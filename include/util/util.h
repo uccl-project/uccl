@@ -1086,10 +1086,10 @@ inline int get_dev_idx(void* ptr) {
   }
   return -1;
 #else
-  hipPointerAttributes attributes;
+  hipPointerAttribute_t attributes;
   hipError_t err = hipPointerGetAttributes(&attributes, ptr);
   if (err == hipSuccess) {
-    if (attributes.memoryType == hipMemoryTypeDevice) {
+    if (attributes.type == hipMemoryTypeDevice) {
       return attributes.device;
     }
     return -1;

@@ -175,6 +175,12 @@ class Endpoint {
              std::vector<void*> dst_v, std::vector<size_t> size_v,
              std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs);
 
+  /* Read a vector of data chunks asynchronously. */
+  bool readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                   std::vector<void*> dst_v, std::vector<size_t> size_v,
+                   std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs,
+                   uint64_t* transfer_id);
+
   /* Write data to the remote server. Blocking. */
   bool write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
              uccl::FifoItem const& slot_item);
@@ -187,6 +193,12 @@ class Endpoint {
   bool writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
               std::vector<void*> src_v, std::vector<size_t> size_v,
               std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs);
+
+  /* Write a vector of data chunks asynchronously. */
+  bool writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                    std::vector<void*> src_v, std::vector<size_t> size_v,
+                    std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs,
+                    uint64_t* transfer_id);
 
   /* Write data to the remote server via CUDA/HIP IPC. Blocking. */
   bool write_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
@@ -329,13 +341,17 @@ class Endpoint {
     READ_IPC,
     SENDV,
     RECVV,
+    WRITEV,
+    READV,
   };
   struct TaskBatch {
     size_t num_iovs;  // Number of IO vectors
     std::shared_ptr<std::vector<void const*>> const_data_ptr;  // for SENDV
-    std::shared_ptr<std::vector<void*>> data_ptr;              // for RECVV
+    std::shared_ptr<std::vector<void*>> data_ptr;  // for RECVV/READV/WRITEV
     std::shared_ptr<std::vector<size_t>> size_ptr;
     std::shared_ptr<std::vector<uint64_t>> mr_id_ptr;
+    std::shared_ptr<std::vector<uccl::FifoItem>>
+        slot_item_ptr;  // for READV/WRITEV
 
     TaskBatch() : num_iovs(0) {}
 
@@ -344,7 +360,8 @@ class Endpoint {
           const_data_ptr(std::move(other.const_data_ptr)),
           data_ptr(std::move(other.data_ptr)),
           size_ptr(std::move(other.size_ptr)),
-          mr_id_ptr(std::move(other.mr_id_ptr)) {}
+          mr_id_ptr(std::move(other.mr_id_ptr)),
+          slot_item_ptr(std::move(other.slot_item_ptr)) {}
 
     TaskBatch& operator=(TaskBatch&& other) noexcept {
       if (this != &other) {
@@ -353,6 +370,7 @@ class Endpoint {
         data_ptr = std::move(other.data_ptr);
         size_ptr = std::move(other.size_ptr);
         mr_id_ptr = std::move(other.mr_id_ptr);
+        slot_item_ptr = std::move(other.slot_item_ptr);
       }
       return *this;
     }
@@ -375,6 +393,10 @@ class Endpoint {
     uint64_t* mr_id_v() const {
       if (!mr_id_ptr) return nullptr;
       return mr_id_ptr->data();
+    }
+    uccl::FifoItem* slot_item_v() const {
+      if (!slot_item_ptr) return nullptr;
+      return slot_item_ptr->data();
     }
   };
 
@@ -485,7 +507,8 @@ class Endpoint {
     }
 
     inline bool is_batch_task() const {
-      return type == TaskType::SENDV || type == TaskType::RECVV;
+      return type == TaskType::SENDV || type == TaskType::RECVV ||
+             type == TaskType::WRITEV || type == TaskType::READV;
     }
   };
 
@@ -560,6 +583,60 @@ class Endpoint {
     batch.mr_id_ptr = std::move(mr_id_ptr);
 
     return create_batch_task(conn_id, TaskType::RECVV, std::move(batch));
+  }
+
+  inline UnifiedTask* create_writev_task(
+      uint64_t conn_id, std::vector<void*>&& data_v,
+      std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
+      std::vector<uccl::FifoItem>&& slot_item_v) {
+    if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
+        mr_id_v.size() != slot_item_v.size()) {
+      return nullptr;
+    }
+    size_t num_iovs = data_v.size();
+
+    auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
+    auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
+    auto mr_id_ptr =
+        std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
+    auto slot_item_ptr =
+        std::make_shared<std::vector<uccl::FifoItem>>(std::move(slot_item_v));
+
+    TaskBatch batch;
+    batch.num_iovs = num_iovs;
+    batch.data_ptr = std::move(data_ptr);
+    batch.size_ptr = std::move(size_ptr);
+    batch.mr_id_ptr = std::move(mr_id_ptr);
+    batch.slot_item_ptr = std::move(slot_item_ptr);
+
+    return create_batch_task(conn_id, TaskType::WRITEV, std::move(batch));
+  }
+
+  inline UnifiedTask* create_readv_task(
+      uint64_t conn_id, std::vector<void*>&& data_v,
+      std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
+      std::vector<uccl::FifoItem>&& slot_item_v) {
+    if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
+        mr_id_v.size() != slot_item_v.size()) {
+      return nullptr;
+    }
+    size_t num_iovs = data_v.size();
+
+    auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
+    auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
+    auto mr_id_ptr =
+        std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
+    auto slot_item_ptr =
+        std::make_shared<std::vector<uccl::FifoItem>>(std::move(slot_item_v));
+
+    TaskBatch batch;
+    batch.num_iovs = num_iovs;
+    batch.data_ptr = std::move(data_ptr);
+    batch.size_ptr = std::move(size_ptr);
+    batch.mr_id_ptr = std::move(mr_id_ptr);
+    batch.slot_item_ptr = std::move(slot_item_ptr);
+
+    return create_batch_task(conn_id, TaskType::READV, std::move(batch));
   }
 
   inline UnifiedTask* create_net_task(uint64_t conn_id, uint64_t mr_id,

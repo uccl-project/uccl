@@ -1031,6 +1031,27 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   return true;
 }
 
+bool Endpoint::readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                           std::vector<void*> dst_v, std::vector<size_t> size_v,
+                           std::vector<uccl::FifoItem> slot_item_v,
+                           size_t num_iovs, uint64_t* transfer_id) {
+  // Use move semantics to reduce memory copies
+  UnifiedTask* task =
+      create_readv_task(conn_id, std::move(dst_v), std::move(size_v),
+                        std::move(mr_id_v), std::move(slot_item_v));
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
+
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
+         1) {
+  }
+
+  return true;
+}
+
 bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
                            size_t size, uccl::FifoItem const& slot_item,
                            uint64_t* transfer_id) {
@@ -1134,6 +1155,28 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
            done[ureq_finished % kMaxInflightChunks]) {
       ureq_finished++;
     }
+  }
+
+  return true;
+}
+
+bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                            std::vector<void*> src_v,
+                            std::vector<size_t> size_v,
+                            std::vector<uccl::FifoItem> slot_item_v,
+                            size_t num_iovs, uint64_t* transfer_id) {
+  // Use move semantics to reduce memory copies
+  UnifiedTask* task =
+      create_writev_task(conn_id, std::move(src_v), std::move(size_v),
+                         std::move(mr_id_v), std::move(slot_item_v));
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
+
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
+         1) {
   }
 
   return true;
@@ -1826,6 +1869,21 @@ void Endpoint::send_proxy_thread_func() {
           sendv(task.conn_id, mr_id_v, const_data_v, size_v, batch.num_iovs);
           break;
         }
+        case TaskType::WRITEV: {
+          TaskBatch const& batch = task.task_batch();
+          std::vector<void*> data_v(batch.data_v(),
+                                    batch.data_v() + batch.num_iovs);
+          std::vector<size_t> size_v(batch.size_v(),
+                                     batch.size_v() + batch.num_iovs);
+          std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
+                                        batch.mr_id_v() + batch.num_iovs);
+          std::vector<uccl::FifoItem> slot_item_v(
+              batch.slot_item_v(), batch.slot_item_v() + batch.num_iovs);
+
+          writev(task.conn_id, mr_id_v, data_v, size_v, slot_item_v,
+                 batch.num_iovs);
+          break;
+        }
         default:
           LOG(ERROR) << "Unexpected task type in send processing: "
                      << static_cast<int>(task.type);
@@ -1867,6 +1925,21 @@ void Endpoint::recv_proxy_thread_func() {
                                         batch.mr_id_v() + batch.num_iovs);
 
           recvv(task.conn_id, mr_id_v, data_v, size_v, batch.num_iovs);
+          break;
+        }
+        case TaskType::READV: {
+          TaskBatch const& batch = task.task_batch();
+          std::vector<void*> data_v(batch.data_v(),
+                                    batch.data_v() + batch.num_iovs);
+          std::vector<size_t> size_v(batch.size_v(),
+                                     batch.size_v() + batch.num_iovs);
+          std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
+                                        batch.mr_id_v() + batch.num_iovs);
+          std::vector<uccl::FifoItem> slot_item_v(
+              batch.slot_item_v(), batch.slot_item_v() + batch.num_iovs);
+
+          readv(task.conn_id, mr_id_v, data_v, size_v, slot_item_v,
+                batch.num_iovs);
           break;
         }
         case TaskType::SEND_NET:
