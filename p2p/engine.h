@@ -73,6 +73,15 @@ class Endpoint {
    */
   Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus);
 
+  /*
+   * Create endpoint without intializing the engine. Lazy creation of engine is
+   * done during  memory registration. Additionally, open a unified P2P socket
+   * for metadata exchanges.
+   *
+   * input:
+   *   num_cpus: the number of CPUs to use for the engine
+   */
+  Endpoint(uint32_t const num_cpus);
   ~Endpoint();
 
   /*
@@ -89,6 +98,11 @@ class Endpoint {
                uint64_t& conn_id);
 
   std::vector<uint8_t> get_metadata();
+
+  /*
+   * Get the unified metadata for all devices.
+   */
+  std::vector<uint8_t> get_unified_metadata();
 
   /*
    * Parse endpoint metadata to extract IP address, port, and GPU index.
@@ -266,11 +280,18 @@ class Endpoint {
    */
   void cleanup_uds_socket();
 
+  /*
+   * Initialize the engine
+   * Internal helper function for lazy initialization.
+   */
+  void initialize_engine();
+
   int local_gpu_idx_;
   uint32_t num_cpus_;
   int numa_node_;
 
   uccl::RDMAEndpoint* ep_;
+  bool engine_initialized_ = false;
 
   std::atomic<uint64_t> next_conn_id_ = 0;
   std::atomic<uint64_t> next_mr_id_ = 0;
