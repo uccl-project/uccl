@@ -138,6 +138,10 @@ class Buffer {
 #endif
           }
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+          // Note(huangzhen): It will make d_handles turn to nullptr in rocm7.0,
+          // so we don't prefetch d_handles.
+#else
           // Prefetch so the device immediately sees initialized contents
           CUDA_CHECK(cudaMemPrefetchAsync(
               d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
@@ -146,6 +150,7 @@ class Buffer {
               d_handles, num_d2h_channel_addrs * sizeof(uint64_t),
               device_index));
           CUDA_CHECK(cudaDeviceSynchronize());
+#endif
         }
         // Allocate device memory for IPC base pointers
         CUDA_CHECK(
@@ -405,7 +410,6 @@ class Buffer {
       int expert_alignment, uccl::Config const& config,
       std::optional<EventHandle>& previous_event, bool async,
       bool allocate_on_comm_stream) {
-#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__)
     // In dispatch, CPU will busy-wait until GPU receive tensor size metadata
     // from other ranks, which can be quite long. If users of DeepEP need to
     // execute other Python code on other threads, such as KV transfer, their
@@ -745,9 +749,6 @@ class Buffer {
             send_rdma_head,
             send_nvl_head,
             event};
-#else
-    return {};
-#endif
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>,
@@ -766,7 +767,6 @@ class Buffer {
                     uccl::Config const& config,
                     std::optional<EventHandle>& previous_event, bool async,
                     bool allocate_on_comm_stream) {
-#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__)
     int const num_channels = config.num_sms / 2;
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
 
@@ -923,9 +923,6 @@ class Buffer {
 
     // Return values
     return {combined_x, combined_topk_weights, event};
-#else
-    return {};
-#endif
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>,
@@ -1463,10 +1460,16 @@ class Buffer {
     if (not return_recv_hook) stream_wait(launch_stream, compute_stream);
 
     // Allocate packed tensors
-    auto packed_recv_x = torch::empty(
-        {num_local_experts, num_ranks * num_max_dispatch_tokens_per_rank,
-         hidden},
-        x.options().dtype(use_fp8 ? torch::kFloat8_e4m3fn : torch::kBFloat16));
+    auto packed_recv_x =
+        torch::empty({num_local_experts,
+                      num_ranks * num_max_dispatch_tokens_per_rank, hidden},
+                     x.options().dtype(use_fp8 ?
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+                                               torch::kFloat8_e4m3fnuz
+#else
+                                               torch::kFloat8_e4m3fn
+#endif
+                                               : torch::kBFloat16));
     auto packed_recv_src_info = torch::empty(
         {num_local_experts, num_ranks * num_max_dispatch_tokens_per_rank},
         torch::dtype(torch::kInt32).device(torch::kCUDA));
