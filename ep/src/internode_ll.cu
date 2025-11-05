@@ -99,7 +99,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   // initialize barrier
-  amd::shared_data.barrier[1] = 0;
+  amd::barrier_init(1);
 #endif
 
   // Sending phase
@@ -157,9 +157,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
           EP_STATIC_ASSERT(kNumElemsPerRead * WARP_SIZE / kNumPerChannels == 4,
                            "Invalid vectorization");
-          amax = warp_reduce_max<8>(amax);
+          amax = warp_reduce_max<16>(amax);
           calculate_fp8_scales(amax, scale, scale_inv, round_scale);
-          if (lane_id == 0)
+          if (lane_id % 16 == 0)
 #else
           EP_STATIC_ASSERT(kNumElemsPerRead * WARP_SIZE / kNumPerChannels == 2,
                            "Invalid vectorization");
@@ -549,7 +549,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   }                                                                           \
   break
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  EP_HOST_ASSERT(num_warps * WARP_SIZE <= 1024);
+  EP_HOST_ASSERT(num_warps * WARP_SIZE <= MAX_NTHREADS);
 #endif
 
   SETUP_LAUNCH_CONFIG(num_sms, num_warps * WARP_SIZE, stream);
@@ -1065,7 +1065,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
   break
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  EP_HOST_ASSERT(num_warps * WARP_SIZE <= 1024);
+  EP_HOST_ASSERT(num_warps * WARP_SIZE <= MAX_NTHREADS);
 #endif
 
   SETUP_LAUNCH_CONFIG(num_sms, num_warps * WARP_SIZE, stream);

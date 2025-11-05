@@ -137,8 +137,7 @@ def test_main(
     hash_value, num_times = 0, 0
     for current_x in x_list:
         for return_recv_hook in (False, True):
-            # for dispatch_use_fp8 in (False, True):
-            for dispatch_use_fp8 in (False,):
+            for dispatch_use_fp8 in (False, True):
                 for round_scale in (False,):
                     for round_scale in (False, True) if dispatch_use_fp8 else (False,):
                         for use_ue8m0 in (False, True) if round_scale else (False,):
@@ -321,7 +320,7 @@ def test_main(
                                         9e-4 if dispatch_use_fp8 else 1e-5
                                     ), f"Error: {diff=}, {dispatch_use_fp8=}, {zero_copy=}"
                                     hash_value ^= hash_tensor(combined_x)
-    
+
     # noinspection PyShadowingNames
     def large_gemm_with_hook(hook):
         mat_0 = torch.randn((8192, 8192), dtype=torch.float)

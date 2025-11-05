@@ -93,6 +93,8 @@ __host__ __device__ constexpr dtype_t ceil_div(dtype_t a, dtype_t b) {
 }
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+// support for AMD GPU MI300X (gfx942)
+// TODO: support AMD GPU MI350X (gfx950)
 constexpr float kFP8Margin = 1e-4;
 constexpr float kFinfoAmaxE4M3 = 240.0f;
 constexpr float kFinfoAmaxInvE4M3 = 1 / 240.0f;
