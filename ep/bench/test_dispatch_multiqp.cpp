@@ -3,14 +3,15 @@
 // Uses DeepEP's one-QP-per-expert design (matches test_low_latency.py)
 //
 // Architecture:
-// - Multiple GPU threads (one per GPU), similar to test_dispatch_connectionless.cpp
+// - Multiple GPU threads (one per GPU), similar to
+// test_dispatch_connectionless.cpp
 // - Each GPU has 36 local experts, each expert has its own QP
 // - Each local expert ONLY connects to corresponding expert on remote nodes
 //   Example: Rank0 GPU0 expert5 <-> Rank1 GPU0 expert5, Rank2 GPU0 expert5
 // - Total QPs per GPU: 36
 // - Total connections per GPU: 36 experts × (N-1) remote nodes
 //
-// Parameters 
+// Parameters
 // - 128 tokens per GPU, 7KB per token
 // - Top-8 expert selection
 // - 36 experts per GPU (288 total experts across 8 GPUs)
@@ -144,23 +145,28 @@ void tcp_barrier(int rank, int world_size, std::vector<std::string> const& ips,
 }
 
 void exchange_connection_info(int my_rank, int my_gpu, int my_expert,
-                              int remote_rank, int remote_gpu, int remote_expert,
-                              std::string const& peer_ip,
+                              int remote_rank, int remote_gpu,
+                              int remote_expert, std::string const& peer_ip,
                               RDMAConnectionInfo* local,
                               RDMAConnectionInfo* remote) {
   int my_global_gpu = my_rank * NUM_GPUS_PER_NODE + my_gpu;
   int remote_global_gpu = remote_rank * NUM_GPUS_PER_NODE + remote_gpu;
-  int low_global_gpu = (my_global_gpu < remote_global_gpu) ? my_global_gpu : remote_global_gpu;
-  int high_global_gpu = (my_global_gpu < remote_global_gpu) ? remote_global_gpu : my_global_gpu;
+  int low_global_gpu =
+      (my_global_gpu < remote_global_gpu) ? my_global_gpu : remote_global_gpu;
+  int high_global_gpu =
+      (my_global_gpu < remote_global_gpu) ? remote_global_gpu : my_global_gpu;
 
-  int pair_id = low_global_gpu * 31 - (low_global_gpu * (low_global_gpu - 1)) / 2 + (high_global_gpu - low_global_gpu - 1);
+  int pair_id = low_global_gpu * 31 -
+                (low_global_gpu * (low_global_gpu - 1)) / 2 +
+                (high_global_gpu - low_global_gpu - 1);
   int port = TCP_PORT_BASE + pair_id * NUM_EXPERTS_PER_GPU + my_expert;
 
   int sockfd;
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
 
-  if (my_rank < remote_rank || (my_rank == remote_rank && my_gpu < remote_gpu)) {
+  if (my_rank < remote_rank ||
+      (my_rank == remote_rank && my_gpu < remote_gpu)) {
     // This side listens
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
@@ -174,7 +180,8 @@ void exchange_connection_info(int my_rank, int my_gpu, int my_expert,
 
     if (bind(listenfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
       perror("bind");
-      fprintf(stderr, "Failed to bind port %d for expert %d\n", port, my_expert);
+      fprintf(stderr, "Failed to bind port %d for expert %d\n", port,
+              my_expert);
       exit(EXIT_FAILURE);
     }
 
@@ -290,8 +297,9 @@ ibv_qp* create_srd_qp_ex(ibv_context* context, ibv_pd* pd, ibv_cq* cq) {
   attr.pkey_index = 0;
   attr.port_num = 1;
   attr.qkey = QKEY;
-  if (ibv_modify_qp(qp, &attr,
-                    IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_QKEY)) {
+  if (ibv_modify_qp(
+          qp, &attr,
+          IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_QKEY)) {
     ibv_destroy_qp(qp);
     return nullptr;
   }
@@ -353,7 +361,8 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
   // Calculate total experts across all GPUs
   int total_experts = num_nodes * NUM_GPUS_PER_NODE * NUM_EXPERTS_PER_GPU;
 
-  // Generate routing table: each token randomly selects TOPK experts from ALL experts
+  // Generate routing table: each token randomly selects TOPK experts from ALL
+  // experts
   std::mt19937 rng(seed + my_rank * NUM_GPUS_PER_NODE + gpu_id);
 
   // Build list of ALL experts across all nodes
@@ -441,9 +450,10 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
     if (!expert_qp->pd) exit(EXIT_FAILURE);
 
     uint64_t iova = (uintptr_t)gpu_buf;
-    expert_qp->mr = ibv_reg_mr_iova2(
-        expert_qp->pd, gpu_buf, total_size, iova,
-        IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_RELAXED_ORDERING);
+    expert_qp->mr =
+        ibv_reg_mr_iova2(expert_qp->pd, gpu_buf, total_size, iova,
+                         IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                             IBV_ACCESS_RELAXED_ORDERING);
     if (!expert_qp->mr) exit(EXIT_FAILURE);
     expert_qp->lkey = expert_qp->mr->lkey;
 
@@ -452,9 +462,11 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
     expert_qp->cq = (ibv_cq*)ibv_create_cq_ex(expert_qp->context, &cq_ex_attr);
     if (!expert_qp->cq) exit(EXIT_FAILURE);
 
-    expert_qp->qp = create_srd_qp_ex(expert_qp->context, expert_qp->pd, expert_qp->cq);
+    expert_qp->qp =
+        create_srd_qp_ex(expert_qp->context, expert_qp->pd, expert_qp->cq);
     if (!expert_qp->qp) {
-      fprintf(stderr, "[GPU %d] Failed to create QP for expert %d\n", gpu_id, e);
+      fprintf(stderr, "[GPU %d] Failed to create QP for expert %d\n", gpu_id,
+              e);
       exit(EXIT_FAILURE);
     }
 
@@ -472,8 +484,9 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
   }
   thread_barrier(NUM_GPUS_PER_NODE);
 
-  // Establish connections 
-  for (int local_expert = 0; local_expert < NUM_EXPERTS_PER_GPU; local_expert++) {
+  // Establish connections
+  for (int local_expert = 0; local_expert < NUM_EXPERTS_PER_GPU;
+       local_expert++) {
     for (int remote_rank = 0; remote_rank < num_nodes; remote_rank++) {
       if (remote_rank == my_rank) continue;
 
@@ -489,9 +502,9 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
       fill_local_gid(expert_qps[local_expert]->context, local_info.gid);
 
       RDMAConnectionInfo remote_info = {};
-      exchange_connection_info(my_rank, gpu_id, local_expert,
-                               remote_rank, remote_gpu, remote_expert,
-                               node_ips[remote_rank], &local_info, &remote_info);
+      exchange_connection_info(my_rank, gpu_id, local_expert, remote_rank,
+                               remote_gpu, remote_expert, node_ips[remote_rank],
+                               &local_info, &remote_info);
 
       peers[local_expert][remote_rank].ah =
           create_ah(expert_qps[local_expert]->pd, remote_info.gid);
@@ -528,12 +541,14 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
     // Post phase
     while (total_posted < total_msgs) {
       while (current_token < NUM_TOKENS_PER_GPU &&
-             token_progress[current_token] >= (int)token_routes[current_token].size()) {
+             token_progress[current_token] >=
+                 (int)token_routes[current_token].size()) {
         current_token++;
       }
       if (current_token >= NUM_TOKENS_PER_GPU) break;
 
-      TokenRoute& route = token_routes[current_token][token_progress[current_token]];
+      TokenRoute& route =
+          token_routes[current_token][token_progress[current_token]];
       int local_expert = route.local_expert;
 
       if (expert_qps[local_expert]->inflight.load() >= WINDOW_PER_EXPERT) {
@@ -543,10 +558,11 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
       // Post RDMA WRITE
       int sender_global_gpu_id = my_rank * NUM_GPUS_PER_NODE + gpu_id;
       uint64_t slot = token_progress[current_token] % SLOTS_PER_SRC;
-      uint64_t remote_offset = send_size +
-                               sender_global_gpu_id * SLOTS_PER_SRC * TOKEN_SIZE +
-                               slot * TOKEN_SIZE;
-      uint64_t remote_addr = peers[local_expert][route.remote_rank].remote_addr + remote_offset;
+      uint64_t remote_offset =
+          send_size + sender_global_gpu_id * SLOTS_PER_SRC * TOKEN_SIZE +
+          slot * TOKEN_SIZE;
+      uint64_t remote_addr =
+          peers[local_expert][route.remote_rank].remote_addr + remote_offset;
 
       ibv_qp_ex* qpx = (ibv_qp_ex*)expert_qps[local_expert]->qp;
       ibv_wr_start(qpx);
@@ -555,9 +571,11 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
       qpx->wr_flags = IBV_SEND_SIGNALED;
       qpx->comp_mask = 0;
 
-      ibv_wr_rdma_write(qpx, peers[local_expert][route.remote_rank].remote_rkey, remote_addr);
+      ibv_wr_rdma_write(qpx, peers[local_expert][route.remote_rank].remote_rkey,
+                        remote_addr);
       ibv_wr_set_ud_addr(qpx, peers[local_expert][route.remote_rank].ah,
-                         peers[local_expert][route.remote_rank].remote_qpn, QKEY);
+                         peers[local_expert][route.remote_rank].remote_qpn,
+                         QKEY);
 
       uint64_t local_offset = current_token * TOKEN_SIZE;
       ibv_wr_set_sge(qpx, expert_qps[local_expert]->lkey,
@@ -565,7 +583,8 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
 
       int ret = ibv_wr_complete(qpx);
       if (ret) {
-        fprintf(stderr, "[GPU %d] ibv_wr_complete failed: %s\n", gpu_id, strerror(ret));
+        fprintf(stderr, "[GPU %d] ibv_wr_complete failed: %s\n", gpu_id,
+                strerror(ret));
         exit(EXIT_FAILURE);
       }
 
@@ -623,7 +642,8 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
 
   {
     std::lock_guard<std::mutex> lock(print_mutex);
-    printf("\n=== [Rank %d GPU %d] DeepEP Multi-QP Results ===\n", my_rank, gpu_id);
+    printf("\n=== [Rank %d GPU %d] DeepEP Multi-QP Results ===\n", my_rank,
+           gpu_id);
     printf("  Elapsed: %.3f ms\n", elapsed * 1000.0);
     printf("  Num tokens: %d\n", NUM_TOKENS_PER_GPU);
     printf("  Token size: %zu bytes (7KB)\n", TOKEN_SIZE);
@@ -633,14 +653,16 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
     printf("  Intra-node selections (skipped): %lu (%.1f%%)\n",
            intra_node_selections,
            100.0 * intra_node_selections / total_selections);
-    printf("  Inter-node RDMA dispatches: %lu (%.1f%%)\n",
-           total_msgs,
+    printf("  Inter-node RDMA dispatches: %lu (%.1f%%)\n", total_msgs,
            100.0 * total_msgs / total_selections);
     printf("  Total bytes: %.2f MB\n", total_bytes / (1024.0 * 1024.0));
     printf("  Bandwidth: %.3f GB/s\n", bw_gbps);
-    printf("  Avg latency per token: %.2f us\n", (elapsed * 1e6) / NUM_TOKENS_PER_GPU);
-    printf("  Connection pattern: Each local expert -> corresponding expert on %d remote nodes\n",
-           num_nodes - 1);
+    printf("  Avg latency per token: %.2f us\n",
+           (elapsed * 1e6) / NUM_TOKENS_PER_GPU);
+    printf(
+        "  Connection pattern: Each local expert -> corresponding expert on %d "
+        "remote nodes\n",
+        num_nodes - 1);
   }
 
   // Cleanup
@@ -680,23 +702,29 @@ int main(int argc, char** argv) {
   int total_experts = num_nodes * NUM_GPUS_PER_NODE * NUM_EXPERTS_PER_GPU;
 
   printf("=== DeepEP Multi-QP Dispatch Pattern Test ===\n");
-  printf("Architecture: Multi-threaded (based on test_dispatch_connectionless.cpp)\n");
+  printf(
+      "Architecture: Multi-threaded (based on "
+      "test_dispatch_connectionless.cpp)\n");
   printf("QP Design: One QP per expert (matches DeepEP test_low_latency.py)\n");
   printf("Total nodes: %d\n", num_nodes);
   printf("My rank: %d\n", my_rank);
   printf("Config: %d tokens/GPU, %zu bytes/token (7KB), Top-%d routing\n",
          NUM_TOKENS_PER_GPU, TOKEN_SIZE, TOPK);
-  printf("Experts: %d per GPU, %d total experts\n",
-         NUM_EXPERTS_PER_GPU, total_experts);
+  printf("Experts: %d per GPU, %d total experts\n", NUM_EXPERTS_PER_GPU,
+         total_experts);
   printf("QPs per GPU: %d (one per expert)\n", NUM_EXPERTS_PER_GPU);
   printf("Connections per GPU: %d experts × %d remote nodes = %d\n",
-         NUM_EXPERTS_PER_GPU, num_nodes - 1, NUM_EXPERTS_PER_GPU * (num_nodes - 1));
-  printf("Connection pattern: Local expert N <-> Remote expert N (DeepEP style)\n");
+         NUM_EXPERTS_PER_GPU, num_nodes - 1,
+         NUM_EXPERTS_PER_GPU * (num_nodes - 1));
+  printf(
+      "Connection pattern: Local expert N <-> Remote expert N (DeepEP "
+      "style)\n");
   printf("Random seed: %d\n\n", seed);
 
   std::vector<std::thread> threads;
   for (int gpu = 0; gpu < NUM_GPUS_PER_NODE; gpu++) {
-    threads.emplace_back(run_gpu_thread, gpu, my_rank, num_nodes, node_ips, seed);
+    threads.emplace_back(run_gpu_thread, gpu, my_rank, num_nodes, node_ips,
+                         seed);
   }
 
   for (auto& t : threads) {
