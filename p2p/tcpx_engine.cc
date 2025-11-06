@@ -27,6 +27,9 @@ namespace {
 constexpr int kDefaultOobPort = 28900;
 constexpr int kCtrlBacklog = 128;
 constexpr size_t kDefaultChunkBytes = 512 * 1024;
+constexpr int kDefaultSendInflight = 12;
+constexpr int kDefaultRecvInflight = 16;
+constexpr int kTcpxBusy = 3;  // tcpx_isend/irecv temporary no-resource
 
 // Payloads exchanged on the lightweight TCP control plane.
 struct EndpointInfo {
@@ -108,18 +111,43 @@ bool recv_ctrl_ack(int fd) {
   return hdr.type == CTRL_ACK;
 }
 
-constexpr uint64_t encode_chunk_token(uint32_t count, uint32_t bytes) {
-  return (static_cast<uint64_t>(count) << 32) |
-         static_cast<uint64_t>(bytes & 0xffffffffu);
-}
+class ScopedCudaContext {
+ public:
+  ScopedCudaContext(CUcontext ctx, int device_ordinal)
+      : pushed_(false), context_(ctx) {
+    if (!context_) return;
+    CUresult cu_rc = cuCtxPushCurrent(context_);
+    if (cu_rc != CUDA_SUCCESS) {
+      std::cerr << "[tcpx] cuCtxPushCurrent failed rc=" << cu_rc << std::endl;
+      context_ = nullptr;
+      return;
+    }
+    pushed_ = true;
+    if (device_ordinal >= 0) {
+      cudaError_t cuda_rc = cudaSetDevice(device_ordinal);
+      if (cuda_rc != cudaSuccess) {
+        std::cerr << "[tcpx] cudaSetDevice failed inside ScopedCudaContext: "
+                  << cudaGetErrorString(cuda_rc) << std::endl;
+      }
+    }
+  }
 
-inline uint32_t decode_chunk_count(uint64_t token) {
-  return static_cast<uint32_t>(token >> 32);
-}
+  ~ScopedCudaContext() {
+    if (!pushed_) return;
+    CUcontext popped = nullptr;
+    CUresult cu_rc = cuCtxPopCurrent(&popped);
+    if (cu_rc != CUDA_SUCCESS) {
+      std::cerr << "[tcpx] cuCtxPopCurrent failed rc=" << cu_rc << std::endl;
+    }
+  }
 
-inline uint32_t decode_chunk_bytes(uint64_t token) {
-  return static_cast<uint32_t>(token & 0xffffffffu);
-}
+  ScopedCudaContext(ScopedCudaContext const&) = delete;
+  ScopedCudaContext& operator=(ScopedCudaContext const&) = delete;
+
+ private:
+  bool pushed_;
+  CUcontext context_;
+};
 
 struct ChannelHandleMsg {
   uint32_t num_channels;
@@ -292,12 +320,38 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const /*num_cpus*/) {
     throw std::runtime_error("tcpx: listen failed");
   }
 
-  // Initialize CUDA context for unpack kernels
+  // Initialize CUDA primary context for unpack kernels and driver interactions.
+  CUresult cu_rc = cuInit(0);
+  if (cu_rc != CUDA_SUCCESS) {
+    throw std::runtime_error("tcpx: cuInit failed with rc=" +
+                             std::to_string(static_cast<int>(cu_rc)));
+  }
+  cu_rc = cuDeviceGet(&cu_device_, static_cast<int>(local_gpu_idx_));
+  if (cu_rc != CUDA_SUCCESS) {
+    throw std::runtime_error("tcpx: cuDeviceGet failed with rc=" +
+                             std::to_string(static_cast<int>(cu_rc)));
+  }
+  cu_rc = cuDevicePrimaryCtxRetain(&cu_context_, cu_device_);
+  if (cu_rc != CUDA_SUCCESS) {
+    throw std::runtime_error("tcpx: cuDevicePrimaryCtxRetain failed with rc=" +
+                             std::to_string(static_cast<int>(cu_rc)));
+  }
+  cu_rc = cuCtxSetCurrent(cu_context_);
+  if (cu_rc != CUDA_SUCCESS) {
+    cuDevicePrimaryCtxRelease(cu_device_);
+    cu_context_ = nullptr;
+    throw std::runtime_error("tcpx: cuCtxSetCurrent failed with rc=" +
+                             std::to_string(static_cast<int>(cu_rc)));
+  }
   if (cudaSetDevice(static_cast<int>(local_gpu_idx_)) != cudaSuccess) {
+    cuDevicePrimaryCtxRelease(cu_device_);
+    cu_context_ = nullptr;
     throw std::runtime_error("tcpx: cudaSetDevice failed");
   }
   if (cudaStreamCreateWithFlags(&unpack_stream_, cudaStreamNonBlocking) !=
       cudaSuccess) {
+    cuDevicePrimaryCtxRelease(cu_device_);
+    cu_context_ = nullptr;
     throw std::runtime_error("tcpx: failed to create CUDA stream");
   }
   device::UnpackLaunchConfig cfg;
@@ -338,6 +392,10 @@ Endpoint::~Endpoint() {
   if (unpack_stream_) {
     cudaStreamDestroy(unpack_stream_);
     unpack_stream_ = nullptr;
+  }
+  if (cu_context_) {
+    cuDevicePrimaryCtxRelease(cu_device_);
+    cu_context_ = nullptr;
   }
 }
 
@@ -419,6 +477,7 @@ std::tuple<std::string, uint16_t, int> Endpoint::parse_metadata(
 
 bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                        uint64_t& conn_id) {
+  ScopedCudaContext ctx_guard(cu_context_, static_cast<int>(local_gpu_idx_));
   (void)remote_gpu_idx;
 
   if (remote_port < 0) remote_port = ctrl_port_;
@@ -575,6 +634,7 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
 
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
+  ScopedCudaContext ctx_guard(cu_context_, static_cast<int>(local_gpu_idx_));
   // Symmetric handshake to connect(): accept the control socket, exchange
   // endpoint info, push back our listen handle, then finish the send/recv comm
   // pair using handle payloads from the client.
@@ -764,6 +824,7 @@ bool Endpoint::find_mr_by_addr(uintptr_t addr, size_t size,
 
 bool Endpoint::populate_conn_handles_(Conn& conn, uint64_t mr_id, bool is_recv,
                                       void** mhandle_out) {
+  ScopedCudaContext ctx_guard(cu_context_, static_cast<int>(local_gpu_idx_));
   void* comm = is_recv ? conn.recv_comm : conn.send_comm;
   if (!comm) return false;
 
@@ -845,13 +906,7 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
   item.size = static_cast<uint32_t>(len);
   item.offset = static_cast<uint64_t>(addr_u - base_addr);
   item.tag = next_tag_.fetch_add(1);
-  uint32_t chunk_bytes_hint =
-      static_cast<uint32_t>(std::min<size_t>(chunk_bytes_, 0xffffffffu));
-  uint32_t chunk_count_hint =
-      static_cast<uint32_t>((len + chunk_bytes_hint - 1) / chunk_bytes_hint);
-  if (chunk_count_hint == 0) chunk_count_hint = 1;
-  // Encode chunk scheduling hints so the passive side can mirror our pipeline.
-  item.token = encode_chunk_token(chunk_count_hint, chunk_bytes_hint);
+  item.token = 0;
   // Fifo item travels over the uccl control socket; the peer rehydrates it into
   // tag/offset parameters for TCPX operations.
   std::memcpy(out_buf, &item, sizeof(FifoItem));
@@ -882,20 +937,6 @@ bool Endpoint::queue_read_response(uint64_t conn_id,
   char* base_ptr =
       static_cast<char*>(mr.base) + static_cast<size_t>(fifo_item.offset);
   void const* base = static_cast<void const*>(base_ptr);
-
-  if (debug_enabled_) {
-    uint32_t hinted_chunks = decode_chunk_count(fifo_item.token);
-    uint32_t hinted_bytes = decode_chunk_bytes(fifo_item.token);
-    if (hinted_bytes == 0)
-      hinted_bytes = static_cast<uint32_t>(
-          std::min<size_t>(chunk_bytes_, 0xffffffffu));
-    if (hinted_chunks == 0)
-      hinted_chunks = static_cast<uint32_t>((fifo_item.size + hinted_bytes - 1) /
-                                            std::max<uint32_t>(hinted_bytes, 1));
-    std::cerr << "[tcpx] queue_read_response size=" << fifo_item.size
-              << " hinted_chunks=" << hinted_chunks
-              << " hinted_chunk_bytes=" << hinted_bytes << std::endl;
-  }
 
   uint64_t tid = 0;
   if (!post_send_(*conn_ptr, fifo_item.mr_id, mr, base, fifo_item.size,
@@ -965,13 +1006,6 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           uint64_t* transfer_id) {
   if (!dst || size == 0) return false;
 
-  uint32_t advertised_chunk_count = decode_chunk_count(slot_item.token);
-  uint32_t advertised_chunk_bytes = decode_chunk_bytes(slot_item.token);
-  if (advertised_chunk_bytes == 0) {
-    advertised_chunk_bytes = static_cast<uint32_t>(
-        std::min<size_t>(chunk_bytes_, 0xffffffffu));
-  }
-
   Conn* conn_ptr = nullptr;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -995,24 +1029,6 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
   uintptr_t dst_addr = reinterpret_cast<uintptr_t>(dst);
   if (dst_addr < base_addr || dst_addr + slot_item.size > base_addr + mr.size) {
     return false;
-  }
-
-  size_t local_chunk_bytes = chunk_bytes_;
-  size_t expected_chunks =
-      (slot_item.size + local_chunk_bytes - 1) /
-      std::max<size_t>(local_chunk_bytes, static_cast<size_t>(1));
-  if (advertised_chunk_count != 0 &&
-      expected_chunks != static_cast<size_t>(advertised_chunk_count) &&
-      debug_enabled_) {
-    std::cerr << "[tcpx] read_async chunk count mismatch (local="
-              << expected_chunks << " remote=" << advertised_chunk_count
-              << ")" << std::endl;
-  }
-  if (advertised_chunk_bytes != static_cast<uint32_t>(local_chunk_bytes) &&
-      debug_enabled_) {
-    std::cerr << "[tcpx] read_async chunk bytes mismatch (local="
-              << local_chunk_bytes << " remote=" << advertised_chunk_bytes
-              << ")" << std::endl;
   }
 
   // Reuse the advertised tag so the active peer can match this recv.
@@ -1063,6 +1079,186 @@ bool Endpoint::recv_async_with_tag(uint64_t conn_id, uint64_t mr_id, void* data,
   return true;
 }
 
+bool Endpoint::reserve_send_slot(uint64_t conn_id, size_t limit) {
+  std::lock_guard<std::mutex> lock(window_mu_);
+  size_t& counter = send_inflight_chunks_[conn_id];
+  if (counter >= limit) return false;
+  ++counter;
+  return true;
+}
+
+bool Endpoint::reserve_recv_slot(uint64_t conn_id, size_t limit) {
+  std::lock_guard<std::mutex> lock(window_mu_);
+  size_t& counter = recv_inflight_chunks_[conn_id];
+  if (counter >= limit) return false;
+  ++counter;
+  return true;
+}
+
+void Endpoint::release_send_slot(uint64_t conn_id) {
+  bool notify = false;
+  {
+    std::lock_guard<std::mutex> lock(window_mu_);
+    auto it = send_inflight_chunks_.find(conn_id);
+    if (it == send_inflight_chunks_.end()) return;
+    if (it->second <= 1) {
+      send_inflight_chunks_.erase(it);
+    } else {
+      --(it->second);
+    }
+    notify = true;
+  }
+  if (notify) window_cv_.notify_all();
+}
+
+void Endpoint::release_recv_slot(uint64_t conn_id) {
+  bool notify = false;
+  {
+    std::lock_guard<std::mutex> lock(window_mu_);
+    auto it = recv_inflight_chunks_.find(conn_id);
+    if (it == recv_inflight_chunks_.end()) return;
+    if (it->second <= 1) {
+      recv_inflight_chunks_.erase(it);
+    } else {
+      --(it->second);
+    }
+    notify = true;
+  }
+  if (notify) window_cv_.notify_all();
+}
+
+Endpoint::ScheduleOutcome Endpoint::schedule_send_chunks_locked(
+    Conn& conn, PendingTransfer& transfer) {
+  int max_send_inflight =
+      get_env_int("UCCL_TCPX_MAX_SEND_INFLIGHT", kDefaultSendInflight);
+  if (max_send_inflight <= 0) max_send_inflight = kDefaultSendInflight;
+  size_t limit = static_cast<size_t>(max_send_inflight);
+
+  constexpr int kBusyRetryMax = 512;
+  constexpr int kBusySleepMicros = 5;
+
+  bool posted_any = false;
+  while (transfer.next_chunk_to_post < transfer.chunks.size()) {
+    if (!reserve_send_slot(conn.conn_id, limit)) break;
+
+    auto& chunk = transfer.chunks[transfer.next_chunk_to_post];
+    bool chunk_posted = false;
+    int attempt = 0;
+    while (attempt < kBusyRetryMax) {
+      void* request = nullptr;
+      int rc = tcpx_isend(conn.send_comm, chunk.dst_ptr,
+                          static_cast<int>(chunk.bytes),
+                          static_cast<int>(chunk.tag), transfer.mhandle,
+                          &request);
+      if (debug_enabled_) {
+        std::cerr << "[tcpx] isend rc=" << rc << " req=" << request
+                  << " chunk_off=" << chunk.offset
+                  << " chunk_bytes=" << chunk.bytes
+                  << " tag=" << chunk.tag << std::endl;
+      }
+      if (rc == 0 && request) {
+        chunk.request = request;
+        chunk.posted = true;
+        chunk_posted = true;
+        break;
+      }
+
+      release_send_slot(conn.conn_id);
+      if (rc == kTcpxBusy || (rc == 0 && !request)) {
+        if (!progress_conn_transfers_locked(conn))
+          return ScheduleOutcome::kError;
+        ++attempt;
+        std::this_thread::sleep_for(
+            std::chrono::microseconds(kBusySleepMicros));
+        if (!reserve_send_slot(conn.conn_id, limit)) break;
+        continue;
+      }
+
+      std::cerr << "[tcpx] tcpx_isend failed rc=" << rc
+                << " chunk_offset=" << chunk.offset
+                << " chunk_bytes=" << chunk.bytes << std::endl;
+      return ScheduleOutcome::kError;
+    }
+
+    if (!chunk_posted) break;
+
+    transfer.send_queue.push_back(transfer.next_chunk_to_post);
+    transfer.recv_stage1_queue.push_back(transfer.next_chunk_to_post);
+    transfer.next_chunk_to_post++;
+    posted_any = true;
+  }
+
+  return posted_any ? ScheduleOutcome::kProgress
+                    : ScheduleOutcome::kNoProgress;
+}
+
+Endpoint::ScheduleOutcome Endpoint::schedule_recv_chunks_locked(
+    Conn& conn, PendingTransfer& transfer) {
+  int max_recv_inflight =
+      get_env_int("UCCL_TCPX_MAX_RECV_INFLIGHT", kDefaultRecvInflight);
+  if (max_recv_inflight <= 0) max_recv_inflight = kDefaultRecvInflight;
+  size_t limit = static_cast<size_t>(max_recv_inflight);
+
+  constexpr int kBusyRetryMax = 512;
+  constexpr int kBusySleepMicros = 5;
+
+  bool posted_any = false;
+  while (transfer.next_chunk_to_post < transfer.chunks.size()) {
+    if (!reserve_recv_slot(conn.conn_id, limit)) break;
+
+    auto& chunk = transfer.chunks[transfer.next_chunk_to_post];
+    bool chunk_posted = false;
+    int attempt = 0;
+    while (attempt < kBusyRetryMax) {
+      void* buffers[1] = {chunk.dst_ptr};
+      int sizes[1] = {static_cast<int>(chunk.bytes)};
+      int tags[1] = {static_cast<int>(chunk.tag)};
+      void* mhandles[1] = {transfer.mhandle};
+      void* requests[1] = {nullptr};
+
+      int rc = tcpx_irecv(conn.recv_comm, 1, buffers, sizes, tags, mhandles,
+                          requests);
+      if (debug_enabled_) {
+        std::cerr << "[tcpx] irecv rc=" << rc << " req=" << requests[0]
+                  << " chunk_off=" << chunk.offset
+                  << " chunk_bytes=" << chunk.bytes
+                  << " tag=" << chunk.tag << std::endl;
+      }
+      if (rc == 0 && requests[0]) {
+        chunk.request = requests[0];
+        chunk.posted = true;
+        chunk_posted = true;
+        break;
+      }
+
+      release_recv_slot(conn.conn_id);
+      if (rc == kTcpxBusy || (rc == 0 && !requests[0])) {
+        if (!progress_conn_transfers_locked(conn))
+          return ScheduleOutcome::kError;
+        ++attempt;
+        std::this_thread::sleep_for(
+            std::chrono::microseconds(kBusySleepMicros));
+        if (!reserve_recv_slot(conn.conn_id, limit)) break;
+        continue;
+      }
+
+      std::cerr << "[tcpx] tcpx_irecv failed rc=" << rc
+                << " chunk_offset=" << chunk.offset
+                << " chunk_bytes=" << chunk.bytes << std::endl;
+      return ScheduleOutcome::kError;
+    }
+
+    if (!chunk_posted) break;
+
+    transfer.recv_stage1_queue.push_back(transfer.next_chunk_to_post);
+    transfer.next_chunk_to_post++;
+    posted_any = true;
+  }
+
+  return posted_any ? ScheduleOutcome::kProgress
+                    : ScheduleOutcome::kNoProgress;
+}
+
 bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
                           void const* data, size_t size, int tag,
                           uint64_t& transfer_id) {
@@ -1072,56 +1268,13 @@ bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
   if (!populate_conn_handles_(conn, mr_id, /*is_recv=*/false, &mhandle))
     return false;
 
-  constexpr int kDefaultSendInflight = 12;
-  int max_send_inflight = get_env_int("UCCL_TCPX_MAX_SEND_INFLIGHT",
-                                      kDefaultSendInflight);
-  if (max_send_inflight <= 0) max_send_inflight = kDefaultSendInflight;
-
   size_t chunk_bytes = std::max<size_t>(1, chunk_bytes_);
   size_t chunk_count = (size + chunk_bytes - 1) / chunk_bytes;
-
-  bool window_reserved = false;
-  // Helper to return reserved send-window credits if we fail mid-way.
-  auto release_window = [&]() {
-    if (!window_reserved) return;
-    std::lock_guard<std::mutex> win_lock(window_mu_);
-    auto it = send_inflight_chunks_.find(conn.conn_id);
-    if (it != send_inflight_chunks_.end()) {
-      if (it->second <= chunk_count) {
-        send_inflight_chunks_.erase(it);
-      } else {
-        it->second -= chunk_count;
-      }
-    }
-    window_reserved = false;
-  };
-
-  {
-    std::lock_guard<std::mutex> win_lock(window_mu_);
-    // Enforce a per-connection budget of chunks in flight on the send path.
-    auto it = send_inflight_chunks_.find(conn.conn_id);
-    size_t current = it == send_inflight_chunks_.end() ? 0 : it->second;
-    if (current + chunk_count > static_cast<size_t>(max_send_inflight)) {
-      if (debug_enabled_) {
-        std::cerr << "[tcpx] send window full: inflight=" << current
-                  << " new_chunks=" << chunk_count
-                  << " limit=" << max_send_inflight << std::endl;
-      }
-      return false;
-    }
-    if (it == send_inflight_chunks_.end()) {
-      send_inflight_chunks_.emplace(conn.conn_id, chunk_count);
-    } else {
-      it->second = current + chunk_count;
-    }
-    window_reserved = true;
-  }
 
   uintptr_t base_addr = reinterpret_cast<uintptr_t>(mr.base);
   uintptr_t data_addr = reinterpret_cast<uintptr_t>(data);
   if (data_addr < base_addr || data_addr + size > base_addr + mr.size) {
     std::cerr << "[tcpx] send_async data out of bounds" << std::endl;
-    release_window();
     return false;
   }
 
@@ -1132,6 +1285,7 @@ bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
   transfer.mr_id = mr_id;
   transfer.total_bytes = size;
   transfer.base_tag = static_cast<uint32_t>(tag);
+  transfer.mhandle = mhandle;
   transfer.chunks.reserve(chunk_count);
 
   auto base_ptr = static_cast<char const*>(data);
@@ -1139,52 +1293,27 @@ bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
     size_t offset = idx * chunk_bytes;
     size_t chunk_len = std::min(chunk_bytes, size - offset);
     PendingTransfer::ChunkState chunk;
-    // Describe the slice of the user buffer this chunk is responsible for.
     chunk.offset = offset;
     chunk.bytes = chunk_len;
-    chunk.tag = static_cast<uint32_t>(tag);
+    chunk.tag = static_cast<uint32_t>(tag) + static_cast<uint32_t>(idx);
     chunk.needs_unpack = false;
     chunk.dst_ptr = const_cast<char*>(base_ptr) + offset;
     transfer.chunks.push_back(std::move(chunk));
   }
 
-  for (auto& chunk : transfer.chunks) {
-    void* request = nullptr;
-    int rc = tcpx_isend(conn.send_comm,
-                        const_cast<char*>(base_ptr) + chunk.offset,
-                        static_cast<int>(chunk.bytes), chunk.tag, mhandle,
-                        &request);
-    if (rc != 0 || !request) {
-      std::cerr << "[tcpx] tcpx_isend failed rc=" << rc
-                << " chunk_offset=" << chunk.offset
-                << " chunk_bytes=" << chunk.bytes << std::endl;
-      release_window();
-      return false;
-    }
-    chunk.request = request;
-  }
-
-  transfer_id = transfer.transfer_id;
+  uint64_t tid = transfer.transfer_id;
   {
     std::lock_guard<std::mutex> lock(transfer_mu_);
-    size_t current_inflight = 0;
-    for (auto const& kv : transfer_map_) {
-      PendingTransfer const& active = kv.second;
-      if (active.conn_id != conn.conn_id) continue;
-      if (active.kind != PendingTransfer::Kind::kSend) continue;
-      current_inflight += active.chunks.size() - active.chunks_completed;
-    }
-    if (current_inflight + chunk_count > static_cast<size_t>(max_send_inflight)) {
-      if (debug_enabled_) {
-        std::cerr << "[tcpx] send window full at commit: inflight="
-                  << current_inflight << " new_chunks=" << chunk_count
-                  << " limit=" << max_send_inflight << std::endl;
-      }
+    auto [it, inserted] = transfer_map_.emplace(tid, std::move(transfer));
+    PendingTransfer& stored = it->second;
+    auto outcome = schedule_send_chunks_locked(conn, stored);
+    if (outcome == ScheduleOutcome::kError) {
+      transfer_map_.erase(it);
       return false;
     }
-    transfer_map_.emplace(transfer.transfer_id, std::move(transfer));
   }
 
+  transfer_id = tid;
   return true;
 }
 
@@ -1200,64 +1329,22 @@ bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
   size_t chunk_bytes = std::max<size_t>(1, chunk_bytes_);
   size_t chunk_count = (size + chunk_bytes - 1) / chunk_bytes;
 
-  constexpr int kDefaultRecvInflight = 16;
-  int max_recv_inflight = get_env_int("UCCL_TCPX_MAX_RECV_INFLIGHT",
-                                      kDefaultRecvInflight);
-  if (max_recv_inflight <= 0) max_recv_inflight = kDefaultRecvInflight;
-
-  bool window_reserved = false;
-  // Helper to return receive-window credits on early exit paths.
-  auto release_window = [&]() {
-    if (!window_reserved) return;
-    std::lock_guard<std::mutex> win_lock(window_mu_);
-    auto it = recv_inflight_chunks_.find(conn.conn_id);
-    if (it != recv_inflight_chunks_.end()) {
-      if (it->second <= chunk_count) {
-        recv_inflight_chunks_.erase(it);
-      } else {
-        it->second -= chunk_count;
-      }
-    }
-    window_reserved = false;
-  };
-
-  {
-    std::lock_guard<std::mutex> win_lock(window_mu_);
-    // Same quota enforcement for receive buffers to avoid overrunning bounce
-    // buffers or GPU work queues.
-    auto it = recv_inflight_chunks_.find(conn.conn_id);
-    size_t current = it == recv_inflight_chunks_.end() ? 0 : it->second;
-    if (current + chunk_count > static_cast<size_t>(max_recv_inflight)) {
-      if (debug_enabled_) {
-        std::cerr << "[tcpx] recv window full: inflight=" << current
-                  << " new_chunks=" << chunk_count
-                  << " limit=" << max_recv_inflight << std::endl;
-      }
-      return false;
-    }
-    if (it == recv_inflight_chunks_.end()) {
-      recv_inflight_chunks_.emplace(conn.conn_id, chunk_count);
-    } else {
-      it->second = current + chunk_count;
-    }
-    window_reserved = true;
-  }
-
   uintptr_t base_addr = reinterpret_cast<uintptr_t>(mr.base);
   uintptr_t dst_addr = reinterpret_cast<uintptr_t>(data);
   if (dst_addr < base_addr || dst_addr + size > base_addr + mr.size) {
     std::cerr << "[tcpx] recv_async destination out of bounds" << std::endl;
-    release_window();
     return false;
   }
 
   PendingTransfer transfer;
-  transfer.kind = PendingTransfer::Kind::kRecv;
+  transfer.kind = needs_unpack ? PendingTransfer::Kind::kRecv
+                               : PendingTransfer::Kind::kRead;
   transfer.transfer_id = next_transfer_id_.fetch_add(1);
   transfer.conn_id = conn.conn_id;
   transfer.mr_id = mr_id;
   transfer.total_bytes = size;
   transfer.base_tag = static_cast<uint32_t>(tag);
+  transfer.mhandle = mhandle;
   transfer.chunks.reserve(chunk_count);
 
   auto base_ptr = static_cast<char*>(data);
@@ -1265,56 +1352,27 @@ bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
     size_t offset = idx * chunk_bytes;
     size_t chunk_len = std::min(chunk_bytes, size - offset);
     PendingTransfer::ChunkState chunk;
-    // Each receive chunk mirrors the send path but optionally needs GPU unpack.
     chunk.offset = offset;
     chunk.bytes = chunk_len;
-    chunk.tag = static_cast<uint32_t>(tag);
+    chunk.tag = static_cast<uint32_t>(tag) + static_cast<uint32_t>(idx);
     chunk.needs_unpack = needs_unpack;
     chunk.dst_ptr = base_ptr + offset;
     transfer.chunks.push_back(std::move(chunk));
   }
 
-  for (auto& chunk : transfer.chunks) {
-    void* dst_ptr = base_ptr + chunk.offset;
-    void* buffers[1] = {dst_ptr};
-    int sizes[1] = {static_cast<int>(chunk.bytes)};
-    int tags[1] = {static_cast<int>(chunk.tag)};
-    void* mhandles[1] = {mhandle};
-    void* requests[1] = {nullptr};
-
-    int rc = tcpx_irecv(conn.recv_comm, 1, buffers, sizes, tags, mhandles,
-                        requests);
-    if (rc != 0 || !requests[0]) {
-      std::cerr << "[tcpx] tcpx_irecv failed rc=" << rc
-                << " chunk_offset=" << chunk.offset
-                << " chunk_bytes=" << chunk.bytes << std::endl;
-      release_window();
-      return false;
-    }
-    chunk.request = requests[0];
-  }
-
-  transfer_id = transfer.transfer_id;
+  uint64_t tid = transfer.transfer_id;
   {
     std::lock_guard<std::mutex> lock(transfer_mu_);
-    size_t current_inflight = 0;
-    for (auto const& kv : transfer_map_) {
-      PendingTransfer const& active = kv.second;
-      if (active.conn_id != conn.conn_id) continue;
-      if (active.kind != PendingTransfer::Kind::kRecv) continue;
-      current_inflight += active.chunks.size() - active.chunks_completed;
-    }
-    if (current_inflight + chunk_count > static_cast<size_t>(max_recv_inflight)) {
-      if (debug_enabled_) {
-        std::cerr << "[tcpx] recv window full at commit: inflight="
-                  << current_inflight << " new_chunks=" << chunk_count
-                  << " limit=" << max_recv_inflight << std::endl;
-      }
+    auto [it, inserted] = transfer_map_.emplace(tid, std::move(transfer));
+    PendingTransfer& stored = it->second;
+    auto outcome = schedule_recv_chunks_locked(conn, stored);
+    if (outcome == ScheduleOutcome::kError) {
+      transfer_map_.erase(it);
       return false;
     }
-    transfer_map_.emplace(transfer.transfer_id, std::move(transfer));
   }
 
+  transfer_id = tid;
   return true;
 }
 
@@ -1330,7 +1388,27 @@ bool Endpoint::poll_chunk_request_(PendingTransfer& transfer,
   // `completed` when the network transfer has finished populating the bounce
   // buffer.
   int rc = tcpx_test(chunk.request, &completed, &size);
-  if (rc != 0) {
+  if (debug_enabled_ && rc != kTcpxBusy) {
+    std::cerr << "[tcpx] test transfer=" << transfer.transfer_id
+              << " chunk_off=" << chunk.offset << " rc=" << rc
+              << " completed=" << completed << " size=" << size << std::endl;
+  }
+  if (rc == kTcpxBusy) {
+    // TCPX runtime has not produced progress yet; keep the request queued.
+    return true;
+  }
+  if (rc == 2) {
+    // Peer closed the connection; treat as transient unless the chunk already
+    // completed, mirroring the legacy TcpxTransfer logic.
+    if (!completed) {
+      if (debug_enabled_) {
+        std::cerr << "[tcpx] tcpx_test reported connection close (rc=2) for "
+                  << "transfer_id=" << transfer.transfer_id
+                  << " offset=" << chunk.offset << " (not ready)" << std::endl;
+      }
+      return true;
+    }
+  } else if (rc != 0) {
     std::cerr << "[tcpx] tcpx_test failed rc=" << rc
               << " transfer_id=" << transfer.transfer_id
               << " offset=" << chunk.offset << std::endl;
@@ -1347,6 +1425,8 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
                                      PendingTransfer::ChunkState& chunk,
                                      tcpx::plugin::tcpxRequest* request,
                                      Conn& conn) {
+  ScopedCudaContext ctx_guard(cu_context_, static_cast<int>(local_gpu_idx_));
+
   auto* dev_handle_struct =
       reinterpret_cast<tcpx::plugin::NcclNetDeviceHandle*>(
           conn.recv_dev_handle);
@@ -1469,6 +1549,179 @@ bool Endpoint::finalize_recv_chunk_(Conn& conn,
   return true;
 }
 
+bool Endpoint::progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
+                                        bool* schedule_send,
+                                        bool* schedule_recv) {
+  bool trigger_send = false;
+  bool trigger_recv = false;
+
+  if (transfer.kind == PendingTransfer::Kind::kSend) {
+    if (transfer.send_queue.empty()) {
+      if (schedule_send) *schedule_send = false;
+      if (schedule_recv) *schedule_recv = false;
+      return true;
+    }
+    size_t idx = transfer.send_queue.front();
+    if (idx >= transfer.chunks.size()) return false;
+    auto& chunk = transfer.chunks[idx];
+    if (!chunk.posted) return true;
+
+    bool done = false;
+    int received = 0;
+    if (!poll_chunk_request_(transfer, chunk, &done, &received)) return false;
+    if (!done) return true;
+
+    transfer.send_queue.pop_front();
+    chunk.stage2_done = true;
+    transfer.chunks_completed++;
+    chunk.request = nullptr;
+    release_send_slot(transfer.conn_id);
+    trigger_send = true;
+  } else {
+    // Stage 1: 推进接收端的网络传输完成（从bounce buffer到达）
+    // 参考实现：p2p/tcpx/src/transfer_manager.cc 的 processInflightRecv() 函数
+    //
+    // BUG修复：遍历整个队列，处理所有已完成的chunks
+    //
+    // 原来的错误逻辑：
+    //   - 只处理队首chunk
+    //   - 如果队首chunk没完成，就break退出
+    //   - 问题：TCPX可能乱序完成chunks，后面已完成的chunks会被忽略
+    //
+    // 正确做法（对齐参考实现的非阻塞模式）：
+    //   - 遍历整个recv_stage1_queue
+    //   - 对每个chunk调用一次tcpx_test
+    //   - 处理所有已完成的chunks
+    //   - 未完成的chunks留在队列中，下次poll_async时再检查
+    //
+    // 注意：虽然参考实现也是FIFO处理队首，但那是在blocking模式下
+    //       在非blocking模式下，我们需要遍历所有chunks以避免卡住
+    auto stage1_it = transfer.recv_stage1_queue.begin();
+    while (stage1_it != transfer.recv_stage1_queue.end()) {
+      size_t idx = *stage1_it;
+      if (idx >= transfer.chunks.size()) {
+        stage1_it = transfer.recv_stage1_queue.erase(stage1_it);
+        continue;
+      }
+      auto& chunk = transfer.chunks[idx];
+      if (!chunk.posted) {
+        ++stage1_it;
+        continue;
+      }
+      if (chunk.stage1_done) {
+        stage1_it = transfer.recv_stage1_queue.erase(stage1_it);
+        continue;
+      }
+
+      // 对这个chunk调用一次tcpx_test
+      bool done = false;
+      int received = 0;
+      if (!poll_chunk_request_(transfer, chunk, &done, &received))
+        return false;
+
+      if (!done) {
+        // chunk还没完成，跳过它，继续检查下一个chunk
+        ++stage1_it;
+        continue;
+      }
+
+      // chunk已完成网络传输（数据已到达bounce buffer）
+      chunk.stage1_done = true;
+      stage1_it = transfer.recv_stage1_queue.erase(stage1_it);
+
+      if (chunk.needs_unpack) {
+        // 需要GPU unpack kernel：将数据从bounce buffer拷贝到目标GPU内存
+        auto* rx_req = reinterpret_cast<tcpx::plugin::tcpxRequest*>(chunk.request);
+        if (!enqueue_chunk_unpack_(transfer, chunk, rx_req, conn)) return false;
+        transfer.recv_stage2_queue.push_back(idx);
+      } else {
+        // 不需要unpack（例如READ操作），直接完成
+        if (!finalize_recv_chunk_(conn, chunk)) return false;
+        chunk.stage2_done = true;
+        transfer.chunks_completed++;
+        chunk.request = nullptr;
+        release_recv_slot(transfer.conn_id);
+        trigger_recv = true;
+      }
+    }
+
+    // Stage 2: 等待GPU unpack完成
+    //
+    // BUG修复：遍历整个队列，处理所有已ready的events
+    //
+    // 原来的错误逻辑：
+    //   - 遇到第一个未ready的event就break
+    //   - 问题：后面已ready的events会被忽略
+    //
+    // 正确做法：
+    //   - 遍历整个recv_stage2_queue
+    //   - 对每个event调用cudaEventQuery
+    //   - 处理所有已ready的events
+    //   - 未ready的events留在队列中
+    auto stage2_it = transfer.recv_stage2_queue.begin();
+    while (stage2_it != transfer.recv_stage2_queue.end()) {
+      size_t idx = *stage2_it;
+      if (idx >= transfer.chunks.size()) {
+        stage2_it = transfer.recv_stage2_queue.erase(stage2_it);
+        continue;
+      }
+      auto& chunk = transfer.chunks[idx];
+      if (chunk.stage2_done) {
+        stage2_it = transfer.recv_stage2_queue.erase(stage2_it);
+        continue;
+      }
+      if (!chunk.event) {
+        std::cerr << "[tcpx] missing CUDA event for chunk offset "
+                  << chunk.offset << std::endl;
+        if (!finalize_recv_chunk_(conn, chunk)) return false;
+        chunk.stage2_done = true;
+        transfer.chunks_completed++;
+        chunk.request = nullptr;
+        release_recv_slot(transfer.conn_id);
+        trigger_recv = true;
+        stage2_it = transfer.recv_stage2_queue.erase(stage2_it);
+        continue;
+      }
+
+      cudaError_t err = cudaEventQuery(chunk.event);
+      if (err == cudaErrorNotReady) {
+        // Event还没ready，跳过它，继续检查下一个event
+        ++stage2_it;
+        continue;
+      }
+      if (err != cudaSuccess) {
+        std::cerr << "[tcpx] cudaEventQuery failed: "
+                  << cudaGetErrorString(err) << std::endl;
+        return false;
+      }
+
+      // Event已ready，完成这个chunk
+      if (!finalize_recv_chunk_(conn, chunk)) return false;
+      chunk.stage2_done = true;
+      transfer.chunks_completed++;
+      chunk.request = nullptr;
+      release_recv_slot(transfer.conn_id);
+      trigger_recv = true;
+      stage2_it = transfer.recv_stage2_queue.erase(stage2_it);
+    }
+  }
+
+  if (schedule_send) *schedule_send = trigger_send;
+  if (schedule_recv) *schedule_recv = trigger_recv;
+  return true;
+}
+
+bool Endpoint::progress_conn_transfers_locked(Conn& conn) {
+  for (auto& kv : transfer_map_) {
+    PendingTransfer& other = kv.second;
+    if (other.conn_id != conn.conn_id) continue;
+    if (!progress_transfer_locked(conn, other, nullptr, nullptr)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   if (!is_done) return false;
   *is_done = false;
@@ -1486,14 +1739,24 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
     conn_ptr = conn_it->second.get();
   }
 
+  if (transfer.next_chunk_to_post < transfer.chunks.size()) {
+    ScheduleOutcome outcome = ScheduleOutcome::kNoProgress;
+    if (transfer.kind == PendingTransfer::Kind::kSend) {
+      outcome = schedule_send_chunks_locked(*conn_ptr, transfer);
+    } else {
+      outcome = schedule_recv_chunks_locked(*conn_ptr, transfer);
+    }
+    if (outcome == ScheduleOutcome::kError) return false;
+  }
+
   auto log_progress = [&](char const* state) {
     if (!debug_enabled_) return;
     // Optional verbose tracing to understand how chunks progress.
-    size_t posted = transfer.chunks.size();
+    size_t posted = transfer.next_chunk_to_post;
     size_t completed = transfer.chunks_completed;
     size_t inflight = 0;
     for (auto const& chunk : transfer.chunks) {
-      if (!chunk.stage2_done) ++inflight;
+      if (chunk.posted && !chunk.stage2_done) ++inflight;
     }
     std::cerr << "[tcpx] poll transfer=" << transfer.transfer_id
               << " state=" << state << " posted=" << posted
@@ -1501,67 +1764,21 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
               << " completed=" << completed << std::endl;
   };
 
-  for (auto& chunk : transfer.chunks) {
-    if (chunk.stage2_done) continue;
+  bool schedule_send = false;
+  bool schedule_recv = false;
+  if (!progress_transfer_locked(*conn_ptr, transfer, &schedule_send,
+                                &schedule_recv))
+    return false;
 
-    if (!chunk.stage1_done) {
-      // Stage 1: wait for TCPX to finish moving this chunk over the network.
-      bool done = false;
-      int received = 0;
-      if (!poll_chunk_request_(transfer, chunk, &done, &received)) return false;
-      if (!done) {
-        log_progress("stage1");
-        return true;
-      }
-      chunk.stage1_done = true;
-      if (transfer.kind == PendingTransfer::Kind::kSend) {
-        chunk.stage2_done = true;
-        transfer.chunks_completed++;
-        continue;
-      }
-      if (chunk.needs_unpack) {
-        // Stage 2a: launch GPU unpack once the network delivery completed.
-        auto* rx_req =
-            reinterpret_cast<tcpx::plugin::tcpxRequest*>(chunk.request);
-        if (!enqueue_chunk_unpack_(transfer, chunk, rx_req, *conn_ptr))
-          return false;
-      } else {
-        // Stage 2b: no unpack required, mark the chunk as finished.
-        if (!finalize_recv_chunk_(*conn_ptr, chunk)) return false;
-        chunk.stage2_done = true;
-        transfer.chunks_completed++;
-        continue;
-      }
-    }
-
-    if (transfer.kind == PendingTransfer::Kind::kSend) continue;
-    if (chunk.stage2_done) continue;
-    if (!chunk.needs_unpack) continue;
-
-    if (!chunk.event) {
-      // Safety net: unpack should always create an event, but fall back to
-      // synchronous completion if it was skipped.
-      std::cerr << "[tcpx] missing CUDA event for chunk offset "
-                << chunk.offset << std::endl;
-      if (!finalize_recv_chunk_(*conn_ptr, chunk)) return false;
-      chunk.stage2_done = true;
-      transfer.chunks_completed++;
-      continue;
-    }
-
-    cudaError_t err = cudaEventQuery(chunk.event);
-    if (err == cudaErrorNotReady) {
-      log_progress("stage2");
-      return true;
-    }
-    if (err != cudaSuccess) {
-      std::cerr << "[tcpx] cudaEventQuery failed: "
-                << cudaGetErrorString(err) << std::endl;
-      return false;
-    }
-    if (!finalize_recv_chunk_(*conn_ptr, chunk)) return false;
-    chunk.stage2_done = true;
-    transfer.chunks_completed++;
+  if (schedule_send && transfer.kind == PendingTransfer::Kind::kSend &&
+      transfer.next_chunk_to_post < transfer.chunks.size()) {
+    auto outcome = schedule_send_chunks_locked(*conn_ptr, transfer);
+    if (outcome == ScheduleOutcome::kError) return false;
+  }
+  if (schedule_recv && transfer.kind != PendingTransfer::Kind::kSend &&
+      transfer.next_chunk_to_post < transfer.chunks.size()) {
+    auto outcome = schedule_recv_chunks_locked(*conn_ptr, transfer);
+    if (outcome == ScheduleOutcome::kError) return false;
   }
 
   if (transfer.chunks_completed < transfer.chunks.size()) {
@@ -1572,26 +1789,15 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   log_progress("complete");
 
   uint64_t done_conn = transfer.conn_id;
-  size_t done_chunks = transfer.chunks.size();
-  PendingTransfer::Kind done_kind = transfer.kind;
   transfer_map_.erase(it);
   lock.unlock();
 
   {
     std::lock_guard<std::mutex> win_lock(window_mu_);
-    // Release the chunk budget now that every slice for this transfer finished.
-    auto& table = done_kind == PendingTransfer::Kind::kSend
-                      ? send_inflight_chunks_
-                      : recv_inflight_chunks_;
-    auto counter_it = table.find(done_conn);
-    if (counter_it != table.end()) {
-      if (counter_it->second <= done_chunks) {
-        table.erase(counter_it);
-      } else {
-        counter_it->second -= done_chunks;
-      }
-    }
+    send_inflight_chunks_.erase(done_conn);
+    recv_inflight_chunks_.erase(done_conn);
   }
+  window_cv_.notify_all();
 
   *is_done = true;
   return true;
@@ -1621,10 +1827,12 @@ void Endpoint::free_conn_(std::unique_ptr<Conn>& conn) {
     }
   }
   {
-    std::lock_guard<std::mutex> win_lock(window_mu_);
+    std::unique_lock<std::mutex> win_lock(window_mu_);
     send_inflight_chunks_.erase(conn->conn_id);
     recv_inflight_chunks_.erase(conn->conn_id);
+    win_lock.unlock();
   }
+  window_cv_.notify_all();
   for (void* handle : send_handles) {
     if (conn->send_comm) tcpx_dereg_mr(conn->send_comm, handle);
   }

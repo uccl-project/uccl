@@ -448,11 +448,26 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
                      size_t data_size) {
   if (!conn || !mr || !data) return -1;
-  uint64_t transfer_id;
-  return conn->engine->endpoint->recv_async(conn->conn_id, mr->mr_id, data,
-                                            data_size, &transfer_id)
-             ? 0
-             : -1;
+
+  uint64_t transfer_id = 0;
+  if (!conn->engine->endpoint->recv_async(conn->conn_id, mr->mr_id, data,
+                                          data_size, &transfer_id)) {
+    return -1;
+  }
+
+  // Poll until the transfer completes
+  // This drives the stage 1 (network -> bounce buffer) and stage 2 (unpack kernel) pipelines
+  bool done = false;
+  while (!done) {
+    if (!conn->engine->endpoint->poll_async(transfer_id, &done)) {
+      return -1;
+    }
+    if (!done) {
+      std::this_thread::sleep_for(std::chrono::microseconds(10));
+    }
+  }
+
+  return 0;
 }
 
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {

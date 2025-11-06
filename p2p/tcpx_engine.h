@@ -6,6 +6,8 @@
 #include "tcpx/include/unpack_descriptor.h"
 #include <array>
 #include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -79,6 +81,7 @@ struct PendingTransfer {
     bool needs_unpack = false;
     bool stage1_done = false;
     bool stage2_done = false;
+    bool posted = false;
     // Bounce-buffer metadata used to launch the unpack kernel once the network
     // transfer finishes.
     rx::UnpackDescriptorBlock desc_block{};
@@ -93,10 +96,15 @@ struct PendingTransfer {
   uint64_t mr_id = 0;
   size_t total_bytes = 0;
   uint32_t base_tag = 0;
+  size_t next_chunk_to_post = 0;
+  void* mhandle = nullptr;
   // Transfer is expressed as a vector of chunks that flow through
   // (TCP completion -> optional GPU unpack -> completion).
   std::vector<ChunkState> chunks;
   size_t chunks_completed = 0;
+  std::deque<size_t> send_queue;
+  std::deque<size_t> recv_stage1_queue;
+  std::deque<size_t> recv_stage2_queue;
 };
 
 class Endpoint {
@@ -206,16 +214,32 @@ class Endpoint {
 
   size_t chunk_bytes_ = 0;
   bool debug_enabled_ = false;
+  CUdevice cu_device_ = 0;
+  CUcontext cu_context_ = nullptr;
 
   mutable std::mutex window_mu_;
   // Sliding-window counters (how many chunks are currently in-flight per
   // connection for send/recv directions).
   std::unordered_map<uint64_t, size_t> send_inflight_chunks_;
   std::unordered_map<uint64_t, size_t> recv_inflight_chunks_;
+  std::condition_variable window_cv_;
 
-  static void free_conn_(std::unique_ptr<Conn>& conn);
+  enum class ScheduleOutcome { kNoProgress, kProgress, kError };
+
+  void free_conn_(std::unique_ptr<Conn>& conn);
+  ScheduleOutcome schedule_send_chunks_locked(Conn& conn,
+                                              PendingTransfer& transfer);
+  ScheduleOutcome schedule_recv_chunks_locked(Conn& conn,
+                                              PendingTransfer& transfer);
+  bool reserve_send_slot(uint64_t conn_id, size_t limit);
+  bool reserve_recv_slot(uint64_t conn_id, size_t limit);
+  void release_send_slot(uint64_t conn_id);
+  void release_recv_slot(uint64_t conn_id);
   bool populate_conn_handles_(Conn& conn, uint64_t mr_id, bool is_recv,
                               void** mhandle_out);
+  bool progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
+                                bool* schedule_send, bool* schedule_recv);
+  bool progress_conn_transfers_locked(Conn& conn);
   bool poll_chunk_request_(PendingTransfer& transfer,
                            PendingTransfer::ChunkState& chunk, bool* done,
                            int* received_size);
