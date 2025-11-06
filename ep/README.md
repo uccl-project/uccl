@@ -120,6 +120,15 @@ We follow the **DeepSeek-V3 pretraining** configuration (4096 tokens per batch, 
 | Internode | 24 | 53 GB/s (RDMA)    | 24 | 26 GB/s (RDMA)    |
 | Internode | 32 | 54 GB/s (RDMA)    | 32 | 43 GB/s (RDMA)    |
 
+**Latency:**
+
+| #EP | Dispatch (FP8) | Dispatch (BF16) | Combine |
+|:----:|:---------------:|:----------------:|:--------:|
+| 8  | 500 µs | 922 µs | 973 µs |
+| 16 | 1196 µs | 1988 µs | 6379 µs |
+| 24 | 1633 µs | 2863 µs | 6365 µs |
+| 32 | 2022 µs | 3702 µs | 4899 µs |
+
 ### Low-latency kernels with pure RDMA
 
 We test low-latency kernels on **H200 (8× GPUs + EFA 400 Gb/s)** following a **DeepSeek-V3 inference** setting (128 tokens per batch, 7168 hidden, top-8 experts, FP8 dispatch / BF16 combine).
