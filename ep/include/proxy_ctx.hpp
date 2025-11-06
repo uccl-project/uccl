@@ -54,13 +54,12 @@ struct ProxyCtx {
   struct ibv_ah* dst_ah = nullptr;
 
   // Connectionless SRD support: multiple AHs and QPNs for different remote NICs
-  // These are used in fast mode when use_normal_mode = false
-  std::vector<struct ibv_ah*> dst_ah_per_nic;     // AH for each remote NIC
-  std::vector<uint32_t> dst_qpn_per_nic;          // QPN for each remote NIC
-  std::vector<uint32_t> dst_ack_qpn_per_nic;      // Ack QPN for each remote NIC
-  std::vector<uintptr_t> remote_addr_per_nic;     // Remote addr for each NIC
-  std::vector<uint32_t> remote_rkey_per_nic;      // Remote rkey for each NIC
-  std::vector<uint64_t> remote_len_per_nic;       // Remote len for each NIC
+  std::vector<struct ibv_ah*> dst_ah_per_nic;
+  std::vector<uint32_t> dst_qpn_per_nic;
+  std::vector<uint32_t> dst_ack_qpn_per_nic;
+  std::vector<uintptr_t> remote_addr_per_nic;
+  std::vector<uint32_t> remote_rkey_per_nic;
+  std::vector<uint64_t> remote_len_per_nic;
 
   // Remote memory
   uintptr_t remote_addr = 0;  // Base address of remote rdma_buffer

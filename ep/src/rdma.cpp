@@ -420,12 +420,12 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   local_info->psn = 0;
   local_info->ack_psn = 0;
   fill_local_gid(S, local_info);
-  
-  // Initialize multi-NIC info for fast mode (will be populated later)
+
   local_info->num_nics = 0;
   memset(local_info->gid_per_nic, 0, sizeof(local_info->gid_per_nic));
   memset(local_info->qp_num_per_nic, 0, sizeof(local_info->qp_num_per_nic));
-  memset(local_info->ack_qp_num_per_nic, 0, sizeof(local_info->ack_qp_num_per_nic));
+  memset(local_info->ack_qp_num_per_nic, 0,
+         sizeof(local_info->ack_qp_num_per_nic));
 }
 
 void modify_qp_to_init(ProxyCtx& S) {
@@ -498,20 +498,16 @@ struct ibv_ah* create_ah(ProxyCtx& S, uint8_t* remote_gid) {
 void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
                       bool use_normal_mode) {
 #ifdef EFA
-  // For connectionless SRD, store primary connection info
   S.dst_qpn = remote->qp_num;
   S.dst_ack_qpn = remote->recv_ack_qp_num;
   S.dst_ah = create_ah(S, remote->gid);
-  
-  // In fast mode (use_normal_mode=false), support multiple NICs per node
-  // Store AH and QPN for each remote NIC for connectionless SRD
+
   if (!use_normal_mode && remote->num_nics > 0) {
     S.dst_ah_per_nic.resize(remote->num_nics);
     S.dst_qpn_per_nic.resize(remote->num_nics);
     S.dst_ack_qpn_per_nic.resize(remote->num_nics);
-    
+
     for (uint32_t nic_idx = 0; nic_idx < remote->num_nics; ++nic_idx) {
-      // Create AH for each NIC
       S.dst_ah_per_nic[nic_idx] = create_ah(S, remote->gid_per_nic[nic_idx]);
       S.dst_qpn_per_nic[nic_idx] = remote->qp_num_per_nic[nic_idx];
       S.dst_ack_qpn_per_nic[nic_idx] = remote->ack_qp_num_per_nic[nic_idx];
@@ -1044,16 +1040,13 @@ static void post_rdma_async_batched_fast_mode(
         qpx->comp_mask = 0;
         qpx->wr_flags = IBV_SEND_SIGNALED;
 
-        // Connectionless SRD: select which remote NIC to target
-        // If multi-NIC info is available, round-robin to distribute load
         struct ibv_ah* selected_ah = ctx->dst_ah;
         uint32_t selected_qpn = ctx->dst_qpn;
         uintptr_t selected_remote_addr = ctx->remote_addr;
         uint32_t selected_remote_rkey = ctx->remote_rkey;
         uint64_t selected_remote_len = ctx->remote_len;
-        
+
         if (!ctx->dst_ah_per_nic.empty()) {
-          // Use the work request ID to select a NIC for load balancing
           size_t nic_idx = wrs_to_post[i] % ctx->dst_ah_per_nic.size();
           selected_ah = ctx->dst_ah_per_nic[nic_idx];
           selected_qpn = ctx->dst_qpn_per_nic[nic_idx];
@@ -1072,7 +1065,8 @@ static void post_rdma_async_batched_fast_mode(
                   "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
                   "size=%zu), cmd.req_rptr: 0x%llx\n",
                   (unsigned long long)remote_addr, cmd.bytes,
-                  (unsigned long long)selected_remote_addr, (size_t)selected_remote_len,
+                  (unsigned long long)selected_remote_addr,
+                  (size_t)selected_remote_len,
                   (unsigned long long)cmd.req_rptr);
           cudaError_t err = cudaDeviceSynchronize();
           if (err != cudaSuccess) {
@@ -1092,7 +1086,8 @@ static void post_rdma_async_batched_fast_mode(
                                       get_low_latency(cmd.cmd_type),
                                       cmd.expert_idx, 1, my_rank)
                            .GetImmData();
-        ibv_wr_rdma_write_imm(qpx, selected_remote_rkey, remote_addr, htonl(imm));
+        ibv_wr_rdma_write_imm(qpx, selected_remote_rkey, remote_addr,
+                              htonl(imm));
 #else
       if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
         int v = static_cast<int>(cmd.atomic_val);
@@ -1104,20 +1099,22 @@ static void post_rdma_async_batched_fast_mode(
             AtomicsImm::Pack(true, false, cmd.atomic_val, cmd.atomic_offset,
                              get_low_latency(cmd.cmd_type))
                 .GetImmData();
-        ibv_wr_rdma_write_imm(qpx, selected_remote_rkey, remote_addr, htonl(imm));
+        ibv_wr_rdma_write_imm(qpx, selected_remote_rkey, remote_addr,
+                              htonl(imm));
       } else if (j + 1 == k) {
         uint32_t imm = WriteImm::Pack(get_is_combine(cmd.cmd_type),
                                       get_low_latency(cmd.cmd_type),
                                       cmd.expert_idx, k, my_rank)
                            .GetImmData();
-        ibv_wr_rdma_write_imm(qpx, selected_remote_rkey, remote_addr, htonl(imm));
+        ibv_wr_rdma_write_imm(qpx, selected_remote_rkey, remote_addr,
+                              htonl(imm));
       } else {
         ibv_wr_rdma_write(qpx, selected_remote_rkey, remote_addr);
       }
 #endif
         uintptr_t laddr =
             cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
-        
+
         ibv_wr_set_ud_addr(qpx, selected_ah, selected_qpn, QKEY);
         ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
                        static_cast<uint32_t>(cmd.bytes));
