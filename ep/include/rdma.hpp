@@ -29,6 +29,14 @@ struct RDMAConnectionInfo {
   // #ifdef EFA
   uint32_t num_rings;
   uint32_t data_qp_num[kChannelPerProxy];
+  
+  // Connectionless SRD: support for multiple NICs per node
+  // In fast mode (use_normal_mode=false), we can use a single QP
+  // with different AH and QPN for each remote NIC
+  uint32_t num_nics;                     // Number of NICs on this node
+  uint8_t gid_per_nic[MAX_NUM_GPUS][16]; // GID for each NIC
+  uint32_t qp_num_per_nic[MAX_NUM_GPUS]; // QPN for each NIC
+  uint32_t ack_qp_num_per_nic[MAX_NUM_GPUS]; // Ack QPN for each NIC
   // #endif
 };
 
@@ -301,6 +309,10 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
 void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info);
 
 void modify_qp_to_init(ProxyCtx& S);
+
+// Create Address Handle for connectionless SRD communication
+struct ibv_ah* create_ah(ProxyCtx& S, uint8_t* remote_gid);
+
 void local_poll_completions(ProxyCtx& S,
                             std::unordered_set<uint64_t>& acked_wrs,
                             int thread_idx, std::vector<ProxyCtx*>& ctx_by_tag);
