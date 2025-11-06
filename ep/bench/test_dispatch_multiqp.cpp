@@ -721,10 +721,7 @@ int main(int argc, char** argv) {
   int total_experts = total_gpus * NUM_EXPERTS_PER_GPU;
 
   printf("=== DeepEP Multi-QP Dispatch Pattern Test ===\n");
-  printf(
-      "Architecture: Multi-threaded (based on "
-      "test_dispatch_connectionless.cpp)\n");
-  printf("QP Design: One QP per expert (matches DeepEP test_low_latency.py)\n");
+  printf("QP Design: One QP per expert\n");
   printf("Total nodes: %d\n", num_nodes);
   printf("Total GPUs: %d\n", total_gpus);
   printf("My rank: %d\n", my_rank);

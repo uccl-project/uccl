@@ -1,11 +1,11 @@
-// DeepEP Low-Latency Dispatch Pattern Test
+// DeepEP Low-Latency Dispatch Pattern Test - Shared QP Version
 // Simulates MoE token dispatch across nodes with random expert selection
 //
 // Pattern:
-// - Each GPU has 128 tokens, each token is 7KB
-// - Each token randomly selects 8 remote GPUs (experts) on OTHER nodes
+// - Each GPU has 36 experts, 128 tokens, each token is 7KB
+// - Each token randomly selects 8 experts from ALL experts (matches DeepEP)
 // - Only tests inter-node RDMA (skips intra-node traffic)
-// - Uses shared QP architecture (1 QP per NIC)
+// - Uses shared QP architecture (1 QP per NIC, 2 QPs per GPU)
 
 #include <arpa/inet.h>
 #include <infiniband/efadv.h>
@@ -31,10 +31,11 @@
 
 // Configuration
 constexpr int NUM_GPUS_PER_NODE = 8;
+constexpr int NUM_EXPERTS_PER_GPU = 36;  // DeepEP: 288 experts / 8 GPUs = 36
 constexpr int NUM_NICS_PER_GPU = 2;
 constexpr size_t TOKEN_SIZE = 7 * 1024;  // 7KB per token (DeepEP FP8 format)
 constexpr int NUM_TOKENS_PER_GPU = 128;  // Each GPU has 128 tokens
-constexpr int TOPK = 8;  // Each token selects 8 experts (remote GPUs)
+constexpr int TOPK = 8;  // Each token selects 8 experts (matches DeepEP)
 constexpr int SLOTS_PER_SRC = 1024;
 constexpr int WINDOW_PER_NIC = 256;
 constexpr uint32_t QKEY = 0x11111111u;
@@ -85,6 +86,7 @@ struct PeerEndpoint {
 struct TokenRoute {
   int remote_rank;
   int remote_gpu;
+  int remote_expert;  // Expert ID (0-35) on remote GPU
 };
 
 std::vector<std::string> parse_ip_list(std::string const& ip_str) {
@@ -335,14 +337,22 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
   CUDA_CHECK(cudaSetDevice(gpu_id));
 
   // Generate routing table: each token randomly selects TOPK experts from ALL
-  // GPUs
+  // experts (matches DeepEP)
   std::mt19937 rng(seed + my_rank * NUM_GPUS_PER_NODE + gpu_id);
 
-  // Build list of ALL GPUs (experts) across all nodes
-  std::vector<std::pair<int, int>> all_gpus;  // (rank, gpu_id)
+  // Build list of ALL experts across all nodes
+  // Each expert is identified by (rank, gpu_id, expert_id)
+  struct ExpertID {
+    int rank;
+    int gpu;
+    int expert;
+  };
+  std::vector<ExpertID> all_experts;
   for (int r = 0; r < num_nodes; r++) {
     for (int g = 0; g < NUM_GPUS_PER_NODE; g++) {
-      all_gpus.push_back({r, g});
+      for (int e = 0; e < NUM_EXPERTS_PER_GPU; e++) {
+        all_experts.push_back({r, g, e});
+      }
     }
   }
 
@@ -353,7 +363,7 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
   uint64_t intra_node_selections = 0;
 
   for (int t = 0; t < NUM_TOKENS_PER_GPU; t++) {
-    std::vector<std::pair<int, int>> candidates = all_gpus;
+    std::vector<ExpertID> candidates = all_experts;
     std::shuffle(candidates.begin(), candidates.end(), rng);
 
     // Select top-K experts
@@ -361,10 +371,11 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
       total_selections++;
 
       // Only send via RDMA if expert is on a different node
-      if (candidates[k].first != my_rank) {
+      if (candidates[k].rank != my_rank) {
         TokenRoute route;
-        route.remote_rank = candidates[k].first;
-        route.remote_gpu = candidates[k].second;
+        route.remote_rank = candidates[k].rank;
+        route.remote_gpu = candidates[k].gpu;
+        route.remote_expert = candidates[k].expert;
         token_routes[t].push_back(route);
       } else {
         intra_node_selections++;
@@ -654,14 +665,21 @@ int main(int argc, char** argv) {
   }
 
   int num_nodes = (int)node_ips.size();
+  int total_gpus = num_nodes * NUM_GPUS_PER_NODE;
+  int total_experts = total_gpus * NUM_EXPERTS_PER_GPU;
 
-  printf("=== DeepEP Low-Latency Dispatch Pattern Test ===\n");
+  printf("=== DeepEP Low-Latency Dispatch Pattern Test (Shared QP) ===\n");
+  printf("Architecture: Shared QP (1 QP per NIC, 2 QPs per GPU)\n");
   printf("Total nodes: %d\n", num_nodes);
+  printf("Total GPUs: %d\n", total_gpus);
   printf("My rank: %d\n", my_rank);
   printf("Config: %d tokens/GPU, %zu bytes/token (7KB), Top-%d routing\n",
          NUM_TOKENS_PER_GPU, TOKEN_SIZE, TOPK);
-  printf("Pattern: Each token randomly selects %d experts from ALL %d GPUs\n",
-         TOPK, num_nodes * NUM_GPUS_PER_NODE);
+  printf("Experts: %d per GPU, %d total experts\n", NUM_EXPERTS_PER_GPU,
+         total_experts);
+  printf(
+      "Pattern: Each token randomly selects %d experts from ALL %d experts\n",
+      TOPK, total_experts);
   printf("         Intra-node selections are skipped (no RDMA)\n");
   printf("         Only inter-node selections are sent via RDMA\n");
   printf("Random seed: %d\n", seed);
