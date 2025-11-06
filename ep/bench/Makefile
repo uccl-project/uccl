@@ -182,6 +182,12 @@ FC_LATENCY_TARGET := test_fc_latency$(BUILD_SUFFIX)
 FC_LOAD_LATENCY_TARGET := test_fc_load_latency$(BUILD_SUFFIX)
 CAS_TARGET := test_cas_throughput$(BUILD_SUFFIX)
 
+# RDMA test targets (require EFA)
+ifeq ($(HAS_EFA),1)
+    ALLTOALL_RAIL_SHARED_QP_TARGET := test_alltoall_rail_shared_qp$(BUILD_SUFFIX)
+    ALLTOALL_NONRAIL_SHARED_QP_TARGET := test_alltoall_nonrail_shared_qp$(BUILD_SUFFIX)
+endif
+
 # EP runtime targets (if EFA is available)
 ifeq ($(HAS_EFA),1)
     TARGET_LOCAL := benchmark_local$(BUILD_SUFFIX)
@@ -319,6 +325,28 @@ $(CAS_TARGET): test_cas_throughput.cu $(HEADERS)
 	@echo "Building CAS throughput test..."
 	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $< $(LIBS)
 	@echo "Build complete: $@"
+
+# ===============================================================================
+# RDMA Test Build Rules (only if EFA is available)
+# ===============================================================================
+
+ifeq ($(HAS_EFA),1)
+# AllToAll Rail Shared QP test
+alltoall-rail-shared-qp: $(ALLTOALL_RAIL_SHARED_QP_TARGET)
+
+$(ALLTOALL_RAIL_SHARED_QP_TARGET): test_alltoall_rail_shared_qp.cpp $(HEADERS)
+	@echo "Building AllToAll Rail Shared QP test..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $< $(LIBS) -libverbs
+	@echo "Build complete: $@"
+
+# AllToAll NonRail Shared QP test
+alltoall-nonrail-shared-qp: $(ALLTOALL_NONRAIL_SHARED_QP_TARGET)
+
+$(ALLTOALL_NONRAIL_SHARED_QP_TARGET): test_alltoall_nonrail_shared_qp.cpp $(HEADERS)
+	@echo "Building AllToAll NonRail Shared QP test..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $< $(LIBS) -libverbs
+	@echo "Build complete: $@"
+endif
 
 # ===============================================================================
 # EP Runtime Build Rules (only if EFA is available)
@@ -567,6 +595,13 @@ clean:
 	rm -f test_fc_latency test_fc_latency_debug
 	rm -f test_fc_load_latency test_fc_load_latency_debug
 	rm -f test_cas_throughput test_cas_throughput_debug
+	# Clean RDMA test targets
+ifeq ($(HAS_EFA),1)
+	rm -f $(ALLTOALL_RAIL_SHARED_QP_TARGET)
+	rm -f test_alltoall_rail_shared_qp test_alltoall_rail_shared_qp_debug
+	rm -f $(ALLTOALL_NONRAIL_SHARED_QP_TARGET)
+	rm -f test_alltoall_nonrail_shared_qp test_alltoall_nonrail_shared_qp_debug
+endif
 	# Clean EP runtime targets
 ifeq ($(HAS_EFA),1)
 	rm -f $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL)
@@ -603,6 +638,12 @@ endif
 	@echo "  fc-latency       - Build flat combining latency test"
 	@echo "  fc-load-latency  - Build flat combining load-latency test"
 	@echo "  cas              - Build CAS throughput test"
+ifeq ($(HAS_EFA),1)
+	@echo ""
+	@echo "RDMA test targets (EFA required):"
+	@echo "  alltoall-rail-shared-qp    - Build AllToAll Rail test with shared QP"
+	@echo "  alltoall-nonrail-shared-qp - Build AllToAll NonRail test with shared QP"
+endif
 	@echo ""
 	@echo "Run targets:"
 	@echo "  run-fc           - Run flat combining test"
@@ -660,8 +701,9 @@ endif
 # Phony targets
 # ===============================================================================
 .PHONY: all benchmarks ep-runtime ep py
-.PHONY: fc lock multi-ring fc-latency fc-load-latency
-.PHONY: run-fc run-lock run-multi-ring run-fc-latency run-fc-load-latency
+.PHONY: fc lock multi-ring fc-latency fc-load-latency cas
+.PHONY: alltoall-rail-shared-qp alltoall-nonrail-shared-qp
+.PHONY: run-fc run-lock run-multi-ring run-fc-latency run-fc-load-latency run-cas
 .PHONY: run-ep-local run-ep-remote run-ep-dual run-ep
 .PHONY: quick benchmark
 .PHONY: memcheck-fc memcheck-lock profile-fc profile-lock
