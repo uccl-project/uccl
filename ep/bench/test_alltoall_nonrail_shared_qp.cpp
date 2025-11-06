@@ -14,12 +14,12 @@
 #include <netinet/in.h>
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <cerrno>
 #include <iostream>
 #include <mutex>
 #include <sstream>
@@ -153,8 +153,8 @@ void exchange_connection_info(int my_rank, int my_gpu, int nic_id,
     // Lower rank/gpu listens
     int listenfd = socket(AF_INET, SOCK_STREAM, 0);
     if (listenfd < 0) {
-      fprintf(stderr, "[Rank %d GPU %d] socket() failed: %s\n",
-              my_rank, my_gpu, strerror(errno));
+      fprintf(stderr, "[Rank %d GPU %d] socket() failed: %s\n", my_rank, my_gpu,
+              strerror(errno));
       exit(EXIT_FAILURE);
     }
 
@@ -193,8 +193,8 @@ void exchange_connection_info(int my_rank, int my_gpu, int nic_id,
     }
 
     if (listen(listenfd, 1) < 0) {
-      fprintf(stderr, "[Rank %d GPU %d] listen() failed: %s\n",
-              my_rank, my_gpu, strerror(errno));
+      fprintf(stderr, "[Rank %d GPU %d] listen() failed: %s\n", my_rank, my_gpu,
+              strerror(errno));
       close(listenfd);
       exit(EXIT_FAILURE);
     }
@@ -233,8 +233,8 @@ void exchange_connection_info(int my_rank, int my_gpu, int nic_id,
     // Higher rank/gpu connects
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
-      fprintf(stderr, "[Rank %d GPU %d] socket() failed: %s\n",
-              my_rank, my_gpu, strerror(errno));
+      fprintf(stderr, "[Rank %d GPU %d] socket() failed: %s\n", my_rank, my_gpu,
+              strerror(errno));
       exit(EXIT_FAILURE);
     }
 
