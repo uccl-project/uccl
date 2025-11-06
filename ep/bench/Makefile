@@ -186,6 +186,8 @@ CAS_TARGET := test_cas_throughput$(BUILD_SUFFIX)
 ifeq ($(HAS_EFA),1)
     ALLTOALL_RAIL_SHARED_QP_TARGET := test_alltoall_rail_shared_qp$(BUILD_SUFFIX)
     ALLTOALL_NONRAIL_SHARED_QP_TARGET := test_alltoall_nonrail_shared_qp$(BUILD_SUFFIX)
+    DISPATCH_CONNECTIONLESS_TARGET := test_dispatch_connectionless$(BUILD_SUFFIX)
+    DISPATCH_MULTIQP_TARGET := test_dispatch_multiqp$(BUILD_SUFFIX)
 endif
 
 # EP runtime targets (if EFA is available)
@@ -249,6 +251,12 @@ all: $(ALL_TARGETS)
 # Benchmark targets
 benchmarks: $(FC_TARGET) $(LOCK_TARGET) $(MULTI_RING_TARGET) $(CAS_TARGET)
 	@echo "Benchmark tests built successfully"
+
+# RDMA test targets (only if EFA is available)
+ifeq ($(HAS_EFA),1)
+rdma-tests: $(ALLTOALL_RAIL_SHARED_QP_TARGET) $(ALLTOALL_NONRAIL_SHARED_QP_TARGET) $(DISPATCH_CONNECTIONLESS_TARGET) $(DISPATCH_MULTIQP_TARGET)
+	@echo "RDMA tests built successfully"
+endif
 
 # EP Runtime targets (only if EFA is available)
 ifeq ($(HAS_EFA),1)
@@ -344,6 +352,22 @@ alltoall-nonrail-shared-qp: $(ALLTOALL_NONRAIL_SHARED_QP_TARGET)
 
 $(ALLTOALL_NONRAIL_SHARED_QP_TARGET): test_alltoall_nonrail_shared_qp.cpp $(HEADERS)
 	@echo "Building AllToAll NonRail Shared QP test..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $< $(LIBS) -libverbs
+	@echo "Build complete: $@"
+
+# Dispatch Connectionless test (MoE pattern)
+dispatch-connectionless: $(DISPATCH_CONNECTIONLESS_TARGET)
+
+$(DISPATCH_CONNECTIONLESS_TARGET): test_dispatch_connectionless.cpp $(HEADERS)
+	@echo "Building Dispatch Connectionless test (MoE pattern)..."
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $< $(LIBS) -libverbs
+	@echo "Build complete: $@"
+
+# Dispatch Multi-QP test (DeepEP one QP per expert)
+dispatch-multiqp: $(DISPATCH_MULTIQP_TARGET)
+
+$(DISPATCH_MULTIQP_TARGET): test_dispatch_multiqp.cpp $(HEADERS)
+	@echo "Building Dispatch Multi-QP test (DeepEP one QP per expert)..."
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $< $(LIBS) -libverbs
 	@echo "Build complete: $@"
 endif
@@ -601,6 +625,10 @@ ifeq ($(HAS_EFA),1)
 	rm -f test_alltoall_rail_shared_qp test_alltoall_rail_shared_qp_debug
 	rm -f $(ALLTOALL_NONRAIL_SHARED_QP_TARGET)
 	rm -f test_alltoall_nonrail_shared_qp test_alltoall_nonrail_shared_qp_debug
+	rm -f $(DISPATCH_CONNECTIONLESS_TARGET)
+	rm -f test_dispatch_connectionless test_dispatch_connectionless_debug
+	rm -f $(DISPATCH_MULTIQP_TARGET)
+	rm -f test_dispatch_multiqp test_dispatch_multiqp_debug
 endif
 	# Clean EP runtime targets
 ifeq ($(HAS_EFA),1)
