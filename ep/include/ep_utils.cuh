@@ -925,7 +925,7 @@ __device__ __forceinline__ void st_relaxed_sys_global(int const* ptr, int val) {
 __device__ __forceinline__ int ld_acquire_cta(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  HIP_ATOMIC_LOAD(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_WORKGROUP);
+  ret = HIP_ATOMIC_LOAD(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_WORKGROUP);
 #else
   asm volatile("ld.acquire.cta.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif

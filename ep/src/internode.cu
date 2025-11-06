@@ -819,7 +819,7 @@ __global__ void __launch_bounds__(
         acquire_lock(rdma_send_channel_lock + lane_id);
         auto latest_tail = rdma_send_channel_tail[lane_id];
         auto offset = rdma_tail_idx - latest_tail;
-        while (offset >= WARP_SIZE) {
+        while (offset >= 32) {
           release_lock(rdma_send_channel_lock + lane_id);
           acquire_lock(rdma_send_channel_lock + lane_id);
           latest_tail = rdma_send_channel_tail[lane_id];
@@ -830,8 +830,7 @@ __global__ void __launch_bounds__(
         // Add the bit and move the ones if possible
         auto window = rdma_send_channel_window[lane_id] | (1u << offset);
         if (offset == 0) {
-          auto num_empty_slots =
-              (~window) == 0 ? WARP_SIZE : __ffs(~window) - 1;
+          auto num_empty_slots = (~window) == 0 ? 32 : __ffs(~window) - 1;
           st_release_cta(rdma_send_channel_tail + lane_id,
                          latest_tail + num_empty_slots);
           window >>= num_empty_slots;
@@ -1375,9 +1374,6 @@ __global__ void __launch_bounds__(
         st_relaxed_sys_global(nvl_channel_head.buffer(),
                               cached_channel_head_idx);
     }
-  }
-  if (lane_id == 0) {
-    printf("[Dispatch]: warp %d finished!\n", warp_id);
   }
 }
 
