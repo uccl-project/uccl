@@ -4,6 +4,7 @@
 #include "rx_ring.h"
 #include "tx_ring.h"
 #include <glog/logging.h>
+#include <linux/ethtool.h>
 #include <cstdint>
 #include <deque>
 #include <mutex>
@@ -34,17 +35,20 @@ class DPDKSocket {
     return packet_pool_->InUsePacketsCount();
   }
 
-  inline void push_packet(Packet* pkt) { Packet::Free(pkt); }
+  inline void push_packet(Packet* pkt) {
+    LOG(INFO) << "push_packet packet: " << pkt;
+    Packet::Free(pkt);
+  }
 
   inline Packet* pop_packet() {
-    std::lock_guard<std::mutex> lock(mutex_);
+    // std::lock_guard<std::mutex> lock(mutex_);
     return packet_pool_->PacketAlloc();
   }
 
   inline Packet* pop_packet(uint16_t pkt_len) {
     Packet* pkt = nullptr;
     do {
-      std::lock_guard<std::mutex> lock(mutex_);
+      // std::lock_guard<std::mutex> lock(mutex_);
       pkt = packet_pool_->PacketAlloc();
     } while (pkt == nullptr);
 
@@ -55,20 +59,24 @@ class DPDKSocket {
   }
 
   uint32_t send_packets(Packet** pkts, uint32_t nb_pkts) {
+    for (uint32_t i = 0; i < nb_pkts; i++) {
+      LOG(INFO) << "send_packets [" << i << "] packet: " << pkts[i];
+    }
     uint32_t sent = tx_ring_->TrySendPackets(pkts, nb_pkts);
     total_sent_packets_ += sent;
+    // LOG(INFO) << "send_packets sent: " << sent;
     return sent;
   }
 
-  uint32_t send_packet(Packet* pkt) {
-    return tx_ring_->TrySendPackets(&pkt, 1);
-  }
+  uint32_t send_packet(Packet* pkt) { return send_packets(&pkt, 1); }
 
   uint32_t recv_packets(Packet** pkts, uint32_t nb_pkts) {
     uint32_t rcvd = rx_ring_->RecvPackets(pkts, nb_pkts);
-    total_recv_packets_ += rcvd;
+    // total_recv_packets_ += rcvd;
     return rcvd;
   }
+
+  void increment_recv() { total_recv_packets_++; }
 
   int get_queue_id() const { return queue_id_; }
 
@@ -143,48 +151,63 @@ class PacketBuf {
   PacketBuf* next_;
   // Describing the packet frame address and length.
   Packet* pkt_;
+  // The length of the payload in the packet.
+  uint32_t payload_len_;
+  // The address of the payload in the packet.
+  uint8_t* payload_addr_;
+  // The sequence number of the packet.
+  uint32_t seqno_;
   // Flags to denote the message buffer state.
 #define UCCL_MSGBUF_FLAGS_SYN (1 << 0)
 #define UCCL_MSGBUF_FLAGS_FIN (1 << 1)
 #define UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE (1 << 2)
   uint8_t msg_flags_;
 
-  PacketBuf() {
+  PacketBuf(Packet* pkt, uint8_t msg_flags) {
     next_ = nullptr;
-    pkt_ = nullptr;
-    msg_flags_ = 0;
+    pkt_ = pkt;
+    msg_flags_ = msg_flags;
+    payload_addr_ = nullptr;
+    payload_len_ = 0;
+    seqno_ = -1;
   }
 
  public:
-  static PacketBuf* GetPacketBuf(Packet* pkt) {
-    // LOG(INFO) << "[PacketBuf] HEADROOM: " << pkt->headroom();
-    uint64_t pkt_buf_addr = (uint64_t)pkt->head_data<void*>();
-    return reinterpret_cast<PacketBuf*>(pkt_buf_addr - sizeof(PacketBuf));
+  ~PacketBuf() {
+    if (payload_addr_) {
+      delete[] payload_addr_;
+    }
   }
 
-  static PacketBuf* Create(Packet* pkt) {
-    /*
-     * The XDP_PACKET_HEADROOM bytes before frame_offset is xdp metedata,
-     * and we reuse it to chain Framebufs.
-     */
-    PacketBuf* pkt_buf = GetPacketBuf(pkt);
-    pkt_buf->pkt_ = pkt;
-    pkt_buf->next_ = nullptr;
-    pkt_buf->msg_flags_ = 0;
-    return pkt_buf;
+  static PacketBuf* Allocate(Packet* pkt, uint8_t msg_flags) {
+    return new PacketBuf(pkt, msg_flags);
   }
 
-  static PacketBuf* Allocate() {
-    return new PacketBuf();
-  }
-
-  static void Release(PacketBuf* pkt_buf) {
-    delete pkt_buf;
-  }
+  static void Release(PacketBuf* pkt_buf) { delete pkt_buf; }
 
   Packet* get_pkt() const { return pkt_; }
+  void set_pkt(Packet* pkt) { pkt_ = pkt; }
+  Packet* pop_pkt() {
+    auto res = pkt_;
+    pkt_ = nullptr;
+    return res;
+  }
   uint8_t* get_pkt_addr() const { return pkt_->head_data<uint8_t*>(); }
+
   uint32_t get_packet_len() const { return pkt_->length(); }
+
+  void set_payload(uint8_t* payload_addr, uint32_t payload_len) {
+    DCHECK(payload_addr_ == nullptr);
+    payload_addr_ = new uint8_t[payload_len];
+    memcpy(payload_addr_, payload_addr, payload_len);
+    payload_len_ = payload_len;
+  }
+
+  uint8_t* get_payload() const { return payload_addr_; }
+  uint32_t get_payload_len() const { return payload_len_; }
+
+  void set_seqno(uint32_t seqno) { seqno_ = seqno; }
+  uint32_t get_seqno() const { return seqno_; }
 
   uint16_t msg_flags() const { return msg_flags_; }
 
@@ -192,6 +215,9 @@ class PacketBuf {
   bool is_first() const { return (msg_flags_ & UCCL_MSGBUF_FLAGS_SYN) != 0; }
   // Returns true if this is the last in a message.
   bool is_last() const { return (msg_flags_ & UCCL_MSGBUF_FLAGS_FIN) != 0; }
+  static bool is_last(uint8_t msg_flags) {
+    return (msg_flags & UCCL_MSGBUF_FLAGS_FIN) != 0;
+  }
 
   // Returns the next message buffer index in the chain.
   PacketBuf* next() const { return next_; }
@@ -211,27 +237,13 @@ class PacketBuf {
     return (msg_flags_ & UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE) != 0;
   }
 
-  static void mark_txpulltime_free(Packet* pkt) {
-    GetPacketBuf(pkt)->add_msg_flags(UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE);
-  }
-  static void mark_not_txpulltime_free(Packet* pkt) {
-    GetPacketBuf(pkt)->msg_flags_ &= ~UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE;
-  }
-  static bool is_txpulltime_free(Packet* pkt) {
-    return (GetPacketBuf(pkt)->msg_flags_ &
-            UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE) != 0;
-  }
-
-  static uint32_t get_packet_len(Packet* pkt) {
-    return GetPacketBuf(pkt)->get_packet_len();
-  }
+  static uint32_t get_packet_len(Packet* pkt) { return pkt->length(); }
 
   void clear_fields() {
     next_ = nullptr;
     pkt_ = nullptr;
     msg_flags_ = 0;
   }
-  static void clear_fields(Packet* pkt) { GetPacketBuf(pkt)->clear_fields(); }
 
   void set_msg_flags(uint16_t flags) { msg_flags_ = flags; }
   void add_msg_flags(uint16_t flags) { msg_flags_ |= flags; }

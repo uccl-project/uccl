@@ -64,11 +64,12 @@ class Dpdk {
     struct rte_ether_addr mac;
     char buf[32];
 
+    LOG(INFO) << "Checking " << nb_ports << " ports";
     for (uint16_t pid = 0; pid < nb_ports; pid++) {
       if (rte_eth_macaddr_get(pid, &mac) < 0) continue;
 
       mac_to_str(&mac, buf, sizeof(buf));
-
+      LOG(INFO) << "Checking port " << pid << " with MAC " << buf;
       if (strcasecmp(buf, l2_addr) == 0) {
         return pid;
       }

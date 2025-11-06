@@ -299,7 +299,7 @@ class RXTracking {
     kOOOTrackableExpectedOrInOrder = 3,
   };
 
-  ConsumeRet consume(swift::Pcb* pcb, PacketBuf* msgbuf);
+  ConsumeRet consume(swift::Pcb* pcb, Packet* pkt);
 
  private:
   void push_inorder_msgbuf_to_app(swift::Pcb* pcb);
@@ -483,11 +483,15 @@ class UcclFlow {
 
   void prepare_datapacket(PacketBuf* msgbuf, uint32_t path_id, uint32_t seqno,
                           UcclPktHdr::UcclFlags const net_flags);
+                          void prepare_retransmission_payload(PacketBuf* msgbuf);
   Packet* craft_ackpacket(uint32_t path_id, uint16_t dst_port, uint32_t seqno,
                           uint32_t ackno, UcclPktHdr::UcclFlags const net_flags,
                           uint64_t ts1, uint64_t ts2);
   Packet* craft_rssprobe_packet(uint16_t dst_port);
-  void reverse_packet_l2l3(PacketBuf* msgbuf);
+
+  
+
+  void reverse_packet_l2l3(Packet* pkt);
 
   // The following is used to fill packet headers.
   uint32_t local_addr_;
@@ -509,7 +513,7 @@ class UcclFlow {
   // Missing data frames to be sent.
   std::vector<Packet*> missing_frames_;
   // Frames that are pending rx processing in a batch.
-  std::deque<PacketBuf*> pending_rx_msgbufs_;
+  std::deque<Packet*> pending_rx_frames_;
 
   TXTracking tx_tracking_;
   RXTracking rx_tracking_;
@@ -580,6 +584,7 @@ class UcclEngine {
   UcclEngine(int queue_id, Channel* channel, DPDKSocket* socket,
              std::string const local_addr, std::string const local_l2_addr)
       : local_addr_(htonl(str_to_ip(local_addr))),
+        remote_addr_(0),
         local_engine_idx_(queue_id),
         socket_(socket),
         channel_(channel),
@@ -633,8 +638,37 @@ class UcclEngine {
    */
   void process_ctl_reqs();
 
+  bool is_valid_packet(Packet* pkt) const {
+    auto* pkt_addr = pkt->head_data<uint8_t*>();
+
+    auto* ethh = reinterpret_cast<ethhdr*>(pkt_addr);
+    if (ntohs(ethh->h_proto) != ETH_P_IP) {
+      VLOG(3) << "Non-IP packet, EtherType: 0x" << std::hex
+              << ntohs(ethh->h_proto);
+      return false;
+    }
+
+    auto* iph = reinterpret_cast<iphdr*>(pkt_addr + sizeof(ethhdr));
+    if (iph->protocol != IPPROTO_UDP) {
+      VLOG(3) << "Non-UDP packet, IP protocol: " << (int)iph->protocol;
+      return false;
+    }
+
+    // Nelson: drop the DHCP packet from 0.0.0.0 and other unrelevant packets.
+
+    if (remote_addr_ == 0 || iph->saddr == 0 || iph->saddr != remote_addr_) {
+      VLOG(3) << "Non-remote packet, IP source address: "
+              << ip_to_str(iph->saddr)
+              << " remote_addr_: " << ip_to_str(remote_addr_);
+      return false;
+    }
+
+    return true;
+  }
+
  private:
   uint32_t local_addr_;
+  uint32_t remote_addr_;
   uint8_t local_l2_addr_[ETH_ALEN];
   // Engine index, also NIC queue ID and xsk index.
   uint32_t local_engine_idx_;
@@ -691,8 +725,8 @@ class Endpoint {
   std::unordered_map<FlowID, int> bootstrap_fd_map_;
 
  public:
-  Endpoint(uint16_t port_id, char const* interface_name, int num_queues,
-           int engine_cpu_start);
+  Endpoint(uint16_t port_id, int num_queues, int engine_cpu_start,
+           std::string local_ip_str, std::string local_mac_str);
   ~Endpoint();
 
   // Connecting to a remote address; thread-safe

@@ -19,7 +19,7 @@ using namespace uccl;
 
 #define BASE_PORT 1000
 
-const uint32_t MY_NUM_QUEUES = 2;
+const uint32_t MY_NUM_QUEUES = 1;
 
 uint32_t server_addr_u32 = 0x0;
 uint32_t client_addr_u32 = 0x0;
@@ -31,18 +31,18 @@ const uint16_t client_ports[8] = {40000, 40001, 40002, 40003,
 // static char server_ip_str[] = "10.10.1.2";
 // static char client_ip_str[] = "10.10.1.1";
 
-static char server_mac_str[] = "9c:dc:71:5e:2f:21";
-static char client_mac_str[] = "9c:dc:71:49:a8:81";
-static char server_ip_str[] = "10.10.1.1";
-static char client_ip_str[] = "10.10.1.2";
+static char server_mac_str[] = "6c:92:bf:f3:2e:1a";
+static char client_mac_str[] = "6c:92:bf:f3:83:1e";
+static char server_ip_str[] = "10.10.0.1";
+static char client_ip_str[] = "10.10.0.2";
 
 static bool is_client = true;
 
 uint8_t server_mac_char[6] = {};
 uint8_t client_mac_char[6] = {};
 
-int const MY_SEND_BATCH_SIZE = 256;
-int const MY_RECV_BATCH_SIZE = 256;
+int const MY_SEND_BATCH_SIZE = 32;
+int const MY_RECV_BATCH_SIZE = 32;
 // 256 is reserved for xdp_meta, 42 is reserved for eth+ip+udp
 // Max payload under AFXDP is 4096-256-42;
 int const PAYLOAD_BYTES = 64;
@@ -248,13 +248,15 @@ void socket_recv(struct socket_t *socket, Packet **pkts, int queue_id) {
     auto *pkt = pkts[i];
     if (pkt->length() < sizeof(Ethernet)) {
       LOG(WARNING) << "received non-ethernet packet " << queue_id;
-      return;
+      socket->dpdk_socket->push_packet(pkt);
+      continue;
     }
 
     Ethernet *eth = pkt->head_data<Ethernet *>();
     if (eth->eth_type.value() != Ethernet::kIpv4) [[unlikely]] {
-      LOG(WARNING) << "received non-ipv4 packet " << queue_id;
-      return;
+      LOG(WARNING) << "received non-ipv4 packet " << std::hex << eth->eth_type.value();
+      socket->dpdk_socket->push_packet(pkt);
+      continue;
     }
 
     Ipv4 *ipv4 = reinterpret_cast<Ipv4 *>(eth + 1);
@@ -263,12 +265,14 @@ void socket_recv(struct socket_t *socket, Packet **pkts, int queue_id) {
       LOG(WARNING) << "IPv4 packet length mismatch (expected: "
                    << ipv4->total_length.value()
                    << ", actual: " << pkt->length() << ")";
-      return;
+                   socket->dpdk_socket->push_packet(pkt);
+      continue;
     }
 
     if (ipv4->next_proto_id != Ipv4::Proto::kUdp) [[unlikely]] {
       LOG(WARNING) << "received non-udp packet " << queue_id;
-      return;
+      socket->dpdk_socket->push_packet(pkt);
+      continue;
     }
 
     Udp *udp = reinterpret_cast<Udp *>(ipv4 + 1);
@@ -407,7 +411,7 @@ static void *stats_thread(void *arg) {
 int main(int argc, char *argv[]) {
   google::InitGoogleLogging(argv[0]);
   google::InstallFailureSignalHandler();
-  FLAGS_alsologtostderr = true;
+  FLAGS_alsologtostderr = false;
 
   if (argc < 2) {
     printf("Usage: %s --server | --client\n", argv[0]);
@@ -431,10 +435,10 @@ int main(int argc, char *argv[]) {
 
   if (strcmp(argv[1], "--server") == 0) {
     is_client = false;
-    printf("\n[server]\n");
+    LOG(INFO) << "[server] " << server_mac_str << " " << server_ip_str;
     client_port_id = dpdk.GetPmdPortIdByMac(server_mac_str);
   } else if (strcmp(argv[1], "--client") == 0) {
-    printf("\n[client]\n");
+    LOG(INFO) << "[client] " << client_mac_str << " " << client_ip_str;
     client_port_id = dpdk.GetPmdPortIdByMac(client_mac_str);
   } else {
     printf("Usage: %s --server | --client\n", argv[0]);
@@ -442,7 +446,7 @@ int main(int argc, char *argv[]) {
   }
 
   if (client_port_id == (uint16_t)-1) {
-    VLOG(3) << "Client port not found";
+    LOG(INFO) << "Client port not found";
     return 1;
   }
 

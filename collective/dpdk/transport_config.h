@@ -22,8 +22,8 @@ static constexpr CCType kCCType = CCType::kCubicPP;
 
 #if !defined(AWS_C5) && !defined(AWS_G4) && !defined(AWS_G4METAL) &&     \
     !defined(CLAB_XL170) && !defined(CLAB_D6515) && !defined(IBM_GX3) && \
-    !defined(TPU_V6E8)
-#define CLAB_XL170
+    !defined(TPU_V6E8) && !defined(LOCAL)
+#define LOCAL
 #endif
 
 #if defined(AWS_C5)
@@ -75,6 +75,13 @@ static double const kLinkBandwidth = 200.0 * 1e9 / 8;
 static const uint32_t NUM_QUEUES = 1;
 static const uint32_t kMaxPath = 64;
 static const uint32_t kMaxUnackedPktsPP = 1u;
+#elif defined(LOCAL)
+static const uint32_t DPDK_MTU = 1500;
+[[maybe_unused]] static char const* DEV_DEFAULT = "ens44f3";
+static double const kLinkBandwidth = 1.0 * 1e9 / 8;
+static const uint32_t NUM_QUEUES = 1;
+static const uint32_t kMaxPath = 64;
+static const uint32_t kMaxUnackedPktsPP = 8u;
 #endif
 
 static uint32_t NUM_CPUS = std::thread::hardware_concurrency();

@@ -23,6 +23,8 @@ DEFINE_uint64(size, 1024000, "Size of test message.");
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
 DEFINE_string(serverip, "", "Server IP address the client tries to connect.");
 DEFINE_string(clientip, "", "Client IP address the server tries to connect.");
+DEFINE_string(localip, "", "Local IP address the endpoint uses.");
+DEFINE_string(localmac, "", "Local MAC address the endpoint uses.");
 DEFINE_bool(verify, false, "Whether to check data correctness.");
 DEFINE_bool(rand, false, "Whether to use randomized data length.");
 DEFINE_string(
@@ -40,6 +42,10 @@ void interrupt_handler(int signal) {
 }
 
 int main(int argc, char* argv[]) {
+  FLAGS_log_dir = "/tmp/logs";
+  FLAGS_logtostderr = false;
+  FLAGS_alsologtostderr = true;
+
   google::InitGoogleLogging(argv[0]);
   google::InstallFailureSignalHandler();
   gflags::ParseCommandLineFlags(&argc, &argv, true);
@@ -53,9 +59,13 @@ int main(int argc, char* argv[]) {
   Dpdk dpdk;
   dpdk.InitDpdk(1, argv);
 
-  LOG(INFO) << "Getting port ID for device " << DEV_DEFAULT;
+  //   LOG(INFO) << "Getting port ID for device " << DEV_DEFAULT;
 
-  std::string mac_str = get_dev_mac(DEV_DEFAULT);
+  //   std::string mac_str = get_dev_mac(DEV_DEFAULT);
+
+  LOG(INFO) << "Getting port ID for device " << FLAGS_localmac;
+  std::string mac_str = FLAGS_localmac;
+  
   uint16_t port_id = dpdk.GetPmdPortIdByMac(mac_str.c_str());
   if (port_id == (uint16_t)-1) {
     LOG(FATAL) << "Client port not found";
@@ -96,26 +106,23 @@ int main(int argc, char* argv[]) {
   pin_thread_to_cpu(0);
 
   if (FLAGS_client) {
-    auto ep = Endpoint(port_id, DEV_DEFAULT, NUM_QUEUES, ENGINE_CPU_START);
+    auto ep = Endpoint(port_id, NUM_QUEUES, ENGINE_CPU_START, FLAGS_localip,
+                       FLAGS_localmac);
     DCHECK(FLAGS_serverip != "");
-    auto conn_id =
-        ep.uccl_connect(FLAGS_serverip, FLAGS_clientip);
+    auto conn_id = ep.uccl_connect(FLAGS_serverip, FLAGS_clientip);
     ConnID conn_id2;
     ConnID conn_id_vec[NUM_QUEUES];
     if (test_type == kMc) {
-      conn_id2 =
-          ep.uccl_connect(FLAGS_serverip, FLAGS_clientip);
+      conn_id2 = ep.uccl_connect(FLAGS_serverip, FLAGS_clientip);
     } else if (test_type == kMq) {
       conn_id_vec[0] = conn_id;
       for (uint32_t i = 1; i < NUM_QUEUES; i++)
-        conn_id_vec[i] =
-            ep.uccl_connect(FLAGS_serverip, FLAGS_clientip);
+        conn_id_vec[i] = ep.uccl_connect(FLAGS_serverip, FLAGS_clientip);
     } else if (test_type == kBiMq) {
       conn_id_vec[0] = conn_id;
       for (uint32_t i = 1; i < NUM_QUEUES; i++) {
         if (i % 2 == 0)
-          conn_id_vec[i] =
-              ep.uccl_connect(FLAGS_serverip, FLAGS_clientip);
+          conn_id_vec[i] = ep.uccl_connect(FLAGS_serverip, FLAGS_clientip);
         else
           conn_id_vec[i] = ep.uccl_accept();
       }
@@ -309,7 +316,8 @@ int main(int argc, char* argv[]) {
       }
     }
   } else {
-    auto ep = Endpoint(port_id, DEV_DEFAULT, NUM_QUEUES, ENGINE_CPU_START);
+    auto ep = Endpoint(port_id, NUM_QUEUES, ENGINE_CPU_START, FLAGS_localip,
+                       FLAGS_localmac);
     auto conn_id = ep.uccl_accept();
     ConnID conn_id2;
     ConnID conn_id_vec[NUM_QUEUES];
@@ -325,8 +333,7 @@ int main(int argc, char* argv[]) {
         if (i % 2 == 0)
           conn_id_vec[i] = ep.uccl_accept();
         else
-          conn_id_vec[i] =
-              ep.uccl_connect(FLAGS_serverip, FLAGS_clientip);
+          conn_id_vec[i] = ep.uccl_connect(FLAGS_serverip, FLAGS_clientip);
       }
     }
 

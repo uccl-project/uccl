@@ -3,12 +3,9 @@
 
 #include "ether.h"
 #include "ipv4.h"
-
 #include <glog/logging.h>
-
-#include <rte_mbuf.h>
-
 #include <cstdint>
+#include <rte_mbuf.h>
 
 namespace uccl {
 
@@ -18,7 +15,7 @@ namespace uccl {
  * This class wraps around DPDK's mbuf structure for packet management.
  */
 class Packet {
-public:
+ public:
   /** @brief Default constructor is deleted to ensure allocation only from a
    * PacketPool. */
   Packet() = delete;
@@ -28,15 +25,15 @@ public:
    * mempool.
    * @param pkt Packet to be freed. May be nullptr.
    */
-  static void Free(Packet *pkt) { rte_pktmbuf_free(&pkt->mbuf_); }
+  static void Free(Packet* pkt) { rte_pktmbuf_free(&pkt->mbuf_); }
 
   /**
    * @brief Resets the packet to its initial state.
    * @param pkt Packet to be reset.
    */
-  static void Reset(Packet *pkt) {
-    auto &mbuf_ = pkt->mbuf_;
-    struct rte_mempool *mp = mbuf_.pool;
+  static void Reset(Packet* pkt) {
+    auto& mbuf_ = pkt->mbuf_;
+    struct rte_mempool* mp = mbuf_.pool;
     uint32_t mbuf_size, buf_len;
     uint16_t priv_size;
 
@@ -45,7 +42,7 @@ public:
     buf_len = rte_pktmbuf_data_room_size(mp);
 
     mbuf_.priv_size = priv_size;
-    mbuf_.buf_addr = reinterpret_cast<uint8_t *>(&mbuf_) + mbuf_size;
+    mbuf_.buf_addr = reinterpret_cast<uint8_t*>(&mbuf_) + mbuf_size;
     mbuf_.buf_iova = rte_mempool_virt2iova(&mbuf_) + mbuf_size;
     mbuf_.buf_len = static_cast<uint16_t>(buf_len);
     rte_pktmbuf_reset_headroom(&mbuf_);
@@ -62,8 +59,9 @@ public:
    * @param offset Offset from the start of the data. Default is 0.
    * @return `const` Pointer to the head data of the packet.
    */
-  template <typename T = void *> const T head_data(uint16_t offset = 0) const {
-    return reinterpret_cast<T>(rte_pktmbuf_mtod(&mbuf_, uint8_t *) + offset);
+  template <typename T = void*>
+  const T head_data(uint16_t offset = 0) const {
+    return reinterpret_cast<T>(rte_pktmbuf_mtod(&mbuf_, uint8_t*) + offset);
   }
 
   /**
@@ -72,9 +70,10 @@ public:
    * @param offset Offset from the start of the data. Default is 0.
    * @return Pointer to the head data of the packet.
    */
-  template <typename T = void *> T head_data(uint16_t offset = 0) {
+  template <typename T = void*>
+  T head_data(uint16_t offset = 0) {
     return const_cast<T>(
-        static_cast<const Packet &>(*this).head_data<T>(offset));
+        static_cast<Packet const&>(*this).head_data<T>(offset));
   }
 
   /**
@@ -125,7 +124,8 @@ public:
    * If there isn't enough room to append, return nullptr, without affecting
    * the underlying packet.
    */
-  template <typename T = void *> T append(uint16_t len) {
+  template <typename T = void*>
+  T append(uint16_t len) {
     return reinterpret_cast<T>(rte_pktmbuf_append(&mbuf_, len));
   }
 
@@ -136,7 +136,8 @@ public:
    * If there isn't enough room to prepend, return nullptr, without affecting
    * the underlying packet.
    */
-  template <typename T = void *> T prepend(uint16_t len) {
+  template <typename T = void*>
+  T prepend(uint16_t len) {
     return reinterpret_cast<T>(rte_pktmbuf_prepend(&mbuf_, len));
   }
 
@@ -144,15 +145,17 @@ public:
    * @return String representation of L2 and L3 headers.
    */
   std::string L2L3HeaderString() const {
-    auto *eh = head_data<Ethernet *>();
-    auto *ipv4h = reinterpret_cast<Ipv4 *>(eh + 1);
+    auto* eh = head_data<Ethernet*>();
+    auto* ipv4h = reinterpret_cast<Ipv4*>(eh + 1);
     return eh->ToString() + " " + ipv4h->ToString();
   }
 
   uint16_t headroom() const { return rte_pktmbuf_headroom(&mbuf_); }
-  
-private:
-  struct rte_mbuf mbuf_; //!< Underlying DPDK mbuf structure.
+
+  uint16_t ref_cnt() const { return rte_mbuf_refcnt_read(&mbuf_); }
+
+ private:
+  struct rte_mbuf mbuf_;  //!< Underlying DPDK mbuf structure.
 
   friend class PacketPool;
   friend class PacketBatch;
@@ -163,7 +166,7 @@ private:
  * packet handling; suitable for stack allocation.
  */
 class PacketBatch {
-public:
+ public:
   static const uint16_t kMaxBurst = 32;
 
   /**
@@ -174,17 +177,17 @@ public:
   /**
    * @return Constant pointer to the underlying packet array.
    */
-  Packet *const *pkts() const { return pkts_; }
+  Packet* const* pkts() const { return pkts_; }
 
   /**
    * @return Pointer to the underlying packet array.
    */
-  Packet **pkts() { return pkts_; }
+  Packet** pkts() { return pkts_; }
 
   /**
    * @return Packet at the given index.
    */
-  Packet *operator[](uint16_t index) {
+  Packet* operator[](uint16_t index) {
     DCHECK(index < cnt_);
     return pkts_[index];
   }
@@ -216,7 +219,7 @@ public:
    * @param pkt Packet to be appended.
    * @attention This method does not check if the batch is full.
    */
-  void Append(Packet *pkt) {
+  void Append(Packet* pkt) {
     DCHECK(!IsFull());
     pkts_[cnt_++] = pkt;
   }
@@ -227,9 +230,9 @@ public:
    * @param npkts Number of packets to be appended.
    * @attention This method does not check if the batch is full.
    */
-  void Append(Packet **pkts, uint16_t npkts) {
+  void Append(Packet** pkts, uint16_t npkts) {
     DCHECK(npkts <= GetRoom());
-    std::memcpy(&pkts_[cnt_], pkts, npkts * sizeof(Packet *));
+    std::memcpy(&pkts_[cnt_], pkts, npkts * sizeof(Packet*));
     cnt_ += npkts;
   }
 
@@ -238,7 +241,7 @@ public:
    * @param batch Batch of packets to be appended.
    * @attention This method does not check if the batch is full.
    */
-  void Append(PacketBatch *batch) { Append(batch->pkts(), batch->GetSize()); }
+  void Append(PacketBatch* batch) { Append(batch->pkts(), batch->GetSize()); }
 
   /**
    * @brief Clear all packets in the batch.
@@ -252,15 +255,15 @@ public:
   void Release() {
     if (cnt_ == 0) [[unlikely]]
       return;
-    rte_pktmbuf_free_bulk(reinterpret_cast<rte_mbuf **>(pkts_), cnt_);
+    rte_pktmbuf_free_bulk(reinterpret_cast<rte_mbuf**>(pkts_), cnt_);
     Clear();
   }
 
-private:
-  uint16_t cnt_;            //!< Number of packets in the batch.
-  Packet *pkts_[kMaxBurst]; //!< Underlying packet array.
+ private:
+  uint16_t cnt_;             //!< Number of packets in the batch.
+  Packet* pkts_[kMaxBurst];  //!< Underlying packet array.
 };
 
-} // namespace uccl
+}  // namespace uccl
 
-#endif // SRC_INCLUDE_PACKET_H_
+#endif  // SRC_INCLUDE_PACKET_H_
