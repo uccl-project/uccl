@@ -354,8 +354,7 @@ void listener_thread_func(uccl_conn_t* conn) {
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
-  // TODO: Infer the device idx during memory registration
-  eng->endpoint = new Endpoint(0, num_cpus);
+  eng->endpoint = new Endpoint(num_cpus);
   return eng;
 }
 
@@ -638,7 +637,8 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
   if (!engine || !metadata) return -1;
 
   try {
-    std::vector<uint8_t> metadata_vec = engine->endpoint->get_metadata();
+    std::vector<uint8_t> metadata_vec =
+        engine->endpoint->get_unified_metadata();
 
     std::string result;
     if (metadata_vec.size() == 10) {  // IPv4 format
