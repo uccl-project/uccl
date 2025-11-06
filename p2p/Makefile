@@ -52,7 +52,6 @@ CU_SOURCES := tcpx/device/unpack_kernels.cu tcpx/device/unpack_launch.cu
 CORE_OBJECTS := $(SOURCES:.cc=.o)
 CU_OBJECTS := $(CU_SOURCES:.cu=.o)
 CXXFLAGS += -Itcpx -Itcpx/include
-BIN_CXXFLAGS := $(filter-out -shared -fPIC,$(CXXFLAGS)) -I.
 else
 SOURCES := engine.cc pybind_engine.cc
 CORE_OBJECT := engine.o
@@ -79,11 +78,7 @@ $(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS)
 %.o: %.cu
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 
-# TCPX C API smoke test exercising uccl_engine wrapper
-tests/uccl_smoke: tests/uccl_smoke.cc $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS)
-	$(CXX) $(BIN_CXXFLAGS) tests/uccl_smoke.cc $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS) \
-	      -L$(CUDA_LIB) -lcudart -lcuda \
-	      -o $@ $(LDFLAGS) -Wl,-rpath,$(CUDA_LIB)
+
 else
 # Default target
 all: $(TARGET) $(PLUGIN_SO)
