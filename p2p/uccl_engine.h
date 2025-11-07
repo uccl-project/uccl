@@ -144,23 +144,6 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uint64_t> mr_ids,
                             std::vector<void*> dst_v,
                             std::vector<size_t> size_v, int fifo_id,
                             int num_iovs, uint64_t* transfer_id);
-
-/**
- * Get a FIFO item.
- * @param id            FIFO item ID.
- * @param fifo_item     Pointer to the FIFO item.
- * @return              0 on success, non-zero on failure.
- */
-int uccl_engine_get_fifo_item(int id, void* fifo_item);
-
-/**
- * Get a FIFO vector.
- * @param id            FIFO vector ID.
- * @param fifo_vec      Vector of FIFO items.
- * @return              0 on success, non-zero on failure.
- */
-int uccl_engine_get_fifo_vec(int id, std::vector<FifoItem>& fifo_vec);
-
 /**
  * Wait for the FIFO vector to be available.
  * @param id            FIFO vector ID.

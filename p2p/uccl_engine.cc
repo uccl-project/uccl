@@ -66,6 +66,10 @@ std::mutex fifo_item_map_mutex;
 std::mutex fifo_vec_item_map_mutex;
 std::mutex notify_msg_list_mutex;
 
+int uccl_engine_get_fifo_item(int id, void* fifo_item);
+int uccl_engine_get_fifo_vec(int id, std::vector<FifoItem>& fifo_vec);
+void uccl_engine_delete_fifo_vec(int id);
+void uccl_engine_delete_fifo_item(int id);
 // Helper function for the listener thread
 void listener_thread_func(uccl_conn_t* conn) {
   std::cout << "Listener thread: Waiting for metadata." << std::endl;
