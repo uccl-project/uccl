@@ -147,12 +147,11 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uint64_t> mr_ids,
 
 /**
  * Get a FIFO item.
- * @param conn          Connection handle.
  * @param id            FIFO item ID.
  * @param fifo_item     Pointer to the FIFO item.
  * @return              0 on success, non-zero on failure.
  */
-int uccl_engine_get_fifo_item(uccl_conn_t* conn, int id, void* fifo_item);
+int uccl_engine_get_fifo_item(int id, void* fifo_item);
 
 /**
  * Get a FIFO vector.

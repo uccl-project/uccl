@@ -461,6 +461,7 @@ uccl_mr_t uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size) {
 int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* dst,
                      size_t size, int fifo_id, uint64_t* transfer_id) {
   if (!conn || !dst) return -1;
+  int result = -1;
 
   FifoItem slot_item;
   result = uccl_engine_get_fifo_item(fifo_id, slot_item);
@@ -469,11 +470,13 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* dst,
     return -1;
   }
 
-  return conn->engine->endpoint->read_async(conn->conn_id, mr,
+  result = conn->engine->endpoint->read_async(conn->conn_id, mr,
                                             const_cast<void*>(dst), size,
                                             slot_item, transfer_id)
              ? 0
              : -1;
+  uccl_engine_delete_fifo_item(fifo_id);
+  return 0;
 }
 
 int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
@@ -483,9 +486,7 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
   if (!conn || num_iovs <= 0) return -1;
 
   std::vector<FifoItem> slot_items;
-  int const max_retries = 10;
   int result = -1;
-  int retry_count = 0;
 
   // Get the fifo vector. Make sure to execute wait_for_fifo
   result = uccl_engine_get_fifo_vec(fifo_id, slot_items);
@@ -495,11 +496,13 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
     return -1;
   }
 
-  return conn->engine->endpoint->readv_async(conn->conn_id, mr_ids, dst_v,
+  result = conn->engine->endpoint->readv_async(conn->conn_id, mr_ids, dst_v,
                                              size_v, slot_items, num_iovs,
                                              transfer_id)
              ? 0
              : -1;
+  uccl_engine_delete_fifo_vec(fifo_id);
+  return result;             
 }
 
 int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* src,
@@ -589,14 +592,6 @@ int uccl_engine_stop_listener(uccl_conn_t* conn) {
 void uccl_engine_conn_destroy(uccl_conn_t* conn) {
   if (conn) {
     uccl_engine_stop_listener(conn);
-    {
-      std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
-      auto it = fifo_item_map.find(conn);
-      if (it != fifo_item_map.end()) {
-        delete it->second;
-        fifo_item_map.erase(it);
-      }
-    }
     delete conn;
   }
 }
@@ -681,11 +676,21 @@ int uccl_engine_get_fifo_item(int id, FifoItem& fifo_item) {
     return -1;  
   }
   if (it->second->is_valid) {
-    memcpy(fifo_item, &it->second->fifo_item, sizeof(FifoItem));
+    fifo_item = it->second->fifo_item;
     it->second->is_valid = false;
     return 0;
   }
   return -1;
+}
+
+void uccl_engine_delete_fifo_item(int id) {
+  std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
+  auto it = fifo_item_map.find(id);
+  if (it == fifo_item_map.end()) {
+    return;
+  }
+  delete it->second;
+  fifo_item_map.erase(it);
 }
 
 int uccl_engine_get_fifo_vec(int id, std::vector<FifoItem>& fifo_vec) {
@@ -700,6 +705,16 @@ int uccl_engine_get_fifo_vec(int id, std::vector<FifoItem>& fifo_vec) {
     return 0;
   }
   return -1;
+}
+
+void uccl_engine_delete_fifo_vec(int id) {
+  std::lock_guard<std::mutex> lock(fifo_vec_item_map_mutex);
+  auto it = fifo_vec_item_map.find(id);
+  if (it == fifo_vec_item_map.end()) {
+    return;
+  }
+  delete it->second;
+  fifo_vec_item_map.erase(it);
 }
 
 int uccl_engine_wait_for_fifo(int id) {
