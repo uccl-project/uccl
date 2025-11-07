@@ -194,64 +194,7 @@ build_eccl() {
   # cp eccl/eccl.*.so uccl/
 }
 
-# Determine the Docker image to use based on the target and architecture
-if [[ $TARGET == "cuda" ]]; then
-  # default is cuda 12 from `nvidia/cuda:12.3.2-devel-ubuntu22.04`/`nvidia/cuda:12.4.1-devel-ubuntu22.04`
-  if [[ "$ARCH" == "aarch64" ]]; then
-    DOCKERFILE="docker/Dockerfile.gh"
-    IMAGE_NAME="uccl-builder-gh"
-  elif [[ -n "$IS_EFA" ]]; then
-    DOCKERFILE="docker/Dockerfile.efa"
-    IMAGE_NAME="uccl-builder-efa"
-  else
-    DOCKERFILE="docker/Dockerfile.cuda"
-    IMAGE_NAME="uccl-builder-cuda"
-  fi
-elif [[ $TARGET == "cuda13" ]]; then
-  BASE_IMAGE="nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04"
-  if [[ "$ARCH" == "aarch64" ]]; then
-    DOCKERFILE="docker/Dockerfile.gh"
-    IMAGE_NAME="uccl-builder-gh"
-  elif [[ -n "$IS_EFA" ]]; then
-    DOCKERFILE="docker/Dockerfile.efa"
-    IMAGE_NAME="uccl-builder-efa"
-  else
-    DOCKERFILE="docker/Dockerfile.cuda"
-    IMAGE_NAME="uccl-builder-cuda"
-  fi
-elif [[ $TARGET == "rocm" ]]; then
-  # default is latest rocm version from `rocm/dev-ubuntu-22.04`
-  DOCKERFILE="docker/Dockerfile.rocm"
-  IMAGE_NAME="uccl-builder-rocm"
-elif [[ $TARGET == "rocm6" ]]; then
-  DOCKERFILE="docker/Dockerfile.rocm"
-  BASE_IMAGE="rocm/dev-ubuntu-22.04:6.4.3-complete"
-  IMAGE_NAME="uccl-builder-rocm"
-elif [[ $TARGET == "therock" ]]; then
-  DOCKERFILE="docker/Dockerfile.therock"
-  BASE_IMAGE="${THEROCK_BASE_IMAGE}"
-  IMAGE_NAME="uccl-builder-therock"
-fi
-
-# Build the builder image (contains toolchain + CUDA/ROCm)
-echo "[1/3] Building Docker image ${IMAGE_NAME} using ${DOCKERFILE}..."
-echo "Python version: ${PY_VER}"
-if [[ "$TARGET" == "therock" ]]; then
-  echo "ROCm index URL: ${ROCM_IDX_URL}"
-fi
-BUILD_ARGS="--build-arg PY_VER=${PY_VER}"
-if [[ -n "${BASE_IMAGE:-}" ]]; then
-  BUILD_ARGS+=" --build-arg BASE_IMAGE=${BASE_IMAGE}"
-fi
-
-if [[ "$ARCH" == "aarch64" ]]; then
-  echo 'docker build --platform=linux/arm64 $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .'
-  # docker build --platform=linux/arm64 $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
-else
-  echo "docker build $BUILD_ARGS -t '$IMAGE_NAME' -f '$DOCKERFILE' ."
-  # docker build $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
-fi
-
+# Build (contains toolchain + CUDA/ROCm)
 echo "[2/3] Building..."
 
 export USE_TCPX="${USE_TCPX:-0}"
@@ -264,7 +207,7 @@ eval "$FUNCTION_DEF"
 
 echo "BUILD_TYPE : ${BUILD_TYPE}"
 
-if [[ $TARGET == "cuda" && "$ARCH" == "x86" ]]; then
+if [[ $TARGET == "cuda" && "$ARCH" == "x86_64" ]]; then
 
 export CUDA_HOME=/usr/local/cuda
 export PATH=$PATH:$CUDA_HOME/bin
@@ -277,7 +220,7 @@ build_rdma "$TARGET" "$ARCH" "$IS_EFA"
 build_efa "$TARGET" "$ARCH" "$IS_EFA"
 build_p2p "$TARGET" "$ARCH" "$IS_EFA"
 build_ep "$TARGET" "$ARCH" "$IS_EFA"
-NOTE (yiakwy) : eccl is skpipped on CUDA platform
+# NOTE (yiakwy) : eccl is skpipped on CUDA platform
 build_eccl "$TARGET" "$ARCH" "$IS_EFA"
 
 else
