@@ -154,10 +154,7 @@ void listener_thread_func(uccl_conn_t* conn) {
         }
         mr_id = local_mem_iter->second;
 
-        uccl_mr_t temp_mr;
-        temp_mr.mr_id = mr_id;
-        temp_mr.engine = conn->engine;
-        int result = uccl_engine_recv(conn, &temp_mr, (void*)tx_data.data_ptr,
+        int result = uccl_engine_recv(conn, mr_id, (void*)tx_data.data_ptr,
                                       tx_data.data_size);
         if (result < 0) {
           std::cerr << "Failed to perform uccl_engine_recv" << std::endl;
@@ -307,10 +304,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           }
           mr_id = local_mem_iter->second;
 
-          uccl_mr_t temp_mr;
-          temp_mr.mr_id = mr_id;
-          temp_mr.engine = conn->engine;
-          int result = uccl_engine_recv(conn, &temp_mr, (void*)tx_data.data_ptr,
+          int result = uccl_engine_recv(conn, mr_id, (void*)tx_data.data_ptr,
                                         tx_data.data_size);
           if (result < 0) {
             std::cerr << "Failed to perform uccl_engine_recv for item " << i

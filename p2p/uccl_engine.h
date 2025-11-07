@@ -36,7 +36,7 @@ typedef struct fifo_msg {
 } fifo_msg_t;
 
 typedef struct fifo_v_msg {
-  char fifo_buf[MSG_SIZE];
+  char fifo_buf[MSG_SIZE];  
 } fifo_v_msg_t;
 
 typedef struct tx_msg {
@@ -46,7 +46,7 @@ typedef struct tx_msg {
 
 typedef struct vector_msg {
   size_t count;  // Number of items in the vector
-  int id;        // optional ID for a vector
+  int id;       // optional ID for a vector
 } vector_msg_t;
 
 typedef struct md {
@@ -112,9 +112,9 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
  * @param engine        The engine instance.
  * @param data          Pointer to the data to register.
  * @param size          Size of the data.
- * @return              Memory region handle, or NULL on failure.
+ * @return              Memory region handle, or -1 on failure.
  */
-uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size);
+uccl_mr_t uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size);
 
 /**
  * Read data (Non blocking).
@@ -126,7 +126,7 @@ uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size);
  * @param transfer_id   Pointer to store the transfer ID.
  * @return              0 on success, non-zero on failure.
  */
-int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                      size_t size, void* slot_item, uint64_t* transfer_id);
 
 /**
@@ -164,7 +164,7 @@ int uccl_engine_get_fifo_item(uccl_conn_t* conn, int id, void* fifo_item);
  * @param transfer_id   Pointer to store the transfer ID.
  * @return              0 on success, non-zero on failure.
  */
-int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                       size_t size, uint64_t* transfer_id);
 
 /**
@@ -190,7 +190,7 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uint64_t> mr_ids,
  * @param max_size      Maximum size of the buffer.
  * @return              0 on success, non-zero on failure.
  */
-int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
+int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
                      size_t max_size);
 
 /**
@@ -222,7 +222,7 @@ void uccl_engine_conn_destroy(uccl_conn_t* conn);
  * Deregister memory region.
  * @param mr            Memory region handle to destroy.
  */
-void uccl_engine_mr_destroy(uccl_mr_t* mr);
+void uccl_engine_mr_destroy(uccl_mr_t mr);
 
 /**
  * Get endpoint metadata for connection establishment.
