@@ -40,6 +40,13 @@ struct Conn {
   int remote_port = -1;
   int ctrl_sock_fd = -1;
 
+  // CUDA Event Pool for recv unpack operations (循环复用)
+  // 对齐原来的 ChannelWindow::events 设计。池大小与接收窗口上限保持一致，
+  // 在 connect/accept 时根据 UCCL_TCPX_MAX_RECV_INFLIGHT 计算并初始化。
+  std::vector<cudaEvent_t> recv_events;
+  size_t recv_event_pool_size = 0;  // = recv_events.size()
+  uint64_t event_counter = 0;       // 事件循环复用计数器
+
   // TCPX plugin handles
   void* send_comm = nullptr;
   void* recv_comm = nullptr;
@@ -85,7 +92,10 @@ struct PendingTransfer {
     // Bounce-buffer metadata used to launch the unpack kernel once the network
     // transfer finishes.
     rx::UnpackDescriptorBlock desc_block{};
+    // CUDA event 从 Conn::recv_events pool 中获取（不拥有，只是引用）
     cudaEvent_t event = nullptr;
+    // Event 在 pool 中的索引（用于调试）
+    size_t event_idx = 0;
   };
 
   enum class Kind { kSend, kRecv, kRead };

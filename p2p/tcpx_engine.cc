@@ -625,6 +625,31 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   conn->remote_port = remote_port;
   conn->ctrl_sock_fd = sock_fd;
 
+  // 初始化 CUDA Event Pool（对齐原来的 ChannelWindow::events 设计）
+  // 预分配固定数量的 events，整个连接生命周期内循环复用
+  int max_recv_inflight =
+      get_env_int("UCCL_TCPX_MAX_RECV_INFLIGHT", kDefaultRecvInflight);
+  if (max_recv_inflight <= 0) max_recv_inflight = kDefaultRecvInflight;
+  conn->recv_event_pool_size = static_cast<size_t>(max_recv_inflight);
+  conn->recv_events.resize(conn->recv_event_pool_size);
+  for (size_t i = 0; i < conn->recv_event_pool_size; ++i) {
+    cudaError_t rc = cudaEventCreateWithFlags(&conn->recv_events[i],
+                                               cudaEventDisableTiming);
+    if (rc != cudaSuccess) {
+      std::cerr << "[tcpx] cudaEventCreateWithFlags failed for event " << i
+                << ": " << cudaGetErrorString(rc) << std::endl;
+      // 清理已创建的 events
+      for (size_t j = 0; j < i; ++j) {
+        cudaEventDestroy(conn->recv_events[j]);
+      }
+      ::close(sock_fd);
+      tcpx_close_send(conn->send_comm);
+      tcpx_close_recv(conn->recv_comm);
+      free_conn_(conn);
+      return false;
+    }
+  }
+
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
     conn_map_.emplace(conn_id, std::move(conn));
@@ -740,6 +765,30 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   conn->remote_gpu_idx = client_info.gpu;
   conn->remote_port = ntohs(client_addr.sin_port);
   conn->ctrl_sock_fd = sock_fd;
+
+  // 初始化 CUDA Event Pool（对齐原来的 ChannelWindow::events 设计）
+  // 预分配固定数量的 events，整个连接生命周期内循环复用
+  int max_recv_inflight_acc =
+      get_env_int("UCCL_TCPX_MAX_RECV_INFLIGHT", kDefaultRecvInflight);
+  if (max_recv_inflight_acc <= 0) max_recv_inflight_acc = kDefaultRecvInflight;
+  conn->recv_event_pool_size = static_cast<size_t>(max_recv_inflight_acc);
+  conn->recv_events.resize(conn->recv_event_pool_size);
+  for (size_t i = 0; i < conn->recv_event_pool_size; ++i) {
+    cudaError_t rc = cudaEventCreateWithFlags(&conn->recv_events[i],
+                                               cudaEventDisableTiming);
+    if (rc != cudaSuccess) {
+      std::cerr << "[tcpx] cudaEventCreateWithFlags failed for event " << i
+                << ": " << cudaGetErrorString(rc) << std::endl;
+      // 清理已创建的 events
+      for (size_t j = 0; j < i; ++j) {
+        cudaEventDestroy(conn->recv_events[j]);
+      }
+      ::close(sock_fd);
+      tcpx_close_recv(conn->recv_comm);
+      tcpx_close_send(conn->send_comm);
+      return false;
+    }
+  }
 
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
@@ -1311,6 +1360,8 @@ bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
       transfer_map_.erase(it);
       return false;
     }
+    // Opportunistic progress: 提交后尝试推进同连接的其它传输
+    (void)progress_conn_transfers_locked(conn);
   }
 
   transfer_id = tid;
@@ -1370,6 +1421,8 @@ bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
       transfer_map_.erase(it);
       return false;
     }
+    // Opportunistic progress: 提交后尝试推进同连接的其它传输
+    (void)progress_conn_transfers_locked(conn);
   }
 
   transfer_id = tid;
@@ -1438,9 +1491,11 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
     return false;
   }
   frag_cnt = *(request->unpack_slot.cnt);
-  std::cerr << "[tcpx] unpack transfer_id=" << transfer.transfer_id
-            << " chunk_off=" << chunk.offset << " frag_cnt=" << frag_cnt
-            << std::endl;
+  if (debug_enabled_) {
+    std::cerr << "[tcpx] unpack transfer_id=" << transfer.transfer_id
+              << " chunk_off=" << chunk.offset << " frag_cnt=" << frag_cnt
+              << std::endl;
+  }
   if (frag_cnt == 0 || frag_cnt > MAX_UNPACK_DESCRIPTORS) {
     std::cerr << "[tcpx] invalid fragment count " << frag_cnt << std::endl;
     return false;
@@ -1454,8 +1509,10 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
     std::cerr << "[tcpx] cuMemcpyDtoH failed " << cu_rc << std::endl;
     return false;
   }
-  std::cerr << "[tcpx] dev_handle bounce_buf=" << dev_handle.bounce_buf
-            << std::endl;
+  if (debug_enabled_) {
+    std::cerr << "[tcpx] dev_handle bounce_buf=" << dev_handle.bounce_buf
+              << std::endl;
+  }
 
   auto* meta_entries =
       static_cast<tcpx::plugin::loadMeta*>(request->unpack_slot.mem);
@@ -1465,7 +1522,7 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
   tcpx::rx::buildDescriptorBlock(meta_entries, static_cast<uint32_t>(frag_cnt),
                                  dev_handle.bounce_buf, chunk.dst_ptr,
                                  block);
-  if (frag_cnt > 0) {
+  if (debug_enabled_ && frag_cnt > 0) {
     auto const& m0 = block.descriptors[0];
     size_t probe_len = std::min<size_t>(m0.len, 64);
     std::vector<uint8_t> sample(probe_len);
@@ -1484,26 +1541,30 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
                 << std::endl;
     }
   }
-  for (uint32_t i = 0; i < std::min<uint32_t>(frag_cnt, 4); ++i) {
-    auto const& m = block.descriptors[i];
-    std::cerr << "  meta[" << i << "] src_off=" << m.src_off << " len=" << m.len
-              << " dst_off=" << m.dst_off << " (chunk_off=" << chunk.offset
-              << ")" << std::endl;
-  }
-  if (frag_cnt > 4) {
-    for (uint32_t i = frag_cnt - std::min<uint32_t>(frag_cnt, 4); i < frag_cnt;
-         ++i) {
+  if (debug_enabled_) {
+    for (uint32_t i = 0; i < std::min<uint32_t>(frag_cnt, 4); ++i) {
       auto const& m = block.descriptors[i];
-      std::cerr << "  meta[" << i << "] src_off=" << m.src_off
-                << " len=" << m.len << " dst_off=" << m.dst_off << " (tail)"
-                << std::endl;
+      std::cerr << "  meta[" << i << "] src_off=" << m.src_off << " len="
+                << m.len << " dst_off=" << m.dst_off << " (chunk_off="
+                << chunk.offset << ")" << std::endl;
+    }
+    if (frag_cnt > 4) {
+      for (uint32_t i = frag_cnt - std::min<uint32_t>(frag_cnt, 4); i < frag_cnt;
+           ++i) {
+        auto const& m = block.descriptors[i];
+        std::cerr << "  meta[" << i << "] src_off=" << m.src_off
+                  << " len=" << m.len << " dst_off=" << m.dst_off
+                  << " (tail)" << std::endl;
+      }
     }
   }
   block.ready_flag = request->unpack_slot.cnt;
   block.ready_threshold = frag_cnt;
 
-  std::cerr << "[tcpx] launch unpack: count=" << block.count
-            << " total_bytes=" << block.total_bytes << std::endl;
+  if (debug_enabled_) {
+    std::cerr << "[tcpx] launch unpack: count=" << block.count
+              << " total_bytes=" << block.total_bytes << std::endl;
+  }
   int launch_rc = unpack_launcher_->launch(block, unpack_stream_);
   if (launch_rc != 0) {
     std::cerr << "[tcpx] unpack kernel launch failed rc=" << launch_rc
@@ -1511,21 +1572,25 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
     return false;
   }
 
-  if (!chunk.event) {
-    cudaError_t evt_rc = cudaEventCreateWithFlags(&chunk.event,
-                                                  cudaEventDisableTiming);
-    if (evt_rc != cudaSuccess) {
-      std::cerr << "[tcpx] cudaEventCreateWithFlags failed: "
-                << cudaGetErrorString(evt_rc) << std::endl;
-      return false;
-    }
-  }
-  cudaError_t record_rc = cudaEventRecord(chunk.event, unpack_stream_);
+  // 从 Conn 的 event pool 中获取 event（循环复用）
+  // 对齐原来的 ChannelWindow::events 设计：
+  //   int event_idx = win.chunk_counter % MAX_INFLIGHT_PER_CHANNEL;
+  //   cudaEventRecord(win.events[event_idx], unpack_stream);
+  size_t event_idx = conn.recv_events.empty()
+                          ? 0
+                          : (conn.event_counter % conn.recv_events.size());
+  conn.event_counter++;
+
+  cudaEvent_t event = conn.recv_events[event_idx];
+  cudaError_t record_rc = cudaEventRecord(event, unpack_stream_);
   if (record_rc != cudaSuccess) {
     std::cerr << "[tcpx] cudaEventRecord failed: "
               << cudaGetErrorString(record_rc) << std::endl;
     return false;
   }
+
+  chunk.event = event;  // 保存引用（不拥有）
+  chunk.event_idx = event_idx;  // 保存索引（用于调试）
   chunk.desc_block = block;
   return true;
 }
@@ -1541,10 +1606,9 @@ bool Endpoint::finalize_recv_chunk_(Conn& conn,
       return false;
     }
   }
-  if (chunk.event) {
-    cudaEventDestroy(chunk.event);
-    chunk.event = nullptr;
-  }
+  // ✅ 不销毁 event，只清空引用（event 由 Conn::recv_events pool 拥有）
+  // 对齐原来的设计：events 在 ChannelWindow 中预分配，循环复用，不在热路径上销毁
+  chunk.event = nullptr;
   chunk.request = nullptr;
   return true;
 }
@@ -1783,6 +1847,8 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
 
   if (transfer.chunks_completed < transfer.chunks.size()) {
     log_progress("pending");
+    // 在返回前，顺带推进同连接的其它传输，减少外层遗漏 progress 的影响
+    (void)progress_conn_transfers_locked(*conn_ptr);
     return true;
   }
 
@@ -1839,6 +1905,14 @@ void Endpoint::free_conn_(std::unique_ptr<Conn>& conn) {
   for (void* handle : recv_handles) {
     if (conn->recv_comm) tcpx_dereg_mr(conn->recv_comm, handle);
   }
+  // 销毁 CUDA Event Pool
+  // 对齐原来的设计：events 在 ChannelWindow 析构时销毁
+  for (auto& event : conn->recv_events) {
+    if (event) {
+      cudaEventDestroy(event);
+    }
+  }
+  conn->recv_events.clear();
   if (conn->send_comm) {
     tcpx_close_send(conn->send_comm);
     conn->send_comm = nullptr;

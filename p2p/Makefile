@@ -77,8 +77,6 @@ $(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS)
 
 %.o: %.cu
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
-
-
 else
 # Default target
 all: $(TARGET) $(PLUGIN_SO)
