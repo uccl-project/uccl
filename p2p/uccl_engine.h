@@ -36,7 +36,7 @@ typedef struct fifo_msg {
 } fifo_msg_t;
 
 typedef struct fifo_v_msg {
-  char fifo_buf[MSG_SIZE];  
+  char fifo_buf[MSG_SIZE];
 } fifo_v_msg_t;
 
 typedef struct tx_msg {
@@ -46,7 +46,7 @@ typedef struct tx_msg {
 
 typedef struct vector_msg {
   size_t count;  // Number of items in the vector
-  int id;       // optional ID for a vector
+  int id;        // optional ID for a vector
 } vector_msg_t;
 
 typedef struct md {

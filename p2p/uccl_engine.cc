@@ -448,7 +448,7 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
 }
 
 uccl_mr_t uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size) {
-  if (!engine || !data) return nullptr;
+  if (!engine || !data) return -1;
   uccl_mr_t mr_id;
   bool ok = engine->endpoint->reg((void*)data, size, mr_id);
   if (!ok) {
@@ -477,8 +477,7 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<size_t> size_v,
                             std::vector<void*> slot_item_v, int num_iovs,
                             uint64_t* transfer_id) {
-  if (!conn || !mr_ids || !dst_v || !size_v || !slot_item_v || num_iovs <= 0)
-    return -1;
+  if (!conn || num_iovs <= 0) return -1;
 
   std::vector<FifoItem> slot_item_v;
   slot_item_v = *static_cast<std::vector<FifoItem>*>(slot_item_v_ptr);
@@ -501,18 +500,12 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* src,
 
 int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                              std::vector<void*> src_v,
-                             std::vector<size_t> size_v,
-                             std::vector<void*> slot_item_v, int num_iovs,
+                             std::vector<size_t> size_v, int num_iovs,
                              uint64_t* transfer_id) {
-  if (!conn || !mr_ids || !src_v || !size_v || !slot_item_v || num_iovs <= 0)
-    return -1;
+  if (!conn || num_iovs <= 0) return -1;
 
-  std::vector<FifoItem> slot_item_v;
-  slot_item_v = *static_cast<std::vector<FifoItem>*>(slot_item_v_ptr);
-
-  return conn->engine->endpoint->writev_async(conn->conn_id, mr_ids, src_v,
-                                              size_v, slot_item_v, num_iovs,
-                                              transfer_id)
+  return conn->engine->endpoint->sendv_async(conn->conn_id, mr_ids, src_v,
+                                             size_v, num_iovs, transfer_id)
              ? 0
              : -1;
 }
@@ -602,7 +595,6 @@ void uccl_engine_mr_destroy(uccl_mr_t mr) {
       break;
     }
   }
-  delete mr;
 }
 
 int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md) {
