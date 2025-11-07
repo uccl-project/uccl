@@ -58,8 +58,8 @@ typedef struct {
 } fifo_vec_item_t;
 
 std::unordered_map<uintptr_t, uint64_t> mem_reg_info;
-std::unordered_map<uccl_conn_t*, fifo_item_t*> fifo_item_map;
-std::unordered_map<uccl_conn_t*, fifo_vec_item_t*> fifo_vec_item_map;
+std::unordered_map<int, fifo_item_t*> fifo_item_map;
+std::unordered_map<int, fifo_vec_item_t*> fifo_vec_item_map;
 std::vector<notify_msg_t> notify_msg_list;
 
 std::mutex fifo_item_map_mutex;
@@ -325,7 +325,7 @@ void listener_thread_func(uccl_conn_t* conn) {
 
         {
           std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
-          fifo_item_map[conn + fifo_data.id] = f_item;
+          fifo_item_map[fifo_data.id] = f_item;
         }
         break;
       }
@@ -369,7 +369,7 @@ void listener_thread_func(uccl_conn_t* conn) {
 
         {
           std::lock_guard<std::mutex> lock(fifo_vec_item_map_mutex);
-          fifo_vec_item_map[conn + id] = f_item;
+          fifo_vec_item_map[id] = f_item;
         }
 
         delete[] fifo_v_msg;
@@ -459,11 +459,15 @@ uccl_mr_t uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size) {
 }
 
 int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* dst,
-                     size_t size, void* slot_item_ptr, uint64_t* transfer_id) {
+                     size_t size, int fifo_id, uint64_t* transfer_id) {
   if (!conn || !dst) return -1;
 
   FifoItem slot_item;
-  slot_item = *static_cast<FifoItem*>(slot_item_ptr);
+  result = uccl_engine_get_fifo_item(fifo_id, slot_item);
+  if (result != 0) {
+    std::cerr << "Failed to get FIFO item for id " << fifo_id << std::endl;
+    return -1;
+  }
 
   return conn->engine->endpoint->read_async(conn->conn_id, mr,
                                             const_cast<void*>(dst), size,
@@ -484,7 +488,7 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
   int retry_count = 0;
 
   // Get the fifo vector. Make sure to execute wait_for_fifo
-  result = uccl_engine_get_fifo_vector(conn, fifo_id, slot_items);
+  result = uccl_engine_get_fifo_vec(fifo_id, slot_items);
 
   if (result != 0) {
     std::cerr << "Failed to get FIFO vec for id " << fifo_id << std::endl;
@@ -670,28 +674,23 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   return send(conn->sock_fd, &md, sizeof(md_t), 0);
 }
 
-int uccl_engine_get_fifo_item(uccl_conn_t* conn, int id, void* fifo_item) {
-  if (!conn || !fifo_item) return -1;
-
+int uccl_engine_get_fifo_item(int id, FifoItem& fifo_item) {
   std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
-  auto it = fifo_item_map.find(conn + id);
+  auto it = fifo_item_map.find(id);
   if (it == fifo_item_map.end()) {
-    return -1;
+    return -1;  
   }
   if (it->second->is_valid) {
     memcpy(fifo_item, &it->second->fifo_item, sizeof(FifoItem));
     it->second->is_valid = false;
     return 0;
-  } else {
-    return -1;
   }
+  return -1;
 }
 
 int uccl_engine_get_fifo_vec(int id, std::vector<FifoItem>& fifo_vec) {
-  if (!conn || !fifo_item) return -1;
-
   std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
-  auto it = fifo_vec_item_map.find(conn + id);
+  auto it = fifo_vec_item_map.find(id);
   if (it == fifo_vec_item_map.end()) {
     return -1;
   }
@@ -699,12 +698,36 @@ int uccl_engine_get_fifo_vec(int id, std::vector<FifoItem>& fifo_vec) {
     fifo_vec = it->second->fifo_item;
     it->second->is_valid = false;
     return 0;
-  } else {
-    return -1;
   }
+  return -1;
 }
 
 int uccl_engine_wait_for_fifo(int id) {
+  int const max_retries = 10;
+  int result = -1;
+  int retry_count = 0;
+  do {
+    {
+      std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
+      auto it = fifo_item_map.find(id);
+      if (it != fifo_item_map.end() && it->second->is_valid) {
+        result = 0;
+        break;
+      }
+    }
+    retry_count++;
+    if (retry_count < max_retries) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  } while (retry_count < max_retries);
+  if (result != 0) {
+    std::cerr << "Failed to get FIFO after " << max_retries
+              << " retries for item " << id << std::endl;
+  }
+  return result;
+}
+
+int uccl_engine_wait_for_fifo_vec(int id) {
   int const max_retries = 10;
   int result = -1;
   int retry_count = 0;

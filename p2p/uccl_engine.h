@@ -122,12 +122,12 @@ uccl_mr_t uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size);
  * @param mr            Memory region handle.
  * @param data          Pointer to the data to send.
  * @param size          Size of the data.
- * @param slot_item     Pointer to FifoItem for RDMA read.
+ * @param fifo_id       FIFO ID.
  * @param transfer_id   Pointer to store the transfer ID.
  * @return              0 on success, non-zero on failure.
  */
 int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
-                     size_t size, void* slot_item, uint64_t* transfer_id);
+                     size_t size, int fifo_id, uint64_t* transfer_id);
 
 /**
  * Read a vector of data chunks (Non blocking).
@@ -135,7 +135,7 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
  * @param mr_ids        Vector of memory region handles.
  * @param dst_v         Vector of pointers to the data to receive.
  * @param size_v        Vector of sizes of the data to receive.
- * @param slot_item_v   Vector of pointers to the FifoItem for RDMA read.
+ * @param fifo_id       FIFO ID.
  * @param num_iovs      Number of IO vectors.
  * @param transfer_id   Pointer to store the transfer ID.
  * @return              0 on success, non-zero on failure.
