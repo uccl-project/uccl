@@ -474,13 +474,22 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* dst,
 
 int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<void*> dst_v,
-                            std::vector<size_t> size_v,
-                            std::vector<void*> slot_item_v, int num_iovs,
-                            uint64_t* transfer_id) {
+                            std::vector<size_t> size_v, int fifo_id,
+                            int num_iovs, uint64_t* transfer_id) {
   if (!conn || num_iovs <= 0) return -1;
 
   std::vector<FifoItem> slot_items;
-  slot_items = *static_cast<std::vector<FifoItem>*>(slot_item_v);
+  int const max_retries = 10;
+  int result = -1;
+  int retry_count = 0;
+
+  // Get the fifo vector. Make sure to execute wait_for_fifo
+  result = uccl_engine_get_fifo_vector(conn, fifo_id, slot_items);
+
+  if (result != 0) {
+    std::cerr << "Failed to get FIFO vec for id " << fifo_id << std::endl;
+    return -1;
+  }
 
   return conn->engine->endpoint->readv_async(conn->conn_id, mr_ids, dst_v,
                                              size_v, slot_items, num_iovs,
@@ -676,6 +685,48 @@ int uccl_engine_get_fifo_item(uccl_conn_t* conn, int id, void* fifo_item) {
   } else {
     return -1;
   }
+}
+
+int uccl_engine_get_fifo_vec(int id, std::vector<FifoItem>& fifo_vec) {
+  if (!conn || !fifo_item) return -1;
+
+  std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
+  auto it = fifo_vec_item_map.find(conn + id);
+  if (it == fifo_vec_item_map.end()) {
+    return -1;
+  }
+  if (it->second->is_valid) {
+    fifo_vec = it->second->fifo_item;
+    it->second->is_valid = false;
+    return 0;
+  } else {
+    return -1;
+  }
+}
+
+int uccl_engine_wait_for_fifo(int id) {
+  int const max_retries = 10;
+  int result = -1;
+  int retry_count = 0;
+  do {
+    {
+      std::lock_guard<std::mutex> lock(fifo_vec_item_map_mutex);
+      auto it = fifo_vec_item_map.find(id);
+      if (it != fifo_vec_item_map.end() && it->second->is_valid) {
+        result = 0;
+        break;
+      }
+    }
+    retry_count++;
+    if (retry_count < max_retries) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  } while (retry_count < max_retries);
+  if (result != 0) {
+    std::cerr << "Failed to get FIFO vec after " << max_retries
+              << " retries for item " << id << std::endl;
+  }
+  return result;
 }
 
 int uccl_engine_get_sock_fd(uccl_conn_t* conn) {
