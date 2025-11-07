@@ -489,6 +489,7 @@ void uccl_engine_conn_destroy(uccl_conn_t* conn) {
 void uccl_engine_mr_destroy(uccl_mr_t* mr) {
   for (auto it = mem_reg_info.begin(); it != mem_reg_info.end(); ++it) {
     if (it->second == mr->mr_id) {
+      mr->engine->endpoint->dereg(mr->mr_id);
       mem_reg_info.erase(it);
       break;
     }
