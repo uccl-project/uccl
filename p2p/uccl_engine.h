@@ -12,7 +12,7 @@ typedef struct uccl_engine uccl_engine_t;
 typedef struct uccl_conn uccl_conn_t;
 
 // Handle for a memory region
-typedef struct uccl_mr uccl_mr_t;
+typedef uint64_t uccl_mr_t;
 
 // UCCL operation types
 enum uccl_msg_type {
@@ -21,7 +21,8 @@ enum uccl_msg_type {
   UCCL_VECTOR_READ = 2,
   UCCL_VECTOR_WRITE = 3,
   UCCL_FIFO = 4,
-  UCCL_NOTIFY = 5
+  UCCL_VECTOR_FIFO = 5,
+  UCCL_NOTIFY = 6
 };
 
 typedef struct notify_msg {
@@ -34,6 +35,10 @@ typedef struct fifo_msg {
   char fifo_buf[MSG_SIZE];
 } fifo_msg_t;
 
+typedef struct fifo_v_msg {
+  char fifo_buf[MSG_SIZE];
+} fifo_v_msg_t;
+
 typedef struct tx_msg {
   uint64_t data_ptr;  // Memory address for data reception
   size_t data_size;   // Size of data to receive
@@ -41,7 +46,7 @@ typedef struct tx_msg {
 
 typedef struct vector_msg {
   size_t count;  // Number of items in the vector
-
+  int id;        // optional ID for a vector
 } vector_msg_t;
 
 typedef struct md {
@@ -123,6 +128,24 @@ uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size);
  */
 int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
                      size_t size, void* slot_item, uint64_t* transfer_id);
+
+/**
+ * Read a vector of data chunks (Non blocking).
+ * @param conn          Connection handle.
+ * @param mr_ids        Vector of memory region handles.
+ * @param dst_v         Vector of pointers to the data to receive.
+ * @param size_v        Vector of sizes of the data to receive.
+ * @param slot_item_v   Vector of pointers to the FifoItem for RDMA read.
+ * @param num_iovs      Number of IO vectors.
+ * @param transfer_id   Pointer to store the transfer ID.
+ * @return              0 on success, non-zero on failure.
+ */
+int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uint64_t> mr_ids,
+                            std::vector<void*> dst_v,
+                            std::vector<size_t> size_v,
+                            std::vector<void*> slot_item_v, int num_iovs,
+                            uint64_t* transfer_id);
+
 /**
  * Get a FIFO item.
  * @param conn          Connection handle.
@@ -145,6 +168,21 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
                       size_t size, uint64_t* transfer_id);
 
 /**
+ * Read a vector of data chunks (Non blocking).
+ * @param conn          Connection handle.
+ * @param mr_ids        Vector of memory region handles.
+ * @param src_v         Vector of pointers to the data to write.
+ * @param num_iovs      Number of IO vectors.
+ * @param size_v        Vector of sizes of the data to write.
+ * @param transfer_id   Pointer to store the transfer ID.
+ * @return              0 on success, non-zero on failure.
+ */
+int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uint64_t> mr_ids,
+                             std::vector<void*> src_v,
+                             std::vector<size_t> size_v, int num_iovs,
+                             uint64_t* transfer_id);
+
+/**
  * Receive data (blocking).
  * @param conn          Connection handle.
  * @param mr            Memory region handle.
@@ -154,6 +192,19 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
  */
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
                      size_t max_size);
+
+/**
+ * Receive a vector of data chunks (blocking).
+ * @param conn          Connection handle.
+ * @param mr_ids        Vector of memory region handles.
+ * @param data_v        Vector of pointers to the buffer to receive data.
+ * @param size_v        Vector of sizes of the data to receive.
+ * @param num_iovs      Number of IO vectors.
+ * @return              0 on success, non-zero on failure.
+ */
+int uccl_engine_recv_vector(uccl_conn_t* conn, std::vector<uint64_t> mr_ids,
+                            std::vector<void*> data_v,
+                            std::vector<size_t> size_v, int num_iovs);
 /**
  * Check the status of a transfer.
  * @param conn          Connection handle.

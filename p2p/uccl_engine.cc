@@ -52,11 +52,18 @@ typedef struct {
   bool is_valid;
 } fifo_item_t;
 
+typedef struct {
+  std::vector<FifoItem> fifo_item;
+  bool is_valid;
+} fifo_vec_item_t;
+
 std::unordered_map<uintptr_t, uint64_t> mem_reg_info;
 std::unordered_map<uccl_conn_t*, fifo_item_t*> fifo_item_map;
+std::unordered_map<uccl_conn_t*, fifo_vec_item_t*> fifo_vec_item_map;
 std::vector<notify_msg_t> notify_msg_list;
 
 std::mutex fifo_item_map_mutex;
+std::mutex fifo_vec_item_map_mutex;
 std::mutex notify_msg_list_mutex;
 
 // Helper function for the listener thread
@@ -159,7 +166,7 @@ void listener_thread_func(uccl_conn_t* conn) {
       }
       case UCCL_VECTOR_READ: {
         size_t count = md.data.vector_data.count;
-
+        int id = md.data.vector_data.id;
         tx_msg_t* tx_data_array = new tx_msg_t[count];
         ssize_t data_size = count * sizeof(tx_msg_t);
 
@@ -186,6 +193,12 @@ void listener_thread_func(uccl_conn_t* conn) {
           delete[] tx_data_array;
           break;
         }
+
+        std::vector<uccl_mr_t> mr_id_v(count);
+        std::vector<void*> addr_v(count);
+        std::vector<size_t> size_v(count);
+        std::vector<char*> out_buf_v(count);
+
         for (size_t i = 0; i < count; i++) {
           tx_msg_t tx_data = tx_data_array[i];
           auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
@@ -194,32 +207,24 @@ void listener_thread_func(uccl_conn_t* conn) {
                       << tx_data.data_ptr << " (item " << i << ")" << std::endl;
             continue;
           }
-          mr_id = local_mem_iter->second;
+          mr_id_v[i] = local_mem_iter->second;
+          addr_v[i] = (void*)tx_data.data_ptr;
+          size_v[i] = tx_data.data_size;
+          out_buf_v[i] = new char[sizeof(FifoItem)];
+        }
 
-          char out_buf[sizeof(FifoItem)];
-          conn->engine->endpoint->advertise(conn->conn_id, mr_id,
-                                            (void*)tx_data.data_ptr,
-                                            tx_data.data_size, out_buf);
+        conn->engine->endpoint->advertisev(conn->conn_id, mr_id_v, addr_v,
+                                           size_v, out_buf_v, count);
 
-          md_t response_md;
-          response_md.op = UCCL_FIFO;
-          fifo_msg_t fifo_data;
-          fifo_data.id = i;
-          memcpy(fifo_data.fifo_buf, out_buf, sizeof(FifoItem));
-          response_md.data.fifo_data = fifo_data;
-
-          // TODO: Check if this has to sent in bulk or individually
-          ssize_t result = send(conn->sock_fd, &response_md, sizeof(md_t), 0);
-          if (result < 0) {
-            std::cerr << "Failed to send FifoItem data for item " << i << ": "
-                      << strerror(errno) << std::endl;
-          }
-
-          FifoItem fifo_item;
-          memcpy(&fifo_item, out_buf, sizeof(FifoItem));
+        // Prepare fifo_v_msg array from out_buf_v
+        fifo_v_msg_t* fifo_v_msg_array = new fifo_v_msg_t[count];
+        for (size_t i = 0; i < count; i++) {
+          memcpy(fifo_v_msg_array[i].fifo_buf, out_buf_v[i], sizeof(FifoItem));
           // Each advertised slice triggers a corresponding send so the remote
           // side can simply post tagged receives.
 #ifdef USE_TCPX
+          FifoItem fifo_item;
+          memcpy(&fifo_item, out_buf_v[i], sizeof(FifoItem));
           if (!conn->engine->endpoint->queue_read_response(conn->conn_id,
                                                            fifo_item)) {
             std::cerr << "Failed to queue read response for item " << i
@@ -227,6 +232,38 @@ void listener_thread_func(uccl_conn_t* conn) {
           }
 #endif
         }
+
+        // Send metadata with count
+        md_t vector_md;
+        vector_md.op = UCCL_VECTOR_FIFO;
+        vector_md.data.vector_data.count = count;
+        vector_md.data.vector_data.id = id;
+
+        ssize_t bytes_sent = send(conn->sock_fd, &vector_md, sizeof(md_t), 0);
+        if (bytes_sent != sizeof(md_t)) {
+          std::cerr << "Failed to send vector FIFO metadata header. Expected: "
+                    << sizeof(md_t) << ", Sent: " << bytes_sent << std::endl;
+          delete[] fifo_v_msg_array;
+          delete[] tx_data_array;
+          break;
+        }
+
+        // Send fifo_v_msg array
+        ssize_t fifo_data_size = count * sizeof(fifo_v_msg_t);
+        bytes_sent = send(conn->sock_fd, fifo_v_msg_array, fifo_data_size, 0);
+        if (bytes_sent != fifo_data_size) {
+          std::cerr << "Failed to send vector FIFO data array. Expected: "
+                    << fifo_data_size << ", Sent: " << bytes_sent << std::endl;
+          delete[] fifo_v_msg_array;
+          delete[] tx_data_array;
+          break;
+        }
+
+        // Clean up
+        for (size_t i = 0; i < count; i++) {
+          delete[] out_buf_v[i];
+        }
+        delete[] fifo_v_msg_array;
 
         delete[] tx_data_array;
         break;
@@ -296,6 +333,52 @@ void listener_thread_func(uccl_conn_t* conn) {
           std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
           fifo_item_map[conn + fifo_data.id] = f_item;
         }
+        break;
+      }
+      case UCCL_VECTOR_FIFO: {
+        size_t count = md.data.vector_data.count;
+        int id = md.data.vector_data.id;
+        fifo_v_msg_t* fifo_v_msg = new fifo_v_msg_t[count];
+        ssize_t data_size = count * sizeof(fifo_v_msg_t);
+
+        ssize_t total_received = 0;
+        ssize_t recv_data_size = 0;
+        char* buffer = reinterpret_cast<char*>(fifo_v_msg);
+
+        while (total_received < data_size) {
+          recv_data_size = recv(conn->sock_fd, buffer + total_received,
+                                data_size - total_received, 0);
+
+          if (recv_data_size <= 0) {
+            std::cerr << "Failed to receive tx_data array. Expected: "
+                      << data_size << ", Received: " << total_received
+                      << ", Last recv: " << recv_data_size << std::endl;
+            delete[] fifo_v_msg;
+            break;
+          }
+
+          total_received += recv_data_size;
+        }
+        if (total_received != data_size) {
+          delete[] fifo_v_msg;
+          break;
+        }
+
+        std::vector<FifoItem> fifo_item_vec(count);
+        for (size_t i = 0; i < count; i++) {
+          memcpy(&fifo_item_vec[i], fifo_v_msg[i].fifo_buf, sizeof(FifoItem));
+        }
+
+        fifo_vec_item_t* f_item = new fifo_vec_item_t;
+        f_item->fifo_item = fifo_item_vec;
+        f_item->is_valid = true;
+
+        {
+          std::lock_guard<std::mutex> lock(fifo_vec_item_map_mutex);
+          fifo_vec_item_map[conn + id] = f_item;
+        }
+
+        delete[] fifo_v_msg;
         break;
       }
       case UCCL_NOTIFY: {
@@ -370,50 +453,82 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   return conn;
 }
 
-uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size) {
+uccl_mr_t uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size) {
   if (!engine || !data) return nullptr;
-  uccl_mr_t* mr = new uccl_mr;
-  uint64_t mr_id;
+  uccl_mr_t mr_id;
   bool ok = engine->endpoint->reg((void*)data, size, mr_id);
   if (!ok) {
-    delete mr;
-    return nullptr;
+    return -1;
   }
-  mr->mr_id = mr_id;
-  mr->engine = engine;
   mem_reg_info[data] = mr_id;
-  return mr;
+  return mr_id;
 }
 
-int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* dst,
                      size_t size, void* slot_item_ptr, uint64_t* transfer_id) {
-  if (!conn || !mr || !data) return -1;
+  if (!conn || !dst) return -1;
 
   FifoItem slot_item;
   slot_item = *static_cast<FifoItem*>(slot_item_ptr);
 
-  return conn->engine->endpoint->read_async(conn->conn_id, mr->mr_id,
-                                            const_cast<void*>(data), size,
+  return conn->engine->endpoint->read_async(conn->conn_id, mr,
+                                            const_cast<void*>(dst), size,
                                             slot_item, transfer_id)
              ? 0
              : -1;
 }
 
-int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
-                      size_t size, uint64_t* transfer_id) {
-  if (!conn || !mr || !data) return -1;
-  return conn->engine->endpoint->send_async(conn->conn_id, mr->mr_id, data,
-                                            size, transfer_id)
+int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
+                            std::vector<void*> dst_v,
+                            std::vector<size_t> size_v,
+                            std::vector<void*> slot_item_v, int num_iovs,
+                            uint64_t* transfer_id) {
+  if (!conn || !mr_ids || !dst_v || !size_v || !slot_item_v || num_iovs <= 0)
+    return -1;
+
+  std::vector<FifoItem> slot_item_v;
+  slot_item_v = *static_cast<std::vector<FifoItem>*>(slot_item_v_ptr);
+
+  return conn->engine->endpoint->readv_async(conn->conn_id, mr_ids, dst_v,
+                                             size_v, slot_item_v, num_iovs,
+                                             transfer_id)
              ? 0
              : -1;
 }
 
-int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
+int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* src,
+                      size_t size, uint64_t* transfer_id) {
+  if (!conn || !src) return -1;
+  return conn->engine->endpoint->send_async(conn->conn_id, mr, src, size,
+                                            transfer_id)
+             ? 0
+             : -1;
+}
+
+int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
+                             std::vector<void*> src_v,
+                             std::vector<size_t> size_v,
+                             std::vector<void*> slot_item_v, int num_iovs,
+                             uint64_t* transfer_id) {
+  if (!conn || !mr_ids || !src_v || !size_v || !slot_item_v || num_iovs <= 0)
+    return -1;
+
+  std::vector<FifoItem> slot_item_v;
+  slot_item_v = *static_cast<std::vector<FifoItem>*>(slot_item_v_ptr);
+
+  return conn->engine->endpoint->writev_async(conn->conn_id, mr_ids, src_v,
+                                              size_v, slot_item_v, num_iovs,
+                                              transfer_id)
+             ? 0
+             : -1;
+}
+
+int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
                      size_t data_size) {
-  if (!conn || !mr || !data) return -1;
+  if (!conn || !data) return -1;
   uint64_t transfer_id;
-  return conn->engine->endpoint->recv_async(conn->conn_id, mr->mr_id, data,
-                                            data_size, &transfer_id)
+  return conn->engine->endpoint->recv_async(conn->conn_id, mr, data, data_size,
+                                            &transfer_id)
              ? 0
              : -1;
 }
@@ -486,9 +601,9 @@ void uccl_engine_conn_destroy(uccl_conn_t* conn) {
   }
 }
 
-void uccl_engine_mr_destroy(uccl_mr_t* mr) {
+void uccl_engine_mr_destroy(uccl_mr_t mr) {
   for (auto it = mem_reg_info.begin(); it != mem_reg_info.end(); ++it) {
-    if (it->second == mr->mr_id) {
+    if (it->second == mr) {
       mem_reg_info.erase(it);
       break;
     }
