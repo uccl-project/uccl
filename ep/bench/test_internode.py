@@ -26,6 +26,7 @@ This benchmark verifies:
 """
 
 import argparse
+import inspect
 import os
 import time
 import torch
@@ -77,6 +78,47 @@ def test_main(
         args.num_topk,
         args.num_experts,
     )
+
+    try:
+        dispatch_params = inspect.signature(buffer.dispatch).parameters
+    except (TypeError, ValueError):
+        dispatch_params = {}
+    try:
+        combine_params = inspect.signature(buffer.combine).parameters
+    except (TypeError, ValueError):
+        combine_params = {}
+
+    dispatch_supports_return_hook = (
+        "return_recv_hook" in dispatch_params
+        and getattr(buffer, "internode_dispatch_supports_return_hook", False)
+    )
+    dispatch_supports_num_max = (
+        "num_max_dispatch_tokens_per_rank" in dispatch_params
+        and getattr(buffer, "internode_dispatch_supports_num_max", False)
+    )
+    dispatch_supports_decoupled = (
+        "decoupled_mode" in dispatch_params
+        and getattr(buffer, "internode_dispatch_supports_decoupled", False)
+    )
+    combine_supports_return_hook = (
+        "return_recv_hook" in combine_params
+        and getattr(buffer, "internode_combine_supports_return_hook", False)
+    )
+    hook_capable = getattr(buffer, "internode_hook_capable", False)
+
+    if args.use_hook and local_rank == 0:
+        if not dispatch_supports_return_hook:
+            print(
+                "[warning] --use-hook requested but Buffer.dispatch does not support return_recv_hook; falling back to default path.",
+                flush=True,
+            )
+            assert(False)
+        if not combine_supports_return_hook:
+            print(
+                "[warning] --use-hook requested but Buffer.combine does not support return_recv_hook; falling back to default path.",
+                flush=True,
+            )
+            assert(False)
 
     assert num_experts % num_ranks == 0 and num_local_ranks == 8
     if local_rank == 0:
@@ -150,6 +192,10 @@ def test_main(
     gbl_num_tokens_per_rank = num_tokens_per_rank.clone()
     dist.all_reduce(gbl_num_tokens_per_rank, group=group)
 
+    max_dispatch_tokens_per_rank = int(
+        max(num_tokens_per_rank.max().item(), num_tokens)
+    )
+
     (
         ref_num_tokens_per_rank,
         ref_num_tokens_per_rdma_rank,
@@ -161,6 +207,23 @@ def test_main(
     assert torch.allclose(ref_num_tokens_per_rdma_rank, num_tokens_per_rdma_rank)
     assert torch.allclose(ref_num_tokens_per_expert, num_tokens_per_expert)
     assert torch.allclose(ref_is_token_in_rank, is_token_in_rank)
+    if dispatch_supports_return_hook and hook_capable:
+        (
+            hook_num_tokens_per_rank,
+            hook_num_tokens_per_rdma_rank,
+            hook_num_tokens_per_expert,
+            hook_is_token_in_rank,
+            _,
+        ) = buffer.get_dispatch_layout(
+            topk_idx, num_experts, return_recv_hook=True
+        )
+        torch.cuda.current_stream().synchronize()
+        assert torch.allclose(hook_num_tokens_per_rank, num_tokens_per_rank)
+        assert torch.allclose(
+            hook_num_tokens_per_rdma_rank, num_tokens_per_rdma_rank
+        )
+        assert torch.allclose(hook_num_tokens_per_expert, num_tokens_per_expert)
+        assert torch.allclose(hook_is_token_in_rank, is_token_in_rank)
     t = bench(lambda: buffer.get_dispatch_layout(topk_idx, num_experts))[0]
     if local_rank == 0:
         print(f"[layout] Kernel performance: {t * 1000:.3f} ms", flush=True)
@@ -216,15 +279,47 @@ def test_main(
                         )
                     if previous_mode:
                         dispatch_args.update({"previous_event": buffer.capture()})
-                    (
-                        recv_x,
-                        recv_topk_idx,
-                        recv_topk_weights,
-                        recv_num_tokens_per_expert_list,
-                        handle,
-                        event,
-                    ) = buffer.dispatch(**dispatch_args)
-                    event.current_stream_wait() if async_mode else ()
+                    want_hook = (
+                        args.use_hook
+                        and hook_capable
+                        and dispatch_supports_return_hook
+                        and not async_mode
+                    )
+                    if want_hook and dispatch_supports_decoupled:
+                        dispatch_args["decoupled_mode"] = True
+                    if want_hook and dispatch_supports_return_hook:
+                        dispatch_args["return_recv_hook"] = True
+                    if want_hook and dispatch_supports_num_max:
+                        dispatch_args[
+                            "num_max_dispatch_tokens_per_rank"
+                        ] = max_dispatch_tokens_per_rank
+
+                    dispatch_result = buffer.dispatch(**dispatch_args)
+                    if len(dispatch_result) == 7:
+                        (
+                            recv_x,
+                            recv_topk_idx,
+                            recv_topk_weights,
+                            recv_num_tokens_per_expert_list,
+                            handle,
+                            event,
+                            hook,
+                        ) = dispatch_result
+                    else:
+                        (
+                            recv_x,
+                            recv_topk_idx,
+                            recv_topk_weights,
+                            recv_num_tokens_per_expert_list,
+                            handle,
+                            event,
+                        ) = dispatch_result
+                        hook = None
+
+                    if async_mode and event is not None and getattr(event, "event", None) is not None:
+                        event.current_stream_wait()
+                    if hook is not None:
+                        hook()
                     recv_x = (
                         per_token_cast_back(*recv_x)
                         if isinstance(recv_x, tuple)
@@ -232,7 +327,9 @@ def test_main(
                     )
 
                     # Checks
-                    recv_gbl_rank_prefix_sum = handle[-4]
+                    recv_gbl_rank_prefix_sum = (
+                        handle[-5] if len(handle) > 10 else handle[-4]
+                    )
                     assert gbl_num_tokens_per_rank[rank].item() == recv_x.size(
                         0
                     ), f"{gbl_num_tokens_per_rank[rank].item()} != {recv_x.size(0)}"
@@ -273,8 +370,26 @@ def test_main(
                         }
                         if previous_mode:
                             dispatch_args.update({"previous_event": buffer.capture()})
-                        recv_x, _, _, _, _, event = buffer.dispatch(**dispatch_args)
-                        event.current_stream_wait() if async_mode else ()
+                        if want_hook and dispatch_supports_decoupled:
+                            dispatch_args["decoupled_mode"] = True
+                        if want_hook and dispatch_supports_return_hook:
+                            dispatch_args["return_recv_hook"] = True
+                        if want_hook and dispatch_supports_num_max:
+                            dispatch_args[
+                                "num_max_dispatch_tokens_per_rank"
+                            ] = max_dispatch_tokens_per_rank
+
+                        cached_result = buffer.dispatch(**dispatch_args)
+                        if len(cached_result) == 7:
+                            recv_x, _, _, _, _, event, hook = cached_result
+                        else:
+                            recv_x, _, _, _, _, event = cached_result
+                            hook = None
+
+                        if async_mode and event is not None and getattr(event, "event", None) is not None:
+                            event.current_stream_wait()
+                        if hook is not None:
+                            hook()
                         recv_x = (
                             per_token_cast_back(*recv_x)
                             if isinstance(recv_x, tuple)
@@ -301,10 +416,25 @@ def test_main(
                         combine_args.update({"topk_weights": recv_topk_weights})
                     if previous_mode:
                         combine_args.update({"previous_event": buffer.capture()})
-                    combined_x, combined_topk_weights, event = buffer.combine(
-                        **combine_args
+                    combine_hook_enabled = (
+                        want_hook and combine_supports_return_hook
                     )
-                    event.current_stream_wait() if async_mode else ()
+                    if combine_hook_enabled:
+                        combine_args["return_recv_hook"] = True
+
+                    combine_result = buffer.combine(**combine_args)
+                    if len(combine_result) == 4:
+                        combined_x, combined_topk_weights, event, combine_hook = (
+                            combine_result
+                        )
+                    else:
+                        combined_x, combined_topk_weights, event = combine_result
+                        combine_hook = None
+
+                    if async_mode and event is not None and getattr(event, "event", None) is not None:
+                        event.current_stream_wait()
+                    if combine_hook is not None:
+                        combine_hook()
                     check_x = (
                         combined_x.float() - bias_0.float() - bias_1.float()
                     ) / is_token_in_rank.sum(dim=1).unsqueeze(1)
@@ -412,7 +542,16 @@ def test_main(
         "num_tokens_per_expert": num_tokens_per_expert,
         "config": dispatch_config if dispatch_config is not None else config,
     }
-    recv_x, _, _, _, handle, _ = buffer.dispatch(**dispatch_args)
+    dispatch_result = buffer.dispatch(**dispatch_args)
+    if len(dispatch_result) == 7:
+        recv_x, _, _, _, handle, event, hook = dispatch_result
+    else:
+        recv_x, _, _, _, handle, event = dispatch_result
+        hook = None
+    if event is not None and getattr(event, "event", None) is not None:
+        event.current_stream_wait()
+    if hook is not None:
+        hook()
 
     # Tune combine performance
     best_time, best_results = 1e10, None
@@ -529,6 +668,11 @@ if __name__ == "__main__":
         "--test-ll-compatibility",
         action="store_true",
         help="whether to test compatibility with low-latency kernels",
+    )
+    parser.add_argument(
+        "--use-hook",
+        action="store_true",
+        help="enable recv hook path for internode dispatch/combine",
     )
     args = parser.parse_args()
     world_size = int(os.environ["WORLD_SIZE"])

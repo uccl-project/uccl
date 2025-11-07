@@ -160,7 +160,9 @@ def test_main(
                         recv_num_tokens_per_expert_list,
                         handle,
                         event,
+                        hook,
                     ) = buffer.dispatch(**dispatch_args)
+                    assert hook is None
                     event.current_stream_wait() if async_mode else ()
                     recv_x = (
                         per_token_cast_back(*recv_x)
@@ -213,7 +215,9 @@ def test_main(
                             empty_list,
                             _,
                             event,
+                            hook,
                         ) = buffer.dispatch(**dispatch_args)
+                        assert hook is None
                         event.current_stream_wait() if async_mode else ()
                         recv_worst_x = (
                             per_token_cast_back(*recv_worst_x)
@@ -246,7 +250,8 @@ def test_main(
                         }
                         if previous_mode:
                             dispatch_args.update({"previous_event": buffer.capture()})
-                        recv_x, _, _, _, _, event = buffer.dispatch(**dispatch_args)
+                        recv_x, _, _, _, _, event, hook = buffer.dispatch(**dispatch_args)
+                        assert hook is None
                         event.current_stream_wait() if async_mode else ()
                         recv_x = (
                             per_token_cast_back(*recv_x)
@@ -267,9 +272,18 @@ def test_main(
                         combine_args.update({"topk_weights": recv_topk_weights})
                     if previous_mode:
                         combine_args.update({"previous_event": buffer.capture()})
-                    combined_x, combined_topk_weights, event = buffer.combine(
-                        **combine_args
-                    )
+                    combine_result = buffer.combine(**combine_args)
+                    if len(combine_result) == 4:
+                        (
+                            combined_x,
+                            combined_topk_weights,
+                            event,
+                            combine_hook,
+                        ) = combine_result
+                    else:
+                        combined_x, combined_topk_weights, event = combine_result
+                        combine_hook = None
+                    assert combine_hook is None
                     event.current_stream_wait() if async_mode else ()
                     check_x = combined_x.float() / is_token_in_rank.sum(
                         dim=1
@@ -359,7 +373,8 @@ def test_main(
         "num_tokens_per_expert": num_tokens_per_expert,
         "config": dispatch_config if dispatch_config is not None else config,
     }
-    recv_x, _, _, _, handle, _ = buffer.dispatch(**dispatch_args)
+    recv_x, _, _, _, handle, _, hook = buffer.dispatch(**dispatch_args)
+    assert hook is None
 
     # Tune combine performance
     best_time, best_results = 1e10, None

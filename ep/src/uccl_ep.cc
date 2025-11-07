@@ -258,7 +258,10 @@ class Buffer {
              torch::Tensor, std::optional<EventHandle>>
   get_dispatch_layout(torch::Tensor const& topk_idx, int num_experts,
                       std::optional<EventHandle>& previous_event, bool async,
-                      bool allocate_on_comm_stream) {
+                      bool allocate_on_comm_stream, bool return_recv_hook) {
+    if (return_recv_hook) {
+        EP_HOST_ASSERT(not async);
+    }
     EP_HOST_ASSERT(topk_idx.dim() == 2);
     EP_HOST_ASSERT(topk_idx.is_contiguous());
     EP_HOST_ASSERT(num_experts > 0);
@@ -266,16 +269,19 @@ class Buffer {
     // Allocate all tensors on comm stream if set
     // NOTES: do not allocate tensors upfront!
     auto compute_stream = at::cuda::getCurrentCUDAStream();
+    auto launch_stream = return_recv_hook ? compute_stream : comm_stream;
     if (allocate_on_comm_stream) {
       EP_HOST_ASSERT(previous_event.has_value() and async);
       at::cuda::setCurrentCUDAStream(comm_stream);
     }
 
     // Wait previous tasks to be finished
-    if (previous_event.has_value()) {
-      stream_wait(comm_stream, previous_event.value());
-    } else {
-      stream_wait(comm_stream, compute_stream);
+    if(not return_recv_hook) {
+      if (previous_event.has_value()) {
+        stream_wait(comm_stream, previous_event.value());
+      } else {
+        stream_wait(comm_stream, compute_stream);
+      }
     }
 
     auto num_tokens = static_cast<int>(topk_idx.size(0)),
@@ -298,15 +304,15 @@ class Buffer {
             : nullptr,
         num_tokens_per_expert.data_ptr<int>(),
         is_token_in_rank.data_ptr<bool>(), num_tokens, num_topk, num_ranks,
-        num_experts, comm_stream);
+        num_experts, launch_stream);
 
     // Wait streams
     std::optional<EventHandle> event;
     if (async) {
-      event = EventHandle(comm_stream);
+      event = EventHandle(launch_stream);
       for (auto& t : {topk_idx, num_tokens_per_rank, num_tokens_per_expert,
                       is_token_in_rank}) {
-        t.record_stream(comm_stream);
+        t.record_stream(launch_stream);
         if (allocate_on_comm_stream) t.record_stream(compute_stream);
       }
       for (auto& to : {num_tokens_per_rdma_rank}) {
@@ -314,8 +320,8 @@ class Buffer {
         if (allocate_on_comm_stream)
           to.has_value() ? to->record_stream(compute_stream) : void();
       }
-    } else {
-      stream_wait(compute_stream, comm_stream);
+    } else if (not return_recv_hook) {
+      stream_wait(compute_stream, launch_stream);
     }
 
     // Switch back compute stream
@@ -393,7 +399,8 @@ class Buffer {
              std::optional<torch::Tensor>, torch::Tensor,
              std::optional<torch::Tensor>, torch::Tensor,
              std::optional<torch::Tensor>, std::optional<torch::Tensor>,
-             std::optional<torch::Tensor>, std::optional<EventHandle>>
+             std::optional<torch::Tensor>, int, std::optional<EventHandle>,
+             std::optional<std::function<void()>>>
   internode_dispatch(
       torch::Tensor const& x, std::optional<torch::Tensor> const& x_scales,
       std::optional<torch::Tensor> const& topk_idx,
@@ -409,18 +416,23 @@ class Buffer {
       std::optional<torch::Tensor> const& cached_recv_gbl_rank_prefix_sum,
       int expert_alignment, uccl::Config const& config,
       std::optional<EventHandle>& previous_event, bool async,
-      bool allocate_on_comm_stream) {
+      bool allocate_on_comm_stream, bool decoupled_mode = false,
+      bool return_recv_hook = false, int num_max_dispatch_tokens_per_rank = 0) {
     // In dispatch, CPU will busy-wait until GPU receive tensor size metadata
     // from other ranks, which can be quite long. If users of DeepEP need to
     // execute other Python code on other threads, such as KV transfer, their
     // code will get stuck due to GIL unless we release GIL here.
     pybind11::gil_scoped_release release;
 
-    int const num_channels = config.num_sms / 2;
-    EP_HOST_ASSERT(config.num_sms % 2 == 0);
+    if (return_recv_hook) {
+        EP_HOST_ASSERT((not async) and decoupled_mode);
+    }
+
+    const int num_channels = return_recv_hook ? config.num_sms : config.num_sms / 2;
+    EP_HOST_ASSERT(return_recv_hook or config.num_sms % 2 == 0);
     EP_HOST_ASSERT(0 < get_num_rdma_ranks() and
                    get_num_rdma_ranks() <= NUM_MAX_RDMA_PEERS);
-
+    EP_HOST_ASSERT((not decoupled_mode) or num_max_dispatch_tokens_per_rank > 0);
     bool cached_mode = cached_rdma_channel_prefix_matrix.has_value();
     if (cached_mode) {
       EP_HOST_ASSERT(cached_rdma_channel_prefix_matrix.has_value());
@@ -529,16 +541,19 @@ class Buffer {
     // Allocate all tensors on comm stream if set
     // NOTES: do not allocate tensors upfront!
     auto compute_stream = at::cuda::getCurrentCUDAStream();
+    auto launch_stream = return_recv_hook ? compute_stream : comm_stream;
     if (allocate_on_comm_stream) {
       EP_HOST_ASSERT(previous_event.has_value() and async);
-      at::cuda::setCurrentCUDAStream(comm_stream);
+      at::cuda::setCurrentCUDAStream(launch_stream);
     }
 
     // Wait previous tasks to be finished
-    if (previous_event.has_value()) {
-      stream_wait(comm_stream, previous_event.value());
-    } else {
-      stream_wait(comm_stream, compute_stream);
+    if(not return_recv_hook) {
+        if (previous_event.has_value()) {
+            stream_wait(launch_stream, previous_event.value());
+        } else {
+            stream_wait(launch_stream, compute_stream);
+        }
     }
 
     // Create handles (only return for non-cached mode)
@@ -564,11 +579,10 @@ class Buffer {
           0, nullptr, nullptr, nullptr, nullptr, rdma_buffer_ptr,
           config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
           config.num_max_nvl_chunked_recv_tokens, barrier_signal_ptrs_gpu, rank,
-          comm_stream,
-          config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4),
-                                           num_ranks),
-          num_nvl_bytes, true, low_latency_mode, d_handles,
-          num_d2h_channel_addrs, atomic_buffer_ptr);
+      launch_stream,
+      static_cast<int64_t>(num_rdma_bytes),
+      num_nvl_bytes, true, low_latency_mode, d_handles,
+      num_d2h_channel_addrs, atomic_buffer_ptr);
     } else {
       rdma_channel_prefix_matrix =
           torch::empty({num_rdma_ranks, num_channels},
@@ -597,11 +611,10 @@ class Buffer {
           recv_gbl_rank_prefix_sum.data_ptr<int>(), rdma_buffer_ptr,
           config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
           config.num_max_nvl_chunked_recv_tokens, barrier_signal_ptrs_gpu, rank,
-          comm_stream,
-          config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4),
-                                           num_ranks),
-          num_nvl_bytes, low_latency_mode, d_handles, num_d2h_channel_addrs,
-          atomic_buffer_ptr);
+      launch_stream,
+      static_cast<int64_t>(num_rdma_bytes),
+      num_nvl_bytes, low_latency_mode, d_handles, num_d2h_channel_addrs,
+      atomic_buffer_ptr);
 
       // Synchronize total received tokens and tokens per expert
       auto start_time = std::chrono::high_resolution_clock::now();
@@ -726,8 +739,17 @@ class Buffer {
         if (allocate_on_comm_stream)
           to.has_value() ? to->record_stream(compute_stream) : void();
       }
-    } else {
+    } else if (not return_recv_hook) {
       stream_wait(compute_stream, comm_stream);
+    }
+
+    std::optional<std::function<void()>> recv_hook = std::nullopt;
+    if (return_recv_hook) {
+      auto compute_stream_wait = compute_stream;
+      auto comm_stream_wait = comm_stream;
+      recv_hook = [compute_stream_wait, comm_stream_wait]() mutable {
+        stream_wait(compute_stream_wait, comm_stream_wait);
+      };
     }
 
     // Switch back compute stream
@@ -748,7 +770,8 @@ class Buffer {
             recv_src_meta,
             send_rdma_head,
             send_nvl_head,
-            event};
+            event,
+            recv_hook};
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>,
@@ -858,10 +881,10 @@ class Buffer {
         num_combined_tokens, combined_rdma_head.data_ptr<int>(),
         rdma_channel_prefix_matrix.data_ptr<int>(),
         rdma_rank_prefix_sum.data_ptr<int>(), combined_nvl_head.data_ptr<int>(),
-        rdma_buffer_ptr, config.num_max_rdma_chunked_recv_tokens,
-        buffer_ptrs_gpu, config.num_max_nvl_chunked_recv_tokens,
-        barrier_signal_ptrs_gpu, rank, comm_stream,
-        config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4), num_ranks),
+    rdma_buffer_ptr, config.num_max_rdma_chunked_recv_tokens,
+    buffer_ptrs_gpu, config.num_max_nvl_chunked_recv_tokens,
+    barrier_signal_ptrs_gpu, rank, comm_stream,
+    static_cast<int64_t>(num_rdma_bytes),
         num_nvl_bytes, false, low_latency_mode, d_handles,
         num_d2h_channel_addrs, atomic_buffer_ptr);
 
@@ -2066,7 +2089,21 @@ PYBIND11_MODULE(ep, m) {
       .def("is_available", &Buffer::is_available)
       .def("get_next_low_latency_combine_buffer",
            &Buffer::get_next_low_latency_combine_buffer)
-      .def("get_dispatch_layout", &Buffer::get_dispatch_layout)
+    .def(
+      "get_dispatch_layout",
+       [](Buffer& self, torch::Tensor const& topk_idx, int num_experts,
+         std::optional<EventHandle> previous_event, bool async,
+         bool allocate_on_comm_stream, bool return_recv_hook) {
+        return self.get_dispatch_layout(topk_idx, num_experts,
+                              previous_event, async,
+                      allocate_on_comm_stream,
+                      return_recv_hook);
+      },
+      py::arg("topk_idx"), py::arg("num_experts"),
+      py::arg("previous_event") = py::none(),
+      py::arg("async") = false,
+      py::arg("allocate_on_comm_stream") = false,
+      py::arg("return_recv_hook") = false)
       .def("intranode_dispatch", &Buffer::intranode_dispatch)
       .def("intranode_combine", &Buffer::intranode_combine)
       .def("internode_dispatch", &Buffer::internode_dispatch)
