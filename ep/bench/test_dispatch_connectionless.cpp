@@ -31,13 +31,13 @@
 
 // Configuration
 constexpr int NUM_GPUS_PER_NODE = 8;
-constexpr int NUM_EXPERTS_PER_GPU = 36;  // DeepEP: 288 experts / 8 GPUs = 36
+constexpr int NUM_EXPERTS_PER_GPU = 36;
 constexpr int NUM_NICS_PER_GPU = 2;
-constexpr size_t TOKEN_SIZE = 7 * 1024;  // 7KB per token (DeepEP FP8 format)
-constexpr int NUM_TOKENS_PER_GPU = 128;  // Each GPU has 128 tokens
-constexpr int TOPK = 8;  // Each token selects 8 experts (matches DeepEP)
+constexpr size_t TOKEN_SIZE = 7 * 1024;
+constexpr int NUM_TOKENS_PER_GPU = 128;
+constexpr int TOPK = 8;
 constexpr int SLOTS_PER_SRC = 1024;
-constexpr int WINDOW_PER_NIC = 256;
+constexpr int MAX_SEND_WR_PER_NIC = 2048;
 constexpr uint32_t QKEY = 0x11111111u;
 constexpr int TCP_PORT_BASE = 18516;
 
@@ -82,11 +82,10 @@ struct PeerEndpoint {
   size_t remote_len = 0;
 };
 
-// Token routing info: which remote GPUs each token should be sent to
 struct TokenRoute {
   int remote_rank;
   int remote_gpu;
-  int remote_expert;  // Expert ID (0-35) on remote GPU
+  int remote_expert;
 };
 
 std::vector<std::string> parse_ip_list(std::string const& ip_str) {
@@ -249,8 +248,8 @@ ibv_qp* create_srd_qp_ex(BaseNicCtx& base) {
                               IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM |
                               IBV_QP_EX_WITH_SEND_WITH_IMM;
 
-  qp_attr_ex.cap.max_send_wr = WINDOW_PER_NIC * 2;
-  qp_attr_ex.cap.max_recv_wr = WINDOW_PER_NIC * 2;
+  qp_attr_ex.cap.max_send_wr = MAX_SEND_WR_PER_NIC;
+  qp_attr_ex.cap.max_recv_wr = MAX_SEND_WR_PER_NIC;
   qp_attr_ex.cap.max_send_sge = 1;
   qp_attr_ex.cap.max_recv_sge = 1;
   qp_attr_ex.cap.max_inline_data = 0;
@@ -336,8 +335,7 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
                     std::vector<std::string> const& node_ips, int seed) {
   CUDA_CHECK(cudaSetDevice(gpu_id));
 
-  // Generate routing table: each token randomly selects TOPK experts from ALL
-  // experts (matches DeepEP)
+  // Generate routing
   std::mt19937 rng(seed + my_rank * NUM_GPUS_PER_NODE + gpu_id);
 
   // Build list of ALL experts across all nodes
@@ -432,7 +430,7 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
     base_nics[nic].lkey = base_nics[nic].mr->lkey;
 
     ibv_cq_init_attr_ex cq_ex_attr = {};
-    cq_ex_attr.cqe = WINDOW_PER_NIC * 4;
+    cq_ex_attr.cqe = MAX_SEND_WR_PER_NIC;  // CQ must hold all possible CQEs
     base_nics[nic].cq =
         (ibv_cq*)ibv_create_cq_ex(base_nics[nic].context, &cq_ex_attr);
     if (!base_nics[nic].cq) exit(EXIT_FAILURE);
@@ -497,36 +495,16 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
     total_msgs += token_routes[t].size();
   }
 
-  // Track messages sent per token
-  std::vector<int> token_progress(NUM_TOKENS_PER_GPU, 0);
-  int current_token = 0;
-
-  int inflight_per_nic[NUM_NICS_PER_GPU] = {0};
   uint64_t total_posted = 0;
-  uint64_t total_completed = 0;
+  for (int t = 0; t < NUM_TOKENS_PER_GPU; t++) {
+    for (size_t i = 0; i < token_routes[t].size(); i++) {
+      TokenRoute& route = token_routes[t][i];
 
-  while (total_completed < total_msgs) {
-    // Post phase: send tokens to their selected remote GPUs
-    while (total_posted < total_msgs) {
-      // Find next token that needs to be sent
-      while (current_token < NUM_TOKENS_PER_GPU &&
-             token_progress[current_token] >=
-                 (int)token_routes[current_token].size()) {
-        current_token++;
-      }
-      if (current_token >= NUM_TOKENS_PER_GPU) break;
-
-      TokenRoute& route =
-          token_routes[current_token][token_progress[current_token]];
-
-      // Striping: alternate NICs
-      int nic = (token_progress[current_token] / 4) % NUM_NICS_PER_GPU;
-
-      if (inflight_per_nic[nic] >= WINDOW_PER_NIC) break;
+      int nic = total_posted % NUM_NICS_PER_GPU;
 
       // Post RDMA WRITE
       int sender_global_gpu_id = my_rank * NUM_GPUS_PER_NODE + gpu_id;
-      uint64_t slot = token_progress[current_token] % SLOTS_PER_SRC;
+      uint64_t slot = i % SLOTS_PER_SRC;
       uint64_t remote_offset =
           send_size + sender_global_gpu_id * SLOTS_PER_SRC * TOKEN_SIZE +
           slot * TOKEN_SIZE;
@@ -537,8 +515,7 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
       ibv_qp_ex* qpx = (ibv_qp_ex*)base_nics[nic].qp;
       ibv_wr_start(qpx);
 
-      qpx->wr_id = ((uint64_t)nic << 56) | ((uint64_t)current_token << 32) |
-                   (token_progress[current_token] & 0xFFFF);
+      qpx->wr_id = ((uint64_t)nic << 56) | ((uint64_t)t << 32) | (i & 0xFFFF);
       qpx->wr_flags = IBV_SEND_SIGNALED;
       qpx->comp_mask = 0;
       ibv_wr_rdma_write(
@@ -548,8 +525,8 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
           qpx, peers[nic][route.remote_rank][route.remote_gpu].ah,
           peers[nic][route.remote_rank][route.remote_gpu].remote_qpn, QKEY);
 
-      // Send the specific token
-      uint64_t local_offset = current_token * TOKEN_SIZE;
+      // Send token
+      uint64_t local_offset = t * TOKEN_SIZE;
       ibv_wr_set_sge(qpx, base_nics[nic].lkey,
                      (uintptr_t)gpu_send_buf + local_offset, TOKEN_SIZE);
 
@@ -560,13 +537,14 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
         exit(EXIT_FAILURE);
       }
 
-      token_progress[current_token]++;
-      inflight_per_nic[nic]++;
       total_posted++;
       base_nics[nic].posted.fetch_add(1, std::memory_order_relaxed);
     }
+  }
 
-    // Poll phase
+  // poll complete
+  uint64_t total_completed = 0;
+  while (total_completed < total_msgs) {
     for (int nic = 0; nic < NUM_NICS_PER_GPU; nic++) {
       ibv_cq_ex* cqx = (ibv_cq_ex*)base_nics[nic].cq;
       ibv_poll_cq_attr poll_attr = {.comp_mask = 0};
@@ -582,7 +560,6 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
 
         uint32_t opcode = ibv_wc_read_opcode(cqx);
         if (opcode == IBV_WC_RDMA_WRITE) {
-          inflight_per_nic[nic]--;
           total_completed++;
           base_nics[nic].completed.fetch_add(1, std::memory_order_relaxed);
         }
@@ -610,7 +587,7 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
     std::lock_guard<std::mutex> lock(print_mutex);
     printf("\n=== [Rank %d GPU %d] DeepEP Dispatch Pattern Results ===\n",
            my_rank, gpu_id);
-    printf("  Elapsed: %.3f ms\n", elapsed * 1000.0);
+    printf("  Total latency (128 tokens): %.3f ms\n", elapsed * 1000.0);
     printf("  Num tokens: %d\n", NUM_TOKENS_PER_GPU);
     printf("  Token size: %zu bytes (7KB)\n", TOKEN_SIZE);
     printf("  Top-K: %d\n", TOPK);
@@ -649,21 +626,9 @@ void run_gpu_thread(int gpu_id, int my_rank, int num_nodes,
 }
 
 int main(int argc, char** argv) {
-  if (argc < 3) {
-    printf("Usage: %s <my_rank> <node_ips> [seed]\n", argv[0]);
-    printf("  Example: %s 0 10.1.1.1,10.1.1.2 42\n", argv[0]);
-    return 1;
-  }
-
   int my_rank = atoi(argv[1]);
   std::vector<std::string> node_ips = parse_ip_list(argv[2]);
   int seed = (argc > 3) ? atoi(argv[3]) : 42;
-
-  if (node_ips.size() < 2) {
-    fprintf(stderr, "ERROR: Need at least 2 nodes for inter-node RDMA test\n");
-    return 1;
-  }
-
   int num_nodes = (int)node_ips.size();
   int total_gpus = num_nodes * NUM_GPUS_PER_NODE;
   int total_experts = total_gpus * NUM_EXPERTS_PER_GPU;
@@ -693,6 +658,5 @@ int main(int argc, char** argv) {
   for (auto& t : threads) {
     t.join();
   }
-
   return 0;
 }
