@@ -11,6 +11,7 @@ set -e
 #
 # The wheels are written to wheelhouse-[cuda|rocm|therock]
 # -----------------------
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 TARGET=${1:-cuda}
 BUILD_TYPE=${2:-all}
@@ -230,11 +231,13 @@ exit 1
 
 fi
 
+cd $ROOT
+
 python${PY_VER} -m build
 
-auditwheel repair dist/uccl-*.whl --exclude "libtorch*.so" --exclude "libc10*.so" --exclude "libibverbs.so.1" --exclude "libcudart.so.12" --exclude "libamdhip64.so.*" --exclude "libcuda.so.1" -w `pwd`/${WHEEL_DIR}
-auditwheel show `pwd`/${WHEEL_DIR}/*.whl
+auditwheel repair dist/uccl-*.whl --exclude "libtorch*.so" --exclude "libc10*.so" --exclude "libibverbs.so.1" --exclude "libcudart.so.12" --exclude "libamdhip64.so.*" --exclude "libcuda.so.1" -w $ROOT/${WHEEL_DIR}
+auditwheel show $ROOT/${WHEEL_DIR}/*.whl
 
 # 3. Done
 echo "[3/3] Wheel built successfully (stored in ${WHEEL_DIR}):"
-ls -lh "`pwd`/${WHEEL_DIR}"/uccl-*.whl || true
+ls -lh "$ROOT/${WHEEL_DIR}"/uccl-*.whl || true
