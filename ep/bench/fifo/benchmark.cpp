@@ -149,12 +149,13 @@ void printThroughputResults(
   printf("\n");
 }
 
+constexpr int NUM_SMS = 128;
+constexpr int NUM_FIFOS = 32;
+constexpr int NUM_PROXIES = 4;
+constexpr int FIFOS_PER_PROXY = NUM_FIFOS / NUM_PROXIES;
+
 // Run single benchmark test
 void runBenchmark(BenchmarkConfig const& config) {
-  constexpr int NUM_FIFOS = 32;
-  constexpr int NUM_PROXIES = 4;
-  constexpr int FIFOS_PER_PROXY = NUM_FIFOS / NUM_PROXIES;
-
   // Create 32 FIFOs
   std::vector<std::unique_ptr<Fifo>> fifos;
   std::vector<FifoDeviceHandle> deviceHandles;
@@ -200,7 +201,7 @@ void runBenchmark(BenchmarkConfig const& config) {
   }
 
   // Launch GPU kernel
-  dim3 grid(NUM_FIFOS);
+  dim3 grid(NUM_SMS);
   dim3 block((config.num_threads + grid.x - 1) / grid.x);
 
   auto start_time = std::chrono::high_resolution_clock::now();
@@ -318,7 +319,8 @@ int main(int argc, char** argv) {
   printf("GPU %d: %s\n", local_rank, prop.name);
   printf("SM count: %d\n", prop.multiProcessorCount);
   printf("GPU Clock: %.2f GHz\n", gpu_clock_ghz);
-  printf("Configuration: 32 FIFOs, 4 Proxy Threads (8 FIFOs/proxy)\n\n");
+  printf("Configuration: %d FIFOs, %d Proxy Threads (%d FIFOs/proxy)\n\n",
+         NUM_FIFOS, NUM_PROXIES, NUM_FIFOS / NUM_PROXIES);
 
   BenchmarkConfig config = {.num_threads = 32,
                             .fifo_size = 2048,
@@ -341,7 +343,7 @@ int main(int argc, char** argv) {
   }
 
   // Test configurations
-  std::vector<uint32_t> thread_counts = {1, 32, 64, 128, 256, 512};
+  std::vector<uint32_t> thread_counts = {1, 32, 64, 128, 256, 512, 1024};
   std::vector<uint32_t> fifo_sizes = {2048, 4096};
 
   if (config.mode == 0) {
