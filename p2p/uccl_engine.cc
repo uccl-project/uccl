@@ -479,11 +479,11 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             uint64_t* transfer_id) {
   if (!conn || num_iovs <= 0) return -1;
 
-  std::vector<FifoItem> slot_item_v;
-  slot_item_v = *static_cast<std::vector<FifoItem>*>(slot_item_v_ptr);
+  std::vector<FifoItem> slot_items;
+  slot_items = *static_cast<std::vector<FifoItem>*>(slot_item_v);
 
   return conn->engine->endpoint->readv_async(conn->conn_id, mr_ids, dst_v,
-                                             size_v, slot_item_v, num_iovs,
+                                             size_v, slot_items, num_iovs,
                                              transfer_id)
              ? 0
              : -1;
@@ -499,7 +499,7 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* src,
 }
 
 int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
-                             std::vector<void*> src_v,
+                             std::vector<void const*> src_v,
                              std::vector<size_t> size_v, int num_iovs,
                              uint64_t* transfer_id) {
   if (!conn || num_iovs <= 0) return -1;

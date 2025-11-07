@@ -178,7 +178,7 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
  * @return              0 on success, non-zero on failure.
  */
 int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uint64_t> mr_ids,
-                             std::vector<void*> src_v,
+                             std::vector<void const*> src_v,
                              std::vector<size_t> size_v, int num_iovs,
                              uint64_t* transfer_id);
 
