@@ -26,7 +26,7 @@
 #define USE_MSCCLPP_FIFO_BACKEND
 // #define USE_SUBSET_BARRIER
 #define kAtomicBufferSize 81960
-#define kQueueSize 1024
+#define kQueueSize 2048
 #define kQueueMask (kQueueSize - 1)
 // This is the highest we can get due to the number of bits we allocate in the
 // imm for reordering buffer sequence tracking.
