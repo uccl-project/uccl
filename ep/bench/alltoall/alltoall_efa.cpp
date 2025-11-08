@@ -16,11 +16,11 @@
 #include <mutex>
 #include <vector>
 #include <cuda_runtime.h>
-#include <sys/socket.h>
-#include <unistd.h>
 #include <numa.h>
 #include <numaif.h>
 #include <sched.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 constexpr int NUM_GPUS_PER_NODE = 8;
 constexpr int NUM_NICS_PER_GPU = 2;
@@ -201,12 +201,14 @@ void pin_to_numa(int local_rank) {
   }
 
   if (sched_setaffinity(0, sizeof(cpu_mask), &cpu_mask) < 0) {
-    fprintf(stderr, "Warning: Failed to set CPU affinity for NUMA node %d\n", numa_node);
+    fprintf(stderr, "Warning: Failed to set CPU affinity for NUMA node %d\n",
+            numa_node);
   }
 
   numa_free_cpumask(cpu_bitmask);
 
-  printf("Rank pinned to NUMA node %d (local_rank %d)\n", numa_node, local_rank);
+  printf("Rank pinned to NUMA node %d (local_rank %d)\n", numa_node,
+         local_rank);
 }
 
 void tcp_control_init(
