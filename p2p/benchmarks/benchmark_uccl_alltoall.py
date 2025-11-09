@@ -269,7 +269,7 @@ def main():
     setup_seed(330)
     device = torch.device(f"cuda:{int(os.environ['LOCAL_RANK'])}")
     torch.cuda.set_device(device)
-    dist.init_process_group(backend="nccl", device_id=device)
+    dist.init_process_group(backend="gloo", device_id=device)
 
     rank = dist.get_rank()
     world_size = dist.get_world_size()
@@ -283,7 +283,7 @@ def main():
     results = []
 
     try:
-        collective.init_collective(args.num_cpus, disable_uccl_intra=True)
+        collective.init_collective(args.num_cpus)
         print(f"[Rank {rank}] UCCL Collective initialized successfully")
         dist.barrier()
         global_rank = dist.get_rank()
