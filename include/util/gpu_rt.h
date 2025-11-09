@@ -60,6 +60,7 @@
 #define gpuIpcGetEventHandle cudaIpcGetEventHandle
 #define gpuIpcOpenEventHandle cudaIpcOpenEventHandle
 #define gpuIpcCloseEventHandle cudaIpcCloseEventHandle
+#define gpuMemGetAddressRange cuMemGetAddressRange
 #else
 #include <hip/hip_runtime.h>
 #include <hip/hip_runtime_api.h>
@@ -121,6 +122,7 @@
 #define gpuIpcGetEventHandle hipIpcGetEventHandle
 #define gpuIpcOpenEventHandle hipIpcOpenEventHandle
 #define gpuIpcCloseEventHandle(handle) (gpuSuccess)
+#define gpuMemGetAddressRange hipMemGetAddressRange
 #endif
 
 #define GPU_RT_CHECK(call)                                         \
