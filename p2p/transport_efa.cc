@@ -1,6 +1,9 @@
 #include "transport_efa.h"
 #include <iostream>
 #include <arpa/inet.h>
+#include <algorithm>
+#include <cstdint>
+#include <cinttypes>
 #include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
 #include <netinet/in.h>
@@ -16,6 +19,7 @@
 #include <chrono>
 #include <thread>
 #include "util/util.h"
+#include "../collective/rdma/rdma_io.h"
 
 #define GID_INDEX 0
 #define PORT_NUM 1
@@ -474,6 +478,108 @@ void RDMAEndpoint::uccl_deregmr(struct Mhandle* mhandle) {
         }
         delete mhandle;
     }
+}
+
+int RDMAEndpoint::prepare_fifo_metadata(uint64_t conn_id,
+                                        uint64_t mr_id, void const* data,
+                                        size_t size, char* out_buf) {
+    uccl::FifoItem item{};
+
+    // store multiple rkeys in the padding
+    const size_t padding_slots = sizeof(item.padding) / sizeof(uint32_t);
+    if (mr_map_[mr_id].size() > padding_slots + 1) {
+        printf("prepare_fifo_metadata error: too many MRs for mr_id=%llu\n",
+               static_cast<unsigned long long>(mr_id));
+        return -1;
+    }
+    memset(item.padding, 0, sizeof(item.padding));
+    auto* padding_rkeys = reinterpret_cast<uint32_t*>(item.padding);
+
+    for (size_t i = 0; i < mr_map_[mr_id].size(); ++i) {
+        if (i == 0) {
+            item.addr = reinterpret_cast<uint64_t>(data);
+            item.size = size;
+            item.rkey = mr_map_[mr_id][i]->rkey;
+            item.nmsgs = 1;
+            item.rid = 0;  // TODO
+            item.idx = 0;  // TODO
+            item.engine_offset = 0;
+        } else {
+            padding_rkeys[i - 1] = mr_map_[mr_id][i]->rkey;
+        }
+    }
+    uccl::serialize_fifo_item(item, out_buf);
+    return 0;
+}
+
+int RDMAEndpoint::uccl_write_async(uint64_t conn_id, Mhandle* local_mh,
+                                   int num_devs_per_gpu, void* src, size_t size,
+                                   uccl::FifoItem const& slot_item,
+                                   ucclRequest* ureq) {
+    uint64_t dev_local_idx =
+        next_dev_local_idx_.fetch_add(1) % num_devs_per_gpu;
+
+    struct ibv_qp* qp = qp_list_[dev_local_idx];
+    struct ibv_mr* mr = mr_map_[local_mh->mr_id][dev_local_idx];
+    struct ibv_ah* ah = ah_map_[conn_id][dev_local_idx];
+    uint32_t remote_qpn = qpn_map_[conn_id][dev_local_idx];
+    uint32_t remote_rkey = slot_item.rkey;
+    if (dev_local_idx > 0) {
+        auto const* padding_rkeys =
+            reinterpret_cast<uint32_t const*>(slot_item.padding);
+        remote_rkey = padding_rkeys[dev_local_idx - 1];
+    }
+
+    struct ibv_qp_ex* qpx = ibv_qp_to_qp_ex(qp);
+    ibv_wr_start(qpx);
+    qpx->wr_id = reinterpret_cast<uint64_t>(ureq);
+    qpx->comp_mask = 0;
+    qpx->wr_flags = IBV_SEND_SIGNALED;
+    ibv_wr_rdma_write(qpx, remote_rkey, slot_item.addr);
+
+    uint32_t data_len =
+        std::min<uint32_t>(static_cast<uint32_t>(size), slot_item.size);
+    struct ibv_sge sge {
+        reinterpret_cast<uint64_t>(src), data_len, mr->lkey
+    };
+    ibv_wr_set_sge_list(qpx, 1, &sge);
+    ibv_wr_set_ud_addr(qpx, ah, remote_qpn, QKEY);
+
+    if (ibv_wr_complete(qpx)) {
+        printf("ibv_wr_complete failed\n");
+    }
+    // printf("Client: Large message sent: wr_id=%lx, length=%d\n", qpx->wr_id,
+    //     data_len);
+
+    ureq->type = ReqTx;
+    ureq->n = 1;
+    ureq->send_len = static_cast<int>(data_len);
+    ureq->dev_local_idx = dev_local_idx;
+
+    return 0;
+}
+
+bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest* ureq) {
+    uint64_t dev_local_idx = ureq->dev_local_idx;
+    auto* cq = ibv_cq_ex_to_cq(cq_ex_list_[dev_local_idx]);
+    struct ibv_wc wc{};
+
+    int ne = ibv_poll_cq(cq, 1, &wc);
+    if (ne < 0) {
+        fprintf(stderr, "uccl_poll_ureq_once: ibv_poll_cq error %d\n", ne);
+        return false;
+    }
+    if (ne == 0) return false;
+
+    if (wc.status != IBV_WC_SUCCESS) {
+        // fprintf(stderr, "uccl_poll_ureq_once: CQ status %d wr_id=%" PRIu64 "\n",
+        //         wc.status, static_cast<uint64_t>(wc.wr_id));
+        return true;
+    }
+
+    auto* completed = reinterpret_cast<ucclRequest*>(wc.wr_id);
+    completed->send_len = static_cast<int>(wc.byte_len);
+    return completed == ureq;
 }
 
 }

@@ -92,10 +92,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
     }
   }
   if (is_efa_available_) {
-    // NUMA node is the same for all devices on the same GPU.
-    const char* dev_name = ep_efa_->get_dev_name(
-      gpu_to_devs_efa[local_gpu_idx_][0]);
-    numa_node_ = uccl::get_dev_numa_node(dev_name);
+    numa_node_ = ep_efa_->get_dev_numa_node(gpu_to_devs_efa[local_gpu_idx_]);
   } else {
     numa_node_ = uccl::RDMAFactory::get_factory_dev(
                      gpu_to_dev[local_gpu_idx_])
@@ -1044,90 +1041,176 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                       std::vector<void*> src_v, std::vector<size_t> size_v,
                       std::vector<uccl::FifoItem> slot_item_v,
                       size_t num_iovs) {
-  auto conn = conn_id_to_conn_[conn_id];
-  auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
+  if (is_efa_available_) {
+    // auto conn = conn_id_to_conn_[conn_id];
+    // auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
+    
+    transport_efa::ucclRequest ureq[kMaxInflightChunks] = {};
+    uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
+    bool done[kMaxInflightChunks] = {false};
 
-  uccl::ucclRequest ureq[kMaxInflightChunks] = {};
-  uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
-  bool done[kMaxInflightChunks] = {false};
-
-  int estimated_ureq_max = 0;
-  for (int i = 0; i < num_iovs; i++) {
-    estimated_ureq_max += (size_v[i] + kChunkSize - 1) / kChunkSize;
-  }
-
-  std::vector<void*> data_write_vec;
-  std::vector<size_t> size_write_vec;
-  std::vector<uccl::Mhandle*> mhandle_write_vec;
-  std::vector<uccl::FifoItem> slot_item_vec;
-  // Avoid reallocations.
-  data_write_vec.reserve(estimated_ureq_max);
-  size_write_vec.reserve(estimated_ureq_max);
-  mhandle_write_vec.reserve(estimated_ureq_max);
-  slot_item_vec.reserve(estimated_ureq_max);
-
-  for (int i = 0; i < num_iovs; i++) {
-    void* cur_data = src_v[i];
-    size_t cur_size_expected = size_v[i];
-    size_t cur_size_post_write = 0;
-    uccl::FifoItem base_slot_item = slot_item_v[i];
-    auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
-
-    while (cur_size_post_write < cur_size_expected) {
-      size_t chunk_size =
-          std::min(cur_size_expected - cur_size_post_write, (size_t)kChunkSize);
-      uccl::FifoItem chunk_slot_item = base_slot_item;
-      chunk_slot_item.addr += cur_size_post_write;
-      chunk_slot_item.size = chunk_size;
-      // engine_offset will be set later
-      data_write_vec.push_back(cur_data);
-      size_write_vec.push_back(chunk_size);
-      mhandle_write_vec.push_back(mhandle);
-      slot_item_vec.push_back(chunk_slot_item);
-      cur_data = (void*)((char*)cur_data + chunk_size);
-      cur_size_post_write += chunk_size;
+    int estimated_ureq_max = 0;
+    for (int i = 0; i < num_iovs; i++) {
+      estimated_ureq_max += (size_v[i] + kChunkSize - 1) / kChunkSize;
     }
-  }
 
-  int ureq_max = data_write_vec.size();
-  int ureq_issued = 0, ureq_finished = 0;
-  auto num_engines = ucclParamNUM_ENGINES();
+    std::vector<void*> data_write_vec;
+    std::vector<size_t> size_write_vec;
+    std::vector<transport_efa::Mhandle*> mhandle_write_vec;
+    std::vector<uccl::FifoItem> slot_item_vec;
+    // Avoid reallocations.
+    data_write_vec.reserve(estimated_ureq_max);
+    size_write_vec.reserve(estimated_ureq_max);
+    mhandle_write_vec.reserve(estimated_ureq_max);
+    slot_item_vec.reserve(estimated_ureq_max);
 
-  while (ureq_finished < ureq_max) {
-    while (ureq_issued < ureq_max &&
-           ureq_issued - ureq_finished < kMaxInflightChunks &&
-           size_write_vec[ureq_issued] > 0) {
-      slot_item_vec[ureq_issued].engine_offset = ureq_issued % num_engines;
-      curr_slot_item[ureq_issued % kMaxInflightChunks] =
-          slot_item_vec[ureq_issued];
-      memset(&ureq[ureq_issued % kMaxInflightChunks], 0,
-             sizeof(uccl::ucclRequest));
-      auto rc = ep_->uccl_write_async(
-          uccl_flow, mhandle_write_vec[ureq_issued],
-          data_write_vec[ureq_issued], size_write_vec[ureq_issued],
-          curr_slot_item[ureq_issued % kMaxInflightChunks],
-          &ureq[ureq_issued % kMaxInflightChunks]);
-      if (rc == -1) break;
-      done[ureq_issued % kMaxInflightChunks] = false;
-      ureq_issued++;
-    }
-    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+    for (int i = 0; i < num_iovs; i++) {
+      void* cur_data = src_v[i];
+      size_t cur_size_expected = size_v[i];
+      size_t cur_size_post_write = 0;
+      uccl::FifoItem base_slot_item = slot_item_v[i];
+      auto mhandle = mr_id_to_mr_efa_[mr_id_v[i]]->mhandle_;
 
-    for (int i = ureq_finished; i < ureq_issued; i++) {
-      if (done[i % kMaxInflightChunks]) {
-        continue;
-      }
-      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
-        done[i % kMaxInflightChunks] = true;
+      while (cur_size_post_write < cur_size_expected) {
+        size_t chunk_size = std::min(cur_size_expected - cur_size_post_write,
+                                    (size_t)kChunkSize);
+        uccl::FifoItem chunk_slot_item = base_slot_item;
+        chunk_slot_item.addr += cur_size_post_write;
+        chunk_slot_item.size = chunk_size;
+        // engine_offset will be set later
+        data_write_vec.push_back(cur_data);
+        size_write_vec.push_back(chunk_size);
+        mhandle_write_vec.push_back(mhandle);
+        slot_item_vec.push_back(chunk_slot_item);
+        cur_data = (void*)((char*)cur_data + chunk_size);
+        cur_size_post_write += chunk_size;
       }
     }
 
-    while (ureq_finished < ureq_issued &&
-           done[ureq_finished % kMaxInflightChunks]) {
-      ureq_finished++;
+    int ureq_max = data_write_vec.size();
+    int ureq_issued = 0, ureq_finished = 0;
+
+    while (ureq_finished < ureq_max) {
+      while (ureq_issued < ureq_max &&
+            ureq_issued - ureq_finished < kMaxInflightChunks &&
+            size_write_vec[ureq_issued] > 0) {
+        slot_item_vec[ureq_issued].engine_offset = 0;
+        curr_slot_item[ureq_issued % kMaxInflightChunks] =
+            slot_item_vec[ureq_issued];
+        memset(&ureq[ureq_issued % kMaxInflightChunks], 0,
+              sizeof(transport_efa::ucclRequest));
+        auto rc = ep_efa_->uccl_write_async(
+            conn_id,
+            mhandle_write_vec[ureq_issued],
+            gpu_to_devs_efa[local_gpu_idx_].size(),
+            data_write_vec[ureq_issued], size_write_vec[ureq_issued],
+            curr_slot_item[ureq_issued % kMaxInflightChunks],
+            &ureq[ureq_issued % kMaxInflightChunks]);
+        if (rc == -1) break;
+        done[ureq_issued % kMaxInflightChunks] = false;
+        ureq_issued++;
+      }
+      auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+
+      for (int i = ureq_finished; i < ureq_issued; i++) {
+        if (done[i % kMaxInflightChunks]) {
+          continue;
+        }
+        if (ep_efa_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+          done[i % kMaxInflightChunks] = true;
+        }
+      }
+
+      while (ureq_finished < ureq_issued &&
+            done[ureq_finished % kMaxInflightChunks]) {
+        ureq_finished++;
+      }
+    }
+  } else {
+    auto conn = conn_id_to_conn_[conn_id];
+    auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
+
+    uccl::ucclRequest ureq[kMaxInflightChunks] = {};
+    uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
+    bool done[kMaxInflightChunks] = {false};
+
+    int estimated_ureq_max = 0;
+    for (int i = 0; i < num_iovs; i++) {
+      estimated_ureq_max += (size_v[i] + kChunkSize - 1) / kChunkSize;
+    }
+
+    std::vector<void*> data_write_vec;
+    std::vector<size_t> size_write_vec;
+    std::vector<uccl::Mhandle*> mhandle_write_vec;
+    std::vector<uccl::FifoItem> slot_item_vec;
+    // Avoid reallocations.
+    data_write_vec.reserve(estimated_ureq_max);
+    size_write_vec.reserve(estimated_ureq_max);
+    mhandle_write_vec.reserve(estimated_ureq_max);
+    slot_item_vec.reserve(estimated_ureq_max);
+
+    for (int i = 0; i < num_iovs; i++) {
+      void* cur_data = src_v[i];
+      size_t cur_size_expected = size_v[i];
+      size_t cur_size_post_write = 0;
+      uccl::FifoItem base_slot_item = slot_item_v[i];
+      auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
+
+      while (cur_size_post_write < cur_size_expected) {
+        size_t chunk_size = std::min(cur_size_expected - cur_size_post_write,
+                                    (size_t)kChunkSize);
+        uccl::FifoItem chunk_slot_item = base_slot_item;
+        chunk_slot_item.addr += cur_size_post_write;
+        chunk_slot_item.size = chunk_size;
+        // engine_offset will be set later
+        data_write_vec.push_back(cur_data);
+        size_write_vec.push_back(chunk_size);
+        mhandle_write_vec.push_back(mhandle);
+        slot_item_vec.push_back(chunk_slot_item);
+        cur_data = (void*)((char*)cur_data + chunk_size);
+        cur_size_post_write += chunk_size;
+      }
+    }
+
+    int ureq_max = data_write_vec.size();
+    int ureq_issued = 0, ureq_finished = 0;
+    auto num_engines = ucclParamNUM_ENGINES();
+
+    while (ureq_finished < ureq_max) {
+      while (ureq_issued < ureq_max &&
+            ureq_issued - ureq_finished < kMaxInflightChunks &&
+            size_write_vec[ureq_issued] > 0) {
+        slot_item_vec[ureq_issued].engine_offset = ureq_issued % num_engines;
+        curr_slot_item[ureq_issued % kMaxInflightChunks] =
+            slot_item_vec[ureq_issued];
+        memset(&ureq[ureq_issued % kMaxInflightChunks], 0,
+              sizeof(uccl::ucclRequest));
+        auto rc = ep_->uccl_write_async(
+            uccl_flow, mhandle_write_vec[ureq_issued],
+            data_write_vec[ureq_issued], size_write_vec[ureq_issued],
+            curr_slot_item[ureq_issued % kMaxInflightChunks],
+            &ureq[ureq_issued % kMaxInflightChunks]);
+        if (rc == -1) break;
+        done[ureq_issued % kMaxInflightChunks] = false;
+        ureq_issued++;
+      }
+      auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+
+      for (int i = ureq_finished; i < ureq_issued; i++) {
+        if (done[i % kMaxInflightChunks]) {
+          continue;
+        }
+        if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+          done[i % kMaxInflightChunks] = true;
+        }
+      }
+
+      while (ureq_finished < ureq_issued &&
+            done[ureq_finished % kMaxInflightChunks]) {
+        ureq_finished++;
+      }
     }
   }
-
   return true;
 }
 
@@ -1212,13 +1295,23 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
 bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                           std::vector<void*> addr_v, std::vector<size_t> len_v,
                           std::vector<char*> out_buf_v, size_t num_iovs) {
-  auto* conn = conn_id_to_conn_[conn_id];
-  for (size_t i = 0; i < num_iovs; ++i) {
-    auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
-    if (ep_->prepare_fifo_metadata(
+  if (is_efa_available_) {
+    for (size_t i = 0; i < num_iovs; ++i) {
+      if (ep_efa_->prepare_fifo_metadata(
+              conn_id, mr_id_v[i],
+              addr_v[i], len_v[i], out_buf_v[i]) == -1) {
+          return false;
+      }
+    }
+  } else {
+    auto* conn = conn_id_to_conn_[conn_id];
+    for (size_t i = 0; i < num_iovs; ++i) {
+      auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
+      if (ep_->prepare_fifo_metadata(
             static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
             addr_v[i], len_v[i], out_buf_v[i]) == -1) {
-      return false;
+        return false;
+      }
     }
   }
   return true;
