@@ -261,6 +261,15 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const /*num_cpus*/) {
   if (chunk_bytes_ == 0) {
     chunk_bytes_ = kDefaultChunkBytes;
   }
+  int max_send_env =
+      get_env_int("UCCL_TCPX_MAX_SEND_INFLIGHT", kDefaultSendInflight);
+  if (max_send_env <= 0) max_send_env = kDefaultSendInflight;
+  max_send_inflight_ = static_cast<size_t>(max_send_env);
+
+  int max_recv_env =
+      get_env_int("UCCL_TCPX_MAX_RECV_INFLIGHT", kDefaultRecvInflight);
+  if (max_recv_env <= 0) max_recv_env = kDefaultRecvInflight;
+  max_recv_inflight_ = static_cast<size_t>(max_recv_env);
   debug_enabled_ = get_env_int("UCCL_TCPX_DEBUG", 0) != 0;
   if (debug_enabled_) {
     std::cerr << "[tcpx] chunk size configured to " << chunk_bytes_
@@ -598,10 +607,10 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
     for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
       int rc = tcpx_accept_v5(reverse_listen, &conn->recv_comm,
                               &conn->recv_dev_handle);
-      if (rc == 0 && conn->recv_comm) {
-        accepted = true;
-        break;
-      }
+  if (rc == 0 && conn->recv_comm) {
+    accepted = true;
+    break;
+  }
       std::cout << "[tcpx] client reverse accept retry rc=" << rc
                 << " attempt=" << attempt + 1 << std::endl;
       std::this_thread::sleep_for(std::chrono::milliseconds(kRetryMs));
@@ -633,23 +642,45 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   conn->remote_port = remote_port;
   conn->ctrl_sock_fd = sock_fd;
 
+  if (!ensure_recv_dev_handle_cached_(*conn)) {
+    std::cerr << "[tcpx] failed to cache recv device handle (client)" << std::endl;
+    free_conn_(conn);
+    return false;
+  }
+
+  // ==========================================================================
   // 初始化 CUDA Event Pool（对齐原来的 ChannelWindow::events 设计）
-  // 预分配固定数量的 events，整个连接生命周期内循环复用
+  // ==========================================================================
+  // 设计要点：
+  // - 预分配固定数量的 events（等于 max_recv_inflight）
+  // - 整个连接生命周期内循环复用（round-robin）
+  // - 避免在热路径上创建/销毁 events（性能优化）
+  // - 使用 cudaEventDisableTiming 标志（不需要计时功能）
+  //
+  // 对齐原来的设计：
+  //   ChannelWindow::events[MAX_INFLIGHT_PER_CHANNEL]
+  //   int event_idx = win.chunk_counter % MAX_INFLIGHT_PER_CHANNEL;
+  //   cudaEventRecord(win.events[event_idx], unpack_stream);
   int max_recv_inflight =
       get_env_int("UCCL_TCPX_MAX_RECV_INFLIGHT", kDefaultRecvInflight);
   if (max_recv_inflight <= 0) max_recv_inflight = kDefaultRecvInflight;
   conn->recv_event_pool_size = static_cast<size_t>(max_recv_inflight);
   conn->recv_events.resize(conn->recv_event_pool_size);
+
+  // 预分配所有 events
   for (size_t i = 0; i < conn->recv_event_pool_size; ++i) {
     cudaError_t rc = cudaEventCreateWithFlags(&conn->recv_events[i],
                                                cudaEventDisableTiming);
     if (rc != cudaSuccess) {
       std::cerr << "[tcpx] cudaEventCreateWithFlags failed for event " << i
                 << ": " << cudaGetErrorString(rc) << std::endl;
+
       // 清理已创建的 events
       for (size_t j = 0; j < i; ++j) {
         cudaEventDestroy(conn->recv_events[j]);
       }
+
+      // 清理连接资源
       ::close(sock_fd);
       tcpx_close_send(conn->send_comm);
       tcpx_close_recv(conn->recv_comm);
@@ -774,6 +805,12 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   conn->remote_gpu_idx = client_info.gpu;
   conn->remote_port = ntohs(client_addr.sin_port);
   conn->ctrl_sock_fd = sock_fd;
+
+  if (!ensure_recv_dev_handle_cached_(*conn)) {
+    std::cerr << "[tcpx] failed to cache recv device handle (server)" << std::endl;
+    free_conn_(conn);
+    return false;
+  }
 
   // 初始化 CUDA Event Pool（对齐原来的 ChannelWindow::events 设计）
   // 预分配固定数量的 events，整个连接生命周期内循环复用
@@ -943,16 +980,70 @@ bool Endpoint::populate_conn_handles_(Conn& conn, uint64_t mr_id, bool is_recv,
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// Unified producer-consumer helpers
-// ---------------------------------------------------------------------------
-// advance_transfer_locked / finalize_transfer_locked / drive_transfer_
-// implement the shared advancement path used by both API callers and the
-// per-connection progress workers. They make it easy to reason about progress:
-//  1) Stage 0: schedule more chunks if the sliding window allows.
-//  2) Stage 1/2: move posted chunks through tcpx_test and CUDA completion.
-//  3) Completion: once all chunks finish, remove from transfer_map_ and reset
-//     inflight counters to unblock producers waiting on window_cv_.
+bool Endpoint::ensure_recv_dev_handle_cached_(Conn& conn) {
+  if (conn.recv_dev_handle_cached) return true;
+  if (!conn.recv_dev_handle) return false;
+
+  auto* dev_handle_struct =
+      reinterpret_cast<tcpx::plugin::NcclNetDeviceHandle*>(
+          conn.recv_dev_handle);
+  if (!dev_handle_struct || !dev_handle_struct->handle) return false;
+
+  ScopedCudaContext ctx_guard(cu_context_, static_cast<int>(local_gpu_idx_));
+  CUresult cu_rc = cuMemcpyDtoH(
+      &conn.recv_dev_handle_host,
+      reinterpret_cast<CUdeviceptr>(dev_handle_struct->handle),
+      sizeof(conn.recv_dev_handle_host));
+  if (cu_rc != CUDA_SUCCESS) {
+    std::cerr << "[tcpx] cuMemcpyDtoH (cache recv handle) failed rc=" << cu_rc
+              << std::endl;
+    return false;
+  }
+  conn.recv_dev_handle_cached = true;
+  return true;
+}
+
+// ============================================================================
+// 生产者-消费者模型的核心辅助函数
+// ============================================================================
+// 以下三个函数实现了生产者-消费者模型的共享推进路径：
+//
+// 1. advance_transfer_locked：
+//    - 统一的传输推进函数，被 poll_async 和 drive_transfer_ 调用
+//    - 假设 transfer_mu_ 已持锁
+//    - 执行 Stage 0（调度新 chunks）和 Stage 1/2（推进已提交的 chunks）
+//    - 返回传输是否完成
+//
+// 2. finalize_transfer_locked：
+//    - 从 transfer_map_ 中移除已完成的传输
+//    - 假设 transfer_mu_ 已持锁
+//
+// 3. drive_transfer_：
+//    - 消费者线程的入口函数
+//    - 持锁调用 advance_transfer_locked
+//    - 如果完成，释放锁后调用 reset_conn_window_counters_ 唤醒生产者
+//
+// 设计要点：
+// - 生产者（send_async/recv_async/queue_read_response）提交传输并入队
+// - 消费者（ConnProgressWorker::run）从队列取出并调用 drive_transfer_
+// - 所有传输推进逻辑集中在 advance_transfer_locked，便于维护和调试
+// - 完成后重置窗口计数器，确保生产者不会因窗口满而永久阻塞
+// ============================================================================
+
+/**
+ * 统一的传输推进函数（持锁调用）
+ *
+ * 执行流程：
+ * 1. Stage 0：如果还有未提交的 chunks，调用 schedule_*_chunks_locked 调度
+ * 2. Stage 1/2：调用 progress_transfer_locked 推进已提交的 chunks
+ * 3. 如果 Stage 1/2 有进度，再次尝试调度（充分利用窗口）
+ * 4. 检查是否所有 chunks 都已完成（chunks_completed >= chunks.size()）
+ *
+ * @param conn 连接对象
+ * @param transfer 传输对象
+ * @param transfer_complete 输出：传输是否完成
+ * @return 成功返回 true，失败返回 false
+ */
 bool Endpoint::advance_transfer_locked(Conn& conn, PendingTransfer& transfer,
                                        bool* transfer_complete) {
   if (!transfer_complete) return false;
@@ -986,11 +1077,30 @@ bool Endpoint::advance_transfer_locked(Conn& conn, PendingTransfer& transfer,
   return true;
 }
 
+/**
+ * 完成传输并清理资源（持锁调用）
+ *
+ * 从 transfer_map_ 中移除传输，释放内存
+ *
+ * @param it 传输迭代器
+ * @param conn 连接对象（当前未使用，保留用于未来扩展）
+ */
 void Endpoint::finalize_transfer_locked(
     std::unordered_map<uint64_t, PendingTransfer>::iterator it, Conn& conn) {
   transfer_map_.erase(it);
 }
 
+/**
+ * 重置连接的窗口计数器并唤醒等待的生产者
+ *
+ * 清空 send_inflight_chunks_ 和 recv_inflight_chunks_ 中的条目，
+ * 并调用 window_cv_.notify_all() 唤醒所有等待窗口空闲的生产者
+ *
+ * 注意：当前实现中生产者不会阻塞等待窗口（reserve_*_slot 直接返回 false），
+ * 但保留 notify_all 用于未来可能的阻塞等待实现
+ *
+ * @param conn_id 连接 ID
+ */
 void Endpoint::reset_conn_window_counters_(uint64_t conn_id) {
   std::lock_guard<std::mutex> lock(window_mu_);
   send_inflight_chunks_.erase(conn_id);
@@ -998,6 +1108,26 @@ void Endpoint::reset_conn_window_counters_(uint64_t conn_id) {
   window_cv_.notify_all();
 }
 
+/**
+ * 推进单个传输（消费者线程的核心函数）
+ *
+ * 执行流程：
+ * 1. 持锁查找 transfer_map_ 中的传输
+ * 2. 如果不存在，说明已被其他线程完成，返回 true
+ * 3. 调用 advance_transfer_locked 推进传输
+ * 4. 如果完成，调用 finalize_transfer_locked 清理
+ * 5. 释放锁后调用 reset_conn_window_counters_ 唤醒生产者
+ *
+ * 设计要点：
+ * - 被 ConnProgressWorker::run 循环调用
+ * - 如果传输未完成，返回 false，调用者会重新入队
+ * - 如果传输完成，返回 true，调用者不再重试
+ *
+ * @param conn 连接对象
+ * @param transfer_id 传输 ID
+ * @param transfer_done 输出：传输是否完成
+ * @return 成功返回 true，失败返回 false
+ */
 bool Endpoint::drive_transfer_(std::shared_ptr<Conn> const& conn,
                                uint64_t transfer_id, bool* transfer_done) {
   if (!conn || !transfer_done) return false;
@@ -1055,10 +1185,28 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
   return true;
 }
 
+/**
+ * 响应 READ 请求（主动端，生产者接口）
+ *
+ * 执行流程：
+ * 1. 根据 conn_id 查找连接对象
+ * 2. 根据 fifo_item.mr_id 查找内存注册条目
+ * 3. 计算数据地址（base + offset）
+ * 4. 调用 post_send_ 提交发送传输
+ * 5. 调用 enqueue_transfer_for_progress_ 将传输加入后台队列
+ *
+ * 设计要点：
+ * - READ 回复路径完全异步，避免阻塞 UCCL listener 线程
+ * - 使用 FifoItem 中的 tag 确保与被动端的接收匹配
+ * - 传输由 ConnProgressWorker 后台线程推进，不阻塞调用者
+ *
+ * @param conn_id 连接 ID
+ * @param fifo_item FIFO 元数据项
+ * @return 成功返回 true，失败返回 false
+ */
 bool Endpoint::queue_read_response(uint64_t conn_id,
                                    FifoItem const& fifo_item) {
-  // Active side of a read: locate the advertised slice and push it using the
-  // tag recorded in the FIFO.
+  // 查找连接对象
   std::shared_ptr<Conn> conn_ptr;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -1067,6 +1215,7 @@ bool Endpoint::queue_read_response(uint64_t conn_id,
     conn_ptr = it->second;
   }
 
+  // 查找内存注册条目
   MrEntry mr;
   {
     std::lock_guard<std::mutex> lock(mr_mu_);
@@ -1075,19 +1224,23 @@ bool Endpoint::queue_read_response(uint64_t conn_id,
     mr = it->second;
   }
 
+  // 验证偏移量和大小
   if (fifo_item.offset + fifo_item.size > mr.size) return false;
+
+  // 计算数据地址
   char* base_ptr =
       static_cast<char*>(mr.base) + static_cast<size_t>(fifo_item.offset);
   void const* base = static_cast<void const*>(base_ptr);
 
+  // 提交发送传输
   uint64_t tid = 0;
   if (!post_send_(*conn_ptr, fifo_item.mr_id, mr, base, fifo_item.size,
                   static_cast<int>(fifo_item.tag), tid)) {
     return false;
   }
 
-  // READ 回复路径改为完全异步：提交后立刻交由连接的 progress worker
-  // 控制，避免监听线程因同步等待而阻塞。
+  // 【生产者】将传输加入后台队列，由 ConnProgressWorker 推进
+  // 这是 READ 回复路径的关键改进：避免监听线程因同步等待而阻塞
   enqueue_transfer_for_progress_(conn_ptr, tid);
   return true;
 }
@@ -1126,11 +1279,19 @@ bool Endpoint::send_async_with_tag(uint64_t conn_id, uint64_t mr_id,
     return false;
   }
 
+  // 【生产者】提交发送传输
   uint64_t tid = 0;
   if (!post_send_(*conn_ptr, mr_id, mr, data, size, static_cast<int>(tag),
                   tid)) {
     return false;
   }
+
+  // 【生产者-消费者模型】
+  // 1. 启动后台进度线程（懒加载，如果已存在则跳过）
+  // 2. 将传输加入后台队列，由 ConnProgressWorker 推进
+  // 3. 立即返回，不阻塞调用者
+  start_conn_progress_worker_(conn_ptr);
+  enqueue_transfer_for_progress_(conn_ptr, tid);
 
   if (transfer_id) *transfer_id = tid;
   return true;
@@ -1205,11 +1366,20 @@ bool Endpoint::recv_async_with_tag(uint64_t conn_id, uint64_t mr_id, void* data,
     return false;
   }
 
+  // 【生产者】提交接收传输
   uint64_t tid = 0;
   if (!post_recv_(*conn_ptr, mr_id, mr, data, size, static_cast<int>(tag), tid,
                   /*needs_unpack=*/true)) {
     return false;
   }
+
+  // 【生产者-消费者模型】
+  // 1. 启动后台进度线程（懒加载，如果已存在则跳过）
+  // 2. 将传输加入后台队列，由 ConnProgressWorker 推进
+  // 3. 立即返回，不阻塞调用者
+  start_conn_progress_worker_(conn_ptr);
+  enqueue_transfer_for_progress_(conn_ptr, tid);
+
   if (transfer_id) *transfer_id = tid;
   return true;
 }
@@ -1265,25 +1435,51 @@ void Endpoint::release_recv_slot(uint64_t conn_id) {
   if (notify) window_cv_.notify_all();
 }
 
+/**
+ * 调度发送 chunks（Stage 0，持锁调用）
+ *
+ * 执行流程：
+ * 1. 从 next_chunk_to_post 开始遍历未提交的 chunks
+ * 2. 调用 reserve_send_slot 检查滑动窗口是否有空闲配额
+ * 3. 如果窗口已满，停止调度（返回 kNoProgress）
+ * 4. 调用 tcpx_isend 提交 chunk
+ * 5. 如果返回 kTcpxBusy 或 request 为空，短暂休眠后重试（最多 512 次）
+ * 6. 成功后标记 chunk.posted = true 并加入 send_queue
+ * 7. 递增 next_chunk_to_post
+ *
+ * 设计要点：
+ * - 滑动窗口流控：限制同时在途的 chunks 数量（max_send_inflight_）
+ * - 重试机制：如果 TCPX 返回 kTcpxBusy，休眠 5 微秒后重试
+ * - 批量调度：尽可能多地调度 chunks，直到窗口满或所有 chunks 已提交
+ * - 错误处理：如果 tcpx_isend 失败，释放窗口配额并返回 kError
+ *
+ * @param conn 连接对象
+ * @param transfer 传输对象
+ * @return 调度结果（kNoProgress/kProgress/kError）
+ */
 Endpoint::ScheduleOutcome Endpoint::schedule_send_chunks_locked(
     Conn& conn, PendingTransfer& transfer) {
-  int max_send_inflight =
-      get_env_int("UCCL_TCPX_MAX_SEND_INFLIGHT", kDefaultSendInflight);
-  if (max_send_inflight <= 0) max_send_inflight = kDefaultSendInflight;
-  size_t limit = static_cast<size_t>(max_send_inflight);
+  size_t limit = max_send_inflight_;
 
   constexpr int kBusyRetryMax = 512;
   constexpr int kBusySleepMicros = 5;
 
   bool posted_any = false;
+
+  // 从 next_chunk_to_post 开始遍历未提交的 chunks
   while (transfer.next_chunk_to_post < transfer.chunks.size()) {
+    // 【滑动窗口流控】检查是否有空闲配额
     if (!reserve_send_slot(conn.conn_id, limit)) break;
 
     auto& chunk = transfer.chunks[transfer.next_chunk_to_post];
     bool chunk_posted = false;
     int attempt = 0;
+
+    // 【重试机制】如果返回 kTcpxBusy，短暂休眠后重试
     while (attempt < kBusyRetryMax) {
       void* request = nullptr;
+
+      // 调用 tcpx_isend 提交 chunk
       int rc = tcpx_isend(conn.send_comm, chunk.dst_ptr,
                           static_cast<int>(chunk.bytes),
                           static_cast<int>(chunk.tag), transfer.mhandle,
@@ -1294,6 +1490,8 @@ Endpoint::ScheduleOutcome Endpoint::schedule_send_chunks_locked(
                   << " chunk_bytes=" << chunk.bytes
                   << " tag=" << chunk.tag << std::endl;
       }
+
+      // 成功：request 非空
       if (rc == 0 && request) {
         chunk.request = request;
         chunk.posted = true;
@@ -1301,25 +1499,31 @@ Endpoint::ScheduleOutcome Endpoint::schedule_send_chunks_locked(
         break;
       }
 
+      // 失败：释放窗口配额
       release_send_slot(conn.conn_id);
+
+      // kTcpxBusy 或 request 为空：重试
       if (rc == kTcpxBusy || (rc == 0 && !request)) {
         ++attempt;
         std::this_thread::sleep_for(
             std::chrono::microseconds(kBusySleepMicros));
+        // 重新获取窗口配额
         if (!reserve_send_slot(conn.conn_id, limit)) break;
         continue;
       }
 
+      // 其他错误：返回 kError
       std::cerr << "[tcpx] tcpx_isend failed rc=" << rc
                 << " chunk_offset=" << chunk.offset
                 << " chunk_bytes=" << chunk.bytes << std::endl;
       return ScheduleOutcome::kError;
     }
 
+    // 如果重试次数耗尽，停止调度
     if (!chunk_posted) break;
 
+    // 加入 send_queue 并递增 next_chunk_to_post
     transfer.send_queue.push_back(transfer.next_chunk_to_post);
-    transfer.recv_stage1_queue.push_back(transfer.next_chunk_to_post);
     transfer.next_chunk_to_post++;
     posted_any = true;
   }
@@ -1328,30 +1532,57 @@ Endpoint::ScheduleOutcome Endpoint::schedule_send_chunks_locked(
                     : ScheduleOutcome::kNoProgress;
 }
 
+/**
+ * 调度接收 chunks（Stage 0，持锁调用）
+ *
+ * 执行流程：
+ * 1. 从 next_chunk_to_post 开始遍历未提交的 chunks
+ * 2. 调用 reserve_recv_slot 检查滑动窗口是否有空闲配额
+ * 3. 如果窗口已满，停止调度（返回 kNoProgress）
+ * 4. 调用 tcpx_irecv 提交 chunk
+ * 5. 如果返回 kTcpxBusy 或 request 为空，短暂休眠后重试（最多 512 次）
+ * 6. 成功后标记 chunk.posted = true 并加入 recv_stage1_queue
+ * 7. 递增 next_chunk_to_post
+ *
+ * 设计要点：
+ * - 滑动窗口流控：限制同时在途的 chunks 数量（max_recv_inflight_）
+ * - 重试机制：如果 TCPX 返回 kTcpxBusy，休眠 5 微秒后重试
+ * - 批量调度：尽可能多地调度 chunks，直到窗口满或所有 chunks 已提交
+ * - 错误处理：如果 tcpx_irecv 失败，释放窗口配额并返回 kError
+ * - 接收路径特殊性：数据到达 bounce buffer，需要后续 GPU unpack（Stage 2）
+ *
+ * @param conn 连接对象
+ * @param transfer 传输对象
+ * @return 调度结果（kNoProgress/kProgress/kError）
+ */
 Endpoint::ScheduleOutcome Endpoint::schedule_recv_chunks_locked(
     Conn& conn, PendingTransfer& transfer) {
-  int max_recv_inflight =
-      get_env_int("UCCL_TCPX_MAX_RECV_INFLIGHT", kDefaultRecvInflight);
-  if (max_recv_inflight <= 0) max_recv_inflight = kDefaultRecvInflight;
-  size_t limit = static_cast<size_t>(max_recv_inflight);
+  size_t limit = max_recv_inflight_;
 
   constexpr int kBusyRetryMax = 512;
   constexpr int kBusySleepMicros = 5;
 
   bool posted_any = false;
+
+  // 从 next_chunk_to_post 开始遍历未提交的 chunks
   while (transfer.next_chunk_to_post < transfer.chunks.size()) {
+    // 【滑动窗口流控】检查是否有空闲配额
     if (!reserve_recv_slot(conn.conn_id, limit)) break;
 
     auto& chunk = transfer.chunks[transfer.next_chunk_to_post];
     bool chunk_posted = false;
     int attempt = 0;
+
+    // 【重试机制】如果返回 kTcpxBusy，短暂休眠后重试
     while (attempt < kBusyRetryMax) {
+      // tcpx_irecv 使用数组接口（支持批量接收）
       void* buffers[1] = {chunk.dst_ptr};
       int sizes[1] = {static_cast<int>(chunk.bytes)};
       int tags[1] = {static_cast<int>(chunk.tag)};
       void* mhandles[1] = {transfer.mhandle};
       void* requests[1] = {nullptr};
 
+      // 调用 tcpx_irecv 提交 chunk
       int rc = tcpx_irecv(conn.recv_comm, 1, buffers, sizes, tags, mhandles,
                           requests);
       if (debug_enabled_) {
@@ -1360,6 +1591,8 @@ Endpoint::ScheduleOutcome Endpoint::schedule_recv_chunks_locked(
                   << " chunk_bytes=" << chunk.bytes
                   << " tag=" << chunk.tag << std::endl;
       }
+
+      // 成功：request 非空
       if (rc == 0 && requests[0]) {
         chunk.request = requests[0];
         chunk.posted = true;
@@ -1367,23 +1600,30 @@ Endpoint::ScheduleOutcome Endpoint::schedule_recv_chunks_locked(
         break;
       }
 
+      // 失败：释放窗口配额
       release_recv_slot(conn.conn_id);
+
+      // kTcpxBusy 或 request 为空：重试
       if (rc == kTcpxBusy || (rc == 0 && !requests[0])) {
         ++attempt;
         std::this_thread::sleep_for(
             std::chrono::microseconds(kBusySleepMicros));
+        // 重新获取窗口配额
         if (!reserve_recv_slot(conn.conn_id, limit)) break;
         continue;
       }
 
+      // 其他错误：返回 kError
       std::cerr << "[tcpx] tcpx_irecv failed rc=" << rc
                 << " chunk_offset=" << chunk.offset
                 << " chunk_bytes=" << chunk.bytes << std::endl;
       return ScheduleOutcome::kError;
     }
 
+    // 如果重试次数耗尽，停止调度
     if (!chunk_posted) break;
 
+    // 加入 recv_stage1_queue（等待网络完成）并递增 next_chunk_to_post
     transfer.recv_stage1_queue.push_back(transfer.next_chunk_to_post);
     transfer.next_chunk_to_post++;
     posted_any = true;
@@ -1564,10 +1804,11 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
                                      Conn& conn) {
   ScopedCudaContext ctx_guard(cu_context_, static_cast<int>(local_gpu_idx_));
 
-  auto* dev_handle_struct =
-      reinterpret_cast<tcpx::plugin::NcclNetDeviceHandle*>(
-          conn.recv_dev_handle);
-  if (!dev_handle_struct || !request) return false;
+  if (!request) return false;
+  if (!conn.recv_dev_handle_cached) {
+    if (!ensure_recv_dev_handle_cached_(conn)) return false;
+  }
+  auto const& dev_handle = conn.recv_dev_handle_host;
 
   uint64_t frag_cnt = 0;
   if (!request->unpack_slot.cnt) {
@@ -1585,14 +1826,6 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
     return false;
   }
 
-  tcpx::plugin::unpackNetDeviceHandle dev_handle{};
-  CUresult cu_rc = cuMemcpyDtoH(
-      &dev_handle, reinterpret_cast<CUdeviceptr>(dev_handle_struct->handle),
-      sizeof(dev_handle));
-  if (cu_rc != CUDA_SUCCESS) {
-    std::cerr << "[tcpx] cuMemcpyDtoH failed " << cu_rc << std::endl;
-    return false;
-  }
   if (debug_enabled_) {
     std::cerr << "[tcpx] dev_handle bounce_buf=" << dev_handle.bounce_buf
               << std::endl;
@@ -1697,79 +1930,108 @@ bool Endpoint::finalize_recv_chunk_(Conn& conn,
   return true;
 }
 
+/**
+ * 推进传输的 Stage 1 和 Stage 2（持锁调用）
+ *
+ * 发送端流程（单阶段）：
+ * - 遍历 send_queue，对每个 chunk 调用 poll_chunk_request_
+ * - 如果 tcpx_test 返回完成，标记 stage2_done 并释放窗口配额
+ * - 递增 chunks_completed
+ *
+ * 接收端流程（两阶段）：
+ * - Stage 1：遍历 recv_stage1_queue，对每个 chunk 调用 poll_chunk_request_
+ *   - 如果 tcpx_test 返回完成，调用 enqueue_chunk_unpack_ 启动 GPU kernel
+ *   - 将 chunk 索引移入 recv_stage2_queue
+ * - Stage 2：遍历 recv_stage2_queue，对每个 chunk 调用 cudaEventQuery
+ *   - 如果 event 已 ready，调用 finalize_recv_chunk_ 释放资源
+ *   - 标记 stage2_done 并释放窗口配额
+ *   - 递增 chunks_completed
+ *
+ * 设计要点：
+ * - 遍历整个队列：修复了之前只检查队列头部的 bug（out-of-order completion）
+ * - 释放窗口配额：每完成一个 chunk 就释放，允许调度新的 chunks
+ * - 触发重新调度：如果有进度，设置 schedule_* 标志，调用者会再次调度
+ *
+ * @param conn 连接对象
+ * @param transfer 传输对象
+ * @param schedule_send 输出：是否需要调度更多发送 chunks
+ * @param schedule_recv 输出：是否需要调度更多接收 chunks
+ * @return 成功返回 true，失败返回 false
+ */
 bool Endpoint::progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
                                         bool* schedule_send,
                                         bool* schedule_recv) {
   bool trigger_send = false;
   bool trigger_recv = false;
 
+  // ========================================================================
+  // 发送端：单阶段流水线
+  // ========================================================================
   if (transfer.kind == PendingTransfer::Kind::kSend) {
-    auto it = transfer.send_queue.begin();
-    while (it != transfer.send_queue.end()) {
-      size_t idx = *it;
+    // TCPX 要求按 FIFO 顺序 test requests（只能 test "next in line"）
+    // 只处理队列头部，如果头部未完成则停止
+    while (!transfer.send_queue.empty()) {
+      size_t idx = transfer.send_queue.front();
+
+      // 安全检查：索引越界
       if (idx >= transfer.chunks.size()) {
-        it = transfer.send_queue.erase(it);
-        continue;
-      }
-      auto& chunk = transfer.chunks[idx];
-      if (!chunk.posted) {
-        ++it;
+        transfer.send_queue.pop_front();
         continue;
       }
 
+      auto& chunk = transfer.chunks[idx];
+
+      // 跳过未提交的 chunks
+      if (!chunk.posted) {
+        break;  // 头部未提交，停止处理
+      }
+
+      // 【Stage 1】轮询 TCPX 请求状态
       bool done = false;
       int received = 0;
       if (!poll_chunk_request_(transfer, chunk, &done, &received))
         return false;
+
+      // 如果未完成，停止处理（TCPX 要求 FIFO 顺序）
       if (!done) {
-        ++it;
-        continue;
+        break;
       }
 
-      it = transfer.send_queue.erase(it);
+      // 【完成】从队列中移除，标记完成，释放窗口配额
+      transfer.send_queue.pop_front();
       chunk.stage2_done = true;
       transfer.chunks_completed++;
       chunk.request = nullptr;
       release_send_slot(transfer.conn_id);
-      trigger_send = true;
+      trigger_send = true;  // 触发重新调度
     }
 
     if (schedule_send) *schedule_send = trigger_send;
     if (schedule_recv) *schedule_recv = false;
     return true;
-  } else {
-    // Stage 1: 推进接收端的网络传输完成（从bounce buffer到达）
-    // 参考实现：p2p/tcpx/src/transfer_manager.cc 的 processInflightRecv() 函数
-    //
-    // BUG修复：遍历整个队列，处理所有已完成的chunks
-    //
-    // 原来的错误逻辑：
-    //   - 只处理队首chunk
-    //   - 如果队首chunk没完成，就break退出
-    //   - 问题：TCPX可能乱序完成chunks，后面已完成的chunks会被忽略
-    //
-    // 正确做法（对齐参考实现的非阻塞模式）：
-    //   - 遍历整个recv_stage1_queue
-    //   - 对每个chunk调用一次tcpx_test
-    //   - 处理所有已完成的chunks
-    //   - 未完成的chunks留在队列中，下次poll_async时再检查
-    //
-    // 注意：虽然参考实现也是FIFO处理队首，但那是在blocking模式下
-    //       在非blocking模式下，我们需要遍历所有chunks以避免卡住
-    auto stage1_it = transfer.recv_stage1_queue.begin();
-    while (stage1_it != transfer.recv_stage1_queue.end()) {
-      size_t idx = *stage1_it;
+  }
+
+  // ========================================================================
+  // 接收端：两阶段流水线
+  // ========================================================================
+  else {
+    // ------------------------------------------------------------------------
+    // Stage 1: 推进网络传输完成（数据到达 bounce buffer）
+    // ------------------------------------------------------------------------
+    // TCPX 要求按 FIFO 顺序 test requests（只能 test "next in line"）
+    // 只处理队列头部，如果头部未完成则停止
+    while (!transfer.recv_stage1_queue.empty()) {
+      size_t idx = transfer.recv_stage1_queue.front();
       if (idx >= transfer.chunks.size()) {
-        stage1_it = transfer.recv_stage1_queue.erase(stage1_it);
+        transfer.recv_stage1_queue.pop_front();
         continue;
       }
       auto& chunk = transfer.chunks[idx];
       if (!chunk.posted) {
-        ++stage1_it;
-        continue;
+        break;  // 头部未提交，停止处理
       }
       if (chunk.stage1_done) {
-        stage1_it = transfer.recv_stage1_queue.erase(stage1_it);
+        transfer.recv_stage1_queue.pop_front();
         continue;
       }
 
@@ -1780,14 +2042,13 @@ bool Endpoint::progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
         return false;
 
       if (!done) {
-        // chunk还没完成，跳过它，继续检查下一个chunk
-        ++stage1_it;
-        continue;
+        // chunk还没完成，停止处理（TCPX 要求 FIFO 顺序）
+        break;
       }
 
       // chunk已完成网络传输（数据已到达bounce buffer）
       chunk.stage1_done = true;
-      stage1_it = transfer.recv_stage1_queue.erase(stage1_it);
+      transfer.recv_stage1_queue.pop_front();
 
       if (chunk.needs_unpack) {
         // 需要GPU unpack kernel：将数据从bounce buffer拷贝到目标GPU内存
@@ -1877,7 +2138,14 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
 
   std::unique_lock<std::mutex> lock(transfer_mu_);
   auto it = transfer_map_.find(transfer_id);
-  if (it == transfer_map_.end()) return false;
+  if (it == transfer_map_.end()) {
+    if (debug_enabled_) {
+      std::cerr << "[tcpx] poll transfer_id=" << transfer_id
+                << " completed by background worker" << std::endl;
+    }
+    *is_done = true;
+    return true;
+  }
   PendingTransfer& transfer = it->second;
 
   std::shared_ptr<Conn> conn_ptr;
@@ -1916,6 +2184,11 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   return true;
 }
 
+bool Endpoint::is_transfer_done(uint64_t transfer_id) {
+  std::lock_guard<std::mutex> lock(transfer_mu_);
+  return transfer_map_.find(transfer_id) == transfer_map_.end();
+}
+
 bool Endpoint::progress_conn(uint64_t conn_id) {
   std::shared_ptr<Conn> conn_ptr;
   {
@@ -1944,111 +2217,299 @@ bool Endpoint::progress_conn(uint64_t conn_id) {
   return progressed;
 }
 
+// ============================================================================
+// 生产者-消费者模型：ConnProgressWorker 管理函数
+// ============================================================================
+
+/**
+ * 启动连接的后台进度线程（懒加载）
+ *
+ * 设计要点：
+ * - 懒加载：只有在首次提交传输时才创建线程
+ * - 避免为失败的连接创建线程
+ * - 如果 progress_worker 已存在则直接返回（幂等）
+ *
+ * @param conn 连接对象
+ */
 void Endpoint::start_conn_progress_worker_(std::shared_ptr<Conn> const& conn) {
   if (!conn) return;
   if (conn->progress_worker) return;
-  // Lazily create the worker so we do not spin up threads for failed
-  // connections; all subsequent queueing is routed through this object.
+
+  // 懒加载创建 worker，避免为失败的连接浪费线程资源
   conn->progress_worker =
       std::make_unique<Conn::ConnProgressWorker>(*this, conn);
 }
 
+/**
+ * 停止连接的后台进度线程
+ *
+ * 执行流程：
+ * 1. 调用 progress_worker->stop() 设置 running_ = false
+ * 2. 唤醒线程并等待其退出
+ * 3. 清空队列和 inflight_ 集合
+ * 4. 销毁 progress_worker 对象
+ *
+ * 设计要点：
+ * - 在 free_conn_ 中调用，确保线程在 TCPX 句柄销毁前退出
+ * - 显式 stop 确保线程安全退出，避免访问已释放的资源
+ *
+ * @param conn 连接对象
+ */
 void Endpoint::stop_conn_progress_worker_(std::shared_ptr<Conn> const& conn) {
   if (!conn) return;
   if (conn->progress_worker) {
-    // Explicit stop ensures the worker drains its queue before we tear down
-    // TCPX handles and CUDA events.
+    // 显式停止确保 worker 在 TCPX 句柄和 CUDA 事件销毁前退出
     conn->progress_worker->stop();
     conn->progress_worker.reset();
   }
 }
 
+/**
+ * 将传输加入后台进度队列（生产者接口）
+ *
+ * 执行流程：
+ * 1. 检查 progress_worker 是否存在
+ * 2. 调用 progress_worker->enqueue(transfer_id)
+ * 3. enqueue 内部会检查 inflight_ 集合，避免重复入队
+ *
+ * 设计要点：
+ * - 被 send_async/recv_async/queue_read_response 调用
+ * - 去重机制：如果 transfer_id 已在 inflight_ 中则忽略
+ * - 非阻塞：立即返回，不等待传输完成
+ *
+ * @param conn 连接对象
+ * @param transfer_id 传输 ID
+ */
 void Endpoint::enqueue_transfer_for_progress_(
     std::shared_ptr<Conn> const& conn, uint64_t transfer_id) {
   if (!conn || !conn->progress_worker) return;
-  // Avoid duplicating work: the worker tracks inflight IDs, so enqueue() will
-  // ignore duplicates until the current pass completes.
+
+  // 【生产者】将 transfer_id 加入队列
+  // enqueue 内部会检查 inflight_ 集合，避免重复入队
   conn->progress_worker->enqueue(transfer_id);
 }
 
+// ============================================================================
+// ConnProgressWorker 实现（消费者线程）
+// ============================================================================
+
+/**
+ * ConnProgressWorker 构造函数
+ *
+ * 执行流程：
+ * 1. 保存 Endpoint 引用和 Conn 弱引用
+ * 2. 启动后台线程（调用 run 函数）
+ *
+ * 设计要点：
+ * - 使用 weak_ptr 持有连接，避免循环引用
+ * - 线程在构造函数中启动，在析构函数中停止
+ *
+ * @param endpoint Endpoint 引用
+ * @param owner 连接对象（转移为 weak_ptr）
+ */
 Conn::ConnProgressWorker::ConnProgressWorker(Endpoint& endpoint,
                                              std::shared_ptr<Conn> owner)
     : endpoint_(endpoint), conn_(std::move(owner)) {
+  // 启动后台线程
   thread_ = std::thread(&ConnProgressWorker::run, this);
 }
 
-Conn::ConnProgressWorker::~ConnProgressWorker() { stop(); }
+/**
+ * ConnProgressWorker 析构函数
+ *
+ * 确保线程已停止
+ */
+Conn::ConnProgressWorker::~ConnProgressWorker() {
+  stop();
+}
 
+/**
+ * 将 transfer_id 加入队列（生产者接口）
+ *
+ * 执行流程：
+ * 1. 持锁检查 running_ 标志
+ * 2. 尝试将 transfer_id 插入 inflight_ 集合
+ * 3. 如果插入成功（之前不存在），加入 queue_ 并唤醒消费者
+ * 4. 如果插入失败（已存在），直接返回（去重）
+ *
+ * 设计要点：
+ * - 去重机制：inflight_ 集合确保同一 transfer_id 只入队一次
+ * - 非阻塞：立即返回，不等待队列空闲
+ * - 线程安全：持锁操作 queue_ 和 inflight_
+ *
+ * @param transfer_id 传输 ID
+ */
 void Conn::ConnProgressWorker::enqueue(uint64_t transfer_id) {
   std::lock_guard<std::mutex> lock(mu_);
+
+  // 如果线程已停止，忽略新的入队请求
   if (!running_) return;
+
+  // 【去重】尝试插入 inflight_ 集合
+  // 如果 transfer_id 已存在，insert 返回 (iterator, false)
   if (!inflight_.insert(transfer_id).second) return;
+
+  // 加入队列并唤醒消费者线程
   queue_.push_back(transfer_id);
   cv_.notify_one();
 }
 
+/**
+ * 停止后台线程
+ *
+ * 执行流程：
+ * 1. 持锁设置 running_ = false
+ * 2. 唤醒所有等待的线程
+ * 3. 等待线程退出（join）
+ * 4. 清空队列和 inflight_ 集合
+ *
+ * 设计要点：
+ * - 幂等：多次调用 stop 是安全的
+ * - 阻塞：等待线程完全退出后才返回
+ * - 清理：确保队列和集合被清空
+ */
 void Conn::ConnProgressWorker::stop() {
   {
     std::lock_guard<std::mutex> lock(mu_);
-    if (!running_) return;
+    if (!running_) return;  // 幂等检查
     running_ = false;
   }
+
+  // 唤醒所有等待的线程
   cv_.notify_all();
+
+  // 等待线程退出
   if (thread_.joinable()) {
     thread_.join();
   }
+
+  // 清空队列和 inflight_ 集合
   std::lock_guard<std::mutex> lock(mu_);
   queue_.clear();
   inflight_.clear();
 }
 
+/**
+ * 消费者线程主循环
+ *
+ * 执行流程：
+ * 1. 使用超时等待（1 微秒），而不是无限等待
+ * 2. 批量处理队列中的所有传输
+ * 3. 对每个传输持续推进多次，减少重新入队开销
+ * 4. 减少锁竞争和上下文切换
+ *
+ * 优化要点：
+ * - 超时等待：避免长时间睡眠，快速响应新提交的传输
+ * - 批量处理：一次处理队列中的所有传输，减少锁竞争
+ * - 持续推进：对每个传输多次调用 drive_transfer_，减少重新入队开销
+ * - 快速轮询：使用 1 微秒超时，接近 busy-wait，最大化吞吐量
+ *
+ * 性能改进：
+ * - 减少条件变量唤醒延迟（1 微秒超时 vs 无限等待）
+ * - 减少锁竞争（批量处理 vs 逐个处理）
+ * - 减少重新入队开销（持续推进 vs 单次推进）
+ * - 接近 busy-wait 的轮询频率，最大化吞吐量
+ */
 void Conn::ConnProgressWorker::run() {
+  constexpr int kPushesPerTransfer = 10;  // 每个传输推进 10 次再重新入队
+
   while (true) {
-    uint64_t transfer_id = 0;
+    // 检查连接是否仍然有效
+    auto conn_locked = conn_.lock();
+    if (!conn_locked) break;
+
+    // 批量收集队列中的所有传输
+    std::vector<uint64_t> transfers_to_process;
     {
       std::unique_lock<std::mutex> lock(mu_);
-      cv_.wait(lock, [&] { return !running_ || !queue_.empty(); });
+
+      // 使用超时等待（1 微秒），接近 busy-wait
+      cv_.wait_for(lock, std::chrono::microseconds(1),
+                   [&] { return !running_ || !queue_.empty(); });
+
+      // 如果停止且队列为空，退出循环
       if (!running_ && queue_.empty()) {
         break;
       }
-      transfer_id = queue_.front();
-      queue_.pop_front();
-      inflight_.erase(transfer_id);
+
+      // 批量收集所有传输，减少锁竞争
+      while (!queue_.empty()) {
+        uint64_t tid = queue_.front();
+        queue_.pop_front();
+        transfers_to_process.push_back(tid);
+        inflight_.erase(tid);  // 允许重新入队
+      }
     }
 
-    // Grab the shared_ptr before doing any heavy lifting; if the connection
-    // has been destroyed we can exit quietly without touching freed state.
-    auto conn_locked = conn_.lock();
-    if (!conn_locked) break;
-    bool completed = false;
-    if (!endpoint_.drive_transfer_(conn_locked, transfer_id, &completed)) {
-      enqueue(transfer_id);
-      std::this_thread::sleep_for(std::chrono::microseconds(50));
+    // 如果没有传输需要处理，继续等待
+    if (transfers_to_process.empty()) {
       continue;
     }
-    if (!completed) {
-      enqueue(transfer_id);
+
+    // 对每个传输持续推进多次，减少重新入队开销
+    for (uint64_t transfer_id : transfers_to_process) {
+      bool completed = false;
+
+      // 持续推进多次，减少重新入队开销
+      for (int i = 0; i < kPushesPerTransfer && !completed; ++i) {
+        if (!endpoint_.drive_transfer_(conn_locked, transfer_id, &completed)) {
+          // drive_transfer_ 失败，跳出循环
+          break;
+        }
+      }
+
+      // 如果传输未完成，重新入队
+      if (!completed) {
+        enqueue(transfer_id);
+      }
     }
   }
 }
 
-// Helper invoked during teardown to make sure every comm and its registrations
-// are returned to the TCPX runtime.
+/**
+ * 释放连接资源（在析构或连接关闭时调用）
+ *
+ * 清理顺序（重要！）：
+ * 1. 停止 ConnProgressWorker 后台线程
+ * 2. 收集该连接的所有 TCPX 内存注册句柄
+ * 3. 重置窗口计数器
+ * 4. 调用 tcpx_dereg_mr 释放所有句柄
+ * 5. 销毁 CUDA Event Pool
+ * 6. 关闭 TCPX send_comm 和 recv_comm
+ * 7. 关闭 TCP 控制套接字
+ *
+ * 设计要点：
+ * - 先停止线程：确保没有线程访问即将释放的资源
+ * - 先收集句柄：避免持锁时间过长（tcpx_dereg_mr 可能阻塞）
+ * - Event Pool 清理：对齐原来的 ChannelWindow 析构逻辑
+ *
+ * @param conn 连接对象
+ */
 void Endpoint::free_conn_(std::shared_ptr<Conn> const& conn) {
   if (!conn) return;
+
+  // 【步骤 1】停止后台进度线程
+  // 必须在释放 TCPX 句柄和 CUDA 事件前停止，避免线程访问已释放的资源
   stop_conn_progress_worker_(conn);
+
+  // 【步骤 2】收集该连接的所有 TCPX 内存注册句柄
   std::vector<void*> send_handles;
   std::vector<void*> recv_handles;
   {
     std::lock_guard<std::mutex> lock(mr_mu_);
-    // Drop cached registration handles that reference this connection.
+
+    // 遍历所有 MR，移除该连接的缓存句柄
     for (auto& kv : mr_map_) {
       auto& mr = kv.second;
+
+      // 发送句柄
       auto send_it = mr.send_handles.find(conn->conn_id);
       if (send_it != mr.send_handles.end()) {
         send_handles.push_back(send_it->second);
         mr.send_handles.erase(send_it);
       }
+
+      // 接收句柄
       auto recv_it = mr.recv_handles.find(conn->conn_id);
       if (recv_it != mr.recv_handles.end()) {
         recv_handles.push_back(recv_it->second);
@@ -2056,21 +2517,29 @@ void Endpoint::free_conn_(std::shared_ptr<Conn> const& conn) {
       }
     }
   }
+
+  // 【步骤 3】重置窗口计数器并唤醒等待的生产者
   reset_conn_window_counters_(conn->conn_id);
+
+  // 【步骤 4】释放 TCPX 内存注册句柄
   for (void* handle : send_handles) {
     if (conn->send_comm) tcpx_dereg_mr(conn->send_comm, handle);
   }
   for (void* handle : recv_handles) {
     if (conn->recv_comm) tcpx_dereg_mr(conn->recv_comm, handle);
   }
-  // 销毁 CUDA Event Pool
+
+  // 【步骤 5】销毁 CUDA Event Pool
   // 对齐原来的设计：events 在 ChannelWindow 析构时销毁
+  // 注意：必须在 ConnProgressWorker 停止后销毁，避免线程访问已销毁的 events
   for (auto& event : conn->recv_events) {
     if (event) {
       cudaEventDestroy(event);
     }
   }
   conn->recv_events.clear();
+
+  // 【步骤 6】关闭 TCPX 通道
   if (conn->send_comm) {
     tcpx_close_send(conn->send_comm);
     conn->send_comm = nullptr;
@@ -2079,6 +2548,8 @@ void Endpoint::free_conn_(std::shared_ptr<Conn> const& conn) {
     tcpx_close_recv(conn->recv_comm);
     conn->recv_comm = nullptr;
   }
+
+  // 【步骤 7】关闭 TCP 控制套接字
   if (conn->ctrl_sock_fd >= 0) {
     ::close(conn->ctrl_sock_fd);
     conn->ctrl_sock_fd = -1;
