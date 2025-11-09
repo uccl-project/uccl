@@ -444,6 +444,17 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
              : -1;
 }
 
+void uccl_engine_progress_conn(uccl_conn_t* conn) {
+  if (!conn) return;
+#ifdef USE_TCPX
+  if (conn->engine && conn->engine->endpoint) {
+    conn->engine->endpoint->progress_conn(conn->conn_id);
+  }
+#else
+  (void)conn;
+#endif
+}
+
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
                      size_t data_size) {
   if (!conn || !mr || !data) return -1;

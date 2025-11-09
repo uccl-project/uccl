@@ -16,6 +16,7 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#include <unordered_set>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -185,21 +186,6 @@ std::string get_local_ip() {
   return "127.0.0.1";
 }
 
-int get_env_int(char const* name, int def_val) {
-  char const* value = std::getenv(name);
-  if (!value || !*value) return def_val;
-  return std::atoi(value);
-}
-
-size_t get_env_size_t(char const* name, size_t def_val) {
-  char const* value = std::getenv(name);
-  if (!value || !*value) return def_val;
-  char* end = nullptr;
-  unsigned long long parsed = std::strtoull(value, &end, 10);
-  if (end == value) return def_val;
-  return static_cast<size_t>(parsed);
-}
-
 // Score available TCPX NICs to find the best attachment for this GPU.
 int find_best_dev(uint32_t local_gpu_idx) {
   int device_count = tcpx_get_device_count();
@@ -225,9 +211,28 @@ int find_best_dev(uint32_t local_gpu_idx) {
   return best_dev;
 }
 
+int get_env_int(char const* name, int def_val) {
+  char const* value = std::getenv(name);
+  if (!value || !*value) return def_val;
+  return std::atoi(value);
+}
+
+size_t get_env_size_t(char const* name, size_t def_val) {
+  char const* value = std::getenv(name);
+  if (!value || !*value) return def_val;
+  char* end = nullptr;
+  unsigned long long parsed = std::strtoull(value, &end, 10);
+  if (end == value) return def_val;
+  return static_cast<size_t>(parsed);
+}
+
 }  // namespace
 
 namespace tcpx {
+
+// ============================================================================
+// Endpoint Construction & Control Plane
+// ============================================================================
 
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const /*num_cpus*/) {
   local_gpu_idx_ = local_gpu_idx;
@@ -399,6 +404,9 @@ Endpoint::~Endpoint() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Metadata helpers
+// ---------------------------------------------------------------------------
 std::vector<uint8_t> Endpoint::get_metadata() {
   EndpointInfo info{};
   std::string ip = get_local_ip();
@@ -482,7 +490,7 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
 
   if (remote_port < 0) remote_port = ctrl_port_;
 
-  auto conn = std::make_unique<Conn>();
+  auto conn = std::make_shared<Conn>();
 
   void* reverse_listen = nullptr;
   ncclNetHandle_v7 reverse_handle{};
@@ -652,8 +660,9 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
 
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
-    conn_map_.emplace(conn_id, std::move(conn));
+    conn_map_.emplace(conn_id, conn);
   }
+  start_conn_progress_worker_(conn);
   return true;
 }
 
@@ -695,7 +704,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
     return false;
   }
 
-  auto conn = std::make_unique<Conn>();
+  auto conn = std::make_shared<Conn>();
 
   ChannelHandleMsg server_handles{};
   server_handles.num_channels = 1;
@@ -792,12 +801,16 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
-    conn_map_.emplace(conn_id, std::move(conn));
+    conn_map_.emplace(conn_id, conn);
   }
 
+  start_conn_progress_worker_(conn);
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Memory registration and lookup
+// ---------------------------------------------------------------------------
 bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   if (!data || size == 0) return false;
   uint64_t id = next_mr_id_.fetch_add(1);
@@ -838,7 +851,7 @@ bool Endpoint::dereg(uint64_t mr_id) {
     std::shared_lock<std::shared_mutex> conn_lock(conn_mu_);
     auto conn_it = conn_map_.find(item.first);
     if (conn_it == conn_map_.end()) return;
-    Conn* conn = conn_it->second.get();
+    std::shared_ptr<Conn> conn = conn_it->second;
     void* comm = is_send ? conn->send_comm : conn->recv_comm;
     if (comm) {
       tcpx_dereg_mr(comm, item.second);
@@ -930,6 +943,86 @@ bool Endpoint::populate_conn_handles_(Conn& conn, uint64_t mr_id, bool is_recv,
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Unified producer-consumer helpers
+// ---------------------------------------------------------------------------
+// advance_transfer_locked / finalize_transfer_locked / drive_transfer_
+// implement the shared advancement path used by both API callers and the
+// per-connection progress workers. They make it easy to reason about progress:
+//  1) Stage 0: schedule more chunks if the sliding window allows.
+//  2) Stage 1/2: move posted chunks through tcpx_test and CUDA completion.
+//  3) Completion: once all chunks finish, remove from transfer_map_ and reset
+//     inflight counters to unblock producers waiting on window_cv_.
+bool Endpoint::advance_transfer_locked(Conn& conn, PendingTransfer& transfer,
+                                       bool* transfer_complete) {
+  if (!transfer_complete) return false;
+  if (transfer.next_chunk_to_post < transfer.chunks.size()) {
+    ScheduleOutcome outcome = ScheduleOutcome::kNoProgress;
+    if (transfer.kind == PendingTransfer::Kind::kSend) {
+      outcome = schedule_send_chunks_locked(conn, transfer);
+    } else {
+      outcome = schedule_recv_chunks_locked(conn, transfer);
+    }
+    if (outcome == ScheduleOutcome::kError) return false;
+  }
+
+  bool schedule_send = false;
+  bool schedule_recv = false;
+  if (!progress_transfer_locked(conn, transfer, &schedule_send, &schedule_recv))
+    return false;
+
+  if (schedule_send && transfer.kind == PendingTransfer::Kind::kSend &&
+      transfer.next_chunk_to_post < transfer.chunks.size()) {
+    auto outcome = schedule_send_chunks_locked(conn, transfer);
+    if (outcome == ScheduleOutcome::kError) return false;
+  }
+  if (schedule_recv && transfer.kind != PendingTransfer::Kind::kSend &&
+      transfer.next_chunk_to_post < transfer.chunks.size()) {
+    auto outcome = schedule_recv_chunks_locked(conn, transfer);
+    if (outcome == ScheduleOutcome::kError) return false;
+  }
+
+  *transfer_complete = (transfer.chunks_completed >= transfer.chunks.size());
+  return true;
+}
+
+void Endpoint::finalize_transfer_locked(
+    std::unordered_map<uint64_t, PendingTransfer>::iterator it, Conn& conn) {
+  transfer_map_.erase(it);
+}
+
+void Endpoint::reset_conn_window_counters_(uint64_t conn_id) {
+  std::lock_guard<std::mutex> lock(window_mu_);
+  send_inflight_chunks_.erase(conn_id);
+  recv_inflight_chunks_.erase(conn_id);
+  window_cv_.notify_all();
+}
+
+bool Endpoint::drive_transfer_(std::shared_ptr<Conn> const& conn,
+                               uint64_t transfer_id, bool* transfer_done) {
+  if (!conn || !transfer_done) return false;
+  std::unique_lock<std::mutex> lock(transfer_mu_);
+  auto it = transfer_map_.find(transfer_id);
+  if (it == transfer_map_.end()) {
+    *transfer_done = true;
+    return true;
+  }
+  bool complete = false;
+  if (!advance_transfer_locked(*conn, it->second, &complete)) return false;
+  if (complete) {
+    finalize_transfer_locked(it, *conn);
+  }
+  lock.unlock();
+  if (complete) {
+    reset_conn_window_counters_(conn->conn_id);
+  }
+  *transfer_done = complete;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Data-plane entry points (advertise / send / recv / read)
+// ---------------------------------------------------------------------------
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
   // Produce a fixed-width description of a registered buffer so the peer can
@@ -966,12 +1059,12 @@ bool Endpoint::queue_read_response(uint64_t conn_id,
                                    FifoItem const& fifo_item) {
   // Active side of a read: locate the advertised slice and push it using the
   // tag recorded in the FIFO.
-  Conn* conn_ptr = nullptr;
+  std::shared_ptr<Conn> conn_ptr;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
     auto it = conn_map_.find(conn_id);
     if (it == conn_map_.end()) return false;
-    conn_ptr = it->second.get();
+    conn_ptr = it->second;
   }
 
   MrEntry mr;
@@ -993,16 +1086,9 @@ bool Endpoint::queue_read_response(uint64_t conn_id,
     return false;
   }
 
-  // Wait for completion to avoid leaking outstanding transfers.
-  // Reads appear synchronous to the uccl engine, so a short polling loop here
-  // is acceptable.
-  bool done = false;
-  while (!done) {
-    if (!poll_async(tid, &done)) return false;
-    if (!done) {
-      std::this_thread::sleep_for(std::chrono::microseconds(10));
-    }
-  }
+  // READ 回复路径改为完全异步：提交后立刻交由连接的 progress worker
+  // 控制，避免监听线程因同步等待而阻塞。
+  enqueue_transfer_for_progress_(conn_ptr, tid);
   return true;
 }
 
@@ -1018,12 +1104,12 @@ bool Endpoint::send_async_with_tag(uint64_t conn_id, uint64_t mr_id,
   // the tag.
   if (!data || size == 0) return false;
 
-  Conn* conn_ptr = nullptr;
+  std::shared_ptr<Conn> conn_ptr;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
     auto it = conn_map_.find(conn_id);
     if (it == conn_map_.end()) return false;
-    conn_ptr = it->second.get();
+    conn_ptr = it->second;
   }
 
   MrEntry mr;
@@ -1055,12 +1141,12 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           uint64_t* transfer_id) {
   if (!dst || size == 0) return false;
 
-  Conn* conn_ptr = nullptr;
+  std::shared_ptr<Conn> conn_ptr;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
     auto it = conn_map_.find(conn_id);
     if (it == conn_map_.end()) return false;
-    conn_ptr = it->second.get();
+    conn_ptr = it->second;
   }
 
   MrEntry mr;
@@ -1097,12 +1183,12 @@ bool Endpoint::recv_async_with_tag(uint64_t conn_id, uint64_t mr_id, void* data,
   // will use.
   if (!data || size == 0) return false;
 
-  Conn* conn_ptr = nullptr;
+  std::shared_ptr<Conn> conn_ptr;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
     auto it = conn_map_.find(conn_id);
     if (it == conn_map_.end()) return false;
-    conn_ptr = it->second.get();
+    conn_ptr = it->second;
   }
 
   MrEntry mr;
@@ -1128,6 +1214,9 @@ bool Endpoint::recv_async_with_tag(uint64_t conn_id, uint64_t mr_id, void* data,
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Sliding-window management (producer-side flow control)
+// ---------------------------------------------------------------------------
 bool Endpoint::reserve_send_slot(uint64_t conn_id, size_t limit) {
   std::lock_guard<std::mutex> lock(window_mu_);
   size_t& counter = send_inflight_chunks_[conn_id];
@@ -1214,8 +1303,6 @@ Endpoint::ScheduleOutcome Endpoint::schedule_send_chunks_locked(
 
       release_send_slot(conn.conn_id);
       if (rc == kTcpxBusy || (rc == 0 && !request)) {
-        if (!progress_conn_transfers_locked(conn))
-          return ScheduleOutcome::kError;
         ++attempt;
         std::this_thread::sleep_for(
             std::chrono::microseconds(kBusySleepMicros));
@@ -1282,8 +1369,6 @@ Endpoint::ScheduleOutcome Endpoint::schedule_recv_chunks_locked(
 
       release_recv_slot(conn.conn_id);
       if (rc == kTcpxBusy || (rc == 0 && !requests[0])) {
-        if (!progress_conn_transfers_locked(conn))
-          return ScheduleOutcome::kError;
         ++attempt;
         std::this_thread::sleep_for(
             std::chrono::microseconds(kBusySleepMicros));
@@ -1308,6 +1393,9 @@ Endpoint::ScheduleOutcome Endpoint::schedule_recv_chunks_locked(
                     : ScheduleOutcome::kNoProgress;
 }
 
+// ---------------------------------------------------------------------------
+// Transfer scheduling helpers (chunk partition, sliding window posting)
+// ---------------------------------------------------------------------------
 bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
                           void const* data, size_t size, int tag,
                           uint64_t& transfer_id) {
@@ -1360,8 +1448,6 @@ bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
       transfer_map_.erase(it);
       return false;
     }
-    // Opportunistic progress: 提交后尝试推进同连接的其它传输
-    (void)progress_conn_transfers_locked(conn);
   }
 
   transfer_id = tid;
@@ -1421,8 +1507,6 @@ bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
       transfer_map_.erase(it);
       return false;
     }
-    // Opportunistic progress: 提交后尝试推进同连接的其它传输
-    (void)progress_conn_transfers_locked(conn);
   }
 
   transfer_id = tid;
@@ -1620,27 +1704,39 @@ bool Endpoint::progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
   bool trigger_recv = false;
 
   if (transfer.kind == PendingTransfer::Kind::kSend) {
-    if (transfer.send_queue.empty()) {
-      if (schedule_send) *schedule_send = false;
-      if (schedule_recv) *schedule_recv = false;
-      return true;
+    auto it = transfer.send_queue.begin();
+    while (it != transfer.send_queue.end()) {
+      size_t idx = *it;
+      if (idx >= transfer.chunks.size()) {
+        it = transfer.send_queue.erase(it);
+        continue;
+      }
+      auto& chunk = transfer.chunks[idx];
+      if (!chunk.posted) {
+        ++it;
+        continue;
+      }
+
+      bool done = false;
+      int received = 0;
+      if (!poll_chunk_request_(transfer, chunk, &done, &received))
+        return false;
+      if (!done) {
+        ++it;
+        continue;
+      }
+
+      it = transfer.send_queue.erase(it);
+      chunk.stage2_done = true;
+      transfer.chunks_completed++;
+      chunk.request = nullptr;
+      release_send_slot(transfer.conn_id);
+      trigger_send = true;
     }
-    size_t idx = transfer.send_queue.front();
-    if (idx >= transfer.chunks.size()) return false;
-    auto& chunk = transfer.chunks[idx];
-    if (!chunk.posted) return true;
 
-    bool done = false;
-    int received = 0;
-    if (!poll_chunk_request_(transfer, chunk, &done, &received)) return false;
-    if (!done) return true;
-
-    transfer.send_queue.pop_front();
-    chunk.stage2_done = true;
-    transfer.chunks_completed++;
-    chunk.request = nullptr;
-    release_send_slot(transfer.conn_id);
-    trigger_send = true;
+    if (schedule_send) *schedule_send = trigger_send;
+    if (schedule_recv) *schedule_recv = false;
+    return true;
   } else {
     // Stage 1: 推进接收端的网络传输完成（从bounce buffer到达）
     // 参考实现：p2p/tcpx/src/transfer_manager.cc 的 processInflightRecv() 函数
@@ -1775,17 +1871,6 @@ bool Endpoint::progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
   return true;
 }
 
-bool Endpoint::progress_conn_transfers_locked(Conn& conn) {
-  for (auto& kv : transfer_map_) {
-    PendingTransfer& other = kv.second;
-    if (other.conn_id != conn.conn_id) continue;
-    if (!progress_transfer_locked(conn, other, nullptr, nullptr)) {
-      return false;
-    }
-  }
-  return true;
-}
-
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   if (!is_done) return false;
   *is_done = false;
@@ -1795,27 +1880,26 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   if (it == transfer_map_.end()) return false;
   PendingTransfer& transfer = it->second;
 
-  Conn* conn_ptr = nullptr;
+  std::shared_ptr<Conn> conn_ptr;
   {
     std::shared_lock<std::shared_mutex> conn_lock(conn_mu_);
     auto conn_it = conn_map_.find(transfer.conn_id);
     if (conn_it == conn_map_.end()) return false;
-    conn_ptr = conn_it->second.get();
+    conn_ptr = conn_it->second;
+  }
+  bool transfer_complete = false;
+  if (!advance_transfer_locked(*conn_ptr, transfer, &transfer_complete))
+    return false;
+
+  if (transfer_complete) {
+    finalize_transfer_locked(it, *conn_ptr);
+    lock.unlock();
+    reset_conn_window_counters_(conn_ptr->conn_id);
+    *is_done = true;
+    return true;
   }
 
-  if (transfer.next_chunk_to_post < transfer.chunks.size()) {
-    ScheduleOutcome outcome = ScheduleOutcome::kNoProgress;
-    if (transfer.kind == PendingTransfer::Kind::kSend) {
-      outcome = schedule_send_chunks_locked(*conn_ptr, transfer);
-    } else {
-      outcome = schedule_recv_chunks_locked(*conn_ptr, transfer);
-    }
-    if (outcome == ScheduleOutcome::kError) return false;
-  }
-
-  auto log_progress = [&](char const* state) {
-    if (!debug_enabled_) return;
-    // Optional verbose tracing to understand how chunks progress.
+  if (debug_enabled_) {
     size_t posted = transfer.next_chunk_to_post;
     size_t completed = transfer.chunks_completed;
     size_t inflight = 0;
@@ -1823,56 +1907,136 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
       if (chunk.posted && !chunk.stage2_done) ++inflight;
     }
     std::cerr << "[tcpx] poll transfer=" << transfer.transfer_id
-              << " state=" << state << " posted=" << posted
-              << " inflight=" << inflight
+              << " state=pending"
+              << " posted=" << posted << " inflight=" << inflight
               << " completed=" << completed << std::endl;
-  };
-
-  bool schedule_send = false;
-  bool schedule_recv = false;
-  if (!progress_transfer_locked(*conn_ptr, transfer, &schedule_send,
-                                &schedule_recv))
-    return false;
-
-  if (schedule_send && transfer.kind == PendingTransfer::Kind::kSend &&
-      transfer.next_chunk_to_post < transfer.chunks.size()) {
-    auto outcome = schedule_send_chunks_locked(*conn_ptr, transfer);
-    if (outcome == ScheduleOutcome::kError) return false;
-  }
-  if (schedule_recv && transfer.kind != PendingTransfer::Kind::kSend &&
-      transfer.next_chunk_to_post < transfer.chunks.size()) {
-    auto outcome = schedule_recv_chunks_locked(*conn_ptr, transfer);
-    if (outcome == ScheduleOutcome::kError) return false;
   }
 
-  if (transfer.chunks_completed < transfer.chunks.size()) {
-    log_progress("pending");
-    // 在返回前，顺带推进同连接的其它传输，减少外层遗漏 progress 的影响
-    (void)progress_conn_transfers_locked(*conn_ptr);
-    return true;
-  }
-
-  log_progress("complete");
-
-  uint64_t done_conn = transfer.conn_id;
-  transfer_map_.erase(it);
   lock.unlock();
-
-  {
-    std::lock_guard<std::mutex> win_lock(window_mu_);
-    send_inflight_chunks_.erase(done_conn);
-    recv_inflight_chunks_.erase(done_conn);
-  }
-  window_cv_.notify_all();
-
-  *is_done = true;
   return true;
+}
+
+bool Endpoint::progress_conn(uint64_t conn_id) {
+  std::shared_ptr<Conn> conn_ptr;
+  {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_map_.find(conn_id);
+    if (it == conn_map_.end()) return false;
+    conn_ptr = it->second;
+  }
+
+  std::vector<uint64_t> pending;
+  {
+    std::lock_guard<std::mutex> lock(transfer_mu_);
+    for (auto const& kv : transfer_map_) {
+      if (kv.second.conn_id == conn_id) {
+        pending.push_back(kv.first);
+      }
+    }
+  }
+
+  bool progressed = false;
+  for (auto transfer_id : pending) {
+    bool complete = false;
+    if (!drive_transfer_(conn_ptr, transfer_id, &complete)) continue;
+    progressed = true;
+  }
+  return progressed;
+}
+
+void Endpoint::start_conn_progress_worker_(std::shared_ptr<Conn> const& conn) {
+  if (!conn) return;
+  if (conn->progress_worker) return;
+  // Lazily create the worker so we do not spin up threads for failed
+  // connections; all subsequent queueing is routed through this object.
+  conn->progress_worker =
+      std::make_unique<Conn::ConnProgressWorker>(*this, conn);
+}
+
+void Endpoint::stop_conn_progress_worker_(std::shared_ptr<Conn> const& conn) {
+  if (!conn) return;
+  if (conn->progress_worker) {
+    // Explicit stop ensures the worker drains its queue before we tear down
+    // TCPX handles and CUDA events.
+    conn->progress_worker->stop();
+    conn->progress_worker.reset();
+  }
+}
+
+void Endpoint::enqueue_transfer_for_progress_(
+    std::shared_ptr<Conn> const& conn, uint64_t transfer_id) {
+  if (!conn || !conn->progress_worker) return;
+  // Avoid duplicating work: the worker tracks inflight IDs, so enqueue() will
+  // ignore duplicates until the current pass completes.
+  conn->progress_worker->enqueue(transfer_id);
+}
+
+Conn::ConnProgressWorker::ConnProgressWorker(Endpoint& endpoint,
+                                             std::shared_ptr<Conn> owner)
+    : endpoint_(endpoint), conn_(std::move(owner)) {
+  thread_ = std::thread(&ConnProgressWorker::run, this);
+}
+
+Conn::ConnProgressWorker::~ConnProgressWorker() { stop(); }
+
+void Conn::ConnProgressWorker::enqueue(uint64_t transfer_id) {
+  std::lock_guard<std::mutex> lock(mu_);
+  if (!running_) return;
+  if (!inflight_.insert(transfer_id).second) return;
+  queue_.push_back(transfer_id);
+  cv_.notify_one();
+}
+
+void Conn::ConnProgressWorker::stop() {
+  {
+    std::lock_guard<std::mutex> lock(mu_);
+    if (!running_) return;
+    running_ = false;
+  }
+  cv_.notify_all();
+  if (thread_.joinable()) {
+    thread_.join();
+  }
+  std::lock_guard<std::mutex> lock(mu_);
+  queue_.clear();
+  inflight_.clear();
+}
+
+void Conn::ConnProgressWorker::run() {
+  while (true) {
+    uint64_t transfer_id = 0;
+    {
+      std::unique_lock<std::mutex> lock(mu_);
+      cv_.wait(lock, [&] { return !running_ || !queue_.empty(); });
+      if (!running_ && queue_.empty()) {
+        break;
+      }
+      transfer_id = queue_.front();
+      queue_.pop_front();
+      inflight_.erase(transfer_id);
+    }
+
+    // Grab the shared_ptr before doing any heavy lifting; if the connection
+    // has been destroyed we can exit quietly without touching freed state.
+    auto conn_locked = conn_.lock();
+    if (!conn_locked) break;
+    bool completed = false;
+    if (!endpoint_.drive_transfer_(conn_locked, transfer_id, &completed)) {
+      enqueue(transfer_id);
+      std::this_thread::sleep_for(std::chrono::microseconds(50));
+      continue;
+    }
+    if (!completed) {
+      enqueue(transfer_id);
+    }
+  }
 }
 
 // Helper invoked during teardown to make sure every comm and its registrations
 // are returned to the TCPX runtime.
-void Endpoint::free_conn_(std::unique_ptr<Conn>& conn) {
+void Endpoint::free_conn_(std::shared_ptr<Conn> const& conn) {
   if (!conn) return;
+  stop_conn_progress_worker_(conn);
   std::vector<void*> send_handles;
   std::vector<void*> recv_handles;
   {
@@ -1892,13 +2056,7 @@ void Endpoint::free_conn_(std::unique_ptr<Conn>& conn) {
       }
     }
   }
-  {
-    std::unique_lock<std::mutex> win_lock(window_mu_);
-    send_inflight_chunks_.erase(conn->conn_id);
-    recv_inflight_chunks_.erase(conn->conn_id);
-    win_lock.unlock();
-  }
-  window_cv_.notify_all();
+  reset_conn_window_counters_(conn->conn_id);
   for (void* handle : send_handles) {
     if (conn->send_comm) tcpx_dereg_mr(conn->send_comm, handle);
   }

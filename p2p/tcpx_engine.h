@@ -14,8 +14,10 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <cuda.h>
 #include <cuda_runtime_api.h>
@@ -24,7 +26,12 @@ extern thread_local bool inside_python;
 
 namespace tcpx {
 
-struct Conn {
+// Connection state shared across the endpoint and its dedicated progress worker.
+// Each connection owns its TCPX handles, CUDA event pool, and the
+// ConnProgressWorker that keeps its transfers moving (producer-consumer model).
+class Endpoint;
+
+struct Conn : std::enable_shared_from_this<Conn> {
   Conn() {
     recv_dev_handle = recv_dev_handle_storage.data();
     send_dev_handle = send_dev_handle_storage.data();
@@ -55,6 +62,28 @@ struct Conn {
 
   alignas(16) std::array<uint8_t, 512> recv_dev_handle_storage;
   alignas(16) std::array<uint8_t, 512> send_dev_handle_storage;
+
+  // Per-connection progress worker state. The nested struct encapsulates the
+  // background thread plus its synchronization primitives so teardown can stop
+  // the worker before TCPX handles are destroyed.
+  struct ConnProgressWorker {
+    ConnProgressWorker(Endpoint& endpoint, std::shared_ptr<Conn> owner);
+    ~ConnProgressWorker();
+    void enqueue(uint64_t transfer_id);
+    void stop();
+
+   private:
+    void run();
+    Endpoint& endpoint_;
+    std::weak_ptr<Conn> conn_;
+    std::thread thread_;
+    std::mutex mu_;
+    std::condition_variable cv_;
+    std::deque<uint64_t> queue_;
+    std::unordered_set<uint64_t> inflight_;
+    bool running_ = true;
+  };
+  std::unique_ptr<ConnProgressWorker> progress_worker;
 };
 
 struct FifoItem {
@@ -194,6 +223,7 @@ class Endpoint {
 
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);
+  bool progress_conn(uint64_t conn_id);
 
   size_t chunk_bytes() const { return chunk_bytes_; }
 
@@ -211,7 +241,7 @@ class Endpoint {
   std::atomic<uint32_t> next_tag_{1};
 
   mutable std::shared_mutex conn_mu_;
-  std::unordered_map<uint64_t, std::unique_ptr<Conn>> conn_map_;
+  std::unordered_map<uint64_t, std::shared_ptr<Conn>> conn_map_;
 
   mutable std::mutex mr_mu_;
   std::unordered_map<uint64_t, MrEntry> mr_map_;
@@ -236,7 +266,7 @@ class Endpoint {
 
   enum class ScheduleOutcome { kNoProgress, kProgress, kError };
 
-  void free_conn_(std::unique_ptr<Conn>& conn);
+  void free_conn_(std::shared_ptr<Conn> const& conn);
   ScheduleOutcome schedule_send_chunks_locked(Conn& conn,
                                               PendingTransfer& transfer);
   ScheduleOutcome schedule_recv_chunks_locked(Conn& conn,
@@ -249,7 +279,17 @@ class Endpoint {
                               void** mhandle_out);
   bool progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
                                 bool* schedule_send, bool* schedule_recv);
-  bool progress_conn_transfers_locked(Conn& conn);
+  // Unified advancement helper that assumes transfer_mu_ is already held. It
+  // schedules additional chunks (Stage 0) and runs Stage 1/2. The bool output
+  // tells callers whether the transfer finished so they can cleanup outside the
+  // critical section.
+  bool advance_transfer_locked(Conn& conn, PendingTransfer& transfer,
+                               bool* transfer_complete);
+  void finalize_transfer_locked(
+      std::unordered_map<uint64_t, PendingTransfer>::iterator it, Conn& conn);
+  // Utility to reset per-connection inflight counters and wake any producers
+  // waiting for window space.
+  void reset_conn_window_counters_(uint64_t conn_id);
   bool poll_chunk_request_(PendingTransfer& transfer,
                            PendingTransfer::ChunkState& chunk, bool* done,
                            int* received_size);
@@ -267,6 +307,14 @@ class Endpoint {
   bool post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr, void* data,
                   size_t size, int tag, uint64_t& transfer_id,
                   bool needs_unpack);
+  void start_conn_progress_worker_(std::shared_ptr<Conn> const& conn);
+  void stop_conn_progress_worker_(std::shared_ptr<Conn> const& conn);
+  void enqueue_transfer_for_progress_(std::shared_ptr<Conn> const& conn,
+                                      uint64_t transfer_id);
+  bool drive_transfer_(std::shared_ptr<Conn> const& conn, uint64_t transfer_id,
+                       bool* transfer_done);
+
+  friend struct Conn::ConnProgressWorker;
 };
 
 }  // namespace tcpx

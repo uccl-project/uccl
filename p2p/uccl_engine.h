@@ -145,6 +145,12 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
                       size_t size, uint64_t* transfer_id);
 
 /**
+ * Progress all inflight transfers on a connection.
+ * @param conn          Connection handle.
+ */
+void uccl_engine_progress_conn(uccl_conn_t* conn);
+
+/**
  * Receive data (blocking).
  * @param conn          Connection handle.
  * @param mr            Memory region handle.
