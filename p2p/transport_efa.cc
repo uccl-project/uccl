@@ -49,8 +49,7 @@ RDMAEndpoint::RDMAEndpoint(int gpu_index)
     ah_map_.clear();
     qpn_map_.clear();
     mr_map_.clear();
-    remote_rkey_list_.clear();
-    remote_addr_list_.clear();
+    completed_req_set_list_.clear();
 }
 
 RDMAEndpoint::~RDMAEndpoint() {
@@ -101,8 +100,7 @@ RDMAEndpoint::~RDMAEndpoint() {
     }
     ctx_list_.clear();
     qpn_map_.clear();
-    remote_rkey_list_.clear();
-    remote_addr_list_.clear();
+    completed_req_set_list_.clear();
 
     // Clean up the p2p listen fd and port
     if (p2p_listen_fd_ >= 0) {
@@ -329,6 +327,7 @@ bool RDMAEndpoint::initialize_engine_by_dev(std::vector<int> dev_indices){
             exit(1);
         }
         cq_ex_list_.push_back(cq_ex_);
+        completed_req_set_list_.push_back(std::unordered_set<uint64_t>());
 
         struct ibv_qp* qp = create_qp(ctx_, pd_, cq_ex_);
         qp_list_.push_back(qp);
@@ -444,8 +443,12 @@ int RDMAEndpoint::uccl_regmr(std::vector<int> devs, void* addr, size_t len,
                             struct Mhandle** mhandle) {
     std::vector<struct ibv_mr*> mr_list;
     for (int i = 0; i < devs.size(); i++) {
-        struct ibv_mr* mr = ibv_reg_mr(pd_list_[i], addr, len,
-                                       IBV_ACCESS_LOCAL_WRITE);
+        struct ibv_mr* mr = ibv_reg_mr(
+            pd_list_[i],
+            addr,
+            len,
+            IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ |
+                IBV_ACCESS_REMOTE_WRITE);
 
         if (!mr) {
             fprintf(stderr, "Failed to register memory region\n");
@@ -548,8 +551,6 @@ int RDMAEndpoint::uccl_write_async(uint64_t conn_id, Mhandle* local_mh,
     if (ibv_wr_complete(qpx)) {
         printf("ibv_wr_complete failed\n");
     }
-    // printf("Client: Large message sent: wr_id=%lx, length=%d\n", qpx->wr_id,
-    //     data_len);
 
     ureq->type = ReqTx;
     ureq->n = 1;
@@ -561,25 +562,24 @@ int RDMAEndpoint::uccl_write_async(uint64_t conn_id, Mhandle* local_mh,
 
 bool RDMAEndpoint::uccl_poll_ureq_once(struct ucclRequest* ureq) {
     uint64_t dev_local_idx = ureq->dev_local_idx;
+
     auto* cq = ibv_cq_ex_to_cq(cq_ex_list_[dev_local_idx]);
     struct ibv_wc wc{};
-
-    int ne = ibv_poll_cq(cq, 1, &wc);
-    if (ne < 0) {
-        fprintf(stderr, "uccl_poll_ureq_once: ibv_poll_cq error %d\n", ne);
-        return false;
+    while (ibv_poll_cq(cq, 1, &wc) > 0) {
+        if (wc.status != IBV_WC_SUCCESS) {
+            fprintf(
+                stderr, "uccl_poll_ureq_once: wc.status != IBV_WC_SUCCESS\n");
+        }
+        completed_req_set_list_[dev_local_idx].insert(wc.wr_id);
     }
-    if (ne == 0) return false;
 
-    if (wc.status != IBV_WC_SUCCESS) {
-        // fprintf(stderr, "uccl_poll_ureq_once: CQ status %d wr_id=%" PRIu64 "\n",
-        //         wc.status, static_cast<uint64_t>(wc.wr_id));
+    uint64_t wr_id = reinterpret_cast<uint64_t>(ureq);
+    if (completed_req_set_list_[dev_local_idx].find(wr_id) != 
+        completed_req_set_list_[dev_local_idx].end()) {
+        completed_req_set_list_[dev_local_idx].erase(wr_id);
         return true;
     }
-
-    auto* completed = reinterpret_cast<ucclRequest*>(wc.wr_id);
-    completed->send_len = static_cast<int>(wc.byte_len);
-    return completed == ureq;
+    return false;
 }
 
 }

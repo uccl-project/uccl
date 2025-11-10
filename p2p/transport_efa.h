@@ -1,9 +1,10 @@
 #pragma once
 
 #include <atomic>
+#include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <vector>
-#include <unordered_map>
 #include <filesystem>
 #include <infiniband/verbs.h>
 #include "util/util.h"
@@ -120,8 +121,7 @@ private:
     std::unordered_map<uint64_t, std::vector<struct ibv_ah*>> ah_map_;
     std::unordered_map<uint64_t, std::vector<uint32_t>> qpn_map_;
     std::unordered_map<uint64_t, std::vector<struct ibv_mr*>> mr_map_;
-    std::vector<uint32_t> remote_rkey_list_;
-    std::vector<uint64_t> remote_addr_list_;
+    std::vector<std::unordered_set<uint64_t>> completed_req_set_list_;
     std::atomic<uint64_t> next_dev_local_idx_ = 0;
 };
 

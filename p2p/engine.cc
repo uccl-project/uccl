@@ -1042,9 +1042,6 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                       std::vector<uccl::FifoItem> slot_item_v,
                       size_t num_iovs) {
   if (is_efa_available_) {
-    // auto conn = conn_id_to_conn_[conn_id];
-    // auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
-    
     transport_efa::ucclRequest ureq[kMaxInflightChunks] = {};
     uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
     bool done[kMaxInflightChunks] = {false};
