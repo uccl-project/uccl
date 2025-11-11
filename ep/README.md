@@ -147,7 +147,7 @@ We test low-latency kernels on **8x H200 + 16x 200 Gb/s)** following a **DeepSee
 
 #### On p6-b200
 
-We test low-latency kernels on **8x B200 + 8x 400 Gb/s)**.
+We test low-latency kernels on **(8x B200 + 8x 400 Gb/s)**.
 
 | Dispatch #EP | Latency | RDMA bandwidth | Combine #EP | Latency | RDMA bandwidth |
 |:-------------:|:--------:|:---------------:|:------------:|:--------:|:---------------:|
