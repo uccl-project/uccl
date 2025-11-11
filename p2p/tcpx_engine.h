@@ -6,7 +6,6 @@
 #include "tcpx/include/unpack_descriptor.h"
 #include <array>
 #include <atomic>
-#include <condition_variable>
 #include <deque>
 #include <cstdint>
 #include <cstring>
@@ -14,10 +13,8 @@
 #include <mutex>
 #include <shared_mutex>
 #include <string>
-#include <thread>
 #include <tuple>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 #include <cuda.h>
 #include <cuda_runtime_api.h>
@@ -27,20 +24,93 @@ extern thread_local bool inside_python;
 namespace tcpx {
 
 // ============================================================================
+// 锁使用总结（Lock Usage Summary）
+// ============================================================================
+//
+// tcpx_engine 使用 4 个锁来保护不同的资源，避免数据竞争：
+//
+// 【锁 1】conn_mu_ (std::shared_mutex)
+//   保护资源：conn_map_ (连接映射)
+//   锁类型：读写锁（允许多个读者，一个写者）
+//   使用场景：
+//     - 读锁：send_async/recv_async/poll_async 查找连接
+//     - 写锁：accept/connect 创建连接，close 清理连接
+//   持锁时间：短（只做查找操作）
+//
+// 【锁 2】mr_mu_ (std::mutex)
+//   保护资源：mr_map_ (内存注册映射)
+//   锁类型：普通互斥锁
+//   使用场景：
+//     - reg/dereg: 注册/注销内存
+//     - populate_conn_handles_: 缓存 TCPX 句柄
+//     - free_conn_: 清理连接的句柄缓存
+//   持锁时间：短（避免在持锁时调用 TCPX API）
+//
+// 【锁 3】transfer_mu_ (std::mutex)
+//   保护资源：transfer_map_ (传输映射)
+//   锁类型：普通互斥锁
+//   使用场景：
+//     - post_send_/post_recv_: 创建传输
+//     - poll_async: 用户线程查询传输状态并推进传输（高频）
+//   持锁时间：可能较长（推进整个传输）
+//   性能优化：用户线程 busy-wait polling，最大化吞吐量
+//
+// 【锁 4】window_mu_ (std::mutex)
+//   保护资源：send_inflight_chunks_, recv_inflight_chunks_ (窗口计数器)
+//   锁类型：普通互斥锁
+//   使用场景：
+//     - reserve_*_slot: 调度前检查窗口配额
+//     - release_*_slot: chunk 完成后释放配额
+//   持锁时间：非常短（只做计数器操作）
+//
+// ============================================================================
+// 锁顺序（避免死锁）
+// ============================================================================
+//
+// 1. transfer_mu_ -> conn_mu_
+//    - poll_async: 先锁 transfer_mu_，再锁 conn_mu_（嵌套）
+//
+// 2. 独立的锁（不会同时持有）
+//    - window_mu_: 独立于其他锁
+//    - mr_mu_: 独立于其他锁
+//
+// 3. 避免死锁的设计
+//    - poll_async: 先释放 transfer_mu_，再调用 reset_conn_window_counters_（持 window_mu_）
+//    - free_conn_: 先收集句柄（持 mr_mu_），释放锁后再调用 tcpx_dereg_mr
+//
+// ============================================================================
+// 性能优化策略
+// ============================================================================
+//
+// 1. 使用读写锁（conn_mu_）
+//    - 允许多个线程并发读取 conn_map_
+//    - 减少锁竞争，提高多线程性能
+//
+// 2. 减少持锁时间
+//    - 嵌套作用域：查找完成后立即释放锁
+//    - 先收集数据，释放锁后再调用可能阻塞的函数
+//
+// 3. 用户线程主动推进（poll_async）
+//    - 用户线程 busy-wait polling，最快响应
+//    - 无后台线程，避免上下文切换开销
+//
+// ============================================================================
+
+// ============================================================================
 // 连接状态结构 (Connection State)
 // ============================================================================
 // Conn 结构体封装了单个 TCPX 连接的所有状态，包括：
 // - TCPX 通信句柄（send_comm/recv_comm）
 // - CUDA 事件池（用于接收端 GPU unpack 操作的同步）
-// - 专属的后台进度线程（ConnProgressWorker，生产者-消费者模型）
 //
 // 设计要点：
-// 1. 每个连接拥有独立的进度线程，避免多连接之间的竞争
-// 2. CUDA 事件池预分配并循环复用，避免热路径上的事件创建/销毁开销
-// 3. 使用 enable_shared_from_this 支持安全的异步访问
+// 1. CUDA 事件池预分配并循环复用，避免热路径上的事件创建/销毁开销
+// 2. 使用 enable_shared_from_this 支持安全的异步访问
 class Endpoint;
 
-struct Conn : std::enable_shared_from_this<Conn> {
+// Note: shared_from_this is not needed; connections are always managed via
+// std::shared_ptr in conn_map_.
+struct Conn {
   Conn() {
     recv_dev_handle = recv_dev_handle_storage.data();
     send_dev_handle = send_dev_handle_storage.data();
@@ -65,7 +135,7 @@ struct Conn : std::enable_shared_from_this<Conn> {
   // 设计理念：
   // 1. 预分配固定数量的 CUDA events，整个连接生命周期内循环复用
   // 2. 池大小 = UCCL_TCPX_MAX_RECV_INFLIGHT（默认 16）
-  // 3. 使用 event_counter 进行轮询分配：event_idx = counter % pool_size
+  // 3. 使用 event_counter 进行轮询分配：event_idx = counter % recv_events.size()
   // 4. 避免热路径上的 cudaEventCreate/Destroy 开销
   //
   // 对齐参考实现：
@@ -73,7 +143,6 @@ struct Conn : std::enable_shared_from_this<Conn> {
   // - 在 connect/accept 时根据 UCCL_TCPX_MAX_RECV_INFLIGHT 初始化
   // - 在 free_conn_ 时统一销毁
   std::vector<cudaEvent_t> recv_events;  // 事件池数组
-  size_t recv_event_pool_size = 0;       // 池大小（= recv_events.size()）
   uint64_t event_counter = 0;            // 事件分配计数器（用于轮询）
 
   // -------------------------------------------------------------------------
@@ -81,6 +150,8 @@ struct Conn : std::enable_shared_from_this<Conn> {
   // -------------------------------------------------------------------------
   void* send_comm = nullptr;      // TCPX 发送通信句柄
   void* recv_comm = nullptr;      // TCPX 接收通信句柄
+  // Note: send_dev_handle is not referenced by the engine today but is kept
+  // to satisfy the tcpx_connect_v5 API contract (device-handle lifetime).
   void* send_dev_handle = nullptr;// 发送端设备句柄（指向 send_dev_handle_storage）
   void* recv_dev_handle = nullptr;// 接收端设备句柄（指向 recv_dev_handle_storage）
 
@@ -92,65 +163,6 @@ struct Conn : std::enable_shared_from_this<Conn> {
   // 设备句柄存储（对齐要求：16 字节）
   alignas(16) std::array<uint8_t, 512> recv_dev_handle_storage;
   alignas(16) std::array<uint8_t, 512> send_dev_handle_storage;
-
-  // -------------------------------------------------------------------------
-  // 每连接专属的后台进度线程 (Per-Connection Progress Worker)
-  // -------------------------------------------------------------------------
-  // 设计模式：生产者-消费者模型
-  //
-  // 生产者：
-  // - send_async/recv_async/read_async 等 API 调用
-  // - queue_read_response（READ 操作的回复路径）
-  // - 通过 enqueue_transfer_for_progress_ 将 transfer_id 加入队列
-  //
-  // 消费者：
-  // - ConnProgressWorker::run() 后台线程
-  // - 从队列中取出 transfer_id，调用 drive_transfer_ 推进传输
-  // - 直到传输完成或遇到错误
-  //
-  // 关键特性：
-  // 1. 每个连接独立的线程，避免多连接竞争
-  // 2. 使用 weak_ptr 持有连接，避免循环引用
-  // 3. 使用 inflight_ 集合去重，避免重复处理同一 transfer
-  // 4. 在连接销毁前显式 stop()，确保线程安全退出
-  //
-  // 嵌套结构体封装了后台线程及其同步原语，便于在 free_conn_ 时
-  // 先停止 worker，再销毁 TCPX 句柄和 CUDA 事件。
-  struct ConnProgressWorker {
-    // 构造函数：启动后台线程
-    ConnProgressWorker(Endpoint& endpoint, std::shared_ptr<Conn> owner);
-
-    // 析构函数：确保线程已停止
-    ~ConnProgressWorker();
-
-    // 生产者接口：将 transfer_id 加入队列
-    // - 如果 transfer_id 已在 inflight_ 中，则忽略（去重）
-    // - 否则加入 queue_ 并唤醒消费者线程
-    void enqueue(uint64_t transfer_id);
-
-    // 停止后台线程
-    // - 设置 running_ = false
-    // - 唤醒线程并等待其退出
-    // - 清空队列和 inflight_ 集合
-    void stop();
-
-   private:
-    // 消费者线程主循环
-    // - 等待队列非空或 running_ = false
-    // - 取出 transfer_id，调用 endpoint_.drive_transfer_
-    // - 如果传输未完成，重新入队并短暂休眠
-    void run();
-
-    Endpoint& endpoint_;                    // Endpoint 引用（用于调用 drive_transfer_）
-    std::weak_ptr<Conn> conn_;              // 连接弱引用（避免循环引用）
-    std::thread thread_;                    // 后台线程
-    std::mutex mu_;                         // 保护队列和 inflight_ 的互斥锁
-    std::condition_variable cv_;            // 条件变量（用于唤醒消费者）
-    std::deque<uint64_t> queue_;            // 待处理的 transfer_id 队列
-    std::unordered_set<uint64_t> inflight_; // 正在处理的 transfer_id 集合（去重）
-    bool running_ = true;                   // 线程运行标志
-  };
-  std::unique_ptr<ConnProgressWorker> progress_worker;  // 进度线程实例
 };
 
 // ============================================================================
@@ -187,7 +199,6 @@ struct MrEntry {
   void* base = nullptr;           // 内存区域基地址
   size_t size = 0;                // 内存区域大小（字节）
   int ptr_type = NCCL_PTR_CUDA;   // 指针类型（CUDA 设备内存）
-  bool is_recv = true;            // 是否用于接收（默认 true）
 
   // 每连接的 TCPX 注册句柄缓存
   // - 键：conn_id（连接唯一标识符）
@@ -209,7 +220,7 @@ struct MrEntry {
 // 流水线处理（接收端）：
 // - Stage 0：调度阶段 - schedule_recv_chunks_locked 提交 tcpx_irecv
 // - Stage 1：网络完成 - poll_chunk_request_ 检查 tcpx_test，数据到达 bounce buffer
-// - Stage 2：GPU 完成 - enqueue_chunk_unpack_ 启动 CUDA kernel，cudaEventQuery 等待完成
+// - Stage 2：GPU 完成 - launch_chunk_unpack_ 启动 CUDA kernel，cudaEventQuery 等待完成
 //
 // 流水线处理（发送端）：
 // - Stage 0：调度阶段 - schedule_send_chunks_locked 提交 tcpx_isend
@@ -296,7 +307,6 @@ struct PendingTransfer {
 //
 // 1. 连接管理：
 //    - connect/accept：建立 TCPX 连接（包括 TCP 控制握手和 TCPX 通道建立）
-//    - 每个连接拥有独立的 ConnProgressWorker 后台线程
 //
 // 2. 内存注册：
 //    - reg/dereg：注册/注销 CUDA 设备内存
@@ -308,14 +318,13 @@ struct PendingTransfer {
 //    - 所有传输自动分块并通过流水线处理
 //
 // 4. 进度推进：
-//    - poll_async：轮询单个传输的完成状态
+//    - poll_async：轮询单个传输的完成状态（用户主动调用）
 //    - progress_conn：推进某个连接上的所有传输
-//    - ConnProgressWorker：每连接的后台线程自动推进传输
 //
-// 5. 生产者-消费者模型：
-//    - 生产者：send_async/recv_async/queue_read_response 提交传输并入队
-//    - 消费者：ConnProgressWorker 后台线程从队列取出并推进传输
-//    - 优势：避免阻塞 API 调用者，支持多传输并发
+// 5. 设计模型：
+//    - 用户主动推进：所有传输通过 poll_async 显式推进
+//    - 无后台线程：避免线程开销和锁竞争
+//    - 优势：简单高效，用户完全控制推进时机
 class Endpoint {
  public:
   // ==========================================================================
@@ -341,10 +350,9 @@ class Endpoint {
    * 销毁 TCPX 传输引擎实例
    *
    * 清理顺序：
-   * 1. 停止所有连接的 ConnProgressWorker 线程
-   * 2. 释放所有 TCPX 连接和内存注册
-   * 3. 关闭 TCPX listen comm 和 TCP 控制套接字
-   * 4. 销毁 CUDA stream 和释放 CUDA 上下文
+   * 1. 释放所有 TCPX 连接和内存注册
+   * 2. 关闭 TCPX listen comm 和 TCP 控制套接字
+   * 3. 销毁 CUDA stream 和释放 CUDA 上下文
    */
   ~Endpoint();
 
@@ -363,7 +371,6 @@ class Endpoint {
    * 5. 创建本地 reverse listen handle 并发送给服务器
    * 6. 调用 tcpx_accept_v5 建立接收通道
    * 7. 初始化 CUDA 事件池
-   * 8. 启动 ConnProgressWorker 后台线程
    *
    * @param ip_addr 远端 IP 地址
    * @param remote_gpu_idx 远端 GPU 索引
@@ -385,7 +392,6 @@ class Endpoint {
    * 5. 接收客户端的 reverse listen handle
    * 6. 调用 tcpx_connect_v5 建立发送通道
    * 7. 初始化 CUDA 事件池
-   * 8. 启动 ConnProgressWorker 后台线程
    *
    * @param ip_addr 输出：远端 IP 地址
    * @param remote_gpu_idx 输出：远端 GPU 索引
@@ -443,7 +449,7 @@ class Endpoint {
    *
    * 解析 FifoItem，定位数据并调用 post_send_ 发送：
    * - 使用 FifoItem 中的 tag 确保匹配
-   * - 传输完全异步，通过 ConnProgressWorker 推进
+   * - 传输完全异步，通过 poll_async 推进
    *
    * @param conn_id 连接 ID
    * @param fifo_item FIFO 元数据项
@@ -522,7 +528,7 @@ class Endpoint {
    *
    * 根据 FifoItem 中的 tag 发起接收：
    * - 调用 recv_async_with_tag 使用指定的 tag
-   * - 传输自动分块并通过 ConnProgressWorker 推进
+   * - 传输自动分块并通过 poll_async 推进
    *
    * @param conn_id 连接 ID
    * @param mr_id 内存注册 ID
@@ -556,7 +562,7 @@ class Endpoint {
    * 流程：
    * 1. 调用 post_send_ 创建 PendingTransfer 并分块
    * 2. 调用 schedule_send_chunks_locked 提交初始 chunks
-   * 3. 调用 enqueue_transfer_for_progress_ 加入后台队列
+   * 3. 用户通过 poll_async 推进传输
    *
    * @param conn_id 连接 ID
    * @param mr_id 内存注册 ID
@@ -590,7 +596,7 @@ class Endpoint {
    * 流程：
    * 1. 调用 post_recv_ 创建 PendingTransfer 并分块
    * 2. 调用 schedule_recv_chunks_locked 提交初始 chunks
-   * 3. 调用 enqueue_transfer_for_progress_ 加入后台队列
+   * 3. 用户通过 poll_async 推进传输
    *
    * @param conn_id 连接 ID
    * @param mr_id 内存注册 ID
@@ -612,7 +618,7 @@ class Endpoint {
    *
    * 流程：
    * 1. 查找 transfer_map_ 中的传输
-   * 2. 如果不存在，说明已被 ConnProgressWorker 完成
+   * 2. 如果不存在，说明已完成
    * 3. 如果存在，调用 advance_transfer_locked 推进
    * 4. 如果完成，调用 finalize_transfer_locked 清理
    *
@@ -621,24 +627,18 @@ class Endpoint {
    * @return 成功返回 true，失败返回 false
    */
   bool poll_async(uint64_t transfer_id, bool* is_done);
-  bool is_transfer_done(uint64_t transfer_id);
 
   /**
    * 推进某个连接上的所有传输
    *
-   * 遍历 transfer_map_，对所有属于该连接的传输调用 drive_transfer_
+   * 遍历 transfer_map_，对所有属于该连接的传输调用 advance_transfer_locked
    *
    * @param conn_id 连接 ID
    * @return 是否有进度
    */
   bool progress_conn(uint64_t conn_id);
 
-  /**
-   * 获取 chunk 大小配置
-   *
-   * @return chunk 大小（字节）
-   */
-  size_t chunk_bytes() const { return chunk_bytes_; }
+  // chunk_bytes() getter 移除：当前无外部调用者，如需可再添加
 
  private:
   // ==========================================================================
@@ -662,20 +662,107 @@ class Endpoint {
   // ==========================================================================
   // 连接管理
   // ==========================================================================
-  mutable std::shared_mutex conn_mu_;                           // 连接映射的读写锁
-  std::unordered_map<uint64_t, std::shared_ptr<Conn>> conn_map_; // conn_id -> Conn
+  // 【锁 1】conn_mu_: 连接映射的读写锁（shared_mutex）
+  //
+  // 保护资源：
+  // - conn_map_: 连接 ID 到连接对象的映射
+  //
+  // 锁类型：std::shared_mutex（读写锁）
+  // - 允许多个读者同时访问（std::shared_lock）
+  // - 只允许一个写者独占访问（std::unique_lock）
+  //
+  // 使用场景：
+  // - 读锁（shared_lock）：
+  //   * send_async/recv_async/poll_async: 查找连接对象
+  //   * get_sock_fd: 获取套接字文件描述符
+  //   * 高频操作，需要并发读取
+  // - 写锁（unique_lock）：
+  //   * accept/connect: 创建新连接并加入 conn_map_
+  //   * close: 析构时清理所有连接
+  //   * 低频操作，需要独占访问
+  //
+  // 性能优化：
+  // - 使用读写锁而非普通互斥锁，允许并发读取
+  // - 减少锁竞争，提高多线程性能
+  //
+  // 锁顺序（避免死锁）：
+  // - 如果需要同时持有 conn_mu_ 和 transfer_mu_，先获取 transfer_mu_，再获取 conn_mu_
+  // - 例如：poll_async 先锁 transfer_mu_，再锁 conn_mu_
+  //
+  mutable std::shared_mutex conn_mu_;
+  std::unordered_map<uint64_t, std::shared_ptr<Conn>> conn_map_;
 
   // ==========================================================================
   // 内存注册管理
   // ==========================================================================
-  mutable std::mutex mr_mu_;                      // 内存注册映射的互斥锁
-  std::unordered_map<uint64_t, MrEntry> mr_map_;  // mr_id -> MrEntry
+  // 【锁 2】mr_mu_: 内存注册映射的互斥锁（mutex）
+  //
+  // 保护资源：
+  // - mr_map_: 内存注册 ID 到 MrEntry 的映射
+  // - MrEntry 包含：
+  //   * base/size: 注册的内存区域
+  //   * send_handles/recv_handles: 每个连接的 TCPX 句柄缓存
+  //
+  // 锁类型：std::mutex（普通互斥锁）
+  // - 不使用读写锁，因为写操作（缓存句柄）也很频繁
+  //
+  // 使用场景：
+  // - reg: 注册新的内存区域
+  // - dereg: 注销内存区域并清理所有连接的句柄
+  // - populate_conn_handles_: 为连接缓存 TCPX 句柄（写操作）
+  // - find_mr_by_addr: 根据地址查找 MR（读操作）
+  // - free_conn_: 清理连接的所有句柄缓存
+  //
+  // 持锁时间：
+  // - 尽量短：只在访问 mr_map_ 时持锁
+  // - 避免在持锁时调用 TCPX API（可能阻塞）
+  // - 例如：dereg 先收集句柄，释放锁后再调用 tcpx_dereg_mr
+  //
+  // 锁顺序（避免死锁）：
+  // - mr_mu_ 可以与其他锁同时持有，但要注意顺序
+  // - 通常先获取 mr_mu_，再获取 conn_mu_（如果需要）
+  //
+  mutable std::mutex mr_mu_;
+  std::unordered_map<uint64_t, MrEntry> mr_map_;
 
   // ==========================================================================
   // 传输管理
   // ==========================================================================
-  mutable std::mutex transfer_mu_;                            // 传输映射的互斥锁
-  std::unordered_map<uint64_t, PendingTransfer> transfer_map_; // transfer_id -> PendingTransfer
+  // 【锁 3】transfer_mu_: 传输映射的互斥锁（mutex）
+  //
+  // 保护资源：
+  // - transfer_map_: 传输 ID 到 PendingTransfer 的映射
+  // - PendingTransfer 包含：
+  //   * chunks: chunk 状态数组
+  //   * send_queue/recv_stage1_queue/recv_stage2_queue: 流水线队列
+  //   * chunks_completed: 已完成的 chunks 数量
+  //
+  // 锁类型：std::mutex（普通互斥锁）
+  // - 不使用读写锁，因为写操作（推进传输）非常频繁
+  //
+  // 使用场景：
+  // - post_send_/post_recv_: 创建新传输并加入 transfer_map_
+  // - poll_async: 用户线程查询传输状态并推进传输（高频操作）
+  // - finalize_transfer_locked: 完成传输并从 transfer_map_ 移除
+  //
+  // 持锁时间：
+  // - 可能较长：advance_transfer_locked 需要持锁推进整个传输
+  // - 包括调度 chunks、轮询 TCPX、启动 GPU kernels
+  // - 但这是必要的，因为需要保证传输状态的一致性
+  //
+  // 锁顺序（避免死锁）：
+  // - 如果需要同时持有 transfer_mu_ 和 conn_mu_，先获取 transfer_mu_
+  // - 例如：poll_async 先锁 transfer_mu_，再锁 conn_mu_
+  // - poll_async 推进完成后释放锁，再调用 reset_conn_window_counters_
+  //
+  // 性能考虑：
+  // - transfer_mu_ 是热点锁（用户线程频繁访问）
+  // - 优化策略：
+  //   * 用户线程 busy-wait polling，最快响应
+  //   * 无后台线程，避免上下文切换开销
+  //
+  mutable std::mutex transfer_mu_;
+  std::unordered_map<uint64_t, PendingTransfer> transfer_map_;
 
   // ==========================================================================
   // CUDA 资源（用于接收端 GPU unpack）
@@ -699,12 +786,37 @@ class Endpoint {
   // 设计要点：
   // - 每个连接独立计数发送和接收方向的在途 chunks
   // - reserve_*_slot：尝试获取窗口配额（如果已满则返回 false）
-  // - release_*_slot：释放窗口配额并唤醒等待的生产者
-  // - window_cv_：条件变量（用于等待窗口空闲，当前未使用阻塞等待）
-  mutable std::mutex window_mu_;                              // 窗口计数器的互斥锁
-  std::unordered_map<uint64_t, size_t> send_inflight_chunks_; // conn_id -> 发送在途 chunks 数量
-  std::unordered_map<uint64_t, size_t> recv_inflight_chunks_; // conn_id -> 接收在途 chunks 数量
-  std::condition_variable window_cv_;                         // 条件变量（用于窗口流控）
+  // - release_*_slot：释放窗口配额
+  //
+  // 【锁 4】window_mu_: 窗口计数器的互斥锁（mutex）
+  //
+  // 保护资源：
+  // - send_inflight_chunks_: 每个连接的发送在途 chunks 数量
+  // - recv_inflight_chunks_: 每个连接的接收在途 chunks 数量
+  //
+  // 锁类型：std::mutex（普通互斥锁）
+  // - 操作简单（递增/递减计数器），不需要读写锁
+  //
+  // 使用场景：
+  // - reserve_send_slot/reserve_recv_slot: 调度前检查窗口是否有空闲配额
+  // - release_send_slot/release_recv_slot: chunk 完成后释放配额
+  // - reset_conn_window_counters_: 连接关闭时清空计数器
+  //
+  // 持锁时间：
+  // - 非常短：只做简单的计数器操作
+  // - 不会调用任何可能阻塞的函数
+  //
+  // 锁顺序（避免死锁）：
+  // - window_mu_ 独立于其他锁，不会同时持有
+  // - 例如：poll_async 先释放 transfer_mu_，再调用 reset_conn_window_counters_
+  //
+  // 性能考虑：
+  // - 高频操作：每个 chunk 调度和完成都会访问
+  // - 优化策略：持锁时间极短，只做计数器操作
+  //
+  mutable std::mutex window_mu_;
+  std::unordered_map<uint64_t, size_t> send_inflight_chunks_;
+  std::unordered_map<uint64_t, size_t> recv_inflight_chunks_;
 
   // ==========================================================================
   // 调度结果枚举
@@ -723,12 +835,11 @@ class Endpoint {
    * 释放连接资源
    *
    * 清理顺序：
-   * 1. 停止 ConnProgressWorker 后台线程
-   * 2. 遍历 mr_map_，收集该连接的所有 TCPX 注册句柄
-   * 3. 调用 tcpx_dereg_mr 释放所有句柄
-   * 4. 销毁 CUDA 事件池（recv_events）
-   * 5. 关闭 TCPX send_comm 和 recv_comm
-   * 6. 关闭 TCP 控制套接字
+   * 1. 遍历 mr_map_，收集该连接的所有 TCPX 注册句柄
+   * 2. 调用 tcpx_dereg_mr 释放所有句柄
+   * 3. 销毁 CUDA 事件池（recv_events）
+   * 4. 关闭 TCPX send_comm 和 recv_comm
+   * 5. 关闭 TCP 控制套接字
    *
    * @param conn 连接对象
    */
@@ -841,7 +952,7 @@ class Endpoint {
    *
    * 接收端流程：
    * - Stage 1：遍历 recv_stage1_queue，对每个 chunk 调用 poll_chunk_request_
-   *   - 如果 tcpx_test 返回完成，调用 enqueue_chunk_unpack_ 启动 GPU kernel
+   *   - 如果 tcpx_test 返回完成，启动 GPU unpack kernel
    *   - 将 chunk 索引移入 recv_stage2_queue
    * - Stage 2：遍历 recv_stage2_queue，对每个 chunk 调用 cudaEventQuery
    *   - 如果 event 已 ready，调用 finalize_recv_chunk_ 释放资源
@@ -879,16 +990,14 @@ class Endpoint {
    * 从 transfer_map_ 中移除传输
    *
    * @param it 传输迭代器
-   * @param conn 连接对象
    */
   void finalize_transfer_locked(
-      std::unordered_map<uint64_t, PendingTransfer>::iterator it, Conn& conn);
+      std::unordered_map<uint64_t, PendingTransfer>::iterator it);
 
   /**
    * 重置连接的窗口计数器
    *
-   * 清空 send_inflight_chunks_ 和 recv_inflight_chunks_ 中的条目，
-   * 并唤醒所有等待窗口空闲的生产者
+   * 清空 send_inflight_chunks_ 和 recv_inflight_chunks_ 中的条目
    *
    * @param conn_id 连接 ID
    */
@@ -949,35 +1058,7 @@ class Endpoint {
    */
   bool finalize_recv_chunk_(Conn& conn, PendingTransfer::ChunkState& chunk);
 
-  /**
-   * 旧版 unpack 接口（已废弃，保留用于兼容）
-   *
-   * @param transfer 传输对象
-   * @param request TCPX 请求对象
-   * @param conn 连接对象
-   * @return 成功返回 true，失败返回 false
-   */
-  bool enqueue_unpack_(PendingTransfer& transfer,
-                       tcpx::plugin::tcpxRequest* request, Conn& conn);
 
-  /**
-   * 旧版传输完成接口（已废弃，保留用于兼容）
-   *
-   * @param transfer 传输对象
-   * @param success 是否成功
-   * @return 成功返回 true，失败返回 false
-   */
-  bool complete_pending_transfer_(PendingTransfer& transfer, bool success);
-
-  /**
-   * 旧版请求轮询接口（已废弃，保留用于兼容）
-   *
-   * @param transfer 传输对象
-   * @param done 输出：是否完成
-   * @param received_size 输出：接收到的字节数
-   * @return 成功返回 true，失败返回 false
-   */
-  bool poll_request_(PendingTransfer& transfer, bool* done, int* received_size);
 
   // ==========================================================================
   // 传输提交辅助函数
@@ -1029,60 +1110,6 @@ class Endpoint {
   bool post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr, void* data,
                   size_t size, int tag, uint64_t& transfer_id,
                   bool needs_unpack);
-
-  // ==========================================================================
-  // 生产者-消费者模型辅助函数
-  // ==========================================================================
-
-  /**
-   * 启动连接的后台进度线程
-   *
-   * 如果 progress_worker 已存在则直接返回，否则创建新实例
-   *
-   * @param conn 连接对象
-   */
-  void start_conn_progress_worker_(std::shared_ptr<Conn> const& conn);
-
-  /**
-   * 停止连接的后台进度线程
-   *
-   * 调用 progress_worker->stop() 并等待线程退出
-   *
-   * @param conn 连接对象
-   */
-  void stop_conn_progress_worker_(std::shared_ptr<Conn> const& conn);
-
-  /**
-   * 将传输加入后台进度队列（生产者接口）
-   *
-   * 调用 progress_worker->enqueue(transfer_id)，如果 transfer_id 已在
-   * inflight_ 集合中则忽略（去重）
-   *
-   * @param conn 连接对象
-   * @param transfer_id 传输 ID
-   */
-  void enqueue_transfer_for_progress_(std::shared_ptr<Conn> const& conn,
-                                      uint64_t transfer_id);
-
-  /**
-   * 推进单个传输（消费者接口）
-   *
-   * 流程：
-   * 1. 持锁查找 transfer_map_ 中的传输
-   * 2. 调用 advance_transfer_locked 推进传输
-   * 3. 如果完成，调用 finalize_transfer_locked 清理
-   * 4. 释放锁后调用 reset_conn_window_counters_ 唤醒生产者
-   *
-   * @param conn 连接对象
-   * @param transfer_id 传输 ID
-   * @param transfer_done 输出：传输是否完成
-   * @return 成功返回 true，失败返回 false
-   */
-  bool drive_transfer_(std::shared_ptr<Conn> const& conn, uint64_t transfer_id,
-                       bool* transfer_done);
-
-  // ConnProgressWorker 需要访问 drive_transfer_
-  friend struct Conn::ConnProgressWorker;
 };
 
 }  // namespace tcpx
