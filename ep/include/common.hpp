@@ -25,7 +25,7 @@
 
 #ifdef EFA
 #define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
-static bool use_ll_sl = false;
+extern bool use_ll_sl;
 #endif
 
 #define USE_MSCCLPP_FIFO_BACKEND
