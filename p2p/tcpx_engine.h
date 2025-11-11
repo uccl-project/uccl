@@ -800,7 +800,7 @@ class Endpoint {
   // 使用场景：
   // - reserve_send_slot/reserve_recv_slot: 调度前检查窗口是否有空闲配额
   // - release_send_slot/release_recv_slot: chunk 完成后释放配额
-  // - reset_conn_window_counters_: 连接关闭时清空计数器
+  // - reset_conn_window_counters_: 用于连接关闭及传输完成后的计数重置（全连接维度）
   //
   // 持锁时间：
   // - 非常短：只做简单的计数器操作

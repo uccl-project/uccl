@@ -808,7 +808,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
     return false;
   }
 
-  // 初始化 CUDA Event Pool（对齐原来的 ChannelWindow::events 设计）
+  // 初始化 CUDA Event Pool
   // 预分配固定数量的 events，整个连接生命周期内循环复用
   int max_recv_inflight_acc =
       get_env_int("UCCL_TCPX_MAX_RECV_INFLIGHT", kDefaultRecvInflight);
@@ -1325,19 +1325,14 @@ bool Endpoint::recv_async_with_tag(uint64_t conn_id, uint64_t mr_id, void* data,
 // 工作原理：
 // 1. reserve_*_slot: 在调度 chunk 前调用，检查是否有空闲配额
 //    - 如果 counter < limit，递增 counter 并返回 true
-//    - 如果 counter >= limit，返回 false（窗口已满）
+//    - 如果 counter >= limit，返回 false（窗口已满，调用者放弃调度）
 // 2. release_*_slot: 在 chunk 完成后调用，释放配额
 //    - 递减 counter
-//    - 唤醒等待的调用者（window_cv_.notify_all）
-//
-// 流控效果：
-// - 防止内存耗尽：限制 TCPX bounce buffer 使用量
-// - 防止 GPU 资源耗尽：限制同时在途的 CUDA events 数量
-// - 提高吞吐量：窗口大小调优可以平衡延迟和吞吐量
-//
-// 默认窗口大小：
-// - max_send_inflight_ = 128（可通过环境变量 UCCL_TCPX_MAX_SEND_INFLIGHT 配置）
-// - max_recv_inflight_ = 128（可通过环境变量 UCCL_TCPX_MAX_RECV_INFLIGHT 配置）
+//    - 无阻塞等待机制：调用者通过下次 poll_async 重试
+// 注意：
+// - 当前实现为非阻塞式：reserve 失败时直接返回 false，不等待
+// - 调用者（schedule_send_chunks_/schedule_recv_chunks_）会在下次 poll_async 时重试
+// - 这种设计避免了条件变量的开销，与用户主动推进模型一致
 // ============================================================================
 
 /**
@@ -1460,8 +1455,9 @@ Endpoint::ScheduleOutcome Endpoint::schedule_send_chunks_locked(
                           static_cast<int>(chunk.tag), transfer.mhandle,
                           &request);
       if (debug_enabled_) {
+        size_t chunk_idx = transfer.next_chunk_to_post;
         std::cerr << "[tcpx] isend rc=" << rc << " req=" << request
-                  << " chunk_off=" << chunk.offset
+                  << " chunk=" << chunk_idx
                   << " chunk_bytes=" << chunk.bytes
                   << " tag=" << chunk.tag << std::endl;
       }
@@ -1561,8 +1557,9 @@ Endpoint::ScheduleOutcome Endpoint::schedule_recv_chunks_locked(
       int rc = tcpx_irecv(conn.recv_comm, 1, buffers, sizes, tags, mhandles,
                           requests);
       if (debug_enabled_) {
+        size_t chunk_idx = transfer.next_chunk_to_post;
         std::cerr << "[tcpx] irecv rc=" << rc << " req=" << requests[0]
-                  << " chunk_off=" << chunk.offset
+                  << " chunk=" << chunk_idx
                   << " chunk_bytes=" << chunk.bytes
                   << " tag=" << chunk.tag << std::endl;
       }
@@ -1847,8 +1844,9 @@ bool Endpoint::poll_chunk_request_(PendingTransfer& transfer,
   int rc = tcpx_test(chunk.request, &completed, &size);
 
   if (debug_enabled_ && rc != kTcpxBusy) {
+    size_t chunk_idx = chunk_bytes_ ? (chunk.offset / chunk_bytes_) : 0;
     std::cerr << "[tcpx] test transfer=" << transfer.transfer_id
-              << " chunk_off=" << chunk.offset << " rc=" << rc
+              << " chunk=" << chunk_idx << " rc=" << rc
               << " completed=" << completed << " size=" << size << std::endl;
   }
 
@@ -1862,17 +1860,19 @@ bool Endpoint::poll_chunk_request_(PendingTransfer& transfer,
   if (rc == 2) {
     if (!completed) {
       if (debug_enabled_) {
+        size_t chunk_idx = chunk_bytes_ ? (chunk.offset / chunk_bytes_) : 0;
         std::cerr << "[tcpx] tcpx_test reported connection close (rc=2) for "
                   << "transfer_id=" << transfer.transfer_id
-                  << " offset=" << chunk.offset << " (not ready)" << std::endl;
+                  << " chunk=" << chunk_idx << " (not ready)" << std::endl;
       }
       return true;
     }
   } else if (rc != 0) {
     // 其他错误：永久性失败
+    size_t chunk_idx = chunk_bytes_ ? (chunk.offset / chunk_bytes_) : 0;
     std::cerr << "[tcpx] tcpx_test failed rc=" << rc
               << " transfer_id=" << transfer.transfer_id
-              << " offset=" << chunk.offset << std::endl;
+              << " chunk=" << chunk_idx << std::endl;
     return false;
   }
 
@@ -1889,8 +1889,8 @@ bool Endpoint::poll_chunk_request_(PendingTransfer& transfer,
  * 【Stage 2 启动】启动 GPU unpack kernel（接收端专用）
  *
  * 功能：
- * - 将数据从 bounce buffer（CPU pinned memory）拷贝到目标 GPU 内存
- * - 使用 CUDA kernel 执行异步拷贝（比 cudaMemcpy 更高效）
+ * - 将数据从 bounce buffer拷贝到目标 GPU 内存
+ * - 使用 CUDA kernel 执行异步拷贝
  * - 记录 CUDA event 用于跟踪 kernel 完成状态
  *
  * 执行流程：
@@ -1947,8 +1947,9 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
   frag_cnt = *(request->unpack_slot.cnt);
 
   if (debug_enabled_) {
-    std::cerr << "[tcpx] unpack transfer_id=" << transfer.transfer_id
-              << " chunk_off=" << chunk.offset << " frag_cnt=" << frag_cnt
+    size_t chunk_idx = chunk_bytes_ ? (chunk.offset / chunk_bytes_) : 0;
+    std::cerr << "[tcpx] unpack transfer=" << transfer.transfer_id
+              << " chunk=" << chunk_idx << " frag_cnt=" << frag_cnt
               << std::endl;
   }
 
@@ -1957,10 +1958,6 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
     return false;
   }
 
-  if (debug_enabled_) {
-    std::cerr << "[tcpx] dev_handle bounce_buf=" << dev_handle.bounce_buf
-              << std::endl;
-  }
 
   // 【步骤 3】构建 UnpackDescriptorBlock
   // 将 TCPX plugin 提供的元数据转换为 CUDA kernel 期望的格式
@@ -1971,26 +1968,6 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
                                  dev_handle.bounce_buf, chunk.dst_ptr,
                                  block);
 
-  // 调试采样（cuMemcpyDtoH）已移除：避免在大规模传输下带来额外同步与日志开销。
-
-  // 【调试】打印 fragment 元数据
-  if (debug_enabled_) {
-    for (uint32_t i = 0; i < std::min<uint32_t>(frag_cnt, 4); ++i) {
-      auto const& m = block.descriptors[i];
-      std::cerr << "  meta[" << i << "] src_off=" << m.src_off << " len="
-                << m.len << " dst_off=" << m.dst_off << " (chunk_off="
-                << chunk.offset << ")" << std::endl;
-    }
-    if (frag_cnt > 4) {
-      for (uint32_t i = frag_cnt - std::min<uint32_t>(frag_cnt, 4); i < frag_cnt;
-           ++i) {
-        auto const& m = block.descriptors[i];
-        std::cerr << "  meta[" << i << "] src_off=" << m.src_off
-                  << " len=" << m.len << " dst_off=" << m.dst_off
-                  << " (tail)" << std::endl;
-      }
-    }
-  }
 
   block.ready_flag = request->unpack_slot.cnt;
   block.ready_threshold = frag_cnt;
@@ -2480,11 +2457,6 @@ bool Endpoint::progress_conn(uint64_t conn_id) {
 }
 
 
-
-
-
-
-
 /**
  * 释放连接资源（在析构或连接关闭时调用）
  *
@@ -2554,7 +2526,7 @@ void Endpoint::free_conn_(std::shared_ptr<Conn> const& conn) {
   }
   // 【释放锁】离开作用域，mr_mu_ 自动释放
 
-  // 【步骤 2】重置窗口计数器并唤醒等待的调用者
+  // 【步骤 2】重置窗口计数器
   // reset_conn_window_counters_ 内部会持 window_mu_
   reset_conn_window_counters_(conn->conn_id);
 
