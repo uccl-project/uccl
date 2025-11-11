@@ -188,6 +188,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
         assert(candidates.size() == 2);
         auto half = (local_rank % 2) * 1;
         selected_nic_name = candidates[thread_idx % 1 + half];
+        use_ll_sl = true;
       }
 #endif
     }
@@ -306,8 +307,7 @@ struct ibv_qp* create_srd_qp_ex(ProxyCtx& S) {
   qp_attr_ex.qp_type = IBV_QPT_DRIVER;
 
   efa_attr.driver_qp_type = EFADV_QP_DRIVER_TYPE_SRD;
-#define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
-  efa_attr.sl = EFA_QP_LOW_LATENCY_SERVICE_LEVEL;
+  if (use_ll_sl) efa_attr.sl = EFA_QP_LOW_LATENCY_SERVICE_LEVEL;
   efa_attr.flags = 0;
   // If set, Receive WRs will not be consumed for RDMA write with imm.
   efa_attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;

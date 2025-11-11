@@ -23,6 +23,11 @@
 #endif
 #endif
 
+#ifdef EFA
+#define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
+static bool use_ll_sl = false;
+#endif
+
 #define USE_MSCCLPP_FIFO_BACKEND
 // #define USE_SUBSET_BARRIER
 #define kAtomicBufferSize 81960
