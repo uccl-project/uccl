@@ -176,6 +176,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
         auto half = (local_rank % 2) * 4;
         // GPU0 uses candidates[0/1/2/3], GPU1 uses candidates[4/5/6/7], etc.
         selected_nic_name = candidates[thread_idx % 4 + half];
+        use_ll_sl = true;
       } else if (candidates.size() == 4) {
         // On p5e/p5en, there are 4 NICs with the same distance.
         // We hardcode the first half Proxies to use the first NIC, and the
@@ -183,6 +184,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
         auto half = (local_rank % 2) * 2;
         // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
         selected_nic_name = candidates[thread_idx % 2 + half];
+        use_ll_sl = true;
       } else {
         // On p6-b200, there is 2 NICs with the same distance.
         assert(candidates.size() == 2);
