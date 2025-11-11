@@ -273,8 +273,7 @@ __global__ void notify_dispatch(
             i)[NUM_MAX_NVL_PEERS + num_rdma_experts];
         recv_rdma_rank_prefix_sum[i] = sum;
       }
-      while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1)
-        ;
+      while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1);
       *moe_recv_rdma_counter_mapped = sum;
     }
 
@@ -303,8 +302,7 @@ __global__ void notify_dispatch(
         sum += nvl_recv_num_tokens_per_rank.buffer(src_nvl_rank)[src_rdma_rank];
         recv_gbl_rank_prefix_sum[i] = sum;
       }
-      while (ld_volatile_global(moe_recv_counter_mapped) != -1)
-        ;
+      while (ld_volatile_global(moe_recv_counter_mapped) != -1);
       *moe_recv_counter_mapped = sum;
     }
     if (thread_id < num_nvl_experts) {
@@ -314,8 +312,7 @@ __global__ void notify_dispatch(
         sum += nvl_recv_num_tokens_per_expert.buffer(i)[thread_id];
       sum = (sum + expert_alignment - 1) / expert_alignment * expert_alignment;
       while (ld_volatile_global(moe_recv_expert_counter_mapped + thread_id) !=
-             -1)
-        ;
+             -1);
       moe_recv_expert_counter_mapped[thread_id] = sum;
     }
 
@@ -454,6 +451,7 @@ void notify_dispatch(
 constexpr int get_num_topk_rdma_ranks(int num_rdma_ranks) {
   return num_rdma_ranks < 8 ? num_rdma_ranks : 8;
 }
+
 
 template <bool kLowLatencyMode, int kNumRDMARanks, bool kCachedMode,
           int kNumTMABytesPerWarp, int kNumDispatchRDMASenderWarps,
@@ -964,9 +962,6 @@ __global__ void __launch_bounds__(
         __syncwarp();
       }
     }
-    if (lane_id == 0 && warp_id == kNumDispatchRDMASenderWarps) {
-      printf("[RDMASenderCoordinator]: finished!\n");
-    }
   } else if (warp_role == WarpRole::kRDMAAndNVLForwarder) {
     // RDMA consumers and NVL producers
     auto const dst_nvl_rank = target_rank;
@@ -1124,9 +1119,10 @@ __global__ void __launch_bounds__(
 
         // Copy data
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-        UNROLLED_WARP_COPY(
-            5, lane_id, hidden_int4, reinterpret_cast<int4*>(dst_shifted),
-            reinterpret_cast<int4*>(shifted), ld_nc_global, st_na_global);
+        UNROLLED_WARP_COPY(5, lane_id, num_bytes_per_token / sizeof(int4),
+                           reinterpret_cast<int4*>(dst_shifted),
+                           reinterpret_cast<int4*>(shifted), ld_nc_global,
+                           st_na_global);
 #else
         if (lane_id == 0) {
           tma_load_1d(tma_buffer, shifted, tma_mbarrier, num_bytes_per_token,
@@ -1250,6 +1246,7 @@ __global__ void __launch_bounds__(
       }
     }
     num_tokens_to_recv = warp_reduce_sum(end_offset - start_offset);
+
     auto num_tokens_to_recv_original = num_tokens_to_recv;
     // Save for combine usage
     if (lane_id < kNumRDMARanks and not kCachedMode)
@@ -1892,7 +1889,7 @@ template <
     int kNumWarpsPerForwarder = (kNumCombineForwarderWarps / kNumRDMARanks > 0)
                                     ? kNumCombineForwarderWarps / kNumRDMARanks
                                     : 1,
-    int kNumForwarders = kNumRDMARanks* kNumWarpsPerForwarder,
+    int kNumForwarders = kNumRDMARanks * kNumWarpsPerForwarder,
     int kNumRDMAReceivers = kNumForwarders - NUM_MAX_NVL_PEERS>
 __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
     combine(int4* combined_x, float* combined_topk_weights,

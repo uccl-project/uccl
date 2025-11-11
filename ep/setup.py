@@ -60,6 +60,9 @@ if __name__ == "__main__":
 
         cxx_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
         nvcc_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
+        
+        cxx_flags.append("-DENABLE_FAST_DEBUG")
+        nvcc_flags.append("-DENABLE_FAST_DEBUG")
 
         device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", "gfx942")
         os.environ["PYTORCH_ROCM_ARCH"] = device_arch
