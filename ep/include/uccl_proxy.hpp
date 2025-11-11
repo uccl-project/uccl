@@ -17,9 +17,8 @@ class UcclProxy {
 
  public:
   UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr, size_t total_size,
-            int rank, int node_idx, int local_rank,
-            std::string const& peer_ip = {}, int num_experts = 0,
-            int num_ranks = 0, int num_nodes = 0, bool use_normal_mode = false);
+            int rank, int node_idx, int local_rank, int num_experts = 0,
+            int num_ranks = 0, int num_nodes = 0, bool use_normal_mode = false, bool is_intranode = false);
   ~UcclProxy();
 
   void start_sender();
@@ -83,7 +82,7 @@ class UcclProxy {
   enum class Mode { None, Sender, Remote, Local, Dual };
   void start(Mode m);
 
-  std::string peer_ip_;
+  bool is_intranode_;
   std::unique_ptr<Proxy> proxy_;
   std::thread thread_;
   Mode mode_;
@@ -137,7 +136,7 @@ class FifoProxy {
   int rank_;
   int node_idx_;
   int local_rank_;
-  std::string peer_ip_;
+  bool is_intranode_;
 
   std::vector<std::tuple<int, uintptr_t, size_t, std::string>> peers_meta_;
 };

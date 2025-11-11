@@ -473,7 +473,6 @@ def initialize_uccl(
         rank, scratch_ptr, scratch_nbytes, num_ranks, group
     )
     peers_meta_list = [rank2meta[r] for r in range(num_ranks)]
-    peer_ip = rank2meta[(rank + 1) % num_ranks]["ip"]
 
     for i in range(ep.get_num_proxy_threads()):
         proxy = ep.Proxy(
@@ -483,11 +482,11 @@ def initialize_uccl(
             rank=rank,
             node_idx=node_idx,
             local_rank=local_rank,
-            peer_ip="" if is_intranode else peer_ip,
             num_experts=num_experts,
             num_ranks=num_ranks,
             num_nodes=int(os.environ.get("WORLD_SIZE")) // nproc_per_node,
             use_normal_mode=use_normal_mode,
+            is_intranode = is_intranode,
         )
         if not is_intranode:
             proxy.set_peers_meta(peers_meta_list)

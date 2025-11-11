@@ -43,13 +43,13 @@ class Proxy {
     int rank = 0;
     int node_idx = -1;
     int local_rank = -1;
-    char const* peer_ip = nullptr;
     bool pin_thread = true;
     int num_experts = 0;
     int num_ranks = 0;
     int num_nodes = 0;
     bool use_normal_mode =
         false;  // Runtime flag for normal mode (batching optimization)
+    bool is_intranode = false;
   };
 
   explicit Proxy(Config const& cfg) : cfg_(cfg) {
