@@ -137,7 +137,7 @@ We test normal kernels on **B200 (8× GPUs per node)** with each GPU connected t
 
 #### On p5en
 
-We test low-latency kernels on **8x H200 + 16x 200 Gb/s)** following a **DeepSeek-V3 inference** setting (128 tokens per batch, 7168 hidden, top-8 experts, FP8 dispatch / BF16 combine).
+We test low-latency kernels on **(8x H200 + 16x 200 Gb/s)** following a **DeepSeek-V3 inference** setting (128 tokens per batch, 7168 hidden, top-8 experts, FP8 dispatch / BF16 combine).
 
 | Dispatch #EP | Latency | RDMA bandwidth | Combine #EP | Latency | RDMA bandwidth |
 |:-------------:|:--------:|:---------------:|:------------:|:--------:|:---------------:|
