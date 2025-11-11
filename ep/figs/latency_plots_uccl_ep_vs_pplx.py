@@ -11,8 +11,8 @@ tokens = [128, 256, 512, 1024, 2048, 4096]
 uccl_ep_dispatch = [200.25, 288.93, 430.19, 660.09, 1113.00, 2026.00]
 uccl_ep_combine  = [ 519.51, 763.02, 1176.00, 1929.00, 3039.00, 5377.00]
 
-pplx_dispatch = [228.6, 399.4, 744.9, None, None, None]
-pplx_combine  = [331.4, 591.3, 1103.4, None, None, None]
+pplx_dispatch = [228.6, 399.4, 744.9, 1483.0, 2539.1, 4638.2]
+pplx_combine  = [331.4, 591.3, 1103.4, 2124.0, 4177.4, 8290.1]
 
 
 def align_tokens(tokens_list, series):
