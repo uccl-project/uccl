@@ -44,7 +44,7 @@ LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
       perror("shm_open(existing)");
       return nullptr;
     }
-    struct stat st {};
+    struct stat st{};
     int tries = 1000;
     while (tries-- > 0) {
       if (fstat(fd, &st) == 0 && static_cast<size_t>(st.st_size) >= kSize)
@@ -435,7 +435,7 @@ void Proxy::run_dual() {
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   if (acked_wrs_.empty()) return;
 
-    // Mark all acked command slots in each ring's bitmask
+  // Mark all acked command slots in each ring's bitmask
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   // FIFO path: pop in order using the pending deque and the completion set.
   for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); ++rb_idx) {

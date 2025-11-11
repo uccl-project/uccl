@@ -39,9 +39,9 @@
 #define kObjectSize 7168  // 7 KB
 // #define kObjectSize 10752  // 10.5 KB
 // #define kObjectSize 14336  // 14 KB
-#define kMaxOutstandingSends 2048
+#define kMaxOutstandingSends 2048  // = max_send_wr, max_recv_wr, cq_depth / 2
 #define kMaxOutstandingRecvs 2048 * 2
-#define kSenderAckQueueDepth 2048 * 2
+#define kSenderAckQueueDepth 2048
 #define kWarmupOps 10000
 #define kChannelPerProxy 8
 // TODO(MaoZiming): I tried to fit more bits, but this eats into offset and
