@@ -47,6 +47,7 @@ def warmup_all2all_check(
     recv_chunks = [recv_chunks_tensor[i] for i in range(world_size)]
     # recv_chunks = torch.empty_like(send_chunks, device=device)
 
+    torch.cuda.synchronize()
     sync_all()
 
     send_ids, recv_ids = [], []
@@ -56,10 +57,11 @@ def warmup_all2all_check(
     # recv_chunks = recv_tensor.view(world_size, -1)
     # send
     print(f"[Rank {rank}] send_chunks: {send_chunks}")
-    collective.register_tensor(send_chunks_tensor)
+    print(f"[Rank {rank}] send_chunks size: {send_chunks_tensor.size()}")
+    # collective.register_tensor(send_chunks_tensor)
     print(send_chunks_tensor.data_ptr())
     print(send_chunks_tensor.size())
-    collective.register_tensor(recv_chunks_tensor)
+    # collective.register_tensor(recv_chunks_tensor)
     for r in range(world_size):
         if r == rank:
             recv_chunks[r].copy_(send_chunks[r].contiguous())
@@ -136,8 +138,8 @@ def run_fcp_p2p(
 
     recv_tensor = torch.empty_like(send_tensor, device=device)
 
-    collective.register_tensor(send_tensor)
-    collective.register_tensor(recv_tensor)
+    # collective.register_tensor(send_tensor)
+    # collective.register_tensor(recv_tensor)
 
     sync_all()
 
@@ -167,8 +169,8 @@ def run_fcp_p2p(
         flops_buckets=np.zeros(world_size),
         seq_lens=np.zeros(world_size),
     )
-    collective.deregister_tensor(send_tensor)
-    collective.deregister_tensor(recv_tensor)
+    # collective.deregister_tensor(send_tensor)
+    # collective.deregister_tensor(recv_tensor)
 
     return data
 
@@ -269,7 +271,8 @@ def main():
     setup_seed(330)
     device = torch.device(f"cuda:{int(os.environ['LOCAL_RANK'])}")
     torch.cuda.set_device(device)
-    dist.init_process_group(backend="nccl", device_id=device)
+    # dist.init_process_group(backend="nccl", device_id=device)
+    dist.init_process_group(backend="gloo")
 
     rank = dist.get_rank()
     world_size = dist.get_world_size()
@@ -283,7 +286,7 @@ def main():
     results = []
 
     try:
-        collective.init_collective(args.num_cpus, disable_uccl_intra=True)
+        collective.init_collective(args.num_cpus, disable_uccl_intra=False)
         print(f"[Rank {rank}] UCCL Collective initialized successfully")
         dist.barrier()
         global_rank = dist.get_rank()
