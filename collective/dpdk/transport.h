@@ -569,7 +569,7 @@ class UcclFlow {
 class UcclEngine {
  public:
   // Slow timer (periodic processing) interval in microseconds.
-  size_t const kSlowTimerIntervalUs = 2000;  // 2ms
+  size_t const kSlowTimerIntervalUs = 20000;  // 20ms
   UcclEngine() = delete;
   UcclEngine(UcclEngine const&) = delete;
 
