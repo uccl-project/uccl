@@ -23,10 +23,15 @@
 #endif
 #endif
 
+#ifdef EFA
+#define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
+extern bool use_ll_sl;
+#endif
+
 #define USE_MSCCLPP_FIFO_BACKEND
 // #define USE_SUBSET_BARRIER
 #define kAtomicBufferSize 81960
-#define kQueueSize 1024
+#define kQueueSize 2048
 #define kQueueMask (kQueueSize - 1)
 // This is the highest we can get due to the number of bits we allocate in the
 // imm for reordering buffer sequence tracking.
@@ -39,9 +44,9 @@
 #define kObjectSize 7168  // 7 KB
 // #define kObjectSize 10752  // 10.5 KB
 // #define kObjectSize 14336  // 14 KB
-#define kMaxOutstandingSends 2048
-#define kMaxOutstandingRecvs 2048 * 2
-#define kSenderAckQueueDepth 2048 * 2
+#define kMaxOutstandingSends 2048  // = max_send_wr, max_recv_wr, cq_depth / 2
+#define kMaxOutstandingRecvs 2048
+#define kSenderAckQueueDepth 2048
 #define kWarmupOps 10000
 #define kChannelPerProxy 8
 // TODO(MaoZiming): I tried to fit more bits, but this eats into offset and

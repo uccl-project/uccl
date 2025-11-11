@@ -4,3 +4,4 @@ benchmark_local
 benchmark_dual
 *.hip
 *_hip.*
+*.egg-info

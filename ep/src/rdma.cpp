@@ -153,10 +153,13 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     // Collect all NICs with equal minimum distance
     std::vector<std::string> candidates;
     for (auto& p : dist) {
-#ifndef EFA
+#ifdef EFA
+      if (p.second == min_d && strncmp(p.first.c_str(), "rdmap", 5) == 0)
+        candidates.push_back(p.first);
+#else
       if (!uccl::is_iface_up(p.first)) continue;
-#endif
       if (p.second == min_d) candidates.push_back(p.first);
+#endif
     }
 
     if (candidates.empty()) {
@@ -168,13 +171,27 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       selected_nic_name = candidates[thread_idx % candidates.size()];
 #ifdef EFA
       // NOTE(MaoZiming): This is a temporary hack.
-      // On p5en, there are 4 NICs with the same distance.
-      // We hardcode the first half Proxies to use the first NIC, and the second
-      // half to use the second NIC.
-      assert(candidates.size() == 4);
-      // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
-      auto half = (local_rank % 2) * 2;
-      selected_nic_name = candidates[thread_idx % 2 + half];
+      if (candidates.size() == 8) {
+        // On p5, there are 8 NICs with the same distance.
+        auto half = (local_rank % 2) * 4;
+        // GPU0 uses candidates[0/1/2/3], GPU1 uses candidates[4/5/6/7], etc.
+        selected_nic_name = candidates[thread_idx % 4 + half];
+        use_ll_sl = true;
+      } else if (candidates.size() == 4) {
+        // On p5e/p5en, there are 4 NICs with the same distance.
+        // We hardcode the first half Proxies to use the first NIC, and the
+        // second half to use the second NIC.
+        auto half = (local_rank % 2) * 2;
+        // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
+        selected_nic_name = candidates[thread_idx % 2 + half];
+        use_ll_sl = true;
+      } else {
+        // On p6-b200, there is 2 NICs with the same distance.
+        assert(candidates.size() == 2);
+        auto half = (local_rank % 2) * 1;
+        selected_nic_name = candidates[thread_idx % 1 + half];
+        use_ll_sl = true;
+      }
 #endif
     }
   }
@@ -276,8 +293,8 @@ struct ibv_qp* create_srd_qp_ex(ProxyCtx& S) {
                               IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM |
                               IBV_QP_EX_WITH_SEND_WITH_IMM;
 
-  qp_attr_ex.cap.max_send_wr = kMaxOutstandingSends * 2;
-  qp_attr_ex.cap.max_recv_wr = kMaxOutstandingSends * 2;
+  qp_attr_ex.cap.max_send_wr = kMaxOutstandingSends;
+  qp_attr_ex.cap.max_recv_wr = kMaxOutstandingSends;
   qp_attr_ex.cap.max_send_sge = 1;
   qp_attr_ex.cap.max_recv_sge = 1;
   qp_attr_ex.cap.max_inline_data = 0;
@@ -292,8 +309,7 @@ struct ibv_qp* create_srd_qp_ex(ProxyCtx& S) {
   qp_attr_ex.qp_type = IBV_QPT_DRIVER;
 
   efa_attr.driver_qp_type = EFADV_QP_DRIVER_TYPE_SRD;
-  // #define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
-  //   efa_attr.sl = EFA_QP_LOW_LATENCY_SERVICE_LEVEL;
+  if (use_ll_sl) efa_attr.sl = EFA_QP_LOW_LATENCY_SERVICE_LEVEL;
   efa_attr.flags = 0;
   // If set, Receive WRs will not be consumed for RDMA write with imm.
   efa_attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;
@@ -351,11 +367,9 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   struct ibv_qp_init_attr qp_init_attr = {};
   qp_init_attr.send_cq = S.cq;
   qp_init_attr.recv_cq = S.cq;
-  qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
-  qp_init_attr.cap.max_send_wr =
-      kMaxOutstandingSends * 2;  // max outstanding sends
-  qp_init_attr.cap.max_recv_wr =
-      kMaxOutstandingSends * 2;  // max outstanding recvs
+  qp_init_attr.qp_type = IBV_QPT_RC;                    // Reliable Connection
+  qp_init_attr.cap.max_send_wr = kMaxOutstandingSends;  // max outstanding sends
+  qp_init_attr.cap.max_recv_wr = kMaxOutstandingSends;  // max outstanding recvs
   qp_init_attr.cap.max_send_sge = 1;
   qp_init_attr.cap.max_recv_sge = 1;
   qp_init_attr.sq_sig_all = 0;
