@@ -46,8 +46,9 @@ TORCH_INCS := -I$(TORCH_INCLUDE) -I$(TORCH_INCLUDE_API)
 PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")
 INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
 
-# GPU arch (override with: make SM=90)
-SM ?= 90
+# GPU arch (auto-detected, override with: make SM=90)
+DETECTED_SM := $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -n1 | tr -d '.')
+SM ?= $(DETECTED_SM)
 
 CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden -Wno-interference-size -Wno-unused-function
 LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -lnuma -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
