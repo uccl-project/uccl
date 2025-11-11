@@ -112,7 +112,7 @@ Please refer to [bench/baseline](bench/baseline) for running more baselines incl
 
 #### On p5en
 
-We test normal kernels on **H200 (8× GPUs per node)** with each GPU connected to **2x EFA 200 Gb/s RDMA** network card.
+We test normal kernels on **8x H200 + 16x 200Gb/s EFA** with each GPU connected to two **200 Gb/s EFA RDMA** network cards.
 We follow the **DeepSeek-V3 pretraining** configuration (4096 tokens per batch, 7168 hidden, top-4 groups, top-8 experts, FP8 dispatch and BF16 combine).
 
 |   Type    | Dispatch #EP | Bottleneck bandwidth & latency | Combine #EP | Bottleneck bandwidth & latency |
@@ -124,7 +124,7 @@ We follow the **DeepSeek-V3 pretraining** configuration (4096 tokens per batch, 
 
 #### On p6-b200
 
-We test normal kernels on **B200 (8× GPUs per node)** with each GPU connected to a **EFA 400 Gb/s RDMA** network card.
+We test normal kernels on **8x B200 + 8x 400Gb/s EFA** with each GPU connected to a **400Gb/s EFA RDMA** network card.
 
 |   Type    | Dispatch #EP | Bottleneck bandwidth & latency | Combine #EP | Bottleneck bandwidth & latency |
 |:---------:|:-------------:|:--------------------:|:------------:|:--------------------:|
@@ -137,7 +137,7 @@ We test normal kernels on **B200 (8× GPUs per node)** with each GPU connected t
 
 #### On p5en
 
-We test low-latency kernels on **(8x H200 + 16x 200 Gb/s)** following a **DeepSeek-V3 inference** setting (128 tokens per batch, 7168 hidden, top-8 experts, FP8 dispatch / BF16 combine).
+We test low-latency kernels on **8x H200 + 16x 200Gb/s EFA**, following a **DeepSeek-V3 inference** setting (128 tokens per batch, 7168 hidden, top-8 experts, FP8 dispatch / BF16 combine).
 
 | Dispatch #EP | Latency | RDMA bandwidth | Combine #EP | Latency | RDMA bandwidth |
 |:-------------:|:--------:|:---------------:|:------------:|:--------:|:---------------:|
@@ -147,7 +147,7 @@ We test low-latency kernels on **(8x H200 + 16x 200 Gb/s)** following a **DeepSe
 
 #### On p6-b200
 
-We test low-latency kernels on **(8x B200 + 8x 400 Gb/s)**.
+We test low-latency kernels on **8x B200 + 8x 400Gb/s EFA**.
 
 | Dispatch #EP | Latency | RDMA bandwidth | Combine #EP | Latency | RDMA bandwidth |
 |:-------------:|:--------:|:---------------:|:------------:|:--------:|:---------------:|
