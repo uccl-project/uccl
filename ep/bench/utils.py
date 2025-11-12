@@ -107,27 +107,6 @@ def _discover_local_ip():
         s.close()
 
 
-def _gather_peer_ips(group):
-    # Gather local IP strings across ranks
-    world = dist.get_world_size(group)
-    my_ip = _discover_local_ip()
-    ips = [None] * world
-    dist.all_gather_object(ips, my_ip, group=group)
-    return ips
-
-
-def get_peer_ip(rank: int, num_ranks: int, group: dist.ProcessGroup):
-
-    if num_ranks == 1:
-        # single-process local test: okay to leave blank (or 127.0.0.1)
-        peer_ip = ""
-    else:
-        ips = _gather_peer_ips(group)
-        # simple ring: next rank is your peer
-        peer_ip = ips[(rank + 1) % num_ranks]
-    return peer_ip if peer_ip else ""
-
-
 def get_cpu_proxies_meta(rank, scratch_ptr, scratch_bytes, num_ranks, group):
     meta = {
         "rank": rank,
@@ -473,7 +452,6 @@ def initialize_uccl(
         rank, scratch_ptr, scratch_nbytes, num_ranks, group
     )
     peers_meta_list = [rank2meta[r] for r in range(num_ranks)]
-    peer_ip = rank2meta[(rank + 1) % num_ranks]["ip"]
 
     for i in range(ep.get_num_proxy_threads()):
         proxy = ep.Proxy(
@@ -483,11 +461,11 @@ def initialize_uccl(
             rank=rank,
             node_idx=node_idx,
             local_rank=local_rank,
-            peer_ip="" if is_intranode else peer_ip,
             num_experts=num_experts,
             num_ranks=num_ranks,
             num_nodes=int(os.environ.get("WORLD_SIZE")) // nproc_per_node,
             use_normal_mode=use_normal_mode,
+            is_intranode=is_intranode,
         )
         if not is_intranode:
             proxy.set_peers_meta(peers_meta_list)

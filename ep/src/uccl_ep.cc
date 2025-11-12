@@ -2141,13 +2141,13 @@ PYBIND11_MODULE(ep, m) {
   });
   py::class_<Stats>(m, "Stats");
   py::class_<UcclProxy>(m, "Proxy")
-      .def(py::init<int, uintptr_t, size_t, int, int, int, std::string const&,
-                    int, int, int, bool>(),
+      .def(py::init<int, uintptr_t, size_t, int, int, int, int, int, int, bool,
+                    bool>(),
            py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
            py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
-           py::arg("local_rank") = 0, py::arg("peer_ip") = std::string(),
-           py::arg("num_experts") = -1, py::arg("num_ranks") = -1,
-           py::arg("num_nodes") = 0, py::arg("use_normal_mode") = false)
+           py::arg("local_rank") = 0, py::arg("num_experts") = -1,
+           py::arg("num_ranks") = -1, py::arg("num_nodes") = 0,
+           py::arg("use_normal_mode") = false, py::arg("is_intranode") = false)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)
@@ -2226,8 +2226,6 @@ PYBIND11_MODULE(ep, m) {
       .def("timing_start", &Bench::timing_start)
       .def("timing_stop", &Bench::timing_stop)
       .def("is_running", &Bench::is_running)
-      .def("start_local_proxies", &Bench::start_local_proxies,
-           py::arg("rank") = 0, py::arg("peer_ip") = std::string())
       .def("launch_gpu_issue_batched_commands",
            &Bench::launch_gpu_issue_batched_commands)
       .def("sync_stream", &Bench::sync_stream)
@@ -2279,11 +2277,10 @@ PYBIND11_MODULE(ep, m) {
       .def("last_elapsed_ms", &BenchFifo::last_elapsed_ms);
 
   py::class_<FifoProxy>(m, "FifoProxy")
-      .def(
-          py::init<int, uintptr_t, size_t, int, int, int, std::string const&>(),
-          py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
-          py::arg("total_size"), py::arg("rank"), py::arg("node_idx"),
-          py::arg("local_rank"), py::arg("peer_ip"))
+      .def(py::init<int, uintptr_t, size_t, int, int, int, bool>(),
+           py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
+           py::arg("total_size"), py::arg("rank"), py::arg("node_idx"),
+           py::arg("local_rank"), py::arg("is_intranode"))
       .def("set_fifo", &FifoProxy::set_fifo, py::arg("fifo"))
       .def("set_peers_meta",
            [](FifoProxy& proxy, py::list meta_list) {

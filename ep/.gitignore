@@ -1,7 +1,4 @@
 benchmark
-benchmark_remote
-benchmark_local
-benchmark_dual
 *.hip
 *_hip.*
 *.egg-info
