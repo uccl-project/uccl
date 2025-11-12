@@ -33,9 +33,9 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   // NOTE(MaoZiming): different from the nvshmemi_ibgda_put_nbi_warp in
   // ibgda_device.cuh, we don't do warp-cooperation.
   if (lane_id != 0) return;
-  int thread_idx = (expert_idx % num_d2h_channel_addrs) % kNumThBlocks;
+  int thread_idx = (expert_idx % num_d2h_channel_addrs) % kNumProxyThs;
   int per_thread_d2h_channel_idx =
-      (expert_idx % num_d2h_channel_addrs) / kNumThBlocks;
+      (expert_idx % num_d2h_channel_addrs) / kNumProxyThs;
   EP_DEVICE_ASSERT(per_thread_d2h_channel_idx < kChannelPerProxy);
   int d2h_channel_idx =
       thread_idx * kChannelPerProxy + per_thread_d2h_channel_idx;
@@ -152,9 +152,9 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
       if (skip_remote) return;
     }
     rptr -= atomic_base_addr;
-    int thread_idx = (warp_id % num_d2h_channel_addrs) % kNumThBlocks;
+    int thread_idx = (warp_id % num_d2h_channel_addrs) % kNumProxyThs;
     int per_thread_d2h_channel_idx =
-        (warp_id % num_d2h_channel_addrs) / kNumThBlocks;
+        (warp_id % num_d2h_channel_addrs) / kNumProxyThs;
     EP_DEVICE_ASSERT(per_thread_d2h_channel_idx < kChannelPerProxy);
     int d2h_channel_idx =
         thread_idx * kChannelPerProxy + per_thread_d2h_channel_idx;
@@ -293,9 +293,9 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
    * thread manages kChannelPerProxy ring buffers, we just need to post a quiet
    * command to one out of the kChannelPerProxy ring buffer per cpu thread. */
   EP_DEVICE_ASSERT(num_d2h_channel_addrs % kChannelPerProxy == 0);
-  EP_DEVICE_ASSERT(num_d2h_channel_addrs / kChannelPerProxy == kNumThBlocks);
+  EP_DEVICE_ASSERT(num_d2h_channel_addrs / kChannelPerProxy == kNumProxyThs);
   // First, atomically commit QUIET to one ring per proxy
-  uint64_t slots[kNumThBlocks];
+  uint64_t slots[kNumProxyThs];
   int num_posted = 0;
   for (int d2h_channel_idx = 0; d2h_channel_idx < num_d2h_channel_addrs;
        d2h_channel_idx += kChannelPerProxy) {
@@ -342,8 +342,8 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
   EP_DEVICE_ASSERT(
       num_d2h_channel_addrs % kChannelPerProxy == 0 &&
       "num_d2h_channel_addrs must be multiple of kChannelPerProxy");
-  EP_DEVICE_ASSERT(num_d2h_channel_addrs / kChannelPerProxy == kNumThBlocks);
-  uint64_t slots[kNumThBlocks];
+  EP_DEVICE_ASSERT(num_d2h_channel_addrs / kChannelPerProxy == kNumProxyThs);
+  uint64_t slots[kNumProxyThs];
   int num_posted = 0;
 
   // First, post one BARRIER command per proxy

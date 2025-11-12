@@ -45,8 +45,8 @@ __device__ __forceinline__ uint64_t ld_volatile(uint64_t* ptr) {
 #endif
 }
 
-__device__ unsigned long long cycle_accum[kNumThBlocks] = {0};
-__device__ unsigned int op_count[kNumThBlocks] = {0};
+__device__ unsigned long long cycle_accum[kNumProxyThs] = {0};
+__device__ unsigned int op_count[kNumProxyThs] = {0};
 
 __global__ void gpu_issue_batched_commands(Fifo* fifos) {
   int const bid = blockIdx.x;
@@ -168,9 +168,9 @@ int main() {
 
   Fifo* fifos;
   GPU_RT_CHECK(
-      gpuHostAlloc(&fifos, sizeof(Fifo) * kNumThBlocks, gpuHostAllocMapped));
+      gpuHostAlloc(&fifos, sizeof(Fifo) * kNumProxyThs, gpuHostAllocMapped));
 
-  for (int i = 0; i < kNumThBlocks; ++i) {
+  for (int i = 0; i < kNumProxyThs; ++i) {
     fifos[i].head = 0;
     fifos[i].tail = 0;
     for (uint32_t j = 0; j < kQueueSize; ++j) {
@@ -180,12 +180,12 @@ int main() {
 
   // Launch one CPU polling thread per block
   std::vector<std::thread> cpu_threads;
-  for (int i = 0; i < kNumThBlocks; ++i) {
+  for (int i = 0; i < kNumProxyThs; ++i) {
     cpu_threads.emplace_back(cpu_proxy, &fifos[i], i);
   }
   auto t0 = std::chrono::high_resolution_clock::now();
   size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
-  gpu_issue_batched_commands<<<kNumThBlocks, kNumThPerBlock, shmem_bytes,
+  gpu_issue_batched_commands<<<kNumProxyThs, kTestNumGpuThPerBlock, shmem_bytes,
                                stream1>>>(fifos);
   GPU_RT_CHECK_ERRORS("gpu_issue_command kernel failed");
   GPU_RT_CHECK(gpuStreamSynchronize(stream1));
@@ -195,8 +195,8 @@ int main() {
     t.join();
   }
 
-  unsigned long long h_cycles[kNumThBlocks];
-  unsigned int h_ops[kNumThBlocks];
+  unsigned long long h_cycles[kNumProxyThs];
+  unsigned int h_ops[kNumProxyThs];
   gpuMemcpyFromSymbol(h_cycles, cycle_accum, sizeof(h_cycles));
   gpuMemcpyFromSymbol(h_ops, op_count, sizeof(h_ops));
 
@@ -204,7 +204,7 @@ int main() {
   double total_us = 0;
   unsigned long long tot_cycles = 0;
   printf("\nPer-block avg latency:\n");
-  for (int b = 0; b < kNumThBlocks; ++b) {
+  for (int b = 0; b < kNumProxyThs; ++b) {
     double us = (double)h_cycles[b] * 1000.0 / prop.clockRate / h_ops[b];
     printf("  Block %d : %.3f µs over %u ops\n", b, us, h_ops[b]);
     total_us += us;
@@ -212,7 +212,7 @@ int main() {
     tot_ops += h_ops[b];
   }
   double wall_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-  double throughput = (double)(kNumThBlocks * kIterations) / (wall_ms * 1000.0);
+  double throughput = (double)(kNumProxyThs * kIterations) / (wall_ms * 1000.0);
 
   printf("\nOverall avg GPU-measured latency  : %.3f µs\n",
          (double)tot_cycles * 1000.0 / prop.clockRate / tot_ops);

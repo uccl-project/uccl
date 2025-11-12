@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #define GID_INDEX 0
+#define NIC_INDEX 3
 #define PORT_NUM 1
 #define QKEY 0x12345
 #define MTU 8928
@@ -131,13 +132,13 @@ void exchange_qpns(char const* peer_ip, metadata* local_meta,
 struct ibv_qp* create_qp(struct rdma_context* rdma);
 
 // Initialize RDMA resources
-struct rdma_context* init_rdma(int gid_index) {
+struct rdma_context* init_rdma(int rdma_index) {
   struct rdma_context* rdma =
       (struct rdma_context*)calloc(1, sizeof(struct rdma_context));
 
   struct ibv_device** dev_list = ibv_get_device_list(NULL);
-  rdma->ctx = ibv_open_device(dev_list[gid_index]);
-  printf("Using device: %s\n", ibv_get_device_name(dev_list[gid_index]));
+  rdma->ctx = ibv_open_device(dev_list[rdma_index]);
+  printf("Using device: %s\n", ibv_get_device_name(dev_list[rdma_index]));
   ibv_free_device_list(dev_list);
   if (!rdma->ctx) {
     perror("Failed to open device");
@@ -459,7 +460,7 @@ void run_client(struct rdma_context* rdma, char const* server_ip,
 }
 
 int main(int argc, char* argv[]) {
-  struct rdma_context* rdma = init_rdma(GID_INDEX);
+  struct rdma_context* rdma = init_rdma(NIC_INDEX);
 
   if (argc == 2)
     run_client(rdma, argv[1], GID_INDEX);
