@@ -63,29 +63,17 @@ INCLUDES  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
 SRC_CPP := src/proxy.cpp src/rdma.cpp src/common.cpp src/peer_copy_worker.cpp src/uccl_proxy.cpp src/uccl_bench.cpp src/peer_copy_manager.cpp src/fifo.cpp
 SRC_CU  := src/bench_kernel.cu src/peer_copy.cu src/internode_ll.cu src/internode.cu src/layout.cu src/intranode.cu src/ep_runtime.cu
 
-SRC_LOCAL  := bench/benchmark_local.cu
-SRC_REMOTE := bench/benchmark_remote.cu
-SRC_DUAL   := bench/benchmark_dual.cu
-
 OBJ_CPP := $(SRC_CPP:.cpp=.o)
 OBJ_CU  := $(SRC_CU:.cu=.o)
-
-OBJ_LOCAL  := $(OBJ_CPP) $(OBJ_CU) $(SRC_LOCAL:.cu=.o)
-OBJ_REMOTE := $(OBJ_CPP) $(OBJ_CU) $(SRC_REMOTE:.cu=.o)
-OBJ_DUAL   := $(OBJ_CPP) $(OBJ_CU) $(SRC_DUAL:.cu=.o)
 
 SRC_BIND := src/uccl_ep.cc
 OBJ_BIND := $(SRC_BIND:.cc=.o)
 EP_EXT  := ep$(EXT_SUFFIX)
-
-TARGET_LOCAL  := benchmark_local
-TARGET_REMOTE := benchmark_remote
-TARGET_DUAL   := benchmark_dual
 PYTARGET      := ep$(EXT_SUFFIX)
 
 .PHONY: all py clean
 
-all: $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL) $(EP_EXT)
+all: $(EP_EXT)
 
 # C++ compilation rule with dependency generation
 %.o: %.cpp
@@ -97,15 +85,6 @@ all: $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL) $(EP_EXT)
 # Linking rules
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(PYBIND11_INCLUDES) -MMD -MP -c $< -o $@
-
-$(TARGET_LOCAL): $(OBJ_LOCAL)
-	$(NVCC) -arch=sm_$(SM) $(NVCCFLAGS) $(INCLUDES) $(OBJ_LOCAL) -lcuda -lcudart $(LDFLAGS) -o $@
-
-$(TARGET_REMOTE): $(OBJ_REMOTE)
-	$(NVCC) -arch=sm_$(SM) $(NVCCFLAGS) $(INCLUDES) $(OBJ_REMOTE) -lcuda -lcudart $(LDFLAGS) -o $@
-
-$(TARGET_DUAL): $(OBJ_DUAL)
-	$(NVCC) -arch=sm_$(SM) $(NVCCFLAGS) $(INCLUDES) $(OBJ_DUAL) -lcuda -lcudart $(LDFLAGS) -o $@
 
 $(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND)
 	$(CXX) $(CXXFLAGS) -shared -fPIC \
@@ -127,13 +106,9 @@ install: $(EP_EXT)
 # Clean all generated files
 clean:
 	rm -f $(OBJ_CPP) $(OBJ_CC) $(OBJ_CU) \
-	      $(SRC_LOCAL:.cu=.o) $(SRC_REMOTE:.cu=.o) $(SRC_DUAL:.cu=.o) \
-	      $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL) \
 	      $(EP_EXT) \
 	      *.d src/*.d bench/*.d src/*.o
 
 # Automatically include dependency files if they exist
-DEPS := $(OBJ_CPP:.o=.d) $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_BIND:.o=.d) \
-        $(SRC_LOCAL:.cu=.d) $(SRC_REMOTE:.cu=.d) $(SRC_DUAL:.cu=.d) \
-        $(EP_OBJ:.o=.d)
+DEPS := $(OBJ_CPP:.o=.d) $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_BIND:.o=.d)
 -include $(DEPS)
