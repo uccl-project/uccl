@@ -166,16 +166,7 @@ FifoProxy::~FifoProxy() { stop(); }
 
 void FifoProxy::set_fifo(mscclpp::Fifo* fifo) { fifo_ = fifo; }
 
-void FifoProxy::set_peers_meta(
-    std::vector<std::tuple<int, uintptr_t, size_t, std::string>> const& meta) {
-  peers_meta_ = meta;
-
-  // Convert to PeerMeta format for Proxy
-  std::vector<PeerMeta> peer_metas;
-  for (auto const& [rank, ptr, nbytes, ip] : meta) {
-    peer_metas.push_back({rank, ptr, nbytes, ip});
-  }
-
+void FifoProxy::set_peers_meta(std::vector<PeerMeta> const& meta) {
   // Create Proxy::Config
   // Note: we don't pass ring_buffers since we're using FIFO
   Proxy::Config cfg;
@@ -195,7 +186,7 @@ void FifoProxy::set_peers_meta(
 
   // Create the underlying Proxy
   proxy_ = std::make_unique<Proxy>(cfg);
-  proxy_->set_peers_meta(peer_metas);
+  proxy_->set_peers_meta(meta);
 }
 
 void FifoProxy::start_sender() {
