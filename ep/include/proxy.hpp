@@ -29,6 +29,7 @@ struct PeerMeta {
   uintptr_t ptr;
   size_t nbytes;
   std::string ip;
+  int listen_ports[kNumProxyThs];
 };
 
 class Proxy {
@@ -52,13 +53,9 @@ class Proxy {
     bool is_intranode = false;
   };
 
-  explicit Proxy(Config const& cfg) : cfg_(cfg) {
-    // Initialize state tracking for each ring buffer
-#ifndef USE_MSCCLPP_FIFO_BACKEND
-    ring_tails_.resize(cfg_.d2h_queues.size(), 0);
-    ring_seen_.resize(cfg_.d2h_queues.size(), 0);
-#endif
-  }
+  Proxy(Config const& cfg);
+
+  int get_listen_port() const { return listen_port_; }
 
   void set_progress_run(bool run) {
     ctx_.progress_run.store(run, std::memory_order_release);
@@ -117,6 +114,10 @@ class Proxy {
   // Sender loop aggregates
   std::chrono::duration<double, std::micro> total_rdma_write_durations_ =
       std::chrono::duration<double, std::micro>::zero();
+
+  // For exchanging RDMA metadata with peers.
+  int listen_fd_;
+  int listen_port_;
 
   std::vector<PeerMeta> peers_;
   std::vector<std::unique_ptr<ProxyCtx>> ctxs_for_all_ranks_;

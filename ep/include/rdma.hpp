@@ -291,8 +291,8 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
 // Post an RDMA write
 void post_receive_buffer_for_imm(ProxyCtx& S);
 
-void exchange_connection_info(int rank, char const* peer_ip, int tid,
-                              RDMAConnectionInfo* local,
+void exchange_connection_info(int virt_rank, int listen_fd, char const* peer_ip,
+                              int peer_listen_port, RDMAConnectionInfo* local,
                               RDMAConnectionInfo* remote);
 
 void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,

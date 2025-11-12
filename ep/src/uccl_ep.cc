@@ -2122,7 +2122,7 @@ PYBIND11_MODULE(ep, m) {
     return std::string(cudaGetErrorString(st));
   });
   m.def("is_sm90_compiled", is_sm90_compiled);
-  m.def("get_num_proxy_threads", []() { return kNumThBlocks; });
+  m.def("get_num_proxy_threads", []() { return kNumProxyThs; });
   m.def(
       "stream_query",
       [](uintptr_t stream_ptr) {
@@ -2153,6 +2153,7 @@ PYBIND11_MODULE(ep, m) {
       .def("start_local", &UcclProxy::start_local)
       .def("start_dual", &UcclProxy::start_dual)
       .def("stop", &UcclProxy::stop)
+      .def("get_listen_port", &UcclProxy::get_listen_port)
       .def("get_atomic_buffer_ptr", &UcclProxy::get_atomic_buffer_ptr)
       .def("set_atomic_buffer_ptr", &UcclProxy::set_atomic_buffer_ptr)
       .def("set_dispatch_recv_data_offset",
@@ -2180,6 +2181,21 @@ PYBIND11_MODULE(ep, m) {
                   pm.nbytes = static_cast<size_t>(
                       py::cast<unsigned long long>(d["nbytes"]));
                   pm.ip = py::cast<std::string>(d["ip"]);
+
+                  // Handle listen_ports array (always present)
+                  auto ports = d["listen_ports"].cast<py::sequence>();
+                  size_t port_count =
+                      std::min(static_cast<size_t>(py::len(ports)),
+                               static_cast<size_t>(kNumProxyThs));
+                  for (size_t i = 0; i < port_count; ++i) {
+                    pm.listen_ports[i] = ports[i].cast<int>();
+                  }
+                  // Initialize remaining ports to 0 if fewer than kNumProxyThs
+                  // provided
+                  for (size_t i = port_count; i < kNumProxyThs; ++i) {
+                    pm.listen_ports[i] = 0;
+                  }
+
                   v.push_back(std::move(pm));
                 } else {
                   v.push_back(obj.cast<PeerMeta>());
@@ -2195,6 +2211,20 @@ PYBIND11_MODULE(ep, m) {
               pm.nbytes = static_cast<size_t>(
                   py::cast<unsigned long long>(d["nbytes"]));
               pm.ip = py::cast<std::string>(d["ip"]);
+
+              // Handle listen_ports array (always present)
+              auto ports = d["listen_ports"].cast<py::sequence>();
+              size_t port_count = std::min(static_cast<size_t>(py::len(ports)),
+                                           static_cast<size_t>(kNumProxyThs));
+              for (size_t i = 0; i < port_count; ++i) {
+                pm.listen_ports[i] = ports[i].cast<int>();
+              }
+              // Initialize remaining ports to 0 if fewer than kNumProxyThs
+              // provided
+              for (size_t i = port_count; i < kNumProxyThs; ++i) {
+                pm.listen_ports[i] = 0;
+              }
+
               v.push_back(std::move(pm));
             }
             self.set_peers_meta(v);
@@ -2284,19 +2314,33 @@ PYBIND11_MODULE(ep, m) {
       .def("set_fifo", &FifoProxy::set_fifo, py::arg("fifo"))
       .def("set_peers_meta",
            [](FifoProxy& proxy, py::list meta_list) {
-             std::vector<std::tuple<int, uintptr_t, size_t, std::string>> vec;
+             std::vector<PeerMeta> vec;
              for (py::handle h : meta_list) {
-               // Handle both dict and tuple formats
                if (py::isinstance<py::dict>(h)) {
                  auto d = h.cast<py::dict>();
-                 vec.emplace_back(
-                     d["rank"].cast<int>(), d["ptr"].cast<uintptr_t>(),
-                     d["nbytes"].cast<size_t>(), d["ip"].cast<std::string>());
+                 PeerMeta pm;
+                 pm.rank = d["rank"].cast<int>();
+                 pm.ptr = d["ptr"].cast<uintptr_t>();
+                 pm.nbytes = d["nbytes"].cast<size_t>();
+                 pm.ip = d["ip"].cast<std::string>();
+
+                 // Handle listen_ports array (always present)
+                 auto ports = d["listen_ports"].cast<py::sequence>();
+                 size_t port_count =
+                     std::min(static_cast<size_t>(py::len(ports)),
+                              static_cast<size_t>(kNumProxyThs));
+                 for (size_t i = 0; i < port_count; ++i) {
+                   pm.listen_ports[i] = ports[i].cast<int>();
+                 }
+                 // Initialize remaining ports to 0 if fewer than kNumProxyThs
+                 // provided
+                 for (size_t i = port_count; i < kNumProxyThs; ++i) {
+                   pm.listen_ports[i] = 0;
+                 }
+
+                 vec.push_back(std::move(pm));
                } else {
-                 auto t = h.cast<py::tuple>();
-                 vec.emplace_back(t[0].cast<int>(), t[1].cast<uintptr_t>(),
-                                  t[2].cast<size_t>(),
-                                  t[3].cast<std::string>());
+                 vec.push_back(h.cast<PeerMeta>());
                }
              }
              proxy.set_peers_meta(vec);
@@ -2304,6 +2348,7 @@ PYBIND11_MODULE(ep, m) {
       .def("start_sender", &FifoProxy::start_sender)
       .def("start_remote", &FifoProxy::start_remote)
       .def("stop", &FifoProxy::stop)
+      .def("get_listen_port", &FifoProxy::get_listen_port)
       .def("avg_wr_latency_us", &FifoProxy::avg_wr_latency_us)
       .def("processed_count", &FifoProxy::processed_count)
       .def_readonly("thread_idx", &FifoProxy::thread_idx);
