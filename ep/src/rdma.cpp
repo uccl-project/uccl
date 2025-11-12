@@ -248,12 +248,9 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 
   if (S.rkey != 0) {
     fprintf(stderr, "Warning: rkey already set (%x), overwriting\n", S.rkey);
+    exit(1);
   }
 
-  if (S.mr->rkey == 0) {
-    fprintf(stderr, "rkey equals 0!\n");
-    std::abort();
-  }
   S.rkey = S.mr->rkey;
 }
 
