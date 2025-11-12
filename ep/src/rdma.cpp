@@ -1062,9 +1062,12 @@ static void post_rdma_async_batched_fast_mode(
                                                get_low_latency(cmd.cmd_type)};
 #endif
 #ifdef USE_RECEIVER_BARRIER
+        
+        printf("Posting write. expert_idx=%d, num_tokens: %ld, dst_rank=%d\n",
+               cmd.expert_idx, expert_k, dst_rank);
         uint32_t imm = WriteImm::Pack(get_is_combine(cmd.cmd_type),
                                       get_low_latency(cmd.cmd_type),
-                                      cmd.expert_idx, 1, my_rank)
+                                      cmd.expert_idx, cmd.atomic_val == 0 ? 1 : cmd.atomic_val, my_rank)
                            .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
 #else
