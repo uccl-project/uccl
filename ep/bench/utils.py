@@ -107,12 +107,13 @@ def _discover_local_ip():
         s.close()
 
 
-def get_cpu_proxies_meta(rank, scratch_ptr, scratch_bytes, num_ranks, group):
+def get_cpu_proxies_meta(proxies, rank, scratch_ptr, scratch_bytes, num_ranks, group):
     meta = {
         "rank": rank,
         "ptr": int(scratch_ptr),
         "nbytes": int(scratch_bytes),
         "ip": _discover_local_ip(),
+        "listen_ports": [proxy.get_listen_port() for proxy in proxies],
     }
     all_meta = [None] * num_ranks
     device_index = int(os.environ.get("LOCAL_RANK", 0))
@@ -349,15 +350,21 @@ def bench_kineto(
                 if barrier_comm_profiling:
                     current_device = torch.cuda.current_device()
                     lhs = torch.randn(
-                        (8192, 8192), dtype=torch.float, device=f"cuda:{current_device}"
+                        (8192, 8192),
+                        dtype=torch.float,
+                        device=f"cuda:{current_device}",
                     )
                     rhs = torch.randn(
-                        (8192, 8192), dtype=torch.float, device=f"cuda:{current_device}"
+                        (8192, 8192),
+                        dtype=torch.float,
+                        device=f"cuda:{current_device}",
                     )
                     lhs @ rhs
                     dist.all_reduce(
                         torch.ones(
-                            1, dtype=torch.float, device=f"cuda:{current_device}"
+                            1,
+                            dtype=torch.float,
+                            device=f"cuda:{current_device}",
                         )
                     )
                 for _ in range(num_tests):
@@ -448,11 +455,6 @@ def initialize_uccl(
         raise ValueError("WORLD_SIZE must be divisible by LOCAL_WORLD_SIZE")
 
     proxies = []
-    rank2meta = get_cpu_proxies_meta(
-        rank, scratch_ptr, scratch_nbytes, num_ranks, group
-    )
-    peers_meta_list = [rank2meta[r] for r in range(num_ranks)]
-
     for i in range(ep.get_num_proxy_threads()):
         proxy = ep.Proxy(
             thread_idx=i,
@@ -467,9 +469,17 @@ def initialize_uccl(
             use_normal_mode=use_normal_mode,
             is_intranode=is_intranode,
         )
-        if not is_intranode:
-            proxy.set_peers_meta(peers_meta_list)
         proxies.append(proxy)
+
+    rank2meta = get_cpu_proxies_meta(
+        proxies, rank, scratch_ptr, scratch_nbytes, num_ranks, group
+    )
+    peers_meta_list = [rank2meta[r] for r in range(num_ranks)]
+
+    if not is_intranode:
+        for proxy in proxies:
+            proxy.set_peers_meta(peers_meta_list)
+
     ep.register_proxies(local_rank, proxies)
 
     dist.barrier(group)

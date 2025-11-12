@@ -39,44 +39,32 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-void exchange_connection_info(int rank, char const* peer_ip, int tid,
-                              RDMAConnectionInfo* local,
+void exchange_connection_info(int virt_rank, int listen_fd, char const* peer_ip,
+                              int peer_listen_port, RDMAConnectionInfo* local,
                               RDMAConnectionInfo* remote) {
   int sockfd;
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
-  if (rank == 0) {
-    // Listen
-    int listenfd = socket(AF_INET, SOCK_STREAM, 0);
-    int one = 1;
-    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(TCP_PORT + tid);
-    addr.sin_addr.s_addr = INADDR_ANY;
-    if (bind(listenfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
-      perror("bind failed");
-      exit(1);
-    }
-    listen(listenfd, 1);
-
+  if (virt_rank == 0) {
+    // Already listen when calling uccl::create_listen_socket().
     socklen_t len = sizeof(addr);
-    sockfd = accept(listenfd, (struct sockaddr*)&addr, &len);
-    close(listenfd);
+    sockfd = accept(listen_fd, (struct sockaddr*)&addr, &len);
+    close(listen_fd);
   } else {
     // Connect
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     int one = 1;
     setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(TCP_PORT + tid);
+    addr.sin_port = htons(peer_listen_port);
     inet_pton(AF_INET, peer_ip, &addr.sin_addr);
 
     int retry = 0;
     while (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
       if (errno == ECONNREFUSED || errno == ENETUNREACH) {
         if (++retry > MAX_RETRIES) {
-          fprintf(stderr, "Rank %d: failed to connect after %d retries\n", rank,
-                  retry);
+          fprintf(stderr, "VirtRank %d: failed to connect after %d retries\n",
+                  virt_rank, retry);
           exit(1);
         }
         usleep(RETRY_DELAY_MS * 1000);  // sleep 200 ms
@@ -682,7 +670,7 @@ void post_receive_buffer_for_imm_on_qp(ProxyCtx& S, ibv_qp* qp) {
   std::vector<ibv_recv_wr> wrs(kMaxOutstandingRecvs);
   std::vector<ibv_sge> sges(kMaxOutstandingRecvs);
   for (size_t i = 0; i < kMaxOutstandingRecvs; ++i) {
-    size_t offset = (i < kNumThBlocks) ? i : (i % kNumThBlocks);
+    size_t offset = (i < kNumProxyThs) ? i : (i % kNumProxyThs);
     sges[i] = {(uintptr_t)S.mr->addr + offset * kObjectSize, kObjectSize,
                S.mr->lkey};
     wrs[i] = {.wr_id = make_wr_id(S.tag, (uint32_t)i),

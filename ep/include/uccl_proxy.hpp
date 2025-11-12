@@ -27,6 +27,7 @@ class UcclProxy {
   void start_local();
   void start_dual();
   void stop();
+  int get_listen_port() const { return proxy_->get_listen_port(); }
 
   // Set the offset of dispatch_rdma_recv_data_buffer within rdma_buffer
   void set_dispatch_recv_data_offset(uintptr_t offset) {
@@ -111,12 +112,12 @@ class FifoProxy {
   ~FifoProxy();
 
   void set_fifo(mscclpp::Fifo* fifo);
-  void set_peers_meta(
-      std::vector<std::tuple<int, uintptr_t, size_t, std::string>> const& meta);
+  void set_peers_meta(std::vector<PeerMeta> const& meta);
 
   void start_sender();
   void start_remote();
   void stop();
+  int get_listen_port() const { return proxy_->get_listen_port(); }
 
   double avg_wr_latency_us() const;
   uint64_t processed_count() const;
@@ -138,6 +139,4 @@ class FifoProxy {
   int node_idx_;
   int local_rank_;
   bool is_intranode_;
-
-  std::vector<std::tuple<int, uintptr_t, size_t, std::string>> peers_meta_;
 };

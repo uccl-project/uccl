@@ -2,6 +2,7 @@
 #include "bench_utils.hpp"
 #include "d2h_queue_host.hpp"
 #include "ep_util.hpp"
+#include "util/util.h"
 #include <arpa/inet.h>  // for htonl, ntohl
 #include <chrono>
 #include <cstdlib>
@@ -77,6 +78,15 @@ void unmap_local_barrier_shm(std::string const& name, LocalBarrier* lb,
 }
 #endif
 
+Proxy::Proxy(Config const& cfg) : cfg_(cfg) {
+  // Initialize state tracking for each ring buffer
+  listen_port_ = uccl::create_listen_socket(&listen_fd_);
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+  ring_tails_.resize(cfg_.d2h_queues.size(), 0);
+  ring_seen_.resize(cfg_.d2h_queues.size(), 0);
+#endif
+}
+
 double Proxy::avg_rdma_write_us() const {
   if (kIterations == 0) return 0.0;
   return total_rdma_write_durations_.count() / static_cast<double>(kIterations);
@@ -93,7 +103,7 @@ uint64_t Proxy::completed_wr() const { return completion_count_; }
 void Proxy::pin_thread_to_cpu_wrapper() {
   if (cfg_.pin_thread) {
     // TODO(MaoZiming): improves pinning.
-    pin_thread_to_cpu(cfg_.thread_idx + cfg_.local_rank * kNumThBlocks);
+    pin_thread_to_cpu(cfg_.thread_idx + cfg_.local_rank * kNumProxyThs);
     int cpu = sched_getcpu();
     if (cpu == -1) {
       perror("sched_getcpu");
@@ -110,7 +120,7 @@ void Proxy::pin_thread_to_numa_wrapper() {
   if (cfg_.pin_thread) {
     assert(ctx_.numa_node != -1);
     pin_thread_unique(ctx_.numa_node, cfg_.local_rank, cfg_.thread_idx,
-                      kNumThBlocks);
+                      kNumProxyThs);
 
     // Get the actual CPU this thread is running on
     int cpu = sched_getcpu();
@@ -157,11 +167,6 @@ void Proxy::set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs) {
     d2hq::init_from_addr(h, addr);  // unified initialization
     cfg_.d2h_queues.push_back(h);
   }
-}
-
-static inline int pair_tid_block(int a, int b, int N, int thread_idx) {
-  int lo = std::min(a, b), hi = std::max(a, b);
-  return thread_idx * (N * N) + lo * N + hi;
 }
 
 void Proxy::init_common() {
@@ -238,12 +243,12 @@ void Proxy::init_common() {
     if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
       continue;
     bool const i_listen = (my_rank < peer);
-    int const tid = pair_tid_block(my_rank, peer, num_ranks, cfg_.thread_idx);
-    char const* ip = peers_[peer].ip.c_str();
+    char const* peer_ip = peers_[peer].ip.c_str();
+    int const peer_listen_port = peers_[peer].listen_ports[cfg_.thread_idx];
 
     int virt_rank = i_listen ? 0 : 1;
-    exchange_connection_info(virt_rank, ip, tid, &local_infos_[peer],
-                             &remote_infos_[peer]);
+    exchange_connection_info(virt_rank, listen_fd_, peer_ip, peer_listen_port,
+                             &local_infos_[peer], &remote_infos_[peer]);
     if (remote_infos_[peer].addr != peers_[peer].ptr) {
       fprintf(stderr,
               "Rank %d thread %d: Warning: remote addr mismatch for peer %d: "
