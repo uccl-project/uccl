@@ -18,7 +18,8 @@ class UcclProxy {
  public:
   UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr, size_t total_size,
             int rank, int node_idx, int local_rank, int num_experts = 0,
-            int num_ranks = 0, int num_nodes = 0, bool use_normal_mode = false, bool is_intranode = false);
+            int num_ranks = 0, int num_nodes = 0, bool use_normal_mode = false,
+            bool is_intranode = false);
   ~UcclProxy();
 
   void start_sender();
@@ -82,7 +83,6 @@ class UcclProxy {
   enum class Mode { None, Sender, Remote, Local, Dual };
   void start(Mode m);
 
-  bool is_intranode_;
   std::unique_ptr<Proxy> proxy_;
   std::thread thread_;
   Mode mode_;
@@ -94,6 +94,7 @@ class UcclProxy {
   int local_rank_;
   void* atomic_buffer_ptr_;
   int node_idx_;
+  bool is_intranode_;
   std::vector<d2hq::HostD2HHandle> d2h_queues;
   std::vector<std::unique_ptr<mscclpp::Fifo>> fifos;
 };
@@ -106,7 +107,7 @@ class UcclProxy {
 class FifoProxy {
  public:
   FifoProxy(int thread_idx, uintptr_t gpu_buffer_addr, size_t total_size,
-            int rank, int node_idx, int local_rank, std::string const& peer_ip);
+            int rank, int node_idx, int local_rank, bool is_intranode = false);
   ~FifoProxy();
 
   void set_fifo(mscclpp::Fifo* fifo);

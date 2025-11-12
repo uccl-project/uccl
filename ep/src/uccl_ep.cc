@@ -2145,10 +2145,9 @@ PYBIND11_MODULE(ep, m) {
                     bool>(),
            py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
            py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
-           py::arg("local_rank") = 0, py::arg("peer_ip") = std::string(),
-           py::arg("num_experts") = -1, py::arg("num_ranks") = -1,
-           py::arg("num_nodes") = 0, py::arg("use_normal_mode") = false,
-           py::arg("is_intranode") = false)
+           py::arg("local_rank") = 0, py::arg("num_experts") = -1,
+           py::arg("num_ranks") = -1, py::arg("num_nodes") = 0,
+           py::arg("use_normal_mode") = false, py::arg("is_intranode") = false)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)
@@ -2227,8 +2226,6 @@ PYBIND11_MODULE(ep, m) {
       .def("timing_start", &Bench::timing_start)
       .def("timing_stop", &Bench::timing_stop)
       .def("is_running", &Bench::is_running)
-      .def("start_local_proxies", &Bench::start_local_proxies,
-           py::arg("rank") = 0, py::arg("peer_ip") = std::string())
       .def("launch_gpu_issue_batched_commands",
            &Bench::launch_gpu_issue_batched_commands)
       .def("sync_stream", &Bench::sync_stream)

@@ -65,23 +65,6 @@ void Bench::timing_stop() {
   have_t1_ = true;
 }
 
-void Bench::start_local_proxies(int rank, std::string const& peer_ip) {
-  if (running_.load(std::memory_order_acquire)) {
-    throw std::runtime_error("Proxies already running");
-  }
-
-  threads_.reserve(env_.blocks);
-  for (int i = 0; i < env_.blocks; ++i) {
-    threads_.emplace_back([this, i, rank, peer_ip]() {
-      Proxy p{
-          make_cfg(env_, i, rank, peer_ip.empty() ? nullptr : peer_ip.c_str())};
-      p.run_local();
-    });
-  }
-
-  running_.store(true, std::memory_order_release);
-}
-
 void Bench::launch_gpu_issue_batched_commands() {
   timing_start();
 

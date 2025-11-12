@@ -119,14 +119,14 @@ inline void destroy_env(BenchEnv& env) {
 }
 
 inline Proxy::Config make_cfg(BenchEnv const& env, int thread_idx, int rank,
-                              char const* peer_ip, void* gpu_buffer = nullptr,
+                              bool is_intranode, void* gpu_buffer = nullptr,
                               size_t total_size = 0, bool pin_thread = true) {
   Proxy::Config cfg{};
   // expose unified handle only
   cfg.d2h_queues.push_back(env.d2h_queues.at(thread_idx));
   cfg.thread_idx = thread_idx;
   cfg.rank = rank;
-  cfg.peer_ip = peer_ip;
+  cfg.is_intranode = is_intranode;
   cfg.gpu_buffer = gpu_buffer;
   cfg.total_size = total_size;
   cfg.pin_thread = pin_thread;

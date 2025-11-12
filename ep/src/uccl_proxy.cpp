@@ -11,9 +11,13 @@
 #include <unordered_set>
 
 UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
-                     size_t total_size, int rank, int node_idx, int local_rank, int num_experts, int num_ranks,
-                     int num_nodes, bool use_normal_mode, bool is_intranode)
-    : thread_{}, mode_{Mode::None}, running_{false}, is_intranode_{is_intranode} {
+                     size_t total_size, int rank, int node_idx, int local_rank,
+                     int num_experts, int num_ranks, int num_nodes,
+                     bool use_normal_mode, bool is_intranode)
+    : thread_{},
+      mode_{Mode::None},
+      running_{false},
+      is_intranode_{is_intranode} {
   // EP 8 of internode_ll also need atomic_buffer_ptr
 
   Proxy::Config cfg{};
