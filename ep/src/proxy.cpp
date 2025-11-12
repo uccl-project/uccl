@@ -242,19 +242,27 @@ void Proxy::init_common() {
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
     if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
       continue;
-    bool const i_listen = (my_rank < peer);
-    char const* peer_ip = peers_[peer].ip.c_str();
-    int const peer_listen_port = peers_[peer].listen_ports[cfg_.thread_idx];
 
-    int virt_rank = i_listen ? 0 : 1;
-    exchange_connection_info(virt_rank, listen_fd_, peer_ip, peer_listen_port,
-                             &local_infos_[peer], &remote_infos_[peer]);
-    if (remote_infos_[peer].addr != peers_[peer].ptr) {
+    int actual_peer;
+    if (my_rank < peer) {
+      exchange_connection_info_as_server(my_rank, &actual_peer, listen_fd_,
+                                         &local_infos_[peer],
+                                         remote_infos_.data());
+    } else {
+      actual_peer = peer;
+      char const* peer_ip = peers_[peer].ip.c_str();
+      int const peer_listen_port = peers_[peer].listen_ports[cfg_.thread_idx];
+      exchange_connection_info_as_client(my_rank, peer, peer_ip,
+                                         peer_listen_port, &local_infos_[peer],
+                                         remote_infos_.data());
+    }
+
+    if (remote_infos_[actual_peer].addr != peers_[actual_peer].ptr) {
       fprintf(stderr,
               "Rank %d thread %d: Warning: remote addr mismatch for peer %d: "
               "got 0x%lx, expected 0x%lx\n",
-              my_rank, cfg_.thread_idx, peer, remote_infos_[peer].addr,
-              peers_[peer].ptr);
+              my_rank, cfg_.thread_idx, actual_peer,
+              remote_infos_[actual_peer].addr, peers_[actual_peer].ptr);
       std::abort();
     }
   }
