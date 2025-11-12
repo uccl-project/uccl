@@ -177,7 +177,7 @@ def test_main(
                                     if return_recv_hook
                                     else event.current_stream_wait()
                                 )
-                                print("low_latency_dispatch done", flush=True)
+                                # print("low_latency_dispatch done", flush=True)
                             packed_recv_x = (
                                 (packed_recv_x[0], packed_recv_x[1].contiguous())
                                 if dispatch_use_fp8
@@ -236,8 +236,8 @@ def test_main(
                                     recv_x = recv_x[:num_valid_tokens]
                                     recv_x_amin = recv_x[:, :-128].amin(dim=-1)
                                     recv_src_info = recv_src_info[:num_valid_tokens]
-                                    print("recv_x_amin: ", recv_x_amin)
-                                    print("recv_x_amax: ", recv_x[:, :-128].amax(dim=-1))
+                                    # print("recv_x_amin: ", recv_x_amin)
+                                    # print("recv_x_amax: ", recv_x[:, :-128].amax(dim=-1))
                                     assert torch.equal(
                                         recv_x_amin, recv_x[:, :-128].amax(dim=-1)
                                     )

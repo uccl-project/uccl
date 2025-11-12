@@ -93,7 +93,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       sizeof(int4) + (kUseFP8 ? (kHidden + num_scales * sizeof(float))
                               : (kHidden * sizeof(nv_bfloat16)));
   size_t const num_int4_per_msg = num_bytes_per_msg / sizeof(int4);
-  constexpr int kPrevSlotsToCheck = 1;
+  constexpr int kPrevSlotsToCheck = 6;
   EP_STATIC_ASSERT(kPrevSlotsToCheck > 0, "Chunk size must be positive");
   EP_DEVICE_ASSERT(num_bytes_per_msg % sizeof(int4) == 0);
 
@@ -255,15 +255,16 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                       : kPrevSlotsToCheck;
               chunk_start_slot = slot_idx - (chunk_len_slots - 1);
             
-              printf("[dispatch] warp_id: %d, token_idx: %d, dst_expert_idx: %d, slot_idx:"
-                    " %d, issue_chunk_send: %d, chunk_len_slots: %d, num_tokens_for_expert: %d\n",
-                    warp_id, token_idx, dst_expert_idx, slot_idx, issue_chunk_send, chunk_len_slots, num_tokens_for_expert);
+              // printf("[dispatch] warp_id: %d, token_idx: %d, dst_expert_idx: %d, slot_idx:"
+              //       " %d, issue_chunk_send: %d, chunk_len_slots: %d, num_tokens_for_expert: %d\n",
+              //       warp_id, token_idx, dst_expert_idx, slot_idx, issue_chunk_send, chunk_len_slots, num_tokens_for_expert);
             }
 
           }
         }
         issue_chunk_send = __shfl_sync(WARP_MASK, issue_chunk_send, 0);
         chunk_start_slot = __shfl_sync(WARP_MASK, chunk_start_slot, 0);
+        chunk_len_slots = __shfl_sync(WARP_MASK, chunk_len_slots, 0);
 
         if (issue_chunk_send) {
         if (lane_id == 0) {
@@ -300,10 +301,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             static_cast<size_t>(chunk_len_slots) * num_bytes_per_msg;
         if (dst_p2p_ptr == 0) {
           __threadfence_system();
-          if (lane_id == 0) {
-            printf("[dispatch] IBGDA PUT dst_rank: %d, dst_expert_idx:"
-                    " %d, slot_idx: %d, chunk_bytes: %llu\n", dst_rank, dst_expert_idx, slot_idx, (unsigned long long)chunk_bytes);
-          }
+          // if (lane_id == 0) {
+          //   printf("[dispatch] IBGDA PUT dst_rank: %d, dst_expert_idx:"
+          //           " %d, slot_idx: %d, chunk_bytes: %llu\n", dst_rank, dst_expert_idx, slot_idx, (unsigned long long)chunk_bytes);
+          // }
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
               src_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
@@ -322,10 +323,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         __syncwarp();
 
         if (chunk_len_slots > 0) {
-          if (lane_id == 0) {
-            printf("update atomic_finish_counter_per_expert for dst_expert_idx: %d, chunk_len_slots: %d\n",
-                  dst_expert_idx, chunk_len_slots);
-          }
+          // if (lane_id == 0) {
+          //   printf("update atomic_finish_counter_per_expert for dst_expert_idx: %d, chunk_len_slots: %d\n",
+          //         dst_expert_idx, chunk_len_slots);
+          // }
           lane_id == 0 ? atomic_add_release_global(
                             atomic_finish_counter_per_expert + dst_expert_idx, chunk_len_slots)
                       : 0;
@@ -373,9 +374,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         atomic_add_release_global(atomic_finish_counter_per_expert + i,
                                   FINISHED_SUM_TAG - sum);
       }
-      if (lane_id == 0)
-        printf("sm_id: %d, atomic_finish_counter_per_expert subtract for expert_idx: %d, sum: %d\n", sm_id,
-              i, sum);
+      // if (lane_id == 0)
+      //   printf("sm_id: %d, atomic_finish_counter_per_expert subtract for expert_idx: %d, sum: %d\n", sm_id,
+      //         i, sum);
     }
   }
   __syncthreads();
@@ -405,10 +406,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             : 0;
     if (dst_p2p_ptr == 0) {
       // Inter-node or no IPC: use IBGDA atomic
-      if (lane_id == 0) {
-        printf("[dispatch] IBGDA AMO dst_rank: %d, dst_expert_idx: %d, num_tokens_sent: %d\n",
-               dst_rank, responsible_expert_idx, num_tokens_sent);
-      }
+      // if (lane_id == 0) {
+      //   printf("[dispatch] IBGDA AMO dst_rank: %d, dst_expert_idx: %d, num_tokens_sent: %d\n",
+      //          dst_rank, responsible_expert_idx, num_tokens_sent);
+      // }
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
           dst_ptr_internode, reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           -num_tokens_sent - 1, dst_rank,
@@ -676,9 +677,9 @@ __global__ __launch_bounds__(1024, 1) void combine(
     void* combined_x, void* rdma_recv_x, int* rdma_recv_flag, void* rdma_send_x,
     void const* x, int64_t const* topk_idx, float const* topk_weights,
     int const* src_info, int64_t const* layout_range,
-    int64_t* combine_wait_recv_cost_stats, int* next_clean,
-    int* next_clean_second, int num_next_clean_int, int* atomic_clean_flag,
-    int num_combined_tokens, int hidden, int num_topk,
+  int64_t* combine_wait_recv_cost_stats, int* next_clean,
+  int* next_clean_second, int num_next_clean_int, int* atomic_clean_flag,
+  int* token_ready_flags, int num_combined_tokens, int hidden, int num_topk,
     int num_max_dispatch_tokens_per_rank, int num_experts, int rank,
     int num_ranks, int num_warp_groups, int num_warps_per_group, int phases,
     bool zero_copy, uint64_t const* d2h_channel_addrs,
@@ -709,6 +710,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
   constexpr size_t num_bytes_per_slot = kHidden * sizeof(nv_bfloat16);
   EP_STATIC_ASSERT(num_bytes_per_slot % sizeof(int4) == 0,
                    "Invalid vectorization");
+  constexpr int kPrevSlotsToCheck = 4;
+  EP_STATIC_ASSERT(kPrevSlotsToCheck > 0, "Chunk size must be positive");
 
   // Sending phase
   if ((phases & LOW_LATENCY_SEND_PHASE) == 0) goto LOW_LATENCY_COMBINE_RECV;
@@ -743,6 +746,9 @@ __global__ __launch_bounds__(1024, 1) void combine(
                                  local_expert_idx * num_ranks *
                                      num_max_dispatch_tokens_per_rank *
                                      num_bytes_per_slot;
+    auto ready_flags_per_expert = token_ready_flags +
+                    responsible_expert_idx *
+                      num_max_dispatch_tokens_per_rank;
 
     // Unpack layout
     int offset, num_tokens_to_send;
@@ -821,6 +827,12 @@ __global__ __launch_bounds__(1024, 1) void combine(
               ? uccl::get_ipc_p2p_ptr(dst_ptr, ipc_rdma_base_ptrs, rank,
                                       dst_rank, max_nvl_peers, 0)
               : 0;
+      auto const local_slot = token_idx - offset;
+
+      if (dst_p2p_ptr == 0 && lane_id == 0) {
+        EP_DEVICE_ASSERT(local_slot < num_max_dispatch_tokens_per_rank);
+        st_release_sys_global(ready_flags_per_expert + local_slot, 0);
+      }
 
       if (not zero_copy or dst_p2p_ptr != 0) {
         // Read from `cpy_src_int4_ptr` and copy into `cpy_dst_int4_ptr`
@@ -957,16 +969,102 @@ __global__ __launch_bounds__(1024, 1) void combine(
       // NOTES: for zero-copy mode, we assume the data is already in the send
       // buffer
       if (dst_p2p_ptr == 0) {
-        __threadfence_system();
-        nvshmemi_ibgda_put_nbi_warp(
-            dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
-            buf_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
-            hidden * sizeof(nv_bfloat16), dst_rank,
-            /*warp_id=*/global_expert_idx,  // NOTE(Yang): for selecting rb.
-            // NOTE(Ziming): this is global_expert_idx because destination is
-            // indexed by global_expert_idx
-            lane_id, token_idx - offset, d2h_channel_addrs,
-            num_d2h_channel_addrs, true, low_latency_buffer_idx);
+        if (lane_id == 0)
+          st_release_sys_global(ready_flags_per_expert + local_slot, 1);
+        __syncwarp();
+
+        bool issue_chunk_send = false;
+        int chunk_start_slot = local_slot;
+        int chunk_len_slots = 0;
+        int chunk_start_token_idx = 0;
+
+        if (lane_id == 0) {
+          issue_chunk_send = ((local_slot + 1) % kPrevSlotsToCheck) == 0 ||
+                             (local_slot == num_tokens_to_send - 1);
+          if (issue_chunk_send) {
+            chunk_len_slots =
+                (local_slot == num_tokens_to_send - 1)
+                    ? ((local_slot % kPrevSlotsToCheck) + 1)
+                    : kPrevSlotsToCheck;
+            chunk_start_slot = local_slot - (chunk_len_slots - 1);
+            chunk_start_token_idx = offset + chunk_start_slot;
+            for (int i = 0; i < chunk_len_slots; ++i) {
+              auto const* flag_ptr =
+                  ready_flags_per_expert + chunk_start_slot + i;
+              while (ld_acquire_sys_global(flag_ptr) == 0) {}
+            }
+          }
+        }
+
+        issue_chunk_send = __shfl_sync(WARP_MASK, issue_chunk_send, 0);
+        chunk_start_slot = __shfl_sync(WARP_MASK, chunk_start_slot, 0);
+        chunk_len_slots = __shfl_sync(WARP_MASK, chunk_len_slots, 0);
+        chunk_start_token_idx = __shfl_sync(WARP_MASK, chunk_start_token_idx, 0);
+
+        if (issue_chunk_send) {
+          int remaining_slots = chunk_len_slots;
+          int segment_token_idx = chunk_start_token_idx;
+          int segment_slot = chunk_start_slot;
+          while (remaining_slots > 0) {
+            int segment_src_idx = 0;
+            int segment_len_slots = 1;
+            if (lane_id == 0) {
+              segment_src_idx = __ldg(local_src_info + segment_token_idx);
+              for (int i = 1; i < remaining_slots; ++i) {
+                auto next_src_idx =
+                    __ldg(local_src_info + segment_token_idx + i);
+                if (next_src_idx != segment_src_idx + i) break;
+                ++segment_len_slots;
+              }
+            }
+            segment_src_idx = __shfl_sync(WARP_MASK, segment_src_idx, 0);
+            segment_len_slots =
+                __shfl_sync(WARP_MASK, segment_len_slots, 0);
+
+            auto const segment_dst_ptr =
+                reinterpret_cast<uint64_t>(rdma_recv_x) +
+                (global_expert_idx * num_max_dispatch_tokens_per_rank +
+                 segment_src_idx) *
+                    num_bytes_per_slot;
+            auto const segment_src_ptr =
+                reinterpret_cast<uint64_t>(rdma_send_x_vec) +
+                static_cast<uint64_t>(segment_token_idx) *
+                    num_bytes_per_slot;
+            auto const segment_bytes =
+                static_cast<size_t>(segment_len_slots) * num_bytes_per_slot;
+
+            __threadfence_system();
+            // if (lane_id == 0)
+            //   if (segment_len_slots > 1)
+            //     printf("[combine] IBGDA put_nbi_warp: expert %d, dst_rank "
+            //           "%d, slot %d, len %d\n",
+            //           global_expert_idx, dst_rank, segment_slot,
+            //           segment_len_slots);
+            uccl::nvshmemi_ibgda_put_nbi_warp(
+                segment_dst_ptr -
+                    reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+                segment_src_ptr -
+                    reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+                segment_bytes, dst_rank,
+                /*expert_idx=*/global_expert_idx, lane_id,
+                segment_slot + segment_len_slots - 1, d2h_channel_addrs,
+                num_d2h_channel_addrs, true, low_latency_buffer_idx, 0,
+                segment_len_slots);
+
+
+            if (lane_id == 0) {
+              for (int i = 0; i < segment_len_slots; ++i)
+                st_release_sys_global(ready_flags_per_expert +
+                                          segment_slot + i,
+                                      0);
+            }
+            __syncwarp();
+
+            remaining_slots -= segment_len_slots;
+            segment_token_idx += segment_len_slots;
+            segment_slot += segment_len_slots;
+          }
+        }
       }
     }
 
@@ -1144,7 +1242,12 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
 
   // Check workspace
   auto atomic_clean_flag = static_cast<int*>(workspace);
-  EP_HOST_ASSERT(sizeof(int) <= NUM_WORKSPACE_BYTES);
+  auto token_ready_flags = atomic_clean_flag + 1;
+  auto const required_workspace_ints =
+      static_cast<size_t>(1) +
+      static_cast<size_t>(num_experts) *
+          static_cast<size_t>(num_max_dispatch_tokens_per_rank);
+  EP_HOST_ASSERT(required_workspace_ints * sizeof(int) <= NUM_WORKSPACE_BYTES);
   EP_HOST_ASSERT(num_topk <= kNumMaxTopk);
 
   // Online cast cannot use zero-copy
@@ -1159,11 +1262,12 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
     auto combine_func = use_logfmt ? combine<true, hidden, kNumMaxTopk>     \
                                    : combine<false, hidden, kNumMaxTopk>;   \
     SET_SHARED_MEMORY_FOR_TMA(combine_func);                                \
-    LAUNCH_KERNEL(                                                          \
-        &cfg, combine_func, combined_x, rdma_recv_x, rdma_recv_flag,        \
-        rdma_send_x, x, topk_idx, topk_weights, src_info, layout_range,     \
-        combine_wait_recv_cost_stats, next_clean, next_clean_second,        \
-        num_next_clean_int, atomic_clean_flag, num_combined_tokens, hidden, \
+  LAUNCH_KERNEL(                                                          \
+    &cfg, combine_func, combined_x, rdma_recv_x, rdma_recv_flag,        \
+    rdma_send_x, x, topk_idx, topk_weights, src_info, layout_range,     \
+    combine_wait_recv_cost_stats, next_clean, next_clean_second,        \
+    num_next_clean_int, atomic_clean_flag, token_ready_flags,           \
+    num_combined_tokens, hidden,                                        \
         num_topk, num_max_dispatch_tokens_per_rank, num_experts, rank,      \
         num_ranks, num_warp_groups, num_warps_per_group, phases, zero_copy, \
         d2h_channel_addrs, num_d2h_channel_addrs, max_nvl_peers,            \
