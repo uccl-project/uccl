@@ -184,9 +184,6 @@ CAS_TARGET := test_cas_throughput$(BUILD_SUFFIX)
 
 # EP runtime targets (if EFA is available)
 ifeq ($(HAS_EFA),1)
-    TARGET_LOCAL := benchmark_local$(BUILD_SUFFIX)
-    TARGET_REMOTE := benchmark_remote$(BUILD_SUFFIX)
-    TARGET_DUAL := benchmark_dual$(BUILD_SUFFIX)
     EP_EXT := ep$(EXT_SUFFIX)
 endif
 
@@ -207,16 +204,8 @@ ifeq ($(HAS_EFA),1)
     SRC_CU += ../src/internode_ll.cu ../src/internode.cu ../src/layout.cu
     SRC_CU += ../src/intranode.cu ../src/ep_runtime.cu
 
-    SRC_LOCAL := benchmark_local.cu
-    SRC_REMOTE := benchmark_remote.cu
-    SRC_DUAL := benchmark_dual.cu
-
     OBJ_CPP := $(SRC_CPP:.cpp=.o)
     OBJ_CU := $(SRC_CU:.cu=.o)
-
-    OBJ_LOCAL := $(OBJ_CPP) $(OBJ_CU) $(SRC_LOCAL:.cu=.o)
-    OBJ_REMOTE := $(OBJ_CPP) $(OBJ_CU) $(SRC_REMOTE:.cu=.o)
-    OBJ_DUAL := $(OBJ_CPP) $(OBJ_CU) $(SRC_DUAL:.cu=.o)
 
     ifeq ($(PYBIND11_AVAILABLE),yes)
         SRC_BIND := ../src/uccl_ep.cc
@@ -246,7 +235,7 @@ benchmarks: $(FC_TARGET) $(LOCK_TARGET) $(MULTI_RING_TARGET) $(CAS_TARGET)
 
 # EP Runtime targets (only if EFA is available)
 ifeq ($(HAS_EFA),1)
-ep-runtime: $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL) $(EP_EXT)
+ep-runtime: $(EP_EXT)
 	@echo "EP runtime built successfully"
 
 ep: ep-runtime
@@ -325,15 +314,6 @@ $(CAS_TARGET): test_cas_throughput.cu $(HEADERS)
 # ===============================================================================
 
 ifeq ($(HAS_EFA),1)
-$(TARGET_LOCAL): $(OBJ_LOCAL)
-	$(NVCC) -arch=sm_$(SM) $(NVCC_FLAGS) $(INCLUDES) $(OBJ_LOCAL) $(LIBS) -o $@
-
-$(TARGET_REMOTE): $(OBJ_REMOTE)
-	$(NVCC) -arch=sm_$(SM) $(NVCC_FLAGS) $(INCLUDES) $(OBJ_REMOTE) $(LIBS) -o $@
-
-$(TARGET_DUAL): $(OBJ_DUAL)
-	$(NVCC) -arch=sm_$(SM) $(NVCC_FLAGS) $(INCLUDES) $(OBJ_DUAL) $(LIBS) -o $@
-
 ifeq ($(PYBIND11_AVAILABLE),yes)
 ifeq ($(TORCH_AVAILABLE),yes)
 $(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND)
@@ -413,26 +393,6 @@ run-cas: $(CAS_TARGET)
 	@echo "=============================="
 	./$(CAS_TARGET)
 
-# Run EP benchmarks (if available)
-ifeq ($(HAS_EFA),1)
-run-ep-local: $(TARGET_LOCAL)
-	@echo "Running EP local benchmark..."
-	@echo "============================="
-	./$(TARGET_LOCAL)
-
-run-ep-remote: $(TARGET_REMOTE)
-	@echo "Running EP remote benchmark..."
-	@echo "=============================="
-	./$(TARGET_REMOTE)
-
-run-ep-dual: $(TARGET_DUAL)
-	@echo "Running EP dual benchmark..."
-	@echo "============================"
-	./$(TARGET_DUAL)
-
-run-ep: run-ep-local run-ep-remote run-ep-dual
-endif
-
 # Quick test - run main benchmarks with minimal config
 quick: $(FC_TARGET) $(LOCK_TARGET)
 	@echo "Quick test - Flat Combining:"
@@ -452,12 +412,6 @@ benchmark: benchmarks
 	./$(LOCK_TARGET)
 	@echo "\n--- Multi Ring Throughput ---"
 	./$(MULTI_RING_TARGET)
-ifeq ($(HAS_EFA),1)
-	@echo "\n--- EP Local Benchmark ---"
-	./$(TARGET_LOCAL)
-	@echo "\n--- EP Remote Benchmark ---"
-	./$(TARGET_REMOTE)
-endif
 
 # ===============================================================================
 # Analysis and Profiling
@@ -525,9 +479,6 @@ info:
 	@echo "    Multi Ring: $(MULTI_RING_TARGET)"
 ifeq ($(HAS_EFA),1)
 	@echo "  EP Runtime Targets:"
-	@echo "    Local: $(TARGET_LOCAL)"
-	@echo "    Remote: $(TARGET_REMOTE)"
-	@echo "    Dual: $(TARGET_DUAL)"
 	@echo "    Python Extension: $(EP_EXT)"
 endif
 	@echo "  NVCC_FLAGS: $(NVCC_FLAGS)"
@@ -569,14 +520,9 @@ clean:
 	rm -f test_cas_throughput test_cas_throughput_debug
 	# Clean EP runtime targets
 ifeq ($(HAS_EFA),1)
-	rm -f $(TARGET_LOCAL) $(TARGET_REMOTE) $(TARGET_DUAL)
-	rm -f benchmark_local benchmark_local_debug
-	rm -f benchmark_remote benchmark_remote_debug
-	rm -f benchmark_dual benchmark_dual_debug
 	rm -f $(EP_EXT)
 	rm -f $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND)
-	rm -f $(SRC_LOCAL:.cu=.o) $(SRC_REMOTE:.cu=.o) $(SRC_DUAL:.cu=.o)
-	rm -f src/*.o src/*.d bench/*.o bench/*.d
+	rm -f ../src/*.o ../src/*.d
 endif
 	# Clean profiling and debug files
 	rm -f *.ncu-rep
@@ -611,12 +557,6 @@ endif
 	@echo "  run-fc-latency   - Run flat combining latency test"
 	@echo "  run-fc-load-latency - Run flat combining load-latency test"
 	@echo "  run-cas          - Run CAS throughput test"
-ifeq ($(HAS_EFA),1)
-	@echo "  run-ep-local     - Run EP local benchmark"
-	@echo "  run-ep-remote    - Run EP remote benchmark"
-	@echo "  run-ep-dual      - Run EP dual benchmark"
-	@echo "  run-ep           - Run all EP benchmarks"
-endif
 	@echo "  quick            - Quick test of main benchmarks"
 	@echo "  benchmark        - Run complete benchmark suite"
 	@echo ""
@@ -649,7 +589,6 @@ endif
 # Automatically include dependency files if they exist
 ifeq ($(HAS_EFA),1)
     DEPS := $(OBJ_CPP:.o=.d) $(OBJ_CU:.o=.d)
-    DEPS += $(SRC_LOCAL:.cu=.d) $(SRC_REMOTE:.cu=.d) $(SRC_DUAL:.cu=.d)
     ifneq ($(PYBIND11_AVAILABLE),no)
         DEPS += $(OBJ_BIND:.o=.d)
     endif
@@ -660,9 +599,8 @@ endif
 # Phony targets
 # ===============================================================================
 .PHONY: all benchmarks ep-runtime ep py
-.PHONY: fc lock multi-ring fc-latency fc-load-latency
-.PHONY: run-fc run-lock run-multi-ring run-fc-latency run-fc-load-latency
-.PHONY: run-ep-local run-ep-remote run-ep-dual run-ep
+.PHONY: fc lock multi-ring fc-latency fc-load-latency cas
+.PHONY: run-fc run-lock run-multi-ring run-fc-latency run-fc-load-latency run-cas
 .PHONY: quick benchmark
 .PHONY: memcheck-fc memcheck-lock profile-fc profile-lock
 .PHONY: install info check-deps clean help

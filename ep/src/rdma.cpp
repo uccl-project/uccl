@@ -39,60 +39,64 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-void exchange_connection_info(int rank, char const* peer_ip, int tid,
-                              RDMAConnectionInfo* local,
-                              RDMAConnectionInfo* remote) {
+void exchange_connection_info_as_server(int my_rank, int* actual_peer,
+                                        int listen_fd,
+                                        RDMAConnectionInfo* local,
+                                        RDMAConnectionInfo* remote_array) {
   int sockfd;
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
-  if (rank == 0) {
-    // Listen
-    int listenfd = socket(AF_INET, SOCK_STREAM, 0);
-    int one = 1;
-    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(TCP_PORT + tid);
-    addr.sin_addr.s_addr = INADDR_ANY;
-    if (bind(listenfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
-      perror("bind failed");
-      exit(1);
-    }
-    listen(listenfd, 1);
 
-    socklen_t len = sizeof(addr);
-    sockfd = accept(listenfd, (struct sockaddr*)&addr, &len);
-    close(listenfd);
-  } else {
-    // Connect
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    int one = 1;
-    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(TCP_PORT + tid);
-    inet_pton(AF_INET, peer_ip, &addr.sin_addr);
+  // Already listening when calling uccl::create_listen_socket().
+  socklen_t len = sizeof(addr);
+  sockfd = accept(listen_fd, (struct sockaddr*)&addr, &len);
 
-    int retry = 0;
-    while (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
-      if (errno == ECONNREFUSED || errno == ENETUNREACH) {
-        if (++retry > MAX_RETRIES) {
-          fprintf(stderr, "Rank %d: failed to connect after %d retries\n", rank,
-                  retry);
-          exit(1);
-        }
-        usleep(RETRY_DELAY_MS * 1000);  // sleep 200 ms
-        continue;
-      } else {
-        perror("connect failed");
+  // Exchange info
+  uccl::receive_message(sockfd, actual_peer, sizeof(*actual_peer));
+  uccl::send_message(sockfd, local, sizeof(*local));
+  uccl::receive_message(sockfd, &remote_array[*actual_peer],
+                        sizeof(remote_array[*actual_peer]));
+  close(sockfd);
+}
+
+void exchange_connection_info_as_client(int my_rank, int peer,
+                                        char const* peer_ip,
+                                        int peer_listen_port,
+                                        RDMAConnectionInfo* local,
+                                        RDMAConnectionInfo* remote_array) {
+  int sockfd;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+
+  // Connect
+  sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  int one = 1;
+  setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(peer_listen_port);
+  inet_pton(AF_INET, peer_ip, &addr.sin_addr);
+
+  int retry = 0;
+  while (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+    if (errno == ECONNREFUSED || errno == ENETUNREACH) {
+      if (++retry > MAX_RETRIES) {
+        fprintf(stderr, "Rank %d: failed to connect to %d after %d retries\n",
+                my_rank, peer, retry);
         exit(1);
       }
+      usleep(RETRY_DELAY_MS * 1000);  // sleep 200 ms
+      continue;
+    } else {
+      perror("connect failed");
+      exit(1);
     }
   }
 
   // Exchange info
-  // send(sockfd, local, sizeof(*local), 0);
-  // recv(sockfd, remote, sizeof(*remote), MSG_WAITALL);
+  uccl::send_message(sockfd, &my_rank, sizeof(my_rank));
   uccl::send_message(sockfd, local, sizeof(*local));
-  uccl::receive_message(sockfd, remote, sizeof(*remote));
+  uccl::receive_message(sockfd, &remote_array[peer],
+                        sizeof(remote_array[peer]));
   close(sockfd);
 }
 
@@ -153,10 +157,13 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     // Collect all NICs with equal minimum distance
     std::vector<std::string> candidates;
     for (auto& p : dist) {
-#ifndef EFA
+#ifdef EFA
+      if (p.second == min_d && strncmp(p.first.c_str(), "rdmap", 5) == 0)
+        candidates.push_back(p.first);
+#else
       if (!uccl::is_iface_up(p.first)) continue;
-#endif
       if (p.second == min_d) candidates.push_back(p.first);
+#endif
     }
 
     if (candidates.empty()) {
@@ -168,13 +175,27 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       selected_nic_name = candidates[thread_idx % candidates.size()];
 #ifdef EFA
       // NOTE(MaoZiming): This is a temporary hack.
-      // On p5en, there are 4 NICs with the same distance.
-      // We hardcode the first half Proxies to use the first NIC, and the second
-      // half to use the second NIC.
-      assert(candidates.size() == 4);
-      // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
-      auto half = (local_rank % 2) * 2;
-      selected_nic_name = candidates[thread_idx % 2 + half];
+      if (candidates.size() == 8) {
+        // On p5, there are 8 NICs with the same distance.
+        auto half = (local_rank % 2) * 4;
+        // GPU0 uses candidates[0/1/2/3], GPU1 uses candidates[4/5/6/7], etc.
+        selected_nic_name = candidates[thread_idx % 4 + half];
+        use_ll_sl = true;
+      } else if (candidates.size() == 4) {
+        // On p5e/p5en, there are 4 NICs with the same distance.
+        // We hardcode the first half Proxies to use the first NIC, and the
+        // second half to use the second NIC.
+        auto half = (local_rank % 2) * 2;
+        // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
+        selected_nic_name = candidates[thread_idx % 2 + half];
+        use_ll_sl = true;
+      } else {
+        // On p6-b200, there is 2 NICs with the same distance.
+        assert(candidates.size() == 2);
+        auto half = (local_rank % 2) * 1;
+        selected_nic_name = candidates[thread_idx % 1 + half];
+        use_ll_sl = true;
+      }
 #endif
     }
   }
@@ -227,12 +248,9 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 
   if (S.rkey != 0) {
     fprintf(stderr, "Warning: rkey already set (%x), overwriting\n", S.rkey);
+    exit(1);
   }
 
-  if (S.mr->rkey == 0) {
-    fprintf(stderr, "rkey equals 0!\n");
-    std::abort();
-  }
   S.rkey = S.mr->rkey;
 }
 
@@ -276,8 +294,8 @@ struct ibv_qp* create_srd_qp_ex(ProxyCtx& S) {
                               IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM |
                               IBV_QP_EX_WITH_SEND_WITH_IMM;
 
-  qp_attr_ex.cap.max_send_wr = kMaxOutstandingSends * 2;
-  qp_attr_ex.cap.max_recv_wr = kMaxOutstandingSends * 2;
+  qp_attr_ex.cap.max_send_wr = kMaxOutstandingSends;
+  qp_attr_ex.cap.max_recv_wr = kMaxOutstandingSends;
   qp_attr_ex.cap.max_send_sge = 1;
   qp_attr_ex.cap.max_recv_sge = 1;
   qp_attr_ex.cap.max_inline_data = 0;
@@ -292,8 +310,7 @@ struct ibv_qp* create_srd_qp_ex(ProxyCtx& S) {
   qp_attr_ex.qp_type = IBV_QPT_DRIVER;
 
   efa_attr.driver_qp_type = EFADV_QP_DRIVER_TYPE_SRD;
-  // #define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
-  //   efa_attr.sl = EFA_QP_LOW_LATENCY_SERVICE_LEVEL;
+  if (use_ll_sl) efa_attr.sl = EFA_QP_LOW_LATENCY_SERVICE_LEVEL;
   efa_attr.flags = 0;
   // If set, Receive WRs will not be consumed for RDMA write with imm.
   efa_attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;
@@ -351,11 +368,9 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   struct ibv_qp_init_attr qp_init_attr = {};
   qp_init_attr.send_cq = S.cq;
   qp_init_attr.recv_cq = S.cq;
-  qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
-  qp_init_attr.cap.max_send_wr =
-      kMaxOutstandingSends * 2;  // max outstanding sends
-  qp_init_attr.cap.max_recv_wr =
-      kMaxOutstandingSends * 2;  // max outstanding recvs
+  qp_init_attr.qp_type = IBV_QPT_RC;                    // Reliable Connection
+  qp_init_attr.cap.max_send_wr = kMaxOutstandingSends;  // max outstanding sends
+  qp_init_attr.cap.max_recv_wr = kMaxOutstandingSends;  // max outstanding recvs
   qp_init_attr.cap.max_send_sge = 1;
   qp_init_attr.cap.max_recv_sge = 1;
   qp_init_attr.sq_sig_all = 0;
@@ -668,7 +683,7 @@ void post_receive_buffer_for_imm_on_qp(ProxyCtx& S, ibv_qp* qp) {
   std::vector<ibv_recv_wr> wrs(kMaxOutstandingRecvs);
   std::vector<ibv_sge> sges(kMaxOutstandingRecvs);
   for (size_t i = 0; i < kMaxOutstandingRecvs; ++i) {
-    size_t offset = (i < kNumThBlocks) ? i : (i % kNumThBlocks);
+    size_t offset = (i < kNumProxyThs) ? i : (i % kNumProxyThs);
     sges[i] = {(uintptr_t)S.mr->addr + offset * kObjectSize, kObjectSize,
                S.mr->lkey};
     wrs[i] = {.wr_id = make_wr_id(S.tag, (uint32_t)i),
@@ -935,10 +950,10 @@ static void post_rdma_async_batched_normal_mode(
           std::abort();
         }
         size_t const last = kgroup - 1;
-        uint64_t const batch_tail_wr = wr_ids[last];
+        uint64_t const batch_tail_wr = ring_wrids[last];
         {
-          auto [it, inserted] =
-              S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
+          auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
+              batch_tail_wr, std::move(ring_wrids));
           if (!inserted) {
             fprintf(stderr,
                     "thread_idx: %d, Error: tail wr_id %lu already exists "
@@ -1698,70 +1713,15 @@ void remote_process_completions_fast_mode(
 #endif
 #endif
       if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
-
-      if (!aimm.IsReorderable()) {
-        addr32->fetch_add(value, std::memory_order_release);
+      bool is_combine = aimm.IsCombine();
+      assert(!is_combine || value >= 0);
+      if (is_combine) {
+        assert(value >= 0 && "Combine atomic value should be non-negative");
       } else {
-        struct SeqBuf {
-          uint8_t expected = 0;       // next seq expected
-          uint16_t present_mask = 0;  // bitmask of buffered seqs
-          int vals[kReorderingBufferSize] = {0};
-        };
-
-        // Thread-local map to maintain per-index state
-        static thread_local std::unordered_map<size_t, SeqBuf> seqbufs;
-        auto& sb = seqbufs[index];
-
-        auto commit = [&](int delta) {
-          addr32->fetch_add(delta, std::memory_order_release);
-        };
-        uint8_t seq = aimm.GetSeq();
-        if (seq >= kReorderingBufferSize) {
-          fprintf(stderr, "Error: seq %u out of range\n", seq);
-          std::abort();
-        }
-        if (seq == sb.expected) {
-          // if (my_rank % MAX_NUM_GPUS == 0)
-          //   printf("seq: %u in order, applying immediately\n", seq);
-          // Apply immediately
-          commit(value);
-          sb.expected = (sb.expected + 1) % kReorderingBufferSize;
-
-          // Drain buffered consecutive entries
-          for (int step = 0; step < kReorderingBufferSize; ++step) {
-            uint8_t e = sb.expected;
-            uint16_t bit = static_cast<uint16_t>(1u << e);
-            if (!(sb.present_mask & bit)) break;
-            commit(sb.vals[e]);
-            sb.present_mask &= static_cast<uint16_t>(~bit);
-            sb.expected = (sb.expected + 1) % kReorderingBufferSize;
-          }
-        } else {
-          // Out-of-order arrival — buffer it
-          if (seq >= kReorderingBufferSize) {
-            fprintf(stderr, "Error: seq %u out of range\n", seq);
-            std::abort();
-          }
-          // if (my_rank % MAX_NUM_GPUS == 0)
-          //   printf("seq: %u out of order (expected %u), buffering\n", seq,
-          //         sb.expected);
-
-          if (sb.present_mask & (1u << seq)) {
-            fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
-            std::abort();
-          }
-          uint16_t bit = static_cast<uint16_t>(1u << seq);
-          if (sb.present_mask & bit) {
-            // Duplicate (possible with UD/SRD). Ignore safely.
-            // If you prefer strictness, keep the abort here.
-            fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
-            std::abort();
-          } else {
-            sb.present_mask |= bit;
-            sb.vals[seq] = value;
-          }
-        }
+        assert(value <= -1 && "Dispatch atomic value should be <= -1");
       }
+      if (is_combine) value = 1;
+      addr32->fetch_add(value, std::memory_order_release);
 #endif
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
                ImmType::IsBarrier(ntohl(cqe.imm_data))) {
@@ -2275,6 +2235,11 @@ static void post_atomic_operations_fast_mode(
       }
       uint32_t const off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
       int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
+      if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
+        fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
+                low_latency_buffer_idx);
+        std::abort();
+      }
       uint32_t const imm = AtomicsImm::Pack(true, get_is_combine(cmd.cmd_type),
                                             v, off16, low_latency_buffer_idx)
                                .GetImmData();

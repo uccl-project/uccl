@@ -352,11 +352,15 @@ def initialize():
 
     # Add backend tag to wheel filename using local version identifier
     if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
+      # Adjust TARGET to the preferred wheel name suffix for python-packaged ROCm, e.g. "rocm7.9.0rc1"
+      if [[ "$TARGET" == "therock" ]]; then
+        TARGET="rocm$(rocm-sdk version)"
+      fi
       cd /io/${WHEEL_DIR}
       for wheel in uccl-*.whl; do
         if [[ -f "$wheel" ]]; then
           # Extract wheel name components: uccl-version-python-abi-platform.whl
-          if [[ "$wheel" =~ ^(uccl-)([^-]+)-([^-]+-[^-]+-[^.]+)(\.whl)$ ]]; then
+          if [[ "$wheel" =~ ^(uccl-)([^-]+)-([^-]+-[^-]+-.+)(\.whl)$ ]]; then
             name="${BASH_REMATCH[1]}"
             version="${BASH_REMATCH[2]}"
             python_abi_platform="${BASH_REMATCH[3]}"
