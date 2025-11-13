@@ -27,8 +27,17 @@ fi
 
 # Set up library discovery for NIXL meson builds
 echo "Setting up UCCL library discovery"
-UCCL_INSTALL_PATH=$(python3 -c "import uccl; import os; print(os.path.dirname(uccl.__file__))" 2>/dev/null || echo "")
+# Extract installation path from pip
+UCCL_INSTALL_PATH=$(pip show uccl 2>/dev/null | grep "^Location:" | cut -d' ' -f2 || echo "")
 if [[ -n "$UCCL_INSTALL_PATH" && -d "$UCCL_INSTALL_PATH" ]]; then
-  echo "UCCL installed at: $UCCL_INSTALL_PATH"
-  echo "Set LIBRARY_PATH: export LIBRARY_PATH=\"$UCCL_INSTALL_PATH/lib:\$LIBRARY_PATH\""
+  # The Location from pip is the site-packages directory, uccl is a subdirectory
+  UCCL_PACKAGE_PATH="$UCCL_INSTALL_PATH/uccl"
+  if [[ -d "$UCCL_PACKAGE_PATH" ]]; then
+    echo "UCCL installed at: $UCCL_PACKAGE_PATH"
+    echo "Set LIBRARY_PATH: export LIBRARY_PATH=\"$UCCL_PACKAGE_PATH/lib:\$LIBRARY_PATH\""
+  else
+    echo "UCCL package directory not found at: $UCCL_PACKAGE_PATH"
+  fi
+else
+  echo "Warning: Could not detect UCCL installation path from pip"
 fi
