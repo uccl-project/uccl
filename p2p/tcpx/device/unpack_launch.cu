@@ -1,8 +1,3 @@
-/*************************************************************************
- * Copyright (c) 2024, UCCL Project. All rights reserved.
- *
- * See LICENSE.txt for license information
- ************************************************************************/
 #include "unpack_launch.h"
 #include <algorithm>
 #include <chrono>
@@ -368,14 +363,10 @@ int UnpackLauncher::launchKernel(KernelLaunchParams const& params) {
   bool launch_small = params.use_small_kernel && config_.use_small_kernel;
 
   if (launch_small) {
-    std::cout << "[Debug Kernel] Launch Small: grid=" << params.grid_size.x
-              << " block=" << params.block_size.x << std::endl;
     tcpxUnpackKernelSmall<<<params.grid_size, params.block_size,
                             params.shared_mem_size, config_.stream>>>(
         d_desc_ptr);
   } else {
-    std::cout << "[Debug Kernel] Launch Main: grid=" << params.grid_size.x
-              << " block=" << params.block_size.x << std::endl;
     tcpxUnpackKernel<<<params.grid_size, params.block_size,
                        params.shared_mem_size, config_.stream>>>(d_desc_ptr);
   }

@@ -1,10 +1,9 @@
 #include "tcpx_engine.h"
-#include "tcpx/include/bootstrap.h"
 #include "tcpx/include/unpack_descriptor.h"
-#include <algorithm>
-#include <array>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <algorithm>
+#include <array>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
@@ -153,9 +152,9 @@ class ScopedCudaContext {
 // Note: current implementation is single-channel only; the extra fields
 // (num_channels/reserved) are kept for forward-compat but always set to 1/0.
 struct ChannelHandleMsg {
-  uint32_t num_channels;                        // always 1 for now
-  uint32_t reserved;                            // reserved for future use
-  std::array<ncclNetHandle_v7, 1> handles;      // single handle payload
+  uint32_t num_channels;                    // always 1 for now
+  uint32_t reserved;                        // reserved for future use
+  std::array<ncclNetHandle_v7, 1> handles;  // single handle payload
 };
 static_assert(std::is_trivially_copyable<ChannelHandleMsg>::value,
               "ChannelHandleMsg must be trivially copyable");
@@ -299,14 +298,15 @@ Endpoint::Endpoint(uint32_t const /*num_cpus*/) {
                sizeof(addr)) == 0) {
       ctrl_port_ = try_port;
       bound = true;
-      std::cerr << "[tcpx] control socket bound on port " << ctrl_port_ << " (attempt "
-                << (attempt + 1) << "/" << max_attempts << ")" << std::endl;
+      std::cerr << "[tcpx] control socket bound on port " << ctrl_port_
+                << " (attempt " << (attempt + 1) << "/" << max_attempts << ")"
+                << std::endl;
       break;
     }
     if (errno != EADDRINUSE) {
       std::cerr << "[tcpx] control bind failed on port " << try_port
-                << " with errno=" << errno << " (" << std::strerror(errno) << ")"
-                << std::endl;
+                << " with errno=" << errno << " (" << std::strerror(errno)
+                << ")" << std::endl;
       break;
     }
     std::cerr << "[tcpx] control port " << try_port
@@ -452,13 +452,12 @@ std::vector<uint8_t> Endpoint::get_unified_metadata() {
 std::tuple<std::string, uint16_t, int> Endpoint::parse_metadata(
     std::vector<uint8_t> const& metadata) {
   if (metadata.size() == 10) {
-    std::string ip = std::to_string(metadata[0]) + "." +
-                     std::to_string(metadata[1]) + "." +
-                     std::to_string(metadata[2]) + "." +
-                     std::to_string(metadata[3]);
-    uint16_t net_port = static_cast<uint16_t>(
-        (static_cast<uint16_t>(metadata[4]) << 8) |
-        static_cast<uint16_t>(metadata[5]));
+    std::string ip =
+        std::to_string(metadata[0]) + "." + std::to_string(metadata[1]) + "." +
+        std::to_string(metadata[2]) + "." + std::to_string(metadata[3]);
+    uint16_t net_port =
+        static_cast<uint16_t>((static_cast<uint16_t>(metadata[4]) << 8) |
+                              static_cast<uint16_t>(metadata[5]));
     uint16_t port = ntohs(net_port);
     int gpu_idx = 0;
     std::memcpy(&gpu_idx, metadata.data() + 6, sizeof(int));
@@ -473,9 +472,9 @@ std::tuple<std::string, uint16_t, int> Endpoint::parse_metadata(
     if (!inet_ntop(AF_INET6, &ip6_addr, ip6_str, sizeof(ip6_str))) {
       throw std::runtime_error("tcpx metadata IPv6 decode failed");
     }
-    uint16_t net_port = static_cast<uint16_t>(
-        (static_cast<uint16_t>(metadata[16]) << 8) |
-        static_cast<uint16_t>(metadata[17]));
+    uint16_t net_port =
+        static_cast<uint16_t>((static_cast<uint16_t>(metadata[16]) << 8) |
+                              static_cast<uint16_t>(metadata[17]));
     uint16_t port = ntohs(net_port);
     int gpu_idx = 0;
     std::memcpy(&gpu_idx, metadata.data() + 18, sizeof(int));
@@ -495,6 +494,13 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                        uint64_t& conn_id) {
   ScopedCudaContext ctx_guard(cu_context_, static_cast<int>(local_gpu_idx_));
   (void)remote_gpu_idx;
+
+  // Connection blueprint (client):
+  //   - Spin up a temporary reverse listen handle so the server can connect
+  //     back once the send path is established.
+  //   - Establish the control socket and swap EndpointInfo + listen handles.
+  //   - Use tcpx_connect_v5/tcpx_accept_v5 to materialize send/recv comms.
+  //   - Cache device handles / preload CUDA events before publishing the conn.
 
   if (remote_port < 0) remote_port = ctrl_port_;
 
@@ -606,10 +612,10 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
     for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
       int rc = tcpx_accept_v5(reverse_listen, &conn->recv_comm,
                               &conn->recv_dev_handle);
-  if (rc == 0 && conn->recv_comm) {
-    accepted = true;
-    break;
-  }
+      if (rc == 0 && conn->recv_comm) {
+        accepted = true;
+        break;
+      }
       std::cout << "[tcpx] client reverse accept retry rc=" << rc
                 << " attempt=" << attempt + 1 << std::endl;
       std::this_thread::sleep_for(std::chrono::milliseconds(kRetryMs));
@@ -642,39 +648,30 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   conn->ctrl_sock_fd = sock_fd;
 
   if (!ensure_recv_dev_handle_cached_(*conn)) {
-    std::cerr << "[tcpx] failed to cache recv device handle (client)" << std::endl;
+    std::cerr << "[tcpx] failed to cache recv device handle (client)"
+              << std::endl;
     free_conn_(conn);
     return false;
   }
 
-  // ==========================================================================
-  // 初始化 CUDA Event Pool
-  // ==========================================================================
-  // 设计要点：
-  // - 预分配固定数量的 events（等于 max_recv_inflight）
-  // - 整个连接生命周期内循环复用（round-robin）
-  // - 避免在热路径上创建/销毁 events（性能优化）
-  // - 使用 cudaEventDisableTiming 标志（不需要计时功能）
+  // Preallocate the recv-side CUDA event pool for this connection.
   int max_recv_inflight =
       get_env_int("UCCL_TCPX_MAX_RECV_INFLIGHT", kDefaultRecvInflight);
   if (max_recv_inflight <= 0) max_recv_inflight = kDefaultRecvInflight;
   size_t pool_size = static_cast<size_t>(max_recv_inflight);
   conn->recv_events.resize(pool_size);
 
-  // 预分配所有 events
   for (size_t i = 0; i < pool_size; ++i) {
-    cudaError_t rc = cudaEventCreateWithFlags(&conn->recv_events[i],
-                                              cudaEventDisableTiming);
+    cudaError_t rc =
+        cudaEventCreateWithFlags(&conn->recv_events[i], cudaEventDisableTiming);
     if (rc != cudaSuccess) {
       std::cerr << "[tcpx] cudaEventCreateWithFlags failed for event " << i
                 << ": " << cudaGetErrorString(rc) << std::endl;
 
-      // 清理已创建的 events
       for (size_t j = 0; j < i; ++j) {
         cudaEventDestroy(conn->recv_events[j]);
       }
 
-      // 清理连接资源
       ::close(sock_fd);
       tcpx_close_send(conn->send_comm);
       tcpx_close_recv(conn->recv_comm);
@@ -693,6 +690,13 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
   ScopedCudaContext ctx_guard(cu_context_, static_cast<int>(local_gpu_idx_));
+  // Server-side sequence mirrors connect():
+  //   - Accept the control socket and learn about the client's GPU/IP.
+  //   - Immediately send back local EndpointInfo and listen handle so the
+  //     client can connect to our recv comm.
+  //   - After tcpx_accept_v5 returns, read the client's reverse listen handle
+  //     and connect our send comm.
+  //   - Cache device handles / CUDA events before publishing the connection.
   // Symmetric handshake to connect(): accept the control socket, exchange
   // endpoint info, push back our listen handle, then finish the send/recv comm
   // pair using handle payloads from the client.
@@ -775,7 +779,8 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
     return false;
   }
 
-  ncclNetHandle_v7 client_handle_copy = client_handles.handles[0];  // single-channel
+  ncclNetHandle_v7 client_handle_copy =
+      client_handles.handles[0];  // single-channel
   if (tcpx_connect_v5(dev_id_, &client_handle_copy, &conn->send_comm,
                       &conn->send_dev_handle) != 0 ||
       !conn->send_comm) {
@@ -800,25 +805,25 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   conn->ctrl_sock_fd = sock_fd;
 
   if (!ensure_recv_dev_handle_cached_(*conn)) {
-    std::cerr << "[tcpx] failed to cache recv device handle (server)" << std::endl;
+    std::cerr << "[tcpx] failed to cache recv device handle (server)"
+              << std::endl;
     free_conn_(conn);
     return false;
   }
 
-  // 初始化 CUDA Event Pool
-  // 预分配固定数量的 events，整个连接生命周期内循环复用
+  // Server side event pool mirrors the client logic above.
   int max_recv_inflight_acc =
       get_env_int("UCCL_TCPX_MAX_RECV_INFLIGHT", kDefaultRecvInflight);
   if (max_recv_inflight_acc <= 0) max_recv_inflight_acc = kDefaultRecvInflight;
   size_t pool_size_acc = static_cast<size_t>(max_recv_inflight_acc);
   conn->recv_events.resize(pool_size_acc);
   for (size_t i = 0; i < pool_size_acc; ++i) {
-    cudaError_t rc = cudaEventCreateWithFlags(&conn->recv_events[i],
-                                              cudaEventDisableTiming);
+    cudaError_t rc =
+        cudaEventCreateWithFlags(&conn->recv_events[i], cudaEventDisableTiming);
     if (rc != cudaSuccess) {
       std::cerr << "[tcpx] cudaEventCreateWithFlags failed for event " << i
                 << ": " << cudaGetErrorString(rc) << std::endl;
-      // 清理已创建的 events
+      // Destroy events that were created before the failure.
       for (size_t j = 0; j < i; ++j) {
         cudaEventDestroy(conn->recv_events[j]);
       }
@@ -841,6 +846,8 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 // Memory registration and lookup
 // ---------------------------------------------------------------------------
 bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
+  // Only caches the descriptor in mr_map_; actual tcpx_reg_mr calls are
+  // deferred until populate_conn_handles_ is invoked for a specific connection.
   if (!data || size == 0) return false;
   uint64_t id = next_mr_id_.fetch_add(1);
   MrEntry entry;
@@ -857,6 +864,9 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
 }
 
 bool Endpoint::dereg(uint64_t mr_id) {
+  // Two-stage teardown to minimize lock hold time:
+  //   1) Copy out the per-connection handles while holding mr_mu_.
+  //   2) Release mr_mu_ and call tcpx_dereg_mr for each connection.
   std::vector<std::pair<uint64_t, void*>> send_handles;
   std::vector<std::pair<uint64_t, void*>> recv_handles;
   {
@@ -894,22 +904,6 @@ bool Endpoint::dereg(uint64_t mr_id) {
   }
 
   return true;
-}
-
-bool Endpoint::find_mr_by_addr(uintptr_t addr, size_t size,
-                               uint64_t* mr_id) const {
-  if (!mr_id || size == 0) return false;
-  std::lock_guard<std::mutex> lock(mr_mu_);
-  for (auto const& kv : mr_map_) {
-    uintptr_t base = reinterpret_cast<uintptr_t>(kv.second.base);
-    if (addr < base) continue;
-    size_t offset = static_cast<size_t>(addr - base);
-    if (offset + size <= kv.second.size) {
-      *mr_id = kv.first;
-      return true;
-    }
-  }
-  return false;
 }
 
 bool Endpoint::populate_conn_handles_(Conn& conn, uint64_t mr_id, bool is_recv,
@@ -981,10 +975,10 @@ bool Endpoint::ensure_recv_dev_handle_cached_(Conn& conn) {
   if (!dev_handle_struct || !dev_handle_struct->handle) return false;
 
   ScopedCudaContext ctx_guard(cu_context_, static_cast<int>(local_gpu_idx_));
-  CUresult cu_rc = cuMemcpyDtoH(
-      &conn.recv_dev_handle_host,
-      reinterpret_cast<CUdeviceptr>(dev_handle_struct->handle),
-      sizeof(conn.recv_dev_handle_host));
+  CUresult cu_rc =
+      cuMemcpyDtoH(&conn.recv_dev_handle_host,
+                   reinterpret_cast<CUdeviceptr>(dev_handle_struct->handle),
+                   sizeof(conn.recv_dev_handle_host));
   if (cu_rc != CUDA_SUCCESS) {
     std::cerr << "[tcpx] cuMemcpyDtoH (cache recv handle) failed rc=" << cu_rc
               << std::endl;
@@ -994,44 +988,25 @@ bool Endpoint::ensure_recv_dev_handle_cached_(Conn& conn) {
   return true;
 }
 
-// ============================================================================
-// 传输推进的核心辅助函数
-// ============================================================================
-// 以下两个函数实现了传输推进的共享路径：
+// Polling entry point used by poll_async to drive Stage 0/1/2 progression while
+// transfer_mu_ is held.
+// Central driver that runs Stage 0 followed by Stage 1/2. Called only while
+// transfer_mu_ is held to ensure exclusive access to the transfer state.
 //
-// 1. advance_transfer_locked：
-//    - 统一的传输推进函数，被 poll_async 调用
-//    - 假设 transfer_mu_ 已持锁
-//    - 执行 Stage 0（调度新 chunks）和 Stage 1/2（推进已提交的 chunks）
-//    - 返回传输是否完成
+// Pipeline stages:
+//   Stage 0: Schedule new chunks (schedule_send/recv_chunks_locked)
+//   Stage 1: Poll network completions (progress_transfer_locked)
+//   Stage 2: Poll GPU completions (progress_transfer_locked, receive only)
 //
-// 2. finalize_transfer_locked：
-//    - 从 transfer_map_ 中移除已完成的传输
-//    - 假设 transfer_mu_ 已持锁
-//
-// 设计要点：
-// - 用户通过 poll_async 主动推进传输
-// - 所有传输推进逻辑集中在 advance_transfer_locked，便于维护和调试
-// - 完成后重置窗口计数器，确保后续传输不会因窗口满而阻塞
-// ============================================================================
-
-/**
- * 统一的传输推进函数（持锁调用）
- *
- * 执行流程：
- * 1. Stage 0：如果还有未提交的 chunks，调用 schedule_*_chunks_locked 调度
- * 2. Stage 1/2：调用 progress_transfer_locked 推进已提交的 chunks
- * 3. 如果 Stage 1/2 有进度，再次尝试调度（充分利用窗口）
- * 4. 检查是否所有 chunks 都已完成（chunks_completed >= chunks.size()）
- *
- * @param conn 连接对象
- * @param transfer 传输对象
- * @param transfer_complete 输出：传输是否完成
- * @return 成功返回 true，失败返回 false
- */
+// Flow control:
+//   - Stage 0 runs first to fill the pipeline
+//   - Stage 1/2 run via progress_transfer_locked()
+//   - If Stage 1/2 free window slots, Stage 0 runs again (pipelining)
 bool Endpoint::advance_transfer_locked(Conn& conn, PendingTransfer& transfer,
                                        bool* transfer_complete) {
   if (!transfer_complete) return false;
+
+  // Stage 0: Try to post new chunks if any remain unscheduled
   if (transfer.next_chunk_to_post < transfer.chunks.size()) {
     ScheduleOutcome outcome = ScheduleOutcome::kNoProgress;
     if (transfer.kind == PendingTransfer::Kind::kSend) {
@@ -1042,11 +1017,13 @@ bool Endpoint::advance_transfer_locked(Conn& conn, PendingTransfer& transfer,
     if (outcome == ScheduleOutcome::kError) return false;
   }
 
+  // Stage 1/2: Advance in-flight chunks through the pipeline
   bool schedule_send = false;
   bool schedule_recv = false;
   if (!progress_transfer_locked(conn, transfer, &schedule_send, &schedule_recv))
     return false;
 
+  // If Stage 1/2 freed window slots, retry Stage 0 to keep pipeline full
   if (schedule_send && transfer.kind == PendingTransfer::Kind::kSend &&
       transfer.next_chunk_to_post < transfer.chunks.size()) {
     auto outcome = schedule_send_chunks_locked(conn, transfer);
@@ -1062,36 +1039,30 @@ bool Endpoint::advance_transfer_locked(Conn& conn, PendingTransfer& transfer,
   return true;
 }
 
-/**
- * 完成传输并清理资源（持锁调用）
- *
- * 从 transfer_map_ 中移除传输，释放内存
- *
- * @param it 传输迭代器
- */
 void Endpoint::finalize_transfer_locked(
     std::unordered_map<uint64_t, PendingTransfer>::iterator it) {
+  // Remove the transfer from transfer_map_ (transfer_mu_ held). Window counters
+  // are reset later by poll_async once it drops transfer_mu_.
   transfer_map_.erase(it);
 }
 
-/**
- * 重置连接的窗口计数器
- *
- * 清空 send_inflight_chunks_ 和 recv_inflight_chunks_ 中的条目
- *
- * @param conn_id 连接 ID
- */
 void Endpoint::reset_conn_window_counters_(uint64_t conn_id) {
+  // After a transfer completes we nuke the inflight counters for the owning
+  // connection so future transfers do not inherit stale slot usage.
   std::lock_guard<std::mutex> lock(window_mu_);
   send_inflight_chunks_.erase(conn_id);
   recv_inflight_chunks_.erase(conn_id);
 }
 
-
-
 // ---------------------------------------------------------------------------
 // Data-plane entry points (advertise / send / recv / read)
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// FIFO/read helpers
+// ---------------------------------------------------------------------------
+// advertise() is called by the passive peer (server) to publish a slice of a
+// registered buffer. The listener thread forwards the resulting FifoItem to the
+// active peer so it can issue a tagged READ.
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
   (void)conn_id;  // kept for API symmetry with higher layers; unused here
@@ -1125,28 +1096,11 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
   return true;
 }
 
-/**
- * 响应 READ 请求（主动端）
- *
- * 执行流程：
- * 1. 根据 conn_id 查找连接对象
- * 2. 根据 fifo_item.mr_id 查找内存注册条目
- * 3. 计算数据地址（base + offset）
- * 4. 调用 post_send_ 提交发送传输
- * 5. 用户通过 poll_async 推进传输
- *
- * 设计要点：
- * - READ 回复路径完全异步，避免阻塞 UCCL listener 线程
- * - 使用 FifoItem 中的 tag 确保与被动端的接收匹配
- * - 传输由用户线程通过 poll_async 推进
- *
- * @param conn_id 连接 ID
- * @param fifo_item FIFO 元数据项
- * @return 成功返回 true，失败返回 false
- */
+// Active-side handler that turns a FIFO item into a tagged send. This is the
+// mirror of advertise(): callers invoke it after they dequeue a FifoItem from
+// the listener thread so the data path can remain fully asynchronous.
 bool Endpoint::queue_read_response(uint64_t conn_id,
                                    FifoItem const& fifo_item) {
-  // 查找连接对象
   std::shared_ptr<Conn> conn_ptr;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -1155,7 +1109,6 @@ bool Endpoint::queue_read_response(uint64_t conn_id,
     conn_ptr = it->second;
   }
 
-  // 查找内存注册条目
   MrEntry mr;
   {
     std::lock_guard<std::mutex> lock(mr_mu_);
@@ -1164,27 +1117,28 @@ bool Endpoint::queue_read_response(uint64_t conn_id,
     mr = it->second;
   }
 
-  // 验证偏移量和大小
   if (fifo_item.offset + fifo_item.size > mr.size) return false;
 
-  // 计算数据地址
   char* base_ptr =
       static_cast<char*>(mr.base) + static_cast<size_t>(fifo_item.offset);
   void const* base = static_cast<void const*>(base_ptr);
 
-  // 提交发送传输
   uint64_t tid = 0;
   if (!post_send_(*conn_ptr, fifo_item.mr_id, mr, base, fifo_item.size,
                   static_cast<int>(fifo_item.tag), tid)) {
     return false;
   }
 
-  // 传输已提交，用户需要通过 poll_async 推进
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Asynchronous data path helpers (Stage 0 producers)
+// ---------------------------------------------------------------------------
 bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
                           size_t size, uint64_t* transfer_id) {
+  // Fast path uses an auto-assigned tag, which keeps the rest of the pipeline
+  // identical to the explicit-tag variant.
   return send_async_with_tag(conn_id, mr_id, data, size, 0, transfer_id);
 }
 
@@ -1192,9 +1146,12 @@ bool Endpoint::send_async_with_tag(uint64_t conn_id, uint64_t mr_id,
                                    void const* data, size_t size, uint32_t tag,
                                    uint64_t* transfer_id) {
   // Variant used by queue_read_response / read_async where the caller controls
-  // the tag.
+  // the tag. The function slices the payload into chunks, seeds a
+  // PendingTransfer and lets schedule_send_chunks_locked (Stage 0) post the
+  // first batch.
   if (!data || size == 0) return false;
 
+  // Look up the connection under a shared lock (hot path).
   std::shared_ptr<Conn> conn_ptr;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -1203,6 +1160,7 @@ bool Endpoint::send_async_with_tag(uint64_t conn_id, uint64_t mr_id,
     conn_ptr = it->second;
   }
 
+  // Snapshot the MR entry so the lock can be dropped before touching TCPX.
   MrEntry mr;
   {
     std::lock_guard<std::mutex> lock(mr_mu_);
@@ -1211,20 +1169,21 @@ bool Endpoint::send_async_with_tag(uint64_t conn_id, uint64_t mr_id,
     mr = it->second;
   }
 
+  // Validate that the caller-supplied pointer falls within the MR range.
   uintptr_t base_addr = reinterpret_cast<uintptr_t>(mr.base);
   uintptr_t data_addr = reinterpret_cast<uintptr_t>(data);
   if (data_addr < base_addr || data_addr + size > base_addr + mr.size) {
     return false;
   }
 
-  // 提交发送传输
+  // Post the chunked transfer; transfer_id is returned to the caller so they
+  // can drive completion via poll_async.
   uint64_t tid = 0;
   if (!post_send_(*conn_ptr, mr_id, mr, data, size, static_cast<int>(tag),
                   tid)) {
     return false;
   }
 
-  // 传输已提交，用户需要通过 poll_async 推进
   if (transfer_id) *transfer_id = tid;
   return true;
 }
@@ -1232,8 +1191,12 @@ bool Endpoint::send_async_with_tag(uint64_t conn_id, uint64_t mr_id,
 bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, FifoItem const& slot_item,
                           uint64_t* transfer_id) {
+  // READs originate from the active peer after it consumes a slot from the
+  // server-side FIFO. The tag inside slot_item ties the recv to the server's
+  // pending send, allowing multi-chunk transfers without extra control traffic.
   if (!dst || size == 0) return false;
 
+  // Grab the connection and MR metadata before touching CUDA/TCPX state.
   std::shared_ptr<Conn> conn_ptr;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -1250,16 +1213,16 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
     mr = it->second;
   }
 
+  // Ensure the destination buffer is large enough and MR-backed.
   if (slot_item.size > mr.size) return false;
   if (size < slot_item.size) return false;
-
   uintptr_t base_addr = reinterpret_cast<uintptr_t>(mr.base);
   uintptr_t dst_addr = reinterpret_cast<uintptr_t>(dst);
   if (dst_addr < base_addr || dst_addr + slot_item.size > base_addr + mr.size) {
     return false;
   }
 
-  // Reuse the advertised tag so the active peer can match this recv.
+  // Reuse the advertised tag so the passive peer can match this recv slot.
   return recv_async_with_tag(conn_id, mr_id, dst, slot_item.size, slot_item.tag,
                              transfer_id);
 }
@@ -1273,9 +1236,11 @@ bool Endpoint::recv_async_with_tag(uint64_t conn_id, uint64_t mr_id, void* data,
                                    size_t size, uint32_t tag,
                                    uint64_t* transfer_id) {
   // Allow callers (e.g. FIFO-driven reads) to enforce the tag that the sender
-  // will use.
+  // will use. Much like send_async_with_tag, the transfer is chunked, queued,
+  // and schedule_recv_chunks_locked handles initial postings.
   if (!data || size == 0) return false;
 
+  // Locate the connection instance under shared ownership.
   std::shared_ptr<Conn> conn_ptr;
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -1284,6 +1249,7 @@ bool Endpoint::recv_async_with_tag(uint64_t conn_id, uint64_t mr_id, void* data,
     conn_ptr = it->second;
   }
 
+  // Grab the MR metadata while holding mr_mu_.
   MrEntry mr;
   {
     std::lock_guard<std::mutex> lock(mr_mu_);
@@ -1292,140 +1258,82 @@ bool Endpoint::recv_async_with_tag(uint64_t conn_id, uint64_t mr_id, void* data,
     mr = it->second;
   }
 
+  // Bounds-check the receive buffer before posting anything to TCPX.
   uintptr_t base_addr = reinterpret_cast<uintptr_t>(mr.base);
   uintptr_t dst_addr = reinterpret_cast<uintptr_t>(data);
   if (dst_addr < base_addr || dst_addr + size > base_addr + mr.size) {
     return false;
   }
 
-  // 提交接收传输
+  // Create the pending transfer, marking that GPU unpack is required.
   uint64_t tid = 0;
   if (!post_recv_(*conn_ptr, mr_id, mr, data, size, static_cast<int>(tag), tid,
                   /*needs_unpack=*/true)) {
     return false;
   }
 
-  // 传输已提交，用户需要通过 poll_async 推进
   if (transfer_id) *transfer_id = tid;
   return true;
 }
 
-// ============================================================================
-// 滑动窗口流控
-// ============================================================================
-//
-// 设计目标：
-// - 限制同时在途的 chunks 数量，避免资源耗尽
-// - 发送端和接收端分别限制（max_send_inflight_ 和 max_recv_inflight_）
-// - 每个连接独立计数（send_inflight_chunks_ 和 recv_inflight_chunks_）
-//
-// 工作原理：
-// 1. reserve_*_slot: 在调度 chunk 前调用，检查是否有空闲配额
-//    - 如果 counter < limit，递增 counter 并返回 true
-//    - 如果 counter >= limit，返回 false（窗口已满，调用者放弃调度）
-// 2. release_*_slot: 在 chunk 完成后调用，释放配额
-//    - 递减 counter
-//    - 无阻塞等待机制：调用者通过下次 poll_async 重试
-// 注意：
-// - 当前实现为非阻塞式：reserve 失败时直接返回 false，不等待
-// - 调用者（schedule_send_chunks_/schedule_recv_chunks_）会在下次 poll_async 时重试
-// - 这种设计避免了条件变量的开销，与用户主动推进模型一致
-// ============================================================================
-
-/**
- * 【滑动窗口】预留发送 slot（调度前调用）
- *
- * @param conn_id 连接 ID
- * @param limit 窗口大小限制（max_send_inflight_）
- * @return 成功返回 true，窗口已满返回 false
- */
 bool Endpoint::reserve_send_slot(uint64_t conn_id, size_t limit) {
+  // Sliding window flow control: check if we can post another send chunk.
+  // Returns false if the window is full, causing Stage 0 to stop scheduling.
   std::lock_guard<std::mutex> lock(window_mu_);
   size_t& counter = send_inflight_chunks_[conn_id];
-  if (counter >= limit) return false;  // 窗口已满
+  if (counter >= limit) return false;
   ++counter;
   return true;
 }
 
-/**
- * 【滑动窗口】预留接收 slot（调度前调用）
- *
- * @param conn_id 连接 ID
- * @param limit 窗口大小限制（max_recv_inflight_）
- * @return 成功返回 true，窗口已满返回 false
- */
 bool Endpoint::reserve_recv_slot(uint64_t conn_id, size_t limit) {
+  // Sliding window flow control: check if we can post another receive chunk.
+  // For receives, the slot remains reserved until Stage 2 completes.
   std::lock_guard<std::mutex> lock(window_mu_);
   size_t& counter = recv_inflight_chunks_[conn_id];
-  if (counter >= limit) return false;  // 窗口已满
+  if (counter >= limit) return false;
   ++counter;
   return true;
 }
 
-/**
- * 【滑动窗口】释放发送 slot（chunk 完成后调用）
- *
- * 执行流程：
- * 1. 递减 send_inflight_chunks_[conn_id]
- * 2. 如果 counter 降为 0，从 map 中移除条目
- *
- * @param conn_id 连接 ID
- */
 void Endpoint::release_send_slot(uint64_t conn_id) {
+  // Called when a send chunk completes Stage 1 (network done).
+  // Frees a window slot so Stage 0 can post more chunks.
   std::lock_guard<std::mutex> lock(window_mu_);
   auto it = send_inflight_chunks_.find(conn_id);
   if (it == send_inflight_chunks_.end()) return;
   if (it->second <= 1) {
-    send_inflight_chunks_.erase(it);  // counter 降为 0，移除条目
+    send_inflight_chunks_.erase(it);
   } else {
     --(it->second);
   }
 }
 
-/**
- * 【滑动窗口】释放接收 slot（chunk 完成后调用）
- *
- * 执行流程：
- * 1. 递减 recv_inflight_chunks_[conn_id]
- * 2. 如果 counter 降为 0，从 map 中移除条目
- *
- * @param conn_id 连接 ID
- */
 void Endpoint::release_recv_slot(uint64_t conn_id) {
+  // Called when a receive chunk completes Stage 2 (GPU unpack done).
+  // Frees a window slot so Stage 0 can post more chunks.
   std::lock_guard<std::mutex> lock(window_mu_);
   auto it = recv_inflight_chunks_.find(conn_id);
   if (it == recv_inflight_chunks_.end()) return;
   if (it->second <= 1) {
-    recv_inflight_chunks_.erase(it);  // counter 降为 0，移除条目
+    recv_inflight_chunks_.erase(it);
   } else {
     --(it->second);
   }
 }
 
-/**
- * 调度发送 chunks（Stage 0，持锁调用）
- *
- * 执行流程：
- * 1. 从 next_chunk_to_post 开始遍历未提交的 chunks
- * 2. 调用 reserve_send_slot 检查滑动窗口是否有空闲配额
- * 3. 如果窗口已满，停止调度（返回 kNoProgress）
- * 4. 调用 tcpx_isend 提交 chunk
- * 5. 如果返回 kTcpxBusy 或 request 为空，短暂休眠后重试（最多 512 次）
- * 6. 成功后标记 chunk.posted = true 并加入 send_queue
- * 7. 递增 next_chunk_to_post
- *
- * 设计要点：
- * - 滑动窗口流控：限制同时在途的 chunks 数量（max_send_inflight_）
- * - 重试机制：如果 TCPX 返回 kTcpxBusy，休眠 5 微秒后重试
- * - 批量调度：尽可能多地调度 chunks，直到窗口满或所有 chunks 已提交
- * - 错误处理：如果 tcpx_isend 失败，释放窗口配额并返回 kError
- *
- * @param conn 连接对象
- * @param transfer 传输对象
- * @return 调度结果（kNoProgress/kProgress/kError）
- */
 Endpoint::ScheduleOutcome Endpoint::schedule_send_chunks_locked(
     Conn& conn, PendingTransfer& transfer) {
+  // Stage 0 (TX): attempt to keep the pipeline full by posting as many chunks
+  // as the per-connection send window allows. Each chunk inherits a unique tag
+  // (base_tag + index) so the remote side can disambiguate completions.
+  //
+  // Data flow:
+  //   1. Check window quota via reserve_send_slot()
+  //   2. Call tcpx_isend() to post chunk to TCPX send queue
+  //   3. Mark chunk.posted = true and add to send_queue
+  //   4. Increment next_chunk_to_post
+  //   5. Repeat until window is full or all chunks posted
   size_t limit = max_send_inflight_;
 
   constexpr int kBusyRetryMax = 512;
@@ -1433,33 +1341,26 @@ Endpoint::ScheduleOutcome Endpoint::schedule_send_chunks_locked(
 
   bool posted_any = false;
 
-  // 从 next_chunk_to_post 开始遍历未提交的 chunks
   while (transfer.next_chunk_to_post < transfer.chunks.size()) {
-    // 【滑动窗口流控】检查是否有空闲配额
     if (!reserve_send_slot(conn.conn_id, limit)) break;
 
     auto& chunk = transfer.chunks[transfer.next_chunk_to_post];
     bool chunk_posted = false;
     int attempt = 0;
 
-    // 【重试机制】如果返回 kTcpxBusy，短暂休眠后重试
     while (attempt < kBusyRetryMax) {
       void* request = nullptr;
 
-      // 调用 tcpx_isend 提交 chunk
-      int rc = tcpx_isend(conn.send_comm, chunk.dst_ptr,
-                          static_cast<int>(chunk.bytes),
-                          static_cast<int>(chunk.tag), transfer.mhandle,
-                          &request);
+      int rc = tcpx_isend(
+          conn.send_comm, chunk.dst_ptr, static_cast<int>(chunk.bytes),
+          static_cast<int>(chunk.tag), transfer.mhandle, &request);
       if (debug_enabled_) {
         size_t chunk_idx = transfer.next_chunk_to_post;
         std::cerr << "[tcpx] isend rc=" << rc << " req=" << request
-                  << " chunk=" << chunk_idx
-                  << " chunk_bytes=" << chunk.bytes
+                  << " chunk=" << chunk_idx << " chunk_bytes=" << chunk.bytes
                   << " tag=" << chunk.tag << std::endl;
       }
 
-      // 成功：request 非空
       if (rc == 0 && request) {
         chunk.request = request;
         chunk.posted = true;
@@ -1467,64 +1368,43 @@ Endpoint::ScheduleOutcome Endpoint::schedule_send_chunks_locked(
         break;
       }
 
-      // 失败：释放窗口配额
       release_send_slot(conn.conn_id);
 
-      // kTcpxBusy 或 request 为空：重试
       if (rc == kTcpxBusy || (rc == 0 && !request)) {
         ++attempt;
         std::this_thread::sleep_for(
             std::chrono::microseconds(kBusySleepMicros));
-        // 重新获取窗口配额
         if (!reserve_send_slot(conn.conn_id, limit)) break;
         continue;
       }
 
-      // 其他错误：返回 kError
       std::cerr << "[tcpx] tcpx_isend failed rc=" << rc
                 << " chunk_offset=" << chunk.offset
                 << " chunk_bytes=" << chunk.bytes << std::endl;
       return ScheduleOutcome::kError;
     }
 
-    // 如果重试次数耗尽，停止调度
     if (!chunk_posted) break;
 
-    // 加入 send_queue 并递增 next_chunk_to_post
     transfer.send_queue.push_back(transfer.next_chunk_to_post);
     transfer.next_chunk_to_post++;
     posted_any = true;
   }
 
-  return posted_any ? ScheduleOutcome::kProgress
-                    : ScheduleOutcome::kNoProgress;
+  return posted_any ? ScheduleOutcome::kProgress : ScheduleOutcome::kNoProgress;
 }
 
-/**
- * 调度接收 chunks（Stage 0，持锁调用）
- *
- * 执行流程：
- * 1. 从 next_chunk_to_post 开始遍历未提交的 chunks
- * 2. 调用 reserve_recv_slot 检查滑动窗口是否有空闲配额
- * 3. 如果窗口已满，停止调度（返回 kNoProgress）
- * 4. 调用 tcpx_irecv 提交 chunk
- * 5. 如果返回 kTcpxBusy 或 request 为空，短暂休眠后重试（最多 512 次）
- * 6. 成功后标记 chunk.posted = true 并加入 recv_stage1_queue
- * 7. 递增 next_chunk_to_post
- *
- * 设计要点：
- * - 滑动窗口流控：限制同时在途的 chunks 数量（max_recv_inflight_）
- * - 重试机制：如果 TCPX 返回 kTcpxBusy，休眠 5 微秒后重试
- * - 批量调度：尽可能多地调度 chunks，直到窗口满或所有 chunks 已提交
- * - 错误处理：如果 tcpx_irecv 失败，释放窗口配额并返回 kError
- * - 接收路径特殊性：数据到达 bounce buffer，需要后续 GPU unpack（Stage 2）
- *
- * @param conn 连接对象
- * @param transfer 传输对象
- * @return 调度结果（kNoProgress/kProgress/kError）
- */
 Endpoint::ScheduleOutcome Endpoint::schedule_recv_chunks_locked(
     Conn& conn, PendingTransfer& transfer) {
+  // Stage 0 (RX): mirrors the send scheduler but seeds recv_stage1_queue so
+  // later phases can detect network completions and launch GPU unpack work.
+  //
+  // Data flow:
+  //   1. Check window quota via reserve_recv_slot()
+  //   2. Call tcpx_irecv() to post chunk to TCPX receive queue
+  //   3. Mark chunk.posted = true and add to recv_stage1_queue
+  //   4. Increment next_chunk_to_post
+  //   5. Window quota remains reserved until Stage 2 completes
   size_t limit = max_recv_inflight_;
 
   constexpr int kBusyRetryMax = 512;
@@ -1532,36 +1412,29 @@ Endpoint::ScheduleOutcome Endpoint::schedule_recv_chunks_locked(
 
   bool posted_any = false;
 
-  // 从 next_chunk_to_post 开始遍历未提交的 chunks
   while (transfer.next_chunk_to_post < transfer.chunks.size()) {
-    // 【滑动窗口流控】检查是否有空闲配额
     if (!reserve_recv_slot(conn.conn_id, limit)) break;
 
     auto& chunk = transfer.chunks[transfer.next_chunk_to_post];
     bool chunk_posted = false;
     int attempt = 0;
 
-    // 【重试机制】如果返回 kTcpxBusy，短暂休眠后重试
     while (attempt < kBusyRetryMax) {
-      // tcpx_irecv 使用数组接口（支持批量接收）
       void* buffers[1] = {chunk.dst_ptr};
       int sizes[1] = {static_cast<int>(chunk.bytes)};
       int tags[1] = {static_cast<int>(chunk.tag)};
       void* mhandles[1] = {transfer.mhandle};
       void* requests[1] = {nullptr};
 
-      // 调用 tcpx_irecv 提交 chunk
       int rc = tcpx_irecv(conn.recv_comm, 1, buffers, sizes, tags, mhandles,
                           requests);
       if (debug_enabled_) {
         size_t chunk_idx = transfer.next_chunk_to_post;
         std::cerr << "[tcpx] irecv rc=" << rc << " req=" << requests[0]
-                  << " chunk=" << chunk_idx
-                  << " chunk_bytes=" << chunk.bytes
+                  << " chunk=" << chunk_idx << " chunk_bytes=" << chunk.bytes
                   << " tag=" << chunk.tag << std::endl;
       }
 
-      // 成功：request 非空
       if (rc == 0 && requests[0]) {
         chunk.request = requests[0];
         chunk.posted = true;
@@ -1569,86 +1442,55 @@ Endpoint::ScheduleOutcome Endpoint::schedule_recv_chunks_locked(
         break;
       }
 
-      // 失败：释放窗口配额
       release_recv_slot(conn.conn_id);
 
-      // kTcpxBusy 或 request 为空：重试
       if (rc == kTcpxBusy || (rc == 0 && !requests[0])) {
         ++attempt;
         std::this_thread::sleep_for(
             std::chrono::microseconds(kBusySleepMicros));
-        // 重新获取窗口配额
         if (!reserve_recv_slot(conn.conn_id, limit)) break;
         continue;
       }
 
-      // 其他错误：返回 kError
       std::cerr << "[tcpx] tcpx_irecv failed rc=" << rc
                 << " chunk_offset=" << chunk.offset
                 << " chunk_bytes=" << chunk.bytes << std::endl;
       return ScheduleOutcome::kError;
     }
 
-    // 如果重试次数耗尽，停止调度
     if (!chunk_posted) break;
 
-    // 加入 recv_stage1_queue（等待网络完成）并递增 next_chunk_to_post
     transfer.recv_stage1_queue.push_back(transfer.next_chunk_to_post);
     transfer.next_chunk_to_post++;
     posted_any = true;
   }
 
-  return posted_any ? ScheduleOutcome::kProgress
-                    : ScheduleOutcome::kNoProgress;
+  return posted_any ? ScheduleOutcome::kProgress : ScheduleOutcome::kNoProgress;
 }
 
 // ---------------------------------------------------------------------------
 // Transfer scheduling helpers (chunk partition, sliding window posting)
 // ---------------------------------------------------------------------------
-/**
- * 提交发送传输（send_async 的内部实现）
- *
- * 执行流程：
- * 1. 获取 TCPX 内存注册句柄（mhandle）
- * 2. 将数据分割成多个 chunks（默认 512KB 每个）
- * 3. 创建 PendingTransfer 对象并加入 transfer_map_
- * 4. 调用 schedule_send_chunks_locked 开始调度第一批 chunks
- * 5. 返回 transfer_id 给调用者
- *
- * 数据分割策略：
- * - chunk_bytes = 512KB（默认）
- * - chunk_count = ceil(size / chunk_bytes)
- * - 每个 chunk 有独立的 tag = base_tag + chunk_index
- *
- * 流水线设计：
- * - 发送端是单阶段流水线（只有网络传输，无 GPU unpack）
- * - chunks 被加入 send_queue，等待 tcpx_isend 提交
- * - 用户通过 poll_async 推进传输，直到所有 chunks 完成
- *
- * @param conn 连接对象
- * @param mr_id 内存注册 ID
- * @param mr 内存注册条目
- * @param data 发送数据指针（必须在 mr 范围内）
- * @param size 发送数据大小
- * @param tag 基础 tag（每个 chunk 的 tag = base_tag + chunk_index）
- * @param transfer_id 输出：传输 ID
- * @return 成功返回 true，失败返回 false
- */
 bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
                           void const* data, size_t size, int tag,
                           uint64_t& transfer_id) {
+  // Shared implementation for send_async*(). Builds a PendingTransfer,
+  // precomputes chunk metadata (offset/size/tag), and lets Stage 0 take over.
+  //
+  // Chunking strategy:
+  //   - Split transfer into chunks of chunk_bytes_ (default 512KB)
+  //   - Each chunk gets unique tag = base_tag + chunk_index
+  //   - All chunks share the same TCPX memory handle (mhandle)
+  //   - Chunks are posted to send_queue for Stage 1 to process
   if (!data || size == 0) return false;
 
-  // 【步骤 1】获取 TCPX 内存注册句柄
   void* mhandle = nullptr;
   if (!populate_conn_handles_(conn, mr_id, /*is_recv=*/false, &mhandle))
     return false;
 
-  // 【步骤 2】计算 chunk 分割参数
   size_t chunk_bytes = std::max<size_t>(1, chunk_bytes_);
   size_t chunk_count = (size + chunk_bytes - 1) / chunk_bytes;
 
-  // 【步骤 3】边界检查：确保数据在 MR 范围内
   uintptr_t base_addr = reinterpret_cast<uintptr_t>(mr.base);
   uintptr_t data_addr = reinterpret_cast<uintptr_t>(data);
   if (data_addr < base_addr || data_addr + size > base_addr + mr.size) {
@@ -1656,7 +1498,6 @@ bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
     return false;
   }
 
-  // 【步骤 4】创建 PendingTransfer 对象
   PendingTransfer transfer;
   transfer.kind = PendingTransfer::Kind::kSend;
   transfer.transfer_id = next_transfer_id_.fetch_add(1);
@@ -1667,7 +1508,6 @@ bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
   transfer.mhandle = mhandle;
   transfer.chunks.reserve(chunk_count);
 
-  // 【步骤 5】分割成 chunks
   auto base_ptr = static_cast<char const*>(data);
   for (size_t idx = 0; idx < chunk_count; ++idx) {
     size_t offset = idx * chunk_bytes;
@@ -1676,19 +1516,17 @@ bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
     chunk.offset = offset;
     chunk.bytes = chunk_len;
     chunk.tag = static_cast<uint32_t>(tag) + static_cast<uint32_t>(idx);
-    chunk.needs_unpack = false;  // 发送端不需要 unpack
+    chunk.needs_unpack = false;
     chunk.dst_ptr = const_cast<char*>(base_ptr) + offset;
     transfer.chunks.push_back(std::move(chunk));
   }
 
-  // 【步骤 6】加入 transfer_map_ 并开始调度
   uint64_t tid = transfer.transfer_id;
   {
     std::lock_guard<std::mutex> lock(transfer_mu_);
     auto [it, inserted] = transfer_map_.emplace(tid, std::move(transfer));
     PendingTransfer& stored = it->second;
 
-    // 立即调度第一批 chunks（受滑动窗口限制）
     auto outcome = schedule_send_chunks_locked(conn, stored);
     if (outcome == ScheduleOutcome::kError) {
       transfer_map_.erase(it);
@@ -1700,56 +1538,28 @@ bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
   return true;
 }
 
-/**
- * 提交接收传输（recv_async 的内部实现）
- *
- * 执行流程：
- * 1. 获取 TCPX 内存注册句柄（mhandle）
- * 2. 将数据分割成多个 chunks（默认 512KB 每个）
- * 3. 创建 PendingTransfer 对象并加入 transfer_map_
- * 4. 调用 schedule_recv_chunks_locked 开始调度第一批 chunks
- * 5. 返回 transfer_id 给调用者
- *
- * 数据分割策略：
- * - chunk_bytes = 512KB（默认）
- * - chunk_count = ceil(size / chunk_bytes)
- * - 每个 chunk 有独立的 tag = base_tag + chunk_index
- *
- * 流水线设计：
- * - 接收端是两阶段流水线（网络传输 + GPU unpack）
- * - Stage 1: chunks 被加入 recv_stage1_queue，等待 tcpx_irecv 提交
- * - Stage 2: 网络完成后，chunks 被移入 recv_stage2_queue，等待 GPU unpack 完成
- * - 用户通过 poll_async 推进传输，直到所有 chunks 完成
- *
- * needs_unpack 参数：
- * - true: 需要 GPU unpack kernel（recv_async 调用）
- * - false: 不需要 unpack（READ 操作，数据直接写入目标内存）
- *
- * @param conn 连接对象
- * @param mr_id 内存注册 ID
- * @param mr 内存注册条目
- * @param data 接收数据指针（必须在 mr 范围内）
- * @param size 接收数据大小
- * @param tag 基础 tag（每个 chunk 的 tag = base_tag + chunk_index）
- * @param transfer_id 输出：传输 ID
- * @param needs_unpack 是否需要 GPU unpack kernel
- * @return 成功返回 true，失败返回 false
- */
 bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
                           void* data, size_t size, int tag,
                           uint64_t& transfer_id, bool needs_unpack) {
+  // Mirror of post_send_. The needs_unpack flag distinguishes between pure READ
+  // completions (already in device memory) versus recv_async, which requires
+  // the CUDA unpack stage to run after TCPX hands back bounce buffer fragments.
+  //
+  // Two-stage pipeline (if needs_unpack=true):
+  //   Stage 1: tcpx_irecv() -> bounce buffer (recv_stage1_queue)
+  //   Stage 2: GPU unpack kernel -> final destination (recv_stage2_queue)
+  //
+  // Single-stage (if needs_unpack=false, READ path):
+  //   Stage 1: tcpx_irecv() -> device memory directly (no Stage 2)
   if (!data || size == 0) return false;
 
-  // 【步骤 1】获取 TCPX 内存注册句柄
   void* mhandle = nullptr;
   if (!populate_conn_handles_(conn, mr_id, /*is_recv=*/true, &mhandle))
     return false;
 
-  // 【步骤 2】计算 chunk 分割参数
   size_t chunk_bytes = std::max<size_t>(1, chunk_bytes_);
   size_t chunk_count = (size + chunk_bytes - 1) / chunk_bytes;
 
-  // 【步骤 3】边界检查：确保数据在 MR 范围内
   uintptr_t base_addr = reinterpret_cast<uintptr_t>(mr.base);
   uintptr_t dst_addr = reinterpret_cast<uintptr_t>(data);
   if (dst_addr < base_addr || dst_addr + size > base_addr + mr.size) {
@@ -1757,7 +1567,6 @@ bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
     return false;
   }
 
-  // 【步骤 4】创建 PendingTransfer 对象
   PendingTransfer transfer;
   transfer.kind = needs_unpack ? PendingTransfer::Kind::kRecv
                                : PendingTransfer::Kind::kRead;
@@ -1769,7 +1578,6 @@ bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
   transfer.mhandle = mhandle;
   transfer.chunks.reserve(chunk_count);
 
-  // 【步骤 5】分割成 chunks
   auto base_ptr = static_cast<char*>(data);
   for (size_t idx = 0; idx < chunk_count; ++idx) {
     size_t offset = idx * chunk_bytes;
@@ -1778,19 +1586,17 @@ bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
     chunk.offset = offset;
     chunk.bytes = chunk_len;
     chunk.tag = static_cast<uint32_t>(tag) + static_cast<uint32_t>(idx);
-    chunk.needs_unpack = needs_unpack;  // 接收端可能需要 GPU unpack
+    chunk.needs_unpack = needs_unpack;
     chunk.dst_ptr = base_ptr + offset;
     transfer.chunks.push_back(std::move(chunk));
   }
 
-  // 【步骤 6】加入 transfer_map_ 并开始调度
   uint64_t tid = transfer.transfer_id;
   {
     std::lock_guard<std::mutex> lock(transfer_mu_);
     auto [it, inserted] = transfer_map_.emplace(tid, std::move(transfer));
     PendingTransfer& stored = it->second;
 
-    // 立即调度第一批 chunks（受滑动窗口限制）
     auto outcome = schedule_recv_chunks_locked(conn, stored);
     if (outcome == ScheduleOutcome::kError) {
       transfer_map_.erase(it);
@@ -1802,42 +1608,18 @@ bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
   return true;
 }
 
-/**
- * 【Stage 1】轮询 TCPX 网络传输完成状态
- *
- * 功能：
- * - 调用 tcpx_test 查询 chunk 的网络传输是否完成
- * - 网络完成 = 数据已到达 bounce buffer（CPU 端 pinned memory）
- * - 对于接收端，还需要 Stage 2（GPU unpack）才能真正完成
- *
- * tcpx_test 返回值：
- * - 0: 成功，检查 completed 标志
- * - kTcpxBusy: TCPX 运行时还没有进度，继续等待
- * - 2: 对端关闭连接（如果 completed=1 则忽略，否则继续等待）
- * - 其他: 错误
- *
- * 设计要点：
- * - 非阻塞：tcpx_test 立即返回，不等待
- * - 幂等：可以多次调用，直到 completed=1
- * - 错误处理：区分暂时性错误（kTcpxBusy）和永久性错误
- *
- * @param transfer 传输对象
- * @param chunk chunk 状态
- * @param done 输出：是否完成
- * @param received_size 输出：接收到的字节数（可选）
- * @return 成功返回 true，失败返回 false
- */
 bool Endpoint::poll_chunk_request_(PendingTransfer& transfer,
                                    PendingTransfer::ChunkState& chunk,
                                    bool* done, int* received_size) {
+  // Stage-1 helper for both TX and RX: poll tcpx_test and mark
+  // chunk.stage1_done when the hardware reports completion. For RX this also
+  // extracts descriptor metadata that Stage 2 uses to launch the unpack kernel.
   *done = false;
   if (!chunk.request) return false;
 
   int completed = 0;
   int size = 0;
 
-  // 【Stage 1】查询 TCPX 网络传输进度
-  // tcpx_test 立即返回，completed=1 表示数据已到达 bounce buffer
   int rc = tcpx_test(chunk.request, &completed, &size);
 
   if (debug_enabled_ && rc != kTcpxBusy) {
@@ -1847,13 +1629,10 @@ bool Endpoint::poll_chunk_request_(PendingTransfer& transfer,
               << " completed=" << completed << " size=" << size << std::endl;
   }
 
-  // kTcpxBusy: TCPX 运行时还没有进度，继续等待
   if (rc == kTcpxBusy) {
     return true;
   }
 
-  // rc=2: 对端关闭连接
-  // 如果 chunk 已完成则忽略，否则继续等待（对齐原来的 TcpxTransfer 逻辑）
   if (rc == 2) {
     if (!completed) {
       if (debug_enabled_) {
@@ -1865,7 +1644,6 @@ bool Endpoint::poll_chunk_request_(PendingTransfer& transfer,
       return true;
     }
   } else if (rc != 0) {
-    // 其他错误：永久性失败
     size_t chunk_idx = chunk_bytes_ ? (chunk.offset / chunk_bytes_) : 0;
     std::cerr << "[tcpx] tcpx_test failed rc=" << rc
               << " transfer_id=" << transfer.transfer_id
@@ -1873,69 +1651,36 @@ bool Endpoint::poll_chunk_request_(PendingTransfer& transfer,
     return false;
   }
 
-  // completed=0: 还没完成，继续等待
   if (!completed) return true;
 
-  // completed=1: 网络传输完成
   *done = true;
   if (received_size) *received_size = size;
   return true;
 }
 
-/**
- * 【Stage 2 启动】启动 GPU unpack kernel（接收端专用）
- *
- * 功能：
- * - 将数据从 bounce buffer拷贝到目标 GPU 内存
- * - 使用 CUDA kernel 执行异步拷贝
- * - 记录 CUDA event 用于跟踪 kernel 完成状态
- *
- * 执行流程：
- * 1. 从 TCPX request 中提取 fragment 元数据（src_off, len, dst_off）
- * 2. 构建 UnpackDescriptorBlock（描述所有 fragments）
- * 3. 启动 GPU unpack kernel（在 unpack_stream_ 上）
- * 4. 记录 CUDA event（用于 Stage 2 完成检测）
- * 5. 保存 event 引用到 chunk（不拥有，由 Conn::recv_events pool 管理）
- *
- * Bounce Buffer 设计：
- * - TCPX 使用 bounce buffer 作为中间存储（CPU pinned memory）
- * - 网络数据先到达 bounce buffer（Stage 1 完成）
- * - GPU kernel 再从 bounce buffer 拷贝到目标 GPU 内存（Stage 2）
- * - 这样可以解耦网络传输和 GPU 操作，提高流水线效率
- *
- * Fragment 元数据：
- * - frag_cnt: fragment 数量（一个 chunk 可能被分成多个 fragments）
- * - src_off: 在 bounce buffer 中的偏移
- * - len: fragment 长度
- * - dst_off: 在目标 GPU 内存中的偏移
- *
- * CUDA Event Pool 设计：
- * - 对齐原来的 ChannelWindow::events 设计
- * - 预分配固定数量的 events（MAX_INFLIGHT_PER_CHANNEL）
- * - 循环复用：event_idx = event_counter % pool_size
- * - 避免频繁创建/销毁 events（性能优化）
- *
- * @param transfer 传输对象
- * @param chunk chunk 状态
- * @param request TCPX request（包含 fragment 元数据）
- * @param conn 连接对象
- * @return 成功返回 true，失败返回 false
- */
 bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
                                      PendingTransfer::ChunkState& chunk,
                                      tcpx::plugin::tcpxRequest* request,
                                      Conn& conn) {
+  // Convert TCPX's unpack metadata into a descriptor block, launch the CUDA
+  // unpack kernel, and associate a recycled event so Stage 2 completion can be
+  // detected cheaply inside poll_async.
+  //
+  // GPU unpack flow:
+  //   1. Extract bounce buffer metadata from TCPX request
+  //   2. Build UnpackDescriptorBlock (src=bounce_buf, dst=chunk.dst_ptr)
+  //   3. Launch GPU kernel on unpack_stream_
+  //   4. Record CUDA event for completion detection
+  //   5. Recycle event from pool (event_counter % pool_size)
   ScopedCudaContext ctx_guard(cu_context_, static_cast<int>(local_gpu_idx_));
 
   if (!request) return false;
 
-  // 【步骤 1】确保 recv_dev_handle 已缓存（包含 bounce_buf 指针）
   if (!conn.recv_dev_handle_cached) {
     if (!ensure_recv_dev_handle_cached_(conn)) return false;
   }
   auto const& dev_handle = conn.recv_dev_handle_host;
 
-  // 【步骤 2】提取 fragment 数量
   uint64_t frag_cnt = 0;
   if (!request->unpack_slot.cnt) {
     std::cerr << "[tcpx] missing unpack counter" << std::endl;
@@ -1955,21 +1700,15 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
     return false;
   }
 
-
-  // 【步骤 3】构建 UnpackDescriptorBlock
-  // 将 TCPX plugin 提供的元数据转换为 CUDA kernel 期望的格式
   auto* meta_entries =
       static_cast<tcpx::plugin::loadMeta*>(request->unpack_slot.mem);
   tcpx::rx::UnpackDescriptorBlock block;
   tcpx::rx::buildDescriptorBlock(meta_entries, static_cast<uint32_t>(frag_cnt),
-                                 dev_handle.bounce_buf, chunk.dst_ptr,
-                                 block);
-
+                                 dev_handle.bounce_buf, chunk.dst_ptr, block);
 
   block.ready_flag = request->unpack_slot.cnt;
   block.ready_threshold = frag_cnt;
 
-  // 【步骤 4】启动 GPU unpack kernel
   int launch_rc = unpack_launcher_->launch(block, unpack_stream_);
   if (launch_rc != 0) {
     std::cerr << "[tcpx] unpack kernel launch failed rc=" << launch_rc
@@ -1977,13 +1716,11 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
     return false;
   }
 
-  // 【步骤 5】从 Event Pool 中获取 event（循环复用）
-  // 对齐原来的 ChannelWindow::events 设计：
   //   int event_idx = win.chunk_counter % MAX_INFLIGHT_PER_CHANNEL;
   //   cudaEventRecord(win.events[event_idx], unpack_stream);
   size_t event_idx = conn.recv_events.empty()
-                          ? 0
-                          : (conn.event_counter % conn.recv_events.size());
+                         ? 0
+                         : (conn.event_counter % conn.recv_events.size());
   conn.event_counter++;
 
   cudaEvent_t event = conn.recv_events[event_idx];
@@ -1994,38 +1731,21 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
     return false;
   }
 
-  // 【步骤 6】保存 event 引用（不拥有，由 Conn::recv_events pool 管理）
   chunk.event = event;
   chunk.event_idx = event_idx;
   chunk.desc_block = block;
   return true;
 }
 
-/**
- * 【Stage 2 完成】释放接收 chunk 的资源
- *
- * 功能：
- * - 通知 TCPX 运行时 bounce buffer 已被消费（可以复用）
- * - 清空 chunk 的 event 和 request 引用
- *
- * 执行流程：
- * 1. 调用 tcpx_irecv_consumed 释放 bounce buffer slot
- * 2. 清空 chunk.event 引用（不销毁，由 Event Pool 管理）
- * 3. 清空 chunk.request 引用
- *
- * 设计要点：
- * - tcpx_irecv_consumed: 告诉 TCPX 运行时 GPU unpack 已完成
- * - bounce buffer 可以被复用（用于新的 chunks）
- * - Event Pool 设计：events 预分配，循环复用，不在热路径上销毁
- * - 对齐原来的 ChannelWindow 设计
- *
- * @param conn 连接对象
- * @param chunk chunk 状态
- * @return 成功返回 true，失败返回 false
- */
 bool Endpoint::finalize_recv_chunk_(Conn& conn,
                                     PendingTransfer::ChunkState& chunk) {
-  // 【步骤 1】通知 TCPX 运行时 bounce buffer 已被消费
+  // Stage 2 epilogue for recv/read paths: notify TCPX that the bounce buffer
+  // can be reused and release the per-chunk CUDA event back to the pool.
+  //
+  // Cleanup steps:
+  //   1. Call tcpx_irecv_consumed() to release bounce buffer
+  //   2. Clear chunk.event (returns event to pool for reuse)
+  //   3. Clear chunk.request
   if (conn.recv_comm) {
     int rc = tcpx_irecv_consumed(conn.recv_comm, 1, chunk.request);
     if (rc != 0) {
@@ -2035,131 +1755,35 @@ bool Endpoint::finalize_recv_chunk_(Conn& conn,
     }
   }
 
-  // 【步骤 2】清空引用（不销毁）
-  // ✅ 不销毁 event，只清空引用（event 由 Conn::recv_events pool 拥有）
-  // 对齐原来的设计：events 在 ChannelWindow 中预分配，循环复用，不在热路径上销毁
   chunk.event = nullptr;
   chunk.request = nullptr;
   return true;
 }
 
-/**
- * 【核心流水线函数】推进传输的 Stage 1 和 Stage 2（持锁调用）
- *
- * ============================================================================
- * 发送端流程（单阶段流水线）
- * ============================================================================
- *
- * 队列：send_queue
- *
- * 流程：
- * 1. 遍历 send_queue（FIFO 顺序，只处理队列头部）
- * 2. 对每个 chunk 调用 poll_chunk_request_（查询 tcpx_test）
- * 3. 如果 tcpx_test 返回 completed=1：
- *    - 从 send_queue 中移除
- *    - 标记 chunk.stage2_done = true
- *    - 递增 transfer.chunks_completed
- *    - 释放窗口配额（release_send_slot）
- *    - 设置 trigger_send = true（触发重新调度）
- * 4. 如果 tcpx_test 返回 completed=0：
- *    - 停止处理（TCPX 要求 FIFO 顺序）
- *
- * 为什么是单阶段：
- * - 发送端不需要 GPU unpack（数据直接从 GPU 内存发送）
- * - 只需要等待网络传输完成（tcpx_test）
- *
- * ============================================================================
- * 接收端流程（两阶段流水线）
- * ============================================================================
- *
- * 队列：recv_stage1_queue -> recv_stage2_queue
- *
- * 【Stage 1】网络传输完成（数据到达 bounce buffer）
- *
- * 流程：
- * 1. 遍历 recv_stage1_queue（FIFO 顺序，只处理队列头部）
- * 2. 对每个 chunk 调用 poll_chunk_request_（查询 tcpx_test）
- * 3. 如果 tcpx_test 返回 completed=1：
- *    - 从 recv_stage1_queue 中移除
- *    - 标记 chunk.stage1_done = true
- *    - 如果 chunk.needs_unpack = true：
- *      a. 启动 GPU unpack kernel
- *      b. 将 chunk 索引加入 recv_stage2_queue
- *    - 如果 chunk.needs_unpack = false（READ 操作）：
- *      a. 调用 finalize_recv_chunk_ 释放资源
- *      b. 标记 chunk.stage2_done = true
- *      c. 递增 transfer.chunks_completed
- *      d. 释放窗口配额（release_recv_slot）
- *      e. 设置 trigger_recv = true
- * 4. 如果 tcpx_test 返回 completed=0：
- *    - 停止处理（TCPX 要求 FIFO 顺序）
- *
- * 【Stage 2】GPU unpack 完成（数据从 bounce buffer 拷贝到目标 GPU 内存）
- *
- * 流程：
- * 1. 遍历 recv_stage2_queue（遍历整个队列，处理所有已 ready 的 events）
- * 2. 对每个 chunk 调用 cudaEventQuery（查询 GPU kernel 是否完成）
- * 3. 如果 cudaEventQuery 返回 cudaSuccess：
- *    - 调用 finalize_recv_chunk_ 释放资源（bounce buffer slot）
- *    - 标记 chunk.stage2_done = true
- *    - 递增 transfer.chunks_completed
- *    - 释放窗口配额（release_recv_slot）
- *    - 从 recv_stage2_queue 中移除
- *    - 设置 trigger_recv = true
- * 4. 如果 cudaEventQuery 返回 cudaErrorNotReady：
- *    - 跳过该 chunk，继续检查下一个（允许乱序完成）
- *
- * ============================================================================
- * 设计要点
- * ============================================================================
- *
- * 1. FIFO 顺序（Stage 1）：
- *    - TCPX 要求按 FIFO 顺序 test requests（只能 test "next in line"）
- *    - send_queue 和 recv_stage1_queue 只处理队列头部
- *    - 如果头部未完成则停止处理
- *
- * 2. 乱序完成（Stage 2）：
- *    - GPU unpack kernels 可能乱序完成
- *    - recv_stage2_queue 遍历整个队列，处理所有已 ready 的 events
- *    - 修复了之前只检查队列头部的 bug
- *
- * 3. 释放窗口配额：
- *    - 每完成一个 chunk 就释放配额（release_*_slot）
- *    - 允许 Stage 0 调度新的 chunks
- *    - 充分利用滑动窗口，最大化吞吐量
- *
- * 4. 触发重新调度：
- *    - 如果有进度，设置 schedule_* 标志
- *    - 调用者（advance_transfer_locked）会再次调用 schedule_*_chunks_locked
- *    - 确保窗口始终保持满载
- *
- * 5. Bounce Buffer 设计：
- *    - 网络数据先到达 bounce buffer（CPU pinned memory）
- *    - GPU kernel 再从 bounce buffer 拷贝到目标 GPU 内存
- *    - 解耦网络传输和 GPU 操作，提高流水线效率
- *
- * @param conn 连接对象
- * @param transfer 传输对象
- * @param schedule_send 输出：是否需要调度更多发送 chunks
- * @param schedule_recv 输出：是否需要调度更多接收 chunks
- * @return 成功返回 true，失败返回 false
- */
 bool Endpoint::progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
                                         bool* schedule_send,
                                         bool* schedule_recv) {
+  // Stage 1 covers network completions; Stage 2 covers GPU completions for the
+  // receive path. schedule_send/recv are used to signal that Stage 0 should
+  // retry submission because window slots were freed during this pass.
+  //
+  // Pipeline overview:
+  //   Send path (single-stage):
+  //     send_queue -> tcpx_test() -> release_send_slot() -> done
+  //
+  //   Receive path (two-stage):
+  //     recv_stage1_queue -> tcpx_test() -> enqueue_chunk_unpack_() ->
+  //     recv_stage2_queue -> cudaEventQuery() -> release_recv_slot() -> done
   bool trigger_send = false;
   bool trigger_recv = false;
 
   // ========================================================================
-  // 发送端：单阶段流水线
+  // Send path: Stage 1 only (no GPU unpack needed)
   // ========================================================================
   if (transfer.kind == PendingTransfer::Kind::kSend) {
-    // TCPX 要求按 FIFO 顺序 test requests（只能 test "next in line"）
-    // 只处理队列头部，如果头部未完成则停止
     while (!transfer.send_queue.empty()) {
       size_t idx = transfer.send_queue.front();
 
-      // 安全检查：索引越界
       if (idx >= transfer.chunks.size()) {
         transfer.send_queue.pop_front();
         continue;
@@ -2167,29 +1791,26 @@ bool Endpoint::progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
 
       auto& chunk = transfer.chunks[idx];
 
-      // 跳过未提交的 chunks
       if (!chunk.posted) {
-        break;  // 头部未提交，停止处理
-      }
-
-      // 【Stage 1】轮询 TCPX 请求状态
-      bool done = false;
-      int received = 0;
-      if (!poll_chunk_request_(transfer, chunk, &done, &received))
-        return false;
-
-      // 如果未完成，停止处理（TCPX 要求 FIFO 顺序）
-      if (!done) {
         break;
       }
 
-      // 【完成】从队列中移除，标记完成，释放窗口配额
+      // Poll TCPX for network completion
+      bool done = false;
+      int received = 0;
+      if (!poll_chunk_request_(transfer, chunk, &done, &received)) return false;
+
+      if (!done) {
+        break;  // Still in flight, check again on next poll_async()
+      }
+
+      // Network send complete: release window slot and mark done
       transfer.send_queue.pop_front();
       chunk.stage2_done = true;
       transfer.chunks_completed++;
       chunk.request = nullptr;
       release_send_slot(transfer.conn_id);
-      trigger_send = true;  // 触发重新调度
+      trigger_send = true;  // Signal Stage 0 to post more chunks
     }
 
     if (schedule_send) *schedule_send = trigger_send;
@@ -2198,14 +1819,11 @@ bool Endpoint::progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
   }
 
   // ========================================================================
-  // 接收端：两阶段流水线
+  // Receive path: Stage 1 (network) + Stage 2 (GPU unpack)
   // ========================================================================
   else {
-    // ------------------------------------------------------------------------
-    // Stage 1: 推进网络传输完成（数据到达 bounce buffer）
-    // ------------------------------------------------------------------------
-    // TCPX 要求按 FIFO 顺序 test requests（只能 test "next in line"）
-    // 只处理队列头部，如果头部未完成则停止
+    // Stage 1: Poll TCPX for network completions. When a chunk arrives in the
+    // bounce buffer, extract unpack metadata and launch the GPU kernel.
     while (!transfer.recv_stage1_queue.empty()) {
       size_t idx = transfer.recv_stage1_queue.front();
       if (idx >= transfer.chunks.size()) {
@@ -2214,35 +1832,35 @@ bool Endpoint::progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
       }
       auto& chunk = transfer.chunks[idx];
       if (!chunk.posted) {
-        break;  // 头部未提交，停止处理
+        break;
       }
       if (chunk.stage1_done) {
         transfer.recv_stage1_queue.pop_front();
         continue;
       }
 
-      // 对这个chunk调用一次tcpx_test
+      // Poll TCPX for network completion
       bool done = false;
       int received = 0;
-      if (!poll_chunk_request_(transfer, chunk, &done, &received))
-        return false;
+      if (!poll_chunk_request_(transfer, chunk, &done, &received)) return false;
 
       if (!done) {
-        // chunk还没完成，停止处理（TCPX 要求 FIFO 顺序）
-        break;
+        break;  // Still in flight, check again on next poll_async()
       }
 
-      // chunk已完成网络传输（数据已到达bounce buffer）
+      // Network receive complete: data is now in bounce buffer
       chunk.stage1_done = true;
       transfer.recv_stage1_queue.pop_front();
 
       if (chunk.needs_unpack) {
-        // 需要GPU unpack kernel：将数据从bounce buffer拷贝到目标GPU内存
-        auto* rx_req = reinterpret_cast<tcpx::plugin::tcpxRequest*>(chunk.request);
+        // Launch GPU kernel to copy from bounce buffer to final destination
+        auto* rx_req =
+            reinterpret_cast<tcpx::plugin::tcpxRequest*>(chunk.request);
         if (!enqueue_chunk_unpack_(transfer, chunk, rx_req, conn)) return false;
         transfer.recv_stage2_queue.push_back(idx);
+        // Window slot remains reserved until Stage 2 completes
       } else {
-        // 不需要unpack（例如READ操作），直接完成
+        // READ path: data already in device memory, no unpack needed
         if (!finalize_recv_chunk_(conn, chunk)) return false;
         chunk.stage2_done = true;
         transfer.chunks_completed++;
@@ -2252,19 +1870,10 @@ bool Endpoint::progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
       }
     }
 
-    // Stage 2: 等待GPU unpack完成
-    //
-    // BUG修复：遍历整个队列，处理所有已ready的events
-    //
-    // 原来的错误逻辑：
-    //   - 遇到第一个未ready的event就break
-    //   - 问题：后面已ready的events会被忽略
-    //
-    // 正确做法：
-    //   - 遍历整个recv_stage2_queue
-    //   - 对每个event调用cudaEventQuery
-    //   - 处理所有已ready的events
-    //   - 未ready的events留在队列中
+    // Stage 2: Poll CUDA events to detect GPU unpack completion. This stage
+    // runs asynchronously with Stage 1, allowing network and GPU work to
+    // overlap. Chunks may complete out-of-order, so we iterate the entire
+    // queue.
     auto stage2_it = transfer.recv_stage2_queue.begin();
     while (stage2_it != transfer.recv_stage2_queue.end()) {
       size_t idx = *stage2_it;
@@ -2290,24 +1899,24 @@ bool Endpoint::progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
         continue;
       }
 
+      // Query CUDA event to check if GPU unpack kernel has finished
       cudaError_t err = cudaEventQuery(chunk.event);
       if (err == cudaErrorNotReady) {
-        // Event还没ready，跳过它，继续检查下一个event
-        ++stage2_it;
+        ++stage2_it;  // GPU still working, check next chunk
         continue;
       }
       if (err != cudaSuccess) {
-        std::cerr << "[tcpx] cudaEventQuery failed: "
-                  << cudaGetErrorString(err) << std::endl;
+        std::cerr << "[tcpx] cudaEventQuery failed: " << cudaGetErrorString(err)
+                  << std::endl;
         return false;
       }
 
-      // Event已ready，完成这个chunk
+      // GPU unpack complete: finalize and release window slot
       if (!finalize_recv_chunk_(conn, chunk)) return false;
       chunk.stage2_done = true;
       transfer.chunks_completed++;
       chunk.request = nullptr;
-      release_recv_slot(transfer.conn_id);
+      release_recv_slot(transfer.conn_id);  // Now Stage 0 can post more chunks
       trigger_recv = true;
       stage2_it = transfer.recv_stage2_queue.erase(stage2_it);
     }
@@ -2318,63 +1927,35 @@ bool Endpoint::progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
   return true;
 }
 
-/**
- * 【用户接口】轮询传输是否完成
- *
- * 执行流程：
- * 1. 持 transfer_mu_ 查找传输
- * 2. 如果不存在，说明已完成，返回 true
- * 3. 持 conn_mu_ 查找连接对象（嵌套锁）
- * 4. 调用 advance_transfer_locked 推进传输
- * 5. 如果完成，清理并释放锁，然后重置窗口计数器
- *
- * 【锁使用详解】
- *
- * 1. 锁顺序（避免死锁）：
- *    - 先获取 transfer_mu_（外层锁）
- *    - 再获取 conn_mu_（内层锁，使用嵌套作用域）
- *    - 这个顺序与 drive_transfer_ 一致
- *
- * 2. 为什么使用嵌套作用域获取 conn_mu_：
- *    - conn_mu_ 只需要持锁查找连接对象
- *    - 查找完成后立即释放 conn_mu_（离开作用域）
- *    - 减少锁持有时间，降低锁竞争
- *
- * 3. 为什么使用 shared_lock 而非 unique_lock：
- *    - conn_mu_ 是读写锁（shared_mutex）
- *    - 只需要读取 conn_map_，不需要修改
- *    - 使用 shared_lock 允许多个线程并发读取
- *
- * 4. 为什么先释放 transfer_mu_ 再调用 reset_conn_window_counters_：
- *    - 与 drive_transfer_ 相同的原因
- *    - 避免同时持有 transfer_mu_ 和 window_mu_
- *    - 减少锁竞争，提高并发性能
- *
- * @param transfer_id 传输 ID
- * @param is_done 输出：传输是否完成
- * @return 成功返回 true，失败返回 false
- */
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
+  // Main entry point for advancing a transfer through its pipeline stages.
+  // Called repeatedly by the user until the transfer completes.
+  //
+  // Overall data flow:
+  //   1. Lookup transfer and connection (under locks)
+  //   2. Call advance_transfer_locked() to run Stage 0/1/2
+  //   3. If complete, finalize and reset window counters
+  //   4. Return completion status to caller
   if (!is_done) return false;
   *is_done = false;
 
-  // 【持锁 1】获取 transfer_mu_，保护 transfer_map_
+  // Step 1: grab the transfer while holding transfer_mu_. This guarantees that
+  // only a single thread is advancing the pipeline for a given transfer_id.
   std::unique_lock<std::mutex> lock(transfer_mu_);
 
   auto it = transfer_map_.find(transfer_id);
   if (it == transfer_map_.end()) {
-    // 传输已完成并移除
     if (debug_enabled_) {
-      std::cerr << "[tcpx] poll transfer_id=" << transfer_id
-                << " c" << std::endl;
+      std::cerr << "[tcpx] poll transfer_id=" << transfer_id << " c"
+                << std::endl;
     }
     *is_done = true;
     return true;
   }
   PendingTransfer& transfer = it->second;
 
-  // 【持锁 2】嵌套获取 conn_mu_（读锁），查找连接对象
-  // 使用嵌套作用域，查找完成后立即释放 conn_mu_
+  // Step 2: lookup the owning connection under conn_mu_. The connection is
+  // shared_ptr-managed so we can safely release conn_mu_ immediately after.
   std::shared_ptr<Conn> conn_ptr;
   {
     std::shared_lock<std::shared_mutex> conn_lock(conn_mu_);
@@ -2382,22 +1963,20 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
     if (conn_it == conn_map_.end()) return false;
     conn_ptr = conn_it->second;
   }
-  // 【释放锁 2】离开作用域，conn_mu_ 自动释放
 
-  // 【持锁推进】调用 advance_transfer_locked 推进传输
-  // 此时只持有 transfer_mu_，conn_mu_ 已释放
+  // Step 3: drive Stage 0/1/2 progression. On success transfer_complete tells
+  // us whether finalize_transfer_locked should run.
   bool transfer_complete = false;
   if (!advance_transfer_locked(*conn_ptr, transfer, &transfer_complete))
     return false;
 
   if (transfer_complete) {
-    // 【持锁清理】从 transfer_map_ 中移除传输
     finalize_transfer_locked(it);
 
-    // 【释放锁 1】在调用 reset_conn_window_counters_ 前释放 transfer_mu_
     lock.unlock();
 
-    // 【持锁 3】reset_conn_window_counters_ 内部会持 window_mu_
+    // After the transfer is removed we can safely reset the per-connection
+    // window counters (guarded by window_mu_).
     reset_conn_window_counters_(conn_ptr->conn_id);
 
     *is_done = true;
@@ -2421,95 +2000,26 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   return true;
 }
 
-bool Endpoint::progress_conn(uint64_t conn_id) {
-  std::shared_ptr<Conn> conn_ptr;
-  {
-    std::shared_lock<std::shared_mutex> lock(conn_mu_);
-    auto it = conn_map_.find(conn_id);
-    if (it == conn_map_.end()) return false;
-    conn_ptr = it->second;
-  }
-
-  std::vector<uint64_t> pending;
-  {
-    std::lock_guard<std::mutex> lock(transfer_mu_);
-    for (auto const& kv : transfer_map_) {
-      if (kv.second.conn_id == conn_id) {
-        pending.push_back(kv.first);
-      }
-    }
-  }
-
-  bool progressed = false;
-  for (auto transfer_id : pending) {
-    bool is_done = false;
-    if (!poll_async(transfer_id, &is_done)) continue;
-    progressed = true;
-  }
-  return progressed;
-}
-
-
-/**
- * 释放连接资源（在析构或连接关闭时调用）
- *
- * 清理顺序（重要！）：
- * 1. 收集该连接的所有 TCPX 内存注册句柄
- * 2. 重置窗口计数器
- * 3. 调用 tcpx_dereg_mr 释放所有句柄
- * 4. 销毁 CUDA Event Pool
- * 5. 关闭 TCPX send_comm 和 recv_comm
- * 6. 关闭 TCP 控制套接字
- *
- * 设计要点：
- * - 先收集句柄：避免持锁时间过长（tcpx_dereg_mr 可能阻塞）
- * - Event Pool 清理：对齐原来的 ChannelWindow 析构逻辑
- *
- * 【锁使用详解】
- *
- * 1. mr_mu_ 的持锁范围：
- *    - 只在收集句柄时持锁
- *    - 收集完成后立即释放锁（离开作用域）
- *    - 避免在持锁时调用 tcpx_dereg_mr（可能阻塞）
- *
- * 2. 为什么先收集句柄再释放锁：
- *    - tcpx_dereg_mr 可能阻塞（等待 TCPX 运行时完成）
- *    - 如果持锁调用，会阻塞其他线程访问 mr_map_
- *    - 先收集到 vector，释放锁后再调用 tcpx_dereg_mr
- *
- * 3. reset_conn_window_counters_ 的锁：
- *    - 内部会持 window_mu_
- *    - 此时不持 mr_mu_，避免同时持有多个锁
- *
- * 4. 清理顺序的重要性：
- *    - 先收集句柄（持锁时间短）
- *    - 再释放句柄（无锁，可能阻塞）
- *    - 最后销毁 CUDA events 和关闭 TCPX 通道
- *
- * @param conn 连接对象
- */
 void Endpoint::free_conn_(std::shared_ptr<Conn> const& conn) {
+  // Connection teardown order matters: remove per-connection MR handles while
+  // holding mr_mu_, reset inflight windows, then release hardware resources in
+  // the reverse order of creation (events -> comms -> control socket).
   if (!conn) return;
 
-  // 【步骤 1】收集该连接的所有 TCPX 内存注册句柄
-  // 【持锁收集】持 mr_mu_ 遍历 mr_map_ 并收集句柄
   std::vector<void*> send_handles;
   std::vector<void*> recv_handles;
   {
     std::lock_guard<std::mutex> lock(mr_mu_);
 
-    // 遍历所有 MR，移除该连接的缓存句柄
     for (auto& kv : mr_map_) {
       auto& mr = kv.second;
 
-      // 发送句柄
       auto send_it = mr.send_handles.find(conn->conn_id);
       if (send_it != mr.send_handles.end()) {
         send_handles.push_back(send_it->second);
         mr.send_handles.erase(send_it);
       }
 
-      // 接收句柄
       auto recv_it = mr.recv_handles.find(conn->conn_id);
       if (recv_it != mr.recv_handles.end()) {
         recv_handles.push_back(recv_it->second);
@@ -2517,14 +2027,9 @@ void Endpoint::free_conn_(std::shared_ptr<Conn> const& conn) {
       }
     }
   }
-  // 【释放锁】离开作用域，mr_mu_ 自动释放
 
-  // 【步骤 2】重置窗口计数器
-  // reset_conn_window_counters_ 内部会持 window_mu_
   reset_conn_window_counters_(conn->conn_id);
 
-  // 【步骤 3】释放 TCPX 内存注册句柄
-  // 【无锁调用】tcpx_dereg_mr 可能阻塞，不持锁
   for (void* handle : send_handles) {
     if (conn->send_comm) tcpx_dereg_mr(conn->send_comm, handle);
   }
@@ -2532,8 +2037,6 @@ void Endpoint::free_conn_(std::shared_ptr<Conn> const& conn) {
     if (conn->recv_comm) tcpx_dereg_mr(conn->recv_comm, handle);
   }
 
-  // 【步骤 4】销毁 CUDA Event Pool
-  // 对齐原来的设计：events 在 ChannelWindow 析构时销毁
   for (auto& event : conn->recv_events) {
     if (event) {
       cudaEventDestroy(event);
@@ -2541,7 +2044,6 @@ void Endpoint::free_conn_(std::shared_ptr<Conn> const& conn) {
   }
   conn->recv_events.clear();
 
-  // 【步骤 5】关闭 TCPX 通道
   if (conn->send_comm) {
     tcpx_close_send(conn->send_comm);
     conn->send_comm = nullptr;
@@ -2551,7 +2053,6 @@ void Endpoint::free_conn_(std::shared_ptr<Conn> const& conn) {
     conn->recv_comm = nullptr;
   }
 
-  // 【步骤 6】关闭 TCP 控制套接字
   if (conn->ctrl_sock_fd >= 0) {
     ::close(conn->ctrl_sock_fd);
     conn->ctrl_sock_fd = -1;
