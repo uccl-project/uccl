@@ -136,7 +136,9 @@ build_p2p() {
   mkdir -p uccl
   mkdir -p uccl/lib
   if [[ -z "${USE_TCPX:-}" || "$USE_TCPX" != "1" ]]; then
-    cp p2p/p2p.*.so uccl/
+    cp p2p/*.so uccl/
+    cp p2p/*.a uccl/
+    # TODO : Check if the below files are required to be installed
     cp p2p/collective.py uccl/
     cp p2p/transfer.py uccl/
     cp p2p/utils.py uccl/
