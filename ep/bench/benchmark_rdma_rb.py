@@ -29,7 +29,7 @@ except ImportError as exc:
     sys.stderr.write("Failed to import ep\n")
     raise
 
-from utils import init_dist, get_peer_ip, detect_ib_hca, get_cpu_proxies_meta
+from utils import init_dist, detect_ib_hca, get_cpu_proxies_meta
 
 
 def make_proxies(
@@ -39,7 +39,6 @@ def make_proxies(
     rank: int,
     node_idx: int,
     local_rank: int,
-    peer_ip: str,
     mode: str,
     peers_meta_list=None,
 ) -> List[ep.Proxy]:
@@ -55,7 +54,7 @@ def make_proxies(
             rank=rank,
             node_idx=node_idx,
             local_rank=local_rank,
-            peer_ip=peer_ip or "",
+            is_intranode=False,
         )
         if peers_meta_list is not None:
             p.set_peers_meta(peers_meta_list)
@@ -73,7 +72,6 @@ def make_proxies(
 
 def run_rank0_sender(
     args,
-    peer_ip: str,
     peers_meta_list: list,
     nbytes: int,
     buf_addr,
@@ -90,7 +88,7 @@ def run_rank0_sender(
     bench = ep.Bench()
     env = bench.env_info()
     print(
-        f"[rank 0] peer={peer_ip} blocks={int(env.blocks)} "
+        f"[rank 0] blocks={int(env.blocks)} "
         f"tpb={int(env.threads_per_block)} iters={int(env.iterations)}",
         flush=True,
     )
@@ -101,7 +99,7 @@ def run_rank0_sender(
         rank=0,
         node_idx=node_idx,
         local_rank=local_rank,
-        peer_ip=peer_ip,
+        is_intranode=False,
         mode="sender",
         peers_meta_list=peers_meta_list,
     )
@@ -128,7 +126,6 @@ def run_rank0_sender(
 
 def run_rank1_remote(
     args,
-    peer_ip: str,
     peers_meta_list: list,
     nbytes: int,
     buf_addr,
@@ -146,7 +143,6 @@ def run_rank1_remote(
         rank=1,
         node_idx=node_idx,
         local_rank=local_rank,
-        peer_ip=peer_ip,
         mode="remote",
         peers_meta_list=peers_meta_list,
     )
@@ -193,7 +189,6 @@ def main():
     num_local_ranks = int(os.environ["LOCAL_WORLD_SIZE"])
     rank, num_ranks, group = init_dist(local_rank, num_local_ranks)
     node_idx = rank // num_local_ranks
-    peer_ip = get_peer_ip(rank, num_ranks, group)
 
     scratch_nbytes = int(args.size_mb) << 20
     scratch = torch.empty(
@@ -209,7 +204,6 @@ def main():
     if rank == 0:
         run_rank0_sender(
             args,
-            peer_ip,
             peers_meta_list,
             scratch_nbytes,
             scratch_ptr,
@@ -219,7 +213,6 @@ def main():
     else:
         run_rank1_remote(
             args,
-            peer_ip,
             peers_meta_list,
             scratch_nbytes,
             scratch_ptr,

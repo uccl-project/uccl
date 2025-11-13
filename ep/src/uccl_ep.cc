@@ -138,6 +138,10 @@ class Buffer {
 #endif
           }
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+          // Note(huangzhen): It will make d_handles turn to nullptr in rocm7.0,
+          // so we don't prefetch d_handles.
+#else
           // Prefetch so the device immediately sees initialized contents
           CUDA_CHECK(cudaMemPrefetchAsync(
               d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
@@ -146,6 +150,7 @@ class Buffer {
               d_handles, num_d2h_channel_addrs * sizeof(uint64_t),
               device_index));
           CUDA_CHECK(cudaDeviceSynchronize());
+#endif
         }
         // Allocate device memory for IPC base pointers
         CUDA_CHECK(
@@ -405,7 +410,6 @@ class Buffer {
       int expert_alignment, uccl::Config const& config,
       std::optional<EventHandle>& previous_event, bool async,
       bool allocate_on_comm_stream) {
-#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__)
     // In dispatch, CPU will busy-wait until GPU receive tensor size metadata
     // from other ranks, which can be quite long. If users of DeepEP need to
     // execute other Python code on other threads, such as KV transfer, their
@@ -745,9 +749,6 @@ class Buffer {
             send_rdma_head,
             send_nvl_head,
             event};
-#else
-    return {};
-#endif
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>,
@@ -766,7 +767,6 @@ class Buffer {
                     uccl::Config const& config,
                     std::optional<EventHandle>& previous_event, bool async,
                     bool allocate_on_comm_stream) {
-#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__)
     int const num_channels = config.num_sms / 2;
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
 
@@ -923,9 +923,6 @@ class Buffer {
 
     // Return values
     return {combined_x, combined_topk_weights, event};
-#else
-    return {};
-#endif
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>,
@@ -1463,10 +1460,16 @@ class Buffer {
     if (not return_recv_hook) stream_wait(launch_stream, compute_stream);
 
     // Allocate packed tensors
-    auto packed_recv_x = torch::empty(
-        {num_local_experts, num_ranks * num_max_dispatch_tokens_per_rank,
-         hidden},
-        x.options().dtype(use_fp8 ? torch::kFloat8_e4m3fn : torch::kBFloat16));
+    auto packed_recv_x =
+        torch::empty({num_local_experts,
+                      num_ranks * num_max_dispatch_tokens_per_rank, hidden},
+                     x.options().dtype(use_fp8 ?
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+                                               torch::kFloat8_e4m3fnuz
+#else
+                                               torch::kFloat8_e4m3fn
+#endif
+                                               : torch::kBFloat16));
     auto packed_recv_src_info = torch::empty(
         {num_local_experts, num_ranks * num_max_dispatch_tokens_per_rank},
         torch::dtype(torch::kInt32).device(torch::kCUDA));
@@ -2119,7 +2122,7 @@ PYBIND11_MODULE(ep, m) {
     return std::string(cudaGetErrorString(st));
   });
   m.def("is_sm90_compiled", is_sm90_compiled);
-  m.def("get_num_proxy_threads", []() { return kNumThBlocks; });
+  m.def("get_num_proxy_threads", []() { return kNumProxyThs; });
   m.def(
       "stream_query",
       [](uintptr_t stream_ptr) {
@@ -2138,18 +2141,19 @@ PYBIND11_MODULE(ep, m) {
   });
   py::class_<Stats>(m, "Stats");
   py::class_<UcclProxy>(m, "Proxy")
-      .def(py::init<int, uintptr_t, size_t, int, int, int, std::string const&,
-                    int, int, int, bool>(),
+      .def(py::init<int, uintptr_t, size_t, int, int, int, int, int, int, bool,
+                    bool>(),
            py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
            py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
-           py::arg("local_rank") = 0, py::arg("peer_ip") = std::string(),
-           py::arg("num_experts") = -1, py::arg("num_ranks") = -1,
-           py::arg("num_nodes") = 0, py::arg("use_normal_mode") = false)
+           py::arg("local_rank") = 0, py::arg("num_experts") = -1,
+           py::arg("num_ranks") = -1, py::arg("num_nodes") = 0,
+           py::arg("use_normal_mode") = false, py::arg("is_intranode") = false)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)
       .def("start_dual", &UcclProxy::start_dual)
       .def("stop", &UcclProxy::stop)
+      .def("get_listen_port", &UcclProxy::get_listen_port)
       .def("get_atomic_buffer_ptr", &UcclProxy::get_atomic_buffer_ptr)
       .def("set_atomic_buffer_ptr", &UcclProxy::set_atomic_buffer_ptr)
       .def("set_dispatch_recv_data_offset",
@@ -2177,6 +2181,21 @@ PYBIND11_MODULE(ep, m) {
                   pm.nbytes = static_cast<size_t>(
                       py::cast<unsigned long long>(d["nbytes"]));
                   pm.ip = py::cast<std::string>(d["ip"]);
+
+                  // Handle listen_ports array (always present)
+                  auto ports = d["listen_ports"].cast<py::sequence>();
+                  size_t port_count =
+                      std::min(static_cast<size_t>(py::len(ports)),
+                               static_cast<size_t>(kNumProxyThs));
+                  for (size_t i = 0; i < port_count; ++i) {
+                    pm.listen_ports[i] = ports[i].cast<int>();
+                  }
+                  // Initialize remaining ports to 0 if fewer than kNumProxyThs
+                  // provided
+                  for (size_t i = port_count; i < kNumProxyThs; ++i) {
+                    pm.listen_ports[i] = 0;
+                  }
+
                   v.push_back(std::move(pm));
                 } else {
                   v.push_back(obj.cast<PeerMeta>());
@@ -2192,6 +2211,20 @@ PYBIND11_MODULE(ep, m) {
               pm.nbytes = static_cast<size_t>(
                   py::cast<unsigned long long>(d["nbytes"]));
               pm.ip = py::cast<std::string>(d["ip"]);
+
+              // Handle listen_ports array (always present)
+              auto ports = d["listen_ports"].cast<py::sequence>();
+              size_t port_count = std::min(static_cast<size_t>(py::len(ports)),
+                                           static_cast<size_t>(kNumProxyThs));
+              for (size_t i = 0; i < port_count; ++i) {
+                pm.listen_ports[i] = ports[i].cast<int>();
+              }
+              // Initialize remaining ports to 0 if fewer than kNumProxyThs
+              // provided
+              for (size_t i = port_count; i < kNumProxyThs; ++i) {
+                pm.listen_ports[i] = 0;
+              }
+
               v.push_back(std::move(pm));
             }
             self.set_peers_meta(v);
@@ -2223,8 +2256,6 @@ PYBIND11_MODULE(ep, m) {
       .def("timing_start", &Bench::timing_start)
       .def("timing_stop", &Bench::timing_stop)
       .def("is_running", &Bench::is_running)
-      .def("start_local_proxies", &Bench::start_local_proxies,
-           py::arg("rank") = 0, py::arg("peer_ip") = std::string())
       .def("launch_gpu_issue_batched_commands",
            &Bench::launch_gpu_issue_batched_commands)
       .def("sync_stream", &Bench::sync_stream)
@@ -2276,27 +2307,40 @@ PYBIND11_MODULE(ep, m) {
       .def("last_elapsed_ms", &BenchFifo::last_elapsed_ms);
 
   py::class_<FifoProxy>(m, "FifoProxy")
-      .def(
-          py::init<int, uintptr_t, size_t, int, int, int, std::string const&>(),
-          py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
-          py::arg("total_size"), py::arg("rank"), py::arg("node_idx"),
-          py::arg("local_rank"), py::arg("peer_ip"))
+      .def(py::init<int, uintptr_t, size_t, int, int, int, bool>(),
+           py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
+           py::arg("total_size"), py::arg("rank"), py::arg("node_idx"),
+           py::arg("local_rank"), py::arg("is_intranode"))
       .def("set_fifo", &FifoProxy::set_fifo, py::arg("fifo"))
       .def("set_peers_meta",
            [](FifoProxy& proxy, py::list meta_list) {
-             std::vector<std::tuple<int, uintptr_t, size_t, std::string>> vec;
+             std::vector<PeerMeta> vec;
              for (py::handle h : meta_list) {
-               // Handle both dict and tuple formats
                if (py::isinstance<py::dict>(h)) {
                  auto d = h.cast<py::dict>();
-                 vec.emplace_back(
-                     d["rank"].cast<int>(), d["ptr"].cast<uintptr_t>(),
-                     d["nbytes"].cast<size_t>(), d["ip"].cast<std::string>());
+                 PeerMeta pm;
+                 pm.rank = d["rank"].cast<int>();
+                 pm.ptr = d["ptr"].cast<uintptr_t>();
+                 pm.nbytes = d["nbytes"].cast<size_t>();
+                 pm.ip = d["ip"].cast<std::string>();
+
+                 // Handle listen_ports array (always present)
+                 auto ports = d["listen_ports"].cast<py::sequence>();
+                 size_t port_count =
+                     std::min(static_cast<size_t>(py::len(ports)),
+                              static_cast<size_t>(kNumProxyThs));
+                 for (size_t i = 0; i < port_count; ++i) {
+                   pm.listen_ports[i] = ports[i].cast<int>();
+                 }
+                 // Initialize remaining ports to 0 if fewer than kNumProxyThs
+                 // provided
+                 for (size_t i = port_count; i < kNumProxyThs; ++i) {
+                   pm.listen_ports[i] = 0;
+                 }
+
+                 vec.push_back(std::move(pm));
                } else {
-                 auto t = h.cast<py::tuple>();
-                 vec.emplace_back(t[0].cast<int>(), t[1].cast<uintptr_t>(),
-                                  t[2].cast<size_t>(),
-                                  t[3].cast<std::string>());
+                 vec.push_back(h.cast<PeerMeta>());
                }
              }
              proxy.set_peers_meta(vec);
@@ -2304,6 +2348,7 @@ PYBIND11_MODULE(ep, m) {
       .def("start_sender", &FifoProxy::start_sender)
       .def("start_remote", &FifoProxy::start_remote)
       .def("stop", &FifoProxy::stop)
+      .def("get_listen_port", &FifoProxy::get_listen_port)
       .def("avg_wr_latency_us", &FifoProxy::avg_wr_latency_us)
       .def("processed_count", &FifoProxy::processed_count)
       .def_readonly("thread_idx", &FifoProxy::thread_idx);

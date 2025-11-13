@@ -409,7 +409,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
 
       // Move tail index
       // NOTES: here all warps should share the same new tail
-      sync_barrier(responsible_rank, num_threads_per_rank);
+      sync_barrier<true>(responsible_rank, num_threads_per_rank);
       if (send_warp_id_in_rank == 0 and lane_id == 0)
         st_release_sys_global(channel_tail_idx.buffer(),
                               cached_channel_tail_idx);
@@ -480,7 +480,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
       }
 
       // Synchronize queue tail
-      sync_barrier(responsible_rank, num_threads_per_rank);
+      sync_barrier<true>(responsible_rank, num_threads_per_rank);
       cached_channel_tail_idx = shared_channel_tail_idx[responsible_rank];
 
       // Copy data
@@ -564,7 +564,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
       // Move queue
       cached_channel_head_idx += num_recv_tokens;
       total_offset += num_recv_tokens;
-      sync_barrier(responsible_rank, num_threads_per_rank);
+      sync_barrier<true>(responsible_rank, num_threads_per_rank);
       if (recv_warp_id_in_rank == num_recv_warps_per_rank - 1 and lane_id == 0)
         st_relaxed_sys_global(channel_head_idx.buffer(),
                               cached_channel_head_idx);
@@ -860,7 +860,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
       current_channel_tail_idx += num_round_tokens;
 
       // Move tail index
-      sync_barrier(send_rank_id, num_threads_per_rank);
+      sync_barrier<true>(send_rank_id, num_threads_per_rank);
       if (lane_id == 0 and send_warp_id_in_rank == 0)
         st_release_sys_global(channel_tail_idx.buffer(),
                               current_channel_tail_idx);
