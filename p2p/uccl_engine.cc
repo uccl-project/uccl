@@ -57,6 +57,7 @@ typedef struct {
   bool is_valid;
 } fifo_vec_item_t;
 
+uint64_t fifo_id_counter = 0; // Global FIFO ID counter
 std::unordered_map<uintptr_t, uint64_t> mem_reg_info;
 std::unordered_map<int, fifo_item_t*> fifo_item_map;
 std::unordered_map<int, fifo_vec_item_t*> fifo_vec_item_map;
@@ -70,6 +71,13 @@ int uccl_engine_get_fifo_item(int id, FifoItem& fifo_item);
 int uccl_engine_get_fifo_vec(int id, std::vector<FifoItem>& fifo_vec);
 void uccl_engine_delete_fifo_vec(int id);
 void uccl_engine_delete_fifo_item(int id);
+
+uint64_t get_new_fifo_id() {
+  if (fifo_id_counter == UINT64_MAX) {
+    fifo_id_counter = 0;
+  }
+  return fifo_id_counter++;
+}
 // Helper function for the listener thread
 void listener_thread_func(uccl_conn_t* conn) {
   std::cout << "Listener thread: Waiting for metadata." << std::endl;
@@ -616,7 +624,7 @@ int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md) {
 }
 
 int uccl_engine_send_tx_md_vector(uccl_conn_t* conn, md_t* md_array,
-                                  size_t count) {
+                                  size_t count, int id) {
   if (!conn || !md_array || count == 0) return -1;
 
   // Determine the operation type based on the first item
@@ -626,6 +634,7 @@ int uccl_engine_send_tx_md_vector(uccl_conn_t* conn, md_t* md_array,
   md_t vector_md;
   vector_md.op = op_type;
   vector_md.data.vector_data.count = count;
+  vector_md.data.vector_data.id = id;
 
   ssize_t bytes_sent = send(conn->sock_fd, &vector_md, sizeof(md_t), 0);
   if (bytes_sent != sizeof(md_t)) {
