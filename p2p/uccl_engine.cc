@@ -354,7 +354,7 @@ void listener_thread_func(uccl_conn_t* conn) {
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
-  eng->endpoint = new Endpoint(0, num_cpus);
+  eng->endpoint = new Endpoint(num_cpus);
   return eng;
 }
 
@@ -444,40 +444,41 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
              : -1;
 }
 
-void uccl_engine_progress_conn(uccl_conn_t* conn) {
-  if (!conn) return;
-#ifdef USE_TCPX
-  if (conn->engine && conn->engine->endpoint) {
-    conn->engine->endpoint->progress_conn(conn->conn_id);
-  }
-#else
-  (void)conn;
-#endif
-}
-
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
                      size_t data_size) {
   if (!conn || !mr || !data) return -1;
 
+#ifdef USE_TCPX
+  // TCPX: no background progress thread exists, so drive progress here.
   uint64_t transfer_id = 0;
   if (!conn->engine->endpoint->recv_async(conn->conn_id, mr->mr_id, data,
                                           data_size, &transfer_id)) {
     return -1;
   }
 
-  // Poll until the transfer completes
-  // This drives the stage 1 (network -> bounce buffer) and stage 2 (unpack kernel) pipelines
+  // Poll until the transfer completes (drives Stage 1 and Stage 2).
   bool done = false;
+  // Simple adaptive backoff: spin a few times, then sleep briefly.
+  int spins = 0;
   while (!done) {
     if (!conn->engine->endpoint->poll_async(transfer_id, &done)) {
       return -1;
     }
     if (!done) {
-      std::this_thread::sleep_for(std::chrono::microseconds(10));
+      if (spins < 64) {
+        ++spins;  // brief spin to reduce tail latency on large transfers
+      } else {
+        std::this_thread::sleep_for(std::chrono::microseconds(5));
+      }
     }
   }
-
   return 0;
+#else
+  return conn->engine->endpoint->recv(conn->conn_id, mr->mr_id, data,
+                                      data_size)
+             ? 0
+             : -1;
+#endif
 }
 
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {
@@ -648,7 +649,8 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
   if (!engine || !metadata) return -1;
 
   try {
-    std::vector<uint8_t> metadata_vec = engine->endpoint->get_metadata();
+    std::vector<uint8_t> metadata_vec =
+        engine->endpoint->get_unified_metadata();
 
     std::string result;
     if (metadata_vec.size() == 10) {  // IPv4 format

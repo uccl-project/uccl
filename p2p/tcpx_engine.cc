@@ -236,15 +236,12 @@ namespace tcpx {
 // Endpoint Construction & Control Plane
 // ============================================================================
 
-Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const /*num_cpus*/) {
-  local_gpu_idx_ = local_gpu_idx;
+Endpoint::Endpoint(uint32_t const /*num_cpus*/) {
+  // Resolve local GPU index from env (default 0) to align with RDMA-style ctor.
+  local_gpu_idx_ = 0;
   int override_gpu = get_env_int("UCCL_TCPX_LOCAL_DEVICE", -1);
-  if (override_gpu < 0) {
-    override_gpu = get_env_int("UCCL_TCPX_DEVICE_IDX", -1);
-  }
-  if (override_gpu >= 0) {
-    local_gpu_idx_ = static_cast<uint32_t>(override_gpu);
-  }
+  if (override_gpu < 0) override_gpu = get_env_int("UCCL_TCPX_DEVICE_IDX", -1);
+  if (override_gpu >= 0) local_gpu_idx_ = static_cast<uint32_t>(override_gpu);
 
   // Bring up the control socket, pre-create the TCPX listen handle, and warm up
   // the CUDA stream used by bounce-buffer unpack launches.
@@ -418,7 +415,7 @@ Endpoint::~Endpoint() {
 // ---------------------------------------------------------------------------
 // Metadata helpers
 // ---------------------------------------------------------------------------
-std::vector<uint8_t> Endpoint::get_metadata() {
+std::vector<uint8_t> Endpoint::get_unified_metadata() {
   EndpointInfo info{};
   std::string ip = get_local_ip();
   std::snprintf(info.ip, sizeof(info.ip), "%s", ip.c_str());
@@ -1973,10 +1970,6 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
   block.ready_threshold = frag_cnt;
 
   // 【步骤 4】启动 GPU unpack kernel
-  if (debug_enabled_) {
-    std::cerr << "[tcpx] launch unpack: count=" << block.count
-              << " total_bytes=" << block.total_bytes << std::endl;
-  }
   int launch_rc = unpack_launcher_->launch(block, unpack_stream_);
   if (launch_rc != 0) {
     std::cerr << "[tcpx] unpack kernel launch failed rc=" << launch_rc

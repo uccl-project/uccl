@@ -344,7 +344,7 @@ class Endpoint {
    * @param local_gpu_idx 本地 GPU 索引（可通过 UCCL_TCPX_LOCAL_DEVICE 覆盖）
    * @param num_cpus CPU 数量（当前未使用）
    */
-  Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus);
+  explicit Endpoint(uint32_t const num_cpus);
 
   /**
    * 销毁 TCPX 传输引擎实例
@@ -401,7 +401,7 @@ class Endpoint {
   bool accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
 
   /**
-   * 获取本地 endpoint 元数据（用于 NIXL 插件的 getConnInfo）
+   * 获取本地 endpoint 元数据（统一接口，与 RDMA 对齐）
    *
    * 元数据格式：
    * - IPv4：10 字节（4 字节 IP + 2 字节端口 + 4 字节 GPU 索引）
@@ -410,7 +410,7 @@ class Endpoint {
    *
    * @return 元数据字节数组
    */
-  std::vector<uint8_t> get_metadata();
+  std::vector<uint8_t> get_unified_metadata();
 
   /**
    * 解析 endpoint 元数据
