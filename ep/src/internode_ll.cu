@@ -115,7 +115,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   __syncthreads();
 
   if (warp_id == num_warps - 1) {
-    // Count how many tokens are routed to each expert via topk_idx.
   #pragma unroll 8
     for (int i = lane_id; i < num_tokens * num_topk; i += WARP_SIZE) {
       auto idx = static_cast<int>(__ldg(topk_idx + i)); 
@@ -123,7 +122,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         atomicAdd(&full_expert_count_shared[idx], 1);
     }
   }
-  // ensure all warps see the shared results
   __syncthreads();
 
   // There are 2 kinds of warps in this part:
