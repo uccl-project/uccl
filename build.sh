@@ -50,7 +50,7 @@ build_rccl_nccl_h() {
   fi
 }
 
-build_rdma() {
+build_ccl_rdma() {
   local TARGET="$1"
   local ARCH="$2"
   local IS_EFA="$3"
@@ -89,7 +89,7 @@ build_rdma() {
   cp ${TARGET_SO} uccl/lib/
 }
 
-build_efa() {
+build_ccl_efa() {
   local TARGET="$1"
   local ARCH="$2"
   local IS_EFA="$3"
@@ -136,9 +136,10 @@ build_p2p() {
   mkdir -p uccl
   mkdir -p uccl/lib
   if [[ -z "${USE_TCPX:-}" || "$USE_TCPX" != "1" ]]; then
-    cp p2p/*.so uccl/
-    cp p2p/*.a uccl/
-    # TODO : Check if the below files are required to be installed
+    cp p2p/libuccl_p2p.so uccl/lib/
+    cp p2p/librdma_plugin.a uccl/lib/
+    cp p2p/p2p.*.so uccl/
+    # TODO : Check if the below files are required to be installed?
     cp p2p/collective.py uccl/
     cp p2p/transfer.py uccl/
     cp p2p/utils.py uccl/
@@ -290,10 +291,10 @@ docker run --rm --user "$(id -u):$(id -g)" \
       build_rccl_nccl_h
     fi
 
-    if [[ "$BUILD_TYPE" == "rdma" ]]; then
-      build_rdma "$TARGET" "$ARCH" "$IS_EFA"
-    elif [[ "$BUILD_TYPE" == "efa" ]]; then
-      build_efa "$TARGET" "$ARCH" "$IS_EFA"
+    if [[ "$BUILD_TYPE" == "ccl_rdma" ]]; then
+      build_ccl_rdma "$TARGET" "$ARCH" "$IS_EFA"
+    elif [[ "$BUILD_TYPE" == "ccl_efa" ]]; then
+      build_ccl_efa "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "p2p" ]]; then
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "ep" ]]; then
@@ -301,8 +302,8 @@ docker run --rm --user "$(id -u):$(id -g)" \
     elif [[ "$BUILD_TYPE" == "eccl" ]]; then
       build_eccl "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "all" ]]; then
-      build_rdma "$TARGET" "$ARCH" "$IS_EFA"
-      build_efa "$TARGET" "$ARCH" "$IS_EFA"
+      build_ccl_rdma "$TARGET" "$ARCH" "$IS_EFA"
+      build_ccl_efa "$TARGET" "$ARCH" "$IS_EFA"
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
       # build_ep "$TARGET" "$ARCH" "$IS_EFA"
       # build_eccl "$TARGET" "$ARCH" "$IS_EFA"
