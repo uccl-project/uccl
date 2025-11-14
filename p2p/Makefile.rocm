@@ -56,7 +56,7 @@ $(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) RDMA_PLUGIN_SO
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(HIP_LIB) $(PYTHON_LIB) -libverbs -lz -lelf
 
-$(RDMA_HOME)/librdma_hip.a: $(RDMA_HOME)/*.cc $(RDMA_HOME)/*.h
+$(RDMA_HOME)/librdma_hip.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
 	make -C $(RDMA_HOME) -f Makefile.rocm -j$(nproc)
 
 RDMA_OBJECTS := $(patsubst $(RDMA_HOME)/%.cc,%.o,$(filter-out $(RDMA_HOME)/nccl_plugin.cc,$(wildcard $(RDMA_HOME)/*.cc)))
@@ -81,11 +81,11 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	install -m 644 $(CAPI_HEADER) $(INCDIR)/
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(TARGET)
+	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB) $(P2P_PYTHON_EXT) $(RDMA_PLUGIN_SO) $(RDMA_OBJECTS)
 	make -C $(RDMA_HOME) -f Makefile.rocm clean -j$(nproc)
 
 # Test the module
-test: $(TARGET)
+test: $(P2P_PYTHON_EXT)
 	$(PYTHON) test_engine_write.py
 
 # Install pybind11 if not available
