@@ -420,8 +420,8 @@ void pt_listen_ports(int local_rank) {
   nodes[r].listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
   DCHECK(nodes[r].listen_fd_ >= 0);
   int flag = 1;
-  DCHECK(setsockopt(nodes[r].listen_fd_, SOL_SOCKET, SO_REUSEADDR, &flag,
-                    sizeof(int)) >= 0);
+  CHECK(setsockopt(nodes[r].listen_fd_, SOL_SOCKET, SO_REUSEADDR, &flag,
+                   sizeof(int)) >= 0);
   struct sockaddr_in serv_addr;
   bzero((char*)&serv_addr, sizeof(serv_addr));
   serv_addr.sin_family = AF_INET;
@@ -445,8 +445,8 @@ void incast_listen_ports() {
     nodes[r].incast_listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     DCHECK(nodes[r].incast_listen_fd_ >= 0);
     int flag = 1;
-    DCHECK(setsockopt(nodes[r].incast_listen_fd_, SOL_SOCKET, SO_REUSEADDR,
-                      &flag, sizeof(int)) >= 0);
+    CHECK(setsockopt(nodes[r].incast_listen_fd_, SOL_SOCKET, SO_REUSEADDR,
+                     &flag, sizeof(int)) >= 0);
     struct sockaddr_in serv_addr;
     bzero((char*)&serv_addr, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
@@ -599,11 +599,11 @@ void p2p_receive(int local_rank, int target_rank, int size, bool incast) {
     while (offset < size) {
       int net_chunk_size =
           std::min(size - offset, (uint32_t)INCAST_NET_CHUNK_SIZE);
-      DCHECK(ep->uccl_recv_async(
-                 (UcclFlow*)recv_comm_->incast[local_rank].conn_id.context,
-                 &recv_comm_->incast[local_rank].mhandle,
-                 &recv_comm_->incast[local_rank].buffer, &net_chunk_size, 1,
-                 &recv_comm_->incast[local_rank].ureq[chunk_id]) == 0);
+      CHECK(ep->uccl_recv_async(
+                (UcclFlow*)recv_comm_->incast[local_rank].conn_id.context,
+                &recv_comm_->incast[local_rank].mhandle,
+                &recv_comm_->incast[local_rank].buffer, &net_chunk_size, 1,
+                &recv_comm_->incast[local_rank].ureq[chunk_id]) == 0);
 
       recv_comm_->incast[local_rank].done[chunk_id] = false;
       offset += net_chunk_size;
@@ -614,10 +614,10 @@ void p2p_receive(int local_rank, int target_rank, int size, bool incast) {
   } else {
     while (offset < size) {
       int net_chunk_size = std::min(size - offset, (uint32_t)PT_NET_CHUNK_SIZE);
-      DCHECK(ep->uccl_recv_async((UcclFlow*)recv_comm_->pt.conn_id.context,
-                                 &recv_comm_->pt.mhandle,
-                                 &recv_comm_->pt.buffer, &net_chunk_size, 1,
-                                 &recv_comm_->pt.ureq[chunk_id]) == 0);
+      CHECK(ep->uccl_recv_async((UcclFlow*)recv_comm_->pt.conn_id.context,
+                                &recv_comm_->pt.mhandle, &recv_comm_->pt.buffer,
+                                &net_chunk_size, 1,
+                                &recv_comm_->pt.ureq[chunk_id]) == 0);
 
       recv_comm_->pt.done[chunk_id] = false;
       offset += net_chunk_size;

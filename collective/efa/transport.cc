@@ -690,7 +690,7 @@ void UcclFlow::process_rttprobe_rsp(uint64_t ts1, uint64_t ts2, uint64_t ts3,
 bool UcclFlow::periodic_check() {
   // TODO(yang): send RST packet, indicating removal of the flow.
   if (pcb_.max_rto_rexmits_consectutive_reached()) {
-    DCHECK(false) << "Max RTO retransmits reached";
+    CHECK(false) << "Max RTO retransmits reached";
   }
 
   pcb_.advance_rto_tick();
@@ -1245,9 +1245,9 @@ bool UcclFlow::send_pullpacket(PullQuanta const& pullno) {
   wr.wr.ud.remote_qkey = QKEY;
   wr.send_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE;
 
-  DCHECK(ibv_post_send(
-             credit_qp_ctx_->get_qp_by_idx(credit_qpidx_rr_ % kMaxSrcQPCredit),
-             &wr, &bad_wr) == 0);
+  CHECK(ibv_post_send(
+            credit_qp_ctx_->get_qp_by_idx(credit_qpidx_rr_ % kMaxSrcQPCredit),
+            &wr, &bad_wr) == 0);
 
   return true;
 }
@@ -1846,8 +1846,8 @@ std::tuple<uint16_t, int> Endpoint::uccl_listen() {
   DCHECK(listen_fd >= 0) << "ERROR: opening socket";
 
   int flag = 1;
-  DCHECK(setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
-         0)
+  CHECK(setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
+        0)
       << "ERROR: setsockopt SO_REUSEADDR fails";
 
   auto listen_port = 0;  // Let OS assign a port.
@@ -1887,7 +1887,7 @@ std::tuple<uint16_t, int> Endpoint::uccl_listen() {
   LOG(INFO) << "[Endpoint] Rank " << localRank << " bound on port "
             << listen_port << " (fd=" << listen_fd << ")";
 
-  DCHECK(!listen(listen_fd, 128)) << "ERROR: listen";
+  CHECK(!listen(listen_fd, 128)) << "ERROR: listen";
   LOG(INFO) << "[Endpoint] server ready, listening on port " << listen_port;
 
   std::lock_guard<std::mutex> lock(listen_mu_);
@@ -2031,7 +2031,7 @@ ConnID Endpoint::uccl_accept(int local_vdev, int* remote_vdev,
     } else {
       // Remove the speculatively inserted flow ID.
       std::lock_guard<std::mutex> lock(fd_map_mu_);
-      DCHECK(1 == fd_map_.erase(flow_id));
+      CHECK(1 == fd_map_.erase(flow_id));
     }
   }
 
