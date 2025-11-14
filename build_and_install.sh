@@ -25,12 +25,8 @@ else
   pip install --extra-index-url ${ROCM_IDX_URL} $(ls wheelhouse-$TARGET/uccl-*.whl)[rocm]
 fi
 
-# Set up library discovery for NIXL meson builds
-echo "Setting up UCCL library discovery"
-# Extract installation path from pip
 UCCL_INSTALL_PATH=$(pip show uccl 2>/dev/null | grep "^Location:" | cut -d' ' -f2 || echo "")
 if [[ -n "$UCCL_INSTALL_PATH" && -d "$UCCL_INSTALL_PATH" ]]; then
-  # The Location from pip is the site-packages directory, uccl is a subdirectory
   UCCL_PACKAGE_PATH="$UCCL_INSTALL_PATH/uccl"
   if [[ -d "$UCCL_PACKAGE_PATH" ]]; then
     echo "UCCL installed at: $UCCL_PACKAGE_PATH"
@@ -39,5 +35,5 @@ if [[ -n "$UCCL_INSTALL_PATH" && -d "$UCCL_INSTALL_PATH" ]]; then
     echo "UCCL package directory not found at: $UCCL_PACKAGE_PATH"
   fi
 else
-  echo "Warning: Could not detect UCCL installation path from pip"
+  echo "Warning: Could not detect UCCL installation path"
 fi
