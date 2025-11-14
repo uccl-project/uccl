@@ -26,13 +26,7 @@ bash build_and_install.sh cuda ep
 
 ## Build on ROCm for testing
 
-With ROCm7 installed system-widely, you can directly build and install:
-```bash
-# Under ep
-python setup.py install
-```
-
-Alternatively, you can build `uccl.ep` wheel for ROCm using docker:
+You can build `uccl.ep` wheel for ROCm7 using docker:
 ```bash
 # Under uccl
 bash build_and_install.sh rocm ep

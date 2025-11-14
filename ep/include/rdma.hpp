@@ -291,15 +291,12 @@ void setup_rdma(void* gpu_buffer, size_t size, RDMAConnectionInfo* local_info,
 // Post an RDMA write
 void post_receive_buffer_for_imm(ProxyCtx& S);
 
-void exchange_connection_info_as_server(int my_rank, int* actual_peer,
-                                        int listen_fd,
-                                        RDMAConnectionInfo* local,
-                                        RDMAConnectionInfo* remote_array);
-void exchange_connection_info_as_client(int my_rank, int peer,
-                                        char const* peer_ip,
-                                        int peer_listen_port,
-                                        RDMAConnectionInfo* local,
-                                        RDMAConnectionInfo* remote_array);
+void recv_connection_info_as_server(int my_rank, int* actual_peer,
+                                    int listen_fd,
+                                    RDMAConnectionInfo* remote_array);
+void send_connection_info_as_client(int my_rank, int peer, char const* peer_ip,
+                                    int peer_listen_port,
+                                    RDMAConnectionInfo* local);
 
 void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
                       bool use_normal_mode);
