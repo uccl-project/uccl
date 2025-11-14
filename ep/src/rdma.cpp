@@ -477,8 +477,7 @@ void modify_qp_to_init(ProxyCtx& S) {
     }
   }
 
-  if (S.local_rank == 0 && S.thread_idx == 0)
-    printf("QP modified to INIT state\n");
+  printf("QP modified to INIT state\n");
 }
 
 struct ibv_ah* create_ah(ProxyCtx& S, uint8_t* remote_gid) {
@@ -572,19 +571,17 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
   int flags = IBV_QP_STATE | IBV_QP_PATH_MTU | IBV_QP_AV | IBV_QP_DEST_QPN |
               IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
 
-  if (S.local_rank == 0 && S.thread_idx == 0) {
-    printf("Remote LID: 0x%x, QPN: %u, PSN: %u\n", remote->lid, remote->qp_num,
-           remote->psn);
-    printf("Verifying port state:\n");
-    printf("  link_layer: %s\n",
-           (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) ? "Ethernet (RoCE)"
-                                                             : "InfiniBand");
-    printf("  port_state: %s\n",
-           (port_attr.state == IBV_PORT_ACTIVE) ? "ACTIVE" : "NOT ACTIVE");
-    printf("  max_mtu: %d\n", port_attr.max_mtu);
-    printf("  active_mtu: %d\n", port_attr.active_mtu);
-    printf("  lid: 0x%x\n", port_attr.lid);
-  }
+  printf("Remote LID: 0x%x, QPN: %u, PSN: %u\n", remote->lid, remote->qp_num,
+         remote->psn);
+  printf("Verifying port state:\n");
+  printf("  link_layer: %s\n", (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET)
+                                   ? "Ethernet (RoCE)"
+                                   : "InfiniBand");
+  printf("  port_state: %s\n",
+         (port_attr.state == IBV_PORT_ACTIVE) ? "ACTIVE" : "NOT ACTIVE");
+  printf("  max_mtu: %d\n", port_attr.max_mtu);
+  printf("  active_mtu: %d\n", port_attr.active_mtu);
+  printf("  lid: 0x%x\n", port_attr.lid);
 
   int ret = ibv_modify_qp(S.qp, &attr, flags);
   if (ret) {
@@ -601,8 +598,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
     }
   }
 
-  if (S.local_rank == 0 && S.thread_idx == 0)
-    printf("QP modified to RTR state\n");
+  printf("QP modified to RTR state\n");
 
   if (S.ack_qp) {
     attr.dest_qp_num = remote->recv_ack_qp_num;
@@ -626,8 +622,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
     }
   }
 
-  if (S.local_rank == 0 && S.thread_idx == 0)
-    printf("ACK-QP modified to RTR state\n");
+  printf("ACK-QP modified to RTR state\n");
 }
 
 void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
@@ -676,6 +671,7 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
     fprintf(stderr, "errno: %d\n", errno);
     exit(1);
   }
+
   printf("ACK-QP modified to RTS state\n");
 }
 
