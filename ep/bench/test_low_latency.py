@@ -323,9 +323,9 @@ def test_main(
 
     # noinspection PyShadowingNames
     def large_gemm_with_hook(hook):
-        mat_0 = torch.randn((8192, 8192), dtype=torch.float)
-        mat_1 = torch.randn((8192, 8192), dtype=torch.float)
-        mat_0 @ mat_1
+        # mat_0 = torch.randn((8192, 8192), dtype=torch.float)
+        # mat_1 = torch.randn((8192, 8192), dtype=torch.float)
+        # mat_0 @ mat_1
         hook()
 
     # noinspection PyShadowingNames

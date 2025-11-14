@@ -27,7 +27,8 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               void** ipc_rdma_base_ptrs = nullptr,
               void* rdma_buffer_ptr = nullptr,
               void* atomic_buffer_ptr = nullptr,
-              int* rdma_recv_count_internode = nullptr);
+              int* rdma_recv_count_internode = nullptr,
+            int* grid_sync_barrier_ptr = nullptr);
 
 void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              void* rdma_send_x, void const* x, int64_t const* topk_idx,
@@ -42,6 +43,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              int num_d2h_channel_addrs, int max_nvl_peers,
              int low_latency_buffer_idx, void** ipc_rdma_base_ptrs = nullptr,
              void* rdma_buffer_ptr = nullptr, void* atomic_buffer_ptr = nullptr,
-             int* rdma_recv_flag_internode = nullptr);
+             int* rdma_recv_flag_internode = nullptr,
+             int* grid_sync_barrier_ptr = nullptr);
 }  // namespace internode_ll
 }  // namespace uccl

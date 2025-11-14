@@ -14,11 +14,15 @@
 #define HIP_ATOMIC_LOAD(ptr, order, scope) __builtin_nontemporal_load((ptr))
 #define HIP_ATOMIC_STORE(val, ptr, order, scope) \
   __builtin_nontemporal_store((val), (ptr))
+#define HIP_ATOMIC_ADD(ptr, val, order, scope) \
+  __hip_atomic_fetch_add((ptr), (val), __ATOMIC_RELAXED, (scope))
 #else
 #define HIP_ATOMIC_LOAD(ptr, order, scope) \
   __hip_atomic_load((ptr), (order), (scope))
 #define HIP_ATOMIC_STORE(val, ptr, order, scope) \
   __hip_atomic_store((ptr), (val), (order), (scope))
+#define HIP_ATOMIC_ADD(ptr, val, order, scope) \
+  __hip_atomic_fetch_add((ptr), (val), (order), (scope))
 #endif
 
 // workgroup-level barrier sync used shared memory
@@ -74,6 +78,25 @@ __device__ __forceinline__ void barrier_sync(T* bar_ptr,
   }
   __syncwarp();
 }
+
+template <typename T = uint32_t, int MemoryOrder = __ATOMIC_RELAXED,
+          int MemoryScope = __HIP_MEMORY_SCOPE_AGENT>
+__device__ __forceinline__ void grid_sync(T* bar_ptr, int num_participants) {
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    __threadfence();
+    __hip_atomic_fetch_add(bar_ptr, 1, MemoryOrder, MemoryScope);
+  }
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    while (__hip_atomic_load(bar_ptr, MemoryOrder, MemoryScope) <
+           num_participants) {
+      __builtin_amdgcn_s_sleep(1);
+    }
+  }
+  __syncthreads();  // All threads resume together
+}
+
 }  // namespace amd
 #endif
 
@@ -604,8 +627,8 @@ __device__ __forceinline__ int atomic_add_release_global(int const* ptr,
                                                          int value) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __hip_atomic_fetch_add(const_cast<int*>(ptr), value, __ATOMIC_RELEASE,
-                               __HIP_MEMORY_SCOPE_AGENT);
+  ret = HIP_ATOMIC_ADD(const_cast<int*>(ptr), value, __ATOMIC_RELEASE,
+                       __HIP_MEMORY_SCOPE_AGENT);
 #else
   asm volatile("atom.add.release.gpu.global.s32 %0, [%1], %2;"
                : "=r"(ret)
@@ -911,8 +934,7 @@ __device__ __forceinline__ int ld_acquire_cta(int const* ptr) {
 __forceinline__ __device__ void acquire_lock(int* mutex) {
   // To make later memory operations valid, we must use `acquire` for memory
   // semantics
-  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0)
-    ;
+  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0);
 }
 
 __forceinline__ __device__ void release_lock(int* mutex) {

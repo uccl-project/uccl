@@ -14,6 +14,7 @@ except ImportError as exc:
 from uccl.ep import EventHandle, Config
 from utils import EventOverlap, check_nvlink_connections, initialize_uccl, destroy_uccl
 
+from hip import hip
 
 class Buffer:
     """
@@ -70,7 +71,8 @@ class Buffer:
         self.scratch = torch.zeros(
             num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
         )
-        rdma_buffer_ptr = self.scratch.data_ptr()
+        # rdma_buffer_ptr = self.scratch.data_ptr()
+        _, rdma_buffer_ptr = hip.hipExtMallocWithFlags(num_rdma_bytes, 3)
         self.proxies, self.workers = initialize_uccl(
             rdma_buffer_ptr,
             num_rdma_bytes,
