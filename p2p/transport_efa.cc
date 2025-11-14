@@ -515,6 +515,52 @@ int RDMAEndpoint::prepare_fifo_metadata(uint64_t conn_id,
     return 0;
 }
 
+int RDMAEndpoint::uccl_read_async(uint64_t conn_id, Mhandle* local_mh,
+                                  int num_devs_per_gpu, void* src, size_t size,
+                                  uccl::FifoItem const& slot_item,
+                                  ucclRequest* ureq) {
+
+    uint64_t dev_local_idx =
+        next_dev_local_idx_.fetch_add(1) % num_devs_per_gpu;
+
+    struct ibv_qp* qp = qp_list_[dev_local_idx];
+    struct ibv_mr* mr = mr_map_[local_mh->mr_id][dev_local_idx];
+    struct ibv_ah* ah = ah_map_[conn_id][dev_local_idx];
+    uint32_t remote_qpn = qpn_map_[conn_id][dev_local_idx];
+    uint32_t remote_rkey = slot_item.rkey;
+    if (dev_local_idx > 0) {
+        auto const* padding_rkeys =
+            reinterpret_cast<uint32_t const*>(slot_item.padding);
+        remote_rkey = padding_rkeys[dev_local_idx - 1];
+    }
+
+    struct ibv_qp_ex* qpx = ibv_qp_to_qp_ex(qp);
+    ibv_wr_start(qpx);
+    qpx->wr_id = reinterpret_cast<uint64_t>(ureq);
+    qpx->comp_mask = 0;
+    qpx->wr_flags = IBV_SEND_SIGNALED;
+    ibv_wr_rdma_read(qpx, remote_rkey, slot_item.addr);
+
+    uint32_t data_len =
+        std::min<uint32_t>(static_cast<uint32_t>(size), slot_item.size);
+    struct ibv_sge sge {
+        reinterpret_cast<uint64_t>(src), data_len, mr->lkey
+    };
+    ibv_wr_set_sge_list(qpx, 1, &sge);
+    ibv_wr_set_ud_addr(qpx, ah, remote_qpn, QKEY);
+
+    if (ibv_wr_complete(qpx)) {
+        printf("ibv_wr_complete failed\n");
+    }
+
+    ureq->type = ReqRx;
+    ureq->n = 1;
+    ureq->send_len = static_cast<int>(data_len);
+    ureq->dev_local_idx = dev_local_idx;
+
+    return 0;
+}
+
 int RDMAEndpoint::uccl_write_async(uint64_t conn_id, Mhandle* local_mh,
                                    int num_devs_per_gpu, void* src, size_t size,
                                    uccl::FifoItem const& slot_item,

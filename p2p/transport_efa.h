@@ -104,6 +104,11 @@ public:
                         uccl::FifoItem const& slot_item,
                         ucclRequest* ureq);
     
+    int uccl_read_async(uint64_t conn_id, Mhandle* local_mh,
+                        int num_devs_per_gpu, void* src, size_t size,
+                        uccl::FifoItem const& slot_item,
+                        ucclRequest* ureq);
+    
     bool uccl_poll_ureq_once(struct ucclRequest* ureq);
                               
 private:
