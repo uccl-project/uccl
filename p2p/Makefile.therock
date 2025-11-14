@@ -28,46 +28,63 @@ LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
                   -lz -lelf -libverbs -lpthread
 
 # Target and source files
-TARGET   := p2p$(PYEXT)
+P2P_PYTHON_EXT := p2p$(PYEXT)
+P2P_SHARED_LIB := libuccl_p2p.so
+RDMA_PLUGIN_SO := librdma_plugin.a
+CAPI_SOURCE := uccl_engine.cc
+CAPI_HEADER := uccl_engine.h
+CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
 SOURCES := engine.cc pybind_engine.cc
 OBJECTS := $(SOURCES:.cc=.o)
 
 # Default target
-all: $(TARGET)
+all: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 
 # Build the shared library
-$(TARGET): $(OBJECTS) $(RDMA_HOME)/librdma_hip.a
+$(P2P_PYTHON_EXT): $(OBJECTS) $(RDMA_HOME)/librdma_hip.a
 	$(CXX) $(OBJECTS) $(RDMA_HOME)/librdma_hip.a \
 	      -L$(HIP_LIB) -lamdhip64 \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS)
 
+$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_SO)
+	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_SO) \
+	      -L$(HIP_LIB) -lamdhip64 \
+	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
+	      -Wl,-rpath,$(HIP_LIB) $(PYTHON_LIB) -libverbs -lz -lelf
 
-$(RDMA_HOME)/librdma_hip.a: $(RDMA_HOME)/*.cc $(RDMA_HOME)/*.h
-	make -C $(RDMA_HOME) -f Makefile.therock -j$(nproc) HIP_HOME=${HIP_HOME} CONDA_LIB_HOME=${CONDA_LIB_HOME}
+$(RDMA_HOME)/librdma_hip.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc %_test.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
+	make -C $(RDMA_HOME) -f Makefile.therock librdma_hip.a -j$(nproc) HIP_HOME=${HIP_HOME} CONDA_LIB_HOME=${CONDA_LIB_HOME}
+
+RDMA_OBJECTS := $(patsubst $(RDMA_HOME)/%.cc,%.o,$(filter-out $(RDMA_HOME)/nccl_plugin.cc %_test.cc,$(wildcard $(RDMA_HOME)/*.cc)))
+
+$(RDMA_PLUGIN_SO): $(RDMA_OBJECTS)
+	ar rcs $@ $(RDMA_OBJECTS)
+
+$(RDMA_OBJECTS): %.o: $(RDMA_HOME)/%.cc
+	$(CXX) -c $< -o $@ $(CXXFLAGS) -DDISABLE_CALL_ONCE_STATIC -I$(RDMA_HOME)
 
 # Compile source files
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
 
 # Install the module
-install: $(TARGET)
+install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	@mkdir -p $(INSTALL_DIR)
 	@cp $(TARGET) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(TARGET)"
 
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(TARGET)
+	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB) $(P2P_PYTHON_EXT) $(RDMA_PLUGIN_SO) $(RDMA_OBJECTS)
 	make -C $(RDMA_HOME) -f Makefile.therock clean -j$(nproc) HIP_HOME=${HIP_HOME} CONDA_LIB_HOME=${CONDA_LIB_HOME}
 
 # Test the module
-test: $(TARGET)
+test: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	$(PYTHON) test_engine_write.py
 
 # Install pybind11 if not available
 install-deps:
 	pip3 install pybind11
-
 # Help target
 help:
 	@echo "Available targets:"
