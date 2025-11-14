@@ -126,13 +126,13 @@ void EFAFactory::InitDev(int dev_idx) {
   int i, nb_devices;
 
   // Check if the device is already initialized.
-  DCHECK(efa_ctl.dev_map.find(dev_idx) == efa_ctl.dev_map.end());
+  CHECK(efa_ctl.dev_map.find(dev_idx) == efa_ctl.dev_map.end());
 
   // Get Infiniband name from dev_idx.
-  DCHECK(util_efa_get_ib_name_from_dev_idx(dev_idx, dev->ib_name) == 0);
+  CHECK(util_efa_get_ib_name_from_dev_idx(dev_idx, dev->ib_name) == 0);
 
   // Get IP address from dev_idx.
-  DCHECK(util_efa_get_ip_from_dev_idx(dev_idx, &dev->local_ip_str) == 0);
+  CHECK(util_efa_get_ip_from_dev_idx(dev_idx, &dev->local_ip_str) == 0);
 
   // Get the list of RDMA devices.
   device_list = ibv_get_device_list(&nb_devices);
@@ -583,11 +583,11 @@ uint32_t EFASocket::post_send_wrs(std::vector<FrameDesc*>& frames,
     if (is_last) {
       struct ibv_send_wr* bad_send_wr;
       if (ibv_post_send(qp_list_[src_qp_idx], wr_head, &bad_send_wr)) {
-        DCHECK(false) << "[util_efa]: Failed to post send wrs send_queue_wrs_ "
-                      << send_queue_wrs_
-                      << " send_queue_wrs_per_qp_[src_qp_idx] "
-                      << send_queue_wrs_per_qp_[src_qp_idx] << " frames.size() "
-                      << frames.size();
+        CHECK(false) << "[util_efa]: Failed to post send wrs send_queue_wrs_ "
+                     << send_queue_wrs_
+                     << " send_queue_wrs_per_qp_[src_qp_idx] "
+                     << send_queue_wrs_per_qp_[src_qp_idx] << " frames.size() "
+                     << frames.size();
       }
       if (i + 1 != frames.size()) {
         wr_head = &send_wr_vec_[(i + 1) % kMaxChainedWr];
@@ -639,9 +639,9 @@ uint32_t EFASocket::post_send_wrs_for_ctrl(std::vector<FrameDesc*>& frames,
     if (is_last) {
       struct ibv_send_wr* bad_send_wr;
       if (ibv_post_send(ctrl_qp_list_[src_qp_idx], wr_head, &bad_send_wr)) {
-        DCHECK(false) << "[util_efa]: Failed to post send wrs for ctrl "
-                         "ctrl_send_queue_wrs_ "
-                      << ctrl_send_queue_wrs_;
+        CHECK(false) << "[util_efa]: Failed to post send wrs for ctrl "
+                        "ctrl_send_queue_wrs_ "
+                     << ctrl_send_queue_wrs_;
       }
       if (i + 1 != frames.size()) {
         wr_head = &send_wr_vec_[(i + 1) % kMaxChainedWr];
@@ -899,7 +899,7 @@ std::tuple<std::vector<FrameDesc*>, uint32_t> EFASocket::poll_ctrl_cq(
         polled_send_acks++;
         ctrl_send_queue_wrs_--;
       } else {
-        DCHECK(false) << "Wrong wc_[i].opcode: " << wc_[i].opcode;
+        CHECK(false) << "Wrong wc_[i].opcode: " << wc_[i].opcode;
       }
     }
 

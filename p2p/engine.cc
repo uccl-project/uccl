@@ -813,8 +813,8 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                     uccl::FifoItem const& slot_item) {
   if (!ucclParamRCMode()) {
-    DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
-                     "be True in transport_config.h";
+    CHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
+                    "be True in transport_config.h";
     std::abort();
   }
 
@@ -1185,7 +1185,7 @@ bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
                      uccl::FifoItem const& slot_item) {
   if (!ucclParamRCMode()) {
-    DCHECK(false) << "We only support RC mode for now.";
+    CHECK(false) << "We only support RC mode for now.";
     std::abort();
   }
 
