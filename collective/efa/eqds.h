@@ -362,12 +362,12 @@ class CreditQPContext {
 
   inline uint64_t engine_pop_frame_desc() {
     uint64_t frame_desc;
-    DCHECK(engine_frame_desc_pool_->alloc_buff(&frame_desc) == 0);
+    CHECK(engine_frame_desc_pool_->alloc_buff(&frame_desc) == 0);
     return frame_desc;
   }
   inline uint64_t pacer_pop_frame_desc() {
     uint64_t frame_desc;
-    DCHECK(pacer_frame_desc_pool_->alloc_buff(&frame_desc) == 0);
+    CHECK(pacer_frame_desc_pool_->alloc_buff(&frame_desc) == 0);
     return frame_desc;
   }
 
@@ -380,12 +380,12 @@ class CreditQPContext {
 
   inline uint64_t engine_pop_pkt_hdr() {
     uint64_t pkt_hdr;
-    DCHECK(engine_hdr_pool_->alloc_buff(&pkt_hdr) == 0);
+    CHECK(engine_hdr_pool_->alloc_buff(&pkt_hdr) == 0);
     return pkt_hdr;
   }
   inline uint64_t pacer_pop_pkt_hdr() {
     uint64_t pkt_hdr;
-    DCHECK(pacer_hdr_pool_->alloc_buff(&pkt_hdr) == 0);
+    CHECK(pacer_hdr_pool_->alloc_buff(&pkt_hdr) == 0);
     return pkt_hdr;
   }
 
@@ -425,20 +425,20 @@ class CreditQPContext {
     attr.pkey_index = 0;
     attr.port_num = EFA_PORT_NUM;
     attr.qkey = QKEY;
-    DCHECK(ibv_modify_qp(qp, &attr,
-                         IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
-                             IBV_QP_QKEY) == 0)
+    CHECK(ibv_modify_qp(qp, &attr,
+                        IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
+                            IBV_QP_QKEY) == 0)
         << "Failed to modify Credit QP INIT.";
 
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTR;
-    DCHECK(ibv_modify_qp(qp, &attr, IBV_QP_STATE) == 0)
+    CHECK(ibv_modify_qp(qp, &attr, IBV_QP_STATE) == 0)
         << "Failed to modify Credit QP RTR.";
 
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTS;
     attr.sq_psn = SQ_PSN;
-    DCHECK(ibv_modify_qp(qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN) == 0)
+    CHECK(ibv_modify_qp(qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN) == 0)
         << "Failed to modify Credit QP RTS.";
 
     return qp;

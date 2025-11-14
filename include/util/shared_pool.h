@@ -67,13 +67,13 @@ class SharedPool {
         auto _ = finally([&]() { global_spin_.Unlock(); });
         for (uint32_t i = 0; i < kNumCachedItemsPerCPU; i++) {
           T migrated;
-          DCHECK(cache.pop_front(&migrated));
-          DCHECK(global_pool_.push_front(migrated));
+          CHECK(cache.pop_front(&migrated));
+          CHECK(global_pool_.push_front(migrated));
         }
       }
-      DCHECK(cache.push_front(item));
+      CHECK(cache.push_front(item));
     } else {
-      DCHECK(global_pool_.push_front(item));
+      CHECK(global_pool_.push_front(item));
     }
   }
 
@@ -86,16 +86,16 @@ class SharedPool {
         auto _ = finally([&]() { global_spin_.Unlock(); });
         for (uint32_t i = 0; i < kNumCachedItemsPerCPU; i++) {
           T migrated;
-          DCHECK(global_pool_.pop_front(&migrated));
-          DCHECK(cache.push_front(migrated));
+          CHECK(global_pool_.pop_front(&migrated));
+          CHECK(cache.push_front(migrated));
         }
       }
       T item;
-      DCHECK(cache.pop_front(&item));
+      CHECK(cache.pop_front(&item));
       return item;
     } else {
       T item;
-      DCHECK(global_pool_.pop_front(&item));
+      CHECK(global_pool_.pop_front(&item));
       return item;
     }
   }
