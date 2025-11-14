@@ -39,10 +39,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-void exchange_connection_info_as_server(int my_rank, int* actual_peer,
-                                        int listen_fd,
-                                        RDMAConnectionInfo* local,
-                                        RDMAConnectionInfo* remote_array) {
+void recv_connection_info_as_server(int my_rank, int* actual_peer,
+                                    int listen_fd,
+                                    RDMAConnectionInfo* remote_array) {
   int sockfd;
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
@@ -53,17 +52,14 @@ void exchange_connection_info_as_server(int my_rank, int* actual_peer,
 
   // Exchange info
   uccl::receive_message(sockfd, actual_peer, sizeof(*actual_peer));
-  uccl::send_message(sockfd, local, sizeof(*local));
   uccl::receive_message(sockfd, &remote_array[*actual_peer],
                         sizeof(remote_array[*actual_peer]));
   close(sockfd);
 }
 
-void exchange_connection_info_as_client(int my_rank, int peer,
-                                        char const* peer_ip,
-                                        int peer_listen_port,
-                                        RDMAConnectionInfo* local,
-                                        RDMAConnectionInfo* remote_array) {
+void send_connection_info_as_client(int my_rank, int peer, char const* peer_ip,
+                                    int peer_listen_port,
+                                    RDMAConnectionInfo* local) {
   int sockfd;
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
@@ -95,8 +91,6 @@ void exchange_connection_info_as_client(int my_rank, int peer,
   // Exchange info
   uccl::send_message(sockfd, &my_rank, sizeof(my_rank));
   uccl::send_message(sockfd, local, sizeof(*local));
-  uccl::receive_message(sockfd, &remote_array[peer],
-                        sizeof(remote_array[peer]));
   close(sockfd);
 }
 
@@ -483,7 +477,8 @@ void modify_qp_to_init(ProxyCtx& S) {
     }
   }
 
-  printf("QP modified to INIT state\n");
+  if (S.local_rank == 0 && S.thread_idx == 0)
+    printf("QP modified to INIT state\n");
 }
 
 struct ibv_ah* create_ah(ProxyCtx& S, uint8_t* remote_gid) {
@@ -577,17 +572,19 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
   int flags = IBV_QP_STATE | IBV_QP_PATH_MTU | IBV_QP_AV | IBV_QP_DEST_QPN |
               IBV_QP_RQ_PSN | IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
 
-  printf("Remote LID: 0x%x, QPN: %u, PSN: %u\n", remote->lid, remote->qp_num,
-         remote->psn);
-  printf("Verifying port state:\n");
-  printf("  link_layer: %s\n", (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET)
-                                   ? "Ethernet (RoCE)"
-                                   : "InfiniBand");
-  printf("  port_state: %s\n",
-         (port_attr.state == IBV_PORT_ACTIVE) ? "ACTIVE" : "NOT ACTIVE");
-  printf("  max_mtu: %d\n", port_attr.max_mtu);
-  printf("  active_mtu: %d\n", port_attr.active_mtu);
-  printf("  lid: 0x%x\n", port_attr.lid);
+  if (S.local_rank == 0 && S.thread_idx == 0) {
+    printf("Remote LID: 0x%x, QPN: %u, PSN: %u\n", remote->lid, remote->qp_num,
+           remote->psn);
+    printf("Verifying port state:\n");
+    printf("  link_layer: %s\n",
+           (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) ? "Ethernet (RoCE)"
+                                                             : "InfiniBand");
+    printf("  port_state: %s\n",
+           (port_attr.state == IBV_PORT_ACTIVE) ? "ACTIVE" : "NOT ACTIVE");
+    printf("  max_mtu: %d\n", port_attr.max_mtu);
+    printf("  active_mtu: %d\n", port_attr.active_mtu);
+    printf("  lid: 0x%x\n", port_attr.lid);
+  }
 
   int ret = ibv_modify_qp(S.qp, &attr, flags);
   if (ret) {
@@ -604,7 +601,8 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
     }
   }
 
-  printf("QP modified to RTR state\n");
+  if (S.local_rank == 0 && S.thread_idx == 0)
+    printf("QP modified to RTR state\n");
 
   if (S.ack_qp) {
     attr.dest_qp_num = remote->recv_ack_qp_num;
@@ -627,7 +625,9 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
       exit(1);
     }
   }
-  printf("ACK-QP modified to RTR state\n");
+
+  if (S.local_rank == 0 && S.thread_idx == 0)
+    printf("ACK-QP modified to RTR state\n");
 }
 
 void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
