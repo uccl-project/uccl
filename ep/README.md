@@ -6,7 +6,7 @@ For UCCL's host/CPU-driven P2P engine, see [p2p](../p2p/) folder.
 
 ## Build on CUDA for testing
 
-We provide a script to install dependencies (tested on p5en). Then under a Python environment: 
+We provide a script to install dependencies (tested on p5en and p6-b200). Then under a Python environment: 
 ```bash
 # Under uccl/ep
 ./install_deps.sh
@@ -110,31 +110,47 @@ Please refer to [bench/baseline](bench/baseline) for running more baselines incl
 
 ### Normal kernels with NVLink and RDMA forwarding
 
-We test normal kernels on **H200 (8× GPUs per node)** with each node connected to an **EFA 400 Gb/s RDMA** network card.
+#### On p5en
+
+We test normal kernels on **8x H200 + 16x 200Gb/s EFA** with each GPU connected to two **200 Gb/s EFA RDMA** network cards.
 We follow the **DeepSeek-V3 pretraining** configuration (4096 tokens per batch, 7168 hidden, top-4 groups, top-8 experts, FP8 dispatch and BF16 combine).
 
-|   Type    | Dispatch #EP | Bottleneck bandwidth | Combine #EP | Bottleneck bandwidth |
+|   Type    | Dispatch #EP | Bottleneck bandwidth & latency | Combine #EP | Bottleneck bandwidth & latency |
 |:---------:|:-------------:|:--------------------:|:------------:|:--------------------:|
-| Intranode | 8  | 320 GB/s (NVLink) | 8  | 319 GB/s (NVLink) |
-| Internode | 16 | 50 GB/s (RDMA)    | 16 | 18 GB/s (RDMA)    |
-| Internode | 24 | 53 GB/s (RDMA)    | 24 | 26 GB/s (RDMA)    |
-| Internode | 32 | 54 GB/s (RDMA)    | 32 | 43 GB/s (RDMA)    |
+| Intranode | 8  | 320 GB/s (NVLink), 500 µs | 8  | 319 GB/s (NVLink), 973 µs |
+| Internode | 16 | 50 GB/s (RDMA), 1196 µs | 16 | 18 GB/s (RDMA), 6379 µs    |
+| Internode | 24 | 53 GB/s (RDMA), 1633 µs | 24 | 26 GB/s (RDMA), 6365 µs    |
+| Internode | 32 | 54 GB/s (RDMA), 2022 µs | 32 | 43 GB/s (RDMA), 4899 µs    |
 
-**Latency:**
+#### On p6-b200
 
-| #EP | Dispatch (FP8) | Dispatch (BF16) | Combine |
-|:----:|:---------------:|:----------------:|:--------:|
-| 8  | 500 µs | 922 µs | 973 µs |
-| 16 | 1196 µs | 1988 µs | 6379 µs |
-| 24 | 1633 µs | 2863 µs | 6365 µs |
-| 32 | 2022 µs | 3702 µs | 4899 µs |
+We test normal kernels on **8x B200 + 8x 400Gb/s EFA** with each GPU connected to a **400Gb/s EFA RDMA** network card.
+
+|   Type    | Dispatch #EP | Bottleneck bandwidth & latency | Combine #EP | Bottleneck bandwidth & latency |
+|:---------:|:-------------:|:--------------------:|:------------:|:--------------------:|
+| Intranode | 8  | 280 GB/s (NVLink), 571 µs | 8  | 426 GB/s (NVLink), 727 µs |
+| Internode | 16 | 53 GB/s (RDMA), 1141 µs | 16 | 60 GB/s (RDMA), 1965 µs    |
+| Internode | 24 | 53 GB/s (RDMA), 1637 µs | 24 | 59 GB/s (RDMA), 2887 µs    |
+| Internode | 32 | 53 GB/s (RDMA), 2072 µs | 32 | 57 GB/s (RDMA), 3724 µs    |
 
 ### Low-latency kernels with pure RDMA
 
-We test low-latency kernels on **H200 (8× GPUs + EFA 400 Gb/s)** following a **DeepSeek-V3 inference** setting (128 tokens per batch, 7168 hidden, top-8 experts, FP8 dispatch / BF16 combine).
+#### On p5en
+
+We test low-latency kernels on **8x H200 + 16x 200Gb/s EFA**, following a **DeepSeek-V3 inference** setting (128 tokens per batch, 7168 hidden, top-8 experts, FP8 dispatch / BF16 combine).
 
 | Dispatch #EP | Latency | RDMA bandwidth | Combine #EP | Latency | RDMA bandwidth |
 |:-------------:|:--------:|:---------------:|:------------:|:--------:|:---------------:|
 | 16 | 226 µs | 36 GB/s | 16 | 293 µs | 48 GB/s |
 | 24 | 386 µs | 20 GB/s | 24 | 580 µs | 26 GB/s |
 | 32 | 465 µs | 16 GB/s | 32 | 694 µs | 25 GB/s |
+
+#### On p6-b200
+
+We test low-latency kernels on **8x B200 + 8x 400Gb/s EFA**.
+
+| Dispatch #EP | Latency | RDMA bandwidth | Combine #EP | Latency | RDMA bandwidth |
+|:-------------:|:--------:|:---------------:|:------------:|:--------:|:---------------:|
+| 16 | 228 µs | 33 GB/s | 16 | 318 µs | 46 GB/s |
+| 24 | 448 µs | 17 GB/s | 24 | 566 µs | 26 GB/s |
+| 32 | 406 µs | 19 GB/s | 32 | 617 µs | 24 GB/s |

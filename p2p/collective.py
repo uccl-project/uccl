@@ -47,7 +47,7 @@ class CollectiveContext:
         self,
         num_cpus: int = 4,
         local_gpu_idx: Optional[int] = None,
-        disable_uccl_intra: Optional[bool] = True,
+        disable_uccl_intra: Optional[bool] = False,
     ):
         """
         Initialize collective context with automatic GPU index derivation from torch.distributed.
@@ -67,7 +67,7 @@ class CollectiveContext:
 
         if dist.get_backend() != required_backend:
             raise RuntimeError(
-                f"CollectiveContext requires torch.distributed to use {required_backend} backend"
+                f"CollectiveContext requires torch.distributed to use {required_backend} backend, currently using {dist.get_backend()}"
             )
 
         self.num_cpus = num_cpus

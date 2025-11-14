@@ -87,7 +87,7 @@ Notes:
 * To benchmark one-sided WRITE transfer, you can run `benchmark_uccl_write.py`.
 * To benchmark UCCL copy-only collectives, you can run `benchmark_uccl_collective.py`.
 * To benchmark UCCL copy-only collectives over CUDA/HIP IPC, `torchrun --nnodes=1 --nproc_per_node=2 benchmark_uccl_collective.py`
-* From CollectiveContext, the default parameter `disable_uccl_intra` is True, which means we will use NCCL torch.distributed for intra-node communication. Intra-node communication supported by UCCL is still under development.
+* From CollectiveContext, the default parameter `disable_uccl_intra` is `False`, which means we will use UCCL-native zero-copy intranode communication. If setting to `True`, it will use torch.distributed for intra-node communication.
 
 ### Running NCCL
 
