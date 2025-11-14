@@ -1388,8 +1388,8 @@ Endpoint::Endpoint(char const* interface_name, int num_queues,
   DCHECK(listen_fd_ >= 0) << "ERROR: opening socket";
 
   int flag = 1;
-  DCHECK(setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
-         0)
+  CHECK(setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
+        0)
       << "ERROR: setsockopt SO_REUSEADDR fails";
 
   struct sockaddr_in serv_addr;
@@ -1397,10 +1397,10 @@ Endpoint::Endpoint(char const* interface_name, int num_queues,
   serv_addr.sin_family = AF_INET;
   serv_addr.sin_addr.s_addr = INADDR_ANY;
   serv_addr.sin_port = htons(kBootstrapPort);
-  DCHECK(bind(listen_fd_, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0)
+  CHECK(bind(listen_fd_, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0)
       << "ERROR: binding";
 
-  DCHECK(!listen(listen_fd_, 128)) << "ERROR: listen";
+  CHECK(!listen(listen_fd_, 128)) << "ERROR: listen";
   LOG(INFO) << "[Endpoint] server ready, listening on port " << kBootstrapPort;
 }
 
@@ -1550,7 +1550,7 @@ ConnID Endpoint::uccl_accept(std::string& remote_ip) {
     } else {
       // Remove the speculatively inserted flow ID.
       std::lock_guard<std::mutex> lock(bootstrap_fd_map_mu_);
-      DCHECK(1 == bootstrap_fd_map_.erase(flow_id));
+      CHECK(1 == bootstrap_fd_map_.erase(flow_id));
     }
   }
 
