@@ -6,14 +6,15 @@ For UCCL's host/CPU-driven P2P engine, see [p2p](../p2p/) folder.
 
 ## Build on CUDA for testing
 
-We provide a script to install dependencies (tested on p5en and p6-b200). Then under a Python environment: 
+We provide a script to install dependencies (tested on p5en and p6-b200). 
 ```bash
 # Under uccl/ep
 ./install_deps.sh
 ```
 
-In a conda environment: 
+Then under a Python environment, you can directly build and install:
 ```bash
+# Under uccl/ep
 make -j install
 ```
 
@@ -25,7 +26,13 @@ bash build_and_install.sh cuda ep
 
 ## Build on ROCm for testing
 
-Build `uccl.ep` wheel for ROCm using docker:
+With ROCm7 installed system-widely, you can directly build and install:
+```bash
+# Under ep
+python setup.py install
+```
+
+Alternatively, you can build `uccl.ep` wheel for ROCm using docker:
 ```bash
 # Under uccl
 bash build_and_install.sh rocm ep
