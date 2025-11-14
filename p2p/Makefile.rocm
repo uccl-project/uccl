@@ -57,7 +57,7 @@ $(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) RDMA_PLUGIN_SO
 	      -Wl,-rpath,$(HIP_LIB) $(PYTHON_LIB) -libverbs -lz -lelf
 
 $(RDMA_HOME)/librdma_hip.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
-	make -C $(RDMA_HOME) -f Makefile.rocm -j$(nproc)
+	make -C $(RDMA_HOME) -f Makefile.rocm librdma_hip.a -j$(nproc)
 
 RDMA_OBJECTS := $(patsubst $(RDMA_HOME)/%.cc,%.o,$(filter-out $(RDMA_HOME)/nccl_plugin.cc,$(wildcard $(RDMA_HOME)/*.cc)))
 
