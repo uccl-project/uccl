@@ -31,7 +31,7 @@ NVLINK_ON=1
 NVLINK_OFF=$((1 - NVLINK_ON))
 
 # alltoall_perf, all_reduce_perf
-TEST_BIN=alltoall_perf
+TEST_BIN=all_reduce_perf
 QP_SCALING=4
 UCCL_ENTROPY=2
 UCCL_CHUNK_SIZE_KB=64
@@ -40,6 +40,7 @@ mpirun --bind-to none -np 3 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
     -x LD_LIBRARY_PATH=${UCCL_HOME}/thirdparty/rccl/build/release:${CONDA_LIB_HOME}:/opt/rocm/lib:${LD_LIBRARY_PATH} \
     --mca btl tcp,self \
     --mca btl_tcp_if_include ens51f1np1 \
+    -x NCCL_SOCKET_IFNAME=ens51f1np1 \
     -x NCCL_NET_PLUGIN=${plugin_path} \
     -x NCCL_P2P_DISABLE=${NVLINK_OFF} \
     -x NCCL_SHM_DISABLE=${NVLINK_OFF} \
@@ -59,6 +60,7 @@ mpirun --bind-to none -np 3 -N 1 --hostfile $NODEFILE --map-by ppr:1:node \
     -x UCCL_PORT_ENTROPY=${UCCL_ENTROPY} \
     -x UCCL_CHUNK_SIZE_KB=${UCCL_CHUNK_SIZE_KB} \
     -x UCCL_RCMODE=1 \
+    -x NCCL_DEBUG=INFO \
     ${UCCL_HOME}/thirdparty/rccl-tests/build/${TEST_BIN} \
     -b 1K -e 1G -f 2 -w 5 -n 20 -c 1 -g 1 -t 8 |& 
     tee ${TEST_BIN}_$([ "$TEST" = "rccl" ] && echo "rccl_qp${QP_SCALING}" || echo "uccl_qp${UCCL_ENTROPY}").log

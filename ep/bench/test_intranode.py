@@ -1,7 +1,7 @@
 """
 This is the same test_intranode.py test in DeepEP's repo.
 OMP_NUM_THREADS=8 torchrun --standalone --nproc_per_node=8 bench/test_intranode.py \
-    --num-tokens 2048 --hidden 3584 --num-topk 4 --num-experts 128
+    --num-tokens 4096 --hidden 7168 --num-topk 8 --num-experts 256
 """
 
 import argparse
@@ -19,8 +19,6 @@ from utils import (
     inplace_unique,
     per_token_cast_to_fp8,
     per_token_cast_back,
-    initialize_uccl,
-    destroy_uccl,
 )
 
 # Test compatibility with low latency functions
@@ -407,27 +405,20 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         num_rdma_bytes = Buffer.get_low_latency_rdma_size_hint(
             ll_num_tokens, ll_hidden, num_ranks, ll_num_experts
         )
-
-    device_index = int(os.environ["LOCAL_RANK"])
-    scratch = torch.zeros(
-        num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
-    )
-    proxies, workers = initialize_uccl(
-        scratch, num_rdma_bytes, rank, num_ranks, group, args.num_experts, True
-    )
-
     buffer = Buffer(
         group,
-        scratch.data_ptr(),
         int(2e9),
         num_rdma_bytes,
         low_latency_mode=test_ll_compatibility,
         num_qps_per_rank=(ll_num_experts // num_ranks if test_ll_compatibility else 1),
         explicitly_destroy=True,
+        is_intranode=True,
     )
     torch.manual_seed(rank)
 
-    for i in (24,):
+    num_sms = 24 if torch.version.cuda else 64
+
+    for i in (num_sms,):
         test_main(args, i, local_rank, num_ranks, rank, buffer, group)
         if local_rank == 0:
             print("", flush=True)
@@ -446,11 +437,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             buffer,
             seed=1,
         )
-
-    group.barrier()
     buffer.destroy()
-    dist.barrier()
-    destroy_uccl(proxies, workers)
     dist.barrier()
     dist.destroy_process_group()
 

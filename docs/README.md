@@ -17,15 +17,17 @@ sudo apt install linux-tools-$(uname -r) clang llvm cmake m4 build-essential \
                  libelf-dev libpcap-dev libc6-dev-i386 libpci-dev \
                  libopenmpi-dev libibverbs-dev clang-format -y
 
-# Install and activate Anaconda (you can choose any recent versions)
-wget https://repo.anaconda.com/archive/Anaconda3-2025.06-1-Linux-x86_64.sh
-bash ./Anaconda3-2025.06-1-Linux-x86_64.sh -b
-source ~/anaconda3/bin/activate
+# Install and activate Miniconda (you can choose any recent versions)
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash ./Miniconda3-latest-Linux-x86_64.sh -b
+source ~/miniconda3/bin/activate
 source ~/.bashrc # or .zshrc and others
 conda init
 
-# Install python ssh lib into conda-default base env
+# Install python ssh lib
 pip install paramiko pybind11
+# Upgrade conda glic to modern ones
+conda install -c conda-forge "libstdcxx-ng>=12" "libgcc-ng>=12"
 ```
 </details>
 

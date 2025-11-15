@@ -172,18 +172,18 @@ inline void create_listen_socket(int* listen_fd, uint16_t listen_port) {
   *listen_fd = socket(AF_INET, SOCK_STREAM, 0);
   DCHECK(*listen_fd >= 0) << "ERROR: opening socket";
   int flag = 1;
-  DCHECK(setsockopt(*listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
-         0)
+  CHECK(setsockopt(*listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
+        0)
       << "ERROR: setsockopt SO_REUSEADDR fails";
   struct sockaddr_in serv_addr;
   bzero((char*)&serv_addr, sizeof(serv_addr));
   serv_addr.sin_family = AF_INET;
   serv_addr.sin_addr.s_addr = INADDR_ANY;
   serv_addr.sin_port = htons(listen_port);
-  DCHECK(bind(*listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0)
+  CHECK(bind(*listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0)
       << "ERROR: binding";
 
-  DCHECK(!listen(*listen_fd, 128)) << "ERROR: listen";
+  CHECK(!listen(*listen_fd, 128)) << "ERROR: listen";
   VLOG(5) << "[Endpoint] server ready, listening on port " << listen_port;
 }
 
@@ -192,8 +192,8 @@ inline uint16_t create_listen_socket(int* listen_fd) {
   DCHECK(*listen_fd >= 0) << "ERROR: opening socket";
 
   int flag = 1;
-  DCHECK(setsockopt(*listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
-         0)
+  CHECK(setsockopt(*listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
+        0)
       << "ERROR: setsockopt SO_REUSEADDR fails";
 
   struct sockaddr_in serv_addr;
@@ -202,17 +202,17 @@ inline uint16_t create_listen_socket(int* listen_fd) {
   serv_addr.sin_addr.s_addr = INADDR_ANY;
   serv_addr.sin_port = htons(0);  // Ask OS for ephemeral port
 
-  DCHECK(bind(*listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0)
+  CHECK(bind(*listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0)
       << "ERROR: binding";
 
   // Get the assigned port
   socklen_t len = sizeof(serv_addr);
-  DCHECK(getsockname(*listen_fd, (struct sockaddr*)&serv_addr, &len) >= 0)
+  CHECK(getsockname(*listen_fd, (struct sockaddr*)&serv_addr, &len) >= 0)
       << "ERROR: getsockname";
 
   uint16_t assigned_port = ntohs(serv_addr.sin_port);
 
-  DCHECK(!listen(*listen_fd, 128)) << "ERROR: listen";
+  CHECK(!listen(*listen_fd, 128)) << "ERROR: listen";
   VLOG(5) << "[Endpoint] server ready, listening on ephemeral port "
           << assigned_port;
 
@@ -736,7 +736,7 @@ static inline std::string ip_to_str(uint32_t ip) {
 // 1.2.3.4 -> 0x04030201 (network order)
 static inline uint32_t str_to_ip(std::string const& ip) {
   struct sockaddr_in sa;
-  DCHECK(inet_pton(AF_INET, ip.c_str(), &(sa.sin_addr)) != 0);
+  CHECK(inet_pton(AF_INET, ip.c_str(), &(sa.sin_addr)) != 0);
   return sa.sin_addr.s_addr;
 }
 
@@ -875,19 +875,19 @@ static inline std::string mac_to_str(char const mac[6]) {
 }
 
 static inline std::string get_dev_mac(char const* dev_name) {
+  std::string path = Format("/sys/class/net/%s/address", dev_name);
+  std::ifstream file(path);
+  if (!file.is_open()) {
+    LOG(ERROR) << "Failed to open " << path;
+    return "";
+  }
+
   std::string mac;
-  std::string cmd = Format("cat /sys/class/net/%s/address", dev_name);
-  FILE* fp = popen(cmd.c_str(), "r");
-  if (fp == nullptr) {
-    LOG(ERROR) << "Failed to get MAC address.";
-    return mac;
+  if (!std::getline(file, mac)) {
+    LOG(ERROR) << "Failed to read " << path;
+    return "";
   }
-  char buffer[18];
-  if (fgets(buffer, sizeof(buffer), fp) != nullptr) {
-    mac = std::string(buffer);
-    mac.erase(std::remove(mac.begin(), mac.end(), '\n'), mac.end());
-  }
-  pclose(fp);
+
   return mac;
 }
 
@@ -1074,18 +1074,46 @@ inline void checkMemoryLocation(void* ptr) {
 }
 #endif
 
+inline int get_dev_idx(void* ptr) {
+#ifndef __HIP_PLATFORM_AMD__
+  cudaPointerAttributes attributes;
+  cudaError_t err = cudaPointerGetAttributes(&attributes, ptr);
+  if (err == cudaSuccess) {
+    if (attributes.type == cudaMemoryTypeDevice) {
+      return attributes.device;
+    }
+    return -1;
+  }
+  return -1;
+#else
+  hipPointerAttribute_t attributes;
+  hipError_t err = hipPointerGetAttributes(&attributes, ptr);
+  if (err == hipSuccess) {
+    if (attributes.type == hipMemoryTypeDevice) {
+      return attributes.device;
+    }
+    return -1;
+  }
+  return -1;
+#endif
+}
+
 inline int get_dev_numa_node(char const* dev_name) {
-  std::string cmd =
-      Format("cat /sys/class/infiniband/%s/device/numa_node", dev_name);
-  FILE* fp = popen(cmd.c_str(), "r");
-  DCHECK(fp != nullptr) << "Failed to open " << cmd;
+  std::string path =
+      Format("/sys/class/infiniband/%s/device/numa_node", dev_name);
+  std::ifstream file(path);
+  if (!file.is_open()) {
+    LOG(ERROR) << "Failed to open " << path;
+    return -1;
+  }
 
-  char buffer[10];
-  DCHECK(fgets(buffer, sizeof(buffer), fp) != nullptr)
-      << "Failed to read " << cmd;
-  pclose(fp);
+  std::string line;
+  if (!std::getline(file, line)) {
+    LOG(ERROR) << "Failed to read " << path;
+    return -1;
+  }
 
-  auto numa_node = atoi(buffer);
+  auto numa_node = std::stoi(line);
   DCHECK(numa_node != -1) << "NUMA node is -1 for " << dev_name;
   return numa_node;
 }

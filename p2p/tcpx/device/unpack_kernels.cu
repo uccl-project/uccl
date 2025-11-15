@@ -1,9 +1,3 @@
-/*************************************************************************
- * Copyright (c) 2024, UCCL Project. All rights reserved.
- * Adapted from NCCL unpack kernel logic
- *
- * See LICENSE.txt for license information
- ************************************************************************/
 #include "../include/unpack_descriptor.h"
 #include "unpack_launch.h"
 #include <algorithm>
@@ -344,6 +338,7 @@ extern "C" __host__ tcpx::device::KernelLaunchParams calculateLaunchParams(
     params.shared_mem_size =
         warps_per_block * kWarpShmPageCnt * sizeof(tcpx::rx::UnpackDescriptor);
   }
+  params.use_small_kernel = use_small_kernel;
 
   return params;
 }

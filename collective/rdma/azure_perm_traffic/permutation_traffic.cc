@@ -199,8 +199,8 @@ void listen_ports() {
     nodes[r].listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
     DCHECK(nodes[r].listen_fd_ >= 0);
     int flag = 1;
-    DCHECK(setsockopt(nodes[r].listen_fd_, SOL_SOCKET, SO_REUSEADDR, &flag,
-                      sizeof(int)) >= 0);
+    CHECK(setsockopt(nodes[r].listen_fd_, SOL_SOCKET, SO_REUSEADDR, &flag,
+                     sizeof(int)) >= 0);
     struct sockaddr_in serv_addr;
     bzero((char*)&serv_addr, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
@@ -284,10 +284,10 @@ void p2p_receive(int target_rank, int size) {
 
   while (offset < size) {
     int net_chunk_size = std::min(size - offset, (uint32_t)NET_CHUNK_SIZE);
-    DCHECK(ep->uccl_recv_async((UcclFlow*)recv_comm_->conn_id.context,
-                               &recv_comm_->mhandle, &recv_comm_->buffer,
-                               &net_chunk_size, 1,
-                               &recv_comm_->ureq[chunk_id]) == 0);
+    CHECK(ep->uccl_recv_async((UcclFlow*)recv_comm_->conn_id.context,
+                              &recv_comm_->mhandle, &recv_comm_->buffer,
+                              &net_chunk_size, 1,
+                              &recv_comm_->ureq[chunk_id]) == 0);
 
     offset += net_chunk_size;
     chunk_id++;

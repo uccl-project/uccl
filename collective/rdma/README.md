@@ -148,6 +148,15 @@ Using the following to run `rccl-tests`:
 ./run_rccl_test.sh rccl
 ```
 
+### For ROCm 7
+
+In order to build RCCL under ROCm 7, you need to use recent RCCL release such as the following. Then you can proceed to building RCCL. 
+
+```bash
+cd $UCCL_HOME/thirdparty/rccl
+git checkout rocm-7.0.2
+```
+
 ## Environment Variables in UCCL
 
 UCCL supports the following environment variables to configure.

@@ -1,44 +1,14 @@
 #!/bin/bash
 set -e
 
-sudo apt install -y nvtop
-sudo apt install -y libgoogle-glog-dev
-sudo apt install -y clang-format-14
-
-CONDA_ENV_NAME="${1}"
-if [ -z "$CONDA_ENV_NAME" ]; then
-    echo "Please provide the conda environment name as the first argument, e.g., bash install_deps.sh myenv"
-    exit 1
-fi
-
-# Ensure conda is available
-if ! command -v conda &> /dev/null; then
-    echo "Conda is not installed. Please install Anaconda or Miniconda first."
-    exit 1
-fi
-
-# Activate conda environment
-echo "Activating conda environment: $CONDA_ENV_NAME"
-eval "$(conda shell.bash hook)"
-conda activate $CONDA_ENV_NAME
-
-conda install -c conda-forge libstdcxx-ng
-pip install black
-
-# Check if pip is installed in the environment
-if ! command -v pip3 &> /dev/null; then
-    echo "Installing pip3..."
-    sudo apt update
-    sudo apt install -y python3-pip
-fi
-
-# Install pybind11
-echo "Installing pybind11..."
-pip3 install pybind11 --upgrade
-
 # Check CUDA availability and get version
 check_cuda() {
     command -v nvcc &> /dev/null
+}
+
+# Check HIP availability and get version
+check_rocm() {
+    command -v hipcc &> /dev/null
 }
 
 get_cuda_version() {
@@ -49,6 +19,16 @@ get_cuda_version() {
 # Install PyTorch with automatic CUDA version handling
 echo "Checking CUDA environment..."
 if check_cuda; then
+    sudo apt install -y nvtop libgoogle-glog-dev clang-format-14 python3-pip
+    pip3 install pybind11 --upgrade
+    pip3 install black
+
+    # Check if we're in a conda environment
+    if [[ ! -z "${CONDA_PREFIX}" ]]; then
+        conda install -c conda-forge libstdcxx-ng -y
+    fi
+
+    # Install CUDA dependencies
     CUDA_VERSION=$(get_cuda_version)
     echo "Detected CUDA version: $CUDA_VERSION"
     
@@ -66,8 +46,13 @@ if check_cuda; then
     fi
     
     pip3 install torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/$PYTORCH_SUFFIX"
+elif check_rocm; then
+    echo "Detected ROCM"
+    # Yang: moved to Dockerfile.rocm to reuse it inside the container for faster rebuild
+    # Install Pytorch using nightly
+    # pip3 install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
 else
-    echo "No CUDA detected"
+    echo "No CUDA or ROCM detected"
     exit 1
 fi
 

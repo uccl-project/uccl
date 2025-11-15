@@ -19,6 +19,8 @@
 #if defined(__x86_64__) || defined(__i386__)
 #include <immintrin.h>
 #endif
+#include "d2h_queue_host.hpp"
+#include <deque>
 #include <set>
 #include <tuple>
 
@@ -27,6 +29,7 @@ struct PeerMeta {
   uintptr_t ptr;
   size_t nbytes;
   std::string ip;
+  int listen_ports[kNumProxyThs];
 };
 
 class Proxy {
@@ -34,25 +37,25 @@ class Proxy {
   enum class Mode { Sender, Remote, Local, Dual };
 
   struct Config {
-    std::vector<DeviceToHostCmdBuffer*> ring_buffers;
+    std::vector<d2hq::HostD2HHandle> d2h_queues;
     int thread_idx = 0;
     void* gpu_buffer = nullptr;
     size_t total_size = 0;
     int rank = 0;
     int node_idx = -1;
     int local_rank = -1;
-    char const* peer_ip = nullptr;
     bool pin_thread = true;
     int num_experts = 0;
     int num_ranks = 0;
     int num_nodes = 0;
+    bool use_normal_mode =
+        false;  // Runtime flag for normal mode (batching optimization)
+    bool is_intranode = false;
   };
 
-  explicit Proxy(Config const& cfg) : cfg_(cfg) {
-    // Initialize state tracking for each ring buffer
-    ring_tails_.resize(cfg_.ring_buffers.size(), 0);
-    ring_seen_.resize(cfg_.ring_buffers.size(), 0);
-  }
+  Proxy(Config const& cfg);
+
+  int get_listen_port() const { return listen_port_; }
 
   void set_progress_run(bool run) {
     ctx_.progress_run.store(run, std::memory_order_release);
@@ -78,11 +81,13 @@ class Proxy {
   uint64_t completed_wr() const;
 
   void set_peers_meta(std::vector<PeerMeta> const& peers);
-  void set_bench_ring_addrs(std::vector<uintptr_t> const& addrs);
+  void set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs);
 
   CopyRingBuffer ring;
+  Config cfg_;
 
  private:
+  friend class FifoProxy;  // Allow FifoProxy to access private methods
   ProxyCtx ctx_;
   void init_common();
   void init_sender();
@@ -97,14 +102,10 @@ class Proxy {
   void barrier_check();
   void quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds);
   void quiet_cq();
-  Config cfg_;
   RDMAConnectionInfo local_info_{}, remote_info_{};
 
   // Completion tracking
-  std::unordered_set<uint64_t> finished_wrs_;
   std::unordered_set<uint64_t> acked_wrs_;
-  std::mutex finished_wrs_mutex_;
-
   std::unordered_map<uint64_t, std::chrono::high_resolution_clock::time_point>
       wr_id_to_start_time_;
   uint64_t completion_count_ = 0;
@@ -114,6 +115,10 @@ class Proxy {
   std::chrono::duration<double, std::micro> total_rdma_write_durations_ =
       std::chrono::duration<double, std::micro>::zero();
 
+  // For exchanging RDMA metadata with peers.
+  int listen_fd_;
+  int listen_port_;
+
   std::vector<PeerMeta> peers_;
   std::vector<std::unique_ptr<ProxyCtx>> ctxs_for_all_ranks_;
   std::vector<RDMAConnectionInfo> local_infos_, remote_infos_;
@@ -122,9 +127,13 @@ class Proxy {
   std::vector<TransferCmd> postponed_atomics_;
   std::vector<uint64_t> postponed_wr_ids_;
 
-  // Multi-ring buffer state tracking (one per ring buffer)
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+  std::vector<uint64_t> fifo_seq_;
+  std::vector<std::deque<uint64_t>> fifo_pending_;
+#else
   std::vector<uint64_t> ring_tails_;
   std::vector<size_t> ring_seen_;
+#endif
 };
 
 #endif  // PROXY_HPP

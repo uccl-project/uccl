@@ -82,9 +82,7 @@ __global__ void fc_throughput_kernel(
     // Quick warmup
     for (uint32_t i = 0; i < config.warmup_iterations && !(*stop_flag); i++) {
       TransferCmd cmd = {};
-      cmd.cmd = 1;
       cmd.bytes = config.payload_size;  // Just record size, no actual data
-      cmd.message_idx = i;
       mgr_ptr->submit_request(warp_id, cmd);  // Use no-payload version
     }
 
@@ -99,10 +97,7 @@ __global__ void fc_throughput_kernel(
 
       // Create and submit request - metadata only
       TransferCmd cmd = {};
-      cmd.cmd = 1;
-      cmd.bytes = config.payload_size;  // Just record size
-      cmd.message_idx = metrics[warp_id].request_count;
-
+      cmd.bytes = config.payload_size;        // Just record size
       mgr_ptr->submit_request(warp_id, cmd);  // No payload copying
 
       // Record metrics - only count requests
@@ -133,9 +128,8 @@ void simple_cpu_proxy(DeviceToHostCmdBuffer* ring_buffer, int proxy_id,
 
     // Collect batch of commands (like proxy.cpp)
     for (size_t i = seen; i < cur_head; ++i) {
-      uint64_t cmd = ring_buffer->volatile_load_cmd(i);
-      // Non-blocking: break if cmd not ready
-      if (cmd == 0) break;
+      CmdType cmd = ring_buffer->volatile_load_cmd_type(i);
+      if (cmd == CmdType::EMPTY) break;
 
       TransferCmd& cmd_entry = ring_buffer->load_cmd_entry(i);
       cmds_to_process.push_back(cmd_entry);

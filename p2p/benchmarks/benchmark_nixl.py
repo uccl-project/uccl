@@ -78,13 +78,12 @@ def create_nixl_agent_mc(role: str, dataset, zmq_socket, device_idx, backend):
     """
     Create Nixl agents based on the role with Mooncake/UCCL backend
     """
-    backend_name = "Mooncake" if backend == "mooncake" else "Uccl"
-    # device_idx is only supported by UCCL backend of nixl
-    config = (
-        nixl_agent_config(device_idx=device_idx, backends=[backend_name])
-        if backend == "uccl"
-        else nixl_agent_config(backends=[backend_name])
+    backend_name = (
+        "Mooncake"
+        if backend == "mooncake"
+        else ("UCCL" if backend == "uccl" else "TCPX")
     )
+    config = nixl_agent_config(backends=[backend_name])
     agent = nixl_agent(role, config)
     descs = agent.get_reg_descs(dataset)
     register_descs = agent.register_memory(descs)
@@ -254,7 +253,7 @@ def start_transfer(size, num_kvblocks, args):
     op = "WRITE" if args.op_type == "write" else "READ"
     zmq_socket = None
 
-    if args.backend == "mooncake" or args.backend == "uccl":
+    if args.backend == "mooncake" or args.backend == "uccl" or args.backend == "tcpx":
         zmq_socket = init_zmq(args.remote_ip, listen_port, args.role)
     try:
         dataset = create_dataset(
@@ -265,10 +264,14 @@ def start_transfer(size, num_kvblocks, args):
         transfer_handle = None
         register_descs = None
 
-        # Suppress stdout for better output
+        # Suppress stdout for better output during agent setup
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
-        if args.backend == "mooncake" or args.backend == "uccl":
+        if (
+            args.backend == "mooncake"
+            or args.backend == "uccl"
+            or args.backend == "tcpx"
+        ):
             agent, register_descs = create_nixl_agent_mc(
                 args.role, dataset, zmq_socket, args.local_gpu_idx, args.backend
             )
@@ -280,7 +283,11 @@ def start_transfer(size, num_kvblocks, args):
         total_transfer_time = 0.0
 
         for _ in range(args.iters):
-            if args.backend == "mooncake" or args.backend == "uccl":
+            if (
+                args.backend == "mooncake"
+                or args.backend == "uccl"
+                or args.backend == "tcpx"
+            ):
                 transfer_handle = init_transfer_metadata_mc(
                     args.role, op, agent, register_descs, zmq_socket
                 )
@@ -294,7 +301,11 @@ def start_transfer(size, num_kvblocks, args):
                     listen_port,
                 )
             start = time.perf_counter()
-            if args.backend == "mooncake" or args.backend == "uccl":
+            if (
+                args.backend == "mooncake"
+                or args.backend == "uccl"
+                or args.backend == "tcpx"
+            ):
                 do_transfer_mc(args.role, agent, transfer_handle, zmq_socket)
                 total_size += size
             else:
@@ -329,7 +340,11 @@ def start_transfer(size, num_kvblocks, args):
             register_descs,
         )
         cleanup_agent(agent)
-        if args.backend == "mooncake" or args.backend == "uccl":
+        if (
+            args.backend == "mooncake"
+            or args.backend == "uccl"
+            or args.backend == "tcpx"
+        ):
             zmq_socket.close()
 
 
@@ -595,7 +610,7 @@ def main():
     )
     p.add_argument(
         "--backend",
-        choices=["ucx", "mooncake", "uccl"],
+        choices=["ucx", "mooncake", "uccl", "tcpx"],
         default="ucx",
         help="Backend that nixl will use for the data transfer",
     )

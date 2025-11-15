@@ -79,14 +79,21 @@ torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> ben
 
 Notes: 
 * You may consider exporting `GLOO_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
-* You may consider exporting `NCCL_IB_GID_INDEX=3` if your cluster requires it for NCCL to run.
+* You may consider exporting `UCCL_IB_GID_INDEX` if your cluster requires it for NCCL to run (usually 1, or 3 in some testbed).
 * **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to work. 
 * To benchmark dual direction transfer, you can add `--dual` with the same commands as above. 
-* To benchmark intra-node transfer via CUDA/HIP IPC, `torchrun --nnodes=1 --nproc_per_node=2 benchmark_uccl.py --ipc`.
+* To benchmark intra-node transfer via CUDA/HIP IPC, `torchrun --nproc_per_node=2 benchmark_uccl.py --ipc`.
 * To benchmark one-sided READ transfer, you can run `benchmark_uccl_read.py`.
 * To benchmark one-sided WRITE transfer, you can run `benchmark_uccl_write.py`.
-* To benchmark UCCL copy-only collectives, you can run `benchmark_uccl_collective.py`.
-* To benchmark UCCL copy-only collectives over CUDA/HIP IPC, `torchrun --nnodes=1 --nproc_per_node=2 benchmark_uccl_collective.py`
+* To benchmark UCCL copy-only collectives, you can run `benchmark_uccl_collective.py`. You can also run ring-like communication pattern with `--ring`.
+* From CollectiveContext, the default parameter `disable_uccl_intra` is `False`, which means we will use UCCL-native zero-copy intranode communication. If setting to `True`, it will use torch.distributed for intra-node communication.
+
+| Environment Variable | Description | Default Value |
+|---------------------|-------------|---------------|
+| UCCL_IB_HCA | The names of IB devices used | (null) |
+| UCCL_IB_GID_INDEX | Global ID index used in RoCE mode | -1 |
+| UCCL_PORT_ENTROPY | Paths/QPs per engine | 32 |
+| UCCL_CHUNK_SIZE_KB | Maximum chunk size for each WQE | 64 |
 
 ### Running NCCL
 

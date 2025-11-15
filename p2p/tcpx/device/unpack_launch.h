@@ -1,8 +1,3 @@
-/*************************************************************************
- * Copyright (c) 2024, UCCL Project. All rights reserved.
- *
- * See LICENSE.txt for license information
- ************************************************************************/
 #ifndef TCPX_DEVICE_UNPACK_LAUNCH_H_
 #define TCPX_DEVICE_UNPACK_LAUNCH_H_
 
@@ -17,8 +12,13 @@ struct KernelLaunchParams {
   dim3 grid_size;
   dim3 block_size;
   size_t shared_mem_size;
+  bool use_small_kernel;
 
-  KernelLaunchParams() : shared_mem_size(0) {}
+  KernelLaunchParams()
+      : grid_size(1, 1, 1),
+        block_size(1, 1, 1),
+        shared_mem_size(0),
+        use_small_kernel(true) {}
 };
 
 // Unpack launcher configuration

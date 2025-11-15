@@ -76,7 +76,7 @@ void EQDS::handle_grant_credit() {
         list_del(pos);
         if (grant_credit(sink, false, &consumed)) {
           // Grant done, add it to idle sender list.
-          DCHECK(list_empty(&sink->idle_item.idle_link));
+          CHECK(list_empty(&sink->idle_item.idle_link));
           list_add_tail(&sink->idle_item.idle_link, &idle_senders_);
         } else {
           // We have not satisfied its demand, re-add it to the active
@@ -205,7 +205,7 @@ bool EQDS::send_pull_packet(EQDSCC* eqds_cc) {
   wr.send_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE;
   wr.next = nullptr;
 
-  DCHECK(ibv_post_send(pc_qpw->credit_qp_, &wr, &bad_wr) == 0);
+  CHECK(ibv_post_send(pc_qpw->credit_qp_, &wr, &bad_wr) == 0);
 
   pc_qpw->poll_cq_cnt_++;
 

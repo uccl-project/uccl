@@ -1,5 +1,7 @@
+#include "bench_kernel.cuh"
 #include "bench_utils.hpp"
 #include "common.hpp"
+#include "d2h_queue_device.cuh"
 #include "ep_config.hpp"
 #include "ep_configs.cuh"
 #include "ep_event.hpp"
@@ -11,7 +13,6 @@
 #include "intranode.cuh"
 #include "layout.hpp"
 #include "peer_copy_manager.hpp"
-#include "py_cuda_shims.hpp"
 #include "ring_buffer.cuh"
 #include "uccl_bench.hpp"
 #include "uccl_proxy.hpp"
@@ -54,7 +55,8 @@ static std::atomic<long> g_next{1};
 static std::mutex g_mu;
 static std::unordered_map<long, Ctx> g_ctx;
 
-static std::vector<uint64_t> collect_ring_addrs_for_device(int device_index) {
+static std::vector<uint64_t> collect_d2h_channel_addrs_for_device(
+    int device_index) {
   std::lock_guard<std::mutex> lk(g_proxies_mu);
   auto it = uccl::g_proxies_by_dev.find(device_index);
   EP_HOST_ASSERT(it != uccl::g_proxies_by_dev.end() && !it->second.empty());
@@ -64,7 +66,7 @@ static std::vector<uint64_t> collect_ring_addrs_for_device(int device_index) {
   for (auto& proxy : it->second) {
     // Each proxy now manages multiple ring buffers
     auto proxy_addrs =
-        proxy.attr("get_ring_buffer_addrs")().cast<std::vector<uint64_t>>();
+        proxy.attr("get_d2h_channel_addrs")().cast<std::vector<uint64_t>>();
     all_addrs.insert(all_addrs.end(), proxy_addrs.begin(), proxy_addrs.end());
   }
   return all_addrs;
@@ -107,26 +109,49 @@ class Buffer {
 
       {
         CUDA_CHECK(cudaSetDevice(device_index));
-        auto host_addrs = collect_ring_addrs_for_device(device_index);
-        num_ring_addrs = static_cast<int>(host_addrs.size());
-        if (num_ring_addrs > 0) {
-          CUDA_CHECK(cudaMallocManaged(&d_ring_addrs,
-                                       num_ring_addrs * sizeof(uint64_t)));
+        auto host_addrs = collect_d2h_channel_addrs_for_device(device_index);
+        num_d2h_channel_addrs = static_cast<int>(host_addrs.size());
+        if (num_d2h_channel_addrs > 0) {
+          CUDA_CHECK(cudaMallocManaged(
+              &d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle)));
 
-          for (int i = 0; i < num_ring_addrs; ++i) {
+          CUDA_CHECK(cudaMallocManaged(
+              &d_handles, num_d2h_channel_addrs * sizeof(uint64_t)));
+
+          for (int i = 0; i < num_d2h_channel_addrs; ++i) {
+#ifndef USE_MSCCLPP_FIFO_BACKEND
             void* host_ptr = reinterpret_cast<void*>(host_addrs[i]);
             void* dev_ptr = nullptr;
 #ifndef USE_GRACE_HOPPER
-            CUDA_CHECK(cudaHostGetDevicePointer(&dev_ptr, host_ptr, 0));
+            CUDA_CHECK(cudaHostGetDevicePointer(
+                reinterpret_cast<void**>(&dev_ptr), host_ptr, 0));
 #else
             dev_ptr = host_ptr;
 #endif
-            d_ring_addrs[i] = reinterpret_cast<uint64_t>(dev_ptr);
-            // printf("Ring buffer %d addr: host %p, dev %p\n", i, host_ptr,
-            //        dev_ptr);
+            d_handle_objs[i].init_from_dev_ptr(dev_ptr);
+            d_handles[i] = reinterpret_cast<uint64_t>(&d_handle_objs[i]);
+#else
+            auto* fifo = reinterpret_cast<mscclpp::Fifo*>(host_addrs[i]);
+            mscclpp::FifoDeviceHandle h = fifo->deviceHandle();
+            d_handle_objs[i].init_from_host_value(h);
+            d_handles[i] = reinterpret_cast<uint64_t>(d_handle_objs + i);
+#endif
           }
+
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+          // Note(huangzhen): It will make d_handles turn to nullptr in rocm7.0,
+          // so we don't prefetch d_handles.
+#else
+          // Prefetch so the device immediately sees initialized contents
+          CUDA_CHECK(cudaMemPrefetchAsync(
+              d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
+              device_index));
+          CUDA_CHECK(cudaMemPrefetchAsync(
+              d_handles, num_d2h_channel_addrs * sizeof(uint64_t),
+              device_index));
+          CUDA_CHECK(cudaDeviceSynchronize());
+#endif
         }
-        CUDA_CHECK(cudaDeviceSynchronize());
         // Allocate device memory for IPC base pointers
         CUDA_CHECK(
             cudaMalloc(&d_ipc_rdma_base_ptrs, max_nvl_peers * sizeof(void*)));
@@ -171,7 +196,13 @@ class Buffer {
       // Ensure we're on the correct device before memory allocation and IPC
       // handle creation
       CUDA_CHECK(cudaSetDevice(device_index));
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+      // aggressive atomic will work with malloc with uncached memory
+      CUDA_CHECK(hipExtMallocWithFlags(&buffer_ptrs[nvl_rank], total_bytes,
+                                       hipDeviceMallocUncached));
+#else
       CUDA_CHECK(cudaMalloc(&buffer_ptrs[nvl_rank], total_bytes));
+#endif
       CUDA_CHECK(
           cudaIpcGetMemHandle(&ipc_handles[nvl_rank], buffer_ptrs[nvl_rank]));
 
@@ -190,12 +221,18 @@ class Buffer {
                                  barrier_signal_bytes, comm_stream));
     }
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    CUDA_CHECK(hipExtMallocWithFlags(&workspace, NUM_WORKSPACE_BYTES,
+                                     hipDeviceMallocUncached));
+#else
     CUDA_CHECK(cudaMalloc(&workspace, NUM_WORKSPACE_BYTES));
+#endif
     CUDA_CHECK(cudaMemsetAsync(workspace, 0, NUM_WORKSPACE_BYTES, comm_stream));
     CUDA_CHECK(cudaMallocHost(&moe_recv_counter, sizeof(int64_t),
                               cudaHostAllocMapped));
-    CUDA_CHECK(cudaHostGetDevicePointer(&moe_recv_counter_mapped,
-                                        const_cast<int*>(moe_recv_counter), 0));
+    CUDA_CHECK(cudaHostGetDevicePointer(
+        reinterpret_cast<void**>(&moe_recv_counter_mapped),
+        const_cast<int*>(moe_recv_counter), 0));
     *moe_recv_counter = -1;
 
     CUDA_CHECK(cudaMallocHost(&moe_recv_expert_counter,
@@ -338,7 +375,14 @@ class Buffer {
 
     // Free chunked mode staffs
     CUDA_CHECK(cudaFreeHost(const_cast<int*>(moe_recv_expert_counter)));
-
+    // Free D2HHandle device-side arrays if allocated
+    if (d_handle_objs) {
+      CUDA_CHECK(cudaFree(d_handle_objs));
+      d_handle_objs = nullptr;
+    }
+    if (d_handles) {
+      CUDA_CHECK(cudaFree(d_handles));
+    }
     destroyed = true;
     available = false;
   }
@@ -523,8 +567,8 @@ class Buffer {
           comm_stream,
           config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4),
                                            num_ranks),
-          num_nvl_bytes, true, low_latency_mode, d_ring_addrs, num_ring_addrs,
-          atomic_buffer_ptr);
+          num_nvl_bytes, true, low_latency_mode, d_handles,
+          num_d2h_channel_addrs, atomic_buffer_ptr);
     } else {
       rdma_channel_prefix_matrix =
           torch::empty({num_rdma_ranks, num_channels},
@@ -556,7 +600,7 @@ class Buffer {
           comm_stream,
           config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4),
                                            num_ranks),
-          num_nvl_bytes, low_latency_mode, d_ring_addrs, num_ring_addrs,
+          num_nvl_bytes, low_latency_mode, d_handles, num_d2h_channel_addrs,
           atomic_buffer_ptr);
 
       // Synchronize total received tokens and tokens per expert
@@ -658,8 +702,8 @@ class Buffer {
         config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
         config.num_max_nvl_chunked_send_tokens,
         config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, cached_mode,
-        comm_stream, num_channels, low_latency_mode, d_ring_addrs,
-        num_ring_addrs, atomic_buffer_ptr);
+        comm_stream, num_channels, low_latency_mode, d_handles,
+        num_d2h_channel_addrs, atomic_buffer_ptr);
     // Wait streams
     std::optional<EventHandle> event;
     if (async) {
@@ -818,8 +862,8 @@ class Buffer {
         buffer_ptrs_gpu, config.num_max_nvl_chunked_recv_tokens,
         barrier_signal_ptrs_gpu, rank, comm_stream,
         config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4), num_ranks),
-        num_nvl_bytes, false, low_latency_mode, d_ring_addrs, num_ring_addrs,
-        atomic_buffer_ptr);
+        num_nvl_bytes, false, low_latency_mode, d_handles,
+        num_d2h_channel_addrs, atomic_buffer_ptr);
 
     // Assign bias pointers
     auto bias_opts =
@@ -851,7 +895,7 @@ class Buffer {
         config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
         config.num_max_nvl_chunked_send_tokens,
         config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, comm_stream,
-        num_channels, low_latency_mode, d_ring_addrs, num_ring_addrs,
+        num_channels, low_latency_mode, d_handles, num_d2h_channel_addrs,
         atomic_buffer_ptr);
 
     // Wait streams
@@ -1416,10 +1460,16 @@ class Buffer {
     if (not return_recv_hook) stream_wait(launch_stream, compute_stream);
 
     // Allocate packed tensors
-    auto packed_recv_x = torch::empty(
-        {num_local_experts, num_ranks * num_max_dispatch_tokens_per_rank,
-         hidden},
-        x.options().dtype(use_fp8 ? torch::kFloat8_e4m3fn : torch::kBFloat16));
+    auto packed_recv_x =
+        torch::empty({num_local_experts,
+                      num_ranks * num_max_dispatch_tokens_per_rank, hidden},
+                     x.options().dtype(use_fp8 ?
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+                                               torch::kFloat8_e4m3fnuz
+#else
+                                               torch::kFloat8_e4m3fn
+#endif
+                                               : torch::kBFloat16));
     auto packed_recv_src_info = torch::empty(
         {num_local_experts, num_ranks * num_max_dispatch_tokens_per_rank},
         torch::dtype(torch::kInt32).device(torch::kCUDA));
@@ -1475,8 +1525,8 @@ class Buffer {
           topk_idx.data_ptr<int64_t>(), ptr0, ptr_internode0, count0,
           num_tokens, hidden, num_max_dispatch_tokens_per_rank, num_topk,
           num_experts, rank, num_ranks, use_fp8, round_scale, use_ue8m0,
-          workspace, num_device_sms, launch_stream, phases, d_ring_addrs,
-          num_ring_addrs, max_nvl_peers, low_latency_buffer_idx_used,
+          workspace, num_device_sms, launch_stream, phases, d_handles,
+          num_d2h_channel_addrs, max_nvl_peers, low_latency_buffer_idx_used,
           d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
           buffer.dispatch_rdma_recv_count_buffer_internode);  // Added IPC base
                                                               // pointers
@@ -1601,7 +1651,7 @@ class Buffer {
           ptr0, ptr_internode0, count0, num_combined_tokens, hidden,
           num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,
           num_ranks, use_logfmt, workspace, num_device_sms, launch_stream,
-          phases, zero_copy, d_ring_addrs, num_ring_addrs, max_nvl_peers,
+          phases, zero_copy, d_handles, num_d2h_channel_addrs, max_nvl_peers,
           low_latency_buffer_idx_used, d_ipc_rdma_base_ptrs, rdma_buffer_ptr,
           atomic_buffer_ptr,
           buffer.combine_rdma_recv_flag_buffer_internode);  // Added IPC base
@@ -1883,8 +1933,9 @@ class Buffer {
   bool destroyed = false;
 
   // Ring buffers
-  int num_ring_addrs{0};
-  uint64_t* d_ring_addrs{nullptr};
+  int num_d2h_channel_addrs{0};
+  d2hq::D2HHandle* d_handle_objs{nullptr};
+  uint64_t* d_handles{nullptr};
 
   // IPC base pointers for GPU access (for replacing nvshmemi_get_p2p_ptr)
   void** d_ipc_rdma_base_ptrs{
@@ -2071,7 +2122,7 @@ PYBIND11_MODULE(ep, m) {
     return std::string(cudaGetErrorString(st));
   });
   m.def("is_sm90_compiled", is_sm90_compiled);
-  m.def("get_num_proxy_threads", []() { return kNumThBlocks; });
+  m.def("get_num_proxy_threads", []() { return kNumProxyThs; });
   m.def(
       "stream_query",
       [](uintptr_t stream_ptr) {
@@ -2090,18 +2141,19 @@ PYBIND11_MODULE(ep, m) {
   });
   py::class_<Stats>(m, "Stats");
   py::class_<UcclProxy>(m, "Proxy")
-      .def(py::init<int, uintptr_t, size_t, int, int, int, std::string const&,
-                    int, int, int>(),
+      .def(py::init<int, uintptr_t, size_t, int, int, int, int, int, int, bool,
+                    bool>(),
            py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
            py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
-           py::arg("local_rank") = 0, py::arg("peer_ip") = std::string(),
-           py::arg("num_experts") = -1, py::arg("num_ranks") = -1,
-           py::arg("num_nodes") = 0)
+           py::arg("local_rank") = 0, py::arg("num_experts") = -1,
+           py::arg("num_ranks") = -1, py::arg("num_nodes") = 0,
+           py::arg("use_normal_mode") = false, py::arg("is_intranode") = false)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)
       .def("start_dual", &UcclProxy::start_dual)
       .def("stop", &UcclProxy::stop)
+      .def("get_listen_port", &UcclProxy::get_listen_port)
       .def("get_atomic_buffer_ptr", &UcclProxy::get_atomic_buffer_ptr)
       .def("set_atomic_buffer_ptr", &UcclProxy::set_atomic_buffer_ptr)
       .def("set_dispatch_recv_data_offset",
@@ -2109,7 +2161,7 @@ PYBIND11_MODULE(ep, m) {
       .def("calculate_and_set_dispatch_recv_data_offset",
            &UcclProxy::calculate_and_set_dispatch_recv_data_offset,
            py::arg("num_tokens"), py::arg("hidden"), py::arg("num_experts"))
-      .def("get_ring_buffer_addrs", &UcclProxy::get_ring_buffer_addrs)
+      .def("get_d2h_channel_addrs", &UcclProxy::get_d2h_channel_addrs)
       .def_property_readonly("thread_idx", &UcclProxy::thread_idx)
       .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr)
       .def("avg_rdma_write_us", &UcclProxy::avg_rdma_write_us)
@@ -2129,6 +2181,21 @@ PYBIND11_MODULE(ep, m) {
                   pm.nbytes = static_cast<size_t>(
                       py::cast<unsigned long long>(d["nbytes"]));
                   pm.ip = py::cast<std::string>(d["ip"]);
+
+                  // Handle listen_ports array (always present)
+                  auto ports = d["listen_ports"].cast<py::sequence>();
+                  size_t port_count =
+                      std::min(static_cast<size_t>(py::len(ports)),
+                               static_cast<size_t>(kNumProxyThs));
+                  for (size_t i = 0; i < port_count; ++i) {
+                    pm.listen_ports[i] = ports[i].cast<int>();
+                  }
+                  // Initialize remaining ports to 0 if fewer than kNumProxyThs
+                  // provided
+                  for (size_t i = port_count; i < kNumProxyThs; ++i) {
+                    pm.listen_ports[i] = 0;
+                  }
+
                   v.push_back(std::move(pm));
                 } else {
                   v.push_back(obj.cast<PeerMeta>());
@@ -2144,6 +2211,20 @@ PYBIND11_MODULE(ep, m) {
               pm.nbytes = static_cast<size_t>(
                   py::cast<unsigned long long>(d["nbytes"]));
               pm.ip = py::cast<std::string>(d["ip"]);
+
+              // Handle listen_ports array (always present)
+              auto ports = d["listen_ports"].cast<py::sequence>();
+              size_t port_count = std::min(static_cast<size_t>(py::len(ports)),
+                                           static_cast<size_t>(kNumProxyThs));
+              for (size_t i = 0; i < port_count; ++i) {
+                pm.listen_ports[i] = ports[i].cast<int>();
+              }
+              // Initialize remaining ports to 0 if fewer than kNumProxyThs
+              // provided
+              for (size_t i = port_count; i < kNumProxyThs; ++i) {
+                pm.listen_ports[i] = 0;
+              }
+
               v.push_back(std::move(pm));
             }
             self.set_peers_meta(v);
@@ -2151,11 +2232,11 @@ PYBIND11_MODULE(ep, m) {
           py::arg("metas"),
           "Attach peer metadata (list of dicts or PeerMeta objects).")
       .def(
-          "set_bench_ring_addrs",
+          "set_bench_d2h_channel_addrs",
           [](UcclProxy& self, py::iterable addrs) {
             std::vector<uintptr_t> v;
             for (py::handle h : addrs) v.push_back(h.cast<uintptr_t>());
-            self.set_bench_ring_addrs(v);
+            self.set_bench_d2h_channel_addrs(v);
           },
           py::arg("addrs"), "Attach ring buffer addresses for benchmarking.");
   // .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr);
@@ -2175,8 +2256,6 @@ PYBIND11_MODULE(ep, m) {
       .def("timing_start", &Bench::timing_start)
       .def("timing_stop", &Bench::timing_stop)
       .def("is_running", &Bench::is_running)
-      .def("start_local_proxies", &Bench::start_local_proxies,
-           py::arg("rank") = 0, py::arg("peer_ip") = std::string())
       .def("launch_gpu_issue_batched_commands",
            &Bench::launch_gpu_issue_batched_commands)
       .def("sync_stream", &Bench::sync_stream)
@@ -2199,4 +2278,78 @@ PYBIND11_MODULE(ep, m) {
              mgr.start_for_proxies(vec);
            })
       .def("stop", &PeerCopyManager::stop);
+
+  // MSCCLPP Fifo class - must be registered before BenchFifo which uses it
+  py::class_<mscclpp::Fifo>(m, "Fifo").def(py::init<uint32_t>(),
+                                           py::arg("size") = 2048);
+
+  // FIFO-based benchmarking classes
+  py::class_<BenchFifo>(m, "BenchFifo")
+      .def(py::init<>())
+      .def("env_info", &BenchFifo::env_info)
+      .def("blocks", &BenchFifo::blocks)
+      .def("num_proxies", &BenchFifo::num_proxies)
+      .def("get_fifo", &BenchFifo::get_fifo, py::return_value_policy::reference)
+      .def("timing_start", &BenchFifo::timing_start)
+      .def("timing_stop", &BenchFifo::timing_stop)
+      .def("is_running", &BenchFifo::is_running)
+      .def("launch_gpu_issue_batched_commands",
+           &BenchFifo::launch_gpu_issue_batched_commands)
+      .def("sync_stream", &BenchFifo::sync_stream)
+      .def("sync_stream_interruptible", &BenchFifo::sync_stream_interruptible,
+           py::arg("poll_ms") = 5, py::arg("timeout_ms") = -1,
+           py::arg("should_abort") = nullptr)
+      .def("join_proxies", &BenchFifo::join_proxies)
+      .def("print_block_latencies", &BenchFifo::print_block_latencies)
+      .def("compute_stats", &BenchFifo::compute_stats)
+      .def("print_summary", &BenchFifo::print_summary)
+      .def("print_summary_last", &BenchFifo::print_summary_last)
+      .def("last_elapsed_ms", &BenchFifo::last_elapsed_ms);
+
+  py::class_<FifoProxy>(m, "FifoProxy")
+      .def(py::init<int, uintptr_t, size_t, int, int, int, bool>(),
+           py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
+           py::arg("total_size"), py::arg("rank"), py::arg("node_idx"),
+           py::arg("local_rank"), py::arg("is_intranode"))
+      .def("set_fifo", &FifoProxy::set_fifo, py::arg("fifo"))
+      .def("set_peers_meta",
+           [](FifoProxy& proxy, py::list meta_list) {
+             std::vector<PeerMeta> vec;
+             for (py::handle h : meta_list) {
+               if (py::isinstance<py::dict>(h)) {
+                 auto d = h.cast<py::dict>();
+                 PeerMeta pm;
+                 pm.rank = d["rank"].cast<int>();
+                 pm.ptr = d["ptr"].cast<uintptr_t>();
+                 pm.nbytes = d["nbytes"].cast<size_t>();
+                 pm.ip = d["ip"].cast<std::string>();
+
+                 // Handle listen_ports array (always present)
+                 auto ports = d["listen_ports"].cast<py::sequence>();
+                 size_t port_count =
+                     std::min(static_cast<size_t>(py::len(ports)),
+                              static_cast<size_t>(kNumProxyThs));
+                 for (size_t i = 0; i < port_count; ++i) {
+                   pm.listen_ports[i] = ports[i].cast<int>();
+                 }
+                 // Initialize remaining ports to 0 if fewer than kNumProxyThs
+                 // provided
+                 for (size_t i = port_count; i < kNumProxyThs; ++i) {
+                   pm.listen_ports[i] = 0;
+                 }
+
+                 vec.push_back(std::move(pm));
+               } else {
+                 vec.push_back(h.cast<PeerMeta>());
+               }
+             }
+             proxy.set_peers_meta(vec);
+           })
+      .def("start_sender", &FifoProxy::start_sender)
+      .def("start_remote", &FifoProxy::start_remote)
+      .def("stop", &FifoProxy::stop)
+      .def("get_listen_port", &FifoProxy::get_listen_port)
+      .def("avg_wr_latency_us", &FifoProxy::avg_wr_latency_us)
+      .def("processed_count", &FifoProxy::processed_count)
+      .def_readonly("thread_idx", &FifoProxy::thread_idx);
 }

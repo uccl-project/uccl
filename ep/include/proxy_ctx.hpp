@@ -41,12 +41,13 @@ struct ProxyCtx {
   ibv_mr* mr = nullptr;
   ibv_cq* cq = nullptr;
   ibv_qp* qp = nullptr;
-  std::vector<ibv_qp*> data_qps_by_ring;
+  std::vector<ibv_qp*> data_qps_by_channel;
   std::vector<uint32_t> dst_data_qpn_by_ring;
   // std::vector<ibv_cq*> extra_cqs;
   ibv_qp* ack_qp = nullptr;
   ibv_qp* recv_ack_qp = nullptr;
   int numa_node = -1;
+  int gid_index = -1;
 
   uint32_t dst_qpn;
   uint32_t dst_ack_qpn;
@@ -102,7 +103,10 @@ struct ProxyCtx {
   // Async-barrier state (single inflight assumed)
   bool barrier_inflight = false;
   uint64_t barrier_seq = 0;
-  uint64_t barrier_wr = 0;
+  int barrier_wr = -1;
+
+  bool quiet_inflight = false;
+  int quiet_wr = -1;
 
   // Rank-0 bookkeeping
   std::vector<uint8_t> barrier_arrived;  // size = num_ranks; 1 if arrival seen
@@ -119,4 +123,11 @@ struct ProxyCtx {
   int node_leader_rank = -1;  // lowest global rank on this node
   int local_rank = -1;        // convenience mirror of cfg_.local_rank
   int thread_idx = -1;        // thread index used in shm name
+
+  std::unordered_map<uint64_t, uint8_t> next_seq_per_index;
+  inline uint64_t seq_key(int dst_rank, size_t index) {
+    // assumes dst_rank fits 32 bits; if index > 32 bits, prefer Pair Hash below
+    return (static_cast<uint64_t>(static_cast<uint32_t>(dst_rank)) << 32) ^
+           static_cast<uint64_t>(static_cast<uint32_t>(index));
+  }
 };

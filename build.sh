@@ -17,15 +17,15 @@ BUILD_TYPE=${2:-all}
 PY_VER=${3:-$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")}
 ARCH="$(uname -m)"
 # The default for ROCM_IDX_URL depends on the gfx architecture of your GPU and the index URLs may change.
-ROCM_IDX_URL=${4:-https://rocm.nightlies.amd.com/v2/gfx94X-dcgpu}
+ROCM_IDX_URL=${4:-https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu}
 # The default for THEROCK_BASE_IMAGE is current, but may change. Make sure to track TheRock's dockerfile.
 THEROCK_BASE_IMAGE=${5:-quay.io/pypa/manylinux_2_28_x86_64@sha256:d632b5e68ab39e59e128dcf0e59e438b26f122d7f2d45f3eea69ffd2877ab017}
-IS_EFA=$(ls /sys/class/infiniband/ | grep rdmap || true)
+IS_EFA=$( [ -d "/sys/class/infiniband/" ] && ls /sys/class/infiniband/ 2>/dev/null | grep -q rdmap && echo "EFA support: true" ) || echo "EFA support: false"
 
 
 if [[ $TARGET != cuda* && $TARGET != rocm* && $TARGET != "therock" ]]; then
   echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep|eccl] [py_version] [rocm_index_url]" >&2
-
+  exit 1
 fi
 
 if [[ $ARCH == "aarch64" && ( $TARGET == rocm* || $TARGET == "therock" ) ]]; then
@@ -135,10 +135,14 @@ build_p2p() {
   echo "[container] Copying P2P .so, collective.py and utils.py to uccl/"
   mkdir -p uccl
   mkdir -p uccl/lib
-  cp p2p/p2p.*.so uccl/
-  cp p2p/collective.py uccl/
-  cp p2p/transfer.py uccl/
-  cp p2p/utils.py uccl/
+  if [[ -z "${USE_TCPX:-}" || "$USE_TCPX" != "1" ]]; then
+    cp p2p/p2p.*.so uccl/
+    cp p2p/collective.py uccl/
+    cp p2p/transfer.py uccl/
+    cp p2p/utils.py uccl/
+  else
+    echo "[container] USE_TCPX=1, skipping copying p2p runtime files"
+  fi
 }
 
 build_ep() {
@@ -149,16 +153,25 @@ build_ep() {
   set -euo pipefail
   echo "[container] build_ep Target: $TARGET"
 
-  if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
-    echo "Skipping GPU-driven build on ROCm (no GPU-driven support yet)."
-    return
+  if [[ "$TARGET" == "therock" ]]; then
+    echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
+  elif [[ "$TARGET" == rocm* ]]; then
+    cd ep
+    # This might be needed if you traverse among different git commits
+    # make clean
+    python3 setup.py build
+    cd ..
+    echo "[container] Copying GPU-driven .so to uccl/"
+    mkdir -p uccl/lib
+    cp ep/build/**/*.so uccl/
+  elif [[ "$TARGET" == cuda* ]]; then
+    cd ep
+    make clean && make -j$(nproc) all
+    cd ..
+    echo "[container] Copying GPU-driven .so to uccl/"
+    mkdir -p uccl/lib
+    cp ep/*.so uccl/
   fi
-
-  cd ep && make clean && make -j$(nproc) all && cd ..
-
-  echo "[container] Copying GPU-driven .so to uccl/"
-  mkdir -p uccl/lib
-  cp ep/*.so uccl/
 }
 
 build_eccl() {
@@ -251,6 +264,8 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e IS_EFA="${IS_EFA}" \
   -e WHEEL_DIR="${WHEEL_DIR}" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
+  -e USE_TCPX="${USE_TCPX:-0}" \
+  -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
   -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_rdma build_efa build_p2p build_ep build_eccl)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
@@ -333,15 +348,19 @@ def initialize():
       mv ${BACKUP_FN} setup.py
     fi
 
-    auditwheel repair dist/uccl-*.whl --exclude "libtorch*.so" --exclude "libc10*.so" --exclude "libibverbs.so.1" --exclude "libcudart.so.12" --exclude "libamdhip64.so.*" -w /io/${WHEEL_DIR}
+    auditwheel repair dist/uccl-*.whl --exclude "libtorch*.so" --exclude "libc10*.so" --exclude "libibverbs.so.1" --exclude "libcudart.so.12" --exclude "libamdhip64.so.*" --exclude "libcuda.so.1" -w /io/${WHEEL_DIR}
 
     # Add backend tag to wheel filename using local version identifier
     if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
+      # Adjust TARGET to the preferred wheel name suffix for python-packaged ROCm, e.g. "rocm7.9.0rc1"
+      if [[ "$TARGET" == "therock" ]]; then
+        TARGET="rocm$(rocm-sdk version)"
+      fi
       cd /io/${WHEEL_DIR}
       for wheel in uccl-*.whl; do
         if [[ -f "$wheel" ]]; then
           # Extract wheel name components: uccl-version-python-abi-platform.whl
-          if [[ "$wheel" =~ ^(uccl-)([^-]+)-([^-]+-[^-]+-[^.]+)(\.whl)$ ]]; then
+          if [[ "$wheel" =~ ^(uccl-)([^-]+)-([^-]+-[^-]+-.+)(\.whl)$ ]]; then
             name="${BASH_REMATCH[1]}"
             version="${BASH_REMATCH[2]}"
             python_abi_platform="${BASH_REMATCH[3]}"
