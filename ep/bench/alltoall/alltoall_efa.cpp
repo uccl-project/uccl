@@ -23,10 +23,10 @@
 #include <unistd.h>
 
 constexpr int NUM_GPUS_PER_NODE = 8;
-constexpr int NUM_NICS_PER_GPU = 2;
-constexpr size_t MSG_SIZE = 7168 * 2;  // 7KB
-constexpr int NUM_MSGS = 64;
-constexpr int DISPATCH_PER_MSG = 8;
+constexpr int NUM_NICS_PER_GPU = 1;  // 1 for p6, 2 for p5en
+constexpr size_t MSG_SIZE = 7168;    // 7KB
+constexpr int NUM_MSGS = 128;
+constexpr int TOPK = 8;
 constexpr int WINDOW_SIZE = 64;
 constexpr uint32_t QKEY = 0x11111111u;
 constexpr int TCP_PORT_BASE = 18515;
@@ -76,10 +76,10 @@ struct PeerEndpoint {
 
 // Prepopulated random dispatch table
 std::vector<int> generate_dispatch_table(int rank, int world_size) {
-  std::vector<int> table(NUM_MSGS * DISPATCH_PER_MSG);
+  std::vector<int> table(NUM_MSGS * TOPK);
   unsigned int seed = rank * 12345;
 
-  for (int i = 0; i < NUM_MSGS * DISPATCH_PER_MSG; i++) {
+  for (int i = 0; i < NUM_MSGS * TOPK; i++) {
     table[i] = rand_r(&seed) % world_size;
   }
   return table;
@@ -193,8 +193,9 @@ void pin_to_numa(int local_rank) {
   struct bitmask* cpu_bitmask = numa_allocate_cpumask();
   numa_node_to_cpus(numa_node, cpu_bitmask);
 
-  unsigned int num_cpus = numa_bitmask_weight(cpu_bitmask);
-  for (unsigned int i = 0; i < num_cpus; i++) {
+  // Iterate through all possible CPUs and check if they're in the bitmask
+  unsigned int max_cpus = numa_num_configured_cpus();
+  for (unsigned int i = 0; i < max_cpus; i++) {
     if (numa_bitmask_isbitset(cpu_bitmask, i)) {
       CPU_SET(i, &cpu_mask);
     }
@@ -354,14 +355,32 @@ void run_benchmark(int rank, int local_rank, int world_size,
 
   std::vector<NicContext> nics(NUM_NICS_PER_GPU);
 
-  ibv_device** dev_list = ibv_get_device_list(nullptr);
+  int num_devices = 0;
+  ibv_device** dev_list = ibv_get_device_list(&num_devices);
+
+  // Filter devices with names starting with "rdmap"
+  std::vector<ibv_device*> rdmap_devices;
+  for (int i = 0; i < num_devices; i++) {
+    char const* dev_name = ibv_get_device_name(dev_list[i]);
+    if (strncmp(dev_name, "rdmap", 5) == 0) {
+      rdmap_devices.push_back(dev_list[i]);
+    }
+  }
+
   int nic_base = local_rank * NUM_NICS_PER_GPU;
+
+  if (nic_base + NUM_NICS_PER_GPU > static_cast<int>(rdmap_devices.size())) {
+    fprintf(stderr, "Not enough rdmap devices: need %d, found %zu\n",
+            nic_base + NUM_NICS_PER_GPU, rdmap_devices.size());
+    exit(1);
+  }
 
   for (int i = 0; i < NUM_NICS_PER_GPU; i++) {
     auto& nic = nics[i];
-    nic.ctx = ibv_open_device(dev_list[nic_base + i]);
+    nic.ctx = ibv_open_device(rdmap_devices[nic_base + i]);
     if (!nic.ctx) {
-      fprintf(stderr, "Failed to open device %d\n", nic_base + i);
+      fprintf(stderr, "Failed to open device %s (index %d)\n",
+              ibv_get_device_name(rdmap_devices[nic_base + i]), nic_base + i);
       exit(1);
     }
 
@@ -454,7 +473,7 @@ void run_benchmark(int rank, int local_rank, int world_size,
   constexpr int NUM_ROUNDS = 50;
   constexpr int WARMUP_ROUNDS = 20;
   std::vector<double> round_times;
-  int total_ops = NUM_MSGS * DISPATCH_PER_MSG;
+  int total_ops = NUM_MSGS * TOPK;
 
   for (int round = 0; round < NUM_ROUNDS; round++) {
     tcp_barrier(rank, world_size);
@@ -477,7 +496,7 @@ void run_benchmark(int rank, int local_rank, int world_size,
       }
       network_ops++;
 
-      int msg_id = op_idx / DISPATCH_PER_MSG;
+      int msg_id = op_idx / TOPK;
       int nic_idx = op_idx % NUM_NICS_PER_GPU;
       auto& nic = nics[nic_idx];
       auto& peer = peers[nic_idx][dst_rank];
@@ -589,7 +608,7 @@ void run_benchmark(int rank, int local_rank, int world_size,
          NUM_ROUNDS - WARMUP_ROUNDS, avg_us);
 
   if (rank == 0) {
-    double total_data_gb = (NUM_MSGS * DISPATCH_PER_MSG * MSG_SIZE) / 1e9;
+    double total_data_gb = (NUM_MSGS * TOPK * MSG_SIZE) / 1e9;
     double elapsed_s = avg_us / 1e6;
     printf("Average time: %.2f us\n", avg_us);
     printf("Throughput: %.2f GB/s\n", total_data_gb / elapsed_s);
