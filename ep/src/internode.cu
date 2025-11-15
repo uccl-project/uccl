@@ -445,6 +445,8 @@ void notify_dispatch(
   EP_HOST_ASSERT(num_nvl_bytes < std::numeric_limits<int>::max());
 
   // Launch kernel
+  printf("notify dispatch num_sms = %d, num_threads = %d", 1 + num_rdma_ranks,
+         kNumThreads);
   SETUP_LAUNCH_CONFIG(1 + num_rdma_ranks, kNumThreads, stream);
   SWITCH_RDMA_RANKS(NOTIFY_DISPATCH_LAUNCH_CASE);
 #undef NOTIFY_DISPATCH_LAUNCH_CASE
@@ -819,7 +821,7 @@ __global__ void __launch_bounds__(
         acquire_lock(rdma_send_channel_lock + lane_id);
         auto latest_tail = rdma_send_channel_tail[lane_id];
         auto offset = rdma_tail_idx - latest_tail;
-        while (offset >= WARP_SIZE) {
+        while (offset >= 32) {
           release_lock(rdma_send_channel_lock + lane_id);
           acquire_lock(rdma_send_channel_lock + lane_id);
           latest_tail = rdma_send_channel_tail[lane_id];
@@ -830,8 +832,7 @@ __global__ void __launch_bounds__(
         // Add the bit and move the ones if possible
         auto window = rdma_send_channel_window[lane_id] | (1u << offset);
         if (offset == 0) {
-          auto num_empty_slots =
-              (~window) == 0 ? WARP_SIZE : __ffs(~window) - 1;
+          auto num_empty_slots = (~window) == 0 ? 32 : __ffs(~window) - 1;
           st_release_cta(rdma_send_channel_tail + lane_id,
                          latest_tail + num_empty_slots);
           window >>= num_empty_slots;
@@ -1114,9 +1115,10 @@ __global__ void __launch_bounds__(
 
         // Copy data
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-        UNROLLED_WARP_COPY(
-            5, lane_id, hidden_int4, reinterpret_cast<int4*>(dst_shifted),
-            reinterpret_cast<int4*>(shifted), ld_nc_global, st_na_global);
+        UNROLLED_WARP_COPY(5, lane_id, num_bytes_per_token / sizeof(int4),
+                           reinterpret_cast<int4*>(dst_shifted),
+                           reinterpret_cast<int4*>(shifted), ld_nc_global,
+                           st_na_global);
 #else
         if (lane_id == 0) {
           tma_load_1d(tma_buffer, shifted, tma_mbarrier, num_bytes_per_token,
@@ -1240,6 +1242,7 @@ __global__ void __launch_bounds__(
       }
     }
     num_tokens_to_recv = warp_reduce_sum(end_offset - start_offset);
+
     auto num_tokens_to_recv_original = num_tokens_to_recv;
     // Save for combine usage
     if (lane_id < kNumRDMARanks and not kCachedMode)
@@ -1265,12 +1268,13 @@ __global__ void __launch_bounds__(
           printf(
               "DeepEP dispatch NVL receiver timeout, channel: %d, RDMA: %d, "
               "nvl: %d, src NVL: %d, head: %d, tail: %d, "
-              "num_tokens_to_recv_original: %d, last_recv_token_idx: %lld, "
+              "num_tokens_to_recv_original: %d, num_tokens_to_recv: %d, "
+              "last_recv_token_idx: %lld, "
               "next_expected_token_idx: %lld\n",
               channel_id, rdma_rank, nvl_rank, src_nvl_rank,
               cached_channel_head_idx, cached_channel_tail_idx,
-              num_tokens_to_recv_original, last_recv_token_idx,
-              (long long)(last_recv_token_idx + 1));
+              num_tokens_to_recv_original, num_tokens_to_recv,
+              last_recv_token_idx, (long long)(last_recv_token_idx + 1));
           trap();
         }
       }
@@ -1298,6 +1302,11 @@ __global__ void __launch_bounds__(
             5, lane_id, hidden_int4,
             reinterpret_cast<int4*>(recv_x + recv_token_idx * hidden_int4),
             reinterpret_cast<int4*>(shifted), ld_nc_global, st_na_global);
+        if (scale_aligned)
+          UNROLLED_WARP_COPY(1, lane_id, num_scales,
+                             recv_x_scales + recv_token_idx * num_scales,
+                             reinterpret_cast<float*>(shifted + hidden_bytes),
+                             ld_nc_global, st_na_global);
 #else
         if (lane_id == 0) {
           tma_load_1d(tma_buffer, shifted, tma_mbarrier, tma_load_bytes);
@@ -1432,6 +1441,8 @@ void dispatch(void* recv_x, float* recv_x_scales, int64_t* recv_topk_idx,
   EP_HOST_ASSERT((topk_idx == nullptr) == (topk_weights == nullptr));
   EP_HOST_ASSERT((recv_topk_idx == nullptr) == (recv_topk_weights == nullptr));
 
+  printf("dispatch num_sms = %d, num_threads = %d", num_channels * 2,
+         (kNumDispatchRDMASenderWarps + 1 + NUM_MAX_NVL_PEERS) * WARP_SIZE);
   SETUP_LAUNCH_CONFIG(
       num_channels * 2,
       (kNumDispatchRDMASenderWarps + 1 + NUM_MAX_NVL_PEERS) * WARP_SIZE,
@@ -1691,6 +1702,9 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
   auto cached_notify_func = low_latency_mode
                                 ? cached_notify<true, kNumTMABytesPerWarp>
                                 : cached_notify<false, kNumTMABytesPerWarp>;
+
+  printf("cached_notify num_sms = %d, num_threads = %d", num_channels * 2,
+         num_threads);
   SETUP_LAUNCH_CONFIG(num_channels * 2, num_threads, stream);
   SET_SHARED_MEMORY_FOR_TMA(cached_notify_func);
   LAUNCH_KERNEL(&cfg, cached_notify_func, rdma_clean_meta.first,
@@ -2660,6 +2674,8 @@ void combine(cudaDataType_t type, void* combined_x,
   EP_HOST_ASSERT(num_max_rdma_chunked_send_tokens >= num_warps_per_forwarder);
   EP_HOST_ASSERT(type == CUDA_R_16BF);
 
+  printf("combine num_sms = %d, num_threads = %d", num_channels * 2,
+         (num_forwarder_warps + 1) * WARP_SIZE);
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   EP_HOST_ASSERT((num_forwarder_warps + 1) * WARP_SIZE <= MAX_NTHREADS);
 #endif

@@ -920,15 +920,26 @@ static void post_rdma_async_batched_normal_mode(
                     .GetImmData();
             wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
             wrs[j].imm_data = htonl(imm);
-          } else if (j + 1 == kgroup) {
-            // Put WriteImm only on the tail WR
-            uint32_t imm =
-                WriteImm::Pack(get_is_combine(cmd.cmd_type),
-                               get_low_latency(cmd.cmd_type), cmd.expert_idx,
-                               static_cast<uint32_t>(kgroup), my_rank)
-                    .GetImmData();
-            wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-            wrs[j].imm_data = htonl(imm);
+            printf(
+                "Posting AtomicsImm with imm=0x%08x, atomic_offset: %d, "
+                "atomic_val: %d, dst_rank: %d\n",
+                imm, cmd.atomic_offset / sizeof(int), cmd.atomic_val, dst_rank);
+
+            AtomicsImm aimm(imm);
+            assert(aimm.GetValue() == cmd.atomic_val);
+            assert(aimm.GetOff() == cmd.atomic_offset);
+
+            // } else if (j + 1 == kgroup) {
+            //   // Put WriteImm only on the tail WR
+            //   uint32_t imm =
+            //       WriteImm::Pack(get_is_combine(cmd.cmd_type),
+            //                      get_low_latency(cmd.cmd_type),
+            //                      cmd.expert_idx,
+            //                      static_cast<uint32_t>(kgroup), my_rank)
+            //           .GetImmData();
+            //   wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+            //   wrs[j].imm_data = htonl(imm);
+            //   printf("Posting WriteImm with imm=0x%08x\n", imm);
           } else {
             wrs[j].opcode = IBV_WR_RDMA_WRITE;
           }
@@ -950,6 +961,8 @@ static void post_rdma_async_batched_normal_mode(
         {
           auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
               batch_tail_wr, std::move(ring_wrids));
+          printf("pushed tail wr_id %lu into map (map=%p)\n", batch_tail_wr,
+                 (void*)&S.wr_id_to_wr_ids);
           if (!inserted) {
             fprintf(stderr,
                     "thread_idx: %d, Error: tail wr_id %lu already exists "
@@ -1245,7 +1258,7 @@ void local_process_completions(ProxyCtx& S,
             }
             S.wr_id_to_wr_ids.erase(it);
           } else {
-            printf("Error: ACK for unknown wr_id %lu\n", wrid);
+            printf("Error: Atomic ACK for unknown wr_id %lu\n", wrid);
             std::abort();
           }
 #endif
@@ -1284,7 +1297,7 @@ void local_process_completions(ProxyCtx& S,
             }
             S.wr_id_to_wr_ids.erase(it);
           } else {
-            printf("Error: ACK for unknown wr_id %lu\n", wr_done);
+            printf("Error: Write ACK for unknown wr_id %lu\n", wr_done);
             std::abort();
           }
 #endif
@@ -1422,6 +1435,8 @@ void remote_process_completions_normal_mode(
   std::unordered_map<uint32_t, std::vector<ibv_recv_wr>> per_tag;
   per_tag.reserve(8);
 
+  printf("Remote thread %d: processing %d completions\n", idx, ne);
+
   for (int i = 0; i < ne; ++i) {
     ibv_wc const& cqe = wc[i];
     if (cqe.status != IBV_WC_SUCCESS) {
@@ -1444,8 +1459,11 @@ void remote_process_completions_normal_mode(
       if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
 
       if (!aimm.IsReorderable()) {
+        printf("Applying non-reorderable atomic at index %zu: +%d\n", index,
+               value);
         addr32->fetch_add(value, std::memory_order_release);
       } else {
+        printf("Applying reorderable atomic at index %zu: +%d\n", index, value);
         struct SeqBuf {
           uint8_t expected = 0;       // next seq expected
           uint16_t present_mask = 0;  // bitmask of buffered seqs
@@ -1552,6 +1570,7 @@ void remote_process_completions_normal_mode(
       fprintf(stderr, "Unexpected CQE opcode: %d\n", cqe.opcode);
       std::abort();
     }
+
 #ifndef EFA
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
       uint32_t const tag = wr_tag(cqe.wr_id);
@@ -2125,6 +2144,11 @@ static void post_atomic_operations_normal_mode(
         wr[t].wr.rdma.remote_addr = ctx->remote_addr;
         wr[t].wr.rdma.rkey = ctx->remote_rkey;
         wr[t].next = (t + 1 < k) ? &wr[t + 1] : nullptr;
+
+        printf(
+            "Posting AtomicsImm2 with imm=0x%08x, atomic_offset: %d, "
+            "atomic_val: %d, dst_rank = %d\n",
+            imm, off16 / sizeof(int), v, dst_rank);
       }
 
       ibv_send_wr* bad = nullptr;
@@ -2137,6 +2161,20 @@ static void post_atomic_operations_normal_mode(
                   (unsigned long long)bad->wr_id, bad->opcode);
         }
         std::abort();
+      }
+      uint64_t const batch_tail_wr = group_wrids.back();
+      {
+        auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
+            batch_tail_wr, std::move(group_wrids));
+        if (!inserted) {
+          fprintf(stderr,
+                  "thread_idx: %d, Error: tail wr_id %lu already exists "
+                  "(map=%p, "
+                  "size=%zu, dst_rank=%d)\n",
+                  thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
+                  S.wr_id_to_wr_ids.size(), dst_rank);
+          std::abort();
+        }
       }
 #endif
     }

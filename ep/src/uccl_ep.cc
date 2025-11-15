@@ -682,6 +682,8 @@ class Buffer {
 
     // Launch data dispatch
     // NOTES: the buffer size checks are moved into the `.cu` file
+
+    printf("Before dispatch internode\n");
     uccl::internode::dispatch(
         recv_x.data_ptr(), recv_x_scales_ptr, recv_topk_idx_ptr,
         recv_topk_weights_ptr,
@@ -732,6 +734,11 @@ class Buffer {
 
     // Switch back compute stream
     if (allocate_on_comm_stream) at::cuda::setCurrentCUDAStream(compute_stream);
+
+    // synchronize
+    CUDA_CHECK(cudaStreamSynchronize(comm_stream));
+    // print error
+    CUDA_CHECK(cudaGetLastError());
 
     // Return values
     return {recv_x,
