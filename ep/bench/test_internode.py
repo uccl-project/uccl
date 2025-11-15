@@ -184,8 +184,7 @@ def test_main(
             check_end = recv_gbl_rank_prefix_sum[i].item()
             assert (check_x[check_start:check_end, :].int() - i).sum().item() == 0
             check_start = check_end
-            
-            
+
     do_combine = False
 
     for previous_mode in (False, True):
@@ -288,7 +287,7 @@ def test_main(
                             check_data(recv_x, recv_gbl_rank_prefix_sum)
 
                     # Test combine
-                    
+
                     if do_combine:
                         bias_0 = torch.ones(
                             (num_tokens, hidden), dtype=torch.bfloat16, device="cuda"
@@ -330,7 +329,9 @@ def test_main(
                                 if current_x is x_pure_rand
                                 else topk_weights
                             )
-                            assert calc_diff(check_topk_weights, ref_topk_weights) < 1e-9
+                            assert (
+                                calc_diff(check_topk_weights, ref_topk_weights) < 1e-9
+                            )
 
                     # For later tuning
                     dispatch_bf16_rdma_send_bytes = num_rdma_token_sent * hidden * 2
@@ -403,7 +404,7 @@ def test_main(
     #             all_best_fp8_results_list, best_dispatch_results, group=group
     #         )
     #         best_dispatch_results = all_best_fp8_results_list[0].tolist()
-            
+
     if do_combine:
         dispatch_config = Config(
             best_dispatch_results[0],

@@ -273,7 +273,8 @@ __global__ void notify_dispatch(
             i)[NUM_MAX_NVL_PEERS + num_rdma_experts];
         recv_rdma_rank_prefix_sum[i] = sum;
       }
-      while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1);
+      while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1)
+        ;
       *moe_recv_rdma_counter_mapped = sum;
     }
 
@@ -302,7 +303,8 @@ __global__ void notify_dispatch(
         sum += nvl_recv_num_tokens_per_rank.buffer(src_nvl_rank)[src_rdma_rank];
         recv_gbl_rank_prefix_sum[i] = sum;
       }
-      while (ld_volatile_global(moe_recv_counter_mapped) != -1);
+      while (ld_volatile_global(moe_recv_counter_mapped) != -1)
+        ;
       *moe_recv_counter_mapped = sum;
     }
     if (thread_id < num_nvl_experts) {
@@ -312,7 +314,8 @@ __global__ void notify_dispatch(
         sum += nvl_recv_num_tokens_per_expert.buffer(i)[thread_id];
       sum = (sum + expert_alignment - 1) / expert_alignment * expert_alignment;
       while (ld_volatile_global(moe_recv_expert_counter_mapped + thread_id) !=
-             -1);
+             -1)
+        ;
       moe_recv_expert_counter_mapped[thread_id] = sum;
     }
 
@@ -451,7 +454,6 @@ void notify_dispatch(
 constexpr int get_num_topk_rdma_ranks(int num_rdma_ranks) {
   return num_rdma_ranks < 8 ? num_rdma_ranks : 8;
 }
-
 
 template <bool kLowLatencyMode, int kNumRDMARanks, bool kCachedMode,
           int kNumTMABytesPerWarp, int kNumDispatchRDMASenderWarps,
@@ -1881,7 +1883,7 @@ template <
     int kNumWarpsPerForwarder = (kNumCombineForwarderWarps / kNumRDMARanks > 0)
                                     ? kNumCombineForwarderWarps / kNumRDMARanks
                                     : 1,
-    int kNumForwarders = kNumRDMARanks * kNumWarpsPerForwarder,
+    int kNumForwarders = kNumRDMARanks* kNumWarpsPerForwarder,
     int kNumRDMAReceivers = kNumForwarders - NUM_MAX_NVL_PEERS>
 __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
     combine(int4* combined_x, float* combined_topk_weights,
