@@ -2622,7 +2622,7 @@ void combine(cudaDataType_t type, void* combined_x,
              uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
              void* atomic_buffer_ptr) {
   // NOTE(MaoZiming): I changed here from 24 to 16.
-  constexpr int kNumCombineForwarderWarps = 12;
+  constexpr int kNumCombineForwarderWarps = 16;
   constexpr int kNumTMABytesPerSenderWarp = 16384;
   constexpr int kNumTMABytesPerForwarderWarp = 9248;
 
