@@ -27,7 +27,7 @@ constexpr int NUM_NICS_PER_GPU = 1;  // 1 for p6, 2 for p5en
 constexpr size_t MSG_SIZE = 7168;    // 7KB
 constexpr int NUM_MSGS = 128;
 constexpr int TOPK = 8;
-constexpr int WINDOW_SIZE = 64;
+constexpr int WINDOW_SIZE = 2048;
 constexpr uint32_t QKEY = 0x11111111u;
 constexpr int TCP_PORT_BASE = 18515;
 

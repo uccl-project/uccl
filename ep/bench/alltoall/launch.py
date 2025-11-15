@@ -27,9 +27,7 @@ def main():
 
     master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
 
-    print(
-        f"Rank {rank}/{world_size} on GPU {local_rank}, master: {master_addr}"
-    )
+    print(f"Rank {rank}/{world_size} on GPU {local_rank}, master: {master_addr}")
 
     dist.barrier()
 
