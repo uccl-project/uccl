@@ -170,6 +170,7 @@ class PacketBuf {
 #define UCCL_MSGBUF_FLAGS_TXPULLTIME_FREE (1 << 2)
   uint8_t msg_flags_;
 
+ public:
   PacketBuf(Packet* pkt, uint8_t msg_flags) {
     next_ = nullptr;
     pkt_ = pkt;
@@ -179,18 +180,11 @@ class PacketBuf {
     seqno_ = -1;
   }
 
- public:
   ~PacketBuf() {
     if (payload_addr_) {
       delete[] payload_addr_;
     }
   }
-
-  static PacketBuf* Allocate(Packet* pkt, uint8_t msg_flags) {
-    return new PacketBuf(pkt, msg_flags);
-  }
-
-  static void Release(PacketBuf* pkt_buf) { delete pkt_buf; }
 
   Packet* get_pkt() const { return pkt_; }
   void set_pkt(Packet* pkt) { pkt_ = pkt; }
@@ -273,4 +267,35 @@ class PacketBuf {
     return s.str();
   }
 };
+
+class PacketBufPool {
+  static const uint32_t kDefaultNumBufs = 1024;
+  inline static uint32_t buf_count_ = 0;
+  inline static std::mutex pool_lock_{};
+
+  PacketBufPool() {}
+  PacketBufPool(PacketBufPool const&) = delete;
+  PacketBufPool& operator=(PacketBufPool const&) = delete;
+
+ public:
+  static PacketBuf* Allocate(Packet* pkt, uint8_t msg_flags) {
+    PacketBuf* buf = nullptr;
+    do {
+      std::lock_guard<std::mutex> lock(pool_lock_);
+      if (buf_count_ < kDefaultNumBufs) {
+        buf = new PacketBuf(pkt, msg_flags);
+        buf_count_++;
+      }
+    } while (buf == nullptr);
+
+    return buf;
+  }
+
+  static void Release(PacketBuf* buf) {
+    std::lock_guard<std::mutex> lock(pool_lock_);
+    delete buf;
+    buf_count_--;
+  }
+};
+
 }  // namespace uccl

@@ -43,7 +43,7 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
     // }
 
     if (msgbuf->is_last()) {
-      LOG(INFO) << "Transmitted a complete message";
+      // LOG(INFO) << "Transmitted a complete message";
       // Tx a full message; wakeup app thread waiting on endpoint.
       DCHECK(!poll_ctxs_.empty());
       auto poll_ctx = poll_ctxs_.front();
@@ -56,7 +56,7 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
     }
     // Free transmitted frames that are acked
     oldest_unacked_msgbuf_ = msgbuf->next();
-    PacketBuf::Release(msgbuf);
+    PacketBufPool::Release(msgbuf);
 
     num_unacked_msgbufs_--;
     num_tracked_msgbufs_--;
@@ -163,7 +163,7 @@ std::optional<PacketBuf*> TXTracking::get_and_update_oldest_unsent() {
 
 RXTracking::ConsumeRet RXTracking::consume(swift::Pcb* pcb, Packet* pkt) {
   uint8_t* pkt_addr = pkt->head_data<uint8_t*>();
-  auto frame_len = PacketBuf::get_packet_len(pkt);
+  // auto frame_len = PacketBuf::get_packet_len(pkt);
   auto const* ucclh =
       reinterpret_cast<UcclPktHdr const*>(pkt_addr + kNetHdrLen);
   // auto const* payload =
@@ -176,7 +176,7 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb* pcb, Packet* pkt) {
 
   if (swift::seqno_lt(seqno, expected_seqno)) {
     // VLOG(3) << "Received old packet: " << seqno << " < " << expected_seqno;
-    LOG(INFO) << "Received old packet: " << seqno << " < " << expected_seqno;
+    // LOG(INFO) << "Received old packet: " << seqno << " < " << expected_seqno;
     socket_->push_packet(pkt);
     return kOldPkt;
   }
@@ -185,8 +185,8 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb* pcb, Packet* pkt) {
   if (distance >= kReassemblyMaxSeqnoDistance) {
     // VLOG(3) << "Packet too far ahead. Dropping as we can't handle SACK. "
     //         << "seqno: " << seqno << ", expected: " << expected_seqno;
-    LOG(INFO) << "Packet too far ahead. Dropping as we can't handle SACK. "
-              << "seqno: " << seqno << ", expected: " << expected_seqno;
+      // LOG(INFO) << "Packet too far ahead. Dropping as we can't handle SACK. "
+      //           << "seqno: " << seqno << ", expected: " << expected_seqno;
     socket_->push_packet(pkt);
     return kOOOUntrackable;
   }
@@ -197,7 +197,7 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb* pcb, Packet* pkt) {
     it = reass_q_.lower_bound(seqno);
     if (it != reass_q_.end() && it->first == seqno) {
       //   VLOG(3) << "Received duplicate packet: " << seqno;
-      LOG(INFO) << "Received duplicate packet: " << seqno;
+      // LOG(INFO) << "Received duplicate packet: " << seqno;
       // Duplicate packet. Drop it.
       socket_->push_packet(pkt);
       return kOOOTrackableDup;
@@ -205,18 +205,18 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb* pcb, Packet* pkt) {
     // VLOG(3) << "Received OOO trackable packet: " << seqno
     //         << " payload_len: " << frame_len - kNetHdrLen - kUcclHdrLen
     //         << " reass_q size " << reass_q_.size();
-    LOG(INFO) << "Received OOO trackable packet: " << seqno
-              << " payload_len: " << frame_len - kNetHdrLen - kUcclHdrLen
-              << " reass_q size " << reass_q_.size();
+    // LOG(INFO) << "Received OOO trackable packet: " << seqno
+    //           << " payload_len: " << frame_len - kNetHdrLen - kUcclHdrLen
+    //           << " reass_q size " << reass_q_.size();
   } else {
     // VLOG(3) << "Received expected packet: " << seqno
     //         << " payload_len: " << frame_len - kNetHdrLen - kUcclHdrLen;
-    LOG(INFO) << "Received expected packet: " << seqno
-              << " payload_len: " << frame_len - kNetHdrLen - kUcclHdrLen;
+    // LOG(INFO) << "Received expected packet: " << seqno
+    //           << " payload_len: " << frame_len - kNetHdrLen - kUcclHdrLen;
   }
 
   // Buffer the packet in the frame pool. It may be out-of-order.
-  auto* msgbuf = PacketBuf::Allocate(pkt, ucclh->msg_flags);
+  auto* msgbuf = PacketBufPool::Allocate(pkt, ucclh->msg_flags);
   auto* payload_addr = msgbuf->get_pkt_addr() + kNetHdrLen + kUcclHdrLen;
   auto payload_len = msgbuf->get_packet_len() - kNetHdrLen - kUcclHdrLen;
   msgbuf->set_payload(payload_addr, payload_len);
@@ -345,7 +345,7 @@ void UcclFlow::rx_messages() {
       case UcclPktHdr::UcclFlags::kData:
         // Data packet, process the payload. The frame will be freed
         // once the engine copies the payload into app buffer
-        LOG(INFO) << "Received data packet: " << ucclh->seqno.value();
+        // LOG(INFO) << "Received data packet: " << ucclh->seqno.value();
         rx_tracking_.consume(&pcb_, pkt);
         num_data_frames_recvd++;
         // Sender's dst_port selection are symmetric.
@@ -388,8 +388,8 @@ void UcclFlow::rx_messages() {
       auto dst_port_reverse =
           received_rtt_probe ? dst_port_rtt_probe : dst_port;
 
-      LOG(INFO) << "Sending ACK packet: " << pcb_.seqno() << " "
-                << pcb_.ackno();
+      // LOG(INFO) << "Sending ACK packet: " << pcb_.seqno() << " "
+      //           << pcb_.ackno();
 
       Packet* ack_pkt =
           craft_ackpacket(path_id, dst_port_reverse, pcb_.seqno(), pcb_.ackno(),
@@ -479,11 +479,11 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
 
   if (swift::seqno_lt(ackno, pcb_.snd_una)) {
     VLOG(3) << "Received old ACK " << ackno;
-    LOG(INFO) << "Received old ACK " << ackno;
+    // LOG(INFO) << "Received old ACK " << ackno;
     return;
   } else if (swift::seqno_eq(ackno, pcb_.snd_una)) {
     VLOG(3) << "Received duplicate ACK " << ackno;
-    LOG(INFO) << "Received duplicate ACK " << ackno;
+    // LOG(INFO) << "Received duplicate ACK " << ackno;
     // LOG(INFO) << "Received duplicate ACK " << ackno
     //           << " seqno: " << pcb_.snd_una;
     // Duplicate ACK.
@@ -509,8 +509,8 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
       auto* msgbuf = tx_tracking_.get_oldest_unacked_msgbuf();
       VLOG(2) << "Fast recovery " << ackno << " sack_bitmap_count "
               << sack_bitmap_count;
-      LOG(INFO) << "Fast recovery " << ackno << " sack_bitmap_count "
-                << sack_bitmap_count;
+      // LOG(INFO) << "Fast recovery " << ackno << " sack_bitmap_count "
+      //           << sack_bitmap_count;
       // Avoid sending too many packets.
 
       // NOTICE(Nelson): DPDK does not support unpulled_tx_pkts() anymore.
@@ -573,8 +573,8 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
       if (!missing_frames_.empty()) {
         VLOG(2) << "Fast recovery retransmitting " << missing_frames_.size()
                 << " missing packets";
-        LOG(INFO) << "Fast recovery retransmitting " << missing_frames_.size()
-                  << " missing packets";
+        // LOG(INFO) << "Fast recovery retransmitting " << missing_frames_.size()
+        //           << " missing packets";
         // TODO(yang): handling the cases where the number of
         // missing frames is larger than the free send_queue size.
         socket_->send_packets(missing_frames_.data(), missing_frames_.size());
@@ -583,10 +583,10 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
     }
   } else if (swift::seqno_gt(ackno, pcb_.snd_nxt)) {
     VLOG(3) << "Received ACK for untransmitted data.";
-    LOG(INFO) << "Received ACK for untransmitted data.";
+    // LOG(INFO) << "Received ACK for untransmitted data.";
   } else {
     VLOG(3) << "Received valid ACK " << ackno;
-    LOG(INFO) << "Received valid ACK " << ackno;
+    // LOG(INFO) << "Received valid ACK " << ackno;
     // This is a valid ACK, acknowledging new data.
     size_t num_acked_packets = ackno - pcb_.snd_una;
     tx_tracking_.receive_acks(num_acked_packets);
@@ -642,8 +642,8 @@ void UcclFlow::fast_retransmit() {
     set_path_id(seqno, path_id);
 #endif
     // Nelson: re-allocated packet and restore the payload.
-    LOG(INFO) << "fast_retransmit: " << socket_->avail_packets() << " "
-              << socket_->in_use_packets() << " seqno: " << seqno;
+    // LOG(INFO) << "fast_retransmit: " << socket_->avail_packets() << " "
+    //           << socket_->in_use_packets() << " seqno: " << seqno;
     prepare_retransmission_payload(msgbuf);
     prepare_datapacket(msgbuf, path_id, seqno, UcclPktHdr::UcclFlags::kData);
     auto const* ucclh = reinterpret_cast<UcclPktHdr const*>(
@@ -1070,8 +1070,8 @@ Packet* UcclFlow::craft_ackpacket(uint32_t path_id, uint16_t dst_port,
 
 Packet* UcclFlow::craft_rssprobe_packet(uint16_t dst_port) {
   size_t const kRssProbePayloadBytes = kUcclHdrLen;
-  LOG(INFO) << "craft_rssprobe_packet: " << socket_->avail_packets() << " "
-            << socket_->in_use_packets();
+  // LOG(INFO) << "craft_rssprobe_packet: " << socket_->avail_packets() << " "
+  //           << socket_->in_use_packets();
   auto pkt = socket_->pop_packet(kNetHdrLen + kRssProbePayloadBytes);
   // auto msgbuf = PacketBuf::Create(pkt);
   // Let AFXDPSocket::pull_complete_queue() free control frames.
@@ -1220,7 +1220,7 @@ void UcclEngine::deser_th_func(std::vector<UcclEngine*> engines) {
           //                                        kUcclHdrLen);
 
           // Nelson: do not allocate packets until sending.
-          auto* msgbuf = PacketBuf::Allocate(nullptr, 0);
+          auto* msgbuf = PacketBufPool::Allocate(nullptr, 0);
 #ifndef EMULATE_ZC
           // auto pkt_payload_addr =
           //     msgbuf->get_pkt_addr() + kNetHdrLen + kUcclHdrLen;
@@ -1302,15 +1302,15 @@ void UcclEngine::deser_th_func(std::vector<UcclEngine*> engines) {
               poll_ctx->done = true;
               poll_ctx->cv.notify_one();
             }
-            LOG(INFO) << "Received a complete message " << cur_offset
-                      << " bytes";
+            // LOG(INFO) << "Received a complete message " << cur_offset
+            //           << " bytes";
           }
 
           auto* ready_msg_tmp = ready_msg;
           ready_msg = ready_msg->next();
           // Free received frames that have been copied to app buf.
           // engine->socket_->push_packet(ready_msg_tmp->pop_pkt());
-          PacketBuf::Release(ready_msg_tmp);
+          PacketBufPool::Release(ready_msg_tmp);
         }
       }
     }
