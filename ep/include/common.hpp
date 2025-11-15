@@ -39,7 +39,7 @@ extern bool use_ll_sl;
 #define kMaxInflightNormal 8
 #define kBatchSize 32
 #define kIterations 40000
-#define kNumProxyThs 4
+#define kNumProxyThs 1
 #define kTestNumGpuThPerBlock 1
 #define kObjectSize 7168  // 7 KB
 // #define kObjectSize 10752  // 10.5 KB
@@ -48,7 +48,7 @@ extern bool use_ll_sl;
 #define kMaxOutstandingRecvs 2048
 #define kSenderAckQueueDepth 2048
 #define kWarmupOps 10000
-#define kChannelPerProxy 8
+#define kChannelPerProxy 1
 // TODO(MaoZiming): I tried to fit more bits, but this eats into offset and
 // values.
 #define kReorderingBufferSize 16  // Right now only 4 bits.

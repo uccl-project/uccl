@@ -273,7 +273,8 @@ __global__ void notify_dispatch(
             i)[NUM_MAX_NVL_PEERS + num_rdma_experts];
         recv_rdma_rank_prefix_sum[i] = sum;
       }
-      while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1);
+      while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1)
+        ;
       *moe_recv_rdma_counter_mapped = sum;
     }
 
@@ -302,7 +303,8 @@ __global__ void notify_dispatch(
         sum += nvl_recv_num_tokens_per_rank.buffer(src_nvl_rank)[src_rdma_rank];
         recv_gbl_rank_prefix_sum[i] = sum;
       }
-      while (ld_volatile_global(moe_recv_counter_mapped) != -1);
+      while (ld_volatile_global(moe_recv_counter_mapped) != -1)
+        ;
       *moe_recv_counter_mapped = sum;
     }
     if (thread_id < num_nvl_experts) {
@@ -312,7 +314,8 @@ __global__ void notify_dispatch(
         sum += nvl_recv_num_tokens_per_expert.buffer(i)[thread_id];
       sum = (sum + expert_alignment - 1) / expert_alignment * expert_alignment;
       while (ld_volatile_global(moe_recv_expert_counter_mapped + thread_id) !=
-             -1);
+             -1)
+        ;
       moe_recv_expert_counter_mapped[thread_id] = sum;
     }
 
@@ -442,6 +445,8 @@ void notify_dispatch(
   EP_HOST_ASSERT(num_nvl_bytes < std::numeric_limits<int>::max());
 
   // Launch kernel
+  printf("notify dispatch num_sms = %d, num_threads = %d", 1 + num_rdma_ranks,
+         kNumThreads);
   SETUP_LAUNCH_CONFIG(1 + num_rdma_ranks, kNumThreads, stream);
   SWITCH_RDMA_RANKS(NOTIFY_DISPATCH_LAUNCH_CASE);
 #undef NOTIFY_DISPATCH_LAUNCH_CASE
@@ -451,7 +456,6 @@ void notify_dispatch(
 constexpr int get_num_topk_rdma_ranks(int num_rdma_ranks) {
   return num_rdma_ranks < 8 ? num_rdma_ranks : 8;
 }
-
 
 template <bool kLowLatencyMode, int kNumRDMARanks, bool kCachedMode,
           int kNumTMABytesPerWarp, int kNumDispatchRDMASenderWarps,
@@ -1264,12 +1268,13 @@ __global__ void __launch_bounds__(
           printf(
               "DeepEP dispatch NVL receiver timeout, channel: %d, RDMA: %d, "
               "nvl: %d, src NVL: %d, head: %d, tail: %d, "
-              "num_tokens_to_recv_original: %d, last_recv_token_idx: %lld, "
+              "num_tokens_to_recv_original: %d, num_tokens_to_recv: %d, "
+              "last_recv_token_idx: %lld, "
               "next_expected_token_idx: %lld\n",
               channel_id, rdma_rank, nvl_rank, src_nvl_rank,
               cached_channel_head_idx, cached_channel_tail_idx,
-              num_tokens_to_recv_original, last_recv_token_idx,
-              (long long)(last_recv_token_idx + 1));
+              num_tokens_to_recv_original, num_tokens_to_recv,
+              last_recv_token_idx, (long long)(last_recv_token_idx + 1));
           trap();
         }
       }
@@ -1297,6 +1302,11 @@ __global__ void __launch_bounds__(
             5, lane_id, hidden_int4,
             reinterpret_cast<int4*>(recv_x + recv_token_idx * hidden_int4),
             reinterpret_cast<int4*>(shifted), ld_nc_global, st_na_global);
+        if (scale_aligned)
+          UNROLLED_WARP_COPY(1, lane_id, num_scales,
+                             recv_x_scales + recv_token_idx * num_scales,
+                             reinterpret_cast<float*>(shifted + hidden_bytes),
+                             ld_nc_global, st_na_global);
 #else
         if (lane_id == 0) {
           tma_load_1d(tma_buffer, shifted, tma_mbarrier, tma_load_bytes);
@@ -1431,6 +1441,8 @@ void dispatch(void* recv_x, float* recv_x_scales, int64_t* recv_topk_idx,
   EP_HOST_ASSERT((topk_idx == nullptr) == (topk_weights == nullptr));
   EP_HOST_ASSERT((recv_topk_idx == nullptr) == (recv_topk_weights == nullptr));
 
+  printf("dispatch num_sms = %d, num_threads = %d", num_channels * 2,
+         (kNumDispatchRDMASenderWarps + 1 + NUM_MAX_NVL_PEERS) * WARP_SIZE);
   SETUP_LAUNCH_CONFIG(
       num_channels * 2,
       (kNumDispatchRDMASenderWarps + 1 + NUM_MAX_NVL_PEERS) * WARP_SIZE,
@@ -1690,6 +1702,9 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
   auto cached_notify_func = low_latency_mode
                                 ? cached_notify<true, kNumTMABytesPerWarp>
                                 : cached_notify<false, kNumTMABytesPerWarp>;
+
+  printf("cached_notify num_sms = %d, num_threads = %d", num_channels * 2,
+         num_threads);
   SETUP_LAUNCH_CONFIG(num_channels * 2, num_threads, stream);
   SET_SHARED_MEMORY_FOR_TMA(cached_notify_func);
   LAUNCH_KERNEL(&cfg, cached_notify_func, rdma_clean_meta.first,
@@ -1881,7 +1896,7 @@ template <
     int kNumWarpsPerForwarder = (kNumCombineForwarderWarps / kNumRDMARanks > 0)
                                     ? kNumCombineForwarderWarps / kNumRDMARanks
                                     : 1,
-    int kNumForwarders = kNumRDMARanks * kNumWarpsPerForwarder,
+    int kNumForwarders = kNumRDMARanks* kNumWarpsPerForwarder,
     int kNumRDMAReceivers = kNumForwarders - NUM_MAX_NVL_PEERS>
 __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
     combine(int4* combined_x, float* combined_topk_weights,
@@ -2607,7 +2622,7 @@ void combine(cudaDataType_t type, void* combined_x,
              uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
              void* atomic_buffer_ptr) {
   // NOTE(MaoZiming): I changed here from 24 to 16.
-  constexpr int kNumCombineForwarderWarps = 16;
+  constexpr int kNumCombineForwarderWarps = 12;
   constexpr int kNumTMABytesPerSenderWarp = 16384;
   constexpr int kNumTMABytesPerForwarderWarp = 9248;
 
@@ -2659,6 +2674,8 @@ void combine(cudaDataType_t type, void* combined_x,
   EP_HOST_ASSERT(num_max_rdma_chunked_send_tokens >= num_warps_per_forwarder);
   EP_HOST_ASSERT(type == CUDA_R_16BF);
 
+  printf("combine num_sms = %d, num_threads = %d", num_channels * 2,
+         (num_forwarder_warps + 1) * WARP_SIZE);
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   EP_HOST_ASSERT((num_forwarder_warps + 1) * WARP_SIZE <= MAX_NTHREADS);
 #endif

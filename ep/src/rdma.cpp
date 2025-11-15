@@ -922,23 +922,24 @@ static void post_rdma_async_batched_normal_mode(
             wrs[j].imm_data = htonl(imm);
             printf(
                 "Posting AtomicsImm with imm=0x%08x, atomic_offset: %d, "
-                "atomic_val: %d\n",
-                imm, cmd.atomic_offset, cmd.atomic_val);
+                "atomic_val: %d, dst_rank: %d\n",
+                imm, cmd.atomic_offset / sizeof(int), cmd.atomic_val, dst_rank);
 
             AtomicsImm aimm(imm);
             assert(aimm.GetValue() == cmd.atomic_val);
             assert(aimm.GetOff() == cmd.atomic_offset);
 
-          } else if (j + 1 == kgroup) {
-            // Put WriteImm only on the tail WR
-            uint32_t imm =
-                WriteImm::Pack(get_is_combine(cmd.cmd_type),
-                               get_low_latency(cmd.cmd_type), cmd.expert_idx,
-                               static_cast<uint32_t>(kgroup), my_rank)
-                    .GetImmData();
-            wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-            wrs[j].imm_data = htonl(imm);
-            printf("Posting WriteImm with imm=0x%08x\n", imm);
+            // } else if (j + 1 == kgroup) {
+            //   // Put WriteImm only on the tail WR
+            //   uint32_t imm =
+            //       WriteImm::Pack(get_is_combine(cmd.cmd_type),
+            //                      get_low_latency(cmd.cmd_type),
+            //                      cmd.expert_idx,
+            //                      static_cast<uint32_t>(kgroup), my_rank)
+            //           .GetImmData();
+            //   wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+            //   wrs[j].imm_data = htonl(imm);
+            //   printf("Posting WriteImm with imm=0x%08x\n", imm);
           } else {
             wrs[j].opcode = IBV_WR_RDMA_WRITE;
           }
@@ -1569,6 +1570,7 @@ void remote_process_completions_normal_mode(
       fprintf(stderr, "Unexpected CQE opcode: %d\n", cqe.opcode);
       std::abort();
     }
+
 #ifndef EFA
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
       uint32_t const tag = wr_tag(cqe.wr_id);
@@ -2142,6 +2144,11 @@ static void post_atomic_operations_normal_mode(
         wr[t].wr.rdma.remote_addr = ctx->remote_addr;
         wr[t].wr.rdma.rkey = ctx->remote_rkey;
         wr[t].next = (t + 1 < k) ? &wr[t + 1] : nullptr;
+
+        printf(
+            "Posting AtomicsImm2 with imm=0x%08x, atomic_offset: %d, "
+            "atomic_val: %d, dst_rank = %d\n",
+            imm, off16 / sizeof(int), v, dst_rank);
       }
 
       ibv_send_wr* bad = nullptr;

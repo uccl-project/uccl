@@ -60,7 +60,7 @@ if __name__ == "__main__":
 
         cxx_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
         nvcc_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
-        
+
         cxx_flags.append("-DENABLE_FAST_DEBUG")
         nvcc_flags.append("-DENABLE_FAST_DEBUG")
 
