@@ -2138,6 +2138,20 @@ static void post_atomic_operations_normal_mode(
         }
         std::abort();
       }
+      uint64_t const batch_tail_wr = group_wrids.back();
+      {
+        auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
+            batch_tail_wr, std::move(group_wrids));
+        if (!inserted) {
+          fprintf(stderr,
+                  "thread_idx: %d, Error: tail wr_id %lu already exists "
+                  "(map=%p, "
+                  "size=%zu, dst_rank=%d)\n",
+                  thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
+                  S.wr_id_to_wr_ids.size(), dst_rank);
+          std::abort();
+        }
+      }
 #endif
     }
   }
