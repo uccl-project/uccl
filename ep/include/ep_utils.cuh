@@ -347,6 +347,29 @@ __forceinline__ __device__ float fast_pow2(int x) {
   return *reinterpret_cast<float*>(&bits_x);
 }
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+__forceinline__ __device__ void calculate_fp8_scales(float amax, float& scale,
+                                                     float& scale_inv,
+                                                     bool round_scale) {
+  if (!isfinite(amax) || amax <= 0.0f) {
+    scale = 1.0f;
+    scale_inv = 1.0f;
+    return;
+  }
+  float t = amax * kFinfoAmaxInvE4M3;
+  if (round_scale) {
+    int e;
+    frexpf(t, &e);
+    scale_inv = ldexpf(1.0f, e);
+    scale = ldexpf(1.0f, -e);
+  } else {
+    scale_inv = t;
+    scale = kFinfoAmaxE4M3 / amax;
+  }
+  if (!isfinite(scale) || scale <= 0.0f) scale = 1.0f;
+  if (!isfinite(scale_inv) || scale_inv <= 0.0f) scale_inv = 1.0f;
+}
+#else
 __forceinline__ __device__ void calculate_fp8_scales(float amax, float& scale,
                                                      float& scale_inv,
                                                      bool round_scale) {
@@ -359,6 +382,7 @@ __forceinline__ __device__ void calculate_fp8_scales(float amax, float& scale,
     scale = kFinfoAmaxE4M3 / amax;
   }
 }
+#endif
 
 // `ld.global.nc.L1::no_allocate` will be translated into
 // `LDG.E.NA.[width].CONSTANT` in SASS
@@ -901,7 +925,7 @@ __device__ __forceinline__ void st_relaxed_sys_global(int const* ptr, int val) {
 __device__ __forceinline__ int ld_acquire_cta(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  HIP_ATOMIC_LOAD(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_WORKGROUP);
+  ret = HIP_ATOMIC_LOAD(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_WORKGROUP);
 #else
   asm volatile("ld.acquire.cta.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif

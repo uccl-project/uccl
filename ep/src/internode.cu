@@ -819,7 +819,7 @@ __global__ void __launch_bounds__(
         acquire_lock(rdma_send_channel_lock + lane_id);
         auto latest_tail = rdma_send_channel_tail[lane_id];
         auto offset = rdma_tail_idx - latest_tail;
-        while (offset >= WARP_SIZE) {
+        while (offset >= 32) {
           release_lock(rdma_send_channel_lock + lane_id);
           acquire_lock(rdma_send_channel_lock + lane_id);
           latest_tail = rdma_send_channel_tail[lane_id];
@@ -830,8 +830,7 @@ __global__ void __launch_bounds__(
         // Add the bit and move the ones if possible
         auto window = rdma_send_channel_window[lane_id] | (1u << offset);
         if (offset == 0) {
-          auto num_empty_slots =
-              (~window) == 0 ? WARP_SIZE : __ffs(~window) - 1;
+          auto num_empty_slots = (~window) == 0 ? 32 : __ffs(~window) - 1;
           st_release_cta(rdma_send_channel_tail + lane_id,
                          latest_tail + num_empty_slots);
           window >>= num_empty_slots;
@@ -1114,9 +1113,10 @@ __global__ void __launch_bounds__(
 
         // Copy data
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-        UNROLLED_WARP_COPY(
-            5, lane_id, hidden_int4, reinterpret_cast<int4*>(dst_shifted),
-            reinterpret_cast<int4*>(shifted), ld_nc_global, st_na_global);
+        UNROLLED_WARP_COPY(5, lane_id, num_bytes_per_token / sizeof(int4),
+                           reinterpret_cast<int4*>(dst_shifted),
+                           reinterpret_cast<int4*>(shifted), ld_nc_global,
+                           st_na_global);
 #else
         if (lane_id == 0) {
           tma_load_1d(tma_buffer, shifted, tma_mbarrier, num_bytes_per_token,
@@ -1240,6 +1240,7 @@ __global__ void __launch_bounds__(
       }
     }
     num_tokens_to_recv = warp_reduce_sum(end_offset - start_offset);
+
     auto num_tokens_to_recv_original = num_tokens_to_recv;
     // Save for combine usage
     if (lane_id < kNumRDMARanks and not kCachedMode)
