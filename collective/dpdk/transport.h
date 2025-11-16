@@ -591,7 +591,7 @@ class UcclEngine {
         last_periodic_tsc_(rdtsc()),
         periodic_ticks_(0),
         kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, freq_ghz)) {
-    DCHECK(str_to_mac(local_l2_addr, local_l2_addr_));
+    DCHECK(str_to_mac(local_l2_addr, reinterpret_cast<char*>(local_l2_addr_)));
   }
 
   /**

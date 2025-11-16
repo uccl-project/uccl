@@ -1874,7 +1874,7 @@ void Endpoint::install_flow_on_engine(FlowID flow_id,
   uint8_t local_mac_char[ETH_ALEN];
   std::string local_mac = local_mac_str_;
   VLOG(3) << "[Endpoint] local MAC: " << local_mac;
-  str_to_mac(local_mac, local_mac_char);
+  str_to_mac(local_mac, reinterpret_cast<char*>(local_mac_char));
   ret = send_message(bootstrap_fd, local_mac_char, ETH_ALEN);
   DCHECK(ret == ETH_ALEN);
 
@@ -1898,7 +1898,7 @@ void Endpoint::install_flow_on_engine(FlowID flow_id,
   ctrl_msg.remote_ip = htonl(str_to_ip(remote_ip));
   ctrl_msg.remote_engine_idx = remote_engine_idx;
   ctrl_msg.poll_ctx = poll_ctx;
-  str_to_mac(remote_mac, ctrl_msg.remote_mac);
+  str_to_mac(remote_mac, reinterpret_cast<char*>(ctrl_msg.remote_mac));
   Channel::enqueue_mp(channel_vec_[local_engine_idx]->ctrl_task_q_, &ctrl_msg);
 
   // Wait until the flow has been installed on the engine.

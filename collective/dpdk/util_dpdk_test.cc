@@ -425,8 +425,8 @@ int main(int argc, char *argv[]) {
 
   client_addr_u32 = str_to_ip(client_ip_str);
   server_addr_u32 = str_to_ip(server_ip_str);
-  DCHECK(str_to_mac(client_mac_str, client_mac_char));
-  DCHECK(str_to_mac(server_mac_str, server_mac_char));
+  DCHECK(str_to_mac(client_mac_str, reinterpret_cast<char*>(client_mac_char)));
+  DCHECK(str_to_mac(server_mac_str, reinterpret_cast<char*>(server_mac_char)));
 
   Dpdk dpdk;
   dpdk.InitDpdk(1, argv);

@@ -35,7 +35,7 @@ UCCL (Unified Collective Communication Library) DPDK Transport is a user-space n
 $ su root
 
 # apt update
-# apt install -y pkg-config build-essential python3-pip libnuma-dev python3-pyelftools libgoogle-glog-dev
+# apt install -y pkg-config build-essential python3-pip libnuma-dev python3-pyelftools libgoogle-glog-dev libibverbs-dev
 # pip3 install meson ninja --break-system-packages
 
 # wget https://fast.dpdk.org/rel/dpdk-24.11.3.tar.xz
