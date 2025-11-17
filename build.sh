@@ -24,7 +24,7 @@ IS_EFA=$( [ -d "/sys/class/infiniband/" ] && ls /sys/class/infiniband/ 2>/dev/nu
 
 
 if [[ $TARGET != cuda* && $TARGET != rocm* && $TARGET != "therock" ]]; then
-  echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url]" >&2
+  echo "Usage: $0 [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url]" >&2
   exit 1
 fi
 
@@ -267,7 +267,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
   -e USE_TCPX="${USE_TCPX:-0}" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
-  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_rdma build_efa build_p2p build_ep build_eccl)" \
+  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_ccl_rdma build_ccl_efa build_p2p build_ep build_eccl)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
     set -euo pipefail
