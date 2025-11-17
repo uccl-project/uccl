@@ -235,34 +235,45 @@ void Proxy::init_common() {
 
   usleep(50 * 1000);
 
-  // Out-of-band exchange per pair.
-  for (int peer = 0; peer < num_ranks; ++peer) {
-    if (peer == my_rank) continue;
-    // Skip rdma connection for intra-node.
-    if (peers_[peer].ip == peers_[my_rank].ip) continue;
-    if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
-      continue;
-
-    int actual_peer;
-    if (my_rank < peer) {
-      exchange_connection_info_as_server(my_rank, &actual_peer, listen_fd_,
-                                         &local_infos_[peer],
-                                         remote_infos_.data());
-    } else {
-      actual_peer = peer;
-      char const* peer_ip = peers_[peer].ip.c_str();
-      int const peer_listen_port = peers_[peer].listen_ports[cfg_.thread_idx];
-      exchange_connection_info_as_client(my_rank, peer, peer_ip,
-                                         peer_listen_port, &local_infos_[peer],
-                                         remote_infos_.data());
+  // Out-of-band exchange info per pair: start receiver thread first
+  std::thread receiver_thread([this, num_ranks, my_rank]() {
+    for (int peer = 0; peer < num_ranks; ++peer) {
+      // Skip rdma connection for intra-node.
+      if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
+          (cfg_.use_normal_mode &&
+           std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
+        continue;
+      int actual_peer;
+      recv_connection_info_as_server(my_rank, &actual_peer, listen_fd_,
+                                     remote_infos_.data());
     }
+  });
 
-    if (remote_infos_[actual_peer].addr != peers_[actual_peer].ptr) {
+  // Then send our info to all peers
+  for (int peer = 0; peer < num_ranks; ++peer) {
+    if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
+        (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
+      continue;
+    char const* peer_ip = peers_[peer].ip.c_str();
+    int const peer_listen_port = peers_[peer].listen_ports[cfg_.thread_idx];
+    send_connection_info_as_client(my_rank, peer, peer_ip, peer_listen_port,
+                                   &local_infos_[peer]);
+  }
+
+  // Wait for receiver thread to finish
+  receiver_thread.join();
+
+  // Verify remote info correctness
+  for (int peer = 0; peer < num_ranks; ++peer) {
+    if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
+        (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
+      continue;
+    if (remote_infos_[peer].addr != peers_[peer].ptr) {
       fprintf(stderr,
               "Rank %d thread %d: Warning: remote addr mismatch for peer %d: "
               "got 0x%lx, expected 0x%lx\n",
-              my_rank, cfg_.thread_idx, actual_peer,
-              remote_infos_[actual_peer].addr, peers_[actual_peer].ptr);
+              my_rank, cfg_.thread_idx, peer, remote_infos_[peer].addr,
+              peers_[peer].ptr);
       std::abort();
     }
   }

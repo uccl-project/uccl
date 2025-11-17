@@ -160,6 +160,8 @@ build_ep() {
     echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
   elif [[ "$TARGET" == rocm* ]]; then
     cd ep
+    # This might be needed if you traverse among different git commits
+    # make clean
     python3 setup.py build
     cd ..
     echo "[container] Copying GPU-driven .so to uccl/"

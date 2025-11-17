@@ -1,9 +1,3 @@
-/*************************************************************************
- * Copyright (c) 2024, UCCL Project. All rights reserved.
- * Adapted from NCCL unpack kernel logic
- *
- * See LICENSE.txt for license information
- ************************************************************************/
 #include "../include/unpack_descriptor.h"
 #include "unpack_launch.h"
 #include <algorithm>

@@ -54,8 +54,8 @@ static void server_basic(ConnID conn_id, struct Mhandle* mhandle, void* data) {
     void* recv_data = data;
 
     struct ucclRequest ureq;
-    DCHECK(ep->uccl_recv_async((UcclFlow*)conn_id.context, &mhandle, &recv_data,
-                               &len, 1, &ureq) == 0);
+    CHECK(ep->uccl_recv_async((UcclFlow*)conn_id.context, &mhandle, &recv_data,
+                              &len, 1, &ureq) == 0);
 
     ep->uccl_poll_ureq(&ureq);
 
@@ -98,8 +98,8 @@ static void server_lat(ConnID conn_id, struct Mhandle* mhandle, void* data) {
       int len = FLAGS_msize;
       void* recv_data = data;
       struct ucclRequest ureq;
-      DCHECK(ep->uccl_recv_async((UcclFlow*)conn_id.context, &mhandle,
-                                 &recv_data, &len, 1, &ureq) == 0);
+      CHECK(ep->uccl_recv_async((UcclFlow*)conn_id.context, &mhandle,
+                                &recv_data, &len, 1, &ureq) == 0);
       ep->uccl_poll_ureq(&ureq);
     }
   }
@@ -109,8 +109,8 @@ static void server_lat(ConnID conn_id, struct Mhandle* mhandle, void* data) {
     void* recv_data = data;
     auto t1 = rdtsc();
     struct ucclRequest ureq;
-    DCHECK(ep->uccl_recv_async((UcclFlow*)conn_id.context, &mhandle, &recv_data,
-                               &len, 1, &ureq) == 0);
+    CHECK(ep->uccl_recv_async((UcclFlow*)conn_id.context, &mhandle, &recv_data,
+                              &len, 1, &ureq) == 0);
     ep->uccl_poll_ureq(&ureq);
     auto t2 = rdtsc();
     lat_vec.push_back(to_usec(t2 - t1, freq_ghz));
@@ -185,9 +185,9 @@ static void server_tpt(std::vector<ConnID>& conn_ids,
 
   for (int f = 0; f < FLAGS_nflow; f++) {
     for (int r = 0; r < FLAGS_nreq; r++) {
-      DCHECK(ep->uccl_recv_async((UcclFlow*)conn_ids[f].context, mhs[f][r],
-                                 recv_data[f][r], len[f][r], FLAGS_nmsg,
-                                 &ureq_vec[f][r]) == 0);
+      CHECK(ep->uccl_recv_async((UcclFlow*)conn_ids[f].context, mhs[f][r],
+                                recv_data[f][r], len[f][r], FLAGS_nmsg,
+                                &ureq_vec[f][r]) == 0);
       s_itr--;
       rx_cur_sec_bytes += FLAGS_msize * FLAGS_nmsg;
     }
@@ -205,24 +205,24 @@ static void server_tpt(std::vector<ConnID>& conn_ids,
         if (!FLAGS_flush) {
           s_itr--;
           if (s_itr == 0) break;
-          DCHECK(ep->uccl_recv_async((UcclFlow*)conn_ids[f].context, mhs[f][r],
-                                     recv_data[f][r], len[f][r], FLAGS_nmsg,
-                                     &ureq_vec[f][r]) == 0);
+          CHECK(ep->uccl_recv_async((UcclFlow*)conn_ids[f].context, mhs[f][r],
+                                    recv_data[f][r], len[f][r], FLAGS_nmsg,
+                                    &ureq_vec[f][r]) == 0);
           rx_cur_sec_bytes += FLAGS_msize * FLAGS_nmsg;
           continue;
         }
 
         if (flag[f][r] == 0) {
-          DCHECK(ep->uccl_flush((UcclFlow*)conn_ids[f].context, mhs[f][r],
-                                recv_data[f][r], len[f][r], FLAGS_nmsg,
-                                &ureq_vec[f][r]) == 0);
+          CHECK(ep->uccl_flush((UcclFlow*)conn_ids[f].context, mhs[f][r],
+                               recv_data[f][r], len[f][r], FLAGS_nmsg,
+                               &ureq_vec[f][r]) == 0);
           flag[f][r] = 1;
         } else if (flag[f][r] == 1) {
           s_itr--;
           if (s_itr == 0) break;
-          DCHECK(ep->uccl_recv_async((UcclFlow*)conn_ids[f].context, mhs[f][r],
-                                     recv_data[f][r], len[f][r], FLAGS_nmsg,
-                                     &ureq_vec[f][r]) == 0);
+          CHECK(ep->uccl_recv_async((UcclFlow*)conn_ids[f].context, mhs[f][r],
+                                    recv_data[f][r], len[f][r], FLAGS_nmsg,
+                                    &ureq_vec[f][r]) == 0);
           rx_cur_sec_bytes += FLAGS_msize * FLAGS_nmsg;
           flag[f][r] = 0;
         }

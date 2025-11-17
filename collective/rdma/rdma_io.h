@@ -886,7 +886,7 @@ class SharedIOContext {
 
   inline CQEDesc* pop_cqe_desc() {
     uint64_t addr;
-    DCHECK(cq_desc_pool_->alloc_buff(&addr) == 0)
+    CHECK(cq_desc_pool_->alloc_buff(&addr) == 0)
         << "Failed to allocate buffer for CQE descriptor";
     return reinterpret_cast<CQEDesc*>(addr);
   }
@@ -894,7 +894,7 @@ class SharedIOContext {
   inline void push_retr_hdr(uint64_t addr) { retr_hdr_pool_->free_buff(addr); }
   inline uint64_t pop_retr_hdr() {
     uint64_t addr;
-    DCHECK(retr_hdr_pool_->alloc_buff(&addr) == 0)
+    CHECK(retr_hdr_pool_->alloc_buff(&addr) == 0)
         << "Failed to allocate buffer for retransmission header";
     return addr;
   }
@@ -903,7 +903,7 @@ class SharedIOContext {
   }
   inline uint64_t pop_retr_chunk() {
     uint64_t addr;
-    DCHECK(retr_chunk_pool_->alloc_buff(&addr) == 0)
+    CHECK(retr_chunk_pool_->alloc_buff(&addr) == 0)
         << "Failed to allocate buffer for retransmission chunk";
     return addr;
   }
@@ -913,7 +913,7 @@ class SharedIOContext {
   }
   inline uint64_t pop_ctrl_chunk() {
     uint64_t addr;
-    DCHECK(ctrl_chunk_pool_->alloc_buff(&addr) == 0)
+    CHECK(ctrl_chunk_pool_->alloc_buff(&addr) == 0)
         << "Failed to allocate buffer for control chunk";
     return addr;
   }
