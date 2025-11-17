@@ -566,9 +566,8 @@ static bool ncclUpdateGidIndex(struct ibv_context* context, uint8_t portNum,
                                int roceVer, int gidIndexCandidate,
                                int* gidIndex) {
   union ibv_gid gid, gidCandidate;
-  DCHECK(ibv_query_gid(context, portNum, *gidIndex, &gid) == 0);
-  DCHECK(ibv_query_gid(context, portNum, gidIndexCandidate, &gidCandidate) ==
-         0);
+  CHECK(ibv_query_gid(context, portNum, *gidIndex, &gid) == 0);
+  CHECK(ibv_query_gid(context, portNum, gidIndexCandidate, &gidCandidate) == 0);
 
   sa_family_t usrFam = af;
   sa_family_t gidFam = getGidAddrFamily(&gid);
@@ -587,10 +586,10 @@ static bool ncclUpdateGidIndex(struct ibv_context* context, uint8_t portNum,
     int usrRoceVer = roceVer;
     int gidRoceVerNum, gidRoceVerNumCandidate;
     char const* deviceName = ibv_get_device_name(context->device);
-    DCHECK(ncclIbRoceGetVersionNum(deviceName, portNum, *gidIndex,
-                                   &gidRoceVerNum));
-    DCHECK(ncclIbRoceGetVersionNum(deviceName, portNum, gidIndexCandidate,
-                                   &gidRoceVerNumCandidate));
+    CHECK(ncclIbRoceGetVersionNum(deviceName, portNum, *gidIndex,
+                                  &gidRoceVerNum));
+    CHECK(ncclIbRoceGetVersionNum(deviceName, portNum, gidIndexCandidate,
+                                  &gidRoceVerNumCandidate));
     if ((gidRoceVerNum != gidRoceVerNumCandidate || !validGid(&gid)) &&
         gidRoceVerNumCandidate == usrRoceVer) {
       *gidIndex = gidIndexCandidate;
@@ -620,7 +619,7 @@ static bool ncclIbGetGidIndex(struct ibv_context* context, uint8_t portNum,
     union ibv_gid gid;
     int routableGidIndex = ncclParamIbRoutableFlidIbGidIndex();
     if (routableGidIndex < gidTblLen) {
-      DCHECK(ibv_query_gid(context, portNum, routableGidIndex, &gid) == 0);
+      CHECK(ibv_query_gid(context, portNum, routableGidIndex, &gid) == 0);
       if (ncclIbExtractFlid(&gid) != 0) {
         *gidIndex = routableGidIndex;
         return true;
@@ -643,9 +642,9 @@ static bool ncclIbGetGidIndex(struct ibv_context* context, uint8_t portNum,
 
   *gidIndex = 0;
   for (int gidIndexNext = 1; gidIndexNext < gidTblLen; ++gidIndexNext) {
-    DCHECK(ncclUpdateGidIndex(context, portNum, userAddrFamily, prefix,
-                              prefixlen, userRoceVersion, gidIndexNext,
-                              gidIndex));
+    CHECK(ncclUpdateGidIndex(context, portNum, userAddrFamily, prefix,
+                             prefixlen, userRoceVersion, gidIndexNext,
+                             gidIndex));
   }
 
   return true;

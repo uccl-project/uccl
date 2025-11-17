@@ -39,10 +39,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-void exchange_connection_info_as_server(int my_rank, int* actual_peer,
-                                        int listen_fd,
-                                        RDMAConnectionInfo* local,
-                                        RDMAConnectionInfo* remote_array) {
+void recv_connection_info_as_server(int my_rank, int* actual_peer,
+                                    int listen_fd,
+                                    RDMAConnectionInfo* remote_array) {
   int sockfd;
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
@@ -53,17 +52,14 @@ void exchange_connection_info_as_server(int my_rank, int* actual_peer,
 
   // Exchange info
   uccl::receive_message(sockfd, actual_peer, sizeof(*actual_peer));
-  uccl::send_message(sockfd, local, sizeof(*local));
   uccl::receive_message(sockfd, &remote_array[*actual_peer],
                         sizeof(remote_array[*actual_peer]));
   close(sockfd);
 }
 
-void exchange_connection_info_as_client(int my_rank, int peer,
-                                        char const* peer_ip,
-                                        int peer_listen_port,
-                                        RDMAConnectionInfo* local,
-                                        RDMAConnectionInfo* remote_array) {
+void send_connection_info_as_client(int my_rank, int peer, char const* peer_ip,
+                                    int peer_listen_port,
+                                    RDMAConnectionInfo* local) {
   int sockfd;
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
@@ -95,8 +91,6 @@ void exchange_connection_info_as_client(int my_rank, int peer,
   // Exchange info
   uccl::send_message(sockfd, &my_rank, sizeof(my_rank));
   uccl::send_message(sockfd, local, sizeof(*local));
-  uccl::receive_message(sockfd, &remote_array[peer],
-                        sizeof(remote_array[peer]));
   close(sockfd);
 }
 
@@ -627,6 +621,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
       exit(1);
     }
   }
+
   printf("ACK-QP modified to RTR state\n");
 }
 
@@ -676,6 +671,7 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
     fprintf(stderr, "errno: %d\n", errno);
     exit(1);
   }
+
   printf("ACK-QP modified to RTS state\n");
 }
 
@@ -2141,6 +2137,20 @@ static void post_atomic_operations_normal_mode(
                   (unsigned long long)bad->wr_id, bad->opcode);
         }
         std::abort();
+      }
+      uint64_t const batch_tail_wr = group_wrids.back();
+      {
+        auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
+            batch_tail_wr, std::move(group_wrids));
+        if (!inserted) {
+          fprintf(stderr,
+                  "thread_idx: %d, Error: tail wr_id %lu already exists "
+                  "(map=%p, "
+                  "size=%zu, dst_rank=%d)\n",
+                  thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
+                  S.wr_id_to_wr_ids.size(), dst_rank);
+          std::abort();
+        }
       }
 #endif
     }

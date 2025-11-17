@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """
 Launch script for all-to-all RDMA benchmark using torch.distributed
-Usage: torchrun --nnodes=N --nproc_per_node=8 launch.py
+Usage: torchrun --nnodes=<N> --node_rank=<0/1/../N-1> --nproc_per_node=8 --master_addr=<main_ip> launch.py
+Eg:
+    torchrun --nnodes=2 --node_rank=0 --nproc_per_node=8 --master_addr=10.1.18.53 launch.py
+    torchrun --nnodes=2 --node_rank=1 --nproc_per_node=8 --master_addr=10.1.18.53 launch.py
 """
 
 import os
