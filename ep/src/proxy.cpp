@@ -511,9 +511,6 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
 
 void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
   // Multi-ring buffer processing: collect commands from all ring buffers
-  std::vector<uint64_t> wrs_to_post;
-  std::vector<TransferCmd> cmds_to_post;
-  bool found_work = false;
   // Process each ring buffer (similar to test_multi_ring_throughput.cu)
   for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); rb_idx++) {
     d2hq::HostD2HHandle* h = &cfg_.d2h_queues[rb_idx];
@@ -549,7 +546,6 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
       wrs_to_post.push_back(unique_wr_id);
       cmds_to_post.push_back(cmd);
       fifo_pending_[rb_idx].push_back(unique_wr_id);
-      found_work = true;
 
       if (get_base_cmd(cmd.cmd_type) == CmdType::BARRIER ||
           get_base_cmd(cmd.cmd_type) == CmdType::QUIET) {
@@ -629,25 +625,27 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
           std::chrono::high_resolution_clock::now();
 #endif
       ring_seen = i + 1;
-      found_work = true;
     }
 #endif
   }
 
-  // If no work found across all ring buffers, relax CPU
-  if (!found_work) {
-    cpu_relax();
-    return;
-  }
-
   // Process all collected commands in batch
   if (!wrs_to_post.empty()) {
+#ifdef MEASURE_PER_OP_LATENCY
     auto start = std::chrono::high_resolution_clock::now();
+#endif
+    // Post all commands: writes, atomics, barriers, quiets
     post_gpu_commands_mixed(wrs_to_post, cmds_to_post);
+#ifdef MEASURE_PER_OP_LATENCY
     auto end = std::chrono::high_resolution_clock::now();
     total_rdma_write_durations_ +=
         std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+#endif
   }
+
+  // This does not deallocate the memory, saving malloc overhead.
+  wrs_to_post.clear();
+  cmds_to_post.clear();
 }
 
 void Proxy::run_local() {
@@ -757,82 +755,90 @@ void Proxy::post_gpu_commands_mixed(
     std::vector<uint64_t> const& wrs_to_post,
     std::vector<TransferCmd> const& cmds_to_post) {
   // Separate atomic operations from regular RDMA writes
-  std::vector<uint64_t> rdma_wrs, atomic_wrs;
-  std::vector<TransferCmd> rdma_cmds, atomic_cmds;
-
-  std::vector<uint64_t> quiet_wrs, barrier_wrs;
-  std::vector<TransferCmd> quiet_cmds, barrier_cmds;
+  std::vector<uint64_t> rdma_wrs, atomic_wrs, quiet_wrs, barrier_wrs;
+  std::vector<TransferCmd> rdma_cmds, atomic_cmds, quiet_cmds, barrier_cmds;
 
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
-    if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::ATOMIC) {
+    switch (get_base_cmd(cmds_to_post[i].cmd_type)) {
+      case (CmdType::ATOMIC): {
 #ifdef USE_SENDER_BARRIER
-      if (!cfg_.use_normal_mode) {
-        int value = cmds_to_post[i].value;
-        uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
-        uint32_t new_offset =
-            offset - cmds_to_post[i].low_latency_buffer_idx *
-                         align<size_t>(cfg_.num_experts * sizeof(int), 128);
-        size_t new_index = new_offset / sizeof(int);
-        int expected_value;
-        int expert_idx;
+        if (!cfg_.use_normal_mode) {
+          int value = cmds_to_post[i].value;
+          uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
+          uint32_t new_offset =
+              offset - cmds_to_post[i].low_latency_buffer_idx *
+                           align<size_t>(cfg_.num_experts * sizeof(int), 128);
+          size_t new_index = new_offset / sizeof(int);
+          int expected_value;
+          int expert_idx;
 
-        if (cmds_to_post[i].is_combine) {
-          expert_idx = new_index;
-          expected_value = ctx_.combine_sent_counter.Get(
-              {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
-               cmds_to_post[i].dst_rank});
-        } else {
-          expert_idx = new_index / cfg_.num_ranks;
-          expected_value = ctx_.dispatch_sent_counter.Get(
-              {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
-               cmds_to_post[i].dst_rank});
-          value = -value - 1;
+          if (cmds_to_post[i].is_combine) {
+            expert_idx = new_index;
+            expected_value = ctx_.combine_sent_counter.Get(
+                {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+                 cmds_to_post[i].dst_rank});
+          } else {
+            expert_idx = new_index / cfg_.num_ranks;
+            expected_value = ctx_.dispatch_sent_counter.Get(
+                {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+                 cmds_to_post[i].dst_rank});
+            value = -value - 1;
+          }
+          if (value != expected_value) {
+            postponed_atomics_.push_back(cmds_to_post[i]);
+            postponed_wr_ids_.push_back(wrs_to_post[i]);
+            assert(postponed_atomics_.size() == postponed_wr_ids_.size());
+            continue;
+          }
         }
-        if (value != expected_value) {
-          postponed_atomics_.push_back(cmds_to_post[i]);
-          postponed_wr_ids_.push_back(wrs_to_post[i]);
-          assert(postponed_atomics_.size() == postponed_wr_ids_.size());
-          continue;
-        }
-      }
 #endif
-      atomic_wrs.push_back(wrs_to_post[i]);
-      atomic_cmds.push_back(cmds_to_post[i]);
+
+        atomic_wrs.push_back(wrs_to_post[i]);
+        atomic_cmds.push_back(cmds_to_post[i]);
 
 #ifdef USE_SENDER_BARRIER
-      if (!cfg_.use_normal_mode) {
-        uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
-        uint32_t new_offset =
-            offset - cmds_to_post[i].low_latency_buffer_idx *
-                         align<size_t>(cfg_.num_experts * sizeof(int), 128);
-        size_t new_index = new_offset / sizeof(int);
-        int expert_idx;
-        if (cmds_to_post[i].is_combine) {
-          expert_idx = new_index;
-          ctx_.combine_sent_counter.Reset(
-              {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
-               cmds_to_post[i].dst_rank});
-        } else {
-          expert_idx = new_index / cfg_.num_ranks;
-          ctx_.dispatch_sent_counter.Reset(
-              {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
-               cmds_to_post[i].dst_rank});
+        if (!cfg_.use_normal_mode) {
+          uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
+          uint32_t new_offset =
+              offset - cmds_to_post[i].low_latency_buffer_idx *
+                           align<size_t>(cfg_.num_experts * sizeof(int), 128);
+          size_t new_index = new_offset / sizeof(int);
+          int expert_idx;
+          if (cmds_to_post[i].is_combine) {
+            expert_idx = new_index;
+            ctx_.combine_sent_counter.Reset(
+                {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+                 cmds_to_post[i].dst_rank});
+          } else {
+            expert_idx = new_index / cfg_.num_ranks;
+            ctx_.dispatch_sent_counter.Reset(
+                {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+                 cmds_to_post[i].dst_rank});
+          }
         }
-      }
 #endif
-    } else if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::WRITE) {
-      rdma_wrs.push_back(wrs_to_post[i]);
-      rdma_cmds.push_back(cmds_to_post[i]);
-    } else if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::QUIET) {
-      quiet_cmds.push_back(cmds_to_post[i]);
-      quiet_wrs.push_back(wrs_to_post[i]);
-    } else if (get_base_cmd(cmds_to_post[i].cmd_type) == CmdType::BARRIER) {
-      barrier_cmds.push_back(cmds_to_post[i]);
-      barrier_wrs.push_back(wrs_to_post[i]);
-    } else {
-      fprintf(stderr, "Error: Unknown command type %d\n",
-              static_cast<int>(cmds_to_post[i].cmd_type));
-      std::abort();
+        break;
+      }
+      case (CmdType::WRITE): {
+        rdma_wrs.push_back(wrs_to_post[i]);
+        rdma_cmds.push_back(cmds_to_post[i]);
+        break;
+      }
+      case (CmdType::QUIET): {
+        quiet_cmds.push_back(cmds_to_post[i]);
+        quiet_wrs.push_back(wrs_to_post[i]);
+        break;
+      }
+      case (CmdType::BARRIER): {
+        barrier_cmds.push_back(cmds_to_post[i]);
+        barrier_wrs.push_back(wrs_to_post[i]);
+        break;
+      }
+      default: {
+        fprintf(stderr, "Error: Unknown command type %d\n",
+                static_cast<int>(cmds_to_post[i].cmd_type));
+        std::abort();
+      }
     }
   }
   if (rdma_wrs.size() + atomic_wrs.size() + barrier_cmds.size() +
@@ -840,31 +846,41 @@ void Proxy::post_gpu_commands_mixed(
       0) {
     return;
   }
+
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
                             rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
                             cfg_.thread_idx, cfg_.use_normal_mode);
+    rdma_wrs.clear();
+    rdma_cmds.clear();
   }
+
   if (!atomic_wrs.empty()) {
     post_atomic_operations(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
                            cfg_.rank, cfg_.thread_idx, acked_wrs_,
                            cfg_.use_normal_mode);
+    atomic_wrs.clear();
+    atomic_cmds.clear();
   }
+
   if (!barrier_cmds.empty()) {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
-    assert(barrier_wrs.size() == 1);
-    assert(ctx_.barrier_wr == -1);
+    assert(barrier_wrs.size() == 1 && ctx_.barrier_wr == -1);
 #endif
     send_barrier(barrier_wrs[0]);
+    barrier_wrs.clear();
+    barrier_cmds.clear();
   }
+
   if (!quiet_cmds.empty()) {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
-    assert(quiet_wrs.size() == 1);
-    assert(ctx_.quiet_wr == -1);
+    assert(quiet_wrs.size() == 1 && ctx_.quiet_wr == -1);
 #endif
     ctx_.quiet_wr = quiet_wrs[0];
     quiet(quiet_wrs, quiet_cmds);
+    quiet_wrs.clear();
+    quiet_cmds.clear();
   }
 }
 
