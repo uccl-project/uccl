@@ -422,18 +422,9 @@ int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
 
   // Poll until the transfer completes (drives Stage 1 and Stage 2).
   bool done = false;
-  // Simple adaptive backoff: spin a few times, then sleep briefly.
-  int spins = 0;
   while (!done) {
     if (!conn->engine->endpoint->poll_async(transfer_id, &done)) {
       return -1;
-    }
-    if (!done) {
-      if (spins < 64) {
-        ++spins;  // brief spin to reduce tail latency on large transfers
-      } else {
-        std::this_thread::sleep_for(std::chrono::microseconds(5));
-      }
     }
   }
   return 0;

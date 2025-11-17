@@ -31,10 +31,27 @@ namespace tcpx {
 // reused to keep the hot path free of cudaEventCreate/Destroy churn.
 class Endpoint;
 
-// Note: shared_from_this is not needed; connections are always managed via
-// std::shared_ptr in conn_map_.
-struct Conn {
-  Conn() {
+// Per-channel resources within a connection
+struct ChannelState {
+  void* send_comm = nullptr;  // TCPX send comm for this channel.
+  void* recv_comm = nullptr;  // TCPX recv comm for this channel.
+  void* send_dev_handle = nullptr;  // Points into send_dev_handle_storage.
+  void* recv_dev_handle = nullptr;  // Points into recv_dev_handle_storage.
+
+  // Host-side cached copy of the recv device handle
+  tcpx::plugin::unpackNetDeviceHandle recv_dev_handle_host{};
+  bool recv_dev_handle_cached = false;
+
+  // Backing storage for device handles (aligned for NCCL requirements).
+  alignas(16) std::array<uint8_t, 512> recv_dev_handle_storage;
+  alignas(16) std::array<uint8_t, 512> send_dev_handle_storage;
+
+  // Per-channel sliding window counters (not guarded by mutex - accessed only
+  // under transfer_mu_ which already serializes access to the same transfer)
+  size_t send_inflight = 0;  // Number of send chunks in flight on this channel
+  size_t recv_inflight = 0;  // Number of recv chunks in flight on this channel
+
+  ChannelState() {
     recv_dev_handle = recv_dev_handle_storage.data();
     send_dev_handle = send_dev_handle_storage.data();
     std::memset(recv_dev_handle_storage.data(), 0,
@@ -42,7 +59,11 @@ struct Conn {
     std::memset(send_dev_handle_storage.data(), 0,
                 send_dev_handle_storage.size());
   }
+};
 
+// Note: shared_from_this is not needed; connections are always managed via
+// std::shared_ptr in conn_map_.
+struct Conn {
   // Basic connection metadata
   uint64_t conn_id = 0;     // Unique connection identifier.
   std::string ip_addr;      // Remote IP string (hostname already resolved).
@@ -57,21 +78,12 @@ struct Conn {
   std::vector<cudaEvent_t> recv_events;
   uint64_t event_counter = 0;  // Round-robin cursor for recv_events.
 
-  // TCPX comm state
-  void* send_comm = nullptr;  // TCPX send comm for this peer.
-  void* recv_comm = nullptr;  // TCPX recv comm for this peer.
-  // Note: send_dev_handle is not referenced by the engine today but is kept to
-  // satisfy the tcpx_connect_v5 API contract (device-handle lifetime).
-  void* send_dev_handle = nullptr;  // Points into send_dev_handle_storage.
-  void* recv_dev_handle = nullptr;  // Points into recv_dev_handle_storage.
+  // Multi-channel state
+  std::vector<ChannelState> channels;
 
-  // Host-side cached copy of the recv device handle
-  tcpx::plugin::unpackNetDeviceHandle recv_dev_handle_host{};
-  bool recv_dev_handle_cached = false;
-
-  // Backing storage for device handles (aligned for NCCL requirements).
-  alignas(16) std::array<uint8_t, 512> recv_dev_handle_storage;
-  alignas(16) std::array<uint8_t, 512> send_dev_handle_storage;
+  void init_channels(size_t num_channels) {
+    channels.resize(num_channels);
+  }
 };
 
 // FIFO metadata item
@@ -98,8 +110,9 @@ struct MrEntry {
   int ptr_type = NCCL_PTR_CUDA;  // NCCL pointer type (defaults to device).
 
   // Cached TCPX handles keyed by conn_id.
-  std::unordered_map<uint64_t, void*> send_handles;
-  std::unordered_map<uint64_t, void*> recv_handles;
+  // For multi-channel: each conn_id maps to a vector of handles (one per channel).
+  std::unordered_map<uint64_t, std::vector<void*>> send_handles;
+  std::unordered_map<uint64_t, std::vector<void*>> recv_handles;
 };
 
 // Pending transfer
@@ -126,6 +139,10 @@ struct PendingTransfer {
     void* dst_ptr = nullptr;    // Destination ptr (recv target or send src).
     bool needs_unpack = false;  // Whether the recv path must run GPU unpack.
 
+    // Multi-channel support
+    size_t channel_idx = 0;  // Which channel this chunk is assigned to.
+    void* mhandle = nullptr;  // TCPX memory handle for this chunk.
+
     // State progression flags:
     //   posted=false -> Stage 0 schedules -> posted=true
     //   posted=true, stage1_done=false -> Stage 1 polls -> stage1_done=true
@@ -135,6 +152,8 @@ struct PendingTransfer {
     bool stage1_done = false;  // Network completion observed (tcpx_test).
     bool stage2_done =
         false;  // GPU completion observed (cudaEventQuery) or send acked.
+    bool queued_for_consume = false;  // Added to recv_consume_queues (recv path only).
+    bool consumed = false;     // tcpx_irecv_consumed called (recv path only).
 
     // Bounce-buffer metadata (populated after Stage 1 on the recv path).
     rx::UnpackDescriptorBlock desc_block{};
@@ -163,12 +182,27 @@ struct PendingTransfer {
   std::vector<ChunkState> chunks;
   size_t chunks_completed = 0;
 
-  // Queues that mirror the pipeline stages.
-  // Send path uses only send_queue; recv path uses both stage1 and stage2
+  // Per-channel queues that mirror the pipeline stages.
+  // CRITICAL: TCPX requires FIFO ordering per channel (matches
+  // rq.next_transmitting). Each channel maintains its own queue; we test only
+  // the head of each channel's queue.
+  //
+  // Send path uses only send_queues; recv path uses both stage1 and stage2
   // queues.
-  std::deque<size_t> send_queue;         // Post-send chunks waiting for test.
-  std::deque<size_t> recv_stage1_queue;  // Posted recvs awaiting TCPX test.
-  std::deque<size_t> recv_stage2_queue;  // Chunks waiting for CUDA completion.
+  std::vector<std::deque<size_t>>
+      send_queues;  // Per-channel: post-send chunks waiting for test.
+  std::vector<std::deque<size_t>>
+      recv_stage1_queues;  // Per-channel: posted recvs awaiting TCPX test.
+  std::deque<size_t> recv_stage2_queue;  // Global: chunks waiting for CUDA
+                                         // completion (can complete
+                                         // out-of-order).
+
+  // Per-channel queues for tracking chunks ready to consume.
+  // CRITICAL: tcpx_irecv_consumed must be called in FIFO order per channel.
+  // When a chunk's GPU unpack completes, we mark it as ready but only consume
+  // the head of each channel's queue.
+  std::vector<std::deque<size_t>>
+      recv_consume_queues;  // Per-channel: chunks ready to consume (FIFO order).
 };
 
 // TCPX transport engine
@@ -364,10 +398,14 @@ class Endpoint {
   // Device / control-plane state.
   int dev_id_ = -1;
   int ctrl_listen_fd_ = -1;
-  void* listen_comms_ = nullptr;
   uint32_t local_gpu_idx_ = 0;
   int ctrl_port_ = 0;
-  ncclNetHandle_v7 listen_handle_{};
+
+  // Multi-channel state
+  size_t num_channels_ = 1;
+  std::vector<int> channel_dev_ids_;
+  std::vector<ncclNetHandle_v7> listen_handles_;
+  std::vector<void*> listen_comms_;
 
   // Monotonic id/tag generators.
   std::atomic<uint64_t> next_conn_id_{0};
@@ -472,15 +510,16 @@ class Endpoint {
    * @param conn             Connection to use.
    * @param mr_id            Memory registration id.
    * @param is_recv          Direction: false=send, true=recv.
+   * @param channel_idx      Channel index within the connection.
    * @param mhandle_out      [out] Resulting TCPX handle pointer.
    * @return                 true on success, false on failure.
    */
   bool populate_conn_handles_(Conn& conn, uint64_t mr_id, bool is_recv,
-                              void** mhandle_out);
+                              size_t channel_idx, void** mhandle_out);
   /**
    * Cache the device handle used by the recv path (host copy).
    */
-  bool ensure_recv_dev_handle_cached_(Conn& conn);
+  bool ensure_recv_dev_handle_cached_(Conn& conn, size_t channel_idx);
 
   // Stage-1/2 progress (network completion + GPU completion). Stage 1 is
   // handled inside progress_transfer_locked by polling TCPX; Stage 2 applies
@@ -545,8 +584,14 @@ class Endpoint {
                              PendingTransfer::ChunkState& chunk,
                              tcpx::plugin::tcpxRequest* request, Conn& conn);
   /**
-   * Stage 2 epilogue (RX): notify TCPX the chunk was consumed and clear state.
-   * Calls tcpx_irecv_consumed() to release bounce buffer.
+   * Call tcpx_irecv_consumed() for a chunk.
+   * CRITICAL: Must be called in FIFO order per channel!
+   */
+  bool consume_recv_chunk_(Conn& conn, PendingTransfer::ChunkState& chunk);
+
+  /**
+   * Stage 2 epilogue (RX): clear chunk state (event, etc).
+   * Does NOT call tcpx_irecv_consumed - that's handled separately in FIFO order.
    */
   bool finalize_recv_chunk_(Conn& conn, PendingTransfer::ChunkState& chunk);
 
