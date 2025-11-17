@@ -24,7 +24,7 @@ IS_EFA=$( [ -d "/sys/class/infiniband/" ] && ls /sys/class/infiniband/ 2>/dev/nu
 
 
 if [[ $TARGET != cuda* && $TARGET != rocm* && $TARGET != "therock" ]]; then
-  echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep|eccl] [py_version] [rocm_index_url]" >&2
+  echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url]" >&2
   exit 1
 fi
 

@@ -85,6 +85,7 @@ test: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 # Install pybind11 if not available
 install-deps:
 	pip3 install pybind11
+
 # Help target
 help:
 	@echo "Available targets:"
