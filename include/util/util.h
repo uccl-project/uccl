@@ -172,18 +172,18 @@ inline void create_listen_socket(int* listen_fd, uint16_t listen_port) {
   *listen_fd = socket(AF_INET, SOCK_STREAM, 0);
   DCHECK(*listen_fd >= 0) << "ERROR: opening socket";
   int flag = 1;
-  DCHECK(setsockopt(*listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
-         0)
+  CHECK(setsockopt(*listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
+        0)
       << "ERROR: setsockopt SO_REUSEADDR fails";
   struct sockaddr_in serv_addr;
   bzero((char*)&serv_addr, sizeof(serv_addr));
   serv_addr.sin_family = AF_INET;
   serv_addr.sin_addr.s_addr = INADDR_ANY;
   serv_addr.sin_port = htons(listen_port);
-  DCHECK(bind(*listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0)
+  CHECK(bind(*listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0)
       << "ERROR: binding";
 
-  DCHECK(!listen(*listen_fd, 128)) << "ERROR: listen";
+  CHECK(!listen(*listen_fd, 128)) << "ERROR: listen";
   VLOG(5) << "[Endpoint] server ready, listening on port " << listen_port;
 }
 
@@ -192,8 +192,8 @@ inline uint16_t create_listen_socket(int* listen_fd) {
   DCHECK(*listen_fd >= 0) << "ERROR: opening socket";
 
   int flag = 1;
-  DCHECK(setsockopt(*listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
-         0)
+  CHECK(setsockopt(*listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
+        0)
       << "ERROR: setsockopt SO_REUSEADDR fails";
 
   struct sockaddr_in serv_addr;
@@ -202,17 +202,17 @@ inline uint16_t create_listen_socket(int* listen_fd) {
   serv_addr.sin_addr.s_addr = INADDR_ANY;
   serv_addr.sin_port = htons(0);  // Ask OS for ephemeral port
 
-  DCHECK(bind(*listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0)
+  CHECK(bind(*listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0)
       << "ERROR: binding";
 
   // Get the assigned port
   socklen_t len = sizeof(serv_addr);
-  DCHECK(getsockname(*listen_fd, (struct sockaddr*)&serv_addr, &len) >= 0)
+  CHECK(getsockname(*listen_fd, (struct sockaddr*)&serv_addr, &len) >= 0)
       << "ERROR: getsockname";
 
   uint16_t assigned_port = ntohs(serv_addr.sin_port);
 
-  DCHECK(!listen(*listen_fd, 128)) << "ERROR: listen";
+  CHECK(!listen(*listen_fd, 128)) << "ERROR: listen";
   VLOG(5) << "[Endpoint] server ready, listening on ephemeral port "
           << assigned_port;
 
@@ -736,7 +736,7 @@ static inline std::string ip_to_str(uint32_t ip) {
 // 1.2.3.4 -> 0x04030201 (network order)
 static inline uint32_t str_to_ip(std::string const& ip) {
   struct sockaddr_in sa;
-  DCHECK(inet_pton(AF_INET, ip.c_str(), &(sa.sin_addr)) != 0);
+  CHECK(inet_pton(AF_INET, ip.c_str(), &(sa.sin_addr)) != 0);
   return sa.sin_addr.s_addr;
 }
 

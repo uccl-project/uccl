@@ -813,8 +813,8 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                     uccl::FifoItem const& slot_item) {
   if (!ucclParamRCMode()) {
-    DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
-                     "be True in transport_config.h";
+    CHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
+                    "be True in transport_config.h";
     std::abort();
   }
 
@@ -1185,7 +1185,7 @@ bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
                      uccl::FifoItem const& slot_item) {
   if (!ucclParamRCMode()) {
-    DCHECK(false) << "We only support RC mode for now.";
+    CHECK(false) << "We only support RC mode for now.";
     std::abort();
   }
 
@@ -1399,13 +1399,12 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
   CHECK_EQ(transfer_info.size, size)
       << "Size mismatch: expected " << size << ", got " << transfer_info.size;
 
-  void* raw_dst_ptr = nullptr;
+  void* base = nullptr;
   GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
-  GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, transfer_info.handle,
+  GPU_RT_CHECK(gpuIpcOpenMemHandle(&base, transfer_info.handle,
                                    gpuIpcMemLazyEnablePeerAccess));
-
-  void* dst_ptr = reinterpret_cast<void*>(
-      reinterpret_cast<uintptr_t>(raw_dst_ptr) + transfer_info.offset);
+  void* dst_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) +
+                                          transfer_info.offset);
 
   std::vector<gpuStream_t>& dst_streams = ipc_streams_[conn->remote_gpu_idx_];
   int num_streams =
@@ -1478,12 +1477,16 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
   IpcTransferInfo transfer_info = {};  // Initialize to zero
   transfer_info.size = size;
   transfer_info.operation = 1;  // response
+  GPU_RT_CHECK(
+      gpuIpcGetMemHandle(&transfer_info.handle, reinterpret_cast<void*>(data)));
 
-  auto data_aligned = reinterpret_cast<uintptr_t>(data) & ~(kIpcAlignment - 1);
-  auto data_offset = reinterpret_cast<uintptr_t>(data) - data_aligned;
+  // Getting the base address.
+  void* base = nullptr;
+  size_t base_size;
+  GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, data));
+  auto data_offset =
+      reinterpret_cast<uintptr_t>(data) - reinterpret_cast<uintptr_t>(base);
   transfer_info.offset = data_offset;
-  GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
-                                  reinterpret_cast<void*>(data_aligned)));
 
   auto ret = uccl::send_message_nonblock(
       client_fd, static_cast<void const*>(&transfer_info),

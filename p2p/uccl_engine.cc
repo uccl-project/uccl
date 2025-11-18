@@ -411,11 +411,37 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
                      size_t data_size) {
   if (!conn || !mr || !data) return -1;
-  uint64_t transfer_id;
-  return conn->engine->endpoint->recv_async(conn->conn_id, mr->mr_id, data,
-                                            data_size, &transfer_id)
+
+#ifdef USE_TCPX
+  // TCPX: no background progress thread exists, so drive progress here.
+  uint64_t transfer_id = 0;
+  if (!conn->engine->endpoint->recv_async(conn->conn_id, mr->mr_id, data,
+                                          data_size, &transfer_id)) {
+    return -1;
+  }
+
+  // Poll until the transfer completes (drives Stage 1 and Stage 2).
+  bool done = false;
+  // Simple adaptive backoff: spin a few times, then sleep briefly.
+  int spins = 0;
+  while (!done) {
+    if (!conn->engine->endpoint->poll_async(transfer_id, &done)) {
+      return -1;
+    }
+    if (!done) {
+      if (spins < 64) {
+        ++spins;  // brief spin to reduce tail latency on large transfers
+      } else {
+        std::this_thread::sleep_for(std::chrono::microseconds(5));
+      }
+    }
+  }
+  return 0;
+#else
+  return conn->engine->endpoint->recv(conn->conn_id, mr->mr_id, data, data_size)
              ? 0
              : -1;
+#endif
 }
 
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {

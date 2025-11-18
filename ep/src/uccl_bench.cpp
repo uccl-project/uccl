@@ -25,7 +25,7 @@ EnvInfo Bench::env_info() const {
   EnvInfo e;
   e.blocks = env_.blocks;
   e.queue_size = kQueueSize;
-  e.threads_per_block = kNumThPerBlock;
+  e.threads_per_block = kTestNumGpuThPerBlock;
   e.iterations = kIterations;
   e.stream_addr = reinterpret_cast<uintptr_t>(env_.stream);
 
@@ -65,30 +65,13 @@ void Bench::timing_stop() {
   have_t1_ = true;
 }
 
-void Bench::start_local_proxies(int rank, std::string const& peer_ip) {
-  if (running_.load(std::memory_order_acquire)) {
-    throw std::runtime_error("Proxies already running");
-  }
-
-  threads_.reserve(env_.blocks);
-  for (int i = 0; i < env_.blocks; ++i) {
-    threads_.emplace_back([this, i, rank, peer_ip]() {
-      Proxy p{
-          make_cfg(env_, i, rank, peer_ip.empty() ? nullptr : peer_ip.c_str())};
-      p.run_local();
-    });
-  }
-
-  running_.store(true, std::memory_order_release);
-}
-
 void Bench::launch_gpu_issue_batched_commands() {
   timing_start();
 
 #ifndef USE_MSCCLPP_FIFO_BACKEND
   const size_t shmem_bytes = kQueueSize * 2 * sizeof(unsigned long long);
   auto st = launch_gpu_issue_batched_commands_shim(
-      env_.blocks, kNumThPerBlock, shmem_bytes, env_.stream, env_.rbs);
+      env_.blocks, kTestNumGpuThPerBlock, shmem_bytes, env_.stream, env_.rbs);
 
   if (st != cudaSuccess) {
     throw std::runtime_error(std::string("kernel launch failed: ") +
@@ -194,7 +177,7 @@ EnvInfo BenchFifo::env_info() const {
   EnvInfo e;
   e.blocks = env_.blocks;
   e.queue_size = kQueueSize;  // Default FIFO size
-  e.threads_per_block = kNumThPerBlock;
+  e.threads_per_block = kTestNumGpuThPerBlock;
   e.iterations = kIterations;
   e.stream_addr = reinterpret_cast<uintptr_t>(env_.stream);
   e.rbs_addr = reinterpret_cast<uintptr_t>(env_.d_fifo_handles);
@@ -224,7 +207,8 @@ void BenchFifo::launch_gpu_issue_batched_commands() {
   // Shared memory for circular buffer, sized to kQueueSize (not kIterations!)
   const size_t shmem_bytes = kQueueSize * sizeof(unsigned long long);
   auto st = launch_gpu_issue_batched_commands_fifo(
-      env_.blocks, kNumThPerBlock, shmem_bytes, env_.stream, env_.d_fifo_handles
+      env_.blocks, kTestNumGpuThPerBlock, shmem_bytes, env_.stream,
+      env_.d_fifo_handles
 #ifdef MEASURE_PER_OP_LATENCY
       ,
       env_.cycle_start, env_.cycle_end, env_.cycle_accum, env_.op_count

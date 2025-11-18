@@ -290,8 +290,8 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   DCHECK(listen_fd >= 0) << "ERROR: opening socket";
 
   int flag = 1;
-  DCHECK(setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
-         0);
+  CHECK(setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
+        0);
 
   struct sockaddr_in serv_addr;
   bzero((char*)&serv_addr, sizeof(serv_addr));

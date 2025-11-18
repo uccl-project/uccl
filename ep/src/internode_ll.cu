@@ -309,7 +309,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting rb.
           false, d2h_channel_addrs, num_d2h_channel_addrs, false,
           low_latency_buffer_idx);
-
     } else {
       // Intra-node: use direct atomic operation
       st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr),
@@ -392,7 +391,7 @@ LOW_LATENCY_DISPATCH_RECV:
               "Same node but rdma_recv_count_internode is not zero! src_rank: "
               "%d, rank: %d, max_nvl_peers: %d\n",
               src_rank, rank, max_nvl_peers);
-          assert(false);
+          EP_DEVICE_ASSERT(false);
         }
       }
       if (src_rank / max_nvl_peers != rank / max_nvl_peers) {
@@ -403,7 +402,7 @@ LOW_LATENCY_DISPATCH_RECV:
               "Different node but rdma_recv_count is not zero! src_rank: %d, "
               "rank: %d, max_nvl_peers: %d\n",
               src_rank, rank, max_nvl_peers);
-          assert(false);
+          EP_DEVICE_ASSERT(false);
         }
       }
       auto wait_recv_cost = clock64() - start_time;
@@ -932,7 +931,7 @@ LOW_LATENCY_COMBINE_RECV:
               "Same node but rdma_recv_flag_internode is not zero! src_rank: "
               "%d, rank: %d, max_nvl_peers: %d\n",
               src_rank, rank, max_nvl_peers);
-          assert(false);
+          EP_DEVICE_ASSERT(false);
         }
       }
       if (src_rank / max_nvl_peers != rank / max_nvl_peers) {
@@ -942,7 +941,7 @@ LOW_LATENCY_COMBINE_RECV:
               "Different node but rdma_recv_flag is not zero! src_rank: %d, "
               "rank: %d, max_nvl_peers: %d\n",
               src_rank, rank, max_nvl_peers);
-          assert(false);
+          EP_DEVICE_ASSERT(false);
         }
       }
 

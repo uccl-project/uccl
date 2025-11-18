@@ -16,6 +16,18 @@
 #define NCCL_PTR_HOST 0x1  // Host (CPU) memory
 #define NCCL_PTR_CUDA 0x2  // Device (GPU) memory
 
+/**
+ * @brief NCCL network handle (version 7)
+ *
+ * Opaque 128-byte structure used by TCPX plugin for connection handshake.
+ * Contains serialized connection information (IP, port, etc.).
+ */
+struct ncclNetHandle_v7 {
+  char data[128];
+};
+static_assert(sizeof(ncclNetHandle_v7) == 128,
+              "ncclNetHandle_v7 must be exactly 128 bytes");
+
 extern "C" {
 
 // Plugin initialization
