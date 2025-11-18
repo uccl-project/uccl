@@ -77,23 +77,38 @@ int main(int argc, char* argv[]) {
     std::atomic<int> responses_received{0};
 
     for (int i = 0; i < num_messages; ++i) {
-        MetaInfo meta{};
-        meta.client_id = client_id_start + i;
-        meta.value = 3.14 + i;
-        snprintf(meta.message, sizeof(meta.message), "Message %d from client (id=%d)",
-                 i, meta.client_id);
+        MetaInfoToExchange meta{};
+        meta.rank_id = client_id_start + i;
+        meta.context_id = i;
+        // Initialize channel_meta and mem_meta with example values
+        meta.channel_meta.qpn = 1000 + i;
+        memset(&meta.channel_meta.gid, 0, sizeof(meta.channel_meta.gid));
+        meta.mem_meta.addr = 0x1000000 + i * 0x1000;
+        meta.mem_meta.rkey = 2000 + i;
+        meta.mem_meta.length = 4096;
+
+        // Manually serialize MetaInfoToExchange
+        std::string serialized_meta = serialize(meta);
 
         // Send with callback
         int msg_id = i;
-        bool sent = client.send_meta(conn_key, meta, [msg_id, &responses_received](const std::string& response) {
-            std::cout << "Message " << msg_id << " received response: " << response;
+        bool sent = client.send_meta(conn_key, serialized_meta, [msg_id, &responses_received](const std::string& response) {
+            // Deserialize response as MetaInfoToExchange
+            MetaInfoToExchange response_meta = deserialize<MetaInfoToExchange>(response);
+            std::cout << "Message " << msg_id << " received response:\n";
+            std::cout << "  rank_id: " << response_meta.rank_id << "\n";
+            std::cout << "  context_id: " << response_meta.context_id << "\n";
+            std::cout << "  channel_meta.qpn: " << response_meta.channel_meta.qpn << "\n";
+            std::cout << "  mem_meta.addr: 0x" << std::hex << response_meta.mem_meta.addr << std::dec << "\n";
+            std::cout << "  mem_meta.rkey: " << response_meta.mem_meta.rkey << "\n";
+            std::cout << "  mem_meta.length: " << response_meta.mem_meta.length << "\n";
             responses_received++;
         });
 
         if (!sent) {
-            std::cerr << "Failed to send message " << i << " (client_id=" << meta.client_id << ")\n";
+            std::cerr << "Failed to send message " << i << " (rank_id=" << meta.rank_id << ")\n";
         } else {
-            std::cout << "Sent message " << i << " (client_id=" << meta.client_id << ")\n";
+            std::cout << "Sent message " << i << " (rank_id=" << meta.rank_id << ")\n";
         }
 
         // Small delay between sends

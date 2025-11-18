@@ -4,28 +4,8 @@
 #ifndef EPOLL_CLIENT_H
 #define EPOLL_CLIENT_H
 
-#include "epoll_server.h"  // reuse serialization, MetaInfo, helper functions
+#include "define.h"  // reuse serialization, MetaInfo, helper functions
 
-#include <arpa/inet.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <sys/epoll.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
-#include <atomic>
-#include <chrono>
-#include <condition_variable>
-#include <cstring>
-#include <functional>
-#include <iostream>
-#include <map>
-#include <mutex>
-#include <queue>
-#include <string>
-#include <thread>
-#include <vector>
 
 // ---------------------------
 // Client connection state
@@ -156,9 +136,8 @@ public:
         return conn_key;
     }
 
-    // Send MetaInfo to server with callback for response
-    bool send_meta(const std::string& conn_key, const MetaInfo& meta, ResponseCallback callback = nullptr) {
-        std::string payload = serialize(meta);
+    // Send serialized payload to server with callback for response
+    bool send_meta(const std::string& conn_key, const std::string& payload, ResponseCallback callback = nullptr) {
         uint32_t len = htonl((uint32_t)payload.size());
         std::string pkt;
         pkt.reserve(sizeof(len) + payload.size());
@@ -200,12 +179,12 @@ public:
     }
 
     // Convenience method: connect and send in one call
-    bool send_to_server(const std::string& server_ip, int server_port,
-                       const MetaInfo& meta, ResponseCallback callback = nullptr) {
-        std::string conn_key = connect_to_server(server_ip, server_port);
-        if (conn_key.empty()) return false;
-        return send_meta(conn_key, meta, callback);
-    }
+    // bool send_to_server(const std::string& server_ip, int server_port,
+    //                    const MetaInfo& meta, ResponseCallback callback = nullptr) {
+    //     std::string conn_key = connect_to_server(server_ip, server_port);
+    //     if (conn_key.empty()) return false;
+    //     return send_meta(conn_key, meta, callback);
+    // }
 
     // Get number of active connections
     size_t get_connection_count() const {
@@ -249,9 +228,10 @@ private:
         auto it = conns_.find(conn_key);
         if (it == conns_.end()) return;
         ClientConnection& conn = it->second;
-
+        std::cout<<"received"<<std::endl;
         while (true) {
             ssize_t count = ::recv(conn.fd, buf, sizeof(buf), 0);
+            std::cout<<"received count: "<<count<<std::endl;
             if (count == -1) {
                 if (errno == EAGAIN || errno == EWOULDBLOCK) break;
                 std::cerr << "recv error on " << conn_key << "\n";
@@ -264,33 +244,58 @@ private:
             } else {
                 conn.in_buf.insert(conn.in_buf.end(), buf, buf + count);
                 conn.last_activity = std::chrono::steady_clock::now();
+                std::cout<<"message received count: "<<count<<std::endl;
                 parse_responses(conn);
             }
         }
     }
 
     void parse_responses(ClientConnection& conn) {
-        // For simple text responses (like "Server ACK..."), we'll just read line by line
-        // In a more complex protocol, you'd implement proper framing here
+        // Parse responses with length framing: [uint32_t len][payload bytes]
         while (true) {
-            auto it = std::find(conn.in_buf.begin(), conn.in_buf.end(), '\n');
-            if (it == conn.in_buf.end()) break;
+            if (conn.expected_len == 0) {
+                // Need to read header (length)
+                if (conn.in_buf.size() >= sizeof(uint32_t)) {
+                    uint32_t net_len;
+                    std::memcpy(&net_len, conn.in_buf.data(), sizeof(uint32_t));
+                    uint32_t len = ntohl(net_len);
+                    conn.expected_len = len;
+                    // Erase header
+                    conn.in_buf.erase(conn.in_buf.begin(), conn.in_buf.begin() + sizeof(uint32_t));
 
-            std::string response(conn.in_buf.begin(), it + 1);
-            conn.in_buf.erase(conn.in_buf.begin(), it + 1);
-
-            // Call the next callback if available
-            if (!conn.response_callbacks.empty()) {
-                auto callback = conn.response_callbacks.front();
-                conn.response_callbacks.pop();
-                try {
-                    callback(response);
-                } catch (const std::exception& e) {
-                    std::cerr << "Callback exception: " << e.what() << "\n";
+                    std::cout << "Parsed response header: expected_len=" << len << "\n";
+                } else {
+                    break; // Wait for more data
                 }
-            } else {
-                // No callback registered, just print
-                std::cout << "Received (no callback): " << response;
+            }
+
+            if (conn.expected_len > 0) {
+                if (conn.in_buf.size() >= conn.expected_len) {
+                    // Got full payload
+                    std::string response(conn.in_buf.begin(), conn.in_buf.begin() + conn.expected_len);
+                    conn.in_buf.erase(conn.in_buf.begin(), conn.in_buf.begin() + conn.expected_len);
+                    uint32_t got_len = conn.expected_len;
+                    conn.expected_len = 0;
+
+                    std::cout << "Got full response payload: len=" << got_len << "\n";
+
+                    // Call the next callback if available
+                    if (!conn.response_callbacks.empty()) {
+                        auto callback = conn.response_callbacks.front();
+                        conn.response_callbacks.pop();
+                        try {
+                            callback(response);
+                        } catch (const std::exception& e) {
+                            std::cerr << "Callback exception: " << e.what() << "\n";
+                        }
+                    } else {
+                        // No callback registered
+                        std::cout << "Received response (no callback): len=" << response.size() << "\n";
+                    }
+                    // Loop to see if more messages in buffer
+                } else {
+                    break; // Wait for more payload bytes
+                }
             }
         }
     }

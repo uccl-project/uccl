@@ -11,7 +11,8 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <unistd.h>
-
+#include <chrono>
+#include <thread>
 #define GID_INDEX 0
 #define PORT_NUM 1
 #define QKEY 0x12345
@@ -130,6 +131,60 @@ void exchange_qpns(char const* peer_ip, metadata* local_meta,
 
 struct ibv_qp* create_qp(struct rdma_context* rdma);
 
+// Check if device supports atomic operations
+void check_atomic_support(struct rdma_context* rdma) {
+  struct ibv_device_attr device_attr;
+  memset(&device_attr, 0, sizeof(device_attr));
+
+  if (ibv_query_device(rdma->ctx, &device_attr)) {
+    perror("Failed to query device attributes");
+    exit(1);
+  }
+
+  printf("\n=== Checking RDMA Atomic Operations Support ===\n");
+  printf("Device: %s\n", ibv_get_device_name(rdma->ctx->device));
+  printf("Atomic capabilities:\n");
+
+  // Check atomic_cap field
+  printf("  atomic_cap: ");
+  switch (device_attr.atomic_cap) {
+    case IBV_ATOMIC_NONE:
+      printf("IBV_ATOMIC_NONE (No atomic operations supported)\n");
+      break;
+    case IBV_ATOMIC_HCA:
+      printf("IBV_ATOMIC_HCA (Atomic operations within this HCA)\n");
+      break;
+    case IBV_ATOMIC_GLOB:
+      printf("IBV_ATOMIC_GLOB (Global atomic operations supported)\n");
+      break;
+    default:
+      printf("UNKNOWN (%d)\n", device_attr.atomic_cap);
+  }
+
+  printf("  max_qp: %d\n", device_attr.max_qp);
+  printf("  max_qp_wr: %d\n", device_attr.max_qp_wr);
+  printf("  device_cap_flags: 0x%llx\n", (unsigned long long)device_attr.device_cap_flags);
+
+  // Query extended device attributes for more details
+  struct ibv_query_device_ex_input input = {};
+  struct ibv_device_attr_ex device_attr_ex;
+  memset(&device_attr_ex, 0, sizeof(device_attr_ex));
+
+  if (ibv_query_device_ex(rdma->ctx, &input, &device_attr_ex) == 0) {
+    printf("\nExtended device attributes:\n");
+    printf("  max_dm_size: %llu\n", (unsigned long long)device_attr_ex.max_dm_size);
+    printf("  odp_caps.general_caps: 0x%llx\n", (unsigned long long)device_attr_ex.odp_caps.general_caps);
+  }
+
+  printf("==============================================\n\n");
+
+  if (device_attr.atomic_cap == IBV_ATOMIC_NONE) {
+    printf("WARNING: Device does NOT support atomic operations!\n");
+  } else {
+    printf("Device supports atomic operations (level: %d)\n", device_attr.atomic_cap);
+  }
+}
+
 // Initialize RDMA resources
 struct rdma_context* init_rdma(int gid_index) {
   struct rdma_context* rdma =
@@ -148,6 +203,9 @@ struct rdma_context* init_rdma(int gid_index) {
     perror("Failed to open device");
     exit(1);
   }
+
+  // Check atomic operation support
+  check_atomic_support(rdma);
 
   rdma->pd = ibv_alloc_pd(rdma->ctx);
 
@@ -211,6 +269,11 @@ struct ibv_qp* create_qp(struct rdma_context* rdma) {
                               IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM |
                               IBV_QP_EX_WITH_RDMA_READ;
 
+  // Try to add atomic operations support
+  printf("Attempting to create QP with atomic operations support...\n");
+  qp_attr_ex.send_ops_flags |= IBV_QP_EX_WITH_ATOMIC_CMP_AND_SWP |
+                               IBV_QP_EX_WITH_ATOMIC_FETCH_AND_ADD;
+
   qp_attr_ex.cap.max_send_wr = 256;
   qp_attr_ex.cap.max_recv_wr = 256;
   qp_attr_ex.cap.max_send_sge = 1;
@@ -234,8 +297,24 @@ struct ibv_qp* create_qp(struct rdma_context* rdma) {
                                          sizeof(struct efadv_qp_init_attr));
 
   if (!qp) {
-    perror("Failed to create QP");
-    exit(1);
+    perror("Failed to create QP with atomic operations");
+    printf("Retrying QP creation without atomic operations...\n");
+
+    // Retry without atomic operations
+    qp_attr_ex.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE |
+                                IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM |
+                                IBV_QP_EX_WITH_RDMA_READ;
+
+    qp = efadv_create_qp_ex(rdma->ctx, &qp_attr_ex, &efa_attr,
+                           sizeof(struct efadv_qp_init_attr));
+
+    if (!qp) {
+      perror("Failed to create QP even without atomic operations");
+      exit(1);
+    }
+    printf("QP created successfully WITHOUT atomic operations\n");
+  } else {
+    printf("QP created successfully WITH atomic operations support!\n");
   }
 
   struct ibv_qp_attr attr = {};
@@ -333,18 +412,20 @@ void run_server(struct rdma_context* rdma, int gid_index) {
       {(uintptr_t)rdma->local_buf, MSG_SIZE, rdma->mr->lkey}};
 
   struct ibv_recv_wr wr = {0}, *bad_wr;
-  wr.wr_id = 1;
+  wr.wr_id = 3;
   wr.num_sge = 1;
   wr.sg_list = sge;
   wr.next = NULL;
+  
 
+  std::this_thread::sleep_for(std::chrono::seconds(5));
   if (ibv_post_recv(rdma->qp, &wr, &bad_wr)) {
     perror("Failed to post recv");
     exit(1);
   }
 
   // Post second receive buffer
-  wr.wr_id = 2;
+  wr.wr_id = 3;
   wr.num_sge = 1;
   wr.sg_list = sge;
   wr.next = NULL;
@@ -356,6 +437,7 @@ void run_server(struct rdma_context* rdma, int gid_index) {
 
   printf("Server waiting for client message...\n");
   auto total_pull_count = 0;
+  // std::this_thread::sleep_for(std::chrono::seconds(5));
   while (total_pull_count < 2) {
     total_pull_count += poll_cq(rdma, IBV_WC_RECV_RDMA_WITH_IMM);
   }
@@ -517,6 +599,93 @@ void run_client(struct rdma_context* rdma, char const* server_ip,
 #else
   printf("Client received from server: %s\n", rdma->local_buf);
 #endif
+}
+
+// Test atomic operations
+void test_atomic_operations(struct rdma_context* rdma, metadata* remote_meta) {
+  printf("\n=== Testing RDMA Atomic Operations ===\n");
+
+  // Prepare local buffer for atomic operations
+  uint64_t* local_atomic_buf = (uint64_t*)rdma->local_buf;
+  uint64_t compare_value = 0x1234567890ABCDEF;
+  uint64_t swap_value = 0xFEDCBA0987654321;
+  uint64_t add_value = 100;
+
+  auto* qpx = ibv_qp_to_qp_ex(rdma->qp);
+
+  // Test 1: Atomic Compare and Swap
+  printf("Test 1: Attempting atomic compare-and-swap...\n");
+
+  // Try to call atomic CMP_AND_SWP
+  // Note: This will cause a runtime error if not supported
+  printf("  Calling ibv_wr_atomic_cmp_swp...\n");
+  try {
+    ibv_wr_start(qpx);
+    qpx->wr_id = 100;
+    qpx->comp_mask = 0;
+    qpx->wr_flags = IBV_SEND_SIGNALED;
+
+    ibv_wr_atomic_cmp_swp(qpx, remote_meta->rkey, remote_meta->addr,
+                          compare_value, swap_value);
+
+    struct ibv_sge sge[1] = {
+        {(uintptr_t)local_atomic_buf, sizeof(uint64_t), rdma->mr->lkey}};
+    ibv_wr_set_sge_list(qpx, 1, sge);
+    ibv_wr_set_ud_addr(qpx, rdma->ah, remote_meta->qpn, QKEY);
+
+    int ret = ibv_wr_complete(qpx);
+    if (ret != 0) {
+      printf("  ERROR: ibv_wr_complete failed for atomic operation (error: %d)\n", ret);
+      printf("  This indicates atomic operations are NOT supported by this device/QP\n");
+    } else {
+      printf("  Atomic compare-and-swap operation posted successfully!\n");
+      // Poll for completion
+      int poll_count = 0;
+      while (poll_count < 1) {
+        poll_count += poll_cq(rdma, IBV_WC_COMP_SWAP);
+      }
+      printf("  Original value: 0x%lx\n", *local_atomic_buf);
+    }
+  } catch (...) {
+    printf("  EXCEPTION: Atomic compare-and-swap not supported\n");
+  }
+
+  // Test 2: Atomic Fetch and Add
+  printf("\nTest 2: Attempting atomic fetch-and-add...\n");
+
+  printf("  Calling ibv_wr_atomic_fetch_add...\n");
+  try {
+    ibv_wr_start(qpx);
+    qpx->wr_id = 101;
+    qpx->comp_mask = 0;
+    qpx->wr_flags = IBV_SEND_SIGNALED;
+
+    ibv_wr_atomic_fetch_add(qpx, remote_meta->rkey, remote_meta->addr,
+                            add_value);
+
+    struct ibv_sge sge[1] = {
+        {(uintptr_t)local_atomic_buf, sizeof(uint64_t), rdma->mr->lkey}};
+    ibv_wr_set_sge_list(qpx, 1, sge);
+    ibv_wr_set_ud_addr(qpx, rdma->ah, remote_meta->qpn, QKEY);
+
+    int ret = ibv_wr_complete(qpx);
+    if (ret != 0) {
+      printf("  ERROR: ibv_wr_complete failed for atomic operation (error: %d)\n", ret);
+      printf("  This indicates atomic operations are NOT supported by this device/QP\n");
+    } else {
+      printf("  Atomic fetch-and-add operation posted successfully!\n");
+      // Poll for completion
+      int poll_count = 0;
+      while (poll_count < 1) {
+        poll_count += poll_cq(rdma, IBV_WC_FETCH_ADD);
+      }
+      printf("  Original value: 0x%lx\n", *local_atomic_buf);
+    }
+  } catch (...) {
+    printf("  EXCEPTION: Atomic fetch-and-add not supported\n");
+  }
+
+  printf("=== Atomic Operations Test Complete ===\n\n");
 }
 
 int main(int argc, char* argv[]) {

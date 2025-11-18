@@ -1,58 +1,42 @@
 // epoll_server.h
 // Header file containing epoll-based server implementation
+//
+// Features:
+//  - Auto port assignment: Set port=0 to let system assign available port
+//  - Member function callbacks: Use lambdas or std::bind to pass object methods
+//  - Synchronous (blocking) callback processing
+//  - Edge-triggered epoll for high performance
+//
+// Usage:
+//  1. With standalone function callback:
+//     EpollServer server(9000, my_callback_func);
+//
+//  2. With member function callback:
+//     MyClass obj;
+//     EpollServer server(9000,
+//         [&obj](const std::string& input, std::string& output) { obj.process(input, output); });
+//
+//  3. With auto port assignment:
+//     EpollServer server(0, my_callback);  // port=0 for auto-assign
+//     server.start();
+//     int actual_port = server.get_port();  // Get assigned port
 
 #ifndef EPOLL_SERVER_H
 #define EPOLL_SERVER_H
 
-#include <arpa/inet.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <sys/epoll.h>
-#include <sys/socket.h>
-#include <unistd.h>
+#include "define.h"
 
-#include <atomic>
-#include <chrono>
-#include <condition_variable>
-#include <cstring>
-#include <functional>
-#include <iostream>
-#include <map>
-#include <mutex>
-#include <queue>
-#include <string>
-#include <thread>
-#include <vector>
 
-// ---------------------------
-// Serialization utilities
-// ---------------------------
-template <typename T>
-std::string serialize(const T& obj) {
-    std::string s(sizeof(T), '\0');
-    std::memcpy(&s[0], reinterpret_cast<const char*>(&obj), sizeof(T));
-    return s;
-}
+// // Message framing: [uint32_t len][payload bytes]
 
-template <typename T>
-T deserialize(const std::string& s) {
-    T obj{};
-    size_t copy_len = std::min(s.size(), sizeof(T));
-    std::memcpy(reinterpret_cast<char*>(&obj), s.data(), copy_len);
-    return obj;
-}
-
-// Message framing: [uint32_t len][payload bytes]
-
-// ---------------------------
-// Example MetaInfo struct
-// ---------------------------
-struct MetaInfo {
-    int32_t client_id;
-    double value;
-    char message[64];
-};
+// // ---------------------------
+// // Example MetaInfo struct
+// // ---------------------------
+// struct MetaInfo {
+//     int32_t client_id;
+//     double value;
+//     char message[64];
+// };
 
 // ---------------------------
 // Simple thread pool
@@ -123,34 +107,18 @@ struct Connection {
 // Helper functions
 // ---------------------------
 
-static int make_socket_non_blocking(int fd) {
-    int flags = fcntl(fd, F_GETFL, 0);
-    if (flags == -1) return -1;
-    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) return -1;
-    return 0;
-}
 
-// try send entire buffer, return bytes_sent
-static ssize_t try_send(int fd, const char* buf, size_t len) {
-    ssize_t n = ::send(fd, buf, len, MSG_NOSIGNAL);
-    if (n < 0) {
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
-        return -1;
-    }
-    return n;
-}
 
 // ---------------------------
 // Epoll-based server class
 // ---------------------------
 class EpollServer {
 public:
-    using MetaHandler = std::function<void(const MetaInfo&, int client_fd)>;
+    using MetaHandler = std::function<void(const std::string&, std::string&)>;
 
-    EpollServer(int port, MetaHandler handler, int thread_count = 4, int max_events = 1024)
+    EpollServer(int port, MetaHandler handler, int max_events = 1024)
         : port_(port),
           handler_(std::move(handler)),
-          pool_(thread_count),
           max_events_(max_events),
           running_(false) {}
 
@@ -177,6 +145,19 @@ public:
             perror("bind");
             ::close(listen_fd_);
             return false;
+        }
+
+        // If port was 0, get the actual assigned port
+        if (port_ == 0) {
+            sockaddr_in assigned_addr{};
+            socklen_t addr_len = sizeof(assigned_addr);
+            if (getsockname(listen_fd_, (sockaddr*)&assigned_addr, &addr_len) < 0) {
+                perror("getsockname");
+                ::close(listen_fd_);
+                return false;
+            }
+            port_ = ntohs(assigned_addr.sin_port);
+            std::cout << "System assigned port: " << port_ << "\n";
         }
 
         if (make_socket_non_blocking(listen_fd_) < 0) {
@@ -238,6 +219,11 @@ public:
         }
         // block calling thread
         if (worker_thread_.joinable()) worker_thread_.join();
+    }
+
+    // Get the actual port being used (useful when port was set to 0 for auto-assignment)
+    int get_port() const {
+        return port_;
     }
 
 private:
@@ -365,41 +351,46 @@ private:
                     std::string payload(conn.in_buf.begin(), conn.in_buf.begin() + conn.expected_len);
                     // consume payload
                     conn.in_buf.erase(conn.in_buf.begin(), conn.in_buf.begin() + conn.expected_len);
-                    uint32_t got_len = conn.expected_len;
                     conn.expected_len = 0;
 
-                    // Deserialize to MetaInfo (assuming size matches)
-                    if (got_len != sizeof(MetaInfo)) {
-                        std::cerr << "Warning: payload size mismatch. expected=" << sizeof(MetaInfo)
-                                  << " got=" << got_len << "\n";
-                    }
-                    MetaInfo meta = deserialize<MetaInfo>(payload);
-
-                    // Before handing to thread pool, we must send a response to client per your requirement.
-                    std::string response = "Server ACK for client " + std::to_string(meta.client_id) + "\n";
-                    // try to send immediately
-                    ssize_t s = try_send(conn.fd, response.data(), response.size());
-                    if (s < 0) {
-                        // fatal send error -> close connection
-                        std::cerr << "Error sending immediate response on fd=" << conn.fd << "\n";
+                    // Call handler directly (blocking) with payload and get response
+                    std::string response;
+                    try {
+                        handler_(payload, response);
+                    } catch (const std::exception& e) {
+                        std::cerr << "Handler exception: " << e.what() << "\n";
                         remove_connection(conn.fd);
                         return;
-                    } else if ((size_t)s < response.size()) {
-                        // partial send -> buffer remainder and ensure EPOLLOUT monitored
-                        conn.out_buf.insert(conn.out_buf.end(), response.data() + s, response.data() + response.size());
-                        modify_epoll_out(conn.fd, true);
+                    } catch (...) {
+                        std::cerr << "Handler exception (unknown)\n";
+                        remove_connection(conn.fd);
+                        return;
                     }
-                    // Now dispatch to thread pool for processing
-                    int client_fd = conn.fd;
-                    MetaInfo meta_copy = meta;
-                    pool_.enqueue([this, meta_copy, client_fd]() {
-                        // user-provided handler
-                        try {
-                            handler_(meta_copy, client_fd);
-                        } catch (...) {
-                            std::cerr << "Handler exception\n";
+
+                    // Send response back to client with length header
+                    if (!response.empty()) {
+                        // Prepend length header (same format as client sends)
+                        uint32_t len = htonl((uint32_t)response.size());
+                        std::string pkt;
+                        pkt.reserve(sizeof(len) + response.size());
+                        pkt.append(reinterpret_cast<const char*>(&len), sizeof(len));
+                        pkt.append(response);
+
+                        std::cout << "Sending response: len=" << response.size()
+                                  << " total_with_header=" << pkt.size() << "\n";
+
+                        ssize_t s = try_send(conn.fd, pkt.data(), pkt.size());
+                        if (s < 0) {
+                            // fatal send error -> close connection
+                            std::cerr << "Error sending response on fd=" << conn.fd << "\n";
+                            remove_connection(conn.fd);
+                            return;
+                        } else if ((size_t)s < pkt.size()) {
+                            // partial send -> buffer remainder and ensure EPOLLOUT monitored
+                            conn.out_buf.insert(conn.out_buf.end(), pkt.data() + s, pkt.data() + pkt.size());
+                            modify_epoll_out(conn.fd, true);
                         }
-                    });
+                    }
                     // loop to see if more messages in buffer
                 } else {
                     break; // wait for more payload bytes
@@ -457,7 +448,6 @@ private:
 private:
     int port_;
     MetaHandler handler_;
-    ThreadPool pool_;
     int max_events_;
     int listen_fd_ = -1;
     int epoll_fd_ = -1;

@@ -1,11 +1,6 @@
 // rdma_device.h
 #pragma once
-#include <infiniband/verbs.h>
-#include <memory>
-#include <string>
-#include <vector>
-#include <iostream>
-#include <mutex>
+#include "define.h"
 
 class RdmaDevice {
 public:
