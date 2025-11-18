@@ -4,7 +4,6 @@
 #include "define.h"
 #include "rdma_device.h"
 
-
 class RdmaContext {
  public:
   explicit RdmaContext(std::shared_ptr<RdmaDevice> dev) {
@@ -18,11 +17,19 @@ class RdmaContext {
   }
 
   // Getters
-  struct ibv_context* getCtx() const { return ctx_.get(); }
-  struct ibv_context* ctx() const { return ctx_.get(); }
+  struct ibv_context* getCtx() const {
+    return ctx_.get();
+  }
+  struct ibv_context* ctx() const {
+    return ctx_.get();
+  }
 
-  struct ibv_pd* getPD() const { return pd_.get(); }
-  struct ibv_pd* pd() const { return pd_.get(); }
+  struct ibv_pd* getPD() const {
+    return pd_.get();
+  }
+  struct ibv_pd* pd() const {
+    return pd_.get();
+  }
 
   // Query GID by index
   void getGID(int gid_index, union ibv_gid* gid, int port = 1) const {
@@ -35,7 +42,7 @@ class RdmaContext {
   }
 
   union ibv_gid queryGid(int gid_index, int port = 1) const {
-    union ibv_gid gid{};
+    union ibv_gid gid {};
     getGID(gid_index, &gid, port);
     return gid;
   }
@@ -55,16 +62,16 @@ class RdmaContext {
     return createAH(remote_gid, port);
   }
 
-  struct ibv_mr* regMem(void* addr, size_t size ) const {
-      int access_flags = IBV_ACCESS_LOCAL_WRITE |
-                        IBV_ACCESS_REMOTE_WRITE |
-                        IBV_ACCESS_REMOTE_READ;
-      return ibv_reg_mr(pd_.get(), addr, size, access_flags);
+  struct ibv_mr* regMem(void* addr, size_t size) const {
+    int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                       IBV_ACCESS_REMOTE_READ;
+    return ibv_reg_mr(pd_.get(), addr, size, access_flags);
   }
 
-  static void deregMem(struct ibv_mr* mr){
-    if(mr) ibv_dereg_mr(mr);
+  static void deregMem(struct ibv_mr* mr) {
+    if (mr) ibv_dereg_mr(mr);
   }
+
  private:
   std::shared_ptr<struct ibv_context> ctx_;
   std::shared_ptr<struct ibv_pd> pd_;

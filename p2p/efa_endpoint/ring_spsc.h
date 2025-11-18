@@ -4,7 +4,8 @@
 template <typename T, size_t Capacity>
 class EmptyRingBuffer {
  public:
-  explicit EmptyRingBuffer(void* addr) : base_addr_(reinterpret_cast<uintptr_t>(addr)) {
+  explicit EmptyRingBuffer(void* addr)
+      : base_addr_(reinterpret_cast<uintptr_t>(addr)) {
     static_assert((Capacity & (Capacity - 1)) == 0,
                   "Capacity must be a power of two");
   }
@@ -16,14 +17,10 @@ class EmptyRingBuffer {
   }
 
   // Get the theoretical capacity of the ring
-  constexpr size_t capacity() const {
-    return Capacity;
-  }
+  constexpr size_t capacity() const { return Capacity; }
 
   // Get the total size in bytes
-  constexpr size_t sizeInBytes() const {
-    return Capacity * sizeof(T);
-  }
+  constexpr size_t sizeInBytes() const { return Capacity * sizeof(T); }
 
  private:
   uintptr_t base_addr_;
@@ -64,8 +61,8 @@ class RingBuffer {
   }
 
   // Disable copy
-  RingBuffer(const RingBuffer&) = delete;
-  RingBuffer& operator=(const RingBuffer&) = delete;
+  RingBuffer(RingBuffer const&) = delete;
+  RingBuffer& operator=(RingBuffer const&) = delete;
 
   // Enable move
   RingBuffer(RingBuffer&& other) noexcept
@@ -99,8 +96,7 @@ class RingBuffer {
   int push(T const& item) {
     size_t current_write = write_ptr.load(std::memory_order_relaxed);
     size_t next_write = (current_write + 1) & (Capacity - 1);
-    if (next_write == read_ptr.load(std::memory_order_acquire))
-      return -1;  
+    if (next_write == read_ptr.load(std::memory_order_acquire)) return -1;
     buffer_[current_write] = item;
     write_ptr.store(next_write, std::memory_order_release);
     return current_write;
@@ -108,8 +104,7 @@ class RingBuffer {
 
   bool pop(T& item) {
     size_t current_read = read_ptr.load(std::memory_order_relaxed);
-    if (current_read == write_ptr.load(std::memory_order_acquire))
-      return false;
+    if (current_read == write_ptr.load(std::memory_order_acquire)) return false;
     item = buffer_[current_read];
     read_ptr.store((current_read + 1) & (Capacity - 1),
                    std::memory_order_release);
@@ -121,8 +116,7 @@ class RingBuffer {
   int push_with_convert(U const& item, ConvertFunc&& converter) {
     size_t current_write = write_ptr.load(std::memory_order_relaxed);
     size_t next_write = (current_write + 1) & (Capacity - 1);
-    if (next_write == read_ptr.load(std::memory_order_acquire))
-      return -1;
+    if (next_write == read_ptr.load(std::memory_order_acquire)) return -1;
     converter(item, buffer_[current_write]);
     write_ptr.store(next_write, std::memory_order_release);
     return current_write;
@@ -132,8 +126,7 @@ class RingBuffer {
   template <typename U, typename ConvertFunc>
   bool pop_with_convert(U& item, ConvertFunc&& converter) {
     size_t current_read = read_ptr.load(std::memory_order_relaxed);
-    if (current_read == write_ptr.load(std::memory_order_acquire))
-      return false;
+    if (current_read == write_ptr.load(std::memory_order_acquire)) return false;
     converter(buffer_[current_read], item);
     read_ptr.store((current_read + 1) & (Capacity - 1),
                    std::memory_order_release);
@@ -144,7 +137,7 @@ class RingBuffer {
   //   size_t current_write = write_ptr.load(std::memory_order_relaxed);
   //   size_t current_read = read_ptr.load(std::memory_order_acquire);
   //   size_t used = current_write - current_read;
-  //   size_t available = Capacity - used - 1; 
+  //   size_t available = Capacity - used - 1;
   //   size_t to_write = std::min(count, available);
   //   for (size_t i = 0; i < to_write; ++i) {
   //     buffer_[(current_write + i) & (Capacity - 1)] = data[i];
@@ -218,9 +211,11 @@ class RingBuffer {
   }
 
   // Modify element at index and advance write_ptr if applicable
-  // Returns the number of positions write_ptr was advanced (0 if index != write_ptr)
+  // Returns the number of positions write_ptr was advanced (0 if index !=
+  // write_ptr)
   template <typename CheckFunc, typename ModifyFunc>
-  size_t modify_and_advance_write(size_t index, CheckFunc&& check, ModifyFunc&& modifier) {
+  size_t modify_and_advance_write(size_t index, CheckFunc&& check,
+                                  ModifyFunc&& modifier) {
     size_t pos = index & (Capacity - 1);
 
     // Modify the element at the specified position
@@ -259,9 +254,7 @@ class RingBuffer {
   }
 
   // Get the size of element type T
-  constexpr size_t elementSize() const {
-    return sizeof(T);
-  }
+  constexpr size_t elementSize() const { return sizeof(T); }
 
   // Get the address of element at given index as uint64_t
   uint64_t getElementAddress(size_t index) const {

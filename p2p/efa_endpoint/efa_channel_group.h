@@ -4,7 +4,6 @@
 #include "efa_ctrl_channel.h"
 #include <shared_mutex>
 
-
 class ChannelGroup {
  public:
   ChannelGroup() = default;
@@ -16,7 +15,7 @@ class ChannelGroup {
       throw std::invalid_argument("addChannel called with null channel");
     }
     std::unique_lock<std::shared_mutex> lock(mutex_);
-    
+
     channels_[channel_id] = std::move(channel);
   }
 
@@ -32,7 +31,7 @@ class ChannelGroup {
     return channels_.size();
   }
 
-  virtual const std::unordered_map<uint32_t, std::shared_ptr<EFAChannel>>&
+  virtual std::unordered_map<uint32_t, std::shared_ptr<EFAChannel>> const&
   channels() const {
     mutex_.lock_shared();
     mutex_.unlock_shared();  // just to annotate read lock expected
@@ -44,16 +43,14 @@ class ChannelGroup {
   std::unordered_map<uint32_t, std::shared_ptr<EFAChannel>> channels_;
 };
 
-
 class SendChannelGroup : public ChannelGroup {
  public:
   SendChannelGroup() : running_(false), poll_thread_(nullptr) {}
 
-  ~SendChannelGroup() {
-    stopPolling();
-  }
+  ~SendChannelGroup() { stopPolling(); }
 
-  void addChannel(uint32_t channel_id, std::shared_ptr<EFAChannel> channel) override {
+  void addChannel(uint32_t channel_id,
+                  std::shared_ptr<EFAChannel> channel) override {
     ChannelGroup::addChannel(channel_id, channel);
     // Add SendChannelGroup specific logic here
   }
@@ -70,7 +67,8 @@ class SendChannelGroup : public ChannelGroup {
     return result;
   }
 
-  std::unordered_map<uint32_t, std::shared_ptr<EFAChannel>> const& channels() const override {
+  std::unordered_map<uint32_t, std::shared_ptr<EFAChannel>> const& channels()
+      const override {
     // Add SendChannelGroup specific logic here
     return ChannelGroup::channels();
   }
@@ -79,7 +77,8 @@ class SendChannelGroup : public ChannelGroup {
   template <typename T>
   void setControlChannel(T&& ctrl_channel) {
     if (ctrl_channel_) {
-      throw std::runtime_error("SendChannelGroup: Control channel has already been set");
+      throw std::runtime_error(
+          "SendChannelGroup: Control channel has already been set");
     }
     ctrl_channel_ = std::forward<T>(ctrl_channel);
     startPolling();
@@ -112,7 +111,8 @@ class SendChannelGroup : public ChannelGroup {
       return;
     }
     running_.store(true);
-    poll_thread_ = std::make_unique<std::thread>(&SendChannelGroup::pollingLoop, this);
+    poll_thread_ =
+        std::make_unique<std::thread>(&SendChannelGroup::pollingLoop, this);
   }
 
   bool check(uint32_t channel_id, int64_t wr_id) {
@@ -155,43 +155,40 @@ class SendChannelGroup : public ChannelGroup {
   // }
   void pollingLoop() {
     while (running_.load(std::memory_order_acquire)) {
+      // ---- Step 1: Copy shared data under read lock ----
+      std::vector<std::shared_ptr<EFAChannel>> local_channels;
+      std::shared_ptr<SendControlChannel> local_ctrl;
 
-        // ---- Step 1: Copy shared data under read lock ----
-        std::vector<std::shared_ptr<EFAChannel>> local_channels;
-        std::shared_ptr<SendControlChannel> local_ctrl;
-
-        {   // scope for lock
-            std::shared_lock lock(mutex_);     
-            local_channels.reserve(channels_.size());
-            for (auto& kv : channels_) {
-                local_channels.push_back(kv.second);
-            }
-            local_ctrl = ctrl_channel_;
+      {  // scope for lock
+        std::shared_lock lock(mutex_);
+        local_channels.reserve(channels_.size());
+        for (auto& kv : channels_) {
+          local_channels.push_back(kv.second);
         }
+        local_ctrl = ctrl_channel_;
+      }
 
-        // ---- Step 2: unlock, do slow polling outside lock ----
-        CQMeta cq_data;
-        for (auto& ch : local_channels) {
-            if (ch) ch->poll_once(cq_data);
-        }
+      // ---- Step 2: unlock, do slow polling outside lock ----
+      CQMeta cq_data;
+      for (auto& ch : local_channels) {
+        if (ch) ch->poll_once(cq_data);
+      }
 
-        if (local_ctrl) {
-            local_ctrl->noblockingPoll();
-        }
+      if (local_ctrl) {
+        local_ctrl->noblockingPoll();
+      }
     }
-}
-
+  }
 };
 
 class RecvChannelGroup : public ChannelGroup {
  public:
   RecvChannelGroup() : running_(false), poll_thread_(nullptr) {}
 
-  ~RecvChannelGroup() {
-    stopPolling();
-  }
+  ~RecvChannelGroup() { stopPolling(); }
 
-  void addChannel(uint32_t channel_id, std::shared_ptr<EFAChannel> channel) override {
+  void addChannel(uint32_t channel_id,
+                  std::shared_ptr<EFAChannel> channel) override {
     ChannelGroup::addChannel(channel_id, channel);
     // Add RecvChannelGroup specific logic here
   }
@@ -208,7 +205,8 @@ class RecvChannelGroup : public ChannelGroup {
     return result;
   }
 
-  std::unordered_map<uint32_t, std::shared_ptr<EFAChannel>> const& channels() const override {
+  std::unordered_map<uint32_t, std::shared_ptr<EFAChannel>> const& channels()
+      const override {
     // Add RecvChannelGroup specific logic here
     return ChannelGroup::channels();
   }
@@ -217,7 +215,8 @@ class RecvChannelGroup : public ChannelGroup {
   template <typename T>
   void setControlChannel(T&& ctrl_channel) {
     if (ctrl_channel_) {
-      throw std::runtime_error("RecvChannelGroup: Control channel has already been set");
+      throw std::runtime_error(
+          "RecvChannelGroup: Control channel has already been set");
     }
     ctrl_channel_ = std::forward<T>(ctrl_channel);
     startPolling();
@@ -229,7 +228,8 @@ class RecvChannelGroup : public ChannelGroup {
       return;
     }
     running_.store(true);
-    poll_thread_ = std::make_unique<std::thread>(&RecvChannelGroup::pollingLoop, this);
+    poll_thread_ =
+        std::make_unique<std::thread>(&RecvChannelGroup::pollingLoop, this);
   }
 
   // Stop polling thread
@@ -247,9 +247,8 @@ class RecvChannelGroup : public ChannelGroup {
     return ctrl_channel_->postSendReq(req);
   }
 
-  bool check(uint64_t index){
-    return ctrl_channel_->check_done(index);
-  }
+  bool check(uint64_t index) { return ctrl_channel_->check_done(index); }
+
  private:
   std::shared_ptr<RecvControlChannel> ctrl_channel_;
   std::atomic<bool> running_;
@@ -268,40 +267,39 @@ class RecvChannelGroup : public ChannelGroup {
   //         }
   //       }
   //     }
-      
+
   //   }
   // }
   // 修改后的 pollingLoop（RecvChannelGroup）
-void pollingLoop() {
-  while (running_.load(std::memory_order_acquire)) {
-    CQMeta cq_data;
-    std::vector<std::shared_ptr<EFAChannel>> snapshot;
-    {
-      std::shared_lock<std::shared_mutex> lock(mutex_); 
-      snapshot.reserve(channels_.size());
-      for (auto &kv : channels_) {
-        snapshot.push_back(kv.second);
-      }
-    }
-
-    for (auto &channel : snapshot) {
-      if (!channel) continue;          
-      bool polled = false;
-      try {
-        polled = channel->poll_once(cq_data);
-      } catch (...) {
-        std::cout<<"????????????????????????"<<std::endl;
-      }
-      if (polled && cq_data.hasIMM()) {
-        if (ctrl_channel_) {
-          ctrl_channel_->recv_done(cq_data.imm);
+  void pollingLoop() {
+    while (running_.load(std::memory_order_acquire)) {
+      CQMeta cq_data;
+      std::vector<std::shared_ptr<EFAChannel>> snapshot;
+      {
+        std::shared_lock<std::shared_mutex> lock(mutex_);
+        snapshot.reserve(channels_.size());
+        for (auto& kv : channels_) {
+          snapshot.push_back(kv.second);
         }
       }
+
+      for (auto& channel : snapshot) {
+        if (!channel) continue;
+        bool polled = false;
+        try {
+          polled = channel->poll_once(cq_data);
+        } catch (...) {
+          std::cout << "????????????????????????" << std::endl;
+        }
+        if (polled && cq_data.hasIMM()) {
+          if (ctrl_channel_) {
+            ctrl_channel_->recv_done(cq_data.imm);
+          }
+        }
+      }
+
+      // optional small sleep/yield to avoid busy-looping if desired:
+      // std::this_thread::yield();
     }
-
-    // optional small sleep/yield to avoid busy-looping if desired:
-    // std::this_thread::yield();
   }
-}
-
 };

@@ -11,7 +11,7 @@ class EFAChannel {
         cq_ex_(nullptr),
         ah_(nullptr),
         local_meta_(std::make_shared<ChannelMetaData>()),
-        remote_meta_(std::make_shared<ChannelMetaData>()){
+        remote_meta_(std::make_shared<ChannelMetaData>()) {
     tracker_ = std::make_shared<AtomicBitmapPacketTracker>();
     initQP();
   }
@@ -23,7 +23,7 @@ class EFAChannel {
         cq_ex_(nullptr),
         ah_(nullptr),
         local_meta_(std::make_shared<ChannelMetaData>()),
-        remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)){
+        remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)) {
     tracker_ = std::make_shared<AtomicBitmapPacketTracker>();
     initQP();
     ah_ = ctx_->createAH(remote_meta_->gid);
@@ -46,9 +46,10 @@ class EFAChannel {
     qpx->wr_flags = IBV_SEND_SIGNALED;
     ibv_wr_rdma_write(qpx, req->getRemoteKey(), req->getRemoteAddress());
 
-    struct ibv_sge sge{reinterpret_cast<uint64_t>(req->getLocalAddress()),
-                       reinterpret_cast<uint32_t>(req->getLocalLen()),
-                       req->getLocalKey()};
+    struct ibv_sge sge {
+      reinterpret_cast<uint64_t>(req->getLocalAddress()),
+          reinterpret_cast<uint32_t>(req->getLocalLen()), req->getLocalKey()
+    };
     ibv_wr_set_sge_list(qpx, 1, &sge);
     ibv_wr_set_ud_addr(qpx, ah_, remote_meta_->qpn, QKEY);
 
@@ -68,8 +69,10 @@ class EFAChannel {
     qpx->wr_flags = IBV_SEND_SIGNALED;
     ibv_wr_rdma_read(qpx, req->getRemoteKey(), req->getRemoteAddress());
 
-    struct ibv_sge sge{reinterpret_cast<uint64_t>(req->getLocalAddress()),
-                       req->getLocalLen(), req->getLocalKey()};
+    struct ibv_sge sge {
+      reinterpret_cast<uint64_t>(req->getLocalAddress()), req->getLocalLen(),
+          req->getLocalKey()
+    };
     ibv_wr_set_sge_list(qpx, 1, &sge);
     ibv_wr_set_ud_addr(qpx, ah_, remote_meta_->qpn, QKEY);
 
@@ -127,7 +130,7 @@ class EFAChannel {
   }
 
   bool poll_once(CQMeta& cq_data) {
-    if(!cq_ex_){
+    if (!cq_ex_) {
       return false;
     }
     struct ibv_poll_cq_attr poll_cq_attr = {.comp_mask = 0};
@@ -190,7 +193,6 @@ class EFAChannel {
           std::cout << "wr_id == expected_wr:" << expected_wr << std::endl;
           break;
         }
-
       }
       err = ibv_next_poll(cq_ex_);
     }
@@ -198,8 +200,12 @@ class EFAChannel {
     if (should_end_poll) ibv_end_poll(cq_ex_);
   }
 
-  struct ibv_cq_ex* getCQ() const { return cq_ex_; }
-  struct ibv_qp* getQP() const { return qp_; }
+  struct ibv_cq_ex* getCQ() const {
+    return cq_ex_;
+  }
+  struct ibv_qp* getQP() const {
+    return qp_;
+  }
 
   // Get local metadata
   std::shared_ptr<ChannelMetaData> get_local_meta() const {

@@ -410,8 +410,8 @@ class EFAEndpoint {
                 << " bytes for recv control channel ring buffer at "
                 << ctrl_mem->addr << std::endl;
 
-      auto recv_ctrl_channel = std::make_shared<RecvControlChannel>(
-          ctx_ptr, meta, ctrl_mem);
+      auto recv_ctrl_channel =
+          std::make_shared<RecvControlChannel>(ctx_ptr, meta, ctrl_mem);
 
       // Create respons
       RemoteMemInfo ctrl_info(ctrl_mem);
