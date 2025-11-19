@@ -99,3 +99,4 @@ transport_test
 ep/figs
 
 ep/deep_ep_wrapper/deep_ep.egg-info/
+*.json
