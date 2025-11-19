@@ -18,6 +18,11 @@ You can directly build and install into your Python env:
 python setup.py install
 ```
 
+You can also use `make` to build and install (might deprecate in the future): 
+```bash
+make -j install
+```
+
 Alternatively, you can build `uccl.ep` wheel using docker then install:
 ```bash
 # Under uccl
