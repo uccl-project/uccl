@@ -5,9 +5,9 @@ setup(
     version="0.1.0",
     packages=find_packages(),
     install_requires=[
-        "uccl",  # 声明依赖
+        "uccl",
     ],
-    author="whn09",
+    author="uccl",
     description="A wrapper package for uccl.ep with additional functionality",
     python_requires=">=3.6",
 )

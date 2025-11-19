@@ -10,14 +10,12 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 # Disable NVLink.
 NV_LINK_DISABLE=0
 MULTI_GROUP=0
-# NIC=10.1.0.0/16
-NIC=172.31.0.0/16
+NIC=10.1.0.0/16
 # Processes/Ranks/GPUs per node.
 PROCS_PER_NODE=8
 
 TEST=${1:-srd}
-# NUM_PROCS=${2:-32}
-NUM_PROCS=${2:-16}
+NUM_PROCS=${2:-32}
 PROG_NAME=${3:-0}
 
 # all_gather_perf  all_reduce_perf  alltoall_perf  broadcast_perf  gather_perf
@@ -34,8 +32,7 @@ else
     exit 1
 fi
 
-# CHANNELS=32
-CHANNELS=16
+CHANNELS=32
 CHANNELS_NET_PEER=1
 
 # UCCL optimal parameters. Yang: for allreduce with nvlink, we need to use larger buffer to catch up with NCCL with larger buffers, and avoid outliers.
@@ -58,7 +55,7 @@ if [ "$TEST" = "srd" ]; then
         >"nccl_test_outputs/output_rank_$rank.log"
     done
 
-    LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
+    LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl/build/lib/libnccl.so"
     PLUGIN_PATH="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so"
 
     mpirun --bind-to none -np ${NUM_PROCS} -N ${PROCS_PER_NODE} --hostfile $NODEFILE --map-by ppr:8:node \
@@ -78,9 +75,7 @@ if [ "$TEST" = "srd" ]; then
         -x NCCL_NCHANNELS_PER_NET_PEER=${CHANNELS_NET_PEER} \
         -x NCCL_P2P_NET_CHUNKSIZE=${CHUNK_SIZE} \
         -x NCCL_BUFFSIZE=${BUFFSIZE} \
-        -x UCCL_EFA_DEVICES=rdmap110s0,rdmap112s0,rdmap135s0,rdmap137s0,rdmap160s0,rdmap162s0,rdmap85s0,rdmap87s0,rdmap111s0,rdmap113s0,rdmap136s0,rdmap138s0,rdmap161s0,rdmap163s0,rdmap86s0,rdmap88s0 \
-        -x UCCL_ENA_DEVICES=enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0 \
-        /usr/local/cuda-12.9/efa/test-cuda-12.9/${PROG_NAME} \
+        ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} \
         -b 1K -e 1G -f 2 -c 1 -w 5 -n 10 -t 1 -g 1 \
         2>&1 | while read -r line; do
         if [[ "$line" =~ ^\[[0-9]+,([0-9]+)\](.+) ]]; then
@@ -134,9 +129,7 @@ elif [ "$TEST" = "ud" ]; then
         -x NCCL_TOPO_FILE=${UCCL_HOME}/collective/efa/p4d-24xl-topo.xml \
         -x NCCL_PXN_DISABLE=1 \
         -x UCCL_ENGINE_QUIET=1 \
-        -x UCCL_EFA_DEVICES=rdmap110s0,rdmap112s0,rdmap135s0,rdmap137s0,rdmap160s0,rdmap162s0,rdmap85s0,rdmap87s0,rdmap111s0,rdmap113s0,rdmap136s0,rdmap138s0,rdmap161s0,rdmap163s0,rdmap86s0,rdmap88s0 \
-        -x UCCL_ENA_DEVICES=enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0,enp71s0 \
-        /usr/local/cuda-12.9/efa/test-cuda-12.9/${PROG_NAME} \
+        ${UCCL_HOME}/thirdparty/nccl-tests/build/${PROG_NAME} \
         -b 1K -e 1G -f 2 -c 1 -w 5 -n 10 -t 1 -g 1 \
         2>&1 | while read -r line; do
         if [[ "$line" =~ ^\[[0-9]+,([0-9]+)\](.+) ]]; then
