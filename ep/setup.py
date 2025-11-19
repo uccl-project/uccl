@@ -151,6 +151,10 @@ if __name__ == "__main__":
             # Disable some SM90 features: FP8, launch methods, and TMA
             cxx_flags.append("-DDISABLE_SM90_FEATURES")
             nvcc_flags.append("-DDISABLE_SM90_FEATURES")
+        else:
+            # For SM90 and above, add register usage optimization
+            if float(default_arch) >= 9.0:
+                nvcc_flags.extend(["--ptxas-options=--register-usage-level=10"])
 
         os.environ["TORCH_CUDA_ARCH_LIST"] = os.getenv(
             "TORCH_CUDA_ARCH_LIST", default_arch
