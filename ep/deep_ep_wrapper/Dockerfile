@@ -2,6 +2,8 @@ FROM lmsysorg/sglang:latest
 RUN apt-get update
 RUN apt-get install -y linux-headers-generic
 RUN apt -y install build-essential devscripts debhelper check libsubunit-dev fakeroot pkg-config dkms
+# Performance regression with the latest sglang version. 
+RUN pip install --force-reinstall sglang==0.5.3 
 RUN cd $HOME \
     && wget https://github.com/NVIDIA/gdrcopy/archive/refs/tags/v2.4.tar.gz \
     && tar xf v2.4.tar.gz \

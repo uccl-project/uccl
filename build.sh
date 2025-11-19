@@ -105,7 +105,6 @@ build_ccl_efa() {
 
   # EFA requires a custom NCCL.
   cd thirdparty/nccl-sg
-  # make src.build -j$(nproc) NVCC_GENCODE="-gencode=arch=compute_80,code=sm_80"
   make src.build -j$(nproc) NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90"
   cd ../..
 
