@@ -29,6 +29,7 @@ struct PeerMeta {
   uintptr_t ptr;
   size_t nbytes;
   std::string ip;
+  int listen_ports[kNumProxyThs];
 };
 
 class Proxy {
@@ -43,22 +44,18 @@ class Proxy {
     int rank = 0;
     int node_idx = -1;
     int local_rank = -1;
-    char const* peer_ip = nullptr;
     bool pin_thread = true;
     int num_experts = 0;
     int num_ranks = 0;
     int num_nodes = 0;
     bool use_normal_mode =
         false;  // Runtime flag for normal mode (batching optimization)
+    bool is_intranode = false;
   };
 
-  explicit Proxy(Config const& cfg) : cfg_(cfg) {
-    // Initialize state tracking for each ring buffer
-#ifndef USE_MSCCLPP_FIFO_BACKEND
-    ring_tails_.resize(cfg_.d2h_queues.size(), 0);
-    ring_seen_.resize(cfg_.d2h_queues.size(), 0);
-#endif
-  }
+  Proxy(Config const& cfg);
+
+  int get_listen_port() const { return listen_port_; }
 
   void set_progress_run(bool run) {
     ctx_.progress_run.store(run, std::memory_order_release);
@@ -107,6 +104,12 @@ class Proxy {
   void quiet_cq();
   RDMAConnectionInfo local_info_{}, remote_info_{};
 
+  // Reuse across multiple calls to avoid reallocations
+  std::vector<uint64_t> wrs_to_post;
+  std::vector<TransferCmd> cmds_to_post;
+  std::vector<uint64_t> rdma_wrs, atomic_wrs, quiet_wrs, barrier_wrs;
+  std::vector<TransferCmd> rdma_cmds, atomic_cmds, quiet_cmds, barrier_cmds;
+
   // Completion tracking
   std::unordered_set<uint64_t> acked_wrs_;
   std::unordered_map<uint64_t, std::chrono::high_resolution_clock::time_point>
@@ -117,6 +120,10 @@ class Proxy {
   // Sender loop aggregates
   std::chrono::duration<double, std::micro> total_rdma_write_durations_ =
       std::chrono::duration<double, std::micro>::zero();
+
+  // For exchanging RDMA metadata with peers.
+  int listen_fd_;
+  int listen_port_;
 
   std::vector<PeerMeta> peers_;
   std::vector<std::unique_ptr<ProxyCtx>> ctxs_for_all_ranks_;

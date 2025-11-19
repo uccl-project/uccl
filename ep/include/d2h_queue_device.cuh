@@ -73,7 +73,7 @@ struct D2HHandle {
   __device__ __forceinline__ bool atomic_set_and_commit(
       TransferCmd const& item, uint64_t* out_slot = nullptr) {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
-#if defined(MSCCLPP_DEVICE_COMPILE)
+#ifdef MSCCLPP_DEVICE_COMPILE
     mscclpp::ProxyTrigger trig;
     uint64_t fst, snd;
     pack_transfer_cmd(item, fst, snd);

@@ -318,8 +318,7 @@ void listener_thread_func(uccl_conn_t* conn) {
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
-  // TODO: Infer the device idx during memory registration
-  eng->endpoint = new Endpoint(0, num_cpus);
+  eng->endpoint = new Endpoint(num_cpus);
   return eng;
 }
 
@@ -412,11 +411,37 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
                      size_t data_size) {
   if (!conn || !mr || !data) return -1;
-  uint64_t transfer_id;
-  return conn->engine->endpoint->recv_async(conn->conn_id, mr->mr_id, data,
-                                            data_size, &transfer_id)
+
+#ifdef USE_TCPX
+  // TCPX: no background progress thread exists, so drive progress here.
+  uint64_t transfer_id = 0;
+  if (!conn->engine->endpoint->recv_async(conn->conn_id, mr->mr_id, data,
+                                          data_size, &transfer_id)) {
+    return -1;
+  }
+
+  // Poll until the transfer completes (drives Stage 1 and Stage 2).
+  bool done = false;
+  // Simple adaptive backoff: spin a few times, then sleep briefly.
+  int spins = 0;
+  while (!done) {
+    if (!conn->engine->endpoint->poll_async(transfer_id, &done)) {
+      return -1;
+    }
+    if (!done) {
+      if (spins < 64) {
+        ++spins;  // brief spin to reduce tail latency on large transfers
+      } else {
+        std::this_thread::sleep_for(std::chrono::microseconds(5));
+      }
+    }
+  }
+  return 0;
+#else
+  return conn->engine->endpoint->recv(conn->conn_id, mr->mr_id, data, data_size)
              ? 0
              : -1;
+#endif
 }
 
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {
@@ -490,6 +515,7 @@ void uccl_engine_conn_destroy(uccl_conn_t* conn) {
 void uccl_engine_mr_destroy(uccl_mr_t* mr) {
   for (auto it = mem_reg_info.begin(); it != mem_reg_info.end(); ++it) {
     if (it->second == mr->mr_id) {
+      mr->engine->endpoint->dereg(mr->mr_id);
       mem_reg_info.erase(it);
       break;
     }
@@ -587,7 +613,8 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
   if (!engine || !metadata) return -1;
 
   try {
-    std::vector<uint8_t> metadata_vec = engine->endpoint->get_metadata();
+    std::vector<uint8_t> metadata_vec =
+        engine->endpoint->get_unified_metadata();
 
     std::string result;
     if (metadata_vec.size() == 10) {  // IPv4 format

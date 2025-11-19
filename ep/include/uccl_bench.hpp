@@ -35,7 +35,6 @@ class Bench {
   void timing_stop();
 
   // pure C++ (no pybind)
-  void start_local_proxies(int rank = 0, std::string const& peer_ip = {});
   void launch_gpu_issue_batched_commands();
   void sync_stream();
 

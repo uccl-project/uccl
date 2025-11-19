@@ -1,8 +1,3 @@
-/*************************************************************************
- * Copyright (c) 2024, UCCL Project. All rights reserved.
- *
- * See LICENSE.txt for license information
- ************************************************************************/
 #ifndef TCPX_DEVICE_UNPACK_LAUNCH_H_
 #define TCPX_DEVICE_UNPACK_LAUNCH_H_
 

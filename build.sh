@@ -7,7 +7,7 @@ set -e
 # a purpose-built Docker image derived from Ubuntu 22.04.
 #
 # Usage:
-#   ./build.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url] [therock_base_image]
+#   ./build.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image]
 #
 # The wheels are written to wheelhouse-[cuda|rocm|therock]
 # -----------------------
@@ -17,14 +17,14 @@ BUILD_TYPE=${2:-all}
 PY_VER=${3:-$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")}
 ARCH="$(uname -m)"
 # The default for ROCM_IDX_URL depends on the gfx architecture of your GPU and the index URLs may change.
-ROCM_IDX_URL=${4:-https://rocm.nightlies.amd.com/v2/gfx94X-dcgpu}
+ROCM_IDX_URL=${4:-https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu}
 # The default for THEROCK_BASE_IMAGE is current, but may change. Make sure to track TheRock's dockerfile.
 THEROCK_BASE_IMAGE=${5:-quay.io/pypa/manylinux_2_28_x86_64@sha256:d632b5e68ab39e59e128dcf0e59e438b26f122d7f2d45f3eea69ffd2877ab017}
 IS_EFA=$( [ -d "/sys/class/infiniband/" ] && ls /sys/class/infiniband/ 2>/dev/null | grep -q rdmap && echo "EFA support: true" ) || echo "EFA support: false"
 
 
 if [[ $TARGET != cuda* && $TARGET != rocm* && $TARGET != "therock" ]]; then
-  echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep|eccl] [py_version] [rocm_index_url]" >&2
+  echo "Usage: $0 [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image]" >&2
   exit 1
 fi
 
@@ -50,13 +50,13 @@ build_rccl_nccl_h() {
   fi
 }
 
-build_rdma() {
+build_ccl_rdma() {
   local TARGET="$1"
   local ARCH="$2"
   local IS_EFA="$3"
 
   set -euo pipefail
-  echo "[container] build_rdma Target: $TARGET"
+  echo "[container] build_ccl_rdma Target: $TARGET"
   
   if [[ "$TARGET" == cuda* ]]; then
     cd collective/rdma && make clean && make -j$(nproc) && cd ../../
@@ -89,13 +89,13 @@ build_rdma() {
   cp ${TARGET_SO} uccl/lib/
 }
 
-build_efa() {
+build_ccl_efa() {
   local TARGET="$1"
   local ARCH="$2"
   local IS_EFA="$3"
 
   set -euo pipefail
-  echo "[container] build_efa Target: $TARGET"
+  echo "[container] build_ccl_efa Target: $TARGET"
 
   if [[ "$ARCH" == "aarch64" || "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
     echo "Skipping EFA build on Arm64 (no EFA installer) or ROCm (no CUDA)."
@@ -137,6 +137,8 @@ build_p2p() {
   mkdir -p uccl
   mkdir -p uccl/lib
   if [[ -z "${USE_TCPX:-}" || "$USE_TCPX" != "1" ]]; then
+    cp p2p/libuccl_p2p.so uccl/lib/
+    cp p2p/librdma_plugin.a uccl/lib/
     cp p2p/p2p.*.so uccl/
     cp p2p/collective.py uccl/
     cp p2p/transfer.py uccl/
@@ -156,20 +158,15 @@ build_ep() {
 
   if [[ "$TARGET" == "therock" ]]; then
     echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
-  elif [[ "$TARGET" == rocm* ]]; then
+  elif [[ "$TARGET" == rocm* || "$TARGET" == cuda* ]]; then
     cd ep
+    # This may be needed if you traverse through different git commits
+    # rm *.d src/*.d bench/*.d src/*.o **/*.hip **/*_hip.*
     python3 setup.py build
     cd ..
     echo "[container] Copying GPU-driven .so to uccl/"
     mkdir -p uccl/lib
     cp ep/build/**/*.so uccl/
-  elif [[ "$TARGET" == cuda* ]]; then
-    cd ep
-    make clean && make -j$(nproc) all
-    cd ..
-    echo "[container] Copying GPU-driven .so to uccl/"
-    mkdir -p uccl/lib
-    cp ep/*.so uccl/
   fi
 }
 
@@ -265,7 +262,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
   -e USE_TCPX="${USE_TCPX:-0}" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
-  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_rdma build_efa build_p2p build_ep build_eccl)" \
+  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_ccl_rdma build_ccl_efa build_p2p build_ep build_eccl)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
     set -euo pipefail
@@ -289,10 +286,10 @@ docker run --rm --user "$(id -u):$(id -g)" \
       build_rccl_nccl_h
     fi
 
-    if [[ "$BUILD_TYPE" == "rdma" ]]; then
-      build_rdma "$TARGET" "$ARCH" "$IS_EFA"
-    elif [[ "$BUILD_TYPE" == "efa" ]]; then
-      build_efa "$TARGET" "$ARCH" "$IS_EFA"
+    if [[ "$BUILD_TYPE" == "ccl_rdma" ]]; then
+      build_ccl_rdma "$TARGET" "$ARCH" "$IS_EFA"
+    elif [[ "$BUILD_TYPE" == "ccl_efa" ]]; then
+      build_ccl_efa "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "p2p" ]]; then
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "ep" ]]; then
@@ -300,8 +297,8 @@ docker run --rm --user "$(id -u):$(id -g)" \
     elif [[ "$BUILD_TYPE" == "eccl" ]]; then
       build_eccl "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "all" ]]; then
-      build_rdma "$TARGET" "$ARCH" "$IS_EFA"
-      build_efa "$TARGET" "$ARCH" "$IS_EFA"
+      build_ccl_rdma "$TARGET" "$ARCH" "$IS_EFA"
+      build_ccl_efa "$TARGET" "$ARCH" "$IS_EFA"
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
       # build_ep "$TARGET" "$ARCH" "$IS_EFA"
       # build_eccl "$TARGET" "$ARCH" "$IS_EFA"
@@ -351,11 +348,15 @@ def initialize():
 
     # Add backend tag to wheel filename using local version identifier
     if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
+      # Adjust TARGET to the preferred wheel name suffix for python-packaged ROCm, e.g. "rocm7.9.0rc1"
+      if [[ "$TARGET" == "therock" ]]; then
+        TARGET="rocm$(rocm-sdk version)"
+      fi
       cd /io/${WHEEL_DIR}
       for wheel in uccl-*.whl; do
         if [[ -f "$wheel" ]]; then
           # Extract wheel name components: uccl-version-python-abi-platform.whl
-          if [[ "$wheel" =~ ^(uccl-)([^-]+)-([^-]+-[^-]+-[^.]+)(\.whl)$ ]]; then
+          if [[ "$wheel" =~ ^(uccl-)([^-]+)-([^-]+-[^-]+-.+)(\.whl)$ ]]; then
             name="${BASH_REMATCH[1]}"
             version="${BASH_REMATCH[2]}"
             python_abi_platform="${BASH_REMATCH[3]}"
