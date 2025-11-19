@@ -64,6 +64,10 @@ if __name__ == "__main__":
     extra_link_args = []
 
     if torch.version.cuda:
+        # Add CUDA library directory to library_dirs
+        cuda_home = os.getenv("CUDA_HOME", "/usr/local/cuda")
+        library_dirs.append(str(Path(cuda_home) / "lib64"))
+
         # EFA (Elastic Fabric Adapter) Detection
         efa_home = os.getenv("EFA_HOME", "/opt/amazon/efa")
         has_efa = os.path.exists(efa_home)
@@ -79,6 +83,7 @@ if __name__ == "__main__":
         # GPU Detection
         gpu_name = ""
         gpu_is_hopper = False
+        detected_compute_cap = None
         try:
             gpu_query = (
                 subprocess.check_output(
@@ -91,8 +96,25 @@ if __name__ == "__main__":
             )
             gpu_name = gpu_query
             gpu_is_hopper = "GH200" in gpu_name
-        except Exception:
-            print("Warning: Could not detect GPU name via nvidia-smi")
+
+            # Auto-detect compute capability
+            compute_cap_query = (
+                subprocess.check_output(
+                    [
+                        "nvidia-smi",
+                        "--query-gpu=compute_cap",
+                        "--format=csv,noheader",
+                    ],
+                    stderr=subprocess.DEVNULL,
+                )
+                .decode("ascii")
+                .strip()
+                .split("\n")[0]
+            )
+            detected_compute_cap = compute_cap_query.strip()
+            print(f"Detected GPU compute capability: {detected_compute_cap}")
+        except Exception as e:
+            print(f"Warning: Could not detect GPU info via nvidia-smi: {e}")
 
         # GH200 (Grace Hopper) Detection
         has_gh200 = cpu_is_arm64 and gpu_is_hopper
@@ -116,27 +138,27 @@ if __name__ == "__main__":
             cxx_flags.append("-DUSE_GRACE_HOPPER")
             nvcc_flags.append("-DUSE_GRACE_HOPPER")
 
-        if int(os.getenv("DISABLE_SM90_FEATURES", 0)):
-            # Prefer A100
-            os.environ["TORCH_CUDA_ARCH_LIST"] = os.getenv(
-                "TORCH_CUDA_ARCH_LIST", "8.0"
-            )
+        # Use auto-detected compute capability if available
+        if detected_compute_cap:
+            default_arch = detected_compute_cap
+        else:
+            # Fallback to 9.0 if detection failed
+            default_arch = "9.0"
 
+        if int(os.getenv("DISABLE_SM90_FEATURES", 0)):
+            # Force A100 architecture
+            default_arch = "8.0"
             # Disable some SM90 features: FP8, launch methods, and TMA
             cxx_flags.append("-DDISABLE_SM90_FEATURES")
             nvcc_flags.append("-DDISABLE_SM90_FEATURES")
-
         else:
-            # Prefer H800 series
-            os.environ["TORCH_CUDA_ARCH_LIST"] = os.getenv(
-                "TORCH_CUDA_ARCH_LIST", "9.0"
-            )
+            # For SM90 and above, add register usage optimization
+            if float(default_arch) >= 9.0:
+                nvcc_flags.extend(["--ptxas-options=--register-usage-level=10"])
 
-            # CUDA 12 flags
-            nvcc_flags.extend(
-                ["-rdc=true", "--ptxas-options=--register-usage-level=10"]
-            )
-
+        os.environ["TORCH_CUDA_ARCH_LIST"] = os.getenv(
+            "TORCH_CUDA_ARCH_LIST", default_arch
+        )
         device_arch = os.environ["TORCH_CUDA_ARCH_LIST"]
     else:
         # Disable SM90 features on AMD
@@ -150,9 +172,14 @@ if __name__ == "__main__":
         os.environ["PYTORCH_ROCM_ARCH"] = device_arch
 
     # Disable LD/ST tricks, as some CUDA version does not support `.L1::no_allocate`
-    if device_arch.strip() != "9.0":
-        assert int(os.getenv("DISABLE_AGGRESSIVE_PTX_INSTRS", 1)) == 1
-        os.environ["DISABLE_AGGRESSIVE_PTX_INSTRS"] = "1"
+    # Only enable aggressive PTX instructions for SM 9.0+ (H100/H800/B200)
+    try:
+        arch_version = float(device_arch.strip())
+        if arch_version < 9.0:
+            os.environ["DISABLE_AGGRESSIVE_PTX_INSTRS"] = "1"
+    except (ValueError, AttributeError):
+        # If we can't parse the arch, be conservative
+        os.environ.setdefault("DISABLE_AGGRESSIVE_PTX_INSTRS", "1")
 
     # Disable aggressive PTX instructions
     if int(os.getenv("DISABLE_AGGRESSIVE_PTX_INSTRS", "1")):
