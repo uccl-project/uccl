@@ -177,12 +177,14 @@ if __name__ == "__main__":
         arch_version = float(device_arch.strip())
         if arch_version < 9.0:
             os.environ["DISABLE_AGGRESSIVE_PTX_INSTRS"] = "1"
+        else:
+            # Enable aggressive PTX instructions for SM 9.0+
+            os.environ.setdefault("DISABLE_AGGRESSIVE_PTX_INSTRS", "0")
     except (ValueError, AttributeError):
-        # If we can't parse the arch, be conservative
         os.environ.setdefault("DISABLE_AGGRESSIVE_PTX_INSTRS", "1")
 
-    # Disable aggressive PTX instructions
-    if int(os.getenv("DISABLE_AGGRESSIVE_PTX_INSTRS", "1")):
+    # Apply aggressive PTX instruction flag
+    if int(os.getenv("DISABLE_AGGRESSIVE_PTX_INSTRS", "0")):
         cxx_flags.append("-DDISABLE_AGGRESSIVE_PTX_INSTRS")
         nvcc_flags.append("-DDISABLE_AGGRESSIVE_PTX_INSTRS")
 
