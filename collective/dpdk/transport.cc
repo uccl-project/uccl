@@ -185,8 +185,8 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb* pcb, Packet* pkt) {
   if (distance >= kReassemblyMaxSeqnoDistance) {
     // VLOG(3) << "Packet too far ahead. Dropping as we can't handle SACK. "
     //         << "seqno: " << seqno << ", expected: " << expected_seqno;
-      // LOG(INFO) << "Packet too far ahead. Dropping as we can't handle SACK. "
-      //           << "seqno: " << seqno << ", expected: " << expected_seqno;
+    // LOG(INFO) << "Packet too far ahead. Dropping as we can't handle SACK. "
+    //           << "seqno: " << seqno << ", expected: " << expected_seqno;
     socket_->push_packet(pkt);
     return kOOOUntrackable;
   }
@@ -573,7 +573,8 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
       if (!missing_frames_.empty()) {
         VLOG(2) << "Fast recovery retransmitting " << missing_frames_.size()
                 << " missing packets";
-        // LOG(INFO) << "Fast recovery retransmitting " << missing_frames_.size()
+        // LOG(INFO) << "Fast recovery retransmitting " <<
+        // missing_frames_.size()
         //           << " missing packets";
         // TODO(yang): handling the cases where the number of
         // missing frames is larger than the free send_queue size.

@@ -1,19 +1,15 @@
 #include "packet_pool.h"
-
 #include <glog/logging.h>
-
+#include <string>
 #include <rte_mbuf.h>
 #include <rte_mbuf_pool_ops.h>
 #include <rte_mempool.h>
 
-#include <string>
-
 namespace uccl {
 
-[[maybe_unused]] static rte_mempool *
-CreateSpScPacketPool(const std::string &name, uint32_t nmbufs,
-                     uint16_t mbuf_data_size) {
-  struct rte_mempool *mp;
+[[maybe_unused]] static rte_mempool* CreateSpScPacketPool(
+    std::string const& name, uint32_t nmbufs, uint16_t mbuf_data_size) {
+  struct rte_mempool* mp;
   struct rte_pktmbuf_pool_private mbp_priv;
 
   const uint16_t priv_size = 0;
@@ -22,7 +18,7 @@ CreateSpScPacketPool(const std::string &name, uint32_t nmbufs,
   mbp_priv.mbuf_data_room_size = mbuf_data_size;
   mbp_priv.mbuf_priv_size = priv_size;
 
-  const unsigned int kMemPoolFlags =
+  unsigned int const kMemPoolFlags =
       RTE_MEMPOOL_F_SC_GET | RTE_MEMPOOL_F_SP_PUT;
   mp = rte_mempool_create(name.c_str(), nmbufs, elt_size, 0, sizeof(mbp_priv),
                           rte_pktmbuf_pool_init, &mbp_priv, rte_pktmbuf_init,
@@ -41,7 +37,7 @@ uint16_t PacketPool::next_id_ = 0;
 // 'nmbufs' is the number of mbufs to allocate in the backing pool.
 // 'mbuf_size' the size of an mbuf buffer. (MBUF_DATASZ_DEFAULT is the minimum)
 PacketPool::PacketPool(uint32_t nmbufs, uint16_t mbuf_size,
-                       const char *mempool_name)
+                       char const* mempool_name)
     : is_dpdk_primary_process_(rte_eal_process_type() == RTE_PROC_PRIMARY) {
   if (is_dpdk_primary_process_) {
     // Create mempool here, choose the name automatically
@@ -71,8 +67,7 @@ PacketPool::PacketPool(uint32_t nmbufs, uint16_t mbuf_size,
 PacketPool::~PacketPool() {
   LOG(INFO) << "[FREE] [type:mempool, name:" << this->GetPacketPoolName()
             << "]";
-  if (is_dpdk_primary_process_)
-    rte_mempool_free(mpool_);
+  if (is_dpdk_primary_process_) rte_mempool_free(mpool_);
 }
 
-} // namespace uccl
+}  // namespace uccl

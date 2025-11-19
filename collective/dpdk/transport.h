@@ -483,13 +483,11 @@ class UcclFlow {
 
   void prepare_datapacket(PacketBuf* msgbuf, uint32_t path_id, uint32_t seqno,
                           UcclPktHdr::UcclFlags const net_flags);
-                          void prepare_retransmission_payload(PacketBuf* msgbuf);
+  void prepare_retransmission_payload(PacketBuf* msgbuf);
   Packet* craft_ackpacket(uint32_t path_id, uint16_t dst_port, uint32_t seqno,
                           uint32_t ackno, UcclPktHdr::UcclFlags const net_flags,
                           uint64_t ts1, uint64_t ts2);
   Packet* craft_rssprobe_packet(uint16_t dst_port);
-
-  
 
   void reverse_packet_l2l3(Packet* pkt);
 

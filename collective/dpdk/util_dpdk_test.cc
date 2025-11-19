@@ -6,14 +6,13 @@
 #include "udp.h"
 #include "util/util.h"
 #include "util_dpdk.h"
-
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <vector>
 #include <pthread.h>
 #include <signal.h>
-#include <vector>
 
 using namespace uccl;
 
@@ -53,7 +52,7 @@ int const SEND_INTV_US = 0;
 int const RTO_US = 2000;
 
 struct socket_t {
-  DPDKSocket *dpdk_socket;
+  DPDKSocket* dpdk_socket;
   std::atomic<uint64_t> sent_packets;
   uint64_t last_stall_time;
   uint32_t counter;
@@ -73,11 +72,11 @@ static struct client_t client;
 std::atomic<uint64_t> inflight_pkts{0};
 bool volatile quit;
 
-static void *stats_thread(void *arg);
-static void *send_thread(void *arg);
-static void *recv_thread(void *arg);
+static void* stats_thread(void* arg);
+static void* send_thread(void* arg);
+static void* recv_thread(void* arg);
 
-int client_init(struct client_t *client, DPDKFactory *dpdk_factory) {
+int client_init(struct client_t* client, DPDKFactory* dpdk_factory) {
   // per-CPU socket setup
 
   for (uint32_t i = 0; i < MY_NUM_QUEUES; i++) {
@@ -115,7 +114,7 @@ int client_init(struct client_t *client, DPDKFactory *dpdk_factory) {
   return 0;
 }
 
-void client_shutdown(struct client_t *client) {
+void client_shutdown(struct client_t* client) {
   assert(client);
 
   for (uint32_t i = 0; i < MY_NUM_QUEUES; i++) {
@@ -137,19 +136,19 @@ static void cleanup() {
   fflush(stdout);
 }
 
-int client_generate_packet(Packet *pkt, uint32_t payload_bytes, uint32_t counter) {
-
+int client_generate_packet(Packet* pkt, uint32_t payload_bytes,
+                           uint32_t counter) {
   uint32_t packet_len =
       sizeof(Ethernet) + sizeof(Ipv4) + sizeof(Udp) + payload_bytes;
 
   // generate ethernet header
-  Ethernet *eth = pkt->append<Ethernet *>(packet_len);
+  Ethernet* eth = pkt->append<Ethernet*>(packet_len);
   eth->dst_addr = server_mac_char;
   eth->src_addr = client_mac_char;
   eth->eth_type = be16_t(Ethernet::kIpv4);
 
   // generate ip header
-  Ipv4 *ipv4 = reinterpret_cast<Ipv4 *>(eth + 1);
+  Ipv4* ipv4 = reinterpret_cast<Ipv4*>(eth + 1);
   ipv4->version_ihl = 0x45;
   ipv4->type_of_service = 0;
   ipv4->packet_id = be16_t(0x1513);
@@ -163,7 +162,7 @@ int client_generate_packet(Packet *pkt, uint32_t payload_bytes, uint32_t counter
 
   // generate udp header: using different ports to bypass per-flow rate
   // limiting
-  Udp *udp = reinterpret_cast<Udp *>(ipv4 + 1);
+  Udp* udp = reinterpret_cast<Udp*>(ipv4 + 1);
   udp->src_port =
       client_ports[counter % (sizeof(client_ports) / sizeof(client_ports[0]))];
   udp->dst_port = BASE_PORT;
@@ -171,7 +170,7 @@ int client_generate_packet(Packet *pkt, uint32_t payload_bytes, uint32_t counter
   udp->cksum = be16_t(0);
 
   // generate udp payload
-  uint8_t *payload = reinterpret_cast<uint8_t *>(udp + 1);
+  uint8_t* payload = reinterpret_cast<uint8_t*>(udp + 1);
   auto now = std::chrono::high_resolution_clock::now();
   uint64_t now_us = std::chrono::duration_cast<std::chrono::microseconds>(
                         now.time_since_epoch())
@@ -188,10 +187,10 @@ int client_generate_packet(Packet *pkt, uint32_t payload_bytes, uint32_t counter
   return packet_len;
 }
 
-void server_generate_packet(Packet *pkt) {
-  Ethernet *eth = pkt->head_data<Ethernet *>();
-  Ipv4 *ipv4 = reinterpret_cast<Ipv4 *>(eth + 1);
-  Udp *udp = reinterpret_cast<Udp *>(ipv4 + 1);
+void server_generate_packet(Packet* pkt) {
+  Ethernet* eth = pkt->head_data<Ethernet*>();
+  Ipv4* ipv4 = reinterpret_cast<Ipv4*>(eth + 1);
+  Udp* udp = reinterpret_cast<Udp*>(ipv4 + 1);
 
   std::swap(eth->src_addr, eth->dst_addr);
   std::swap(ipv4->src_addr, ipv4->dst_addr);
@@ -205,7 +204,7 @@ void server_generate_packet(Packet *pkt) {
   pkt->offload_udpv4_csum();
 }
 
-void socket_send(struct socket_t *socket, Packet **pkts, int queue_id) {
+void socket_send(struct socket_t* socket, Packet** pkts, int queue_id) {
   if (inflight_pkts >= MAX_INFLIGHT_PKTS) {
     auto now_us =
         std::chrono::duration_cast<std::chrono::microseconds>(
@@ -234,7 +233,7 @@ void socket_send(struct socket_t *socket, Packet **pkts, int queue_id) {
   socket->counter += completed;
 }
 
-void socket_recv(struct socket_t *socket, Packet **pkts, int queue_id) {
+void socket_recv(struct socket_t* socket, Packet** pkts, int queue_id) {
   // Check any packet received, in order to drive packet receiving path for
   // other kernel transport.
   uint32_t rcvd = socket->dpdk_socket->recv_packets(pkts, MY_RECV_BATCH_SIZE);
@@ -245,27 +244,28 @@ void socket_recv(struct socket_t *socket, Packet **pkts, int queue_id) {
     return;
 
   for (uint32_t i = 0; i < rcvd; i++) {
-    auto *pkt = pkts[i];
+    auto* pkt = pkts[i];
     if (pkt->length() < sizeof(Ethernet)) {
       LOG(WARNING) << "received non-ethernet packet " << queue_id;
       socket->dpdk_socket->push_packet(pkt);
       continue;
     }
 
-    Ethernet *eth = pkt->head_data<Ethernet *>();
+    Ethernet* eth = pkt->head_data<Ethernet*>();
     if (eth->eth_type.value() != Ethernet::kIpv4) [[unlikely]] {
-      LOG(WARNING) << "received non-ipv4 packet " << std::hex << eth->eth_type.value();
+      LOG(WARNING) << "received non-ipv4 packet " << std::hex
+                   << eth->eth_type.value();
       socket->dpdk_socket->push_packet(pkt);
       continue;
     }
 
-    Ipv4 *ipv4 = reinterpret_cast<Ipv4 *>(eth + 1);
+    Ipv4* ipv4 = reinterpret_cast<Ipv4*>(eth + 1);
 
     if (pkt->length() != sizeof(Ethernet) + ipv4->total_length.value()) {
       LOG(WARNING) << "IPv4 packet length mismatch (expected: "
                    << ipv4->total_length.value()
                    << ", actual: " << pkt->length() << ")";
-                   socket->dpdk_socket->push_packet(pkt);
+      socket->dpdk_socket->push_packet(pkt);
       continue;
     }
 
@@ -275,10 +275,10 @@ void socket_recv(struct socket_t *socket, Packet **pkts, int queue_id) {
       continue;
     }
 
-    Udp *udp = reinterpret_cast<Udp *>(ipv4 + 1);
-    uint8_t *payload = reinterpret_cast<uint8_t *>(udp + 1);
+    Udp* udp = reinterpret_cast<Udp*>(ipv4 + 1);
+    uint8_t* payload = reinterpret_cast<uint8_t*>(udp + 1);
 
-    uint64_t now_us = *(uint64_t *)payload;
+    uint64_t now_us = *(uint64_t*)payload;
     // uint32_t counter = *(uint32_t *)(payload + sizeof(uint64_t));
 
     auto now = std::chrono::high_resolution_clock::now();
@@ -303,8 +303,8 @@ void socket_recv(struct socket_t *socket, Packet **pkts, int queue_id) {
   }
 }
 
-static void *send_thread(void *arg) {
-  struct socket_t *socket = (struct socket_t *)arg;
+static void* send_thread(void* arg) {
+  struct socket_t* socket = (struct socket_t*)arg;
 
   int queue_id = socket->dpdk_socket->get_queue_id();
 
@@ -312,12 +312,11 @@ static void *send_thread(void *arg) {
 
   pin_thread_to_cpu(queue_id);
 
-  Packet **pkts = new Packet *[MY_SEND_BATCH_SIZE];
+  Packet** pkts = new Packet*[MY_SEND_BATCH_SIZE];
 
   while (!quit) {
     socket_send(socket, pkts, queue_id);
-    if (SEND_INTV_US)
-      usleep(SEND_INTV_US);
+    if (SEND_INTV_US) usleep(SEND_INTV_US);
   }
 
   delete[] pkts;
@@ -325,15 +324,15 @@ static void *send_thread(void *arg) {
   return NULL;
 }
 
-static void *recv_thread(void *arg) {
-  struct socket_t *socket = (struct socket_t *)arg;
+static void* recv_thread(void* arg) {
+  struct socket_t* socket = (struct socket_t*)arg;
   int queue_id = socket->dpdk_socket->get_queue_id();
 
   printf("started socket recv thread for queue #%d\n", queue_id);
 
   pin_thread_to_cpu(MY_NUM_QUEUES + queue_id);
 
-  Packet **pkts = new Packet *[MY_RECV_BATCH_SIZE];
+  Packet** pkts = new Packet*[MY_RECV_BATCH_SIZE];
 
   while (!quit) {
     socket_recv(socket, pkts, queue_id);
@@ -346,14 +345,14 @@ static void *recv_thread(void *arg) {
   return NULL;
 }
 
-uint64_t aggregate_sent_packets(struct client_t *client) {
+uint64_t aggregate_sent_packets(struct client_t* client) {
   uint64_t sent_packets = 0;
   for (uint32_t i = 0; i < MY_NUM_QUEUES; i++)
     sent_packets += client->socket[i].sent_packets.load();
   return sent_packets;
 }
 
-std::vector<uint64_t> aggregate_rtts(struct client_t *client) {
+std::vector<uint64_t> aggregate_rtts(struct client_t* client) {
   std::vector<uint64_t> rtts;
   for (uint32_t i = 0; i < MY_NUM_QUEUES; i++) {
     std::lock_guard<std::mutex> lock(client->socket[i].rtts_lock);
@@ -363,8 +362,8 @@ std::vector<uint64_t> aggregate_rtts(struct client_t *client) {
   return rtts;
 }
 
-static void *stats_thread(void *arg) {
-  struct client_t *client = (struct client_t *)arg;
+static void* stats_thread(void* arg) {
+  struct client_t* client = (struct client_t*)arg;
 
   auto start = std::chrono::high_resolution_clock::now();
   auto start_pkts = aggregate_sent_packets(client);
@@ -396,9 +395,10 @@ static void *stats_thread(void *arg) {
   auto med_latency = Percentile(rtts, 50);
   auto tail_latency = Percentile(rtts, 99);
 
-  printf("Throughput: %.2f Kpkts/s, BW: %.2f Gbps, med rtt: %lu us, tail rtt: "
-         "%lu us\n",
-         throughput, bw_gbps, med_latency, tail_latency);
+  printf(
+      "Throughput: %.2f Kpkts/s, BW: %.2f Gbps, med rtt: %lu us, tail rtt: "
+      "%lu us\n",
+      throughput, bw_gbps, med_latency, tail_latency);
 
   return NULL;
 }
@@ -408,7 +408,7 @@ static void *stats_thread(void *arg) {
 // On server: GLOG_minloglevel=0 sudo ./uccl-util-dpdk-test --server
 // On client: GLOG_minloglevel=0 sudo ./uccl-util-dpdk-test --client
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
   google::InitGoogleLogging(argv[0]);
   google::InstallFailureSignalHandler();
   FLAGS_alsologtostderr = false;

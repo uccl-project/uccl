@@ -15,7 +15,7 @@ namespace uccl {
  * and other related functions.
  */
 class PmdPort {
-public:
+ public:
   static const uint16_t kDefaultRingNr_ = 1;
 
   /**
@@ -36,8 +36,11 @@ public:
           uint16_t rx_desc_nr = PmdRing::kDefaultRingDescNr,
           uint16_t tx_desc_nr = PmdRing::kDefaultRingDescNr)
       : is_dpdk_primary_process_(rte_eal_process_type() == RTE_PROC_PRIMARY),
-        port_id_(id), tx_rings_nr_(tx_rings_nr), rx_rings_nr_(rx_rings_nr),
-        tx_ring_desc_nr_(tx_desc_nr), rx_ring_desc_nr_(rx_desc_nr),
+        port_id_(id),
+        tx_rings_nr_(tx_rings_nr),
+        rx_rings_nr_(rx_rings_nr),
+        tx_ring_desc_nr_(tx_desc_nr),
+        rx_ring_desc_nr_(rx_desc_nr),
         initialized_(false) {
     // Get L2 address.
     rte_ether_addr temp;
@@ -48,8 +51,8 @@ public:
   /**
    * @brief Deleted copy constructor and assignment operator.
    */
-  PmdPort(PmdPort const &) = delete;
-  PmdPort &operator=(PmdPort const &) = delete;
+  PmdPort(PmdPort const&) = delete;
+  PmdPort& operator=(PmdPort const&) = delete;
 
   /**
    * @brief Destructor. Deinitializes the port if it was initialized.
@@ -87,13 +90,14 @@ public:
    *
    * @return Pointer to the associated device.
    */
-  rte_device *GetDevice() const { return device_; }
+  rte_device* GetDevice() const { return device_; }
 
-  template <typename T> decltype(auto) GetRing(uint16_t id) const {
+  template <typename T>
+  decltype(auto) GetRing(uint16_t id) const {
     constexpr bool is_tx_ring = std::is_same<T, TxRing>::value;
     CHECK_LT(id, (is_tx_ring ? tx_rings_nr_ : rx_rings_nr_)) << "Out-of-bounds";
-    return is_tx_ring ? static_cast<T *>(tx_rings_.at(id).get())
-                      : static_cast<T *>(rx_rings_.at(id).get());
+    return is_tx_ring ? static_cast<T*>(tx_rings_.at(id).get())
+                      : static_cast<T*>(rx_rings_.at(id).get());
   }
 
   /**
@@ -105,8 +109,7 @@ public:
   std::optional<uint16_t> GetMTU() const {
     uint16_t mtu;
     int ret = rte_eth_dev_get_mtu(port_id_, &mtu);
-    if (ret != 0)
-      return std::nullopt; // Error (wrong port id?)
+    if (ret != 0) return std::nullopt;  // Error (wrong port id?)
     return mtu;
   }
 
@@ -122,7 +125,7 @@ public:
    *
    * @return A vector containing the RSS hash key bytes.
    */
-  const std::vector<uint8_t> &GetRSSKey() const { return rss_hash_key_; }
+  std::vector<uint8_t> const& GetRSSKey() const { return rss_hash_key_; }
 
   /**
    * @brief Calculates the landing RX queue for a given RSS hash.
@@ -219,8 +222,8 @@ public:
     }
   }
 
-private:
-  const bool is_dpdk_primary_process_;
+ private:
+  bool const is_dpdk_primary_process_;
   const uint16_t port_id_;
   const uint16_t tx_rings_nr_, rx_rings_nr_;
   uint16_t tx_ring_desc_nr_, rx_ring_desc_nr_;
@@ -228,11 +231,11 @@ private:
 
   Ethernet::Address l2_addr_;
   struct rte_eth_dev_info devinfo_;
-  rte_device *device_;
+  rte_device* device_;
   std::vector<rte_eth_rss_reta_entry64> rss_reta_conf_;
   struct rte_eth_stats port_stats_;
   std::vector<uint8_t> rss_hash_key_;
   bool initialized_;
 };
-} // namespace uccl
-#endif // SRC_INCLUDE_PMD_PORT_H_
+}  // namespace uccl
+#endif  // SRC_INCLUDE_PMD_PORT_H_

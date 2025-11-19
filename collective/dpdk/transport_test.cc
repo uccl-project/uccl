@@ -65,7 +65,7 @@ int main(int argc, char* argv[]) {
 
   LOG(INFO) << "Getting port ID for device " << FLAGS_localmac;
   std::string mac_str = FLAGS_localmac;
-  
+
   uint16_t port_id = dpdk.GetPmdPortIdByMac(mac_str.c_str());
   if (port_id == (uint16_t)-1) {
     LOG(FATAL) << "Client port not found";

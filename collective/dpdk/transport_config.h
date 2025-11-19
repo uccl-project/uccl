@@ -108,4 +108,3 @@ static_assert(kMaxUnackedPktsPerEngine <= kMaxPathHistoryPerEngine,
               "kMaxUnackedPktsPerEngine too large");
 static_assert(is_power_of_two(kMaxPathHistoryPerEngine),
               "kMaxPathHistoryPerEngine must be power of 2");
-

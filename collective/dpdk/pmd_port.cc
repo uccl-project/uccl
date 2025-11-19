@@ -1,6 +1,5 @@
 #include "pmd_port.h"
 #include "ether.h"
-
 #include <memory>
 #include <optional>
 #include <string>
@@ -9,8 +8,8 @@
 
 namespace uccl {
 [[maybe_unused]] static void FetchDpdkPortInfo(uint8_t port_id,
-                                               struct rte_eth_dev_info *devinfo,
-                                               Ethernet::Address *lladdr) {
+                                               struct rte_eth_dev_info* devinfo,
+                                               Ethernet::Address* lladdr) {
   if (!rte_eth_dev_is_valid_port(port_id)) {
     LOG(INFO) << "Port id " << static_cast<int>(port_id) << " is not valid.";
     return;
@@ -26,7 +25,7 @@ namespace uccl {
   CHECK_NOTNULL(devinfo->device);
 
   rte_eth_macaddr_get(port_id,
-                      reinterpret_cast<rte_ether_addr *>(lladdr->bytes));
+                      reinterpret_cast<rte_ether_addr*>(lladdr->bytes));
 
   LOG(INFO) << "[PMDPORT] [port_id: " << static_cast<uint32_t>(port_id)
             << ", driver: " << devinfo->driver_name
@@ -35,15 +34,14 @@ namespace uccl {
             << ", l2addr: " << lladdr->ToString() << "]";
 }
 
-static rte_eth_conf DefaultEthConf(const rte_eth_dev_info *devinfo) {
+static rte_eth_conf DefaultEthConf(rte_eth_dev_info const* devinfo) {
   CHECK_NOTNULL(devinfo);
 
   struct rte_eth_conf port_conf = rte_eth_conf();
 
   // The `net_null' driver is only used for testing, and it does not support
   // offloads so return a very basic ethernet configuration.
-  if (std::string(devinfo->driver_name) == "net_null")
-    return port_conf;
+  if (std::string(devinfo->driver_name) == "net_null") return port_conf;
 
   port_conf.link_speeds = RTE_ETH_LINK_SPEED_AUTONEG;
   uint64_t rss_hf =
@@ -57,7 +55,7 @@ static rte_eth_conf DefaultEthConf(const rte_eth_dev_info *devinfo) {
 
   port_conf.rxmode.mtu = PmdRing::kDefaultFrameSize;
   port_conf.rxmode.max_lro_pkt_size = PmdRing::kDefaultFrameSize;
-  const auto rx_offload_capa = devinfo->rx_offload_capa;
+  auto const rx_offload_capa = devinfo->rx_offload_capa;
   port_conf.rxmode.offloads |= ((RTE_ETH_RX_OFFLOAD_CHECKSUM)&rx_offload_capa);
 
   port_conf.rx_adv_conf.rss_conf = {
@@ -67,7 +65,7 @@ static rte_eth_conf DefaultEthConf(const rte_eth_dev_info *devinfo) {
       .algorithm = RTE_ETH_HASH_FUNCTION_DEFAULT,
   };
 
-  const auto tx_offload_capa = devinfo->tx_offload_capa;
+  auto const tx_offload_capa = devinfo->tx_offload_capa;
   if (!(tx_offload_capa & RTE_ETH_TX_OFFLOAD_IPV4_CKSUM) ||
       !(tx_offload_capa & RTE_ETH_TX_OFFLOAD_UDP_CKSUM)) {
     // Making this fatal; not sure what NIC does not support checksum offloads.
@@ -96,7 +94,7 @@ static rte_eth_conf DefaultEthConf(const rte_eth_dev_info *devinfo) {
  * @return A unique pointer to the created ring.
  */
 template <typename T, typename... Args>
-decltype(auto) makeRing(Args &&...params) {
+decltype(auto) makeRing(Args&&... params) {
   std::unique_ptr<T> ptr(nullptr);
   ptr.reset(new T(std::forward<Args>(params)...));
   return ptr;
@@ -179,7 +177,7 @@ void PmdPort::InitDriver(uint16_t mtu) {
     LOG(INFO) << Format("RSS indirection table (size %d):\n",
                         devinfo_.reta_size);
     for (auto i = 0u; i < devinfo_.reta_size; i++) {
-      const auto kColumns = 8;
+      auto const kColumns = 8;
       auto index = i / RTE_ETH_RETA_GROUP_SIZE;
       auto shift = i % RTE_ETH_RETA_GROUP_SIZE;
       if (!(rss_reta_conf_[index].mask & (1 << shift))) {
@@ -210,7 +208,7 @@ void PmdPort::InitDriver(uint16_t mtu) {
           << static_cast<int>(port_id_);
     }
 
-    const auto mbuf_data_size =
+    auto const mbuf_data_size =
         mtu + RTE_ETHER_HDR_LEN + RTE_ETHER_CRC_LEN + RTE_PKTMBUF_HEADROOM;
 
     // Setup the TX queues.
@@ -244,12 +242,10 @@ void PmdPort::InitDriver(uint16_t mtu) {
     //   LOG(INFO) << "Promiscuous mode enabled.";
 
     ret = rte_eth_stats_reset(port_id_);
-    if (ret != 0)
-      LOG(WARNING) << "Failed to reset port statistics.";
+    if (ret != 0) LOG(WARNING) << "Failed to reset port statistics.";
 
     ret = rte_eth_dev_set_link_up(port_id_);
-    if (ret != 0)
-      LOG(WARNING) << "rte_eth_dev_set_link_up() failed.";
+    if (ret != 0) LOG(WARNING) << "rte_eth_dev_set_link_up() failed.";
 
     ret = rte_eth_dev_start(port_id_);
     if (ret != 0) {
@@ -285,13 +281,11 @@ void PmdPort::InitDriver(uint16_t mtu) {
     // For the rings, just set port and queue IDs here, which have been
     // pre-initialized by the DPDK primary process
     for (auto q = 0; q < tx_rings_nr_; q++) {
-      tx_rings_.emplace_back(
-          makeRing<TxRing>(port_id_, q, tx_ring_desc_nr_));
+      tx_rings_.emplace_back(makeRing<TxRing>(port_id_, q, tx_ring_desc_nr_));
     }
 
     for (auto q = 0; q < rx_rings_nr_; q++) {
-      rx_rings_.emplace_back(
-          makeRing<RxRing>(port_id_, q, rx_ring_desc_nr_));
+      rx_rings_.emplace_back(makeRing<RxRing>(port_id_, q, rx_ring_desc_nr_));
     }
   }
 
@@ -308,11 +302,10 @@ void PmdPort::UpdatePortStats() {
 }
 
 void PmdPort::DeInit() {
-  if (!initialized_ || !is_dpdk_primary_process_)
-    return;
+  if (!initialized_ || !is_dpdk_primary_process_) return;
   rte_eth_dev_stop(port_id_);
   rte_eth_dev_close(port_id_);
   LOG(INFO) << Format("[PMDPORT: %u closed.]", port_id_);
   initialized_ = false;
 }
-} // namespace uccl
+}  // namespace uccl

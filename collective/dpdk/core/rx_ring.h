@@ -11,7 +11,7 @@ namespace uccl {
  * Provides functionalities specific to RX rings in DPDK.
  */
 class RxRing : public PmdRing {
-public:
+ public:
   RxRing(uint8_t port_id, uint16_t ring_id, uint16_t ndesc)
       : PmdRing(port_id, ring_id, ndesc) {}
 
@@ -19,8 +19,8 @@ public:
          struct rte_eth_rxconf rxconf, uint32_t nmbufs, uint32_t mbuf_sz)
       : PmdRing(port_id, ring_id, ndesc, nmbufs, mbuf_sz), conf_(rxconf) {}
 
-  RxRing(RxRing const &) = delete;
-  RxRing &operator=(RxRing const &) = delete;
+  RxRing(RxRing const&) = delete;
+  RxRing& operator=(RxRing const&) = delete;
 
   void Init() {
     int ret = rte_eth_rx_queue_setup(this->GetPortId(), this->GetRingId(),
@@ -42,10 +42,9 @@ public:
    * @param nb_pkts Maximum number of packets to receive.
    * @return Number of packets successfully received.
    */
-  uint16_t RecvPackets(Packet **pkts, uint16_t nb_pkts) {
+  uint16_t RecvPackets(Packet** pkts, uint16_t nb_pkts) {
     return rte_eth_rx_burst(this->GetPortId(), this->GetRingId(),
-                            reinterpret_cast<struct rte_mbuf **>(pkts),
-                            nb_pkts);
+                            reinterpret_cast<struct rte_mbuf**>(pkts), nb_pkts);
   }
 
   /**
@@ -59,15 +58,15 @@ public:
    * @param batch Batch of packets to store the received packets.
    * @return Number of packets successfully received.
    */
-  uint16_t RecvPackets(PacketBatch *batch) {
+  uint16_t RecvPackets(PacketBatch* batch) {
     const uint16_t nb_rx = RecvPackets(batch->pkts(), batch->GetRoom());
     batch->IncrCount(nb_rx);
     return nb_rx;
   }
 
-private:
+ private:
   struct rte_eth_rxconf conf_;
 };
-} // namespace uccl
+}  // namespace uccl
 
-#endif // SRC_INCLUDE_RX_RING_H_
+#endif  // SRC_INCLUDE_RX_RING_H_

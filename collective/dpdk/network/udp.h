@@ -12,9 +12,9 @@ struct __attribute__((packed)) Udp {
     static const uint8_t kSize = 2;
     Port() = default;
     Port(uint16_t udp_port) { port = be16_t(udp_port); }
-    bool operator==(const Port &rhs) const { return port == rhs.port; }
+    bool operator==(Port const& rhs) const { return port == rhs.port; }
     bool operator==(be16_t rhs) const { return rhs == port; }
-    bool operator!=(const Port &rhs) const { return port != rhs.port; }
+    bool operator!=(Port const& rhs) const { return port != rhs.port; }
     bool operator!=(be16_t rhs) const { return rhs != port; }
 
     be16_t port;
@@ -32,6 +32,6 @@ struct __attribute__((packed)) Udp {
   be16_t cksum;
 };
 
-} // namespace uccl
+}  // namespace uccl
 
-#endif // SRC_INCLUDE_UDP_H_
+#endif  // SRC_INCLUDE_UDP_H_

@@ -3,7 +3,6 @@
 
 #include "util/endian.h"
 #include "util/util.h"
-
 #include <cstdint>
 #include <string>
 
@@ -13,8 +12,8 @@ struct __attribute__((packed)) Ethernet {
   struct __attribute__((packed)) Address {
     static const uint8_t kSize = 6;
     Address() = default;
-    Address(const Address &other) = default;
-    Address(const uint8_t *addr) {
+    Address(Address const& other) = default;
+    Address(uint8_t const* addr) {
       bytes[0] = addr[0];
       bytes[1] = addr[1];
       bytes[2] = addr[2];
@@ -25,7 +24,7 @@ struct __attribute__((packed)) Ethernet {
 
     Address(const std::string mac_addr) { FromString(mac_addr); }
 
-    void FromUint8(const uint8_t *addr) {
+    void FromUint8(uint8_t const* addr) {
       bytes[0] = addr[0];
       bytes[1] = addr[1];
       bytes[2] = addr[2];
@@ -53,7 +52,7 @@ struct __attribute__((packed)) Ethernet {
       return ret;
     }
 
-    Address &operator=(const Address &rhs) {
+    Address& operator=(Address const& rhs) {
       bytes[0] = rhs.bytes[0];
       bytes[1] = rhs.bytes[1];
       bytes[2] = rhs.bytes[2];
@@ -62,12 +61,12 @@ struct __attribute__((packed)) Ethernet {
       bytes[5] = rhs.bytes[5];
       return *this;
     }
-    bool operator==(const Address &rhs) const {
+    bool operator==(Address const& rhs) const {
       return bytes[0] == rhs.bytes[0] && bytes[1] == rhs.bytes[1] &&
              bytes[2] == rhs.bytes[2] && bytes[3] == rhs.bytes[3] &&
              bytes[4] == rhs.bytes[4] && bytes[5] == rhs.bytes[5];
     }
-    bool operator!=(const Address &rhs) const { return !operator==(rhs); }
+    bool operator!=(Address const& rhs) const { return !operator==(rhs); }
 
     uint8_t bytes[kSize];
   };
@@ -82,14 +81,14 @@ struct __attribute__((packed)) Ethernet {
 
   std::string ToString() const {
     return Format("[Eth: dst %s, src %s, eth_type %u]",
-                                  dst_addr.ToString().c_str(),
-                                  src_addr.ToString().c_str(), eth_type.value());
+                  dst_addr.ToString().c_str(), src_addr.ToString().c_str(),
+                  eth_type.value());
   }
 
   Address dst_addr;
   Address src_addr;
   be16_t eth_type;
 };
-} // namespace uccl
+}  // namespace uccl
 
-#endif // SRC_INCLUDE_ETHER_H_
+#endif  // SRC_INCLUDE_ETHER_H_
