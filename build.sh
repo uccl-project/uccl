@@ -245,6 +245,19 @@ else
 fi
 
 echo "[2/3] Running build inside container..."
+
+# Auto-detect CUDA architecture for ep build
+DETECTED_CUDA_ARCH=""
+if [[ "$TARGET" == cuda* && "$BUILD_TYPE" =~ (ep|all) ]]; then
+  if command -v nvidia-smi &> /dev/null; then
+    DETECTED_CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
+    if [[ -n "$DETECTED_CUDA_ARCH" ]]; then
+      echo "Auto-detected CUDA compute capability: ${DETECTED_CUDA_ARCH}"
+      export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-${DETECTED_CUDA_ARCH}}"
+    fi
+  fi
+fi
+
 docker run --rm --user "$(id -u):$(id -g)" \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
@@ -259,6 +272,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
   -e USE_TCPX="${USE_TCPX:-0}" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
+  -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
   -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_rdma build_efa build_p2p build_ep build_eccl)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
