@@ -7,7 +7,7 @@ set -e
 # a purpose-built Docker image derived from Ubuntu 22.04.
 #
 # Usage:
-#   ./build.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url] [therock_base_image]
+#   ./build.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image]
 #
 # The wheels are written to wheelhouse-[cuda|rocm|therock]
 # -----------------------
@@ -24,7 +24,7 @@ IS_EFA=$( [ -d "/sys/class/infiniband/" ] && ls /sys/class/infiniband/ 2>/dev/nu
 
 
 if [[ $TARGET != cuda* && $TARGET != rocm* && $TARGET != "therock" ]]; then
-  echo "Usage: $0 [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url]" >&2
+  echo "Usage: $0 [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image]" >&2
   exit 1
 fi
 
