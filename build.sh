@@ -24,7 +24,7 @@ IS_EFA=$( [ -d "/sys/class/infiniband/" ] && ls /sys/class/infiniband/ 2>/dev/nu
 
 
 if [[ $TARGET != cuda* && $TARGET != rocm* && $TARGET != "therock" ]]; then
-  echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep|eccl] [py_version] [rocm_index_url]" >&2
+  echo "Usage: $0 [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url]" >&2
   exit 1
 fi
 
@@ -50,13 +50,13 @@ build_rccl_nccl_h() {
   fi
 }
 
-build_rdma() {
+build_ccl_rdma() {
   local TARGET="$1"
   local ARCH="$2"
   local IS_EFA="$3"
 
   set -euo pipefail
-  echo "[container] build_rdma Target: $TARGET"
+  echo "[container] build_ccl_rdma Target: $TARGET"
   
   if [[ "$TARGET" == cuda* ]]; then
     cd collective/rdma && make clean && make -j$(nproc) && cd ../../
@@ -89,13 +89,13 @@ build_rdma() {
   cp ${TARGET_SO} uccl/lib/
 }
 
-build_efa() {
+build_ccl_efa() {
   local TARGET="$1"
   local ARCH="$2"
   local IS_EFA="$3"
 
   set -euo pipefail
-  echo "[container] build_efa Target: $TARGET"
+  echo "[container] build_ccl_efa Target: $TARGET"
 
   if [[ "$ARCH" == "aarch64" || "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
     echo "Skipping EFA build on Arm64 (no EFA installer) or ROCm (no CUDA)."
@@ -136,6 +136,8 @@ build_p2p() {
   mkdir -p uccl
   mkdir -p uccl/lib
   if [[ -z "${USE_TCPX:-}" || "$USE_TCPX" != "1" ]]; then
+    cp p2p/libuccl_p2p.so uccl/lib/
+    cp p2p/librdma_plugin.a uccl/lib/
     cp p2p/p2p.*.so uccl/
     cp p2p/collective.py uccl/
     cp p2p/transfer.py uccl/
@@ -259,7 +261,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
   -e USE_TCPX="${USE_TCPX:-0}" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
-  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_rdma build_efa build_p2p build_ep build_eccl)" \
+  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_ccl_rdma build_ccl_efa build_p2p build_ep build_eccl)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
     set -euo pipefail
@@ -283,10 +285,10 @@ docker run --rm --user "$(id -u):$(id -g)" \
       build_rccl_nccl_h
     fi
 
-    if [[ "$BUILD_TYPE" == "rdma" ]]; then
-      build_rdma "$TARGET" "$ARCH" "$IS_EFA"
-    elif [[ "$BUILD_TYPE" == "efa" ]]; then
-      build_efa "$TARGET" "$ARCH" "$IS_EFA"
+    if [[ "$BUILD_TYPE" == "ccl_rdma" ]]; then
+      build_ccl_rdma "$TARGET" "$ARCH" "$IS_EFA"
+    elif [[ "$BUILD_TYPE" == "ccl_efa" ]]; then
+      build_ccl_efa "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "p2p" ]]; then
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "ep" ]]; then
@@ -294,8 +296,8 @@ docker run --rm --user "$(id -u):$(id -g)" \
     elif [[ "$BUILD_TYPE" == "eccl" ]]; then
       build_eccl "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "all" ]]; then
-      build_rdma "$TARGET" "$ARCH" "$IS_EFA"
-      build_efa "$TARGET" "$ARCH" "$IS_EFA"
+      build_ccl_rdma "$TARGET" "$ARCH" "$IS_EFA"
+      build_ccl_efa "$TARGET" "$ARCH" "$IS_EFA"
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
       # build_ep "$TARGET" "$ARCH" "$IS_EFA"
       # build_eccl "$TARGET" "$ARCH" "$IS_EFA"
