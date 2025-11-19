@@ -56,7 +56,7 @@ build_ccl_rdma() {
   local IS_EFA="$3"
 
   set -euo pipefail
-  echo "[container] build_rdma Target: $TARGET"
+  echo "[container] build_ccl_rdma Target: $TARGET"
   
   if [[ "$TARGET" == cuda* ]]; then
     cd collective/rdma && make clean && make -j$(nproc) && cd ../../
@@ -95,7 +95,7 @@ build_ccl_efa() {
   local IS_EFA="$3"
 
   set -euo pipefail
-  echo "[container] build_efa Target: $TARGET"
+  echo "[container] build_ccl_efa Target: $TARGET"
 
   if [[ "$ARCH" == "aarch64" || "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
     echo "Skipping EFA build on Arm64 (no EFA installer) or ROCm (no CUDA)."
@@ -139,7 +139,6 @@ build_p2p() {
     cp p2p/libuccl_p2p.so uccl/lib/
     cp p2p/librdma_plugin.a uccl/lib/
     cp p2p/p2p.*.so uccl/
-    # TODO : Check if the below files are required to be installed?
     cp p2p/collective.py uccl/
     cp p2p/transfer.py uccl/
     cp p2p/utils.py uccl/

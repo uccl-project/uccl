@@ -30,7 +30,7 @@ LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
 # Target and source files
 P2P_PYTHON_EXT := p2p$(PYEXT)
 P2P_SHARED_LIB := libuccl_p2p.so
-RDMA_PLUGIN_SO := librdma_plugin.a
+RDMA_PLUGIN_LIB := librdma_plugin.a
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
@@ -46,8 +46,8 @@ $(P2P_PYTHON_EXT): $(OBJECTS) $(RDMA_HOME)/librdma_hip.a
 	      -L$(HIP_LIB) -lamdhip64 \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS)
 
-$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_SO)
-	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_SO) \
+$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB)
+	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB) \
 	      -L$(HIP_LIB) -lamdhip64 \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(HIP_LIB) $(PYTHON_LIB) -libverbs -lz -lelf
@@ -57,7 +57,7 @@ $(RDMA_HOME)/librdma_hip.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc %_test.cc, 
 
 RDMA_OBJECTS := $(patsubst $(RDMA_HOME)/%.cc,%.o,$(filter-out $(RDMA_HOME)/nccl_plugin.cc %_test.cc,$(wildcard $(RDMA_HOME)/*.cc)))
 
-$(RDMA_PLUGIN_SO): $(RDMA_OBJECTS)
+$(RDMA_PLUGIN_LIB): $(RDMA_OBJECTS)
 	ar rcs $@ $(RDMA_OBJECTS)
 
 $(RDMA_OBJECTS): %.o: $(RDMA_HOME)/%.cc
@@ -75,7 +75,7 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB) $(P2P_PYTHON_EXT) $(RDMA_PLUGIN_SO) $(RDMA_OBJECTS)
+	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB) $(P2P_PYTHON_EXT) $(RDMA_PLUGIN_LIB) $(RDMA_OBJECTS)
 	make -C $(RDMA_HOME) -f Makefile.therock clean -j$(nproc) HIP_HOME=${HIP_HOME} CONDA_LIB_HOME=${CONDA_LIB_HOME}
 
 # Test the module

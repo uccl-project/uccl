@@ -41,7 +41,7 @@ LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LINK_LI
 # Target and source files
 P2P_PYTHON_EXT := p2p$(PYEXT)
 P2P_SHARED_LIB := libuccl_p2p.so
-RDMA_PLUGIN_SO := librdma_plugin.a
+RDMA_PLUGIN_LIB := librdma_plugin.a
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
@@ -88,8 +88,8 @@ $(P2P_PYTHON_EXT): $(OBJECTS) $(RDMA_HOME)/librdma.a
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB)
 
-$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_SO)
-	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_SO) \
+$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB)
+	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) -libverbs -lz -lelf
@@ -99,7 +99,7 @@ $(RDMA_HOME)/librdma.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(R
 
 RDMA_OBJECTS := $(patsubst $(RDMA_HOME)/%.cc,%.o,$(filter-out $(RDMA_HOME)/nccl_plugin.cc,$(wildcard $(RDMA_HOME)/*.cc)))
 
-$(RDMA_PLUGIN_SO): $(RDMA_OBJECTS)
+$(RDMA_PLUGIN_LIB): $(RDMA_OBJECTS)
 	ar rcs $@ $(RDMA_OBJECTS)
 
 $(RDMA_OBJECTS): %.o: $(RDMA_HOME)/%.cc
@@ -122,14 +122,14 @@ else
 endif
 	install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/
 ifneq ($(USE_TCPX),1)
-	install -m 755 $(RDMA_PLUGIN_SO) $(LIBDIR)/
+	install -m 755 $(RDMA_PLUGIN_LIB) $(LIBDIR)/
 endif
 	install -m 644 $(CAPI_HEADER) $(INCDIR)/
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB)
 ifneq ($(USE_TCPX),1)
-	rm -f $(P2P_PYTHON_EXT) $(RDMA_PLUGIN_SO) $(RDMA_OBJECTS)
+	rm -f $(P2P_PYTHON_EXT) $(RDMA_PLUGIN_LIB) $(RDMA_OBJECTS)
 endif
 
 # Test the module
@@ -153,4 +153,4 @@ help:
 	@echo "  install-deps - Install pybind11 dependency"
 	@echo "  help         - Show this help message"
 
-.PHONY: all clean test install-deps help install 
+.PHONY: all clean test install-deps help install
