@@ -104,6 +104,12 @@ class Proxy {
   void quiet_cq();
   RDMAConnectionInfo local_info_{}, remote_info_{};
 
+  // Reuse across multiple calls to avoid reallocations
+  std::vector<uint64_t> wrs_to_post;
+  std::vector<TransferCmd> cmds_to_post;
+  std::vector<uint64_t> rdma_wrs, atomic_wrs, quiet_wrs, barrier_wrs;
+  std::vector<TransferCmd> rdma_cmds, atomic_cmds, quiet_cmds, barrier_cmds;
+
   // Completion tracking
   std::unordered_set<uint64_t> acked_wrs_;
   std::unordered_map<uint64_t, std::chrono::high_resolution_clock::time_point>
