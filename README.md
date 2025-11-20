@@ -71,7 +71,7 @@ The easiest way to use UCCL is to first build based on your platform. The build 
 
 ```bash
 git clone https://github.com/uccl-project/uccl.git --recursive && cd uccl
-bash build_and_install.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url]
+bash build_and_install.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url]
 # Eg, bash build_and_install.sh cuda ep
 ```
 > Note: 
