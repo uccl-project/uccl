@@ -157,25 +157,16 @@ build_ep() {
 
   if [[ "$TARGET" == "therock" ]]; then
     echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
-  # elif [[ "$TARGET" == rocm* || "$TARGET" == cuda* ]]; then
-  #   cd ep
-  #   # This may be needed if you traverse through different git commits
-  #   make clean && rm -r build || true
-  #   python3 setup.py build
-  #   cd ..
-  #   echo "[container] Copying GPU-driven .so to uccl/"
-  #   mkdir -p uccl/lib
-  #   cp ep/build/**/*.so uccl/
-  # fi
-  elif [[ "$TARGET" == cuda* ]]; then
+  elif [[ "$TARGET" == rocm* || "$TARGET" == cuda* ]]; then
     cd ep
-    make clean && make -j$(nproc) SM=100
+    # This may be needed if you traverse through different git commits
+    # make clean && rm -r build || true
+    python3 setup.py build
     cd ..
     echo "[container] Copying GPU-driven .so to uccl/"
     mkdir -p uccl/lib
-    cp ep/*.so uccl/
+    cp ep/build/**/*.so uccl/
   fi
-
 }
 
 build_eccl() {
@@ -388,7 +379,33 @@ def initialize():
       mv ${BACKUP_FN} setup.py
     fi
 
-    auditwheel repair dist/uccl-*.whl --exclude "libtorch*.so" --exclude "libc10*.so" --exclude "libibverbs.so.1" --exclude "libcudart.so.12" --exclude "libamdhip64.so.*" --exclude "libcuda.so.1" -w /io/${WHEEL_DIR}
+    auditwheel repair dist/uccl-*.whl \
+      --exclude "libtorch*.so" \
+      --exclude "libc10*.so" \
+      --exclude "libibverbs.so.1" \
+      --exclude "libcudart.so.12" \
+      --exclude "libamdhip64.so.*" \
+      --exclude "libcuda.so.1" \
+      -w /io/${WHEEL_DIR}
+
+    # Fix RPATH in the repaired wheel to find PyTorch libraries
+    cd /io/${WHEEL_DIR}
+    for whl in uccl-*.whl; do
+      if [[ -f "$whl" ]]; then
+        echo "Fixing RPATH in $whl"
+        # Extract wheel
+        unzip -q "$whl" -d tmpwheel
+        # Find all .so files and add RPATH
+        find tmpwheel -name "*.so" -type f | while read sofile; do
+          patchelf --set-rpath "\$ORIGIN:\$ORIGIN/../torch/lib:\$ORIGIN/../../torch/lib:$(patchelf --print-rpath "$sofile" 2>/dev/null || echo '')" "$sofile" 2>/dev/null || true
+        done
+        # Repack wheel
+        (cd tmpwheel && zip -qr "../${whl}.new" .)
+        mv "${whl}.new" "$whl"
+        rm -rf tmpwheel
+      fi
+    done
+    cd /io
 
     # Add backend tag to wheel filename using local version identifier
     if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then

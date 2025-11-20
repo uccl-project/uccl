@@ -188,6 +188,15 @@ if __name__ == "__main__":
         cxx_flags.append("-DDISABLE_AGGRESSIVE_PTX_INSTRS")
         nvcc_flags.append("-DDISABLE_AGGRESSIVE_PTX_INSTRS")
 
+    # Set RPATH to find PyTorch libraries at runtime
+    # Use $ORIGIN to make the path relative to the .so file location
+    extra_link_args.extend(
+        [
+            "-Wl,-rpath,$ORIGIN/../torch/lib",
+            "-Wl,-rpath,$ORIGIN/../../torch/lib",
+        ]
+    )
+
     # Put them together
     extra_compile_args = {
         "cxx": cxx_flags,

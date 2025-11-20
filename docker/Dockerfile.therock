@@ -9,7 +9,7 @@ FROM ${BASE_IMAGE}
 # Note that the PyPA manylinux upstream has all python versions pre-installed
 # ---------------------------------------------------------------------------
 RUN dnf install -y rdma-core rdma-core-devel glog glog-devel gflags gflags-devel gtest gtest-devel\
-    elfutils-libelf elfutils-libelf-devel hiredis hiredis-devel libnl3 libnl3-devel
+    elfutils-libelf elfutils-libelf-devel hiredis hiredis-devel libnl3 libnl3-devel unzip
 
 WORKDIR /io
 

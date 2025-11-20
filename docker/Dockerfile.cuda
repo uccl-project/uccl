@@ -16,7 +16,7 @@ RUN apt-get update && \
         build-essential cmake git ninja-build g++ make patchelf \
         rdma-core libibverbs-dev libnuma-dev \
         libgoogle-glog-dev libgflags-dev libgtest-dev libelf-dev \
-        pkg-config zlib1g-dev curl && \
+        pkg-config zlib1g-dev curl unzip && \
 \
 # ───── Add Python ${PY_VER} PPA & install Python ${PY_VER} + setuptools ─────
     add-apt-repository ppa:deadsnakes/ppa && \
