@@ -157,16 +157,25 @@ build_ep() {
 
   if [[ "$TARGET" == "therock" ]]; then
     echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
-  elif [[ "$TARGET" == rocm* || "$TARGET" == cuda* ]]; then
+  # elif [[ "$TARGET" == rocm* || "$TARGET" == cuda* ]]; then
+  #   cd ep
+  #   # This may be needed if you traverse through different git commits
+  #   make clean && rm -r build || true
+  #   python3 setup.py build
+  #   cd ..
+  #   echo "[container] Copying GPU-driven .so to uccl/"
+  #   mkdir -p uccl/lib
+  #   cp ep/build/**/*.so uccl/
+  # fi
+  elif [[ "$TARGET" == cuda* ]]; then
     cd ep
-    # This may be needed if you traverse through different git commits
-    # rm *.d src/*.d bench/*.d src/*.o **/*.hip **/*_hip.*
-    python3 setup.py build
+    make clean && make -j$(nproc) SM=100
     cd ..
     echo "[container] Copying GPU-driven .so to uccl/"
     mkdir -p uccl/lib
-    cp ep/build/**/*.so uccl/
+    cp ep/*.so uccl/
   fi
+
 }
 
 build_eccl() {
@@ -242,12 +251,12 @@ if [[ "${hash_image}" != "" ]]; then
   # If image is stale, suggest deleting & purging it
   if [[ "${ts_dockerfile}" > "${ts_image}" ]]; then
       echo "WARNING: builder image '${IMAGE_NAME}' is older than its source (${DOCKERFILE})" >&2
-      echo "Please, remove it, prune the builder cache, and retry the build to regenerate it." >&2
+      echo "Please consider removing it, pruning the builder cache, and retrying the build to regenerate it." >&2
       echo " " >&2
       echo "  $ docker image rm '${IMAGE_NAME}'" >&2
       echo "  $ docker buildx prune -f" >&2
       echo " " >&2
-      echo "NOTE: Please, note this may also prune unrelated builder cache images!" >&2
+      echo "NOTE: this may also prune unrelated builder cache images!" >&2
       sleep 1
   fi
 fi

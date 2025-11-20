@@ -14,8 +14,7 @@ RUN apt-get update && \
     software-properties-common \
     build-essential cmake git ninja-build g++ make patchelf \
     rdma-core libibverbs-dev ibverbs-utils net-tools infiniband-diags \
-    libgoogle-glog-dev libgflags-dev libgtest-dev libelf-dev \
-    libnuma-dev libdrm-dev libdrm-amdgpu1 \
+    libgoogle-glog-dev libgflags-dev libgtest-dev libelf-dev libnuma-dev \
     pkg-config zlib1g-dev curl \
     autoconf automake libtool linux-headers-$(uname -r) && \
     add-apt-repository ppa:deadsnakes/ppa && \
