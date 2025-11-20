@@ -86,16 +86,16 @@ class UnpackLauncher {
   // Allocate device memory for descriptor block
   int allocateDeviceMemory(size_t size);
 
-  // Copy descriptor block to device
+  // Copy descriptor block to device on the specified stream
   int copyDescriptorBlockToDevice(
-      tcpx::rx::UnpackDescriptorBlock const& desc_block);
+      tcpx::rx::UnpackDescriptorBlock const& desc_block, cudaStream_t stream);
 
   // Calculate optimal launch parameters
   KernelLaunchParams calculateLaunchParams(
       tcpx::rx::UnpackDescriptorBlock const& desc_block) const;
 
-  // Launch kernel with parameters
-  int launchKernel(KernelLaunchParams const& params);
+  // Launch kernel with parameters on the specified stream
+  int launchKernel(KernelLaunchParams const& params, cudaStream_t stream);
 
   // Update statistics after launch
   void updateStats(tcpx::rx::UnpackDescriptorBlock const& desc_block,

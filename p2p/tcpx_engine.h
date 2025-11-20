@@ -51,6 +51,11 @@ struct ChannelState {
   size_t send_inflight = 0;  // Number of send chunks in flight on this channel
   size_t recv_inflight = 0;  // Number of recv chunks in flight on this channel
 
+  // Per-channel CUDA resources for independent GPU unpack pipeline
+  cudaStream_t unpack_stream = nullptr;  // Dedicated CUDA stream for this channel
+  std::vector<cudaEvent_t> recv_events;  // Event pool for tracking GPU unpack completion
+  size_t next_event_idx = 0;             // Round-robin index for event allocation
+
   ChannelState() {
     recv_dev_handle = recv_dev_handle_storage.data();
     send_dev_handle = send_dev_handle_storage.data();
@@ -71,14 +76,9 @@ struct Conn {
   int remote_port = -1;     // Remote TCP control port.
   int ctrl_sock_fd = -1;    // TCP control-socket descriptor.
 
-  // CUDA event pool used by recv-side GPU unpack.
-  // Events are recycled via round-robin to avoid create/destroy overhead.
-  // Each chunk borrows an event during Stage 2, then returns it when
-  // stage2_done=true.
-  std::vector<cudaEvent_t> recv_events;
-  uint64_t event_counter = 0;  // Round-robin cursor for recv_events.
-
   // Multi-channel state
+  // NOTE: CUDA event pools and streams are now per-channel (in ChannelState)
+  // to enable independent GPU unpack pipelines.
   std::vector<ChannelState> channels;
 
   void init_channels(size_t num_channels) {
@@ -176,11 +176,18 @@ struct PendingTransfer {
   uint64_t mr_id = 0;
   size_t total_bytes = 0;
   uint32_t base_tag = 0;  // Starting tag; chunks add their index.
-  size_t next_chunk_to_post = 0;
+  size_t chunks_posted = 0;  // Total chunks submitted to TCPX (Stage 0).
   void* mhandle = nullptr;  // TCPX memory handle cached in MrEntry.
 
   std::vector<ChunkState> chunks;
   size_t chunks_completed = 0;
+
+  // Per-channel scheduling state. Each entry stores the next chunk index that
+  // still needs to be posted on that channel. Initialized to the channel id
+  // (0..num_channels-1) and bumped by num_channels after every submission.
+  // When all indices reach chunks.size(), Stage 0 has nothing left to do.
+  std::vector<size_t> channel_next_chunk_idx;
+  size_t next_channel_cursor = 0;  // Round-robin start point for Stage 0.
 
   // Per-channel queues that mirror the pipeline stages.
   // CRITICAL: TCPX requires FIFO ordering per channel (matches
@@ -426,7 +433,9 @@ class Endpoint {
   std::unordered_map<uint64_t, PendingTransfer> transfer_map_;
 
   // Recv-side CUDA resources.
-  cudaStream_t unpack_stream_ = nullptr;
+  // NOTE: unpack_stream is now per-channel (in ChannelState) to enable
+  // independent GPU unpack pipelines. We keep a single launcher that can
+  // be used with any stream.
   std::unique_ptr<device::UnpackLauncher> unpack_launcher_;
 
   // Tunables sourced from the environment.
@@ -583,6 +592,24 @@ class Endpoint {
   bool enqueue_chunk_unpack_(PendingTransfer& transfer,
                              PendingTransfer::ChunkState& chunk,
                              tcpx::plugin::tcpxRequest* request, Conn& conn);
+  /**
+   * Progress a single channel's recv pipeline (Stage 1, 2, 3).
+   * This processes only one channel to minimize overhead.
+   * Returns true on success, false on error.
+   * Sets *made_progress to true if any chunk advanced through the pipeline.
+   */
+  bool progress_recv_channel_(Conn& conn, size_t channel_idx,
+                              PendingTransfer& transfer, bool* made_progress);
+
+  /**
+   * Progress a single channel's send pipeline (Stage 1).
+   * This processes only one channel to minimize overhead.
+   * Returns true on success, false on error.
+   * Sets *made_progress to true if any chunk advanced through the pipeline.
+   */
+  bool progress_send_channel_(Conn& conn, size_t channel_idx,
+                              PendingTransfer& transfer, bool* made_progress);
+
   /**
    * Call tcpx_irecv_consumed() for a chunk.
    * CRITICAL: Must be called in FIFO order per channel!
