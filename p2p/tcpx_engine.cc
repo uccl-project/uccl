@@ -1196,7 +1196,9 @@ void Endpoint::finalize_transfer_locked(
     std::unordered_map<uint64_t, PendingTransfer>::iterator it) {
   // Remove the transfer from transfer_map_ (transfer_mu_ held). Window counters
   // are reset later by poll_async once it drops transfer_mu_.
+  auto transfer_id = it->first;
   transfer_map_.erase(it);
+  completed_transfer_ids_.insert(transfer_id);
 }
 
 void Endpoint::reset_conn_window_counters_(uint64_t conn_id) {
@@ -2338,12 +2340,17 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
 
   auto it = transfer_map_.find(transfer_id);
   if (it == transfer_map_.end()) {
-    if (debug_enabled_) {
-      std::cerr << "[tcpx] poll transfer_id=" << transfer_id << " c"
-                << std::endl;
+    // Transfer not found. Treat as complete only if it was previously finalized.
+    auto completed_it = completed_transfer_ids_.find(transfer_id);
+    if (completed_it != completed_transfer_ids_.end()) {
+      completed_transfer_ids_.erase(completed_it);
+      *is_done = true;
+      return true;
     }
-    *is_done = true;
-    return true;
+
+    std::cerr << "[tcpx] poll_async: unknown transfer_id=" << transfer_id
+              << std::endl;
+    return false;
   }
   PendingTransfer& transfer = it->second;
 

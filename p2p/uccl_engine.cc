@@ -154,7 +154,27 @@ void listener_thread_func(uccl_conn_t* conn) {
                                       tx_data.data_size);
         if (result < 0) {
           std::cerr << "Failed to perform uccl_engine_recv" << std::endl;
+#ifdef USE_TCPX
+          notify_msg_t notify_msg = {};
+          std::snprintf(notify_msg.name, sizeof(notify_msg.name), "%s",
+                        "server");
+          std::snprintf(notify_msg.msg, sizeof(notify_msg.msg), "%s",
+                        "RECV_ERROR");
+          uccl_engine_send_notif(conn, &notify_msg);
+#endif
+          break;
         }
+
+#ifdef USE_TCPX
+        // Passive recv (including GPU unpack) is done: tell the active side so it
+        // only tears down after the data is fully landed.
+        notify_msg_t notify_msg = {};
+        std::snprintf(notify_msg.name, sizeof(notify_msg.name), "%s",
+                      "server");
+        std::snprintf(notify_msg.msg, sizeof(notify_msg.msg), "%s",
+                      "RECV_DONE");
+        uccl_engine_send_notif(conn, &notify_msg);
+#endif
         break;
       }
       case UCCL_VECTOR_READ: {
@@ -186,12 +206,18 @@ void listener_thread_func(uccl_conn_t* conn) {
           delete[] tx_data_array;
           break;
         }
+#ifdef USE_TCPX
+        bool vector_ok = true;
+#endif
         for (size_t i = 0; i < count; i++) {
           tx_msg_t tx_data = tx_data_array[i];
           auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
           if (local_mem_iter == mem_reg_info.end()) {
             std::cerr << "Local memory not registered for address: "
                       << tx_data.data_ptr << " (item " << i << ")" << std::endl;
+#ifdef USE_TCPX
+            vector_ok = false;
+#endif
             continue;
           }
           mr_id = local_mem_iter->second;
@@ -260,6 +286,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           break;
         }
 
+        bool vector_ok = true;
         for (size_t i = 0; i < count; i++) {
           tx_msg_t tx_data = tx_data_array[i];
           auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
@@ -278,10 +305,26 @@ void listener_thread_func(uccl_conn_t* conn) {
           if (result < 0) {
             std::cerr << "Failed to perform uccl_engine_recv for item " << i
                       << std::endl;
+#ifdef USE_TCPX
+            vector_ok = false;
+#endif
           }
         }
 
         delete[] tx_data_array;
+#ifdef USE_TCPX
+        notify_msg_t notify_msg = {};
+        std::snprintf(notify_msg.name, sizeof(notify_msg.name), "%s",
+                      "server");
+        if (vector_ok) {
+          std::snprintf(notify_msg.msg, sizeof(notify_msg.msg), "%s",
+                        "RECV_DONE");
+        } else {
+          std::snprintf(notify_msg.msg, sizeof(notify_msg.msg), "%s",
+                        "RECV_ERROR");
+        }
+        uccl_engine_send_notif(conn, &notify_msg);
+#endif
         break;
       }
       case UCCL_FIFO: {

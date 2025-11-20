@@ -14,6 +14,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <cuda.h>
 #include <cuda_runtime_api.h>
@@ -429,6 +430,7 @@ class Endpoint {
   // Pending transfers guarded by transfer_mu_.
   mutable std::mutex transfer_mu_;
   std::unordered_map<uint64_t, PendingTransfer> transfer_map_;
+  std::unordered_set<uint64_t> completed_transfer_ids_;
 
   // Recv-side CUDA resources.
   // Single global CUDA stream for all GPU unpack operations to avoid
