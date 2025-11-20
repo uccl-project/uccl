@@ -67,6 +67,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       cmd.atomic_val = atomic_val;
     } else {
       cmd.expert_idx = expert_idx;
+      if (atomic_val != 0)
+        cmd.atomic_val = atomic_val;
     }
     h->atomic_set_and_commit(cmd, &slot);
   }
