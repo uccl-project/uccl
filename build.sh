@@ -230,6 +230,28 @@ elif [[ $TARGET == "therock" ]]; then
   IMAGE_NAME="uccl-builder-therock"
 fi
 
+# Detect stale builder image
+# If a builder image exists...
+hash_image=$(docker images -q ${IMAGE_NAME})
+if [[ "${hash_image}" != "" ]]; then
+
+  # Get its and its dockerfile's timestamps
+  ts_dockerfile=$(date -r ${DOCKERFILE} --iso-8601=seconds)
+  ts_image=$(docker inspect -f '{{ .Created }}' ${IMAGE_NAME})
+
+  # If image is stale, suggest deleting & purging it
+  if [[ "${ts_dockerfile}" > "${ts_image}" ]]; then
+      echo "WARNING: builder image '${IMAGE_NAME}' is older than its source (${DOCKERFILE})" >&2
+      echo "Please, remove it, prune the builder cache, and retry the build to regenerate it." >&2
+      echo " " >&2
+      echo "  $ docker image rm '${IMAGE_NAME}'" >&2
+      echo "  $ docker buildx prune -f" >&2
+      echo " " >&2
+      echo "NOTE: Please, note this may also prune unrelated builder cache images!" >&2
+      sleep 1
+  fi
+fi
+
 # Build the builder image (contains toolchain + CUDA/ROCm)
 echo "[1/3] Building Docker image ${IMAGE_NAME} using ${DOCKERFILE}..."
 echo "Python version: ${PY_VER}"
