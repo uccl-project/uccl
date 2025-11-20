@@ -403,11 +403,16 @@ Endpoint::Endpoint(uint32_t const /*num_cpus*/) {
     throw std::runtime_error("tcpx: cudaSetDevice failed");
   }
 
-  // NOTE: We no longer create a global unpack_stream here. Instead, each
-  // channel will have its own stream created during connection setup.
-  // The launcher can be used with any stream passed at launch time.
+  // Create a single global CUDA stream for all GPU unpack operations.
+  // This avoids GPU scheduler overhead from multiple concurrent streams.
+  if (cudaStreamCreate(&global_unpack_stream_) != cudaSuccess) {
+    cuDevicePrimaryCtxRelease(cu_device_);
+    cu_context_ = nullptr;
+    throw std::runtime_error("tcpx: cudaStreamCreate failed for global_unpack_stream");
+  }
+
   device::UnpackLaunchConfig cfg;
-  cfg.stream = nullptr;  // Will be set per-launch
+  cfg.stream = global_unpack_stream_;
   cfg.use_small_kernel = true;
   cfg.enable_profiling = false;
   unpack_launcher_ = std::make_unique<device::UnpackLauncher>(cfg);
@@ -443,7 +448,12 @@ Endpoint::~Endpoint() {
   if (unpack_launcher_) {
     unpack_launcher_.reset();
   }
-  // NOTE: Per-channel streams are destroyed in free_conn_
+
+  if (global_unpack_stream_) {
+    cudaStreamDestroy(global_unpack_stream_);
+    global_unpack_stream_ = nullptr;
+  }
+
   if (cu_context_) {
     cuDevicePrimaryCtxRelease(cu_device_);
     cu_context_ = nullptr;
@@ -731,28 +741,10 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   size_t pool_size = static_cast<size_t>(max_recv_inflight);
 
   for (auto& ch : conn->channels) {
-    // Create per-channel CUDA stream
-    cudaError_t rc = cudaStreamCreateWithFlags(&ch.unpack_stream, cudaStreamNonBlocking);
-    if (rc != cudaSuccess) {
-      std::cerr << "[tcpx] cudaStreamCreateWithFlags failed: "
-                << cudaGetErrorString(rc) << std::endl;
-      ::close(sock_fd);
-      for (auto& cleanup_ch : conn->channels) {
-        if (cleanup_ch.send_comm) tcpx_close_send(cleanup_ch.send_comm);
-        if (cleanup_ch.recv_comm) tcpx_close_recv(cleanup_ch.recv_comm);
-        if (cleanup_ch.unpack_stream) cudaStreamDestroy(cleanup_ch.unpack_stream);
-        for (auto evt : cleanup_ch.recv_events) {
-          if (evt) cudaEventDestroy(evt);
-        }
-      }
-      free_conn_(conn);
-      return false;
-    }
-
     // Create per-channel event pool
     ch.recv_events.resize(pool_size);
     for (size_t i = 0; i < pool_size; ++i) {
-      rc = cudaEventCreateWithFlags(&ch.recv_events[i], cudaEventDisableTiming);
+      cudaError_t rc = cudaEventCreateWithFlags(&ch.recv_events[i], cudaEventDisableTiming);
       if (rc != cudaSuccess) {
         std::cerr << "[tcpx] cudaEventCreateWithFlags failed for event " << i
                   << ": " << cudaGetErrorString(rc) << std::endl;
@@ -764,7 +756,6 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
         for (auto& cleanup_ch : conn->channels) {
           if (cleanup_ch.send_comm) tcpx_close_send(cleanup_ch.send_comm);
           if (cleanup_ch.recv_comm) tcpx_close_recv(cleanup_ch.recv_comm);
-          if (cleanup_ch.unpack_stream) cudaStreamDestroy(cleanup_ch.unpack_stream);
           for (auto evt : cleanup_ch.recv_events) {
             if (evt) cudaEventDestroy(evt);
           }
@@ -939,27 +930,10 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   size_t pool_size_acc = static_cast<size_t>(max_recv_inflight_acc);
 
   for (auto& ch : conn->channels) {
-    // Create per-channel CUDA stream
-    cudaError_t rc = cudaStreamCreateWithFlags(&ch.unpack_stream, cudaStreamNonBlocking);
-    if (rc != cudaSuccess) {
-      std::cerr << "[tcpx] cudaStreamCreateWithFlags failed: "
-                << cudaGetErrorString(rc) << std::endl;
-      ::close(sock_fd);
-      for (auto& cleanup_ch : conn->channels) {
-        if (cleanup_ch.recv_comm) tcpx_close_recv(cleanup_ch.recv_comm);
-        if (cleanup_ch.send_comm) tcpx_close_send(cleanup_ch.send_comm);
-        if (cleanup_ch.unpack_stream) cudaStreamDestroy(cleanup_ch.unpack_stream);
-        for (auto evt : cleanup_ch.recv_events) {
-          if (evt) cudaEventDestroy(evt);
-        }
-      }
-      return false;
-    }
-
     // Create per-channel event pool
     ch.recv_events.resize(pool_size_acc);
     for (size_t i = 0; i < pool_size_acc; ++i) {
-      rc = cudaEventCreateWithFlags(&ch.recv_events[i], cudaEventDisableTiming);
+      cudaError_t rc = cudaEventCreateWithFlags(&ch.recv_events[i], cudaEventDisableTiming);
       if (rc != cudaSuccess) {
         std::cerr << "[tcpx] cudaEventCreateWithFlags failed for event " << i
                   << ": " << cudaGetErrorString(rc) << std::endl;
@@ -971,7 +945,6 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
         for (auto& cleanup_ch : conn->channels) {
           if (cleanup_ch.recv_comm) tcpx_close_recv(cleanup_ch.recv_comm);
           if (cleanup_ch.send_comm) tcpx_close_send(cleanup_ch.send_comm);
-          if (cleanup_ch.unpack_stream) cudaStreamDestroy(cleanup_ch.unpack_stream);
           for (auto evt : cleanup_ch.recv_events) {
             if (evt) cudaEventDestroy(evt);
           }
@@ -1814,7 +1787,7 @@ bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
   //
   // Two-stage pipeline (if needs_unpack=true):
   //   Stage 1: tcpx_irecv() -> bounce buffer (recv_stage1_queue)
-  //   Stage 2: GPU unpack kernel -> final destination (recv_stage2_queue)
+  //   Stage 2: GPU unpack kernel -> final destination (recv_stage2_queues)
   //
   // Single-stage (if needs_unpack=false, READ path):
   //   Stage 1: tcpx_irecv() -> device memory directly (no Stage 2)
@@ -1842,6 +1815,7 @@ bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
 
   // Initialize per-channel queues
   transfer.recv_stage1_queues.resize(conn.channels.size());
+  transfer.recv_stage2_queues.resize(conn.channels.size());
   transfer.recv_consume_queues.resize(conn.channels.size());
   transfer.channel_next_chunk_idx.resize(conn.channels.size(),
                                          transfer.chunks.size());
@@ -1996,9 +1970,8 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
   block.ready_flag = request->unpack_slot.cnt;
   block.ready_threshold = frag_cnt;
 
-  // Use per-channel stream for GPU unpack
-  cudaStream_t stream = channel.unpack_stream;
-  int launch_rc = unpack_launcher_->launch(block, stream);
+  // Use global CUDA stream for all GPU unpack operations
+  int launch_rc = unpack_launcher_->launch(block, global_unpack_stream_);
   if (launch_rc != 0) {
     std::cerr << "[tcpx] unpack kernel launch failed rc=" << launch_rc
               << std::endl;
@@ -2012,7 +1985,7 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
   channel.next_event_idx++;
 
   cudaEvent_t event = channel.recv_events[event_idx];
-  cudaError_t record_rc = cudaEventRecord(event, stream);
+  cudaError_t record_rc = cudaEventRecord(event, global_unpack_stream_);
   if (record_rc != cudaSuccess) {
     std::cerr << "[tcpx] cudaEventRecord failed: "
               << cudaGetErrorString(record_rc) << std::endl;
@@ -2062,6 +2035,7 @@ bool Endpoint::progress_send_channel_(Conn& conn, size_t channel_idx,
     // Network send complete: release per-channel window slot and mark done
     queue.pop_front();
     chunk.stage2_done = true;
+    chunk.consumed = true;
     transfer.chunks_completed++;
     chunk.request = nullptr;
 
@@ -2140,16 +2114,29 @@ bool Endpoint::progress_recv_channel_(Conn& conn, size_t channel_idx,
         auto* rx_req =
             reinterpret_cast<tcpx::plugin::tcpxRequest*>(chunk.request);
         if (!enqueue_chunk_unpack_(transfer, chunk, rx_req, conn)) return false;
-        transfer.recv_stage2_queue.push_back(idx);
+        if (chunk.channel_idx < transfer.recv_stage2_queues.size()) {
+          transfer.recv_stage2_queues[chunk.channel_idx].push_back(idx);
+        } else {
+          std::cerr << "[tcpx] stage2 queue missing for channel "
+                    << chunk.channel_idx << std::endl;
+          return false;
+        }
+
+        // Record consume order immediately (FIFO by post order); Stage 3 will
+        // wait for stage2_done before calling tcpx_irecv_consumed.
+        if (!chunk.queued_for_consume &&
+            chunk.channel_idx < transfer.recv_consume_queues.size()) {
+          transfer.recv_consume_queues[chunk.channel_idx].push_back(idx);
+          chunk.queued_for_consume = true;
+        }
       } else {
         // READ path: data already in device memory, no unpack needed
         if (!finalize_recv_chunk_(conn, chunk)) return false;
         chunk.stage2_done = true;
-        transfer.chunks_completed++;
 
-        // Add to consume queue (will be consumed in FIFO order below)
-        // Only add once to prevent duplicates
-        if (!chunk.queued_for_consume && chunk.channel_idx < transfer.recv_consume_queues.size()) {
+        // Add to consume queue (will be consumed in FIFO order below).
+        if (!chunk.queued_for_consume &&
+            chunk.channel_idx < transfer.recv_consume_queues.size()) {
           transfer.recv_consume_queues[chunk.channel_idx].push_back(idx);
           chunk.queued_for_consume = true;
         }
@@ -2160,74 +2147,54 @@ bool Endpoint::progress_recv_channel_(Conn& conn, size_t channel_idx,
   }
 
   // Stage 2: Poll CUDA events for GPU unpack completion
-  // (We still use a global stage2_queue, but only process chunks for this channel)
-  auto stage2_it = transfer.recv_stage2_queue.begin();
-  while (stage2_it != transfer.recv_stage2_queue.end()) {
-    size_t idx = *stage2_it;
-    if (idx >= transfer.chunks.size()) {
-      stage2_it = transfer.recv_stage2_queue.erase(stage2_it);
-      continue;
-    }
-    auto& chunk = transfer.chunks[idx];
+  if (channel_idx < transfer.recv_stage2_queues.size()) {
+    auto& stage2_queue = transfer.recv_stage2_queues[channel_idx];
+    while (!stage2_queue.empty()) {
+      size_t idx = stage2_queue.front();
+      if (idx >= transfer.chunks.size()) {
+        stage2_queue.pop_front();
+        continue;
+      }
+      auto& chunk = transfer.chunks[idx];
 
-    // Only process chunks for this channel
-    if (chunk.channel_idx != channel_idx) {
-      ++stage2_it;
-      continue;
-    }
-
-    if (chunk.stage2_done) {
-      stage2_it = transfer.recv_stage2_queue.erase(stage2_it);
-      continue;
-    }
-    if (!chunk.event) {
-      std::cerr << "[tcpx] missing CUDA event for chunk offset "
-                << chunk.offset << std::endl;
-      if (!finalize_recv_chunk_(conn, chunk)) return false;
-      chunk.stage2_done = true;
-      transfer.chunks_completed++;
-
-      // Add to consume queue
-      if (!chunk.queued_for_consume && chunk.channel_idx < transfer.recv_consume_queues.size()) {
-        transfer.recv_consume_queues[chunk.channel_idx].push_back(idx);
-        chunk.queued_for_consume = true;
+      if (chunk.stage2_done) {
+        stage2_queue.pop_front();
+        continue;
       }
 
-      stage2_it = transfer.recv_stage2_queue.erase(stage2_it);
+      if (!chunk.event) {
+        std::cerr << "[tcpx] missing CUDA event for chunk offset "
+                  << chunk.offset << std::endl;
+        if (!finalize_recv_chunk_(conn, chunk)) return false;
+        chunk.stage2_done = true;
+        stage2_queue.pop_front();
+        local_progress = true;
+        continue;
+      }
+
+      cudaError_t query_rc = cudaEventQuery(chunk.event);
+      if (query_rc == cudaErrorNotReady) {
+        break;  // Preserve per-channel order
+      }
+      if (query_rc != cudaSuccess) {
+        std::cerr << "[tcpx] cudaEventQuery failed: "
+                  << cudaGetErrorString(query_rc) << std::endl;
+        return false;
+      }
+
+      if (!finalize_recv_chunk_(conn, chunk)) return false;
+      chunk.stage2_done = true;
+
+      if (debug_enabled_) {
+        size_t chunk_idx = chunk_bytes_ ? (chunk.offset / chunk_bytes_) : 0;
+        std::cerr << "[tcpx] Stage 2 complete: chunk=" << chunk_idx
+                  << " channel=" << chunk.channel_idx
+                  << " (GPU unpack done)" << std::endl;
+      }
+
+      stage2_queue.pop_front();
       local_progress = true;
-      continue;
     }
-
-    cudaError_t query_rc = cudaEventQuery(chunk.event);
-    if (query_rc == cudaErrorNotReady) {
-      ++stage2_it;
-      continue;
-    }
-    if (query_rc != cudaSuccess) {
-      std::cerr << "[tcpx] cudaEventQuery failed: "
-                << cudaGetErrorString(query_rc) << std::endl;
-      return false;
-    }
-
-    // GPU unpack complete: finalize and add to consume queue
-    if (!finalize_recv_chunk_(conn, chunk)) return false;
-    chunk.stage2_done = true;
-    transfer.chunks_completed++;
-
-    if (debug_enabled_) {
-      size_t chunk_idx = chunk_bytes_ ? (chunk.offset / chunk_bytes_) : 0;
-      std::cerr << "[tcpx] Stage 2 complete: chunk=" << chunk_idx
-                << " channel=" << chunk.channel_idx << " (GPU unpack done)" << std::endl;
-    }
-
-    // Add to consume queue
-    if (!chunk.queued_for_consume && chunk.channel_idx < transfer.recv_consume_queues.size()) {
-      transfer.recv_consume_queues[chunk.channel_idx].push_back(idx);
-      chunk.queued_for_consume = true;
-    }
-
-    stage2_it = transfer.recv_stage2_queue.erase(stage2_it);
-    local_progress = true;
   }
 
   // Stage 3: Consume chunks in FIFO order
@@ -2249,28 +2216,24 @@ bool Endpoint::progress_recv_channel_(Conn& conn, size_t channel_idx,
       }
 
       // Now consume if stage2 is done
-      if (chunk.stage2_done) {
-        // Consume this chunk
-        if (!consume_recv_chunk_(conn, chunk)) return false;
-        chunk.request = nullptr;
+      // Consume this chunk
+      if (!consume_recv_chunk_(conn, chunk)) return false;
+      chunk.request = nullptr;
 
-        if (debug_enabled_) {
-          size_t chunk_idx = chunk_bytes_ ? (chunk.offset / chunk_bytes_) : 0;
-          std::cerr << "[tcpx] Stage 3 complete: chunk=" << chunk_idx
-                    << " channel=" << channel_idx << " (consumed)" << std::endl;
-        }
-
-        // Decrement per-channel inflight counter (now Stage 0 can post more chunks)
-        if (channel.recv_inflight > 0) {
-          channel.recv_inflight--;
-        }
-
-        consume_queue.pop_front();
-        local_progress = true;
-      } else {
-        // Should not happen
-        break;
+      if (debug_enabled_) {
+        size_t chunk_idx = chunk_bytes_ ? (chunk.offset / chunk_bytes_) : 0;
+        std::cerr << "[tcpx] Stage 3 complete: chunk=" << chunk_idx
+                  << " channel=" << channel_idx << " (consumed)" << std::endl;
       }
+
+      // Decrement per-channel inflight counter (now Stage 0 can post more chunks)
+      if (channel.recv_inflight > 0) {
+        channel.recv_inflight--;
+      }
+
+      consume_queue.pop_front();
+      transfer.chunks_completed++;
+      local_progress = true;
     }
   }
 
@@ -2418,7 +2381,7 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
     size_t completed = transfer.chunks_completed;
     size_t inflight = 0;
     for (auto const& chunk : transfer.chunks) {
-      if (chunk.posted && !chunk.stage2_done) ++inflight;
+      if (chunk.posted && !chunk.consumed) ++inflight;
     }
     std::cerr << "[tcpx] poll transfer=" << transfer.transfer_id
               << " state=pending"
@@ -2500,12 +2463,6 @@ void Endpoint::free_conn_(std::shared_ptr<Conn> const& conn) {
       }
     }
     channel.recv_events.clear();
-
-    // Destroy per-channel stream
-    if (channel.unpack_stream) {
-      cudaStreamDestroy(channel.unpack_stream);
-      channel.unpack_stream = nullptr;
-    }
 
     // Close TCPX comms
     if (channel.send_comm) {

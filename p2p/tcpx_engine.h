@@ -51,8 +51,7 @@ struct ChannelState {
   size_t send_inflight = 0;  // Number of send chunks in flight on this channel
   size_t recv_inflight = 0;  // Number of recv chunks in flight on this channel
 
-  // Per-channel CUDA resources for independent GPU unpack pipeline
-  cudaStream_t unpack_stream = nullptr;  // Dedicated CUDA stream for this channel
+  // Per-channel event pool for tracking GPU unpack completion
   std::vector<cudaEvent_t> recv_events;  // Event pool for tracking GPU unpack completion
   size_t next_event_idx = 0;             // Round-robin index for event allocation
 
@@ -200,9 +199,8 @@ struct PendingTransfer {
       send_queues;  // Per-channel: post-send chunks waiting for test.
   std::vector<std::deque<size_t>>
       recv_stage1_queues;  // Per-channel: posted recvs awaiting TCPX test.
-  std::deque<size_t> recv_stage2_queue;  // Global: chunks waiting for CUDA
-                                         // completion (can complete
-                                         // out-of-order).
+  std::vector<std::deque<size_t>>
+      recv_stage2_queues;  // Per-channel: Stage 2 GPU completion tracking.
 
   // Per-channel queues for tracking chunks ready to consume.
   // CRITICAL: tcpx_irecv_consumed must be called in FIFO order per channel.
@@ -433,9 +431,9 @@ class Endpoint {
   std::unordered_map<uint64_t, PendingTransfer> transfer_map_;
 
   // Recv-side CUDA resources.
-  // NOTE: unpack_stream is now per-channel (in ChannelState) to enable
-  // independent GPU unpack pipelines. We keep a single launcher that can
-  // be used with any stream.
+  // Single global CUDA stream for all GPU unpack operations to avoid
+  // GPU scheduler overhead from multiple concurrent streams.
+  cudaStream_t global_unpack_stream_ = nullptr;
   std::unique_ptr<device::UnpackLauncher> unpack_launcher_;
 
   // Tunables sourced from the environment.

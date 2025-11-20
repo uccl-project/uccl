@@ -87,14 +87,14 @@ int UnpackLauncher::launch(tcpx::rx::UnpackDescriptorBlock const& desc_block,
     std::cout.flush();
   }
 
-  // Copy descriptor block to device on the specified stream
+  // Copy descriptor block to device
   if (dbg) {
     std::cout << "[Debug Kernel] [launch] copyDescriptorBlockToDevice..."
               << std::endl;
     std::cout.flush();
   }
 
-  int ret = copyDescriptorBlockToDevice(desc_block, stream);
+  int ret = copyDescriptorBlockToDevice(desc_block);
 
   if (dbg) {
     std::cout << "[Debug Kernel] [launch] copyDescriptorBlockToDevice rc="
@@ -171,8 +171,8 @@ int UnpackLauncher::launch(tcpx::rx::UnpackDescriptorBlock const& desc_block,
     cudaEventRecord(start_event_, stream);
   }
 
-  // Launch kernel on the specified stream (not config_.stream)
-  ret = launchKernel(params, stream);
+  // Launch kernel
+  ret = launchKernel(params);
   if (dbg) {
     std::cout << "[Debug Kernel] [launch] launchKernel rc=" << ret << std::endl;
     std::cout.flush();
@@ -289,7 +289,7 @@ int UnpackLauncher::allocateDeviceMemory(size_t size) {
 }
 
 int UnpackLauncher::copyDescriptorBlockToDevice(
-    tcpx::rx::UnpackDescriptorBlock const& desc_block, cudaStream_t stream) {
+    tcpx::rx::UnpackDescriptorBlock const& desc_block) {
   constexpr size_t kHeaderSize =
       offsetof(tcpx::rx::UnpackDescriptorBlock, descriptors);
   const size_t descriptor_bytes =
@@ -308,15 +308,14 @@ int UnpackLauncher::copyDescriptorBlockToDevice(
                     std::string(std::getenv("UCCL_TCPX_LAUNCH_DEBUG")) == "1");
   if (dbg) {
     std::cout << "[Debug Kernel] [copy] H2D desc_block required_size="
-              << required_size << " stream=" << stream << std::endl;
+              << required_size << " stream=" << config_.stream << std::endl;
     std::cout.flush();
   }
 
   cudaError_t err;
-  // Use the stream passed from launch() for async copy
-  if (stream) {
+  if (config_.stream) {
     err = cudaMemcpyAsync(d_desc_block_, &desc_block, required_size,
-                          cudaMemcpyHostToDevice, stream);
+                          cudaMemcpyHostToDevice, config_.stream);
   } else {
     err = cudaMemcpy(d_desc_block_, &desc_block, required_size,
                      cudaMemcpyHostToDevice);
@@ -341,8 +340,7 @@ KernelLaunchParams UnpackLauncher::calculateLaunchParams(
   return ::calculateLaunchParams(desc_block);
 }
 
-int UnpackLauncher::launchKernel(KernelLaunchParams const& params,
-                                 cudaStream_t stream) {
+int UnpackLauncher::launchKernel(KernelLaunchParams const& params) {
   tcpx::rx::UnpackDescriptorBlock const* d_desc_ptr =
       static_cast<tcpx::rx::UnpackDescriptorBlock const*>(d_desc_block_);
 
@@ -353,7 +351,7 @@ int UnpackLauncher::launchKernel(KernelLaunchParams const& params,
   char const* probe_env = std::getenv("UCCL_TCPX_PROBE_BYTE");
   if (probe_env && std::string(probe_env) == "1") {
     std::cout << "[Debug Kernel] ProbeByte kernel launch..." << std::endl;
-    tcpxUnpackKernelProbeByte<<<1, 1, 0, stream>>>(d_desc_ptr);
+    tcpxUnpackKernelProbeByte<<<1, 1, 0, config_.stream>>>(d_desc_ptr);
     err = cudaGetLastError();
     if (err != cudaSuccess) {
       std::cout << "[Debug Kernel] ProbeByte launch failed: "
@@ -366,10 +364,11 @@ int UnpackLauncher::launchKernel(KernelLaunchParams const& params,
 
   if (launch_small) {
     tcpxUnpackKernelSmall<<<params.grid_size, params.block_size,
-                            params.shared_mem_size, stream>>>(d_desc_ptr);
+                            params.shared_mem_size, config_.stream>>>(
+        d_desc_ptr);
   } else {
     tcpxUnpackKernel<<<params.grid_size, params.block_size,
-                       params.shared_mem_size, stream>>>(d_desc_ptr);
+                       params.shared_mem_size, config_.stream>>>(d_desc_ptr);
   }
 
   err = cudaGetLastError();
