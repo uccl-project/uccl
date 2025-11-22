@@ -123,14 +123,15 @@ class RingBuffer {
   }
 
   // Pop with type conversion: converts T to U using converter function
+  // Returns the index of popped item on success, -1 on failure
   template <typename U, typename ConvertFunc>
-  bool pop_with_convert(U& item, ConvertFunc&& converter) {
+  int pop_with_convert(U& item, ConvertFunc&& converter) {
     size_t current_read = read_ptr.load(std::memory_order_relaxed);
-    if (current_read == write_ptr.load(std::memory_order_acquire)) return false;
+    if (current_read == write_ptr.load(std::memory_order_acquire)) return -1;
     converter(buffer_[current_read], item);
     read_ptr.store((current_read + 1) & (Capacity - 1),
                    std::memory_order_release);
-    return true;
+    return current_read;
   }
 
   // size_t push_bulk(T const* data, size_t count) {

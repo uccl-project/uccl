@@ -14,7 +14,7 @@ class MemoryAllocator {
   ~MemoryAllocator() = default;
 
   std::shared_ptr<RegMemBlock> allocate(
-      size_t size, MemoryType type, const std::shared_ptr<RdmaContext> ctx) {
+      size_t size, MemoryType type, const std::shared_ptr<RdmaContext> ctx = nullptr) {
     void* addr = nullptr;
     struct ibv_mr* mr = nullptr;
 
@@ -28,24 +28,26 @@ class MemoryAllocator {
       throw std::runtime_error("Failed to allocate memory");
     }
 
-    mr = ctx->regMem(addr, size);
+    if(ctx){
+      mr = ctx->regMem(addr, size);
 
-    if (!mr) {
-      deallocateRaw(addr, type);
-      throw std::runtime_error("Failed to register memory with RDMA");
+      if (!mr) {
+        deallocateRaw(addr, type);
+        throw std::runtime_error("Failed to register memory with RDMA");
+      }
     }
 
     // Create RegMemBlock with custom deleter
     auto deleter = [this, type](RegMemBlock* block) {
       if (block) {
         std::cout << "memory freed" << std::endl;
-        RdmaContext::deregMem(block->mr);
-        deallocateRaw(block->addr, type);
+        if(block->mr) RdmaContext::deregMem(block->mr);
+        if(block->addr) deallocateRaw(block->addr, type);
         delete block;
       }
     };
 
-    auto block = new RegMemBlock(addr, size, type, mr, true);
+    auto block = new RegMemBlock(addr, size, type, mr);
     return std::shared_ptr<RegMemBlock>(block, deleter);
   }
 

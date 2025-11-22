@@ -29,6 +29,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -36,17 +37,44 @@
 #include <vector>
 #include <cuda_runtime.h>
 
+#include <glog/logging.h>
+
+#include "util/util.h"
+
 #define GID_INDEX 0
 #define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
 #define QKEY 0x12345
 #define PORT_NUM 1
 #define EFA_RDM_DEFAULT_RNR_RETRY (3)
 
+// Branch prediction hints for optimization
+
+// #ifdef __GNUC__
+// #define likely(x)   __builtin_expect(!!(x), 1)
+// #define unlikely(x) __builtin_expect(!!(x), 0)
+// #else
+// #define likely(x)   (x)
+// #define unlikely(x) (x)
+// #endif
+
 constexpr size_t RING_CAPACITY = 16384;  // Must be power of 2
 
 struct ChannelMetaData {
   uint32_t qpn;
   union ibv_gid gid;
+
+  friend std::ostream& operator<<(std::ostream& os, ChannelMetaData const& meta) {
+    os << "ChannelMetaData{qpn: " << meta.qpn << ", gid: ";
+    std::ios_base::fmtflags flags = os.flags();
+    for (int i = 0; i < 16; ++i) {
+      os << std::hex << std::setw(2) << std::setfill('0')
+         << static_cast<int>(meta.gid.raw[i]);
+      if (i == 7) os << ":";
+    }
+    os.flags(flags);
+    os << "}";
+    return os;
+  }
 };
 
 enum class MemoryType { HOST, GPU };
@@ -56,6 +84,12 @@ enum class ChannelType : int16_t { Control, Normal };
 struct OOBMetaData {
   std::string server_ip;
   int64_t server_port;
+
+  friend std::ostream& operator<<(std::ostream& os, OOBMetaData const& meta) {
+    os << "OOBMetaData{server_ip: " << meta.server_ip
+       << ", server_port: " << meta.server_port << "}";
+    return os;
+  }
 };
 
 struct CQMeta {
@@ -64,7 +98,17 @@ struct CQMeta {
   uint32_t len;
   int imm;
   inline bool hasIMM() { return op_code == IBV_WC_RECV_RDMA_WITH_IMM; };
+
+  friend std::ostream& operator<<(std::ostream& os, CQMeta const& meta) {
+    os << "CQMeta{wr_id: " << meta.wr_id
+       << ", op_code: " << meta.op_code
+       << ", len: " << meta.len
+       << ", imm: " << meta.imm
+       << ", hasIMM: " << (meta.op_code == IBV_WC_RECV_RDMA_WITH_IMM) << "}";
+    return os;
+  }
 };
+
 
 // Registered memory region info
 typedef struct RegMemBlock {
@@ -72,11 +116,26 @@ typedef struct RegMemBlock {
   size_t size;
   MemoryType type;
   struct ibv_mr* mr;
-  bool pool_allocated;  // true if allocated by pool, false if externally
-                        // provided
-  RegMemBlock(void* a, size_t s, MemoryType t, struct ibv_mr* m,
-              bool pool_alloc)
-      : addr(a), size(s), type(t), mr(m), pool_allocated(pool_alloc){};
+  std::unordered_map<int64_t, struct ibv_mr* > mr_map;
+  bool pool_allocated = false;
+  RegMemBlock(void* a, size_t s, MemoryType t,struct ibv_mr* m, bool p = false)
+      : addr(a), size(s), type(t), mr(m), pool_allocated(p) {};
+
+  // Equality operator for hash support (based on size and type only)
+  bool operator==(const RegMemBlock& other) const {
+    return addr == other.addr && size == other.size && type == other.type;
+  }
+
+  friend std::ostream& operator<<(std::ostream& os, RegMemBlock const& block) {
+    os << "RegMemBlock{addr: " << block.addr
+       << ", size: " << block.size
+       << ", type: " << (block.type == MemoryType::HOST ? "HOST" : "GPU")
+       << ", mr: " << block.mr
+       << ", lkey: " << (block.mr ? block.mr->lkey : 0)
+       << ", rkey: " << (block.mr ? block.mr->rkey : 0)
+       << ", pool_allocated: " << block.pool_allocated << "}";
+    return os;
+  }
 } RegMemBlock;
 
 typedef struct RemoteMemInfo {
@@ -105,6 +164,14 @@ typedef struct RemoteMemInfo {
         rkey(block->mr ? block->mr->rkey : 0),
         length(block->size),
         type(block->type) {}
+
+  friend std::ostream& operator<<(std::ostream& os, RemoteMemInfo const& info) {
+    os << "RemoteMemInfo{addr: 0x" << std::hex << info.addr << std::dec
+       << ", rkey: 0x" << std::hex << info.rkey << std::dec
+       << ", length: " << info.length
+       << ", type: " << (info.type == MemoryType::HOST ? "HOST" : "GPU") << "}";
+    return os;
+  }
 } RemoteMemInfo;
 
 enum class ReqFlag : int16_t { PENDING = 2, IN_PROGRESS = 3, IS_DONE = 4 };
@@ -112,6 +179,13 @@ struct alignas(64) SendReqMeta {
   uint32_t rank_id;
   uint32_t channel_id;
   RemoteMemInfo remote_mem;
+
+  friend std::ostream& operator<<(std::ostream& os, SendReqMeta const& meta) {
+    os << "SendReqMeta{rank_id: " << meta.rank_id
+       << ", channel_id: " << meta.channel_id
+       << ", remote_mem: " << meta.remote_mem << "}";
+    return os;
+  }
 };
 struct alignas(64) SendReqMetaOnRing {
   SendReqMeta meta;
@@ -134,6 +208,14 @@ struct alignas(64) SendReqMetaOnRing {
 
   // Set SendReqMeta part
   void setSendReqMeta(SendReqMeta const& m) { meta = m; }
+
+  friend std::ostream& operator<<(std::ostream& os, SendReqMetaOnRing const& ring) {
+    auto flag_val = ring.flag.load(std::memory_order_relaxed);
+    os << "SendReqMetaOnRing{meta: " << ring.meta
+       << ", flag: " << (flag_val == ReqFlag::PENDING ? "PENDING" :
+                         flag_val == ReqFlag::IN_PROGRESS ? "IN_PROGRESS" : "IS_DONE") << "}";
+    return os;
+  }
 };
 
 // Ring buffer size for control channel
@@ -203,6 +285,26 @@ struct EFASendRequest {
   inline uint32_t getImm() const { return imm_data; }
 
   inline uint32_t getLocalLen() const { return local_mem->size; }
+
+  friend std::ostream& operator<<(std::ostream& os, EFASendRequest const& req) {
+    os << "EFASendRequest{";
+    os << "from_rank_id: " << req.from_rank_id
+       << ", to_rank_id: " << req.to_rank_id
+       << ", channel_id: " << req.channel_id
+       << ", imm_data: " << req.imm_data;
+    if (req.local_mem) {
+      os << ", local_mem: " << *req.local_mem;
+    } else {
+      os << ", local_mem: nullptr";
+    }
+    if (req.remote_mem) {
+      os << ", remote_mem: " << *req.remote_mem;
+    } else {
+      os << ", remote_mem: nullptr";
+    }
+    os << "}";
+    return os;
+  }
 };
 
 struct EFARecvRequest {
@@ -222,6 +324,20 @@ struct EFARecvRequest {
   }
 
   inline uint32_t getLocalLen() const { return local_mem->size; }
+
+  friend std::ostream& operator<<(std::ostream& os, EFARecvRequest const& req) {
+    os << "EFARecvRequest{";
+    os << "from_rank_id: " << req.from_rank_id
+       << ", to_rank_id: " << req.to_rank_id
+       << ", channel_id: " << req.channel_id;
+    if (req.local_mem) {
+      os << ", local_mem: " << *req.local_mem;
+    } else {
+      os << ", local_mem: nullptr";
+    }
+    os << "}";
+    return os;
+  }
 };
 
 template <typename T>
@@ -330,3 +446,18 @@ static inline ssize_t try_send(int fd, char const* buf, size_t len) {
   }
   return n;
 }
+
+// Hash support for RegMemBlock (based on size and type only)
+namespace std {
+template <>
+struct hash<RegMemBlock> {
+  size_t operator()(const RegMemBlock& block) const {
+    // Combine hash of size and type
+    size_t h1 = hash<size_t>{}(block.size);
+    size_t h2 = hash<int>{}(static_cast<int>(block.type));
+
+    // Use a simple hash combining algorithm
+    return h1 ^ (h2 << 1);
+  }
+};
+}  // namespace std

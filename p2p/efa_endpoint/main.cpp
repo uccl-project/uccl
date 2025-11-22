@@ -7,48 +7,250 @@
 #include <iostream>
 #include <string>
 #include <thread>
-// ./efa_endpoint_example 0 1 19997 0 10.1.82.97 19997
+#include <gflags/gflags.h>
+#include <glog/logging.h>
+
+// Define command line flags
+DEFINE_int32(gpu_index, 0, "GPU index to use");
+DEFINE_uint64(rank_id, 0, "Local rank ID");
+DEFINE_uint64(port, 19997, "Local port for OOB server");
+DEFINE_uint64(remote_rank, 1, "Remote rank ID to connect to");
+DEFINE_string(remote_ip, "", "Remote IP address");
+DEFINE_uint64(remote_port, 19997, "Remote port number");
+DEFINE_string(test_mode, "correctness", "Test mode: 'correctness' or 'bandwidth'");
+DEFINE_int32(iterations, 1000, "Number of iterations for bandwidth test");
+DEFINE_uint64(buffer_size, 1024 * 1024, "Buffer size in bytes");
+
+// Example usage:
+// Correctness test (100 iterations with verification):
+// ./efa_endpoint_example --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1 --remote_ip=10.1.219.155 --remote_port=19997 --test_mode=correctness --buffer_size=1048576 this one
+// ./efa_endpoint_example --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0 --remote_ip=10.1.82.97 --remote_port=19997 --test_mode=correctness --buffer_size=1048576
 //
-// ./efa_endpoint_example 0 0 19997 1 10.1.219.155 19997  这个
-void print_usage(char const* program_name) {
-  std::cerr << "Usage: " << program_name
-            << " <gpu_index> <rank_id> <port> <remote_rank> <remote_ip> "
-               "<remote_port>\n"
-            << "\n"
-            << "Parameters:\n"
-            << "  gpu_index    : GPU index to use\n"
-            << "  rank_id      : Local rank ID\n"
-            << "  port         : Local port for OOB server\n"
-            << "  remote_rank  : Remote rank ID to connect to\n"
-            << "  remote_ip    : Remote IP address\n"
-            << "  remote_port  : Remote port number\n"
-            << "\n"
-            << "Example:\n"
-            << "  " << program_name << " 0 0 8888 1 192.168.1.100 8889\n";
+// Bandwidth test (custom iterations):
+// ./efa_endpoint_example --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1 --remote_ip=10.1.219.155 --remote_port=19997 --test_mode=bandwidth --iterations=1000 --buffer_size=1048576
+// ./efa_endpoint_example --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0 --remote_ip=10.1.82.97 --remote_port=19997 --test_mode=bandwidth --iterations=1000 --buffer_size=1048576
+
+// Correctness test: perform 100 send/recv operations and verify results
+void correctness_test(EFAEndpoint& endpoint, MemoryAllocator& allocator) {
+  std::cout << "\n=== Starting Correctness Test (100 iterations) ===\n";
+
+  const int num_iterations = 100;
+  size_t test_buffer_size = FLAGS_buffer_size;
+
+  // Allocate buffers
+  auto send_mem = allocator.allocate(test_buffer_size, MemoryType::GPU,
+                                     endpoint.getContext(0));
+  auto recv_mem = allocator.allocate(test_buffer_size, MemoryType::GPU,
+                                     endpoint.getContext(0));
+
+  if (!endpoint.regMem(send_mem)) {
+    throw std::runtime_error("Failed to register send_mem");
+  }
+  if (!endpoint.regMem(recv_mem)) {
+    throw std::runtime_error("Failed to register recv_mem");
+  }
+
+  std::cout << "Allocated buffers of size " << test_buffer_size << " bytes\n";
+
+  // Host buffers for verification
+  char* h_send_data = (char*)malloc(test_buffer_size);
+  char* h_recv_data = (char*)malloc(test_buffer_size);
+
+  int passed = 0;
+  int failed = 0;
+
+  for (int i = 0; i < num_iterations; i++) {
+    // Prepare unique test data for this iteration
+    std::string test_message = "Rank " + std::to_string(FLAGS_rank_id) +
+                               " iteration " + std::to_string(i);
+    memset(h_send_data, 0, test_buffer_size);
+    memset(h_recv_data, 0, test_buffer_size);
+    strcpy(h_send_data, test_message.c_str());
+
+    // Copy to GPU
+    cudaMemcpy(send_mem->addr, h_send_data, test_buffer_size, cudaMemcpyHostToDevice);
+    cudaMemset(recv_mem->addr, 0, test_buffer_size);
+
+    // Create requests
+    auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
+    auto send_req = std::make_shared<EFASendRequest>(send_mem, remote_mem_placeholder);
+    auto recv_req = std::make_shared<EFARecvRequest>(recv_mem);
+
+    // Post recv first
+    int64_t recv_index = endpoint.recv(FLAGS_remote_rank, recv_req);
+    std::cout << "recv_index:" <<recv_index<<std::endl;
+    if (recv_index < 0) {
+      std::cerr << "Failed to post recv request\n";
+      failed++;
+      continue;
+    }
+
+    // Post send
+    int64_t send_wr_id = endpoint.send(FLAGS_remote_rank, send_req);
+
+    std::cout << "send_wr_id:" <<send_wr_id<<std::endl;
+    if(send_wr_id < 0) {
+      std::cerr << "Failed to post send request\n";
+      failed++;
+      continue;
+    }
+
+    // Wait for completion
+    endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
+    std::cout << "After checkRecvComplete\n";
+    endpoint.checkSendComplete(FLAGS_remote_rank, send_req->channel_id, send_wr_id);
+    
+
+    // Verify received data
+    cudaMemcpy(h_recv_data, recv_mem->addr, test_buffer_size, cudaMemcpyDeviceToHost);
+
+    std::string expected_from_remote = "Rank " + std::to_string(FLAGS_remote_rank) +
+                                       " iteration " + std::to_string(i);
+
+    if (strcmp(h_recv_data, expected_from_remote.c_str()) == 0) {
+      passed++;
+      if (i % 10 == 0) {
+        std::cout << "Iteration " << i << " PASSED\n";
+      }
+    } else {
+      failed++;
+      std::cout << "Iteration " << i << " FAILED - Expected: \""
+                << expected_from_remote << "\", Got: \"" << h_recv_data << "\"\n";
+    }
+  }
+
+  free(h_send_data);
+  free(h_recv_data);
+
+  std::cout << "\n=== Correctness Test Results ===\n";
+  std::cout << "Total iterations: " << num_iterations << "\n";
+  std::cout << "Passed: " << passed << "\n";
+  std::cout << "Failed: " << failed << "\n";
+  std::cout << "Success rate: " << (100.0 * passed / num_iterations) << "%\n";
+}
+
+// Bandwidth test: perform N send/recv operations and measure bandwidth
+void bandwidth_test(EFAEndpoint& endpoint, MemoryAllocator& allocator, int iterations) {
+  std::cout << "\n=== Starting Bandwidth Test (" << iterations << " iterations) ===\n";
+
+  size_t test_buffer_size = FLAGS_buffer_size;
+
+  // Allocate buffers
+  auto send_mem = allocator.allocate(test_buffer_size, MemoryType::GPU,
+                                     endpoint.getContext(0));
+  auto recv_mem = allocator.allocate(test_buffer_size, MemoryType::GPU,
+                                     endpoint.getContext(0));
+
+  if (!endpoint.regMem(send_mem)) {
+    throw std::runtime_error("Failed to register send_mem");
+  }
+  if (!endpoint.regMem(recv_mem)) {
+    throw std::runtime_error("Failed to register recv_mem");
+  }
+
+  std::cout << "Buffer size: " << test_buffer_size << " bytes ("
+            << (test_buffer_size / (1024.0 * 1024.0)) << " MB)\n";
+
+  // Initialize send buffer
+  char* h_data = (char*)malloc(test_buffer_size);
+  memset(h_data, 'A', test_buffer_size);
+  cudaMemcpy(send_mem->addr, h_data, test_buffer_size, cudaMemcpyHostToDevice);
+  free(h_data);
+
+  // Warmup
+  std::cout << "Running warmup (10 iterations)...\n";
+  for (int i = 0; i < 10; i++) {
+    auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
+    auto send_req = std::make_shared<EFASendRequest>(send_mem, remote_mem_placeholder);
+    auto recv_req = std::make_shared<EFARecvRequest>(recv_mem);
+
+    int64_t recv_index = endpoint.recv(FLAGS_remote_rank, recv_req);
+    int64_t send_wr_id = endpoint.send(FLAGS_remote_rank, send_req);
+
+    endpoint.checkSendComplete(FLAGS_remote_rank, send_req->channel_id, send_wr_id);
+    endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
+  }
+
+  std::cout << "Starting benchmark...\n";
+
+  // Benchmark
+  auto start_time = std::chrono::high_resolution_clock::now();
+
+  for (int i = 0; i < iterations; i++) {
+    std::vector<int64_t> recv_indices;
+    std::vector<std::pair<int, int64_t>> send_infos; // (channel_id, send_wr_id)
+
+    auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
+    auto send_req = std::make_shared<EFASendRequest>(send_mem, remote_mem_placeholder);
+    auto recv_req = std::make_shared<EFARecvRequest>(recv_mem);
+
+    // 先进行recv/send操作，收集index
+    int64_t recv_index = endpoint.recv(FLAGS_remote_rank, recv_req);
+    recv_indices.push_back(recv_index);
+
+    int64_t send_wr_id = endpoint.send(FLAGS_remote_rank, send_req);
+    send_infos.push_back({send_req->channel_id, send_wr_id});
+
+    // 统一遍历进行checkSendComplete
+    for (const auto& [channel_id, send_wr_id] : send_infos) {
+      endpoint.checkSendComplete(FLAGS_remote_rank, channel_id, send_wr_id);
+    }
+
+    // 统一遍历进行checkRecvComplete
+    for (int64_t recv_index : recv_indices) {
+      endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
+    }
+
+    // if ((i + 1) % 100 == 0) {
+    //   std::cout << "Completed " << (i + 1) << " iterations\n";
+    // }
+  }
+
+  auto end_time = std::chrono::high_resolution_clock::now();
+
+  // Calculate statistics
+  double elapsed_seconds = std::chrono::duration<double>(end_time - start_time).count();
+  double total_bytes = static_cast<double>(test_buffer_size) * iterations * 2; // send + recv
+  double bandwidth_gbps = (total_bytes / elapsed_seconds) / (1024.0 * 1024.0 * 1024.0);
+  double latency_us = (elapsed_seconds / iterations) * 1000000.0;
+
+  std::cout << "\n=== Bandwidth Test Results ===\n";
+  std::cout << "Iterations: " << iterations << "\n";
+  std::cout << "Buffer size: " << test_buffer_size << " bytes\n";
+  std::cout << "Total time: " << elapsed_seconds << " seconds\n";
+  std::cout << "Total data transferred: " << (total_bytes / (1024.0 * 1024.0 * 1024.0)) << " GB\n";
+  std::cout << "Bandwidth: " << bandwidth_gbps << " GB/s\n";
+  std::cout << "Average latency (per round-trip): " << latency_us << " us\n";
+  std::cout << "Operations per second: " << (iterations / elapsed_seconds) << "\n";
 }
 
 int main(int argc, char* argv[]) {
-  // Check command line arguments
-  if (argc != 7) {
-    print_usage(argv[0]);
+  // Initialize Google's logging library
+  google::InitGoogleLogging(argv[0]);
+
+  // Set logging level to INFO
+  // FLAGS_minloglevel = google::INFO;
+  FLAGS_minloglevel = google::WARNING;
+  FLAGS_logtostderr = true;
+
+  // Parse command line flags
+  gflags::SetUsageMessage("EFAEndpoint usage example");
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
+
+  // Validate required flags
+  if (FLAGS_remote_ip.empty()) {
+    std::cerr << "remote_ip is required!\n";
+    gflags::ShowUsageWithFlagsRestrict(argv[0], "main.cpp");
     return 1;
   }
 
-  // Parse command line arguments
-  int gpu_index = std::atoi(argv[1]);
-  uint64_t rank_id = std::stoull(argv[2]);
-  uint64_t port = std::stoull(argv[3]);
-  uint64_t remote_rank = std::stoull(argv[4]);
-  std::string remote_ip = argv[5];
-  uint64_t remote_port = std::stoull(argv[6]);
-
   std::cout << "=== EFAEndpoint Usage Example ===\n";
-  std::cout << "GPU Index: " << gpu_index << "\n";
-  std::cout << "Rank ID: " << rank_id << "\n";
-  std::cout << "Port: " << port << "\n";
-  std::cout << "Remote Rank: " << remote_rank << "\n";
-  std::cout << "Remote IP: " << remote_ip << "\n";
-  std::cout << "Remote Port: " << remote_port << "\n";
+  std::cout << "GPU Index: " << FLAGS_gpu_index << "\n";
+  std::cout << "Rank ID: " << FLAGS_rank_id << "\n";
+  std::cout << "Port: " << FLAGS_port << "\n";
+  std::cout << "Remote Rank: " << FLAGS_remote_rank << "\n";
+  std::cout << "Remote IP: " << FLAGS_remote_ip << "\n";
+  std::cout << "Remote Port: " << FLAGS_remote_port << "\n";
   std::cout << "================================\n\n";
 
   //     size_t gpu_size = 1024 * 1024;
@@ -59,155 +261,81 @@ int main(int argc, char* argv[]) {
   // RemoteMemInfo info(gpu_mem);
   // recv_test_ = std::make_shared<EFARecvRequest>(gpu_mem);
   try {
+    // Set GPU device for the entire process
+    cudaError_t cuda_err = cudaSetDevice(FLAGS_gpu_index);
+    if (cuda_err != cudaSuccess) {
+      std::cerr << "Failed to set GPU device " << FLAGS_gpu_index
+                << ": " << cudaGetErrorString(cuda_err) << "\n";
+      return 1;
+    }
+    std::cout << "Set GPU device to: " << FLAGS_gpu_index << "\n\n";
+
     // Initialize RDMA device manager
     std::cout << "Initializing RDMA device manager...\n";
     auto& device_manager = RdmaDeviceManager::instance();
-    std::cout << "Found " << device_manager.deviceCount()
-              << " RDMA device(s)\n\n";
+    auto results = device_manager.get_best_dev_idx(FLAGS_gpu_index);
+
+    // Print results
+    std::cout << "Best device indices for GPU " << FLAGS_gpu_index << ": [";
+    for (size_t i = 0; i < results.size(); i++) {
+      std::cout << results[i];
+      if (i < results.size() - 1) std::cout << ", ";
+    }
+    std::cout << "]\n";
+
+    std::cout << "Found " << device_manager.deviceCount() << " RDMA device(s)\n\n";
 
     // Create EFAEndpoint with device_ids = {0}
     std::cout << "Creating EFAEndpoint...\n";
-    std::vector<size_t> device_ids = {0, 1, 2};
-    EFAEndpoint endpoint(gpu_index, rank_id, port, device_ids);
+    std::vector<size_t> device_ids = {0, 1};
+    EFAEndpoint endpoint(FLAGS_gpu_index, FLAGS_rank_id, FLAGS_port);
     std::cout << "EFAEndpoint created successfully\n\n";
 
     // Create OOBMetaData for remote rank
     std::cout << "Setting up remote rank metadata...\n";
     auto remote_meta = std::make_shared<OOBMetaData>();
-    remote_meta->server_ip = remote_ip;
-    remote_meta->server_port = remote_port;
+    remote_meta->server_ip = FLAGS_remote_ip;
+    remote_meta->server_port = FLAGS_remote_port;
 
     // Add remote rank metadata
     std::unordered_map<uint64_t, std::shared_ptr<OOBMetaData>> rank_meta_map;
-    rank_meta_map[remote_rank] = remote_meta;
+    rank_meta_map[FLAGS_remote_rank] = remote_meta;
     endpoint.add_rank_oob_meta(rank_meta_map);
-    std::cout << "Added remote rank " << remote_rank
-              << " metadata (IP: " << remote_ip << ", Port: " << remote_port
-              << ")\n\n";
+    std::cout << "Added remote rank " << FLAGS_remote_rank
+              << " metadata (IP: " << FLAGS_remote_ip << ", Port: " << FLAGS_remote_port << ")\n\n";
 
     // Wait a bit to ensure both endpoints are ready
-    std::cout
-        << "Waiting for 2 seconds to ensure both endpoints are ready...\n";
+    std::cout << "Waiting for 2 seconds to ensure both endpoints are ready...\n";
     std::this_thread::sleep_for(std::chrono::seconds(2));
 
     // Connect to remote rank
-    std::cout << "Connecting to remote rank " << remote_rank << "...\n";
-    bool connect_result = endpoint.build_connect(remote_rank);
+    std::cout << "Connecting to remote rank " << FLAGS_remote_rank << "...\n";
+    bool connect_result = endpoint.build_connect(FLAGS_remote_rank);
 
     if (connect_result) {
-      std::cout << "Successfully connected to remote rank " << remote_rank
-                << "\n";
+      std::cout << "Successfully connected to remote rank " << FLAGS_remote_rank << "\n";
     } else {
-      std::cerr << "Failed to connect to remote rank " << remote_rank << "\n";
+      std::cerr << "Failed to connect to remote rank " << FLAGS_remote_rank << "\n";
       return 1;
     }
 
     std::this_thread::sleep_for(std::chrono::seconds(5));
 
-    // Test send/recv functionality
-    std::cout << "\n=== Testing send/recv functionality ===\n";
-
-    // Allocate memory for send and recv
+    // Create memory allocator
     MemoryAllocator allocator;
-    size_t buffer_size = 1024 * 1024;  // 1MB
-    auto send_mem = allocator.allocate(buffer_size, MemoryType::HOST,
-                                       endpoint.getContext(0));
-    auto recv_mem = allocator.allocate(buffer_size, MemoryType::HOST,
-                                       endpoint.getContext(0));
 
-    std::cout << "Allocated " << send_mem->size << " bytes for send buffer at "
-              << send_mem->addr << "\n";
-    std::cout << "Allocated " << recv_mem->size << " bytes for recv buffer at "
-              << recv_mem->addr << "\n";
-
-    // Prepare test data
-    std::string test_message =
-        "Hello from rank " + std::to_string(rank_id) + "!";
-    if (send_mem->type == MemoryType::GPU) {
-      char* h_data = (char*)malloc(buffer_size);
-      strcpy(h_data, test_message.c_str());
-      cudaMemcpy(send_mem->addr, h_data, buffer_size, cudaMemcpyHostToDevice);
-      free(h_data);
+    // Run the selected test mode
+    if (FLAGS_test_mode == "correctness") {
+      correctness_test(endpoint, allocator);
+    } else if (FLAGS_test_mode == "bandwidth") {
+      bandwidth_test(endpoint, allocator, FLAGS_iterations);
     } else {
-      strcpy((char*)send_mem->addr, test_message.c_str());
+      std::cerr << "Invalid test_mode: " << FLAGS_test_mode << "\n";
+      std::cerr << "Valid options are: 'correctness' or 'bandwidth'\n";
+      return 1;
     }
 
-    std::cout << "Prepared send data: \"" << test_message << "\"\n";
-
-    // Create send and recv requests
-    // For send request, create a placeholder remote_mem (will be filled by
-    // control channel)
-    auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
-    auto send_req =
-        std::make_shared<EFASendRequest>(send_mem, remote_mem_placeholder);
-    auto recv_req = std::make_shared<EFARecvRequest>(recv_mem);
-
-    uint32_t channel_id = 0;  // Use channel 0 for testing
-
-    // Test based on rank_id
-    if (rank_id == 0) {
-      // Rank 0: First recv, then send
-      std::cout << "\n[Rank 0] Posting recv request...\n";
-      int64_t recv_index = endpoint.recv(remote_rank, channel_id, recv_req);
-      std::cout << "[Rank 0] Recv posted with index: " << recv_index << "\n";
-
-      std::cout << "[Rank 0] Checking recv completion...\n";
-      endpoint.checkRecvComplete(remote_rank, recv_index);
-      std::cout << "[Rank 0] Recv completed!\n";
-
-      // Read received data
-      char* h_data = (char*)malloc(buffer_size);
-      if (recv_mem->type == MemoryType::GPU) {
-        cudaMemcpy(h_data, recv_mem->addr, buffer_size, cudaMemcpyDeviceToHost);
-      } else {
-        memcpy(h_data, recv_mem->addr, buffer_size);
-      }
-      std::cout << "[Rank 0] Received message: \"" << h_data << "\"\n";
-      free(h_data);
-
-      std::this_thread::sleep_for(std::chrono::seconds(1));
-
-      std::cout << "\n[Rank 0] Posting send request...\n";
-      int64_t send_wr_id = endpoint.send(remote_rank, channel_id, send_req);
-      std::cout << "[Rank 0] Send posted with wr_id: " << send_wr_id << "\n";
-
-      std::cout << "[Rank 0] Checking send completion...\n";
-      endpoint.checkSendComplete(remote_rank, channel_id, send_wr_id);
-      std::cout << "[Rank 0] Send completed!\n";
-
-    } else {
-      // Rank 1: First send, then recv
-      std::cout << "\n[Rank 1] Posting send request...\n";
-      int64_t send_wr_id = endpoint.send(remote_rank, channel_id, send_req);
-      std::cout << "[Rank 1] Send posted with wr_id: " << send_wr_id << "\n";
-
-      std::cout << "[Rank 1] Checking send completion...\n";
-      endpoint.checkSendComplete(remote_rank, channel_id, send_wr_id);
-      std::cout << "[Rank 1] Send completed!\n";
-
-      std::this_thread::sleep_for(std::chrono::seconds(1));
-
-      std::cout << "\n[Rank 1] Posting recv request...\n";
-      int64_t recv_index = endpoint.recv(remote_rank, channel_id, recv_req);
-      std::cout << "[Rank 1] Recv posted with index: " << recv_index << "\n";
-
-      std::cout << "[Rank 1] Checking recv completion...\n";
-      endpoint.checkRecvComplete(remote_rank, recv_index);
-      std::cout << "[Rank 1] Recv completed!\n";
-
-      // Read received data
-      char* h_data = (char*)malloc(buffer_size);
-      if (recv_mem->type == MemoryType::GPU) {
-        cudaMemcpy(h_data, recv_mem->addr, buffer_size, cudaMemcpyDeviceToHost);
-      } else {
-        memcpy(h_data, recv_mem->addr, buffer_size);
-      }
-      std::cout << "[Rank 1] Received message: \"" << h_data << "\"\n";
-      free(h_data);
-    }
-
-    std::cout << "\n=== Send/Recv test completed successfully ===\n";
-    std::cout << "Press Ctrl+C to exit...\n";
+    std::cout << "\nTest completed. Press Ctrl+C to exit...\n";
 
     // Keep the program running to maintain the connection
     while (true) {
@@ -219,5 +347,6 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
+  google::ShutdownGoogleLogging();
   return 0;
 }

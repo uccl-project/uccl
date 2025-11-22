@@ -8,6 +8,8 @@
 #include "rdma_context.h"
 #include "rdma_device.h"
 
+#include <glog/logging.h>
+
 // ChannelGroup manages multiple channels for a connection
 
 // EFAEndpoint manages RDMA contexts and channel groups
@@ -19,9 +21,15 @@ class EFAEndpoint {
       int gpu_index, uint64_t rank_id, uint64_t port = 0,
       std::vector<size_t> const& device_ids = std::vector<size_t>())
       : gpu_index_(gpu_index), rank_id_(rank_id), port_(port) {
-    initializeContexts(device_ids);
-    std::cout << "EFAEndpoint initialized with " << contexts_.size()
-              << " context(s) for GPU " << gpu_index_ << std::endl;
+    std::vector<size_t> actual_device_ids;
+    if(device_ids.size() == 0) {
+      actual_device_ids = RdmaDeviceManager::instance().get_best_dev_idx(gpu_index);
+    } else {
+      actual_device_ids = device_ids;
+    }
+    initializeContexts(actual_device_ids);
+    UCCL_LOG_EP << "EFAEndpoint initialized with " << contexts_.size()
+                << " context(s) for GPU " << gpu_index_;
 
     oob_server_ = std::make_shared<EpollServer>(
         port_, [this](std::string const& input, std::string& output) {
@@ -58,6 +66,48 @@ class EFAEndpoint {
     return contexts_;
   }
 
+  bool regMem(std::shared_ptr<RegMemBlock> reg_block) {
+    if (unlikely(!reg_block)) {
+      UCCL_LOG_ERROR << "Error: regMem called with null reg_block";
+      return false;
+    }
+
+    // Register memory with each context
+    try {
+      for (size_t context_id = 0; context_id < contexts_.size(); ++context_id) {
+        auto context = contexts_[context_id];
+        if (unlikely(!context)) {
+          UCCL_LOG_ERROR << "Error: context at context_id " << context_id << " is null";
+          return false;
+        }
+
+        // Register memory region for this context
+        struct ibv_mr* mr = ibv_reg_mr(
+            context->getPD(), reg_block->addr, reg_block->size,
+            IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                IBV_ACCESS_REMOTE_READ);
+
+        if (unlikely(!mr)) {
+          UCCL_LOG_ERROR << "Error: ibv_reg_mr failed for block at " << reg_block->addr
+                         << " size " << reg_block->size << " context_id " << context_id;
+          return false;
+        }
+
+        // Store the MR in the RegMemBlock's mr_map using context_id as key
+        reg_block->mr_map[context_id] = mr;
+
+        UCCL_LOG_RE << "Registered memory block at " << reg_block->addr << " size "
+                    << reg_block->size << " with context_id " << context_id
+                    << " (lkey: 0x" << std::hex << mr->lkey << ", rkey: 0x"
+                    << mr->rkey << std::dec << ")";
+      }
+
+      return true;
+    } catch (std::exception const& e) {
+      UCCL_LOG_ERROR << "Exception during memory registration: " << e.what();
+      return false;
+    }
+  }
   // Channel group management
   // std::shared_ptr<ChannelGroup> getChannelGroup(uint64_t connect_id) {
   //     auto it = channel_groups_.find(connect_id);
@@ -188,12 +238,11 @@ class EFAEndpoint {
     // Allocate memory for control channel ring buffer
     auto ctrl_mem =
         allocator_->allocate(RING_BUFFER_SIZE, MemoryType::HOST, contexts_[0]);
-    std::cout << "Allocated " << ctrl_mem->size
-              << " bytes for control channel ring buffer at " << ctrl_mem->addr
-              << std::endl;
+    UCCL_LOG_RE << "Allocated " << ctrl_mem->size
+                << " bytes for control channel ring buffer at " << ctrl_mem->addr;
 
     auto control_channel =
-        std::make_shared<SendControlChannel>(contexts_[0], ctrl_mem);
+        std::make_shared<SendControlChannel>(contexts_[0], ctrl_mem, 0);
     std::shared_ptr<RemoteMemInfo> ctrl_info =
         std::make_shared<RemoteMemInfo>(ctrl_mem);
     MetaInfoToExchange ctrl_meta(rank_id_, 0, control_channel->get_local_meta(),
@@ -207,15 +256,16 @@ class EFAEndpoint {
           auto ctrl_ch_copy = control_channel;
           this->setSendControlChannel(rank_id, std::move(ctrl_ch_copy));
         });
-    std::cout << "Created control channel with QPN: "
-              << control_channel->get_local_meta()->qpn << std::endl;
+    UCCL_LOG_EP << "Created control channel with QPN: "
+                << control_channel->get_local_meta()->qpn;
   }
 
   bool build_normal_channels(std::string const& oob_con, uint64_t rank_id) {
     for (int i = 0; i < contexts_.size(); i++) {
-      auto new_channel = std::make_shared<EFAChannel>(contexts_[i]);
-      addOneSendChannel(rank_id, i, new_channel);
-      MetaInfoToExchange meta(rank_id_, i, new_channel->get_local_meta());
+      uint32_t channel_id = i+1;
+      auto new_channel = std::make_shared<EFAChannel>(contexts_[i], channel_id);
+      addOneSendChannel(rank_id, channel_id, new_channel);
+      MetaInfoToExchange meta(rank_id_, channel_id, new_channel->get_local_meta());
       std::string serialized_meta = serialize(meta);
       bool sent = oob_client_->send_meta(
           oob_con, serialized_meta,
@@ -237,6 +287,10 @@ class EFAEndpoint {
 
   // Blocking check for send completion
   void checkSendComplete(uint64_t rank_id, uint32_t channel_id, int64_t wr_id) {
+    LOG(INFO) << "checkSendComplete - rank_id: " << rank_id
+              << ", channel_id: " << channel_id
+              << ", wr_id: " << wr_id;
+
     auto it = send_channel_groups_.find(rank_id);
     if (it == send_channel_groups_.end()) {
       throw std::runtime_error("Send channel group not found for rank_id: " +
@@ -247,6 +301,9 @@ class EFAEndpoint {
     while (!send_group->check(channel_id, wr_id)) {
       std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
+    LOG(INFO) << "checkSendComplete - Completed for rank_id: " << rank_id
+              << ", channel_id: " << channel_id
+              << ", wr_id: " << wr_id;
   }
 
   // Blocking check for recv completion
@@ -265,7 +322,7 @@ class EFAEndpoint {
 
   // Blocking send: wraps SendChannelGroup::send with rank_id parameter
   // Returns wr_id for checking completion later
-  int64_t send(uint64_t rank_id, uint32_t channel_id,
+  int64_t send(uint64_t rank_id, 
                std::shared_ptr<EFASendRequest> req) {
     auto it = send_channel_groups_.find(rank_id);
     if (it == send_channel_groups_.end()) {
@@ -278,7 +335,7 @@ class EFAEndpoint {
 
     // Blocking call until send succeeds
     while (wr_id < 0) {
-      wr_id = send_group->send(channel_id, req);
+      wr_id = send_group->send(req);
       if (wr_id < 0) {
         std::this_thread::sleep_for(std::chrono::microseconds(10));
       }
@@ -289,7 +346,7 @@ class EFAEndpoint {
 
   // Blocking recv: wraps RecvChannelGroup::recv with rank_id parameter
   // Returns index for checking completion later
-  int64_t recv(uint64_t rank_id, uint32_t channel_id,
+  int64_t recv(uint64_t rank_id, 
                std::shared_ptr<EFARecvRequest> req) {
     auto it = recv_channel_groups_.find(rank_id);
     if (it == recv_channel_groups_.end()) {
@@ -299,10 +356,9 @@ class EFAEndpoint {
 
     auto recv_group = it->second;
     int64_t index = -1;
-
     // Blocking call until recv succeeds
     while (index < 0) {
-      index = recv_group->recv(channel_id, req);
+      index = recv_group->recv(req);
       if (index < 0) {
         std::this_thread::sleep_for(std::chrono::microseconds(10));
       }
@@ -319,6 +375,8 @@ class EFAEndpoint {
       rank_oob_meta_[rank_id] = meta_ptr;
     }
   }
+
+  
   // void TestSendReceive2() {
   //     std::string word = "World Hello! " + std::to_string(rank_id_);
   //     if (send_test_->local_mem->type == MemoryType::GPU) {
@@ -373,19 +431,18 @@ class EFAEndpoint {
     for (size_t device_id : target_device_ids) {
       auto device = device_manager.getDevice(device_id);
       if (!device) {
-        std::cerr << "Warning: Device " << device_id << " not found, skipping"
-                  << std::endl;
+        UCCL_LOG_ERROR << "Warning: Device " << device_id << " not found, skipping";
         continue;
       }
 
       try {
-        auto context = std::make_shared<RdmaContext>(device);
+        auto context = std::make_shared<RdmaContext>(device, contexts_.size());
         contexts_.push_back(context);
-        std::cout << "EFAEndpoint: Created context for device " << device_id
-                  << " (" << device->name() << ")" << std::endl;
+        UCCL_LOG_EP << "EFAEndpoint: Created context for device " << device_id
+                    << " (" << device->name() << ")";
       } catch (std::exception const& e) {
-        std::cerr << "Error creating context for device " << device_id << ": "
-                  << e.what() << std::endl;
+        UCCL_LOG_ERROR << "Error creating context for device " << device_id << ": "
+                       << e.what();
       }
     }
 
@@ -396,7 +453,7 @@ class EFAEndpoint {
 
   void process_meta(std::string const& input, std::string& output) {
     MetaInfoToExchange meta = deserialize<MetaInfoToExchange>(input);
-    std::cout << meta << std::endl;
+    UCCL_LOG_EP << meta;
 
     auto context_id = meta.channel_id % contexts_.size();
     std::shared_ptr<RdmaContext> ctx_ptr = contexts_[context_id];
@@ -406,19 +463,19 @@ class EFAEndpoint {
       // RecvControlChannel
       auto ctrl_mem =
           allocator_->allocate(RING_BUFFER_SIZE, MemoryType::HOST, ctx_ptr);
-      std::cout << "process_meta: Allocated " << ctrl_mem->size
-                << " bytes for recv control channel ring buffer at "
-                << ctrl_mem->addr << std::endl;
+      UCCL_LOG_RE << "process_meta: Allocated " << ctrl_mem->size
+                  << " bytes for recv control channel ring buffer at "
+                  << ctrl_mem->addr;
 
       auto recv_ctrl_channel =
-          std::make_shared<RecvControlChannel>(ctx_ptr, meta, ctrl_mem);
+          std::make_shared<RecvControlChannel>(ctx_ptr, meta, ctrl_mem, meta.channel_id);
 
       // Create respons
       RemoteMemInfo ctrl_info(ctrl_mem);
       MetaInfoToExchange response(rank_id_, meta.channel_id,
                                   recv_ctrl_channel->get_local_meta());
       response.mem_meta = ctrl_info;
-      std::cout << "response (control channel):::::::" << response << std::endl;
+      UCCL_LOG_EP << "response (control channel):::::::" << response;
       output = serialize(response);
 
       // Set the control channel
@@ -427,11 +484,11 @@ class EFAEndpoint {
     } else {
       // Normal channel
       std::shared_ptr<EFAChannel> new_channel =
-          std::make_shared<EFAChannel>(ctx_ptr, meta.channel_meta);
+          std::make_shared<EFAChannel>(ctx_ptr, meta.channel_meta, meta.channel_id);
       // Create response (echo back the same data)
       MetaInfoToExchange response(rank_id_, meta.channel_id,
                                   new_channel->get_local_meta());
-      std::cout << "response:::::::" << response << std::endl;
+      UCCL_LOG_EP << "response:::::::" << response;
       output = serialize(response);
       addOneRecvChannel(meta.rank_id, meta.channel_id, new_channel);
     }
@@ -443,7 +500,7 @@ class EFAEndpoint {
     // Deserialize response as MetaInfoToExchange
     MetaInfoToExchange response_meta =
         deserialize<MetaInfoToExchange>(response);
-    std::cout << response_meta << std::endl;
+    UCCL_LOG_EP << response_meta;
     channel->connect(response_meta.channel_meta);
   }
 

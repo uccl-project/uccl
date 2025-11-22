@@ -6,7 +6,8 @@
 
 class RdmaContext {
  public:
-  explicit RdmaContext(std::shared_ptr<RdmaDevice> dev) {
+  explicit RdmaContext(std::shared_ptr<RdmaDevice> dev, uint64_t context_id = 0) {
+    context_id_ = context_id;
     ctx_ = dev->open();
     if (!ctx_) throw std::runtime_error("Failed to open context");
 
@@ -71,8 +72,12 @@ class RdmaContext {
   static void deregMem(struct ibv_mr* mr) {
     if (mr) ibv_dereg_mr(mr);
   }
+  inline const uint64_t getContextID() const {
+    return context_id_;
+  }
 
  private:
   std::shared_ptr<struct ibv_context> ctx_;
   std::shared_ptr<struct ibv_pd> pd_;
+  uint64_t context_id_;
 };

@@ -3,26 +3,30 @@
 #include "efa_channel.h"
 #include "ring_spsc.h"
 
+
 class SendControlChannel : public EFAChannel {
  public:
-  explicit SendControlChannel(std::shared_ptr<RdmaContext> ctx)
-      : EFAChannel(ctx) {}
+  explicit SendControlChannel(std::shared_ptr<RdmaContext> ctx, uint32_t channel_id = 0)
+      : EFAChannel(ctx, channel_id) {}
 
   explicit SendControlChannel(std::shared_ptr<RdmaContext> ctx,
-                              ChannelMetaData const& remote_meta)
-      : EFAChannel(ctx, remote_meta) {}
+                              ChannelMetaData const& remote_meta,
+                              uint32_t channel_id = 0)
+      : EFAChannel(ctx, remote_meta, channel_id) {}
 
   explicit SendControlChannel(std::shared_ptr<RdmaContext> ctx,
-                              std::shared_ptr<RegMemBlock> mem_block)
-      : EFAChannel(ctx) {
+                              std::shared_ptr<RegMemBlock> mem_block,
+                              uint32_t channel_id = 0)
+      : EFAChannel(ctx, channel_id) {
     rb_ = std::make_unique<RingBuffer<SendReqMetaOnRing, RING_CAPACITY>>(
         mem_block);
   }
 
   explicit SendControlChannel(std::shared_ptr<RdmaContext> ctx,
                               ChannelMetaData const& remote_meta,
-                              std::shared_ptr<RegMemBlock> mem_block)
-      : EFAChannel(ctx, remote_meta) {
+                              std::shared_ptr<RegMemBlock> mem_block,
+                              uint32_t channel_id = 0)
+      : EFAChannel(ctx, remote_meta, channel_id) {
     rb_ = std::make_unique<RingBuffer<SendReqMetaOnRing, RING_CAPACITY>>(
         mem_block);
   }
@@ -39,6 +43,10 @@ class SendControlChannel : public EFAChannel {
   bool getOneSendRequest(std::shared_ptr<EFASendRequest>& req) {
     // Pop from rb_ and generate req, return false if empty
     SendReqMeta meta;
+    int index = rb_->pop_with_convert(meta, from_ring_meta);
+    if (unlikely(index < 0)) {
+      return false;
+    }
     if (!rb_->pop_with_convert(meta, from_ring_meta)) {
       return false;
     }
@@ -47,6 +55,13 @@ class SendControlChannel : public EFAChannel {
     auto remote_mem = std::make_shared<RemoteMemInfo>(meta.remote_mem);
     // req should already have local_mem set, just update remote_mem
     req->remote_mem = remote_mem;
+    req->channel_id = meta.channel_id;
+    req->imm_data = index;
+
+    // Log the received request with all information
+    LOG(INFO) << "getOneSendRequest - Received request: " << *req;
+    LOG(INFO) << "  SendReqMeta from ring buffer: " << meta;
+
     return true;
   }
 
@@ -68,16 +83,18 @@ class SendControlChannel : public EFAChannel {
 
 class RecvControlChannel : public EFAChannel {
  public:
-  explicit RecvControlChannel(std::shared_ptr<RdmaContext> ctx)
-      : EFAChannel(ctx) {}
+  explicit RecvControlChannel(std::shared_ptr<RdmaContext> ctx, uint32_t channel_id = 0)
+      : EFAChannel(ctx, channel_id) {}
 
   explicit RecvControlChannel(std::shared_ptr<RdmaContext> ctx,
-                              ChannelMetaData const& remote_meta)
-      : EFAChannel(ctx, remote_meta) {}
+                              ChannelMetaData const& remote_meta,
+                              uint32_t channel_id = 0)
+      : EFAChannel(ctx, remote_meta, channel_id) {}
 
   explicit RecvControlChannel(std::shared_ptr<RdmaContext> ctx,
-                              std::shared_ptr<RegMemBlock> mem_block)
-      : EFAChannel(ctx) {
+                              std::shared_ptr<RegMemBlock> mem_block,
+                              uint32_t channel_id = 0)
+      : EFAChannel(ctx, channel_id) {
     local_info_ = mem_block;
     rb_ = std::make_unique<RingBuffer<SendReqMetaOnRing, RING_CAPACITY>>(
         local_info_);
@@ -85,8 +102,9 @@ class RecvControlChannel : public EFAChannel {
 
   explicit RecvControlChannel(std::shared_ptr<RdmaContext> ctx,
                               MetaInfoToExchange const& remote_meta,
-                              std::shared_ptr<RegMemBlock> mem_block)
-      : EFAChannel(ctx, remote_meta.channel_meta) {
+                              std::shared_ptr<RegMemBlock> mem_block,
+                              uint32_t channel_id = 0)
+      : EFAChannel(ctx, remote_meta.channel_meta, channel_id) {
     local_info_ = mem_block;
     rb_ = std::make_unique<RingBuffer<SendReqMetaOnRing, RING_CAPACITY>>(
         local_info_);
@@ -107,14 +125,22 @@ class RecvControlChannel : public EFAChannel {
   }
 
   int postSendReq(std::shared_ptr<EFARecvRequest> rev_req) {
+    LOG(INFO) << "postSendReq - Received EFARecvRequest: " << *rev_req;
+
     SendReqMeta req_meta;
     req_meta.rank_id = rev_req->from_rank_id;
     req_meta.channel_id = rev_req->channel_id;
     req_meta.remote_mem = rev_req->local_mem;
+
+    LOG(INFO) << "postSendReq - Created SendReqMeta: " << req_meta;
+
     int index = rb_->push_with_convert(req_meta, to_ring_meta);
     if (index < 0) {
+      LOG(INFO) << "postSendReq - Failed to push to ring buffer, index: " << index;
       return index;
     }
+  
+    LOG(INFO) << "postSendReq - Successfully pushed to ring buffer at index: " << index;
     std::shared_ptr<RemoteMemInfo> remote_mem_ptr =
         std::make_shared<RemoteMemInfo>(
             empty_rb_->getElementAddress(index), remote_info_->rkey,
@@ -137,6 +163,7 @@ class RecvControlChannel : public EFAChannel {
     return rb_->check_at(index, check_is_done);
   }
 
+  
  private:
   std::unique_ptr<EmptyRingBuffer<SendReqMetaOnRing, RING_CAPACITY>> empty_rb_;
   std::unique_ptr<RemoteMemInfo> remote_info_;

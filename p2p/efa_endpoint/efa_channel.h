@@ -2,14 +2,17 @@
 #include "define.h"
 #include "rdma_context.h"
 #include "seq_num.h"
+#include "util/util.h"
+#include <glog/logging.h>
 
 class EFAChannel {
  public:
-  explicit EFAChannel(std::shared_ptr<RdmaContext> ctx)
+  explicit EFAChannel(std::shared_ptr<RdmaContext> ctx, uint32_t channel_id = 0)
       : ctx_(ctx),
         qp_(nullptr),
         cq_ex_(nullptr),
         ah_(nullptr),
+        channel_id_(channel_id),
         local_meta_(std::make_shared<ChannelMetaData>()),
         remote_meta_(std::make_shared<ChannelMetaData>()) {
     tracker_ = std::make_shared<AtomicBitmapPacketTracker>();
@@ -17,24 +20,24 @@ class EFAChannel {
   }
 
   explicit EFAChannel(std::shared_ptr<RdmaContext> ctx,
-                      ChannelMetaData const& remote_meta)
+                      ChannelMetaData const& remote_meta,
+                      uint32_t channel_id = 0)
       : ctx_(ctx),
         qp_(nullptr),
         cq_ex_(nullptr),
         ah_(nullptr),
+        channel_id_(channel_id),
         local_meta_(std::make_shared<ChannelMetaData>()),
         remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)) {
     tracker_ = std::make_shared<AtomicBitmapPacketTracker>();
     initQP();
     ah_ = ctx_->createAH(remote_meta_->gid);
-    std::cout << "EFAChannel connected to remote qpn=" << remote_meta.qpn
-              << std::endl;
+    UCCL_LOG_EP << "EFAChannel connected to remote qpn=" << remote_meta.qpn;
   }
   void connect(ChannelMetaData const& remote_meta) {
     remote_meta_ = std::make_shared<ChannelMetaData>(remote_meta);
     ah_ = ctx_->createAH(remote_meta_->gid);
-    std::cout << "EFAChannel connected to remote qpn=" << remote_meta.qpn
-              << std::endl;
+    UCCL_LOG_EP << "EFAChannel connected to remote qpn=" << remote_meta.qpn;
   }
 
   int64_t write_async(std::shared_ptr<EFASendRequest> req) {
@@ -54,7 +57,7 @@ class EFAChannel {
     ibv_wr_set_ud_addr(qpx, ah_, remote_meta_->qpn, QKEY);
 
     if (ibv_wr_complete(qpx)) {
-      printf("ibv_wr_complete failed\n");
+      LOG(ERROR) << "ibv_wr_complete failed in write_async";
     }
 
     return wr_id;
@@ -77,7 +80,7 @@ class EFAChannel {
     ibv_wr_set_ud_addr(qpx, ah_, remote_meta_->qpn, QKEY);
 
     if (ibv_wr_complete(qpx)) {
-      printf("ibv_wr_complete failed\n");
+      LOG(ERROR) << "ibv_wr_complete failed in read_async";
     }
 
     return wr_id;
@@ -104,7 +107,16 @@ class EFAChannel {
     ibv_wr_set_ud_addr(qpx, ah_, remote_meta_->qpn, QKEY);
 
     if (ibv_wr_complete(qpx)) {
-      perror("ibv_wr_complete failed");
+      LOG(ERROR) << "ibv_wr_complete failed in send: " << strerror(errno)
+                 << " (errno=" << errno << ")"
+                 << ", ah_=" << (void*)ah_
+                 << ", remote_qpn=" << remote_meta_->qpn
+                 << ", local_qpn=" << qp_->qp_num
+                 << ", wr_id=" << wr_id
+                 << ", remote_key=" << req->getRemoteKey()
+                 << ", remote_addr=0x" << std::hex << req->getRemoteAddress()
+                 << ", local_key=" << req->getLocalKey()
+                 << std::dec;
     }
     return wr_id;
   }
@@ -124,13 +136,14 @@ class EFAChannel {
     wr.num_sge = 1;
 
     if (ibv_post_recv(qp_, &wr, &bad_wr)) {
-      perror("ibv_post_recv failed");
+      LOG(ERROR) << "ibv_post_recv failed: " << strerror(errno);
     }
     return wr_id;
   }
 
   bool poll_once(CQMeta& cq_data) {
     if (!cq_ex_) {
+      LOG(INFO) << "poll_once - channel_id: " << channel_id_ << ", cq_ex_ is null";
       return false;
     }
     struct ibv_poll_cq_attr poll_cq_attr = {.comp_mask = 0};
@@ -138,12 +151,18 @@ class EFAChannel {
 
     if (err) {
       // No completion available
+      // LOG(INFO) << "poll_once - channel_id: " << channel_id_ << ", No completion available, err: " << err;
       return false;
     }
 
     // Successfully polled one completion
+    LOG(INFO) << "poll_once - channel_id: " << channel_id_
+              << ", Successfully polled completion, wr_id: " << cq_ex_->wr_id
+              << ", status: " << cq_ex_->status;
+
     if (cq_ex_->status != IBV_WC_SUCCESS) {
-      printf("poll_once: %s\n", ibv_wc_status_str(cq_ex_->status));
+      LOG(INFO) << "poll_once - channel_id: " << channel_id_
+                << ", CQ status error: " << ibv_wc_status_str(cq_ex_->status);
       ibv_end_poll(cq_ex_);
       return false;
     }
@@ -157,8 +176,14 @@ class EFAChannel {
       cq_data.imm = 0;
     }
 
+    LOG(INFO) << "poll_once - channel_id: " << channel_id_
+              << ", Completion data: " << cq_data;
+
     tracker_->acknowledge(cq_data.wr_id);
     ibv_end_poll(cq_ex_);
+
+    LOG(INFO) << "poll_once - channel_id: " << channel_id_
+              << ", Acknowledged wr_id: " << cq_data.wr_id;
 
     return true;
   }
@@ -169,8 +194,7 @@ class EFAChannel {
 
   void poll_cq(int32_t expected_wr) {
     if (tracker_->isAcknowledged(expected_wr)) {
-      std::cout << "tracker_->isAcknowledged(expected_wr): " << expected_wr
-                << std::endl;
+      UCCL_LOG_EP << "tracker_->isAcknowledged(expected_wr): " << expected_wr;
       return;
     }
     int poll_count = 0;
@@ -181,7 +205,7 @@ class EFAChannel {
     while (!err || !poll_count) {
       if (!err) {
         if (cq_ex_->status != IBV_WC_SUCCESS) {
-          printf("poll_cq: %s\n", ibv_wc_status_str(cq_ex_->status));
+          LOG(ERROR) << "poll_cq: " << ibv_wc_status_str(cq_ex_->status);
           return;
         }
         auto wr_id = cq_ex_->wr_id;
@@ -190,7 +214,7 @@ class EFAChannel {
         tracker_->acknowledge(wr_id);
         if (wr_id == expected_wr || opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
           poll_count++;
-          std::cout << "wr_id == expected_wr:" << expected_wr << std::endl;
+          UCCL_LOG_EP << "wr_id == expected_wr:" << expected_wr;
           break;
         }
       }
@@ -217,15 +241,29 @@ class EFAChannel {
     return remote_meta_;
   }
 
+  // Get RdmaContext
+  inline const std::shared_ptr<RdmaContext> getContext() const {
+    return ctx_;
+  }
+
+  inline const uint64_t getContextID() const {
+    return ctx_->getContextID();
+  }
+
+  inline uint32_t getChannelID() const {
+    return channel_id_;
+  }
+
   void printQP() {
     //     local_meta_->gid = ctx_->queryGid(GID_INDEX);
     // local_meta_->qpn = qp_->qp_num;
-    std::cout << "local_meta_->qpn " << local_meta_->qpn << std::endl;
-    std::cout << "remote_meta_->qpn " << remote_meta_->qpn << std::endl;
+    UCCL_LOG_EP << "local_meta_->qpn " << local_meta_->qpn;
+    UCCL_LOG_EP << "remote_meta_->qpn " << remote_meta_->qpn;
   }
 
  private:
   std::shared_ptr<RdmaContext> ctx_;
+  uint32_t channel_id_;
 
   struct ibv_cq_ex* cq_ex_;
   struct ibv_qp* qp_;

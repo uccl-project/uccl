@@ -3,6 +3,7 @@
 #include "efa_channel.h"
 #include "efa_ctrl_channel.h"
 #include <shared_mutex>
+#include <glog/logging.h>
 
 class ChannelGroup {
  public:
@@ -84,8 +85,30 @@ class SendChannelGroup : public ChannelGroup {
     startPolling();
   }
 
+  bool setupRecvRequest(std::shared_ptr<EFASendRequest> req) {
+    if (unlikely(!req || !req->local_mem)) {
+      return false;
+    }
+
+    auto channel = getChannel(req->channel_id);
+    if (unlikely(!channel)) {
+      return false;
+    }
+    uint64_t context_id = channel->getContextID();
+
+    auto& mr_map = req->local_mem->mr_map;
+    auto it = mr_map.find(context_id);
+    if (unlikely(it == mr_map.end())) {
+      return false;
+    }
+
+    req->local_mem->mr = it->second;
+
+    return true;
+    
+  }
   // Send function: channel_id and EFASendRequest
-  int64_t send(uint32_t channel_id, std::shared_ptr<EFASendRequest> req) {
+  int64_t send(std::shared_ptr<EFASendRequest> req) {
     // Get additional info from SendControlChannel
     if (!ctrl_channel_) {
       return -1;
@@ -96,8 +119,11 @@ class SendChannelGroup : public ChannelGroup {
     }
 
     // Find channel by channel_id
-    auto channel = getChannel(channel_id);
+    LOG(INFO) << "SendChannelGroup: Sending on channel_id " << req->channel_id;
+    auto channel = getChannel(req->channel_id);
+    setupRecvRequest(req);
     if (!channel) {
+      LOG(WARNING) << "SendChannelGroup: Channel not found for channel_id " << req->channel_id;
       return -1;
     }
 
@@ -154,6 +180,8 @@ class SendChannelGroup : public ChannelGroup {
   //   }
   // }
   void pollingLoop() {
+    LOG(INFO) << "SendChannelGroup::pollingLoop - Started";
+    uint64_t iteration_count = 0;
     while (running_.load(std::memory_order_acquire)) {
       // ---- Step 1: Copy shared data under read lock ----
       std::vector<std::shared_ptr<EFAChannel>> local_channels;
@@ -170,20 +198,34 @@ class SendChannelGroup : public ChannelGroup {
 
       // ---- Step 2: unlock, do slow polling outside lock ----
       CQMeta cq_data;
-      for (auto& ch : local_channels) {
-        if (ch) ch->poll_once(cq_data);
+      for (size_t i = 0; i < local_channels.size(); ++i) {
+        auto& ch = local_channels[i];
+        if (ch && ch->poll_once(cq_data)) {
+          LOG(INFO) << "SendChannelGroup::pollingLoop - Channel " << i
+                    << " polled completion: " << cq_data;
+        }
       }
 
       if (local_ctrl) {
-        local_ctrl->noblockingPoll();
+        if (local_ctrl->noblockingPoll()) {
+          LOG(INFO) << "SendChannelGroup::pollingLoop - Control channel polled successfully";
+        }
+      }
+
+      // Print periodic status every 10000 iterations
+      iteration_count++;
+      if (iteration_count % 10000 == 0) {
+        LOG(INFO) << "SendChannelGroup::pollingLoop - Still running, iteration: " << iteration_count
+                  << ", channels: " << local_channels.size();
       }
     }
+    LOG(INFO) << "SendChannelGroup::pollingLoop - Stopped";
   }
 };
 
 class RecvChannelGroup : public ChannelGroup {
  public:
-  RecvChannelGroup() : running_(false), poll_thread_(nullptr) {}
+  RecvChannelGroup() : running_(false), poll_thread_(nullptr), last_channel_id_(0) {}
 
   ~RecvChannelGroup() { stopPolling(); }
 
@@ -243,16 +285,61 @@ class RecvChannelGroup : public ChannelGroup {
     }
   }
 
-  int64_t recv(uint32_t channel_id, std::shared_ptr<EFARecvRequest> req) {
+  
+  int64_t recv(std::shared_ptr<EFARecvRequest> req) {
+    if (unlikely(!setupRecvRequestWithRoundRobin(req))) {
+      return -1;
+    }
     return ctrl_channel_->postSendReq(req);
   }
 
   bool check(uint64_t index) { return ctrl_channel_->check_done(index); }
 
+  // Round-robin channel selection and MR setup
+  bool setupRecvRequestWithRoundRobin(std::shared_ptr<EFARecvRequest> req) {
+    if (unlikely(!req || !req->local_mem)) {
+      return false;
+    }
+
+    // Get the total number of channels
+    size_t num_channels = channelCount();
+    if (unlikely(num_channels == 0)) {
+      return false;
+    }
+
+    // Round-robin: get next channel_id
+    uint32_t current_id = last_channel_id_.load(std::memory_order_relaxed);
+    uint32_t next_id = (current_id + 1) % num_channels;
+    last_channel_id_.store(next_id, std::memory_order_relaxed);
+
+    // Get the channel by channel_id
+    auto channel = getChannel(next_id);
+    if (unlikely(!channel)) {
+      return false;
+    }
+
+    uint64_t context_id = channel->getContextID();
+
+    // Get MR from mr_map using context_id as key
+    auto& mr_map = req->local_mem->mr_map;
+    auto it = mr_map.find(context_id);
+    if (unlikely(it == mr_map.end())) {
+      return false;
+    }
+
+    // Set the MR
+    req->local_mem->mr = it->second;
+    req->channel_id = next_id;
+    LOG(INFO) << "RecvChannelGroup: Assigned channel_id " << next_id << " to recv request";
+
+    return true;
+  }
+
  private:
   std::shared_ptr<RecvControlChannel> ctrl_channel_;
   std::atomic<bool> running_;
   std::unique_ptr<std::thread> poll_thread_;
+  std::atomic<uint32_t> last_channel_id_;
 
   // Polling loop
   // void pollingLoop() {
@@ -272,6 +359,8 @@ class RecvChannelGroup : public ChannelGroup {
   // }
   // 修改后的 pollingLoop（RecvChannelGroup）
   void pollingLoop() {
+    LOG(INFO) << "RecvChannelGroup::pollingLoop - Started";
+    uint64_t iteration_count = 0;
     while (running_.load(std::memory_order_acquire)) {
       CQMeta cq_data;
       std::vector<std::shared_ptr<EFAChannel>> snapshot;
@@ -283,23 +372,41 @@ class RecvChannelGroup : public ChannelGroup {
         }
       }
 
-      for (auto& channel : snapshot) {
+      for (size_t i = 0; i < snapshot.size(); ++i) {
+        auto& channel = snapshot[i];
         if (!channel) continue;
         bool polled = false;
         try {
           polled = channel->poll_once(cq_data);
         } catch (...) {
-          std::cout << "????????????????????????" << std::endl;
+          LOG(ERROR) << "RecvChannelGroup::pollingLoop - Exception in poll_once for channel " << i;
         }
-        if (polled && cq_data.hasIMM()) {
-          if (ctrl_channel_) {
-            ctrl_channel_->recv_done(cq_data.imm);
+        if (polled) {
+          LOG(INFO) << "RecvChannelGroup::pollingLoop - Channel " << i
+                    << " polled completion: " << cq_data;
+
+          if (cq_data.hasIMM()) {
+            LOG(INFO) << "RecvChannelGroup::pollingLoop - Completion has IMM data: " << cq_data.imm;
+            if (ctrl_channel_) {
+              ctrl_channel_->recv_done(cq_data.imm);
+              LOG(INFO) << "RecvChannelGroup::pollingLoop - Called recv_done(" << cq_data.imm << ")";
+            } else {
+              LOG(WARNING) << "RecvChannelGroup::pollingLoop - ctrl_channel_ is null, cannot call recv_done";
+            }
           }
         }
+      }
+
+      // Print periodic status every 10000 iterations
+      iteration_count++;
+      if (iteration_count % 10000000 == 0) {
+        LOG(INFO) << "RecvChannelGroup::pollingLoop - Still running, iteration: " << iteration_count
+                  << ", channels: " << snapshot.size();
       }
 
       // optional small sleep/yield to avoid busy-looping if desired:
       // std::this_thread::yield();
     }
+    LOG(INFO) << "RecvChannelGroup::pollingLoop - Stopped";
   }
 };
