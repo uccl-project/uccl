@@ -28,6 +28,7 @@ Alternatively, you can build `uccl.ep` wheel using docker then install:
 # Under uccl
 bash build_and_install.sh cuda ep
 ```
+> Note: docker-built `uccl.ep` wheel currently does not work on p6-b200, see https://github.com/uccl-project/uccl/issues/554. 
 
 ## Build on ROCm
 
