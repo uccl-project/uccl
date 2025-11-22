@@ -388,25 +388,6 @@ def initialize():
       --exclude "libcuda.so.1" \
       -w /io/${WHEEL_DIR}
 
-    # Fix RPATH in the repaired wheel to find PyTorch libraries
-    cd /io/${WHEEL_DIR}
-    for whl in uccl-*.whl; do
-      if [[ -f "$whl" ]]; then
-        echo "Fixing RPATH in $whl"
-        # Extract wheel
-        unzip -q "$whl" -d tmpwheel
-        # Find all .so files and add RPATH
-        find tmpwheel -name "*.so" -type f | while read sofile; do
-          patchelf --set-rpath "\$ORIGIN:\$ORIGIN/../torch/lib:\$ORIGIN/../../torch/lib:$(patchelf --print-rpath "$sofile" 2>/dev/null || echo '')" "$sofile" 2>/dev/null || true
-        done
-        # Repack wheel
-        (cd tmpwheel && zip -qr "../${whl}.new" .)
-        mv "${whl}.new" "$whl"
-        rm -rf tmpwheel
-      fi
-    done
-    cd /io
-
     # Add backend tag to wheel filename using local version identifier
     if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
       # Adjust TARGET to the preferred wheel name suffix for python-packaged ROCm, e.g. "rocm7.9.0rc1"
