@@ -160,7 +160,7 @@ build_ep() {
   elif [[ "$TARGET" == rocm* || "$TARGET" == cuda* ]]; then
     cd ep
     # This may be needed if you traverse through different git commits
-    # rm *.d src/*.d bench/*.d src/*.o **/*.hip **/*_hip.*
+    # make clean && rm -r build || true
     python3 setup.py build
     cd ..
     echo "[container] Copying GPU-driven .so to uccl/"
@@ -242,12 +242,12 @@ if [[ "${hash_image}" != "" ]]; then
   # If image is stale, suggest deleting & purging it
   if [[ "${ts_dockerfile}" > "${ts_image}" ]]; then
       echo "WARNING: builder image '${IMAGE_NAME}' is older than its source (${DOCKERFILE})" >&2
-      echo "Please, remove it, prune the builder cache, and retry the build to regenerate it." >&2
+      echo "Please consider removing it, pruning the builder cache, and retrying the build to regenerate it." >&2
       echo " " >&2
       echo "  $ docker image rm '${IMAGE_NAME}'" >&2
       echo "  $ docker buildx prune -f" >&2
       echo " " >&2
-      echo "NOTE: Please, note this may also prune unrelated builder cache images!" >&2
+      echo "NOTE: this may also prune unrelated builder cache images!" >&2
       sleep 1
   fi
 fi
@@ -269,6 +269,19 @@ else
 fi
 
 echo "[2/3] Running build inside container..."
+
+# Auto-detect CUDA architecture for ep build
+DETECTED_CUDA_ARCH=""
+if [[ "$TARGET" == cuda* && "$BUILD_TYPE" =~ (ep|all) ]]; then
+  if command -v nvidia-smi &> /dev/null; then
+    DETECTED_CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
+    if [[ -n "$DETECTED_CUDA_ARCH" ]]; then
+      echo "Auto-detected CUDA compute capability: ${DETECTED_CUDA_ARCH}"
+      export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-${DETECTED_CUDA_ARCH}}"
+    fi
+  fi
+fi
+
 docker run --rm --user "$(id -u):$(id -g)" \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
@@ -283,6 +296,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
   -e USE_TCPX="${USE_TCPX:-0}" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
+  -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
   -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_ccl_rdma build_ccl_efa build_p2p build_ep build_eccl)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
@@ -365,7 +379,14 @@ def initialize():
       mv ${BACKUP_FN} setup.py
     fi
 
-    auditwheel repair dist/uccl-*.whl --exclude "libtorch*.so" --exclude "libc10*.so" --exclude "libibverbs.so.1" --exclude "libcudart.so.12" --exclude "libamdhip64.so.*" --exclude "libcuda.so.1" -w /io/${WHEEL_DIR}
+    auditwheel repair dist/uccl-*.whl \
+      --exclude "libtorch*.so" \
+      --exclude "libc10*.so" \
+      --exclude "libibverbs.so.1" \
+      --exclude "libcudart.so.12" \
+      --exclude "libamdhip64.so.*" \
+      --exclude "libcuda.so.1" \
+      -w /io/${WHEEL_DIR}
 
     # Add backend tag to wheel filename using local version identifier
     if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
