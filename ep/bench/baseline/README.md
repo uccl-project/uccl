@@ -47,7 +47,7 @@ export NODE_RANK=0
 ## Run NVSHMEM and PyTorch Distributed
 python bench_nvshmem_sparse_uccl.py --dp-size 1
 ## Run PPLX Kernel
-pytest -svx tests/test_all_to_all.py 
+python3 -m tests.bench_all_to_all
 ```
 
 
@@ -62,14 +62,21 @@ export NODE_RANK=<node_id>
 ## Run NVSHMEM and PyTorch Distributed
 python bench_nvshmem_sparse_uccl.py --dp-size 1
 ## Run PPLX Kernel
-pytest -svx tests/test_all_to_all.py 
+python3 -m tests.bench_all_to_all
 ```
 
 ## Output
 
 Results saved to: `uccl/ep/bench/data/<timestamp>_unified_moe_separated.tsv`
 
+## NVSHMEM 3.4.5 vs 3.5.0
+![NVSHMEM 3.4.5 vs 3.5.0](NVSHME.png)
 
+If using 3.5.0, you need to add the environment variable:
+
+``` bash
+NVSHMEM_BOOTSTRAP_TWO_STAGE=1
+```
 
 
 
