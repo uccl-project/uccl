@@ -281,8 +281,9 @@ def start_transfer(size, num_kvblocks, args):
 
         total_size = 0
         total_transfer_time = 0.0
+        warmup = 1 if args.iters > 1 else 0
 
-        for _ in range(args.iters):
+        for iter_idx in range(args.iters):
             if (
                 args.backend == "mooncake"
                 or args.backend == "uccl"
@@ -307,16 +308,27 @@ def start_transfer(size, num_kvblocks, args):
                 or args.backend == "tcpx"
             ):
                 do_transfer_mc(args.role, agent, transfer_handle, zmq_socket)
-                total_size += size
             else:
                 do_transfer_ucx(args.role, agent, transfer_handle)
-                total_size += size
 
             end = time.perf_counter()
             transfer_time = end - start
-            total_transfer_time += transfer_time
+            if iter_idx >= warmup:
+                total_transfer_time += transfer_time
+                total_size += size
 
-        avg_transfer_time = total_transfer_time / args.iters
+            # [PERF LOG] Per-iteration bandwidth
+            iter_bw = size / transfer_time / 1e9
+            print(
+                f"[PERF] Iteration {iter_idx}: {transfer_time*1000:.2f} ms, {iter_bw:.2f} GB/s",
+                flush=True,
+            )
+
+        effective_iters = max(args.iters - warmup, 1)
+        if total_transfer_time == 0:
+            total_transfer_time = transfer_time
+            total_size = size
+        avg_transfer_time = total_transfer_time / effective_iters
         gbps = (total_size * 8) / total_transfer_time / 1e9  # bits per second → Gbps
         gb_sec = total_size / total_transfer_time / 1e9  # bytes per second → GB/s
         lat = avg_transfer_time  # Average latency per transfer
