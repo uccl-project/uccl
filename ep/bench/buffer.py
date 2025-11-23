@@ -66,7 +66,10 @@ class Buffer:
                 otherwise, the resources will be released by the destructor.
                 Note: Releasing resources in the destructor may cause Python's exception handling process to hang.
         """
-        device_index = int(os.environ["LOCAL_RANK"])
+        if "LOCAL_RANK" in os.environ:
+            device_index = int(os.environ["LOCAL_RANK"])
+        else:
+            device_index = torch.cuda.current_device()
         self.scratch = torch.zeros(
             num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
         )
