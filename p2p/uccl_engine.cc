@@ -166,11 +166,10 @@ void listener_thread_func(uccl_conn_t* conn) {
         }
 
 #ifdef USE_TCPX
-        // Passive recv (including GPU unpack) is done: tell the active side so it
-        // only tears down after the data is fully landed.
+        // Passive recv (including GPU unpack) is done: tell the active side so
+        // it only tears down after the data is fully landed.
         notify_msg_t notify_msg = {};
-        std::snprintf(notify_msg.name, sizeof(notify_msg.name), "%s",
-                      "server");
+        std::snprintf(notify_msg.name, sizeof(notify_msg.name), "%s", "server");
         std::snprintf(notify_msg.msg, sizeof(notify_msg.msg), "%s",
                       "RECV_DONE");
         uccl_engine_send_notif(conn, &notify_msg);
@@ -314,8 +313,7 @@ void listener_thread_func(uccl_conn_t* conn) {
         delete[] tx_data_array;
 #ifdef USE_TCPX
         notify_msg_t notify_msg = {};
-        std::snprintf(notify_msg.name, sizeof(notify_msg.name), "%s",
-                      "server");
+        std::snprintf(notify_msg.name, sizeof(notify_msg.name), "%s", "server");
         if (vector_ok) {
           std::snprintf(notify_msg.msg, sizeof(notify_msg.msg), "%s",
                         "RECV_DONE");

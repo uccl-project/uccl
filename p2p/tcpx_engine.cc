@@ -160,7 +160,8 @@ static_assert(std::is_trivially_copyable<ChannelHandleMsg>::value,
               "ChannelHandleMsg must be trivially copyable");
 
 // Helper functions to send/recv channel handles
-bool send_channel_handles(int fd, std::vector<ncclNetHandle_v7> const& handles) {
+bool send_channel_handles(int fd,
+                          std::vector<ncclNetHandle_v7> const& handles) {
   ChannelHandleMsg msg{};
   msg.num_channels = static_cast<uint32_t>(handles.size());
   msg.reserved = 0;
@@ -362,7 +363,8 @@ Endpoint::Endpoint(uint32_t const /*num_cpus*/) {
 
   for (size_t i = 0; i < num_channels_; ++i) {
     if (tcpx_listen(channel_dev_ids_[i], &listen_handles_[i],
-                    &listen_comms_[i]) != 0 || !listen_comms_[i]) {
+                    &listen_comms_[i]) != 0 ||
+        !listen_comms_[i]) {
       std::cerr << "[tcpx] listen failed for channel " << i << std::endl;
       throw std::runtime_error("tcpx: listen failed for channel " +
                                std::to_string(i));
@@ -408,7 +410,8 @@ Endpoint::Endpoint(uint32_t const /*num_cpus*/) {
   if (cudaStreamCreate(&global_unpack_stream_) != cudaSuccess) {
     cuDevicePrimaryCtxRelease(cu_device_);
     cu_context_ = nullptr;
-    throw std::runtime_error("tcpx: cudaStreamCreate failed for global_unpack_stream");
+    throw std::runtime_error(
+        "tcpx: cudaStreamCreate failed for global_unpack_stream");
   }
 
   device::UnpackLaunchConfig cfg;
@@ -561,7 +564,8 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
 
   for (size_t i = 0; i < num_channels_; ++i) {
     if (tcpx_listen(channel_dev_ids_[i], &reverse_handles[i],
-                    &reverse_listens[i]) != 0 || !reverse_listens[i]) {
+                    &reverse_listens[i]) != 0 ||
+        !reverse_listens[i]) {
       std::cerr << "[tcpx] reverse listen failed (client) channel=" << i
                 << std::endl;
       // Clean up previously created listens
@@ -678,9 +682,9 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
     for (size_t idx = 0; idx < num_channels_; ++idx) {
       bool accepted = false;
       for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
-        int rc = tcpx_accept_v5(reverse_listens[idx],
-                                &conn->channels[idx].recv_comm,
-                                &conn->channels[idx].recv_dev_handle);
+        int rc =
+            tcpx_accept_v5(reverse_listens[idx], &conn->channels[idx].recv_comm,
+                           &conn->channels[idx].recv_dev_handle);
         if (rc == 0 && conn->channels[idx].recv_comm) {
           accepted = true;
           break;
@@ -744,7 +748,8 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
     // Create per-channel event pool
     ch.recv_events.resize(pool_size);
     for (size_t i = 0; i < pool_size; ++i) {
-      cudaError_t rc = cudaEventCreateWithFlags(&ch.recv_events[i], cudaEventDisableTiming);
+      cudaError_t rc =
+          cudaEventCreateWithFlags(&ch.recv_events[i], cudaEventDisableTiming);
       if (rc != cudaSuccess) {
         std::cerr << "[tcpx] cudaEventCreateWithFlags failed for event " << i
                   << ": " << cudaGetErrorString(rc) << std::endl;
@@ -835,9 +840,9 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
     for (size_t idx = 0; idx < num_channels_; ++idx) {
       bool accepted = false;
       for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
-        int rc = tcpx_accept_v5(listen_comms_[idx],
-                                &conn->channels[idx].recv_comm,
-                                &conn->channels[idx].recv_dev_handle);
+        int rc =
+            tcpx_accept_v5(listen_comms_[idx], &conn->channels[idx].recv_comm,
+                           &conn->channels[idx].recv_dev_handle);
         if (rc == 0 && conn->channels[idx].recv_comm) {
           accepted = true;
           break;
@@ -933,7 +938,8 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
     // Create per-channel event pool
     ch.recv_events.resize(pool_size_acc);
     for (size_t i = 0; i < pool_size_acc; ++i) {
-      cudaError_t rc = cudaEventCreateWithFlags(&ch.recv_events[i], cudaEventDisableTiming);
+      cudaError_t rc =
+          cudaEventCreateWithFlags(&ch.recv_events[i], cudaEventDisableTiming);
       if (rc != cudaSuccess) {
         std::cerr << "[tcpx] cudaEventCreateWithFlags failed for event " << i
                   << ": " << cudaGetErrorString(rc) << std::endl;
@@ -1084,8 +1090,8 @@ bool Endpoint::populate_conn_handles_(Conn& conn, uint64_t mr_id, bool is_recv,
   void* mhandle = nullptr;
   int rc = tcpx_reg_mr(comm, base, size, ptr_type, &mhandle);
   if (rc != 0 || !mhandle) {
-    std::cerr << "[tcpx] tcpx_reg_mr failed rc=" << rc << " channel="
-              << channel_idx << std::endl;
+    std::cerr << "[tcpx] tcpx_reg_mr failed rc=" << rc
+              << " channel=" << channel_idx << std::endl;
     return false;
   }
 
@@ -1115,8 +1121,7 @@ bool Endpoint::populate_conn_handles_(Conn& conn, uint64_t mr_id, bool is_recv,
   return true;
 }
 
-bool Endpoint::ensure_recv_dev_handle_cached_(Conn& conn,
-                                              size_t channel_idx) {
+bool Endpoint::ensure_recv_dev_handle_cached_(Conn& conn, size_t channel_idx) {
   if (channel_idx >= conn.channels.size()) return false;
   auto& channel = conn.channels[channel_idx];
   if (channel.recv_dev_handle_cached) return true;
@@ -1523,8 +1528,8 @@ Endpoint::ScheduleOutcome Endpoint::schedule_send_chunks_locked(
         if (debug_enabled_) {
           std::cerr << "[tcpx] isend rc=" << rc << " req=" << request
                     << " chunk=" << chunk_idx << " channel=" << channel_idx
-                    << " chunk_bytes=" << chunk.bytes
-                    << " tag=" << chunk.tag << std::endl;
+                    << " chunk_bytes=" << chunk.bytes << " tag=" << chunk.tag
+                    << std::endl;
         }
 
         if (rc == 0 && request) {
@@ -1564,7 +1569,8 @@ Endpoint::ScheduleOutcome Endpoint::schedule_send_chunks_locked(
       transfer.next_channel_cursor = (channel_idx + 1) % num_channels;
 
       bool progress_made = false;
-      if (!progress_send_channel_(conn, channel_idx, transfer, &progress_made)) {
+      if (!progress_send_channel_(conn, channel_idx, transfer,
+                                  &progress_made)) {
         return ScheduleOutcome::kError;
       }
       for (size_t other_ch = 0; other_ch < conn.channels.size(); ++other_ch) {
@@ -1572,7 +1578,8 @@ Endpoint::ScheduleOutcome Endpoint::schedule_send_chunks_locked(
         if (transfer.send_queues[other_ch].empty()) continue;
 
         bool other_progress = false;
-        if (!progress_send_channel_(conn, other_ch, transfer, &other_progress)) {
+        if (!progress_send_channel_(conn, other_ch, transfer,
+                                    &other_progress)) {
           return ScheduleOutcome::kError;
         }
       }
@@ -1634,8 +1641,8 @@ Endpoint::ScheduleOutcome Endpoint::schedule_recv_chunks_locked(
         if (debug_enabled_) {
           std::cerr << "[tcpx] irecv rc=" << rc << " req=" << requests[0]
                     << " chunk=" << chunk_idx << " channel=" << channel_idx
-                    << " chunk_bytes=" << chunk.bytes
-                    << " tag=" << chunk.tag << std::endl;
+                    << " chunk_bytes=" << chunk.bytes << " tag=" << chunk.tag
+                    << std::endl;
         }
 
         if (rc == 0 && requests[0]) {
@@ -1675,7 +1682,8 @@ Endpoint::ScheduleOutcome Endpoint::schedule_recv_chunks_locked(
       transfer.next_channel_cursor = (channel_idx + 1) % num_channels;
 
       bool progress_made = false;
-      if (!progress_recv_channel_(conn, channel_idx, transfer, &progress_made)) {
+      if (!progress_recv_channel_(conn, channel_idx, transfer,
+                                  &progress_made)) {
         return ScheduleOutcome::kError;
       }
 
@@ -1686,7 +1694,8 @@ Endpoint::ScheduleOutcome Endpoint::schedule_recv_chunks_locked(
           continue;
         }
         bool other_progress = false;
-        if (!progress_recv_channel_(conn, other_ch, transfer, &other_progress)) {
+        if (!progress_recv_channel_(conn, other_ch, transfer,
+                                    &other_progress)) {
           return ScheduleOutcome::kError;
         }
       }
@@ -1981,9 +1990,10 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
   }
 
   // Allocate event from per-channel pool
-  size_t event_idx = channel.recv_events.empty()
-                         ? 0
-                         : (channel.next_event_idx % channel.recv_events.size());
+  size_t event_idx =
+      channel.recv_events.empty()
+          ? 0
+          : (channel.next_event_idx % channel.recv_events.size());
   channel.next_event_idx++;
 
   cudaEvent_t event = channel.recv_events[event_idx];
@@ -2108,7 +2118,8 @@ bool Endpoint::progress_recv_channel_(Conn& conn, size_t channel_idx,
       if (debug_enabled_) {
         size_t chunk_idx = chunk_bytes_ ? (chunk.offset / chunk_bytes_) : 0;
         std::cerr << "[tcpx] Stage 1 complete: chunk=" << chunk_idx
-                  << " channel=" << channel_idx << " (network recv done)" << std::endl;
+                  << " channel=" << channel_idx << " (network recv done)"
+                  << std::endl;
       }
 
       if (chunk.needs_unpack) {
@@ -2190,8 +2201,8 @@ bool Endpoint::progress_recv_channel_(Conn& conn, size_t channel_idx,
       if (debug_enabled_) {
         size_t chunk_idx = chunk_bytes_ ? (chunk.offset / chunk_bytes_) : 0;
         std::cerr << "[tcpx] Stage 2 complete: chunk=" << chunk_idx
-                  << " channel=" << chunk.channel_idx
-                  << " (GPU unpack done)" << std::endl;
+                  << " channel=" << chunk.channel_idx << " (GPU unpack done)"
+                  << std::endl;
       }
 
       stage2_queue.pop_front();
@@ -2228,7 +2239,8 @@ bool Endpoint::progress_recv_channel_(Conn& conn, size_t channel_idx,
                   << " channel=" << channel_idx << " (consumed)" << std::endl;
       }
 
-      // Decrement per-channel inflight counter (now Stage 0 can post more chunks)
+      // Decrement per-channel inflight counter (now Stage 0 can post more
+      // chunks)
       if (channel.recv_inflight > 0) {
         channel.recv_inflight--;
       }
@@ -2340,7 +2352,8 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
 
   auto it = transfer_map_.find(transfer_id);
   if (it == transfer_map_.end()) {
-    // Transfer not found. Treat as complete only if it was previously finalized.
+    // Transfer not found. Treat as complete only if it was previously
+    // finalized.
     auto completed_it = completed_transfer_ids_.find(transfer_id);
     if (completed_it != completed_transfer_ids_.end()) {
       completed_transfer_ids_.erase(completed_it);

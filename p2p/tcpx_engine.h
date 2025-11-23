@@ -34,8 +34,8 @@ class Endpoint;
 
 // Per-channel resources within a connection
 struct ChannelState {
-  void* send_comm = nullptr;  // TCPX send comm for this channel.
-  void* recv_comm = nullptr;  // TCPX recv comm for this channel.
+  void* send_comm = nullptr;        // TCPX send comm for this channel.
+  void* recv_comm = nullptr;        // TCPX recv comm for this channel.
   void* send_dev_handle = nullptr;  // Points into send_dev_handle_storage.
   void* recv_dev_handle = nullptr;  // Points into recv_dev_handle_storage.
 
@@ -53,8 +53,9 @@ struct ChannelState {
   size_t recv_inflight = 0;  // Number of recv chunks in flight on this channel
 
   // Per-channel event pool for tracking GPU unpack completion
-  std::vector<cudaEvent_t> recv_events;  // Event pool for tracking GPU unpack completion
-  size_t next_event_idx = 0;             // Round-robin index for event allocation
+  std::vector<cudaEvent_t>
+      recv_events;            // Event pool for tracking GPU unpack completion
+  size_t next_event_idx = 0;  // Round-robin index for event allocation
 
   ChannelState() {
     recv_dev_handle = recv_dev_handle_storage.data();
@@ -81,9 +82,7 @@ struct Conn {
   // to enable independent GPU unpack pipelines.
   std::vector<ChannelState> channels;
 
-  void init_channels(size_t num_channels) {
-    channels.resize(num_channels);
-  }
+  void init_channels(size_t num_channels) { channels.resize(num_channels); }
 };
 
 // FIFO metadata item
@@ -110,7 +109,8 @@ struct MrEntry {
   int ptr_type = NCCL_PTR_CUDA;  // NCCL pointer type (defaults to device).
 
   // Cached TCPX handles keyed by conn_id.
-  // For multi-channel: each conn_id maps to a vector of handles (one per channel).
+  // For multi-channel: each conn_id maps to a vector of handles (one per
+  // channel).
   std::unordered_map<uint64_t, std::vector<void*>> send_handles;
   std::unordered_map<uint64_t, std::vector<void*>> recv_handles;
 };
@@ -140,7 +140,7 @@ struct PendingTransfer {
     bool needs_unpack = false;  // Whether the recv path must run GPU unpack.
 
     // Multi-channel support
-    size_t channel_idx = 0;  // Which channel this chunk is assigned to.
+    size_t channel_idx = 0;   // Which channel this chunk is assigned to.
     void* mhandle = nullptr;  // TCPX memory handle for this chunk.
 
     // State progression flags:
@@ -152,8 +152,9 @@ struct PendingTransfer {
     bool stage1_done = false;  // Network completion observed (tcpx_test).
     bool stage2_done =
         false;  // GPU completion observed (cudaEventQuery) or send acked.
-    bool queued_for_consume = false;  // Added to recv_consume_queues (recv path only).
-    bool consumed = false;     // tcpx_irecv_consumed called (recv path only).
+    bool queued_for_consume =
+        false;              // Added to recv_consume_queues (recv path only).
+    bool consumed = false;  // tcpx_irecv_consumed called (recv path only).
 
     // Bounce-buffer metadata (populated after Stage 1 on the recv path).
     rx::UnpackDescriptorBlock desc_block{};
@@ -175,9 +176,9 @@ struct PendingTransfer {
   uint64_t conn_id = 0;
   uint64_t mr_id = 0;
   size_t total_bytes = 0;
-  uint32_t base_tag = 0;  // Starting tag; chunks add their index.
+  uint32_t base_tag = 0;     // Starting tag; chunks add their index.
   size_t chunks_posted = 0;  // Total chunks submitted to TCPX (Stage 0).
-  void* mhandle = nullptr;  // TCPX memory handle cached in MrEntry.
+  void* mhandle = nullptr;   // TCPX memory handle cached in MrEntry.
 
   std::vector<ChunkState> chunks;
   size_t chunks_completed = 0;
@@ -208,7 +209,8 @@ struct PendingTransfer {
   // When a chunk's GPU unpack completes, we mark it as ready but only consume
   // the head of each channel's queue.
   std::vector<std::deque<size_t>>
-      recv_consume_queues;  // Per-channel: chunks ready to consume (FIFO order).
+      recv_consume_queues;  // Per-channel: chunks ready to consume (FIFO
+                            // order).
 };
 
 // TCPX transport engine
@@ -618,7 +620,8 @@ class Endpoint {
 
   /**
    * Stage 2 epilogue (RX): clear chunk state (event, etc).
-   * Does NOT call tcpx_irecv_consumed - that's handled separately in FIFO order.
+   * Does NOT call tcpx_irecv_consumed - that's handled separately in FIFO
+   * order.
    */
   bool finalize_recv_chunk_(Conn& conn, PendingTransfer::ChunkState& chunk);
 
