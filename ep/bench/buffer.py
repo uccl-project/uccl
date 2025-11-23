@@ -12,7 +12,23 @@ except ImportError as exc:
     raise
 
 from uccl.ep import EventHandle, Config
-from .utils import EventOverlap, check_nvlink_connections, initialize_uccl, destroy_uccl
+# Support both execution modes:
+# 1) As part of the packaged deep_ep_wrapper (symlinked buffer inside a package): uses relative import `.utils`.
+# 2) As a standalone benchmark script from the `ep/bench` directory (no package): falls back to plain `utils`.
+try:
+    from .utils import (
+        EventOverlap,
+        check_nvlink_connections,
+        initialize_uccl,
+        destroy_uccl,
+    )
+except ImportError:
+    from utils import (
+        EventOverlap,
+        check_nvlink_connections,
+        initialize_uccl,
+        destroy_uccl,
+    )
 
 
 class Buffer:
