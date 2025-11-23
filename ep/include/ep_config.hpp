@@ -195,7 +195,9 @@ struct LowLatencyLayout {
 
     // Send buffer
     size_t dispatch_send_buffer_bytes =
-        num_max_dispatch_tokens_per_rank * num_bytes_per_dispatch_msg;
+        (static_cast<size_t>(num_experts) + 1) *
+        static_cast<size_t>(num_max_dispatch_tokens_per_rank) *
+        num_bytes_per_dispatch_msg;
     size_t combine_send_buffer_bytes = num_experts *
                                        num_max_dispatch_tokens_per_rank *
                                        num_bytes_per_combine_msg;
