@@ -46,20 +46,26 @@ CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
 ifeq ($(USE_TCPX),1)
-NVCC ?= $(CUDA_HOME)/bin/nvcc
-NVCCFLAGS := -std=c++17 -Xcompiler "-fPIC -O3" -I../include -Itcpx -Itcpx/include -I$(CUDA_INC) -DUSE_TCPX
-SOURCES := tcpx_engine.cc tcpx/tcpx_impl.cc
-CU_SOURCES := tcpx/device/unpack_kernels.cu tcpx/device/unpack_launch.cu
+NCCL_HOME ?= ../thirdparty/nccl/build
+NCCL_INC  ?= $(NCCL_HOME)/include
+NCCL_LIB  ?= $(NCCL_HOME)/lib
+ifeq (,$(wildcard $(NCCL_INC)/nccl.h))
+$(error NCCL header not found at $(NCCL_INC)/nccl.h; set NCCL_HOME)
+endif
+ifeq (,$(wildcard $(NCCL_LIB)/libnccl.so*))
+$(error NCCL library not found at $(NCCL_LIB)/libnccl.so*; set NCCL_HOME)
+endif
+SOURCES := nccl_tcpx_endpoint.cc
 CORE_OBJECTS := $(SOURCES:.cc=.o)
-CU_OBJECTS := $(CU_SOURCES:.cu=.o)
-CXXFLAGS += -Itcpx -Itcpx/include
+CXXFLAGS += -I$(NCCL_INC)
+LDFLAGS += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
 else
 SOURCES := engine.cc pybind_engine.cc
 CORE_OBJECT := engine.o
 endif
 
 ifeq ($(USE_TCPX),1)
-OBJECTS := $(CORE_OBJECTS) $(CU_OBJECTS)
+OBJECTS := $(CORE_OBJECTS)
 else
 OBJECTS := $(SOURCES:.cc=.o)
 endif
@@ -70,14 +76,11 @@ ifeq ($(USE_TCPX),1)
 all: $(P2P_SHARED_LIB)
 
 # only build plugin for tcpx now, TODO: add tcpx to p2p	  
-$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS)
-	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS) \
+$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECTS)
+	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECTS) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB)
-
-%.o: %.cu
-	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 else
 # Default target
 all: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
@@ -111,20 +114,21 @@ endif
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
 
 # Install the module
-install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
-ifneq ($(USE_TCPX),1)
-	$(MAKE) $(P2P_PYTHON_EXT)
+
+ifeq ($(USE_TCPX),1)
+install: $(P2P_SHARED_LIB)
+	@mkdir -p $(INSTALL_DIR)
+	install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/
+	install -m 644 $(CAPI_HEADER) $(INCDIR)/
+else
+install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB) $(RDMA_PLUGIN_LIB)
 	@mkdir -p $(INSTALL_DIR)
 	@cp $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
-else
-	@mkdir -p $(INSTALL_DIR)
-endif
 	install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/
-ifneq ($(USE_TCPX),1)
 	install -m 755 $(RDMA_PLUGIN_LIB) $(LIBDIR)/
-endif
 	install -m 644 $(CAPI_HEADER) $(INCDIR)/
+endif
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB)
