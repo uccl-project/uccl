@@ -39,8 +39,9 @@ INCDIR ?= $(PREFIX)/include
 LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LINK_LIBS)
 
 # Target and source files
-TARGET   := p2p$(PYEXT)
-PLUGIN_SO := libuccl_engine.so
+P2P_PYTHON_EXT := p2p$(PYEXT)
+P2P_SHARED_LIB := libuccl_p2p.so
+RDMA_PLUGIN_LIB := librdma_plugin.a
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
@@ -66,10 +67,10 @@ endif
 # Build the shared libraries
 ifeq ($(USE_TCPX),1)
 # Default target
-all: $(PLUGIN_SO)
+all: $(P2P_SHARED_LIB)
 
 # only build plugin for tcpx now, TODO: add tcpx to p2p	  
-$(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS)
+$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS)
 	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
@@ -79,16 +80,16 @@ $(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS)
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 else
 # Default target
-all: $(TARGET) $(PLUGIN_SO)
+all: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 
-$(TARGET): $(OBJECTS) $(RDMA_HOME)/librdma.a
+$(P2P_PYTHON_EXT): $(OBJECTS) $(RDMA_HOME)/librdma.a
 	$(CXX) $(OBJECTS) $(RDMA_HOME)/librdma.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB)
 
-$(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_HOME)/librdma_plugin.a
-	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_HOME)/librdma_plugin.a \
+$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB)
+	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) -libverbs -lz -lelf
@@ -96,8 +97,13 @@ $(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_HOME)/librdma_plugin.a
 $(RDMA_HOME)/librdma.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
 	make -C $(RDMA_HOME) librdma.a -j$(nproc)
 
-$(RDMA_HOME)/librdma_plugin.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
-	make CXXFLAGS="-DDISABLE_CALL_ONCE_STATIC" -C $(RDMA_HOME) librdma_plugin.a
+RDMA_OBJECTS := $(patsubst $(RDMA_HOME)/%.cc,%.o,$(filter-out $(RDMA_HOME)/nccl_plugin.cc,$(wildcard $(RDMA_HOME)/*.cc)))
+
+$(RDMA_PLUGIN_LIB): $(RDMA_OBJECTS)
+	ar rcs $@ $(RDMA_OBJECTS)
+
+$(RDMA_OBJECTS): %.o: $(RDMA_HOME)/%.cc
+	$(CXX) -c $< -o $@ $(CXXFLAGS) -DDISABLE_CALL_ONCE_STATIC -DUSE_CUDA -I$(RDMA_HOME)
 endif
 
 # Compile source files
@@ -105,32 +111,31 @@ endif
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
 
 # Install the module
-install: $(PLUGIN_SO)
+install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 ifneq ($(USE_TCPX),1)
-	$(MAKE) $(TARGET)
+	$(MAKE) $(P2P_PYTHON_EXT)
 	@mkdir -p $(INSTALL_DIR)
-	@cp $(TARGET) $(INSTALL_DIR)/
-	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(TARGET)"
+	@cp $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
+	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
 else
 	@mkdir -p $(INSTALL_DIR)
 endif
-	install -m 755 $(PLUGIN_SO) $(LIBDIR)/
+	install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/
 ifneq ($(USE_TCPX),1)
-	install -m 755 $(RDMA_HOME)/librdma_plugin.a $(LIBDIR)/
+	install -m 755 $(RDMA_PLUGIN_LIB) $(LIBDIR)/
 endif
 	install -m 644 $(CAPI_HEADER) $(INCDIR)/
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(CAPI_OBJECT) $(PLUGIN_SO)
+	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB)
 ifneq ($(USE_TCPX),1)
-	rm -f $(TARGET)
-	make -C $(RDMA_HOME) clean -j$(nproc)
+	rm -f $(P2P_PYTHON_EXT) $(RDMA_PLUGIN_LIB) $(RDMA_OBJECTS)
 endif
 
 # Test the module
 test:
 ifneq ($(USE_TCPX),1)
-	$(MAKE) $(TARGET)
+	$(MAKE) $(P2P_PYTHON_EXT)
 	$(PYTHON) tests/test_engine_write.py
 endif
 
@@ -148,4 +153,4 @@ help:
 	@echo "  install-deps - Install pybind11 dependency"
 	@echo "  help         - Show this help message"
 
-.PHONY: all clean test install-deps help install 
+.PHONY: all clean test install-deps help install

@@ -4,38 +4,46 @@ GPU-driven communication (e.g., DeepEP) is the key to efficient and large-scale 
 
 For UCCL's host/CPU-driven P2P engine, see [p2p](../p2p/) folder.
 
-## Build on CUDA for testing
+## Prerequisite
 
-We provide a script to install dependencies (tested on p5en and p6-b200). 
+We provide a script to install dependencies (tested on p5en, p6-b200, AMD MI300x), assuming under a Python environment: 
 ```bash
-# Under uccl/ep
 ./install_deps.sh
 ```
 
-Then under a Python environment, you can directly build and install:
+## Build on CUDA
+
+You can directly build and install into your Python env:
 ```bash
-# Under uccl/ep
+python setup.py install
+```
+
+You can also use `make` to build and install (might deprecate in the future): 
+```bash
 make -j install
 ```
 
-Alternatively, you can build `uccl.ep` wheel using docker:
+Alternatively, you can build `uccl.ep` wheel using docker then install:
 ```bash
 # Under uccl
 bash build_and_install.sh cuda ep
 ```
+> Note: docker-built `uccl.ep` wheel currently does not work on p6-b200, see https://github.com/uccl-project/uccl/issues/554. 
 
-## Build on ROCm for testing
+## Build on ROCm
 
-You can build `uccl.ep` wheel for ROCm7 using docker:
+You can directly build and install into your Python env:
+```bash
+python setup.py install
+```
+
+Alternatively, you can build `uccl.ep` wheel for ROCm7 using docker then install:
 ```bash
 # Under uccl
 bash build_and_install.sh rocm ep
-
-# Install rocm7 into local Python env
-pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
 ```
 
-Test import `uccl.ep`
+## Test import `uccl.ep`
 ```bash
 python -c "import torch; import uccl.ep"
 ```
