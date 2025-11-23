@@ -45,9 +45,6 @@ def hash_tensor(t: torch.Tensor):
 
 def init_dist(local_rank: int, num_local_ranks: int):
     # Set device
-    device_index = int(os.environ.get("LOCAL_RANK", 0))
-    torch.cuda.set_device(device_index)
-    torch.set_default_device(f"cuda:{device_index}")
 
     # NOTES: you may rewrite this function with your own cluster settings
     ip = os.getenv("MASTER_ADDR", "127.0.0.1")
@@ -96,30 +93,95 @@ def _discover_local_ip():
     # Try to infer the IP that can reach MASTER_ADDR (works in most clusters)
     import socket, os
 
-    master = os.environ.get("MASTER_ADDR", "127.0.0.1")
-    port = int(os.environ.get("MASTER_PORT", "29500"))
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # Method 1: Use MASTER_ADDR if available (torchrun style)
+    if "MASTER_ADDR" in os.environ:
+        master = os.environ["MASTER_ADDR"]
+        port = int(os.environ.get("MASTER_PORT", "29500"))
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect((master, port))
+            return s.getsockname()[0]
+        except:
+            pass
+        finally:
+            s.close()
+
+    # Method 2: Use hostname resolution (works in AWS and most cloud environments)
+    hostname = socket.gethostname()
     try:
-        # UDP connect doesn't send packets; just selects a route/interface
-        s.connect((master, port))
-        return s.getsockname()[0]
-    finally:
+        # This usually returns the private IP in cloud environments
+        local_ip = socket.gethostbyname(hostname)
+        # Skip loopback addresses
+        if not local_ip.startswith("127."):
+            return local_ip
+    except:
+        pass
+
+    # Method 3: Connect to a public DNS to determine outgoing interface
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Google DNS - this doesn't actually send packets
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
         s.close()
+        return local_ip
+    except:
+        pass
+
+    # Last resort: return localhost
+    return "127.0.0.1"
+
+
+def _gather_peer_ips(group):
+    # Gather local IP strings across ranks
+    world = dist.get_world_size(group)
+    my_ip = _discover_local_ip()
+    ips = [None] * world
+    dist.all_gather_object(ips, my_ip, group=group)
+    return ips
+
+
+def get_peer_ip(rank: int, num_ranks: int, group: dist.ProcessGroup):
+
+    if num_ranks == 1:
+        # single-process local test: okay to leave blank (or 127.0.0.1)
+        peer_ip = ""
+    else:
+        ips = _gather_peer_ips(group)
+        # simple ring: next rank is your peer
+        peer_ip = ips[(rank + 1) % num_ranks]
+    return peer_ip if peer_ip else ""
 
 
 def get_cpu_proxies_meta(proxies, rank, scratch_ptr, scratch_bytes, num_ranks, group):
+    my_ip = _discover_local_ip()
     meta = {
         "rank": rank,
         "ptr": int(scratch_ptr),
         "nbytes": int(scratch_bytes),
-        "ip": _discover_local_ip(),
+        "ip": my_ip,
         "listen_ports": [proxy.get_listen_port() for proxy in proxies],
     }
     all_meta = [None] * num_ranks
-    device_index = int(os.environ.get("LOCAL_RANK", 0))
+    # Use current device or fallback to LOCAL_RANK or 0
+    if "LOCAL_RANK" in os.environ:
+        device_index = int(os.environ["LOCAL_RANK"])
+    else:
+        device_index = torch.cuda.current_device()
     torch.cuda.set_device(device_index)
     dist.all_gather_object(all_meta, meta, group=group)
     rank2meta = {m["rank"]: m for m in all_meta}
+
+    # Debug: print IP distribution
+    ip_counts = {}
+    for m in all_meta:
+        ip = m["ip"]
+        ip_counts[ip] = ip_counts.get(ip, 0) + 1
+    if rank == 0:
+        print(f"[DEBUG] IP distribution across {num_ranks} ranks:", flush=True)
+        for ip, count in ip_counts.items():
+            print(f"[DEBUG]   {ip}: {count} ranks", flush=True)
+
     return rank2meta
 
 
@@ -447,14 +509,44 @@ def initialize_uccl(
             os.remove(shm_file)
     except Exception:
         pass
-    local_rank = int(os.environ["LOCAL_RANK"])
-    nproc_per_node = int(os.environ.get("LOCAL_WORLD_SIZE", 1))
-    node_idx = rank // nproc_per_node
 
-    if int(os.environ.get("WORLD_SIZE")) % nproc_per_node != 0:
-        raise ValueError("WORLD_SIZE must be divisible by LOCAL_WORLD_SIZE")
+    # Try to get local_rank from environment or infer from current device
+    if "LOCAL_RANK" in os.environ:
+        local_rank = int(os.environ["LOCAL_RANK"])
+    else:
+        # Fallback: use current CUDA device as local_rank
+        local_rank = torch.cuda.current_device()
+
+    # Try to get nproc_per_node from environment
+    if "LOCAL_WORLD_SIZE" in os.environ:
+        nproc_per_node = int(os.environ["LOCAL_WORLD_SIZE"])
+    else:
+        # Fallback: infer from is_intranode and num_ranks
+        if is_intranode:
+            # All ranks are on the same node
+            nproc_per_node = num_ranks
+        else:
+            # Assume uniform distribution across nodes
+            # If we have N GPUs, assume each node has same number of GPUs
+            num_gpus = torch.cuda.device_count()
+            nproc_per_node = num_gpus if num_gpus > 0 else 1
+
+    node_idx = rank // nproc_per_node if nproc_per_node > 0 else 0
+
+    # Only check WORLD_SIZE consistency if it's defined
+    if "WORLD_SIZE" in os.environ and nproc_per_node > 0:
+        world_size = int(os.environ.get("WORLD_SIZE"))
+        if world_size % nproc_per_node != 0:
+            raise ValueError("WORLD_SIZE must be divisible by LOCAL_WORLD_SIZE")
 
     proxies = []
+
+    # Calculate num_nodes from num_ranks and nproc_per_node
+    if nproc_per_node > 0:
+        num_nodes = num_ranks // nproc_per_node
+    else:
+        num_nodes = num_ranks  # Fallback: assume each rank is on a different node
+
     for i in range(ep.get_num_proxy_threads()):
         proxy = ep.Proxy(
             thread_idx=i,
@@ -465,7 +557,7 @@ def initialize_uccl(
             local_rank=local_rank,
             num_experts=num_experts,
             num_ranks=num_ranks,
-            num_nodes=int(os.environ.get("WORLD_SIZE")) // nproc_per_node,
+            num_nodes=num_nodes,
             use_normal_mode=use_normal_mode,
             is_intranode=is_intranode,
         )
@@ -503,7 +595,12 @@ def initialize_uccl(
 
 
 def destroy_uccl(proxies, workers):
-    device_index = int(os.environ["LOCAL_RANK"])
+    # Use current device or fallback to LOCAL_RANK
+    if "LOCAL_RANK" in os.environ:
+        device_index = int(os.environ["LOCAL_RANK"])
+    else:
+        device_index = torch.cuda.current_device()
+
     if workers is not None:
         try:
             workers.stop()
