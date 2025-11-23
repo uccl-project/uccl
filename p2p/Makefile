@@ -45,20 +45,29 @@ RDMA_PLUGIN_LIB := librdma_plugin.a
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
+
 ifeq ($(USE_TCPX),1)
 NCCL_HOME ?= ../thirdparty/nccl/build
 NCCL_INC  ?= $(NCCL_HOME)/include
 NCCL_LIB  ?= $(NCCL_HOME)/lib
-ifeq (,$(wildcard $(NCCL_INC)/nccl.h))
-$(error NCCL header not found at $(NCCL_INC)/nccl.h; set NCCL_HOME)
+
+# Try to locate nccl.h and libnccl.so* in common places
+NCCL_INC_FOUND := $(firstword $(wildcard $(NCCL_INC)/nccl.h /usr/include/nccl.h /usr/local/include/nccl.h))
+NCCL_LIB_FOUND := $(firstword $(wildcard $(NCCL_LIB)/libnccl.so* $(NCCL_HOME)/lib64/libnccl.so* $(CUDA_HOME)/lib64/libnccl.so* /usr/lib/x86_64-linux-gnu/libnccl.so* /usr/lib/libnccl.so*))
+ifeq ($(NCCL_INC_FOUND),)
+$(error NCCL header not found; set NCCL_HOME or NCCL_INC)
 endif
-ifeq (,$(wildcard $(NCCL_LIB)/libnccl.so*))
-$(error NCCL library not found at $(NCCL_LIB)/libnccl.so*; set NCCL_HOME)
+ifeq ($(NCCL_LIB_FOUND),)
+$(error NCCL library not found; set NCCL_HOME or NCCL_LIB)
 endif
+NCCL_LIB_DIR := $(dir $(NCCL_LIB_FOUND))
+
+# For TCPX build, produce libuccl_engine.so (NIXL plugin depends on this SONAME).
+P2P_SHARED_LIB := libuccl_engine.so
 SOURCES := nccl_tcpx_endpoint.cc
 CORE_OBJECTS := $(SOURCES:.cc=.o)
-CXXFLAGS += -I$(NCCL_INC)
-LDFLAGS += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
+CXXFLAGS += -I$(dir $(NCCL_INC_FOUND))
+LDFLAGS += -L$(NCCL_LIB_DIR) -lnccl -Wl,-rpath,$(NCCL_LIB_DIR)
 else
 SOURCES := engine.cc pybind_engine.cc
 CORE_OBJECT := engine.o

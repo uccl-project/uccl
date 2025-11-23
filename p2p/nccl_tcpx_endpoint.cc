@@ -13,7 +13,7 @@
 
 namespace nccl_tcpx {
 namespace {
-// 控制信令的魔数/版本。通过 TCP 信道互换 uid 与 GPU 编号后再初始化 ncclComm。
+// Control-plane magic/version. Exchange uid and GPU index over TCP before initializing ncclComm.
 constexpr uint32_t kMagic = 0x4e43434c;  // "NCCL"
 constexpr uint32_t kVersion = 1;
 
@@ -88,7 +88,6 @@ Endpoint::~Endpoint() {
 }
 
 bool Endpoint::setup_listener_() {
-  // 复用 TCPX 的控制端口，只监听 IPv4；server 侧 accept 后发 uid。
   int fd = ::socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return false;
 
@@ -138,8 +137,7 @@ bool Endpoint::recv_all_(int fd, void* buf, size_t len) {
 }
 
 bool Endpoint::init_comm_(Conn& conn, ncclUniqueId const& uid, int rank) {
-  // 将 NCCL 控制/数据生命周期封装在 per-conn 上，避免 uccl_engine
-  // 增加额外状态。
+  // Encapsulate NCCL control/data lifetime per connection so uccl_engine does not need extra state.
   if (cudaSetDevice(conn.local_gpu_idx) != cudaSuccess) return false;
   if (cudaStreamCreateWithFlags(&conn.stream, cudaStreamNonBlocking) !=
       cudaSuccess) {
@@ -317,7 +315,7 @@ bool Endpoint::dereg(uint64_t mr_id) {
 
 bool Endpoint::advertise(uint64_t /*conn_id*/, uint64_t mr_id, void const* addr,
                          size_t len, void* out_buf) {
-  // 保留与 TCPX 相同的 advertise 接口，仅返回 64B FIFO 描述符；tag 始终置 0。
+  // Preserve the TCPX-style advertise API: return a 64B FIFO descriptor; tag is always 0.
   MrEntry mr{};
   {
     std::lock_guard<std::mutex> lock(mr_mu_);
@@ -341,7 +339,7 @@ bool Endpoint::advertise(uint64_t /*conn_id*/, uint64_t mr_id, void const* addr,
 
 bool Endpoint::send_internal_(Conn& conn, void const* data, size_t size,
                               uint64_t& transfer_id) {
-  // 真正的数据面调用：ncclSend + 在流上挂一个 cudaEvent，供 poll_async 轮询。
+  // Actual data-plane call: ncclSend plus a cudaEvent on the stream for poll_async to poll.
   if (cudaSetDevice(conn.local_gpu_idx) != cudaSuccess) return false;
   ncclResult_t rc =
       ncclSend(data, size, ncclChar, conn.remote_rank, conn.comm, conn.stream);
@@ -367,7 +365,7 @@ bool Endpoint::send_internal_(Conn& conn, void const* data, size_t size,
 
 bool Endpoint::recv_internal_(Conn& conn, void* data, size_t size,
                               uint64_t& transfer_id) {
-  // 对称的接收路径，同样用事件标记完成。
+  // Symmetric receive path, also using an event to mark completion.
   if (cudaSetDevice(conn.local_gpu_idx) != cudaSuccess) return false;
   ncclResult_t rc =
       ncclRecv(data, size, ncclChar, conn.remote_rank, conn.comm, conn.stream);
@@ -421,8 +419,7 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t /*mr_id*/, void* data,
 bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, FifoItem const& slot_item,
                           uint64_t* transfer_id) {
-  // 兼容 read_async 入口：NCCL 路径下忽略 tag，只按 slot_item.size/size
-  // 取最小值收取。
+  // Compatibility read_async entry: in the NCCL path we ignore tag and receive min(slot_item.size, size).
   size_t recv_size = size;
   if (slot_item.size > 0 && slot_item.size < recv_size) {
     recv_size = slot_item.size;
@@ -432,7 +429,7 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
 
 bool Endpoint::queue_read_response(uint64_t conn_id,
                                    FifoItem const& fifo_item) {
-  // FIFO 回调直接触发一次 ncclSend；没有 bounce buffer，保持接口形状即可。
+  // FIFO callback directly issues an ncclSend; no bounce buffer, just keep the API shape.
   Conn conn{};
   {
     std::lock_guard<std::mutex> lock(conn_mu_);
