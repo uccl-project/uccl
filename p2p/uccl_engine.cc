@@ -25,7 +25,8 @@
 #include <utility>
 
 #ifdef USE_TCPX
-// nccl_tcpx_endpoint does not declare inside_python; define it here for uccl_engine.
+// nccl_tcpx_endpoint does not declare inside_python; define it here for
+// uccl_engine.
 thread_local bool inside_python = false;
 
 // Reuse NCCL FIFO descriptor (64B ABI) directly.

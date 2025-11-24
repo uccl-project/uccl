@@ -12,7 +12,8 @@
 
 namespace nccl_tcpx {
 
-// 64-byte FIFO descriptor matching tcpx::FifoItem layout so uccl_engine can swap implementations.
+// 64-byte FIFO descriptor matching tcpx::FifoItem layout so uccl_engine can
+// swap implementations.
 struct FifoItem {
   uint64_t mr_id;
   uint32_t size;
@@ -23,11 +24,6 @@ struct FifoItem {
 };
 static_assert(sizeof(FifoItem) == 64, "FifoItem must be 64 bytes");
 
-// Minimal NCCL TCPX Endpoint:
-// - API shape mirrors a subset of tcpx::Endpoint so uccl_engine can swap implementations.
-// - Control: exchange ncclUniqueId / rank / gpu id over TCP, then init ncclComm.
-// - Data: call ncclSend/ncclRecv (ncclChar, count in bytes), track completion via cudaEvent.
-//   benchmark_nixl.py/NIXL plugin calls and metadata format stay unchanged.
 class Endpoint {
  public:
   explicit Endpoint(int num_cpus);

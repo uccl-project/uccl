@@ -91,22 +91,16 @@ sudo mv /usr/local/nixl /usr/local/nixl.bak
 sudo ldconfig
 ```
 
-```bash
-cd $UCCL_HOME/thirdparty/nixl
-pip uninstall -y nixl
-pip install . --no-cache-dir --force-reinstall
-```
-
 ## Run benchmark
 
 ```bash
 cd $UCCL_HOME/p2p
 
 # Server (node 1)
-python benchmarks/benchmark_nixl.py --backend tcpx --role server --sizes 67108864 --iters 10
+python benchmarks/benchmark_nixl.py --backend tcpx --role server --sizes 67108864 --iters 10 --op-type read
 
 # Client (node 2, replace with actual IP)
-python benchmarks/benchmark_nixl.py --backend tcpx --role client --sizes 67108864 --iters 10 --remote-ip=<server_ip>
+python benchmarks/benchmark_nixl.py --backend tcpx --role client --sizes 67108864 --iters 10 --remote-ip=10.64.78.49 --op-type read
 ```
 
 ## Performance

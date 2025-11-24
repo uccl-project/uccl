@@ -13,7 +13,8 @@
 
 namespace nccl_tcpx {
 namespace {
-// Control-plane magic/version. Exchange uid and GPU index over TCP before initializing ncclComm.
+// Control-plane magic/version. Exchange uid and GPU index over TCP before
+// initializing ncclComm.
 constexpr uint32_t kMagic = 0x4e43434c;  // "NCCL"
 constexpr uint32_t kVersion = 1;
 
@@ -137,7 +138,8 @@ bool Endpoint::recv_all_(int fd, void* buf, size_t len) {
 }
 
 bool Endpoint::init_comm_(Conn& conn, ncclUniqueId const& uid, int rank) {
-  // Encapsulate NCCL control/data lifetime per connection so uccl_engine does not need extra state.
+  // Encapsulate NCCL control/data lifetime per connection so uccl_engine does
+  // not need extra state.
   if (cudaSetDevice(conn.local_gpu_idx) != cudaSuccess) return false;
   if (cudaStreamCreateWithFlags(&conn.stream, cudaStreamNonBlocking) !=
       cudaSuccess) {
@@ -315,7 +317,8 @@ bool Endpoint::dereg(uint64_t mr_id) {
 
 bool Endpoint::advertise(uint64_t /*conn_id*/, uint64_t mr_id, void const* addr,
                          size_t len, void* out_buf) {
-  // Preserve the TCPX-style advertise API: return a 64B FIFO descriptor; tag is always 0.
+  // Preserve the TCPX-style advertise API: return a 64B FIFO descriptor; tag is
+  // always 0.
   MrEntry mr{};
   {
     std::lock_guard<std::mutex> lock(mr_mu_);
@@ -339,7 +342,8 @@ bool Endpoint::advertise(uint64_t /*conn_id*/, uint64_t mr_id, void const* addr,
 
 bool Endpoint::send_internal_(Conn& conn, void const* data, size_t size,
                               uint64_t& transfer_id) {
-  // Actual data-plane call: ncclSend plus a cudaEvent on the stream for poll_async to poll.
+  // Actual data-plane call: ncclSend plus a cudaEvent on the stream for
+  // poll_async to poll.
   if (cudaSetDevice(conn.local_gpu_idx) != cudaSuccess) return false;
   ncclResult_t rc =
       ncclSend(data, size, ncclChar, conn.remote_rank, conn.comm, conn.stream);
@@ -419,7 +423,8 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t /*mr_id*/, void* data,
 bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, FifoItem const& slot_item,
                           uint64_t* transfer_id) {
-  // Compatibility read_async entry: in the NCCL path we ignore tag and receive min(slot_item.size, size).
+  // Compatibility read_async entry: in the NCCL path we ignore tag and receive
+  // min(slot_item.size, size).
   size_t recv_size = size;
   if (slot_item.size > 0 && slot_item.size < recv_size) {
     recv_size = slot_item.size;
@@ -429,7 +434,8 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
 
 bool Endpoint::queue_read_response(uint64_t conn_id,
                                    FifoItem const& fifo_item) {
-  // FIFO callback directly issues an ncclSend; no bounce buffer, just keep the API shape.
+  // FIFO callback directly issues an ncclSend; no bounce buffer, just keep the
+  // API shape.
   Conn conn{};
   {
     std::lock_guard<std::mutex> lock(conn_mu_);
