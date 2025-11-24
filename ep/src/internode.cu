@@ -273,8 +273,7 @@ __global__ void notify_dispatch(
             i)[NUM_MAX_NVL_PEERS + num_rdma_experts];
         recv_rdma_rank_prefix_sum[i] = sum;
       }
-      while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1)
-        ;
+      while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1);
       *moe_recv_rdma_counter_mapped = sum;
     }
 
@@ -303,8 +302,7 @@ __global__ void notify_dispatch(
         sum += nvl_recv_num_tokens_per_rank.buffer(src_nvl_rank)[src_rdma_rank];
         recv_gbl_rank_prefix_sum[i] = sum;
       }
-      while (ld_volatile_global(moe_recv_counter_mapped) != -1)
-        ;
+      while (ld_volatile_global(moe_recv_counter_mapped) != -1);
       *moe_recv_counter_mapped = sum;
     }
     if (thread_id < num_nvl_experts) {
@@ -314,8 +312,7 @@ __global__ void notify_dispatch(
         sum += nvl_recv_num_tokens_per_expert.buffer(i)[thread_id];
       sum = (sum + expert_alignment - 1) / expert_alignment * expert_alignment;
       while (ld_volatile_global(moe_recv_expert_counter_mapped + thread_id) !=
-             -1)
-        ;
+             -1);
       moe_recv_expert_counter_mapped[thread_id] = sum;
     }
 
@@ -1150,9 +1147,17 @@ __global__ void __launch_bounds__(
 
       // Move tail index
       __syncwarp();
-      if (lane_id == 0)
+      if (lane_id == 0) {
+        /*******************************************************************/
+        printf(
+            "DeepEP dispatch NVL forwarder, channel: %d, RDMA: %d, "
+            "src NVL: %d, dst NVL: %d, head: %d, tail: %d\n",
+            channel_id, rdma_rank, nvl_rank, target_rank,
+            cached_nvl_channel_head, cached_nvl_channel_tail);
         st_release_sys_global(nvl_channel_tail.buffer(),
                               cached_nvl_channel_tail);
+        /*******************************************************************/
+      }
     }
     // Retired
     __syncwarp();
@@ -1263,6 +1268,19 @@ __global__ void __launch_bounds__(
 
         cached_channel_tail_idx = __shfl_sync(
             WARP_MASK, ld_acquire_sys_global(nvl_channel_tail.buffer()), 0);
+        if (lane_id == 0) {
+          /*******************************************************************/
+          printf(
+              "DeepEP dispatch NVL receiver check, channel: %d, RDMA: %d, src "
+              "NVL: %d, dst NVL: %d, head: %d, tail: %d, "
+              "num_tokens_to_recv_original: %d, "
+              "num_tokens_to_recv: %d\n",
+              channel_id, rdma_rank, target_rank, nvl_rank,
+              ld_acquire_sys_global(nvl_channel_head.buffer()),
+              ld_acquire_sys_global(nvl_channel_tail.buffer()),
+              num_tokens_to_recv_original, num_tokens_to_recv);
+          /*******************************************************************/
+        }
         // Timeout check
         if (lane_id == 0 and clock64() - start_time > NUM_TIMEOUT_CYCLES) {
           printf(
@@ -1896,7 +1914,7 @@ template <
     int kNumWarpsPerForwarder = (kNumCombineForwarderWarps / kNumRDMARanks > 0)
                                     ? kNumCombineForwarderWarps / kNumRDMARanks
                                     : 1,
-    int kNumForwarders = kNumRDMARanks* kNumWarpsPerForwarder,
+    int kNumForwarders = kNumRDMARanks * kNumWarpsPerForwarder,
     int kNumRDMAReceivers = kNumForwarders - NUM_MAX_NVL_PEERS>
 __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
     combine(int4* combined_x, float* combined_topk_weights,
