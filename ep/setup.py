@@ -2,12 +2,20 @@ import os
 import subprocess
 import setuptools
 from glob import glob
-import torch
 import shutil
 import site
 
 from pathlib import Path
 
+# Set ROCm architecture early, before importing torch
+# This prevents PyTorch from compiling for all architectures
+if not os.getenv("TORCH_CUDA_ARCH_LIST"):
+    # Default to gfx942, but can be overridden by environment variable
+    default_rocm_arch = os.getenv("PYTORCH_ROCM_ARCH", "gfx942")
+    os.environ["PYTORCH_ROCM_ARCH"] = default_rocm_arch
+    os.environ["TORCH_CUDA_ARCH_LIST"] = default_rocm_arch
+
+import torch
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 from setuptools.command.install import install
 
@@ -156,10 +164,9 @@ if __name__ == "__main__":
             if float(default_arch) >= 9.0:
                 nvcc_flags.extend(["--ptxas-options=--register-usage-level=10"])
 
-        os.environ["TORCH_CUDA_ARCH_LIST"] = os.getenv(
-            "TORCH_CUDA_ARCH_LIST", default_arch
-        )
-        device_arch = os.environ["TORCH_CUDA_ARCH_LIST"]
+        # Set architecture environment variable before creating CUDAExtension
+        device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", default_arch)
+        os.environ["TORCH_CUDA_ARCH_LIST"] = device_arch
     else:
         # Disable SM90 features on AMD
         cxx_flags.append("-DDISABLE_SM90_FEATURES")
@@ -171,8 +178,8 @@ if __name__ == "__main__":
         cxx_flags.append("-DENABLE_FAST_DEBUG")
         nvcc_flags.append("-DENABLE_FAST_DEBUG")
 
+        # Get device architecture (already set at top of file)
         device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", "gfx942")
-        os.environ["PYTORCH_ROCM_ARCH"] = device_arch
 
     # Disable LD/ST tricks, as some CUDA version does not support `.L1::no_allocate`
     # Only enable aggressive PTX instructions for SM 9.0+ (H100/H800/B200)
