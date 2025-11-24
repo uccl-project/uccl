@@ -12,7 +12,7 @@
 #include <vector>
 
 struct BenchEnv {
-  int blocks = kNumThBlocks;
+  int blocks = kNumProxyThs;
   gpuStream_t stream = nullptr;
   gpuDeviceProp prop{};
 
@@ -24,7 +24,7 @@ struct BenchEnv {
   mscclpp::FifoDeviceHandle* d_fifo_handles = nullptr;
 };
 
-inline void init_env(BenchEnv& env, int blocks = kNumThBlocks,
+inline void init_env(BenchEnv& env, int blocks = kNumProxyThs,
                      int device = -1) {
   env.blocks = blocks;
   if (device == -1) gpuGetDevice(&device);
@@ -292,7 +292,7 @@ dtype_t align(dtype_t a, dtype_t b) {
 struct BenchEnvFifo {
   std::vector<std::unique_ptr<mscclpp::Fifo>> fifos;
   mscclpp::FifoDeviceHandle* d_fifo_handles = nullptr;
-  int blocks = kNumThBlocks;
+  int blocks = kNumProxyThs;
   gpuStream_t stream = nullptr;
   gpuDeviceProp prop{};
 
@@ -303,7 +303,7 @@ struct BenchEnvFifo {
   uint32_t* op_count = nullptr;
 };
 
-inline void init_env_fifo(BenchEnvFifo& env, int blocks = kNumThBlocks,
+inline void init_env_fifo(BenchEnvFifo& env, int blocks = kNumProxyThs,
                           int device = -1, uint32_t fifo_size = 2048) {
   env.blocks = blocks;
   if (device == -1) gpuGetDevice(&device);

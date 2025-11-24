@@ -650,8 +650,8 @@ int main(int argc, char* argv[]) {
 
   client_addr_u32 = htonl(str_to_ip(client_ip_str));
   server_addr_u32 = htonl(str_to_ip(server_ip_str));
-  DCHECK(str_to_mac(client_mac_str, client_mac_char));
-  DCHECK(str_to_mac(server_mac_str, server_mac_char));
+  CHECK(str_to_mac(client_mac_str, client_mac_char));
+  CHECK(str_to_mac(server_mac_str, server_mac_char));
 
   int pshared;
   int ret;

@@ -39,60 +39,58 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-void exchange_connection_info(int rank, char const* peer_ip, int tid,
-                              RDMAConnectionInfo* local,
-                              RDMAConnectionInfo* remote) {
+void recv_connection_info_as_server(int my_rank, int* actual_peer,
+                                    int listen_fd,
+                                    RDMAConnectionInfo* remote_array) {
   int sockfd;
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
-  if (rank == 0) {
-    // Listen
-    int listenfd = socket(AF_INET, SOCK_STREAM, 0);
-    int one = 1;
-    setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(TCP_PORT + tid);
-    addr.sin_addr.s_addr = INADDR_ANY;
-    if (bind(listenfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
-      perror("bind failed");
-      exit(1);
-    }
-    listen(listenfd, 1);
 
-    socklen_t len = sizeof(addr);
-    sockfd = accept(listenfd, (struct sockaddr*)&addr, &len);
-    close(listenfd);
-  } else {
-    // Connect
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    int one = 1;
-    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(TCP_PORT + tid);
-    inet_pton(AF_INET, peer_ip, &addr.sin_addr);
+  // Already listening when calling uccl::create_listen_socket().
+  socklen_t len = sizeof(addr);
+  sockfd = accept(listen_fd, (struct sockaddr*)&addr, &len);
 
-    int retry = 0;
-    while (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
-      if (errno == ECONNREFUSED || errno == ENETUNREACH) {
-        if (++retry > MAX_RETRIES) {
-          fprintf(stderr, "Rank %d: failed to connect after %d retries\n", rank,
-                  retry);
-          exit(1);
-        }
-        usleep(RETRY_DELAY_MS * 1000);  // sleep 200 ms
-        continue;
-      } else {
-        perror("connect failed");
+  // Exchange info
+  uccl::receive_message(sockfd, actual_peer, sizeof(*actual_peer));
+  uccl::receive_message(sockfd, &remote_array[*actual_peer],
+                        sizeof(remote_array[*actual_peer]));
+  close(sockfd);
+}
+
+void send_connection_info_as_client(int my_rank, int peer, char const* peer_ip,
+                                    int peer_listen_port,
+                                    RDMAConnectionInfo* local) {
+  int sockfd;
+  struct sockaddr_in addr;
+  memset(&addr, 0, sizeof(addr));
+
+  // Connect
+  sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  int one = 1;
+  setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(peer_listen_port);
+  inet_pton(AF_INET, peer_ip, &addr.sin_addr);
+
+  int retry = 0;
+  while (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+    if (errno == ECONNREFUSED || errno == ENETUNREACH) {
+      if (++retry > MAX_RETRIES) {
+        fprintf(stderr, "Rank %d: failed to connect to %d after %d retries\n",
+                my_rank, peer, retry);
         exit(1);
       }
+      usleep(RETRY_DELAY_MS * 1000);  // sleep 200 ms
+      continue;
+    } else {
+      perror("connect failed");
+      exit(1);
     }
   }
 
   // Exchange info
-  // send(sockfd, local, sizeof(*local), 0);
-  // recv(sockfd, remote, sizeof(*remote), MSG_WAITALL);
+  uccl::send_message(sockfd, &my_rank, sizeof(my_rank));
   uccl::send_message(sockfd, local, sizeof(*local));
-  uccl::receive_message(sockfd, remote, sizeof(*remote));
   close(sockfd);
 }
 
@@ -244,12 +242,9 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 
   if (S.rkey != 0) {
     fprintf(stderr, "Warning: rkey already set (%x), overwriting\n", S.rkey);
+    exit(1);
   }
 
-  if (S.mr->rkey == 0) {
-    fprintf(stderr, "rkey equals 0!\n");
-    std::abort();
-  }
   S.rkey = S.mr->rkey;
 }
 
@@ -626,6 +621,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
       exit(1);
     }
   }
+
   printf("ACK-QP modified to RTR state\n");
 }
 
@@ -675,6 +671,7 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
     fprintf(stderr, "errno: %d\n", errno);
     exit(1);
   }
+
   printf("ACK-QP modified to RTS state\n");
 }
 
@@ -682,7 +679,7 @@ void post_receive_buffer_for_imm_on_qp(ProxyCtx& S, ibv_qp* qp) {
   std::vector<ibv_recv_wr> wrs(kMaxOutstandingRecvs);
   std::vector<ibv_sge> sges(kMaxOutstandingRecvs);
   for (size_t i = 0; i < kMaxOutstandingRecvs; ++i) {
-    size_t offset = (i < kNumThBlocks) ? i : (i % kNumThBlocks);
+    size_t offset = (i < kNumProxyThs) ? i : (i % kNumProxyThs);
     sges[i] = {(uintptr_t)S.mr->addr + offset * kObjectSize, kObjectSize,
                S.mr->lkey};
     wrs[i] = {.wr_id = make_wr_id(S.tag, (uint32_t)i),
@@ -2140,6 +2137,20 @@ static void post_atomic_operations_normal_mode(
                   (unsigned long long)bad->wr_id, bad->opcode);
         }
         std::abort();
+      }
+      uint64_t const batch_tail_wr = group_wrids.back();
+      {
+        auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
+            batch_tail_wr, std::move(group_wrids));
+        if (!inserted) {
+          fprintf(stderr,
+                  "thread_idx: %d, Error: tail wr_id %lu already exists "
+                  "(map=%p, "
+                  "size=%zu, dst_rank=%d)\n",
+                  thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
+                  S.wr_id_to_wr_ids.size(), dst_rank);
+          std::abort();
+        }
       }
 #endif
     }
