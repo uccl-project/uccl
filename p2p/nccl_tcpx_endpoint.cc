@@ -450,6 +450,15 @@ bool Endpoint::queue_read_response(uint64_t conn_id,
 
   uint64_t tid = 0;
   if (!send_internal_(conn, base, fifo_item.size, tid)) return false;
+
+  // Wait for the send to complete so we do not leak events in transfer_map_.
+  bool done = false;
+  while (!done) {
+    if (!poll_async(tid, &done)) return false;
+    if (!done) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
   return true;
 }
 
