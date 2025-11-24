@@ -149,15 +149,38 @@ class ScopedCudaContext {
 };
 
 // Control-plane payload for advertising TCPX listen handles.
-// Note: current implementation is single-channel only; the extra fields
-// (num_channels/reserved) are kept for forward-compat but always set to 1/0.
+// Supports multi-channel: num_channels can be > 1.
+constexpr size_t kMaxChannels = 16;
 struct ChannelHandleMsg {
-  uint32_t num_channels;                    // always 1 for now
-  uint32_t reserved;                        // reserved for future use
-  std::array<ncclNetHandle_v7, 1> handles;  // single handle payload
+  uint32_t num_channels;
+  uint32_t reserved;
+  std::array<ncclNetHandle_v7, kMaxChannels> handles;
 };
 static_assert(std::is_trivially_copyable<ChannelHandleMsg>::value,
               "ChannelHandleMsg must be trivially copyable");
+
+// Helper functions to send/recv channel handles
+bool send_channel_handles(int fd,
+                          std::vector<ncclNetHandle_v7> const& handles) {
+  ChannelHandleMsg msg{};
+  msg.num_channels = static_cast<uint32_t>(handles.size());
+  msg.reserved = 0;
+  for (size_t i = 0; i < handles.size() && i < kMaxChannels; ++i) {
+    msg.handles[i] = handles[i];
+  }
+  return send_ctrl_struct(fd, msg);
+}
+
+bool recv_channel_handles(int fd, std::vector<ncclNetHandle_v7>& handles) {
+  ChannelHandleMsg msg{};
+  if (!recv_ctrl_struct(fd, msg)) return false;
+  if (msg.num_channels == 0 || msg.num_channels > kMaxChannels) return false;
+  handles.resize(msg.num_channels);
+  for (size_t i = 0; i < msg.num_channels; ++i) {
+    handles[i] = msg.handles[i];
+  }
+  return true;
+}
 
 // Resolve a best effort control IP; used only to seed the metadata exchange.
 std::string get_local_ip() {
@@ -327,10 +350,30 @@ Endpoint::Endpoint(uint32_t const /*num_cpus*/) {
     throw std::runtime_error("tcpx: failed to listen on control socket");
   }
 
-  // Prepare TCPX listen comm for inbound connections
-  if (tcpx_listen(dev_id_, &listen_handle_, &listen_comms_) != 0 ||
-      !listen_comms_) {
-    throw std::runtime_error("tcpx: listen failed");
+  // Multi-channel setup
+  num_channels_ = get_env_size_t("UCCL_TCPX_NUM_CHANNELS", 1);
+  if (num_channels_ == 0) num_channels_ = 1;
+
+  // Initialize channel device IDs (all use the same dev_id for now)
+  channel_dev_ids_.resize(num_channels_, dev_id_);
+
+  // Prepare TCPX listen comms for inbound connections (one per channel)
+  listen_handles_.resize(num_channels_);
+  listen_comms_.resize(num_channels_);
+
+  for (size_t i = 0; i < num_channels_; ++i) {
+    if (tcpx_listen(channel_dev_ids_[i], &listen_handles_[i],
+                    &listen_comms_[i]) != 0 ||
+        !listen_comms_[i]) {
+      std::cerr << "[tcpx] listen failed for channel " << i << std::endl;
+      throw std::runtime_error("tcpx: listen failed for channel " +
+                               std::to_string(i));
+    }
+  }
+
+  if (debug_enabled_) {
+    std::cerr << "[tcpx] initialized " << num_channels_ << " channels"
+              << std::endl;
   }
 
   // Initialize CUDA primary context for unpack kernels and driver interactions.
@@ -361,14 +404,18 @@ Endpoint::Endpoint(uint32_t const /*num_cpus*/) {
     cu_context_ = nullptr;
     throw std::runtime_error("tcpx: cudaSetDevice failed");
   }
-  if (cudaStreamCreateWithFlags(&unpack_stream_, cudaStreamNonBlocking) !=
-      cudaSuccess) {
+
+  // Create a single global CUDA stream for all GPU unpack operations.
+  // This avoids GPU scheduler overhead from multiple concurrent streams.
+  if (cudaStreamCreate(&global_unpack_stream_) != cudaSuccess) {
     cuDevicePrimaryCtxRelease(cu_device_);
     cu_context_ = nullptr;
-    throw std::runtime_error("tcpx: failed to create CUDA stream");
+    throw std::runtime_error(
+        "tcpx: cudaStreamCreate failed for global_unpack_stream");
   }
+
   device::UnpackLaunchConfig cfg;
-  cfg.stream = unpack_stream_;
+  cfg.stream = global_unpack_stream_;
   cfg.use_small_kernel = true;
   cfg.enable_profiling = false;
   unpack_launcher_ = std::make_unique<device::UnpackLauncher>(cfg);
@@ -390,9 +437,11 @@ Endpoint::~Endpoint() {
     mr_map_.clear();
   }
 
-  if (listen_comms_) {
-    tcpx_close_listen(listen_comms_);
-    listen_comms_ = nullptr;
+  for (auto& lc : listen_comms_) {
+    if (lc) {
+      tcpx_close_listen(lc);
+      lc = nullptr;
+    }
   }
   if (ctrl_listen_fd_ >= 0) {
     ::close(ctrl_listen_fd_);
@@ -402,10 +451,12 @@ Endpoint::~Endpoint() {
   if (unpack_launcher_) {
     unpack_launcher_.reset();
   }
-  if (unpack_stream_) {
-    cudaStreamDestroy(unpack_stream_);
-    unpack_stream_ = nullptr;
+
+  if (global_unpack_stream_) {
+    cudaStreamDestroy(global_unpack_stream_);
+    global_unpack_stream_ = nullptr;
   }
+
   if (cu_context_) {
     cuDevicePrimaryCtxRelease(cu_device_);
     cu_context_ = nullptr;
@@ -505,24 +556,38 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   if (remote_port < 0) remote_port = ctrl_port_;
 
   auto conn = std::make_shared<Conn>();
+  conn->init_channels(num_channels_);
 
-  void* reverse_listen = nullptr;
-  ncclNetHandle_v7 reverse_handle{};
-  if (tcpx_listen(dev_id_, &reverse_handle, &reverse_listen) != 0 ||
-      !reverse_listen) {
-    std::cerr << "[tcpx] tcpx_listen (reverse) failed" << std::endl;
-    return false;
+  // Create reverse listen handles (one per channel) for server to connect back
+  std::vector<void*> reverse_listens(num_channels_, nullptr);
+  std::vector<ncclNetHandle_v7> reverse_handles(num_channels_);
+
+  for (size_t i = 0; i < num_channels_; ++i) {
+    if (tcpx_listen(channel_dev_ids_[i], &reverse_handles[i],
+                    &reverse_listens[i]) != 0 ||
+        !reverse_listens[i]) {
+      std::cerr << "[tcpx] reverse listen failed (client) channel=" << i
+                << std::endl;
+      // Clean up previously created listens
+      for (size_t j = 0; j < i; ++j) {
+        if (reverse_listens[j]) tcpx_close_listen(reverse_listens[j]);
+      }
+      return false;
+    }
   }
-  auto close_reverse_listen = [&]() {
-    if (reverse_listen) {
-      tcpx_close_listen(reverse_listen);
-      reverse_listen = nullptr;
+
+  auto close_reverse_listens = [&]() {
+    for (auto& rl : reverse_listens) {
+      if (rl) {
+        tcpx_close_listen(rl);
+        rl = nullptr;
+      }
     }
   };
 
   int sock_fd = ::socket(AF_INET, SOCK_STREAM, 0);
   if (sock_fd < 0) {
-    close_reverse_listen();
+    close_reverse_listens();
     return false;
   }
 
@@ -532,7 +597,7 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   if (inet_pton(AF_INET, ip_addr.c_str(), &addr.sin_addr) != 1) {
     std::cerr << "[tcpx] invalid IP address " << ip_addr << std::endl;
     ::close(sock_fd);
-    close_reverse_listen();
+    close_reverse_listens();
     return false;
   }
 
@@ -541,7 +606,7 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
     std::cerr << "[tcpx] connect() to " << ip_addr << ":" << remote_port
               << " failed: " << strerror(errno) << std::endl;
     ::close(sock_fd);
-    close_reverse_listen();
+    close_reverse_listens();
     return false;
   }
 
@@ -555,87 +620,103 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   // the TCPX handles.
   if (!send_ctrl_struct(sock_fd, local_info)) {
     ::close(sock_fd);
-    close_reverse_listen();
+    close_reverse_listens();
     return false;
   }
 
   EndpointInfo remote_info{};
   if (!recv_ctrl_struct(sock_fd, remote_info)) {
     ::close(sock_fd);
-    close_reverse_listen();
+    close_reverse_listens();
     return false;
   }
 
   // Read the listen handle(s) the server advertised over the control socket.
-  ChannelHandleMsg server_handles{};
-  if (!recv_ctrl_struct(sock_fd, server_handles)) {
+  std::vector<ncclNetHandle_v7> server_handles;
+  if (!recv_channel_handles(sock_fd, server_handles)) {
     ::close(sock_fd);
-    close_reverse_listen();
+    close_reverse_listens();
     return false;
   }
-  if (server_handles.num_channels != 1) {
+  if (server_handles.size() != num_channels_) {
     std::cerr << "[tcpx] unexpected channel count from server: "
-              << server_handles.num_channels << std::endl;
+              << server_handles.size() << " expected: " << num_channels_
+              << std::endl;
     ::close(sock_fd);
-    close_reverse_listen();
+    close_reverse_listens();
     return false;
   }
 
-  ncclNetHandle_v7 server_handle_copy = server_handles.handles[0];
-  if (tcpx_connect_v5(dev_id_, &server_handle_copy, &conn->send_comm,
-                      &conn->send_dev_handle) != 0 ||
-      !conn->send_comm) {
-    std::cerr << "[tcpx] tcpx_connect_v5 failed (client)" << std::endl;
-    ::close(sock_fd);
-    close_reverse_listen();
-    free_conn_(conn);
-    return false;
-  }
-
-  // Client returns the reverse-path handle using the same compact framing.
-  ChannelHandleMsg client_handles{};
-  client_handles.num_channels = 1;
-  client_handles.reserved = 0;
-  client_handles.handles[0] = reverse_handle;
-  if (!send_ctrl_struct(sock_fd, client_handles)) {
-    ::close(sock_fd);
-    tcpx_close_send(conn->send_comm);
-    close_reverse_listen();
-    free_conn_(conn);
-    return false;
-  }
-
-  {
-    constexpr int kMaxRetries = 100;
-    constexpr int kRetryMs = 50;
-    bool accepted = false;
-    for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
-      int rc = tcpx_accept_v5(reverse_listen, &conn->recv_comm,
-                              &conn->recv_dev_handle);
-      if (rc == 0 && conn->recv_comm) {
-        accepted = true;
-        break;
-      }
-      std::cout << "[tcpx] client reverse accept retry rc=" << rc
-                << " attempt=" << attempt + 1 << std::endl;
-      std::this_thread::sleep_for(std::chrono::milliseconds(kRetryMs));
-    }
-    if (!accepted) {
-      std::cerr << "[tcpx] tcpx_accept_v5 failed (client reverse)" << std::endl;
+  // Connect to all server channels
+  for (size_t idx = 0; idx < num_channels_; ++idx) {
+    ncclNetHandle_v7 handle_copy = server_handles[idx];
+    if (tcpx_connect_v5(channel_dev_ids_[idx], &handle_copy,
+                        &conn->channels[idx].send_comm,
+                        &conn->channels[idx].send_dev_handle) != 0 ||
+        !conn->channels[idx].send_comm) {
+      std::cerr << "[tcpx] tcpx_connect_v5 failed (client) channel=" << idx
+                << std::endl;
       ::close(sock_fd);
-      tcpx_close_send(conn->send_comm);
-      close_reverse_listen();
+      close_reverse_listens();
       free_conn_(conn);
       return false;
     }
   }
-  close_reverse_listen();
+
+  // Client returns the reverse-path handles using the helper function.
+  if (!send_channel_handles(sock_fd, reverse_handles)) {
+    ::close(sock_fd);
+    for (auto& ch : conn->channels) {
+      if (ch.send_comm) tcpx_close_send(ch.send_comm);
+    }
+    close_reverse_listens();
+    free_conn_(conn);
+    return false;
+  }
+
+  // Accept incoming connections on all reverse listen handles
+  {
+    constexpr int kMaxRetries = 100;
+    constexpr int kRetryMs = 50;
+
+    for (size_t idx = 0; idx < num_channels_; ++idx) {
+      bool accepted = false;
+      for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
+        int rc =
+            tcpx_accept_v5(reverse_listens[idx], &conn->channels[idx].recv_comm,
+                           &conn->channels[idx].recv_dev_handle);
+        if (rc == 0 && conn->channels[idx].recv_comm) {
+          accepted = true;
+          break;
+        }
+        std::cout << "[tcpx] client reverse accept retry rc=" << rc
+                  << " channel=" << idx << " attempt=" << attempt + 1
+                  << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(kRetryMs));
+      }
+      if (!accepted) {
+        std::cerr << "[tcpx] tcpx_accept_v5 failed (client reverse) channel="
+                  << idx << std::endl;
+        ::close(sock_fd);
+        for (auto& ch : conn->channels) {
+          if (ch.send_comm) tcpx_close_send(ch.send_comm);
+          if (ch.recv_comm) tcpx_close_recv(ch.recv_comm);
+        }
+        close_reverse_listens();
+        free_conn_(conn);
+        return false;
+      }
+    }
+  }
+  close_reverse_listens();
 
   if (!recv_ctrl_ack(sock_fd)) {
     std::cerr << "[tcpx] missing ACK from server" << std::endl;
     ::close(sock_fd);
-    tcpx_close_send(conn->send_comm);
-    tcpx_close_recv(conn->recv_comm);
+    for (auto& ch : conn->channels) {
+      if (ch.send_comm) tcpx_close_send(ch.send_comm);
+      if (ch.recv_comm) tcpx_close_recv(ch.recv_comm);
+    }
     free_conn_(conn);
     return false;
   }
@@ -647,36 +728,46 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   conn->remote_port = remote_port;
   conn->ctrl_sock_fd = sock_fd;
 
-  if (!ensure_recv_dev_handle_cached_(*conn)) {
-    std::cerr << "[tcpx] failed to cache recv device handle (client)"
-              << std::endl;
-    free_conn_(conn);
-    return false;
+  // Cache recv device handles for all channels
+  for (size_t idx = 0; idx < num_channels_; ++idx) {
+    if (!ensure_recv_dev_handle_cached_(*conn, idx)) {
+      std::cerr << "[tcpx] failed to cache recv device handle (client) channel="
+                << idx << std::endl;
+      free_conn_(conn);
+      return false;
+    }
   }
 
-  // Preallocate the recv-side CUDA event pool for this connection.
+  // Initialize per-channel CUDA resources (streams and event pools).
   int max_recv_inflight =
       get_env_int("UCCL_TCPX_MAX_RECV_INFLIGHT", kDefaultRecvInflight);
   if (max_recv_inflight <= 0) max_recv_inflight = kDefaultRecvInflight;
   size_t pool_size = static_cast<size_t>(max_recv_inflight);
-  conn->recv_events.resize(pool_size);
 
-  for (size_t i = 0; i < pool_size; ++i) {
-    cudaError_t rc =
-        cudaEventCreateWithFlags(&conn->recv_events[i], cudaEventDisableTiming);
-    if (rc != cudaSuccess) {
-      std::cerr << "[tcpx] cudaEventCreateWithFlags failed for event " << i
-                << ": " << cudaGetErrorString(rc) << std::endl;
-
-      for (size_t j = 0; j < i; ++j) {
-        cudaEventDestroy(conn->recv_events[j]);
+  for (auto& ch : conn->channels) {
+    // Create per-channel event pool
+    ch.recv_events.resize(pool_size);
+    for (size_t i = 0; i < pool_size; ++i) {
+      cudaError_t rc =
+          cudaEventCreateWithFlags(&ch.recv_events[i], cudaEventDisableTiming);
+      if (rc != cudaSuccess) {
+        std::cerr << "[tcpx] cudaEventCreateWithFlags failed for event " << i
+                  << ": " << cudaGetErrorString(rc) << std::endl;
+        // Cleanup events created so far
+        for (size_t j = 0; j < i; ++j) {
+          cudaEventDestroy(ch.recv_events[j]);
+        }
+        ::close(sock_fd);
+        for (auto& cleanup_ch : conn->channels) {
+          if (cleanup_ch.send_comm) tcpx_close_send(cleanup_ch.send_comm);
+          if (cleanup_ch.recv_comm) tcpx_close_recv(cleanup_ch.recv_comm);
+          for (auto evt : cleanup_ch.recv_events) {
+            if (evt) cudaEventDestroy(evt);
+          }
+        }
+        free_conn_(conn);
+        return false;
       }
-
-      ::close(sock_fd);
-      tcpx_close_send(conn->send_comm);
-      tcpx_close_recv(conn->recv_comm);
-      free_conn_(conn);
-      return false;
     }
   }
 
@@ -733,67 +824,90 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   }
 
   auto conn = std::make_shared<Conn>();
+  conn->init_channels(num_channels_);
 
-  ChannelHandleMsg server_handles{};  // single-channel
-  server_handles.num_channels = 1;
-  server_handles.reserved = 0;
-  server_handles.handles[0] = listen_handle_;
-  if (!send_ctrl_struct(sock_fd, server_handles)) {
+  // Send our listen handles to the client
+  if (!send_channel_handles(sock_fd, listen_handles_)) {
     ::close(sock_fd);
     return false;
   }
 
+  // Accept incoming connections on all channels
   {
     constexpr int kMaxRetries = 100;
     constexpr int kRetryMs = 50;
-    bool accepted = false;
-    for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
-      int rc = tcpx_accept_v5(listen_comms_, &conn->recv_comm,
-                              &conn->recv_dev_handle);
-      if (rc == 0 && conn->recv_comm) {
-        accepted = true;
-        break;
+
+    for (size_t idx = 0; idx < num_channels_; ++idx) {
+      bool accepted = false;
+      for (int attempt = 0; attempt < kMaxRetries; ++attempt) {
+        int rc =
+            tcpx_accept_v5(listen_comms_[idx], &conn->channels[idx].recv_comm,
+                           &conn->channels[idx].recv_dev_handle);
+        if (rc == 0 && conn->channels[idx].recv_comm) {
+          accepted = true;
+          break;
+        }
+        std::cout << "[tcpx] server accept retry rc=" << rc
+                  << " channel=" << idx << " attempt=" << attempt + 1
+                  << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(kRetryMs));
       }
-      std::cout << "[tcpx] server accept retry rc=" << rc
-                << " attempt=" << attempt + 1 << std::endl;
-      std::this_thread::sleep_for(std::chrono::milliseconds(kRetryMs));
+      if (!accepted) {
+        std::cerr << "[tcpx] tcpx_accept_v5 failed (server) channel=" << idx
+                  << std::endl;
+        ::close(sock_fd);
+        for (auto& ch : conn->channels) {
+          if (ch.recv_comm) tcpx_close_recv(ch.recv_comm);
+        }
+        return false;
+      }
     }
-    if (!accepted) {
-      std::cerr << "[tcpx] tcpx_accept_v5 failed (server)" << std::endl;
+  }
+
+  // Receive client's reverse listen handles
+  std::vector<ncclNetHandle_v7> client_handles;
+  if (!recv_channel_handles(sock_fd, client_handles)) {
+    ::close(sock_fd);
+    for (auto& ch : conn->channels) {
+      if (ch.recv_comm) tcpx_close_recv(ch.recv_comm);
+    }
+    return false;
+  }
+  if (client_handles.size() != num_channels_) {
+    std::cerr << "[tcpx] unexpected channel count from client: "
+              << client_handles.size() << " expected: " << num_channels_
+              << std::endl;
+    ::close(sock_fd);
+    for (auto& ch : conn->channels) {
+      if (ch.recv_comm) tcpx_close_recv(ch.recv_comm);
+    }
+    return false;
+  }
+
+  // Connect to all client reverse listen handles
+  for (size_t idx = 0; idx < num_channels_; ++idx) {
+    ncclNetHandle_v7 client_handle_copy = client_handles[idx];
+    if (tcpx_connect_v5(channel_dev_ids_[idx], &client_handle_copy,
+                        &conn->channels[idx].send_comm,
+                        &conn->channels[idx].send_dev_handle) != 0 ||
+        !conn->channels[idx].send_comm) {
+      std::cerr << "[tcpx] tcpx_connect_v5 failed (server->client) channel="
+                << idx << std::endl;
       ::close(sock_fd);
+      for (auto& ch : conn->channels) {
+        if (ch.recv_comm) tcpx_close_recv(ch.recv_comm);
+        if (ch.send_comm) tcpx_close_send(ch.send_comm);
+      }
       return false;
     }
   }
 
-  ChannelHandleMsg client_handles{};
-  if (!recv_ctrl_struct(sock_fd, client_handles)) {
-    ::close(sock_fd);
-    tcpx_close_recv(conn->recv_comm);
-    return false;
-  }
-  if (client_handles.num_channels != 1) {
-    std::cerr << "[tcpx] unexpected channel count from client: "
-              << client_handles.num_channels << std::endl;
-    ::close(sock_fd);
-    tcpx_close_recv(conn->recv_comm);
-    return false;
-  }
-
-  ncclNetHandle_v7 client_handle_copy =
-      client_handles.handles[0];  // single-channel
-  if (tcpx_connect_v5(dev_id_, &client_handle_copy, &conn->send_comm,
-                      &conn->send_dev_handle) != 0 ||
-      !conn->send_comm) {
-    std::cerr << "[tcpx] tcpx_connect_v5 failed (server->client)" << std::endl;
-    ::close(sock_fd);
-    tcpx_close_recv(conn->recv_comm);
-    return false;
-  }
-
   if (!send_ctrl_ack(sock_fd)) {
     ::close(sock_fd);
-    tcpx_close_recv(conn->recv_comm);
-    tcpx_close_send(conn->send_comm);
+    for (auto& ch : conn->channels) {
+      if (ch.recv_comm) tcpx_close_recv(ch.recv_comm);
+      if (ch.send_comm) tcpx_close_send(ch.send_comm);
+    }
     return false;
   }
 
@@ -804,33 +918,45 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   conn->remote_port = ntohs(client_addr.sin_port);
   conn->ctrl_sock_fd = sock_fd;
 
-  if (!ensure_recv_dev_handle_cached_(*conn)) {
-    std::cerr << "[tcpx] failed to cache recv device handle (server)"
-              << std::endl;
-    free_conn_(conn);
-    return false;
+  // Cache recv device handles for all channels
+  for (size_t idx = 0; idx < num_channels_; ++idx) {
+    if (!ensure_recv_dev_handle_cached_(*conn, idx)) {
+      std::cerr << "[tcpx] failed to cache recv device handle (server) channel="
+                << idx << std::endl;
+      free_conn_(conn);
+      return false;
+    }
   }
 
-  // Server side event pool mirrors the client logic above.
+  // Initialize per-channel CUDA resources (streams and event pools).
   int max_recv_inflight_acc =
       get_env_int("UCCL_TCPX_MAX_RECV_INFLIGHT", kDefaultRecvInflight);
   if (max_recv_inflight_acc <= 0) max_recv_inflight_acc = kDefaultRecvInflight;
   size_t pool_size_acc = static_cast<size_t>(max_recv_inflight_acc);
-  conn->recv_events.resize(pool_size_acc);
-  for (size_t i = 0; i < pool_size_acc; ++i) {
-    cudaError_t rc =
-        cudaEventCreateWithFlags(&conn->recv_events[i], cudaEventDisableTiming);
-    if (rc != cudaSuccess) {
-      std::cerr << "[tcpx] cudaEventCreateWithFlags failed for event " << i
-                << ": " << cudaGetErrorString(rc) << std::endl;
-      // Destroy events that were created before the failure.
-      for (size_t j = 0; j < i; ++j) {
-        cudaEventDestroy(conn->recv_events[j]);
+
+  for (auto& ch : conn->channels) {
+    // Create per-channel event pool
+    ch.recv_events.resize(pool_size_acc);
+    for (size_t i = 0; i < pool_size_acc; ++i) {
+      cudaError_t rc =
+          cudaEventCreateWithFlags(&ch.recv_events[i], cudaEventDisableTiming);
+      if (rc != cudaSuccess) {
+        std::cerr << "[tcpx] cudaEventCreateWithFlags failed for event " << i
+                  << ": " << cudaGetErrorString(rc) << std::endl;
+        // Cleanup events created so far
+        for (size_t j = 0; j < i; ++j) {
+          cudaEventDestroy(ch.recv_events[j]);
+        }
+        ::close(sock_fd);
+        for (auto& cleanup_ch : conn->channels) {
+          if (cleanup_ch.recv_comm) tcpx_close_recv(cleanup_ch.recv_comm);
+          if (cleanup_ch.send_comm) tcpx_close_send(cleanup_ch.send_comm);
+          for (auto evt : cleanup_ch.recv_events) {
+            if (evt) cudaEventDestroy(evt);
+          }
+        }
+        return false;
       }
-      ::close(sock_fd);
-      tcpx_close_recv(conn->recv_comm);
-      tcpx_close_send(conn->send_comm);
-      return false;
     }
   }
 
@@ -867,49 +993,68 @@ bool Endpoint::dereg(uint64_t mr_id) {
   // Two-stage teardown to minimize lock hold time:
   //   1) Copy out the per-connection handles while holding mr_mu_.
   //   2) Release mr_mu_ and call tcpx_dereg_mr for each connection.
-  std::vector<std::pair<uint64_t, void*>> send_handles;
-  std::vector<std::pair<uint64_t, void*>> recv_handles;
+  struct HandleRef {
+    uint64_t conn_id;
+    size_t channel_idx;
+    void* handle;
+  };
+  std::vector<HandleRef> send_handles;
+  std::vector<HandleRef> recv_handles;
   {
     std::lock_guard<std::mutex> lock(mr_mu_);
     auto it = mr_map_.find(mr_id);
     if (it == mr_map_.end()) return false;
-    send_handles.reserve(it->second.send_handles.size());
-    recv_handles.reserve(it->second.recv_handles.size());
+
     for (auto const& kv : it->second.send_handles) {
-      send_handles.emplace_back(kv.first, kv.second);
+      uint64_t conn_id = kv.first;
+      auto const& handles_vec = kv.second;
+      for (size_t ch_idx = 0; ch_idx < handles_vec.size(); ++ch_idx) {
+        if (handles_vec[ch_idx]) {
+          send_handles.push_back({conn_id, ch_idx, handles_vec[ch_idx]});
+        }
+      }
     }
     for (auto const& kv : it->second.recv_handles) {
-      recv_handles.emplace_back(kv.first, kv.second);
+      uint64_t conn_id = kv.first;
+      auto const& handles_vec = kv.second;
+      for (size_t ch_idx = 0; ch_idx < handles_vec.size(); ++ch_idx) {
+        if (handles_vec[ch_idx]) {
+          recv_handles.push_back({conn_id, ch_idx, handles_vec[ch_idx]});
+        }
+      }
     }
     mr_map_.erase(it);
   }
 
-  auto dereg_for_conn = [&](std::pair<uint64_t, void*> const& item,
-                            bool is_send) {
+  auto dereg_for_conn = [&](HandleRef const& ref, bool is_send) {
     std::shared_lock<std::shared_mutex> conn_lock(conn_mu_);
-    auto conn_it = conn_map_.find(item.first);
+    auto conn_it = conn_map_.find(ref.conn_id);
     if (conn_it == conn_map_.end()) return;
     std::shared_ptr<Conn> conn = conn_it->second;
-    void* comm = is_send ? conn->send_comm : conn->recv_comm;
+    if (ref.channel_idx >= conn->channels.size()) return;
+    auto& channel = conn->channels[ref.channel_idx];
+    void* comm = is_send ? channel.send_comm : channel.recv_comm;
     if (comm) {
-      tcpx_dereg_mr(comm, item.second);
+      tcpx_dereg_mr(comm, ref.handle);
     }
   };
 
-  for (auto const& kv : send_handles) {
-    dereg_for_conn(kv, /*is_send=*/true);
+  for (auto const& ref : send_handles) {
+    dereg_for_conn(ref, /*is_send=*/true);
   }
-  for (auto const& kv : recv_handles) {
-    dereg_for_conn(kv, /*is_send=*/false);
+  for (auto const& ref : recv_handles) {
+    dereg_for_conn(ref, /*is_send=*/false);
   }
 
   return true;
 }
 
 bool Endpoint::populate_conn_handles_(Conn& conn, uint64_t mr_id, bool is_recv,
-                                      void** mhandle_out) {
+                                      size_t channel_idx, void** mhandle_out) {
   ScopedCudaContext ctx_guard(cu_context_, static_cast<int>(local_gpu_idx_));
-  void* comm = is_recv ? conn.recv_comm : conn.send_comm;
+  if (channel_idx >= conn.channels.size()) return false;
+  auto& channel = conn.channels[channel_idx];
+  void* comm = is_recv ? channel.recv_comm : channel.send_comm;
   if (!comm) return false;
 
   void* existing = nullptr;
@@ -925,8 +1070,12 @@ bool Endpoint::populate_conn_handles_(Conn& conn, uint64_t mr_id, bool is_recv,
     auto& table = is_recv ? it->second.recv_handles : it->second.send_handles;
     auto handle_it = table.find(conn.conn_id);
     if (handle_it != table.end()) {
-      existing = handle_it->second;
-    } else {
+      auto const& handles_vec = handle_it->second;
+      if (channel_idx < handles_vec.size() && handles_vec[channel_idx]) {
+        existing = handles_vec[channel_idx];
+      }
+    }
+    if (!existing) {
       base = it->second.base;
       size = it->second.size;
       ptr_type = it->second.ptr_type;
@@ -941,7 +1090,8 @@ bool Endpoint::populate_conn_handles_(Conn& conn, uint64_t mr_id, bool is_recv,
   void* mhandle = nullptr;
   int rc = tcpx_reg_mr(comm, base, size, ptr_type, &mhandle);
   if (rc != 0 || !mhandle) {
-    std::cerr << "[tcpx] tcpx_reg_mr failed rc=" << rc << std::endl;
+    std::cerr << "[tcpx] tcpx_reg_mr failed rc=" << rc
+              << " channel=" << channel_idx << std::endl;
     return false;
   }
 
@@ -953,38 +1103,46 @@ bool Endpoint::populate_conn_handles_(Conn& conn, uint64_t mr_id, bool is_recv,
       return false;
     }
     auto& table = is_recv ? it->second.recv_handles : it->second.send_handles;
-    auto [insert_it, inserted] = table.emplace(conn.conn_id, mhandle);
-    if (!inserted) {
+    auto [insert_it, inserted] = table.try_emplace(conn.conn_id);
+    auto& handles_vec = insert_it->second;
+    if (handles_vec.size() <= channel_idx) {
+      handles_vec.resize(channel_idx + 1, nullptr);
+    }
+    if (handles_vec[channel_idx]) {
+      // Another thread beat us to it
       tcpx_dereg_mr(comm, mhandle);
-      *mhandle_out = insert_it->second;
+      *mhandle_out = handles_vec[channel_idx];
       return true;
     }
+    handles_vec[channel_idx] = mhandle;
   }
 
   *mhandle_out = mhandle;
   return true;
 }
 
-bool Endpoint::ensure_recv_dev_handle_cached_(Conn& conn) {
-  if (conn.recv_dev_handle_cached) return true;
-  if (!conn.recv_dev_handle) return false;
+bool Endpoint::ensure_recv_dev_handle_cached_(Conn& conn, size_t channel_idx) {
+  if (channel_idx >= conn.channels.size()) return false;
+  auto& channel = conn.channels[channel_idx];
+  if (channel.recv_dev_handle_cached) return true;
+  if (!channel.recv_dev_handle) return false;
 
   auto* dev_handle_struct =
       reinterpret_cast<tcpx::plugin::NcclNetDeviceHandle*>(
-          conn.recv_dev_handle);
+          channel.recv_dev_handle);
   if (!dev_handle_struct || !dev_handle_struct->handle) return false;
 
   ScopedCudaContext ctx_guard(cu_context_, static_cast<int>(local_gpu_idx_));
   CUresult cu_rc =
-      cuMemcpyDtoH(&conn.recv_dev_handle_host,
+      cuMemcpyDtoH(&channel.recv_dev_handle_host,
                    reinterpret_cast<CUdeviceptr>(dev_handle_struct->handle),
-                   sizeof(conn.recv_dev_handle_host));
+                   sizeof(channel.recv_dev_handle_host));
   if (cu_rc != CUDA_SUCCESS) {
     std::cerr << "[tcpx] cuMemcpyDtoH (cache recv handle) failed rc=" << cu_rc
-              << std::endl;
+              << " channel=" << channel_idx << std::endl;
     return false;
   }
-  conn.recv_dev_handle_cached = true;
+  channel.recv_dev_handle_cached = true;
   return true;
 }
 
@@ -1007,7 +1165,7 @@ bool Endpoint::advance_transfer_locked(Conn& conn, PendingTransfer& transfer,
   if (!transfer_complete) return false;
 
   // Stage 0: Try to post new chunks if any remain unscheduled
-  if (transfer.next_chunk_to_post < transfer.chunks.size()) {
+  if (transfer.chunks_posted < transfer.chunks.size()) {
     ScheduleOutcome outcome = ScheduleOutcome::kNoProgress;
     if (transfer.kind == PendingTransfer::Kind::kSend) {
       outcome = schedule_send_chunks_locked(conn, transfer);
@@ -1025,12 +1183,12 @@ bool Endpoint::advance_transfer_locked(Conn& conn, PendingTransfer& transfer,
 
   // If Stage 1/2 freed window slots, retry Stage 0 to keep pipeline full
   if (schedule_send && transfer.kind == PendingTransfer::Kind::kSend &&
-      transfer.next_chunk_to_post < transfer.chunks.size()) {
+      transfer.chunks_posted < transfer.chunks.size()) {
     auto outcome = schedule_send_chunks_locked(conn, transfer);
     if (outcome == ScheduleOutcome::kError) return false;
   }
   if (schedule_recv && transfer.kind != PendingTransfer::Kind::kSend &&
-      transfer.next_chunk_to_post < transfer.chunks.size()) {
+      transfer.chunks_posted < transfer.chunks.size()) {
     auto outcome = schedule_recv_chunks_locked(conn, transfer);
     if (outcome == ScheduleOutcome::kError) return false;
   }
@@ -1043,7 +1201,9 @@ void Endpoint::finalize_transfer_locked(
     std::unordered_map<uint64_t, PendingTransfer>::iterator it) {
   // Remove the transfer from transfer_map_ (transfer_mu_ held). Window counters
   // are reset later by poll_async once it drops transfer_mu_.
+  auto transfer_id = it->first;
   transfer_map_.erase(it);
+  completed_transfer_ids_.insert(transfer_id);
 }
 
 void Endpoint::reset_conn_window_counters_(uint64_t conn_id) {
@@ -1324,71 +1484,109 @@ void Endpoint::release_recv_slot(uint64_t conn_id) {
 
 Endpoint::ScheduleOutcome Endpoint::schedule_send_chunks_locked(
     Conn& conn, PendingTransfer& transfer) {
-  // Stage 0 (TX): attempt to keep the pipeline full by posting as many chunks
-  // as the per-connection send window allows. Each chunk inherits a unique tag
-  // (base_tag + index) so the remote side can disambiguate completions.
-  //
-  // Data flow:
-  //   1. Check window quota via reserve_send_slot()
-  //   2. Call tcpx_isend() to post chunk to TCPX send queue
-  //   3. Mark chunk.posted = true and add to send_queue
-  //   4. Increment next_chunk_to_post
-  //   5. Repeat until window is full or all chunks posted
-  size_t limit = max_send_inflight_;
-
   constexpr int kBusyRetryMax = 512;
   constexpr int kBusySleepMicros = 5;
+  const size_t per_channel_limit = max_send_inflight_;
+
+  size_t num_channels = conn.channels.size();
+  if (num_channels == 0) return ScheduleOutcome::kNoProgress;
 
   bool posted_any = false;
+  size_t start_channel = transfer.next_channel_cursor % num_channels;
 
-  while (transfer.next_chunk_to_post < transfer.chunks.size()) {
-    if (!reserve_send_slot(conn.conn_id, limit)) break;
+  while (true) {
+    bool iteration_progress = false;
 
-    auto& chunk = transfer.chunks[transfer.next_chunk_to_post];
-    bool chunk_posted = false;
-    int attempt = 0;
+    for (size_t offset = 0; offset < num_channels; ++offset) {
+      size_t channel_idx = (start_channel + offset) % num_channels;
+      if (channel_idx >= transfer.channel_next_chunk_idx.size()) continue;
 
-    while (attempt < kBusyRetryMax) {
-      void* request = nullptr;
+      size_t chunk_idx = transfer.channel_next_chunk_idx[channel_idx];
+      if (chunk_idx >= transfer.chunks.size()) continue;
 
-      int rc = tcpx_isend(
-          conn.send_comm, chunk.dst_ptr, static_cast<int>(chunk.bytes),
-          static_cast<int>(chunk.tag), transfer.mhandle, &request);
-      if (debug_enabled_) {
-        size_t chunk_idx = transfer.next_chunk_to_post;
-        std::cerr << "[tcpx] isend rc=" << rc << " req=" << request
-                  << " chunk=" << chunk_idx << " chunk_bytes=" << chunk.bytes
-                  << " tag=" << chunk.tag << std::endl;
+      auto& channel = conn.channels[channel_idx];
+      if (channel.send_inflight >= per_channel_limit) continue;
+
+      auto& chunk = transfer.chunks[chunk_idx];
+      chunk.channel_idx = channel_idx;
+
+      if (!populate_conn_handles_(conn, transfer.mr_id, /*is_recv=*/false,
+                                  channel_idx, &chunk.mhandle)) {
+        std::cerr << "[tcpx] populate_conn_handles_ failed (send) channel="
+                  << channel_idx << std::endl;
+        return ScheduleOutcome::kError;
       }
 
-      if (rc == 0 && request) {
-        chunk.request = request;
-        chunk.posted = true;
-        chunk_posted = true;
-        break;
+      bool chunk_posted = false;
+      int attempt = 0;
+
+      while (attempt < kBusyRetryMax) {
+        void* request = nullptr;
+        int rc = tcpx_isend(
+            channel.send_comm, chunk.dst_ptr, static_cast<int>(chunk.bytes),
+            static_cast<int>(chunk.tag), chunk.mhandle, &request);
+        if (debug_enabled_) {
+          std::cerr << "[tcpx] isend rc=" << rc << " req=" << request
+                    << " chunk=" << chunk_idx << " channel=" << channel_idx
+                    << " chunk_bytes=" << chunk.bytes << " tag=" << chunk.tag
+                    << std::endl;
+        }
+
+        if (rc == 0 && request) {
+          chunk.request = request;
+          chunk.posted = true;
+          chunk_posted = true;
+          break;
+        }
+
+        if (rc == kTcpxBusy || (rc == 0 && !request)) {
+          ++attempt;
+          std::this_thread::sleep_for(
+              std::chrono::microseconds(kBusySleepMicros));
+          continue;
+        }
+
+        std::cerr << "[tcpx] tcpx_isend failed rc=" << rc
+                  << " chunk_offset=" << chunk.offset
+                  << " chunk_bytes=" << chunk.bytes
+                  << " channel=" << channel_idx << std::endl;
+        return ScheduleOutcome::kError;
       }
 
-      release_send_slot(conn.conn_id);
+      if (!chunk_posted) continue;
 
-      if (rc == kTcpxBusy || (rc == 0 && !request)) {
-        ++attempt;
-        std::this_thread::sleep_for(
-            std::chrono::microseconds(kBusySleepMicros));
-        if (!reserve_send_slot(conn.conn_id, limit)) break;
-        continue;
+      transfer.send_queues[channel_idx].push_back(chunk_idx);
+      channel.send_inflight++;
+      transfer.chunks_posted++;
+      transfer.channel_next_chunk_idx[channel_idx] += num_channels;
+      if (transfer.channel_next_chunk_idx[channel_idx] >=
+          transfer.chunks.size()) {
+        transfer.channel_next_chunk_idx[channel_idx] = transfer.chunks.size();
       }
 
-      std::cerr << "[tcpx] tcpx_isend failed rc=" << rc
-                << " chunk_offset=" << chunk.offset
-                << " chunk_bytes=" << chunk.bytes << std::endl;
-      return ScheduleOutcome::kError;
+      posted_any = true;
+      iteration_progress = true;
+      transfer.next_channel_cursor = (channel_idx + 1) % num_channels;
+
+      bool progress_made = false;
+      if (!progress_send_channel_(conn, channel_idx, transfer,
+                                  &progress_made)) {
+        return ScheduleOutcome::kError;
+      }
+      for (size_t other_ch = 0; other_ch < conn.channels.size(); ++other_ch) {
+        if (other_ch == channel_idx) continue;
+        if (transfer.send_queues[other_ch].empty()) continue;
+
+        bool other_progress = false;
+        if (!progress_send_channel_(conn, other_ch, transfer,
+                                    &other_progress)) {
+          return ScheduleOutcome::kError;
+        }
+      }
     }
 
-    if (!chunk_posted) break;
-
-    transfer.send_queue.push_back(transfer.next_chunk_to_post);
-    transfer.next_chunk_to_post++;
-    posted_any = true;
+    if (!iteration_progress) break;
+    start_channel = transfer.next_channel_cursor % num_channels;
   }
 
   return posted_any ? ScheduleOutcome::kProgress : ScheduleOutcome::kNoProgress;
@@ -1396,73 +1594,115 @@ Endpoint::ScheduleOutcome Endpoint::schedule_send_chunks_locked(
 
 Endpoint::ScheduleOutcome Endpoint::schedule_recv_chunks_locked(
     Conn& conn, PendingTransfer& transfer) {
-  // Stage 0 (RX): mirrors the send scheduler but seeds recv_stage1_queue so
-  // later phases can detect network completions and launch GPU unpack work.
-  //
-  // Data flow:
-  //   1. Check window quota via reserve_recv_slot()
-  //   2. Call tcpx_irecv() to post chunk to TCPX receive queue
-  //   3. Mark chunk.posted = true and add to recv_stage1_queue
-  //   4. Increment next_chunk_to_post
-  //   5. Window quota remains reserved until Stage 2 completes
-  size_t limit = max_recv_inflight_;
-
   constexpr int kBusyRetryMax = 512;
   constexpr int kBusySleepMicros = 5;
+  const size_t per_channel_limit = max_recv_inflight_;
+
+  size_t num_channels = conn.channels.size();
+  if (num_channels == 0) return ScheduleOutcome::kNoProgress;
 
   bool posted_any = false;
+  size_t start_channel = transfer.next_channel_cursor % num_channels;
 
-  while (transfer.next_chunk_to_post < transfer.chunks.size()) {
-    if (!reserve_recv_slot(conn.conn_id, limit)) break;
+  while (true) {
+    bool iteration_progress = false;
 
-    auto& chunk = transfer.chunks[transfer.next_chunk_to_post];
-    bool chunk_posted = false;
-    int attempt = 0;
+    for (size_t offset = 0; offset < num_channels; ++offset) {
+      size_t channel_idx = (start_channel + offset) % num_channels;
+      if (channel_idx >= transfer.channel_next_chunk_idx.size()) continue;
 
-    while (attempt < kBusyRetryMax) {
-      void* buffers[1] = {chunk.dst_ptr};
-      int sizes[1] = {static_cast<int>(chunk.bytes)};
-      int tags[1] = {static_cast<int>(chunk.tag)};
-      void* mhandles[1] = {transfer.mhandle};
-      void* requests[1] = {nullptr};
+      size_t chunk_idx = transfer.channel_next_chunk_idx[channel_idx];
+      if (chunk_idx >= transfer.chunks.size()) continue;
 
-      int rc = tcpx_irecv(conn.recv_comm, 1, buffers, sizes, tags, mhandles,
-                          requests);
-      if (debug_enabled_) {
-        size_t chunk_idx = transfer.next_chunk_to_post;
-        std::cerr << "[tcpx] irecv rc=" << rc << " req=" << requests[0]
-                  << " chunk=" << chunk_idx << " chunk_bytes=" << chunk.bytes
-                  << " tag=" << chunk.tag << std::endl;
+      auto& channel = conn.channels[channel_idx];
+      if (channel.recv_inflight >= per_channel_limit) continue;
+
+      auto& chunk = transfer.chunks[chunk_idx];
+      chunk.channel_idx = channel_idx;
+
+      if (!populate_conn_handles_(conn, transfer.mr_id, /*is_recv=*/true,
+                                  channel_idx, &chunk.mhandle)) {
+        std::cerr << "[tcpx] populate_conn_handles_ failed (recv) channel="
+                  << channel_idx << std::endl;
+        return ScheduleOutcome::kError;
       }
 
-      if (rc == 0 && requests[0]) {
-        chunk.request = requests[0];
-        chunk.posted = true;
-        chunk_posted = true;
-        break;
+      bool chunk_posted = false;
+      int attempt = 0;
+      while (attempt < kBusyRetryMax) {
+        void* buffers[1] = {chunk.dst_ptr};
+        int sizes[1] = {static_cast<int>(chunk.bytes)};
+        int tags[1] = {static_cast<int>(chunk.tag)};
+        void* mhandles[1] = {chunk.mhandle};
+        void* requests[1] = {nullptr};
+
+        int rc = tcpx_irecv(channel.recv_comm, 1, buffers, sizes, tags,
+                            mhandles, requests);
+        if (debug_enabled_) {
+          std::cerr << "[tcpx] irecv rc=" << rc << " req=" << requests[0]
+                    << " chunk=" << chunk_idx << " channel=" << channel_idx
+                    << " chunk_bytes=" << chunk.bytes << " tag=" << chunk.tag
+                    << std::endl;
+        }
+
+        if (rc == 0 && requests[0]) {
+          chunk.request = requests[0];
+          chunk.posted = true;
+          chunk_posted = true;
+          break;
+        }
+
+        if (rc == kTcpxBusy || (rc == 0 && !requests[0])) {
+          ++attempt;
+          std::this_thread::sleep_for(
+              std::chrono::microseconds(kBusySleepMicros));
+          continue;
+        }
+
+        std::cerr << "[tcpx] tcpx_irecv failed rc=" << rc
+                  << " chunk_offset=" << chunk.offset
+                  << " chunk_bytes=" << chunk.bytes
+                  << " channel=" << channel_idx << std::endl;
+        return ScheduleOutcome::kError;
       }
 
-      release_recv_slot(conn.conn_id);
+      if (!chunk_posted) continue;
 
-      if (rc == kTcpxBusy || (rc == 0 && !requests[0])) {
-        ++attempt;
-        std::this_thread::sleep_for(
-            std::chrono::microseconds(kBusySleepMicros));
-        if (!reserve_recv_slot(conn.conn_id, limit)) break;
-        continue;
+      transfer.recv_stage1_queues[channel_idx].push_back(chunk_idx);
+      channel.recv_inflight++;
+      transfer.chunks_posted++;
+      transfer.channel_next_chunk_idx[channel_idx] += num_channels;
+      if (transfer.channel_next_chunk_idx[channel_idx] >=
+          transfer.chunks.size()) {
+        transfer.channel_next_chunk_idx[channel_idx] = transfer.chunks.size();
       }
 
-      std::cerr << "[tcpx] tcpx_irecv failed rc=" << rc
-                << " chunk_offset=" << chunk.offset
-                << " chunk_bytes=" << chunk.bytes << std::endl;
-      return ScheduleOutcome::kError;
+      posted_any = true;
+      iteration_progress = true;
+      transfer.next_channel_cursor = (channel_idx + 1) % num_channels;
+
+      bool progress_made = false;
+      if (!progress_recv_channel_(conn, channel_idx, transfer,
+                                  &progress_made)) {
+        return ScheduleOutcome::kError;
+      }
+
+      for (size_t other_ch = 0; other_ch < conn.channels.size(); ++other_ch) {
+        if (other_ch == channel_idx) continue;
+        if (transfer.recv_stage1_queues[other_ch].empty() &&
+            transfer.recv_consume_queues[other_ch].empty()) {
+          continue;
+        }
+        bool other_progress = false;
+        if (!progress_recv_channel_(conn, other_ch, transfer,
+                                    &other_progress)) {
+          return ScheduleOutcome::kError;
+        }
+      }
     }
 
-    if (!chunk_posted) break;
-
-    transfer.recv_stage1_queue.push_back(transfer.next_chunk_to_post);
-    transfer.next_chunk_to_post++;
-    posted_any = true;
+    if (!iteration_progress) break;
+    start_channel = transfer.next_channel_cursor % num_channels;
   }
 
   return posted_any ? ScheduleOutcome::kProgress : ScheduleOutcome::kNoProgress;
@@ -1484,10 +1724,6 @@ bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
   //   - Chunks are posted to send_queue for Stage 1 to process
   if (!data || size == 0) return false;
 
-  void* mhandle = nullptr;
-  if (!populate_conn_handles_(conn, mr_id, /*is_recv=*/false, &mhandle))
-    return false;
-
   size_t chunk_bytes = std::max<size_t>(1, chunk_bytes_);
   size_t chunk_count = (size + chunk_bytes - 1) / chunk_bytes;
 
@@ -1505,8 +1741,14 @@ bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
   transfer.mr_id = mr_id;
   transfer.total_bytes = size;
   transfer.base_tag = static_cast<uint32_t>(tag);
-  transfer.mhandle = mhandle;
   transfer.chunks.reserve(chunk_count);
+
+  // Initialize per-channel queues
+  transfer.send_queues.resize(conn.channels.size());
+  transfer.channel_next_chunk_idx.resize(conn.channels.size(),
+                                         transfer.chunks.size());
+  transfer.next_channel_cursor = 0;
+  transfer.chunks_posted = 0;
 
   auto base_ptr = static_cast<char const*>(data);
   for (size_t idx = 0; idx < chunk_count; ++idx) {
@@ -1519,6 +1761,15 @@ bool Endpoint::post_send_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
     chunk.needs_unpack = false;
     chunk.dst_ptr = const_cast<char*>(base_ptr) + offset;
     transfer.chunks.push_back(std::move(chunk));
+  }
+
+  for (size_t ch = 0; ch < conn.channels.size(); ++ch) {
+    size_t initial_idx = ch;
+    if (initial_idx >= transfer.chunks.size()) {
+      transfer.channel_next_chunk_idx[ch] = transfer.chunks.size();
+    } else {
+      transfer.channel_next_chunk_idx[ch] = initial_idx;
+    }
   }
 
   uint64_t tid = transfer.transfer_id;
@@ -1547,15 +1798,11 @@ bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
   //
   // Two-stage pipeline (if needs_unpack=true):
   //   Stage 1: tcpx_irecv() -> bounce buffer (recv_stage1_queue)
-  //   Stage 2: GPU unpack kernel -> final destination (recv_stage2_queue)
+  //   Stage 2: GPU unpack kernel -> final destination (recv_stage2_queues)
   //
   // Single-stage (if needs_unpack=false, READ path):
   //   Stage 1: tcpx_irecv() -> device memory directly (no Stage 2)
   if (!data || size == 0) return false;
-
-  void* mhandle = nullptr;
-  if (!populate_conn_handles_(conn, mr_id, /*is_recv=*/true, &mhandle))
-    return false;
 
   size_t chunk_bytes = std::max<size_t>(1, chunk_bytes_);
   size_t chunk_count = (size + chunk_bytes - 1) / chunk_bytes;
@@ -1575,8 +1822,16 @@ bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
   transfer.mr_id = mr_id;
   transfer.total_bytes = size;
   transfer.base_tag = static_cast<uint32_t>(tag);
-  transfer.mhandle = mhandle;
   transfer.chunks.reserve(chunk_count);
+
+  // Initialize per-channel queues
+  transfer.recv_stage1_queues.resize(conn.channels.size());
+  transfer.recv_stage2_queues.resize(conn.channels.size());
+  transfer.recv_consume_queues.resize(conn.channels.size());
+  transfer.channel_next_chunk_idx.resize(conn.channels.size(),
+                                         transfer.chunks.size());
+  transfer.next_channel_cursor = 0;
+  transfer.chunks_posted = 0;
 
   auto base_ptr = static_cast<char*>(data);
   for (size_t idx = 0; idx < chunk_count; ++idx) {
@@ -1589,6 +1844,15 @@ bool Endpoint::post_recv_(Conn& conn, uint64_t mr_id, MrEntry const& mr,
     chunk.needs_unpack = needs_unpack;
     chunk.dst_ptr = base_ptr + offset;
     transfer.chunks.push_back(std::move(chunk));
+  }
+
+  for (size_t ch = 0; ch < conn.channels.size(); ++ch) {
+    size_t initial_idx = ch;
+    if (initial_idx >= transfer.chunks.size()) {
+      transfer.channel_next_chunk_idx[ch] = transfer.chunks.size();
+    } else {
+      transfer.channel_next_chunk_idx[ch] = initial_idx;
+    }
   }
 
   uint64_t tid = transfer.transfer_id;
@@ -1676,10 +1940,18 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
 
   if (!request) return false;
 
-  if (!conn.recv_dev_handle_cached) {
-    if (!ensure_recv_dev_handle_cached_(conn)) return false;
+  // Get the channel for this chunk
+  size_t channel_idx = chunk.channel_idx;
+  if (channel_idx >= conn.channels.size()) {
+    std::cerr << "[tcpx] invalid channel_idx=" << channel_idx << std::endl;
+    return false;
   }
-  auto const& dev_handle = conn.recv_dev_handle_host;
+  auto& channel = conn.channels[channel_idx];
+
+  if (!channel.recv_dev_handle_cached) {
+    if (!ensure_recv_dev_handle_cached_(conn, channel_idx)) return false;
+  }
+  auto const& dev_handle = channel.recv_dev_handle_host;
 
   uint64_t frag_cnt = 0;
   if (!request->unpack_slot.cnt) {
@@ -1709,22 +1981,23 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
   block.ready_flag = request->unpack_slot.cnt;
   block.ready_threshold = frag_cnt;
 
-  int launch_rc = unpack_launcher_->launch(block, unpack_stream_);
+  // Use global CUDA stream for all GPU unpack operations
+  int launch_rc = unpack_launcher_->launch(block, global_unpack_stream_);
   if (launch_rc != 0) {
     std::cerr << "[tcpx] unpack kernel launch failed rc=" << launch_rc
               << std::endl;
     return false;
   }
 
-  //   int event_idx = win.chunk_counter % MAX_INFLIGHT_PER_CHANNEL;
-  //   cudaEventRecord(win.events[event_idx], unpack_stream);
-  size_t event_idx = conn.recv_events.empty()
-                         ? 0
-                         : (conn.event_counter % conn.recv_events.size());
-  conn.event_counter++;
+  // Allocate event from per-channel pool
+  size_t event_idx =
+      channel.recv_events.empty()
+          ? 0
+          : (channel.next_event_idx % channel.recv_events.size());
+  channel.next_event_idx++;
 
-  cudaEvent_t event = conn.recv_events[event_idx];
-  cudaError_t record_rc = cudaEventRecord(event, unpack_stream_);
+  cudaEvent_t event = channel.recv_events[event_idx];
+  cudaError_t record_rc = cudaEventRecord(event, global_unpack_stream_);
   if (record_rc != cudaSuccess) {
     std::cerr << "[tcpx] cudaEventRecord failed: "
               << cudaGetErrorString(record_rc) << std::endl;
@@ -1737,62 +2010,96 @@ bool Endpoint::enqueue_chunk_unpack_(PendingTransfer& transfer,
   return true;
 }
 
-bool Endpoint::finalize_recv_chunk_(Conn& conn,
-                                    PendingTransfer::ChunkState& chunk) {
-  // Stage 2 epilogue for recv/read paths: notify TCPX that the bounce buffer
-  // can be reused and release the per-chunk CUDA event back to the pool.
-  //
-  // Cleanup steps:
-  //   1. Call tcpx_irecv_consumed() to release bounce buffer
-  //   2. Clear chunk.event (returns event to pool for reuse)
-  //   3. Clear chunk.request
-  if (conn.recv_comm) {
-    int rc = tcpx_irecv_consumed(conn.recv_comm, 1, chunk.request);
-    if (rc != 0) {
-      std::cerr << "[tcpx] tcpx_irecv_consumed failed rc=" << rc
-                << " chunk_offset=" << chunk.offset << std::endl;
-      return false;
+bool Endpoint::progress_send_channel_(Conn& conn, size_t channel_idx,
+                                      PendingTransfer& transfer,
+                                      bool* made_progress) {
+  // Progress a single channel's send pipeline (Stage 1: test completion).
+  // This is called opportunistically to keep the pipeline flowing.
+
+  if (made_progress) *made_progress = false;
+  if (channel_idx >= transfer.send_queues.size()) return true;
+
+  auto& queue = transfer.send_queues[channel_idx];
+
+  while (!queue.empty()) {
+    size_t idx = queue.front();
+
+    if (idx >= transfer.chunks.size()) {
+      queue.pop_front();
+      continue;
     }
+
+    auto& chunk = transfer.chunks[idx];
+
+    if (!chunk.posted) {
+      break;
+    }
+
+    // Poll TCPX for network completion
+    bool done = false;
+    int received = 0;
+    if (!poll_chunk_request_(transfer, chunk, &done, &received)) return false;
+
+    if (!done) {
+      break;  // Still in flight, must wait (FIFO ordering)
+    }
+
+    // Network send complete: release per-channel window slot and mark done
+    queue.pop_front();
+    chunk.stage2_done = true;
+    chunk.consumed = true;
+    transfer.chunks_completed++;
+    chunk.request = nullptr;
+
+    if (debug_enabled_) {
+      size_t chunk_idx = chunk_bytes_ ? (chunk.offset / chunk_bytes_) : 0;
+      std::cerr << "[tcpx] Send complete: chunk=" << chunk_idx
+                << " channel=" << chunk.channel_idx << std::endl;
+    }
+
+    // Decrement per-channel inflight counter
+    if (chunk.channel_idx < conn.channels.size()) {
+      auto& channel = conn.channels[chunk.channel_idx];
+      if (channel.send_inflight > 0) {
+        channel.send_inflight--;
+      }
+    }
+
+    if (made_progress) *made_progress = true;
   }
 
-  chunk.event = nullptr;
-  chunk.request = nullptr;
   return true;
 }
 
-bool Endpoint::progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
-                                        bool* schedule_send,
-                                        bool* schedule_recv) {
-  // Stage 1 covers network completions; Stage 2 covers GPU completions for the
-  // receive path. schedule_send/recv are used to signal that Stage 0 should
-  // retry submission because window slots were freed during this pass.
-  //
-  // Pipeline overview:
-  //   Send path (single-stage):
-  //     send_queue -> tcpx_test() -> release_send_slot() -> done
-  //
-  //   Receive path (two-stage):
-  //     recv_stage1_queue -> tcpx_test() -> enqueue_chunk_unpack_() ->
-  //     recv_stage2_queue -> cudaEventQuery() -> release_recv_slot() -> done
-  bool trigger_send = false;
-  bool trigger_recv = false;
+bool Endpoint::progress_recv_channel_(Conn& conn, size_t channel_idx,
+                                      PendingTransfer& transfer,
+                                      bool* made_progress) {
+  // Progress a single channel's recv pipeline (Stage 1, 2, 3).
+  // This is called opportunistically to keep the pipeline flowing.
 
-  // ========================================================================
-  // Send path: Stage 1 only (no GPU unpack needed)
-  // ========================================================================
-  if (transfer.kind == PendingTransfer::Kind::kSend) {
-    while (!transfer.send_queue.empty()) {
-      size_t idx = transfer.send_queue.front();
+  if (made_progress) *made_progress = false;
+  if (channel_idx >= conn.channels.size()) return true;
 
+  auto& channel = conn.channels[channel_idx];
+  bool local_progress = false;
+
+  // Stage 1: Poll TCPX for network completions
+  if (channel_idx < transfer.recv_stage1_queues.size()) {
+    auto& queue = transfer.recv_stage1_queues[channel_idx];
+
+    while (!queue.empty()) {
+      size_t idx = queue.front();
       if (idx >= transfer.chunks.size()) {
-        transfer.send_queue.pop_front();
+        queue.pop_front();
         continue;
       }
-
       auto& chunk = transfer.chunks[idx];
-
       if (!chunk.posted) {
         break;
+      }
+      if (chunk.stage1_done) {
+        queue.pop_front();
+        continue;
       }
 
       // Poll TCPX for network completion
@@ -1801,16 +2108,205 @@ bool Endpoint::progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
       if (!poll_chunk_request_(transfer, chunk, &done, &received)) return false;
 
       if (!done) {
-        break;  // Still in flight, check again on next poll_async()
+        break;  // Still in flight, must wait (FIFO ordering)
       }
 
-      // Network send complete: release window slot and mark done
-      transfer.send_queue.pop_front();
+      // Network receive complete: data is now in bounce buffer
+      chunk.stage1_done = true;
+      queue.pop_front();
+
+      if (debug_enabled_) {
+        size_t chunk_idx = chunk_bytes_ ? (chunk.offset / chunk_bytes_) : 0;
+        std::cerr << "[tcpx] Stage 1 complete: chunk=" << chunk_idx
+                  << " channel=" << channel_idx << " (network recv done)"
+                  << std::endl;
+      }
+
+      if (chunk.needs_unpack) {
+        // Launch GPU kernel to copy from bounce buffer to final destination
+        auto* rx_req =
+            reinterpret_cast<tcpx::plugin::tcpxRequest*>(chunk.request);
+        if (!enqueue_chunk_unpack_(transfer, chunk, rx_req, conn)) return false;
+        if (chunk.channel_idx < transfer.recv_stage2_queues.size()) {
+          transfer.recv_stage2_queues[chunk.channel_idx].push_back(idx);
+        } else {
+          std::cerr << "[tcpx] stage2 queue missing for channel "
+                    << chunk.channel_idx << std::endl;
+          return false;
+        }
+
+        // Record consume order immediately (FIFO by post order); Stage 3 will
+        // wait for stage2_done before calling tcpx_irecv_consumed.
+        if (!chunk.queued_for_consume &&
+            chunk.channel_idx < transfer.recv_consume_queues.size()) {
+          transfer.recv_consume_queues[chunk.channel_idx].push_back(idx);
+          chunk.queued_for_consume = true;
+        }
+      } else {
+        // READ path: data already in device memory, no unpack needed
+        if (!finalize_recv_chunk_(conn, chunk)) return false;
+        chunk.stage2_done = true;
+
+        // Add to consume queue (will be consumed in FIFO order below).
+        if (!chunk.queued_for_consume &&
+            chunk.channel_idx < transfer.recv_consume_queues.size()) {
+          transfer.recv_consume_queues[chunk.channel_idx].push_back(idx);
+          chunk.queued_for_consume = true;
+        }
+      }
+
+      local_progress = true;
+    }
+  }
+
+  // Stage 2: Poll CUDA events for GPU unpack completion
+  if (channel_idx < transfer.recv_stage2_queues.size()) {
+    auto& stage2_queue = transfer.recv_stage2_queues[channel_idx];
+    while (!stage2_queue.empty()) {
+      size_t idx = stage2_queue.front();
+      if (idx >= transfer.chunks.size()) {
+        stage2_queue.pop_front();
+        continue;
+      }
+      auto& chunk = transfer.chunks[idx];
+
+      if (chunk.stage2_done) {
+        stage2_queue.pop_front();
+        continue;
+      }
+
+      if (!chunk.event) {
+        std::cerr << "[tcpx] missing CUDA event for chunk offset "
+                  << chunk.offset << std::endl;
+        if (!finalize_recv_chunk_(conn, chunk)) return false;
+        chunk.stage2_done = true;
+        stage2_queue.pop_front();
+        local_progress = true;
+        continue;
+      }
+
+      cudaError_t query_rc = cudaEventQuery(chunk.event);
+      if (query_rc == cudaErrorNotReady) {
+        break;  // Preserve per-channel order
+      }
+      if (query_rc != cudaSuccess) {
+        std::cerr << "[tcpx] cudaEventQuery failed: "
+                  << cudaGetErrorString(query_rc) << std::endl;
+        return false;
+      }
+
+      if (!finalize_recv_chunk_(conn, chunk)) return false;
       chunk.stage2_done = true;
-      transfer.chunks_completed++;
+
+      if (debug_enabled_) {
+        size_t chunk_idx = chunk_bytes_ ? (chunk.offset / chunk_bytes_) : 0;
+        std::cerr << "[tcpx] Stage 2 complete: chunk=" << chunk_idx
+                  << " channel=" << chunk.channel_idx << " (GPU unpack done)"
+                  << std::endl;
+      }
+
+      stage2_queue.pop_front();
+      local_progress = true;
+    }
+  }
+
+  // Stage 3: Consume chunks in FIFO order
+  if (channel_idx < transfer.recv_consume_queues.size()) {
+    auto& consume_queue = transfer.recv_consume_queues[channel_idx];
+
+    while (!consume_queue.empty()) {
+      size_t idx = consume_queue.front();
+      if (idx >= transfer.chunks.size()) {
+        consume_queue.pop_front();
+        continue;
+      }
+
+      auto& chunk = transfer.chunks[idx];
+
+      // If stage2 is not done, just break and wait
+      if (!chunk.stage2_done) {
+        break;  // Wait for this chunk to complete (FIFO ordering)
+      }
+
+      // Now consume if stage2 is done
+      // Consume this chunk
+      if (!consume_recv_chunk_(conn, chunk)) return false;
       chunk.request = nullptr;
-      release_send_slot(transfer.conn_id);
-      trigger_send = true;  // Signal Stage 0 to post more chunks
+
+      if (debug_enabled_) {
+        size_t chunk_idx = chunk_bytes_ ? (chunk.offset / chunk_bytes_) : 0;
+        std::cerr << "[tcpx] Stage 3 complete: chunk=" << chunk_idx
+                  << " channel=" << channel_idx << " (consumed)" << std::endl;
+      }
+
+      // Decrement per-channel inflight counter (now Stage 0 can post more
+      // chunks)
+      if (channel.recv_inflight > 0) {
+        channel.recv_inflight--;
+      }
+
+      consume_queue.pop_front();
+      transfer.chunks_completed++;
+      local_progress = true;
+    }
+  }
+
+  if (made_progress) *made_progress = local_progress;
+  return true;
+}
+
+bool Endpoint::consume_recv_chunk_(Conn& conn,
+                                   PendingTransfer::ChunkState& chunk) {
+  // Call tcpx_irecv_consumed() to release bounce buffer.
+  // CRITICAL: This must be called in FIFO order per channel!
+  size_t channel_idx = chunk.channel_idx;
+  if (channel_idx < conn.channels.size()) {
+    auto& channel = conn.channels[channel_idx];
+    if (channel.recv_comm && chunk.request && !chunk.consumed) {
+      int rc = tcpx_irecv_consumed(channel.recv_comm, 1, chunk.request);
+      if (rc != 0) {
+        std::cerr << "[tcpx] tcpx_irecv_consumed failed rc=" << rc
+                  << " chunk_offset=" << chunk.offset
+                  << " channel=" << channel_idx << std::endl;
+        return false;
+      }
+      chunk.consumed = true;
+    }
+  }
+  return true;
+}
+
+bool Endpoint::finalize_recv_chunk_(Conn& conn,
+                                    PendingTransfer::ChunkState& chunk) {
+  // Stage 2 epilogue for recv/read paths: release the per-chunk CUDA event
+  // back to the pool.
+  //
+  // NOTE: We do NOT call tcpx_irecv_consumed here! That must be done in FIFO
+  // order per channel, which is handled separately in progress_transfer_locked.
+  chunk.event = nullptr;
+  return true;
+}
+
+bool Endpoint::progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
+                                        bool* schedule_send,
+                                        bool* schedule_recv) {
+  // Progress all channels by calling per-channel progress functions.
+  // This is called from poll_transfer to advance the pipeline.
+  bool trigger_send = false;
+  bool trigger_recv = false;
+
+  // ========================================================================
+  // Send path: Progress all send channels
+  // ========================================================================
+  if (transfer.kind == PendingTransfer::Kind::kSend) {
+    for (size_t ch_idx = 0; ch_idx < transfer.send_queues.size(); ++ch_idx) {
+      bool progress_made = false;
+      if (!progress_send_channel_(conn, ch_idx, transfer, &progress_made)) {
+        return false;
+      }
+      if (progress_made) {
+        trigger_send = true;
+      }
     }
 
     if (schedule_send) *schedule_send = trigger_send;
@@ -1819,106 +2315,17 @@ bool Endpoint::progress_transfer_locked(Conn& conn, PendingTransfer& transfer,
   }
 
   // ========================================================================
-  // Receive path: Stage 1 (network) + Stage 2 (GPU unpack)
+  // Receive path: Progress all recv channels
   // ========================================================================
   else {
-    // Stage 1: Poll TCPX for network completions. When a chunk arrives in the
-    // bounce buffer, extract unpack metadata and launch the GPU kernel.
-    while (!transfer.recv_stage1_queue.empty()) {
-      size_t idx = transfer.recv_stage1_queue.front();
-      if (idx >= transfer.chunks.size()) {
-        transfer.recv_stage1_queue.pop_front();
-        continue;
-      }
-      auto& chunk = transfer.chunks[idx];
-      if (!chunk.posted) {
-        break;
-      }
-      if (chunk.stage1_done) {
-        transfer.recv_stage1_queue.pop_front();
-        continue;
-      }
-
-      // Poll TCPX for network completion
-      bool done = false;
-      int received = 0;
-      if (!poll_chunk_request_(transfer, chunk, &done, &received)) return false;
-
-      if (!done) {
-        break;  // Still in flight, check again on next poll_async()
-      }
-
-      // Network receive complete: data is now in bounce buffer
-      chunk.stage1_done = true;
-      transfer.recv_stage1_queue.pop_front();
-
-      if (chunk.needs_unpack) {
-        // Launch GPU kernel to copy from bounce buffer to final destination
-        auto* rx_req =
-            reinterpret_cast<tcpx::plugin::tcpxRequest*>(chunk.request);
-        if (!enqueue_chunk_unpack_(transfer, chunk, rx_req, conn)) return false;
-        transfer.recv_stage2_queue.push_back(idx);
-        // Window slot remains reserved until Stage 2 completes
-      } else {
-        // READ path: data already in device memory, no unpack needed
-        if (!finalize_recv_chunk_(conn, chunk)) return false;
-        chunk.stage2_done = true;
-        transfer.chunks_completed++;
-        chunk.request = nullptr;
-        release_recv_slot(transfer.conn_id);
-        trigger_recv = true;
-      }
-    }
-
-    // Stage 2: Poll CUDA events to detect GPU unpack completion. This stage
-    // runs asynchronously with Stage 1, allowing network and GPU work to
-    // overlap. Chunks may complete out-of-order, so we iterate the entire
-    // queue.
-    auto stage2_it = transfer.recv_stage2_queue.begin();
-    while (stage2_it != transfer.recv_stage2_queue.end()) {
-      size_t idx = *stage2_it;
-      if (idx >= transfer.chunks.size()) {
-        stage2_it = transfer.recv_stage2_queue.erase(stage2_it);
-        continue;
-      }
-      auto& chunk = transfer.chunks[idx];
-      if (chunk.stage2_done) {
-        stage2_it = transfer.recv_stage2_queue.erase(stage2_it);
-        continue;
-      }
-      if (!chunk.event) {
-        std::cerr << "[tcpx] missing CUDA event for chunk offset "
-                  << chunk.offset << std::endl;
-        if (!finalize_recv_chunk_(conn, chunk)) return false;
-        chunk.stage2_done = true;
-        transfer.chunks_completed++;
-        chunk.request = nullptr;
-        release_recv_slot(transfer.conn_id);
-        trigger_recv = true;
-        stage2_it = transfer.recv_stage2_queue.erase(stage2_it);
-        continue;
-      }
-
-      // Query CUDA event to check if GPU unpack kernel has finished
-      cudaError_t err = cudaEventQuery(chunk.event);
-      if (err == cudaErrorNotReady) {
-        ++stage2_it;  // GPU still working, check next chunk
-        continue;
-      }
-      if (err != cudaSuccess) {
-        std::cerr << "[tcpx] cudaEventQuery failed: " << cudaGetErrorString(err)
-                  << std::endl;
+    for (size_t ch_idx = 0; ch_idx < conn.channels.size(); ++ch_idx) {
+      bool progress_made = false;
+      if (!progress_recv_channel_(conn, ch_idx, transfer, &progress_made)) {
         return false;
       }
-
-      // GPU unpack complete: finalize and release window slot
-      if (!finalize_recv_chunk_(conn, chunk)) return false;
-      chunk.stage2_done = true;
-      transfer.chunks_completed++;
-      chunk.request = nullptr;
-      release_recv_slot(transfer.conn_id);  // Now Stage 0 can post more chunks
-      trigger_recv = true;
-      stage2_it = transfer.recv_stage2_queue.erase(stage2_it);
+      if (progress_made) {
+        trigger_recv = true;
+      }
     }
   }
 
@@ -1945,12 +2352,18 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
 
   auto it = transfer_map_.find(transfer_id);
   if (it == transfer_map_.end()) {
-    if (debug_enabled_) {
-      std::cerr << "[tcpx] poll transfer_id=" << transfer_id << " c"
-                << std::endl;
+    // Transfer not found. Treat as complete only if it was previously
+    // finalized.
+    auto completed_it = completed_transfer_ids_.find(transfer_id);
+    if (completed_it != completed_transfer_ids_.end()) {
+      completed_transfer_ids_.erase(completed_it);
+      *is_done = true;
+      return true;
     }
-    *is_done = true;
-    return true;
+
+    std::cerr << "[tcpx] poll_async: unknown transfer_id=" << transfer_id
+              << std::endl;
+    return false;
   }
   PendingTransfer& transfer = it->second;
 
@@ -1984,11 +2397,11 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   }
 
   if (debug_enabled_) {
-    size_t posted = transfer.next_chunk_to_post;
+    size_t posted = transfer.chunks_posted;
     size_t completed = transfer.chunks_completed;
     size_t inflight = 0;
     for (auto const& chunk : transfer.chunks) {
-      if (chunk.posted && !chunk.stage2_done) ++inflight;
+      if (chunk.posted && !chunk.consumed) ++inflight;
     }
     std::cerr << "[tcpx] poll transfer=" << transfer.transfer_id
               << " state=pending"
@@ -2006,8 +2419,12 @@ void Endpoint::free_conn_(std::shared_ptr<Conn> const& conn) {
   // the reverse order of creation (events -> comms -> control socket).
   if (!conn) return;
 
-  std::vector<void*> send_handles;
-  std::vector<void*> recv_handles;
+  struct HandleRef {
+    size_t channel_idx;
+    void* handle;
+  };
+  std::vector<HandleRef> send_handles;
+  std::vector<HandleRef> recv_handles;
   {
     std::lock_guard<std::mutex> lock(mr_mu_);
 
@@ -2016,13 +2433,23 @@ void Endpoint::free_conn_(std::shared_ptr<Conn> const& conn) {
 
       auto send_it = mr.send_handles.find(conn->conn_id);
       if (send_it != mr.send_handles.end()) {
-        send_handles.push_back(send_it->second);
+        auto const& handles_vec = send_it->second;
+        for (size_t ch_idx = 0; ch_idx < handles_vec.size(); ++ch_idx) {
+          if (handles_vec[ch_idx]) {
+            send_handles.push_back({ch_idx, handles_vec[ch_idx]});
+          }
+        }
         mr.send_handles.erase(send_it);
       }
 
       auto recv_it = mr.recv_handles.find(conn->conn_id);
       if (recv_it != mr.recv_handles.end()) {
-        recv_handles.push_back(recv_it->second);
+        auto const& handles_vec = recv_it->second;
+        for (size_t ch_idx = 0; ch_idx < handles_vec.size(); ++ch_idx) {
+          if (handles_vec[ch_idx]) {
+            recv_handles.push_back({ch_idx, handles_vec[ch_idx]});
+          }
+        }
         mr.recv_handles.erase(recv_it);
       }
     }
@@ -2030,27 +2457,42 @@ void Endpoint::free_conn_(std::shared_ptr<Conn> const& conn) {
 
   reset_conn_window_counters_(conn->conn_id);
 
-  for (void* handle : send_handles) {
-    if (conn->send_comm) tcpx_dereg_mr(conn->send_comm, handle);
-  }
-  for (void* handle : recv_handles) {
-    if (conn->recv_comm) tcpx_dereg_mr(conn->recv_comm, handle);
-  }
-
-  for (auto& event : conn->recv_events) {
-    if (event) {
-      cudaEventDestroy(event);
+  for (auto const& ref : send_handles) {
+    if (ref.channel_idx < conn->channels.size()) {
+      auto& channel = conn->channels[ref.channel_idx];
+      if (channel.send_comm) {
+        tcpx_dereg_mr(channel.send_comm, ref.handle);
+      }
     }
   }
-  conn->recv_events.clear();
-
-  if (conn->send_comm) {
-    tcpx_close_send(conn->send_comm);
-    conn->send_comm = nullptr;
+  for (auto const& ref : recv_handles) {
+    if (ref.channel_idx < conn->channels.size()) {
+      auto& channel = conn->channels[ref.channel_idx];
+      if (channel.recv_comm) {
+        tcpx_dereg_mr(channel.recv_comm, ref.handle);
+      }
+    }
   }
-  if (conn->recv_comm) {
-    tcpx_close_recv(conn->recv_comm);
-    conn->recv_comm = nullptr;
+
+  // Clean up per-channel CUDA resources and close channels
+  for (auto& channel : conn->channels) {
+    // Destroy per-channel events
+    for (auto& event : channel.recv_events) {
+      if (event) {
+        cudaEventDestroy(event);
+      }
+    }
+    channel.recv_events.clear();
+
+    // Close TCPX comms
+    if (channel.send_comm) {
+      tcpx_close_send(channel.send_comm);
+      channel.send_comm = nullptr;
+    }
+    if (channel.recv_comm) {
+      tcpx_close_recv(channel.recv_comm);
+      channel.recv_comm = nullptr;
+    }
   }
 
   if (conn->ctrl_sock_fd >= 0) {

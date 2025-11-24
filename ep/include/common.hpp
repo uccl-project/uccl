@@ -13,8 +13,8 @@
 #include <unistd.h>
 
 #define MAX_IB_DEVS 32
-#define MEASURE_PER_OP_LATENCY
-#define MEASURE_PER_VERB_LATENCY
+// #define MEASURE_PER_OP_LATENCY
+// #define MEASURE_PER_VERB_LATENCY
 
 // Barrier type selection (can be overridden at compile time)
 #ifndef USE_SENDER_BARRIER

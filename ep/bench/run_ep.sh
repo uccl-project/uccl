@@ -18,3 +18,4 @@ else
         --log-dir=./logs --redirect 3 test_internode.py  --num-tokens=1024 \
         --hidden=7168 --num-topk=8 --num-experts=288 --test-ll-compatibility
 fi
+# --log-dir=logs --redirect=3
