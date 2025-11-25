@@ -36,7 +36,9 @@ int RDMAFactory::init_devs() {
   static std::once_flag init_flag;
   std::call_once(init_flag, []() {
 #endif
-    rdma_ctl = std::make_shared<RDMAFactory>();
+    if (rdma_ctl == NULL) {
+      rdma_ctl = std::make_shared<RDMAFactory>();
+    }
 #ifndef DISABLE_CALL_ONCE_STATIC
   });
 #endif

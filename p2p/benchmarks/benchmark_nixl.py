@@ -81,7 +81,7 @@ def create_nixl_agent_mc(role: str, dataset, zmq_socket, device_idx, backend):
     backend_name = (
         "Mooncake"
         if backend == "mooncake"
-        else ("UCCL" if backend == "uccl" else "TCPX")
+        else ("UCCL_P2P" if backend == "uccl" else "TCPX")
     )
     config = nixl_agent_config(backends=[backend_name])
     agent = nixl_agent(role, config)
