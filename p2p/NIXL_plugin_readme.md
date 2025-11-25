@@ -1,4 +1,4 @@
-# NIXL with TCPX Backend
+# NIXL with UCCL_P2P (TCPX)
 
 Quick setup and run guide for the TCPX backend.
 
@@ -29,12 +29,11 @@ make MPI=1 MPI_HOME=/opt/amazon/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCC
 cd $UCCL_HOME/p2p
 make clean
 make USE_TCPX=1 -j
-sudo install -m 0755 libuccl_engine.so /usr/local/lib/
-sudo ldconfig
 sudo make USE_TCPX=1 install
+sudo ldconfig
 ```
 
-## Environment variables
+## Runtime env (minimal TCPX)
 
 ```bash
 # CUDA paths
@@ -72,38 +71,32 @@ export NCCL_DEBUG_SUBSYS=ENV
 
 ```bash
 cd $UCCL_HOME/thirdparty/
-git clone https://github.com/uccl-project/nixl.git
-cd $UCCL_HOME/thirdparty/nixl
-git checkout pr-895-tcpx
+git clone https://github.com/ai-dynamo/nixl.git
+cd nixl
+git fetch origin pull/895/head
+git checkout -b uccl FETCH_HEAD
+
+meson setup build -Ddisable_uccl_p2p_backend=false
+ninja -C build src/plugins/uccl_p2p/libplugin_UCCL_P2P.so
+
 pip uninstall -y nixl
-meson setup build -Ddisable_tcpx_backend=false
-ninja -C build src/plugins/tcpx/libplugin_TCPX.so
-pip install . --no-cache-dir --force-reinstall
-export LD_LIBRARY_PATH=$(pwd)/build/src/core:$(pwd)/build/src:$(pwd)/build/src/infra:$LD_LIBRARY_PATH
-export NIXL_PLUGIN_DIR=$(pwd)/build/src/plugins/tcpx
-export NIXL_LOG_LEVEL=debug
+python -m pip install --no-cache-dir "nixl[cu12]"
 ```
 
-### (Optional) Remove legacy system NIXL
-
-```bash
-sudo mv /usr/local/nixl /usr/local/nixl.bak
-sudo ldconfig
-```
 
 ## Run benchmark
 
 ```bash
 cd $UCCL_HOME/p2p
 
-# Server (node 1)
-python benchmarks/benchmark_nixl.py --backend tcpx --role server --sizes 67108864 --iters 10 --op-type read
+# Server (node A)
+python benchmarks/benchmark_nixl.py --backend uccl_p2p --role server --sizes 67108864 --iters 10 --op-type read
 
-# Client (node 2, replace with actual IP)
-python benchmarks/benchmark_nixl.py --backend tcpx --role client --sizes 67108864 --iters 10 --remote-ip=10.64.78.49 --op-type read
+# Client (node B, set server IP)
+python benchmarks/benchmark_nixl.py --backend uccl_p2p --role client --sizes 67108864 --iters 10 --remote-ip=10.65.66.199 --op-type read
 ```
 
 ## Performance
 
 - **Hardware**: 2 nodes, 8x H100 GPUs, 4x gVNIC
-- **Bandwidth**: ~18 GB/s per GPU
+- **Bandwidth**: ~18 GB/s per gVNIC

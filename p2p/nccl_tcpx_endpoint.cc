@@ -63,6 +63,39 @@ std::string get_local_ip() {
   }
   return "127.0.0.1";
 }
+
+// Insert a CUDA event on the legacy default stream and make the NCCL stream
+// wait on it so we do not race with user work running on the default stream
+// (e.g., PyTorch fills on PTDS).
+bool record_and_wait(cudaStream_t record_stream, cudaStream_t wait_stream) {
+  cudaEvent_t evt = nullptr;
+  if (cudaEventCreateWithFlags(&evt, cudaEventDisableTiming) != cudaSuccess) {
+    return false;
+  }
+  if (cudaEventRecord(evt, record_stream) != cudaSuccess) {
+    cudaEventDestroy(evt);
+    return false;
+  }
+  if (cudaStreamWaitEvent(wait_stream, evt, 0) != cudaSuccess) {
+    cudaEventDestroy(evt);
+    return false;
+  }
+  cudaEventDestroy(evt);
+  return true;
+}
+
+bool fence_default_stream(int device, cudaStream_t stream) {
+  if (!stream) return false;
+  if (cudaSetDevice(device) != cudaSuccess) return false;
+
+  // Cover both legacy and per-thread default streams; PyTorch commonly uses
+  // the per-thread default, while some code paths still enqueue on legacy.
+  if (!record_and_wait(cudaStreamLegacy, stream)) return false;
+  if (cudaStreamPerThread != cudaStreamLegacy) {
+    if (!record_and_wait(cudaStreamPerThread, stream)) return false;
+  }
+  return true;
+}
 }  // namespace
 
 Endpoint::Endpoint(int /*num_cpus*/) {
@@ -277,9 +310,10 @@ std::vector<uint8_t> Endpoint::get_unified_metadata() {
   in_addr ipv4{};
   inet_pton(AF_INET, ip.c_str(), &ipv4);
   std::memcpy(meta.data(), &ipv4, sizeof(ipv4));
-  uint16_t port_be = htons(static_cast<uint16_t>(ctrl_port_));
-  meta[4] = static_cast<uint8_t>((port_be >> 8) & 0xFF);
-  meta[5] = static_cast<uint8_t>(port_be & 0xFF);
+  // Encode port in host byte order to match uccl_engine's parser.
+  uint16_t port_ho = static_cast<uint16_t>(ctrl_port_);
+  meta[4] = static_cast<uint8_t>((port_ho >> 8) & 0xFF);
+  meta[5] = static_cast<uint8_t>(port_ho & 0xFF);
   std::memcpy(meta.data() + 6, &local_gpu_idx_, sizeof(int));
   return meta;
 }
@@ -344,7 +378,7 @@ bool Endpoint::send_internal_(Conn& conn, void const* data, size_t size,
                               uint64_t& transfer_id) {
   // Actual data-plane call: ncclSend plus a cudaEvent on the stream for
   // poll_async to poll.
-  if (cudaSetDevice(conn.local_gpu_idx) != cudaSuccess) return false;
+  if (!fence_default_stream(conn.local_gpu_idx, conn.stream)) return false;
   ncclResult_t rc =
       ncclSend(data, size, ncclChar, conn.remote_rank, conn.comm, conn.stream);
   if (rc != ncclSuccess) {
@@ -370,7 +404,7 @@ bool Endpoint::send_internal_(Conn& conn, void const* data, size_t size,
 bool Endpoint::recv_internal_(Conn& conn, void* data, size_t size,
                               uint64_t& transfer_id) {
   // Symmetric receive path, also using an event to mark completion.
-  if (cudaSetDevice(conn.local_gpu_idx) != cudaSuccess) return false;
+  if (!fence_default_stream(conn.local_gpu_idx, conn.stream)) return false;
   ncclResult_t rc =
       ncclRecv(data, size, ncclChar, conn.remote_rank, conn.comm, conn.stream);
   if (rc != ncclSuccess) {
