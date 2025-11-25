@@ -1,4 +1,5 @@
 import os
+import time
 import torch
 import torch.distributed as dist
 from typing import Callable, Tuple, Optional, Union, List
@@ -672,12 +673,16 @@ class Buffer:
         # Default config
         config = self.get_dispatch_config(self.group_size) if config is None else config
 
+        # Start timing
+        x_tensor = x[0] if isinstance(x, tuple) else x
+        start_time = time.time()
+
         # Internode
         if self.runtime.get_num_rdma_ranks() > 1:
             assert (
                 num_worst_tokens == 0
             ), "Internode dispatch does not support `num_worst_tokens > 0`"
-            return self.internode_dispatch(
+            result = self.internode_dispatch(
                 x,
                 handle,
                 num_tokens_per_rank,
@@ -692,6 +697,13 @@ class Buffer:
                 async_finish,
                 allocate_on_comm_stream,
             )
+            elapsed_time = time.time() - start_time
+            if self.rank == 0:
+                num_internode_tokens = num_tokens_per_rdma_rank.sum().item() if num_tokens_per_rdma_rank is not None else 0
+                rdma_dist = num_tokens_per_rdma_rank.tolist() if num_tokens_per_rdma_rank is not None else []
+                rank_dist = num_tokens_per_rank.tolist() if num_tokens_per_rank is not None else []
+                print(f"[inter-node dispatch] {x_tensor.shape[0]} tokens total, {num_internode_tokens} internode in {elapsed_time*1e6:.2f} us, rdma_dist={rdma_dist}, rank_dist={rank_dist}, async_finish: {async_finish}", flush=True)
+            return result
 
         # Launch the kernel with cached or non-cached mode
         x, x_scales = x if isinstance(x, tuple) else (x, None)
@@ -726,6 +738,9 @@ class Buffer:
                     allocate_on_comm_stream,
                 )
             )
+            elapsed_time = time.time() - start_time
+            if self.rank == 0:
+                print(f"[intra-node dispatch] {x_tensor.shape[0]} tokens in {elapsed_time*1e6:.2f} us", flush=True)
             return (
                 (recv_x, recv_x_scales) if x_scales is not None else recv_x,
                 None,
@@ -778,6 +793,9 @@ class Buffer:
                 is_token_in_rank,
                 send_head,
             )
+            elapsed_time = time.time() - start_time
+            if self.rank == 0:
+                print(f"[intra-node dispatch] {x_tensor.shape[0]} tokens in {elapsed_time*1e6:.2f} us", flush=True)
             return (
                 (recv_x, recv_x_scales) if x_scales is not None else recv_x,
                 recv_topk_idx,
@@ -823,9 +841,12 @@ class Buffer:
         # Default config
         config = self.get_combine_config(self.group_size) if config is None else config
 
+        # Start timing
+        start_time = time.time()
+
         # Internode
         if self.runtime.get_num_rdma_ranks() > 1:
-            return self.internode_combine(
+            result = self.internode_combine(
                 x,
                 handle,
                 topk_weights,
@@ -835,6 +856,10 @@ class Buffer:
                 async_finish,
                 allocate_on_comm_stream,
             )
+            elapsed_time = time.time() - start_time
+            if self.rank == 0:
+                print(f"[inter-node combine] {x.shape[0]} tokens in {elapsed_time*1e6:.2f} us, async_{async_finish}", flush=True)
+            return result
 
         # NOTES: the second `_` is for the sending side, so we should use the third one
         (
@@ -862,6 +887,9 @@ class Buffer:
             async_finish,
             allocate_on_comm_stream,
         )
+        elapsed_time = time.time() - start_time
+        if self.rank == 0:
+            print(f"[intra-node combine] {x.shape[0]} tokens in {elapsed_time*1e6:.2f} us", flush=True)
         return recv_x, recv_topk_weights, EventOverlap(event)
 
     # noinspection PyTypeChecker
