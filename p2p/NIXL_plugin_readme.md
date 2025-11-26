@@ -12,7 +12,7 @@ export UCCL_HOME=/path/to/your/uccl
 # Install dependencies
 sudo apt update
 sudo apt install -y build-essential net-tools libelf-dev libibverbs-dev \
-                    libgoogle-glog-dev libgtest-dev libgflags-dev \
+                    libgoogle-glog-dev libgtest-dev libgflags-dev libaio-dev \
                     python3-dev pybind11-dev python3-pip python3-pybind11
 
 cd $UCCL_HOME/thirdparty/nccl
@@ -65,6 +65,10 @@ export NCCL_MAX_NCHANNELS=8
 export NCCL_MIN_NCHANNELS=8
 export NCCL_DEBUG=INFO
 export NCCL_DEBUG_SUBSYS=ENV
+
+# Nixl plugin config
+export NIXL_PLUGIN_DIR=$UCCL_HOME/thirdparty/nixl/build/src/plugins/uccl_p2p
+export NIXL_LOG_LEVEL=debug
 ```
 
 ## Build NIXL + TCPX plugin
