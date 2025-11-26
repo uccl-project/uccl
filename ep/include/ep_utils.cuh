@@ -82,18 +82,18 @@ __device__ __forceinline__ void barrier_sync(T* bar_ptr,
 template <typename T, int MemoryOrder = __ATOMIC_RELAXED,
           int MemoryScope = __HIP_MEMORY_SCOPE_AGENT>
 __device__ __forceinline__ void grid_sync(T* bar_ptr, int num_participants) {
+  __syncthreads();
   if (threadIdx.x == 0) {
     __threadfence();
-    HIP_ATOMIC_ADD(bar_ptr, 1, MemoryOrder, MemoryScope);
-
-    while (HIP_ATOMIC_LOAD(bar_ptr, MemoryOrder, MemoryScope) <
+    __hip_atomic_fetch_add(bar_ptr, 1, MemoryOrder, MemoryScope);
+    while (__hip_atomic_load(bar_ptr, MemoryOrder, MemoryScope) <
            num_participants)
       __builtin_amdgcn_s_sleep(1);
 
     asm volatile("s_wakeup");
   }
 
-  __syncthreads();  // All threads resume together
+  __syncthreads();
 }
 }  // namespace amd
 #endif
