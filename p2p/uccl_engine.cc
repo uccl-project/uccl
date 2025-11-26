@@ -1,6 +1,6 @@
 #include "uccl_engine.h"
 #ifdef USE_TCPX
-#include "tcpx_engine.h"
+#include "nccl_tcpx_endpoint.h"
 #else
 #include "engine.h"
 #endif
@@ -11,26 +11,38 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdbool>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <future>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 
 #ifdef USE_TCPX
-using FifoItem = tcpx::FifoItem;
-using Endpoint = tcpx::Endpoint;
+// nccl_tcpx_endpoint does not declare inside_python; define it here for
+// uccl_engine.
+thread_local bool inside_python = false;
+
+// Reuse NCCL FIFO descriptor (64B ABI) directly.
+using FifoItem = nccl_tcpx::FifoItem;
+using Endpoint = nccl_tcpx::Endpoint;
 #else
 using FifoItem = uccl::FifoItem;
-using Endpoint = Endpoint;
+using Endpoint = ::Endpoint;
 #endif
 
 struct uccl_engine {
+#ifdef USE_TCPX
+  std::unique_ptr<Endpoint> endpoint;
+#else
   Endpoint* endpoint;
+#endif
 };
 
 struct uccl_conn {
@@ -359,13 +371,21 @@ void listener_thread_func(uccl_conn_t* conn) {
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
+#ifdef USE_TCPX
+  eng->endpoint = std::unique_ptr<Endpoint>(new Endpoint(num_cpus));
+#else
   eng->endpoint = new Endpoint(num_cpus);
+#endif
   return eng;
 }
 
 void uccl_engine_destroy(uccl_engine_t* engine) {
   if (engine) {
+#ifdef USE_TCPX
+    engine->endpoint.reset();
+#else
     delete engine->endpoint;
+#endif
     delete engine;
   }
 }
