@@ -165,8 +165,9 @@ if __name__ == "__main__":
         cxx_flags.append("-DDISABLE_SM90_FEATURES")
         nvcc_flags.append("-DDISABLE_SM90_FEATURES")
 
-        cxx_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
-        nvcc_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
+        if int(os.getenv("DISABLE_AGGRESSIVE_ATOMIC", 0)):
+            cxx_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
+            nvcc_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
 
         device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", "gfx942")
         os.environ["PYTORCH_ROCM_ARCH"] = device_arch

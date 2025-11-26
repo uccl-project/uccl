@@ -31,7 +31,6 @@ except ImportError:
         destroy_uccl,
     )
 
-from hip import hip
 
 class Buffer:
     """
@@ -88,11 +87,8 @@ class Buffer:
             device_index = int(os.environ["LOCAL_RANK"])
         else:
             device_index = torch.cuda.current_device()
-        self.scratch = torch.zeros(
-            num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
-        )
-        # rdma_buffer_ptr = self.scratch.data_ptr()
-        _, rdma_buffer_ptr = hip.hipExtMallocWithFlags(num_rdma_bytes, 3)
+        self.scratch: torch.Tensor = ep.get_rdma_buffer(num_rdma_bytes, device_index)
+        rdma_buffer_ptr = self.scratch.data_ptr()
         self.proxies, self.workers = initialize_uccl(
             rdma_buffer_ptr,
             num_rdma_bytes,

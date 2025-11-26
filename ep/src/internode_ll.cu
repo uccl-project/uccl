@@ -228,9 +228,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         }
         // Increase counter after finishing
         __syncwarp();
-        lane_id == 0 ? __hip_atomic_fetch_add(
-                           atomic_finish_counter_per_expert + dst_expert_idx, 1,
-                           __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_WORKGROUP)
+        lane_id == 0 ? atomic_add_release_global(
+                           atomic_finish_counter_per_expert + dst_expert_idx, 1)
                      : 0;
       }
     }
@@ -248,9 +247,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       __syncwarp();
 #pragma unroll
       for (int i = lane_id; i < num_experts; i += WARP_SIZE)
-        __hip_atomic_fetch_add(atomic_finish_counter_per_expert + i,
-                               FINISHED_SUM_TAG, __ATOMIC_RELAXED,
-                               __HIP_MEMORY_SCOPE_WORKGROUP);
+        atomic_add_release_global(atomic_finish_counter_per_expert + i,
+                                  FINISHED_SUM_TAG);
     }
     // This SM should be responsible for some destination experts, read
     // `topk_idx` for them
@@ -273,9 +271,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       auto sum = warp_reduce_sum(expert_count[i - expert_begin_idx]);
       if (lane_id == 0) {
         shared_num_tokens_sent_per_expert[i - expert_begin_idx] = sum;
-        __hip_atomic_fetch_add(atomic_finish_counter_per_expert + i,
-                               FINISHED_SUM_TAG - sum, __ATOMIC_RELAXED,
-                               __HIP_MEMORY_SCOPE_WORKGROUP);
+        atomic_add_release_global(atomic_finish_counter_per_expert + i,
+                                  FINISHED_SUM_TAG - sum);
       }
     }
   }
@@ -290,10 +287,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         shared_num_tokens_sent_per_expert[responsible_expert_idx -
                                           sm_id * num_warp_groups];
     // Wait local sends issued and send expert counts
-    while (__builtin_nontemporal_load(atomic_finish_counter_per_expert +
-                                      responsible_expert_idx) !=
-           FINISHED_SUM_TAG * 2)
+    while (ld_acquire_global(atomic_finish_counter_per_expert +
+                             responsible_expert_idx) != FINISHED_SUM_TAG * 2)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
       __builtin_amdgcn_s_sleep(1);
+#else
+      ;
+#endif
 
     auto dst_ptr = reinterpret_cast<uint64_t>(
         rdma_recv_count + dst_expert_local_idx * num_ranks + rank);
@@ -315,8 +315,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           low_latency_buffer_idx);
     } else {
       // Intra-node: use direct atomic operation
-      __builtin_nontemporal_store(-num_tokens_sent - 1,
-                                  reinterpret_cast<int*>(dst_p2p_ptr));
+      st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr),
+                            -num_tokens_sent - 1);
     }
     // Clean workspace for next use
     atomic_counter_per_expert[responsible_expert_idx] = 0;
@@ -336,7 +336,11 @@ LOW_LATENCY_DISPATCH_RECV:
   // For send-and-recv kernels, we need a grid sync for making
   // `packed_recv_count` visible
   if (phases & LOW_LATENCY_SEND_PHASE)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
     amd::grid_sync(grid_sync_barrier_ptr, num_sms);
+#else
+    cg::this_grid().sync();
+#endif
 
   // Receiving and packing
   if (responsible_expert_idx < num_experts) {
@@ -378,21 +382,29 @@ LOW_LATENCY_DISPATCH_RECV:
     if (sub_warp_id == 1 and lane_id == 0) {
       auto start_time = clock64();
       while ((src_rank / max_nvl_peers == rank / max_nvl_peers) &&
-             (num_recv_tokens_ipc = __builtin_nontemporal_load(
+             (num_recv_tokens_ipc = ld_acquire_sys_global(
                   rdma_recv_count + local_expert_idx * num_ranks + src_rank)) ==
                  0)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         __builtin_amdgcn_s_sleep(1);
+#else
+        ;
+#endif
 
       while ((src_rank / max_nvl_peers != rank / max_nvl_peers) &&
-             (num_recv_tokens_internode = __builtin_nontemporal_load(
+             (num_recv_tokens_internode = ld_acquire_sys_global(
                   rdma_recv_count_internode + local_expert_idx * num_ranks +
                   src_rank)) == 0)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         __builtin_amdgcn_s_sleep(1);
+#else
+        ;
+#endif
 
       if (src_rank / max_nvl_peers == rank / max_nvl_peers) {
-        if (__builtin_nontemporal_load(rdma_recv_count_internode +
-                                       local_expert_idx * num_ranks +
-                                       src_rank) != 0) {
+        if (ld_acquire_sys_global(rdma_recv_count_internode +
+                                  local_expert_idx * num_ranks + src_rank) !=
+            0) {
           printf(
               "Same node but rdma_recv_count_internode is not zero! src_rank: "
               "%d, rank: %d, max_nvl_peers: %d\n",
@@ -401,8 +413,8 @@ LOW_LATENCY_DISPATCH_RECV:
         }
       }
       if (src_rank / max_nvl_peers != rank / max_nvl_peers) {
-        if (__builtin_nontemporal_load(
-                rdma_recv_count + local_expert_idx * num_ranks + src_rank) !=
+        if (ld_acquire_sys_global(rdma_recv_count +
+                                  local_expert_idx * num_ranks + src_rank) !=
             0) {
           printf(
               "Different node but rdma_recv_count is not zero! src_rank: %d, "
@@ -440,6 +452,11 @@ LOW_LATENCY_DISPATCH_RECV:
                   wait_recv_cost);
     }
     sync_barrier<true>(warp_group_id + 2, num_warps_per_group * WARP_SIZE);
+
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    // reset grid sync barrier for next use
+    if (sm_id == 0 and thread_id == 0) *grid_sync_barrier_ptr = 0;
+#endif
     num_recv_tokens = shared_num_recv_tokens[warp_group_id];
     recv_token_begin_idx = shared_recv_token_begin_idx[warp_group_id];
 
@@ -493,8 +510,6 @@ LOW_LATENCY_DISPATCH_RECV:
         }
       }
     }
-    // if (blockIdx.x == 0 && threadIdx.x == 0)
-    //   printf("[dispatch] RECV finished\n");
   }
 }
 
@@ -512,8 +527,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
               int max_nvl_peers, int low_latency_buffer_idx,
               void** ipc_rdma_base_ptrs, void* rdma_buffer_ptr,
-              void* atomic_buffer_ptr, int* rdma_recv_count_internode,
-              int* grid_sync_barrier_ptr) {
+              void* atomic_buffer_ptr, int* rdma_recv_count_internode) {
   constexpr int kNumMaxTopK = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = kNumMaxWarpGroups / num_warp_groups;
@@ -528,7 +542,8 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   auto atomic_counter_per_expert = static_cast<int*>(workspace);
   auto atomic_finish_counter_per_expert =
       atomic_counter_per_expert + num_experts;
-  EP_HOST_ASSERT(num_experts * sizeof(int) * 2 <= NUM_WORKSPACE_BYTES);
+  auto grid_sync_barrier_ptr = atomic_finish_counter_per_expert + num_experts;
+  EP_HOST_ASSERT((num_experts * 2 + 1) * sizeof(int) <= NUM_WORKSPACE_BYTES);
 
   // FP8 checks
   if (use_ue8m0)
@@ -621,9 +636,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
 
     // Notify before executing `int_p`
     __syncwarp();
-    if (lane_id == 0)
-      __hip_atomic_fetch_add(atomic_clean_flag, num_experts, __ATOMIC_RELAXED,
-                             __HIP_MEMORY_SCOPE_WORKGROUP);
+    if (lane_id == 0) atomic_add_release_global(atomic_clean_flag, num_experts);
   }
 
   // Issue IBGDA sends
@@ -874,8 +887,12 @@ __global__ __launch_bounds__(1024, 1) void combine(
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 16);
     sync_barrier<true>(warp_group_id + 1, num_warps_per_group * WARP_SIZE);
     if (sub_warp_id == 1 and lane_id == 0) {
-      while (__builtin_nontemporal_load(atomic_clean_flag) == 0)
+      while (ld_acquire_global(atomic_clean_flag) == 0)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         __builtin_amdgcn_s_sleep(1);
+#else
+        ;
+#endif
       // Calculate offset from data buffer to flag buffer (similar to dispatch
       // phase) rdma_recv_flag_internode corresponds to
       // combine_rdma_recv_flag_buffer We need to calculate the offset from
@@ -892,7 +909,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
               : 0;
       if (dst_p2p_ptr != 0) {
         // Intra-node: use direct atomic operation
-        __builtin_nontemporal_store(1, reinterpret_cast<int*>(dst_p2p_ptr));
+        st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr), 1);
       } else {
         // Inter-node or no IPC: use IBGDA atomic
         // NOTE(MaoZiming): Without ibgda, we can only use atomic add
@@ -906,8 +923,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
             false, d2h_channel_addrs, num_d2h_channel_addrs, true,
             low_latency_buffer_idx);
       }
-      __hip_atomic_fetch_add(atomic_clean_flag, -1, __ATOMIC_RELAXED,
-                             __HIP_MEMORY_SCOPE_WORKGROUP);
+      atomic_add_release_global(atomic_clean_flag, -1);
     }
     __syncwarp();
   }
@@ -926,17 +942,26 @@ LOW_LATENCY_COMBINE_RECV:
       auto const src_rank = responsible_expert_idx / num_local_experts;
       auto start_time = clock64();
       while ((src_rank / max_nvl_peers == rank / max_nvl_peers) &&
-             __builtin_nontemporal_load(rdma_recv_flag +
-                                        responsible_expert_idx) == 0)
+             ld_acquire_sys_global(rdma_recv_flag + responsible_expert_idx) ==
+                 0)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         __builtin_amdgcn_s_sleep(1);
+#else
+        ;
+#endif
+
       while ((src_rank / max_nvl_peers != rank / max_nvl_peers) &&
-             __builtin_nontemporal_load(rdma_recv_flag_internode +
-                                        responsible_expert_idx) == 0)
+             ld_acquire_sys_global(rdma_recv_flag_internode +
+                                   responsible_expert_idx) == 0)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         __builtin_amdgcn_s_sleep(1);
+#else
+        ;
+#endif
 
       if (src_rank / max_nvl_peers == rank / max_nvl_peers) {
-        if (__builtin_nontemporal_load(rdma_recv_flag_internode +
-                                       responsible_expert_idx) != 0) {
+        if (ld_acquire_sys_global(rdma_recv_flag_internode +
+                                  responsible_expert_idx) != 0) {
           printf(
               "Same node but rdma_recv_flag_internode is not zero! src_rank: "
               "%d, rank: %d, max_nvl_peers: %d\n",
@@ -945,8 +970,8 @@ LOW_LATENCY_COMBINE_RECV:
         }
       }
       if (src_rank / max_nvl_peers != rank / max_nvl_peers) {
-        if (__builtin_nontemporal_load(rdma_recv_flag +
-                                       responsible_expert_idx) != 0) {
+        if (ld_acquire_sys_global(rdma_recv_flag + responsible_expert_idx) !=
+            0) {
           printf(
               "Different node but rdma_recv_flag is not zero! src_rank: %d, "
               "rank: %d, max_nvl_peers: %d\n",
@@ -964,7 +989,11 @@ LOW_LATENCY_COMBINE_RECV:
       }
     }
   }
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   amd::grid_sync(grid_sync_barrier_ptr, num_sms);
+#else
+  cg::this_grid().sync();
+#endif
 
   // Reduce tokens
   EP_DEVICE_ASSERT(num_topk <= WARP_SIZE);
@@ -1019,6 +1048,11 @@ LOW_LATENCY_COMBINE_RECV:
     // if (blockIdx.x == 0 && threadIdx.x == 0)
     //   printf("[combine] RECV finished\n");
   }
+
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  // reset grid sync barrier for next use
+  if (sm_id == 0 and thread_id == 0) *grid_sync_barrier_ptr = 0;
+#endif
 }
 
 void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
@@ -1034,7 +1068,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              int num_d2h_channel_addrs, int max_nvl_peers,
              int low_latency_buffer_idx, void** ipc_rdma_base_ptrs,
              void* rdma_buffer_ptr, void* atomic_buffer_ptr,
-             int* rdma_recv_flag_internode, int* grid_sync_barrier_ptr) {
+             int* rdma_recv_flag_internode) {
   constexpr int kNumMaxTopk = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = kNumMaxWarpGroups / num_warp_groups;
@@ -1045,6 +1079,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
 
   // Check workspace
   auto atomic_clean_flag = static_cast<int*>(workspace);
+  auto grid_sync_barrier_ptr = atomic_clean_flag + 1;
   EP_HOST_ASSERT(sizeof(int) <= NUM_WORKSPACE_BYTES);
   EP_HOST_ASSERT(num_topk <= kNumMaxTopk);
 

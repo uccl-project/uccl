@@ -79,24 +79,22 @@ __device__ __forceinline__ void barrier_sync(T* bar_ptr,
   __syncwarp();
 }
 
-template <typename T = uint32_t, int MemoryOrder = __ATOMIC_RELAXED,
+template <typename T, int MemoryOrder = __ATOMIC_RELAXED,
           int MemoryScope = __HIP_MEMORY_SCOPE_AGENT>
 __device__ __forceinline__ void grid_sync(T* bar_ptr, int num_participants) {
-  __syncthreads();
   if (threadIdx.x == 0) {
     __threadfence();
-    __hip_atomic_fetch_add(bar_ptr, 1, MemoryOrder, MemoryScope);
-  }
-  __syncthreads();
-  if (threadIdx.x == 0) {
-    while (__hip_atomic_load(bar_ptr, MemoryOrder, MemoryScope) <
-           num_participants) {
+    HIP_ATOMIC_ADD(bar_ptr, 1, MemoryOrder, MemoryScope);
+
+    while (HIP_ATOMIC_LOAD(bar_ptr, MemoryOrder, MemoryScope) <
+           num_participants)
       __builtin_amdgcn_s_sleep(1);
-    }
+
+    asm volatile("s_wakeup");
   }
+
   __syncthreads();  // All threads resume together
 }
-
 }  // namespace amd
 #endif
 
@@ -743,11 +741,7 @@ __device__ __forceinline__ void trap() {
 __device__ __forceinline__ int ld_volatile_global(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  asm volatile(
-      "global_load_dword %0 %1 off sc0 sc1\n "
-      "s_waitcnt vmcnt(0)"
-      : "=v"(ret)
-      : "v"(ptr));
+  ret = __hip_atomic_load(ptr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.volatile.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif
@@ -757,11 +751,7 @@ __device__ __forceinline__ int ld_volatile_global(int const* ptr) {
 __device__ __forceinline__ float ld_volatile_global(float const* ptr) {
   float ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  asm volatile(
-      "global_load_dword %0 %1 off sc0 sc1\n "
-      "s_waitcnt vmcnt(0)"
-      : "=v"(ret)
-      : "v"(ptr));
+  ret = __hip_atomic_load(ptr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.volatile.global.f32 %0, [%1];" : "=f"(ret) : "l"(ptr));
 #endif
@@ -771,11 +761,7 @@ __device__ __forceinline__ float ld_volatile_global(float const* ptr) {
 __device__ __forceinline__ int64_t ld_volatile_global(int64_t const* ptr) {
   int64_t ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  asm volatile(
-      "global_load_dwordx2 %0 %1 off sc0 sc1\n "
-      "s_waitcnt vmcnt(0)"
-      : "=v"(ret)
-      : "v"(ptr));
+  ret = __hip_atomic_load(ptr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.volatile.global.s64 %0, [%1];" : "=l"(ret) : "l"(ptr));
 #endif
@@ -785,11 +771,7 @@ __device__ __forceinline__ int64_t ld_volatile_global(int64_t const* ptr) {
 __device__ __forceinline__ int64_t ld_volatile_global(uint64_t const* ptr) {
   int64_t ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  asm volatile(
-      "global_load_dwordx2 %0 %1 off sc0 sc1\n "
-      "s_waitcnt vmcnt(0)"
-      : "=v"(ret)
-      : "v"(ptr));
+  ret = __hip_atomic_load(ptr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.volatile.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));
 #endif
@@ -934,7 +916,8 @@ __device__ __forceinline__ int ld_acquire_cta(int const* ptr) {
 __forceinline__ __device__ void acquire_lock(int* mutex) {
   // To make later memory operations valid, we must use `acquire` for memory
   // semantics
-  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0);
+  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0)
+    ;
 }
 
 __forceinline__ __device__ void release_lock(int* mutex) {

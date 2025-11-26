@@ -252,9 +252,6 @@ class Buffer {
           moe_recv_rdma_counter, 0));
       *moe_recv_rdma_counter = -1;
     }
-
-    CUDA_CHECK(hipExtMallocWithFlags((void**)&grid_sync_barrier_ptr, sizeof(int),
-                                     hipDeviceMallocUncached));
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>, torch::Tensor,
@@ -1508,8 +1505,6 @@ class Buffer {
       packed_recv_x_scales_ptr = packed_recv_x_scales->data_ptr();
     }
 
-    CUDA_CHECK(
-        cudaMemsetAsync(grid_sync_barrier_ptr, 0, sizeof(int), launch_stream));
     // Kernel launch
     auto [ptr0, ptr_internode0, count0] = next_buffer.clean_meta();
     auto launcher = [=](int phases) {
@@ -1533,9 +1528,8 @@ class Buffer {
           workspace, num_device_sms, launch_stream, phases, d_handles,
           num_d2h_channel_addrs, max_nvl_peers, low_latency_buffer_idx_used,
           d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
-          buffer.dispatch_rdma_recv_count_buffer_internode,
-          grid_sync_barrier_ptr);  // Added IPC base
-                                   // pointers
+          buffer.dispatch_rdma_recv_count_buffer_internode);  // Added IPC base
+                                                              // pointers
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -1642,8 +1636,6 @@ class Buffer {
       combined_x = torch::empty({num_combined_tokens, hidden}, x.options());
     }
 
-    CUDA_CHECK(
-        cudaMemsetAsync(grid_sync_barrier_ptr, 0, sizeof(int), launch_stream));
     // Kernel launch
     auto [ptr0, ptr_internode0, count0] = next_buffer.clean_meta();
     auto launcher = [=](int phases) {
@@ -1661,9 +1653,9 @@ class Buffer {
           num_ranks, use_logfmt, workspace, num_device_sms, launch_stream,
           phases, zero_copy, d_handles, num_d2h_channel_addrs, max_nvl_peers,
           low_latency_buffer_idx_used, d_ipc_rdma_base_ptrs, rdma_buffer_ptr,
-          atomic_buffer_ptr, buffer.combine_rdma_recv_flag_buffer_internode,
-          grid_sync_barrier_ptr);  // Added IPC base
-                                   // pointers
+          atomic_buffer_ptr,
+          buffer.combine_rdma_recv_flag_buffer_internode);  // Added IPC base
+                                                            // pointers
     };
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
@@ -1938,8 +1930,6 @@ class Buffer {
   int* moe_recv_rdma_counter{nullptr};
   int* moe_recv_rdma_counter_mapped{nullptr};
 
-  int* grid_sync_barrier_ptr{nullptr};
-
   bool destroyed = false;
 
   // Ring buffers
@@ -2023,6 +2013,20 @@ PYBIND11_MODULE(ep, m) {
       }
     }
     uccl::g_proxies_by_dev.clear();
+  });
+
+  m.def("get_rdma_buffer", [](int64_t num_rdma_bytes, int device_index) {
+    void* ptr;
+    CUDA_CHECK(cudaSetDevice(device_index));
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    CUDA_CHECK(
+        hipExtMallocWithFlags(&ptr, num_rdma_bytes, hipDeviceMallocUncached));
+#else
+    CUDA_CHECK(cudaMalloc(&ptr, num_rdma_bytes));
+#endif
+    CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
+    return torch::from_blob(ptr, {num_rdma_bytes},
+                            dtype(torch::kInt32).device(torch::kCUDA));
   });
 
   py::class_<EventHandle>(m, "EventHandle")
