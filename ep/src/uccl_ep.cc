@@ -2015,6 +2015,20 @@ PYBIND11_MODULE(ep, m) {
     uccl::g_proxies_by_dev.clear();
   });
 
+  m.def("get_rdma_buffer", [](int64_t num_rdma_bytes, int device_index) {
+    void* ptr;
+    CUDA_CHECK(cudaSetDevice(device_index));
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    CUDA_CHECK(
+        hipExtMallocWithFlags(&ptr, num_rdma_bytes, hipDeviceMallocUncached));
+#else
+    CUDA_CHECK(cudaMalloc(&ptr, num_rdma_bytes));
+#endif
+    CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
+    return torch::from_blob(ptr, {num_rdma_bytes},
+                            dtype(torch::kInt32).device(torch::kCUDA));
+  });
+
   py::class_<EventHandle>(m, "EventHandle")
       .def(py::init<>())
       .def("current_stream_wait", &EventHandle::current_stream_wait);
