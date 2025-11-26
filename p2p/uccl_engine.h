@@ -4,7 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define MSG_SIZE 64
+#define MSG_SIZE 256
+#define FIFO_SIZE 256
 // Handle for the UCCL engine instance
 typedef struct uccl_engine uccl_engine_t;
 
@@ -31,7 +32,7 @@ typedef struct notify_msg {
 
 typedef struct fifo_msg {
   int id;
-  char fifo_buf[MSG_SIZE];
+  char fifo_buf[FIFO_SIZE];
 } fifo_msg_t;
 
 typedef struct tx_msg {
