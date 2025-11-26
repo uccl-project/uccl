@@ -442,8 +442,6 @@ void notify_dispatch(
   EP_HOST_ASSERT(num_nvl_bytes < std::numeric_limits<int>::max());
 
   // Launch kernel
-  printf("notify dispatch num_sms = %d, num_threads = %d", 1 + num_rdma_ranks,
-         kNumThreads);
   SETUP_LAUNCH_CONFIG(1 + num_rdma_ranks, kNumThreads, stream);
   SWITCH_RDMA_RANKS(NOTIFY_DISPATCH_LAUNCH_CASE);
 #undef NOTIFY_DISPATCH_LAUNCH_CASE
@@ -705,9 +703,7 @@ __global__ void __launch_bounds__(
       __syncwarp();
 
       // Skip the token which does not belong to this warp
-      if ((token_idx - token_start_idx) % kNumDispatchRDMASenderWarps !=
-          warp_id)
-        continue;
+      if ((token_idx - token_start_idx) % 2 != warp_id) continue;
       auto rdma_tail_idx =
           is_token_in_rank_uint64 == 0 ? -1 : global_rdma_tail_idx - 1;
 
@@ -1148,15 +1144,15 @@ __global__ void __launch_bounds__(
       // Move tail index
       __syncwarp();
       if (lane_id == 0) {
-        /*******************************************************************/
-        printf(
-            "DeepEP dispatch NVL forwarder, channel: %d, RDMA: %d, "
-            "src NVL: %d, dst NVL: %d, head: %d, tail: %d\n",
-            channel_id, rdma_rank, nvl_rank, target_rank,
-            cached_nvl_channel_head, cached_nvl_channel_tail);
+        // /*******************************************************************/
+        // printf(
+        //     "DeepEP dispatch NVL forwarder, channel: %d, RDMA: %d, "
+        //     "src NVL: %d, dst NVL: %d, head: %d, tail: %d\n",
+        //     channel_id, rdma_rank, nvl_rank, target_rank,
+        //     cached_nvl_channel_head, cached_nvl_channel_tail);
         st_release_sys_global(nvl_channel_tail.buffer(),
                               cached_nvl_channel_tail);
-        /*******************************************************************/
+        // /*******************************************************************/
       }
     }
     // Retired
@@ -1268,19 +1264,19 @@ __global__ void __launch_bounds__(
 
         cached_channel_tail_idx = __shfl_sync(
             WARP_MASK, ld_acquire_sys_global(nvl_channel_tail.buffer()), 0);
-        if (lane_id == 0) {
-          /*******************************************************************/
-          printf(
-              "DeepEP dispatch NVL receiver check, channel: %d, RDMA: %d, src "
-              "NVL: %d, dst NVL: %d, head: %d, tail: %d, "
-              "num_tokens_to_recv_original: %d, "
-              "num_tokens_to_recv: %d\n",
-              channel_id, rdma_rank, target_rank, nvl_rank,
-              ld_acquire_sys_global(nvl_channel_head.buffer()),
-              ld_acquire_sys_global(nvl_channel_tail.buffer()),
-              num_tokens_to_recv_original, num_tokens_to_recv);
-          /*******************************************************************/
-        }
+        // if (lane_id == 0) {
+        /*******************************************************************/
+        // printf(
+        //     "DeepEP dispatch NVL receiver check, channel: %d, RDMA: %d, src
+        //     " "NVL: %d, dst NVL: %d, head: %d, tail: %d, "
+        //     "num_tokens_to_recv_original: %d, "
+        //     "num_tokens_to_recv: %d\n",
+        //     channel_id, rdma_rank, target_rank, nvl_rank,
+        //     ld_acquire_sys_global(nvl_channel_head.buffer()),
+        //     ld_acquire_sys_global(nvl_channel_tail.buffer()),
+        //     num_tokens_to_recv_original, num_tokens_to_recv);
+        /*******************************************************************/
+        // }
         // Timeout check
         if (lane_id == 0 and clock64() - start_time > NUM_TIMEOUT_CYCLES) {
           printf(
@@ -1459,8 +1455,6 @@ void dispatch(void* recv_x, float* recv_x_scales, int64_t* recv_topk_idx,
   EP_HOST_ASSERT((topk_idx == nullptr) == (topk_weights == nullptr));
   EP_HOST_ASSERT((recv_topk_idx == nullptr) == (recv_topk_weights == nullptr));
 
-  printf("dispatch num_sms = %d, num_threads = %d", num_channels * 2,
-         (kNumDispatchRDMASenderWarps + 1 + NUM_MAX_NVL_PEERS) * WARP_SIZE);
   SETUP_LAUNCH_CONFIG(
       num_channels * 2,
       (kNumDispatchRDMASenderWarps + 1 + NUM_MAX_NVL_PEERS) * WARP_SIZE,
@@ -1721,8 +1715,6 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
                                 ? cached_notify<true, kNumTMABytesPerWarp>
                                 : cached_notify<false, kNumTMABytesPerWarp>;
 
-  printf("cached_notify num_sms = %d, num_threads = %d", num_channels * 2,
-         num_threads);
   SETUP_LAUNCH_CONFIG(num_channels * 2, num_threads, stream);
   SET_SHARED_MEMORY_FOR_TMA(cached_notify_func);
   LAUNCH_KERNEL(&cfg, cached_notify_func, rdma_clean_meta.first,
@@ -2083,7 +2075,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
               channel_id, rdma_rank, nvl_rank, dst_nvl_rank, lane_id,
               ld_volatile_global(nvl_channel_head.buffer() + lane_id),
               cached_channel_tail_idx, token_start_idx, token_end_idx);
-          trap();
+          // trap();
         }
       }
 
@@ -2335,7 +2327,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                 channel_id, rdma_rank, nvl_rank, dst_rdma_rank,
                 ld_acquire_sys_global(rdma_channel_head.buffer(dst_rdma_rank)),
                 token_start_idx, num_chunked_tokens);
-            trap();
+            // trap();
           }
         }
         sync_large_warp();
@@ -2372,7 +2364,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                   channel_id, rdma_rank, nvl_rank, lane_id, dst_rdma_rank,
                   cached_nvl_channel_tail_idx, token_idx, num_tokens_to_combine,
                   sub_warp_id, kNumWarpsPerForwarder, expected_head);
-              trap();
+              // trap();
             }
           }
 
@@ -2516,7 +2508,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                 "nvl: %d, src RDMA: %d, tail: %d, waiting: %ld, expect: %d\n",
                 channel_id, rdma_rank, nvl_rank, lane_id,
                 cached_channel_tail_idx, token_idx, expected_head);
-            trap();
+            // trap();
           }
         }
         __syncwarp();
