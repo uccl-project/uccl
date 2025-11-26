@@ -319,7 +319,8 @@ std::vector<uint8_t> Endpoint::get_unified_metadata() {
   uint16_t port_ho = static_cast<uint16_t>(ctrl_port_);
   meta[4] = static_cast<uint8_t>((port_ho >> 8) & 0xFF);
   meta[5] = static_cast<uint8_t>(port_ho & 0xFF);
-  // We send metadata before getting the true local_gpu_idx from register_memory().
+  // We send metadata before getting the true local_gpu_idx from
+  // register_memory().
   std::memcpy(meta.data() + 6, &idx, sizeof(int));
   return meta;
 }
