@@ -100,7 +100,8 @@ bool fence_default_stream(int device, cudaStream_t stream) {
 }  // namespace
 
 Endpoint::Endpoint(int /*num_cpus*/) {
-  ctrl_port_ = get_env_int("UCCL_TCPX_OOB_BASE_PORT", 28900);
+  ctrl_port_ = get_env_int("UCCL_TCPX_OOB_PORT", 28900);
+  setup_listener_();
 }
 
 Endpoint::~Endpoint() {
@@ -241,11 +242,11 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
 
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
+  if (ctrl_listen_fd_ < 0) return false;
   // Wait until endpoint is intialized to get the correct local_gpu_idx_
   while (!initialized_) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-  if (ctrl_listen_fd_ < 0) setup_listener_();
 
   sockaddr_in cli_addr{};
   socklen_t len = sizeof(cli_addr);
@@ -320,6 +321,7 @@ std::vector<uint8_t> Endpoint::get_unified_metadata() {
   meta[5] = static_cast<uint8_t>(port_ho & 0xFF);
   // We send metadata before getting the true local_gpu_idx from
   // register_memory().
+  // TODO: we can't get correct remote_gpu_idx from metadata now.
   std::memcpy(meta.data() + 6, &idx, sizeof(int));
   return meta;
 }
@@ -351,7 +353,6 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
       local_gpu_idx_ = 0;
     }
     initialized_ = true;
-    ctrl_port_ += local_gpu_idx_;
   }
   mr_id = next_mr_id_.fetch_add(1);
   std::lock_guard<std::mutex> lock(mr_mu_);
