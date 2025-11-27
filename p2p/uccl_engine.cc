@@ -356,8 +356,7 @@ void listener_thread_func(uccl_conn_t* conn) {
         notify_msg_t notify_msg = {};
         strncpy(notify_msg.name, md.data.notify_data.name,
                 sizeof(notify_msg.name) - 1);
-        strncpy(notify_msg.msg, md.data.notify_data.msg,
-                sizeof(notify_msg.msg) - 1);
+        memcpy(notify_msg.msg, md.data.notify_data.msg, sizeof(notify_msg.msg));
         notify_msg_list.push_back(notify_msg);
         break;
       }
