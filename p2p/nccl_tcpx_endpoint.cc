@@ -1,4 +1,5 @@
 #include "nccl_tcpx_endpoint.h"
+#include "util/util.h"
 #include <arpa/inet.h>
 #include <cerrno>
 #include <chrono>
@@ -99,8 +100,6 @@ bool fence_default_stream(int device, cudaStream_t stream) {
 }  // namespace
 
 Endpoint::Endpoint(int /*num_cpus*/) {
-  local_gpu_idx_ =
-      get_env_int("UCCL_NCCL_DEVICE", get_env_int("UCCL_TCPX_LOCAL_DEVICE", 0));
   ctrl_port_ = get_env_int("UCCL_TCPX_OOB_PORT", 28900);
   setup_listener_();
 }
@@ -244,6 +243,11 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
   if (ctrl_listen_fd_ < 0) return false;
+  // Wait until endpoint is intialized to get the correct local_gpu_idx_
+  while (!initialized_) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
   sockaddr_in cli_addr{};
   socklen_t len = sizeof(cli_addr);
   int fd =
@@ -305,6 +309,7 @@ int Endpoint::get_sock_fd(uint64_t conn_id) const {
 }
 
 std::vector<uint8_t> Endpoint::get_unified_metadata() {
+  int idx = 0;
   std::vector<uint8_t> meta(10);
   std::string ip = get_local_ip();
   in_addr ipv4{};
@@ -314,7 +319,10 @@ std::vector<uint8_t> Endpoint::get_unified_metadata() {
   uint16_t port_ho = static_cast<uint16_t>(ctrl_port_);
   meta[4] = static_cast<uint8_t>((port_ho >> 8) & 0xFF);
   meta[5] = static_cast<uint8_t>(port_ho & 0xFF);
-  std::memcpy(meta.data() + 6, &local_gpu_idx_, sizeof(int));
+  // We send metadata before getting the true local_gpu_idx from
+  // register_memory().
+  // TODO: we can't get correct remote_gpu_idx from metadata now.
+  std::memcpy(meta.data() + 6, &idx, sizeof(int));
   return meta;
 }
 
@@ -335,6 +343,17 @@ std::tuple<std::string, uint16_t, int> Endpoint::parse_metadata(
 
 bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   if (!data || size == 0) return false;
+  if (!initialized_) {
+    int idx = uccl::get_dev_idx((void*)data);
+    if (idx != -1) {
+      // Pointer is on device idx
+      local_gpu_idx_ = idx;
+    } else {
+      // Host memory/unknown memory type - fallback to dev 0
+      local_gpu_idx_ = 0;
+    }
+    initialized_ = true;
+  }
   mr_id = next_mr_id_.fetch_add(1);
   std::lock_guard<std::mutex> lock(mr_mu_);
   mr_map_[mr_id] = MrEntry{const_cast<void*>(data), size};
