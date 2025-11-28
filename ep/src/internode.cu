@@ -1150,13 +1150,13 @@ __global__ void __launch_bounds__(
       if (lane_id == 0) {
         /*******************************************************************/
         printf(
-            "DeepEP dispatch NVL forwarder, channel: %d, RDMA: %d, "
+            "[Sender] DeepEP dispatch NVL, channel: %d, RDMA: %d, "
             "src NVL: %d, dst NVL: %d, head: %d, tail: %d\n",
             channel_id, rdma_rank, nvl_rank, target_rank,
             cached_nvl_channel_head, cached_nvl_channel_tail);
+        /*******************************************************************/
         st_release_sys_global(nvl_channel_tail.buffer(),
                               cached_nvl_channel_tail);
-        /*******************************************************************/
       }
     }
     // Retired
@@ -1269,16 +1269,15 @@ __global__ void __launch_bounds__(
         cached_channel_tail_idx = __shfl_sync(
             WARP_MASK, ld_acquire_sys_global(nvl_channel_tail.buffer()), 0);
         if (lane_id == 0) {
-          /*******************************************************************/
-          printf(
-              "DeepEP dispatch NVL receiver check, channel: %d, RDMA: %d, src "
-              "NVL: %d, dst NVL: %d, head: %d, tail: %d, "
-              "num_tokens_to_recv_original: %d, "
-              "num_tokens_to_recv: %d\n",
-              channel_id, rdma_rank, target_rank, nvl_rank,
-              ld_acquire_sys_global(nvl_channel_head.buffer()),
-              ld_acquire_sys_global(nvl_channel_tail.buffer()),
-              num_tokens_to_recv_original, num_tokens_to_recv);
+          /**************************************************************\*****/
+          // printf(
+          //     "[Receiver] DeepEP dispatch NVL, channel: %d, RDMA: %d, "
+          //     "src NVL: %d, dst NVL: %d, head: %d, tail: %d, "
+          //     "num_tokens_to_recv_original: %d, num_tokens_to_recv: %d\n",
+          //     channel_id, rdma_rank, target_rank, nvl_rank,
+          //     ld_acquire_sys_global(nvl_channel_head.buffer()),
+          //     ld_acquire_sys_global(nvl_channel_tail.buffer()),
+          //     num_tokens_to_recv_original, num_tokens_to_recv);
           /*******************************************************************/
         }
         // Timeout check
