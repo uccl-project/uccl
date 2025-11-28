@@ -171,6 +171,8 @@ void FifoProxy::set_peers_meta(std::vector<PeerMeta> const& meta) {
   // Note: we don't pass ring_buffers since we're using FIFO
   Proxy::Config cfg;
   cfg.thread_idx = thread_idx;
+  assert(gpu_buffer_addr_ != 0 && "GPU buffer address is null");
+  assert(total_size_ != 0 && "Total size is 0");
   cfg.gpu_buffer = reinterpret_cast<void*>(gpu_buffer_addr_);
   cfg.total_size = total_size_;
   cfg.rank = rank_;

@@ -224,20 +224,37 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     exit(1);
   }
   uint64_t iova = (uintptr_t)gpu_buf;
-#ifndef EFA
-  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                              IBV_ACCESS_REMOTE_ATOMIC |
-                              IBV_ACCESS_RELAXED_ORDERING);
-#else
-  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                              IBV_ACCESS_RELAXED_ORDERING);
-#endif
+  int flags = 
+  #ifndef EFA
+      IBV_ACCESS_LOCAL_WRITE |
+      IBV_ACCESS_REMOTE_WRITE |
+      IBV_ACCESS_REMOTE_ATOMIC |
+      IBV_ACCESS_RELAXED_ORDERING;
+  #else
+      IBV_ACCESS_LOCAL_WRITE |
+      IBV_ACCESS_REMOTE_WRITE |
+      IBV_ACCESS_RELAXED_ORDERING;
+  #endif
+
+  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova, flags);
+
 
   if (!S.mr) {
-    perror("ibv_reg_mr failed");
-    exit(1);
+      fprintf(stderr,
+          "ibv_reg_mr_iova2 FAILED:\n"
+          "  errno      = %d (%s)\n"
+          "  pd         = %p\n"
+          "  gpu_buf    = %p\n"
+          "  bytes      = %zu\n"
+          "  iova       = 0x%lx\n"
+          "  flags      = 0x%x\n",
+          errno, strerror(errno),
+          (void*)S.pd,
+          gpu_buf,
+          bytes,
+          (unsigned long)iova,
+          flags);
+      exit(1);
   }
 
   if (S.rkey != 0) {
