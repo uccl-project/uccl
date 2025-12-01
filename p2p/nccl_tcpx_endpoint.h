@@ -85,6 +85,7 @@ class Endpoint {
   int local_gpu_idx_ = 0;
   int ctrl_listen_fd_ = -1;
   int ctrl_port_ = 0;
+  bool initialized_{false};
 
   std::atomic<uint64_t> next_conn_id_{1};
   std::atomic<uint64_t> next_mr_id_{1};

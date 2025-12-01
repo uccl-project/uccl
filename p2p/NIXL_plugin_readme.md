@@ -12,7 +12,7 @@ export UCCL_HOME=/path/to/your/uccl
 # Install dependencies
 sudo apt update
 sudo apt install -y build-essential net-tools libelf-dev libibverbs-dev \
-                    libgoogle-glog-dev libgtest-dev libgflags-dev \
+                    libgoogle-glog-dev libgtest-dev libgflags-dev libaio-dev \
                     python3-dev pybind11-dev python3-pip python3-pybind11
 
 cd $UCCL_HOME/thirdparty/nccl
@@ -63,8 +63,12 @@ export NCCL_ALGO=Ring
 export NCCL_PROTO=Simple
 export NCCL_MAX_NCHANNELS=8
 export NCCL_MIN_NCHANNELS=8
-export NCCL_DEBUG=INFO
+export NCCL_DEBUG=WARN # INFO
 export NCCL_DEBUG_SUBSYS=ENV
+
+# Nixl plugin config
+export NIXL_PLUGIN_DIR=$UCCL_HOME/thirdparty/nixl/build/src/plugins/uccl_p2p
+# export NIXL_LOG_LEVEL=debug
 ```
 
 ## Build NIXL + TCPX plugin
@@ -94,6 +98,12 @@ python benchmarks/benchmark_nixl.py --backend uccl_p2p --role server --sizes 671
 
 # Client (node B, set server IP)
 python benchmarks/benchmark_nixl.py --backend uccl_p2p --role client --sizes 67108864 --iters 10 --remote-ip=10.65.66.199 --op-type read
+
+# 8 GPUs Server (node A)
+python benchmarks/benchmark_nixl_8gpu.py --role server
+
+# 8 GPUs Client (node B, set server IP)
+python benchmarks/benchmark_nixl_8gpu.py --role client --server-ip 10.65.66.199
 ```
 
 ## Performance
