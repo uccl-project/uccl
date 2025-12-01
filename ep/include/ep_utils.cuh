@@ -14,11 +14,15 @@
 #define HIP_ATOMIC_LOAD(ptr, order, scope) __builtin_nontemporal_load((ptr))
 #define HIP_ATOMIC_STORE(val, ptr, order, scope) \
   __builtin_nontemporal_store((val), (ptr))
+#define HIP_ATOMIC_ADD(ptr, val, order, scope) \
+  __hip_atomic_fetch_add((ptr), (val), __ATOMIC_RELAXED, (scope))
 #else
 #define HIP_ATOMIC_LOAD(ptr, order, scope) \
   __hip_atomic_load((ptr), (order), (scope))
 #define HIP_ATOMIC_STORE(val, ptr, order, scope) \
   __hip_atomic_store((ptr), (val), (order), (scope))
+#define HIP_ATOMIC_ADD(ptr, val, order, scope) \
+  __hip_atomic_fetch_add((ptr), (val), (order), (scope))
 #endif
 
 // workgroup-level barrier sync used shared memory
@@ -73,6 +77,23 @@ __device__ __forceinline__ void barrier_sync(T* bar_ptr,
     barrier_wait(bar_ptr, barrier_arrive(bar_ptr, num_participants));
   }
   __syncwarp();
+}
+
+template <typename T, int MemoryOrder = __ATOMIC_RELAXED,
+          int MemoryScope = __HIP_MEMORY_SCOPE_AGENT>
+__device__ __forceinline__ void grid_sync(T* bar_ptr, int num_participants) {
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    __threadfence();
+    __hip_atomic_fetch_add(bar_ptr, 1, MemoryOrder, MemoryScope);
+    while (__hip_atomic_load(bar_ptr, MemoryOrder, MemoryScope) <
+           num_participants)
+      __builtin_amdgcn_s_sleep(1);
+
+    asm volatile("s_wakeup");
+  }
+
+  __syncthreads();
 }
 }  // namespace amd
 #endif
@@ -604,8 +625,8 @@ __device__ __forceinline__ int atomic_add_release_global(int const* ptr,
                                                          int value) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __hip_atomic_fetch_add(const_cast<int*>(ptr), value, __ATOMIC_RELEASE,
-                               __HIP_MEMORY_SCOPE_AGENT);
+  ret = HIP_ATOMIC_ADD(const_cast<int*>(ptr), value, __ATOMIC_RELEASE,
+                       __HIP_MEMORY_SCOPE_AGENT);
 #else
   asm volatile("atom.add.release.gpu.global.s32 %0, [%1], %2;"
                : "=r"(ret)
@@ -720,11 +741,7 @@ __device__ __forceinline__ void trap() {
 __device__ __forceinline__ int ld_volatile_global(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  asm volatile(
-      "global_load_dword %0 %1 off sc0 sc1\n "
-      "s_waitcnt vmcnt(0)"
-      : "=v"(ret)
-      : "v"(ptr));
+  ret = __hip_atomic_load(ptr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.volatile.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif
@@ -734,11 +751,7 @@ __device__ __forceinline__ int ld_volatile_global(int const* ptr) {
 __device__ __forceinline__ float ld_volatile_global(float const* ptr) {
   float ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  asm volatile(
-      "global_load_dword %0 %1 off sc0 sc1\n "
-      "s_waitcnt vmcnt(0)"
-      : "=v"(ret)
-      : "v"(ptr));
+  ret = __hip_atomic_load(ptr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.volatile.global.f32 %0, [%1];" : "=f"(ret) : "l"(ptr));
 #endif
@@ -748,11 +761,7 @@ __device__ __forceinline__ float ld_volatile_global(float const* ptr) {
 __device__ __forceinline__ int64_t ld_volatile_global(int64_t const* ptr) {
   int64_t ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  asm volatile(
-      "global_load_dwordx2 %0 %1 off sc0 sc1\n "
-      "s_waitcnt vmcnt(0)"
-      : "=v"(ret)
-      : "v"(ptr));
+  ret = __hip_atomic_load(ptr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.volatile.global.s64 %0, [%1];" : "=l"(ret) : "l"(ptr));
 #endif
@@ -762,11 +771,7 @@ __device__ __forceinline__ int64_t ld_volatile_global(int64_t const* ptr) {
 __device__ __forceinline__ int64_t ld_volatile_global(uint64_t const* ptr) {
   int64_t ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  asm volatile(
-      "global_load_dwordx2 %0 %1 off sc0 sc1\n "
-      "s_waitcnt vmcnt(0)"
-      : "=v"(ret)
-      : "v"(ptr));
+  ret = __hip_atomic_load(ptr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.volatile.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));
 #endif

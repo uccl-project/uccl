@@ -88,9 +88,14 @@ class Buffer:
             device_index = int(os.environ["LOCAL_RANK"])
         else:
             device_index = torch.cuda.current_device()
-        self.scratch = torch.zeros(
-            num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
-        )
+
+        if torch.version.cuda:
+            self.scratch = torch.zeros(
+                num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
+            )
+        else:
+            self.scratch = ep.get_rdma_buffer(num_rdma_bytes, device_index)
+
         rdma_buffer_ptr = self.scratch.data_ptr()
         self.proxies, self.workers = initialize_uccl(
             rdma_buffer_ptr,
