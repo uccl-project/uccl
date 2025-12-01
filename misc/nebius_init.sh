@@ -30,12 +30,15 @@ runcmd:
   - [sudo, "-u", "ubuntu", bash, -lc, "printf '%s\n' 'export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/nvshmem/12:$LD_LIBRARY_PATH' >> /home/ubuntu/.bashrc"]
   - [sudo, "-u", "ubuntu", bash, -lc, "printf '%s\n' 'export PATH=/usr/bin/nvshmem_12:$PATH' >> /home/ubuntu/.bashrc"]
   - [bash, -lc, "export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/nvshmem/12:$LD_LIBRARY_PATH && export PATH=/usr/bin/nvshmem_12:$PATH && nvshmem-info -a || echo 'WARNING: nvshmem error'"]
+  - [sudo, "-u", "ubuntu", bash, -lc, "pip uninstall nvidia-nvshmem-cu12 && rm /home/ubuntu/miniconda3/lib/python3.13/site-packages/nvidia/nvshmem/"]
 
   # Build and install UCCL-EP
   - [sudo, "-u", "ubuntu", bash, -lc, "cd /home/ubuntu && git clone https://github.com/uccl-project/uccl.git --recursive"]
   - [sudo, "-u", "ubuntu", bash, -lc, "printf '%s\n' 'export UCCL_HOME=$HOME/uccl' >> /home/ubuntu/.bashrc"]
   - [sudo, "-u", "ubuntu", bash, -lc, "export PATH=$HOME/miniconda3/bin:$PATH && cd $HOME/uccl/ep && ./install_deps.sh && make -j install"]
   - [sudo, "-u", "ubuntu", bash, -lc, "export PATH=$HOME/miniconda3/bin:$PATH && python -c 'import torch, uccl.ep' || echo 'WARNING: torch/uccl.ep import test failed'"]
+  - [sudo, "-u", "ubuntu", bash, -lc, "cd $HOME/uccl/thirdparty/DeepEP && python setup.py install"]
+  - [sudo, "-u", "ubuntu", bash, -lc, "export PATH=$HOME/miniconda3/bin:$PATH && python -c 'import deep_ep' || echo 'WARNING: deep_ep import test failed'"]
 
   # Install GDRCopy debs (system-wide, as root)
   - [bash, -lc, "cd /tmp && wget https://developer.download.nvidia.com/compute/redist/gdrcopy/CUDA%2012.8/ubuntu24_04/x64/gdrcopy-tests_2.5.1-1_amd64.Ubuntu24_04+cuda12.8.deb"]
