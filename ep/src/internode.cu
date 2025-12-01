@@ -273,7 +273,8 @@ __global__ void notify_dispatch(
             i)[NUM_MAX_NVL_PEERS + num_rdma_experts];
         recv_rdma_rank_prefix_sum[i] = sum;
       }
-      while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1);
+      while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1)
+        ;
       *moe_recv_rdma_counter_mapped = sum;
     }
 
@@ -302,7 +303,8 @@ __global__ void notify_dispatch(
         sum += nvl_recv_num_tokens_per_rank.buffer(src_nvl_rank)[src_rdma_rank];
         recv_gbl_rank_prefix_sum[i] = sum;
       }
-      while (ld_volatile_global(moe_recv_counter_mapped) != -1);
+      while (ld_volatile_global(moe_recv_counter_mapped) != -1)
+        ;
       *moe_recv_counter_mapped = sum;
     }
     if (thread_id < num_nvl_experts) {
@@ -312,7 +314,8 @@ __global__ void notify_dispatch(
         sum += nvl_recv_num_tokens_per_expert.buffer(i)[thread_id];
       sum = (sum + expert_alignment - 1) / expert_alignment * expert_alignment;
       while (ld_volatile_global(moe_recv_expert_counter_mapped + thread_id) !=
-             -1);
+             -1)
+        ;
       moe_recv_expert_counter_mapped[thread_id] = sum;
     }
 
@@ -580,9 +583,9 @@ __global__ void __launch_bounds__(
   // NOTES: `rdma_send_channel_tail` means the latest released tail
   // NOTES: `rdma_send_channel_window` means the ongoing 32 transactions' status
   // __shared__ int rdma_send_channel_lock[kNumRDMARanks];
-  __shared__ volatile int rdma_send_next_token_idx;
-  __shared__ volatile int rdma_send_channel_tail[kNumRDMARanks];
-  __shared__ volatile int rdma_send_channel_next_tail[kNumRDMARanks];
+  __shared__ int volatile rdma_send_next_token_idx;
+  __shared__ int volatile rdma_send_channel_tail[kNumRDMARanks];
+  __shared__ int volatile rdma_send_channel_next_tail[kNumRDMARanks];
   __shared__ uint32_t rdma_send_channel_window[kNumRDMARanks];
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
@@ -710,7 +713,8 @@ __global__ void __launch_bounds__(
       }
 
       // Acquire sequential lock
-      while (lane_id == 0 and rdma_send_next_token_idx != token_idx);
+      while (lane_id == 0 and rdma_send_next_token_idx != token_idx)
+        ;
       __syncwarp();
 
       // Acquire next tail
@@ -723,12 +727,6 @@ __global__ void __launch_bounds__(
                num_max_rdma_chunked_recv_tokens) {
           cached_rdma_channel_head = static_cast<int>(
               ld_acquire_sys_global(rdma_channel_head.buffer(lane_id)));
-
-          // printf(
-          //     "DeepEP dispatch RDMA sender timeout, channel: %d, RDMA: %d, "
-          //     "nvl: %d, dst RDMA lane: %d, head: %d, tail: %d\n",
-          //     channel_id, rdma_rank, nvl_rank, lane_id,
-          //     cached_rdma_channel_head, rdma_tail_idx);
 
           // Timeout check
           if (clock64() - start_time >= NUM_TIMEOUT_CYCLES) {
@@ -836,7 +834,8 @@ __global__ void __launch_bounds__(
 
     // Epilogue
     // Acquire sequential lock
-    while (lane_id == 0 and rdma_send_next_token_idx != token_idx);
+    while (lane_id == 0 and rdma_send_next_token_idx != token_idx)
+      ;
     __syncwarp();
 
     // Update last token tail
@@ -1152,17 +1151,9 @@ __global__ void __launch_bounds__(
 
       // Move tail index
       __syncwarp();
-      if (lane_id == 0) {
-        /*******************************************************************/
-        // printf(
-        //     "[Sender] DeepEP dispatch NVL, channel: %d, RDMA: %d, "
-        //     "src NVL: %d, dst NVL: %d, head: %d, tail: %d\n",
-        //     channel_id, rdma_rank, nvl_rank, target_rank,
-        //     cached_nvl_channel_head, cached_nvl_channel_tail);
-        /*******************************************************************/
+      if (lane_id == 0)
         st_release_sys_global(nvl_channel_tail.buffer(),
                               cached_nvl_channel_tail);
-      }
     }
     // Retired
     __syncwarp();
@@ -1273,18 +1264,6 @@ __global__ void __launch_bounds__(
 
         cached_channel_tail_idx = __shfl_sync(
             WARP_MASK, ld_acquire_sys_global(nvl_channel_tail.buffer()), 0);
-        if (lane_id == 0) {
-          /**************************************************************\*****/
-          // printf(
-          //     "[Receiver] DeepEP dispatch NVL, channel: %d, RDMA: %d, "
-          //     "src NVL: %d, dst NVL: %d, head: %d, tail: %d, "
-          //     "num_tokens_to_recv_original: %d, num_tokens_to_recv: %d\n",
-          //     channel_id, rdma_rank, target_rank, nvl_rank,
-          //     ld_acquire_sys_global(nvl_channel_head.buffer()),
-          //     ld_acquire_sys_global(nvl_channel_tail.buffer()),
-          //     num_tokens_to_recv_original, num_tokens_to_recv);
-          /*******************************************************************/
-        }
         // Timeout check
         if (lane_id == 0 and clock64() - start_time > NUM_TIMEOUT_CYCLES) {
           printf(
@@ -1914,7 +1893,7 @@ template <
     int kNumWarpsPerForwarder = (kNumCombineForwarderWarps / kNumRDMARanks > 0)
                                     ? kNumCombineForwarderWarps / kNumRDMARanks
                                     : 1,
-    int kNumForwarders = kNumRDMARanks * kNumWarpsPerForwarder,
+    int kNumForwarders = kNumRDMARanks* kNumWarpsPerForwarder,
     int kNumRDMAReceivers = kNumForwarders - NUM_MAX_NVL_PEERS>
 __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
     combine(int4* combined_x, float* combined_topk_weights,
@@ -2083,7 +2062,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
               channel_id, rdma_rank, nvl_rank, dst_nvl_rank, lane_id,
               ld_volatile_global(nvl_channel_head.buffer() + lane_id),
               cached_channel_tail_idx, token_start_idx, token_end_idx);
-          // trap();
+          trap();
         }
       }
 
@@ -2335,7 +2314,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                 channel_id, rdma_rank, nvl_rank, dst_rdma_rank,
                 ld_acquire_sys_global(rdma_channel_head.buffer(dst_rdma_rank)),
                 token_start_idx, num_chunked_tokens);
-            // trap();
+            trap();
           }
         }
         sync_large_warp();
@@ -2372,7 +2351,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                   channel_id, rdma_rank, nvl_rank, lane_id, dst_rdma_rank,
                   cached_nvl_channel_tail_idx, token_idx, num_tokens_to_combine,
                   sub_warp_id, kNumWarpsPerForwarder, expected_head);
-              // trap();
+              trap();
             }
           }
 
@@ -2516,7 +2495,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                 "nvl: %d, src RDMA: %d, tail: %d, waiting: %ld, expect: %d\n",
                 channel_id, rdma_rank, nvl_rank, lane_id,
                 cached_channel_tail_idx, token_idx, expected_head);
-            // trap();
+            trap();
           }
         }
         __syncwarp();
@@ -2692,8 +2671,6 @@ void combine(cudaDataType_t type, void* combined_x,
   EP_HOST_ASSERT(num_max_rdma_chunked_send_tokens >= num_warps_per_forwarder);
   EP_HOST_ASSERT(type == CUDA_R_16BF);
 
-  printf("combine num_sms = %d, num_threads = %d", num_channels * 2,
-         (num_forwarder_warps + 1) * WARP_SIZE);
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   EP_HOST_ASSERT((num_forwarder_warps + 1) * WARP_SIZE <= MAX_NTHREADS);
 #endif
