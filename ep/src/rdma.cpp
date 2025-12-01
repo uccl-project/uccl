@@ -920,10 +920,6 @@ static void post_rdma_async_batched_normal_mode(
                     .GetImmData();
             wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
             wrs[j].imm_data = htonl(imm);
-            printf(
-                "Posting AtomicsImm with imm=0x%08x, atomic_offset: %d, "
-                "atomic_val: %d, dst_rank: %d\n",
-                imm, cmd.atomic_offset / sizeof(int), cmd.atomic_val, dst_rank);
 
             AtomicsImm aimm(imm);
             assert(aimm.GetValue() == cmd.atomic_val);
@@ -961,8 +957,6 @@ static void post_rdma_async_batched_normal_mode(
         {
           auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
               batch_tail_wr, std::move(ring_wrids));
-          printf("pushed tail wr_id %lu into map (map=%p)\n", batch_tail_wr,
-                 (void*)&S.wr_id_to_wr_ids);
           if (!inserted) {
             fprintf(stderr,
                     "thread_idx: %d, Error: tail wr_id %lu already exists "
@@ -1435,8 +1429,6 @@ void remote_process_completions_normal_mode(
   std::unordered_map<uint32_t, std::vector<ibv_recv_wr>> per_tag;
   per_tag.reserve(8);
 
-  printf("Remote thread %d: processing %d completions\n", idx, ne);
-
   for (int i = 0; i < ne; ++i) {
     ibv_wc const& cqe = wc[i];
     if (cqe.status != IBV_WC_SUCCESS) {
@@ -1459,11 +1451,8 @@ void remote_process_completions_normal_mode(
       if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
 
       if (!aimm.IsReorderable()) {
-        printf("Applying non-reorderable atomic at index %zu: +%d\n", index,
-               value);
         addr32->fetch_add(value, std::memory_order_release);
       } else {
-        printf("Applying reorderable atomic at index %zu: +%d\n", index, value);
         struct SeqBuf {
           uint8_t expected = 0;       // next seq expected
           uint16_t present_mask = 0;  // bitmask of buffered seqs
@@ -1483,9 +1472,6 @@ void remote_process_completions_normal_mode(
           std::abort();
         }
         if (seq == sb.expected) {
-          // if (my_rank % MAX_NUM_GPUS == 0)
-          //   printf("seq: %u in order, applying immediately\n", seq);
-          // Apply immediately
           commit(value);
           sb.expected = (sb.expected + 1) % kReorderingBufferSize;
 
@@ -1504,10 +1490,6 @@ void remote_process_completions_normal_mode(
             fprintf(stderr, "Error: seq %u out of range\n", seq);
             std::abort();
           }
-          // if (my_rank % MAX_NUM_GPUS == 0)
-          //   printf("seq: %u out of order (expected %u), buffering\n", seq,
-          //         sb.expected);
-
           if (sb.present_mask & (1u << seq)) {
             fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
             std::abort();
@@ -2144,11 +2126,6 @@ static void post_atomic_operations_normal_mode(
         wr[t].wr.rdma.remote_addr = ctx->remote_addr;
         wr[t].wr.rdma.rkey = ctx->remote_rkey;
         wr[t].next = (t + 1 < k) ? &wr[t + 1] : nullptr;
-
-        printf(
-            "Posting AtomicsImm2 with imm=0x%08x, atomic_offset: %d, "
-            "atomic_val: %d, dst_rank = %d\n",
-            imm, off16 / sizeof(int), v, dst_rank);
       }
 
       ibv_send_wr* bad = nullptr;

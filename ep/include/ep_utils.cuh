@@ -5,7 +5,6 @@
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
 #include "amd_nanosleep.cuh"
-#define __syncwarp() __builtin_amdgcn_wave_barrier()
 #ifndef clock64
 #define clock64 wall_clock64
 #endif
@@ -680,7 +679,7 @@ __device__ __forceinline__ void st_release_sys_global(int const* ptr, int val) {
 
 __device__ __forceinline__ void st_release_cta(int const* ptr, int val) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  HIP_ATOMIC_STORE(val, const_cast<int*>(ptr), __ATOMIC_RELEASE,
+  __hip_atomic_store(const_cast<int*>(ptr), val, __ATOMIC_RELEASE,
                    __HIP_MEMORY_SCOPE_WORKGROUP);
 #else
   asm volatile("st.release.cta.s32 [%0], %1;" ::"l"(ptr), "r"(val) : "memory");
@@ -925,7 +924,7 @@ __device__ __forceinline__ void st_relaxed_sys_global(int const* ptr, int val) {
 __device__ __forceinline__ int ld_acquire_cta(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = HIP_ATOMIC_LOAD(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_WORKGROUP);
+  ret = __hip_atomic_load(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_WORKGROUP);
 #else
   asm volatile("ld.acquire.cta.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif
@@ -935,8 +934,14 @@ __device__ __forceinline__ int ld_acquire_cta(int const* ptr) {
 __forceinline__ __device__ void acquire_lock(int* mutex) {
   // To make later memory operations valid, we must use `acquire` for memory
   // semantics
-  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0)
-    ;
+  auto start_time = clock64();
+  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0);
+  //{
+  //   if (clock64() - start_time > NUM_TIMEOUT_CYCLES) {
+  //     printf("DeepEP acquire lock timeout check failed: mutex = %d\n",
+  //     *mutex); trap();
+  //   }
+  // }
 }
 
 __forceinline__ __device__ void release_lock(int* mutex) {

@@ -172,11 +172,14 @@ if __name__ == "__main__":
         cxx_flags.append("-DDISABLE_SM90_FEATURES")
         nvcc_flags.append("-DDISABLE_SM90_FEATURES")
 
-        cxx_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
-        nvcc_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
+        # cxx_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
+        # nvcc_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
 
         cxx_flags.append("-DENABLE_FAST_DEBUG")
         nvcc_flags.append("-DENABLE_FAST_DEBUG")
+        
+        cxx_flags.append("-DUSE_GRACE_HOPPER")
+        nvcc_flags.append("-DUSE_GRACE_HOPPER")
 
         # Get device architecture (already set at top of file)
         device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", "gfx942")
