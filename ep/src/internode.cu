@@ -126,14 +126,20 @@ __global__ void notify_dispatch(
     // waiting for all previous inflight wrs to complete,
     // in case of rewriting cleared rdma_buffer
     if (thread_id == WARP_SIZE) {
+      long long start_quiet = clock64();
       uccl::nvshmemi_ibgda_quiet(d2h_channel_addrs, num_d2h_channel_addrs,
                                  nvl_rank);
+      long long end_quiet = clock64();
+      if (rank == 0) printf("Initial Quiet: %lld cycles\n", end_quiet - start_quiet);
     }
     __syncthreads();
 
     if (thread_id == WARP_SIZE) {
+      long long start = clock64();
       uccl::nvshmem_sync_with_same_gpu_idx(d2h_channel_addrs,
                                            num_d2h_channel_addrs, nvl_rank);
+      long long end = clock64();
+      if (rank == 0) printf("Barrier 1: %lld cycles\n", end - start);
     }
     barrier_block<NUM_MAX_NVL_PEERS, true>(barrier_signal_ptrs, nvl_rank);
 
@@ -188,6 +194,7 @@ __global__ void notify_dispatch(
     // Issue send
     // TODO: more light fence or barrier or signaling
     // TODO: overlap EP barrier and NVL cleaning
+    long long start_rdma = clock64();
     for (int i = warp_id; i < kNumRDMARanks; i += num_warps) {
       if (i != rdma_rank) {
         uint64_t dst_ptr = reinterpret_cast<uint64_t>(
@@ -217,11 +224,18 @@ __global__ void notify_dispatch(
                                  nvl_rank);
     }
     __syncthreads();
+    if (rank == 0 && thread_id == 0) {
+        long long end_rdma = clock64();
+        printf("RDMA Put + Quiet: %lld cycles\n", end_rdma - start_rdma);
+    }
 
     // Barrier
     if (thread_id == 0) {
+      long long start = clock64();
       uccl::nvshmem_sync_with_same_gpu_idx(d2h_channel_addrs,
                                            num_d2h_channel_addrs, nvl_rank);
+      long long end = clock64();
+      if (rank == 0) printf("Barrier 2: %lld cycles\n", end - start);
     }
     __syncthreads();
 
@@ -320,12 +334,17 @@ __global__ void notify_dispatch(
     }
 
     // Finally barrier
-    if (thread_id == WARP_SIZE)
+    if (thread_id == WARP_SIZE) {
+      long long start = clock64();
       uccl::nvshmem_sync_with_same_gpu_idx(d2h_channel_addrs,
                                            num_d2h_channel_addrs, nvl_rank);
+      long long end = clock64();
+      if (rank == 0) printf("Barrier 3: %lld cycles\n", end - start);
+    }
     barrier_block<NUM_MAX_NVL_PEERS>(barrier_signal_ptrs, nvl_rank);
   } else {
     // Calculate meta data
+    long long start_calc = clock64();
     int dst_rdma_rank = sm_id - 1;
     for (int channel_id = warp_id; channel_id < num_channels;
          channel_id += num_warps) {
@@ -371,6 +390,8 @@ __global__ void notify_dispatch(
     // Calculate prefix sum
     __syncthreads();
     if (thread_id == 0) {
+      long long end_calc = clock64();
+      // if (sm_id == 1) printf("Calc meta: %lld cycles\n", end_calc - start_calc);
       auto prefix_row =
           rdma_channel_prefix_matrix + dst_rdma_rank * num_channels;
 #pragma unroll
@@ -1462,15 +1483,23 @@ __global__ void cached_notify(
 
   // Using two SMs, which clean the RDMA/NVL buffer respectively
   if (sm_id == 0) {
-    if (thread_id == WARP_SIZE)
+    if (thread_id == WARP_SIZE) {
+      long long start_quiet = clock64();
       uccl::nvshmemi_ibgda_quiet(d2h_channel_addrs, num_d2h_channel_addrs,
                                  nvl_rank, 3);
+      long long end_quiet = clock64();
+      if (rank == 0) printf("Cached Quiet: %lld cycles\n", end_quiet - start_quiet);
+    }
     __syncthreads();
 
     // Barrier for RDMA
-    if (thread_id == WARP_SIZE)
+    if (thread_id == WARP_SIZE) {
+      long long start = clock64();
       uccl::nvshmem_sync_with_same_gpu_idx(d2h_channel_addrs,
                                            num_d2h_channel_addrs, nvl_rank, 3);
+      long long end = clock64();
+      if (rank == 0) printf("Cached Barrier 1: %lld cycles\n", end - start);
+    }
 
     // Barrier for NVL
     barrier_block<NUM_MAX_NVL_PEERS, true>(barrier_signal_ptrs, nvl_rank);
@@ -1506,9 +1535,13 @@ __global__ void cached_notify(
     __syncthreads();
 
     // Barrier again
-    if (thread_id == WARP_SIZE)
+    if (thread_id == WARP_SIZE) {
+      long long start = clock64();
       uccl::nvshmem_sync_with_same_gpu_idx(d2h_channel_addrs,
                                            num_d2h_channel_addrs, nvl_rank);
+      long long end = clock64();
+      if (rank == 0) printf("Cached Barrier 2: %lld cycles\n", end - start);
+    }
 
     barrier_block<NUM_MAX_NVL_PEERS>(barrier_signal_ptrs, nvl_rank);
   } else if (sm_id == 1) {

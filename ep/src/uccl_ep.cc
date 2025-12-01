@@ -584,6 +584,7 @@ class Buffer {
       *moe_recv_counter = -1, *moe_recv_rdma_counter = -1;
       for (int i = 0; i < num_local_experts; ++i)
         moe_recv_expert_counter[i] = -1;
+      auto start_notify = std::chrono::high_resolution_clock::now();
       uccl::internode::notify_dispatch(
           num_tokens_per_rank->data_ptr<int>(), moe_recv_counter_mapped,
           num_ranks, num_tokens_per_rdma_rank->data_ptr<int>(),
@@ -602,6 +603,10 @@ class Buffer {
                                            num_ranks),
           num_nvl_bytes, low_latency_mode, d_handles, num_d2h_channel_addrs,
           atomic_buffer_ptr);
+      auto end_notify = std::chrono::high_resolution_clock::now();
+      if (rank == 0) {
+          printf("notify_dispatch took %ld us\n", std::chrono::duration_cast<std::chrono::microseconds>(end_notify - start_notify).count());
+      }
 
       // Synchronize total received tokens and tokens per expert
       auto start_time = std::chrono::high_resolution_clock::now();
@@ -630,6 +635,10 @@ class Buffer {
                    moe_recv_expert_counter[i]);
           throw std::runtime_error("DeepEP error: timeout (dispatch CPU)");
         }
+      }
+      auto end_time = std::chrono::high_resolution_clock::now();
+      if (rank == 0) {
+          printf("CPU sync (notify wait) took %ld us\n", std::chrono::duration_cast<std::chrono::microseconds>(end_time - start_time).count());
       }
       num_recv_tokens_per_expert_list = std::vector<int>(
           moe_recv_expert_counter, moe_recv_expert_counter + num_local_experts);
@@ -1414,8 +1423,13 @@ class Buffer {
                    x.scalar_type() == torch::kBFloat16);
     EP_HOST_ASSERT(x.size(1) % sizeof(int4) == 0 and x.size(1) % 128 == 0);
     EP_HOST_ASSERT(topk_idx.dim() == 2 and topk_idx.is_contiguous());
-    EP_HOST_ASSERT(x.size(0) == topk_idx.size(0) and
-                   x.size(0) <= num_max_dispatch_tokens_per_rank);
+    if (x.size(0) != topk_idx.size(0) || x.size(0) > num_max_dispatch_tokens_per_rank) {
+      std::string msg = "x.size(0)=" + std::to_string(x.size(0)) + 
+                        ", topk_idx.size(0)=" + std::to_string(topk_idx.size(0)) + 
+                        ", num_max_dispatch_tokens_per_rank=" + std::to_string(num_max_dispatch_tokens_per_rank) +
+                        ". Condition: x.size(0) == topk_idx.size(0) and x.size(0) <= num_max_dispatch_tokens_per_rank";
+      throw EPException("Assertion", __FILE__, __LINE__, msg);
+    }
     EP_HOST_ASSERT(topk_idx.scalar_type() == torch::kInt64);
     EP_HOST_ASSERT(num_experts % num_ranks == 0);
 

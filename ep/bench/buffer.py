@@ -271,6 +271,12 @@ class Buffer:
             event: the event after executing the kernel (valid only if `async_finish` is set).
             hook: the receiving hook function (valid only if `return_recv_hook` is set).
         """
+        print(f"DEBUG: x.size(0)={x.size(0)}, topk_idx.size(0)={topk_idx.size(0)}, num_max_dispatch_tokens_per_rank={num_max_dispatch_tokens_per_rank}", flush=True)
+        if x.size(0) > num_max_dispatch_tokens_per_rank:
+            raise RuntimeError(
+                f"x.size(0)={x.size(0)} > num_max_dispatch_tokens_per_rank={num_max_dispatch_tokens_per_rank}"
+            )
+
         for proxy in self.proxies:
             proxy.calculate_and_set_dispatch_recv_data_offset(
                 num_tokens=x.shape[0],

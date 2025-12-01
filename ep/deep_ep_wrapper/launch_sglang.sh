@@ -5,6 +5,9 @@ set -e
 # Configuration
 # ============================
 
+# python setup.py install
+# pip install ../../wheelhouse-cuda/uccl-0.0.1.post4-py3-none-any.whl
+
 # Local path for DeepEP config
 DEEPEP_CFG="$(pwd)/deepep_config.json"
 
@@ -13,16 +16,16 @@ cat > "$DEEPEP_CFG" <<'EOF'
 {
   "normal_dispatch": {
     "num_sms": 24,
-    "num_max_nvl_chunked_send_tokens": 16,
+    "num_max_nvl_chunked_send_tokens": 40,
     "num_max_nvl_chunked_recv_tokens": 512,
-    "num_max_rdma_chunked_send_tokens": 16,
+    "num_max_rdma_chunked_send_tokens": 20,
     "num_max_rdma_chunked_recv_tokens": 512
   },
   "normal_combine": {
     "num_sms": 24,
-    "num_max_nvl_chunked_send_tokens": 16,
+    "num_max_nvl_chunked_send_tokens": 7,
     "num_max_nvl_chunked_recv_tokens": 512,
-    "num_max_rdma_chunked_send_tokens": 16,
+    "num_max_rdma_chunked_send_tokens": 32,
     "num_max_rdma_chunked_recv_tokens": 512
   }
 }
@@ -42,7 +45,7 @@ export SGLANG_ENABLE_JIT_DEEPGEMM=1
 MODEL_PATH="deepseek-ai/DeepSeek-R1-0528"
 DIST_ADDR="172.31.36.62:5000"   # Node 0 master
 NODE_RANK=$1
-NNODES=4
+NNODES=2
 
 # ============================
 # Launch
@@ -54,25 +57,23 @@ echo "DeepEP config: $DEEPEP_CFG"
 
 python -m sglang.launch_server \
   --model-path "$MODEL_PATH" \
-  --tp-size 32 \
-  --dp-size 32 \
-  --ep-size 32 \
+  --tp-size 16 \
+  --dp-size 16 \
+  --ep-size 16 \
   --nnodes "$NNODES" \
   --node-rank "$NODE_RANK" \
   --dist-init-addr "$DIST_ADDR" \
   --trust-remote-code \
   --mem-fraction-static 0.85 \
   --attention-backend flashinfer \
-  --enable-eplb \
-  --eplb-algorithm deepseek \
-  --ep-num-redundant-experts 0 \
+  --ep-num-redundant-experts 32 \
   --ep-dispatch-algorithm dynamic \
   --enable-dp-attention \
   --enable-dp-lm-head \
-  --page-size 256 \
   --moe-dense-tp-size 1 \
-  --chunked-prefill-size 32768 \
-  --cuda-graph-bs 256 \
   --moe-a2a-backend deepep \
   --deepep-mode normal \
   --deepep-config "$DEEPEP_CFG" \
+  --enable-eplb \
+  --eplb-algorithm deepseek \
+  --chunked-prefill-size 65536 \
