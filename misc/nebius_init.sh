@@ -19,19 +19,8 @@ runcmd:
   - [sudo, "-u", "ubuntu", bash, -lc, "cd /home/ubuntu && bash Miniconda3-latest-Linux-x86_64.sh -b -p /home/ubuntu/miniconda3"]
   - [sudo, "-u", "ubuntu", bash, -lc, "printf '%s\n' 'export PATH=$HOME/miniconda3/bin:$PATH' >> /home/ubuntu/.bashrc"]
   - [sudo, "-u", "ubuntu", bash, -lc, "export PATH=$HOME/miniconda3/bin:$PATH && $HOME/miniconda3/bin/conda init bash"]
-  - [sudo, "-u", "ubuntu", bash, -lc, "export PATH=$HOME/miniconda3/bin:$PATH && pip install --upgrade pip && pip install paramiko pybind11"]
+  - [sudo, "-u", "ubuntu", bash, -lc, "export PATH=$HOME/miniconda3/bin:$PATH && pip install --upgrade pip && pip install paramiko pybind11 nvidia-nvshmem-cu12 ninja -y"]
   - [sudo, "-u", "ubuntu", bash, -lc, "export PATH=$HOME/miniconda3/bin:$PATH && conda install -y -c conda-forge 'libstdcxx-ng>=12' 'libgcc-ng>=12'"]
-  - [sudo, "-u", "ubuntu", bash, -lc, "export PATH=$HOME/miniconda3/bin:$PATH && pip uninstall nvidia-nvshmem-cu12 -y"]
-  - [sudo, "-u", "ubuntu", bash, -lc, "rm -r $HOME/miniconda3/lib/python3.13/site-packages/nvidia/nvshmem/"]
-
-  # Install NVSHMEM from CUDA apt repo
-  - [bash, -lc, "cd /tmp && wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb"]
-  - [bash, -lc, "cd /tmp && dpkg -i cuda-keyring_1.1-1_all.deb"]
-  - [bash, -lc, "DEBIAN_FRONTEND=noninteractive apt-get update"]
-  - [bash, -lc, "DEBIAN_FRONTEND=noninteractive apt-get -y install nvshmem nvshmem-cuda-12"]
-  - [sudo, "-u", "ubuntu", bash, -lc, "printf '%s\n' 'export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/nvshmem/12:$LD_LIBRARY_PATH' >> /home/ubuntu/.bashrc"]
-  - [sudo, "-u", "ubuntu", bash, -lc, "printf '%s\n' 'export PATH=/usr/bin/nvshmem_12:$PATH' >> /home/ubuntu/.bashrc"]
-  - [bash, -lc, "export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/nvshmem/12:$LD_LIBRARY_PATH && export PATH=/usr/bin/nvshmem_12:$PATH && nvshmem-info -a || echo 'WARNING: nvshmem error'"]
 
   # Build and install UCCL-EP
   - [sudo, "-u", "ubuntu", bash, -lc, "cd /home/ubuntu && git clone https://github.com/uccl-project/uccl.git --recursive"]

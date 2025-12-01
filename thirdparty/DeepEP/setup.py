@@ -68,7 +68,7 @@ if __name__ == '__main__':
         os.environ['TORCH_CUDA_ARCH_LIST'] = os.getenv('TORCH_CUDA_ARCH_LIST', '9.0')
 
         # CUDA 12 flags
-        nvcc_flags.extend(['--ptxas-options=--register-usage-level=10'])
+        nvcc_flags.extend(['-rdc=true', '--ptxas-options=--register-usage-level=10'])
 
     # Disable LD/ST tricks, as some CUDA version does not support `.L1::no_allocate`
     if os.environ['TORCH_CUDA_ARCH_LIST'].strip() != '9.0':
