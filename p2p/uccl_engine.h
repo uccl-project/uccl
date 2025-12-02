@@ -17,9 +17,9 @@ typedef struct uccl_mr uccl_mr_t;
 
 // UCCL operation types
 enum uccl_msg_type {
-  UCCL_READ = 0,
+  UCCL_RW_RC = 0, // Used by both READ/WRITE in RCMODE
   UCCL_WRITE = 1,
-  UCCL_VECTOR_READ = 2,
+  UCCL_VECTOR_RW_RC = 2, // Used by both READ/WRITE in RCMODE
   UCCL_VECTOR_WRITE = 3,
   UCCL_FIFO = 4,
   UCCL_NOTIFY = 5
@@ -145,6 +145,19 @@ int uccl_engine_get_fifo_item(uccl_conn_t* conn, int id, void* fifo_item);
 int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
                       size_t size, uint64_t* transfer_id);
 
+/**
+ * Send data with RC mode (Non blocking).
+ * @param conn          Connection handle.
+ * @param mr            Memory region handle.
+ * @param data          Pointer to the data to send.
+ * @param size          Size of the data.
+ * @param slot_item_ptr Pointer to the slot item.
+ * @param transfer_id   Pointer to store the transfer ID.
+ * @return              0 on success, non-zero on failure.
+ */
+int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+                         size_t size, void* slot_item_ptr,
+                         uint64_t* transfer_id);
 /**
  * Receive data (blocking).
  * @param conn          Connection handle.
