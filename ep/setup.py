@@ -182,7 +182,7 @@ if __name__ == "__main__":
             arch_list = list(matches)
 
         else:
-            gpu_archs = gpu_archs.split(",")
+            arch_list = gpu_archs.split(",")
 
         for arch in arch_list:
             nvcc_flags.append(f"--offload-arch={arch.lower()}")

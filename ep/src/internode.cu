@@ -1756,8 +1756,8 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
                    uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
                    void* atomic_buffer_ptr) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  int const num_threads =
-      std::max(128, WARP_SIZE * (is_cached_dispatch ? 2 : num_channels));
+  EP_HOST_ASSERT(is_cached_dispatch and "only support for dispatch");
+  int const num_threads = std::max(128, WARP_SIZE * std::min(16, num_channels));
 #else
   int const num_threads = std::max(128, WARP_SIZE * num_channels);
 #endif

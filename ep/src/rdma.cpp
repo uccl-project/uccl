@@ -924,18 +924,6 @@ static void post_rdma_async_batched_normal_mode(
             AtomicsImm aimm(imm);
             assert(aimm.GetValue() == cmd.atomic_val);
             assert(aimm.GetOff() == cmd.atomic_offset);
-
-            // } else if (j + 1 == kgroup) {
-            //   // Put WriteImm only on the tail WR
-            //   uint32_t imm =
-            //       WriteImm::Pack(get_is_combine(cmd.cmd_type),
-            //                      get_low_latency(cmd.cmd_type),
-            //                      cmd.expert_idx,
-            //                      static_cast<uint32_t>(kgroup), my_rank)
-            //           .GetImmData();
-            //   wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-            //   wrs[j].imm_data = htonl(imm);
-            //   printf("Posting WriteImm with imm=0x%08x\n", imm);
           } else {
             wrs[j].opcode = IBV_WR_RDMA_WRITE;
           }
