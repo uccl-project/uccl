@@ -17,9 +17,9 @@ typedef struct uccl_mr uccl_mr_t;
 
 // UCCL operation types
 enum uccl_msg_type {
-  UCCL_RW_RC = 0, // Used by both READ/WRITE in RCMODE
+  UCCL_RW_RC = 0,  // Used by both READ/WRITE in RCMODE
   UCCL_WRITE = 1,
-  UCCL_VECTOR_RW_RC = 2, // Used by both READ/WRITE in RCMODE
+  UCCL_VECTOR_RW_RC = 2,  // Used by both READ/WRITE in RCMODE
   UCCL_VECTOR_WRITE = 3,
   UCCL_FIFO = 4,
   UCCL_NOTIFY = 5
