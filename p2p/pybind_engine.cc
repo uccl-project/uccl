@@ -13,14 +13,14 @@ struct InsidePythonGuard {
 PYBIND11_MODULE(p2p, m) {
   m.doc() = "P2P Engine - High-performance RDMA-based peer-to-peer transport";
 
-  m.def("get_oob_ip", &get_oob_ip, "Get the OOB IP address");
+  m.def("get_oob_ip", &uccl::get_oob_ip, "Get the OOB IP address");
 
   // Endpoint class binding
   py::class_<Endpoint>(m, "Endpoint")
-      .def(py::init([](uint32_t local_gpu_idx, uint32_t num_cpus) {
+      .def(py::init([](uint32_t local_gpu_idx, uint32_t num_cpus, uint32_t rank_id) {
         py::gil_scoped_release release;
         InsidePythonGuard guard;
-        return std::make_unique<Endpoint>(local_gpu_idx, num_cpus);
+        return std::make_unique<Endpoint>(local_gpu_idx, num_cpus, rank_id);
       }))
       .def("__del__",
            [](Endpoint& self) {

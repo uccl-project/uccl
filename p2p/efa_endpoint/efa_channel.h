@@ -34,6 +34,11 @@ class EFAChannel {
     ah_ = ctx_->createAH(remote_meta_->gid);
     UCCL_LOG_EP << "EFAChannel connected to remote qpn=" << remote_meta.qpn;
   }
+
+  // Delete copy constructor and copy assignment operator
+  EFAChannel(const EFAChannel&) = delete;
+  EFAChannel& operator=(const EFAChannel&) = delete;
+
   void connect(ChannelMetaData const& remote_meta) {
     remote_meta_ = std::make_shared<ChannelMetaData>(remote_meta);
     ah_ = ctx_->createAH(remote_meta_->gid);
@@ -114,7 +119,7 @@ class EFAChannel {
 
     // int64_t wr_id = wr_id_counter_.fetch_add(1, std::memory_order_relaxed) +
     // 1;
-    LOG(INFO)<<*req;
+    LOG(INFO) << *req;
     qpx->wr_id = req->wr_id;
     qpx->comp_mask = 0;
     // qpx->wr_flags = req->need_signaled ? IBV_SEND_SIGNALED : IBV_SEND_FENCE;
@@ -196,7 +201,8 @@ class EFAChannel {
 
     if (cq_ex_->status != IBV_WC_SUCCESS) {
       LOG(WARNING) << "poll_once - channel_id: " << channel_id_
-                << ", CQ status error: " << ibv_wc_status_str(cq_ex_->status);
+                   << ", CQ status error: "
+                   << ibv_wc_status_str(cq_ex_->status);
       ibv_end_poll(cq_ex_);
       return false;
     }

@@ -6,7 +6,7 @@ import numpy as np
 import nvtx
 import torch
 import torch.distributed as dist
-
+import time
 from util import setup_seed, get_fcp_comm_plans, sync_all, Metrics
 from uccl import collective
 
@@ -23,12 +23,13 @@ def warmup_all2all_check(
 ):
     print("\n🔧 Running warmup_all2all_check...")
     print(chunk)
+    # chunk = 1024 * 1024
     if device == None:
         print("No device specified for warmup_all2all_check, using current device")
         device = torch.cuda.current_device()
     world_size = dist.get_world_size()
     rank = dist.get_rank()
-
+    # time.sleep(20)
     send_chunks_tensor = torch.full(
         (world_size, 1, chunk),
         fill_value=float(rank + 1),
@@ -60,6 +61,8 @@ def warmup_all2all_check(
     print(send_chunks_tensor.data_ptr())
     print(send_chunks_tensor.size())
     collective.register_tensor(recv_chunks_tensor)
+
+
     for r in range(world_size):
         if r == rank:
             recv_chunks[r].copy_(send_chunks[r].contiguous())
@@ -71,15 +74,17 @@ def warmup_all2all_check(
             send_ids.append(tid)
     # sync_all()
     # # recv
+
     for r in range(world_size):
         if not r == rank:
             # print(f"[Rank {rank}] : posting irecv from rank before {r} {recv_chunks[r].contiguous()}")
             tid = collective.irecv(recv_chunks[r], r)
             # print(f"[Rank {rank}] : posting irecv from rank {r} {recv_chunks[r].contiguous()}")
             recv_ids.append(tid)
-            # print(f"[Rank {rank}] : posted irecv from rank {r} {recv_chunks[r].contiguous()}")
-
+        # print(f"[Rank {rank}] : posted irecv from rank {r} {recv_chunks[r].contiguous()}")
+    print(f"[Rank {rank}] : waiting for all sends and recvs")
     collective.wait_all(send_ids + recv_ids)
+    print(f"[Rank {rank}] : all sends and recvs done")
     sync_all()
     if rank == 0:
         ok = True
@@ -155,7 +160,8 @@ def run_fcp_p2p(
             send_req = collective.isend(send_tensor, send_rank)
             recv_req = collective.irecv(recv_tensor, recv_rank)
             collective.wait_all([send_req, recv_req])
-
+            print(f"FCP P2P Alltoall Iteration {idx+1}/{num_iters}" + " completed")
+    print(f"Completed {num_iters} iterations of FCP P2P Alltoall")
     end_event.record()
     sync_all()
     elapsed_time.append(start_event.elapsed_time(end_event))
@@ -250,7 +256,7 @@ def main():
         "--block-sizes",
         type=int,
         nargs="+",
-        default=[4 * 1024],
+        default=[4*1024],
         help="List of block sizes per GPU",
     )
     p.add_argument("--num-qo-heads", type=int, default=32, help="#QO heads")
@@ -293,22 +299,22 @@ def main():
         for block_size in args.block_sizes:
             print(f"\n🚀 Running benchmark with block_size={block_size}")
             # warmup
-            warmup_all2all_check(
-                chunk=block_size
-                * 2
-                * args.num_qo_heads
-                // args.gqa_group_size
-                * args.head_dim,
-                dtype=dtype,
-                device=device,
-            )
+            # warmup_all2all_check(
+            #     chunk=block_size
+            #     * 2
+            #     * args.num_qo_heads
+            #     // args.gqa_group_size
+            #     * args.head_dim,
+            #     dtype=dtype,
+            #     device=device,
+            # )
             print("warmup_all2all_check")
             run_fcp_p2p(
                 block_size=block_size,
                 num_qo_heads=args.num_qo_heads,
                 gqa_group_size=args.gqa_group_size,
                 head_dim=args.head_dim,
-                num_iters=100,
+                num_iters=10,
                 dtype=dtype,
                 device=device,
             )

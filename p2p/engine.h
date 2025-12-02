@@ -15,14 +15,26 @@
 #include <tuple>
 #include <unordered_map>
 #include <vector>
+#include <variant>
+#include "efa_endpoint/efa_endpoint.h"
+#include "transport.h"
 
 namespace py = pybind11;
 
 extern thread_local bool inside_python;
+namespace my_namespace {
 
+struct P2PMhandle {
+  struct uccl::Mhandle* mhandle_;
+  std::unordered_map<int64_t, struct ibv_mr*> mr_map;
+};
+
+using RDMAEndPoint =
+    std::variant<uccl::RDMAEndpoint*, std::shared_ptr<EFAEndpoint>>;
+}
 struct MR {
   uint64_t mr_id_;
-  uccl::Mhandle* mhandle_;
+  my_namespace::P2PMhandle* mhandle_;
 };
 
 struct Conn {
@@ -38,19 +50,12 @@ struct PeerInfo {
   int gpu_idx;          // GPU index of the peer
 };
 
-static inline std::string get_oob_ip() {
-  char uccl_ifname[MAX_IF_NAME_SIZE + 1];
-  uccl::socketAddress uccl_ifaddr;
-  int num_ifs =
-      uccl::find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
-  CHECK(num_ifs == 1) << "No IP interface found";
-  return uccl::get_dev_ip(uccl_ifname);
-}
+
 
 class Endpoint {
   uint64_t const kRTTBytes = 1024 * 1024;
-  uint64_t const kChunkSize = 1024 * 1024;
-  uint32_t const kMaxInflightChunks = 8;
+  uint64_t const kChunkSize = 1024 * 1024*1024;
+  uint32_t const kMaxInflightChunks = 1;
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
 
@@ -71,7 +76,8 @@ class Endpoint {
    *   local_gpu_idx: the GPU index to use for the engine
    *   num_cpus: the number of CPUs to use for the engine
    */
-  Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus);
+  Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus,
+           uint32_t const rank_id);
 
   /*
    * Create endpoint without intializing the engine. Lazy creation of engine is
@@ -81,7 +87,7 @@ class Endpoint {
    * input:
    *   num_cpus: the number of CPUs to use for the engine
    */
-  Endpoint(uint32_t const num_cpus);
+  Endpoint(uint32_t const num_cpus, uint32_t const rank_id = 0);
   ~Endpoint();
 
   /*
@@ -302,7 +308,7 @@ class Endpoint {
   uint32_t num_cpus_;
   int numa_node_;
 
-  uccl::RDMAEndpoint* ep_;
+  my_namespace::RDMAEndPoint ep_;
   bool engine_initialized_ = false;
 
   std::atomic<uint64_t> next_conn_id_ = 0;
@@ -312,6 +318,7 @@ class Endpoint {
   // Accessed by both app thread and proxy thread.
   mutable std::shared_mutex conn_mu_;
   std::unordered_map<uint64_t, Conn*> conn_id_to_conn_;
+  std::unordered_map<uint64_t, uint64_t> conn_id_to_conn_efa_;
   mutable std::shared_mutex mr_mu_;
   std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
 

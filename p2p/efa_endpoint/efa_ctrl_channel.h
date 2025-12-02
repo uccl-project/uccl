@@ -71,6 +71,8 @@ class SendControlChannel : public EFAChannel {
   bool noblockingPoll() {
     CQMeta cq_data;
     if (EFAChannel::poll_once(cq_data)) {
+      LOG(INFO) << "SendControlChannel::noblockingPoll - Polled completion: "
+                << cq_data;
       if (cq_data.hasIMM()) {
         rb_->modify_and_advance_write(cq_data.imm, check_in_progress,
                                       set_in_progress);
@@ -135,7 +137,8 @@ class RecvControlChannel : public EFAChannel {
     req_meta.rank_id = rev_req->from_rank_id;
     req_meta.channel_id = rev_req->channel_id;
     req_meta.remote_mem = rev_req->local_mem;
-    req_meta.expected_chunk_count = getMessageChunkCount(rev_req->local_mem->size);
+    req_meta.expected_chunk_count =
+        getMessageChunkCount(rev_req->local_mem->size);
     req_meta.received_chunk_count = 0;
     LOG(INFO) << "postSendReq - Created SendReqMeta: " << req_meta;
 
@@ -172,7 +175,15 @@ class RecvControlChannel : public EFAChannel {
       rb_->remove_while(check_is_done);
     }
   }
-
+  bool noblockingPoll() {
+    CQMeta cq_data;
+    if (EFAChannel::poll_once(cq_data)) {
+      LOG(INFO) << "RecvControlChannel::noblockingPoll - Polled completion: "
+                << cq_data;
+      return true;
+    }
+    return false;
+  }
   bool check_done(uint64_t index) {
     return rb_->check_at(index, check_is_done);
   }

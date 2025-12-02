@@ -527,18 +527,24 @@ int main(int argc, char* argv[]) {
 
     // Connect to remote rank
     std::cout << "Connecting to remote rank " << FLAGS_remote_rank << "...\n";
-    bool connect_result = endpoint.build_connect(FLAGS_remote_rank);
+    // bool connect_result = endpoint.build_connect_sync(FLAGS_remote_rank);
+    // // bool connect_result = endpoint.build_connect(FLAGS_remote_rank);
+    // endpoint.connect_check(FLAGS_remote_rank);
+    std::string remote_ip;
+    int remote_dev;
+    int remote_gpuidx;
+    endpoint.uccl_connect(0,0,0,0,FLAGS_remote_ip,FLAGS_remote_port);
+    endpoint.uccl_accept(0,0,0,remote_ip,&remote_dev,&remote_gpuidx);
+    // if (connect_result>=0) {
+    //   std::cout << "Successfully connected to remote rank " << FLAGS_remote_rank
+    //             << "\n";
+    // } else {
+    //   std::cerr << "Failed to connect to remote rank " << FLAGS_remote_rank
+    //             << "\n";
+    //   return 1;
+    // }
 
-    if (connect_result) {
-      std::cout << "Successfully connected to remote rank " << FLAGS_remote_rank
-                << "\n";
-    } else {
-      std::cerr << "Failed to connect to remote rank " << FLAGS_remote_rank
-                << "\n";
-      return 1;
-    }
-
-    std::this_thread::sleep_for(std::chrono::seconds(5));
+    // std::this_thread::sleep_for(std::chrono::seconds(5));
 
     // Create memory allocator
     MemoryAllocator allocator;

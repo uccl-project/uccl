@@ -25,6 +25,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <functional>
+#include <future>
 #include <iomanip>
 #include <iostream>  // for std::cout, std::cerr
 #include <map>
@@ -37,12 +38,14 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 #include <cuda_runtime.h>
 
 static constexpr int kGidIndex = 0;
+static constexpr int kRankIDPlaceHolder = 9999;
 static constexpr int kEfaQpLowLatencyServiceLevel = 8;
-static constexpr uint32_t kQKey = 0x12345;
+static constexpr uint32_t kQKey = 0x15695;
 static constexpr uint8_t kPortNum = 1;
 static constexpr uint8_t kEfaRdmDefaultRnrRetry = 3;
 
@@ -52,13 +55,13 @@ static constexpr int kMaxSendWr = 1024;
 static constexpr int kMaxRecvWr = 1024;
 static constexpr int kMaxSendSeg = 2;
 static constexpr int kMaxRecvSeg = 2;
-static constexpr uint64_t kMessageChunkSizeKB = 256;  // 1 MB
-static constexpr uint64_t kMaxSplitNum = 16;      
+static constexpr uint64_t kMessageChunkSizeKB = 1024;  // 1 MB
+static constexpr uint64_t kMaxSplitNum = 2;
 
 static constexpr size_t kTaskRingSize = 1024;
 
-
-static constexpr size_t kInFlightMaxSizeKB = 10240000;  // Max in-flight packets per channel
+static constexpr size_t kInFlightMaxSizeKB =
+    10240000;  // Max in-flight packets per channel
 
 // Message chunk information for splitting large messages
 struct MessageChunk {
@@ -150,10 +153,14 @@ enum class ChannelType : int16_t { Control, Normal };
 struct OOBMetaData {
   std::string server_ip;
   int64_t server_port;
-
+  int gpu_id;
+  OOBMetaData() : server_ip(""), server_port(0), gpu_id(0) {}
+  OOBMetaData(std::string conn_key_, uint16_t remote_port_)
+      : server_ip(std::move(conn_key_)), server_port(remote_port_), gpu_id(0) {}
   friend std::ostream& operator<<(std::ostream& os, OOBMetaData const& meta) {
     os << "OOBMetaData{server_ip: " << meta.server_ip
-       << ", server_port: " << meta.server_port << "}";
+       << ", server_port: " << meta.server_port
+       << ", gpu_id: " << meta.gpu_id << "}";
     return os;
   }
 };
@@ -181,8 +188,10 @@ typedef struct RegMemBlock {
   struct ibv_mr* mr;
   std::unordered_map<int64_t, struct ibv_mr*> mr_map;
   bool pool_allocated = false;
-  uint32_t rkeys[kQpNumPerChannel+1];  // For multiple memory regions (e.g., GPU memory)
-  RegMemBlock(void* a, size_t s, MemoryType t, struct ibv_mr* m, bool p = false)
+  uint32_t rkeys[kQpNumPerChannel +
+                 1];  // For multiple memory regions (e.g., GPU memory)
+
+  RegMemBlock(void* a, size_t s, MemoryType t, struct ibv_mr* m = nullptr, bool p = false)
       : addr(a), size(s), type(t), mr(m), pool_allocated(p){};
 
   // Equality operator for hash support (based on size and type only)
@@ -203,7 +212,8 @@ typedef struct RegMemBlock {
 typedef struct RemoteMemInfo {
   uint64_t addr;
   uint32_t rkey;
-  uint32_t rkeys[kQpNumPerChannel+1];  // For multiple memory regions (e.g., GPU memory)
+  uint32_t rkeys[kQpNumPerChannel +
+                 1];  // For multiple memory regions (e.g., GPU memory)
   size_t length;
   MemoryType type;
 
@@ -220,10 +230,10 @@ typedef struct RemoteMemInfo {
         rkey(block.mr ? block.mr->rkey : 0),
         length(block.size),
         type(block.type) {
-          for (int i = 0; i < kQpNumPerChannel + 1; ++i) {
-            rkeys[i] = block.rkeys[i];
-          }
-        }
+    for (int i = 0; i < kQpNumPerChannel + 1; ++i) {
+      rkeys[i] = block.rkeys[i];
+    }
+  }
 
   // Constructor from shared_ptr<RegMemBlock> (copy constructor)
   RemoteMemInfo(const std::shared_ptr<RegMemBlock> block)
@@ -231,10 +241,10 @@ typedef struct RemoteMemInfo {
         rkey(block->mr ? block->mr->rkey : 0),
         length(block->size),
         type(block->type) {
-          for (int i = 0; i < kQpNumPerChannel + 1; ++i) {
-            rkeys[i] = block->rkeys[i];
-          }
-        }
+    for (int i = 0; i < kQpNumPerChannel + 1; ++i) {
+      rkeys[i] = block->rkeys[i];
+    }
+  }
 
   friend std::ostream& operator<<(std::ostream& os, RemoteMemInfo const& info) {
     os << "RemoteMemInfo{addr: 0x" << std::hex << info.addr << std::dec
@@ -368,21 +378,27 @@ struct EFASendRequest {
   EFASendRequest(std::shared_ptr<RegMemBlock> local,
                  std::shared_ptr<RemoteMemInfo> remote, uint32_t imm = 0,
                  bool signaled = true)
-      : local_mem(local), remote_mem(remote), imm_data(imm),
+      : local_mem(local),
+        remote_mem(remote),
+        imm_data(imm),
         need_signaled(signaled) {}
 
   // Constructor from shared_ptr<EFASendRequest>
   EFASendRequest(std::shared_ptr<EFASendRequest> other,
                  std::shared_ptr<RegMemBlock> local, uint32_t imm = 0,
                  bool signaled = true)
-      : local_mem(local), remote_mem(other->remote_mem), imm_data(imm),
+      : local_mem(local),
+        remote_mem(other->remote_mem),
+        imm_data(imm),
         need_signaled(signaled) {}
 
   // Constructor from const EFASendRequest&
   EFASendRequest(EFASendRequest const& other,
                  std::shared_ptr<RegMemBlock> local, uint32_t imm = 0,
                  bool signaled = true)
-      : local_mem(local), remote_mem(other.remote_mem), imm_data(imm),
+      : local_mem(local),
+        remote_mem(other.remote_mem),
+        imm_data(imm),
         need_signaled(signaled) {}
 
   // Getter methods
@@ -477,6 +493,7 @@ struct MetaInfoToExchange {
   ChannelType flag;
   ChannelMetaData channel_meta;
   RemoteMemInfo mem_meta;
+  int gpu_id;
 
   // Default constructor
   MetaInfoToExchange()
@@ -484,19 +501,22 @@ struct MetaInfoToExchange {
         channel_id(0),
         flag(ChannelType::Normal),
         channel_meta{},
-        mem_meta{} {}
+        mem_meta{},
+        gpu_id(0) {}
 
   // Constructor with required rank_id and channel_id, optional channel_meta and
   // mem_meta
   MetaInfoToExchange(int32_t rid, int32_t cid,
                      std::shared_ptr<ChannelMetaData> ch_meta = nullptr,
                      std::shared_ptr<RemoteMemInfo> mem_meta_ptr = nullptr,
-                     ChannelType flag_in = ChannelType::Normal)
+                     ChannelType flag_in = ChannelType::Normal,
+                     int gid = 0)
       : rank_id(rid),
         channel_id(cid),
         channel_meta{},
         mem_meta{},
-        flag(flag_in) {
+        flag(flag_in),
+        gpu_id(gid) {
     if (ch_meta) {
       channel_meta = *ch_meta;
     }
@@ -538,6 +558,8 @@ struct MetaInfoToExchange {
     os << "    type: "
        << (meta.mem_meta.type == MemoryType::HOST ? "HOST" : "GPU")
        << std::endl;
+
+    os << "  gpu_id: " << meta.gpu_id << std::endl;
     os << "=========================" << std::endl;
 
     return os;
@@ -575,4 +597,12 @@ struct hash<RegMemBlock> {
     return h1 ^ (h2 << 1);
   }
 };
+
 }  // namespace std
+
+typedef struct AcceptedMeta {
+  std::string ip;
+  uint16_t port;
+  int gpu_id;
+  uint64_t rank_id;
+} AcceptedMeta;

@@ -64,8 +64,14 @@ class SendChannelGroup : public ChannelGroup {
 
   size_t channelCount() const override {
     auto result = ChannelGroup::channelCount();
+    std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
+    if (ctrl_channel_) {
+      result += 1;
+    }
     return result;
   }
+
+  size_t normalChannelCount() const { return ChannelGroup::channelCount(); }
 
   std::unordered_map<uint32_t, std::shared_ptr<EFAChannel>> const& channels()
       const override {
@@ -192,10 +198,12 @@ class SendChannelGroup : public ChannelGroup {
     }
 
     while (index >= 0) {
+      LOG(INFO) << "SendChannelGroup: Processing send request meta: " << meta;
       std::shared_ptr<EFASendRequest> req;
-      while (tracker_->getTotalInflightBytes()>kInFlightMaxSizeKB*1024 ||!request_queue_->pop(req)) {
-        if(tracker_->getTotalInflightBytes()>kInFlightMaxSizeKB*1024){
-          // LOG(WARNING) << "SendChannelGroup: In-flight bytes exceed limit, pausing sending."<< tracker_->getTotalInflightBytes() << " bytes in-flight.";
+      while (tracker_->getTotalInflightBytes() > kInFlightMaxSizeKB * 1024 ||
+             !request_queue_->pop(req)) {
+        if (tracker_->getTotalInflightBytes() > kInFlightMaxSizeKB * 1024) {
+          LOG(WARNING) << "SendChannelGroup: In-flight bytes exceed limit,pausing sending."<< tracker_->getTotalInflightBytes() << " bytes in-flight.";
 
           // std::this_thread::sleep_for(std::chrono::microseconds(50));
         }
@@ -220,7 +228,7 @@ class SendChannelGroup : public ChannelGroup {
                   << chunks.size() << " chunks (message_size: " << message_size
                   << ")";
 
-        size_t num_channels = channelCount();
+        size_t num_channels = normalChannelCount();
         uint32_t base_channel_id = meta.channel_id;
 
         for (size_t i = 0; i < chunks.size(); ++i) {
@@ -238,8 +246,9 @@ class SendChannelGroup : public ChannelGroup {
 
           // Create RemoteMemInfo for this chunk
           auto chunk_remote_mem = std::make_shared<RemoteMemInfo>(
-              meta.remote_mem.addr + chunk.offset, meta.remote_mem.rkeys[chunk_channel_id],
-              chunk.size, meta.remote_mem.type);
+              meta.remote_mem.addr + chunk.offset,
+              meta.remote_mem.rkeys[chunk_channel_id], chunk.size,
+              meta.remote_mem.type);
 
           // Create send request for this chunk
           // Only the last chunk needs signaled for completion notification
@@ -321,10 +330,12 @@ class RecvChannelGroup : public ChannelGroup {
 
   size_t channelCount() const override {
     auto result = ChannelGroup::channelCount();
-    // Add RecvChannelGroup specific logic here
+    if (ctrl_channel_) {
+      result += 1;
+    }
     return result;
   }
-
+  size_t normalChannelCount() const { return ChannelGroup::channelCount(); }
   std::unordered_map<uint32_t, std::shared_ptr<EFAChannel>> const& channels()
       const override {
     // Add RecvChannelGroup specific logic here
@@ -383,6 +394,9 @@ class RecvChannelGroup : public ChannelGroup {
   void pollAndProcessCompletions() {
     CQMeta cq_data;
     std::shared_lock<std::shared_mutex> lock(mutex_);
+    if(ctrl_channel_){
+      ctrl_channel_->noblockingPoll();
+    }
     for (auto& [channel_id, channel] : channels_) {
       if (!channel) continue;
       bool polled = false;
@@ -437,7 +451,8 @@ class RecvChannelGroup : public ChannelGroup {
     }
 
     // Get the total number of channels
-    size_t num_channels = channelCount();
+    size_t num_channels = normalChannelCount();
+    std::cout<<"num_channels::"<<num_channels<<std::endl<<std::flush;
     if (unlikely(num_channels == 0)) {
       LOG(WARNING)
           << "RecvChannelGroup: No channels available for recv request";
@@ -446,7 +461,7 @@ class RecvChannelGroup : public ChannelGroup {
 
     // Round-robin: get next channel_id
     uint32_t current_id = last_channel_id_.load(std::memory_order_relaxed);
-    uint32_t next_id = (current_id + 1) % num_channels + 1;
+    uint32_t next_id = (current_id ) % num_channels + 1;
     last_channel_id_.store(next_id, std::memory_order_relaxed);
 
     // Get the channel by channel_id
@@ -487,7 +502,7 @@ class RecvChannelGroup : public ChannelGroup {
       if (unlikely(it == mr_map.end())) {
         LOG(WARNING) << "RecvChannelGroup: MR not found for context_id "
                      << context_id;
-        return false; 
+        return false;
       }
       req->local_mem->rkeys[i] = it->second->rkey;
     }
