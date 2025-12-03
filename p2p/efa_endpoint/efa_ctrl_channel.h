@@ -69,13 +69,15 @@ class SendControlChannel : public EFAChannel {
   }
 
   bool noblockingPoll() {
-    CQMeta cq_data;
-    if (EFAChannel::poll_once(cq_data)) {
-      LOG(INFO) << "SendControlChannel::noblockingPoll - Polled completion: "
-                << cq_data;
-      if (cq_data.hasIMM()) {
-        rb_->modify_and_advance_write(cq_data.imm, check_in_progress,
-                                      set_in_progress);
+    std::vector<CQMeta> cq_datas;
+    if (EFAChannel::poll_once(cq_datas)) {
+      for (const auto& cq_data : cq_datas) {
+        LOG(INFO) << "SendControlChannel::noblockingPoll - Polled completion: "
+                  << cq_data;
+        if (cq_data.hasIMM()) {
+          rb_->modify_and_advance_write(cq_data.imm, check_in_progress,
+                                        set_in_progress);
+        }
       }
       return true;
     }
@@ -176,10 +178,12 @@ class RecvControlChannel : public EFAChannel {
     }
   }
   bool noblockingPoll() {
-    CQMeta cq_data;
-    if (EFAChannel::poll_once(cq_data)) {
-      LOG(INFO) << "RecvControlChannel::noblockingPoll - Polled completion: "
-                << cq_data;
+    std::vector<CQMeta> cq_datas;
+    if (EFAChannel::poll_once(cq_datas)) {
+      for (const auto& cq_data : cq_datas) {
+        LOG(INFO) << "RecvControlChannel::noblockingPoll - Polled completion: "
+                  << cq_data;
+      }
       return true;
     }
     return false;

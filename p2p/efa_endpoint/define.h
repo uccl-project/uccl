@@ -55,8 +55,8 @@ static constexpr int kMaxSendWr = 1024;
 static constexpr int kMaxRecvWr = 1024;
 static constexpr int kMaxSendSeg = 2;
 static constexpr int kMaxRecvSeg = 2;
-static constexpr uint64_t kMessageChunkSizeKB = 1024;  // 1 MB
-static constexpr uint64_t kMaxSplitNum = 2;
+static constexpr uint64_t kMessageChunkSizeKB = 256;  // 1 MB
+static constexpr uint64_t kMaxSplitNum = 16;
 
 static constexpr size_t kTaskRingSize = 1024;
 
@@ -170,7 +170,7 @@ struct CQMeta {
   ibv_wc_opcode op_code;
   uint32_t len;
   int imm;
-  inline bool hasIMM() { return op_code == IBV_WC_RECV_RDMA_WITH_IMM; };
+  inline bool hasIMM() const { return op_code == IBV_WC_RECV_RDMA_WITH_IMM; };
 
   friend std::ostream& operator<<(std::ostream& os, CQMeta const& meta) {
     os << "CQMeta{wr_id: " << meta.wr_id << ", op_code: " << meta.op_code

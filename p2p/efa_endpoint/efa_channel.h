@@ -178,12 +178,13 @@ class EFAChannel {
     return wr_id;
   }
 
-  bool poll_once(CQMeta& cq_data) {
+  bool poll_once(std::vector<CQMeta>& cq_datas) {
     if (!cq_ex_) {
       LOG(INFO) << "poll_once - channel_id: " << channel_id_
                 << ", cq_ex_ is null";
       return false;
     }
+
     struct ibv_poll_cq_attr poll_cq_attr = {.comp_mask = 0};
     ssize_t err = ibv_start_poll(cq_ex_, &poll_cq_attr);
 
@@ -194,35 +195,45 @@ class EFAChannel {
       return false;
     }
 
-    // Successfully polled one completion
-    LOG(INFO) << "poll_once - channel_id: " << channel_id_
-              << ", Successfully polled completion, wr_id: " << cq_ex_->wr_id
-              << ", status: " << cq_ex_->status;
+    // Process all available completions
+    do {
+      // Successfully polled a completion
+      LOG(INFO) << "poll_once - channel_id: " << channel_id_
+                << ", Successfully polled completion, wr_id: " << cq_ex_->wr_id
+                << ", status: " << cq_ex_->status;
 
-    if (cq_ex_->status != IBV_WC_SUCCESS) {
-      LOG(WARNING) << "poll_once - channel_id: " << channel_id_
-                   << ", CQ status error: "
-                   << ibv_wc_status_str(cq_ex_->status);
-      ibv_end_poll(cq_ex_);
-      return false;
-    }
+      if (cq_ex_->status != IBV_WC_SUCCESS) {
+        LOG(WARNING) << "poll_once - channel_id: " << channel_id_
+                     << ", CQ status error: "
+                     << ibv_wc_status_str(cq_ex_->status);
+        continue;
+      }
 
-    cq_data.wr_id = cq_ex_->wr_id;
-    cq_data.op_code = ibv_wc_read_opcode(cq_ex_);
-    cq_data.len = ibv_wc_read_byte_len(cq_ex_);
-    if (cq_data.op_code == IBV_WC_RECV_RDMA_WITH_IMM) {
-      cq_data.imm = ibv_wc_read_imm_data(cq_ex_);
-    } else {
-      cq_data.imm = 0;
-    }
+      CQMeta cq_data;
+      cq_data.wr_id = cq_ex_->wr_id;
+      cq_data.op_code = ibv_wc_read_opcode(cq_ex_);
+      cq_data.len = ibv_wc_read_byte_len(cq_ex_);
+      if (cq_data.op_code == IBV_WC_RECV_RDMA_WITH_IMM) {
+        cq_data.imm = ibv_wc_read_imm_data(cq_ex_);
+      } else {
+        cq_data.imm = 0;
+      }
 
-    LOG(INFO) << "poll_once - channel_id: " << channel_id_
-              << ", Completion data: " << cq_data << "wr_id: " << cq_data.wr_id;
+      LOG(INFO) << "poll_once - channel_id: " << channel_id_
+                << ", Completion data: " << cq_data << "wr_id: " << cq_data.wr_id;
 
-    // tracker_->acknowledge(cq_data.wr_id);
+      // Add to vector
+      cq_datas.emplace_back(cq_data);
+
+      // tracker_->acknowledge(cq_data.wr_id);
+
+      // Get next completion
+      err = ibv_next_poll(cq_ex_);
+    } while (err == 0);
+
     ibv_end_poll(cq_ex_);
 
-    return true;
+    return !cq_datas.empty();
   }
 
   // bool isAcknowledged(int32_t expected_wr) const {

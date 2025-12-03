@@ -203,7 +203,10 @@ class SendChannelGroup : public ChannelGroup {
       while (tracker_->getTotalInflightBytes() > kInFlightMaxSizeKB * 1024 ||
              !request_queue_->pop(req)) {
         if (tracker_->getTotalInflightBytes() > kInFlightMaxSizeKB * 1024) {
-          LOG(WARNING) << "SendChannelGroup: In-flight bytes exceed limit,pausing sending."<< tracker_->getTotalInflightBytes() << " bytes in-flight.";
+          LOG(WARNING) << "SendChannelGroup: In-flight bytes exceed "
+                          "limit,pausing sending."
+                       << tracker_->getTotalInflightBytes()
+                       << " bytes in-flight.";
 
           // std::this_thread::sleep_for(std::chrono::microseconds(50));
         }
@@ -283,13 +286,16 @@ class SendChannelGroup : public ChannelGroup {
   }
 
   void pollDataChannels() {
-    CQMeta cq_data;
+    
     std::shared_lock<std::shared_mutex> lock(mutex_);
     for (auto& [channel_id, channel] : channels_) {
-      if (channel && channel->poll_once(cq_data)) {
-        LOG(INFO) << "SendChannelGroup::pollingLoop - Channel " << channel_id
-                  << " polled completion: " << cq_data;
-        tracker_->acknowledge(cq_data.wr_id);
+      std::vector<CQMeta> cq_datas;
+      if (channel && channel->poll_once(cq_datas)) {
+        for(auto const& cq_data : cq_datas){
+          LOG(INFO) << "SendChannelGroup::pollingLoop - Channel " << channel_id
+                    << " polled completion: " << cq_data;
+          tracker_->acknowledge(cq_data.wr_id);
+        }
       }
     }
   }
@@ -392,37 +398,31 @@ class RecvChannelGroup : public ChannelGroup {
   std::atomic<uint32_t> last_channel_id_;
 
   void pollAndProcessCompletions() {
-    CQMeta cq_data;
     std::shared_lock<std::shared_mutex> lock(mutex_);
-    if(ctrl_channel_){
+    if (ctrl_channel_) {
       ctrl_channel_->noblockingPoll();
     }
     for (auto& [channel_id, channel] : channels_) {
       if (!channel) continue;
       bool polled = false;
-      try {
-        polled = channel->poll_once(cq_data);
-      } catch (...) {
-        LOG(ERROR) << "RecvChannelGroup::pollAndProcessCompletions - Exception "
-                      "in poll_once for channel "
-                   << channel_id;
-      }
+      std::vector<CQMeta> cq_datas;
+      polled = channel->poll_once(cq_datas);
       if (polled) {
-        LOG(INFO) << "RecvChannelGroup::pollAndProcessCompletions - Channel "
-                  << channel_id << " polled completion: " << cq_data;
-
-        if (cq_data.hasIMM()) {
-          LOG(INFO) << "RecvChannelGroup::pollAndProcessCompletions - "
-                       "Completion has IMM data: "
-                    << cq_data.imm;
-          if (ctrl_channel_) {
-            ctrl_channel_->recv_done(cq_data.imm);
-            LOG(INFO) << "RecvChannelGroup::pollAndProcessCompletions - Called "
-                         "recv_done("
-                      << cq_data.imm << ")";
-          } else {
-            LOG(WARNING) << "RecvChannelGroup::pollAndProcessCompletions - "
-                            "ctrl_channel_ is null, cannot call recv_done";
+        for (auto const& cq_data : cq_datas) {
+          if (cq_data.hasIMM()) {
+            LOG(INFO)
+                << "RecvChannelGroup::pollAndProcessCompletions - Channel "
+                << channel_id << " polled completion: " << cq_data;
+            if (ctrl_channel_) {
+              ctrl_channel_->recv_done(cq_data.imm);
+              LOG(INFO)
+                  << "RecvChannelGroup::pollAndProcessCompletions - Called "
+                     "recv_done("
+                  << cq_data.imm << ")";
+            } else {
+              LOG(WARNING) << "RecvChannelGroup::pollAndProcessCompletions - "
+                              "ctrl_channel_ is null, cannot call recv_done";
+            }
           }
         }
       }
@@ -452,7 +452,7 @@ class RecvChannelGroup : public ChannelGroup {
 
     // Get the total number of channels
     size_t num_channels = normalChannelCount();
-    std::cout<<"num_channels::"<<num_channels<<std::endl<<std::flush;
+    std::cout << "num_channels::" << num_channels << std::endl << std::flush;
     if (unlikely(num_channels == 0)) {
       LOG(WARNING)
           << "RecvChannelGroup: No channels available for recv request";
@@ -461,7 +461,7 @@ class RecvChannelGroup : public ChannelGroup {
 
     // Round-robin: get next channel_id
     uint32_t current_id = last_channel_id_.load(std::memory_order_relaxed);
-    uint32_t next_id = (current_id ) % num_channels + 1;
+    uint32_t next_id = (current_id) % num_channels + 1;
     last_channel_id_.store(next_id, std::memory_order_relaxed);
 
     // Get the channel by channel_id
