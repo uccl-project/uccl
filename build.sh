@@ -279,6 +279,11 @@ if [[ "$BUILD_TYPE" =~ (ep|all) ]];then
       echo "Auto-detected CUDA compute capability: ${DETECTED_GPU_ARCH}"
     fi
   elif [[ "$TARGET" == rocm* ]] && command -v amd-smi &> /dev/null; then
+    # Check if jq is installed, install via pip if not
+    if ! command -v jq &> /dev/null; then
+      echo "jq not found, installing via pip..."
+      pip install jq
+    fi
     DETECTED_GPU_ARCH=$(amd-smi static -g 0 --asic --json | jq -r '.[].asic.target_graphics_version')
     if [[ -n "$DETECTED_GPU_ARCH" ]]; then
       echo "Auto-detected ROCm architecture: ${DETECTED_GPU_ARCH}"
