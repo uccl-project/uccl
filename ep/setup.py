@@ -2,12 +2,12 @@ import os
 import subprocess
 import setuptools
 from glob import glob
-import torch
 import shutil
 import site
-
+import re
 from pathlib import Path
 
+import torch
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 from setuptools.command.install import install
 
@@ -156,11 +156,37 @@ if __name__ == "__main__":
             if float(default_arch) >= 9.0:
                 nvcc_flags.extend(["--ptxas-options=--register-usage-level=10"])
 
-        os.environ["TORCH_CUDA_ARCH_LIST"] = os.getenv(
-            "TORCH_CUDA_ARCH_LIST", default_arch
-        )
-        device_arch = os.environ["TORCH_CUDA_ARCH_LIST"]
+        # Set architecture environment variable before creating CUDAExtension
+        device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", default_arch)
+        os.environ["TORCH_CUDA_ARCH_LIST"] = device_arch
     else:
+        gpu_archs = os.getenv("TORCH_CUDA_ARCH_LIST", None)
+        if gpu_archs is None or gpu_archs.strip() == "":
+            # Detect GPU architecture on AMD
+            GPU_ARCH_PATTERN = re.compile(r"Name:\s*(gfx\d+\w*)")
+            try:
+                result = subprocess.run(
+                    ["rocminfo"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=True,
+                )
+            except Exception as e:
+                raise RuntimeError(f"rocminfo failed: {e}")
+
+            matches = set(GPU_ARCH_PATTERN.findall(result.stdout))
+
+            if not matches:
+                raise RuntimeError("No gfx architecture found in rocminfo output.")
+            arch_list = list(matches)
+
+        else:
+            arch_list = gpu_archs.split(",")
+
+        for arch in arch_list:
+            nvcc_flags.append(f"--offload-arch={arch.lower()}")
+
         # Disable SM90 features on AMD
         cxx_flags.append("-DDISABLE_SM90_FEATURES")
         nvcc_flags.append("-DDISABLE_SM90_FEATURES")
@@ -169,8 +195,11 @@ if __name__ == "__main__":
             cxx_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
             nvcc_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
 
-        device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", "gfx942")
-        os.environ["PYTORCH_ROCM_ARCH"] = device_arch
+        cxx_flags.append("-DUSE_GRACE_HOPPER")
+        nvcc_flags.append("-DUSE_GRACE_HOPPER")
+
+        # Get device architecture (already set at top of file)
+        device_arch = os.getenv("PYTORCH_ROCM_ARCH", "gfx942")
 
     # Disable LD/ST tricks, as some CUDA version does not support `.L1::no_allocate`
     # Only enable aggressive PTX instructions for SM 9.0+ (H100/H800/B200)
