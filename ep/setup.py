@@ -163,24 +163,24 @@ if __name__ == "__main__":
         gpu_archs = os.getenv("TORCH_CUDA_ARCH_LIST", None)
         if gpu_archs is None or gpu_archs.strip() == "":
             # Detect GPU architecture on AMD
-            GPU_ARCH_PATTERN = re.compile(r"Name:\s*(gfx\d+\w*)")
+            GPU_ARCH_PATTERN = re.compile(r"gfx\d+\w*")
             try:
                 result = subprocess.run(
-                    ["rocminfo"],
+                    ["rocm-smi", "--showhw"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
                     check=True,
                 )
             except Exception as e:
-                raise RuntimeError(f"rocminfo failed: {e}")
+                raise RuntimeError(f"rocm-smi failed: {e}")
 
             matches = set(GPU_ARCH_PATTERN.findall(result.stdout))
 
             if not matches:
-                raise RuntimeError("No gfx architecture found in rocminfo output.")
+                raise RuntimeError("No gfx architecture found in rocm-smi output.")
             arch_list = list(matches)
-
+            gpu_archs = ",".join(arch_list)
         else:
             arch_list = gpu_archs.split(",")
 
@@ -198,8 +198,7 @@ if __name__ == "__main__":
         cxx_flags.append("-DUSE_GRACE_HOPPER")
         nvcc_flags.append("-DUSE_GRACE_HOPPER")
 
-        # Get device architecture (already set at top of file)
-        device_arch = os.getenv("PYTORCH_ROCM_ARCH", "gfx942")
+        device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", gpu_archs)
 
     # Disable LD/ST tricks, as some CUDA version does not support `.L1::no_allocate`
     # Only enable aggressive PTX instructions for SM 9.0+ (H100/H800/B200)

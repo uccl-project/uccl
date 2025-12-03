@@ -271,18 +271,37 @@ fi
 echo "[2/3] Running build inside container..."
 
 # Auto-detect CUDA architecture for ep build
-DETECTED_CUDA_ARCH=""
-if [[ "$TARGET" == cuda* && "$BUILD_TYPE" =~ (ep|all) ]]; then
-  if command -v nvidia-smi &> /dev/null; then
-    DETECTED_CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
-    if [[ -n "$DETECTED_CUDA_ARCH" ]]; then
-      echo "Auto-detected CUDA compute capability: ${DETECTED_CUDA_ARCH}"
-      export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-${DETECTED_CUDA_ARCH}}"
+DETECTED_GPU_ARCH=""
+if [[  "$BUILD_TYPE" =~ (ep|all) ]];then
+  if [[ "$TARGET" == cuda* ]] && command -v nvidia-smi &> /dev/null; then
+    DETECTED_GPU_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
+    if [[ -n "$DETECTED_GPU_ARCH" ]]; then
+      echo "Auto-detected CUDA compute capability: ${DETECTED_GPU_ARCH}"
+    fi
+  elif [[ "$TARGET" == rocm* ]] && command -v amd-smi &> /dev/null; then
+    DETECTED_GPU_ARCH=$(amd-smi static -g 0 --asic --csv | awk -F',' 'NR==2{print $NF}' | tr -d '\r')
+    if [[ -n "$DETECTED_GPU_ARCH" ]]; then
+      echo "Auto-detected ROCm architecture: ${DETECTED_GPU_ARCH}"
     fi
   fi
 fi
 
+export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-${DETECTED_GPU_ARCH}}"
+
+# Build platform-specific docker run arguments
+DOCKER_RUN_ARGS=""
+if [[ "$TARGET" == rocm* ]]; then
+  DOCKER_RUN_ARGS=" --device=/dev/kfd \
+                    --device=/dev/dri \
+                    --device=/dev/infiniband \
+                    --cap-add=SYS_PTRACE \
+                    --cap-add=CAP_SYS_ADMIN \
+                    --security-opt seccomp=unconfined \
+                    --group-add video"
+fi
+
 docker run --rm --user "$(id -u):$(id -g)" \
+    $DOCKER_RUN_ARGS \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
   -v $HOME:$HOME \
