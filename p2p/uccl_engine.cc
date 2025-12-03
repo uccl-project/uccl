@@ -604,7 +604,6 @@ int uccl_engine_send_tx_md_vector(uccl_conn_t* conn, md_t* md_array,
   char const* rc_mode_env = getenv("UCCL_RCMODE");
   if (rc_mode_env != nullptr) {
     rc_mode = (std::strcmp(rc_mode_env, "1") == 0);
-    printf("Using rc_mode = %d\n", rc_mode);
   }
   // Determine the operation type based on the first item
   uccl_msg_type op_type = (rc_mode || md_array[0].op == UCCL_RW_RC)
