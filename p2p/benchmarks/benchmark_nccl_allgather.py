@@ -10,7 +10,6 @@ Usage:
 """
 
 import argparse
-import csv
 import os
 import sys
 from typing import List
@@ -333,41 +332,43 @@ def main():
                 )
             print("=" * 80)
 
-            # Save to CSV
+            # Save to CSV with aligned columns
             csv_file = args.csv_output
             write_header = not os.path.exists(csv_file)
 
+            # Define column widths for alignment
+            col_widths = {
+                "world_size": 10,
+                "dtype": 8,
+                "num_iters": 9,
+                "backend": 8,
+                "send_bytes": 12,
+                "recv_bytes": 12,
+                "avg_time_ms": 12,
+                "algbw_gbps": 12,
+                "busbw_gbps": 12,
+            }
+
             with open(csv_file, mode="a", newline="") as f:
-                writer = csv.writer(f)
                 if write_header:
-                    writer.writerow(
-                        [
-                            "world_size",
-                            "dtype",
-                            "num_iters",
-                            "backend",
-                            "send_bytes",
-                            "recv_bytes",
-                            "avg_time_ms",
-                            "algbw_gbps",
-                            "busbw_gbps",
-                        ]
+                    header = ",".join(
+                        f"{col:>{col_widths[col]}}" for col in col_widths.keys()
                     )
+                    f.write(header + "\n")
 
                 for r in results:
-                    writer.writerow(
-                        [
-                            world_size,
-                            args.dtype,
-                            args.num_iters,
-                            "nccl",
-                            r["send_bytes"],
-                            r["recv_bytes"],
-                            f"{r['avg_time_ms']:.4f}",
-                            f"{r['algbw_gbps']:.4f}",
-                            f"{r['busbw_gbps']:.4f}",
-                        ]
-                    )
+                    row_data = [
+                        f"{world_size:>{col_widths['world_size']}}",
+                        f"{args.dtype:>{col_widths['dtype']}}",
+                        f"{args.num_iters:>{col_widths['num_iters']}}",
+                        f"{'nccl':>{col_widths['backend']}}",
+                        f"{r['send_bytes']:>{col_widths['send_bytes']}}",
+                        f"{r['recv_bytes']:>{col_widths['recv_bytes']}}",
+                        f"{r['avg_time_ms']:>{col_widths['avg_time_ms']}.4f}",
+                        f"{r['algbw_gbps']:>{col_widths['algbw_gbps']}.4f}",
+                        f"{r['busbw_gbps']:>{col_widths['busbw_gbps']}.4f}",
+                    ]
+                    f.write(",".join(row_data) + "\n")
             print(f"✅ Results saved to {csv_file}")
 
         comm.barrier()
