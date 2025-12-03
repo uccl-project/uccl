@@ -276,7 +276,7 @@ class Buffer:
             event: the event after executing the kernel (valid only if `async_finish` is set).
             hook: the receiving hook function (valid only if `return_recv_hook` is set).
         """
-        print(f"DEBUG: x.size(0)={x.size(0)}, topk_idx.size(0)={topk_idx.size(0)}, num_max_dispatch_tokens_per_rank={num_max_dispatch_tokens_per_rank}", flush=True)
+        print(f"Low Latency Dispatch: x.size(0)={x.size(0)}, topk_idx.size(0)={topk_idx.size(0)}, num_max_dispatch_tokens_per_rank={num_max_dispatch_tokens_per_rank}", flush=True)
         if x.size(0) > num_max_dispatch_tokens_per_rank:
             raise RuntimeError(
                 f"x.size(0)={x.size(0)} > num_max_dispatch_tokens_per_rank={num_max_dispatch_tokens_per_rank}"
@@ -381,6 +381,7 @@ class Buffer:
             event: the event after executing the kernel (valid only if `async_finish` is set).
             hook: the receiving hook function (valid only if `return_recv_hook` is set).
         """
+        print(f"Low Latency Combine: x.size(0)={x.size(0)}, topk_idx.size(0)={topk_idx.size(0)}", flush=True)
         (
             src_info,
             layout_range,
@@ -388,6 +389,15 @@ class Buffer:
             hidden,
             num_experts,
         ) = handle
+        # print(f"Low Latency Combine Details:", flush=True)
+        # print(f"  x.shape={x.shape}, x.dtype={x.dtype}", flush=True)
+        # print(f"  topk_idx.shape={topk_idx.shape}, topk_idx.dtype={topk_idx.dtype}", flush=True)
+        # print(f"  topk_weights.shape={topk_weights.shape}, topk_weights.dtype={topk_weights.dtype}", flush=True)
+        # print(f"  num_max_dispatch_tokens_per_rank={num_max_dispatch_tokens_per_rank}", flush=True)
+        # print(f"  hidden={hidden}, num_experts={num_experts}", flush=True)
+        # print(f"  num_ranks={self.group_size}, num_local_experts={num_experts // self.group_size}", flush=True)
+        # print(f"  Expected x.shape=[{num_experts // self.group_size}, {num_max_dispatch_tokens_per_rank * self.group_size}, {hidden}]", flush=True)
+        # print(f"  use_logfmt={use_logfmt}, zero_copy={zero_copy}", flush=True)
         combined_x, event, hook = self.runtime.low_latency_combine(
             x,
             topk_idx,

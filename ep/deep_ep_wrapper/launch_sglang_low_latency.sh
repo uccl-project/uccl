@@ -42,7 +42,7 @@ export NCCL_SOCKET_IFNAME="^lo,docker"
 export FI_PROVIDER=efa
 export FI_EFA_USE_DEVICE_RDMA=1
 export SGLANG_ENABLE_JIT_DEEPGEMM=1
-export SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=512
+export SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK=128
 export CUDA_LAUNCH_BLOCKING=1
 export TORCH_USE_CUDA_DSA=1
 
@@ -70,7 +70,7 @@ python -m sglang.launch_server \
   --attention-backend flashinfer \
   --enable-eplb \
   --eplb-algorithm deepseek \
-  --ep-num-redundant-experts 16 \
+  --ep-num-redundant-experts 32 \
   --ep-dispatch-algorithm dynamic \
   --moe-a2a-backend deepep \
   --deepep-mode low_latency \

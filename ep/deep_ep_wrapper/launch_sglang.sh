@@ -58,13 +58,12 @@ echo "DeepEP config: $DEEPEP_CFG"
 python -m sglang.launch_server \
   --model-path "$MODEL_PATH" \
   --tp-size 16 \
-  --dp-size 16 \
   --ep-size 16 \
   --nnodes "$NNODES" \
   --node-rank "$NODE_RANK" \
   --dist-init-addr "$DIST_ADDR" \
   --trust-remote-code \
-  --mem-fraction-static 0.85 \
+  --mem-fraction-static 0.7 \
   --attention-backend flashinfer \
   --ep-num-redundant-experts 32 \
   --ep-dispatch-algorithm dynamic \
@@ -76,4 +75,6 @@ python -m sglang.launch_server \
   --deepep-config "$DEEPEP_CFG" \
   --enable-eplb \
   --eplb-algorithm deepseek \
-  --chunked-prefill-size 65536 \
+  --cuda-graph-bs 128 \
+  # --dp-size 16 \
+  # --chunked-prefill-size 65536 \
