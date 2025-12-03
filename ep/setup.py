@@ -4,7 +4,6 @@ import setuptools
 from glob import glob
 import shutil
 import site
-import re
 from pathlib import Path
 
 import torch
@@ -160,31 +159,9 @@ if __name__ == "__main__":
         device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", default_arch)
         os.environ["TORCH_CUDA_ARCH_LIST"] = device_arch
     else:
-        gpu_archs = os.getenv("TORCH_CUDA_ARCH_LIST", None)
-        if gpu_archs is None or gpu_archs.strip() == "":
-            # Detect GPU architecture on AMD
-            GPU_ARCH_PATTERN = re.compile(r"gfx\d+\w*")
-            try:
-                result = subprocess.run(
-                    ["rocm-smi", "--showhw"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    check=True,
-                )
-            except Exception as e:
-                raise RuntimeError(f"rocm-smi failed: {e}")
+        device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", "gfx942")
 
-            matches = set(GPU_ARCH_PATTERN.findall(result.stdout))
-
-            if not matches:
-                raise RuntimeError("No gfx architecture found in rocm-smi output.")
-            arch_list = list(matches)
-            gpu_archs = ",".join(arch_list)
-        else:
-            arch_list = gpu_archs.split(",")
-
-        for arch in arch_list:
+        for arch in device_arch.split(","):
             nvcc_flags.append(f"--offload-arch={arch.lower()}")
 
         # Disable SM90 features on AMD
@@ -197,8 +174,6 @@ if __name__ == "__main__":
 
         cxx_flags.append("-DUSE_GRACE_HOPPER")
         nvcc_flags.append("-DUSE_GRACE_HOPPER")
-
-        device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", gpu_archs)
 
     # Disable LD/ST tricks, as some CUDA version does not support `.L1::no_allocate`
     # Only enable aggressive PTX instructions for SM 9.0+ (H100/H800/B200)
