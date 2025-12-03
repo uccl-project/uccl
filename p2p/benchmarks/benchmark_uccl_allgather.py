@@ -301,7 +301,9 @@ def main():
         ],
         help="Comma-separated list of message sizes in bytes",
     )
-    parser.add_argument("--num-iters", type=int, default=100, help="Number of iterations")
+    parser.add_argument(
+        "--num-iters", type=int, default=100, help="Number of iterations"
+    )
     parser.add_argument(
         "--dtype",
         type=str,
@@ -361,7 +363,9 @@ def main():
             print(f"Device: cuda:{local_rank}")
             print(f"Data type: {args.dtype} ({element_size} bytes)")
             print(f"Iterations: {args.num_iters}")
-            print(f"Mode: {'async (iallgather)' if args.use_async else 'sync (allgather)'}")
+            print(
+                f"Mode: {'async (iallgather)' if args.use_async else 'sync (allgather)'}"
+            )
             print("=" * 60)
 
         dist.barrier()
@@ -388,7 +392,9 @@ def main():
             count = size_bytes // element_size
 
             if rank == 0:
-                print(f"\n🚀 Running benchmark: size={_pretty_size(size_bytes)}, count={count}")
+                print(
+                    f"\n🚀 Running benchmark: size={_pretty_size(size_bytes)}, count={count}"
+                )
 
             if args.use_async:
                 data = run_allgather_async_benchmark(
@@ -489,4 +495,3 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\n[Interrupted] Benchmark aborted by user.")
         sys.exit(1)
-
