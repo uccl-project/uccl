@@ -1,12 +1,12 @@
 """
-Benchmark UCCL Collective for AllGather
+Benchmark NCCL AllGather (baseline for comparison with UCCL)
 
 Usage:
     torchrun --nnodes=2 --nproc_per_node=1 --node-rank=0 --master_addr=<IP> --master_port=19999 \
-        benchmark_uccl_allgather.py --sizes 1024,4096,16384,65536,262144,1048576 --num-iters 100
+        benchmark_nccl_allgather.py --sizes 1024,4096,16384,65536,262144,1048576 --num-iters 100
 
     # Single node multi-GPU:
-    torchrun --standalone --nproc_per_node=4 benchmark_uccl_allgather.py --sizes 65536,262144,1048576 --num-iters 100
+    torchrun --standalone --nproc_per_node=4 benchmark_nccl_allgather.py --sizes 65536,262144,1048576 --num-iters 100
 """
 
 import argparse
@@ -18,8 +18,8 @@ from typing import List
 import torch
 import torch.distributed as dist
 
-from util import setup_seed, sync_all
-from uccl import collective
+from util import setup_seed
+from pynccl import PyNcclCommunicator
 
 
 def _pretty_size(num_bytes: int) -> str:
@@ -34,22 +34,21 @@ def _pretty_size(num_bytes: int) -> str:
 
 
 def warmup_allgather_check(
+    comm: PyNcclCommunicator,
     count: int = 4 * 1024,
     dtype: torch.dtype = torch.float32,
     device: torch.device = None,
 ):
     """
-    Warmup and verification for allgather operation.
-    Each rank fills its send buffer with (rank + 1) and verifies
-    the gathered result contains all ranks' data.
+    Warmup and verification for NCCL allgather operation.
     """
-    print("\n🔧 Running warmup_allgather_check...")
+    print("\n🔧 Running NCCL warmup_allgather_check...")
 
     if device is None:
         device = torch.cuda.current_device()
 
-    world_size = dist.get_world_size()
-    rank = dist.get_rank()
+    world_size = comm.world_size
+    rank = dist.get_rank(comm.group)
 
     # Create send tensor filled with rank-specific value
     send_tensor = torch.full(
@@ -66,18 +65,16 @@ def warmup_allgather_check(
         device=device,
     )
 
-    sync_all()
-
-    # Register tensors for RDMA
-    collective.register_tensor(send_tensor)
-    collective.register_tensor(recv_tensor)
+    comm.barrier()
+    torch.cuda.synchronize(device)
 
     print(f"[Rank {rank}] send_tensor: shape={send_tensor.shape}, value={rank + 1}")
 
-    # Perform allgather
-    collective.allgather(send_tensor, recv_tensor)
+    # Perform NCCL allgather
+    comm.all_gather(recv_tensor, send_tensor)
+    torch.cuda.synchronize(device)
 
-    sync_all()
+    comm.barrier()
 
     # Verify results
     all_passed = True
@@ -97,27 +94,25 @@ def warmup_allgather_check(
 
     if rank == 0:
         if all_passed:
-            print(f"[Rank {rank}] ✅ AllGather verification PASSED")
+            print(f"[Rank {rank}] ✅ NCCL AllGather verification PASSED")
         else:
-            print(f"[Rank {rank}] ❌ AllGather verification FAILED")
-
-    # Cleanup
-    collective.deregister_tensor(send_tensor)
-    collective.deregister_tensor(recv_tensor)
+            print(f"[Rank {rank}] ❌ NCCL AllGather verification FAILED")
 
     return all_passed
 
 
-def run_allgather_sync_benchmark(
+def run_allgather_benchmark(
+    comm: PyNcclCommunicator,
     count: int,
     num_iters: int,
     dtype: torch.dtype = torch.float32,
     device: torch.device = None,
 ) -> dict:
     """
-    Run synchronous allgather benchmark.
+    Run NCCL allgather benchmark.
 
     Args:
+        comm: PyNcclCommunicator instance
         count: Number of elements per rank to gather
         num_iters: Number of iterations
         dtype: Data type
@@ -129,24 +124,21 @@ def run_allgather_sync_benchmark(
     if device is None:
         device = torch.cuda.current_device()
 
-    world_size = dist.get_world_size()
-    rank = dist.get_rank()
+    world_size = comm.world_size
 
     # Create tensors
     send_tensor = torch.randn(count, dtype=dtype, device=device)
     recv_tensor = torch.empty(world_size * count, dtype=dtype, device=device)
 
-    # Register tensors
-    collective.register_tensor(send_tensor)
-    collective.register_tensor(recv_tensor)
-
-    sync_all()
+    comm.barrier()
+    torch.cuda.synchronize(device)
 
     # Warmup iterations
     for _ in range(5):
-        collective.allgather(send_tensor, recv_tensor)
+        comm.all_gather(recv_tensor, send_tensor)
+    torch.cuda.synchronize(device)
 
-    sync_all()
+    comm.barrier()
 
     # Timed iterations using CUDA events
     start_event = torch.cuda.Event(enable_timing=True)
@@ -154,93 +146,10 @@ def run_allgather_sync_benchmark(
 
     start_event.record()
     for _ in range(num_iters):
-        collective.allgather(send_tensor, recv_tensor)
+        comm.all_gather(recv_tensor, send_tensor)
     end_event.record()
 
-    sync_all()
-
-    # Calculate elapsed time in milliseconds
-    elapsed_ms = start_event.elapsed_time(end_event)
-    avg_time_ms = elapsed_ms / num_iters
-
-    # Calculate data sizes
-    element_size = send_tensor.element_size()
-    send_bytes = count * element_size
-    total_recv_bytes = world_size * send_bytes
-
-    # Algorithm bandwidth: total data in output / time
-    algbw_gbps = (total_recv_bytes / (avg_time_ms / 1000)) / 1e9
-
-    # Bus bandwidth for allgather: algbw * (n-1)/n
-    # This accounts for the ring algorithm efficiency
-    busbw_gbps = algbw_gbps * (world_size - 1) / world_size
-
-    # Cleanup
-    collective.deregister_tensor(send_tensor)
-    collective.deregister_tensor(recv_tensor)
-
-    return {
-        "count": count,
-        "send_bytes": send_bytes,
-        "recv_bytes": total_recv_bytes,
-        "avg_time_ms": avg_time_ms,
-        "algbw_gbps": algbw_gbps,
-        "busbw_gbps": busbw_gbps,
-    }
-
-
-def run_allgather_async_benchmark(
-    count: int,
-    num_iters: int,
-    dtype: torch.dtype = torch.float32,
-    device: torch.device = None,
-) -> dict:
-    """
-    Run asynchronous allgather benchmark using iallgather.
-
-    Args:
-        count: Number of elements per rank to gather
-        num_iters: Number of iterations
-        dtype: Data type
-        device: CUDA device
-
-    Returns:
-        dict with timing and bandwidth metrics
-    """
-    if device is None:
-        device = torch.cuda.current_device()
-
-    world_size = dist.get_world_size()
-    rank = dist.get_rank()
-
-    # Create tensors
-    send_tensor = torch.randn(count, dtype=dtype, device=device)
-    recv_tensor = torch.empty(world_size * count, dtype=dtype, device=device)
-
-    # Register tensors
-    collective.register_tensor(send_tensor)
-    collective.register_tensor(recv_tensor)
-
-    sync_all()
-
-    # Warmup iterations
-    for _ in range(5):
-        transfer_ids = collective.iallgather(send_tensor, recv_tensor)
-        collective.wait_all(transfer_ids)
-
-    sync_all()
-
-    # Timed iterations using CUDA events
-    start_event = torch.cuda.Event(enable_timing=True)
-    end_event = torch.cuda.Event(enable_timing=True)
-
-    start_event.record()
-    for _ in range(num_iters):
-        transfer_ids = collective.iallgather(send_tensor, recv_tensor)
-        collective.wait_all(transfer_ids)
-    end_event.record()
-
-    sync_all()
+    torch.cuda.synchronize(device)
 
     # Calculate elapsed time in milliseconds
     elapsed_ms = start_event.elapsed_time(end_event)
@@ -256,10 +165,6 @@ def run_allgather_async_benchmark(
 
     # Bus bandwidth for allgather: algbw * (n-1)/n
     busbw_gbps = algbw_gbps * (world_size - 1) / world_size
-
-    # Cleanup
-    collective.deregister_tensor(send_tensor)
-    collective.deregister_tensor(recv_tensor)
 
     return {
         "count": count,
@@ -281,10 +186,7 @@ def parse_size_list(val: str) -> List[int]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Benchmark UCCL Collective AllGather API"
-    )
-    parser.add_argument(
-        "--num-cpus", type=int, default=4, help="Number of CPU threads for RDMA ops"
+        description="Benchmark NCCL AllGather (baseline for UCCL comparison)"
     )
     parser.add_argument(
         "--sizes",
@@ -310,12 +212,6 @@ def main():
         help="Data type for tensors",
     )
     parser.add_argument(
-        "--async",
-        dest="use_async",
-        action="store_true",
-        help="Use async iallgather API instead of sync allgather",
-    )
-    parser.add_argument(
         "--skip-verify",
         action="store_true",
         help="Skip verification warmup",
@@ -323,7 +219,7 @@ def main():
     parser.add_argument(
         "--csv-output",
         type=str,
-        default="uccl_allgather_results.csv",
+        default="nccl_allgather_results.csv",
         help="CSV output file name",
     )
     args = parser.parse_args()
@@ -335,11 +231,14 @@ def main():
     device = torch.device(f"cuda:{local_rank}")
     torch.cuda.set_device(device)
 
-    # Initialize distributed
+    # Initialize distributed with gloo for coordination, NCCL for data
     dist.init_process_group(backend="gloo", device_id=device)
 
     rank = dist.get_rank()
     world_size = dist.get_world_size()
+
+    # Create NCCL communicator
+    comm = PyNcclCommunicator(group=dist.group.WORLD, device=device)
 
     dtype_map = {
         "float16": torch.float16,
@@ -350,27 +249,23 @@ def main():
     element_size = torch.tensor([], dtype=dtype).element_size()
 
     try:
-        # Initialize UCCL collective
-        collective.init_collective(args.num_cpus)
-
         if rank == 0:
             print("=" * 60)
-            print("UCCL AllGather Benchmark")
+            print("NCCL AllGather Benchmark (Baseline)")
             print("=" * 60)
             print(f"World size: {world_size}")
             print(f"Device: cuda:{local_rank}")
             print(f"Data type: {args.dtype} ({element_size} bytes)")
             print(f"Iterations: {args.num_iters}")
-            print(f"Mode: {'async (iallgather)' if args.use_async else 'sync (allgather)'}")
             print("=" * 60)
 
         dist.barrier()
 
         # Run verification warmup
         if not args.skip_verify:
-            # Convert first size to element count for verification
             verify_count = args.sizes[0] // element_size
             verify_passed = warmup_allgather_check(
+                comm=comm,
                 count=verify_count,
                 dtype=dtype,
                 device=device,
@@ -379,7 +274,8 @@ def main():
                 print(f"[Rank {rank}] Verification failed, aborting benchmark")
                 sys.exit(1)
 
-        sync_all()
+        comm.barrier()
+        torch.cuda.synchronize(device)
 
         results = []
 
@@ -390,20 +286,13 @@ def main():
             if rank == 0:
                 print(f"\n🚀 Running benchmark: size={_pretty_size(size_bytes)}, count={count}")
 
-            if args.use_async:
-                data = run_allgather_async_benchmark(
-                    count=count,
-                    num_iters=args.num_iters,
-                    dtype=dtype,
-                    device=device,
-                )
-            else:
-                data = run_allgather_sync_benchmark(
-                    count=count,
-                    num_iters=args.num_iters,
-                    dtype=dtype,
-                    device=device,
-                )
+            data = run_allgather_benchmark(
+                comm=comm,
+                count=count,
+                num_iters=args.num_iters,
+                dtype=dtype,
+                device=device,
+            )
 
             results.append(data)
 
@@ -416,12 +305,13 @@ def main():
                     f"BusBW: {data['busbw_gbps']:.2f} GB/s"
                 )
 
-            sync_all()
+            comm.barrier()
+            torch.cuda.synchronize(device)
 
         # Print summary table
         if rank == 0:
             print("\n" + "=" * 80)
-            print("Summary")
+            print("Summary (NCCL Baseline)")
             print("=" * 80)
             print(
                 f"{'Size':>12} | {'Send':>10} | {'Recv':>10} | "
@@ -451,7 +341,7 @@ def main():
                             "world_size",
                             "dtype",
                             "num_iters",
-                            "mode",
+                            "backend",
                             "send_bytes",
                             "recv_bytes",
                             "avg_time_ms",
@@ -466,7 +356,7 @@ def main():
                             world_size,
                             args.dtype,
                             args.num_iters,
-                            "async" if args.use_async else "sync",
+                            "nccl",
                             r["send_bytes"],
                             r["recv_bytes"],
                             f"{r['avg_time_ms']:.4f}",
@@ -476,10 +366,10 @@ def main():
                     )
             print(f"✅ Results saved to {csv_file}")
 
-        sync_all()
+        comm.barrier()
+        torch.cuda.synchronize(device)
 
     finally:
-        collective.finalize_collective()
         dist.destroy_process_group()
 
 
