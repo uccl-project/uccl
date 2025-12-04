@@ -31,6 +31,7 @@ echo "Node rank: $NODE_RANK"
 python -m sglang.launch_server \
   --model-path "$MODEL_PATH" \
   --tp-size 16 \
+  --dp-size 16 \
   --ep-size 16 \
   --nnodes "$NNODES" \
   --node-rank "$NODE_RANK" \
@@ -40,7 +41,8 @@ python -m sglang.launch_server \
   --attention-backend flashinfer \
   --enable-eplb \
   --eplb-algorithm deepseek \
-  --ep-num-redundant-experts 16 \
+  --ep-num-redundant-experts 32 \
   --ep-dispatch-algorithm dynamic \
   --enable-dp-attention \
-  --enable-dp-lm-head
+  --enable-dp-lm-head \
+  --moe-dense-tp-size 1

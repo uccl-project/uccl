@@ -5,6 +5,9 @@ set -e
 # Configuration
 # ============================
 
+# python setup.py install
+# pip install ../../wheelhouse-cuda/uccl-0.0.1.post4-py3-none-any.whl
+
 # Local path for DeepEP config
 DEEPEP_CFG="$(pwd)/deepep_config.json"
 
@@ -13,16 +16,16 @@ cat > "$DEEPEP_CFG" <<'EOF'
 {
   "normal_dispatch": {
     "num_sms": 24,
-    "num_max_nvl_chunked_send_tokens": 16,
+    "num_max_nvl_chunked_send_tokens": 40,
     "num_max_nvl_chunked_recv_tokens": 512,
-    "num_max_rdma_chunked_send_tokens": 16,
+    "num_max_rdma_chunked_send_tokens": 20,
     "num_max_rdma_chunked_recv_tokens": 512
   },
   "normal_combine": {
     "num_sms": 24,
-    "num_max_nvl_chunked_send_tokens": 16,
+    "num_max_nvl_chunked_send_tokens": 7,
     "num_max_nvl_chunked_recv_tokens": 512,
-    "num_max_rdma_chunked_send_tokens": 16,
+    "num_max_rdma_chunked_send_tokens": 32,
     "num_max_rdma_chunked_recv_tokens": 512
   }
 }
@@ -55,6 +58,7 @@ echo "DeepEP config: $DEEPEP_CFG"
 python -m sglang.launch_server \
   --model-path "$MODEL_PATH" \
   --tp-size 16 \
+  --dp-size 16 \
   --ep-size 16 \
   --nnodes "$NNODES" \
   --node-rank "$NODE_RANK" \
@@ -62,12 +66,14 @@ python -m sglang.launch_server \
   --trust-remote-code \
   --mem-fraction-static 0.85 \
   --attention-backend flashinfer \
-  --enable-eplb \
-  --eplb-algorithm deepseek \
-  --ep-num-redundant-experts 16 \
+  --ep-num-redundant-experts 32 \
   --ep-dispatch-algorithm dynamic \
+  --enable-dp-attention \
+  --enable-dp-lm-head \
+  --moe-dense-tp-size 1 \
   --moe-a2a-backend deepep \
   --deepep-mode normal \
   --deepep-config "$DEEPEP_CFG" \
-  --enable-dp-attention \
-  --enable-dp-lm-head
+  --enable-eplb \
+  --eplb-algorithm deepseek \
+  --chunked-prefill-size 65536 \

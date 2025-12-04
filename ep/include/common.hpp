@@ -29,7 +29,7 @@ extern bool use_ll_sl;
 #endif
 
 #define USE_MSCCLPP_FIFO_BACKEND
-// #define USE_SUBSET_BARRIER
+#define USE_SUBSET_BARRIER
 #define kAtomicBufferSize 81960
 #define kQueueSize 2048
 #define kQueueMask (kQueueSize - 1)
@@ -39,7 +39,7 @@ extern bool use_ll_sl;
 #define kMaxInflightNormal 8
 #define kBatchSize 32
 #define kIterations 40000
-#define kNumProxyThs 4
+#define kNumProxyThs 1
 #define kTestNumGpuThPerBlock 1
 #define kObjectSize 7168  // 7 KB
 // #define kObjectSize 10752  // 10.5 KB
