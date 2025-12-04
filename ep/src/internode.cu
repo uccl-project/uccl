@@ -582,7 +582,12 @@ __global__ void __launch_bounds__(
   // RDMA sender warp synchronization
   // NOTES: `rdma_send_channel_tail` means the latest released tail
   // NOTES: `rdma_send_channel_window` means the ongoing 32 transactions' status
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  __shared__ int volatile rdma_send_next_token_idx;
+  __shared__ int volatile rdma_send_channel_next_tail[kNumRDMARanks];
+#else
   __shared__ int rdma_send_channel_lock[kNumRDMARanks];
+#endif
   __shared__ int rdma_send_channel_tail[kNumRDMARanks];
   __shared__ uint32_t rdma_send_channel_window[kNumRDMARanks];
 
@@ -628,6 +633,12 @@ __global__ void __launch_bounds__(
     int token_start_idx, token_end_idx;
     get_channel_task_range(num_tokens, num_channels, channel_id,
                            token_start_idx, token_end_idx);
+
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    (warp_id == 0 and lane_id == 0)
+        ? (rdma_send_next_token_idx = token_start_idx)
+        : 0;
+#endif
 
     // Send number of tokens in this channel by `-value - 1`
     EP_STATIC_ASSERT(NUM_MAX_NVL_PEERS * 2 + 2 <= WARP_SIZE,
@@ -694,6 +705,59 @@ __global__ void __launch_bounds__(
     auto send_buffer = lane_id == rdma_rank
                            ? rdma_channel_data.recv_buffer(lane_id)
                            : rdma_channel_data.send_buffer(lane_id);
+
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    // NOTE: sequential lock works for amd.
+    int last_rdma_tail_idx = -1;
+    for (token_idx = token_start_idx + warp_id; token_idx < token_end_idx;
+         token_idx += kNumDispatchRDMASenderWarps) {
+      // Read RDMA rank existence
+      uint64_t is_token_in_rank_uint64 = 0;
+      if (lane_id < kNumRDMARanks) {
+        is_token_in_rank_uint64 = __ldg(reinterpret_cast<uint64_t const*>(
+            is_token_in_rank + token_idx * num_ranks +
+            lane_id * NUM_MAX_NVL_PEERS));
+      }
+
+      // Acquire sequential lock
+      while (lane_id == 0 and rdma_send_next_token_idx != token_idx)
+        ;
+      __syncwarp();
+
+      // Acquire next tail
+      int rdma_tail_idx = -1;
+      auto start_time = clock64();
+      if (is_token_in_rank_uint64 != 0) {
+        rdma_tail_idx = rdma_send_channel_next_tail[lane_id]++;
+        // Wait the remote buffer to be released
+        while (rdma_tail_idx - cached_rdma_channel_head >=
+               num_max_rdma_chunked_recv_tokens) {
+          cached_rdma_channel_head = static_cast<int>(
+              ld_acquire_sys_global(rdma_channel_head.buffer(lane_id)));
+
+          // Timeout check
+          if (clock64() - start_time >= NUM_TIMEOUT_CYCLES) {
+            printf(
+                "DeepEP dispatch RDMA sender timeout, channel: %d, RDMA: %d, "
+                "nvl: %d, dst RDMA lane: %d, head: %d, tail: %d\n",
+                channel_id, rdma_rank, nvl_rank, lane_id,
+                cached_rdma_channel_head, rdma_tail_idx);
+            trap();
+          }
+        }
+      }
+      __syncwarp();
+
+      // Update last token tail
+      if (last_rdma_tail_idx >= 0)
+        st_release_cta(const_cast<int const*>(rdma_send_channel_tail + lane_id),
+                       last_rdma_tail_idx + 1);
+      last_rdma_tail_idx = rdma_tail_idx;
+
+      // Release sequential lock
+      lane_id == 0 ? (rdma_send_next_token_idx += 1) : 0;
+
+#else
     for (token_idx = token_start_idx; token_idx < token_end_idx; ++token_idx) {
       // Read RDMA rank existence
       uint64_t is_token_in_rank_uint64 = 0;
@@ -701,6 +765,7 @@ __global__ void __launch_bounds__(
         is_token_in_rank_uint64 = __ldg(reinterpret_cast<uint64_t const*>(
             is_token_in_rank + token_idx * num_ranks +
             lane_id * NUM_MAX_NVL_PEERS));
+
         global_rdma_tail_idx += (is_token_in_rank_uint64 != 0);
       }
       __syncwarp();
@@ -730,6 +795,7 @@ __global__ void __launch_bounds__(
           trap();
         }
       }
+#endif
       __syncwarp();
 
       // Store RDMA head for combine
@@ -813,6 +879,7 @@ __global__ void __launch_bounds__(
       }
       __syncwarp();
 
+#if defined(__NVCC__)
       // Release the transaction in the window
       if (is_token_in_rank_uint64 != 0) {
         // Acquire lock first
@@ -841,8 +908,25 @@ __global__ void __launch_bounds__(
         // Release lock
         release_lock(rdma_send_channel_lock + lane_id);
       }
+#endif
       __syncwarp();
     }
+
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    // Epilogue
+    // Acquire sequential lock
+    while (lane_id == 0 and rdma_send_next_token_idx != token_idx)
+      ;
+    __syncwarp();
+
+    // Update last token tail
+    if (last_rdma_tail_idx >= 0)
+      st_release_cta(const_cast<int const*>(rdma_send_channel_tail + lane_id),
+                     last_rdma_tail_idx + 1);
+
+    // Release sequential lock
+    lane_id == 0 ? (rdma_send_next_token_idx += 1) : 0;
+#endif
   } else if (warp_role == WarpRole::kRDMASenderCoordinator) {
     // NOTES: in case of splitting, the issued put at the end of the buffer
     EP_DEVICE_ASSERT(num_max_rdma_chunked_recv_tokens %
@@ -852,7 +936,11 @@ __global__ void __launch_bounds__(
     // Clean shared memory
     EP_STATIC_ASSERT(kNumRDMARanks <= WARP_SIZE,
                      "Invalid number of RDMA ranks");
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    (lane_id < kNumRDMARanks) ? (rdma_send_channel_next_tail[lane_id] = 0) : 0;
+#else
     (lane_id < kNumRDMARanks) ? (rdma_send_channel_lock[lane_id] = 0) : 0;
+#endif
     (lane_id < kNumRDMARanks) ? (rdma_send_channel_tail[lane_id] = 0) : 0;
     (lane_id < kNumRDMARanks) ? (rdma_send_channel_window[lane_id] = 0) : 0;
 
@@ -1114,9 +1202,10 @@ __global__ void __launch_bounds__(
 
         // Copy data
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-        UNROLLED_WARP_COPY(
-            5, lane_id, hidden_int4, reinterpret_cast<int4*>(dst_shifted),
-            reinterpret_cast<int4*>(shifted), ld_nc_global, st_na_global);
+        UNROLLED_WARP_COPY(5, lane_id, num_bytes_per_token / sizeof(int4),
+                           reinterpret_cast<int4*>(dst_shifted),
+                           reinterpret_cast<int4*>(shifted), ld_nc_global,
+                           st_na_global);
 #else
         if (lane_id == 0) {
           tma_load_1d(tma_buffer, shifted, tma_mbarrier, num_bytes_per_token,
@@ -1298,6 +1387,12 @@ __global__ void __launch_bounds__(
             5, lane_id, hidden_int4,
             reinterpret_cast<int4*>(recv_x + recv_token_idx * hidden_int4),
             reinterpret_cast<int4*>(shifted), ld_nc_global, st_na_global);
+        if (scale_aligned)
+          UNROLLED_WARP_COPY(1, lane_id, num_scales,
+                             recv_x_scales + recv_token_idx * num_scales,
+                             reinterpret_cast<float*>(shifted + hidden_bytes),
+                             ld_nc_global, st_na_global);
+
 #else
         if (lane_id == 0) {
           tma_load_1d(tma_buffer, shifted, tma_mbarrier, tma_load_bytes);
@@ -1660,7 +1755,12 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
                    bool is_cached_dispatch, bool low_latency_mode,
                    uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
                    void* atomic_buffer_ptr) {
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  EP_HOST_ASSERT(is_cached_dispatch and "only support for dispatch");
+  int const num_threads = std::max(128, WARP_SIZE * std::min(16, num_channels));
+#else
   int const num_threads = std::max(128, WARP_SIZE * num_channels);
+#endif
   int const num_warps = num_threads / WARP_SIZE;
   auto const num_rdma_ranks = num_ranks / NUM_MAX_NVL_PEERS;
   int const kNumTMABytesPerWarp = 8192;
