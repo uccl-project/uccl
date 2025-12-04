@@ -2022,7 +2022,7 @@ PYBIND11_MODULE(ep, m) {
     CUDA_CHECK(
         hipExtMallocWithFlags(&ptr, num_rdma_bytes, hipDeviceMallocUncached));
 #else
-    EP_HOST_ASSERT(false and "Please use torch.zeros instead on CUDA platform.")
+    EP_HOST_ASSERT(false and "Please use torch.zeros instead on CUDA platform.");
 #endif
     CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
     return torch::from_blob(ptr, {num_rdma_bytes},
