@@ -39,26 +39,28 @@ INCDIR ?= $(PREFIX)/include
 LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LINK_LIBS)
 
 # Target and source files
-TARGET   := p2p$(PYEXT)
-PLUGIN_SO := libuccl_engine.so
+P2P_PYTHON_EXT := p2p$(PYEXT)
+P2P_SHARED_LIB := libuccl_p2p.so
+RDMA_PLUGIN_LIB := librdma_plugin.a
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
 ifeq ($(USE_TCPX),1)
-NVCC ?= $(CUDA_HOME)/bin/nvcc
-NVCCFLAGS := -std=c++17 -Xcompiler "-fPIC -O3" -I../include -Itcpx -Itcpx/include -I$(CUDA_INC) -DUSE_TCPX
-SOURCES := tcpx_engine.cc tcpx/tcpx_impl.cc
-CU_SOURCES := tcpx/device/unpack_kernels.cu tcpx/device/unpack_launch.cu
+NCCL_HOME ?= ../thirdparty/nccl/build
+NCCL_INC  ?= $(NCCL_HOME)/include
+NCCL_LIB  ?= $(NCCL_HOME)/lib
+P2P_SHARED_LIB := libuccl_p2p.so
+SOURCES := nccl_tcpx_endpoint.cc
 CORE_OBJECTS := $(SOURCES:.cc=.o)
-CU_OBJECTS := $(CU_SOURCES:.cu=.o)
-CXXFLAGS += -Itcpx -Itcpx/include
+CXXFLAGS += -DUSE_TCPX -I$(NCCL_INC)
+LDFLAGS  += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
 else
 SOURCES := engine.cc pybind_engine.cc
 CORE_OBJECT := engine.o
 endif
 
 ifeq ($(USE_TCPX),1)
-OBJECTS := $(CORE_OBJECTS) $(CU_OBJECTS)
+OBJECTS := $(CORE_OBJECTS)
 else
 OBJECTS := $(SOURCES:.cc=.o)
 endif
@@ -66,29 +68,26 @@ endif
 # Build the shared libraries
 ifeq ($(USE_TCPX),1)
 # Default target
-all: $(PLUGIN_SO)
+all: $(P2P_SHARED_LIB)
 
 # only build plugin for tcpx now, TODO: add tcpx to p2p	  
-$(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS)
+$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS)
 	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB)
-
-%.o: %.cu
-	$(NVCC) $(NVCCFLAGS) -c $< -o $@
 else
 # Default target
-all: $(TARGET) $(PLUGIN_SO)
+all: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 
-$(TARGET): $(OBJECTS) $(RDMA_HOME)/librdma.a
+$(P2P_PYTHON_EXT): $(OBJECTS) $(RDMA_HOME)/librdma.a
 	$(CXX) $(OBJECTS) $(RDMA_HOME)/librdma.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB)
 
-$(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_HOME)/librdma_plugin.a
-	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_HOME)/librdma_plugin.a \
+$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB)
+	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) -libverbs -lz -lelf
@@ -96,41 +95,44 @@ $(PLUGIN_SO): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_HOME)/librdma_plugin.a
 $(RDMA_HOME)/librdma.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
 	make -C $(RDMA_HOME) librdma.a -j$(nproc)
 
-$(RDMA_HOME)/librdma_plugin.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
-	make CXXFLAGS="-DDISABLE_CALL_ONCE_STATIC" -C $(RDMA_HOME) librdma_plugin.a
+RDMA_OBJECTS := $(patsubst $(RDMA_HOME)/%.cc,%.o,$(filter-out $(RDMA_HOME)/nccl_plugin.cc,$(wildcard $(RDMA_HOME)/*.cc)))
+
+$(RDMA_PLUGIN_LIB): $(RDMA_OBJECTS)
+	ar rcs $@ $(RDMA_OBJECTS)
+
+$(RDMA_OBJECTS): %.o: $(RDMA_HOME)/%.cc
+	$(CXX) -c $< -o $@ $(CXXFLAGS) -DDISABLE_CALL_ONCE_STATIC -DUSE_CUDA -I$(RDMA_HOME)
 endif
 
 # Compile source files
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
 
-# Install the module
-install: $(PLUGIN_SO)
-ifneq ($(USE_TCPX),1)
-	$(MAKE) $(TARGET)
-	@mkdir -p $(INSTALL_DIR)
-	@cp $(TARGET) $(INSTALL_DIR)/
-	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(TARGET)"
-else
-	@mkdir -p $(INSTALL_DIR)
-endif
-	install -m 755 $(PLUGIN_SO) $(LIBDIR)/
-ifneq ($(USE_TCPX),1)
-	install -m 755 $(RDMA_HOME)/librdma_plugin.a $(LIBDIR)/
-endif
+ifeq ($(USE_TCPX),1)
+install: $(P2P_SHARED_LIB)
+	install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/
 	install -m 644 $(CAPI_HEADER) $(INCDIR)/
+else
+install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
+	$(MAKE) $(P2P_PYTHON_EXT)
+	@mkdir -p $(INSTALL_DIR)
+	@cp $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
+	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
+	install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/
+	install -m 755 $(RDMA_PLUGIN_LIB) $(LIBDIR)/
+	install -m 644 $(CAPI_HEADER) $(INCDIR)/
+endif
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(CAPI_OBJECT) $(PLUGIN_SO)
+	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB)
 ifneq ($(USE_TCPX),1)
-	rm -f $(TARGET)
-	make -C $(RDMA_HOME) clean -j$(nproc)
+	rm -f $(P2P_PYTHON_EXT) $(RDMA_PLUGIN_LIB) $(RDMA_OBJECTS)
 endif
 
 # Test the module
 test:
 ifneq ($(USE_TCPX),1)
-	$(MAKE) $(TARGET)
+	$(MAKE) $(P2P_PYTHON_EXT)
 	$(PYTHON) tests/test_engine_write.py
 endif
 
@@ -148,4 +150,4 @@ help:
 	@echo "  install-deps - Install pybind11 dependency"
 	@echo "  help         - Show this help message"
 
-.PHONY: all clean test install-deps help install 
+.PHONY: all clean test install-deps help install

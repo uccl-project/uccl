@@ -64,7 +64,7 @@ void UcclFlow::post_flush(struct Mhandle** mhandles, void** data, int* size,
   wr.send_flags = IBV_SEND_SIGNALED;
 
   struct ibv_send_wr* bad_wr;
-  DCHECK(ibv_post_send(recv_comm_.gpu_flush_qp, &wr, &bad_wr) == 0);
+  CHECK(ibv_post_send(recv_comm_.gpu_flush_qp, &wr, &bad_wr) == 0);
 
   flow_cq_cnt_++;
 
@@ -116,7 +116,7 @@ void UcclFlow::rc_recv(void* data, int size, struct Mhandle* mhandle,
   }
 
   struct ibv_send_wr* bad_wr;
-  DCHECK(ibv_post_send(qp, wr, &bad_wr) == 0);
+  CHECK(ibv_post_send(qp, wr, &bad_wr) == 0);
 
   // Post a recv buffer for consuming immedate data.
   struct ibv_recv_wr recv_wr = {};
@@ -125,7 +125,7 @@ void UcclFlow::rc_recv(void* data, int size, struct Mhandle* mhandle,
   recv_wr.num_sge = 0;
   recv_wr.next = nullptr;
   struct ibv_recv_wr* bad_recv_wr;
-  DCHECK(ibv_post_recv(comm_base->rc_qp, &recv_wr, &bad_recv_wr) == 0);
+  CHECK(ibv_post_recv(comm_base->rc_qp, &recv_wr, &bad_recv_wr) == 0);
   flow_cq_cnt_++;
 
   UCCL_LOG_EP << "rc_recv: supplies buffer at recv slot: " << slot;
@@ -1374,7 +1374,7 @@ void UcclFlow::rc_send(struct ucclRequest* ureq) {
 
   wr.wr_id = (uint64_t)&ureq->rc_or_flush_done;
 
-  DCHECK(ibv_post_send(qp, &wr, &bad_wr) == 0) << "Failed to post send";
+  CHECK(ibv_post_send(qp, &wr, &bad_wr) == 0) << "Failed to post send";
   flow_cq_cnt_++;
 }
 
@@ -1430,7 +1430,7 @@ void UcclFlow::rc_read(struct ucclRequest* ureq) {
   wr.send_flags = IBV_SEND_SIGNALED;
   wr.wr_id = (uint64_t)&ureq->rc_or_flush_done;
 
-  DCHECK(ibv_post_send(qp, &wr, &bad) == 0) << "RC read post failed";
+  CHECK(ibv_post_send(qp, &wr, &bad) == 0) << "RC read post failed";
   flow_cq_cnt_++;
   printf(
       "RC read posted: laddr: %lx, raddr: %lx, size: %u, lkey: %u, rkey: %u\n",
@@ -2129,7 +2129,7 @@ bool RDMAContext::receiverCC_tx_message(struct ucclRequest* ureq) {
 
     auto pull_target = eqds->compute_pull_target(subflow, chunk_size);
 
-    DCHECK(wr_ex_pool_->alloc_buff(&wr_addr) == 0);
+    CHECK(wr_ex_pool_->alloc_buff(&wr_addr) == 0);
     struct wr_ex* wr_ex = reinterpret_cast<struct wr_ex*>(wr_addr);
     auto wr = &wr_ex->wr;
 
@@ -2176,7 +2176,7 @@ bool RDMAContext::receiverCC_tx_message(struct ucclRequest* ureq) {
     wr_ex->qpidx = qpidx;
 
     struct ibv_send_wr* bad_wr;
-    DCHECK(ibv_post_send(qpw->qp, wr, &bad_wr) == 0);
+    CHECK(ibv_post_send(qpw->qp, wr, &bad_wr) == 0);
 
     // Track this chunk.
     subflow->txtracking.track_chunk(ureq, wr_ex, now, imm_data.GetCSN(),
@@ -2229,7 +2229,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
     if (chunk_size == 0 && size) return false;
 
     if (io_ctx_->bypass_pacing()) {
-      DCHECK(wr_ex_pool_->alloc_buff(&wr_addr) == 0);
+      CHECK(wr_ex_pool_->alloc_buff(&wr_addr) == 0);
       struct wr_ex* wr_ex = reinterpret_cast<struct wr_ex*>(wr_addr);
       auto wr = &wr_ex->wr;
 
@@ -2274,7 +2274,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
       wr_ex->qpidx = qpidx;
 
       struct ibv_send_wr* bad_wr;
-      DCHECK(ibv_post_send(qpw->qp, wr, &bad_wr) == 0);
+      CHECK(ibv_post_send(qpw->qp, wr, &bad_wr) == 0);
 
       // Track this chunk.
       subflow->txtracking.track_chunk(ureq, wr_ex, now, imm_data.GetCSN(),
@@ -2301,7 +2301,7 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
     }
 
     // Prepare SGE.
-    DCHECK(wr_ex_pool_->alloc_buff(&wr_addr) == 0);
+    CHECK(wr_ex_pool_->alloc_buff(&wr_addr) == 0);
     struct wr_ex* wr_ex = reinterpret_cast<struct wr_ex*>(wr_addr);
     auto wr = &wr_ex->wr;
     wr_ex->sge.addr = laddr + *sent_offset;
@@ -2422,7 +2422,7 @@ bool RDMAContext::senderCC_tx_write(struct ucclRequest* ureq) {
   uint64_t wr_addr;
   uint32_t chunk_size;
   if (size == 0) {
-    DCHECK(false) << "RDMA WRITE len 0";
+    CHECK(false) << "RDMA WRITE len 0";
     return true;
   }
 
@@ -2499,7 +2499,7 @@ bool RDMAContext::senderCC_tx_read(struct ucclRequest* ureq) {
   uint64_t wr_addr;
   uint32_t chunk_size;
   if (size == 0) {
-    DCHECK(false) << "RDMA READ len 0";
+    CHECK(false) << "RDMA READ len 0";
     return true;
   }
 
@@ -2632,12 +2632,12 @@ void RDMAContext::check_credit_rq(bool force) {
     struct ibv_recv_wr* bad_wr;
     for (int i = 0; i < kPostRQThreshold; i++) {
       uint64_t chunk_addr;
-      DCHECK(engine_credit_chunk_pool_->alloc_buff(&chunk_addr) == 0);
+      CHECK(engine_credit_chunk_pool_->alloc_buff(&chunk_addr) == 0);
       credit_recv_wrs_.recv_sges[i].addr = chunk_addr;
       credit_recv_wrs_.recv_wrs[i].wr_id = chunk_addr;
     }
-    DCHECK(ibv_post_recv(credit_qp_, &credit_recv_wrs_.recv_wrs[0], &bad_wr) ==
-           0);
+    CHECK(ibv_post_recv(credit_qp_, &credit_recv_wrs_.recv_wrs[0], &bad_wr) ==
+          0);
     UCCL_LOG_IO << "Posted " << credit_recv_wrs_.post_rq_cnt
                 << " recv requests for Credit QP";
     credit_recv_wrs_.post_rq_cnt -= kPostRQThreshold;
@@ -2647,13 +2647,13 @@ void RDMAContext::check_credit_rq(bool force) {
     struct ibv_recv_wr* bad_wr;
     for (int i = 0; i < credit_recv_wrs_.post_rq_cnt; i++) {
       uint64_t chunk_addr;
-      DCHECK(engine_credit_chunk_pool_->alloc_buff(&chunk_addr) == 0);
+      CHECK(engine_credit_chunk_pool_->alloc_buff(&chunk_addr) == 0);
       credit_recv_wrs_.recv_sges[i].addr = chunk_addr;
       credit_recv_wrs_.recv_wrs[i].wr_id = chunk_addr;
     }
     credit_recv_wrs_.recv_wrs[credit_recv_wrs_.post_rq_cnt - 1].next = nullptr;
-    DCHECK(ibv_post_recv(credit_qp_, &credit_recv_wrs_.recv_wrs[0], &bad_wr) ==
-           0);
+    CHECK(ibv_post_recv(credit_qp_, &credit_recv_wrs_.recv_wrs[0], &bad_wr) ==
+          0);
     UCCL_LOG_IO << "Posted " << credit_recv_wrs_.post_rq_cnt
                 << " recv requests for Credit QP";
     credit_recv_wrs_.recv_wrs[credit_recv_wrs_.post_rq_cnt - 1].next =
@@ -3074,10 +3074,10 @@ void RDMAContext::uc_rx_rtx_chunk(T* wc_or_cq_ex, uint64_t chunk_addr) {
       reinterpret_cast<void*>(chunk_addr + sizeof(struct retr_chunk_hdr)),
       chunk_len, cudaMemcpyHostToDevice);
 #else
-  DCHECK(hipMemcpy(reinterpret_cast<void*>(hdr->remote_addr),
-                   reinterpret_cast<void*>(chunk_addr +
-                                           sizeof(struct retr_chunk_hdr)),
-                   chunk_len, hipMemcpyHostToDevice) == hipSuccess);
+  CHECK(hipMemcpy(
+            reinterpret_cast<void*>(hdr->remote_addr),
+            reinterpret_cast<void*>(chunk_addr + sizeof(struct retr_chunk_hdr)),
+            chunk_len, hipMemcpyHostToDevice) == hipSuccess);
 #endif
 #endif
 
@@ -3230,7 +3230,7 @@ void RDMAContext::uc_rx_chunk(T* wc_or_cq_ex) {
   // rtx chunk. In addition, all rtx chunks are handled in uc_rx_rtx_chunk()
   // rather than uc_rx_chunk(). Therefore, there is no need for us to check
   // duplicate OOO chunks here. But uc_rx_rtx_chunk() needs to handle this case.
-  DCHECK(!subflow->pcb.sack_bitmap_bit_is_set(distance.to_uint32()));
+  CHECK(!subflow->pcb.sack_bitmap_bit_is_set(distance.to_uint32()));
 
   // Always use the latest timestamp.
   if constexpr (kTestNoHWTimestamp || is_wc)

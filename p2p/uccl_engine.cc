@@ -1,6 +1,6 @@
 #include "uccl_engine.h"
 #ifdef USE_TCPX
-#include "tcpx_engine.h"
+#include "nccl_tcpx_endpoint.h"
 #else
 #include "engine.h"
 #endif
@@ -11,26 +11,38 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdbool>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <future>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 
 #ifdef USE_TCPX
-using FifoItem = tcpx::FifoItem;
-using Endpoint = tcpx::Endpoint;
+// nccl_tcpx_endpoint does not declare inside_python; define it here for
+// uccl_engine.
+thread_local bool inside_python = false;
+
+// Reuse NCCL FIFO descriptor (64B ABI) directly.
+using FifoItem = nccl_tcpx::FifoItem;
+using Endpoint = nccl_tcpx::Endpoint;
 #else
 using FifoItem = uccl::FifoItem;
-using Endpoint = Endpoint;
+using Endpoint = ::Endpoint;
 #endif
 
 struct uccl_engine {
+#ifdef USE_TCPX
+  std::unique_ptr<Endpoint> endpoint;
+#else
   Endpoint* endpoint;
+#endif
 };
 
 struct uccl_conn {
@@ -98,7 +110,7 @@ void listener_thread_func(uccl_conn_t* conn) {
 
     uint64_t mr_id = 0;
     switch (md.op) {
-      case UCCL_READ: {
+      case UCCL_RW_RC: {
         tx_msg_t tx_data = md.data.tx_data;
         auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
         if (local_mem_iter == mem_reg_info.end()) {
@@ -154,10 +166,29 @@ void listener_thread_func(uccl_conn_t* conn) {
                                       tx_data.data_size);
         if (result < 0) {
           std::cerr << "Failed to perform uccl_engine_recv" << std::endl;
+#ifdef USE_TCPX
+          notify_msg_t notify_msg = {};
+          std::snprintf(notify_msg.name, sizeof(notify_msg.name), "%s",
+                        "server");
+          std::snprintf(notify_msg.msg, sizeof(notify_msg.msg), "%s",
+                        "RECV_ERROR");
+          uccl_engine_send_notif(conn, &notify_msg);
+#endif
+          break;
         }
+
+#ifdef USE_TCPX
+        // Passive recv (including GPU unpack) is done: tell the active side so
+        // it only tears down after the data is fully landed.
+        notify_msg_t notify_msg = {};
+        std::snprintf(notify_msg.name, sizeof(notify_msg.name), "%s", "server");
+        std::snprintf(notify_msg.msg, sizeof(notify_msg.msg), "%s",
+                      "RECV_DONE");
+        uccl_engine_send_notif(conn, &notify_msg);
+#endif
         break;
       }
-      case UCCL_VECTOR_READ: {
+      case UCCL_VECTOR_RW_RC: {
         size_t count = md.data.vector_data.count;
 
         tx_msg_t* tx_data_array = new tx_msg_t[count];
@@ -186,12 +217,18 @@ void listener_thread_func(uccl_conn_t* conn) {
           delete[] tx_data_array;
           break;
         }
+#ifdef USE_TCPX
+        bool vector_ok = true;
+#endif
         for (size_t i = 0; i < count; i++) {
           tx_msg_t tx_data = tx_data_array[i];
           auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
           if (local_mem_iter == mem_reg_info.end()) {
             std::cerr << "Local memory not registered for address: "
                       << tx_data.data_ptr << " (item " << i << ")" << std::endl;
+#ifdef USE_TCPX
+            vector_ok = false;
+#endif
             continue;
           }
           mr_id = local_mem_iter->second;
@@ -260,6 +297,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           break;
         }
 
+        bool vector_ok = true;
         for (size_t i = 0; i < count; i++) {
           tx_msg_t tx_data = tx_data_array[i];
           auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
@@ -278,10 +316,25 @@ void listener_thread_func(uccl_conn_t* conn) {
           if (result < 0) {
             std::cerr << "Failed to perform uccl_engine_recv for item " << i
                       << std::endl;
+#ifdef USE_TCPX
+            vector_ok = false;
+#endif
           }
         }
 
         delete[] tx_data_array;
+#ifdef USE_TCPX
+        notify_msg_t notify_msg = {};
+        std::snprintf(notify_msg.name, sizeof(notify_msg.name), "%s", "server");
+        if (vector_ok) {
+          std::snprintf(notify_msg.msg, sizeof(notify_msg.msg), "%s",
+                        "RECV_DONE");
+        } else {
+          std::snprintf(notify_msg.msg, sizeof(notify_msg.msg), "%s",
+                        "RECV_ERROR");
+        }
+        uccl_engine_send_notif(conn, &notify_msg);
+#endif
         break;
       }
       case UCCL_FIFO: {
@@ -303,8 +356,7 @@ void listener_thread_func(uccl_conn_t* conn) {
         notify_msg_t notify_msg = {};
         strncpy(notify_msg.name, md.data.notify_data.name,
                 sizeof(notify_msg.name) - 1);
-        strncpy(notify_msg.msg, md.data.notify_data.msg,
-                sizeof(notify_msg.msg) - 1);
+        memcpy(notify_msg.msg, md.data.notify_data.msg, sizeof(notify_msg.msg));
         notify_msg_list.push_back(notify_msg);
         break;
       }
@@ -318,13 +370,21 @@ void listener_thread_func(uccl_conn_t* conn) {
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
+#ifdef USE_TCPX
+  eng->endpoint = std::unique_ptr<Endpoint>(new Endpoint(num_cpus));
+#else
   eng->endpoint = new Endpoint(num_cpus);
+#endif
   return eng;
 }
 
 void uccl_engine_destroy(uccl_engine_t* engine) {
   if (engine) {
+#ifdef USE_TCPX
+    engine->endpoint.reset();
+#else
     delete engine->endpoint;
+#endif
     delete engine;
   }
 }
@@ -408,14 +468,46 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
              : -1;
 }
 
+int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+                         size_t size, void* slot_item_ptr,
+                         uint64_t* transfer_id) {
+  if (!conn || !mr || !data) return -1;
+
+  FifoItem slot_item;
+  slot_item = *static_cast<FifoItem*>(slot_item_ptr);
+
+  return conn->engine->endpoint->write_async(conn->conn_id, mr->mr_id,
+                                             const_cast<void*>(data), size,
+                                             slot_item, transfer_id)
+             ? 0
+             : -1;
+}
+
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
                      size_t data_size) {
   if (!conn || !mr || !data) return -1;
-  uint64_t transfer_id;
-  return conn->engine->endpoint->recv_async(conn->conn_id, mr->mr_id, data,
-                                            data_size, &transfer_id)
+
+#ifdef USE_TCPX
+  // TCPX: no background progress thread exists, so drive progress here.
+  uint64_t transfer_id = 0;
+  if (!conn->engine->endpoint->recv_async(conn->conn_id, mr->mr_id, data,
+                                          data_size, &transfer_id)) {
+    return -1;
+  }
+
+  // Poll until the transfer completes (drives Stage 1 and Stage 2).
+  bool done = false;
+  while (!done) {
+    if (!conn->engine->endpoint->poll_async(transfer_id, &done)) {
+      return -1;
+    }
+  }
+  return 0;
+#else
+  return conn->engine->endpoint->recv(conn->conn_id, mr->mr_id, data, data_size)
              ? 0
              : -1;
+#endif
 }
 
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {
@@ -507,10 +599,16 @@ int uccl_engine_send_tx_md_vector(uccl_conn_t* conn, md_t* md_array,
                                   size_t count) {
   if (!conn || !md_array || count == 0) return -1;
 
+  // Check UCCL_RCMODE environment variable
+  bool rc_mode = false;
+  char const* rc_mode_env = getenv("UCCL_RCMODE");
+  if (rc_mode_env != nullptr) {
+    rc_mode = (std::strcmp(rc_mode_env, "1") == 0);
+  }
   // Determine the operation type based on the first item
-  uccl_msg_type op_type =
-      (md_array[0].op == UCCL_READ) ? UCCL_VECTOR_READ : UCCL_VECTOR_WRITE;
-
+  uccl_msg_type op_type = (rc_mode || md_array[0].op == UCCL_RW_RC)
+                              ? UCCL_VECTOR_RW_RC
+                              : UCCL_VECTOR_WRITE;
   md_t vector_md;
   vector_md.op = op_type;
   vector_md.data.vector_data.count = count;

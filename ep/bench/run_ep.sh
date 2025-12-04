@@ -18,3 +18,4 @@ else
         test_internode.py  --num-tokens=4096 \
         --hidden=7168 --num-topk=8 --num-experts=288 --test-ll-compatibility
 fi
+# --log-dir=logs --redirect=3

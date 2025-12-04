@@ -107,7 +107,7 @@ install: $(EP_EXT)
 clean:
 	rm -f $(OBJ_CPP) $(OBJ_CC) $(OBJ_CU) \
 	      $(EP_EXT) \
-	      *.d src/*.d bench/*.d src/*.o
+	      *.d src/*.d bench/*.d src/*.o **/*.hip **/*_hip.*
 
 # Automatically include dependency files if they exist
 DEPS := $(OBJ_CPP:.o=.d) $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_BIND:.o=.d)

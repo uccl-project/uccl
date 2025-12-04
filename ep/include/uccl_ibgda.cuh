@@ -48,11 +48,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
 
   if constexpr (use_normal_mode) {
-    if (low_latency_buffer_idx == -1) {
-      /* Normal mode */
-      expert_idx = 0;
-      low_latency_buffer_idx = 0;
-    }
+    low_latency_buffer_idx == -1 ? expert_idx = 0 : 0;
+    low_latency_buffer_idx == -1 ? low_latency_buffer_idx = 0 : 0;
   }
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   // FIFO path: no head/tail; push does backpressure.
@@ -164,10 +161,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
 
     auto last_print = clock64();
     if constexpr (use_normal_mode) {
-      if (low_latency_buffer_idx == -1) {
-        /* Normal mode */
-        low_latency_buffer_idx = 0;
-      }
+      /* Normal mode */
+      low_latency_buffer_idx == -1 ? low_latency_buffer_idx = 0 : 0;
     }
 #ifdef USE_MSCCLPP_FIFO_BACKEND
     {

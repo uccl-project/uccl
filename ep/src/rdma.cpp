@@ -39,10 +39,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-void exchange_connection_info_as_server(int my_rank, int* actual_peer,
-                                        int listen_fd,
-                                        RDMAConnectionInfo* local,
-                                        RDMAConnectionInfo* remote_array) {
+void recv_connection_info_as_server(int my_rank, int* actual_peer,
+                                    int listen_fd,
+                                    RDMAConnectionInfo* remote_array) {
   int sockfd;
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
@@ -53,17 +52,14 @@ void exchange_connection_info_as_server(int my_rank, int* actual_peer,
 
   // Exchange info
   uccl::receive_message(sockfd, actual_peer, sizeof(*actual_peer));
-  uccl::send_message(sockfd, local, sizeof(*local));
   uccl::receive_message(sockfd, &remote_array[*actual_peer],
                         sizeof(remote_array[*actual_peer]));
   close(sockfd);
 }
 
-void exchange_connection_info_as_client(int my_rank, int peer,
-                                        char const* peer_ip,
-                                        int peer_listen_port,
-                                        RDMAConnectionInfo* local,
-                                        RDMAConnectionInfo* remote_array) {
+void send_connection_info_as_client(int my_rank, int peer, char const* peer_ip,
+                                    int peer_listen_port,
+                                    RDMAConnectionInfo* local) {
   int sockfd;
   struct sockaddr_in addr;
   memset(&addr, 0, sizeof(addr));
@@ -95,8 +91,6 @@ void exchange_connection_info_as_client(int my_rank, int peer,
   // Exchange info
   uccl::send_message(sockfd, &my_rank, sizeof(my_rank));
   uccl::send_message(sockfd, local, sizeof(*local));
-  uccl::receive_message(sockfd, &remote_array[peer],
-                        sizeof(remote_array[peer]));
   close(sockfd);
 }
 
@@ -627,6 +621,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
       exit(1);
     }
   }
+
   printf("ACK-QP modified to RTR state\n");
 }
 
@@ -676,6 +671,7 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
     fprintf(stderr, "errno: %d\n", errno);
     exit(1);
   }
+
   printf("ACK-QP modified to RTS state\n");
 }
 
@@ -924,15 +920,10 @@ static void post_rdma_async_batched_normal_mode(
                     .GetImmData();
             wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
             wrs[j].imm_data = htonl(imm);
-          } else if (j + 1 == kgroup) {
-            // Put WriteImm only on the tail WR
-            uint32_t imm =
-                WriteImm::Pack(get_is_combine(cmd.cmd_type),
-                               get_low_latency(cmd.cmd_type), cmd.expert_idx,
-                               static_cast<uint32_t>(kgroup), my_rank)
-                    .GetImmData();
-            wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-            wrs[j].imm_data = htonl(imm);
+
+            AtomicsImm aimm(imm);
+            assert(aimm.GetValue() == cmd.atomic_val);
+            assert(aimm.GetOff() == cmd.atomic_offset);
           } else {
             wrs[j].opcode = IBV_WR_RDMA_WRITE;
           }
@@ -1249,7 +1240,7 @@ void local_process_completions(ProxyCtx& S,
             }
             S.wr_id_to_wr_ids.erase(it);
           } else {
-            printf("Error: ACK for unknown wr_id %lu\n", wrid);
+            printf("Error: Atomic ACK for unknown wr_id %lu\n", wrid);
             std::abort();
           }
 #endif
@@ -1288,7 +1279,7 @@ void local_process_completions(ProxyCtx& S,
             }
             S.wr_id_to_wr_ids.erase(it);
           } else {
-            printf("Error: ACK for unknown wr_id %lu\n", wr_done);
+            printf("Error: Write ACK for unknown wr_id %lu\n", wr_done);
             std::abort();
           }
 #endif
@@ -1469,9 +1460,6 @@ void remote_process_completions_normal_mode(
           std::abort();
         }
         if (seq == sb.expected) {
-          // if (my_rank % MAX_NUM_GPUS == 0)
-          //   printf("seq: %u in order, applying immediately\n", seq);
-          // Apply immediately
           commit(value);
           sb.expected = (sb.expected + 1) % kReorderingBufferSize;
 
@@ -1490,10 +1478,6 @@ void remote_process_completions_normal_mode(
             fprintf(stderr, "Error: seq %u out of range\n", seq);
             std::abort();
           }
-          // if (my_rank % MAX_NUM_GPUS == 0)
-          //   printf("seq: %u out of order (expected %u), buffering\n", seq,
-          //         sb.expected);
-
           if (sb.present_mask & (1u << seq)) {
             fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
             std::abort();
@@ -1556,6 +1540,7 @@ void remote_process_completions_normal_mode(
       fprintf(stderr, "Unexpected CQE opcode: %d\n", cqe.opcode);
       std::abort();
     }
+
 #ifndef EFA
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
       uint32_t const tag = wr_tag(cqe.wr_id);
@@ -2141,6 +2126,20 @@ static void post_atomic_operations_normal_mode(
                   (unsigned long long)bad->wr_id, bad->opcode);
         }
         std::abort();
+      }
+      uint64_t const batch_tail_wr = group_wrids.back();
+      {
+        auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
+            batch_tail_wr, std::move(group_wrids));
+        if (!inserted) {
+          fprintf(stderr,
+                  "thread_idx: %d, Error: tail wr_id %lu already exists "
+                  "(map=%p, "
+                  "size=%zu, dst_rank=%d)\n",
+                  thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
+                  S.wr_id_to_wr_ids.size(), dst_rank);
+          std::abort();
+        }
       }
 #endif
     }

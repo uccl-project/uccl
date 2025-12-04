@@ -36,7 +36,9 @@ int RDMAFactory::init_devs() {
   static std::once_flag init_flag;
   std::call_once(init_flag, []() {
 #endif
-    rdma_ctl = std::make_shared<RDMAFactory>();
+    if (rdma_ctl == NULL) {
+      rdma_ctl = std::make_shared<RDMAFactory>();
+    }
 #ifndef DISABLE_CALL_ONCE_STATIC
   });
 #endif
@@ -124,7 +126,7 @@ int RDMAFactory::init_devs() {
                          1e6 / 8;
         dev.link_bw = link_bw;
 
-        DCHECK(ncclIbGetGidIndex(context, port_num, &port_attr, &dev.gid_idx));
+        CHECK(ncclIbGetGidIndex(context, port_num, &port_attr, &dev.gid_idx));
         UCCL_LOG_RE << devices[d]->name << " uses gid_idx " << dev.gid_idx;
 
         if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
@@ -490,7 +492,7 @@ void SharedIOContext::check_ctrl_rq(bool force) {
   }
 
   struct ibv_recv_wr* bad_wr;
-  DCHECK(ibv_post_recv(ctrl_qp_, &ctrl_recv_wrs_.recv_wrs[0], &bad_wr) == 0);
+  CHECK(ibv_post_recv(ctrl_qp_, &ctrl_recv_wrs_.recv_wrs[0], &bad_wr) == 0);
   UCCL_LOG_IO << "Posted " << post_batch << " recv requests for Ctrl QP";
   dec_post_ctrl_rq(post_batch);
 }
@@ -525,7 +527,7 @@ void SharedIOContext::check_srq(bool force) {
   }
 
   struct ibv_recv_wr* bad_wr;
-  DCHECK(ibv_post_srq_recv(srq_, &dp_recv_wrs_.recv_wrs[0], &bad_wr) == 0);
+  CHECK(ibv_post_srq_recv(srq_, &dp_recv_wrs_.recv_wrs[0], &bad_wr) == 0);
   // UCCL_LOG_IO << "Posted " << post_batch << " recv requests for SRQ";
   dec_post_srq(post_batch);
 }
@@ -559,9 +561,9 @@ int SharedIOContext::_poll_ctrl_cq_ex(void) {
 
     while (1) {
       if (cq_ex->status != IBV_WC_SUCCESS) {
-        DCHECK(false) << "Ctrl CQ state error: " << cq_ex->status << ", "
-                      << ibv_wc_read_opcode(cq_ex)
-                      << ", ctrl_chunk_pool_size: " << ctrl_chunk_pool_->size();
+        CHECK(false) << "Ctrl CQ state error: " << cq_ex->status << ", "
+                     << ibv_wc_read_opcode(cq_ex)
+                     << ", ctrl_chunk_pool_size: " << ctrl_chunk_pool_->size();
       }
 
       CQEDesc* cqe_desc = reinterpret_cast<CQEDesc*>(cq_ex->wr_id);
@@ -684,8 +686,8 @@ int SharedIOContext::_rc_poll_recv_cq_ex(void) {
 
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
-      DCHECK(false) << "data path CQ state error: " << cq_ex->status
-                    << " from QP:" << ibv_wc_read_qp_num(cq_ex);
+      CHECK(false) << "data path CQ state error: " << cq_ex->status
+                   << " from QP:" << ibv_wc_read_qp_num(cq_ex);
     }
 
     auto* rdma_ctx = qpn_to_rdma_ctx(ibv_wc_read_qp_num(cq_ex));
@@ -711,8 +713,8 @@ int SharedIOContext::_rc_poll_send_cq_ex(void) {
 
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
-      DCHECK(false) << "data path CQ state error: " << cq_ex->status
-                    << " from QP:" << ibv_wc_read_qp_num(cq_ex);
+      CHECK(false) << "data path CQ state error: " << cq_ex->status
+                   << " from QP:" << ibv_wc_read_qp_num(cq_ex);
     }
 
     auto* rdma_ctx = qpn_to_rdma_ctx(ibv_wc_read_qp_num(cq_ex));
@@ -736,8 +738,8 @@ int SharedIOContext::_uc_poll_send_cq_ex(void) {
 
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
-      DCHECK(false) << "data path CQ state error: " << cq_ex->status
-                    << " from QP:" << ibv_wc_read_qp_num(cq_ex);
+      CHECK(false) << "data path CQ state error: " << cq_ex->status
+                   << " from QP:" << ibv_wc_read_qp_num(cq_ex);
     }
 
     auto* cqe_desc = (CQEDesc*)cq_ex->wr_id;
@@ -768,8 +770,8 @@ int SharedIOContext::_uc_poll_recv_cq_ex(void) {
 
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
-      DCHECK(false) << "data path CQ state error: " << cq_ex->status
-                    << " from QP:" << ibv_wc_read_qp_num(cq_ex);
+      CHECK(false) << "data path CQ state error: " << cq_ex->status
+                   << " from QP:" << ibv_wc_read_qp_num(cq_ex);
     }
 
     auto* rdma_ctx = qpn_to_rdma_ctx(ibv_wc_read_qp_num(cq_ex));

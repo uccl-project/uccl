@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=nvidia/cuda:12.3.2-devel-ubuntu22.04
+ARG BASE_IMAGE=nvidia/cuda:12.8.0-devel-ubuntu22.04
 FROM ${BASE_IMAGE}
 ARG PY_VER=3.13
 
@@ -14,16 +14,15 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         software-properties-common \
         build-essential cmake git ninja-build g++ make patchelf \
-        rdma-core libibverbs-dev \
+        rdma-core libibverbs-dev libnuma-dev \
         libgoogle-glog-dev libgflags-dev libgtest-dev libelf-dev \
-        libnuma-dev libdrm-dev libdrm-amdgpu1 \
-        pkg-config zlib1g-dev curl && \
+        pkg-config zlib1g-dev curl unzip && \
 \
 # ───── Add Python ${PY_VER} PPA & install Python ${PY_VER} + setuptools ─────
     add-apt-repository ppa:deadsnakes/ppa && \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-        python${PY_VER} python${PY_VER}-dev python${PY_VER}-venv python3-setuptools python3-distutils && \
+        python${PY_VER} python${PY_VER}-dev python${PY_VER}-venv && \
 \
 # ───── Bootstrap pip for Python ${PY_VER} ─────
     curl -sS https://bootstrap.pypa.io/get-pip.py | python${PY_VER} && \

@@ -101,7 +101,7 @@ void EQDS::handle_grant_credit(void) {
 
         if (grant_credit(sink, false, &total_inc)) {
           // Grant done, add it to idle sender list.
-          DCHECK(!sink->in_idle_list());
+          CHECK(!sink->in_idle_list());
           sink->add_to_idle_list(&idle_senders_);
         } else {
           // We have not satisfied its demand, re-add it to the active
@@ -164,7 +164,7 @@ void CreditQPContext::__post_recv_wrs_for_credit(int nb, uint32_t qpidx) {
     rq_wrs_[nr_post - 1].next = nullptr;
 
     struct ibv_recv_wr* bad_wr;
-    DCHECK(ibv_post_recv(credit_qp_list_[qpidx], rq_wrs_, &bad_wr) == 0)
+    CHECK(ibv_post_recv(credit_qp_list_[qpidx], rq_wrs_, &bad_wr) == 0)
         << qpidx;
 
     rq_wrs_[nr_post - 1].next =

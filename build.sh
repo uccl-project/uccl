@@ -7,7 +7,7 @@ set -e
 # a purpose-built Docker image derived from Ubuntu 22.04.
 #
 # Usage:
-#   ./build.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url] [therock_base_image]
+#   ./build.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image]
 #
 # The wheels are written to wheelhouse-[cuda|rocm|therock]
 # -----------------------
@@ -24,7 +24,7 @@ IS_EFA=$( [ -d "/sys/class/infiniband/" ] && ls /sys/class/infiniband/ 2>/dev/nu
 
 
 if [[ $TARGET != cuda* && $TARGET != rocm* && $TARGET != "therock" ]]; then
-  echo "Usage: $0 [cuda|rocm|therock] [all|rdma|p2p|efa|ep|eccl] [py_version] [rocm_index_url]" >&2
+  echo "Usage: $0 [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image]" >&2
   exit 1
 fi
 
@@ -50,13 +50,13 @@ build_rccl_nccl_h() {
   fi
 }
 
-build_rdma() {
+build_ccl_rdma() {
   local TARGET="$1"
   local ARCH="$2"
   local IS_EFA="$3"
 
   set -euo pipefail
-  echo "[container] build_rdma Target: $TARGET"
+  echo "[container] build_ccl_rdma Target: $TARGET"
   
   if [[ "$TARGET" == cuda* ]]; then
     cd collective/rdma && make clean && make -j$(nproc) && cd ../../
@@ -89,13 +89,13 @@ build_rdma() {
   cp ${TARGET_SO} uccl/lib/
 }
 
-build_efa() {
+build_ccl_efa() {
   local TARGET="$1"
   local ARCH="$2"
   local IS_EFA="$3"
 
   set -euo pipefail
-  echo "[container] build_efa Target: $TARGET"
+  echo "[container] build_ccl_efa Target: $TARGET"
 
   if [[ "$ARCH" == "aarch64" || "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
     echo "Skipping EFA build on Arm64 (no EFA installer) or ROCm (no CUDA)."
@@ -105,7 +105,7 @@ build_efa() {
 
   # EFA requires a custom NCCL.
   cd thirdparty/nccl-sg
-  make src.build -j$(nproc) NVCC_GENCODE="-gencode=arch=compute_80,code=sm_80"
+  make src.build -j$(nproc) NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90"
   cd ../..
 
   echo "[container] Copying EFA .so to uccl/lib/"
@@ -136,6 +136,8 @@ build_p2p() {
   mkdir -p uccl
   mkdir -p uccl/lib
   if [[ -z "${USE_TCPX:-}" || "$USE_TCPX" != "1" ]]; then
+    cp p2p/libuccl_p2p.so uccl/lib/
+    cp p2p/librdma_plugin.a uccl/lib/
     cp p2p/p2p.*.so uccl/
     cp p2p/collective.py uccl/
     cp p2p/transfer.py uccl/
@@ -155,20 +157,15 @@ build_ep() {
 
   if [[ "$TARGET" == "therock" ]]; then
     echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
-  elif [[ "$TARGET" == rocm* ]]; then
+  elif [[ "$TARGET" == rocm* || "$TARGET" == cuda* ]]; then
     cd ep
+    # This may be needed if you traverse through different git commits
+    # make clean && rm -r build || true
     python3 setup.py build
     cd ..
     echo "[container] Copying GPU-driven .so to uccl/"
     mkdir -p uccl/lib
     cp ep/build/**/*.so uccl/
-  elif [[ "$TARGET" == cuda* ]]; then
-    cd ep
-    make clean && make -j$(nproc) all
-    cd ..
-    echo "[container] Copying GPU-driven .so to uccl/"
-    mkdir -p uccl/lib
-    cp ep/*.so uccl/
   fi
 }
 
@@ -233,6 +230,28 @@ elif [[ $TARGET == "therock" ]]; then
   IMAGE_NAME="uccl-builder-therock"
 fi
 
+# Detect stale builder image
+# If a builder image exists...
+hash_image=$(docker images -q ${IMAGE_NAME})
+if [[ "${hash_image}" != "" ]]; then
+
+  # Get its and its dockerfile's timestamps
+  ts_dockerfile=$(date -r ${DOCKERFILE} --iso-8601=seconds)
+  ts_image=$(docker inspect -f '{{ .Created }}' ${IMAGE_NAME})
+
+  # If image is stale, suggest deleting & purging it
+  if [[ "${ts_dockerfile}" > "${ts_image}" ]]; then
+      echo "WARNING: builder image '${IMAGE_NAME}' is older than its source (${DOCKERFILE})" >&2
+      echo "Please consider removing it, pruning the builder cache, and retrying the build to regenerate it." >&2
+      echo " " >&2
+      echo "  $ docker image rm '${IMAGE_NAME}'" >&2
+      echo "  $ docker buildx prune -f" >&2
+      echo " " >&2
+      echo "NOTE: this may also prune unrelated builder cache images!" >&2
+      sleep 1
+  fi
+fi
+
 # Build the builder image (contains toolchain + CUDA/ROCm)
 echo "[1/3] Building Docker image ${IMAGE_NAME} using ${DOCKERFILE}..."
 echo "Python version: ${PY_VER}"
@@ -250,6 +269,30 @@ else
 fi
 
 echo "[2/3] Running build inside container..."
+
+# Auto-detect CUDA architecture for ep build
+DETECTED_GPU_ARCH=""
+if [[ "$BUILD_TYPE" =~ (ep|all) ]];then
+  if [[ "$TARGET" == cuda* ]] && command -v nvidia-smi &> /dev/null; then
+    DETECTED_GPU_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
+    if [[ -n "$DETECTED_GPU_ARCH" ]]; then
+      echo "Auto-detected CUDA compute capability: ${DETECTED_GPU_ARCH}"
+    fi
+  elif [[ "$TARGET" == rocm* ]] && command -v amd-smi &> /dev/null; then
+    # Check if jq is installed, install via pip if not
+    if ! command -v jq &> /dev/null; then
+      echo "jq not found, installing via pip..."
+      pip install jq
+    fi
+    DETECTED_GPU_ARCH=$(amd-smi static -g 0 --asic --json | jq -r '.[].asic.target_graphics_version')
+    if [[ -n "$DETECTED_GPU_ARCH" ]]; then
+      echo "Auto-detected ROCm architecture: ${DETECTED_GPU_ARCH}"
+    fi
+  fi
+fi
+
+export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-${DETECTED_GPU_ARCH}}"
+
 docker run --rm --user "$(id -u):$(id -g)" \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
@@ -264,7 +307,8 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
   -e USE_TCPX="${USE_TCPX:-0}" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
-  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_rdma build_efa build_p2p build_ep build_eccl)" \
+  -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
+  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_ccl_rdma build_ccl_efa build_p2p build_ep build_eccl)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
     set -euo pipefail
@@ -288,10 +332,10 @@ docker run --rm --user "$(id -u):$(id -g)" \
       build_rccl_nccl_h
     fi
 
-    if [[ "$BUILD_TYPE" == "rdma" ]]; then
-      build_rdma "$TARGET" "$ARCH" "$IS_EFA"
-    elif [[ "$BUILD_TYPE" == "efa" ]]; then
-      build_efa "$TARGET" "$ARCH" "$IS_EFA"
+    if [[ "$BUILD_TYPE" == "ccl_rdma" ]]; then
+      build_ccl_rdma "$TARGET" "$ARCH" "$IS_EFA"
+    elif [[ "$BUILD_TYPE" == "ccl_efa" ]]; then
+      build_ccl_efa "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "p2p" ]]; then
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "ep" ]]; then
@@ -299,8 +343,8 @@ docker run --rm --user "$(id -u):$(id -g)" \
     elif [[ "$BUILD_TYPE" == "eccl" ]]; then
       build_eccl "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "all" ]]; then
-      build_rdma "$TARGET" "$ARCH" "$IS_EFA"
-      build_efa "$TARGET" "$ARCH" "$IS_EFA"
+      build_ccl_rdma "$TARGET" "$ARCH" "$IS_EFA"
+      build_ccl_efa "$TARGET" "$ARCH" "$IS_EFA"
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
       # build_ep "$TARGET" "$ARCH" "$IS_EFA"
       # build_eccl "$TARGET" "$ARCH" "$IS_EFA"
@@ -346,7 +390,14 @@ def initialize():
       mv ${BACKUP_FN} setup.py
     fi
 
-    auditwheel repair dist/uccl-*.whl --exclude "libtorch*.so" --exclude "libc10*.so" --exclude "libibverbs.so.1" --exclude "libcudart.so.12" --exclude "libamdhip64.so.*" --exclude "libcuda.so.1" -w /io/${WHEEL_DIR}
+    auditwheel repair dist/uccl-*.whl \
+      --exclude "libtorch*.so" \
+      --exclude "libc10*.so" \
+      --exclude "libibverbs.so.1" \
+      --exclude "libcudart.so.12" \
+      --exclude "libamdhip64.so.*" \
+      --exclude "libcuda.so.1" \
+      -w /io/${WHEEL_DIR}
 
     # Add backend tag to wheel filename using local version identifier
     if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
