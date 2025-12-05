@@ -204,19 +204,32 @@ constexpr auto scopeDevice = 0;
 
 template <typename T, int scope = scopeSystem>
 MSCCLPP_HOST_DEVICE_INLINE T atomicLoad(T const* ptr, int memoryOrder) {
+#ifdef DISABLE_AGGRESSIVE_ATOMIC
   return __atomic_load_n(ptr, memoryOrder);
+#else
+  return __atomic_load_n(ptr, __ATOMIC_RELAXED);
+#endif
 }
 
 template <typename T, int scope = scopeSystem>
 MSCCLPP_HOST_DEVICE_INLINE void atomicStore(T* ptr, T const& val,
                                             int memoryOrder) {
+#ifdef DISABLE_AGGRESSIVE_ATOMIC
   __atomic_store_n(ptr, val, memoryOrder);
+
+#else
+  __atomic_store_n(ptr, val, __ATOMIC_RELAXED);
+#endif
 }
 
 template <typename T, int scope = scopeSystem>
 MSCCLPP_HOST_DEVICE_INLINE T atomicFetchAdd(T* ptr, T const& val,
                                             int memoryOrder) {
+#ifdef DISABLE_AGGRESSIVE_ATOMIC
   return __atomic_fetch_add(ptr, val, memoryOrder);
+#else
+  return __atomic_fetch_add(ptr, val, __ATOMIC_RELAXED);
+#endif
 }
 
 #else  // Host-side (non-device) compilation
@@ -318,7 +331,13 @@ static inline bool isCudaTeardownError(cudaError_t err) {
 
 inline void* gpuCalloc(size_t bytes) {
   void* ptr;
+
+#if defined(__HIP_PLATFORM_AMD__) && !defined(DISABLE_AGGRESSIVE_ATOMIC)
+  MSCCLPP_CUDATHROW(
+      hipExtMallocWithFlags(&ptr, bytes, hipDeviceMallocUncached));
+#else
   MSCCLPP_CUDATHROW(cudaMalloc(&ptr, bytes));
+#endif
   MSCCLPP_CUDATHROW(cudaMemset(ptr, 0, bytes));
   return ptr;
 }
