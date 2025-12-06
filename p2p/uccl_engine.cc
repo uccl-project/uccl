@@ -449,8 +449,8 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
                      size_t size, void* slot_item_ptr, uint64_t* transfer_id) {
   if (!conn || !mr || !data) return -1;
 
-  FifoItem slot_item;
-  slot_item = *static_cast<FifoItem*>(slot_item_ptr);
+  UnionRemoteMemInfo slot_item;
+  slot_item = *static_cast<UnionRemoteMemInfo*>(slot_item_ptr);
 
   return conn->engine->endpoint->read_async(conn->conn_id, mr->mr_id,
                                             const_cast<void*>(data), size,

@@ -143,7 +143,8 @@ class CollectiveContext:
             return
 
         # Create endpoint
-        self.ep = p2p.Endpoint(self.local_gpu_idx, self.num_cpus)
+        self.ep = p2p.Endpoint(self.local_gpu_idx, self.num_cpus, self.rank)
+        print(f"[Rank {self.rank}] Created p2p.Endpoint on GPU {self.local_gpu_idx}")
         local_metadata = self.ep.get_metadata()
 
         # Initialize connection arrays
@@ -173,7 +174,9 @@ class CollectiveContext:
             torch.cuda.synchronize(device)
 
         # Establish connections with all other ranks
+        print(f"[Rank {self.rank}] Establishing connections with all peers...")
         self._establish_connections(all_metadata)
+        print(f"[Rank {self.rank}] All connections established.")
         self.initialized = True
 
     def _establish_connections(self, all_metadata: list):
@@ -198,6 +201,7 @@ class CollectiveContext:
         accept_errors = []
 
         def connect_to_peer(peer_rank):
+            print("connect_to_peer(peer_rank)")
             """Connect to a specific peer for sending data TO that peer."""
             try:
                 if self.local_connections[peer_rank]:
@@ -230,6 +234,7 @@ class CollectiveContext:
                 connect_errors.append(f"Connect to rank {peer_rank}: {e}")
 
         def accept_from_peer(peer_rank):
+            print("Accept connection from a specific peer")
             """Accept connection from a specific peer for receiving data FROM that peer."""
             try:
                 # We need to accept both local and remote connections

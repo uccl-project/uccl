@@ -8,6 +8,13 @@ CUDA_HOME ?= /usr/local/cuda
 CUDA_INC  := $(CUDA_HOME)/include
 CUDA_LIB  := $(CUDA_HOME)/lib64
 RDMA_HOME := ../collective/rdma
+EFA_HOME ?= /opt/amazon/efa
+
+# Building with the following settings:
+INC = -I./ -I$(CUDA_HOME)/include -I${EFA_HOME}/include 
+LIBS = -L ${CUDA_HOME}/lib64 -L ${EFA_HOME}/lib -libverbs -lefa -lcudart -lcuda -lpthread -lglog -lgflags -lgtest -lz -lelf
+LIBS_SHARED = ${LIBS}
+
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I$(RDMA_HOME) -I$(CUDA_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
@@ -84,13 +91,13 @@ $(P2P_PYTHON_EXT): $(OBJECTS) $(RDMA_HOME)/librdma.a
 	$(CXX) $(OBJECTS) $(RDMA_HOME)/librdma.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(CUDA_LIB)
+	      -Wl,-rpath,$(CUDA_LIB) $(INC) $(LIBS_SHARED)
 
 $(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB)
 	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) -libverbs -lz -lelf
+	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) -libverbs -lz -lelf $(INC) $(LIBS_SHARED)
 
 $(RDMA_HOME)/librdma.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
 	make -C $(RDMA_HOME) librdma.a -j$(nproc)
