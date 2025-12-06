@@ -51,7 +51,7 @@ static constexpr uint32_t kQKey = 0x15695;
 static constexpr uint8_t kPortNum = 1;
 static constexpr uint8_t kEfaRdmDefaultRnrRetry = 3;
 
-static constexpr int kQpNumPerChannel = 4;
+static constexpr int kQpNumPerChannel = 2;
 
 static constexpr int kMaxSendWr = 1024;
 static constexpr int kMaxRecvWr = 1024;
