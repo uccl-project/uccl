@@ -2,6 +2,7 @@
 #include "define.h"
 #include "efa_channel.h"
 #include "efa_ctrl_channel.h"
+#include <random>
 
 class ChannelGroup {
  public:
@@ -63,6 +64,34 @@ class ChannelGroup {
 
     uint64_t context_id = channel->getContextID();
     return {next_id, context_id};
+  }
+
+  // Select next channel using random selection algorithm
+  // Returns: pair<channel_id, context_id>, or pair<0, 0> on failure
+  std::pair<uint32_t, uint64_t> selectNextChannelRandom() {
+    // Get the total number of channels
+    size_t num_channels = ChannelGroup::channelCount();
+    if (unlikely(num_channels == 0)) {
+      LOG(WARNING)
+          << "ChannelGroup: No channels available for random selection";
+      return {0, 0};
+    }
+
+    // Random selection: generate random channel_id in range [1, num_channels]
+    static thread_local std::mt19937 rng(std::random_device{}());
+    std::uniform_int_distribution<uint32_t> dist(1, num_channels);
+    uint32_t random_id = dist(rng);
+
+    // Get the channel by channel_id
+    auto channel = getChannel(random_id);
+    if (unlikely(!channel)) {
+      LOG(WARNING) << "ChannelGroup: Channel not found for channel_id "
+                   << random_id << " num_channels " << num_channels;
+      return {0, 0};
+    }
+
+    uint64_t context_id = channel->getContextID();
+    return {random_id, context_id};
   }
 
  protected:
@@ -426,7 +455,7 @@ class RecvChannelGroup : public ChannelGroup {
   }
 
   int64_t recv(std::shared_ptr<EFARecvRequest> req) {
-    if (unlikely(!setupRecvRequestWithRoundRobin(req))) {
+    if (unlikely(!setupRecvRequestChannelAndMemoryRegion(req))) {
       LOG(WARNING)
           << "RecvChannelGroup: Failed to setup recv request with round robin";
       return -1;
@@ -559,13 +588,14 @@ class RecvChannelGroup : public ChannelGroup {
   }
 
   // Round-robin channel selection and MR setup
-  bool setupRecvRequestWithRoundRobin(std::shared_ptr<EFARecvRequest> req) {
+  bool setupRecvRequestChannelAndMemoryRegion(std::shared_ptr<EFARecvRequest> req) {
     if (unlikely(!req || !req->local_mem)) {
       return false;
     }
 
     // Select next channel using round-robin
-    auto [channel_id, context_id] = selectNextChannelRoundRobin();
+    // auto [channel_id, context_id] = selectNextChannelRoundRobin();
+    auto [channel_id, context_id] = selectNextChannelRandom();
     if (channel_id == 0) {
       return false;
     }

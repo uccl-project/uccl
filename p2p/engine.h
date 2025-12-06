@@ -66,7 +66,7 @@ void serialize_union_remotememfnfo(UnionRemoteMemInfo const& u, char* buf);
 void deserialize_union_remotememfnfo(char const* buf, UnionRemoteMemInfo* u); 
 class Endpoint {
   uint64_t const kRTTBytes = 1024 * 1024;
-  uint64_t const kChunkSize = 1024 * 1024;
+  uint64_t const kChunkSize = 1024 * 1024*1024;
   uint32_t const kMaxInflightChunks = 8;
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;

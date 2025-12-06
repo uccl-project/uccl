@@ -248,16 +248,16 @@ void unidirectional_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
 
       int64_t send_wr_id = endpoint.send(FLAGS_remote_rank, send_req);
       send_infos.push_back({send_req->channel_id, send_wr_id});
-
+      endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
       if ((i + 1) % 100 == 0) {
         std::cout << "Sent " << (i + 1) << " messages\n";
       }
     }
 
     // Then, check all send completions
-    for (auto const& [channel_id, send_wr_id] : send_infos) {
-      endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
-    }
+    // for (auto const& [channel_id, send_wr_id] : send_infos) {
+    //   endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
+    // }
     std::cout << "All sends completed\n";
   } else {
     // Rank 1: receiver only
@@ -270,16 +270,16 @@ void unidirectional_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
 
       int64_t recv_index = endpoint.recv(FLAGS_remote_rank, recv_req);
       recv_indices.push_back(recv_index);
-
+      endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
       if ((i + 1) % 100 == 0) {
         std::cout << "Received " << (i + 1) << " messages\n";
       }
     }
 
     // Then, check all recv completions
-    for (int64_t recv_index : recv_indices) {
-      endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
-    }
+    // for (int64_t recv_index : recv_indices) {
+    //   endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
+    // }
     std::cout << "All receives completed\n";
   }
 
