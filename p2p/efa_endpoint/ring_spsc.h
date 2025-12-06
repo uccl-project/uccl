@@ -270,6 +270,12 @@ class RingBuffer {
     return check(buffer_[pos]);
   }
 
+  // Check if the ring buffer is empty
+  bool empty() const {
+    return read_ptr.load(std::memory_order_acquire) ==
+           write_ptr.load(std::memory_order_acquire);
+  }
+
  private:
   T* buffer_;
   bool owns_buffer_;

@@ -256,13 +256,13 @@ def main():
         "--block-sizes",
         type=int,
         nargs="+",
-        default=[4*1024],
+        default=[1024],
         help="List of block sizes per GPU",
     )
     p.add_argument("--num-qo-heads", type=int, default=32, help="#QO heads")
     p.add_argument("--gqa-group-size", type=int, default=4, help="GQA group size")
     p.add_argument("--head-dim", type=int, default=128, help="Head dimension")
-    p.add_argument("--num-iters", type=int, default=10, help="#Iterations")
+    p.add_argument("--num-iters", type=int, default=100, help="#Iterations")
     p.add_argument(
         "--dtype",
         type=str,
@@ -299,15 +299,15 @@ def main():
         for block_size in args.block_sizes:
             print(f"\n🚀 Running benchmark with block_size={block_size}")
             # warmup
-            # warmup_all2all_check(
-            #     chunk=block_size
-            #     * 2
-            #     * args.num_qo_heads
-            #     // args.gqa_group_size
-            #     * args.head_dim,
-            #     dtype=dtype,
-            #     device=device,
-            # )
+            warmup_all2all_check(
+                chunk=block_size
+                * 2
+                * args.num_qo_heads
+                // args.gqa_group_size
+                * args.head_dim,
+                dtype=dtype,
+                device=device,
+            )
             print("warmup_all2all_check")
             run_fcp_p2p(
                 block_size=block_size,

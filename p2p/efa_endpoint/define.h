@@ -42,6 +42,8 @@
 #include <vector>
 #include <cuda_runtime.h>
 
+#include <transport.h>
+
 static constexpr int kGidIndex = 0;
 static constexpr int kRankIDPlaceHolder = 9999;
 static constexpr int kEfaQpLowLatencyServiceLevel = 8;
@@ -59,6 +61,7 @@ static constexpr uint64_t kMessageChunkSizeKB = 256;  // 1 MB
 static constexpr uint64_t kMaxSplitNum = 16;
 
 static constexpr size_t kTaskRingSize = 1024;
+
 
 static constexpr size_t kInFlightMaxSizeKB =
     10240000;  // Max in-flight packets per channel
@@ -364,6 +367,7 @@ inline auto to_ring_meta = [](SendReqMeta const& src, SendReqMetaOnRing& dst) {
 inline auto from_ring_meta = [](SendReqMetaOnRing const& src,
                                 SendReqMeta& dst) { dst = src.meta; };
 
+enum class SendType { Send, Write };
 struct EFASendRequest {
   std::shared_ptr<RegMemBlock> local_mem;
   std::shared_ptr<RemoteMemInfo> remote_mem;
@@ -373,6 +377,7 @@ struct EFASendRequest {
   uint32_t imm_data;  // immediate data
   int64_t wr_id;
   bool need_signaled;  // Whether to use IBV_SEND_SIGNALED flag
+  SendType send_type = SendType::Send;
 
   // Constructor
   EFASendRequest(std::shared_ptr<RegMemBlock> local,
@@ -606,3 +611,4 @@ typedef struct AcceptedMeta {
   int gpu_id;
   uint64_t rank_id;
 } AcceptedMeta;
+

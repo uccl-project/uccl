@@ -8,7 +8,7 @@
 #include "rdma_context.h"
 #include "rdma_device.h"
 #include <glog/logging.h>
-#include <transport.h>
+
 #include "util/net.h"
 
 // ChannelGroup manages multiple channels for a connection
@@ -517,7 +517,31 @@ class EFAEndpoint {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   }
+  int64_t write(std::shared_ptr<EFASendRequest> req){
+    req->send_type = SendType::Write;
+    uint64_t rank_id = req->to_rank_id;
+    auto it = send_channel_groups_.find(rank_id);
+    if (it == send_channel_groups_.end()) {
+      throw std::runtime_error("Send channel group not found for rank_id: " +
+                               std::to_string(rank_id));
+    }
 
+    auto send_group = it->second;
+    int64_t wr_id = -1;
+
+    // Blocking call until send succeeds
+    while (wr_id < 0) {
+      LOG(INFO) << "EFAEndpoint::write - Attempting to send to rank_id: "
+          << rank_id << ", peer rank_id " << rank_id;
+      wr_id = send_group->write(req);
+
+      if (wr_id < 0) {
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
+      }
+    }
+
+    return wr_id;
+  }
   // Blocking send: wraps SendChannelGroup::send with rank_id parameter
   // Returns wr_id for checking completion later
   int64_t send(uint64_t rank_id, std::shared_ptr<EFASendRequest> req) {
@@ -705,10 +729,29 @@ class EFAEndpoint {
                               void* src, size_t size,
                               uccl::FifoItem const& slot_item,
                               uccl::ucclRequest* ureq) { return 0; }
-  inline int prepare_fifo_metadata(uccl::UcclFlow* flow,
-                                   struct uccl::Mhandle** mhandles,
+  inline int prepare_fifo_metadata(uint64_t rank_id,
+                                   const std::unordered_map<int64_t, struct ibv_mr*>& mr_map,
                                    void const* data, size_t size,
-                                   char* out_buf) { return 0; }
+                                    uint32_t rkeys[]) {
+
+
+    // Get the recv group for this rank_id
+    auto recv_group = getOrCreateRecvGroup(rank_id);
+    if (!recv_group) {
+      UCCL_LOG_ERROR << "Failed to get recv group for rank_id " << rank_id;
+      return -1;
+    }
+
+    // Collect rkeys from all channels
+    if (!recv_group->collectAllRkeys(mr_map, rkeys)) {
+      UCCL_LOG_ERROR << "Failed to collect rkeys for rank_id " << rank_id;
+      return -1;
+    }
+
+    // Serialize the remote_m
+
+    return 0;
+  }
   inline void uccl_deregmr(std::unordered_map<int64_t, struct ibv_mr*>& mr_map) {
     for (auto const& [context_id, mr] : mr_map) {
       if (unlikely(!mr)) {

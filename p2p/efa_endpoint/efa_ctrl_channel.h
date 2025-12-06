@@ -44,6 +44,9 @@ class SendControlChannel : public EFAChannel {
     return rb_->pop_with_convert(meta, from_ring_meta);
   }
 
+  inline bool hasSendRequest(){
+    return !rb_->empty();
+  }
   // not thread safe
   bool getOneSendRequest(std::shared_ptr<EFASendRequest>& req) {
     // Pop from rb_ and generate req, return false if empty

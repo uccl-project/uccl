@@ -1,8 +1,7 @@
-#include "engine.h"
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-
+#include "endpoint_wrapper.h"
 namespace py = pybind11;
 
 struct InsidePythonGuard {
@@ -274,12 +273,12 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size, py::bytes meta_blob) {
             std::string buf = meta_blob;
-            if (buf.size() != sizeof(uccl::FifoItem))
+            if (buf.size() != sizeof(UnionRemoteMemInfo))
               throw std::runtime_error(
                   "meta must be exactly 64 bytes (serialized FifoItem)");
 
-            uccl::FifoItem item;
-            uccl::deserialize_fifo_item(buf.data(), &item);
+            UnionRemoteMemInfo item;
+            deserialize_union_remotememfnfo(buf.data(), &item);
             bool success;
             {
               py::gil_scoped_release release;
@@ -298,12 +297,12 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size, py::bytes meta_blob) {
             std::string buf = meta_blob;
-            if (buf.size() != sizeof(uccl::FifoItem))
+            if (buf.size() != sizeof(UnionRemoteMemInfo))
               throw std::runtime_error(
                   "meta must be exactly 64 bytes (serialized FifoItem)");
 
-            uccl::FifoItem item;
-            uccl::deserialize_fifo_item(buf.data(), &item);
+            UnionRemoteMemInfo item;
+            deserialize_union_remotememfnfo(buf.data(), &item);
             uint64_t transfer_id;
             bool success;
             {
@@ -329,15 +328,15 @@ PYBIND11_MODULE(p2p, m) {
               throw std::runtime_error(
                   "All input vectors/lists must have length num_iovs");
             }
-            std::vector<uccl::FifoItem> item_v;
+            std::vector<UnionRemoteMemInfo> item_v;
             item_v.reserve(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
               std::string buf = py::cast<py::bytes>(meta_blob_v[i]);
-              if (buf.size() != sizeof(uccl::FifoItem))
+              if (buf.size() != sizeof(UnionRemoteMemInfo))
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
-              uccl::FifoItem item;
-              uccl::deserialize_fifo_item(buf.data(), &item);
+              UnionRemoteMemInfo item;
+              deserialize_union_remotememfnfo(buf.data(), &item);
               item_v.push_back(item);
             }
             std::vector<void*> data_v;
@@ -365,12 +364,12 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size, py::bytes meta_blob) {
             std::string buf = meta_blob;
-            if (buf.size() != sizeof(uccl::FifoItem))
+            if (buf.size() != sizeof(UnionRemoteMemInfo))
               throw std::runtime_error(
                   "meta must be exactly 64 bytes (serialized FifoItem)");
 
-            uccl::FifoItem item;
-            uccl::deserialize_fifo_item(buf.data(), &item);
+            UnionRemoteMemInfo item;
+            deserialize_union_remotememfnfo(buf.data(), &item);
             bool success;
             {
               py::gil_scoped_release release;
@@ -389,12 +388,12 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size, py::bytes meta_blob) {
             std::string buf = meta_blob;
-            if (buf.size() != sizeof(uccl::FifoItem))
+            if (buf.size() != sizeof(UnionRemoteMemInfo))
               throw std::runtime_error(
                   "meta must be exactly 64 bytes (serialized FifoItem)");
 
-            uccl::FifoItem item;
-            uccl::deserialize_fifo_item(buf.data(), &item);
+            UnionRemoteMemInfo item;
+            deserialize_union_remotememfnfo(buf.data(), &item);
             uint64_t transfer_id;
             bool success;
             {
@@ -420,15 +419,15 @@ PYBIND11_MODULE(p2p, m) {
               throw std::runtime_error(
                   "All input vectors/lists must have length num_iovs");
             }
-            std::vector<uccl::FifoItem> item_v;
+            std::vector<UnionRemoteMemInfo> item_v;
             item_v.reserve(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
               std::string buf = py::cast<py::bytes>(meta_blob_v[i]);
-              if (buf.size() != sizeof(uccl::FifoItem))
+              if (buf.size() != sizeof(UnionRemoteMemInfo))
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
-              uccl::FifoItem item;
-              uccl::deserialize_fifo_item(buf.data(), &item);
+              UnionRemoteMemInfo item;
+              deserialize_union_remotememfnfo(buf.data(), &item);
               item_v.push_back(item);
             }
             std::vector<void*> data_v;
@@ -457,7 +456,7 @@ PYBIND11_MODULE(p2p, m) {
              uint64_t ptr,  // raw pointer passed from Python
              size_t size) {
             char
-                serialized[sizeof(uccl::FifoItem)]{};  // 64-byte scratch buffer
+                serialized[sizeof(UnionRemoteMemInfo)]{};  // 64-byte scratch buffer
             bool ok;
             {
               py::gil_scoped_release release;
@@ -467,7 +466,7 @@ PYBIND11_MODULE(p2p, m) {
             }
             /* return (success, bytes) — empty bytes when failed */
             return py::make_tuple(
-                ok, ok ? py::bytes(serialized, sizeof(uccl::FifoItem))
+                ok, ok ? py::bytes(serialized, sizeof(UnionRemoteMemInfo))
                        : py::bytes());
           },
           "Expose a registered buffer for the peer to RDMA-READ or RDMA-WRITE",
@@ -479,8 +478,8 @@ PYBIND11_MODULE(p2p, m) {
              size_t num_iovs) {
             std::vector<char*> serialized_vec(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
-              serialized_vec[i] = new char[sizeof(uccl::FifoItem)];
-              memset(serialized_vec[i], 0, sizeof(uccl::FifoItem));
+              serialized_vec[i] = new char[sizeof(UnionRemoteMemInfo)];
+              memset(serialized_vec[i], 0, sizeof(UnionRemoteMemInfo));
             }
             std::vector<void*> data_v;
             data_v.reserve(ptr_v.size());
@@ -498,7 +497,7 @@ PYBIND11_MODULE(p2p, m) {
             py::list py_bytes_list;
             for (size_t i = 0; i < num_iovs; ++i) {
               py_bytes_list.append(
-                  py::bytes(serialized_vec[i], sizeof(uccl::FifoItem)));
+                  py::bytes(serialized_vec[i], sizeof(UnionRemoteMemInfo)));
             }
             for (size_t i = 0; i < num_iovs; ++i) {
               delete[] serialized_vec[i];

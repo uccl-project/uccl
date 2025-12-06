@@ -36,8 +36,8 @@ class EFAChannel {
   }
 
   // Delete copy constructor and copy assignment operator
-  EFAChannel(const EFAChannel&) = delete;
-  EFAChannel& operator=(const EFAChannel&) = delete;
+  EFAChannel(EFAChannel const&) = delete;
+  EFAChannel& operator=(EFAChannel const&) = delete;
 
   void connect(ChannelMetaData const& remote_meta) {
     remote_meta_ = std::make_shared<ChannelMetaData>(remote_meta);
@@ -124,8 +124,15 @@ class EFAChannel {
     qpx->comp_mask = 0;
     // qpx->wr_flags = req->need_signaled ? IBV_SEND_SIGNALED : IBV_SEND_FENCE;
     qpx->wr_flags = IBV_SEND_SIGNALED;
-    ibv_wr_rdma_write_imm(qpx, req->getRemoteKey(), req->getRemoteAddress(),
-                          req->imm_data);
+    if (req->send_type == SendType::Send) {
+      ibv_wr_rdma_write_imm(qpx, req->getRemoteKey(), req->getRemoteAddress(),
+                            req->imm_data);
+    } else if (req->send_type == SendType::Write) {
+      ibv_wr_rdma_write(qpx, req->getRemoteKey(), req->getRemoteAddress());
+    } else {
+      LOG(ERROR) << "Unknown SendType in EFAChannel::send";
+      return -1;
+    }
 
     struct ibv_sge sge[1];
     int num_sge = prepareSGEList(sge, req);
@@ -178,63 +185,151 @@ class EFAChannel {
     return wr_id;
   }
 
-  bool poll_once(std::vector<CQMeta>& cq_datas) {
+  // bool poll_once(std::vector<CQMeta>& cq_datas) {
+    // if (!cq_ex_) {
+    //   LOG(INFO) << "poll_once - channel_id: " << channel_id_
+    //             << ", cq_ex_ is null";
+    //   return false;
+    // }
+    // struct ibv_poll_cq_attr poll_cq_attr = {.comp_mask = 0};
+    // ssize_t err = ibv_start_poll(cq_ex_, &poll_cq_attr);
+    // if (err)
+    //     return false;
+
+    // do {
+    //     // 必须调用消费 API，否则 CQ entry 不会前进
+    //     auto opcode = cq_ex_->read_opcode(cq_ex_);
+    //     auto len    = cq_ex_->read_byte_len(cq_ex_);
+    //     auto imm    = cq_ex_->read_imm_data(cq_ex_);
+
+    //     CQMeta cq_data;
+    //     cq_data.op_code = opcode;
+    //     cq_data.len = len;
+    //     cq_data.imm = (opcode == IBV_WC_RECV_RDMA_WITH_IMM ? imm : 0);
+    //     cq_data.wr_id = cq_ex_->wr_id;
+
+    //     cq_datas.push_back(cq_data);
+
+    // } while (ibv_next_poll(cq_ex_) == 0);
+
+    // ibv_end_poll(cq_ex_);
+    // return true;
+
+    // struct ibv_poll_cq_attr poll_cq_attr = {.comp_mask = 0};
+    // ssize_t err = ibv_start_poll(cq_ex_, &poll_cq_attr);
+
+    // if (err) {
+    //   // No completion available
+    //   // LOG(INFO) << "poll_once - channel_id: " << channel_id_ << ", No
+    //   // completion available, err: " << err;
+    //   return false;
+    // }
+
+    // // Process all available completions
+    // do {
+    //   // Successfully polled a completion
+    //   LOG(INFO) << "poll_once - channel_id: " << channel_id_
+    //             << ", Successfully polled completion, wr_id: " << cq_ex_->wr_id
+    //             << ", status: " << cq_ex_->status;
+
+    //   if (cq_ex_->status != IBV_WC_SUCCESS) {
+    //     LOG(WARNING) << "poll_once - channel_id: " << channel_id_
+    //                  << ", CQ status error: "
+    //                  << ibv_wc_status_str(cq_ex_->status);
+    //     continue;
+    //   }
+
+    //   CQMeta cq_data;
+    //   cq_data.wr_id = cq_ex_->wr_id;
+    //   cq_data.op_code = ibv_wc_read_opcode(cq_ex_);
+    //   cq_data.len = ibv_wc_read_byte_len(cq_ex_);
+    //   if (cq_data.op_code == IBV_WC_RECV_RDMA_WITH_IMM) {
+    //     cq_data.imm = ibv_wc_read_imm_data(cq_ex_);
+    //   } else {
+    //     cq_data.imm = 0;
+    //   }
+
+    //   LOG(INFO) << "poll_once - channel_id: " << channel_id_
+    //             << ", Completion data: " << cq_data
+    //             << "wr_id: " << cq_data.wr_id;
+
+    //   // Add to vector
+    //   cq_datas.emplace_back(cq_data);
+
+    //   // tracker_->acknowledge(cq_data.wr_id);
+
+    //   // Get next completion
+    //   err = ibv_next_poll(cq_ex_);
+    // } while (err == 0);
+
+    // ibv_end_poll(cq_ex_);
+
+    // return !cq_datas.empty();
+  // }
+bool poll_once(std::vector<CQMeta>& cq_datas) {
     if (!cq_ex_) {
-      LOG(INFO) << "poll_once - channel_id: " << channel_id_
-                << ", cq_ex_ is null";
-      return false;
+        LOG(INFO) << "poll_once - channel_id: " << channel_id_
+                  << ", cq_ex_ is null";
+        return false;
     }
 
-    struct ibv_poll_cq_attr poll_cq_attr = {.comp_mask = 0};
-    ssize_t err = ibv_start_poll(cq_ex_, &poll_cq_attr);
+    struct ibv_poll_cq_attr attr = {};
+    int ret = ibv_start_poll(cq_ex_, &attr);
 
-    if (err) {
-      // No completion available
-      // LOG(INFO) << "poll_once - channel_id: " << channel_id_ << ", No
-      // completion available, err: " << err;
-      return false;
+    if (ret == ENOENT) {
+        // 当前没有 completion，CQ 还是 valid 的
+        return false;
+    }
+    if (ret) {
+        // 真正的错误
+        LOG(ERROR) << "poll_once - channel_id: " << channel_id_
+                   << ", ibv_start_poll error: " << ret
+                   << " (" << strerror(ret) << ")";
+        return false;
     }
 
-    // Process all available completions
+    // 至少有一条 completion
     do {
-      // Successfully polled a completion
-      LOG(INFO) << "poll_once - channel_id: " << channel_id_
-                << ", Successfully polled completion, wr_id: " << cq_ex_->wr_id
-                << ", status: " << cq_ex_->status;
+        uint64_t wr_id  = cq_ex_->wr_id;
+        auto     status = cq_ex_->status;
 
-      if (cq_ex_->status != IBV_WC_SUCCESS) {
-        LOG(WARNING) << "poll_once - channel_id: " << channel_id_
-                     << ", CQ status error: "
-                     << ibv_wc_status_str(cq_ex_->status);
-        continue;
-      }
+        if (status != IBV_WC_SUCCESS) {
+            LOG(WARNING) << "poll_once - channel_id: " << channel_id_
+                         << ", CQE error, wr_id=" << wr_id
+                         << ", status=" << status
+                         << " (" << ibv_wc_status_str(status) << ")";
+            // 即使 error，也算消耗了一条 CQE，不 push 到 cq_datas 取决于你上层逻辑
+            // 可以选择 push，带 status 字段，让上层知道是 error completion
+            // 这里示例：不 push，只记录日志
+        } else {
+            CQMeta cq_data{};
+            cq_data.wr_id   = wr_id;
+            cq_data.op_code = ibv_wc_read_opcode(cq_ex_);
+            cq_data.len     = ibv_wc_read_byte_len(cq_ex_); // 前提: CQ 创建时设置了 BYTE_LEN
 
-      CQMeta cq_data;
-      cq_data.wr_id = cq_ex_->wr_id;
-      cq_data.op_code = ibv_wc_read_opcode(cq_ex_);
-      cq_data.len = ibv_wc_read_byte_len(cq_ex_);
-      if (cq_data.op_code == IBV_WC_RECV_RDMA_WITH_IMM) {
-        cq_data.imm = ibv_wc_read_imm_data(cq_ex_);
-      } else {
-        cq_data.imm = 0;
-      }
+            if (cq_data.op_code == IBV_WC_RECV_RDMA_WITH_IMM) {
+                cq_data.imm = ibv_wc_read_imm_data(cq_ex_);  // 前提: 设置了 WITH_IMM
+            } else {
+                cq_data.imm = 0;
+            }
 
-      LOG(INFO) << "poll_once - channel_id: " << channel_id_
-                << ", Completion data: " << cq_data << "wr_id: " << cq_data.wr_id;
+            cq_datas.emplace_back(cq_data);
+        }
 
-      // Add to vector
-      cq_datas.emplace_back(cq_data);
-
-      // tracker_->acknowledge(cq_data.wr_id);
-
-      // Get next completion
-      err = ibv_next_poll(cq_ex_);
-    } while (err == 0);
+        ret = ibv_next_poll(cq_ex_);
+    } while (ret == 0);
 
     ibv_end_poll(cq_ex_);
 
+    if (ret != ENOENT) {
+        // 非 ENOENT 说明发生真正的 error
+        LOG(ERROR) << "poll_once - channel_id: " << channel_id_
+                   << ", ibv_next_poll error: " << ret
+                   << " (" << strerror(ret) << ")";
+    }
+
     return !cq_datas.empty();
-  }
+}
 
   // bool isAcknowledged(int32_t expected_wr) const {
   //   return tracker_->isAcknowledged(expected_wr);
@@ -272,12 +367,8 @@ class EFAChannel {
   //   if (should_end_poll) ibv_end_poll(cq_ex_);
   // }
 
-  struct ibv_cq_ex* getCQ() const {
-    return cq_ex_;
-  }
-  struct ibv_qp* getQP() const {
-    return qp_;
-  }
+  struct ibv_cq_ex* getCQ() const { return cq_ex_; }
+  struct ibv_qp* getQP() const { return qp_; }
 
   // Get local metadata
   std::shared_ptr<ChannelMetaData> get_local_meta() const {
@@ -290,9 +381,9 @@ class EFAChannel {
   }
 
   // Get RdmaContext
-  inline const std::shared_ptr<RdmaContext> getContext() const { return ctx_; }
+  inline std::shared_ptr<RdmaContext> const getContext() const { return ctx_; }
 
-  inline const uint64_t getContextID() const { return ctx_->getContextID(); }
+  inline uint64_t const getContextID() const { return ctx_->getContextID(); }
 
   inline uint32_t getChannelID() const { return channel_id_; }
 
