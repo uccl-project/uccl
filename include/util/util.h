@@ -40,8 +40,6 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-
-
 namespace uccl {
 
 #define UCCL_LOG_RE VLOG(1) << "[Resource] "
@@ -1499,7 +1497,5 @@ static inline bool is_nvlink_peer(int local_gpu, int remote_gpu) {
   return true;
 #endif
 }
-
-
 
 }  // namespace uccl

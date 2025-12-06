@@ -34,14 +34,13 @@ inline void check_python_signals() {
   PyGILState_Release(gstate);
 }
 
-
 void serialize_union_remotememfnfo(UnionRemoteMemInfo const& u, char* buf) {
   // 1) Serialize FIFO item (64 bytes) - cast to base class
   serialize_fifo_item(static_cast<uccl::FifoItem const&>(u), buf);
 
   // 2) Serialize rkeys array after that
   size_t rkeys_offset = sizeof(uccl::FifoItem);
-  size_t rkeys_size   = sizeof(u.rkeys);
+  size_t rkeys_size = sizeof(u.rkeys);
 
   std::memcpy(buf + rkeys_offset, u.rkeys, rkeys_size);
 }
@@ -52,11 +51,10 @@ void deserialize_union_remotememfnfo(char const* buf, UnionRemoteMemInfo* u) {
 
   // 2) Deserialize rkeys array after that
   size_t rkeys_offset = sizeof(uccl::FifoItem);
-  size_t rkeys_size   = sizeof(u->rkeys);
+  size_t rkeys_size = sizeof(u->rkeys);
 
   std::memcpy(u->rkeys, buf + rkeys_offset, rkeys_size);
 }
-
 
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus,
                    uint32_t const rank_id)
@@ -892,8 +890,7 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
       memset(&ureq[ureq_issued % kMaxInflightChunks], 0,
              sizeof(uccl::ucclRequest));
       auto rc = my_namespace::uccl_read_async(
-          ep_, conn,
-          mhandle, cur_data, chunk_size,
+          ep_, conn, mhandle, cur_data, chunk_size,
           curr_slot_item[ureq_issued % kMaxInflightChunks],
           &ureq[ureq_issued % kMaxInflightChunks]);
       if (rc == -1) break;
@@ -991,7 +988,8 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
 bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> dst_v, std::vector<size_t> size_v,
-                     std::vector<UnionRemoteMemInfo> slot_item_v, size_t num_iovs) {
+                     std::vector<UnionRemoteMemInfo> slot_item_v,
+                     size_t num_iovs) {
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
@@ -1051,8 +1049,8 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       memset(&ureq[ureq_issued % kMaxInflightChunks], 0,
              sizeof(uccl::ucclRequest));
       auto rc = my_namespace::uccl_read_async(
-          ep_, conn, mhandle_read_vec[ureq_issued],
-          data_read_vec[ureq_issued], size_read_vec[ureq_issued],
+          ep_, conn, mhandle_read_vec[ureq_issued], data_read_vec[ureq_issued],
+          size_read_vec[ureq_issued],
           curr_slot_item[ureq_issued % kMaxInflightChunks],
           &ureq[ureq_issued % kMaxInflightChunks]);
       if (rc == -1) break;
@@ -1266,8 +1264,7 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
       memset(&ureq[ureq_issued % kMaxInflightChunks], 0,
              sizeof(uccl::ucclRequest));
       auto rc = my_namespace::uccl_write_async(
-          ep_, conn,
-          mhandle, cur_data, chunk_size,
+          ep_, conn, mhandle, cur_data, chunk_size,
           curr_slot_item[ureq_issued % kMaxInflightChunks],
           &ureq[ureq_issued % kMaxInflightChunks]);
       if (rc == -1) break;

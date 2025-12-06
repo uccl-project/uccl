@@ -62,7 +62,6 @@ def warmup_all2all_check(
     print(send_chunks_tensor.size())
     collective.register_tensor(recv_chunks_tensor)
 
-
     for r in range(world_size):
         if r == rank:
             recv_chunks[r].copy_(send_chunks[r].contiguous())

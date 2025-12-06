@@ -41,7 +41,6 @@
 #include <variant>
 #include <vector>
 #include <cuda_runtime.h>
-
 #include <transport.h>
 
 static constexpr int kGidIndex = 0;
@@ -61,7 +60,6 @@ static constexpr uint64_t kMessageChunkSizeKB = 256;  // 1 MB
 static constexpr uint64_t kMaxSplitNum = 16;
 
 static constexpr size_t kTaskRingSize = 1024;
-
 
 static constexpr size_t kInFlightMaxSizeKB =
     10240000;  // Max in-flight packets per channel
@@ -162,8 +160,8 @@ struct OOBMetaData {
       : server_ip(std::move(conn_key_)), server_port(remote_port_), gpu_id(0) {}
   friend std::ostream& operator<<(std::ostream& os, OOBMetaData const& meta) {
     os << "OOBMetaData{server_ip: " << meta.server_ip
-       << ", server_port: " << meta.server_port
-       << ", gpu_id: " << meta.gpu_id << "}";
+       << ", server_port: " << meta.server_port << ", gpu_id: " << meta.gpu_id
+       << "}";
     return os;
   }
 };
@@ -194,7 +192,8 @@ typedef struct RegMemBlock {
   uint32_t rkeys[kQpNumPerChannel +
                  1];  // For multiple memory regions (e.g., GPU memory)
 
-  RegMemBlock(void* a, size_t s, MemoryType t, struct ibv_mr* m = nullptr, bool p = false)
+  RegMemBlock(void* a, size_t s, MemoryType t, struct ibv_mr* m = nullptr,
+              bool p = false)
       : addr(a), size(s), type(t), mr(m), pool_allocated(p){};
 
   // Equality operator for hash support (based on size and type only)
@@ -367,7 +366,7 @@ inline auto to_ring_meta = [](SendReqMeta const& src, SendReqMetaOnRing& dst) {
 inline auto from_ring_meta = [](SendReqMetaOnRing const& src,
                                 SendReqMeta& dst) { dst = src.meta; };
 
-enum class SendType { Send, Write };
+enum class SendType { Send, Write, Read };
 struct EFASendRequest {
   std::shared_ptr<RegMemBlock> local_mem;
   std::shared_ptr<RemoteMemInfo> remote_mem;
@@ -514,8 +513,7 @@ struct MetaInfoToExchange {
   MetaInfoToExchange(int32_t rid, int32_t cid,
                      std::shared_ptr<ChannelMetaData> ch_meta = nullptr,
                      std::shared_ptr<RemoteMemInfo> mem_meta_ptr = nullptr,
-                     ChannelType flag_in = ChannelType::Normal,
-                     int gid = 0)
+                     ChannelType flag_in = ChannelType::Normal, int gid = 0)
       : rank_id(rid),
         channel_id(cid),
         channel_meta{},
@@ -611,4 +609,3 @@ typedef struct AcceptedMeta {
   int gpu_id;
   uint64_t rank_id;
 } AcceptedMeta;
-

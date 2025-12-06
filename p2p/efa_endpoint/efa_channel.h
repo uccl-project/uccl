@@ -7,6 +7,11 @@
 
 class EFAChannel {
  public:
+  enum class QPXType {
+    WriteImm,
+    Write,
+    READ,
+  };
   explicit EFAChannel(std::shared_ptr<RdmaContext> ctx, uint32_t channel_id = 0)
       : ctx_(ctx),
         qp_(nullptr),
@@ -15,7 +20,6 @@ class EFAChannel {
         channel_id_(channel_id),
         local_meta_(std::make_shared<ChannelMetaData>()),
         remote_meta_(std::make_shared<ChannelMetaData>()) {
-    // tracker_ = std::make_shared<AtomicBitmapPacketTracker>();
     initQP();
   }
 
@@ -29,13 +33,11 @@ class EFAChannel {
         channel_id_(channel_id),
         local_meta_(std::make_shared<ChannelMetaData>()),
         remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)) {
-    // tracker_ = std::make_shared<AtomicBitmapPacketTracker>();
     initQP();
     ah_ = ctx_->createAH(remote_meta_->gid);
     UCCL_LOG_EP << "EFAChannel connected to remote qpn=" << remote_meta.qpn;
   }
 
-  // Delete copy constructor and copy assignment operator
   EFAChannel(EFAChannel const&) = delete;
   EFAChannel& operator=(EFAChannel const&) = delete;
 
@@ -45,92 +47,156 @@ class EFAChannel {
     UCCL_LOG_EP << "EFAChannel connected to remote qpn=" << remote_meta.qpn;
   }
 
-  // int64_t write_async(std::shared_ptr<EFASendRequest> req) {
-  //   struct ibv_qp_ex* qpx = ibv_qp_to_qp_ex(qp_);
-  //   ibv_wr_start(qpx);
-  //   int32_t wr_id = tracker_->sendPacket();
-  //   qpx->wr_id = wr_id;
-  //   qpx->comp_mask = 0;
-  //   qpx->wr_flags = IBV_SEND_SIGNALED;
-  //   ibv_wr_rdma_write(qpx, req->getRemoteKey(), req->getRemoteAddress());
-
-  //   struct ibv_sge sge {
-  //     reinterpret_cast<uint64_t>(req->getLocalAddress()),
-  //         reinterpret_cast<uint32_t>(req->getLocalLen()), req->getLocalKey()
-  //   };
-  //   ibv_wr_set_sge_list(qpx, 1, &sge);
-  //   ibv_wr_set_ud_addr(qpx, ah_, remote_meta_->qpn, QKEY);
-
-  //   if (ibv_wr_complete(qpx)) {
-  //     LOG(ERROR) << "ibv_wr_complete failed in write_async";
-  //   }
-
-  //   return wr_id;
-  // }
-
-  // int read_async(std::shared_ptr<EFASendRequest> req) {
-  //   struct ibv_qp_ex* qpx = ibv_qp_to_qp_ex(qp_);
-  //   ibv_wr_start(qpx);
-  //   int64_t wr_id = tracker_->sendPacket();
-  //   qpx->wr_id = wr_id;
-  //   qpx->comp_mask = 0;
-  //   qpx->wr_flags = IBV_SEND_SIGNALED;
-  //   ibv_wr_rdma_read(qpx, req->getRemoteKey(), req->getRemoteAddress());
-
-  //   struct ibv_sge sge {
-  //     reinterpret_cast<uint64_t>(req->getLocalAddress()), req->getLocalLen(),
-  //         req->getLocalKey()
-  //   };
-  //   ibv_wr_set_sge_list(qpx, 1, &sge);
-  //   ibv_wr_set_ud_addr(qpx, ah_, remote_meta_->qpn, QKEY);
-
-  //   if (ibv_wr_complete(qpx)) {
-  //     LOG(ERROR) << "ibv_wr_complete failed in read_async";
-  //   }
-
-  //   return wr_id;
-  // }
-
-  // int64_t send(std::shared_ptr<EFASendRequest> req){
-  //   int64_t wr_id = tracker_->sendPacket();
-  //   req->wr_id = wr_id;
-  //   return send_with_wr_id(req);
-  // }
-
-  // int64_t get_wr_id() const {
-  //   return tracker_->sendPacket();
-  // }
-
-  // Prepare SGE list for send request
-  // Returns the number of SGE entries filled
-  int prepareSGEList(struct ibv_sge* sge, std::shared_ptr<EFASendRequest> req) {
-    uint32_t total_len = req->getLocalLen();
-    uint64_t local_addr = req->getLocalAddress();
-    uint32_t local_key = req->getLocalKey();
-    sge[0].addr = local_addr;
-    sge[0].length = total_len;
-    sge[0].lkey = local_key;
-    return 1;
+  int64_t submitRequest(std::shared_ptr<EFASendRequest> req) {
+    return postRequest(req);
+  }
+  int64_t read(std::shared_ptr<EFASendRequest> req) {
+    int ret = postRequest(req);
+    if (ret != 0) {
+      LOG(ERROR) << "Failed to post read request, wr_id=" << req->wr_id;
+      return -1;
+    }
+    return req->wr_id;
   }
 
   int64_t send(std::shared_ptr<EFASendRequest> req) {
+    int ret = postRequest(req);
+    if (ret != 0) {
+      LOG(ERROR) << "Failed to post send request, wr_id=" << req->wr_id;
+      return -1;
+    }
+    return req->wr_id;
+  }
+
+  int64_t recv(std::shared_ptr<EFARecvRequest> req) {
+    struct ibv_sge sge = {
+        .addr = (uintptr_t)req->getLocalAddress(),
+        .length = (uint32_t)req->getLocalLen(),
+        .lkey = req->getLocalKey(),
+    };
+    struct ibv_recv_wr wr = {0}, *bad_wr = nullptr;
+    int64_t wr_id = req->wr_id;
+    wr.wr_id = wr_id;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+
+    if (ibv_post_recv(qp_, &wr, &bad_wr)) {
+      LOG(ERROR) << "ibv_post_recv failed: " << strerror(errno);
+    }
+    return wr_id;
+  }
+
+  bool poll_once(std::vector<CQMeta>& cq_datas) {
+    if (!cq_ex_) {
+      LOG(INFO) << "poll_once - channel_id: " << channel_id_
+                << ", cq_ex_ is null";
+      return false;
+    }
+
+    struct ibv_poll_cq_attr attr = {};
+    int ret = ibv_start_poll(cq_ex_, &attr);
+
+    if (ret == ENOENT) {
+      return false;
+    }
+    if (ret) {
+      LOG(ERROR) << "poll_once - channel_id: " << channel_id_
+                 << ", ibv_start_poll error: " << ret << " (" << strerror(ret)
+                 << ")";
+      return false;
+    }
+
+    do {
+      uint64_t wr_id = cq_ex_->wr_id;
+      auto status = cq_ex_->status;
+      if (unlikely(status != IBV_WC_SUCCESS)) {
+        LOG(WARNING) << "poll_once - channel_id: " << channel_id_
+                     << ", CQE error, wr_id=" << wr_id << ", status=" << status
+                     << " (" << ibv_wc_status_str(status) << ")";
+      } else {
+        CQMeta cq_data{};
+        cq_data.wr_id = wr_id;
+        cq_data.op_code = ibv_wc_read_opcode(cq_ex_);
+        cq_data.len =
+            ibv_wc_read_byte_len(cq_ex_);  // 前提: CQ 创建时设置了 BYTE_LEN
+
+        if (cq_data.op_code == IBV_WC_RECV_RDMA_WITH_IMM) {
+          cq_data.imm = ibv_wc_read_imm_data(cq_ex_);  // 前提: 设置了 WITH_IMM
+        } else {
+          cq_data.imm = 0;
+        }
+
+        cq_datas.emplace_back(cq_data);
+      }
+
+      ret = ibv_next_poll(cq_ex_);
+    } while (ret == 0);
+
+    ibv_end_poll(cq_ex_);
+
+    if (ret != ENOENT) {
+      LOG(ERROR) << "poll_once - channel_id: " << channel_id_
+                 << ", ibv_next_poll error: " << ret << " (" << strerror(ret)
+                 << ")";
+    }
+
+    return !cq_datas.empty();
+  }
+
+  // Get local metadata
+  std::shared_ptr<ChannelMetaData> get_local_meta() const {
+    return local_meta_;
+  }
+
+  // Get remote metadata
+  std::shared_ptr<ChannelMetaData> get_remote_meta() const {
+    return remote_meta_;
+  }
+
+  // Get RdmaContext
+  inline std::shared_ptr<RdmaContext> const getContext() const { return ctx_; }
+
+  inline uint64_t const getContextID() const { return ctx_->getContextID(); }
+
+  inline uint32_t getChannelID() const { return channel_id_; }
+
+ private:
+  std::shared_ptr<RdmaContext> ctx_;
+  uint32_t channel_id_;
+
+  struct ibv_cq_ex* cq_ex_;
+  struct ibv_qp* qp_;
+  struct ibv_ah* ah_;
+
+  std::shared_ptr<ChannelMetaData> local_meta_;
+  std::shared_ptr<ChannelMetaData> remote_meta_;
+
+  std::shared_ptr<AtomicBitmapPacketTracker> tracker_;
+  struct ibv_cq_ex* getCQ() const {
+    return cq_ex_;
+  }
+  struct ibv_qp* getQP() const {
+    return qp_;
+  }
+  // Post send request based on send_type
+  // Returns 0 on success, error code on failure
+  inline int postRequest(std::shared_ptr<EFASendRequest> req) {
     auto* qpx = ibv_qp_to_qp_ex(qp_);
     ibv_wr_start(qpx);
-
-    // int64_t wr_id = wr_id_counter_.fetch_add(1, std::memory_order_relaxed) +
-    // 1;
     LOG(INFO) << *req;
     qpx->wr_id = req->wr_id;
     qpx->comp_mask = 0;
-    // qpx->wr_flags = req->need_signaled ? IBV_SEND_SIGNALED : IBV_SEND_FENCE;
     qpx->wr_flags = IBV_SEND_SIGNALED;
+
     if (req->send_type == SendType::Send) {
       ibv_wr_rdma_write_imm(qpx, req->getRemoteKey(), req->getRemoteAddress(),
                             req->imm_data);
     } else if (req->send_type == SendType::Write) {
       ibv_wr_rdma_write(qpx, req->getRemoteKey(), req->getRemoteAddress());
+    } else if (req->send_type == SendType::Read) {
+      ibv_wr_rdma_read(qpx, req->getRemoteKey(), req->getRemoteAddress());
     } else {
-      LOG(ERROR) << "Unknown SendType in EFAChannel::send";
+      LOG(ERROR) << "Unknown SendType in EFAChannel::postRequest";
       return -1;
     }
 
@@ -151,7 +217,7 @@ class EFAChannel {
       }
       sge_info << "]";
 
-      LOG(ERROR) << "ibv_wr_complete failed in send: " << ret << " "
+      LOG(ERROR) << "ibv_wr_complete failed in postRequest: " << ret << " "
                  << strerror(ret) << ", ah_=" << (void*)ah_
                  << ", remote_qpn=" << remote_meta_->qpn
                  << ", local_qpn=" << qp_->qp_num << ", wr_id=" << req->wr_id
@@ -161,251 +227,8 @@ class EFAChannel {
                  << ", num_sge=" << num_sge << ", sge_list=" << sge_info.str()
                  << std::dec;
     }
-    return req->wr_id;
+    return ret;
   }
-
-  int64_t recv(std::shared_ptr<EFARecvRequest> req) {
-    struct ibv_sge sge = {
-        .addr = (uintptr_t)req->getLocalAddress(),
-        .length = (uint32_t)req->getLocalLen(),
-        .lkey = req->getLocalKey(),
-    };
-    struct ibv_recv_wr wr = {0}, *bad_wr = nullptr;
-    // int64_t wr_id = wr_id_counter_.fetch_add(1, std::memory_order_relaxed) +
-    // 1;
-    // int64_t wr_id = tracker_->sendPacket();
-    int64_t wr_id = req->wr_id;
-    wr.wr_id = wr_id;
-    wr.sg_list = &sge;
-    wr.num_sge = 1;
-
-    if (ibv_post_recv(qp_, &wr, &bad_wr)) {
-      LOG(ERROR) << "ibv_post_recv failed: " << strerror(errno);
-    }
-    return wr_id;
-  }
-
-  // bool poll_once(std::vector<CQMeta>& cq_datas) {
-    // if (!cq_ex_) {
-    //   LOG(INFO) << "poll_once - channel_id: " << channel_id_
-    //             << ", cq_ex_ is null";
-    //   return false;
-    // }
-    // struct ibv_poll_cq_attr poll_cq_attr = {.comp_mask = 0};
-    // ssize_t err = ibv_start_poll(cq_ex_, &poll_cq_attr);
-    // if (err)
-    //     return false;
-
-    // do {
-    //     // 必须调用消费 API，否则 CQ entry 不会前进
-    //     auto opcode = cq_ex_->read_opcode(cq_ex_);
-    //     auto len    = cq_ex_->read_byte_len(cq_ex_);
-    //     auto imm    = cq_ex_->read_imm_data(cq_ex_);
-
-    //     CQMeta cq_data;
-    //     cq_data.op_code = opcode;
-    //     cq_data.len = len;
-    //     cq_data.imm = (opcode == IBV_WC_RECV_RDMA_WITH_IMM ? imm : 0);
-    //     cq_data.wr_id = cq_ex_->wr_id;
-
-    //     cq_datas.push_back(cq_data);
-
-    // } while (ibv_next_poll(cq_ex_) == 0);
-
-    // ibv_end_poll(cq_ex_);
-    // return true;
-
-    // struct ibv_poll_cq_attr poll_cq_attr = {.comp_mask = 0};
-    // ssize_t err = ibv_start_poll(cq_ex_, &poll_cq_attr);
-
-    // if (err) {
-    //   // No completion available
-    //   // LOG(INFO) << "poll_once - channel_id: " << channel_id_ << ", No
-    //   // completion available, err: " << err;
-    //   return false;
-    // }
-
-    // // Process all available completions
-    // do {
-    //   // Successfully polled a completion
-    //   LOG(INFO) << "poll_once - channel_id: " << channel_id_
-    //             << ", Successfully polled completion, wr_id: " << cq_ex_->wr_id
-    //             << ", status: " << cq_ex_->status;
-
-    //   if (cq_ex_->status != IBV_WC_SUCCESS) {
-    //     LOG(WARNING) << "poll_once - channel_id: " << channel_id_
-    //                  << ", CQ status error: "
-    //                  << ibv_wc_status_str(cq_ex_->status);
-    //     continue;
-    //   }
-
-    //   CQMeta cq_data;
-    //   cq_data.wr_id = cq_ex_->wr_id;
-    //   cq_data.op_code = ibv_wc_read_opcode(cq_ex_);
-    //   cq_data.len = ibv_wc_read_byte_len(cq_ex_);
-    //   if (cq_data.op_code == IBV_WC_RECV_RDMA_WITH_IMM) {
-    //     cq_data.imm = ibv_wc_read_imm_data(cq_ex_);
-    //   } else {
-    //     cq_data.imm = 0;
-    //   }
-
-    //   LOG(INFO) << "poll_once - channel_id: " << channel_id_
-    //             << ", Completion data: " << cq_data
-    //             << "wr_id: " << cq_data.wr_id;
-
-    //   // Add to vector
-    //   cq_datas.emplace_back(cq_data);
-
-    //   // tracker_->acknowledge(cq_data.wr_id);
-
-    //   // Get next completion
-    //   err = ibv_next_poll(cq_ex_);
-    // } while (err == 0);
-
-    // ibv_end_poll(cq_ex_);
-
-    // return !cq_datas.empty();
-  // }
-bool poll_once(std::vector<CQMeta>& cq_datas) {
-    if (!cq_ex_) {
-        LOG(INFO) << "poll_once - channel_id: " << channel_id_
-                  << ", cq_ex_ is null";
-        return false;
-    }
-
-    struct ibv_poll_cq_attr attr = {};
-    int ret = ibv_start_poll(cq_ex_, &attr);
-
-    if (ret == ENOENT) {
-        // 当前没有 completion，CQ 还是 valid 的
-        return false;
-    }
-    if (ret) {
-        // 真正的错误
-        LOG(ERROR) << "poll_once - channel_id: " << channel_id_
-                   << ", ibv_start_poll error: " << ret
-                   << " (" << strerror(ret) << ")";
-        return false;
-    }
-
-    // 至少有一条 completion
-    do {
-        uint64_t wr_id  = cq_ex_->wr_id;
-        auto     status = cq_ex_->status;
-
-        if (status != IBV_WC_SUCCESS) {
-            LOG(WARNING) << "poll_once - channel_id: " << channel_id_
-                         << ", CQE error, wr_id=" << wr_id
-                         << ", status=" << status
-                         << " (" << ibv_wc_status_str(status) << ")";
-            // 即使 error，也算消耗了一条 CQE，不 push 到 cq_datas 取决于你上层逻辑
-            // 可以选择 push，带 status 字段，让上层知道是 error completion
-            // 这里示例：不 push，只记录日志
-        } else {
-            CQMeta cq_data{};
-            cq_data.wr_id   = wr_id;
-            cq_data.op_code = ibv_wc_read_opcode(cq_ex_);
-            cq_data.len     = ibv_wc_read_byte_len(cq_ex_); // 前提: CQ 创建时设置了 BYTE_LEN
-
-            if (cq_data.op_code == IBV_WC_RECV_RDMA_WITH_IMM) {
-                cq_data.imm = ibv_wc_read_imm_data(cq_ex_);  // 前提: 设置了 WITH_IMM
-            } else {
-                cq_data.imm = 0;
-            }
-
-            cq_datas.emplace_back(cq_data);
-        }
-
-        ret = ibv_next_poll(cq_ex_);
-    } while (ret == 0);
-
-    ibv_end_poll(cq_ex_);
-
-    if (ret != ENOENT) {
-        // 非 ENOENT 说明发生真正的 error
-        LOG(ERROR) << "poll_once - channel_id: " << channel_id_
-                   << ", ibv_next_poll error: " << ret
-                   << " (" << strerror(ret) << ")";
-    }
-
-    return !cq_datas.empty();
-}
-
-  // bool isAcknowledged(int32_t expected_wr) const {
-  //   return tracker_->isAcknowledged(expected_wr);
-  // }
-
-  // void poll_cq(int32_t expected_wr) {
-  //   if (tracker_->isAcknowledged(expected_wr)) {
-  //     UCCL_LOG_EP << "tracker_->isAcknowledged(expected_wr): " <<
-  //     expected_wr; return;
-  //   }
-  //   int poll_count = 0;
-
-  //   struct ibv_poll_cq_attr poll_cq_attr = {.comp_mask = 0};
-  //   ssize_t err = ibv_start_poll(cq_ex_, &poll_cq_attr);
-  //   bool should_end_poll = !err;
-  //   while (!err || !poll_count) {
-  //     if (!err) {
-  //       if (cq_ex_->status != IBV_WC_SUCCESS) {
-  //         LOG(ERROR) << "poll_cq: " << ibv_wc_status_str(cq_ex_->status);
-  //         return;
-  //       }
-  //       auto wr_id = cq_ex_->wr_id;
-  //       int opcode = ibv_wc_read_opcode(cq_ex_);
-  //       auto length = ibv_wc_read_byte_len(cq_ex_);
-  //       tracker_->acknowledge(wr_id);
-  //       if (wr_id == expected_wr || opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
-  //         poll_count++;
-  //         UCCL_LOG_EP << "wr_id == expected_wr:" << expected_wr;
-  //         break;
-  //       }
-  //     }
-  //     err = ibv_next_poll(cq_ex_);
-  //   }
-
-  //   if (should_end_poll) ibv_end_poll(cq_ex_);
-  // }
-
-  struct ibv_cq_ex* getCQ() const { return cq_ex_; }
-  struct ibv_qp* getQP() const { return qp_; }
-
-  // Get local metadata
-  std::shared_ptr<ChannelMetaData> get_local_meta() const {
-    return local_meta_;
-  }
-
-  // Get remote metadata
-  std::shared_ptr<ChannelMetaData> get_remote_meta() const {
-    return remote_meta_;
-  }
-
-  // Get RdmaContext
-  inline std::shared_ptr<RdmaContext> const getContext() const { return ctx_; }
-
-  inline uint64_t const getContextID() const { return ctx_->getContextID(); }
-
-  inline uint32_t getChannelID() const { return channel_id_; }
-
-  void printQP() {
-    //     local_meta_->gid = ctx_->queryGid(kGidIndex);
-    // local_meta_->qpn = qp_->qp_num;
-    UCCL_LOG_EP << "local_meta_->qpn " << local_meta_->qpn;
-    UCCL_LOG_EP << "remote_meta_->qpn " << remote_meta_->qpn;
-  }
-
- private:
-  std::shared_ptr<RdmaContext> ctx_;
-  uint32_t channel_id_;
-
-  struct ibv_cq_ex* cq_ex_;
-  struct ibv_qp* qp_;
-  struct ibv_ah* ah_;
-
-  std::shared_ptr<ChannelMetaData> local_meta_;
-  std::shared_ptr<ChannelMetaData> remote_meta_;
-
-  std::shared_ptr<AtomicBitmapPacketTracker> tracker_;
 
   void initQP() {
     struct ibv_cq_init_attr_ex cq_attr = {0};
@@ -472,5 +295,16 @@ bool poll_once(std::vector<CQMeta>& cq_datas) {
 
     local_meta_->gid = ctx_->queryGid(kGidIndex);
     local_meta_->qpn = qp_->qp_num;
+  }
+  // Prepare SGE list for send request
+  // Returns the number of SGE entries filled
+  int prepareSGEList(struct ibv_sge* sge, std::shared_ptr<EFASendRequest> req) {
+    uint32_t total_len = req->getLocalLen();
+    uint64_t local_addr = req->getLocalAddress();
+    uint32_t local_key = req->getLocalKey();
+    sge[0].addr = local_addr;
+    sge[0].length = total_len;
+    sge[0].lkey = local_key;
+    return 1;
   }
 };

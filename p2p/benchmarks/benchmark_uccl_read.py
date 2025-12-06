@@ -15,7 +15,7 @@ except ImportError:
     sys.stderr.write("Failed to import p2p\n")
     raise
 
-
+fifo_blob_size = 80
 # parse_metadata is now provided by the C++ layer via p2p.Endpoint.parse_metadata()
 
 
@@ -60,7 +60,7 @@ def _run_server_read(args, ep, remote_metadata):
             size_v.append(size_per_block)
         # Use advertisev to advertise all blocks at once
         ok, fifo_blob_v = ep.advertisev(conn_id, mr_id_v, ptr_v, size_v, args.num_iovs)
-        assert ok and all(len(fifo_blob) == 64 for fifo_blob in fifo_blob_v)
+        assert ok and all(len(fifo_blob) == fifo_blob_size for fifo_blob in fifo_blob_v)
         # Send all fifo_blobs to peer
         for fifo_blob in fifo_blob_v:
             dist.send(torch.ByteTensor(list(fifo_blob)), dst=peer)
@@ -91,7 +91,7 @@ def _run_client_recv(args, ep, remote_metadata):
             mr_id_v.append(mr_id)
             size_v.append(size_per_block)
         for _ in range(args.num_iovs):
-            fifo_blob = torch.zeros(64, dtype=torch.uint8)
+            fifo_blob = torch.zeros(fifo_blob_size, dtype=torch.uint8)
             dist.recv(fifo_blob, src=peer)
             fifo_blob_v.append(bytes(fifo_blob.tolist()))
         start = time.perf_counter()
@@ -184,7 +184,7 @@ def main():
     world_size = dist.get_world_size()
     assert world_size == 2, "This benchmark only supports 2 processes"
 
-    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus, rank)
     local_metadata = ep.get_metadata()
 
     if rank == 0:

@@ -1,7 +1,7 @@
+#include "endpoint_wrapper.h"
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-#include "endpoint_wrapper.h"
 namespace py = pybind11;
 
 struct InsidePythonGuard {
@@ -16,11 +16,12 @@ PYBIND11_MODULE(p2p, m) {
 
   // Endpoint class binding
   py::class_<Endpoint>(m, "Endpoint")
-      .def(py::init([](uint32_t local_gpu_idx, uint32_t num_cpus, uint32_t rank_id) {
-        py::gil_scoped_release release;
-        InsidePythonGuard guard;
-        return std::make_unique<Endpoint>(local_gpu_idx, num_cpus, rank_id);
-      }))
+      .def(py::init(
+          [](uint32_t local_gpu_idx, uint32_t num_cpus, uint32_t rank_id) {
+            py::gil_scoped_release release;
+            InsidePythonGuard guard;
+            return std::make_unique<Endpoint>(local_gpu_idx, num_cpus, rank_id);
+          }))
       .def("__del__",
            [](Endpoint& self) {
              py::gil_scoped_release release;
@@ -455,8 +456,8 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
              uint64_t ptr,  // raw pointer passed from Python
              size_t size) {
-            char
-                serialized[sizeof(UnionRemoteMemInfo)]{};  // 64-byte scratch buffer
+            char serialized[sizeof(
+                UnionRemoteMemInfo)]{};  // 64-byte scratch buffer
             bool ok;
             {
               py::gil_scoped_release release;

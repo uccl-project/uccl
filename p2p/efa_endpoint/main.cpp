@@ -24,17 +24,29 @@ DEFINE_uint64(buffer_size, 1024 * 1024, "Buffer size in bytes");
 
 // Example usage:
 // Correctness test (100 iterations with verification):
-// ./efa_endpoint_example --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1 --remote_ip=10.1.219.155 --remote_port=19997 --test_mode=correctness --buffer_size=104857600
-// ./efa_endpoint_example --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0 --remote_ip=10.1.82.97 --remote_port=19997 --test_mode=correctness --buffer_size=104857600
+// ./efa_endpoint_example --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1
+// --remote_ip=10.1.219.155 --remote_port=19997 --test_mode=correctness
+// --buffer_size=104857600
+// ./efa_endpoint_example --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0
+// --remote_ip=10.1.82.97 --remote_port=19997 --test_mode=correctness
+// --buffer_size=104857600
 //
 //
 // Unidirectional test (rank 0 sends, rank 1 receives):
-// ./efa_endpoint_example --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1 --remote_ip=10.1.219.155 --remote_port=19997 --test_mode=unidirectional --iterations=100 --buffer_size=104857600
-// ./efa_endpoint_example --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0 --remote_ip=10.1.82.97 --remote_port=19997 --test_mode=unidirectional --iterations=100 --buffer_size=104857600
+// ./efa_endpoint_example --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1
+// --remote_ip=10.1.219.155 --remote_port=19997 --test_mode=unidirectional
+// --iterations=100 --buffer_size=104857600
+// ./efa_endpoint_example --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0
+// --remote_ip=10.1.82.97 --remote_port=19997 --test_mode=unidirectional
+// --iterations=100 --buffer_size=104857600
 
 // Bandwidth test (bidirectional):
-// ./efa_endpoint_example --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1 --remote_ip=10.1.219.155 --remote_port=19997 --test_mode=bandwidth --iterations=100 --buffer_size=104857600
-// ./efa_endpoint_example --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0 --remote_ip=10.1.82.97 --remote_port=19997 --test_mode=bandwidth --iterations=100 --buffer_size=104857600
+// ./efa_endpoint_example --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1
+// --remote_ip=10.1.219.155 --remote_port=19997 --test_mode=bandwidth
+// --iterations=100 --buffer_size=104857600
+// ./efa_endpoint_example --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0
+// --remote_ip=10.1.82.97 --remote_port=19997 --test_mode=bandwidth
+// --iterations=100 --buffer_size=104857600
 
 // Correctness test: perform 100 send/recv operations and verify results
 void correctness_test(EFAEndpoint& endpoint, MemoryAllocator& allocator) {
@@ -533,10 +545,11 @@ int main(int argc, char* argv[]) {
     std::string remote_ip;
     int remote_dev;
     int remote_gpuidx;
-    endpoint.uccl_connect(0,0,0,0,FLAGS_remote_ip,FLAGS_remote_port);
-    endpoint.uccl_accept(0,0,0,remote_ip,&remote_dev,&remote_gpuidx);
+    endpoint.uccl_connect(0, 0, 0, 0, FLAGS_remote_ip, FLAGS_remote_port);
+    endpoint.uccl_accept(0, 0, 0, remote_ip, &remote_dev, &remote_gpuidx);
     // if (connect_result>=0) {
-    //   std::cout << "Successfully connected to remote rank " << FLAGS_remote_rank
+    //   std::cout << "Successfully connected to remote rank " <<
+    //   FLAGS_remote_rank
     //             << "\n";
     // } else {
     //   std::cerr << "Failed to connect to remote rank " << FLAGS_remote_rank

@@ -248,8 +248,7 @@ class AtomicBitmapPacketTrackerMultiAck {
     uint32_t cur =
         current_ack_count_[pos].fetch_add(1, std::memory_order_acq_rel) + 1;
 
-    uint32_t need =
-        expected_ack_count_[pos].load(std::memory_order_acquire);
+    uint32_t need = expected_ack_count_[pos].load(std::memory_order_acquire);
 
     if (cur >= need) {
       // Fully acknowledged
@@ -257,30 +256,30 @@ class AtomicBitmapPacketTrackerMultiAck {
       slideWindow();
     }
   }
-  
+
   bool updateExpectedAckCount(uint32_t seq_num, uint32_t new_expected_ack) {
-      uint32_t base = base_seq_num_.load(std::memory_order_acquire);
-      uint32_t next = next_seq_num_.load(std::memory_order_acquire);
+    uint32_t base = base_seq_num_.load(std::memory_order_acquire);
+    uint32_t next = next_seq_num_.load(std::memory_order_acquire);
 
-      // If seq outside window → cannot update
-      if (seq_num < base || seq_num >= next || seq_num - base >= WINDOW_SIZE) {
-          return false;
-      }
+    // If seq outside window → cannot update
+    if (seq_num < base || seq_num >= next || seq_num - base >= WINDOW_SIZE) {
+      return false;
+    }
 
-      size_t pos = seq_num % WINDOW_SIZE;
+    size_t pos = seq_num % WINDOW_SIZE;
 
-      // Update expected ack count
-      expected_ack_count_[pos].store(new_expected_ack, std::memory_order_release);
+    // Update expected ack count
+    expected_ack_count_[pos].store(new_expected_ack, std::memory_order_release);
 
-      // If new expected count is already satisfied, mark as acked
-      uint32_t cur = current_ack_count_[pos].load(std::memory_order_acquire);
+    // If new expected count is already satisfied, mark as acked
+    uint32_t cur = current_ack_count_[pos].load(std::memory_order_acquire);
 
-      if (cur >= new_expected_ack) {
-          ack_bitmap_[pos].store(true, std::memory_order_release);
-          slideWindow();
-      }
+    if (cur >= new_expected_ack) {
+      ack_bitmap_[pos].store(true, std::memory_order_release);
+      slideWindow();
+    }
 
-      return true;
+    return true;
   }
 
   // Query if fully acked
@@ -290,7 +289,7 @@ class AtomicBitmapPacketTrackerMultiAck {
     if (seq_num < base || seq_num - base >= WINDOW_SIZE) {
       return true;
     }
-    
+
     return ack_bitmap_[seq_num % WINDOW_SIZE].load(std::memory_order_acquire);
   }
 
@@ -341,7 +340,8 @@ class AtomicBitmapPacketTrackerMultiAck {
       uint32_t seq_num = base + i;
       if (seq_num < next &&
           !ack_bitmap_[seq_num % WINDOW_SIZE].load(std::memory_order_acquire)) {
-        total += packet_sizes_[seq_num % WINDOW_SIZE].load(std::memory_order_acquire);
+        total += packet_sizes_[seq_num % WINDOW_SIZE].load(
+            std::memory_order_acquire);
       }
     }
     return total;
@@ -365,9 +365,9 @@ class AtomicBitmapPacketTrackerMultiAck {
 
       // Advance base atomically
       uint32_t new_base = base + 1;
-      if (base_seq_num_.compare_exchange_weak(
-              base, new_base,
-              std::memory_order_acq_rel, std::memory_order_acquire)) {
+      if (base_seq_num_.compare_exchange_weak(base, new_base,
+                                              std::memory_order_acq_rel,
+                                              std::memory_order_acquire)) {
         base = new_base;
       } else {
         base = base_seq_num_.load(std::memory_order_acquire);

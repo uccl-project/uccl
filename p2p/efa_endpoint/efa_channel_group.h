@@ -149,8 +149,7 @@ class SendChannelGroup : public ChannelGroup {
   }
 
   int64_t send(std::shared_ptr<EFASendRequest> req) {
-    int64_t wr_id = tracker_->sendPacket(
-        req->getLocalLen());
+    int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
     if (unlikely(request_queue_->push(req) < 0)) {
       LOG(WARNING) << "SendChannelGroup: isend request queue is full, wr_id="
@@ -160,8 +159,9 @@ class SendChannelGroup : public ChannelGroup {
     return wr_id;
   }
 
-  int64_t write(std::shared_ptr<EFASendRequest> req) {
-    if (req->send_type != SendType::Write) {
+  int64_t postWriteOrRead(std::shared_ptr<EFASendRequest> req) {
+    if (unlikely(req->send_type != SendType::Write &&
+                 req->send_type != SendType::Read)) {
       LOG(ERROR) << "SendChannelGroup::write - Invalid send_type, expected "
                     "SendType::Write";
       return -1;
@@ -171,13 +171,35 @@ class SendChannelGroup : public ChannelGroup {
     req->wr_id = wr_id;
 
     auto [channel_id, context_id] = selectNextChannelRoundRobin();
-    if (channel_id == 0) {
+    if (unlikely(channel_id == 0)) {
       LOG(ERROR) << "SendChannelGroup::write - Failed to select channel";
       return -1;
     }
 
     req->channel_id = channel_id;
-    sendChunkedRequest(req);
+    postChunkedRequest(req);
+
+    return wr_id;
+  }
+
+  int64_t read(std::shared_ptr<EFASendRequest> req) {
+    if (unlikely(req->send_type != SendType::Read)) {
+      LOG(ERROR) << "SendChannelGroup::read - Invalid send_type, expected "
+                    "SendType::Read";
+      return -1;
+    }
+
+    int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
+    req->wr_id = wr_id;
+
+    auto [channel_id, context_id] = selectNextChannelRoundRobin();
+    if (unlikely(channel_id == 0)) {
+      LOG(ERROR) << "SendChannelGroup::read - Failed to select channel";
+      return -1;
+    }
+
+    req->channel_id = channel_id;
+    postChunkedRequest(req);
 
     return wr_id;
   }
@@ -235,7 +257,7 @@ class SendChannelGroup : public ChannelGroup {
 
   // Send a request through the appropriate channel
   // Returns true on success, false on failure
-  bool sendRequestOnChannel(std::shared_ptr<EFASendRequest> req) {
+  bool postRequestOnChannel(std::shared_ptr<EFASendRequest> req) {
     auto channel = getChannel(req->channel_id);
     if (unlikely(!channel)) {
       LOG(WARNING) << "SendChannelGroup: Channel not found for channel_id "
@@ -250,7 +272,7 @@ class SendChannelGroup : public ChannelGroup {
       return false;
     }
 
-    int64_t send_ret = channel->send(req);
+    int64_t send_ret = channel->submitRequest(req);
     if (send_ret < 0) {
       LOG(WARNING) << "SendChannelGroup: Failed to send on channel_id "
                    << req->channel_id;
@@ -270,7 +292,7 @@ class SendChannelGroup : public ChannelGroup {
     }
   }
 
-  void sendChunkedRequest(std::shared_ptr<EFASendRequest> req) {
+  void postChunkedRequest(std::shared_ptr<EFASendRequest> req) {
     // Split message into chunks
     size_t message_size = req->local_mem->size;
     auto chunks = splitMessageToChunks(message_size);
@@ -309,7 +331,7 @@ class SendChannelGroup : public ChannelGroup {
       chunk_req->wr_id = req->wr_id;
 
       // Send the chunk
-      if (sendRequestOnChannel(chunk_req)) {
+      if (postRequestOnChannel(chunk_req)) {
         LOG(INFO) << "SendChannelGroup: Sent chunk " << i << "/"
                   << chunks.size() << " (offset: " << chunk.offset
                   << ", size: " << chunk.size
@@ -330,8 +352,8 @@ class SendChannelGroup : public ChannelGroup {
     bool has_meta = false;
     int index = -1;
     // {
-      std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
-      has_meta = ctrl_channel_->hasSendRequest();
+    std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
+    has_meta = ctrl_channel_->hasSendRequest();
     // }
     while (has_meta) {
       std::shared_ptr<EFASendRequest> req;
@@ -344,7 +366,7 @@ class SendChannelGroup : public ChannelGroup {
                        << " bytes in-flight.";
         }
         break;
-      }  
+      }
       index = ctrl_channel_->getOneSendRequestMeta(meta);
       LOG(INFO) << "SendChannelGroup: Processing send request meta: " << meta;
       req->imm_data = index;
@@ -353,9 +375,9 @@ class SendChannelGroup : public ChannelGroup {
       req->remote_mem = std::make_shared<RemoteMemInfo>(meta.remote_mem);
 
       if (meta.expected_chunk_count > 1) {
-        sendChunkedRequest(req);
+        postChunkedRequest(req);
       } else {
-        sendRequestOnChannel(req);
+        postRequestOnChannel(req);
       }
       has_meta = ctrl_channel_->hasSendRequest();
     }
@@ -588,7 +610,8 @@ class RecvChannelGroup : public ChannelGroup {
   }
 
   // Round-robin channel selection and MR setup
-  bool setupRecvRequestChannelAndMemoryRegion(std::shared_ptr<EFARecvRequest> req) {
+  bool setupRecvRequestChannelAndMemoryRegion(
+      std::shared_ptr<EFARecvRequest> req) {
     if (unlikely(!req || !req->local_mem)) {
       return false;
     }

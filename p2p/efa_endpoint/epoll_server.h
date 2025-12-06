@@ -112,7 +112,8 @@ struct Connection {
 // ---------------------------
 class EpollServer {
  public:
-  using MetaHandler = std::function<void(std::string const&, std::string&, std::string const&, int)>;
+  using MetaHandler = std::function<void(std::string const&, std::string&,
+                                         std::string const&, int)>;
 
   EpollServer(int port, MetaHandler handler, int max_events = 1024)
       : port_(port),

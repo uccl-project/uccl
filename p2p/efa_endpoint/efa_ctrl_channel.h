@@ -44,9 +44,7 @@ class SendControlChannel : public EFAChannel {
     return rb_->pop_with_convert(meta, from_ring_meta);
   }
 
-  inline bool hasSendRequest(){
-    return !rb_->empty();
-  }
+  inline bool hasSendRequest() { return !rb_->empty(); }
   // not thread safe
   bool getOneSendRequest(std::shared_ptr<EFASendRequest>& req) {
     // Pop from rb_ and generate req, return false if empty
@@ -74,7 +72,7 @@ class SendControlChannel : public EFAChannel {
   bool noblockingPoll() {
     std::vector<CQMeta> cq_datas;
     if (EFAChannel::poll_once(cq_datas)) {
-      for (const auto& cq_data : cq_datas) {
+      for (auto const& cq_data : cq_datas) {
         LOG(INFO) << "SendControlChannel::noblockingPoll - Polled completion: "
                   << cq_data;
         if (cq_data.hasIMM()) {
@@ -183,7 +181,7 @@ class RecvControlChannel : public EFAChannel {
   bool noblockingPoll() {
     std::vector<CQMeta> cq_datas;
     if (EFAChannel::poll_once(cq_datas)) {
-      for (const auto& cq_data : cq_datas) {
+      for (auto const& cq_data : cq_datas) {
         LOG(INFO) << "RecvControlChannel::noblockingPoll - Polled completion: "
                   << cq_data;
       }

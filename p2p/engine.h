@@ -1,5 +1,6 @@
 #pragma once
 
+#include "efa_endpoint/efa_endpoint.h"
 #include "transport.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
@@ -14,10 +15,8 @@
 #include <thread>
 #include <tuple>
 #include <unordered_map>
-#include <vector>
 #include <variant>
-#include "efa_endpoint/efa_endpoint.h"
-#include "transport.h"
+#include <vector>
 
 namespace py = pybind11;
 
@@ -31,9 +30,7 @@ struct P2PMhandle {
 
 using RDMAEndPoint =
     std::variant<uccl::RDMAEndpoint*, std::shared_ptr<EFAEndpoint>>;
-}
-
-
+}  // namespace my_namespace
 
 struct MR {
   uint64_t mr_id_;
@@ -63,10 +60,10 @@ typedef struct UnionRemoteMemInfo : uccl::FifoItem {
 
 void serialize_union_remotememfnfo(UnionRemoteMemInfo const& u, char* buf);
 
-void deserialize_union_remotememfnfo(char const* buf, UnionRemoteMemInfo* u); 
+void deserialize_union_remotememfnfo(char const* buf, UnionRemoteMemInfo* u);
 class Endpoint {
   uint64_t const kRTTBytes = 1024 * 1024;
-  uint64_t const kChunkSize = 1024 * 1024*1024;
+  uint64_t const kChunkSize = 1024 * 1024 * 1024;
   uint32_t const kMaxInflightChunks = 8;
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
@@ -215,8 +212,8 @@ class Endpoint {
   /* Write a vector of data chunks asynchronously. */
   bool writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                     std::vector<void*> src_v, std::vector<size_t> size_v,
-                    std::vector<UnionRemoteMemInfo> slot_item_v, size_t num_iovs,
-                    uint64_t* transfer_id);
+                    std::vector<UnionRemoteMemInfo> slot_item_v,
+                    size_t num_iovs, uint64_t* transfer_id);
 
   /* Write data to the remote server via CUDA/HIP IPC. Blocking. */
   bool write_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
@@ -618,8 +615,8 @@ class Endpoint {
     auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
     auto mr_id_ptr =
         std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
-    auto slot_item_ptr =
-        std::make_shared<std::vector<UnionRemoteMemInfo>>(std::move(slot_item_v));
+    auto slot_item_ptr = std::make_shared<std::vector<UnionRemoteMemInfo>>(
+        std::move(slot_item_v));
 
     TaskBatch batch;
     batch.num_iovs = num_iovs;
@@ -645,8 +642,8 @@ class Endpoint {
     auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
     auto mr_id_ptr =
         std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
-    auto slot_item_ptr =
-        std::make_shared<std::vector<UnionRemoteMemInfo>>(std::move(slot_item_v));
+    auto slot_item_ptr = std::make_shared<std::vector<UnionRemoteMemInfo>>(
+        std::move(slot_item_v));
 
     TaskBatch batch;
     batch.num_iovs = num_iovs;

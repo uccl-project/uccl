@@ -7,9 +7,8 @@
 #include "memory_allocator.h"
 #include "rdma_context.h"
 #include "rdma_device.h"
-#include <glog/logging.h>
-
 #include "util/net.h"
+#include <glog/logging.h>
 
 // ChannelGroup manages multiple channels for a connection
 
@@ -230,10 +229,9 @@ class EFAEndpoint {
         std::make_shared<SendControlChannel>(contexts_[0], ctrl_mem, 0);
     std::shared_ptr<RemoteMemInfo> ctrl_info =
         std::make_shared<RemoteMemInfo>(ctrl_mem);
-    MetaInfoToExchange ctrl_meta(rank_id_, 0,
-                                 control_channel->get_local_meta(),
+    MetaInfoToExchange ctrl_meta(rank_id_, 0, control_channel->get_local_meta(),
                                  ctrl_info, ChannelType::Control, gpu_index_);
-    LOG(INFO)<<ctrl_meta<<std::endl;
+    LOG(INFO) << ctrl_meta << std::endl;
     std::string ctrl_serialized_meta = serialize(ctrl_meta);
     bool ctrl_sent = oob_client_->send_meta(
         oob_con, ctrl_serialized_meta,
@@ -245,7 +243,7 @@ class EFAEndpoint {
           this->setSendControlChannel(rank_id, std::move(ctrl_ch_copy));
         });
     LOG(INFO) << "Created control channel with QPN: "
-                << control_channel->get_local_meta()->qpn;
+              << control_channel->get_local_meta()->qpn;
   }
 
   // Synchronous version using future and promise
@@ -259,10 +257,9 @@ class EFAEndpoint {
         std::make_shared<SendControlChannel>(contexts_[0], ctrl_mem, 0);
     std::shared_ptr<RemoteMemInfo> ctrl_info =
         std::make_shared<RemoteMemInfo>(ctrl_mem);
-    MetaInfoToExchange ctrl_meta(rank_id_, 0,
-                                 control_channel->get_local_meta(),
+    MetaInfoToExchange ctrl_meta(rank_id_, 0, control_channel->get_local_meta(),
                                  ctrl_info, ChannelType::Control, gpu_index_);
-    LOG(INFO) <<ctrl_meta<<std::endl;
+    LOG(INFO) << ctrl_meta << std::endl;
     std::string ctrl_serialized_meta = serialize(ctrl_meta);
 
     // Create promise and future for synchronization
@@ -289,20 +286,19 @@ class EFAEndpoint {
 
     if (!ctrl_sent) {
       LOG(ERROR) << "Failed to send control channel metadata for rank "
-                     << rank_id;
+                 << rank_id;
       return false;
     }
 
     LOG(INFO) << "Created control channel with QPN: "
-                << control_channel->get_local_meta()->qpn
-                << ", waiting for handshake...";
+              << control_channel->get_local_meta()->qpn
+              << ", waiting for handshake...";
 
     // Wait for callback to complete with timeout
     if (future.wait_for(std::chrono::milliseconds(timeout_ms)) ==
         std::future_status::timeout) {
-      LOG(ERROR)
-          << "Timeout waiting for control channel handshake for rank "
-          << rank_id;
+      LOG(ERROR) << "Timeout waiting for control channel handshake for rank "
+                 << rank_id;
       return false;
     }
 
@@ -310,11 +306,11 @@ class EFAEndpoint {
       future.get();  // Throws if callback had an exception
     } catch (std::exception const& e) {
       LOG(ERROR) << "Error in control channel callback for rank " << rank_id
-                     << ": " << e.what();
+                 << ": " << e.what();
       return false;
     }
     LOG(INFO) << "Control channel handshake completed successfully for rank "
-                << recv_rank_id;
+              << recv_rank_id;
     return recv_rank_id;
   }
 
@@ -326,7 +322,7 @@ class EFAEndpoint {
       MetaInfoToExchange meta(rank_id_, channel_id,
                               new_channel->get_local_meta(), nullptr,
                               ChannelType::Normal, gpu_index_);
-      LOG(INFO) <<meta<<std::endl;
+      LOG(INFO) << meta << std::endl;
       std::string serialized_meta = serialize(meta);
       bool sent = oob_client_->send_meta(
           oob_con, serialized_meta,
@@ -517,8 +513,7 @@ class EFAEndpoint {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   }
-  int64_t write(std::shared_ptr<EFASendRequest> req){
-    req->send_type = SendType::Write;
+  int64_t writeOrRead(std::shared_ptr<EFASendRequest> req) {
     uint64_t rank_id = req->to_rank_id;
     auto it = send_channel_groups_.find(rank_id);
     if (it == send_channel_groups_.end()) {
@@ -532,8 +527,8 @@ class EFAEndpoint {
     // Blocking call until send succeeds
     while (wr_id < 0) {
       LOG(INFO) << "EFAEndpoint::write - Attempting to send to rank_id: "
-          << rank_id << ", peer rank_id " << rank_id;
-      wr_id = send_group->write(req);
+                << rank_id << ", peer rank_id " << rank_id;
+      wr_id = send_group->postWriteOrRead(req);
 
       if (wr_id < 0) {
         std::this_thread::sleep_for(std::chrono::microseconds(10));
@@ -542,6 +537,7 @@ class EFAEndpoint {
 
     return wr_id;
   }
+
   // Blocking send: wraps SendChannelGroup::send with rank_id parameter
   // Returns wr_id for checking completion later
   int64_t send(uint64_t rank_id, std::shared_ptr<EFASendRequest> req) {
@@ -557,7 +553,7 @@ class EFAEndpoint {
     // Blocking call until send succeeds
     while (wr_id < 0) {
       LOG(INFO) << "EFAEndpoint::send - Attempting to send to rank_id: "
-          << rank_id << ", peer rank_id " << rank_id;
+                << rank_id << ", peer rank_id " << rank_id;
       wr_id = send_group->send(req);
 
       if (wr_id < 0) {
@@ -581,10 +577,9 @@ class EFAEndpoint {
     int64_t index = -1;
     // Blocking call until recv succeeds
     while (index < 0) {
-
       index = recv_group->recv(req);
       LOG(INFO) << "EFAEndpoint::recv - Attempting to recv from rank_id: "
-                << rank_id <<  ", peer rank_id " << rank_id;
+                << rank_id << ", peer rank_id " << rank_id;
       if (index < 0) {
         std::this_thread::sleep_for(std::chrono::microseconds(10));
       }
@@ -606,14 +601,17 @@ class EFAEndpoint {
                             uint16_t remote_port) {
     add_rank_oob_meta({{kRankIDPlaceHolder, std::make_shared<OOBMetaData>(
                                                 remote_ip, remote_port)}});
-    std::cout <<"remote_gpuidx:"<<remote_gpuidx<<"remote_ip"<<remote_ip<<"remote_port"<<remote_port<<std::endl;
+    std::cout << "remote_gpuidx:" << remote_gpuidx << "remote_ip" << remote_ip
+              << "remote_port" << remote_port << std::endl;
     int rank_id = build_connect_sync(kRankIDPlaceHolder);
     uccl::ConnID conn_id;
     conn_id.context = reinterpret_cast<void*>(static_cast<intptr_t>(rank_id));
     conn_id.flow_id = rank_id;
     return conn_id;
   };
-  inline uint16_t get_p2p_listen_port(int dev) { return oob_server_->get_port(); };
+  inline uint16_t get_p2p_listen_port(int dev) {
+    return oob_server_->get_port();
+  };
   inline int get_p2p_listen_fd(int dev) {
     return oob_server_->get_listen_fd();
   };
@@ -626,32 +624,35 @@ class EFAEndpoint {
     // Block until there's an accepted connection
     while (true) {
       {
-        {std::unique_lock<std::shared_mutex> lock(accepted_meta_mutex_);
-        if (!accepted_meta_.empty()) {
-          // Get the first accepted connection
-          auto it = accepted_meta_.begin();
-          rank_id = it->first;
-          accepted = it->second;
-          // Remove it from the map
-          if(getOrCreateRecvGroup(rank_id)->channelCount() == kQpNumPerChannel + 1){
-            accepted_meta_.erase(it);
-            std::cout<< "Accepted connection: rank_id=" << rank_id
-                        << ", ip=" << accepted.ip << ", port=" << accepted.port
-                        << ", gpu_id=" << accepted.gpu_id; 
-            UCCL_LOG_EP << "Accepted connection: rank_id=" << rank_id
+        {
+          std::unique_lock<std::shared_mutex> lock(accepted_meta_mutex_);
+          if (!accepted_meta_.empty()) {
+            // Get the first accepted connection
+            auto it = accepted_meta_.begin();
+            rank_id = it->first;
+            accepted = it->second;
+            // Remove it from the map
+            if (getOrCreateRecvGroup(rank_id)->channelCount() ==
+                kQpNumPerChannel + 1) {
+              accepted_meta_.erase(it);
+              std::cout << "Accepted connection: rank_id=" << rank_id
                         << ", ip=" << accepted.ip << ", port=" << accepted.port
                         << ", gpu_id=" << accepted.gpu_id;
-            break;
+              UCCL_LOG_EP << "Accepted connection: rank_id=" << rank_id
+                          << ", ip=" << accepted.ip
+                          << ", port=" << accepted.port
+                          << ", gpu_id=" << accepted.gpu_id;
+              break;
+            }
           }
-        }
         }
       }
       // Wait before checking again
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    std::cout<< "Done Accepted connection: rank_id=" << rank_id
-                << ", ip=" << accepted.ip << ", port=" << accepted.port
-                << ", gpu_id=" << accepted.gpu_id;
+    std::cout << "Done Accepted connection: rank_id=" << rank_id
+              << ", ip=" << accepted.ip << ", port=" << accepted.port
+              << ", gpu_id=" << accepted.gpu_id;
     // Assign output parameters
     remote_ip = accepted.ip;
     if (remote_gpuidx != nullptr) {
@@ -672,7 +673,8 @@ class EFAEndpoint {
                         struct uccl::Mhandle** mhandle) {
     return 0;
   }
-  inline int uccl_regmr(void* const data, const size_t len, std::unordered_map<int64_t, struct ibv_mr*>& mr_map) {
+  inline int uccl_regmr(void* const data, const size_t len,
+                        std::unordered_map<int64_t, struct ibv_mr*>& mr_map) {
     if (unlikely(!data)) {
       UCCL_LOG_ERROR << "Error: uccl_regmr called with null data";
       return -1;
@@ -690,19 +692,18 @@ class EFAEndpoint {
       struct ibv_mr* mr = context->regMem(data, len);
 
       if (unlikely(!mr)) {
-        UCCL_LOG_ERROR << "Error: ibv_reg_mr failed for data at "
-                       << data << " size " << len
-                       << " context_id " << context_id;
+        UCCL_LOG_ERROR << "Error: ibv_reg_mr failed for data at " << data
+                       << " size " << len << " context_id " << context_id;
         return -1;
       }
 
       // Store the MR in the mr_map using context_id as key
       mr_map[context_id] = mr;
 
-      UCCL_LOG_RE << "Registered memory at " << data
-                  << " size " << len << " with context_id "
-                  << context_id << " (lkey: 0x" << std::hex << mr->lkey
-                  << ", rkey: 0x" << mr->rkey << std::dec << ")";
+      UCCL_LOG_RE << "Registered memory at " << data << " size " << len
+                  << " with context_id " << context_id << " (lkey: 0x"
+                  << std::hex << mr->lkey << ", rkey: 0x" << mr->rkey
+                  << std::dec << ")";
     }
 
     return 0;
@@ -720,21 +721,25 @@ class EFAEndpoint {
                              int* size, int n, struct uccl::ucclRequest* ureq) {
     return 0;
   }
-  inline bool uccl_poll_ureq_once(struct uccl::ucclRequest* ureq) { return false; }
-  inline int uccl_read_async(uccl::UcclFlow* flow, struct uccl::Mhandle* local_mh,
-                             void* dst, size_t size,
-                             uccl::FifoItem const& slot_item,
-                             uccl::ucclRequest* ureq) { return 0; }
-  inline int uccl_write_async(uccl::UcclFlow* flow, struct uccl::Mhandle* local_mh,
-                              void* src, size_t size,
-                              uccl::FifoItem const& slot_item,
-                              uccl::ucclRequest* ureq) { return 0; }
-  inline int prepare_fifo_metadata(uint64_t rank_id,
-                                   const std::unordered_map<int64_t, struct ibv_mr*>& mr_map,
-                                   void const* data, size_t size,
-                                    uint32_t rkeys[]) {
-
-
+  inline bool uccl_poll_ureq_once(struct uccl::ucclRequest* ureq) {
+    return false;
+  }
+  inline int uccl_read_async(uccl::UcclFlow* flow,
+                             struct uccl::Mhandle* local_mh, void* dst,
+                             size_t size, uccl::FifoItem const& slot_item,
+                             uccl::ucclRequest* ureq) {
+    return 0;
+  }
+  inline int uccl_write_async(uccl::UcclFlow* flow,
+                              struct uccl::Mhandle* local_mh, void* src,
+                              size_t size, uccl::FifoItem const& slot_item,
+                              uccl::ucclRequest* ureq) {
+    return 0;
+  }
+  inline int prepare_fifo_metadata(
+      uint64_t rank_id,
+      std::unordered_map<int64_t, struct ibv_mr*> const& mr_map,
+      void const* data, size_t size, uint32_t rkeys[]) {
     // Get the recv group for this rank_id
     auto recv_group = getOrCreateRecvGroup(rank_id);
     if (!recv_group) {
@@ -752,7 +757,8 @@ class EFAEndpoint {
 
     return 0;
   }
-  inline void uccl_deregmr(std::unordered_map<int64_t, struct ibv_mr*>& mr_map) {
+  inline void uccl_deregmr(
+      std::unordered_map<int64_t, struct ibv_mr*>& mr_map) {
     for (auto const& [context_id, mr] : mr_map) {
       if (unlikely(!mr)) {
         UCCL_LOG_ERROR << "Error: mr is null for context_id " << context_id;
@@ -820,8 +826,8 @@ class EFAEndpoint {
   void process_meta(std::string const& input, std::string& output,
                     std::string const& client_ip, int client_port) {
     MetaInfoToExchange meta = deserialize<MetaInfoToExchange>(input);
-    LOG(INFO) << "Received from " << client_ip << ":" << client_port
-                   << " - " << meta;
+    LOG(INFO) << "Received from " << client_ip << ":" << client_port << " - "
+              << meta;
 
     auto context_id = meta.channel_id % contexts_.size();
     std::shared_ptr<RdmaContext> ctx_ptr = contexts_[context_id];
@@ -832,8 +838,8 @@ class EFAEndpoint {
       auto ctrl_mem =
           allocator_->allocate(kRingBufferSize, MemoryType::HOST, ctx_ptr);
       LOG(INFO) << "process_meta: Allocated " << ctrl_mem->size
-                  << " bytes for recv control channel ring buffer at "
-                  << ctrl_mem->addr;
+                << " bytes for recv control channel ring buffer at "
+                << ctrl_mem->addr;
 
       auto recv_ctrl_channel = std::make_shared<RecvControlChannel>(
           ctx_ptr, meta, ctrl_mem, meta.channel_id);
@@ -841,8 +847,8 @@ class EFAEndpoint {
       // Create respons
       RemoteMemInfo ctrl_info(ctrl_mem);
       MetaInfoToExchange response(rank_id_, meta.channel_id,
-                                  recv_ctrl_channel->get_local_meta(),
-                                  nullptr, ChannelType::Control, gpu_index_);
+                                  recv_ctrl_channel->get_local_meta(), nullptr,
+                                  ChannelType::Control, gpu_index_);
       response.mem_meta = ctrl_info;
       LOG(INFO) << "response (control channel):::::::" << response;
       output = serialize(response);
@@ -861,8 +867,8 @@ class EFAEndpoint {
         accepted.rank_id = meta.rank_id;
         accepted_meta_[meta.rank_id] = accepted;
         LOG(INFO) << "Stored accepted connection: rank_id=" << meta.rank_id
-                    << ", ip=" << client_ip << ", port=" << client_port
-                    << ", gpu_id=" << meta.gpu_id;
+                  << ", ip=" << client_ip << ", port=" << client_port
+                  << ", gpu_id=" << meta.gpu_id;
       }
     } else {
       // Normal channel
