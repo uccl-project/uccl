@@ -1060,7 +1060,18 @@ static void post_rdma_async_batched_fast_mode(
                            .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
 #else
-      if (j + 1 == k) {
+      if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
+        int v = static_cast<int>(cmd.atomic_val);
+        if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
+          fprintf(stderr, "[EFA] atomic value=%d won't fit in 15 bits\n", v);
+          std::abort();
+        }
+        uint32_t imm =
+            AtomicsImm::Pack(true, false, cmd.atomic_val, cmd.atomic_offset,
+                             get_low_latency(cmd.cmd_type))
+                .GetImmData();
+        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
+      } else if (j + 1 == k) {
         uint32_t imm = WriteImm::Pack(get_is_combine(cmd.cmd_type),
                                       get_low_latency(cmd.cmd_type),
                                       cmd.expert_idx, k, my_rank)
@@ -1243,8 +1254,6 @@ void local_process_completions(ProxyCtx& S,
           auto it = S.wr_id_to_write_struct.find(wrid);
           if (it != S.wr_id_to_write_struct.end()) {
             WriteStruct const& ws = it->second;
-            fprintf(stderr, "[RDMA_COMPLETION] wrid=%lu WriteStruct: low_latency_buffer_idx=%d, expert_idx=%d, dst_rank=%d, is_combine=%d\n",
-                    wrid, ws.low_latency_buffer_idx, ws.expert_idx, ws.dst_rank, ws.is_combine);
             S.wr_id_to_write_struct.erase(it);
             if (ws.is_combine) {
               S.combine_sent_counter.Add(
@@ -1665,7 +1674,8 @@ void remote_process_completions_fast_mode(
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
 #ifdef USE_SENDER_BARRIER
-      if (aimm.IsCombine()) value = 1;
+      bool is_combine = aimm.IsCombine();
+      if (is_combine) value = 1;
 #ifndef EFA
       const uint32_t tag = wr_tag(cqe.wr_id);
       ProxyCtx& S_atomic = *ctx_by_tag[tag];
