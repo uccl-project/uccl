@@ -196,9 +196,6 @@ void Proxy::init_common() {
       reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(cfg_.gpu_buffer) +
                                   cfg_.total_size - atomic_buf_size);
 
-  // printf("[PROXY_INIT] Atomic buffer at %p, size %zu bytes\n",
-  //        ctx_.atomic_old_values_buf, atomic_buf_size);
-
   int num_ranks = ctxs_for_all_ranks_.size();
   local_infos_.assign(num_ranks, RDMAConnectionInfo{});
   remote_infos_.assign(num_ranks, RDMAConnectionInfo{});
@@ -846,7 +843,6 @@ void Proxy::post_gpu_commands_mixed(
       0) {
     return;
   }
-
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
