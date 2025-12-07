@@ -45,7 +45,7 @@ export SGLANG_ENABLE_JIT_DEEPGEMM=1
 MODEL_PATH="deepseek-ai/DeepSeek-R1-0528"
 DIST_ADDR="172.31.36.62:5000"   # Node 0 master
 NODE_RANK=$1
-NNODES=2
+NNODES=4
 
 # ============================
 # Launch
@@ -57,8 +57,8 @@ echo "DeepEP config: $DEEPEP_CFG"
 
 python -m sglang.launch_server \
   --model-path "$MODEL_PATH" \
-  --tp-size 16 \
-  --ep-size 16 \
+  --tp-size 32 \
+  --ep-size 32 \
   --nnodes "$NNODES" \
   --node-rank "$NODE_RANK" \
   --dist-init-addr "$DIST_ADDR" \
