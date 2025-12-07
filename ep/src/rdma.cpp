@@ -224,37 +224,20 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     exit(1);
   }
   uint64_t iova = (uintptr_t)gpu_buf;
-  int flags = 
-  #ifndef EFA
-      IBV_ACCESS_LOCAL_WRITE |
-      IBV_ACCESS_REMOTE_WRITE |
-      IBV_ACCESS_REMOTE_ATOMIC |
-      IBV_ACCESS_RELAXED_ORDERING;
-  #else
-      IBV_ACCESS_LOCAL_WRITE |
-      IBV_ACCESS_REMOTE_WRITE |
-      IBV_ACCESS_RELAXED_ORDERING;
-  #endif
-
-  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova, flags);
-
+#ifndef EFA
+  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
+                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                              IBV_ACCESS_REMOTE_ATOMIC |
+                              IBV_ACCESS_RELAXED_ORDERING);
+#else
+  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
+                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                              IBV_ACCESS_RELAXED_ORDERING);
+#endif
 
   if (!S.mr) {
-      fprintf(stderr,
-          "ibv_reg_mr_iova2 FAILED:\n"
-          "  errno      = %d (%s)\n"
-          "  pd         = %p\n"
-          "  gpu_buf    = %p\n"
-          "  bytes      = %zu\n"
-          "  iova       = 0x%lx\n"
-          "  flags      = 0x%x\n",
-          errno, strerror(errno),
-          (void*)S.pd,
-          gpu_buf,
-          bytes,
-          (unsigned long)iova,
-          flags);
-      exit(1);
+    perror("ibv_reg_mr failed");
+    exit(1);
   }
 
   if (S.rkey != 0) {
@@ -937,15 +920,10 @@ static void post_rdma_async_batched_normal_mode(
                     .GetImmData();
             wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
             wrs[j].imm_data = htonl(imm);
-          } else if (j + 1 == kgroup) {
-            // Put WriteImm only on the tail WR
-            uint32_t imm =
-                WriteImm::Pack(get_is_combine(cmd.cmd_type),
-                               get_low_latency(cmd.cmd_type), cmd.expert_idx,
-                               static_cast<uint32_t>(kgroup), my_rank)
-                    .GetImmData();
-            wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-            wrs[j].imm_data = htonl(imm);
+
+            AtomicsImm aimm(imm);
+            assert(aimm.GetValue() == cmd.atomic_val);
+            assert(aimm.GetOff() == cmd.atomic_offset);
           } else {
             wrs[j].opcode = IBV_WR_RDMA_WRITE;
           }
@@ -1082,18 +1060,7 @@ static void post_rdma_async_batched_fast_mode(
                            .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
 #else
-      if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
-        int v = static_cast<int>(cmd.atomic_val);
-        if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
-          fprintf(stderr, "[EFA] atomic value=%d won't fit in 15 bits\n", v);
-          std::abort();
-        }
-        uint32_t imm =
-            AtomicsImm::Pack(true, false, cmd.atomic_val, cmd.atomic_offset,
-                             get_low_latency(cmd.cmd_type))
-                .GetImmData();
-        ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
-      } else if (j + 1 == k) {
+      if (j + 1 == k) {
         uint32_t imm = WriteImm::Pack(get_is_combine(cmd.cmd_type),
                                       get_low_latency(cmd.cmd_type),
                                       cmd.expert_idx, k, my_rank)
@@ -1262,7 +1229,7 @@ void local_process_completions(ProxyCtx& S,
             }
             S.wr_id_to_wr_ids.erase(it);
           } else {
-            printf("Error: ACK for unknown wr_id %lu\n", wrid);
+            printf("Error: Atomic ACK for unknown wr_id %lu\n", wrid);
             std::abort();
           }
 #endif
@@ -1276,6 +1243,8 @@ void local_process_completions(ProxyCtx& S,
           auto it = S.wr_id_to_write_struct.find(wrid);
           if (it != S.wr_id_to_write_struct.end()) {
             WriteStruct const& ws = it->second;
+            fprintf(stderr, "[RDMA_COMPLETION] wrid=%lu WriteStruct: low_latency_buffer_idx=%d, expert_idx=%d, dst_rank=%d, is_combine=%d\n",
+                    wrid, ws.low_latency_buffer_idx, ws.expert_idx, ws.dst_rank, ws.is_combine);
             S.wr_id_to_write_struct.erase(it);
             if (ws.is_combine) {
               S.combine_sent_counter.Add(
@@ -1301,7 +1270,7 @@ void local_process_completions(ProxyCtx& S,
             }
             S.wr_id_to_wr_ids.erase(it);
           } else {
-            printf("Error: ACK for unknown wr_id %lu\n", wr_done);
+            printf("Error: Write ACK for unknown wr_id %lu\n", wr_done);
             std::abort();
           }
 #endif
@@ -1482,9 +1451,6 @@ void remote_process_completions_normal_mode(
           std::abort();
         }
         if (seq == sb.expected) {
-          // if (my_rank % MAX_NUM_GPUS == 0)
-          //   printf("seq: %u in order, applying immediately\n", seq);
-          // Apply immediately
           commit(value);
           sb.expected = (sb.expected + 1) % kReorderingBufferSize;
 
@@ -1503,10 +1469,6 @@ void remote_process_completions_normal_mode(
             fprintf(stderr, "Error: seq %u out of range\n", seq);
             std::abort();
           }
-          // if (my_rank % MAX_NUM_GPUS == 0)
-          //   printf("seq: %u out of order (expected %u), buffering\n", seq,
-          //         sb.expected);
-
           if (sb.present_mask & (1u << seq)) {
             fprintf(stderr, "Error: duplicate seq %u arrival\n", seq);
             std::abort();
@@ -1569,6 +1531,7 @@ void remote_process_completions_normal_mode(
       fprintf(stderr, "Unexpected CQE opcode: %d\n", cqe.opcode);
       std::abort();
     }
+
 #ifndef EFA
     if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
       uint32_t const tag = wr_tag(cqe.wr_id);
@@ -1702,8 +1665,7 @@ void remote_process_completions_fast_mode(
       auto* addr32 =
           reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
 #ifdef USE_SENDER_BARRIER
-      bool is_combine = aimm.IsCombine();
-      if (is_combine) value = 1;
+      if (aimm.IsCombine()) value = 1;
 #ifndef EFA
       const uint32_t tag = wr_tag(cqe.wr_id);
       ProxyCtx& S_atomic = *ctx_by_tag[tag];
