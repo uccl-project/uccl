@@ -33,13 +33,12 @@ struct BenchmarkConfig {
   uint32_t fifo_size;          // FIFO size
   uint32_t test_duration_ms;   // Test duration in milliseconds
   uint32_t warmup_iterations;  // Number of warmup iterations
-  uint32_t batch_size;    // Batch size for in-flight requests (default: 32)
-  float gpu_clock_ghz;    // GPU clock rate in GHz
-  bool measure_latency;   // Whether to measure GPU-side latency
-  int mode;               // 0: throughput, 1: latency, 2: burst, 3: random, 4:
-                          // controlled_eval
-  uint64_t sleep_cycles;  // Sleep cycles for controlled mops mode
-  float target_mops;      // Target Mops
+  uint32_t batch_size;
+  float gpu_clock_ghz;
+  bool measure_latency;
+  int mode;
+  uint64_t sleep_cycles;
+  float target_mops;
 };
 
 // Metrics collected from GPU

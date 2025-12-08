@@ -8,6 +8,7 @@ NVCC := $(CUDA_PATH)/bin/nvcc
 HIPCC := $(ROCM_PATH)/bin/hipcc
 CXX := g++
 
+# Auto-detect GPU architecture
 GPU_ARCH := $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1 | sed 's/\.//' || echo "90")
 
 TARGET := benchmark
