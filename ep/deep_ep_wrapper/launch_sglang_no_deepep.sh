@@ -36,11 +36,14 @@ python -m sglang.launch_server \
   --node-rank "$NODE_RANK" \
   --dist-init-addr "$DIST_ADDR" \
   --trust-remote-code \
-  --mem-fraction-static 0.85 \
+  --mem-fraction-static 0.7 \
   --attention-backend flashinfer \
   --enable-eplb \
   --eplb-algorithm deepseek \
-  --ep-num-redundant-experts 16 \
+  --ep-num-redundant-experts 32 \
   --ep-dispatch-algorithm dynamic \
   --enable-dp-attention \
-  --enable-dp-lm-head
+  --enable-dp-lm-head \
+  --moe-dense-tp-size 1 \
+  --cuda-graph-bs 128 \
+  # --ep-size 16 \
