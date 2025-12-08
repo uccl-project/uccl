@@ -20,7 +20,7 @@ struct RDMAConnectionInfo {
   uint32_t ack_qp_num;
   uint32_t recv_ack_qp_num;
   uint32_t ack_psn;
-  uint32_t rkey;   // Memory region key
+  uint32_t rkey;   // Memory region keyf
   uintptr_t addr;  // Buffer address
   uint64_t len;
   uint16_t lid;     // Local ID
@@ -29,7 +29,11 @@ struct RDMAConnectionInfo {
   // #ifdef EFA
   uint32_t num_rings;
   uint32_t data_qp_num[kChannelPerProxy];
-  // #endif
+
+  uint32_t num_nics;
+  uint8_t gid_per_nic[MAX_NUM_GPUS][16];
+  uint32_t qp_num_per_nic[MAX_NUM_GPUS];
+  uint32_t ack_qp_num_per_nic[MAX_NUM_GPUS];
 };
 
 struct PendingUpdate {
@@ -304,6 +308,9 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
 void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info);
 
 void modify_qp_to_init(ProxyCtx& S);
+
+struct ibv_ah* create_ah(ProxyCtx& S, uint8_t* remote_gid);
+
 void local_poll_completions(ProxyCtx& S,
                             std::unordered_set<uint64_t>& acked_wrs,
                             int thread_idx, std::vector<ProxyCtx*>& ctx_by_tag);

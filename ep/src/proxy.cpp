@@ -300,6 +300,7 @@ void Proxy::init_common() {
     }
   }
   usleep(50 * 1000);
+
   if (cfg_.use_normal_mode) {
     // if (cfg_.thread_idx != 0) {
     //   return;
