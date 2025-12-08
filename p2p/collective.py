@@ -766,6 +766,147 @@ class CollectiveContext:
 
         return transfer_ids
 
+    def alltoall(
+        self,
+        send_tensor: torch.Tensor,
+        recv_tensor: torch.Tensor,
+    ):
+        """
+        All-to-all operation: each rank sends different data to each rank.
+
+        Each rank splits its send_tensor into world_size chunks. Chunk i is sent
+        to rank i. After completion, recv_tensor contains chunks from all ranks
+        where chunk i came from rank i.
+
+        Args:
+            send_tensor: Input tensor (size = count * world_size)
+                        Chunk i (at offset i * count) is sent to rank i.
+            recv_tensor: Output tensor (size = count * world_size)
+                        Chunk i (at offset i * count) contains data from rank i.
+        """
+        if not self.initialized:
+            raise RuntimeError("CollectiveContext not initialized. Call init() first.")
+
+        # Validate tensor sizes
+        send_size = send_tensor.numel() * send_tensor.element_size()
+        recv_size = recv_tensor.numel() * recv_tensor.element_size()
+
+        if send_size != recv_size:
+            raise ValueError(
+                f"send_tensor and recv_tensor must have same size: "
+                f"send={send_size} bytes, recv={recv_size} bytes"
+            )
+
+        if send_tensor.numel() % self.world_size != 0:
+            raise ValueError(
+                f"send_tensor size ({send_tensor.numel()}) must be divisible by world_size ({self.world_size})"
+            )
+
+        # Calculate chunk size
+        chunk_numel = send_tensor.numel() // self.world_size
+
+        # Split tensors into chunks for each rank
+        send_chunks = [
+            send_tensor.view(-1)[i * chunk_numel : (i + 1) * chunk_numel]
+            for i in range(self.world_size)
+        ]
+        recv_chunks = [
+            recv_tensor.view(-1)[i * chunk_numel : (i + 1) * chunk_numel]
+            for i in range(self.world_size)
+        ]
+
+        # Copy own chunk (rank sends to itself)
+        recv_chunks[self.rank].copy_(send_chunks[self.rank])
+
+        send_ids = []
+        recv_ids = []
+
+        # Send chunk i to rank i (for all other ranks)
+        for peer_rank in range(self.world_size):
+            if peer_rank != self.rank:
+                tid = self.isend(send_chunks[peer_rank], peer_rank)
+                send_ids.append(tid)
+
+        # Receive chunk from rank i into position i (for all other ranks)
+        for peer_rank in range(self.world_size):
+            if peer_rank != self.rank:
+                tid = self.irecv(recv_chunks[peer_rank], peer_rank)
+                recv_ids.append(tid)
+
+        # Wait for all transfers to complete
+        self.wait_all(send_ids + recv_ids)
+
+    def ialltoall(
+        self,
+        send_tensor: torch.Tensor,
+        recv_tensor: torch.Tensor,
+    ) -> List[Union[int, dist.P2POp]]:
+        """
+        Initiate asynchronous all-to-all operation (non-blocking).
+
+        Each rank splits its send_tensor into world_size chunks. Chunk i is sent
+        to rank i. After completion, recv_tensor contains chunks from all ranks
+        where chunk i came from rank i.
+
+        Args:
+            send_tensor: Input tensor (size = count * world_size)
+                        Chunk i (at offset i * count) is sent to rank i.
+            recv_tensor: Output tensor (size = count * world_size)
+                        Chunk i (at offset i * count) contains data from rank i.
+
+        Returns:
+            List of transfer_ids to poll for completion using wait_all()
+        """
+        if not self.initialized:
+            raise RuntimeError("CollectiveContext not initialized. Call init() first.")
+
+        # Validate tensor sizes
+        send_size = send_tensor.numel() * send_tensor.element_size()
+        recv_size = recv_tensor.numel() * recv_tensor.element_size()
+
+        if send_size != recv_size:
+            raise ValueError(
+                f"send_tensor and recv_tensor must have same size: "
+                f"send={send_size} bytes, recv={recv_size} bytes"
+            )
+
+        if send_tensor.numel() % self.world_size != 0:
+            raise ValueError(
+                f"send_tensor size ({send_tensor.numel()}) must be divisible by world_size ({self.world_size})"
+            )
+
+        # Calculate chunk size
+        chunk_numel = send_tensor.numel() // self.world_size
+
+        # Split tensors into chunks for each rank
+        send_chunks = [
+            send_tensor.view(-1)[i * chunk_numel : (i + 1) * chunk_numel]
+            for i in range(self.world_size)
+        ]
+        recv_chunks = [
+            recv_tensor.view(-1)[i * chunk_numel : (i + 1) * chunk_numel]
+            for i in range(self.world_size)
+        ]
+
+        # Copy own chunk (rank sends to itself)
+        recv_chunks[self.rank].copy_(send_chunks[self.rank])
+
+        transfer_ids = []
+
+        # Send chunk i to rank i (for all other ranks)
+        for peer_rank in range(self.world_size):
+            if peer_rank != self.rank:
+                tid = self.isend(send_chunks[peer_rank], peer_rank)
+                transfer_ids.append(tid)
+
+        # Receive chunk from rank i into position i (for all other ranks)
+        for peer_rank in range(self.world_size):
+            if peer_rank != self.rank:
+                tid = self.irecv(recv_chunks[peer_rank], peer_rank)
+                transfer_ids.append(tid)
+
+        return transfer_ids
+
 
 # Global collective context instance
 _default_context: Optional[CollectiveContext] = None
@@ -871,6 +1012,31 @@ def iallgather(
         List of transfer_ids to poll for completion using wait_all()
     """
     return get_collective().iallgather(send_tensor, recv_tensor)
+
+
+def alltoall(send_tensor: torch.Tensor, recv_tensor: torch.Tensor):
+    """
+    All-to-all using the default collective context.
+    Args:
+        send_tensor: Input tensor (size = count * world_size)
+        recv_tensor: Output tensor (size = count * world_size)
+    """
+    get_collective().alltoall(send_tensor, recv_tensor)
+
+
+def ialltoall(
+    send_tensor: torch.Tensor, recv_tensor: torch.Tensor
+) -> List[Union[int, dist.P2POp]]:
+    """
+    Async all-to-all using the default collective context.
+    Args:
+        send_tensor: Input tensor (size = count * world_size)
+        recv_tensor: Output tensor (size = count * world_size)
+
+    Returns:
+        List of transfer_ids to poll for completion using wait_all()
+    """
+    return get_collective().ialltoall(send_tensor, recv_tensor)
 
 
 def wait_all(transfer_ids: List[Union[int, dist.P2POp]]):
