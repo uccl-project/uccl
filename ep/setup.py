@@ -230,7 +230,7 @@ if __name__ == "__main__":
         revision = ""
 
     setuptools.setup(
-        name="ep",
+        name="uccl.ep",
         version="0.0.1" + revision,
         ext_modules=[
             CUDAExtension(
