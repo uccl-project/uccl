@@ -28,7 +28,7 @@
 namespace amd {
 
 struct SharedData {
-  uint32_t barrier[MAX_GROUPS];
+  uint32_t barrier[MAX_NUM_BARRIERS];
 };
 
 __shared__ SharedData shared_data;
