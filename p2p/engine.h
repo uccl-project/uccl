@@ -1,5 +1,9 @@
 #pragma once
 
+#include "efa_endpoint/define.h"
+#ifdef UCCL_ENABLE_EFA
+#include "efa_endpoint/efa_endpoint.h"
+#endif
 #include "transport.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
@@ -14,15 +18,30 @@
 #include <thread>
 #include <tuple>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 namespace py = pybind11;
 
 extern thread_local bool inside_python;
+namespace my_namespace {
+
+struct P2PMhandle {
+  struct uccl::Mhandle* mhandle_;
+  std::unordered_map<int64_t, struct ibv_mr*> mr_map;
+};
+
+#ifdef UCCL_ENABLE_EFA
+using RDMAEndPoint =
+    std::variant<uccl::RDMAEndpoint*, std::shared_ptr<EFAEndpoint>>;
+#else
+using RDMAEndPoint = std::variant<uccl::RDMAEndpoint*>;
+#endif
+}  // namespace my_namespace
 
 struct MR {
   uint64_t mr_id_;
-  uccl::Mhandle* mhandle_;
+  my_namespace::P2PMhandle* mhandle_;
 };
 
 struct Conn {
@@ -38,15 +57,17 @@ struct PeerInfo {
   int gpu_idx;          // GPU index of the peer
 };
 
-static inline std::string get_oob_ip() {
-  char uccl_ifname[MAX_IF_NAME_SIZE + 1];
-  uccl::socketAddress uccl_ifaddr;
-  int num_ifs =
-      uccl::find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
-  CHECK(num_ifs == 1) << "No IP interface found";
-  return uccl::get_dev_ip(uccl_ifname);
-}
+typedef struct UnionRemoteMemInfo : uccl::FifoItem {
+  uint32_t rkeys[kQpNumPerChannel +
+                 1];  // For multiple memory regions (e.g., GPU memory)
 
+  UnionRemoteMemInfo() : uccl::FifoItem() {}
+  ~UnionRemoteMemInfo() {}
+} UnionRemoteMemInfo;
+
+void serialize_union_remotememfnfo(UnionRemoteMemInfo const& u, char* buf);
+
+void deserialize_union_remotememfnfo(char const* buf, UnionRemoteMemInfo* u);
 class Endpoint {
   uint64_t const kRTTBytes = 1024 * 1024;
   uint64_t const kChunkSize = 1024 * 1024;
@@ -71,7 +92,8 @@ class Endpoint {
    *   local_gpu_idx: the GPU index to use for the engine
    *   num_cpus: the number of CPUs to use for the engine
    */
-  Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus);
+  Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus,
+           uint32_t const rank_id);
 
   /*
    * Create endpoint without intializing the engine. Lazy creation of engine is
@@ -81,7 +103,7 @@ class Endpoint {
    * input:
    *   num_cpus: the number of CPUs to use for the engine
    */
-  Endpoint(uint32_t const num_cpus);
+  Endpoint(uint32_t const num_cpus, uint32_t const rank_id = 0);
   ~Endpoint();
 
   /*
@@ -164,41 +186,41 @@ class Endpoint {
 
   /* Read data from the remote server. Blocking. */
   bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-            uccl::FifoItem const& slot_item);
+            UnionRemoteMemInfo const& slot_item);
 
   /* Read data from the remote server asynchronously. */
   bool read_async(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-                  uccl::FifoItem const& slot_item, uint64_t* transfer_id);
+                  UnionRemoteMemInfo const& slot_item, uint64_t* transfer_id);
 
   /* Read a vector of data chunks. */
   bool readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<void*> dst_v, std::vector<size_t> size_v,
-             std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs);
+             std::vector<UnionRemoteMemInfo> slot_item_v, size_t num_iovs);
 
   /* Read a vector of data chunks asynchronously. */
   bool readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                    std::vector<void*> dst_v, std::vector<size_t> size_v,
-                   std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs,
+                   std::vector<UnionRemoteMemInfo> slot_item_v, size_t num_iovs,
                    uint64_t* transfer_id);
 
   /* Write data to the remote server. Blocking. */
   bool write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
-             uccl::FifoItem const& slot_item);
+             UnionRemoteMemInfo const& slot_item);
 
   /* Write data to the remote server asynchronously. */
   bool write_async(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
-                   uccl::FifoItem const& slot_item, uint64_t* transfer_id);
+                   UnionRemoteMemInfo const& slot_item, uint64_t* transfer_id);
 
   /* Write a vector of data chunks. */
   bool writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
               std::vector<void*> src_v, std::vector<size_t> size_v,
-              std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs);
+              std::vector<UnionRemoteMemInfo> slot_item_v, size_t num_iovs);
 
   /* Write a vector of data chunks asynchronously. */
   bool writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                     std::vector<void*> src_v, std::vector<size_t> size_v,
-                    std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs,
-                    uint64_t* transfer_id);
+                    std::vector<UnionRemoteMemInfo> slot_item_v,
+                    size_t num_iovs, uint64_t* transfer_id);
 
   /* Write data to the remote server via CUDA/HIP IPC. Blocking. */
   bool write_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
@@ -302,7 +324,7 @@ class Endpoint {
   uint32_t num_cpus_;
   int numa_node_;
 
-  uccl::RDMAEndpoint* ep_;
+  my_namespace::RDMAEndPoint ep_;
   bool engine_initialized_ = false;
 
   std::atomic<uint64_t> next_conn_id_ = 0;
@@ -312,6 +334,7 @@ class Endpoint {
   // Accessed by both app thread and proxy thread.
   mutable std::shared_mutex conn_mu_;
   std::unordered_map<uint64_t, Conn*> conn_id_to_conn_;
+  std::unordered_map<uint64_t, uint64_t> conn_id_to_conn_efa_;
   mutable std::shared_mutex mr_mu_;
   std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
 
@@ -350,7 +373,7 @@ class Endpoint {
     std::shared_ptr<std::vector<void*>> data_ptr;  // for RECVV/READV/WRITEV
     std::shared_ptr<std::vector<size_t>> size_ptr;
     std::shared_ptr<std::vector<uint64_t>> mr_id_ptr;
-    std::shared_ptr<std::vector<uccl::FifoItem>>
+    std::shared_ptr<std::vector<UnionRemoteMemInfo>>
         slot_item_ptr;  // for READV/WRITEV
 
     TaskBatch() : num_iovs(0) {}
@@ -394,7 +417,7 @@ class Endpoint {
       if (!mr_id_ptr) return nullptr;
       return mr_id_ptr->data();
     }
-    uccl::FifoItem* slot_item_v() const {
+    UnionRemoteMemInfo* slot_item_v() const {
       if (!slot_item_ptr) return nullptr;
       return slot_item_ptr->data();
     }
@@ -420,7 +443,7 @@ class Endpoint {
     std::atomic<bool> done;
     // For proxy to access the task.done
     NetRwTask* self_ptr;
-    uccl::FifoItem slot_item;
+    UnionRemoteMemInfo slot_item;
   };
 
   struct alignas(64) IpcRwTask {
@@ -436,7 +459,7 @@ class Endpoint {
   };
 
   static constexpr size_t MAX_RESERVE_SIZE =
-      uccl::max_sizeof<uccl::FifoItem, IpcTransferInfo, TaskBatch>();
+      uccl::max_sizeof<UnionRemoteMemInfo, IpcTransferInfo, TaskBatch>();
 
   struct alignas(64) UnifiedTask {
     TaskType type;
@@ -453,8 +476,8 @@ class Endpoint {
       } base;
 
       struct {
-        uccl::FifoItem slot_item;
-        uint8_t reserved[MAX_RESERVE_SIZE - sizeof(uccl::FifoItem)];
+        UnionRemoteMemInfo slot_item;
+        uint8_t reserved[MAX_RESERVE_SIZE - sizeof(UnionRemoteMemInfo)];
       } net;
 
       struct {
@@ -488,9 +511,9 @@ class Endpoint {
       }
     }
 
-    inline uccl::FifoItem& slot_item() { return specific.net.slot_item; }
+    inline UnionRemoteMemInfo& slot_item() { return specific.net.slot_item; }
 
-    inline uccl::FifoItem const& slot_item() const {
+    inline UnionRemoteMemInfo const& slot_item() const {
       return specific.net.slot_item;
     }
 
@@ -588,7 +611,7 @@ class Endpoint {
   inline UnifiedTask* create_writev_task(
       uint64_t conn_id, std::vector<void*>&& data_v,
       std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
-      std::vector<uccl::FifoItem>&& slot_item_v) {
+      std::vector<UnionRemoteMemInfo>&& slot_item_v) {
     if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
         mr_id_v.size() != slot_item_v.size()) {
       return nullptr;
@@ -599,8 +622,8 @@ class Endpoint {
     auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
     auto mr_id_ptr =
         std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
-    auto slot_item_ptr =
-        std::make_shared<std::vector<uccl::FifoItem>>(std::move(slot_item_v));
+    auto slot_item_ptr = std::make_shared<std::vector<UnionRemoteMemInfo>>(
+        std::move(slot_item_v));
 
     TaskBatch batch;
     batch.num_iovs = num_iovs;
@@ -615,7 +638,7 @@ class Endpoint {
   inline UnifiedTask* create_readv_task(
       uint64_t conn_id, std::vector<void*>&& data_v,
       std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
-      std::vector<uccl::FifoItem>&& slot_item_v) {
+      std::vector<UnionRemoteMemInfo>&& slot_item_v) {
     if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
         mr_id_v.size() != slot_item_v.size()) {
       return nullptr;
@@ -626,8 +649,8 @@ class Endpoint {
     auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
     auto mr_id_ptr =
         std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
-    auto slot_item_ptr =
-        std::make_shared<std::vector<uccl::FifoItem>>(std::move(slot_item_v));
+    auto slot_item_ptr = std::make_shared<std::vector<UnionRemoteMemInfo>>(
+        std::move(slot_item_v));
 
     TaskBatch batch;
     batch.num_iovs = num_iovs;
@@ -641,7 +664,7 @@ class Endpoint {
 
   inline UnifiedTask* create_net_task(uint64_t conn_id, uint64_t mr_id,
                                       TaskType type, void* data, size_t size,
-                                      uccl::FifoItem const& slot_item) {
+                                      UnionRemoteMemInfo const& slot_item) {
     UnifiedTask* task = create_task(conn_id, mr_id, type, data, size);
     task->slot_item() = slot_item;
     return task;
