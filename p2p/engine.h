@@ -1,6 +1,9 @@
 #pragma once
 
+#include "efa_endpoint/define.h"
+#ifdef UCCL_ENABLE_EFA
 #include "efa_endpoint/efa_endpoint.h"
+#endif
 #include "transport.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
@@ -28,8 +31,12 @@ struct P2PMhandle {
   std::unordered_map<int64_t, struct ibv_mr*> mr_map;
 };
 
+#ifdef UCCL_ENABLE_EFA
 using RDMAEndPoint =
     std::variant<uccl::RDMAEndpoint*, std::shared_ptr<EFAEndpoint>>;
+#else
+using RDMAEndPoint = std::variant<uccl::RDMAEndpoint*>;
+#endif
 }  // namespace my_namespace
 
 struct MR {
@@ -63,7 +70,7 @@ void serialize_union_remotememfnfo(UnionRemoteMemInfo const& u, char* buf);
 void deserialize_union_remotememfnfo(char const* buf, UnionRemoteMemInfo* u);
 class Endpoint {
   uint64_t const kRTTBytes = 1024 * 1024;
-  uint64_t const kChunkSize = 1024 * 1024 * 1024;
+  uint64_t const kChunkSize = 1024 * 1024;
   uint32_t const kMaxInflightChunks = 8;
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;

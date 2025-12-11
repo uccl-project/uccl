@@ -201,7 +201,6 @@ class CollectiveContext:
         accept_errors = []
 
         def connect_to_peer(peer_rank):
-            print("connect_to_peer(peer_rank)")
             """Connect to a specific peer for sending data TO that peer."""
             try:
                 if self.local_connections[peer_rank]:

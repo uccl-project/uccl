@@ -1,7 +1,7 @@
 #pragma once
 #include "engine.h"
 
-#define EFA = 1
+// #define UCCL_ENABLE_EFA
 
 namespace my_namespace {
 
@@ -16,9 +16,13 @@ inline void delete_ep(RDMAEndPoint const& s) {
         if constexpr (std::is_pointer_v<T>) {
           // raw pointer: we own it → delete
           delete ep;
-        } else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+        }
+#ifdef UCCL_ENABLE_EFA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
           // shared_ptr: do nothing (shared_ptr handles lifetime)
-        } else {
+        }
+#endif
+        else {
           static_assert(always_false<T>::value,
                         "Unhandled type in RDMAEndPoint variant");
         }
@@ -26,6 +30,7 @@ inline void delete_ep(RDMAEndPoint const& s) {
       s);
 }
 
+#ifdef UCCL_ENABLE_EFA
 inline int set_request(std::shared_ptr<EFAEndpoint> const& obj, Conn* conn,
                        my_namespace::P2PMhandle* local_mh, void* src,
                        size_t size, UnionRemoteMemInfo const& slot_item,
@@ -55,6 +60,7 @@ inline int set_request(std::shared_ptr<EFAEndpoint> const& obj, Conn* conn,
 
   return ureq->engine_idx;
 }
+#endif
 
 inline uccl::ConnID uccl_connect(RDMAEndPoint const& s, int dev,
                                  int local_gpuidx, int remote_dev,
@@ -107,19 +113,24 @@ inline bool uccl_regmr(RDMAEndPoint const& s, int dev, void* data, size_t len,
 
         if constexpr (std::is_pointer_v<T>) {
           // raw pointer: we own it → delete
-          struct uccl::Mhandle* mh = mhandle->mhandle_;  // 必须是 Mhandle*
-          return obj->uccl_regmr(dev, data, len, type, &mh);
+          // struct uccl::Mhandle* mh = mhandle->mhandle_;  // 必须是 Mhandle*
+          return obj->uccl_regmr(dev, data, len, type, &(mhandle->mhandle_));
 
-          mhandle->mhandle_ = mh;
-          if (mh == nullptr || mh->mr == nullptr) {
+          // mhandle->mhandle_ = mh;
+          if (mhandle->mhandle_ == nullptr ||
+              mhandle->mhandle_->mr == nullptr) {
             return false;
           }
-        } else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+        }
+#ifdef UCCL_ENABLE_EFA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
           // shared_ptr: call the EFAEndpoint's regmr method
           if (obj->uccl_regmr(data, len, mhandle->mr_map) < 0) {
             return false;
           }
-        } else {
+        }
+#endif
+        else {
           static_assert(always_false<T>::value,
                         "Unhandled type in RDMAEndPoint variant");
         }
@@ -141,7 +152,9 @@ inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
           return obj->uccl_send_async(
               static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mh,
               data, size, ureq);
-        } else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+        }
+#ifdef UCCL_ENABLE_EFA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
           auto send_mem = std::make_shared<RegMemBlock>(const_cast<void*>(data),
                                                         size, MemoryType::GPU);
           send_mem->mr_map = mhandle->mr_map;
@@ -153,7 +166,9 @@ inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
           // std::cout<<"send_req::::::"<<send_req->wr_id<<std::endl;
           ureq->n = conn->uccl_conn_id_.flow_id;
           return ureq->engine_idx;
-        } else {
+        }
+#endif
+        else {
           static_assert(always_false<T>::value,
                         "Unhandled type in RDMAEndPoint variant");
         }
@@ -173,7 +188,9 @@ inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
           return obj->uccl_recv_async(
               static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
               &(mhandles->mhandle_), data, size, n, ureq);
-        } else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+        }
+#ifdef UCCL_ENABLE_EFA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
           auto recv_mem =
               std::make_shared<RegMemBlock>(data[0], size[0], MemoryType::GPU);
           recv_mem->mr_map = mhandles->mr_map;
@@ -182,7 +199,9 @@ inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
           ureq->engine_idx = obj->recv(conn->uccl_conn_id_.flow_id, recv_req);
           ureq->n = conn->uccl_conn_id_.flow_id;
           return ureq->engine_idx;
-        } else {
+        }
+#endif
+        else {
           static_assert(always_false<T>::value,
                         "Unhandled type in RDMAEndPoint variant");
         }
@@ -198,7 +217,9 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
         using T = std::decay_t<decltype(obj)>;
         if constexpr (std::is_pointer_v<T>) {
           return obj->uccl_poll_ureq_once(ureq);
-        } else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+        }
+#ifdef UCCL_ENABLE_EFA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
           if (ureq->type == uccl::ReqType::ReqTx ||
               ureq->type == uccl::ReqType::ReqWrite ||
               ureq->type == uccl::ReqType::ReqRead) {
@@ -210,7 +231,9 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
             // ureq->engine_idx << ", n: " << ureq->n;
             return obj->checkRecvComplete_once(ureq->n, ureq->engine_idx);
           }
-        } else {
+        }
+#endif
+        else {
           static_assert(always_false<T>::value,
                         "Unhandled type in RDMAEndPoint variant");
         }
@@ -231,10 +254,14 @@ inline int uccl_read_async(RDMAEndPoint const& s, Conn* conn,
               static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
               local_mh->mhandle_, dst, size,
               static_cast<uccl::FifoItem const&>(slot_item), ureq);
-        } else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+        }
+#ifdef UCCL_ENABLE_EFA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
           ureq->type = uccl::ReqType::ReqRead;
           return set_request(obj, conn, local_mh, dst, size, slot_item, ureq);
-        } else {
+        }
+#endif
+        else {
           static_assert(always_false<T>::value,
                         "Unhandled type in RDMAEndPoint variant");
         }
@@ -255,10 +282,14 @@ inline int uccl_write_async(RDMAEndPoint const& s, Conn* conn,
               static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
               local_mh->mhandle_, src, size,
               static_cast<uccl::FifoItem const&>(slot_item), ureq);
-        } else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+        }
+#ifdef UCCL_ENABLE_EFA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
           ureq->type = uccl::ReqType::ReqWrite;
           return set_request(obj, conn, local_mh, src, size, slot_item, ureq);
-        } else {
+        }
+#endif
+        else {
           static_assert(always_false<T>::value,
                         "Unhandled type in RDMAEndPoint variant");
         }
@@ -278,7 +309,9 @@ inline int prepare_fifo_metadata(RDMAEndPoint const& s, Conn* conn,
           return obj->prepare_fifo_metadata(
               static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
               &(mhandle->mhandle_), data, size, out_buf);
-        } else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+        }
+#ifdef UCCL_ENABLE_EFA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
           // shared_ptr: call with mr_map
           UnionRemoteMemInfo remote_mem_info;
           remote_mem_info.addr = reinterpret_cast<uint64_t>(data);
@@ -290,7 +323,9 @@ inline int prepare_fifo_metadata(RDMAEndPoint const& s, Conn* conn,
           }
           serialize_union_remotememfnfo(remote_mem_info, out_buf);
           return 0;
-        } else {
+        }
+#endif
+        else {
           static_assert(always_false<T>::value,
                         "Unhandled type in RDMAEndPoint variant");
         }
@@ -305,10 +340,14 @@ inline void uccl_deregmr(RDMAEndPoint const& s, P2PMhandle* mhandle) {
         if constexpr (std::is_pointer_v<T>) {
           // raw pointer: call with mhandle_
           obj->uccl_deregmr(mhandle->mhandle_);
-        } else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+        }
+#ifdef UCCL_ENABLE_EFA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
           // shared_ptr: call with mr_map
           obj->uccl_deregmr(mhandle->mr_map);
-        } else {
+        }
+#endif
+        else {
           static_assert(always_false<T>::value,
                         "Unhandled type in RDMAEndPoint variant");
         }

@@ -3,6 +3,23 @@
 #include "define.h"
 #include "rdma_context.h"
 
+// GPU runtime support
+#if defined(__HIPCC__) || defined(__HIP_PLATFORM_AMD__)
+#include <hip/hip_runtime.h>
+#define gpuMalloc hipMalloc
+#define gpuFree hipFree
+#define gpuError_t hipError_t
+#define gpuSuccess hipSuccess
+#define gpuGetErrorString hipGetErrorString
+#elif defined(__CUDACC__) || defined(__NVCC__)
+#include <cuda_runtime.h>
+#define gpuMalloc cudaMalloc
+#define gpuFree cudaFree
+#define gpuError_t cudaError_t
+#define gpuSuccess cudaSuccess
+#define gpuGetErrorString cudaGetErrorString
+#endif
+
 class MemoryAllocator {
  public:
   explicit MemoryAllocator() : page_size_(sysconf(_SC_PAGESIZE)) {
@@ -67,12 +84,18 @@ class MemoryAllocator {
   }
   void* allocateGPU(size_t size) {
     void* addr = nullptr;
-    cudaError_t err = cudaMalloc(&addr, size);
-    if (err != cudaSuccess) {
-      std::cerr << "cudaMalloc failed: " << cudaGetErrorString(err)
-                << std::endl;
+#if defined(__HIPCC__) || defined(__HIP_PLATFORM_AMD__) || \
+    defined(__CUDACC__) || defined(__NVCC__)
+    gpuError_t err = gpuMalloc(&addr, size);
+    if (err != gpuSuccess) {
+      std::cerr << "gpuMalloc failed: " << gpuGetErrorString(err) << std::endl;
       return nullptr;
     }
+#else
+    std::cerr << "GPU support not available (neither CUDA nor HIP)"
+              << std::endl;
+    return nullptr;
+#endif
     return addr;
   }
 
@@ -81,11 +104,16 @@ class MemoryAllocator {
     if (!addr) return;
 
     if (type == MemoryType::GPU) {
-      cudaError_t err = cudaFree(addr);
-      if (err != cudaSuccess) {
-        std::cerr << "cudaFree failed: " << cudaGetErrorString(err)
-                  << std::endl;
+#if defined(__HIPCC__) || defined(__HIP_PLATFORM_AMD__) || \
+    defined(__CUDACC__) || defined(__NVCC__)
+      gpuError_t err = gpuFree(addr);
+      if (err != gpuSuccess) {
+        std::cerr << "gpuFree failed: " << gpuGetErrorString(err) << std::endl;
       }
+#else
+      std::cerr << "GPU support not available (neither CUDA nor HIP)"
+                << std::endl;
+#endif
     } else {  // MemoryType::HOST
       free(addr);
     }
