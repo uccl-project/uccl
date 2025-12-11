@@ -656,3 +656,7 @@ def inplace_unique(x: torch.Tensor, num_slots: int):
     x[:, :].fill_(-1)
     valid_len = min(num_slots, x.size(1))
     x[:, :valid_len] = sorted_bin_idx[:, :valid_len]
+
+
+def hash_tensor(t: torch.Tensor):
+    return t.view(torch.int).sum().item()

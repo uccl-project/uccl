@@ -2336,7 +2336,7 @@ __global__ void __launch_bounds__(kNumForwarders* WARP_SIZE, 1)
     };
     auto sync_rdma_receiver_smem = [=]() {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-      sync_barrier(0, kNumRDMAReceivers * WARP_SIZE);
+      sync_barrier_1(kNumRDMAReceivers * WARP_SIZE);
 #else
       sync_barrier_1((kNumRDMAReceivers + 1) * WARP_SIZE);
 #endif
@@ -2351,6 +2351,25 @@ __global__ void __launch_bounds__(kNumForwarders* WARP_SIZE, 1)
       // Receiver with Coordinator
       auto const num_warps_per_rdma_rank = kNumForwarders / kNumRDMARanks;
       int last_nvl_head[kNumRDMARanks] = {0};
+
+      auto forwarder_coordinator = [&]() {
+        EP_DEVICE_ASSERT(dst_rdma_rank < kNumRDMARanks);
+        int min_head = std::numeric_limits<int>::max();
+        int dst_nvl_rank = lane_id < NUM_MAX_NVL_PEERS ? lane_id : 0;
+#pragma unroll
+        for (int j = 0; j < num_warps_per_rdma_rank; ++j)
+          if (not forwarder_retired[dst_rdma_rank * num_warps_per_rdma_rank +
+                                    j])
+            min_head = min(
+                min_head,
+                forwarder_nvl_head[dst_rdma_rank * num_warps_per_rdma_rank + j]
+                                  [dst_nvl_rank]);
+        if (min_head != std::numeric_limits<int>::max() and
+            min_head > last_nvl_head[dst_rdma_rank] and
+            lane_id < NUM_MAX_NVL_PEERS)
+          st_relaxed_sys_global(nvl_channel_head.buffer_by(dst_nvl_rank),
+                                last_nvl_head[dst_rdma_rank] = min_head);
+      };
 #endif
       auto send_buffer = dst_rdma_rank == rdma_rank
                              ? rdma_channel_data.recv_buffer(dst_rdma_rank)
@@ -2472,23 +2491,13 @@ __global__ void __launch_bounds__(kNumForwarders* WARP_SIZE, 1)
           }
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+          sync_barrier(dst_rdma_rank + 10,
+                       min(kNumWarpsPerForwarder,
+                           token_end_idx - token_idx + sub_warp_id) *
+                           WARP_SIZE);
+
           // Coordinator
-          if (warp_id < kNumRDMARanks) {
-            int min_head = std::numeric_limits<int>::max();
-            int warp_dst_nvl_rank = lane_id < NUM_MAX_NVL_PEERS ? lane_id : 0;
-#pragma unroll
-            for (int j = 0; j < num_warps_per_rdma_rank; ++j)
-              min_head =
-                  min(min_head,
-                      forwarder_nvl_head[warp_id * num_warps_per_rdma_rank + j]
-                                        [warp_dst_nvl_rank]);
-            if (min_head != std::numeric_limits<int>::max() and
-                min_head > last_nvl_head[warp_id] and
-                lane_id < NUM_MAX_NVL_PEERS)
-              st_relaxed_sys_global(
-                  nvl_channel_head.buffer_by(warp_dst_nvl_rank) + warp_id,
-                  last_nvl_head[warp_id] = min_head);
-          }
+          if (sub_warp_id == 0) forwarder_coordinator();
 #endif
           // Wait lanes to be ready
           start_time = clock64();
@@ -2556,6 +2565,11 @@ __global__ void __launch_bounds__(kNumForwarders* WARP_SIZE, 1)
             expected_head < 0
                 ? (forwarder_nvl_head[warp_id][lane_id] = -expected_head - 1)
                 : (forwarder_nvl_head[warp_id][lane_id] = expected_head + 1);
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+          // Coordinator
+          if (sub_warp_id == (1 % kNumWarpsPerForwarder))
+            forwarder_coordinator();
+#endif
         }
         sync_large_warp();
 
@@ -2610,7 +2624,6 @@ __global__ void __launch_bounds__(kNumForwarders* WARP_SIZE, 1)
     } else if (warp_role == WarpRole::kRDMAReceiver) {
       // Receive from RDMA ranks and write to the output tensor
       // Clean shared memory and sync
-      int last_rdma_head = 0;
 
       EP_DEVICE_ASSERT(kNumRDMARanks <= WARP_SIZE);
       lane_id < kNumRDMARanks ? (rdma_receiver_rdma_head[warp_id][lane_id] = 0)
@@ -2618,6 +2631,8 @@ __global__ void __launch_bounds__(kNumForwarders* WARP_SIZE, 1)
       lane_id == 0 ? (rdma_receiver_retired[warp_id] = false) : 0;
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+      // coordinator
+      int last_rdma_head = 0;
       // no need to sync_rdma_receiver_smem for AMD GPUs, because no coordinator
       // warp anymore
 #else
