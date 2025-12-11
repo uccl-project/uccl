@@ -41,6 +41,9 @@ class CustomInstall(install):
         print(f"Installing {so_file.name} to {install_dir}")
         shutil.copy2(so_file, dest_path)
         print(f"Installation complete. Module installed as: {dest_path}")
+        
+        
+        self.run_command('install_egg_info')
 
 
 if __name__ == "__main__":
