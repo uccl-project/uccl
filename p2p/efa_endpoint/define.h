@@ -40,7 +40,6 @@
 #include <unordered_map>
 #include <variant>
 #include <vector>
-#include <cuda_runtime.h>
 #include <transport.h>
 
 static constexpr int kGidIndex = 0;

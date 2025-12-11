@@ -376,7 +376,6 @@ void bandwidth_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
   send_infos.reserve(iterations);
   auto start_time = std::chrono::high_resolution_clock::now();
 
-  // 统计第一段耗时：304-319行 (recv/send操作)
   auto phase1_start = std::chrono::high_resolution_clock::now();
   for (int i = 0; i < iterations; i++) {
     auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
@@ -384,7 +383,6 @@ void bandwidth_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
         std::make_shared<EFASendRequest>(send_mem, remote_mem_placeholder);
     auto recv_req = std::make_shared<EFARecvRequest>(recv_mem);
 
-    // 先进行recv/send操作，收集index
     int64_t recv_index = endpoint.recv(FLAGS_remote_rank, recv_req);
     recv_indices.push_back(recv_index);
 
@@ -401,15 +399,12 @@ void bandwidth_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
             << " seconds\n"
             << std::flush;
 
-  // 统计第二段耗时：321-329行 (check complete操作)
   auto phase2_start = std::chrono::high_resolution_clock::now();
-  // 统一遍历进行checkSendComplete
   for (auto const& [channel_id, send_wr_id] : send_infos) {
     // std::cout << "channel_id:" <<channel_id<<",
     // send_wr_id:"<<send_wr_id<<std::endl<<std::flush;
     endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
   }
-  // 统一遍历进行checkRecvComplete
   for (int64_t recv_index : recv_indices) {
     // std::cout << "recv_index:" <<recv_index<<std::endl<<std::flush;
     endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
