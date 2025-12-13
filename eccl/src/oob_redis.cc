@@ -2,6 +2,7 @@
 
 RedisExchanger::RedisExchanger(std::string const& host, int port,
                                int timeout_ms) {
+#ifdef USE_REDIS_OOB
   struct timeval timeout;
   timeout.tv_sec = timeout_ms / 1000;
   timeout.tv_usec = (timeout_ms % 1000) * 1000;
@@ -15,13 +16,26 @@ RedisExchanger::RedisExchanger(std::string const& host, int port,
     }
     ctx_ = nullptr;
   }
+#else
+#endif
 }
 
 RedisExchanger::~RedisExchanger() {
+#ifdef USE_REDIS_OOB
   if (ctx_) redisFree(ctx_);
+#endif
+}
+
+bool RedisExchanger::valid() const { 
+#ifdef USE_REDIS_OOB
+  return ctx_ != nullptr; 
+#else
+  return false;
+#endif
 }
 
 bool RedisExchanger::publish(std::string const& key, Exchangeable const& obj) {
+#ifdef USE_REDIS_OOB
   if (!ctx_) return false;
 
   auto kv = obj.to_map();
@@ -37,9 +51,13 @@ bool RedisExchanger::publish(std::string const& key, Exchangeable const& obj) {
   }
   freeReplyObject(reply);
   return true;
+#else
+  return false;
+#endif
 }
 
 bool RedisExchanger::fetch(std::string const& key, Exchangeable& obj) {
+#ifdef USE_REDIS_OOB
   if (!ctx_) return false;
 
   redisReply* reply =
@@ -64,10 +82,14 @@ bool RedisExchanger::fetch(std::string const& key, Exchangeable& obj) {
   obj.from_map(kv);
   freeReplyObject(reply);
   return true;
+#else
+  return false;
+#endif
 }
 
 bool RedisExchanger::wait_and_fetch(std::string const& key, Exchangeable& obj,
                                     int max_retries, int delay_ms) {
+#ifdef USE_REDIS_OOB
   if (max_retries > 0) {
     for (int i = 0; i < max_retries; ++i) {
       if (fetch(key, obj)) return true;
@@ -80,4 +102,7 @@ bool RedisExchanger::wait_and_fetch(std::string const& key, Exchangeable& obj,
     }
   }
   return false;
+#else
+  return false;
+#endif
 }

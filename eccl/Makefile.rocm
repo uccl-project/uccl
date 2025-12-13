@@ -1,38 +1,31 @@
-# --------------------------
 # Compiler and environment
-# --------------------------
 HIP_HOME ?= /opt/rocm
 HIP_LIB  := $(HIP_HOME)/lib
 override CXX := /usr/bin/g++
 HIPCC      := $(HIP_HOME)/bin/hipcc
 CONDA_LIB_HOME ?= /usr/lib
 
-# --------------------------
 # Compilation flags
-# --------------------------
-CXXFLAGS   := -O0 -std=c++17 -Wall -Wno-unused-function -pthread -D__HIP_PLATFORM_AMD__ -I${CONDA_LIB_HOME}/../include
-HIPCCFLAGS := -g -O0 -std=c++17 -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942
-
+CXXFLAGS   := -O0 -std=c++17 -Wall -Wno-unused-function -pthread -fPIC -D__HIP_PLATFORM_AMD__ -I${CONDA_LIB_HOME}/../include
+HIPCCFLAGS := -g -O0 -std=c++17 -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942 \
+				--compiler-options "-fPIC -Wall -pthread -I${CONDA_LIB_HOME}/../include"
 LDFLAGS    := -L${CONDA_LIB_HOME} -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -lglog
 
-# --------------------------
 # Include directories
-# --------------------------
 INCLUDES := -Iinclude -I$(HIP_HOME)/include -I/usr/include -I../include
 
-# --------------------------
-# Redis
-# --------------------------
+# Redis: use redis exchaner by USE_REDIS_OOB=1
+ifeq ($(USE_REDIS_OOB),1)
 REDIS_PKGCONFIG := pkg-config
 REDIS_CFLAGS    := $(shell $(REDIS_PKGCONFIG) --cflags hiredis)
 REDIS_LIBS      := $(shell $(REDIS_PKGCONFIG) --libs hiredis)
 
-CXXFLAGS += $(REDIS_CFLAGS)
-LDFLAGS  += -L$(HIP_LIB) -Wl,-rpath,$(HIP_LIB) $(REDIS_LIBS)
+CXXFLAGS   += $(REDIS_CFLAGS) -DUSE_REDIS_OOB
+HIPCCFLAGS += -DUSE_REDIS_OOB --compiler-options "$(REDIS_CFLAGS)"
+LDFLAGS    += -L$(HIP_LIB) -Wl,-rpath,$(HIP_LIB) $(REDIS_LIBS)
+endif
 
-# --------------------------
-# Source files (recursive)
-# --------------------------
+# Source files
 SRC_CPP := $(shell find src -name '*.cc')
 SRC_CU  := $(shell find src -name '*.cu')
 
@@ -46,46 +39,39 @@ OBJ_CU   := $(SRC_CU:.cu=.o)
 OBJ_TEST := $(SRC_TEST:.cc=.o)
 
 # Targets
+STATIC_LIB  := libeccl.a
+SHARED_LIB  := libeccl.so
 TARGET_TEST := test_main
 
-# --------------------------
 # Default target
-# --------------------------
-all: $(TARGET_TEST)
+all: $(STATIC_LIB) $(SHARED_LIB) $(TARGET_TEST)
 
-# --------------------------
 # Compilation rules
-# --------------------------
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 %.o: %.cu
 	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-libeccl.a: $(OBJ_CC)
+
+$(STATIC_LIB): $(OBJ_CC) $(OBJ_CU)
 	ar rcs $@ $^
 
-# --------------------------
-# Linking rules
-# --------------------------
-$(TARGET_TEST): $(OBJ_TEST) libeccl.a
-	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(OBJ_TEST) libeccl.a -lamdhip64 $(LDFLAGS) -o $@
+$(SHARED_LIB): $(OBJ_CC) $(OBJ_CU)
+	$(HIPCC) -shared $(HIPCCFLAGS) $(INCLUDES) $^ -lamdhip64 $(LDFLAGS) -o $@
 
-# --------------------------
+$(TARGET_TEST): $(OBJ_TEST) $(STATIC_LIB)
+	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(OBJ_TEST) $(STATIC_LIB) -lamdhip64 $(LDFLAGS) -o $@
+
 # Run tests
-# --------------------------
 run_test: $(TARGET_TEST)
 	./$(TARGET_TEST)
 
-# --------------------------
 # Clean rule
-# --------------------------
 clean:
-	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) $(TARGET_TEST) *.d src/*.d tests/*.d
+	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) $(TARGET_TEST) $(STATIC_LIB) $(SHARED_LIB) *.d src/*.d tests/*.d
 
-# --------------------------
 # Include dependencies
-# --------------------------
 -include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_TEST:.o=.d)
 
 .PHONY: all clean run_test

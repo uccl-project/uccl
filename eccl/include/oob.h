@@ -4,7 +4,9 @@
 #include <string>
 
 // for redis
+#ifdef USE_REDIS_OOB
 #include <hiredis/hiredis.h>
+#endif
 #include <chrono>
 #include <iostream>
 #include <map>
@@ -16,6 +18,12 @@
 #include <sstream>
 #include <vector>
 
+// for socket
+#include <mutex>
+#include <unordered_map>
+#include <atomic>
+#include <functional>
+
 struct Exchangeable {
   virtual std::map<std::string, std::string> to_map() const = 0;
   virtual void from_map(std::map<std::string, std::string> const& kv) = 0;
@@ -24,6 +32,7 @@ struct Exchangeable {
 
 struct CommunicatorMeta : public Exchangeable {
   std::string host_id;
+  std::string ip;
   bool is_ready;
   // TODO: connection abality // Support RDMA, PCIe, NVlink, UAlink, etc.
 
@@ -32,12 +41,14 @@ struct CommunicatorMeta : public Exchangeable {
   std::map<std::string, std::string> to_map() const override {
     std::map<std::string, std::string> kv;
     kv["host_id"] = host_id;
+    kv["ip"] = ip;
     kv["is_ready"] = is_ready ? "1" : "0";
     return kv;
   }
 
   void from_map(std::map<std::string, std::string> const& kv) override {
     host_id = kv.at("host_id");
+    ip = kv.at("ip");
     std::string const& ready_str = kv.at("is_ready");
     is_ready = (ready_str == "1");
   }
@@ -102,6 +113,7 @@ struct MR {
   uint32_t id;
   uint64_t address;
   uint32_t length;
+  uint32_t lkey;
   uint32_t key;
 };
 
@@ -150,20 +162,82 @@ struct MRInfos : public Exchangeable {
   }
 };
 
-class RedisExchanger {
- public:
-  RedisExchanger(std::string const& host = "127.0.0.1", int port = 6379,
-                 int timeout_ms = 2000);
+class Exchanger {
+public:
+    virtual ~Exchanger() = default;
 
-  ~RedisExchanger();
+    virtual bool valid() const = 0;
+    virtual bool publish(const std::string& key, const Exchangeable& obj) = 0;
+    virtual bool fetch(const std::string& key, Exchangeable& obj) = 0;
+    virtual bool wait_and_fetch(
+        const std::string& key,
+        Exchangeable& obj,
+        int max_retries = 50,
+        int delay_ms = 100) = 0;
+};
 
-  bool valid() const { return ctx_ != nullptr; }
+class RedisExchanger : public Exchanger {
+public:
+    RedisExchanger(const std::string& host = "127.0.0.1", int port = 6379,
+                   int timeout_ms = 2000);
+    ~RedisExchanger();
 
-  bool publish(std::string const& key, Exchangeable const& obj);
-  bool fetch(std::string const& key, Exchangeable& obj);
-  bool wait_and_fetch(std::string const& key, Exchangeable& obj,
-                      int max_retries = 50, int delay_ms = 100);
+    bool valid() const override;
+    bool publish(const std::string& key, const Exchangeable& obj) override;
+    bool fetch(const std::string& key, Exchangeable& obj) override;
+    bool wait_and_fetch(const std::string& key, Exchangeable& obj,
+                        int max_retries = 50, int delay_ms = 100) override;
 
- private:
-  redisContext* ctx_;
+private:
+#ifdef USE_REDIS_OOB
+    redisContext* ctx_;
+#endif
+};
+
+class SockExchanger : public Exchanger {
+public:
+    SockExchanger(bool is_server,
+                  const std::string& host,
+                  int port,
+                  int timeout_ms = 3000,
+                  size_t max_line_bytes = 1 * 1024 * 1024 /* 1MB */);
+    ~SockExchanger();
+
+    bool valid() const;
+
+    // client-only
+    bool publish(const std::string& key, const Exchangeable& obj);
+    bool fetch(const std::string& key, Exchangeable& obj);
+
+    bool wait_and_fetch(const std::string& key, Exchangeable& obj,
+                        int max_retries = -1, int delay_ms = 100);
+
+private:
+    bool start_server();
+    bool connect_client();
+    bool send_cmd_and_recv(const std::string& cmd, std::string& resp);
+
+private:
+    int sock_fd_;
+    std::string host_;
+    int port_;
+    int timeout_ms_;
+    bool is_server_;
+    int listen_fd_;
+    std::atomic<bool> running_;
+    size_t max_line_bytes_;
+
+    // server side state
+    std::unordered_map<std::string, std::map<std::string, std::string>> store_;
+    std::mutex store_mutex_;
+    std::thread server_thread_;
+    std::mutex conn_threads_mutex_;
+    std::vector<std::thread> conn_threads_;
+
+    friend void handle_connection(int,
+                                  std::unordered_map<std::string, std::map<std::string, std::string>>&,
+                                  std::mutex&,
+                                  std::atomic<bool>&,
+                                  size_t,
+                                  std::function<void(std::thread&&)>);
 };

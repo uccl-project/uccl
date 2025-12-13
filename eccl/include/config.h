@@ -4,19 +4,17 @@
 #include <string>
 
 #define DEFAULT_RDMA_CHUNK_SIZE 1024 * 1024
-#define DEFAULT_QP_PER_EP 4
-#define DEFAULT_CQ_PER_EP 4
-#define DEFAULT_CQ_POLLER_THREADS 4
+#define DEFAULT_QP_PER_EP 1
+#define DEFAULT_CQ_PER_EP 1
+#define DEFAULT_CQ_POLLER_THREADS 1
 #define DEFAULT_CQ_DEPTH 2048
 #define DEFAULT_MAX_RETRY_TIMES 10
-#define DEFAULT_SOCKET_IP "0.0.0.0"
-#define DEFAULT_SOCKET_PORT 9999
 #define DEFAULT_RESOLVE_TIMEOUT_MS 2000
 #define DEFAULT_QP_MAX_SEND_WR 2048
 #define DEFAULT_QP_MAX_RECV_WR 2048
 #define DEFAUTL_QP_MAX_SGE 1
-#define DEFAULT_REDIS_SERVER_IP "0.0.0.0"
-#define DEFAULT_REDIS_SERVER_PORT 6379
+#define DEFAULT_EXCHANGER_SERVER_IP "0.0.0.0"
+#define DEFAULT_EXCHANGER_SERVER_PORT 6979
 
 struct Config {
   int rdma_chunk_size;
@@ -29,8 +27,8 @@ struct Config {
   int qp_max_send_wr;
   int qp_max_recv_wr;
   int qp_max_sge;
-  std::string redis_ip;
-  int redis_port;
+  std::string exchanger_ip;
+  int exchanger_port;
 
   Config()
       : rdma_chunk_size(
@@ -49,10 +47,10 @@ struct Config {
         qp_max_recv_wr(
             getEnvOrDefault("ECCL_QP_MAX_RECV_WR", DEFAULT_QP_MAX_RECV_WR)),
         qp_max_sge(getEnvOrDefault("ECCL_QP_MAX_SGE", DEFAUTL_QP_MAX_SGE)),
-        redis_ip(
-            getEnvOrDefault("ECCL_REDIS_SERVER_IP", DEFAULT_REDIS_SERVER_IP)),
-        redis_port(getEnvOrDefault("ECCL_REDIS_SERVER_PORT",
-                                   DEFAULT_REDIS_SERVER_PORT)) {}
+        exchanger_ip(
+            getEnvOrDefault("UHM_EXCHANGER_SERVER_IP", DEFAULT_EXCHANGER_SERVER_IP)),
+        exchanger_port(getEnvOrDefault("UHM_EXCHANGER_SERVER_PORT",
+                                   DEFAULT_EXCHANGER_SERVER_PORT)) {}
 
  private:
   static int getEnvOrDefault(char const* env_name, int default_val) {
