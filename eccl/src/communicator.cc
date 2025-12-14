@@ -5,29 +5,28 @@
 #include <unordered_set>
 
 std::string get_local_ip() {
-    if (const char* env_ip = std::getenv("UHM_LOCAL_IP")) {
-        if (std::strlen(env_ip) > 0)
-            return env_ip;
-    }
+  if (char const* env_ip = std::getenv("UHM_LOCAL_IP")) {
+    if (std::strlen(env_ip) > 0) return env_ip;
+  }
 
-    int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
-    if (sock < 0) return "127.0.0.1";
+  int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+  if (sock < 0) return "127.0.0.1";
 
-    sockaddr_in remote{};
-    remote.sin_family = AF_INET;
-    remote.sin_port   = htons(80);
-    ::inet_pton(AF_INET, "8.8.8.8", &remote.sin_addr);
+  sockaddr_in remote{};
+  remote.sin_family = AF_INET;
+  remote.sin_port = htons(80);
+  ::inet_pton(AF_INET, "8.8.8.8", &remote.sin_addr);
 
-    ::connect(sock, (sockaddr*)&remote, sizeof(remote));
+  ::connect(sock, (sockaddr*)&remote, sizeof(remote));
 
-    sockaddr_in local{};
-    socklen_t len = sizeof(local);
-    ::getsockname(sock, (sockaddr*)&local, &len);
-    ::close(sock);
+  sockaddr_in local{};
+  socklen_t len = sizeof(local);
+  ::getsockname(sock, (sockaddr*)&local, &len);
+  ::close(sock);
 
-    char buf[INET_ADDRSTRLEN];
-    ::inet_ntop(AF_INET, &local.sin_addr, buf, sizeof(buf));
-    return buf;
+  char buf[INET_ADDRSTRLEN];
+  ::inet_ntop(AF_INET, &local.sin_addr, buf, sizeof(buf));
+  return buf;
 }
 
 Communicator::Communicator(int gpu_id, int rank, int world_size,
@@ -134,14 +133,17 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
 
   // Initialize Redis client
 #ifdef USE_REDIS_OOB
-  exchanger_client_ =
-      std::make_shared<RedisExchanger>(config_->exchanger_ip, config_->exchanger_port);
+  exchanger_client_ = std::make_shared<RedisExchanger>(config_->exchanger_ip,
+                                                       config_->exchanger_port);
 #else
   bool is_server = (local_rank_ == 0);
-  if (!is_server && config_->exchanger_ip == "0.0.0.0") config_->exchanger_ip = "127.0.0.1";
-  std::cout << "[INFO] Using socket-based exchanger as " << (is_server ? "server" : "client") << " " << config_->exchanger_ip << std::endl;
-  exchanger_client_ =
-      std::make_shared<SockExchanger>((local_rank_ == 0), config_->exchanger_ip, config_->exchanger_port);
+  if (!is_server && config_->exchanger_ip == "0.0.0.0")
+    config_->exchanger_ip = "127.0.0.1";
+  std::cout << "[INFO] Using socket-based exchanger as "
+            << (is_server ? "server" : "client") << " " << config_->exchanger_ip
+            << std::endl;
+  exchanger_client_ = std::make_shared<SockExchanger>(
+      (local_rank_ == 0), config_->exchanger_ip, config_->exchanger_port);
 #endif
   if (!exchanger_client_->valid()) {
     fprintf(stderr, "[ERROR] Failed to connect to Exchanger\n");
@@ -289,7 +291,7 @@ bool Communicator::connect_to(int rank) {
 
   // We use RDMA for test now. TODO: support IPC
   bool same_host = meta->host_id == local_meta->host_id;
-  same_host = false; // only RDMA now
+  same_host = false;  // only RDMA now
 
   std::shared_ptr<EndpointBase> ep;
   bool ret = false;
@@ -302,12 +304,14 @@ bool Communicator::connect_to(int rank) {
     ret = true;
   } else {
     // std::cout << "[INFO] Communicator " << local_rank_
-    //           << " different host detected, using RDMA endpoint" << std::endl;
+    //           << " different host detected, using RDMA endpoint" <<
+    //           std::endl;
     ep = std::make_shared<RDMAEndpoint>(config_, this);
     ret = ep->connect_to(rank);
     if (ret) {
       // std::cout << "[INFO] Communicator " << local_rank_
-      //           << " RDMA connect_to succeeded to rank " << rank << std::endl;
+      //           << " RDMA connect_to succeeded to rank " << rank <<
+      //           std::endl;
     } else {
       std::cerr << "[ERROR] Communicator " << local_rank_
                 << " RDMA connect_to failed to rank " << rank << std::endl;
@@ -346,8 +350,7 @@ unsigned Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
   unsigned rid = make_request_id(rank, remote_mr_id, safe_seq);
 
   auto req = std::make_shared<Request>(rid, ptr, offset, len, local_mr_id,
-                                       remote_mr_id,
-                                       on_gpu, RequestType::SEND);
+                                       remote_mr_id, on_gpu, RequestType::SEND);
 
   {
     std::lock_guard<std::mutex> lk(req_mu_);
@@ -393,8 +396,7 @@ unsigned Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
   // generated CQEs before irecv is called. For such CQEs that are not yet
   // processed, add them to a pending queue. If the queue is not empty, process
   // these CQEs here and release the corresponding requests.
-  if (!cq_poller_list_.empty())
-    cq_poller_list_[0]->process_pending();
+  if (!cq_poller_list_.empty()) cq_poller_list_[0]->process_pending();
 
   return rid;
 }
@@ -411,9 +413,8 @@ unsigned Communicator::irecv_red(int rank, void* ptr, size_t offset, size_t len,
   uint16_t safe_seq = seq_val + 1;  // [1, 4095]
   unsigned rid = make_request_id(local_rank_, local_mr.id, safe_seq);
 
-  auto req = std::make_shared<Request>(rid, ptr, offset, len, -1, -1,
-                                       on_gpu, RequestType::RECV,
-                                       true, red_op);
+  auto req = std::make_shared<Request>(rid, ptr, offset, len, -1, -1, on_gpu,
+                                       RequestType::RECV, true, red_op);
 
   {
     std::lock_guard<std::mutex> lk(req_mu_);
@@ -426,8 +427,7 @@ unsigned Communicator::irecv_red(int rank, void* ptr, size_t offset, size_t len,
     return 0;
   }
 
-  if (!cq_poller_list_.empty())
-    cq_poller_list_[0]->process_pending();
+  if (!cq_poller_list_.empty()) cq_poller_list_[0]->process_pending();
 
   return rid;
 }
@@ -436,9 +436,8 @@ unsigned Communicator::ired(void* ptr, size_t offset, size_t len, bool on_gpu,
                             ReductionType red_op) {
   unsigned rid = make_request_id(
       0, 0, next_red_seq_.fetch_add(1, std::memory_order_relaxed), true);
-  auto req = std::make_shared<Request>(rid, ptr, offset, len, -1, -1,
-                                       on_gpu, RequestType::NONE,
-                                       true, red_op);
+  auto req = std::make_shared<Request>(rid, ptr, offset, len, -1, -1, on_gpu,
+                                       RequestType::NONE, true, red_op);
   {
     std::lock_guard<std::mutex> lk(req_mu_);
     requests_map_[rid] = req;
@@ -452,7 +451,7 @@ unsigned Communicator::ired(void* ptr, size_t offset, size_t len, bool on_gpu,
   return rid;
 }
 
-bool Communicator::wait_finish(const unsigned req) {
+bool Communicator::wait_finish(unsigned const req) {
   while (true) {
     {
       std::lock_guard<std::mutex> lk(req_mu_);
@@ -472,7 +471,7 @@ bool Communicator::wait_finish(const unsigned req) {
   }
 }
 
-bool Communicator::wait_finish(const std::vector<unsigned>& reqs) {
+bool Communicator::wait_finish(std::vector<unsigned> const& reqs) {
   std::unordered_set<unsigned> remaining;
   bool wait_all = reqs.empty();
 
@@ -491,7 +490,8 @@ bool Communicator::wait_finish(const std::vector<unsigned>& reqs) {
           break;
         }
         for (auto it = requests_map_.begin(); it != requests_map_.end(); ++it) {
-          if (it->second && it->second->finished.load(std::memory_order_acquire)) {
+          if (it->second &&
+              it->second->finished.load(std::memory_order_acquire)) {
             finished_ids.push_back(it->first);
           }
         }
@@ -669,7 +669,8 @@ MR Communicator::wait_mr_notify(int remote_rank) {
   MRInfos wrapper;
   bool ok = exchanger_client_->wait_and_fetch(key, wrapper);
   if (!ok || wrapper.mrs.empty()) {
-    throw std::runtime_error("Failed to fetch MR from remote rank=" + std::to_string(remote_rank));
+    throw std::runtime_error("Failed to fetch MR from remote rank=" +
+                             std::to_string(remote_rank));
   }
 
   MR remote_mr = wrapper.mrs[0];  // only support one mr now

@@ -19,10 +19,10 @@
 #include <vector>
 
 // for socket
-#include <mutex>
-#include <unordered_map>
 #include <atomic>
 #include <functional>
+#include <mutex>
+#include <unordered_map>
 
 struct Exchangeable {
   virtual std::map<std::string, std::string> to_map() const = 0;
@@ -163,81 +163,74 @@ struct MRInfos : public Exchangeable {
 };
 
 class Exchanger {
-public:
-    virtual ~Exchanger() = default;
+ public:
+  virtual ~Exchanger() = default;
 
-    virtual bool valid() const = 0;
-    virtual bool publish(const std::string& key, const Exchangeable& obj) = 0;
-    virtual bool fetch(const std::string& key, Exchangeable& obj) = 0;
-    virtual bool wait_and_fetch(
-        const std::string& key,
-        Exchangeable& obj,
-        int max_retries = 50,
-        int delay_ms = 100) = 0;
+  virtual bool valid() const = 0;
+  virtual bool publish(std::string const& key, Exchangeable const& obj) = 0;
+  virtual bool fetch(std::string const& key, Exchangeable& obj) = 0;
+  virtual bool wait_and_fetch(std::string const& key, Exchangeable& obj,
+                              int max_retries = 50, int delay_ms = 100) = 0;
 };
 
 class RedisExchanger : public Exchanger {
-public:
-    RedisExchanger(const std::string& host = "127.0.0.1", int port = 6379,
-                   int timeout_ms = 2000);
-    ~RedisExchanger();
+ public:
+  RedisExchanger(std::string const& host = "127.0.0.1", int port = 6379,
+                 int timeout_ms = 2000);
+  ~RedisExchanger();
 
-    bool valid() const override;
-    bool publish(const std::string& key, const Exchangeable& obj) override;
-    bool fetch(const std::string& key, Exchangeable& obj) override;
-    bool wait_and_fetch(const std::string& key, Exchangeable& obj,
-                        int max_retries = 50, int delay_ms = 100) override;
+  bool valid() const override;
+  bool publish(std::string const& key, Exchangeable const& obj) override;
+  bool fetch(std::string const& key, Exchangeable& obj) override;
+  bool wait_and_fetch(std::string const& key, Exchangeable& obj,
+                      int max_retries = 50, int delay_ms = 100) override;
 
-private:
+ private:
 #ifdef USE_REDIS_OOB
-    redisContext* ctx_;
+  redisContext* ctx_;
 #endif
 };
 
 class SockExchanger : public Exchanger {
-public:
-    SockExchanger(bool is_server,
-                  const std::string& host,
-                  int port,
-                  int timeout_ms = 3000,
-                  size_t max_line_bytes = 1 * 1024 * 1024 /* 1MB */);
-    ~SockExchanger();
+ public:
+  SockExchanger(bool is_server, std::string const& host, int port,
+                int timeout_ms = 3000,
+                size_t max_line_bytes = 1 * 1024 * 1024 /* 1MB */);
+  ~SockExchanger();
 
-    bool valid() const;
+  bool valid() const;
 
-    // client-only
-    bool publish(const std::string& key, const Exchangeable& obj);
-    bool fetch(const std::string& key, Exchangeable& obj);
+  // client-only
+  bool publish(std::string const& key, Exchangeable const& obj);
+  bool fetch(std::string const& key, Exchangeable& obj);
 
-    bool wait_and_fetch(const std::string& key, Exchangeable& obj,
-                        int max_retries = -1, int delay_ms = 100);
+  bool wait_and_fetch(std::string const& key, Exchangeable& obj,
+                      int max_retries = -1, int delay_ms = 100);
 
-private:
-    bool start_server();
-    bool connect_client();
-    bool send_cmd_and_recv(const std::string& cmd, std::string& resp);
+ private:
+  bool start_server();
+  bool connect_client();
+  bool send_cmd_and_recv(std::string const& cmd, std::string& resp);
 
-private:
-    int sock_fd_;
-    std::string host_;
-    int port_;
-    int timeout_ms_;
-    bool is_server_;
-    int listen_fd_;
-    std::atomic<bool> running_;
-    size_t max_line_bytes_;
+ private:
+  int sock_fd_;
+  std::string host_;
+  int port_;
+  int timeout_ms_;
+  bool is_server_;
+  int listen_fd_;
+  std::atomic<bool> running_;
+  size_t max_line_bytes_;
 
-    // server side state
-    std::unordered_map<std::string, std::map<std::string, std::string>> store_;
-    std::mutex store_mutex_;
-    std::thread server_thread_;
-    std::mutex conn_threads_mutex_;
-    std::vector<std::thread> conn_threads_;
+  // server side state
+  std::unordered_map<std::string, std::map<std::string, std::string>> store_;
+  std::mutex store_mutex_;
+  std::thread server_thread_;
+  std::mutex conn_threads_mutex_;
+  std::vector<std::thread> conn_threads_;
 
-    friend void handle_connection(int,
-                                  std::unordered_map<std::string, std::map<std::string, std::string>>&,
-                                  std::mutex&,
-                                  std::atomic<bool>&,
-                                  size_t,
-                                  std::function<void(std::thread&&)>);
+  friend void handle_connection(
+      int, std::unordered_map<std::string, std::map<std::string, std::string>>&,
+      std::mutex&, std::atomic<bool>&, size_t,
+      std::function<void(std::thread&&)>);
 };

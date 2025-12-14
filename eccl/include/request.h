@@ -43,7 +43,7 @@ struct Request {
         on_gpu(gpu),
         request_type(reqtype),
         do_reduction(reduction),
-        reduction_op(op){}
+        reduction_op(op) {}
 };
 
 static inline unsigned make_request_id(uint16_t receiver_rank, uint8_t mr_id,

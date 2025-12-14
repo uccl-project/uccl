@@ -83,8 +83,8 @@ void test_redis_oob() {
             << std::endl;
 }
 
-void rank_thread(int local_rank, int world_size, std::string const& exchanger_ip,
-                 int exchanger_port) {
+void rank_thread(int local_rank, int world_size,
+                 std::string const& exchanger_ip, int exchanger_port) {
   auto ex = std::make_shared<RedisExchanger>(exchanger_ip, exchanger_port);
   if (!ex->valid()) {
     std::cerr << "[ERROR] Rank " << local_rank << " failed to connect to Redis"

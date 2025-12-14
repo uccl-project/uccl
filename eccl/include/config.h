@@ -47,10 +47,10 @@ struct Config {
         qp_max_recv_wr(
             getEnvOrDefault("ECCL_QP_MAX_RECV_WR", DEFAULT_QP_MAX_RECV_WR)),
         qp_max_sge(getEnvOrDefault("ECCL_QP_MAX_SGE", DEFAUTL_QP_MAX_SGE)),
-        exchanger_ip(
-            getEnvOrDefault("UHM_EXCHANGER_SERVER_IP", DEFAULT_EXCHANGER_SERVER_IP)),
+        exchanger_ip(getEnvOrDefault("UHM_EXCHANGER_SERVER_IP",
+                                     DEFAULT_EXCHANGER_SERVER_IP)),
         exchanger_port(getEnvOrDefault("UHM_EXCHANGER_SERVER_PORT",
-                                   DEFAULT_EXCHANGER_SERVER_PORT)) {}
+                                       DEFAULT_EXCHANGER_SERVER_PORT)) {}
 
  private:
   static int getEnvOrDefault(char const* env_name, int default_val) {

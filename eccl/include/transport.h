@@ -113,8 +113,9 @@ class Communicator {
                      bool on_gpu, ReductionType red_op);
   unsigned ired(void* ptr, size_t offset, size_t len, bool on_gpu,
                 ReductionType red_op);
-  bool wait_finish(const unsigned req);
-  bool wait_finish(const std::vector<unsigned>& reqs);  // wait before works finished
+  bool wait_finish(unsigned const req);
+  bool wait_finish(
+      std::vector<unsigned> const& reqs);  // wait before works finished
 
   // ---------- Meta info -------------
   void set_communicator_meta_with_rank(int rank, CommunicatorMeta const& meta);

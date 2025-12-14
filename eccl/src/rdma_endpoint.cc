@@ -41,7 +41,8 @@ bool RDMAEndpoint::connect_to(int peer_rank) {
   // Create QPs
   for (int i = 0; i < config_->qp_count_per_ep; i++) {
     struct ibv_qp_init_attr qp_init_attr = {};
-    // qp_init_attr.send_cq = comm_->cq_list_[peer_rank % comm_->cq_list_.size()];
+    // qp_init_attr.send_cq = comm_->cq_list_[peer_rank %
+    // comm_->cq_list_.size()];
     qp_init_attr.send_cq = comm_->cq_list_[i % comm_->cq_list_.size()];
     qp_init_attr.recv_cq = qp_init_attr.send_cq;
     qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
@@ -203,7 +204,7 @@ bool RDMAEndpoint::send_async(int to_rank, std::shared_ptr<Request> creq) {
   size_t total = creq->len;
   if (total == 0) return false;
 
-  ibv_qp* qp_cur = get_qp(0); // use qp 0
+  ibv_qp* qp_cur = get_qp(0);  // use qp 0
   if (!qp_cur) return false;
   // TODO: multi qp send_async
 

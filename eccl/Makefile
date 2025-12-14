@@ -64,33 +64,23 @@ all: $(STATIC_LIB) $(SHARED_LIB) $(TARGET_TEST)
 $(STATIC_LIB): $(OBJ_CC)
 	ar rcs $@ $^
 
-# --------------------------
-# Shared library (MUST include BOTH .cc and .cu objects for full functionality)
-# --------------------------
+# Shared library
 $(SHARED_LIB): $(OBJ_CC) $(OBJ_CU)
 	$(CXX) -shared $(CXXFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
 
-# --------------------------
-# Test executable (links static lib by default for simplicity)
-# --------------------------
+# Test executable
 $(TARGET_TEST): $(OBJ_TEST) $(STATIC_LIB)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(OBJ_TEST) $(STATIC_LIB) $(LDFLAGS) -o $@
 
-# --------------------------
 # Run tests
-# --------------------------
 run_test: $(TARGET_TEST)
 	./$(TARGET_TEST)
 
-# --------------------------
 # Clean
-# --------------------------
 clean:
 	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) $(TARGET_TEST) $(STATIC_LIB) $(SHARED_LIB) *.d src/*.d tests/*.d
 
-# --------------------------
 # Include dependencies
-# --------------------------
 -include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_TEST:.o=.d)
 
 .PHONY: all clean run_test

@@ -26,9 +26,9 @@ RedisExchanger::~RedisExchanger() {
 #endif
 }
 
-bool RedisExchanger::valid() const { 
+bool RedisExchanger::valid() const {
 #ifdef USE_REDIS_OOB
-  return ctx_ != nullptr; 
+  return ctx_ != nullptr;
 #else
   return false;
 #endif

@@ -35,7 +35,8 @@ void cqpoller_client_thread(std::shared_ptr<Communicator> comm, int peer_rank) {
             << std::hex << remote_mr.address << " len=" << std::dec
             << remote_mr.length << "\n";
 
-  unsigned rid = comm->isend(peer_rank, d_data, 0, size, mr.id, remote_mr.id, true);
+  unsigned rid =
+      comm->isend(peer_rank, d_data, 0, size, mr.id, remote_mr.id, true);
   if (rid == 0) {
     std::cerr << "[CLIENT] isend failed\n";
   } else {

@@ -6,7 +6,8 @@
 void communicator_client_thread() {
   {
     auto comm = std::make_shared<Communicator>(
-        0, 0, 2, std::make_shared<Config>());  // gpu_id=0, local_rank=0, world_size=2
+        0, 0, 2,
+        std::make_shared<Config>());  // gpu_id=0, local_rank=0, world_size=2
     std::cout << "[CLIENT] Communicator for rank 0 created." << std::endl;
 
     int peer_rank = 1;
@@ -19,14 +20,16 @@ void communicator_client_thread() {
     }
 
     comm.reset();
-    std::cout << "[CLIENT] Communicator destroyed and resources released." << std::endl;
+    std::cout << "[CLIENT] Communicator destroyed and resources released."
+              << std::endl;
   }
 }
 
 void communicator_server_thread() {
   {
     auto comm = std::make_shared<Communicator>(
-        0, 1, 2, std::make_shared<Config>());  // gpu_id=0, local_rank=1, world_size=2
+        0, 1, 2,
+        std::make_shared<Config>());  // gpu_id=0, local_rank=1, world_size=2
     std::cout << "[SERVER] Communicator for rank 1 created." << std::endl;
 
     int peer_rank = 0;
@@ -39,7 +42,8 @@ void communicator_server_thread() {
     }
 
     comm.reset();
-    std::cout << "[SERVER] Communicator destroyed and resources released." << std::endl;
+    std::cout << "[SERVER] Communicator destroyed and resources released."
+              << std::endl;
   }
 }
 
@@ -50,5 +54,7 @@ void test_communicator() {
   t_client.join();
   t_server.join();
 
-  std::cout << "[TEST] RDMA QP connection test finished, all threads exited cleanly." << std::endl;
+  std::cout
+      << "[TEST] RDMA QP connection test finished, all threads exited cleanly."
+      << std::endl;
 }
