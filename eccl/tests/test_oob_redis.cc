@@ -83,9 +83,9 @@ void test_redis_oob() {
             << std::endl;
 }
 
-void rank_thread(int local_rank, int world_size, std::string const& redis_ip,
-                 int redis_port) {
-  auto ex = std::make_shared<RedisExchanger>(redis_ip, redis_port);
+void rank_thread(int local_rank, int world_size, std::string const& exchanger_ip,
+                 int exchanger_port) {
+  auto ex = std::make_shared<RedisExchanger>(exchanger_ip, exchanger_port);
   if (!ex->valid()) {
     std::cerr << "[ERROR] Rank " << local_rank << " failed to connect to Redis"
               << std::endl;
@@ -124,7 +124,7 @@ void rank_thread(int local_rank, int world_size, std::string const& redis_ip,
             << std::endl;
 }
 
-void test_meta_exchange_multi_threads(int world_size) {
+void test_redis_meta_exchange_multi_threads(int world_size) {
   std::vector<std::thread> threads;
   for (int rank = 0; rank < world_size; ++rank) {
     threads.emplace_back(rank_thread, rank, world_size, "127.0.0.1", 6379);

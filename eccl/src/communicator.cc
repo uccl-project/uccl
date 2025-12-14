@@ -582,7 +582,7 @@ bool Communicator::check_ready() {
                 << " check_ready: pd_ is nullptr" << std::endl;
       return false;
     }
-    if ((cq_list_.size()-1) != static_cast<size_t>(config_->cq_poller_threads)) {
+    if ((cq_list_.size()) != static_cast<size_t>(config_->cq_poller_threads)) {
       return false;
     }
   }

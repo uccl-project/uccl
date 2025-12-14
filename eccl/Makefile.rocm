@@ -7,12 +7,13 @@ CONDA_LIB_HOME ?= /usr/lib
 
 # Compilation flags
 CXXFLAGS   := -O0 -std=c++17 -Wall -Wno-unused-function -pthread -fPIC -D__HIP_PLATFORM_AMD__ -I${CONDA_LIB_HOME}/../include
-HIPCCFLAGS := -g -O0 -std=c++17 -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942 \
-				--compiler-options "-fPIC -Wall -pthread -I${CONDA_LIB_HOME}/../include"
+HIPCCFLAGS := -g -O0 -std=c++17 -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942
 LDFLAGS    := -L${CONDA_LIB_HOME} -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -lglog
 
 # Include directories
 INCLUDES := -Iinclude -I$(HIP_HOME)/include -I/usr/include -I../include
+
+LDFLAGS += -L$(HIP_LIB) -Wl,-rpath,$(HIP_LIB)
 
 # Redis: use redis exchaner by USE_REDIS_OOB=1
 ifeq ($(USE_REDIS_OOB),1)
@@ -22,7 +23,7 @@ REDIS_LIBS      := $(shell $(REDIS_PKGCONFIG) --libs hiredis)
 
 CXXFLAGS   += $(REDIS_CFLAGS) -DUSE_REDIS_OOB
 HIPCCFLAGS += -DUSE_REDIS_OOB --compiler-options "$(REDIS_CFLAGS)"
-LDFLAGS    += -L$(HIP_LIB) -Wl,-rpath,$(HIP_LIB) $(REDIS_LIBS)
+LDFLAGS    += $(REDIS_LIBS)
 endif
 
 # Source files
