@@ -59,23 +59,28 @@ python -m sglang.launch_server \
   --model-path "$MODEL_PATH" \
   --tp-size 32 \
   --ep-size 32 \
-  --dp-size 32 \
   --nnodes "$NNODES" \
   --node-rank "$NODE_RANK" \
   --dist-init-addr "$DIST_ADDR" \
   --trust-remote-code \
-  --mem-fraction-static 0.8 \
+  --mem-fraction-static 0.85 \
   --attention-backend flashinfer \
   --enable-eplb \
   --eplb-algorithm deepseek \
   --ep-num-redundant-experts 0 \
   --ep-dispatch-algorithm dynamic \
+  --enable-dp-attention \
+  --enable-dp-lm-head \
+  --moe-a2a-backend deepep \
+  --deepep-mode normal \
+  --deepep-config "$DEEPEP_CFG" \
   --enable-eplb \
   --eplb-algorithm deepseek \
+  --chunked-prefill-size 65536 \
   --enable-dp-attention \
   --enable-dp-lm-head \
   --page-size 256 \
   --moe-dense-tp-size 1 \
   --chunked-prefill-size 32768 \
   --cuda-graph-bs 256 \
-  --moe-runner-backend triton_kernel
+  --dp-size 32 \
