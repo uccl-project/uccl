@@ -46,8 +46,6 @@ class RingBuffer {
            "RegMemBlock size is too small for the requested capacity");
     assert(mem_block->type == MemoryType::HOST &&
            "RegMemBlock must be HOST memory type");
-    assert(mem_block->mr != nullptr &&
-           "RegMemBlock mr pointer must not be null");
     assert(mem_block->addr != nullptr &&
            "RegMemBlock addr pointer must not be null");
 
@@ -134,32 +132,6 @@ class RingBuffer {
     return current_read;
   }
 
-  // size_t push_bulk(T const* data, size_t count) {
-  //   size_t current_write = write_ptr.load(std::memory_order_relaxed);
-  //   size_t current_read = read_ptr.load(std::memory_order_acquire);
-  //   size_t used = current_write - current_read;
-  //   size_t available = Capacity - used - 1;
-  //   size_t to_write = std::min(count, available);
-  //   for (size_t i = 0; i < to_write; ++i) {
-  //     buffer_[(current_write + i) & (Capacity - 1)] = data[i];
-  //   }
-  //   write_ptr.store((current_write + to_write) & (Capacity - 1),
-  //                   std::memory_order_release);
-  //   return to_write;
-  // }
-
-  // size_t pop_bulk(T* data, size_t count) {
-  //   size_t current_read = read_ptr.load(std::memory_order_relaxed);
-  //   size_t current_write = write_ptr.load(std::memory_order_acquire);
-  //   size_t available = current_write - current_read;
-  //   size_t to_read = std::min(count, available);
-  //   for (size_t i = 0; i < to_read; ++i) {
-  //     data[i] = buffer_[(current_read + i) & (Capacity - 1)];
-  //   }
-  //   read_ptr.store((current_read + to_read) & (Capacity - 1),
-  //                  std::memory_order_release);
-  //   return to_read;
-  // }
 
   // Modify element at given index using a modifier function
   // Returns true if modification was successful, false if index is out of range

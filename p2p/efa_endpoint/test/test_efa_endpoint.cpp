@@ -1,6 +1,6 @@
-#include "efa_endpoint.h"
-#include "memory_allocator.h"
-#include "rdma_device.h"
+#include "../efa_endpoint.h"
+#include "../memory_allocator.h"
+#include "../rdma_device.h"
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <chrono>
@@ -24,29 +24,17 @@ DEFINE_uint64(buffer_size, 1024 * 1024, "Buffer size in bytes");
 
 // Example usage:
 // Correctness test (100 iterations with verification):
-// ./efa_endpoint_example --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1
-// --remote_ip=10.1.219.155 --remote_port=19997 --test_mode=correctness
-// --buffer_size=104857600
-// ./efa_endpoint_example --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0
-// --remote_ip=10.1.82.97 --remote_port=19997 --test_mode=correctness
-// --buffer_size=104857600
+// ./test_efa_endpoint --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1 --remote_ip=172.31.47.234 --remote_port=19997 --test_mode=correctness --buffer_size=104857600
+// ./test_efa_endpoint --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0 --remote_ip=172.31.36.62 --remote_port=19997 --test_mode=correctness --buffer_size=104857600
 //
 //
 // Unidirectional test (rank 0 sends, rank 1 receives):
-// ./efa_endpoint_example --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1
-// --remote_ip=10.1.219.155 --remote_port=19997 --test_mode=unidirectional
-// --iterations=100 --buffer_size=104857600
-// ./efa_endpoint_example --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0
-// --remote_ip=10.1.82.97 --remote_port=19997 --test_mode=unidirectional
-// --iterations=100 --buffer_size=104857600
+// ./test_efa_endpoint --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1 --remote_ip=172.31.47.234 --remote_port=19997 --test_mode=unidirectional --iterations=100 --buffer_size=104857600
+// ./test_efa_endpoint --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0 --remote_ip=172.31.36.62 --remote_port=19997 --test_mode=unidirectional --iterations=100 --buffer_size=104857600
 
 // Bandwidth test (bidirectional):
-// ./efa_endpoint_example --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1
-// --remote_ip=10.1.219.155 --remote_port=19997 --test_mode=bandwidth
-// --iterations=100 --buffer_size=104857600
-// ./efa_endpoint_example --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0
-// --remote_ip=10.1.82.97 --remote_port=19997 --test_mode=bandwidth
-// --iterations=100 --buffer_size=104857600
+// ./test_efa_endpoint --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1 --remote_ip=172.31.47.234 --remote_port=19997 --test_mode=bandwidth --iterations=100 --buffer_size=104857600
+// ./test_efa_endpoint --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0 --remote_ip=172.31.36.62 --remote_port=19997 --test_mode=bandwidth --iterations=100 --buffer_size=104857600
 
 // Correctness test: perform 100 send/recv operations and verify results
 void correctness_test(EFAEndpoint& endpoint, MemoryAllocator& allocator) {
@@ -57,10 +45,8 @@ void correctness_test(EFAEndpoint& endpoint, MemoryAllocator& allocator) {
   size_t test_buffer_size = FLAGS_buffer_size;
 
   // Allocate buffers
-  auto send_mem = allocator.allocate(test_buffer_size, MemoryType::GPU,
-                                     endpoint.getContext(0));
-  auto recv_mem = allocator.allocate(test_buffer_size, MemoryType::GPU,
-                                     endpoint.getContext(0));
+  auto send_mem = allocator.allocate(test_buffer_size, MemoryType::GPU);
+  auto recv_mem = allocator.allocate(test_buffer_size, MemoryType::GPU);
 
   if (!endpoint.regMem(send_mem)) {
     throw std::runtime_error("Failed to register send_mem");
@@ -180,9 +166,15 @@ void correctness_test(EFAEndpoint& endpoint, MemoryAllocator& allocator) {
     }
   }
 
+
+  if (!endpoint.deregMem(send_mem)) {
+    throw std::runtime_error("Failed to deregMem send_mem");
+  }
+  if (!endpoint.deregMem(recv_mem)) {
+    throw std::runtime_error("Failed to deregMem recv_mem");
+  }
   free(h_send_data);
   free(h_recv_data);
-
   std::cout << "\n=== Correctness Test Results ===\n";
   std::cout << "Total iterations: " << num_iterations << "\n";
   std::cout << "Passed: " << passed << "\n";
@@ -202,10 +194,8 @@ void unidirectional_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
   size_t test_buffer_size = FLAGS_buffer_size;
 
   // Allocate buffers
-  auto send_mem = allocator.allocate(test_buffer_size, MemoryType::GPU,
-                                     endpoint.getContext(0));
-  auto recv_mem = allocator.allocate(test_buffer_size, MemoryType::GPU,
-                                     endpoint.getContext(0));
+  auto send_mem = allocator.allocate(test_buffer_size, MemoryType::GPU);
+  auto recv_mem = allocator.allocate(test_buffer_size, MemoryType::GPU);
 
   if (!endpoint.regMem(send_mem)) {
     throw std::runtime_error("Failed to register send_mem");
@@ -225,7 +215,7 @@ void unidirectional_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
 
   // Warmup
   std::cout << "Running warmup (10 iterations)...\n";
-  for (int i = 0; i < 10; i++) {
+  for (int i = 0; i < 50; i++) {
     if (FLAGS_rank_id == 0) {
       // Rank 0: only send
       auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
@@ -261,16 +251,16 @@ void unidirectional_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
       int64_t send_wr_id = endpoint.send(FLAGS_remote_rank, send_req);
       send_infos.push_back({send_req->channel_id, send_wr_id});
       endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
-      if ((i + 1) % 100 == 0) {
-        std::cout << "Sent " << (i + 1) << " messages\n";
-      }
+      // if ((i + 1) % 100 == 0) {
+      //   std::cout << "Sent " << (i + 1) << " messages\n";
+      // }
     }
 
     // Then, check all send completions
     // for (auto const& [channel_id, send_wr_id] : send_infos) {
     //   endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
     // }
-    std::cout << "All sends completed\n";
+    // std::cout << "All sends completed\n";
   } else {
     // Rank 1: receiver only
     std::vector<int64_t> recv_indices;
@@ -283,20 +273,25 @@ void unidirectional_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
       int64_t recv_index = endpoint.recv(FLAGS_remote_rank, recv_req);
       recv_indices.push_back(recv_index);
       endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
-      if ((i + 1) % 100 == 0) {
-        std::cout << "Received " << (i + 1) << " messages\n";
-      }
+      // if ((i + 1) % 100 == 0) {
+      //   std::cout << "Received " << (i + 1) << " messages\n";
+      // }
     }
 
     // Then, check all recv completions
     // for (int64_t recv_index : recv_indices) {
     //   endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
     // }
-    std::cout << "All receives completed\n";
+    
   }
 
   auto end_time = std::chrono::high_resolution_clock::now();
-
+  if (!endpoint.deregMem(send_mem)) {
+    throw std::runtime_error("Failed to deregMem send_mem");
+  }
+  if (!endpoint.deregMem(recv_mem)) {
+    throw std::runtime_error("Failed to deregMem recv_mem");
+  }
   // Calculate statistics
   double elapsed_seconds =
       std::chrono::duration<double>(end_time - start_time).count();
@@ -329,10 +324,8 @@ void bandwidth_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
   size_t test_buffer_size = FLAGS_buffer_size;
 
   // Allocate buffers
-  auto send_mem = allocator.allocate(test_buffer_size, MemoryType::GPU,
-                                     endpoint.getContext(0));
-  auto recv_mem = allocator.allocate(test_buffer_size, MemoryType::GPU,
-                                     endpoint.getContext(0));
+  auto send_mem = allocator.allocate(test_buffer_size, MemoryType::GPU);
+  auto recv_mem = allocator.allocate(test_buffer_size, MemoryType::GPU);
 
   if (!endpoint.regMem(send_mem)) {
     throw std::runtime_error("Failed to register send_mem");
@@ -353,7 +346,7 @@ void bandwidth_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
 
   // Warmup
   std::cout << "Running warmup (10 iterations)...\n" << std::flush;
-  for (int i = 0; i < 10; i++) {
+  for (int i = 0; i < 50; i++) {
     auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
     auto send_req =
         std::make_shared<EFASendRequest>(send_mem, remote_mem_placeholder);
@@ -388,6 +381,8 @@ void bandwidth_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
 
     int64_t send_wr_id = endpoint.send(FLAGS_remote_rank, send_req);
     send_infos.push_back({send_req->channel_id, send_wr_id});
+    endpoint.checkSendComplete(FLAGS_remote_rank,send_wr_id);
+    endpoint.checkRecvComplete(FLAGS_remote_rank,recv_index);
     // if ((i + 1) % 100 == 0) {
     //   std::cout << "Completed " << (i + 1) << " iterations\n";
     // }
@@ -400,15 +395,15 @@ void bandwidth_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
             << std::flush;
 
   auto phase2_start = std::chrono::high_resolution_clock::now();
-  for (auto const& [channel_id, send_wr_id] : send_infos) {
-    // std::cout << "channel_id:" <<channel_id<<",
-    // send_wr_id:"<<send_wr_id<<std::endl<<std::flush;
-    endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
-  }
-  for (int64_t recv_index : recv_indices) {
-    // std::cout << "recv_index:" <<recv_index<<std::endl<<std::flush;
-    endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
-  }
+  // for (auto const& [channel_id, send_wr_id] : send_infos) {
+  //   // std::cout << "channel_id:" <<channel_id<<",
+  //   // send_wr_id:"<<send_wr_id<<std::endl<<std::flush;
+  //   endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
+  // }
+  // for (int64_t recv_index : recv_indices) {
+  //   // std::cout << "recv_index:" <<recv_index<<std::endl<<std::flush;
+  //   endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
+  // }
   auto phase2_end = std::chrono::high_resolution_clock::now();
   double phase2_time =
       std::chrono::duration<double>(phase2_end - phase2_start).count();
@@ -426,7 +421,12 @@ void bandwidth_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
   double bandwidth_gbps =
       (total_bytes / elapsed_seconds) / (1024.0 * 1024.0 * 1024.0);
   double latency_us = (elapsed_seconds / iterations) * 1000000.0;
-
+  if (!endpoint.deregMem(send_mem)) {
+    throw std::runtime_error("Failed to deregMem send_mem");
+  }
+  if (!endpoint.deregMem(recv_mem)) {
+    throw std::runtime_error("Failed to deregMem recv_mem");
+  }
   std::cout << "\n=== Bandwidth Test Results ===\n" << std::flush;
   std::cout << "Iterations: " << iterations << "\n" << std::flush;
 
@@ -534,14 +534,18 @@ int main(int argc, char* argv[]) {
 
     // Connect to remote rank
     std::cout << "Connecting to remote rank " << FLAGS_remote_rank << "...\n";
-    // bool connect_result = endpoint.build_connect_sync(FLAGS_remote_rank);
-    // // bool connect_result = endpoint.build_connect(FLAGS_remote_rank);
+    // int connect_result = endpoint.build_connect(FLAGS_remote_rank);  // sync mode (default)
+    // // int connect_result = endpoint.build_connect(FLAGS_remote_rank, false);  // async mode
     // endpoint.connect_check(FLAGS_remote_rank);
     std::string remote_ip;
     int remote_dev;
     int remote_gpuidx;
-    endpoint.uccl_connect(0, 0, 0, 0, FLAGS_remote_ip, FLAGS_remote_port);
-    endpoint.uccl_accept(0, 0, 0, remote_ip, &remote_dev, &remote_gpuidx);
+    // if(FLAGS_rank_id==0){
+      endpoint.uccl_connect(0, 0, 0, 0, FLAGS_remote_ip, FLAGS_remote_port);
+    // }
+    // else{
+      endpoint.uccl_accept(0, 0, 0, remote_ip, &remote_dev, &remote_gpuidx);
+    // }
     // if (connect_result>=0) {
     //   std::cout << "Successfully connected to remote rank " <<
     //   FLAGS_remote_rank

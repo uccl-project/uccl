@@ -3,7 +3,7 @@
 
 // #define UCCL_ENABLE_EFA
 
-namespace my_namespace {
+namespace unifiedp2p {
 
 template <class T>
 struct always_false : std::false_type {};
@@ -32,28 +32,22 @@ inline void delete_ep(RDMAEndPoint const& s) {
 
 #ifdef UCCL_ENABLE_EFA
 inline int set_request(std::shared_ptr<EFAEndpoint> const& obj, Conn* conn,
-                       my_namespace::P2PMhandle* local_mh, void* src,
-                       size_t size, UnionRemoteMemInfo const& slot_item,
+                       unifiedp2p::P2PMhandle* local_mh, void* src,
+                       size_t size, FifoItem const& slot_item,
                        uccl::ucclRequest* ureq) {
-  // Create RemoteMemInfo from UnionRemoteMemInfo
+  // Create RemoteMemInfo from FifoItem
   auto remote_mem = std::make_shared<RemoteMemInfo>();
   remote_mem->addr = slot_item.addr;
   remote_mem->length = slot_item.size;
   remote_mem->type = MemoryType::GPU;
-  // Copy rkeys array
-  for (int i = 0; i < kQpNumPerChannel + 1; ++i) {
-    remote_mem->rkeys[i] = slot_item.rkeys[i];
-  }
-
+  remote_mem->rkey_array.copyFrom(slot_item.padding);
   // Create RegMemBlock for local memory
   auto local_mem = std::make_shared<RegMemBlock>(src, size, MemoryType::GPU);
-  local_mem->mr_map = local_mh->mr_map;
+  local_mem->mr_array = local_mh->mr_array;
 
-  // Create EFASendRequest
   auto req = std::make_shared<EFASendRequest>(local_mem, remote_mem);
   req->to_rank_id = conn->uccl_conn_id_.flow_id;
 
-  // Call write method
   req->send_type = SendType::Write;
   ureq->engine_idx = obj->writeOrRead(req);
   ureq->n = conn->uccl_conn_id_.flow_id;
@@ -125,7 +119,7 @@ inline bool uccl_regmr(RDMAEndPoint const& s, int dev, void* data, size_t len,
 #ifdef UCCL_ENABLE_EFA
         else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
           // shared_ptr: call the EFAEndpoint's regmr method
-          if (obj->uccl_regmr(data, len, mhandle->mr_map) < 0) {
+          if (obj->uccl_regmr(data, len, mhandle->mr_array) < 0) {
             return false;
           }
         }
@@ -157,7 +151,7 @@ inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
         else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
           auto send_mem = std::make_shared<RegMemBlock>(const_cast<void*>(data),
                                                         size, MemoryType::GPU);
-          send_mem->mr_map = mhandle->mr_map;
+          send_mem->mr_array = mhandle->mr_array;
           auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
           auto send_req = std::make_shared<EFASendRequest>(
               send_mem, remote_mem_placeholder);
@@ -178,7 +172,7 @@ inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
 }
 
 inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
-                           my_namespace::P2PMhandle* mhandles, void** data,
+                           unifiedp2p::P2PMhandle* mhandles, void** data,
                            int* size, int n, struct uccl::ucclRequest* ureq) {
   return std::visit(
       [conn, mhandles, data, size, n, ureq](auto&& obj) mutable -> int {
@@ -193,7 +187,7 @@ inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
         else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
           auto recv_mem =
               std::make_shared<RegMemBlock>(data[0], size[0], MemoryType::GPU);
-          recv_mem->mr_map = mhandles->mr_map;
+          recv_mem->mr_array = mhandles->mr_array;
           auto recv_req = std::make_shared<EFARecvRequest>(recv_mem);
           ureq->type = uccl::ReqType::ReqRx;
           ureq->engine_idx = obj->recv(conn->uccl_conn_id_.flow_id, recv_req);
@@ -223,12 +217,8 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
           if (ureq->type == uccl::ReqType::ReqTx ||
               ureq->type == uccl::ReqType::ReqWrite ||
               ureq->type == uccl::ReqType::ReqRead) {
-            // LOG(INFO) << "Checking send complete for engine_idx: " <<
-            // ureq->engine_idx << ", n: " << ureq->n;
             return obj->checkSendComplete_once(ureq->n, ureq->engine_idx);
           } else if (ureq->type == uccl::ReqType::ReqRx) {
-            // LOG(INFO) << "Checking recv complete for engine_idx: " <<
-            // ureq->engine_idx << ", n: " << ureq->n;
             return obj->checkRecvComplete_once(ureq->n, ureq->engine_idx);
           }
         }
@@ -243,8 +233,8 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
 }
 
 inline int uccl_read_async(RDMAEndPoint const& s, Conn* conn,
-                           my_namespace::P2PMhandle* local_mh, void* dst,
-                           size_t size, UnionRemoteMemInfo const& slot_item,
+                           unifiedp2p::P2PMhandle* local_mh, void* dst,
+                           size_t size, FifoItem const& slot_item,
                            uccl::ucclRequest* ureq) {
   return std::visit(
       [conn, local_mh, dst, size, &slot_item, ureq](auto&& obj) -> int {
@@ -271,8 +261,8 @@ inline int uccl_read_async(RDMAEndPoint const& s, Conn* conn,
 }
 
 inline int uccl_write_async(RDMAEndPoint const& s, Conn* conn,
-                            my_namespace::P2PMhandle* local_mh, void* src,
-                            size_t size, UnionRemoteMemInfo const& slot_item,
+                            unifiedp2p::P2PMhandle* local_mh, void* src,
+                            size_t size, FifoItem const& slot_item,
                             uccl::ucclRequest* ureq) {
   return std::visit(
       [conn, local_mh, src, size, &slot_item, ureq](auto&& obj) -> int {
@@ -312,16 +302,15 @@ inline int prepare_fifo_metadata(RDMAEndPoint const& s, Conn* conn,
         }
 #ifdef UCCL_ENABLE_EFA
         else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
-          // shared_ptr: call with mr_map
-          UnionRemoteMemInfo remote_mem_info;
+          FifoItem remote_mem_info;
           remote_mem_info.addr = reinterpret_cast<uint64_t>(data);
           remote_mem_info.size = size;
-          if (obj->prepare_fifo_metadata(conn->uccl_conn_id_.flow_id,
-                                         mhandle->mr_map, data, size,
-                                         remote_mem_info.rkeys) < 0) {
-            return -1;
-          }
-          serialize_union_remotememfnfo(remote_mem_info, out_buf);
+
+          copyRKeysFromMRArrayToBytes(mhandle->mr_array, static_cast<char *>(remote_mem_info.padding), sizeof(remote_mem_info.padding));
+          auto* rkeys1 =
+          const_cast<RKeyArray*>(
+                reinterpret_cast<const RKeyArray*>(remote_mem_info.padding));
+          uccl::serialize_fifo_item(remote_mem_info, out_buf);
           return 0;
         }
 #endif
@@ -343,8 +332,7 @@ inline void uccl_deregmr(RDMAEndPoint const& s, P2PMhandle* mhandle) {
         }
 #ifdef UCCL_ENABLE_EFA
         else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
-          // shared_ptr: call with mr_map
-          obj->uccl_deregmr(mhandle->mr_map);
+          obj->uccl_deregmr(mhandle->mr_array);
         }
 #endif
         else {
@@ -372,4 +360,4 @@ inline bool initialize_engine_by_dev(RDMAEndPoint const& s, int dev,
 inline void create_unified_p2p_socket(RDMAEndPoint const& s) {
   std::visit([](auto&& obj) { obj->create_unified_p2p_socket(); }, s);
 }
-}  // namespace my_namespace
+}  // namespace unifiedp2p

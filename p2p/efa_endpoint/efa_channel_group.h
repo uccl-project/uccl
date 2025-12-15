@@ -234,26 +234,6 @@ class SendChannelGroup : public ChannelGroup {
   std::unique_ptr<RingBuffer<std::shared_ptr<EFASendRequest>, kRingCapacity>>
       request_queue_;
   std::shared_ptr<AtomicBitmapPacketTrackerMultiAck> tracker_;
-  bool setupRecvRequest(std::shared_ptr<EFASendRequest> req) {
-    if (unlikely(!req || !req->local_mem)) {
-      return false;
-    }
-
-    auto channel = getChannel(req->channel_id);
-    if (unlikely(!channel)) {
-      return false;
-    }
-    uint64_t context_id = channel->getContextID();
-
-    auto& mr_map = req->local_mem->mr_map;
-    auto it = mr_map.find(context_id);
-    if (unlikely(it == mr_map.end())) {
-      return false;
-    }
-
-    req->local_mem->mr = it->second;
-    return true;
-  }
 
   // Send a request through the appropriate channel
   // Returns true on success, false on failure
@@ -262,13 +242,6 @@ class SendChannelGroup : public ChannelGroup {
     if (unlikely(!channel)) {
       LOG(WARNING) << "SendChannelGroup: Channel not found for channel_id "
                    << req->channel_id;
-      return false;
-    }
-
-    if (!setupRecvRequest(req)) {
-      LOG(WARNING)
-          << "SendChannelGroup: Failed to setup request for channel_id "
-          << req->channel_id;
       return false;
     }
 
@@ -311,13 +284,12 @@ class SendChannelGroup : public ChannelGroup {
       // Create RegMemBlock for this chunk
       auto chunk_local_mem = std::make_shared<RegMemBlock>(
           static_cast<char*>(req->local_mem->addr) + chunk.offset, chunk.size,
-          req->local_mem->type, req->local_mem->mr, false);
-      chunk_local_mem->mr_map = req->local_mem->mr_map;
+          req->local_mem->mr_array,req->local_mem->type);
 
       // Create RemoteMemInfo for this chunk
       auto chunk_remote_mem = std::make_shared<RemoteMemInfo>(
           req->remote_mem->addr + chunk.offset,
-          req->remote_mem->rkeys[chunk_channel_id], chunk.size,
+          chunk.size, req->remote_mem->rkey_array,
           req->remote_mem->type);
 
       // Create send request for this chunk
@@ -329,13 +301,12 @@ class SendChannelGroup : public ChannelGroup {
       chunk_req->from_rank_id = req->from_rank_id;
       chunk_req->to_rank_id = req->to_rank_id;
       chunk_req->wr_id = req->wr_id;
-
       // Send the chunk
       if (postRequestOnChannel(chunk_req)) {
         LOG(INFO) << "SendChannelGroup: Sent chunk " << i << "/"
                   << chunks.size() << " (offset: " << chunk.offset
                   << ", size: " << chunk.size
-                  << ", channel_id: " << chunk_channel_id << ")";
+                  << ", channel_id: " << chunk_channel_id << ")"<<std::endl;
       } else {
         LOG(WARNING) << "SendChannelGroup: Failed to send chunk " << i
                      << " (offset: " << chunk.offset << ", size: " << chunk.size
@@ -406,7 +377,7 @@ class SendChannelGroup : public ChannelGroup {
       pollDataChannels();
 
       LOG_EVERY_N_ENDPOINT(INFO, 100000000)
-          << "SendChannelGroup::pollingLoop - Still running";
+         << "SendChannelGroup::pollingLoop - Still running";
     }
     LOG(INFO) << "SendChannelGroup::pollingLoop - Stopped";
   }
@@ -421,12 +392,10 @@ class RecvChannelGroup : public ChannelGroup {
   void addChannel(uint32_t channel_id,
                   std::shared_ptr<EFAChannel> channel) override {
     ChannelGroup::addChannel(channel_id, channel);
-    // Add RecvChannelGroup specific logic here
   }
 
   std::shared_ptr<EFAChannel> getChannel(uint32_t channel_id) const override {
     auto result = ChannelGroup::getChannel(channel_id);
-    // Add RecvChannelGroup specific logic here
     return result;
   }
 
@@ -440,7 +409,6 @@ class RecvChannelGroup : public ChannelGroup {
   size_t normalChannelCount() const { return ChannelGroup::channelCount(); }
   std::unordered_map<uint32_t, std::shared_ptr<EFAChannel>> const& channels()
       const override {
-    // Add RecvChannelGroup specific logic here
     return ChannelGroup::channels();
   }
 
@@ -479,7 +447,7 @@ class RecvChannelGroup : public ChannelGroup {
   int64_t recv(std::shared_ptr<EFARecvRequest> req) {
     if (unlikely(!setupRecvRequestChannelAndMemoryRegion(req))) {
       LOG(WARNING)
-          << "RecvChannelGroup: Failed to setup recv request with round robin";
+         << "RecvChannelGroup: Failed to setup recv request with round robin";
       return -1;
     }
     return ctrl_channel_->postSendReq(req);
@@ -495,7 +463,7 @@ class RecvChannelGroup : public ChannelGroup {
     for (int i = 1; i < kQpNumPerChannel + 1; ++i) {
       if (!collectRkeyForChannel(i, mr_map, rkeys[i])) {
         LOG(WARNING) << "RecvChannelGroup: Failed to collect rkey for channel "
-                     << i;
+                    << i;
         return false;
       }
     }
@@ -578,36 +546,6 @@ class RecvChannelGroup : public ChannelGroup {
     return true;
   }
 
-  // Setup memory regions and collect rkeys from all channels
-  // Returns: true on success, false on failure
-  bool setupMemoryRegionsAndCollectKeys(std::shared_ptr<EFARecvRequest> req,
-                                        uint32_t channel_id,
-                                        uint64_t context_id) {
-    // Get MR from mr_map using context_id as key
-    auto& mr_map = req->local_mem->mr_map;
-    auto it = mr_map.find(context_id);
-    if (unlikely(it == mr_map.end())) {
-      LOG(WARNING) << "RecvChannelGroup: MR not found for context_id "
-                   << context_id;
-      return false;
-    }
-
-    // Set the MR
-    req->local_mem->mr = it->second;
-    req->channel_id = channel_id;
-    LOG(INFO) << "RecvChannelGroup: Assigned channel_id " << channel_id
-              << " to recv request";
-
-    // Collect rkeys from all channels
-    for (int i = 1; i < kQpNumPerChannel + 1; ++i) {
-      if (!collectRkeyForChannel(i, req->local_mem->mr_map,
-                                 req->local_mem->rkeys[i])) {
-        return false;
-      }
-    }
-
-    return true;
-  }
 
   // Round-robin channel selection and MR setup
   bool setupRecvRequestChannelAndMemoryRegion(
@@ -617,13 +555,12 @@ class RecvChannelGroup : public ChannelGroup {
     }
 
     // Select next channel using round-robin
-    // auto [channel_id, context_id] = selectNextChannelRoundRobin();
-    auto [channel_id, context_id] = selectNextChannelRandom();
+    auto [channel_id, context_id] = selectNextChannelRoundRobin();
+    // auto [channel_id, context_id] = selectNextChannelRandom();
     if (channel_id == 0) {
       return false;
     }
-
-    // Setup memory regions and collect rkeys
-    return setupMemoryRegionsAndCollectKeys(req, channel_id, context_id);
+    req->channel_id = channel_id;
+    return true;
   }
 };

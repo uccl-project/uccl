@@ -1,33 +1,21 @@
 #pragma once
+#include "util/util.h"
 #include <arpa/inet.h>
+#include <glog/logging.h>
 #include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
-#include <cassert>
-#include <cstdint>
-#include <cstring>
-#include <iostream>
-#include <memory>
-#include <sys/mman.h>
-
-// Socket programming headers
 #include <netinet/in.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <sys/epoll.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
-// Standard library headers
-#include "util/util.h"
-#include <glog/logging.h>
-#include <algorithm>  // for std::find
+#include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
+#include <cstring>
 #include <functional>
 #include <future>
 #include <iomanip>
-#include <iostream>  // for std::cout, std::cerr
+#include <iostream>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -40,7 +28,13 @@
 #include <unordered_map>
 #include <variant>
 #include <vector>
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/epoll.h>
+#include <sys/mman.h>
+#include <sys/socket.h>
 #include <transport.h>
+#include <unistd.h>
 
 static constexpr int kGidIndex = 0;
 static constexpr int kRankIDPlaceHolder = 9999;
@@ -50,6 +44,8 @@ static constexpr uint8_t kPortNum = 1;
 static constexpr uint8_t kEfaRdmDefaultRnrRetry = 3;
 
 static constexpr int kQpNumPerChannel = 2;
+static constexpr int kNICContextNumber = 2;
+static constexpr int kControlChannelID = 0;
 
 static constexpr int kMaxSendWr = 1024;
 static constexpr int kMaxRecvWr = 1024;
@@ -59,11 +55,35 @@ static constexpr uint64_t kMessageChunkSizeKB = 256;  // 1 MB
 static constexpr uint64_t kMaxSplitNum = 16;
 
 static constexpr size_t kTaskRingSize = 1024;
+static constexpr size_t kRingCapacity = 16384;  // Must be power of 2
 
 static constexpr size_t kInFlightMaxSizeKB =
     10240000;  // Max in-flight packets per channel
+inline size_t channelIdToContextId(uint32_t channel_id) {
+  return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;
+}
 
-// Message chunk information for splitting large messages
+inline int parseLogLevelFromEnv() {
+  const char* env = std::getenv("EFA_LOG_LEVEL");
+  if (!env) {
+    return google::WARNING;
+  }
+
+  if (!strcasecmp(env, "INFO"))    return google::INFO;
+  if (!strcasecmp(env, "WARNING")) return google::WARNING;
+  if (!strcasecmp(env, "ERROR"))   return google::ERROR;
+  if (!strcasecmp(env, "FATAL"))   return google::FATAL;
+
+  char* end = nullptr;
+  long val = std::strtol(env, &end, 10);
+  if (end != env && val >= 0 && val <= 3) {
+    return static_cast<int>(val);
+  }
+
+  return google::WARNING;
+}
+
+
 struct MessageChunk {
   uint64_t offset;  // Offset from the start of the message
   size_t size;      // Size of this chunk in bytes
@@ -77,9 +97,6 @@ struct MessageChunk {
   }
 };
 
-// Calculate the number of chunks needed for a message
-// If the message would be split into more than kMaxSplitNum chunks,
-// returns kMaxSplitNum instead.
 inline size_t getMessageChunkCount(size_t message_size) {
   constexpr size_t chunk_size_bytes = kMessageChunkSizeKB * 1024;
   if (message_size == 0) return 0;
@@ -87,11 +104,6 @@ inline size_t getMessageChunkCount(size_t message_size) {
   return std::min(chunk_count, static_cast<size_t>(kMaxSplitNum));
 }
 
-// Split a message into chunks based on kMessageChunkSizeKB
-// Returns a vector of MessageChunk that can be used with range-based for loop
-// without extra copies (use: for (const auto& chunk : chunks))
-// Note: If the message would be split into more than kMaxSplitNum chunks,
-// it will be split into exactly kMaxSplitNum chunks with larger chunk sizes.
 inline std::vector<MessageChunk> splitMessageToChunks(size_t message_size) {
   constexpr size_t chunk_size_bytes = kMessageChunkSizeKB * 1024;
   size_t chunk_count = getMessageChunkCount(message_size);
@@ -110,17 +122,6 @@ inline std::vector<MessageChunk> splitMessageToChunks(size_t message_size) {
 
   return chunks;
 }
-// Branch prediction hints for optimization
-
-// #ifdef __GNUC__
-// #define likely(x)   __builtin_expect(!!(x), 1)
-// #define unlikely(x) __builtin_expect(!!(x), 0)
-// #else
-// #define likely(x)   (x)
-// #define unlikely(x) (x)
-// #endif
-
-static constexpr size_t kRingCapacity = 16384;  // Must be power of 2
 
 #define LOG_EVERY_N_ENDPOINT(severity, freq)             \
   static std::atomic<int> LOG_OCCURRENCES_##__LINE__(0); \
@@ -149,6 +150,87 @@ struct ChannelMetaData {
 enum class MemoryType { HOST, GPU };
 
 enum class ChannelType : int16_t { Control, Normal };
+
+template <typename T = uint32_t>
+struct RKeyArrayT {
+  T keys[kNICContextNumber];
+
+  RKeyArrayT() { std::memset(keys, 0, sizeof(keys)); }
+
+  inline void copyFrom(RKeyArrayT<T> const& other) {
+    static_assert(std::is_trivially_copyable_v<T>,
+                  "RKeyArrayT::copyFrom requires trivially copyable T");
+
+    std::memcpy(keys, other.keys, sizeof(keys));
+  }
+
+  inline void copyFrom(char const* other) {
+    static_assert(std::is_trivially_copyable_v<T>,
+                  "RKeyArrayT::copyFrom requires trivially copyable T");
+
+    std::memcpy(keys, other, sizeof(keys));
+  }
+
+  inline T getKeyByChannelID(uint32_t channel_id) const {
+    return getKeyByContextID(channelIdToContextId(channel_id));
+  }
+
+  inline T getKeyByContextID(size_t context_id) const {
+    return keys[context_id];
+  }
+
+  inline void setKeyByContextID(uint32_t context_id, T key) {
+    keys[context_id] = key;
+  }
+
+  inline void setKeyByChannelID(uint32_t channel_id, T key) {
+    setKeyByContextID(channelIdToContextId(channel_id), key);
+  }
+
+  T& operator[](int index) { return keys[index]; }
+  T const& operator[](int index) const { return keys[index]; }
+
+  friend std::ostream& operator<<(std::ostream& os, RKeyArrayT<T> const& arr) {
+    os << "RKeyArrayT{";
+    for (int i = 0; i < kNICContextNumber; ++i) {
+      if (i > 0) os << ", ";
+      if constexpr (std::is_integral_v<T>) {
+        os << "0x" << std::hex << arr.keys[i] << std::dec;
+      } else {
+        os << arr.keys[i];
+      }
+    }
+    os << "}";
+    return os;
+  }
+};
+
+// Type alias for backward compatibility and convenience
+using RKeyArray = RKeyArrayT<uint32_t>;
+using MRArray = RKeyArrayT<struct ibv_mr*>;
+
+inline void copyRKeyArrayFromMRArray(MRArray const& mr_array,
+                                     RKeyArray& rkey_array) {
+  for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
+    ibv_mr* mr = mr_array.getKeyByContextID(ctx);
+    uint32_t rkey = mr ? mr->rkey : 0;
+    rkey_array.setKeyByContextID(ctx, rkey);
+  }
+}
+inline void copyRKeysFromMRArrayToBytes(
+    MRArray const& mr_array,
+    char* dst,
+    size_t dst_size) {
+  constexpr size_t needed = sizeof(uint32_t) * kNICContextNumber;
+  assert(dst_size >= needed);
+
+  uint32_t* out = reinterpret_cast<uint32_t*>(dst);
+
+  for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
+    ibv_mr* mr = mr_array.getKeyByContextID(ctx);
+    out[ctx] = mr ? mr->rkey : 0;
+  }
+}
 
 struct OOBMetaData {
   std::string server_ip;
@@ -185,76 +267,166 @@ typedef struct RegMemBlock {
   void* addr;
   size_t size;
   MemoryType type;
-  struct ibv_mr* mr;
-  std::unordered_map<int64_t, struct ibv_mr*> mr_map;
   bool pool_allocated = false;
-  uint32_t rkeys[kQpNumPerChannel +
-                 1];  // For multiple memory regions (e.g., GPU memory)
+  MRArray mr_array;  // Array of MR pointers for multiple contexts
 
-  RegMemBlock(void* a, size_t s, MemoryType t, struct ibv_mr* m = nullptr,
+  RegMemBlock(void* a, size_t s, MemoryType t, bool p = false)
+      : addr(a), size(s), type(t), pool_allocated(p) {}
+
+  RegMemBlock(void* a, size_t s, MRArray const& mr_array_in, MemoryType t,
               bool p = false)
-      : addr(a), size(s), type(t), mr(m), pool_allocated(p){};
+      : addr(a), size(s), type(t), pool_allocated(p) {
+    mr_array.copyFrom(mr_array_in);
+  }
 
   // Equality operator for hash support (based on size and type only)
   bool operator==(RegMemBlock const& other) const {
     return addr == other.addr && size == other.size && type == other.type;
   }
 
+  // Set MR by context ID
+  inline void setMRByContextID(uint32_t context_id, struct ibv_mr* mr) {
+    mr_array.setKeyByContextID(context_id, mr);
+  }
+
+  // Set MR by channel ID
+  inline void setMRByChannelID(uint32_t channel_id, struct ibv_mr* mr) {
+    mr_array.setKeyByChannelID(channel_id, mr);
+  }
+
+  // Get MR by channel ID
+  inline struct ibv_mr* getMRByChannelID(uint32_t channel_id) const {
+    return mr_array.getKeyByChannelID(channel_id);
+  }
+
+  // Get MR by context ID
+  inline struct ibv_mr* getMRByContextID(uint32_t context_id) const {
+    return mr_array.getKeyByContextID(context_id);
+  }
+
+  // Get rkey by channel ID (for backward compatibility)
+  inline uint32_t getKeyByChannelID(uint32_t channel_id) const {
+    struct ibv_mr* mr = getMRByChannelID(channel_id);
+    return mr ? mr->rkey : 0;
+  }
+
+  // Get rkey by context ID (for backward compatibility)
+  inline uint32_t getKeyByContextID(uint32_t context_id) const {
+    struct ibv_mr* mr = getMRByContextID(context_id);
+    return mr ? mr->rkey : 0;
+  }
+
   friend std::ostream& operator<<(std::ostream& os, RegMemBlock const& block) {
     os << "RegMemBlock{addr: " << block.addr << ", size: " << block.size
        << ", type: " << (block.type == MemoryType::HOST ? "HOST" : "GPU")
-       << ", mr: " << block.mr << ", lkey: " << (block.mr ? block.mr->lkey : 0)
-       << ", rkey: " << (block.mr ? block.mr->rkey : 0)
-       << ", pool_allocated: " << block.pool_allocated << "}";
+       << ", pool_allocated: " << block.pool_allocated << block.mr_array
+       << std::endl;
+
+    os << "}";
     return os;
   }
 } RegMemBlock;
 
 typedef struct RemoteMemInfo {
   uint64_t addr;
-  uint32_t rkey;
-  uint32_t rkeys[kQpNumPerChannel +
-                 1];  // For multiple memory regions (e.g., GPU memory)
+  RKeyArray rkey_array;  // For multiple memory regions (e.g., GPU memory)
   size_t length;
   MemoryType type;
+  RemoteMemInfo() : addr(0), length(0), type(MemoryType::HOST) {}
 
-  // Default constructor
-  RemoteMemInfo() : addr(0), rkey(0), length(0), type(MemoryType::HOST) {}
+  RemoteMemInfo(uint64_t a, size_t len, RKeyArray const& rkey, MemoryType t)
+      : addr(a), length(len), type(t) {
+    rkey_array.copyFrom(rkey);
+  }
+  RemoteMemInfo(uint64_t a, size_t len, MRArray const& mrs, MemoryType t)
+      : addr(a), length(len), type(t) {
+    copyRKeyArrayFromMRArray(mrs, rkey_array);
+  }
 
-  // Constructor with all parameters
-  RemoteMemInfo(uint64_t a, uint32_t k, size_t len, MemoryType t)
-      : addr(a), rkey(k), length(len), type(t) {}
-
-  // Constructor from RegMemBlock (copy constructor)
   RemoteMemInfo(RegMemBlock const& block)
       : addr(reinterpret_cast<uint64_t>(block.addr)),
-        rkey(block.mr ? block.mr->rkey : 0),
         length(block.size),
         type(block.type) {
-    for (int i = 0; i < kQpNumPerChannel + 1; ++i) {
-      rkeys[i] = block.rkeys[i];
-    }
+    copyRKeyArrayFromMRArray(block.mr_array, rkey_array);
   }
 
-  // Constructor from shared_ptr<RegMemBlock> (copy constructor)
-  RemoteMemInfo(const std::shared_ptr<RegMemBlock> block)
+  // RemoteMemInfo(RemoteMemInfo const& remote_in)
+  //     : addr(reinterpret_cast<uint64_t>(remote_in.addr)),
+  //       length(remote_in.length),
+  //       type(remote_in.type) {
+  //   rkey_array.copyFrom(remote_in.rkey_array);
+  // }
+
+  RemoteMemInfo(std::shared_ptr<RegMemBlock> const block)
       : addr(reinterpret_cast<uint64_t>(block->addr)),
-        rkey(block->mr ? block->mr->rkey : 0),
         length(block->size),
         type(block->type) {
-    for (int i = 0; i < kQpNumPerChannel + 1; ++i) {
-      rkeys[i] = block->rkeys[i];
-    }
+    copyRKeyArrayFromMRArray(block->mr_array, rkey_array);
+  }
+  inline uint32_t getKeyByChannelID(uint32_t channel_id) const {
+    return rkey_array.getKeyByChannelID(channel_id);
+  }
+  // // Get rkey by context ID (direct index access)
+  inline uint32_t getKeyByContextID(size_t context_id) const {
+    return rkey_array.getKeyByContextID(context_id);
   }
 
+  // RemoteMemInfo& operator=(RemoteMemInfo const& rhs) {
+  //   if (this == &rhs) {
+  //     return *this;
+  //   }
+
+  //   addr = rhs.addr;
+  //   length = rhs.length;
+  //   type = rhs.type;
+  //   rkey_array.copyFrom(rhs.rkey_array);
+
+  //   return *this;
+  // }
   friend std::ostream& operator<<(std::ostream& os, RemoteMemInfo const& info) {
     os << "RemoteMemInfo{addr: 0x" << std::hex << info.addr << std::dec
-       << ", rkey: 0x" << std::hex << info.rkey << std::dec
        << ", length: " << info.length
-       << ", type: " << (info.type == MemoryType::HOST ? "HOST" : "GPU") << "}";
+       << ", type: " << (info.type == MemoryType::HOST ? "HOST" : "GPU")
+       << "rkey_array " << info.rkey_array << "}" << std::endl;
     return os;
   }
 } RemoteMemInfo;
+
+typedef struct EFARecvRequest {
+  uint32_t from_rank_id;
+  uint32_t to_rank_id;
+  uint32_t channel_id;
+  int64_t wr_id;
+  std::shared_ptr<RegMemBlock> local_mem;
+
+  // Constructor
+  EFARecvRequest(std::shared_ptr<RegMemBlock> local) : local_mem(local) {}
+
+  // Getter methods
+  inline uint32_t getLocalKey() const {
+    return local_mem->getKeyByContextID(channel_id);
+  }
+
+  inline uint64_t getLocalAddress() const {
+    return reinterpret_cast<uint64_t>(local_mem->addr);
+  }
+
+  inline uint32_t getLocalLen() const { return local_mem->size; }
+
+  friend std::ostream& operator<<(std::ostream& os, EFARecvRequest const& req) {
+    os << "EFARecvRequest{";
+    os << "from_rank_id: " << req.from_rank_id
+       << ", to_rank_id: " << req.to_rank_id
+       << ", channel_id: " << req.channel_id;
+    if (req.local_mem) {
+      os << ", local_mem: " << *req.local_mem;
+    } else {
+      os << ", local_mem: nullptr";
+    }
+    os << "}";
+    return os;
+  }
+} EFARecvRequest;
 
 enum class ReqFlag : int16_t { PENDING = 2, IN_PROGRESS = 3, IS_DONE = 4 };
 struct alignas(64) SendReqMeta {
@@ -264,7 +436,6 @@ struct alignas(64) SendReqMeta {
   uint32_t expected_chunk_count;  // Expected number of chunks to receive
   uint32_t received_chunk_count;  // Number of chunks already received
 
-  // Default constructor
   SendReqMeta()
       : rank_id(0),
         channel_id(0),
@@ -272,7 +443,6 @@ struct alignas(64) SendReqMeta {
         expected_chunk_count(0),
         received_chunk_count(0) {}
 
-  // Constructor with parameters
   SendReqMeta(uint32_t rid, uint32_t cid, RemoteMemInfo const& rmem,
               uint32_t expected = 0, uint32_t received = 0)
       : rank_id(rid),
@@ -281,6 +451,13 @@ struct alignas(64) SendReqMeta {
         expected_chunk_count(expected),
         received_chunk_count(received) {}
 
+  SendReqMeta(std::shared_ptr<EFARecvRequest> rev_req) {
+    rank_id = rev_req->from_rank_id;
+    channel_id = rev_req->channel_id;
+    remote_mem = rev_req->local_mem;
+    expected_chunk_count = getMessageChunkCount(rev_req->local_mem->size);
+    received_chunk_count = 0;
+  }
   friend std::ostream& operator<<(std::ostream& os, SendReqMeta const& meta) {
     os << "SendReqMeta{rank_id: " << meta.rank_id
        << ", channel_id: " << meta.channel_id
@@ -405,9 +582,13 @@ struct EFASendRequest {
         need_signaled(signaled) {}
 
   // Getter methods
-  inline uint32_t getLocalKey() const { return local_mem->mr->lkey; }
+  inline uint32_t getLocalKey() const {
+    return local_mem->getKeyByChannelID(channel_id);
+  }
 
-  inline uint32_t getRemoteKey() const { return remote_mem->rkey; }
+  inline uint32_t getRemoteKey() const {
+    return remote_mem->getKeyByChannelID(channel_id);
+  }
 
   inline uint64_t getLocalAddress() const {
     return reinterpret_cast<uint64_t>(local_mem->addr);
@@ -440,42 +621,8 @@ struct EFASendRequest {
   }
 };
 
-struct EFARecvRequest {
-  uint32_t from_rank_id;
-  uint32_t to_rank_id;
-  uint32_t channel_id;
-  int64_t wr_id;
-  std::shared_ptr<RegMemBlock> local_mem;
-
-  // Constructor
-  EFARecvRequest(std::shared_ptr<RegMemBlock> local) : local_mem(local) {}
-
-  // Getter methods
-  inline uint32_t getLocalKey() const { return local_mem->mr->lkey; }
-
-  inline uint64_t getLocalAddress() const {
-    return reinterpret_cast<uint64_t>(local_mem->addr);
-  }
-
-  inline uint32_t getLocalLen() const { return local_mem->size; }
-
-  friend std::ostream& operator<<(std::ostream& os, EFARecvRequest const& req) {
-    os << "EFARecvRequest{";
-    os << "from_rank_id: " << req.from_rank_id
-       << ", to_rank_id: " << req.to_rank_id
-       << ", channel_id: " << req.channel_id;
-    if (req.local_mem) {
-      os << ", local_mem: " << *req.local_mem;
-    } else {
-      os << ", local_mem: nullptr";
-    }
-    os << "}";
-    return os;
-  }
-};
-
 template <typename T>
-std::string serialize(const T& obj) {
+std::string serialize(T const& obj) {
   std::string s(sizeof(T), '\0');
   std::memcpy(&s[0], reinterpret_cast<char const*>(&obj), sizeof(T));
   return s;
@@ -551,16 +698,7 @@ struct MetaInfoToExchange {
     os.flags(flags);
     os << std::endl;
 
-    os << "  mem_meta:" << std::endl;
-    os << "    addr: 0x" << std::hex << meta.mem_meta.addr << std::dec
-       << std::endl;
-    os << "    rkey: 0x" << std::hex << meta.mem_meta.rkey << std::dec
-       << std::endl;
-    os << "    length: " << meta.mem_meta.length << " bytes" << std::endl;
-    os << "    type: "
-       << (meta.mem_meta.type == MemoryType::HOST ? "HOST" : "GPU")
-       << std::endl;
-
+    os << "  mem_meta:" << meta.mem_meta << std::endl;
     os << "  gpu_id: " << meta.gpu_id << std::endl;
     os << "=========================" << std::endl;
 

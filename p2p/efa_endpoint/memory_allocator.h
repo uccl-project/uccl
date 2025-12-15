@@ -4,14 +4,7 @@
 #include "rdma_context.h"
 
 // GPU runtime support
-#if defined(__HIPCC__) || defined(__HIP_PLATFORM_AMD__)
-#include <hip/hip_runtime.h>
-#define gpuMalloc hipMalloc
-#define gpuFree hipFree
-#define gpuError_t hipError_t
-#define gpuSuccess hipSuccess
-#define gpuGetErrorString hipGetErrorString
-#elif defined(__CUDACC__) || defined(__NVCC__)
+#if defined(UCCL_ENABLE_GPU)
 #include <cuda_runtime.h>
 #define gpuMalloc cudaMalloc
 #define gpuFree cudaFree
@@ -32,7 +25,7 @@ class MemoryAllocator {
 
   std::shared_ptr<RegMemBlock> allocate(
       size_t size, MemoryType type,
-      const std::shared_ptr<RdmaContext> ctx = nullptr) {
+      std::shared_ptr<RdmaContext> const ctx = nullptr) {
     void* addr = nullptr;
     struct ibv_mr* mr = nullptr;
 
@@ -46,6 +39,16 @@ class MemoryAllocator {
       throw std::runtime_error("Failed to allocate memory");
     }
 
+    // Create RegMemBlock with custom deleter
+    auto deleter = [this, type](RegMemBlock* block) {
+      if (block) {
+        std::cout << "memory freed" << std::endl;
+        if (block->addr) deallocateRaw(block->addr, type);
+        delete block;
+      }
+    };
+
+    auto block = new RegMemBlock(addr, size, type);
     if (ctx) {
       mr = ctx->regMem(addr, size);
 
@@ -53,19 +56,9 @@ class MemoryAllocator {
         deallocateRaw(addr, type);
         throw std::runtime_error("Failed to register memory with RDMA");
       }
+      block->setMRByContextID(ctx->getContextID(),mr);
     }
 
-    // Create RegMemBlock with custom deleter
-    auto deleter = [this, type](RegMemBlock* block) {
-      if (block) {
-        std::cout << "memory freed" << std::endl;
-        if (block->mr) RdmaContext::deregMem(block->mr);
-        if (block->addr) deallocateRaw(block->addr, type);
-        delete block;
-      }
-    };
-
-    auto block = new RegMemBlock(addr, size, type, mr);
     return std::shared_ptr<RegMemBlock>(block, deleter);
   }
 
@@ -84,8 +77,7 @@ class MemoryAllocator {
   }
   void* allocateGPU(size_t size) {
     void* addr = nullptr;
-#if defined(__HIPCC__) || defined(__HIP_PLATFORM_AMD__) || \
-    defined(__CUDACC__) || defined(__NVCC__)
+#if defined(UCCL_ENABLE_GPU)
     gpuError_t err = gpuMalloc(&addr, size);
     if (err != gpuSuccess) {
       std::cerr << "gpuMalloc failed: " << gpuGetErrorString(err) << std::endl;
@@ -104,8 +96,7 @@ class MemoryAllocator {
     if (!addr) return;
 
     if (type == MemoryType::GPU) {
-#if defined(__HIPCC__) || defined(__HIP_PLATFORM_AMD__) || \
-    defined(__CUDACC__) || defined(__NVCC__)
+#if defined(UCCL_ENABLE_GPU)
       gpuError_t err = gpuFree(addr);
       if (err != gpuSuccess) {
         std::cerr << "gpuFree failed: " << gpuGetErrorString(err) << std::endl;

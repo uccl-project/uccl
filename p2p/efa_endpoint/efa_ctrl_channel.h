@@ -91,14 +91,6 @@ class SendControlChannel : public EFAChannel {
 
 class RecvControlChannel : public EFAChannel {
  public:
-  explicit RecvControlChannel(std::shared_ptr<RdmaContext> ctx,
-                              uint32_t channel_id = 0)
-      : EFAChannel(ctx, channel_id) {}
-
-  explicit RecvControlChannel(std::shared_ptr<RdmaContext> ctx,
-                              ChannelMetaData const& remote_meta,
-                              uint32_t channel_id = 0)
-      : EFAChannel(ctx, remote_meta, channel_id) {}
 
   explicit RecvControlChannel(std::shared_ptr<RdmaContext> ctx,
                               std::shared_ptr<RegMemBlock> mem_block,
@@ -134,15 +126,7 @@ class RecvControlChannel : public EFAChannel {
   }
 
   int postSendReq(std::shared_ptr<EFARecvRequest> rev_req) {
-    LOG(INFO) << "postSendReq - Received EFARecvRequest: " << *rev_req;
-
-    SendReqMeta req_meta;
-    req_meta.rank_id = rev_req->from_rank_id;
-    req_meta.channel_id = rev_req->channel_id;
-    req_meta.remote_mem = rev_req->local_mem;
-    req_meta.expected_chunk_count =
-        getMessageChunkCount(rev_req->local_mem->size);
-    req_meta.received_chunk_count = 0;
+    SendReqMeta req_meta(rev_req);
     LOG(INFO) << "postSendReq - Created SendReqMeta: " << req_meta;
 
     int index = rb_->push_with_convert(req_meta, to_ring_meta);
@@ -154,15 +138,27 @@ class RecvControlChannel : public EFAChannel {
 
     LOG(INFO) << "postSendReq - Successfully pushed to ring buffer at index: "
               << index;
-    std::shared_ptr<RemoteMemInfo> remote_mem_ptr =
-        std::make_shared<RemoteMemInfo>(
-            empty_rb_->getElementAddress(index), remote_info_->rkey,
-            empty_rb_->sizeInBytes(), MemoryType::HOST);
-    std::shared_ptr<RegMemBlock> local_mem_ptr = std::make_shared<RegMemBlock>(
+    if(!remote_mem_ptr_){
+      remote_mem_ptr_ =
+          std::make_shared<RemoteMemInfo>(
+              empty_rb_->getElementAddress(index), 
+              empty_rb_->sizeInBytes(), remote_info_->rkey_array, MemoryType::HOST);
+    } else{
+      remote_mem_ptr_->addr = empty_rb_->getElementAddress(index);
+      remote_mem_ptr_->length = empty_rb_->sizeInBytes();
+    }
+    if(!local_mem_ptr_){
+      local_mem_ptr_ = std::make_shared<RegMemBlock>(
         reinterpret_cast<void*>(rb_->getElementAddress(index)),
-        rb_->elementSize(), MemoryType::HOST, local_info_->mr, false);
+        rb_->elementSize(), local_info_->mr_array, MemoryType::HOST);
+    } else{
+      local_mem_ptr_->addr = reinterpret_cast<void*>(rb_->getElementAddress(index));
+      local_mem_ptr_->size = rb_->elementSize();
+    }
+
     std::shared_ptr<EFASendRequest> send_ptr =
-        std::make_shared<EFASendRequest>(local_mem_ptr, remote_mem_ptr, index);
+        std::make_shared<EFASendRequest>(local_mem_ptr_, remote_mem_ptr_, index);
+    send_ptr->channel_id = kControlChannelID;
     EFAChannel::send(send_ptr);
     return index;
   }
@@ -198,4 +194,6 @@ class RecvControlChannel : public EFAChannel {
   std::unique_ptr<RemoteMemInfo> remote_info_;
   std::shared_ptr<RegMemBlock> local_info_;
   std::unique_ptr<RingBuffer<SendReqMetaOnRing, kRingCapacity>> rb_;
+  std::shared_ptr<RemoteMemInfo> remote_mem_ptr_;
+  std::shared_ptr<RegMemBlock> local_mem_ptr_;
 };

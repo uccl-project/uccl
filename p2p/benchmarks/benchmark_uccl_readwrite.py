@@ -14,7 +14,7 @@ try:
 except ImportError:
     sys.stderr.write("Failed to import p2p\n")
     raise
-fifo_blob_size = 80  # bytes
+fifo_blob_size = 64  # bytes
 
 # parse_metadata is now provided by the C++ layer via p2p.Endpoint.parse_metadata()
 
@@ -60,7 +60,8 @@ def _run_server(args, ep, remote_metadata):
             size_v.append(size_per_block)
         # Use advertisev to advertise all blocks at once
         ok, fifo_blob_v = ep.advertisev(conn_id, mr_id_v, ptr_v, size_v, args.num_iovs)
-        assert ok and all(len(fifo_blob) == fifo_blob_size for fifo_blob in fifo_blob_v)
+        assert ok 
+        assert all(len(fifo_blob) == fifo_blob_size for fifo_blob in fifo_blob_v)
         # Send all fifo_blobs to peer
         for fifo_blob in fifo_blob_v:
             dist.send(torch.ByteTensor(list(fifo_blob)), dst=peer)

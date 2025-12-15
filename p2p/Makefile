@@ -10,6 +10,13 @@ CUDA_LIB  := $(CUDA_HOME)/lib64
 RDMA_HOME := ../collective/rdma
 EFA_HOME ?= /opt/amazon/efa
 
+# Check if EFA_HOME exists and define UCCL_ENABLE_EFA
+ifneq ($(wildcard $(EFA_HOME)),)
+    CXXFLAGS_EFA := -DUCCL_ENABLE_EFA
+else
+    CXXFLAGS_EFA :=
+endif
+
 # Building with the following settings:
 INC = -I./ -I$(CUDA_HOME)/include -I${EFA_HOME}/include 
 LIBS = -L ${CUDA_HOME}/lib64 -L ${EFA_HOME}/lib -libverbs -lefa -lcudart -lcuda -lpthread -lglog -lgflags -lgtest -lz -lelf
@@ -18,7 +25,7 @@ LIBS_SHARED = ${LIBS}
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I$(RDMA_HOME) -I$(CUDA_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
-	-Wl,-rpath=/usr/lib/x86_64-linux-gnu
+	-Wl,-rpath=/usr/lib/x86_64-linux-gnu $(CXXFLAGS_EFA)
 
 ifeq ($(USE_TCPX),1)
 	CXXFLAGS += -DUSE_TCPX
