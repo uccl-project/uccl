@@ -211,16 +211,21 @@ class WriteImm {
     assert((buffer_idx & ~kBUFFER_IDX_MASK) == 0 &&
            "buffer_idx overflow (1 bit)");
     if ((expert_idx & ~kEXPERT_MASK) != 0) {
-      fprintf(stderr, "[RDMA ERROR] expert_idx=%u exceeds 9-bit limit (max 511)\n", expert_idx);
+      fprintf(stderr,
+              "[RDMA ERROR] expert_idx=%u exceeds 9-bit limit (max 511)\n",
+              expert_idx);
     }
-    assert((expert_idx & ~kEXPERT_MASK) == 0 &&
-           "expert_idx overflow (9 bits)");
+    assert((expert_idx & ~kEXPERT_MASK) == 0 && "expert_idx overflow (9 bits)");
     if ((num_tokens & ~kTOKENS_MASK) != 0) {
-      fprintf(stderr, "[RDMA ERROR] num_tokens=%u exceeds 8-bit limit (max 255)\n", num_tokens);
+      fprintf(stderr,
+              "[RDMA ERROR] num_tokens=%u exceeds 8-bit limit (max 255)\n",
+              num_tokens);
     }
     assert((num_tokens & ~kTOKENS_MASK) == 0 && "num_tokens overflow (8 bits)");
     if ((my_rank & ~kRANK_MASK) != 0) {
-      fprintf(stderr, "[RDMA ERROR] my_rank=%u exceeds 10-bit limit (max 1023)\n", my_rank);
+      fprintf(stderr,
+              "[RDMA ERROR] my_rank=%u exceeds 10-bit limit (max 1023)\n",
+              my_rank);
     }
     assert((my_rank & ~kRANK_MASK) == 0 && "my_rank overflow (10 bits)");
 

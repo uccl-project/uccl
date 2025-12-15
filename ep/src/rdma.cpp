@@ -823,12 +823,10 @@ static void post_rdma_async_batched_normal_mode(
 
           ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
         } else if (j + 1 == idxs.size()) {
-          // Clamp batch size to 63 (6-bit limit) for encoding
-          uint32_t num_tokens_clamped = std::min((uint32_t)idxs.size(), 63u);
           uint32_t imm =
               WriteImm::Pack(get_is_combine(cmd.cmd_type),
                              get_low_latency(cmd.cmd_type), cmd.expert_idx,
-                             num_tokens_clamped, my_rank)
+                             (uint32_t)idxs.size(), my_rank)
                   .GetImmData();
           ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
         } else {
