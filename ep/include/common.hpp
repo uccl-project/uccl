@@ -17,7 +17,6 @@
 // #define MEASURE_PER_VERB_LATENCY
 
 // Barrier type selection (can be overridden at compile time)
-// #define USE_SENDER_BARRIER
 #ifndef USE_SENDER_BARRIER
 #ifdef EFA
 #define USE_RECEIVER_BARRIER
