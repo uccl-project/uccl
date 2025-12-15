@@ -1,5 +1,4 @@
 import os
-import time
 import torch
 import torch.distributed as dist
 from typing import Callable, Tuple, Optional, Union, List
@@ -276,12 +275,6 @@ class Buffer:
             event: the event after executing the kernel (valid only if `async_finish` is set).
             hook: the receiving hook function (valid only if `return_recv_hook` is set).
         """
-        print(f"Low Latency Dispatch: x.size(0)={x.size(0)}, topk_idx.size(0)={topk_idx.size(0)}, num_max_dispatch_tokens_per_rank={num_max_dispatch_tokens_per_rank}", flush=True)
-        if x.size(0) > num_max_dispatch_tokens_per_rank:
-            raise RuntimeError(
-                f"x.size(0)={x.size(0)} > num_max_dispatch_tokens_per_rank={num_max_dispatch_tokens_per_rank}"
-            )
-
         for proxy in self.proxies:
             proxy.calculate_and_set_dispatch_recv_data_offset(
                 num_tokens=x.shape[0],
@@ -381,7 +374,6 @@ class Buffer:
             event: the event after executing the kernel (valid only if `async_finish` is set).
             hook: the receiving hook function (valid only if `return_recv_hook` is set).
         """
-        print(f"Low Latency Combine: x.size(0)={x.size(0)}, topk_idx.size(0)={topk_idx.size(0)}", flush=True)
         (
             src_info,
             layout_range,
@@ -389,15 +381,6 @@ class Buffer:
             hidden,
             num_experts,
         ) = handle
-        # print(f"Low Latency Combine Details:", flush=True)
-        # print(f"  x.shape={x.shape}, x.dtype={x.dtype}", flush=True)
-        # print(f"  topk_idx.shape={topk_idx.shape}, topk_idx.dtype={topk_idx.dtype}", flush=True)
-        # print(f"  topk_weights.shape={topk_weights.shape}, topk_weights.dtype={topk_weights.dtype}", flush=True)
-        # print(f"  num_max_dispatch_tokens_per_rank={num_max_dispatch_tokens_per_rank}", flush=True)
-        # print(f"  hidden={hidden}, num_experts={num_experts}", flush=True)
-        # print(f"  num_ranks={self.group_size}, num_local_experts={num_experts // self.group_size}", flush=True)
-        # print(f"  Expected x.shape=[{num_experts // self.group_size}, {num_max_dispatch_tokens_per_rank * self.group_size}, {hidden}]", flush=True)
-        # print(f"  use_logfmt={use_logfmt}, zero_copy={zero_copy}", flush=True)
         combined_x, event, hook = self.runtime.low_latency_combine(
             x,
             topk_idx,
@@ -694,16 +677,12 @@ class Buffer:
         # Default config
         config = self.get_dispatch_config(self.group_size) if config is None else config
 
-        # Start timing
-        x_tensor = x[0] if isinstance(x, tuple) else x
-        start_time = time.time()
-
         # Internode
         if self.runtime.get_num_rdma_ranks() > 1:
             assert (
                 num_worst_tokens == 0
             ), "Internode dispatch does not support `num_worst_tokens > 0`"
-            result = self.internode_dispatch(
+            return self.internode_dispatch(
                 x,
                 handle,
                 num_tokens_per_rank,
@@ -718,13 +697,6 @@ class Buffer:
                 async_finish,
                 allocate_on_comm_stream,
             )
-            elapsed_time = time.time() - start_time
-            if self.rank == 0:
-                num_internode_tokens = num_tokens_per_rdma_rank.sum().item() if num_tokens_per_rdma_rank is not None else 0
-                rdma_dist = num_tokens_per_rdma_rank.tolist() if num_tokens_per_rdma_rank is not None else []
-                rank_dist = num_tokens_per_rank.tolist() if num_tokens_per_rank is not None else []
-                print(f"[inter-node dispatch] {x_tensor.shape[0]} tokens total, {num_internode_tokens} internode in {elapsed_time*1e6:.2f} us, rdma_dist={rdma_dist}, rank_dist={rank_dist}, async_finish: {async_finish}", flush=True)
-            return result
 
         # Launch the kernel with cached or non-cached mode
         x, x_scales = x if isinstance(x, tuple) else (x, None)
@@ -759,9 +731,6 @@ class Buffer:
                     allocate_on_comm_stream,
                 )
             )
-            elapsed_time = time.time() - start_time
-            if self.rank == 0:
-                print(f"[intra-node dispatch] {x_tensor.shape[0]} tokens in {elapsed_time*1e6:.2f} us", flush=True)
             return (
                 (recv_x, recv_x_scales) if x_scales is not None else recv_x,
                 None,
@@ -814,9 +783,6 @@ class Buffer:
                 is_token_in_rank,
                 send_head,
             )
-            elapsed_time = time.time() - start_time
-            if self.rank == 0:
-                print(f"[intra-node dispatch] {x_tensor.shape[0]} tokens in {elapsed_time*1e6:.2f} us", flush=True)
             return (
                 (recv_x, recv_x_scales) if x_scales is not None else recv_x,
                 recv_topk_idx,
@@ -862,12 +828,9 @@ class Buffer:
         # Default config
         config = self.get_combine_config(self.group_size) if config is None else config
 
-        # Start timing
-        start_time = time.time()
-
         # Internode
         if self.runtime.get_num_rdma_ranks() > 1:
-            result = self.internode_combine(
+            return self.internode_combine(
                 x,
                 handle,
                 topk_weights,
@@ -877,10 +840,6 @@ class Buffer:
                 async_finish,
                 allocate_on_comm_stream,
             )
-            elapsed_time = time.time() - start_time
-            if self.rank == 0:
-                print(f"[inter-node combine] {x.shape[0]} tokens in {elapsed_time*1e6:.2f} us, async_{async_finish}", flush=True)
-            return result
 
         # NOTES: the second `_` is for the sending side, so we should use the third one
         (
@@ -908,9 +867,6 @@ class Buffer:
             async_finish,
             allocate_on_comm_stream,
         )
-        elapsed_time = time.time() - start_time
-        if self.rank == 0:
-            print(f"[intra-node combine] {x.shape[0]} tokens in {elapsed_time*1e6:.2f} us", flush=True)
         return recv_x, recv_topk_weights, EventOverlap(event)
 
     # noinspection PyTypeChecker
