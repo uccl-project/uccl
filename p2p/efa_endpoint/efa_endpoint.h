@@ -263,7 +263,8 @@ class EFAEndpoint {
                             uint16_t remote_port) {
     add_rank_oob_meta({{kRankIDPlaceHolder, std::make_shared<OOBMetaData>(
                                                 remote_ip, remote_port)}});
-    LOG(INFO) << "remote_gpuidx: " << remote_gpuidx << ", remote_ip: " << remote_ip
+    LOG(INFO) << "remote_gpuidx: " << remote_gpuidx
+              << ", remote_ip: " << remote_ip
               << ", remote_port: " << remote_port;
     int rank_id = build_connect(kRankIDPlaceHolder);  // sync mode (default)
     uccl::ConnID conn_id;
@@ -331,8 +332,7 @@ class EFAEndpoint {
                         struct uccl::Mhandle** mhandle) {
     return 0;
   }
-  inline int uccl_regmr(void* const data, size_t const len,
-                        MRArray& mr_array) {
+  inline int uccl_regmr(void* const data, size_t const len, MRArray& mr_array) {
     if (unlikely(!data)) {
       LOG(ERROR) << "Error: uccl_regmr called with null data";
       return -1;
@@ -357,7 +357,6 @@ class EFAEndpoint {
 
       // Store the MR in the mr_map using context_id as key
       mr_array.setKeyByContextID(context_id, mr);
-
     }
 
     return 0;
@@ -390,8 +389,7 @@ class EFAEndpoint {
                               uccl::ucclRequest* ureq) {
     return 0;
   }
-  inline void uccl_deregmr(
-      const MRArray& mr_array) {
+  inline void uccl_deregmr(MRArray const& mr_array) {
     for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
       ibv_mr* mr = mr_array.getKeyByContextID(ctx);
       if (likely(mr != nullptr)) {
@@ -409,7 +407,6 @@ class EFAEndpoint {
   void create_unified_p2p_socket() {}
 
  private:
-
   // Get context from channel_id
   inline std::shared_ptr<RdmaContext> getContextByChannelId(
       uint32_t channel_id) const {
@@ -418,7 +415,7 @@ class EFAEndpoint {
 
   void initializeContexts(std::vector<size_t> const& device_ids) {
     auto& device_manager = RdmaDeviceManager::instance();
-    assert(!device_ids.empty()&&device_ids.size() <= kNICContextNumber);
+    assert(!device_ids.empty() && device_ids.size() <= kNICContextNumber);
 
     for (int i = 0; i < kNICContextNumber; ++i) {
       size_t device_id = device_ids[i % device_ids.size()];
@@ -507,12 +504,12 @@ class EFAEndpoint {
     return response_meta.rank_id;
   }
 
-    std::shared_ptr<RecvChannelGroup> getOrCreateRecvGroup(uint64_t rank_id) {
+  std::shared_ptr<RecvChannelGroup> getOrCreateRecvGroup(uint64_t rank_id) {
     {
       std::shared_lock read_lock(recv_channel_mutex_);
       auto it = recv_channel_groups_.find(rank_id);
       if (it != recv_channel_groups_.end()) {
-        return it->second; 
+        return it->second;
       }
     }
 
@@ -590,12 +587,13 @@ class EFAEndpoint {
                             bool sync = true, int timeout_ms = 10000) {
     auto ctrl_mem =
         allocator_->allocate(kRingBufferSize, MemoryType::HOST, contexts_[0]);
-    auto control_channel =
-        std::make_shared<SendControlChannel>(contexts_[0], ctrl_mem, kControlChannelID);
+    auto control_channel = std::make_shared<SendControlChannel>(
+        contexts_[0], ctrl_mem, kControlChannelID);
     auto ctrl_info = std::make_shared<RemoteMemInfo>(ctrl_mem);
 
-    MetaInfoToExchange ctrl_meta(rank_id_, kControlChannelID, control_channel->get_local_meta(),
-                                 ctrl_info, ChannelType::Control, gpu_index_);
+    MetaInfoToExchange ctrl_meta(rank_id_, kControlChannelID,
+                                 control_channel->get_local_meta(), ctrl_info,
+                                 ChannelType::Control, gpu_index_);
 
     LOG(INFO) << "Control Meta: " << ctrl_meta
               << " Local Channel Meta: " << control_channel->get_local_meta()

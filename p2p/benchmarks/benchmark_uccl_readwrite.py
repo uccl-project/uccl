@@ -60,7 +60,7 @@ def _run_server(args, ep, remote_metadata):
             size_v.append(size_per_block)
         # Use advertisev to advertise all blocks at once
         ok, fifo_blob_v = ep.advertisev(conn_id, mr_id_v, ptr_v, size_v, args.num_iovs)
-        assert ok 
+        assert ok
         assert all(len(fifo_blob) == fifo_blob_size for fifo_blob in fifo_blob_v)
         # Send all fifo_blobs to peer
         for fifo_blob in fifo_blob_v:
@@ -137,9 +137,13 @@ def _run_client(args, ep, remote_metadata):
                 total += size_v[0]
             else:
                 if args.mode == "write":
-                    ep.writev(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
+                    ep.writev(
+                        conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs
+                    )
                 else:  # read
-                    ep.readv(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
+                    ep.readv(
+                        conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs
+                    )
                 total += sum(size_v)
         elapsed = time.perf_counter() - start
         print(
@@ -165,7 +169,7 @@ def main():
         "--mode",
         choices=["read", "write"],
         required=True,
-        help="Benchmark mode: read or write"
+        help="Benchmark mode: read or write",
     )
     p.add_argument("--local-gpu-idx", type=int, default=0)
     p.add_argument("--num-cpus", type=int, default=4)

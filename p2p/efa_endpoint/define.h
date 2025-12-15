@@ -64,15 +64,15 @@ inline size_t channelIdToContextId(uint32_t channel_id) {
 }
 
 inline int parseLogLevelFromEnv() {
-  const char* env = std::getenv("EFA_LOG_LEVEL");
+  char const* env = std::getenv("EFA_LOG_LEVEL");
   if (!env) {
     return google::WARNING;
   }
 
-  if (!strcasecmp(env, "INFO"))    return google::INFO;
+  if (!strcasecmp(env, "INFO")) return google::INFO;
   if (!strcasecmp(env, "WARNING")) return google::WARNING;
-  if (!strcasecmp(env, "ERROR"))   return google::ERROR;
-  if (!strcasecmp(env, "FATAL"))   return google::FATAL;
+  if (!strcasecmp(env, "ERROR")) return google::ERROR;
+  if (!strcasecmp(env, "FATAL")) return google::FATAL;
 
   char* end = nullptr;
   long val = std::strtol(env, &end, 10);
@@ -82,7 +82,6 @@ inline int parseLogLevelFromEnv() {
 
   return google::WARNING;
 }
-
 
 struct MessageChunk {
   uint64_t offset;  // Offset from the start of the message
@@ -217,10 +216,8 @@ inline void copyRKeyArrayFromMRArray(MRArray const& mr_array,
     rkey_array.setKeyByContextID(ctx, rkey);
   }
 }
-inline void copyRKeysFromMRArrayToBytes(
-    MRArray const& mr_array,
-    char* dst,
-    size_t dst_size) {
+inline void copyRKeysFromMRArrayToBytes(MRArray const& mr_array, char* dst,
+                                        size_t dst_size) {
   constexpr size_t needed = sizeof(uint32_t) * kNICContextNumber;
   assert(dst_size >= needed);
 

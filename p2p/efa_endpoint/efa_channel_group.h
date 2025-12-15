@@ -284,13 +284,12 @@ class SendChannelGroup : public ChannelGroup {
       // Create RegMemBlock for this chunk
       auto chunk_local_mem = std::make_shared<RegMemBlock>(
           static_cast<char*>(req->local_mem->addr) + chunk.offset, chunk.size,
-          req->local_mem->mr_array,req->local_mem->type);
+          req->local_mem->mr_array, req->local_mem->type);
 
       // Create RemoteMemInfo for this chunk
       auto chunk_remote_mem = std::make_shared<RemoteMemInfo>(
-          req->remote_mem->addr + chunk.offset,
-          chunk.size, req->remote_mem->rkey_array,
-          req->remote_mem->type);
+          req->remote_mem->addr + chunk.offset, chunk.size,
+          req->remote_mem->rkey_array, req->remote_mem->type);
 
       // Create send request for this chunk
       // Only the last chunk needs signaled for completion notification
@@ -306,7 +305,7 @@ class SendChannelGroup : public ChannelGroup {
         LOG(INFO) << "SendChannelGroup: Sent chunk " << i << "/"
                   << chunks.size() << " (offset: " << chunk.offset
                   << ", size: " << chunk.size
-                  << ", channel_id: " << chunk_channel_id << ")"<<std::endl;
+                  << ", channel_id: " << chunk_channel_id << ")" << std::endl;
       } else {
         LOG(WARNING) << "SendChannelGroup: Failed to send chunk " << i
                      << " (offset: " << chunk.offset << ", size: " << chunk.size
@@ -377,7 +376,7 @@ class SendChannelGroup : public ChannelGroup {
       pollDataChannels();
 
       LOG_EVERY_N_ENDPOINT(INFO, 100000000)
-         << "SendChannelGroup::pollingLoop - Still running";
+          << "SendChannelGroup::pollingLoop - Still running";
     }
     LOG(INFO) << "SendChannelGroup::pollingLoop - Stopped";
   }
@@ -447,7 +446,7 @@ class RecvChannelGroup : public ChannelGroup {
   int64_t recv(std::shared_ptr<EFARecvRequest> req) {
     if (unlikely(!setupRecvRequestChannelAndMemoryRegion(req))) {
       LOG(WARNING)
-         << "RecvChannelGroup: Failed to setup recv request with round robin";
+          << "RecvChannelGroup: Failed to setup recv request with round robin";
       return -1;
     }
     return ctrl_channel_->postSendReq(req);
@@ -463,7 +462,7 @@ class RecvChannelGroup : public ChannelGroup {
     for (int i = 1; i < kQpNumPerChannel + 1; ++i) {
       if (!collectRkeyForChannel(i, mr_map, rkeys[i])) {
         LOG(WARNING) << "RecvChannelGroup: Failed to collect rkey for channel "
-                    << i;
+                     << i;
         return false;
       }
     }
@@ -545,7 +544,6 @@ class RecvChannelGroup : public ChannelGroup {
     rkey = it->second->rkey;
     return true;
   }
-
 
   // Round-robin channel selection and MR setup
   bool setupRecvRequestChannelAndMemoryRegion(

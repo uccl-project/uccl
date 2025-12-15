@@ -132,7 +132,6 @@ class RingBuffer {
     return current_read;
   }
 
-
   // Modify element at given index using a modifier function
   // Returns true if modification was successful, false if index is out of range
   template <typename ModifyFunc>

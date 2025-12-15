@@ -91,7 +91,6 @@ class SendControlChannel : public EFAChannel {
 
 class RecvControlChannel : public EFAChannel {
  public:
-
   explicit RecvControlChannel(std::shared_ptr<RdmaContext> ctx,
                               std::shared_ptr<RegMemBlock> mem_block,
                               uint32_t channel_id = 0)
@@ -138,26 +137,26 @@ class RecvControlChannel : public EFAChannel {
 
     LOG(INFO) << "postSendReq - Successfully pushed to ring buffer at index: "
               << index;
-    if(!remote_mem_ptr_){
-      remote_mem_ptr_ =
-          std::make_shared<RemoteMemInfo>(
-              empty_rb_->getElementAddress(index), 
-              empty_rb_->sizeInBytes(), remote_info_->rkey_array, MemoryType::HOST);
-    } else{
+    if (!remote_mem_ptr_) {
+      remote_mem_ptr_ = std::make_shared<RemoteMemInfo>(
+          empty_rb_->getElementAddress(index), empty_rb_->sizeInBytes(),
+          remote_info_->rkey_array, MemoryType::HOST);
+    } else {
       remote_mem_ptr_->addr = empty_rb_->getElementAddress(index);
       remote_mem_ptr_->length = empty_rb_->sizeInBytes();
     }
-    if(!local_mem_ptr_){
+    if (!local_mem_ptr_) {
       local_mem_ptr_ = std::make_shared<RegMemBlock>(
-        reinterpret_cast<void*>(rb_->getElementAddress(index)),
-        rb_->elementSize(), local_info_->mr_array, MemoryType::HOST);
-    } else{
-      local_mem_ptr_->addr = reinterpret_cast<void*>(rb_->getElementAddress(index));
+          reinterpret_cast<void*>(rb_->getElementAddress(index)),
+          rb_->elementSize(), local_info_->mr_array, MemoryType::HOST);
+    } else {
+      local_mem_ptr_->addr =
+          reinterpret_cast<void*>(rb_->getElementAddress(index));
       local_mem_ptr_->size = rb_->elementSize();
     }
 
-    std::shared_ptr<EFASendRequest> send_ptr =
-        std::make_shared<EFASendRequest>(local_mem_ptr_, remote_mem_ptr_, index);
+    std::shared_ptr<EFASendRequest> send_ptr = std::make_shared<EFASendRequest>(
+        local_mem_ptr_, remote_mem_ptr_, index);
     send_ptr->channel_id = kControlChannelID;
     EFAChannel::send(send_ptr);
     return index;

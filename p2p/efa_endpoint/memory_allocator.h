@@ -56,7 +56,7 @@ class MemoryAllocator {
         deallocateRaw(addr, type);
         throw std::runtime_error("Failed to register memory with RDMA");
       }
-      block->setMRByContextID(ctx->getContextID(),mr);
+      block->setMRByContextID(ctx->getContextID(), mr);
     }
 
     return std::shared_ptr<RegMemBlock>(block, deleter);

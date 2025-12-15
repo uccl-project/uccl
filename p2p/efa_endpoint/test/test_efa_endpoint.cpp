@@ -24,17 +24,29 @@ DEFINE_uint64(buffer_size, 1024 * 1024, "Buffer size in bytes");
 
 // Example usage:
 // Correctness test (100 iterations with verification):
-// ./test_efa_endpoint --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1 --remote_ip=172.31.47.234 --remote_port=19997 --test_mode=correctness --buffer_size=104857600
-// ./test_efa_endpoint --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0 --remote_ip=172.31.36.62 --remote_port=19997 --test_mode=correctness --buffer_size=104857600
+// ./test_efa_endpoint --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1
+// --remote_ip=172.31.47.234 --remote_port=19997 --test_mode=correctness
+// --buffer_size=104857600
+// ./test_efa_endpoint --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0
+// --remote_ip=172.31.36.62 --remote_port=19997 --test_mode=correctness
+// --buffer_size=104857600
 //
 //
 // Unidirectional test (rank 0 sends, rank 1 receives):
-// ./test_efa_endpoint --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1 --remote_ip=172.31.47.234 --remote_port=19997 --test_mode=unidirectional --iterations=100 --buffer_size=104857600
-// ./test_efa_endpoint --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0 --remote_ip=172.31.36.62 --remote_port=19997 --test_mode=unidirectional --iterations=100 --buffer_size=104857600
+// ./test_efa_endpoint --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1
+// --remote_ip=172.31.47.234 --remote_port=19997 --test_mode=unidirectional
+// --iterations=100 --buffer_size=104857600
+// ./test_efa_endpoint --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0
+// --remote_ip=172.31.36.62 --remote_port=19997 --test_mode=unidirectional
+// --iterations=100 --buffer_size=104857600
 
 // Bandwidth test (bidirectional):
-// ./test_efa_endpoint --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1 --remote_ip=172.31.47.234 --remote_port=19997 --test_mode=bandwidth --iterations=100 --buffer_size=104857600
-// ./test_efa_endpoint --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0 --remote_ip=172.31.36.62 --remote_port=19997 --test_mode=bandwidth --iterations=100 --buffer_size=104857600
+// ./test_efa_endpoint --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1
+// --remote_ip=172.31.47.234 --remote_port=19997 --test_mode=bandwidth
+// --iterations=100 --buffer_size=104857600
+// ./test_efa_endpoint --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0
+// --remote_ip=172.31.36.62 --remote_port=19997 --test_mode=bandwidth
+// --iterations=100 --buffer_size=104857600
 
 // Correctness test: perform 100 send/recv operations and verify results
 void correctness_test(EFAEndpoint& endpoint, MemoryAllocator& allocator) {
@@ -166,7 +178,6 @@ void correctness_test(EFAEndpoint& endpoint, MemoryAllocator& allocator) {
     }
   }
 
-
   if (!endpoint.deregMem(send_mem)) {
     throw std::runtime_error("Failed to deregMem send_mem");
   }
@@ -282,7 +293,6 @@ void unidirectional_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
     // for (int64_t recv_index : recv_indices) {
     //   endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
     // }
-    
   }
 
   auto end_time = std::chrono::high_resolution_clock::now();
@@ -381,8 +391,8 @@ void bandwidth_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
 
     int64_t send_wr_id = endpoint.send(FLAGS_remote_rank, send_req);
     send_infos.push_back({send_req->channel_id, send_wr_id});
-    endpoint.checkSendComplete(FLAGS_remote_rank,send_wr_id);
-    endpoint.checkRecvComplete(FLAGS_remote_rank,recv_index);
+    endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
+    endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
     // if ((i + 1) % 100 == 0) {
     //   std::cout << "Completed " << (i + 1) << " iterations\n";
     // }
@@ -534,17 +544,18 @@ int main(int argc, char* argv[]) {
 
     // Connect to remote rank
     std::cout << "Connecting to remote rank " << FLAGS_remote_rank << "...\n";
-    // int connect_result = endpoint.build_connect(FLAGS_remote_rank);  // sync mode (default)
-    // // int connect_result = endpoint.build_connect(FLAGS_remote_rank, false);  // async mode
-    // endpoint.connect_check(FLAGS_remote_rank);
+    // int connect_result = endpoint.build_connect(FLAGS_remote_rank);  // sync
+    // mode (default)
+    // // int connect_result = endpoint.build_connect(FLAGS_remote_rank, false);
+    // // async mode endpoint.connect_check(FLAGS_remote_rank);
     std::string remote_ip;
     int remote_dev;
     int remote_gpuidx;
     // if(FLAGS_rank_id==0){
-      endpoint.uccl_connect(0, 0, 0, 0, FLAGS_remote_ip, FLAGS_remote_port);
+    endpoint.uccl_connect(0, 0, 0, 0, FLAGS_remote_ip, FLAGS_remote_port);
     // }
     // else{
-      endpoint.uccl_accept(0, 0, 0, remote_ip, &remote_dev, &remote_gpuidx);
+    endpoint.uccl_accept(0, 0, 0, remote_ip, &remote_dev, &remote_gpuidx);
     // }
     // if (connect_result>=0) {
     //   std::cout << "Successfully connected to remote rank " <<

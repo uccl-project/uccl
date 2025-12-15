@@ -32,9 +32,8 @@ inline void delete_ep(RDMAEndPoint const& s) {
 
 #ifdef UCCL_ENABLE_EFA
 inline int set_request(std::shared_ptr<EFAEndpoint> const& obj, Conn* conn,
-                       unifiedp2p::P2PMhandle* local_mh, void* src,
-                       size_t size, FifoItem const& slot_item,
-                       uccl::ucclRequest* ureq) {
+                       unifiedp2p::P2PMhandle* local_mh, void* src, size_t size,
+                       FifoItem const& slot_item, uccl::ucclRequest* ureq) {
   // Create RemoteMemInfo from FifoItem
   auto remote_mem = std::make_shared<RemoteMemInfo>();
   remote_mem->addr = slot_item.addr;
@@ -306,10 +305,11 @@ inline int prepare_fifo_metadata(RDMAEndPoint const& s, Conn* conn,
           remote_mem_info.addr = reinterpret_cast<uint64_t>(data);
           remote_mem_info.size = size;
 
-          copyRKeysFromMRArrayToBytes(mhandle->mr_array, static_cast<char *>(remote_mem_info.padding), sizeof(remote_mem_info.padding));
-          auto* rkeys1 =
-          const_cast<RKeyArray*>(
-                reinterpret_cast<const RKeyArray*>(remote_mem_info.padding));
+          copyRKeysFromMRArrayToBytes(
+              mhandle->mr_array, static_cast<char*>(remote_mem_info.padding),
+              sizeof(remote_mem_info.padding));
+          auto* rkeys1 = const_cast<RKeyArray*>(
+              reinterpret_cast<const RKeyArray*>(remote_mem_info.padding));
           uccl::serialize_fifo_item(remote_mem_info, out_buf);
           return 0;
         }

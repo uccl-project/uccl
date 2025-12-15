@@ -8,8 +8,7 @@ struct InsidePythonGuard {
   InsidePythonGuard() { inside_python = true; }
   ~InsidePythonGuard() { inside_python = false; }
 };
-inline auto& deserialize_fifo_item =
-    uccl::deserialize_fifo_item;
+inline auto& deserialize_fifo_item = uccl::deserialize_fifo_item;
 
 PYBIND11_MODULE(p2p, m) {
   m.doc() = "P2P Engine - High-performance RDMA-based peer-to-peer transport";
@@ -458,8 +457,7 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
              uint64_t ptr,  // raw pointer passed from Python
              size_t size) {
-            char serialized[sizeof(
-                FifoItem)]{};  // 64-byte scratch buffer
+            char serialized[sizeof(FifoItem)]{};  // 64-byte scratch buffer
             bool ok;
             {
               py::gil_scoped_release release;
@@ -469,8 +467,7 @@ PYBIND11_MODULE(p2p, m) {
             }
             /* return (success, bytes) — empty bytes when failed */
             return py::make_tuple(
-                ok, ok ? py::bytes(serialized, sizeof(FifoItem))
-                       : py::bytes());
+                ok, ok ? py::bytes(serialized, sizeof(FifoItem)) : py::bytes());
           },
           "Expose a registered buffer for the peer to RDMA-READ or RDMA-WRITE",
           py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"))
