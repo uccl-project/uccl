@@ -179,29 +179,30 @@ class AtomicsImm {
 
 class WriteImm {
  public:
-  // Bit positions
-  static constexpr int kRANK = 0;         // 10 bits
-  static constexpr int kNUM_TOKENS = 10;  // 6 bits
-  static constexpr int kEXPERT_IDX = 16;  // 12 bits
-  static constexpr int kBUFFER_IDX = 28;  // 1 bit
-  static constexpr int kIS_COMBINE = 29;  // 1 bit
+  // Bit positions (adjusted for 128 tokens, 512 experts max)
+  static constexpr int kRANK = 0;         // 10 bits (0-1023 ranks)
+  static constexpr int kNUM_TOKENS = 10;  // 8 bits (0-255 tokens)
+  static constexpr int kEXPERT_IDX = 18;  // 9 bits (0-511 experts)
+  static constexpr int kBUFFER_IDX = 27;  // 1 bit
+  static constexpr int kIS_COMBINE = 28;  // 1 bit
+  // bits 29-31 unused (can use for future expansion)
 
   // Masks
   static constexpr uint32_t kRANK_MASK = 0x3FF;    // 10 bits
-  static constexpr uint32_t kTOKENS_MASK = 0x03F;  // 6 bits
-  static constexpr uint32_t kEXPERT_MASK = 0xFFF;  // 12 bits
+  static constexpr uint32_t kTOKENS_MASK = 0xFF;   // 8 bits
+  static constexpr uint32_t kEXPERT_MASK = 0x1FF;  // 9 bits
 
   explicit WriteImm(uint32_t imm_data = 0) : imm_data_(imm_data) {}
 
   static WriteImm Pack(bool is_combine,
                        uint32_t buffer_idx,  // 0/1
-                       uint32_t expert_idx,  // 0..4095 (12 bits)
-                       uint32_t num_tokens,  // 0..63   (6 bits)
+                       uint32_t expert_idx,  // 0..511 (9 bits)
+                       uint32_t num_tokens,  // 0..255 (8 bits)
                        uint32_t my_rank) {   // 0..1023 (10 bits)
     constexpr uint32_t kIS_COMBINE_MASK = 0x1u;
     constexpr uint32_t kBUFFER_IDX_MASK = 0x1u;
-    constexpr uint32_t kEXPERT_MASK = 0xFFFu;  // 12 bits
-    constexpr uint32_t kTOKENS_MASK = 0x3Fu;   // 6 bits
+    constexpr uint32_t kEXPERT_MASK = 0x1FFu;  // 9 bits
+    constexpr uint32_t kTOKENS_MASK = 0xFFu;   // 8 bits
     constexpr uint32_t kRANK_MASK = 0x3FFu;    // 10 bits
 
     // Runtime validation
@@ -209,9 +210,23 @@ class WriteImm {
            "is_combine overflow (1 bit)");
     assert((buffer_idx & ~kBUFFER_IDX_MASK) == 0 &&
            "buffer_idx overflow (1 bit)");
-    assert((expert_idx & ~kEXPERT_MASK) == 0 &&
-           "expert_idx overflow (12 bits)");
-    assert((num_tokens & ~kTOKENS_MASK) == 0 && "num_tokens overflow (6 bits)");
+    if ((expert_idx & ~kEXPERT_MASK) != 0) {
+      fprintf(stderr,
+              "[RDMA ERROR] expert_idx=%u exceeds 9-bit limit (max 511)\n",
+              expert_idx);
+    }
+    assert((expert_idx & ~kEXPERT_MASK) == 0 && "expert_idx overflow (9 bits)");
+    if ((num_tokens & ~kTOKENS_MASK) != 0) {
+      fprintf(stderr,
+              "[RDMA ERROR] num_tokens=%u exceeds 8-bit limit (max 255)\n",
+              num_tokens);
+    }
+    assert((num_tokens & ~kTOKENS_MASK) == 0 && "num_tokens overflow (8 bits)");
+    if ((my_rank & ~kRANK_MASK) != 0) {
+      fprintf(stderr,
+              "[RDMA ERROR] my_rank=%u exceeds 10-bit limit (max 1023)\n",
+              my_rank);
+    }
     assert((my_rank & ~kRANK_MASK) == 0 && "my_rank overflow (10 bits)");
 
     uint32_t imm = ((is_combine & 0x1u) << kIS_COMBINE) |
