@@ -117,11 +117,10 @@ class EFAChannel {
         CQMeta cq_data{};
         cq_data.wr_id = wr_id;
         cq_data.op_code = ibv_wc_read_opcode(cq_ex_);
-        cq_data.len =
-            ibv_wc_read_byte_len(cq_ex_); 
+        cq_data.len = ibv_wc_read_byte_len(cq_ex_);
 
         if (cq_data.op_code == IBV_WC_RECV_RDMA_WITH_IMM) {
-          cq_data.imm = ibv_wc_read_imm_data(cq_ex_); 
+          cq_data.imm = ibv_wc_read_imm_data(cq_ex_);
         } else {
           cq_data.imm = 0;
         }

@@ -102,7 +102,10 @@ class ChannelGroup {
 
 class SendChannelGroup : public ChannelGroup {
  public:
-  SendChannelGroup() : running_(false), poll_thread_(nullptr) {
+  SendChannelGroup(bool auto_start_polling = true)
+      : running_(false),
+        poll_thread_(nullptr),
+        auto_start_polling_(auto_start_polling) {
     tracker_ = std::make_shared<AtomicBitmapPacketTrackerMultiAck>();
     request_queue_ = std::make_unique<
         RingBuffer<std::shared_ptr<EFASendRequest>, kRingCapacity>>();
@@ -145,7 +148,9 @@ class SendChannelGroup : public ChannelGroup {
     }
     ctrl_channel_ = std::forward<T>(ctrl_channel);
     lock.unlock();
-    startPolling();
+    if (auto_start_polling_) {
+      startPolling();
+    }
   }
 
   int64_t send(std::shared_ptr<EFASendRequest> req) {
@@ -226,6 +231,30 @@ class SendChannelGroup : public ChannelGroup {
     }
   }
 
+  void pollingLoopForMeta() {
+    pollControlChannel();
+    pollDataChannels();
+    LOG_EVERY_N_ENDPOINT(INFO, 100000000)
+        << "SendChannelGroup::pollingLoop - Still running";
+  }
+  int processSendRequests(std::shared_ptr<EFASendRequest> req) {
+    pollControlChannel();
+    if (unlikely(ctrl_channel_ == nullptr)) {
+      return -1;
+    }
+    SendReqMeta meta;
+    std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
+    int index = ctrl_channel_->getOneSendRequestMeta(meta);
+    if (index < 0) {
+      return -1;
+    }
+    int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
+    req->wr_id = wr_id;
+    LOG(INFO) << "SendChannelGroup: Processing send request meta: " << meta;
+    processOnceSendRequests(req, meta, index);
+    return wr_id;
+  }
+
  private:
   std::shared_ptr<SendControlChannel> ctrl_channel_;
   mutable std::shared_mutex ctrl_channel_mutex_;
@@ -234,6 +263,7 @@ class SendChannelGroup : public ChannelGroup {
   std::unique_ptr<RingBuffer<std::shared_ptr<EFASendRequest>, kRingCapacity>>
       request_queue_;
   std::shared_ptr<AtomicBitmapPacketTrackerMultiAck> tracker_;
+  bool auto_start_polling_;
 
   // Send a request through the appropriate channel
   // Returns true on success, false on failure
@@ -339,17 +369,20 @@ class SendChannelGroup : public ChannelGroup {
       }
       index = ctrl_channel_->getOneSendRequestMeta(meta);
       LOG(INFO) << "SendChannelGroup: Processing send request meta: " << meta;
-      req->imm_data = index;
-      // Process send request with chunking if needed
-      req->channel_id = meta.channel_id;
-      req->remote_mem = std::make_shared<RemoteMemInfo>(meta.remote_mem);
-
-      if (meta.expected_chunk_count > 1) {
-        postChunkedRequest(req);
-      } else {
-        postRequestOnChannel(req);
-      }
+      processOnceSendRequests(req, meta, index);
       has_meta = ctrl_channel_->hasSendRequest();
+    }
+  }
+
+  inline void processOnceSendRequests(std::shared_ptr<EFASendRequest> req,
+                                      SendReqMeta& meta, int index) {
+    req->imm_data = index;
+    req->channel_id = meta.channel_id;
+    req->remote_mem = std::make_shared<RemoteMemInfo>(meta.remote_mem);
+    if (meta.expected_chunk_count > 1) {
+      postChunkedRequest(req);
+    } else {
+      postRequestOnChannel(req);
     }
   }
 
@@ -384,7 +417,10 @@ class SendChannelGroup : public ChannelGroup {
 
 class RecvChannelGroup : public ChannelGroup {
  public:
-  RecvChannelGroup() : running_(false), poll_thread_(nullptr) {}
+  RecvChannelGroup(bool auto_start_polling = true)
+      : running_(false),
+        poll_thread_(nullptr),
+        auto_start_polling_(auto_start_polling) {}
 
   ~RecvChannelGroup() { stopPolling(); }
 
@@ -419,7 +455,9 @@ class RecvChannelGroup : public ChannelGroup {
           "RecvChannelGroup: Control channel has already been set");
     }
     ctrl_channel_ = std::forward<T>(ctrl_channel);
-    startPolling();
+    if (auto_start_polling_) {
+      startPolling();
+    }
   }
 
   // Start polling thread
@@ -453,27 +491,6 @@ class RecvChannelGroup : public ChannelGroup {
   }
 
   bool check(uint64_t index) { return ctrl_channel_->check_done(index); }
-
-  // Collect rkeys from all channels
-  // Returns: true on success, false on failure
-  bool collectAllRkeys(
-      std::unordered_map<int64_t, struct ibv_mr*> const& mr_map,
-      uint32_t rkeys[]) {
-    for (int i = 1; i < kQpNumPerChannel + 1; ++i) {
-      if (!collectRkeyForChannel(i, mr_map, rkeys[i])) {
-        LOG(WARNING) << "RecvChannelGroup: Failed to collect rkey for channel "
-                     << i;
-        return false;
-      }
-    }
-    return true;
-  }
-
- private:
-  std::shared_ptr<RecvControlChannel> ctrl_channel_;
-  std::atomic<bool> running_;
-  std::unique_ptr<std::thread> poll_thread_;
-
   void pollAndProcessCompletions() {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     if (ctrl_channel_) {
@@ -508,18 +525,21 @@ class RecvChannelGroup : public ChannelGroup {
         << "RecvChannelGroup::pollingLoop - Still running, channels: "
         << channels_.size();
   }
-
   void pollingLoop() {
     LOG(INFO) << "RecvChannelGroup::pollingLoop - Started";
-    uccl::pin_thread_to_numa(0);
     while (running_.load(std::memory_order_acquire)) {
       pollAndProcessCompletions();
-
       // optional small sleep/yield to avoid busy-looping if desired:
       // std::this_thread::yield();
     }
     LOG(INFO) << "RecvChannelGroup::pollingLoop - Stopped";
   }
+
+ private:
+  std::shared_ptr<RecvControlChannel> ctrl_channel_;
+  std::atomic<bool> running_;
+  std::unique_ptr<std::thread> poll_thread_;
+  bool auto_start_polling_;
 
   // Collect rkey for a specific channel
   // Returns: true on success, false on failure

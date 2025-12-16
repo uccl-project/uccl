@@ -155,7 +155,11 @@ inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
           auto send_req = std::make_shared<EFASendRequest>(
               send_mem, remote_mem_placeholder);
           ureq->type = uccl::ReqType::ReqTx;
-          ureq->engine_idx = obj->send(conn->uccl_conn_id_.flow_id, send_req);
+          send_req->to_rank_id = conn->uccl_conn_id_.flow_id;
+          ureq->engine_idx = obj->sendWithoutInnerQueue(send_req);
+          while (ureq->engine_idx < 0) {
+            ureq->engine_idx = obj->sendWithoutInnerQueue(send_req);
+          }
           // std::cout<<"send_req::::::"<<send_req->wr_id<<std::endl;
           ureq->n = conn->uccl_conn_id_.flow_id;
           return ureq->engine_idx;
@@ -216,8 +220,10 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
           if (ureq->type == uccl::ReqType::ReqTx ||
               ureq->type == uccl::ReqType::ReqWrite ||
               ureq->type == uccl::ReqType::ReqRead) {
+            obj->sendRoutine();
             return obj->checkSendComplete_once(ureq->n, ureq->engine_idx);
           } else if (ureq->type == uccl::ReqType::ReqRx) {
+            obj->recvRoutine();
             return obj->checkRecvComplete_once(ureq->n, ureq->engine_idx);
           }
         }

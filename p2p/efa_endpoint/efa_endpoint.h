@@ -14,8 +14,11 @@ class EFAEndpoint {
  public:
   explicit EFAEndpoint(
       int gpu_index, uint64_t rank_id, uint64_t port = 0,
+      bool auto_start_polling = true,
       std::vector<size_t> const& device_ids = std::vector<size_t>())
-      : gpu_index_(gpu_index), rank_id_(rank_id) {
+      : gpu_index_(gpu_index),
+        rank_id_(rank_id),
+        auto_start_polling_(auto_start_polling) {
     uccl::pin_thread_to_numa(0);
     std::vector<size_t> actual_device_ids;
     if (device_ids.size() == 0) {
@@ -361,34 +364,6 @@ class EFAEndpoint {
 
     return 0;
   }
-
-  inline int uccl_send_async(uccl::UcclFlow* flow,
-                             struct uccl::Mhandle* mhandle, void const* data,
-                             size_t const size,
-                             struct uccl::ucclRequest* ureq) {
-    return 0;
-  }
-
-  inline int uccl_recv_async(uccl::UcclFlow* flow,
-                             struct uccl::Mhandle** mhandles, void** data,
-                             int* size, int n, struct uccl::ucclRequest* ureq) {
-    return 0;
-  }
-  inline bool uccl_poll_ureq_once(struct uccl::ucclRequest* ureq) {
-    return false;
-  }
-  inline int uccl_read_async(uccl::UcclFlow* flow,
-                             struct uccl::Mhandle* local_mh, void* dst,
-                             size_t size, uccl::FifoItem const& slot_item,
-                             uccl::ucclRequest* ureq) {
-    return 0;
-  }
-  inline int uccl_write_async(uccl::UcclFlow* flow,
-                              struct uccl::Mhandle* local_mh, void* src,
-                              size_t size, uccl::FifoItem const& slot_item,
-                              uccl::ucclRequest* ureq) {
-    return 0;
-  }
   inline void uccl_deregmr(MRArray const& mr_array) {
     for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
       ibv_mr* mr = mr_array.getKeyByContextID(ctx);
@@ -405,6 +380,61 @@ class EFAEndpoint {
   }
 
   void create_unified_p2p_socket() {}
+
+  // Manual polling routine for recv channels when auto_start_polling_ is false
+  void recvRoutine() {
+    if (auto_start_polling_) {
+      return;  // Do nothing if auto polling is enabled
+    }
+    std::shared_lock<std::shared_mutex> lock(recv_channel_mutex_);
+    for (auto& [rank_id, recv_group] : recv_channel_groups_) {
+      if (recv_group) {
+        recv_group->pollAndProcessCompletions();
+      }
+    }
+  }
+
+  void sendRoutine() {
+    if (auto_start_polling_) {
+      return;  // Do nothing if auto polling is enabled
+    }
+    std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
+    for (auto& [rank_id, send_group] : send_channel_groups_) {
+      if (send_group) {
+        send_group->pollingLoopForMeta();
+      }
+    }
+  }
+  // Manual polling routine for send channels when auto_start_polling_ is false
+  int sendWithoutInnerQueue(std::shared_ptr<EFASendRequest> req) {
+    if (auto_start_polling_) {
+      return -1;  // Do nothing if auto polling is enabled
+    }
+    if (!req) {
+      LOG(WARNING) << "EFAEndpoint::sendRoutine - null request";
+      return -1;
+    }
+
+    uint64_t rank_id = req->to_rank_id;
+    std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
+    auto it = send_channel_groups_.find(rank_id);
+    if (it == send_channel_groups_.end()) {
+      LOG(WARNING) << "EFAEndpoint::sendRoutine - Send channel group not found "
+                      "for rank_id: "
+                   << rank_id;
+      return -1;
+    }
+
+    auto send_group = it->second;
+    if (!send_group) {
+      LOG(WARNING) << "EFAEndpoint::sendRoutine - Send channel group is null "
+                      "for rank_id: "
+                   << rank_id;
+      return -1;
+    }
+
+    return send_group->processSendRequests(req);
+  }
 
  private:
   // Get context from channel_id
@@ -517,8 +547,9 @@ class EFAEndpoint {
       std::unique_lock write_lock(recv_channel_mutex_);
       auto [it, inserted] = recv_channel_groups_.try_emplace(
           rank_id,
-          std::make_shared<RecvChannelGroup>());  // try_emplace constructs only
-                                                  // if inserting
+          std::make_shared<RecvChannelGroup>(
+              auto_start_polling_));  // try_emplace constructs only
+                                      // if inserting
       return it->second;
     }
   }
@@ -527,6 +558,13 @@ class EFAEndpoint {
                          std::shared_ptr<EFAChannel> new_channel) {
     std::shared_ptr<RecvChannelGroup> group_ptr = getOrCreateRecvGroup(rank_id);
     group_ptr->addChannel(channel_id, new_channel);
+  }
+
+  void setRecvControlChannel(
+      uint64_t rank_id, std::shared_ptr<RecvControlChannel>&& ctrl_channel) {
+    auto it = getOrCreateRecvGroup(rank_id);
+    recv_channel_groups_[rank_id]->setControlChannel(
+        std::forward<std::shared_ptr<RecvControlChannel>>(ctrl_channel));
   }
 
   std::shared_ptr<SendChannelGroup> getOrCreateSendGroup(uint64_t rank_id) {
@@ -538,7 +576,7 @@ class EFAEndpoint {
     {
       std::unique_lock write_lock(send_channel_mutex_);
       auto [it, inserted] = send_channel_groups_.try_emplace(
-          rank_id, std::make_shared<SendChannelGroup>());
+          rank_id, std::make_shared<SendChannelGroup>(auto_start_polling_));
       return it->second;
     }
   }
@@ -551,24 +589,9 @@ class EFAEndpoint {
 
   void setSendControlChannel(
       uint64_t rank_id, std::shared_ptr<SendControlChannel>&& ctrl_channel) {
-    std::unique_lock write_lock(send_channel_mutex_);
-    auto it = send_channel_groups_.find(rank_id);
-    if (it == send_channel_groups_.end()) {
-      send_channel_groups_[rank_id] = std::make_shared<SendChannelGroup>();
-    }
+    auto it = getOrCreateSendGroup(rank_id);
     send_channel_groups_[rank_id]->setControlChannel(
         std::forward<std::shared_ptr<SendControlChannel>>(ctrl_channel));
-  }
-
-  void setRecvControlChannel(
-      uint64_t rank_id, std::shared_ptr<RecvControlChannel>&& ctrl_channel) {
-    std::unique_lock write_lock(recv_channel_mutex_);
-    auto it = recv_channel_groups_.find(rank_id);
-    if (it == recv_channel_groups_.end()) {
-      recv_channel_groups_[rank_id] = std::make_shared<RecvChannelGroup>();
-    }
-    recv_channel_groups_[rank_id]->setControlChannel(
-        std::forward<std::shared_ptr<RecvControlChannel>>(ctrl_channel));
   }
 
   std::string const build_oob_connect(uint64_t rank_id) {
@@ -716,4 +739,5 @@ class EFAEndpoint {
   std::shared_ptr<MemoryAllocator> allocator_;
   mutable std::shared_mutex accepted_meta_mutex_;
   std::unordered_map<uint64_t, AcceptedMeta> accepted_meta_;
+  bool auto_start_polling_;
 };

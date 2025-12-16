@@ -67,7 +67,8 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus,
 
   // Initialize the RDMA endpoint with lazy creation.
 #ifdef UCCL_ENABLE_EFA
-  ep_ = std::shared_ptr<EFAEndpoint>(new EFAEndpoint(local_gpu_idx_, rank_id));
+  ep_ = std::shared_ptr<EFAEndpoint>(
+      new EFAEndpoint(local_gpu_idx_, rank_id, 0, false));
   numa_node_ = 0;
 #else
   ep_ = new uccl::RDMAEndpoint(num_cpus_);
