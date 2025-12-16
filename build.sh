@@ -179,16 +179,15 @@ build_eccl() {
 
   cd eccl
   if [[ "$TARGET" == cuda* ]]; then
-    echo "Skipping eccl build on Cuda."
-    return
+    make clean -f Makefile && make -j$(nproc) -f Makefile
   elif [[ "$TARGET" == rocm* ]]; then
     make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm
   fi
   cd ..
 
   echo "[container] Copying eccl .so to uccl/"
-  # mkdir -p uccl/lib
-  # cp eccl/eccl.*.so uccl/
+  mkdir -p uccl/lib # mkdir anyway
+  cp eccl/*eccl*.so uccl/lib
 }
 
 # Determine the Docker image to use based on the target and architecture

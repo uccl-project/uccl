@@ -35,14 +35,15 @@ void cqpoller_client_thread(std::shared_ptr<Communicator> comm, int peer_rank) {
             << std::hex << remote_mr.address << " len=" << std::dec
             << remote_mr.length << "\n";
 
-  bool ok = comm->isend(peer_rank, d_data, 0, size, mr.id, remote_mr.id, true);
-  if (!ok) {
+  unsigned rid =
+      comm->isend(peer_rank, d_data, 0, size, mr.id, remote_mr.id, true);
+  if (rid == 0) {
     std::cerr << "[CLIENT] isend failed\n";
   } else {
     std::cout << "[CLIENT] isend posted\n";
   }
 
-  comm->wait_finish();
+  comm->wait_finish(rid);
   std::cout << "[CLIENT] send completed\n";
 
   GPU_RT_CHECK(gpuFree(d_data));
@@ -66,8 +67,8 @@ void cqpoller_server_thread(std::shared_ptr<Communicator> comm, int peer_rank) {
   auto mr = comm->reg_mr(d_data, size);
   comm->notify_mr(peer_rank, mr);
   sleep(1);  // test recv ceq before post irecv
-  bool ok = comm->irecv(peer_rank, d_data, 0, size, true);
-  if (!ok) {
+  unsigned rid = comm->irecv(peer_rank, d_data, 0, size, true);
+  if (rid == 0) {
     std::cerr << "[SERVER] irecv failed\n";
     GPU_RT_CHECK(gpuFree(d_data));
     return;
@@ -75,7 +76,7 @@ void cqpoller_server_thread(std::shared_ptr<Communicator> comm, int peer_rank) {
     std::cout << "[SERVER] irecv posted\n";
   }
 
-  comm->wait_finish();
+  comm->wait_finish(rid);
 
   // Copy and check data
   std::vector<float> h_recv(count);
