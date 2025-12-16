@@ -19,3 +19,5 @@ void Request::on_comm_done(bool done) {
 void Request::on_compute_done() {
   { finished.store(true, std::memory_order_release); }
 }
+
+void Request::start_compute() { on_comm_done(true); }
