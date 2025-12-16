@@ -31,35 +31,35 @@ struct SharedData {
   uint32_t barrier[MAX_NUM_BARRIERS];
 };
 
-__shared__ SharedData shared_data;
+__shared__ volatile SharedData shared_data;
 
 __device__ __forceinline__ void barrier_init(int barrier_id) {
   shared_data.barrier[barrier_id] = 0;
 }
 
-template <typename T, int MemoryOrder = __ATOMIC_RELAXED,
-          int MemoryScope = __HIP_MEMORY_SCOPE_WORKGROUP>
+template <typename T>
 __device__ __forceinline__ T barrier_arrive(T* bar_ptr, int num_participants) {
-  T v = __hip_atomic_fetch_add(bar_ptr, 1U, MemoryOrder, MemoryScope);
+  __threadfence_block();
+  T v = __hip_atomic_fetch_add(bar_ptr, 1U, __ATOMIC_RELEASE,
+                               __HIP_MEMORY_SCOPE_WORKGROUP);
 
   if ((v & MAX_GROUPS_MASK) == num_participants - 1)
-    __hip_atomic_fetch_add(bar_ptr, MAX_GROUPS - num_participants, MemoryOrder,
-                           MemoryScope);
+    __hip_atomic_fetch_add(bar_ptr, MAX_GROUPS - num_participants,
+                           __ATOMIC_RELEASE, __HIP_MEMORY_SCOPE_WORKGROUP);
 
   return v & ~MAX_GROUPS_MASK;
 }
 
-template <typename T, int MemoryOrder = __ATOMIC_RELAXED,
-          int MemoryScope = __HIP_MEMORY_SCOPE_WORKGROUP>
-__device__ __forceinline__ void barrier_wait(T* bar_ptr, T target) {
-  while ((__hip_atomic_load(bar_ptr, MemoryOrder, MemoryScope) &
+template <typename T>
+__device__ __forceinline__ void barrier_wait(T volatile* bar_ptr, T target) {
+  while ((__hip_atomic_load(bar_ptr, __ATOMIC_ACQUIRE,
+                            __HIP_MEMORY_SCOPE_WORKGROUP) &
           ~MAX_GROUPS_MASK) == target)
     __builtin_amdgcn_s_sleep(1);
 }
 
-template <typename T, int MemoryOrder = __ATOMIC_RELAXED,
-          int MemoryScope = __HIP_MEMORY_SCOPE_WORKGROUP>
-__device__ __forceinline__ void barrier_sync(T* bar_ptr,
+template <typename T>
+__device__ __forceinline__ void barrier_sync(T volatile* bar_ptr,
                                              uint32_t num_participants) {
   // bound check
   if (num_participants >= MAX_GROUPS) {
@@ -676,8 +676,8 @@ __device__ __forceinline__ void st_release_sys_global(int const* ptr, int val) {
 
 __device__ __forceinline__ void st_release_cta(int const* ptr, int val) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  HIP_ATOMIC_STORE(val, const_cast<int*>(ptr), __ATOMIC_RELEASE,
-                   __HIP_MEMORY_SCOPE_WORKGROUP);
+  __hip_atomic_store(const_cast<int*>(ptr), val, __ATOMIC_RELEASE,
+                     __HIP_MEMORY_SCOPE_WORKGROUP);
 #else
   asm volatile("st.release.cta.s32 [%0], %1;" ::"l"(ptr), "r"(val) : "memory");
 #endif
@@ -697,7 +697,7 @@ __device__ inline void workgroup_sync_barrier(int barrier_id, int num_threads) {
     EP_DEVICE_ASSERT(num_threads % WARP_SIZE == 0 and
                      "invalid number of threads");
 
-    auto* bar_ptr = &amd::shared_data.barrier[barrier_id];
+    auto volatile* bar_ptr = amd::shared_data.barrier + barrier_id;
     auto const num_participants =
         static_cast<uint32_t>(num_threads / WARP_SIZE);
     amd::barrier_sync(bar_ptr, num_participants);
@@ -740,7 +740,7 @@ __device__ __forceinline__ void trap() {
 __device__ __forceinline__ int ld_volatile_global(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __hip_atomic_load(ptr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
+  ret = __builtin_nontemporal_load(ptr);
 #else
   asm volatile("ld.volatile.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif
@@ -750,7 +750,7 @@ __device__ __forceinline__ int ld_volatile_global(int const* ptr) {
 __device__ __forceinline__ float ld_volatile_global(float const* ptr) {
   float ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __hip_atomic_load(ptr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
+  ret = __builtin_nontemporal_load(ptr);
 #else
   asm volatile("ld.volatile.global.f32 %0, [%1];" : "=f"(ret) : "l"(ptr));
 #endif
@@ -760,7 +760,7 @@ __device__ __forceinline__ float ld_volatile_global(float const* ptr) {
 __device__ __forceinline__ int64_t ld_volatile_global(int64_t const* ptr) {
   int64_t ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __hip_atomic_load(ptr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
+  ret = __builtin_nontemporal_load(ptr);
 #else
   asm volatile("ld.volatile.global.s64 %0, [%1];" : "=l"(ret) : "l"(ptr));
 #endif
@@ -770,7 +770,7 @@ __device__ __forceinline__ int64_t ld_volatile_global(int64_t const* ptr) {
 __device__ __forceinline__ int64_t ld_volatile_global(uint64_t const* ptr) {
   int64_t ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __hip_atomic_load(ptr, __ATOMIC_RELAXED, __HIP_MEMORY_SCOPE_SYSTEM);
+  ret = __builtin_nontemporal_load(ptr);
 #else
   asm volatile("ld.volatile.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));
 #endif
@@ -905,7 +905,7 @@ __device__ __forceinline__ void st_relaxed_sys_global(int const* ptr, int val) {
 __device__ __forceinline__ int ld_acquire_cta(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = HIP_ATOMIC_LOAD(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_WORKGROUP);
+  ret = __hip_atomic_load(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_WORKGROUP);
 #else
   asm volatile("ld.acquire.cta.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif

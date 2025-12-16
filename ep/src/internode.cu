@@ -585,10 +585,11 @@ __global__ void __launch_bounds__(
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   __shared__ int volatile rdma_send_next_token_idx;
   __shared__ int volatile rdma_send_channel_next_tail[kNumRDMARanks];
+  __shared__ int volatile rdma_send_channel_tail[kNumRDMARanks];
 #else
   __shared__ int rdma_send_channel_lock[kNumRDMARanks];
-#endif
   __shared__ int rdma_send_channel_tail[kNumRDMARanks];
+#endif
   __shared__ uint32_t rdma_send_channel_window[kNumRDMARanks];
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
@@ -1167,6 +1168,9 @@ __global__ void __launch_bounds__(
           trap();
         }
       }
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+      memory_fence();
+#endif
       auto src_rdma_head =
           __shfl_sync(WARP_MASK, cached_rdma_channel_head, src_rdma_rank);
       auto src_rdma_tail =
@@ -1177,15 +1181,10 @@ __global__ void __launch_bounds__(
         auto rdma_slot_idx = i % num_max_rdma_chunked_recv_tokens;
         auto shifted = rdma_channel_data.recv_buffer(src_rdma_rank) +
                        rdma_slot_idx * num_bytes_per_token;
-        int seen_bits =
-            ld_acquire_sys_global(reinterpret_cast<uint32_t volatile*>(
-                &reinterpret_cast<SourceMeta*>(shifted + hidden_bytes +
-                                               scale_bytes)
-                     ->is_token_in_nvl_rank_bits));
-        if (seen_bits == 0) trap();
+        auto src_meta = ld_nc_global(reinterpret_cast<SourceMeta*>(
+            shifted + hidden_bytes + scale_bytes));
         lane_id == src_rdma_rank ? (num_tokens_to_recv_from_rdma -= 1) : 0;
-
-        bool is_in_dst_nvl_rank = (seen_bits >> dst_nvl_rank) & 1;
+        bool is_in_dst_nvl_rank = src_meta.is_token_in_nvl_rank(dst_nvl_rank);
         if (lane_id == src_rdma_rank) {
           auto cached_head = is_in_dst_nvl_rank ? rdma_nvl_token_idx : -1;
           rdma_nvl_token_idx += is_in_dst_nvl_rank;
@@ -2010,9 +2009,9 @@ template <
     int kNumForwarders = kNumRDMARanks* kNumWarpsPerForwarder,
     int kNumRDMAReceivers = kNumForwarders - NUM_MAX_NVL_PEERS>
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-__global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
-#else
 __global__ void __launch_bounds__(kNumForwarders* WARP_SIZE, 1)
+#else
+__global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
 #endif
     combine(int4* combined_x, float* combined_topk_weights,
             bool const* is_combined_token_in_rank, int4 const* x,
@@ -2491,12 +2490,8 @@ __global__ void __launch_bounds__(kNumForwarders* WARP_SIZE, 1)
           }
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-          sync_barrier(dst_rdma_rank + 10,
-                       min(kNumWarpsPerForwarder,
-                           token_end_idx - token_idx + sub_warp_id) *
-                           WARP_SIZE);
-
           // Coordinator
+          __threadfence_block();
           if (sub_warp_id == 0) forwarder_coordinator();
 #endif
           // Wait lanes to be ready
@@ -2565,11 +2560,6 @@ __global__ void __launch_bounds__(kNumForwarders* WARP_SIZE, 1)
             expected_head < 0
                 ? (forwarder_nvl_head[warp_id][lane_id] = -expected_head - 1)
                 : (forwarder_nvl_head[warp_id][lane_id] = expected_head + 1);
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-          // Coordinator
-          if (sub_warp_id == (1 % kNumWarpsPerForwarder))
-            forwarder_coordinator();
-#endif
         }
         sync_large_warp();
 
