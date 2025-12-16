@@ -763,21 +763,21 @@ void Proxy::post_gpu_commands_mixed(
           int value = cmds_to_post[i].value;
           uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
           uint32_t new_offset =
-              offset - cmds_to_post[i].low_latency_buffer_idx *
+              offset - get_low_latency(cmds_to_post[i].cmd_type) *
                            align<size_t>(cfg_.num_experts * sizeof(int), 128);
           size_t new_index = new_offset / sizeof(int);
           int expected_value;
           int expert_idx;
 
-          if (cmds_to_post[i].is_combine) {
+          if (get_is_combine(cmds_to_post[i].cmd_type)) {
             expert_idx = new_index;
             expected_value = ctx_.combine_sent_counter.Get(
-                {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+                {get_low_latency(cmds_to_post[i].cmd_type), expert_idx,
                  cmds_to_post[i].dst_rank});
           } else {
             expert_idx = new_index / cfg_.num_ranks;
             expected_value = ctx_.dispatch_sent_counter.Get(
-                {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+                {get_low_latency(cmds_to_post[i].cmd_type), expert_idx,
                  cmds_to_post[i].dst_rank});
             value = -value - 1;
           }
@@ -797,19 +797,19 @@ void Proxy::post_gpu_commands_mixed(
         if (!cfg_.use_normal_mode) {
           uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
           uint32_t new_offset =
-              offset - cmds_to_post[i].low_latency_buffer_idx *
+              offset - get_low_latency(cmds_to_post[i].cmd_type) *
                            align<size_t>(cfg_.num_experts * sizeof(int), 128);
           size_t new_index = new_offset / sizeof(int);
           int expert_idx;
-          if (cmds_to_post[i].is_combine) {
+          if (get_is_combine(cmds_to_post[i].cmd_type)) {
             expert_idx = new_index;
             ctx_.combine_sent_counter.Reset(
-                {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+                {get_low_latency(cmds_to_post[i].cmd_type), expert_idx,
                  cmds_to_post[i].dst_rank});
           } else {
             expert_idx = new_index / cfg_.num_ranks;
             ctx_.dispatch_sent_counter.Reset(
-                {cmds_to_post[i].low_latency_buffer_idx, expert_idx,
+                {get_low_latency(cmds_to_post[i].cmd_type), expert_idx,
                  cmds_to_post[i].dst_rank});
           }
         }
