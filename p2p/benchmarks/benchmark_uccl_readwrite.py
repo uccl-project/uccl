@@ -223,7 +223,7 @@ def main():
     world_size = dist.get_world_size()
     assert world_size == 2, "This benchmark only supports 2 processes"
 
-    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus, rank)
+    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
     local_metadata = ep.get_metadata()
 
     if rank == 0:

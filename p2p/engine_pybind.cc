@@ -18,10 +18,10 @@ PYBIND11_MODULE(p2p, m) {
   // Endpoint class binding
   py::class_<Endpoint>(m, "Endpoint")
       .def(py::init(
-          [](uint32_t local_gpu_idx, uint32_t num_cpus, uint32_t rank_id) {
+          [](uint32_t local_gpu_idx, uint32_t num_cpus) {
             py::gil_scoped_release release;
             InsidePythonGuard guard;
-            return std::make_unique<Endpoint>(local_gpu_idx, num_cpus, rank_id);
+            return std::make_unique<Endpoint>(local_gpu_idx, num_cpus);
           }))
       .def("__del__",
            [](Endpoint& self) {

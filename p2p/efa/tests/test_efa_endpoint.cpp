@@ -24,12 +24,8 @@ DEFINE_uint64(buffer_size, 1024 * 1024, "Buffer size in bytes");
 
 // Example usage:
 // Correctness test (100 iterations with verification):
-// ./test_efa_endpoint --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1
-// --remote_ip=172.31.47.234 --remote_port=19997 --test_mode=correctness
-// --buffer_size=104857600
-// ./test_efa_endpoint --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0
-// --remote_ip=172.31.36.62 --remote_port=19997 --test_mode=correctness
-// --buffer_size=104857600
+// ./test_efa_endpoint --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1 --remote_ip=172.31.47.234 --remote_port=19997 --test_mode=correctness --buffer_size=104857600
+// ./test_efa_endpoint --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0 --remote_ip=172.31.36.62 --remote_port=19997 --test_mode=correctness --buffer_size=104857600
 //
 //
 // Unidirectional test (rank 0 sends, rank 1 receives):
@@ -544,7 +540,7 @@ int main(int argc, char* argv[]) {
 
     // Connect to remote rank
     std::cout << "Connecting to remote rank " << FLAGS_remote_rank << "...\n";
-    // int connect_result = endpoint.build_connect(FLAGS_remote_rank);  // sync
+    int connect_result = endpoint.build_connect(FLAGS_remote_rank);  // sync
     // mode (default)
     // // int connect_result = endpoint.build_connect(FLAGS_remote_rank, false);
     // // async mode endpoint.connect_check(FLAGS_remote_rank);
@@ -552,10 +548,10 @@ int main(int argc, char* argv[]) {
     int remote_dev;
     int remote_gpuidx;
     // if(FLAGS_rank_id==0){
-    endpoint.uccl_connect(0, 0, 0, 0, FLAGS_remote_ip, FLAGS_remote_port);
-    // }
-    // else{
-    endpoint.uccl_accept(0, 0, 0, remote_ip, &remote_dev, &remote_gpuidx);
+    // endpoint.uccl_connect(0, 0, 0, 0, FLAGS_remote_ip, FLAGS_remote_port);
+    // // }
+    // // else{
+    // endpoint.uccl_accept(0, 0, 0, remote_ip, &remote_dev, &remote_gpuidx);
     // }
     // if (connect_result>=0) {
     //   std::cout << "Successfully connected to remote rank " <<
@@ -567,7 +563,7 @@ int main(int argc, char* argv[]) {
     //   return 1;
     // }
 
-    // std::this_thread::sleep_for(std::chrono::seconds(5));
+    std::this_thread::sleep_for(std::chrono::seconds(5));
 
     // Create memory allocator
     MemoryAllocator allocator;

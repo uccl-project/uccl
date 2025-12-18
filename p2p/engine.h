@@ -91,8 +91,7 @@ class Endpoint {
    *   local_gpu_idx: the GPU index to use for the engine
    *   num_cpus: the number of CPUs to use for the engine
    */
-  Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus,
-           uint32_t const rank_id);
+  Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus);
 
   /*
    * Create endpoint without intializing the engine. Lazy creation of engine is
@@ -102,7 +101,7 @@ class Endpoint {
    * input:
    *   num_cpus: the number of CPUs to use for the engine
    */
-  Endpoint(uint32_t const num_cpus, uint32_t const rank_id = 0);
+  Endpoint(uint32_t const num_cpus);
   ~Endpoint();
 
   /*

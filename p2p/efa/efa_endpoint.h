@@ -13,13 +13,14 @@
 class EFAEndpoint {
  public:
   explicit EFAEndpoint(
-      int gpu_index, uint64_t rank_id, uint64_t port = 0,
+      int gpu_index, uint64_t rank_id = INVALID_RANK_ID, uint64_t port = 0,
       bool auto_start_polling = true,
       std::vector<size_t> const& device_ids = std::vector<size_t>())
       : gpu_index_(gpu_index),
         rank_id_(rank_id),
-        auto_start_polling_(auto_start_polling) {
-    uccl::pin_thread_to_numa(0);
+        auto_start_polling_(auto_start_polling),
+        send_id_(0),
+        recv_id_(0) {
     std::vector<size_t> actual_device_ids;
     if (device_ids.size() == 0) {
       actual_device_ids =
@@ -101,9 +102,6 @@ class EFAEndpoint {
 
   int build_connect(uint64_t rank_id, bool sync = true,
                     int timeout_ms = 10000) {
-    if (rank_id == rank_id_) {
-      return -1;
-    }
     std::string const oob_con = build_oob_connect(rank_id);
     uint64_t receved_rank_id =
         this->build_control_channel(oob_con, rank_id, sync, timeout_ms);
@@ -266,15 +264,17 @@ class EFAEndpoint {
   uccl::ConnID uccl_connect(int dev, int local_gpuidx, int remote_dev,
                             int remote_gpuidx, std::string remote_ip,
                             uint16_t remote_port) {
-    add_rank_oob_meta({{kRankIDPlaceHolder, std::make_shared<OOBMetaData>(
+    int32_t current_send_id = send_id_.fetch_add(1, std::memory_order_relaxed);
+
+    add_rank_oob_meta({{current_send_id, std::make_shared<OOBMetaData>(
                                                 remote_ip, remote_port)}});
     LOG(INFO) << "remote_gpuidx: " << remote_gpuidx
               << ", remote_ip: " << remote_ip
               << ", remote_port: " << remote_port;
-    int rank_id = build_connect(kRankIDPlaceHolder);  // sync mode (default)
+    build_connect(current_send_id);  // sync mode (default)
     uccl::ConnID conn_id;
-    conn_id.context = reinterpret_cast<void*>(static_cast<intptr_t>(rank_id));
-    conn_id.flow_id = rank_id;
+    conn_id.context = reinterpret_cast<void*>(static_cast<intptr_t>(current_send_id));
+    conn_id.flow_id = current_send_id;
     return conn_id;
   };
 
@@ -482,6 +482,11 @@ class EFAEndpoint {
     std::shared_ptr<RdmaContext> ctx_ptr = contexts_[context_id];
 
     if (meta.flag == ChannelType::Control) {
+      uint64_t actual_rank_id = meta.rank_id;
+      if (rank_id_ == INVALID_RANK_ID) {
+        actual_rank_id = recv_id_.fetch_add(1, std::memory_order_relaxed);
+      }
+
       auto ctrl_mem =
           allocator_->allocate(kRingBufferSize, MemoryType::HOST, ctx_ptr);
       LOG(INFO) << "process_meta: Allocated " << ctrl_mem->size
@@ -502,7 +507,7 @@ class EFAEndpoint {
 
       // Set the control channel
       auto ctrl_ch_copy = recv_ctrl_channel;
-      setRecvControlChannel(meta.rank_id, std::move(ctrl_ch_copy));
+      setRecvControlChannel(actual_rank_id, std::move(ctrl_ch_copy));
 
       // Store accepted connection metadata
       {
@@ -511,14 +516,28 @@ class EFAEndpoint {
         accepted.ip = client_ip;
         accepted.port = static_cast<uint16_t>(client_port);
         accepted.gpu_id = meta.gpu_id;
-        accepted.rank_id = meta.rank_id;
-        accepted_meta_[meta.rank_id] = accepted;
-        LOG(INFO) << "Stored accepted connection: rank_id=" << meta.rank_id
+        accepted.rank_id = actual_rank_id;
+        accepted_meta_[actual_rank_id] = accepted;
+        LOG(INFO) << "Stored accepted connection: rank_id=" << actual_rank_id
                   << ", ip=" << client_ip << ", port=" << client_port
                   << ", gpu_id=" << meta.gpu_id;
       }
     } else {
       // Normal channel
+      uint64_t actual_rank_id = meta.rank_id;
+      if (rank_id_ == INVALID_RANK_ID) {
+        // Find matching rank_id from accepted_meta_
+        std::shared_lock<std::shared_mutex> lock(accepted_meta_mutex_);
+        for (auto const& [rank_id, accepted] : accepted_meta_) {
+          if (accepted.ip == client_ip &&
+              accepted.port == static_cast<uint16_t>(client_port) &&
+              accepted.gpu_id == meta.gpu_id) {
+            actual_rank_id = rank_id;
+            break;
+          }
+        }
+      }
+
       std::shared_ptr<EFAChannel> new_channel = std::make_shared<EFAChannel>(
           ctx_ptr, meta.channel_meta, meta.channel_id);
       // Create response (echo back the same data)
@@ -527,7 +546,7 @@ class EFAEndpoint {
                                   ChannelType::Normal, gpu_index_);
       LOG(INFO) << "response:::::::" << response;
       output = serialize(response);
-      addOneRecvChannel(meta.rank_id, meta.channel_id, new_channel);
+      addOneRecvChannel(actual_rank_id, meta.channel_id, new_channel);
     }
   }
 
@@ -637,10 +656,10 @@ class EFAEndpoint {
 
     bool sent = oob_client_->send_meta(
         oob_con, ctrl_serialized_meta,
-        [this, control_channel, promise](std::string const& response) mutable {
+        [this, control_channel, promise, rank_id](std::string const& response) mutable {
           uint64_t peer_rank =
-              this->handle_send_meta_response(control_channel, response);
-          this->setSendControlChannel(peer_rank, std::move(control_channel));
+              this->handle_send_meta_response(control_channel, response);          
+          this->setSendControlChannel(rank_id, std::move(control_channel));
           promise->set_value(peer_rank);  // no try/catch → fail-fast
         });
 
@@ -691,10 +710,10 @@ class EFAEndpoint {
 
       bool sent = oob_client_->send_meta(
           oob_con, serialized_meta,
-          [this, channel, channel_id, promise](std::string const& response) {
+          [this, channel, channel_id, promise, rank_id](std::string const& response) {
             uint64_t peer_rank =
                 this->handle_send_meta_response(channel, response);
-            addOneSendChannel(peer_rank, channel_id, channel);
+            addOneSendChannel(rank_id, channel_id, channel);
             promise->set_value();  // no try/catch → fail-fast
           });
 
@@ -749,4 +768,6 @@ class EFAEndpoint {
   mutable std::shared_mutex accepted_meta_mutex_;
   std::unordered_map<uint64_t, AcceptedMeta> accepted_meta_;
   bool auto_start_polling_;
+  std::atomic<int32_t> send_id_;
+  std::atomic<int32_t> recv_id_;
 };

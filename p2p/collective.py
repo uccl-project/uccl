@@ -143,7 +143,7 @@ class CollectiveContext:
             return
 
         # Create endpoint
-        self.ep = p2p.Endpoint(self.local_gpu_idx, self.num_cpus, self.rank)
+        self.ep = p2p.Endpoint(self.local_gpu_idx, self.num_cpus)
         print(f"[Rank {self.rank}] Created p2p.Endpoint on GPU {self.local_gpu_idx}")
         local_metadata = self.ep.get_metadata()
 

@@ -34,8 +34,7 @@ inline void check_python_signals() {
   PyGILState_Release(gstate);
 }
 
-Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus,
-                   uint32_t const rank_id)
+Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
             << ", CPUs: " << num_cpus << std::endl;
@@ -68,7 +67,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus,
   // Initialize the RDMA endpoint with lazy creation.
 #ifdef UCCL_ENABLE_EFA
   ep_ = std::shared_ptr<EFAEndpoint>(
-      new EFAEndpoint(local_gpu_idx_, rank_id, 0, false));
+      new EFAEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
   numa_node_ = 0;
 #else
   ep_ = new uccl::RDMAEndpoint(num_cpus_);
@@ -108,7 +107,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus,
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
-Endpoint::Endpoint(uint32_t const num_cpus, uint32_t const rank_id)
+Endpoint::Endpoint(uint32_t const num_cpus)
     : num_cpus_(num_cpus) {
   std::cout << "Creating Engine with CPUs: " << num_cpus << std::endl;
   int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
@@ -130,7 +129,7 @@ Endpoint::Endpoint(uint32_t const num_cpus, uint32_t const rank_id)
 
   google::InstallFailureSignalHandler();
 #ifdef UCCL_ENABLE_EFA
-  ep_ = std::shared_ptr<EFAEndpoint>(new EFAEndpoint(local_gpu_idx_, rank_id));
+  ep_ = std::shared_ptr<EFAEndpoint>(new EFAEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
 #else
   // Initialize the RDMA endpoint with lazy creation.
   ep_ = new uccl::RDMAEndpoint(num_cpus_);
