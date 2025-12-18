@@ -34,7 +34,7 @@ RDMA_PLUGIN_LIB := librdma_plugin.a
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
-SOURCES := engine.cc pybind_engine.cc
+SOURCES := engine.cc engine_pybind.cc
 OBJECTS := $(SOURCES:.cc=.o)
 
 # Default target
