@@ -3,7 +3,7 @@
 
 // #define UCCL_ENABLE_EFA
 
-namespace unifiedp2p {
+namespace unified {
 
 template <class T>
 struct always_false : std::false_type {};
@@ -32,7 +32,7 @@ inline void delete_ep(RDMAEndPoint const& s) {
 
 #ifdef UCCL_ENABLE_EFA
 inline int set_request(std::shared_ptr<EFAEndpoint> const& obj, Conn* conn,
-                       unifiedp2p::P2PMhandle* local_mh, void* src, size_t size,
+                       unified::P2PMhandle* local_mh, void* src, size_t size,
                        FifoItem const& slot_item, uccl::ucclRequest* ureq) {
   // Create RemoteMemInfo from FifoItem
   auto remote_mem = std::make_shared<RemoteMemInfo>();
@@ -170,7 +170,7 @@ inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
 }
 
 inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
-                           unifiedp2p::P2PMhandle* mhandles, void** data,
+                           unified::P2PMhandle* mhandles, void** data,
                            int* size, int n, struct uccl::ucclRequest* ureq) {
   return std::visit(
       [conn, mhandles, data, size, n, ureq](auto&& obj) mutable -> int {
@@ -233,7 +233,7 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
 }
 
 inline int uccl_read_async(RDMAEndPoint const& s, Conn* conn,
-                           unifiedp2p::P2PMhandle* local_mh, void* dst,
+                           unified::P2PMhandle* local_mh, void* dst,
                            size_t size, FifoItem const& slot_item,
                            uccl::ucclRequest* ureq) {
   return std::visit(
@@ -261,7 +261,7 @@ inline int uccl_read_async(RDMAEndPoint const& s, Conn* conn,
 }
 
 inline int uccl_write_async(RDMAEndPoint const& s, Conn* conn,
-                            unifiedp2p::P2PMhandle* local_mh, void* src,
+                            unified::P2PMhandle* local_mh, void* src,
                             size_t size, FifoItem const& slot_item,
                             uccl::ucclRequest* ureq) {
   return std::visit(
@@ -322,6 +322,7 @@ inline int prepare_fifo_metadata(RDMAEndPoint const& s, Conn* conn,
       },
       s);
 }
+
 inline void uccl_deregmr(RDMAEndPoint const& s, P2PMhandle* mhandle) {
   std::visit(
       [mhandle](auto&& obj) {
@@ -349,6 +350,7 @@ inline int get_best_dev_idx(RDMAEndPoint const& s, int gpu_idx) {
       [gpu_idx](auto&& obj) -> int { return obj->get_best_dev_idx(gpu_idx); },
       s);
 }
+
 inline bool initialize_engine_by_dev(RDMAEndPoint const& s, int dev,
                                      bool enable_p2p_listen) {
   return std::visit(
@@ -361,4 +363,5 @@ inline bool initialize_engine_by_dev(RDMAEndPoint const& s, int dev,
 inline void create_unified_p2p_socket(RDMAEndPoint const& s) {
   std::visit([](auto&& obj) { obj->create_unified_p2p_socket(); }, s);
 }
-}  // namespace unifiedp2p
+
+}  // namespace unified

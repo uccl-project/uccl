@@ -69,7 +69,7 @@ CORE_OBJECTS := $(SOURCES:.cc=.o)
 CXXFLAGS += -DUSE_TCPX -I$(NCCL_INC)
 LDFLAGS  += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
 else
-SOURCES := engine.cc pybind_engine.cc
+SOURCES := engine.cc engine_pybind.cc
 CORE_OBJECT := engine.o
 endif
 

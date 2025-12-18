@@ -52,6 +52,7 @@ class EFAEndpoint {
       oob_server_->stop();
     }
   }
+
   int gpuIndex() const { return gpu_index_; }
 
   size_t contextCount() const { return contexts_.size(); }
@@ -114,6 +115,7 @@ class EFAEndpoint {
     }
     return static_cast<int>(receved_rank_id);
   }
+
   // Blocking check for send completion
   void checkSendComplete(uint64_t rank_id, int64_t wr_id) {
     LOG(INFO) << "checkSendComplete - rank_id: " << rank_id
@@ -275,12 +277,15 @@ class EFAEndpoint {
     conn_id.flow_id = rank_id;
     return conn_id;
   };
+
   inline uint16_t get_p2p_listen_port(int dev) {
     return oob_server_->get_port();
   };
+
   inline int get_p2p_listen_fd(int dev) {
     return oob_server_->get_listen_fd();
   };
+
   inline uccl::ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
                                   std::string& remote_ip, int* remote_dev,
                                   int* remote_gpuidx) {
@@ -335,6 +340,7 @@ class EFAEndpoint {
                         struct uccl::Mhandle** mhandle) {
     return 0;
   }
+
   inline int uccl_regmr(void* const data, size_t const len, MRArray& mr_array) {
     if (unlikely(!data)) {
       LOG(ERROR) << "Error: uccl_regmr called with null data";
@@ -364,6 +370,7 @@ class EFAEndpoint {
 
     return 0;
   }
+
   inline void uccl_deregmr(MRArray const& mr_array) {
     for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
       ibv_mr* mr = mr_array.getKeyByContextID(ctx);
@@ -405,6 +412,7 @@ class EFAEndpoint {
       }
     }
   }
+
   // Manual polling routine for send channels when auto_start_polling_ is false
   int sendWithoutInnerQueue(std::shared_ptr<EFASendRequest> req) {
     if (auto_start_polling_) {
@@ -723,6 +731,7 @@ class EFAEndpoint {
 
     return true;
   }
+
   uint64_t rank_id_;
   int gpu_index_;
   std::vector<std::shared_ptr<RdmaContext>> contexts_;

@@ -12,6 +12,7 @@ class EFAChannel {
     Write,
     READ,
   };
+
   explicit EFAChannel(std::shared_ptr<RdmaContext> ctx, uint32_t channel_id = 0)
       : ctx_(ctx),
         qp_(nullptr),
@@ -50,6 +51,7 @@ class EFAChannel {
   int64_t submitRequest(std::shared_ptr<EFASendRequest> req) {
     return postRequest(req);
   }
+
   int64_t read(std::shared_ptr<EFASendRequest> req) {
     int ret = postRequest(req);
     if (ret != 0) {
@@ -171,12 +173,15 @@ class EFAChannel {
   std::shared_ptr<ChannelMetaData> remote_meta_;
 
   std::shared_ptr<AtomicBitmapPacketTracker> tracker_;
+
   struct ibv_cq_ex* getCQ() const {
     return cq_ex_;
   }
+
   struct ibv_qp* getQP() const {
     return qp_;
   }
+
   // Post send request based on send_type
   // Returns 0 on success, error code on failure
   inline int postRequest(std::shared_ptr<EFASendRequest> req) {
@@ -295,6 +300,7 @@ class EFAChannel {
     local_meta_->gid = ctx_->queryGid(kGidIndex);
     local_meta_->qpn = qp_->qp_num;
   }
+
   // Prepare SGE list for send request
   // Returns the number of SGE entries filled
   int prepareSGEList(struct ibv_sge* sge, std::shared_ptr<EFASendRequest> req) {

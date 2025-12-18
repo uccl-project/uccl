@@ -216,6 +216,7 @@ inline void copyRKeyArrayFromMRArray(MRArray const& mr_array,
     rkey_array.setKeyByContextID(ctx, rkey);
   }
 }
+
 inline void copyRKeysFromMRArrayToBytes(MRArray const& mr_array, char* dst,
                                         size_t dst_size) {
   constexpr size_t needed = sizeof(uint32_t) * kNICContextNumber;
@@ -347,39 +348,22 @@ typedef struct RemoteMemInfo {
     copyRKeyArrayFromMRArray(block.mr_array, rkey_array);
   }
 
-  // RemoteMemInfo(RemoteMemInfo const& remote_in)
-  //     : addr(reinterpret_cast<uint64_t>(remote_in.addr)),
-  //       length(remote_in.length),
-  //       type(remote_in.type) {
-  //   rkey_array.copyFrom(remote_in.rkey_array);
-  // }
-
   RemoteMemInfo(std::shared_ptr<RegMemBlock> const block)
       : addr(reinterpret_cast<uint64_t>(block->addr)),
         length(block->size),
         type(block->type) {
     copyRKeyArrayFromMRArray(block->mr_array, rkey_array);
   }
+
   inline uint32_t getKeyByChannelID(uint32_t channel_id) const {
     return rkey_array.getKeyByChannelID(channel_id);
   }
-  // // Get rkey by context ID (direct index access)
+
+  // Get rkey by context ID (direct index access)
   inline uint32_t getKeyByContextID(size_t context_id) const {
     return rkey_array.getKeyByContextID(context_id);
   }
 
-  // RemoteMemInfo& operator=(RemoteMemInfo const& rhs) {
-  //   if (this == &rhs) {
-  //     return *this;
-  //   }
-
-  //   addr = rhs.addr;
-  //   length = rhs.length;
-  //   type = rhs.type;
-  //   rkey_array.copyFrom(rhs.rkey_array);
-
-  //   return *this;
-  // }
   friend std::ostream& operator<<(std::ostream& os, RemoteMemInfo const& info) {
     os << "RemoteMemInfo{addr: 0x" << std::hex << info.addr << std::dec
        << ", length: " << info.length
@@ -426,6 +410,7 @@ typedef struct EFARecvRequest {
 } EFARecvRequest;
 
 enum class ReqFlag : int16_t { PENDING = 2, IN_PROGRESS = 3, IS_DONE = 4 };
+
 struct alignas(64) SendReqMeta {
   uint32_t rank_id;
   uint32_t channel_id;
@@ -455,6 +440,7 @@ struct alignas(64) SendReqMeta {
     expected_chunk_count = getMessageChunkCount(rev_req->local_mem->size);
     received_chunk_count = 0;
   }
+
   friend std::ostream& operator<<(std::ostream& os, SendReqMeta const& meta) {
     os << "SendReqMeta{rank_id: " << meta.rank_id
        << ", channel_id: " << meta.channel_id
@@ -464,6 +450,7 @@ struct alignas(64) SendReqMeta {
     return os;
   }
 };
+
 struct alignas(64) SendReqMetaOnRing {
   SendReqMeta meta;
   std::atomic<ReqFlag> flag;

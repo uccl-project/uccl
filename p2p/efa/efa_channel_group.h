@@ -220,6 +220,7 @@ class SendChannelGroup : public ChannelGroup {
   }
 
   bool check(int64_t wr_id) { return tracker_->isAcknowledged(wr_id); }
+
   // Stop polling thread
   void stopPolling() {
     if (!running_.load()) {
@@ -237,6 +238,7 @@ class SendChannelGroup : public ChannelGroup {
     LOG_EVERY_N_ENDPOINT(INFO, 100000000)
         << "SendChannelGroup::pollingLoop - Still running";
   }
+
   int processSendRequests(std::shared_ptr<EFASendRequest> req) {
     pollControlChannel();
     if (unlikely(ctrl_channel_ == nullptr)) {
@@ -441,7 +443,9 @@ class RecvChannelGroup : public ChannelGroup {
     }
     return result;
   }
+
   size_t normalChannelCount() const { return ChannelGroup::channelCount(); }
+
   std::unordered_map<uint32_t, std::shared_ptr<EFAChannel>> const& channels()
       const override {
     return ChannelGroup::channels();
@@ -491,6 +495,7 @@ class RecvChannelGroup : public ChannelGroup {
   }
 
   bool check(uint64_t index) { return ctrl_channel_->check_done(index); }
+
   void pollAndProcessCompletions() {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     if (ctrl_channel_) {
@@ -525,6 +530,7 @@ class RecvChannelGroup : public ChannelGroup {
         << "RecvChannelGroup::pollingLoop - Still running, channels: "
         << channels_.size();
   }
+
   void pollingLoop() {
     LOG(INFO) << "RecvChannelGroup::pollingLoop - Started";
     while (running_.load(std::memory_order_acquire)) {

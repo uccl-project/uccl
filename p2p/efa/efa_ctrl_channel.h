@@ -45,6 +45,7 @@ class SendControlChannel : public EFAChannel {
   }
 
   inline bool hasSendRequest() { return !rb_->empty(); }
+
   // not thread safe
   bool getOneSendRequest(std::shared_ptr<EFASendRequest>& req) {
     // Pop from rb_ and generate req, return false if empty
@@ -173,6 +174,7 @@ class RecvControlChannel : public EFAChannel {
       rb_->remove_while(check_is_done);
     }
   }
+
   bool noblockingPoll() {
     std::vector<CQMeta> cq_datas;
     if (EFAChannel::poll_once(cq_datas)) {
@@ -184,6 +186,7 @@ class RecvControlChannel : public EFAChannel {
     }
     return false;
   }
+
   bool check_done(uint64_t index) {
     return rb_->check_at(index, check_is_done);
   }

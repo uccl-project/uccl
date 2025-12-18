@@ -1,8 +1,8 @@
 #pragma once
 
-#include "efa_endpoint/define.h"
+#include "efa/define.h"
 #ifdef UCCL_ENABLE_EFA
-#include "efa_endpoint/efa_endpoint.h"
+#include "efa/efa_endpoint.h"
 #endif
 #include "transport.h"
 #include "util/gpu_rt.h"
@@ -24,7 +24,7 @@
 namespace py = pybind11;
 
 extern thread_local bool inside_python;
-namespace unifiedp2p {
+namespace unified {
 
 struct P2PMhandle {
   struct uccl::Mhandle* mhandle_;
@@ -37,11 +37,11 @@ using RDMAEndPoint =
 #else
 using RDMAEndPoint = std::variant<uccl::RDMAEndpoint*>;
 #endif
-}  // namespace unifiedp2p
+}  // namespace unified
 
 struct MR {
   uint64_t mr_id_;
-  unifiedp2p::P2PMhandle* mhandle_;
+  unified::P2PMhandle* mhandle_;
 };
 
 struct Conn {
@@ -323,7 +323,7 @@ class Endpoint {
   uint32_t num_cpus_;
   int numa_node_;
 
-  unifiedp2p::RDMAEndPoint ep_;
+  unified::RDMAEndPoint ep_;
   bool engine_initialized_ = false;
 
   std::atomic<uint64_t> next_conn_id_ = 0;

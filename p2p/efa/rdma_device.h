@@ -1,4 +1,3 @@
-// rdma_device.h
 #pragma once
 #include "define.h"
 

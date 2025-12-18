@@ -75,6 +75,7 @@ class MemoryAllocator {
     memset(addr, 0, size);  // Initialize memory to zero
     return addr;
   }
+
   void* allocateGPU(size_t size) {
     void* addr = nullptr;
 #if defined(UCCL_ENABLE_GPU)

@@ -1,4 +1,3 @@
-// rdma_context.h
 // Simple RDMA context wrapper - no memory management
 #pragma once
 #include "define.h"
@@ -25,7 +24,6 @@ class RdmaContext {
   struct ibv_context* ctx() const {
     return ctx_.get();
   }
-
   struct ibv_pd* getPD() const {
     return pd_.get();
   }

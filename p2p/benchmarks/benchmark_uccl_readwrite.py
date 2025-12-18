@@ -138,11 +138,21 @@ def _run_client(args, ep, remote_metadata):
             else:
                 if args.mode == "write":
                     ep.writev(
-                        conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs
+                        conn_id,
+                        mr_id_v,
+                        ptr_v,
+                        size_v,
+                        fifo_blob_v,
+                        args.num_iovs,
                     )
                 else:  # read
                     ep.readv(
-                        conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs
+                        conn_id,
+                        mr_id_v,
+                        ptr_v,
+                        size_v,
+                        fifo_blob_v,
+                        args.num_iovs,
                     )
                 total += sum(size_v)
         elapsed = time.perf_counter() - start
@@ -168,7 +178,7 @@ def main():
     p.add_argument(
         "--mode",
         choices=["read", "write"],
-        required=True,
+        default="read",
         help="Benchmark mode: read or write",
     )
     p.add_argument("--local-gpu-idx", type=int, default=0)

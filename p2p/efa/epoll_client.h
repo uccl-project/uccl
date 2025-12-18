@@ -1,9 +1,7 @@
-// epoll_client.h
 // Header file containing epoll-based client implementation with connection
 // reuse
 
-#ifndef EPOLL_CLIENT_H
-#define EPOLL_CLIENT_H
+#pragma once
 
 #include "define.h"  // reuse serialization, MetaInfo, helper functions
 
@@ -182,15 +180,6 @@ class EpollClient {
     return true;
   }
 
-  // Convenience method: connect and send in one call
-  // bool send_to_server(const std::string& server_ip, int server_port,
-  //                    const MetaInfo& meta, ResponseCallback callback =
-  //                    nullptr) {
-  //     std::string conn_key = connect_to_server(server_ip, server_port);
-  //     if (conn_key.empty()) return false;
-  //     return send_meta(conn_key, meta, callback);
-  // }
-
   // Get number of active connections
   size_t get_connection_count() const {
     std::lock_guard<std::mutex> lk(conns_mtx_);
@@ -355,5 +344,3 @@ class EpollClient {
   mutable std::mutex conns_mtx_;
   std::map<std::string, ClientConnection> conns_;
 };
-
-#endif  // EPOLL_CLIENT_H

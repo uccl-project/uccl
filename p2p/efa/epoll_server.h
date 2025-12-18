@@ -1,4 +1,3 @@
-// epoll_server.h
 // Header file containing epoll-based server implementation
 //
 // Features:
@@ -22,8 +21,7 @@
 //     server.start();
 //     int actual_port = server.get_port();  // Get assigned port
 
-#ifndef EPOLL_SERVER_H
-#define EPOLL_SERVER_H
+#pragma once
 
 #include "define.h"
 
@@ -468,5 +466,3 @@ class EpollServer {
   std::mutex conns_mtx_;
   std::map<int, Connection> conns_;
 };
-
-#endif  // EPOLL_SERVER_H
