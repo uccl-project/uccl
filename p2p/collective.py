@@ -47,7 +47,7 @@ class CollectiveContext:
         self,
         num_cpus: int = 4,
         local_gpu_idx: Optional[int] = None,
-        disable_uccl_intra: Optional[bool] = False,
+        use_copy_engine_for_intra: Optional[bool] = False,
     ):
         """
         Initialize collective context with automatic GPU index derivation from torch.distributed.
@@ -61,8 +61,10 @@ class CollectiveContext:
                 "torch.distributed must be initialized before creating CollectiveContext"
             )
 
-        required_backend = "gloo"
-        if disable_uccl_intra:
+        if use_copy_engine_for_intra:
+            required_backend = "gloo"
+        else:
+            # Otherwise, use NCCL/RCCL for intra-node communication
             required_backend = "nccl"
 
         if dist.get_backend() != required_backend:
@@ -73,7 +75,7 @@ class CollectiveContext:
         self.num_cpus = num_cpus
         self.rank = dist.get_rank()
         self.world_size = dist.get_world_size()
-        self.disable_uccl_intra = disable_uccl_intra
+        self.use_copy_engine_for_intra = use_copy_engine_for_intra
 
         # Derive local GPU index from distributed context
         if local_gpu_idx is not None:
@@ -422,13 +424,13 @@ class CollectiveContext:
         conn_id = self.send_connections[dst]
 
         if self.local_connections[dst]:
-            if self.disable_uccl_intra:
-                dist.send(tensor, dst)
-            else:
+            if self.use_copy_engine_for_intra:
                 # Use IPC for local connection (no memory registration needed)
                 ok = self.ep.send_ipc(conn_id, ptr, size)
                 if not ok:
                     raise RuntimeError(f"Failed to initiate IPC send to rank {dst}")
+            else:
+                dist.send(tensor, dst)
         else:
             # Use RDMA for remote connection (requires memory registration)
             mr_id = self.check_tensor_registered(tensor)
@@ -462,13 +464,13 @@ class CollectiveContext:
         conn_id = self.recv_connections[src]
 
         if self.local_connections[src]:
-            if self.disable_uccl_intra:
-                dist.recv(tensor, src)
-            else:
+            if self.use_copy_engine_for_intra:
                 # Use IPC for local connection (no memory registration needed)
                 ok = self.ep.recv_ipc(conn_id, ptr, size)
                 if not ok:
                     raise RuntimeError(f"Failed to initiate IPC recv from rank {src}")
+            else:
+                dist.recv(tensor, src)
         else:
             # Use RDMA for remote connection (requires memory registration)
             mr_id = self.check_tensor_registered(tensor)
@@ -505,10 +507,7 @@ class CollectiveContext:
         conn_id = self.send_connections[dst]
 
         if self.local_connections[dst]:
-            if self.disable_uccl_intra:
-                return dist.P2POp(dist.isend, tensor, dst)
-                # return dist.isend(tensor, dst)
-            else:
+            if self.use_copy_engine_for_intra:
                 # Use IPC async for local connection (no memory registration needed)
                 ok, transfer_id = self.ep.send_ipc_async(conn_id, ptr, size)
                 if not ok:
@@ -516,6 +515,9 @@ class CollectiveContext:
                         f"Failed to initiate async IPC send to rank {dst}"
                     )
                 return transfer_id
+            else:
+                return dist.P2POp(dist.isend, tensor, dst)
+                # return dist.isend(tensor, dst)
         else:
             # Use RDMA async for remote connection (requires memory registration)
             mr_id = self.check_tensor_registered(tensor)
@@ -555,10 +557,7 @@ class CollectiveContext:
         conn_id = self.recv_connections[src]
 
         if self.local_connections[src]:
-            if self.disable_uccl_intra:
-                return dist.P2POp(dist.irecv, tensor, src)
-                # return dist.irecv(tensor, src)
-            else:
+            if self.use_copy_engine_for_intra:
                 # Use IPC async for local connection (no memory registration needed)
                 ok, transfer_id = self.ep.recv_ipc_async(conn_id, ptr, size)
                 if not ok:
@@ -566,6 +565,9 @@ class CollectiveContext:
                         f"Failed to initiate async IPC recv from rank {src}"
                     )
                 return transfer_id
+            else:
+                return dist.P2POp(dist.irecv, tensor, src)
+                # return dist.irecv(tensor, src)
         else:
             # Use RDMA async for remote connection (requires memory registration)
             mr_id = self.check_tensor_registered(tensor)
@@ -778,7 +780,7 @@ _default_context: Optional[CollectiveContext] = None
 def init_collective(
     num_cpus: int = 4,
     local_gpu_idx: Optional[int] = None,
-    disable_uccl_intra: Optional[bool] = False,
+    use_copy_engine_for_intra: Optional[bool] = False,
 ):
     """
     Initialize the default collective context with automatic GPU index derivation.
@@ -788,7 +790,9 @@ def init_collective(
         local_gpu_idx: Optional override for local GPU index. If None, will be derived from torch.distributed
     """
     global _default_context
-    _default_context = CollectiveContext(num_cpus, local_gpu_idx, disable_uccl_intra)
+    _default_context = CollectiveContext(
+        num_cpus, local_gpu_idx, use_copy_engine_for_intra
+    )
     _default_context.init()
 
 
