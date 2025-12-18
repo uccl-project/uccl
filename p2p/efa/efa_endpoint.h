@@ -267,13 +267,14 @@ class EFAEndpoint {
     int32_t current_send_id = send_id_.fetch_add(1, std::memory_order_relaxed);
 
     add_rank_oob_meta({{current_send_id, std::make_shared<OOBMetaData>(
-                                                remote_ip, remote_port)}});
+                                             remote_ip, remote_port)}});
     LOG(INFO) << "remote_gpuidx: " << remote_gpuidx
               << ", remote_ip: " << remote_ip
               << ", remote_port: " << remote_port;
     build_connect(current_send_id);  // sync mode (default)
     uccl::ConnID conn_id;
-    conn_id.context = reinterpret_cast<void*>(static_cast<intptr_t>(current_send_id));
+    conn_id.context =
+        reinterpret_cast<void*>(static_cast<intptr_t>(current_send_id));
     conn_id.flow_id = current_send_id;
     return conn_id;
   };
@@ -656,9 +657,10 @@ class EFAEndpoint {
 
     bool sent = oob_client_->send_meta(
         oob_con, ctrl_serialized_meta,
-        [this, control_channel, promise, rank_id](std::string const& response) mutable {
+        [this, control_channel, promise,
+         rank_id](std::string const& response) mutable {
           uint64_t peer_rank =
-              this->handle_send_meta_response(control_channel, response);          
+              this->handle_send_meta_response(control_channel, response);
           this->setSendControlChannel(rank_id, std::move(control_channel));
           promise->set_value(peer_rank);  // no try/catch → fail-fast
         });
@@ -710,7 +712,8 @@ class EFAEndpoint {
 
       bool sent = oob_client_->send_meta(
           oob_con, serialized_meta,
-          [this, channel, channel_id, promise, rank_id](std::string const& response) {
+          [this, channel, channel_id, promise,
+           rank_id](std::string const& response) {
             uint64_t peer_rank =
                 this->handle_send_meta_response(channel, response);
             addOneSendChannel(rank_id, channel_id, channel);

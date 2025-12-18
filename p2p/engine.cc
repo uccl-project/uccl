@@ -107,8 +107,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
-Endpoint::Endpoint(uint32_t const num_cpus)
-    : num_cpus_(num_cpus) {
+Endpoint::Endpoint(uint32_t const num_cpus) : num_cpus_(num_cpus) {
   std::cout << "Creating Engine with CPUs: " << num_cpus << std::endl;
   int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
 
@@ -129,7 +128,8 @@ Endpoint::Endpoint(uint32_t const num_cpus)
 
   google::InstallFailureSignalHandler();
 #ifdef UCCL_ENABLE_EFA
-  ep_ = std::shared_ptr<EFAEndpoint>(new EFAEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
+  ep_ = std::shared_ptr<EFAEndpoint>(
+      new EFAEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
 #else
   // Initialize the RDMA endpoint with lazy creation.
   ep_ = new uccl::RDMAEndpoint(num_cpus_);

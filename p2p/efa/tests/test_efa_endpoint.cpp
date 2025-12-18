@@ -24,8 +24,12 @@ DEFINE_uint64(buffer_size, 1024 * 1024, "Buffer size in bytes");
 
 // Example usage:
 // Correctness test (100 iterations with verification):
-// ./test_efa_endpoint --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1 --remote_ip=172.31.47.234 --remote_port=19997 --test_mode=correctness --buffer_size=104857600
-// ./test_efa_endpoint --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0 --remote_ip=172.31.36.62 --remote_port=19997 --test_mode=correctness --buffer_size=104857600
+// ./test_efa_endpoint --gpu_index=0 --rank_id=0 --port=19997 --remote_rank=1
+// --remote_ip=172.31.47.234 --remote_port=19997 --test_mode=correctness
+// --buffer_size=104857600
+// ./test_efa_endpoint --gpu_index=0 --rank_id=1 --port=19997 --remote_rank=0
+// --remote_ip=172.31.36.62 --remote_port=19997 --test_mode=correctness
+// --buffer_size=104857600
 //
 //
 // Unidirectional test (rank 0 sends, rank 1 receives):
