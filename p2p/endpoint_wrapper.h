@@ -105,11 +105,7 @@ inline bool uccl_regmr(RDMAEndPoint const& s, int dev, void* data, size_t len,
         using T = std::decay_t<decltype(obj)>;
 
         if constexpr (std::is_pointer_v<T>) {
-          // raw pointer: we own it → delete
-          // struct uccl::Mhandle* mh = mhandle->mhandle_;  // 必须是 Mhandle*
-          return obj->uccl_regmr(dev, data, len, type, &(mhandle->mhandle_));
-
-          // mhandle->mhandle_ = mh;
+          obj->uccl_regmr(dev, data, len, type, &(mhandle->mhandle_));
           if (mhandle->mhandle_ == nullptr ||
               mhandle->mhandle_->mr == nullptr) {
             return false;
@@ -117,7 +113,6 @@ inline bool uccl_regmr(RDMAEndPoint const& s, int dev, void* data, size_t len,
         }
 #ifdef UCCL_ENABLE_EFA
         else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
-          // shared_ptr: call the EFAEndpoint's regmr method
           if (obj->uccl_regmr(data, len, mhandle->mr_array) < 0) {
             return false;
           }
