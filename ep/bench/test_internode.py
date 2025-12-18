@@ -475,7 +475,7 @@ def test_loop(
     if args.test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
 
-    num_sms = 24
+    num_sms = 32
     num_qps_per_rank = max(
         num_sms,
         ll_num_experts // num_ranks if args.test_ll_compatibility else 0,
