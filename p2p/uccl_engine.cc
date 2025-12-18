@@ -110,7 +110,7 @@ void listener_thread_func(uccl_conn_t* conn) {
 
     uint64_t mr_id = 0;
     switch (md.op) {
-      case UCCL_READ: {
+      case UCCL_RW_RC: {
         tx_msg_t tx_data = md.data.tx_data;
         auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
         if (local_mem_iter == mem_reg_info.end()) {
@@ -188,7 +188,7 @@ void listener_thread_func(uccl_conn_t* conn) {
 #endif
         break;
       }
-      case UCCL_VECTOR_READ: {
+      case UCCL_VECTOR_RW_RC: {
         size_t count = md.data.vector_data.count;
 
         tx_msg_t* tx_data_array = new tx_msg_t[count];
@@ -468,6 +468,21 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
              : -1;
 }
 
+int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+                         size_t size, void* slot_item_ptr,
+                         uint64_t* transfer_id) {
+  if (!conn || !mr || !data) return -1;
+
+  FifoItem slot_item;
+  slot_item = *static_cast<FifoItem*>(slot_item_ptr);
+
+  return conn->engine->endpoint->write_async(conn->conn_id, mr->mr_id,
+                                             const_cast<void*>(data), size,
+                                             slot_item, transfer_id)
+             ? 0
+             : -1;
+}
+
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
                      size_t data_size) {
   if (!conn || !mr || !data) return -1;
@@ -584,10 +599,16 @@ int uccl_engine_send_tx_md_vector(uccl_conn_t* conn, md_t* md_array,
                                   size_t count) {
   if (!conn || !md_array || count == 0) return -1;
 
+  // Check UCCL_RCMODE environment variable
+  bool rc_mode = false;
+  char const* rc_mode_env = getenv("UCCL_RCMODE");
+  if (rc_mode_env != nullptr) {
+    rc_mode = (std::strcmp(rc_mode_env, "1") == 0);
+  }
   // Determine the operation type based on the first item
-  uccl_msg_type op_type =
-      (md_array[0].op == UCCL_READ) ? UCCL_VECTOR_READ : UCCL_VECTOR_WRITE;
-
+  uccl_msg_type op_type = (rc_mode || md_array[0].op == UCCL_RW_RC)
+                              ? UCCL_VECTOR_RW_RC
+                              : UCCL_VECTOR_WRITE;
   md_t vector_md;
   vector_md.op = op_type;
   vector_md.data.vector_data.count = count;

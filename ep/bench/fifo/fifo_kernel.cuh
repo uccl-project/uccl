@@ -344,4 +344,82 @@ __global__ void fifoRandomKernel(mscclpp::FifoDeviceHandle* fifos,
   }
 }
 
+__global__ void fifoControlledMopsKernel(
+    mscclpp::FifoDeviceHandle* fifos, ThreadMetrics* metrics,
+    uint32_t num_threads, uint32_t test_duration_ms, uint32_t warmup_iterations,
+    bool volatile* stop_flag, float gpu_clock_ghz, int num_fifos,
+    uint64_t* latency_samples, int max_samples, uint64_t sleep_cycles) {
+  const uint32_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+  const uint32_t lane_id = threadIdx.x % 32;
+
+  if (tid >= num_threads) return;
+
+  // only thread 0 send
+  if (lane_id != 0) return;
+
+  mscclpp::FifoDeviceHandle& fifo = fifos[blockIdx.x % num_fifos];
+
+  metrics[tid].push_count = 0;
+  metrics[tid].total_cycles = 0;
+  metrics[tid].max_latency_cycles = 0;
+  metrics[tid].min_latency_cycles = UINT64_MAX;
+
+  for (uint32_t i = 0; i < warmup_iterations && !(*stop_flag); i++) {
+    mscclpp::ProxyTrigger trigger;
+    trigger.fst = tid + 1;
+    trigger.snd = i;
+
+    uint64_t head = fifo.push(trigger);
+    fifo.sync(head);
+  }
+
+  __syncthreads();
+
+  uint64_t test_start = clock64();
+  uint64_t test_duration_cycles =
+      (uint64_t)(test_duration_ms * gpu_clock_ghz * 1000000.0f);
+  uint64_t iteration = 0;
+  uint32_t sample_idx = 0;
+
+  while (!(*stop_flag)) {
+    uint64_t current_time = clock64();
+    if (current_time - test_start > test_duration_cycles) {
+      break;
+    }
+
+    if (sleep_cycles > 0) {
+      uint64_t sleep_start = clock64();
+      uint64_t sleep_gpu_cycles = (uint64_t)(sleep_cycles * gpu_clock_ghz);
+      while (clock64() - sleep_start < sleep_gpu_cycles) {
+      }
+    }
+
+    mscclpp::ProxyTrigger trigger;
+    trigger.fst = tid + 1;
+    trigger.snd = warmup_iterations + iteration;
+
+    uint64_t rtt_start = clock64();
+    uint64_t head = fifo.push(trigger);
+
+    fifo.sync(head);
+
+    uint64_t rtt_end = clock64();
+    uint64_t latency = rtt_end - rtt_start;
+
+    metrics[tid].total_cycles += latency;
+    metrics[tid].max_latency_cycles =
+        max(metrics[tid].max_latency_cycles, latency);
+    metrics[tid].min_latency_cycles =
+        min(metrics[tid].min_latency_cycles, latency);
+    metrics[tid].push_count++;
+
+    if (latency_samples && sample_idx < max_samples) {
+      latency_samples[tid * max_samples + sample_idx] = latency;
+      sample_idx++;
+    }
+
+    iteration++;
+  }
+}
+
 #endif  // FIFO_KERNEL_CUH_

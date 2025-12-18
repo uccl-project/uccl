@@ -179,16 +179,15 @@ build_eccl() {
 
   cd eccl
   if [[ "$TARGET" == cuda* ]]; then
-    echo "Skipping eccl build on Cuda."
-    return
+    make clean -f Makefile && make -j$(nproc) -f Makefile
   elif [[ "$TARGET" == rocm* ]]; then
     make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm
   fi
   cd ..
 
   echo "[container] Copying eccl .so to uccl/"
-  # mkdir -p uccl/lib
-  # cp eccl/eccl.*.so uccl/
+  mkdir -p uccl/lib # mkdir anyway
+  cp eccl/*eccl*.so uccl/lib
 }
 
 # Determine the Docker image to use based on the target and architecture
@@ -271,16 +270,27 @@ fi
 echo "[2/3] Running build inside container..."
 
 # Auto-detect CUDA architecture for ep build
-DETECTED_CUDA_ARCH=""
-if [[ "$TARGET" == cuda* && "$BUILD_TYPE" =~ (ep|all) ]]; then
-  if command -v nvidia-smi &> /dev/null; then
-    DETECTED_CUDA_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
-    if [[ -n "$DETECTED_CUDA_ARCH" ]]; then
-      echo "Auto-detected CUDA compute capability: ${DETECTED_CUDA_ARCH}"
-      export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-${DETECTED_CUDA_ARCH}}"
+DETECTED_GPU_ARCH=""
+if [[ "$BUILD_TYPE" =~ (ep|all) ]];then
+  if [[ "$TARGET" == cuda* ]] && command -v nvidia-smi &> /dev/null; then
+    DETECTED_GPU_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
+    if [[ -n "$DETECTED_GPU_ARCH" ]]; then
+      echo "Auto-detected CUDA compute capability: ${DETECTED_GPU_ARCH}"
+    fi
+  elif [[ "$TARGET" == rocm* ]] && command -v amd-smi &> /dev/null; then
+    # Check if jq is installed, install via pip if not
+    if ! command -v jq &> /dev/null; then
+      echo "jq not found, installing via pip..."
+      pip install jq
+    fi
+    DETECTED_GPU_ARCH=$(amd-smi static -g 0 --asic --json | jq -r '.[].asic.target_graphics_version')
+    if [[ -n "$DETECTED_GPU_ARCH" ]]; then
+      echo "Auto-detected ROCm architecture: ${DETECTED_GPU_ARCH}"
     fi
   fi
 fi
+
+export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-${DETECTED_GPU_ARCH}}"
 
 docker run --rm --user "$(id -u):$(id -g)" \
   -v /etc/passwd:/etc/passwd:ro \

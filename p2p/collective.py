@@ -634,6 +634,142 @@ class CollectiveContext:
         for transfer_id in transfer_ids:
             self.wait(transfer_id)
 
+    def allgather(
+        self,
+        send_tensor: torch.Tensor,
+        recv_tensor: torch.Tensor,
+    ):
+        """
+        All-gather operation: gather data from all ranks to all ranks.
+
+        Each rank sends its send_tensor to all ranks. After completion, each rank's
+        recv_tensor contains the concatenated data from all ranks in rank order.
+
+        Args:
+            send_tensor: Input tensor to send (size = count)
+            recv_tensor: Output tensor to receive all data (size = count * world_size)
+                        The data from rank i will be at offset i * send_count.
+
+        Note:
+            - recv_tensor must be large enough to hold data from all ranks
+            - Memory registration is required for remote connections
+            - In-place operation is supported if send_tensor == recv_tensor[rank * count : (rank+1) * count]
+        """
+        if not self.initialized:
+            raise RuntimeError("CollectiveContext not initialized. Call init() first.")
+
+        # Validate tensor sizes
+        send_size = send_tensor.numel() * send_tensor.element_size()
+        recv_size = recv_tensor.numel() * recv_tensor.element_size()
+        expected_recv_size = send_size * self.world_size
+
+        if recv_size < expected_recv_size:
+            raise ValueError(
+                f"recv_tensor too small: got {recv_size} bytes, need at least {expected_recv_size} bytes "
+                f"(send_size={send_size} * world_size={self.world_size})"
+            )
+
+        # Calculate chunk size (same as send_tensor size)
+        chunk_numel = send_tensor.numel()
+
+        # Split recv_tensor into chunks for each rank
+        recv_chunks = [
+            recv_tensor.view(-1)[i * chunk_numel : (i + 1) * chunk_numel].view(
+                send_tensor.shape
+            )
+            for i in range(self.world_size)
+        ]
+
+        # Copy own data to appropriate position in recv buffer
+        recv_chunks[self.rank].copy_(send_tensor)
+
+        send_ids = []
+        recv_ids = []
+
+        # Send to all other ranks
+        for peer_rank in range(self.world_size):
+            if peer_rank != self.rank:
+                tid = self.isend(send_tensor, peer_rank)
+                send_ids.append(tid)
+
+        # Receive from all other ranks
+        for peer_rank in range(self.world_size):
+            if peer_rank != self.rank:
+                tid = self.irecv(recv_chunks[peer_rank], peer_rank)
+                recv_ids.append(tid)
+
+        # Wait for all transfers to complete
+        self.wait_all(send_ids + recv_ids)
+
+    def iallgather(
+        self,
+        send_tensor: torch.Tensor,
+        recv_tensor: torch.Tensor,
+    ) -> List[Union[int, dist.P2POp]]:
+        """
+        Initiate asynchronous all-gather operation (non-blocking).
+
+        Each rank sends its send_tensor to all ranks. After completion, each rank's
+        recv_tensor contains the concatenated data from all ranks in rank order.
+
+        Args:
+            send_tensor: Input tensor to send (size = count)
+            recv_tensor: Output tensor to receive all data (size = count * world_size)
+                        The data from rank i will be at offset i * send_count.
+
+        Returns:
+            List of transfer_ids to poll for completion using wait_all()
+
+        Note:
+            - recv_tensor must be large enough to hold data from all ranks
+            - Memory registration is required for remote connections
+            - Use wait_all() to wait for completion
+            - In-place operation is supported if send_tensor == recv_tensor[rank * count : (rank+1) * count]
+        """
+        if not self.initialized:
+            raise RuntimeError("CollectiveContext not initialized. Call init() first.")
+
+        # Validate tensor sizes
+        send_size = send_tensor.numel() * send_tensor.element_size()
+        recv_size = recv_tensor.numel() * recv_tensor.element_size()
+        expected_recv_size = send_size * self.world_size
+
+        if recv_size < expected_recv_size:
+            raise ValueError(
+                f"recv_tensor too small: got {recv_size} bytes, need at least {expected_recv_size} bytes "
+                f"(send_size={send_size} * world_size={self.world_size})"
+            )
+
+        # Calculate chunk size (same as send_tensor size)
+        chunk_numel = send_tensor.numel()
+
+        # Split recv_tensor into chunks for each rank
+        recv_chunks = [
+            recv_tensor.view(-1)[i * chunk_numel : (i + 1) * chunk_numel].view(
+                send_tensor.shape
+            )
+            for i in range(self.world_size)
+        ]
+
+        # Copy own data to appropriate position in recv buffer (synchronous local copy)
+        recv_chunks[self.rank].copy_(send_tensor)
+
+        transfer_ids = []
+
+        # Send to all other ranks
+        for peer_rank in range(self.world_size):
+            if peer_rank != self.rank:
+                tid = self.isend(send_tensor, peer_rank)
+                transfer_ids.append(tid)
+
+        # Receive from all other ranks
+        for peer_rank in range(self.world_size):
+            if peer_rank != self.rank:
+                tid = self.irecv(recv_chunks[peer_rank], peer_rank)
+                transfer_ids.append(tid)
+
+        return transfer_ids
+
 
 # Global collective context instance
 _default_context: Optional[CollectiveContext] = None
@@ -714,6 +850,31 @@ def finalize_collective():
 def deregister_tensor(tensor: torch.Tensor):
     """Deregister tensor using the default collective context."""
     get_collective().deregister_tensor(tensor)
+
+
+def allgather(send_tensor: torch.Tensor, recv_tensor: torch.Tensor):
+    """
+    All-gather using the default collective context.
+    Args:
+        send_tensor: Input tensor to send (size = count)
+        recv_tensor: Output tensor to receive all data (size = count * world_size)
+    """
+    get_collective().allgather(send_tensor, recv_tensor)
+
+
+def iallgather(
+    send_tensor: torch.Tensor, recv_tensor: torch.Tensor
+) -> List[Union[int, dist.P2POp]]:
+    """
+    Async all-gather using the default collective context.
+    Args:
+        send_tensor: Input tensor to send (size = count)
+        recv_tensor: Output tensor to receive all data (size = count * world_size)
+
+    Returns:
+        List of transfer_ids to poll for completion using wait_all()
+    """
+    return get_collective().iallgather(send_tensor, recv_tensor)
 
 
 def wait_all(transfer_ids: List[Union[int, dist.P2POp]]):
