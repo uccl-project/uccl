@@ -177,17 +177,17 @@ build_eccl() {
   set -euo pipefail
   echo "[container] build_eccl Target: $TARGET"
 
-  cd eccl
+  cd experiments/eccl
   if [[ "$TARGET" == cuda* ]]; then
     make clean -f Makefile && make -j$(nproc) -f Makefile
   elif [[ "$TARGET" == rocm* ]]; then
     make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm
   fi
-  cd ..
+  cd ../..
 
   echo "[container] Copying eccl .so to uccl/"
   mkdir -p uccl/lib # mkdir anyway
-  cp eccl/*eccl*.so uccl/lib
+  cp experiments/eccl/*eccl*.so uccl/lib
 }
 
 # Determine the Docker image to use based on the target and architecture
