@@ -441,8 +441,13 @@ void notify_dispatch(
                  static_cast<size_t>(num_rdma_bytes));
   EP_HOST_ASSERT((nvl_clean_meta.first + nvl_clean_meta.second) * sizeof(int) <=
                  static_cast<size_t>(num_nvl_bytes));
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  EP_HOST_ASSERT(num_rdma_bytes < std::numeric_limits<int64_t>::max());
+  EP_HOST_ASSERT(num_nvl_bytes < std::numeric_limits<int64_t>::max());
+#else
   EP_HOST_ASSERT(num_rdma_bytes < std::numeric_limits<int>::max());
   EP_HOST_ASSERT(num_nvl_bytes < std::numeric_limits<int>::max());
+#endif
 
   // Launch kernel
   SETUP_LAUNCH_CONFIG(1 + num_rdma_ranks, kNumThreads, stream);
@@ -589,11 +594,11 @@ __global__ void __launch_bounds__(
 #else
   __shared__ int rdma_send_channel_lock[kNumRDMARanks];
   __shared__ int rdma_send_channel_tail[kNumRDMARanks];
-#endif
   __shared__ uint32_t rdma_send_channel_window[kNumRDMARanks];
+#endif
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  for (int i = thread_id; i < MAX_GROUPS; i += num_threads)
+  for (int i = thread_id; i < MAX_NUM_BARRIERS; i += num_threads)
     amd::barrier_init(i);
   __syncthreads();
 #endif
@@ -733,8 +738,8 @@ __global__ void __launch_bounds__(
         // Wait the remote buffer to be released
         while (rdma_tail_idx - cached_rdma_channel_head >=
                num_max_rdma_chunked_recv_tokens) {
-          cached_rdma_channel_head = static_cast<int>(
-              ld_acquire_sys_global(rdma_channel_head.buffer(lane_id)));
+          cached_rdma_channel_head = static_cast<int>(__atomic_load_n(
+              rdma_channel_head.buffer(lane_id), __ATOMIC_SEQ_CST));
 
           // Timeout check
           if (clock64() - start_time >= NUM_TIMEOUT_CYCLES) {
@@ -941,9 +946,9 @@ __global__ void __launch_bounds__(
     (lane_id < kNumRDMARanks) ? (rdma_send_channel_next_tail[lane_id] = 0) : 0;
 #else
     (lane_id < kNumRDMARanks) ? (rdma_send_channel_lock[lane_id] = 0) : 0;
+    (lane_id < kNumRDMARanks) ? (rdma_send_channel_window[lane_id] = 0) : 0;
 #endif
     (lane_id < kNumRDMARanks) ? (rdma_send_channel_tail[lane_id] = 0) : 0;
-    (lane_id < kNumRDMARanks) ? (rdma_send_channel_window[lane_id] = 0) : 0;
 
     // Synchronize shared memory
     sync_rdma_sender_smem();
@@ -1147,8 +1152,13 @@ __global__ void __launch_bounds__(
         if (__shfl_sync(WARP_MASK, num_tokens_to_recv_from_rdma,
                         src_rdma_rank) > 0) {
           if (lane_id == src_rdma_rank)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+            cached_rdma_channel_tail = static_cast<int>(__atomic_load_n(
+                rdma_channel_tail.buffer(src_rdma_rank), __ATOMIC_SEQ_CST));
+#else
             cached_rdma_channel_tail = static_cast<int>(
                 ld_acquire_sys_global(rdma_channel_tail.buffer(src_rdma_rank)));
+#endif
           if (__shfl_sync(WARP_MASK,
                           cached_rdma_channel_tail > cached_rdma_channel_head,
                           src_rdma_rank))
@@ -1186,7 +1196,7 @@ __global__ void __launch_bounds__(
                             .is_token_in_nvl_rank_bits;
         if (seen_bits == 0) trap();
         lane_id == src_rdma_rank ? (num_tokens_to_recv_from_rdma -= 1) : 0;
-        bool is_in_dst_nvl_rank = src_meta.is_token_in_nvl_rank(dst_nvl_rank);
+        bool is_in_dst_nvl_rank = (seen_bits >> dst_nvl_rank) & 1;
         if (lane_id == src_rdma_rank) {
           auto cached_head = is_in_dst_nvl_rank ? rdma_nvl_token_idx : -1;
           rdma_nvl_token_idx += is_in_dst_nvl_rank;
@@ -1239,8 +1249,13 @@ __global__ void __launch_bounds__(
       // Move tail index
       __syncwarp();
       if (lane_id == 0)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+        __atomic_store_n(nvl_channel_tail.buffer(), cached_nvl_channel_tail,
+                         __ATOMIC_RELEASE);
+#else
         st_release_sys_global(nvl_channel_tail.buffer(),
                               cached_nvl_channel_tail);
+#endif
     }
     // Retired
     __syncwarp();
@@ -1451,8 +1466,8 @@ __global__ void __launch_bounds__(
 #if defined(__NVCC__)
         // Wait TMA to be finished
         tma_store_wait();
-        __syncwarp();
 #endif
+        __syncwarp();
       }
 
       // Move queue
@@ -1487,8 +1502,13 @@ void dispatch(void* recv_x, float* recv_x_scales, int64_t* recv_topk_idx,
   constexpr int smem_size = kNumTMABytesPerWarp * NUM_MAX_NVL_PEERS;
 
   // Make sure never OOB
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   EP_HOST_ASSERT(static_cast<int64_t>(num_scales) * scale_hidden_stride <
+                 std::numeric_limits<int64_t>::max());
+#else
+  EP_HOST_ASSERT(static_cast<int>(num_scales) * scale_hidden_stride <
                  std::numeric_limits<int>::max());
+#endif
 
 #define DISPATCH_LAUNCH_CASE(num_rdma_ranks)                                   \
   {                                                                            \
@@ -1809,8 +1829,13 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
                  static_cast<size_t>(num_rdma_bytes));
   EP_HOST_ASSERT((nvl_clean_meta.first + nvl_clean_meta.second) * sizeof(int) <=
                  static_cast<size_t>(num_nvl_bytes));
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  EP_HOST_ASSERT(num_rdma_bytes < std::numeric_limits<int64_t>::max());
+  EP_HOST_ASSERT(num_nvl_bytes < std::numeric_limits<int64_t>::max());
+#else
   EP_HOST_ASSERT(num_rdma_bytes < std::numeric_limits<int>::max());
   EP_HOST_ASSERT(num_nvl_bytes < std::numeric_limits<int>::max());
+#endif
   EP_HOST_ASSERT(num_channels * 2 > 3);
 
   // Launch kernel
@@ -2088,7 +2113,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
       num_max_nvl_chunked_recv_tokens / kNumRDMARanks;
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  for (int i = thread_id; i < MAX_GROUPS; i += num_threads)
+  for (int i = thread_id; i < MAX_NUM_BARRIERS; i += num_threads)
     amd::barrier_init(i);
   __syncthreads();
 #endif

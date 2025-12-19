@@ -475,13 +475,21 @@ def test_loop(
     if args.test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
 
-    num_sms = 32
+    if torch.version.cuda:
+        num_sms = 24
+        num_nvlink_bytes = int(2e9)
+        num_rdma_bytes = int(1e9)
+    elif torch.version.hip:
+        num_sms = 64 if num_nodes < 8 else 32
+        num_nvlink_bytes = int(4e9)
+        num_rdma_bytes = int(2e9)
+    else:
+        raise ValueError("Unsupported platform")
+
     num_qps_per_rank = max(
         num_sms,
         ll_num_experts // num_ranks if args.test_ll_compatibility else 0,
     )
-    num_nvlink_bytes = int(2e9)
-    num_rdma_bytes = int(1e9)
 
     buffer = Buffer(
         group,
