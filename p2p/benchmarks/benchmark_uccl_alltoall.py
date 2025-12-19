@@ -62,27 +62,24 @@ def warmup_all2all_check(
     print(send_chunks_tensor.size())
     collective.register_tensor(recv_chunks_tensor)
 
+    # Build batch operations
+    ops = []
     for r in range(world_size):
         if r == rank:
             recv_chunks[r].copy_(send_chunks[r].contiguous())
         else:
             print(f"send_chunks[r]:{send_chunks[r].data_ptr()}")
             print(send_chunks[r].size())
-            tid = collective.isend(send_chunks[r], r)
-
-            send_ids.append(tid)
-    # sync_all()
-    # # recv
+            ops.append(collective.P2POp(collective.isend, send_chunks[r], r))
 
     for r in range(world_size):
-        if not r == rank:
-            # print(f"[Rank {rank}] : posting irecv from rank before {r} {recv_chunks[r].contiguous()}")
-            tid = collective.irecv(recv_chunks[r], r)
-            # print(f"[Rank {rank}] : posting irecv from rank {r} {recv_chunks[r].contiguous()}")
-            recv_ids.append(tid)
-        # print(f"[Rank {rank}] : posted irecv from rank {r} {recv_chunks[r].contiguous()}")
+        if r != rank:
+            ops.append(collective.P2POp(collective.irecv, recv_chunks[r], r))
+
+    print(f"[Rank {rank}] : executing batch_isend_irecv with {len(ops)} ops")
+    handles = collective.batch_isend_irecv(ops)
     print(f"[Rank {rank}] : waiting for all sends and recvs")
-    collective.wait_all(send_ids + recv_ids)
+    collective.wait_all(handles)
     print(f"[Rank {rank}] : all sends and recvs done")
     sync_all()
     if rank == 0:
@@ -156,9 +153,13 @@ def run_fcp_p2p(
         recv_rank = plans[idx][1][global_rank]
 
         with nvtx.annotate(f"iter {idx}"):
-            send_req = collective.isend(send_tensor, send_rank)
-            recv_req = collective.irecv(recv_tensor, recv_rank)
-            collective.wait_all([send_req, recv_req])
+            handles = collective.batch_isend_irecv(
+                [
+                    collective.P2POp(collective.isend, send_tensor, send_rank),
+                    collective.P2POp(collective.irecv, recv_tensor, recv_rank),
+                ]
+            )
+            collective.wait_all(handles)
             print(f"FCP P2P Alltoall Iteration {idx+1}/{num_iters}" + " completed")
     print(f"Completed {num_iters} iterations of FCP P2P Alltoall")
     end_event.record()
@@ -217,16 +218,24 @@ def run_ring_p2p(
     collective.register_tensor(send_tensor)
     collective.register_tensor(recv_tensor)
 
-    send_req = collective.isend(send_tensor, dst=send_rank)
-    recv_req = collective.irecv(recv_tensor, src=recv_rank)
-    collective.wait_all([send_req, recv_req])
+    handles = collective.batch_isend_irecv(
+        [
+            collective.P2POp(collective.isend, send_tensor, send_rank),
+            collective.P2POp(collective.irecv, recv_tensor, recv_rank),
+        ]
+    )
+    collective.wait_all(handles)
 
     start_event.record()
     for idx in range(num_iters):
         with nvtx.annotate(f"iter {idx}"):
-            send_req = collective.isend(send_tensor, send_rank)
-            recv_req = collective.irecv(recv_tensor, recv_rank)
-            collective.wait_all([send_req, recv_req])
+            handles = collective.batch_isend_irecv(
+                [
+                    collective.P2POp(collective.isend, send_tensor, send_rank),
+                    collective.P2POp(collective.irecv, recv_tensor, recv_rank),
+                ]
+            )
+            collective.wait_all(handles)
 
     end_event.record()
     sync_all()
