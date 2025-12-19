@@ -67,7 +67,7 @@ cd $UCCL_HOME/scripts
 python rsync.py -n node_ips/p4d.txt
 
 # Assume four p4d.24xlarge instances each with 8 A100 GPUs. 
-cd $UCCL_HOME/efa
+cd $UCCL_HOME/collective/efa
 ./run_nccl_test.sh ud 32
 ``` 
 
@@ -83,7 +83,7 @@ UCCL currently only supports `Simple` protocol; support for `LL` and `LL128` is 
 
 You can launch distributed ResNet training by: 
 ```bash
-cd $UCCL_HOME/misc
+cd $UCCL_HOME/experiments/misc
 
 # Benchmark UCCL
 bash run_resnet_uccl.sh
@@ -92,9 +92,9 @@ bash run_resnet_uccl.sh
 bash run_resnet_nccl.sh
 ```
 
-You can also check [misc/run_ddp.sh](../misc/run_ddp.sh) for an example of running UCCL with PyTorch DDP applications. 
+You can also check [experiments/misc/run_ddp.sh](../experiments/misc/run_ddp.sh) for an example of running UCCL with PyTorch DDP applications. 
 ```bash
-cd $UCCL_HOME/misc
+cd $UCCL_HOME/experiments/misc
 
 # Run UCCL
 ./run_ddp.sh ud
@@ -114,7 +114,7 @@ Other applications such as DeepSpeed, vLLM, Megatron-LM, and PyTorch FSDP should
 ```bash
 pushd /tmp
 git clone https://github.com/linux-rdma/perftest.git && cd perftest && git checkout c04922f
-git apply $UCCL_HOME/efa/perftest.patch
+git apply $UCCL_HOME/collective/efa/perftest.patch
 ./autogen.sh && ./configure CUDA_H_PATH=/usr/local/cuda/include/cuda.h && make -j
 sudo make install
 popd
