@@ -1177,11 +1177,9 @@ __global__ void __launch_bounds__(
         auto rdma_slot_idx = i % num_max_rdma_chunked_recv_tokens;
         auto shifted = rdma_channel_data.recv_buffer(src_rdma_rank) +
                        rdma_slot_idx * num_bytes_per_token;
-        int seen_bits =
-            ld_acquire_sys_global(reinterpret_cast<uint32_t volatile*>(
-                &reinterpret_cast<SourceMeta*>(shifted + hidden_bytes +
-                                               scale_bytes)
-                     ->is_token_in_nvl_rank_bits));
+        int seen_bits = ld_nc_global(reinterpret_cast<SourceMeta*>(
+                                         shifted + hidden_bytes + scale_bytes))
+                            .is_token_in_nvl_rank_bits;
         if (seen_bits == 0) trap();
         lane_id == src_rdma_rank ? (num_tokens_to_recv_from_rdma -= 1) : 0;
 

@@ -186,21 +186,27 @@ def _run_dual_benchmark(args):
         collective.register_tensor(recv_tensor)
 
         # Warm-up: simultaneous send and receive
-        send_req = collective.isend(send_tensor, dst=peer)
-        recv_req = collective.irecv(recv_tensor, src=peer)
-        collective.wait_all([send_req, recv_req])
+        handles = collective.batch_isend_irecv(
+            [
+                collective.P2POp(collective.isend, send_tensor, peer),
+                collective.P2POp(collective.irecv, recv_tensor, peer),
+            ]
+        )
+        collective.wait_all(handles)
 
         start = time.perf_counter()
         total_sent = 0
         total_recv = 0
 
         for _ in range(args.iters):
-            # Start both operations simultaneously
-            send_req = collective.isend(send_tensor, dst=peer)
-            recv_req = collective.irecv(recv_tensor, src=peer)
-
-            # Wait for both to complete
-            collective.wait_all([send_req, recv_req])
+            # Start both operations simultaneously with batching
+            handles = collective.batch_isend_irecv(
+                [
+                    collective.P2POp(collective.isend, send_tensor, peer),
+                    collective.P2POp(collective.irecv, recv_tensor, peer),
+                ]
+            )
+            collective.wait_all(handles)
 
             total_sent += size
             total_recv += size
@@ -247,9 +253,13 @@ def _run_ring_benchmark(args):
         collective.register_tensor(recv_tensor)
 
         # Warm-up
-        send_req = collective.isend(send_tensor, dst=dst_rank)
-        recv_req = collective.irecv(recv_tensor, src=src_rank)
-        collective.wait_all([send_req, recv_req])
+        handles = collective.batch_isend_irecv(
+            [
+                collective.P2POp(collective.isend, send_tensor, dst_rank),
+                collective.P2POp(collective.irecv, recv_tensor, src_rank),
+            ]
+        )
+        collective.wait_all(handles)
 
         # Verify received data
         expected_value = float(size)
@@ -268,10 +278,14 @@ def _run_ring_benchmark(args):
         total_bytes = 0
 
         for iteration in range(args.iters):
-            # Use async operations for better performance (no fill overhead)
-            send_req = collective.isend(send_tensor, dst=dst_rank)
-            recv_req = collective.irecv(recv_tensor, src=src_rank)
-            collective.wait_all([send_req, recv_req])
+            # Use batched operations for better performance
+            handles = collective.batch_isend_irecv(
+                [
+                    collective.P2POp(collective.isend, send_tensor, dst_rank),
+                    collective.P2POp(collective.irecv, recv_tensor, src_rank),
+                ]
+            )
+            collective.wait_all(handles)
             total_bytes += size
 
         elapsed = time.perf_counter() - start
@@ -281,9 +295,13 @@ def _run_ring_benchmark(args):
         send_tensor.fill_(final_send_value)
 
         # Final verification round
-        send_req = collective.isend(send_tensor, dst=dst_rank)
-        recv_req = collective.irecv(recv_tensor, src=src_rank)
-        collective.wait_all([send_req, recv_req])
+        handles = collective.batch_isend_irecv(
+            [
+                collective.P2POp(collective.isend, send_tensor, dst_rank),
+                collective.P2POp(collective.irecv, recv_tensor, src_rank),
+            ]
+        )
+        collective.wait_all(handles)
 
         # Synchronize all ranks before verification
         dist.barrier()
@@ -336,7 +354,7 @@ def main():
             104857600,
         ],
     )
-    p.add_argument("--iters", type=int, default=1000)
+    p.add_argument("--iters", type=int, default=100)
     p.add_argument(
         "--async-api",
         action="store_true",
