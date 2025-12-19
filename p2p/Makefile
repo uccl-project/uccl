@@ -8,10 +8,24 @@ CUDA_HOME ?= /usr/local/cuda
 CUDA_INC  := $(CUDA_HOME)/include
 CUDA_LIB  := $(CUDA_HOME)/lib64
 RDMA_HOME := ../collective/rdma
+EFA_HOME ?= /opt/amazon/efa
+
+# Check if EFA_HOME exists and define UCCL_ENABLE_EFA
+ifneq ($(wildcard $(EFA_HOME)),)
+    CXXFLAGS_EFA := -DUCCL_ENABLE_EFA
+else
+    CXXFLAGS_EFA :=
+endif
+
+# Building with the following settings:
+INC = -I./ -I$(CUDA_HOME)/include -I${EFA_HOME}/include 
+LIBS = -L ${CUDA_HOME}/lib64 -L ${EFA_HOME}/lib -libverbs -lefa -lcudart -lcuda -lpthread -lglog -lgflags -lgtest -lz -lelf
+LIBS_SHARED = ${LIBS}
+
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I$(RDMA_HOME) -I$(CUDA_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
-	-Wl,-rpath=/usr/lib/x86_64-linux-gnu
+	-Wl,-rpath=/usr/lib/x86_64-linux-gnu $(CXXFLAGS_EFA)
 
 ifeq ($(USE_TCPX),1)
 	CXXFLAGS += -DUSE_TCPX
@@ -55,7 +69,7 @@ CORE_OBJECTS := $(SOURCES:.cc=.o)
 CXXFLAGS += -DUSE_TCPX -I$(NCCL_INC)
 LDFLAGS  += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
 else
-SOURCES := engine.cc pybind_engine.cc
+SOURCES := engine.cc engine_pybind.cc
 CORE_OBJECT := engine.o
 endif
 
@@ -84,13 +98,13 @@ $(P2P_PYTHON_EXT): $(OBJECTS) $(RDMA_HOME)/librdma.a
 	$(CXX) $(OBJECTS) $(RDMA_HOME)/librdma.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(CUDA_LIB)
+	      -Wl,-rpath,$(CUDA_LIB) $(INC) $(LIBS_SHARED)
 
 $(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB)
 	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) -libverbs -lz -lelf
+	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) -libverbs -lz -lelf $(INC) $(LIBS_SHARED)
 
 $(RDMA_HOME)/librdma.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
 	make -C $(RDMA_HOME) librdma.a -j$(nproc)

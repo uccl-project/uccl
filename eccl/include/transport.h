@@ -37,6 +37,14 @@ class RDMAEndpoint : public EndpointBase {
   bool send_async(int to_rank, std::shared_ptr<Request> creq) override;
   bool recv_async(int from_rank, std::shared_ptr<Request> creq) override;
 
+  ibv_qp* get_qp(int index) {
+    std::lock_guard<std::mutex> lk(qp_list_mu_);
+    if (index < 0 || static_cast<size_t>(index) >= qp_list_.size()) {
+      return nullptr;
+    }
+    return qp_list_[index];
+  };
+
  private:
   std::vector<ibv_qp*> qp_list_;
   mutable std::mutex qp_list_mu_;
@@ -84,7 +92,7 @@ struct IpcCache {
   size_t size;
 };
 
-// one gpu with best nic
+// one gpu with the best nic
 class Communicator {
  public:
   Communicator(int gpu_id, int rank, int world_size,
@@ -98,12 +106,16 @@ class Communicator {
       int rank);
 
   // ---------- Communication ----------
-  bool isend(int rank, void* ptr, size_t offset, size_t len,
-             uint16_t local_mr_id, uint16_t remote_mr_id, bool on_gpu);
-  bool irecv(int rank, void* ptr, size_t offset, size_t len, bool on_gpu);
-  bool irecv_red(int rank, void* ptr, size_t offset, size_t len, bool on_gpu,
-                 ReductionType red_op);
-  bool wait_finish();  // wait before works finished
+  unsigned isend(int rank, void* ptr, size_t offset, size_t len,
+                 uint16_t local_mr_id, uint16_t remote_mr_id, bool on_gpu);
+  unsigned irecv(int rank, void* ptr, size_t offset, size_t len, bool on_gpu);
+  unsigned irecv_red(int rank, void* ptr, size_t offset, size_t len,
+                     bool on_gpu, ReductionType red_op);
+  unsigned ired(void* ptr, size_t offset, size_t len, bool on_gpu,
+                ReductionType red_op);
+  bool wait_finish(unsigned const req);
+  bool wait_finish(
+      std::vector<unsigned> const& reqs);  // wait before works finished
 
   // ---------- Meta info -------------
   void set_communicator_meta_with_rank(int rank, CommunicatorMeta const& meta);
@@ -112,6 +124,7 @@ class Communicator {
 
   // ---------- RDMA / IPC helpers ----
   MR reg_mr(void* local_buf, size_t len);
+  bool dereg_mr(void* local_buf);
   bool notify_mr(int remote_rank, MR& mr);
   MR wait_mr_notify(int remote_rank);
   MR get_local_mr(void* local_buf);
@@ -168,12 +181,13 @@ class Communicator {
 
   // ---------- Config & Redis --------
   std::shared_ptr<Config> config_;
-  std::shared_ptr<RedisExchanger> redis_client_;
-  mutable std::mutex redis_client_mu_;
+  std::shared_ptr<Exchanger> exchanger_client_;
+  mutable std::mutex exchanger_client_mu_;
 
   // Requests pool
   std::unordered_map<unsigned, std::shared_ptr<Request>> requests_map_;
   std::mutex req_mu_;
+  std::atomic<uint16_t> next_red_seq_{0};
   jring_t* pending_req_id_to_deal_ =
       nullptr;  // For which request has not been added to requests_map_,
                 // cqpoller add unaddressed req_id to this queue, and

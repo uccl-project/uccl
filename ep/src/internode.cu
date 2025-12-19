@@ -1181,8 +1181,10 @@ __global__ void __launch_bounds__(
         auto rdma_slot_idx = i % num_max_rdma_chunked_recv_tokens;
         auto shifted = rdma_channel_data.recv_buffer(src_rdma_rank) +
                        rdma_slot_idx * num_bytes_per_token;
-        auto src_meta = ld_nc_global(reinterpret_cast<SourceMeta*>(
-            shifted + hidden_bytes + scale_bytes));
+        int seen_bits = ld_nc_global(reinterpret_cast<SourceMeta*>(
+                                         shifted + hidden_bytes + scale_bytes))
+                            .is_token_in_nvl_rank_bits;
+        if (seen_bits == 0) trap();
         lane_id == src_rdma_rank ? (num_tokens_to_recv_from_rdma -= 1) : 0;
         bool is_in_dst_nvl_rank = src_meta.is_token_in_nvl_rank(dst_nvl_rank);
         if (lane_id == src_rdma_rank) {

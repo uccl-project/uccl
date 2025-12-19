@@ -5,6 +5,9 @@ set -e
 # Configuration
 # ============================
 
+# python setup.py install
+# pip install ../../wheelhouse-cuda/uccl-0.0.1.post4-py3-none-any.whl
+
 # Local path for DeepEP config
 DEEPEP_CFG="$(pwd)/deepep_config.json"
 
@@ -42,7 +45,7 @@ export SGLANG_ENABLE_JIT_DEEPGEMM=1
 MODEL_PATH="deepseek-ai/DeepSeek-R1-0528"
 DIST_ADDR="172.31.36.62:5000"   # Node 0 master
 NODE_RANK=$1
-NNODES=2
+NNODES=4
 
 # ============================
 # Launch
@@ -54,8 +57,8 @@ echo "DeepEP config: $DEEPEP_CFG"
 
 python -m sglang.launch_server \
   --model-path "$MODEL_PATH" \
-  --tp-size 16 \
-  --ep-size 16 \
+  --tp-size 32 \
+  --ep-size 32 \
   --nnodes "$NNODES" \
   --node-rank "$NODE_RANK" \
   --dist-init-addr "$DIST_ADDR" \
@@ -64,10 +67,20 @@ python -m sglang.launch_server \
   --attention-backend flashinfer \
   --enable-eplb \
   --eplb-algorithm deepseek \
-  --ep-num-redundant-experts 16 \
+  --ep-num-redundant-experts 0 \
   --ep-dispatch-algorithm dynamic \
+  --enable-dp-attention \
+  --enable-dp-lm-head \
   --moe-a2a-backend deepep \
   --deepep-mode normal \
   --deepep-config "$DEEPEP_CFG" \
+  --enable-eplb \
+  --eplb-algorithm deepseek \
+  --chunked-prefill-size 65536 \
   --enable-dp-attention \
-  --enable-dp-lm-head
+  --enable-dp-lm-head \
+  --page-size 256 \
+  --moe-dense-tp-size 1 \
+  --chunked-prefill-size 32768 \
+  --cuda-graph-bs 256 \
+  --dp-size 32 \

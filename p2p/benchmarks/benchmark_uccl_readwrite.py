@@ -6,7 +6,7 @@ import torch
 import numpy as np
 import os
 
-# UCCL P2P read requires RC mode, as RDMA UC does not support one-sided read.
+# Only RC mode is supported for now.
 os.environ["UCCL_RCMODE"] = "1"
 
 try:
@@ -14,7 +14,7 @@ try:
 except ImportError:
     sys.stderr.write("Failed to import p2p\n")
     raise
-
+fifo_blob_size = 64  # bytes
 
 # parse_metadata is now provided by the C++ layer via p2p.Endpoint.parse_metadata()
 
@@ -38,7 +38,7 @@ def _pretty(num: int):
         val /= 1024
 
 
-def _run_server_read(args, ep, remote_metadata):
+def _run_server(args, ep, remote_metadata):
     peer = 0
     print("[Server] Waiting for connection …")
     ok, r_ip, r_gpu, conn_id = ep.accept()
@@ -60,7 +60,8 @@ def _run_server_read(args, ep, remote_metadata):
             size_v.append(size_per_block)
         # Use advertisev to advertise all blocks at once
         ok, fifo_blob_v = ep.advertisev(conn_id, mr_id_v, ptr_v, size_v, args.num_iovs)
-        assert ok and all(len(fifo_blob) == 64 for fifo_blob in fifo_blob_v)
+        assert ok
+        assert all(len(fifo_blob) == fifo_blob_size for fifo_blob in fifo_blob_v)
         # Send all fifo_blobs to peer
         for fifo_blob in fifo_blob_v:
             dist.send(torch.ByteTensor(list(fifo_blob)), dst=peer)
@@ -68,7 +69,7 @@ def _run_server_read(args, ep, remote_metadata):
     print("[Server] Benchmark complete")
 
 
-def _run_client_recv(args, ep, remote_metadata):
+def _run_client(args, ep, remote_metadata):
     peer = 1
     ip, port, r_gpu = p2p.Endpoint.parse_metadata(remote_metadata)
     ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
@@ -91,29 +92,43 @@ def _run_client_recv(args, ep, remote_metadata):
             mr_id_v.append(mr_id)
             size_v.append(size_per_block)
         for _ in range(args.num_iovs):
-            fifo_blob = torch.zeros(64, dtype=torch.uint8)
+            fifo_blob = torch.zeros(fifo_blob_size, dtype=torch.uint8)
             dist.recv(fifo_blob, src=peer)
             fifo_blob_v.append(bytes(fifo_blob.tolist()))
-        start = time.perf_counter()
-        total = 0
+
+        # Warmup
         if args.async_api:
-            ok, transfer_id = ep.read_async(
-                conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0]
-            )
+            if args.mode == "write":
+                ok, transfer_id = ep.write_async(
+                    conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0]
+                )
+            else:  # read
+                ok, transfer_id = ep.read_async(
+                    conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0]
+                )
             assert ok
             is_done = False
             while not is_done:
                 ok, is_done = ep.poll_async(transfer_id)
                 assert ok
         else:
-            ep.readv(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
+            if args.mode == "write":
+                ep.writev(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
+            else:  # read
+                ep.readv(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
+
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
             if args.async_api:
-                ok, transfer_id = ep.read_async(
-                    conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0]
-                )
+                if args.mode == "write":
+                    ok, transfer_id = ep.write_async(
+                        conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0]
+                    )
+                else:  # read
+                    ok, transfer_id = ep.read_async(
+                        conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0]
+                    )
                 assert ok
                 is_done = False
                 while not is_done:
@@ -121,7 +136,24 @@ def _run_client_recv(args, ep, remote_metadata):
                     assert ok
                 total += size_v[0]
             else:
-                ep.readv(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
+                if args.mode == "write":
+                    ep.writev(
+                        conn_id,
+                        mr_id_v,
+                        ptr_v,
+                        size_v,
+                        fifo_blob_v,
+                        args.num_iovs,
+                    )
+                else:  # read
+                    ep.readv(
+                        conn_id,
+                        mr_id_v,
+                        ptr_v,
+                        size_v,
+                        fifo_blob_v,
+                        args.num_iovs,
+                    )
                 total += sum(size_v)
         elapsed = time.perf_counter() - start
         print(
@@ -142,7 +174,13 @@ def parse_sizes(v: str) -> List[int]:
 
 
 def main():
-    p = argparse.ArgumentParser("UCCL READ benchmark (one-sided)")
+    p = argparse.ArgumentParser("UCCL READ/WRITE benchmark (one-sided)")
+    p.add_argument(
+        "--mode",
+        choices=["read", "write"],
+        default="read",
+        help="Benchmark mode: read or write",
+    )
     p.add_argument("--local-gpu-idx", type=int, default=0)
     p.add_argument("--num-cpus", type=int, default=4)
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
@@ -168,13 +206,14 @@ def main():
         "--num-iovs",
         type=int,
         default=1,
-        help="Number of iovs to read in a single call",
+        help="Number of iovs to read/write in a single call",
     )
     args = p.parse_args()
 
     if args.async_api:
         assert args.num_iovs == 1, "Async transfers only support one iov"
 
+    print(f"Mode: {args.mode.upper()}")
     print("Sizes:", ", ".join(_pretty(s) for s in args.sizes))
     if args.async_api:
         print("Async path enabled")
@@ -199,9 +238,9 @@ def main():
         remote_metadata = bytes(remote_metadata_tensor.tolist())
 
     if rank == 0:
-        _run_client_recv(args, ep, remote_metadata)
+        _run_client(args, ep, remote_metadata)
     elif rank == 1:
-        _run_server_read(args, ep, remote_metadata)
+        _run_server(args, ep, remote_metadata)
 
     dist.destroy_process_group()
 
