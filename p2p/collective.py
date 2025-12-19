@@ -627,8 +627,20 @@ class CollectiveContext:
         self.initialized = False
 
     def wait_all(self, transfer_ids: List[int]):
-        for transfer_id in transfer_ids:
-            self.wait(transfer_id)
+        """Wait for all transfers to complete by polling them concurrently."""
+        # Filter out dummy self-transfer IDs
+        remaining = [tid for tid in transfer_ids if tid != -1]
+
+        # Poll all transfers in round-robin until all complete
+        while remaining:
+            still_waiting = []
+            for tid in remaining:
+                ok, is_done = self.ep.poll_async(tid)
+                if not ok:
+                    raise RuntimeError(f"Error polling transfer {tid}")
+                if not is_done:
+                    still_waiting.append(tid)
+            remaining = still_waiting
 
     def allgather(
         self,
@@ -679,23 +691,22 @@ class CollectiveContext:
         # Copy own data to appropriate position in recv buffer
         recv_chunks[self.rank].copy_(send_tensor)
 
-        send_ids = []
-        recv_ids = []
+        transfer_ids = []
 
-        # Send to all other ranks
-        for peer_rank in range(self.world_size):
-            if peer_rank != self.rank:
-                tid = self.isend(send_tensor, peer_rank)
-                send_ids.append(tid)
-
-        # Receive from all other ranks
+        # Post receives first to ensure buffers are ready
         for peer_rank in range(self.world_size):
             if peer_rank != self.rank:
                 tid = self.irecv(recv_chunks[peer_rank], peer_rank)
-                recv_ids.append(tid)
+                transfer_ids.append(tid)
+
+        # Then post sends
+        for peer_rank in range(self.world_size):
+            if peer_rank != self.rank:
+                tid = self.isend(send_tensor, peer_rank)
+                transfer_ids.append(tid)
 
         # Wait for all transfers to complete
-        self.wait_all(send_ids + recv_ids)
+        self.wait_all(transfer_ids)
 
     def iallgather(
         self,
@@ -752,16 +763,16 @@ class CollectiveContext:
 
         transfer_ids = []
 
-        # Send to all other ranks
-        for peer_rank in range(self.world_size):
-            if peer_rank != self.rank:
-                tid = self.isend(send_tensor, peer_rank)
-                transfer_ids.append(tid)
-
-        # Receive from all other ranks
+        # Post receives first to ensure buffers are ready
         for peer_rank in range(self.world_size):
             if peer_rank != self.rank:
                 tid = self.irecv(recv_chunks[peer_rank], peer_rank)
+                transfer_ids.append(tid)
+
+        # Then post sends
+        for peer_rank in range(self.world_size):
+            if peer_rank != self.rank:
+                tid = self.isend(send_tensor, peer_rank)
                 transfer_ids.append(tid)
 
         return transfer_ids
@@ -818,23 +829,23 @@ class CollectiveContext:
         # Copy own chunk (rank sends to itself)
         recv_chunks[self.rank].copy_(send_chunks[self.rank])
 
-        send_ids = []
-        recv_ids = []
+        transfer_ids = []
 
-        # Send chunk i to rank i (for all other ranks)
-        for peer_rank in range(self.world_size):
-            if peer_rank != self.rank:
-                tid = self.isend(send_chunks[peer_rank], peer_rank)
-                send_ids.append(tid)
-
-        # Receive chunk from rank i into position i (for all other ranks)
+        # Interleave sends and receives to avoid all ranks blocking on sends
+        # Post receives first to ensure buffers are ready
         for peer_rank in range(self.world_size):
             if peer_rank != self.rank:
                 tid = self.irecv(recv_chunks[peer_rank], peer_rank)
-                recv_ids.append(tid)
+                transfer_ids.append(tid)
+
+        # Then post sends
+        for peer_rank in range(self.world_size):
+            if peer_rank != self.rank:
+                tid = self.isend(send_chunks[peer_rank], peer_rank)
+                transfer_ids.append(tid)
 
         # Wait for all transfers to complete
-        self.wait_all(send_ids + recv_ids)
+        self.wait_all(transfer_ids)
 
     def ialltoall(
         self,
@@ -893,16 +904,17 @@ class CollectiveContext:
 
         transfer_ids = []
 
-        # Send chunk i to rank i (for all other ranks)
-        for peer_rank in range(self.world_size):
-            if peer_rank != self.rank:
-                tid = self.isend(send_chunks[peer_rank], peer_rank)
-                transfer_ids.append(tid)
-
-        # Receive chunk from rank i into position i (for all other ranks)
+        # Interleave sends and receives to avoid all ranks blocking on sends
+        # Post receives first to ensure buffers are ready
         for peer_rank in range(self.world_size):
             if peer_rank != self.rank:
                 tid = self.irecv(recv_chunks[peer_rank], peer_rank)
+                transfer_ids.append(tid)
+
+        # Then post sends
+        for peer_rank in range(self.world_size):
+            if peer_rank != self.rank:
+                tid = self.isend(send_chunks[peer_rank], peer_rank)
                 transfer_ids.append(tid)
 
         return transfer_ids
