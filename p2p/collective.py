@@ -758,16 +758,6 @@ class CollectiveContext:
     ):
         """
         All-to-all operation: each rank sends different data to each rank.
-
-        Each rank splits its send_tensor into world_size chunks. Chunk i is sent
-        to rank i. After completion, recv_tensor contains chunks from all ranks
-        where chunk i came from rank i.
-
-        Args:
-            send_tensor: Input tensor (size = count * world_size)
-                        Chunk i (at offset i * count) is sent to rank i.
-            recv_tensor: Output tensor (size = count * world_size)
-                        Chunk i (at offset i * count) contains data from rank i.
         """
         handles = self.ialltoall(send_tensor, recv_tensor)
         self.wait_all(handles)
@@ -779,19 +769,6 @@ class CollectiveContext:
     ) -> List[Union[int, dist.Work]]:
         """
         Initiate asynchronous all-to-all operation (non-blocking).
-
-        Each rank splits its send_tensor into world_size chunks. Chunk i is sent
-        to rank i. After completion, recv_tensor contains chunks from all ranks
-        where chunk i came from rank i.
-
-        Args:
-            send_tensor: Input tensor (size = count * world_size)
-                        Chunk i (at offset i * count) is sent to rank i.
-            recv_tensor: Output tensor (size = count * world_size)
-                        Chunk i (at offset i * count) contains data from rank i.
-
-        Returns:
-            List of transfer handles to poll for completion using wait_all()
         """
         if not self.initialized:
             raise RuntimeError("CollectiveContext not initialized. Call init() first.")
@@ -944,10 +921,6 @@ def iallgather(
 def alltoall(send_tensor: torch.Tensor, recv_tensor: torch.Tensor):
     """
     All-to-all using the default collective context.
-
-    Args:
-        send_tensor: Input tensor (size = count * world_size)
-        recv_tensor: Output tensor (size = count * world_size)
     """
     get_collective().alltoall(send_tensor, recv_tensor)
 
@@ -957,12 +930,5 @@ def ialltoall(
 ) -> List[Union[int, dist.Work]]:
     """
     Async all-to-all using the default collective context.
-
-    Args:
-        send_tensor: Input tensor (size = count * world_size)
-        recv_tensor: Output tensor (size = count * world_size)
-
-    Returns:
-        List of transfer handles to poll for completion using wait_all()
     """
     return get_collective().ialltoall(send_tensor, recv_tensor)
