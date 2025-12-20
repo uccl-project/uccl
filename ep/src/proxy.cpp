@@ -3,7 +3,7 @@
 #include "d2h_queue_host.hpp"
 #include "ep_util.hpp"
 #include "util/util.h"
-#include <arpa/inet.h>  // for htonl, ntohl
+#include <arpa/inet.h>
 #include <chrono>
 #include <cstdlib>
 #include <thread>
@@ -37,7 +37,6 @@ uint64_t Proxy::completed_wr() const { return completion_count_; }
 
 void Proxy::pin_thread_to_cpu_wrapper() {
   if (cfg_.pin_thread) {
-    // TODO(MaoZiming): improves pinning.
     pin_thread_to_cpu(cfg_.thread_idx + cfg_.local_rank * kNumProxyThs);
     int cpu = sched_getcpu();
     if (cpu == -1) {
@@ -56,11 +55,7 @@ void Proxy::pin_thread_to_numa_wrapper() {
     assert(ctx_.numa_node != -1);
     pin_thread_unique(ctx_.numa_node, cfg_.local_rank, cfg_.thread_idx,
                       kNumProxyThs);
-
-    // Get the actual CPU this thread is running on
     int cpu = sched_getcpu();
-
-    // Get the affinity mask (optional but useful)
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     pthread_getaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
@@ -99,12 +94,11 @@ void Proxy::set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs) {
 
   for (auto addr : addrs) {
     d2hq::HostD2HHandle h{};
-    d2hq::init_from_addr(h, addr);  // unified initialization
+    d2hq::init_from_addr(h, addr);
     cfg_.d2h_queues.push_back(h);
   }
 }
 
-// Helper function to conditionally modify QP to INIT state (non-EFA only)
 static void maybe_modify_qp_to_init(ProxyCtx& c) {
 #ifndef EFA
   modify_qp_to_init(c);
@@ -113,7 +107,6 @@ static void maybe_modify_qp_to_init(ProxyCtx& c) {
 #endif
 }
 
-// Helper function to conditionally post receive buffers (non-EFA only)
 static void maybe_post_receive_buffer_for_imm(ProxyCtx& ctx) {
 #ifndef EFA
   post_receive_buffer_for_imm(ctx);
@@ -848,13 +841,10 @@ void Proxy::barrier_check() {
   if (!ctx_.barrier_inflight) return;
 
   uint64_t const seq = ctx_.barrier_seq;
-  // Node leader aggregates local arrivals
   static thread_local uint64_t last_sent_seq = 0;
   if (last_sent_seq != seq) {
     last_sent_seq = seq;
     if (cfg_.node_idx == 0) {
-      // Global leader: mark self-arrival; remote arrivals will come via
-      // your existing CQ handler.
       if (ctx_.barrier_arrived.empty()) {
         ctx_.barrier_arrived.assign(ctxs_for_all_ranks_.size(), 0);
         ctx_.barrier_arrival_count = 0;

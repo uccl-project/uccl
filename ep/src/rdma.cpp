@@ -2193,7 +2193,6 @@ static void non_efa_atomic_handle_latency_mode(
 #endif
 }
 
-// Fast mode implementation
 static void post_atomic_operations_latency_mode(
     ProxyCtx& S, std::vector<uint64_t> const& wrs_to_post,
     std::vector<TransferCmd> const& cmds_to_post,
@@ -2244,7 +2243,6 @@ static void post_atomic_operations_latency_mode(
   }
 }
 
-// Wrapper that selects implementation based on use_normal_mode
 void post_atomic_operations(ProxyCtx& S,
                             std::vector<uint64_t> const& wrs_to_post,
                             std::vector<TransferCmd> const& cmds_to_post,
