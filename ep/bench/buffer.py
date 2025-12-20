@@ -96,7 +96,7 @@ class Buffer:
             self.scratch = ep.get_rdma_buffer(num_rdma_bytes, device_index)
 
         rdma_buffer_ptr = self.scratch.data_ptr()
-        self.proxies= initialize_uccl(
+        self.proxies = initialize_uccl(
             rdma_buffer_ptr,
             num_rdma_bytes,
             group.rank(),

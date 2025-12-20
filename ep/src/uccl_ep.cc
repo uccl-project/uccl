@@ -1983,7 +1983,6 @@ PYBIND11_MODULE(ep, m) {
         for (auto& proxy : proxies) {
           vec.push_back(std::move(proxy));
         }
-        printf("Registered proxies for device %d\n", device_index);
       },
       py::arg("device_index"), py::arg("proxies"));
   m.def(

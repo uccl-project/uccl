@@ -19,7 +19,6 @@
 extern bool use_ll_sl;
 
 #define USE_MSCCLPP_FIFO_BACKEND
-// #define USE_SUBSET_BARRIER
 #define kAtomicBufferSize 81960
 #define kQueueSize 2048
 #define kQueueMask (kQueueSize - 1)

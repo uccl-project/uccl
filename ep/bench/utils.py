@@ -171,17 +171,6 @@ def get_cpu_proxies_meta(proxies, rank, scratch_ptr, scratch_bytes, num_ranks, g
     torch.cuda.set_device(device_index)
     dist.all_gather_object(all_meta, meta, group=group)
     rank2meta = {m["rank"]: m for m in all_meta}
-
-    # Debug: print IP distribution
-    ip_counts = {}
-    for m in all_meta:
-        ip = m["ip"]
-        ip_counts[ip] = ip_counts.get(ip, 0) + 1
-    if rank == 0:
-        print(f"[DEBUG] IP distribution across {num_ranks} ranks:", flush=True)
-        for ip, count in ip_counts.items():
-            print(f"[DEBUG]   {ip}: {count} ranks", flush=True)
-
     return rank2meta
 
 
@@ -504,12 +493,6 @@ def initialize_uccl(
     is_intranode=False,
     use_normal_mode=False,
 ):
-    try:
-        for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
-            os.remove(shm_file)
-    except Exception:
-        pass
-
     # Try to get local_rank from environment or infer from current device
     if "LOCAL_RANK" in os.environ:
         local_rank = int(os.environ["LOCAL_RANK"])
@@ -596,11 +579,6 @@ def destroy_uccl(proxies):
         pass
     try:
         ep.unregister_proxy(device_index)
-    except Exception:
-        pass
-    try:
-        for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
-            os.remove(shm_file)
     except Exception:
         pass
 

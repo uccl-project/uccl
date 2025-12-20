@@ -13,71 +13,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#ifndef USE_SUBSET_BARRIER
-static std::string shm_name_for_barrier(std::string const& ip, int thread_idx) {
-  // Include UID to avoid cross-user collisions on /dev/shm which cause EACCES
-  // when a leftover object is owned by a different user.
-  uid_t uid = getuid();
-  return "/uccl_barrier_" + ip + "_uid" + std::to_string(uid) + "_th" +
-         std::to_string(thread_idx);
-}
-
-LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
-  *out_owner = false;
-  size_t const kSize = sizeof(LocalBarrier);
-  mode_t const kMode = 0600;
-  int fd = shm_open(name.c_str(), O_RDWR | O_CREAT | O_EXCL, kMode);
-  if (fd >= 0) {
-    *out_owner = true;
-    if (ftruncate(fd, kSize) != 0) {
-      perror("ftruncate(LocalBarrier)");
-      close(fd);
-      shm_unlink(name.c_str());
-      return nullptr;
-    }
-  } else {
-    if (errno != EEXIST) {
-      perror("shm_open");
-      return nullptr;
-    }
-    fd = shm_open(name.c_str(), O_RDWR, kMode);
-    if (fd < 0) {
-      perror("shm_open(existing)");
-      return nullptr;
-    }
-    struct stat st {};
-    int tries = 1000;
-    while (tries-- > 0) {
-      if (fstat(fd, &st) == 0 && static_cast<size_t>(st.st_size) >= kSize)
-        break;
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-    if (tries < 0) {
-      fprintf(stderr,
-              "map_local_barrier_shm: existing shm '%s' never sized to %zu\n",
-              name.c_str(), kSize);
-      close(fd);
-      return nullptr;
-    }
-  }
-  void* p = mmap(nullptr, kSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  int saved_errno = errno;
-  close(fd);
-  if (p == MAP_FAILED) {
-    errno = saved_errno;
-    perror("mmap(LocalBarrier)");
-    return nullptr;
-  }
-  return reinterpret_cast<LocalBarrier*>(p);
-}
-
-void unmap_local_barrier_shm(std::string const& name, LocalBarrier* lb,
-                             bool owner) {
-  if (lb) munmap(lb, sizeof(LocalBarrier));
-  if (owner) shm_unlink(name.c_str());
-}
-#endif
-
 Proxy::Proxy(Config const& cfg) : cfg_(cfg) {
   // Initialize state tracking for each ring buffer
   listen_port_ = uccl::create_listen_socket(&listen_fd_);
@@ -319,10 +254,6 @@ void Proxy::init_common() {
   }
   usleep(50 * 1000);
   if (cfg_.use_normal_mode) {
-    // if (cfg_.thread_idx != 0) {
-    //   return;
-    // }
-    // Discover local ranks (same IP as me)
     std::string const my_ip = peers_[cfg_.rank].ip;
     std::vector<int> local_ranks;
     local_ranks.reserve(ctxs_for_all_ranks_.size());
@@ -343,26 +274,6 @@ void Proxy::init_common() {
               ctx_.num_local_ranks, (int)UCCL_MAX_LOCAL_RANKS);
       std::abort();
     }
-#ifndef USE_SUBSET_BARRIER
-    std::string const shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
-    ctx_.lb = map_local_barrier_shm(shm_name, &ctx_.lb_owner);
-    if (!ctx_.lb) {
-      fprintf(stderr, "Failed to map local barrier shm: %s\n",
-              shm_name.c_str());
-      std::abort();
-    }
-    if (ctx_.lb_owner) {
-      ctx_.lb->full_mask = (ctx_.num_local_ranks >= 64)
-                               ? ~0ULL
-                               : ((1ULL << ctx_.num_local_ranks) - 1ULL);
-      for (int i = 0; i < ctx_.num_local_ranks; ++i) {
-        ctx_.lb->arrive_seq[i].store(0, std::memory_order_relaxed);
-        ctx_.lb->release_seq[i].store(0, std::memory_order_relaxed);
-      }
-    } else {
-      while (ctx_.lb->full_mask == 0ULL) cpu_relax();
-    }
-#endif
   }
 
 #ifdef USE_MSCCLPP_FIFO_BACKEND
@@ -510,8 +421,6 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
   for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); rb_idx++) {
     d2hq::HostD2HHandle* h = &cfg_.d2h_queues[rb_idx];
 #ifdef USE_MSCCLPP_FIFO_BACKEND
-    assert(h && "h is empty!\n");
-    assert(h->fifo && "h->fifo is empty!\n");
     // FIFO path: one trigger == one command. Do NOT pop yet.
     auto* fifo = h->fifo;
     if (!fifo) continue;
@@ -524,8 +433,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
       auto trig = fifo->poll();
       if (trig.fst == 0) break;
       TransferCmd cmd = d2hq::decode_from_trigger(trig);
-
-      /* For some reason, this is important for correctness */
+      /* This is important for correctness */
       /* It cannot be if (ctx_.barrier_inflight) */
       if (get_base_cmd(cmd.cmd_type) == CmdType::BARRIER &&
           ctx_.barrier_inflight) {
@@ -649,7 +557,6 @@ void Proxy::post_gpu_commands_mixed(
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     switch (get_base_cmd(cmds_to_post[i].cmd_type)) {
       case (CmdType::ATOMIC): {
-
         atomic_wrs.push_back(wrs_to_post[i]);
         atomic_cmds.push_back(cmds_to_post[i]);
         break;
@@ -699,18 +606,12 @@ void Proxy::post_gpu_commands_mixed(
   }
 
   if (!barrier_cmds.empty()) {
-#ifdef USE_MSCCLPP_FIFO_BACKEND
-    assert(barrier_wrs.size() == 1 && ctx_.barrier_wr == -1);
-#endif
     send_barrier(barrier_wrs[0]);
     barrier_wrs.clear();
     barrier_cmds.clear();
   }
 
   if (!quiet_cmds.empty()) {
-#ifdef USE_MSCCLPP_FIFO_BACKEND
-    assert(quiet_wrs.size() == 1 && ctx_.quiet_wr == -1);
-#endif
     ctx_.quiet_wr = quiet_wrs[0];
     quiet(quiet_wrs, quiet_cmds);
     quiet_wrs.clear();
@@ -848,15 +749,6 @@ void Proxy::destroy(bool free_gpu_buffer) {
     ibv_close_device(ctx_.context);
     ctx_.context = nullptr;
   }
-#ifndef USE_SUBSET_BARRIER
-  std::string const my_ip =
-      (cfg_.rank < (int)peers_.size()) ? peers_[cfg_.rank].ip : "";
-  std::string const shm_name = shm_name_for_barrier(my_ip, cfg_.thread_idx);
-  unmap_local_barrier_shm(shm_name, ctx_.lb, ctx_.lb_owner);
-  ctx_.lb = nullptr;
-  ctx_.lb_owner = false;
-#endif
-
   acked_wrs_.clear();
   wr_id_to_start_time_.clear();
   ctxs_for_all_ranks_.clear();
@@ -950,89 +842,7 @@ void Proxy::send_barrier(uint64_t wr) {
       ctx_.barrier_arrival_count = 0;
     }
   }
-#ifndef USE_SUBSET_BARRIER
-  auto* lb = ctx_.lb;
-  lb->seq.store(ctx_.barrier_seq, std::memory_order_release);
-  lb->arrive_seq[ctx_.local_rank].store((uint32_t)ctx_.barrier_seq,
-                                        std::memory_order_release);
-
-  uint64_t bit = (1ULL << (uint64_t)ctx_.local_rank);
-  lb->arrived_mask.fetch_or(bit, std::memory_order_acq_rel);
-#endif
 }
-
-#ifdef USE_SUBSET_BARRIER
-void Proxy::barrier_check() {
-  if (!ctx_.barrier_inflight) return;
-
-  uint64_t const seq = ctx_.barrier_seq;
-  // Node leader aggregates local arrivals
-  static thread_local uint64_t last_sent_seq = 0;
-  if (last_sent_seq != seq) {
-    last_sent_seq = seq;
-    if (cfg_.node_idx == 0) {
-      // Global leader: mark self-arrival; remote arrivals will come via
-      // your existing CQ handler.
-      if (ctx_.barrier_arrived.empty()) {
-        ctx_.barrier_arrived.assign(ctxs_for_all_ranks_.size(), 0);
-        ctx_.barrier_arrival_count = 0;
-      }
-      if (!ctx_.barrier_arrived[0]) {
-        ctx_.barrier_arrived[0] = 1;
-        ++ctx_.barrier_arrival_count;
-      }
-    } else {
-      int rank = cfg_.rank - cfg_.node_idx * MAX_NUM_GPUS;
-      if (rank < 0 || rank >= MAX_NUM_GPUS) {
-        printf("rank: %d, node_idx: %d invalid for barrier\n", cfg_.rank,
-               cfg_.node_idx);
-      }
-      assert(rank >= 0 && rank < MAX_NUM_GPUS);
-      post_barrier_msg(/*dst=*/rank,
-                       /*ack=*/false, seq);
-    }
-  }
-
-  if (cfg_.node_idx == 0) {
-    if (ctx_.barrier_arrival_count == cfg_.num_nodes) {
-      std::unordered_map<std::string, int> leader_for_ip;
-      for (int r = 0; r < (int)peers_.size(); ++r) {
-        if (r >= MAX_NUM_GPUS && (r - cfg_.rank) % MAX_NUM_GPUS == 0) {
-          leader_for_ip[peers_[r].ip] = r;
-        }
-      }
-      for (auto const& kv : leader_for_ip) {
-        std::string const& ip = kv.first;
-        int leader_r = kv.second;
-        if (ip == peers_[0].ip) continue;
-        post_barrier_msg(leader_r, true, seq);
-      }
-      ctx_.barrier_arrived.clear();
-      ctx_.barrier_arrival_count = 0;
-
-      acked_wrs_.insert(ctx_.barrier_wr);
-#ifndef USE_MSCCLPP_FIFO_BACKEND
-      ctx_.barrier_inflight = false;
-      ctx_.barrier_wr = -1;
-#endif
-      return;
-    }
-  }
-
-  // When global release comes back (CQ handler should set these):
-  if (ctx_.barrier_released && ctx_.barrier_release_seq == seq) {
-    // Reset local mask for next barrier and consume the global release
-    ctx_.barrier_released = false;
-
-    // Complete WR
-    acked_wrs_.insert(ctx_.barrier_wr);
-#ifndef USE_MSCCLPP_FIFO_BACKEND
-    ctx_.barrier_inflight = false;
-    ctx_.barrier_wr = -1;
-#endif
-  }
-}
-#else
 
 void Proxy::barrier_check() {
   if (!ctx_.barrier_inflight) return;
@@ -1134,4 +944,3 @@ void Proxy::barrier_check() {
 #endif
   }
 }
-#endif
