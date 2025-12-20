@@ -83,7 +83,7 @@ UCCL currently only supports `Simple` protocol; support for `LL` and `LL128` is 
 
 You can launch distributed ResNet training by: 
 ```bash
-cd $UCCL_HOME/experiments/misc
+cd $UCCL_HOME/experimental/misc
 
 # Benchmark UCCL
 bash run_resnet_uccl.sh
@@ -92,9 +92,9 @@ bash run_resnet_uccl.sh
 bash run_resnet_nccl.sh
 ```
 
-You can also check [experiments/misc/run_ddp.sh](../experiments/misc/run_ddp.sh) for an example of running UCCL with PyTorch DDP applications. 
+You can also check [experimental/misc/run_ddp.sh](../experimental/misc/run_ddp.sh) for an example of running UCCL with PyTorch DDP applications. 
 ```bash
-cd $UCCL_HOME/experiments/misc
+cd $UCCL_HOME/experimental/misc
 
 # Run UCCL
 ./run_ddp.sh ud
