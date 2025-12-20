@@ -96,7 +96,7 @@ class Buffer:
             self.scratch = ep.get_rdma_buffer(num_rdma_bytes, device_index)
 
         rdma_buffer_ptr = self.scratch.data_ptr()
-        self.proxies, self.workers = initialize_uccl(
+        self.proxies= initialize_uccl(
             rdma_buffer_ptr,
             num_rdma_bytes,
             group.rank(),
@@ -183,7 +183,7 @@ class Buffer:
 
         self.runtime.destroy()
         self.runtime = None
-        destroy_uccl(self.proxies, self.workers)
+        destroy_uccl(self.proxies)
 
     @staticmethod
     def is_sm90_compiled():

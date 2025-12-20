@@ -169,6 +169,24 @@ void Proxy::set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs) {
   }
 }
 
+// Helper function to conditionally modify QP to INIT state (non-EFA only)
+static void maybe_modify_qp_to_init(ProxyCtx& c) {
+#ifndef EFA
+  modify_qp_to_init(c);
+#else
+  (void)c;
+#endif
+}
+
+// Helper function to conditionally post receive buffers (non-EFA only)
+static void maybe_post_receive_buffer_for_imm(ProxyCtx& ctx) {
+#ifndef EFA
+  post_receive_buffer_for_imm(ctx);
+#else
+  (void)ctx;
+#endif
+}
+
 void Proxy::init_common() {
   int const my_rank = cfg_.rank;
 
@@ -227,9 +245,7 @@ void Proxy::init_common() {
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank, cfg_.d2h_queues.size(),
                          cfg_.use_normal_mode);
-#ifndef EFA
-    modify_qp_to_init(c);
-#endif
+    maybe_modify_qp_to_init(c);
   }
 
   usleep(50 * 1000);
@@ -369,9 +385,7 @@ void Proxy::init_remote() {
   local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
   remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
   ring.ack_qp = ctx_ptr->ack_qp;
-#ifndef EFA
-  post_receive_buffer_for_imm(*ctx_ptr);
-#endif
+  maybe_post_receive_buffer_for_imm(*ctx_ptr);
 }
 
 void Proxy::run_sender() {
@@ -395,12 +409,10 @@ void Proxy::run_remote() {
                             atomic_buffer_ptr_, cfg_.num_ranks,
                             cfg_.num_experts, pending_atomic_updates, cfg_.rank,
                             cfg_.num_nodes, cfg_.use_normal_mode);
-#ifdef USE_RECEIVER_BARRIER
     if (!cfg_.use_normal_mode) {
       apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                             cfg_.num_experts, cfg_.num_ranks);
     }
-#endif
   }
 }
 
@@ -416,9 +428,7 @@ void Proxy::run_dual() {
     local_post_ack_buf(*ctx_ptr, kSenderAckQueueDepth);
     remote_reg_ack_buf(ctx_ptr->pd, ring.ack_buf, ring.ack_mr);
     ring.ack_qp = ctx_ptr->ack_qp;
-#ifndef EFA
-    post_receive_buffer_for_imm(*ctx_ptr);
-#endif
+    maybe_post_receive_buffer_for_imm(*ctx_ptr);
   }
   uint64_t my_tail = 0;
   size_t seen = 0;
@@ -430,24 +440,10 @@ void Proxy::run_dual() {
                  cfg_.use_normal_mode);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
-#ifdef USE_RECEIVER_BARRIER
     if (!cfg_.use_normal_mode) {
       apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                             cfg_.num_experts, cfg_.num_ranks);
     }
-#endif
-
-#ifdef USE_SENDER_BARRIER
-    if (!cfg_.use_normal_mode) {
-      auto postponed_wr_ids = postponed_wr_ids_;
-      auto postponed_atomics = postponed_atomics_;
-      postponed_wr_ids_.clear();
-      postponed_atomics_.clear();
-      assert(postponed_wr_ids.size() == postponed_atomics.size());
-      assert(postponed_wr_ids_.size() == 0);
-      post_gpu_commands_mixed(postponed_wr_ids, postponed_atomics);
-    }
-#endif
 
     if (cfg_.use_normal_mode) {
       barrier_check();
@@ -653,62 +649,9 @@ void Proxy::post_gpu_commands_mixed(
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
     switch (get_base_cmd(cmds_to_post[i].cmd_type)) {
       case (CmdType::ATOMIC): {
-#ifdef USE_SENDER_BARRIER
-        if (!cfg_.use_normal_mode) {
-          int value = cmds_to_post[i].value;
-          uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
-          uint32_t new_offset =
-              offset - get_low_latency(cmds_to_post[i].cmd_type) *
-                           align<size_t>(cfg_.num_experts * sizeof(int), 128);
-          size_t new_index = new_offset / sizeof(int);
-          int expected_value;
-          int expert_idx;
-
-          if (get_is_combine(cmds_to_post[i].cmd_type)) {
-            expert_idx = new_index;
-            expected_value = ctx_.combine_sent_counter.Get(
-                {get_low_latency(cmds_to_post[i].cmd_type), expert_idx,
-                 cmds_to_post[i].dst_rank});
-          } else {
-            expert_idx = new_index / cfg_.num_ranks;
-            expected_value = ctx_.dispatch_sent_counter.Get(
-                {get_low_latency(cmds_to_post[i].cmd_type), expert_idx,
-                 cmds_to_post[i].dst_rank});
-            value = -value - 1;
-          }
-          if (value != expected_value) {
-            postponed_atomics_.push_back(cmds_to_post[i]);
-            postponed_wr_ids_.push_back(wrs_to_post[i]);
-            assert(postponed_atomics_.size() == postponed_wr_ids_.size());
-            continue;
-          }
-        }
-#endif
 
         atomic_wrs.push_back(wrs_to_post[i]);
         atomic_cmds.push_back(cmds_to_post[i]);
-
-#ifdef USE_SENDER_BARRIER
-        if (!cfg_.use_normal_mode) {
-          uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
-          uint32_t new_offset =
-              offset - get_low_latency(cmds_to_post[i].cmd_type) *
-                           align<size_t>(cfg_.num_experts * sizeof(int), 128);
-          size_t new_index = new_offset / sizeof(int);
-          int expert_idx;
-          if (get_is_combine(cmds_to_post[i].cmd_type)) {
-            expert_idx = new_index;
-            ctx_.combine_sent_counter.Reset(
-                {get_low_latency(cmds_to_post[i].cmd_type), expert_idx,
-                 cmds_to_post[i].dst_rank});
-          } else {
-            expert_idx = new_index / cfg_.num_ranks;
-            ctx_.dispatch_sent_counter.Reset(
-                {get_low_latency(cmds_to_post[i].cmd_type), expert_idx,
-                 cmds_to_post[i].dst_rank});
-          }
-        }
-#endif
         break;
       }
       case (CmdType::WRITE): {
@@ -800,12 +743,10 @@ void Proxy::quiet_cq() {
           ctx_, cfg_.thread_idx, ring, ne, wc, ctx_by_tag_, atomic_buffer_ptr_,
           cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates, cfg_.rank,
           cfg_.num_nodes, cfg_.use_normal_mode);
-#ifdef USE_RECEIVER_BARRIER
       if (!cfg_.use_normal_mode) {
         apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                               cfg_.num_experts, cfg_.num_ranks);
       }
-#endif
     } else {
       ++empty_iters;
     }
@@ -924,13 +865,7 @@ void Proxy::destroy(bool free_gpu_buffer) {
   remote_infos_.clear();
 }
 
-void Proxy::post_barrier_msg(int dst_rank, bool ack, uint64_t seq) {
-  ProxyCtx* ctx = ctxs_for_all_ranks_[dst_rank].get();
-  if (!ctx || !ctx->qp || !ctx->mr) {
-    fprintf(stderr, "barrier_msg: bad ctx for dst=%d\n", dst_rank);
-    std::abort();
-  }
-  uint32_t imm = BarrierImm::Pack(ack, (uint32_t)seq, (uint8_t)cfg_.rank);
+static void post_barrier_msg_efa(ProxyCtx* ctx, uint32_t imm) {
 #ifdef EFA
   auto* qpx = (struct ibv_qp_ex*)ctx->qp;
   int barrier_seq = 0;
@@ -949,6 +884,13 @@ void Proxy::post_barrier_msg(int dst_rank, bool ack, uint64_t seq) {
     std::abort();
   }
 #else
+  (void)ctx;
+  (void)imm;
+#endif
+}
+
+static void post_barrier_msg_non_efa(ProxyCtx* ctx, uint32_t imm) {
+#ifndef EFA
   ibv_sge sge{};
   sge.addr = (uintptr_t)ctx->mr->addr;
   sge.length = 0;
@@ -973,6 +915,23 @@ void Proxy::post_barrier_msg(int dst_rank, bool ack, uint64_t seq) {
       fprintf(stderr, "  bad wr_id=%llu\n", (unsigned long long)bad->wr_id);
     std::abort();
   }
+#else
+  (void)ctx;
+  (void)imm;
+#endif
+}
+
+void Proxy::post_barrier_msg(int dst_rank, bool ack, uint64_t seq) {
+  ProxyCtx* ctx = ctxs_for_all_ranks_[dst_rank].get();
+  if (!ctx || !ctx->qp || !ctx->mr) {
+    fprintf(stderr, "barrier_msg: bad ctx for dst=%d\n", dst_rank);
+    std::abort();
+  }
+  uint32_t imm = BarrierImm::Pack(ack, (uint32_t)seq, (uint8_t)cfg_.rank);
+#ifdef EFA
+  post_barrier_msg_efa(ctx, imm);
+#else
+  post_barrier_msg_non_efa(ctx, imm);
 #endif
 }
 

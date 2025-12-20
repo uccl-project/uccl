@@ -80,8 +80,8 @@ combined_x, event, hook = buffer.low_latency_combine(
 
 Initialization and tear down:
 ```python
-proxies, workers = initialize_uccl(scratch, num_rdma_bytes, rank, num_ranks, group, args.num_experts)
-destroy_uccl(proxies, workers)
+proxies = initialize_uccl(scratch, num_rdma_bytes, rank, num_ranks, group, args.num_experts)
+destroy_uccl(proxies)
 ```
 
 ## Benchmark

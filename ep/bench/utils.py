@@ -578,34 +578,16 @@ def initialize_uccl(
     if not is_intranode:
         for proxy in proxies:
             proxy.start_dual()
-
-    workers = None
-    # if hasattr(ep, "PeerCopyManager"):
-    #     try:
-    #         workers = ep.PeerCopyManager(src_device=local_rank)
-    #         workers.start_for_proxies(proxies)
-    #         if rank == 0:
-    #             print("✓ PeerCopyManager started", flush=True)
-    #     except Exception as e:
-    #         if rank == 0:
-    #             print(f"PeerCopyManager unavailable: {e}", flush=True)
-
     time.sleep(3)
-    return proxies, workers
+    return proxies
 
 
-def destroy_uccl(proxies, workers):
+def destroy_uccl(proxies):
     # Use current device or fallback to LOCAL_RANK
     if "LOCAL_RANK" in os.environ:
         device_index = int(os.environ["LOCAL_RANK"])
     else:
         device_index = torch.cuda.current_device()
-
-    if workers is not None:
-        try:
-            workers.stop()
-        except Exception:
-            pass
 
     try:
         for p in proxies:

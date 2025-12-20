@@ -14,12 +14,9 @@
 
 #define MAX_IB_DEVS 32
 // #define MEASURE_PER_OP_LATENCY
-
-#ifdef EFA
 #define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
-#define USE_RECEIVER_BARRIER
+
 extern bool use_ll_sl;
-#endif
 
 #define USE_MSCCLPP_FIFO_BACKEND
 // #define USE_SUBSET_BARRIER
