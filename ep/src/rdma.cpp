@@ -429,7 +429,7 @@ static void create_qps_non_efa(ProxyCtx& S) {
 
 void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
                           RDMAConnectionInfo* local_info, int rank,
-                          size_t num_rings, bool use_normal_mode) {
+                          size_t num_rings, bool use_throughput_mode) {
   if (S.qp) return;
   if (S.ack_qp) return;
   if (S.recv_ack_qp) return;
@@ -439,7 +439,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   create_qps_non_efa(S);
 #endif
 
-  if (use_normal_mode) {
+  if (use_throughput_mode) {
     size_t const rings_to_create =
         std::min(num_rings, (size_t)kChannelPerProxy);
     S.data_qps_by_channel.resize(rings_to_create);
@@ -558,12 +558,12 @@ struct ibv_ah* create_ah(ProxyCtx& S, uint8_t* remote_gid) {
 }
 
 void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
-                      bool use_normal_mode) {
+                      bool use_throughput_mode) {
 #ifdef EFA
   S.dst_qpn = remote->qp_num;
   S.dst_ack_qpn = remote->recv_ack_qp_num;
   S.dst_ah = create_ah(S, remote->gid);
-  if (use_normal_mode) {
+  if (use_throughput_mode) {
     S.dst_data_qpn_by_ring.clear();
     uint32_t const remote_rings =
         std::min(remote->num_rings, (uint32_t)kChannelPerProxy);
@@ -574,7 +574,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
   }
   return;
 #endif
-  if (use_normal_mode) {
+  if (use_throughput_mode) {
     S.dst_data_qpn_by_ring.clear();
     uint32_t const remote_rings =
         std::min(remote->num_rings, (uint32_t)kChannelPerProxy);
@@ -1224,8 +1224,8 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                              int my_rank, int thread_idx,
-                             bool use_normal_mode) {
-  if (use_normal_mode) {
+                             bool use_throughput_mode) {
+  if (use_throughput_mode) {
     post_rdma_async_batched_throughput_mode(
         S, buf, num_wrs, wrs_to_post, cmds_to_post, ctxs, my_rank, thread_idx);
   } else {
@@ -1386,7 +1386,7 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
                   std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr,
                   int num_ranks, int num_experts,
                   std::set<PendingUpdate>& pending_atomic_updates, int my_rank,
-                  int num_nodes, bool use_normal_mode) {
+                  int num_nodes, bool use_throughput_mode) {
   ibv_wc wc[kMaxOutstandingSends];
   auto poll_one = [&](ibv_cq* cq) {
     int ne = poll_cq_once(cq, wc, kMaxOutstandingSends);
@@ -1395,7 +1395,7 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
       remote_process_completions(S, thread_idx, g_ring, ne, wc, ctx_by_tag,
                                  atomic_buffer_ptr, num_ranks, num_experts,
                                  pending_atomic_updates, my_rank, num_nodes,
-                                 use_normal_mode);
+                                 use_throughput_mode);
     }
   };
   if (S.cq) poll_one(S.cq);
@@ -1775,8 +1775,8 @@ void remote_process_completions(
     ProxyCtx& S, int idx, CopyRingBuffer& g_ring, int ne, ibv_wc* wc,
     std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr, int num_ranks,
     int num_experts, std::set<PendingUpdate>& pending_atomic_updates,
-    int my_rank, int num_nodes, bool use_normal_mode) {
-  if (use_normal_mode) {
+    int my_rank, int num_nodes, bool use_throughput_mode) {
+  if (use_throughput_mode) {
     remote_process_completions_throughput_mode(
         S, idx, g_ring, ne, wc, ctx_by_tag, atomic_buffer_ptr, num_ranks,
         num_experts, pending_atomic_updates, my_rank, num_nodes);
@@ -1792,7 +1792,7 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              void* atomic_buffer_ptr, int num_ranks,
                              int num_experts,
                              std::set<PendingUpdate>& pending_atomic_updates,
-                             int my_rank, int num_nodes, bool use_normal_mode) {
+                             int my_rank, int num_nodes, bool use_throughput_mode) {
   ibv_wc wc[kMaxOutstandingRecvs];
   auto poll_one = [&](ibv_cq* cq) {
     int ne = poll_cq_once(cq, wc, kMaxOutstandingRecvs);
@@ -1800,7 +1800,7 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
       remote_process_completions(S, idx, g_ring, ne, wc, ctx_by_tag,
                                  atomic_buffer_ptr, num_ranks, num_experts,
                                  pending_atomic_updates, my_rank, num_nodes,
-                                 use_normal_mode);
+                                 use_throughput_mode);
     }
   };
   if (S.cq) poll_one(S.cq);
@@ -2249,8 +2249,8 @@ void post_atomic_operations(ProxyCtx& S,
                             std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                             int my_rank, int thread_idx,
                             std::unordered_set<uint64_t>& acked_wrs,
-                            bool use_normal_mode) {
-  if (use_normal_mode) {
+                            bool use_throughput_mode) {
+  if (use_throughput_mode) {
     post_atomic_operations_throughput_mode(S, wrs_to_post, cmds_to_post, ctxs,
                                            my_rank, thread_idx, acked_wrs);
   } else {

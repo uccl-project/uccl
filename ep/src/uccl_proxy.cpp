@@ -13,7 +13,7 @@
 UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      size_t total_size, int rank, int node_idx, int local_rank,
                      int num_experts, int num_ranks, int num_nodes,
-                     bool use_normal_mode, bool is_intranode)
+                     bool use_throughput_mode, bool is_intranode)
     : thread_{},
       mode_{Mode::None},
       running_{false},
@@ -46,7 +46,7 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.num_experts = num_experts;
   cfg.num_ranks = num_ranks;
   cfg.num_nodes = num_nodes;
-  cfg.use_normal_mode = use_normal_mode;
+  cfg.use_throughput_mode = use_throughput_mode;
   cfg.is_intranode = is_intranode;
   proxy_ = std::make_unique<Proxy>(cfg);
   local_rank_ = local_rank;

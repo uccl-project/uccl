@@ -168,11 +168,11 @@ void Proxy::init_common() {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
-    if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
+    if (cfg_.use_throughput_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
       continue;
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank, cfg_.d2h_queues.size(),
-                         cfg_.use_normal_mode);
+                         cfg_.use_throughput_mode);
     maybe_modify_qp_to_init(c);
   }
 
@@ -183,7 +183,7 @@ void Proxy::init_common() {
     for (int peer = 0; peer < num_ranks; ++peer) {
       // Skip rdma connection for intra-node.
       if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-          (cfg_.use_normal_mode &&
+          (cfg_.use_throughput_mode &&
            std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
         continue;
       int actual_peer;
@@ -195,7 +195,7 @@ void Proxy::init_common() {
   // Then send our info to all peers
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-        (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
+        (cfg_.use_throughput_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
       continue;
     char const* peer_ip = peers_[peer].ip.c_str();
     int const peer_listen_port = peers_[peer].listen_ports[cfg_.thread_idx];
@@ -209,7 +209,7 @@ void Proxy::init_common() {
   // Verify remote info correctness
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-        (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
+        (cfg_.use_throughput_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
       continue;
     if (remote_infos_[peer].addr != peers_[peer].ptr) {
       fprintf(stderr,
@@ -226,12 +226,12 @@ void Proxy::init_common() {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
-    if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
+    if (cfg_.use_throughput_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
       continue;
     auto& c = *ctxs_for_all_ranks_[peer];
 
     // qp is different from each rank.
-    modify_qp_to_rtr(c, &remote_infos_[peer], cfg_.use_normal_mode);
+    modify_qp_to_rtr(c, &remote_infos_[peer], cfg_.use_throughput_mode);
     modify_qp_to_rts(c, &local_infos_[peer]);
 
     c.remote_addr = remote_infos_[peer].addr;
@@ -246,7 +246,7 @@ void Proxy::init_common() {
     }
   }
   usleep(50 * 1000);
-  if (cfg_.use_normal_mode) {
+  if (cfg_.use_throughput_mode) {
     std::string const my_ip = peers_[cfg_.rank].ip;
     std::vector<int> local_ranks;
     local_ranks.reserve(ctxs_for_all_ranks_.size());
@@ -312,8 +312,8 @@ void Proxy::run_remote() {
     remote_poll_completions(ctx_, cfg_.thread_idx, ring, ctx_by_tag_,
                             atomic_buffer_ptr_, cfg_.num_ranks,
                             cfg_.num_experts, pending_atomic_updates, cfg_.rank,
-                            cfg_.num_nodes, cfg_.use_normal_mode);
-    if (!cfg_.use_normal_mode) {
+                            cfg_.num_nodes, cfg_.use_throughput_mode);
+    if (!cfg_.use_throughput_mode) {
       apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                             cfg_.num_experts, cfg_.num_ranks);
     }
@@ -325,7 +325,7 @@ void Proxy::run_dual() {
   for (int peer = 0; peer < (int)ctxs_for_all_ranks_.size(); ++peer) {
     if (peer == cfg_.rank) continue;
     if (peers_[peer].ip == peers_[cfg_.rank].ip) continue;
-    if (cfg_.use_normal_mode && std::abs(peer - cfg_.rank) % MAX_NUM_GPUS != 0)
+    if (cfg_.use_throughput_mode && std::abs(peer - cfg_.rank) % MAX_NUM_GPUS != 0)
       continue;
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;
@@ -341,15 +341,15 @@ void Proxy::run_dual() {
     poll_cq_dual(ctx_, acked_wrs_, cfg_.thread_idx, ring, ctx_by_tag_,
                  atomic_buffer_ptr_, cfg_.num_ranks, cfg_.num_experts,
                  pending_atomic_updates, cfg_.rank, cfg_.num_nodes,
-                 cfg_.use_normal_mode);
+                 cfg_.use_throughput_mode);
     notify_gpu_completion(my_tail);
     post_gpu_command(my_tail, seen);
-    if (!cfg_.use_normal_mode) {
+    if (!cfg_.use_throughput_mode) {
       apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                             cfg_.num_experts, cfg_.num_ranks);
     }
 
-    if (cfg_.use_normal_mode) {
+    if (cfg_.use_throughput_mode) {
       barrier_check();
     }
   }
@@ -420,7 +420,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     // Available budget for this FIFO.
     size_t pending = fifo_pending_[rb_idx].size();
     size_t kMaxInflight =
-        cfg_.use_normal_mode ? kMaxInflightNormal : kMaxInflightLowLatency;
+        cfg_.use_throughput_mode ? kMaxInflightNormal : kMaxInflightLowLatency;
     size_t budget = (kMaxInflight > pending) ? (kMaxInflight - pending) : 0;
     for (size_t take = 0; take < budget; ++take) {
       auto trig = fifo->poll();
@@ -585,7 +585,7 @@ void Proxy::post_gpu_commands_mixed(
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
                             rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
-                            cfg_.thread_idx, cfg_.use_normal_mode);
+                            cfg_.thread_idx, cfg_.use_throughput_mode);
     rdma_wrs.clear();
     rdma_cmds.clear();
   }
@@ -593,7 +593,7 @@ void Proxy::post_gpu_commands_mixed(
   if (!atomic_wrs.empty()) {
     post_atomic_operations(ctx_, atomic_wrs, atomic_cmds, ctxs_for_all_ranks_,
                            cfg_.rank, cfg_.thread_idx, acked_wrs_,
-                           cfg_.use_normal_mode);
+                           cfg_.use_throughput_mode);
     atomic_wrs.clear();
     atomic_cmds.clear();
   }
@@ -636,8 +636,8 @@ void Proxy::quiet_cq() {
       remote_process_completions(
           ctx_, cfg_.thread_idx, ring, ne, wc, ctx_by_tag_, atomic_buffer_ptr_,
           cfg_.num_ranks, cfg_.num_experts, pending_atomic_updates, cfg_.rank,
-          cfg_.num_nodes, cfg_.use_normal_mode);
-      if (!cfg_.use_normal_mode) {
+          cfg_.num_nodes, cfg_.use_throughput_mode);
+      if (!cfg_.use_throughput_mode) {
         apply_pending_updates(ctx_, pending_atomic_updates, atomic_buffer_ptr_,
                               cfg_.num_experts, cfg_.num_ranks);
       }

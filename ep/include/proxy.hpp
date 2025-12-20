@@ -48,8 +48,7 @@ class Proxy {
     int num_experts = 0;
     int num_ranks = 0;
     int num_nodes = 0;
-    bool use_normal_mode =
-        false;  // Runtime flag for normal mode (batching optimization)
+    bool use_throughput_mode = false;
     bool is_intranode = false;
   };
 

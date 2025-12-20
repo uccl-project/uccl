@@ -491,7 +491,7 @@ def initialize_uccl(
     group,
     num_experts=0,
     is_intranode=False,
-    use_normal_mode=False,
+    use_throughput_mode=False,
 ):
     # Try to get local_rank from environment or infer from current device
     if "LOCAL_RANK" in os.environ:
@@ -541,7 +541,7 @@ def initialize_uccl(
             num_experts=num_experts,
             num_ranks=num_ranks,
             num_nodes=num_nodes,
-            use_normal_mode=use_normal_mode,
+            use_throughput_mode=use_throughput_mode,
             is_intranode=is_intranode,
         )
         proxies.append(proxy)

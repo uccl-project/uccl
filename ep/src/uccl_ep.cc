@@ -2159,7 +2159,7 @@ PYBIND11_MODULE(ep, m) {
            py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
            py::arg("local_rank") = 0, py::arg("num_experts") = -1,
            py::arg("num_ranks") = -1, py::arg("num_nodes") = 0,
-           py::arg("use_normal_mode") = false, py::arg("is_intranode") = false)
+           py::arg("use_throughput_mode") = false, py::arg("is_intranode") = false)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_dual", &UcclProxy::start_dual)
