@@ -70,7 +70,6 @@ class Proxy {
 
   void run_sender();
   void run_remote();
-  void run_local();
   void run_dual();
   void pin_thread_to_cpu_wrapper();
   void pin_thread_to_numa_wrapper();

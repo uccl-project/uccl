@@ -97,7 +97,6 @@ void UcclProxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
 
 void UcclProxy::start_sender() { start(Mode::Sender); }
 void UcclProxy::start_remote() { start(Mode::Remote); }
-void UcclProxy::start_local() { start(Mode::Local); }
 void UcclProxy::start_dual() { start(Mode::Dual); }
 
 void UcclProxy::stop() {
@@ -123,7 +122,6 @@ void UcclProxy::start(Mode m) {
   thread_ = std::thread([this]() {
     if (is_intranode_) {
       std::printf("UcclProxy: no peer IP set, running in local mode\n");
-      proxy_->run_local();
       return;
     }
     switch (mode_) {
@@ -132,9 +130,6 @@ void UcclProxy::start(Mode m) {
         break;
       case Mode::Remote:
         proxy_->run_remote();
-        break;
-      case Mode::Local:
-        proxy_->run_local();
         break;
       case Mode::Dual:
         proxy_->run_dual();

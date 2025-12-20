@@ -81,7 +81,7 @@ class UcclProxy {
   }
 
  private:
-  enum class Mode { None, Sender, Remote, Local, Dual };
+  enum class Mode { None, Sender, Remote, Dual };
   void start(Mode m);
 
   std::unique_ptr<Proxy> proxy_;
