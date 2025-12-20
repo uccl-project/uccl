@@ -2164,7 +2164,6 @@ PYBIND11_MODULE(ep, m) {
            py::arg("use_normal_mode") = false, py::arg("is_intranode") = false)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
-      .def("start_local", &UcclProxy::start_local)
       .def("start_dual", &UcclProxy::start_dual)
       .def("stop", &UcclProxy::stop)
       .def("get_listen_port", &UcclProxy::get_listen_port)

@@ -14,17 +14,10 @@
 
 #define MAX_IB_DEVS 32
 // #define MEASURE_PER_OP_LATENCY
-// #define MEASURE_PER_VERB_LATENCY
-
-// Barrier type selection (can be overridden at compile time)
-#ifndef USE_SENDER_BARRIER
-#ifdef EFA
-#define USE_RECEIVER_BARRIER
-#endif
-#endif
 
 #ifdef EFA
 #define EFA_QP_LOW_LATENCY_SERVICE_LEVEL 8
+#define USE_RECEIVER_BARRIER
 extern bool use_ll_sl;
 #endif
 
@@ -41,9 +34,7 @@ extern bool use_ll_sl;
 #define kIterations 40000
 #define kNumProxyThs 4
 #define kTestNumGpuThPerBlock 1
-#define kObjectSize 7168  // 7 KB
-// #define kObjectSize 10752  // 10.5 KB
-// #define kObjectSize 14336  // 14 KB
+#define kObjectSize 7168           // 7 KB
 #define kMaxOutstandingSends 2048  // = max_send_wr, max_recv_wr, cq_depth / 2
 #define kMaxOutstandingRecvs 2048
 #define kSenderAckQueueDepth 2048

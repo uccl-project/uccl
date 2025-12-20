@@ -227,7 +227,9 @@ void Proxy::init_common() {
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank, cfg_.d2h_queues.size(),
                          cfg_.use_normal_mode);
+#ifndef EFA
     modify_qp_to_init(c);
+#endif
   }
 
   usleep(50 * 1000);
@@ -617,10 +619,6 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
       uint64_t unique_wr_id = (rb_idx << 32) | i;
       wrs_to_post.push_back(unique_wr_id);
       cmds_to_post.push_back(cmd_entry);
-#ifdef MEASURE_PER_VERB_LATENCY
-      wr_id_to_start_time_[unique_wr_id] =
-          std::chrono::high_resolution_clock::now();
-#endif
       ring_seen = i + 1;
     }
 #endif
