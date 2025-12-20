@@ -847,96 +847,66 @@ void Proxy::send_barrier(uint64_t wr) {
 void Proxy::barrier_check() {
   if (!ctx_.barrier_inflight) return;
 
-  auto* lb = ctx_.lb;
   uint64_t const seq = ctx_.barrier_seq;
-
   // Node leader aggregates local arrivals
-  if (cfg_.rank == ctx_.node_leader_rank) {
-    bool all_local_arrived = true;
-    for (int lr = 0; lr < ctx_.num_local_ranks; ++lr) {
-      uint32_t seen = lb->arrive_seq[lr].load(std::memory_order_acquire);
-      if ((uint32_t)seen != seq) {
-        all_local_arrived = false;
-        break;
+  static thread_local uint64_t last_sent_seq = 0;
+  if (last_sent_seq != seq) {
+    last_sent_seq = seq;
+    if (cfg_.node_idx == 0) {
+      // Global leader: mark self-arrival; remote arrivals will come via
+      // your existing CQ handler.
+      if (ctx_.barrier_arrived.empty()) {
+        ctx_.barrier_arrived.assign(ctxs_for_all_ranks_.size(), 0);
+        ctx_.barrier_arrival_count = 0;
       }
+      if (!ctx_.barrier_arrived[0]) {
+        ctx_.barrier_arrived[0] = 1;
+        ++ctx_.barrier_arrival_count;
+      }
+    } else {
+      int rank = cfg_.rank - cfg_.node_idx * MAX_NUM_GPUS;
+      if (rank < 0 || rank >= MAX_NUM_GPUS) {
+        printf("rank: %d, node_idx: %d invalid for barrier\n", cfg_.rank,
+               cfg_.node_idx);
+      }
+      assert(rank >= 0 && rank < MAX_NUM_GPUS);
+      post_barrier_msg(/*dst=*/rank,
+                       /*ack=*/false, seq);
     }
-    if (all_local_arrived) {
-      static thread_local uint64_t last_sent_seq = 0;
-      if (last_sent_seq != seq) {
-        last_sent_seq = seq;
-        if (cfg_.rank == 0) {
-          // Global leader: mark self-arrival; remote arrivals will come via
-          // your existing CQ handler.
-          if (ctx_.barrier_arrived.empty()) {
-            ctx_.barrier_arrived.assign(ctxs_for_all_ranks_.size(), 0);
-            ctx_.barrier_arrival_count = 0;
-          }
-          if (!ctx_.barrier_arrived[0]) {
-            ctx_.barrier_arrived[0] = 1;
-            ++ctx_.barrier_arrival_count;
-          }
-        } else {
-          post_barrier_msg(/*dst=*/0, /*ack=*/false, seq);
-        }
-      }
-
-      if (cfg_.rank == 0) {
-        if (ctx_.barrier_arrival_count == cfg_.num_nodes) {
-          std::unordered_map<std::string, int> leader_for_ip;
-          for (int r = 0; r < (int)peers_.size(); ++r) {
-            auto it = leader_for_ip.find(peers_[r].ip);
-            if (it == leader_for_ip.end() || r < it->second) {
-              assert(r % MAX_NUM_GPUS == 0);
-              leader_for_ip[peers_[r].ip] = r;
-            }
-          }
-          for (auto const& kv : leader_for_ip) {
-            std::string const& ip = kv.first;
-            int leader_r = kv.second;
-            if (ip == peers_[0].ip) continue;
-            post_barrier_msg(leader_r, true, seq);
-          }
-
-          for (int lr = 0; lr < ctx_.num_local_ranks; ++lr) {
-            lb->release_seq[lr].store(seq, std::memory_order_release);
-          }
-          ctx_.barrier_arrived.clear();
-          ctx_.barrier_arrival_count = 0;
-
-          acked_wrs_.insert(ctx_.barrier_wr);
-#ifndef USE_MSCCLPP_FIFO_BACKEND
-          ctx_.barrier_inflight = false;
-          ctx_.barrier_wr = -1;
-#endif
-          return;
-        }
-      }
-
-      // When global release comes back (CQ handler should set these):
-      if (ctx_.barrier_released && ctx_.barrier_release_seq == seq) {
-        // Fan-out to local ranks via shared memory
-        for (int lr = 0; lr < ctx_.num_local_ranks; ++lr) {
-          lb->release_seq[lr].store(seq, std::memory_order_release);
-        }
-        // Reset local mask for next barrier and consume the global release
-        ctx_.barrier_released = false;
-
-        // Complete WR
-        acked_wrs_.insert(ctx_.barrier_wr);
-#ifndef USE_MSCCLPP_FIFO_BACKEND
-        ctx_.barrier_inflight = false;
-        ctx_.barrier_wr = -1;
-#endif
-      }
-    }
-    return;
-  } else {
-    assert(!ctx_.barrier_released &&
-           "This can only be set by local leader thread.");
   }
 
-  // Followers: wait until leader sets our release_seq
-  if (lb->release_seq[ctx_.local_rank].load(std::memory_order_acquire) == seq) {
+  if (cfg_.node_idx == 0) {
+    if (ctx_.barrier_arrival_count == cfg_.num_nodes) {
+      std::unordered_map<std::string, int> leader_for_ip;
+      for (int r = 0; r < (int)peers_.size(); ++r) {
+        if (r >= MAX_NUM_GPUS && (r - cfg_.rank) % MAX_NUM_GPUS == 0) {
+          leader_for_ip[peers_[r].ip] = r;
+        }
+      }
+      for (auto const& kv : leader_for_ip) {
+        std::string const& ip = kv.first;
+        int leader_r = kv.second;
+        if (ip == peers_[0].ip) continue;
+        post_barrier_msg(leader_r, true, seq);
+      }
+      ctx_.barrier_arrived.clear();
+      ctx_.barrier_arrival_count = 0;
+
+      acked_wrs_.insert(ctx_.barrier_wr);
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+      ctx_.barrier_inflight = false;
+      ctx_.barrier_wr = -1;
+#endif
+      return;
+    }
+  }
+
+  // When global release comes back (CQ handler should set these):
+  if (ctx_.barrier_released && ctx_.barrier_release_seq == seq) {
+    // Reset local mask for next barrier and consume the global release
+    ctx_.barrier_released = false;
+
+    // Complete WR
     acked_wrs_.insert(ctx_.barrier_wr);
 #ifndef USE_MSCCLPP_FIFO_BACKEND
     ctx_.barrier_inflight = false;
