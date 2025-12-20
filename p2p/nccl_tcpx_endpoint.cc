@@ -99,12 +99,12 @@ bool fence_default_stream(int device, cudaStream_t stream) {
 }
 }  // namespace
 
-Endpoint::Endpoint(int /*num_cpus*/) {
+TCPXEndpoint::TCPXEndpoint(int /*num_cpus*/) {
   ctrl_port_ = get_env_int("UCCL_TCPX_OOB_PORT", 28900);
   setup_listener_();
 }
 
-Endpoint::~Endpoint() {
+TCPXEndpoint::~TCPXEndpoint() {
   {
     std::lock_guard<std::mutex> lock(conn_mu_);
     for (auto& kv : conn_map_) {
@@ -120,7 +120,7 @@ Endpoint::~Endpoint() {
   }
 }
 
-bool Endpoint::setup_listener_() {
+bool TCPXEndpoint::setup_listener_() {
   int fd = ::socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return false;
 
@@ -147,7 +147,7 @@ bool Endpoint::setup_listener_() {
   return true;
 }
 
-bool Endpoint::send_all_(int fd, void const* buf, size_t len) {
+bool TCPXEndpoint::send_all_(int fd, void const* buf, size_t len) {
   char const* p = static_cast<char const*>(buf);
   size_t sent = 0;
   while (sent < len) {
@@ -158,7 +158,7 @@ bool Endpoint::send_all_(int fd, void const* buf, size_t len) {
   return true;
 }
 
-bool Endpoint::recv_all_(int fd, void* buf, size_t len) {
+bool TCPXEndpoint::recv_all_(int fd, void* buf, size_t len) {
   char* p = static_cast<char*>(buf);
   size_t recvd = 0;
   while (recvd < len) {
@@ -169,7 +169,7 @@ bool Endpoint::recv_all_(int fd, void* buf, size_t len) {
   return true;
 }
 
-bool Endpoint::init_comm_(Conn& conn, ncclUniqueId const& uid, int rank) {
+bool TCPXEndpoint::init_comm_(Conn& conn, ncclUniqueId const& uid, int rank) {
   // Encapsulate NCCL control/data lifetime per connection so uccl_engine does
   // not need extra state.
   if (cudaSetDevice(conn.local_gpu_idx) != cudaSuccess) return false;
@@ -186,7 +186,7 @@ bool Endpoint::init_comm_(Conn& conn, ncclUniqueId const& uid, int rank) {
   return true;
 }
 
-bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
+bool TCPXEndpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                        uint64_t& conn_id) {
   int fd = ::socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return false;
@@ -240,7 +240,7 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   return true;
 }
 
-bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
+bool TCPXEndpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
   if (ctrl_listen_fd_ < 0) return false;
   // Wait until endpoint is intialized to get the correct local_gpu_idx_
@@ -301,14 +301,14 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   return true;
 }
 
-int Endpoint::get_sock_fd(uint64_t conn_id) const {
+int TCPXEndpoint::get_sock_fd(uint64_t conn_id) const {
   std::lock_guard<std::mutex> lock(conn_mu_);
   auto it = conn_map_.find(conn_id);
   if (it == conn_map_.end()) return -1;
   return it->second.sock_fd;
 }
 
-std::vector<uint8_t> Endpoint::get_unified_metadata() {
+std::vector<uint8_t> TCPXEndpoint::get_unified_metadata() {
   int idx = 0;
   std::vector<uint8_t> meta(10);
   std::string ip = get_local_ip();
@@ -326,7 +326,7 @@ std::vector<uint8_t> Endpoint::get_unified_metadata() {
   return meta;
 }
 
-std::tuple<std::string, uint16_t, int> Endpoint::parse_metadata(
+std::tuple<std::string, uint16_t, int> TCPXEndpoint::parse_metadata(
     std::vector<uint8_t> const& metadata) {
   if (metadata.size() != 10) return std::make_tuple("", 0, 0);
   std::string ip =
@@ -341,7 +341,7 @@ std::tuple<std::string, uint16_t, int> Endpoint::parse_metadata(
   return std::make_tuple(ip, port, gpu_idx);
 }
 
-bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
+bool TCPXEndpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   if (!data || size == 0) return false;
   if (!initialized_) {
     int idx = uccl::get_dev_idx((void*)data);
@@ -360,7 +360,7 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   return true;
 }
 
-bool Endpoint::dereg(uint64_t mr_id) {
+bool TCPXEndpoint::dereg(uint64_t mr_id) {
   std::lock_guard<std::mutex> lock(mr_mu_);
   auto it = mr_map_.find(mr_id);
   if (it == mr_map_.end()) return false;
@@ -368,7 +368,7 @@ bool Endpoint::dereg(uint64_t mr_id) {
   return true;
 }
 
-bool Endpoint::advertise(uint64_t /*conn_id*/, uint64_t mr_id, void const* addr,
+bool TCPXEndpoint::advertise(uint64_t /*conn_id*/, uint64_t mr_id, void const* addr,
                          size_t len, void* out_buf) {
   // Preserve the TCPX-style advertise API: return a 64B FIFO descriptor; tag is
   // always 0.
@@ -393,7 +393,7 @@ bool Endpoint::advertise(uint64_t /*conn_id*/, uint64_t mr_id, void const* addr,
   return true;
 }
 
-bool Endpoint::send_internal_(Conn& conn, void const* data, size_t size,
+bool TCPXEndpoint::send_internal_(Conn& conn, void const* data, size_t size,
                               uint64_t& transfer_id) {
   // Actual data-plane call: ncclSend plus a cudaEvent on the stream for
   // poll_async to poll.
@@ -420,7 +420,7 @@ bool Endpoint::send_internal_(Conn& conn, void const* data, size_t size,
   return true;
 }
 
-bool Endpoint::recv_internal_(Conn& conn, void* data, size_t size,
+bool TCPXEndpoint::recv_internal_(Conn& conn, void* data, size_t size,
                               uint64_t& transfer_id) {
   // Symmetric receive path, also using an event to mark completion.
   if (!fence_default_stream(conn.local_gpu_idx, conn.stream)) return false;
@@ -446,7 +446,7 @@ bool Endpoint::recv_internal_(Conn& conn, void* data, size_t size,
   return true;
 }
 
-bool Endpoint::send_async(uint64_t conn_id, uint64_t /*mr_id*/,
+bool TCPXEndpoint::send_async(uint64_t conn_id, uint64_t /*mr_id*/,
                           void const* data, size_t size,
                           uint64_t* transfer_id) {
   if (!data || size == 0 || !transfer_id) return false;
@@ -460,7 +460,7 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t /*mr_id*/,
   return send_internal_(conn, data, size, *transfer_id);
 }
 
-bool Endpoint::recv_async(uint64_t conn_id, uint64_t /*mr_id*/, void* data,
+bool TCPXEndpoint::recv_async(uint64_t conn_id, uint64_t /*mr_id*/, void* data,
                           size_t size, uint64_t* transfer_id) {
   if (!data || size == 0 || !transfer_id) return false;
   Conn conn{};
@@ -473,7 +473,7 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t /*mr_id*/, void* data,
   return recv_internal_(conn, data, size, *transfer_id);
 }
 
-bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
+bool TCPXEndpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, FifoItem const& slot_item,
                           uint64_t* transfer_id) {
   // Compatibility read_async entry: in the NCCL path we ignore tag and receive
@@ -485,7 +485,24 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
   return recv_async(conn_id, mr_id, dst, recv_size, transfer_id);
 }
 
-bool Endpoint::queue_read_response(uint64_t conn_id,
+// TODO: move to new engine Endpoint later
+bool TCPXEndpoint::deal_out_buf(uint64_t conn_id, char* out_buf) {
+  // For Endpoint that support one-side primitives, like RDMA, the peer will read data by FifoItem once received it.
+  // For that does not support one-side primitives, like TCPx, send FifoItem to remote.
+#ifdef USE_TCPX
+  FifoItem fifo_item;
+  memcpy(&fifo_item, out_buf, sizeof(FifoItem));
+  // Immediately push the data over TCPX so the passive reader only needs
+  // the FIFO metadata to complete its read.
+  if (!conn->engine->endpoint->queue_read_response(conn->conn_id,
+                                                    fifo_item)) {
+    return false;
+  }
+#endif
+  return true;
+}
+
+bool TCPXEndpoint::queue_read_response(uint64_t conn_id,
                                    FifoItem const& fifo_item) {
   // FIFO callback directly issues an ncclSend; no bounce buffer, just keep the
   // API shape.
@@ -521,7 +538,7 @@ bool Endpoint::queue_read_response(uint64_t conn_id,
   return true;
 }
 
-bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
+bool TCPXEndpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
   uint64_t tid = 0;
   if (!recv_async(conn_id, mr_id, data, size, &tid)) return false;
   bool done = false;
@@ -534,7 +551,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
   return true;
 }
 
-bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
+bool TCPXEndpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   if (!is_done) return false;
   Transfer tr{};
   {

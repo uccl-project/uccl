@@ -24,10 +24,10 @@ struct FifoItem {
 };
 static_assert(sizeof(FifoItem) == 64, "FifoItem must be 64 bytes");
 
-class Endpoint {
+class TCPXEndpoint {
  public:
-  explicit Endpoint(int num_cpus);
-  ~Endpoint();
+  explicit TCPXEndpoint(int num_cpus);
+  ~TCPXEndpoint();
 
   bool connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                uint64_t& conn_id);
@@ -42,7 +42,9 @@ class Endpoint {
 
   bool advertise(uint64_t conn_id, uint64_t mr_id, void const* addr, size_t len,
                  void* out_buf);
-
+  
+  /* Deal out_buf(fifoitem for READ) */
+  bool deal_out_buf(uint64_t conn_id, char* out_buf);
   bool queue_read_response(uint64_t conn_id, FifoItem const& fifo_item);
   bool read_async(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                   FifoItem const& slot_item, uint64_t* transfer_id);

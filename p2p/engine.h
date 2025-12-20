@@ -57,11 +57,7 @@ struct PeerInfo {
   int gpu_idx;          // GPU index of the peer
 };
 
-#ifdef USE_TCPX
-using FifoItem = nccl_tcpx::FifoItem;
-#else
 using FifoItem = uccl::FifoItem;
-#endif
 
 class Endpoint {
   uint64_t const kRTTBytes = 1024 * 1024;
