@@ -975,31 +975,19 @@ static void efa_handle_dst_rank_latency_mode(
   struct ibv_qp_ex* qpx = (struct ibv_qp_ex*)ctx->qp;
   ibv_wr_start(qpx);
 
-#ifdef USE_RECEIVER_BARRIER
   std::unordered_map<int, std::vector<size_t>> dst_expert_wr_ids;
   for (size_t j = 0; j < k; ++j) {
     size_t i = wr_ids[j];
     int expert_idx = cmds_to_post[i].expert_idx;
     dst_expert_wr_ids[expert_idx].push_back(i);
   }
-#endif
 
-#ifdef USE_RECEIVER_BARRIER
   for (auto& [expert_idx, expert_wr_ids] : dst_expert_wr_ids) {
     size_t expert_k = expert_wr_ids.size();
     for (size_t j = 0; j < expert_k; ++j) {
       size_t i = expert_wr_ids[j];
-#else
-  for (size_t j = 0; j < k; ++j) {
-    size_t i = wr_ids[j];
-#endif
-
       auto const& cmd = cmds_to_post[i];
-#ifdef USE_RECEIVER_BARRIER
       expert_wr_ids[j] = wrs_to_post[i];
-#else
-    wr_ids[j] = wrs_to_post[i];
-#endif
       qpx->wr_id = wrs_to_post[i];
       qpx->comp_mask = 0;
       qpx->wr_flags = IBV_SEND_SIGNALED;
@@ -1024,36 +1012,17 @@ static void efa_handle_dst_rank_latency_mode(
         }
         std::abort();
       }
-#ifdef USE_SENDER_BARRIER
-      S.wr_id_to_write_struct[qpx->wr_id] = {cmd.expert_idx, dst_rank,
-                                             get_is_combine(cmd.cmd_type),
-                                             get_low_latency(cmd.cmd_type)};
-#endif
-#ifdef USE_RECEIVER_BARRIER
       uint32_t imm = WriteImm::Pack(get_is_combine(cmd.cmd_type),
                                     get_low_latency(cmd.cmd_type),
                                     cmd.expert_idx, 1, my_rank)
                          .GetImmData();
       ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
-#else
-    if (j + 1 == k) {
-      uint32_t imm = WriteImm::Pack(get_is_combine(cmd.cmd_type),
-                                    get_low_latency(cmd.cmd_type),
-                                    cmd.expert_idx, k, my_rank)
-                         .GetImmData();
-      ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
-    } else {
-      ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
-    }
-#endif
       uintptr_t laddr =
           cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
       ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
       ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
                      static_cast<uint32_t>(cmd.bytes));
     }
-
-#ifdef USE_RECEIVER_BARRIER
     uint64_t const expert_tail_wr = expert_wr_ids.back();
     {
       auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
@@ -1067,20 +1036,6 @@ static void efa_handle_dst_rank_latency_mode(
       }
     }
   }
-#else
-  uint64_t const tail_wr = wr_ids.back();
-  {
-    auto [it, inserted] =
-        S.wr_id_to_wr_ids.try_emplace(tail_wr, std::move(wr_ids));
-    if (!inserted) {
-      fprintf(stderr,
-              "thread_idx: %d, Error: tail wr_id %lu already exists "
-              "(map=%p)\n",
-              thread_idx, tail_wr, (void*)&S.wr_id_to_wr_ids);
-      std::abort();
-    }
-  }
-#endif
 
   int ret = ibv_wr_complete(qpx);
   if (ret) {
@@ -1263,24 +1218,6 @@ void local_process_completions(ProxyCtx& S,
         if ((wrid & kBarrierWrTag) == kBarrierWrTag) {
           break;
         }
-#ifdef USE_SENDER_BARRIER
-        {
-          auto it = S.wr_id_to_write_struct.find(wrid);
-          if (it != S.wr_id_to_write_struct.end()) {
-            WriteStruct const& ws = it->second;
-            S.wr_id_to_write_struct.erase(it);
-            if (ws.is_combine) {
-              S.combine_sent_counter.Add(
-                  {ws.low_latency_buffer_idx, ws.expert_idx, ws.dst_rank}, 1);
-            } else {
-              S.dispatch_sent_counter.Add(
-                  {ws.low_latency_buffer_idx, ws.expert_idx, ws.dst_rank}, 1);
-            }
-          } else {
-            assert(false && "wr_id not found in write_struct map");
-          }
-        }
-#endif
         {
           uint64_t const wr_done = wc[i].wr_id;
 #ifdef EFA
@@ -1619,7 +1556,6 @@ void remote_process_completions_latency_mode(
       int value = aimm.GetValue();
       uint32_t offset = aimm.GetOff();
       size_t index = offset / sizeof(int);
-#ifdef USE_RECEIVER_BARRIER
       // ep_config.hpp
       bool is_combine = aimm.IsCombine();
       int low_latency_buffer_idx = aimm.GetBufferIdx();
@@ -1684,43 +1620,6 @@ void remote_process_completions_latency_mode(
                                        low_latency_buffer_idx, expert_idx,
                                        is_combine, src_rank});
       }
-#else
-      auto* addr32 =
-          reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
-#ifdef USE_SENDER_BARRIER
-      if (aimm.IsCombine()) value = 1;
-#ifndef EFA
-      const uint32_t tag = wr_tag(cqe.wr_id);
-      ProxyCtx& S_atomic = *ctx_by_tag[tag];
-      ibv_sge sge = {
-          .addr = reinterpret_cast<uintptr_t>(S_atomic.mr->addr),
-          .length = 1,
-          .lkey = S_atomic.mr->lkey,
-      };
-      ibv_recv_wr rwr = {};
-      S.pool_index = (S.pool_index + 1) % (kRemoteBufferSize / kObjectSize - 1);
-      rwr.wr_id = make_wr_id(wr_tag(cqe.wr_id), S.pool_index);
-      rwr.sg_list = &sge;
-      rwr.num_sge = 1;
-      ibv_recv_wr* bad = nullptr;
-      if (ibv_post_recv(S_atomic.qp, &rwr, &bad)) {
-        perror("ibv_post_recv (atomics replenish)");
-        std::abort();
-      }
-      continue;
-#endif
-#endif
-      if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
-      bool is_combine = aimm.IsCombine();
-      assert(!is_combine || value >= 0);
-      if (is_combine) {
-        assert(value >= 0 && "Combine atomic value should be non-negative");
-      } else {
-        assert(value <= -1 && "Dispatch atomic value should be <= -1");
-      }
-      if (is_combine) value = 1;
-      addr32->fetch_add(value, std::memory_order_release);
-#endif
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
                ImmType::IsBarrier(ntohl(cqe.imm_data))) {
       BarrierImm bimm(ntohl(cqe.imm_data));
@@ -1757,7 +1656,6 @@ void remote_process_completions_latency_mode(
       }
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
                ImmType::IsWrite(ntohl(cqe.imm_data))) {
-#ifdef USE_RECEIVER_BARRIER
       uint32_t imm = ntohl(cqe.imm_data);
       WriteImm wimm(imm);
       bool is_combine = wimm.IsCombine();
@@ -1775,7 +1673,6 @@ void remote_process_completions_latency_mode(
                expert_idx < (src_rank + 1) * (num_experts / num_ranks));
         S.combine_token_counter.Add({buffer_idx, expert_idx}, k);
       }
-#endif
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
       fprintf(stderr, "Unexpected CQE opcode: %d\n", cqe.opcode);
       std::abort();
