@@ -22,7 +22,7 @@ LDFLAGS    := -L$(CONDA_LIB_HOME) \
               -lcudart \
               -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -lglog
 
-INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include
+INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../../include
 
 # Redis support: when USE_REDIS_OOB=1
 ifeq ($(USE_REDIS_OOB),1)
