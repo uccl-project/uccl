@@ -701,58 +701,11 @@ void post_receive_buffer_for_imm(ProxyCtx& S) {
   }
 }
 
-// Normal mode implementation
-static void post_rdma_async_batched_normal_mode(
-    ProxyCtx& S, void* buf, size_t num_wrs,
-    std::vector<uint64_t> const& wrs_to_post,
-    std::vector<TransferCmd> const& cmds_to_post,
-    std::vector<std::unique_ptr<ProxyCtx>>& ctxs, int my_rank, int thread_idx) {
-  if (num_wrs == 0) return;
-  if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
-    fprintf(stderr, "Size mismatch (num_wrs=%zu, wr_ids=%zu, cmds=%zu)\n",
-            num_wrs, wrs_to_post.size(), cmds_to_post.size());
-    std::abort();
-  }
-
-  std::unordered_map<int, std::vector<size_t>> dst_rank_wr_ids;
-  for (size_t i = 0; i < num_wrs; ++i) {
-    if (cmds_to_post[i].dst_rank == static_cast<uint32_t>(my_rank)) {
-      // NOTE(MaoZiming): this should not happen.
-      printf("Posting rdma to itself\n");
-      std::abort();
-      continue;
-    } else if (std::abs((int)cmds_to_post[i].dst_rank - (int)my_rank) %
-                   MAX_NUM_GPUS !=
-               0) {
-      // NOTE(MaoZiming): this should not happen.
-      printf("Posting rdma to a different rank\n");
-      std::abort();
-      continue;
-    } else {
-      dst_rank_wr_ids[cmds_to_post[i].dst_rank].push_back(i);
-    }
-  }
-
-  for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
-    if (wr_ids.empty()) continue;
-
-    ProxyCtx* ctx = ctxs[dst_rank].get();
-    if (!ctx || !ctx->qp || !ctx->mr) {
-      fprintf(stderr, "Destination ctx missing fields for dst=%d\n", dst_rank);
-      std::abort();
-    }
-    size_t const k = wr_ids.size();
-    std::unordered_map<size_t, std::vector<size_t>> ring_to_indices;
-    ring_to_indices.reserve(k);
-    for (size_t j = 0; j < k; ++j) {
-      size_t i = wr_ids[j];
-      size_t ring_idx =
-          static_cast<size_t>((wrs_to_post[i] >> 32) & 0xFFFFFFFFu);
-      ring_to_indices[ring_idx].push_back(i);
-    }
-
-    for (auto& [ring_idx_raw, idxs] : ring_to_indices) {
-#ifdef EFA
+static void efa_handle_ring_idx_throughput_mode(
+    ProxyCtx* ctx, int dst_rank, int my_rank, size_t ring_idx_raw,
+    const std::vector<size_t>& idxs,
+    const std::vector<uint64_t>& wrs_to_post,
+    const std::vector<TransferCmd>& cmds_to_post) {
       const size_t local_ring_count = ctx->data_qps_by_channel.size();
       struct ibv_qp_ex* qpx =
           (struct ibv_qp_ex*)(local_ring_count
@@ -847,7 +800,14 @@ static void post_rdma_async_batched_normal_mode(
                 dst_rank, strerror(ret), ret);
         std::abort();
       }
-#else
+
+}
+
+static void non_efa_handle_ring_idx_throughput_mode(
+    ProxyCtx& S, ProxyCtx* ctx, int dst_rank, int my_rank, int thread_idx,
+    size_t ring_idx_raw, const std::vector<size_t>& idxs,
+    const std::vector<uint64_t>& wrs_to_post,
+    const std::vector<TransferCmd>& cmds_to_post) {
       {
         size_t const local_ring_count = ctx->data_qps_by_channel.size();
         struct ibv_qp* qp =
@@ -954,13 +914,73 @@ static void post_rdma_async_batched_normal_mode(
           }
         }
       }
+
+}
+
+static void post_rdma_async_batched_throughput_mode(
+    ProxyCtx& S, void* buf, size_t num_wrs,
+    std::vector<uint64_t> const& wrs_to_post,
+    std::vector<TransferCmd> const& cmds_to_post,
+    std::vector<std::unique_ptr<ProxyCtx>>& ctxs, int my_rank, int thread_idx) {
+  if (num_wrs == 0) return;
+  if (wrs_to_post.size() != num_wrs || cmds_to_post.size() != num_wrs) {
+    fprintf(stderr, "Size mismatch (num_wrs=%zu, wr_ids=%zu, cmds=%zu)\n",
+            num_wrs, wrs_to_post.size(), cmds_to_post.size());
+    std::abort();
+  }
+
+  std::unordered_map<int, std::vector<size_t>> dst_rank_wr_ids;
+  for (size_t i = 0; i < num_wrs; ++i) {
+    if (cmds_to_post[i].dst_rank == static_cast<uint32_t>(my_rank)) {
+      // NOTE(MaoZiming): this should not happen.
+      printf("Posting rdma to itself\n");
+      std::abort();
+      continue;
+    } else if (std::abs((int)cmds_to_post[i].dst_rank - (int)my_rank) %
+                   MAX_NUM_GPUS !=
+               0) {
+      // NOTE(MaoZiming): this should not happen.
+      printf("Posting rdma to a different rank\n");
+      std::abort();
+      continue;
+    } else {
+      dst_rank_wr_ids[cmds_to_post[i].dst_rank].push_back(i);
+    }
+  }
+
+  for (auto& [dst_rank, wr_ids] : dst_rank_wr_ids) {
+    if (wr_ids.empty()) continue;
+
+    ProxyCtx* ctx = ctxs[dst_rank].get();
+    if (!ctx || !ctx->qp || !ctx->mr) {
+      fprintf(stderr, "Destination ctx missing fields for dst=%d\n", dst_rank);
+      std::abort();
+    }
+    size_t const k = wr_ids.size();
+    std::unordered_map<size_t, std::vector<size_t>> ring_to_indices;
+    ring_to_indices.reserve(k);
+    for (size_t j = 0; j < k; ++j) {
+      size_t i = wr_ids[j];
+      size_t ring_idx =
+          static_cast<size_t>((wrs_to_post[i] >> 32) & 0xFFFFFFFFu);
+      ring_to_indices[ring_idx].push_back(i);
+    }
+
+    for (auto& [ring_idx_raw, idxs] : ring_to_indices) {
+#ifdef EFA
+      efa_handle_ring_idx_throughput_mode(ctx, dst_rank, my_rank, ring_idx_raw,
+                                           idxs, wrs_to_post, cmds_to_post);
+#else
+      non_efa_handle_ring_idx_throughput_mode(S, ctx, dst_rank, my_rank,
+                                               thread_idx, ring_idx_raw, idxs,
+                                               wrs_to_post, cmds_to_post);
 #endif
     }
   }
 }
 
 // Fast mode implementation
-static void post_rdma_async_batched_fast_mode(
+static void post_rdma_async_batched_latency_mode(
     ProxyCtx& S, void* buf, size_t num_wrs,
     std::vector<uint64_t> const& wrs_to_post,
     std::vector<TransferCmd> const& cmds_to_post,
@@ -1189,11 +1209,11 @@ void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              int my_rank, int thread_idx,
                              bool use_normal_mode) {
   if (use_normal_mode) {
-    post_rdma_async_batched_normal_mode(
+    post_rdma_async_batched_throughput_mode(
         S, buf, num_wrs, wrs_to_post, cmds_to_post, ctxs, my_rank, thread_idx);
   } else {
-    post_rdma_async_batched_fast_mode(S, buf, num_wrs, wrs_to_post,
-                                      cmds_to_post, ctxs, my_rank, thread_idx);
+    post_rdma_async_batched_latency_mode(
+        S, buf, num_wrs, wrs_to_post, cmds_to_post, ctxs, my_rank, thread_idx);
   }
 }
 
@@ -1397,7 +1417,7 @@ ibv_qp* qp_from_qpnum(ProxyCtx& S, uint32_t qpnum) {
   return nullptr;
 }
 
-void remote_process_completions_normal_mode(
+void remote_process_completions_throughput_mode(
     ProxyCtx& S, int idx, CopyRingBuffer& g_ring, int ne, ibv_wc* wc,
     std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr, int num_ranks,
     int num_experts, std::set<PendingUpdate>& pending_atomic_updates,
@@ -1570,7 +1590,7 @@ void remote_process_completions_normal_mode(
   }
 }
 
-void remote_process_completions_fast_mode(
+void remote_process_completions_latency_mode(
     ProxyCtx& S, int idx, CopyRingBuffer& g_ring, int ne, ibv_wc* wc,
     std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr, int num_ranks,
     int num_experts, std::set<PendingUpdate>& pending_atomic_updates,
@@ -1801,11 +1821,11 @@ void remote_process_completions(
     int num_experts, std::set<PendingUpdate>& pending_atomic_updates,
     int my_rank, int num_nodes, bool use_normal_mode) {
   if (use_normal_mode) {
-    remote_process_completions_normal_mode(
+    remote_process_completions_throughput_mode(
         S, idx, g_ring, ne, wc, ctx_by_tag, atomic_buffer_ptr, num_ranks,
         num_experts, pending_atomic_updates, my_rank, num_nodes);
   } else {
-    remote_process_completions_fast_mode(
+    remote_process_completions_latency_mode(
         S, idx, g_ring, ne, wc, ctx_by_tag, atomic_buffer_ptr, num_ranks,
         num_experts, pending_atomic_updates, my_rank, num_nodes);
   }
@@ -1943,7 +1963,7 @@ void local_post_ack_buf(ProxyCtx& S, int depth) {
 }
 
 // Normal mode implementation
-static void post_atomic_operations_normal_mode(
+static void post_atomic_operations_throughput_mode(
     ProxyCtx& S, std::vector<uint64_t> const& wrs_to_post,
     std::vector<TransferCmd> const& cmds_to_post,
     std::vector<std::unique_ptr<ProxyCtx>>& ctxs, int my_rank, int thread_idx,
@@ -2135,7 +2155,7 @@ static void post_atomic_operations_normal_mode(
 }
 
 // Fast mode implementation
-static void post_atomic_operations_fast_mode(
+static void post_atomic_operations_latency_mode(
     ProxyCtx& S, std::vector<uint64_t> const& wrs_to_post,
     std::vector<TransferCmd> const& cmds_to_post,
     std::vector<std::unique_ptr<ProxyCtx>>& ctxs, int my_rank, int thread_idx,
@@ -2284,10 +2304,10 @@ void post_atomic_operations(ProxyCtx& S,
                             std::unordered_set<uint64_t>& acked_wrs,
                             bool use_normal_mode) {
   if (use_normal_mode) {
-    post_atomic_operations_normal_mode(S, wrs_to_post, cmds_to_post, ctxs,
+    post_atomic_operations_throughput_mode(S, wrs_to_post, cmds_to_post, ctxs,
                                        my_rank, thread_idx, acked_wrs);
   } else {
-    post_atomic_operations_fast_mode(S, wrs_to_post, cmds_to_post, ctxs,
-                                     my_rank, thread_idx, acked_wrs);
+    post_atomic_operations_latency_mode(S, wrs_to_post, cmds_to_post, ctxs,
+                                        my_rank, thread_idx, acked_wrs);
   }
 }
