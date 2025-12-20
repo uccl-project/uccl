@@ -41,9 +41,8 @@ class CustomInstall(install):
         print(f"Installing {so_file.name} to {install_dir}")
         shutil.copy2(so_file, dest_path)
         print(f"Installation complete. Module installed as: {dest_path}")
-        
-        
-        self.run_command('install_egg_info')
+
+        self.run_command("install_egg_info")
 
 
 if __name__ == "__main__":
@@ -233,8 +232,9 @@ if __name__ == "__main__":
         revision = ""
 
     setuptools.setup(
-        name="uccl.ep",
+        name="uccl_ep",
         version="0.0.1" + revision,
+        packages=["uccl_ep"],
         ext_modules=[
             CUDAExtension(
                 name="ep",
