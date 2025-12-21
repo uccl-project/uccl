@@ -76,7 +76,7 @@ using FifoItem = uccl::FifoItem;
 class Endpoint {
   uint64_t const kRTTBytes = 1024 * 1024;
 #if defined(UCCL_ENABLE_EFA) || defined(UCCL_ENABLE_TCP)
-  uint64_t const kChunkSize = 1024 * 1024 * 1024;  // 1GB for EFA/TCP
+  uint64_t const kChunkSize = 1024 * 1024 * 1024;  // 1GB for EFA
 #else
   uint64_t const kChunkSize = 1024 * 1024;
 #endif
