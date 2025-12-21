@@ -1,8 +1,6 @@
 #pragma once
 #include "engine.h"
 
-// #define UCCL_P2P_USE_EFA
-
 namespace unified {
 
 template <class T>
