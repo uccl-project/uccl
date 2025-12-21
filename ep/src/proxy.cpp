@@ -168,7 +168,8 @@ void Proxy::init_common() {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
-    if (cfg_.use_throughput_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
+    if (cfg_.use_throughput_mode &&
+        std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
       continue;
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank, cfg_.d2h_queues.size(),
@@ -195,7 +196,8 @@ void Proxy::init_common() {
   // Then send our info to all peers
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-        (cfg_.use_throughput_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
+        (cfg_.use_throughput_mode &&
+         std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
       continue;
     char const* peer_ip = peers_[peer].ip.c_str();
     int const peer_listen_port = peers_[peer].listen_ports[cfg_.thread_idx];
@@ -209,7 +211,8 @@ void Proxy::init_common() {
   // Verify remote info correctness
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-        (cfg_.use_throughput_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
+        (cfg_.use_throughput_mode &&
+         std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
       continue;
     if (remote_infos_[peer].addr != peers_[peer].ptr) {
       fprintf(stderr,
@@ -226,7 +229,8 @@ void Proxy::init_common() {
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
-    if (cfg_.use_throughput_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
+    if (cfg_.use_throughput_mode &&
+        std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
       continue;
     auto& c = *ctxs_for_all_ranks_[peer];
 
@@ -325,7 +329,8 @@ void Proxy::run_dual() {
   for (int peer = 0; peer < (int)ctxs_for_all_ranks_.size(); ++peer) {
     if (peer == cfg_.rank) continue;
     if (peers_[peer].ip == peers_[cfg_.rank].ip) continue;
-    if (cfg_.use_throughput_mode && std::abs(peer - cfg_.rank) % MAX_NUM_GPUS != 0)
+    if (cfg_.use_throughput_mode &&
+        std::abs(peer - cfg_.rank) % MAX_NUM_GPUS != 0)
       continue;
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
     if (!ctx_ptr) continue;

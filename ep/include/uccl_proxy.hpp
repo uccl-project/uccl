@@ -14,8 +14,8 @@ class UcclProxy {
  public:
   UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr, size_t total_size,
             int rank, int node_idx, int local_rank, int num_experts = 0,
-            int num_ranks = 0, int num_nodes = 0, bool use_throughput_mode = false,
-            bool is_intranode = false);
+            int num_ranks = 0, int num_nodes = 0,
+            bool use_throughput_mode = false, bool is_intranode = false);
   ~UcclProxy();
 
   void start_sender();
