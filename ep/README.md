@@ -1,4 +1,4 @@
-# UCCL-EP: GPU-initiated Expert Parallelism Communication
+# UCCL-EP: GPU-initiated Expert-parallel Communication
 
 GPU-initiated expert-parallel communication (e.g., DeepEP) is the key to efficient and large-scale EP. However, it cannot run on heterogeneous platforms due to tight coupling between GPU and NIC (e.g., with IBGDA). UCCL-EP has the same interface and functionality as [DeepEP](https://github.com/deepseek-ai/DeepEP), and enables GPU-initiated communication for MoE models across heterogeneous GPUs (e.g., Nvidia, AMD) and NICs (e.g., EFA, Broadcom, CX7), with superior performance to the state-of-the-art. 
 
