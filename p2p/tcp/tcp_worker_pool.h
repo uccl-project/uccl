@@ -36,11 +36,11 @@ static constexpr int kEpollTimeoutMs = 1;
 
 // Get number of TCP threads from environment
 inline size_t get_tcp_thread_count() {
-  char const* env = std::getenv("UCCL_TCP_THREADS");
+  char const* env = std::getenv("UCCL_P2P_TCP_THREADS");
   if (env && strlen(env) > 0) {
     int val = std::atoi(env);
     if (val > 0) {
-      LOG(INFO) << "TCP: Using " << val << " threads from UCCL_TCP_THREADS";
+      LOG(INFO) << "TCP: Using " << val << " threads from UCCL_P2P_TCP_THREADS";
       return static_cast<size_t>(val);
     }
   }
