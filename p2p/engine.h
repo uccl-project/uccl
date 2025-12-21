@@ -4,6 +4,9 @@
 #ifdef UCCL_ENABLE_EFA
 #include "efa/efa_endpoint.h"
 #endif
+#ifdef UCCL_ENABLE_TCP
+#include "tcp/tcp_endpoint.h"
+#endif
 #include "transport.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
@@ -31,9 +34,16 @@ struct P2PMhandle {
   MRArray mr_array;
 };
 
-#ifdef UCCL_ENABLE_EFA
+#if defined(UCCL_ENABLE_EFA) && defined(UCCL_ENABLE_TCP)
+using RDMAEndPoint =
+    std::variant<uccl::RDMAEndpoint*, std::shared_ptr<EFAEndpoint>,
+                 std::shared_ptr<tcp::TCPEndpoint>>;
+#elif defined(UCCL_ENABLE_EFA)
 using RDMAEndPoint =
     std::variant<uccl::RDMAEndpoint*, std::shared_ptr<EFAEndpoint>>;
+#elif defined(UCCL_ENABLE_TCP)
+using RDMAEndPoint =
+    std::variant<uccl::RDMAEndpoint*, std::shared_ptr<tcp::TCPEndpoint>>;
 #else
 using RDMAEndPoint = std::variant<uccl::RDMAEndpoint*>;
 #endif
@@ -65,8 +75,8 @@ using FifoItem = uccl::FifoItem;
 
 class Endpoint {
   uint64_t const kRTTBytes = 1024 * 1024;
-#ifdef UCCL_ENABLE_EFA
-  uint64_t const kChunkSize = 1024 * 1024 * 1024;
+#if defined(UCCL_ENABLE_EFA) || defined(UCCL_ENABLE_TCP)
+  uint64_t const kChunkSize = 1024 * 1024 * 1024;  // 1GB for EFA/TCP
 #else
   uint64_t const kChunkSize = 1024 * 1024;
 #endif
@@ -86,10 +96,6 @@ class Endpoint {
   /*
    * Create engine threads running in background for a single interface. It also
    * opens a TCP listening thread waiting for incoming connections.
-   *
-   * input:
-   *   local_gpu_idx: the GPU index to use for the engine
-   *   num_cpus: the number of CPUs to use for the engine
    */
   Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus);
 
@@ -97,22 +103,12 @@ class Endpoint {
    * Create endpoint without intializing the engine. Lazy creation of engine is
    * done during  memory registration. Additionally, open a unified P2P socket
    * for metadata exchanges.
-   *
-   * input:
-   *   num_cpus: the number of CPUs to use for the engine
    */
   Endpoint(uint32_t const num_cpus);
   ~Endpoint();
 
   /*
    * Connect to a remote server via TCP, then build RDMA QP connections.
-   *
-   * input:
-   *   ip_addr: the IP address of the remote server
-   *   remote_gpu_idx: the GPU index of the remote server
-   *   remote_port: the port of the remote server (optional)
-   * output:
-   *   conn_id: the ID of the connection
    */
   bool connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                uint64_t& conn_id);
@@ -133,11 +129,6 @@ class Endpoint {
 
   /*
    * Accept an incoming connection via TCP, then build RDMA QP connections.
-   *
-   * output:
-   *   ip_addr: the IP address of the remote server
-   *   remote_gpu_idx: the GPU index of the remote server
-   *   conn_id: the ID of the connection
    */
   bool accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
 
