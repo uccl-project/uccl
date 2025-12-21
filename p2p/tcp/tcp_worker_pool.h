@@ -23,12 +23,15 @@
 
 namespace tcp {
 
-// Constants
-static constexpr size_t kCopyBufferSize =
+static constexpr size_t kStagingBufferSize =
     16 * 1024 * 1024;  // 16MB staging buffer
 static constexpr size_t kDefaultTCPThreads = 4;
 static constexpr size_t kRequestRingSize = 1024;
 static constexpr int kEpollMaxEvents = 64;
+
+// Common TCP I/O helper functions
+bool send_exact(int fd, void const* buf, size_t n);
+bool recv_exact(int fd, void* buf, size_t n);
 static constexpr int kEpollTimeoutMs = 1;
 
 // Get number of TCP threads from environment
@@ -52,22 +55,31 @@ enum class TCPRequestType : uint32_t {
   RECV = 1,  // Recv data (sends RecvReady on ctrl, receiver worker handles data
              // via epoll)
   WRITE = 2,  // RDMA-style write (dest_addr already known, no ctrl message)
-  READ = 3,   // RDMA-style read (dest_addr already known, no ctrl message)
+  READ = 3,   // RDMA-style read (sends request on data conn, receiver worker
+              // handles incoming data)
   SHUTDOWN = 255
+};
+
+// Message types on data connections (first 4 bytes of any message)
+enum class TCPDataMsgType : uint32_t {
+  DATA_CHUNK = 0,    // ChunkHeader follows (for SEND/WRITE data)
+  READ_REQUEST = 1,  // ReadWriteHeader for READ request
 };
 
 // Chunk header sent before each data chunk on data connections
 struct ChunkHeader {
+  uint32_t msg_type;    // TCPDataMsgType::DATA_CHUNK
+  uint32_t flags;       // Flags (kFlagLastChunk, etc.)
   uint64_t dest_addr;   // Destination GPU address on receiver side
   uint64_t offset;      // Offset within the transfer
   uint64_t chunk_size;  // Size of this chunk
   uint64_t total_size;  // Total transfer size
   uint32_t request_id;  // Request ID for matching
-  uint32_t flags;       // Flags
+  uint32_t reserved;
 
   static constexpr uint32_t kFlagLastChunk = 1;
 };
-static_assert(sizeof(ChunkHeader) == 40, "ChunkHeader size mismatch");
+static_assert(sizeof(ChunkHeader) == 48, "ChunkHeader size mismatch");
 
 // Message sent on control connection by receiver to tell sender where to put
 // data
@@ -79,6 +91,15 @@ struct RecvReadyMsg {
 };
 static_assert(sizeof(RecvReadyMsg) == 24, "RecvReadyMsg size mismatch");
 
+// Header for READ requests sent on data connections
+struct ReadWriteHeader {
+  uint32_t msg_type;  // TCPDataMsgType::READ_REQUEST
+  uint32_t reserved;
+  uint64_t remote_addr;  // Address on remote side (source for READ)
+  uint64_t dest_addr;    // Destination address (where to put data on requester)
+  size_t size;           // Transfer size
+};
+
 // Forward declarations
 struct TCPConnectionGroup;
 class TCPReceiverWorker;
@@ -87,10 +108,11 @@ class TCPSenderWorker;
 // TCP request structure (submitted via jring)
 struct alignas(64) TCPRequest {
   TCPRequestType type;
-  int ctrl_fd;         // Control connection fd
-  void* data;          // GPU memory pointer (local buffer)
-  size_t size;         // Total size to transfer
-  uint64_t dest_addr;  // Destination GPU addr (for WRITE/READ, known upfront)
+  int ctrl_fd;           // Control connection fd
+  void* data;            // GPU memory pointer (local buffer)
+  size_t size;           // Total size to transfer
+  uint64_t dest_addr;    // Destination GPU addr (for WRITE/READ, known upfront)
+  uint64_t remote_addr;  // Remote addr to read from (for READ)
   std::atomic<bool>* completed;  // Completion flag
   std::atomic<bool>* success;    // Success flag
   uint32_t request_id;           // Unique request ID
@@ -104,6 +126,7 @@ struct alignas(64) TCPRequest {
         data(nullptr),
         size(0),
         dest_addr(0),
+        remote_addr(0),
         completed(nullptr),
         success(nullptr),
         request_id(0),
@@ -194,7 +217,8 @@ class TCPReceiverWorker {
  private:
   void worker_loop();
   void process_incoming_data(int fd, std::vector<char>& staging_buffer);
-  bool recv_exact(int fd, void* buf, size_t n);
+  void process_read_request(int fd, std::vector<char>& staging_buffer);
+  void process_data_chunk(int fd, std::vector<char>& staging_buffer);
 
   uint32_t worker_id_;
   std::atomic<bool> running_;
@@ -223,9 +247,6 @@ class TCPSenderWorker {
   void worker_loop();
   bool process_requests();
 
-  bool send_exact(int fd, void const* buf, size_t n);
-  bool recv_exact(int fd, void* buf, size_t n);
-
   bool do_recv_ctrl(TCPRequest& req);
   bool do_send(TCPRequest& req);
   bool do_write(TCPRequest& req);
@@ -234,6 +255,7 @@ class TCPSenderWorker {
   uint32_t worker_id_;
   std::atomic<bool> running_;
   jring_t* request_ring_;
+  std::vector<char> staging_buffer_;
   std::thread worker_thread_;
 };
 
@@ -269,7 +291,7 @@ class TCPThreadPool {
   uint32_t assign_data_connection(int fd);
 
   // Submit request to a sender worker
-  bool submit_send_request(TCPRequest const& req);
+  bool submit_request(TCPRequest const& req);
 
   // Register a pending receive (shared across all receiver workers)
   void register_pending_recv(uint64_t dest_addr, size_t size,

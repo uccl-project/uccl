@@ -39,7 +39,7 @@ uint64_t get_interface_bandwidth(std::string const& ifname) {
 std::vector<InterfaceInfo> parse_tcp_interfaces() {
   std::vector<InterfaceInfo> interfaces;
 
-  char const* env = std::getenv("UCCL_TCP_IFNAME");
+  char const* env = std::getenv("UCCL_P2P_TCP_IFNAME");
   if (!env || strlen(env) == 0) {
     char ifNames[MAX_IFS * MAX_IF_NAME_SIZE];
     uccl::socketAddress ifAddrs[MAX_IFS];
@@ -342,7 +342,7 @@ int TCPEndpoint::uccl_send_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
   req.request_id = request_id;
   req.conn_group = group.get();
 
-  if (!thread_pool_->submit_send_request(req)) {
+  if (!thread_pool_->submit_request(req)) {
     delete handle;
     return -1;
   }
@@ -386,7 +386,7 @@ int TCPEndpoint::uccl_recv_async(uccl::UcclFlow* flow,
   req.request_id = request_id;
   req.conn_group = group.get();
 
-  if (!thread_pool_->submit_send_request(req)) {
+  if (!thread_pool_->submit_request(req)) {
     delete handle;
     return -1;
   }
@@ -431,15 +431,21 @@ int TCPEndpoint::uccl_read_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
                                       request_id, &handle->completed,
                                       &handle->success);
 
-  // Send read request to remote side via control connection
-  ReadWriteHeader header;
-  header.type = static_cast<uint32_t>(TCPRequestType::READ);
-  header.reserved = 0;
-  header.remote_addr = slot_item.addr;  // Address on remote side
-  header.dest_addr = reinterpret_cast<uint64_t>(dst);
-  header.size = size;
+  // Submit READ request to sender worker - it will send the request
+  // on a data connection so the remote receiver can see it via epoll
+  TCPRequest req;
+  req.type = TCPRequestType::READ;
+  req.ctrl_fd = group->ctrl_fd;
+  req.data = nullptr;  // No data to send for READ request
+  req.size = size;
+  req.dest_addr = reinterpret_cast<uint64_t>(dst);
+  req.remote_addr = slot_item.addr;  // Address on remote side
+  req.completed = &handle->completed;
+  req.success = &handle->success;
+  req.request_id = request_id;
+  req.conn_group = group.get();
 
-  uccl::send_message(group->ctrl_fd, &header, sizeof(header));
+  thread_pool_->submit_request(req);
 
   if (ureq) {
     ureq->engine_idx = reinterpret_cast<int64_t>(handle);
@@ -473,7 +479,7 @@ int TCPEndpoint::uccl_write_async(uccl::UcclFlow* flow,
   req.request_id = request_id;
   req.conn_group = group.get();
 
-  if (!thread_pool_->submit_send_request(req)) {
+  if (!thread_pool_->submit_request(req)) {
     delete handle;
     return -1;
   }

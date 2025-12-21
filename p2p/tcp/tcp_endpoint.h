@@ -25,8 +25,9 @@
 
 namespace tcp {
 
-// Constants
 static constexpr size_t kChunkSize = 1024 * 1024;  // 1MB chunk size
+static_assert(kChunkSize <= kStagingBufferSize,
+              "kChunkSize must be <= kStagingBufferSize");
 static constexpr size_t kMaxInflightChunks = 256;
 static constexpr size_t kTCPBufferSize = 4 * 1024 * 1024;  // 4MB TCP buffer
 static constexpr uint64_t kBandwidthPerConnection =
@@ -127,14 +128,6 @@ class TCPEndpoint {
     int32_t num_interfaces;
     int32_t total_connections;
     int32_t reserved;
-  };
-
-  struct ReadWriteHeader {
-    uint32_t type;
-    uint32_t reserved;
-    uint64_t remote_addr;
-    uint64_t dest_addr;
-    size_t size;
   };
 
   void start_listening();

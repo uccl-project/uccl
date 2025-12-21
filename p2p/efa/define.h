@@ -68,7 +68,7 @@ inline size_t channelIdToContextId(uint32_t channel_id) {
 }
 
 inline int parseLogLevelFromEnv() {
-  char const* env = std::getenv("P2P_LOG_LEVEL");
+  char const* env = std::getenv("UCCL_P2P_LOG_LEVEL");
   if (!env) {
     return google::WARNING;
   }

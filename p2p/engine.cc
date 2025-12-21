@@ -601,7 +601,6 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
       }
       if (unified::uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightChunks])) {
         // Just mark it as completed, DO NOT increment ureq_finished here.
-        LOG(INFO) << "chunk recv::::" << i;
         done[i % kMaxInflightChunks] = true;
       }
     }
