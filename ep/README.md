@@ -1,8 +1,6 @@
-# UCCL GPU-Driven Expert Parallelism Engine
+# UCCL-EP: GPU-initiated Expert Parallelism Communication
 
-GPU-driven communication (e.g., DeepEP) is the key to efficient and large-scale EP, but it cannot run on heterogeneous platforms in the public cloud due to tight coupling between GPU and NIC. UCCL-EP has exactly the same interface and functionality as [DeepEP](https://github.com/deepseek-ai/DeepEP), but allows you to run GPU-driven communication for MoE models on public clouds, such as AWS, with superior performance to the state-of-the-art. Our ultimate goal with UCCL-EP is to democratize EP for heterogeneous GPUs and NIC vendors, including AMD GPUs, Broadcom NICs, AMD Pensando NICs, and more. 
-
-For UCCL's host/CPU-driven P2P engine, see [p2p](../p2p/) folder.
+GPU-initiated expert-parallel communication (e.g., DeepEP) is the key to efficient and large-scale EP. However, it cannot run on heterogeneous platforms due to tight coupling between GPU and NIC (e.g., with IBGDA). UCCL-EP has the same interface and functionality as [DeepEP](https://github.com/deepseek-ai/DeepEP), and enables GPU-initiated communication for MoE models across heterogeneous GPUs (e.g., Nvidia, AMD) and NICs (e.g., EFA, Broadcom, CX7), with superior performance to the state-of-the-art. 
 
 ## Prerequisite
 
