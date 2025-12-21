@@ -79,7 +79,8 @@ TCPReceiverWorker::TCPReceiverWorker(uint32_t id, PendingRecvMap* pending_recvs)
     : worker_id_(id),
       running_(false),
       epoll_fd_(-1),
-      pending_recvs_(pending_recvs) {
+      pending_recvs_(pending_recvs),
+      staging_buffer_(kStagingBufferSize) {
   epoll_fd_ = epoll_create1(0);
   if (epoll_fd_ < 0) {
     LOG(ERROR) << "TCPReceiverWorker " << id << ": Failed to create epoll";
@@ -134,7 +135,6 @@ void TCPReceiverWorker::remove_data_connection(int fd) {
 
 void TCPReceiverWorker::worker_loop() {
   std::vector<epoll_event> events(kEpollMaxEvents);
-  thread_local std::vector<char> staging_buffer(kStagingBufferSize);
 
   while (running_) {
     int n =
@@ -147,14 +147,13 @@ void TCPReceiverWorker::worker_loop() {
 
     for (int i = 0; i < n; ++i) {
       if (events[i].events & EPOLLIN) {
-        process_incoming_data(events[i].data.fd, staging_buffer);
+        process_incoming_data(events[i].data.fd);
       }
     }
   }
 }
 
-void TCPReceiverWorker::process_incoming_data(
-    int fd, std::vector<char>& staging_buffer) {
+void TCPReceiverWorker::process_incoming_data(int fd) {
   // Peek first 4 bytes to determine message type
   uint32_t msg_type;
   ssize_t ret = recv(fd, &msg_type, sizeof(msg_type), MSG_PEEK);
@@ -165,15 +164,14 @@ void TCPReceiverWorker::process_incoming_data(
 
   if (static_cast<TCPDataMsgType>(msg_type) == TCPDataMsgType::READ_REQUEST) {
     // Handle READ request - remote side wants us to send data
-    process_read_request(fd, staging_buffer);
+    process_read_request(fd);
   } else {
     // Handle data chunk (SEND/WRITE)
-    process_data_chunk(fd, staging_buffer);
+    process_data_chunk(fd);
   }
 }
 
-void TCPReceiverWorker::process_read_request(
-    int fd, std::vector<char>& staging_buffer) {
+void TCPReceiverWorker::process_read_request(int fd) {
   ReadWriteHeader header;
   ssize_t ret = recv(fd, &header, sizeof(header), MSG_PEEK);
   if (ret < static_cast<ssize_t>(sizeof(header))) {
@@ -195,8 +193,8 @@ void TCPReceiverWorker::process_read_request(
 
   // Copy from GPU to staging buffer
   void* src = reinterpret_cast<void*>(header.remote_addr);
-  gpuError_t err =
-      gpuMemcpy(staging_buffer.data(), src, header.size, gpuMemcpyDeviceToHost);
+  gpuError_t err = gpuMemcpy(staging_buffer_.data(), src, header.size,
+                             gpuMemcpyDeviceToHost);
   if (err != gpuSuccess) {
     LOG(ERROR) << "TCPReceiverWorker " << worker_id_
                << ": GPU memcpy failed for READ";
@@ -220,15 +218,14 @@ void TCPReceiverWorker::process_read_request(
     return;
   }
 
-  if (!send_exact(fd, staging_buffer.data(), header.size)) {
+  if (!send_exact(fd, staging_buffer_.data(), header.size)) {
     LOG(ERROR) << "TCPReceiverWorker " << worker_id_
                << ": failed to send READ response data";
     return;
   }
 }
 
-void TCPReceiverWorker::process_data_chunk(int fd,
-                                           std::vector<char>& staging_buffer) {
+void TCPReceiverWorker::process_data_chunk(int fd) {
   // Read chunk header
   ChunkHeader header;
   ssize_t ret = recv(fd, &header, sizeof(header), MSG_PEEK);
@@ -250,7 +247,7 @@ void TCPReceiverWorker::process_data_chunk(int fd,
   }
 
   // Read chunk data
-  if (!recv_exact(fd, staging_buffer.data(), header.chunk_size)) {
+  if (!recv_exact(fd, staging_buffer_.data(), header.chunk_size)) {
     LOG(ERROR) << "TCPReceiverWorker " << worker_id_
                << ": failed to read chunk data";
     return;
@@ -258,8 +255,8 @@ void TCPReceiverWorker::process_data_chunk(int fd,
 
   // Copy to GPU at dest_addr + offset
   void* gpu_dest = reinterpret_cast<void*>(header.dest_addr + header.offset);
-  gpuError_t err = gpuMemcpy(gpu_dest, staging_buffer.data(), header.chunk_size,
-                             gpuMemcpyHostToDevice);
+  gpuError_t err = gpuMemcpy(gpu_dest, staging_buffer_.data(),
+                             header.chunk_size, gpuMemcpyHostToDevice);
   if (err != gpuSuccess) {
     LOG(ERROR) << "TCPReceiverWorker " << worker_id_ << ": GPU memcpy failed";
   }
@@ -340,7 +337,7 @@ bool TCPSenderWorker::process_requests() {
         success = do_send(req);
         break;
       case TCPRequestType::RECV:
-        success = do_recv_ctrl(req);  // Just send RecvReady on ctrl
+        success = do_recv(req);  // Just send RecvReady on ctrl
         break;
       case TCPRequestType::WRITE:
         success = do_write(req);
@@ -363,16 +360,6 @@ bool TCPSenderWorker::process_requests() {
     }
   }
   return processed_any;
-}
-
-bool TCPSenderWorker::do_recv_ctrl(TCPRequest& req) {
-  RecvReadyMsg msg;
-  msg.dest_addr = reinterpret_cast<uint64_t>(req.data);
-  msg.size = req.size;
-  msg.request_id = req.request_id;
-  msg.reserved = 0;
-
-  return send_exact(req.ctrl_fd, &msg, sizeof(msg));
 }
 
 bool TCPSenderWorker::do_send(TCPRequest& req) {
@@ -399,8 +386,6 @@ bool TCPSenderWorker::do_send(TCPRequest& req) {
     return false;
   }
 
-  conn->inflight_chunks.fetch_add(1, std::memory_order_relaxed);
-
   // Prepare chunk header
   ChunkHeader header;
   header.msg_type = static_cast<uint32_t>(TCPDataMsgType::DATA_CHUNK);
@@ -425,6 +410,7 @@ bool TCPSenderWorker::do_send(TCPRequest& req) {
     return false;
   }
 
+  conn->inflight_chunks.fetch_add(1, std::memory_order_relaxed);
   // Send data
   if (!send_exact(conn->fd, staging_buffer_.data(), req.size)) {
     return false;
@@ -432,6 +418,16 @@ bool TCPSenderWorker::do_send(TCPRequest& req) {
   conn->inflight_chunks.fetch_sub(1, std::memory_order_relaxed);
 
   return true;
+}
+
+bool TCPSenderWorker::do_recv(TCPRequest& req) {
+  RecvReadyMsg msg;
+  msg.dest_addr = reinterpret_cast<uint64_t>(req.data);
+  msg.size = req.size;
+  msg.request_id = req.request_id;
+  msg.reserved = 0;
+
+  return send_exact(req.ctrl_fd, &msg, sizeof(msg));
 }
 
 bool TCPSenderWorker::do_write(TCPRequest& req) {
@@ -442,8 +438,6 @@ bool TCPSenderWorker::do_write(TCPRequest& req) {
   // Use pre-assigned connection (ensures disjoint connections per worker)
   TCPConnection* conn = req.assigned_conn;
   if (!conn || !conn->is_valid()) return false;
-
-  conn->inflight_chunks.fetch_add(1, std::memory_order_relaxed);
 
   ChunkHeader header;
   header.msg_type = static_cast<uint32_t>(TCPDataMsgType::DATA_CHUNK);
@@ -466,6 +460,8 @@ bool TCPSenderWorker::do_write(TCPRequest& req) {
     return false;
   }
 
+  conn->inflight_chunks.fetch_add(1, std::memory_order_relaxed);
+  // Send data
   if (!send_exact(conn->fd, staging_buffer_.data(), req.size)) {
     return false;
   }

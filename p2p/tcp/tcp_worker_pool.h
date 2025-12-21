@@ -224,15 +224,16 @@ class TCPReceiverWorker {
 
  private:
   void worker_loop();
-  void process_incoming_data(int fd, std::vector<char>& staging_buffer);
-  void process_read_request(int fd, std::vector<char>& staging_buffer);
-  void process_data_chunk(int fd, std::vector<char>& staging_buffer);
+  void process_incoming_data(int fd);
+  void process_read_request(int fd);
+  void process_data_chunk(int fd);
 
   uint32_t worker_id_;
   std::atomic<bool> running_;
   int epoll_fd_;
   std::thread worker_thread_;
   PendingRecvMap* pending_recvs_;  // Shared across all workers
+  std::vector<char> staging_buffer_;
 
   mutable std::mutex mutex_;
   std::unordered_set<int> data_fds_;
@@ -255,8 +256,8 @@ class TCPSenderWorker {
   void worker_loop();
   bool process_requests();
 
-  bool do_recv_ctrl(TCPRequest& req);
   bool do_send(TCPRequest& req);
+  bool do_recv(TCPRequest& req);
   bool do_write(TCPRequest& req);
   bool do_read(TCPRequest& req);
 
