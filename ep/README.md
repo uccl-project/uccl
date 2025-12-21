@@ -140,17 +140,30 @@ We test normal kernels on **8x B200 + 8x 400Gb/s EFA** with each GPU connected t
 | Internode | 24 | 53 GB/s (RDMA), 1637 µs | 24 | 59 GB/s (RDMA), 2887 µs    |
 | Internode | 32 | 53 GB/s (RDMA), 2072 µs | 32 | 57 GB/s (RDMA), 3724 µs    |
 
+#### On AMD MI300X with CX7 InfiniBand
+
+|   Type    | FP8 Dispatch #EP | Bottleneck bandwidth| BF16 Dispatch #EP |Bottleneck bandwidth | Combine #EP | Bottleneck bandwidth |
+|:---------:|:------------:|:--------------------:|:-----------:|:--------------------:|:--------------------:|:--------------------:|
+| Internode |      16      |    71 GB/s (RDMA)    |     16      |    81 GB/s (RDMA)    | 16      |    54 GB/s (RDMA)    |
+| Internode |      32      |    57 GB/s (RDMA)    |     32      |    60 GB/s (RDMA)    |  32      |    57 GB/s (RDMA)    |
+
+#### On AMD MI300X with Broadcom Thor2
+
+|   Type    | FP8 Dispatch #EP | Bottleneck bandwidth| BF16 Dispatch #EP |Bottleneck bandwidth | Combine #EP | Bottleneck bandwidth |
+|:---------:|:------------:|:--------------------:|:-----------:|:--------------------:|:--------------------:|:--------------------:|
+| Internode |      16      |    71 GB/s (RDMA)    |     16      |    81 GB/s (RDMA)    | 16      |    45 GB/s (RDMA)    |
+| Internode |      32      |    49 GB/s (RDMA)    |     32      |    55 GB/s (RDMA)    |  32      |    50 GB/s (RDMA)    |
+
+
 ### Low-latency kernels with pure RDMA
 
-#### On p5en
-
-We test low-latency kernels on **8x H200 + 16x 200Gb/s EFA**, following a **DeepSeek-V3 inference** setting (128 tokens per batch, 7168 hidden, top-8 experts, FP8 dispatch / BF16 combine).
+#### AMD MI300X with CX7 InfiniBand
 
 | Dispatch #EP | Latency | RDMA bandwidth | Combine #EP | Latency | RDMA bandwidth |
-|:-------------:|:--------:|:---------------:|:------------:|:--------:|:---------------:|
-| 16 | 226 µs | 36 GB/s | 16 | 293 µs | 48 GB/s |
-| 24 | 386 µs | 20 GB/s | 24 | 580 µs | 26 GB/s |
-| 32 | 465 µs | 16 GB/s | 32 | 694 µs | 25 GB/s |
+|:------------:|:-------:|:--------------:|:-----------:|:-------:|:--------------:|
+|      8       |   65 us  |    114 GB/s     |      8      |  92 us  |    157 GB/s    |
+|      16      | 136 us  |    55 GB/s     |     16      | 207 us  |    70 GB/s     |
+|      32      | 224 us  |    30 GB/s     |     32      | 341 us  |    42 GB/s     |
 
 #### On p6-b200
 
@@ -161,3 +174,13 @@ We test low-latency kernels on **8x B200 + 8x 400Gb/s EFA**.
 | 16 | 228 µs | 33 GB/s | 16 | 318 µs | 46 GB/s |
 | 24 | 448 µs | 17 GB/s | 24 | 566 µs | 26 GB/s |
 | 32 | 406 µs | 19 GB/s | 32 | 617 µs | 24 GB/s |
+
+#### On p5en
+
+We test low-latency kernels on **8x H200 + 16x 200Gb/s EFA**, following a **DeepSeek-V3 inference** setting (128 tokens per batch, 7168 hidden, top-8 experts, FP8 dispatch / BF16 combine).
+
+| Dispatch #EP | Latency | RDMA bandwidth | Combine #EP | Latency | RDMA bandwidth |
+|:-------------:|:--------:|:---------------:|:------------:|:--------:|:---------------:|
+| 16 | 226 µs | 36 GB/s | 16 | 293 µs | 48 GB/s |
+| 24 | 386 µs | 20 GB/s | 24 | 580 µs | 26 GB/s |
+| 32 | 465 µs | 16 GB/s | 32 | 694 µs | 25 GB/s |
