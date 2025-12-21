@@ -148,6 +148,7 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
             << remote_port;
 
   auto group = std::make_shared<TCPConnectionGroup>();
+  group->num_sender_workers = thread_pool_->num_sender_workers();
 
   NegotiationInfo local_info;
   local_info.gpu_index = local_gpuidx;
@@ -258,6 +259,7 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   uint64_t conn_id = next_conn_id_.fetch_add(1, std::memory_order_relaxed);
 
   auto group = std::make_shared<TCPConnectionGroup>();
+  group->num_sender_workers = thread_pool_->num_sender_workers();
   group->ctrl_fd = ctrl_fd;
   setup_tcp_socket_options(ctrl_fd);
 
@@ -331,6 +333,13 @@ int TCPEndpoint::uccl_send_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
       next_request_id_.fetch_add(1, std::memory_order_relaxed);
   handle->request_id = request_id;
 
+  // Select connection upfront to route request to its owner
+  TCPConnection* conn = group->select_data_connection();
+  if (!conn) {
+    delete handle;
+    return -1;
+  }
+
   TCPRequest req;
   req.type = TCPRequestType::SEND;
   req.ctrl_fd = group->ctrl_fd;
@@ -341,6 +350,7 @@ int TCPEndpoint::uccl_send_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
   req.success = &handle->success;
   req.request_id = request_id;
   req.conn_group = group.get();
+  req.assigned_conn = conn;
 
   if (!thread_pool_->submit_request(req)) {
     delete handle;
@@ -375,6 +385,13 @@ int TCPEndpoint::uccl_recv_async(uccl::UcclFlow* flow,
                                       &handle->success);
 
   // Send RecvReady message on control connection
+  // Select connection for routing (actual send uses ctrl_fd, not data conn)
+  TCPConnection* conn = group->select_data_connection();
+  if (!conn) {
+    delete handle;
+    return -1;
+  }
+
   TCPRequest req;
   req.type = TCPRequestType::RECV;
   req.ctrl_fd = group->ctrl_fd;
@@ -385,6 +402,7 @@ int TCPEndpoint::uccl_recv_async(uccl::UcclFlow* flow,
   req.success = nullptr;
   req.request_id = request_id;
   req.conn_group = group.get();
+  req.assigned_conn = conn;  // For routing, even though RECV uses ctrl_fd
 
   if (!thread_pool_->submit_request(req)) {
     delete handle;
@@ -431,6 +449,13 @@ int TCPEndpoint::uccl_read_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
                                       request_id, &handle->completed,
                                       &handle->success);
 
+  // Select connection upfront to route request to its owner
+  TCPConnection* conn = group->select_data_connection();
+  if (!conn) {
+    delete handle;
+    return -1;
+  }
+
   // Submit READ request to sender worker - it will send the request
   // on a data connection so the remote receiver can see it via epoll
   TCPRequest req;
@@ -444,6 +469,7 @@ int TCPEndpoint::uccl_read_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
   req.success = &handle->success;
   req.request_id = request_id;
   req.conn_group = group.get();
+  req.assigned_conn = conn;
 
   thread_pool_->submit_request(req);
 
@@ -468,6 +494,13 @@ int TCPEndpoint::uccl_write_async(uccl::UcclFlow* flow,
       next_request_id_.fetch_add(1, std::memory_order_relaxed);
   handle->request_id = request_id;
 
+  // Select connection upfront to route request to its owner
+  TCPConnection* conn = group->select_data_connection();
+  if (!conn) {
+    delete handle;
+    return -1;
+  }
+
   TCPRequest req;
   req.type = TCPRequestType::WRITE;
   req.ctrl_fd = group->ctrl_fd;
@@ -478,6 +511,7 @@ int TCPEndpoint::uccl_write_async(uccl::UcclFlow* flow,
   req.success = &handle->success;
   req.request_id = request_id;
   req.conn_group = group.get();
+  req.assigned_conn = conn;
 
   if (!thread_pool_->submit_request(req)) {
     delete handle;

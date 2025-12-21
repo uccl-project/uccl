@@ -391,11 +391,11 @@ bool TCPSenderWorker::do_send(TCPRequest& req) {
 
   uint64_t dest_addr = ready_msg.dest_addr;
 
-  // Select a data connection with power-of-two choice
-  TCPConnection* conn = group->select_data_connection();
+  // Use pre-assigned connection (ensures disjoint connections per worker)
+  TCPConnection* conn = req.assigned_conn;
   if (!conn || !conn->is_valid()) {
     LOG(ERROR) << "TCPSenderWorker " << worker_id_
-               << ": no valid data connection";
+               << ": no valid assigned connection";
     return false;
   }
 
@@ -437,12 +437,10 @@ bool TCPSenderWorker::do_send(TCPRequest& req) {
 bool TCPSenderWorker::do_write(TCPRequest& req) {
   if (!req.data || req.size == 0) return false;
 
-  auto* group = static_cast<TCPConnectionGroup*>(req.conn_group);
-  if (!group) return false;
-
   uint64_t dest_addr = req.dest_addr;  // Already known from FifoItem
 
-  TCPConnection* conn = group->select_data_connection();
+  // Use pre-assigned connection (ensures disjoint connections per worker)
+  TCPConnection* conn = req.assigned_conn;
   if (!conn || !conn->is_valid()) return false;
 
   conn->inflight_chunks.fetch_add(1, std::memory_order_relaxed);
@@ -479,10 +477,9 @@ bool TCPSenderWorker::do_write(TCPRequest& req) {
 bool TCPSenderWorker::do_read(TCPRequest& req) {
   // For READ, send request header on a data connection so remote
   // receiver worker can see it via epoll and trigger sending data back
-  auto* group = static_cast<TCPConnectionGroup*>(req.conn_group);
-  if (!group) return false;
 
-  TCPConnection* conn = group->select_data_connection();
+  // Use pre-assigned connection (ensures disjoint connections per worker)
+  TCPConnection* conn = req.assigned_conn;
   if (!conn || !conn->is_valid()) return false;
 
   // Send ReadWriteHeader on data connection
@@ -527,6 +524,8 @@ TCPConnection* TCPConnectionGroup::select_data_connection() {
 void TCPConnectionGroup::add_data_connection(
     std::unique_ptr<TCPConnection> conn) {
   std::unique_lock<std::shared_mutex> lock(mutex);
+  // Assign to sender worker round-robin based on current count
+  conn->sender_worker_id = data_connections.size() % num_sender_workers;
   data_connections.push_back(std::move(conn));
 }
 
@@ -577,8 +576,7 @@ uint32_t TCPThreadPool::assign_data_connection(int fd) {
 }
 
 bool TCPThreadPool::submit_request(TCPRequest const& req) {
-  uint32_t id = next_sender_.fetch_add(1, std::memory_order_relaxed) %
-                sender_workers_.size();
+  uint32_t id = req.assigned_conn->sender_worker_id;
   return sender_workers_[id]->submit_request(req);
 }
 

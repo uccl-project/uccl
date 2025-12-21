@@ -101,6 +101,7 @@ struct ReadWriteHeader {
 };
 
 // Forward declarations
+struct TCPConnection;
 struct TCPConnectionGroup;
 class TCPReceiverWorker;
 class TCPSenderWorker;
@@ -120,6 +121,9 @@ struct alignas(64) TCPRequest {
   // For sender: pointer to connection group for load-balanced sending
   void* conn_group;  // TCPConnectionGroup*
 
+  // Pre-assigned connection (selected before submission, routes to its owner)
+  TCPConnection* assigned_conn;
+
   TCPRequest()
       : type(TCPRequestType::SEND),
         ctrl_fd(-1),
@@ -130,7 +134,8 @@ struct alignas(64) TCPRequest {
         completed(nullptr),
         success(nullptr),
         request_id(0),
-        conn_group(nullptr) {}
+        conn_group(nullptr),
+        assigned_conn(nullptr) {}
 };
 
 // TCP connection wrapper
@@ -140,7 +145,9 @@ struct TCPConnection {
   std::string remote_ip;
   int remote_port = 0;
   std::atomic<uint32_t> inflight_chunks{0};
-  uint32_t worker_id = 0;
+  uint32_t sender_worker_id = 0;  // Which sender worker owns this connection
+  uint32_t receiver_worker_id =
+      0;  // Which receiver worker monitors this connection
 
   TCPConnection() = default;
 
@@ -150,7 +157,8 @@ struct TCPConnection {
         remote_ip(std::move(other.remote_ip)),
         remote_port(other.remote_port),
         inflight_chunks(other.inflight_chunks.load()),
-        worker_id(other.worker_id) {
+        sender_worker_id(other.sender_worker_id),
+        receiver_worker_id(other.receiver_worker_id) {
     other.fd = -1;
   }
 
@@ -265,14 +273,16 @@ struct TCPConnectionGroup {
   std::vector<std::unique_ptr<TCPConnection>> data_connections;
   std::atomic<uint64_t> round_robin_idx{0};
   mutable std::shared_mutex mutex;
+  uint32_t num_sender_workers = 1;  // Set by TCPThreadPool
 
   // For tracking remaining data to send (decremented as RecvReady messages
   // arrive)
   std::atomic<size_t> pending_send_size{0};
 
-  // Power-of-two choice selection for load balancing
+  // Select a connection and return it (caller routes request to its owner)
   TCPConnection* select_data_connection();
 
+  // Add connection and assign to sender worker round-robin
   void add_data_connection(std::unique_ptr<TCPConnection> conn);
 
   size_t data_connection_count() const;
@@ -290,7 +300,7 @@ class TCPThreadPool {
   // Assign a data connection to a receiver worker (round-robin)
   uint32_t assign_data_connection(int fd);
 
-  // Submit request to a sender worker
+  // Submit request to sender worker (routes based on assigned_conn's owner)
   bool submit_request(TCPRequest const& req);
 
   // Register a pending receive (shared across all receiver workers)
@@ -298,6 +308,7 @@ class TCPThreadPool {
                              uint32_t request_id, std::atomic<bool>* completed,
                              std::atomic<bool>* success);
 
+  size_t num_sender_workers() const { return sender_workers_.size(); }
   size_t size() const { return sender_workers_.size(); }
 
   TCPReceiverWorker* get_receiver_worker(size_t idx);
