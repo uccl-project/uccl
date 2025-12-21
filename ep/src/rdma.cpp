@@ -5,6 +5,8 @@
 #include "proxy_ctx.hpp"
 #include "rdma_util.hpp"
 #include "util/gpu_rt.h"
+#include "util/util.h"
+// net.h should be included after util.h
 #include "util/net.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
