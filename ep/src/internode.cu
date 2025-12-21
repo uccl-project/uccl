@@ -2641,14 +2641,12 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
     } else if (warp_role == WarpRole::kRDMAReceiver) {
       // Receive from RDMA ranks and write to the output tensor
       // Clean shared memory and sync
-
       EP_DEVICE_ASSERT(kNumRDMARanks <= WARP_SIZE);
       lane_id < kNumRDMARanks ? (rdma_receiver_rdma_head[warp_id][lane_id] = 0)
                               : 0;
       lane_id == 0 ? (rdma_receiver_retired[warp_id] = false) : 0;
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-      // coordinator
       int last_rdma_head = 0;
       // no need to sync_rdma_receiver_smem for AMD GPUs, because no coordinator
       // warp anymore
