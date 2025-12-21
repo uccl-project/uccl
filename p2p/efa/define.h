@@ -36,7 +36,11 @@
 #include <transport.h>
 #include <unistd.h>
 
+#ifdef UCCL_ENABLE_IBRC
+static constexpr int kGidIndex = 3;
+#else
 static constexpr int kGidIndex = 0;
+#endif
 static constexpr int kRankIDPlaceHolder = 9999;
 static constexpr int kEfaQpLowLatencyServiceLevel = 8;
 static constexpr uint32_t kQKey = 0x15695;
