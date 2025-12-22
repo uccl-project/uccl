@@ -57,6 +57,8 @@ static constexpr int kMaxSendSeg = 2;
 static constexpr int kMaxRecvSeg = 2;
 static constexpr uint64_t kMessageChunkSizeKB = 256;  // 1 MB
 static constexpr uint64_t kMaxSplitNum = 16;
+static constexpr uint32_t kBatchPostRecvWr = 32;
+static constexpr uint32_t kBatchPollCqe = 32;
 
 static constexpr size_t kTaskRingSize = 1024;
 static constexpr size_t kRingCapacity = 16384;  // Must be power of 2

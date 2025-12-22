@@ -87,7 +87,6 @@ class EFAChannel {
     wr.wr_id = wr_id;
     wr.sg_list = &sge;
     wr.num_sge = 1;
-
     if (ibv_post_recv(qp_, &wr, &bad_wr)) {
       LOG(ERROR) << "ibv_post_recv failed: " << strerror(errno);
     }
@@ -95,6 +94,19 @@ class EFAChannel {
   }
 
 #ifdef UCCL_ENABLE_IBRC
+
+  void lazy_post_recv_wr(uint32_t threshold) {
+    threshold = std::min(threshold, (uint32_t)kMaxRecvWr);
+    pending_post_recv_++;
+    while (pending_post_recv_ >= threshold) {
+      struct ibv_recv_wr* bad_wr = nullptr;
+      pre_alloc_recv_wrs_[threshold - 1].next = nullptr;
+      assert(ibv_post_recv(qp_, pre_alloc_recv_wrs_, &bad_wr) == 0);
+      pre_alloc_recv_wrs_[threshold - 1].next = (threshold == kMaxRecvWr) ? nullptr : &pre_alloc_recv_wrs_[threshold];
+      pending_post_recv_ -= threshold;
+    }
+  }
+
   bool poll_once(std::vector<CQMeta>& cq_datas) {
     if (!cq_ex_) {
       LOG(INFO) << "poll_once - channel_id: " << channel_id_
@@ -102,16 +114,15 @@ class EFAChannel {
       return false;
     }
 
-    struct ibv_wc wcs[32];
     auto cq = ibv_cq_ex_to_cq(cq_ex_);
-    int ret = ibv_poll_cq(cq, 32, wcs);
+    int ret = ibv_poll_cq(cq, kBatchPollCqe, pre_alloc_wcs_);
 
     if (ret <= 0) {
       return false;
     }
 
     for (int i = 0; i < ret; i++) {
-      auto wc = &wcs[i];
+      auto wc = &pre_alloc_wcs_[i];
       uint64_t wr_id = wc->wr_id;
       auto status = wc->status;
       if (unlikely(status != IBV_WC_SUCCESS)) {
@@ -126,12 +137,14 @@ class EFAChannel {
 
         if (cq_data.op_code == IBV_WC_RECV_RDMA_WITH_IMM) {
           cq_data.imm = wc->imm_data;
+          lazy_post_recv_wr(kBatchPostRecvWr);
         } else {
           cq_data.imm = 0;
         }
 
         cq_datas.emplace_back(cq_data);
       }
+
     }
 
     return !cq_datas.empty();
@@ -218,6 +231,10 @@ class EFAChannel {
   struct ibv_cq_ex* cq_ex_;
   struct ibv_qp* qp_;
   struct ibv_ah* ah_;
+
+  struct ibv_wc pre_alloc_wcs_[kBatchPollCqe];
+  struct ibv_recv_wr pre_alloc_recv_wrs_[kMaxRecvWr];
+  uint32_t pending_post_recv_ = 0;
 
   std::shared_ptr<ChannelMetaData> local_meta_;
   std::shared_ptr<ChannelMetaData> remote_meta_;
@@ -316,6 +333,10 @@ class EFAChannel {
             IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER | IBV_QP_AV;
     assert(ibv_modify_qp(qp_, &attr, flags) == 0);
 
+    for (int i = 0; i < kMaxRecvWr; i++) {
+      lazy_post_recv_wr(kMaxRecvWr);
+    }
+
     // RTS
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTS;
@@ -330,6 +351,13 @@ class EFAChannel {
   }
 
 #ifdef UCCL_ENABLE_IBRC
+  void init_pre_alloc_resource() {
+    for (int i = 0; i < kMaxRecvWr; i++) {
+      pre_alloc_recv_wrs_[i] = {};
+      pre_alloc_recv_wrs_[i].next = (i == kMaxRecvWr - 1) ? nullptr : &pre_alloc_recv_wrs_[i + 1];
+    }
+  }
+
   void initQP() {
     cq_ex_ = (struct ibv_cq_ex*)ibv_create_cq(ctx_->getCtx(), 1024, nullptr,
                                               nullptr, 0);
@@ -372,6 +400,8 @@ class EFAChannel {
 
     local_meta_->gid = ctx_->queryGid(kGidIndex);
     local_meta_->qpn = qp_->qp_num;
+
+    init_pre_alloc_resource();
   }
 #else
   void initQP() {
