@@ -10,7 +10,7 @@ CXX := g++
 CXXFLAGS_TRANS := -DUCCL_ENABLE_EFA -DUCCL_ENABLE_IBRC
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I$(RDMA_HOME) -I$(HIP_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
-	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=${CONDA_LIB_HOME} -I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest -lz -lelf -libverbs -lpthread \
+	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=${CONDA_LIB_HOME} -I${CONDA_LIB_HOME}/../include \
 	$(CXXFLAGS_TRANS)
 
 # Python and pybind11 configuration
@@ -29,7 +29,7 @@ INCDIR ?= $(PREFIX)/include
 
 CXXFLAGS       += -D__HIP_PLATFORM_AMD__
 LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
-                  -Wl,-rpath,$(HIP_LIB) -I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest \
+                  -Wl,-rpath,$(HIP_LIB) -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest \
                   -lz -lelf -libverbs -lpthread
 
 # Target and source files
@@ -56,7 +56,7 @@ $(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB)
 	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB) \
 	      -L$(HIP_LIB) -lamdhip64 \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(HIP_LIB) $(PYTHON_LIB) -libverbs -lz -lelf
+	      -Wl,-rpath,$(HIP_LIB) $(PYTHON_LIB)
 
 $(RDMA_HOME)/librdma_hip.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc %_test.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
 	make -C $(RDMA_HOME) -f Makefile.rocm librdma_hip.a -j$(nproc)

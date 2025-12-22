@@ -230,6 +230,7 @@ bool poll_once(std::vector<CQMeta>& cq_datas) {
 
   // Post send request based on send_type
   // Returns 0 on success, error code on failure
+  #ifdef USE_QPEX
   inline int postRequest(std::shared_ptr<EFASendRequest> req) {
     auto* qpx = ibv_qp_to_qp_ex(qp_);
     ibv_wr_start(qpx);
@@ -283,6 +284,38 @@ bool poll_once(std::vector<CQMeta>& cq_datas) {
     }
     return ret;
   }
+  #else
+  inline int postRequest(std::shared_ptr<EFASendRequest> req) {
+    struct ibv_send_wr wr = {}, *bad_wr = nullptr;
+    wr.wr_id = req->wr_id;
+
+    wr.imm_data = req->imm_data;
+    wr.wr.rdma.remote_addr = req->getRemoteAddress();
+    wr.wr.rdma.rkey = req->getRemoteKey();
+    
+    if (req->send_type == SendType::Send) {
+      wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+    } else if (req->send_type == SendType::Write) {
+      wr.opcode = IBV_WR_RDMA_WRITE;
+    } else {
+      wr.opcode = IBV_WR_RDMA_READ;
+    }
+
+    struct ibv_sge sge[1];
+    int num_sge = prepareSGEList(sge, req);
+    wr.sg_list = sge;
+    wr.num_sge = num_sge;
+
+    wr.send_flags = IBV_SEND_SIGNALED;
+    wr.next = nullptr;
+    int ret = ibv_post_send(qp_, &wr, &bad_wr);
+    if (ret) {
+      std::cout << "error in postRequest" << std::endl;
+    }
+    return ret;
+  }
+
+  #endif
 
   void ibrcQP_rtr_rts() {
     int flags = 0;
@@ -327,28 +360,49 @@ void initQP() {
   cq_ex_ = (struct ibv_cq_ex*)ibv_create_cq(ctx_->getCtx(), 1024, nullptr, nullptr, 0);
   assert(cq_ex_);
 
-  struct ibv_qp_init_attr_ex qp_attr = {0};
-  qp_attr.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
-  qp_attr.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE |
-                           IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM |
-                           IBV_QP_EX_WITH_RDMA_READ;
+  #ifdef USE_QPEX
+    struct ibv_qp_init_attr_ex qp_attr = {0};
+    qp_attr.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
+    qp_attr.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE |
+                            IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM |
+                            IBV_QP_EX_WITH_RDMA_READ;
 
-  qp_attr.cap.max_send_wr = kMaxSendWr;
-  qp_attr.cap.max_recv_wr = kMaxRecvWr;
-  qp_attr.cap.max_send_sge = kMaxSendSeg;
-  qp_attr.cap.max_recv_sge = kMaxRecvSeg;
-  qp_attr.cap.max_inline_data = 0;
+    qp_attr.cap.max_send_wr = kMaxSendWr;
+    qp_attr.cap.max_recv_wr = kMaxRecvWr;
+    qp_attr.cap.max_send_sge = kMaxSendSeg;
+    qp_attr.cap.max_recv_sge = kMaxRecvSeg;
+    qp_attr.cap.max_inline_data = 0;
 
-  qp_attr.send_cq = ibv_cq_ex_to_cq(cq_ex_);
-  qp_attr.recv_cq = ibv_cq_ex_to_cq(cq_ex_);
+    qp_attr.send_cq = ibv_cq_ex_to_cq(cq_ex_);
+    qp_attr.recv_cq = ibv_cq_ex_to_cq(cq_ex_);
 
-  qp_attr.pd = ctx_->getPD();
-  qp_attr.qp_context = ctx_->getCtx();
-  qp_attr.sq_sig_all = 0;
+    qp_attr.pd = ctx_->getPD();
+    qp_attr.qp_context = ctx_->getCtx();
+    qp_attr.sq_sig_all = 0;
 
-  qp_attr.qp_type = IBV_QPT_RC;
-  qp_ = ibv_create_qp_ex(ctx_->getCtx(), &qp_attr);
-  assert(qp_);
+    qp_attr.qp_type = IBV_QPT_RC;
+    qp_ = ibv_create_qp_ex(ctx_->getCtx(), &qp_attr);
+    assert(qp_);
+  #else
+    struct ibv_qp_init_attr qp_attr = {};
+    memset(&qp_attr, 0, sizeof(qp_attr));
+
+    qp_attr.cap.max_send_wr = kMaxSendWr;
+    qp_attr.cap.max_recv_wr = kMaxRecvWr;
+    qp_attr.cap.max_send_sge = kMaxSendSeg;
+    qp_attr.cap.max_recv_sge = kMaxRecvSeg;
+    qp_attr.cap.max_inline_data = 0;
+
+    qp_attr.send_cq = ibv_cq_ex_to_cq(cq_ex_);
+    qp_attr.recv_cq = ibv_cq_ex_to_cq(cq_ex_);
+
+    qp_attr.qp_context = ctx_->getCtx();
+    qp_attr.sq_sig_all = 0;
+
+    qp_attr.qp_type = IBV_QPT_RC;
+    qp_ = ibv_create_qp(ctx_->getPD(), &qp_attr);
+    assert(qp_);
+  #endif
 
   struct ibv_qp_attr attr = {};
   memset(&attr, 0, sizeof(attr));
