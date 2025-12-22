@@ -275,7 +275,7 @@ def main():
 
     try:
         # Initialize UCCL collective
-        collective.init_collective(args.num_cpus)
+        collective.init_collective(num_cpus=args.num_cpus, use_copy_engine_for_intra=True)
         print(f"[Rank {rank}] UCCL Collective initialized successfully")
 
         dist.barrier()
