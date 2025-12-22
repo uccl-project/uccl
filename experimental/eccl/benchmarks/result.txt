@@ -1,0 +1,108 @@
+# Test on Nvidia A40
+./bench_gdrcopy -d 5 -s $((1<<18)) -w 10000 -r 10000 -c
+Detected 7 CUDA device(s):
+  GPU id:0; name:NVIDIA GeForce RTX 4090; Bus:0000:1a:00
+  GPU id:1; name:NVIDIA GeForce RTX 4090; Bus:0000:1b:00
+  GPU id:2; name:NVIDIA GeForce RTX 4090; Bus:0000:3d:00
+  GPU id:3; name:NVIDIA GeForce RTX 4090; Bus:0000:3e:00
+  GPU id:4; name:NVIDIA A40; Bus:0000:89:00
+  GPU id:5; name:NVIDIA A40; Bus:0000:b1:00
+  GPU id:6; name:NVIDIA L40S; Bus:0000:b2:00
+Selected GPU 5, allocated 262144 bytes, dptr=0x749820600000
+
+cuMemcpy_H2D iters=10000
+Test                    Size(B)         Avg.Time(us)
+cuMemcpy_H2D                   1                   213.3819
+cuMemcpy_H2D                   2                   224.2403
+cuMemcpy_H2D                   4                   229.2765
+cuMemcpy_H2D                   8                   220.6002
+cuMemcpy_H2D                  16                   213.6974
+cuMemcpy_H2D                  32                   237.8857
+cuMemcpy_H2D                  64                   232.9511
+cuMemcpy_H2D                 128                   243.0186
+cuMemcpy_H2D                 256                   240.2060
+cuMemcpy_H2D                 512                   241.7339
+cuMemcpy_H2D                1024                   263.8447
+cuMemcpy_H2D                2048                   274.7001
+cuMemcpy_H2D                4096                   293.4498
+cuMemcpy_H2D                8192                   335.4116
+cuMemcpy_H2D               16384                   413.2267
+cuMemcpy_H2D               32768                    11.4489
+cuMemcpy_H2D               65536                    14.1560
+cuMemcpy_H2D              131072                    20.0434
+cuMemcpy_H2D              262144                    30.5826
+
+cuMemcpy_D2H iters=10000
+Test                    Size(B)         Avg.Time(us)
+cuMemcpy_D2H                   1                     8.4463
+cuMemcpy_D2H                   2                     8.4648
+cuMemcpy_D2H                   4                     8.5189
+cuMemcpy_D2H                   8                     8.0216
+cuMemcpy_D2H                  16                     8.4271
+cuMemcpy_D2H                  32                     8.5027
+cuMemcpy_D2H                  64                     8.4359
+cuMemcpy_D2H                 128                     8.3908
+cuMemcpy_D2H                 256                     8.1600
+cuMemcpy_D2H                 512                     8.4735
+cuMemcpy_D2H                1024                     8.6549
+cuMemcpy_D2H                2048                     8.5612
+cuMemcpy_D2H                4096                     8.7234
+cuMemcpy_D2H                8192                     8.9905
+cuMemcpy_D2H               16384                     9.7738
+cuMemcpy_D2H               32768                    11.2653
+cuMemcpy_D2H               65536                    13.9666
+cuMemcpy_D2H              131072                    19.2498
+cuMemcpy_D2H              262144                    29.3551
+
+gdr_map ptr: 0x74982eaf9000
+info.va=0x749820600000 mapped_size=262144 page_size=65536 wc_mapping=1 mapping_type=1
+page offset: 0 bytes
+use cold cache: no
+
+[gdr_copy_to_mapping] write iters=10000
+WARNING: measures CPU-side API invocation latency; may not imply full GPU visibility ordering.
+Test                            Size(B)         Avg.Time(us)
+gdr_copy_to_mapping                    1                     0.1038
+gdr_copy_to_mapping                    2                     0.1022
+gdr_copy_to_mapping                    4                     0.1021
+gdr_copy_to_mapping                    8                     0.1024
+gdr_copy_to_mapping                   16                     0.1023
+gdr_copy_to_mapping                   32                     0.1025
+gdr_copy_to_mapping                   64                     0.1205
+gdr_copy_to_mapping                  128                     0.1037
+gdr_copy_to_mapping                  256                     0.1093
+gdr_copy_to_mapping                  512                     0.1310
+gdr_copy_to_mapping                 1024                     0.1818
+gdr_copy_to_mapping                 2048                     0.2682
+gdr_copy_to_mapping                 4096                     0.4242
+gdr_copy_to_mapping                 8192                     0.8344
+gdr_copy_to_mapping                16384                     1.6470
+gdr_copy_to_mapping                32768                     3.2685
+gdr_copy_to_mapping                65536                     6.5084
+gdr_copy_to_mapping               131072                    12.9669
+gdr_copy_to_mapping               262144                    25.8937
+
+[gdr_copy_from_mapping] read iters=10000
+Test                            Size(B)         Avg.Time(us)
+gdr_copy_from_mapping                  1                     0.7659
+gdr_copy_from_mapping                  2                     1.5265
+gdr_copy_from_mapping                  4                     1.5288
+gdr_copy_from_mapping                  8                     1.5287
+gdr_copy_from_mapping                 16                     0.2599
+gdr_copy_from_mapping                 32                     0.2625
+gdr_copy_from_mapping                 64                     0.5164
+gdr_copy_from_mapping                128                     0.5647
+gdr_copy_from_mapping                256                     0.7855
+gdr_copy_from_mapping                512                     1.1564
+gdr_copy_from_mapping               1024                     3.0512
+gdr_copy_from_mapping               2048                     4.9621
+gdr_copy_from_mapping               4096                    10.9714
+gdr_copy_from_mapping               8192                    22.8102
+gdr_copy_from_mapping              16384                    45.4182
+gdr_copy_from_mapping              32768                    90.4610
+gdr_copy_from_mapping              65536                   181.6188
+gdr_copy_from_mapping             131072                   377.4111
+gdr_copy_from_mapping             262144                   797.2256
+
+Cleaning up...
+Done.

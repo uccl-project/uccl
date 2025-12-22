@@ -248,6 +248,7 @@ void bench_nvidia_gpu_gdrcopy(int dev_id,
             clock_gettime(CLOCK_MONOTONIC, &beg);
             for (int i = 0; i < num_write_iters; ++i) {
                 gdr_copy_to_mapping(mh, buf_ptr_u8, init_buf, copy_size);
+                cpu_sfence();
             }
             clock_gettime(CLOCK_MONOTONIC, &end);
             total_us = time_diff_us(beg, end);
@@ -521,11 +522,14 @@ int main(int argc, char** argv) {
                 return 1;
         }
     }
+    /*
+    ./bench_gdrcopy -d 5 -s $((1<<18)) -w 10000 -r 10000 -c
+    */
 #ifdef ENABLE_CUDA
     bench_nvidia_gpu_gdrcopy(dev_id, size, w, r, do_cumemcpy, cold);
 #endif
 #ifdef ENABLE_HIP
-    bench_amd_gpu_gdrcopy();
+    bench_amd_gpu_gdrcopy(dev_id, size, w, r, do_cumemcpy, cold);
 #endif
 
 return 0;
