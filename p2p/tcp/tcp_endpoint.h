@@ -26,13 +26,13 @@
 
 namespace tcp {
 
-static constexpr size_t kChunkSize = 1 * 1024 * 1024;  // 1MB chunk size
+static constexpr size_t kChunkSize = 16 * 1024 * 1024;  // 16MB chunk size
 static_assert(kChunkSize <= kStagingBufferSize,
               "kChunkSize must be <= kStagingBufferSize");
 static constexpr size_t kMaxInflightChunks = 256;
-static constexpr size_t kTCPBufferSize = 16 * 1024 * 1024;  // 16MB TCP buffer
+static constexpr size_t kTCPBufferSize = 128 * 1024 * 1024;  // 128MB TCP buffer
 static constexpr uint64_t kBandwidthPerConnection =
-    10ULL * 1000 * 1000 * 1000;  // 10Gbps
+    20ULL * 1000 * 1000 * 1000;  // 20Gbps
 
 // TCP doesn't need memory registration, so MRArray is a dummy type
 struct MRArray {

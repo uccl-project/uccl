@@ -114,12 +114,66 @@ bool recv_exact(int fd, void* buf, size_t n) {
   return true;
 }
 
+// Use sendmsg for scatter-gather I/O (header + data in one syscall)
+// This reduces syscall overhead and allows TCP to coalesce better
+bool send_header_and_data(int fd, void const* header, size_t header_size,
+                          void const* data, size_t data_size) {
+  struct iovec iov[2];
+  iov[0].iov_base = const_cast<void*>(header);
+  iov[0].iov_len = header_size;
+  iov[1].iov_base = const_cast<void*>(data);
+  iov[1].iov_len = data_size;
+
+  struct msghdr msg;
+  std::memset(&msg, 0, sizeof(msg));
+  msg.msg_iov = iov;
+  msg.msg_iovlen = 2;
+
+  size_t total = header_size + data_size;
+  size_t sent = 0;
+
+  while (sent < total) {
+    // Adjust iov for partial sends
+    size_t offset = sent;
+    int iov_idx = 0;
+    if (offset >= header_size) {
+      // Header fully sent, only data remains
+      iov[0].iov_base = nullptr;
+      iov[0].iov_len = 0;
+      iov[1].iov_base =
+          static_cast<char*>(const_cast<void*>(data)) + (offset - header_size);
+      iov[1].iov_len = data_size - (offset - header_size);
+      iov_idx = 1;
+    } else {
+      // Still sending header
+      iov[0].iov_base = static_cast<char*>(const_cast<void*>(header)) + offset;
+      iov[0].iov_len = header_size - offset;
+    }
+
+    ssize_t ret = ::sendmsg(fd, &msg, MSG_NOSIGNAL);
+    if (ret < 0) {
+      if (errno == EINTR) continue;
+      if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+      return false;
+    }
+    sent += ret;
+  }
+  return true;
+}
+
 TCPReceiverWorker::TCPReceiverWorker(uint32_t id, PendingRecvMap* pending_recvs)
     : worker_id_(id),
       running_(false),
       epoll_fd_(-1),
       pending_recvs_(pending_recvs),
-      staging_buffer_(kStagingBufferSize) {
+      staging_buffer_(nullptr) {
+  // Allocate pinned memory for efficient GPU-host transfers
+  gpuError_t err = gpuHostMalloc(reinterpret_cast<void**>(&staging_buffer_),
+                                 kStagingBufferSize, 0);
+  if (err != gpuSuccess) {
+    LOG(ERROR) << "TCPReceiverWorker " << id
+               << ": Failed to allocate pinned memory";
+  }
   epoll_fd_ = epoll_create1(0);
   if (epoll_fd_ < 0) {
     LOG(ERROR) << "TCPReceiverWorker " << id << ": Failed to create epoll";
@@ -131,6 +185,10 @@ TCPReceiverWorker::~TCPReceiverWorker() {
   stop();
   if (epoll_fd_ >= 0) {
     close(epoll_fd_);
+  }
+  if (staging_buffer_) {
+    (void)gpuFreeHost(staging_buffer_);
+    staging_buffer_ = nullptr;
   }
 }
 
@@ -233,8 +291,8 @@ void TCPReceiverWorker::process_read_request(int fd,
   // Copy from GPU to staging buffer
 #if UCCL_TCP_GPU_MEMCPY
   void* src = reinterpret_cast<void*>(header.remote_addr);
-  gpuError_t err = gpuMemcpy(staging_buffer_.data(), src, header.size,
-                             gpuMemcpyDeviceToHost);
+  gpuError_t err =
+      gpuMemcpy(staging_buffer_, src, header.size, gpuMemcpyDeviceToHost);
   if (err != gpuSuccess) {
     LOG(ERROR) << "TCPReceiverWorker " << worker_id_
                << ": GPU memcpy failed for READ";
@@ -259,7 +317,7 @@ void TCPReceiverWorker::process_read_request(int fd,
     return;
   }
 
-  if (!send_exact(fd, staging_buffer_.data(), header.size)) {
+  if (!send_exact(fd, staging_buffer_, header.size)) {
     LOG(ERROR) << "TCPReceiverWorker " << worker_id_
                << ": failed to send READ response data";
     return;
@@ -276,7 +334,7 @@ void TCPReceiverWorker::process_data_chunk(int fd,
   }
 
   // Read chunk data
-  if (!recv_exact(fd, staging_buffer_.data(), header.size)) {
+  if (!recv_exact(fd, staging_buffer_, header.size)) {
     LOG(ERROR) << "TCPReceiverWorker " << worker_id_
                << ": failed to read chunk data";
     return;
@@ -285,8 +343,8 @@ void TCPReceiverWorker::process_data_chunk(int fd,
   // Copy to GPU at dest_addr
 #if UCCL_TCP_GPU_MEMCPY
   void* gpu_dest = reinterpret_cast<void*>(header.dest_addr);
-  gpuError_t err = gpuMemcpy(gpu_dest, staging_buffer_.data(), header.size,
-                             gpuMemcpyHostToDevice);
+  gpuError_t err =
+      gpuMemcpy(gpu_dest, staging_buffer_, header.size, gpuMemcpyHostToDevice);
   if (err != gpuSuccess) {
     LOG(ERROR) << "TCPReceiverWorker " << worker_id_ << ": GPU memcpy failed";
   }
@@ -301,8 +359,15 @@ TCPSenderWorker::TCPSenderWorker(uint32_t id, PendingSendMap* pending_sends)
     : worker_id_(id),
       running_(false),
       request_ring_(nullptr),
-      staging_buffer_(kStagingBufferSize),
+      staging_buffer_(nullptr),
       pending_sends_(pending_sends) {
+  // Allocate pinned memory for efficient GPU-host transfers
+  gpuError_t err = gpuHostMalloc(reinterpret_cast<void**>(&staging_buffer_),
+                                 kStagingBufferSize, 0);
+  if (err != gpuSuccess) {
+    LOG(ERROR) << "TCPSenderWorker " << id
+               << ": Failed to allocate pinned memory";
+  }
   request_ring_ = uccl::create_ring(sizeof(TCPRequest), kRequestRingSize);
   LOG(INFO) << "TCPSenderWorker " << id << " initialized";
 }
@@ -311,6 +376,10 @@ TCPSenderWorker::~TCPSenderWorker() {
   stop();
   if (request_ring_) {
     free(request_ring_);
+  }
+  if (staging_buffer_) {
+    (void)gpuFreeHost(staging_buffer_);
+    staging_buffer_ = nullptr;
   }
 }
 
@@ -414,23 +483,19 @@ bool TCPSenderWorker::do_send(TCPRequest& req) {
   header.size = req.size;
   header.total_size = req.total_size;
 
-  // Send header on data connection
-  if (!send_exact(conn->fd, &header, sizeof(header))) {
-    return false;
-  }
-
-  // Copy from GPU to staging buffer
+  // Copy from GPU to staging buffer (always needed as req.data is GPU memory)
 #if UCCL_TCP_GPU_MEMCPY
   gpuError_t err =
-      gpuMemcpy(staging_buffer_.data(), static_cast<char const*>(req.data),
-                req.size, gpuMemcpyDeviceToHost);
+      gpuMemcpy(staging_buffer_, static_cast<char const*>(req.data), req.size,
+                gpuMemcpyDeviceToHost);
   if (err != gpuSuccess) {
     return false;
   }
 #endif
 
-  // Send data (inflight_chunks already incremented at submit time)
-  if (!send_exact(conn->fd, staging_buffer_.data(), req.size)) {
+  // Send header + data in one syscall using scatter-gather I/O
+  if (!send_header_and_data(conn->fd, &header, sizeof(header), staging_buffer_,
+                            req.size)) {
     conn->inflight_chunks.fetch_sub(1, std::memory_order_relaxed);
     return false;
   }
@@ -467,21 +532,19 @@ bool TCPSenderWorker::do_write(TCPRequest& req) {
   header.size = req.size;
   header.total_size = req.total_size;
 
-  if (!send_exact(conn->fd, &header, sizeof(header))) {
-    return false;
-  }
-
+  // Copy from GPU to staging buffer (always needed as req.data is GPU memory)
 #if UCCL_TCP_GPU_MEMCPY
   gpuError_t err =
-      gpuMemcpy(staging_buffer_.data(), static_cast<char const*>(req.data),
-                req.size, gpuMemcpyDeviceToHost);
+      gpuMemcpy(staging_buffer_, static_cast<char const*>(req.data), req.size,
+                gpuMemcpyDeviceToHost);
   if (err != gpuSuccess) {
     return false;
   }
 #endif
 
-  // Send data (inflight_chunks already incremented at submit time)
-  if (!send_exact(conn->fd, staging_buffer_.data(), req.size)) {
+  // Send header + data in one syscall using scatter-gather I/O
+  if (!send_header_and_data(conn->fd, &header, sizeof(header), staging_buffer_,
+                            req.size)) {
     conn->inflight_chunks.fetch_sub(1, std::memory_order_relaxed);
     return false;
   }

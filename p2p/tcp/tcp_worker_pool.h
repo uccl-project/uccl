@@ -24,21 +24,25 @@
 namespace tcp {
 
 // Toggle GPU memcpy (set to 0 for testing without GPU)
-#define UCCL_TCP_GPU_MEMCPY 0
+// #define UCCL_TCP_GPU_MEMCPY 0
 #ifndef UCCL_TCP_GPU_MEMCPY
 #define UCCL_TCP_GPU_MEMCPY 1
 #endif
 
 static constexpr size_t kStagingBufferSize =
     16 * 1024 * 1024;  // 16MB staging buffer
-static constexpr size_t kDefaultTCPThreads = 4;
+static constexpr size_t kDefaultTCPThreads =
+    8;  // More threads for high bandwidth
 static constexpr size_t kRequestRingSize = 1024;
 static constexpr int kEpollMaxEvents = 64;
 
 // Common TCP I/O helper functions
 bool send_exact(int fd, void const* buf, size_t n);
 bool recv_exact(int fd, void* buf, size_t n);
-static constexpr int kEpollTimeoutMs = 1;
+// Use sendmsg for scatter-gather I/O (header + data in one syscall)
+bool send_header_and_data(int fd, void const* header, size_t header_size,
+                          void const* data, size_t data_size);
+static constexpr int kEpollTimeoutMs = 100;  // Reduce spinning
 
 // Get number of TCP threads from environment
 inline size_t get_tcp_thread_count() {
@@ -252,7 +256,7 @@ class TCPReceiverWorker {
   int epoll_fd_;
   std::thread worker_thread_;
   PendingRecvMap* pending_recvs_;  // Shared across all workers
-  std::vector<char> staging_buffer_;
+  char* staging_buffer_;  // Pinned memory for efficient GPU-host transfers
 
   mutable std::mutex mutex_;
   std::unordered_set<int> data_fds_;
@@ -283,7 +287,7 @@ class TCPSenderWorker {
   uint32_t worker_id_;
   std::atomic<bool> running_;
   jring_t* request_ring_;
-  std::vector<char> staging_buffer_;
+  char* staging_buffer_;  // Pinned memory for efficient GPU-host transfers
   std::thread worker_thread_;
   PendingSendMap* pending_sends_;  // Shared across all sender workers
 };

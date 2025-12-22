@@ -354,7 +354,7 @@ def main():
             104857600,
         ],
     )
-    p.add_argument("--iters", type=int, default=100)
+    p.add_argument("--iters", type=int, default=10)
     p.add_argument(
         "--async-api",
         action="store_true",

@@ -198,7 +198,7 @@ def main():
             104857600,
         ],
     )
-    p.add_argument("--iters", type=int, default=1000)
+    p.add_argument("--iters", type=int, default=10)
     p.add_argument(
         "--dual",
         action="store_true",
