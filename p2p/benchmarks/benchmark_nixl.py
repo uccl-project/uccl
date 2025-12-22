@@ -108,7 +108,7 @@ def create_nixl_agent_ucx(role: str, dataset):
     port = listen_port
     if role == "client":
         port = 0
-    config = nixl_agent_config(False, True, port, backends=["UCCL"])
+    config = nixl_agent_config(True, True, port)
     agent = nixl_agent(role, config)
     descs = agent.get_reg_descs(dataset)
     register_descs = agent.register_memory(descs)
