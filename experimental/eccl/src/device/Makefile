@@ -13,10 +13,6 @@ LIBS = -L/usr/local/cuda/lib -lcudart -lnuma
 # 目标文件
 TARGET = test_persistent
 
-# 源文件
-SRC = ./test_persistent.cc ./c2d_fifo.cc ./operator.cu
-OBJ = test_persistent.o c2d_fifo.o operator.o
-
 # Source files
 SRC_CPP := ./test_persistent.cc ./c2d_fifo.cc
 SRC_CU  := ./operator.cu

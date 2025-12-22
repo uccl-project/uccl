@@ -149,8 +149,8 @@ class Communicator {
   mutable std::mutex meta_mu_;
 
   // ---------- GPU / NIC info --------
-  int gpu_id_;
-  int local_rank_;
+  int gpu_id_; // todo, this is true local_rank_
+  int local_rank_; // todo, replace with rank_
   int world_size_;
   bool support_rdma;
   bool support_rdma_roce;
@@ -178,6 +178,8 @@ class Communicator {
       rank_ptr_to_ipc_cache_;
   mutable std::mutex local_ipc_cache_mu_;
   mutable std::mutex remote_ipc_cache_mu_;
+  // ipc_stream_[gpu_num], for ipc_send/recv
+  // uds_fd_ init with rank_, per communicator; connect with rank_
 
   // ---------- Config & Redis --------
   std::shared_ptr<Config> config_;
