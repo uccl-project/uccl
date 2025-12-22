@@ -82,7 +82,7 @@ def warmup_alltoall_check(
     )
 
     # Perform UCCL alltoall
-    collective.alltoall(send_tensor, recv_tensor)
+    collective.ialltoall(send_tensor, recv_tensor)
     torch.cuda.synchronize(device)
 
     sync_all()
@@ -152,7 +152,7 @@ def run_alltoall_benchmark(
 
     # Warmup iterations
     for _ in range(5):
-        collective.alltoall(send_tensor, recv_tensor)
+        collective.ialltoall(send_tensor, recv_tensor)
     torch.cuda.synchronize(device)
 
     sync_all()
@@ -163,7 +163,7 @@ def run_alltoall_benchmark(
 
     start_event.record()
     for _ in range(num_iters):
-        collective.alltoall(send_tensor, recv_tensor)
+        collective.ialltoall(send_tensor, recv_tensor)
     end_event.record()
 
     torch.cuda.synchronize(device)
