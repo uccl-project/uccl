@@ -87,9 +87,9 @@ class RdmaDeviceManager {
         LOG(WARNING) << "no candidate NIC found, defaulting to first";
         selected_nic_names.push_back(dist.front().first);
       } else {
-        #ifdef UCCL_ENABLE_IBRC
+#ifdef UCCL_ENABLE_IBRC
         selected_nic_names.push_back(candidates.front());
-        #else
+#else
         // NOTE(xzhiying): This is a temporary hack.
         // On p5en, there are 4 NICs with the same distance.
         // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
@@ -100,7 +100,7 @@ class RdmaDeviceManager {
         for (int i = start_idx; i < end_idx; i++) {
           selected_nic_names.push_back(candidates[i]);
         }
-        #endif
+#endif
       }
     }
 

@@ -36,7 +36,6 @@
 #include <transport.h>
 #include <unistd.h>
 
-#define USE_QPEX
 #ifdef UCCL_ENABLE_IBRC
 static constexpr int kGidIndex = 3;
 #else
