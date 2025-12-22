@@ -36,9 +36,9 @@ class EFAChannel {
         remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)) {
     initQP();
     ah_ = ctx_->createAH(remote_meta_->gid);
-    #ifdef UCCL_ENABLE_IBRC
+#ifdef UCCL_ENABLE_IBRC
     ibrcQP_rtr_rts();
-    #endif
+#endif
     UCCL_LOG_EP << "EFAChannel connected to remote qpn=" << remote_meta.qpn;
   }
 
@@ -102,7 +102,8 @@ class EFAChannel {
       struct ibv_recv_wr* bad_wr = nullptr;
       pre_alloc_recv_wrs_[threshold - 1].next = nullptr;
       assert(ibv_post_recv(qp_, pre_alloc_recv_wrs_, &bad_wr) == 0);
-      pre_alloc_recv_wrs_[threshold - 1].next = (threshold == kMaxRecvWr) ? nullptr : &pre_alloc_recv_wrs_[threshold];
+      pre_alloc_recv_wrs_[threshold - 1].next =
+          (threshold == kMaxRecvWr) ? nullptr : &pre_alloc_recv_wrs_[threshold];
       pending_post_recv_ -= threshold;
     }
   }
@@ -144,7 +145,6 @@ class EFAChannel {
 
         cq_datas.emplace_back(cq_data);
       }
-
     }
 
     return !cq_datas.empty();
@@ -354,7 +354,8 @@ class EFAChannel {
   void init_pre_alloc_resource() {
     for (int i = 0; i < kMaxRecvWr; i++) {
       pre_alloc_recv_wrs_[i] = {};
-      pre_alloc_recv_wrs_[i].next = (i == kMaxRecvWr - 1) ? nullptr : &pre_alloc_recv_wrs_[i + 1];
+      pre_alloc_recv_wrs_[i].next =
+          (i == kMaxRecvWr - 1) ? nullptr : &pre_alloc_recv_wrs_[i + 1];
     }
   }
 
