@@ -17,10 +17,8 @@ class CustomInstall(install):
     """Custom install command that installs .so file to INSTALL_DIR"""
 
     def run(self):
-        # Run the standard build first
-        self.run_command("build_ext")
-
-        # Get the install directory
+        super().run()
+        # Get the install directory for the .so file
         python_site_packages = site.getsitepackages()[0]
         install_dir = os.getenv(
             "INSTALL_DIR", os.path.join(python_site_packages, "uccl")
@@ -41,8 +39,6 @@ class CustomInstall(install):
         print(f"Installing {so_file.name} to {install_dir}")
         shutil.copy2(so_file, dest_path)
         print(f"Installation complete. Module installed as: {dest_path}")
-
-        self.run_command("install_egg_info")
 
 
 if __name__ == "__main__":
