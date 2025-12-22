@@ -164,12 +164,21 @@ class Buffer {
     int64_t const buffer_ptr_bytes = max_nvl_peers * sizeof(void*);
     int64_t const barrier_signal_ptr_bytes = max_nvl_peers * sizeof(int*);
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    EP_HOST_ASSERT(num_nvl_bytes % NUM_BUFFER_ALIGNMENT_BYTES == 0 &&
+                   (num_nvl_bytes <= std::numeric_limits<int64_t>::max() ||
+                    num_rdma_bytes == 0));
+    EP_HOST_ASSERT(num_rdma_bytes % NUM_BUFFER_ALIGNMENT_BYTES == 0 &&
+                   (low_latency_mode ||
+                    num_rdma_bytes <= std::numeric_limits<int64_t>::max()));
+#else
     EP_HOST_ASSERT(num_nvl_bytes % NUM_BUFFER_ALIGNMENT_BYTES == 0 &&
                    (num_nvl_bytes <= std::numeric_limits<int>::max() ||
                     num_rdma_bytes == 0));
     EP_HOST_ASSERT(num_rdma_bytes % NUM_BUFFER_ALIGNMENT_BYTES == 0 &&
                    (low_latency_mode ||
                     num_rdma_bytes <= std::numeric_limits<int>::max()));
+#endif
     EP_HOST_ASSERT(
         0 <= rank && rank < num_ranks &&
         (num_ranks <= max_nvl_peers * NUM_MAX_RDMA_PEERS || low_latency_mode));
@@ -1464,7 +1473,7 @@ class Buffer {
         torch::empty({num_local_experts,
                       num_ranks * num_max_dispatch_tokens_per_rank, hidden},
                      x.options().dtype(use_fp8 ?
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__) && defined(__gfx942__)
                                                torch::kFloat8_e4m3fnuz
 #else
                                                torch::kFloat8_e4m3fn

@@ -172,9 +172,6 @@ if __name__ == "__main__":
             cxx_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
             nvcc_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
 
-        cxx_flags.append("-DUSE_GRACE_HOPPER")
-        nvcc_flags.append("-DUSE_GRACE_HOPPER")
-
     # Disable LD/ST tricks, as some CUDA version does not support `.L1::no_allocate`
     # Only enable aggressive PTX instructions for SM 9.0+ (H100/H800/B200)
     try:
