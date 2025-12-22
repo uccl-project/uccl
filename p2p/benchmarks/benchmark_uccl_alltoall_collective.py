@@ -260,7 +260,7 @@ def main():
     torch.cuda.set_device(device)
 
     # Initialize distributed with gloo for coordination
-    dist.init_process_group(backend="gloo", device_id=device)
+    dist.init_process_group(backend="gloo")
 
     rank = dist.get_rank()
     world_size = dist.get_world_size()
