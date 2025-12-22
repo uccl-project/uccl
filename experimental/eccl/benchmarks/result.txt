@@ -1,4 +1,6 @@
-# Test on Nvidia A40
+######################
+# Test on Nvidia A40 #
+######################
 ./bench_gdrcopy -d 5 -s $((1<<18)) -w 10000 -r 10000 -c
 Detected 7 CUDA device(s):
   GPU id:0; name:NVIDIA GeForce RTX 4090; Bus:0000:1a:00
@@ -103,6 +105,118 @@ gdr_copy_from_mapping              32768                    90.4610
 gdr_copy_from_mapping              65536                   181.6188
 gdr_copy_from_mapping             131072                   377.4111
 gdr_copy_from_mapping             262144                   797.2256
+
+Cleaning up...
+Done.
+
+
+######################
+# Test on AMD MI325X #
+######################
+./bench_gdrcopy -d 5 -s $((1<<18)) -w 10000 -r 10000 -c
+Detected 8 HIP device(s):
+  GPU id:0; name:AMD Instinct MI325X; pciDomainID:0; pciBusID:117; pciDeviceID:0
+  GPU id:1; name:AMD Instinct MI325X; pciDomainID:0; pciBusID:5; pciDeviceID:0
+  GPU id:2; name:AMD Instinct MI325X; pciDomainID:0; pciBusID:101; pciDeviceID:0
+  GPU id:3; name:AMD Instinct MI325X; pciDomainID:0; pciBusID:21; pciDeviceID:0
+  GPU id:4; name:AMD Instinct MI325X; pciDomainID:0; pciBusID:245; pciDeviceID:0
+  GPU id:5; name:AMD Instinct MI325X; pciDomainID:0; pciBusID:133; pciDeviceID:0
+  GPU id:6; name:AMD Instinct MI325X; pciDomainID:0; pciBusID:229; pciDeviceID:0
+  GPU id:7; name:AMD Instinct MI325X; pciDomainID:0; pciBusID:149; pciDeviceID:0
+Selected GPU 5, allocated DEVICE memory 262144 bytes, dptr=0x7fd822200000
+Probing host access to device pointer...
+Probe ok: host can access device memory pointer.
+use cold cache: no
+
+[hipMemcpy H2D] iters=10000
+Test                    Size(B)         Avg.Time(us)
+hipMemcpy_H2D                  1                    28.9786
+hipMemcpy_H2D                  2                    15.5552
+hipMemcpy_H2D                  4                    15.6105
+hipMemcpy_H2D                  8                    15.5377
+hipMemcpy_H2D                 16                    15.6266
+hipMemcpy_H2D                 32                    15.5545
+hipMemcpy_H2D                 64                    15.3665
+hipMemcpy_H2D                128                    15.3865
+hipMemcpy_H2D                256                    15.6131
+hipMemcpy_H2D                512                    15.6093
+hipMemcpy_H2D               1024                    15.6286
+hipMemcpy_H2D               2048                    15.5442
+hipMemcpy_H2D               4096                    16.2846
+hipMemcpy_H2D               8192                    16.4664
+hipMemcpy_H2D              16384                    16.3034
+hipMemcpy_H2D              32768                    19.4538
+hipMemcpy_H2D              65536                    19.0985
+hipMemcpy_H2D             131072                    20.3093
+hipMemcpy_H2D             262144                    22.6458
+
+[hipMemcpy D2H] iters=10000
+Test                    Size(B)         Avg.Time(us)
+hipMemcpy_D2H                  1                    16.1636
+hipMemcpy_D2H                  2                    16.1795
+hipMemcpy_D2H                  4                    16.1044
+hipMemcpy_D2H                  8                    16.4868
+hipMemcpy_D2H                 16                    16.2439
+hipMemcpy_D2H                 32                    16.1905
+hipMemcpy_D2H                 64                    16.2028
+hipMemcpy_D2H                128                    16.1711
+hipMemcpy_D2H                256                    16.1844
+hipMemcpy_D2H                512                    16.1697
+hipMemcpy_D2H               1024                    16.1118
+hipMemcpy_D2H               2048                    16.0186
+hipMemcpy_D2H               4096                    15.9972
+hipMemcpy_D2H               8192                    16.0312
+hipMemcpy_D2H              16384                    16.0014
+hipMemcpy_D2H              32768                    17.8524
+hipMemcpy_D2H              65536                    18.3468
+hipMemcpy_D2H             131072                    19.7483
+hipMemcpy_D2H             262144                    22.4916
+
+
+[CPU memcpy -> hipMalloc(device)] write iters=10000
+WARNING: measures CPU-side memcpy into device memory (host zero-copy access).
+Test                            Size(B)         Avg.Time(us)
+hipMalloc_host_write                   1                     0.0019
+hipMalloc_host_write                   2                     0.0016
+hipMalloc_host_write                   4                     0.0016
+hipMalloc_host_write                   8                     0.0016
+hipMalloc_host_write                  16                     0.0016
+hipMalloc_host_write                  32                     0.0016
+hipMalloc_host_write                  64                     0.4401
+hipMalloc_host_write                 128                     0.2154
+hipMalloc_host_write                 256                     0.2156
+hipMalloc_host_write                 512                     0.2159
+hipMalloc_host_write                1024                     0.4319
+hipMalloc_host_write                2048                     0.4316
+hipMalloc_host_write                4096                     0.5293
+hipMalloc_host_write                8192                     0.6215
+hipMalloc_host_write               16384                     0.8163
+hipMalloc_host_write               32768                     1.1996
+hipMalloc_host_write               65536                     1.9752
+hipMalloc_host_write              131072                     3.5453
+hipMalloc_host_write              262144                     6.6670
+
+[CPU memcpy <- hipMalloc(device)] read iters=10000
+Test                            Size(B)         Avg.Time(us)
+hipMalloc_host_read                    1                     1.1365
+hipMalloc_host_read                    2                     2.2736
+hipMalloc_host_read                    4                     2.2737
+hipMalloc_host_read                    8                     2.2730
+hipMalloc_host_read                   16                     2.2752
+hipMalloc_host_read                   32                     2.4794
+hipMalloc_host_read                   64                     2.4794
+hipMalloc_host_read                  128                     2.4775
+hipMalloc_host_read                  256                     4.9514
+hipMalloc_host_read                  512                     9.9353
+hipMalloc_host_read                 1024                    21.1679
+hipMalloc_host_read                 2048                    41.1271
+hipMalloc_host_read                 4096                    80.5573
+hipMalloc_host_read                 8192                   156.6876
+hipMalloc_host_read                16384                   296.9479
+hipMalloc_host_read                32768                   597.2472
+hipMalloc_host_read                65536                  1193.2834
+hipMalloc_host_read               131072                  2352.2201
+hipMalloc_host_read               262144                  4434.7053
 
 Cleaning up...
 Done.
