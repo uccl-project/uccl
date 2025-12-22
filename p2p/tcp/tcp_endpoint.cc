@@ -148,7 +148,6 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
             << remote_port;
 
   auto group = std::make_shared<TCPConnectionGroup>();
-  group->num_sender_workers = thread_pool_->num_sender_workers();
 
   NegotiationInfo local_info;
   local_info.gpu_index = local_gpuidx;
@@ -196,7 +195,7 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
         setup_tcp_socket_options(fd);
 
         // Register data connection with receiver worker
-        thread_pool_->assign_data_connection(fd);
+        thread_pool_->assign_data_connection(fd, conn.get());
 
         group->add_data_connection(std::move(conn));
         created_connections++;
@@ -259,7 +258,6 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   uint64_t conn_id = next_conn_id_.fetch_add(1, std::memory_order_relaxed);
 
   auto group = std::make_shared<TCPConnectionGroup>();
-  group->num_sender_workers = thread_pool_->num_sender_workers();
   group->ctrl_fd = ctrl_fd;
   setup_tcp_socket_options(ctrl_fd);
 
@@ -281,7 +279,7 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     setup_tcp_socket_options(data_fd);
 
     // Register data connection with receiver worker
-    thread_pool_->assign_data_connection(data_fd);
+    thread_pool_->assign_data_connection(data_fd, conn.get());
 
     group->add_data_connection(std::move(conn));
     accepted_connections++;
@@ -329,32 +327,61 @@ int TCPEndpoint::uccl_send_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
   if (!group) return -1;
 
   auto handle = new TCPAsyncHandle();
-  uint32_t request_id =
-      next_request_id_.fetch_add(1, std::memory_order_relaxed);
-  handle->request_id = request_id;
 
-  // Select connection upfront to route request to its owner
-  TCPConnection* conn = group->select_data_connection();
-  if (!conn) {
+  // Wait for RecvReady message ONCE on control connection
+  RecvReadyMsg ready_msg;
+  if (!recv_exact(group->ctrl_fd, &ready_msg, sizeof(ready_msg))) {
+    LOG(ERROR) << "uccl_send_async: failed to recv RecvReady";
     delete handle;
     return -1;
   }
 
-  TCPRequest req;
-  req.type = TCPRequestType::SEND;
-  req.ctrl_fd = group->ctrl_fd;
-  req.data = const_cast<void*>(data);
-  req.size = size;
-  req.dest_addr = 0;  // Will be received from ctrl connection
-  req.completed = &handle->completed;
-  req.success = &handle->success;
-  req.request_id = request_id;
-  req.conn_group = group.get();
-  req.assigned_conn = conn;
+  uint64_t base_dest_addr = ready_msg.dest_addr;
+  // Use receiver's request_id for chunks so receiver can track completion
+  uint32_t recv_request_id = ready_msg.request_id;
+  // Generate our own request_id for sender-side completion tracking
+  uint32_t send_request_id =
+      next_request_id_.fetch_add(1, std::memory_order_relaxed);
+  handle->request_id = send_request_id;
 
-  if (!thread_pool_->submit_request(req)) {
-    delete handle;
-    return -1;
+  // Register pending send with total size for sender completion tracking
+  thread_pool_->register_pending_send(size, send_request_id, &handle->completed,
+                                      &handle->success);
+
+  // Chunk the message and distribute across workers
+  size_t num_chunks = (size + kChunkSize - 1) / kChunkSize;
+  size_t offset = 0;
+
+  for (size_t i = 0; i < num_chunks; ++i) {
+    size_t chunk_size = std::min(kChunkSize, size - offset);
+    bool is_last = (i == num_chunks - 1);
+
+    // Select different connection for each chunk (load balance across workers)
+    TCPConnection* conn = group->select_data_connection();
+    if (!conn) {
+      delete handle;
+      return -1;
+    }
+
+    TCPRequest req;
+    req.type = TCPRequestType::SEND;
+    req.ctrl_fd = group->ctrl_fd;
+    req.data = const_cast<char*>(static_cast<char const*>(data) + offset);
+    req.size = chunk_size;
+    req.total_size = size;
+    req.dest_addr = base_dest_addr + offset;  // Destination with offset
+    req.flags = is_last ? TCPDataHeader::kFlagLastChunk : 0;
+    req.request_id = send_request_id;       // For sender completion tracking
+    req.recv_request_id = recv_request_id;  // For receiver completion tracking
+    req.conn_group = group.get();
+    req.assigned_conn = conn;
+
+    thread_pool_->submit_request(req);
+
+    // Track inflight chunks for load balancing
+    conn->inflight_chunks.fetch_add(1, std::memory_order_relaxed);
+
+    offset += chunk_size;
   }
 
   if (ureq) {
@@ -379,32 +406,21 @@ int TCPEndpoint::uccl_recv_async(uccl::UcclFlow* flow,
       next_request_id_.fetch_add(1, std::memory_order_relaxed);
   handle->request_id = request_id;
 
-  // Register pending receive with receiver workers
+  // Register pending receive with receiver workers for FULL size
+  // The receiver will accumulate chunks and mark complete when all received
   thread_pool_->register_pending_recv(reinterpret_cast<uint64_t>(data[0]),
                                       sizes[0], request_id, &handle->completed,
                                       &handle->success);
 
-  // Send RecvReady message on control connection
-  // Select connection for routing (actual send uses ctrl_fd, not data conn)
-  TCPConnection* conn = group->select_data_connection();
-  if (!conn) {
-    delete handle;
-    return -1;
-  }
+  // Send RecvReady message ONCE directly on control connection
+  RecvReadyMsg msg;
+  msg.dest_addr = reinterpret_cast<uint64_t>(data[0]);
+  msg.size = sizes[0];
+  msg.request_id = request_id;
+  msg.reserved = 0;
 
-  TCPRequest req;
-  req.type = TCPRequestType::RECV;
-  req.ctrl_fd = group->ctrl_fd;
-  req.data = data[0];
-  req.size = sizes[0];
-  req.dest_addr = 0;
-  req.completed = nullptr;  // Completion handled by receiver worker
-  req.success = nullptr;
-  req.request_id = request_id;
-  req.conn_group = group.get();
-  req.assigned_conn = conn;  // For routing, even though RECV uses ctrl_fd
-
-  if (!thread_pool_->submit_request(req)) {
+  if (!send_exact(group->ctrl_fd, &msg, sizeof(msg))) {
+    LOG(ERROR) << "uccl_recv_async: failed to send RecvReady";
     delete handle;
     return -1;
   }
@@ -444,34 +460,51 @@ int TCPEndpoint::uccl_read_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
       next_request_id_.fetch_add(1, std::memory_order_relaxed);
   handle->request_id = request_id;
 
-  // For READ, we're receiving data - register with receiver workers
+  // For READ, we're receiving data - register pending recv for FULL size
+  // The receiver will accumulate chunks and mark complete when all received
   thread_pool_->register_pending_recv(reinterpret_cast<uint64_t>(dst), size,
                                       request_id, &handle->completed,
                                       &handle->success);
 
-  // Select connection upfront to route request to its owner
-  TCPConnection* conn = group->select_data_connection();
-  if (!conn) {
-    delete handle;
-    return -1;
+  // Chunk the read request and distribute across workers
+  size_t num_chunks = (size + kChunkSize - 1) / kChunkSize;
+  size_t offset = 0;
+  uint64_t base_dst = reinterpret_cast<uint64_t>(dst);
+  uint64_t base_remote = slot_item.addr;
+
+  for (size_t i = 0; i < num_chunks; ++i) {
+    size_t chunk_size = std::min(kChunkSize, size - offset);
+
+    // Select different connection for each chunk (load balance across workers)
+    TCPConnection* conn = group->select_data_connection();
+    if (!conn) {
+      delete handle;
+      return -1;
+    }
+
+    // Submit READ request to sender worker - it will send the request
+    // on a data connection so the remote receiver can see it via epoll
+    TCPRequest req;
+    req.type = TCPRequestType::READ;
+    req.ctrl_fd = group->ctrl_fd;
+    req.data = nullptr;  // No data to send for READ request
+    req.size = chunk_size;
+    req.total_size = size;
+    req.dest_addr = base_dst + offset;       // Where to put data locally
+    req.remote_addr = base_remote + offset;  // Where to read from remotely
+    req.completed = nullptr;  // Completion tracked by pending_recv
+    req.success = nullptr;
+    req.request_id = request_id;       // For READ response tracking
+    req.recv_request_id = request_id;  // Same as request_id for READ
+    req.conn_group = group.get();
+    req.assigned_conn = conn;
+
+    thread_pool_->submit_request(req);
+
+    conn->inflight_chunks.fetch_add(1, std::memory_order_relaxed);
+
+    offset += chunk_size;
   }
-
-  // Submit READ request to sender worker - it will send the request
-  // on a data connection so the remote receiver can see it via epoll
-  TCPRequest req;
-  req.type = TCPRequestType::READ;
-  req.ctrl_fd = group->ctrl_fd;
-  req.data = nullptr;  // No data to send for READ request
-  req.size = size;
-  req.dest_addr = reinterpret_cast<uint64_t>(dst);
-  req.remote_addr = slot_item.addr;  // Address on remote side
-  req.completed = &handle->completed;
-  req.success = &handle->success;
-  req.request_id = request_id;
-  req.conn_group = group.get();
-  req.assigned_conn = conn;
-
-  thread_pool_->submit_request(req);
 
   if (ureq) {
     ureq->engine_idx = reinterpret_cast<int64_t>(handle);
@@ -494,28 +527,45 @@ int TCPEndpoint::uccl_write_async(uccl::UcclFlow* flow,
       next_request_id_.fetch_add(1, std::memory_order_relaxed);
   handle->request_id = request_id;
 
-  // Select connection upfront to route request to its owner
-  TCPConnection* conn = group->select_data_connection();
-  if (!conn) {
-    delete handle;
-    return -1;
-  }
+  // Register pending send with total size for completion tracking
+  thread_pool_->register_pending_send(size, request_id, &handle->completed,
+                                      &handle->success);
 
-  TCPRequest req;
-  req.type = TCPRequestType::WRITE;
-  req.ctrl_fd = group->ctrl_fd;
-  req.data = src;
-  req.size = size;
-  req.dest_addr = slot_item.addr;  // Remote address already known
-  req.completed = &handle->completed;
-  req.success = &handle->success;
-  req.request_id = request_id;
-  req.conn_group = group.get();
-  req.assigned_conn = conn;
+  // Chunk the message and distribute across workers
+  size_t num_chunks = (size + kChunkSize - 1) / kChunkSize;
+  size_t offset = 0;
+  uint64_t base_dest_addr = slot_item.addr;
 
-  if (!thread_pool_->submit_request(req)) {
-    delete handle;
-    return -1;
+  for (size_t i = 0; i < num_chunks; ++i) {
+    size_t chunk_size = std::min(kChunkSize, size - offset);
+    bool is_last = (i == num_chunks - 1);
+
+    // Select different connection for each chunk (load balance across workers)
+    TCPConnection* conn = group->select_data_connection();
+    if (!conn) {
+      delete handle;
+      return -1;
+    }
+
+    TCPRequest req;
+    req.type = TCPRequestType::WRITE;
+    req.ctrl_fd = group->ctrl_fd;
+    req.data = static_cast<char*>(src) + offset;
+    req.size = chunk_size;
+    req.total_size = size;
+    req.dest_addr = base_dest_addr + offset;  // Remote address with offset
+    req.flags = is_last ? TCPDataHeader::kFlagLastChunk : 0;
+    req.request_id = request_id;       // For sender completion tracking
+    req.recv_request_id = request_id;  // Not used for WRITE (one-sided)
+    req.conn_group = group.get();
+    req.assigned_conn = conn;
+
+    thread_pool_->submit_request(req);
+
+    // Track inflight chunks for load balancing
+    conn->inflight_chunks.fetch_add(1, std::memory_order_relaxed);
+
+    offset += chunk_size;
   }
 
   if (ureq) {

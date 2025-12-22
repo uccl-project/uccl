@@ -23,6 +23,12 @@
 
 namespace tcp {
 
+// Toggle GPU memcpy (set to 0 for testing without GPU)
+#define UCCL_TCP_GPU_MEMCPY 0
+#ifndef UCCL_TCP_GPU_MEMCPY
+#define UCCL_TCP_GPU_MEMCPY 1
+#endif
+
 static constexpr size_t kStagingBufferSize =
     16 * 1024 * 1024;  // 16MB staging buffer
 static constexpr size_t kDefaultTCPThreads = 4;
@@ -62,24 +68,25 @@ enum class TCPRequestType : uint32_t {
 
 // Message types on data connections (first 4 bytes of any message)
 enum class TCPDataMsgType : uint32_t {
-  DATA_CHUNK = 0,    // ChunkHeader follows (for SEND/WRITE data)
-  READ_REQUEST = 1,  // ReadWriteHeader for READ request
+  DATA_CHUNK = 0,    // TCPDataHeader for SEND/WRITE data
+  READ_REQUEST = 1,  // TCPDataHeader for READ request
 };
 
-// Chunk header sent before each data chunk on data connections
-struct ChunkHeader {
-  uint32_t msg_type;    // TCPDataMsgType::DATA_CHUNK
+// Unified message header for all data connection messages (DATA_CHUNK and
+// READ_REQUEST) This eliminates the need for MSG_PEEK to determine message type
+struct TCPDataHeader {
+  uint32_t msg_type;    // TCPDataMsgType (DATA_CHUNK or READ_REQUEST)
   uint32_t flags;       // Flags (kFlagLastChunk, etc.)
-  uint64_t dest_addr;   // Destination GPU address on receiver side
-  uint64_t offset;      // Offset within the transfer
-  uint64_t chunk_size;  // Size of this chunk
-  uint64_t total_size;  // Total transfer size
-  uint32_t request_id;  // Request ID for matching
+  uint32_t request_id;  // Request ID for completion tracking
   uint32_t reserved;
+  uint64_t dest_addr;    // Destination GPU address
+  uint64_t remote_addr;  // Remote address (for READ), unused for DATA_CHUNK
+  uint64_t size;         // Size of this chunk/request
+  uint64_t total_size;   // Total transfer size
 
   static constexpr uint32_t kFlagLastChunk = 1;
 };
-static_assert(sizeof(ChunkHeader) == 48, "ChunkHeader size mismatch");
+static_assert(sizeof(TCPDataHeader) == 48, "TCPDataHeader size mismatch");
 
 // Message sent on control connection by receiver to tell sender where to put
 // data
@@ -90,15 +97,6 @@ struct RecvReadyMsg {
   uint32_t reserved;
 };
 static_assert(sizeof(RecvReadyMsg) == 24, "RecvReadyMsg size mismatch");
-
-// Header for READ requests sent on data connections
-struct ReadWriteHeader {
-  uint32_t msg_type;  // TCPDataMsgType::READ_REQUEST
-  uint32_t reserved;
-  uint64_t remote_addr;  // Address on remote side (source for READ)
-  uint64_t dest_addr;    // Destination address (where to put data on requester)
-  size_t size;           // Transfer size
-};
 
 // Forward declarations
 struct TCPConnection;
@@ -111,12 +109,15 @@ struct alignas(64) TCPRequest {
   TCPRequestType type;
   int ctrl_fd;           // Control connection fd
   void* data;            // GPU memory pointer (local buffer)
-  size_t size;           // Total size to transfer
-  uint64_t dest_addr;    // Destination GPU addr (for WRITE/READ, known upfront)
+  size_t size;           // Chunk size to transfer
+  size_t total_size;     // Total transfer size (for header)
+  uint64_t dest_addr;    // Destination GPU addr (includes offset for chunks)
   uint64_t remote_addr;  // Remote addr to read from (for READ)
   std::atomic<bool>* completed;  // Completion flag
   std::atomic<bool>* success;    // Success flag
-  uint32_t request_id;           // Unique request ID
+  uint32_t request_id;           // Sender's request ID (for pending_sends_)
+  uint32_t recv_request_id;  // Receiver's request ID (for DATA_CHUNK header)
+  uint32_t flags;            // Chunk flags (kFlagLastChunk, etc.)
 
   // For sender: pointer to connection group for load-balanced sending
   void* conn_group;  // TCPConnectionGroup*
@@ -129,11 +130,13 @@ struct alignas(64) TCPRequest {
         ctrl_fd(-1),
         data(nullptr),
         size(0),
+        total_size(0),
         dest_addr(0),
         remote_addr(0),
         completed(nullptr),
         success(nullptr),
         request_id(0),
+        flags(0),
         conn_group(nullptr),
         assigned_conn(nullptr) {}
 };
@@ -172,39 +175,55 @@ struct TCPConnection {
   bool is_valid() const { return fd >= 0; }
 };
 
+// Pending transfer tracking (shared across workers)
+struct alignas(64) PendingTransfer {
+  size_t total_size;
+  std::atomic<size_t> transferred_size{0};
+  uint32_t request_id;
+  std::atomic<bool>* completed;
+  std::atomic<bool>* success;
+
+  PendingTransfer() = default;
+  PendingTransfer(size_t size, uint32_t req_id, std::atomic<bool>* comp,
+                  std::atomic<bool>* succ)
+      : total_size(size),
+        transferred_size(0),
+        request_id(req_id),
+        completed(comp),
+        success(succ) {}
+};
+
 // Global pending receives map (shared across all receiver workers)
 class PendingRecvMap {
-  struct alignas(64) PendingRecv {
-    uint64_t dest_addr;
-    size_t total_size;
-    std::atomic<size_t> received_size{0};
-    uint32_t request_id;
-    std::atomic<bool>* completed;
-    std::atomic<bool>* success;
-
-    PendingRecv() = default;
-    PendingRecv(uint64_t addr, size_t size, uint32_t req_id,
-                std::atomic<bool>* comp, std::atomic<bool>* succ)
-        : dest_addr(addr),
-          total_size(size),
-          received_size(0),
-          request_id(req_id),
-          completed(comp),
-          success(succ) {}
-  };
-
  public:
   void add(uint64_t dest_addr, size_t size, uint32_t request_id,
            std::atomic<bool>* completed, std::atomic<bool>* success);
 
   // Update received size and check if complete. Returns true if this call
-  // completed the receive.
-  bool update_and_check_complete(uint64_t dest_addr, size_t chunk_size,
-                                 bool is_last_chunk);
+  // completed the receive. Keyed by request_id to support chunked transfers.
+  // Completion is based purely on received_size >= total_size (not last chunk
+  // flag)
+  bool update_and_check_complete(uint32_t request_id, size_t chunk_size);
 
  private:
   mutable std::mutex mutex_;
-  std::unordered_map<uint64_t, std::unique_ptr<PendingRecv>> pending_recvs_;
+  // Keyed by request_id (not dest_addr) to support chunked transfers
+  std::unordered_map<uint32_t, std::unique_ptr<PendingTransfer>> pending_recvs_;
+};
+
+// Global pending sends map (shared across all sender workers)
+class PendingSendMap {
+ public:
+  void add(size_t size, uint32_t request_id, std::atomic<bool>* completed,
+           std::atomic<bool>* success);
+
+  // Update sent size and check if complete. Returns true if this call
+  // completed the send.
+  bool update_and_check_complete(uint32_t request_id, size_t chunk_size);
+
+ private:
+  mutable std::mutex mutex_;
+  std::unordered_map<uint32_t, std::unique_ptr<PendingTransfer>> pending_sends_;
 };
 
 // TCP Receiver Worker - uses epoll to wait on data connections
@@ -224,9 +243,9 @@ class TCPReceiverWorker {
 
  private:
   void worker_loop();
-  void process_incoming_data(int fd);
-  void process_read_request(int fd);
-  void process_data_chunk(int fd);
+  void process_event(int fd);
+  void process_read_request(int fd, TCPDataHeader const& header);
+  void process_data_chunk(int fd, TCPDataHeader const& header);
 
   uint32_t worker_id_;
   std::atomic<bool> running_;
@@ -242,7 +261,7 @@ class TCPReceiverWorker {
 // TCP Sender Worker - processes send requests from jring
 class TCPSenderWorker {
  public:
-  explicit TCPSenderWorker(uint32_t id);
+  TCPSenderWorker(uint32_t id, PendingSendMap* pending_sends);
   ~TCPSenderWorker();
 
   void start();
@@ -266,6 +285,7 @@ class TCPSenderWorker {
   jring_t* request_ring_;
   std::vector<char> staging_buffer_;
   std::thread worker_thread_;
+  PendingSendMap* pending_sends_;  // Shared across all sender workers
 };
 
 // Connection group for a peer (ctrl + data connections)
@@ -274,7 +294,6 @@ struct TCPConnectionGroup {
   std::vector<std::unique_ptr<TCPConnection>> data_connections;
   std::atomic<uint64_t> round_robin_idx{0};
   mutable std::shared_mutex mutex;
-  uint32_t num_sender_workers = 1;  // Set by TCPThreadPool
 
   // For tracking remaining data to send (decremented as RecvReady messages
   // arrive)
@@ -299,7 +318,7 @@ class TCPThreadPool {
   void stop();
 
   // Assign a data connection to a receiver worker (round-robin)
-  uint32_t assign_data_connection(int fd);
+  uint32_t assign_data_connection(int fd, TCPConnection* conn);
 
   // Submit request to sender worker (routes based on assigned_conn's owner)
   bool submit_request(TCPRequest const& req);
@@ -309,13 +328,14 @@ class TCPThreadPool {
                              uint32_t request_id, std::atomic<bool>* completed,
                              std::atomic<bool>* success);
 
-  size_t num_sender_workers() const { return sender_workers_.size(); }
-  size_t size() const { return sender_workers_.size(); }
-
-  TCPReceiverWorker* get_receiver_worker(size_t idx);
+  // Register a pending send (shared across all sender workers)
+  void register_pending_send(size_t size, uint32_t request_id,
+                             std::atomic<bool>* completed,
+                             std::atomic<bool>* success);
 
  private:
   PendingRecvMap pending_recvs_;  // Shared pending receives
+  PendingSendMap pending_sends_;  // Shared pending sends
   std::vector<std::unique_ptr<TCPSenderWorker>> sender_workers_;
   std::vector<std::unique_ptr<TCPReceiverWorker>> receiver_workers_;
   std::atomic<uint32_t> next_sender_{0};

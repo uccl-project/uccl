@@ -6,25 +6,26 @@ void PendingRecvMap::add(uint64_t dest_addr, size_t size, uint32_t request_id,
                          std::atomic<bool>* completed,
                          std::atomic<bool>* success) {
   std::lock_guard<std::mutex> lock(mutex_);
-  pending_recvs_[dest_addr] = std::make_unique<PendingRecv>(
-      dest_addr, size, request_id, completed, success);
+  // Key by request_id to support chunked transfers where dest_addr varies
+  pending_recvs_[request_id] =
+      std::make_unique<PendingTransfer>(size, request_id, completed, success);
 }
 
-bool PendingRecvMap::update_and_check_complete(uint64_t dest_addr,
-                                               size_t chunk_size,
-                                               bool is_last_chunk) {
+bool PendingRecvMap::update_and_check_complete(uint32_t request_id,
+                                               size_t chunk_size) {
   std::lock_guard<std::mutex> lock(mutex_);
-  auto it = pending_recvs_.find(dest_addr);
+  auto it = pending_recvs_.find(request_id);
   if (it == pending_recvs_.end()) {
     return false;  // Not found, ignore
   }
 
-  PendingRecv* pr = it->second.get();
+  PendingTransfer* pr = it->second.get();
   size_t new_received =
-      pr->received_size.fetch_add(chunk_size, std::memory_order_relaxed) +
+      pr->transferred_size.fetch_add(chunk_size, std::memory_order_relaxed) +
       chunk_size;
 
-  bool is_complete = is_last_chunk || (new_received >= pr->total_size);
+  // Complete only when all bytes received (chunks may arrive out of order)
+  bool is_complete = (new_received >= pr->total_size);
 
   if (is_complete) {
     if (pr->success) {
@@ -34,6 +35,44 @@ bool PendingRecvMap::update_and_check_complete(uint64_t dest_addr,
       pr->completed->store(true, std::memory_order_release);
     }
     pending_recvs_.erase(it);
+    return true;
+  }
+
+  return false;
+}
+
+void PendingSendMap::add(size_t size, uint32_t request_id,
+                         std::atomic<bool>* completed,
+                         std::atomic<bool>* success) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  pending_sends_[request_id] =
+      std::make_unique<PendingTransfer>(size, request_id, completed, success);
+}
+
+bool PendingSendMap::update_and_check_complete(uint32_t request_id,
+                                               size_t chunk_size) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = pending_sends_.find(request_id);
+  if (it == pending_sends_.end()) {
+    return false;  // Not found, ignore
+  }
+
+  PendingTransfer* ps = it->second.get();
+  size_t new_sent =
+      ps->transferred_size.fetch_add(chunk_size, std::memory_order_relaxed) +
+      chunk_size;
+
+  // Complete only when all bytes sent
+  bool is_complete = (new_sent >= ps->total_size);
+
+  if (is_complete) {
+    if (ps->success) {
+      ps->success->store(true, std::memory_order_release);
+    }
+    if (ps->completed) {
+      ps->completed->store(true, std::memory_order_release);
+    }
+    pending_sends_.erase(it);
     return true;
   }
 
@@ -66,7 +105,7 @@ bool recv_exact(int fd, void* buf, size_t n) {
     ssize_t ret = ::recv(fd, ptr + received, n - received, 0);
     if (ret < 0) {
       if (errno == EINTR) continue;
-      if (errno == EAGAIN || errno == EWOULDBLOCK) return false;  // Would block
+      if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
       return false;
     }
     if (ret == 0) return false;  // Connection closed
@@ -118,7 +157,7 @@ bool TCPReceiverWorker::add_data_connection(int fd) {
 
   if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &ev) < 0) {
     LOG(ERROR) << "TCPReceiverWorker " << worker_id_
-               << ": epoll_ctl ADD failed";
+               << ": epoll_ctl ADD failed for fd=" << fd << " errno=" << errno;
     return false;
   }
 
@@ -147,43 +186,43 @@ void TCPReceiverWorker::worker_loop() {
 
     for (int i = 0; i < n; ++i) {
       if (events[i].events & EPOLLIN) {
-        process_incoming_data(events[i].data.fd);
+        process_event(events[i].data.fd);
       }
     }
   }
 }
 
-void TCPReceiverWorker::process_incoming_data(int fd) {
-  // Peek first 4 bytes to determine message type
-  uint32_t msg_type;
-  ssize_t ret = recv(fd, &msg_type, sizeof(msg_type), MSG_PEEK);
-  if (ret < static_cast<ssize_t>(sizeof(msg_type))) {
-    // Not enough data yet (edge-triggered, will be notified again)
-    return;
-  }
+void TCPReceiverWorker::process_event(int fd) {
+  // With edge-triggered epoll, we must drain all available data
+  // Otherwise subsequent messages won't trigger EPOLLIN
+  while (true) {
+    // Check if a full header is available (non-blocking peek)
+    TCPDataHeader header;
+    ssize_t peeked = recv(fd, &header, sizeof(header), MSG_PEEK | MSG_DONTWAIT);
+    if (peeked < static_cast<ssize_t>(sizeof(header))) {
+      // No complete header available, exit loop
+      return;
+    }
 
-  if (static_cast<TCPDataMsgType>(msg_type) == TCPDataMsgType::READ_REQUEST) {
-    // Handle READ request - remote side wants us to send data
-    process_read_request(fd);
-  } else {
-    // Handle data chunk (SEND/WRITE)
-    process_data_chunk(fd);
+    // Now read the header (blocking is OK since we know data is there)
+    if (!recv_exact(fd, &header, sizeof(header))) {
+      // Error or connection closed
+      return;
+    }
+
+    if (static_cast<TCPDataMsgType>(header.msg_type) ==
+        TCPDataMsgType::READ_REQUEST) {
+      // Handle READ request - remote side wants us to send data
+      process_read_request(fd, header);
+    } else {
+      // Handle data chunk (SEND/WRITE)
+      process_data_chunk(fd, header);
+    }
   }
 }
 
-void TCPReceiverWorker::process_read_request(int fd) {
-  ReadWriteHeader header;
-  ssize_t ret = recv(fd, &header, sizeof(header), MSG_PEEK);
-  if (ret < static_cast<ssize_t>(sizeof(header))) {
-    return;  // Not enough data yet
-  }
-
-  if (!recv_exact(fd, &header, sizeof(header))) {
-    LOG(ERROR) << "TCPReceiverWorker " << worker_id_
-               << ": failed to read ReadWriteHeader";
-    return;
-  }
-
+void TCPReceiverWorker::process_read_request(int fd,
+                                             TCPDataHeader const& header) {
   // Read from local memory at remote_addr and send to requester
   // The requester wants data from our remote_addr sent to their dest_addr
   if (header.size > kStagingBufferSize) {
@@ -192,6 +231,7 @@ void TCPReceiverWorker::process_read_request(int fd) {
   }
 
   // Copy from GPU to staging buffer
+#if UCCL_TCP_GPU_MEMCPY
   void* src = reinterpret_cast<void*>(header.remote_addr);
   gpuError_t err = gpuMemcpy(staging_buffer_.data(), src, header.size,
                              gpuMemcpyDeviceToHost);
@@ -200,19 +240,20 @@ void TCPReceiverWorker::process_read_request(int fd) {
                << ": GPU memcpy failed for READ";
     return;
   }
+#endif
 
-  // Send data back as a ChunkHeader + data
-  ChunkHeader chunk;
-  chunk.msg_type = static_cast<uint32_t>(TCPDataMsgType::DATA_CHUNK);
-  chunk.flags = ChunkHeader::kFlagLastChunk;
-  chunk.dest_addr = header.dest_addr;  // Where requester wants the data
-  chunk.offset = 0;
-  chunk.chunk_size = header.size;
-  chunk.total_size = header.size;
-  chunk.request_id = 0;
-  chunk.reserved = 0;
+  // Send data back with a response header
+  TCPDataHeader response;
+  response.msg_type = static_cast<uint32_t>(TCPDataMsgType::DATA_CHUNK);
+  response.flags = 0;
+  response.request_id = header.request_id;
+  response.reserved = 0;
+  response.dest_addr = header.dest_addr;
+  response.remote_addr = 0;
+  response.size = header.size;
+  response.total_size = header.total_size;
 
-  if (!send_exact(fd, &chunk, sizeof(chunk))) {
+  if (!send_exact(fd, &response, sizeof(response))) {
     LOG(ERROR) << "TCPReceiverWorker " << worker_id_
                << ": failed to send READ response header";
     return;
@@ -225,53 +266,43 @@ void TCPReceiverWorker::process_read_request(int fd) {
   }
 }
 
-void TCPReceiverWorker::process_data_chunk(int fd) {
-  // Read chunk header
-  ChunkHeader header;
-  ssize_t ret = recv(fd, &header, sizeof(header), MSG_PEEK);
-  if (ret < static_cast<ssize_t>(sizeof(header))) {
-    // Not enough data yet (edge-triggered, will be notified again)
-    return;
-  }
+void TCPReceiverWorker::process_data_chunk(int fd,
+                                           TCPDataHeader const& header) {
+  // Header already read by process_event
 
-  // Actually read the header
-  if (!recv_exact(fd, &header, sizeof(header))) {
-    LOG(ERROR) << "TCPReceiverWorker " << worker_id_
-               << ": failed to read chunk header";
-    return;
-  }
-
-  if (header.chunk_size > kStagingBufferSize) {
+  if (header.size > kStagingBufferSize) {
     LOG(ERROR) << "TCPReceiverWorker " << worker_id_ << ": chunk too large";
     return;
   }
 
   // Read chunk data
-  if (!recv_exact(fd, staging_buffer_.data(), header.chunk_size)) {
+  if (!recv_exact(fd, staging_buffer_.data(), header.size)) {
     LOG(ERROR) << "TCPReceiverWorker " << worker_id_
                << ": failed to read chunk data";
     return;
   }
 
-  // Copy to GPU at dest_addr + offset
-  void* gpu_dest = reinterpret_cast<void*>(header.dest_addr + header.offset);
-  gpuError_t err = gpuMemcpy(gpu_dest, staging_buffer_.data(),
-                             header.chunk_size, gpuMemcpyHostToDevice);
+  // Copy to GPU at dest_addr
+#if UCCL_TCP_GPU_MEMCPY
+  void* gpu_dest = reinterpret_cast<void*>(header.dest_addr);
+  gpuError_t err = gpuMemcpy(gpu_dest, staging_buffer_.data(), header.size,
+                             gpuMemcpyHostToDevice);
   if (err != gpuSuccess) {
     LOG(ERROR) << "TCPReceiverWorker " << worker_id_ << ": GPU memcpy failed";
   }
+#endif
 
-  // Update pending recv tracking (shared map)
-  bool is_last = (header.flags & ChunkHeader::kFlagLastChunk) != 0;
-  pending_recvs_->update_and_check_complete(header.dest_addr, header.chunk_size,
-                                            is_last);
+  // Update pending recv tracking (shared map) - keyed by request_id
+  // Completion is based on received_size >= total_size
+  pending_recvs_->update_and_check_complete(header.request_id, header.size);
 }
 
-TCPSenderWorker::TCPSenderWorker(uint32_t id)
+TCPSenderWorker::TCPSenderWorker(uint32_t id, PendingSendMap* pending_sends)
     : worker_id_(id),
       running_(false),
       request_ring_(nullptr),
-      staging_buffer_(kStagingBufferSize) {
+      staging_buffer_(kStagingBufferSize),
+      pending_sends_(pending_sends) {
   request_ring_ = uccl::create_ring(sizeof(TCPRequest), kRequestRingSize);
   LOG(INFO) << "TCPSenderWorker " << id << " initialized";
 }
@@ -337,7 +368,7 @@ bool TCPSenderWorker::process_requests() {
         success = do_send(req);
         break;
       case TCPRequestType::RECV:
-        success = do_recv(req);  // Just send RecvReady on ctrl
+        success = do_recv(req);
         break;
       case TCPRequestType::WRITE:
         success = do_write(req);
@@ -349,13 +380,10 @@ bool TCPSenderWorker::process_requests() {
         break;
     }
 
-    // For RECV and READ, completion is handled by receiver worker
-    if (req.type != TCPRequestType::RECV && req.type != TCPRequestType::READ) {
-      if (req.success) {
-        req.success->store(success, std::memory_order_release);
-      }
-      if (req.completed) {
-        req.completed->store(true, std::memory_order_release);
+    // For SEND and WRITE, track bytes sent via shared map
+    if (req.type == TCPRequestType::SEND || req.type == TCPRequestType::WRITE) {
+      if (success) {
+        pending_sends_->update_and_check_complete(req.request_id, req.size);
       }
     }
   }
@@ -363,20 +391,9 @@ bool TCPSenderWorker::process_requests() {
 }
 
 bool TCPSenderWorker::do_send(TCPRequest& req) {
-  if (req.ctrl_fd < 0 || !req.data || req.size == 0) return false;
-
-  auto* group = static_cast<TCPConnectionGroup*>(req.conn_group);
-  if (!group) return false;
-
-  // Wait for RecvReady message on control connection
-  RecvReadyMsg ready_msg;
-  if (!recv_exact(req.ctrl_fd, &ready_msg, sizeof(ready_msg))) {
-    LOG(ERROR) << "TCPSenderWorker " << worker_id_
-               << ": failed to recv RecvReady";
-    return false;
-  }
-
-  uint64_t dest_addr = ready_msg.dest_addr;
+  // dest_addr and total_size are pre-set from RecvReady exchange in
+  // uccl_send_async
+  if (!req.data || req.size == 0) return false;
 
   // Use pre-assigned connection (ensures disjoint connections per worker)
   TCPConnection* conn = req.assigned_conn;
@@ -386,16 +403,16 @@ bool TCPSenderWorker::do_send(TCPRequest& req) {
     return false;
   }
 
-  // Prepare chunk header
-  ChunkHeader header;
+  // Prepare header - dest_addr already includes offset from chunking
+  TCPDataHeader header;
   header.msg_type = static_cast<uint32_t>(TCPDataMsgType::DATA_CHUNK);
-  header.flags = ChunkHeader::kFlagLastChunk;
-  header.dest_addr = dest_addr;
-  header.offset = 0;
-  header.chunk_size = req.size;
-  header.total_size = req.size;
-  header.request_id = req.request_id;
+  header.flags = req.flags;
+  header.request_id = req.recv_request_id;  // Use receiver's request_id
   header.reserved = 0;
+  header.dest_addr = req.dest_addr;
+  header.remote_addr = 0;  // Not used for DATA_CHUNK
+  header.size = req.size;
+  header.total_size = req.total_size;
 
   // Send header on data connection
   if (!send_exact(conn->fd, &header, sizeof(header))) {
@@ -403,16 +420,18 @@ bool TCPSenderWorker::do_send(TCPRequest& req) {
   }
 
   // Copy from GPU to staging buffer
+#if UCCL_TCP_GPU_MEMCPY
   gpuError_t err =
       gpuMemcpy(staging_buffer_.data(), static_cast<char const*>(req.data),
                 req.size, gpuMemcpyDeviceToHost);
   if (err != gpuSuccess) {
     return false;
   }
+#endif
 
-  conn->inflight_chunks.fetch_add(1, std::memory_order_relaxed);
-  // Send data
+  // Send data (inflight_chunks already incremented at submit time)
   if (!send_exact(conn->fd, staging_buffer_.data(), req.size)) {
+    conn->inflight_chunks.fetch_sub(1, std::memory_order_relaxed);
     return false;
   }
   conn->inflight_chunks.fetch_sub(1, std::memory_order_relaxed);
@@ -433,36 +452,37 @@ bool TCPSenderWorker::do_recv(TCPRequest& req) {
 bool TCPSenderWorker::do_write(TCPRequest& req) {
   if (!req.data || req.size == 0) return false;
 
-  uint64_t dest_addr = req.dest_addr;  // Already known from FifoItem
-
   // Use pre-assigned connection (ensures disjoint connections per worker)
   TCPConnection* conn = req.assigned_conn;
   if (!conn || !conn->is_valid()) return false;
 
-  ChunkHeader header;
+  // dest_addr already includes offset from chunking
+  TCPDataHeader header;
   header.msg_type = static_cast<uint32_t>(TCPDataMsgType::DATA_CHUNK);
-  header.flags = ChunkHeader::kFlagLastChunk;
-  header.dest_addr = dest_addr;
-  header.offset = 0;
-  header.chunk_size = req.size;
-  header.total_size = req.size;
+  header.flags = req.flags;
   header.request_id = req.request_id;
   header.reserved = 0;
+  header.dest_addr = req.dest_addr;
+  header.remote_addr = 0;  // Not used for DATA_CHUNK
+  header.size = req.size;
+  header.total_size = req.total_size;
 
   if (!send_exact(conn->fd, &header, sizeof(header))) {
     return false;
   }
 
+#if UCCL_TCP_GPU_MEMCPY
   gpuError_t err =
       gpuMemcpy(staging_buffer_.data(), static_cast<char const*>(req.data),
                 req.size, gpuMemcpyDeviceToHost);
   if (err != gpuSuccess) {
     return false;
   }
+#endif
 
-  conn->inflight_chunks.fetch_add(1, std::memory_order_relaxed);
-  // Send data
+  // Send data (inflight_chunks already incremented at submit time)
   if (!send_exact(conn->fd, staging_buffer_.data(), req.size)) {
+    conn->inflight_chunks.fetch_sub(1, std::memory_order_relaxed);
     return false;
   }
   conn->inflight_chunks.fetch_sub(1, std::memory_order_relaxed);
@@ -478,17 +498,22 @@ bool TCPSenderWorker::do_read(TCPRequest& req) {
   TCPConnection* conn = req.assigned_conn;
   if (!conn || !conn->is_valid()) return false;
 
-  // Send ReadWriteHeader on data connection
-  ReadWriteHeader header;
+  // Send READ request header on data connection
+  TCPDataHeader header;
   header.msg_type = static_cast<uint32_t>(TCPDataMsgType::READ_REQUEST);
+  header.flags = 0;
+  header.request_id = req.request_id;  // For tracking completion on return
   header.reserved = 0;
-  header.remote_addr = req.remote_addr;  // Address to read from on remote side
   header.dest_addr = req.dest_addr;      // Where to put data on our side
+  header.remote_addr = req.remote_addr;  // Address to read from on remote side
   header.size = req.size;
+  header.total_size = req.total_size;
 
   if (!send_exact(conn->fd, &header, sizeof(header))) {
     return false;
   }
+
+  conn->inflight_chunks.fetch_sub(1, std::memory_order_relaxed);
 
   // Completion is handled by receiver worker when data arrives
   return true;
@@ -520,8 +545,6 @@ TCPConnection* TCPConnectionGroup::select_data_connection() {
 void TCPConnectionGroup::add_data_connection(
     std::unique_ptr<TCPConnection> conn) {
   std::unique_lock<std::shared_mutex> lock(mutex);
-  // Assign to sender worker round-robin based on current count
-  conn->sender_worker_id = data_connections.size() % num_sender_workers;
   data_connections.push_back(std::move(conn));
 }
 
@@ -535,21 +558,26 @@ TCPThreadPool::TCPThreadPool(size_t num_threads) {
     num_threads = get_tcp_thread_count();
   }
 
-  // Create sender workers
-  sender_workers_.reserve(num_threads);
-  for (size_t i = 0; i < num_threads; ++i) {
-    sender_workers_.push_back(std::make_unique<TCPSenderWorker>(i));
+  // Split threads: half for sender, half for receiver (minimum 1 each)
+  size_t num_senders = std::max(size_t{1}, num_threads / 2);
+  size_t num_receivers = std::max(size_t{1}, num_threads - num_senders);
+
+  // Create sender workers (pass shared pending_sends_)
+  sender_workers_.reserve(num_senders);
+  for (size_t i = 0; i < num_senders; ++i) {
+    sender_workers_.push_back(
+        std::make_unique<TCPSenderWorker>(i, &pending_sends_));
   }
 
   // Create receiver workers (pass shared pending_recvs_)
-  receiver_workers_.reserve(num_threads);
-  for (size_t i = 0; i < num_threads; ++i) {
+  receiver_workers_.reserve(num_receivers);
+  for (size_t i = 0; i < num_receivers; ++i) {
     receiver_workers_.push_back(
         std::make_unique<TCPReceiverWorker>(i, &pending_recvs_));
   }
 
-  LOG(INFO) << "TCPThreadPool created with " << num_threads
-            << " sender + receiver workers";
+  LOG(INFO) << "TCPThreadPool created with " << num_senders
+            << " sender workers + " << num_receivers << " receiver workers";
 }
 
 TCPThreadPool::~TCPThreadPool() { stop(); }
@@ -564,10 +592,16 @@ void TCPThreadPool::stop() {
   for (auto& w : receiver_workers_) w->stop();
 }
 
-uint32_t TCPThreadPool::assign_data_connection(int fd) {
+uint32_t TCPThreadPool::assign_data_connection(int fd, TCPConnection* conn) {
   uint32_t id = next_receiver_.fetch_add(1, std::memory_order_relaxed) %
                 receiver_workers_.size();
   receiver_workers_[id]->add_data_connection(fd);
+  conn->receiver_worker_id = id;
+
+  id = next_sender_.fetch_add(1, std::memory_order_relaxed) %
+       sender_workers_.size();
+  conn->sender_worker_id = id;
+
   return id;
 }
 
@@ -584,9 +618,11 @@ void TCPThreadPool::register_pending_recv(uint64_t dest_addr, size_t size,
   pending_recvs_.add(dest_addr, size, request_id, completed, success);
 }
 
-TCPReceiverWorker* TCPThreadPool::get_receiver_worker(size_t idx) {
-  return idx < receiver_workers_.size() ? receiver_workers_[idx].get()
-                                        : nullptr;
+void TCPThreadPool::register_pending_send(size_t size, uint32_t request_id,
+                                          std::atomic<bool>* completed,
+                                          std::atomic<bool>* success) {
+  // Register in shared pending_sends_ map
+  pending_sends_.add(size, request_id, completed, success);
 }
 
 }  // namespace tcp
