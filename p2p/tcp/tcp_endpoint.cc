@@ -134,6 +134,14 @@ TCPEndpoint::~TCPEndpoint() {
     listen_fd_ = -1;
   }
 
+  // Close per-interface data listen sockets
+  for (int fd : data_listen_fds_) {
+    if (fd >= 0) {
+      close(fd);
+    }
+  }
+  data_listen_fds_.clear();
+
   std::unique_lock<std::shared_mutex> lock(conn_mutex_);
   connection_groups_.clear();
 }
@@ -153,6 +161,7 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
   local_info.gpu_index = local_gpuidx;
   local_info.num_interfaces = interfaces_.size();
   local_info.total_connections = total_connections_;
+  local_info.reserved = 0;
 
   // Create control connection first
   int ctrl_fd = create_tcp_connection(remote_ip, remote_port);
@@ -166,42 +175,73 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
   group->ctrl_fd = ctrl_fd;
   setup_tcp_socket_options(ctrl_fd);
 
-  // Exchange negotiation info
+  // Exchange negotiation info (base info first)
   uccl::send_message(ctrl_fd, &local_info, sizeof(local_info));
   NegotiationInfo remote_info;
   uccl::receive_message(ctrl_fd, &remote_info, sizeof(remote_info));
+
+  // Send our interface info (including data ports)
+  for (size_t i = 0; i < interfaces_.size(); i++) {
+    InterfaceNegotiationInfo iface_info;
+    std::memset(&iface_info, 0, sizeof(iface_info));
+    std::strncpy(iface_info.ip_addr, interfaces_[i].ip_addr.c_str(),
+                 sizeof(iface_info.ip_addr) - 1);
+    iface_info.num_connections = interfaces_[i].num_connections;
+    iface_info.data_port =
+        (i < data_listen_ports_.size()) ? data_listen_ports_[i] : listen_port_;
+    iface_info.reserved = 0;
+    uccl::send_message(ctrl_fd, &iface_info, sizeof(iface_info));
+  }
+
+  // Receive remote interface info (including data ports)
+  std::vector<InterfaceNegotiationInfo> remote_interfaces(
+      remote_info.num_interfaces);
+  for (int i = 0; i < remote_info.num_interfaces; i++) {
+    uccl::receive_message(ctrl_fd, &remote_interfaces[i],
+                          sizeof(InterfaceNegotiationInfo));
+  }
 
   int actual_connections = std::min(static_cast<int>(total_connections_),
                                     remote_info.total_connections);
   actual_connections = std::max(1, actual_connections);
 
-  LOG(INFO) << "Negotiated " << actual_connections
-            << " data connections with peer";
+  LOG(INFO) << "Negotiated " << actual_connections << " data connections with "
+            << remote_info.num_interfaces << " remote interfaces";
 
-  // Create data connections based on num_connections per interface
+  // Create data connections: match local interfaces to remote interfaces
+  // Connect to remote interface IPs on their specific data ports
   int created_connections = 0;
-  for (auto const& iface : interfaces_) {
-    for (int j = 0; j < iface.num_connections; j++) {
-      if (created_connections >= actual_connections) break;
+  size_t local_iface_idx = 0;
+  size_t remote_iface_idx = 0;
 
-      int fd = create_tcp_connection_from_interface(remote_ip, remote_port,
-                                                    iface.ip_addr);
-      if (fd >= 0) {
-        auto conn = std::make_unique<TCPConnection>();
-        conn->fd = fd;
-        conn->local_ip = iface.ip_addr;
-        conn->remote_ip = remote_ip;
-        conn->remote_port = remote_port;
-        setup_tcp_socket_options(fd);
+  while (created_connections < actual_connections) {
+    auto const& local_iface = interfaces_[local_iface_idx % interfaces_.size()];
+    auto const& remote_iface =
+        remote_interfaces[remote_iface_idx % remote_interfaces.size()];
 
-        // Register data connection with receiver worker
-        thread_pool_->assign_data_connection(fd, conn.get());
+    std::string remote_iface_ip(remote_iface.ip_addr);
+    uint16_t remote_data_port = remote_iface.data_port;
 
-        group->add_data_connection(std::move(conn));
-        created_connections++;
-      }
+    int fd = create_tcp_connection_from_interface(
+        remote_iface_ip, remote_data_port, local_iface.ip_addr);
+    if (fd >= 0) {
+      auto conn = std::make_unique<TCPConnection>();
+      conn->fd = fd;
+      conn->local_ip = local_iface.ip_addr;
+      conn->remote_ip = remote_iface_ip;
+      conn->remote_port = remote_data_port;
+      setup_tcp_socket_options(fd);
+
+      // Register data connection with sender and receiver workers
+      thread_pool_->assign_data_connection(fd, conn.get());
+
+      group->add_data_connection(std::move(conn));
+      created_connections++;
     }
-    if (created_connections >= actual_connections) break;
+
+    // Round-robin through interfaces
+    local_iface_idx++;
+    remote_iface_idx++;
   }
 
   LOG(INFO) << "Created " << group->data_connection_count()
@@ -243,10 +283,32 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   local_info.gpu_index = local_gpuidx;
   local_info.num_interfaces = interfaces_.size();
   local_info.total_connections = total_connections_;
+  local_info.reserved = 0;
 
   NegotiationInfo remote_info;
   uccl::receive_message(ctrl_fd, &remote_info, sizeof(remote_info));
   uccl::send_message(ctrl_fd, &local_info, sizeof(local_info));
+
+  // Receive remote interface info (including data ports)
+  std::vector<InterfaceNegotiationInfo> remote_interfaces(
+      remote_info.num_interfaces);
+  for (int i = 0; i < remote_info.num_interfaces; i++) {
+    uccl::receive_message(ctrl_fd, &remote_interfaces[i],
+                          sizeof(InterfaceNegotiationInfo));
+  }
+
+  // Send our interface info (including data ports)
+  for (size_t i = 0; i < interfaces_.size(); i++) {
+    InterfaceNegotiationInfo iface_info;
+    std::memset(&iface_info, 0, sizeof(iface_info));
+    std::strncpy(iface_info.ip_addr, interfaces_[i].ip_addr.c_str(),
+                 sizeof(iface_info.ip_addr) - 1);
+    iface_info.num_connections = interfaces_[i].num_connections;
+    iface_info.data_port =
+        (i < data_listen_ports_.size()) ? data_listen_ports_[i] : listen_port_;
+    iface_info.reserved = 0;
+    uccl::send_message(ctrl_fd, &iface_info, sizeof(iface_info));
+  }
 
   if (remote_gpuidx) *remote_gpuidx = remote_info.gpu_index;
   if (remote_dev) *remote_dev = 0;
@@ -261,11 +323,56 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   group->ctrl_fd = ctrl_fd;
   setup_tcp_socket_options(ctrl_fd);
 
-  // Accept data connections (matching the number negotiated)
+  // Accept data connections from per-interface listen sockets
+  // Build fd_set once outside the loop
+  fd_set listen_fds;
+  FD_ZERO(&listen_fds);
+  int max_fd = -1;
+
+  for (int data_listen_fd : data_listen_fds_) {
+    FD_SET(data_listen_fd, &listen_fds);
+    if (data_listen_fd > max_fd) max_fd = data_listen_fd;
+  }
+
+  // Also include control listen_fd as fallback
+  FD_SET(listen_fd, &listen_fds);
+  if (listen_fd > max_fd) max_fd = listen_fd;
+
   int accepted_connections = 0;
   while (accepted_connections < actual_connections) {
-    int data_fd =
-        accept(listen_fd, (struct sockaddr*)&client_addr, &client_len);
+    // Copy fd_set since select() modifies it
+    fd_set read_fds = listen_fds;
+
+    struct timeval timeout;
+    timeout.tv_sec = 30;
+    timeout.tv_usec = 0;
+
+    int ready = select(max_fd + 1, &read_fds, nullptr, nullptr, &timeout);
+    if (ready <= 0) {
+      LOG(ERROR) << "Timeout waiting for data connection";
+      break;
+    }
+
+    // Accept from whichever fd is ready
+    int data_fd = -1;
+    std::string local_iface_ip;
+
+    for (size_t i = 0; i < data_listen_fds_.size(); i++) {
+      if (FD_ISSET(data_listen_fds_[i], &read_fds)) {
+        data_fd = accept(data_listen_fds_[i], (struct sockaddr*)&client_addr,
+                         &client_len);
+        if (data_fd >= 0 && i < interfaces_.size()) {
+          local_iface_ip = interfaces_[i].ip_addr;
+        }
+        break;
+      }
+    }
+
+    // Fallback to control listen_fd
+    if (data_fd < 0 && FD_ISSET(listen_fd, &read_fds)) {
+      data_fd = accept(listen_fd, (struct sockaddr*)&client_addr, &client_len);
+    }
+
     if (data_fd < 0) {
       LOG(ERROR) << "Failed to accept data connection: " << strerror(errno);
       break;
@@ -273,12 +380,13 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
 
     auto conn = std::make_unique<TCPConnection>();
     conn->fd = data_fd;
+    conn->local_ip = local_iface_ip;
     inet_ntop(AF_INET, &client_addr.sin_addr, ip_str, INET_ADDRSTRLEN);
     conn->remote_ip = ip_str;
     conn->remote_port = ntohs(client_addr.sin_port);
     setup_tcp_socket_options(data_fd);
 
-    // Register data connection with receiver worker
+    // Register data connection with sender and receiver workers
     thread_pool_->assign_data_connection(data_fd, conn.get());
 
     group->add_data_connection(std::move(conn));
@@ -589,6 +697,7 @@ int TCPEndpoint::prepare_fifo_metadata(uccl::UcclFlow* flow,
 }
 
 void TCPEndpoint::start_listening() {
+  // Create control listen socket on INADDR_ANY
   listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
   if (listen_fd_ < 0) {
     LOG(ERROR) << "Failed to create listen socket: " << strerror(errno);
@@ -603,7 +712,7 @@ void TCPEndpoint::start_listening() {
   std::memset(&addr, 0, sizeof(addr));
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = INADDR_ANY;
-  addr.sin_port = htons(listen_port_);
+  addr.sin_port = htons(0);
 
   if (bind(listen_fd_, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
     LOG(ERROR) << "Failed to bind listen socket: " << strerror(errno);
@@ -612,11 +721,9 @@ void TCPEndpoint::start_listening() {
     return;
   }
 
-  if (listen_port_ == 0) {
-    socklen_t len = sizeof(addr);
-    getsockname(listen_fd_, (struct sockaddr*)&addr, &len);
-    listen_port_ = ntohs(addr.sin_port);
-  }
+  socklen_t len = sizeof(addr);
+  getsockname(listen_fd_, (struct sockaddr*)&addr, &len);
+  listen_port_ = ntohs(addr.sin_port);
 
   if (listen(listen_fd_, 128) < 0) {
     LOG(ERROR) << "Failed to listen: " << strerror(errno);
@@ -625,7 +732,46 @@ void TCPEndpoint::start_listening() {
     return;
   }
 
-  LOG(INFO) << "TCP listening on port " << listen_port_;
+  LOG(INFO) << "TCP control listening on port " << listen_port_;
+
+  // Create per-interface data listen sockets with unique ports
+  for (auto const& iface : interfaces_) {
+    int data_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (data_fd < 0) {
+      LOG(ERROR) << "Failed to create data listen socket for " << iface.ip_addr;
+      continue;
+    }
+
+    setsockopt(data_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    struct sockaddr_in data_addr;
+    std::memset(&data_addr, 0, sizeof(data_addr));
+    data_addr.sin_family = AF_INET;
+    inet_pton(AF_INET, iface.ip_addr.c_str(), &data_addr.sin_addr);
+    data_addr.sin_port = htons(0);  // Let OS assign a unique port
+
+    if (bind(data_fd, (struct sockaddr*)&data_addr, sizeof(data_addr)) < 0) {
+      LOG(ERROR) << "Failed to bind data listen socket to " << iface.ip_addr
+                 << ": " << strerror(errno);
+      close(data_fd);
+      continue;
+    }
+
+    // Get the assigned port
+    socklen_t addr_len = sizeof(data_addr);
+    getsockname(data_fd, (struct sockaddr*)&data_addr, &addr_len);
+    uint16_t data_port = ntohs(data_addr.sin_port);
+
+    if (listen(data_fd, 128) < 0) {
+      LOG(ERROR) << "Failed to listen on " << iface.ip_addr;
+      close(data_fd);
+      continue;
+    }
+
+    data_listen_fds_.push_back(data_fd);
+    data_listen_ports_.push_back(data_port);
+    LOG(INFO) << "TCP data listening on " << iface.ip_addr << ":" << data_port;
+  }
 }
 
 int TCPEndpoint::create_tcp_connection(std::string const& remote_ip,

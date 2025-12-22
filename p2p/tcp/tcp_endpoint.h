@@ -21,15 +21,16 @@
 #include <unordered_map>
 #include <vector>
 #include <sys/ioctl.h>
+#include <sys/select.h>
 #include <transport.h>  // For common types like uccl::ConnID, FifoItem, etc.
 
 namespace tcp {
 
-static constexpr size_t kChunkSize = 1024 * 1024;  // 1MB chunk size
+static constexpr size_t kChunkSize = 1 * 1024 * 1024;  // 1MB chunk size
 static_assert(kChunkSize <= kStagingBufferSize,
               "kChunkSize must be <= kStagingBufferSize");
 static constexpr size_t kMaxInflightChunks = 256;
-static constexpr size_t kTCPBufferSize = 4 * 1024 * 1024;  // 4MB TCP buffer
+static constexpr size_t kTCPBufferSize = 16 * 1024 * 1024;  // 16MB TCP buffer
 static constexpr uint64_t kBandwidthPerConnection =
     10ULL * 1000 * 1000 * 1000;  // 10Gbps
 
@@ -123,11 +124,20 @@ class TCPEndpoint {
   void create_unified_p2p_socket() {}
 
  private:
+  // Interface info exchanged during negotiation
+  struct InterfaceNegotiationInfo {
+    char ip_addr[16];  // IPv4 address string
+    int32_t num_connections;
+    uint16_t data_port;  // Port for data connections on this interface
+    uint16_t reserved;
+  };
+
   struct NegotiationInfo {
     int32_t gpu_index;
     int32_t num_interfaces;
     int32_t total_connections;
     int32_t reserved;
+    // Followed by InterfaceNegotiationInfo[num_interfaces]
   };
 
   void start_listening();
@@ -144,7 +154,9 @@ class TCPEndpoint {
 
   int gpu_index_;
   uint16_t listen_port_;
-  int listen_fd_ = -1;
+  int listen_fd_ = -1;  // Control connection listen fd (INADDR_ANY)
+  std::vector<int> data_listen_fds_;         // Per-interface data listen fds
+  std::vector<uint16_t> data_listen_ports_;  // Per-interface data listen ports
   std::atomic<uint64_t> next_conn_id_;
   std::atomic<uint32_t> next_request_id_;
   std::atomic<bool> running_;
