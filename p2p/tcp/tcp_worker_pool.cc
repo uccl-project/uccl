@@ -168,11 +168,11 @@ TCPReceiverWorker::TCPReceiverWorker(uint32_t id, PendingRecvMap* pending_recvs)
       pending_recvs_(pending_recvs),
       staging_buffer_(nullptr) {
   // Allocate pinned memory for efficient GPU-host transfers
-  gpuError_t err = gpuHostMalloc(reinterpret_cast<void**>(&staging_buffer_),
-                                 kStagingBufferSize, 0);
+  gpuError_t err = gpuMallocHost(reinterpret_cast<void**>(&staging_buffer_),
+                                 kStagingBufferSize);
   if (err != gpuSuccess) {
     LOG(ERROR) << "TCPReceiverWorker " << id
-               << ": Failed to allocate pinned memory";
+               << ": Failed to allocate pinned memory" << err;
   }
   epoll_fd_ = epoll_create1(0);
   if (epoll_fd_ < 0) {
@@ -362,11 +362,11 @@ TCPSenderWorker::TCPSenderWorker(uint32_t id, PendingSendMap* pending_sends)
       staging_buffer_(nullptr),
       pending_sends_(pending_sends) {
   // Allocate pinned memory for efficient GPU-host transfers
-  gpuError_t err = gpuHostMalloc(reinterpret_cast<void**>(&staging_buffer_),
-                                 kStagingBufferSize, 0);
+  gpuError_t err = gpuMallocHost(reinterpret_cast<void**>(&staging_buffer_),
+                                 kStagingBufferSize);
   if (err != gpuSuccess) {
     LOG(ERROR) << "TCPSenderWorker " << id
-               << ": Failed to allocate pinned memory";
+               << ": Failed to allocate pinned memory" << err;
   }
   request_ring_ = uccl::create_ring(sizeof(TCPRequest), kRequestRingSize);
   LOG(INFO) << "TCPSenderWorker " << id << " initialized";
