@@ -1,5 +1,5 @@
 """
-Benchmark UCCL Collective for AllToAll
+Benchmark UCCL AllToAll Collective
 
 Usage:
     torchrun --nnodes=2 --nproc_per_node=8 --node-rank=0 --master_addr=<IP> --master_port=19999 \
@@ -7,6 +7,10 @@ Usage:
 
     # Single node multi-GPU:
     torchrun --standalone --nproc_per_node=4 benchmark_uccl_alltoall_collective.py --sizes 65536,262144,1048576 --num-iters 100
+
+Environment Variables:
+    UCCL_CHUNK_SIZE_KB: Chunk size for UCCL transport (default: 64)
+    UCCL_ENTROPY: Entropy setting for UCCL (default: 2)
 """
 
 import argparse
@@ -38,11 +42,9 @@ def warmup_alltoall_check(
     device: torch.device = None,
 ):
     """
-    Warmup and verification for alltoall operation.
-    Each rank fills chunk i with value (rank * world_size + i + 1).
-    After alltoall, each rank verifies it received correct data from each source.
+    Warmup and verification for UCCL alltoall operation.
     """
-    print("\n🔧 Running warmup_alltoall_check...")
+    print("\n🔧 Running UCCL warmup_alltoall_check...")
 
     if device is None:
         device = torch.cuda.current_device()
@@ -51,7 +53,6 @@ def warmup_alltoall_check(
     rank = dist.get_rank()
 
     # Create send tensor: chunk i is sent to rank i
-    # Fill chunk i with value (rank * world_size + i + 1) so we can verify source
     send_tensor = torch.zeros(
         (world_size * count_per_rank,),
         dtype=dtype,
@@ -69,25 +70,24 @@ def warmup_alltoall_check(
         device=device,
     )
 
-    sync_all()
-
-    # Register tensors for RDMA
+    # Register tensors for UCCL
     collective.register_tensor(send_tensor)
     collective.register_tensor(recv_tensor)
+
+    sync_all()
 
     print(
         f"[Rank {rank}] send_tensor: shape={send_tensor.shape}, "
         f"first chunk value={rank * world_size + 1}"
     )
 
-    # Perform alltoall
+    # Perform UCCL alltoall
     collective.alltoall(send_tensor, recv_tensor)
+    torch.cuda.synchronize(device)
 
     sync_all()
 
     # Verify results
-    # After alltoall, recv_tensor[i * count : (i+1) * count] should contain
-    # data from rank i, which filled it with value (i * world_size + rank + 1)
     all_passed = True
     for src_rank in range(world_size):
         expected_val = float(src_rank * world_size + rank + 1)
@@ -105,111 +105,28 @@ def warmup_alltoall_check(
 
     if rank == 0:
         if all_passed:
-            print(f"[Rank {rank}] ✅ AllToAll verification PASSED")
+            print(f"[Rank {rank}] ✅ UCCL AllToAll verification PASSED")
         else:
-            print(f"[Rank {rank}] ❌ AllToAll verification FAILED")
+            print(f"[Rank {rank}] ❌ UCCL AllToAll verification FAILED")
 
-    # Cleanup
+    # Deregister tensors
     collective.deregister_tensor(send_tensor)
     collective.deregister_tensor(recv_tensor)
 
     return all_passed
 
 
-def run_alltoall_sync_benchmark(
+def run_alltoall_benchmark(
     count_per_rank: int,
     num_iters: int,
     dtype: torch.dtype = torch.float32,
     device: torch.device = None,
 ) -> dict:
     """
-    Run synchronous alltoall benchmark.
+    Run UCCL alltoall benchmark.
 
     Args:
-        count_per_rank: Number of elements per rank (total = count_per_rank * world_size)
-        num_iters: Number of iterations
-        dtype: Data type
-        device: CUDA device
-
-    Returns:
-        dict with timing and bandwidth metrics
-    """
-    if device is None:
-        device = torch.cuda.current_device()
-
-    world_size = dist.get_world_size()
-
-    # Create tensors (each has world_size * count_per_rank elements)
-    total_count = world_size * count_per_rank
-    send_tensor = torch.randn(total_count, dtype=dtype, device=device)
-    recv_tensor = torch.empty(total_count, dtype=dtype, device=device)
-
-    # Register tensors
-    collective.register_tensor(send_tensor)
-    collective.register_tensor(recv_tensor)
-
-    sync_all()
-
-    # Warmup iterations
-    for _ in range(5):
-        collective.alltoall(send_tensor, recv_tensor)
-
-    sync_all()
-
-    # Timed iterations using CUDA events
-    start_event = torch.cuda.Event(enable_timing=True)
-    end_event = torch.cuda.Event(enable_timing=True)
-
-    start_event.record()
-    for _ in range(num_iters):
-        collective.alltoall(send_tensor, recv_tensor)
-    end_event.record()
-
-    sync_all()
-
-    # Calculate elapsed time in milliseconds
-    elapsed_ms = start_event.elapsed_time(end_event)
-    avg_time_ms = elapsed_ms / num_iters
-
-    # Calculate data sizes
-    element_size = send_tensor.element_size()
-    total_bytes = total_count * element_size
-
-    # Algorithm bandwidth: total data moved / time
-    # In alltoall, each rank sends (n-1) chunks and receives (n-1) chunks
-    # Total data per rank = 2 * (n-1) * chunk_size
-    chunk_bytes = count_per_rank * element_size
-    data_moved = 2 * (world_size - 1) * chunk_bytes
-    algbw_gbps = (data_moved / (avg_time_ms / 1000)) / 1e9
-
-    # Bus bandwidth for alltoall: algbw * (n-1)/n
-    busbw_gbps = algbw_gbps * (world_size - 1) / world_size
-
-    # Cleanup
-    collective.deregister_tensor(send_tensor)
-    collective.deregister_tensor(recv_tensor)
-
-    return {
-        "count_per_rank": count_per_rank,
-        "total_bytes": total_bytes,
-        "chunk_bytes": chunk_bytes,
-        "avg_time_ms": avg_time_ms,
-        "algbw_gbps": algbw_gbps,
-        "busbw_gbps": busbw_gbps,
-    }
-
-
-def run_alltoall_async_benchmark(
-    count_per_rank: int,
-    num_iters: int,
-    dtype: torch.dtype = torch.float32,
-    device: torch.device = None,
-) -> dict:
-    """
-    Run asynchronous alltoall benchmark using ialltoall.
-
-    Args:
-        count_per_rank: Number of elements per rank (total = count_per_rank * world_size)
+        count_per_rank: Number of elements per rank
         num_iters: Number of iterations
         dtype: Data type
         device: CUDA device
@@ -227,7 +144,7 @@ def run_alltoall_async_benchmark(
     send_tensor = torch.randn(total_count, dtype=dtype, device=device)
     recv_tensor = torch.empty(total_count, dtype=dtype, device=device)
 
-    # Register tensors
+    # Register tensors for UCCL
     collective.register_tensor(send_tensor)
     collective.register_tensor(recv_tensor)
 
@@ -235,8 +152,8 @@ def run_alltoall_async_benchmark(
 
     # Warmup iterations
     for _ in range(5):
-        transfer_ids = collective.ialltoall(send_tensor, recv_tensor)
-        collective.wait_all(transfer_ids)
+        collective.alltoall(send_tensor, recv_tensor)
+    torch.cuda.synchronize(device)
 
     sync_all()
 
@@ -246,11 +163,10 @@ def run_alltoall_async_benchmark(
 
     start_event.record()
     for _ in range(num_iters):
-        transfer_ids = collective.ialltoall(send_tensor, recv_tensor)
-        collective.wait_all(transfer_ids)
+        collective.alltoall(send_tensor, recv_tensor)
     end_event.record()
 
-    sync_all()
+    torch.cuda.synchronize(device)
 
     # Calculate elapsed time in milliseconds
     elapsed_ms = start_event.elapsed_time(end_event)
@@ -261,14 +177,15 @@ def run_alltoall_async_benchmark(
     total_bytes = total_count * element_size
     chunk_bytes = count_per_rank * element_size
 
-    # Algorithm bandwidth
+    # Algorithm bandwidth: total data movement = 2 * (world_size - 1) * chunk_size
+    # Each rank sends (world_size - 1) chunks and receives (world_size - 1) chunks
     data_moved = 2 * (world_size - 1) * chunk_bytes
     algbw_gbps = (data_moved / (avg_time_ms / 1000)) / 1e9
 
-    # Bus bandwidth
+    # Bus bandwidth: accounts for network topology efficiency
     busbw_gbps = algbw_gbps * (world_size - 1) / world_size
 
-    # Cleanup
+    # Deregister tensors
     collective.deregister_tensor(send_tensor)
     collective.deregister_tensor(recv_tensor)
 
@@ -292,10 +209,7 @@ def parse_size_list(val: str) -> List[int]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Benchmark UCCL Collective AllToAll API"
-    )
-    parser.add_argument(
-        "--num-cpus", type=int, default=4, help="Number of CPU threads for RDMA ops"
+        description="Benchmark UCCL AllToAll Collective"
     )
     parser.add_argument(
         "--sizes",
@@ -316,17 +230,14 @@ def main():
         "--num-iters", type=int, default=100, help="Number of iterations"
     )
     parser.add_argument(
+        "--num-cpus", type=int, default=4, help="Number of CPU threads for RDMA ops"
+    )
+    parser.add_argument(
         "--dtype",
         type=str,
         default="float32",
         choices=["float16", "float32", "float64"],
         help="Data type for tensors",
-    )
-    parser.add_argument(
-        "--async",
-        dest="use_async",
-        action="store_true",
-        help="Use async ialltoall API instead of sync alltoall",
     )
     parser.add_argument(
         "--skip-verify",
@@ -348,7 +259,7 @@ def main():
     device = torch.device(f"cuda:{local_rank}")
     torch.cuda.set_device(device)
 
-    # Initialize distributed
+    # Initialize distributed with gloo for coordination
     dist.init_process_group(backend="gloo", device_id=device)
 
     rank = dist.get_rank()
@@ -365,21 +276,22 @@ def main():
     try:
         # Initialize UCCL collective
         collective.init_collective(args.num_cpus)
+        print(f"[Rank {rank}] UCCL Collective initialized successfully")
+
+        dist.barrier()
 
         if rank == 0:
             print("=" * 70)
-            print("UCCL AllToAll Benchmark")
+            print("UCCL AllToAll Collective Benchmark")
             print("=" * 70)
             print(f"World size: {world_size}")
             print(f"Device: cuda:{local_rank}")
             print(f"Data type: {args.dtype} ({element_size} bytes)")
             print(f"Iterations: {args.num_iters}")
-            print(
-                f"Mode: {'async (ialltoall)' if args.use_async else 'sync (alltoall)'}"
-            )
+            print(f"CPU threads: {args.num_cpus}")
             print("=" * 70)
 
-        dist.barrier()
+        sync_all()
 
         # Run verification warmup
         if not args.skip_verify:
@@ -407,20 +319,12 @@ def main():
                     f"total_size={_pretty_size(size_bytes * world_size)}"
                 )
 
-            if args.use_async:
-                data = run_alltoall_async_benchmark(
-                    count_per_rank=count_per_rank,
-                    num_iters=args.num_iters,
-                    dtype=dtype,
-                    device=device,
-                )
-            else:
-                data = run_alltoall_sync_benchmark(
-                    count_per_rank=count_per_rank,
-                    num_iters=args.num_iters,
-                    dtype=dtype,
-                    device=device,
-                )
+            data = run_alltoall_benchmark(
+                count_per_rank=count_per_rank,
+                num_iters=args.num_iters,
+                dtype=dtype,
+                device=device,
+            )
 
             results.append(data)
 
@@ -438,7 +342,7 @@ def main():
         # Print summary table
         if rank == 0:
             print("\n" + "=" * 85)
-            print("Summary")
+            print("Summary (UCCL AllToAll Collective)")
             print("=" * 85)
             print(
                 f"{'Chunk Size':>12} | {'Total Size':>12} | "
@@ -463,7 +367,7 @@ def main():
                 "world_size": 10,
                 "dtype": 8,
                 "num_iters": 9,
-                "mode": 6,
+                "backend": 8,
                 "chunk_bytes": 12,
                 "total_bytes": 12,
                 "avg_time_ms": 12,
@@ -483,7 +387,7 @@ def main():
                         f"{world_size:>{col_widths['world_size']}}",
                         f"{args.dtype:>{col_widths['dtype']}}",
                         f"{args.num_iters:>{col_widths['num_iters']}}",
-                        f"{'async' if args.use_async else 'sync':>{col_widths['mode']}}",
+                        f"{'uccl':>{col_widths['backend']}}",
                         f"{r['chunk_bytes']:>{col_widths['chunk_bytes']}}",
                         f"{r['total_bytes']:>{col_widths['total_bytes']}}",
                         f"{r['avg_time_ms']:>{col_widths['avg_time_ms']}.4f}",
