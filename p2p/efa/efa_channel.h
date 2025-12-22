@@ -35,6 +35,10 @@ class EFAChannel {
         local_meta_(std::make_shared<ChannelMetaData>()),
         remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)) {
     initQP();
+    ah_ = ctx_->createAH(remote_meta_->gid);
+    #ifdef UCCL_ENABLE_IBRC
+    ibrcQP_rtr_rts();
+    #endif
     UCCL_LOG_EP << "EFAChannel connected to remote qpn=" << remote_meta.qpn;
   }
 
