@@ -12,9 +12,12 @@
 
 UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      size_t total_size, int rank, int node_idx, int local_rank,
-                     std::string const& peer_ip, int num_experts, int num_ranks,
-                     int num_nodes, bool use_normal_mode)
-    : peer_ip_{peer_ip}, thread_{}, mode_{Mode::None}, running_{false} {
+                     int num_experts, int num_ranks, int num_nodes,
+                     bool use_normal_mode, bool is_intranode)
+    : thread_{},
+      mode_{Mode::None},
+      running_{false},
+      is_intranode_{is_intranode} {
   // EP 8 of internode_ll also need atomic_buffer_ptr
 
   Proxy::Config cfg{};
@@ -40,13 +43,13 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.gpu_buffer = reinterpret_cast<void*>(gpu_buffer_addr);
   cfg.total_size = total_size;
   cfg.rank = rank;
+  cfg.node_idx = node_idx;
   cfg.local_rank = local_rank;
-  cfg.peer_ip = peer_ip_.empty() ? nullptr : peer_ip_.c_str();
   cfg.num_experts = num_experts;
   cfg.num_ranks = num_ranks;
   cfg.num_nodes = num_nodes;
   cfg.use_normal_mode = use_normal_mode;
-  cfg.node_idx = node_idx;
+  cfg.is_intranode = is_intranode;
   proxy_ = std::make_unique<Proxy>(cfg);
   local_rank_ = local_rank;
   node_idx_ = node_idx;
@@ -54,6 +57,10 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   if (thread_idx == 0) {
 #ifdef USE_GRACE_HOPPER
     cudaMallocManaged(&atomic_buffer_ptr_, kAtomicBufferSize);
+#elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
+                  cudaHostAllocMapped | cudaHostAllocWriteCombined |
+                      hipHostMallocUncached);
 #else
     cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
                   cudaHostAllocMapped | cudaHostAllocWriteCombined);
@@ -118,7 +125,7 @@ void UcclProxy::start(Mode m) {
   running_.store(true, std::memory_order_release);
 
   thread_ = std::thread([this]() {
-    if (peer_ip_.empty()) {
+    if (is_intranode_) {
       std::printf("UcclProxy: no peer IP set, running in local mode\n");
       proxy_->run_local();
       return;
@@ -148,7 +155,7 @@ void UcclProxy::start(Mode m) {
 
 FifoProxy::FifoProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      size_t total_size, int rank, int node_idx, int local_rank,
-                     std::string const& peer_ip)
+                     bool is_intranode)
     : thread_idx(thread_idx),
       fifo_(nullptr),
       stop_flag_(false),
@@ -157,22 +164,13 @@ FifoProxy::FifoProxy(int thread_idx, uintptr_t gpu_buffer_addr,
       rank_(rank),
       node_idx_(node_idx),
       local_rank_(local_rank),
-      peer_ip_(peer_ip) {}
+      is_intranode_(is_intranode) {}
 
 FifoProxy::~FifoProxy() { stop(); }
 
 void FifoProxy::set_fifo(mscclpp::Fifo* fifo) { fifo_ = fifo; }
 
-void FifoProxy::set_peers_meta(
-    std::vector<std::tuple<int, uintptr_t, size_t, std::string>> const& meta) {
-  peers_meta_ = meta;
-
-  // Convert to PeerMeta format for Proxy
-  std::vector<PeerMeta> peer_metas;
-  for (auto const& [rank, ptr, nbytes, ip] : meta) {
-    peer_metas.push_back({rank, ptr, nbytes, ip});
-  }
-
+void FifoProxy::set_peers_meta(std::vector<PeerMeta> const& meta) {
   // Create Proxy::Config
   // Note: we don't pass ring_buffers since we're using FIFO
   Proxy::Config cfg;
@@ -182,7 +180,7 @@ void FifoProxy::set_peers_meta(
   cfg.rank = rank_;
   cfg.node_idx = node_idx_;
   cfg.local_rank = local_rank_;
-  cfg.peer_ip = peer_ip_.empty() ? nullptr : peer_ip_.c_str();
+  cfg.is_intranode = is_intranode_;
   cfg.pin_thread = true;
 
   // Set RDMA parameters (for 2-node benchmarking)
@@ -192,7 +190,7 @@ void FifoProxy::set_peers_meta(
 
   // Create the underlying Proxy
   proxy_ = std::make_unique<Proxy>(cfg);
-  proxy_->set_peers_meta(peer_metas);
+  proxy_->set_peers_meta(meta);
 }
 
 void FifoProxy::start_sender() {

@@ -1,6 +1,7 @@
 #pragma once
 #include "common.hpp"
 #include "d2h_queue_device.cuh"
+#include "exception.cuh"
 #include "ring_buffer.cuh"
 #include <cstddef>
 #include <cstdint>
@@ -22,22 +23,23 @@ namespace uccl {
 // Note(MaoZiming, Yang): the expert_idx here is used to tell which ring buffer
 // to use. The total concurrent warps can be say 64 (= number of experts), while
 // the number of ring buffers is small (say 6).
+template <bool use_normal_mode = false>
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank,
     int expert_idx, int lane_id, int message_idx,
     uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
     bool is_combine, int low_latency_buffer_idx = 0, uint64_t atomic_offset = 0,
-    uint64_t atomic_val = 0, bool use_normal_mode = false) {
+    uint64_t atomic_val = 0) {
   // NOTE(MaoZiming): different from the nvshmemi_ibgda_put_nbi_warp in
   // ibgda_device.cuh, we don't do warp-cooperation.
   if (lane_id != 0) return;
-  int thread_idx = (expert_idx % num_d2h_channel_addrs) % kNumThBlocks;
+  int thread_idx = (expert_idx % num_d2h_channel_addrs) % kNumProxyThs;
   int per_thread_d2h_channel_idx =
-      (expert_idx % num_d2h_channel_addrs) / kNumThBlocks;
-  assert(per_thread_d2h_channel_idx < kChannelPerProxy);
+      (expert_idx % num_d2h_channel_addrs) / kNumProxyThs;
+  EP_DEVICE_ASSERT(per_thread_d2h_channel_idx < kChannelPerProxy);
   int d2h_channel_idx =
       thread_idx * kChannelPerProxy + per_thread_d2h_channel_idx;
-  assert(d2h_channel_idx < num_d2h_channel_addrs);
+  EP_DEVICE_ASSERT(d2h_channel_idx < num_d2h_channel_addrs);
   unsigned long long rptr_val = static_cast<unsigned long long>(req_rptr);
   unsigned long long lptr_val = static_cast<unsigned long long>(req_lptr);
   unsigned long long bytes_val = static_cast<unsigned long long>(bytes);
@@ -45,12 +47,9 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   auto* h = reinterpret_cast<d2hq::D2HHandle*>(
       static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
 
-  if (use_normal_mode) {
-    if (low_latency_buffer_idx == -1) {
-      /* Normal mode */
-      expert_idx = 0;
-      low_latency_buffer_idx = 0;
-    }
+  if constexpr (use_normal_mode) {
+    low_latency_buffer_idx == -1 ? expert_idx = 0 : 0;
+    low_latency_buffer_idx == -1 ? low_latency_buffer_idx = 0 : 0;
   }
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   // FIFO path: no head/tail; push does backpressure.
@@ -63,7 +62,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     cmd.req_lptr = lptr_val;
     cmd.bytes = bytes_val;
     cmd.dst_rank = dst_rank;
-    if (use_normal_mode) {
+    if constexpr (use_normal_mode) {
       cmd.atomic_offset = atomic_offset;
       cmd.atomic_val = atomic_val;
     } else {
@@ -100,7 +99,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
         trap();
       }
 
-      if (use_normal_mode) {
+      if constexpr (use_normal_mode) {
         if (atomic_offset >> 16) {
           printf(
               "[nvshmemi_ibgda_put_nbi_warp] atomic_offset too large: %llu\n",
@@ -135,36 +134,35 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
 
 // TODO(MaoZiming): Fix. This should be a non-fetch add operation. This could be
 // implemented with CPU proxy.
+template <bool use_normal_mode = false>
 __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     uint64_t rptr, uint64_t atomic_base_addr, int const& value, int dst_rank,
     int warp_id, bool is_local_copy = false,
     uint64_t const* d2h_channel_addrs = nullptr, int num_d2h_channel_addrs = 0,
     bool is_combine = true, int low_latency_buffer_idx = 0,
-    bool skip_remote = false, bool use_normal_mode = false) {
+    bool skip_remote = false) {
   if (is_local_copy) {
     atomicAdd(reinterpret_cast<unsigned long long*>(rptr),
               static_cast<unsigned long long>(value));
   } else {
-    if (use_normal_mode && skip_remote) {
-      return;
+    if constexpr (use_normal_mode) {
+      if (skip_remote) return;
     }
     rptr -= atomic_base_addr;
-    int thread_idx = (warp_id % num_d2h_channel_addrs) % kNumThBlocks;
+    int thread_idx = (warp_id % num_d2h_channel_addrs) % kNumProxyThs;
     int per_thread_d2h_channel_idx =
-        (warp_id % num_d2h_channel_addrs) / kNumThBlocks;
-    assert(per_thread_d2h_channel_idx < kChannelPerProxy);
+        (warp_id % num_d2h_channel_addrs) / kNumProxyThs;
+    EP_DEVICE_ASSERT(per_thread_d2h_channel_idx < kChannelPerProxy);
     int d2h_channel_idx =
         thread_idx * kChannelPerProxy + per_thread_d2h_channel_idx;
-    assert(d2h_channel_idx < num_d2h_channel_addrs);
+    EP_DEVICE_ASSERT(d2h_channel_idx < num_d2h_channel_addrs);
     auto* h = reinterpret_cast<d2hq::D2HHandle*>(
         static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
 
     auto last_print = clock64();
-    if (use_normal_mode) {
-      if (low_latency_buffer_idx == -1) {
-        /* Normal mode */
-        low_latency_buffer_idx = 0;
-      }
+    if constexpr (use_normal_mode) {
+      /* Normal mode */
+      low_latency_buffer_idx == -1 ? low_latency_buffer_idx = 0 : 0;
     }
 #ifdef USE_MSCCLPP_FIFO_BACKEND
     {
@@ -283,15 +281,16 @@ __device__ static __forceinline__ void wait_until_cmd_consumed(
 __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
     uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
     int nvl_rank = -1, int label = -1) {
-  assert(num_d2h_channel_addrs % kChannelPerProxy == 0 &&
-         "num_d2h_channel_addrs must be multiple of kChannelPerProxy");
+  EP_DEVICE_ASSERT(
+      num_d2h_channel_addrs % kChannelPerProxy == 0 &&
+      "num_d2h_channel_addrs must be multiple of kChannelPerProxy");
   /* NOTE(MaoZiming): This is sent to all proxy threads. Since each proxy
    * thread manages kChannelPerProxy ring buffers, we just need to post a quiet
    * command to one out of the kChannelPerProxy ring buffer per cpu thread. */
-  assert(num_d2h_channel_addrs % kChannelPerProxy == 0);
-  assert(num_d2h_channel_addrs / kChannelPerProxy == kNumThBlocks);
+  EP_DEVICE_ASSERT(num_d2h_channel_addrs % kChannelPerProxy == 0);
+  EP_DEVICE_ASSERT(num_d2h_channel_addrs / kChannelPerProxy == kNumProxyThs);
   // First, atomically commit QUIET to one ring per proxy
-  uint64_t slots[kNumThBlocks];
+  uint64_t slots[kNumProxyThs];
   int num_posted = 0;
   for (int d2h_channel_idx = 0; d2h_channel_idx < num_d2h_channel_addrs;
        d2h_channel_idx += kChannelPerProxy) {
@@ -335,10 +334,11 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
 __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
     uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
     int nvl_rank = -1, int label = -1) {
-  assert(num_d2h_channel_addrs % kChannelPerProxy == 0 &&
-         "num_d2h_channel_addrs must be multiple of kChannelPerProxy");
-  assert(num_d2h_channel_addrs / kChannelPerProxy == kNumThBlocks);
-  uint64_t slots[kNumThBlocks];
+  EP_DEVICE_ASSERT(
+      num_d2h_channel_addrs % kChannelPerProxy == 0 &&
+      "num_d2h_channel_addrs must be multiple of kChannelPerProxy");
+  EP_DEVICE_ASSERT(num_d2h_channel_addrs / kChannelPerProxy == kNumProxyThs);
+  uint64_t slots[kNumProxyThs];
   int num_posted = 0;
 
   // First, post one BARRIER command per proxy

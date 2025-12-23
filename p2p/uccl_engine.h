@@ -4,7 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define MSG_SIZE 64
+#define MSG_SIZE 256
+#define FIFO_SIZE 64
 // Handle for the UCCL engine instance
 typedef struct uccl_engine uccl_engine_t;
 
@@ -16,9 +17,9 @@ typedef uint64_t uccl_mr_t;
 
 // UCCL operation types
 enum uccl_msg_type {
-  UCCL_READ = 0,
+  UCCL_RW_RC = 0,  // Used by both READ/WRITE in RCMODE
   UCCL_WRITE = 1,
-  UCCL_VECTOR_READ = 2,
+  UCCL_VECTOR_RW_RC = 2,  // Used by both READ/WRITE in RCMODE
   UCCL_VECTOR_WRITE = 3,
   UCCL_FIFO = 4,
   UCCL_VECTOR_FIFO = 5,
@@ -32,7 +33,7 @@ typedef struct notify_msg {
 
 typedef struct fifo_msg {
   int id;
-  char fifo_buf[MSG_SIZE];
+  char fifo_buf[FIFO_SIZE];
 } fifo_msg_t;
 
 typedef struct fifo_v_msg {
@@ -164,7 +165,7 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                       size_t size, uint64_t* transfer_id);
 
 /**
- * Read a vector of data chunks (Non blocking).
+ * Send a vector of data chunks (Non blocking).
  * @param conn          Connection handle.
  * @param mr_ids        Vector of memory region handles.
  * @param src_v         Vector of pointers to the data to write.
@@ -177,7 +178,34 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uint64_t> mr_ids,
                              std::vector<void const*> src_v,
                              std::vector<size_t> size_v, int num_iovs,
                              uint64_t* transfer_id);
-
+/**
+ * Send data with RC mode (Non blocking).
+ * @param conn          Connection handle.
+ * @param mr            Memory region handle.
+ * @param data          Pointer to the data to send.
+ * @param size          Size of the data.
+ * @param slot_item_ptr Pointer to the slot item.
+ * @param transfer_id   Pointer to store the transfer ID.
+ * @return              0 on success, non-zero on failure.
+ */
+int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+                         size_t size, void* slot_item_ptr,
+                         uint64_t* transfer_id);
+/**
+ * Send a vector of data chunks with RC mode (Non blocking).
+ * @param conn          Connection handle.
+ * @param mr_ids        Vector of memory region handles.
+ * @param dst_v         Vector of pointers to the data to write.
+ * @param size_v        Vector of sizes of the data to write.
+ * @param fifo_id       FIFO ID.
+ * @param num_iovs      Number of IO vectors.
+ * @param transfer_id   Pointer to store the transfer ID.
+ * @return              0 on success, non-zero on failure.
+ */                         
+int uccl_engine_write_vector_rc(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
+  std::vector<void*> dst_v,
+  std::vector<size_t> size_v, int fifo_id,
+  int num_iovs, uint64_t* transfer_id);
 /**
  * Receive data (blocking).
  * @param conn          Connection handle.

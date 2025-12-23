@@ -17,9 +17,9 @@ class UcclProxy {
 
  public:
   UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr, size_t total_size,
-            int rank, int node_idx, int local_rank,
-            std::string const& peer_ip = {}, int num_experts = 0,
-            int num_ranks = 0, int num_nodes = 0, bool use_normal_mode = false);
+            int rank, int node_idx, int local_rank, int num_experts = 0,
+            int num_ranks = 0, int num_nodes = 0, bool use_normal_mode = false,
+            bool is_intranode = false);
   ~UcclProxy();
 
   void start_sender();
@@ -27,6 +27,7 @@ class UcclProxy {
   void start_local();
   void start_dual();
   void stop();
+  int get_listen_port() const { return proxy_->get_listen_port(); }
 
   // Set the offset of dispatch_rdma_recv_data_buffer within rdma_buffer
   void set_dispatch_recv_data_offset(uintptr_t offset) {
@@ -83,7 +84,6 @@ class UcclProxy {
   enum class Mode { None, Sender, Remote, Local, Dual };
   void start(Mode m);
 
-  std::string peer_ip_;
   std::unique_ptr<Proxy> proxy_;
   std::thread thread_;
   Mode mode_;
@@ -95,6 +95,7 @@ class UcclProxy {
   int local_rank_;
   void* atomic_buffer_ptr_;
   int node_idx_;
+  bool is_intranode_;
   std::vector<d2hq::HostD2HHandle> d2h_queues;
   std::vector<std::unique_ptr<mscclpp::Fifo>> fifos;
 };
@@ -107,16 +108,16 @@ class UcclProxy {
 class FifoProxy {
  public:
   FifoProxy(int thread_idx, uintptr_t gpu_buffer_addr, size_t total_size,
-            int rank, int node_idx, int local_rank, std::string const& peer_ip);
+            int rank, int node_idx, int local_rank, bool is_intranode = false);
   ~FifoProxy();
 
   void set_fifo(mscclpp::Fifo* fifo);
-  void set_peers_meta(
-      std::vector<std::tuple<int, uintptr_t, size_t, std::string>> const& meta);
+  void set_peers_meta(std::vector<PeerMeta> const& meta);
 
   void start_sender();
   void start_remote();
   void stop();
+  int get_listen_port() const { return proxy_->get_listen_port(); }
 
   double avg_wr_latency_us() const;
   uint64_t processed_count() const;
@@ -137,7 +138,5 @@ class FifoProxy {
   int rank_;
   int node_idx_;
   int local_rank_;
-  std::string peer_ip_;
-
-  std::vector<std::tuple<int, uintptr_t, size_t, std::string>> peers_meta_;
+  bool is_intranode_;
 };

@@ -60,6 +60,16 @@
 #define gpuIpcGetEventHandle cudaIpcGetEventHandle
 #define gpuIpcOpenEventHandle cudaIpcOpenEventHandle
 #define gpuIpcCloseEventHandle cudaIpcCloseEventHandle
+inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
+                                        void* ptr) {
+  CUdeviceptr base;
+  CUresult result = cuMemGetAddressRange(&base, size, (CUdeviceptr)ptr);
+  if (result == CUDA_SUCCESS) {
+    *base_ptr = (void*)base;
+    return gpuSuccess;
+  }
+  return gpuError_t(result);
+}
 #else
 #include <hip/hip_runtime.h>
 #include <hip/hip_runtime_api.h>
@@ -121,6 +131,7 @@
 #define gpuIpcGetEventHandle hipIpcGetEventHandle
 #define gpuIpcOpenEventHandle hipIpcOpenEventHandle
 #define gpuIpcCloseEventHandle(handle) (gpuSuccess)
+#define gpuMemGetAddressRange hipMemGetAddressRange
 #endif
 
 #define GPU_RT_CHECK(call)                                         \

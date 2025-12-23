@@ -16,18 +16,19 @@ get_cuda_version() {
     nvcc --version | grep -oE 'release [0-9]+\.[0-9]+' | awk '{print $2}' | head -n1
 }
 
+# Install common dependencies
+sudo apt install -y nvtop libgoogle-glog-dev clang-format-14 python3-pip
+pip install pybind11 --upgrade
+pip install black
+
+# Check if we're in a conda environment
+if [[ ! -z "${CONDA_PREFIX}" ]]; then
+    conda install -c conda-forge libstdcxx-ng -y
+fi
+
 # Install PyTorch with automatic CUDA version handling
 echo "Checking CUDA environment..."
 if check_cuda; then
-    sudo apt install -y nvtop libgoogle-glog-dev clang-format-14 python3-pip
-    pip3 install pybind11 --upgrade
-    pip3 install black
-
-    # Check if we're in a conda environment
-    if [[ ! -z "${CONDA_PREFIX}" ]]; then
-        conda install -c conda-forge libstdcxx-ng -y
-    fi
-
     # Install CUDA dependencies
     CUDA_VERSION=$(get_cuda_version)
     echo "Detected CUDA version: $CUDA_VERSION"
@@ -45,12 +46,11 @@ if check_cuda; then
         PYTORCH_SUFFIX="cu${CUDA_MAJOR}1"  # Fallback to major version + .1
     fi
     
-    pip3 install torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/$PYTORCH_SUFFIX"
+    pip install torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/$PYTORCH_SUFFIX"
 elif check_rocm; then
     echo "Detected ROCM"
-    # Yang: moved to Dockerfile.rocm to reuse it inside the container for faster rebuild
     # Install Pytorch using nightly
-    # pip3 install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
+    pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
 else
     echo "No CUDA or ROCM detected"
     exit 1
@@ -58,7 +58,7 @@ fi
 
 # Verify PyTorch installation
 echo "Verifying PyTorch installation..."
-if python3 -c "import torch" &> /dev/null; then
+if python -c "import torch" &> /dev/null; then
     echo "PyTorch installed successfully"
 else
     echo "PyTorch installation failed. Please check your network connection or install manually."
@@ -67,9 +67,9 @@ fi
 
 # Get PyTorch include paths
 echo "Retrieving PyTorch path information..."
-TORCH_INCLUDE=$(python3 -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent / 'include')")
-TORCH_API_INCLUDE=$(python3 -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent / 'include/torch/csrc/api/include')")
-TORCH_LIB=$(python3 -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent / 'lib')")
+TORCH_INCLUDE=$(python -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent / 'include')")
+TORCH_API_INCLUDE=$(python -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent / 'include/torch/csrc/api/include')")
+TORCH_LIB=$(python -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent / 'lib')")
 
 # Configure environment variables
 echo "Configuring environment variables..."

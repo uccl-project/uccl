@@ -6,6 +6,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("-l", action="store_true", help="Run latency mode")
 parser.add_argument("-b", action="store_true", help="Run burst mode")
 parser.add_argument("-r", action="store_true", help="Run random mode")
+parser.add_argument("-c", action="store_true", help="Run mops-controlled mode")
 args = parser.parse_args()
 
 if args.l:
@@ -14,6 +15,8 @@ elif args.b:
     cmd = ["./benchmark", "-b"]
 elif args.r:
     cmd = ["./benchmark", "-r"]
+elif args.e:
+    cmd = ["./benchmark", "-c"]
 else:
     cmd = ["./benchmark"]
 

@@ -44,6 +44,7 @@ from utils import (
     per_token_cast_back,
     init_dist_under_torchrun,
     detect_ib_hca,
+    hash_tensor,
 )
 
 # Test compatibility with low latency functions
@@ -69,6 +70,7 @@ def test_main(
     rank: int,
     buffer: Buffer,
     group: dist.ProcessGroup,
+    skip_benchmark: bool = False,
 ):
     # Settings
     num_tokens, hidden = args.num_tokens, args.hidden
@@ -114,6 +116,7 @@ def test_main(
     rdma_rank_idx = rank_idx // num_local_ranks
     rdma_rank_idx.masked_fill_(rank_idx == -1, -1)
     inplace_unique(rdma_rank_idx, num_nodes)
+    hash_value = 0
 
     # RDMA dispatch counts
     rdma_idx = topk_idx // (num_experts // num_nodes)
@@ -225,6 +228,13 @@ def test_main(
                         event,
                     ) = buffer.dispatch(**dispatch_args)
                     event.current_stream_wait() if async_mode else ()
+
+                    if current_x is x_pure_rand or current_x is x:
+                        hash_value += hash_tensor(recv_x)
+                    else:
+                        hash_value += hash_tensor(recv_x[0])
+                        hash_value += hash_tensor(recv_x[1])
+
                     recv_x = (
                         per_token_cast_back(*recv_x)
                         if isinstance(recv_x, tuple)
@@ -326,6 +336,8 @@ def test_main(
                         )
                         assert calc_diff(check_topk_weights, ref_topk_weights) < 1e-9
 
+                    hash_value += hash_tensor(recv_x)
+
                     # For later tuning
                     dispatch_bf16_rdma_send_bytes = num_rdma_token_sent * hidden * 2
                     dispatch_bf16_nvl_recv_bytes = recv_x.numel() * 2
@@ -333,6 +345,9 @@ def test_main(
                     combine_bf16_rdma_recv_bytes = dispatch_bf16_rdma_send_bytes
     if local_rank == 0:
         print("", flush=True)
+
+    if skip_benchmark:
+        return hash_value
 
     # Tune dispatch performance
     best_dispatch_results = None
@@ -449,6 +464,8 @@ def test_main(
         )
         print("", flush=True)
 
+    return hash_value
+
 
 # noinspection PyUnboundLocalVariable,PyShadowingNames
 def test_loop(
@@ -458,13 +475,21 @@ def test_loop(
     if args.test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
 
-    num_sms = 24
+    if torch.version.cuda:
+        num_sms = 24
+        num_nvlink_bytes = int(2e9)
+        num_rdma_bytes = int(1e9)
+    elif torch.version.hip:
+        num_sms = 64 if num_nodes < 8 else 32
+        num_nvlink_bytes = int(4e9)
+        num_rdma_bytes = int(2e9)
+    else:
+        raise ValueError("Unsupported platform")
+
     num_qps_per_rank = max(
         num_sms,
         ll_num_experts // num_ranks if args.test_ll_compatibility else 0,
     )
-    num_nvlink_bytes = int(2e9)
-    num_rdma_bytes = int(1e9)
 
     buffer = Buffer(
         group,
@@ -476,22 +501,53 @@ def test_loop(
     )
 
     assert num_local_ranks == 8 and num_ranks > 8
-    torch.manual_seed(rank)
 
-    for i in (num_sms,):
-        test_main(
-            args,
-            i,
-            local_rank,
-            num_local_ranks,
-            num_ranks,
-            num_nodes,
-            rank,
-            buffer,
-            group,
-        )
+    for seed in range(int(1e9)):
         if local_rank == 0:
+            print(f"Testing with seed {seed} ...", flush=True)
+        torch.manual_seed(rank + seed)
+        ref_hash = 0
+        for i in (num_sms,):
+            ref_hash += test_main(
+                args,
+                i,
+                local_rank,
+                num_local_ranks,
+                num_ranks,
+                num_nodes,
+                rank,
+                buffer,
+                group,
+                args.pressure_test_mode == 1,
+            )
+            if local_rank == 0:
+                print("", flush=True)
+        if args.pressure_test_mode == 0:
+            break
+
+        if local_rank == 0:
+            print(f"{ref_hash=}")
             print("", flush=True)
+
+        for _ in range(20):
+            torch.manual_seed(rank + seed)
+            current_hash = 0
+            for i in (num_sms,):
+                current_hash += test_main(
+                    args,
+                    i,
+                    local_rank,
+                    num_local_ranks,
+                    num_ranks,
+                    num_nodes,
+                    rank,
+                    buffer,
+                    group,
+                    args.pressure_test_mode == 1,
+                )
+                if local_rank == 0:
+                    print("", flush=True)
+            assert current_hash == ref_hash
 
     # Destroy the buffer runtime and communication group
     buffer.destroy()
@@ -518,6 +574,12 @@ if __name__ == "__main__":
         type=int,
         default=None,
         help="Number of top-k groups (default: `min(num_nodes, 4)`)",
+    )
+    parser.add_argument(
+        "--pressure-test-mode",
+        type=int,
+        default=0,
+        help="Pressure test mode. 0: don't do pressure test, 1: do pressure test without benchmarks, 2: do pressure test with benchmarks",
     )
     parser.add_argument(
         "--num-topk", type=int, default=8, help="Number of top-k experts (default: 8)"
