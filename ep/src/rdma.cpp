@@ -754,7 +754,7 @@ static void post_rdma_async_batched_normal_mode(
     }
 
     for (auto& [ring_idx_raw, idxs] : ring_to_indices) {
-#if defined(EFA)
+#ifdef EFA
       const size_t local_ring_count = ctx->data_qps_by_channel.size();
       struct ibv_qp_ex* qpx =
           (struct ibv_qp_ex*)(local_ring_count
@@ -850,7 +850,6 @@ static void post_rdma_async_batched_normal_mode(
         std::abort();
       }
 #elif defined(SOFTWARE_ORDERING)
-      // SOFTWARE_ORDERING: Use standard QP interface with RC operations
       {
         size_t const local_ring_count = ctx->data_qps_by_channel.size();
         struct ibv_qp* qp =
