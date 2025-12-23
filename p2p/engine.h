@@ -70,7 +70,7 @@ class Endpoint {
 #else
   uint64_t const kChunkSize = 1024 * 1024;
 #endif
-  uint32_t const kMaxInflightChunks = 8;
+  static constexpr uint32_t kMaxInflightChunks = 8;
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
 

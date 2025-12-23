@@ -222,10 +222,10 @@ class EpollClient {
     auto it = conns_.find(conn_key);
     if (it == conns_.end()) return;
     ClientConnection& conn = it->second;
-    std::cout << "received" << std::endl;
+    // std::cout << "received" << std::endl;
     while (true) {
       ssize_t count = ::recv(conn.fd, buf, sizeof(buf), 0);
-      std::cout << "received count: " << count << std::endl;
+      // std::cout << "received count: " << count << std::endl;
       if (count == -1) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) break;
         std::cerr << "recv error on " << conn_key << "\n";
@@ -238,7 +238,7 @@ class EpollClient {
       } else {
         conn.in_buf.insert(conn.in_buf.end(), buf, buf + count);
         conn.last_activity = std::chrono::steady_clock::now();
-        std::cout << "message received count: " << count << std::endl;
+        // std::cout << "message received count: " << count << std::endl;
         parse_responses(conn);
       }
     }

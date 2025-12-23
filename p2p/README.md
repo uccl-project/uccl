@@ -60,6 +60,14 @@ sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
 
 </details>
 
+To build AWS EFA support, you can: 
+```bash
+USE_EFA=1 bash build_and_install.sh cuda p2p
+# or
+make -j USE_EFA=1 install
+```
+
+To build GCP TCPX support, you can follow [NIXL_plugin_readme.md](./NIXL_plugin_readme.md). 
 
 ## Performance Benchmarks
 
