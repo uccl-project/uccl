@@ -92,7 +92,7 @@ void run_persistent_kernel() {
     cudaFree(dst_reduce);
     cudaFree(src_reduce);
 
-    std::cout << "Persistent kernel started and completed." << std::endl;
+    std::cout << "Persistent kernel completed." << std::endl;
 }
 
 int main() {

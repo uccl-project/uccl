@@ -9,11 +9,9 @@ INCLUDES = -I./ -I/usr/local/cuda/include
 GDRCOPY_LIBDIR = $(abspath ../../../thirdparty/gdrcopy/src)
 
 LIBS = -L/usr/local/cuda/lib -lcudart -lcuda \
-       -L$(GDRCOPY_LIBDIR) -lgdrapi \
-	   -L/usr/lib/x86_64-linux-gnu
+       -L$(GDRCOPY_LIBDIR) -lgdrapi
 
-RPATH = -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR) \
-        -Xlinker -rpath -Xlinker /usr/lib/x86_64-linux-gnu
+RPATH = -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR)
 
 TARGET = bench_gdrcopy
 

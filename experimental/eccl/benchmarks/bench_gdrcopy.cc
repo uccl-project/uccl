@@ -169,7 +169,7 @@ void bench_nvidia_gpu_gdrcopy(int dev_id,
         std::cout << "\n";
     }
 
-    // --- gdrcopy path ---
+    // gdrcopy path
     gdr_t g = gdr_open();
     if (!g) {
         std::fprintf(stderr, "ERROR: gdr_open failed. Is gdrdrv loaded? (lsmod | grep gdrdrv)\n");
@@ -370,7 +370,7 @@ void bench_amd_gpu_gdrcopy(int dev_id,
     HK(hipHostMalloc((void**)&h_buf,    size, hipHostMallocDefault), "hipHostMalloc(h_buf)");
     init_hbuf_walking_bit(init_buf, size);
 
-    // host 上 touch 一下 device pointer
+    // host touch device pointer
     std::cout << "Probing host access to device pointer...\n";
     volatile uint8_t* probe = (volatile uint8_t*)d_A;
     probe[0] = 0;
@@ -523,6 +523,7 @@ int main(int argc, char** argv) {
         }
     }
     /*
+    Usage:
     ./bench_gdrcopy -d 5 -s $((1<<18)) -w 10000 -r 10000 -c
     */
 #ifdef ENABLE_CUDA

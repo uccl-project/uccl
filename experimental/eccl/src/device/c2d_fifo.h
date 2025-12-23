@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <iterator>
 #include "c2d_fifo_device.h"
+#include "fifo_gdrcopy.hpp"
 #include "task.h"
 
 namespace mscclpp {
@@ -37,13 +38,13 @@ class CpuToGpuFifo {
   struct Impl {
     detail::UniqueGpuPtr<T> buffer;              // device
     detail::UniqueGpuHostPtr<uint64_t> head;     // host-pinned
-    detail::UniqueGpuPtr<uint64_t> tail;         // device，会被很多线程读，所以放到显存好。
+    detail::UniqueGdrU64Ptr tail;                // device gdr mapped
     int const size;
 
     Impl(int size)
         : buffer(detail::gpuCallocUnique<T>(size)),
           head(detail::gpuCallocHostUnique<uint64_t>()),
-          tail(detail::gpuCallocUnique<uint64_t>()),
+          tail(detail::gpuCallocGdrU64Unique()),
           size(size) {}
   };
   std::unique_ptr<Impl> pimpl_;

@@ -10,6 +10,7 @@ template <typename T>
 CpuToGpuFifo<T>::CpuToGpuFifo(int size) {
   int device;
   MSCCLPP_CUDATHROW(cudaGetDevice(&device));
+  MSCCLPP_CUDATHROW(cudaFree(0)); // force init context for current GPU
   cudaDeviceProp deviceProp;
   MSCCLPP_CUDATHROW(cudaGetDeviceProperties(&deviceProp, device));
   std::cout << "Init CpuToGpuFifo at device " << deviceProp.name << " !" << std::endl;
@@ -89,12 +90,8 @@ uint64_t CpuToGpuFifo<T>::push(InputIt first, InputIt last) {
 template <typename T>
 bool CpuToGpuFifo<T>::poll(uint64_t taskId) const {
   // Load tail with acquire to see latest GPU updates
-  uint64_t currentTail = atomicLoad(pimpl_->tail.get(), memoryOrderAcquire);
-  
-  // 这些数值存在显存，直接atomicLoad触发了段错误；
-  // 多消费线程会读取tail，所以tail还是要放到显存，但是cpu这里就不能用atmoicload显存了
-
-  // 难道只能放到内存？hostptr，gpu读取的开销如何？
+  uint64_t* tail_host = detail::getGdrHostPtr(pimpl_->tail);
+  uint64_t currentTail = atomicLoad(tail_host, memoryOrderAcquire);
 
   // Check if the task with taskId has been consumed
   return currentTail > taskId;
