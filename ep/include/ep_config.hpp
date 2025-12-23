@@ -174,10 +174,12 @@ struct LowLatencyLayout {
                                        count);
   }
 
-  LowLatencyLayout(void* rdma_buffer, int num_max_dispatch_tokens_per_rank,
-                   int hidden, int num_ranks, int num_experts,
+  LowLatencyLayout(bool disable_ll_layered, void* rdma_buffer,
+                   int num_max_dispatch_tokens_per_rank, int hidden,
+                   int num_ranks, int num_experts,
                    void* atomic_buffer_ptr = nullptr) {
     int const num_scales = hidden / 128;
+    int const num_nodes = num_ranks / NUM_MAX_NVL_PEERS;
 
     // Dispatch and combine layout:
     //  - 2 symmetric odd/even send buffer
@@ -188,9 +190,15 @@ struct LowLatencyLayout {
     // NOTES: you should add a control `int4` for combine messages if you want
     // to do data transformation
     EP_HOST_ASSERT(num_scales * sizeof(float) <= static_cast<size_t>(hidden));
+    size_t per_meta_data_size = sizeof(int4);
+    size_t per_token_size = std::max(hidden * sizeof(nv_bfloat16),
+                                     hidden + num_scales * sizeof(float));
     size_t num_bytes_per_dispatch_msg =
         sizeof(int4) + std::max(hidden * sizeof(nv_bfloat16),
                                 hidden + num_scales * sizeof(float));
+    if (!disable_ll_layered) {
+      num_bytes_per_dispatch_msg = per_meta_data_size + per_token_size;
+    }
     size_t num_bytes_per_combine_msg = hidden * sizeof(nv_bfloat16);
 
     // Send buffer
@@ -209,6 +217,12 @@ struct LowLatencyLayout {
     size_t dispatch_recv_data_buffer_bytes = num_experts *
                                              num_max_dispatch_tokens_per_rank *
                                              num_bytes_per_dispatch_msg;
+    if (!disable_ll_layered) {
+      dispatch_recv_data_buffer_bytes =
+          num_experts * num_max_dispatch_tokens_per_rank * per_meta_data_size +
+          num_nodes * num_max_dispatch_tokens_per_rank * per_token_size;
+    }
+
     size_t combine_recv_buffer_bytes = num_experts *
                                        num_max_dispatch_tokens_per_rank *
                                        num_bytes_per_combine_msg;
@@ -219,6 +233,12 @@ struct LowLatencyLayout {
 
     // Symmetric signaling buffers
     size_t dispatch_recv_count_buffer_bytes = num_experts * sizeof(int);
+    if (!disable_ll_layered) {
+      dispatch_recv_count_buffer_bytes += NUM_MAX_NVL_PEERS * num_nodes *
+                                              num_max_dispatch_tokens_per_rank *
+                                              sizeof(int) +
+                                          NUM_MAX_NVL_PEERS * sizeof(int);
+    }
     size_t combine_recv_flag_buffer_bytes = dispatch_recv_count_buffer_bytes;
     size_t signaling_buffer_bytes = std::max(dispatch_recv_count_buffer_bytes,
                                              combine_recv_flag_buffer_bytes);
@@ -261,11 +281,13 @@ struct LowLatencyLayout {
   }
 };
 
-size_t get_low_latency_rdma_size_hint(int num_max_dispatch_tokens_per_rank,
+size_t get_low_latency_rdma_size_hint(bool dispatch_ll_dispatch_opt,
+                                      int num_max_dispatch_tokens_per_rank,
                                       int hidden, int num_ranks,
                                       int num_experts) {
-  auto num_bytes = LowLatencyLayout(nullptr, num_max_dispatch_tokens_per_rank,
-                                    hidden, num_ranks, num_experts, nullptr)
+  auto num_bytes = LowLatencyLayout(dispatch_ll_dispatch_opt, nullptr,
+                                    num_max_dispatch_tokens_per_rank, hidden,
+                                    num_ranks, num_experts, nullptr)
                        .total_bytes;
   return ((num_bytes + NUM_BUFFER_ALIGNMENT_BYTES) /
           NUM_BUFFER_ALIGNMENT_BYTES) *

@@ -123,6 +123,7 @@ class Buffer:
             low_latency_mode,
             explicitly_destroy,
             int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
+            Buffer.disable_ll_layered(),
         )
         if num_rdma_bytes:
             self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
@@ -172,6 +173,13 @@ class Buffer:
 
     def connect_atomic_buffer(self, proxy: "ep.UcclProxy"):
         ep.connect_atomic_buffer(proxy, self.runtime)
+
+    @staticmethod
+    def disable_ll_layered() -> bool:
+        disable_ll_layered = False
+        if int(os.environ.get("DEEPEP_DISABLE_LL_DISPATCH_OPT", "0")) == 1:
+            disable_ll_layered = True
+        return disable_ll_layered
 
     def destroy(self):
         """
@@ -453,7 +461,11 @@ class Buffer:
             size: the RDMA buffer size recommended.
         """
         return ep.get_low_latency_rdma_size_hint(
-            num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts
+            Buffer.disable_ll_layered(),
+            num_max_dispatch_tokens_per_rank,
+            hidden,
+            num_ranks,
+            num_experts,
         )
 
     def get_comm_stream(self) -> torch.Stream:
