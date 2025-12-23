@@ -1,7 +1,7 @@
 #pragma once
 
 #include "efa/define.h"
-#ifdef UCCL_ENABLE_EFA
+#ifdef UCCL_P2P_USE_EFA
 #include "efa/efa_endpoint.h"
 #endif
 #include "transport.h"
@@ -31,7 +31,7 @@ struct P2PMhandle {
   MRArray mr_array;
 };
 
-#ifdef UCCL_ENABLE_EFA
+#ifdef UCCL_P2P_USE_EFA
 using RDMAEndPoint =
     std::variant<uccl::RDMAEndpoint*, std::shared_ptr<EFAEndpoint>>;
 #else
@@ -57,7 +57,7 @@ struct PeerInfo {
   int gpu_idx;          // GPU index of the peer
 };
 
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
 using FifoItem = nccl_tcpx::FifoItem;
 #else
 using FifoItem = uccl::FifoItem;
@@ -65,7 +65,7 @@ using FifoItem = uccl::FifoItem;
 
 class Endpoint {
   uint64_t const kRTTBytes = 1024 * 1024;
-#ifdef UCCL_ENABLE_EFA
+#ifdef UCCL_P2P_USE_EFA
   uint64_t const kChunkSize = 1024 * 1024 * 1024;
 #else
   uint64_t const kChunkSize = 1024 * 1024;

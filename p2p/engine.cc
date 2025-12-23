@@ -65,7 +65,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   google::InstallFailureSignalHandler();
 
   // Initialize the RDMA endpoint with lazy creation.
-#ifdef UCCL_ENABLE_EFA
+#ifdef UCCL_P2P_USE_EFA
   ep_ = std::shared_ptr<EFAEndpoint>(
       new EFAEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
   numa_node_ = 0;
@@ -127,7 +127,7 @@ Endpoint::Endpoint(uint32_t const num_cpus) : num_cpus_(num_cpus) {
                  []() { google::InitGoogleLogging("uccl_p2p"); });
 
   google::InstallFailureSignalHandler();
-#ifdef UCCL_ENABLE_EFA
+#ifdef UCCL_P2P_USE_EFA
   ep_ = std::shared_ptr<EFAEndpoint>(
       new EFAEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
 #else
@@ -205,7 +205,7 @@ void Endpoint::initialize_engine() {
   std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
             << std::endl;
   // Initialize engine by fixed engine offset since we did lazy initialization
-#ifndef UCCL_ENABLE_EFA
+#ifndef UCCL_P2P_USE_EFA
   unified::initialize_engine_by_dev(ep_, gpu_to_dev[local_gpu_idx_], false);
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
 #endif
