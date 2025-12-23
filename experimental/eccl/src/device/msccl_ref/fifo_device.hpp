@@ -7,6 +7,8 @@
 #include "fifo_util.hpp"
 #include <cstdint>
 
+// TODO: delete later
+
 namespace mscclpp {
 
 using TriggerType = uint64_t;
@@ -116,7 +118,6 @@ struct FifoDeviceHandle {
                                       int64_t maxSpinCount = 1000000) {
     uint64_t prevHead =
         atomicFetchAdd<uint64_t, scopeDevice>(head, 1, memoryOrderRelaxed);
-        // head指针只被gpu多线程密集使用了，所以head放到了显存
 
     // Flip the last bit for safe polling; host will revert.
     constexpr uint64_t flipMask = uint64_t{1} << uint64_t{63};

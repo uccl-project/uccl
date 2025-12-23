@@ -15,7 +15,7 @@ struct PersistentKernelConfig {
   uint32_t fifoCapacity = 16;
   uint32_t smemSize = 0;
 
-  cudaStream_t stream = nullptr; // if user want to manage the stream
+  cudaStream_t stream = nullptr; // if user manage the stream
 };
 
 template <typename T>

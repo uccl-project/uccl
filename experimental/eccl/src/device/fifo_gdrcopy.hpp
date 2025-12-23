@@ -14,6 +14,8 @@
 #include "gdrapi.h"
 #include "fifo_util.hpp"
 
+// TODO: support AMD
+
 namespace mscclpp {
 namespace detail {
 
