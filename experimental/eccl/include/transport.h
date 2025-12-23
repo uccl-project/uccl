@@ -149,8 +149,8 @@ class Communicator {
   mutable std::mutex meta_mu_;
 
   // ---------- GPU / NIC info --------
-  int gpu_id_; // todo, this is true local_rank_
-  int local_rank_; // todo, replace with rank_
+  int gpu_id_;      // todo, this is true local_rank_
+  int local_rank_;  // todo, replace with rank_
   int world_size_;
   bool support_rdma;
   bool support_rdma_roce;

@@ -1,11 +1,11 @@
 #pragma once
 
-#include <memory>
-#include <cstddef>
-#include <iterator>
 #include "c2d_fifo_device.h"
 #include "fifo_gdrcopy.hpp"
 #include "task.h"
+#include <cstddef>
+#include <iterator>
+#include <memory>
 
 namespace mscclpp {
 
@@ -36,9 +36,9 @@ class CpuToGpuFifo {
 
  private:
   struct Impl {
-    detail::UniqueGpuPtr<T> buffer;              // device
-    detail::UniqueGpuHostPtr<uint64_t> head;     // host-pinned
-    detail::UniqueGdrU64Ptr tail;                // device gdr mapped
+    detail::UniqueGpuPtr<T> buffer;           // device
+    detail::UniqueGpuHostPtr<uint64_t> head;  // host-pinned
+    detail::UniqueGdrU64Ptr tail;             // device gdr mapped
     int const size;
 
     Impl(int size)

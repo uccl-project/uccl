@@ -156,7 +156,9 @@ struct FifoDeviceHandle {
   /// @return True if the trigger is popped; false otherwise.
   MSCCLPP_DEVICE_INLINE bool poll(uint64_t fifoHead) {
     uint64_t val;
-    if (fifoHead < (val = atomicLoad(tail, memoryOrderAcquire))) { // GPU 可以从host ptr load
+    if (fifoHead <
+        (val = atomicLoad(tail,
+                          memoryOrderAcquire))) {  // GPU 可以从host ptr load
       // Same as in sync(), this may write a stale value to tailCache.
       *tailCache = val;
       return true;

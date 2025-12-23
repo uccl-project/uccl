@@ -1,18 +1,17 @@
 #pragma once
 
+#include "fifo_util.hpp"
+#include "gdrapi.h"
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <memory>
-#include <stdexcept>
 #include <mutex>
+#include <stdexcept>
 #include <vector>
-#include <cstdio>
-
 #include <cuda.h>
 #include <cuda_runtime.h>
-#include "gdrapi.h"
-#include "fifo_util.hpp"
 
 // TODO: support AMD
 
@@ -95,9 +94,9 @@ inline GdrMapping gdrAllocAndMapBytes(size_t req_bytes) {
   int rc = gdr_pin_buffer(g, m.dptr, m.bytes, 0, 0, &m.mh);
   if (rc != 0) {
     std::fprintf(stderr,
-                 "gdr_pin_buffer failed rc=%d bytes=%zu base_dptr=0x%llx aligned_dptr=0x%llx\n",
-                 rc, m.bytes,
-                 (unsigned long long)m.base_dptr,
+                 "gdr_pin_buffer failed rc=%d bytes=%zu base_dptr=0x%llx "
+                 "aligned_dptr=0x%llx\n",
+                 rc, m.bytes, (unsigned long long)m.base_dptr,
                  (unsigned long long)m.dptr);
     (void)cuMemFree(m.base_dptr);
     throw std::runtime_error("gdr_pin_buffer failed.");
@@ -117,17 +116,15 @@ inline GdrMapping gdrAllocAndMapBytes(size_t req_bytes) {
 
   rc = gdr_map(g, m.mh, &m.map_base, m.map_bytes);
   if (rc != 0 || !m.map_base) {
-    std::fprintf(stderr,
-                 "gdr_map failed rc=%d map_base=%p map_bytes=%zu pin_bytes=%zu "
-                 "base_dptr=0x%llx aligned_dptr=0x%llx info.va=0x%llx info.mapped_size=%zu info.page_size=%zu wc=%d mapping_type=%d\n",
-                 rc, m.map_base, m.map_bytes, m.bytes,
-                 (unsigned long long)m.base_dptr,
-                 (unsigned long long)m.dptr,
-                 (unsigned long long)info.va,
-                 (size_t)info.mapped_size,
-                 (size_t)info.page_size,
-                 info.wc_mapping,
-                 info.mapping_type);
+    std::fprintf(
+        stderr,
+        "gdr_map failed rc=%d map_base=%p map_bytes=%zu pin_bytes=%zu "
+        "base_dptr=0x%llx aligned_dptr=0x%llx info.va=0x%llx "
+        "info.mapped_size=%zu info.page_size=%zu wc=%d mapping_type=%d\n",
+        rc, m.map_base, m.map_bytes, m.bytes, (unsigned long long)m.base_dptr,
+        (unsigned long long)m.dptr, (unsigned long long)info.va,
+        (size_t)info.mapped_size, (size_t)info.page_size, info.wc_mapping,
+        info.mapping_type);
 
     (void)gdr_unpin_buffer(g, m.mh);
     (void)cuMemFree(m.base_dptr);
@@ -135,7 +132,7 @@ inline GdrMapping gdrAllocAndMapBytes(size_t req_bytes) {
   }
   m.mapped = true;
 
-  const long long off =
+  long long const off =
       (long long)((unsigned long long)info.va - (unsigned long long)m.dptr);
   m.host_ptr = (void*)((char*)m.map_base + off);
 
@@ -149,14 +146,22 @@ inline void gdrUnmapUnpinFree(GdrMapping& m) noexcept {
       (void)cudaSetDevice(m.device);
     }
     (void)cudaFree(0);
-    try { ensureDriverContextForCurrentDevice(); } catch (...) {}
+    try {
+      ensureDriverContextForCurrentDevice();
+    } catch (...) {
+    }
   }
 
   gdr_t g = nullptr;
-  try { g = globalGdr(); } catch (...) { g = nullptr; }
+  try {
+    g = globalGdr();
+  } catch (...) {
+    g = nullptr;
+  }
 
   if (g && m.pinned) {
-    if (m.mapped && m.map_base) (void)gdr_unmap(g, m.mh, m.map_base, m.map_bytes);
+    if (m.mapped && m.map_base)
+      (void)gdr_unmap(g, m.mh, m.map_base, m.map_bytes);
     (void)gdr_unpin_buffer(g, m.mh);
   }
 
@@ -183,12 +188,12 @@ inline UniqueGdrGpuPtr<T> gpuCallocGdrUnique(size_t nelems = 1) {
 }
 
 template <class T>
-inline T* getGdrHostPtr(const UniqueGdrGpuPtr<T>& p) {
+inline T* getGdrHostPtr(UniqueGdrGpuPtr<T> const& p) {
   return reinterpret_cast<T*>(p.get_deleter().m.host_ptr);
 }
 
 template <class T>
-inline CUdeviceptr getGdrDevicePtr(const UniqueGdrGpuPtr<T>& p) {
+inline CUdeviceptr getGdrDevicePtr(UniqueGdrGpuPtr<T> const& p) {
   return p.get_deleter().m.dptr;
 }
 
@@ -242,13 +247,15 @@ class GdrU64Pool {
     free_.pop_back();
 
     auto& pg = pages_[out_slot.page].m;
-    const size_t byte_off = static_cast<size_t>(out_slot.idx) * sizeof(uint64_t);
+    const size_t byte_off =
+        static_cast<size_t>(out_slot.idx) * sizeof(uint64_t);
 
     out_dptr = pg.dptr + static_cast<CUdeviceptr>(byte_off);
-    out_hptr = reinterpret_cast<uint64_t*>(static_cast<uint8_t*>(pg.host_ptr) + byte_off);
+    out_hptr = reinterpret_cast<uint64_t*>(static_cast<uint8_t*>(pg.host_ptr) +
+                                           byte_off);
   }
 
-  void free(const U64Slot& s) noexcept {
+  void free(U64Slot const& s) noexcept {
     std::lock_guard<std::mutex> lk(mu_);
     free_.push_back(s);
   }
@@ -314,13 +321,13 @@ inline UniqueGdrU64Ptr gpuCallocGdrU64Unique() {
   return UniqueGdrU64Ptr(dev_ptr, del);
 }
 
-inline uint64_t* getGdrHostPtr(const UniqueGdrU64Ptr& p) {
+inline uint64_t* getGdrHostPtr(UniqueGdrU64Ptr const& p) {
   return p.get_deleter().host_ptr;
 }
 
-inline CUdeviceptr getGdrDevicePtr(const UniqueGdrU64Ptr& p) {
+inline CUdeviceptr getGdrDevicePtr(UniqueGdrU64Ptr const& p) {
   return p.get_deleter().dptr;
 }
 
-} // namespace detail
-} // namespace mscclpp
+}  // namespace detail
+}  // namespace mscclpp

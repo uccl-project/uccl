@@ -1,8 +1,8 @@
 #include "c2d_fifo.h"
 #include "fifo_util.hpp"
+#include <iostream>
 #include <thread>
 #include <numaif.h>
-#include <iostream>
 
 namespace mscclpp {
 
@@ -10,10 +10,11 @@ template <typename T>
 CpuToGpuFifo<T>::CpuToGpuFifo(int size) {
   int device;
   MSCCLPP_CUDATHROW(cudaGetDevice(&device));
-  MSCCLPP_CUDATHROW(cudaFree(0)); // force init context for current GPU
+  MSCCLPP_CUDATHROW(cudaFree(0));  // force init context for current GPU
   cudaDeviceProp deviceProp;
   MSCCLPP_CUDATHROW(cudaGetDeviceProperties(&deviceProp, device));
-  std::cout << "Init CpuToGpuFifo at device " << deviceProp.name << " !" << std::endl;
+  std::cout << "Init CpuToGpuFifo at device " << deviceProp.name << " !"
+            << std::endl;
   int numaNode = getDeviceNumaNode(device);
   unsigned long nodemask = 1UL << numaNode;
   if (set_mempolicy(MPOL_PREFERRED, &nodemask, 8 * sizeof(nodemask)) != 0) {
@@ -24,38 +25,35 @@ CpuToGpuFifo<T>::CpuToGpuFifo(int size) {
   pimpl_ = std::make_unique<Impl>(size);
 
   if (pimpl_->buffer.get() == nullptr) {
-      std::cerr << "Error: Buffer allocation failed!" << std::endl;
-      exit(1);
+    std::cerr << "Error: Buffer allocation failed!" << std::endl;
+    exit(1);
   }
   if (pimpl_->head.get() == nullptr) {
-      std::cerr << "Error: Head allocation failed!" << std::endl;
-      exit(1);
+    std::cerr << "Error: Head allocation failed!" << std::endl;
+    exit(1);
   }
   if (pimpl_->tail.get() == nullptr) {
-      std::cerr << "Error: Tail allocation failed!" << std::endl;
-      exit(1);
+    std::cerr << "Error: Tail allocation failed!" << std::endl;
+    exit(1);
   }
 }
 
 template <typename T>
 uint64_t CpuToGpuFifo<T>::push(const T& task) {
-    uint64_t curHead = *(pimpl_->head);
-    T* devBuffer = pimpl_->buffer.get();
+  uint64_t curHead = *(pimpl_->head);
+  T* devBuffer = pimpl_->buffer.get();
 
-    // Copy single task to device
-    MSCCLPP_CUDATHROW(cudaMemcpy(
-      &devBuffer[curHead % pimpl_->size],
-      &task,
-      sizeof(T),
-      cudaMemcpyHostToDevice));
+  // Copy single task to device
+  MSCCLPP_CUDATHROW(cudaMemcpy(&devBuffer[curHead % pimpl_->size], &task,
+                               sizeof(T), cudaMemcpyHostToDevice));
 
-    // Ensure data is visible before publishing head
-    std::atomic_thread_fence(std::memory_order_release);
+  // Ensure data is visible before publishing head
+  std::atomic_thread_fence(std::memory_order_release);
 
-    // Publish the task
-    atomicStore(pimpl_->head.get(), curHead + 1, memoryOrderRelease);
+  // Publish the task
+  atomicStore(pimpl_->head.get(), curHead + 1, memoryOrderRelease);
 
-    return curHead;
+  return curHead;
 }
 
 template <typename T>
@@ -74,16 +72,13 @@ uint64_t CpuToGpuFifo<T>::push(InputIt first, InputIt last) {
   T* devBuf = pimpl_->buffer.get();
   int size = pimpl_->size;
 
-  MSCCLPP_CUDATHROW(cudaMemcpy(
-      &devBuf[curHead % size],
-      &*first,
-      sizeof(T) * count,
-      cudaMemcpyHostToDevice));
+  MSCCLPP_CUDATHROW(cudaMemcpy(&devBuf[curHead % size], &*first,
+                               sizeof(T) * count, cudaMemcpyHostToDevice));
 
   //   __sync_synchronize();
   std::atomic_thread_fence(std::memory_order_release);
   atomicStore(pimpl_->head.get(), curHead + count, memoryOrderRelease);
-  
+
   return curHead;
 }
 
