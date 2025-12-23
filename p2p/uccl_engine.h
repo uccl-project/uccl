@@ -246,7 +246,7 @@ void uccl_engine_conn_destroy(uccl_conn_t* conn);
  * Deregister memory region.
  * @param mr            Memory region handle to destroy.
  */
-void uccl_engine_mr_destroy(uccl_mr_t mr);
+void uccl_engine_mr_destroy(uccl_engine_t* engine, uccl_mr_t mr);
 
 /**
  * Get endpoint metadata for connection establishment.
