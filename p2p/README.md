@@ -67,7 +67,7 @@ USE_EFA=1 bash build_and_install.sh cuda p2p
 make -j USE_EFA=1 install
 ```
 
-To build GCP TCPX support, you can follow [NIXL_plugin_readme.md](./NIXL_plugin_readme.md). 
+To build GCP TCPX support, you can refer to [NIXL_plugin_readme.md](./NIXL_plugin_readme.md). 
 
 ## Performance Benchmarks
 
