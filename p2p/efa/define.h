@@ -38,8 +38,10 @@
 
 #ifdef UCCL_ENABLE_IBRC
 static constexpr int kGidIndex = 3;
+static constexpr uint32_t kMaxInlineData = 128;
 #else
 static constexpr int kGidIndex = 0;
+static constexpr uint32_t kMaxInlineData = 0;
 #endif
 static constexpr int kRankIDPlaceHolder = 9999;
 static constexpr int kEfaQpLowLatencyServiceLevel = 8;

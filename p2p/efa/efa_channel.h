@@ -273,9 +273,12 @@ class EFAChannel {
 
     struct ibv_sge sge[1];
     int num_sge = prepareSGEList(sge, req);
-    // ibv_wr_set_sge_list(qpx, num_sge, sge);
-    ibv_wr_set_sge(qpx, req->getLocalKey(), req->getLocalAddress(),
-                   req->getLocalLen());
+    if (req->getLocalLen() <= kMaxInlineData) {
+      qpx->wr_flags |= IBV_SEND_INLINE;
+      ibv_wr_set_inline_data(qpx, (void *)req->getLocalAddress(), req->getLocalLen());
+    } else {
+      ibv_wr_set_sge_list(qpx, num_sge, sge);
+    }
 
 #ifndef UCCL_ENABLE_IBRC
     ibv_wr_set_ud_addr(qpx, ah_, remote_meta_->qpn, kQKey);
@@ -375,7 +378,7 @@ class EFAChannel {
     qp_attr.cap.max_recv_wr = kMaxRecvWr;
     qp_attr.cap.max_send_sge = kMaxSendSeg;
     qp_attr.cap.max_recv_sge = kMaxRecvSeg;
-    qp_attr.cap.max_inline_data = 0;
+    qp_attr.cap.max_inline_data = kMaxInlineData;
 
     qp_attr.send_cq = ibv_cq_ex_to_cq(cq_ex_);
     qp_attr.recv_cq = ibv_cq_ex_to_cq(cq_ex_);
