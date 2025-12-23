@@ -78,7 +78,11 @@ def create_nixl_agent_mc(role: str, dataset, zmq_socket, device_idx, backend):
     """
     Create Nixl agents based on the role with Mooncake/UCCL backend
     """
-    backend_name = "Mooncake" if backend == "mooncake" else "UCCL"
+    backend_name = (
+        "Mooncake"
+        if backend == "mooncake"
+        else ("UCCL" if backend == "uccl" else backend.upper())
+    )
     config = nixl_agent_config(backends=[backend_name])
     agent = nixl_agent(role, config)
     descs = agent.get_reg_descs(dataset)
@@ -260,7 +264,7 @@ def start_transfer(size, num_kvblocks, args):
         transfer_handle = None
         register_descs = None
 
-        # Suppress stdout for better output
+        # Suppress stdout for better output during agent setup
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
         if args.backend == "mooncake" or args.backend == "uccl":
@@ -273,8 +277,9 @@ def start_transfer(size, num_kvblocks, args):
 
         total_size = 0
         total_transfer_time = 0.0
+        warmup = 1 if args.iters > 1 else 0
 
-        for _ in range(args.iters):
+        for iter_idx in range(args.iters):
             if args.backend == "mooncake" or args.backend == "uccl":
                 transfer_handle = init_transfer_metadata_mc(
                     args.role, op, agent, register_descs, zmq_socket
@@ -291,16 +296,27 @@ def start_transfer(size, num_kvblocks, args):
             start = time.perf_counter()
             if args.backend == "mooncake" or args.backend == "uccl":
                 do_transfer_mc(args.role, agent, transfer_handle, zmq_socket)
-                total_size += size
             else:
                 do_transfer_ucx(args.role, agent, transfer_handle)
-                total_size += size
 
             end = time.perf_counter()
             transfer_time = end - start
-            total_transfer_time += transfer_time
+            if iter_idx >= warmup:
+                total_transfer_time += transfer_time
+                total_size += size
 
-        avg_transfer_time = total_transfer_time / args.iters
+            # [PERF LOG] Per-iteration bandwidth
+            iter_bw = size / transfer_time / 1e9
+            print(
+                f"[PERF] Iteration {iter_idx}: {transfer_time*1000:.2f} ms, {iter_bw:.2f} GB/s",
+                flush=True,
+            )
+
+        effective_iters = max(args.iters - warmup, 1)
+        if total_transfer_time == 0:
+            total_transfer_time = transfer_time
+            total_size = size
+        avg_transfer_time = total_transfer_time / effective_iters
         gbps = (total_size * 8) / total_transfer_time / 1e9  # bits per second → Gbps
         gb_sec = total_size / total_transfer_time / 1e9  # bytes per second → GB/s
         lat = avg_transfer_time  # Average latency per transfer

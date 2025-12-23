@@ -7,6 +7,7 @@
  *    -l: Latency mode (RTT measurement)
  *    -b: Burst mode (no polling)
  *    -r: Random mode (each thread randomly selects a FIFO)
+ *    -c: Control Mops mode, fifo evaluation for mops vs latency
  */
 
 #include "../../include/fifo.hpp"
@@ -32,10 +33,12 @@ struct BenchmarkConfig {
   uint32_t fifo_size;          // FIFO size
   uint32_t test_duration_ms;   // Test duration in milliseconds
   uint32_t warmup_iterations;  // Number of warmup iterations
-  uint32_t batch_size;   // Batch size for in-flight requests (default: 32)
-  float gpu_clock_ghz;   // GPU clock rate in GHz
-  bool measure_latency;  // Whether to measure GPU-side latency
-  int mode;              // 0: throughput, 1: latency, 2: burst, 3: random
+  uint32_t batch_size;
+  float gpu_clock_ghz;
+  bool measure_latency;
+  int mode;
+  uint64_t sleep_cycles;
+  float target_mops;
 };
 
 // Metrics collected from GPU
@@ -100,12 +103,33 @@ void printThroughputResults(
     double duration_sec, BenchmarkConfig const& config,
     std::vector<uint64_t> const* latency_samples = nullptr) {
   uint64_t total_pushes = 0;
+  uint64_t total_cycles = 0;
   for (auto const& m : metrics) {
     total_pushes += m.push_count;
+    total_cycles += m.total_cycles;
   }
 
   double throughput_mops = total_pushes / duration_sec / 1e6;
   double proxy_throughput_mops = processed_count / duration_sec / 1e6;
+
+  if (config.mode == 4) {
+    double avg_latency_ns =
+        (total_pushes > 0)
+            ? (double)total_cycles / total_pushes / config.gpu_clock_ghz / 2.0
+            : 0;
+    double p99_latency_ns = 0;
+    if (latency_samples && !latency_samples->empty()) {
+      std::vector<uint64_t> sorted_samples = *latency_samples;
+      std::sort(sorted_samples.begin(), sorted_samples.end());
+      size_t p99_idx = (sorted_samples.size() * 99) / 100;
+      if (p99_idx >= sorted_samples.size()) p99_idx = sorted_samples.size() - 1;
+      p99_latency_ns = sorted_samples[p99_idx] / config.gpu_clock_ghz / 2.0;
+    }
+    printf("%11.1f | %7u | %11.2f | %16.0f | %16.0f\n", config.target_mops,
+           config.num_threads / 32, throughput_mops, avg_latency_ns,
+           p99_latency_ns);
+    return;
+  }
 
   printf("Threads: %4u | FIFO Size: %4u | ", config.num_threads,
          config.fifo_size);
@@ -149,12 +173,13 @@ void printThroughputResults(
   printf("\n");
 }
 
+constexpr int NUM_SMS = 128;
+constexpr int NUM_FIFOS = 32;
+constexpr int NUM_PROXIES = 4;
+constexpr int FIFOS_PER_PROXY = NUM_FIFOS / NUM_PROXIES;
+
 // Run single benchmark test
 void runBenchmark(BenchmarkConfig const& config) {
-  constexpr int NUM_FIFOS = 32;
-  constexpr int NUM_PROXIES = 4;
-  constexpr int FIFOS_PER_PROXY = NUM_FIFOS / NUM_PROXIES;
-
   // Create 32 FIFOs
   std::vector<std::unique_ptr<Fifo>> fifos;
   std::vector<FifoDeviceHandle> deviceHandles;
@@ -200,7 +225,7 @@ void runBenchmark(BenchmarkConfig const& config) {
   }
 
   // Launch GPU kernel
-  dim3 grid(NUM_FIFOS);
+  dim3 grid(NUM_SMS);
   dim3 block((config.num_threads + grid.x - 1) / grid.x);
 
   auto start_time = std::chrono::high_resolution_clock::now();
@@ -232,6 +257,13 @@ void runBenchmark(BenchmarkConfig const& config) {
                            config.warmup_iterations, d_stop_flag,
                            config.gpu_clock_ghz, NUM_FIFOS, d_latency_samples,
                            MAX_LATENCY_SAMPLES);
+  } else if (config.mode == 4) {
+    // Use control MOPs mode, to get latency vs mops curve
+    launchFifoControlledMopsKernel(
+        grid, block, d_fifo_handles, d_metrics, config.num_threads,
+        config.test_duration_ms, config.warmup_iterations, d_stop_flag,
+        config.gpu_clock_ghz, NUM_FIFOS, d_latency_samples, MAX_LATENCY_SAMPLES,
+        config.sleep_cycles);
   }
 
   // Wait for test duration (or kernel completion for latency mode)
@@ -318,7 +350,8 @@ int main(int argc, char** argv) {
   printf("GPU %d: %s\n", local_rank, prop.name);
   printf("SM count: %d\n", prop.multiProcessorCount);
   printf("GPU Clock: %.2f GHz\n", gpu_clock_ghz);
-  printf("Configuration: 32 FIFOs, 4 Proxy Threads (8 FIFOs/proxy)\n\n");
+  printf("Configuration: %d FIFOs, %d Proxy Threads (%d FIFOs/proxy)\n\n",
+         NUM_FIFOS, NUM_PROXIES, NUM_FIFOS / NUM_PROXIES);
 
   BenchmarkConfig config = {.num_threads = 32,
                             .fifo_size = 2048,
@@ -327,7 +360,9 @@ int main(int argc, char** argv) {
                             .batch_size = 32,
                             .gpu_clock_ghz = gpu_clock_ghz,
                             .measure_latency = true,
-                            .mode = 0};
+                            .mode = 0,
+                            .sleep_cycles = 0,
+                            .target_mops = 0.0f};
 
   // Parse command line arguments
   for (int i = 1; i < argc; i++) {
@@ -337,11 +372,13 @@ int main(int argc, char** argv) {
       config.mode = 2;
     } else if (std::string(argv[i]) == "-r") {
       config.mode = 3;
+    } else if (std::string(argv[i]) == "-c") {
+      config.mode = 4;
     }
   }
 
   // Test configurations
-  std::vector<uint32_t> thread_counts = {1, 32, 64, 128, 256, 512};
+  std::vector<uint32_t> thread_counts = {1, 32, 64, 128, 256, 512, 1024};
   std::vector<uint32_t> fifo_sizes = {2048, 4096};
 
   if (config.mode == 0) {
@@ -363,6 +400,27 @@ int main(int argc, char** argv) {
     // Random FIFO selection tests
     printf("--- FIFO Random Selection Tests ---\n");
     printf("(Each thread randomly selects a FIFO for each push)\n\n");
+  } else if (config.mode == 4) {
+    printf("(Measuring latency vs. Mops with controlled mops)\n");
+    printf(
+        "Target Mops | Threads | Actual Mops | Avg Latency (ns) | P99 "
+        "Latency (ns)\n");
+
+    config.num_threads = 1024;
+    config.fifo_size = 4096;
+    config.test_duration_ms = 5000;
+
+    for (float target_mops = 0.5f; target_mops <= 22.0f; target_mops += 0.5f) {
+      uint32_t num_active_threads = config.num_threads / 32;
+      float ops_per_thread_per_sec = (target_mops * 1e6f) / num_active_threads;
+      float sleep_time_sec = 1.0f / ops_per_thread_per_sec;
+      uint64_t sleep_ns = (uint64_t)(sleep_time_sec * 1e9f * 4.0f);
+
+      config.sleep_cycles = sleep_ns;
+      config.target_mops = target_mops;
+      runBenchmark(config);
+    }
+    return 0;
   }
 
   for (auto fifo_size : fifo_sizes) {

@@ -1,2 +1,4 @@
 *.txt
+*.csv
 logs
+test_efa_endpoint

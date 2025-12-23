@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "endpoint_wrapper.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
@@ -59,17 +60,23 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
 
   std::call_once(glog_init_once,
                  []() { google::InitGoogleLogging("uccl_p2p"); });
-
+  FLAGS_minloglevel = parseLogLevelFromEnv();
+  FLAGS_logtostderr = true;
   google::InstallFailureSignalHandler();
 
   // Initialize the RDMA endpoint with lazy creation.
+#ifdef UCCL_P2P_USE_EFA
+  ep_ = std::shared_ptr<EFAEndpoint>(
+      new EFAEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
+  numa_node_ = 0;
+#else
   ep_ = new uccl::RDMAEndpoint(num_cpus_);
 
   // Only initialize mapping for detected GPUs
   int ngpus_detected = 0;
   GPU_RT_CHECK(gpuGetDeviceCount(&ngpus_detected));
   for (int i = 0; i < std::min(ngpus_detected, kMaxNumGPUs); i++) {
-    gpu_to_dev[i] = ep_->get_best_dev_idx(i);
+    gpu_to_dev[i] = unified::get_best_dev_idx(ep_, i);
   }
   // Initialize remaining slots to 0 (fallback to first device)
   for (int i = ngpus_detected; i < kMaxNumGPUs; i++) {
@@ -77,12 +84,14 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   }
   numa_node_ =
       uccl::RDMAFactory::get_factory_dev(gpu_to_dev[local_gpu_idx_])->numa_node;
-
   // Initialize the engine based on the GPU index.
   std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
             << std::endl;
-  ep_->initialize_engine_by_dev(gpu_to_dev[local_gpu_idx_], true);
+  unified::initialize_engine_by_dev(ep_, gpu_to_dev[local_gpu_idx_], true);
+#endif
+
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
+  engine_initialized_ = true;
 
   send_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
@@ -98,6 +107,48 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
+Endpoint::Endpoint(uint32_t const num_cpus) : num_cpus_(num_cpus) {
+  std::cout << "Creating Engine with CPUs: " << num_cpus << std::endl;
+  int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
+
+  int ngpus = 0;
+  GPU_RT_CHECK(gpuGetDeviceCount(&ngpus));
+  ipc_streams_.resize(ngpus);
+  for (int i = 0; i < ngpus; ++i) {
+    GPU_RT_CHECK(gpuSetDevice(i));
+    ipc_streams_[i].resize(n_streams);
+    for (int j = 0; j < n_streams; ++j) {
+      GPU_RT_CHECK(
+          gpuStreamCreateWithFlags(&ipc_streams_[i][j], gpuStreamNonBlocking));
+    }
+  }
+
+  std::call_once(glog_init_once,
+                 []() { google::InitGoogleLogging("uccl_p2p"); });
+
+  google::InstallFailureSignalHandler();
+#ifdef UCCL_P2P_USE_EFA
+  ep_ = std::shared_ptr<EFAEndpoint>(
+      new EFAEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
+#else
+  // Initialize the RDMA endpoint with lazy creation.
+  ep_ = new uccl::RDMAEndpoint(num_cpus_);
+  // Create a unified P2P socket, which is used to synchronize dev_idx
+  unified::create_unified_p2p_socket(ep_);
+  // Only initialize mapping for detected GPUs
+  int ngpus_detected = 0;
+  GPU_RT_CHECK(gpuGetDeviceCount(&ngpus_detected));
+  for (int i = 0; i < std::min(ngpus_detected, kMaxNumGPUs); i++) {
+    gpu_to_dev[i] = unified::get_best_dev_idx(ep_, i);
+  }
+  // Initialize remaining slots to 0 (fallback to first device)
+  for (int i = ngpus_detected; i < kMaxNumGPUs; i++) {
+    gpu_to_dev[i] = 0;
+  }
+#endif
+  std::cout << "Endpoint initialized successfully" << std::endl;
+}
+
 Endpoint::~Endpoint() {
   std::cout << "Destroying Engine..." << std::endl;
 
@@ -108,8 +159,7 @@ Endpoint::~Endpoint() {
 
   free(send_unified_task_ring_);
   free(recv_unified_task_ring_);
-
-  delete ep_;
+  unified::delete_ep(ep_);
 
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -140,19 +190,50 @@ Endpoint::~Endpoint() {
   std::cout << "Engine destroyed" << std::endl;
 }
 
+void Endpoint::initialize_engine() {
+  int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+  streams_.resize(n_streams);
+  for (int i = 0; i < n_streams; ++i) {
+    GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i], gpuStreamNonBlocking));
+  }
+
+  numa_node_ =
+      uccl::RDMAFactory::get_factory_dev(gpu_to_dev[local_gpu_idx_])->numa_node;
+
+  // Initialize the engine based on the GPU index.
+  std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
+            << std::endl;
+  // Initialize engine by fixed engine offset since we did lazy initialization
+#ifndef UCCL_P2P_USE_EFA
+  unified::initialize_engine_by_dev(ep_, gpu_to_dev[local_gpu_idx_], false);
+  std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
+#endif
+
+  send_unified_task_ring_ =
+      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+  recv_unified_task_ring_ =
+      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+
+  send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
+  recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
+
+  // Initialize UDS socket for local connections
+  init_uds_socket();
+}
+
 bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                        uint64_t& conn_id) {
   std::cout << "Attempting to connect to " << ip_addr << ":" << remote_gpu_idx
             << " via port " << remote_port << std::endl;
-
   // Create a new connection ID
   conn_id = next_conn_id_.fetch_add(1);
 
   std::future<uccl::ConnID> uccl_conn_id_future = std::async(
       std::launch::async, [this, remote_gpu_idx, &ip_addr, remote_port]() {
-        return ep_->uccl_connect(gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
-                                 gpu_to_dev[remote_gpu_idx], remote_gpu_idx,
-                                 ip_addr, remote_port);
+        return unified::uccl_connect(ep_, gpu_to_dev[local_gpu_idx_],
+                                     local_gpu_idx_, gpu_to_dev[remote_gpu_idx],
+                                     remote_gpu_idx, ip_addr, remote_port);
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
@@ -173,8 +254,8 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
 }
 
 std::vector<uint8_t> Endpoint::get_metadata() {
-  std::string ip_str = get_oob_ip();
-  uint16_t port = ep_->get_p2p_listen_port(gpu_to_dev[local_gpu_idx_]);
+  std::string ip_str = uccl::get_oob_ip();
+  uint16_t port = unified::get_p2p_listen_port(ep_, gpu_to_dev[local_gpu_idx_]);
 
   bool is_ipv6 = ip_str.find(':') != std::string::npos;
   size_t ip_len = is_ipv6 ? 16 : 4;
@@ -206,6 +287,40 @@ std::vector<uint8_t> Endpoint::get_metadata() {
   return metadata;
 }
 
+std::vector<uint8_t> Endpoint::get_unified_metadata() {
+  int idx = 0;
+  std::string ip_str = uccl::get_oob_ip();
+  uint16_t port = unified::get_p2p_listen_port(ep_, 0);
+
+  bool is_ipv6 = ip_str.find(':') != std::string::npos;
+  size_t ip_len = is_ipv6 ? 16 : 4;
+
+  // Additional 2 bytes for port and 4 bytes for local_gpu_idx_
+  size_t total_len = ip_len + 2 + sizeof(int);
+  std::vector<uint8_t> metadata(total_len);
+
+  // Copy IP
+  if (is_ipv6) {
+    struct in6_addr ip6_bin;
+    if (inet_pton(AF_INET6, ip_str.c_str(), &ip6_bin) != 1)
+      throw std::runtime_error("Invalid IPv6 address: " + ip_str);
+    std::memcpy(metadata.data(), &ip6_bin, 16);
+  } else {
+    struct in_addr ip4_bin;
+    if (inet_pton(AF_INET, ip_str.c_str(), &ip4_bin) != 1)
+      throw std::runtime_error("Invalid IPv4 address: " + ip_str);
+    std::memcpy(metadata.data(), &ip4_bin, 4);
+  }
+
+  // Copy port in network byte order
+  uint16_t net_port = htons(port);
+  std::memcpy(metadata.data() + ip_len, &net_port, 2);
+
+  // Copy local_gpu_idx_ in host byte order
+  std::memcpy(metadata.data() + ip_len + 2, &idx, sizeof(int));
+
+  return metadata;
+}
 std::tuple<std::string, uint16_t, int> Endpoint::parse_metadata(
     std::vector<uint8_t> const& metadata) {
   if (metadata.size() == 10) {
@@ -253,13 +368,17 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   // For demo purposes, simulate accepted connection
   conn_id = next_conn_id_.fetch_add(1);
 
+  // Wait until engine is intialized to get the correct local_gpu_idx_
+  while (!engine_initialized_) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
   std::future<uccl::ConnID> uccl_conn_id_future =
       std::async(std::launch::async, [this, &ip_addr, &remote_gpu_idx]() {
         auto dev_idx = gpu_to_dev[local_gpu_idx_];
-        auto p2p_listen_fd = ep_->get_p2p_listen_fd(dev_idx);
+        auto p2p_listen_fd = unified::get_p2p_listen_fd(ep_, dev_idx);
         int remote_dev_idx;
-        return ep_->uccl_accept(dev_idx, p2p_listen_fd, local_gpu_idx_, ip_addr,
-                                &remote_dev_idx, &remote_gpu_idx);
+        return unified::uccl_accept(ep_, dev_idx, p2p_listen_fd, local_gpu_idx_,
+                                    ip_addr, &remote_dev_idx, &remote_gpu_idx);
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
@@ -283,13 +402,23 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
 bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   mr_id = next_mr_id_.fetch_add(1);
 
-  uccl::Mhandle* mhandle;
-  ep_->uccl_regmr(gpu_to_dev[local_gpu_idx_], const_cast<void*>(data), size, 0,
-                  &mhandle);
-  if (mhandle->mr == nullptr) {
-    std::cerr << "[Endpoint::reg] Failed to register memory region, "
-              << "mhandle->mr is null\n";
-    std::abort();
+  if (!engine_initialized_) {
+    int idx = uccl::get_dev_idx((void*)data);
+    if (idx != -1) {
+      // Pointer is on device idx
+      local_gpu_idx_ = idx;
+    } else {
+      // Host memory/unknown memory type - fallback to dev 0
+      local_gpu_idx_ = 0;
+    }
+    initialize_engine();
+    engine_initialized_ = true;
+  }
+
+  unified::P2PMhandle* mhandle = new unified::P2PMhandle();
+  if (!unified::uccl_regmr(ep_, gpu_to_dev[local_gpu_idx_],
+                           const_cast<void*>(data), size, 0, mhandle)) {
+    return false;
   }
   {
     std::unique_lock<std::shared_mutex> lock(mr_mu_);
@@ -316,12 +445,11 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
 
   for (size_t i = 0; i < n; ++i) {
     uint64_t id = next_mr_id_.fetch_add(1);
-    uccl::Mhandle* mhandle = nullptr;
+    unified::P2PMhandle* mhandle = new unified::P2PMhandle();
 
-    ep_->uccl_regmr(gpu_to_dev[local_gpu_idx_], const_cast<void*>(data_v[i]),
-                    size_v[i], 0, &mhandle);
-
-    if (mhandle == nullptr || mhandle->mr == nullptr) {
+    if (!unified::uccl_regmr(ep_, gpu_to_dev[local_gpu_idx_],
+                             const_cast<void*>(data_v[i]), size_v[i], 0,
+                             mhandle)) {
       std::cerr << "[Endpoint::regv] registration failed at i=" << i << '\n';
       return false;
     }
@@ -339,7 +467,7 @@ bool Endpoint::dereg(uint64_t mr_id) {
   {
     std::unique_lock<std::shared_mutex> lock(mr_mu_);
     MR* mr = mr_id_to_mr_[mr_id];
-    ep_->uccl_deregmr(mr->mhandle_);
+    unified::uccl_deregmr(ep_, mr->mhandle_);
     delete mr;
     mr_id_to_mr_.erase(mr_id);
   }
@@ -356,7 +484,7 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
     conn = conn_id_to_conn_[conn_id];
   }
 
-  uccl::Mhandle* mhandle;
+  unified::P2PMhandle* mhandle;
   {
     std::shared_lock<std::shared_mutex> lock(mr_mu_);
     mhandle = mr_id_to_mr_[mr_id]->mhandle_;
@@ -370,13 +498,15 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   int ureq_max = (size + kChunkSize - 1) / kChunkSize;
   int ureq_issued = 0, ureq_finished = 0;
 
+  // std::cout << "ureq_max::::" << ureq_max << std::endl << std::flush;
   while (ureq_finished < ureq_max) {
+    // std::cout<< "ureq_finished::"<<ureq_finished<<std::endl<<std::flush;
     while (ureq_issued - ureq_finished < kMaxInflightChunks &&
            size_sent < size) {
       size_t chunk_size = std::min(size - size_sent, kChunkSize);
-      auto rc = ep_->uccl_send_async(
-          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
-          cur_data, chunk_size, &ureq[ureq_issued % kMaxInflightChunks]);
+      auto rc =
+          unified::uccl_send_async(ep_, conn, mhandle, cur_data, chunk_size,
+                                   &ureq[ureq_issued % kMaxInflightChunks]);
       if (rc == -1) break;
       cur_data += chunk_size;
       size_sent += chunk_size;
@@ -390,7 +520,8 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
       if (done[i % kMaxInflightChunks]) {
         continue;
       }
-      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+      if (unified::uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightChunks])) {
+        // std::cout << "chunk sent::::" << i << std::endl << std::flush;
         // Just mark it as completed, DO NOT increment ureq_finished here.
         done[i % kMaxInflightChunks] = true;
       }
@@ -413,7 +544,7 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
     conn = conn_id_to_conn_[conn_id];
   }
 
-  uccl::Mhandle* mhandle;
+  unified::P2PMhandle* mhandle;
   {
     std::shared_lock<std::shared_mutex> lock(mr_mu_);
     mhandle = mr_id_to_mr_[mr_id]->mhandle_;
@@ -432,9 +563,9 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
     while (ureq_issued - ureq_finished < kMaxInflightChunks &&
            size_post_recv < size) {
       int chunk_size = std::min(size - size_post_recv, kChunkSize);
-      auto rc = ep_->uccl_recv_async(
-          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
-          &cur_data, &chunk_size, 1, &ureq[ureq_issued % kMaxInflightChunks]);
+      auto rc =
+          unified::uccl_recv_async(ep_, conn, mhandle, &cur_data, &chunk_size,
+                                   1, &ureq[ureq_issued % kMaxInflightChunks]);
       if (rc == -1) break;
       cur_data += chunk_size;
       size_post_recv += chunk_size;
@@ -448,8 +579,9 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
       if (done[i % kMaxInflightChunks]) {
         continue;
       }
-      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+      if (unified::uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightChunks])) {
         // Just mark it as completed, DO NOT increment ureq_finished here.
+        LOG(INFO) << "chunk recv::::" << i;
         done[i % kMaxInflightChunks] = true;
       }
     }
@@ -523,7 +655,7 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
   std::vector<void*> data_send_vec;
   std::vector<size_t> size_send_vec;
-  std::vector<uccl::Mhandle*> mhandle_send_vec;
+  std::vector<unified::P2PMhandle*> mhandle_send_vec;
   // Avoid reallocations.
   data_send_vec.reserve(estimated_ureq_max);
   size_send_vec.reserve(estimated_ureq_max);
@@ -561,8 +693,8 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     while (ureq_issued < ureq_max &&
            ureq_issued - ureq_finished < kMaxInflightChunks &&
            size_send_vec[ureq_issued] > 0) {
-      auto rc = ep_->uccl_send_async(
-          uccl_flow, mhandle_send_vec[ureq_issued], data_send_vec[ureq_issued],
+      auto rc = unified::uccl_send_async(
+          ep_, conn, mhandle_send_vec[ureq_issued], data_send_vec[ureq_issued],
           size_send_vec[ureq_issued], &ureq[ureq_issued % kMaxInflightChunks]);
       if (rc == -1) break;
       done[ureq_issued % kMaxInflightChunks] = false;
@@ -574,7 +706,7 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       if (done[i % kMaxInflightChunks]) {
         continue;
       }
-      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+      if (unified::uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightChunks])) {
         done[i % kMaxInflightChunks] = true;
       }
     }
@@ -611,8 +743,8 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   std::vector<void*> data_recv_vec;
   std::vector<void**> data_recv_ptr_vec;
   std::vector<int> size_recv_vec;
-  std::vector<uccl::Mhandle*> mhandle_recv_vec;
-  std::vector<uccl::Mhandle**> mhandle_recv_ptr_vec;
+  std::vector<unified::P2PMhandle*> mhandle_recv_vec;
+  std::vector<unified::P2PMhandle**> mhandle_recv_ptr_vec;
 
   int estimated_ureq_max = 0;
   for (int i = 0; i < num_iovs; i++) {
@@ -660,8 +792,8 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     while (ureq_issued < ureq_max &&
            ureq_issued - ureq_finished < kMaxInflightChunks &&
            size_recv_vec[ureq_issued] > 0) {
-      auto rc = ep_->uccl_recv_async(
-          uccl_flow, mhandle_recv_ptr_vec[ureq_issued],
+      auto rc = unified::uccl_recv_async(
+          ep_, conn, *mhandle_recv_ptr_vec[ureq_issued],
           data_recv_ptr_vec[ureq_issued], &size_recv_vec[ureq_issued], 1,
           &ureq[ureq_issued % kMaxInflightChunks]);
       if (rc == -1) break;
@@ -674,7 +806,7 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       if (done[i % kMaxInflightChunks]) {
         continue;
       }
-      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+      if (unified::uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightChunks])) {
         done[i % kMaxInflightChunks] = true;
       }
     }
@@ -689,10 +821,10 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 }
 
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
-                    uccl::FifoItem const& slot_item) {
+                    FifoItem const& slot_item) {
   if (!ucclParamRCMode()) {
-    DCHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
-                     "be True in transport_config.h";
+    CHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
+                    "be True in transport_config.h";
     std::abort();
   }
 
@@ -701,7 +833,7 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
 
   uccl::ucclRequest ureq[kMaxInflightChunks] = {};
-  uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
+  FifoItem curr_slot_item[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
 
   void* cur_data = dst;
@@ -722,9 +854,8 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
           ureq_issued % num_engines;
       memset(&ureq[ureq_issued % kMaxInflightChunks], 0,
              sizeof(uccl::ucclRequest));
-      auto rc = ep_->uccl_read_async(
-          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
-          cur_data, chunk_size,
+      auto rc = unified::uccl_read_async(
+          ep_, conn, mhandle, cur_data, chunk_size,
           curr_slot_item[ureq_issued % kMaxInflightChunks],
           &ureq[ureq_issued % kMaxInflightChunks]);
       if (rc == -1) break;
@@ -740,7 +871,7 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
       if (done[i % kMaxInflightChunks]) {
         continue;
       }
-      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+      if (unified::uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightChunks])) {
         // Just mark it as completed, DO NOT increment ureq_finished here.
         done[i % kMaxInflightChunks] = true;
       }
@@ -757,7 +888,7 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
 }
 
 bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
-                          size_t size, uccl::FifoItem const& slot_item,
+                          size_t size, FifoItem const& slot_item,
                           uint64_t* transfer_id) {
   UnifiedTask* rw_task =
       create_net_task(conn_id, mr_id, TaskType::READ_NET, dst, size, slot_item);
@@ -821,12 +952,12 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
 bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> dst_v, std::vector<size_t> size_v,
-                     std::vector<uccl::FifoItem> slot_item_v, size_t num_iovs) {
+                     std::vector<FifoItem> slot_item_v, size_t num_iovs) {
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
   uccl::ucclRequest ureq[kMaxInflightChunks] = {};
-  uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
+  FifoItem curr_slot_item[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
 
   int estimated_ureq_max = 0;
@@ -836,8 +967,8 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
   std::vector<void*> data_read_vec;
   std::vector<size_t> size_read_vec;
-  std::vector<uccl::Mhandle*> mhandle_read_vec;
-  std::vector<uccl::FifoItem> slot_item_vec;
+  std::vector<unified::P2PMhandle*> mhandle_read_vec;
+  std::vector<FifoItem> slot_item_vec;
   // Avoid reallocations.
   data_read_vec.reserve(estimated_ureq_max);
   size_read_vec.reserve(estimated_ureq_max);
@@ -848,13 +979,13 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     void* cur_data = dst_v[i];
     size_t cur_size_expected = size_v[i];
     size_t cur_size_post_read = 0;
-    uccl::FifoItem base_slot_item = slot_item_v[i];
+    FifoItem base_slot_item = slot_item_v[i];
     auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
 
     while (cur_size_post_read < cur_size_expected) {
       size_t chunk_size =
           std::min(cur_size_expected - cur_size_post_read, (size_t)kChunkSize);
-      uccl::FifoItem chunk_slot_item = base_slot_item;
+      FifoItem chunk_slot_item = base_slot_item;
       chunk_slot_item.addr += cur_size_post_read;
       chunk_slot_item.size = chunk_size;
       // engine_offset will be set later
@@ -880,8 +1011,8 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
           slot_item_vec[ureq_issued];
       memset(&ureq[ureq_issued % kMaxInflightChunks], 0,
              sizeof(uccl::ucclRequest));
-      auto rc = ep_->uccl_read_async(
-          uccl_flow, mhandle_read_vec[ureq_issued], data_read_vec[ureq_issued],
+      auto rc = unified::uccl_read_async(
+          ep_, conn, mhandle_read_vec[ureq_issued], data_read_vec[ureq_issued],
           size_read_vec[ureq_issued],
           curr_slot_item[ureq_issued % kMaxInflightChunks],
           &ureq[ureq_issued % kMaxInflightChunks]);
@@ -895,7 +1026,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       if (done[i % kMaxInflightChunks]) {
         continue;
       }
-      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+      if (unified::uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightChunks])) {
         done[i % kMaxInflightChunks] = true;
       }
     }
@@ -909,8 +1040,29 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   return true;
 }
 
+bool Endpoint::readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                           std::vector<void*> dst_v, std::vector<size_t> size_v,
+                           std::vector<FifoItem> slot_item_v, size_t num_iovs,
+                           uint64_t* transfer_id) {
+  // Use move semantics to reduce memory copies
+  UnifiedTask* task =
+      create_readv_task(conn_id, std::move(dst_v), std::move(size_v),
+                        std::move(mr_id_v), std::move(slot_item_v));
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
+
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
+         1) {
+  }
+
+  return true;
+}
+
 bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
-                           size_t size, uccl::FifoItem const& slot_item,
+                           size_t size, FifoItem const& slot_item,
                            uint64_t* transfer_id) {
   UnifiedTask* rw_task = create_net_task(conn_id, mr_id, TaskType::WRITE_NET,
                                          src, size, slot_item);
@@ -928,13 +1080,12 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
 
 bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                       std::vector<void*> src_v, std::vector<size_t> size_v,
-                      std::vector<uccl::FifoItem> slot_item_v,
-                      size_t num_iovs) {
+                      std::vector<FifoItem> slot_item_v, size_t num_iovs) {
   auto conn = conn_id_to_conn_[conn_id];
   auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
   uccl::ucclRequest ureq[kMaxInflightChunks] = {};
-  uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
+  FifoItem curr_slot_item[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
 
   int estimated_ureq_max = 0;
@@ -944,8 +1095,8 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
   std::vector<void*> data_write_vec;
   std::vector<size_t> size_write_vec;
-  std::vector<uccl::Mhandle*> mhandle_write_vec;
-  std::vector<uccl::FifoItem> slot_item_vec;
+  std::vector<unified::P2PMhandle*> mhandle_write_vec;
+  std::vector<FifoItem> slot_item_vec;
   // Avoid reallocations.
   data_write_vec.reserve(estimated_ureq_max);
   size_write_vec.reserve(estimated_ureq_max);
@@ -956,13 +1107,13 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     void* cur_data = src_v[i];
     size_t cur_size_expected = size_v[i];
     size_t cur_size_post_write = 0;
-    uccl::FifoItem base_slot_item = slot_item_v[i];
+    FifoItem base_slot_item = slot_item_v[i];
     auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
 
     while (cur_size_post_write < cur_size_expected) {
       size_t chunk_size =
           std::min(cur_size_expected - cur_size_post_write, (size_t)kChunkSize);
-      uccl::FifoItem chunk_slot_item = base_slot_item;
+      FifoItem chunk_slot_item = base_slot_item;
       chunk_slot_item.addr += cur_size_post_write;
       chunk_slot_item.size = chunk_size;
       // engine_offset will be set later
@@ -988,8 +1139,8 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
           slot_item_vec[ureq_issued];
       memset(&ureq[ureq_issued % kMaxInflightChunks], 0,
              sizeof(uccl::ucclRequest));
-      auto rc = ep_->uccl_write_async(
-          uccl_flow, mhandle_write_vec[ureq_issued],
+      auto rc = unified::uccl_write_async(
+          ep_, conn, mhandle_write_vec[ureq_issued],
           data_write_vec[ureq_issued], size_write_vec[ureq_issued],
           curr_slot_item[ureq_issued % kMaxInflightChunks],
           &ureq[ureq_issued % kMaxInflightChunks]);
@@ -1003,7 +1154,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       if (done[i % kMaxInflightChunks]) {
         continue;
       }
-      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+      if (unified::uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightChunks])) {
         done[i % kMaxInflightChunks] = true;
       }
     }
@@ -1017,10 +1168,32 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   return true;
 }
 
+bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                            std::vector<void*> src_v,
+                            std::vector<size_t> size_v,
+                            std::vector<FifoItem> slot_item_v, size_t num_iovs,
+                            uint64_t* transfer_id) {
+  // Use move semantics to reduce memory copies
+  UnifiedTask* task =
+      create_writev_task(conn_id, std::move(src_v), std::move(size_v),
+                         std::move(mr_id_v), std::move(slot_item_v));
+  if (unlikely(task == nullptr)) {
+    return false;
+  }
+
+  *transfer_id = reinterpret_cast<uint64_t>(task);
+
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
+         1) {
+  }
+
+  return true;
+}
+
 bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
-                     uccl::FifoItem const& slot_item) {
+                     FifoItem const& slot_item) {
   if (!ucclParamRCMode()) {
-    DCHECK(false) << "We only support RC mode for now.";
+    CHECK(false) << "We only support RC mode for now.";
     std::abort();
   }
 
@@ -1029,7 +1202,7 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
   auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
 
   uccl::ucclRequest ureq[kMaxInflightChunks] = {};
-  uccl::FifoItem curr_slot_item[kMaxInflightChunks] = {};
+  FifoItem curr_slot_item[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
 
   void* cur_data = src;
@@ -1050,9 +1223,8 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
           ureq_issued % num_engines;
       memset(&ureq[ureq_issued % kMaxInflightChunks], 0,
              sizeof(uccl::ucclRequest));
-      auto rc = ep_->uccl_write_async(
-          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mhandle,
-          cur_data, chunk_size,
+      auto rc = unified::uccl_write_async(
+          ep_, conn, mhandle, cur_data, chunk_size,
           curr_slot_item[ureq_issued % kMaxInflightChunks],
           &ureq[ureq_issued % kMaxInflightChunks]);
       if (rc == -1) break;
@@ -1068,7 +1240,7 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
       if (done[i % kMaxInflightChunks]) {
         continue;
       }
-      if (ep_->uccl_poll_ureq_once(&ureq[i % kMaxInflightChunks])) {
+      if (unified::uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightChunks])) {
         // Just mark it as completed, DO NOT increment ureq_finished here.
         done[i % kMaxInflightChunks] = true;
       }
@@ -1087,10 +1259,8 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
   auto* conn = conn_id_to_conn_[conn_id];
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
-  uccl::ucclRequest req_data;
-  if (ep_->prepare_fifo_metadata(
-          static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
-          addr, len, out_buf) == -1)
+  if (unified::prepare_fifo_metadata(ep_, conn, mhandle, addr, len, out_buf) ==
+      -1)
     return false;
   return true;
 }
@@ -1101,9 +1271,8 @@ bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   auto* conn = conn_id_to_conn_[conn_id];
   for (size_t i = 0; i < num_iovs; ++i) {
     auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
-    if (ep_->prepare_fifo_metadata(
-            static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), &mhandle,
-            addr_v[i], len_v[i], out_buf_v[i]) == -1) {
+    if (unified::prepare_fifo_metadata(ep_, conn, mhandle, addr_v[i], len_v[i],
+                                       out_buf_v[i]) == -1) {
       return false;
     }
   }
@@ -1234,13 +1403,12 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
   CHECK_EQ(transfer_info.size, size)
       << "Size mismatch: expected " << size << ", got " << transfer_info.size;
 
-  void* raw_dst_ptr = nullptr;
+  void* base = nullptr;
   GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
-  GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, transfer_info.handle,
+  GPU_RT_CHECK(gpuIpcOpenMemHandle(&base, transfer_info.handle,
                                    gpuIpcMemLazyEnablePeerAccess));
-
-  void* dst_ptr = reinterpret_cast<void*>(
-      reinterpret_cast<uintptr_t>(raw_dst_ptr) + transfer_info.offset);
+  void* dst_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) +
+                                          transfer_info.offset);
 
   std::vector<gpuStream_t>& dst_streams = ipc_streams_[conn->remote_gpu_idx_];
   int num_streams =
@@ -1313,12 +1481,16 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
   IpcTransferInfo transfer_info = {};  // Initialize to zero
   transfer_info.size = size;
   transfer_info.operation = 1;  // response
+  GPU_RT_CHECK(
+      gpuIpcGetMemHandle(&transfer_info.handle, reinterpret_cast<void*>(data)));
 
-  auto data_aligned = reinterpret_cast<uintptr_t>(data) & ~(kIpcAlignment - 1);
-  auto data_offset = reinterpret_cast<uintptr_t>(data) - data_aligned;
+  // Getting the base address.
+  void* base = nullptr;
+  size_t base_size;
+  GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, data));
+  auto data_offset =
+      reinterpret_cast<uintptr_t>(data) - reinterpret_cast<uintptr_t>(base);
   transfer_info.offset = data_offset;
-  GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle,
-                                  reinterpret_cast<void*>(data_aligned)));
 
   auto ret = uccl::send_message_nonblock(
       client_fd, static_cast<void const*>(&transfer_info),
@@ -1611,6 +1783,7 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   auto task = reinterpret_cast<UnifiedTask*>(transfer_id);
   *is_done = task->done.load(std::memory_order_acquire);
   if (*is_done) {
+    // std::cout << "transfer_id is done:" << transfer_id << std::endl;
     delete task;
   }
   return true;
@@ -1704,6 +1877,21 @@ void Endpoint::send_proxy_thread_func() {
           sendv(task.conn_id, mr_id_v, const_data_v, size_v, batch.num_iovs);
           break;
         }
+        case TaskType::WRITEV: {
+          TaskBatch const& batch = task.task_batch();
+          std::vector<void*> data_v(batch.data_v(),
+                                    batch.data_v() + batch.num_iovs);
+          std::vector<size_t> size_v(batch.size_v(),
+                                     batch.size_v() + batch.num_iovs);
+          std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
+                                        batch.mr_id_v() + batch.num_iovs);
+          std::vector<FifoItem> slot_item_v(
+              batch.slot_item_v(), batch.slot_item_v() + batch.num_iovs);
+
+          writev(task.conn_id, mr_id_v, data_v, size_v, slot_item_v,
+                 batch.num_iovs);
+          break;
+        }
         default:
           LOG(ERROR) << "Unexpected task type in send processing: "
                      << static_cast<int>(task.type);
@@ -1745,6 +1933,21 @@ void Endpoint::recv_proxy_thread_func() {
                                         batch.mr_id_v() + batch.num_iovs);
 
           recvv(task.conn_id, mr_id_v, data_v, size_v, batch.num_iovs);
+          break;
+        }
+        case TaskType::READV: {
+          TaskBatch const& batch = task.task_batch();
+          std::vector<void*> data_v(batch.data_v(),
+                                    batch.data_v() + batch.num_iovs);
+          std::vector<size_t> size_v(batch.size_v(),
+                                     batch.size_v() + batch.num_iovs);
+          std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
+                                        batch.mr_id_v() + batch.num_iovs);
+          std::vector<FifoItem> slot_item_v(
+              batch.slot_item_v(), batch.slot_item_v() + batch.num_iovs);
+
+          readv(task.conn_id, mr_id_v, data_v, size_v, slot_item_v,
+                batch.num_iovs);
           break;
         }
         case TaskType::SEND_NET:

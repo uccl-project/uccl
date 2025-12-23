@@ -36,4 +36,11 @@ void launchFifoRandomKernel(
     uint32_t warmup_iterations, bool volatile* stop_flag, float gpu_clock_ghz,
     int num_fifos, uint64_t* latency_samples, int max_samples);
 
+void launchFifoControlledMopsKernel(
+    dim3 grid, dim3 block, mscclpp::FifoDeviceHandle* fifos,
+    ThreadMetrics* metrics, uint32_t num_threads, uint32_t test_duration_ms,
+    uint32_t warmup_iterations, bool volatile* stop_flag, float gpu_clock_ghz,
+    int num_fifos, uint64_t* latency_samples, int max_samples,
+    uint64_t sleep_cycles);
+
 #endif  // LAUNCH_KERNEL_SHIM_HPP_

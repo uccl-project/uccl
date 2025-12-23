@@ -56,26 +56,30 @@ UCCL has been adopted as part of the AMD [TheRock](https://github.com/ROCm/TheRo
 
 More UCCL features are under development in this repo, currently including: 
 - ✅ More efficient KV cache transfer engine (e.g., better Mooncake)
-- 🚧 Generic and SM-free GPU-initiated P2P (e.g., better DeepEP for MoE)
-  - 🚧 Supporting all NIC vendors including Nvidia, AWS EFA, and Broadcom
-  - 🚧 Avoiding burning precious GPU SMs
+  - 🚧 Supporting RDMA (NVIDIA, Broadcom), AWS EFA, GCP TCPX, TCP
+  - ✅ Supporting AMD GPUs
+- ✅ Efficient and portable expert-parallel communication
+  - ✅ Supporting all NIC vendors, including Nvidia, AWS EFA, and Broadcom
+  - ✅ Supporting AMD GPUs
+  - 🚧 Better flow control to avoid congestion
+  - ☐ Supporting other AI accelerators, such as TPUs and Trainium.
 - 🚧 Re-architecting NCCL to unleash network hardware performance
   - 🚧 Scalable and efficient CPU proxy
   - ☐ Fast async collectives with compute-communication ordering guarantee
   - ☐ Device kernels in vendor-agnostic Triton language
 - ☐ Dynamic membership with GPU servers joining and exiting
 
-
 ## Quick Start
 
 The easiest way to use UCCL is to first build based on your platform. The build script will automatically detect the `py_version` of your current environment. If you need to compile UCCL for a specific python version, please specify the `py_version`, such as `3.10`. 
 
 ```bash
-git clone https://github.com/uccl-project/uccl.git --recursive
-cd uccl && bash build_and_install.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url]
+git clone https://github.com/uccl-project/uccl.git --recursive && cd uccl
+bash build_and_install.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url]
+# Eg, bash build_and_install.sh cuda ep
 ```
 > Note: 
-> - when building for ROCm with python packaging through TheRock, please specify your ROCm index url; the default is `https://rocm.nightlies.amd.com/v2/gfx94X-dcgpu` and it may not be what you want. When installing UCCL wheels for TheRock, please provide pip with the index url and add the optional extra `[rocm]` to the wheel, e.g., `pip install --extra-index-url https://rocm.nightlies.amd.com/v2/gfx94X-dcgpu wheelhouse-therock/uccl-0.0.1.post4+therock-py3-none-manylinux_2_35_x86_64.whl[rocm]`.
+> - when building for ROCm with python packaging through TheRock, please specify your ROCm index url; the default is `https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu` and it may not be what you want. When installing UCCL wheels for TheRock, please provide pip with the index url and add the optional extra `[rocm]` to the wheel, e.g., `pip install --extra-index-url https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu wheelhouse-therock/uccl-0.0.1.post4-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl[rocm]`.
 > - you can build with different CUDA or ROCm versions by specifying tags such as cuda13 or rocm6. The default versions are CUDA 12.x for the "cuda" tag and ROCm 7.x for the "rocm" tag.
 
 Then, when running your PyTorch applications, set the environment variable accordingly: 
@@ -95,7 +99,88 @@ Now, you can just run your PyTorch applications and enjoy UCCL performance benef
 
 ## Dev Guide
 
-Please refer to [docs/README.md](docs/README.md) for full development guide of UCCL.
+<details>
+<summary>Click</summary>
+
+First clone the UCCL repo and init submodules: 
+```bash
+git clone https://github.com/uccl-project/uccl.git --recursive
+export UCCL_HOME=$(pwd)/uccl
+```
+
+To build UCCL for development, you need to install some common dependencies: 
+<details><summary>Click me</summary>
+
+```bash
+# Note if you are using docker+wheel build, there is no need to install the following dependencies. 
+sudo apt update
+sudo apt install linux-tools-$(uname -r) clang llvm cmake m4 build-essential \
+                 net-tools libgoogle-glog-dev libgtest-dev libgflags-dev \
+                 libelf-dev libpcap-dev libc6-dev-i386 libpci-dev \
+                 libopenmpi-dev libibverbs-dev clang-format -y
+
+# Install and activate Miniconda (you can choose any recent versions)
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+bash ./Miniconda3-latest-Linux-x86_64.sh -b
+source ~/miniconda3/bin/activate
+source ~/.bashrc # or .zshrc and others
+conda init
+
+# Install python ssh lib
+pip install paramiko pybind11
+# Upgrade conda glic to modern ones
+conda install -c conda-forge "libstdcxx-ng>=12" "libgcc-ng>=12"
+```
+</details>
+
+For quick installation with docker, you can directly dive into: 
+* [`UCCL-Collective RDMA`](collective/rdma/README.md): Collectives for Nvidia/AMD GPUs + IB/RoCE RDMA NICs (currently support Nvidia and Broadcom NICs)
+* [`UCCL-Collective EFA`](collective/efa/README.md): Collectives for AWS EFA NIC (currently support p4d.24xlarge)
+
+    > On p5/p5e/p5en/p6, the offical [aws-ofi-nccl](https://github.com/aws/aws-ofi-nccl) NCCL plugin with proper [env variables](https://github.com/uccl-project/uccl/blob/deeeaa36ebe5440449273633652d2b7d77f4a7aa/collective/efa/run_nccl_test.sh#L76-L77) already makes NCCL perform excellent
+* [`UCCL-Collective AFXDP`](collective/afxdp/README.md): Collectives for Non-RDMA NICs (currently support AWS ENA NICs and IBM VirtIO NICs)
+* [`UCCL-P2P`](p2p/README.md): P2P for RDMA NICs and GPU IPCs (currently support Nvidia/AMD GPUs and Nvidia/Broadcom NICs)
+* [`UCCL-EP`](ep/README.md): EP for MoE training and inference with DeepEP-compatible APIs (currently support Nvidia/AMD GPUs and Nvidia/Broadcom/EFA NICs)
+
+### Python Wheel Build
+
+Run the following to build Python wheels: 
+```bash
+cd $UCCL_HOME
+./build.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url]
+```
+
+Run the following to install the wheels locally: 
+```bash
+cd $UCCL_HOME
+pip install wheelhouse-[cuda/rocm]/uccl-*.whl
+```
+
+The cross-compilation matrix is as follows:
+
+| Platform/Feature   | rdma-cuda | rdma-rocm | rdma-arm | p2p-cuda | p2p-rocm | p2p-arm | efa |
+|--------------------|-----------|-----------|----------|----------|----------|---------|-----|
+| cuda + x86         | ✓         | ✓         | x        | ✓        | ✓        | x       | ✓   |
+| cuda + arm (gh200) | ✓         | x         | x        | ✓        | x        | x       | x   |
+| rocm + x86         | ✓         | ✓         | ✓        | ✓        | ✓        | ✓       | x   |
+| aws p4d/p4de       | ✓         | ✓         | x        | ✓        | x        | x       | ✓   |
+
+Note that you need ARM hosts to build ARM wheels, as cross-compilation tool `qemu-user-static` cannot emulate CUDA or ROCm. 
+
+### On Cloudlab CPU Machines
+
+If you want to build nccl and nccl-tests on cloudlab ubuntu22, you need to install cuda and openmpi: 
+
+```bash
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+sudo apt install ./cuda-keyring_1.1-1_all.deb
+sudo apt update
+sudo apt install cuda-toolkit -y
+sudo apt install nvidia-driver-550 nvidia-utils-550 -y
+sudo apt-get install openmpi-bin openmpi-doc libopenmpi-dev -y
+```
+
+</details>
 
 ## Citation
 The code in this repository is mostly described in the paper below. Please consider citing this work if you find the repository helpful. 

@@ -1,6 +1,6 @@
 #include "uccl_engine.h"
-#ifdef USE_TCPX
-#include "tcpx_engine.h"
+#ifdef UCCL_P2P_USE_TCPX
+#include "nccl_tcpx_endpoint.h"
 #else
 #include "engine.h"
 #endif
@@ -11,26 +11,38 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdbool>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <future>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 
-#ifdef USE_TCPX
-using FifoItem = tcpx::FifoItem;
-using Endpoint = tcpx::Endpoint;
+#ifdef UCCL_P2P_USE_TCPX
+// nccl_tcpx_endpoint does not declare inside_python; define it here for
+// uccl_engine.
+thread_local bool inside_python = false;
+
+// Reuse NCCL FIFO descriptor (64B ABI) directly.
+using FifoItem = nccl_tcpx::FifoItem;
+using Endpoint = nccl_tcpx::Endpoint;
 #else
 using FifoItem = uccl::FifoItem;
-using Endpoint = Endpoint;
+using Endpoint = ::Endpoint;
 #endif
 
 struct uccl_engine {
+#ifdef UCCL_P2P_USE_TCPX
+  std::unique_ptr<Endpoint> endpoint;
+#else
   Endpoint* endpoint;
+#endif
 };
 
 struct uccl_conn {
@@ -52,12 +64,30 @@ typedef struct {
   bool is_valid;
 } fifo_item_t;
 
-std::unordered_map<uintptr_t, uint64_t> mem_reg_info;
+typedef struct {
+  uint64_t mr_id;
+  size_t size;
+} mem_reg_entry_t;
+
+std::unordered_map<uintptr_t, mem_reg_entry_t> mem_reg_info;
 std::unordered_map<uccl_conn_t*, fifo_item_t*> fifo_item_map;
 std::vector<notify_msg_t> notify_msg_list;
 
 std::mutex fifo_item_map_mutex;
 std::mutex notify_msg_list_mutex;
+
+// Helper function to find the base address and mr_id for any address within a
+// registered region
+bool find_mem_reg(uintptr_t addr, uintptr_t& base_addr, uint64_t& mr_id) {
+  for (auto const& [base, entry] : mem_reg_info) {
+    if (addr >= base && addr < base + entry.size) {
+      base_addr = base;
+      mr_id = entry.mr_id;
+      return true;
+    }
+  }
+  return false;
+}
 
 // Helper function for the listener thread
 void listener_thread_func(uccl_conn_t* conn) {
@@ -98,15 +128,14 @@ void listener_thread_func(uccl_conn_t* conn) {
 
     uint64_t mr_id = 0;
     switch (md.op) {
-      case UCCL_READ: {
+      case UCCL_RW_RC: {
         tx_msg_t tx_data = md.data.tx_data;
-        auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
-        if (local_mem_iter == mem_reg_info.end()) {
+        uintptr_t base_addr;
+        if (!find_mem_reg(tx_data.data_ptr, base_addr, mr_id)) {
           std::cerr << "Local memory not registered for address: "
                     << tx_data.data_ptr << std::endl;
           break;
         }
-        mr_id = local_mem_iter->second;
 
         char out_buf[sizeof(FifoItem)];
         conn->engine->endpoint->advertise(conn->conn_id, mr_id,
@@ -125,7 +154,7 @@ void listener_thread_func(uccl_conn_t* conn) {
                     << std::endl;
         }
 
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
         FifoItem fifo_item;
         memcpy(&fifo_item, out_buf, sizeof(FifoItem));
         // Immediately push the data over TCPX so the passive reader only needs
@@ -139,13 +168,12 @@ void listener_thread_func(uccl_conn_t* conn) {
       }
       case UCCL_WRITE: {
         tx_msg_t tx_data = md.data.tx_data;
-        auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
-        if (local_mem_iter == mem_reg_info.end()) {
+        uintptr_t base_addr;
+        if (!find_mem_reg(tx_data.data_ptr, base_addr, mr_id)) {
           std::cerr << "Local memory not registered for address: "
                     << tx_data.data_ptr << std::endl;
           break;
         }
-        mr_id = local_mem_iter->second;
 
         uccl_mr_t temp_mr;
         temp_mr.mr_id = mr_id;
@@ -154,10 +182,29 @@ void listener_thread_func(uccl_conn_t* conn) {
                                       tx_data.data_size);
         if (result < 0) {
           std::cerr << "Failed to perform uccl_engine_recv" << std::endl;
+#ifdef UCCL_P2P_USE_TCPX
+          notify_msg_t notify_msg = {};
+          std::snprintf(notify_msg.name, sizeof(notify_msg.name), "%s",
+                        "server");
+          std::snprintf(notify_msg.msg, sizeof(notify_msg.msg), "%s",
+                        "RECV_ERROR");
+          uccl_engine_send_notif(conn, &notify_msg);
+#endif
+          break;
         }
+
+#ifdef UCCL_P2P_USE_TCPX
+        // Passive recv (including GPU unpack) is done: tell the active side so
+        // it only tears down after the data is fully landed.
+        notify_msg_t notify_msg = {};
+        std::snprintf(notify_msg.name, sizeof(notify_msg.name), "%s", "server");
+        std::snprintf(notify_msg.msg, sizeof(notify_msg.msg), "%s",
+                      "RECV_DONE");
+        uccl_engine_send_notif(conn, &notify_msg);
+#endif
         break;
       }
-      case UCCL_VECTOR_READ: {
+      case UCCL_VECTOR_RW_RC: {
         size_t count = md.data.vector_data.count;
 
         tx_msg_t* tx_data_array = new tx_msg_t[count];
@@ -186,15 +233,20 @@ void listener_thread_func(uccl_conn_t* conn) {
           delete[] tx_data_array;
           break;
         }
+#ifdef UCCL_P2P_USE_TCPX
+        bool vector_ok = true;
+#endif
         for (size_t i = 0; i < count; i++) {
           tx_msg_t tx_data = tx_data_array[i];
-          auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
-          if (local_mem_iter == mem_reg_info.end()) {
+          uintptr_t base_addr;
+          if (!find_mem_reg(tx_data.data_ptr, base_addr, mr_id)) {
             std::cerr << "Local memory not registered for address: "
                       << tx_data.data_ptr << " (item " << i << ")" << std::endl;
+#ifdef UCCL_P2P_USE_TCPX
+            vector_ok = false;
+#endif
             continue;
           }
-          mr_id = local_mem_iter->second;
 
           char out_buf[sizeof(FifoItem)];
           conn->engine->endpoint->advertise(conn->conn_id, mr_id,
@@ -219,7 +271,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           memcpy(&fifo_item, out_buf, sizeof(FifoItem));
           // Each advertised slice triggers a corresponding send so the remote
           // side can simply post tagged receives.
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
           if (!conn->engine->endpoint->queue_read_response(conn->conn_id,
                                                            fifo_item)) {
             std::cerr << "Failed to queue read response for item " << i
@@ -260,15 +312,15 @@ void listener_thread_func(uccl_conn_t* conn) {
           break;
         }
 
+        bool vector_ok = true;
         for (size_t i = 0; i < count; i++) {
           tx_msg_t tx_data = tx_data_array[i];
-          auto local_mem_iter = mem_reg_info.find(tx_data.data_ptr);
-          if (local_mem_iter == mem_reg_info.end()) {
+          uintptr_t base_addr;
+          if (!find_mem_reg(tx_data.data_ptr, base_addr, mr_id)) {
             std::cerr << "Local memory not registered for address: "
                       << tx_data.data_ptr << " (item " << i << ")" << std::endl;
             continue;
           }
-          mr_id = local_mem_iter->second;
 
           uccl_mr_t temp_mr;
           temp_mr.mr_id = mr_id;
@@ -278,10 +330,25 @@ void listener_thread_func(uccl_conn_t* conn) {
           if (result < 0) {
             std::cerr << "Failed to perform uccl_engine_recv for item " << i
                       << std::endl;
+#ifdef UCCL_P2P_USE_TCPX
+            vector_ok = false;
+#endif
           }
         }
 
         delete[] tx_data_array;
+#ifdef UCCL_P2P_USE_TCPX
+        notify_msg_t notify_msg = {};
+        std::snprintf(notify_msg.name, sizeof(notify_msg.name), "%s", "server");
+        if (vector_ok) {
+          std::snprintf(notify_msg.msg, sizeof(notify_msg.msg), "%s",
+                        "RECV_DONE");
+        } else {
+          std::snprintf(notify_msg.msg, sizeof(notify_msg.msg), "%s",
+                        "RECV_ERROR");
+        }
+        uccl_engine_send_notif(conn, &notify_msg);
+#endif
         break;
       }
       case UCCL_FIFO: {
@@ -303,8 +370,7 @@ void listener_thread_func(uccl_conn_t* conn) {
         notify_msg_t notify_msg = {};
         strncpy(notify_msg.name, md.data.notify_data.name,
                 sizeof(notify_msg.name) - 1);
-        strncpy(notify_msg.msg, md.data.notify_data.msg,
-                sizeof(notify_msg.msg) - 1);
+        memcpy(notify_msg.msg, md.data.notify_data.msg, sizeof(notify_msg.msg));
         notify_msg_list.push_back(notify_msg);
         break;
       }
@@ -318,14 +384,21 @@ void listener_thread_func(uccl_conn_t* conn) {
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
-  // TODO: Infer the device idx during memory registration
-  eng->endpoint = new Endpoint(0, num_cpus);
+#ifdef UCCL_P2P_USE_TCPX
+  eng->endpoint = std::unique_ptr<Endpoint>(new Endpoint(num_cpus));
+#else
+  eng->endpoint = new Endpoint(num_cpus);
+#endif
   return eng;
 }
 
 void uccl_engine_destroy(uccl_engine_t* engine) {
   if (engine) {
+#ifdef UCCL_P2P_USE_TCPX
+    engine->endpoint.reset();
+#else
     delete engine->endpoint;
+#endif
     delete engine;
   }
 }
@@ -382,7 +455,10 @@ uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size) {
   }
   mr->mr_id = mr_id;
   mr->engine = engine;
-  mem_reg_info[data] = mr_id;
+  mem_reg_entry_t entry;
+  entry.mr_id = mr_id;
+  entry.size = size;
+  mem_reg_info[data] = entry;
   return mr;
 }
 
@@ -409,14 +485,46 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
              : -1;
 }
 
+int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+                         size_t size, void* slot_item_ptr,
+                         uint64_t* transfer_id) {
+  if (!conn || !mr || !data) return -1;
+
+  FifoItem slot_item;
+  slot_item = *static_cast<FifoItem*>(slot_item_ptr);
+
+  return conn->engine->endpoint->write_async(conn->conn_id, mr->mr_id,
+                                             const_cast<void*>(data), size,
+                                             slot_item, transfer_id)
+             ? 0
+             : -1;
+}
+
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
                      size_t data_size) {
   if (!conn || !mr || !data) return -1;
-  uint64_t transfer_id;
-  return conn->engine->endpoint->recv_async(conn->conn_id, mr->mr_id, data,
-                                            data_size, &transfer_id)
+
+#ifdef UCCL_P2P_USE_TCPX
+  // TCPX: no background progress thread exists, so drive progress here.
+  uint64_t transfer_id = 0;
+  if (!conn->engine->endpoint->recv_async(conn->conn_id, mr->mr_id, data,
+                                          data_size, &transfer_id)) {
+    return -1;
+  }
+
+  // Poll until the transfer completes (drives Stage 1 and Stage 2).
+  bool done = false;
+  while (!done) {
+    if (!conn->engine->endpoint->poll_async(transfer_id, &done)) {
+      return -1;
+    }
+  }
+  return 0;
+#else
+  return conn->engine->endpoint->recv(conn->conn_id, mr->mr_id, data, data_size)
              ? 0
              : -1;
+#endif
 }
 
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {
@@ -489,7 +597,8 @@ void uccl_engine_conn_destroy(uccl_conn_t* conn) {
 
 void uccl_engine_mr_destroy(uccl_mr_t* mr) {
   for (auto it = mem_reg_info.begin(); it != mem_reg_info.end(); ++it) {
-    if (it->second == mr->mr_id) {
+    if (it->second.mr_id == mr->mr_id) {
+      mr->engine->endpoint->dereg(mr->mr_id);
       mem_reg_info.erase(it);
       break;
     }
@@ -507,10 +616,16 @@ int uccl_engine_send_tx_md_vector(uccl_conn_t* conn, md_t* md_array,
                                   size_t count) {
   if (!conn || !md_array || count == 0) return -1;
 
+  // Check UCCL_RCMODE environment variable
+  bool rc_mode = false;
+  char const* rc_mode_env = getenv("UCCL_RCMODE");
+  if (rc_mode_env != nullptr) {
+    rc_mode = (std::strcmp(rc_mode_env, "1") == 0);
+  }
   // Determine the operation type based on the first item
-  uccl_msg_type op_type =
-      (md_array[0].op == UCCL_READ) ? UCCL_VECTOR_READ : UCCL_VECTOR_WRITE;
-
+  uccl_msg_type op_type = (rc_mode || md_array[0].op == UCCL_RW_RC)
+                              ? UCCL_VECTOR_RW_RC
+                              : UCCL_VECTOR_WRITE;
   md_t vector_md;
   vector_md.op = op_type;
   vector_md.data.vector_data.count = count;
@@ -587,7 +702,8 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
   if (!engine || !metadata) return -1;
 
   try {
-    std::vector<uint8_t> metadata_vec = engine->endpoint->get_metadata();
+    std::vector<uint8_t> metadata_vec =
+        engine->endpoint->get_unified_metadata();
 
     std::string result;
     if (metadata_vec.size() == 10) {  // IPv4 format

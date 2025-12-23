@@ -21,7 +21,6 @@ import sys
 
 from utils import (
     init_dist,
-    get_peer_ip,
     detect_ib_hca,
     get_cpu_proxies_meta,
     initialize_uccl,
@@ -39,7 +38,9 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
 
     torch.manual_seed(rank)
     x = torch.randn(
-        (num_tokens, hidden), dtype=torch.bfloat16, device=f"cuda:{device_index}"
+        (num_tokens, hidden),
+        dtype=torch.bfloat16,
+        device=f"cuda:{device_index}",
     )
     topk_idx = torch.randint(
         0, num_experts, (num_tokens, num_topk), device=f"cuda:{device_index}"
@@ -120,7 +121,10 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
         combine_hook()
 
         print("[simple-test] ✓ Low-latency combine completed", flush=True)
-        print(f"[simple-test] Combined tensor shape: {combined_x.shape}", flush=True)
+        print(
+            f"[simple-test] Combined tensor shape: {combined_x.shape}",
+            flush=True,
+        )
         print("[simple-test] ✓ All tests passed!", flush=True)
 
         time.sleep(1)

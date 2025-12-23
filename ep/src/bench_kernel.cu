@@ -26,7 +26,7 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
   __shared__ uint64_t shared_cycle_start;
   __shared__ unsigned long long start_cycle_smem[kQueueSize];
 
-#define kInflightSlotSize (kMaxInflightLowLatency * kNumThPerBlock)
+#define kInflightSlotSize (kMaxInflightLowLatency * kTestNumGpuThPerBlock)
 #define kInflightSlotMask (kInflightSlotSize - 1)
   uint64_t inflight_slots[kInflightSlotSize];
 
@@ -47,7 +47,8 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
       if (completed >= kWarmupOps) {
         unsigned long long t1 = clock64();
         uint64_t inflight_slot =
-            inflight_slots[(completed / kNumThPerBlock) & kInflightSlotMask];
+            inflight_slots[(completed / kTestNumGpuThPerBlock) &
+                           kInflightSlotMask];
         unsigned long long t0 = start_cycle_smem[inflight_slot & kQueueMask];
         unsigned long long cycles = t1 - t0;
         atomicAdd((unsigned long long*)&cycle_accum_smem, cycles);
@@ -77,7 +78,8 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
         // Space available, atomically reserve and commit
         rb->atomic_set_and_commit(cmd, &my_slot);
         start_cycle_smem[my_slot & kQueueMask] = t0;
-        inflight_slots[(it / kNumThPerBlock) & kInflightSlotMask] = my_slot;
+        inflight_slots[(it / kTestNumGpuThPerBlock) & kInflightSlotMask] =
+            my_slot;
         break;
       } else {
         // Otherwise, it is gonna hang here.
@@ -93,7 +95,8 @@ __global__ void gpu_issue_batched_commands(DeviceToHostCmdBuffer* rbs) {
       if (completed >= kWarmupOps) {
         unsigned long long t1 = clock64();
         uint64_t inflight_slot =
-            inflight_slots[(completed / kNumThPerBlock) & kInflightSlotMask];
+            inflight_slots[(completed / kTestNumGpuThPerBlock) &
+                           kInflightSlotMask];
         unsigned long long t0 = start_cycle_smem[inflight_slot & kQueueMask];
         unsigned long long cycles = t1 - t0;
         atomicAdd((unsigned long long*)&cycle_accum_smem, cycles);

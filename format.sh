@@ -5,7 +5,7 @@ set -e
 
 # Directories to format (excluding thirdparty/, scripts/, docs/, etc.)
 
-DIRECTORIES=("collective" "ep" "misc" "p2p" "include" "eccl")
+DIRECTORIES=("collective" "ep" "p2p" "include" "experimental")
 
 EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
 EXCLUDE=("collective/afxdp/lib")

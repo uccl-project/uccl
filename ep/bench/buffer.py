@@ -12,7 +12,24 @@ except ImportError as exc:
     raise
 
 from uccl.ep import EventHandle, Config
-from utils import EventOverlap, check_nvlink_connections, initialize_uccl, destroy_uccl
+
+# Support both execution modes:
+# 1) As part of the packaged deep_ep_wrapper (symlinked buffer inside a package): uses relative import `.utils`.
+# 2) As a standalone benchmark script from the `ep/bench` directory (no package): falls back to plain `utils`.
+try:
+    from .utils import (
+        EventOverlap,
+        check_nvlink_connections,
+        initialize_uccl,
+        destroy_uccl,
+    )
+except ImportError:
+    from utils import (
+        EventOverlap,
+        check_nvlink_connections,
+        initialize_uccl,
+        destroy_uccl,
+    )
 
 
 class Buffer:
@@ -45,6 +62,7 @@ class Buffer:
         allow_nvlink_for_low_latency_mode: bool = True,
         allow_mnnvl: bool = False,
         explicitly_destroy: bool = False,
+        is_intranode: bool = False,
     ) -> None:
         """
         Initialize the communication buffer.
@@ -65,10 +83,18 @@ class Buffer:
                 otherwise, the resources will be released by the destructor.
                 Note: Releasing resources in the destructor may cause Python's exception handling process to hang.
         """
-        device_index = int(os.environ["LOCAL_RANK"])
-        self.scratch = torch.zeros(
-            num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
-        )
+        if "LOCAL_RANK" in os.environ:
+            device_index = int(os.environ["LOCAL_RANK"])
+        else:
+            device_index = torch.cuda.current_device()
+
+        if torch.version.cuda:
+            self.scratch = torch.zeros(
+                num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
+            )
+        else:
+            self.scratch = ep.get_rdma_buffer(num_rdma_bytes, device_index)
+
         rdma_buffer_ptr = self.scratch.data_ptr()
         self.proxies, self.workers = initialize_uccl(
             rdma_buffer_ptr,
@@ -77,6 +103,7 @@ class Buffer:
             dist.get_world_size(group),
             group,
             use_normal_mode=not low_latency_mode,
+            is_intranode=is_intranode,
         )
         check_nvlink_connections(group)
 
