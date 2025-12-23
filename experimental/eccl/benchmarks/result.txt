@@ -10,101 +10,101 @@ Detected 7 CUDA device(s):
   GPU id:4; name:NVIDIA A40; Bus:0000:89:00
   GPU id:5; name:NVIDIA A40; Bus:0000:b1:00
   GPU id:6; name:NVIDIA L40S; Bus:0000:b2:00
-Selected GPU 5, allocated 262144 bytes, dptr=0x749820600000
+Selected GPU 5, allocated 262144 bytes, dptr=0x7f9648600000
 
 cuMemcpy_H2D iters=10000
 Test                    Size(B)         Avg.Time(us)
-cuMemcpy_H2D                   1                   213.3819
-cuMemcpy_H2D                   2                   224.2403
-cuMemcpy_H2D                   4                   229.2765
-cuMemcpy_H2D                   8                   220.6002
-cuMemcpy_H2D                  16                   213.6974
-cuMemcpy_H2D                  32                   237.8857
-cuMemcpy_H2D                  64                   232.9511
-cuMemcpy_H2D                 128                   243.0186
-cuMemcpy_H2D                 256                   240.2060
-cuMemcpy_H2D                 512                   241.7339
-cuMemcpy_H2D                1024                   263.8447
-cuMemcpy_H2D                2048                   274.7001
-cuMemcpy_H2D                4096                   293.4498
-cuMemcpy_H2D                8192                   335.4116
-cuMemcpy_H2D               16384                   413.2267
-cuMemcpy_H2D               32768                    11.4489
-cuMemcpy_H2D               65536                    14.1560
-cuMemcpy_H2D              131072                    20.0434
-cuMemcpy_H2D              262144                    30.5826
+cuMemcpy_H2D                   1                     7.5224
+cuMemcpy_H2D                   2                     7.5786
+cuMemcpy_H2D                   4                     7.5724
+cuMemcpy_H2D                   8                     7.5336
+cuMemcpy_H2D                  16                     7.5255
+cuMemcpy_H2D                  32                     7.5845
+cuMemcpy_H2D                  64                     7.5999
+cuMemcpy_H2D                 128                     7.6102
+cuMemcpy_H2D                 256                     7.6305
+cuMemcpy_H2D                 512                     7.6666
+cuMemcpy_H2D                1024                     7.8636
+cuMemcpy_H2D                2048                     8.0655
+cuMemcpy_H2D                4096                     8.5775
+cuMemcpy_H2D                8192                     9.8012
+cuMemcpy_H2D               16384                    12.2205
+cuMemcpy_H2D               32768                    11.6196
+cuMemcpy_H2D               65536                    14.3995
+cuMemcpy_H2D              131072                    19.8015
+cuMemcpy_H2D              262144                    30.3872
 
 cuMemcpy_D2H iters=10000
 Test                    Size(B)         Avg.Time(us)
-cuMemcpy_D2H                   1                     8.4463
-cuMemcpy_D2H                   2                     8.4648
-cuMemcpy_D2H                   4                     8.5189
-cuMemcpy_D2H                   8                     8.0216
-cuMemcpy_D2H                  16                     8.4271
-cuMemcpy_D2H                  32                     8.5027
-cuMemcpy_D2H                  64                     8.4359
-cuMemcpy_D2H                 128                     8.3908
-cuMemcpy_D2H                 256                     8.1600
-cuMemcpy_D2H                 512                     8.4735
-cuMemcpy_D2H                1024                     8.6549
-cuMemcpy_D2H                2048                     8.5612
-cuMemcpy_D2H                4096                     8.7234
-cuMemcpy_D2H                8192                     8.9905
-cuMemcpy_D2H               16384                     9.7738
-cuMemcpy_D2H               32768                    11.2653
-cuMemcpy_D2H               65536                    13.9666
-cuMemcpy_D2H              131072                    19.2498
-cuMemcpy_D2H              262144                    29.3551
+cuMemcpy_D2H                   1                     7.7359
+cuMemcpy_D2H                   2                     7.7763
+cuMemcpy_D2H                   4                     7.7560
+cuMemcpy_D2H                   8                     7.7742
+cuMemcpy_D2H                  16                     7.7686
+cuMemcpy_D2H                  32                     7.4908
+cuMemcpy_D2H                  64                     6.9538
+cuMemcpy_D2H                 128                     7.0385
+cuMemcpy_D2H                 256                     7.0258
+cuMemcpy_D2H                 512                     7.0051
+cuMemcpy_D2H                1024                     7.0711
+cuMemcpy_D2H                2048                     7.0661
+cuMemcpy_D2H                4096                     7.1600
+cuMemcpy_D2H                8192                     7.4444
+cuMemcpy_D2H               16384                     8.1022
+cuMemcpy_D2H               32768                     9.3876
+cuMemcpy_D2H               65536                    11.9109
+cuMemcpy_D2H              131072                    16.9735
+cuMemcpy_D2H              262144                    26.9185
 
-gdr_map ptr: 0x74982eaf9000
-info.va=0x749820600000 mapped_size=262144 page_size=65536 wc_mapping=1 mapping_type=1
+gdr_map ptr: 0x7f9656af9000
+info.va=0x7f9648600000 mapped_size=262144 page_size=65536 wc_mapping=1 mapping_type=1
 page offset: 0 bytes
 use cold cache: no
 
 [gdr_copy_to_mapping] write iters=10000
 WARNING: measures CPU-side API invocation latency; may not imply full GPU visibility ordering.
 Test                            Size(B)         Avg.Time(us)
-gdr_copy_to_mapping                    1                     0.1038
-gdr_copy_to_mapping                    2                     0.1022
-gdr_copy_to_mapping                    4                     0.1021
-gdr_copy_to_mapping                    8                     0.1024
-gdr_copy_to_mapping                   16                     0.1023
-gdr_copy_to_mapping                   32                     0.1025
-gdr_copy_to_mapping                   64                     0.1205
-gdr_copy_to_mapping                  128                     0.1037
-gdr_copy_to_mapping                  256                     0.1093
-gdr_copy_to_mapping                  512                     0.1310
-gdr_copy_to_mapping                 1024                     0.1818
-gdr_copy_to_mapping                 2048                     0.2682
-gdr_copy_to_mapping                 4096                     0.4242
-gdr_copy_to_mapping                 8192                     0.8344
-gdr_copy_to_mapping                16384                     1.6470
-gdr_copy_to_mapping                32768                     3.2685
-gdr_copy_to_mapping                65536                     6.5084
-gdr_copy_to_mapping               131072                    12.9669
-gdr_copy_to_mapping               262144                    25.8937
+gdr_copy_to_mapping                    1                     0.1024
+gdr_copy_to_mapping                    2                     0.1021
+gdr_copy_to_mapping                    4                     0.1020
+gdr_copy_to_mapping                    8                     0.1023
+gdr_copy_to_mapping                   16                     0.1022
+gdr_copy_to_mapping                   32                     0.1023
+gdr_copy_to_mapping                   64                     0.1022
+gdr_copy_to_mapping                  128                     0.1131
+gdr_copy_to_mapping                  256                     0.1184
+gdr_copy_to_mapping                  512                     0.1395
+gdr_copy_to_mapping                 1024                     0.1793
+gdr_copy_to_mapping                 2048                     0.2620
+gdr_copy_to_mapping                 4096                     0.4257
+gdr_copy_to_mapping                 8192                     0.8226
+gdr_copy_to_mapping                16384                     1.7100
+gdr_copy_to_mapping                32768                     3.2279
+gdr_copy_to_mapping                65536                     6.5215
+gdr_copy_to_mapping               131072                    12.9295
+gdr_copy_to_mapping               262144                    25.9116
 
 [gdr_copy_from_mapping] read iters=10000
 Test                            Size(B)         Avg.Time(us)
-gdr_copy_from_mapping                  1                     0.7659
-gdr_copy_from_mapping                  2                     1.5265
-gdr_copy_from_mapping                  4                     1.5288
-gdr_copy_from_mapping                  8                     1.5287
-gdr_copy_from_mapping                 16                     0.2599
-gdr_copy_from_mapping                 32                     0.2625
-gdr_copy_from_mapping                 64                     0.5164
-gdr_copy_from_mapping                128                     0.5647
-gdr_copy_from_mapping                256                     0.7855
-gdr_copy_from_mapping                512                     1.1564
-gdr_copy_from_mapping               1024                     3.0512
-gdr_copy_from_mapping               2048                     4.9621
-gdr_copy_from_mapping               4096                    10.9714
-gdr_copy_from_mapping               8192                    22.8102
-gdr_copy_from_mapping              16384                    45.4182
-gdr_copy_from_mapping              32768                    90.4610
-gdr_copy_from_mapping              65536                   181.6188
-gdr_copy_from_mapping             131072                   377.4111
-gdr_copy_from_mapping             262144                   797.2256
+gdr_copy_from_mapping                  1                     0.7674
+gdr_copy_from_mapping                  2                     1.5334
+gdr_copy_from_mapping                  4                     1.5305
+gdr_copy_from_mapping                  8                     1.5565
+gdr_copy_from_mapping                 16                     0.3922
+gdr_copy_from_mapping                 32                     0.4886
+gdr_copy_from_mapping                 64                     1.1549
+gdr_copy_from_mapping                128                     1.3434
+gdr_copy_from_mapping                256                     1.6955
+gdr_copy_from_mapping                512                     2.2025
+gdr_copy_from_mapping               1024                     3.3176
+gdr_copy_from_mapping               2048                     5.4309
+gdr_copy_from_mapping               4096                     9.3691
+gdr_copy_from_mapping               8192                    17.0848
+gdr_copy_from_mapping              16384                    33.3405
+gdr_copy_from_mapping              32768                    64.4006
+gdr_copy_from_mapping              65536                   123.4659
+gdr_copy_from_mapping             131072                   287.1672
+gdr_copy_from_mapping             262144                   580.9617
 
 Cleaning up...
 Done.
