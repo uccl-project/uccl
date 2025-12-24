@@ -41,14 +41,11 @@ An UCCL overview can be found in this [slide deck](https://docs.google.com/prese
     * rearchitect the network transport layer to be fast and extensible
     * support heterogeneous GPU and networking vendors such as Nvidia, AMD, and Broadcom
     * become an open and collaborative platform for GPU communication research
-  <br>
-
   * UCCL-collective has built a fast and extensible transport layer in software, which has created many benefits. 
     * For example, existing network transports under NCCL (i.e., kernel TCP and RDMA) leverage one or few network paths to stream huge data volumes, thus prone to congestion happening in datacenter networks. 
     * Instead, UCCL-collective employs packet spraying in software to leverage abundant network paths to avoid "single-path-of-congestion". 
     * More benefits include: 1) packet spraying with 256 paths, 2) advanced congestion control such as latency-based and receiver-driven ones, 3) efficient loss recovery by selective repeat, and 4) widely usable in public clouds with legacy NICs and Ethernet. Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307).
   </details>
-  <br>
 
 * **[UCCL-P2P](p2p/)** provides both NIXL-style initiator-target tranfer APIs and NCCL-style collective APIs, with the same or better performance than both. UCCL-P2P is purposely designed for the next-gen 800Gbps NICs with efficient multi-threaded transfer engines. 
 
@@ -58,7 +55,6 @@ An UCCL overview can be found in this [slide deck](https://docs.google.com/prese
   * Message transfer bandwidth over RDMA on AMD MI300X + Broadcom Thor-2:
     <p align="left"> <img src="./docs/images/p2p-mi300x-thor2.png" alt="" width="600"> </p>
   </details>
-  <br>
 
 * **[UCCL-EP](ep/)** allows running DeepEP atop of heterogeneous hardware platforms, including AMD and Nvidia GPUs, and any RDMA NICs such as AWS EFA NICs and Broadcom NICs, while achieving IBGDA-level performance. 
 
