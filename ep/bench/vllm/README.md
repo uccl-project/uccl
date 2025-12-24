@@ -23,7 +23,7 @@ Follow the official guide:
 git clone https://github.com/vllm-project/vllm.git
 cd vllm
 # This may take 5-10 minutes.
-pip install -e .
+uv pip install -e .
 ```
 
 For detailed EP setup, refer to [vLLM Expert Parallel Deployment](https://docs.vllm.ai/en/stable/serving/expert_parallel_deployment.html)
@@ -37,7 +37,11 @@ DeepGEMM provides optimized kernels for MoE operations:
 git clone --recursive git@github.com:deepseek-ai/DeepGEMM.git
 cd DeepGEMM
 cat install.sh
-./install.sh # ignore the error
+# cuobjdump used by https://github.com/deepseek-ai/DeepGEMM/blob/9b680f428484625f4f35dc3617f134187c6bcd4a/csrc/jit/kernel_runtime.hpp#L44
+sudo apt install nvidia-cuda-toolkit -y
+# /bin/cuobjdump instead of $CUDA_HOME/bin/cuobjdump in cuda12.8
+sudo ln -s /bin/cuobjdump /usr/local/cuda-12.8/bin/cuobjdump
+./install.sh
 uv pip install dist/*.whl --force-reinstall
 ```
 
