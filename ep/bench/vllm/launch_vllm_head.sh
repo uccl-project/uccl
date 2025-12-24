@@ -1,5 +1,5 @@
 #!/bin/bash
-# Node 1 (Primary) - Multi-node vLLM with Expert Parallel (EP)
+# Node 0 (Primary) - Multi-node vLLM with Expert Parallel (EP)
 # This node handles incoming requests
 #
 # Prerequisites:
@@ -10,7 +10,7 @@
 
 set -e
 
-echo "🚀 Launching vLLM Node 1 (Primary) with Expert Parallel..."
+echo "🚀 Launching vLLM Node 0 (Primary) with Expert Parallel..."
 
 # Check if IP is provided
 if [ -z "$1" ]; then
@@ -52,7 +52,6 @@ export VLLM_USE_DEEP_GEMM=1
 # For InfiniBand/EFA clusters: Prevent initialization hangs
 # This ensures torch distributed uses Ethernet for initial setup
 # Find your network interface: ip addr show | grep -E 'eth|enp'
-
 export GLOO_SOCKET_IFNAME=enp71s0         # Change to your primary network interface
 export NCCL_SOCKET_IFNAME=enp71s0       # Uncomment if using NCCL
 export TP_SOCKET_IFNAME=enp71s0         # Uncomment if using tensor parallel
@@ -65,22 +64,22 @@ export TP_SOCKET_IFNAME=enp71s0         # Uncomment if using tensor parallel
 export NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so"
 
 # NCCL performance tuning (optional):
-# export NCCL_P2P_NET_CHUNKSIZE=524288
-# export NCCL_BUFFSIZE=8388608
+export NCCL_P2P_NET_CHUNKSIZE=524288
+export NCCL_BUFFSIZE=8388608
+
+# NCCL debugging (for diagnosing connection issues):
+# export NCCL_DEBUG=INFO
+# export NCCL_DEBUG_SUBSYS=INIT,NET
 
 # https://github.com/vllm-project/vllm/pull/27444
 export VLLM_ENGINE_READY_TIMEOUT_S=3600
 export DG_JIT_CACHE_DIR=/opt/dlami/nvme
 
-# NCCL debugging (for diagnosing connection issues):
-export NCCL_DEBUG=INFO
-export NCCL_DEBUG_SUBSYS=INIT,NET
-
 # ============================================================================
 # ARGUMENTS PARSING
 # ============================================================================
 
-NODE1_IP="$1"                                      # Node 1 IP address (REQUIRED)
+NODE1_IP="$1"                                      # Node 0 IP address (REQUIRED)
 RPC_PORT="${2:-13345}"                             # RPC communication port
 MODEL="${3:-deepseek-ai/DeepSeek-V3-0324}"         # Model to serve
 TOTAL_DP_SIZE="${4:-16}"                           # Total DP size across all nodes
@@ -134,7 +133,7 @@ vllm serve "${MODEL}" \
     --data-parallel-size-local "${LOCAL_DP_SIZE}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
-    --gpu-memory-utilization 0.6 \
+    --gpu-memory-utilization 0.8 \
     --api-server-count="${API_SERVERS}"
 
 # Additional useful options (uncomment as needed):

@@ -1,14 +1,14 @@
 #!/bin/bash
-# Node 2+ (Secondary) - Multi-node vLLM with Expert Parallel (EP)
+# Node 1+ (Secondary) - Multi-node vLLM with Expert Parallel (EP)
 # This node runs in headless mode (no API server)
 #
-# Prerequisites: Same as Node 1
+# Prerequisites: Same as Node 0
 # 1. Install vLLM with EP support
 # 2. Install DeepGEMM
 # 3. Install EP kernels
 # 4. For AWS EFA: Install AWS OFI-NCCL plugin
 #
-# IMPORTANT: All configuration must match Node 1!
+# IMPORTANT: All configuration must match Node 0!
 
 set -e
 
@@ -16,15 +16,15 @@ echo "🚀 Launching vLLM Secondary Node (Headless) with Expert Parallel..."
 
 # Check if primary node IP is provided
 if [ -z "$1" ]; then
-    echo "❌ Error: Primary Node (Node 1) IP address is required!"
+    echo "❌ Error: Primary Node (Node 0) IP address is required!"
     echo ""
     echo "Usage: $0 <NODE1_IP> [RPC_PORT] [MODEL] [TOTAL_DP_SIZE] [LOCAL_DP_SIZE] [START_RANK]"
     echo ""
     echo "Example:"
     echo "  $0 10.1.107.86 13345 deepseek-ai/DeepSeek-V3-0324 16 8 8"
     echo ""
-    echo "⚠️  Note: Use Node 1's IP address, not this node's IP!"
-    echo "💡 To find Node 1's IP, run on Node 1: hostname -I"
+    echo "⚠️  Note: Use Node 0's IP address, not this node's IP!"
+    echo "💡 To find Node 0's IP, run on Node 0: hostname -I"
     exit 1
 fi
 
@@ -34,7 +34,7 @@ export LD_LIBRARY_PATH=$(python3 -c "import torch; import os; print(os.path.join
 # ============================================================================
 # BACKEND CONFIGURATION
 # ============================================================================
-# CRITICAL: Must match Node 1 exactly!
+# CRITICAL: Must match Node 0 exactly!
 
 if [ -z "$VLLM_ALL2ALL_BACKEND" ]; then
     all2all_backend="allgather_reducescatter"
@@ -47,8 +47,8 @@ export VLLM_USE_DEEP_GEMM=1
 # ============================================================================
 # NETWORK CONFIGURATION
 # ============================================================================
-# CRITICAL: Must match Node 1 exactly!
 
+# CRITICAL: Must match Node 0 exactly!
 # For InfiniBand/EFA clusters
 export GLOO_SOCKET_IFNAME=enp71s0         # Change to your primary network interface
 export NCCL_SOCKET_IFNAME=enp71s0       # Uncomment if using NCCL
@@ -57,38 +57,38 @@ export TP_SOCKET_IFNAME=enp71s0         # Uncomment if using tensor parallel
 # ============================================================================
 # NCCL CONFIGURATION (Optional)
 # ============================================================================
-# CRITICAL: Must match Node 1 exactly!
+# CRITICAL: Must match Node 0 exactly!
 
 # AWS EFA NCCL plugin (uncomment if using AWS EFA):
 export NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so"
 
 # NCCL performance tuning (optional):
-# export NCCL_P2P_NET_CHUNKSIZE=524288
-# export NCCL_BUFFSIZE=8388608
-
-# https://github.com/vllm-project/vllm/pull/27444
-export VLLM_ENGINE_READY_TIMEOUT_S=3600
-export DG_JIT_CACHE_DIR=/opt/dlami/nvme
+export NCCL_P2P_NET_CHUNKSIZE=524288
+export NCCL_BUFFSIZE=8388608
 
 # NCCL debugging (for diagnosing connection issues):
 # export NCCL_DEBUG=INFO
 # export NCCL_DEBUG_SUBSYS=INIT,NET
+
+# https://github.com/vllm-project/vllm/pull/27444
+export VLLM_ENGINE_READY_TIMEOUT_S=3600
+export DG_JIT_CACHE_DIR=/opt/dlami/nvme
 
 # ============================================================================
 # ARGUMENTS PARSING
 # ============================================================================
 
 NODE1_IP="$1"                                      # Primary node IP (REQUIRED)
-RPC_PORT="${2:-13345}"                             # Same RPC port as Node 1
-MODEL="${3:-deepseek-ai/DeepSeek-V3-0324}"         # Same model as Node 1
-TOTAL_DP_SIZE="${4:-16}"                           # Same total DP as Node 1
+RPC_PORT="${2:-13345}"                             # Same RPC port as Node 0
+MODEL="${3:-deepseek-ai/DeepSeek-V3-0324}"         # Same model as Node 0
+TOTAL_DP_SIZE="${4:-16}"                           # Same total DP as Node 0
 LOCAL_DP_SIZE="${5:-8}"                            # Local DP on this node
 LOCAL_TP_SIZE="${6:-1}"                            # Local TP on this node
 START_RANK="${7:-8}"                               # Starting rank offset
 
 # START_RANK calculation:
-# - Node 2: LOCAL_DP_SIZE of Node 1 (e.g., 8)
-# - Node 3: LOCAL_DP_SIZE of Node 1 + Node 2 (e.g., 16)
+# - Node 1: LOCAL_DP_SIZE of Node 0 (e.g., 8)
+# - Node 2: LOCAL_DP_SIZE of Node 0 + Node 1 (e.g., 16)
 # - Node N: Sum of all previous nodes' LOCAL_DP_SIZE
 
 # ============================================================================
@@ -133,10 +133,10 @@ vllm serve "${MODEL}" \
     --data-parallel-start-rank "${START_RANK}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
-    --gpu-memory-utilization 0.6 \
+    --gpu-memory-utilization 0.8 \
     --headless
 
-# Additional useful options (uncomment as needed, must match Node 1):
+# Additional useful options (uncomment as needed, must match Node 0):
 #   --max-model-len 8192 \
 #   --gpu-memory-utilization 0.9 \
 #   --dtype auto \
