@@ -25,23 +25,7 @@ if [ -z "$1" ]; then
     exit 1
 fi
 
-# ============================================================================
-# ENVIRONMENT CONFIGURATION
-# ============================================================================
-# IMPORTANT: Adjust these paths according to your installation
-# ============================================================================
-
-# Python path configuration (adjust to your installation)
-# Example paths - modify according to your setup:
-export PYTHONPATH=/path/to/vllm:$PYTHONPATH
-export PYTHONPATH=/path/to/DeepGEMM:$PYTHONPATH
-export PYTHONPATH=/path/to/DeepEP:$PYTHONPATH
-export PYTHONPATH=/path/to/pplx-kernels:$PYTHONPATH
-
 # PyTorch library path (required for DeepGEMM)
-export LD_LIBRARY_PATH=/path/to/python/site-packages/torch/lib:$LD_LIBRARY_PATH
-
-# Example for conda/pip installation:
 export LD_LIBRARY_PATH=$(python3 -c "import torch; import os; print(os.path.join(torch.__path__[0], 'lib'))"):$LD_LIBRARY_PATH
 
 # ============================================================================
@@ -53,7 +37,12 @@ export LD_LIBRARY_PATH=$(python3 -c "import torch; import os; print(os.path.join
 # - deepep_high_throughput: Multi-node, high-throughput (prefill-dominated)
 # - allgather_reducescatter: Multi-node with NCCL (works well with InfiniBand/EFA)
 
-export VLLM_ALL2ALL_BACKEND=allgather_reducescatter
+if [ -z "$VLLM_ALL2ALL_BACKEND" ]; then
+    all2all_backend="allgather_reducescatter"
+else
+    all2all_backend="$VLLM_ALL2ALL_BACKEND"
+    unset VLLM_ALL2ALL_BACKEND
+fi
 export VLLM_USE_DEEP_GEMM=1
 
 # ============================================================================
@@ -62,16 +51,11 @@ export VLLM_USE_DEEP_GEMM=1
 
 # For InfiniBand/EFA clusters: Prevent initialization hangs
 # This ensures torch distributed uses Ethernet for initial setup
-# Find your network interface: ip addr show | grep -E 'eth|ib|enp'
-#
-# Common interfaces:
-#   - eth0, eno1, enp0s3 (Ethernet)
-#   - ib0, ib1 (InfiniBand)
-#   - enp74s0, ens5 (Custom/AWS EFA)
+# Find your network interface: ip addr show | grep -E 'eth|enp'
 
-export GLOO_SOCKET_IFNAME=eth0         # Change to your primary network interface
-export NCCL_SOCKET_IFNAME=eth0       # Uncomment if using NCCL
-export TP_SOCKET_IFNAME=eth0         # Uncomment if using tensor parallel
+export GLOO_SOCKET_IFNAME=enp71s0         # Change to your primary network interface
+export NCCL_SOCKET_IFNAME=enp71s0       # Uncomment if using NCCL
+export TP_SOCKET_IFNAME=enp71s0         # Uncomment if using tensor parallel
 
 # ============================================================================
 # NCCL CONFIGURATION (Optional - for advanced users)
@@ -110,7 +94,7 @@ echo "║              vLLM Expert Parallel Configuration               ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 echo ""
 echo "Backend Configuration:"
-echo "  • Backend: ${VLLM_ALL2ALL_BACKEND}"
+echo "  • Backend: ${all2all_backend}"
 echo "  • DeepGEMM: Enabled"
 echo ""
 echo "Node Configuration:"
@@ -133,18 +117,19 @@ echo ""
 # ============================================================================
 
 vllm serve "${MODEL}" \
-    --tensor-parallel-size 1 \                          # TP size (usually 1 for EP)
-    --enable-expert-parallel \                          # Enable Expert Parallel
-    --data-parallel-size "${TOTAL_DP_SIZE}" \           # Total DP across all nodes
-    --data-parallel-size-local "${LOCAL_DP_SIZE}" \     # Local DP on this node
-    --data-parallel-address "${NODE1_IP}" \             # Primary node IP
-    --data-parallel-rpc-port "${RPC_PORT}" \            # RPC port for coordination
-    --api-server-count="${API_SERVERS}" \               # Number of API servers
-    --trust-remote-code                                  # Allow custom model code
+    --all2all-backend "${all2all_backend}" \
+    --tensor-parallel-size 1 \
+    --enable-expert-parallel \
+    --data-parallel-size "${TOTAL_DP_SIZE}" \
+    --data-parallel-size-local "${LOCAL_DP_SIZE}" \
+    --data-parallel-address "${NODE1_IP}" \
+    --data-parallel-rpc-port "${RPC_PORT}" \
+    --api-server-count="${API_SERVERS}"
 
 # Additional useful options (uncomment as needed):
-#   --max-model-len 8192 \                              # Max sequence length
-#   --gpu-memory-utilization 0.9 \                      # GPU memory usage (0.0-1.0)
-#   --dtype auto \                                      # Data type (auto/float16/bfloat16)
-#   --enable-chunked-prefill \                          # Enable chunked prefill
-#   --port 8000 \                                       # API server port
+#   --max-model-len 8192 \
+#   --gpu-memory-utilization 0.9 \
+#   --dtype auto \
+#   --enable-chunked-prefill \
+#   --port 8000 \
+

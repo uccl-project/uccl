@@ -1,40 +1,29 @@
-# vLLM Multi-Node Expert Parallel Deployment Guide
+# vLLM + UCCL-EP Multi-Node Expert Parallel Deployment Guide
 
-This guide provides example scripts and instructions for deploying vLLM with Expert Parallelism (EP) across multiple nodes.
-
-## 🎯 Overview
-
-**Expert Parallelism (EP)** allows experts in Mixture-of-Experts (MoE) models to be deployed on separate GPUs, increasing locality, efficiency, and throughput. EP is typically coupled with Data Parallelism (DP).
-
-## 📦 Prerequisites
-
-Before deploying vLLM with EP, ensure you have:
-
-### Hardware Requirements
-
-- **Multi-GPU nodes** (typically 8 GPUs per node)
-- **High-speed interconnect** (InfiniBand, AWS EFA, or high-bandwidth Ethernet)
-- **GPU memory** sufficient for model size + KV cache
-
-### Software Requirements
-
-- **Python 3.8+**
-- **PyTorch** with CUDA support
-- **vLLM** with EP support
-- **Network access** between nodes
+This guide provides example scripts and instructions for deploying vLLM with Expert Parallelism (EP) across multiple nodes on AWS p5en.
 
 ## 🚀 Installation
+
+### 0. Install uv
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv venv
+source .venv/bin/activate
+uv pip install numpy torch
+```
+
+Note: we do not recommend installing to EFS shared file systems, as it is too slow. 
 
 ### 1. Install vLLM with EP Support
 
 Follow the official guide:
 ```bash
 # Install vLLM (latest version with EP support)
-pip install vllm
+uv pip install vllm
 ```
 
-For detailed EP setup, refer to:
-📖 [vLLM Expert Parallel Deployment](https://docs.vllm.ai/en/stable/serving/expert_parallel_deployment.html)
+For detailed EP setup, refer to [vLLM Expert Parallel Deployment](https://docs.vllm.ai/en/stable/serving/expert_parallel_deployment.html)
 
 ### 2. Install DeepGEMM Library
 
@@ -42,41 +31,25 @@ DeepGEMM provides optimized kernels for MoE operations:
 
 ```bash
 # Clone and install DeepGEMM
-git clone https://github.com/deepseek-ai/DeepGEMM.git
+git clone --recursive git@github.com:deepseek-ai/DeepGEMM.git
 cd DeepGEMM
-pip install -e .
+cat install.sh
+./install.sh # ignore the error
+uv pip install dist/*.whl --force-reinstall
 ```
 
-📖 [DeepGEMM Installation Guide](https://github.com/deepseek-ai/DeepGEMM#installation)
+Refer to [DeepGEMM Installation Guide](https://github.com/deepseek-ai/DeepGEMM#installation), if hitting any issues.
 
 ### 3. Install EP Kernels
 
-```bash
-# Install DeepEP and pplx-kernels
-# Follow vLLM's guide for EP kernels setup
-```
+Refer to [../deep_ep_wrapper/README.md](../deep_ep_wrapper/README.md) to install UCCL-EP's drop-in replacement for DeepEP.
+
+Refer to vLLM's guide for the original DeepEP and pplx-kernels setup.
 
 ### 4. (Optional) AWS EFA Setup
 
-For AWS instances with EFA:
+For AWS instances with EFA, install AWS OFI-NCCL plugin, which is pre-installed on AWS Deep Learning AMIs
 
-```bash
-# Install AWS OFI-NCCL plugin
-# This is pre-installed on AWS Deep Learning AMIs
-sudo apt-get install aws-ofi-nccl
-```
-
-### 5. (Optional) Disaggregated Serving
-
-For prefill/decode split deployments:
-
-```bash
-# Install gdrcopy, ucx, and nixl
-pip install nixl
-
-# For optimal performance, install gdrcopy
-# See: https://github.com/NVIDIA/gdrcopy
-```
 
 ## ⚙️ Configuration
 
@@ -143,21 +116,13 @@ NODE1_IP=$(hostname -I | awk '{print $1}')
 bash launch_vllm_node1.sh $NODE1_IP 13345 deepseek-ai/DeepSeek-V3-0324 16 8 8
 ```
 
-**Arguments:**
-- `NODE1_IP` - IP address of Node 1
-- `13345` - RPC port for coordination
-- `deepseek-ai/DeepSeek-V3-0324` - Model to serve
-- `16` - Total DP size (across all nodes)
-- `8` - Local DP size (GPUs on this node)
-- `8` - Number of API servers
-
 #### Step 2: Start Node 2+ (Secondary)
 
 On **each additional node** (secondary nodes in headless mode):
 
 ```bash
 # Use Node 1's IP (not this node's IP!)
-NODE1_IP="10.1.59.30"  # Replace with actual Node 1 IP
+NODE1_IP="10.1.59.30"
 
 # Launch Node 2 (headless)
 bash launch_vllm_node2.sh $NODE1_IP 13345 deepseek-ai/DeepSeek-V3-0324 16 8 8
@@ -170,28 +135,3 @@ bash launch_vllm_node2.sh $NODE1_IP 13345 deepseek-ai/DeepSeek-V3-0324 16 8 8
 - `16` - Same total DP size as Node 1
 - `8` - Local DP size on this node
 - `8` - Starting rank (= sum of previous nodes' local DP)
-
-### Example: 2-Node Deployment
-
-**Configuration:**
-- 2 nodes × 8 GPUs = 16 GPUs total
-- DP size = 16 (8 per node)
-- Model: DeepSeek-V3-0324
-
-**Node 1 (10.1.59.30):**
-```bash
-bash launch_vllm_node1.sh 10.1.59.30 13345 deepseek-ai/DeepSeek-V3-0324 16 8 8
-```
-
-**Node 2 (10.1.60.57):**
-```bash
-bash launch_vllm_node2.sh 10.1.59.30 13345 deepseek-ai/DeepSeek-V3-0324 16 8 8
-```
-
-### Startup Sequence
-
-1. **Start Node 1 first** - Wait for API servers to start
-2. **Wait 30-60 seconds** - Allow model loading and initialization
-3. **Start Node 2** - It will connect to Node 1 via RPC
-4. **Verify connection** - Check logs for "Connected all rings"
-
