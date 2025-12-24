@@ -19,8 +19,11 @@ Note: we do not recommend installing to EFS shared file systems, as it is too sl
 
 Follow the official guide:
 ```bash
-# Install vLLM (latest version with EP support)
-uv pip install vllm
+# Install vLLM: latest version with timeout fix (https://github.com/vllm-project/vllm/pull/27444)
+git clone https://github.com/vllm-project/vllm.git
+cd vllm
+# This may take 5-10 minutes.
+pip install -e .
 ```
 
 For detailed EP setup, refer to [vLLM Expert Parallel Deployment](https://docs.vllm.ai/en/stable/serving/expert_parallel_deployment.html)
@@ -80,7 +83,7 @@ ip addr show
 
 ### Environment Setup
 
-Edit the provided scripts (`launch_vllm_node1.sh` and `launch_vllm_node2.sh`) to configure:
+Edit the provided scripts (`launch_vllm_head.sh` and `launch_vllm_worker.sh`) to configure:
 
 1. **PYTHONPATH** - Paths to vLLM, DeepGEMM, and EP kernels
 2. **LD_LIBRARY_PATH** - Path to PyTorch libraries
@@ -113,7 +116,7 @@ On the **first node** (primary node that handles API requests):
 NODE1_IP=$(hostname -I | awk '{print $1}')
 
 # Launch Node 1
-bash launch_vllm_node1.sh $NODE1_IP 13345 deepseek-ai/DeepSeek-V3-0324 16 8 8
+bash launch_vllm_head.sh $NODE1_IP 13345 deepseek-ai/DeepSeek-V3-0324 16 8 8
 ```
 
 #### Step 2: Start Node 2+ (Secondary)
@@ -125,7 +128,7 @@ On **each additional node** (secondary nodes in headless mode):
 NODE1_IP="10.1.59.30"
 
 # Launch Node 2 (headless)
-bash launch_vllm_node2.sh $NODE1_IP 13345 deepseek-ai/DeepSeek-V3-0324 16 8 8
+bash launch_vllm_worker.sh $NODE1_IP 13345 deepseek-ai/DeepSeek-V3-0324 16 8 8
 ```
 
 **Arguments:**

@@ -68,6 +68,13 @@ export NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so
 export NCCL_P2P_NET_CHUNKSIZE=524288
 export NCCL_BUFFSIZE=8388608
 
+# https://github.com/vllm-project/vllm/pull/27444
+export VLLM_ENGINE_READY_TIMEOUT_S=3600
+
+# NCCL debugging (for diagnosing connection issues):
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=INIT,NET
+
 # ============================================================================
 # ARGUMENTS PARSING
 # ============================================================================
