@@ -142,4 +142,4 @@ bash launch_vllm_worker.sh $NODE1_IP 13345 deepseek-ai/DeepSeek-V3-0324 16 8 1 8
 - `16` - Total DP size
 - `8` - Local DP size on this node
 - `1` - Local TP size on this node
-- `8` - Starting rank (= sum of previous nodes' local DP)
+- `8` - For node 0, number of API servers; for others, starting rank (= sum of previous nodes' local DP)
