@@ -114,11 +114,16 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   size_t const num_int4_per_msg = num_bytes_per_msg / sizeof(int4);
   EP_DEVICE_ASSERT(num_bytes_per_msg % sizeof(int4) == 0);
 
-  const size_t num_bytes_per_meta = sizeof(int4);
-  const size_t num_bytes_per_data =
+  size_t const num_bytes_per_meta = sizeof(int4);
+  size_t const num_bytes_per_data_unaligned =
       (kUseFP8 ? (kHidden + num_scales * sizeof(float))
-               : (kHidden * sizeof(nv_bfloat16)));
-  const size_t num_bytes_per_msg_new = num_bytes_per_meta + num_bytes_per_data;
+               : (kHidden * sizeof(nv_bfloat16))) +
+      sizeof(int);  // Flag at end of data
+  // Align to sizeof(int4)
+  size_t const num_bytes_per_data =
+      ((num_bytes_per_data_unaligned + sizeof(int4) - 1) / sizeof(int4)) *
+      sizeof(int4);
+  size_t const num_bytes_per_msg_new = num_bytes_per_meta + num_bytes_per_data;
   EP_DEVICE_ASSERT(num_bytes_per_msg_new % sizeof(int4) == 0);
 
   void* rdma_recv_x_meta = rdma_recv_x;
@@ -136,7 +141,16 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 #endif
 
   // Sending phase
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    printf(
+        "[internode_ll] Start of kernel: rank=%d, phases=0x%x, "
+        "has_send_phase=%d\n",
+        rank, phases, (phases & LOW_LATENCY_SEND_PHASE) != 0);
+  }
   if ((phases & LOW_LATENCY_SEND_PHASE) == 0) goto LOW_LATENCY_DISPATCH_RECV;
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    printf("[internode_ll] Entering SEND phase: rank=%d\n", rank);
+  }
 
   // There are 2 kinds of warps in this part:
   // 1. The first-kind warps for FP8 cast and sending top-k tokens
@@ -237,9 +251,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                 ? atomicAdd(atomic_counter_per_expert + dst_expert_idx, 1)
                 : 0;
         slot_idx = __shfl_sync(WARP_MASK, slot_idx, 0);
+
+        /* dst_rank is the logical rank that owns the expert. The final
+         * destination where the expert lives. */
         auto const dst_rank = dst_expert_idx / num_local_experts;
         auto const dst_expert_local_idx = dst_expert_idx % num_local_experts;
-        // Same-rail mapping (same as the other PR)
+        /* real_write_dst_rank has the same NVLink rail position as the sender.
+         */
         auto real_write_dst_rank =
             (dst_rank / num_nvl_ranks) * num_nvl_ranks + (rank % num_nvl_ranks);
         auto real_dst_expert_id =
@@ -258,6 +276,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                     ? (tmp_dst_expert_id / num_local_experts / num_nvl_ranks)
                     : -1;
 
+            /* This check if the token is already sent to the same node */
 #pragma unroll
             for (int i = 0; i < warp_id; ++i) {
               int dst_node_id = __shfl_sync(0xffffffff, tmp_dst_node_id, i);
@@ -269,6 +288,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           }
 
           if (send_node_id != -1) {
+            /* Send the token to the destination node (data + flag) */
             auto const src_ptr =
                 reinterpret_cast<uint64_t>(rdma_x_src_idx) + num_bytes_per_meta;
             auto const dst_ptr = reinterpret_cast<uint64_t>(rdma_recv_x_data) +
@@ -276,6 +296,18 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                      num_max_dispatch_tokens_per_rank *
                                      num_bytes_per_data +
                                  token_idx * num_bytes_per_data;
+
+            // Write flag value (2) at end of source data buffer with release
+            // semantics
+            // Flag is at the end of actual data (before padding)
+            size_t num_bytes_data_only =
+                num_bytes_per_data_unaligned - sizeof(int);
+            if (lane_id == 0) {
+              auto* flag_ptr = reinterpret_cast<int*>(
+                  reinterpret_cast<uint8_t*>(src_ptr) + num_bytes_data_only);
+              st_release_sys_global(flag_ptr, 2);
+            }
+            __syncwarp();
 
             auto const dst_p2p_ptr =
                 ipc_rdma_base_ptrs ? uccl::get_ipc_p2p_ptr(
@@ -290,7 +322,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                       reinterpret_cast<uint64_t>(rdma_buffer_ptr),
                   /*src_off=*/src_ptr -
                       reinterpret_cast<uint64_t>(rdma_buffer_ptr),
-                  /*bytes=*/num_bytes_per_data,
+                  /*bytes=*/num_bytes_per_data,  // Includes flag
                   /*dst_rank=*/real_write_dst_rank,
                   /*warp_id=*/dst_expert_local_idx, lane_id,
                   /*slot_idx=*/slot_idx, d2h_channel_addrs,
@@ -305,46 +337,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             }
           }
 
-          if (send_node_id != -1) {
-            auto const src_ptr =
-                reinterpret_cast<uint64_t>(data_ready_send_buffer);
-
-            auto const data_ready_counter_ptr =
-                reinterpret_cast<uint64_t>(data_ready_counter) +
-                (rank / num_nvl_ranks) * num_max_dispatch_tokens_per_rank *
-                    num_nvl_ranks * sizeof(int) +
-                token_idx * num_nvl_ranks * sizeof(int);
-
-            auto const data_ready_counter_p2p_ptr =
-                ipc_rdma_base_ptrs
-                    ? uccl::get_ipc_p2p_ptr(
-                          data_ready_counter_ptr, ipc_rdma_base_ptrs, rank,
-                          real_write_dst_rank, max_nvl_peers, 0)
-                    : 0;
-
-            if (data_ready_counter_p2p_ptr == 0) {
-              __threadfence_system();
-              uccl::nvshmemi_ibgda_put_nbi_warp(
-                  /*dst_off=*/data_ready_counter_ptr -
-                      reinterpret_cast<uint64_t>(rdma_buffer_ptr),
-                  /*src_off=*/src_ptr -
-                      reinterpret_cast<uint64_t>(rdma_buffer_ptr),
-                  /*bytes=*/num_nvl_ranks * sizeof(int),
-                  /*dst_rank=*/real_write_dst_rank,
-                  /*warp_id=*/dst_expert_local_idx, lane_id,
-                  /*slot_idx=*/slot_idx + 1, d2h_channel_addrs,
-                  num_d2h_channel_addrs,
-                  /*is_atomic=*/false, low_latency_buffer_idx);
-            } else {
-              auto const* src_int_ptr = reinterpret_cast<int const*>(src_ptr);
-              auto* dst_int_ptr =
-                  reinterpret_cast<int*>(data_ready_counter_p2p_ptr);
-              UNROLLED_WARP_COPY(1, lane_id, num_nvl_ranks, dst_int_ptr,
-                                 src_int_ptr, ld_nc_global, st_na_global);
-            }
-          }
-
-          {
+          {  // send meta
             auto const src_ptr = reinterpret_cast<uint64_t>(rdma_x_src_idx);
 
             auto const dst_ptr =
@@ -485,8 +478,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       }
       if (lane_id == 0) {
         shared_num_tokens_sent_per_expert[i - expert_begin_idx] = sum;
+        int increment = FINISHED_SUM_TAG - waiting_flag_sum - sum;
+        printf(
+            "[internode_ll] Last warp: rank=%d, sm_id=%d, expert_idx=%d, "
+            "sum=%d, waiting_flag_sum=%d, increment=%d\n",
+            rank, sm_id, i, sum, waiting_flag_sum, increment);
         atomic_add_release_global(atomic_finish_counter_per_expert + i,
-                                  FINISHED_SUM_TAG - waiting_flag_sum - sum);
+                                  increment);
       }
     }
   }
@@ -529,6 +527,12 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       }
     }
     __syncthreads();
+    if (thread_id == 0) {
+      printf(
+          "[internode_ll] Last SM (sm_id=%d, rank=%d) adding FINISHED_SUM_TAG "
+          "to all experts\n",
+          sm_id, rank);
+    }
 #pragma unroll
     for (int i = thread_id; i < num_experts; i += blockDim.x)
       atomic_add_release_global(atomic_finish_counter_per_expert + i,
@@ -536,6 +540,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   }
 
   __syncthreads();
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    printf("[internode_ll] After last SM sync: rank=%d\n", rank);
+  }
   // Issue count sends
   if (responsible_expert_idx < num_experts and sub_warp_id == 0 and
       lane_id == 0) {
@@ -546,18 +553,40 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         shared_num_tokens_sent_per_expert[responsible_expert_idx -
                                           sm_id * num_warp_groups];
     // Wait local sends issued and send expert counts
-    while (ld_acquire_global(atomic_finish_counter_per_expert +
-                             responsible_expert_idx) != FINISHED_SUM_TAG * 2)
+    printf(
+        "[internode_ll] Before wait: rank=%d, responsible_expert_idx=%d, "
+        "num_tokens_sent=%d, FINISHED_SUM_TAG*2=%d\n",
+        rank, responsible_expert_idx, num_tokens_sent, FINISHED_SUM_TAG * 2);
+    int counter_value = ld_acquire_global(atomic_finish_counter_per_expert +
+                                          responsible_expert_idx);
+    printf(
+        "[internode_ll] Initial counter: rank=%d, responsible_expert_idx=%d, "
+        "counter_value=%d\n",
+        rank, responsible_expert_idx, counter_value);
+    // Wait until counter reaches at least FINISHED_SUM_TAG * 2
+    // Use < instead of != because counter can occasionally exceed target due to
+    // race conditions or timing differences between per-token increments and
+    // last warp adjustments
+    while (counter_value < FINISHED_SUM_TAG * 2) {
+      counter_value = ld_acquire_global(atomic_finish_counter_per_expert +
+                                        responsible_expert_idx);
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
       __builtin_amdgcn_s_sleep(1);
 #else
       ;
 #endif
-
+    }
+    printf(
+        "[internode_ll] After wait: rank=%d, responsible_expert_idx=%d, "
+        "counter_value=%d\n",
+        rank, responsible_expert_idx, counter_value);
     auto dst_ptr = reinterpret_cast<uint64_t>(
         rdma_recv_count + dst_expert_local_idx * num_ranks + rank);
     auto dst_ptr_internode = reinterpret_cast<uint64_t>(
         rdma_recv_count_internode + dst_expert_local_idx * num_ranks + rank);
+    // Ensure all metadata writes are flushed before sending atomic to maintain
+    // ordering on EFA
+    __threadfence_system();
     // Try to use IPC for intra-node atomic operations
     auto const dst_p2p_ptr =
         ipc_rdma_base_ptrs
@@ -583,26 +612,56 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
     // Clean `packed_recv_count`
     if (dst_rank == 0) packed_recv_count[dst_expert_local_idx] = 0;
+    printf(
+        "[internode_ll] Finished SEND phase: rank=%d, "
+        "responsible_expert_idx=%d\n",
+        rank, responsible_expert_idx);
   }
   __syncwarp();
 
 // Receiving phase
 LOW_LATENCY_DISPATCH_RECV:
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    printf(
+        "[internode_ll] LOW_LATENCY_DISPATCH_RECV: rank=%d, phases=0x%x, "
+        "LOW_LATENCY_RECV_PHASE=0x%x, has_recv_phase=%d\n",
+        rank, phases, LOW_LATENCY_RECV_PHASE,
+        (phases & LOW_LATENCY_RECV_PHASE) != 0);
+  }
   if ((phases & LOW_LATENCY_RECV_PHASE) == 0) {
     return;
   }
 
   // For send-and-recv kernels, we need a grid sync for making
   // `packed_recv_count` visible
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    printf("[internode_ll] Before grid sync: phases=0x%x, has_send_phase=%d\n",
+           phases, (phases & LOW_LATENCY_SEND_PHASE) != 0);
+  }
   if (phases & LOW_LATENCY_SEND_PHASE)
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
     amd::grid_sync(grid_sync_barrier_ptr, num_sms);
 #else
     cg::this_grid().sync();
 #endif
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    printf("[internode_ll] After grid sync\n");
+  }
 
   // Receiving and packing
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    printf(
+        "[internode_ll] Before responsible_expert_idx check: "
+        "responsible_expert_idx=%d, num_experts=%d\n",
+        responsible_expert_idx, num_experts);
+  }
   if (responsible_expert_idx < num_experts) {
+    if (sub_warp_id == 1 and lane_id == 0) {
+      printf(
+          "[internode_ll] Entering recv phase: responsible_expert_idx=%d, "
+          "num_experts=%d, sub_warp_id=%d, lane_id=%d\n",
+          responsible_expert_idx, num_experts, sub_warp_id, lane_id);
+    }
     auto const src_rank = responsible_expert_idx / num_local_experts;
     auto const local_expert_idx = responsible_expert_idx % num_local_experts;
     uint8_t* rdma_recv_x_uint8 = nullptr;
@@ -648,8 +707,28 @@ LOW_LATENCY_DISPATCH_RECV:
 #else
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 15);
 #endif
+    // Debug: print from any lane 0 to see if we reach here
+    if (sub_warp_id == 1 and lane_id == 0) {
+      printf(
+          "[internode_ll] DEBUG: sub_warp_id=1 reached before wait section "
+          "print, "
+          "responsible_expert_idx=%d, src_rank=%d, rank=%d, "
+          "local_expert_idx=%d\n",
+          responsible_expert_idx, src_rank, rank, local_expert_idx);
+    }
+    if (lane_id == 0) {
+      printf(
+          "[internode_ll] Reached wait section: sub_warp_id=%d, lane_id=%d, "
+          "src_rank=%d, rank=%d, local_expert_idx=%d\n",
+          sub_warp_id, lane_id, src_rank, rank, local_expert_idx);
+    }
     if (sub_warp_id == 1 and lane_id == 0) {
       auto start_time = clock64();
+      printf(
+          "[internode_ll] Before IPC wait: src_rank=%d, rank=%d, "
+          "local_expert_idx=%d, max_nvl_peers=%d, sub_warp_id=%d, lane_id=%d\n",
+          src_rank, rank, local_expert_idx, max_nvl_peers, sub_warp_id,
+          lane_id);
       while ((src_rank / max_nvl_peers == rank / max_nvl_peers) &&
              (num_recv_tokens_ipc = ld_acquire_sys_global(
                   rdma_recv_count + local_expert_idx * num_ranks + src_rank)) ==
@@ -659,7 +738,13 @@ LOW_LATENCY_DISPATCH_RECV:
 #else
         ;
 #endif
+      printf("[internode_ll] After IPC wait: num_recv_tokens_ipc=%d\n",
+             num_recv_tokens_ipc);
 
+      printf(
+          "[internode_ll] Before internode wait: src_rank=%d, rank=%d, "
+          "local_expert_idx=%d, max_nvl_peers=%d\n",
+          src_rank, rank, local_expert_idx, max_nvl_peers);
       while ((src_rank / max_nvl_peers != rank / max_nvl_peers) &&
              (num_recv_tokens_internode = ld_acquire_sys_global(
                   rdma_recv_count_internode + local_expert_idx * num_ranks +
@@ -669,6 +754,9 @@ LOW_LATENCY_DISPATCH_RECV:
 #else
         ;
 #endif
+      printf(
+          "[internode_ll] After internode wait: num_recv_tokens_internode=%d\n",
+          num_recv_tokens_internode);
 
       if (src_rank / max_nvl_peers == rank / max_nvl_peers) {
         if (ld_acquire_sys_global(rdma_recv_count_internode +
@@ -745,27 +833,41 @@ LOW_LATENCY_DISPATCH_RECV:
               pack2<int, int64_t>(src_token_idx, src_rank);
         }
         src_token_idx = __shfl_sync(0xffffffff, src_token_idx, 0);
-        auto const data_ready_flag_src_ptr =
-            reinterpret_cast<int*>(data_ready_counter) +
-            (src_rank / num_nvl_ranks) * num_max_dispatch_tokens_per_rank *
-                num_nvl_ranks +
-            src_token_idx * num_nvl_ranks + rank % num_nvl_ranks;
+        auto const src_ptr = reinterpret_cast<uint64_t>(rdma_recv_x_data) +
+                             (src_rank / num_nvl_ranks) *
+                                 num_max_dispatch_tokens_per_rank *
+                                 num_bytes_per_data +
+                             src_token_idx * num_bytes_per_data;
+        // Flag is at end of actual data (before padding)
+        size_t num_bytes_data_only = num_bytes_per_data_unaligned - sizeof(int);
+        auto const data_ready_flag_ptr =
+            reinterpret_cast<uint64_t>(src_ptr) + num_bytes_data_only;
         auto const src_data_ready_flag_p2p_ptr = reinterpret_cast<int*>(
-            ipc_rdma_base_ptrs
-                ? uccl::get_ipc_p2p_ptr(
-                      /*dst_ptr=*/uint64_t(data_ready_flag_src_ptr),
-                      /*ipc_rdma_base_ptrs=*/ipc_rdma_base_ptrs,
-                      /*my_rank=*/rank,
-                      /*peer_rank=*/real_read_src_rank,
-                      /*max_nvl_peers=*/max_nvl_peers,
-                      /*peer_base_idx=*/0)
-                : 0);
+            ipc_rdma_base_ptrs ? uccl::get_ipc_p2p_ptr(
+                                     /*dst_ptr=*/data_ready_flag_ptr,
+                                     /*ipc_rdma_base_ptrs=*/ipc_rdma_base_ptrs,
+                                     /*my_rank=*/rank,
+                                     /*peer_rank=*/real_read_src_rank,
+                                     /*max_nvl_peers=*/max_nvl_peers,
+                                     /*peer_base_idx=*/0)
+                               : 0);
 
         if (lane_id == 0) {
           int tmp = 0;
           auto start_time = clock64();
           while (tmp != 2) {  // wait for data to be ready
-            tmp = ld_acquire_sys_global(src_data_ready_flag_p2p_ptr);
+            if (src_data_ready_flag_p2p_ptr != 0) {
+              tmp = ld_acquire_sys_global(src_data_ready_flag_p2p_ptr);
+            } else {
+              // RDMA case: read flag directly from data buffer address
+              // The flag is at the end of the data buffer written via RDMA
+              auto* flag_ptr = reinterpret_cast<int*>(
+                  reinterpret_cast<uint8_t*>(rdma_recv_x_data) +
+                  (src_rank / num_nvl_ranks) *
+                      num_max_dispatch_tokens_per_rank * num_bytes_per_data +
+                  src_token_idx * num_bytes_per_data + num_bytes_data_only);
+              tmp = ld_acquire_sys_global(flag_ptr);
+            }
             if (clock64() - start_time >= NUM_TIMEOUT_CYCLES) {
               printf(
                   "DeepEP ll dispatch recv data timeout,src_rank:%d, dst_rank: "
@@ -778,11 +880,6 @@ LOW_LATENCY_DISPATCH_RECV:
           }
         }
         __syncwarp();
-        auto const src_ptr = reinterpret_cast<uint64_t>(rdma_recv_x_data) +
-                             (src_rank / num_nvl_ranks) *
-                                 num_max_dispatch_tokens_per_rank *
-                                 num_bytes_per_data +
-                             src_token_idx * num_bytes_per_data;
         src_data = reinterpret_cast<int4*>(
             ipc_rdma_base_ptrs
                 ? uccl::get_ipc_p2p_ptr(src_ptr, ipc_rdma_base_ptrs, rank,

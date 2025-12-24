@@ -191,8 +191,11 @@ struct LowLatencyLayout {
     // to do data transformation
     EP_HOST_ASSERT(num_scales * sizeof(float) <= static_cast<size_t>(hidden));
     size_t per_meta_data_size = sizeof(int4);
-    size_t per_token_size = std::max(hidden * sizeof(nv_bfloat16),
-                                     hidden + num_scales * sizeof(float));
+    size_t per_token_size_unaligned = std::max(hidden * sizeof(nv_bfloat16),
+                                               hidden + num_scales * sizeof(float)) +
+                                      sizeof(int);  // Flag at end of data
+    // Align to sizeof(int4) for efficient vectorized copies
+    size_t per_token_size = align<size_t>(per_token_size_unaligned, sizeof(int4));
     size_t num_bytes_per_dispatch_msg =
         sizeof(int4) + std::max(hidden * sizeof(nv_bfloat16),
                                 hidden + num_scales * sizeof(float));

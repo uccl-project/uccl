@@ -1612,6 +1612,15 @@ void remote_process_completions_fast_mode(
         src_rank = new_index % num_ranks;
         int num_tokens = S.dispatch_token_counter.Get(
             {low_latency_buffer_idx, expert_idx, src_rank});
+        if ((-value - 1) == num_tokens)
+          fprintf(stderr,
+                  "[USE_RECEIVER_BARRIER] Dispatch atomic: offset=%u, "
+                  "new_offset=%u, new_index=%zu, expert_idx=%d, src_rank=%d, "
+                  "num_tokens=%d, value=%d, expected_value=%d, "
+                  "is_atomic_ready=%d, low_latency_buffer_idx=%d\n",
+                  offset, new_offset, new_index, expert_idx, src_rank, num_tokens,
+                  value, -value - 1, (-value - 1) == num_tokens,
+                  low_latency_buffer_idx);
         if ((-value - 1) == num_tokens) {
           is_atomic_ready = true;
         }
@@ -1745,12 +1754,28 @@ void remote_process_completions_fast_mode(
 
       if (!is_combine) {
         /* expert_idx here is the local expert index of the receiver. */
+        int old_count = S.dispatch_token_counter.Get({buffer_idx, expert_idx, src_rank});
         S.dispatch_token_counter.Add({buffer_idx, expert_idx, src_rank}, k);
+        int new_count = S.dispatch_token_counter.Get({buffer_idx, expert_idx, src_rank});
+        // fprintf(stderr,
+        //         "[USE_RECEIVER_BARRIER] Dispatch metadata write: imm=0x%x, "
+        //         "is_combine=%d, buffer_idx=%u, expert_idx=%u, src_rank=%u, "
+        //         "k=%u, old_count=%d, new_count=%d\n",
+        //         imm, is_combine, buffer_idx, expert_idx, src_rank, k, old_count,
+        //         new_count);
       } else {
         /* expert_idx here is the global expert index of the sender. */
         assert(expert_idx >= src_rank * (num_experts / num_ranks) &&
                expert_idx < (src_rank + 1) * (num_experts / num_ranks));
+        int old_count = S.combine_token_counter.Get({buffer_idx, expert_idx});
         S.combine_token_counter.Add({buffer_idx, expert_idx}, k);
+        int new_count = S.combine_token_counter.Get({buffer_idx, expert_idx});
+        // fprintf(stderr,
+        //         "[USE_RECEIVER_BARRIER] Combine metadata write: imm=0x%x, "
+        //         "is_combine=%d, buffer_idx=%u, expert_idx=%u, src_rank=%u, "
+        //         "k=%u, old_count=%d, new_count=%d\n",
+        //         imm, is_combine, buffer_idx, expert_idx, src_rank, k, old_count,
+        //         new_count);
       }
 #endif
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
