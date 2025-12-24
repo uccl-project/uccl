@@ -71,8 +71,8 @@ export VLLM_ENGINE_READY_TIMEOUT_S=3600
 export DG_JIT_CACHE_DIR=/opt/dlami/nvme
 
 # NCCL debugging (for diagnosing connection issues):
-export NCCL_DEBUG=INFO
-export NCCL_DEBUG_SUBSYS=INIT,NET
+# export NCCL_DEBUG=INFO
+# export NCCL_DEBUG_SUBSYS=INIT,NET
 
 # ============================================================================
 # ARGUMENTS PARSING
@@ -83,7 +83,8 @@ RPC_PORT="${2:-13345}"                             # Same RPC port as Node 1
 MODEL="${3:-deepseek-ai/DeepSeek-V3-0324}"         # Same model as Node 1
 TOTAL_DP_SIZE="${4:-16}"                           # Same total DP as Node 1
 LOCAL_DP_SIZE="${5:-8}"                            # Local DP on this node
-START_RANK="${6:-8}"                               # Starting rank offset
+LOCAL_TP_SIZE="${6:-1}"                            # Local TP on this node
+START_RANK="${7:-8}"                               # Starting rank offset
 
 # START_RANK calculation:
 # - Node 2: LOCAL_DP_SIZE of Node 1 (e.g., 8)
@@ -112,6 +113,7 @@ echo ""
 echo "Parallelism Configuration:"
 echo "  • Total Data Parallel Size: ${TOTAL_DP_SIZE} (across all nodes)"
 echo "  • Local Data Parallel Size: ${LOCAL_DP_SIZE} (this node)"
+echo "  • Local Tensor Parallel Size: ${LOCAL_TP_SIZE} (this node)"
 echo "  • Starting Rank: ${START_RANK}"
 echo "  • Expert Parallel: Enabled (automatically calculated)"
 echo ""
@@ -123,14 +125,15 @@ echo ""
 # ============================================================================
 
 vllm serve "${MODEL}" \
-    --all2all-backend "${all2all_backend}" \
-    --tensor-parallel-size 1 \
     --enable-expert-parallel \
+    --all2all-backend "${all2all_backend}" \
+    --tensor-parallel-size "${LOCAL_TP_SIZE}" \
     --data-parallel-size "${TOTAL_DP_SIZE}" \
     --data-parallel-size-local "${LOCAL_DP_SIZE}" \
     --data-parallel-start-rank "${START_RANK}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
+    --gpu-memory-utilization 0.6 \
     --headless
 
 # Additional useful options (uncomment as needed, must match Node 1):

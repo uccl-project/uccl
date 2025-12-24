@@ -85,7 +85,8 @@ RPC_PORT="${2:-13345}"                             # RPC communication port
 MODEL="${3:-deepseek-ai/DeepSeek-V3-0324}"         # Model to serve
 TOTAL_DP_SIZE="${4:-16}"                           # Total DP size across all nodes
 LOCAL_DP_SIZE="${5:-8}"                            # Local DP size on this node
-API_SERVERS="${6:-8}"                              # Number of API servers
+LOCAL_TP_SIZE="${6:-1}"                            # Local TP size on this node
+API_SERVERS="${7:-8}"                              # Number of API servers
 
 # Recommendations:
 # - TOTAL_DP_SIZE = LOCAL_DP_SIZE * NUMBER_OF_NODES
@@ -114,6 +115,7 @@ echo ""
 echo "Parallelism Configuration:"
 echo "  • Total Data Parallel Size: ${TOTAL_DP_SIZE} (across all nodes)"
 echo "  • Local Data Parallel Size: ${LOCAL_DP_SIZE} (this node)"
+echo "  • Local Tensor Parallel Size: ${LOCAL_TP_SIZE} (this node)"
 echo "  • API Servers: ${API_SERVERS}"
 echo "  • Expert Parallel: Enabled (automatically calculated)"
 echo ""
@@ -125,13 +127,14 @@ echo ""
 # ============================================================================
 
 vllm serve "${MODEL}" \
-    --all2all-backend "${all2all_backend}" \
-    --tensor-parallel-size 1 \
     --enable-expert-parallel \
+    --all2all-backend "${all2all_backend}" \
+    --tensor-parallel-size "${LOCAL_TP_SIZE}" \
     --data-parallel-size "${TOTAL_DP_SIZE}" \
     --data-parallel-size-local "${LOCAL_DP_SIZE}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
+    --gpu-memory-utilization 0.6 \
     --api-server-count="${API_SERVERS}"
 
 # Additional useful options (uncomment as needed):

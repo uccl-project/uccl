@@ -102,7 +102,7 @@ For single-node deployment (e.g., 8 GPUs on one node):
 
 ```bash
 # Using pplx backend (recommended for single node)
-VLLM_ALL2ALL_BACKEND=pplx VLLM_USE_DEEP_GEMM=1 \
+VLLM_ALL2ALL_BACKEND=pplx \
     vllm serve deepseek-ai/DeepSeek-V3-0324 \
     --tensor-parallel-size 1 \
     --data-parallel-size 8 \
@@ -111,34 +111,35 @@ VLLM_ALL2ALL_BACKEND=pplx VLLM_USE_DEEP_GEMM=1 \
 
 ### Multi-Node Deployment (2+ Nodes)
 
-#### Step 1: Start Node 1 (Primary)
+#### Step 1: Start Node 0 (Primary)
 
 On the **first node** (primary node that handles API requests):
 
 ```bash
-# Get Node 1's IP address
+# Get Node 0's IP address
 NODE1_IP=$(hostname -I | awk '{print $1}')
 
-# Launch Node 1
-bash launch_vllm_head.sh $NODE1_IP 13345 deepseek-ai/DeepSeek-V3-0324 16 8 8
+# Launch Node 0
+bash launch_vllm_head.sh $NODE1_IP 13345 deepseek-ai/DeepSeek-V3-0324 16 8 1 8
 ```
 
-#### Step 2: Start Node 2+ (Secondary)
+#### Step 2: Start Node 1+ (Secondary)
 
 On **each additional node** (secondary nodes in headless mode):
 
 ```bash
-# Use Node 1's IP (not this node's IP!)
+# Use Node 0's IP (not this node's IP!)
 NODE1_IP="10.1.59.30"
 
-# Launch Node 2 (headless)
-bash launch_vllm_worker.sh $NODE1_IP 13345 deepseek-ai/DeepSeek-V3-0324 16 8 8
+# Launch Node 1 (headless)
+bash launch_vllm_worker.sh $NODE1_IP 13345 deepseek-ai/DeepSeek-V3-0324 16 8 1 8
 ```
 
 **Arguments:**
-- `NODE1_IP` - IP address of **Node 1** (primary)
-- `13345` - Same RPC port as Node 1
+- `NODE1_IP` - IP address of **Node 0** (primary)
+- `13345` - RPC port
 - `deepseek-ai/DeepSeek-V3-0324` - Same model as Node 1
-- `16` - Same total DP size as Node 1
+- `16` - Total DP size
 - `8` - Local DP size on this node
+- `1` - Local TP size on this node
 - `8` - Starting rank (= sum of previous nodes' local DP)
