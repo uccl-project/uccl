@@ -87,7 +87,7 @@ class RdmaDeviceManager {
         LOG(WARNING) << "no candidate NIC found, defaulting to first";
         selected_nic_names.push_back(dist.front().first);
       } else {
-#ifdef UCCL_P2P_USE_RDMA
+#ifdef UCCL_P2P_USE_IB
         selected_nic_names.push_back(candidates.front());
 #else
         // NOTE(xzhiying): This is a temporary hack.

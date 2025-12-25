@@ -5,7 +5,7 @@
 #include "util/util.h"
 #include <glog/logging.h>
 
-class EFAChannel {
+class RDMAChannel {
  public:
   enum class QPXType {
     WriteImm,
@@ -13,7 +13,7 @@ class EFAChannel {
     READ,
   };
 
-  explicit EFAChannel(std::shared_ptr<RdmaContext> ctx, uint32_t channel_id = 0)
+  explicit RDMAChannel(std::shared_ptr<RdmaContext> ctx, uint32_t channel_id = 0)
       : ctx_(ctx),
         qp_(nullptr),
         cq_ex_(nullptr),
@@ -24,7 +24,7 @@ class EFAChannel {
     initQP();
   }
 
-  explicit EFAChannel(std::shared_ptr<RdmaContext> ctx,
+  explicit RDMAChannel(std::shared_ptr<RdmaContext> ctx,
                       ChannelMetaData const& remote_meta,
                       uint32_t channel_id = 0)
       : ctx_(ctx),
@@ -36,29 +36,29 @@ class EFAChannel {
         remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)) {
     initQP();
     ah_ = ctx_->createAH(remote_meta_->gid);
-#ifdef UCCL_P2P_USE_RDMA
+#ifdef UCCL_P2P_USE_IB
     ibrcQP_rtr_rts();
 #endif
-    UCCL_LOG_EP << "EFAChannel connected to remote qpn=" << remote_meta.qpn;
+    UCCL_LOG_EP << "RDMAChannel connected to remote qpn=" << remote_meta.qpn;
   }
 
-  EFAChannel(EFAChannel const&) = delete;
-  EFAChannel& operator=(EFAChannel const&) = delete;
+  RDMAChannel(RDMAChannel const&) = delete;
+  RDMAChannel& operator=(RDMAChannel const&) = delete;
 
   void connect(ChannelMetaData const& remote_meta) {
     remote_meta_ = std::make_shared<ChannelMetaData>(remote_meta);
     ah_ = ctx_->createAH(remote_meta_->gid);
-#ifdef UCCL_P2P_USE_RDMA
+#ifdef UCCL_P2P_USE_IB
     ibrcQP_rtr_rts();
 #endif
-    UCCL_LOG_EP << "EFAChannel connected to remote qpn=" << remote_meta.qpn;
+    UCCL_LOG_EP << "RDMAChannel connected to remote qpn=" << remote_meta.qpn;
   }
 
-  int64_t submitRequest(std::shared_ptr<EFASendRequest> req) {
+  int64_t submitRequest(std::shared_ptr<RDMASendRequest> req) {
     return postRequest(req);
   }
 
-  int64_t read(std::shared_ptr<EFASendRequest> req) {
+  int64_t read(std::shared_ptr<RDMASendRequest> req) {
     int ret = postRequest(req);
     if (ret != 0) {
       LOG(ERROR) << "Failed to post read request, wr_id=" << req->wr_id;
@@ -67,7 +67,7 @@ class EFAChannel {
     return req->wr_id;
   }
 
-  int64_t send(std::shared_ptr<EFASendRequest> req) {
+  int64_t send(std::shared_ptr<RDMASendRequest> req) {
     int ret = postRequest(req);
     if (ret != 0) {
       LOG(ERROR) << "Failed to post send request, wr_id=" << req->wr_id;
@@ -76,7 +76,7 @@ class EFAChannel {
     return req->wr_id;
   }
 
-  int64_t recv(std::shared_ptr<EFARecvRequest> req) {
+  int64_t recv(std::shared_ptr<RDMARecvRequest> req) {
     struct ibv_sge sge = {
         .addr = (uintptr_t)req->getLocalAddress(),
         .length = (uint32_t)req->getLocalLen(),
@@ -93,7 +93,7 @@ class EFAChannel {
     return wr_id;
   }
 
-#ifdef UCCL_P2P_USE_RDMA
+#ifdef UCCL_P2P_USE_IB
 
   void lazy_post_recv_wr(uint32_t threshold) {
     threshold = std::min(threshold, (uint32_t)kMaxRecvWr);
@@ -251,7 +251,7 @@ class EFAChannel {
 
   // Post send request based on send_type
   // Returns 0 on success, error code on failure
-  inline int postRequest(std::shared_ptr<EFASendRequest> req) {
+  inline int postRequest(std::shared_ptr<RDMASendRequest> req) {
     auto* qpx = ibv_qp_to_qp_ex(qp_);
     ibv_wr_start(qpx);
     LOG(INFO) << *req;
@@ -267,7 +267,7 @@ class EFAChannel {
     } else if (req->send_type == SendType::Read) {
       ibv_wr_rdma_read(qpx, req->getRemoteKey(), req->getRemoteAddress());
     } else {
-      LOG(ERROR) << "Unknown SendType in EFAChannel::postRequest";
+      LOG(ERROR) << "Unknown SendType in RDMAChannel::postRequest";
       return -1;
     }
 
@@ -280,7 +280,7 @@ class EFAChannel {
       ibv_wr_set_sge_list(qpx, num_sge, sge);
     }
 
-#ifndef UCCL_P2P_USE_RDMA
+#ifndef UCCL_P2P_USE_IB
     ibv_wr_set_ud_addr(qpx, ah_, remote_meta_->qpn, kQKey);
 #endif
 
@@ -353,7 +353,7 @@ class EFAChannel {
     assert(ibv_modify_qp(qp_, &attr, flags) == 0);
   }
 
-#ifdef UCCL_P2P_USE_RDMA
+#ifdef UCCL_P2P_USE_IB
   void init_pre_alloc_resource() {
     for (int i = 0; i < kMaxRecvWr; i++) {
       pre_alloc_recv_wrs_[i] = {};
@@ -478,7 +478,7 @@ class EFAChannel {
   // Prepare SGE list for send request
   // Returns the number of SGE entries filled
   inline int prepareSGEList(struct ibv_sge* sge,
-                            std::shared_ptr<EFASendRequest> req) {
+                            std::shared_ptr<RDMASendRequest> req) {
     uint32_t total_len = req->getLocalLen();
     uint64_t local_addr = req->getLocalAddress();
     uint32_t local_key = req->getLocalKey();

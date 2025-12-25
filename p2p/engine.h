@@ -1,8 +1,8 @@
 #pragma once
 
-#include "efa/define.h"
-#ifdef UCCL_P2P_USE_EFA
-#include "efa/efa_endpoint.h"
+#include "rdma/define.h"
+#ifdef UCCL_P2P_USE_RDMA
+#include "rdma/rdma_endpoint.h"
 #endif
 #include "transport.h"
 #include "util/gpu_rt.h"
@@ -31,9 +31,9 @@ struct P2PMhandle {
   MRArray mr_array;
 };
 
-#ifdef UCCL_P2P_USE_EFA
+#ifdef UCCL_P2P_USE_RDMA
 using RDMAEndPoint =
-    std::variant<uccl::RDMAEndpoint*, std::shared_ptr<EFAEndpoint>>;
+    std::variant<uccl::RDMAEndpoint*, std::shared_ptr<NICEndpoint>>;
 #else
 using RDMAEndPoint = std::variant<uccl::RDMAEndpoint*>;
 #endif
@@ -64,7 +64,7 @@ using FifoItem = uccl::FifoItem;
 #endif
 
 class Endpoint {
-#ifdef UCCL_P2P_USE_EFA
+#ifdef UCCL_P2P_USE_RDMA
   uint64_t const kChunkSize = 1024 * 1024 * 1024;
 #else
   uint64_t const kChunkSize = 1024 * 1024;

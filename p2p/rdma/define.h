@@ -36,7 +36,7 @@
 #include <transport.h>
 #include <unistd.h>
 
-#ifdef UCCL_P2P_USE_RDMA
+#ifdef UCCL_P2P_USE_IB
 static constexpr int kGidIndex = 3;
 static constexpr uint32_t kMaxInlineData = 128;
 #else
@@ -76,7 +76,7 @@ inline size_t channelIdToContextId(uint32_t channel_id) {
 }
 
 inline int parseLogLevelFromEnv() {
-  char const* env = std::getenv("EFA_LOG_LEVEL");
+  char const* env = std::getenv("RDMA_LOG_LEVEL");
   if (!env) {
     return google::WARNING;
   }
@@ -385,7 +385,7 @@ typedef struct RemoteMemInfo {
   }
 } RemoteMemInfo;
 
-typedef struct EFARecvRequest {
+typedef struct RDMARecvRequest {
   uint32_t from_rank_id;
   uint32_t to_rank_id;
   uint32_t channel_id;
@@ -393,7 +393,7 @@ typedef struct EFARecvRequest {
   std::shared_ptr<RegMemBlock> local_mem;
 
   // Constructor
-  EFARecvRequest(std::shared_ptr<RegMemBlock> local) : local_mem(local) {}
+  RDMARecvRequest(std::shared_ptr<RegMemBlock> local) : local_mem(local) {}
 
   // Getter methods
   inline uint32_t getLocalKey() const {
@@ -406,8 +406,8 @@ typedef struct EFARecvRequest {
 
   inline uint32_t getLocalLen() const { return local_mem->size; }
 
-  friend std::ostream& operator<<(std::ostream& os, EFARecvRequest const& req) {
-    os << "EFARecvRequest{";
+  friend std::ostream& operator<<(std::ostream& os, RDMARecvRequest const& req) {
+    os << "RDMARecvRequest{";
     os << "from_rank_id: " << req.from_rank_id
        << ", to_rank_id: " << req.to_rank_id
        << ", channel_id: " << req.channel_id;
@@ -419,7 +419,7 @@ typedef struct EFARecvRequest {
     os << "}";
     return os;
   }
-} EFARecvRequest;
+} RDMARecvRequest;
 
 enum class ReqFlag : int16_t { PENDING = 2, IN_PROGRESS = 3, IS_DONE = 4 };
 
@@ -445,7 +445,7 @@ struct alignas(64) SendReqMeta {
         expected_chunk_count(expected),
         received_chunk_count(received) {}
 
-  SendReqMeta(std::shared_ptr<EFARecvRequest> rev_req) {
+  SendReqMeta(std::shared_ptr<RDMARecvRequest> rev_req) {
     rank_id = rev_req->from_rank_id;
     channel_id = rev_req->channel_id;
     remote_mem = rev_req->local_mem;
@@ -539,7 +539,7 @@ inline auto from_ring_meta = [](SendReqMetaOnRing const& src,
                                 SendReqMeta& dst) { dst = src.meta; };
 
 enum class SendType { Send, Write, Read };
-struct EFASendRequest {
+struct RDMASendRequest {
   std::shared_ptr<RegMemBlock> local_mem;
   std::shared_ptr<RemoteMemInfo> remote_mem;
   uint32_t from_rank_id;
@@ -551,7 +551,7 @@ struct EFASendRequest {
   SendType send_type = SendType::Send;
 
   // Constructor
-  EFASendRequest(std::shared_ptr<RegMemBlock> local,
+  RDMASendRequest(std::shared_ptr<RegMemBlock> local,
                  std::shared_ptr<RemoteMemInfo> remote, uint32_t imm = 0,
                  bool signaled = true)
       : local_mem(local),
@@ -559,8 +559,8 @@ struct EFASendRequest {
         imm_data(imm),
         need_signaled(signaled) {}
 
-  // Constructor from shared_ptr<EFASendRequest>
-  EFASendRequest(std::shared_ptr<EFASendRequest> other,
+  // Constructor from shared_ptr<RDMASendRequest>
+  RDMASendRequest(std::shared_ptr<RDMASendRequest> other,
                  std::shared_ptr<RegMemBlock> local, uint32_t imm = 0,
                  bool signaled = true)
       : local_mem(local),
@@ -568,8 +568,8 @@ struct EFASendRequest {
         imm_data(imm),
         need_signaled(signaled) {}
 
-  // Constructor from const EFASendRequest&
-  EFASendRequest(EFASendRequest const& other,
+  // Constructor from const RDMASendRequest&
+  RDMASendRequest(RDMASendRequest const& other,
                  std::shared_ptr<RegMemBlock> local, uint32_t imm = 0,
                  bool signaled = true)
       : local_mem(local),
@@ -596,8 +596,8 @@ struct EFASendRequest {
 
   inline uint32_t getLocalLen() const { return local_mem->size; }
 
-  friend std::ostream& operator<<(std::ostream& os, EFASendRequest const& req) {
-    os << "EFASendRequest{";
+  friend std::ostream& operator<<(std::ostream& os, RDMASendRequest const& req) {
+    os << "RDMASendRequest{";
     os << "from_rank_id: " << req.from_rank_id
        << ", to_rank_id: " << req.to_rank_id
        << ", channel_id: " << req.channel_id << ", imm_data: " << req.imm_data

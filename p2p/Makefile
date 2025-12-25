@@ -26,7 +26,7 @@ ifeq ($(USE_TCPX),1)
 	CXXFLAGS += -DUCCL_P2P_USE_TCPX
 	LIBS2 += -lglog -lgflags -lpthread -ldl
 else ifeq ($(USE_EFA),1)
-	CXXFLAGS += -DUCCL_P2P_USE_EFA
+	CXXFLAGS += -DUCCL_P2P_USE_RDMA
 	INC += -I${EFA_HOME}/include
 	LIBS += -L ${EFA_HOME}/lib -lefa
 else

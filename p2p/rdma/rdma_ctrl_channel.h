@@ -1,23 +1,23 @@
 #pragma once
 #include "define.h"
-#include "efa_channel.h"
+#include "rdma_channel.h"
 #include "ring_spsc.h"
 
-class SendControlChannel : public EFAChannel {
+class SendControlChannel : public RDMAChannel {
  public:
   explicit SendControlChannel(std::shared_ptr<RdmaContext> ctx,
                               uint32_t channel_id = 0)
-      : EFAChannel(ctx, channel_id) {}
+      : RDMAChannel(ctx, channel_id) {}
 
   explicit SendControlChannel(std::shared_ptr<RdmaContext> ctx,
                               ChannelMetaData const& remote_meta,
                               uint32_t channel_id = 0)
-      : EFAChannel(ctx, remote_meta, channel_id) {}
+      : RDMAChannel(ctx, remote_meta, channel_id) {}
 
   explicit SendControlChannel(std::shared_ptr<RdmaContext> ctx,
                               std::shared_ptr<RegMemBlock> mem_block,
                               uint32_t channel_id = 0)
-      : EFAChannel(ctx, channel_id) {
+      : RDMAChannel(ctx, channel_id) {
     rb_ = std::make_unique<RingBuffer<SendReqMetaOnRing, kRingCapacity>>(
         mem_block);
   }
@@ -26,7 +26,7 @@ class SendControlChannel : public EFAChannel {
                               ChannelMetaData const& remote_meta,
                               std::shared_ptr<RegMemBlock> mem_block,
                               uint32_t channel_id = 0)
-      : EFAChannel(ctx, remote_meta, channel_id) {
+      : RDMAChannel(ctx, remote_meta, channel_id) {
     rb_ = std::make_unique<RingBuffer<SendReqMetaOnRing, kRingCapacity>>(
         mem_block);
   }
@@ -36,7 +36,7 @@ class SendControlChannel : public EFAChannel {
     // Initialize rb_ with the shared_ptr<RegMemBlock>
     rb_ = std::make_unique<RingBuffer<SendReqMetaOnRing, kRingCapacity>>(
         mem_block);
-    EFAChannel::connect(remote_meta);
+    RDMAChannel::connect(remote_meta);
   }
 
   int getOneSendRequestMeta(SendReqMeta& meta) {
@@ -47,7 +47,7 @@ class SendControlChannel : public EFAChannel {
   inline bool hasSendRequest() { return !rb_->empty(); }
 
   // not thread safe
-  bool getOneSendRequest(std::shared_ptr<EFASendRequest>& req) {
+  bool getOneSendRequest(std::shared_ptr<RDMASendRequest>& req) {
     // Pop from rb_ and generate req, return false if empty
     SendReqMeta meta;
     int index = getOneSendRequestMeta(meta);
@@ -72,7 +72,7 @@ class SendControlChannel : public EFAChannel {
 
   bool noblockingPoll() {
     std::vector<CQMeta> cq_datas;
-    if (EFAChannel::poll_once(cq_datas)) {
+    if (RDMAChannel::poll_once(cq_datas)) {
       for (auto const& cq_data : cq_datas) {
         LOG(INFO) << "SendControlChannel::noblockingPoll - Polled completion: "
                   << cq_data;
@@ -90,12 +90,12 @@ class SendControlChannel : public EFAChannel {
   std::unique_ptr<RingBuffer<SendReqMetaOnRing, kRingCapacity>> rb_;
 };
 
-class RecvControlChannel : public EFAChannel {
+class RecvControlChannel : public RDMAChannel {
  public:
   explicit RecvControlChannel(std::shared_ptr<RdmaContext> ctx,
                               std::shared_ptr<RegMemBlock> mem_block,
                               uint32_t channel_id = 0)
-      : EFAChannel(ctx, channel_id) {
+      : RDMAChannel(ctx, channel_id) {
     local_info_ = mem_block;
     rb_ = std::make_unique<RingBuffer<SendReqMetaOnRing, kRingCapacity>>(
         local_info_);
@@ -105,7 +105,7 @@ class RecvControlChannel : public EFAChannel {
                               MetaInfoToExchange const& remote_meta,
                               std::shared_ptr<RegMemBlock> mem_block,
                               uint32_t channel_id = 0)
-      : EFAChannel(ctx, remote_meta.channel_meta, channel_id) {
+      : RDMAChannel(ctx, remote_meta.channel_meta, channel_id) {
     local_info_ = mem_block;
     rb_ = std::make_unique<RingBuffer<SendReqMetaOnRing, kRingCapacity>>(
         local_info_);
@@ -122,10 +122,10 @@ class RecvControlChannel : public EFAChannel {
     empty_rb_ =
         std::make_unique<EmptyRingBuffer<SendReqMetaOnRing, kRingCapacity>>(
             reinterpret_cast<void*>(remote_meta.mem_meta.addr));
-    EFAChannel::connect(remote_meta.channel_meta);
+    RDMAChannel::connect(remote_meta.channel_meta);
   }
 
-  int postSendReq(std::shared_ptr<EFARecvRequest> rev_req) {
+  int postSendReq(std::shared_ptr<RDMARecvRequest> rev_req) {
     SendReqMeta req_meta(rev_req);
     LOG(INFO) << "postSendReq - Created SendReqMeta: " << req_meta;
 
@@ -156,10 +156,10 @@ class RecvControlChannel : public EFAChannel {
       local_mem_ptr_->size = rb_->elementSize();
     }
 
-    std::shared_ptr<EFASendRequest> send_ptr = std::make_shared<EFASendRequest>(
+    std::shared_ptr<RDMASendRequest> send_ptr = std::make_shared<RDMASendRequest>(
         local_mem_ptr_, remote_mem_ptr_, index);
     send_ptr->channel_id = kControlChannelID;
-    EFAChannel::send(send_ptr);
+    RDMAChannel::send(send_ptr);
     return index;
   }
 
@@ -177,7 +177,7 @@ class RecvControlChannel : public EFAChannel {
 
   bool noblockingPoll() {
     std::vector<CQMeta> cq_datas;
-    if (EFAChannel::poll_once(cq_datas)) {
+    if (RDMAChannel::poll_once(cq_datas)) {
       for (auto const& cq_data : cq_datas) {
         LOG(INFO) << "RecvControlChannel::noblockingPoll - Polled completion: "
                   << cq_data;
