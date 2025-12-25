@@ -1,5 +1,18 @@
 #pragma once
 #include "define.h"
+#include <memory>
+#include <string>
+#include <vector>
+
+// Base class for device selection strategy
+class RDMADeviceSelectionStrategy {
+ public:
+  virtual ~RDMADeviceSelectionStrategy() = default;
+
+  // Select NIC names from candidates based on GPU index
+  virtual std::vector<std::string> selectNICs(
+      std::vector<std::string> const& candidates, int gpu_idx) = 0;
+};
 
 // Include device selection strategy based on build configuration
 #ifdef UCCL_P2P_USE_IB
@@ -7,6 +20,15 @@
 #else
 #include "providers/efa/rdma_device_selection_efa.h"
 #endif
+
+inline std::unique_ptr<RDMADeviceSelectionStrategy>
+createDeviceSelectionStrategy() {
+#ifdef UCCL_P2P_USE_IB
+  return std::make_unique<IBDeviceSelectionStrategy>();
+#else
+  return std::make_unique<EFADeviceSelectionStrategy>();
+#endif
+}
 
 class RdmaDevice {
  public:

@@ -4,15 +4,8 @@
 #include <string>
 #include <vector>
 
-// Base class for device selection strategy
-class RDMADeviceSelectionStrategy {
- public:
-  virtual ~RDMADeviceSelectionStrategy() = default;
-
-  // Select NIC names from candidates based on GPU index
-  virtual std::vector<std::string> selectNICs(
-      std::vector<std::string> const& candidates, int gpu_idx) = 0;
-};
+// Forward declaration
+class RDMADeviceSelectionStrategy;
 
 // IB device selection strategy
 class IBDeviceSelectionStrategy : public RDMADeviceSelectionStrategy {
@@ -27,9 +20,3 @@ class IBDeviceSelectionStrategy : public RDMADeviceSelectionStrategy {
     return selected;
   }
 };
-
-// Factory function (inline)
-inline std::unique_ptr<RDMADeviceSelectionStrategy>
-createDeviceSelectionStrategy() {
-  return std::make_unique<IBDeviceSelectionStrategy>();
-}
