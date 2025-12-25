@@ -106,7 +106,8 @@ class RDMAChannel {
   }
 
   void lazy_post_recv_wrs_n(uint32_t n) {
-    impl_->lazy_post_recv_wrs_n(qp_, pending_post_recv_, pre_alloc_recv_wrs_, n, false);
+    impl_->lazy_post_recv_wrs_n(qp_, pending_post_recv_, pre_alloc_recv_wrs_, n,
+                                false);
   }
 
   bool poll_once(std::vector<CQMeta>& cq_datas) {

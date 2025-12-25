@@ -24,8 +24,8 @@ class IBChannelImpl : public RDMAChannelImpl {
                  uint32_t channel_id, uint32_t& nb_post_recv) override;
 
   void lazy_post_recv_wrs_n(struct ibv_qp* qp, uint32_t& pending_post_recv,
-                         struct ibv_recv_wr* pre_alloc_recv_wrs,
-                         uint32_t n, bool force) override;
+                            struct ibv_recv_wr* pre_alloc_recv_wrs, uint32_t n,
+                            bool force) override;
 
   void setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
                      uint32_t remote_qpn) override;

@@ -35,9 +35,9 @@ class RDMAChannelImpl {
 
   // Post receive work request
   virtual void lazy_post_recv_wrs_n(struct ibv_qp* qp,
-                                 uint32_t& pending_post_recv,
-                                 struct ibv_recv_wr* pre_alloc_recv_wrs,
-                                 uint32_t n, bool force) = 0;
+                                    uint32_t& pending_post_recv,
+                                    struct ibv_recv_wr* pre_alloc_recv_wrs,
+                                    uint32_t n, bool force) = 0;
 
   // Setup Destination address
   virtual void setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,

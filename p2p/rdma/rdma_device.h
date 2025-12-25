@@ -1,6 +1,12 @@
 #pragma once
 #include "define.h"
-#include "rdma_device_selection.h"
+
+// Include device selection strategy based on build configuration
+#ifdef UCCL_P2P_USE_IB
+#include "providers/ib/rdma_device_selection_ib.h"
+#else
+#include "providers/efa/rdma_device_selection_efa.h"
+#endif
 
 class RdmaDevice {
  public:

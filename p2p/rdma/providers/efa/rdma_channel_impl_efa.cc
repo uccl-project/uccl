@@ -90,7 +90,8 @@ inline void EFAChannelImpl::connectQP(struct ibv_qp* qp,
 
 inline bool EFAChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
                                       std::vector<CQMeta>& cq_datas,
-                                      uint32_t channel_id, uint32_t& nb_post_recv) {
+                                      uint32_t channel_id,
+                                      uint32_t& nb_post_recv) {
   nb_post_recv = 0;
   if (!cq_ex) {
     LOG(INFO) << "poll_once - channel_id: " << channel_id << ", cq_ex_ is null";

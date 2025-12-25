@@ -94,7 +94,8 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(
           IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER | IBV_QP_AV;
   assert(ibv_modify_qp(qp, &attr, flags) == 0);
 
-  lazy_post_recv_wrs_n(qp, pending_post_recv, pre_alloc_recv_wrs, kMaxRecvWr, true);
+  lazy_post_recv_wrs_n(qp, pending_post_recv, pre_alloc_recv_wrs, kMaxRecvWr,
+                       true);
 
   // RTS
   memset(&attr, 0, sizeof(attr));
@@ -111,7 +112,8 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(
 
 inline bool IBChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
                                      std::vector<CQMeta>& cq_datas,
-                                     uint32_t channel_id, uint32_t& nb_post_recv) {
+                                     uint32_t channel_id,
+                                     uint32_t& nb_post_recv) {
   nb_post_recv = 0;
   if (!cq_ex) {
     LOG(INFO) << "poll_once - channel_id: " << channel_id << ", cq_ex_ is null";
@@ -163,7 +165,9 @@ inline void IBChannelImpl::lazy_post_recv_wrs_n(
     pre_alloc_recv_wrs[kBatchPostRecvWr - 1].next = nullptr;
     assert(ibv_post_recv(qp, pre_alloc_recv_wrs, &bad_wr) == 0);
     pre_alloc_recv_wrs[kBatchPostRecvWr - 1].next =
-        (kBatchPostRecvWr == kMaxRecvWr) ? nullptr : &pre_alloc_recv_wrs[kBatchPostRecvWr];
+        (kBatchPostRecvWr == kMaxRecvWr)
+            ? nullptr
+            : &pre_alloc_recv_wrs[kBatchPostRecvWr];
     pending_post_recv -= kBatchPostRecvWr;
   }
 
@@ -172,7 +176,9 @@ inline void IBChannelImpl::lazy_post_recv_wrs_n(
     pre_alloc_recv_wrs[pending_post_recv - 1].next = nullptr;
     assert(ibv_post_recv(qp, pre_alloc_recv_wrs, &bad_wr) == 0);
     pre_alloc_recv_wrs[pending_post_recv - 1].next =
-        (pending_post_recv == kMaxRecvWr) ? nullptr : &pre_alloc_recv_wrs[pending_post_recv];
+        (pending_post_recv == kMaxRecvWr)
+            ? nullptr
+            : &pre_alloc_recv_wrs[pending_post_recv];
     pending_post_recv = 0;
   }
 }
