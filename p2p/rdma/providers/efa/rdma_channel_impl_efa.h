@@ -25,12 +25,7 @@ class EFAChannelImpl : public RDMAChannelImpl {
                  uint32_t* pending_post_recv = nullptr) override;
 
   bool poll_once(struct ibv_cq_ex* cq_ex, std::vector<CQMeta>& cq_datas,
-                 uint32_t channel_id) override;
-
-  void lazy_post_recv_wr(struct ibv_qp* qp, uint32_t threshold,
-                         uint32_t& pending_post_recv,
-                         struct ibv_recv_wr* pre_alloc_recv_wrs,
-                         uint32_t kMaxRecvWr) override;
+                 uint32_t channel_id, uint32_t& nb_post_recv) override;
 
   void setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
                      uint32_t remote_qpn) override;

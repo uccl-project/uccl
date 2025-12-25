@@ -12,7 +12,7 @@ struct ibv_sge;
 struct ibv_recv_wr;
 struct ibv_wc;
 
-// Base class for RDMA channel implementations (IB/EFA)
+// Base class for RDMA channel implementations
 class RDMAChannelImpl {
  public:
   virtual ~RDMAChannelImpl() = default;
@@ -31,13 +31,13 @@ class RDMAChannelImpl {
 
   // Poll completion queue
   virtual bool poll_once(struct ibv_cq_ex* cq_ex, std::vector<CQMeta>& cq_datas,
-                         uint32_t channel_id) = 0;
+                         uint32_t channel_id, uint32_t& nb_post_recv) = 0;
 
   // Post receive work request
-  virtual void lazy_post_recv_wr(struct ibv_qp* qp, uint32_t threshold,
+  virtual void lazy_post_recv_wrs_n(struct ibv_qp* qp,
                                  uint32_t& pending_post_recv,
                                  struct ibv_recv_wr* pre_alloc_recv_wrs,
-                                 uint32_t kMaxRecvWr) = 0;
+                                 uint32_t n, bool force) = 0;
 
   // Setup Destination address
   virtual void setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
@@ -49,7 +49,7 @@ class RDMAChannelImpl {
   // Get max inline data size
   virtual uint32_t getMaxInlineData() const = 0;
 
-  // Initialize pre-allocated resources (IB specific)
+  // Initialize pre-allocated resources
   virtual void initPreAllocResources(struct ibv_recv_wr* pre_alloc_recv_wrs,
                                      uint32_t kMaxRecvWr) = 0;
 };

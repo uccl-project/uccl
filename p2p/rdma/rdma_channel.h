@@ -6,7 +6,6 @@
 #include "util/util.h"
 #include <glog/logging.h>
 
-// Include implementation headers based on build configuration
 #ifdef UCCL_P2P_USE_IB
 #include "providers/ib/rdma_channel_impl_ib.h"
 #else
@@ -106,19 +105,14 @@ class RDMAChannel {
     return wr_id;
   }
 
-  void lazy_post_recv_wr(uint32_t threshold) {
-    impl_->lazy_post_recv_wr(qp_, threshold, pending_post_recv_,
-                             pre_alloc_recv_wrs_, kMaxRecvWr);
+  void lazy_post_recv_wrs_n(uint32_t n) {
+    impl_->lazy_post_recv_wrs_n(qp_, pending_post_recv_, pre_alloc_recv_wrs_, n, false);
   }
 
   bool poll_once(std::vector<CQMeta>& cq_datas) {
-    bool result = impl_->poll_once(cq_ex_, cq_datas, channel_id_);
-    // For IB, we need to lazy post recv wr after receiving IMM data
-    for (auto const& cq_data : cq_datas) {
-      if (cq_data.hasIMM()) {
-        lazy_post_recv_wr(kBatchPostRecvWr);
-      }
-    }
+    uint32_t nb_post_recv = 0;
+    bool result = impl_->poll_once(cq_ex_, cq_datas, channel_id_, nb_post_recv);
+    lazy_post_recv_wrs_n(nb_post_recv);
     return result;
   }
 

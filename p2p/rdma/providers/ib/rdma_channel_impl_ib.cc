@@ -94,10 +94,7 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(
           IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER | IBV_QP_AV;
   assert(ibv_modify_qp(qp, &attr, flags) == 0);
 
-  for (int i = 0; i < kMaxRecvWr; i++) {
-    this->lazy_post_recv_wr(qp, kMaxRecvWr, pending_post_recv,
-                            pre_alloc_recv_wrs, kMaxRecvWr);
-  }
+  lazy_post_recv_wrs_n(qp, pending_post_recv, pre_alloc_recv_wrs, kMaxRecvWr, true);
 
   // RTS
   memset(&attr, 0, sizeof(attr));
@@ -114,7 +111,8 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(
 
 inline bool IBChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
                                      std::vector<CQMeta>& cq_datas,
-                                     uint32_t channel_id) {
+                                     uint32_t channel_id, uint32_t& nb_post_recv) {
+  nb_post_recv = 0;
   if (!cq_ex) {
     LOG(INFO) << "poll_once - channel_id: " << channel_id << ", cq_ex_ is null";
     return false;
@@ -144,6 +142,7 @@ inline bool IBChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
 
       if (cq_data.op_code == IBV_WC_RECV_RDMA_WITH_IMM) {
         cq_data.imm = wc->imm_data;
+        nb_post_recv++;
       } else {
         cq_data.imm = 0;
       }
@@ -155,18 +154,26 @@ inline bool IBChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
   return !cq_datas.empty();
 }
 
-inline void IBChannelImpl::lazy_post_recv_wr(
-    struct ibv_qp* qp, uint32_t threshold, uint32_t& pending_post_recv,
-    struct ibv_recv_wr* pre_alloc_recv_wrs, uint32_t kMaxRecvWr) {
-  threshold = std::min(threshold, kMaxRecvWr);
-  pending_post_recv++;
-  while (pending_post_recv >= threshold) {
+inline void IBChannelImpl::lazy_post_recv_wrs_n(
+    struct ibv_qp* qp, uint32_t& pending_post_recv,
+    struct ibv_recv_wr* pre_alloc_recv_wrs, uint32_t n, bool force) {
+  pending_post_recv += n;
+  while (pending_post_recv >= kBatchPostRecvWr) {
     struct ibv_recv_wr* bad_wr = nullptr;
-    pre_alloc_recv_wrs[threshold - 1].next = nullptr;
+    pre_alloc_recv_wrs[kBatchPostRecvWr - 1].next = nullptr;
     assert(ibv_post_recv(qp, pre_alloc_recv_wrs, &bad_wr) == 0);
-    pre_alloc_recv_wrs[threshold - 1].next =
-        (threshold == kMaxRecvWr) ? nullptr : &pre_alloc_recv_wrs[threshold];
-    pending_post_recv -= threshold;
+    pre_alloc_recv_wrs[kBatchPostRecvWr - 1].next =
+        (kBatchPostRecvWr == kMaxRecvWr) ? nullptr : &pre_alloc_recv_wrs[kBatchPostRecvWr];
+    pending_post_recv -= kBatchPostRecvWr;
+  }
+
+  if (pending_post_recv) {
+    struct ibv_recv_wr* bad_wr = nullptr;
+    pre_alloc_recv_wrs[pending_post_recv - 1].next = nullptr;
+    assert(ibv_post_recv(qp, pre_alloc_recv_wrs, &bad_wr) == 0);
+    pre_alloc_recv_wrs[pending_post_recv - 1].next =
+        (pending_post_recv == kMaxRecvWr) ? nullptr : &pre_alloc_recv_wrs[pending_post_recv];
+    pending_post_recv = 0;
   }
 }
 

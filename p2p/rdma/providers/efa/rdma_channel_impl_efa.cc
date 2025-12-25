@@ -90,7 +90,8 @@ inline void EFAChannelImpl::connectQP(struct ibv_qp* qp,
 
 inline bool EFAChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
                                       std::vector<CQMeta>& cq_datas,
-                                      uint32_t channel_id) {
+                                      uint32_t channel_id, uint32_t& nb_post_recv) {
+  nb_post_recv = 0;
   if (!cq_ex) {
     LOG(INFO) << "poll_once - channel_id: " << channel_id << ", cq_ex_ is null";
     return false;
@@ -145,14 +146,13 @@ inline bool EFAChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
   return !cq_datas.empty();
 }
 
-inline void EFAChannelImpl::lazy_post_recv_wr(
-    struct ibv_qp* qp, uint32_t threshold, uint32_t& pending_post_recv,
-    struct ibv_recv_wr* pre_alloc_recv_wrs, uint32_t kMaxRecvWr) {
+inline void EFAChannelImpl::lazy_post_recv_wrs_n(
+    struct ibv_qp* qp, uint32_t& pending_post_recv,
+    struct ibv_recv_wr* pre_alloc_recv_wrs, uint32_t n, bool force) {
   (void)qp;
-  (void)threshold;
   (void)pending_post_recv;
   (void)pre_alloc_recv_wrs;
-  (void)kMaxRecvWr;
+  (void)n;
 }
 
 inline void EFAChannelImpl::setDstAddress(struct ibv_qp_ex* qpx,
