@@ -36,7 +36,7 @@
 #include <transport.h>
 #include <unistd.h>
 
-#ifdef UCCL_ENABLE_IBRC
+#ifdef UCCL_P2P_USE_RDMA
 static constexpr int kGidIndex = 3;
 static constexpr uint32_t kMaxInlineData = 128;
 #else

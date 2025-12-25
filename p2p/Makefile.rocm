@@ -7,7 +7,7 @@ HIP_LIB  := $(HIP_HOME)/lib
 CONDA_LIB_HOME?=/usr/lib
 RDMA_HOME := ../collective/rdma
 CXX := g++
-CXXFLAGS_TRANS := -DUCCL_ENABLE_EFA -DUCCL_ENABLE_IBRC
+CXXFLAGS_TRANS := -DUCCL_P2P_USE_EFA -DUCCL_P2P_USE_RDMA
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I$(RDMA_HOME) -I$(HIP_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=${CONDA_LIB_HOME} -I${CONDA_LIB_HOME}/../include \

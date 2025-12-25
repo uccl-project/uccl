@@ -36,7 +36,7 @@ class EFAChannel {
         remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)) {
     initQP();
     ah_ = ctx_->createAH(remote_meta_->gid);
-#ifdef UCCL_ENABLE_IBRC
+#ifdef UCCL_P2P_USE_RDMA
     ibrcQP_rtr_rts();
 #endif
     UCCL_LOG_EP << "EFAChannel connected to remote qpn=" << remote_meta.qpn;
@@ -48,7 +48,7 @@ class EFAChannel {
   void connect(ChannelMetaData const& remote_meta) {
     remote_meta_ = std::make_shared<ChannelMetaData>(remote_meta);
     ah_ = ctx_->createAH(remote_meta_->gid);
-#ifdef UCCL_ENABLE_IBRC
+#ifdef UCCL_P2P_USE_RDMA
     ibrcQP_rtr_rts();
 #endif
     UCCL_LOG_EP << "EFAChannel connected to remote qpn=" << remote_meta.qpn;
@@ -93,7 +93,7 @@ class EFAChannel {
     return wr_id;
   }
 
-#ifdef UCCL_ENABLE_IBRC
+#ifdef UCCL_P2P_USE_RDMA
 
   void lazy_post_recv_wr(uint32_t threshold) {
     threshold = std::min(threshold, (uint32_t)kMaxRecvWr);
@@ -280,7 +280,7 @@ class EFAChannel {
       ibv_wr_set_sge_list(qpx, num_sge, sge);
     }
 
-#ifndef UCCL_ENABLE_IBRC
+#ifndef UCCL_P2P_USE_RDMA
     ibv_wr_set_ud_addr(qpx, ah_, remote_meta_->qpn, kQKey);
 #endif
 
@@ -353,7 +353,7 @@ class EFAChannel {
     assert(ibv_modify_qp(qp_, &attr, flags) == 0);
   }
 
-#ifdef UCCL_ENABLE_IBRC
+#ifdef UCCL_P2P_USE_RDMA
   void init_pre_alloc_resource() {
     for (int i = 0; i < kMaxRecvWr; i++) {
       pre_alloc_recv_wrs_[i] = {};
