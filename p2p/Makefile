@@ -4,6 +4,8 @@
 USE_TCPX ?= $(shell echo $${USE_TCPX:-0})
 # EFA optional integration
 USE_EFA ?= $(shell echo $${USE_EFA:-0})
+# IB optional integration
+USE_IB ?= $(shell echo $${USE_IB:-0})
 
 # Compiler and flags
 CUDA_HOME ?= /usr/local/cuda
@@ -29,6 +31,9 @@ else ifeq ($(USE_EFA),1)
 	CXXFLAGS += -DUCCL_P2P_USE_RDMA
 	INC += -I${EFA_HOME}/include
 	LIBS += -L ${EFA_HOME}/lib -lefa
+else ifeq ($(USE_IB),1)
+	CXXFLAGS += -DUCCL_P2P_USE_RDMA -DUCCL_P2P_USE_IB
+	LIBS += -libverbs
 else
 	LIBS2 += -lglog -lgflags -lgtest -lz -lelf -lpthread -libverbs
 endif
