@@ -64,7 +64,6 @@ using FifoItem = uccl::FifoItem;
 #endif
 
 class Endpoint {
-  uint64_t const kRTTBytes = 1024 * 1024;
 #ifdef UCCL_P2P_USE_EFA
   uint64_t const kChunkSize = 1024 * 1024 * 1024;
 #else
