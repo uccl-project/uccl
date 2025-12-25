@@ -1,17 +1,29 @@
 #pragma once
 #include "define.h"
 #include "rdma_context.h"
+#include "rdma_channel_impl.h"
 #include "seq_num.h"
 #include "util/util.h"
 #include <glog/logging.h>
 
+// Include implementation headers based on build configuration
+#ifdef UCCL_P2P_USE_IB
+#include "providers/ib/rdma_channel_impl_ib.h"
+#else
+#include "providers/efa/rdma_channel_impl_efa.h"
+#endif
+
+// Factory function implementation (inline, defined after including impl headers)
+inline std::unique_ptr<RDMAChannelImpl> createRDMAChannelImpl() {
+#ifdef UCCL_P2P_USE_IB
+  return std::make_unique<IBChannelImpl>();
+#else
+  return std::make_unique<EFAChannelImpl>();
+#endif
+}
+
 class RDMAChannel {
  public:
-  enum class QPXType {
-    WriteImm,
-    Write,
-    READ,
-  };
 
   explicit RDMAChannel(std::shared_ptr<RdmaContext> ctx, uint32_t channel_id = 0)
       : ctx_(ctx),
@@ -20,7 +32,8 @@ class RDMAChannel {
         ah_(nullptr),
         channel_id_(channel_id),
         local_meta_(std::make_shared<ChannelMetaData>()),
-        remote_meta_(std::make_shared<ChannelMetaData>()) {
+        remote_meta_(std::make_shared<ChannelMetaData>()),
+        impl_(createRDMAChannelImpl()) {
     initQP();
   }
 
@@ -33,12 +46,12 @@ class RDMAChannel {
         ah_(nullptr),
         channel_id_(channel_id),
         local_meta_(std::make_shared<ChannelMetaData>()),
-        remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)) {
+        remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)),
+        impl_(createRDMAChannelImpl()) {
     initQP();
     ah_ = ctx_->createAH(remote_meta_->gid);
-#ifdef UCCL_P2P_USE_IB
-    ibrcQP_rtr_rts();
-#endif
+    impl_->connectQP(qp_, ctx_, *remote_meta_, pre_alloc_recv_wrs_, kMaxRecvWr,
+                     &pending_post_recv_);
     UCCL_LOG_EP << "RDMAChannel connected to remote qpn=" << remote_meta.qpn;
   }
 
@@ -48,9 +61,8 @@ class RDMAChannel {
   void connect(ChannelMetaData const& remote_meta) {
     remote_meta_ = std::make_shared<ChannelMetaData>(remote_meta);
     ah_ = ctx_->createAH(remote_meta_->gid);
-#ifdef UCCL_P2P_USE_IB
-    ibrcQP_rtr_rts();
-#endif
+    impl_->connectQP(qp_, ctx_, *remote_meta_, pre_alloc_recv_wrs_, kMaxRecvWr,
+                     &pending_post_recv_);
     UCCL_LOG_EP << "RDMAChannel connected to remote qpn=" << remote_meta.qpn;
   }
 
@@ -93,119 +105,21 @@ class RDMAChannel {
     return wr_id;
   }
 
-#ifdef UCCL_P2P_USE_IB
-
   void lazy_post_recv_wr(uint32_t threshold) {
-    threshold = std::min(threshold, (uint32_t)kMaxRecvWr);
-    pending_post_recv_++;
-    while (pending_post_recv_ >= threshold) {
-      struct ibv_recv_wr* bad_wr = nullptr;
-      pre_alloc_recv_wrs_[threshold - 1].next = nullptr;
-      assert(ibv_post_recv(qp_, pre_alloc_recv_wrs_, &bad_wr) == 0);
-      pre_alloc_recv_wrs_[threshold - 1].next =
-          (threshold == kMaxRecvWr) ? nullptr : &pre_alloc_recv_wrs_[threshold];
-      pending_post_recv_ -= threshold;
-    }
+    impl_->lazy_post_recv_wr(qp_, threshold, pending_post_recv_,
+                             pre_alloc_recv_wrs_, kMaxRecvWr);
   }
 
   bool poll_once(std::vector<CQMeta>& cq_datas) {
-    if (!cq_ex_) {
-      LOG(INFO) << "poll_once - channel_id: " << channel_id_
-                << ", cq_ex_ is null";
-      return false;
-    }
-
-    auto cq = ibv_cq_ex_to_cq(cq_ex_);
-    int ret = ibv_poll_cq(cq, kBatchPollCqe, pre_alloc_wcs_);
-
-    if (ret <= 0) {
-      return false;
-    }
-
-    for (int i = 0; i < ret; i++) {
-      auto wc = &pre_alloc_wcs_[i];
-      uint64_t wr_id = wc->wr_id;
-      auto status = wc->status;
-      if (unlikely(status != IBV_WC_SUCCESS)) {
-        LOG(WARNING) << "poll_once - channel_id: " << channel_id_
-                     << ", CQE error, wr_id=" << wr_id << ", status=" << status
-                     << " (" << ibv_wc_status_str(status) << ")";
-      } else {
-        CQMeta cq_data{};
-        cq_data.wr_id = wr_id;
-        cq_data.op_code = wc->opcode;
-        cq_data.len = wc->byte_len;
-
-        if (cq_data.op_code == IBV_WC_RECV_RDMA_WITH_IMM) {
-          cq_data.imm = wc->imm_data;
-          lazy_post_recv_wr(kBatchPostRecvWr);
-        } else {
-          cq_data.imm = 0;
-        }
-
-        cq_datas.emplace_back(cq_data);
+    bool result = impl_->poll_once(cq_ex_, cq_datas, channel_id_);
+    // For IB, we need to lazy post recv wr after receiving IMM data
+    for (auto const& cq_data : cq_datas) {
+      if (cq_data.hasIMM()) {
+        lazy_post_recv_wr(kBatchPostRecvWr);
       }
     }
-
-    return !cq_datas.empty();
+    return result;
   }
-#else
-  bool poll_once(std::vector<CQMeta>& cq_datas) {
-    if (!cq_ex_) {
-      LOG(INFO) << "poll_once - channel_id: " << channel_id_
-                << ", cq_ex_ is null";
-      return false;
-    }
-
-    struct ibv_poll_cq_attr attr = {};
-    int ret = ibv_start_poll(cq_ex_, &attr);
-
-    if (ret == ENOENT) {
-      return false;
-    }
-    if (ret) {
-      LOG(ERROR) << "poll_once - channel_id: " << channel_id_
-                 << ", ibv_start_poll error: " << ret << " (" << strerror(ret)
-                 << ")";
-      return false;
-    }
-
-    do {
-      uint64_t wr_id = cq_ex_->wr_id;
-      auto status = cq_ex_->status;
-      if (unlikely(status != IBV_WC_SUCCESS)) {
-        LOG(WARNING) << "poll_once - channel_id: " << channel_id_
-                     << ", CQE error, wr_id=" << wr_id << ", status=" << status
-                     << " (" << ibv_wc_status_str(status) << ")";
-      } else {
-        CQMeta cq_data{};
-        cq_data.wr_id = wr_id;
-        cq_data.op_code = ibv_wc_read_opcode(cq_ex_);
-        cq_data.len = ibv_wc_read_byte_len(cq_ex_);
-
-        if (cq_data.op_code == IBV_WC_RECV_RDMA_WITH_IMM) {
-          cq_data.imm = ibv_wc_read_imm_data(cq_ex_);
-        } else {
-          cq_data.imm = 0;
-        }
-
-        cq_datas.emplace_back(cq_data);
-      }
-
-      ret = ibv_next_poll(cq_ex_);
-    } while (ret == 0);
-
-    ibv_end_poll(cq_ex_);
-
-    if (ret != ENOENT) {
-      LOG(ERROR) << "poll_once - channel_id: " << channel_id_
-                 << ", ibv_next_poll error: " << ret << " (" << strerror(ret)
-                 << ")";
-    }
-
-    return !cq_datas.empty();
-  }
-#endif
 
   // Get local metadata
   std::shared_ptr<ChannelMetaData> get_local_meta() const {
@@ -240,6 +154,7 @@ class RDMAChannel {
   std::shared_ptr<ChannelMetaData> remote_meta_;
 
   std::shared_ptr<AtomicBitmapPacketTracker> tracker_;
+  std::unique_ptr<RDMAChannelImpl> impl_;
 
   struct ibv_cq_ex* getCQ() const {
     return cq_ex_;
@@ -273,16 +188,15 @@ class RDMAChannel {
 
     struct ibv_sge sge[1];
     int num_sge = prepareSGEList(sge, req);
-    if (req->getLocalLen() <= kMaxInlineData) {
+    uint32_t max_inline = impl_->getMaxInlineData();
+    if (req->getLocalLen() <= max_inline) {
       qpx->wr_flags |= IBV_SEND_INLINE;
       ibv_wr_set_inline_data(qpx, (void *)req->getLocalAddress(), req->getLocalLen());
     } else {
       ibv_wr_set_sge_list(qpx, num_sge, sge);
     }
 
-#ifndef UCCL_P2P_USE_IB
-    ibv_wr_set_ud_addr(qpx, ah_, remote_meta_->qpn, kQKey);
-#endif
+    impl_->setDstAddress(qpx, ah_, remote_meta_->qpn);
 
     int ret = ibv_wr_complete(qpx);
     if (ret) {
@@ -309,171 +223,10 @@ class RDMAChannel {
     return ret;
   }
 
-  void ibrcQP_rtr_rts() {
-    int flags = 0;
-    struct ibv_qp_attr attr = {};
-    struct ibv_port_attr port_attr;
-    assert(ibv_query_port(ctx_->getCtx(), kPortNum, &port_attr) == 0);
-
-    // RTR
-    memset(&attr, 0, sizeof(attr));
-    attr.qp_state = IBV_QPS_RTR;
-    attr.path_mtu = port_attr.active_mtu;
-    attr.dest_qp_num = remote_meta_->qpn;
-    attr.rq_psn = 0;
-    attr.max_dest_rd_atomic = 1;
-    attr.min_rnr_timer = 12;
-    // RoCE
-    attr.ah_attr.is_global = 1;
-    attr.ah_attr.port_num = 1;
-    attr.ah_attr.sl = 135;
-    attr.ah_attr.src_path_bits = 0;
-    attr.ah_attr.grh.traffic_class = 3;
-    attr.ah_attr.grh.hop_limit = 64;
-    memcpy(&attr.ah_attr.grh.dgid, remote_meta_->gid.raw, 16);
-    attr.ah_attr.grh.sgid_index = kGidIndex;
-    flags = IBV_QP_STATE | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
-            IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER | IBV_QP_AV;
-    assert(ibv_modify_qp(qp_, &attr, flags) == 0);
-
-    for (int i = 0; i < kMaxRecvWr; i++) {
-      lazy_post_recv_wr(kMaxRecvWr);
-    }
-
-    // RTS
-    memset(&attr, 0, sizeof(attr));
-    attr.qp_state = IBV_QPS_RTS;
-    attr.timeout = 14;
-    attr.retry_cnt = 7;
-    attr.rnr_retry = 7;
-    attr.sq_psn = 0;
-    attr.max_rd_atomic = 1;
-    flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
-            IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
-    assert(ibv_modify_qp(qp_, &attr, flags) == 0);
-  }
-
-#ifdef UCCL_P2P_USE_IB
-  void init_pre_alloc_resource() {
-    for (int i = 0; i < kMaxRecvWr; i++) {
-      pre_alloc_recv_wrs_[i] = {};
-      pre_alloc_recv_wrs_[i].next =
-          (i == kMaxRecvWr - 1) ? nullptr : &pre_alloc_recv_wrs_[i + 1];
-    }
-  }
-
   void initQP() {
-    cq_ex_ = (struct ibv_cq_ex*)ibv_create_cq(ctx_->getCtx(), 1024, nullptr,
-                                              nullptr, 0);
-    assert(cq_ex_);
-
-    struct ibv_qp_init_attr_ex qp_attr = {};
-    memset(&qp_attr, 0, sizeof(qp_attr));
-    qp_attr.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
-    qp_attr.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE |
-                             IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM |
-                             IBV_QP_EX_WITH_RDMA_READ;
-
-    qp_attr.cap.max_send_wr = kMaxSendWr;
-    qp_attr.cap.max_recv_wr = kMaxRecvWr;
-    qp_attr.cap.max_send_sge = kMaxSendSeg;
-    qp_attr.cap.max_recv_sge = kMaxRecvSeg;
-    qp_attr.cap.max_inline_data = kMaxInlineData;
-
-    qp_attr.send_cq = ibv_cq_ex_to_cq(cq_ex_);
-    qp_attr.recv_cq = ibv_cq_ex_to_cq(cq_ex_);
-
-    qp_attr.pd = ctx_->getPD();
-    qp_attr.qp_context = ctx_->getCtx();
-    qp_attr.sq_sig_all = 0;
-
-    qp_attr.qp_type = IBV_QPT_RC;
-    qp_ = ibv_create_qp_ex(ctx_->getCtx(), &qp_attr);
-    assert(qp_);
-
-    struct ibv_qp_attr attr = {};
-    memset(&attr, 0, sizeof(attr));
-    attr.qp_state = IBV_QPS_INIT;
-    attr.port_num = kPortNum;
-    attr.pkey_index = 0;
-    attr.qp_access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ |
-                           IBV_ACCESS_REMOTE_WRITE;
-    assert(ibv_modify_qp(qp_, &attr,
-                         IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
-                             IBV_QP_ACCESS_FLAGS) == 0);
-
-    local_meta_->gid = ctx_->queryGid(kGidIndex);
-    local_meta_->qpn = qp_->qp_num;
-
-    init_pre_alloc_resource();
+    impl_->initQP(ctx_, &cq_ex_, &qp_, local_meta_.get());
+    impl_->initPreAllocResources(pre_alloc_recv_wrs_, kMaxRecvWr);
   }
-#else
-  void initQP() {
-    struct ibv_cq_init_attr_ex cq_attr = {0};
-    cq_attr.cqe = 1024;
-    cq_attr.wc_flags = IBV_WC_STANDARD_FLAGS;
-    cq_attr.comp_mask = 0;
-
-    cq_ex_ = ibv_create_cq_ex(ctx_->getCtx(), &cq_attr);
-    assert(cq_ex_);
-
-    struct ibv_qp_init_attr_ex qp_attr = {0};
-    qp_attr.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
-    qp_attr.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE |
-                             IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM |
-                             IBV_QP_EX_WITH_RDMA_READ;
-
-    qp_attr.cap.max_send_wr = kMaxSendWr;
-    qp_attr.cap.max_recv_wr = kMaxRecvWr;
-    qp_attr.cap.max_send_sge = kMaxSendSeg;
-    qp_attr.cap.max_recv_sge = kMaxRecvSeg;
-    qp_attr.cap.max_inline_data = 0;
-
-    qp_attr.send_cq = ibv_cq_ex_to_cq(cq_ex_);
-    qp_attr.recv_cq = ibv_cq_ex_to_cq(cq_ex_);
-
-    qp_attr.pd = ctx_->getPD();
-    qp_attr.qp_context = ctx_->getCtx();
-    qp_attr.sq_sig_all = 0;
-
-    qp_attr.qp_type = IBV_QPT_DRIVER;
-
-    struct efadv_qp_init_attr efa_attr = {};
-    efa_attr.driver_qp_type = EFADV_QP_DRIVER_TYPE_SRD;
-    efa_attr.sl = kEfaQpLowLatencyServiceLevel;
-    efa_attr.flags = 0;
-    // If set, Receive WRs will not be consumed for RDMA write with imm.
-    efa_attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;
-
-    qp_ = efadv_create_qp_ex(ctx_->getCtx(), &qp_attr, &efa_attr,
-                             sizeof(efa_attr));
-
-    assert(qp_);
-
-    struct ibv_qp_attr attr = {};
-    memset(&attr, 0, sizeof(attr));
-    attr.qp_state = IBV_QPS_INIT;
-    attr.port_num = kPortNum;
-    attr.qkey = kQKey;
-    attr.pkey_index = 0;
-    assert(ibv_modify_qp(qp_, &attr,
-                         IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
-                             IBV_QP_QKEY) == 0);
-
-    memset(&attr, 0, sizeof(attr));
-    attr.qp_state = IBV_QPS_RTR;
-    assert(ibv_modify_qp(qp_, &attr, IBV_QP_STATE) == 0);
-
-    memset(&attr, 0, sizeof(attr));
-    attr.qp_state = IBV_QPS_RTS;
-    attr.rnr_retry = kEfaRdmDefaultRnrRetry;
-    assert(ibv_modify_qp(qp_, &attr,
-                         IBV_QP_STATE | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN) == 0);
-
-    local_meta_->gid = ctx_->queryGid(kGidIndex);
-    local_meta_->qpn = qp_->qp_num;
-  }
-#endif
 
   // Prepare SGE list for send request
   // Returns the number of SGE entries filled

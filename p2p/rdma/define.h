@@ -36,18 +36,8 @@
 #include <transport.h>
 #include <unistd.h>
 
-#ifdef UCCL_P2P_USE_IB
-static constexpr int kGidIndex = 3;
-static constexpr uint32_t kMaxInlineData = 128;
-#else
-static constexpr int kGidIndex = 0;
-static constexpr uint32_t kMaxInlineData = 0;
-#endif
 static constexpr int kRankIDPlaceHolder = 9999;
-static constexpr int kEfaQpLowLatencyServiceLevel = 8;
-static constexpr uint32_t kQKey = 0x15695;
 static constexpr uint8_t kPortNum = 1;
-static constexpr uint8_t kEfaRdmDefaultRnrRetry = 3;
 
 static constexpr int kQpNumPerChannel = 2;
 static constexpr int kNICContextNumber = 2;
@@ -73,26 +63,6 @@ static constexpr uint32_t INVALID_RANK_ID =
 
 inline size_t channelIdToContextId(uint32_t channel_id) {
   return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;
-}
-
-inline int parseLogLevelFromEnv() {
-  char const* env = std::getenv("RDMA_LOG_LEVEL");
-  if (!env) {
-    return google::WARNING;
-  }
-
-  if (!strcasecmp(env, "INFO")) return google::INFO;
-  if (!strcasecmp(env, "WARNING")) return google::WARNING;
-  if (!strcasecmp(env, "ERROR")) return google::ERROR;
-  if (!strcasecmp(env, "FATAL")) return google::FATAL;
-
-  char* end = nullptr;
-  long val = std::strtol(env, &end, 10);
-  if (end != env && val >= 0 && val <= 3) {
-    return static_cast<int>(val);
-  }
-
-  return google::WARNING;
 }
 
 struct MessageChunk {
@@ -163,62 +133,9 @@ enum class MemoryType { HOST, GPU };
 enum class ChannelType : int16_t { Control, Normal };
 
 template <typename T = uint32_t>
-struct RKeyArrayT {
-  T keys[kNICContextNumber];
-
-  RKeyArrayT() { std::memset(keys, 0, sizeof(keys)); }
-
-  inline void copyFrom(RKeyArrayT<T> const& other) {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "RKeyArrayT::copyFrom requires trivially copyable T");
-
-    std::memcpy(keys, other.keys, sizeof(keys));
-  }
-
-  inline void copyFrom(char const* other) {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "RKeyArrayT::copyFrom requires trivially copyable T");
-
-    std::memcpy(keys, other, sizeof(keys));
-  }
-
-  inline T getKeyByChannelID(uint32_t channel_id) const {
-    return getKeyByContextID(channelIdToContextId(channel_id));
-  }
-
-  inline T getKeyByContextID(size_t context_id) const {
-    return keys[context_id];
-  }
-
-  inline void setKeyByContextID(uint32_t context_id, T key) {
-    keys[context_id] = key;
-  }
-
-  inline void setKeyByChannelID(uint32_t channel_id, T key) {
-    setKeyByContextID(channelIdToContextId(channel_id), key);
-  }
-
-  T& operator[](int index) { return keys[index]; }
-  T const& operator[](int index) const { return keys[index]; }
-
-  friend std::ostream& operator<<(std::ostream& os, RKeyArrayT<T> const& arr) {
-    os << "RKeyArrayT{";
-    for (int i = 0; i < kNICContextNumber; ++i) {
-      if (i > 0) os << ", ";
-      if constexpr (std::is_integral_v<T>) {
-        os << "0x" << std::hex << arr.keys[i] << std::dec;
-      } else {
-        os << arr.keys[i];
-      }
-    }
-    os << "}";
-    return os;
-  }
-};
-
-// Type alias for backward compatibility and convenience
-using RKeyArray = RKeyArrayT<uint32_t>;
-using MRArray = RKeyArrayT<struct ibv_mr*>;
+using RKeyArrayT = unified::RKeyArrayT<T>;
+using RKeyArray = unified::RKeyArrayT<uint32_t>;
+using MRArray = unified::MRArray;
 
 inline void copyRKeyArrayFromMRArray(MRArray const& mr_array,
                                      RKeyArray& rkey_array) {
