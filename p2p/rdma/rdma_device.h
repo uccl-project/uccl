@@ -90,8 +90,8 @@ class RdmaDeviceManager {
       } else {
         auto strategy = createDeviceSelectionStrategy();
         auto selected = strategy->selectNICs(candidates, gpu_idx);
-        selected_nic_names.insert(selected_nic_names.end(),
-                                  selected.begin(), selected.end());
+        selected_nic_names.insert(selected_nic_names.end(), selected.begin(),
+                                  selected.end());
       }
     }
 

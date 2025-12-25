@@ -1,8 +1,8 @@
 #pragma once
-#include <vector>
-#include <string>
-#include <memory>
 #include <cassert>
+#include <memory>
+#include <string>
+#include <vector>
 
 // Base class for device selection strategy
 class RDMADeviceSelectionStrategy {
@@ -18,8 +18,7 @@ class RDMADeviceSelectionStrategy {
 class IBDeviceSelectionStrategy : public RDMADeviceSelectionStrategy {
  public:
   std::vector<std::string> selectNICs(
-      std::vector<std::string> const& candidates,
-      int gpu_idx) override {
+      std::vector<std::string> const& candidates, int gpu_idx) override {
     (void)gpu_idx;
     std::vector<std::string> selected;
     if (!candidates.empty()) {
@@ -33,8 +32,7 @@ class IBDeviceSelectionStrategy : public RDMADeviceSelectionStrategy {
 class EFADeviceSelectionStrategy : public RDMADeviceSelectionStrategy {
  public:
   std::vector<std::string> selectNICs(
-      std::vector<std::string> const& candidates,
-      int gpu_idx) override {
+      std::vector<std::string> const& candidates, int gpu_idx) override {
     // NOTE(xzhiying): This is a temporary hack.
     // On p5en, there are 4 NICs with the same distance.
     // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
@@ -51,11 +49,11 @@ class EFADeviceSelectionStrategy : public RDMADeviceSelectionStrategy {
 };
 
 // Factory function (inline)
-inline std::unique_ptr<RDMADeviceSelectionStrategy> createDeviceSelectionStrategy() {
+inline std::unique_ptr<RDMADeviceSelectionStrategy>
+createDeviceSelectionStrategy() {
 #ifdef UCCL_P2P_USE_IB
   return std::make_unique<IBDeviceSelectionStrategy>();
 #else
   return std::make_unique<EFADeviceSelectionStrategy>();
 #endif
 }
-

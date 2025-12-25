@@ -1,7 +1,7 @@
 #pragma once
 #include "define.h"
-#include "rdma_context.h"
 #include "rdma_channel_impl.h"
+#include "rdma_context.h"
 #include "seq_num.h"
 #include "util/util.h"
 #include <glog/logging.h>
@@ -13,7 +13,8 @@
 #include "providers/efa/rdma_channel_impl_efa.h"
 #endif
 
-// Factory function implementation (inline, defined after including impl headers)
+// Factory function implementation (inline, defined after including impl
+// headers)
 inline std::unique_ptr<RDMAChannelImpl> createRDMAChannelImpl() {
 #ifdef UCCL_P2P_USE_IB
   return std::make_unique<IBChannelImpl>();
@@ -24,8 +25,8 @@ inline std::unique_ptr<RDMAChannelImpl> createRDMAChannelImpl() {
 
 class RDMAChannel {
  public:
-
-  explicit RDMAChannel(std::shared_ptr<RdmaContext> ctx, uint32_t channel_id = 0)
+  explicit RDMAChannel(std::shared_ptr<RdmaContext> ctx,
+                       uint32_t channel_id = 0)
       : ctx_(ctx),
         qp_(nullptr),
         cq_ex_(nullptr),
@@ -38,8 +39,8 @@ class RDMAChannel {
   }
 
   explicit RDMAChannel(std::shared_ptr<RdmaContext> ctx,
-                      ChannelMetaData const& remote_meta,
-                      uint32_t channel_id = 0)
+                       ChannelMetaData const& remote_meta,
+                       uint32_t channel_id = 0)
       : ctx_(ctx),
         qp_(nullptr),
         cq_ex_(nullptr),
@@ -191,7 +192,8 @@ class RDMAChannel {
     uint32_t max_inline = impl_->getMaxInlineData();
     if (req->getLocalLen() <= max_inline) {
       qpx->wr_flags |= IBV_SEND_INLINE;
-      ibv_wr_set_inline_data(qpx, (void *)req->getLocalAddress(), req->getLocalLen());
+      ibv_wr_set_inline_data(qpx, (void*)req->getLocalAddress(),
+                             req->getLocalLen());
     } else {
       ibv_wr_set_sge_list(qpx, num_sge, sge);
     }

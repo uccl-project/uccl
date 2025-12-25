@@ -2,14 +2,13 @@
 #define RDMA_CHANNEL_IMPL_EFA_CC_INCLUDED
 
 #include "rdma_channel_impl_efa.h"
-#include <cstring>
 #include <glog/logging.h>
+#include <cstring>
 #include <errno.h>
 
 inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
-                            struct ibv_cq_ex** cq_ex,
-                            struct ibv_qp** qp,
-                            ChannelMetaData* local_meta) {
+                                   struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
+                                   ChannelMetaData* local_meta) {
   struct ibv_cq_init_attr_ex cq_attr = {0};
   cq_attr.cqe = 1024;
   cq_attr.wc_flags = IBV_WC_STANDARD_FLAGS;
@@ -46,8 +45,8 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   // If set, Receive WRs will not be consumed for RDMA write with imm.
   efa_attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;
 
-  *qp = efadv_create_qp_ex(ctx->getCtx(), &qp_attr, &efa_attr,
-                            sizeof(efa_attr));
+  *qp =
+      efadv_create_qp_ex(ctx->getCtx(), &qp_attr, &efa_attr, sizeof(efa_attr));
 
   assert(*qp);
 
@@ -76,12 +75,11 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
 }
 
 inline void EFAChannelImpl::connectQP(struct ibv_qp* qp,
-                               std::shared_ptr<RdmaContext> ctx,
-                               ChannelMetaData const& remote_meta,
-                               struct ibv_recv_wr* pre_alloc_recv_wrs,
-                               uint32_t kMaxRecvWr,
-                               uint32_t* pending_post_recv) {
-  // EFA QP is already in RTS state after initQP
+                                      std::shared_ptr<RdmaContext> ctx,
+                                      ChannelMetaData const& remote_meta,
+                                      struct ibv_recv_wr* pre_alloc_recv_wrs,
+                                      uint32_t kMaxRecvWr,
+                                      uint32_t* pending_post_recv) {
   (void)qp;
   (void)ctx;
   (void)remote_meta;
@@ -91,11 +89,10 @@ inline void EFAChannelImpl::connectQP(struct ibv_qp* qp,
 }
 
 inline bool EFAChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
-                                std::vector<CQMeta>& cq_datas,
-                                uint32_t channel_id) {
+                                      std::vector<CQMeta>& cq_datas,
+                                      uint32_t channel_id) {
   if (!cq_ex) {
-    LOG(INFO) << "poll_once - channel_id: " << channel_id
-              << ", cq_ex_ is null";
+    LOG(INFO) << "poll_once - channel_id: " << channel_id << ", cq_ex_ is null";
     return false;
   }
 
@@ -148,12 +145,9 @@ inline bool EFAChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
   return !cq_datas.empty();
 }
 
-inline void EFAChannelImpl::lazy_post_recv_wr(struct ibv_qp* qp,
-                                        uint32_t threshold,
-                                        uint32_t& pending_post_recv,
-                                        struct ibv_recv_wr* pre_alloc_recv_wrs,
-                                        uint32_t kMaxRecvWr) {
-  // EFA doesn't use lazy posting
+inline void EFAChannelImpl::lazy_post_recv_wr(
+    struct ibv_qp* qp, uint32_t threshold, uint32_t& pending_post_recv,
+    struct ibv_recv_wr* pre_alloc_recv_wrs, uint32_t kMaxRecvWr) {
   (void)qp;
   (void)threshold;
   (void)pending_post_recv;
@@ -162,17 +156,15 @@ inline void EFAChannelImpl::lazy_post_recv_wr(struct ibv_qp* qp,
 }
 
 inline void EFAChannelImpl::setDstAddress(struct ibv_qp_ex* qpx,
-                                    struct ibv_ah* ah,
-                                    uint32_t remote_qpn) {
+                                          struct ibv_ah* ah,
+                                          uint32_t remote_qpn) {
   ibv_wr_set_ud_addr(qpx, ah, remote_qpn, kQKey);
 }
 
-inline void EFAChannelImpl::initPreAllocResources(struct ibv_recv_wr* pre_alloc_recv_wrs,
-                                          uint32_t kMaxRecvWr) {
-  // EFA doesn't need pre-allocated resources
+inline void EFAChannelImpl::initPreAllocResources(
+    struct ibv_recv_wr* pre_alloc_recv_wrs, uint32_t kMaxRecvWr) {
   (void)pre_alloc_recv_wrs;
   (void)kMaxRecvWr;
 }
 
-#endif // RDMA_CHANNEL_IMPL_EFA_CC_INCLUDED
-
+#endif  // RDMA_CHANNEL_IMPL_EFA_CC_INCLUDED

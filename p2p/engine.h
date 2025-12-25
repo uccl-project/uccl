@@ -6,9 +6,11 @@
 #include "util/net.h"
 #include "util/shared_pool.h"
 #include "util/util.h"
+#include <glog/logging.h>
 #include <infiniband/verbs.h>
 #include <pybind11/pybind11.h>
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <shared_mutex>
 #include <string>
@@ -18,8 +20,6 @@
 #include <unordered_map>
 #include <variant>
 #include <vector>
-#include <cstdlib>
-#include <glog/logging.h>
 
 namespace py = pybind11;
 
@@ -109,9 +109,6 @@ struct RKeyArrayT {
 
 using MRArray = RKeyArrayT<struct ibv_mr*>;
 }  // namespace unified
-
-// Mark that unified::RKeyArrayT is defined
-#define UCCL_UNIFIED_RKEYARRAY_DEFINED
 
 #ifdef UCCL_P2P_USE_RDMA
 #include "rdma/define.h"

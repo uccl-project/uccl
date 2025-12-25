@@ -323,7 +323,8 @@ typedef struct RDMARecvRequest {
 
   inline uint32_t getLocalLen() const { return local_mem->size; }
 
-  friend std::ostream& operator<<(std::ostream& os, RDMARecvRequest const& req) {
+  friend std::ostream& operator<<(std::ostream& os,
+                                  RDMARecvRequest const& req) {
     os << "RDMARecvRequest{";
     os << "from_rank_id: " << req.from_rank_id
        << ", to_rank_id: " << req.to_rank_id
@@ -469,8 +470,8 @@ struct RDMASendRequest {
 
   // Constructor
   RDMASendRequest(std::shared_ptr<RegMemBlock> local,
-                 std::shared_ptr<RemoteMemInfo> remote, uint32_t imm = 0,
-                 bool signaled = true)
+                  std::shared_ptr<RemoteMemInfo> remote, uint32_t imm = 0,
+                  bool signaled = true)
       : local_mem(local),
         remote_mem(remote),
         imm_data(imm),
@@ -478,8 +479,8 @@ struct RDMASendRequest {
 
   // Constructor from shared_ptr<RDMASendRequest>
   RDMASendRequest(std::shared_ptr<RDMASendRequest> other,
-                 std::shared_ptr<RegMemBlock> local, uint32_t imm = 0,
-                 bool signaled = true)
+                  std::shared_ptr<RegMemBlock> local, uint32_t imm = 0,
+                  bool signaled = true)
       : local_mem(local),
         remote_mem(other->remote_mem),
         imm_data(imm),
@@ -487,8 +488,8 @@ struct RDMASendRequest {
 
   // Constructor from const RDMASendRequest&
   RDMASendRequest(RDMASendRequest const& other,
-                 std::shared_ptr<RegMemBlock> local, uint32_t imm = 0,
-                 bool signaled = true)
+                  std::shared_ptr<RegMemBlock> local, uint32_t imm = 0,
+                  bool signaled = true)
       : local_mem(local),
         remote_mem(other.remote_mem),
         imm_data(imm),
@@ -513,7 +514,8 @@ struct RDMASendRequest {
 
   inline uint32_t getLocalLen() const { return local_mem->size; }
 
-  friend std::ostream& operator<<(std::ostream& os, RDMASendRequest const& req) {
+  friend std::ostream& operator<<(std::ostream& os,
+                                  RDMASendRequest const& req) {
     os << "RDMASendRequest{";
     os << "from_rank_id: " << req.from_rank_id
        << ", to_rank_id: " << req.to_rank_id

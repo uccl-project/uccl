@@ -1,6 +1,6 @@
 #pragma once
-#include "rdma/rdma_channel_impl.h"
 #include "rdma/define.h"
+#include "rdma/rdma_channel_impl.h"
 #include <glog/logging.h>
 
 #define GID_INDEX 3
@@ -11,30 +11,24 @@ class IBChannelImpl : public RDMAChannelImpl {
   IBChannelImpl() = default;
   ~IBChannelImpl() override = default;
 
-  void initQP(std::shared_ptr<RdmaContext> ctx,
-              struct ibv_cq_ex** cq_ex,
-              struct ibv_qp** qp,
-              ChannelMetaData* local_meta) override;
+  void initQP(std::shared_ptr<RdmaContext> ctx, struct ibv_cq_ex** cq_ex,
+              struct ibv_qp** qp, ChannelMetaData* local_meta) override;
 
-  void connectQP(struct ibv_qp* qp,
-                std::shared_ptr<RdmaContext> ctx,
-                ChannelMetaData const& remote_meta,
-                struct ibv_recv_wr* pre_alloc_recv_wrs = nullptr,
-                uint32_t kMaxRecvWr = 0,
-                uint32_t* pending_post_recv = nullptr) override;
+  void connectQP(struct ibv_qp* qp, std::shared_ptr<RdmaContext> ctx,
+                 ChannelMetaData const& remote_meta,
+                 struct ibv_recv_wr* pre_alloc_recv_wrs = nullptr,
+                 uint32_t kMaxRecvWr = 0,
+                 uint32_t* pending_post_recv = nullptr) override;
 
-  bool poll_once(struct ibv_cq_ex* cq_ex,
-                 std::vector<CQMeta>& cq_datas,
+  bool poll_once(struct ibv_cq_ex* cq_ex, std::vector<CQMeta>& cq_datas,
                  uint32_t channel_id) override;
 
-  void lazy_post_recv_wr(struct ibv_qp* qp,
-                          uint32_t threshold,
-                          uint32_t& pending_post_recv,
-                          struct ibv_recv_wr* pre_alloc_recv_wrs,
-                          uint32_t kMaxRecvWr) override;
+  void lazy_post_recv_wr(struct ibv_qp* qp, uint32_t threshold,
+                         uint32_t& pending_post_recv,
+                         struct ibv_recv_wr* pre_alloc_recv_wrs,
+                         uint32_t kMaxRecvWr) override;
 
-  void setDstAddress(struct ibv_qp_ex* qpx,
-                     struct ibv_ah* ah,
+  void setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
                      uint32_t remote_qpn) override;
 
   int getGidIndex() const override { return GID_INDEX; }
@@ -44,14 +38,11 @@ class IBChannelImpl : public RDMAChannelImpl {
                              uint32_t kMaxRecvWr) override;
 
  private:
-  void ibrcQP_rtr_rts(struct ibv_qp* qp,
-                      std::shared_ptr<RdmaContext> ctx,
+  void ibrcQP_rtr_rts(struct ibv_qp* qp, std::shared_ptr<RdmaContext> ctx,
                       ChannelMetaData const& remote_meta,
                       struct ibv_recv_wr* pre_alloc_recv_wrs,
-                      uint32_t kMaxRecvWr,
-                      uint32_t& pending_post_recv);
+                      uint32_t kMaxRecvWr, uint32_t& pending_post_recv);
 };
 
 // Implementation (inline to avoid separate .cc file)
 #include "rdma_channel_impl_ib.cc"
-

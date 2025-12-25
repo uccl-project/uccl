@@ -156,8 +156,9 @@ class RecvControlChannel : public RDMAChannel {
       local_mem_ptr_->size = rb_->elementSize();
     }
 
-    std::shared_ptr<RDMASendRequest> send_ptr = std::make_shared<RDMASendRequest>(
-        local_mem_ptr_, remote_mem_ptr_, index);
+    std::shared_ptr<RDMASendRequest> send_ptr =
+        std::make_shared<RDMASendRequest>(local_mem_ptr_, remote_mem_ptr_,
+                                          index);
     send_ptr->channel_id = kControlChannelID;
     RDMAChannel::send(send_ptr);
     return index;
