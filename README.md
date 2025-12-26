@@ -201,7 +201,7 @@ sudo apt-get install openmpi-bin openmpi-doc libopenmpi-dev -y
 </details>
 
 ## Citation
-The code in this repository is mostly described in the paper below. Please consider citing this work if you find the repository helpful. 
+The code in this repository is mostly described in the papers below. Please consider citing this work if you find the repository helpful. 
 
 ```bibtex
 @article{uccl_transport,
@@ -211,7 +211,14 @@ The code in this repository is mostly described in the paper below. Please consi
   year={2025}
 }
 ```
-
+```bibtex
+@article{mao2025uccl,
+  title={UCCL-EP: Portable Expert-Parallel Communication},
+  author={Mao, Ziming and Zhang, Yihan and Cui, Chihan and You, Kaichao and Chen, Zhongjie and Xu, Zhiying and Shenker, Scott and Raiciu, Costin and Zhou, Yang and Stoica, Ion},
+  journal={arXiv preprint arXiv:2512.19849},
+  year={2025}
+}
+```
 ## Acknowledgement
 
 UCCL is being actively developed at [UC Berkeley Sky Computing Lab](https://sky.cs.berkeley.edu/) and [UC Davis ArtSy lab](https://github.com/artsy-lab). We enthusiastically welcome open-source developers joining us! 
