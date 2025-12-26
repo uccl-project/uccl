@@ -178,3 +178,40 @@ Use `UCCL_PARAM()` to introduce new environment variables.
 | UCCL_NUM_ENGINES | Number of engines per device | 4 (NVIDIA), 1 (AMD) |
 | UCCL_PORT_ENTROPY | Path/QP per engine | 32 (NVIDIA), 256 (AMD) |
 | UCCL_CHUNK_SIZE_KB | Maximum chunk size for each WQE | 64 (NVIDIA), 128 (AMD) |
+
+### Chunk Size Guidelines
+
+The `UCCL_CHUNK_SIZE_KB` parameter controls the maximum size of each Work Queue Element (WQE) in the RDMA transport layer. Choosing the right chunk size is important for optimal performance:
+
+**Minimum Chunk Size Requirements:**
+- Chunks smaller than **16 KB** may cause performance issues or failures
+- At 4 KB: `ibv_post_send()` may fail with "Cannot allocate memory" (ENOMEM) due to QP send queue exhaustion
+- At 8 KB: Runs but may show severely degraded throughput
+
+**Recommended Chunk Sizes:**
+- **NVIDIA CUDA**: 64 KB (default) to 128 KB for optimal performance
+- **AMD ROCm**: 128 KB (default) to 256 KB
+- For bandwidth testing: 1 MB chunks can maximize throughput
+
+**Why Small Chunks Fail:**
+
+When chunk sizes are too small, the packet processing rate exceeds what a single CPU core can handle. This causes:
+1. **QP send queue saturation**: Work requests cannot be completed fast enough
+2. **Memory allocation failures**: Buffer pools exhaust before completion processing
+3. **High overhead ratio**: Per-packet overhead dominates useful data transfer
+
+**Tuning Guidelines:**
+```bash
+# Standard ML training workloads (default)
+export UCCL_CHUNK_SIZE_KB=64
+
+# High-throughput bulk transfers
+export UCCL_CHUNK_SIZE_KB=128
+
+# Maximum bandwidth testing
+export UCCL_CHUNK_SIZE_KB=1024
+```
+
+The chunk size also affects credit-based flow control. The outstanding bytes per flow/engine are computed as multiples of `UCCL_CHUNK_SIZE_KB`:
+- `kMaxUnAckedBytesPerFlow = 2 × max(chunk_size, 32KB)`
+- `kMaxUnAckedBytesPerEngineLow = 8-18 × max(chunk_size, 32KB)` (RoCE/IB dependent)
