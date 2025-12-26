@@ -1,4 +1,6 @@
 import os
+import sys
+import resource
 from pathlib import Path
 
 try:
@@ -18,6 +20,35 @@ def has_efa():
     except (OSError, PermissionError):
         return False
 is_efa = has_efa()
+
+
+def set_files_limit():
+    """
+    Raise file descriptor soft limit to hard limit.
+
+    This allows more concurrent sockets for high-performance communication,
+    similar to NCCL's approach. Should be called early in program initialization.
+
+    Returns:
+        tuple: (new_limit, old_limit) on success, or (None, None) on failure
+    """
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+
+        if soft < hard:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+            print(f"[uccl] File descriptor limit raised: {soft} -> {hard}",
+                  file=sys.stderr)
+            return (hard, soft)
+        else:
+            print(f"[uccl] File descriptor limit already at maximum: {hard}",
+                  file=sys.stderr)
+            return (hard, hard)
+
+    except (ValueError, OSError) as e:
+        print(f"[uccl] Failed to set file descriptor limit: {e}",
+              file=sys.stderr)
+        return (None, None)
 
 if not is_efa:
     try:
