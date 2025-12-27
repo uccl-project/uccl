@@ -297,7 +297,7 @@ def detect_ib_hca():
     """Detect InfiniBand HCA device.
 
     Returns the first mlx5 device name found, or None if no InfiniBand
-    devices are available (e.g., on systems without RDMA hardware).
+    devices are available (e.g., on systems without IB).
     """
     try:
         devices = sorted(glob.glob("/sys/class/infiniband/*"))
