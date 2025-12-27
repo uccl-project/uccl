@@ -47,26 +47,19 @@ inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
                        IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
                            IBV_QP_ACCESS_FLAGS) == 0);
 
-  local_meta->gid = ctx->queryGid(getGidIndex());
+  local_meta->gid = ctx->queryGid(GID_INDEX);
   local_meta->qpn = (*qp)->qp_num;
 }
 
 inline void IBChannelImpl::connectQP(struct ibv_qp* qp,
                                      std::shared_ptr<RdmaContext> ctx,
-                                     ChannelMetaData const& remote_meta,
-                                     struct ibv_recv_wr* pre_alloc_recv_wrs,
-                                     uint32_t kMaxRecvWr,
-                                     uint32_t* pending_post_recv) {
-  if (pre_alloc_recv_wrs && pending_post_recv) {
-    ibrcQP_rtr_rts(qp, ctx, remote_meta, pre_alloc_recv_wrs, kMaxRecvWr,
-                   *pending_post_recv);
-  }
+                                     ChannelMetaData const& remote_meta) {
+  ibrcQP_rtr_rts(qp, ctx, remote_meta);
 }
 
-inline void IBChannelImpl::ibrcQP_rtr_rts(
-    struct ibv_qp* qp, std::shared_ptr<RdmaContext> ctx,
-    ChannelMetaData const& remote_meta, struct ibv_recv_wr* pre_alloc_recv_wrs,
-    uint32_t kMaxRecvWr, uint32_t& pending_post_recv) {
+inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
+                                          std::shared_ptr<RdmaContext> ctx,
+                                          ChannelMetaData const& remote_meta) {
   int flags = 0;
   struct ibv_qp_attr attr = {};
   struct ibv_port_attr port_attr;
@@ -89,13 +82,12 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(
   attr.ah_attr.grh.traffic_class = 3;
   attr.ah_attr.grh.hop_limit = 64;
   memcpy(&attr.ah_attr.grh.dgid, remote_meta.gid.raw, 16);
-  attr.ah_attr.grh.sgid_index = getGidIndex();
+  attr.ah_attr.grh.sgid_index = GID_INDEX;
   flags = IBV_QP_STATE | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
           IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER | IBV_QP_AV;
   assert(ibv_modify_qp(qp, &attr, flags) == 0);
 
-  lazy_post_recv_wrs_n(qp, pending_post_recv, pre_alloc_recv_wrs, kMaxRecvWr,
-                       true);
+  lazy_post_recv_wrs_n(qp, kMaxRecvWr, true);
 
   // RTS
   memset(&attr, 0, sizeof(attr));
@@ -156,30 +148,29 @@ inline bool IBChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
   return !cq_datas.empty();
 }
 
-inline void IBChannelImpl::lazy_post_recv_wrs_n(
-    struct ibv_qp* qp, uint32_t& pending_post_recv,
-    struct ibv_recv_wr* pre_alloc_recv_wrs, uint32_t n, bool force) {
-  pending_post_recv += n;
-  while (pending_post_recv >= kBatchPostRecvWr) {
+inline void IBChannelImpl::lazy_post_recv_wrs_n(struct ibv_qp* qp, uint32_t n,
+                                                bool force) {
+  pending_post_recv_ += n;
+  while (pending_post_recv_ >= kBatchPostRecvWr) {
     struct ibv_recv_wr* bad_wr = nullptr;
-    pre_alloc_recv_wrs[kBatchPostRecvWr - 1].next = nullptr;
-    assert(ibv_post_recv(qp, pre_alloc_recv_wrs, &bad_wr) == 0);
-    pre_alloc_recv_wrs[kBatchPostRecvWr - 1].next =
+    pre_alloc_recv_wrs_[kBatchPostRecvWr - 1].next = nullptr;
+    assert(ibv_post_recv(qp, pre_alloc_recv_wrs_, &bad_wr) == 0);
+    pre_alloc_recv_wrs_[kBatchPostRecvWr - 1].next =
         (kBatchPostRecvWr == kMaxRecvWr)
             ? nullptr
-            : &pre_alloc_recv_wrs[kBatchPostRecvWr];
-    pending_post_recv -= kBatchPostRecvWr;
+            : &pre_alloc_recv_wrs_[kBatchPostRecvWr];
+    pending_post_recv_ -= kBatchPostRecvWr;
   }
 
-  if (pending_post_recv) {
+  if (force && pending_post_recv_) {
     struct ibv_recv_wr* bad_wr = nullptr;
-    pre_alloc_recv_wrs[pending_post_recv - 1].next = nullptr;
-    assert(ibv_post_recv(qp, pre_alloc_recv_wrs, &bad_wr) == 0);
-    pre_alloc_recv_wrs[pending_post_recv - 1].next =
-        (pending_post_recv == kMaxRecvWr)
+    pre_alloc_recv_wrs_[pending_post_recv_ - 1].next = nullptr;
+    assert(ibv_post_recv(qp, pre_alloc_recv_wrs_, &bad_wr) == 0);
+    pre_alloc_recv_wrs_[pending_post_recv_ - 1].next =
+        (pending_post_recv_ == kMaxRecvWr)
             ? nullptr
-            : &pre_alloc_recv_wrs[pending_post_recv];
-    pending_post_recv = 0;
+            : &pre_alloc_recv_wrs_[pending_post_recv_];
+    pending_post_recv_ = 0;
   }
 }
 
@@ -192,12 +183,13 @@ inline void IBChannelImpl::setDstAddress(struct ibv_qp_ex* qpx,
   (void)remote_qpn;
 }
 
-inline void IBChannelImpl::initPreAllocResources(
-    struct ibv_recv_wr* pre_alloc_recv_wrs, uint32_t kMaxRecvWr) {
+inline void IBChannelImpl::initPreAllocResources() {
+  pre_alloc_recv_wrs_ = new struct ibv_recv_wr[kMaxRecvWr];
+  pending_post_recv_ = 0;
   for (int i = 0; i < kMaxRecvWr; i++) {
-    pre_alloc_recv_wrs[i] = {};
-    pre_alloc_recv_wrs[i].next =
-        (i == kMaxRecvWr - 1) ? nullptr : &pre_alloc_recv_wrs[i + 1];
+    pre_alloc_recv_wrs_[i] = {};
+    pre_alloc_recv_wrs_[i].next =
+        (i == kMaxRecvWr - 1) ? nullptr : &pre_alloc_recv_wrs_[i + 1];
   }
 }
 

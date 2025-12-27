@@ -24,34 +24,29 @@ class RDMAChannelImpl {
 
   // Connect QP to remote
   virtual void connectQP(struct ibv_qp* qp, std::shared_ptr<RdmaContext> ctx,
-                         ChannelMetaData const& remote_meta,
-                         struct ibv_recv_wr* pre_alloc_recv_wrs = nullptr,
-                         uint32_t kMaxRecvWr = 0,
-                         uint32_t* pending_post_recv = nullptr) = 0;
+                         ChannelMetaData const& remote_meta) = 0;
 
   // Poll completion queue
   virtual bool poll_once(struct ibv_cq_ex* cq_ex, std::vector<CQMeta>& cq_datas,
                          uint32_t channel_id, uint32_t& nb_post_recv) = 0;
 
   // Post receive work request
-  virtual void lazy_post_recv_wrs_n(struct ibv_qp* qp,
-                                    uint32_t& pending_post_recv,
-                                    struct ibv_recv_wr* pre_alloc_recv_wrs,
-                                    uint32_t n, bool force) = 0;
+  virtual void lazy_post_recv_wrs_n(struct ibv_qp* qp, uint32_t n,
+                                    bool force) = 0;
 
   // Setup Destination address
   virtual void setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
                              uint32_t remote_qpn) = 0;
 
-  // Get GID index
-  virtual int getGidIndex() const = 0;
-
   // Get max inline data size
   virtual uint32_t getMaxInlineData() const = 0;
 
   // Initialize pre-allocated resources
-  virtual void initPreAllocResources(struct ibv_recv_wr* pre_alloc_recv_wrs,
-                                     uint32_t kMaxRecvWr) = 0;
+  virtual void initPreAllocResources() = 0;
+
+ protected:
+  struct ibv_recv_wr* pre_alloc_recv_wrs_;
+  uint32_t pending_post_recv_;
 };
 
 // Forward declarations for implementations

@@ -15,32 +15,23 @@ class IBChannelImpl : public RDMAChannelImpl {
               struct ibv_qp** qp, ChannelMetaData* local_meta) override;
 
   void connectQP(struct ibv_qp* qp, std::shared_ptr<RdmaContext> ctx,
-                 ChannelMetaData const& remote_meta,
-                 struct ibv_recv_wr* pre_alloc_recv_wrs = nullptr,
-                 uint32_t kMaxRecvWr = 0,
-                 uint32_t* pending_post_recv = nullptr) override;
+                 ChannelMetaData const& remote_meta) override;
 
   bool poll_once(struct ibv_cq_ex* cq_ex, std::vector<CQMeta>& cq_datas,
                  uint32_t channel_id, uint32_t& nb_post_recv) override;
 
-  void lazy_post_recv_wrs_n(struct ibv_qp* qp, uint32_t& pending_post_recv,
-                            struct ibv_recv_wr* pre_alloc_recv_wrs, uint32_t n,
-                            bool force) override;
+  void lazy_post_recv_wrs_n(struct ibv_qp* qp, uint32_t n, bool force) override;
 
   void setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
                      uint32_t remote_qpn) override;
 
-  int getGidIndex() const override { return GID_INDEX; }
   uint32_t getMaxInlineData() const override { return MAX_INLINE_DATA; }
 
-  void initPreAllocResources(struct ibv_recv_wr* pre_alloc_recv_wrs,
-                             uint32_t kMaxRecvWr) override;
+  void initPreAllocResources() override;
 
  private:
   void ibrcQP_rtr_rts(struct ibv_qp* qp, std::shared_ptr<RdmaContext> ctx,
-                      ChannelMetaData const& remote_meta,
-                      struct ibv_recv_wr* pre_alloc_recv_wrs,
-                      uint32_t kMaxRecvWr, uint32_t& pending_post_recv);
+                      ChannelMetaData const& remote_meta);
 };
 
 // Implementation (inline to avoid separate .cc file)

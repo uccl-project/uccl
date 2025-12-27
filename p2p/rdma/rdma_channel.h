@@ -50,8 +50,7 @@ class RDMAChannel {
         impl_(createRDMAChannelImpl()) {
     initQP();
     ah_ = ctx_->createAH(remote_meta_->gid);
-    impl_->connectQP(qp_, ctx_, *remote_meta_, pre_alloc_recv_wrs_, kMaxRecvWr,
-                     &pending_post_recv_);
+    impl_->connectQP(qp_, ctx_, *remote_meta_);
     UCCL_LOG_EP << "RDMAChannel connected to remote qpn=" << remote_meta.qpn;
   }
 
@@ -61,8 +60,7 @@ class RDMAChannel {
   void connect(ChannelMetaData const& remote_meta) {
     remote_meta_ = std::make_shared<ChannelMetaData>(remote_meta);
     ah_ = ctx_->createAH(remote_meta_->gid);
-    impl_->connectQP(qp_, ctx_, *remote_meta_, pre_alloc_recv_wrs_, kMaxRecvWr,
-                     &pending_post_recv_);
+    impl_->connectQP(qp_, ctx_, *remote_meta_);
     UCCL_LOG_EP << "RDMAChannel connected to remote qpn=" << remote_meta.qpn;
   }
 
@@ -105,15 +103,10 @@ class RDMAChannel {
     return wr_id;
   }
 
-  void lazy_post_recv_wrs_n(uint32_t n) {
-    impl_->lazy_post_recv_wrs_n(qp_, pending_post_recv_, pre_alloc_recv_wrs_, n,
-                                false);
-  }
-
   bool poll_once(std::vector<CQMeta>& cq_datas) {
     uint32_t nb_post_recv = 0;
     bool result = impl_->poll_once(cq_ex_, cq_datas, channel_id_, nb_post_recv);
-    lazy_post_recv_wrs_n(nb_post_recv);
+    impl_->lazy_post_recv_wrs_n(qp_, nb_post_recv, false);
     return result;
   }
 
@@ -141,10 +134,6 @@ class RDMAChannel {
   struct ibv_cq_ex* cq_ex_;
   struct ibv_qp* qp_;
   struct ibv_ah* ah_;
-
-  struct ibv_wc pre_alloc_wcs_[kBatchPollCqe];
-  struct ibv_recv_wr pre_alloc_recv_wrs_[kMaxRecvWr];
-  uint32_t pending_post_recv_ = 0;
 
   std::shared_ptr<ChannelMetaData> local_meta_;
   std::shared_ptr<ChannelMetaData> remote_meta_;
@@ -222,7 +211,7 @@ class RDMAChannel {
 
   void initQP() {
     impl_->initQP(ctx_, &cq_ex_, &qp_, local_meta_.get());
-    impl_->initPreAllocResources(pre_alloc_recv_wrs_, kMaxRecvWr);
+    impl_->initPreAllocResources();
   }
 
   // Prepare SGE list for send request
