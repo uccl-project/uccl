@@ -117,17 +117,20 @@ def unpack_moe_data_from_buffers_cuda(
     weight_scalar_type = dtype_map.get(weight_dtype, torch.float32)
 
     # Call CUDA kernel
-    recv_x, recv_topk_idx, recv_topk_weights, recv_num_tokens_per_expert = (
-        moe_pack_unpack.unpack_moe_data(
-            buffers,
-            per_rank_recv_bytes,
-            num_local_experts,
-            hidden_dim,
-            world_size,
-            x_scalar_type,
-            idx_scalar_type,
-            weight_scalar_type,
-        )
+    (
+        recv_x,
+        recv_topk_idx,
+        recv_topk_weights,
+        recv_num_tokens_per_expert,
+    ) = moe_pack_unpack.unpack_moe_data(
+        buffers,
+        per_rank_recv_bytes,
+        num_local_experts,
+        hidden_dim,
+        world_size,
+        x_scalar_type,
+        idx_scalar_type,
+        weight_scalar_type,
     )
 
     return recv_x, recv_topk_idx, recv_topk_weights, recv_num_tokens_per_expert

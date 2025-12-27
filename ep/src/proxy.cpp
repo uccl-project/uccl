@@ -151,6 +151,11 @@ void Proxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
   }
 }
 
+void Proxy::set_atomic_buffer_ptr(void* ptr) {
+  atomic_buffer_ptr_ = ptr;
+  // MR registration will be done in init_common() after PD is initialized
+}
+
 void Proxy::set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs) {
 #ifndef USE_MSCCLPP_FIFO_BACKEND
   ring_tails_.clear();
@@ -176,6 +181,27 @@ void Proxy::init_common() {
                        cfg_.thread_idx, cfg_.local_rank);
   pin_thread_to_numa_wrapper();
   if (!ctx_.cq) ctx_.cq = create_per_thread_cq(ctx_);
+
+  // Register atomic_buffer_ptr as a separate RDMA memory region if it was set
+  // This must be done after PD is initialized by per_thread_rdma_init
+  if (atomic_buffer_ptr_ && !ctx_.atomic_buffer_mr) {
+    ctx_.atomic_buffer_mr =
+        ibv_reg_mr(ctx_.pd, atomic_buffer_ptr_, kAtomicBufferSize,
+                   IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                       IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC);
+
+    if (!ctx_.atomic_buffer_mr) {
+      perror("Failed to register atomic_buffer_ptr MR");
+      std::abort();
+    }
+
+    fprintf(stderr,
+            "[Proxy] Registered atomic_buffer_ptr MR: addr=0x%llx, len=%zu, "
+            "rkey=0x%x\n",
+            (unsigned long long)ctx_.atomic_buffer_mr->addr,
+            (size_t)ctx_.atomic_buffer_mr->length, ctx_.atomic_buffer_mr->rkey);
+  }
+
   if (ctxs_for_all_ranks_.empty()) {
     fprintf(stderr,
             "Error: peers metadata not set before init_common (peers_.size() "
@@ -195,6 +221,14 @@ void Proxy::init_common() {
   ctx_.atomic_old_values_buf =
       reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(cfg_.gpu_buffer) +
                                   cfg_.total_size - atomic_buf_size);
+  // Check alignment - only abort if not aligned (8-byte alignment required for
+  // 64-bit atomics)
+  if ((reinterpret_cast<uintptr_t>(ctx_.atomic_old_values_buf) & 0x7) != 0) {
+    fprintf(stderr, "Atomic buffer not 8-byte aligned: 0x%llx\n",
+            (unsigned long long)reinterpret_cast<uintptr_t>(
+                ctx_.atomic_old_values_buf));
+    std::abort();
+  }
 
   int num_ranks = ctxs_for_all_ranks_.size();
   local_infos_.assign(num_ranks, RDMAConnectionInfo{});
@@ -218,6 +252,8 @@ void Proxy::init_common() {
     // NOTE(MaoZiming): each context can share the same cq, pd, mr.
     // but the qp must be different.
     c.cq = ctx_.cq;
+    // Share the atomic buffer MR with peer contexts
+    c.atomic_buffer_mr = ctx_.atomic_buffer_mr;
 
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
@@ -226,7 +262,7 @@ void Proxy::init_common() {
       continue;
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank, cfg_.d2h_queues.size(),
-                         cfg_.use_normal_mode);
+                         cfg_.use_normal_mode, atomic_buffer_ptr_);
     modify_qp_to_init(c);
   }
 
@@ -291,6 +327,25 @@ void Proxy::init_common() {
     c.remote_addr = remote_infos_[peer].addr;
     c.remote_rkey = remote_infos_[peer].rkey;
     c.remote_len = remote_infos_[peer].len;
+
+    // Set remote atomic buffer info from exchanged connection info
+    c.remote_atomic_buffer_addr = remote_infos_[peer].atomic_buffer_addr;
+    c.remote_atomic_buffer_len = remote_infos_[peer].atomic_buffer_len;
+    c.remote_atomic_buffer_rkey = remote_infos_[peer].atomic_buffer_rkey;
+
+    if (c.remote_atomic_buffer_addr == 0) {
+      fprintf(
+          stderr,
+          "[Proxy] WARNING: Remote atomic buffer not registered for peer %d "
+          "(local atomic_buffer_ptr=%p, local atomic_buffer_mr=%p)\n",
+          peer, atomic_buffer_ptr_, (void*)ctx_.atomic_buffer_mr);
+    } else {
+      fprintf(stderr,
+              "[Proxy] Remote atomic buffer info for peer %d: addr=0x%llx, "
+              "len=%zu, rkey=0x%x\n",
+              peer, (unsigned long long)c.remote_atomic_buffer_addr,
+              (size_t)c.remote_atomic_buffer_len, c.remote_atomic_buffer_rkey);
+    }
     if (FILE* f = fopen("/tmp/uccl_debug.txt", "a")) {
       fprintf(
           f,

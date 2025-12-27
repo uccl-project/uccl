@@ -1025,10 +1025,11 @@ __global__ void __launch_bounds__(
               num_bytes_per_msg,
               translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
               channel_id,  // NOTE(MaoZiming): use channel_id for rb.
-              lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false, -1,
-              reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)) -
-                  reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
-              num_tokens_to_issue);
+              lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false,
+              -1);  //,
+          // reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)) -
+          // reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
+          // num_tokens_to_issue);
         } else {
           // Lighter fence for local RDMA rank
           memory_fence();
@@ -1046,7 +1047,7 @@ __global__ void __launch_bounds__(
               translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
               channel_id,  // NOTE(MaoZiming): use channel_id for rb.
               dst_rdma_rank == rdma_rank, d2h_channel_addrs,
-              num_d2h_channel_addrs, false, -1, true);
+              num_d2h_channel_addrs, false, -1, false);
         }
         __syncwarp();
       }
@@ -1178,9 +1179,9 @@ __global__ void __launch_bounds__(
           trap();
         }
       }
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-      memory_fence();
-#endif
+      // #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+      //       memory_fence();
+      // #endif
       auto src_rdma_head =
           __shfl_sync(WARP_MASK, cached_rdma_channel_head, src_rdma_rank);
       auto src_rdma_tail =
@@ -1249,13 +1250,14 @@ __global__ void __launch_bounds__(
       // Move tail index
       __syncwarp();
       if (lane_id == 0)
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-        __atomic_store_n(nvl_channel_tail.buffer(), cached_nvl_channel_tail,
-                         __ATOMIC_RELEASE);
-#else
+        // #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+        //         __atomic_store_n(nvl_channel_tail.buffer(),
+        //         cached_nvl_channel_tail,
+        //                          __ATOMIC_RELEASE);
+        // #else
         st_release_sys_global(nvl_channel_tail.buffer(),
                               cached_nvl_channel_tail);
-#endif
+      // #endif
     }
     // Retired
     __syncwarp();

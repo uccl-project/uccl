@@ -93,9 +93,13 @@ def test_main(
     gbl_num_tokens_per_rank = num_tokens_per_rank.clone()
     dist.all_reduce(gbl_num_tokens_per_rank, group=group)
 
-    ref_num_tokens_per_rank, _, ref_num_tokens_per_expert, ref_is_token_in_rank, _ = (
-        buffer.get_dispatch_layout(topk_idx, num_experts)
-    )
+    (
+        ref_num_tokens_per_rank,
+        _,
+        ref_num_tokens_per_expert,
+        ref_is_token_in_rank,
+        _,
+    ) = buffer.get_dispatch_layout(topk_idx, num_experts)
     assert torch.allclose(ref_num_tokens_per_rank, num_tokens_per_rank)
     assert torch.allclose(ref_num_tokens_per_expert, num_tokens_per_expert)
     assert torch.allclose(ref_is_token_in_rank, is_token_in_rank)
@@ -195,11 +199,13 @@ def test_main(
                         # Check `topk_weights`
                         recv_topk_weights_clone = recv_topk_weights.clone()
                         if current_x is not x_pure_rand:
-                            recv_topk_weights[recv_topk_idx.eq(-1)] = (
-                                recv_topk_weights.amax(dim=1, keepdim=True).expand_as(
-                                    recv_topk_weights
-                                )[recv_topk_idx.eq(-1)]
-                            )
+                            recv_topk_weights[
+                                recv_topk_idx.eq(-1)
+                            ] = recv_topk_weights.amax(dim=1, keepdim=True).expand_as(
+                                recv_topk_weights
+                            )[
+                                recv_topk_idx.eq(-1)
+                            ]
                             check_data(recv_topk_weights, rank_prefix_matrix)
 
                     # Test `num_worst_tokens != 0`
