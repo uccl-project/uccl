@@ -83,13 +83,15 @@ bool is_sm90_compiled() {
 class Buffer {
  public:
   Buffer(int rank, int num_ranks, long num_nvl_bytes, long num_rdma_bytes,
-         bool low_latency_mode, bool explicitly_destroy, int num_local_ranks)
+         bool low_latency_mode, bool explicitly_destroy, int num_local_ranks,
+         bool disable_ll_layered)
       : rank(rank),
         num_ranks(num_ranks),
         num_nvl_bytes(num_nvl_bytes),
         num_rdma_bytes(num_rdma_bytes),
         low_latency_mode(low_latency_mode),
         explicitly_destroy(explicitly_destroy),
+        disable_ll_layered(disable_ll_layered),
         comm_stream(at::cuda::getStreamFromPool(/*isHighPriority=*/true)) {
     if (num_local_ranks == -1) num_local_ranks = get_num_max_nvl_peers();
     max_nvl_peers = num_local_ranks;
@@ -1383,7 +1385,7 @@ class Buffer {
                                 int hidden, int num_experts) {
     EP_HOST_ASSERT(low_latency_mode);
 
-    auto layout = uccl::LowLatencyLayout(rdma_buffer_ptr,
+    auto layout = uccl::LowLatencyLayout(disable_ll_layered, rdma_buffer_ptr,
                                          num_max_dispatch_tokens_per_rank,
                                          hidden, num_ranks, num_experts);
     auto clean_meta_0 = layout.buffers[0].clean_meta();
@@ -1452,7 +1454,7 @@ class Buffer {
 
     // Buffer control
     // TODO(MaoZiming)
-    uccl::LowLatencyLayout layout(rdma_buffer_ptr,
+    uccl::LowLatencyLayout layout(disable_ll_layered, rdma_buffer_ptr,
                                   num_max_dispatch_tokens_per_rank, hidden,
                                   num_ranks, num_experts, atomic_buffer_ptr);
     EP_HOST_ASSERT(layout.total_bytes <=
@@ -1518,8 +1520,8 @@ class Buffer {
     auto [ptr0, ptr_internode0, count0] = next_buffer.clean_meta();
     auto launcher = [=](int phases) {
       uccl::internode_ll::dispatch(
-          packed_recv_x.data_ptr(), packed_recv_x_scales_ptr,
-          packed_recv_src_info.data_ptr<int>(),
+          disable_ll_layered, packed_recv_x.data_ptr(),
+          packed_recv_x_scales_ptr, packed_recv_src_info.data_ptr<int>(),
           packed_recv_layout_range.data_ptr<int64_t>(),
           packed_recv_count.data_ptr<int>(),
           cumulative_local_expert_recv_stats.has_value()
@@ -1617,7 +1619,7 @@ class Buffer {
 
     // Buffer control
     // TODO(MaoZiming)
-    uccl::LowLatencyLayout layout(rdma_buffer_ptr,
+    uccl::LowLatencyLayout layout(disable_ll_layered, rdma_buffer_ptr,
                                   num_max_dispatch_tokens_per_rank, hidden,
                                   num_ranks, num_experts, atomic_buffer_ptr);
     EP_HOST_ASSERT(layout.total_bytes <=
@@ -1649,7 +1651,8 @@ class Buffer {
     auto [ptr0, ptr_internode0, count0] = next_buffer.clean_meta();
     auto launcher = [=](int phases) {
       uccl::internode_ll::combine(
-          combined_x.data_ptr(), buffer.combine_rdma_recv_data_buffer,
+          disable_ll_layered, combined_x.data_ptr(),
+          buffer.combine_rdma_recv_data_buffer,
           buffer.combine_rdma_recv_flag_buffer, buffer.combine_rdma_send_buffer,
           x.data_ptr(), topk_idx.data_ptr<int64_t>(),
           topk_weights.data_ptr<float>(), src_info.data_ptr<int>(),
@@ -1728,7 +1731,7 @@ class Buffer {
   torch::Tensor get_next_low_latency_combine_buffer(
       int num_max_dispatch_tokens_per_rank, int hidden, int num_experts) const {
     // printf("get_next_low_latency_combine_buffer called\n");
-    uccl::LowLatencyLayout layout(rdma_buffer_ptr,
+    uccl::LowLatencyLayout layout(disable_ll_layered, rdma_buffer_ptr,
                                   num_max_dispatch_tokens_per_rank, hidden,
                                   num_ranks, num_experts, nullptr);
 
@@ -1906,6 +1909,7 @@ class Buffer {
   long num_rdma_bytes{0};
   bool low_latency_mode{false};
   bool explicitly_destroy{false};
+  bool disable_ll_layered{false};
   int device_index{0};
   std::vector<py::object> proxies_;
   bool available{false};
@@ -2048,11 +2052,12 @@ PYBIND11_MODULE(ep, m) {
 
   py::class_<EventOverlap>(m, "EventOverlap").def(py::init<>());
   py::class_<Buffer>(m, "Buffer")
-      .def(py::init<int, int, long, long, bool, bool, int>(), py::arg("rank"),
-           py::arg("num_ranks"), py::arg("num_nvl_bytes") = 0,
+      .def(py::init<int, int, long, long, bool, bool, int, bool>(),
+           py::arg("rank"), py::arg("num_ranks"), py::arg("num_nvl_bytes") = 0,
            py::arg("num_rdma_bytes") = 0, py::arg("low_latency_mode") = false,
            py::arg("explicitly_destroy") = false,
-           py::arg("num_local_ranks") = -1)
+           py::arg("num_local_ranks") = -1,
+           py::arg("disable_ll_layered") = false)
       .def("destroy", &Buffer::destroy)
       .def(
           "set_rdma_buffer_raw",
