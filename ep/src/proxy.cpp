@@ -346,13 +346,6 @@ void Proxy::init_common() {
               peer, (unsigned long long)c.remote_atomic_buffer_addr,
               (size_t)c.remote_atomic_buffer_len, c.remote_atomic_buffer_rkey);
     }
-    if (FILE* f = fopen("/tmp/uccl_debug.txt", "a")) {
-      fprintf(
-          f,
-          "[PROXY_INIT] me=%d peer=%d: remote_addr=0x%lx local_buffer=0x%lx\n",
-          my_rank, peer, c.remote_addr, (uintptr_t)cfg_.gpu_buffer);
-      fclose(f);
-    }
   }
   usleep(50 * 1000);
   if (cfg_.use_normal_mode) {

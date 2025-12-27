@@ -448,14 +448,8 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
             (size_t)local_info->atomic_buffer_len,
             local_info->atomic_buffer_rkey);
   } else {
-    local_info->atomic_buffer_rkey = 0;
-    local_info->atomic_buffer_addr = 0;
-    local_info->atomic_buffer_len = 0;
-    if (atomic_buffer_ptr) {
-      fprintf(stderr,
-              "[create_per_thread_qp] WARNING: atomic_buffer_ptr provided but "
-              "atomic_buffer_mr is null\n");
-    }
+    // TODO(MaoZiming): Only for non-EFA case. 
+    assert(false && "Atomic buffer is not registered");
   }
 
   fill_local_gid(S, local_info);
@@ -2254,7 +2248,7 @@ static void post_atomic_operations_normal_mode(
         group_wrids.push_back(wr_id);
 
         int v = static_cast<int>(cmd.value);
-        if (v > kLargeAtomicValue) v = kMaxSendAtomicValue;  // saturate for imm
+        if (v > kLargeAtomicValue) v = kMaxSendAtomicValue;
         if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
           fprintf(stderr,
                   "value=%d (cmd.value=%lu) won't fit in 15 bits for imm; "

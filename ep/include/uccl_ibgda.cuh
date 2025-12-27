@@ -293,7 +293,7 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
   uint64_t slots[kNumProxyThs];
   int num_posted = 0;
   for (int d2h_channel_idx = 0; d2h_channel_idx < num_d2h_channel_addrs;
-       d2h_channel_idx += 1) {
+       d2h_channel_idx += kChannelPerProxy) {
     auto* h = reinterpret_cast<d2hq::D2HHandle*>(
         static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
 #ifdef USE_MSCCLPP_FIFO_BACKEND
