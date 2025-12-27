@@ -128,9 +128,9 @@ def test_main(
 
     # Randomly mask some positions
     for i in range(10):
-        topk_idx[
-            random.randint(0, num_tokens - 1), random.randint(0, num_topk - 1)
-        ] = -1
+        topk_idx[random.randint(0, num_tokens - 1), random.randint(0, num_topk - 1)] = (
+            -1
+        )
 
     # Check dispatch correctness
     do_check = True
@@ -214,7 +214,7 @@ def test_main(
                                 )
 
                                 # Check expert indices
-                                int_mask = (2 ** 32) - 1
+                                int_mask = (2**32) - 1
                                 num_valid_tokens = recv_count.item()
                                 assert (
                                     cumulative_local_expert_recv_stats[i].item()

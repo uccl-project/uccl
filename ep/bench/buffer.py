@@ -160,9 +160,8 @@ class Buffer:
         assert self.runtime.is_available()
         self.connect_atomic_buffer(self.proxies[0])
 
-        # Note: set_atomic_buffer_ptr is now called in initialize_uccl() before start_dual()
-        # to ensure atomic buffer info is included in connection info exchange.
-        # No need to call it here since it's already done before the proxies are started.
+        for proxy in self.proxies:
+            proxy.set_atomic_buffer_ptr(self.proxies[0].get_atomic_buffer_ptr())
 
     def reset_rdma_buffer(self):
         """
@@ -712,35 +711,25 @@ class Buffer:
                 send_head,
             ) = handle
             num_recv_tokens = recv_src_idx.size(0)
-            (
-                recv_x,
-                recv_x_scales,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-                event,
-            ) = self.runtime.intranode_dispatch(
-                x,
-                x_scales,
-                None,
-                None,
-                None,
-                is_token_in_rank,
-                None,
-                num_recv_tokens,
-                rank_prefix_matrix,
-                channel_prefix_matrix,
-                expert_alignment,
-                num_worst_tokens,
-                config,
-                getattr(previous_event, "event", None),
-                async_finish,
-                allocate_on_comm_stream,
+            recv_x, recv_x_scales, _, _, _, _, _, _, _, _, event = (
+                self.runtime.intranode_dispatch(
+                    x,
+                    x_scales,
+                    None,
+                    None,
+                    None,
+                    is_token_in_rank,
+                    None,
+                    num_recv_tokens,
+                    rank_prefix_matrix,
+                    channel_prefix_matrix,
+                    expert_alignment,
+                    num_worst_tokens,
+                    config,
+                    getattr(previous_event, "event", None),
+                    async_finish,
+                    allocate_on_comm_stream,
+                )
             )
             return (
                 (recv_x, recv_x_scales) if x_scales is not None else recv_x,
@@ -928,42 +917,28 @@ class Buffer:
             ) = handle
             num_recv_tokens = recv_src_meta.size(0)
             num_rdma_recv_tokens = send_nvl_head.size(0)
-            (
-                recv_x,
-                recv_x_scales,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-                event,
-            ) = self.runtime.internode_dispatch(
-                x,
-                x_scales,
-                topk_idx,
-                topk_weights,
-                None,
-                None,
-                is_token_in_rank,
-                None,
-                num_recv_tokens,
-                num_rdma_recv_tokens,
-                rdma_channel_prefix_matrix,
-                recv_rdma_rank_prefix_sum,
-                gbl_channel_prefix_matrix,
-                recv_gbl_rank_prefix_sum,
-                expert_alignment,
-                config,
-                getattr(previous_event, "event", None),
-                async_finish,
-                allocate_on_comm_stream,
+            recv_x, recv_x_scales, _, _, _, _, _, _, _, _, _, _, _, _, event = (
+                self.runtime.internode_dispatch(
+                    x,
+                    x_scales,
+                    topk_idx,
+                    topk_weights,
+                    None,
+                    None,
+                    is_token_in_rank,
+                    None,
+                    num_recv_tokens,
+                    num_rdma_recv_tokens,
+                    rdma_channel_prefix_matrix,
+                    recv_rdma_rank_prefix_sum,
+                    gbl_channel_prefix_matrix,
+                    recv_gbl_rank_prefix_sum,
+                    expert_alignment,
+                    config,
+                    getattr(previous_event, "event", None),
+                    async_finish,
+                    allocate_on_comm_stream,
+                )
             )
             return (
                 (recv_x, recv_x_scales) if x_scales is not None else recv_x,

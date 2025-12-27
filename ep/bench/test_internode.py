@@ -266,13 +266,11 @@ def test_main(
 
                         # Check `topk_weights`
                         if current_x is not x_pure_rand:
-                            recv_topk_weights[
-                                recv_topk_idx.eq(-1)
-                            ] = recv_topk_weights.amax(dim=1, keepdim=True).expand_as(
-                                recv_topk_weights
-                            )[
-                                recv_topk_idx.eq(-1)
-                            ]
+                            recv_topk_weights[recv_topk_idx.eq(-1)] = (
+                                recv_topk_weights.amax(dim=1, keepdim=True).expand_as(
+                                    recv_topk_weights
+                                )[recv_topk_idx.eq(-1)]
+                            )
                             check_data(recv_topk_weights, recv_gbl_rank_prefix_sum)
 
                     # Test cached dispatch (must without top-k staffs)
