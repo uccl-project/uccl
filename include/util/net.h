@@ -1,7 +1,7 @@
 #pragma once
 
 #include <arpa/inet.h>
-#include <glog/logging.h>
+#include "util/logging.h"
 #include <net/if.h>
 #include <net/if_arp.h>
 #include <netinet/in.h>
