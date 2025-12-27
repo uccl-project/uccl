@@ -1594,39 +1594,31 @@ void remote_process_completions_normal_mode(
       AtomicsImm aimm(ntohl(cqe.imm_data));
       int value = aimm.GetValue();
       uint32_t offset = aimm.GetOff();
-      // Treat atomic buffer as 64-bit aligned for RDMA atomics
-      // Offset must be 8-byte aligned
-      if ((offset & 0x7) != 0) {
-        fprintf(stderr, "[Remote] Atomic offset not 8-byte aligned: 0x%x\n",
-                offset);
-        std::abort();
-      }
-      size_t index = offset / sizeof(int64_t);
-
-      auto* addr64 =
-          reinterpret_cast<std::atomic<int64_t>*>(atomic_buffer_ptr) + index;
+      size_t index = offset / sizeof(int);
+      auto* addr32 =
+          reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
 
       if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
-      // Convert 32-bit value to 64-bit (sign-extend)
-      int64_t value64 = static_cast<int64_t>(static_cast<int32_t>(value));
 
       if (!aimm.IsReorderable()) {
-        addr64->fetch_add(value64, std::memory_order_release);
+        addr32->fetch_add(value, std::memory_order_release);
       } else {
-        assert(false &&
-               "Reorderable atomic operations should not be triggered");
+#ifndef EFA
+          assert(false &&
+                 "Reorderable atomic operations should not be triggered");
+#endif
         struct SeqBuf {
           uint8_t expected = 0;       // next seq expected
           uint16_t present_mask = 0;  // bitmask of buffered seqs
-          int64_t vals[kReorderingBufferSize] = {0};
+          int vals[kReorderingBufferSize] = {0};
         };
 
         // Thread-local map to maintain per-index state
         static thread_local std::unordered_map<size_t, SeqBuf> seqbufs;
         auto& sb = seqbufs[index];
 
-        auto commit = [&](int64_t delta) {
-          addr64->fetch_add(delta, std::memory_order_release);
+        auto commit = [&](int delta) {
+          addr32->fetch_add(delta, std::memory_order_release);
         };
         uint8_t seq = aimm.GetSeq();
         if (seq >= kReorderingBufferSize) {
@@ -1634,7 +1626,7 @@ void remote_process_completions_normal_mode(
           std::abort();
         }
         if (seq == sb.expected) {
-          commit(value64);
+          commit(value);
           sb.expected = (sb.expected + 1) % kReorderingBufferSize;
 
           // Drain buffered consecutive entries
@@ -1664,7 +1656,7 @@ void remote_process_completions_normal_mode(
             std::abort();
           } else {
             sb.present_mask |= bit;
-            sb.vals[seq] = value64;
+            sb.vals[seq] = value;
           }
         }
       }
