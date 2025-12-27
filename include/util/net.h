@@ -1,5 +1,6 @@
 #pragma once
 
+#include "util.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
 #include <net/if.h>

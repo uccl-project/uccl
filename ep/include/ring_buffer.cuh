@@ -80,7 +80,7 @@ struct TransferCmd {
   union {
     // Low-latency mode
     uint16_t expert_idx;
-    // Normal mode
+    // Throughput mode
     uint16_t atomic_offset;
   };
 };

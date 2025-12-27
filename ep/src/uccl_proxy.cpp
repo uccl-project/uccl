@@ -13,13 +13,11 @@
 UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      size_t total_size, int rank, int node_idx, int local_rank,
                      int num_experts, int num_ranks, int num_nodes,
-                     bool use_normal_mode, bool is_intranode)
+                     bool use_throughput_mode, bool is_intranode)
     : thread_{},
       mode_{Mode::None},
       running_{false},
       is_intranode_{is_intranode} {
-  // EP 8 of internode_ll also need atomic_buffer_ptr
-
   Proxy::Config cfg{};
   thread_idx_ = thread_idx;
   gpu_buffer_addr_ = reinterpret_cast<void*>(gpu_buffer_addr);
@@ -48,7 +46,7 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.num_experts = num_experts;
   cfg.num_ranks = num_ranks;
   cfg.num_nodes = num_nodes;
-  cfg.use_normal_mode = use_normal_mode;
+  cfg.use_throughput_mode = use_throughput_mode;
   cfg.is_intranode = is_intranode;
   proxy_ = std::make_unique<Proxy>(cfg);
   local_rank_ = local_rank;
@@ -101,7 +99,6 @@ void UcclProxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
 
 void UcclProxy::start_sender() { start(Mode::Sender); }
 void UcclProxy::start_remote() { start(Mode::Remote); }
-void UcclProxy::start_local() { start(Mode::Local); }
 void UcclProxy::start_dual() { start(Mode::Dual); }
 
 void UcclProxy::stop() {
@@ -127,7 +124,6 @@ void UcclProxy::start(Mode m) {
   thread_ = std::thread([this]() {
     if (is_intranode_) {
       std::printf("UcclProxy: no peer IP set, running in local mode\n");
-      proxy_->run_local();
       return;
     }
     switch (mode_) {
@@ -136,9 +132,6 @@ void UcclProxy::start(Mode m) {
         break;
       case Mode::Remote:
         proxy_->run_remote();
-        break;
-      case Mode::Local:
-        proxy_->run_local();
         break;
       case Mode::Dual:
         proxy_->run_dual();
@@ -242,20 +235,6 @@ void FifoProxy::run_sender() {
     // Process completed work requests (similar to notify_gpu_completion)
     while (fifo_tail_acked < fifo_head_seen &&
            proxy_->acked_wrs_.count(fifo_tail_acked) > 0) {
-#ifdef MEASURE_PER_VERB_LATENCY
-      // Track latency
-      auto it = proxy_->wr_id_to_start_time_.find(fifo_tail_acked);
-      if (it != proxy_->wr_id_to_start_time_.end()) {
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::high_resolution_clock::now() - it->second);
-        if (proxy_->completion_count_ > kWarmupOps) {
-          proxy_->wr_time_total_us_ += duration.count();
-        }
-        proxy_->completion_count_++;
-        proxy_->wr_id_to_start_time_.erase(it);
-      }
-#endif
-
       // Remove from tracking sets
       proxy_->acked_wrs_.erase(fifo_tail_acked);
 
@@ -292,13 +271,6 @@ void FifoProxy::run_sender() {
     // Post immediately (no batching)
     std::vector<uint64_t> wrs_to_post{fifo_head_seen};
     std::vector<TransferCmd> cmds_to_post{cmd};
-
-#ifdef MEASURE_PER_VERB_LATENCY
-    // Record timestamp for latency measurement (like original proxy)
-    proxy_->wr_id_to_start_time_[fifo_head_seen] =
-        std::chrono::high_resolution_clock::now();
-#endif
-
     proxy_->post_gpu_commands_mixed(wrs_to_post, cmds_to_post);
     fifo_head_seen++;
   }
@@ -310,19 +282,6 @@ void FifoProxy::run_sender() {
 
     while (fifo_tail_acked < fifo_head_seen &&
            proxy_->acked_wrs_.count(fifo_tail_acked) > 0) {
-#ifdef MEASURE_PER_VERB_LATENCY
-      auto it = proxy_->wr_id_to_start_time_.find(fifo_tail_acked);
-      if (it != proxy_->wr_id_to_start_time_.end()) {
-        auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
-            std::chrono::high_resolution_clock::now() - it->second);
-        if (proxy_->completion_count_ > kWarmupOps) {
-          proxy_->wr_time_total_us_ += duration.count();
-        }
-        proxy_->completion_count_++;
-        proxy_->wr_id_to_start_time_.erase(it);
-      }
-#endif
-
       proxy_->acked_wrs_.erase(fifo_tail_acked);
       fifo_->pop();
       fifo_tail_acked++;

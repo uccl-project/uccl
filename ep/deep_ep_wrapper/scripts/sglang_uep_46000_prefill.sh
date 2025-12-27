@@ -40,6 +40,7 @@ export NCCL_SOCKET_IFNAME="^lo,docker"
 export FI_PROVIDER=efa
 export FI_EFA_USE_DEVICE_RDMA=1
 export SGLANG_ENABLE_JIT_DEEPGEMM=1
+export SGLANG_TORCH_PROFILER_DIR=/workspace/uccl/ep/deep_ep_wrapper/sglang_profiles
 
 # Parameters
 MODEL_PATH="deepseek-ai/DeepSeek-R1-0528"

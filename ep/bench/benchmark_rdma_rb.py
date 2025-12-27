@@ -146,15 +146,7 @@ def run_rank1_remote(
         mode="remote",
         peers_meta_list=peers_meta_list,
     )
-    device_index = int(os.environ.get("LOCAL_RANK", "0"))
-    workers = ep.PeerCopyManager(src_device=device_index)
-    workers.start_for_proxies(proxies)
-    print("[rank 1] PeerCopyManager started.", flush=True)
     time.sleep(5)
-    try:
-        workers.stop()
-    except Exception:
-        pass
     try:
         for p in proxies:
             p.stop()
