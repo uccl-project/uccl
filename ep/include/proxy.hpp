@@ -66,7 +66,7 @@ class Proxy {
     ctx_.dispatch_recv_data_offset = offset;
   }
 
-  void set_atomic_buffer_ptr(void* ptr);
+  void set_atomic_buffer_ptr(void* ptr) { atomic_buffer_ptr_ = ptr; }
 
   void run_sender();
   void run_remote();

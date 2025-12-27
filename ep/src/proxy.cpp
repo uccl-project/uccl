@@ -151,11 +151,6 @@ void Proxy::set_peers_meta(std::vector<PeerMeta> const& peers) {
   }
 }
 
-void Proxy::set_atomic_buffer_ptr(void* ptr) {
-  atomic_buffer_ptr_ = ptr;
-  // MR registration will be done in init_common() after PD is initialized
-}
-
 void Proxy::set_bench_d2h_channel_addrs(std::vector<uintptr_t> const& addrs) {
 #ifndef USE_MSCCLPP_FIFO_BACKEND
   ring_tails_.clear();

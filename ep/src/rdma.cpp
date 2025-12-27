@@ -448,7 +448,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
             (size_t)local_info->atomic_buffer_len,
             local_info->atomic_buffer_rkey);
   } else {
-    // TODO(MaoZiming): Only for non-EFA case. 
+    // TODO(MaoZiming): Only for non-EFA case.
     assert(false && "Atomic buffer is not registered");
   }
 
@@ -1425,39 +1425,18 @@ void local_process_completions(ProxyCtx& S,
         }
         break;
       case IBV_WC_FETCH_ADD: {
-        // Hardware RDMA atomic fetch-and-add completion
         uint64_t wrid = wc[i].wr_id;
-        // fprintf(
-        //     stderr,
-        //     "[Atomic] Fetch-and-add completion (wr_id=0x%lx,
-        //     map_size=%zu)\n", wrid, S.wr_id_to_wr_ids.size());
-        // The old value is stored in the local buffer (atomic_old_values_buf)
-        // We don't need to use it, just acknowledge completion
         auto it = S.wr_id_to_wr_ids.find(wrid);
         if (it != S.wr_id_to_wr_ids.end()) {
-          // fprintf(stderr,
-          //         "[Atomic] Found batch for wr_id=0x%lx, batch_size=%zu\n",
-          //         wrid, it->second.size());
           for (uint64_t sub_wr : it->second) {
             acked_wrs.insert(sub_wr);
           }
           S.wr_id_to_wr_ids.erase(it);
         } else {
-          // Single atomic operation (not batched) - or lookup failed
           fprintf(stderr,
                   "[Atomic] No batch found for wr_id=0x%lx, treating as single "
                   "(map_size=%zu)\n",
                   wrid, S.wr_id_to_wr_ids.size());
-          if (S.wr_id_to_wr_ids.size() > 0) {
-            fprintf(stderr, "[Atomic] Map contents (first 5):\n");
-            size_t count = 0;
-            for (auto const& [key, val] : S.wr_id_to_wr_ids) {
-              fprintf(stderr, "  [Atomic] key=0x%lx, batch_size=%zu\n", key,
-                      val.size());
-              if (++count >= 5) break;
-            }
-          }
-          acked_wrs.insert(wrid);
         }
       } break;
       default:
@@ -1604,8 +1583,8 @@ void remote_process_completions_normal_mode(
         addr32->fetch_add(value, std::memory_order_release);
       } else {
 #ifndef EFA
-          assert(false &&
-                 "Reorderable atomic operations should not be triggered");
+        assert(false &&
+               "Reorderable atomic operations should not be triggered");
 #endif
         struct SeqBuf {
           uint8_t expected = 0;       // next seq expected
@@ -2558,7 +2537,6 @@ static void post_atomic_operations_native_rdma(
           // Use registered atomic buffer
           remote_atomic_addr = ctx->remote_atomic_buffer_addr + cmd.req_rptr;
         } else {
-          // Fallback: assume atomic buffer is part of main RDMA buffer
           assert(false && "Atomic buffer is not registered");
         }
 
