@@ -1,5 +1,5 @@
 #include "uccl_engine.h"
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
 #include "nccl_tcpx_endpoint.h"
 #else
 #include "engine.h"
@@ -24,7 +24,7 @@
 #include <unordered_map>
 #include <utility>
 
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
 // nccl_tcpx_endpoint does not declare inside_python; define it here for
 // uccl_engine.
 thread_local bool inside_python = false;
@@ -38,7 +38,7 @@ using Endpoint = ::Endpoint;
 #endif
 
 struct uccl_engine {
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
   std::unique_ptr<Endpoint> endpoint;
 #else
   Endpoint* endpoint;
@@ -154,7 +154,7 @@ void listener_thread_func(uccl_conn_t* conn) {
                     << std::endl;
         }
 
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
         FifoItem fifo_item;
         memcpy(&fifo_item, out_buf, sizeof(FifoItem));
         // Immediately push the data over TCPX so the passive reader only needs
@@ -182,7 +182,7 @@ void listener_thread_func(uccl_conn_t* conn) {
                                       tx_data.data_size);
         if (result < 0) {
           std::cerr << "Failed to perform uccl_engine_recv" << std::endl;
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
           notify_msg_t notify_msg = {};
           std::snprintf(notify_msg.name, sizeof(notify_msg.name), "%s",
                         "server");
@@ -193,7 +193,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           break;
         }
 
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
         // Passive recv (including GPU unpack) is done: tell the active side so
         // it only tears down after the data is fully landed.
         notify_msg_t notify_msg = {};
@@ -233,7 +233,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           delete[] tx_data_array;
           break;
         }
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
         bool vector_ok = true;
 #endif
         for (size_t i = 0; i < count; i++) {
@@ -242,7 +242,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           if (!find_mem_reg(tx_data.data_ptr, base_addr, mr_id)) {
             std::cerr << "Local memory not registered for address: "
                       << tx_data.data_ptr << " (item " << i << ")" << std::endl;
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
             vector_ok = false;
 #endif
             continue;
@@ -271,7 +271,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           memcpy(&fifo_item, out_buf, sizeof(FifoItem));
           // Each advertised slice triggers a corresponding send so the remote
           // side can simply post tagged receives.
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
           if (!conn->engine->endpoint->queue_read_response(conn->conn_id,
                                                            fifo_item)) {
             std::cerr << "Failed to queue read response for item " << i
@@ -330,14 +330,14 @@ void listener_thread_func(uccl_conn_t* conn) {
           if (result < 0) {
             std::cerr << "Failed to perform uccl_engine_recv for item " << i
                       << std::endl;
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
             vector_ok = false;
 #endif
           }
         }
 
         delete[] tx_data_array;
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
         notify_msg_t notify_msg = {};
         std::snprintf(notify_msg.name, sizeof(notify_msg.name), "%s", "server");
         if (vector_ok) {
@@ -384,7 +384,7 @@ void listener_thread_func(uccl_conn_t* conn) {
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
   eng->endpoint = std::unique_ptr<Endpoint>(new Endpoint(num_cpus));
 #else
   eng->endpoint = new Endpoint(num_cpus);
@@ -394,7 +394,7 @@ uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
 
 void uccl_engine_destroy(uccl_engine_t* engine) {
   if (engine) {
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
     engine->endpoint.reset();
 #else
     delete engine->endpoint;
@@ -504,7 +504,7 @@ int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
                      size_t data_size) {
   if (!conn || !mr || !data) return -1;
 
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
   // TCPX: no background progress thread exists, so drive progress here.
   uint64_t transfer_id = 0;
   if (!conn->engine->endpoint->recv_async(conn->conn_id, mr->mr_id, data,

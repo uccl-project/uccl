@@ -29,26 +29,44 @@ An UCCL overview can be found in this [slide deck](https://docs.google.com/prese
 
   * On six HGX servers (across two racks) with 8x400G CX-7 RoCE NICs and 8xH100 GPUs, UCCL-collective outperforms NCCL by up to **2.5x** for AllReduce:
     <p align="left"> <img src="./docs/images/allreduce_6_hgx.png" alt="" width="600"> </p>
-
   * On two AWS `g4dn.8xlarge` instances with 1x50G ENA NICs and 1xT4 GPUs within the same cluster placement group, UCCL-collective outperforms NCCL by up to **3.7x** for AllReduce: 
     <p align="left"> <img src="./docs/images/allreduce_2_g4dn.png" alt="" width="600"> </p>
+  </details>
 
-  More specifically, UCCL-collective aims to: 
-  * rearchitect the CCL layer (while keeping NCCL APIs) to unleash the full potential of network hardware
-  * rearchitect the network transport layer to be fast and extensible
-  * support heterogeneous GPU and networking vendors such as Nvidia, AMD, and Broadcom
-  * become an open and collaborative platform for GPU communication research
-  <br>
+  <details>
+  <summary>UCCL-collective high-level design</summary>
 
-  UCCL-collective has built a fast and extensible transport layer in software, which has created many benefits. 
-  For example, existing network transports under NCCL (i.e., kernel TCP and RDMA) leverage one or few network paths to stream huge data volumes, thus prone to congestion happening in datacenter networks. 
-  Instead, UCCL-collective employs packet spraying in software to leverage abundant network paths to avoid "single-path-of-congestion". 
-  More benefits include: 1) packet spraying with 256 paths, 2) advanced congestion control such as latency-based and receiver-driven ones, 3) efficient loss recovery by selective repeat, and 4) widely usable in public clouds with legacy NICs and Ethernet. Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307).
+  * UCCL-collective aims to: 
+    * rearchitect the CCL layer (while keeping NCCL APIs) to unleash the full potential of network hardware
+    * rearchitect the network transport layer to be fast and extensible
+    * support heterogeneous GPU and networking vendors such as Nvidia, AMD, and Broadcom
+    * become an open and collaborative platform for GPU communication research
+  * UCCL-collective has built a fast and extensible transport layer in software, which has created many benefits. 
+    * For example, existing network transports under NCCL (i.e., kernel TCP and RDMA) leverage one or few network paths to stream huge data volumes, thus prone to congestion happening in datacenter networks. 
+    * Instead, UCCL-collective employs packet spraying in software to leverage abundant network paths to avoid "single-path-of-congestion". 
+    * More benefits include: 1) packet spraying with 256 paths, 2) advanced congestion control such as latency-based and receiver-driven ones, 3) efficient loss recovery by selective repeat, and 4) widely usable in public clouds with legacy NICs and Ethernet. Feel free to check out our full [technical report](https://arxiv.org/pdf/2504.17307).
   </details>
 
 * **[UCCL-P2P](p2p/)** provides both NIXL-style initiator-target tranfer APIs and NCCL-style collective APIs, with the same or better performance than both. UCCL-P2P is purposely designed for the next-gen 800Gbps NICs with efficient multi-threaded transfer engines. 
 
-* **[UCCL-EP](ep/)** allows running DeepEP atop of heterogeneous hardware platforms, including AMD and Nvidia GPUs, and any RDMA NICs such as AWS EFA NICs and Broadcom NICs, while achieving IBGDA-level performance. UCCL-EP also makes DeepEP SM-free, devoting all GPU SMs to compute. 
+  <details>
+  <summary>UCCL-P2P performance comparison</summary>
+
+  * Message transfer bandwidth over RDMA on AMD MI300X + Broadcom Thor-2:
+    <p align="left"> <img src="./docs/images/p2p-mi300x-thor2.png" alt="" width="600"> </p>
+  </details>
+
+* **[UCCL-EP](ep/)** allows running DeepEP atop of heterogeneous hardware platforms, including AMD and Nvidia GPUs, and any RDMA NICs such as AWS EFA NICs and Broadcom NICs, while achieving IBGDA-level performance. 
+
+  <details>
+  <summary>UCCL-EP performance comparison</summary>
+
+  * EP32 dispatch and combine on AWS p5en (8x H200 + 16x 200Gb/s EFA):
+    <p align="left">
+      <img src="./docs/images/ep32_dispatch_p5en.png" alt="" width="300" style="display:inline-block; vertical-align:middle; margin-right:10px;">
+      <img src="./docs/images/ep32_combine_p5en.png" alt="" width="300" style="display:inline-block; vertical-align:middle;">
+    </p>
+  </details>
 
 UCCL has been adopted as part of the AMD [TheRock](https://github.com/ROCm/TheRock) ecosystem.
 
@@ -56,8 +74,8 @@ UCCL has been adopted as part of the AMD [TheRock](https://github.com/ROCm/TheRo
 
 More UCCL features are under development in this repo, currently including: 
 - ✅ More efficient KV cache transfer engine (e.g., better Mooncake)
-  - 🚧 Supporting RDMA (NVIDIA, Broadcom), AWS EFA, GCP TCPX, TCP
   - ✅ Supporting AMD GPUs
+  - 🚧 Supporting RDMA (NVIDIA, Broadcom), AWS EFA, GCP TCPX, TCP
 - ✅ Efficient and portable expert-parallel communication
   - ✅ Supporting all NIC vendors, including Nvidia, AWS EFA, and Broadcom
   - ✅ Supporting AMD GPUs
@@ -183,7 +201,7 @@ sudo apt-get install openmpi-bin openmpi-doc libopenmpi-dev -y
 </details>
 
 ## Citation
-The code in this repository is mostly described in the paper below. Please consider citing this work if you find the repository helpful. 
+The code in this repository is mostly described in the papers below. Please consider citing this work if you find the repository helpful. 
 
 ```bibtex
 @article{uccl_transport,
@@ -193,7 +211,14 @@ The code in this repository is mostly described in the paper below. Please consi
   year={2025}
 }
 ```
-
+```bibtex
+@article{mao2025uccl,
+  title={UCCL-EP: Portable Expert-Parallel Communication},
+  author={Mao, Ziming and Zhang, Yihan and Cui, Chihan and You, Kaichao and Chen, Zhongjie and Xu, Zhiying and Shenker, Scott and Raiciu, Costin and Zhou, Yang and Stoica, Ion},
+  journal={arXiv preprint arXiv:2512.19849},
+  year={2025}
+}
+```
 ## Acknowledgement
 
 UCCL is being actively developed at [UC Berkeley Sky Computing Lab](https://sky.cs.berkeley.edu/) and [UC Davis ArtSy lab](https://github.com/artsy-lab). We enthusiastically welcome open-source developers joining us! 
