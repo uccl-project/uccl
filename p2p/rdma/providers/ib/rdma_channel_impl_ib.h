@@ -3,9 +3,6 @@
 #include "rdma/rdma_channel_impl.h"
 #include <glog/logging.h>
 
-#define GID_INDEX 3
-#define MAX_INLINE_DATA 128
-
 class IBChannelImpl : public RDMAChannelImpl {
  public:
   IBChannelImpl() = default;
@@ -25,7 +22,7 @@ class IBChannelImpl : public RDMAChannelImpl {
   void setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
                      uint32_t remote_qpn) override;
 
-  uint32_t getMaxInlineData() const override { return MAX_INLINE_DATA; }
+  uint32_t getMaxInlineData() const override;
 
   void initPreAllocResources() override;
 

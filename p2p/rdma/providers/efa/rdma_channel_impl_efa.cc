@@ -6,11 +6,20 @@
 #include <cstring>
 #include <errno.h>
 
+#define GID_INDEX 0
+#define MAX_INLINE_DATA 0
+#define SERVICE_LEVEL
+#define QKEY 0x15695
+
+#define RNR_RETRY 3
+
+#define MAX_CQE 1024
+
 inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
                                    struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
                                    ChannelMetaData* local_meta) {
   struct ibv_cq_init_attr_ex cq_attr = {0};
-  cq_attr.cqe = 1024;
+  cq_attr.cqe = MAX_CQE;
   cq_attr.wc_flags = IBV_WC_STANDARD_FLAGS;
   cq_attr.comp_mask = 0;
 
@@ -40,7 +49,7 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
 
   struct efadv_qp_init_attr efa_attr = {};
   efa_attr.driver_qp_type = EFADV_QP_DRIVER_TYPE_SRD;
-  efa_attr.sl = kEfaQpLowLatencyServiceLevel;
+  efa_attr.sl = SERVICE_LEVEL;
   efa_attr.flags = 0;
   // If set, Receive WRs will not be consumed for RDMA write with imm.
   efa_attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;
@@ -54,7 +63,7 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_INIT;
   attr.port_num = kPortNum;
-  attr.qkey = kQKey;
+  attr.qkey = QKEY;
   attr.pkey_index = 0;
   assert(ibv_modify_qp(*qp, &attr,
                        IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
@@ -66,7 +75,7 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
 
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTS;
-  attr.rnr_retry = kEfaRdmDefaultRnrRetry;
+  attr.rnr_retry = RNR_RETRY;
   assert(ibv_modify_qp(*qp, &attr,
                        IBV_QP_STATE | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN) == 0);
 
@@ -144,15 +153,20 @@ inline bool EFAChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
 inline void EFAChannelImpl::lazy_post_recv_wrs_n(struct ibv_qp* qp, uint32_t n,
                                                  bool force) {
   (void)qp;
+  (void)n;
   (void)force;
 }
 
 inline void EFAChannelImpl::setDstAddress(struct ibv_qp_ex* qpx,
                                           struct ibv_ah* ah,
                                           uint32_t remote_qpn) {
-  ibv_wr_set_ud_addr(qpx, ah, remote_qpn, kQKey);
+  ibv_wr_set_ud_addr(qpx, ah, remote_qpn, QKEY);
 }
 
 inline void EFAChannelImpl::initPreAllocResources() {}
+
+inline uint32_t EFAChannelImpl::getMaxInlineData() const {
+  return MAX_INLINE_DATA;
+}
 
 #endif  // RDMA_CHANNEL_IMPL_EFA_CC_INCLUDED

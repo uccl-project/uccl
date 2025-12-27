@@ -5,10 +5,23 @@
 #include <glog/logging.h>
 #include <cstring>
 
+#define GID_INDEX 3
+#define MAX_INLINE_DATA 128
+#define SERVICE_LEVEL 135
+#define MIN_RNR_TIMER 12
+#define TRAFFIC_CLASS 3
+
+#define RNR_RETRY 7
+#define RETRY_CNT 7
+#define TIMEOUT 14
+#define MAX_RD_ATOMIC 1
+#define MAX_DEST_RD_ATOMIC 1
+#define MAX_CQE 1024
+
 inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
                                   struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
                                   ChannelMetaData* local_meta) {
-  *cq_ex = (struct ibv_cq_ex*)ibv_create_cq(ctx->getCtx(), 1024, nullptr,
+  *cq_ex = (struct ibv_cq_ex*)ibv_create_cq(ctx->getCtx(), MAX_CQE, nullptr,
                                             nullptr, 0);
   assert(*cq_ex);
 
@@ -71,15 +84,15 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
   attr.path_mtu = port_attr.active_mtu;
   attr.dest_qp_num = remote_meta.qpn;
   attr.rq_psn = 0;
-  attr.max_dest_rd_atomic = 1;
-  attr.min_rnr_timer = 12;
+  attr.max_dest_rd_atomic = MAX_DEST_RD_ATOMIC;
+  attr.min_rnr_timer = MIN_RNR_TIMER;
   // RoCE
   // TODO: Infiniband
   attr.ah_attr.is_global = 1;
   attr.ah_attr.port_num = 1;
-  attr.ah_attr.sl = 135;
+  attr.ah_attr.sl = SERVICE_LEVEL;
   attr.ah_attr.src_path_bits = 0;
-  attr.ah_attr.grh.traffic_class = 3;
+  attr.ah_attr.grh.traffic_class = TRAFFIC_CLASS;
   attr.ah_attr.grh.hop_limit = 64;
   memcpy(&attr.ah_attr.grh.dgid, remote_meta.gid.raw, 16);
   attr.ah_attr.grh.sgid_index = GID_INDEX;
@@ -92,11 +105,11 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
   // RTS
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTS;
-  attr.timeout = 14;
-  attr.retry_cnt = 7;
-  attr.rnr_retry = 7;
+  attr.timeout = TIMEOUT;
+  attr.retry_cnt = RETRY_CNT;
+  attr.rnr_retry = RNR_RETRY;
   attr.sq_psn = 0;
-  attr.max_rd_atomic = 1;
+  attr.max_rd_atomic = MAX_RD_ATOMIC;
   flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY |
           IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
   assert(ibv_modify_qp(qp, &attr, flags) == 0);
@@ -191,6 +204,10 @@ inline void IBChannelImpl::initPreAllocResources() {
     pre_alloc_recv_wrs_[i].next =
         (i == kMaxRecvWr - 1) ? nullptr : &pre_alloc_recv_wrs_[i + 1];
   }
+}
+
+inline uint32_t IBChannelImpl::getMaxInlineData() const {
+  return MAX_INLINE_DATA;
 }
 
 #endif  // RDMA_CHANNEL_IMPL_IB_CC_INCLUDED

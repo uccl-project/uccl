@@ -3,13 +3,6 @@
 #include "rdma/rdma_channel_impl.h"
 #include <glog/logging.h>
 
-#define GID_INDEX 0
-#define MAX_INLINE_DATA 0
-
-static constexpr int kEfaQpLowLatencyServiceLevel = 8;
-static constexpr uint32_t kQKey = 0x15695;
-static constexpr uint8_t kEfaRdmDefaultRnrRetry = 3;
-
 class EFAChannelImpl : public RDMAChannelImpl {
  public:
   EFAChannelImpl() = default;
@@ -27,7 +20,7 @@ class EFAChannelImpl : public RDMAChannelImpl {
   void setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
                      uint32_t remote_qpn) override;
 
-  uint32_t getMaxInlineData() const override { return MAX_INLINE_DATA; }
+  uint32_t getMaxInlineData() const override;
 
   void initPreAllocResources() override;
 };
