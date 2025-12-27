@@ -1,18 +1,18 @@
 #pragma once
 #include "define.h"
-#include "efa_channel_group.h"
-#include "efa_ctrl_channel.h"
 #include "epoll_client.h"
 #include "epoll_server.h"
 #include "memory_allocator.h"
+#include "rdma_channel_group.h"
 #include "rdma_context.h"
+#include "rdma_ctrl_channel.h"
 #include "rdma_device.h"
 #include "util/net.h"
 #include <glog/logging.h>
 
-class EFAEndpoint {
+class NICEndpoint {
  public:
-  explicit EFAEndpoint(
+  explicit NICEndpoint(
       int gpu_index, uint64_t rank_id = INVALID_RANK_ID, uint64_t port = 0,
       bool auto_start_polling = true,
       std::vector<size_t> const& device_ids = std::vector<size_t>())
@@ -29,7 +29,7 @@ class EFAEndpoint {
       actual_device_ids = device_ids;
     }
     initializeContexts(actual_device_ids);
-    LOG(INFO) << "EFAEndpoint initialized with " << contexts_.size()
+    LOG(INFO) << "NICEndpoint initialized with " << contexts_.size()
               << " context(s) for GPU " << gpu_index_;
 
     oob_server_ = std::make_shared<EpollServer>(
@@ -45,7 +45,7 @@ class EFAEndpoint {
   }
 
   // Destructor
-  ~EFAEndpoint() {
+  ~NICEndpoint() {
     if (oob_client_) {
       oob_client_->stop();
     }
@@ -178,7 +178,7 @@ class EFAEndpoint {
               << ", index: " << index;
   }
 
-  int64_t writeOrRead(std::shared_ptr<EFASendRequest> req) {
+  int64_t writeOrRead(std::shared_ptr<RDMASendRequest> req) {
     uint64_t rank_id = req->to_rank_id;
     auto it = send_channel_groups_.find(rank_id);
     if (it == send_channel_groups_.end()) {
@@ -191,7 +191,7 @@ class EFAEndpoint {
 
     // Blocking call until send succeeds
     while (wr_id < 0) {
-      LOG(INFO) << "EFAEndpoint::write - Attempting to send to rank_id: "
+      LOG(INFO) << "NICEndpoint::write - Attempting to send to rank_id: "
                 << rank_id << ", peer rank_id " << rank_id;
       wr_id = send_group->postWriteOrRead(req);
 
@@ -205,7 +205,7 @@ class EFAEndpoint {
 
   // Blocking send: wraps SendChannelGroup::send with rank_id parameter
   // Returns wr_id for checking completion later
-  int64_t send(uint64_t rank_id, std::shared_ptr<EFASendRequest> req) {
+  int64_t send(uint64_t rank_id, std::shared_ptr<RDMASendRequest> req) {
     auto it = send_channel_groups_.find(rank_id);
     if (it == send_channel_groups_.end()) {
       throw std::runtime_error("Send channel group not found for rank_id: " +
@@ -217,7 +217,7 @@ class EFAEndpoint {
 
     // Blocking call until send succeeds
     while (wr_id < 0) {
-      LOG(INFO) << "EFAEndpoint::send - Attempting to send to rank_id: "
+      LOG(INFO) << "NICEndpoint::send - Attempting to send to rank_id: "
                 << rank_id << ", peer rank_id " << rank_id;
       wr_id = send_group->send(req);
 
@@ -231,7 +231,7 @@ class EFAEndpoint {
 
   // Blocking recv: wraps RecvChannelGroup::recv with rank_id parameter
   // Returns index for checking completion later
-  int64_t recv(uint64_t rank_id, std::shared_ptr<EFARecvRequest> req) {
+  int64_t recv(uint64_t rank_id, std::shared_ptr<RDMARecvRequest> req) {
     auto it = recv_channel_groups_.find(rank_id);
     if (it == recv_channel_groups_.end()) {
       throw std::runtime_error("Recv channel group not found for rank_id: " +
@@ -243,7 +243,7 @@ class EFAEndpoint {
     // Blocking call until recv succeeds
     while (index < 0) {
       index = recv_group->recv(req);
-      LOG(INFO) << "EFAEndpoint::recv - Attempting to recv from rank_id: "
+      LOG(INFO) << "NICEndpoint::recv - Attempting to recv from rank_id: "
                 << rank_id << ", peer rank_id " << rank_id;
       if (index < 0) {
         std::this_thread::sleep_for(std::chrono::microseconds(10));
@@ -415,12 +415,12 @@ class EFAEndpoint {
   }
 
   // Manual polling routine for send channels when auto_start_polling_ is false
-  int sendWithoutInnerQueue(std::shared_ptr<EFASendRequest> req) {
+  int sendWithoutInnerQueue(std::shared_ptr<RDMASendRequest> req) {
     if (auto_start_polling_) {
       return -1;  // Do nothing if auto polling is enabled
     }
     if (!req) {
-      LOG(WARNING) << "EFAEndpoint::sendRoutine - null request";
+      LOG(WARNING) << "NICEndpoint::sendRoutine - null request";
       return -1;
     }
 
@@ -428,7 +428,7 @@ class EFAEndpoint {
     std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
     auto it = send_channel_groups_.find(rank_id);
     if (it == send_channel_groups_.end()) {
-      LOG(WARNING) << "EFAEndpoint::sendRoutine - Send channel group not found "
+      LOG(WARNING) << "NICEndpoint::sendRoutine - Send channel group not found "
                       "for rank_id: "
                    << rank_id;
       return -1;
@@ -436,7 +436,7 @@ class EFAEndpoint {
 
     auto send_group = it->second;
     if (!send_group) {
-      LOG(WARNING) << "EFAEndpoint::sendRoutine - Send channel group is null "
+      LOG(WARNING) << "NICEndpoint::sendRoutine - Send channel group is null "
                       "for rank_id: "
                    << rank_id;
       return -1;
@@ -466,7 +466,7 @@ class EFAEndpoint {
       }
       auto context = std::make_shared<RdmaContext>(device, contexts_.size());
       contexts_.push_back(context);
-      LOG(INFO) << "EFAEndpoint: Created context " << i << " for device "
+      LOG(INFO) << "NICEndpoint: Created context " << i << " for device "
                 << device_id << " (" << device->name() << ")";
     }
 
@@ -539,7 +539,7 @@ class EFAEndpoint {
         }
       }
 
-      std::shared_ptr<EFAChannel> new_channel = std::make_shared<EFAChannel>(
+      std::shared_ptr<RDMAChannel> new_channel = std::make_shared<RDMAChannel>(
           ctx_ptr, meta.channel_meta, meta.channel_id);
       // Create response (echo back the same data)
       MetaInfoToExchange response(rank_id_, meta.channel_id,
@@ -552,7 +552,7 @@ class EFAEndpoint {
   }
 
   // Handle response from send_meta operation
-  uint64_t handle_send_meta_response(std::shared_ptr<EFAChannel> channel,
+  uint64_t handle_send_meta_response(std::shared_ptr<RDMAChannel> channel,
                                      std::string const& response) {
     // Deserialize response as MetaInfoToExchange
     MetaInfoToExchange response_meta =
@@ -583,7 +583,7 @@ class EFAEndpoint {
   }
 
   void addOneRecvChannel(uint64_t rank_id, uint32_t channel_id,
-                         std::shared_ptr<EFAChannel> new_channel) {
+                         std::shared_ptr<RDMAChannel> new_channel) {
     std::shared_ptr<RecvChannelGroup> group_ptr = getOrCreateRecvGroup(rank_id);
     group_ptr->addChannel(channel_id, new_channel);
   }
@@ -610,7 +610,7 @@ class EFAEndpoint {
   }
 
   void addOneSendChannel(uint64_t rank_id, uint32_t channel_id,
-                         std::shared_ptr<EFAChannel> new_channel) {
+                         std::shared_ptr<RDMAChannel> new_channel) {
     auto group_ptr = getOrCreateSendGroup(rank_id);
     group_ptr->addChannel(channel_id, new_channel);
   }
@@ -698,7 +698,7 @@ class EFAEndpoint {
     for (int i = 0; i < kQpNumPerChannel; i++) {
       uint32_t channel_id = i + 1;
 
-      auto channel = std::make_shared<EFAChannel>(
+      auto channel = std::make_shared<RDMAChannel>(
           getContextByChannelId(channel_id), channel_id);
 
       MetaInfoToExchange meta(rank_id_, channel_id, channel->get_local_meta(),

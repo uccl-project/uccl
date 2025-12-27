@@ -1,5 +1,34 @@
 #pragma once
 #include "define.h"
+#include <memory>
+#include <string>
+#include <vector>
+
+// Base class for device selection strategy
+class RDMADeviceSelectionStrategy {
+ public:
+  virtual ~RDMADeviceSelectionStrategy() = default;
+
+  // Select NIC names from candidates based on GPU index
+  virtual std::vector<std::string> selectNICs(
+      std::vector<std::string> const& candidates, int gpu_idx) = 0;
+};
+
+// Include device selection strategy based on build configuration
+#ifdef UCCL_P2P_USE_IB
+#include "providers/ib/rdma_device_selection_ib.h"
+#else
+#include "providers/efa/rdma_device_selection_efa.h"
+#endif
+
+inline std::unique_ptr<RDMADeviceSelectionStrategy>
+createDeviceSelectionStrategy() {
+#ifdef UCCL_P2P_USE_IB
+  return std::make_unique<IBDeviceSelectionStrategy>();
+#else
+  return std::make_unique<EFADeviceSelectionStrategy>();
+#endif
+}
 
 class RdmaDevice {
  public:
@@ -87,16 +116,10 @@ class RdmaDeviceManager {
         LOG(WARNING) << "no candidate NIC found, defaulting to first";
         selected_nic_names.push_back(dist.front().first);
       } else {
-        // NOTE(xzhiying): This is a temporary hack.
-        // On p5en, there are 4 NICs with the same distance.
-        // GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
-        assert(candidates.size() == 4);
-        int half_size = candidates.size() / 2;
-        int start_idx = (gpu_idx % 2 == 0) ? 0 : half_size;
-        int end_idx = start_idx + half_size;
-        for (int i = start_idx; i < end_idx; i++) {
-          selected_nic_names.push_back(candidates[i]);
-        }
+        auto strategy = createDeviceSelectionStrategy();
+        auto selected = strategy->selectNICs(candidates, gpu_idx);
+        selected_nic_names.insert(selected_nic_names.end(), selected.begin(),
+                                  selected.end());
       }
     }
 

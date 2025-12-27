@@ -77,12 +77,12 @@ Navigate to `benchmarks` directory:
 
 On client: 
 ```bash
-torchrun --nnodes=2 --nproc_per_node=1 --node-rank=0 --master_addr=<IP addr> benchmark_uccl.py
+torchrun --nnodes=2 --nproc_per_node=1 --node-rank=0 --master_addr=<IP addr> benchmarks/benchmark_uccl.py
 ```
 
 On server:
 ```bash
-torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> benchmark_uccl.py
+torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> benchmarks/benchmark_uccl.py
 ```
 
 Notes: 

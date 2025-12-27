@@ -9,7 +9,6 @@ except ImportError:
 
 
 class TransferManager:
-
     class ConnState:
         def __init__(
             self,

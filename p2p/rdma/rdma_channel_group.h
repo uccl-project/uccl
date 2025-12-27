@@ -1,7 +1,7 @@
 #pragma once
 #include "define.h"
-#include "efa_channel.h"
-#include "efa_ctrl_channel.h"
+#include "rdma_channel.h"
+#include "rdma_ctrl_channel.h"
 #include <random>
 
 class ChannelGroup {
@@ -10,7 +10,7 @@ class ChannelGroup {
   virtual ~ChannelGroup() = default;
 
   virtual void addChannel(uint32_t channel_id,
-                          std::shared_ptr<EFAChannel> channel) {
+                          std::shared_ptr<RDMAChannel> channel) {
     if (!channel) {
       throw std::invalid_argument("addChannel called with null channel");
     }
@@ -19,7 +19,7 @@ class ChannelGroup {
     channels_[channel_id] = std::move(channel);
   }
 
-  virtual std::shared_ptr<EFAChannel> getChannel(uint32_t channel_id) const {
+  virtual std::shared_ptr<RDMAChannel> getChannel(uint32_t channel_id) const {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     auto it = channels_.find(channel_id);
     if (it == channels_.end()) return nullptr;
@@ -31,7 +31,7 @@ class ChannelGroup {
     return channels_.size();
   }
 
-  virtual std::unordered_map<uint32_t, std::shared_ptr<EFAChannel>> const&
+  virtual std::unordered_map<uint32_t, std::shared_ptr<RDMAChannel>> const&
   channels() const {
     mutex_.lock_shared();
     mutex_.unlock_shared();  // just to annotate read lock expected
@@ -96,7 +96,7 @@ class ChannelGroup {
 
  protected:
   mutable std::shared_mutex mutex_;
-  std::unordered_map<uint32_t, std::shared_ptr<EFAChannel>> channels_;
+  std::unordered_map<uint32_t, std::shared_ptr<RDMAChannel>> channels_;
   std::atomic<uint32_t> last_channel_id_;
 };
 
@@ -108,17 +108,17 @@ class SendChannelGroup : public ChannelGroup {
         auto_start_polling_(auto_start_polling) {
     tracker_ = std::make_shared<AtomicBitmapPacketTrackerMultiAck>();
     request_queue_ = std::make_unique<
-        RingBuffer<std::shared_ptr<EFASendRequest>, kRingCapacity>>();
+        RingBuffer<std::shared_ptr<RDMASendRequest>, kRingCapacity>>();
   }
 
   ~SendChannelGroup() { stopPolling(); }
 
   void addChannel(uint32_t channel_id,
-                  std::shared_ptr<EFAChannel> channel) override {
+                  std::shared_ptr<RDMAChannel> channel) override {
     ChannelGroup::addChannel(channel_id, channel);
   }
 
-  std::shared_ptr<EFAChannel> getChannel(uint32_t channel_id) const override {
+  std::shared_ptr<RDMAChannel> getChannel(uint32_t channel_id) const override {
     auto result = ChannelGroup::getChannel(channel_id);
     return result;
   }
@@ -134,7 +134,7 @@ class SendChannelGroup : public ChannelGroup {
 
   size_t normalChannelCount() const { return ChannelGroup::channelCount(); }
 
-  std::unordered_map<uint32_t, std::shared_ptr<EFAChannel>> const& channels()
+  std::unordered_map<uint32_t, std::shared_ptr<RDMAChannel>> const& channels()
       const override {
     return ChannelGroup::channels();
   }
@@ -153,7 +153,7 @@ class SendChannelGroup : public ChannelGroup {
     }
   }
 
-  int64_t send(std::shared_ptr<EFASendRequest> req) {
+  int64_t send(std::shared_ptr<RDMASendRequest> req) {
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
     if (unlikely(request_queue_->push(req) < 0)) {
@@ -164,7 +164,7 @@ class SendChannelGroup : public ChannelGroup {
     return wr_id;
   }
 
-  int64_t postWriteOrRead(std::shared_ptr<EFASendRequest> req) {
+  int64_t postWriteOrRead(std::shared_ptr<RDMASendRequest> req) {
     if (unlikely(req->send_type != SendType::Write &&
                  req->send_type != SendType::Read)) {
       LOG(ERROR) << "SendChannelGroup::write - Invalid send_type, expected "
@@ -187,7 +187,7 @@ class SendChannelGroup : public ChannelGroup {
     return wr_id;
   }
 
-  int64_t read(std::shared_ptr<EFASendRequest> req) {
+  int64_t read(std::shared_ptr<RDMASendRequest> req) {
     if (unlikely(req->send_type != SendType::Read)) {
       LOG(ERROR) << "SendChannelGroup::read - Invalid send_type, expected "
                     "SendType::Read";
@@ -239,7 +239,7 @@ class SendChannelGroup : public ChannelGroup {
         << "SendChannelGroup::pollingLoop - Still running";
   }
 
-  int processSendRequests(std::shared_ptr<EFASendRequest> req) {
+  int processSendRequests(std::shared_ptr<RDMASendRequest> req) {
     pollControlChannel();
     if (unlikely(ctrl_channel_ == nullptr)) {
       return -1;
@@ -262,14 +262,14 @@ class SendChannelGroup : public ChannelGroup {
   mutable std::shared_mutex ctrl_channel_mutex_;
   std::atomic<bool> running_;
   std::unique_ptr<std::thread> poll_thread_;
-  std::unique_ptr<RingBuffer<std::shared_ptr<EFASendRequest>, kRingCapacity>>
+  std::unique_ptr<RingBuffer<std::shared_ptr<RDMASendRequest>, kRingCapacity>>
       request_queue_;
   std::shared_ptr<AtomicBitmapPacketTrackerMultiAck> tracker_;
   bool auto_start_polling_;
 
   // Send a request through the appropriate channel
   // Returns true on success, false on failure
-  bool postRequestOnChannel(std::shared_ptr<EFASendRequest> req) {
+  bool postRequestOnChannel(std::shared_ptr<RDMASendRequest> req) {
     auto channel = getChannel(req->channel_id);
     if (unlikely(!channel)) {
       LOG(WARNING) << "SendChannelGroup: Channel not found for channel_id "
@@ -297,7 +297,7 @@ class SendChannelGroup : public ChannelGroup {
     }
   }
 
-  void postChunkedRequest(std::shared_ptr<EFASendRequest> req) {
+  void postChunkedRequest(std::shared_ptr<RDMASendRequest> req) {
     // Split message into chunks
     size_t message_size = req->local_mem->size;
     auto chunks = splitMessageToChunks(message_size);
@@ -326,7 +326,7 @@ class SendChannelGroup : public ChannelGroup {
       // Create send request for this chunk
       // Only the last chunk needs signaled for completion notification
       bool is_last_chunk = (i == chunks.size() - 1);
-      auto chunk_req = std::make_shared<EFASendRequest>(
+      auto chunk_req = std::make_shared<RDMASendRequest>(
           chunk_local_mem, chunk_remote_mem, req->imm_data, is_last_chunk);
       chunk_req->channel_id = chunk_channel_id;
       chunk_req->from_rank_id = req->from_rank_id;
@@ -358,7 +358,7 @@ class SendChannelGroup : public ChannelGroup {
     has_meta = ctrl_channel_->hasSendRequest();
     // }
     while (has_meta) {
-      std::shared_ptr<EFASendRequest> req;
+      std::shared_ptr<RDMASendRequest> req;
       if (tracker_->getTotalInflightBytes() > kInFlightMaxSizeKB * 1024 ||
           !request_queue_->pop(req)) {
         if (tracker_->getTotalInflightBytes() > kInFlightMaxSizeKB * 1024) {
@@ -376,7 +376,7 @@ class SendChannelGroup : public ChannelGroup {
     }
   }
 
-  inline void processOnceSendRequests(std::shared_ptr<EFASendRequest> req,
+  inline void processOnceSendRequests(std::shared_ptr<RDMASendRequest> req,
                                       SendReqMeta& meta, int index) {
     req->imm_data = index;
     req->channel_id = meta.channel_id;
@@ -427,11 +427,11 @@ class RecvChannelGroup : public ChannelGroup {
   ~RecvChannelGroup() { stopPolling(); }
 
   void addChannel(uint32_t channel_id,
-                  std::shared_ptr<EFAChannel> channel) override {
+                  std::shared_ptr<RDMAChannel> channel) override {
     ChannelGroup::addChannel(channel_id, channel);
   }
 
-  std::shared_ptr<EFAChannel> getChannel(uint32_t channel_id) const override {
+  std::shared_ptr<RDMAChannel> getChannel(uint32_t channel_id) const override {
     auto result = ChannelGroup::getChannel(channel_id);
     return result;
   }
@@ -446,7 +446,7 @@ class RecvChannelGroup : public ChannelGroup {
 
   size_t normalChannelCount() const { return ChannelGroup::channelCount(); }
 
-  std::unordered_map<uint32_t, std::shared_ptr<EFAChannel>> const& channels()
+  std::unordered_map<uint32_t, std::shared_ptr<RDMAChannel>> const& channels()
       const override {
     return ChannelGroup::channels();
   }
@@ -485,7 +485,7 @@ class RecvChannelGroup : public ChannelGroup {
     }
   }
 
-  int64_t recv(std::shared_ptr<EFARecvRequest> req) {
+  int64_t recv(std::shared_ptr<RDMARecvRequest> req) {
     if (unlikely(!setupRecvRequestChannelAndMemoryRegion(req))) {
       LOG(WARNING)
           << "RecvChannelGroup: Failed to setup recv request with round robin";
@@ -573,7 +573,7 @@ class RecvChannelGroup : public ChannelGroup {
 
   // Round-robin channel selection and MR setup
   bool setupRecvRequestChannelAndMemoryRegion(
-      std::shared_ptr<EFARecvRequest> req) {
+      std::shared_ptr<RDMARecvRequest> req) {
     if (unlikely(!req || !req->local_mem)) {
       return false;
     }

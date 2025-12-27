@@ -49,7 +49,7 @@ DEFINE_uint64(buffer_size, 1024 * 1024, "Buffer size in bytes");
 // --iterations=100 --buffer_size=104857600
 
 // Correctness test: perform 100 send/recv operations and verify results
-void correctness_test(EFAEndpoint& endpoint, MemoryAllocator& allocator) {
+void correctness_test(NICEndpoint& endpoint, MemoryAllocator& allocator) {
   std::cout << "\n=== Starting Correctness Test (100 iterations) ===\n"
             << std::flush;
 
@@ -104,8 +104,8 @@ void correctness_test(EFAEndpoint& endpoint, MemoryAllocator& allocator) {
     // Create requests
     auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
     auto send_req =
-        std::make_shared<EFASendRequest>(send_mem, remote_mem_placeholder);
-    auto recv_req = std::make_shared<EFARecvRequest>(recv_mem);
+        std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
+    auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
 
     // Post recv first
     int64_t recv_index = endpoint.recv(FLAGS_remote_rank, recv_req);
@@ -194,7 +194,7 @@ void correctness_test(EFAEndpoint& endpoint, MemoryAllocator& allocator) {
 }
 
 // Unidirectional bandwidth test: rank 0 only sends, rank 1 only receives
-void unidirectional_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
+void unidirectional_test(NICEndpoint& endpoint, MemoryAllocator& allocator,
                          int iterations) {
   std::cout << "\n=== Starting Unidirectional Bandwidth Test (" << iterations
             << " iterations) ===\n";
@@ -231,12 +231,12 @@ void unidirectional_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
       // Rank 0: only send
       auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
       auto send_req =
-          std::make_shared<EFASendRequest>(send_mem, remote_mem_placeholder);
+          std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
       int64_t send_wr_id = endpoint.send(FLAGS_remote_rank, send_req);
       endpoint.checkSendComplete(FLAGS_remote_rank, send_wr_id);
     } else {
       // Rank 1: only receive
-      auto recv_req = std::make_shared<EFARecvRequest>(recv_mem);
+      auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
       int64_t recv_index = endpoint.recv(FLAGS_remote_rank, recv_req);
       endpoint.checkRecvComplete(FLAGS_remote_rank, recv_index);
     }
@@ -257,7 +257,7 @@ void unidirectional_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
     for (int i = 0; i < iterations; i++) {
       auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
       auto send_req =
-          std::make_shared<EFASendRequest>(send_mem, remote_mem_placeholder);
+          std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
 
       int64_t send_wr_id = endpoint.send(FLAGS_remote_rank, send_req);
       send_infos.push_back({send_req->channel_id, send_wr_id});
@@ -279,7 +279,7 @@ void unidirectional_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
 
     // First, recv all messages
     for (int i = 0; i < iterations; i++) {
-      auto recv_req = std::make_shared<EFARecvRequest>(recv_mem);
+      auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
 
       int64_t recv_index = endpoint.recv(FLAGS_remote_rank, recv_req);
       recv_indices.push_back(recv_index);
@@ -325,7 +325,7 @@ void unidirectional_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
 }
 
 // Bandwidth test: perform N send/recv operations and measure bandwidth
-void bandwidth_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
+void bandwidth_test(NICEndpoint& endpoint, MemoryAllocator& allocator,
                     int iterations) {
   std::cout << "\n=== Starting Bandwidth Test (" << iterations
             << " iterations) ===\n"
@@ -359,8 +359,8 @@ void bandwidth_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
   for (int i = 0; i < 50; i++) {
     auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
     auto send_req =
-        std::make_shared<EFASendRequest>(send_mem, remote_mem_placeholder);
-    auto recv_req = std::make_shared<EFARecvRequest>(recv_mem);
+        std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
+    auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
 
     int64_t recv_index = endpoint.recv(FLAGS_remote_rank, recv_req);
     int64_t send_wr_id = endpoint.send(FLAGS_remote_rank, send_req);
@@ -383,8 +383,8 @@ void bandwidth_test(EFAEndpoint& endpoint, MemoryAllocator& allocator,
   for (int i = 0; i < iterations; i++) {
     auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
     auto send_req =
-        std::make_shared<EFASendRequest>(send_mem, remote_mem_placeholder);
-    auto recv_req = std::make_shared<EFARecvRequest>(recv_mem);
+        std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
+    auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
 
     int64_t recv_index = endpoint.recv(FLAGS_remote_rank, recv_req);
     recv_indices.push_back(recv_index);
@@ -465,7 +465,7 @@ int main(int argc, char* argv[]) {
   FLAGS_logtostderr = true;
 
   // Parse command line flags
-  gflags::SetUsageMessage("EFAEndpoint usage example");
+  gflags::SetUsageMessage("NICEndpoint usage example");
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   // Validate required flags
@@ -475,7 +475,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  std::cout << "=== EFAEndpoint Usage Example ===\n";
+  std::cout << "=== NICEndpoint Usage Example ===\n";
   std::cout << "GPU Index: " << FLAGS_gpu_index << "\n";
   std::cout << "Rank ID: " << FLAGS_rank_id << "\n";
   std::cout << "Port: " << FLAGS_port << "\n";
@@ -490,7 +490,7 @@ int main(int argc, char* argv[]) {
   // std::cout << "Allocated " << gpu_mem->size << " bytes of GPU memory at "
   //           << gpu_mem->addr << std::endl;
   // RemoteMemInfo info(gpu_mem);
-  // recv_test_ = std::make_shared<EFARecvRequest>(gpu_mem);
+  // recv_test_ = std::make_shared<RDMARecvRequest>(gpu_mem);
   try {
     // Set GPU device for the entire process
     cudaError_t cuda_err = cudaSetDevice(FLAGS_gpu_index);
@@ -517,11 +517,11 @@ int main(int argc, char* argv[]) {
     std::cout << "Found " << device_manager.deviceCount()
               << " RDMA device(s)\n\n";
 
-    // Create EFAEndpoint with device_ids = {0}
-    std::cout << "Creating EFAEndpoint...\n";
+    // Create NICEndpoint with device_ids = {0}
+    std::cout << "Creating NICEndpoint...\n";
     std::vector<size_t> device_ids = {0, 1};
-    EFAEndpoint endpoint(FLAGS_gpu_index, FLAGS_rank_id, FLAGS_port);
-    std::cout << "EFAEndpoint created successfully\n\n";
+    NICEndpoint endpoint(FLAGS_gpu_index, FLAGS_rank_id, FLAGS_port);
+    std::cout << "NICEndpoint created successfully\n\n";
 
     // Create OOBMetaData for remote rank
     std::cout << "Setting up remote rank metadata...\n";
