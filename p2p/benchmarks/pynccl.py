@@ -515,6 +515,7 @@ class NCCLLibrary:
 
 
 class PyNcclCommunicator:
+
     def __init__(
         self,
         group: ProcessGroup,
