@@ -59,6 +59,12 @@ struct ProxyCtx {
   uint32_t remote_rkey = 0;
   uint32_t rkey = 0;
 
+  // Atomic buffer (separate from main RDMA buffer)
+  ibv_mr* atomic_buffer_mr = nullptr;       // MR for local atomic_buffer_ptr
+  uintptr_t remote_atomic_buffer_addr = 0;  // Remote atomic_buffer_ptr address
+  uint64_t remote_atomic_buffer_len = 0;    // Remote atomic_buffer_ptr length
+  uint32_t remote_atomic_buffer_rkey = 0;   // Remote atomic_buffer_ptr rkey
+
   // Buffer offset within rdma_buffer for address translation
   uintptr_t dispatch_recv_data_offset =
       0;  // offset of dispatch_rdma_recv_data_buffer from rdma_buffer base
