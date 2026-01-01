@@ -11,7 +11,7 @@ HIPCCFLAGS := -g -O0 -std=c++17 -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942
 LDFLAGS    := -L${CONDA_LIB_HOME} -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -lglog
 
 # Include directories
-INCLUDES := -Iinclude -I$(HIP_HOME)/include -I/usr/include -I../include
+INCLUDES := -Iinclude -I$(HIP_HOME)/include -I/usr/include -I../../include
 
 LDFLAGS += -L$(HIP_LIB) -Wl,-rpath,$(HIP_LIB)
 

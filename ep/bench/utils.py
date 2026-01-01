@@ -294,9 +294,19 @@ class EventOverlap:
 
 
 def detect_ib_hca():
-    devices = sorted(glob.glob("/sys/class/infiniband/*"))
+    """Detect InfiniBand HCA device.
+
+    Returns the first mlx5 device name found, or None if no InfiniBand
+    devices are available (e.g., on systems without IB).
+    """
+    try:
+        devices = sorted(glob.glob("/sys/class/infiniband/*"))
+    except (OSError, PermissionError):
+        return None
+
     if not devices:
-        raise RuntimeError("No devices found under /sys/class/infiniband")
+        # No InfiniBand devices found - this is okay on systems without RDMA
+        return None
 
     ib_devs = [
         os.path.basename(d) for d in devices if os.path.basename(d).startswith("mlx5")
@@ -656,3 +666,7 @@ def inplace_unique(x: torch.Tensor, num_slots: int):
     x[:, :].fill_(-1)
     valid_len = min(num_slots, x.size(1))
     x[:, :valid_len] = sorted_bin_idx[:, :valid_len]
+
+
+def hash_tensor(t: torch.Tensor):
+    return t.view(torch.int).sum().item()

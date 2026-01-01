@@ -19,3 +19,6 @@
 [submodule "thirdparty/Primus"]
 	path = thirdparty/Primus
 	url = https://github.com/AMD-AIG-AIMA/Primus
+[submodule "thirdparty/gdrcopy"]
+	path = thirdparty/gdrcopy
+	url = https://github.com/NVIDIA/gdrcopy.git

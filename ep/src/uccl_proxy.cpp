@@ -57,6 +57,10 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   if (thread_idx == 0) {
 #ifdef USE_GRACE_HOPPER
     cudaMallocManaged(&atomic_buffer_ptr_, kAtomicBufferSize);
+#elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
+                  cudaHostAllocMapped | cudaHostAllocWriteCombined |
+                      hipHostMallocUncached);
 #else
     cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
                   cudaHostAllocMapped | cudaHostAllocWriteCombined);

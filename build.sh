@@ -177,17 +177,17 @@ build_eccl() {
   set -euo pipefail
   echo "[container] build_eccl Target: $TARGET"
 
-  cd eccl
+  cd experimental/eccl
   if [[ "$TARGET" == cuda* ]]; then
     make clean -f Makefile && make -j$(nproc) -f Makefile
   elif [[ "$TARGET" == rocm* ]]; then
     make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm
   fi
-  cd ..
+  cd ../..
 
   echo "[container] Copying eccl .so to uccl/"
   mkdir -p uccl/lib # mkdir anyway
-  cp eccl/*eccl*.so uccl/lib
+  cp experimental/eccl/*eccl*.so uccl/lib
 }
 
 # Determine the Docker image to use based on the target and architecture
@@ -305,6 +305,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e WHEEL_DIR="${WHEEL_DIR}" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
   -e USE_TCPX="${USE_TCPX:-0}" \
+  -e USE_EFA="${USE_EFA:-0}" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
   -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
   -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_ccl_rdma build_ccl_efa build_p2p build_ep build_eccl)" \

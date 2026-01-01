@@ -8,8 +8,8 @@ EFA_HOME?=/opt/amazon/efa
 INC = -I./ -I$(CUDA_HOME)/include -I${EFA_HOME}/include -I$(ABS_REPO_ROOT)/include
 LIBS = -L ${CUDA_HOME}/lib64 -L ${EFA_HOME}/lib -libverbs -lefa -lcudart -lcuda -lpthread -lglog -lgflags -lgtest -lz -lelf
 LIBS_SHARED = ${LIBS}
-override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC -DUSE_CUDA
-DEPS = *.h
+# Added -MMD -MP for automatic dependency generation
+override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC -DUSE_CUDA -MMD -MP
 PLUGIN_SO = libnccl-net-efa.so
 
 lib_src = $(wildcard *.cc)
@@ -23,41 +23,45 @@ main_src = $(wildcard *_main.cc)
 main_src += $(wildcard *_test.cc)
 main_bin = $(main_src:.cc=)
 
+# Include automatically generated dependency files
+-include $(lib_obj:.o=.d)
+-include $(patsubst %,%.d,$(main_bin))
+
 .PHONY: build
 build: $(main_bin) $(PLUGIN_SO)
 
-transport_test: transport_test.cc $(DEPS) $(lib_obj)
+transport_test: transport_test.cc $(lib_obj)
 	g++ transport_test.cc -o transport_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
-util_efa_test: util_efa_test.cc $(DEPS) $(lib_obj)
+util_efa_test: util_efa_test.cc $(lib_obj)
 	g++ util_efa_test.cc -o util_efa_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
-util_efa_device_name_list_test: util_efa_device_name_list_test.cc util_efa.cc $(DEPS) $(filter-out util_efa.o,$(lib_obj))
+util_efa_device_name_list_test: util_efa_device_name_list_test.cc util_efa.cc $(filter-out util_efa.o,$(lib_obj))
 	g++ -DUCCL_TESTING util_efa_device_name_list_test.cc util_efa.cc -o util_efa_device_name_list_test $(filter-out util_efa.o,$(lib_obj)) $(INC) $(LIBS) $(CXXFLAGS) -lgtest_main
 
-timely_test: timely_test.cc $(DEPS) $(lib_obj)
+timely_test: timely_test.cc $(lib_obj)
 	g++ timely_test.cc -o timely_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
-timing_wheel_test: timing_wheel_test.cc $(DEPS) $(lib_obj)
+timing_wheel_test: timing_wheel_test.cc $(lib_obj)
 	g++ timing_wheel_test.cc -o timing_wheel_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
-util_lrpc_test: util_lrpc_test.cc $(DEPS) $(lib_obj)
+util_lrpc_test: util_lrpc_test.cc $(lib_obj)
 	g++ util_lrpc_test.cc -o util_lrpc_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
-scattered_memcpy_test: scattered_memcpy_test.cc $(DEPS) $(lib_obj)
+scattered_memcpy_test: scattered_memcpy_test.cc $(lib_obj)
 	g++ scattered_memcpy_test.cc -o scattered_memcpy_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
 scattered_memcpy.o: scattered_memcpy.cu scattered_memcpy.cuh
 	nvcc -c scattered_memcpy.cu -o scattered_memcpy.o -arch=sm_70 -Xcompiler -fPIC
 
-%.o: %.cc $(DEPS)
+%.o: %.cc
 	g++ -c $< -o $@ $(INC) $(CXXFLAGS)
 
 NCCL_INC:= -I$(NCCL_HOME)/build/include -I$(NCCL_HOME)/src/include -I$(CUDA_HOME)/include
 
-$(PLUGIN_SO): nccl_plugin.cc $(DEPS) $(lib_obj)
+$(PLUGIN_SO): nccl_plugin.cc $(lib_obj)
 	g++ $(NCCL_INC) -fPIC -shared -o $@ -Wl,-soname,$(PLUGIN_SO) nccl_plugin.cc $(lib_obj) $(INC) $(LIBS_SHARED) $(CXXFLAGS)
 
 .PHONY: clean
 clean:
-	rm -f *.o $(main_bin) $(PLUGIN_SO)
+	rm -f *.o *.d $(main_bin) $(PLUGIN_SO)
