@@ -4,10 +4,8 @@ Collective API for UCCL P2P Engine
 
 from __future__ import annotations
 
-import struct
-import socket
 from dataclasses import dataclass
-from typing import Dict, Tuple, Optional, List, Union
+from typing import Tuple, Optional, List, Union
 import warnings
 
 import torch
@@ -773,7 +771,20 @@ class CollectiveContext:
         if not self.initialized:
             raise RuntimeError("CollectiveContext not initialized. Call init() first.")
 
+        # Timing event for validate tensor part
+        self.validate_tensor_start_event = torch.cuda.Event(enable_timing=True)
+        self.validate_tensor_end_event = torch.cuda.Event(enable_timing=True)
+
+        # Timing Event for splitting chunks part
+        self.split_chunk_start_event = torch.cuda.Event(enable_timing=True)
+        self.split_chunk_end_event = torch.cuda.Event(enable_timing=True)
+
+        # Timing Event for tensor send and recv part
+        self.tensor_op_start_event = torch.cuda.Event(enable_timing=True)
+        self.tensor_op_end_event = torch.cuda.Event(enable_timing=True)
+
         # Validate tensor sizes
+        self.validate_tensor_start_event.record()
         send_size = send_tensor.numel() * send_tensor.element_size()
         recv_size = recv_tensor.numel() * recv_tensor.element_size()
 
@@ -790,8 +801,10 @@ class CollectiveContext:
 
         # Calculate chunk size
         chunk_numel = send_tensor.numel() // self.world_size
+        self.validate_tensor_end_event.record()
 
         # Split tensors into chunks for each rank
+        self.split_chunk_start_event.record()
         send_chunks = [
             send_tensor.view(-1)[i * chunk_numel : (i + 1) * chunk_numel]
             for i in range(self.world_size)
@@ -803,8 +816,10 @@ class CollectiveContext:
 
         # Copy own chunk (rank sends to itself)
         recv_chunks[self.rank].copy_(send_chunks[self.rank])
+        self.split_chunk_end_event.record()
 
         # Build P2POp list for batch_isend_irecv
+        self.tensor_op_start_event.record()
         ops = []
         for peer_rank in range(self.world_size):
             if peer_rank != self.rank:
@@ -813,7 +828,13 @@ class CollectiveContext:
         for peer_rank in range(self.world_size):
             if peer_rank != self.rank:
                 ops.append(self.P2POp("recv", recv_chunks[peer_rank], peer_rank))
+        self.tensor_op_end_event.record()
 
+        self.validate_time = self.validate_tensor_start_event.elapsed_time(self.validate_tensor_end_event)
+        self.split_time = self.split_chunk_start_event.elapsed_time(self.split_chunk_end_event)
+        self.op_time = self.tensor_op_start_event.elapsed_time(self.tensor_op_end_event)
+
+        print(f"TIMING DATA: V_TIME: {self.validate_time}, S_TIME: {self.split_time}, O_TIME: {self.op_time}")
         return self.batch_isend_irecv(ops)
 
 
