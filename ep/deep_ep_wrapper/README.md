@@ -9,6 +9,6 @@ uv pip install wheelhouse-cuda/uccl-*.whl
 
 Then install UCCL-EP's drop-in replacement for DeepEP:
 ```bash
-cd uccl/ep/deep_ep_wrapper
+cd ep/deep_ep_wrapper
 python setup.py install
 ```
