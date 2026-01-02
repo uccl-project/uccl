@@ -99,7 +99,7 @@ Edit the provided scripts (`launch_vllm_head.sh` and `launch_vllm_worker.sh`) to
 On the **first node** (primary node that handles API requests):
 
 ```bash
-bash launch_vllm_head.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 16 8 1 8
+bash launch_vllm_head.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 allgather_reducescatter 16 8 1 8
 ```
 
 ### Step 2: Start Node 1+ (Secondary)
@@ -108,13 +108,14 @@ On **each additional node** (secondary nodes in headless mode):
 
 ```bash
 # Launch Node 1 (headless)
-bash launch_vllm_worker.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 16 8 1 8
+bash launch_vllm_worker.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 allgather_reducescatter 16 8 1 8
 ```
 
 **Arguments:**
 - `10.4.147.22` - IP address of **Node 0**, should be the IP of the `NCCL_SOCKET_IFNAME`
 - `13345` - RPC port
 - `deepseek-ai/DeepSeek-V3-0324` - Same model as Node 1
+- `allgather_reducescatter` - EP communication backend
 - `16` - Total DP size
 - `8` - Local DP size on this node
 - `1` - Local TP size on this node

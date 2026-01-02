@@ -28,21 +28,6 @@ fi
 # PyTorch library path (required for DeepGEMM)
 export LD_LIBRARY_PATH=$(python3 -c "import torch; import os; print(os.path.join(torch.__path__[0], 'lib'))"):$LD_LIBRARY_PATH
 
-# ============================================================================
-# BACKEND CONFIGURATION
-# ============================================================================
-# Choose the appropriate backend based on your setup:
-# - pplx: Single node deployment
-# - deepep_low_latency: Multi-node, low-latency (decode-dominated workloads)
-# - deepep_high_throughput: Multi-node, high-throughput (prefill-dominated)
-# - allgather_reducescatter: Multi-node with NCCL (works well with InfiniBand/EFA)
-
-if [ -z "$VLLM_ALL2ALL_BACKEND" ]; then
-    all2all_backend="allgather_reducescatter"
-else
-    all2all_backend="$VLLM_ALL2ALL_BACKEND"
-    unset VLLM_ALL2ALL_BACKEND
-fi
 export VLLM_USE_DEEP_GEMM=1
 
 # ============================================================================
@@ -83,10 +68,11 @@ export DG_JIT_CACHE_DIR="/local_storage"
 NODE1_IP="$1"                                      # Node 0 IP address (REQUIRED)
 RPC_PORT="${2:-13345}"                             # RPC communication port
 MODEL="${3:-deepseek-ai/DeepSeek-V3-0324}"         # Model to serve
-TOTAL_DP_SIZE="${4:-16}"                           # Total DP size across all nodes
-LOCAL_DP_SIZE="${5:-8}"                            # Local DP size on this node
-LOCAL_TP_SIZE="${6:-1}"                            # Local TP size on this node
-API_SERVERS="${7:-8}"                              # Number of API servers
+BACKEND="${4:-allgather_reducescatter}"            # Backend to use
+TOTAL_DP_SIZE="${5:-16}"                           # Total DP size across all nodes
+LOCAL_DP_SIZE="${6:-8}"                            # Local DP size on this node
+LOCAL_TP_SIZE="${7:-1}"                            # Local TP size on this node
+API_SERVERS="${8:-8}"                              # Number of API servers
 
 # Recommendations:
 # - TOTAL_DP_SIZE = LOCAL_DP_SIZE * NUMBER_OF_NODES
@@ -103,7 +89,7 @@ echo "║              vLLM Expert Parallel Configuration               ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 echo ""
 echo "Backend Configuration:"
-echo "  • Backend: ${all2all_backend}"
+echo "  • Backend: ${BACKEND}"
 echo "  • DeepGEMM: Enabled"
 echo ""
 echo "Node Configuration:"
@@ -117,7 +103,7 @@ echo "  • Total Data Parallel Size: ${TOTAL_DP_SIZE} (across all nodes)"
 echo "  • Local Data Parallel Size: ${LOCAL_DP_SIZE} (this node)"
 echo "  • Local Tensor Parallel Size: ${LOCAL_TP_SIZE} (this node)"
 echo "  • API Servers: ${API_SERVERS}"
-echo "  • Expert Parallel: Enabled (automatically calculated)"
+echo "  • Expert Parallel: Enabled"
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
@@ -128,7 +114,7 @@ echo ""
 
 vllm serve "${MODEL}" \
     --enable-expert-parallel \
-    --all2all-backend "${all2all_backend}" \
+    --all2all-backend "${BACKEND}" \
     --tensor-parallel-size "${LOCAL_TP_SIZE}" \
     --data-parallel-size "${TOTAL_DP_SIZE}" \
     --data-parallel-size-local "${LOCAL_DP_SIZE}" \

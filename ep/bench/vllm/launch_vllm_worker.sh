@@ -31,17 +31,6 @@ fi
 # PyTorch library path (required for DeepGEMM)
 export LD_LIBRARY_PATH=$(python3 -c "import torch; import os; print(os.path.join(torch.__path__[0], 'lib'))"):$LD_LIBRARY_PATH
 
-# ============================================================================
-# BACKEND CONFIGURATION
-# ============================================================================
-# CRITICAL: Must match Node 0 exactly!
-
-if [ -z "$VLLM_ALL2ALL_BACKEND" ]; then
-    all2all_backend="allgather_reducescatter"
-else
-    all2all_backend="$VLLM_ALL2ALL_BACKEND"
-    unset VLLM_ALL2ALL_BACKEND
-fi
 export VLLM_USE_DEEP_GEMM=1
 
 # ============================================================================
@@ -82,10 +71,11 @@ export DG_JIT_CACHE_DIR="/local_storage"
 NODE1_IP="$1"                                      # Primary node IP (REQUIRED)
 RPC_PORT="${2:-13345}"                             # Same RPC port as Node 0
 MODEL="${3:-deepseek-ai/DeepSeek-V3-0324}"         # Same model as Node 0
-TOTAL_DP_SIZE="${4:-16}"                           # Same total DP as Node 0
-LOCAL_DP_SIZE="${5:-8}"                            # Local DP on this node
-LOCAL_TP_SIZE="${6:-1}"                            # Local TP on this node
-START_RANK="${7:-8}"                               # Starting rank offset
+BACKEND="${4:-allgather_reducescatter}"            # Backend to use
+TOTAL_DP_SIZE="${5:-16}"                           # Same total DP as Node 0
+LOCAL_DP_SIZE="${6:-8}"                            # Local DP on this node
+LOCAL_TP_SIZE="${7:-1}"                            # Local TP on this node
+START_RANK="${8:-8}"                               # Starting rank offset
 
 # START_RANK calculation:
 # - Node 1: LOCAL_DP_SIZE of Node 0 (e.g., 8)
@@ -102,7 +92,7 @@ echo "║         vLLM Expert Parallel - Secondary Node Config          ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 echo ""
 echo "Backend Configuration:"
-echo "  • Backend: ${all2all_backend}"
+echo "  • Backend: ${BACKEND}"
 echo "  • DeepGEMM: Enabled"
 echo ""
 echo "Node Configuration:"
@@ -116,7 +106,7 @@ echo "  • Total Data Parallel Size: ${TOTAL_DP_SIZE} (across all nodes)"
 echo "  • Local Data Parallel Size: ${LOCAL_DP_SIZE} (this node)"
 echo "  • Local Tensor Parallel Size: ${LOCAL_TP_SIZE} (this node)"
 echo "  • Starting Rank: ${START_RANK}"
-echo "  • Expert Parallel: Enabled (automatically calculated)"
+echo "  • Expert Parallel: Enabled"
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
@@ -127,7 +117,7 @@ echo ""
 
 vllm serve "${MODEL}" \
     --enable-expert-parallel \
-    --all2all-backend "${all2all_backend}" \
+    --all2all-backend "${BACKEND}" \
     --tensor-parallel-size "${LOCAL_TP_SIZE}" \
     --data-parallel-size "${TOTAL_DP_SIZE}" \
     --data-parallel-size-local "${LOCAL_DP_SIZE}" \
