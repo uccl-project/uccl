@@ -2,13 +2,13 @@
 
 First build and install UCCL-EP:
 ```bash
-pushd ../../
+cd uccl
 bash build.sh cuda ep
 uv pip install wheelhouse-cuda/uccl-*.whl
-popd
 ```
 
 Then install UCCL-EP's drop-in replacement for DeepEP:
 ```bash
+cd uccl/ep/deep_ep_wrapper
 python setup.py install
 ```

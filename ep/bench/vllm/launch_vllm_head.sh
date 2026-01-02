@@ -52,7 +52,7 @@ export VLLM_USE_DEEP_GEMM=1
 # For InfiniBand/EFA clusters: Prevent initialization hangs
 # This ensures torch distributed uses Ethernet for initial setup
 # Find your network interface: ip addr show | grep -E 'eth|enp'
-export GLOO_SOCKET_IFNAME=enp71s0         # Change to your primary network interface
+export GLOO_SOCKET_IFNAME=enp71s0       # Change to your primary network interface
 export NCCL_SOCKET_IFNAME=enp71s0       # Uncomment if using NCCL
 export TP_SOCKET_IFNAME=enp71s0         # Uncomment if using tensor parallel
 
