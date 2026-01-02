@@ -73,7 +73,6 @@ export NCCL_BUFFSIZE=8388608
 
 # https://github.com/vllm-project/vllm/pull/27444
 export VLLM_ENGINE_READY_TIMEOUT_S=3600
-export DG_JIT_CACHE_DIR=/opt/dlami/nvme
 
 # ============================================================================
 # ARGUMENTS PARSING

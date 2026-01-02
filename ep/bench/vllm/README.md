@@ -60,7 +60,7 @@ For AWS instances with EFA, install AWS OFI-NCCL plugin, which is pre-installed 
 
 ### Network Interface Detection
 
-Find your network interface:
+Find your network interface and IP:
 
 ```bash
 # List all network interfaces
@@ -68,7 +68,6 @@ ip addr show
 
 # Common interface names:
 # - eth0, eno1, enp0s3 (Ethernet)
-# - ib0, ib1 (InfiniBand)
 # - enp74s0, ens5 (Custom/AWS EFA)
 ```
 
@@ -89,27 +88,12 @@ Edit the provided scripts (`launch_vllm_head.sh` and `launch_vllm_worker.sh`) to
 
 1. **Network interfaces** - Set `GLOO_SOCKET_IFNAME`, `NCCL_SOCKET_IFNAME`
 1. **Backend** - Choose appropriate `VLLM_ALL2ALL_BACKEND`
-1. **Model storage** - eg, `export HF_HOME=/emlfsx_southeast3/eml-folder/xzhiying`
+1. **Model storage** - Set `HF_HOME` to some folder with large storage
 
 
 ## 🚢 Deployment
 
-### Single Node Deployment
-
-For single-node deployment (e.g., 8 GPUs on one node):
-
-```bash
-# Using pplx backend (recommended for single node)
-vllm serve deepseek-ai/DeepSeek-V3-0324 \
---all2all-backend pplx \
---tensor-parallel-size 1 \
---data-parallel-size 8 \
---enable-expert-parallel
-```
-
-### Multi-Node Deployment (2+ Nodes)
-
-#### Step 1: Start Node 0 (Primary)
+### Step 1: Start Node 0 (Primary)
 
 On the **first node** (primary node that handles API requests):
 
@@ -117,7 +101,7 @@ On the **first node** (primary node that handles API requests):
 bash launch_vllm_head.sh 10.4.164.146 13345 deepseek-ai/DeepSeek-V3-0324 16 8 1 8
 ```
 
-#### Step 2: Start Node 1+ (Secondary)
+### Step 2: Start Node 1+ (Secondary)
 
 On **each additional node** (secondary nodes in headless mode):
 
