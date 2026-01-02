@@ -1,7 +1,14 @@
 ## DeepEP Wrapper of UCCL-EP
 
-```
-python setup.py install
+First build and install UCCL-EP:
+```bash
+cd uccl
+bash build.sh cuda ep
+uv pip install wheelhouse-cuda/uccl-*.whl
 ```
 
-pip install ../../wheelhouse-cuda/uccl-0.0.1.post4-py3-none-any.whl
+Then install UCCL-EP's drop-in replacement for DeepEP:
+```bash
+cd ep/deep_ep_wrapper
+python setup.py install
+```
