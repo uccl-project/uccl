@@ -1058,9 +1058,9 @@ __global__ void __launch_bounds__(
               dst_rdma_rank == rdma_rank, d2h_channel_addrs,
               num_d2h_channel_addrs, false, -1,
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-              false,
+              false
 #else
-              true,
+              true
 #endif
           );
         }
@@ -2622,7 +2622,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
                 -1,
 #else
-                -1,
                 reinterpret_cast<uint64_t>(
                     rdma_channel_tail.buffer(rdma_rank)) -
                     reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
@@ -2646,9 +2645,9 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                 dst_rdma_rank == rdma_rank, d2h_channel_addrs,
                 num_d2h_channel_addrs, false, -1,
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-                false,
+                false
 #else
-                true,
+                true
 #endif
             );
           }

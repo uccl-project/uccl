@@ -183,7 +183,7 @@ void Proxy::init_common() {
     ctx_.atomic_buffer_mr =
         ibv_reg_mr(ctx_.pd, atomic_buffer_ptr_, kAtomicBufferSize,
                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                       IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC);
+                       IBV_ACCESS_REMOTE_READ);
 
     if (!ctx_.atomic_buffer_mr) {
       perror("Failed to register atomic_buffer_ptr MR");
