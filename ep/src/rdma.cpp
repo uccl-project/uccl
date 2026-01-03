@@ -319,7 +319,8 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                               IBV_ACCESS_REMOTE_ATOMIC);
 #else
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+    IBV_ACCESS_RELAXED_ORDERING);
 #endif
 
   if (!S.mr) {
@@ -522,6 +523,9 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   // for this thread) This ensures all threads exchange the same atomic buffer
   // info
   if (S.atomic_buffer_mr) {
+#ifdef EFA
+    assert(false && "This path should not happen for EFA");
+#endif
     local_info->atomic_buffer_rkey = S.atomic_buffer_mr->rkey;
     local_info->atomic_buffer_addr =
         reinterpret_cast<uintptr_t>(S.atomic_buffer_mr->addr);
