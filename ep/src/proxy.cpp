@@ -1131,7 +1131,7 @@ void Proxy::send_barrier(uint64_t wr) {
 #endif
   assert(ctx_.barrier_wr == -1 && "barrier_wr should be 0");
   ctx_.barrier_wr = wr;
-  ctx_.barrier_seq = ctx_.barrier_seq + 1;
+  ctx_.barrier_seq = (ctx_.barrier_seq + 1) & BarrierImm::kSeqMask;
 
   if (cfg_.rank == ctx_.node_leader_rank) {
     if (ctx_.barrier_arrived.size() != static_cast<size_t>(cfg_.num_nodes)) {
@@ -1211,7 +1211,7 @@ void Proxy::barrier_check() {
   // When global release comes back (CQ handler should set these):
   // NOTE: BarrierImm is 21 bits, so we must mask the local seq.
   if (ctx_.barrier_released &&
-      ctx_.barrier_release_seq == (seq & BarrierImm::kSeqMask)) {
+      ctx_.barrier_release_seq == seq) {
     // Reset local mask for next barrier and consume the global release
     ctx_.barrier_released = false;
 
