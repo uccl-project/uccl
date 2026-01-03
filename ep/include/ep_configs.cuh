@@ -9,18 +9,18 @@
 #define FINISHED_SUM_TAG 1024
 #define NUM_WAIT_NANOSECONDS 500
 
-// #define ENABLE_FAST_DEBUG
+#define ENABLE_FAST_DEBUG
 #ifndef ENABLE_FAST_DEBUG
 #define NUM_CPU_TIMEOUT_SECS 100
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-#define NUM_TIMEOUT_CYCLES 20000000000ull
+#define NUM_TIMEOUT_CYCLES 200000000000ull
 #else
 #define NUM_TIMEOUT_CYCLES 200000000000ull  // 200G cycles ~= 100s
 #endif
 #else
 #define NUM_CPU_TIMEOUT_SECS 10
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-#define NUM_TIMEOUT_CYCLES 2000000000ull
+#define NUM_TIMEOUT_CYCLES 20000000000ull
 #else
 #define NUM_TIMEOUT_CYCLES 20000000000ull  // 20G cycles ~= 10s
 #endif

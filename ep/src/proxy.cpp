@@ -418,7 +418,7 @@ void Proxy::init_remote() {
 void Proxy::run_sender() {
   printf("CPU sender thread %d started\n", cfg_.thread_idx);
   init_sender();
-  size_t seen = 0;
+  uint64_t seen = 0;
   uint64_t my_tail = 0;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     local_poll_completions(ctx_, acked_wrs_, cfg_.thread_idx, ctx_by_tag_);
@@ -462,7 +462,7 @@ void Proxy::run_dual() {
 #endif
   }
   uint64_t my_tail = 0;
-  size_t seen = 0;
+  uint64_t seen = 0;
   std::set<PendingUpdate> pending_atomic_updates;
   while (ctx_.progress_run.load(std::memory_order_acquire)) {
     poll_cq_dual(ctx_, acked_wrs_, cfg_.thread_idx, ring, ctx_by_tag_,
@@ -527,8 +527,8 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   }
 #else
   for (auto wr_id : acked_wrs_) {
-    size_t const rb_idx = (wr_id >> 32) & 0xFFFFFFFF;
-    size_t const cmd_idx = wr_id & 0xFFFFFFFF;
+    size_t const rb_idx = ring_wr_idx(wr_id);
+    size_t const cmd_idx = ring_wr_seq(wr_id);
 
     if (rb_idx >= cfg_.d2h_queues.size()) {
       fprintf(stderr, "Invalid rb_idx %zu in acked_wrs_\n", rb_idx);
@@ -549,7 +549,7 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
 #endif
 }
 
-void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
+void Proxy::post_gpu_command(uint64_t& my_tail, uint64_t& seen) {
   // Multi-ring buffer processing: collect commands from all ring buffers
   // Process each ring buffer (similar to test_multi_ring_throughput.cu)
   for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); rb_idx++) {
@@ -581,8 +581,8 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
         break;
       }
 
-      uint64_t unique_wr_id = (static_cast<uint64_t>(rb_idx) << 32) |
-                              (fifo_seq_[rb_idx]++ & 0xFFFFFFFFULL);
+      uint64_t seq = fifo_seq_[rb_idx]++;
+      uint64_t unique_wr_id = make_ring_wr_id(seq, rb_idx);
       wrs_to_post.push_back(unique_wr_id);
       cmds_to_post.push_back(cmd);
       fifo_pending_[rb_idx].push_back(unique_wr_id);
@@ -655,9 +655,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
           std::abort();
         }
       }
-
-      // Use a unique ID combining ring buffer index and command index
-      uint64_t unique_wr_id = (rb_idx << 32) | i;
+      uint64_t unique_wr_id = make_ring_wr_id(i, rb_idx);
       wrs_to_post.push_back(unique_wr_id);
       cmds_to_post.push_back(cmd_entry);
 #ifdef MEASURE_PER_VERB_LATENCY
@@ -903,23 +901,26 @@ void Proxy::post_gpu_commands_mixed(
     atomic_cmds.clear();
   }
 
-  if (!barrier_cmds.empty()) {
-#ifdef USE_MSCCLPP_FIFO_BACKEND
-    assert(barrier_wrs.size() == 1 && ctx_.barrier_wr == -1);
-#endif
-    send_barrier(barrier_wrs[0]);
-    barrier_wrs.clear();
-    barrier_cmds.clear();
-  }
-
+  /* NOTE: quiet before barrier. */
   if (!quiet_cmds.empty()) {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
     assert(quiet_wrs.size() == 1 && ctx_.quiet_wr == -1);
+    assert(barrier_wrs.empty() && ctx_.barrier_wr == -1);
 #endif
     ctx_.quiet_wr = quiet_wrs[0];
     quiet(quiet_wrs, quiet_cmds);
     quiet_wrs.clear();
     quiet_cmds.clear();
+  }
+
+  if (!barrier_cmds.empty()) {
+#ifdef USE_MSCCLPP_FIFO_BACKEND
+    assert(barrier_wrs.size() == 1 && ctx_.barrier_wr == -1);
+    assert(quiet_wrs.empty() && ctx_.quiet_wr == -1);
+#endif
+    send_barrier(barrier_wrs[0]);
+    barrier_wrs.clear();
+    barrier_cmds.clear();
   }
 }
 
@@ -960,17 +961,19 @@ void Proxy::quiet_cq() {
     if (outstanding_batches() == 0 && empty_iters >= kConsecutiveEmptyToExit) {
       break;
     }
-    auto now = clock::now();
-    if (now - last_log > std::chrono::milliseconds(1000)) {
+    // auto now = clock::now();
+    if (clock::now() - last_log > std::chrono::milliseconds(1000)) {
       fprintf(stderr, "[quiet] polling... outstanding=%zu\n",
               outstanding_batches());
-      last_log = now;
+      // last_log = now;
     }
   }
 }
 
 void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
   assert(cmds.size() == 1 && "quiet size must be 1");
+  assert(wrs.size() == 1 && "wrs size must be 1");
+  // printf("rank: %d, thread: %d, quiet\n", cfg_.rank, cfg_.thread_idx);
   quiet_cq();
   acked_wrs_.insert(wrs[0]);
 }
@@ -1125,6 +1128,7 @@ void Proxy::post_barrier_msg(int dst_rank, bool ack, uint64_t seq) {
 }
 
 void Proxy::send_barrier(uint64_t wr) {
+  // printf("rank: %d, thread: %d, send_barrier\n", cfg_.rank, cfg_.thread_idx);
 #ifndef USE_MSCCLPP_FIFO_BACKEND
   assert(!ctx_.barrier_inflight && "only one barrier at a time");
   ctx_.barrier_inflight = true;
@@ -1233,8 +1237,8 @@ void Proxy::barrier_check() {
   if (cfg_.rank == ctx_.node_leader_rank) {
     bool all_local_arrived = true;
     for (int lr = 0; lr < ctx_.num_local_ranks; ++lr) {
-      uint32_t seen = lb->arrive_seq[lr].load(std::memory_order_acquire);
-      if ((uint32_t)seen != seq) {
+      uint64_t seen = lb->arrive_seq[lr].load(std::memory_order_acquire);
+      if (seen != seq) {
         all_local_arrived = false;
         break;
       }

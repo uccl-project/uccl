@@ -30,7 +30,7 @@ extern bool use_ll_sl;
 #endif
 
 #define USE_MSCCLPP_FIFO_BACKEND
-// #define USE_SUBSET_BARRIER
+#define USE_SUBSET_BARRIER
 #define kAtomicBufferSize 81960
 #define kQueueSize 2048
 #define kQueueMask (kQueueSize - 1)
@@ -62,6 +62,20 @@ extern bool use_ll_sl;
 #define kBarrierWrTag 0xbaba000000000000ULL
 #define kBarrierMask 0x0000FFFFFFFFFFFFULL
 #define kPrintCycleInterval 100000000000ULL
+#define kRingIdxBits 10
+#define kRingIdxMask ((1ULL << kRingIdxBits) - 1ULL)
+#define kRingIdxShift kRingIdxBits
+
+// WR ID helpers for ring-indexed work requests:
+//   - lower kRingIdxBits bits: ring index
+//   - upper bits: sequence / command index
+inline uint64_t make_ring_wr_id(uint64_t seq, uint64_t ring_idx) {
+  return (seq << kRingIdxBits) | (ring_idx & kRingIdxMask);
+}
+inline uint64_t ring_wr_seq(uint64_t wrid) { return wrid >> kRingIdxBits; }
+inline uint32_t ring_wr_idx(uint64_t wrid) {
+  return static_cast<uint32_t>(wrid & kRingIdxMask);
+}
 #define MAX_RETRIES 100
 #define RETRY_DELAY_MS 50
 #define QKEY 0x11111111u

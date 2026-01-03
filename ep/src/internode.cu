@@ -135,7 +135,7 @@ __global__ void notify_dispatch(
       uccl::nvshmem_sync_with_same_gpu_idx(d2h_channel_addrs,
                                            num_d2h_channel_addrs, nvl_rank);
     }
-    barrier_block<NUM_MAX_NVL_PEERS, true>(barrier_signal_ptrs, nvl_rank);
+    barrier_block<NUM_MAX_NVL_PEERS, true, 1>(barrier_signal_ptrs, nvl_rank);
 
     // Send numbers of tokens per rank/expert to RDMA ranks
     auto rdma_buffer_ptr_int = static_cast<int*>(rdma_buffer_ptr);
@@ -290,7 +290,7 @@ __global__ void notify_dispatch(
         nvl_send_num_tokens_per_expert.buffer(nvl_rank)[i] =
             nvl_reduced_num_tokens_per_expert[thread_id * num_nvl_experts + i];
     }
-    barrier_block<NUM_MAX_NVL_PEERS>(barrier_signal_ptrs, nvl_rank);
+    barrier_block<NUM_MAX_NVL_PEERS, false, 2>(barrier_signal_ptrs, nvl_rank);
 
     // Reduce the number of tokens per rank/expert
     EP_DEVICE_ASSERT(num_nvl_experts <= num_threads);
@@ -323,7 +323,7 @@ __global__ void notify_dispatch(
     if (thread_id == WARP_SIZE)
       uccl::nvshmem_sync_with_same_gpu_idx(d2h_channel_addrs,
                                            num_d2h_channel_addrs, nvl_rank);
-    barrier_block<NUM_MAX_NVL_PEERS>(barrier_signal_ptrs, nvl_rank);
+    barrier_block<NUM_MAX_NVL_PEERS, false, 3>(barrier_signal_ptrs, nvl_rank);
   } else {
     // Calculate meta data
     int dst_rdma_rank = sm_id - 1;
@@ -1207,7 +1207,15 @@ __global__ void __launch_bounds__(
         int seen_bits = ld_nc_global(reinterpret_cast<SourceMeta*>(
                                          shifted + hidden_bytes + scale_bytes))
                             .is_token_in_nvl_rank_bits;
-        if (seen_bits == 0) trap();
+        if (seen_bits == 0) {
+          printf("DeepEP dispatch forwarder timeout (RDMA check), channel: %d, "
+              "RDMA: %d, nvl: %d, dst NVL: %d, src RDMA lane: %d, head: %d, "
+              "tail: %d, expected: %d\n",
+              channel_id, rdma_rank, nvl_rank, dst_nvl_rank, lane_id,
+              cached_rdma_channel_head, cached_rdma_channel_tail,
+              num_tokens_to_recv_from_rdma);
+          trap();
+        }
         lane_id == src_rdma_rank ? (num_tokens_to_recv_from_rdma -= 1) : 0;
         bool is_in_dst_nvl_rank = (seen_bits >> dst_nvl_rank) & 1;
         if (lane_id == src_rdma_rank) {
@@ -1597,7 +1605,7 @@ __global__ void cached_notify(
                                            num_d2h_channel_addrs, nvl_rank, 3);
 
     // Barrier for NVL
-    barrier_block<NUM_MAX_NVL_PEERS, true>(barrier_signal_ptrs, nvl_rank);
+    barrier_block<NUM_MAX_NVL_PEERS, true, 4>(barrier_signal_ptrs, nvl_rank);
 
     // Clean RDMA buffer
     auto rdma_buffer_ptr_int = static_cast<int*>(rdma_buffer_ptr);
@@ -1634,7 +1642,7 @@ __global__ void cached_notify(
       uccl::nvshmem_sync_with_same_gpu_idx(d2h_channel_addrs,
                                            num_d2h_channel_addrs, nvl_rank);
 
-    barrier_block<NUM_MAX_NVL_PEERS>(barrier_signal_ptrs, nvl_rank);
+    barrier_block<NUM_MAX_NVL_PEERS, false, 5>(barrier_signal_ptrs, nvl_rank);
   } else if (sm_id == 1) {
     if (is_cached_dispatch) return;
 

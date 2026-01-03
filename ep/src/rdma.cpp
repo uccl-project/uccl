@@ -96,6 +96,57 @@ void send_connection_info_as_client(int my_rank, int peer, char const* peer_ip,
   close(sockfd);
 }
 
+// Helper function to get the root complex PCI bus identifier from a device path
+// Returns something like "pci0000:00" or "pci0000:10" to match the terminal output format
+static std::string get_root_complex_id(std::filesystem::path const& dev_path) {
+  static const std::regex pci_bus_re(R"(pci0000:[0-9a-fA-F]+)", std::regex_constants::icase);
+  
+  try {
+    // Canonicalize the path to get the full sysfs path
+    // e.g., /sys/devices/pci0000:00/0000:00:02.0/0000:02:00.0/...
+    std::filesystem::path canonical_path;
+    try {
+      canonical_path = std::filesystem::canonical(dev_path);
+    } catch (...) {
+      // If canonical fails, try as-is
+      canonical_path = dev_path;
+    }
+    
+    // Convert to string and search for pci0000:XX pattern
+    std::string path_str = canonical_path.string();
+    std::smatch match;
+    if (std::regex_search(path_str, match, pci_bus_re)) {
+      std::string result = match.str();
+      // Normalize to lowercase for consistent comparison
+      std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+      return result;
+    }
+    
+    // Fallback: walk up the path looking for a component that matches
+    std::filesystem::path p = canonical_path;
+    while (p != p.root_path() && p != p.parent_path()) {
+      std::string component = p.filename().string();
+      if (std::regex_match(component, pci_bus_re)) {
+        // Normalize to lowercase for consistent comparison
+        std::transform(component.begin(), component.end(), component.begin(), ::tolower);
+        return component;
+      }
+      p = p.parent_path();
+    }
+  } catch (...) {
+    // If everything fails, try the original path
+    std::string path_str = dev_path.string();
+    std::smatch match;
+    if (std::regex_search(path_str, match, pci_bus_re)) {
+      std::string result = match.str();
+      std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+      return result;
+    }
+  }
+  
+  return "";  // Not found
+}
+
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                           int thread_idx, int local_rank) {
   if (S.context) return;  // already initialized
@@ -115,9 +166,19 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   auto ib_nics = uccl::get_rdma_nics();
   // Get GPU pcie path
   auto gpu_device_path = gpu_cards[gpu_idx];
+  // Get GPU root complex PCI bus identifier (e.g., "pci0000:00")
+  std::string gpu_root_complex = get_root_complex_id(gpu_device_path);
+  fprintf(stderr, "[DEBUG] GPU %d path: %s, root complex: %s\n", 
+          gpu_idx, gpu_device_path.c_str(), 
+          gpu_root_complex.empty() ? "(empty)" : gpu_root_complex.c_str());
+  
   // Find the RDMA NIC that is closest to the GPU.
   std::vector<std::pair<std::string, uint32_t>> dist;
   dist.reserve(ib_nics.size());
+  
+  // Separate NICs by root complex: same root complex vs different
+  std::vector<std::pair<std::string, uint32_t>> same_root_complex_dist;
+  std::vector<std::pair<std::string, uint32_t>> different_root_complex_dist;
 
   // Conforming to UCCL_IB_HCA filter.
   char* ib_hca = getenv("UCCL_IB_HCA");
@@ -136,23 +197,49 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       continue;
     }
     uint32_t d = uccl::safe_pcie_distance(gpu_device_path, nic.second);
+    std::string nic_root_complex = get_root_complex_id(nic.second);
+    
+    // Prioritize NICs on the same root complex
+    if (!gpu_root_complex.empty() && !nic_root_complex.empty() &&
+        gpu_root_complex == nic_root_complex) {
+      same_root_complex_dist.emplace_back(nic.first, d);
+      fprintf(stderr, "[DEBUG] NIC %s matches GPU root complex %s (distance %u)\n",
+              nic.first.c_str(), gpu_root_complex.c_str(), d);
+    } else {
+      different_root_complex_dist.emplace_back(nic.first, d);
+      if (!nic_root_complex.empty()) {
+        fprintf(stderr, "[DEBUG] NIC %s root complex %s != GPU root complex %s (distance %u)\n",
+                nic.first.c_str(), nic_root_complex.c_str(), 
+                gpu_root_complex.empty() ? "(empty)" : gpu_root_complex.c_str(), d);
+      }
+    }
     dist.emplace_back(nic.first, d);
   }
 
-  // Find the NIC with the minimum distance.
+  // Find the NIC with the minimum distance, prioritizing same root complex.
   if (dist.empty()) {
     fprintf(stderr, "[WARN] no NIC found, defaulting to empty\n");
     selected_nic_name.clear();
   } else {
-    // Find the minimum distance
+    // Use same root complex NICs if available, otherwise fall back to all NICs
+    std::vector<std::pair<std::string, uint32_t>>* dist_to_use = &dist;
+    if (!same_root_complex_dist.empty()) {
+      dist_to_use = &same_root_complex_dist;
+      fprintf(stderr, "[DEBUG] Using %zu same-root-complex NICs (out of %zu total)\n",
+              same_root_complex_dist.size(), dist.size());
+    } else {
+      fprintf(stderr, "[DEBUG] No same-root-complex NICs found, using all %zu NICs\n",
+              dist.size());
+    }
+    
     auto min_it = std::min_element(
-        dist.begin(), dist.end(),
+        dist_to_use->begin(), dist_to_use->end(),
         [](auto const& a, auto const& b) { return a.second < b.second; });
     auto min_d = min_it->second;
 
     // Collect all NICs with equal minimum distance
     std::vector<std::string> candidates;
-    for (auto& p : dist) {
+    for (auto& p : *dist_to_use) {
 #ifdef EFA
       if (p.second == min_d && strncmp(p.first.c_str(), "rdmap", 5) == 0)
         candidates.push_back(p.first);
@@ -164,7 +251,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 
     if (candidates.empty()) {
       fprintf(stderr, "[WARN] no candidate NIC found, defaulting to first\n");
-      selected_nic_name = dist.front().first;
+      selected_nic_name = dist_to_use->front().first;
     } else {
       // Spread GPUs across equal-distance NICs: use local GPU index modulo
       // For example, pass in `local_rank` or derive gpu_index from device path
@@ -768,8 +855,7 @@ static void post_rdma_async_batched_normal_mode(
     ring_to_indices.reserve(k);
     for (size_t j = 0; j < k; ++j) {
       size_t i = wr_ids[j];
-      size_t ring_idx =
-          static_cast<size_t>((wrs_to_post[i] >> 32) & 0xFFFFFFFFu);
+      size_t ring_idx = static_cast<size_t>(ring_wr_idx(wrs_to_post[i]));
       ring_to_indices[ring_idx].push_back(i);
     }
 
@@ -2124,13 +2210,11 @@ static void post_atomic_operations_normal_mode(
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
     size_t const k = wr_ids.size();
-    // Group by ring index (upper 32 bits in wrs_to_post)
     std::unordered_map<size_t, std::vector<size_t>> ring_to_indices;
     ring_to_indices.reserve(k);
     for (size_t ii = 0; ii < k; ++ii) {
       size_t global_i = wr_ids[ii];
-      size_t ring_idx =
-          static_cast<size_t>((wrs_to_post[global_i] >> 32) & 0xFFFFFFFFu);
+      size_t ring_idx = static_cast<size_t>(ring_wr_idx(wrs_to_post[global_i]));
       ring_to_indices[ring_idx].push_back(global_i);
     }
 
@@ -2457,13 +2541,12 @@ static void post_atomic_operations_native_rdma(
 
     ProxyCtx* ctx = ctxs[dst_rank].get();
     size_t const k = wr_ids.size();
-    // Group by ring index (upper 32 bits in wrs_to_post)
+
     std::unordered_map<size_t, std::vector<size_t>> ring_to_indices;
     ring_to_indices.reserve(k);
     for (size_t ii = 0; ii < k; ++ii) {
       size_t global_i = wr_ids[ii];
-      size_t ring_idx =
-          static_cast<size_t>((wrs_to_post[global_i] >> 32) & 0xFFFFFFFFu);
+      size_t ring_idx = static_cast<size_t>(ring_wr_idx(wrs_to_post[global_i]));
       ring_to_indices[ring_idx].push_back(global_i);
     }
 
@@ -2515,7 +2598,10 @@ static void post_atomic_operations_native_rdma(
         group_wrids.push_back(wr_id);
 
         int v = static_cast<int>(cmd.value);
-        if (v == kLargeAtomicValue) v = kMaxSendAtomicValue;
+        if (v >= kLargeAtomicValue) {
+          printf("Large atomic value: %d\n", v);
+          // v = kMaxSendAtomicValue;
+        }
 
         // Convert 32-bit signed int to 64-bit for RDMA atomics
         // IBV_WR_ATOMIC_FETCH_AND_ADD requires 64-bit operations
