@@ -288,13 +288,14 @@ struct BarrierImm {
   // [28:8]=SEQ (21 bits), [7:0]=SRC_RANK
   static constexpr uint32_t kCtrlBit = 1u << 30;
   static constexpr uint32_t kAckBit = 1u << 29;
+  static constexpr uint32_t kSeqMask = 0x1FFFFFu;
   static inline bool IsAck(uint32_t imm) { return (imm & kAckBit) != 0u; }
   static inline uint32_t Pack(bool ack, uint32_t seq, uint8_t src_rank) {
     return kCtrlBit | (ack ? kAckBit : 0u) |
-           ((seq & 0x1FFFFFu) << 8)  // 21 bits for seq
+           ((seq & kSeqMask) << 8)  // 21 bits for seq
            | uint32_t(src_rank);
   }
-  static inline uint32_t Seq(uint32_t imm) { return (imm >> 8) & 0x1FFFFFu; }
+  static inline uint32_t Seq(uint32_t imm) { return (imm >> 8) & kSeqMask; }
   static inline uint8_t Rank(uint32_t imm) { return imm & 0xFFu; }
   explicit BarrierImm(uint32_t imm = 0) : value(imm) {}
   bool GetIsAck() const { return IsAck(value); }

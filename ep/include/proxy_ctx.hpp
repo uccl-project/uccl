@@ -108,7 +108,8 @@ struct ProxyCtx {
 
   // Async-barrier state (single inflight assumed)
   bool barrier_inflight = false;
-  uint64_t barrier_seq = 0;
+  // For debuigging only. 
+  uint64_t barrier_seq = (1 << 22) - 100000;
   int barrier_wr = -1;
 
   bool quiet_inflight = false;

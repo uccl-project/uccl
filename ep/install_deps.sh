@@ -17,7 +17,7 @@ get_cuda_version() {
 }
 
 # Install common dependencies
-# sudo apt install -y nvtop libgoogle-glog-dev clang-format-14 python3-pip
+sudo apt install -y nvtop libgoogle-glog-dev clang-format-14 python3-pip
 pip install pybind11 --upgrade
 pip install black
 
@@ -58,7 +58,7 @@ fi
 
 # Verify PyTorch installation
 echo "Verifying PyTorch installation..."
-if python3.10 -c "import torch" &> /dev/null; then
+if python -c "import torch" &> /dev/null; then
     echo "PyTorch installed successfully"
 else
     echo "PyTorch installation failed. Please check your network connection or install manually."
@@ -67,9 +67,9 @@ fi
 
 # Get PyTorch include paths
 echo "Retrieving PyTorch path information..."
-TORCH_INCLUDE=$(python3.10 -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent / 'include')")
-TORCH_API_INCLUDE=$(python3.10 -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent / 'include/torch/csrc/api/include')")
-TORCH_LIB=$(python3.10 -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent / 'lib')")
+TORCH_INCLUDE=$(python -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent / 'include')")
+TORCH_API_INCLUDE=$(python -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent / 'include/torch/csrc/api/include')")
+TORCH_LIB=$(python -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent / 'lib')")
 
 # Configure environment variables
 echo "Configuring environment variables..."

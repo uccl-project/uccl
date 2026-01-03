@@ -45,7 +45,7 @@ LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
       perror("shm_open(existing)");
       return nullptr;
     }
-    struct stat st {};
+    struct stat st{};
     int tries = 1000;
     while (tries-- > 0) {
       if (fstat(fd, &st) == 0 && static_cast<size_t>(st.st_size) >= kSize)
@@ -183,7 +183,12 @@ void Proxy::init_common() {
     ctx_.atomic_buffer_mr =
         ibv_reg_mr(ctx_.pd, atomic_buffer_ptr_, kAtomicBufferSize,
                    IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                       IBV_ACCESS_REMOTE_READ);
+#ifdef EFA
+                       IBV_ACCESS_REMOTE_READ
+#else
+                        IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC
+#endif
+                        );
 
     if (!ctx_.atomic_buffer_mr) {
       perror("Failed to register atomic_buffer_ptr MR");
@@ -499,7 +504,7 @@ void Proxy::run_dual() {
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   if (acked_wrs_.empty()) return;
 
-    // Mark all acked command slots in each ring's bitmask
+  // Mark all acked command slots in each ring's bitmask
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   // FIFO path: pop in order using the pending deque and the completion set.
   for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); ++rb_idx) {
@@ -1135,7 +1140,7 @@ void Proxy::send_barrier(uint64_t wr) {
 #endif
   assert(ctx_.barrier_wr == -1 && "barrier_wr should be 0");
   ctx_.barrier_wr = wr;
-  ctx_.barrier_seq = ctx_.barrier_seq + 1;
+  ctx_.barrier_seq = (ctx_.barrier_seq + 1) & BarrierImm::kSeqMask;
 
   if (cfg_.rank == ctx_.node_leader_rank) {
     if (ctx_.barrier_arrived.size() != static_cast<size_t>(cfg_.num_nodes)) {
@@ -1213,7 +1218,9 @@ void Proxy::barrier_check() {
   }
 
   // When global release comes back (CQ handler should set these):
-  if (ctx_.barrier_released && ctx_.barrier_release_seq == seq) {
+  // NOTE: BarrierImm is 21 bits, so we must mask the local seq.
+  if (ctx_.barrier_released &&
+      ctx_.barrier_release_seq == seq) {
     // Reset local mask for next barrier and consume the global release
     ctx_.barrier_released = false;
 
