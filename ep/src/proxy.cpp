@@ -45,7 +45,7 @@ LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
       perror("shm_open(existing)");
       return nullptr;
     }
-    struct stat st {};
+    struct stat st{};
     int tries = 1000;
     while (tries-- > 0) {
       if (fstat(fd, &st) == 0 && static_cast<size_t>(st.st_size) >= kSize)
@@ -499,7 +499,7 @@ void Proxy::run_dual() {
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   if (acked_wrs_.empty()) return;
 
-    // Mark all acked command slots in each ring's bitmask
+  // Mark all acked command slots in each ring's bitmask
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   // FIFO path: pop in order using the pending deque and the completion set.
   for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); ++rb_idx) {
@@ -1209,7 +1209,9 @@ void Proxy::barrier_check() {
   }
 
   // When global release comes back (CQ handler should set these):
-  if (ctx_.barrier_released && ctx_.barrier_release_seq == seq) {
+  // NOTE: BarrierImm is 21 bits, so we must mask the local seq.
+  if (ctx_.barrier_released &&
+      ctx_.barrier_release_seq == (seq & BarrierImm::kSeqMask)) {
     // Reset local mask for next barrier and consume the global release
     ctx_.barrier_released = false;
 
