@@ -1,22 +1,22 @@
 #pragma once
 
-#include "efa/define.h"
-#ifdef UCCL_P2P_USE_EFA
-#include "efa/efa_endpoint.h"
-#endif
 #include "transport.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
 #include "util/net.h"
 #include "util/shared_pool.h"
 #include "util/util.h"
+#include <glog/logging.h>
 #include <infiniband/verbs.h>
 #include <pybind11/pybind11.h>
 #include <atomic>
+#include <cstdlib>
+#include <cstring>
 #include <shared_mutex>
 #include <string>
 #include <thread>
 #include <tuple>
+#include <type_traits>
 #include <unordered_map>
 #include <variant>
 #include <vector>
@@ -24,6 +24,97 @@
 namespace py = pybind11;
 
 extern thread_local bool inside_python;
+
+// Forward declaration
+struct ibv_mr;
+
+inline int parseLogLevelFromEnv() {
+  char const* env = std::getenv("UCCL_P2P_LOG_LEVEL");
+  if (!env) {
+    return google::WARNING;
+  }
+
+  if (!strcasecmp(env, "INFO")) return google::INFO;
+  if (!strcasecmp(env, "WARNING")) return google::WARNING;
+  if (!strcasecmp(env, "ERROR")) return google::ERROR;
+  if (!strcasecmp(env, "FATAL")) return google::FATAL;
+
+  char* end = nullptr;
+  long val = std::strtol(env, &end, 10);
+  if (end != env && val >= 0 && val <= 3) {
+    return static_cast<int>(val);
+  }
+
+  return google::WARNING;
+}
+
+namespace unified {
+static constexpr int kNICContextNumber = 4;
+
+inline size_t channelIdToContextId(uint32_t channel_id) {
+  return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;
+}
+
+template <typename T = uint32_t>
+struct RKeyArrayT {
+  T keys[kNICContextNumber];
+
+  RKeyArrayT() { std::memset(keys, 0, sizeof(keys)); }
+
+  inline void copyFrom(RKeyArrayT<T> const& other) {
+    static_assert(std::is_trivially_copyable_v<T>,
+                  "RKeyArrayT::copyFrom requires trivially copyable T");
+    std::memcpy(keys, other.keys, sizeof(keys));
+  }
+
+  inline void copyFrom(char const* other) {
+    static_assert(std::is_trivially_copyable_v<T>,
+                  "RKeyArrayT::copyFrom requires trivially copyable T");
+    std::memcpy(keys, other, sizeof(keys));
+  }
+
+  inline T getKeyByChannelID(uint32_t channel_id) const {
+    return getKeyByContextID(channelIdToContextId(channel_id));
+  }
+
+  inline T getKeyByContextID(size_t context_id) const {
+    return keys[context_id];
+  }
+
+  inline void setKeyByContextID(uint32_t context_id, T key) {
+    keys[context_id] = key;
+  }
+
+  inline void setKeyByChannelID(uint32_t channel_id, T key) {
+    setKeyByContextID(channelIdToContextId(channel_id), key);
+  }
+
+  T& operator[](int index) { return keys[index]; }
+  T const& operator[](int index) const { return keys[index]; }
+
+  friend std::ostream& operator<<(std::ostream& os, RKeyArrayT<T> const& arr) {
+    os << "RKeyArrayT{";
+    for (int i = 0; i < kNICContextNumber; ++i) {
+      if (i > 0) os << ", ";
+      if constexpr (std::is_integral_v<T>) {
+        os << "0x" << std::hex << arr.keys[i] << std::dec;
+      } else {
+        os << arr.keys[i];
+      }
+    }
+    os << "}";
+    return os;
+  }
+};
+
+using MRArray = RKeyArrayT<struct ibv_mr*>;
+}  // namespace unified
+
+#ifdef UCCL_P2P_USE_NATIVE_RDMA
+#include "rdma/define.h"
+#include "rdma/rdma_endpoint.h"
+#endif
+
 namespace unified {
 
 struct P2PMhandle {
@@ -31,9 +122,9 @@ struct P2PMhandle {
   MRArray mr_array;
 };
 
-#ifdef UCCL_P2P_USE_EFA
+#ifdef UCCL_P2P_USE_NATIVE_RDMA
 using RDMAEndPoint =
-    std::variant<uccl::RDMAEndpoint*, std::shared_ptr<EFAEndpoint>>;
+    std::variant<uccl::RDMAEndpoint*, std::shared_ptr<NICEndpoint>>;
 #else
 using RDMAEndPoint = std::variant<uccl::RDMAEndpoint*>;
 #endif
@@ -64,8 +155,7 @@ using FifoItem = uccl::FifoItem;
 #endif
 
 class Endpoint {
-  uint64_t const kRTTBytes = 1024 * 1024;
-#ifdef UCCL_P2P_USE_EFA
+#ifdef UCCL_P2P_USE_NATIVE_RDMA
   uint64_t const kChunkSize = 1024 * 1024 * 1024;
 #else
   uint64_t const kChunkSize = 1024 * 1024;
