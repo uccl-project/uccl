@@ -8,7 +8,7 @@
 
 #define GID_INDEX 0
 #define MAX_INLINE_DATA 0
-#define SERVICE_LEVEL
+#define SERVICE_LEVEL 8
 #define QKEY 0x15695
 
 #define RNR_RETRY 3

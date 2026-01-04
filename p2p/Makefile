@@ -15,14 +15,14 @@ RDMA_HOME := ../collective/rdma
 EFA_HOME ?= /opt/amazon/efa
 
 # Building with the following settings:
-INC = -I./ -I$(CUDA_HOME)/include 
+INC = -I./ -I$(CUDA_HOME)/include
 LIBS = -L ${CUDA_HOME}/lib64 -libverbs -lcudart -lcuda -lpthread -lglog -lgflags -lgtest -lz -lelf
 LIBS2 =
 
 CXX := g++
-CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I../include -I$(RDMA_HOME) -I$(CUDA_INC) \
+CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I../include -I$(RDMA_HOME) -I$(CUDA_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
-	-Wl,-rpath=/usr/lib/x86_64-linux-gnu $(CXXFLAGS_EFA)
+	-Wl,-rpath=/usr/lib/x86_64-linux-gnu
 
 ifeq ($(USE_TCPX),1)
 	CXXFLAGS += -DUCCL_P2P_USE_TCPX
