@@ -1086,6 +1086,8 @@ void Proxy::post_barrier_msg(int dst_rank, bool ack, uint64_t seq) {
     fprintf(stderr, "barrier_msg: bad ctx for dst=%d\n", dst_rank);
     std::abort();
   }
+  // assert seq smaller than 22 bits
+  assert(seq <= 0x1FFFFFu);
   uint32_t imm = BarrierImm::Pack(ack, (uint32_t)seq, (uint8_t)cfg_.rank);
 #ifdef EFA
   auto* qpx = (struct ibv_qp_ex*)ctx->qp;
