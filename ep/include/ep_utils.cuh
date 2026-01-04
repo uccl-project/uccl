@@ -821,7 +821,7 @@ __forceinline__ __device__ int atomic_exch_cta_release(int* addr, int x) {
   return ret;
 }
 
-template <int kNumRanks, bool kSyncOnly = false>
+template <int kNumRanks, bool kSyncOnly = false, int label = 0>
 __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs,
                                               int rank) {
   auto thread_id = static_cast<int>(threadIdx.x);
@@ -849,10 +849,17 @@ __forceinline__ __device__ void barrier_block(int** barrier_signal_ptrs,
     if (__all_sync(WARP_MASK, value <= 0)) break;
 
     if (clock64() - start_time > NUM_TIMEOUT_CYCLES and thread_id < kNumRanks) {
-      printf(
-          "DeepEP timeout check failed: rank = %d, thread = %d, value = "
-          "%d)\n",
-          rank, thread_id, value);
+      if (label == 0) {
+        printf(
+            "DeepEP timeout check failed: rank = %d, thread = %d, value = "
+            "%d)\n",
+            rank, thread_id, value);
+      } else {
+        printf(
+            "DeepEP timeout check failed: rank = %d, thread = %d, value = %d, "
+            "label = %d)\n",
+            rank, thread_id, value, label);
+      }
       trap();
     }
   }
@@ -919,8 +926,7 @@ __device__ __forceinline__ int ld_acquire_cta(int const* ptr) {
 __forceinline__ __device__ void acquire_lock(int* mutex) {
   // To make later memory operations valid, we must use `acquire` for memory
   // semantics
-  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0)
-    ;
+  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0);
 }
 
 __forceinline__ __device__ void release_lock(int* mutex) {

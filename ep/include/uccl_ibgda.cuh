@@ -320,7 +320,8 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
       }
     }
 #endif
-    break;
+    // All proxy threads of the GPU will post the quiet command. 
+    // break;
   }
 
   // Then wait for all QUIET commands to complete
@@ -369,6 +370,8 @@ __forceinline__ __device__ void nvshmem_sync_with_same_gpu_idx(
       }
     }
 #endif
+    // Only one thread of the GPU will post the barrier command.
+    // This is because as long as proxy thread reaches the barrier, we are sure that other GPUs managed by the thread have reached the barrier. 
     break;
   }
 

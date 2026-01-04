@@ -9,7 +9,7 @@
 #define FINISHED_SUM_TAG 1024
 #define NUM_WAIT_NANOSECONDS 500
 
-// #define ENABLE_FAST_DEBUG
+#define ENABLE_FAST_DEBUG
 #ifndef ENABLE_FAST_DEBUG
 #define NUM_CPU_TIMEOUT_SECS 100
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
