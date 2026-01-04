@@ -1025,10 +1025,20 @@ __global__ void __launch_bounds__(
               num_bytes_per_msg,
               translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
               channel_id,  // NOTE(MaoZiming): use channel_id for rb.
-              lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false, -1,
+              lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false,
+          // NOTE(MaoZiming): for AMD GPUs, we directly send a subsequent RDMA
+          // to update the tail. For other GPUs and EFA NICs, we use the
+          // CPU-emulated atomics, allow us to piggyback the atomic operation
+          // with the RDMA send.
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+              -1,
+#else
+              -1,
               reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)) -
                   reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
-              num_tokens_to_issue);
+              num_tokens_to_issue
+#endif
+          );
         } else {
           // Lighter fence for local RDMA rank
           memory_fence();
@@ -1046,7 +1056,13 @@ __global__ void __launch_bounds__(
               translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
               channel_id,  // NOTE(MaoZiming): use channel_id for rb.
               dst_rdma_rank == rdma_rank, d2h_channel_addrs,
-              num_d2h_channel_addrs, false, -1, true);
+              num_d2h_channel_addrs, false, -1,
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+              false
+#else
+              true
+#endif
+          );
         }
         __syncwarp();
       }
@@ -1178,9 +1194,6 @@ __global__ void __launch_bounds__(
           trap();
         }
       }
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-      memory_fence();
-#endif
       auto src_rdma_head =
           __shfl_sync(WARP_MASK, cached_rdma_channel_head, src_rdma_rank);
       auto src_rdma_tail =
@@ -1249,13 +1262,8 @@ __global__ void __launch_bounds__(
       // Move tail index
       __syncwarp();
       if (lane_id == 0)
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-        __atomic_store_n(nvl_channel_tail.buffer(), cached_nvl_channel_tail,
-                         __ATOMIC_RELEASE);
-#else
         st_release_sys_global(nvl_channel_tail.buffer(),
                               cached_nvl_channel_tail);
-#endif
     }
     // Retired
     __syncwarp();
@@ -2611,10 +2619,14 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                                                          nvl_rank),
                 channel_id,  // NOTE(MaoZiming): use channel_id for rb.
                 lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false, -1,
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#else
                 reinterpret_cast<uint64_t>(
                     rdma_channel_tail.buffer(rdma_rank)) -
                     reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
-                num_chunked_tokens);
+                num_chunked_tokens
+#endif
+            );
           } else {
             memory_fence();
           }
@@ -2630,7 +2642,13 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                                                          nvl_rank),
                 channel_id,  // NOTE(MaoZiming): use warp_id for rb.
                 dst_rdma_rank == rdma_rank, d2h_channel_addrs,
-                num_d2h_channel_addrs, false, -1, true);
+                num_d2h_channel_addrs, false, -1,
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+                false
+#else
+                true
+#endif
+            );
           }
         }
       }

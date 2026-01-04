@@ -45,7 +45,7 @@ LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
       perror("shm_open(existing)");
       return nullptr;
     }
-    struct stat st {};
+    struct stat st{};
     int tries = 1000;
     while (tries-- > 0) {
       if (fstat(fd, &st) == 0 && static_cast<size_t>(st.st_size) >= kSize)
@@ -176,6 +176,32 @@ void Proxy::init_common() {
                        cfg_.thread_idx, cfg_.local_rank);
   pin_thread_to_numa_wrapper();
   if (!ctx_.cq) ctx_.cq = create_per_thread_cq(ctx_);
+
+  // Register atomic_buffer_ptr as a separate RDMA memory region if it was set
+  // This must be done after PD is initialized by per_thread_rdma_init
+  if (atomic_buffer_ptr_ && !ctx_.atomic_buffer_mr) {
+    ctx_.atomic_buffer_mr =
+        ibv_reg_mr(ctx_.pd, atomic_buffer_ptr_, kAtomicBufferSize,
+                   IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+#ifdef EFA
+                       IBV_ACCESS_REMOTE_READ
+#else
+                        IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC
+#endif
+                        );
+
+    if (!ctx_.atomic_buffer_mr) {
+      perror("Failed to register atomic_buffer_ptr MR");
+      std::abort();
+    }
+
+    fprintf(stderr,
+            "[Proxy] Registered atomic_buffer_ptr MR: addr=0x%llx, len=%zu, "
+            "rkey=0x%x\n",
+            (unsigned long long)ctx_.atomic_buffer_mr->addr,
+            (size_t)ctx_.atomic_buffer_mr->length, ctx_.atomic_buffer_mr->rkey);
+  }
+
   if (ctxs_for_all_ranks_.empty()) {
     fprintf(stderr,
             "Error: peers metadata not set before init_common (peers_.size() "
@@ -195,6 +221,14 @@ void Proxy::init_common() {
   ctx_.atomic_old_values_buf =
       reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(cfg_.gpu_buffer) +
                                   cfg_.total_size - atomic_buf_size);
+  // Check alignment - only abort if not aligned (8-byte alignment required for
+  // 64-bit atomics)
+  if ((reinterpret_cast<uintptr_t>(ctx_.atomic_old_values_buf) & 0x7) != 0) {
+    fprintf(stderr, "Atomic buffer not 8-byte aligned: 0x%llx\n",
+            (unsigned long long)reinterpret_cast<uintptr_t>(
+                ctx_.atomic_old_values_buf));
+    std::abort();
+  }
 
   int num_ranks = ctxs_for_all_ranks_.size();
   local_infos_.assign(num_ranks, RDMAConnectionInfo{});
@@ -218,6 +252,8 @@ void Proxy::init_common() {
     // NOTE(MaoZiming): each context can share the same cq, pd, mr.
     // but the qp must be different.
     c.cq = ctx_.cq;
+    // Share the atomic buffer MR with peer contexts
+    c.atomic_buffer_mr = ctx_.atomic_buffer_mr;
 
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
@@ -226,7 +262,7 @@ void Proxy::init_common() {
       continue;
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
                          &local_infos_[peer], my_rank, cfg_.d2h_queues.size(),
-                         cfg_.use_normal_mode);
+                         cfg_.use_normal_mode, atomic_buffer_ptr_);
     modify_qp_to_init(c);
   }
 
@@ -291,12 +327,24 @@ void Proxy::init_common() {
     c.remote_addr = remote_infos_[peer].addr;
     c.remote_rkey = remote_infos_[peer].rkey;
     c.remote_len = remote_infos_[peer].len;
-    if (FILE* f = fopen("/tmp/uccl_debug.txt", "a")) {
+
+    // Set remote atomic buffer info from exchanged connection info
+    c.remote_atomic_buffer_addr = remote_infos_[peer].atomic_buffer_addr;
+    c.remote_atomic_buffer_len = remote_infos_[peer].atomic_buffer_len;
+    c.remote_atomic_buffer_rkey = remote_infos_[peer].atomic_buffer_rkey;
+
+    if (c.remote_atomic_buffer_addr == 0) {
       fprintf(
-          f,
-          "[PROXY_INIT] me=%d peer=%d: remote_addr=0x%lx local_buffer=0x%lx\n",
-          my_rank, peer, c.remote_addr, (uintptr_t)cfg_.gpu_buffer);
-      fclose(f);
+          stderr,
+          "[Proxy] WARNING: Remote atomic buffer not registered for peer %d "
+          "(local atomic_buffer_ptr=%p, local atomic_buffer_mr=%p)\n",
+          peer, atomic_buffer_ptr_, (void*)ctx_.atomic_buffer_mr);
+    } else {
+      fprintf(stderr,
+              "[Proxy] Remote atomic buffer info for peer %d: addr=0x%llx, "
+              "len=%zu, rkey=0x%x\n",
+              peer, (unsigned long long)c.remote_atomic_buffer_addr,
+              (size_t)c.remote_atomic_buffer_len, c.remote_atomic_buffer_rkey);
     }
   }
   usleep(50 * 1000);
@@ -456,7 +504,7 @@ void Proxy::run_dual() {
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   if (acked_wrs_.empty()) return;
 
-    // Mark all acked command slots in each ring's bitmask
+  // Mark all acked command slots in each ring's bitmask
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   // FIFO path: pop in order using the pending deque and the completion set.
   for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); ++rb_idx) {
@@ -1088,7 +1136,7 @@ void Proxy::send_barrier(uint64_t wr) {
 #endif
   assert(ctx_.barrier_wr == -1 && "barrier_wr should be 0");
   ctx_.barrier_wr = wr;
-  ctx_.barrier_seq = ctx_.barrier_seq + 1;
+  ctx_.barrier_seq = (ctx_.barrier_seq + 1) & BarrierImm::kSeqMask;
 
   if (cfg_.rank == ctx_.node_leader_rank) {
     if (ctx_.barrier_arrived.size() != static_cast<size_t>(cfg_.num_nodes)) {
@@ -1166,7 +1214,9 @@ void Proxy::barrier_check() {
   }
 
   // When global release comes back (CQ handler should set these):
-  if (ctx_.barrier_released && ctx_.barrier_release_seq == seq) {
+  // NOTE: BarrierImm is 21 bits, so we must mask the local seq.
+  if (ctx_.barrier_released &&
+      ctx_.barrier_release_seq == seq) {
     // Reset local mask for next barrier and consume the global release
     ctx_.barrier_released = false;
 
