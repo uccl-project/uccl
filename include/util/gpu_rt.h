@@ -27,14 +27,15 @@
 #define gpuIpcOpenMemHandle cudaIpcOpenMemHandle
 #define gpuIpcGetMemHandle cudaIpcGetMemHandle
 #define gpuIpcCloseMemHandle cudaIpcCloseMemHandle
-#define gpuHostMalloc cudaHostMalloc
+#define gpuHostMalloc cudaMallocHost  // no cudaHostMalloc API in CUDA
 #define gpuHostAlloc cudaHostAlloc
 #define gpuHostAllocMapped cudaHostAllocMapped
-#define gpuFreeHost cudaFreeHost
 #define gpuMalloc cudaMalloc
-#define gpuFree cudaFree
 #define gpuMallocAsync cudaMallocAsync
+#define gpuMallocHost cudaMallocHost
+#define gpuFree cudaFree
 #define gpuFreeAsync cudaFreeAsync
+#define gpuFreeHost cudaFreeHost
 #define gpuMemcpyHostToDevice cudaMemcpyHostToDevice
 #define gpuMemcpyDeviceToHost cudaMemcpyDeviceToHost
 #define gpuMemcpy cudaMemcpy
@@ -101,11 +102,12 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuHostAlloc hipHostAlloc
 #define gpuHostFree hipHostFree
 #define gpuHostAllocMapped hipHostAllocMapped
-#define gpuFreeHost hipFreeHost
 #define gpuMalloc hipMalloc
-#define gpuFree hipFree
 #define gpuMallocAsync hipMallocAsync
+#define gpuMallocHost hipHostMalloc  // cudaMallocHost Deprecated in ROCm
+#define gpuFree hipFree
 #define gpuFreeAsync hipFreeAsync
+#define gpuFreeHost hipFreeHost
 #define gpuMemcpyHostToDevice hipMemcpyHostToDevice
 #define gpuMemcpyDeviceToHost hipMemcpyDeviceToHost
 #define gpuMemcpy hipMemcpy
