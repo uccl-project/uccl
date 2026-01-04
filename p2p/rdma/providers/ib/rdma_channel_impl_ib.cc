@@ -3,9 +3,11 @@
 
 #include "rdma_channel_impl_ib.h"
 #include <glog/logging.h>
+#include <cstdint>
+#include <cstdlib>
 #include <cstring>
 
-#define GID_INDEX 3
+#define GID_INDEX_DEFAULT 0
 #define MAX_INLINE_DATA 128
 #define SERVICE_LEVEL 135
 #define MIN_RNR_TIMER 12
@@ -17,6 +19,18 @@
 #define MAX_RD_ATOMIC 1
 #define MAX_DEST_RD_ATOMIC 1
 #define MAX_CQE 1024
+
+static inline int get_gid_index_from_env() {
+  static int gid_index = -1;
+  if (gid_index == -1) {
+    char const* env = getenv("UCCL_IB_GID_INDEX");
+    if (env)
+      gid_index = std::atoi(env);
+    else
+      gid_index = GID_INDEX_DEFAULT;
+  }
+  return gid_index;
+}
 
 inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
                                   struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
@@ -60,7 +74,7 @@ inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
                        IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
                            IBV_QP_ACCESS_FLAGS) == 0);
 
-  local_meta->gid = ctx->queryGid(GID_INDEX);
+  local_meta->gid = ctx->queryGid(get_gid_index_from_env());
   local_meta->qpn = (*qp)->qp_num;
 }
 
@@ -95,7 +109,7 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
   attr.ah_attr.grh.traffic_class = TRAFFIC_CLASS;
   attr.ah_attr.grh.hop_limit = 64;
   memcpy(&attr.ah_attr.grh.dgid, remote_meta.gid.raw, 16);
-  attr.ah_attr.grh.sgid_index = GID_INDEX;
+  attr.ah_attr.grh.sgid_index = get_gid_index_from_env();
   flags = IBV_QP_STATE | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
           IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER | IBV_QP_AV;
   assert(ibv_modify_qp(qp, &attr, flags) == 0);

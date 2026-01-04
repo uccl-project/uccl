@@ -29,7 +29,7 @@ extern thread_local bool inside_python;
 struct ibv_mr;
 
 inline int parseLogLevelFromEnv() {
-  char const* env = std::getenv("RDMA_LOG_LEVEL");
+  char const* env = std::getenv("UCCL_P2P_LOG_LEVEL");
   if (!env) {
     return google::WARNING;
   }

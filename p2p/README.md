@@ -95,10 +95,8 @@ Notes:
 
 | Environment Variable | Description | Default Value |
 |---------------------|-------------|---------------|
-| UCCL_IB_HCA | The names of IB devices used | (null) |
-| UCCL_IB_GID_INDEX | Global ID index used in RoCE mode | -1 |
-| UCCL_PORT_ENTROPY | Paths/QPs per engine | 32 |
-| UCCL_CHUNK_SIZE_KB | Maximum chunk size for each WQE | 64 |
+| UCCL_P2P_LOG_LEVEL | Logging level | WARNING (others: INFO, ERROR, FATAL) |
+| UCCL_IB_GID_INDEX | Global ID index in RDMA network | 0 |
 
 ### Running NCCL
 
