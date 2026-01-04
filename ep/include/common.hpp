@@ -12,7 +12,7 @@
 #include <stdio.h>
 #include <unistd.h>
 
-// #define SOFTWARE_ORDERING
+#define SOFTWARE_ORDERING
 #define MAX_IB_DEVS 32
 // #define MEASURE_PER_OP_LATENCY
 // #define MEASURE_PER_VERB_LATENCY

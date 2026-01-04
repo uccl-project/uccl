@@ -2735,7 +2735,7 @@ void post_atomic_operations(ProxyCtx& S,
                             std::unordered_set<uint64_t>& acked_wrs,
                             bool use_normal_mode) {
   if (use_normal_mode) {
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#if (defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)) && !defined(SOFTWARE_ORDERING)
     post_atomic_operations_native_rdma(S, wrs_to_post, cmds_to_post, ctxs,
                                        my_rank, thread_idx, acked_wrs);
 #else
