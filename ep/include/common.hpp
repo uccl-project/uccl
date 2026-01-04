@@ -12,7 +12,7 @@
 #include <stdio.h>
 #include <unistd.h>
 
-#define SOFTWARE_ORDERING
+// #define SOFTWARE_ORDERING
 #define MAX_IB_DEVS 32
 // #define MEASURE_PER_OP_LATENCY
 // #define MEASURE_PER_VERB_LATENCY
@@ -30,7 +30,7 @@ extern bool use_ll_sl;
 #endif
 
 #define USE_MSCCLPP_FIFO_BACKEND
-#define USE_SUBSET_BARRIER
+// #define USE_SUBSET_BARRIER
 #define kAtomicBufferSize 81960
 #define kQueueSize 2048
 #define kQueueMask (kQueueSize - 1)

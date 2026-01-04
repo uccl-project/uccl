@@ -321,7 +321,7 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
     }
 #endif
     // All proxy threads of the GPU will post the quiet command. 
-    // break;
+    break;
   }
 
   // Then wait for all QUIET commands to complete

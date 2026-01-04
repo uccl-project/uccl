@@ -313,7 +313,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     exit(1);
   }
   uint64_t iova = (uintptr_t)gpu_buf;
-#ifndef EFA
+#if !defined(EFA) && !defined(SOFTWARE_ORDERING)
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                               IBV_ACCESS_REMOTE_ATOMIC);
@@ -508,6 +508,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
     exit(1);
   }
   ncclIbGetGidIndex(S.context, 1, &port_attr, &S.gid_index);
+  S.gid_index = 3;
   local_info->qp_num = S.qp->qp_num;
   local_info->ack_qp_num = S.ack_qp->qp_num;
   local_info->recv_ack_qp_num = S.recv_ack_qp->qp_num;
@@ -597,7 +598,7 @@ struct ibv_ah* create_ah(ProxyCtx& S, uint8_t* remote_gid) {
   struct ibv_ah_attr ah_attr = {};
   ah_attr.is_global = 1;  // Enable Global Routing Header (GRH)
   ah_attr.port_num = 1;
-  ah_attr.grh.sgid_index = 0;  // Local GID index
+  ah_attr.grh.sgid_index = 3;  // Local GID index
   memcpy(&ah_attr.grh.dgid, remote_gid, 16);
   ah_attr.grh.flow_label = 0;
   ah_attr.grh.hop_limit = 255;
@@ -658,7 +659,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
   attr.path_mtu = port_attr.active_mtu;
   attr.dest_qp_num = remote->qp_num;
   attr.rq_psn = remote->psn;
-  attr.max_dest_rd_atomic = 1;
+  attr.max_dest_rd_atomic = 32;
   attr.min_rnr_timer = 12;
 
   if (is_roce) {
@@ -749,7 +750,7 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
   attr.retry_cnt = 7;
   attr.rnr_retry = 7;
   attr.sq_psn = local_info->psn;
-  attr.max_rd_atomic = 1;
+  attr.max_rd_atomic = 32;
   attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
   int flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
@@ -1670,7 +1671,7 @@ void remote_process_completions_normal_mode(
       if (!aimm.IsReorderable()) {
         addr32->fetch_add(value, std::memory_order_release);
       } else {
-#ifndef EFA
+#if !defined(EFA) && !defined(SOFTWARE_ORDERING)
         assert(false &&
                "Reorderable atomic operations should not be triggered");
 #endif

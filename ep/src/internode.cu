@@ -11,6 +11,10 @@
 // #include "ibgda_device.cuh"
 #include "internode.cuh"
 
+#ifndef SOFTWARE_ORDERING
+#define SOFTWARE_ORDERING
+#endif
+
 namespace uccl {
 
 namespace internode {
@@ -1169,7 +1173,7 @@ __global__ void __launch_bounds__(
         if (__shfl_sync(WARP_MASK, num_tokens_to_recv_from_rdma,
                         src_rdma_rank) > 0) {
           if (lane_id == src_rdma_rank)
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#if (defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)) && !defined(SOFTWARE_ORDERING)
             cached_rdma_channel_tail = static_cast<int>(__atomic_load_n(
                 rdma_channel_tail.buffer(src_rdma_rank), __ATOMIC_SEQ_CST));
 #else
