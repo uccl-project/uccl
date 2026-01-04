@@ -49,7 +49,7 @@ inline int parseLogLevelFromEnv() {
 }
 
 namespace unified {
-static constexpr int kNICContextNumber = 2;
+static constexpr int kNICContextNumber = 4;
 
 inline size_t channelIdToContextId(uint32_t channel_id) {
   return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;
