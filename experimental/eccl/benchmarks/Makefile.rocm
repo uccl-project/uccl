@@ -1,0 +1,37 @@
+# Compiler and environment
+HIP_HOME ?= /opt/rocm
+HIP_LIB  := $(HIP_HOME)/lib
+override CXX := /usr/bin/g++
+HIPCC      := $(HIP_HOME)/bin/hipcc
+
+# Compilation flags
+CXXFLAGS   := -O0 -std=c++17 -Wall -Wno-unused-function -pthread -fPIC -D__HIP_PLATFORM_AMD__ -I${CONDA_LIB_HOME}/../include -DENABLE_HIP
+HIPCCFLAGS := -g -O0 -std=c++17 -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942
+LDFLAGS    := -L${CONDA_LIB_HOME} -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -lglog
+
+# Include directories
+INCLUDES := -I./ -I$(HIP_HOME)/include -I/usr/include
+
+LDFLAGS += -L$(HIP_LIB) -Wl,-rpath,$(HIP_LIB)
+
+# Source files
+SRC_CPP := ./bench_gdrcopy.cc
+SRC_CU  := 
+
+# Object files
+OBJ_CC   := $(SRC_CPP:.cc=.o)
+OBJ_CU   := $(SRC_CU:.cu=.o)
+
+TARGET = bench_gdrcopy
+
+%.o: %.cc
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+
+%.o: %.cu
+	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+
+$(TARGET): $(OBJ_CC) $(OBJ_CU)
+	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(OBJ_CC) $(OBJ_CU) -lamdhip64 $(LDFLAGS) -o $@
+
+clean:
+	rm -f $(OBJ_CC) $(OBJ_CU) $(TARGET)

@@ -2,6 +2,10 @@
 
 # TCPX optional integration
 USE_TCPX ?= $(shell echo $${USE_TCPX:-0})
+# EFA optional integration
+USE_EFA ?= $(shell echo $${USE_EFA:-0})
+# IB optional integration
+USE_IB ?= $(shell echo $${USE_IB:-0})
 
 # TCP endpoint integration
 USE_TCP ?= $(shell echo $${USE_TCP:-0})
@@ -13,34 +17,33 @@ CUDA_LIB  := $(CUDA_HOME)/lib64
 RDMA_HOME := ../collective/rdma
 EFA_HOME ?= /opt/amazon/efa
 
-# Check if EFA_HOME exists and define UCCL_ENABLE_EFA
-ifneq ($(wildcard $(EFA_HOME)),)
-    CXXFLAGS_EFA := -DUCCL_ENABLE_EFA
-else
-    CXXFLAGS_EFA :=
-endif
-
 # Building with the following settings:
-INC = -I./ -I$(CUDA_HOME)/include -I${EFA_HOME}/include 
-LIBS = -L ${CUDA_HOME}/lib64 -L ${EFA_HOME}/lib -libverbs -lefa -lcudart -lcuda -lpthread -lglog -lgflags -lgtest -lz -lelf
-LIBS_SHARED = ${LIBS}
+INC = -I./ -I$(CUDA_HOME)/include
+LIBS = -L ${CUDA_HOME}/lib64 -libverbs -lcudart -lcuda -lpthread -lglog -lgflags -lgtest -lz -lelf
+LIBS2 =
 
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I../include -I$(RDMA_HOME) -I$(CUDA_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
-	-Wl,-rpath=/usr/lib/x86_64-linux-gnu $(CXXFLAGS_EFA)
+	-Wl,-rpath=/usr/lib/x86_64-linux-gnu
 
 ifeq ($(USE_TCPX),1)
-	CXXFLAGS += -DUSE_TCPX
-	LINK_LIBS := -lglog -lgflags -lpthread -ldl
+	CXXFLAGS += -DUCCL_P2P_USE_TCPX
+	LIBS2 += -lglog -lgflags -lpthread -ldl
+else ifeq ($(USE_EFA),1)
+	CXXFLAGS += -DUCCL_P2P_USE_NATIVE_RDMA
+	INC += -I${EFA_HOME}/include
+	LIBS += -L ${EFA_HOME}/lib -lefa
+else ifeq ($(USE_IB),1)
+	CXXFLAGS += -DUCCL_P2P_USE_NATIVE_RDMA -DUCCL_P2P_USE_IB
+	LIBS += -libverbs
 else
-	CXXFLAGS += -libverbs
-	LINK_LIBS := -lglog -lgflags -lgtest -lz -lelf -lpthread -libverbs
+	LIBS2 += -lglog -lgflags -lgtest -lz -lelf -lpthread -libverbs
 endif
 
 # Add TCP endpoint flag
 ifeq ($(USE_TCP),1)
-	CXXFLAGS += -DUCCL_ENABLE_TCP
+	CXXFLAGS += -DUCCL_P2P_USE_TCP
 endif
 
 # Python and pybind11 configuration
@@ -58,7 +61,7 @@ PREFIX ?= /usr/local
 LIBDIR ?= $(PREFIX)/lib
 INCDIR ?= $(PREFIX)/include
 
-LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LINK_LIBS)
+LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LIBS2)
 
 # Target and source files
 P2P_PYTHON_EXT := p2p$(PYEXT)
@@ -74,8 +77,9 @@ NCCL_LIB  ?= $(NCCL_HOME)/lib
 P2P_SHARED_LIB := libuccl_p2p.so
 SOURCES := nccl_tcpx_endpoint.cc
 CORE_OBJECTS := $(SOURCES:.cc=.o)
-CXXFLAGS += -DUSE_TCPX -I$(NCCL_INC)
+CXXFLAGS += -DUCCL_P2P_USE_TCPX -I$(NCCL_INC)
 LDFLAGS  += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
+OBJECTS := $(CORE_OBJECTS)
 else
 SOURCES := engine.cc engine_pybind.cc tcp/tcp_endpoint.cc tcp/tcp_worker_pool.cc
 CORE_OBJECT := engine.o tcp/tcp_endpoint.o tcp/tcp_worker_pool.o
@@ -106,13 +110,13 @@ $(P2P_PYTHON_EXT): $(OBJECTS) $(RDMA_HOME)/librdma.a
 	$(CXX) $(OBJECTS) $(RDMA_HOME)/librdma.a \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(CUDA_LIB) $(INC) $(LIBS_SHARED)
+	      -Wl,-rpath,$(CUDA_LIB) $(INC) $(LIBS)
 
 $(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB)
 	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) -libverbs -lz -lelf $(INC) $(LIBS_SHARED)
+	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) $(INC) $(LIBS)
 
 $(RDMA_HOME)/librdma.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
 	make -C $(RDMA_HOME) librdma.a -j$(nproc)

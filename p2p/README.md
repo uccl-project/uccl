@@ -60,21 +60,27 @@ sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
 
 </details>
 
+To build AWS EFA support, you can: 
+```bash
+USE_EFA=1 bash build_and_install.sh cuda p2p
+# or
+make -j USE_EFA=1 install
+```
+
+To build GCP TCPX support, you can refer to [NIXL_plugin_readme.md](./NIXL_plugin_readme.md). 
 
 ## Performance Benchmarks
-
-Navigate to `benchmarks` directory: 
 
 ### Running UCCL P2P
 
 On client: 
 ```bash
-torchrun --nnodes=2 --nproc_per_node=1 --node-rank=0 --master_addr=<IP addr> benchmark_uccl.py
+torchrun --nnodes=2 --nproc_per_node=1 --node-rank=0 --master_addr=<IP addr> benchmarks/benchmark_uccl.py
 ```
 
 On server:
 ```bash
-torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> benchmark_uccl.py
+torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> benchmarks/benchmark_uccl.py
 ```
 
 Notes: 
@@ -82,28 +88,26 @@ Notes:
 * You may consider exporting `UCCL_IB_GID_INDEX` if your cluster requires it for NCCL to run (usually 1, or 3 in some testbed).
 * **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to work. 
 * To benchmark dual direction transfer, `benchmark_uccl.py --dual`.
-* To benchmark intra-node transfer via CUDA/HIP IPC, `torchrun --nproc_per_node=2 benchmark_uccl.py --ipc`.
+* To benchmark intra-node transfer via CUDA/HIP IPC, `torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --ipc`.
 * To benchmark one-sided READ/WRITE transfer, `benchmark_uccl_readwrite.py`.
 * To benchmark UCCL copy-only collectives (eg, sendrecv, allgather), `benchmark_uccl_collective.py`. You can also run ring-like communication pattern with `--ring`.
 * From CollectiveContext, the default parameter `use_copy_engine_for_intra` is `False`, which means it will use NCCL/RCCL via `torch.distributed` for intra-node communication; if setting to `True`, it will use GPU copy engine (eg, `cudaMemcpy`) via UCCL for intranode communication. 
 
 | Environment Variable | Description | Default Value |
 |---------------------|-------------|---------------|
-| UCCL_IB_HCA | The names of IB devices used | (null) |
-| UCCL_IB_GID_INDEX | Global ID index used in RoCE mode | -1 |
-| UCCL_PORT_ENTROPY | Paths/QPs per engine | 32 |
-| UCCL_CHUNK_SIZE_KB | Maximum chunk size for each WQE | 64 |
+| UCCL_P2P_LOG_LEVEL | Logging level | WARNING (others: INFO, ERROR, FATAL) |
+| UCCL_IB_GID_INDEX | Global ID index in RDMA network | 0 |
 
 ### Running NCCL
 
 On Client:
 ```bash
-NCCL_NCHANNELS_PER_NET_PEER=4 torchrun --nnodes=2 --nproc_per_node=1 --node-rank=0 --master_addr=<IP addr> benchmark_nccl.py
+NCCL_NCHANNELS_PER_NET_PEER=4 torchrun --nnodes=2 --nproc_per_node=1 --node-rank=0 --master_addr=<IP addr> benchmarks/benchmark_nccl.py
 ```
 
 On Server:
 ```bash
-NCCL_NCHANNELS_PER_NET_PEER=4 torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> benchmark_nccl.py
+NCCL_NCHANNELS_PER_NET_PEER=4 torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> benchmarks/benchmark_nccl.py
 ```
 
 Notes: 

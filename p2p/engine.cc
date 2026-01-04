@@ -65,11 +65,11 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   google::InstallFailureSignalHandler();
 
   // Initialize the RDMA endpoint with lazy creation.
-#ifdef UCCL_ENABLE_EFA
-  ep_ = std::shared_ptr<EFAEndpoint>(
-      new EFAEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
+#ifdef UCCL_P2P_USE_NATIVE_RDMA
+  ep_ = std::shared_ptr<NICEndpoint>(
+      new NICEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
   numa_node_ = 0;
-#elif defined(UCCL_ENABLE_TCP)
+#elif defined(UCCL_P2P_USE_TCP)
   ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
   numa_node_ = 0;
   // Initialize GPU to device mapping (use 0 for TCP since no RDMA devices)
@@ -134,10 +134,10 @@ Endpoint::Endpoint(uint32_t const num_cpus) : num_cpus_(num_cpus) {
                  []() { google::InitGoogleLogging("uccl_p2p"); });
 
   google::InstallFailureSignalHandler();
-#ifdef UCCL_ENABLE_EFA
-  ep_ = std::shared_ptr<EFAEndpoint>(
-      new EFAEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
-#elif defined(UCCL_ENABLE_TCP)
+#ifdef UCCL_P2P_USE_NATIVE_RDMA
+  ep_ = std::shared_ptr<NICEndpoint>(
+      new NICEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
+#elif defined(UCCL_P2P_USE_TCP)
   // Initialize the TCP endpoint
   ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
   // Initialize GPU to device mapping (use 0 for TCP since no RDMA devices)
@@ -214,7 +214,7 @@ void Endpoint::initialize_engine() {
     GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i], gpuStreamNonBlocking));
   }
 
-#if defined(UCCL_ENABLE_TCP)
+#if defined(UCCL_P2P_USE_TCP)
   numa_node_ = 0;  // TCP doesn't have RDMA devices
 #else
   numa_node_ =
@@ -225,7 +225,7 @@ void Endpoint::initialize_engine() {
   std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
             << std::endl;
   // Initialize engine by fixed engine offset since we did lazy initialization
-#if !defined(UCCL_ENABLE_EFA) && !defined(UCCL_ENABLE_TCP)
+#if !defined(UCCL_P2P_USE_NATIVE_RDMA) && !defined(UCCL_P2P_USE_TCP)
   unified::initialize_engine_by_dev(ep_, gpu_to_dev[local_gpu_idx_], false);
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
 #endif
