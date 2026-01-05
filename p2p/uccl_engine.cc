@@ -267,7 +267,7 @@ void listener_thread_func(uccl_conn_t* conn) {
 #endif
             continue;
           }
-          mr_id_v[i] = local_mem_iter->second;
+          mr_id_v[i] = mr_id;
           addr_v[i] = (void*)tx_data.data_ptr;
           size_v[i] = tx_data.data_size;
           out_buf_v[i] = new char[sizeof(FifoItem)];
@@ -543,7 +543,7 @@ uccl_mr_t uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size) {
   entry.mr_id = mr_id;
   entry.size = size;
   mem_reg_info[data] = entry;
-  return mr;
+  return mr_id;
 }
 
 int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* dst,
@@ -614,7 +614,7 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                                              : -1;
 }
 
-int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                          size_t size, void* slot_item_ptr,
                          uint64_t* transfer_id) {
   if (!conn || !mr || !data) return -1;
@@ -622,7 +622,7 @@ int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
   FifoItem slot_item;
   slot_item = *static_cast<FifoItem*>(slot_item_ptr);
 
-  return conn->engine->endpoint->write_async(conn->conn_id, mr->mr_id,
+  return conn->engine->endpoint->write_async(conn->conn_id, mr,
                                              const_cast<void*>(data), size,
                                              slot_item, transfer_id)
              ? 0
@@ -677,6 +677,8 @@ int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
 #else
   return conn->engine->endpoint->recv_async(conn->conn_id, mr, data, data_size,
     &transfer_id)
+    ? 0
+    : -1;
 #endif
 }
 
