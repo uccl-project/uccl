@@ -1194,6 +1194,9 @@ __global__ void __launch_bounds__(
           trap();
         }
       }
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+      memory_fence();
+#endif
       auto src_rdma_head =
           __shfl_sync(WARP_MASK, cached_rdma_channel_head, src_rdma_rank);
       auto src_rdma_tail =

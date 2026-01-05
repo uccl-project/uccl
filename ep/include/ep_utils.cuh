@@ -744,7 +744,8 @@ __device__ __forceinline__ void trap() {
 __device__ __forceinline__ int ld_volatile_global(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __atomic_load_n(const_cast<int*>(ptr), __ATOMIC_RELAXED);
+  ret = __hip_atomic_load(const_cast<int*>(ptr), __ATOMIC_RELAXED,
+                          __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.volatile.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif
@@ -754,7 +755,8 @@ __device__ __forceinline__ int ld_volatile_global(int const* ptr) {
 __device__ __forceinline__ float ld_volatile_global(float const* ptr) {
   float ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  __atomic_load(const_cast<float*>(ptr), &ret, __ATOMIC_RELAXED);
+  ret = __hip_atomic_load(const_cast<float*>(ptr), __ATOMIC_RELAXED,
+                          __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.volatile.global.f32 %0, [%1];" : "=f"(ret) : "l"(ptr));
 #endif
@@ -764,7 +766,8 @@ __device__ __forceinline__ float ld_volatile_global(float const* ptr) {
 __device__ __forceinline__ int64_t ld_volatile_global(int64_t const* ptr) {
   int64_t ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __atomic_load_n(const_cast<int64_t*>(ptr), __ATOMIC_RELAXED);
+  ret = __hip_atomic_load(const_cast<int64_t*>(ptr), __ATOMIC_RELAXED,
+                          __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.volatile.global.s64 %0, [%1];" : "=l"(ret) : "l"(ptr));
 #endif
@@ -774,7 +777,8 @@ __device__ __forceinline__ int64_t ld_volatile_global(int64_t const* ptr) {
 __device__ __forceinline__ int64_t ld_volatile_global(uint64_t const* ptr) {
   int64_t ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = __atomic_load_n(const_cast<uint64_t*>(ptr), __ATOMIC_RELAXED);
+  ret = __hip_atomic_load(const_cast<uint64_t*>(ptr), __ATOMIC_RELAXED,
+                          __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.volatile.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));
 #endif

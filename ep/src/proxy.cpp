@@ -45,7 +45,7 @@ LocalBarrier* map_local_barrier_shm(std::string const& name, bool* out_owner) {
       perror("shm_open(existing)");
       return nullptr;
     }
-    struct stat st{};
+    struct stat st {};
     int tries = 1000;
     while (tries-- > 0) {
       if (fstat(fd, &st) == 0 && static_cast<size_t>(st.st_size) >= kSize)
@@ -186,9 +186,9 @@ void Proxy::init_common() {
 #ifdef EFA
                        IBV_ACCESS_REMOTE_READ
 #else
-                        IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC
+                       IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC
 #endif
-                        );
+        );
 
     if (!ctx_.atomic_buffer_mr) {
       perror("Failed to register atomic_buffer_ptr MR");
@@ -504,7 +504,7 @@ void Proxy::run_dual() {
 void Proxy::notify_gpu_completion(uint64_t& my_tail) {
   if (acked_wrs_.empty()) return;
 
-  // Mark all acked command slots in each ring's bitmask
+    // Mark all acked command slots in each ring's bitmask
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   // FIFO path: pop in order using the pending deque and the completion set.
   for (size_t rb_idx = 0; rb_idx < cfg_.d2h_queues.size(); ++rb_idx) {
@@ -841,6 +841,13 @@ void Proxy::post_gpu_commands_mixed(
         atomic_wrs.push_back(wrs_to_post[i]);
         atomic_cmds.push_back(cmds_to_post[i]);
 
+        // post_atomic_operations(ctx_, atomic_wrs, atomic_cmds,
+        // ctxs_for_all_ranks_,
+        //   cfg_.rank, cfg_.thread_idx, acked_wrs_,
+        //   cfg_.use_normal_mode);
+        // atomic_wrs.clear();
+        // atomic_cmds.clear();
+
 #ifdef USE_SENDER_BARRIER
         if (!cfg_.use_normal_mode) {
           uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
@@ -867,6 +874,12 @@ void Proxy::post_gpu_commands_mixed(
       case (CmdType::WRITE): {
         rdma_wrs.push_back(wrs_to_post[i]);
         rdma_cmds.push_back(cmds_to_post[i]);
+        // post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(),
+        // rdma_wrs,
+        //                         rdma_cmds, ctxs_for_all_ranks_, cfg_.rank,
+        //                         cfg_.thread_idx, cfg_.use_normal_mode);
+        // rdma_wrs.clear();
+        // rdma_cmds.clear();
         break;
       }
       case (CmdType::QUIET): {
@@ -1215,8 +1228,7 @@ void Proxy::barrier_check() {
 
   // When global release comes back (CQ handler should set these):
   // NOTE: BarrierImm is 21 bits, so we must mask the local seq.
-  if (ctx_.barrier_released &&
-      ctx_.barrier_release_seq == seq) {
+  if (ctx_.barrier_released && ctx_.barrier_release_seq == seq) {
     // Reset local mask for next barrier and consume the global release
     ctx_.barrier_released = false;
 
