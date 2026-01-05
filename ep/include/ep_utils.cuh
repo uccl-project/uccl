@@ -30,6 +30,27 @@ using f32_gptr = __attribute__((address_space(1))) float*;
   __hip_atomic_fetch_add((ptr), (val), (order), (scope))
 #endif
 
+#define DISABLE_BUILTIN_WARP_SYNC
+
+#ifdef DISABLE_BUILTIN_WARP_SYNC
+
+__device__ __forceinline__ int any_sync(uint64_t mask, int predicate) {
+  uint64_t predicate_bit_pattern = __ballot(predicate);
+  return (predicate_bit_pattern & mask) > 0;
+}
+
+__device__ __forceinline__ int all_sync(uint64_t mask, int predicate) {
+    uint64_t predicate_bit_pattern = __ballot(predicate);
+    return (~predicate_bit_pattern & mask) == 0;
+}
+
+#define __shfl_xor_sync(mask, var, srcLane) __shfl_xor((var), (srcLane))
+#define __shfl_sync(mask, var, srcLane) __shfl((var), (srcLane))
+#define __any_sync(mask, predicate) any_sync((mask), (predicate))
+#define __all_sync(mask, predicate) all_sync((mask), (predicate))
+
+#endif
+
 // workgroup-level barrier sync used shared memory
 namespace amd {
 
@@ -919,8 +940,7 @@ __device__ __forceinline__ int ld_acquire_cta(int const* ptr) {
 __forceinline__ __device__ void acquire_lock(int* mutex) {
   // To make later memory operations valid, we must use `acquire` for memory
   // semantics
-  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0)
-    ;
+  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0);
 }
 
 __forceinline__ __device__ void release_lock(int* mutex) {
