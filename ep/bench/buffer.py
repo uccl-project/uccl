@@ -679,9 +679,6 @@ class Buffer:
 
         # Internode
         if self.runtime.get_num_rdma_ranks() > 1:
-            assert (
-                num_worst_tokens == 0
-            ), "Internode dispatch does not support `num_worst_tokens > 0`"
             return self.internode_dispatch(
                 x,
                 handle,
@@ -692,6 +689,7 @@ class Buffer:
                 topk_idx,
                 topk_weights,
                 expert_alignment,
+                num_worst_tokens,
                 config,
                 previous_event,
                 async_finish,
@@ -881,6 +879,7 @@ class Buffer:
         topk_idx: Optional[torch.Tensor] = None,
         topk_weights: Optional[torch.Tensor] = None,
         expert_alignment: int = 1,
+        num_worst_tokens: int = 0,
         config: Optional[Config] = None,
         previous_event: Optional[EventOverlap] = None,
         async_finish: bool = False,
@@ -934,6 +933,7 @@ class Buffer:
                     gbl_channel_prefix_matrix,
                     recv_gbl_rank_prefix_sum,
                     expert_alignment,
+                    num_worst_tokens,
                     config,
                     getattr(previous_event, "event", None),
                     async_finish,
@@ -986,6 +986,7 @@ class Buffer:
                 None,
                 None,
                 expert_alignment,
+                num_worst_tokens,
                 config,
                 getattr(previous_event, "event", None),
                 async_finish,
