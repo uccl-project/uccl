@@ -158,14 +158,19 @@ build_ep() {
   if [[ "$TARGET" == "therock" ]]; then
     echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
   elif [[ "$TARGET" == rocm* || "$TARGET" == cuda* ]]; then
-    cd ep
-    # This may be needed if you traverse through different git commits
-    # make clean && rm -r build || true
+    # cd ep
+    # # This may be needed if you traverse through different git commits
+    # # make clean && rm -r build || true
+    # python3 setup.py build
+    # cd ..
+    # echo "[container] Copying GPU-driven .so to uccl/"
+    # mkdir -p uccl/lib
+    # cp ep/build/**/*.so uccl/
+
+    cd dietgpu
     python3 setup.py build
     cd ..
-    echo "[container] Copying GPU-driven .so to uccl/"
-    mkdir -p uccl/lib
-    cp ep/build/**/*.so uccl/
+    cp dietgpu/build/**/*.so uccl/
   fi
 }
 

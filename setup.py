@@ -29,6 +29,7 @@ setup(
             "lib/*.so",
             "p2p*.so",
             "ep*.so",
+            "dietgpu*.so",
             "lib/*.a",
             "collective.py",
             "transfer.py",
