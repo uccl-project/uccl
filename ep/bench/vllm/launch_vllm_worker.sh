@@ -32,6 +32,7 @@ fi
 export LD_LIBRARY_PATH=$(python3 -c "import torch; import os; print(os.path.join(torch.__path__[0], 'lib'))"):$LD_LIBRARY_PATH
 
 export VLLM_USE_DEEP_GEMM=1
+export NCCL_P2P_DISABLE=1
 
 # ============================================================================
 # NETWORK CONFIGURATION
@@ -125,7 +126,8 @@ vllm serve "${MODEL}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
     --gpu-memory-utilization 0.8 \
-    --headless
+    --headless \
+    --enforce-eager
 
 # Additional useful options (uncomment as needed, must match Node 0):
 #   --max-model-len 8192 \
