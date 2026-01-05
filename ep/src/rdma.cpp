@@ -554,6 +554,13 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
     exit(1);
   }
 
+  // Query device attributes to get max_dest_rd_atomic
+  struct ibv_device_attr dev_attr;
+  if (ibv_query_device(S.context, &dev_attr)) {
+    perror("Failed to query device attributes");
+    exit(1);
+  }
+
   if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
     printf("RoCE detected (Ethernet)\n");
     is_roce = 1;
@@ -571,7 +578,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
   attr.path_mtu = port_attr.active_mtu;
   attr.dest_qp_num = remote->qp_num;
   attr.rq_psn = remote->psn;
-  attr.max_dest_rd_atomic = 1;
+  attr.max_dest_rd_atomic = dev_attr.max_qp_init_rd_atom;
   attr.min_rnr_timer = 12;
 
   if (is_roce) {
@@ -655,14 +662,21 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
 #ifdef EFA
   return;
 #endif
+  // Query device attributes to get max_rd_atomic
+  struct ibv_device_attr dev_attr;
+  if (ibv_query_device(S.context, &dev_attr)) {
+    perror("Failed to query device attributes");
+    exit(1);
+  }
+
   struct ibv_qp_attr attr;
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTS;
-  attr.timeout = 14;
+  attr.timeout = 20;
   attr.retry_cnt = 7;
   attr.rnr_retry = 7;
   attr.sq_psn = local_info->psn;
-  attr.max_rd_atomic = 1;
+  attr.max_rd_atomic = dev_attr.max_qp_rd_atom;
   attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
   int flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
