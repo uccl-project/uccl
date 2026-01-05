@@ -54,11 +54,6 @@ struct uccl_conn {
   std::mutex listener_mutex;
 };
 
-struct uccl_mr {
-  uint64_t mr_id;
-  uccl_engine* engine;
-};
-
 typedef struct {
   FifoItem fifo_item;
   bool is_valid;
