@@ -1,110 +1,150 @@
-# RDMA-Enabled PyTorch Test Suite
+# UCCL PyTorch Examples
 
-This folder contains lightweight benchmarks that validate **multi-GPU** and **multi-node** communication on AMD Instinct™ clusters using ROCm/RCCL.  Both tests can optionally route traffic through the high-performance **UCCL** RDMA plugin.
+This folder contains examples demonstrating how to use **UCCL** (Ultra and Unified CCL) with PyTorch for distributed training on both **NVIDIA** and **AMD** GPU clusters.
 
 ---
 
-## File overview
+## Overview
 
-| File | Purpose |
-|------|---------|
-| `ddp_amd_test.py` | CIFAR-10 training demo (ResNet-18) driven by **DistributedDataParallel**. |
-| `ddp_amd_run.sh`  | Launch helper for the training demo. |
-| `multi_pg_test.py` | Stress-test that builds three *overlapping* process-groups (BIG, EVEN, ODD) and drives **concurrent** collectives on separate CUDA/HIP streams. |
-| `multi_pg_run.sh` | Launch helper for the multi-PG stress test. |
+| Script | Description |
+|--------|-------------|
+| `ddp_train.py` | CIFAR-10 ResNet-18 training (NVIDIA/AMD unified) |
+| `ddp_run.sh` | Launch script for DDP training |
+| `multi_pg_test.py` | Multi-process-group stress test |
+| `multi_pg_run.sh` | Launch script for stress test |
 
 ---
 
 ## Prerequisites
 
-1. **PyTorch w/ ROCm**.
-2. **RCCL** libraries (bundled with ROCm).
-3. Optional: **UCCL** build that provides `librccl-net-uccl.so`.
-4. `torchvision` (only for `ddp_amd_test.py`).
+### For NVIDIA GPUs (CUDA)
 
-You can install prerequisite 1, 2, and 4 using the following command line, and build prerequisite 3 following [`rdma/README.md`](../rdma/README.md) 
+```bash
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+### For AMD GPUs (ROCm)
+
 ```bash
 pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.3
 ```
 
-Set the following when using UCCL:
+### Building and Installing UCCL
+
 ```bash
-export UCCL_HOME=<path/to/uccl>            # root of your uccl checkout
-export CONDA_LIB_HOME=$CONDA_PREFIX/lib    # contains libglog.so
+git clone https://github.com/uccl-project/uccl.git --recursive && cd uccl
+bash build_and_install.sh [cuda|rocm] all
 ```
 
-If you see `UCCL_* set by environment to xx` printed, that means you have successfully used UCCL in your PyTorch apps. 
+---
+
+## Quick Start
+
+### Single-Node Training
+
+```bash
+cd examples
+
+# Auto-detect platform and use all GPUs
+./ddp_run.sh
+
+# Use specific number of GPUs
+./ddp_run.sh 4
+```
+
+### Multi-Node Training
+
+```bash
+# Node 0 (master)
+./ddp_run.sh 8 2 0 10.0.0.1
+
+# Node 1 (worker)
+./ddp_run.sh 8 2 1 10.0.0.1
+```
+
+### Arguments
+
+```bash
+./ddp_run.sh [NGPUS] [NNODES] [NODE_RANK] [MASTER_ADDR] [MASTER_PORT]
+```
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `NGPUS` | GPUs per node | Auto-detect |
+| `NNODES` | Number of nodes | 1 |
+| `NODE_RANK` | This node's rank | 0 |
+| `MASTER_ADDR` | Master node IP | localhost |
+| `MASTER_PORT` | Master port | 12355 |
+
+---
+
+## Environment Setup
+
+The `ddp_run.sh` script auto-detects your platform and sets the UCCL plugin:
+
+```bash
+# NVIDIA - automatically sets:
+export NCCL_NET_PLUGIN=$(python3 -c "import uccl; print(uccl.nccl_plugin_path())")
+
+# AMD - automatically sets:
+export NCCL_NET_PLUGIN=$(python3 -c "import uccl; print(uccl.rccl_plugin_path())")
+```
+
+When UCCL is loaded, you'll see output like:
+```
+UCCL_* set by environment to xx
+```
+
 <p align="left"> <img src="./uccl_output.png" alt="" width="700"> </p>
 
 ---
 
-## 1 · Distributed training demo (`ddp_amd_*`)
+## Multi-Process-Group Stress Test
 
-### Single-node (4 GPUs)
-```bash
-./ddp_amd_run.sh nccl single 128 10        # BACKEND MODE BATCH_SIZE EPOCHS
-```
+This test creates four overlapping process groups and drives concurrent collectives:
 
-### Two-node (4 × 2 GPUs)
-```bash
-# master node (rank-0)
-MASTER_ADDR=10.0.0.1 MASTER_PORT=12355 NODE_RANK=0 WORLD_SIZE=2 \
-./ddp_amd_run.sh uccl multi 128 10
-
-# worker node (rank-1)
-MASTER_ADDR=10.0.0.1 MASTER_PORT=12355 NODE_RANK=1 WORLD_SIZE=2 \
-./ddp_amd_run.sh uccl multi 128 10
-```
-Arguments (defaults shown):
-```bash
-./ddp_amd_run.sh [BACKEND] [MODE] [BATCH_SIZE] [EPOCHS]
-# BACKEND : nccl | uccl
-# MODE    : single|multi
-```
-
----
-
-## 2 · Concurrent collectives demo (`multi_pg_*`)
-`multi_pg_test.py` creates four groups in **the same order on every rank**:
-```
-WORLD  – implicit default group
-BIG    – explicit group containing *all* ranks
-EVEN   – ranks {0,2,4,…}
-ODD    – ranks {1,3,5,…}
-```
-During each iteration the script:
-1. Resets per-rank tensors.
-2. Launches **four collectives** on their own HIP streams with `async_op=True`:
-   • all-reduce (WORLD)
-   • broadcast (EVEN)
-   • all-reduce (ODD)
-   • all-gather (BIG)
-3. Waits for completion, synchronises, then performs a global `barrier()`.
-
-### Single-node (4 GPUs)
 ```bash
 ./multi_pg_run.sh nccl single 4 100 4096   # BACKEND MODE GPUS ITER SIZE
 ```
 
-### Two-node example
-```bash
-# master node (rank-0)
-MASTER_ADDR=10.0.0.1 MASTER_PORT=12355 NODE_RANK=0 WORLD_SIZE=2 \
-./multi_pg_run.sh uccl multi 4 100 4096
+---
 
-# worker node (rank-1)
-MASTER_ADDR=10.0.0.1 MASTER_PORT=12355 NODE_RANK=0 WORLD_SIZE=2 \
-./multi_pg_run.sh uccl multi 4 100 4096
-```
-Arguments:
-```bash
-./multi_pg_run.sh [BACKEND] [MODE] [NUM_GPUS] [ITERS] [TENSOR_SIZE]
-```
+## Troubleshooting
+
+### General
+
+- **Enable verbose logging**: `export NCCL_DEBUG=INFO GLOG_v=1`
+- **Check GPU visibility**: `nvidia-smi` (CUDA) or `rocm-smi` (ROCm)
+
+### NVIDIA-Specific
+
+- **IB GID index issues**: Try `NCCL_IB_GID_INDEX=3`
+- **Select specific NICs**: `NCCL_IB_HCA=mlx5_2:1`
+
+### AMD-Specific
+
+- **Import order**: Always `import torch` before `import uccl.p2p`
+
+### Multi-Node
+
+- **Gloo connection failures**: Set `GLOO_SOCKET_IFNAME=<interface>`
+- **Firewall issues**: Ensure ports are open between nodes
 
 ---
 
-## Troubleshooting tips
-* Enable verbose logging: `export NCCL_DEBUG=INFO` `GLOG_v=1`.
-* Ensure `HIP_VISIBLE_DEVICES` matches GPUs that have RNIC visibility.
+## UCCL Environment Variables
 
-Happy benchmarking 🚀
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `UCCL_NUM_ENGINES` | Number of UCCL engines | 4 |
+| `UCCL_PORT_ENTROPY` | Paths/QPs per engine | 8 |
+| `UCCL_CHUNK_SIZE_KB` | Max chunk size per WQE | 128 |
+| `UCCL_IB_HCA` | IB devices to use | auto |
+
+---
+
+## References
+
+- [UCCL Project](https://github.com/uccl-project/uccl)
+- [UCCL Collective RDMA README](../collective/rdma/README.md)
+- [PyTorch Distributed](https://pytorch.org/docs/stable/distributed.html)

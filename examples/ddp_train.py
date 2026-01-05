@@ -1,3 +1,18 @@
+"""
+CIFAR-10 Distributed Training with PyTorch DDP
+
+This example demonstrates distributed data parallel training on both
+NVIDIA (CUDA) and AMD (ROCm) GPUs using the UCCL NCCL/RCCL plugin.
+
+Usage:
+    # Single node, multi-GPU
+    torchrun --nproc_per_node=8 ddp_train.py
+
+    # Multi-node (run on each node)
+    torchrun --nnodes=2 --nproc_per_node=8 --node_rank=<RANK> \
+        --master_addr=<IP> --master_port=12355 ddp_train.py
+"""
+
 import os
 import torch
 import torch.nn as nn
@@ -11,7 +26,9 @@ import argparse
 
 
 def parse_args():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="CIFAR-10 Distributed Training Demo (NVIDIA/AMD)"
+    )
     parser.add_argument(
         "--epochs", type=int, default=10, help="Number of training epochs"
     )
@@ -22,22 +39,29 @@ def parse_args():
     return parser.parse_args()
 
 
+def get_gpu_info():
+    """Get GPU platform info (works for both CUDA and ROCm)"""
+    if hasattr(torch.version, "hip") and torch.version.hip is not None:
+        return "AMD ROCm", torch.version.hip
+    elif torch.version.cuda is not None:
+        return "NVIDIA CUDA", torch.version.cuda
+    else:
+        return "Unknown", "N/A"
+
+
 def setup_distributed():
-    """Initialize distributed training for AMD GPUs"""
-    # Check if ROCm is available
+    """Initialize distributed training (works for both NVIDIA and AMD GPUs)"""
     if not torch.cuda.is_available():
         raise RuntimeError(
-            "ROCm/CUDA not available. Please install ROCm for AMD GPUs."
+            "GPU not available. Please ensure CUDA/ROCm drivers are installed."
         )
 
-    # Initialize process group
+    # Get rank and world size from environment
     if "RANK" in os.environ and "WORLD_SIZE" in os.environ:
-        # Multi-node setup
         rank = int(os.environ["RANK"])
         world_size = int(os.environ["WORLD_SIZE"])
         local_rank = int(os.environ["LOCAL_RANK"])
     else:
-        # Single node setup
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
         rank = local_rank
         world_size = torch.cuda.device_count()
@@ -52,15 +76,19 @@ def main():
     # Setup distributed training
     rank, local_rank, world_size = setup_distributed()
 
-    # Initialize process group (RCCL is compatible with NCCL API for AMD GPUs)
+    # Initialize process group with NCCL backend
+    # (RCCL is API-compatible with NCCL for AMD GPUs)
     dist.init_process_group(backend="nccl")
 
-    # Set device for this process (works with both CUDA and ROCm)
+    # Set device for this process
     torch.cuda.set_device(local_rank)
     device = torch.device(f"cuda:{local_rank}")
 
+    # Print GPU info
+    platform, version = get_gpu_info()
     print(f"Process {rank}/{world_size} using device: {device}")
     print(f"Device name: {torch.cuda.get_device_name(device)}")
+    print(f"Platform: {platform} {version}")
 
     # Build the model and move it to the corresponding device
     model = torchvision.models.resnet18(num_classes=10)
@@ -180,7 +208,7 @@ def main():
         train_acc = 100.0 * total_correct.item() / total_samples.item()
 
         # === Testing phase ===
-        model.eval()
+        model.train(False)  # Switch to inference mode
         test_loss = 0.0
         test_total = 0
         test_correct = 0
