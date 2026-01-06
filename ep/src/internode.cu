@@ -720,7 +720,7 @@ __global__ void __launch_bounds__(
       // Read RDMA rank existence
       uint64_t is_token_in_rank_uint64 = 0;
       if (lane_id < kNumRDMARanks) {
-        is_token_in_rank_uint64 = __ldg(reinterpret_cast<uint64_t const*>(
+        is_token_in_rank_uint64 = *(reinterpret_cast<uint64_t const*>(
             is_token_in_rank + token_idx * num_ranks +
             lane_id * NUM_MAX_NVL_PEERS));
       }
