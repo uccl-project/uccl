@@ -665,7 +665,7 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
   if (is_roce) {
     attr.ah_attr.is_global = 1;
     attr.ah_attr.port_num = 1;
-    attr.ah_attr.sl = 135;
+    attr.ah_attr.sl = 0;
     attr.ah_attr.src_path_bits = 0;
     attr.ah_attr.grh.traffic_class = 3;
     attr.ah_attr.grh.hop_limit = 64;
@@ -751,11 +751,11 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
   attr.rnr_retry = 7;
   attr.sq_psn = local_info->psn;
   attr.max_rd_atomic = 32;
-  attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
+  // attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_ATOMIC;
 
   int flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
               IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC |
-              IBV_QP_ACCESS_FLAGS;
+              0;
 
   if (ibv_modify_qp(S.qp, &attr, flags)) {
     perror("Failed to modify QP to RTS");
