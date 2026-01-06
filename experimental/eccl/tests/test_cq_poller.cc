@@ -106,10 +106,8 @@ void cqpoller_server_thread(std::shared_ptr<Communicator> comm, int peer_rank) {
 }
 
 void test_cq_poller() {
-  auto comm0 =
-      std::make_shared<Communicator>(0, 0, 2);  // gpu_id=0, rank=0
-  auto comm1 =
-      std::make_shared<Communicator>(0, 1, 2);  // gpu_id=0, rank=1
+  auto comm0 = std::make_shared<Communicator>(0, 0, 2);  // gpu_id=0, rank=0
+  auto comm1 = std::make_shared<Communicator>(0, 1, 2);  // gpu_id=0, rank=1
 
   std::thread t_client(cqpoller_client_thread, comm0, 1);
   std::thread t_server(cqpoller_server_thread, comm1, 0);

@@ -202,7 +202,7 @@ Communicator::~Communicator() {
     std::lock_guard<std::mutex> lk(local_mr_mu_);
     bufs.reserve(ptr_to_local_ibv_mr_.size());
     for (auto& kv : ptr_to_local_ibv_mr_) {
-      bufs.push_back(kv.first); // ptr
+      bufs.push_back(kv.first);  // ptr
     }
   }
   for (auto* p : bufs) {
@@ -312,8 +312,7 @@ bool Communicator::connect_to(int rank) {
     ret = ep->connect_to(rank);
     if (ret) {
       std::cout << "[INFO] Communicator " << global_rank_
-                << " IPC connect_to succeeded to rank " << rank <<
-                std::endl;
+                << " IPC connect_to succeeded to rank " << rank << std::endl;
     } else {
       std::cerr << "[ERROR] Communicator " << global_rank_
                 << " IPC connect_to failed to rank " << rank << std::endl;
@@ -328,8 +327,7 @@ bool Communicator::connect_to(int rank) {
     ret = ep->connect_to(rank);
     if (ret) {
       std::cout << "[INFO] Communicator " << global_rank_
-                << " RDMA connect_to succeeded to rank " << rank <<
-                std::endl;
+                << " RDMA connect_to succeeded to rank " << rank << std::endl;
     } else {
       std::cerr << "[ERROR] Communicator " << global_rank_
                 << " RDMA connect_to failed to rank " << rank << std::endl;
@@ -367,8 +365,7 @@ bool Communicator::accept_from(int rank) {
     ret = ep->accept_from(rank);
     if (ret) {
       std::cout << "[INFO] Communicator " << global_rank_
-                << " IPC accept_from succeeded from rank " << rank <<
-                std::endl;
+                << " IPC accept_from succeeded from rank " << rank << std::endl;
     } else {
       std::cerr << "[ERROR] Communicator " << global_rank_
                 << " IPC accept_from failed from rank " << rank << std::endl;
@@ -379,8 +376,7 @@ bool Communicator::accept_from(int rank) {
     ret = ep->connect_to(rank);
     if (ret) {
       std::cout << "[INFO] Communicator " << global_rank_
-                << " RDMA accept succeeded from rank " << rank <<
-                std::endl;
+                << " RDMA accept succeeded from rank " << rank << std::endl;
     } else {
       std::cerr << "[ERROR] Communicator " << global_rank_
                 << " RDMA accept failed from rank " << rank << std::endl;
@@ -721,7 +717,8 @@ bool Communicator::notify_mr(int remote_rank, MR& mr) {
     return false;
   }
   if (ep->type != EndpointType::RDMA) {
-    std::cout << "MR only support for EndpointRDMA, skip notify mr" << std::endl;
+    std::cout << "MR only support for EndpointRDMA, skip notify mr"
+              << std::endl;
     return true;
   }
 
@@ -746,7 +743,8 @@ bool Communicator::wait_mr_notify(int remote_rank, MR& mr) {
     throw std::runtime_error("Endpoint is not valid");
   }
   if (ep->type != EndpointType::RDMA) {
-    std::cout << "MR only support for EndpointRDMA, skip wait_mr_notify" << std::endl;
+    std::cout << "MR only support for EndpointRDMA, skip wait_mr_notify"
+              << std::endl;
     return true;
   }
 
@@ -767,9 +765,8 @@ bool Communicator::wait_mr_notify(int remote_rank, MR& mr) {
     rank_mr_id_to_remote_mr_[remote_rank][mr.id] = mr;
   }
 
-  std::cout << "[recv MR from rank " << remote_rank
-            << "] addr=" << mr.address << " length=" << mr.length
-            << " key=" << mr.key << std::endl;
+  std::cout << "[recv MR from rank " << remote_rank << "] addr=" << mr.address
+            << " length=" << mr.length << " key=" << mr.key << std::endl;
 
   return true;
 }

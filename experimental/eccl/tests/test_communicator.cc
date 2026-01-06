@@ -17,7 +17,8 @@ namespace {
 constexpr size_t kBytes = 4 * 1024;
 
 static void fill_pattern(std::vector<uint8_t>& buf) {
-  for (size_t i = 0; i < buf.size(); ++i) buf[i] = static_cast<uint8_t>(i & 0xFF);
+  for (size_t i = 0; i < buf.size(); ++i)
+    buf[i] = static_cast<uint8_t>(i & 0xFF);
 }
 
 static bool check_pattern(std::vector<uint8_t> const& buf) {
@@ -30,11 +31,12 @@ static bool check_pattern(std::vector<uint8_t> const& buf) {
   return true;
 }
 
-static std::string get_arg(int argc, char** argv, const char* key, const char* def) {
+static std::string get_arg(int argc, char** argv, char const* key,
+                           char const* def) {
   // --role=server --role server
   for (int i = 1; i < argc; ++i) {
     if (std::strncmp(argv[i], key, std::strlen(key)) == 0) {
-      const char* p = argv[i] + std::strlen(key);
+      char const* p = argv[i] + std::strlen(key);
       if (*p == '=') return std::string(p + 1);
       if (*p == '\0' && i + 1 < argc) return std::string(argv[i + 1]);
     }
@@ -45,7 +47,8 @@ static std::string get_arg(int argc, char** argv, const char* key, const char* d
 
 static int run_client() {
   auto cfg = std::make_shared<Config>();
-  auto comm = std::make_shared<Communicator>(client_gpu, client_rank, kWorldSize, cfg);
+  auto comm =
+      std::make_shared<Communicator>(client_gpu, client_rank, kWorldSize, cfg);
 
   int peer_rank = server_rank;
   if (!comm->connect_to(peer_rank)) {
@@ -65,21 +68,22 @@ static int run_client() {
     if (sendbuf_d) GPU_RT_CHECK(gpuFree(sendbuf_d));
   });
 
-  GPU_RT_CHECK(gpuMemcpy(sendbuf_d, sendbuf_h.data(), kBytes, gpuMemcpyHostToDevice));
+  GPU_RT_CHECK(
+      gpuMemcpy(sendbuf_d, sendbuf_h.data(), kBytes, gpuMemcpyHostToDevice));
 
-  // only RDMA 
-  MR local_mr = comm->reg_mr(sendbuf_d, kBytes); 
-  if (!comm->notify_mr(peer_rank, local_mr)) { return 3; } 
-  MR remote_mr; 
-  if (!comm->wait_mr_notify(peer_rank, remote_mr)) { return 3; }
+  // only RDMA
+  MR local_mr = comm->reg_mr(sendbuf_d, kBytes);
+  if (!comm->notify_mr(peer_rank, local_mr)) {
+    return 3;
+  }
+  MR remote_mr;
+  if (!comm->wait_mr_notify(peer_rank, remote_mr)) {
+    return 3;
+  }
 
-  unsigned sreq = comm->isend(peer_rank,
-                              sendbuf_d,
-                              0,
-                              kBytes,
-                              local_mr.id,
-                              remote_mr.id,
-                              /*on_gpu*/ true);
+  unsigned sreq =
+      comm->isend(peer_rank, sendbuf_d, 0, kBytes, local_mr.id, remote_mr.id,
+                  /*on_gpu*/ true);
 
   if (!comm->wait_finish(sreq)) {
     std::cerr << "[CLIENT] wait_finish(send) failed\n";
@@ -93,7 +97,8 @@ static int run_client() {
 
 static int run_server() {
   auto cfg = std::make_shared<Config>();
-  auto comm = std::make_shared<Communicator>(server_gpu, server_rank, kWorldSize, cfg);
+  auto comm =
+      std::make_shared<Communicator>(server_gpu, server_rank, kWorldSize, cfg);
 
   int peer_rank = client_rank;
   if (!comm->accept_from(peer_rank)) {
@@ -108,15 +113,16 @@ static int run_server() {
     if (recvbuf_d) GPU_RT_CHECK(gpuFree(recvbuf_d));
   });
 
-  MR local_mr = comm->reg_mr(recvbuf_d, kBytes); 
-  if (!comm->notify_mr(peer_rank, local_mr)) { return 3; } 
+  MR local_mr = comm->reg_mr(recvbuf_d, kBytes);
+  if (!comm->notify_mr(peer_rank, local_mr)) {
+    return 3;
+  }
   MR remote_mr;
-  if (!comm->wait_mr_notify(peer_rank, remote_mr)) { return 3; }
+  if (!comm->wait_mr_notify(peer_rank, remote_mr)) {
+    return 3;
+  }
 
-  unsigned rreq = comm->irecv(peer_rank,
-                              recvbuf_d,
-                              0,
-                              kBytes,
+  unsigned rreq = comm->irecv(peer_rank, recvbuf_d, 0, kBytes,
                               /*on_gpu*/ true);
 
   if (!comm->wait_finish(rreq)) {
@@ -126,7 +132,8 @@ static int run_server() {
 
   // copy back and check
   std::vector<uint8_t> recvbuf_h(kBytes, 0);
-  GPU_RT_CHECK(gpuMemcpy(recvbuf_h.data(), recvbuf_d, kBytes, gpuMemcpyDeviceToHost));
+  GPU_RT_CHECK(
+      gpuMemcpy(recvbuf_h.data(), recvbuf_d, kBytes, gpuMemcpyDeviceToHost));
 
   bool ok = check_pattern(recvbuf_h);
   std::cout << (ok ? "[SERVER] OK\n" : "[SERVER] FAILED\n");

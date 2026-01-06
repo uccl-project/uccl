@@ -6,6 +6,7 @@
 #include "util/gpu_rt.h"
 #include "util/jring.h"
 #include <infiniband/verbs.h>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -13,7 +14,6 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
-#include <condition_variable>
 
 enum class EndpointType { RDMA, IPC };
 
@@ -97,10 +97,10 @@ class IPCEndpoint : public EndpointBase {
   std::thread proxy_thread_;
   std::mutex cv_mu_;
   std::condition_variable cv_;
-  std::atomic<int> pending_{0}; // number of queued tasks
+  std::atomic<int> pending_{0};  // number of queued tasks
   void proxy_thread_func();
 
-  std::vector<gpuStream_t> ipc_streams_;   // n_streams
+  std::vector<gpuStream_t> ipc_streams_;  // n_streams
 
   std::shared_ptr<Config> config_;
   Communicator* comm_;
@@ -163,7 +163,7 @@ class Communicator {
   mutable std::mutex meta_mu_;
 
   // ---------- GPU / NIC info --------
-  int local_rank_;   // gpu_id_
+  int local_rank_;  // gpu_id_
   int global_rank_;
   int world_size_;
   bool support_rdma;

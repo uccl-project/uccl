@@ -1,8 +1,8 @@
 #pragma once
 
+#include "util/gpu_rt.h"
 #include <map>
 #include <string>
-#include "util/gpu_rt.h"
 
 // for redis
 #ifdef USE_REDIS_OOB
@@ -237,7 +237,6 @@ class SockExchanger : public Exchanger {
       std::function<void(std::thread&&)>);
 };
 
-
 // --- P2P Exchanger ---
 
 struct IpcCache {
@@ -264,8 +263,8 @@ struct IpcCacheWire {
 #pragma pack(pop)
 
 struct AckWire {
-  uint32_t status;   // 0=fail, 1=ok, or extend
-  uint32_t reserved; // keep 8B aligned
+  uint32_t status;    // 0=fail, 1=ok, or extend
+  uint32_t reserved;  // keep 8B aligned
 };
 
 class UdsExchanger {
@@ -279,18 +278,18 @@ class UdsExchanger {
   // Client: connect to peer's UDS with retry until timeout. Idempotent.
   bool connect_to(int peer_rank, int timeout_ms = 30000);
 
-  // Server: accept connections until we receive one from peer_rank (or timeout).
-  // Idempotent: returns true immediately if already connected.
+  // Server: accept connections until we receive one from peer_rank (or
+  // timeout). Idempotent: returns true immediately if already connected.
   bool accept_from(int peer_rank, int timeout_ms = 30000);
 
   // Generic framed send
-  bool send(int peer_rank, uint16_t type, uint64_t seq,
-            const void* payload, uint32_t bytes);
+  bool send(int peer_rank, uint16_t type, uint64_t seq, void const* payload,
+            uint32_t bytes);
 
   // Convenience: send IPC cache
-  bool send_ipc_cache(int peer_rank, uint64_t seq, const IpcCacheWire& cache);
-  bool recv_ipc_cache(int peer_rank, IpcCacheWire& out_cache, uint64_t* out_seq = nullptr,
-                      int timeout_ms = 30000);
+  bool send_ipc_cache(int peer_rank, uint64_t seq, IpcCacheWire const& cache);
+  bool recv_ipc_cache(int peer_rank, IpcCacheWire& out_cache,
+                      uint64_t* out_seq = nullptr, int timeout_ms = 30000);
   bool send_ack(int peer_rank, uint64_t seq, uint32_t status = 1);
   bool recv_ack(int peer_rank, uint32_t* out_status = nullptr,
                 uint64_t* out_seq = nullptr, int timeout_ms = 30000,
@@ -319,9 +318,9 @@ class UdsExchanger {
 
  private:
   std::string path_for_rank(int rank);
-  bool connect_once(const std::string& peer_path, int& out_fd);
+  bool connect_once(std::string const& peer_path, int& out_fd);
 
-  bool send_all(int fd, const char* buf, size_t len);
+  bool send_all(int fd, char const* buf, size_t len);
   bool recv_all(int fd, char* buf, size_t len);
 
   // Accept one connection with a poll-like timeout.

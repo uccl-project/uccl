@@ -83,8 +83,8 @@ void test_redis_oob() {
             << std::endl;
 }
 
-void rank_thread(int rank, int world_size,
-                 std::string const& exchanger_ip, int exchanger_port) {
+void rank_thread(int rank, int world_size, std::string const& exchanger_ip,
+                 int exchanger_port) {
   auto ex = std::make_shared<RedisExchanger>(exchanger_ip, exchanger_port);
   if (!ex->valid()) {
     std::cerr << "[ERROR] Rank " << rank << " failed to connect to Redis"
@@ -99,8 +99,8 @@ void rank_thread(int rank, int world_size,
   std::string key = "meta:" + std::to_string(rank);
 
   if (!ex->publish(key, local)) {
-    std::cerr << "[ERROR] Rank " << rank
-              << " failed to publish meta to key " << key << std::endl;
+    std::cerr << "[ERROR] Rank " << rank << " failed to publish meta to key "
+              << key << std::endl;
     return;
   }
   std::cout << "[INFO] Rank " << rank << " published meta to key " << key
@@ -111,8 +111,8 @@ void rank_thread(int rank, int world_size,
     std::string remote_key = "meta:" + std::to_string(r);
     CommunicatorMeta remote;
     if (ex->wait_and_fetch(remote_key, remote, 50, 100)) {
-      std::cout << "[INFO] Rank " << rank << " fetched meta for rank "
-                << r << ", host_id=" << remote.host_id
+      std::cout << "[INFO] Rank " << rank << " fetched meta for rank " << r
+                << ", host_id=" << remote.host_id
                 << ", is_ready=" << remote.is_ready << std::endl;
     } else {
       std::cerr << "[WARN] Rank " << rank

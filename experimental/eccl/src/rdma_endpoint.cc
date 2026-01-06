@@ -55,8 +55,8 @@ bool RDMAEndpoint::connect_to(int peer_rank) {
     std::lock_guard<std::mutex> lock(qp_list_mu_);
     ibv_qp* new_qp = ibv_create_qp(comm_->pd_, &qp_init_attr);
     if (!new_qp) {
-      std::cerr << "[ERROR] Communicator " << rank
-                << " Failed to create QP" << std::endl;
+      std::cerr << "[ERROR] Communicator " << rank << " Failed to create QP"
+                << std::endl;
       return false;
     }
     qp_list_.push_back(new_qp);
@@ -124,9 +124,8 @@ bool RDMAEndpoint::connect_to(int peer_rank) {
     }
   }
 
-  std::cout << "[INFO] Communicator " << rank
-            << " QP info exchanged with rank " << peer_rank
-            << ", local_qps=" << local_info.qps.size()
+  std::cout << "[INFO] Communicator " << rank << " QP info exchanged with rank "
+            << peer_rank << ", local_qps=" << local_info.qps.size()
             << ", remote_qps=" << remote_info.qps.size() << std::endl;
 
   // Modify QPs to RTR

@@ -84,8 +84,7 @@ void rank_thread_socket(int rank, int world_size, std::string const& ip,
   bool is_server = (rank == 0);
   auto ex = std::make_shared<SockExchanger>(is_server, ip, port);
   if (!ex->valid()) {
-    std::cerr << "[ERROR] Rank " << rank
-              << " failed to init SockExchanger\n";
+    std::cerr << "[ERROR] Rank " << rank << " failed to init SockExchanger\n";
     return;
   }
 
@@ -99,16 +98,16 @@ void rank_thread_socket(int rank, int world_size, std::string const& ip,
     std::cerr << "[ERROR] Rank " << rank << " failed to publish meta\n";
     return;
   }
-  std::cout << "[INFO] Rank " << rank << " published meta ("
-            << local.host_id << ")\n";
+  std::cout << "[INFO] Rank " << rank << " published meta (" << local.host_id
+            << ")\n";
 
   for (int r = 0; r < world_size; ++r) {
     if (r == rank) continue;
     std::string remote_key = "meta:" + std::to_string(r);
     CommunicatorMeta remote;
     if (ex->wait_and_fetch(remote_key, remote, 50, 100)) {
-      std::cout << "[INFO] Rank " << rank << " fetched meta for rank "
-                << r << " host_id=" << remote.host_id << " ip=" << remote.ip
+      std::cout << "[INFO] Rank " << rank << " fetched meta for rank " << r
+                << " host_id=" << remote.host_id << " ip=" << remote.ip
                 << " ready=" << remote.is_ready << "\n";
     } else {
       std::cerr << "[WARN] Rank " << rank

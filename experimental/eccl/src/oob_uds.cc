@@ -1,37 +1,35 @@
 #include "oob.h"
-
+#include <chrono>
+#include <cstring>
+#include <iostream>
 #include <errno.h>
-#include <sys/socket.h>
 #include <sys/select.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
-#include <chrono>
-#include <cstring>
-#include <iostream>
 
 namespace {
 constexpr uint32_t kHelloMagic = 0xC0DEF00D;
-constexpr uint32_t kMsgMagic   = 0x55445331; // "UDS1"
-constexpr uint16_t kVersion    = 1;
+constexpr uint32_t kMsgMagic = 0x55445331;  // "UDS1"
+constexpr uint16_t kVersion = 1;
 
-static inline std::string dirname_of(const std::string& path) {
+static inline std::string dirname_of(std::string const& path) {
   auto pos = path.find_last_of('/');
   if (pos == std::string::npos) return {};
   return path.substr(0, pos);
 }
 
-static inline void mkdir_best_effort(const std::string& dir) {
+static inline void mkdir_best_effort(std::string const& dir) {
   if (dir.empty()) return;
   ::mkdir(dir.c_str(), 0700);
 }
 
-} // namespace
+}  // namespace
 
-UdsExchanger::UdsExchanger(int self_rank)
-    : self_rank_(self_rank) {}
+UdsExchanger::UdsExchanger(int self_rank) : self_rank_(self_rank) {}
 
 UdsExchanger::~UdsExchanger() {
   running_.store(false, std::memory_order_relaxed);
@@ -79,11 +77,13 @@ bool UdsExchanger::ensure_server_started() {
 
   sockaddr_un addr{};
   addr.sun_family = AF_UNIX;
-  std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", local_path_.c_str());
+  std::snprintf(addr.sun_path, sizeof(addr.sun_path), "%s",
+                local_path_.c_str());
 
-  if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-    std::cerr << "[UDS] bind(" << local_path_ << ") failed: "
-              << std::strerror(errno) << "\n";
+  if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) <
+      0) {
+    std::cerr << "[UDS] bind(" << local_path_
+              << ") failed: " << std::strerror(errno) << "\n";
     ::close(listen_fd_);
     listen_fd_ = -1;
     return false;
@@ -112,13 +112,14 @@ bool UdsExchanger::connect_to(int peer_rank, int timeout_ms) {
   }
 
   const std::string peer_path = path_for_rank(peer_rank);
-  auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
 
   while (std::chrono::steady_clock::now() < deadline) {
     int fd = -1;
     if (connect_once(peer_path, fd)) {
-      Hello h{ kHelloMagic, self_rank_, peer_rank, kVersion };
-      if (!send_all(fd, reinterpret_cast<const char*>(&h), sizeof(h))) {
+      Hello h{kHelloMagic, self_rank_, peer_rank, kVersion};
+      if (!send_all(fd, reinterpret_cast<char const*>(&h), sizeof(h))) {
         ::close(fd);
         return false;
       }
@@ -162,18 +163,21 @@ bool UdsExchanger::accept_from(int peer_rank, int timeout_ms) {
     if (rank_to_fd_.count(peer_rank)) return true;
   }
 
-  auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
 
   while (std::chrono::steady_clock::now() < deadline) {
-    int remaining_ms = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
-        deadline - std::chrono::steady_clock::now()).count();
+    int remaining_ms =
+        (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+            deadline - std::chrono::steady_clock::now())
+            .count();
     if (remaining_ms <= 0) break;
 
     int fd = accept_with_timeout(remaining_ms);
-    if (fd == -1) { // timeout
+    if (fd == -1) {  // timeout
       break;
     }
-    if (fd == -2) { // fatal
+    if (fd == -2) {  // fatal
       return false;
     }
 
@@ -183,7 +187,8 @@ bool UdsExchanger::accept_from(int peer_rank, int timeout_ms) {
       ::close(fd);
       continue;
     }
-    if (h.magic != kHelloMagic || h.version != kVersion || h.to_rank != self_rank_) {
+    if (h.magic != kHelloMagic || h.version != kVersion ||
+        h.to_rank != self_rank_) {
       ::close(fd);
       continue;
     }
@@ -214,7 +219,7 @@ bool UdsExchanger::accept_from(int peer_rank, int timeout_ms) {
 }
 
 bool UdsExchanger::send(int peer_rank, uint16_t type, uint64_t seq,
-                        const void* payload, uint32_t bytes) {
+                        void const* payload, uint32_t bytes) {
   int fd = -1;
   std::mutex* smu = nullptr;
 
@@ -239,15 +244,19 @@ bool UdsExchanger::send(int peer_rank, uint16_t type, uint64_t seq,
   hdr.seq = seq;
 
   std::lock_guard<std::mutex> lk(*smu);
-  if (!send_all(fd, reinterpret_cast<const char*>(&hdr), sizeof(hdr))) return false;
+  if (!send_all(fd, reinterpret_cast<char const*>(&hdr), sizeof(hdr)))
+    return false;
   if (bytes > 0 && payload != nullptr) {
-    if (!send_all(fd, reinterpret_cast<const char*>(payload), bytes)) return false;
+    if (!send_all(fd, reinterpret_cast<char const*>(payload), bytes))
+      return false;
   }
   return true;
 }
 
-bool UdsExchanger::send_ipc_cache(int peer_rank, uint64_t seq, const IpcCacheWire& cache) {
-  return send(peer_rank, kTypeIpcCache, seq, &cache, (uint32_t)sizeof(IpcCacheWire));
+bool UdsExchanger::send_ipc_cache(int peer_rank, uint64_t seq,
+                                  IpcCacheWire const& cache) {
+  return send(peer_rank, kTypeIpcCache, seq, &cache,
+              (uint32_t)sizeof(IpcCacheWire));
 }
 
 bool UdsExchanger::recv_ipc_cache(int peer_rank, IpcCacheWire& out_cache,
@@ -292,7 +301,9 @@ bool UdsExchanger::recv_ipc_cache(int peer_rank, IpcCacheWire& out_cache,
     } else {
       auto now = std::chrono::steady_clock::now();
       if (now >= deadline) return false;
-      wait_ms = (int)std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+      wait_ms = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - now)
+                    .count();
       if (wait_ms <= 0) return false;
     }
 
@@ -390,7 +401,9 @@ bool UdsExchanger::recv_ack(int peer_rank, uint32_t* out_status,
     } else {
       auto now = std::chrono::steady_clock::now();
       if (now >= deadline) return false;
-      wait_ms = (int)std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
+      wait_ms = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - now)
+                    .count();
       if (wait_ms <= 0) return false;
     }
 
@@ -405,7 +418,7 @@ bool UdsExchanger::recv_ack(int peer_rank, uint32_t* out_status,
     int r = ::select(fd + 1, &rfds, nullptr, nullptr, &tv);
     if (r == 0) {
       if (timeout_ms < 0) continue;
-      return false; // timeout
+      return false;  // timeout
     }
     if (r < 0) {
       if (errno == EINTR) continue;
@@ -461,7 +474,7 @@ void UdsExchanger::close_peer(int peer_rank) {
   rank_recv_mu_.erase(peer_rank);
 }
 
-bool UdsExchanger::connect_once(const std::string& peer_path, int& out_fd) {
+bool UdsExchanger::connect_once(std::string const& peer_path, int& out_fd) {
   out_fd = -1;
   int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
   if (fd < 0) return false;
@@ -479,7 +492,7 @@ bool UdsExchanger::connect_once(const std::string& peer_path, int& out_fd) {
   return false;
 }
 
-bool UdsExchanger::send_all(int fd, const char* buf, size_t len) {
+bool UdsExchanger::send_all(int fd, char const* buf, size_t len) {
   size_t off = 0;
   while (off < len) {
     ssize_t n = ::send(fd, buf + off, len - off, 0);
@@ -521,7 +534,7 @@ int UdsExchanger::accept_with_timeout(int timeout_ms) {
   tv.tv_usec = (timeout_ms % 1000) * 1000;
 
   int r = ::select(listen_fd_ + 1, &rfds, nullptr, nullptr, &tv);
-  if (r == 0) return -1; // timeout
+  if (r == 0) return -1;  // timeout
   if (r < 0) {
     if (errno == EINTR) return -1;
     return -2;
