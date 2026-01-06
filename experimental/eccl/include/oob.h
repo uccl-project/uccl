@@ -1,5 +1,6 @@
 #pragma once
 
+#include "util/gpu_rt.h"
 #include <map>
 #include <string>
 
@@ -24,6 +25,7 @@
 #include <mutex>
 #include <unordered_map>
 
+// --- Group Exchanger ---
 struct Exchangeable {
   virtual std::map<std::string, std::string> to_map() const = 0;
   virtual void from_map(std::map<std::string, std::string> const& kv) = 0;
@@ -233,4 +235,112 @@ class SockExchanger : public Exchanger {
       int, std::unordered_map<std::string, std::map<std::string, std::string>>&,
       std::mutex&, std::atomic<bool>&, size_t,
       std::function<void(std::thread&&)>);
+};
+
+// --- P2P Exchanger ---
+
+struct IpcCache {
+  gpuIpcMemHandle_t handle;
+  bool is_send;
+  void* direct_ptr;  // ptr of remote, local get it by mapping from handle
+  uintptr_t offset;
+  size_t size;
+};
+
+// Only message type needed for now
+static constexpr uint16_t kTypeIpcCache = 1;
+static constexpr uint16_t kTypeAck = 2;
+
+// uds payload
+#pragma pack(push, 1)
+struct IpcCacheWire {
+  gpuIpcMemHandle_t handle;
+  uint8_t is_send;
+  uint64_t offset;
+  uint64_t size;
+  uint32_t remote_gpu_idx_;
+};
+#pragma pack(pop)
+
+struct AckWire {
+  uint32_t status;    // 0=fail, 1=ok, or extend
+  uint32_t reserved;  // keep 8B aligned
+};
+
+class UdsExchanger {
+ public:
+  UdsExchanger(int self_rank);
+  ~UdsExchanger();
+
+  // Lazy start local server (bind/listen) once.
+  bool ensure_server_started();
+
+  // Client: connect to peer's UDS with retry until timeout. Idempotent.
+  bool connect_to(int peer_rank, int timeout_ms = 30000);
+
+  // Server: accept connections until we receive one from peer_rank (or
+  // timeout). Idempotent: returns true immediately if already connected.
+  bool accept_from(int peer_rank, int timeout_ms = 30000);
+
+  // Generic framed send
+  bool send(int peer_rank, uint16_t type, uint64_t seq, void const* payload,
+            uint32_t bytes);
+
+  // Convenience: send IPC cache
+  bool send_ipc_cache(int peer_rank, uint64_t seq, IpcCacheWire const& cache);
+  bool recv_ipc_cache(int peer_rank, IpcCacheWire& out_cache,
+                      uint64_t* out_seq = nullptr, int timeout_ms = 30000);
+  bool send_ack(int peer_rank, uint64_t seq, uint32_t status = 1);
+  bool recv_ack(int peer_rank, uint32_t* out_status = nullptr,
+                uint64_t* out_seq = nullptr, int timeout_ms = 30000,
+                uint64_t expected_seq = UINT64_MAX);
+
+  int get_fd(int peer_rank) const;
+  void close_peer(int peer_rank);
+
+ private:
+  struct Hello {
+    uint32_t magic;
+    int32_t from_rank;
+    int32_t to_rank;
+    uint32_t version;
+  };
+
+  struct MsgHdr {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t type;
+    uint32_t bytes;
+    int32_t from_rank;
+    int32_t to_rank;
+    uint64_t seq;
+  };
+
+ private:
+  std::string path_for_rank(int rank);
+  bool connect_once(std::string const& peer_path, int& out_fd);
+
+  bool send_all(int fd, char const* buf, size_t len);
+  bool recv_all(int fd, char* buf, size_t len);
+
+  // Accept one connection with a poll-like timeout.
+  // Returns: fd>=0 on success, -1 on timeout, -2 on fatal error.
+  int accept_with_timeout(int timeout_ms);
+
+ private:
+  int self_rank_;
+
+  // server state
+  std::atomic<bool> running_{false};
+  int listen_fd_{-1};
+  std::string local_path_;
+
+  // connections
+  mutable std::mutex mu_;
+  std::unordered_map<int, int> rank_to_fd_;
+  std::unordered_map<int, std::unique_ptr<std::mutex>> rank_send_mu_;
+  std::unordered_map<int, std::unique_ptr<std::mutex>> rank_recv_mu_;
+
+  // Ensure only one thread is doing accept() at a time.
+  mutable std::mutex accept_mu_;
 };
