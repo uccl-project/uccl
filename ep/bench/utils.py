@@ -89,53 +89,10 @@ def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
     )
 
 
-def _discover_local_ip():
-    # Try to infer the IP that can reach MASTER_ADDR (works in most clusters)
-    import socket, os
-
-    # Method 1: Use MASTER_ADDR if available (torchrun style)
-    if "MASTER_ADDR" in os.environ:
-        master = os.environ["MASTER_ADDR"]
-        port = int(os.environ.get("MASTER_PORT", "29500"))
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        try:
-            s.connect((master, port))
-            return s.getsockname()[0]
-        except:
-            pass
-        finally:
-            s.close()
-
-    # Method 2: Use hostname resolution (works in AWS and most cloud environments)
-    hostname = socket.gethostname()
-    try:
-        # This usually returns the private IP in cloud environments
-        local_ip = socket.gethostbyname(hostname)
-        # Skip loopback addresses
-        if not local_ip.startswith("127."):
-            return local_ip
-    except:
-        pass
-
-    # Method 3: Connect to a public DNS to determine outgoing interface
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        # Google DNS - this doesn't actually send packets
-        s.connect(("8.8.8.8", 80))
-        local_ip = s.getsockname()[0]
-        s.close()
-        return local_ip
-    except:
-        pass
-
-    # Last resort: return localhost
-    return "127.0.0.1"
-
-
 def _gather_peer_ips(group):
     # Gather local IP strings across ranks
     world = dist.get_world_size(group)
-    my_ip = _discover_local_ip()
+    my_ip = ep.get_oob_ip()
     ips = [None] * world
     dist.all_gather_object(ips, my_ip, group=group)
     return ips
@@ -154,7 +111,7 @@ def get_peer_ip(rank: int, num_ranks: int, group: dist.ProcessGroup):
 
 
 def get_cpu_proxies_meta(proxies, rank, scratch_ptr, scratch_bytes, num_ranks, group):
-    my_ip = _discover_local_ip()
+    my_ip = ep.get_oob_ip()
     meta = {
         "rank": rank,
         "ptr": int(scratch_ptr),
@@ -294,9 +251,19 @@ class EventOverlap:
 
 
 def detect_ib_hca():
-    devices = sorted(glob.glob("/sys/class/infiniband/*"))
+    """Detect InfiniBand HCA device.
+
+    Returns the first mlx5 device name found, or None if no InfiniBand
+    devices are available (e.g., on systems without IB).
+    """
+    try:
+        devices = sorted(glob.glob("/sys/class/infiniband/*"))
+    except (OSError, PermissionError):
+        return None
+
     if not devices:
-        raise RuntimeError("No devices found under /sys/class/infiniband")
+        # No InfiniBand devices found - this is okay on systems without RDMA
+        return None
 
     ib_devs = [
         os.path.basename(d) for d in devices if os.path.basename(d).startswith("mlx5")
