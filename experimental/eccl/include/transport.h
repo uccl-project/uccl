@@ -7,6 +7,7 @@
 #include "util/jring.h"
 #include <infiniband/verbs.h>
 #include <condition_variable>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -145,11 +146,9 @@ class Communicator {
   MR get_local_mr(uint16_t mr_id);
   MR get_remote_mr(int remote_rank, uint16_t mr_id);
 
-  bool register_local_ipc_cache(void* local_buf);
-  bool register_remote_ipc_cache(int remote_rank, void* local_buf,
+  bool register_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle,
                                  IpcCache const& cache);
-  IpcCache get_local_ipc_cache(void* local_buf);
-  IpcCache get_remote_ipc_cache(int remote_rank, void* local_buf);
+  IpcCache get_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle);
 
   ibv_cq* get_cq_by_index(int index);
 
@@ -187,10 +186,25 @@ class Communicator {
   std::atomic<uint16_t> next_mr_id{0};
 
   // ---------- IPC resources ---------
+  using HandleKey = std::array<uint8_t, sizeof(gpuIpcMemHandle_t)>;
+  static inline HandleKey MakeHandleKey(gpuIpcMemHandle_t const& h) {
+    HandleKey k{};
+    std::memcpy(k.data(), &h, k.size());
+    return k;
+  }
+  struct HandleKeyHash {
+    size_t operator()(HandleKey const& k) const noexcept {
+      uint64_t hash = 1469598103934665603ull;
+      for (uint8_t b : k) {
+        hash ^= b;
+        hash *= 1099511628211ull;
+      }
+      return (size_t)hash;
+    }
+  };
   std::shared_ptr<UdsExchanger> uds_;
-  std::unordered_map<void*, IpcCache> ptr_to_local_ipc_cache_;
-  std::unordered_map<int, std::unordered_map<void*, IpcCache>>
-      rank_ptr_to_ipc_cache_;
+  using HandleCacheMap = std::unordered_map<HandleKey, IpcCache, HandleKeyHash>;
+  std::unordered_map<int, HandleCacheMap> rank_handle_to_ipc_cache_;
   mutable std::mutex local_ipc_cache_mu_;
   mutable std::mutex remote_ipc_cache_mu_;
 

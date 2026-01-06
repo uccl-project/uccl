@@ -119,12 +119,11 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
         uccl::create_ring(sizeof(unsigned), 16);  // change num later
 
   } else {  // Does not support RDMA
-    // TODO: if we can't find any rdma nic, we still can do ipc comm on local
+    // If we can't find any rdma nic, we still can do ipc comm on local
     // host.
     support_rdma = false;
   }
 
-  // TODO: Initialize Uds for Ipc
   uds_ = std::make_shared<UdsExchanger>(global_rank_);
 
   // Initialize communicator meta
@@ -252,12 +251,8 @@ Communicator::~Communicator() {
 
   // Clear IPC caches
   {
-    std::lock_guard<std::mutex> lk(local_ipc_cache_mu_);
-    ptr_to_local_ipc_cache_.clear();
-  }
-  {
     std::lock_guard<std::mutex> lk(remote_ipc_cache_mu_);
-    rank_ptr_to_ipc_cache_.clear();
+    rank_handle_to_ipc_cache_.clear();
   }
 
   // Free pending_req_id_to_deal_ buffer
@@ -814,39 +809,25 @@ MR Communicator::get_remote_mr(int remote_rank, uint16_t mr_id) {
   return it_mr->second;
 }
 
-// Register a local IPC cache for a buffer
-bool Communicator::register_local_ipc_cache(void* local_buf) {
-  std::lock_guard<std::mutex> lock(local_ipc_cache_mu_);
-  // TODO: open gpu ipc handle
-  // ptr_to_local_ipc_cache_[local_buf] = cache;
-  return true;
-}
-
-// Get the IPC cache of a local buffer
-IpcCache Communicator::get_local_ipc_cache(void* local_buf) {
-  std::lock_guard<std::mutex> lock(local_ipc_cache_mu_);
-  auto it = ptr_to_local_ipc_cache_.find(local_buf);
-  if (it != ptr_to_local_ipc_cache_.end()) return it->second;
-  return IpcCache{};
-}
-
 // Register a remote IPC cache for a given rank and buffer
-bool Communicator::register_remote_ipc_cache(int remote_rank, void* local_buf,
+bool Communicator::register_remote_ipc_cache(int remote_rank,
+                                             gpuIpcMemHandle_t handle,
                                              IpcCache const& cache) {
   std::lock_guard<std::mutex> lock(remote_ipc_cache_mu_);
-  rank_ptr_to_ipc_cache_[remote_rank][local_buf] = cache;
+  rank_handle_to_ipc_cache_[remote_rank][MakeHandleKey(handle)] = cache;
   return true;
 }
 
 // Get the remote IPC cache of a buffer from a given rank
-IpcCache Communicator::get_remote_ipc_cache(int remote_rank, void* local_buf) {
+IpcCache Communicator::get_remote_ipc_cache(int remote_rank,
+                                            gpuIpcMemHandle_t handle) {
   std::lock_guard<std::mutex> lock(remote_ipc_cache_mu_);
-  auto it_rank = rank_ptr_to_ipc_cache_.find(remote_rank);
-  if (it_rank != rank_ptr_to_ipc_cache_.end()) {
-    auto it_buf = it_rank->second.find(local_buf);
-    if (it_buf != it_rank->second.end()) return it_buf->second;
-  }
-  return IpcCache{};
+  auto it_rank = rank_handle_to_ipc_cache_.find(remote_rank);
+  if (it_rank == rank_handle_to_ipc_cache_.end()) return IpcCache{};
+
+  auto it = it_rank->second.find(MakeHandleKey(handle));
+  if (it == it_rank->second.end()) return IpcCache{};
+  return it->second;
 }
 
 ibv_cq* Communicator::get_cq_by_index(int index) {

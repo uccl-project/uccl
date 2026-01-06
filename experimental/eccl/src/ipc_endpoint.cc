@@ -69,7 +69,6 @@ bool IPCEndpoint::recv_async(int from_rank, std::shared_ptr<Request> creq) {
   return true;
 }
 
-// TODO send_, recv_
 bool IPCEndpoint::send_(int to_rank, std::shared_ptr<Request> creq) {
   CHECK(creq && creq->buf != nullptr) << "send_ipc: data pointer is null!";
 
@@ -85,10 +84,25 @@ bool IPCEndpoint::send_(int to_rank, std::shared_ptr<Request> creq) {
     return false;
   }
 
-  void* base = nullptr;
   GPU_RT_CHECK(gpuSetDevice(got.remote_gpu_idx_));
-  GPU_RT_CHECK(
-      gpuIpcOpenMemHandle(&base, got.handle, gpuIpcMemLazyEnablePeerAccess));
+
+  IpcCache cache = comm_->get_remote_ipc_cache(to_rank, got.handle);
+  void* base = cache.direct_ptr;
+  if (base == nullptr) {
+    // miss: open + register
+    GPU_RT_CHECK(
+        gpuIpcOpenMemHandle(&base, got.handle, gpuIpcMemLazyEnablePeerAccess));
+
+    IpcCache new_cache{};
+    new_cache.handle = got.handle;
+    new_cache.is_send = got.is_send;
+    new_cache.direct_ptr = base;
+    new_cache.offset = got.offset;
+    new_cache.size = got.size;
+
+    comm_->register_remote_ipc_cache(to_rank, got.handle, new_cache);
+  }
+
   void* dst_ptr =
       reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) + got.offset);
 
@@ -98,6 +112,7 @@ bool IPCEndpoint::send_(int to_rank, std::shared_ptr<Request> creq) {
                                  : (size_t)creq->len / kIpcSizePerEngine);
   size_t chunk_size = creq->len / num_streams;
 
+  GPU_RT_CHECK(gpuSetDevice(comm_->local_rank_));
   for (int i = 0; i < num_streams; ++i) {
     // Split data and dst_ptr into n_streams chunks
     void* chunk_data = reinterpret_cast<void*>(
@@ -141,11 +156,10 @@ bool IPCEndpoint::recv_(int from_rank, std::shared_ptr<Request> creq) {
 
   // Getting the base address.
   void* base = nullptr;
-  size_t base_size;
+  size_t base_size = 0;
   GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, creq->buf));
-  auto data_offset = reinterpret_cast<uintptr_t>(creq->buf) -
-                     reinterpret_cast<uintptr_t>(base);
-  transfer_info.offset = data_offset;
+  transfer_info.offset = reinterpret_cast<uintptr_t>(creq->buf) -
+                         reinterpret_cast<uintptr_t>(base);
 
   comm_->uds_->send_ipc_cache(from_rank, 0, transfer_info);
 
