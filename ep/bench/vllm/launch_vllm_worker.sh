@@ -55,6 +55,7 @@ export NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so
 # NCCL performance tuning (optional):
 export NCCL_P2P_NET_CHUNKSIZE=524288
 export NCCL_BUFFSIZE=8388608
+export OMP_NUM_THREADS=32
 
 # NCCL debugging (for diagnosing connection issues):
 # export NCCL_DEBUG=INFO
@@ -126,8 +127,7 @@ vllm serve "${MODEL}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
     --gpu-memory-utilization 0.8 \
-    --headless \
-    --enforce-eager
+    --headless
 
 # Additional useful options (uncomment as needed, must match Node 0):
 #   --max-model-len 8192 \

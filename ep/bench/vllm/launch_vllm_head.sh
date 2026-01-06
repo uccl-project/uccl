@@ -52,6 +52,7 @@ export NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so
 # NCCL performance tuning (optional):
 export NCCL_P2P_NET_CHUNKSIZE=524288
 export NCCL_BUFFSIZE=8388608
+export OMP_NUM_THREADS=32
 
 # NCCL debugging (for diagnosing connection issues):
 # export NCCL_DEBUG=INFO
@@ -61,6 +62,7 @@ export NCCL_BUFFSIZE=8388608
 export VLLM_ENGINE_READY_TIMEOUT_S=3600
 # Set to local non-shared disk like "/opt/dlami/nvme"
 export DG_JIT_CACHE_DIR="/local_storage"
+export VLLM_WORKER_MULTIPROC_METHOD="spawn"
 
 # ============================================================================
 # ARGUMENTS PARSING
@@ -122,8 +124,7 @@ vllm serve "${MODEL}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
     --gpu-memory-utilization 0.8 \
-    --api-server-count="${API_SERVERS}" \
-    --enforce-eager
+    --api-server-count="${API_SERVERS}"
 
 # Additional useful options (uncomment as needed):
 #   --max-model-len 8192 \
