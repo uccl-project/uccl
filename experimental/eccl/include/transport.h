@@ -13,6 +13,9 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
+#include <condition_variable>
+
+enum class EndpointType { RDMA, IPC };
 
 class Communicator;
 class CQPoller;
@@ -24,6 +27,8 @@ class EndpointBase {
   virtual bool recv_async(int from_rank, std::shared_ptr<Request> creq) = 0;
   std::atomic<uint16_t> next_send_seq_{0};
   std::atomic<uint16_t> next_recv_seq_{0};
+
+  EndpointType type;
 };
 
 class RDMAEndpoint : public EndpointBase {
@@ -59,13 +64,9 @@ class RDMAEndpoint : public EndpointBase {
   Communicator* comm_;
 };
 
-struct IPCcontext {
-  gpuIpcMemHandle_t handle;
-  bool is_send;
-  void* direct_ptr;
-  uintptr_t offset;
-  size_t size;
-};
+static constexpr size_t kTaskRingSize = 1024;
+static constexpr size_t kIpcAlignment = 1ul << 20;
+static constexpr size_t kIpcSizePerEngine = 1ul << 20;
 
 class IPCEndpoint : public EndpointBase {
  public:
@@ -79,17 +80,30 @@ class IPCEndpoint : public EndpointBase {
   bool recv_async(int from_rank, std::shared_ptr<Request> creq) override;
 
  private:
-  std::shared_ptr<IPCcontext> ipc_context;
+  enum class IpcTaskType : uint8_t { SEND, RECV };
+  struct IpcTask {
+    IpcTaskType type;
+    int peer_rank;
+    std::shared_ptr<Request> req;
+    uint64_t enqueue_ns;
+    uint32_t retry;
+  };
+
+  bool send_(int to_rank, std::shared_ptr<Request> creq);
+  bool recv_(int from_rank, std::shared_ptr<Request> creq);
+
+  jring_t* task_ring_;
+  std::atomic<bool> stop_{false};
+  std::thread proxy_thread_;
+  std::mutex cv_mu_;
+  std::condition_variable cv_;
+  std::atomic<int> pending_{0}; // number of queued tasks
+  void proxy_thread_func();
+
+  std::vector<gpuStream_t> ipc_streams_;   // n_streams
+
   std::shared_ptr<Config> config_;
   Communicator* comm_;
-};
-
-struct IpcCache {
-  gpuIpcMemHandle_t handle;
-  bool is_send;
-  void* direct_ptr;  // for remote
-  uintptr_t offset;
-  size_t size;
 };
 
 // one gpu with the best nic
@@ -126,7 +140,7 @@ class Communicator {
   MR reg_mr(void* local_buf, size_t len);
   bool dereg_mr(void* local_buf);
   bool notify_mr(int remote_rank, MR& mr);
-  MR wait_mr_notify(int remote_rank);
+  bool wait_mr_notify(int remote_rank, MR& mr);
   MR get_local_mr(void* local_buf);
   MR get_local_mr(uint16_t mr_id);
   MR get_remote_mr(int remote_rank, uint16_t mr_id);
@@ -149,8 +163,8 @@ class Communicator {
   mutable std::mutex meta_mu_;
 
   // ---------- GPU / NIC info --------
-  int gpu_id_;      // todo, this is true local_rank_
-  int local_rank_;  // todo, replace with rank_
+  int local_rank_;   // gpu_id_
+  int global_rank_;
   int world_size_;
   bool support_rdma;
   bool support_rdma_roce;
@@ -173,13 +187,12 @@ class Communicator {
   std::atomic<uint16_t> next_mr_id{0};
 
   // ---------- IPC resources ---------
+  std::shared_ptr<UdsExchanger> uds_;
   std::unordered_map<void*, IpcCache> ptr_to_local_ipc_cache_;
   std::unordered_map<int, std::unordered_map<void*, IpcCache>>
       rank_ptr_to_ipc_cache_;
   mutable std::mutex local_ipc_cache_mu_;
   mutable std::mutex remote_ipc_cache_mu_;
-  // ipc_stream_[gpu_num], for ipc_send/recv
-  // uds_fd_ init with rank_, per communicator; connect with rank_
 
   // ---------- Config & Redis --------
   std::shared_ptr<Config> config_;

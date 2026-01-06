@@ -31,12 +31,12 @@ std::string get_local_ip() {
 
 Communicator::Communicator(int gpu_id, int rank, int world_size,
                            std::shared_ptr<Config> config)
-    : gpu_id_(gpu_id),
-      local_rank_(rank),
+    : local_rank_(gpu_id),
+      global_rank_(rank),
       world_size_(world_size),
       config_(config) {
   // Find best NIC for current gpu
-  auto [nic_id, nic_name] = find_best_rdma_for_gpu(gpu_id_);
+  auto [nic_id, nic_name] = find_best_rdma_for_gpu(gpu_id);
   std::cout << "[INFO] Using RDMA NIC " << nic_name << std::endl;
   if (nic_id != -1) {  // Support RDMA
     struct ibv_device** dev_list = ibv_get_device_list(nullptr);
@@ -65,8 +65,8 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
     }
     ibv_free_device_list(dev_list);
 
-    std::cout << "[INFO] Communicator " << local_rank_ << " initialized: GPU "
-              << gpu_id_ << " map to RDMA NIC " << nic_name << std::endl;
+    std::cout << "[INFO] Communicator " << global_rank_ << " initialized: GPU "
+              << gpu_id << " map to RDMA NIC " << nic_name << std::endl;
 
     support_rdma = true;
     // Init RAMD resource
@@ -124,26 +124,29 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
     support_rdma = false;
   }
 
+  // TODO: Initialize Uds for Ipc
+  uds_ = std::make_shared<UdsExchanger>(global_rank_);
+
   // Initialize communicator meta
   CommunicatorMeta local{};
   local.host_id = generate_host_id();
   local.is_ready = true;
   local.ip = get_local_ip();
-  set_communicator_meta_with_rank(local_rank_, local);
+  set_communicator_meta_with_rank(global_rank_, local);
 
   // Initialize Redis client
 #ifdef USE_REDIS_OOB
   exchanger_client_ = std::make_shared<RedisExchanger>(config_->exchanger_ip,
                                                        config_->exchanger_port);
 #else
-  bool is_server = (local_rank_ == 0);
+  bool is_server = (global_rank_ == 0);
   if (!is_server && config_->exchanger_ip == "0.0.0.0")
     config_->exchanger_ip = "127.0.0.1";
   std::cout << "[INFO] Using socket-based exchanger as "
             << (is_server ? "server" : "client") << " " << config_->exchanger_ip
             << std::endl;
   exchanger_client_ = std::make_shared<SockExchanger>(
-      (local_rank_ == 0), config_->exchanger_ip, config_->exchanger_port);
+      (global_rank_ == 0), config_->exchanger_ip, config_->exchanger_port);
 #endif
   if (!exchanger_client_->valid()) {
     fprintf(stderr, "[ERROR] Failed to connect to Exchanger\n");
@@ -151,7 +154,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
   }
 
   // Exchange communicator meta
-  std::string meta_key = "meta:" + std::to_string(local_rank_);
+  std::string meta_key = "meta:" + std::to_string(global_rank_);
   if (!exchanger_client_->publish(meta_key, local)) {
     fprintf(stderr, "[ERROR] Failed to publish local CommunicatorMeta \n");
   }
@@ -159,7 +162,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
   // Get all others meta
   CommunicatorMeta remote{};
   for (int i = 0; i < world_size_; i++) {
-    if (i == local_rank_) continue;
+    if (i == global_rank_) continue;
     std::string key = "meta:" + std::to_string(i);
     if (exchanger_client_->wait_and_fetch(key, remote, -1)) {
       set_communicator_meta_with_rank(i, remote);
@@ -167,7 +170,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       fprintf(stderr, "[WARN] Timeout waiting for remote CommunicatorMeta \n");
     }
   }
-  std::cout << "[INFO] Communicator " << local_rank_
+  std::cout << "[INFO] Communicator " << global_rank_
             << " initialized: rank_to_comm_meta_ success" << std::endl;
 }
 
@@ -194,12 +197,19 @@ Communicator::~Communicator() {
   }
 
   // Deregister local memory regions
+  std::vector<void*> bufs;
   {
     std::lock_guard<std::mutex> lk(local_mr_mu_);
-    for (auto& [ptr, mr] : ptr_to_local_ibv_mr_) {
-      dereg_mr(ptr);
+    bufs.reserve(ptr_to_local_ibv_mr_.size());
+    for (auto& kv : ptr_to_local_ibv_mr_) {
+      bufs.push_back(kv.first); // ptr
     }
-    ptr_to_local_ibv_mr_.clear();
+  }
+  for (auto* p : bufs) {
+    dereg_mr(p);
+  }
+  {
+    std::lock_guard<std::mutex> lk(local_mr_mu_);
     mr_id_to_local_mr_.clear();
   }
 
@@ -208,7 +218,7 @@ Communicator::~Communicator() {
     for (auto& cq : cq_list_) {
       if (cq) {
         if (ibv_destroy_cq(cq)) {
-          std::cerr << "[WARN] Communicator " << local_rank_
+          std::cerr << "[WARN] Communicator " << global_rank_
                     << " Failed to destroy CQ" << std::endl;
         }
       }
@@ -219,7 +229,7 @@ Communicator::~Communicator() {
   // Deallocate PD
   if (pd_) {
     if (ibv_dealloc_pd(pd_)) {
-      std::cerr << "[WARN] Communicator " << local_rank_
+      std::cerr << "[WARN] Communicator " << global_rank_
                 << " Failed to deallocate PD" << std::endl;
     }
     pd_ = nullptr;
@@ -228,7 +238,7 @@ Communicator::~Communicator() {
   // Close device
   if (nic_ibv_ctx_) {
     if (ibv_close_device(nic_ibv_ctx_)) {
-      std::cerr << "[WARN] Communicator " << local_rank_
+      std::cerr << "[WARN] Communicator " << global_rank_
                 << " Failed to close IBV device context" << std::endl;
     }
     nic_ibv_ctx_ = nullptr;
@@ -256,13 +266,13 @@ Communicator::~Communicator() {
     pending_req_id_to_deal_ = nullptr;
   }
 
-  std::cout << "[INFO] Communicator " << local_rank_ << " resources released"
+  std::cout << "[INFO] Communicator " << global_rank_ << " resources released"
             << std::endl;
 }
 
 bool Communicator::connect_to(int rank) {
   if (!check_ready()) {
-    std::cerr << "[WARN] Communicator " << local_rank_
+    std::cerr << "[WARN] Communicator " << global_rank_
               << " not ready, cannot connect to rank " << rank << std::endl;
     return false;
   }
@@ -270,52 +280,62 @@ bool Communicator::connect_to(int rank) {
   auto [existing_ep, ok] = get_endpoint_by_rank(rank);
   if (ok && existing_ep) return true;  // already
 
-  if (rank == local_rank_) {
+  if (rank == global_rank_) {
     return true;
   }
 
   if (rank < 0 || rank >= world_size_) {
-    std::cerr << "[ERROR] Communicator " << local_rank_ << " invalid rank "
+    std::cerr << "[ERROR] Communicator " << global_rank_ << " invalid rank "
               << rank << ", world_size=" << world_size_ << std::endl;
     return false;
   }
 
   auto meta = get_communicator_meta_by_rank(rank);
-  auto local_meta = get_communicator_meta_by_rank(local_rank_);
+  auto local_meta = get_communicator_meta_by_rank(global_rank_);
 
   if (!meta) {
-    std::cerr << "[ERROR] Communicator " << local_rank_
+    std::cerr << "[ERROR] Communicator " << global_rank_
               << " CommunicatorMeta not found for rank " << rank << std::endl;
     return false;
   }
 
-  // We use RDMA for test now. TODO: support IPC
   bool same_host = meta->host_id == local_meta->host_id;
-  same_host = false;  // only RDMA now
+  // same_host = false;  // force RDMA
 
   std::shared_ptr<EndpointBase> ep;
   bool ret = false;
 
   if (same_host) {
-    // std::cout << "[INFO] Communicator " << local_rank_
+    // std::cout << "[INFO] Communicator " << global_rank_
     //           << " same host detected, using IPC endpoint" << std::endl;
     ep = std::make_shared<IPCEndpoint>(config_, this);
-    // ep->connect_to(rank); // optional if IPCEndpoint needs explicit connect
-    ret = true;
+    ret = ep->connect_to(rank);
+    if (ret) {
+      std::cout << "[INFO] Communicator " << global_rank_
+                << " IPC connect_to succeeded to rank " << rank <<
+                std::endl;
+    } else {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " IPC connect_to failed to rank " << rank << std::endl;
+      return false;
+    }
+    ep->type = EndpointType::IPC;
   } else {
-    // std::cout << "[INFO] Communicator " << local_rank_
+    // std::cout << "[INFO] Communicator " << global_rank_
     //           << " different host detected, using RDMA endpoint" <<
     //           std::endl;
     ep = std::make_shared<RDMAEndpoint>(config_, this);
     ret = ep->connect_to(rank);
     if (ret) {
-      // std::cout << "[INFO] Communicator " << local_rank_
-      //           << " RDMA connect_to succeeded to rank " << rank <<
-      //           std::endl;
+      std::cout << "[INFO] Communicator " << global_rank_
+                << " RDMA connect_to succeeded to rank " << rank <<
+                std::endl;
     } else {
-      std::cerr << "[ERROR] Communicator " << local_rank_
+      std::cerr << "[ERROR] Communicator " << global_rank_
                 << " RDMA connect_to failed to rank " << rank << std::endl;
+      return false;
     }
+    ep->type = EndpointType::RDMA;
   }
 
   {
@@ -325,7 +345,54 @@ bool Communicator::connect_to(int rank) {
   return ret;
 }
 
-bool Communicator::accept_from(int rank) { return connect_to(rank); }
+bool Communicator::accept_from(int rank) {
+  if (!check_ready()) return false;
+  if (rank == global_rank_) return true;
+
+  auto [existing_ep, ok] = get_endpoint_by_rank(rank);
+  if (ok && existing_ep) return true;
+
+  auto meta = get_communicator_meta_by_rank(rank);
+  auto local_meta = get_communicator_meta_by_rank(global_rank_);
+  if (!meta || !local_meta) return false;
+
+  bool same_host = meta->host_id == local_meta->host_id;
+  // same_host = false; // force RDMA
+
+  std::shared_ptr<EndpointBase> ep;
+  bool ret = false;
+
+  if (same_host) {
+    ep = std::make_shared<IPCEndpoint>(config_, this);
+    ret = ep->accept_from(rank);
+    if (ret) {
+      std::cout << "[INFO] Communicator " << global_rank_
+                << " IPC accept_from succeeded from rank " << rank <<
+                std::endl;
+    } else {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " IPC accept_from failed from rank " << rank << std::endl;
+    }
+  } else {
+    // RDMA: accept == connect
+    ep = std::make_shared<RDMAEndpoint>(config_, this);
+    ret = ep->connect_to(rank);
+    if (ret) {
+      std::cout << "[INFO] Communicator " << global_rank_
+                << " RDMA accept succeeded from rank " << rank <<
+                std::endl;
+    } else {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " RDMA accept failed from rank " << rank << std::endl;
+    }
+  }
+
+  {
+    std::lock_guard<std::mutex> lk(ep_mu_);
+    rank_to_endpoint_[rank] = ep;
+  }
+  return ret;
+}
 
 std::tuple<std::shared_ptr<EndpointBase>, bool>
 Communicator::get_endpoint_by_rank(int rank) {
@@ -376,7 +443,7 @@ unsigned Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
   uint16_t seq_val =
       ep->next_recv_seq_.fetch_add(1, std::memory_order_relaxed) % 4095;
   uint16_t safe_seq = seq_val + 1;  // [1, 4095]
-  unsigned rid = make_request_id(local_rank_, local_mr.id, safe_seq);
+  unsigned rid = make_request_id(global_rank_, local_mr.id, safe_seq);
 
   auto req = std::make_shared<Request>(rid, ptr, offset, len, -1, -1, on_gpu,
                                        RequestType::RECV);
@@ -411,7 +478,7 @@ unsigned Communicator::irecv_red(int rank, void* ptr, size_t offset, size_t len,
   uint16_t seq_val =
       ep->next_recv_seq_.fetch_add(1, std::memory_order_relaxed) % 4095;
   uint16_t safe_seq = seq_val + 1;  // [1, 4095]
-  unsigned rid = make_request_id(local_rank_, local_mr.id, safe_seq);
+  unsigned rid = make_request_id(global_rank_, local_mr.id, safe_seq);
 
   auto req = std::make_shared<Request>(rid, ptr, offset, len, -1, -1, on_gpu,
                                        RequestType::RECV, true, red_op);
@@ -546,7 +613,7 @@ bool Communicator::check_ready() {
 
   // Check meta map size
   if (static_cast<int>(rank_to_comm_meta_.size()) < world_size_) {
-    std::cerr << "[WARN] Communicator " << local_rank_
+    std::cerr << "[WARN] Communicator " << global_rank_
               << " check_ready: rank_to_comm_meta_ size "
               << rank_to_comm_meta_.size() << " < world_size " << world_size_
               << std::endl;
@@ -557,13 +624,13 @@ bool Communicator::check_ready() {
   for (int i = 0; i < world_size_; i++) {
     auto it = rank_to_comm_meta_.find(i);
     if (it == rank_to_comm_meta_.end()) {
-      std::cerr << "[WARN] Communicator " << local_rank_
+      std::cerr << "[WARN] Communicator " << global_rank_
                 << " check_ready: missing CommunicatorMeta for rank " << i
                 << std::endl;
       return false;
     }
     if (!it->second->is_ready) {
-      std::cerr << "[WARN] Communicator " << local_rank_
+      std::cerr << "[WARN] Communicator " << global_rank_
                 << " check_ready: CommunicatorMeta for rank " << i
                 << " is not ready" << std::endl;
       return false;
@@ -573,12 +640,12 @@ bool Communicator::check_ready() {
   // Check RDMA NIC context if supported
   if (support_rdma) {
     if (!nic_ibv_ctx_) {
-      std::cerr << "[WARN] Communicator " << local_rank_
+      std::cerr << "[WARN] Communicator " << global_rank_
                 << " check_ready: nic_ibv_ctx_ is nullptr" << std::endl;
       return false;
     }
     if (!pd_) {
-      std::cerr << "[WARN] Communicator " << local_rank_
+      std::cerr << "[WARN] Communicator " << global_rank_
                 << " check_ready: pd_ is nullptr" << std::endl;
       return false;
     }
@@ -587,7 +654,7 @@ bool Communicator::check_ready() {
     }
   }
 
-  std::cerr << "[INFO] Communicator " << local_rank_ << " is ready"
+  std::cerr << "[INFO] Communicator " << global_rank_ << " is ready"
             << std::endl;
   return true;
 }
@@ -633,7 +700,7 @@ bool Communicator::dereg_mr(void* local_buf) {
 
   if (mr) {
     if (ibv_dereg_mr(mr) != 0) {
-      std::cerr << "[WARN] Communicator " << local_rank_
+      std::cerr << "[WARN] Communicator " << global_rank_
                 << " Failed to deregister local MR" << std::endl;
       return false;
     } else {
@@ -647,44 +714,64 @@ bool Communicator::dereg_mr(void* local_buf) {
 bool Communicator::notify_mr(int remote_rank, MR& mr) {
   if (!exchanger_client_ || !exchanger_client_->valid()) return false;
 
+  // we assume that user will connect to remote before notify MR.
+  auto [ep, ok] = get_endpoint_by_rank(remote_rank);
+  if (!ok || !ep) {
+    throw std::runtime_error("Endpoint is not valid");
+    return false;
+  }
+  if (ep->type != EndpointType::RDMA) {
+    std::cout << "MR only support for EndpointRDMA, skip notify mr" << std::endl;
+    return true;
+  }
+
   MRInfos wrapper;
   wrapper.mrs.push_back(mr);
   std::cout << "[notify MR to rank " << remote_rank << "] addr=" << mr.address
             << " length=" << mr.length << " key=" << mr.key << std::endl;
 
   std::string key =
-      "mr:" + std::to_string(local_rank_) + "->" + std::to_string(remote_rank);
+      "mr:" + std::to_string(global_rank_) + "->" + std::to_string(remote_rank);
 
   return exchanger_client_->publish(key, wrapper);
 }
 
-MR Communicator::wait_mr_notify(int remote_rank) {
+bool Communicator::wait_mr_notify(int remote_rank, MR& mr) {
   if (!exchanger_client_ || !exchanger_client_->valid()) {
-    throw std::runtime_error("Redis client not valid");
+    throw std::runtime_error("Exchanger client is not valid");
+  }
+
+  auto [ep, ok] = get_endpoint_by_rank(remote_rank);
+  if (!ok || !ep) {
+    throw std::runtime_error("Endpoint is not valid");
+  }
+  if (ep->type != EndpointType::RDMA) {
+    std::cout << "MR only support for EndpointRDMA, skip wait_mr_notify" << std::endl;
+    return true;
   }
 
   std::string key =
-      "mr:" + std::to_string(remote_rank) + "->" + std::to_string(local_rank_);
+      "mr:" + std::to_string(remote_rank) + "->" + std::to_string(global_rank_);
 
   MRInfos wrapper;
-  bool ok = exchanger_client_->wait_and_fetch(key, wrapper);
+  ok = exchanger_client_->wait_and_fetch(key, wrapper);
   if (!ok || wrapper.mrs.empty()) {
     throw std::runtime_error("Failed to fetch MR from remote rank=" +
                              std::to_string(remote_rank));
   }
 
-  MR remote_mr = wrapper.mrs[0];  // only support one mr now
+  mr = wrapper.mrs[0];  // only support one mr now
 
   {
     std::lock_guard<std::mutex> lk(remote_mr_mu_);
-    rank_mr_id_to_remote_mr_[remote_rank][remote_mr.id] = remote_mr;
+    rank_mr_id_to_remote_mr_[remote_rank][mr.id] = mr;
   }
 
   std::cout << "[recv MR from rank " << remote_rank
-            << "] addr=" << remote_mr.address << " length=" << remote_mr.length
-            << " key=" << remote_mr.key << std::endl;
+            << "] addr=" << mr.address << " length=" << mr.length
+            << " key=" << mr.key << std::endl;
 
-  return remote_mr;
+  return true;
 }
 
 MR Communicator::get_local_mr(void* local_buf) {
