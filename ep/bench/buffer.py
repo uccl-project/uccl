@@ -284,13 +284,13 @@ class Buffer:
             hook: the receiving hook function (valid only if `return_recv_hook` is set).
         """
         
-        print(
-            "dispatch, num_tokens:", x.shape[0],
-            "hidden:", x.shape[1],
-            "num_experts:", num_experts,
-            "async_finish:", async_finish,
-            "return_recv_hook:", return_recv_hook
-        )
+        # print(
+        #     "dispatch, num_tokens:", x.shape[0],
+        #     "hidden:", x.shape[1],
+        #     "num_experts:", num_experts,
+        #     "async_finish:", async_finish,
+        #     "return_recv_hook:", return_recv_hook
+        # )
         for proxy in self.proxies:
             proxy.calculate_and_set_dispatch_recv_data_offset(
                 num_tokens=x.shape[0],
@@ -335,7 +335,7 @@ class Buffer:
             packed_recv_layout_range,
             cumulative_local_expert_recv_stats,
         )
-        print("dispatch finished")
+        # print("dispatch finished")
         return (
             (packed_recv_x, packed_recv_x_scales) if use_fp8 else packed_recv_x,
             packed_recv_count,
@@ -392,14 +392,14 @@ class Buffer:
             hook: the receiving hook function (valid only if `return_recv_hook` is set).
         """
         
-        print(
-            "combine, num_combined_tokens:", x.shape[0],
-            "hidden:", x.shape[1],
-            "use_logfmt:", use_logfmt,
-            "zero_copy:", zero_copy,
-            "async_finish:", async_finish,
-            "return_recv_hook:", return_recv_hook
-        )
+        # print(
+        #     "combine, num_combined_tokens:", x.shape[0],
+        #     "hidden:", x.shape[1],
+        #     "use_logfmt:", use_logfmt,
+        #     "zero_copy:", zero_copy,
+        #     "async_finish:", async_finish,
+        #     "return_recv_hook:", return_recv_hook
+        # )
         (
             src_info,
             layout_range,
@@ -430,7 +430,7 @@ class Buffer:
             layout_range,
             combined_x,
         )
-        print("combine finished")
+        # print("combine finished")
         return (
             combined_x,
             EventOverlap(event, tensors_to_record if async_finish else None),
