@@ -26,7 +26,7 @@
 
 namespace tcp {
 
-static constexpr size_t kChunkSize = 16 * 1024 * 1024;  // 16MB chunk size
+static constexpr size_t kChunkSize = 128 * 1024;  // 128KB chunk size
 static_assert(kChunkSize <= kStagingBufferSize,
               "kChunkSize must be <= kStagingBufferSize");
 static constexpr size_t kMaxInflightChunks = 256;
@@ -97,9 +97,6 @@ class TCPEndpoint {
                       void** data, int* sizes, int n,
                       struct uccl::ucclRequest* ureq);
 
-  // Poll for completion
-  bool uccl_poll_ureq_once(struct uccl::ucclRequest* ureq);
-
   // Read from remote memory (dest_addr already known from FifoItem)
   int uccl_read_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh, void* dst,
                       size_t size, uccl::FifoItem const& slot_item,
@@ -109,6 +106,9 @@ class TCPEndpoint {
   int uccl_write_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
                        void* src, size_t size, uccl::FifoItem const& slot_item,
                        uccl::ucclRequest* ureq);
+
+  // Poll for completion
+  bool uccl_poll_ureq_once(struct uccl::ucclRequest* ureq);
 
   // Prepare FIFO metadata for advertisement
   int prepare_fifo_metadata(uccl::UcclFlow* flow,

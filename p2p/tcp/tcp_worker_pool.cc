@@ -436,9 +436,6 @@ bool TCPSenderWorker::process_requests() {
       case TCPRequestType::SEND:
         success = do_send(req);
         break;
-      case TCPRequestType::RECV:
-        success = do_recv(req);
-        break;
       case TCPRequestType::WRITE:
         success = do_write(req);
         break;
@@ -502,16 +499,6 @@ bool TCPSenderWorker::do_send(TCPRequest& req) {
   conn->inflight_chunks.fetch_sub(1, std::memory_order_relaxed);
 
   return true;
-}
-
-bool TCPSenderWorker::do_recv(TCPRequest& req) {
-  RecvReadyMsg msg;
-  msg.dest_addr = reinterpret_cast<uint64_t>(req.data);
-  msg.size = req.size;
-  msg.request_id = req.request_id;
-  msg.reserved = 0;
-
-  return send_exact(req.ctrl_fd, &msg, sizeof(msg));
 }
 
 bool TCPSenderWorker::do_write(TCPRequest& req) {

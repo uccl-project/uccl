@@ -541,20 +541,6 @@ int TCPEndpoint::uccl_recv_async(uccl::UcclFlow* flow,
   return 0;
 }
 
-bool TCPEndpoint::uccl_poll_ureq_once(struct uccl::ucclRequest* ureq) {
-  if (!ureq) return false;
-
-  TCPAsyncHandle* handle = reinterpret_cast<TCPAsyncHandle*>(ureq->engine_idx);
-  if (!handle) return true;
-
-  bool completed = handle->completed.load(std::memory_order_acquire);
-  if (completed) {
-    delete handle;
-    ureq->engine_idx = 0;
-  }
-  return completed;
-}
-
 int TCPEndpoint::uccl_read_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
                                  void* dst, size_t size,
                                  uccl::FifoItem const& slot_item,
@@ -682,6 +668,20 @@ int TCPEndpoint::uccl_write_async(uccl::UcclFlow* flow,
   }
 
   return 0;
+}
+
+bool TCPEndpoint::uccl_poll_ureq_once(struct uccl::ucclRequest* ureq) {
+  if (!ureq) return false;
+
+  TCPAsyncHandle* handle = reinterpret_cast<TCPAsyncHandle*>(ureq->engine_idx);
+  if (!handle) return true;
+
+  bool completed = handle->completed.load(std::memory_order_acquire);
+  if (completed) {
+    delete handle;
+    ureq->engine_idx = 0;
+  }
+  return completed;
 }
 
 int TCPEndpoint::prepare_fifo_metadata(uccl::UcclFlow* flow,
@@ -834,13 +834,15 @@ int TCPEndpoint::create_tcp_connection_from_interface(
 
 void TCPEndpoint::setup_tcp_socket_options(int fd) {
   int opt = 1;
-  setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt));
-
-  int bufsize = kTCPBufferSize;
-  setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &bufsize, sizeof(bufsize));
-  setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &bufsize, sizeof(bufsize));
-
-  setsockopt(fd, IPPROTO_TCP, TCP_QUICKACK, &opt, sizeof(opt));
+  if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &opt, sizeof(opt)) < 0) {
+    LOG(ERROR) << "Failed to set TCP_NODELAY: " << strerror(errno);
+  }
+  if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+    LOG(ERROR) << "Failed to set SO_REUSEADDR: " << strerror(errno);
+  }
+  if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) < 0) {
+    LOG(ERROR) << "Failed to set SO_REUSEPORT: " << strerror(errno);
+  }
 }
 
 std::shared_ptr<TCPConnectionGroup> TCPEndpoint::get_connection_group(

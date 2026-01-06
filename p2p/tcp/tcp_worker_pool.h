@@ -24,10 +24,10 @@
 namespace tcp {
 
 // Toggle GPU memcpy (set to 0 for testing without GPU)
-// #define UCCL_TCP_GPU_MEMCPY 0
-#ifndef UCCL_TCP_GPU_MEMCPY
-#define UCCL_TCP_GPU_MEMCPY 1
-#endif
+#define UCCL_TCP_GPU_MEMCPY 0
+// #ifndef UCCL_TCP_GPU_MEMCPY
+// #define UCCL_TCP_GPU_MEMCPY 1
+// #endif
 
 static constexpr size_t kStagingBufferSize =
     16 * 1024 * 1024;  // 16MB staging buffer
@@ -62,10 +62,8 @@ inline size_t get_tcp_thread_count() {
 enum class TCPRequestType : uint32_t {
   SEND =
       0,  // Send data (waits for RecvReady on ctrl, then sends on data conns)
-  RECV = 1,  // Recv data (sends RecvReady on ctrl, receiver worker handles data
-             // via epoll)
-  WRITE = 2,  // RDMA-style write (dest_addr already known, no ctrl message)
-  READ = 3,   // RDMA-style read (sends request on data conn, receiver worker
+  WRITE = 1,  // RDMA-style write (dest_addr already known, no ctrl message)
+  READ = 2,   // RDMA-style read (sends request on data conn, receiver worker
               // handles incoming data)
   SHUTDOWN = 255
 };
@@ -280,7 +278,6 @@ class TCPSenderWorker {
   bool process_requests();
 
   bool do_send(TCPRequest& req);
-  bool do_recv(TCPRequest& req);
   bool do_write(TCPRequest& req);
   bool do_read(TCPRequest& req);
 
