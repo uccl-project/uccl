@@ -50,7 +50,7 @@ if check_cuda; then
 elif check_rocm; then
     echo "Detected ROCM"
     # Install Pytorch using nightly
-    pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
+    pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.1
 else
     echo "No CUDA or ROCM detected"
     exit 1
