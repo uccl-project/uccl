@@ -29,7 +29,10 @@ void cqpoller_client_thread(std::shared_ptr<Communicator> comm, int peer_rank) {
   GPU_RT_CHECK(gpuMemcpy(d_data, h_data.data(), size, gpuMemcpyHostToDevice));
 
   auto mr = comm->reg_mr(d_data, size);
-  auto remote_mr = comm->wait_mr_notify(peer_rank);
+  MR remote_mr;
+  if (!comm->wait_mr_notify(peer_rank, remote_mr)) {
+    return;
+  }
 
   std::cout << "[CLIENT] Got remote MR id=" << remote_mr.id << " addr=0x"
             << std::hex << remote_mr.address << " len=" << std::dec
@@ -104,9 +107,9 @@ void cqpoller_server_thread(std::shared_ptr<Communicator> comm, int peer_rank) {
 
 void test_cq_poller() {
   auto comm0 =
-      std::make_shared<Communicator>(0, 0, 2);  // gpu_id=0, local_rank=0
+      std::make_shared<Communicator>(0, 0, 2);  // gpu_id=0, rank=0
   auto comm1 =
-      std::make_shared<Communicator>(0, 1, 2);  // gpu_id=0, local_rank=1
+      std::make_shared<Communicator>(0, 1, 2);  // gpu_id=0, rank=1
 
   std::thread t_client(cqpoller_client_thread, comm0, 1);
   std::thread t_server(cqpoller_server_thread, comm1, 0);

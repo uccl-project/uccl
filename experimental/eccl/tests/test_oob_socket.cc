@@ -79,44 +79,44 @@ void test_socket_oob() {
   std::cout << "[INFO] RDMA socket OOB test complete\n";
 }
 
-void rank_thread_socket(int local_rank, int world_size, std::string const& ip,
+void rank_thread_socket(int rank, int world_size, std::string const& ip,
                         int port) {
-  bool is_server = (local_rank == 0);
+  bool is_server = (rank == 0);
   auto ex = std::make_shared<SockExchanger>(is_server, ip, port);
   if (!ex->valid()) {
-    std::cerr << "[ERROR] Rank " << local_rank
+    std::cerr << "[ERROR] Rank " << rank
               << " failed to init SockExchanger\n";
     return;
   }
 
   CommunicatorMeta local;
-  local.host_id = generate_host_id() + "_" + std::to_string(local_rank);
+  local.host_id = generate_host_id() + "_" + std::to_string(rank);
   local.ip = "127.0.0.1";
   local.is_ready = true;
 
-  std::string key = "meta:" + std::to_string(local_rank);
+  std::string key = "meta:" + std::to_string(rank);
   if (!ex->publish(key, local)) {
-    std::cerr << "[ERROR] Rank " << local_rank << " failed to publish meta\n";
+    std::cerr << "[ERROR] Rank " << rank << " failed to publish meta\n";
     return;
   }
-  std::cout << "[INFO] Rank " << local_rank << " published meta ("
+  std::cout << "[INFO] Rank " << rank << " published meta ("
             << local.host_id << ")\n";
 
   for (int r = 0; r < world_size; ++r) {
-    if (r == local_rank) continue;
+    if (r == rank) continue;
     std::string remote_key = "meta:" + std::to_string(r);
     CommunicatorMeta remote;
     if (ex->wait_and_fetch(remote_key, remote, 50, 100)) {
-      std::cout << "[INFO] Rank " << local_rank << " fetched meta for rank "
+      std::cout << "[INFO] Rank " << rank << " fetched meta for rank "
                 << r << " host_id=" << remote.host_id << " ip=" << remote.ip
                 << " ready=" << remote.is_ready << "\n";
     } else {
-      std::cerr << "[WARN] Rank " << local_rank
+      std::cerr << "[WARN] Rank " << rank
                 << " timeout waiting for meta of rank " << r << "\n";
     }
   }
 
-  std::cout << "[INFO] Rank " << local_rank << " completed meta exchange\n";
+  std::cout << "[INFO] Rank " << rank << " completed meta exchange\n";
 }
 
 void test_socket_meta_exchange_multi_threads(int world_size) {

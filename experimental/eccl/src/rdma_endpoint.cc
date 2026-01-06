@@ -5,17 +5,17 @@ RDMAEndpoint::RDMAEndpoint(std::shared_ptr<Config> config, Communicator* comm)
     : config_(config), comm_(comm) {}
 
 RDMAEndpoint::~RDMAEndpoint() {
-  int local_rank = comm_ ? comm_->local_rank_ : -1;
+  int rank = comm_ ? comm_->global_rank_ : -1;
   {
     std::lock_guard<std::mutex> lk(qp_list_mu_);
     for (size_t i = 0; i < qp_list_.size(); i++) {
       ibv_qp* qp = qp_list_[i];
       if (qp) {
         if (ibv_destroy_qp(qp)) {
-          std::cerr << "[WARN] Communicator " << local_rank
+          std::cerr << "[WARN] Communicator " << rank
                     << " Failed to destroy QP[" << i << "]" << std::endl;
         } else {
-          std::cout << "[INFO] Communicator " << local_rank << " QP[" << i
+          std::cout << "[INFO] Communicator " << rank << " QP[" << i
                     << "] destroyed" << std::endl;
         }
       }
@@ -31,12 +31,12 @@ RDMAEndpoint::~RDMAEndpoint() {
     remote_qp_info_list_.clear();
   }
 
-  std::cout << "[INFO] Communicator " << local_rank
+  std::cout << "[INFO] Communicator " << rank
             << " RDMAEndpoint resources released" << std::endl;
 }
 
 bool RDMAEndpoint::connect_to(int peer_rank) {
-  int local_rank = comm_->local_rank_;
+  int rank = comm_->global_rank_;
 
   // Create QPs
   for (int i = 0; i < config_->qp_count_per_ep; i++) {
@@ -55,7 +55,7 @@ bool RDMAEndpoint::connect_to(int peer_rank) {
     std::lock_guard<std::mutex> lock(qp_list_mu_);
     ibv_qp* new_qp = ibv_create_qp(comm_->pd_, &qp_init_attr);
     if (!new_qp) {
-      std::cerr << "[ERROR] Communicator " << local_rank
+      std::cerr << "[ERROR] Communicator " << rank
                 << " Failed to create QP" << std::endl;
       return false;
     }
@@ -82,7 +82,7 @@ bool RDMAEndpoint::connect_to(int peer_rank) {
 
   for (int i = 0; i < config_->qp_count_per_ep; i++) {
     if (ibv_modify_qp(qp_list_[i], &attr, flags)) {
-      std::cerr << "[ERROR] Communicator " << local_rank
+      std::cerr << "[ERROR] Communicator " << rank
                 << " Failed to modify QP to INIT: " << strerror(errno)
                 << std::endl;
       return false;
@@ -96,9 +96,9 @@ bool RDMAEndpoint::connect_to(int peer_rank) {
     local_info.qps = qp_info_list_;
   }
   std::string key =
-      "qpinfo:" + std::to_string(local_rank) + "->" + std::to_string(peer_rank);
+      "qpinfo:" + std::to_string(rank) + "->" + std::to_string(peer_rank);
   if (!comm_->exchanger_client_->publish(key, local_info)) {
-    std::cerr << "[ERROR] Communicator " << local_rank
+    std::cerr << "[ERROR] Communicator " << rank
               << " Failed to publish QP info for peer " << peer_rank
               << std::endl;
     return false;
@@ -106,9 +106,9 @@ bool RDMAEndpoint::connect_to(int peer_rank) {
 
   RDMAInfo remote_info;
   std::string peer_key =
-      "qpinfo:" + std::to_string(peer_rank) + "->" + std::to_string(local_rank);
+      "qpinfo:" + std::to_string(peer_rank) + "->" + std::to_string(rank);
   if (!comm_->exchanger_client_->wait_and_fetch(peer_key, remote_info, -1)) {
-    std::cerr << "[ERROR] Communicator " << local_rank
+    std::cerr << "[ERROR] Communicator " << rank
               << " Timeout waiting QP info from peer " << peer_rank
               << std::endl;
     return false;
@@ -124,7 +124,7 @@ bool RDMAEndpoint::connect_to(int peer_rank) {
     }
   }
 
-  std::cout << "[INFO] Communicator " << local_rank
+  std::cout << "[INFO] Communicator " << rank
             << " QP info exchanged with rank " << peer_rank
             << ", local_qps=" << local_info.qps.size()
             << ", remote_qps=" << remote_info.qps.size() << std::endl;
@@ -159,12 +159,12 @@ bool RDMAEndpoint::connect_to(int peer_rank) {
                     IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
                     IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
     if (ibv_modify_qp(qp_list_[i], &attr, rtr_flags)) {
-      std::cerr << "[ERROR] Communicator " << local_rank
+      std::cerr << "[ERROR] Communicator " << rank
                 << " Failed to modify QP to RTR: " << strerror(errno)
                 << std::endl;
       return false;
     }
-    std::cout << "[INFO] Communicator " << local_rank << " QP[" << i
+    std::cout << "[INFO] Communicator " << rank << " QP[" << i
               << "] modified to RTR state" << std::endl;
   }
 
@@ -181,12 +181,12 @@ bool RDMAEndpoint::connect_to(int peer_rank) {
     int rts_flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT |
                     IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
     if (ibv_modify_qp(qp_list_[i], &attr, rts_flags)) {
-      std::cerr << "[ERROR] Communicator " << local_rank
+      std::cerr << "[ERROR] Communicator " << rank
                 << " Failed to modify QP to RTS: " << strerror(errno)
                 << std::endl;
       return false;
     }
-    std::cout << "[INFO] Communicator " << local_rank << " QP[" << i
+    std::cout << "[INFO] Communicator " << rank << " QP[" << i
               << "] modified to RTS state" << std::endl;
   }
 
