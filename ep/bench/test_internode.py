@@ -502,7 +502,7 @@ def test_loop(
 
     assert num_local_ranks == 8 and num_ranks > 8
 
-    for seed in range(676, int(1e9)):
+    for seed in range(0, int(1e9)):
         if local_rank == 0:
             print(f"Testing with seed {seed} ...", flush=True)
         torch.manual_seed(rank + seed)
