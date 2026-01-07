@@ -159,6 +159,7 @@ class Buffer:
         )
         assert self.runtime.is_available()
         self.connect_atomic_buffer(self.proxies[0])
+
         for proxy in self.proxies:
             proxy.set_atomic_buffer_ptr(self.proxies[0].get_atomic_buffer_ptr())
 
