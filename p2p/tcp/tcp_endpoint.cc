@@ -2,8 +2,6 @@
 
 namespace tcp {
 
-// Helper functions
-
 uint64_t get_interface_bandwidth(std::string const& ifname) {
   std::string speed_path = "/sys/class/net/" + ifname + "/speed";
   std::ifstream speed_file(speed_path);
@@ -163,7 +161,6 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
   local_info.total_connections = total_connections_;
   local_info.reserved = 0;
 
-  // Create control connection first
   int ctrl_fd = create_tcp_connection(remote_ip, remote_port);
   if (ctrl_fd < 0) {
     LOG(ERROR) << "Failed to create control connection";
@@ -175,12 +172,10 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
   group->ctrl_fd = ctrl_fd;
   setup_tcp_socket_options(ctrl_fd);
 
-  // Exchange negotiation info (base info first)
   uccl::send_message(ctrl_fd, &local_info, sizeof(local_info));
   NegotiationInfo remote_info;
   uccl::receive_message(ctrl_fd, &remote_info, sizeof(remote_info));
 
-  // Send our interface info (including data ports)
   for (size_t i = 0; i < interfaces_.size(); i++) {
     InterfaceNegotiationInfo iface_info;
     std::memset(&iface_info, 0, sizeof(iface_info));
@@ -193,7 +188,6 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
     uccl::send_message(ctrl_fd, &iface_info, sizeof(iface_info));
   }
 
-  // Receive remote interface info (including data ports)
   std::vector<InterfaceNegotiationInfo> remote_interfaces(
       remote_info.num_interfaces);
   for (int i = 0; i < remote_info.num_interfaces; i++) {
@@ -208,8 +202,6 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
   LOG(INFO) << "Negotiated " << actual_connections << " data connections with "
             << remote_info.num_interfaces << " remote interfaces";
 
-  // Create data connections: match local interfaces to remote interfaces
-  // Connect to remote interface IPs on their specific data ports
   int created_connections = 0;
   size_t local_iface_idx = 0;
   size_t remote_iface_idx = 0;
@@ -232,15 +224,12 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
       conn->remote_port = remote_data_port;
       setup_tcp_socket_options(fd);
 
-      // Register data connection with sender and receiver workers
-      // Pass match_queue for SEND/RECV matching
       thread_pool_->assign_data_connection(fd, conn.get(), &group->match_queue);
 
       group->add_data_connection(std::move(conn));
       created_connections++;
     }
 
-    // Round-robin through interfaces
     local_iface_idx++;
     remote_iface_idx++;
   }
@@ -290,7 +279,6 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   uccl::receive_message(ctrl_fd, &remote_info, sizeof(remote_info));
   uccl::send_message(ctrl_fd, &local_info, sizeof(local_info));
 
-  // Receive remote interface info (including data ports)
   std::vector<InterfaceNegotiationInfo> remote_interfaces(
       remote_info.num_interfaces);
   for (int i = 0; i < remote_info.num_interfaces; i++) {
@@ -298,7 +286,6 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
                           sizeof(InterfaceNegotiationInfo));
   }
 
-  // Send our interface info (including data ports)
   for (size_t i = 0; i < interfaces_.size(); i++) {
     InterfaceNegotiationInfo iface_info;
     std::memset(&iface_info, 0, sizeof(iface_info));
@@ -324,8 +311,6 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   group->ctrl_fd = ctrl_fd;
   setup_tcp_socket_options(ctrl_fd);
 
-  // Accept data connections from per-interface listen sockets
-  // Build fd_set once outside the loop
   fd_set listen_fds;
   FD_ZERO(&listen_fds);
   int max_fd = -1;
@@ -335,13 +320,11 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     if (data_listen_fd > max_fd) max_fd = data_listen_fd;
   }
 
-  // Also include control listen_fd as fallback
   FD_SET(listen_fd, &listen_fds);
   if (listen_fd > max_fd) max_fd = listen_fd;
 
   int accepted_connections = 0;
   while (accepted_connections < actual_connections) {
-    // Copy fd_set since select() modifies it
     fd_set read_fds = listen_fds;
 
     struct timeval timeout;
@@ -354,7 +337,6 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
       break;
     }
 
-    // Accept from whichever fd is ready
     int data_fd = -1;
     std::string local_iface_ip;
 
@@ -369,7 +351,6 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
       }
     }
 
-    // Fallback to control listen_fd
     if (data_fd < 0 && FD_ISSET(listen_fd, &read_fds)) {
       data_fd = accept(listen_fd, (struct sockaddr*)&client_addr, &client_len);
     }
@@ -387,8 +368,6 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     conn->remote_port = ntohs(client_addr.sin_port);
     setup_tcp_socket_options(data_fd);
 
-    // Register data connection with sender and receiver workers
-    // Pass match_queue for SEND/RECV matching
     thread_pool_->assign_data_connection(data_fd, conn.get(),
                                          &group->match_queue);
 
@@ -439,19 +418,14 @@ int TCPEndpoint::uccl_send_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
 
   auto handle = new TCPAsyncHandle();
 
-  // Generate send_seq_id for matching with receiver (increments per transfer)
   uint32_t send_seq_id = group->match_queue.get_next_send_seq_id();
-
-  // Generate request_id for sender-side completion tracking
   uint32_t request_id =
       next_request_id_.fetch_add(1, std::memory_order_relaxed);
   handle->request_id = request_id;
 
-  // Register pending send with total size for sender completion tracking
   thread_pool_->register_pending_send(size, request_id, &handle->completed,
                                       &handle->success);
 
-  // Chunk the message and distribute across workers
   size_t num_chunks = (size + kChunkSize - 1) / kChunkSize;
   size_t offset = 0;
 
@@ -472,22 +446,17 @@ int TCPEndpoint::uccl_send_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
     req.data = const_cast<char*>(static_cast<char const*>(data) + offset);
     req.size = chunk_size;
     req.total_size = size;
-    // dest_addr is the offset - receiver will add base from match queue
     req.dest_addr = offset;
-    // Set kFlagNeedsMatch so receiver knows to look up dest from match queue
     req.flags = TCPDataHeader::kFlagNeedsMatch;
     if (is_last) {
       req.flags |= TCPDataHeader::kFlagLastChunk;
     }
-    req.request_id = request_id;    // For sender completion tracking
-    req.send_seq_id = send_seq_id;  // For matching with receiver
+    req.request_id = request_id;
+    req.send_seq_id = send_seq_id;
     req.conn_group = group.get();
     req.assigned_conn = conn;
 
     thread_pool_->submit_request(req);
-
-    // Track inflight chunks for load balancing
-    conn->inflight_chunks.fetch_add(1, std::memory_order_relaxed);
 
     offset += chunk_size;
   }
@@ -514,14 +483,10 @@ int TCPEndpoint::uccl_recv_async(uccl::UcclFlow* flow,
       next_request_id_.fetch_add(1, std::memory_order_relaxed);
   handle->request_id = request_id;
 
-  // Register pending receive with receiver workers for FULL size
-  // The receiver will accumulate chunks and mark complete when all received
   thread_pool_->register_pending_recv(reinterpret_cast<uint64_t>(data[0]),
                                       sizes[0], request_id, &handle->completed,
                                       &handle->success);
 
-  // Register recv info in match queue (no negotiation needed)
-  // Receiver workers will match incoming data with this registration
   group->match_queue.push_recv(reinterpret_cast<uint64_t>(data[0]), sizes[0],
                                request_id);
 
@@ -546,13 +511,10 @@ int TCPEndpoint::uccl_read_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
       next_request_id_.fetch_add(1, std::memory_order_relaxed);
   handle->request_id = request_id;
 
-  // For READ, we're receiving data - register pending recv for FULL size
-  // The receiver will accumulate chunks and mark complete when all received
   thread_pool_->register_pending_recv(reinterpret_cast<uint64_t>(dst), size,
                                       request_id, &handle->completed,
                                       &handle->success);
 
-  // Chunk the read request and distribute across workers
   size_t num_chunks = (size + kChunkSize - 1) / kChunkSize;
   size_t offset = 0;
   uint64_t base_dst = reinterpret_cast<uint64_t>(dst);
@@ -561,32 +523,27 @@ int TCPEndpoint::uccl_read_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
   for (size_t i = 0; i < num_chunks; ++i) {
     size_t chunk_size = std::min(kChunkSize, size - offset);
 
-    // Select different connection for each chunk (load balance across workers)
     TCPConnection* conn = group->select_data_connection();
     if (!conn) {
       delete handle;
       return -1;
     }
 
-    // Submit READ request to sender worker - it will send the request
-    // on a data connection so the remote receiver can see it via epoll
     TCPRequest req;
     req.type = TCPRequestType::READ;
     req.ctrl_fd = group->ctrl_fd;
     req.data = nullptr;  // No data to send for READ request
     req.size = chunk_size;
     req.total_size = size;
-    req.dest_addr = base_dst + offset;       // Where to put data locally
-    req.remote_addr = base_remote + offset;  // Where to read from remotely
-    req.completed = nullptr;  // Completion tracked by pending_recv
+    req.dest_addr = base_dst + offset;
+    req.remote_addr = base_remote + offset;
+    req.completed = nullptr;
     req.success = nullptr;
-    req.request_id = request_id;  // For READ response tracking
+    req.request_id = request_id;
     req.conn_group = group.get();
     req.assigned_conn = conn;
 
     thread_pool_->submit_request(req);
-
-    conn->inflight_chunks.fetch_add(1, std::memory_order_relaxed);
 
     offset += chunk_size;
   }
@@ -612,11 +569,9 @@ int TCPEndpoint::uccl_write_async(uccl::UcclFlow* flow,
       next_request_id_.fetch_add(1, std::memory_order_relaxed);
   handle->request_id = request_id;
 
-  // Register pending send with total size for completion tracking
   thread_pool_->register_pending_send(size, request_id, &handle->completed,
                                       &handle->success);
 
-  // Chunk the message and distribute across workers
   size_t num_chunks = (size + kChunkSize - 1) / kChunkSize;
   size_t offset = 0;
   uint64_t base_dest_addr = slot_item.addr;
@@ -638,16 +593,13 @@ int TCPEndpoint::uccl_write_async(uccl::UcclFlow* flow,
     req.data = static_cast<char*>(src) + offset;
     req.size = chunk_size;
     req.total_size = size;
-    req.dest_addr = base_dest_addr + offset;  // Remote address with offset
+    req.dest_addr = base_dest_addr + offset;
     req.flags = is_last ? TCPDataHeader::kFlagLastChunk : 0;
-    req.request_id = request_id;  // For sender completion tracking
+    req.request_id = request_id;
     req.conn_group = group.get();
     req.assigned_conn = conn;
 
     thread_pool_->submit_request(req);
-
-    // Track inflight chunks for load balancing
-    conn->inflight_chunks.fetch_add(1, std::memory_order_relaxed);
 
     offset += chunk_size;
   }
@@ -687,7 +639,6 @@ int TCPEndpoint::prepare_fifo_metadata(uccl::UcclFlow* flow,
 }
 
 void TCPEndpoint::start_listening() {
-  // Create control listen socket on INADDR_ANY
   listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
   if (listen_fd_ < 0) {
     LOG(ERROR) << "Failed to create listen socket: " << strerror(errno);
@@ -724,7 +675,6 @@ void TCPEndpoint::start_listening() {
 
   LOG(INFO) << "TCP control listening on port " << listen_port_;
 
-  // Create per-interface data listen sockets with unique ports
   for (auto const& iface : interfaces_) {
     int data_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (data_fd < 0) {
@@ -738,7 +688,7 @@ void TCPEndpoint::start_listening() {
     std::memset(&data_addr, 0, sizeof(data_addr));
     data_addr.sin_family = AF_INET;
     inet_pton(AF_INET, iface.ip_addr.c_str(), &data_addr.sin_addr);
-    data_addr.sin_port = htons(0);  // Let OS assign a unique port
+    data_addr.sin_port = htons(0);
 
     if (bind(data_fd, (struct sockaddr*)&data_addr, sizeof(data_addr)) < 0) {
       LOG(ERROR) << "Failed to bind data listen socket to " << iface.ip_addr
@@ -747,7 +697,6 @@ void TCPEndpoint::start_listening() {
       continue;
     }
 
-    // Get the assigned port
     socklen_t addr_len = sizeof(data_addr);
     getsockname(data_fd, (struct sockaddr*)&data_addr, &addr_len);
     uint16_t data_port = ntohs(data_addr.sin_port);
@@ -784,7 +733,6 @@ int TCPEndpoint::create_tcp_connection(std::string const& remote_ip,
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
-
   return fd;
 }
 
@@ -818,7 +766,6 @@ int TCPEndpoint::create_tcp_connection_from_interface(
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
   }
-
   return fd;
 }
 
