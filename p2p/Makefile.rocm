@@ -13,10 +13,8 @@ CONDA_LIB_HOME?=/usr/lib
 RDMA_HOME := ../collective/rdma
 CXX := g++
 
-ifeq ($(USE_EFA),1)
-	CXXFLAGS_TRANS := -DUCCL_P2P_USE_NATIVE_RDMA
-else ifeq ($(USE_IB),1)
-	CXXFLAGS_TRANS := -DUCCL_P2P_USE_NATIVE_RDMA -DUCCL_P2P_USE_IB
+ifeq ($(USE_IB),1)
+	CXXFLAGS_TRANS := -DUCCL_P2P_USE_IB
 endif
 
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I../include -I$(RDMA_HOME) -I$(HIP_INC) \

@@ -339,11 +339,6 @@ class NICEndpoint {
     return conn_id;
   }
 
-  inline int uccl_regmr(uccl::UcclFlow* flow, void* data, size_t len, int type,
-                        struct uccl::Mhandle** mhandle) {
-    return 0;
-  }
-
   inline int uccl_regmr(void* const data, size_t const len, MRArray& mr_array) {
     if (unlikely(!data)) {
       LOG(ERROR) << "Error: uccl_regmr called with null data";
