@@ -126,9 +126,9 @@ build_p2p() {
   if [[ "$TARGET" == cuda* ]]; then
     make clean && make -j$(nproc)
   elif [[ "$TARGET" == rocm* ]]; then
-    make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm
+    make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm USE_IB=1
   elif [[ "$TARGET" == "therock" ]]; then
-    make clean -f Makefile.therock && make -j$(nproc) -f Makefile.therock HIP_HOME=$(rocm-sdk path --root) CONDA_LIB_HOME=$VIRTUAL_ENV/lib
+    make clean -f Makefile.therock && make -j$(nproc) -f Makefile.therock HIP_HOME=$(rocm-sdk path --root) CONDA_LIB_HOME=$VIRTUAL_ENV/lib USE_IB=1
   fi
   cd ..
 
