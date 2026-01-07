@@ -7,9 +7,7 @@
 #include <vector>
 
 std::once_flag peer_ok_flag[MAX_NUM_GPUS][MAX_NUM_GPUS];
-#ifdef EFA
 bool use_ll_sl = false;
-#endif
 
 bool pin_thread_to_cpu(int cpu) {
   int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);

@@ -12,7 +12,6 @@
 #include "internode_ll.cuh"
 #include "intranode.cuh"
 #include "layout.hpp"
-#include "peer_copy_manager.hpp"
 #include "ring_buffer.cuh"
 #include "uccl_bench.hpp"
 #include "uccl_proxy.hpp"
@@ -2000,7 +1999,6 @@ PYBIND11_MODULE(ep, m) {
         for (auto& proxy : proxies) {
           vec.push_back(std::move(proxy));
         }
-        printf("Registered proxies for device %d\n", device_index);
       },
       py::arg("device_index"), py::arg("proxies"));
   m.def(
@@ -2179,10 +2177,10 @@ PYBIND11_MODULE(ep, m) {
            py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
            py::arg("local_rank") = 0, py::arg("num_experts") = -1,
            py::arg("num_ranks") = -1, py::arg("num_nodes") = 0,
-           py::arg("use_normal_mode") = false, py::arg("is_intranode") = false)
+           py::arg("use_throughput_mode") = false,
+           py::arg("is_intranode") = false)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
-      .def("start_local", &UcclProxy::start_local)
       .def("start_dual", &UcclProxy::start_dual)
       .def("stop", &UcclProxy::stop)
       .def("get_listen_port", &UcclProxy::get_listen_port)
@@ -2300,16 +2298,6 @@ PYBIND11_MODULE(ep, m) {
       .def("print_summary", &Bench::print_summary)
       .def("print_summary_last", &Bench::print_summary_last)
       .def("last_elapsed_ms", &Bench::last_elapsed_ms);
-  py::class_<PeerCopyManager>(m, "PeerCopyManager")
-      .def(py::init<int>(), py::arg("src_device") = 0)
-      .def("start_for_proxies",
-           [](PeerCopyManager& mgr, py::iterable proxy_list) {
-             std::vector<UcclProxy*> vec;
-             for (py::handle h : proxy_list)
-               vec.push_back(h.cast<UcclProxy*>());
-             mgr.start_for_proxies(vec);
-           })
-      .def("stop", &PeerCopyManager::stop);
 
   // MSCCLPP Fifo class - must be registered before BenchFifo which uses it
   py::class_<mscclpp::Fifo>(m, "Fifo").def(py::init<uint32_t>(),

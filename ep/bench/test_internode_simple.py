@@ -53,7 +53,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
     scratch = torch.empty(
         scratch_nbytes, dtype=torch.uint8, device=f"cuda:{device_index}"
     )
-    proxies, workers = initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group)
+    proxies = initialize_uccl(scratch, scratch_nbytes, rank, num_ranks, group)
 
     try:
         buffer = Buffer(
@@ -146,7 +146,7 @@ def test_simple_internode(rank: int, num_ranks: int, group: dist.ProcessGroup):
     dist.barrier()
     print("[simple-test] ✓ Buffer destroyed", flush=True)
 
-    destroy_uccl(proxies, workers)
+    destroy_uccl(proxies)
     dist.barrier()
 
 

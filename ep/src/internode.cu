@@ -195,7 +195,7 @@ __global__ void notify_dispatch(
             rdma_recv_num_tokens_mixed.recv_buffer(rdma_rank));
         uint64_t src_ptr = reinterpret_cast<uint64_t>(
             rdma_recv_num_tokens_mixed.send_buffer(i));
-        uccl::nvshmemi_ibgda_put_nbi_warp</*use_normal_mode=*/true>(
+        uccl::nvshmemi_ibgda_put_nbi_warp</*use_throughput_mode=*/true>(
             dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
             src_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
             (NUM_MAX_NVL_PEERS + num_rdma_experts + 1) * sizeof(int),
@@ -698,7 +698,7 @@ __global__ void __launch_bounds__(
       if (dst_rdma_rank != rdma_rank) {
         // NOTE(MaoZiming): this tells the remote rank how many tokens each
         // local nvl_rank and expert are expected to receive.
-        uccl::nvshmemi_ibgda_put_nbi_warp</*use_normal_mode=*/true>(
+        uccl::nvshmemi_ibgda_put_nbi_warp</*use_throughput_mode=*/true>(
             reinterpret_cast<uint64_t>(
                 rdma_channel_meta.recv_buffer(rdma_rank)) -
                 reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
@@ -1028,7 +1028,7 @@ __global__ void __launch_bounds__(
           auto const src_ptr = reinterpret_cast<uint64_t>(
               rdma_channel_data.send_buffer(dst_rdma_rank) +
               dst_slot_idx * num_bytes_per_token);
-          uccl::nvshmemi_ibgda_put_nbi_warp</*use_normal_mode=*/true>(
+          uccl::nvshmemi_ibgda_put_nbi_warp</*use_throughput_mode=*/true>(
               dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
               src_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
               num_bytes_per_msg,
@@ -1048,7 +1048,7 @@ __global__ void __launch_bounds__(
         if (lane_id == dst_rdma_rank) {
           last_issued_tail += num_tokens_to_issue;
           num_tokens_to_send -= num_tokens_to_issue;
-          uccl::nvshmemi_ibgda_amo_nonfetch_add</*use_normal_mode=*/true>(
+          uccl::nvshmemi_ibgda_amo_nonfetch_add</*use_throughput_mode=*/true>(
               reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)),
               reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
               num_tokens_to_issue,
@@ -1301,7 +1301,7 @@ __global__ void __launch_bounds__(
       if (min_head != std::numeric_limits<int>::max() and
           min_head >= last_head + num_max_rdma_chunked_send_tokens and
           lane_id < kNumRDMARanks) {
-        uccl::nvshmemi_ibgda_amo_nonfetch_add</*use_normal_mode=*/true>(
+        uccl::nvshmemi_ibgda_amo_nonfetch_add</*use_throughput_mode=*/true>(
             reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
             reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
             min_head - last_head,
@@ -2627,7 +2627,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
             auto const src_ptr = reinterpret_cast<uint64_t>(
                 rdma_channel_data.send_buffer(dst_rdma_rank) +
                 rdma_slot_idx * num_bytes_per_token);
-            uccl::nvshmemi_ibgda_put_nbi_warp</*use_normal_mode=*/true>(
+            uccl::nvshmemi_ibgda_put_nbi_warp</*use_throughput_mode=*/true>(
                 dst_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
                 src_ptr - reinterpret_cast<uint64_t>(original_rdma_buffer_ptr),
                 num_bytes_per_msg,
@@ -2646,7 +2646,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
           // Write new RDMA tail
           __syncwarp();
           if (lane_id == 0) {
-            uccl::nvshmemi_ibgda_amo_nonfetch_add</*use_normal_mode=*/true>(
+            uccl::nvshmemi_ibgda_amo_nonfetch_add</*use_throughput_mode=*/true>(
                 reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)),
                 reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
                 num_chunked_tokens,
@@ -2809,7 +2809,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
           if (min_head != std::numeric_limits<int>::max() and
               min_head >= last_rdma_head + num_max_rdma_chunked_send_tokens and
               lane_id < kNumRDMARanks) {
-            uccl::nvshmemi_ibgda_amo_nonfetch_add</*use_normal_mode=*/true>(
+            uccl::nvshmemi_ibgda_amo_nonfetch_add</*use_throughput_mode=*/true>(
                 reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
                 reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
                 min_head - last_rdma_head,

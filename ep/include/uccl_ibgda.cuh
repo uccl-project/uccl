@@ -23,7 +23,7 @@ namespace uccl {
 // Note(MaoZiming, Yang): the expert_idx here is used to tell which ring buffer
 // to use. The total concurrent warps can be say 64 (= number of experts), while
 // the number of ring buffers is small (say 6).
-template <bool use_normal_mode = false>
+template <bool use_throughput_mode = false>
 __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     uint64_t req_rptr, uint64_t req_lptr, size_t bytes, int dst_rank,
     int expert_idx, int lane_id, int message_idx,
@@ -47,7 +47,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   auto* h = reinterpret_cast<d2hq::D2HHandle*>(
       static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
 
-  if constexpr (use_normal_mode) {
+  if constexpr (use_throughput_mode) {
     low_latency_buffer_idx == -1 ? expert_idx = 0 : 0;
     low_latency_buffer_idx == -1 ? low_latency_buffer_idx = 0 : 0;
   }
@@ -62,7 +62,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     cmd.req_lptr = lptr_val;
     cmd.bytes = bytes_val;
     cmd.dst_rank = dst_rank;
-    if constexpr (use_normal_mode) {
+    if constexpr (use_throughput_mode) {
       cmd.atomic_offset = atomic_offset;
       cmd.atomic_val = atomic_val;
     } else {
@@ -82,7 +82,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     cur_tail = h->tail();
     inflight = cur_head - cur_tail;
     if (inflight <
-        (use_normal_mode ? kMaxInflightNormal : kMaxInflightLowLatency)) {
+        (use_throughput_mode ? kMaxInflightNormal : kMaxInflightLowLatency)) {
       uint64_t slot = cur_head;
       TransferCmd cmd{};
       // TODO(MaoZiming): Check fields here.
@@ -99,7 +99,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
         trap();
       }
 
-      if constexpr (use_normal_mode) {
+      if constexpr (use_throughput_mode) {
         if (atomic_offset >> 16) {
           printf(
               "[nvshmemi_ibgda_put_nbi_warp] atomic_offset too large: %llu\n",
@@ -134,7 +134,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
 
 // TODO(MaoZiming): Fix. This should be a non-fetch add operation. This could be
 // implemented with CPU proxy.
-template <bool use_normal_mode = false>
+template <bool use_throughput_mode = false>
 __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     uint64_t rptr, uint64_t atomic_base_addr, int const& value, int dst_rank,
     int warp_id, bool is_local_copy = false,
@@ -145,7 +145,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
     atomicAdd(reinterpret_cast<unsigned long long*>(rptr),
               static_cast<unsigned long long>(value));
   } else {
-    if constexpr (use_normal_mode) {
+    if constexpr (use_throughput_mode) {
       if (skip_remote) return;
     }
     rptr -= atomic_base_addr;
@@ -160,7 +160,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
         static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
 
     auto last_print = clock64();
-    if constexpr (use_normal_mode) {
+    if constexpr (use_throughput_mode) {
       /* Normal mode */
       low_latency_buffer_idx == -1 ? low_latency_buffer_idx = 0 : 0;
     }
@@ -185,7 +185,7 @@ __device__ __forceinline__ void nvshmemi_ibgda_amo_nonfetch_add(
       cur_tail = h->tail();
       inflight = cur_head - cur_tail;
       if (inflight <
-          (use_normal_mode ? kMaxInflightNormal : kMaxInflightLowLatency)) {
+          (use_throughput_mode ? kMaxInflightNormal : kMaxInflightLowLatency)) {
         uint64_t slot = cur_head;
         TransferCmd cmd{};
         cmd.cmd_type =

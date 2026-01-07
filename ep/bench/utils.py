@@ -128,17 +128,6 @@ def get_cpu_proxies_meta(proxies, rank, scratch_ptr, scratch_bytes, num_ranks, g
     torch.cuda.set_device(device_index)
     dist.all_gather_object(all_meta, meta, group=group)
     rank2meta = {m["rank"]: m for m in all_meta}
-
-    # Debug: print IP distribution
-    ip_counts = {}
-    for m in all_meta:
-        ip = m["ip"]
-        ip_counts[ip] = ip_counts.get(ip, 0) + 1
-    if rank == 0:
-        print(f"[DEBUG] IP distribution across {num_ranks} ranks:", flush=True)
-        for ip, count in ip_counts.items():
-            print(f"[DEBUG]   {ip}: {count} ranks", flush=True)
-
     return rank2meta
 
 
@@ -469,14 +458,8 @@ def initialize_uccl(
     group,
     num_experts=0,
     is_intranode=False,
-    use_normal_mode=False,
+    use_throughput_mode=False,
 ):
-    try:
-        for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
-            os.remove(shm_file)
-    except Exception:
-        pass
-
     # Try to get local_rank from environment or infer from current device
     if "LOCAL_RANK" in os.environ:
         local_rank = int(os.environ["LOCAL_RANK"])
@@ -525,7 +508,7 @@ def initialize_uccl(
             num_experts=num_experts,
             num_ranks=num_ranks,
             num_nodes=num_nodes,
-            use_normal_mode=use_normal_mode,
+            use_throughput_mode=use_throughput_mode,
             is_intranode=is_intranode,
         )
         proxies.append(proxy)
@@ -545,34 +528,16 @@ def initialize_uccl(
     if not is_intranode:
         for proxy in proxies:
             proxy.start_dual()
-
-    workers = None
-    # if hasattr(ep, "PeerCopyManager"):
-    #     try:
-    #         workers = ep.PeerCopyManager(src_device=local_rank)
-    #         workers.start_for_proxies(proxies)
-    #         if rank == 0:
-    #             print("✓ PeerCopyManager started", flush=True)
-    #     except Exception as e:
-    #         if rank == 0:
-    #             print(f"PeerCopyManager unavailable: {e}", flush=True)
-
     time.sleep(3)
-    return proxies, workers
+    return proxies
 
 
-def destroy_uccl(proxies, workers):
+def destroy_uccl(proxies):
     # Use current device or fallback to LOCAL_RANK
     if "LOCAL_RANK" in os.environ:
         device_index = int(os.environ["LOCAL_RANK"])
     else:
         device_index = torch.cuda.current_device()
-
-    if workers is not None:
-        try:
-            workers.stop()
-        except Exception:
-            pass
 
     try:
         for p in proxies:
@@ -581,11 +546,6 @@ def destroy_uccl(proxies, workers):
         pass
     try:
         ep.unregister_proxy(device_index)
-    except Exception:
-        pass
-    try:
-        for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
-            os.remove(shm_file)
     except Exception:
         pass
 

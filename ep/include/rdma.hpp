@@ -30,11 +30,8 @@ struct RDMAConnectionInfo {
   uint64_t len;
   uint16_t lid;     // Local ID
   uint8_t gid[16];  // Global ID for RoCE (optional)
-
-  // #ifdef EFA
   uint32_t num_rings;
   uint32_t data_qp_num[kChannelPerProxy];
-  // #endif
 };
 
 struct PendingUpdate {
@@ -319,7 +316,7 @@ void send_connection_info_as_client(int my_rank, int peer, char const* peer_ip,
                                     RDMAConnectionInfo* local);
 
 void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
-                      bool use_normal_mode);
+                      bool use_throughput_mode);
 
 void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info);
 
@@ -331,10 +328,10 @@ void remote_process_completions(
     ProxyCtx& S, int idx, CopyRingBuffer& ring, int ne, ibv_wc* wc,
     std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr, int num_ranks,
     int num_experts, std::set<PendingUpdate>& pending_atomic_updates,
-    int my_rank, int num_nodes, bool use_normal_mode = false);
+    int my_rank, int num_nodes, bool use_throughput_mode = false);
 void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
                           RDMAConnectionInfo* local_info, int rank,
-                          size_t num_rings, bool use_normal_mode);
+                          size_t num_rings, bool use_throughput_mode);
 ibv_cq* create_per_thread_cq(ProxyCtx& S);
 void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              std::vector<ProxyCtx*>& ctx_by_tag,
@@ -342,18 +339,17 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              int num_experts,
                              std::set<PendingUpdate>& pending_atomic_updates,
                              int my_rank, int num_nodes,
-                             bool use_normal_mode = false);
+                             bool use_throughput_mode = false);
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                           int thread_idx, int local_rank);
-void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
-                     ibv_mr* local_ack_mr, uint64_t* ack_buf, int worker_idx);
 void local_post_ack_buf(ProxyCtx& S, int depth);
 void remote_reg_ack_buf(ibv_pd* pd, uint64_t* ack_buf, ibv_mr*& ack_mr);
 void post_rdma_async_batched(ProxyCtx& S, void* buf, size_t num_wrs,
                              std::vector<uint64_t> const& wrs_to_post,
                              std::vector<TransferCmd> const& cmds_to_post,
                              std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
-                             int my_rank, int thread_idx, bool use_normal_mode);
+                             int my_rank, int thread_idx,
+                             bool use_throughput_mode);
 void local_process_completions(ProxyCtx& S,
                                std::unordered_set<uint64_t>& acked_wrs,
                                int thread_idx, ibv_wc* wc, int ne,
@@ -363,14 +359,14 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
                   std::vector<ProxyCtx*>& ctx_by_tag, void* atomic_buffer_ptr,
                   int num_ranks, int num_experts,
                   std::set<PendingUpdate>& pending_atomic_updates, int my_rank,
-                  int num_nodes, bool use_normal_mode = false);
+                  int num_nodes, bool use_throughput_mode = false);
 void post_atomic_operations(ProxyCtx& S,
                             std::vector<uint64_t> const& wrs_to_post,
                             std::vector<TransferCmd> const& cmds_to_post,
                             std::vector<std::unique_ptr<ProxyCtx>>& ctxs,
                             int my_rank, int thread_idx,
                             std::unordered_set<uint64_t>& acked_wrs,
-                            bool use_normal_mode);
+                            bool use_throughput_mode);
 void apply_pending_updates(ProxyCtx& ctx,
                            std::set<PendingUpdate>& pending_atomic_updates,
                            void* atomic_buffer_ptr, int num_experts,

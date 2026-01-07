@@ -762,7 +762,7 @@ static inline int get_dev_index(char const* dev_name) {
   return ret;
 }
 
-static inline std::string get_dev_ip(char const* dev_name) {
+inline std::string get_dev_ip(char const* dev_name) {
   struct ifaddrs* ifAddrStruct = NULL;
   struct ifaddrs* ifa = NULL;
   void* tmpAddrPtr = NULL;
