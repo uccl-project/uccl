@@ -1,0 +1,14 @@
+build/
+CMakeFiles/
+*.cmake
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
+*.pyzw
+Makefile
+detect_cuda_version.cc
+detect_cuda_compute_capabilities.cu

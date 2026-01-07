@@ -1,5 +1,10 @@
 # ECCL
 
+```
+sudo apt-get update
+sudo apt-get install -y libelf-dev
+```
+
 ## develpment node:
 
 on AMD
@@ -28,4 +33,15 @@ cd experimental/eccl/src/device
 make clean -f Makefile && make -j$(nproc) -f Makefile
 
 CUDA_VISIBLE_DEVICES=5 ./test_persistent
+```
+
+
+## test
+```
+# test communicator
+CUDA_VISIBLE_DEVICES=5 ./test_main --role=server
+CUDA_VISIBLE_DEVICES=5 ./test_main --role=client
+
+# test others
+CUDA_VISIBLE_DEVICES=5 ./test_main --role=server
 ```

@@ -19,7 +19,7 @@ NVCCFLAGS  := -g -O0 -std=c++17 \
 
 LDFLAGS    := -L$(CONDA_LIB_HOME) \
               -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
-              -lcudart \
+              -lcudart -lcuda \
               -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -lglog
 
 INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../../include

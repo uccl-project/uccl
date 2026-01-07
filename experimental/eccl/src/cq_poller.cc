@@ -18,7 +18,7 @@ void CQPoller::start() {
   if (!running_.compare_exchange_strong(expected, true))
     return;  // already started
   thr_ = std::thread(&CQPoller::run_loop, this);
-  std::cout << "Communicator " << comm_->local_rank_ << " CQPoller with cq "
+  std::cout << "Communicator " << comm_->global_rank_ << " CQPoller with cq "
             << cq_ << " started!" << std::endl;
 }
 
@@ -53,7 +53,7 @@ void CQPoller::stop() {
   if (!running_.compare_exchange_strong(expected, false))
     return;  // already stopped or not started
   if (thr_.joinable()) thr_.join();
-  std::cout << "Communicator " << comm_->local_rank_ << " CQPoller with cq "
+  std::cout << "Communicator " << comm_->global_rank_ << " CQPoller with cq "
             << cq_ << " Closed!" << std::endl;
 }
 
