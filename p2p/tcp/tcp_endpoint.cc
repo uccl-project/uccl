@@ -233,7 +233,8 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
       setup_tcp_socket_options(fd);
 
       // Register data connection with sender and receiver workers
-      thread_pool_->assign_data_connection(fd, conn.get());
+      // Pass match_queue for SEND/RECV matching
+      thread_pool_->assign_data_connection(fd, conn.get(), &group->match_queue);
 
       group->add_data_connection(std::move(conn));
       created_connections++;
@@ -387,7 +388,9 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     setup_tcp_socket_options(data_fd);
 
     // Register data connection with sender and receiver workers
-    thread_pool_->assign_data_connection(data_fd, conn.get());
+    // Pass match_queue for SEND/RECV matching
+    thread_pool_->assign_data_connection(data_fd, conn.get(),
+                                         &group->match_queue);
 
     group->add_data_connection(std::move(conn));
     accepted_connections++;
@@ -436,24 +439,16 @@ int TCPEndpoint::uccl_send_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
 
   auto handle = new TCPAsyncHandle();
 
-  // Wait for RecvReady message ONCE on control connection
-  RecvReadyMsg ready_msg;
-  if (!recv_exact(group->ctrl_fd, &ready_msg, sizeof(ready_msg))) {
-    LOG(ERROR) << "uccl_send_async: failed to recv RecvReady";
-    delete handle;
-    return -1;
-  }
+  // Generate send_seq_id for matching with receiver (increments per transfer)
+  uint32_t send_seq_id = group->match_queue.get_next_send_seq_id();
 
-  uint64_t base_dest_addr = ready_msg.dest_addr;
-  // Use receiver's request_id for chunks so receiver can track completion
-  uint32_t recv_request_id = ready_msg.request_id;
-  // Generate our own request_id for sender-side completion tracking
-  uint32_t send_request_id =
+  // Generate request_id for sender-side completion tracking
+  uint32_t request_id =
       next_request_id_.fetch_add(1, std::memory_order_relaxed);
-  handle->request_id = send_request_id;
+  handle->request_id = request_id;
 
   // Register pending send with total size for sender completion tracking
-  thread_pool_->register_pending_send(size, send_request_id, &handle->completed,
+  thread_pool_->register_pending_send(size, request_id, &handle->completed,
                                       &handle->success);
 
   // Chunk the message and distribute across workers
@@ -477,10 +472,15 @@ int TCPEndpoint::uccl_send_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
     req.data = const_cast<char*>(static_cast<char const*>(data) + offset);
     req.size = chunk_size;
     req.total_size = size;
-    req.dest_addr = base_dest_addr + offset;  // Destination with offset
-    req.flags = is_last ? TCPDataHeader::kFlagLastChunk : 0;
-    req.send_request_id = send_request_id;  // For sender completion tracking
-    req.recv_request_id = recv_request_id;  // For receiver completion tracking
+    // dest_addr is the offset - receiver will add base from match queue
+    req.dest_addr = offset;
+    // Set kFlagNeedsMatch so receiver knows to look up dest from match queue
+    req.flags = TCPDataHeader::kFlagNeedsMatch;
+    if (is_last) {
+      req.flags |= TCPDataHeader::kFlagLastChunk;
+    }
+    req.request_id = request_id;    // For sender completion tracking
+    req.send_seq_id = send_seq_id;  // For matching with receiver
     req.conn_group = group.get();
     req.assigned_conn = conn;
 
@@ -520,18 +520,10 @@ int TCPEndpoint::uccl_recv_async(uccl::UcclFlow* flow,
                                       sizes[0], request_id, &handle->completed,
                                       &handle->success);
 
-  // Send RecvReady message ONCE directly on control connection
-  RecvReadyMsg msg;
-  msg.dest_addr = reinterpret_cast<uint64_t>(data[0]);
-  msg.size = sizes[0];
-  msg.request_id = request_id;
-  msg.reserved = 0;
-
-  if (!send_exact(group->ctrl_fd, &msg, sizeof(msg))) {
-    LOG(ERROR) << "uccl_recv_async: failed to send RecvReady";
-    delete handle;
-    return -1;
-  }
+  // Register recv info in match queue (no negotiation needed)
+  // Receiver workers will match incoming data with this registration
+  group->match_queue.push_recv(reinterpret_cast<uint64_t>(data[0]), sizes[0],
+                               request_id);
 
   if (ureq) {
     ureq->engine_idx = reinterpret_cast<int64_t>(handle);
@@ -588,8 +580,7 @@ int TCPEndpoint::uccl_read_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
     req.remote_addr = base_remote + offset;  // Where to read from remotely
     req.completed = nullptr;  // Completion tracked by pending_recv
     req.success = nullptr;
-    req.send_request_id = request_id;  // For READ response tracking
-    req.recv_request_id = request_id;  // Same as request_id for READ
+    req.request_id = request_id;  // For READ response tracking
     req.conn_group = group.get();
     req.assigned_conn = conn;
 
@@ -649,8 +640,7 @@ int TCPEndpoint::uccl_write_async(uccl::UcclFlow* flow,
     req.total_size = size;
     req.dest_addr = base_dest_addr + offset;  // Remote address with offset
     req.flags = is_last ? TCPDataHeader::kFlagLastChunk : 0;
-    req.send_request_id = request_id;  // For sender completion tracking
-    req.recv_request_id = request_id;  // Not used for WRITE (one-sided)
+    req.request_id = request_id;  // For sender completion tracking
     req.conn_group = group.get();
     req.assigned_conn = conn;
 

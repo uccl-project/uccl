@@ -9,8 +9,10 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <random>
 #include <shared_mutex>
 #include <thread>
@@ -25,9 +27,6 @@ namespace tcp {
 
 // Toggle GPU memcpy (set to 0 for testing without GPU)
 #define UCCL_TCP_GPU_MEMCPY 0
-// #ifndef UCCL_TCP_GPU_MEMCPY
-// #define UCCL_TCP_GPU_MEMCPY 1
-// #endif
 
 static constexpr size_t kStagingBufferSize =
     16 * 1024 * 1024;  // 16MB staging buffer
@@ -78,27 +77,22 @@ enum class TCPDataMsgType : uint32_t {
 // READ_REQUEST) This eliminates the need for MSG_PEEK to determine message type
 struct TCPDataHeader {
   uint32_t msg_type;    // TCPDataMsgType (DATA_CHUNK or READ_REQUEST)
-  uint32_t flags;       // Flags (kFlagLastChunk, etc.)
-  uint32_t request_id;  // Request ID for completion tracking
+  uint32_t flags;       // Flags (kFlagLastChunk, kFlagNeedsMatch, etc.)
+  uint32_t request_id;  // Request ID for completion tracking (unused for SEND
+                        // with kFlagNeedsMatch, used for WRITE/READ)
   uint32_t reserved;
-  uint64_t dest_addr;    // Destination GPU address
+  uint64_t dest_addr;    // Destination GPU address (offset from base for SEND)
   uint64_t remote_addr;  // Remote address (for READ), unused for DATA_CHUNK
   uint64_t size;         // Size of this chunk/request
   uint64_t total_size;   // Total transfer size
 
   static constexpr uint32_t kFlagLastChunk = 1;
+  // Flag to indicate this chunk needs matching (SEND operation)
+  // When set, receiver looks up base_dest_addr from match queue using
+  // request_id as send_seq_id
+  static constexpr uint32_t kFlagNeedsMatch = 2;
 };
 static_assert(sizeof(TCPDataHeader) == 48, "TCPDataHeader size mismatch");
-
-// Message sent on control connection by receiver to tell sender where to put
-// data
-struct RecvReadyMsg {
-  uint64_t dest_addr;   // GPU buffer address on receiver
-  uint64_t size;        // Expected size
-  uint32_t request_id;  // For matching (future use)
-  uint32_t reserved;
-};
-static_assert(sizeof(RecvReadyMsg) == 24, "RecvReadyMsg size mismatch");
 
 // Forward declarations
 struct TCPConnection;
@@ -113,13 +107,14 @@ struct alignas(64) TCPRequest {
   void* data;            // GPU memory pointer (local buffer)
   size_t size;           // Chunk size to transfer
   size_t total_size;     // Total transfer size (for header)
-  uint64_t dest_addr;    // Destination GPU addr (includes offset for chunks)
+  uint64_t dest_addr;    // Destination GPU addr (offset for SEND, absolute for
+                         // WRITE)
   uint64_t remote_addr;  // Remote addr to read from (for READ)
   std::atomic<bool>* completed;  // Completion flag
   std::atomic<bool>* success;    // Success flag
-  uint32_t send_request_id;      // Sender's request ID (for pending_sends_)
-  uint32_t recv_request_id;  // Receiver's request ID (for DATA_CHUNK header)
-  uint32_t flags;            // Chunk flags (kFlagLastChunk, etc.)
+  uint32_t request_id;           // Request ID (for sender completion tracking)
+  uint32_t send_seq_id;          // Sequence ID for matching (for SEND)
+  uint32_t flags;                // Chunk flags (kFlagLastChunk, etc.)
 
   // For sender: pointer to connection group for load-balanced sending
   void* conn_group;  // TCPConnectionGroup*
@@ -137,8 +132,8 @@ struct alignas(64) TCPRequest {
         remote_addr(0),
         completed(nullptr),
         success(nullptr),
-        send_request_id(0),
-        recv_request_id(0),
+        request_id(0),
+        send_seq_id(0),
         flags(0),
         conn_group(nullptr),
         assigned_conn(nullptr) {}
@@ -229,10 +224,55 @@ class PendingSendMap {
   std::unordered_map<uint32_t, std::unique_ptr<PendingTransfer>> pending_sends_;
 };
 
+// Matching info for a pending recv (used for eager send/recv without
+// negotiation)
+struct RecvMatchInfo {
+  uint64_t dest_addr;
+  size_t size;
+  uint32_t recv_request_id;
+  std::atomic<size_t> received{0};  // Bytes received so far (for clearing
+                                    // current_)
+};
+
+// Per-connection-group matching queue for eager send/recv.
+// uccl_recv_async registers recv info here; receiver workers match incoming
+// data with registered recvs in FIFO order using send_seq_id.
+class RecvMatchQueue {
+ public:
+  // Called by uccl_recv_async to register a recv
+  void push_recv(uint64_t dest_addr, size_t size, uint32_t recv_request_id);
+
+  // Called by receiver worker to get recv info for a specific send_seq_id.
+  // If send_seq_id is new, pops from queue and creates in_progress entry.
+  // Returns false if no recv available (queue empty and not in_progress).
+  bool get_recv_info(uint32_t send_seq_id, uint64_t* base_dest_addr,
+                     uint32_t* recv_request_id);
+
+  // Called after processing a chunk - adds bytes and removes from in_progress
+  // when complete
+  void add_received_bytes(uint32_t send_seq_id, size_t bytes);
+
+  // Get next send_seq_id for sender (increments atomically)
+  uint32_t get_next_send_seq_id();
+
+ private:
+  mutable std::mutex mutex_;
+  std::deque<std::unique_ptr<RecvMatchInfo>> pending_recvs_;
+  // Map from send_seq_id to in-progress transfer info
+  std::unordered_map<uint32_t, std::unique_ptr<RecvMatchInfo>> in_progress_;
+  // Next sequence number to assign when popping from pending_recvs_
+  uint32_t next_seq_to_assign_{0};
+  // Next send_seq_id to assign to senders (atomic for thread safety)
+  std::atomic<uint32_t> next_send_seq_id_{0};
+};
+
+// Forward declaration
+class TCPThreadPool;
+
 // TCP Receiver Worker - uses epoll to wait on data connections
 class TCPReceiverWorker {
  public:
-  TCPReceiverWorker(uint32_t id, PendingRecvMap* pending_recvs);
+  TCPReceiverWorker(uint32_t id, TCPThreadPool* thread_pool);
   ~TCPReceiverWorker();
 
   void start();
@@ -254,7 +294,8 @@ class TCPReceiverWorker {
   std::atomic<bool> running_;
   int epoll_fd_;
   std::thread worker_thread_;
-  PendingRecvMap* pending_recvs_;  // Shared across all workers
+  TCPThreadPool* thread_pool_;  // Access to shared state (pending_recvs,
+                                // match_queues)
   char* staging_buffer_;  // Pinned memory for efficient GPU-host transfers
 
   mutable std::mutex mutex_;
@@ -264,7 +305,7 @@ class TCPReceiverWorker {
 // TCP Sender Worker - processes send requests from jring
 class TCPSenderWorker {
  public:
-  TCPSenderWorker(uint32_t id, PendingSendMap* pending_sends);
+  TCPSenderWorker(uint32_t id, TCPThreadPool* thread_pool);
   ~TCPSenderWorker();
 
   void start();
@@ -287,7 +328,7 @@ class TCPSenderWorker {
   jring_t* request_ring_;
   char* staging_buffer_;  // Pinned memory for efficient GPU-host transfers
   std::thread worker_thread_;
-  PendingSendMap* pending_sends_;  // Shared across all sender workers
+  TCPThreadPool* thread_pool_;  // Access to shared state (pending_sends, etc.)
 };
 
 // Connection group for a peer (ctrl + data connections)
@@ -297,9 +338,9 @@ struct TCPConnectionGroup {
   std::atomic<uint64_t> round_robin_idx{0};
   mutable std::shared_mutex mutex;
 
-  // For tracking remaining data to send (decremented as RecvReady messages
-  // arrive)
-  std::atomic<size_t> pending_send_size{0};
+  // Match queue for eager send/recv (recv registers here, receiver workers
+  // match, and send_seq_id generation)
+  RecvMatchQueue match_queue;
 
   // Select a connection and return it (caller routes request to its owner)
   TCPConnection* select_data_connection();
@@ -320,7 +361,9 @@ class TCPThreadPool {
   void stop();
 
   // Assign a data connection to a receiver worker (round-robin)
-  uint32_t assign_data_connection(int fd, TCPConnection* conn);
+  // Also registers the fd -> match_queue mapping
+  uint32_t assign_data_connection(int fd, TCPConnection* conn,
+                                  RecvMatchQueue* match_queue);
 
   // Submit request to sender worker (routes based on assigned_conn's owner)
   bool submit_request(TCPRequest const& req);
@@ -335,6 +378,15 @@ class TCPThreadPool {
                              std::atomic<bool>* completed,
                              std::atomic<bool>* success);
 
+  // Get the match queue for a given fd (used by receiver workers)
+  RecvMatchQueue* get_match_queue(int fd);
+
+  // Get pending recvs map (for receiver workers)
+  PendingRecvMap* get_pending_recvs() { return &pending_recvs_; }
+
+  // Get pending sends map (for sender workers)
+  PendingSendMap* get_pending_sends() { return &pending_sends_; }
+
  private:
   PendingRecvMap pending_recvs_;  // Shared pending receives
   PendingSendMap pending_sends_;  // Shared pending sends
@@ -342,6 +394,10 @@ class TCPThreadPool {
   std::vector<std::unique_ptr<TCPReceiverWorker>> receiver_workers_;
   std::atomic<uint32_t> next_sender_{0};
   std::atomic<uint32_t> next_receiver_{0};
+
+  // Mapping from data fd to its connection group's match queue
+  mutable std::shared_mutex fd_match_queue_mutex_;
+  std::unordered_map<int, RecvMatchQueue*> fd_to_match_queue_;
 };
 
 // Async request tracking
