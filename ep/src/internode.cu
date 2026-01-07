@@ -275,14 +275,14 @@ __global__ void notify_dispatch(
         recv_rdma_rank_prefix_sum[i] = sum;
       }
       // NOTE(MaoZiming): if I wrap this code with if (num_worst_tokens == 0),
-      // it will somehow cause deadlock on vllm with deepep_high_throughput mode.
-      // I suspect it is because some compiler reordering, but I don't know why. 
-      // num_worst_tokens = 0, but somehow wrapping it with the conditional will cause deadlock.
-      // Removing the ``if" is logically redundant but harmless. 
-      // if (num_worst_tokens == 0) {
-        while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1)
-          ;
-        *moe_recv_rdma_counter_mapped = sum;
+      // it will somehow cause deadlock on vllm with deepep_high_throughput
+      // mode. I suspect it is because some compiler reordering, but I don't
+      // know why. num_worst_tokens = 0, but somehow wrapping it with the
+      // conditional will cause deadlock. Removing the ``if" is logically
+      // redundant but harmless. if (num_worst_tokens == 0) {
+      while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1)
+        ;
+      *moe_recv_rdma_counter_mapped = sum;
       // }
     }
 
@@ -313,8 +313,8 @@ __global__ void notify_dispatch(
       }
       // if (num_worst_tokens == 0) {
       while (ld_volatile_global(moe_recv_counter_mapped) != -1)
-          ;
-        *moe_recv_counter_mapped = sum;
+        ;
+      *moe_recv_counter_mapped = sum;
       // }
     }
     if (thread_id < num_nvl_experts) {
@@ -325,7 +325,7 @@ __global__ void notify_dispatch(
       sum = (sum + expert_alignment - 1) / expert_alignment * expert_alignment;
       // if (num_worst_tokens == 0) {
       while (ld_volatile_global(moe_recv_expert_counter_mapped + thread_id) !=
-              -1)
+             -1)
         ;
       // }
       moe_recv_expert_counter_mapped[thread_id] = sum;
