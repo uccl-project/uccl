@@ -27,10 +27,7 @@
 namespace tcp {
 
 static constexpr size_t kChunkSize = 128 * 1024;  // 128KB chunk size
-static_assert(kChunkSize <= kStagingBufferSize,
-              "kChunkSize must be <= kStagingBufferSize");
-static constexpr size_t kMaxInflightChunks = 256;
-static constexpr size_t kTCPBufferSize = 128 * 1024 * 1024;  // 128MB TCP buffer
+static_assert(kChunkSize <= kStagingBufferSize);
 static constexpr uint64_t kBandwidthPerConnection =
     20ULL * 1000 * 1000 * 1000;  // 20Gbps
 

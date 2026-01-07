@@ -449,7 +449,8 @@ bool TCPSenderWorker::process_requests() {
     // For SEND and WRITE, track bytes sent via shared map
     if (req.type == TCPRequestType::SEND || req.type == TCPRequestType::WRITE) {
       if (success) {
-        pending_sends_->update_and_check_complete(req.request_id, req.size);
+        pending_sends_->update_and_check_complete(req.send_request_id,
+                                                  req.size);
       }
     }
   }
@@ -512,7 +513,7 @@ bool TCPSenderWorker::do_write(TCPRequest& req) {
   TCPDataHeader header;
   header.msg_type = static_cast<uint32_t>(TCPDataMsgType::DATA_CHUNK);
   header.flags = req.flags;
-  header.request_id = req.request_id;
+  header.request_id = req.send_request_id;
   header.reserved = 0;
   header.dest_addr = req.dest_addr;
   header.remote_addr = 0;  // Not used for DATA_CHUNK
@@ -552,7 +553,7 @@ bool TCPSenderWorker::do_read(TCPRequest& req) {
   TCPDataHeader header;
   header.msg_type = static_cast<uint32_t>(TCPDataMsgType::READ_REQUEST);
   header.flags = 0;
-  header.request_id = req.request_id;  // For tracking completion on return
+  header.request_id = req.send_request_id;  // For tracking completion on return
   header.reserved = 0;
   header.dest_addr = req.dest_addr;      // Where to put data on our side
   header.remote_addr = req.remote_addr;  // Address to read from on remote side

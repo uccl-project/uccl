@@ -63,7 +63,7 @@ enum class TCPRequestType : uint32_t {
   SEND =
       0,  // Send data (waits for RecvReady on ctrl, then sends on data conns)
   WRITE = 1,  // RDMA-style write (dest_addr already known, no ctrl message)
-  READ = 2,   // RDMA-style read (sends request on data conn, receiver worker
+  READ = 3,   // RDMA-style read (sends request on data conn, receiver worker
               // handles incoming data)
   SHUTDOWN = 255
 };
@@ -117,7 +117,7 @@ struct alignas(64) TCPRequest {
   uint64_t remote_addr;  // Remote addr to read from (for READ)
   std::atomic<bool>* completed;  // Completion flag
   std::atomic<bool>* success;    // Success flag
-  uint32_t request_id;           // Sender's request ID (for pending_sends_)
+  uint32_t send_request_id;      // Sender's request ID (for pending_sends_)
   uint32_t recv_request_id;  // Receiver's request ID (for DATA_CHUNK header)
   uint32_t flags;            // Chunk flags (kFlagLastChunk, etc.)
 
@@ -137,7 +137,8 @@ struct alignas(64) TCPRequest {
         remote_addr(0),
         completed(nullptr),
         success(nullptr),
-        request_id(0),
+        send_request_id(0),
+        recv_request_id(0),
         flags(0),
         conn_group(nullptr),
         assigned_conn(nullptr) {}

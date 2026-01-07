@@ -479,7 +479,7 @@ int TCPEndpoint::uccl_send_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
     req.total_size = size;
     req.dest_addr = base_dest_addr + offset;  // Destination with offset
     req.flags = is_last ? TCPDataHeader::kFlagLastChunk : 0;
-    req.request_id = send_request_id;       // For sender completion tracking
+    req.send_request_id = send_request_id;  // For sender completion tracking
     req.recv_request_id = recv_request_id;  // For receiver completion tracking
     req.conn_group = group.get();
     req.assigned_conn = conn;
@@ -588,7 +588,7 @@ int TCPEndpoint::uccl_read_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
     req.remote_addr = base_remote + offset;  // Where to read from remotely
     req.completed = nullptr;  // Completion tracked by pending_recv
     req.success = nullptr;
-    req.request_id = request_id;       // For READ response tracking
+    req.send_request_id = request_id;  // For READ response tracking
     req.recv_request_id = request_id;  // Same as request_id for READ
     req.conn_group = group.get();
     req.assigned_conn = conn;
@@ -649,7 +649,7 @@ int TCPEndpoint::uccl_write_async(uccl::UcclFlow* flow,
     req.total_size = size;
     req.dest_addr = base_dest_addr + offset;  // Remote address with offset
     req.flags = is_last ? TCPDataHeader::kFlagLastChunk : 0;
-    req.request_id = request_id;       // For sender completion tracking
+    req.send_request_id = request_id;  // For sender completion tracking
     req.recv_request_id = request_id;  // Not used for WRITE (one-sided)
     req.conn_group = group.get();
     req.assigned_conn = conn;
