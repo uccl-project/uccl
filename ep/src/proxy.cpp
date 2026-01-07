@@ -473,16 +473,12 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
         ctx_.quiet_inflight = false;
         ctx_.quiet_wr = -1;
         fifo->pop();
-        printf("quiet complete: wr_id=%llu, rank=%d\n", (unsigned long long)front_wr, cfg_.rank);
       }
 
       if (ctx_.barrier_wr != -1 && front_wr == (uint64_t)ctx_.barrier_wr) {
         ctx_.barrier_inflight = false;
         ctx_.barrier_wr = -1;
         fifo->pop();
-
-        // print barrier complete
-        printf("barrier complete: wr_id=%llu, rank=%d\n", (unsigned long long)front_wr, cfg_.rank);
       }
     }
   }
@@ -869,9 +865,6 @@ void Proxy::post_gpu_commands_mixed(
     assert(barrier_wrs.size() == 1 && ctx_.barrier_wr == -1);
 #endif
     assert(quiet_wrs.empty() && "quiet_wrs should be empty");
-    // print wr_id and rank
-    printf("send_barrier: wr_id=%llu, rank=%d\n", (unsigned long long)barrier_wrs[0], cfg_.rank);
-    
     send_barrier(barrier_wrs[0]);
     barrier_wrs.clear();
     barrier_cmds.clear();
@@ -881,7 +874,6 @@ void Proxy::post_gpu_commands_mixed(
 #ifdef USE_MSCCLPP_FIFO_BACKEND
     assert(quiet_wrs.size() == 1 && ctx_.quiet_wr == -1);
 #endif
-    printf("send_quiet: wr_id=%llu, rank=%d\n", (unsigned long long)quiet_wrs[0], cfg_.rank);
     ctx_.quiet_wr = quiet_wrs[0];
     quiet(quiet_wrs, quiet_cmds);
     quiet_wrs.clear();

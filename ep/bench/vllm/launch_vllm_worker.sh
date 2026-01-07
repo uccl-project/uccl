@@ -32,7 +32,6 @@ fi
 export LD_LIBRARY_PATH=$(python3 -c "import torch; import os; print(os.path.join(torch.__path__[0], 'lib'))"):$LD_LIBRARY_PATH
 
 export VLLM_USE_DEEP_GEMM=1
-export NCCL_P2P_DISABLE=1
 
 # ============================================================================
 # NETWORK CONFIGURATION
@@ -55,7 +54,6 @@ export NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so
 # NCCL performance tuning (optional):
 export NCCL_P2P_NET_CHUNKSIZE=524288
 export NCCL_BUFFSIZE=8388608
-export OMP_NUM_THREADS=32
 
 # NCCL debugging (for diagnosing connection issues):
 # export NCCL_DEBUG=INFO
@@ -78,12 +76,6 @@ TOTAL_DP_SIZE="${5:-16}"                           # Same total DP as Node 0
 LOCAL_DP_SIZE="${6:-8}"                            # Local DP on this node
 LOCAL_TP_SIZE="${7:-1}"                            # Local TP on this node
 START_RANK="${8:-8}"                               # Starting rank offset
-
-export TORCH_NCCL_TRACE_BUFFER_SIZE=1048576
-export TORCH_DISTRIBUTED_DEBUG=DETAIL
-export NCCL_DEBUG=INFO
-export NCCL_DEBUG_SUBSYS=INIT,COLL
-export TORCH_NCCL_ENABLE_MONITORING=0
 
 # START_RANK calculation:
 # - Node 1: LOCAL_DP_SIZE of Node 0 (e.g., 8)
@@ -133,8 +125,7 @@ vllm serve "${MODEL}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
     --gpu-memory-utilization 0.8 \
-    --headless \
-    --enforce-eager
+    --headless
 
 # Additional useful options (uncomment as needed, must match Node 0):
 #   --max-model-len 8192 \
