@@ -198,16 +198,16 @@ void Endpoint::initialize_engine() {
     GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i], gpuStreamNonBlocking));
   }
 
-  numa_node_ =
-      uccl::RDMAFactory::get_factory_dev(gpu_to_dev[local_gpu_idx_])->numa_node;
-
   // Initialize the engine based on the GPU index.
   std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
             << std::endl;
   // Initialize engine by fixed engine offset since we did lazy initialization
 #ifdef UCCL_P2P_USE_NATIVE_RDMA
+  numa_node_ = RdmaDeviceManager::instance().get_numa_node(local_gpu_idx_);
   unified::initialize_engine_by_dev(ep_, local_gpu_idx_, false);
 #else
+  numa_node_ =
+      uccl::RDMAFactory::get_factory_dev(gpu_to_dev[local_gpu_idx_])->numa_node;
   unified::initialize_engine_by_dev(ep_, gpu_to_dev[local_gpu_idx_], false);
 #endif
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
