@@ -2,8 +2,6 @@
 
 # EFA optional integration
 USE_EFA ?= $(shell echo $${USE_EFA:-0})
-# IB optional integration
-USE_IB ?= $(shell echo $${USE_IB:-0})
 
 # Compiler and flags
 HIP_HOME?=/opt/rocm
@@ -13,8 +11,8 @@ CONDA_LIB_HOME?=/usr/lib
 RDMA_HOME := ../collective/rdma
 CXX := g++
 
-ifeq ($(USE_IB),1)
-	CXXFLAGS_TRANS := -DUCCL_P2P_USE_IB
+ifeq ($(USE_EFA),1)
+	CXXFLAGS_TRANS := -DUCCL_P2P_USE_EFA
 endif
 
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I../include -I$(RDMA_HOME) -I$(HIP_INC) \

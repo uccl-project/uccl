@@ -6,19 +6,19 @@
 #include "util/util.h"
 #include <glog/logging.h>
 
-#ifdef UCCL_P2P_USE_IB
-#include "providers/ib/rdma_channel_impl_ib.h"
-#else
+#ifdef UCCL_P2P_USE_EFA
 #include "providers/efa/rdma_channel_impl_efa.h"
+#else
+#include "providers/ib/rdma_channel_impl_ib.h"
 #endif
 
 // Factory function implementation (inline, defined after including impl
 // headers)
 inline std::unique_ptr<RDMAChannelImpl> createRDMAChannelImpl() {
-#ifdef UCCL_P2P_USE_IB
-  return std::make_unique<IBChannelImpl>();
-#else
+#ifdef UCCL_P2P_USE_EFA
   return std::make_unique<EFAChannelImpl>();
+#else
+  return std::make_unique<IBChannelImpl>();
 #endif
 }
 

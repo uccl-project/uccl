@@ -50,10 +50,10 @@ class RDMAChannelImpl {
 };
 
 // Forward declarations for implementations
-#ifdef UCCL_P2P_USE_IB
-class IBChannelImpl;
-#else
+#ifdef UCCL_P2P_USE_EFA
 class EFAChannelImpl;
+#else
+class IBChannelImpl;
 #endif
 
 // Factory function declaration (implementation in rdma_channel.h after
