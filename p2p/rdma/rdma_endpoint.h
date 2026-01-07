@@ -392,6 +392,7 @@ class NICEndpoint {
 
     std::vector<size_t> device_ids =
         RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_);
+
     initializeContexts(device_ids);
     LOG(INFO) << "NICEndpoint initialized with " << contexts_.size()
               << " context(s) for GPU " << gpu_index_;
@@ -582,14 +583,14 @@ class NICEndpoint {
         return it->second;
       }
     }
-
+    auto numa_node = RdmaDeviceManager::instance().get_numa_node(gpu_index_);
     {
       std::unique_lock write_lock(recv_channel_mutex_);
       auto [it, inserted] = recv_channel_groups_.try_emplace(
           rank_id,
           std::make_shared<RecvChannelGroup>(
-              auto_start_polling_));  // try_emplace constructs only
-                                      // if inserting
+              numa_node, auto_start_polling_));  // try_emplace constructs only
+                                                 // if inserting
       return it->second;
     }
   }
@@ -613,10 +614,12 @@ class NICEndpoint {
       auto it = send_channel_groups_.find(rank_id);
       if (it != send_channel_groups_.end()) return it->second;
     }
+    auto numa_node = RdmaDeviceManager::instance().get_numa_node(gpu_index_);
     {
       std::unique_lock write_lock(send_channel_mutex_);
       auto [it, inserted] = send_channel_groups_.try_emplace(
-          rank_id, std::make_shared<SendChannelGroup>(auto_start_polling_));
+          rank_id,
+          std::make_shared<SendChannelGroup>(numa_node, auto_start_polling_));
       return it->second;
     }
   }
