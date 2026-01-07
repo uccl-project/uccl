@@ -8,14 +8,13 @@ HIP_HOME?=/opt/rocm
 HIP_INC  := $(HIP_HOME)/include
 HIP_LIB  := $(HIP_HOME)/lib
 CONDA_LIB_HOME?=/usr/lib
-RDMA_HOME := ../collective/rdma
 CXX := g++
 
 ifeq ($(USE_EFA),1)
 	CXXFLAGS_TRANS := -DUCCL_P2P_USE_EFA
 endif
 
-CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I../include -I$(RDMA_HOME) -I$(HIP_INC) \
+CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I../include -I$(HIP_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=${CONDA_LIB_HOME} -I${CONDA_LIB_HOME}/../include \
 	$(CXXFLAGS_TRANS)
@@ -42,8 +41,7 @@ LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
 # Target and source files
 P2P_PYTHON_EXT   := p2p$(PYEXT)
 P2P_SHARED_LIB := libuccl_p2p.so
-RDMA_PLUGIN_LIB := librdma_plugin.a
-SOURCES := engine.cc engine_pybind.cc
+SOURCES := engine.cc engine_pybind.cc param.cc
 OBJECTS := $(SOURCES:.cc=.o)
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
@@ -53,28 +51,17 @@ CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
 all: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 
 # Build the shared library
-$(P2P_PYTHON_EXT): $(OBJECTS) $(RDMA_HOME)/librdma_hip.a
-	$(CXX) $(OBJECTS) $(RDMA_HOME)/librdma_hip.a \
+$(P2P_PYTHON_EXT): $(OBJECTS)
+	$(CXX) $(OBJECTS) \
 	      -L$(HIP_LIB) -lamdhip64 \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(HIP_LIB)
 
-$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB)
-	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB) \
+$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT)
+	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) \
 	      -L$(HIP_LIB) -lamdhip64 \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(HIP_LIB) $(PYTHON_LIB)
-
-$(RDMA_HOME)/librdma_hip.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc %_test.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
-	make -C $(RDMA_HOME) -f Makefile.rocm librdma_hip.a -j$(nproc)
-
-RDMA_OBJECTS := $(patsubst $(RDMA_HOME)/%.cc,%.o,$(filter-out $(RDMA_HOME)/nccl_plugin.cc %_test.cc,$(wildcard $(RDMA_HOME)/*.cc)))
-
-$(RDMA_PLUGIN_LIB): $(RDMA_OBJECTS)
-	ar rcs $@ $(RDMA_OBJECTS)
-
-$(RDMA_OBJECTS): %.o: $(RDMA_HOME)/%.cc
-	$(CXX) -c $< -o $@ $(CXXFLAGS) -DDISABLE_CALL_ONCE_STATIC -I$(RDMA_HOME)
 
 # Compile source files
 %.o: %.cc
@@ -86,12 +73,11 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	@cp $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
 	install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/
-	install -m 755 $(RDMA_PLUGIN_LIB) $(LIBDIR)/
 	install -m 644 $(CAPI_HEADER) $(INCDIR)/
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB) $(P2P_PYTHON_EXT) $(RDMA_PLUGIN_LIB) $(RDMA_OBJECTS)
-	make -C $(RDMA_HOME) -f Makefile.rocm clean -j$(nproc)
+	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB) $(P2P_PYTHON_EXT)
+	make clean -j$(nproc)
 
 # Test the module
 test: $(P2P_PYTHON_EXT)

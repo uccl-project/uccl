@@ -607,7 +607,6 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     }
     conn = it->second;
   }
-  auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
   uccl::ucclRequest ureq[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
@@ -698,8 +697,6 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     conn = it->second;
   }
 
-  auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
-
   uccl::ucclRequest ureq[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
 
@@ -786,12 +783,6 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                     FifoItem const& slot_item) {
-  if (!ucclParamRCMode()) {
-    CHECK(false) << "RDMA READ is only supported in RC mode, toggle RCMODE to "
-                    "be True in transport_config.h";
-    std::abort();
-  }
-
   DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
   auto* conn = conn_id_to_conn_[conn_id];
   auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
@@ -932,7 +923,6 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> dst_v, std::vector<size_t> size_v,
                      std::vector<FifoItem> slot_item_v, size_t num_iovs) {
   auto conn = conn_id_to_conn_[conn_id];
-  auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
   uccl::ucclRequest ureq[kMaxInflightChunks] = {};
   FifoItem curr_slot_item[kMaxInflightChunks] = {};
@@ -1071,7 +1061,6 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                       std::vector<void*> src_v, std::vector<size_t> size_v,
                       std::vector<FifoItem> slot_item_v, size_t num_iovs) {
   auto conn = conn_id_to_conn_[conn_id];
-  auto uccl_flow = static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context);
 
   uccl::ucclRequest ureq[kMaxInflightChunks] = {};
   FifoItem curr_slot_item[kMaxInflightChunks] = {};
@@ -1186,11 +1175,6 @@ bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
 bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
                      FifoItem const& slot_item) {
-  if (!ucclParamRCMode()) {
-    CHECK(false) << "We only support RC mode for now.";
-    std::abort();
-  }
-
   DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
   auto* conn = conn_id_to_conn_[conn_id];
   auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
