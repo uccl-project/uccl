@@ -27,7 +27,7 @@ namespace tcp {
 #define UCCL_TCP_GPU_MEMCPY 0
 
 static constexpr size_t kStagingBufferSize = 16 * 1024 * 1024;
-static constexpr size_t kDefaultTCPThreads = 8;
+static constexpr size_t kDefaultTCPThreads = 10;
 static constexpr size_t kRequestRingSize = 1024;
 static constexpr int kEpollMaxEvents = 64;
 
@@ -222,7 +222,7 @@ class TCPReceiverWorker {
 
  private:
   void worker_loop();
-  void process_event(int fd);
+  bool process_event(int fd);
   void process_read_request(int fd, TCPDataHeader const& header);
   void process_data_chunk(int fd, TCPDataHeader const& header);
 

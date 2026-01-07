@@ -13,10 +13,6 @@ void RecvMatchQueue::push_recv(uint64_t dest_addr, size_t size,
   pending_recvs_.push_back(std::move(info));
 }
 
-uint32_t RecvMatchQueue::get_next_send_seq_id() {
-  return next_send_seq_id_.fetch_add(1, std::memory_order_relaxed);
-}
-
 bool RecvMatchQueue::get_recv_info(uint32_t send_seq_id,
                                    uint64_t* base_dest_addr,
                                    uint32_t* recv_request_id) {
@@ -52,13 +48,21 @@ bool RecvMatchQueue::get_recv_info(uint32_t send_seq_id,
 void RecvMatchQueue::add_received_bytes(uint32_t send_seq_id, size_t bytes) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = in_progress_.find(send_seq_id);
-  if (it == in_progress_.end()) return;
+  if (it == in_progress_.end()) {
+    LOG(ERROR) << "RecvMatchQueue::add_received_bytes: send_seq_id="
+               << send_seq_id << " not found";
+    exit(1);
+  }
 
   size_t new_total =
       it->second->received.fetch_add(bytes, std::memory_order_relaxed) + bytes;
   if (new_total >= it->second->size) {
     in_progress_.erase(it);
   }
+}
+
+uint32_t RecvMatchQueue::get_next_send_seq_id() {
+  return next_send_seq_id_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void PendingRecvMap::add(uint64_t dest_addr, size_t size, uint32_t request_id,
@@ -288,18 +292,24 @@ void TCPReceiverWorker::worker_loop() {
 
     for (int i = 0; i < n; ++i) {
       if (events[i].events & EPOLLIN) {
-        process_event(events[i].data.fd);
+        int fd = events[i].data.fd;
+        if (!process_event(fd)) {
+          struct epoll_event ev;
+          ev.events = EPOLLIN | EPOLLET;
+          ev.data.fd = fd;
+          epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ev);
+        }
       }
     }
   }
 }
 
-void TCPReceiverWorker::process_event(int fd) {
+bool TCPReceiverWorker::process_event(int fd) {
   while (true) {
     TCPDataHeader header;
     ssize_t peeked = recv(fd, &header, sizeof(header), MSG_PEEK | MSG_DONTWAIT);
     if (peeked < static_cast<ssize_t>(sizeof(header))) {
-      return;
+      return true;
     }
 
     if ((header.flags & TCPDataHeader::kFlagNeedsMatch) &&
@@ -314,9 +324,9 @@ void TCPReceiverWorker::process_event(int fd) {
       uint32_t send_seq_id = header.request_id;
       uint64_t base_dest_addr;
       uint32_t recv_request_id;
-      while (!match_queue->get_recv_info(send_seq_id, &base_dest_addr,
-                                         &recv_request_id)) {
-        std::this_thread::yield();
+      if (!match_queue->get_recv_info(send_seq_id, &base_dest_addr,
+                                      &recv_request_id)) {
+        return false;
       }
     }
 
@@ -424,7 +434,7 @@ void TCPReceiverWorker::process_data_chunk(int fd,
   thread_pool_->get_pending_recvs()->update_and_check_complete(recv_request_id,
                                                                header.size);
 
-  if (match_queue) {
+  if (header.flags & TCPDataHeader::kFlagNeedsMatch) {
     match_queue->add_received_bytes(send_seq_id, header.size);
   }
 }
