@@ -10,6 +10,9 @@
 #
 # IMPORTANT: All configuration must match Node 0!
 
+# Example:
+# bash launch_vllm_worker.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 allgather_reducescatter 2 1 8 1
+
 set -e
 
 echo "🚀 Launching vLLM Secondary Node (Headless) with Expert Parallel..."
