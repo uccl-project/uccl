@@ -398,6 +398,7 @@ def initialize():
       --exclude "libcudart.so.12" \
       --exclude "libamdhip64.so.*" \
       --exclude "libcuda.so.1" \
+      --exclude "libefa.so.1" \
       -w /io/${WHEEL_DIR}
 
     # Add backend tag to wheel filename using local version identifier
