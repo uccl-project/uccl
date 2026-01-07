@@ -60,6 +60,7 @@ static constexpr size_t kInFlightMaxSizeKB =
 
 static constexpr uint32_t INVALID_RANK_ID =
     std::numeric_limits<uint32_t>::max();
+static constexpr uint32_t INVALID_GPU = std::numeric_limits<uint32_t>::max();
 
 inline size_t channelIdToContextId(uint32_t channel_id) {
   return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;
