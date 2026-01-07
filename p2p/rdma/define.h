@@ -1,4 +1,5 @@
 #pragma once
+#include "param.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
@@ -33,7 +34,6 @@
 #include <sys/epoll.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
-#include <transport.h>
 #include <unistd.h>
 
 static constexpr int kRankIDPlaceHolder = 9999;
@@ -65,6 +65,66 @@ static constexpr uint32_t INVALID_GPU = std::numeric_limits<uint32_t>::max();
 inline size_t channelIdToContextId(uint32_t channel_id) {
   return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;
 }
+
+// # of engines per device.
+UCCL_PARAM(NUM_ENGINES, "NUM_ENGINES", 4);
+
+// Number of CUDA/HIP streams per engine.
+UCCL_PARAM(NumGpuRtStreams, "NUM_GPU_RT_STREAMS", 4);
+
+namespace uccl {
+typedef uint64_t FlowID;
+enum ReqType { ReqTx, ReqRx, ReqFlush, ReqTxRC, ReqRxRC, ReqRead, ReqWrite };
+struct ucclRequest {
+  enum ReqType type;
+  uint32_t n;
+  uint32_t engine_idx;
+};
+struct ConnID {
+  void* context;
+  int sock_fd;
+  int dev;
+  FlowID flow_id;
+};
+struct Mhandle {
+  struct ibv_mr* mr;
+};
+struct FifoItem {
+  uint64_t addr;
+  uint32_t size;
+  uint32_t rkey;
+  uint32_t nmsgs;
+  uint32_t rid;
+  uint64_t idx;
+  uint32_t engine_offset;
+  char padding[28];
+};
+static_assert(sizeof(struct FifoItem) == 64, "FifoItem size is not 64 bytes");
+
+inline void serialize_fifo_item(FifoItem const& item, char* buf) {
+  static_assert(sizeof(FifoItem) == 64, "FifoItem must be 64 bytes");
+
+  std::memcpy(buf + 0, &item.addr, sizeof(uint64_t));
+  std::memcpy(buf + 8, &item.size, sizeof(uint32_t));
+  std::memcpy(buf + 12, &item.rkey, sizeof(uint32_t));
+  std::memcpy(buf + 16, &item.nmsgs, sizeof(uint32_t));
+  std::memcpy(buf + 20, &item.rid, sizeof(uint32_t));
+  std::memcpy(buf + 24, &item.idx, sizeof(uint64_t));
+  std::memcpy(buf + 32, &item.engine_offset, sizeof(uint32_t));
+  std::memcpy(buf + 36, &item.padding, sizeof(item.padding));
+}
+
+inline void deserialize_fifo_item(char const* buf, FifoItem* item) {
+  std::memcpy(&item->addr, buf + 0, sizeof(uint64_t));
+  std::memcpy(&item->size, buf + 8, sizeof(uint32_t));
+  std::memcpy(&item->rkey, buf + 12, sizeof(uint32_t));
+  std::memcpy(&item->nmsgs, buf + 16, sizeof(uint32_t));
+  std::memcpy(&item->rid, buf + 20, sizeof(uint32_t));
+  std::memcpy(&item->idx, buf + 24, sizeof(uint64_t));
+  std::memcpy(&item->engine_offset, buf + 32, sizeof(uint32_t));
+  std::memcpy(&item->padding, buf + 36, sizeof(item->padding));
+}
+};  // namespace uccl
 
 struct MessageChunk {
   uint64_t offset;  // Offset from the start of the message
