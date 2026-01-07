@@ -8,6 +8,9 @@
 # 3. Install EP kernels: Follow vLLM's EP installation guide
 # 4. For AWS EFA: Install AWS OFI-NCCL plugin
 
+#  Example: 
+# bash launch_vllm_head.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 deepep_low_latency 2 1 8 1
+
 set -e
 
 echo "🚀 Launching vLLM Node 0 (Primary) with Expert Parallel..."
