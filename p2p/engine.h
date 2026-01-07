@@ -110,10 +110,8 @@ struct RKeyArrayT {
 using MRArray = RKeyArrayT<struct ibv_mr*>;
 }  // namespace unified
 
-#ifdef UCCL_P2P_USE_NATIVE_RDMA
 #include "rdma/define.h"
 #include "rdma/rdma_endpoint.h"
-#endif
 
 namespace unified {
 
@@ -122,12 +120,7 @@ struct P2PMhandle {
   MRArray mr_array;
 };
 
-#ifdef UCCL_P2P_USE_NATIVE_RDMA
-using RDMAEndPoint =
-    std::variant<uccl::RDMAEndpoint*, std::shared_ptr<NICEndpoint>>;
-#else
-using RDMAEndPoint = std::variant<uccl::RDMAEndpoint*>;
-#endif
+using RDMAEndPoint = std::shared_ptr<NICEndpoint>;
 }  // namespace unified
 
 struct MR {
@@ -151,11 +144,7 @@ struct PeerInfo {
 using FifoItem = uccl::FifoItem;
 
 class Endpoint {
-#ifdef UCCL_P2P_USE_NATIVE_RDMA
   uint64_t const kChunkSize = 1024 * 1024 * 1024;
-#else
-  uint64_t const kChunkSize = 1024 * 1024;
-#endif
   static constexpr uint32_t kMaxInflightChunks = 8;
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;

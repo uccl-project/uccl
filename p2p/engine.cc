@@ -65,29 +65,8 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   google::InstallFailureSignalHandler();
 
   // Initialize the RDMA endpoint.
-#ifdef UCCL_P2P_USE_NATIVE_RDMA
   ep_ = std::shared_ptr<NICEndpoint>(
       new NICEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
-#else
-  ep_ = new uccl::RDMAEndpoint(num_cpus_);
-
-  // Only initialize mapping for detected GPUs
-  int ngpus_detected = 0;
-  GPU_RT_CHECK(gpuGetDeviceCount(&ngpus_detected));
-  for (int i = 0; i < std::min(ngpus_detected, kMaxNumGPUs); i++) {
-    gpu_to_dev[i] = unified::get_best_dev_idx(ep_, i);
-  }
-  // Initialize remaining slots to 0 (fallback to first device)
-  for (int i = ngpus_detected; i < kMaxNumGPUs; i++) {
-    gpu_to_dev[i] = 0;
-  }
-  numa_node_ =
-      uccl::RDMAFactory::get_factory_dev(gpu_to_dev[local_gpu_idx_])->numa_node;
-  // Initialize the engine based on the GPU index.
-  std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
-            << std::endl;
-  unified::initialize_engine_by_dev(ep_, gpu_to_dev[local_gpu_idx_], true);
-#endif
 
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
   engine_initialized_ = true;
@@ -127,25 +106,8 @@ Endpoint::Endpoint(uint32_t const num_cpus) : num_cpus_(num_cpus) {
 
   google::InstallFailureSignalHandler();
   // Initialize the RDMA endpoint with lazy creation.
-#ifdef UCCL_P2P_USE_NATIVE_RDMA
   ep_ = std::shared_ptr<NICEndpoint>(
       new NICEndpoint(INVALID_GPU, INVALID_RANK_ID, 0, false));
-#else
-  ep_ = new uccl::RDMAEndpoint(num_cpus_);
-
-  // Create a unified P2P socket, which is used to synchronize dev_idx
-  unified::create_unified_p2p_socket(ep_);
-  // Only initialize mapping for detected GPUs
-  int ngpus_detected = 0;
-  GPU_RT_CHECK(gpuGetDeviceCount(&ngpus_detected));
-  for (int i = 0; i < std::min(ngpus_detected, kMaxNumGPUs); i++) {
-    gpu_to_dev[i] = unified::get_best_dev_idx(ep_, i);
-  }
-  // Initialize remaining slots to 0 (fallback to first device)
-  for (int i = ngpus_detected; i < kMaxNumGPUs; i++) {
-    gpu_to_dev[i] = 0;
-  }
-#endif
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
@@ -159,7 +121,6 @@ Endpoint::~Endpoint() {
 
   free(send_unified_task_ring_);
   free(recv_unified_task_ring_);
-  unified::delete_ep(ep_);
 
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
@@ -202,14 +163,8 @@ void Endpoint::initialize_engine() {
   std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
             << std::endl;
   // Initialize engine by fixed engine offset since we did lazy initialization
-#ifdef UCCL_P2P_USE_NATIVE_RDMA
   numa_node_ = RdmaDeviceManager::instance().get_numa_node(local_gpu_idx_);
   unified::initialize_engine_by_dev(ep_, local_gpu_idx_, false);
-#else
-  numa_node_ =
-      uccl::RDMAFactory::get_factory_dev(gpu_to_dev[local_gpu_idx_])->numa_node;
-  unified::initialize_engine_by_dev(ep_, gpu_to_dev[local_gpu_idx_], false);
-#endif
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
 
   send_unified_task_ring_ =
