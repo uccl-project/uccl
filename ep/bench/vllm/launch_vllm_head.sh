@@ -64,6 +64,12 @@ export VLLM_ENGINE_READY_TIMEOUT_S=3600
 export DG_JIT_CACHE_DIR="/local_storage"
 export VLLM_WORKER_MULTIPROC_METHOD="spawn"
 
+export TORCH_NCCL_TRACE_BUFFER_SIZE=1048576
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=INIT,COLL
+export TORCH_NCCL_ENABLE_MONITORING=0
+
 # ============================================================================
 # ARGUMENTS PARSING
 # ============================================================================
@@ -124,7 +130,8 @@ vllm serve "${MODEL}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
     --gpu-memory-utilization 0.8 \
-    --api-server-count="${API_SERVERS}"
+    --api-server-count="${API_SERVERS}" \
+    --enforce-eager
 
 # Additional useful options (uncomment as needed):
 #   --max-model-len 8192 \

@@ -48,7 +48,7 @@ extern bool use_ll_sl;
 #define kMaxOutstandingRecvs 2048
 #define kSenderAckQueueDepth 2048
 #define kWarmupOps 10000
-#define kChannelPerProxy 8
+#define kChannelPerProxy 1
 // TODO(MaoZiming): I tried to fit more bits, but this eats into offset and
 // values.
 #define kReorderingBufferSize 16  // Right now only 4 bits.
