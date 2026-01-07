@@ -79,6 +79,12 @@ LOCAL_DP_SIZE="${6:-8}"                            # Local DP on this node
 LOCAL_TP_SIZE="${7:-1}"                            # Local TP on this node
 START_RANK="${8:-8}"                               # Starting rank offset
 
+export TORCH_NCCL_TRACE_BUFFER_SIZE=1048576
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=INIT,COLL
+export TORCH_NCCL_ENABLE_MONITORING=0
+
 # START_RANK calculation:
 # - Node 1: LOCAL_DP_SIZE of Node 0 (e.g., 8)
 # - Node 2: LOCAL_DP_SIZE of Node 0 + Node 1 (e.g., 16)
@@ -127,7 +133,8 @@ vllm serve "${MODEL}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
     --gpu-memory-utilization 0.8 \
-    --headless
+    --headless \
+    --enforce-eager
 
 # Additional useful options (uncomment as needed, must match Node 0):
 #   --max-model-len 8192 \

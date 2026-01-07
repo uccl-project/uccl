@@ -419,6 +419,10 @@ class Buffer {
       int expert_alignment, int num_worst_tokens, uccl::Config const& config,
       std::optional<EventHandle>& previous_event, bool async,
       bool allocate_on_comm_stream) {
+    static int count = 0;
+    count++;
+    printf("rank=%d, internode_dispatch start, count=%d\n", rank, count);
+
     // In dispatch, CPU will busy-wait until GPU receive tensor size metadata
     // from other ranks, which can be quite long. If users of DeepEP need to
     // execute other Python code on other threads, such as KV transfer, their
@@ -567,6 +571,8 @@ class Buffer {
       gbl_channel_prefix_matrix = cached_gbl_channel_prefix_matrix.value();
       recv_gbl_rank_prefix_sum = cached_recv_gbl_rank_prefix_sum.value();
 
+      // print rank and say cached_notify_dispatch
+      printf("rank=%d, cached_notify in dispatch, count=%d\n", rank, count);
       // Just a barrier and clean flags
       uccl::internode::cached_notify(
           hidden_int4, num_scales, num_topk, num_topk, num_ranks, num_channels,
@@ -578,6 +584,8 @@ class Buffer {
                                            num_ranks),
           num_nvl_bytes, true, low_latency_mode, d_handles,
           num_d2h_channel_addrs, atomic_buffer_ptr);
+      printf("rank=%d, cached_notify finished in dispatch, count=%d\n", rank,
+             count);
     } else {
       rdma_channel_prefix_matrix =
           torch::empty({num_rdma_ranks, num_channels},
@@ -593,6 +601,8 @@ class Buffer {
       *moe_recv_counter = -1, *moe_recv_rdma_counter = -1;
       for (int i = 0; i < num_local_experts; ++i)
         moe_recv_expert_counter[i] = -1;
+
+      printf("rank=%d, notify_dispatch in dispatch, count=%d\n", rank, count);
       uccl::internode::notify_dispatch(
           num_tokens_per_rank->data_ptr<int>(), moe_recv_counter_mapped,
           num_ranks, num_tokens_per_rdma_rank->data_ptr<int>(),
@@ -611,7 +621,8 @@ class Buffer {
                                            num_ranks),
           num_nvl_bytes, low_latency_mode, d_handles, num_d2h_channel_addrs,
           atomic_buffer_ptr);
-
+      printf("rank=%d, notify_dispatch finished in dispatch, count=%d\n", rank,
+             count);
       // Synchronize total received tokens and tokens per expert
       if (num_worst_tokens > 0) {
         num_recv_tokens = num_worst_tokens;
@@ -720,9 +731,14 @@ class Buffer {
         config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, cached_mode,
         comm_stream, num_channels, low_latency_mode, d_handles,
         num_d2h_channel_addrs, atomic_buffer_ptr);
+    printf("rank=%d, dispatch finished in dispatch, count=%d, async=%d\n", rank,
+           count, async);
+    fflush(stdout);
     // Wait streams
     std::optional<EventHandle> event;
     if (async) {
+      // printf("rank=%d, creating event, count=%d\n", rank, count);
+      // fflush(stdout);
       event = EventHandle(comm_stream);
       for (auto& t : {x, is_token_in_rank, recv_x, rdma_channel_prefix_matrix,
                       recv_rdma_rank_prefix_sum, gbl_channel_prefix_matrix,
@@ -730,6 +746,8 @@ class Buffer {
         t.record_stream(comm_stream);
         if (allocate_on_comm_stream) t.record_stream(compute_stream);
       }
+      // printf("rank=%d, loop 1 finished, count=%d\n", rank, count);
+      // fflush(stdout);
       for (auto& to :
            {x_scales, topk_idx, topk_weights, num_tokens_per_rank,
             num_tokens_per_rdma_rank, num_tokens_per_expert,
@@ -742,14 +760,24 @@ class Buffer {
         if (allocate_on_comm_stream)
           to.has_value() ? to->record_stream(compute_stream) : void();
       }
+      // printf("rank=%d, loop 2 finished, count=%d\n", rank, count);
+      // fflush(stdout);
     } else {
+      printf("rank=%d, stream_wait in dispatch, count=%d, async=%d\n", rank,
+             count, async);
+      fflush(stdout);
       stream_wait(compute_stream, comm_stream);
+      printf("rank=%d, stream_wait finished in dispatch, count=%d, async=%d\n",
+             rank, count, async);
+      fflush(stdout);
     }
 
     // Switch back compute stream
     if (allocate_on_comm_stream) at::cuda::setCurrentCUDAStream(compute_stream);
 
     // Return values
+    printf("rank=%d, internode_dispatch end, count=%d\n", rank, count);
+    fflush(stdout);
     return {recv_x,
             recv_x_scales,
             recv_topk_idx,
@@ -783,6 +811,10 @@ class Buffer {
                     uccl::Config const& config,
                     std::optional<EventHandle>& previous_event, bool async,
                     bool allocate_on_comm_stream) {
+    static int count = 0;
+    count++;
+    printf("rank=%d, internode_combine start, count=%d\n", rank, count);
+
     int const num_channels = config.num_sms / 2;
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
 
@@ -869,6 +901,7 @@ class Buffer {
                    config.num_max_nvl_chunked_recv_tokens / num_rdma_ranks);
 
     // Launch barrier and reset queue head and tail
+    printf("rank=%d, cached_notify in combine, count=%d\n", rank, count);
     uccl::internode::cached_notify(
         hidden_int4, 0, 0, num_topk, num_ranks, num_channels,
         num_combined_tokens, combined_rdma_head.data_ptr<int>(),
@@ -880,7 +913,8 @@ class Buffer {
         config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4), num_ranks),
         num_nvl_bytes, false, low_latency_mode, d_handles,
         num_d2h_channel_addrs, atomic_buffer_ptr);
-
+    printf("rank=%d, cached_notify finished in combine, count=%d\n", rank,
+           count);
     // Assign bias pointers
     auto bias_opts =
         std::vector<std::optional<torch::Tensor>>({bias_0, bias_1});
@@ -897,6 +931,7 @@ class Buffer {
 
     // Launch data combine
     auto combined_x = torch::empty({num_combined_tokens, hidden}, x.options());
+    printf("rank=%d, combine start in combine, count=%d\n", rank, count);
     uccl::internode::combine(
         at::cuda::ScalarTypeToCudaDataType(x.scalar_type()),
         combined_x.data_ptr(), combined_topk_weights_ptr,
@@ -913,6 +948,7 @@ class Buffer {
         config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, comm_stream,
         num_channels, low_latency_mode, d_handles, num_d2h_channel_addrs,
         atomic_buffer_ptr);
+    printf("rank=%d, combine finished in combine, count=%d\n", rank, count);
 
     // Wait streams
     std::optional<EventHandle> event;
@@ -938,6 +974,7 @@ class Buffer {
     if (allocate_on_comm_stream) at::cuda::setCurrentCUDAStream(compute_stream);
 
     // Return values
+    printf("rank=%d, internode_combine end, count=%d\n", rank, count);
     return {combined_x, combined_topk_weights, event};
   }
 
