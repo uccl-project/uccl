@@ -13,24 +13,26 @@
 class NICEndpoint {
  public:
   explicit NICEndpoint(
-      int gpu_index, uint64_t rank_id = INVALID_RANK_ID, uint64_t port = 0,
-      bool auto_start_polling = true,
+      int gpu_index = INVALID_GPU, uint64_t rank_id = INVALID_RANK_ID,
+      uint64_t port = 0, bool auto_start_polling = true,
       std::vector<size_t> const& device_ids = std::vector<size_t>())
       : gpu_index_(gpu_index),
         rank_id_(rank_id),
         auto_start_polling_(auto_start_polling),
         send_id_(0),
         recv_id_(0) {
-    std::vector<size_t> actual_device_ids;
-    if (device_ids.size() == 0) {
-      actual_device_ids =
-          RdmaDeviceManager::instance().get_best_dev_idx(gpu_index);
-    } else {
-      actual_device_ids = device_ids;
+    if (gpu_index != INVALID_GPU) {
+      std::vector<size_t> actual_device_ids;
+      if (device_ids.size() == 0) {
+        actual_device_ids =
+            RdmaDeviceManager::instance().get_best_dev_idx(gpu_index);
+      } else {
+        actual_device_ids = device_ids;
+      }
+      initializeContexts(actual_device_ids);
+      LOG(INFO) << "NICEndpoint initialized with " << contexts_.size()
+                << " context(s) for GPU " << gpu_index;
     }
-    initializeContexts(actual_device_ids);
-    LOG(INFO) << "NICEndpoint initialized with " << contexts_.size()
-              << " context(s) for GPU " << gpu_index_;
 
     oob_server_ = std::make_shared<EpollServer>(
         port, [this](std::string const& input, std::string& output,
@@ -383,7 +385,17 @@ class NICEndpoint {
 
   int get_best_dev_idx(int gpu_idx) { return 0; }
 
-  bool initialize_engine_by_dev(int dev, bool enable_p2p_listen) {
+  bool initialize_engine_by_dev(int gpu_index, bool enable_p2p_listen) {
+    (void)enable_p2p_listen;
+
+    gpu_index_ = gpu_index;
+
+    std::vector<size_t> device_ids =
+        RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_);
+    initializeContexts(device_ids);
+    LOG(INFO) << "NICEndpoint initialized with " << contexts_.size()
+              << " context(s) for GPU " << gpu_index_;
+
     return true;
   }
 
