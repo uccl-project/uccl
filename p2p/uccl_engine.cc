@@ -376,9 +376,8 @@ void listener_thread_func(uccl_conn_t* conn) {
 
         bool vector_ok = true;
         if (!mr_ids.empty()) {
-          uint64_t transfer_id = 0;
-          int result = uccl_engine_recv_vector(
-              conn, mr_ids, data_ptrs, data_sizes, mr_ids.size(), &transfer_id);
+          int result = uccl_engine_recv_vector(conn, mr_ids, data_ptrs,
+                                               data_sizes, mr_ids.size());
           if (result < 0) {
             std::cerr << "Failed to perform uccl_engine_recv_vector"
                       << std::endl;
@@ -695,14 +694,13 @@ int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
 
 int uccl_engine_recv_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<void*> data_v,
-                            std::vector<size_t> data_size_v, int num_iovs,
-                            uint64_t* transfer_id) {
+                            std::vector<size_t> data_size_v, int num_iovs) {
   if (!conn || num_iovs <= 0) return -1;
   uint64_t transfer_id = 0;
 #ifdef USE_TCPX
   // TCPX: no background progress thread exists, so drive progress here.
   if (!conn->engine->endpoint->recvv_async(conn->conn_id, mr_ids, data_v,
-                                           data_size, &transfer_id)) {
+                                           data_size, num_iovs, &transfer_id)) {
     return -1;
   }
 
@@ -715,24 +713,11 @@ int uccl_engine_recv_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
   }
   return 0;
 #else
-  return conn->engine->endpoint->recv_async(conn->conn_id, mr, data, data_size,
-                                            &transfer_id)
+  return conn->engine->endpoint->recvv_async(
+             conn->conn_id, mr_ids, data_v, data_size_v, num_iovs, &transfer_id)
              ? 0
              : -1;
 #endif
-  if (!conn->engine->endpoint->recvv_async(
-          conn->conn_id, mr_ids, data_v, data_size_v, num_iovs, &transfer_id)) {
-    return -1;
-  }
-
-  // Poll until the transfer completes (drives Stage 1 and Stage 2).
-  bool done = false;
-  while (!done) {
-    if (!conn->engine->endpoint->poll_async(transfer_id, &done)) {
-      return -1;
-    }
-  }
-  return 0;
 }
 
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {

@@ -229,8 +229,7 @@ int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
  */
 int uccl_engine_recv_vector(uccl_conn_t* conn, std::vector<uint64_t> mr_ids,
                             std::vector<void*> data_v,
-                            std::vector<size_t> size_v, int num_iovs,
-                            uint64_t* transfer_id);
+                            std::vector<size_t> size_v, int num_iovs);
 /**
  * Check the status of a transfer.
  * @param conn          Connection handle.
