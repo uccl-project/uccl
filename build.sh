@@ -275,26 +275,31 @@ fi
 echo "[2/3] Running build inside container..."
 
 # Auto-detect CUDA architecture for ep build
-DETECTED_GPU_ARCH=""
-if [[ "$BUILD_TYPE" =~ (ep|all) ]];then
-  if [[ "$TARGET" == cuda* ]] && command -v nvidia-smi &> /dev/null; then
-    DETECTED_GPU_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
-    if [[ -n "$DETECTED_GPU_ARCH" ]]; then
-      echo "Auto-detected CUDA compute capability: ${DETECTED_GPU_ARCH}"
-    fi
-  elif [[ "$TARGET" == rocm* ]] && command -v amd-smi &> /dev/null; then
-    # Check if jq is installed, install via pip if not
-    if ! command -v jq &> /dev/null; then
-      echo "jq not found, installing via pip..."
-      pip install jq
-    fi
-    DETECTED_GPU_ARCH=$(amd-smi static -g 0 --asic --json | jq -r '.[].asic.target_graphics_version')
-    if [[ -n "$DETECTED_GPU_ARCH" ]]; then
-      echo "Auto-detected ROCm architecture: ${DETECTED_GPU_ARCH}"
-    fi
-  fi
-fi
+# DETECTED_GPU_ARCH=""
+# if [[ "$BUILD_TYPE" =~ (ep|all) ]];then
+#   if [[ "$TARGET" == cuda* ]] && command -v nvidia-smi &> /dev/null; then
+#     DETECTED_GPU_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
+#     if [[ -n "$DETECTED_GPU_ARCH" ]]; then
+#       echo "Auto-detected CUDA compute capability: ${DETECTED_GPU_ARCH}"
+#     fi
+#   elif [[ "$TARGET" == rocm* ]] && command -v amd-smi &> /dev/null; then
+#     # Check if jq is installed, install via pip if not
+#     if ! command -v jq &> /dev/null; then
+#       echo "jq not found, installing via pip..."
+#       pip install jq
+#     fi
+#     # DETECTED_GPU_ARCH=$(amd-smi static -g 0 --asic --json | jq -r '.[].asic.target_graphics_version')
+#     DETECTED_GPU_ARCH=$(amd-smi static -g 0 --asic --json | jq -r '.[0].asic.target_graphics_version')
 
+#     if [[ -n "$DETECTED_GPU_ARCH" ]]; then
+#       echo "Auto-detected ROCm architecture: ${DETECTED_GPU_ARCH}"
+#     fi
+#   fi
+# fi
+if [[ -z "$DETECTED_GPU_ARCH" ]]; then
+  echo "Warning: could not detect GPU arch, falling back to gfx942"
+  DETECTED_GPU_ARCH="gfx942"
+fi
 export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-${DETECTED_GPU_ARCH}}"
 
 docker run --rm --user "$(id -u):$(id -g)" \
