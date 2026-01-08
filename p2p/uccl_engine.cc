@@ -543,13 +543,14 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
 
 uccl_mr_t uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size) {
   if (!engine || !data) return -1;
-  uccl_mr_t mr_id;
-  bool ok = engine->endpoint->reg((void*)data, size, mr_id);
+  uint64_t mr_id_raw;
+  bool ok = engine->endpoint->reg((void*)data, size, mr_id_raw);
   if (!ok) {
     return -1;
   }
+  uccl_mr_t mr_id = static_cast<uccl_mr_t>(mr_id_raw);
   mem_reg_entry_t entry;
-  entry.mr_id = mr_id;
+  entry.mr_id = mr_id_raw;
   entry.size = size;
   mem_reg_info[data] = entry;
   return mr_id;

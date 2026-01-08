@@ -13,7 +13,7 @@ typedef struct uccl_engine uccl_engine_t;
 typedef struct uccl_conn uccl_conn_t;
 
 // Handle for a memory region
-typedef uint64_t uccl_mr_t;
+typedef int64_t uccl_mr_t;
 
 // UCCL operation types
 enum uccl_msg_type {
@@ -141,7 +141,7 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
  * @param transfer_id   Pointer to store the transfer ID.
  * @return              0 on success, non-zero on failure.
  */
-int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uint64_t> mr_ids,
+int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<void*> dst_v,
                             std::vector<size_t> size_v, int fifo_id,
                             int num_iovs, uint64_t* transfer_id);
@@ -174,7 +174,7 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
  * @param transfer_id   Pointer to store the transfer ID.
  * @return              0 on success, non-zero on failure.
  */
-int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uint64_t> mr_ids,
+int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                              std::vector<void const*> src_v,
                              std::vector<size_t> size_v, int num_iovs,
                              uint64_t* transfer_id);
@@ -227,7 +227,7 @@ int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
  * @param num_iovs      Number of IO vectors.
  * @return              0 on success, non-zero on failure.
  */
-int uccl_engine_recv_vector(uccl_conn_t* conn, std::vector<uint64_t> mr_ids,
+int uccl_engine_recv_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<void*> data_v,
                             std::vector<size_t> size_v, int num_iovs);
 /**
