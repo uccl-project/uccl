@@ -150,7 +150,8 @@ __device__ void decodeOnePartialWarp(
   auto prefix = __popcll(vote & getLaneMaskGe());
 
   if (read) {
-    auto v = in[compressedOffset - prefix];
+    auto in_new = in - compressedOffset;
+    auto v = in_new[compressedOffset - prefix];
     // auto v = in[-prefix];
     state = (state << kANSEncodedBits) + ANSStateT(v);
   }

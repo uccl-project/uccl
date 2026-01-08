@@ -53,7 +53,7 @@ class TestANSCodec(unittest.TestCase):
         dev = torch.device("cuda:0")
         temp_mem = torch.empty([64 * 1024 * 1024], dtype=torch.uint8, device=dev)
 
-        for dt in [torch.float32]:
+        for dt in [torch.bfloat16,torch.float16, torch.float32]:
             for tm in [True, False]:
                 for checksum in [False,True]:
                     ts = [

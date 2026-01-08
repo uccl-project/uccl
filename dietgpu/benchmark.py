@@ -149,41 +149,41 @@ def get_any_comp_timings(ts, num_runs=3):
     return comp_time, decomp_time, total_size, comp_size
 
 
-# for dt in [torch.bfloat16, torch.float16, torch.float32]:
-#     # Non-batched
-#     ts = []
-#     ts.append(torch.normal(0, 1.0, [128 * 512 * 1024], dtype=dt, device=dev))
+for dt in [torch.bfloat16, torch.float16, torch.float32]:
+    # Non-batched
+    ts = []
+    ts.append(torch.normal(0, 1.0, [128 * 512 * 1024], dtype=dt, device=dev))
 
-#     c, dc, total_size, comp_size = get_float_comp_timings(ts)
-#     ratio = comp_size / total_size
-#     c_bw = (total_size / 1e9) / (c * 1e-3)
-#     dc_bw = (total_size / 1e9) / (dc * 1e-3)
+    c, dc, total_size, comp_size = get_float_comp_timings(ts)
+    ratio = comp_size / total_size
+    c_bw = (total_size / 1e9) / (c * 1e-3)
+    dc_bw = (total_size / 1e9) / (dc * 1e-3)
 
-#     print(f"Float codec non-batched perf [128 * 512 * 1024] {dt}")
-#     print(
-#         "comp   time {:.3f} ms B/W {:.1f} GB/s, compression {} -> {} bytes ({:.4f}x) ".format(
-#             c, c_bw, total_size, comp_size, ratio
-#         )
-#     )
-#     print(f"decomp time {dc:.3f} ms B/W {dc_bw:.1f} GB/s")
+    print(f"Float codec non-batched perf [128 * 512 * 1024] {dt}")
+    print(
+        "comp   time {:.3f} ms B/W {:.1f} GB/s, compression {} -> {} bytes ({:.4f}x) ".format(
+            c, c_bw, total_size, comp_size, ratio
+        )
+    )
+    print(f"decomp time {dc:.3f} ms B/W {dc_bw:.1f} GB/s")
 
-#     # Batched
-#     ts = []
-#     for i in range(128):
-#         ts.append(torch.normal(0, 1.0, [512 * 1024], dtype=dt, device=dev))
+    # Batched
+    ts = []
+    for i in range(128):
+        ts.append(torch.normal(0, 1.0, [512 * 1024], dtype=dt, device=dev))
 
-#     c, dc, total_size, comp_size = get_float_comp_timings(ts)
-#     ratio = comp_size / total_size
-#     bw = (total_size / 1e9) / (c * 1e-3)
-#     dc_bw = (total_size / 1e9) / (dc * 1e-3)
+    c, dc, total_size, comp_size = get_float_comp_timings(ts)
+    ratio = comp_size / total_size
+    bw = (total_size / 1e9) / (c * 1e-3)
+    dc_bw = (total_size / 1e9) / (dc * 1e-3)
 
-#     print(f"Float codec batched perf [128, [512 * 1024]] {dt}")
-#     print(
-#         "comp   time {:.3f} ms B/W {:.1f} GB/s, compression {} -> {} bytes ({:.4f}x) ".format(
-#             c, c_bw, total_size, comp_size, ratio
-#         )
-#     )
-#     print(f"decomp time {dc:.3f} ms B/W {dc_bw:.1f} GB/s")
+    print(f"Float codec batched perf [128, [512 * 1024]] {dt}")
+    print(
+        "comp   time {:.3f} ms B/W {:.1f} GB/s, compression {} -> {} bytes ({:.4f}x) ".format(
+            c, c_bw, total_size, comp_size, ratio
+        )
+    )
+    print(f"decomp time {dc:.3f} ms B/W {dc_bw:.1f} GB/s")
 
 print("\n")
 

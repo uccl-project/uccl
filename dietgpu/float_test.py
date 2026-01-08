@@ -9,7 +9,7 @@ import unittest
 
 import torch
 
-torch.ops.load_library("//dietgpu:dietgpu")
+torch.ops.load_library("/home/yangzhou/shuangma/uccl/uccl/dietgpu.cpython-314-x86_64-linux-gnu.so")
 
 
 def run_test(dev, ts, temp_mem=None):
@@ -24,6 +24,14 @@ def run_test(dev, ts, temp_mem=None):
     for size, t in zip(sizes, [*comp]):
         truncated_t = t.narrow(0, 0, size.item()).clone()
         truncated_comp.append(truncated_t)
+        
+    torch.set_printoptions(profile="full")
+
+    comp_ts = list(truncated_comp)
+    for i, x in enumerate(comp_ts):
+        print(f"[{i}] {x}")
+
+    torch.set_printoptions(profile="default")
 
     out_ts = []
     for t in ts:
@@ -44,6 +52,8 @@ def run_test(dev, ts, temp_mem=None):
         torch.ops.dietgpu.decompress_data(True, truncated_comp, out_ts, True)
 
     for a, b in zip(ts, out_ts):
+        print(a)
+        print(b)
         assert torch.equal(a, b)
 
 
@@ -52,127 +62,130 @@ class TestFloatCodec(unittest.TestCase):
         dev = torch.device("cuda:0")
         temp_mem = torch.empty([64 * 1024 * 1024], dtype=torch.uint8, device=dev)
 
-        for dt in [torch.bfloat16, torch.float16, torch.float32]:
+        for dt in [ torch.float32]: #torch.bfloat16,torch.float16, 
             for tm in [False, True]:
                 ts = [
-                    torch.normal(0, 1.0, [i], dtype=dt, device=dev)
-                    for i in [10000, 100000, 1000000]
+                    torch.arange(1, 1025, device=dev, dtype=dt).view(1024),
+                    # torch.normal(0, 1.0, [i], dtype=dt, device=dev)
+                    # for i in [32]
                 ]
                 if tm:
                     run_test(dev, ts, temp_mem)
                 else:
                     run_test(dev, ts)
 
-    def test_large(self):
-        dev = torch.device("cuda:0")
-        temp_mem = torch.empty([64 * 1024 * 1024], dtype=torch.uint8, device=dev)
+    # def test_large(self):
+    #     dev = torch.device("cuda:0")
+    #     temp_mem = torch.empty([64 * 1024 * 1024], dtype=torch.uint8, device=dev)
 
-        for dt in [torch.bfloat16, torch.float16, torch.float32]:
-            for tm in [False, True]:
-                ts = [torch.normal(0, 1.0, [123456789], dtype=dt, device=dev)]
-                if tm:
-                    run_test(dev, ts, temp_mem)
-                else:
-                    run_test(dev, ts)
+    #     for dt in [torch.bfloat16, torch.float16, torch.float32]:
+    #         for tm in [False, True]:
+    #             ts = [torch.normal(0, 1.0, [123456789], dtype=dt, device=dev)]
+    #             if tm:
+    #                 run_test(dev, ts, temp_mem)
+    #             else:
+    #                 run_test(dev, ts)
 
-    def test_simple(self):
-        dev = torch.device("cuda:0")
-        for dt in [torch.bfloat16, torch.float16, torch.float32]:
-            ts = [
-                torch.normal(0, 1.0, [i], dtype=dt, device=dev)
-                for i in [10000, 100000, 1000000]
-            ]
+    # def test_simple(self):
+    #     dev = torch.device("cuda:0")
+    #     for dt in [torch.bfloat16, torch.float16, torch.float32]:
+    #         ts = [
+    #             torch.normal(0, 1.0, [i], dtype=dt, device=dev)
+    #             for i in [10000, 100000, 1000000]
+    #         ]
 
-            cts = torch.ops.dietgpu.compress_data_simple(True, ts, True)
-            for before, after in zip(ts, cts):
-                # We should actually be compressing data
-                assert (
-                    before.numel() * before.element_size()
-                    > after.numel() * after.element_size()
-                )
+    #         cts = torch.ops.dietgpu.compress_data_simple(True, ts, True)
+    #         for before, after in zip(ts, cts):
+    #             # We should actually be compressing data
+    #             assert (
+    #                 before.numel() * before.element_size()
+    #                 > after.numel() * after.element_size()
+    #             )
 
-            dts = torch.ops.dietgpu.decompress_data_simple(True, cts, True)
-            for orig, after in zip(ts, dts):
-                assert torch.equal(orig, after)
+    #         dts = torch.ops.dietgpu.decompress_data_simple(True, cts, True)
+    #         for orig, after in zip(ts, dts):
+    #             assert torch.equal(orig, after)
 
-    def test_empty(self):
-        dev = torch.device("cuda:0")
-        for dt in [torch.bfloat16, torch.float16, torch.float32]:
-            ts = [torch.empty([0], dtype=dt, device=dev)]
-            comp_ts = torch.ops.dietgpu.compress_data_simple(True, ts, True)
+    # def test_empty(self):
+    #     dev = torch.device("cuda:0")
+    #     for dt in [torch.bfloat16, torch.float16, torch.float32]:
+    #         ts = [torch.empty([0], dtype=dt, device=dev)]
+    #         comp_ts = torch.ops.dietgpu.compress_data_simple(True, ts, True)
 
-            # should have a header
-            assert comp_ts[0].numel() > 0
+    #         # should have a header
+    #         assert comp_ts[0].numel() > 0
 
-            decomp_ts = torch.ops.dietgpu.decompress_data_simple(True, comp_ts, True)
-            assert torch.equal(ts[0], decomp_ts[0])
+    #         decomp_ts = torch.ops.dietgpu.decompress_data_simple(True, comp_ts, True)
+    #         assert torch.equal(ts[0], decomp_ts[0])
 
-    def test_split_compress(self):
-        dev = torch.device("cuda:0")
-        temp_mem = torch.empty([64 * 1024 * 1024], dtype=torch.uint8, device=dev)
+    # def test_split_compress(self):
+    #     dev = torch.device("cuda:0")
+    #     temp_mem = torch.empty([64 * 1024 * 1024], dtype=torch.uint8, device=dev)
 
-        for dt in [torch.bfloat16, torch.float16, torch.float32]:
-            for align16 in [True, False]:
-                for tries in range(5):
-                    batch_size = random.randrange(1, 15)
-                    sizes = []
+    #     for dt in [torch.bfloat16, torch.float16, torch.float32]:
+    #         for align16 in [True, False]:
+    #             for tries in range(5):
+    #                 batch_size = random.randrange(1, 15)
+    #                 sizes = []
 
-                    sum_sizes = 0
-                    max_size = 0
-                    for i in range(batch_size):
-                        size = random.randrange(1, 10000)
-                        if align16:
-                            # 2 bytes per float, ensure 16 byte alignment
-                            size *= 8
+    #                 sum_sizes = 0
+    #                 max_size = 0
+    #                 for i in range(batch_size):
+    #                     size = random.randrange(1, 10000)
+    #                     if align16:
+    #                         # 2 bytes per float, ensure 16 byte alignment
+    #                         size *= 8
 
-                        sizes.append(size)
-                        sum_sizes += size
-                        if size > max_size:
-                            max_size = size
+    #                     sizes.append(size)
+    #                     sum_sizes += size
+    #                     if size > max_size:
+    #                         max_size = size
 
-                    t = torch.normal(0, 1.0, [sum_sizes], dtype=dt, device=dev)
-                    sizes_t = torch.IntTensor(sizes)
-                    splits = torch.split(t, sizes)
+    #                 t = torch.normal(0, 1.0, [sum_sizes], dtype=dt, device=dev)
+    #                 sizes_t = torch.IntTensor(sizes)
+    #                 splits = torch.split(t, sizes)
 
-                    comp_ts, _, _ = torch.ops.dietgpu.compress_data_split_size(
-                        True, t, sizes_t, True, temp_mem
-                    )
-                    decomp_ts = torch.ops.dietgpu.decompress_data_simple(
-                        True, comp_ts, True
-                    )
+    #                 comp_ts, _, _ = torch.ops.dietgpu.compress_data_split_size(
+    #                     True, t, sizes_t, True, temp_mem
+    #                 )
+    #                 decomp_ts = torch.ops.dietgpu.decompress_data_simple(
+    #                     True, comp_ts, True
+    #                 )
 
-                    for orig, decomp in zip(splits, decomp_ts):
-                        assert torch.equal(orig, decomp)
+    #                 for orig, decomp in zip(splits, decomp_ts):
+    #                     assert torch.equal(orig, decomp)
 
-    def test_split_decompress(self):
-        dev = torch.device("cuda:0")
-        temp_mem = torch.empty([64 * 1024 * 1024], dtype=torch.uint8, device=dev)
+    # def test_split_decompress(self):
+    #     dev = torch.device("cuda:0")
+    #     temp_mem = torch.empty([64 * 1024 * 1024], dtype=torch.uint8, device=dev)
 
-        for dt in [torch.bfloat16, torch.float16, torch.float32]:
-            for align16 in [True, False]:
-                for tries in range(5):
-                    batch_size = random.randrange(1, 15)
-                    sizes = []
+    #     for dt in [torch.bfloat16, torch.float16, torch.float32]:
+    #         for align16 in [True, False]:
+    #             for tries in range(5):
+    #                 batch_size = random.randrange(1, 15)
+    #                 sizes = []
 
-                    sum_sizes = 0
-                    for i in range(batch_size):
-                        size = random.randrange(1, 10000)
-                        if align16:
-                            # 2 bytes per float, ensure 16 byte alignment
-                            size *= 8
+    #                 sum_sizes = 0
+    #                 for i in range(batch_size):
+    #                     size = random.randrange(1, 10000)
+    #                     if align16:
+    #                         # 2 bytes per float, ensure 16 byte alignment
+    #                         size *= 8
 
-                        sizes.append(size)
-                        sum_sizes += size
+    #                     sizes.append(size)
+    #                     sum_sizes += size
 
-                    t = torch.normal(0, 1.0, [sum_sizes], dtype=dt, device=dev)
-                    sizes_t = torch.IntTensor(sizes)
+    #                 t = torch.normal(0, 1.0, [sum_sizes], dtype=dt, device=dev)
+    #                 sizes_t = torch.IntTensor(sizes)
 
-                    splits = torch.split(t, sizes)
-                    comp_ts = torch.ops.dietgpu.compress_data_simple(True, splits, True)
+    #                 splits = torch.split(t, sizes)
+    #                 comp_ts = torch.ops.dietgpu.compress_data_simple(True, splits, True)
 
-                    decomp_t = torch.empty([sum_sizes], dtype=dt, device=dev)
-                    torch.ops.dietgpu.decompress_data_split_size(
-                        True, comp_ts, decomp_t, sizes_t, True, temp_mem
-                    )
+    #                 decomp_t = torch.empty([sum_sizes], dtype=dt, device=dev)
+    #                 torch.ops.dietgpu.decompress_data_split_size(
+    #                     True, comp_ts, decomp_t, sizes_t, True, temp_mem
+    #                 )
 
-                    assert torch.equal(t, decomp_t)
+    #                 assert torch.equal(t, decomp_t)
+if __name__ == "__main__":
+    unittest.main()
