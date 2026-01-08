@@ -201,11 +201,12 @@ int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
  * @param num_iovs      Number of IO vectors.
  * @param transfer_id   Pointer to store the transfer ID.
  * @return              0 on success, non-zero on failure.
- */                         
-int uccl_engine_write_vector_rc(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
-  std::vector<void*> dst_v,
-  std::vector<size_t> size_v, int fifo_id,
-  int num_iovs, uint64_t* transfer_id);
+ */
+int uccl_engine_write_vector_rc(uccl_conn_t* conn,
+                                std::vector<uccl_mr_t> mr_ids,
+                                std::vector<void*> dst_v,
+                                std::vector<size_t> size_v, int fifo_id,
+                                int num_iovs, uint64_t* transfer_id);
 /**
  * Receive data (blocking).
  * @param conn          Connection handle.
@@ -228,7 +229,8 @@ int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
  */
 int uccl_engine_recv_vector(uccl_conn_t* conn, std::vector<uint64_t> mr_ids,
                             std::vector<void*> data_v,
-                            std::vector<size_t> size_v, int num_iovs);
+                            std::vector<size_t> size_v, int num_iovs,
+                            uint64_t* transfer_id);
 /**
  * Check the status of a transfer.
  * @param conn          Connection handle.
@@ -269,10 +271,11 @@ int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md);
  * @param conn          Connection handle.
  * @param md_array      Array of transfer metadata.
  * @param count         Number of metadata items in the array.
+ * @param id            FIFO ID for the vector transfer.
  * @return              Number of bytes sent, or -1 on failure.
  */
 int uccl_engine_send_tx_md_vector(uccl_conn_t* conn, md_t* md_array,
-                                  size_t count);
+                                  size_t count, int& fifo_id);
 
 /**
  * Get all notification messages and clear the list.
