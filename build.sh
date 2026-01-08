@@ -273,7 +273,8 @@ echo "[2/3] Running build inside container..."
 DETECTED_GPU_ARCH=""
 if [[ "$BUILD_TYPE" =~ (ep|all) ]];then
   if [[ "$TARGET" == cuda* ]] && command -v nvidia-smi &> /dev/null; then
-    DETECTED_GPU_ARCH=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ')
+    DETECTED_GPU_ARCH="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ' || true)"
+
     if [[ -n "$DETECTED_GPU_ARCH" ]]; then
       echo "Auto-detected CUDA compute capability: ${DETECTED_GPU_ARCH}"
     fi
@@ -283,10 +284,23 @@ if [[ "$BUILD_TYPE" =~ (ep|all) ]];then
       echo "jq not found, installing via pip..."
       pip install jq
     fi
-    DETECTED_GPU_ARCH=$(amd-smi static -g 0 --asic --json | jq -r '.[].asic.target_graphics_version')
-    if [[ -n "$DETECTED_GPU_ARCH" ]]; then
-      echo "Auto-detected ROCm architecture: ${DETECTED_GPU_ARCH}"
+    DETECTED_GPU_ARCH="$(
+      PYTHONWARNINGS=ignore \
+      amd-smi static -g 0 --asic --json 2>/dev/null \
+      | jq -r '
+          if .gpu_data and (.gpu_data | length > 0) then
+            .gpu_data[0].asic.target_graphics_version
+          else
+            empty
+          end
+        ' \
+      || true
+    )"
+      if [[ -n "$DETECTED_GPU_ARCH" ]]; then
+        echo "Auto-detected ROCm architecture: ${DETECTED_GPU_ARCH}"
     fi
+  else
+    echo "[INFO] No compatible GPU detection tool found, skipping auto-detect"
   fi
 fi
 
@@ -306,6 +320,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
   -e USE_TCPX="${USE_TCPX:-0}" \
   -e USE_EFA="${USE_EFA:-0}" \
+  -e USE_IB="${USE_IB:-0}" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
   -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
   -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_ccl_rdma build_ccl_efa build_p2p build_ep build_eccl)" \
@@ -397,6 +412,7 @@ def initialize():
       --exclude "libcudart.so.12" \
       --exclude "libamdhip64.so.*" \
       --exclude "libcuda.so.1" \
+      --exclude "libefa.so.1" \
       -w /io/${WHEEL_DIR}
 
     # Add backend tag to wheel filename using local version identifier
