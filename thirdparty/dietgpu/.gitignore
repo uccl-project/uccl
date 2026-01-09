@@ -12,3 +12,6 @@ __pycache__/
 Makefile
 detect_cuda_version.cc
 detect_cuda_compute_capabilities.cu
+*.hip
+*_hip.*
+*.egg-info

@@ -119,6 +119,13 @@ int getDeviceForAddress(const void* p) {
   }
 
   // memoryType is deprecated for CUDA 10.0+
+#if defined(__HIP_PLATFORM_AMD__)
+  if (att.type == hipMemoryTypeHost) {
+    return -1;
+  } else {
+    return att.device;
+  }
+#else
 #if CUDA_VERSION < 10000
   if (att.memoryType == cudaMemoryTypeHost) {
     return -1;
@@ -132,6 +139,7 @@ int getDeviceForAddress(const void* p) {
   } else {
     return -1;
   }
+#endif
 #endif
 }
 
