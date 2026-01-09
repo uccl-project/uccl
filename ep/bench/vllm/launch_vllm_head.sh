@@ -8,6 +8,9 @@
 # 3. Install EP kernels: Follow vLLM's EP installation guide
 # 4. For AWS EFA: Install AWS OFI-NCCL plugin
 
+#  Example: 
+# bash launch_vllm_head.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 deepep_low_latency 2 1 8 1
+
 set -e
 
 echo "🚀 Launching vLLM Node 0 (Primary) with Expert Parallel..."
@@ -29,7 +32,6 @@ fi
 export LD_LIBRARY_PATH=$(python3 -c "import torch; import os; print(os.path.join(torch.__path__[0], 'lib'))"):$LD_LIBRARY_PATH
 
 export VLLM_USE_DEEP_GEMM=1
-export NCCL_P2P_DISABLE=1
 
 # ============================================================================
 # NETWORK CONFIGURATION
@@ -61,8 +63,7 @@ export OMP_NUM_THREADS=32
 # https://github.com/vllm-project/vllm/pull/27444
 export VLLM_ENGINE_READY_TIMEOUT_S=3600
 # Set to local non-shared disk like "/opt/dlami/nvme"
-export DG_JIT_CACHE_DIR="/local_storage"
-export VLLM_WORKER_MULTIPROC_METHOD="spawn"
+export DG_JIT_CACHE_DIR="/scratch/$USER/dg_jit_cache"
 
 # ============================================================================
 # ARGUMENTS PARSING
