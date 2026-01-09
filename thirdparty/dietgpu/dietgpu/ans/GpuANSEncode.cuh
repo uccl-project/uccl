@@ -26,6 +26,12 @@
 #include <vector>
 
 namespace dietgpu {
+#if defined(__HIP_PLATFORM_AMD__)
+  // HIP does not support thrust exec check disabling
+  #define THRUST_DISABLE_EXEC_CHECK
+#else
+  #define THRUST_DISABLE_EXEC_CHECK __thrust_exec_check_disable__
+#endif
 
 // maximum raw compressed data block size in bytes
 constexpr __host__ __device__ uint32_t
@@ -65,9 +71,12 @@ __device__ __forceinline__ uint32_t encodeOneWarp(
   ANSStateT maxStateCheck = pdf * kStateCheckMul;
   bool write = (state >= maxStateCheck);
 
-  auto vote = __ballot_sync(0xffffffff, write);
-  auto prefix = __popc(vote & getLaneMaskLt());
-
+  auto vote = __ballot_sync(kFullMask, write);
+  #if defined(__HIP_PLATFORM_AMD__)
+    auto prefix = __popcll(vote & getLaneMaskLt());
+  #else
+    auto prefix = __popc(vote & getLaneMaskLt());
+  #endif
   // Some lanes wish to write out their data
   if (write) {
     out[outOffset + prefix] = state & kANSEncodedMask;
@@ -86,7 +95,11 @@ __device__ __forceinline__ uint32_t encodeOneWarp(
   state = div * kProbBitsMul + mod + cdf;
 
   // how many values we actually write to the compressed output
-  return __popc(vote);
+  #if defined(__HIP_PLATFORM_AMD__)
+    return __popcll(vote);
+  #else
+    return __popc(vote);
+  #endif
 }
 
 // Returns number of values written to the compressed output
@@ -112,9 +125,12 @@ __device__ __forceinline__ uint32_t encodeOnePartialWarp(
   ANSStateT maxStateCheck = pdf * kStateCheckMul;
   bool write = valid && (state >= maxStateCheck);
 
-  auto vote = __ballot_sync(0xffffffff, write);
-  auto prefix = __popc(vote & getLaneMaskLt());
-
+  auto vote = __ballot_sync(kFullMask, write);
+  #if defined(__HIP_PLATFORM_AMD__)
+    auto prefix = __popcll(vote & getLaneMaskLt());
+  #else
+    auto prefix = __popc(vote & getLaneMaskLt());
+  #endif
   // Some lanes wish to write out their data
   if (write) {
     out[outOffset + prefix] = state & kANSEncodedMask;
@@ -132,7 +148,11 @@ __device__ __forceinline__ uint32_t encodeOnePartialWarp(
   state = valid ? div * kProbBitsMul + mod + cdf : state;
 
   // how many values we actually write to the compressed output
-  return __popc(vote);
+  #if defined(__HIP_PLATFORM_AMD__)
+    return __popcll(vote);
+  #else
+    return __popc(vote);
+  #endif
 }
 
 // Fully encode a single block of data, along with the state for that block as
@@ -179,7 +199,7 @@ __device__ uint32_t ansEncodeWarpBlock(
       }
     }
   }
-
+  
   if (limit != inWords) {
     // Remainder iterations
     limit = roundDown(inWords, kWarpSize);
@@ -318,7 +338,7 @@ __device__ void ansEncodeBlocksFull(
   auto tid = threadIdx.x;
   // so we know the block is warp uniform
   int block =
-      __shfl_sync(0xffffffff, (blockIdx.x * blockDim.x + tid) / kWarpSize, 0);
+      __shfl_sync(kFullMask, (blockIdx.x * blockDim.x + tid) / kWarpSize, 0);
   int laneId = getLaneId();
 
   __shared__ uint4 smemLookup[kNumSymbols];
@@ -499,7 +519,7 @@ struct Align {
   typedef uint32_t argument_type;
   typedef uint32_t result_type;
 
-  __thrust_exec_check_disable__ template <typename T>
+  THRUST_DISABLE_EXEC_CHECK template <typename T>
   __host__ __device__ uint32_t operator()(T x) const {
     constexpr int kDiv = B / sizeof(A);
     constexpr int kSize = kDiv < 1 ? 1 : kDiv;
