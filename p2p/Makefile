@@ -66,7 +66,7 @@ CXXFLAGS += -DUCCL_P2P_USE_TCPX -I$(NCCL_INC)
 LDFLAGS  += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
 OBJECTS := $(CORE_OBJECTS)
 else
-SOURCES := engine.cc engine_pybind.cc param.cc
+SOURCES := engine.cc engine_pybind.cc
 CORE_OBJECT := engine.o
 OBJECTS := $(SOURCES:.cc=.o)
 endif

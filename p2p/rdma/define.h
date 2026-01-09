@@ -1,5 +1,4 @@
 #pragma once
-#include "param.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
@@ -36,6 +35,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+static constexpr int kNumEngines = 4;
+static constexpr int kNumGpuRtStreams = 4;
+
 static constexpr int kRankIDPlaceHolder = 9999;
 static constexpr uint8_t kPortNum = 1;
 
@@ -66,14 +68,8 @@ inline size_t channelIdToContextId(uint32_t channel_id) {
   return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;
 }
 
-// # of engines per device.
-UCCL_PARAM(NUM_ENGINES, "NUM_ENGINES", 4);
-
-// Number of CUDA/HIP streams per engine.
-UCCL_PARAM(NumGpuRtStreams, "NUM_GPU_RT_STREAMS", 4);
-
-namespace uccl {
 typedef uint64_t FlowID;
+namespace uccl {
 enum ReqType { ReqTx, ReqRx, ReqFlush, ReqTxRC, ReqRxRC, ReqRead, ReqWrite };
 struct ucclRequest {
   enum ReqType type;
