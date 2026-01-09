@@ -68,9 +68,65 @@ inline size_t channelIdToContextId(uint32_t channel_id) {
   return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;
 }
 
+// For converting between ibv_mr * and rkey.
+template <typename T = uint32_t>
+struct ContextArrayT {
+  T data[kNICContextNumber];
+
+  ContextArrayT() { std::memset(data, 0, sizeof(data)); }
+
+  inline void copyFrom(ContextArrayT<T> const& other) {
+    static_assert(std::is_trivially_copyable_v<T>,
+                  "ContextArrayT::copyFrom requires trivially copyable T");
+    std::memcpy(data, other.data, sizeof(data));
+  }
+
+  inline void copyFrom(char const* other) {
+    static_assert(std::is_trivially_copyable_v<T>,
+                  "ContextArrayT::copyFrom requires trivially copyable T");
+    std::memcpy(data, other, sizeof(data));
+  }
+
+  inline T getKeyByChannelID(uint32_t channel_id) const {
+    return getKeyByContextID(channelIdToContextId(channel_id));
+  }
+
+  inline T getKeyByContextID(size_t context_id) const {
+    return data[context_id];
+  }
+
+  inline void setKeyByContextID(uint32_t context_id, T key) {
+    data[context_id] = key;
+  }
+
+  inline void setKeyByChannelID(uint32_t channel_id, T key) {
+    setKeyByContextID(channelIdToContextId(channel_id), key);
+  }
+
+  T& operator[](int index) { return data[index]; }
+  T const& operator[](int index) const { return data[index]; }
+
+  friend std::ostream& operator<<(std::ostream& os,
+                                  ContextArrayT<T> const& arr) {
+    os << "ContextArrayT{";
+    for (int i = 0; i < kNICContextNumber; ++i) {
+      if (i > 0) os << ", ";
+      if constexpr (std::is_integral_v<T>) {
+        os << "0x" << std::hex << arr.data[i] << std::dec;
+      } else {
+        os << arr.data[i];
+      }
+    }
+    os << "}";
+    return os;
+  }
+};
+
+using RKeyArray = ContextArrayT<uint32_t>;
+using MRArray = ContextArrayT<struct ibv_mr*>;
+
 typedef uint64_t FlowID;
-namespace uccl {
-enum ReqType { ReqTx, ReqRx, ReqFlush, ReqTxRC, ReqRxRC, ReqRead, ReqWrite };
+enum ReqType { ReqTx, ReqRx, ReqRead, ReqWrite };
 struct ucclRequest {
   enum ReqType type;
   uint32_t n;
@@ -96,7 +152,6 @@ struct FifoItem {
   char padding[28];
 };
 static_assert(sizeof(struct FifoItem) == 64, "FifoItem size is not 64 bytes");
-
 inline void serialize_fifo_item(FifoItem const& item, char* buf) {
   static_assert(sizeof(FifoItem) == 64, "FifoItem must be 64 bytes");
 
@@ -120,7 +175,6 @@ inline void deserialize_fifo_item(char const* buf, FifoItem* item) {
   std::memcpy(&item->engine_offset, buf + 32, sizeof(uint32_t));
   std::memcpy(&item->padding, buf + 36, sizeof(item->padding));
 }
-};  // namespace uccl
 
 struct MessageChunk {
   uint64_t offset;  // Offset from the start of the message
@@ -189,11 +243,6 @@ enum class MemoryType { HOST, GPU };
 
 enum class ChannelType : int16_t { Control, Normal };
 
-template <typename T = uint32_t>
-using RKeyArrayT = unified::RKeyArrayT<T>;
-using RKeyArray = unified::RKeyArrayT<uint32_t>;
-using MRArray = unified::MRArray;
-
 inline void copyRKeyArrayFromMRArray(MRArray const& mr_array,
                                      RKeyArray& rkey_array) {
   for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
@@ -251,15 +300,12 @@ typedef struct RegMemBlock {
   void* addr;
   size_t size;
   MemoryType type;
-  bool pool_allocated = false;
   MRArray mr_array;  // Array of MR pointers for multiple contexts
 
-  RegMemBlock(void* a, size_t s, MemoryType t, bool p = false)
-      : addr(a), size(s), type(t), pool_allocated(p) {}
+  RegMemBlock(void* a, size_t s, MemoryType t) : addr(a), size(s), type(t) {}
 
-  RegMemBlock(void* a, size_t s, MRArray const& mr_array_in, MemoryType t,
-              bool p = false)
-      : addr(a), size(s), type(t), pool_allocated(p) {
+  RegMemBlock(void* a, size_t s, MRArray const& mr_array_in, MemoryType t)
+      : addr(a), size(s), type(t) {
     mr_array.copyFrom(mr_array_in);
   }
 
@@ -303,8 +349,7 @@ typedef struct RegMemBlock {
   friend std::ostream& operator<<(std::ostream& os, RegMemBlock const& block) {
     os << "RegMemBlock{addr: " << block.addr << ", size: " << block.size
        << ", type: " << (block.type == MemoryType::HOST ? "HOST" : "GPU")
-       << ", pool_allocated: " << block.pool_allocated << block.mr_array
-       << std::endl;
+       << block.mr_array << std::endl;
 
     os << "}";
     return os;
