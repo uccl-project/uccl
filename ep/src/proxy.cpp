@@ -864,6 +864,7 @@ void Proxy::post_gpu_commands_mixed(
 #ifdef USE_MSCCLPP_FIFO_BACKEND
     assert(barrier_wrs.size() == 1 && ctx_.barrier_wr == -1);
 #endif
+    assert(quiet_wrs.empty() && "quiet_wrs should be empty");
     send_barrier(barrier_wrs[0]);
     barrier_wrs.clear();
     barrier_cmds.clear();
