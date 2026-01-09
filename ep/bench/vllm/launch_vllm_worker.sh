@@ -65,6 +65,7 @@ export OMP_NUM_THREADS=32
 # https://github.com/vllm-project/vllm/pull/27444
 export VLLM_ENGINE_READY_TIMEOUT_S=3600
 # Set to local non-shared disk like "/opt/dlami/nvme"
+mkdir -p /scratch/$USER/dg_jit_cache
 export DG_JIT_CACHE_DIR="/scratch/$USER/dg_jit_cache"
 
 # ============================================================================

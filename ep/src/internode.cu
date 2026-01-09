@@ -320,7 +320,7 @@ __global__ void notify_dispatch(
       sum = (sum + expert_alignment - 1) / expert_alignment * expert_alignment;
       if (num_worst_tokens == 0) {
         while (ld_volatile_global(moe_recv_expert_counter_mapped + thread_id) !=
-              -1)
+               -1)
           ;
       }
       moe_recv_expert_counter_mapped[thread_id] = sum;
