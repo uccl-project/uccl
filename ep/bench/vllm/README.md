@@ -101,7 +101,7 @@ Edit the provided scripts (`launch_vllm_head.sh` and `launch_vllm_worker.sh`) to
 On the **first node** (primary node that handles API requests):
 
 ```bash
-bash launch_vllm_head.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 allgather_reducescatter 16 8 1 8
+bash launch_vllm_head.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 deepep_high_throughput 2 1 8 1
 ```
 
 ### Step 2: Start Node 1+ (Secondary)

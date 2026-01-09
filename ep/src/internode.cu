@@ -274,16 +274,11 @@ __global__ void notify_dispatch(
             i)[NUM_MAX_NVL_PEERS + num_rdma_experts];
         recv_rdma_rank_prefix_sum[i] = sum;
       }
-      // NOTE(MaoZiming): if I wrap this code with if (num_worst_tokens == 0),
-      // it will somehow cause deadlock on vllm with deepep_high_throughput
-      // mode. I suspect it is because some compiler reordering, but I don't
-      // know why. num_worst_tokens = 0, but somehow wrapping it with the
-      // conditional will cause deadlock. Removing the ``if" is logically
-      // redundant but harmless. if (num_worst_tokens == 0) {
-      while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1)
-        ;
-      *moe_recv_rdma_counter_mapped = sum;
-      // }
+      if (num_worst_tokens == 0) {
+        while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1)
+          ;
+        *moe_recv_rdma_counter_mapped = sum;
+      }
     }
 
     // Send numbers of tokens per rank/expert to NVL ranks
@@ -311,11 +306,11 @@ __global__ void notify_dispatch(
         sum += nvl_recv_num_tokens_per_rank.buffer(src_nvl_rank)[src_rdma_rank];
         recv_gbl_rank_prefix_sum[i] = sum;
       }
-      // if (num_worst_tokens == 0) {
-      while (ld_volatile_global(moe_recv_counter_mapped) != -1)
-        ;
-      *moe_recv_counter_mapped = sum;
-      // }
+      if (num_worst_tokens == 0) {
+        while (ld_volatile_global(moe_recv_counter_mapped) != -1)
+          ;
+        *moe_recv_counter_mapped = sum;
+      }
     }
     if (thread_id < num_nvl_experts) {
       int sum = 0;
@@ -323,11 +318,11 @@ __global__ void notify_dispatch(
       for (int i = 0; i < NUM_MAX_NVL_PEERS; ++i)
         sum += nvl_recv_num_tokens_per_expert.buffer(i)[thread_id];
       sum = (sum + expert_alignment - 1) / expert_alignment * expert_alignment;
-      // if (num_worst_tokens == 0) {
-      while (ld_volatile_global(moe_recv_expert_counter_mapped + thread_id) !=
-             -1)
-        ;
-      // }
+      if (num_worst_tokens == 0) {
+        while (ld_volatile_global(moe_recv_expert_counter_mapped + thread_id) !=
+              -1)
+          ;
+      }
       moe_recv_expert_counter_mapped[thread_id] = sum;
     }
 

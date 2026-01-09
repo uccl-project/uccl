@@ -56,6 +56,7 @@ export NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so
 # NCCL performance tuning (optional):
 export NCCL_P2P_NET_CHUNKSIZE=524288
 export NCCL_BUFFSIZE=8388608
+export OMP_NUM_THREADS=32
 
 # NCCL debugging (for diagnosing connection issues):
 # export NCCL_DEBUG=INFO
