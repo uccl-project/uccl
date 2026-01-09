@@ -581,10 +581,10 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
   if (is_roce) {
     attr.ah_attr.is_global = 1;
     attr.ah_attr.port_num = 1;
-    attr.ah_attr.sl = 135;
+    attr.ah_attr.sl = 1;
     attr.ah_attr.src_path_bits = 0;
-    attr.ah_attr.grh.traffic_class = 3;
-    attr.ah_attr.grh.hop_limit = 64;
+    attr.ah_attr.grh.traffic_class = 1;
+    attr.ah_attr.grh.hop_limit = 255;
     // Fill GID from remote_info
     memcpy(&attr.ah_attr.grh.dgid, remote->gid, 16);
     attr.ah_attr.grh.sgid_index = S.gid_index;
