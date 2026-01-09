@@ -178,7 +178,7 @@ def main():
     p.add_argument(
         "--mode",
         choices=["read", "write"],
-        default="read",
+        default="write",
         help="Benchmark mode: read or write",
     )
     p.add_argument("--local-gpu-idx", type=int, default=0)
