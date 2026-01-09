@@ -159,6 +159,7 @@ class Buffer:
         )
         assert self.runtime.is_available()
         self.connect_atomic_buffer(self.proxies[0])
+
         for proxy in self.proxies:
             proxy.set_atomic_buffer_ptr(self.proxies[0].get_atomic_buffer_ptr())
 
@@ -688,6 +689,7 @@ class Buffer:
                 topk_idx,
                 topk_weights,
                 expert_alignment,
+                num_worst_tokens,
                 config,
                 previous_event,
                 async_finish,
@@ -877,6 +879,7 @@ class Buffer:
         topk_idx: Optional[torch.Tensor] = None,
         topk_weights: Optional[torch.Tensor] = None,
         expert_alignment: int = 1,
+        num_worst_tokens: int = 0,
         config: Optional[Config] = None,
         previous_event: Optional[EventOverlap] = None,
         async_finish: bool = False,
@@ -930,6 +933,7 @@ class Buffer:
                     gbl_channel_prefix_matrix,
                     recv_gbl_rank_prefix_sum,
                     expert_alignment,
+                    num_worst_tokens,
                     config,
                     getattr(previous_event, "event", None),
                     async_finish,
@@ -982,6 +986,7 @@ class Buffer:
                 None,
                 None,
                 expert_alignment,
+                num_worst_tokens,
                 config,
                 getattr(previous_event, "event", None),
                 async_finish,

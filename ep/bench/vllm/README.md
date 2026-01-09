@@ -50,8 +50,6 @@ Refer to [DeepGEMM Installation Guide](https://github.com/deepseek-ai/DeepGEMM#i
 
 Refer to [../../deep_ep_wrapper/README.md](../../deep_ep_wrapper/README.md) to install UCCL-EP's drop-in replacement for DeepEP.
 
-Commit hash: 8c328c6
-
 Refer to vLLM's guide for the original DeepEP and pplx-kernels setup.
 
 ### 4. (Optional) AWS EFA Setup
@@ -101,7 +99,7 @@ Edit the provided scripts (`launch_vllm_head.sh` and `launch_vllm_worker.sh`) to
 On the **first node** (primary node that handles API requests):
 
 ```bash
-bash launch_vllm_head.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 allgather_reducescatter 16 8 1 8
+bash launch_vllm_head.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 deepep_high_throughput 2 1 8 1
 ```
 
 ### Step 2: Start Node 1+ (Secondary)
@@ -110,7 +108,7 @@ On **each additional node** (secondary nodes in headless mode):
 
 ```bash
 # Launch Node 1 (headless)
-bash launch_vllm_worker.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 allgather_reducescatter 16 8 1 8
+bash launch_vllm_worker.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 deepep_high_throughput 2 1 8 1
 ```
 
 **Arguments:**
@@ -118,21 +116,7 @@ bash launch_vllm_worker.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 allgat
 - `13345` - RPC port
 - `deepseek-ai/DeepSeek-V3-0324` - Same model as Node 1
 - `allgather_reducescatter` - EP communication backend
-- `16` - Total DP size
-- `8` - Local DP size on this node
-- `1` - Local TP size on this node
-- `8` - For node 0, number of API servers; for others, starting rank (= sum of previous nodes' local DP)
-
-# vLLM Serving Benchmark Results (Key Metrics)
-
-**Model:** `deepseek-ai/DeepSeek-V3-0324`  
-**Request rate:** 10 RPS  
-**Prompts:** 1000  
-**Input / Output tokens:** 1024 / 256  
-**Max concurrency:** 256  
-
-| Mode | Req Throughput (req/s) | Output Tok Throughput (tok/s) | Mean TTFT (ms) | P99 TTFT (ms) | Mean TPOT (ms) | P99 TPOT (ms) |
-|------|------------------------|-------------------------------|----------------|---------------|----------------|---------------|
-| Allgather + ReduceScatter | 0.61 | 155.15 | 80643.16 | 275588.12 | 1312.63 | 1563.97 |
-| DeepEP – High Throughput | 3.58 | 915.66 | 3503.18 | 11950.74 | 248.03 | 297.82 |
-| DeepEP – Low Latency | **5.25** | **1345.26** | 6391.41 | 21805.85 | **152.02** | 235.48 |
+- `2` - Total DP size
+- `1` - Local DP size on this node
+- `8` - Local TP size on this node
+- `1` - For node 0, number of API servers; for others, starting rank (= sum of previous nodes' local DP)
