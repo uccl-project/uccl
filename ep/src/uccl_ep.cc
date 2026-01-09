@@ -1956,7 +1956,7 @@ class Buffer {
       nullptr};  // Device pointer to array of IPC base addresses
 };
 
-PYBIND11_MODULE(ep, m) {
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.doc() = "Minimal DeepEP-compatible shim with UCCL";
 
   pybind11::class_<uccl::Config>(m, "Config")

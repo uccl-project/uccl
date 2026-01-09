@@ -13,32 +13,32 @@ from setuptools.command.install import install
 PROJECT_ROOT = Path(os.path.dirname(__file__)).resolve()
 
 
-class CustomInstall(install):
-    """Custom install command that installs .so file to INSTALL_DIR"""
+# class CustomInstall(install):
+#     """Custom install command that installs .so file to INSTALL_DIR"""
 
-    def run(self):
-        super().run()
-        # Get the install directory for the .so file
-        python_site_packages = site.getsitepackages()[0]
-        install_dir = os.getenv(
-            "INSTALL_DIR", os.path.join(python_site_packages, "uccl")
-        )
-        os.makedirs(install_dir, exist_ok=True)
+#     def run(self):
+#         super().run()
+#         # Get the install directory for the .so file
+#         python_site_packages = site.getsitepackages()[0]
+#         install_dir = os.getenv(
+#             "INSTALL_DIR", os.path.join(python_site_packages, "uccl")
+#         )
+#         os.makedirs(install_dir, exist_ok=True)
 
-        # Find the built .so file
-        build_lib = self.get_finalized_command("build_ext").build_lib
-        so_files = list(Path(build_lib).glob("ep*.so"))
+#         # Find the built .so file
+#         build_lib = self.get_finalized_command("build_ext").build_lib
+#         so_files = list(Path(build_lib).glob("ep*.so"))
 
-        if not so_files:
-            raise RuntimeError(f"Could not find built .so file in {build_lib}")
+#         if not so_files:
+#             raise RuntimeError(f"Could not find built .so file in {build_lib}")
 
-        so_file = so_files[0]
-        dest_path = os.path.join(install_dir, so_file.name)
+#         so_file = so_files[0]
+#         dest_path = os.path.join(install_dir, so_file.name)
 
-        # Copy the .so file to the install directory
-        print(f"Installing {so_file.name} to {install_dir}")
-        shutil.copy2(so_file, dest_path)
-        print(f"Installation complete. Module installed as: {dest_path}")
+#         # Copy the .so file to the install directory
+#         print(f"Installing {so_file.name} to {install_dir}")
+#         shutil.copy2(so_file, dest_path)
+#         print(f"Installation complete. Module installed as: {dest_path}")
 
 
 if __name__ == "__main__":
@@ -230,7 +230,7 @@ if __name__ == "__main__":
     setuptools.setup(
         name="uccl_ep",
         version="0.0.1" + revision,
-        packages=["uccl_ep"],
+        packages=setuptools.find_packages(include=['uccl_ep']),
         ext_modules=[
             CUDAExtension(
                 name="ep",
@@ -244,6 +244,6 @@ if __name__ == "__main__":
         ],
         cmdclass={
             "build_ext": BuildExtension,
-            "install": CustomInstall,
+            # "install": CustomInstall,
         },
     )

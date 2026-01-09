@@ -3,15 +3,21 @@ import torch
 import torch.distributed as dist
 from typing import Callable, Tuple, Optional, Union, List
 
+
+# 1) Try to import ep from uccl
 try:
     from uccl import ep
-except ImportError as exc:
-    import sys
+    from uccl.ep import EventHandle, Config
+except ImportError:
+    # 2) Try to import ep from uccl_ep module
+    try:
+        import ep
+        from ep import EventHandle, Config
+    except ImportError:
+        import sys
+        sys.stderr.write("Failed to import uccl.ep or ep module\n")
+        raise 
 
-    sys.stderr.write("Failed to import uccl.ep\n")
-    raise
-
-from uccl.ep import EventHandle, Config
 
 # Support both execution modes:
 # 1) As part of the packaged deep_ep_wrapper (symlinked buffer inside a package): uses relative import `.utils`.
