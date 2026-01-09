@@ -41,7 +41,7 @@ LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
 # Target and source files
 P2P_PYTHON_EXT   := p2p$(PYEXT)
 P2P_SHARED_LIB := libuccl_p2p.so
-SOURCES := engine.cc engine_pybind.cc param.cc
+SOURCES := engine.cc engine_pybind.cc
 OBJECTS := $(SOURCES:.cc=.o)
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h

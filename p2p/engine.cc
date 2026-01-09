@@ -38,7 +38,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
             << ", CPUs: " << num_cpus << std::endl;
-  int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
+  int n_streams = std::max(1, (int)kNumGpuRtStreams);
 
   int ngpus = 0;
   GPU_RT_CHECK(gpuGetDeviceCount(&ngpus));
@@ -87,7 +87,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
 
 Endpoint::Endpoint(uint32_t const num_cpus) : num_cpus_(num_cpus) {
   std::cout << "Creating Engine with CPUs: " << num_cpus << std::endl;
-  int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
+  int n_streams = std::max(1, (int)kNumGpuRtStreams);
 
   int ngpus = 0;
   GPU_RT_CHECK(gpuGetDeviceCount(&ngpus));
@@ -152,7 +152,7 @@ Endpoint::~Endpoint() {
 }
 
 void Endpoint::initialize_engine() {
-  int n_streams = std::max(1, (int)ucclParamNumGpuRtStreams());
+  int n_streams = std::max(1, (int)kNumGpuRtStreams);
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   streams_.resize(n_streams);
   for (int i = 0; i < n_streams; ++i) {
@@ -796,7 +796,7 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   int ureq_max = (size + kChunkSize - 1) / kChunkSize;
   int ureq_issued = 0, ureq_finished = 0;
 
-  auto num_engines = ucclParamNUM_ENGINES();
+  auto num_engines = kNumEngines;
 
   while (ureq_finished < ureq_max) {
     while (ureq_issued - ureq_finished < kMaxInflightChunks &&
@@ -968,7 +968,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
   int ureq_max = data_read_vec.size();
   int ureq_issued = 0, ureq_finished = 0;
-  auto num_engines = ucclParamNUM_ENGINES();
+  auto num_engines = kNumEngines;
 
   while (ureq_finished < ureq_max) {
     while (ureq_issued < ureq_max &&
@@ -1106,7 +1106,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
   int ureq_max = data_write_vec.size();
   int ureq_issued = 0, ureq_finished = 0;
-  auto num_engines = ucclParamNUM_ENGINES();
+  auto num_engines = kNumEngines;
 
   while (ureq_finished < ureq_max) {
     while (ureq_issued < ureq_max &&
@@ -1188,7 +1188,7 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
   int ureq_max = (size + kChunkSize - 1) / kChunkSize;
   int ureq_issued = 0, ureq_finished = 0;
 
-  auto num_engines = ucclParamNUM_ENGINES();
+  auto num_engines = kNumEngines;
 
   while (ureq_finished < ureq_max) {
     while (ureq_issued - ureq_finished < kMaxInflightChunks &&
