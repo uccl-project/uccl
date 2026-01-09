@@ -32,6 +32,7 @@ fi
 export LD_LIBRARY_PATH=$(python3 -c "import torch; import os; print(os.path.join(torch.__path__[0], 'lib'))"):$LD_LIBRARY_PATH
 
 export VLLM_USE_DEEP_GEMM=1
+export NCCL_P2P_DISABLE=1
 
 # ============================================================================
 # NETWORK CONFIGURATION
