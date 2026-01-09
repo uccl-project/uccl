@@ -83,44 +83,44 @@ void test_redis_oob() {
             << std::endl;
 }
 
-void rank_thread(int local_rank, int world_size,
-                 std::string const& exchanger_ip, int exchanger_port) {
+void rank_thread(int rank, int world_size, std::string const& exchanger_ip,
+                 int exchanger_port) {
   auto ex = std::make_shared<RedisExchanger>(exchanger_ip, exchanger_port);
   if (!ex->valid()) {
-    std::cerr << "[ERROR] Rank " << local_rank << " failed to connect to Redis"
+    std::cerr << "[ERROR] Rank " << rank << " failed to connect to Redis"
               << std::endl;
     return;
   }
 
   CommunicatorMeta local;
-  local.host_id = generate_host_id() + "_" + std::to_string(local_rank);
+  local.host_id = generate_host_id() + "_" + std::to_string(rank);
   local.is_ready = true;
 
-  std::string key = "meta:" + std::to_string(local_rank);
+  std::string key = "meta:" + std::to_string(rank);
 
   if (!ex->publish(key, local)) {
-    std::cerr << "[ERROR] Rank " << local_rank
-              << " failed to publish meta to key " << key << std::endl;
+    std::cerr << "[ERROR] Rank " << rank << " failed to publish meta to key "
+              << key << std::endl;
     return;
   }
-  std::cout << "[INFO] Rank " << local_rank << " published meta to key " << key
+  std::cout << "[INFO] Rank " << rank << " published meta to key " << key
             << std::endl;
 
   for (int r = 0; r < world_size; ++r) {
-    if (r == local_rank) continue;
+    if (r == rank) continue;
     std::string remote_key = "meta:" + std::to_string(r);
     CommunicatorMeta remote;
     if (ex->wait_and_fetch(remote_key, remote, 50, 100)) {
-      std::cout << "[INFO] Rank " << local_rank << " fetched meta for rank "
-                << r << ", host_id=" << remote.host_id
+      std::cout << "[INFO] Rank " << rank << " fetched meta for rank " << r
+                << ", host_id=" << remote.host_id
                 << ", is_ready=" << remote.is_ready << std::endl;
     } else {
-      std::cerr << "[WARN] Rank " << local_rank
+      std::cerr << "[WARN] Rank " << rank
                 << " timeout waiting for meta of rank " << r << std::endl;
     }
   }
 
-  std::cout << "[INFO] Rank " << local_rank << " completed meta exchange"
+  std::cout << "[INFO] Rank " << rank << " completed meta exchange"
             << std::endl;
 }
 
