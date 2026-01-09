@@ -152,9 +152,17 @@ struct FloatTypeInfo<FloatType::kBFloat16> {
     uint32_t hi = nonComp;
 
     uint32_t out;
+
+#if defined(__HIP_PLATFORM_AMD__)
+    out = (lo >> 1) | (hi << 31);
+    // Emulate funnel shift right: concatenate lo:hi and shift right by 1
+    // out = static_cast<uint32_t>(((uint64_t(lo) << 32) | uint64_t(hi)) >> 1);
+#else
     asm("shf.r.clamp.b32 %0, %1, %2, %3;"
         : "=r"(out)
         : "r"(lo), "r"(hi), "r"(1));
+#endif
+
     return out >>= 16;
   }
 

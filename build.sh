@@ -145,6 +145,13 @@ build_p2p() {
   else
     echo "[container] USE_TCPX=1, skipping copying p2p runtime files"
   fi
+  if [[ "$TARGET" == rocm* ]]; then
+    cd thirdparty/dietgpu
+    rm -rf build/
+    python3 setup.py build
+    cd ../..
+    cp thirdparty/dietgpu/build/**/*.so uccl/
+  fi
 }
 
 build_ep() {
@@ -271,7 +278,7 @@ echo "[2/3] Running build inside container..."
 
 # Auto-detect CUDA architecture for ep build
 DETECTED_GPU_ARCH=""
-if [[ "$BUILD_TYPE" =~ (ep|all) ]];then
+if [[ "$BUILD_TYPE" =~ (ep|all|p2p) ]];then
   if [[ "$TARGET" == cuda* ]] && command -v nvidia-smi &> /dev/null; then
     DETECTED_GPU_ARCH="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ' || true)"
 
