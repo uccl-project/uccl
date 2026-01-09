@@ -13,7 +13,7 @@ typedef struct uccl_engine uccl_engine_t;
 typedef struct uccl_conn uccl_conn_t;
 
 // Handle for a memory region
-typedef int64_t uccl_mr_t;
+typedef uint64_t uccl_mr_t;
 
 // UCCL operation types
 enum uccl_msg_type {
@@ -113,9 +113,10 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
  * @param engine        The engine instance.
  * @param data          Pointer to the data to register.
  * @param size          Size of the data.
+ * @param mr_id         Memory region handle.
  * @return              Memory region handle, or -1 on failure.
  */
-uccl_mr_t uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size);
+int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size, uccl_mr_t& mr_id);
 
 /**
  * Read data (Non blocking).

@@ -541,19 +541,17 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   return conn;
 }
 
-uccl_mr_t uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size) {
+int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size, uccl_mr_t& mr_id) {
   if (!engine || !data) return -1;
-  uint64_t mr_id_raw;
-  bool ok = engine->endpoint->reg((void*)data, size, mr_id_raw);
+  bool ok = engine->endpoint->reg((void*)data, size, mr_id);
   if (!ok) {
     return -1;
   }
-  uccl_mr_t mr_id = static_cast<uccl_mr_t>(mr_id_raw);
   mem_reg_entry_t entry;
-  entry.mr_id = mr_id_raw;
+  entry.mr_id = mr_id;
   entry.size = size;
   mem_reg_info[data] = entry;
-  return mr_id;
+  return 0;
 }
 
 int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* dst,
