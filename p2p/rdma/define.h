@@ -68,7 +68,6 @@ inline size_t channelIdToContextId(uint32_t channel_id) {
   return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;
 }
 
-// For converting between ibv_mr * and rkey.
 template <typename T = uint32_t>
 struct ContextArrayT {
   T data[kNICContextNumber];
