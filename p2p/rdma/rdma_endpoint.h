@@ -263,9 +263,9 @@ class NICEndpoint {
       rank_oob_meta_[rank_id] = meta_ptr;
     }
   }
-  uccl::ConnID uccl_connect(int dev, int local_gpuidx, int remote_dev,
-                            int remote_gpuidx, std::string remote_ip,
-                            uint16_t remote_port) {
+  ConnID uccl_connect(int dev, int local_gpuidx, int remote_dev,
+                      int remote_gpuidx, std::string remote_ip,
+                      uint16_t remote_port) {
     int32_t current_send_id = send_id_.fetch_add(1, std::memory_order_relaxed);
 
     add_rank_oob_meta({{current_send_id, std::make_shared<OOBMetaData>(
@@ -274,7 +274,7 @@ class NICEndpoint {
               << ", remote_ip: " << remote_ip
               << ", remote_port: " << remote_port;
     build_connect(current_send_id);  // sync mode (default)
-    uccl::ConnID conn_id;
+    ConnID conn_id;
     conn_id.context =
         reinterpret_cast<void*>(static_cast<intptr_t>(current_send_id));
     conn_id.flow_id = current_send_id;
@@ -289,9 +289,9 @@ class NICEndpoint {
     return oob_server_->get_listen_fd();
   };
 
-  inline uccl::ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
-                                  std::string& remote_ip, int* remote_dev,
-                                  int* remote_gpuidx) {
+  inline ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
+                            std::string& remote_ip, int* remote_dev,
+                            int* remote_gpuidx) {
     AcceptedMeta accepted;
     uint64_t rank_id = 0;
 
@@ -333,7 +333,7 @@ class NICEndpoint {
     }
 
     // Create and return ConnID
-    uccl::ConnID conn_id;
+    ConnID conn_id;
     conn_id.context = reinterpret_cast<void*>(static_cast<intptr_t>(rank_id));
     conn_id.flow_id = rank_id;
     return conn_id;
