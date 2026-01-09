@@ -127,7 +127,8 @@ vllm serve "${MODEL}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
     --gpu-memory-utilization 0.8 \
-    --headless
+    --headless \
+    --enforce-eager
 
 # Additional useful options (uncomment as needed, must match Node 0):
 #   --max-model-len 8192 \

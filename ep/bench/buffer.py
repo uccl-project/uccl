@@ -83,8 +83,6 @@ class Buffer:
                 otherwise, the resources will be released by the destructor.
                 Note: Releasing resources in the destructor may cause Python's exception handling process to hang.
         """
-        # Print relevant inputs
-        print(f"Buffer initialization inputs: group={group}, num_nvl_bytes={num_nvl_bytes}, num_rdma_bytes={num_rdma_bytes}, low_latency_mode={low_latency_mode}, num_qps_per_rank={num_qps_per_rank}, allow_nvlink_for_low_latency_mode={allow_nvlink_for_low_latency_mode}, allow_mnnvl={allow_mnnvl}, explicitly_destroy={explicitly_destroy}, is_intranode={is_intranode}")
         if "LOCAL_RANK" in os.environ:
             device_index = int(os.environ["LOCAL_RANK"])
         else:
@@ -94,7 +92,6 @@ class Buffer:
             self.scratch = torch.zeros(
                 num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
             )
-            print("scratch: ", self.scratch.shape, self.scratch.dtype, self.scratch.device)
         else:
             self.scratch = ep.get_rdma_buffer(num_rdma_bytes, device_index)
 
@@ -108,7 +105,6 @@ class Buffer:
             use_normal_mode=not low_latency_mode,
             is_intranode=is_intranode,
         )
-        print("initialize_uccl finished")
         check_nvlink_connections(group)
 
         # Initialize the CPP runtime
@@ -119,7 +115,6 @@ class Buffer:
         self.num_rdma_bytes = num_rdma_bytes
         self.low_latency_mode = low_latency_mode
         self.explicitly_destroy = explicitly_destroy
-        print("Before ep.Buffer", int(os.environ.get("LOCAL_WORLD_SIZE", -1)))
         self.runtime = ep.Buffer(
             self.rank,
             self.group_size,
@@ -129,7 +124,6 @@ class Buffer:
             explicitly_destroy,
             int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
         )
-        print("After ep.Buffer")
         if num_rdma_bytes:
             self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
 
@@ -164,12 +158,9 @@ class Buffer:
             rdma_ipc_handles,
         )
         assert self.runtime.is_available()
-        print("before connect_atomic_buffer")
         self.connect_atomic_buffer(self.proxies[0])
-        print("after connect_atomic_buffer")
         for proxy in self.proxies:
             proxy.set_atomic_buffer_ptr(self.proxies[0].get_atomic_buffer_ptr())
-        print("after set_atomic_buffer_ptr")
 
     def reset_rdma_buffer(self):
         """
@@ -283,14 +274,6 @@ class Buffer:
             event: the event after executing the kernel (valid only if `async_finish` is set).
             hook: the receiving hook function (valid only if `return_recv_hook` is set).
         """
-        
-        # print(
-        #     "dispatch, num_tokens:", x.shape[0],
-        #     "hidden:", x.shape[1],
-        #     "num_experts:", num_experts,
-        #     "async_finish:", async_finish,
-        #     "return_recv_hook:", return_recv_hook
-        # )
         for proxy in self.proxies:
             proxy.calculate_and_set_dispatch_recv_data_offset(
                 num_tokens=x.shape[0],
@@ -335,7 +318,6 @@ class Buffer:
             packed_recv_layout_range,
             cumulative_local_expert_recv_stats,
         )
-        # print("dispatch finished")
         return (
             (packed_recv_x, packed_recv_x_scales) if use_fp8 else packed_recv_x,
             packed_recv_count,
@@ -391,15 +373,6 @@ class Buffer:
             event: the event after executing the kernel (valid only if `async_finish` is set).
             hook: the receiving hook function (valid only if `return_recv_hook` is set).
         """
-        
-        # print(
-        #     "combine, num_combined_tokens:", x.shape[0],
-        #     "hidden:", x.shape[1],
-        #     "use_logfmt:", use_logfmt,
-        #     "zero_copy:", zero_copy,
-        #     "async_finish:", async_finish,
-        #     "return_recv_hook:", return_recv_hook
-        # )
         (
             src_info,
             layout_range,
@@ -430,7 +403,6 @@ class Buffer:
             layout_range,
             combined_x,
         )
-        # print("combine finished")
         return (
             combined_x,
             EventOverlap(event, tensors_to_record if async_finish else None),
@@ -706,9 +678,6 @@ class Buffer:
 
         # Internode
         if self.runtime.get_num_rdma_ranks() > 1:
-            assert (
-                num_worst_tokens == 0
-            ), "Internode dispatch does not support `num_worst_tokens > 0`"
             return self.internode_dispatch(
                 x,
                 handle,

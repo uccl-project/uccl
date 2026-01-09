@@ -126,7 +126,8 @@ vllm serve "${MODEL}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
     --gpu-memory-utilization 0.8 \
-    --api-server-count="${API_SERVERS}"
+    --api-server-count="${API_SERVERS}" \
+    --enforce-eager
 
 # Additional useful options (uncomment as needed):
 #   --max-model-len 8192 \
