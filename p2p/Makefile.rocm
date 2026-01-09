@@ -14,7 +14,7 @@ ifeq ($(USE_EFA),1)
 	CXXFLAGS_TRANS := -DUCCL_P2P_USE_EFA
 endif
 
-CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I../include -I$(HIP_INC) \
+CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(HIP_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=${CONDA_LIB_HOME} -I${CONDA_LIB_HOME}/../include \
 	$(CXXFLAGS_TRANS)

@@ -17,7 +17,7 @@ LIBS = -L ${CUDA_HOME}/lib64 -libverbs -lcudart -lcuda -lpthread -lglog -lgflags
 LIBS2 =
 
 CXX := g++
-CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I../include -I$(CUDA_INC) \
+CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(CUDA_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu
 
