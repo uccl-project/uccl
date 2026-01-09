@@ -1,6 +1,6 @@
 #pragma once
 
-#include "rdma/define.h"
+#include "common.h"
 #include "rdma/rdma_endpoint.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
@@ -46,6 +46,50 @@ inline int parseLogLevelFromEnv() {
   }
 
   return google::WARNING;
+}
+
+enum ReqType { ReqTx, ReqRx, ReqRead, ReqWrite };
+struct ucclRequest {
+  enum ReqType type;
+  uint32_t n;
+  uint32_t engine_idx;
+};
+struct Mhandle {
+  struct ibv_mr* mr;
+};
+struct FifoItem {
+  uint64_t addr;
+  uint32_t size;
+  uint32_t rkey;
+  uint32_t nmsgs;
+  uint32_t rid;
+  uint64_t idx;
+  uint32_t engine_offset;
+  char padding[28];
+};
+static_assert(sizeof(struct FifoItem) == 64, "FifoItem size is not 64 bytes");
+inline void serialize_fifo_item(FifoItem const& item, char* buf) {
+  static_assert(sizeof(FifoItem) == 64, "FifoItem must be 64 bytes");
+
+  std::memcpy(buf + 0, &item.addr, sizeof(uint64_t));
+  std::memcpy(buf + 8, &item.size, sizeof(uint32_t));
+  std::memcpy(buf + 12, &item.rkey, sizeof(uint32_t));
+  std::memcpy(buf + 16, &item.nmsgs, sizeof(uint32_t));
+  std::memcpy(buf + 20, &item.rid, sizeof(uint32_t));
+  std::memcpy(buf + 24, &item.idx, sizeof(uint64_t));
+  std::memcpy(buf + 32, &item.engine_offset, sizeof(uint32_t));
+  std::memcpy(buf + 36, &item.padding, sizeof(item.padding));
+}
+
+inline void deserialize_fifo_item(char const* buf, FifoItem* item) {
+  std::memcpy(&item->addr, buf + 0, sizeof(uint64_t));
+  std::memcpy(&item->size, buf + 8, sizeof(uint32_t));
+  std::memcpy(&item->rkey, buf + 12, sizeof(uint32_t));
+  std::memcpy(&item->nmsgs, buf + 16, sizeof(uint32_t));
+  std::memcpy(&item->rid, buf + 20, sizeof(uint32_t));
+  std::memcpy(&item->idx, buf + 24, sizeof(uint64_t));
+  std::memcpy(&item->engine_offset, buf + 32, sizeof(uint32_t));
+  std::memcpy(&item->padding, buf + 36, sizeof(item->padding));
 }
 
 struct P2PMhandle {
