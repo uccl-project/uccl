@@ -10,9 +10,6 @@
 #
 # IMPORTANT: All configuration must match Node 0!
 
-# Example:
-# bash launch_vllm_worker.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 allgather_reducescatter 2 1 8 1
-
 set -e
 
 echo "🚀 Launching vLLM Secondary Node (Headless) with Expert Parallel..."
@@ -35,6 +32,8 @@ fi
 export LD_LIBRARY_PATH=$(python3 -c "import torch; import os; print(os.path.join(torch.__path__[0], 'lib'))"):$LD_LIBRARY_PATH
 
 export VLLM_USE_DEEP_GEMM=1
+export NCCL_P2P_DISABLE=1
+export VLLM_WORKER_MULTIPROC_METHOD="spawn"
 
 # ============================================================================
 # NETWORK CONFIGURATION
@@ -57,6 +56,7 @@ export NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so
 # NCCL performance tuning (optional):
 export NCCL_P2P_NET_CHUNKSIZE=524288
 export NCCL_BUFFSIZE=8388608
+export OMP_NUM_THREADS=32
 
 # NCCL debugging (for diagnosing connection issues):
 # export NCCL_DEBUG=INFO
@@ -65,7 +65,7 @@ export NCCL_BUFFSIZE=8388608
 # https://github.com/vllm-project/vllm/pull/27444
 export VLLM_ENGINE_READY_TIMEOUT_S=3600
 # Set to local non-shared disk like "/opt/dlami/nvme"
-export DG_JIT_CACHE_DIR="/local_storage"
+export DG_JIT_CACHE_DIR="/scratch/$USER/dg_jit_cache"
 
 # ============================================================================
 # ARGUMENTS PARSING
@@ -128,7 +128,8 @@ vllm serve "${MODEL}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
     --gpu-memory-utilization 0.8 \
-    --headless
+    --headless \
+    --enforce-eager
 
 # Additional useful options (uncomment as needed, must match Node 0):
 #   --max-model-len 8192 \
