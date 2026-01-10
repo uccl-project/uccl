@@ -2,7 +2,7 @@
 
 This guide provides example scripts and instructions for deploying vLLM with Expert Parallelism (EP) across multiple nodes on AWS p5en.
 
-## 🚀 Installation
+## Installation
 
 ### 0. Install uv
 
@@ -25,6 +25,8 @@ uv pip install -e .
 ```
 
 For detailed EP setup, refer to [vLLM Expert Parallel Deployment](https://docs.vllm.ai/en/stable/serving/expert_parallel_deployment.html)
+
+Last tested commit hash: 8c328c6
 
 ### 2. Install DeepGEMM Library
 
@@ -92,7 +94,7 @@ Edit the provided scripts (`launch_vllm_head.sh` and `launch_vllm_worker.sh`) to
 1. **DeepGEMM JIT cache** - Set `DG_JIT_CACHE_DIR` to some non-shared folder on each node
 
 
-## 🚢 Deployment
+## Deployment
 
 ### Step 1: Start Node 0 (Primary)
 
@@ -120,3 +122,17 @@ bash launch_vllm_worker.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 deepep
 - `1` - Local DP size on this node
 - `8` - Local TP size on this node
 - `1` - For node 0, number of API servers; for others, starting rank (= sum of previous nodes' local DP)
+
+## vLLM Serving Benchmark Results
+
+**Model:** `deepseek-ai/DeepSeek-V3-0324`  
+**Request rate:** 10 RPS  
+**Prompts:** 1000  
+**Input / Output tokens:** 1024 / 256  
+**Max concurrency:** 256  
+
+| Mode | Req Throughput (req/s) | Output Tok Throughput (tok/s) | Mean TTFT (ms) | P99 TTFT (ms) | Mean TPOT (ms) | P99 TPOT (ms) |
+|------|------------------------|-------------------------------|----------------|---------------|----------------|---------------|
+| Allgather + ReduceScatter | 0.61 | 155.15 | 80643.16 | 275588.12 | 1312.63 | 1563.97 |
+| DeepEP – High Throughput | 3.58 | 915.66 | 3503.18 | 11950.74 | 248.03 | 297.82 |
+| DeepEP – Low Latency | 5.25 | 1345.26 | 6391.41 | 21805.85 | 152.02 | 235.48 |
