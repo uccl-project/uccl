@@ -1,9 +1,9 @@
 #include "c2d_fifo.h"
 #include "fifo_util.hpp"
+#include "gpu_rt.h"
 #include <iostream>
 #include <thread>
 #include <numaif.h>
-#include "gpu_rt.h"
 
 namespace mscclpp {
 
@@ -46,7 +46,7 @@ uint64_t CpuToGpuFifo<T>::push(const T& task) {
 
   // Copy single task to device
   MSCCLPP_CUDATHROW(gpuMemcpy(&devBuffer[curHead % pimpl_->size], &task,
-                               sizeof(T), gpuMemcpyHostToDevice));
+                              sizeof(T), gpuMemcpyHostToDevice));
 
   // Ensure data is visible before publishing head
   std::atomic_thread_fence(std::memory_order_release);
@@ -74,7 +74,7 @@ uint64_t CpuToGpuFifo<T>::push(InputIt first, InputIt last) {
   int size = pimpl_->size;
 
   MSCCLPP_CUDATHROW(gpuMemcpy(&devBuf[curHead % size], &*first,
-                               sizeof(T) * count, gpuMemcpyHostToDevice));
+                              sizeof(T) * count, gpuMemcpyHostToDevice));
 
   //   __sync_synchronize();
   std::atomic_thread_fence(std::memory_order_release);
@@ -95,7 +95,7 @@ uint64_t CpuToGpuFifo<T>::currentId() const {
 
 template <typename T>
 void CpuToGpuFifo<T>::sync(uint64_t taskId) const {
-  while (currentId() <= taskId ) {
+  while (currentId() <= taskId) {
     std::this_thread::yield();
     // std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }

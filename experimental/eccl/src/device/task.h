@@ -1,10 +1,10 @@
 #pragma once
 
+#include "gpu_rt.h"
 #include <cassert>
 #include <cstdint>
-#include <vector>
 #include <mutex>
-#include "gpu_rt.h"
+#include <vector>
 
 namespace eccl {
 
@@ -19,15 +19,11 @@ enum class TaskType : uint64_t {
   // more Type
 };
 
-enum class DataType : uint64_t {
-    Fp8,
-    Fp16,
-    Fp32
-};
+enum class DataType : uint64_t { Fp8, Fp16, Fp32 };
 
 constexpr unsigned int TaskTypeSize = 8;  // 256
 constexpr unsigned int DataTypeSize = 8;
-constexpr unsigned int TaskArgsIndexSize = 32; // Id to Task Args sturct
+constexpr unsigned int TaskArgsIndexSize = 32;  // Id to Task Args sturct
 
 /// Pair of 64-bit unsigned integers used as a Task.
 /// Used as a work element in the concurrent FIFO.
@@ -38,12 +34,11 @@ union alignas(16) Task {
   };
 
   Task() = default;
-  
+
   struct {
     uint64_t type : TaskTypeSize;
     uint64_t dataType : DataTypeSize;
-    uint64_t : (64 - TaskTypeSize - 
-                DataTypeSize);
+    uint64_t : (64 - TaskTypeSize - DataTypeSize);
     uint64_t argsId : TaskArgsIndexSize;
     uint64_t : (64 - TaskArgsIndexSize);
   } fields;
@@ -51,14 +46,13 @@ union alignas(16) Task {
   /// Constructor.
   /// @param type The type of the Task.
   /// @param dType The type of Data.
-  /// @param argsIndex The Args Id of Task (in TaskManager). 
-  __host__ __device__
-  Task(TaskType type, DataType dType, uint32_t argsIndex) {
-    const uint64_t t  = static_cast<uint64_t>(type);
+  /// @param argsIndex The Args Id of Task (in TaskManager).
+  __host__ __device__ Task(TaskType type, DataType dType, uint32_t argsIndex) {
+    const uint64_t t = static_cast<uint64_t>(type);
     const uint64_t dt = static_cast<uint64_t>(dType);
     const uint64_t ai = static_cast<uint64_t>(argsIndex);
 
-    assert(t  < (1ULL << TaskTypeSize));
+    assert(t < (1ULL << TaskTypeSize));
     assert(dt < (1ULL << DataTypeSize));
     assert(ai < (1ULL << TaskArgsIndexSize));
 
@@ -71,18 +65,18 @@ union alignas(16) Task {
   }
 
   __host__ __device__ uint8_t type_u8() const { return uint8_t(fst & 0xFFull); }
-  __host__ __device__ uint8_t dtype_u8() const { return uint8_t((fst >> 8) & 0xFFull); }
+  __host__ __device__ uint8_t dtype_u8() const {
+    return uint8_t((fst >> 8) & 0xFFull);
+  }
   // __host__ __device__ uint64_t args_index_u64() const { return snd; }
-  __host__ __device__ uint32_t args_index() const { return uint32_t(snd & 0xFFFFFFFFull); }
+  __host__ __device__ uint32_t args_index() const {
+    return uint32_t(snd & 0xFFFFFFFFull);
+  }
 };
 static_assert(sizeof(Task) == 16);
 
 // Coll
-enum class ReduceType : uint64_t {
-    Sum,
-    Max,
-    None
-};
+enum class ReduceType : uint64_t { Sum, Max, None };
 
 struct alignas(16) CollArgs {
   void* src;
@@ -92,7 +86,8 @@ struct alignas(16) CollArgs {
   ReduceType redType;
   uint8_t _pad0[3];
 };
-static_assert(sizeof(CollArgs) % 16 == 0, "CollArgs should be 16B aligned size");
+static_assert(sizeof(CollArgs) % 16 == 0,
+              "CollArgs should be 16B aligned size");
 
 struct alignas(16) MoeArgs {
   // TODO:
@@ -101,15 +96,15 @@ struct alignas(16) MoeArgs {
 };
 
 class TaskManager {
-public:
+ public:
   // -------- Singleton entry --------
   static TaskManager& instance() {
     static TaskManager inst;
     return inst;
   }
   // forbid copy/move
-  TaskManager(const TaskManager&) = delete;
-  TaskManager& operator=(const TaskManager&) = delete;
+  TaskManager(TaskManager const&) = delete;
+  TaskManager& operator=(TaskManager const&) = delete;
   TaskManager(TaskManager&&) = delete;
   TaskManager& operator=(TaskManager&&) = delete;
 
@@ -119,11 +114,11 @@ public:
   void init(uint32_t collCap, uint32_t moeCap) {
     std::lock_guard<std::mutex> gc(coll_mu_);
     std::lock_guard<std::mutex> gm(moe_mu_);
-    release_nolock_(); // re-init
+    release_nolock_();  // re-init
 
-    cap_coll_ = collCap; 
-    cap_moe_ = moeCap; 
-    
+    cap_coll_ = collCap;
+    cap_moe_ = moeCap;
+
     GPU_RT_CHECK(gpuMalloc(&d_coll_, sizeof(CollArgs) * cap_coll_));
     GPU_RT_CHECK(gpuMalloc(&d_moe_, sizeof(MoeArgs) * cap_moe_));
 
@@ -131,9 +126,11 @@ public:
     free_coll_.clear();
     free_moe_.clear();
     free_coll_.reserve(cap_coll_);
-    for (uint32_t i = 0; i < cap_coll_; ++i) free_coll_.push_back(cap_coll_ - 1 - i);
+    for (uint32_t i = 0; i < cap_coll_; ++i)
+      free_coll_.push_back(cap_coll_ - 1 - i);
     free_moe_.reserve(cap_moe_);
-    for (uint32_t i = 0; i < cap_moe_; ++i) free_moe_.push_back(cap_moe_ - 1 - i);
+    for (uint32_t i = 0; i < cap_moe_; ++i)
+      free_moe_.push_back(cap_moe_ - 1 - i);
 
     inited_ = true;
   }
@@ -146,12 +143,10 @@ public:
     inited_ = false;
   }
 
-  bool inited() const {
-    return inited_;
-  }
+  bool inited() const { return inited_; }
 
   // CPU: fill coll args (host -> device copy), return idx
-  Task create_coll_task( const CollArgs& h, TaskType tt, DataType dt) {
+  Task create_coll_task(CollArgs const& h, TaskType tt, DataType dt) {
     assert(tt == TaskType::CollCopy || tt == TaskType::CollReduce);
 
     uint32_t idx;
@@ -163,7 +158,8 @@ public:
       free_coll_.pop_back();
     }
 
-    GPU_RT_CHECK(gpuMemcpy(d_coll_ + idx, &h, sizeof(CollArgs), gpuMemcpyHostToDevice));
+    GPU_RT_CHECK(
+        gpuMemcpy(d_coll_ + idx, &h, sizeof(CollArgs), gpuMemcpyHostToDevice));
 
     return Task(tt, dt, idx);
   }
@@ -177,8 +173,9 @@ public:
   }
 
   // CPU: fill moe args (host -> device copy), return idx
-  Task create_moe_task(const MoeArgs& h, TaskType tt, DataType dt) {
-    assert(tt == TaskType::MoePreGemm || tt == TaskType::MoePostGemm || tt == TaskType::MoeCombine);
+  Task create_moe_task(MoeArgs const& h, TaskType tt, DataType dt) {
+    assert(tt == TaskType::MoePreGemm || tt == TaskType::MoePostGemm ||
+           tt == TaskType::MoeCombine);
 
     uint32_t idx;
     {
@@ -188,7 +185,8 @@ public:
       idx = free_moe_.back();
       free_moe_.pop_back();
     }
-    GPU_RT_CHECK(gpuMemcpy(d_moe_ + idx, &h, sizeof(MoeArgs), gpuMemcpyHostToDevice));
+    GPU_RT_CHECK(
+        gpuMemcpy(d_moe_ + idx, &h, sizeof(MoeArgs), gpuMemcpyHostToDevice));
     return Task(tt, dt, idx);
   }
 
@@ -213,24 +211,24 @@ public:
   CollArgs* d_coll() const { return d_coll_; }
   MoeArgs* d_moe() const { return d_moe_; }
 
-private:
+ private:
   TaskManager() = default;
 
   void release_nolock_() {
     if (d_coll_) gpuFree(d_coll_);
-    if (d_moe_)  gpuFree(d_moe_);
+    if (d_moe_) gpuFree(d_moe_);
 
     d_coll_ = nullptr;
-    d_moe_  = nullptr;
+    d_moe_ = nullptr;
 
     free_coll_.clear();
     free_moe_.clear();
 
     cap_coll_ = 0;
-    cap_moe_  = 0;
+    cap_moe_ = 0;
   }
 
-private:
+ private:
   // device pools
   CollArgs* d_coll_{nullptr};
   MoeArgs* d_moe_{nullptr};

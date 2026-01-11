@@ -70,13 +70,14 @@
 #define gpuDrvDevice_t CUdevice
 #define gpuDrvCtx_t CUcontext
 #define gpuDrvDeviceGet(pdev, ordinal) cuDeviceGet(pdev, ordinal)
-#define gpuDrvDevicePrimaryCtxRetain(pctx, dev) cuDevicePrimaryCtxRetain(pctx, dev)
+#define gpuDrvDevicePrimaryCtxRetain(pctx, dev) \
+  cuDevicePrimaryCtxRetain(pctx, dev)
 #define gpuDrvCtxSetCurrent(ctx) cuCtxSetCurrent(ctx)
 #define gpuDrvMemAlloc(pdevptr, bytes) cuMemAlloc(pdevptr, bytes)
 #define gpuDrvMemFree(devptr) cuMemFree(devptr)
 #define gpuDrvMemsetD8(devptr, value, bytes) cuMemsetD8(devptr, value, bytes)
-inline const char* gpuDrvGetErrorString(gpuDrvResult_t r) {
-  const char* s = nullptr;
+inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
+  char const* s = nullptr;
   (void)cuGetErrorString(r, &s);
   return s ? s : "Unknown CUDA driver error";
 }
@@ -152,14 +153,17 @@ inline const char* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuDrvDevice_t hipDevice_t
 #define gpuDrvCtx_t hipCtx_t
 #define gpuDrvDeviceGet(pdev, ordinal) hipDeviceGet(pdev, ordinal)
-#define gpuDrvDevicePrimaryCtxRetain(pctx, dev) hipDevicePrimaryCtxRetain(pctx, dev)
+#define gpuDrvDevicePrimaryCtxRetain(pctx, dev) \
+  hipDevicePrimaryCtxRetain(pctx, dev)
 #define gpuDrvCtxSetCurrent(ctx) hipCtxSetCurrent(ctx)
-inline gpuDrvResult_t gpuDrvMemAlloc(void** p, size_t bytes) { return hipMalloc(p, bytes); }
+inline gpuDrvResult_t gpuDrvMemAlloc(void** p, size_t bytes) {
+  return hipMalloc(p, bytes);
+}
 inline gpuDrvResult_t gpuDrvMemFree(void* p) { return hipFree(p); }
 inline gpuDrvResult_t gpuDrvMemsetD8(void* p, unsigned char v, size_t bytes) {
   return hipMemset(p, (int)v, bytes);
 }
-inline const char* gpuDrvGetErrorString(gpuDrvResult_t r) {
+inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
   return hipGetErrorString(r);
 }
 #endif
@@ -185,12 +189,12 @@ inline const char* gpuDrvGetErrorString(gpuDrvResult_t r) {
     }                                                         \
   } while (0)
 
-#define GPU_DRV_CHECK(call)                                                     \
-  do {                                                                          \
-    gpuDrvResult_t _r = (call);                                                 \
-    if (_r != gpuDrvSuccess) {                                                  \
-      fprintf(stderr, "GPU DRV error %s:%d: %s (%d)\n", __FILE__, __LINE__,     \
-              gpuDrvGetErrorString(_r), (int)_r);                               \
-      std::abort();                                                             \
-    }                                                                           \
+#define GPU_DRV_CHECK(call)                                                 \
+  do {                                                                      \
+    gpuDrvResult_t _r = (call);                                             \
+    if (_r != gpuDrvSuccess) {                                              \
+      fprintf(stderr, "GPU DRV error %s:%d: %s (%d)\n", __FILE__, __LINE__, \
+              gpuDrvGetErrorString(_r), (int)_r);                           \
+      std::abort();                                                         \
+    }                                                                       \
   } while (0)

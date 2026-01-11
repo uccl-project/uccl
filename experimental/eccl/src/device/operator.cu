@@ -12,21 +12,25 @@ template <typename T>
 __device__ __forceinline__ T apply_red(ReduceType op, T a, T b) {
   if (op == ReduceType::Sum) return a + b;
   if (op == ReduceType::Max) return a > b ? a : b;
-  return a; // None or unknown
+  return a;  // None or unknown
 }
 
 template <>
-__device__ __forceinline__ __half apply_red<__half>(ReduceType op, __half a, __half b) {
+__device__ __forceinline__ __half apply_red<__half>(ReduceType op, __half a,
+                                                    __half b) {
   float af = __half2float(a);
   float bf = __half2float(b);
   float rf;
-  if (op == ReduceType::Sum) rf = af + bf;
-  else if (op == ReduceType::Max) rf = (af > bf ? af : bf);
-  else rf = af;
+  if (op == ReduceType::Sum)
+    rf = af + bf;
+  else if (op == ReduceType::Max)
+    rf = (af > bf ? af : bf);
+  else
+    rf = af;
   return __float2half(rf);
 }
 
-__device__ void run_copy(const CollArgs& a) {
+__device__ void run_copy(CollArgs const& a) {
   auto* dst = reinterpret_cast<char*>(a.dst);
   auto* src = reinterpret_cast<char const*>(a.src);
 
@@ -50,7 +54,7 @@ __device__ void run_copy(const CollArgs& a) {
 }
 
 template <typename T>
-__device__ void run_reduce_inplace(const CollArgs& a) {
+__device__ void run_reduce_inplace(CollArgs const& a) {
   auto* dst = reinterpret_cast<T*>(a.dst);
   auto* src = reinterpret_cast<T const*>(a.src);
 
@@ -78,8 +82,8 @@ __device__ void run_reduce_inplace(const CollArgs& a) {
   }
 }
 
-template __device__ void run_reduce_inplace<float>(const CollArgs&);
-template __device__ void run_reduce_inplace<__half>(const CollArgs&);
+template __device__ void run_reduce_inplace<float>(CollArgs const&);
+template __device__ void run_reduce_inplace<__half>(CollArgs const&);
 // more
 // template __device__ void run_reduce_t<double>(const CollArgs&);
 // template __device__ void run_reduce_t<half>(const CollArgs&);
@@ -87,8 +91,7 @@ template __device__ void run_reduce_inplace<__half>(const CollArgs&);
 // TODO: using sm id to assign task
 template <typename T>
 __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T> fifo,
-                                     CollArgs* d_coll,
-                                     MoeArgs*  d_moe,
+                                     CollArgs* d_coll, MoeArgs* d_moe,
                                      bool* should_stop) {
   (void)d_moe;
 
@@ -109,12 +112,8 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T> fifo,
     const CollArgs a = d_coll[idx];
 
     if (threadIdx.x == 0) {
-      printf("task %u type=%d dtype=%d red=%d bytes=%u\n",
-            idx,
-            int(ttype),
-            int(dtype),
-            int(a.redType),
-            a.bytes);
+      printf("task %u type=%d dtype=%d red=%d bytes=%u\n", idx, int(ttype),
+             int(dtype), int(a.redType), a.bytes);
     }
 
     switch (ttype) {
@@ -140,14 +139,12 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T> fifo,
     if (threadIdx.x == 0) {
       fifo.pop();
     }
-    __syncthreads(); 
+    __syncthreads();
   }
 }
 
 template __global__ void basePersistentKernel<Task>(
-    mscclpp::C2DDeviceHandle<Task> fifo,
-    CollArgs* d_coll,
-    MoeArgs*  d_moe,
+    mscclpp::C2DDeviceHandle<Task> fifo, CollArgs* d_coll, MoeArgs* d_moe,
     bool* should_stop);
 
 }  // namespace eccl

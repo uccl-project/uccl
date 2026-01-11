@@ -1,11 +1,11 @@
 #include "c2d_fifo.h"
+#include "gpu_rt.h"
 #include "operator.h"
 #include "persistent.h"
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <vector>
-#include "gpu_rt.h"
 
 #define N 1024
 using namespace eccl;
@@ -26,46 +26,41 @@ static void fill(std::vector<float>& v, float base, float step) {
   for (size_t i = 0; i < v.size(); ++i) v[i] = base + step * (float)i;
 }
 
-uint64_t submit_copy_task(eccl::PersistentKernel<eccl::Task>& kernel,
-                          void* dst, const void* src,
-                          uint64_t bytes,
+uint64_t submit_copy_task(eccl::PersistentKernel<eccl::Task>& kernel, void* dst,
+                          void const* src, uint64_t bytes,
                           eccl::DataType dtype) {
   eccl::CollArgs h{};
-  h.src  = const_cast<void*>(src);
+  h.src = const_cast<void*>(src);
   h.src2 = nullptr;
-  h.dst  = dst;
+  h.dst = dst;
   h.bytes = static_cast<uint32_t>(bytes);
   h.redType = eccl::ReduceType::None;
 
-  eccl::Task t =
-      eccl::TaskManager::instance().create_coll_task(
-          h, eccl::TaskType::CollCopy, dtype);
+  eccl::Task t = eccl::TaskManager::instance().create_coll_task(
+      h, eccl::TaskType::CollCopy, dtype);
 
   return kernel.submit(t);
 }
 
 uint64_t submit_reduce_task(eccl::PersistentKernel<eccl::Task>& kernel,
-                            void* dst, const void* src,
-                            uint64_t bytes,
-                            eccl::DataType dtype,
-                            eccl::ReduceType redop) {
+                            void* dst, void const* src, uint64_t bytes,
+                            eccl::DataType dtype, eccl::ReduceType redop) {
   eccl::CollArgs h{};
-  h.src  = const_cast<void*>(src);
+  h.src = const_cast<void*>(src);
   h.src2 = nullptr;
-  h.dst  = dst;
+  h.dst = dst;
   h.bytes = static_cast<uint32_t>(bytes);
   h.redType = redop;
 
-  eccl::Task t =
-      eccl::TaskManager::instance().create_coll_task(
-          h, eccl::TaskType::CollReduce, dtype);
+  eccl::Task t = eccl::TaskManager::instance().create_coll_task(
+      h, eccl::TaskType::CollReduce, dtype);
 
   return kernel.submit(t);
 }
 
 int main() {
   eccl::TaskManager::instance().init(1024, 256);
-  
+
   PersistentKernelConfig config;
   config.numBlocks = 1;
   config.threadsPerBlock = 64;
@@ -88,49 +83,37 @@ int main() {
   fill(h_src_red, -1.0f, 0.125f);
 
   CK(gpuMemcpy(src_copy, h_src_copy.data(), N * sizeof(float),
-                gpuMemcpyHostToDevice),
+               gpuMemcpyHostToDevice),
      "H2D src_copy");
   CK(gpuMemset(dst_copy, 0, N * sizeof(float)), "memset dst_copy");
 
   CK(gpuMemcpy(dst_reduce, h_dst0.data(), N * sizeof(float),
-                gpuMemcpyHostToDevice),
+               gpuMemcpyHostToDevice),
      "H2D dst_reduce");
   CK(gpuMemcpy(src_reduce, h_src_red.data(), N * sizeof(float),
-                gpuMemcpyHostToDevice),
+               gpuMemcpyHostToDevice),
      "H2D src_reduce");
 
   PersistentKernel<eccl::Task> kernel(config);
   kernel.launch();
   std::cout << "Persistent kernel launched.\n";
 
-  uint64_t id =
-    submit_copy_task(kernel,
-                     dst_copy,
-                     src_copy,
-                     N * sizeof(float),
-                     DataType::Fp32);
+  uint64_t id = submit_copy_task(kernel, dst_copy, src_copy, N * sizeof(float),
+                                 DataType::Fp32);
 
   while (!kernel.is_done(id)) {
   }
   std::cout << "COPY DONE\n";
 
-  id = submit_reduce_task(kernel,
-                        dst_reduce,
-                        src_reduce,
-                        N * sizeof(float),
-                        DataType::Fp32,
-                        ReduceType::Sum);
+  id = submit_reduce_task(kernel, dst_reduce, src_reduce, N * sizeof(float),
+                          DataType::Fp32, ReduceType::Sum);
 
   while (!kernel.is_done(id)) {
   }
   std::cout << "REDUCE DONE\n";
 
-  id =
-    submit_copy_task(kernel,
-                     dst_copy,
-                     src_copy,
-                     N * sizeof(float),
-                     DataType::Fp32);
+  id = submit_copy_task(kernel, dst_copy, src_copy, N * sizeof(float),
+                        DataType::Fp32);
 
   while (!kernel.is_done(id)) {
   }
@@ -140,10 +123,10 @@ int main() {
   std::cout << "Stop signal sent.\n";
 
   CK(gpuMemcpy(h_dst_copy.data(), dst_copy, N * sizeof(float),
-                gpuMemcpyDeviceToHost),
+               gpuMemcpyDeviceToHost),
      "D2H dst_copy");
   CK(gpuMemcpy(h_dst1.data(), dst_reduce, N * sizeof(float),
-                gpuMemcpyDeviceToHost),
+               gpuMemcpyDeviceToHost),
      "D2H dst_reduce");
 
   {
