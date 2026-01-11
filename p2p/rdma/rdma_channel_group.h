@@ -332,6 +332,8 @@ class SendChannelGroup : public ChannelGroup {
       chunk_req->from_rank_id = req->from_rank_id;
       chunk_req->to_rank_id = req->to_rank_id;
       chunk_req->wr_id = req->wr_id;
+      // Inherit the send type from the original request.
+      chunk_req->send_type = req->send_type;
       // Send the chunk
       if (postRequestOnChannel(chunk_req)) {
         LOG(INFO) << "SendChannelGroup: Sent chunk " << i << "/"
