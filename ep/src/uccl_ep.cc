@@ -611,7 +611,6 @@ class Buffer {
                                            num_ranks),
           num_nvl_bytes, low_latency_mode, d_handles, num_d2h_channel_addrs,
           atomic_buffer_ptr);
-
       // Synchronize total received tokens and tokens per expert
       if (num_worst_tokens > 0) {
         num_recv_tokens = num_worst_tokens;
@@ -880,7 +879,6 @@ class Buffer {
         config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4), num_ranks),
         num_nvl_bytes, false, low_latency_mode, d_handles,
         num_d2h_channel_addrs, atomic_buffer_ptr);
-
     // Assign bias pointers
     auto bias_opts =
         std::vector<std::optional<torch::Tensor>>({bias_0, bias_1});
