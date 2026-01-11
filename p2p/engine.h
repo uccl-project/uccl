@@ -64,8 +64,7 @@ struct FifoItem {
   uint32_t nmsgs;
   uint32_t rid;
   uint64_t idx;
-  uint32_t engine_offset;
-  char padding[28];
+  char padding[32];
 };
 static_assert(sizeof(struct FifoItem) == 64, "FifoItem size is not 64 bytes");
 inline void serialize_fifo_item(FifoItem const& item, char* buf) {
@@ -77,8 +76,7 @@ inline void serialize_fifo_item(FifoItem const& item, char* buf) {
   std::memcpy(buf + 16, &item.nmsgs, sizeof(uint32_t));
   std::memcpy(buf + 20, &item.rid, sizeof(uint32_t));
   std::memcpy(buf + 24, &item.idx, sizeof(uint64_t));
-  std::memcpy(buf + 32, &item.engine_offset, sizeof(uint32_t));
-  std::memcpy(buf + 36, &item.padding, sizeof(item.padding));
+  std::memcpy(buf + 32, &item.padding, sizeof(item.padding));
 }
 
 inline void deserialize_fifo_item(char const* buf, FifoItem* item) {
@@ -88,8 +86,7 @@ inline void deserialize_fifo_item(char const* buf, FifoItem* item) {
   std::memcpy(&item->nmsgs, buf + 16, sizeof(uint32_t));
   std::memcpy(&item->rid, buf + 20, sizeof(uint32_t));
   std::memcpy(&item->idx, buf + 24, sizeof(uint64_t));
-  std::memcpy(&item->engine_offset, buf + 32, sizeof(uint32_t));
-  std::memcpy(&item->padding, buf + 36, sizeof(item->padding));
+  std::memcpy(&item->padding, buf + 32, sizeof(item->padding));
 }
 
 struct P2PMhandle {
@@ -112,8 +109,7 @@ struct Conn {
 using FifoItem = uccl::FifoItem;
 
 class Endpoint {
-  uint64_t const kChunkSize = 1024 * 1024 * 1024;
-  static constexpr uint32_t kMaxInflightChunks = 8;
+  static constexpr uint32_t kMaxVector = 8;
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
 
