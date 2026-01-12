@@ -22,16 +22,7 @@ class NICEndpoint {
         send_id_(0),
         recv_id_(0) {
     if (gpu_index != INVALID_GPU) {
-      std::vector<size_t> actual_device_ids;
-      if (device_ids.size() == 0) {
-        actual_device_ids =
-            RdmaDeviceManager::instance().get_best_dev_idx(gpu_index);
-      } else {
-        actual_device_ids = device_ids;
-      }
-      initializeContexts(actual_device_ids);
-      LOG(INFO) << "NICEndpoint initialized with " << contexts_.size()
-                << " context(s) for GPU " << gpu_index;
+      initialize_rdma_ctx_for_gpu(gpu_index, device_ids);
     }
 
     oob_server_ = std::make_shared<EpollServer>(
@@ -368,19 +359,21 @@ class NICEndpoint {
     }
   }
 
-  int get_best_dev_idx(int gpu_idx) { return 0; }
-
-  bool initialize_engine_by_dev(int gpu_index, bool enable_p2p_listen) {
-    (void)enable_p2p_listen;
-
+  bool initialize_rdma_ctx_for_gpu(
+      int gpu_index,
+      std::vector<size_t> const& device_ids = std::vector<size_t>()) {
     gpu_index_ = gpu_index;
 
-    std::vector<size_t> device_ids =
-        RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_);
-
-    initializeContexts(device_ids);
+    std::vector<size_t> actual_device_ids;
+    if (device_ids.size() == 0) {
+      actual_device_ids =
+          RdmaDeviceManager::instance().get_best_dev_idx(gpu_index);
+    } else {
+      actual_device_ids = device_ids;
+    }
+    initializeContexts(actual_device_ids);
     LOG(INFO) << "NICEndpoint initialized with " << contexts_.size()
-              << " context(s) for GPU " << gpu_index_;
+              << " context(s) for GPU " << gpu_index;
 
     return true;
   }

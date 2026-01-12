@@ -130,13 +130,8 @@ inline void uccl_deregmr(RDMAEndPoint const& s, P2PMhandle* mhandle) {
   s->uccl_deregmr(mhandle->mr_array);
 }
 
-inline int get_best_dev_idx(RDMAEndPoint const& s, int gpu_idx) {
-  return s->get_best_dev_idx(gpu_idx);
-}
-
-inline bool initialize_engine_by_dev(RDMAEndPoint const& s, int dev,
-                                     bool enable_p2p_listen) {
-  return s->initialize_engine_by_dev(dev, enable_p2p_listen);
+inline bool initialize_rdma_ctx_for_gpu(RDMAEndPoint const& s, int dev) {
+  return s->initialize_rdma_ctx_for_gpu(dev);
 }
 
 inline void create_unified_p2p_socket(RDMAEndPoint const& s) {
