@@ -19,8 +19,6 @@
 #include <unistd.h>
 
 int const kMaxNumGPUs = 8;
-// Assume the local and remote GPUs have the same GPU-NIC mapping.
-uint8_t gpu_to_dev[kMaxNumGPUs] = {0};
 std::once_flag glog_init_once;
 constexpr uint32_t kGpuStreamId = 0;
 thread_local bool inside_python = false;
@@ -188,9 +186,7 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
 
   std::future<ConnID> uccl_conn_id_future = std::async(
       std::launch::async, [this, remote_gpu_idx, &ip_addr, remote_port]() {
-        return uccl_connect(ep_, gpu_to_dev[local_gpu_idx_], local_gpu_idx_,
-                            gpu_to_dev[remote_gpu_idx], remote_gpu_idx, ip_addr,
-                            remote_port);
+        return uccl_connect(ep_, remote_gpu_idx, ip_addr, remote_port);
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
@@ -212,7 +208,7 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
 
 std::vector<uint8_t> Endpoint::get_metadata() {
   std::string ip_str = uccl::get_oob_ip();
-  uint16_t port = get_p2p_listen_port(ep_, gpu_to_dev[local_gpu_idx_]);
+  uint16_t port = get_p2p_listen_port(ep_);
 
   bool is_ipv6 = ip_str.find(':') != std::string::npos;
   size_t ip_len = is_ipv6 ? 16 : 4;
@@ -247,7 +243,7 @@ std::vector<uint8_t> Endpoint::get_metadata() {
 std::vector<uint8_t> Endpoint::get_unified_metadata() {
   int idx = 0;
   std::string ip_str = uccl::get_oob_ip();
-  uint16_t port = get_p2p_listen_port(ep_, 0);
+  uint16_t port = get_p2p_listen_port(ep_);
 
   bool is_ipv6 = ip_str.find(':') != std::string::npos;
   size_t ip_len = is_ipv6 ? 16 : 4;
@@ -331,11 +327,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   }
   std::future<ConnID> uccl_conn_id_future =
       std::async(std::launch::async, [this, &ip_addr, &remote_gpu_idx]() {
-        auto dev_idx = gpu_to_dev[local_gpu_idx_];
-        auto p2p_listen_fd = get_p2p_listen_fd(ep_, dev_idx);
-        int remote_dev_idx;
-        return uccl_accept(ep_, dev_idx, p2p_listen_fd, local_gpu_idx_, ip_addr,
-                           &remote_dev_idx, &remote_gpu_idx);
+        return uccl_accept(ep_, ip_addr, &remote_gpu_idx);
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
@@ -373,8 +365,7 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   }
 
   P2PMhandle* mhandle = new P2PMhandle();
-  if (!uccl_regmr(ep_, gpu_to_dev[local_gpu_idx_], const_cast<void*>(data),
-                  size, 0, mhandle)) {
+  if (!uccl_regmr(ep_, const_cast<void*>(data), size, mhandle)) {
     return false;
   }
   {
@@ -404,8 +395,7 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
     uint64_t id = next_mr_id_.fetch_add(1);
     P2PMhandle* mhandle = new P2PMhandle();
 
-    if (!uccl_regmr(ep_, gpu_to_dev[local_gpu_idx_],
-                    const_cast<void*>(data_v[i]), size_v[i], 0, mhandle)) {
+    if (!uccl_regmr(ep_, const_cast<void*>(data_v[i]), size_v[i], mhandle)) {
       std::cerr << "[Endpoint::regv] registration failed at i=" << i << '\n';
       return false;
     }
