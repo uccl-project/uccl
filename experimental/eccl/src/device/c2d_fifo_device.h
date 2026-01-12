@@ -30,7 +30,7 @@ struct C2DDeviceHandle {
   /// Consume the task at tail (advance tail by 1).
   /// Only call after poll() returns non-null.
   MSCCLPP_DEVICE_INLINE void pop() {
-    atomicFetchAdd<uint64_t, scopeDevice>(tail, 1, memoryOrderRelaxed);
+    atomicFetchAdd<uint64_t, scopeDevice>(tail, 1, memoryOrderRelease);
   }
 #endif  // MSCCLPP_DEVICE_COMPILE
 };
