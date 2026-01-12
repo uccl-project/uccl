@@ -162,7 +162,7 @@ void Endpoint::initialize_engine() {
             << std::endl;
   // Initialize engine by fixed engine offset since we did lazy initialization
   numa_node_ = RdmaDeviceManager::instance().get_numa_node(local_gpu_idx_);
-  initialize_engine_by_dev(ep_, local_gpu_idx_, false);
+  initialize_rdma_ctx_for_gpu(ep_, local_gpu_idx_);
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
 
   send_unified_task_ring_ =
