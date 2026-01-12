@@ -28,29 +28,25 @@ static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
   return ureq->engine_idx;
 }
 
-inline ConnID uccl_connect(RDMAEndPoint const& s, int dev, int local_gpuidx,
-                           int remote_dev, int remote_gpuidx,
+inline ConnID uccl_connect(RDMAEndPoint const& s, int remote_gpuidx,
                            std::string remote_ip, uint16_t remote_port) {
-  return s->uccl_connect(dev, local_gpuidx, remote_dev, remote_gpuidx,
-                         remote_ip, remote_port);
+  return s->uccl_connect(remote_gpuidx, remote_ip, remote_port);
 }
-inline uint16_t get_p2p_listen_port(RDMAEndPoint const& s, int dev) {
-  return s->get_p2p_listen_port(dev);
-}
-
-inline int get_p2p_listen_fd(RDMAEndPoint const& s, int dev) {
-  return s->get_p2p_listen_fd(dev);
+inline uint16_t get_p2p_listen_port(RDMAEndPoint const& s) {
+  return s->get_p2p_listen_port();
 }
 
-inline ConnID uccl_accept(RDMAEndPoint const& s, int dev, int listen_fd,
-                          int local_gpuidx, std::string& remote_ip,
-                          int* remote_dev, int* remote_gpuidx) {
-  return s->uccl_accept(dev, listen_fd, local_gpuidx, remote_ip, remote_dev,
-                        remote_gpuidx);
+inline int get_p2p_listen_fd(RDMAEndPoint const& s) {
+  return s->get_p2p_listen_fd();
 }
 
-inline bool uccl_regmr(RDMAEndPoint const& s, int dev, void* data, size_t len,
-                       int type, struct P2PMhandle* mhandle) {
+inline ConnID uccl_accept(RDMAEndPoint const& s, std::string& remote_ip,
+                          int* remote_gpuidx) {
+  return s->uccl_accept(remote_ip, remote_gpuidx);
+}
+
+inline bool uccl_regmr(RDMAEndPoint const& s, void* data, size_t len,
+                       struct P2PMhandle* mhandle) {
   return s->uccl_regmr(data, len, mhandle->mr_array) >= 0;
 }
 

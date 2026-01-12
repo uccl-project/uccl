@@ -263,8 +263,7 @@ class NICEndpoint {
       rank_oob_meta_[rank_id] = meta_ptr;
     }
   }
-  ConnID uccl_connect(int dev, int local_gpuidx, int remote_dev,
-                      int remote_gpuidx, std::string remote_ip,
+  ConnID uccl_connect(int remote_gpuidx, std::string remote_ip,
                       uint16_t remote_port) {
     int32_t current_send_id = send_id_.fetch_add(1, std::memory_order_relaxed);
 
@@ -281,17 +280,11 @@ class NICEndpoint {
     return conn_id;
   };
 
-  inline uint16_t get_p2p_listen_port(int dev) {
-    return oob_server_->get_port();
-  };
+  inline uint16_t get_p2p_listen_port() { return oob_server_->get_port(); };
 
-  inline int get_p2p_listen_fd(int dev) {
-    return oob_server_->get_listen_fd();
-  };
+  inline int get_p2p_listen_fd() { return oob_server_->get_listen_fd(); };
 
-  inline ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
-                            std::string& remote_ip, int* remote_dev,
-                            int* remote_gpuidx) {
+  inline ConnID uccl_accept(std::string& remote_ip, int* remote_gpuidx) {
     AcceptedMeta accepted;
     uint64_t rank_id = 0;
 
@@ -327,9 +320,6 @@ class NICEndpoint {
     remote_ip = accepted.ip;
     if (remote_gpuidx != nullptr) {
       *remote_gpuidx = accepted.gpu_id;
-    }
-    if (remote_dev != nullptr) {
-      *remote_dev = 0;  // Default device
     }
 
     // Create and return ConnID
