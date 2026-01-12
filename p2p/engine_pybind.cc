@@ -8,7 +8,6 @@ struct InsidePythonGuard {
   InsidePythonGuard() { inside_python = true; }
   ~InsidePythonGuard() { inside_python = false; }
 };
-inline auto& deserialize_fifo_item = uccl::deserialize_fifo_item;
 
 PYBIND11_MODULE(p2p, m) {
   m.doc() = "P2P Engine - High-performance RDMA-based peer-to-peer transport";
@@ -361,6 +360,48 @@ PYBIND11_MODULE(p2p, m) {
           py::arg("conn_id"), py::arg("mr_id_v"), py::arg("ptr_v"),
           py::arg("size_v"), py::arg("meta_blob_v"), py::arg("num_iovs"))
       .def(
+          "readv_async",
+          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<uint64_t> ptr_v, std::vector<size_t> size_v,
+             py::list meta_blob_v, size_t num_iovs) {
+            if (mr_id_v.size() != num_iovs || ptr_v.size() != num_iovs ||
+                size_v.size() != num_iovs || py::len(meta_blob_v) != num_iovs) {
+              throw std::runtime_error(
+                  "All input vectors/lists must have length num_iovs");
+            }
+            std::vector<FifoItem> item_v;
+            item_v.reserve(num_iovs);
+            for (size_t i = 0; i < num_iovs; ++i) {
+              std::string buf = py::cast<py::bytes>(meta_blob_v[i]);
+              if (buf.size() != sizeof(FifoItem))
+                throw std::runtime_error(
+                    "meta must be exactly 64 bytes (serialized FifoItem)");
+              FifoItem item;
+              deserialize_fifo_item(buf.data(), &item);
+              item_v.push_back(item);
+            }
+            std::vector<void*> data_v;
+            data_v.reserve(num_iovs);
+            for (size_t i = 0; i < num_iovs; ++i) {
+              data_v.push_back(reinterpret_cast<void*>(ptr_v[i]));
+            }
+            uint64_t transfer_id;
+            bool ok;
+            {
+              py::gil_scoped_release release;
+              InsidePythonGuard guard;
+              ok = self.readv_async(conn_id, mr_id_v, data_v, size_v, item_v,
+                                    num_iovs, &transfer_id);
+            }
+            return py::make_tuple(ok, transfer_id);
+          },
+          "RDMA-READ into multiple local buffers asynchronously using metadata "
+          "from advertisev(); "
+          "`meta_blob_v` is a list of 64-byte serialized FifoItem returned by "
+          "the peer",
+          py::arg("conn_id"), py::arg("mr_id_v"), py::arg("ptr_v"),
+          py::arg("size_v"), py::arg("meta_blob_v"), py::arg("num_iovs"))
+      .def(
           "write",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size, py::bytes meta_blob) {
@@ -447,6 +488,48 @@ PYBIND11_MODULE(p2p, m) {
           },
           "RDMA-WRITE into multiple remote buffers using metadata from "
           "advertisev(); "
+          "`meta_blob_v` is a list of 64-byte serialized FifoItem returned by "
+          "the peer",
+          py::arg("conn_id"), py::arg("mr_id_v"), py::arg("ptr_v"),
+          py::arg("size_v"), py::arg("meta_blob_v"), py::arg("num_iovs"))
+      .def(
+          "writev_async",
+          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+             std::vector<uint64_t> ptr_v, std::vector<size_t> size_v,
+             py::list meta_blob_v, size_t num_iovs) {
+            if (mr_id_v.size() != num_iovs || ptr_v.size() != num_iovs ||
+                size_v.size() != num_iovs || py::len(meta_blob_v) != num_iovs) {
+              throw std::runtime_error(
+                  "All input vectors/lists must have length num_iovs");
+            }
+            std::vector<FifoItem> item_v;
+            item_v.reserve(num_iovs);
+            for (size_t i = 0; i < num_iovs; ++i) {
+              std::string buf = py::cast<py::bytes>(meta_blob_v[i]);
+              if (buf.size() != sizeof(FifoItem))
+                throw std::runtime_error(
+                    "meta must be exactly 64 bytes (serialized FifoItem)");
+              FifoItem item;
+              deserialize_fifo_item(buf.data(), &item);
+              item_v.push_back(item);
+            }
+            std::vector<void*> data_v;
+            data_v.reserve(num_iovs);
+            for (size_t i = 0; i < num_iovs; ++i) {
+              data_v.push_back(reinterpret_cast<void*>(ptr_v[i]));
+            }
+            uint64_t transfer_id;
+            bool ok;
+            {
+              py::gil_scoped_release release;
+              InsidePythonGuard guard;
+              ok = self.writev_async(conn_id, mr_id_v, data_v, size_v, item_v,
+                                     num_iovs, &transfer_id);
+            }
+            return py::make_tuple(ok, transfer_id);
+          },
+          "RDMA-WRITE into multiple remote buffers asynchronously using "
+          "metadata from advertisev(); "
           "`meta_blob_v` is a list of 64-byte serialized FifoItem returned by "
           "the peer",
           py::arg("conn_id"), py::arg("mr_id_v"), py::arg("ptr_v"),

@@ -98,19 +98,27 @@ def _run_client(args, ep, remote_metadata):
 
         # Warmup
         if args.async_api:
-            if args.mode == "write":
-                ok, transfer_id = ep.write_async(
-                    conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0]
-                )
-            else:  # read
-                ok, transfer_id = ep.read_async(
-                    conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0]
-                )
-            assert ok
-            is_done = False
-            while not is_done:
-                ok, is_done = ep.poll_async(transfer_id)
+            transfer_ids = []
+            for i in range(args.num_iovs):
+                if args.mode == "write":
+                    ok, transfer_id = ep.write_async(
+                        conn_id, mr_id_v[i], ptr_v[i], size_v[i], fifo_blob_v[i]
+                    )
+                else:  # read
+                    ok, transfer_id = ep.read_async(
+                        conn_id, mr_id_v[i], ptr_v[i], size_v[i], fifo_blob_v[i]
+                    )
                 assert ok
+                transfer_ids.append(transfer_id)
+            # Poll all transfers until done
+            while transfer_ids:
+                remaining_ids = []
+                for transfer_id in transfer_ids:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok
+                    if not is_done:
+                        remaining_ids.append(transfer_id)
+                transfer_ids = remaining_ids
         else:
             if args.mode == "write":
                 ep.writev(conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs)
@@ -122,19 +130,19 @@ def _run_client(args, ep, remote_metadata):
         for _ in range(args.iters):
             if args.async_api:
                 if args.mode == "write":
-                    ok, transfer_id = ep.write_async(
-                        conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0]
+                    ok, transfer_id = ep.writev_async(
+                        conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs
                     )
                 else:  # read
-                    ok, transfer_id = ep.read_async(
-                        conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0]
+                    ok, transfer_id = ep.readv_async(
+                        conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs
                     )
                 assert ok
                 is_done = False
                 while not is_done:
                     ok, is_done = ep.poll_async(transfer_id)
                     assert ok
-                total += size_v[0]
+                total += sum(size_v)
             else:
                 if args.mode == "write":
                     ep.writev(
@@ -209,9 +217,6 @@ def main():
         help="Number of iovs to read/write in a single call",
     )
     args = p.parse_args()
-
-    if args.async_api:
-        assert args.num_iovs == 1, "Async transfers only support one iov"
 
     print(f"Mode: {args.mode.upper()}")
     print("Sizes:", ", ".join(_pretty(s) for s in args.sizes))
