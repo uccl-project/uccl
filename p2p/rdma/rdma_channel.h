@@ -49,15 +49,13 @@ class RDMAChannel {
         remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)),
         impl_(createRDMAChannelImpl()) {
     initQP();
-    ah_ = ctx_->createAH(remote_meta_->gid);
-    impl_->connectQP(qp_, ctx_, *remote_meta_);
-    UCCL_LOG_EP << "RDMAChannel connected to remote qpn=" << remote_meta.qpn;
+    establishChannel(remote_meta);
   }
 
   RDMAChannel(RDMAChannel const&) = delete;
   RDMAChannel& operator=(RDMAChannel const&) = delete;
 
-  void connect(ChannelMetaData const& remote_meta) {
+  void establishChannel(ChannelMetaData const& remote_meta) {
     remote_meta_ = std::make_shared<ChannelMetaData>(remote_meta);
     ah_ = ctx_->createAH(remote_meta_->gid);
     impl_->connectQP(qp_, ctx_, *remote_meta_);

@@ -566,7 +566,7 @@ class NICEndpoint {
     MetaInfoToExchange response_meta =
         deserialize<MetaInfoToExchange>(response);
     LOG(INFO) << response_meta;
-    channel->connect(response_meta.channel_meta);
+    channel->establishChannel(response_meta.channel_meta);
     return response_meta.rank_id;
   }
 
