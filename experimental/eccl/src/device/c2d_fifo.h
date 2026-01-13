@@ -49,6 +49,5 @@ class CpuToGpuFifo {
   };
   std::unique_ptr<Impl> pimpl_;
 };
-template class CpuToGpuFifo<eccl::Task>;
 
 }  // namespace mscclpp

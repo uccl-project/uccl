@@ -16,11 +16,11 @@ COMMON_CPP := c2d_fifo.cc
 COMMON_CU  := operator.cu
 
 TEST_SRC   := test_persistent.cc
-BENCH_SRC  := bench_fifo.cc
+BENCH_SRC  := bench_fifo.cu
 
 COMMON_OBJ := $(COMMON_CPP:.cc=.o) $(COMMON_CU:.cu=.o)
 TEST_OBJ   := $(TEST_SRC:.cc=.o)
-BENCH_OBJ  := $(BENCH_SRC:.cc=.o)
+BENCH_OBJ  := $(BENCH_SRC:.cu=.o)
 
 TEST_BIN  := test_persistent
 BENCH_BIN := bench_fifo

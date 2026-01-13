@@ -7,6 +7,8 @@
 
 namespace mscclpp {
 
+template class CpuToGpuFifo<eccl::Task>;
+
 template <typename T>
 CpuToGpuFifo<T>::CpuToGpuFifo(int size) {
   int device;
@@ -79,18 +81,12 @@ uint64_t CpuToGpuFifo<T>::push(InputIt first, InputIt last) {
   size_t secondPart = count - firstPart;
 
   if (firstPart > 0) {
-    MSCCLPP_CUDATHROW(gpuMemcpy(
-        devBuf + start,
-        &*first,
-        sizeof(T) * firstPart,
-        gpuMemcpyHostToDevice));
+    MSCCLPP_CUDATHROW(gpuMemcpy(devBuf + start, &*first, sizeof(T) * firstPart,
+                                gpuMemcpyHostToDevice));
   }
   if (secondPart > 0) {
-    MSCCLPP_CUDATHROW(gpuMemcpy(
-        devBuf,
-        &*(first + firstPart),
-        sizeof(T) * secondPart,
-        gpuMemcpyHostToDevice));
+    MSCCLPP_CUDATHROW(gpuMemcpy(devBuf, &*(first + firstPart),
+                                sizeof(T) * secondPart, gpuMemcpyHostToDevice));
   }
 
   //   __sync_synchronize();

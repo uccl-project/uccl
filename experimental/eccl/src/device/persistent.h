@@ -119,6 +119,8 @@ class PersistentKernel {
             case TaskType::MoeCombine:
               eccl::TaskManager::instance().free_moe_args(p.argsId);
               break;
+            case TaskType::BenchNop:
+              break;
             default:
               break;
           }

@@ -107,10 +107,11 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T> fifo,
     const uint32_t idx = task->args_index();
     const CollArgs a = d_coll[idx];
 
-    if (threadIdx.x == 0) {
-      printf("task args_id=%u type=%d dtype=%d red=%d bytes=%u\n", idx, int(ttype),
-             int(dtype), int(a.redType), a.bytes);
-    }
+    // if (threadIdx.x == 0) {
+    //   printf("task args_id=%u type=%d dtype=%d red=%d bytes=%u\n", idx,
+    //   int(ttype),
+    //          int(dtype), int(a.redType), a.bytes);
+    // }
 
     switch (ttype) {
       case TaskType::CollCopy: {
