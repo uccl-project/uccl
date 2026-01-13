@@ -4,10 +4,6 @@
 
 namespace eccl {
 
-static __device__ __forceinline__ uint32_t decode_wpt(uint32_t encoded_wpt) {
-  return encoded_wpt + 1u;
-}
-
 template <typename T>
 __device__ __forceinline__ T apply_red(ReduceType op, T a, T b) {
   if (op == ReduceType::Sum) return a + b;
