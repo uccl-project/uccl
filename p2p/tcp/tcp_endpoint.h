@@ -1,8 +1,13 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
+#include <nccl.h>
 #include <transport.h>  // For uccl::ConnID, uccl::FifoItem, uccl::ucclRequest.
 
 namespace tcp {
@@ -61,9 +66,29 @@ class TCPEndpoint {
   void create_unified_p2p_socket() {}
 
  private:
+  struct Conn;
+  struct AsyncHandle;
+
+  bool setup_listener_(uint16_t port);
+  bool send_all_(int fd, void const* buf, size_t len) const;
+  bool recv_all_(int fd, void* buf, size_t len) const;
+  bool init_comm_(Conn& conn, ncclUniqueId const& uid, int comm_index);
+  bool init_comms_(Conn& conn, ncclUniqueId const& uid_rank0,
+                   ncclUniqueId const& uid_rank1);
+  int comm_index_for_send_(Conn const& conn) const;
+  int comm_index_for_recv_(Conn const& conn) const;
+  bool send_internal_(Conn& conn, void const* data, size_t size,
+                      int comm_index, uccl::ucclRequest* ureq);
+  bool recv_internal_(Conn& conn, void* data, size_t size, int comm_index,
+                      uccl::ucclRequest* ureq);
+  void cleanup_conn_(Conn& conn);
+
   int gpu_index_;
   uint16_t listen_port_;
   int listen_fd_;
+  std::atomic<uint64_t> next_flow_id_{1};
+  std::mutex conn_mu_;
+  std::unordered_map<uint64_t, std::unique_ptr<Conn>> conn_map_;
 };
 
 }  // namespace tcp
