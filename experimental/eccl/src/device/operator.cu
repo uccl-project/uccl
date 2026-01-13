@@ -108,7 +108,7 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T> fifo,
     const CollArgs a = d_coll[idx];
 
     if (threadIdx.x == 0) {
-      printf("task %u type=%d dtype=%d red=%d bytes=%u\n", idx, int(ttype),
+      printf("task args_id=%u type=%d dtype=%d red=%d bytes=%u\n", idx, int(ttype),
              int(dtype), int(a.redType), a.bytes);
     }
 
