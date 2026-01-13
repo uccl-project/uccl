@@ -14,6 +14,7 @@ sudo apt update
 sudo apt install -y build-essential net-tools libelf-dev libibverbs-dev \
                     libgoogle-glog-dev libgtest-dev libgflags-dev libaio-dev \
                     python3-dev pybind11-dev python3-pip python3-pybind11
+sudo apt install -y libaio-dev # nixl need this for POXIS
 
 cd $UCCL_HOME/thirdparty/nccl
 git checkout v2.18.5-1
@@ -67,7 +68,7 @@ export NCCL_DEBUG=WARN # INFO
 export NCCL_DEBUG_SUBSYS=ENV
 
 # Nixl plugin config
-export NIXL_PLUGIN_DIR=$UCCL_HOME/thirdparty/nixl/build/src/plugins/uccl_p2p
+export NIXL_PLUGIN_DIR=$UCCL_HOME/thirdparty/nixl/build/src/plugins/uccl
 # export NIXL_LOG_LEVEL=debug
 ```
 
@@ -77,11 +78,12 @@ export NIXL_PLUGIN_DIR=$UCCL_HOME/thirdparty/nixl/build/src/plugins/uccl_p2p
 cd $UCCL_HOME/thirdparty/
 git clone https://github.com/ai-dynamo/nixl.git
 cd nixl
-git fetch origin pull/895/head
-git checkout -b uccl FETCH_HEAD
 
-meson setup build -Ddisable_uccl_p2p_backend=false
-ninja -C build src/plugins/uccl_p2p/libplugin_UCCL_P2P.so
+meson setup build # nixl auto-detect the backend's library.
+cd build
+ninja
+ninja install
+sudo ldconfig
 
 pip uninstall -y nixl
 python -m pip install --no-cache-dir "nixl[cu12]"
@@ -94,16 +96,16 @@ python -m pip install --no-cache-dir "nixl[cu12]"
 cd $UCCL_HOME/p2p
 
 # Server (node A)
-python benchmarks/benchmark_nixl.py --backend uccl_p2p --role server --sizes 67108864 --iters 10 --op-type read
+python benchmarks/benchmark_nixl.py --backend uccl --role server --sizes 67108864 --iters 10 --op-type read
 
 # Client (node B, set server IP)
-python benchmarks/benchmark_nixl.py --backend uccl_p2p --role client --sizes 67108864 --iters 10 --remote-ip=10.65.66.199 --op-type read
+python benchmarks/benchmark_nixl.py --backend uccl --role client --sizes 67108864 --iters 10 --remote-ip=10.65.27.236 --op-type read
 
 # 8 GPUs Server (node A)
 python benchmarks/benchmark_nixl_8gpu.py --role server
 
 # 8 GPUs Client (node B, set server IP)
-python benchmarks/benchmark_nixl_8gpu.py --role client --server-ip 10.65.66.199
+python benchmarks/benchmark_nixl_8gpu.py --role client --server-ip 10.65.27.236
 ```
 
 ## Performance
