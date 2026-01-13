@@ -1,0 +1,127 @@
+#!/bin/bash
+###############################################################################
+# Copyright (c) 2025, Advanced Micro Devices, Inc. All rights reserved.
+#
+# See LICENSE for license information.
+###############################################################################
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+export PRIMUS_PATH=${PRIMUS_PATH:-"${script_dir}/../../../thirdparty/Primus"}
+export MODEL_NAME=${MODEL_NAME:-llama3.1_8B}
+export GPU_ARCH=${GPU_ARCH:-"MI300X"}
+export EXP="${PRIMUS_PATH}/examples/megatron/configs/${GPU_ARCH}/${MODEL_NAME}-BF16-pretrain.yaml"
+###################### Training Docker and Variables ##########################
+export DOCKER_IMAGE=${DOCKER_IMAGE:-""}
+export HF_TOKEN=${HF_TOKEN:-"your_hf_token"}
+export CLEAN_DOCKER_CONTAINER=1
+
+######################## Cluster Settings ###############################
+export NNODES=${NNODES:-1}
+export NODE_LISTS=${NODE_LISTS:-""}
+export USING_AINIC=${USING_AINIC:-0}
+export SOCKET_IFNAME=
+export NCCL_SOCKET_IFNAME=${SOCKET_IFNAME}
+export GLOO_SOCKET_IFNAME=${SOCKET_IFNAME}
+
+########################### Training Config ###################################
+export MBS=${MBS:-8}
+export GBS=${GBS:-256}
+export TP=${TP:-1}
+export PP=${PP:-1}
+export EP=${EP:-1}
+export ETP=${ETP:-1}
+export CP=${CP:-1}
+export VPP=${VPP:-1}
+export SEQ_LENGTH=${SEQ_LENGTH:-4096}
+export LOG_AVG_SKIP_ITERATIONS=${LOG_AVG_SKIP_ITERATIONS:-2}
+export RECOMPUTE_LAYERS=${RECOMPUTE_LAYERS:-0}
+export LEGACY_GG=${LEGACY_GG:-False}
+export TRAIN_ITERS=${TRAIN_ITERS:-10}
+export VPP=${VPP:-1}
+export PROFILE=${PROFILE:-False}
+
+# Optional pipeline layout: if PIPELINE_LAYOUT is set externally, pass it through;
+# otherwise do not configure pipeline_model_parallel_layout at all.
+PIPELINE_LAYOUT=${PIPELINE_LAYOUT:-""}
+
+########################### Feature Config ###################################
+
+# Primus Turbo performance optimization: enable turbo attention and grouped_mlp for better throughput
+FEATURE_ARGS=(
+    --enable_primus_turbo "False"
+    --use_turbo_attention "False"
+    --use_turbo_grouped_mlp "False"
+)
+
+if [ -n "$PIPELINE_LAYOUT" ]; then
+	FEATURE_ARGS+=("--pipeline_model_parallel_layout" "$PIPELINE_LAYOUT")
+elif [ "$VPP" -gt 1 ]; then
+	FEATURE_ARGS+=("--num_virtual_stages_per_pipeline_rank" "$VPP")
+fi
+
+###################### Training Launch Config #################################
+export HSA_NO_SCRATCH_RECLAIM=1
+export NVTE_CK_USES_BWD_V3=1
+
+export NUMA_BINDING=${NUMA_BINDING:-False}
+if [ "$NUMA_BINDING" = "True" ]; then
+	export ENABLE_NUMA_BINDING=1
+	export HSA_KERNARG_POOL_SIZE=12582912
+fi
+
+####################### Training Experiments ##################################
+export PRIMUS_TEAM="date-$(date +%Y%m%d)"
+export PRIMUS_EXP_NAME="${MODEL_NAME}_${GPU_ARCH}_NNODES${NNODES}_MBS${MBS}_GBS${GBS}_TP${TP}_PP${PP}_VPP${VPP}_EP${EP}_ETP${ETP}_CP${CP}"
+
+LOG_DIR=./output/$PRIMUS_TEAM/$PRIMUS_EXP_NAME
+export LOG_FILE=$LOG_DIR/training.log
+export EXPORT_CONFIG=$LOG_DIR/config.yaml
+mkdir -p "$LOG_DIR"
+
+########################## Training Job #######################################
+
+run_primus_cli() {
+	pushd "${PRIMUS_PATH}"
+
+	if [ "$NNODES" -eq 1 ]; then
+		if [ -n "$DOCKER_IMAGE" ]; then
+			bash runner/primus-cli container \
+				--image "${DOCKER_IMAGE}" "$@"
+		else
+			bash runner/primus-cli direct "$@"
+		fi
+	else
+		bash runner/primus-cli slurm \
+			-N "${NNODES}" \
+			--image "${DOCKER_IMAGE}" \
+			--nodelist "${NODE_LISTS}" "$@"
+	fi
+	popd
+}
+
+
+run_primus_cli -- train pretrain --config "${EXP}" \
+	--log_file "$LOG_FILE" \
+	--micro_batch_size "$MBS" \
+	--global_batch_size "$GBS" \
+	--seq_length "$SEQ_LENGTH" \
+	--tensor_model_parallel_size "$TP" \
+	--pipeline_model_parallel_size "$PP" \
+	--num_virtual_stages_per_pipeline_rank "$VPP" \
+	--expert_model_parallel_size "$EP" \
+	--expert_tensor_parallel_size "$ETP" \
+	--context_parallel_size "$CP" \
+	--moe_use_legacy_grouped_gemm "$LEGACY_GG" \
+	--recompute_granularity "full" \
+	--recompute_method "block" \
+	--recompute_num_layers "${RECOMPUTE_LAYERS}" \
+	--cross_entropy_fusion_impl "te" \
+	--cross_entropy_loss_fusion "True" \
+	--log_avg_skip_iterations "$LOG_AVG_SKIP_ITERATIONS" \
+	--profile "${PROFILE}" \
+	--use_pytorch_profiler "${PROFILE}" \
+	--profile_step_start 3 \
+	--profile_step_end 5 \
+	"${FEATURE_ARGS[@]}" \
+	--train_iters "$TRAIN_ITERS" "$@"
