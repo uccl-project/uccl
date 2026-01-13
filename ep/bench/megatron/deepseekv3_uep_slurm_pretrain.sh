@@ -12,5 +12,10 @@ export MODEL_NAME=deepseek_v3
 export EP=8
 export PP=1
 export NNODES=1
+export NODE_LISTS=""
+export DOCKER_IMAGE="docker.io/rocm/primus:v25.11"
 
-bash "${SCRIPT_DIR}"/run_pretrain_cli.sh --moe_token_dispatcher_type alltoall
+bash "${SCRIPT_DIR}"/run_pretrain_cli.sh --moe_token_dispatcher_type "flex" \
+										 --moe_enable_deepep "True" \
+										 --moe_shared_expert_overlap "False" \
+										 --moe_router_dtype "fp32" 

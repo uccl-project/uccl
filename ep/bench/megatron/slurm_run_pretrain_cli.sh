@@ -10,9 +10,9 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PRIMUS_PATH=${PRIMUS_PATH:-"${script_dir}/../../../thirdparty/Primus"}
 export MODEL_NAME=${MODEL_NAME:-llama3.1_8B}
 export GPU_ARCH=${GPU_ARCH:-"MI300X"}
-export EXP="${PRIMUS_PATH}/examples/megatron/configs/${GPU_ARCH}/${MODEL_NAME}-BF16-pretrain.yaml"
+export EXP="examples/megatron/configs/${GPU_ARCH}/${MODEL_NAME}-BF16-pretrain.yaml"
 ###################### Training Docker and Variables ##########################
-export DOCKER_IMAGE=${DOCKER_IMAGE:-""}
+export DOCKER_IMAGE=${DOCKER_IMAGE:-"docker.io/rocm/primus:v25.11"}
 export HF_TOKEN=${HF_TOKEN:-"your_hf_token"}
 export CLEAN_DOCKER_CONTAINER=1
 
@@ -74,7 +74,7 @@ fi
 export PRIMUS_TEAM="date-$(date +%Y%m%d)"
 export PRIMUS_EXP_NAME="${MODEL_NAME}_${GPU_ARCH}_NNODES${NNODES}_MBS${MBS}_GBS${GBS}_TP${TP}_PP${PP}_VPP${VPP}_EP${EP}_ETP${ETP}_CP${CP}"
 
-LOG_DIR=./output/$PRIMUS_TEAM/$PRIMUS_EXP_NAME
+LOG_DIR=${script_dir}/output/$PRIMUS_TEAM/$PRIMUS_EXP_NAME
 export LOG_FILE=$LOG_DIR/training.log
 export EXPORT_CONFIG=$LOG_DIR/config.yaml
 mkdir -p "$LOG_DIR"
@@ -84,25 +84,19 @@ mkdir -p "$LOG_DIR"
 run_primus_cli() {
 	pushd "${PRIMUS_PATH}"
 
-	if [ "$NNODES" -eq 1 ]; then
-		if [ -n "$DOCKER_IMAGE" ]; then
-			bash runner/primus-cli container \
-				--image "${DOCKER_IMAGE}" "$@"
-		else
-			bash runner/primus-cli direct "$@"
-		fi
-	else
-		bash runner/primus-cli slurm \
-			-N "${NNODES}" \
-			--image "${DOCKER_IMAGE}" \
-			--nodelist "${NODE_LISTS}" "$@"
-	fi
+	bash runner/primus-cli slurm \
+		-N "${NNODES}" \
+		--nodelist "${NODE_LISTS}" \
+		-- --image "${DOCKER_IMAGE}" \
+		--volume $script_dir:$script_dir \
+		"$@"
+
 	popd
 }
 
 
-run_primus_cli -- train pretrain --config "${EXP}" \
-	--log_file "$LOG_FILE" \
+run_primus_cli -- --log_file "$LOG_FILE"  train pretrain \
+	--config "${EXP}" \
 	--micro_batch_size "$MBS" \
 	--global_batch_size "$GBS" \
 	--seq_length "$SEQ_LENGTH" \
