@@ -55,8 +55,8 @@ LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
 P2P_PYTHON_EXT   := p2p$(PYEXT)
 P2P_SHARED_LIB := libuccl_p2p.so
 RDMA_PLUGIN_LIB := librdma_plugin.a
-SOURCES := engine.cc engine_pybind.cc tcp/tcp_endpoint.cc tcp/tcp_worker_pool.cc
-OBJECTS := engine.o engine_pybind.o tcp/tcp_endpoint.o tcp/tcp_worker_pool.o
+SOURCES := engine.cc engine_pybind.cc tcp/tcp_endpoint.cc
+OBJECTS := engine.o engine_pybind.o tcp/tcp_endpoint.o
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)

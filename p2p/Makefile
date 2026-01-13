@@ -63,6 +63,14 @@ INCDIR ?= $(PREFIX)/include
 
 LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LIBS2)
 
+ifeq ($(USE_TCP),1)
+NCCL_HOME ?= ../thirdparty/nccl/build
+NCCL_INC  ?= $(NCCL_HOME)/include
+NCCL_LIB  ?= $(NCCL_HOME)/lib
+CXXFLAGS  += -I$(NCCL_INC)
+LDFLAGS   += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
+endif
+
 # Target and source files
 P2P_PYTHON_EXT := p2p$(PYEXT)
 P2P_SHARED_LIB := libuccl_p2p.so
@@ -81,8 +89,8 @@ CXXFLAGS += -DUCCL_P2P_USE_TCPX -I$(NCCL_INC)
 LDFLAGS  += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
 OBJECTS := $(CORE_OBJECTS)
 else
-SOURCES := engine.cc engine_pybind.cc tcp/tcp_endpoint.cc tcp/tcp_worker_pool.cc
-CORE_OBJECT := engine.o tcp/tcp_endpoint.o tcp/tcp_worker_pool.o
+SOURCES := engine.cc engine_pybind.cc tcp/tcp_endpoint.cc
+CORE_OBJECT := engine.o tcp/tcp_endpoint.o
 endif
 
 ifeq ($(USE_TCPX),1)
