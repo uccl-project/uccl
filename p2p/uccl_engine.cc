@@ -429,7 +429,7 @@ int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
   if (!conn || !mr || !data) return -1;
 
 #ifdef UCCL_P2P_USE_TCPX
-  return -1; // TODO: support write_rc for TCPX
+  return -1;  // TODO: support write_rc for TCPX
 #else
   FifoItem slot_item;
   slot_item = *static_cast<FifoItem*>(slot_item_ptr);
