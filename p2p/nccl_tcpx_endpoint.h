@@ -43,6 +43,7 @@ class Endpoint {
   bool advertise(uint64_t conn_id, uint64_t mr_id, void const* addr, size_t len,
                  void* out_buf);
 
+  bool deal_out_buf(uint64_t conn_id, char* out_buf);
   bool queue_read_response(uint64_t conn_id, FifoItem const& fifo_item);
   bool read_async(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                   FifoItem const& slot_item, uint64_t* transfer_id);
