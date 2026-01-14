@@ -27,9 +27,9 @@ static void print_latency(std::vector<uint64_t>& v) {
 
 int main() {
   constexpr int fifo_cap = 1024;
-  constexpr int warmup = 1000;
+  constexpr int warmup = 100;
   constexpr int latency_iters = 10000;
-  constexpr int throughput_iters = 1'000'000;
+  constexpr int throughput_iters = 100'000;
 
   printf("FIFO benchmark via PersistentKernel\n");
 
@@ -81,7 +81,7 @@ int main() {
   uint64_t t1 = now_ns();
   double sec = (t1 - t0) * 1e-9;
 
-  printf("Throughput: %.2f M tasks/s\n", throughput_iters / sec / 1e6);
+  printf("Throughput: %.2f K tasks/s\n", throughput_iters / sec / 1e3);
 
   kernel.stop();
   printf("Done.\n");

@@ -97,6 +97,11 @@ uint64_t CpuToGpuFifo<T>::push(InputIt first, InputIt last) {
 }
 
 template <typename T>
+uint64_t CpuToGpuFifo<T>::head() const {
+  return atomicLoad(pimpl_->head.get(), memoryOrderRelaxed);
+}
+
+template <typename T>
 uint64_t CpuToGpuFifo<T>::currentId() const {
   // Load tail with acquire to see latest GPU updates
   uint64_t* tail_host = detail::getGdrHostPtr(pimpl_->tail);
@@ -108,9 +113,8 @@ uint64_t CpuToGpuFifo<T>::currentId() const {
 
 template <typename T>
 void CpuToGpuFifo<T>::sync(uint64_t taskId) const {
-  while (currentId() <= taskId) {
+  while ((int64_t)(currentId() - taskId) <= 0) {
     std::this_thread::yield();
-    // std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 }
 

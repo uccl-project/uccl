@@ -22,6 +22,7 @@ class CpuToGpuFifo {
   template <typename InputIt>
   uint64_t push(InputIt first, InputIt last);
 
+  uint64_t head() const;
   /// For checking whether a specific Task is popped from the FIFO.
   uint64_t currentId() const;
 
