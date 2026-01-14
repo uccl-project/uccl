@@ -83,7 +83,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
-Endpoint::Endpoint(uint32_t const num_cpus) : num_cpus_(num_cpus) {
+Endpoint::Endpoint(uint32_t const num_cpus) : local_gpu_idx_(INVALID_GPU), num_cpus_(num_cpus) {
   std::cout << "Creating Engine with CPUs: " << num_cpus << std::endl;
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
 
@@ -157,19 +157,25 @@ void Endpoint::initialize_engine() {
     GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i], gpuStreamNonBlocking));
   }
 
-  // Initialize the engine based on the GPU index.
-  std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
-            << std::endl;
-  // Initialize engine by fixed engine offset since we did lazy initialization
   numa_node_ = RdmaDeviceManager::instance().get_numa_node(local_gpu_idx_);
+  
+  // Initialize rdma contexts for devices used by the GPU
   initialize_rdma_ctx_for_gpu(ep_, local_gpu_idx_);
-  std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
+  std::cout << "Lazy creation of engine for GPU " << local_gpu_idx_
+            << std::endl;
 
+  // Initialize task rings
   send_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
   recv_unified_task_ring_ =
+<<<<<<< HEAD
       uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
 
+=======
+      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+  
+  // Initialize proxy threads
+>>>>>>> cb460cea (Nits.)
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
@@ -183,6 +189,8 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
             << " via port " << remote_port << std::endl;
   // Create a new connection ID
   conn_id = next_conn_id_.fetch_add(1);
+
+  assert(local_gpu_idx_ != INVALID_GPU);
 
   std::future<ConnID> uccl_conn_id_future = std::async(
       std::launch::async, [this, remote_gpu_idx, &ip_addr, remote_port]() {
@@ -317,6 +325,8 @@ std::tuple<std::string, uint16_t, int> Endpoint::parse_metadata(
 bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
   std::cout << "Waiting to accept incoming connection..." << std::endl;
+
+  assert(local_gpu_idx_ != INVALID_GPU);
 
   // For demo purposes, simulate accepted connection
   conn_id = next_conn_id_.fetch_add(1);
