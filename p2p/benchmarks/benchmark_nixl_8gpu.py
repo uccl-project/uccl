@@ -45,7 +45,7 @@ DEFAULT_SIZES = [
 
 NUM_KV = 1
 BACKEND = "UCCL"
-OP = "WRITE"
+OP = "READ"  # WRITE
 ITERS = 10
 
 
