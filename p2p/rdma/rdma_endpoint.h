@@ -258,6 +258,8 @@ class NICEndpoint {
                       uint16_t remote_port) {
     int32_t current_send_id = send_id_.fetch_add(1, std::memory_order_relaxed);
 
+    assert(gpu_index_ != INVALID_GPU);
+
     add_rank_oob_meta({{current_send_id, std::make_shared<OOBMetaData>(
                                              remote_ip, remote_port)}});
     LOG(INFO) << "remote_gpuidx: " << remote_gpuidx
@@ -278,6 +280,8 @@ class NICEndpoint {
   inline ConnID uccl_accept(std::string& remote_ip, int* remote_gpuidx) {
     AcceptedMeta accepted;
     uint64_t rank_id = 0;
+
+    assert(gpu_index_ != INVALID_GPU);
 
     // Block until there's an accepted connection
     while (true) {
@@ -363,7 +367,8 @@ class NICEndpoint {
       int gpu_index,
       std::vector<size_t> const& device_ids = std::vector<size_t>()) {
     gpu_index_ = gpu_index;
-
+    
+    // Find all devices used by the GPU
     std::vector<size_t> actual_device_ids;
     if (device_ids.size() == 0) {
       actual_device_ids =
@@ -371,6 +376,7 @@ class NICEndpoint {
     } else {
       actual_device_ids = device_ids;
     }
+
     initializeContexts(actual_device_ids);
     LOG(INFO) << "NICEndpoint initialized with " << contexts_.size()
               << " context(s) for GPU " << gpu_index;

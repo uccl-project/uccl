@@ -117,6 +117,7 @@ class RdmaDeviceManager {
         selected_nic_names.push_back(dist.front().first);
       } else {
         auto strategy = createDeviceSelectionStrategy();
+        // Select NICs based on the strategy among candidates
         auto selected = strategy->selectNICs(candidates, gpu_idx);
         selected_nic_names.insert(selected_nic_names.end(), selected.begin(),
                                   selected.end());
