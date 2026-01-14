@@ -4,9 +4,11 @@
 #include <cerrno>
 #include <cstring>
 #include <cstdlib>
+#include <chrono>
 #include <iostream>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <thread>
 #include <unistd.h>
 #include <cuda_runtime_api.h>
 
@@ -28,6 +30,16 @@ struct ServerHello {
   ncclUniqueId uid_rank0;
   ncclUniqueId uid_rank1;
 };
+
+enum CtrlMsgType : uint8_t { kWriteReq = 1, kReadReq = 2 };
+
+struct CtrlMsg {
+  uint8_t type;
+  uint8_t reserved[3];
+  uint32_t size;
+  uint64_t addr;
+};
+static_assert(sizeof(CtrlMsg) == 16, "CtrlMsg must be 16 bytes");
 
 int get_env_int(char const* key, int def) {
   char const* v = std::getenv(key);
@@ -85,6 +97,9 @@ struct TCPEndpoint::Conn {
   int remote_gpu_idx = 0;
   ncclComm_t comm[2] = {nullptr, nullptr};
   cudaStream_t stream[2] = {nullptr, nullptr};
+  std::atomic<bool> stop{false};
+  std::mutex ctrl_send_mu;
+  std::thread ctrl_thread;
 };
 
 struct TCPEndpoint::AsyncHandle {
@@ -205,6 +220,47 @@ bool TCPEndpoint::init_comms_(Conn& conn, ncclUniqueId const& uid_rank0,
   return true;
 }
 
+void TCPEndpoint::control_loop_(Conn* conn) {
+  if (!conn) return;
+  while (!conn->stop.load(std::memory_order_acquire)) {
+    CtrlMsg msg{};
+    if (!recv_all_(conn->sock_fd, &msg, sizeof(msg))) {
+      break;
+    }
+    if (conn->stop.load(std::memory_order_acquire)) break;
+
+    size_t size = static_cast<size_t>(msg.size);
+    if (size == 0) continue;
+
+    uccl::ucclRequest ureq{};
+    int comm_index = comm_index_for_recv_(*conn);
+    bool ok = false;
+    switch (msg.type) {
+      case kWriteReq:
+        ok = recv_internal_(*conn, reinterpret_cast<void*>(msg.addr), size,
+                            comm_index, &ureq);
+        break;
+      case kReadReq:
+        ok = send_internal_(*conn, reinterpret_cast<void*>(msg.addr), size,
+                            comm_index, &ureq);
+        break;
+      default:
+        std::cerr << "[tcp] unknown ctrl msg type: "
+                  << static_cast<int>(msg.type) << std::endl;
+        return;
+    }
+    if (!ok) {
+      std::cerr << "[tcp] failed to handle ctrl msg type: "
+                << static_cast<int>(msg.type) << std::endl;
+      return;
+    }
+
+    while (!uccl_poll_ureq_once(&ureq)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
+}
+
 int TCPEndpoint::comm_index_for_send_(Conn const& conn) const {
   if (conn.rank == 0 || conn.rank == 1) return conn.rank;
   return 0;
@@ -294,9 +350,14 @@ bool TCPEndpoint::recv_internal_(Conn& conn, void* data, size_t size,
 }
 
 void TCPEndpoint::cleanup_conn_(Conn& conn) {
-  if (conn.local_gpu_idx >= 0) {
-    cudaSetDevice(conn.local_gpu_idx);
+  conn.stop.store(true, std::memory_order_release);
+  if (conn.sock_fd >= 0) {
+    ::shutdown(conn.sock_fd, SHUT_RDWR);
   }
+  if (conn.ctrl_thread.joinable()) {
+    conn.ctrl_thread.join();
+  }
+  if (conn.local_gpu_idx >= 0) cudaSetDevice(conn.local_gpu_idx);
   for (int i = 0; i < 2; ++i) {
     if (conn.stream[i]) {
       cudaStreamDestroy(conn.stream[i]);
@@ -373,6 +434,8 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
     std::lock_guard<std::mutex> lock(conn_mu_);
     conn_map_.emplace(flow_id, std::move(conn));
   }
+  conn_ptr->ctrl_thread =
+      std::thread(&TCPEndpoint::control_loop_, this, conn_ptr);
 
   uccl::ConnID conn_id{};
   conn_id.context = conn_ptr;
@@ -455,6 +518,8 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     std::lock_guard<std::mutex> lock(conn_mu_);
     conn_map_.emplace(flow_id, std::move(conn));
   }
+  conn_ptr->ctrl_thread =
+      std::thread(&TCPEndpoint::control_loop_, this, conn_ptr);
 
   uccl::ConnID conn_id{};
   conn_id.context = conn_ptr;
@@ -526,17 +591,32 @@ int TCPEndpoint::uccl_read_async(uccl::UcclFlow* flow,
                                  size_t size,
                                  uccl::FifoItem const& slot_item,
                                  uccl::ucclRequest* ureq) {
-  (void)flow;
   (void)mh;
-  (void)dst;
-  (void)size;
-  (void)slot_item;
-  if (ureq) {
-    ureq->engine_idx = 0;
-    ureq->n = 0;
+  if (!flow || !ureq) return -1;
+  if (size == 0) {
     ureq->context = nullptr;
+    ureq->engine_idx = 0;
+    return 0;
   }
-  return -1;
+  Conn* conn = reinterpret_cast<Conn*>(flow);
+  size_t xfer_size = size;
+  if (slot_item.size > 0 && slot_item.size < xfer_size) {
+    xfer_size = slot_item.size;
+  }
+
+  CtrlMsg msg{};
+  msg.type = kReadReq;
+  msg.size = static_cast<uint32_t>(xfer_size);
+  msg.addr = slot_item.addr;
+  {
+    std::lock_guard<std::mutex> lock(conn->ctrl_send_mu);
+    if (!send_all_(conn->sock_fd, &msg, sizeof(msg))) {
+      return -1;
+    }
+  }
+
+  int comm_index = comm_index_for_send_(*conn);
+  return recv_internal_(*conn, dst, xfer_size, comm_index, ureq) ? 0 : -1;
 }
 
 int TCPEndpoint::uccl_write_async(uccl::UcclFlow* flow,
@@ -544,17 +624,32 @@ int TCPEndpoint::uccl_write_async(uccl::UcclFlow* flow,
                                   size_t size,
                                   uccl::FifoItem const& slot_item,
                                   uccl::ucclRequest* ureq) {
-  (void)flow;
   (void)mh;
-  (void)src;
-  (void)size;
-  (void)slot_item;
-  if (ureq) {
-    ureq->engine_idx = 0;
-    ureq->n = 0;
+  if (!flow || !ureq) return -1;
+  if (size == 0) {
     ureq->context = nullptr;
+    ureq->engine_idx = 0;
+    return 0;
   }
-  return -1;
+  Conn* conn = reinterpret_cast<Conn*>(flow);
+  size_t xfer_size = size;
+  if (slot_item.size > 0 && slot_item.size < xfer_size) {
+    xfer_size = slot_item.size;
+  }
+
+  CtrlMsg msg{};
+  msg.type = kWriteReq;
+  msg.size = static_cast<uint32_t>(xfer_size);
+  msg.addr = slot_item.addr;
+  {
+    std::lock_guard<std::mutex> lock(conn->ctrl_send_mu);
+    if (!send_all_(conn->sock_fd, &msg, sizeof(msg))) {
+      return -1;
+    }
+  }
+
+  int comm_index = comm_index_for_send_(*conn);
+  return send_internal_(*conn, src, xfer_size, comm_index, ureq) ? 0 : -1;
 }
 
 bool TCPEndpoint::uccl_poll_ureq_once(struct uccl::ucclRequest* ureq) {

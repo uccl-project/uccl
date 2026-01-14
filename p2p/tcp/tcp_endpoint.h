@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <nccl.h>
 #include <transport.h>  // For uccl::ConnID, uccl::FifoItem, uccl::ucclRequest.
@@ -75,6 +76,7 @@ class TCPEndpoint {
   bool init_comm_(Conn& conn, ncclUniqueId const& uid, int comm_index);
   bool init_comms_(Conn& conn, ncclUniqueId const& uid_rank0,
                    ncclUniqueId const& uid_rank1);
+  void control_loop_(Conn* conn);
   int comm_index_for_send_(Conn const& conn) const;
   int comm_index_for_recv_(Conn const& conn) const;
   bool send_internal_(Conn& conn, void const* data, size_t size,
