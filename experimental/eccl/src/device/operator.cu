@@ -4,10 +4,6 @@
 
 namespace eccl {
 
-static __device__ __forceinline__ uint32_t decode_wpt(uint32_t encoded_wpt) {
-  return encoded_wpt + 1u;
-}
-
 template <typename T>
 __device__ __forceinline__ T apply_red(ReduceType op, T a, T b) {
   if (op == ReduceType::Sum) return a + b;
@@ -111,10 +107,11 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T> fifo,
     const uint32_t idx = task->args_index();
     const CollArgs a = d_coll[idx];
 
-    if (threadIdx.x == 0) {
-      printf("task %u type=%d dtype=%d red=%d bytes=%u\n", idx, int(ttype),
-             int(dtype), int(a.redType), a.bytes);
-    }
+    // if (threadIdx.x == 0) {
+    //   printf("task args_id=%u type=%d dtype=%d red=%d bytes=%u\n", idx,
+    //   int(ttype),
+    //          int(dtype), int(a.redType), a.bytes);
+    // }
 
     switch (ttype) {
       case TaskType::CollCopy: {

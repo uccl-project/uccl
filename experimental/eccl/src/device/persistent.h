@@ -3,6 +3,8 @@
 #include "c2d_fifo.h"
 #include "gpu_rt.h"
 #include "operator.h"
+#include <iostream>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -75,6 +77,15 @@ class PersistentKernel {
   };
 
   uint64_t submit(const T& task) {
+    for (;;) {
+      uint64_t tail = fifo_.currentId();
+      uint64_t head = fifo_.head();
+      if ((int64_t)(head + 1 - tail) <= cfg_.fifoCapacity) {
+        break;
+      }
+      std::this_thread::yield();
+    }
+
     uint64_t taskId = fifo_.push(task);
     {
       std::lock_guard<std::mutex> g(pending_mu_);
@@ -85,6 +96,17 @@ class PersistentKernel {
 
   uint64_t submitBatch(std::vector<T>& tasks) {
     assert(!tasks.empty());
+    size_t count = tasks.size();
+
+    for (;;) {
+      uint64_t tail = fifo_.currentId();
+      uint64_t head = fifo_.head();
+      if ((int64_t)(head + count - tail) <= cfg_.fifoCapacity) {
+        break;
+      }
+      std::this_thread::yield();
+    }
+
     uint64_t startTaskId = fifo_.push(tasks.begin(), tasks.end());
     // taskId -> argsId / type
     {
@@ -107,7 +129,7 @@ class PersistentKernel {
       auto it = pending_.begin();
       while (it != pending_.end()) {
         uint64_t tid = it->first;
-        if (tid < doneBefore) {
+        if ((int64_t)(doneBefore - tid) > 0) {
           Pending const& p = it->second;
           switch (p.type) {
             case TaskType::CollCopy:
@@ -119,6 +141,8 @@ class PersistentKernel {
             case TaskType::MoeCombine:
               eccl::TaskManager::instance().free_moe_args(p.argsId);
               break;
+            case TaskType::BenchNop:
+              break;
             default:
               break;
           }
@@ -128,7 +152,8 @@ class PersistentKernel {
         }
       }
     }
-    return doneBefore > (taskId + count);
+    // doneBefore > taskId + count   (wrap-safe)
+    return (int64_t)(doneBefore - (taskId + count)) > 0;
   }
 
   void stop() {

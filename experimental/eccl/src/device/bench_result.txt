@@ -1,0 +1,15 @@
+`CUDA_VISIBLE_DEVICES=5 ./bench_fifo`
+FIFO benchmark via PersistentKernel
+Init CpuToGpuFifo at device NVIDIA A40 !
+Warmup done.
+Latency (us): min 5.41 | p50 31.36 | p90 32.39 | p99 40.46 | max 57.35
+Throughput: 31.58 K tasks/s
+Done.
+
+`CUDA_VISIBLE_DEVICES=6 ./bench_fifo`
+FIFO benchmark via PersistentKernel
+Init CpuToGpuFifo at device NVIDIA L40S !
+Warmup done.
+Latency (us): min 5.80 | p50 22.46 | p90 23.68 | p99 31.07 | max 73.52
+Throughput: 43.53 K tasks/s
+Done.

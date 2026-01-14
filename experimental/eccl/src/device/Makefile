@@ -1,23 +1,40 @@
-CXX = g++
-CXXFLAGS = -std=c++17 -O3 -g -Wall
-NVCC = nvcc
-NVCCFLAGS = -O3 -g -G -Xcompiler -Wall -arch=sm_80
+CXX      := g++
+NVCC     := nvcc
+CXXFLAGS := -std=c++17 -O3 -g -Wall
+NVCCFLAGS:= -O3 -g -G -Xcompiler -Wall -arch=sm_80
 
+CUDA_HOME ?= /usr/local/cuda
 GDRCOPY_LIBDIR = $(abspath ../../../../thirdparty/gdrcopy/src)
 
-INCLUDES = -I./ -I/usr/local/cuda/include
-LIBS = -L/usr/local/cuda/lib -lcudart -lcuda -lnuma \
-       -L$(GDRCOPY_LIBDIR) -lgdrapi
+INCLUDES := -I./ -I$(CUDA_HOME)/include
+LIBS := -L$(CUDA_HOME)/lib -lcudart -lcuda -lnuma \
+        -L$(GDRCOPY_LIBDIR) -lgdrapi
 
 RPATH = -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR)
 
-TARGET = test_persistent
+COMMON_CPP := c2d_fifo.cc
+COMMON_CU  := operator.cu
 
-SRC_CPP := ./test_persistent.cc ./c2d_fifo.cc
-SRC_CU  := ./operator.cu
+TEST_SRC   := test_persistent.cc
+BENCH_SRC  := bench_fifo.cu
 
-OBJ_CC   := $(SRC_CPP:.cc=.o)
-OBJ_CU   := $(SRC_CU:.cu=.o)
+COMMON_OBJ := $(COMMON_CPP:.cc=.o) $(COMMON_CU:.cu=.o)
+TEST_OBJ   := $(TEST_SRC:.cc=.o)
+BENCH_OBJ  := $(BENCH_SRC:.cu=.o)
+
+TEST_BIN  := test_persistent
+BENCH_BIN := bench_fifo
+
+ALL_BIN   := $(TEST_BIN) $(BENCH_BIN)
+
+
+.PHONY: all test bench clean
+
+all: $(ALL_BIN)
+
+test: $(TEST_BIN)
+
+bench: $(BENCH_BIN)
 
 %.o: %.cc
 	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
@@ -25,8 +42,11 @@ OBJ_CU   := $(SRC_CU:.cu=.o)
 %.o: %.cu
 	$(NVCC) -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
-$(TARGET): $(OBJ_CC) $(OBJ_CU)
-	$(NVCC) $(OBJ_CC) $(OBJ_CU) -o $(TARGET) $(LIBS) $(RPATH) $(NVCCFLAGS)
+$(TEST_BIN): $(COMMON_OBJ) $(TEST_OBJ)
+	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+
+$(BENCH_BIN): $(COMMON_OBJ) $(BENCH_OBJ)
+	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
 
 clean:
-	rm -f $(OBJ_CC) $(OBJ_CU) $(TARGET) *.d
+	rm -f *.o $(ALL_BIN)

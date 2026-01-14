@@ -7,6 +7,8 @@
 
 namespace mscclpp {
 
+template class CpuToGpuFifo<eccl::Task>;
+
 template <typename T>
 CpuToGpuFifo<T>::CpuToGpuFifo(int size) {
   int device;
@@ -63,24 +65,40 @@ uint64_t CpuToGpuFifo<T>::push(InputIt first, InputIt last) {
   using VT = typename std::iterator_traits<InputIt>::value_type;
   static_assert(std::is_same_v<VT, T>, "Iterator value_type must be T");
 
-  if (first == last) return 0;
+  if (first == last) return *pimpl_->head;
+
   size_t count = std::distance(first, last);
   if (count > static_cast<size_t>(pimpl_->size)) {
     throw std::length_error("Batch exceeds FIFO capacity");
   }
 
-  uint64_t curHead = *pimpl_->head;
+  uint64_t curHead = atomicLoad(pimpl_->head.get(), memoryOrderRelaxed);
   T* devBuf = pimpl_->buffer.get();
   int size = pimpl_->size;
 
-  MSCCLPP_CUDATHROW(gpuMemcpy(&devBuf[curHead % size], &*first,
-                              sizeof(T) * count, gpuMemcpyHostToDevice));
+  size_t start = curHead % size;
+  size_t firstPart = std::min(count, size - start);
+  size_t secondPart = count - firstPart;
+
+  if (firstPart > 0) {
+    MSCCLPP_CUDATHROW(gpuMemcpy(devBuf + start, &*first, sizeof(T) * firstPart,
+                                gpuMemcpyHostToDevice));
+  }
+  if (secondPart > 0) {
+    MSCCLPP_CUDATHROW(gpuMemcpy(devBuf, &*(first + firstPart),
+                                sizeof(T) * secondPart, gpuMemcpyHostToDevice));
+  }
 
   //   __sync_synchronize();
   std::atomic_thread_fence(std::memory_order_release);
   atomicStore(pimpl_->head.get(), curHead + count, memoryOrderRelease);
 
   return curHead;
+}
+
+template <typename T>
+uint64_t CpuToGpuFifo<T>::head() const {
+  return atomicLoad(pimpl_->head.get(), memoryOrderRelaxed);
 }
 
 template <typename T>
@@ -95,9 +113,8 @@ uint64_t CpuToGpuFifo<T>::currentId() const {
 
 template <typename T>
 void CpuToGpuFifo<T>::sync(uint64_t taskId) const {
-  while (currentId() <= taskId) {
+  while ((int64_t)(currentId() - taskId) <= 0) {
     std::this_thread::yield();
-    // std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 }
 

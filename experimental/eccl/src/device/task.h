@@ -17,6 +17,7 @@ enum class TaskType : uint64_t {
   MoePostGemm,
   MoeCombine,
   // more Type
+  BenchNop,  // for benchmark
 };
 
 enum class DataType : uint64_t { Fp8, Fp16, Fp32 };
