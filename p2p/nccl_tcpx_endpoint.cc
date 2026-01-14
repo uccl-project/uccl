@@ -490,12 +490,12 @@ bool Endpoint::deal_out_buf(uint64_t conn_id, char* out_buf) {
   // For Endpoint that support one-side primitives, like RDMA, the peer will
   // read data by FifoItem once received it. For that does not support one-side
   // primitives, like TCPx, send FifoItem to remote.
-#ifdef USE_TCPX
+#ifdef UCCL_P2P_USE_TCPX
   FifoItem fifo_item;
   memcpy(&fifo_item, out_buf, sizeof(FifoItem));
   // Immediately push the data over TCPX so the passive reader only needs
   // the FIFO metadata to complete its read.
-  if (!conn->engine->endpoint->queue_read_response(conn->conn_id, fifo_item)) {
+  if (!queue_read_response(conn_id, fifo_item)) {
     return false;
   }
 #endif

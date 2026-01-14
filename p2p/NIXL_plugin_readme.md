@@ -96,10 +96,12 @@ python -m pip install --no-cache-dir "nixl[cu12]"
 cd $UCCL_HOME/p2p
 
 # Server (node A)
-python benchmarks/benchmark_nixl.py --backend uccl --role server --sizes 67108864 --iters 10 --op-type read
+UCCL_RCMODE=1 python benchmarks/benchmark_nixl.py --backend uccl --role server --sizes 67108864 --iters 10 --op-type read
 
 # Client (node B, set server IP)
-python benchmarks/benchmark_nixl.py --backend uccl --role client --sizes 67108864 --iters 10 --remote-ip=10.65.27.236 --op-type read
+UCCL_RCMODE=1 python benchmarks/benchmark_nixl.py --backend uccl --role client --sizes 67108864 --iters 10 --remote-ip=10.65.27.236 --op-type read
+
+> note: 2026.1.14: need add UCCL_RCMODE=1 now, check later
 
 # 8 GPUs Server (node A)
 python benchmarks/benchmark_nixl_8gpu.py --role server
