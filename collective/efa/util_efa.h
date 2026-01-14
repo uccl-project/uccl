@@ -89,7 +89,7 @@ class FrameDesc {
   uint32_t pkt_data_lkey_tx_;  // Tx buff may come from app.
 
   uint16_t src_qp_idx_;     // src QP to use for this frame.
-  uint16_t dest_qpn_;       // dest QPN to use for this frame.
+  uint32_t dest_qpn_;       // dest QPN to use for this frame.
   struct ibv_ah* dest_ah_;  // dest ah to use for this frame.
 
   uint64_t cpe_time_tsc_;  // Completion event time.
@@ -113,7 +113,7 @@ class FrameDesc {
         pkt_data_lkey_tx_(pkt_data_lkey_tx),
         msg_flags_(msg_flags) {
     src_qp_idx_ = UINT16_MAX;
-    dest_qpn_ = UINT16_MAX;
+    dest_qpn_ = UINT32_MAX;
     dest_ah_ = nullptr;
     next_ = nullptr;
     poll_ctx_ = nullptr;
@@ -155,8 +155,8 @@ class FrameDesc {
   uint16_t get_src_qp_idx() const { return src_qp_idx_; }
   void set_src_qp_idx(uint16_t src_qp_idx) { src_qp_idx_ = src_qp_idx; }
 
-  uint16_t get_dest_qpn() const { return dest_qpn_; }
-  void set_dest_qpn(uint16_t dest_qpn) { dest_qpn_ = dest_qpn; }
+  uint32_t get_dest_qpn() const { return dest_qpn_; }
+  void set_dest_qpn(uint32_t dest_qpn) { dest_qpn_ = dest_qpn; }
 
   struct ibv_ah* get_dest_ah() const {
     return dest_ah_;
