@@ -9,20 +9,16 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 export DOCKER_IMAGE="docker.io/rocm/primus:v25.11"
-
 # ---------------------------------------------------------------------------
 # Training Config
 # ---------------------------------------------------------------------------
-export MODEL_NAME=deepseek_v3
-export EP=16
-export PP=16
-export VPP=2
-export PIPELINE_LAYOUT="Et|(tt|)*30,mL"
+export MODEL_NAME=deepseek_v2_lite
+export EP=8
 
 # ---------------------------------------------------------------------------
 # Cluster Config
 # ---------------------------------------------------------------------------
-export NNODES=32
+export NNODES=1
 export NODE_LISTS=
 
-bash "${SCRIPT_DIR}"/primus_slurm_pretrain_cli.sh --moe_token_dispatcher_type alltoall
+bash "${SCRIPT_DIR}"/primus_run_pretrain_cli.sh --moe_token_dispatcher_type alltoall

@@ -52,6 +52,7 @@ FEATURE_ARGS=(
     --enable_primus_turbo "False"
     --use_turbo_attention "False"
     --use_turbo_grouped_mlp "False"
+	--turbo_sync_free_moe_stage "0"
 )
 
 if [ -n "$PIPELINE_LAYOUT" ]; then
