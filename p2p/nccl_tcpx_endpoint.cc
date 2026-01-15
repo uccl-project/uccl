@@ -485,8 +485,8 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
   return recv_async(conn_id, mr_id, dst, recv_size, transfer_id);
 }
 
-// TODO: engine Endpoint maybe need thia API later
-bool Endpoint::deal_out_buf(uint64_t conn_id, char* out_buf) {
+// TODO: engine Endpoint maybe need this API later
+bool Endpoint::get_out_buf(uint64_t conn_id, char* out_buf) {
   // For Endpoint that support one-side primitives, like RDMA, the peer will
   // read data by FifoItem once received it. For that does not support one-side
   // primitives, like TCPx, send FifoItem to remote.

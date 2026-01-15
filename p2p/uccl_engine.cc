@@ -151,8 +151,8 @@ void listener_thread_func(uccl_conn_t* conn) {
         }
 
 #ifdef UCCL_P2P_USE_TCPX
-        // we can remove this #ifdef after engine Endpoint has deal_out_buf API
-        if (!conn->engine->endpoint->deal_out_buf(conn->conn_id, out_buf)) {
+        // we can remove this #ifdef after engine Endpoint has get_out_buf API
+        if (!conn->engine->endpoint->get_out_buf(conn->conn_id, out_buf)) {
           std::cerr << "Failed to deal out_buf" << std::endl;
         }
 #endif
@@ -236,7 +236,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           }
 
 #ifdef UCCL_P2P_USE_TCPX
-          if (!conn->engine->endpoint->deal_out_buf(conn->conn_id, out_buf)) {
+          if (!conn->engine->endpoint->get_out_buf(conn->conn_id, out_buf)) {
             std::cerr << "Failed to deal out_buf" << std::endl;
           }
 #endif
