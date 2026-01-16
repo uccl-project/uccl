@@ -436,7 +436,7 @@ void notify_dispatch(
   break
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  constexpr int kNumThreads = 1024;
+  constexpr int kNumThreads = MAX_NTHREADS;
 #else
   constexpr int kNumThreads = 512;
 #endif
@@ -455,6 +455,8 @@ void notify_dispatch(
   EP_HOST_ASSERT((nvl_clean_meta.first + nvl_clean_meta.second) * sizeof(int) <=
                  static_cast<size_t>(num_nvl_bytes));
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  // NOTE(zhuang12): num_nvl_bytes and num_rdma_bytes may exceed the int32_t
+  // range, due to use larger channel size
   EP_HOST_ASSERT(num_rdma_bytes < std::numeric_limits<int64_t>::max());
   EP_HOST_ASSERT(num_nvl_bytes < std::numeric_limits<int64_t>::max());
 #else
@@ -752,8 +754,8 @@ __global__ void __launch_bounds__(
         // Wait the remote buffer to be released
         while (rdma_tail_idx - cached_rdma_channel_head >=
                num_max_rdma_chunked_recv_tokens) {
-          cached_rdma_channel_head = static_cast<int>(__atomic_load_n(
-              rdma_channel_head.buffer(lane_id), __ATOMIC_SEQ_CST));
+          cached_rdma_channel_head = static_cast<int>(
+              ld_acquire_sys_global(rdma_channel_head.buffer(lane_id)));
 
           // Timeout check
           if (clock64() - start_time >= NUM_TIMEOUT_CYCLES) {
@@ -1182,13 +1184,8 @@ __global__ void __launch_bounds__(
         if (__shfl_sync(WARP_MASK, num_tokens_to_recv_from_rdma,
                         src_rdma_rank) > 0) {
           if (lane_id == src_rdma_rank)
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-            cached_rdma_channel_tail = static_cast<int>(__atomic_load_n(
-                rdma_channel_tail.buffer(src_rdma_rank), __ATOMIC_SEQ_CST));
-#else
             cached_rdma_channel_tail = static_cast<int>(
                 ld_acquire_sys_global(rdma_channel_tail.buffer(src_rdma_rank)));
-#endif
           if (__shfl_sync(WARP_MASK,
                           cached_rdma_channel_tail > cached_rdma_channel_head,
                           src_rdma_rank))
@@ -1674,6 +1671,8 @@ __global__ void cached_notify(
 
     // Iterate in reverse order
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    // NOTE(zhuang12): for support channel numbers >= WARP_SIZE, we need to
+    // iterate over the channels in a warp-wise manner
     int remain_warp_id = warp_id;
     for (int i = 0; i < num_channels; i += num_warps) {
       warp_id = i * num_warps + remain_warp_id;
@@ -1712,6 +1711,8 @@ __global__ void cached_notify(
     EP_STATIC_ASSERT(NUM_MAX_NVL_PEERS <= WARP_SIZE, "Too many NVL peers");
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    // NOTE(zhuang12): for support channel numbers >= WARP_SIZE, we need to
+    // iterate over the channels in a warp-wise manner
     int remain_warp_id = warp_id;
     for (int i = 0; i < num_channels; i += num_warps) {
       warp_id = i * num_warps + remain_warp_id;
@@ -1867,6 +1868,8 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
   EP_HOST_ASSERT((nvl_clean_meta.first + nvl_clean_meta.second) * sizeof(int) <=
                  static_cast<size_t>(num_nvl_bytes));
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  // NOTE(zhuang12): num_nvl_bytes and num_rdma_bytes may exceed the int64_t
+  // range, due to use larger channel size
   EP_HOST_ASSERT(num_rdma_bytes < std::numeric_limits<int64_t>::max());
   EP_HOST_ASSERT(num_nvl_bytes < std::numeric_limits<int64_t>::max());
 #else
@@ -2487,7 +2490,12 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
       lane_id < NUM_MAX_NVL_PEERS ? (forwarder_nvl_head[warp_id][lane_id] = 0)
                                   : 0;
       lane_id == 0 ? (forwarder_retired[warp_id] = false) : false;
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+      // no need to sync_forwarder_smem for AMD GPUs, because no coordinator
+      // warp anymore
+#else
       sync_forwarder_smem();
+#endif
 
       // Get count and cached head
       int cached_nvl_channel_tail_idx = 0;
