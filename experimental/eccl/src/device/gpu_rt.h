@@ -62,6 +62,7 @@
 #define gpuIpcOpenEventHandle cudaIpcOpenEventHandle
 #define gpuIpcCloseEventHandle cudaIpcCloseEventHandle
 #define gpuLaunchKernel cudaLaunchKernel
+#define gpuDeviceSynchronize cudaDeviceSynchronize
 // gpu dirver api : for fifo_gdrcopy later
 #define gpuDrvResult_t CUresult
 #define gpuDrvSuccess CUDA_SUCCESS
@@ -145,6 +146,7 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuIpcCloseEventHandle(handle) (gpuSuccess)
 #define gpuMemGetAddressRange hipMemGetAddressRange
 #define gpuLaunchKernel hipLaunchKernel
+#define gpuDeviceSynchronize hipDeviceSynchronize
 // gpu dirver api : for fifo_gdrcopy later
 #define gpuDrvResult_t hipError_t
 #define gpuDrvSuccess hipSuccess
