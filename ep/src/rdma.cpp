@@ -118,6 +118,9 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 
   // Conforming to UCCL_IB_HCA filter.
   char* ib_hca = getenv("UCCL_IB_HCA");
+  if (!ib_hca) {
+    ib_hca = getenv("NCCL_IB_HCA");
+  }
   struct uccl::ib_dev user_ib_ifs[MAX_IB_DEVS];
   bool searchNot = ib_hca && ib_hca[0] == '^';
   if (searchNot) ib_hca++;
