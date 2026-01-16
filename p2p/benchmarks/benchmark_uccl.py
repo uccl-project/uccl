@@ -495,7 +495,7 @@ def main():
     p.add_argument(
         "--iters",
         type=int,
-        default=1000,
+        default=10,
         help="Iterations per message size (excluding 1 warm-up)",
     )
     p.add_argument(

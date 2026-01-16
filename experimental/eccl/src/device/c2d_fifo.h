@@ -22,8 +22,9 @@ class CpuToGpuFifo {
   template <typename InputIt>
   uint64_t push(InputIt first, InputIt last);
 
-  /// Poll whether a specific Task is popped from the FIFO.
-  bool poll(uint64_t taskId) const;
+  uint64_t head() const;
+  /// For checking whether a specific Task is popped from the FIFO.
+  uint64_t currentId() const;
 
   /// Wait until a specific Task is popped from the FIFO.
   void sync(uint64_t taskId) const;
@@ -49,6 +50,5 @@ class CpuToGpuFifo {
   };
   std::unique_ptr<Impl> pimpl_;
 };
-template class CpuToGpuFifo<eccl::OpTask>;
 
 }  // namespace mscclpp

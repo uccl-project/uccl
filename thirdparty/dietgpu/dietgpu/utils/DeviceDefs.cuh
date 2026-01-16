@@ -10,7 +10,10 @@
 #include <cuda.h>
 
 namespace dietgpu {
-
+#if defined(__HIP_PLATFORM_AMD__)
+constexpr int kWarpSize = 64;
+#else
 constexpr int kWarpSize = 32;
+#endif
 
 } // namespace dietgpu

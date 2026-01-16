@@ -27,15 +27,14 @@
 #define gpuIpcOpenMemHandle cudaIpcOpenMemHandle
 #define gpuIpcGetMemHandle cudaIpcGetMemHandle
 #define gpuIpcCloseMemHandle cudaIpcCloseMemHandle
-#define gpuHostMalloc cudaMallocHost  // no cudaHostMalloc API in CUDA
+#define gpuHostMalloc cudaHostMalloc
 #define gpuHostAlloc cudaHostAlloc
 #define gpuHostAllocMapped cudaHostAllocMapped
-#define gpuMalloc cudaMalloc
-#define gpuMallocAsync cudaMallocAsync
-#define gpuMallocHost cudaMallocHost
-#define gpuFree cudaFree
-#define gpuFreeAsync cudaFreeAsync
 #define gpuFreeHost cudaFreeHost
+#define gpuMalloc cudaMalloc
+#define gpuFree cudaFree
+#define gpuMallocAsync cudaMallocAsync
+#define gpuFreeAsync cudaFreeAsync
 #define gpuMemcpyHostToDevice cudaMemcpyHostToDevice
 #define gpuMemcpyDeviceToHost cudaMemcpyDeviceToHost
 #define gpuMemcpy cudaMemcpy
@@ -43,6 +42,7 @@
 #define gpuMemcpyPeerAsync cudaMemcpyPeerAsync
 #define gpuMemcpyDeviceToDevice cudaMemcpyDeviceToDevice
 #define gpuMemcpyFromSymbol cudaMemcpyFromSymbol
+#define gpuMemset cudaMemset
 #define gpuMemsetAsync cudaMemsetAsync
 #define gpuGetLastError cudaGetLastError
 #define gpuErrorPeerAccessAlreadyEnabled cudaErrorPeerAccessAlreadyEnabled
@@ -61,15 +61,26 @@
 #define gpuIpcGetEventHandle cudaIpcGetEventHandle
 #define gpuIpcOpenEventHandle cudaIpcOpenEventHandle
 #define gpuIpcCloseEventHandle cudaIpcCloseEventHandle
-inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
-                                        void* ptr) {
-  CUdeviceptr base;
-  CUresult result = cuMemGetAddressRange(&base, size, (CUdeviceptr)ptr);
-  if (result == CUDA_SUCCESS) {
-    *base_ptr = (void*)base;
-    return gpuSuccess;
-  }
-  return gpuError_t(result);
+#define gpuLaunchKernel cudaLaunchKernel
+#define gpuDeviceSynchronize cudaDeviceSynchronize
+// gpu dirver api : for fifo_gdrcopy later
+#define gpuDrvResult_t CUresult
+#define gpuDrvSuccess CUDA_SUCCESS
+#define gpuDrvDevicePtr CUdeviceptr
+#define gpuDrvInit(flags) cuInit(flags)
+#define gpuDrvDevice_t CUdevice
+#define gpuDrvCtx_t CUcontext
+#define gpuDrvDeviceGet(pdev, ordinal) cuDeviceGet(pdev, ordinal)
+#define gpuDrvDevicePrimaryCtxRetain(pctx, dev) \
+  cuDevicePrimaryCtxRetain(pctx, dev)
+#define gpuDrvCtxSetCurrent(ctx) cuCtxSetCurrent(ctx)
+#define gpuDrvMemAlloc(pdevptr, bytes) cuMemAlloc(pdevptr, bytes)
+#define gpuDrvMemFree(devptr) cuMemFree(devptr)
+#define gpuDrvMemsetD8(devptr, value, bytes) cuMemsetD8(devptr, value, bytes)
+inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
+  char const* s = nullptr;
+  (void)cuGetErrorString(r, &s);
+  return s ? s : "Unknown CUDA driver error";
 }
 #else
 #include <hip/hip_runtime.h>
@@ -102,12 +113,11 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuHostAlloc hipHostAlloc
 #define gpuHostFree hipHostFree
 #define gpuHostAllocMapped hipHostAllocMapped
-#define gpuMalloc hipMalloc
-#define gpuMallocAsync hipMallocAsync
-#define gpuMallocHost hipHostMalloc  // cudaMallocHost Deprecated in ROCm
-#define gpuFree hipFree
-#define gpuFreeAsync hipFreeAsync
 #define gpuFreeHost hipFreeHost
+#define gpuMalloc hipMalloc
+#define gpuFree hipFree
+#define gpuMallocAsync hipMallocAsync
+#define gpuFreeAsync hipFreeAsync
 #define gpuMemcpyHostToDevice hipMemcpyHostToDevice
 #define gpuMemcpyDeviceToHost hipMemcpyDeviceToHost
 #define gpuMemcpy hipMemcpy
@@ -115,6 +125,7 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuMemcpyPeerAsync hipMemcpyPeerAsync
 #define gpuMemcpyDeviceToDevice hipMemcpyDeviceToDevice
 #define gpuMemcpyFromSymbol hipMemcpyFromSymbol
+#define gpuMemset hipMemset
 #define gpuMemsetAsync hipMemsetAsync
 #define gpuGetLastError hipGetLastError
 #define gpuErrorPeerAccessAlreadyEnabled hipErrorPeerAccessAlreadyEnabled
@@ -134,6 +145,29 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuIpcOpenEventHandle hipIpcOpenEventHandle
 #define gpuIpcCloseEventHandle(handle) (gpuSuccess)
 #define gpuMemGetAddressRange hipMemGetAddressRange
+#define gpuLaunchKernel hipLaunchKernel
+#define gpuDeviceSynchronize hipDeviceSynchronize
+// gpu dirver api : for fifo_gdrcopy later
+#define gpuDrvResult_t hipError_t
+#define gpuDrvSuccess hipSuccess
+#define gpuDrvDevicePtr hipDeviceptr_t
+#define gpuDrvInit(flags) hipInit(flags)
+#define gpuDrvDevice_t hipDevice_t
+#define gpuDrvCtx_t hipCtx_t
+#define gpuDrvDeviceGet(pdev, ordinal) hipDeviceGet(pdev, ordinal)
+#define gpuDrvDevicePrimaryCtxRetain(pctx, dev) \
+  hipDevicePrimaryCtxRetain(pctx, dev)
+#define gpuDrvCtxSetCurrent(ctx) hipCtxSetCurrent(ctx)
+inline gpuDrvResult_t gpuDrvMemAlloc(void** p, size_t bytes) {
+  return hipMalloc(p, bytes);
+}
+inline gpuDrvResult_t gpuDrvMemFree(void* p) { return hipFree(p); }
+inline gpuDrvResult_t gpuDrvMemsetD8(void* p, unsigned char v, size_t bytes) {
+  return hipMemset(p, (int)v, bytes);
+}
+inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
+  return hipGetErrorString(r);
+}
 #endif
 
 #define GPU_RT_CHECK(call)                                         \
@@ -155,4 +189,14 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
       fprintf(stderr, "*** FAILED - ABORTING\n");             \
       exit(1);                                                \
     }                                                         \
+  } while (0)
+
+#define GPU_DRV_CHECK(call)                                                 \
+  do {                                                                      \
+    gpuDrvResult_t _r = (call);                                             \
+    if (_r != gpuDrvSuccess) {                                              \
+      fprintf(stderr, "GPU DRV error %s:%d: %s (%d)\n", __FILE__, __LINE__, \
+              gpuDrvGetErrorString(_r), (int)_r);                           \
+      std::abort();                                                         \
+    }                                                                       \
   } while (0)

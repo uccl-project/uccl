@@ -173,62 +173,31 @@ class Endpoint {
     uint32_t operation;  // 0 = send_ipc request, 1 = recv_ipc response
   };
 
-  /*
-   * Create engine threads running in background for a single interface. It also
-   * opens a TCP listening thread waiting for incoming connections.
-   *
-   * input:
-   *   local_gpu_idx: the GPU index to use for the engine
-   *   num_cpus: the number of CPUs to use for the engine
-   */
+  /* Create engine threads running in background for a single interface. It also
+   * opens a TCP listening thread waiting for incoming connections. */
   Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus);
 
-  /*
-   * Create endpoint without intializing the engine. Lazy creation of engine is
+  /* Create endpoint without intializing the engine. Lazy creation of engine is
    * done during  memory registration. Additionally, open a unified P2P socket
-   * for metadata exchanges.
-   *
-   * input:
-   *   num_cpus: the number of CPUs to use for the engine
-   */
+   * for metadata exchanges. */
   Endpoint(uint32_t const num_cpus);
   ~Endpoint();
 
-  /*
-   * Connect to a remote server via TCP, then build RDMA QP connections.
-   *
-   * input:
-   *   ip_addr: the IP address of the remote server
-   *   remote_gpu_idx: the GPU index of the remote server
-   *   remote_port: the port of the remote server (optional)
-   * output:
-   *   conn_id: the ID of the connection
-   */
+  /* Connect to a remote server via TCP, then build RDMA QP connections. */
   bool connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                uint64_t& conn_id);
 
   std::vector<uint8_t> get_metadata();
 
-  /*
-   * Get the unified metadata for all devices.
-   */
+  /* Get the unified metadata for all devices. */
   std::vector<uint8_t> get_unified_metadata();
 
-  /*
-   * Parse endpoint metadata to extract IP address, port, and GPU index.
-   * Returns a tuple of (ip_address, port, gpu_index).
-   */
+  /* Parse endpoint metadata to extract IP address, port, and GPU index.
+   * Returns a tuple of (ip_address, port, gpu_index). */
   static std::tuple<std::string, uint16_t, int> parse_metadata(
       std::vector<uint8_t> const& metadata);
 
-  /*
-   * Accept an incoming connection via TCP, then build RDMA QP connections.
-   *
-   * output:
-   *   ip_addr: the IP address of the remote server
-   *   remote_gpu_idx: the GPU index of the remote server
-   *   conn_id: the ID of the connection
-   */
+  /* Accept an incoming connection via TCP, then build RDMA QP connections. */
   bool accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
 
   /*Register the data with a specific interface. */
@@ -385,27 +354,18 @@ class Endpoint {
     return rank2conn_;
   }
 
-  /*
-   * Create UDS socket path based on GPU index.
-   */
+  /* Create UDS socket path based on GPU index. */
   std::string get_uds_socket_path(int gpu_idx) const {
     return "/tmp/uccl_gpu_" + std::to_string(gpu_idx) + ".sock";
   }
 
-  /*
-   * Initialize UDS socket for listening.
-   */
+  /* Initialize UDS socket for listening. */
   void init_uds_socket();
 
-  /*
-   * Cleanup UDS socket resources.
-   */
+  /* Cleanup UDS socket resources. */
   void cleanup_uds_socket();
 
-  /*
-   * Initialize the engine
-   * Internal helper function for lazy initialization.
-   */
+  /* Initialize the engine Internal helper function for lazy initialization. */
   void initialize_engine();
 
   int local_gpu_idx_;
@@ -578,7 +538,7 @@ class Endpoint {
       } batch;
 
       SpecificData() : base{} {}
-      // // Explicit trivial destructor so the union is not implicitly deleted
+      // Explicit trivial destructor so the union is not implicitly deleted
       ~SpecificData() {}
     } specific;
 

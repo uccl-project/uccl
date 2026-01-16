@@ -88,20 +88,28 @@ __device__ void decodeOneWarp(
 
   // We only sometimes read a new encoded value
   bool read = state < kANSMinState;
-  auto vote = __ballot_sync(0xffffffff, read);
+  auto vote = __ballot_sync(kFullMask, read);
   // We are reading in the same order as we wrote, except by decrementing from
   // compressedOffset, so we need to count down from the highest lane in the
   // warp
-  auto prefix = __popc(vote & getLaneMaskGe());
+  #if defined(__HIP_PLATFORM_AMD__)
+    auto prefix = __popcll(vote & getLaneMaskGe());
+  #else
+    auto prefix = __popc(vote & getLaneMaskGe());
+  #endif
 
   if (read) {
-    // auto v = in[compressedOffset - prefix];
-    auto v = in[-prefix];
+    auto v = in[compressedOffset - prefix];
+    // auto v = in[-prefix];
     state = (state << kANSEncodedBits) + ANSStateT(v);
   }
 
   // how many values we actually read from the compressed input
-  outNumRead = __popc(vote);
+  #if defined(__HIP_PLATFORM_AMD__)
+    outNumRead = __popcll(vote);
+  #else
+    outNumRead = __popc(vote);
+  #endif
 }
 
 template <int ProbBits>
@@ -142,20 +150,28 @@ __device__ void decodeOnePartialWarp(
 
   // We only sometimes read a new encoded value
   bool read = valid && (state < kANSMinState);
-  auto vote = __ballot_sync(0xffffffff, read);
+  auto vote = __ballot_sync(kFullMask, read);
   // We are reading in the same order as we wrote, except by decrementing from
   // compressedOffset, so we need to count down from the highest lane in the
   // warp
-  auto prefix = __popc(vote & getLaneMaskGe());
-
+  #if defined(__HIP_PLATFORM_AMD__)
+    auto prefix = __popcll(vote & getLaneMaskGe());
+  #else
+    auto prefix = __popc(vote & getLaneMaskGe());
+  #endif
   if (read) {
-    // auto v = in[compressedOffset - prefix];
-    auto v = in[-prefix];
+    // auto in_new = in - compressedOffset;
+    auto v = in[compressedOffset - prefix];
+    // auto v = in[-prefix];
     state = (state << kANSEncodedBits) + ANSStateT(v);
   }
 
   // how many values we actually read from the compressed input
-  outNumRead = __popc(vote);
+  #if defined(__HIP_PLATFORM_AMD__)
+    outNumRead = __popcll(vote);
+  #else
+    outNumRead = __popc(vote);
+  #endif
 }
 
 template <typename Writer, int ProbBits>
@@ -179,7 +195,7 @@ __device__ void ansDecodeWarpBlock(
   // A variable number of compressed elements are read each iteration
   uint32_t compressedOffset = compressedWords;
 
-  in += compressedOffset;
+  
 
   // Partial warp handling the end of the data
   if (remainder) {
@@ -214,6 +230,7 @@ __device__ void ansDecodeWarpBlock(
     // compressedOffset -= numCompressedRead;
     in -= numCompressedRead;
   }
+  in += compressedOffset;
 }
 
 template <typename Writer, int ProbBits, int BlockSize, bool UseVec4>
@@ -279,8 +296,7 @@ struct ANSDecodeWarpFullBlock<Writer, ProbBits, BlockSize, false> {
       uint32_t compressedWords,
       const ANSEncodedT* __restrict__ in,
       Writer& writer,
-      const TableT* __restrict__ table) {
-    in += compressedWords;
+      const TableT* __restrict__ table) {  
 
     for (int i = BlockSize - kWarpSize + laneId; i >= 0; i -= kWarpSize) {
       ANSDecodedT sym;
@@ -293,6 +309,7 @@ struct ANSDecodeWarpFullBlock<Writer, ProbBits, BlockSize, false> {
 
       writer.write(i, sym);
     }
+    in += compressedWords;
   }
 };
 
@@ -364,7 +381,7 @@ __global__ __launch_bounds__(128) void ansDecodeKernel(
   // warp id taking into account warps in the current block
   // do this so the compiler knows it is warp uniform
   int globalWarpId =
-      __shfl_sync(0xffffffff, (blockIdx.x * blockDim.x + tid) / kWarpSize, 0);
+      __shfl_sync(kFullMask, (blockIdx.x * blockDim.x + tid) / kWarpSize, 0);
 
   auto warpsPerGrid = gridDim.x * Threads / kWarpSize;
   int laneId = getLaneId();

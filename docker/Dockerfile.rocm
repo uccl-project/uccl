@@ -14,7 +14,8 @@ RUN apt-get update && \
         rdma-core libibverbs-dev libnuma-dev \
         libgoogle-glog-dev libgflags-dev libgtest-dev libelf-dev \
         pkg-config zlib1g-dev curl unzip \
-        software-properties-common && \
+        software-properties-common \
+        hipcub && \
 \
 # ───── Add Python ${PY_VER} PPA & install Python ${PY_VER} + setuptools ─────
     add-apt-repository ppa:deadsnakes/ppa && \

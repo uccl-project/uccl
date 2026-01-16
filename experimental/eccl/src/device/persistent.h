@@ -1,9 +1,12 @@
 #pragma once
 
 #include "c2d_fifo.h"
+#include "gpu_rt.h"
 #include "operator.h"
+#include <iostream>
+#include <thread>
+#include <unordered_map>
 #include <vector>
-#include <cuda_runtime.h>
 
 namespace eccl {
 
@@ -15,7 +18,7 @@ struct PersistentKernelConfig {
   uint32_t fifoCapacity = 16;
   uint32_t smemSize = 0;
 
-  cudaStream_t stream = nullptr;  // if user manage the stream
+  gpuStream_t stream = nullptr;  // if user manage the stream
 };
 
 template <typename T>
@@ -24,96 +27,167 @@ class PersistentKernel {
   explicit PersistentKernel(PersistentKernelConfig const& config)
       : cfg_(config), fifo_(config.fifoCapacity) {
     // Allocate memory for stop flag (host and device)
-    MSCCLPP_CUDATHROW(cudaMalloc(&d_stopFlag_, sizeof(bool)));
-    MSCCLPP_CUDATHROW(
-        cudaHostAlloc(&h_stopFlag_, sizeof(bool), cudaHostAllocMapped));
+    GPU_RT_CHECK(gpuMalloc(&d_stopFlag_, sizeof(bool)));
+    GPU_RT_CHECK(gpuHostAlloc(&h_stopFlag_, sizeof(bool), gpuHostAllocMapped));
 
     // Initialize stop flag to false
     *h_stopFlag_ = false;
-    MSCCLPP_CUDATHROW(cudaMemcpy(d_stopFlag_, h_stopFlag_, sizeof(bool),
-                                 cudaMemcpyHostToDevice));
+    GPU_RT_CHECK(gpuMemcpy(d_stopFlag_, h_stopFlag_, sizeof(bool),
+                           gpuMemcpyHostToDevice));
 
     // kernel stream
     if (cfg_.stream) {
       stream_ = cfg_.stream;
       owns_stream_ = false;
     } else {
-      MSCCLPP_CUDATHROW(
-          cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
+      GPU_RT_CHECK(gpuStreamCreateWithFlags(&stream_, gpuStreamNonBlocking));
       owns_stream_ = true;
     }
 
     // copy stream
-    MSCCLPP_CUDATHROW(
-        cudaStreamCreateWithFlags(&copy_stream_, cudaStreamNonBlocking));
+    GPU_RT_CHECK(gpuStreamCreateWithFlags(&copy_stream_, gpuStreamNonBlocking));
   };
 
   ~PersistentKernel() noexcept(false) {
     if (launched_) stop();
 
-    MSCCLPP_CUDATHROW(cudaFree(d_stopFlag_));
-    MSCCLPP_CUDATHROW(cudaFreeHost(h_stopFlag_));
+    GPU_RT_CHECK(gpuFree(d_stopFlag_));
+    GPU_RT_CHECK(gpuFreeHost(h_stopFlag_));
 
-    if (copy_stream_) MSCCLPP_CUDATHROW(cudaStreamDestroy(copy_stream_));
-    if (owns_stream_ && stream_) MSCCLPP_CUDATHROW(cudaStreamDestroy(stream_));
+    if (copy_stream_) GPU_RT_CHECK(gpuStreamDestroy(copy_stream_));
+    if (owns_stream_ && stream_) GPU_RT_CHECK(gpuStreamDestroy(stream_));
   };
 
   bool launch() {
     if (launched_) return false;
 
     mscclpp::C2DDeviceHandle<T> handle = fifo_.deviceHandle();
-    void* args[] = {&handle, &d_stopFlag_};
+    auto* d_coll = eccl::TaskManager::instance().d_coll();
+    auto* d_moe = eccl::TaskManager::instance().d_moe();
+    void* args[] = {&handle, &d_coll, &d_moe, &d_stopFlag_};
 
     dim3 grid(cfg_.numBlocks);
     dim3 block(cfg_.threadsPerBlock);
 
-    MSCCLPP_CUDATHROW(cudaLaunchKernel(basePersistentKernel<T>, grid, block,
-                                       args, cfg_.smemSize, stream_));
+    GPU_RT_CHECK(gpuLaunchKernel(basePersistentKernel<T>, grid, block, args,
+                                 cfg_.smemSize, stream_));
 
     launched_ = true;
     return true;
   };
 
   uint64_t submit(const T& task) {
+    for (;;) {
+      uint64_t tail = fifo_.currentId();
+      uint64_t head = fifo_.head();
+      if ((int64_t)(head + 1 - tail) <= cfg_.fifoCapacity) {
+        break;
+      }
+      std::this_thread::yield();
+    }
+
     uint64_t taskId = fifo_.push(task);
+    {
+      std::lock_guard<std::mutex> g(pending_mu_);
+      pending_[taskId] = {task.args_index(), (TaskType)task.type_u8()};
+    }
     return taskId;
   };
 
   uint64_t submitBatch(std::vector<T>& tasks) {
-    // Push a batch of tasks to FIFO and return the start task ID
-    uint64_t startTaskId = fifo_.push(tasks.begin(), tasks.end());
-    return startTaskId;
-  };  // return start_id
+    assert(!tasks.empty());
+    size_t count = tasks.size();
 
-  bool is_done(uint64_t startTaskId, size_t count = 0) const {
-    // Check if the tasks from startTaskId to startTaskId + count are completed
-    // fifo_.sync(startTaskId + count);
-    return fifo_.poll(startTaskId + count);
-  };  // true if tail > slotIdx
+    for (;;) {
+      uint64_t tail = fifo_.currentId();
+      uint64_t head = fifo_.head();
+      if ((int64_t)(head + count - tail) <= cfg_.fifoCapacity) {
+        break;
+      }
+      std::this_thread::yield();
+    }
+
+    uint64_t startTaskId = fifo_.push(tasks.begin(), tasks.end());
+    // taskId -> argsId / type
+    {
+      std::lock_guard<std::mutex> g(pending_mu_);
+      uint64_t taskId = startTaskId;
+      for (auto const& task : tasks) {
+        pending_.emplace(
+            taskId,
+            Pending{task.args_index(), static_cast<TaskType>(task.type_u8())});
+        ++taskId;
+      }
+    }
+    return startTaskId;
+  }
+
+  bool is_done(uint64_t taskId, size_t count = 0) {
+    uint64_t doneBefore = fifo_.currentId();
+    {
+      std::lock_guard<std::mutex> g(pending_mu_);
+      auto it = pending_.begin();
+      while (it != pending_.end()) {
+        uint64_t tid = it->first;
+        if ((int64_t)(doneBefore - tid) > 0) {
+          Pending const& p = it->second;
+          switch (p.type) {
+            case TaskType::CollCopy:
+            case TaskType::CollReduce:
+              eccl::TaskManager::instance().free_coll_args(p.argsId);
+              break;
+            case TaskType::MoePreGemm:
+            case TaskType::MoePostGemm:
+            case TaskType::MoeCombine:
+              eccl::TaskManager::instance().free_moe_args(p.argsId);
+              break;
+            case TaskType::BenchNop:
+              break;
+            default:
+              break;
+          }
+          it = pending_.erase(it);
+        } else {
+          ++it;
+        }
+      }
+    }
+    // doneBefore > taskId + count   (wrap-safe)
+    return (int64_t)(doneBefore - (taskId + count)) > 0;
+  }
 
   void stop() {
     if (!launched_) return;
     *h_stopFlag_ = true;
 
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(d_stopFlag_, h_stopFlag_, sizeof(bool),
-                                      cudaMemcpyHostToDevice, copy_stream_));
-
-    MSCCLPP_CUDATHROW(cudaStreamSynchronize(copy_stream_));
+    GPU_RT_CHECK(gpuMemcpyAsync(d_stopFlag_, h_stopFlag_, sizeof(bool),
+                                gpuMemcpyHostToDevice, copy_stream_));
+    // after launched a persistent kernel, using cudaDeviceSynchronize will
+    // block the stream
+    GPU_RT_CHECK(gpuStreamSynchronize(copy_stream_));
   };
 
-  cudaStream_t compute_stream() const { return stream_; }
-  cudaStream_t copy_stream() const { return copy_stream_; }
+  gpuStream_t compute_stream() const { return stream_; }
+  gpuStream_t copy_stream() const { return copy_stream_; }
 
  private:
   PersistentKernelConfig cfg_;
-  mscclpp::CpuToGpuFifo<T> fifo_;
+  mscclpp::CpuToGpuFifo<T> fifo_;  // TODO: multi fifos for multi Thread Blocks
 
   // Mapped memory for stop flag
   bool* d_stopFlag_ = nullptr;  // GPU side stop flag
   bool* h_stopFlag_ = nullptr;  // Host side stop flag
 
-  cudaStream_t stream_ = nullptr;       // compute stream（persistent kernel）
-  cudaStream_t copy_stream_ = nullptr;  // copy stream（push/stop）
+  struct Pending {
+    uint32_t argsId;
+    eccl::TaskType type;
+  };
+
+  std::mutex pending_mu_;
+  std::unordered_map<uint64_t, Pending> pending_;  //
+
+  gpuStream_t stream_ = nullptr;       // compute stream（persistent kernel）
+  gpuStream_t copy_stream_ = nullptr;  // copy stream（push/stop）
   bool owns_stream_ = false;
   bool launched_ = false;
 };

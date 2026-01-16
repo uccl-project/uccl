@@ -1,39 +1,38 @@
 #include "operator.h"
 
+// TODO: ThunderKitten/Tilelang? based operators
+
 namespace eccl {
 
-static __device__ __forceinline__ uint32_t decode_wpt(uint32_t encoded_wpt) {
-  return encoded_wpt + 1u;
-}
-
 template <typename T>
-__device__ __forceinline__ T apply_red(OpRedType op, T a, T b) {
-  if (op == OpRedSum) return a + b;
-  if (op == OpRedMax) return a > b ? a : b;
-  return a;
+__device__ __forceinline__ T apply_red(ReduceType op, T a, T b) {
+  if (op == ReduceType::Sum) return a + b;
+  if (op == ReduceType::Max) return a > b ? a : b;
+  return a;  // None or unknown
 }
 
 template <>
-__device__ __forceinline__ __half apply_red<__half>(OpRedType op, __half a,
+__device__ __forceinline__ __half apply_red<__half>(ReduceType op, __half a,
                                                     __half b) {
   float af = __half2float(a);
   float bf = __half2float(b);
   float rf;
-  if (op == OpRedSum)
+  if (op == ReduceType::Sum)
     rf = af + bf;
-  else if (op == OpRedMax)
+  else if (op == ReduceType::Max)
     rf = (af > bf ? af : bf);
   else
     rf = af;
   return __float2half(rf);
 }
 
-__device__ void run_copy(OpTask const& t) {
-  auto* dst = reinterpret_cast<char*>((uintptr_t)t.dst);
-  auto* src = reinterpret_cast<char const*>((uintptr_t)t.src);
+__device__ void run_copy(CollArgs const& a) {
+  auto* dst = reinterpret_cast<char*>(a.dst);
+  auto* src = reinterpret_cast<char const*>(a.src);
 
-  const uint64_t total = (uint64_t)t.size;
-  const uint32_t wpt = decode_wpt((uint32_t)opWpt(t.meta));
+  const uint64_t total = (uint64_t)a.bytes;
+
+  constexpr uint32_t wpt = 16;
 
   const uint64_t tid = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
   const uint64_t nthread = (uint64_t)gridDim.x * blockDim.x;
@@ -51,19 +50,22 @@ __device__ void run_copy(OpTask const& t) {
 }
 
 template <typename T>
-__device__ void run_reduce_inplace(OpTask const& t) {
-  auto* dst = reinterpret_cast<T*>((uintptr_t)t.dst);
-  auto* src = reinterpret_cast<const T*>((uintptr_t)t.src);
+__device__ void run_reduce_inplace(CollArgs const& a) {
+  auto* dst = reinterpret_cast<T*>(a.dst);
+  auto* src = reinterpret_cast<T const*>(a.src);
 
-  const uint64_t n = (uint64_t)t.size / sizeof(T);
-  const uint32_t wpt = decode_wpt((uint32_t)opWpt(t.meta));
-  const OpRedType rop = (OpRedType)opRedType(t.meta);
+  const uint64_t n = (uint64_t)a.bytes / sizeof(T);
+  constexpr uint32_t wpt = 8;
 
   const uint64_t tid = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
   const uint64_t nthread = (uint64_t)gridDim.x * blockDim.x;
 
   const uint64_t base = tid * (uint64_t)wpt;
   const uint64_t step = nthread * (uint64_t)wpt;
+
+  const ReduceType rop = a.redType;
+
+  if (rop == ReduceType::None) return;
 
   for (uint64_t i = base; i < n; i += step) {
 #pragma unroll
@@ -76,16 +78,19 @@ __device__ void run_reduce_inplace(OpTask const& t) {
   }
 }
 
-template __device__ void run_reduce_inplace<float>(OpTask const&);
-template __device__ void run_reduce_inplace<__half>(OpTask const&);
+template __device__ void run_reduce_inplace<float>(CollArgs const&);
+template __device__ void run_reduce_inplace<__half>(CollArgs const&);
 // more
-// template __device__ void run_reduce_t<double>(const OpTask&, int, int);
-// template __device__ void run_reduce_t<half>(const OpTask&, int, int);
+// template __device__ void run_reduce_t<double>(const CollArgs&);
+// template __device__ void run_reduce_t<half>(const CollArgs&);
 
 // TODO: using sm id to assign task
 template <typename T>
 __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T> fifo,
+                                     CollArgs* d_coll, MoeArgs* d_moe,
                                      bool* should_stop) {
+  (void)d_moe;
+
   if (blockIdx.x != 0) return;
 
   while (true) {
@@ -94,34 +99,49 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T> fifo,
     T* task = fifo.poll();
     if (task == nullptr) continue;
 
-    const uint32_t ttype = opTaskType(task->meta);
-    const uint32_t dtype = opDataType(task->meta);
+    __syncthreads();
 
-    switch ((OpTaskType)ttype) {
-      case OpTaskCopy: {
-        run_copy(*task);
+    const TaskType ttype = (TaskType)task->type_u8();
+    const DataType dtype = (DataType)task->dtype_u8();
+
+    const uint32_t idx = task->args_index();
+    const CollArgs a = d_coll[idx];
+
+    // if (threadIdx.x == 0) {
+    //   printf("task args_id=%u type=%d dtype=%d red=%d bytes=%u\n", idx,
+    //   int(ttype),
+    //          int(dtype), int(a.redType), a.bytes);
+    // }
+
+    switch (ttype) {
+      case TaskType::CollCopy: {
+        run_copy(a);
         break;
       }
-
-      case OpTaskReduce: {
-        if ((OpDataType)dtype == OpDataFp32) {
-          run_reduce_inplace<float>(*task);
-        } else if ((OpDataType)dtype == OpDataFp16) {
-          run_reduce_inplace<__half>(*task);
+      case TaskType::CollReduce: {
+        if (dtype == DataType::Fp32) {
+          run_reduce_inplace<float>(a);
+        } else if (dtype == DataType::Fp16) {
+          run_reduce_inplace<__half>(a);
+        } else {
+          // Fp8 TODO:
         }
         break;
       }
-
       default:
         break;
     }
 
     __threadfence();
-    fifo.pop();
+    if (threadIdx.x == 0) {
+      fifo.pop();
+    }
+    __syncthreads();
   }
 }
 
-template __global__ void basePersistentKernel<OpTask>(
-    mscclpp::C2DDeviceHandle<OpTask> fifo, bool* should_stop);
+template __global__ void basePersistentKernel<Task>(
+    mscclpp::C2DDeviceHandle<Task> fifo, CollArgs* d_coll, MoeArgs* d_moe,
+    bool* should_stop);
 
 }  // namespace eccl
