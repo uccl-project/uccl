@@ -2,6 +2,11 @@
 #define RDMA_HPP
 #include "common.hpp"
 #include "proxy_ctx.hpp"
+// clang-format off
+// prevent clang-format reordering net.h before util.h
+#include "util/util.h"
+#include "util/net.h"
+// clang-format on
 #include "ring_buffer.cuh"
 #include "unistd.h"
 #include <infiniband/efadv.h>

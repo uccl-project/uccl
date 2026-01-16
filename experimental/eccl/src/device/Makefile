@@ -29,4 +29,4 @@ $(TARGET): $(OBJ_CC) $(OBJ_CU)
 	$(NVCC) $(OBJ_CC) $(OBJ_CU) -o $(TARGET) $(LIBS) $(RPATH) $(NVCCFLAGS)
 
 clean:
-	rm -f $(OBJ_CC) $(OBJ_CU) $(TARGET)
+	rm -f $(OBJ_CC) $(OBJ_CU) $(TARGET) *.d

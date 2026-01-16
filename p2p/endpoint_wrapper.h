@@ -1,8 +1,6 @@
 #pragma once
 #include "engine.h"
 
-// #define UCCL_P2P_USE_EFA
-
 namespace unified {
 
 template <class T>
@@ -17,8 +15,8 @@ inline void delete_ep(RDMAEndPoint const& s) {
           // raw pointer: we own it → delete
           delete ep;
         }
-#ifdef UCCL_P2P_USE_EFA
-        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+#ifdef UCCL_P2P_USE_NATIVE_RDMA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<NICEndpoint>>) {
           // shared_ptr: do nothing (shared_ptr handles lifetime)
         }
 #endif
@@ -30,8 +28,8 @@ inline void delete_ep(RDMAEndPoint const& s) {
       s);
 }
 
-#ifdef UCCL_P2P_USE_EFA
-inline int set_request(std::shared_ptr<EFAEndpoint> const& obj, Conn* conn,
+#ifdef UCCL_P2P_USE_NATIVE_RDMA
+inline int set_request(std::shared_ptr<NICEndpoint> const& obj, Conn* conn,
                        unified::P2PMhandle* local_mh, void* src, size_t size,
                        FifoItem const& slot_item, uccl::ucclRequest* ureq) {
   // Create RemoteMemInfo from FifoItem
@@ -44,7 +42,7 @@ inline int set_request(std::shared_ptr<EFAEndpoint> const& obj, Conn* conn,
   auto local_mem = std::make_shared<RegMemBlock>(src, size, MemoryType::GPU);
   local_mem->mr_array = local_mh->mr_array;
 
-  auto req = std::make_shared<EFASendRequest>(local_mem, remote_mem);
+  auto req = std::make_shared<RDMASendRequest>(local_mem, remote_mem);
   req->to_rank_id = conn->uccl_conn_id_.flow_id;
 
   req->send_type = SendType::Write;
@@ -111,8 +109,8 @@ inline bool uccl_regmr(RDMAEndPoint const& s, int dev, void* data, size_t len,
             return false;
           }
         }
-#ifdef UCCL_P2P_USE_EFA
-        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+#ifdef UCCL_P2P_USE_NATIVE_RDMA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<NICEndpoint>>) {
           if (obj->uccl_regmr(data, len, mhandle->mr_array) < 0) {
             return false;
           }
@@ -141,13 +139,13 @@ inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
               static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), mh,
               data, size, ureq);
         }
-#ifdef UCCL_P2P_USE_EFA
-        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+#ifdef UCCL_P2P_USE_NATIVE_RDMA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<NICEndpoint>>) {
           auto send_mem = std::make_shared<RegMemBlock>(const_cast<void*>(data),
                                                         size, MemoryType::GPU);
           send_mem->mr_array = mhandle->mr_array;
           auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
-          auto send_req = std::make_shared<EFASendRequest>(
+          auto send_req = std::make_shared<RDMASendRequest>(
               send_mem, remote_mem_placeholder);
           ureq->type = uccl::ReqType::ReqTx;
           send_req->to_rank_id = conn->uccl_conn_id_.flow_id;
@@ -181,12 +179,12 @@ inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
               static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
               &(mhandles->mhandle_), data, size, n, ureq);
         }
-#ifdef UCCL_P2P_USE_EFA
-        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+#ifdef UCCL_P2P_USE_NATIVE_RDMA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<NICEndpoint>>) {
           auto recv_mem =
               std::make_shared<RegMemBlock>(data[0], size[0], MemoryType::GPU);
           recv_mem->mr_array = mhandles->mr_array;
-          auto recv_req = std::make_shared<EFARecvRequest>(recv_mem);
+          auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
           ureq->type = uccl::ReqType::ReqRx;
           ureq->engine_idx = obj->recv(conn->uccl_conn_id_.flow_id, recv_req);
           ureq->n = conn->uccl_conn_id_.flow_id;
@@ -210,8 +208,8 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
         if constexpr (std::is_pointer_v<T>) {
           return obj->uccl_poll_ureq_once(ureq);
         }
-#ifdef UCCL_P2P_USE_EFA
-        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+#ifdef UCCL_P2P_USE_NATIVE_RDMA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<NICEndpoint>>) {
           if (ureq->type == uccl::ReqType::ReqTx ||
               ureq->type == uccl::ReqType::ReqWrite ||
               ureq->type == uccl::ReqType::ReqRead) {
@@ -245,8 +243,8 @@ inline int uccl_read_async(RDMAEndPoint const& s, Conn* conn,
               local_mh->mhandle_, dst, size,
               static_cast<uccl::FifoItem const&>(slot_item), ureq);
         }
-#ifdef UCCL_P2P_USE_EFA
-        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+#ifdef UCCL_P2P_USE_NATIVE_RDMA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<NICEndpoint>>) {
           ureq->type = uccl::ReqType::ReqRead;
           return set_request(obj, conn, local_mh, dst, size, slot_item, ureq);
         }
@@ -273,8 +271,8 @@ inline int uccl_write_async(RDMAEndPoint const& s, Conn* conn,
               local_mh->mhandle_, src, size,
               static_cast<uccl::FifoItem const&>(slot_item), ureq);
         }
-#ifdef UCCL_P2P_USE_EFA
-        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+#ifdef UCCL_P2P_USE_NATIVE_RDMA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<NICEndpoint>>) {
           ureq->type = uccl::ReqType::ReqWrite;
           return set_request(obj, conn, local_mh, src, size, slot_item, ureq);
         }
@@ -300,8 +298,8 @@ inline int prepare_fifo_metadata(RDMAEndPoint const& s, Conn* conn,
               static_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
               &(mhandle->mhandle_), data, size, out_buf);
         }
-#ifdef UCCL_P2P_USE_EFA
-        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+#ifdef UCCL_P2P_USE_NATIVE_RDMA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<NICEndpoint>>) {
           FifoItem remote_mem_info;
           remote_mem_info.addr = reinterpret_cast<uint64_t>(data);
           remote_mem_info.size = size;
@@ -332,8 +330,8 @@ inline void uccl_deregmr(RDMAEndPoint const& s, P2PMhandle* mhandle) {
           // raw pointer: call with mhandle_
           obj->uccl_deregmr(mhandle->mhandle_);
         }
-#ifdef UCCL_P2P_USE_EFA
-        else if constexpr (std::is_same_v<T, std::shared_ptr<EFAEndpoint>>) {
+#ifdef UCCL_P2P_USE_NATIVE_RDMA
+        else if constexpr (std::is_same_v<T, std::shared_ptr<NICEndpoint>>) {
           obj->uccl_deregmr(mhandle->mr_array);
         }
 #endif
