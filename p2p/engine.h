@@ -106,7 +106,11 @@ struct Conn {
   int uds_sockfd_ = -1;  // Unix Domain Socket file descriptor for local IPC
 };
 
-using FifoItem = uccl::FifoItem;
+#ifdef UCCL_P2P_USE_TCPX
+using FifoItem = nccl_tcpx::FifoItem;
+#else
+using FifoItem = FifoItem;
+#endif
 
 class Endpoint {
   static constexpr uint32_t kMaxVector = 8;
