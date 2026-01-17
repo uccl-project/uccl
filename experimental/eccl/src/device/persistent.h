@@ -100,6 +100,7 @@ class PersistentKernel {
   };
 
   uint64_t submit(const T& task) {
+    // TODO: multi-threads submit
     auto& fq = *fifos_[task.block_index()];
     for (;;) {
       uint64_t tail = fq.fifo.currentId();
@@ -112,9 +113,8 @@ class PersistentKernel {
 
     uint64_t taskId = fq.fifo.push(task);
     {
-      std::lock_guard<std::mutex> g(fifos_[task.block_index()]->pending_mu_);
-      fifos_[task.block_index()]->pending[taskId] = {task.args_index(),
-                                                     (TaskType)task.type_u8()};
+      std::lock_guard<std::mutex> g(fq.pending_mu_);
+      fq.pending[taskId] = {task.args_index(), (TaskType)task.type_u8()};
     }
     return taskId;
   };

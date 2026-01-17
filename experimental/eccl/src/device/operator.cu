@@ -32,20 +32,16 @@ __device__ void run_copy(CollArgs const& a) {
 
   const uint64_t total = (uint64_t)a.bytes;
 
-  constexpr uint32_t wpt = 16;
+  const uint64_t tid = (uint64_t)threadIdx.x;
+  const uint64_t nthread = (uint64_t)blockDim.x;
 
-  const uint64_t tid = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
-  const uint64_t nthread = (uint64_t)gridDim.x * blockDim.x;
+  const uint64_t chunk_size = (total + nthread - 1) / nthread;
 
-  const uint64_t base = tid * (uint64_t)wpt;
-  const uint64_t step = nthread * (uint64_t)wpt;
+  const uint64_t start = tid * chunk_size;
+  const uint64_t end = min(start + chunk_size, total);
 
-  for (uint64_t i = base; i < total; i += step) {
-#pragma unroll
-    for (uint32_t k = 0; k < wpt; ++k) {
-      uint64_t j = i + k;
-      if (j < total) dst[j] = src[j];
-    }
+  for (uint64_t i = start; i < end; ++i) {
+    dst[i] = src[i];
   }
 }
 
@@ -55,26 +51,20 @@ __device__ void run_reduce_inplace(CollArgs const& a) {
   auto* src = reinterpret_cast<T const*>(a.src);
 
   const uint64_t n = (uint64_t)a.bytes / sizeof(T);
-  constexpr uint32_t wpt = 8;
 
-  const uint64_t tid = (uint64_t)blockIdx.x * blockDim.x + threadIdx.x;
-  const uint64_t nthread = (uint64_t)gridDim.x * blockDim.x;
+  const uint64_t tid = (uint64_t)threadIdx.x;
+  const uint64_t nthread = (uint64_t)blockDim.x;
 
-  const uint64_t base = tid * (uint64_t)wpt;
-  const uint64_t step = nthread * (uint64_t)wpt;
+  const uint64_t chunk_size = (n + nthread - 1) / nthread;
+  const uint64_t start = tid * chunk_size;
+  const uint64_t end = min(start + chunk_size, n);
 
   const ReduceType rop = a.redType;
 
   if (rop == ReduceType::None) return;
 
-  for (uint64_t i = base; i < n; i += step) {
-#pragma unroll
-    for (uint32_t k = 0; k < wpt; ++k) {
-      uint64_t j = i + k;
-      if (j < n) {
-        dst[j] = apply_red<T>(rop, dst[j], src[j]);
-      }
-    }
+  for (uint64_t i = start; i < end; ++i) {
+    dst[i] = apply_red<T>(rop, dst[i], src[i]);
   }
 }
 
@@ -105,11 +95,12 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* fifos,
     const TaskType ttype = (TaskType)task->type_u8();
     const DataType dtype = (DataType)task->dtype_u8();
     const uint32_t idx = task->args_index();
+    const uint32_t block_id = task->block_index();
     const CollArgs a = d_coll[idx];
 
     // if (threadIdx.x == 0) {
-    //   printf("task args_id=%u type=%d dtype=%d red=%d bytes=%u\n", idx,
-    //   int(ttype),
+    //   printf("cur block=%u : task block_id=%u args_id=%u type=%d dtype=%d
+    //   red=%d bytes=%u\n", bid, block_id, idx, int(ttype),
     //          int(dtype), int(a.redType), a.bytes);
     // }
 

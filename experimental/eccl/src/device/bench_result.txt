@@ -1,3 +1,4 @@
+# single fifo benchmark
 `CUDA_VISIBLE_DEVICES=5 ./bench_fifo`
 FIFO benchmark via PersistentKernel
 Init CpuToGpuFifo at device NVIDIA A40 !
@@ -12,4 +13,27 @@ Init CpuToGpuFifo at device NVIDIA L40S !
 Warmup done.
 Latency (us): min 5.80 | p50 22.46 | p90 23.68 | p99 31.07 | max 73.52
 Throughput: 43.53 K tasks/s
+Done.
+
+# multi fifos benchmark
+`CUDA_VISIBLE_DEVICES=5 ./bench_full_fifo`
+Number of SMs on the current GPU: 84
+FIFO benchmark via PersistentKernel
+Init CpuToGpuFifo at device NVIDIA A40 !
+        ... ...
+Init CpuToGpuFifo at device NVIDIA A40 !
+Warmup done.
+Latency (us): min 4.16 | p50 6.64 | p90 7.32 | p99 9.03 | max 225.65
+Throughput: 153.77 K tasks/s
+Done.
+
+`CUDA_VISIBLE_DEVICES=5 ./bench_full_fifo`
+Number of SMs on the current GPU: 142
+FIFO benchmark via PersistentKernel
+Init CpuToGpuFifo at device NVIDIA L40S !
+        ... ...
+Init CpuToGpuFifo at device NVIDIA L40S !
+Warmup done.
+Latency (us): min 4.19 | p50 6.84 | p90 7.92 | p99 10.25 | max 199.99
+Throughput: 141.28 K tasks/s
 Done.
