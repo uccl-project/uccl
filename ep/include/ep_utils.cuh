@@ -605,6 +605,11 @@ __device__ __forceinline__ uint64_t ld_acquire_sys_global(uint64_t const* ptr) {
   return ret;
 }
 
+__device__ __forceinline__ int64_t ld_acquire_sys_global(int64_t const* ptr) {
+  return static_cast<int64_t>(
+      ld_acquire_sys_global(reinterpret_cast<uint64_t const*>(ptr)));
+}
+
 template <typename dtype_t>
 __host__ __device__ constexpr dtype_t align(dtype_t a, dtype_t b) {
   return ceil_div<dtype_t>(a, b) * b;
@@ -925,8 +930,7 @@ __device__ __forceinline__ int ld_acquire_cta(int const* ptr) {
 __forceinline__ __device__ void acquire_lock(int* mutex) {
   // To make later memory operations valid, we must use `acquire` for memory
   // semantics
-  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0)
-    ;
+  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0);
 }
 
 __forceinline__ __device__ void release_lock(int* mutex) {

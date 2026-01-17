@@ -45,6 +45,29 @@ void clean_low_latency_buffer(int* clean_0, int num_clean_int_0, int* clean_1,
                 num_clean_int_0, clean_1, num_clean_int_1);
 }
 
+template <int kNumThreads>
+__launch_bounds__(kNumThreads, 1) __global__
+    void clean_low_latency_buffer_internode(int64_t* clean_0,
+                                            int num_clean_int_0,
+                                            int64_t* clean_1,
+                                            int num_clean_int_1) {
+  auto thread_id = static_cast<int>(threadIdx.x);
+#pragma unroll
+  for (int i = thread_id; i < num_clean_int_0; i += kNumThreads) clean_0[i] = 0;
+#pragma unroll
+  for (int i = thread_id; i < num_clean_int_1; i += kNumThreads) clean_1[i] = 0;
+}
+
+void clean_low_latency_buffer_internode(int64_t* clean_0, int num_clean_int_0,
+                                        int64_t* clean_1, int num_clean_int_1,
+                                        cudaStream_t stream) {
+  constexpr int kNumThreads = 256;
+
+  SETUP_LAUNCH_CONFIG(1, kNumThreads, stream);
+  LAUNCH_KERNEL(&cfg, clean_low_latency_buffer_internode<kNumThreads>, clean_0,
+                num_clean_int_0, clean_1, num_clean_int_1);
+}
+
 template <bool kUseFP8, bool kUseUE8M0, int kHidden>
 __global__ __launch_bounds__(1024, 1) void dispatch(
     void* packed_recv_x, void* packed_recv_x_scales, int* packed_recv_src_info,
@@ -53,14 +76,15 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     int64_t* dispatch_wait_recv_cost_stats, void* rdma_recv_x,
     int* rdma_recv_count, void* rdma_x, void const* x, int64_t const* topk_idx,
     int* atomic_counter_per_expert, int* atomic_finish_counter_per_expert,
-    int* next_clean, int* next_clean_second, int num_next_clean_int,
+    int* next_clean, int64_t* next_clean_second, int num_next_clean_int,
     int num_tokens, int num_max_dispatch_tokens_per_rank, int num_topk,
     int num_experts, int rank, int num_ranks, int num_warp_groups,
     int num_warps_per_group, bool round_scale, int phases,
     uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
     int max_nvl_peers, int low_latency_buffer_idx,
     void** ipc_rdma_base_ptrs = nullptr, void* rdma_buffer_ptr = nullptr,
-    void* atomic_buffer_ptr = nullptr, int* rdma_recv_count_internode = nullptr,
+    void* atomic_buffer_ptr = nullptr,
+    int64_t* rdma_recv_count_internode = nullptr,
     int* grid_sync_barrier_ptr = nullptr) {
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const thread_id = static_cast<int>(threadIdx.x);
@@ -391,8 +415,9 @@ LOW_LATENCY_DISPATCH_RECV:
         ;
 #endif
 
+      int64_t num_recv_tokens_internode64 = 0;
       while ((src_rank / max_nvl_peers != rank / max_nvl_peers) &&
-             (num_recv_tokens_internode = ld_acquire_sys_global(
+             (num_recv_tokens_internode64 = ld_acquire_sys_global(
                   rdma_recv_count_internode + local_expert_idx * num_ranks +
                   src_rank)) == 0)
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
@@ -425,7 +450,9 @@ LOW_LATENCY_DISPATCH_RECV:
       }
       auto wait_recv_cost = clock64() - start_time;
       num_recv_tokens_internode =
-          num_recv_tokens_internode != 0 ? -num_recv_tokens_internode - 1 : 0;
+          num_recv_tokens_internode64 != 0
+              ? -static_cast<int>(num_recv_tokens_internode64) - 1
+              : 0;
       num_recv_tokens_ipc =
           num_recv_tokens_ipc != 0 ? -num_recv_tokens_ipc - 1 : 0;
       // printf(
@@ -520,16 +547,16 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
               int* packed_recv_count, int* cumulative_local_expert_recv_stats,
               int64_t* dispatch_wait_recv_cost_stats, void* rdma_recv_x,
               int* rdma_recv_count, void* rdma_x, void const* x,
-              int64_t const* topk_idx, int* next_clean, int* next_clean_second,
-              int num_next_clean_int, int num_tokens, int hidden,
-              int num_max_dispatch_tokens_per_rank, int num_topk,
-              int num_experts, int rank, int num_ranks, bool use_fp8,
-              bool round_scale, bool use_ue8m0, void* workspace,
+              int64_t const* topk_idx, int* next_clean,
+              int64_t* next_clean_second, int num_next_clean_int,
+              int num_tokens, int hidden, int num_max_dispatch_tokens_per_rank,
+              int num_topk, int num_experts, int rank, int num_ranks,
+              bool use_fp8, bool round_scale, bool use_ue8m0, void* workspace,
               int num_device_sms, cudaStream_t stream, int phases,
               uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
               int max_nvl_peers, int low_latency_buffer_idx,
               void** ipc_rdma_base_ptrs, void* rdma_buffer_ptr,
-              void* atomic_buffer_ptr, int* rdma_recv_count_internode) {
+              void* atomic_buffer_ptr, int64_t* rdma_recv_count_internode) {
   constexpr int kNumMaxTopK = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = kNumMaxWarpGroups / num_warp_groups;
@@ -592,14 +619,15 @@ __global__ __launch_bounds__(1024, 1) void combine(
     void const* x, int64_t const* topk_idx, float const* topk_weights,
     int const* src_info, int64_t const* layout_range,
     int64_t* combine_wait_recv_cost_stats, int* next_clean,
-    int* next_clean_second, int num_next_clean_int, int* atomic_clean_flag,
+    int64_t* next_clean_second, int num_next_clean_int, int* atomic_clean_flag,
     int num_combined_tokens, int hidden, int num_topk,
     int num_max_dispatch_tokens_per_rank, int num_experts, int rank,
     int num_ranks, int num_warp_groups, int num_warps_per_group, int phases,
     bool zero_copy, uint64_t const* d2h_channel_addrs,
     int num_d2h_channel_addrs, int max_nvl_peers, int low_latency_buffer_idx,
     void** ipc_rdma_base_ptrs = nullptr, void* rdma_buffer_ptr = nullptr,
-    void* atomic_buffer_ptr = nullptr, int* rdma_recv_flag_internode = nullptr,
+    void* atomic_buffer_ptr = nullptr,
+    int64_t* rdma_recv_flag_internode = nullptr,
     int* grid_sync_barrier_ptr = nullptr) {
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const num_sms = static_cast<int>(gridDim.x);
@@ -1061,8 +1089,8 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              void* rdma_send_x, void const* x, int64_t const* topk_idx,
              float const* topk_weights, int const* src_info,
              int64_t const* layout_range, int64_t* combine_wait_recv_cost_stats,
-             int* next_clean, int* next_clean_second, int num_next_clean_int,
-             int num_combined_tokens, int hidden,
+             int* next_clean, int64_t* next_clean_second,
+             int num_next_clean_int, int num_combined_tokens, int hidden,
              int num_max_dispatch_tokens_per_rank, int num_topk,
              int num_experts, int rank, int num_ranks, bool use_logfmt,
              void* workspace, int num_device_sms, cudaStream_t stream,
@@ -1070,7 +1098,7 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
              int num_d2h_channel_addrs, int max_nvl_peers,
              int low_latency_buffer_idx, void** ipc_rdma_base_ptrs,
              void* rdma_buffer_ptr, void* atomic_buffer_ptr,
-             int* rdma_recv_flag_internode) {
+             int64_t* rdma_recv_flag_internode) {
   constexpr int kNumMaxTopk = 9;
   int const num_warp_groups = ceil_div(num_experts, num_device_sms);
   int const num_warps_per_group = kNumMaxWarpGroups / num_warp_groups;

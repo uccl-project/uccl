@@ -43,7 +43,8 @@ struct RDMAConnectionInfo {
 };
 
 struct PendingUpdate {
-  std::atomic<int>* addr;
+  uintptr_t addr;  // points into atomic_buffer_ptr (either int or int64 slot)
+  bool is_64bit;   // true => addr is std::atomic<int64_t>*, else std::atomic<int>*
   int value;
   uint32_t imm;
   int low_latency_buffer_idx;
@@ -54,6 +55,7 @@ struct PendingUpdate {
   // Needed for std::set ordering
   bool operator<(PendingUpdate const& other) const {
     if (addr != other.addr) return addr < other.addr;
+    if (is_64bit != other.is_64bit) return is_64bit < other.is_64bit;
     if (value != other.value) return value < other.value;
     return imm < other.imm;
   }

@@ -69,9 +69,11 @@ struct ProxyCtx {
   uintptr_t dispatch_recv_data_offset =
       0;  // offset of dispatch_rdma_recv_data_buffer from rdma_buffer base
 
-  // Atomic operations buffer (GPU memory for receiving old values)
-  uint32_t* atomic_old_values_buf =
-      nullptr;  // GPU buffer for atomic old values
+  // Local scratch buffer to receive the "old value" returned by NIC atomics
+  // (e.g., IBV_WR_ATOMIC_FETCH_AND_ADD returns a 64-bit value into the local
+  // SGE). This is NOT the remote atomic counter buffer (`atomic_buffer_ptr`).
+  uint64_t* atomic_old_values_buf = nullptr;
+  ibv_mr* atomic_old_values_mr = nullptr;  // MR for atomic_old_values_buf
   static constexpr size_t kMaxAtomicOps =
       1024;  // Maximum concurrent atomic operations
 

@@ -1402,6 +1402,13 @@ class Buffer {
 
     uccl::internode_ll::clean_low_latency_buffer(
         ptr0, count0, ptr1, count1, at::cuda::getCurrentCUDAStream());
+
+    if (atomic_buffer_ptr != nullptr) {
+      // Internode signaling buffers live in atomic_buffer_ptr.
+      uccl::internode_ll::clean_low_latency_buffer_internode(
+          ptr_internode0, count0, ptr_internode1, count1,
+          at::cuda::getCurrentCUDAStream());
+    }
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>, torch::Tensor,
