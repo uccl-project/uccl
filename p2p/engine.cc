@@ -83,7 +83,8 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
-Endpoint::Endpoint(uint32_t const num_cpus) : local_gpu_idx_(INVALID_GPU), num_cpus_(num_cpus) {
+Endpoint::Endpoint(uint32_t const num_cpus)
+    : local_gpu_idx_(INVALID_GPU), num_cpus_(num_cpus) {
   std::cout << "Creating Engine with CPUs: " << num_cpus << std::endl;
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
 
@@ -158,7 +159,7 @@ void Endpoint::initialize_engine() {
   }
 
   numa_node_ = RdmaDeviceManager::instance().get_numa_node(local_gpu_idx_);
-  
+
   // Initialize rdma contexts for devices used by the GPU
   initialize_rdma_ctx_for_gpu(ep_, local_gpu_idx_);
   std::cout << "Lazy creation of engine for GPU " << local_gpu_idx_
@@ -169,7 +170,7 @@ void Endpoint::initialize_engine() {
       uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
   recv_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
-  
+
   // Initialize proxy threads
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
