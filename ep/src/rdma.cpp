@@ -2847,12 +2847,12 @@ void post_atomic_operations(ProxyCtx& S,
                                        my_rank, thread_idx, acked_wrs);
 #endif
   } else {
-// #if !defined(EFA)
-//     post_atomic_operations_native_rdma_fast_mode(
-//         S, wrs_to_post, cmds_to_post, ctxs, my_rank, thread_idx, acked_wrs);
-// #else
+#if !defined(EFA)
+    post_atomic_operations_native_rdma_fast_mode(
+        S, wrs_to_post, cmds_to_post, ctxs, my_rank, thread_idx, acked_wrs);
+#else
     post_atomic_operations_fast_mode(S, wrs_to_post, cmds_to_post, ctxs,
                                      my_rank, thread_idx, acked_wrs);
-// #endif
+#endif
   }
 }

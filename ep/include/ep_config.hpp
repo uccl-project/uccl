@@ -244,11 +244,10 @@ struct LowLatencyLayout {
                                    send_buffer_bytes * 2 +
                                    recv_buffer_bytes * i),
           advance<int*>(rdma_buffer, signaling_buffer_bytes_aligned * i),
-          atomic_buffer_ptr
-              ? reinterpret_cast<int64_t*>(
-                    (uint8_t*)atomic_buffer_ptr +
-                    i * internode_signaling_buffer_bytes_aligned)
-              : nullptr, /* dispatch_rdma_recv_count_buffer_internode */
+          reinterpret_cast<int64_t*>(
+            (uint8_t*)atomic_buffer_ptr +
+            i * signaling_buffer_bytes_aligned), /* dispatch_rdma_recv_count_buffer_internode
+                                                  */
 
           advance(rdma_buffer,
                   signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * i),
@@ -256,11 +255,10 @@ struct LowLatencyLayout {
                                    send_buffer_bytes * 2 +
                                    recv_buffer_bytes * i),
           advance<int*>(rdma_buffer, signaling_buffer_bytes_aligned * i),
-          atomic_buffer_ptr
-              ? reinterpret_cast<int64_t*>(
-                    (uint8_t*)atomic_buffer_ptr +
-                    i * internode_signaling_buffer_bytes_aligned)
-              : nullptr, /* combine_rdma_recv_flag_buffer_internode */
+          reinterpret_cast<int64_t*>(
+            (uint8_t*)atomic_buffer_ptr +
+            i * signaling_buffer_bytes_aligned), /* combine_rdma_recv_flag_buffer_internode
+                                                  */
 
           advance(rdma_buffer,
                   signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * i),

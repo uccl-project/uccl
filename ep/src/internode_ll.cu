@@ -455,13 +455,13 @@ LOW_LATENCY_DISPATCH_RECV:
               : 0;
       num_recv_tokens_ipc =
           num_recv_tokens_ipc != 0 ? -num_recv_tokens_ipc - 1 : 0;
-      // printf(
-      //     "num_recv_tokens_internode: %d, num_recv_tokens_ipc: %d, src_rank:"
-      //     "%d, rank: %d, max_nvl_peers: %d, responsible_expert_idx: %d,"
-      //     "num_experts: %d, num_local_experts: %d\n",
-      //     num_recv_tokens_internode, num_recv_tokens_ipc, src_rank, rank,
-      //     max_nvl_peers, responsible_expert_idx, num_experts,
-      //     num_local_experts);
+      printf(
+          "num_recv_tokens_internode: %d, num_recv_tokens_ipc: %d, src_rank:"
+          "%d, rank: %d, max_nvl_peers: %d, responsible_expert_idx: %d,"
+          "num_experts: %d, num_local_experts: %d\n",
+          num_recv_tokens_internode, num_recv_tokens_ipc, src_rank, rank,
+          max_nvl_peers, responsible_expert_idx, num_experts,
+          num_local_experts);
       num_recv_tokens = num_recv_tokens_internode + num_recv_tokens_ipc;
       recv_token_begin_idx =
           atomicAdd(packed_recv_count + local_expert_idx, num_recv_tokens);
