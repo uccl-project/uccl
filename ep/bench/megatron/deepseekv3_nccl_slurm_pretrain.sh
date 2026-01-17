@@ -1,0 +1,28 @@
+
+#!/bin/bash
+###############################################################################
+# Copyright (c) 2025, Advanced Micro Devices, Inc. All rights reserved.
+#
+# See LICENSE for license information.
+###############################################################################
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+export DOCKER_IMAGE="docker.io/rocm/primus:v25.11"
+
+# ---------------------------------------------------------------------------
+# Training Config
+# ---------------------------------------------------------------------------
+export MODEL_NAME=deepseek_v3
+export EP=16
+export PP=16
+export VPP=2
+export PIPELINE_LAYOUT="Et|(tt|)*30,mL"
+
+# ---------------------------------------------------------------------------
+# Cluster Config
+# ---------------------------------------------------------------------------
+export NNODES=32
+export NODE_LISTS=
+
+bash "${SCRIPT_DIR}"/primus_slurm_pretrain_cli.sh --moe_token_dispatcher_type alltoall
