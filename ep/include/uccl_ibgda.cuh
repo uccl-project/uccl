@@ -320,7 +320,7 @@ __device__ static __forceinline__ void nvshmemi_ibgda_quiet(
       }
     }
 #endif
-    break;
+    // break;
   }
 
   // Then wait for all QUIET commands to complete

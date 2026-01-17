@@ -112,11 +112,14 @@ class Buffer {
         auto host_addrs = collect_d2h_channel_addrs_for_device(device_index);
         num_d2h_channel_addrs = static_cast<int>(host_addrs.size());
         if (num_d2h_channel_addrs > 0) {
-          CUDA_CHECK(cudaMallocManaged(
+          CUDA_CHECK(cudaMalloc(
               &d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle)));
 
-          CUDA_CHECK(cudaMallocManaged(
+          CUDA_CHECK(cudaMalloc(
               &d_handles, num_d2h_channel_addrs * sizeof(uint64_t)));
+
+          std::vector<d2hq::D2HHandle> h_handle_objs(num_d2h_channel_addrs);
+          std::vector<uint64_t> h_handles(num_d2h_channel_addrs);
 
           for (int i = 0; i < num_d2h_channel_addrs; ++i) {
 #ifndef USE_MSCCLPP_FIFO_BACKEND
@@ -128,24 +131,22 @@ class Buffer {
 #else
             dev_ptr = host_ptr;
 #endif
-            d_handle_objs[i].init_from_dev_ptr(dev_ptr);
-            d_handles[i] = reinterpret_cast<uint64_t>(&d_handle_objs[i]);
+            h_handle_objs[i].init_from_dev_ptr(dev_ptr);
+            h_handles[i] = reinterpret_cast<uint64_t>(d_handle_objs + i);
 #else
             auto* fifo = reinterpret_cast<mscclpp::Fifo*>(host_addrs[i]);
             mscclpp::FifoDeviceHandle h = fifo->deviceHandle();
-            d_handle_objs[i].init_from_host_value(h);
-            d_handles[i] = reinterpret_cast<uint64_t>(d_handle_objs + i);
+            h_handle_objs[i].init_from_host_value(h);
+            h_handles[i] = reinterpret_cast<uint64_t>(d_handle_objs + i);
 #endif
           }
 
-          // Prefetch so the device immediately sees initialized contents
-          CUDA_CHECK(cudaMemPrefetchAsync(
-              d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
-              device_index));
-          CUDA_CHECK(cudaMemPrefetchAsync(
-              d_handles, num_d2h_channel_addrs * sizeof(uint64_t),
-              device_index));
-          CUDA_CHECK(cudaDeviceSynchronize());
+          CUDA_CHECK(cudaMemcpy(d_handle_objs, h_handle_objs.data(),
+                                num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
+                                cudaMemcpyHostToDevice));
+          CUDA_CHECK(cudaMemcpy(d_handles, h_handles.data(),
+                                num_d2h_channel_addrs * sizeof(uint64_t),
+                                cudaMemcpyHostToDevice));
         }
         // Allocate device memory for IPC base pointers
         CUDA_CHECK(

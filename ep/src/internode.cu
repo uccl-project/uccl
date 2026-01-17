@@ -1194,6 +1194,9 @@ __global__ void __launch_bounds__(
           trap();
         }
       }
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+      memory_fence();
+#endif
       auto src_rdma_head =
           __shfl_sync(WARP_MASK, cached_rdma_channel_head, src_rdma_rank);
       auto src_rdma_tail =
@@ -2734,6 +2737,9 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
             trap();
           }
         }
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+        memory_fence();
+#endif
         __syncwarp();
         // Combine current token
         auto get_addr_fn = [&](int src_rdma_rank, int slot_idx,

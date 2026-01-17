@@ -283,7 +283,7 @@ if [[ "$BUILD_TYPE" =~ (ep|all) ]];then
       echo "jq not found, installing via pip..."
       pip install jq
     fi
-    DETECTED_GPU_ARCH=$(amd-smi static -g 0 --asic --json | jq -r '.[].asic.target_graphics_version')
+    DETECTED_GPU_ARCH=$(amd-smi static -g 0 --asic --json | jq -r 'if type=="object" and has("gpu_data") then .gpu_data[] else .[] end | .asic.target_graphics_version')
     if [[ -n "$DETECTED_GPU_ARCH" ]]; then
       echo "Auto-detected ROCm architecture: ${DETECTED_GPU_ARCH}"
     fi
