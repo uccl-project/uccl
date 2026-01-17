@@ -148,11 +148,7 @@ struct PeerInfo {
   int gpu_idx;          // GPU index of the peer
 };
 
-#ifdef UCCL_P2P_USE_TCPX
-using FifoItem = nccl_tcpx::FifoItem;
-#else
 using FifoItem = uccl::FifoItem;
-#endif
 
 class Endpoint {
 #ifdef UCCL_P2P_USE_NATIVE_RDMA
