@@ -86,12 +86,13 @@ template __device__ void run_reduce_inplace<__half>(CollArgs const&);
 
 // TODO: using sm id to assign task
 template <typename T>
-__global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T> fifo,
+__global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* fifos,
                                      CollArgs* d_coll, MoeArgs* d_moe,
                                      bool* should_stop) {
   (void)d_moe;
 
-  if (blockIdx.x != 0) return;
+  const uint32_t bid = blockIdx.x;
+  auto& fifo = fifos[bid];  // block => fifo
 
   while (true) {
     if (should_stop && *should_stop) break;
@@ -103,7 +104,6 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T> fifo,
 
     const TaskType ttype = (TaskType)task->type_u8();
     const DataType dtype = (DataType)task->dtype_u8();
-
     const uint32_t idx = task->args_index();
     const CollArgs a = d_coll[idx];
 
@@ -141,7 +141,7 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T> fifo,
 }
 
 template __global__ void basePersistentKernel<Task>(
-    mscclpp::C2DDeviceHandle<Task> fifo, CollArgs* d_coll, MoeArgs* d_moe,
+    mscclpp::C2DDeviceHandle<Task>* fifos, CollArgs* d_coll, MoeArgs* d_moe,
     bool* should_stop);
 
 }  // namespace eccl

@@ -25,7 +25,13 @@ template <typename T>
 class PersistentKernel {
  public:
   explicit PersistentKernel(PersistentKernelConfig const& config)
-      : cfg_(config), fifo_(config.fifoCapacity) {
+      : cfg_(config) {
+    // multi fifos init
+    fifos_.reserve(cfg_.numBlocks);
+    for (uint32_t i = 0; i < cfg_.numBlocks; ++i) {
+      fifos_.emplace_back(std::make_unique<FifoWithPending>(cfg_.fifoCapacity));
+    }
+
     // Allocate memory for stop flag (host and device)
     GPU_RT_CHECK(gpuMalloc(&d_stopFlag_, sizeof(bool)));
     GPU_RT_CHECK(gpuHostAlloc(&h_stopFlag_, sizeof(bool), gpuHostAllocMapped));
@@ -53,6 +59,9 @@ class PersistentKernel {
 
     GPU_RT_CHECK(gpuFree(d_stopFlag_));
     GPU_RT_CHECK(gpuFreeHost(h_stopFlag_));
+    if (d_fifo_handles_) {
+      GPU_RT_CHECK(gpuFree(d_fifo_handles_));
+    }
 
     if (copy_stream_) GPU_RT_CHECK(gpuStreamDestroy(copy_stream_));
     if (owns_stream_ && stream_) GPU_RT_CHECK(gpuStreamDestroy(stream_));
@@ -61,10 +70,24 @@ class PersistentKernel {
   bool launch() {
     if (launched_) return false;
 
-    mscclpp::C2DDeviceHandle<T> handle = fifo_.deviceHandle();
     auto* d_coll = eccl::TaskManager::instance().d_coll();
     auto* d_moe = eccl::TaskManager::instance().d_moe();
-    void* args[] = {&handle, &d_coll, &d_moe, &d_stopFlag_};
+
+    std::vector<mscclpp::C2DDeviceHandle<T>> h_fifo_handles;
+    h_fifo_handles.reserve(cfg_.numBlocks);
+
+    for (auto& f : fifos_) {
+      h_fifo_handles.push_back(f->fifo.deviceHandle());
+    }
+
+    GPU_RT_CHECK(
+        gpuMalloc(&d_fifo_handles_, sizeof(*d_fifo_handles_) * cfg_.numBlocks));
+    GPU_RT_CHECK(gpuMemcpyAsync(d_fifo_handles_, h_fifo_handles.data(),
+                                sizeof(*d_fifo_handles_) * cfg_.numBlocks,
+                                gpuMemcpyHostToDevice, copy_stream_));
+    GPU_RT_CHECK(gpuStreamSynchronize(copy_stream_));
+
+    void* args[] = {&d_fifo_handles_, &d_coll, &d_moe, &d_stopFlag_};
 
     dim3 grid(cfg_.numBlocks);
     dim3 block(cfg_.threadsPerBlock);
@@ -77,57 +100,31 @@ class PersistentKernel {
   };
 
   uint64_t submit(const T& task) {
+    auto& fq = *fifos_[task.block_index()];
     for (;;) {
-      uint64_t tail = fifo_.currentId();
-      uint64_t head = fifo_.head();
+      uint64_t tail = fq.fifo.currentId();
+      uint64_t head = fq.fifo.head();
       if ((int64_t)(head + 1 - tail) <= cfg_.fifoCapacity) {
         break;
       }
       std::this_thread::yield();
     }
 
-    uint64_t taskId = fifo_.push(task);
+    uint64_t taskId = fq.fifo.push(task);
     {
-      std::lock_guard<std::mutex> g(pending_mu_);
-      pending_[taskId] = {task.args_index(), (TaskType)task.type_u8()};
+      std::lock_guard<std::mutex> g(fifos_[task.block_index()]->pending_mu_);
+      fifos_[task.block_index()]->pending[taskId] = {task.args_index(),
+                                                     (TaskType)task.type_u8()};
     }
     return taskId;
   };
 
-  uint64_t submitBatch(std::vector<T>& tasks) {
-    assert(!tasks.empty());
-    size_t count = tasks.size();
-
-    for (;;) {
-      uint64_t tail = fifo_.currentId();
-      uint64_t head = fifo_.head();
-      if ((int64_t)(head + count - tail) <= cfg_.fifoCapacity) {
-        break;
-      }
-      std::this_thread::yield();
-    }
-
-    uint64_t startTaskId = fifo_.push(tasks.begin(), tasks.end());
-    // taskId -> argsId / type
+  bool is_done(uint64_t blockId, uint64_t taskId, size_t count = 0) {
+    uint64_t doneBefore = fifos_[blockId]->fifo.currentId();
     {
-      std::lock_guard<std::mutex> g(pending_mu_);
-      uint64_t taskId = startTaskId;
-      for (auto const& task : tasks) {
-        pending_.emplace(
-            taskId,
-            Pending{task.args_index(), static_cast<TaskType>(task.type_u8())});
-        ++taskId;
-      }
-    }
-    return startTaskId;
-  }
-
-  bool is_done(uint64_t taskId, size_t count = 0) {
-    uint64_t doneBefore = fifo_.currentId();
-    {
-      std::lock_guard<std::mutex> g(pending_mu_);
-      auto it = pending_.begin();
-      while (it != pending_.end()) {
+      std::lock_guard<std::mutex> g(fifos_[blockId]->pending_mu_);
+      auto it = fifos_[blockId]->pending.begin();
+      while (it != fifos_[blockId]->pending.end()) {
         uint64_t tid = it->first;
         if ((int64_t)(doneBefore - tid) > 0) {
           Pending const& p = it->second;
@@ -146,7 +143,7 @@ class PersistentKernel {
             default:
               break;
           }
-          it = pending_.erase(it);
+          it = fifos_[blockId]->pending.erase(it);
         } else {
           ++it;
         }
@@ -171,20 +168,26 @@ class PersistentKernel {
   gpuStream_t copy_stream() const { return copy_stream_; }
 
  private:
-  PersistentKernelConfig cfg_;
-  mscclpp::CpuToGpuFifo<T> fifo_;  // TODO: multi fifos for multi Thread Blocks
-
-  // Mapped memory for stop flag
-  bool* d_stopFlag_ = nullptr;  // GPU side stop flag
-  bool* h_stopFlag_ = nullptr;  // Host side stop flag
-
   struct Pending {
     uint32_t argsId;
     eccl::TaskType type;
   };
+  struct FifoWithPending {
+    mscclpp::CpuToGpuFifo<T> fifo;
+    std::mutex pending_mu_;
+    std::unordered_map<uint64_t, Pending> pending;
 
-  std::mutex pending_mu_;
-  std::unordered_map<uint64_t, Pending> pending_;  //
+    explicit FifoWithPending(uint32_t fifo_capacity) : fifo(fifo_capacity) {}
+  };
+
+  PersistentKernelConfig cfg_;
+  std::vector<std::unique_ptr<FifoWithPending>>
+      fifos_;  // Multi fifos for multi Blocks
+
+  // Mapped memory for stop flag
+  bool* d_stopFlag_ = nullptr;  // GPU side stop flag
+  bool* h_stopFlag_ = nullptr;  // Host side stop flag
+  mscclpp::C2DDeviceHandle<T>* d_fifo_handles_ = nullptr;
 
   gpuStream_t stream_ = nullptr;       // compute stream（persistent kernel）
   gpuStream_t copy_stream_ = nullptr;  // copy stream（push/stop）

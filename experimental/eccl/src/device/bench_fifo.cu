@@ -45,10 +45,10 @@ int main() {
 
   // warmup
   for (int i = 0; i < warmup; ++i) {
-    kernel.submit(Task(TaskType::BenchNop, DataType::Fp32, 0));
+    kernel.submit(Task(TaskType::BenchNop, DataType::Fp32, 0, 0));
   }
 
-  while (!kernel.is_done(warmup - 1)) {
+  while (!kernel.is_done(0, warmup - 1)) {
   }
 
   printf("Warmup done.\n");
@@ -59,8 +59,8 @@ int main() {
 
   for (int i = 0; i < latency_iters; ++i) {
     uint64_t t0 = now_ns();
-    uint64_t id = kernel.submit(Task(TaskType::BenchNop, DataType::Fp32, 0));
-    kernel.is_done(id);
+    uint64_t id = kernel.submit(Task(TaskType::BenchNop, DataType::Fp32, 0, 0));
+    kernel.is_done(0, id);
     uint64_t t1 = now_ns();
     lat.push_back(t1 - t0);
   }
@@ -69,13 +69,14 @@ int main() {
 
   // throughput
   uint64_t t0 = now_ns();
-  uint64_t first = kernel.submit(Task(TaskType::BenchNop, DataType::Fp32, 0));
+  uint64_t first =
+      kernel.submit(Task(TaskType::BenchNop, DataType::Fp32, 0, 0));
 
   for (int i = 1; i < throughput_iters; ++i) {
-    kernel.submit(Task(TaskType::BenchNop, DataType::Fp32, 0));
+    kernel.submit(Task(TaskType::BenchNop, DataType::Fp32, 0, 0));
   }
 
-  while (!kernel.is_done(first + throughput_iters - 1)) {
+  while (!kernel.is_done(0, first + throughput_iters - 1)) {
   }
 
   uint64_t t1 = now_ns();

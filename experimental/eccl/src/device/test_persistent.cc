@@ -37,7 +37,7 @@ uint64_t submit_copy_task(eccl::PersistentKernel<eccl::Task>& kernel, void* dst,
   h.redType = eccl::ReduceType::None;
 
   eccl::Task t = eccl::TaskManager::instance().create_coll_task(
-      h, eccl::TaskType::CollCopy, dtype);
+      h, eccl::TaskType::CollCopy, dtype, 0);
 
   return kernel.submit(t);
 }
@@ -53,7 +53,7 @@ uint64_t submit_reduce_task(eccl::PersistentKernel<eccl::Task>& kernel,
   h.redType = redop;
 
   eccl::Task t = eccl::TaskManager::instance().create_coll_task(
-      h, eccl::TaskType::CollReduce, dtype);
+      h, eccl::TaskType::CollReduce, dtype, 0);
 
   return kernel.submit(t);
 }
@@ -101,21 +101,21 @@ int main() {
   uint64_t id = submit_copy_task(kernel, dst_copy, src_copy, N * sizeof(float),
                                  DataType::Fp32);
 
-  while (!kernel.is_done(id)) {
+  while (!kernel.is_done(0, id)) {
   }
   std::cout << "COPY DONE\n";
 
   id = submit_reduce_task(kernel, dst_reduce, src_reduce, N * sizeof(float),
                           DataType::Fp32, ReduceType::Sum);
 
-  while (!kernel.is_done(id)) {
+  while (!kernel.is_done(0, id)) {
   }
   std::cout << "REDUCE DONE\n";
 
   id = submit_copy_task(kernel, dst_copy, src_copy, N * sizeof(float),
                         DataType::Fp32);
 
-  while (!kernel.is_done(id)) {
+  while (!kernel.is_done(0, id)) {
   }
   std::cout << "COPY2 DONE\n";
 
