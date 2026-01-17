@@ -168,14 +168,8 @@ void Endpoint::initialize_engine() {
   send_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
   recv_unified_task_ring_ =
-<<<<<<< HEAD
       uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
 
-=======
-      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
-  
-  // Initialize proxy threads
->>>>>>> cb460cea (Nits.)
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 

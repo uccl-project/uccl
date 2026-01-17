@@ -367,7 +367,7 @@ class NICEndpoint {
       int gpu_index,
       std::vector<size_t> const& device_ids = std::vector<size_t>()) {
     gpu_index_ = gpu_index;
-    
+
     // Find all devices used by the GPU
     std::vector<size_t> actual_device_ids;
     if (device_ids.size() == 0) {
@@ -381,6 +381,11 @@ class NICEndpoint {
     LOG(INFO) << "NICEndpoint initialized with " << contexts_.size()
               << " context(s) for GPU " << gpu_index;
 
+    for (auto dev : actual_device_ids) {
+      auto device = RdmaDeviceManager::instance().getDevice(dev);
+      std::cout << "GPU " << gpu_index << " uses device " << dev << " ("
+                << device->name() << ")" << std::endl;
+    }
     return true;
   }
 
