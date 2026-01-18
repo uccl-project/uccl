@@ -18,7 +18,7 @@ template <typename T>
 __device__ void run_reduce_inplace(CollArgs const& a);
 
 template <typename T>
-__global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T> fifo,
+__global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* fifos,
                                      CollArgs* d_coll, MoeArgs* d_moe,
                                      bool* should_stop = nullptr);
 

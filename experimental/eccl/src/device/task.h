@@ -24,6 +24,7 @@ enum class DataType : uint64_t { Fp8, Fp16, Fp32 };
 
 constexpr unsigned int TaskTypeSize = 8;  // 256
 constexpr unsigned int DataTypeSize = 8;
+constexpr unsigned int BlockIdSize = 8;
 constexpr unsigned int TaskArgsIndexSize = 32;  // Id to Task Args sturct
 
 /// Pair of 64-bit unsigned integers used as a Task.
@@ -39,7 +40,8 @@ union alignas(16) Task {
   struct {
     uint64_t type : TaskTypeSize;
     uint64_t dataType : DataTypeSize;
-    uint64_t : (64 - TaskTypeSize - DataTypeSize);
+    uint64_t blockId : BlockIdSize;
+    uint64_t : (64 - TaskTypeSize - DataTypeSize - BlockIdSize);
     uint64_t argsId : TaskArgsIndexSize;
     uint64_t : (64 - TaskArgsIndexSize);
   } fields;
@@ -47,21 +49,28 @@ union alignas(16) Task {
   /// Constructor.
   /// @param type The type of the Task.
   /// @param dType The type of Data.
+  /// @param blockIndex Which block the task will be dispatched to.
   /// @param argsIndex The Args Id of Task (in TaskManager).
-  __host__ __device__ Task(TaskType type, DataType dType, uint32_t argsIndex) {
+  __host__ __device__ Task(TaskType type, DataType dType, uint32_t blockIndex,
+                           uint32_t argsIndex) {
     const uint64_t t = static_cast<uint64_t>(type);
     const uint64_t dt = static_cast<uint64_t>(dType);
+    const uint64_t bi = static_cast<uint64_t>(blockIndex);
     const uint64_t ai = static_cast<uint64_t>(argsIndex);
 
     assert(t < (1ULL << TaskTypeSize));
     assert(dt < (1ULL << DataTypeSize));
+    assert(bi < (1ULL << BlockIdSize));
     assert(ai < (1ULL << TaskArgsIndexSize));
 
     constexpr uint64_t maskType = (1ULL << TaskTypeSize) - 1;
     constexpr uint64_t maskDType = (1ULL << DataTypeSize) - 1;
+    constexpr uint64_t maskBlockId = (1ULL << BlockIdSize) - 1;
     constexpr uint64_t maskArgs = (1ULL << TaskArgsIndexSize) - 1;
 
-    fst = (t & maskType) | ((dt & maskDType) << TaskTypeSize);
+    fst = (t & maskType) | ((dt & maskDType) << TaskTypeSize) |
+          ((bi & maskBlockId) << (TaskTypeSize + DataTypeSize));
+
     snd = (ai & maskArgs);
   }
 
@@ -69,7 +78,10 @@ union alignas(16) Task {
   __host__ __device__ uint8_t dtype_u8() const {
     return uint8_t((fst >> 8) & 0xFFull);
   }
-  // __host__ __device__ uint64_t args_index_u64() const { return snd; }
+  __host__ __device__ uint32_t block_index() const {
+    return uint32_t((fst >> (TaskTypeSize + DataTypeSize)) &
+                    ((1ULL << BlockIdSize) - 1));
+  }
   __host__ __device__ uint32_t args_index() const {
     return uint32_t(snd & 0xFFFFFFFFull);
   }
@@ -147,7 +159,8 @@ class TaskManager {
   bool inited() const { return inited_; }
 
   // CPU: fill coll args (host -> device copy), return idx
-  Task create_coll_task(CollArgs const& h, TaskType tt, DataType dt) {
+  Task create_coll_task(CollArgs const& h, TaskType tt, DataType dt,
+                        uint32_t blockId) {
     assert(tt == TaskType::CollCopy || tt == TaskType::CollReduce);
 
     uint32_t idx;
@@ -162,7 +175,7 @@ class TaskManager {
     GPU_RT_CHECK(
         gpuMemcpy(d_coll_ + idx, &h, sizeof(CollArgs), gpuMemcpyHostToDevice));
 
-    return Task(tt, dt, idx);
+    return Task(tt, dt, blockId, idx);
   }
 
   // CPU: free slot back
@@ -174,7 +187,8 @@ class TaskManager {
   }
 
   // CPU: fill moe args (host -> device copy), return idx
-  Task create_moe_task(MoeArgs const& h, TaskType tt, DataType dt) {
+  Task create_moe_task(MoeArgs const& h, TaskType tt, DataType dt,
+                       uint32_t blockId) {
     assert(tt == TaskType::MoePreGemm || tt == TaskType::MoePostGemm ||
            tt == TaskType::MoeCombine);
 
@@ -188,7 +202,7 @@ class TaskManager {
     }
     GPU_RT_CHECK(
         gpuMemcpy(d_moe_ + idx, &h, sizeof(MoeArgs), gpuMemcpyHostToDevice));
-    return Task(tt, dt, idx);
+    return Task(tt, dt, blockId, idx);
   }
 
   // CPU: free slot back

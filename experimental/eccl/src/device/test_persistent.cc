@@ -27,8 +27,8 @@ static void fill(std::vector<float>& v, float base, float step) {
 }
 
 uint64_t submit_copy_task(eccl::PersistentKernel<eccl::Task>& kernel, void* dst,
-                          void const* src, uint64_t bytes,
-                          eccl::DataType dtype) {
+                          void const* src, uint64_t bytes, eccl::DataType dtype,
+                          uint32_t block_id) {
   eccl::CollArgs h{};
   h.src = const_cast<void*>(src);
   h.src2 = nullptr;
@@ -37,14 +37,15 @@ uint64_t submit_copy_task(eccl::PersistentKernel<eccl::Task>& kernel, void* dst,
   h.redType = eccl::ReduceType::None;
 
   eccl::Task t = eccl::TaskManager::instance().create_coll_task(
-      h, eccl::TaskType::CollCopy, dtype);
+      h, eccl::TaskType::CollCopy, dtype, block_id);
 
   return kernel.submit(t);
 }
 
 uint64_t submit_reduce_task(eccl::PersistentKernel<eccl::Task>& kernel,
                             void* dst, void const* src, uint64_t bytes,
-                            eccl::DataType dtype, eccl::ReduceType redop) {
+                            eccl::DataType dtype, eccl::ReduceType redop,
+                            uint32_t block_id) {
   eccl::CollArgs h{};
   h.src = const_cast<void*>(src);
   h.src2 = nullptr;
@@ -53,7 +54,7 @@ uint64_t submit_reduce_task(eccl::PersistentKernel<eccl::Task>& kernel,
   h.redType = redop;
 
   eccl::Task t = eccl::TaskManager::instance().create_coll_task(
-      h, eccl::TaskType::CollReduce, dtype);
+      h, eccl::TaskType::CollReduce, dtype, block_id);
 
   return kernel.submit(t);
 }
@@ -62,10 +63,13 @@ int main() {
   eccl::TaskManager::instance().init(1024, 256);
 
   PersistentKernelConfig config;
-  config.numBlocks = 1;
+  config.numBlocks = 3;
   config.threadsPerBlock = 64;
   config.fifoCapacity = 16;
   config.smemSize = 0;
+
+  uint32_t test_block_id = 0;
+  uint32_t test_block_id_2 = 1;
 
   float *dst_copy = nullptr, *src_copy = nullptr;
   float *dst_reduce = nullptr, *src_reduce = nullptr;
@@ -99,23 +103,23 @@ int main() {
   std::cout << "Persistent kernel launched.\n";
 
   uint64_t id = submit_copy_task(kernel, dst_copy, src_copy, N * sizeof(float),
-                                 DataType::Fp32);
+                                 DataType::Fp32, test_block_id);
 
-  while (!kernel.is_done(id)) {
+  while (!kernel.is_done(test_block_id, id)) {
   }
   std::cout << "COPY DONE\n";
 
   id = submit_reduce_task(kernel, dst_reduce, src_reduce, N * sizeof(float),
-                          DataType::Fp32, ReduceType::Sum);
+                          DataType::Fp32, ReduceType::Sum, test_block_id_2);
 
-  while (!kernel.is_done(id)) {
+  while (!kernel.is_done(test_block_id_2, id)) {
   }
   std::cout << "REDUCE DONE\n";
 
   id = submit_copy_task(kernel, dst_copy, src_copy, N * sizeof(float),
-                        DataType::Fp32);
+                        DataType::Fp32, test_block_id);
 
-  while (!kernel.is_done(id)) {
+  while (!kernel.is_done(test_block_id, id)) {
   }
   std::cout << "COPY2 DONE\n";
 
