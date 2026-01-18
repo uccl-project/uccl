@@ -47,6 +47,12 @@ class RdmaContext {
     return gid;
   }
 
+  uint16_t queryLid(int port = 1) const {
+    struct ibv_port_attr port_attr;
+    assert(ibv_query_port(ctx_.get(), port, &port_attr) == 0);
+    return port_attr.lid;
+  }
+
   // Create address handle from remote GID
   struct ibv_ah* createAH(union ibv_gid remote_gid, int port = 1) const {
     struct ibv_ah_attr attr = {};

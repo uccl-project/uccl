@@ -6,7 +6,8 @@
 #include <cstring>
 #include <errno.h>
 
-#define GID_INDEX 0
+#define GID_INDEX_EFA 0
+#define LID_EFA 0
 #define MAX_INLINE_DATA 0
 #define SERVICE_LEVEL 8
 #define QKEY 0x15695
@@ -79,8 +80,9 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   assert(ibv_modify_qp(*qp, &attr,
                        IBV_QP_STATE | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN) == 0);
 
-  local_meta->gid = ctx->queryGid(GID_INDEX);
+  local_meta->gid = ctx->queryGid(GID_INDEX_EFA);
   local_meta->qpn = (*qp)->qp_num;
+  local_meta->lid = LID_EFA;
 }
 
 inline void EFAChannelImpl::connectQP(struct ibv_qp* qp,

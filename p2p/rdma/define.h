@@ -171,7 +171,8 @@ inline std::vector<MessageChunk> splitMessageToChunks(size_t message_size) {
 
 struct ChannelMetaData {
   uint32_t qpn;
-  union ibv_gid gid;
+  union ibv_gid gid;  // RoCE
+  uint16_t lid;       // Infiniband
 
   friend std::ostream& operator<<(std::ostream& os,
                                   ChannelMetaData const& meta) {
