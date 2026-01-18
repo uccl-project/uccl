@@ -76,6 +76,7 @@ inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
 
   local_meta->gid = ctx->queryGid(get_gid_index_from_env());
   local_meta->qpn = (*qp)->qp_num;
+  local_meta->lid = ctx->queryLid(kPortNum);
 }
 
 inline void IBChannelImpl::connectQP(struct ibv_qp* qp,
@@ -100,16 +101,30 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
   attr.rq_psn = 0;
   attr.max_dest_rd_atomic = MAX_DEST_RD_ATOMIC;
   attr.min_rnr_timer = MIN_RNR_TIMER;
-  // RoCE
-  // TODO: Infiniband
-  attr.ah_attr.is_global = 1;
-  attr.ah_attr.port_num = 1;
-  attr.ah_attr.sl = SERVICE_LEVEL;
-  attr.ah_attr.src_path_bits = 0;
-  attr.ah_attr.grh.traffic_class = TRAFFIC_CLASS;
-  attr.ah_attr.grh.hop_limit = 64;
-  memcpy(&attr.ah_attr.grh.dgid, remote_meta.gid.raw, 16);
-  attr.ah_attr.grh.sgid_index = get_gid_index_from_env();
+  if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
+    // RoCE
+    attr.ah_attr.is_global = 1;
+    attr.ah_attr.port_num = kPortNum;
+    attr.ah_attr.sl = SERVICE_LEVEL;
+    attr.ah_attr.src_path_bits = 0;
+    attr.ah_attr.grh.traffic_class = TRAFFIC_CLASS;
+    attr.ah_attr.grh.hop_limit = 64;
+    memcpy(&attr.ah_attr.grh.dgid, remote_meta.gid.raw, 16);
+    attr.ah_attr.grh.sgid_index = get_gid_index_from_env();
+  } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
+    // Infiniband
+    attr.ah_attr.is_global = 0;
+    attr.ah_attr.dlid = remote_meta.lid;
+    attr.ah_attr.port_num = kPortNum;
+    attr.ah_attr.sl = 0;
+    attr.ah_attr.src_path_bits = 0;
+    attr.ah_attr.static_rate = 0;
+    memset(&attr.ah_attr.grh, 0, sizeof(attr.ah_attr.grh));
+  } else {
+    LOG(ERROR) << "Unknown link layer: " << port_attr.link_layer;
+    throw std::runtime_error("Unknown link layer");
+  }
+
   flags = IBV_QP_STATE | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
           IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER | IBV_QP_AV;
   assert(ibv_modify_qp(qp, &attr, flags) == 0);
