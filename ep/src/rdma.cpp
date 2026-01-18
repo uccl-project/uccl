@@ -2663,20 +2663,6 @@ static void post_atomic_operations_native_rdma(
         std::abort();
       }
 
-      // Verify atomic buffer is within registered memory region
-      uintptr_t mr_addr = reinterpret_cast<uintptr_t>(S.mr->addr);
-      uintptr_t mr_end = mr_addr + S.mr->length;
-      uintptr_t atomic_buf_end = atomic_buf_addr + k * sizeof(uint64_t);
-      if (atomic_buf_addr < mr_addr || atomic_buf_end > mr_end) {
-        fprintf(stderr,
-                "[Native RDMA] atomic buffer out of bounds: buf=0x%llx-0x%llx, "
-                "mr=0x%llx-0x%llx\n",
-                (unsigned long long)atomic_buf_addr,
-                (unsigned long long)atomic_buf_end, (unsigned long long)mr_addr,
-                (unsigned long long)mr_end);
-        std::abort();
-      }
-
       uint64_t* atomic_old_values_64 =
           reinterpret_cast<uint64_t*>(S.atomic_old_values_buf);
 
@@ -2741,17 +2727,9 @@ static void post_atomic_operations_native_rdma(
         // (64-bit) Use local context S's memory region, not destination ctx
         uintptr_t local_addr =
             reinterpret_cast<uintptr_t>(&atomic_old_values_64[t]);
-        // Double-check address is within bounds
-        if (local_addr < mr_addr || local_addr + sizeof(uint64_t) > mr_end) {
-          fprintf(stderr,
-                  "[Native RDMA] Local atomic address out of bounds: 0x%llx\n",
-                  (unsigned long long)local_addr);
-          std::abort();
-        }
-
         sge[t].addr = local_addr;
         sge[t].length = sizeof(uint64_t);
-        sge[t].lkey = S.mr->lkey;
+        sge[t].lkey = S.atomic_old_values_mr->lkey;
 
         std::memset(&wr[t], 0, sizeof(wr[t]));
         wr[t].wr_id = wr_id;
