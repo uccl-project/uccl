@@ -86,6 +86,7 @@ def test_main(
     buffer: Buffer,
     use_logfmt: bool = False,
     seed: int = 0,
+    skip_benchmark: bool = False,
 ):
     torch.manual_seed(seed + rank)
     random.seed(seed + rank)
@@ -353,6 +354,10 @@ def test_main(
         dist.barrier(group=group)
 
     print("✓ All correctness tests passed!", flush=True)
+
+    if skip_benchmark:
+        return hash_value
+
     # Calculate bandwidth
     num_fp8_bytes, num_bf16_bytes = (hidden + hidden / 128 * 4 + 16), hidden * 2
     num_logfmt10_bytes = hidden * 10 / 8 + hidden / 128 * 4
@@ -414,23 +419,11 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         explicitly_destroy=True,
         allow_mnnvl=args.allow_mnnvl,
     )
-    test_main(
-        num_tokens,
-        hidden,
-        num_experts,
-        num_topk,
-        rank,
-        num_ranks,
-        group,
-        buffer,
-        use_logfmt=args.use_logfmt,
-        seed=1,
-    )
 
-    do_pressure_test = args.pressure_test
-    for seed in range(int(1e9) if do_pressure_test else 0):
+    for seed in range(int(1e9)):
         if local_rank == 0:
             print(f"Testing with seed {seed} ...", flush=True)
+        torch.manual_seed(rank + seed)
         ref_hash = test_main(
             num_tokens,
             hidden,
@@ -442,23 +435,31 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             buffer,
             use_logfmt=args.use_logfmt,
             seed=seed,
+            skip_benchmark=args.pressure_test_mode == 1,
         )
-        for i in range(20):
-            assert (
-                test_main(
-                    num_tokens,
-                    hidden,
-                    num_experts,
-                    num_topk,
-                    rank,
-                    num_ranks,
-                    group,
-                    buffer,
-                    use_logfmt=args.use_logfmt,
-                    seed=seed,
-                )
-                == ref_hash
-            ), f"Error: seed={seed}"
+        if args.pressure_test_mode == 0:
+            break
+
+        if local_rank == 0:
+            print(f"{ref_hash=}")
+            print("", flush=True)
+
+        for _ in range(20):
+            torch.manual_seed(rank + seed)
+            current_hash = test_main(
+                num_tokens,
+                hidden,
+                num_experts,
+                num_topk,
+                rank,
+                num_ranks,
+                group,
+                buffer,
+                use_logfmt=args.use_logfmt,
+                seed=seed,
+                skip_benchmark=args.pressure_test_mode == 1,
+            )
+            assert current_hash == ref_hash, f"Error: seed={seed}"
 
     # Destroy the buffer runtime and communication group
     buffer.destroy()
@@ -498,7 +499,10 @@ if __name__ == "__main__":
         "--use-logfmt", action="store_true", help="Whether to test LogFMT combine"
     )
     parser.add_argument(
-        "--pressure-test", action="store_true", help="Whether to do pressure test"
+        "--pressure-test-mode",
+        type=int,
+        default=0,
+        help="Pressure test mode. 0: don't do pressure test, 1: do pressure test without benchmarks, 2: do pressure test with benchmarks",
     )
     args = parser.parse_args()
 
