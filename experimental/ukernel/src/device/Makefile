@@ -55,4 +55,4 @@ $(BENCH_FULL_BIN): $(COMMON_OBJ) $(BENCH_FULL_OBJ)
 	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
 
 clean:
-	rm -f *.o $(ALL_BIN)
+	rm -f *.o *.d $(ALL_BIN)

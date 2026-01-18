@@ -8,7 +8,7 @@
 #include <vector>
 
 #define N 1024
-using namespace eccl;
+using namespace UKernel;
 
 static void CK(gpuError_t e, char const* msg) {
   if (e != gpuSuccess) {
@@ -26,41 +26,41 @@ static void fill(std::vector<float>& v, float base, float step) {
   for (size_t i = 0; i < v.size(); ++i) v[i] = base + step * (float)i;
 }
 
-uint64_t submit_copy_task(eccl::PersistentKernel<eccl::Task>& kernel, void* dst,
-                          void const* src, uint64_t bytes, eccl::DataType dtype,
-                          uint32_t block_id) {
-  eccl::CollArgs h{};
+uint64_t submit_copy_task(UKernel::PersistentKernel<UKernel::Task>& kernel,
+                          void* dst, void const* src, uint64_t bytes,
+                          UKernel::DataType dtype, uint32_t block_id) {
+  UKernel::CollArgs h{};
   h.src = const_cast<void*>(src);
   h.src2 = nullptr;
   h.dst = dst;
   h.bytes = static_cast<uint32_t>(bytes);
-  h.redType = eccl::ReduceType::None;
+  h.redType = UKernel::ReduceType::None;
 
-  eccl::Task t = eccl::TaskManager::instance().create_coll_task(
-      h, eccl::TaskType::CollCopy, dtype, block_id);
+  UKernel::Task t = UKernel::TaskManager::instance().create_coll_task(
+      h, UKernel::TaskType::CollCopy, dtype, block_id);
 
   return kernel.submit(t);
 }
 
-uint64_t submit_reduce_task(eccl::PersistentKernel<eccl::Task>& kernel,
+uint64_t submit_reduce_task(UKernel::PersistentKernel<UKernel::Task>& kernel,
                             void* dst, void const* src, uint64_t bytes,
-                            eccl::DataType dtype, eccl::ReduceType redop,
+                            UKernel::DataType dtype, UKernel::ReduceType redop,
                             uint32_t block_id) {
-  eccl::CollArgs h{};
+  UKernel::CollArgs h{};
   h.src = const_cast<void*>(src);
   h.src2 = nullptr;
   h.dst = dst;
   h.bytes = static_cast<uint32_t>(bytes);
   h.redType = redop;
 
-  eccl::Task t = eccl::TaskManager::instance().create_coll_task(
-      h, eccl::TaskType::CollReduce, dtype, block_id);
+  UKernel::Task t = UKernel::TaskManager::instance().create_coll_task(
+      h, UKernel::TaskType::CollReduce, dtype, block_id);
 
   return kernel.submit(t);
 }
 
 int main() {
-  eccl::TaskManager::instance().init(1024, 256);
+  UKernel::TaskManager::instance().init(1024, 256);
 
   PersistentKernelConfig config;
   config.numBlocks = 3;
@@ -98,7 +98,7 @@ int main() {
                gpuMemcpyHostToDevice),
      "H2D src_reduce");
 
-  PersistentKernel<eccl::Task> kernel(config);
+  PersistentKernel<UKernel::Task> kernel(config);
   kernel.launch();
   std::cout << "Persistent kernel launched.\n";
 

@@ -6,7 +6,7 @@
 #include <mutex>
 #include <vector>
 
-namespace eccl {
+namespace UKernel {
 
 enum class TaskType : uint64_t {
   // CollTaskType
@@ -258,4 +258,4 @@ class TaskManager {
   bool inited_{false};
 };
 
-}  // namespace eccl
+}  // namespace UKernel

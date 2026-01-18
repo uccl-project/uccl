@@ -549,9 +549,9 @@ int UdsExchanger::accept_with_timeout(int timeout_ms) {
 }
 
 std::string UdsExchanger::path_for_rank(int rank) {
-  // Keep path short: /tmp/eccl_oob_uds/r<rank>.sock
+  // Keep path short: /tmp/ukernel_oob_uds/r<rank>.sock
   char buf[128];
-  std::snprintf(buf, sizeof(buf), "/tmp/eccl_oob_uds/r%d.sock", rank);
+  std::snprintf(buf, sizeof(buf), "/tmp/ukernel_oob_uds/r%d.sock", rank);
 
   std::string path(buf);
   mkdir_best_effort(dirname_of(path));
