@@ -5,7 +5,7 @@
 #include <cassert>
 #include <cstdint>
 
-namespace eccl {
+namespace UKernel {
 
 inline __device__ int min(int a, ssize_t b) { return (a < b) ? a : b; }
 
@@ -22,4 +22,4 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* fifos,
                                      CollArgs* d_coll, MoeArgs* d_moe,
                                      bool* should_stop = nullptr);
 
-}  // namespace eccl
+}  // namespace UKernel

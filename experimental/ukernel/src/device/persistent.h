@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace eccl {
+namespace UKernel {
 
 constexpr uint64_t kAbortTailValue = (uint64_t)-2;
 
@@ -70,8 +70,8 @@ class PersistentKernel {
   bool launch() {
     if (launched_) return false;
 
-    auto* d_coll = eccl::TaskManager::instance().d_coll();
-    auto* d_moe = eccl::TaskManager::instance().d_moe();
+    auto* d_coll = UKernel::TaskManager::instance().d_coll();
+    auto* d_moe = UKernel::TaskManager::instance().d_moe();
 
     std::vector<mscclpp::C2DDeviceHandle<T>> h_fifo_handles;
     h_fifo_handles.reserve(cfg_.numBlocks);
@@ -131,12 +131,12 @@ class PersistentKernel {
           switch (p.type) {
             case TaskType::CollCopy:
             case TaskType::CollReduce:
-              eccl::TaskManager::instance().free_coll_args(p.argsId);
+              UKernel::TaskManager::instance().free_coll_args(p.argsId);
               break;
             case TaskType::MoePreGemm:
             case TaskType::MoePostGemm:
             case TaskType::MoeCombine:
-              eccl::TaskManager::instance().free_moe_args(p.argsId);
+              UKernel::TaskManager::instance().free_moe_args(p.argsId);
               break;
             case TaskType::BenchNop:
               break;
@@ -170,7 +170,7 @@ class PersistentKernel {
  private:
   struct Pending {
     uint32_t argsId;
-    eccl::TaskType type;
+    UKernel::TaskType type;
   };
   struct FifoWithPending {
     mscclpp::CpuToGpuFifo<T> fifo;
@@ -195,4 +195,4 @@ class PersistentKernel {
   bool launched_ = false;
 };
 
-}  // namespace eccl
+}  // namespace UKernel

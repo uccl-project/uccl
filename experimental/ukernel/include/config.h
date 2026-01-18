@@ -31,22 +31,22 @@ struct Config {
   int exchanger_port;
 
   Config()
-      : rdma_chunk_size(
-            getEnvOrDefault("ECCL_RDMA_CHUNK_SIZE", DEFAULT_RDMA_CHUNK_SIZE)),
-        qp_count_per_ep(getEnvOrDefault("ECCL_QP_COUNT", DEFAULT_QP_PER_EP)),
-        cq_count_per_ep(getEnvOrDefault("ECCL_CQ_COUNT", DEFAULT_CQ_PER_EP)),
-        cq_poller_threads(getEnvOrDefault("ECCL_CQ_POLLER_THREADS",
+      : rdma_chunk_size(getEnvOrDefault("UKERNEL_RDMA_CHUNK_SIZE",
+                                        DEFAULT_RDMA_CHUNK_SIZE)),
+        qp_count_per_ep(getEnvOrDefault("UKERNEL_QP_COUNT", DEFAULT_QP_PER_EP)),
+        cq_count_per_ep(getEnvOrDefault("UKERNEL_CQ_COUNT", DEFAULT_CQ_PER_EP)),
+        cq_poller_threads(getEnvOrDefault("UKERNEL_CQ_POLLER_THREADS",
                                           DEFAULT_CQ_POLLER_THREADS)),
-        cq_depth(getEnvOrDefault("ECCL_CQ_DEPTH", DEFAULT_CQ_DEPTH)),
-        max_retry_times(
-            getEnvOrDefault("ECCL_MAX_RETRY_TIMES", DEFAULT_MAX_RETRY_TIMES)),
-        resolve_timeout_ms(getEnvOrDefault("ECCL_RESOLVE_TIMEOUT_MS",
+        cq_depth(getEnvOrDefault("UKERNEL_CQ_DEPTH", DEFAULT_CQ_DEPTH)),
+        max_retry_times(getEnvOrDefault("UKERNEL_MAX_RETRY_TIMES",
+                                        DEFAULT_MAX_RETRY_TIMES)),
+        resolve_timeout_ms(getEnvOrDefault("UKERNEL_RESOLVE_TIMEOUT_MS",
                                            DEFAULT_RESOLVE_TIMEOUT_MS)),
         qp_max_send_wr(
-            getEnvOrDefault("ECCL_QP_MAX_SEND_WR", DEFAULT_QP_MAX_SEND_WR)),
+            getEnvOrDefault("UKERNEL_QP_MAX_SEND_WR", DEFAULT_QP_MAX_SEND_WR)),
         qp_max_recv_wr(
-            getEnvOrDefault("ECCL_QP_MAX_RECV_WR", DEFAULT_QP_MAX_RECV_WR)),
-        qp_max_sge(getEnvOrDefault("ECCL_QP_MAX_SGE", DEFAUTL_QP_MAX_SGE)),
+            getEnvOrDefault("UKERNEL_QP_MAX_RECV_WR", DEFAULT_QP_MAX_RECV_WR)),
+        qp_max_sge(getEnvOrDefault("UKERNEL_QP_MAX_SGE", DEFAUTL_QP_MAX_SGE)),
         exchanger_ip(getEnvOrDefault("UHM_EXCHANGER_SERVER_IP",
                                      DEFAULT_EXCHANGER_SERVER_IP)),
         exchanger_port(getEnvOrDefault("UHM_EXCHANGER_SERVER_PORT",

@@ -27,8 +27,8 @@ LDFLAGS    += $(REDIS_LIBS)
 endif
 
 # Source files
-SRC_CPP := $(shell find src -name '*.cc')
-SRC_CU  := $(shell find src -name '*.cu')
+SRC_CPP := $(shell find src -name '*.cc' | grep -v 'src/device') # skip device now
+SRC_CU  := $(shell find src -name '*.cu' | grep -v 'src/device')
 
 # Test sources
 TEST_DIR := tests
@@ -40,8 +40,8 @@ OBJ_CU   := $(SRC_CU:.cu=.o)
 OBJ_TEST := $(SRC_TEST:.cc=.o)
 
 # Targets
-STATIC_LIB  := libeccl.a
-SHARED_LIB  := libeccl.so
+STATIC_LIB  := libukernel.a
+SHARED_LIB  := libukernel.so
 TARGET_TEST := test_main
 
 # Default target

@@ -2,7 +2,7 @@
 
 // TODO: ThunderKitten/Tilelang? based operators
 
-namespace eccl {
+namespace UKernel {
 
 template <typename T>
 __device__ __forceinline__ T apply_red(ReduceType op, T a, T b) {
@@ -135,4 +135,4 @@ template __global__ void basePersistentKernel<Task>(
     mscclpp::C2DDeviceHandle<Task>* fifos, CollArgs* d_coll, MoeArgs* d_moe,
     bool* should_stop);
 
-}  // namespace eccl
+}  // namespace UKernel
