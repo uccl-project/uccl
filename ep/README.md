@@ -146,8 +146,10 @@ We test normal kernels on **8x B200 + 8x 400Gb/s EFA** with each GPU connected t
 
 |   Type    | FP8 Dispatch #EP | Bottleneck bandwidth| BF16 Dispatch #EP |Bottleneck bandwidth | Combine #EP | Bottleneck bandwidth |
 |:---------:|:------------:|:--------------------:|:-----------:|:--------------------:|:--------------------:|:--------------------:|
-| Internode |      16      |    71 GB/s (RDMA)    |     16      |    81 GB/s (RDMA)    | 16      |    54 GB/s (RDMA)    |
-| Internode |      32      |    57 GB/s (RDMA)    |     32      |    60 GB/s (RDMA)    |  32      |    57 GB/s (RDMA)    |
+| Intranode |       8      |    260 GB/s (xGMI)   |     8       |   295 GB/s (xGMI)    |  8       |  304GB/s (xGMI)     |
+| Internode |      16      |    74 GB/s (RDMA)    |     16      |    82 GB/s (RDMA)    |  16      |   78 GB/s (RDMA)    |
+| Internode |      32      |    60 GB/s (RDMA)    |     32      |    61 GB/s (RDMA)    |  32      |   60 GB/s (RDMA)    |
+| Internode |      64      |    52 GB/s (RDMA)    |     32      |    53 GB/s (RDMA)    |  64      |   51 GB/s (RDMA)    |
 
 #### On AMD MI300X with Broadcom Thor2
 

@@ -58,9 +58,8 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
 #ifdef USE_GRACE_HOPPER
     cudaMallocManaged(&atomic_buffer_ptr_, kAtomicBufferSize);
 #elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-    cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
-                  cudaHostAllocMapped | cudaHostAllocWriteCombined |
-                      hipHostMallocUncached);
+    hipExtMallocWithFlags(&atomic_buffer_ptr_, kAtomicBufferSize,
+                          hipDeviceMallocUncached);
 #else
     cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
                   cudaHostAllocMapped | cudaHostAllocWriteCombined);

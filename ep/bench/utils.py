@@ -541,6 +541,18 @@ def initialize_uccl(
 
     ep.register_proxies(local_rank, proxies)
 
+    # Set atomic buffer pointer for all proxies BEFORE starting them
+    # This ensures the atomic buffer info is included in connection info exchange
+    # Note: Only thread 0's proxy allocates the atomic buffer in its constructor
+    if not is_intranode and len(proxies) > 0:
+        # Get atomic buffer pointer from thread 0 proxy (only thread 0 allocates it)
+        # This must be done before start_dual() so the atomic buffer info is included
+        # in the connection info exchange during init_common()
+        atomic_buffer_ptr = proxies[0].get_atomic_buffer_ptr()
+        if atomic_buffer_ptr:
+            for proxy in proxies:
+                proxy.set_atomic_buffer_ptr(atomic_buffer_ptr)
+
     dist.barrier(group)
     if not is_intranode:
         for proxy in proxies:
