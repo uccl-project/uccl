@@ -2434,6 +2434,171 @@ static void post_atomic_operations_fast_mode(
   }
 }
 
+// Fast mode + native RDMA atomics (non-EFA)
+//
+// This mirrors the batching/dispatch structure of `post_atomic_operations_fast_mode`
+// (group by dst_rank, use ctx->qp, single completion per dst batch), but emits
+// real RDMA atomics like `post_atomic_operations_native_rdma` (FETCH_AND_ADD
+// to the remote atomic buffer).
+static void post_atomic_operations_fast_mode_native_rdma(
+    ProxyCtx& S, std::vector<uint64_t> const& wrs_to_post,
+    std::vector<TransferCmd> const& cmds_to_post,
+    std::vector<std::unique_ptr<ProxyCtx>>& ctxs, int my_rank, int thread_idx,
+    std::unordered_set<uint64_t>& acked_wrs) {
+  (void)thread_idx;
+  (void)acked_wrs;
+#ifdef EFA
+  // EFA path uses write-with-imm atomics; native FETCH_AND_ADD is not used here.
+  post_atomic_operations_fast_mode(S, wrs_to_post, cmds_to_post, ctxs, my_rank,
+                                  thread_idx, acked_wrs);
+#else
+  if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
+    fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
+            cmds_to_post.size(), ProxyCtx::kMaxAtomicOps);
+    std::abort();
+  }
+
+  std::unordered_map<int, std::vector<size_t>> dst_rank_wr_ids;
+  dst_rank_wr_ids.reserve(cmds_to_post.size());
+  for (size_t i = 0; i < wrs_to_post.size(); ++i) {
+    int dst = static_cast<int>(cmds_to_post[i].dst_rank);
+    if (dst == my_rank) {
+      fprintf(stderr, "Posting atomic to itself\n");
+      std::abort();
+    }
+    dst_rank_wr_ids[dst].push_back(i);
+  }
+
+  if (!S.atomic_old_values_buf || !S.atomic_old_values_mr) {
+    fprintf(stderr,
+            "[Native RDMA Fast] Local atomic scratch (old values) not "
+            "initialized (buf=%p mr=%p)\n",
+            (void*)S.atomic_old_values_buf, (void*)S.atomic_old_values_mr);
+    std::abort();
+  }
+  uintptr_t atomic_buf_addr =
+      reinterpret_cast<uintptr_t>(S.atomic_old_values_buf);
+  if ((atomic_buf_addr & 0x7) != 0) {
+    fprintf(stderr,
+            "[Native RDMA Fast] atomic_old_values_buf not 8-byte aligned: "
+            "0x%llx\n",
+            (unsigned long long)atomic_buf_addr);
+    std::abort();
+  }
+
+  for (auto& [dst_rank, idxs] : dst_rank_wr_ids) {
+    if (idxs.empty()) continue;
+
+    ProxyCtx* ctx = ctxs[dst_rank].get();
+    if (!ctx || !ctx->qp) {
+      fprintf(stderr,
+              "[Native RDMA Fast] Destination ctx missing fields for dst=%d\n",
+              dst_rank);
+      std::abort();
+    }
+    if (ctx->remote_atomic_buffer_addr == 0 ||
+        ctx->remote_atomic_buffer_rkey == 0) {
+      fprintf(stderr,
+              "[Native RDMA Fast] Remote atomic buffer not registered "
+              "(addr=0x%llx rkey=0x%x) for dst=%d\n",
+              (unsigned long long)ctx->remote_atomic_buffer_addr,
+              ctx->remote_atomic_buffer_rkey, dst_rank);
+      std::abort();
+    }
+
+    size_t const k = idxs.size();
+    if (S.atomic_old_values_mr->length < k * sizeof(uint64_t)) {
+      fprintf(stderr,
+              "[Native RDMA Fast] atomic_old_values_mr too small: len=%zu, "
+              "need=%zu (k=%zu)\n",
+              (size_t)S.atomic_old_values_mr->length, k * sizeof(uint64_t), k);
+      std::abort();
+    }
+
+    std::vector<ibv_sge> sge(k);
+    std::vector<ibv_send_wr> wr(k);
+    std::vector<uint64_t> group_wrids;
+    group_wrids.reserve(k);
+
+    for (size_t t = 0; t < k; ++t) {
+      size_t cmd_i = idxs[t];
+      auto const& cmd = cmds_to_post[cmd_i];
+      uint64_t const wr_id = wrs_to_post[cmd_i];
+      group_wrids.push_back(wr_id);
+
+      int v = static_cast<int>(cmd.value);
+      bool const is_combine = get_is_combine(cmd.cmd_type);
+      if (is_combine) v = 1;
+      if (v == kLargeAtomicValue) v = kMaxSendAtomicValue;
+      int64_t v64 = static_cast<int64_t>(static_cast<int32_t>(v));
+
+      uint64_t remote_atomic_addr =
+          ctx->remote_atomic_buffer_addr + cmd.req_rptr;
+      if ((remote_atomic_addr & 0x7) != 0) {
+        fprintf(stderr,
+                "[Native RDMA Fast] Remote atomic address must be 8-byte "
+                "aligned: 0x%llx\n",
+                (unsigned long long)remote_atomic_addr);
+        std::abort();
+      }
+      if (remote_atomic_addr < ctx->remote_atomic_buffer_addr ||
+          remote_atomic_addr + sizeof(uint64_t) >
+              ctx->remote_atomic_buffer_addr + ctx->remote_atomic_buffer_len) {
+        fprintf(stderr,
+                "[Native RDMA Fast] Remote atomic address out of bounds: "
+                "0x%llx (base=0x%llx, len=%zu)\n",
+                (unsigned long long)remote_atomic_addr,
+                (unsigned long long)ctx->remote_atomic_buffer_addr,
+                (size_t)ctx->remote_atomic_buffer_len);
+        std::abort();
+      }
+
+      sge[t].addr = atomic_buf_addr + t * sizeof(uint64_t);
+      sge[t].length = sizeof(uint64_t);
+      sge[t].lkey = S.atomic_old_values_mr->lkey;
+
+      std::memset(&wr[t], 0, sizeof(wr[t]));
+      wr[t].wr_id = wr_id;
+      wr[t].opcode = IBV_WR_ATOMIC_FETCH_AND_ADD;
+      wr[t].send_flags = (t + 1 == k) ? IBV_SEND_SIGNALED : 0;
+      wr[t].sg_list = &sge[t];
+      wr[t].num_sge = 1;
+      wr[t].wr.atomic.remote_addr = remote_atomic_addr;
+      wr[t].wr.atomic.rkey = ctx->remote_atomic_buffer_rkey;
+      wr[t].wr.atomic.compare_add = v64;
+      wr[t].next = (t + 1 < k) ? &wr[t + 1] : nullptr;
+    }
+
+    ibv_send_wr* bad = nullptr;
+    int ret = ibv_post_send(ctx->qp, &wr[0], &bad);
+    if (ret) {
+      fprintf(stderr,
+              "[Native RDMA Fast] ibv_post_send(atomic) failed: %d (%s)\n", ret,
+              strerror(ret));
+      if (bad) {
+        fprintf(stderr, "  bad wr_id=0x%llx opcode=%u\n",
+                (unsigned long long)bad->wr_id, bad->opcode);
+      }
+      std::abort();
+    }
+
+    uint64_t const batch_tail_wr = group_wrids.back();
+    {
+      auto [it, inserted] =
+          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(group_wrids));
+      if (!inserted) {
+        fprintf(stderr,
+                "thread_idx: %d, Error: tail wr_id %lu already exists "
+                "(map=%p, size=%zu, dst_rank=%d)\n",
+                thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
+                S.wr_id_to_wr_ids.size(), dst_rank);
+        std::abort();
+      }
+    }
+  }
+#endif
+}
+
 // Native RDMA implementation (non-EFA)
 static void post_atomic_operations_native_rdma(
     ProxyCtx& S, std::vector<uint64_t> const& wrs_to_post,
@@ -2545,6 +2710,10 @@ static void post_atomic_operations_native_rdma(
 
         // Verify final address alignment (should always be true if req_rptr is
         // aligned)
+        assert((ctx->remote_atomic_buffer_addr & 0x7) == 0 &&
+               "Remote atomic buffer address must be 8-byte aligned");
+        assert((cmd.req_rptr & 0x7) == 0 &&
+               "req_rptr must be 8-byte aligned");
         assert((remote_atomic_addr & 0x7) == 0 &&
                "Remote atomic address must be 8-byte aligned");
 
@@ -2650,7 +2819,7 @@ void post_atomic_operations(ProxyCtx& S,
                             std::unordered_set<uint64_t>& acked_wrs,
                             bool use_normal_mode) {
   if (use_normal_mode) {
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#ifndef EFA
     post_atomic_operations_native_rdma(S, wrs_to_post, cmds_to_post, ctxs,
                                        my_rank, thread_idx, acked_wrs);
 #else
@@ -2658,7 +2827,12 @@ void post_atomic_operations(ProxyCtx& S,
                                        my_rank, thread_idx, acked_wrs);
 #endif
   } else {
+#ifndef EFA
+    post_atomic_operations_fast_mode_native_rdma(
+        S, wrs_to_post, cmds_to_post, ctxs, my_rank, thread_idx, acked_wrs);
+#else
     post_atomic_operations_fast_mode(S, wrs_to_post, cmds_to_post, ctxs,
                                      my_rank, thread_idx, acked_wrs);
+#endif
   }
 }

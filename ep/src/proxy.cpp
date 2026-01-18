@@ -210,24 +210,28 @@ void Proxy::init_common() {
     std::abort();
   }
 
-  // Allocate GPU buffer for atomic old values (within the main GPU buffer)
-  // Use a small section at the end of the GPU buffer
-  size_t atomic_buf_size = ProxyCtx::kMaxAtomicOps * sizeof(uint32_t);
-  if (cfg_.total_size < atomic_buf_size) {
-    fprintf(stderr, "GPU buffer too small for atomic operations buffer\n");
-    std::abort();
-  }
-  // Place atomic buffer at the end of the GPU buffer
-  ctx_.atomic_old_values_buf =
-      reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(cfg_.gpu_buffer) +
-                                  cfg_.total_size - atomic_buf_size);
-  // Check alignment - only abort if not aligned (8-byte alignment required for
-  // 64-bit atomics)
-  if ((reinterpret_cast<uintptr_t>(ctx_.atomic_old_values_buf) & 0x7) != 0) {
-    fprintf(stderr, "Atomic buffer not 8-byte aligned: 0x%llx\n",
-            (unsigned long long)reinterpret_cast<uintptr_t>(
-                ctx_.atomic_old_values_buf));
-    std::abort();
+  // Allocate/register local scratch buffer for native RDMA atomics.
+  // NOTE: This must NOT alias cfg_.gpu_buffer (which is used for other layouts).
+  // For IBV_WR_ATOMIC_FETCH_AND_ADD the NIC DMA-writes the old value here.
+  if (!ctx_.atomic_old_values_buf || !ctx_.atomic_old_values_mr) {
+    size_t const atomic_buf_size = ProxyCtx::kMaxAtomicOps * sizeof(uint64_t);
+    void* p = nullptr;
+    int rc = posix_memalign(&p, /*alignment=*/8, atomic_buf_size);
+    if (rc != 0 || !p) {
+      fprintf(stderr, "posix_memalign failed for atomic_old_values_buf (rc=%d)\n",
+              rc);
+      std::abort();
+    }
+    std::memset(p, 0, atomic_buf_size);
+    ctx_.atomic_old_values_buf = static_cast<uint64_t*>(p);
+
+    ctx_.atomic_old_values_mr =
+        ibv_reg_mr(ctx_.pd, ctx_.atomic_old_values_buf, atomic_buf_size,
+                   IBV_ACCESS_LOCAL_WRITE);
+    if (!ctx_.atomic_old_values_mr) {
+      perror("Failed to register atomic_old_values_buf MR");
+      std::abort();
+    }
   }
 
   int num_ranks = ctxs_for_all_ranks_.size();
@@ -254,6 +258,9 @@ void Proxy::init_common() {
     c.cq = ctx_.cq;
     // Share the atomic buffer MR with peer contexts
     c.atomic_buffer_mr = ctx_.atomic_buffer_mr;
+    // Share local atomic scratch buffer MR (used for native atomics)
+    c.atomic_old_values_buf = ctx_.atomic_old_values_buf;
+    c.atomic_old_values_mr = ctx_.atomic_old_values_mr;
 
     if (peer == my_rank) continue;
     // Skip rdma connection for intra-node.
@@ -1043,7 +1050,14 @@ void Proxy::destroy(bool free_gpu_buffer) {
     }
   };
   dereg(ring.ack_mr);
+  dereg(ctx_.atomic_old_values_mr);
+  dereg(ctx_.atomic_buffer_mr);
   dereg(ctx_.mr);
+
+  if (ctx_.atomic_old_values_buf) {
+    free(ctx_.atomic_old_values_buf);
+    ctx_.atomic_old_values_buf = nullptr;
+  }
 
   if (free_gpu_buffer && cfg_.gpu_buffer) {
     cudaError_t e = cudaFree(cfg_.gpu_buffer);

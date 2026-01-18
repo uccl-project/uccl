@@ -139,20 +139,20 @@ struct LowLatencyBuffer {
   void* dispatch_rdma_send_buffer = nullptr;
   void* dispatch_rdma_recv_data_buffer = nullptr;
   int* dispatch_rdma_recv_count_buffer = nullptr;
-  // This is for emulated CPU-based atomics.
-  int* dispatch_rdma_recv_count_buffer_internode = nullptr;
+  // Internode signaling buffer used by RDMA atomics (must be 64-bit / 8B aligned).
+  int64_t* dispatch_rdma_recv_count_buffer_internode = nullptr;
 
   void* combine_rdma_send_buffer = nullptr;
   void* combine_rdma_recv_data_buffer = nullptr;
   int* combine_rdma_recv_flag_buffer = nullptr;
-  // This is for emulated CPU-based atomics.
-  int* combine_rdma_recv_flag_buffer_internode = nullptr;
+  // Internode signaling buffer used by RDMA atomics (must be 64-bit / 8B aligned).
+  int64_t* combine_rdma_recv_flag_buffer_internode = nullptr;
 
   void* combine_rdma_send_buffer_data_start = nullptr;
   size_t num_bytes_per_combine_msg = 0;
 
   // TODO(MaoZiming)
-  std::tuple<int*, int*, int> clean_meta() {
+  std::tuple<int*, int64_t*, int> clean_meta() {
     EP_HOST_ASSERT(dispatch_rdma_recv_count_buffer ==
                    combine_rdma_recv_flag_buffer);
     EP_HOST_ASSERT(dispatch_rdma_recv_count_buffer_internode ==
@@ -226,6 +226,17 @@ struct LowLatencyLayout {
         align<size_t>(signaling_buffer_bytes, 128);
     total_bytes += signaling_buffer_bytes_aligned * 2;
 
+    // Internode signaling buffers (for RDMA atomics): use 64-bit slots.
+    size_t signaling_buffer_bytes_internode = num_experts * sizeof(int64_t);
+    size_t signaling_buffer_bytes_internode_aligned =
+        align<size_t>(signaling_buffer_bytes_internode, 128);
+    // These internode signaling buffers live inside `atomic_buffer_ptr` (not rdma_buffer).
+    // If they overflow `kAtomicBufferSize`, kernels will spin forever waiting for flags.
+    if (atomic_buffer_ptr != nullptr) {
+      EP_HOST_ASSERT(2 * signaling_buffer_bytes_internode_aligned <=
+                     static_cast<size_t>(kAtomicBufferSize));
+    }
+
     // Assign pointers
     // NOTES: we still leave some space for distinguishing dispatch/combine
     // buffer, so you may see some parameters are duplicated
@@ -238,10 +249,9 @@ struct LowLatencyLayout {
                                    send_buffer_bytes * 2 +
                                    recv_buffer_bytes * i),
           advance<int*>(rdma_buffer, signaling_buffer_bytes_aligned * i),
-          reinterpret_cast<int*>(
+          reinterpret_cast<int64_t*>(
               (uint8_t*)atomic_buffer_ptr +
-              i * signaling_buffer_bytes_aligned), /* dispatch_rdma_recv_count_buffer_internode
-                                                    */
+              i * signaling_buffer_bytes_internode_aligned), /* dispatch_rdma_recv_count_buffer_internode */
 
           advance(rdma_buffer,
                   signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * i),
@@ -249,10 +259,9 @@ struct LowLatencyLayout {
                                    send_buffer_bytes * 2 +
                                    recv_buffer_bytes * i),
           advance<int*>(rdma_buffer, signaling_buffer_bytes_aligned * i),
-          reinterpret_cast<int*>(
+          reinterpret_cast<int64_t*>(
               (uint8_t*)atomic_buffer_ptr +
-              i * signaling_buffer_bytes_aligned), /* combine_rdma_recv_flag_buffer_internode
-                                                    */
+              i * signaling_buffer_bytes_internode_aligned), /* combine_rdma_recv_flag_buffer_internode */
 
           advance(rdma_buffer,
                   signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * i),
