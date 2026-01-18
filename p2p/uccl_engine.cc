@@ -33,7 +33,7 @@ thread_local bool inside_python = false;
 using FifoItem = nccl_tcpx::FifoItem;
 using Endpoint = nccl_tcpx::Endpoint;
 #else
-using FifoItem = uccl::FifoItem;
+using FifoItem = FifoItem;
 using Endpoint = ::Endpoint;
 #endif
 

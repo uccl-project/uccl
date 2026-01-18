@@ -137,7 +137,6 @@ build_p2p() {
   mkdir -p uccl/lib
   if [[ -z "${USE_TCPX:-}" || "$USE_TCPX" != "1" ]]; then
     cp p2p/libuccl_p2p.so uccl/lib/
-    cp p2p/librdma_plugin.a uccl/lib/
     cp p2p/p2p.*.so uccl/
     cp p2p/collective.py uccl/
     cp p2p/transfer.py uccl/

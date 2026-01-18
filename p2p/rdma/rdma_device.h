@@ -15,18 +15,18 @@ class RDMADeviceSelectionStrategy {
 };
 
 // Include device selection strategy based on build configuration
-#ifdef UCCL_P2P_USE_IB
-#include "providers/ib/rdma_device_selection_ib.h"
-#else
+#ifdef UCCL_P2P_USE_EFA
 #include "providers/efa/rdma_device_selection_efa.h"
+#else
+#include "providers/ib/rdma_device_selection_ib.h"
 #endif
 
 inline std::unique_ptr<RDMADeviceSelectionStrategy>
 createDeviceSelectionStrategy() {
-#ifdef UCCL_P2P_USE_IB
-  return std::make_unique<IBDeviceSelectionStrategy>();
-#else
+#ifdef UCCL_P2P_USE_EFA
   return std::make_unique<EFADeviceSelectionStrategy>();
+#else
+  return std::make_unique<IBDeviceSelectionStrategy>();
 #endif
 }
 
@@ -117,6 +117,7 @@ class RdmaDeviceManager {
         selected_nic_names.push_back(dist.front().first);
       } else {
         auto strategy = createDeviceSelectionStrategy();
+        // Select NICs based on the strategy among candidates
         auto selected = strategy->selectNICs(candidates, gpu_idx);
         selected_nic_names.insert(selected_nic_names.end(), selected.begin(),
                                   selected.end());
