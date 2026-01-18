@@ -139,13 +139,15 @@ struct LowLatencyBuffer {
   void* dispatch_rdma_send_buffer = nullptr;
   void* dispatch_rdma_recv_data_buffer = nullptr;
   int* dispatch_rdma_recv_count_buffer = nullptr;
-  // Internode signaling buffer used by RDMA atomics (must be 64-bit / 8B aligned).
+  // Internode signaling buffer used by RDMA atomics (must be 64-bit / 8B
+  // aligned).
   int64_t* dispatch_rdma_recv_count_buffer_internode = nullptr;
 
   void* combine_rdma_send_buffer = nullptr;
   void* combine_rdma_recv_data_buffer = nullptr;
   int* combine_rdma_recv_flag_buffer = nullptr;
-  // Internode signaling buffer used by RDMA atomics (must be 64-bit / 8B aligned).
+  // Internode signaling buffer used by RDMA atomics (must be 64-bit / 8B
+  // aligned).
   int64_t* combine_rdma_recv_flag_buffer_internode = nullptr;
 
   void* combine_rdma_send_buffer_data_start = nullptr;
@@ -230,8 +232,9 @@ struct LowLatencyLayout {
     size_t signaling_buffer_bytes_internode = num_experts * sizeof(int64_t);
     size_t signaling_buffer_bytes_internode_aligned =
         align<size_t>(signaling_buffer_bytes_internode, 128);
-    // These internode signaling buffers live inside `atomic_buffer_ptr` (not rdma_buffer).
-    // If they overflow `kAtomicBufferSize`, kernels will spin forever waiting for flags.
+    // These internode signaling buffers live inside `atomic_buffer_ptr` (not
+    // rdma_buffer). If they overflow `kAtomicBufferSize`, kernels will spin
+    // forever waiting for flags.
     if (atomic_buffer_ptr != nullptr) {
       EP_HOST_ASSERT(2 * signaling_buffer_bytes_internode_aligned <=
                      static_cast<size_t>(kAtomicBufferSize));
@@ -251,7 +254,8 @@ struct LowLatencyLayout {
           advance<int*>(rdma_buffer, signaling_buffer_bytes_aligned * i),
           reinterpret_cast<int64_t*>(
               (uint8_t*)atomic_buffer_ptr +
-              i * signaling_buffer_bytes_internode_aligned), /* dispatch_rdma_recv_count_buffer_internode */
+              i * signaling_buffer_bytes_internode_aligned), /* dispatch_rdma_recv_count_buffer_internode
+                                                              */
 
           advance(rdma_buffer,
                   signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * i),
@@ -261,7 +265,8 @@ struct LowLatencyLayout {
           advance<int*>(rdma_buffer, signaling_buffer_bytes_aligned * i),
           reinterpret_cast<int64_t*>(
               (uint8_t*)atomic_buffer_ptr +
-              i * signaling_buffer_bytes_internode_aligned), /* combine_rdma_recv_flag_buffer_internode */
+              i * signaling_buffer_bytes_internode_aligned), /* combine_rdma_recv_flag_buffer_internode
+                                                              */
 
           advance(rdma_buffer,
                   signaling_buffer_bytes_aligned * 2 + send_buffer_bytes * i),

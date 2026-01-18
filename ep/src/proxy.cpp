@@ -211,15 +211,16 @@ void Proxy::init_common() {
   }
 
   // Allocate/register local scratch buffer for native RDMA atomics.
-  // NOTE: This must NOT alias cfg_.gpu_buffer (which is used for other layouts).
-  // For IBV_WR_ATOMIC_FETCH_AND_ADD the NIC DMA-writes the old value here.
+  // NOTE: This must NOT alias cfg_.gpu_buffer (which is used for other
+  // layouts). For IBV_WR_ATOMIC_FETCH_AND_ADD the NIC DMA-writes the old value
+  // here.
   if (!ctx_.atomic_old_values_buf || !ctx_.atomic_old_values_mr) {
     size_t const atomic_buf_size = ProxyCtx::kMaxAtomicOps * sizeof(uint64_t);
     void* p = nullptr;
     int rc = posix_memalign(&p, /*alignment=*/8, atomic_buf_size);
     if (rc != 0 || !p) {
-      fprintf(stderr, "posix_memalign failed for atomic_old_values_buf (rc=%d)\n",
-              rc);
+      fprintf(stderr,
+              "posix_memalign failed for atomic_old_values_buf (rc=%d)\n", rc);
       std::abort();
     }
     std::memset(p, 0, atomic_buf_size);

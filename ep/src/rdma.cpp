@@ -2436,10 +2436,11 @@ static void post_atomic_operations_fast_mode(
 
 // Fast mode + native RDMA atomics (non-EFA)
 //
-// This mirrors the batching/dispatch structure of `post_atomic_operations_fast_mode`
-// (group by dst_rank, use ctx->qp, single completion per dst batch), but emits
-// real RDMA atomics like `post_atomic_operations_native_rdma` (FETCH_AND_ADD
-// to the remote atomic buffer).
+// This mirrors the batching/dispatch structure of
+// `post_atomic_operations_fast_mode` (group by dst_rank, use ctx->qp, single
+// completion per dst batch), but emits real RDMA atomics like
+// `post_atomic_operations_native_rdma` (FETCH_AND_ADD to the remote atomic
+// buffer).
 static void post_atomic_operations_fast_mode_native_rdma(
     ProxyCtx& S, std::vector<uint64_t> const& wrs_to_post,
     std::vector<TransferCmd> const& cmds_to_post,
@@ -2448,9 +2449,10 @@ static void post_atomic_operations_fast_mode_native_rdma(
   (void)thread_idx;
   (void)acked_wrs;
 #ifdef EFA
-  // EFA path uses write-with-imm atomics; native FETCH_AND_ADD is not used here.
+  // EFA path uses write-with-imm atomics; native FETCH_AND_ADD is not used
+  // here.
   post_atomic_operations_fast_mode(S, wrs_to_post, cmds_to_post, ctxs, my_rank,
-                                  thread_idx, acked_wrs);
+                                   thread_idx, acked_wrs);
 #else
   if (cmds_to_post.size() > ProxyCtx::kMaxAtomicOps) {
     fprintf(stderr, "Too many atomic operations: %zu > %zu\n",
@@ -2712,8 +2714,7 @@ static void post_atomic_operations_native_rdma(
         // aligned)
         assert((ctx->remote_atomic_buffer_addr & 0x7) == 0 &&
                "Remote atomic buffer address must be 8-byte aligned");
-        assert((cmd.req_rptr & 0x7) == 0 &&
-               "req_rptr must be 8-byte aligned");
+        assert((cmd.req_rptr & 0x7) == 0 && "req_rptr must be 8-byte aligned");
         assert((remote_atomic_addr & 0x7) == 0 &&
                "Remote atomic address must be 8-byte aligned");
 
