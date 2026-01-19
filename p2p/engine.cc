@@ -94,9 +94,9 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   engine_initialized_ = true;
 
   send_unified_task_ring_ =
-      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+      uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
   recv_unified_task_ring_ =
-      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+      uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
 
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
@@ -211,9 +211,9 @@ void Endpoint::initialize_engine() {
 #endif
 
   send_unified_task_ring_ =
-      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+      uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
   recv_unified_task_ring_ =
-      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+      uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
 
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
@@ -606,7 +606,7 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task, 1, nullptr) !=
          1) {
   }
 
@@ -623,7 +623,7 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task, 1, nullptr) !=
          1) {
   }
 
@@ -898,7 +898,7 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
 
   *transfer_id = reinterpret_cast<uint64_t>(rw_task);
 
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, rw_task, 1, nullptr) !=
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &rw_task, 1, nullptr) !=
          1) {
   }
 
@@ -923,7 +923,7 @@ bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task, 1, nullptr) !=
          1) {
   }
 
@@ -943,7 +943,7 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task, 1, nullptr) !=
          1) {
   }
 
@@ -1054,7 +1054,7 @@ bool Endpoint::readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task, 1, nullptr) !=
          1) {
   }
 
@@ -1071,7 +1071,7 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
   }
   *transfer_id = reinterpret_cast<uint64_t>(rw_task);
 
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, rw_task, 1, nullptr) !=
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &rw_task, 1, nullptr) !=
          1) {
   }
 
@@ -1183,7 +1183,7 @@ bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task, 1, nullptr) !=
          1) {
   }
 
@@ -1521,7 +1521,7 @@ bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
 
   // For now, we'll use the existing async infrastructure but call our IPC
   // function In a real implementation, you might want a separate IPC task ring
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task, 1, nullptr) !=
          1) {
   }
 
@@ -1540,7 +1540,7 @@ bool Endpoint::recv_ipc_async(uint64_t conn_id, void* data, size_t size,
 
   // For now, we'll use the existing async infrastructure but call our IPC
   // function In a real implementation, you might want a separate IPC task ring
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task, 1, nullptr) !=
          1) {
   }
 
@@ -1680,7 +1680,7 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
   // Enqueue the task for processing by proxy thread
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task, 1, nullptr) !=
          1) {
   }
 
@@ -1700,7 +1700,7 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
   *transfer_id = reinterpret_cast<uint64_t>(task);
 
   // Enqueue the task for processing by proxy thread
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task, 1, nullptr) !=
          1) {
   }
 
@@ -1846,27 +1846,27 @@ void Endpoint::cleanup_uds_socket() {
 
 void Endpoint::send_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
-  UnifiedTask task;
+  UnifiedTask* task;
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(send_unified_task_ring_, &task, 1, nullptr) ==
         1) {
-      switch (task.type) {
+      switch (task->type) {
         case TaskType::SEND_IPC:
-          send_ipc(task.conn_id, task.data, task.size);
+          send_ipc(task->conn_id, task->data, task->size);
           break;
         case TaskType::WRITE_NET:
-          write(task.conn_id, task.mr_id, task.data, task.size,
-                task.slot_item());
+          write(task->conn_id, task->mr_id, task->data, task->size,
+                task->slot_item());
           break;
         case TaskType::WRITE_IPC:
-          write_ipc(task.conn_id, task.data, task.size, task.ipc_info());
+          write_ipc(task->conn_id, task->data, task->size, task->ipc_info());
           break;
         case TaskType::SEND_NET:
-          send(task.conn_id, task.mr_id, task.data, task.size);
+          send(task->conn_id, task->mr_id, task->data, task->size);
           break;
         case TaskType::SENDV: {
-          TaskBatch const& batch = task.task_batch();
+          TaskBatch const& batch = task->task_batch();
           std::vector<void const*> const_data_v(
               batch.const_data_v(), batch.const_data_v() + batch.num_iovs);
           std::vector<size_t> size_v(batch.size_v(),
@@ -1874,11 +1874,11 @@ void Endpoint::send_proxy_thread_func() {
           std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
                                         batch.mr_id_v() + batch.num_iovs);
 
-          sendv(task.conn_id, mr_id_v, const_data_v, size_v, batch.num_iovs);
+          sendv(task->conn_id, mr_id_v, const_data_v, size_v, batch.num_iovs);
           break;
         }
         case TaskType::WRITEV: {
-          TaskBatch const& batch = task.task_batch();
+          TaskBatch const& batch = task->task_batch();
           std::vector<void*> data_v(batch.data_v(),
                                     batch.data_v() + batch.num_iovs);
           std::vector<size_t> size_v(batch.size_v(),
@@ -1888,43 +1888,43 @@ void Endpoint::send_proxy_thread_func() {
           std::vector<FifoItem> slot_item_v(
               batch.slot_item_v(), batch.slot_item_v() + batch.num_iovs);
 
-          writev(task.conn_id, mr_id_v, data_v, size_v, slot_item_v,
+          writev(task->conn_id, mr_id_v, data_v, size_v, slot_item_v,
                  batch.num_iovs);
           break;
         }
         default:
           LOG(ERROR) << "Unexpected task type in send processing: "
-                     << static_cast<int>(task.type);
+                     << static_cast<int>(task->type);
           break;
       }
-      task.self_ptr->done.store(true, std::memory_order_release);
+      task->done.store(true, std::memory_order_release);
     }
   }
 }
 
 void Endpoint::recv_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
-  UnifiedTask task;
+  UnifiedTask* task;
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(recv_unified_task_ring_, &task, 1, nullptr) ==
         1) {
-      switch (task.type) {
+      switch (task->type) {
         case TaskType::RECV_IPC:
-          recv_ipc(task.conn_id, task.data, task.size);
+          recv_ipc(task->conn_id, task->data, task->size);
           break;
         case TaskType::READ_NET:
-          read(task.conn_id, task.mr_id, task.data, task.size,
-               task.slot_item());
+          read(task->conn_id, task->mr_id, task->data, task->size,
+               task->slot_item());
           break;
         case TaskType::READ_IPC:
-          read_ipc(task.conn_id, task.data, task.size, task.ipc_info());
+          read_ipc(task->conn_id, task->data, task->size, task->ipc_info());
           break;
         case TaskType::RECV_NET:
-          recv(task.conn_id, task.mr_id, task.data, task.size);
+          recv(task->conn_id, task->mr_id, task->data, task->size);
           break;
         case TaskType::RECVV: {
-          TaskBatch const& batch = task.task_batch();
+          TaskBatch const& batch = task->task_batch();
           std::vector<void*> data_v(batch.data_v(),
                                     batch.data_v() + batch.num_iovs);
           std::vector<size_t> size_v(batch.size_v(),
@@ -1932,11 +1932,11 @@ void Endpoint::recv_proxy_thread_func() {
           std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
                                         batch.mr_id_v() + batch.num_iovs);
 
-          recvv(task.conn_id, mr_id_v, data_v, size_v, batch.num_iovs);
+          recvv(task->conn_id, mr_id_v, data_v, size_v, batch.num_iovs);
           break;
         }
         case TaskType::READV: {
-          TaskBatch const& batch = task.task_batch();
+          TaskBatch const& batch = task->task_batch();
           std::vector<void*> data_v(batch.data_v(),
                                     batch.data_v() + batch.num_iovs);
           std::vector<size_t> size_v(batch.size_v(),
@@ -1946,7 +1946,7 @@ void Endpoint::recv_proxy_thread_func() {
           std::vector<FifoItem> slot_item_v(
               batch.slot_item_v(), batch.slot_item_v() + batch.num_iovs);
 
-          readv(task.conn_id, mr_id_v, data_v, size_v, slot_item_v,
+          readv(task->conn_id, mr_id_v, data_v, size_v, slot_item_v,
                 batch.num_iovs);
           break;
         }
@@ -1956,10 +1956,10 @@ void Endpoint::recv_proxy_thread_func() {
         case TaskType::WRITE_IPC:
         default:
           LOG(ERROR) << "Unexpected task type in receive processing: "
-                     << static_cast<int>(task.type);
+                     << static_cast<int>(task->type);
           break;
       }
-      task.self_ptr->done.store(true, std::memory_order_release);
+      task->done.store(true, std::memory_order_release);
     }
   }
 }
