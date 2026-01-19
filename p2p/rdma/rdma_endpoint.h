@@ -27,8 +27,8 @@ class NICEndpoint {
 
     oob_server_ = std::make_shared<EpollServer>(
         port, [this](std::string const& input, std::string& output,
-                     std::string const& ip, int port) {
-          this->process_meta(input, output, ip, port);
+                     std::string const& ip, int port, int sock_fd) {
+          this->process_meta(input, output, ip, port, sock_fd);
         });
     oob_client_ = std::make_shared<EpollClient>();
 
@@ -93,18 +93,18 @@ class NICEndpoint {
     return true;
   }
 
-  int build_connect(uint64_t rank_id, bool sync = true,
-                    int timeout_ms = 10000) {
+  std::string build_connect(uint64_t rank_id, bool sync = true,
+                            int timeout_ms = 10000) {
     std::string const oob_con = build_oob_connect(rank_id);
     uint64_t receved_rank_id =
         this->build_control_channel(oob_con, rank_id, sync, timeout_ms);
     if (receved_rank_id < 0) {
-      return -1;
+      return "";
     }
     if (!this->build_normal_channels(oob_con, rank_id, sync, timeout_ms)) {
-      return -1;
+      return "";
     }
-    return static_cast<int>(receved_rank_id);
+    return oob_con;
   }
 
   // Blocking check for send completion
@@ -265,11 +265,12 @@ class NICEndpoint {
     LOG(INFO) << "remote_gpuidx: " << remote_gpuidx
               << ", remote_ip: " << remote_ip
               << ", remote_port: " << remote_port;
-    build_connect(current_send_id);  // sync mode (default)
+    auto oob_con = build_connect(current_send_id);  // sync mode (default)
     ConnID conn_id;
     conn_id.context =
         reinterpret_cast<void*>(static_cast<intptr_t>(current_send_id));
     conn_id.flow_id = current_send_id;
+    conn_id.sock_fd = oob_client_->get_sock_fd(oob_con);
     return conn_id;
   };
 
@@ -280,6 +281,7 @@ class NICEndpoint {
   inline ConnID uccl_accept(std::string& remote_ip, int* remote_gpuidx) {
     AcceptedMeta accepted;
     uint64_t rank_id = 0;
+    int sock_fd = -1;
 
     // Block until there's an accepted connection
     while (true) {
@@ -291,6 +293,8 @@ class NICEndpoint {
             auto it = accepted_meta_.begin();
             rank_id = it->first;
             accepted = it->second;
+            sock_fd = accepted.sock_fd;
+
             // Remove it from the map
             if (getOrCreateRecvGroup(rank_id)->channelCount() ==
                 kQpNumPerChannel + 1) {
@@ -319,6 +323,7 @@ class NICEndpoint {
     ConnID conn_id;
     conn_id.context = reinterpret_cast<void*>(static_cast<intptr_t>(rank_id));
     conn_id.flow_id = rank_id;
+    conn_id.sock_fd = sock_fd;
     return conn_id;
   }
 
@@ -474,7 +479,8 @@ class NICEndpoint {
   }
 
   void process_meta(std::string const& input, std::string& output,
-                    std::string const& client_ip, int client_port) {
+                    std::string const& client_ip, int client_port,
+                    int sock_fd) {
     MetaInfoToExchange meta = deserialize<MetaInfoToExchange>(input);
     LOG(INFO) << "Received from " << client_ip << ":" << client_port << " - "
               << meta;
@@ -518,6 +524,7 @@ class NICEndpoint {
         accepted.port = static_cast<uint16_t>(client_port);
         accepted.gpu_id = meta.gpu_id;
         accepted.rank_id = actual_rank_id;
+        accepted.sock_fd = sock_fd;
         accepted_meta_[actual_rank_id] = accepted;
         LOG(INFO) << "Stored accepted connection: rank_id=" << actual_rank_id
                   << ", ip=" << client_ip << ", port=" << client_port
