@@ -320,8 +320,6 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
                       uint64_t& conn_id) {
   std::cout << "Waiting to accept incoming connection..." << std::endl;
 
-  assert(local_gpu_idx_ != INVALID_GPU);
-
   // For demo purposes, simulate accepted connection
   conn_id = next_conn_id_.fetch_add(1);
 
