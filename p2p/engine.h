@@ -725,6 +725,9 @@ class Endpoint {
   jring_t* send_unified_task_ring_;
   jring_t* recv_unified_task_ring_;
 
+  std::unordered_map<uint64_t, std::shared_ptr<UnifiedTask>> pending_tasks_;
+  std::mutex pending_tasks_mutex_;
+
   std::atomic<bool> stop_{false};
   std::thread send_proxy_thread_;
   std::thread recv_proxy_thread_;
