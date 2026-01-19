@@ -281,8 +281,6 @@ class NICEndpoint {
     AcceptedMeta accepted;
     uint64_t rank_id = 0;
 
-    assert(gpu_index_ != INVALID_GPU);
-
     // Block until there's an accepted connection
     while (true) {
       {
