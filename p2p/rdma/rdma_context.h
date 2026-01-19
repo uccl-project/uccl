@@ -64,10 +64,6 @@ class RdmaContext {
     return ah;
   }
 
-  struct ibv_ah* createAh(union ibv_gid remote_gid, int port = 1) const {
-    return createAH(remote_gid, port);
-  }
-
   struct ibv_mr* regMem(void* addr, size_t size) const {
     int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                        IBV_ACCESS_REMOTE_READ;

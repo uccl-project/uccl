@@ -57,7 +57,9 @@ class RDMAChannel {
 
   void establishChannel(ChannelMetaData const& remote_meta) {
     remote_meta_ = std::make_shared<ChannelMetaData>(remote_meta);
+#ifdef UCCL_P2P_USE_EFA
     ah_ = ctx_->createAH(remote_meta_->gid);
+#endif
     impl_->connectQP(qp_, ctx_, *remote_meta_);
     UCCL_LOG_EP << "RDMAChannel connected to remote qpn=" << remote_meta.qpn;
   }
