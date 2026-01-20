@@ -1953,8 +1953,9 @@ void Endpoint::send_proxy_thread_func() {
                      << static_cast<int>(task->type);
           break;
       }
-      task->status_ptr->done.store(true, std::memory_order_release);
-      task->status_ptr->task_ptr.reset();
+      auto* status = task->status_ptr;
+      status->task_ptr.reset();
+      status->done.store(true, std::memory_order_release);
     }
   }
 }
@@ -2016,8 +2017,9 @@ void Endpoint::recv_proxy_thread_func() {
                      << static_cast<int>(task->type);
           break;
       }
-      task->status_ptr->done.store(true, std::memory_order_release);
-      task->status_ptr->task_ptr.reset();
+      auto* status = task->status_ptr;
+      status->task_ptr.reset();
+      status->done.store(true, std::memory_order_release);
     }
   }
 }
