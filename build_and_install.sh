@@ -24,3 +24,16 @@ else
   # That (currently) requires --extra-index-url
   pip install --extra-index-url ${ROCM_IDX_URL} $(ls wheelhouse-$TARGET/uccl-*.whl)[rocm]
 fi
+
+UCCL_INSTALL_PATH=$(pip show uccl 2>/dev/null | grep "^Location:" | cut -d' ' -f2 || echo "")
+if [[ -n "$UCCL_INSTALL_PATH" && -d "$UCCL_INSTALL_PATH" ]]; then
+  UCCL_PACKAGE_PATH="$UCCL_INSTALL_PATH/uccl"
+  if [[ -d "$UCCL_PACKAGE_PATH" ]]; then
+    echo "UCCL installed at: $UCCL_PACKAGE_PATH"
+    echo "Set LIBRARY_PATH: export LIBRARY_PATH=\"$UCCL_PACKAGE_PATH/lib:\$LIBRARY_PATH\""
+  else
+    echo "UCCL package directory not found at: $UCCL_PACKAGE_PATH"
+  fi
+else
+  echo "Warning: Could not detect UCCL installation path"
+fi

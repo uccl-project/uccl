@@ -40,7 +40,14 @@ def calc_diff(x: torch.Tensor, y: torch.Tensor):
 
 
 def hash_tensor(t: torch.Tensor):
-    return t.view(torch.int64).sum().item()
+    # Robust hash that works for any dtype/shape (including 0-d scalars).
+    # We hash raw bytes to avoid dtype-size assumptions (e.g., int32 -> int64).
+    if not t.is_contiguous():
+        t = t.contiguous()
+    if t.dim() == 0:
+        t = t.reshape(1)
+    u8 = t.view(torch.uint8)
+    return int(u8.sum(dtype=torch.int64).item())
 
 
 def init_dist(local_rank: int, num_local_ranks: int):

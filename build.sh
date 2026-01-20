@@ -143,6 +143,13 @@ build_p2p() {
   else
     echo "[container] USE_TCPX=1, skipping copying p2p runtime files"
   fi
+  if [[ "$TARGET" == rocm* ]]; then
+    cd thirdparty/dietgpu
+    rm -rf build/
+    python3 setup.py build
+    cd ../..
+    cp thirdparty/dietgpu/build/**/*.so uccl/
+  fi
 }
 
 build_ep() {
@@ -180,18 +187,17 @@ build_eccl() {
   set -euo pipefail
   echo "[container] build_eccl Target: $TARGET"
 
-  cd eccl
+  cd experimental/eccl
   if [[ "$TARGET" == cuda* ]]; then
-    echo "Skipping eccl build on Cuda."
-    return
+    make clean -f Makefile && make -j$(nproc) -f Makefile
   elif [[ "$TARGET" == rocm* ]]; then
     make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm
   fi
-  cd ..
+  cd ../..
 
   echo "[container] Copying eccl .so to uccl/"
-  # mkdir -p uccl/lib
-  # cp eccl/eccl.*.so uccl/
+  mkdir -p uccl/lib # mkdir anyway
+  cp experimental/eccl/*eccl*.so uccl/lib
 }
 
 # Determine the Docker image to use based on the target and architecture
@@ -250,6 +256,44 @@ else
 fi
 
 echo "[2/3] Running build inside container..."
+
+# Auto-detect CUDA architecture for ep build
+DETECTED_GPU_ARCH=""
+if [[ "$BUILD_TYPE" =~ (ep|all|p2p) ]];then
+  if [[ "$TARGET" == cuda* ]] && command -v nvidia-smi &> /dev/null; then
+    DETECTED_GPU_ARCH="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ' || true)"
+
+    if [[ -n "$DETECTED_GPU_ARCH" ]]; then
+      echo "Auto-detected CUDA compute capability: ${DETECTED_GPU_ARCH}"
+    fi
+  elif [[ "$TARGET" == rocm* ]] && command -v amd-smi &> /dev/null; then
+    # Check if jq is installed, install via pip if not
+    if ! command -v jq &> /dev/null; then
+      echo "jq not found, installing via pip..."
+      pip install jq
+    fi
+    DETECTED_GPU_ARCH="$(
+      PYTHONWARNINGS=ignore \
+      amd-smi static -g 0 --asic --json 2>/dev/null \
+      | jq -r '
+          if .gpu_data and (.gpu_data | length > 0) then
+            .gpu_data[0].asic.target_graphics_version
+          else
+            empty
+          end
+        ' \
+      || true
+    )"
+      if [[ -n "$DETECTED_GPU_ARCH" ]]; then
+        echo "Auto-detected ROCm architecture: ${DETECTED_GPU_ARCH}"
+    fi
+  else
+    echo "[INFO] No compatible GPU detection tool found, skipping auto-detect"
+  fi
+fi
+
+export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-${DETECTED_GPU_ARCH}}"
+
 docker run --rm --user "$(id -u):$(id -g)" \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
@@ -263,6 +307,8 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e WHEEL_DIR="${WHEEL_DIR}" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
   -e USE_TCPX="${USE_TCPX:-0}" \
+  -e USE_EFA="${USE_EFA:-0}" \
+  -e USE_IB="${USE_IB:-0}" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
   -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_rdma build_efa build_p2p build_ep build_eccl)" \
   -w /io \
@@ -346,7 +392,15 @@ def initialize():
       mv ${BACKUP_FN} setup.py
     fi
 
-    auditwheel repair dist/uccl-*.whl --exclude "libtorch*.so" --exclude "libc10*.so" --exclude "libibverbs.so.1" --exclude "libcudart.so.12" --exclude "libamdhip64.so.*" --exclude "libcuda.so.1" -w /io/${WHEEL_DIR}
+    auditwheel repair dist/uccl-*.whl \
+      --exclude "libtorch*.so" \
+      --exclude "libc10*.so" \
+      --exclude "libibverbs.so.1" \
+      --exclude "libcudart.so.12" \
+      --exclude "libamdhip64.so.*" \
+      --exclude "libcuda.so.1" \
+      --exclude "libefa.so.1" \
+      -w /io/${WHEEL_DIR}
 
     # Add backend tag to wheel filename using local version identifier
     if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then

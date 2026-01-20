@@ -11,11 +11,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential cmake git ninja-build g++ make patchelf \
-        rdma-core libibverbs-dev \
+        rdma-core libibverbs-dev libnuma-dev \
         libgoogle-glog-dev libgflags-dev libgtest-dev libelf-dev \
-        libnuma-dev libdrm-dev libdrm-amdgpu1 \
-        pkg-config zlib1g-dev curl \
-        software-properties-common && \
+        pkg-config zlib1g-dev curl unzip \
+        software-properties-common \
+        hipcub && \
 \
 # ───── Add Python ${PY_VER} PPA & install Python ${PY_VER} + setuptools ─────
     add-apt-repository ppa:deadsnakes/ppa && \
