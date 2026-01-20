@@ -11,6 +11,11 @@
 #include <thread>
 #include <vector>
 
+using RedisExchanger = UKernel::Transport::RedisExchanger;
+using RDMAInfo = UKernel::Transport::RDMAInfo;
+using QpInfo = UKernel::Transport::QpInfo;
+using CommunicatorMeta = UKernel::Transport::CommunicatorMeta;
+
 void publisher() {
   RedisExchanger ex("127.0.0.1", 6379);
   if (!ex.valid()) {
@@ -93,7 +98,8 @@ void rank_thread(int rank, int world_size, std::string const& exchanger_ip,
   }
 
   CommunicatorMeta local;
-  local.host_id = generate_host_id() + "_" + std::to_string(rank);
+  local.host_id =
+      UKernel::Transport::generate_host_id() + "_" + std::to_string(rank);
   local.is_ready = true;
 
   std::string key = "meta:" + std::to_string(rank);

@@ -1,5 +1,8 @@
 #include "oob.h"
 
+namespace UKernel {
+namespace Transport {
+
 RedisExchanger::RedisExchanger(std::string const& host, int port,
                                int timeout_ms) {
 #ifdef USE_REDIS_OOB
@@ -106,3 +109,6 @@ bool RedisExchanger::wait_and_fetch(std::string const& key, Exchangeable& obj,
   return false;
 #endif
 }
+
+}  // namespace Transport
+}  // namespace UKernel

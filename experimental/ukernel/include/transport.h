@@ -16,6 +16,9 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+namespace UKernel {
+namespace Transport {
+
 enum class EndpointType { RDMA, IPC };
 
 class Communicator;
@@ -34,7 +37,7 @@ class EndpointBase {
 
 class RDMAEndpoint : public EndpointBase {
  public:
-  RDMAEndpoint(std::shared_ptr<Config> config, Communicator* comm);
+  RDMAEndpoint(std::shared_ptr<CommunicatorConfig> config, Communicator* comm);
   ~RDMAEndpoint();
 
   bool connect_to(int rank) override;
@@ -61,7 +64,7 @@ class RDMAEndpoint : public EndpointBase {
 
   bool post_recv_imm_(ibv_qp* qp, uint64_t count);
 
-  std::shared_ptr<Config> config_;
+  std::shared_ptr<CommunicatorConfig> config_;
   Communicator* comm_;
 };
 
@@ -71,7 +74,7 @@ static constexpr size_t kIpcSizePerEngine = 1ul << 20;
 
 class IPCEndpoint : public EndpointBase {
  public:
-  IPCEndpoint(std::shared_ptr<Config> config, Communicator* comm);
+  IPCEndpoint(std::shared_ptr<CommunicatorConfig> config, Communicator* comm);
   ~IPCEndpoint();
 
   bool connect_to(int rank) override;
@@ -103,7 +106,7 @@ class IPCEndpoint : public EndpointBase {
 
   std::vector<gpuStream_t> ipc_streams_;  // n_streams
 
-  std::shared_ptr<Config> config_;
+  std::shared_ptr<CommunicatorConfig> config_;
   Communicator* comm_;
 };
 
@@ -111,7 +114,8 @@ class IPCEndpoint : public EndpointBase {
 class Communicator {
  public:
   Communicator(int gpu_id, int rank, int world_size,
-               std::shared_ptr<Config> config = std::make_shared<Config>());
+               std::shared_ptr<CommunicatorConfig> config =
+                   std::make_shared<CommunicatorConfig>());
   ~Communicator();
 
   // ---------- Endpoint -------------
@@ -208,8 +212,8 @@ class Communicator {
   mutable std::mutex local_ipc_cache_mu_;
   mutable std::mutex remote_ipc_cache_mu_;
 
-  // ---------- Config & Redis --------
-  std::shared_ptr<Config> config_;
+  // ---------- CommunicatorConfig & Redis --------
+  std::shared_ptr<CommunicatorConfig> config_;
   std::shared_ptr<Exchanger> exchanger_client_;
   mutable std::mutex exchanger_client_mu_;
 
@@ -226,3 +230,6 @@ class Communicator {
   friend class IPCEndpoint;
   friend class CQPoller;
 };
+
+}  // namespace Transport
+}  // namespace UKernel

@@ -1,5 +1,8 @@
 #include "request.h"
 
+namespace UKernel {
+namespace Transport {
+
 void Request::on_comm_done(bool done) {
   if (!done) {
     failed.store(true, std::memory_order_release);
@@ -21,3 +24,6 @@ void Request::on_compute_done() {
 }
 
 void Request::start_compute() { on_comm_done(true); }
+
+}  // namespace Transport
+}  // namespace UKernel

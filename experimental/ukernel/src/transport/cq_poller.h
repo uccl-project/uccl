@@ -7,6 +7,9 @@
 #include <thread>
 #include <vector>
 
+namespace UKernel {
+namespace Transport {
+
 class Communicator;
 
 class CQPoller {
@@ -29,3 +32,6 @@ class CQPoller {
   std::atomic<bool> running_{false};
   int poll_batch_;
 };
+
+}  // namespace Transport
+}  // namespace UKernel

@@ -11,7 +11,7 @@ HIPCCFLAGS := -g -O0 -std=c++17 -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942
 LDFLAGS    := -L${CONDA_LIB_HOME} -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -lglog
 
 # Include directories
-INCLUDES := -Iinclude -I$(HIP_HOME)/include -I/usr/include -I../../include
+INCLUDES := -Iinclude -I$(HIP_HOME)/include -I/usr/include -I../../include -Isrc/transport
 
 LDFLAGS += -L$(HIP_LIB) -Wl,-rpath,$(HIP_LIB)
 
@@ -70,7 +70,7 @@ run_test: $(TARGET_TEST)
 
 # Clean rule
 clean:
-	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) $(TARGET_TEST) $(STATIC_LIB) $(SHARED_LIB) *.d src/*.d tests/*.d
+	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) $(TARGET_TEST) $(STATIC_LIB) $(SHARED_LIB) *.d src/*.d src/transport/*.d tests/*.d
 
 # Include dependencies
 -include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_TEST:.o=.d)

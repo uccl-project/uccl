@@ -5,8 +5,6 @@
 #include <cstdio>
 #include <vector>
 
-using namespace UKernel;
-
 static inline uint64_t now_ns() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
@@ -33,21 +31,23 @@ int main() {
 
   printf("FIFO benchmark via PersistentKernel\n");
 
-  TaskManager::instance().init(1, 1);
+  UKernel::Compute::TaskManager::instance().init(1, 1);
 
-  PersistentKernelConfig cfg;
+  UKernel::Compute::PersistentKernelConfig cfg;
   cfg.numBlocks = 1;
   cfg.threadsPerBlock = 64;
   cfg.fifoCapacity = fifo_cap;
 
   uint32_t test_block_id = 0;
 
-  PersistentKernel<Task> kernel(cfg);
+  UKernel::Compute::PersistentKernel<UKernel::Compute::Task> kernel(cfg);
   kernel.launch();
 
   // warmup
   for (int i = 0; i < warmup; ++i) {
-    kernel.submit(Task(TaskType::BenchNop, DataType::Fp32, test_block_id, 0));
+    kernel.submit(UKernel::Compute::Task(UKernel::Compute::TaskType::BenchNop,
+                                         UKernel::Compute::DataType::Fp32,
+                                         test_block_id, 0));
   }
 
   while (!kernel.is_done(test_block_id, warmup - 1)) {
@@ -61,8 +61,9 @@ int main() {
 
   for (int i = 0; i < latency_iters; ++i) {
     uint64_t t0 = now_ns();
-    uint64_t id = kernel.submit(
-        Task(TaskType::BenchNop, DataType::Fp32, test_block_id, 0));
+    uint64_t id = kernel.submit(UKernel::Compute::Task(
+        UKernel::Compute::TaskType::BenchNop, UKernel::Compute::DataType::Fp32,
+        test_block_id, 0));
     kernel.is_done(test_block_id, id);
     uint64_t t1 = now_ns();
     lat.push_back(t1 - t0);
@@ -72,11 +73,14 @@ int main() {
 
   // throughput
   uint64_t t0 = now_ns();
-  uint64_t first =
-      kernel.submit(Task(TaskType::BenchNop, DataType::Fp32, test_block_id, 0));
+  uint64_t first = kernel.submit(UKernel::Compute::Task(
+      UKernel::Compute::TaskType::BenchNop, UKernel::Compute::DataType::Fp32,
+      test_block_id, 0));
 
   for (int i = 1; i < throughput_iters; ++i) {
-    kernel.submit(Task(TaskType::BenchNop, DataType::Fp32, test_block_id, 0));
+    kernel.submit(UKernel::Compute::Task(UKernel::Compute::TaskType::BenchNop,
+                                         UKernel::Compute::DataType::Fp32,
+                                         test_block_id, 0));
   }
 
   while (!kernel.is_done(test_block_id, first + throughput_iters - 1)) {

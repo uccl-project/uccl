@@ -18,6 +18,9 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+namespace UKernel {
+namespace Transport {
+
 /* ----------------- Internal helpers ----------------- */
 
 static ssize_t send_all_robust(int fd, char const* buf, size_t len) {
@@ -450,3 +453,6 @@ bool SockExchanger::start_server() {
 
   return true;
 }
+
+}  // namespace Transport
+}  // namespace UKernel

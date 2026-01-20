@@ -1,7 +1,11 @@
 #include "transport.h"
 #include <arpa/inet.h>  // ntohl
 
-RDMAEndpoint::RDMAEndpoint(std::shared_ptr<Config> config, Communicator* comm)
+namespace UKernel {
+namespace Transport {
+
+RDMAEndpoint::RDMAEndpoint(std::shared_ptr<CommunicatorConfig> config,
+                           Communicator* comm)
     : config_(config), comm_(comm) {}
 
 RDMAEndpoint::~RDMAEndpoint() {
@@ -290,3 +294,6 @@ bool RDMAEndpoint::recv_async(int from_rank, std::shared_ptr<Request> creq) {
 
   return true;
 }
+
+}  // namespace Transport
+}  // namespace UKernel
