@@ -793,8 +793,8 @@ __forceinline__ __device__ int atomic_cas_cta_acquire(int* addr, int x, int y) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   // TODO: __hip_atomic_compare_exchange_strong or
   // __hip_atomic_compare_exchange_weak
-  __hip_atomic_compare_exchange_strong(addr, &x, y, __ATOMIC_ACQUIRE,
-                                       __ATOMIC_RELAXED,
+  __hip_atomic_compare_exchange_strong(addr, &x, y, __ATOMIC_ACQ_REL,
+                                       __ATOMIC_ACQUIRE,
                                        __HIP_MEMORY_SCOPE_WORKGROUP);
   return x;
 #else
