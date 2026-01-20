@@ -11,6 +11,9 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+namespace UKernel {
+namespace Transport {
+
 namespace {
 constexpr uint32_t kHelloMagic = 0xC0DEF00D;
 constexpr uint32_t kMsgMagic = 0x55445331;  // "UDS1"
@@ -557,3 +560,6 @@ std::string UdsExchanger::path_for_rank(int rank) {
   mkdir_best_effort(dirname_of(path));
   return path;
 }
+
+}  // namespace Transport
+}  // namespace UKernel

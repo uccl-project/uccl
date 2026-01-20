@@ -25,6 +25,9 @@
 #include <mutex>
 #include <unordered_map>
 
+namespace UKernel {
+namespace Transport {
+
 // --- Group Exchanger ---
 struct Exchangeable {
   virtual std::map<std::string, std::string> to_map() const = 0;
@@ -344,3 +347,6 @@ class UdsExchanger {
   // Ensure only one thread is doing accept() at a time.
   mutable std::mutex accept_mu_;
 };
+
+}  // namespace Transport
+}  // namespace UKernel

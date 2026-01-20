@@ -7,7 +7,7 @@
 #include <vector>
 #include <cuda_runtime.h>
 
-using namespace UKernel;
+using namespace UKernel::Compute;
 
 static inline uint64_t now_ns() {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(

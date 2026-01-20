@@ -7,6 +7,7 @@
 #include <vector>
 
 namespace UKernel {
+namespace Compute {
 
 enum class TaskType : uint64_t {
   // CollTaskType
@@ -257,5 +258,5 @@ class TaskManager {
   mutable std::mutex moe_mu_;
   bool inited_{false};
 };
-
+}  // namespace Compute
 }  // namespace UKernel

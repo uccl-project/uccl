@@ -4,6 +4,9 @@
 #include <iostream>
 #include <vector>
 
+using Communicator = UKernel::Transport::Communicator;
+using MR = UKernel::Transport::MR;
+
 void cqpoller_client_thread(std::shared_ptr<Communicator> comm, int peer_rank) {
   if (comm->connect_to(peer_rank)) {
     std::cout << "[CLIENT] Successfully connected to rank " << peer_rank

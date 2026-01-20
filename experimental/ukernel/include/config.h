@@ -16,7 +16,10 @@
 #define DEFAULT_EXCHANGER_SERVER_IP "0.0.0.0"
 #define DEFAULT_EXCHANGER_SERVER_PORT 6979
 
-struct Config {
+namespace UKernel {
+namespace Transport {
+
+struct CommunicatorConfig {
   int rdma_chunk_size;
   int qp_count_per_ep;
   int cq_count_per_ep;
@@ -30,7 +33,7 @@ struct Config {
   std::string exchanger_ip;
   int exchanger_port;
 
-  Config()
+  CommunicatorConfig()
       : rdma_chunk_size(getEnvOrDefault("UKERNEL_RDMA_CHUNK_SIZE",
                                         DEFAULT_RDMA_CHUNK_SIZE)),
         qp_count_per_ep(getEnvOrDefault("UKERNEL_QP_COUNT", DEFAULT_QP_PER_EP)),
@@ -72,3 +75,8 @@ struct Config {
     return default_val;
   }
 };
+
+}  // namespace Transport
+
+namespace Compute {}
+}  // namespace UKernel

@@ -7,6 +7,10 @@
 #include <thread>
 #include <vector>
 
+using CommunicatorConfig = UKernel::Transport::CommunicatorConfig;
+using Communicator = UKernel::Transport::Communicator;
+using MR = UKernel::Transport::MR;
+
 static constexpr int kWorldSize = 2;
 static constexpr int client_gpu = 0;
 static constexpr int server_gpu = 0;
@@ -46,7 +50,7 @@ static std::string get_arg(int argc, char** argv, char const* key,
 }  // namespace
 
 static int run_client() {
-  auto cfg = std::make_shared<Config>();
+  auto cfg = std::make_shared<CommunicatorConfig>();
   auto comm =
       std::make_shared<Communicator>(client_gpu, client_rank, kWorldSize, cfg);
 
@@ -96,7 +100,7 @@ static int run_client() {
 }
 
 static int run_server() {
-  auto cfg = std::make_shared<Config>();
+  auto cfg = std::make_shared<CommunicatorConfig>();
   auto comm =
       std::make_shared<Communicator>(server_gpu, server_rank, kWorldSize, cfg);
 

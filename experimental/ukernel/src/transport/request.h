@@ -3,6 +3,9 @@
 #include <atomic>
 #include <memory>
 
+namespace UKernel {
+namespace Transport {
+
 enum class RequestType { NONE, SEND, RECV };
 enum class ReductionType { NONE, SUM, MAX };
 
@@ -63,3 +66,6 @@ static inline void parse_request_id(unsigned req_id, uint16_t& receiver_rank,
   mr_id = (req_id >> 12) & 0xFF;
   seq = req_id & 0xFFF;
 }
+
+}  // namespace Transport
+}  // namespace UKernel

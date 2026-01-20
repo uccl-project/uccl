@@ -3,7 +3,7 @@
 
 void test_find_best_rdma_for_gpu(int gpu_id) {
   // find best NIC for cur gpu
-  auto [nic_id, nic_name] = find_best_rdma_for_gpu(gpu_id);
+  auto [nic_id, nic_name] = UKernel::Transport::find_best_rdma_for_gpu(gpu_id);
   struct ibv_device** dev_list = ibv_get_device_list(nullptr);
   if (!dev_list) {
     std::cerr << "Failed to get IB devices" << std::endl;
@@ -35,8 +35,8 @@ void test_find_best_rdma_for_gpu(int gpu_id) {
 }
 
 void test_generate_host_id() {
-  auto id = generate_host_id(false);
-  auto id_with_ip = generate_host_id(true);
+  auto id = UKernel::Transport::generate_host_id(false);
+  auto id_with_ip = UKernel::Transport::generate_host_id(true);
 
   std::cout << "Test Utils: generate id " << id << " with ip " << id_with_ip
             << std::endl;
