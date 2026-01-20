@@ -472,9 +472,6 @@ class Endpoint {
     size_t size;
     uint64_t conn_id;
     uint64_t mr_id;
-    std::atomic<bool> done;
-    // For proxy to access the task.done
-    Task* self_ptr;
   };
 
   struct alignas(64) NetRwTask {
@@ -483,9 +480,6 @@ class Endpoint {
     size_t size;
     uint64_t conn_id;
     uint64_t mr_id;
-    std::atomic<bool> done;
-    // For proxy to access the task.done
-    NetRwTask* self_ptr;
     FifoItem slot_item;
   };
 
@@ -495,14 +489,18 @@ class Endpoint {
     size_t size;
     uint64_t conn_id;
     uint64_t mr_id;
-    std::atomic<bool> done;
-    // For proxy to access the task.done
-    IpcRwTask* self_ptr;
     IpcTransferInfo ipc_info;
   };
 
   static constexpr size_t MAX_RESERVE_SIZE =
       uccl::max_sizeof<FifoItem, IpcTransferInfo, TaskBatch>();
+
+  struct UnifiedTask;
+
+  struct TransferStatus {
+    std::atomic<bool> done{false};
+    std::shared_ptr<UnifiedTask> task_ptr;
+  };
 
   struct alignas(64) UnifiedTask {
     TaskType type;
@@ -510,8 +508,7 @@ class Endpoint {
     size_t size;
     uint64_t conn_id;
     uint64_t mr_id;
-    std::atomic<bool> done;
-    UnifiedTask* self_ptr;
+    TransferStatus* status_ptr{nullptr};
 
     union SpecificData {
       struct {
@@ -544,8 +541,7 @@ class Endpoint {
           size(0),
           conn_id(0),
           mr_id(0),
-          done(false),
-          self_ptr(this),
+          status_ptr(nullptr),
           specific() {}
 
     ~UnifiedTask() {
@@ -576,26 +572,24 @@ class Endpoint {
     }
   };
 
-  inline UnifiedTask* create_task(uint64_t conn_id, uint64_t mr_id,
-                                  TaskType type, void* data, size_t size) {
-    UnifiedTask* task = new UnifiedTask();
+  inline std::shared_ptr<UnifiedTask> create_task(uint64_t conn_id,
+                                                  uint64_t mr_id, TaskType type,
+                                                  void* data, size_t size) {
+    auto task = std::make_shared<UnifiedTask>();
     task->type = type;
     task->data = data;
     task->size = size;
     task->conn_id = conn_id;
     task->mr_id = mr_id;
-    task->done = false;
-    task->self_ptr = task;
     return task;
   }
 
-  inline UnifiedTask* create_batch_task(uint64_t conn_id, TaskType type,
-                                        TaskBatch&& batch) {
-    UnifiedTask* task = new UnifiedTask();
+  inline std::shared_ptr<UnifiedTask> create_batch_task(uint64_t conn_id,
+                                                        TaskType type,
+                                                        TaskBatch&& batch) {
+    auto task = std::make_shared<UnifiedTask>();
     task->type = type;
     task->conn_id = conn_id;
-    task->done = false;
-    task->self_ptr = task;
     // Not used for batch operations
     task->mr_id = 0;
     task->data = nullptr;
@@ -605,7 +599,7 @@ class Endpoint {
     return task;
   }
 
-  inline UnifiedTask* create_sendv_task(
+  inline std::shared_ptr<UnifiedTask> create_sendv_task(
       uint64_t conn_id,
       std::shared_ptr<std::vector<void const*>> const_data_ptr,
       std::shared_ptr<std::vector<size_t>> size_ptr,
@@ -626,10 +620,9 @@ class Endpoint {
     return create_batch_task(conn_id, TaskType::SENDV, std::move(batch));
   }
 
-  inline UnifiedTask* create_recvv_task(uint64_t conn_id,
-                                        std::vector<void*>&& data_v,
-                                        std::vector<size_t>&& size_v,
-                                        std::vector<uint64_t>&& mr_id_v) {
+  inline std::shared_ptr<UnifiedTask> create_recvv_task(
+      uint64_t conn_id, std::vector<void*>&& data_v,
+      std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v) {
     if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size()) {
       return nullptr;
     }
@@ -649,11 +642,10 @@ class Endpoint {
     return create_batch_task(conn_id, TaskType::RECVV, std::move(batch));
   }
 
-  inline UnifiedTask* create_writev_task(uint64_t conn_id,
-                                         std::vector<void*>&& data_v,
-                                         std::vector<size_t>&& size_v,
-                                         std::vector<uint64_t>&& mr_id_v,
-                                         std::vector<FifoItem>&& slot_item_v) {
+  inline std::shared_ptr<UnifiedTask> create_writev_task(
+      uint64_t conn_id, std::vector<void*>&& data_v,
+      std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
+      std::vector<FifoItem>&& slot_item_v) {
     if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
         mr_id_v.size() != slot_item_v.size()) {
       return nullptr;
@@ -677,11 +669,10 @@ class Endpoint {
     return create_batch_task(conn_id, TaskType::WRITEV, std::move(batch));
   }
 
-  inline UnifiedTask* create_readv_task(uint64_t conn_id,
-                                        std::vector<void*>&& data_v,
-                                        std::vector<size_t>&& size_v,
-                                        std::vector<uint64_t>&& mr_id_v,
-                                        std::vector<FifoItem>&& slot_item_v) {
+  inline std::shared_ptr<UnifiedTask> create_readv_task(
+      uint64_t conn_id, std::vector<void*>&& data_v,
+      std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
+      std::vector<FifoItem>&& slot_item_v) {
     if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
         mr_id_v.size() != slot_item_v.size()) {
       return nullptr;
@@ -705,18 +696,18 @@ class Endpoint {
     return create_batch_task(conn_id, TaskType::READV, std::move(batch));
   }
 
-  inline UnifiedTask* create_net_task(uint64_t conn_id, uint64_t mr_id,
-                                      TaskType type, void* data, size_t size,
-                                      FifoItem const& slot_item) {
-    UnifiedTask* task = create_task(conn_id, mr_id, type, data, size);
+  inline std::shared_ptr<UnifiedTask> create_net_task(
+      uint64_t conn_id, uint64_t mr_id, TaskType type, void* data, size_t size,
+      FifoItem const& slot_item) {
+    auto task = create_task(conn_id, mr_id, type, data, size);
     task->slot_item() = slot_item;
     return task;
   }
 
-  inline UnifiedTask* create_ipc_task(uint64_t conn_id, uint64_t mr_id,
-                                      TaskType type, void* data, size_t size,
-                                      IpcTransferInfo const& ipc_info) {
-    UnifiedTask* task = create_task(conn_id, mr_id, type, data, size);
+  inline std::shared_ptr<UnifiedTask> create_ipc_task(
+      uint64_t conn_id, uint64_t mr_id, TaskType type, void* data, size_t size,
+      IpcTransferInfo const& ipc_info) {
+    auto task = create_task(conn_id, mr_id, type, data, size);
     task->ipc_info() = ipc_info;
     return task;
   }
@@ -724,9 +715,6 @@ class Endpoint {
   // For both net and ipc send/recv tasks.
   jring_t* send_unified_task_ring_;
   jring_t* recv_unified_task_ring_;
-
-  std::unordered_map<uint64_t, std::shared_ptr<UnifiedTask>> pending_tasks_;
-  std::mutex pending_tasks_mutex_;
 
   std::atomic<bool> stop_{false};
   std::thread send_proxy_thread_;

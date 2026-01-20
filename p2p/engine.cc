@@ -157,11 +157,6 @@ Endpoint::~Endpoint() {
   send_proxy_thread_.join();
   recv_proxy_thread_.join();
 
-  {
-    std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
-    pending_tasks_.clear();
-  }
-
   free(send_unified_task_ring_);
   free(recv_unified_task_ring_);
   unified::delete_ep(ep_);
@@ -603,20 +598,18 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
 
 bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
                           size_t size, uint64_t* transfer_id) {
-  auto task_ptr = std::shared_ptr<UnifiedTask>(create_task(
-      conn_id, mr_id, TaskType::SEND_NET, const_cast<void*>(data), size));
+  auto task_ptr = create_task(conn_id, mr_id, TaskType::SEND_NET,
+                              const_cast<void*>(data), size);
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
+
   UnifiedTask* task_raw = task_ptr.get();
-  *transfer_id = reinterpret_cast<uint64_t>(task_raw);
-
-  {
-    std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
-    pending_tasks_[*transfer_id] = task_ptr;
-  }
-
   while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
   }
@@ -626,20 +619,17 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
                           size_t size, uint64_t* transfer_id) {
-  auto task_ptr = std::shared_ptr<UnifiedTask>(
-      create_task(conn_id, mr_id, TaskType::RECV_NET, data, size));
+  auto task_ptr = create_task(conn_id, mr_id, TaskType::RECV_NET, data, size);
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
+
   UnifiedTask* task_raw = task_ptr.get();
-  *transfer_id = reinterpret_cast<uint64_t>(task_raw);
-
-  {
-    std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
-    pending_tasks_[*transfer_id] = task_ptr;
-  }
-
   while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
   }
@@ -907,19 +897,18 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
 bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, FifoItem const& slot_item,
                           uint64_t* transfer_id) {
-  auto task_ptr = std::shared_ptr<UnifiedTask>(create_net_task(
-      conn_id, mr_id, TaskType::READ_NET, dst, size, slot_item));
+  auto task_ptr =
+      create_net_task(conn_id, mr_id, TaskType::READ_NET, dst, size, slot_item);
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  UnifiedTask* task_raw = task_ptr.get();
-  *transfer_id = reinterpret_cast<uint64_t>(task_raw);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  {
-    std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
-    pending_tasks_[*transfer_id] = task_ptr;
-  }
+  UnifiedTask* task_raw = task_ptr.get();
 
   while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
@@ -937,20 +926,18 @@ bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
   auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
 
-  auto task_ptr = std::shared_ptr<UnifiedTask>(
-      create_sendv_task(conn_id, std::move(const_data_ptr), std::move(size_ptr),
-                        std::move(mr_id_ptr)));
+  auto task_ptr = create_sendv_task(conn_id, std::move(const_data_ptr),
+                                    std::move(size_ptr), std::move(mr_id_ptr));
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  UnifiedTask* task_raw = task_ptr.get();
-  *transfer_id = reinterpret_cast<uint64_t>(task_raw);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  {
-    std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
-    pending_tasks_[*transfer_id] = task_ptr;
-  }
+  UnifiedTask* task_raw = task_ptr.get();
 
   while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
@@ -964,19 +951,18 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                            std::vector<size_t> size_v, size_t num_iovs,
                            uint64_t* transfer_id) {
   // Use move semantics to reduce memory copies
-  auto task_ptr = std::shared_ptr<UnifiedTask>(create_recvv_task(
-      conn_id, std::move(data_v), std::move(size_v), std::move(mr_id_v)));
+  auto task_ptr = create_recvv_task(conn_id, std::move(data_v),
+                                    std::move(size_v), std::move(mr_id_v));
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  UnifiedTask* task_raw = task_ptr.get();
-  *transfer_id = reinterpret_cast<uint64_t>(task_raw);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  {
-    std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
-    pending_tasks_[*transfer_id] = task_ptr;
-  }
+  UnifiedTask* task_raw = task_ptr.get();
 
   while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
@@ -1080,20 +1066,19 @@ bool Endpoint::readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                            std::vector<FifoItem> slot_item_v, size_t num_iovs,
                            uint64_t* transfer_id) {
   // Use move semantics to reduce memory copies
-  auto task_ptr = std::shared_ptr<UnifiedTask>(
+  auto task_ptr =
       create_readv_task(conn_id, std::move(dst_v), std::move(size_v),
-                        std::move(mr_id_v), std::move(slot_item_v)));
+                        std::move(mr_id_v), std::move(slot_item_v));
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  UnifiedTask* task_raw = task_ptr.get();
-  *transfer_id = reinterpret_cast<uint64_t>(task_raw);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  {
-    std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
-    pending_tasks_[*transfer_id] = task_ptr;
-  }
+  UnifiedTask* task_raw = task_ptr.get();
 
   while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
@@ -1105,19 +1090,18 @@ bool Endpoint::readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
                            size_t size, FifoItem const& slot_item,
                            uint64_t* transfer_id) {
-  auto task_ptr = std::shared_ptr<UnifiedTask>(create_net_task(
-      conn_id, mr_id, TaskType::WRITE_NET, src, size, slot_item));
+  auto task_ptr = create_net_task(conn_id, mr_id, TaskType::WRITE_NET, src,
+                                  size, slot_item);
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  UnifiedTask* task_raw = task_ptr.get();
-  *transfer_id = reinterpret_cast<uint64_t>(task_raw);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  {
-    std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
-    pending_tasks_[*transfer_id] = task_ptr;
-  }
+  UnifiedTask* task_raw = task_ptr.get();
 
   while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
@@ -1222,20 +1206,19 @@ bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                             std::vector<FifoItem> slot_item_v, size_t num_iovs,
                             uint64_t* transfer_id) {
   // Use move semantics to reduce memory copies
-  auto task_ptr = std::shared_ptr<UnifiedTask>(
+  auto task_ptr =
       create_writev_task(conn_id, std::move(src_v), std::move(size_v),
-                         std::move(mr_id_v), std::move(slot_item_v)));
+                         std::move(mr_id_v), std::move(slot_item_v));
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  UnifiedTask* task_raw = task_ptr.get();
-  *transfer_id = reinterpret_cast<uint64_t>(task_raw);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  {
-    std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
-    pending_tasks_[*transfer_id] = task_ptr;
-  }
+  UnifiedTask* task_raw = task_ptr.get();
 
   while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
@@ -1565,19 +1548,18 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
 bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
                               uint64_t* transfer_id) {
   // Create a task for IPC send operation
-  auto task_ptr = std::shared_ptr<UnifiedTask>(create_task(
-      conn_id, 0, TaskType::SEND_IPC, const_cast<void*>(data), size));
+  auto task_ptr = create_task(conn_id, 0, TaskType::SEND_IPC,
+                              const_cast<void*>(data), size);
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  UnifiedTask* task_raw = task_ptr.get();
-  *transfer_id = reinterpret_cast<uint64_t>(task_raw);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  {
-    std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
-    pending_tasks_[*transfer_id] = task_ptr;
-  }
+  UnifiedTask* task_raw = task_ptr.get();
 
   // For now, we'll use the existing async infrastructure but call our IPC
   // function In a real implementation, you might want a separate IPC task ring
@@ -1591,19 +1573,17 @@ bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
 bool Endpoint::recv_ipc_async(uint64_t conn_id, void* data, size_t size,
                               uint64_t* transfer_id) {
   // Create a task for IPC receive operation
-  auto task_ptr = std::shared_ptr<UnifiedTask>(
-      create_task(conn_id, 0, TaskType::RECV_IPC, data, size));
+  auto task_ptr = create_task(conn_id, 0, TaskType::RECV_IPC, data, size);
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  UnifiedTask* task_raw = task_ptr.get();
-  *transfer_id = reinterpret_cast<uint64_t>(task_raw);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  {
-    std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
-    pending_tasks_[*transfer_id] = task_ptr;
-  }
+  UnifiedTask* task_raw = task_ptr.get();
 
   // For now, we'll use the existing async infrastructure but call our IPC
   // function In a real implementation, you might want a separate IPC task ring
@@ -1738,19 +1718,18 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
                                IpcTransferInfo const& info,
                                uint64_t* transfer_id) {
   // Create an IPC task for IPC write operation
-  auto task_ptr = std::shared_ptr<UnifiedTask>(create_ipc_task(
-      conn_id, 0, TaskType::WRITE_IPC, const_cast<void*>(data), size, info));
+  auto task_ptr = create_ipc_task(conn_id, 0, TaskType::WRITE_IPC,
+                                  const_cast<void*>(data), size, info);
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  UnifiedTask* task_raw = task_ptr.get();
-  *transfer_id = reinterpret_cast<uint64_t>(task_raw);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  {
-    std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
-    pending_tasks_[*transfer_id] = task_ptr;
-  }
+  UnifiedTask* task_raw = task_ptr.get();
 
   // Enqueue the task for processing by proxy thread
   while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
@@ -1764,19 +1743,18 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
                               IpcTransferInfo const& info,
                               uint64_t* transfer_id) {
   // Create an IPC task for IPC read operation
-  auto task_ptr = std::shared_ptr<UnifiedTask>(
-      create_ipc_task(conn_id, 0, TaskType::READ_IPC, data, size, info));
+  auto task_ptr =
+      create_ipc_task(conn_id, 0, TaskType::READ_IPC, data, size, info);
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  UnifiedTask* task_raw = task_ptr.get();
-  *transfer_id = reinterpret_cast<uint64_t>(task_raw);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  {
-    std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
-    pending_tasks_[*transfer_id] = task_ptr;
-  }
+  UnifiedTask* task_raw = task_ptr.get();
 
   // Enqueue the task for processing by proxy thread
   while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
@@ -1859,16 +1837,10 @@ bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
 }
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
-  std::lock_guard<std::mutex> lock(pending_tasks_mutex_);
-  auto it = pending_tasks_.find(transfer_id);
-  if (it == pending_tasks_.end()) {
-    *is_done = true;
-    return true;
-  }
-
-  *is_done = it->second->done.load(std::memory_order_acquire);
+  auto* status = reinterpret_cast<TransferStatus*>(transfer_id);
+  *is_done = status->done.load(std::memory_order_acquire);
   if (*is_done) {
-    pending_tasks_.erase(it);
+    delete status;
   }
   return true;
 }
@@ -1981,7 +1953,8 @@ void Endpoint::send_proxy_thread_func() {
                      << static_cast<int>(task->type);
           break;
       }
-      task->done.store(true, std::memory_order_release);
+      task->status_ptr->done.store(true, std::memory_order_release);
+      task->status_ptr->task_ptr.reset();
     }
   }
 }
@@ -2043,7 +2016,8 @@ void Endpoint::recv_proxy_thread_func() {
                      << static_cast<int>(task->type);
           break;
       }
-      task->done.store(true, std::memory_order_release);
+      task->status_ptr->done.store(true, std::memory_order_release);
+      task->status_ptr->task_ptr.reset();
     }
   }
 }
