@@ -1902,11 +1902,15 @@ void Endpoint::cleanup_uds_socket() {
 
 void Endpoint::send_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
+  // Use 16-byte buffer to avoid stringop-overflow warning from jring's 16-byte
+  // bulk copy
+  alignas(16) char task_buffer[16];
   UnifiedTask* task;
 
   while (!stop_.load(std::memory_order_acquire)) {
-    if (jring_sc_dequeue_bulk(send_unified_task_ring_, &task, 1, nullptr) ==
-        1) {
+    if (jring_sc_dequeue_bulk(send_unified_task_ring_, task_buffer, 1,
+                              nullptr) == 1) {
+      task = *reinterpret_cast<UnifiedTask**>(task_buffer);
       switch (task->type) {
         case TaskType::SEND_IPC:
           send_ipc(task->conn_id, task->data, task->size);
@@ -1961,11 +1965,15 @@ void Endpoint::send_proxy_thread_func() {
 
 void Endpoint::recv_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
+  // Use 16-byte buffer to avoid stringop-overflow warning from jring's 16-byte
+  // bulk copy
+  alignas(16) char task_buffer[16];
   UnifiedTask* task;
 
   while (!stop_.load(std::memory_order_acquire)) {
-    if (jring_sc_dequeue_bulk(recv_unified_task_ring_, &task, 1, nullptr) ==
-        1) {
+    if (jring_sc_dequeue_bulk(recv_unified_task_ring_, task_buffer, 1,
+                              nullptr) == 1) {
+      task = *reinterpret_cast<UnifiedTask**>(task_buffer);
       switch (task->type) {
         case TaskType::RECV_IPC:
           recv_ipc(task->conn_id, task->data, task->size);
