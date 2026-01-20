@@ -94,9 +94,9 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   engine_initialized_ = true;
 
   send_unified_task_ring_ =
-      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+      uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
   recv_unified_task_ring_ =
-      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+      uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
 
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
@@ -211,9 +211,9 @@ void Endpoint::initialize_engine() {
 #endif
 
   send_unified_task_ring_ =
-      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+      uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
   recv_unified_task_ring_ =
-      uccl::create_ring(sizeof(UnifiedTask), kTaskRingSize);
+      uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
 
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
@@ -598,16 +598,20 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
 
 bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
                           size_t size, uint64_t* transfer_id) {
-  UnifiedTask* task = create_task(conn_id, mr_id, TaskType::SEND_NET,
-                                  const_cast<void*>(data), size);
-  if (unlikely(task == nullptr)) {
+  auto task_ptr = create_task(conn_id, mr_id, TaskType::SEND_NET,
+                              const_cast<void*>(data), size);
+  if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  *transfer_id = reinterpret_cast<uint64_t>(task);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
-         1) {
+  UnifiedTask* task_raw = task_ptr.get();
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
+                               nullptr) != 1) {
   }
 
   return true;
@@ -615,16 +619,19 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
                           size_t size, uint64_t* transfer_id) {
-  UnifiedTask* task =
-      create_task(conn_id, mr_id, TaskType::RECV_NET, data, size);
-  if (unlikely(task == nullptr)) {
+  auto task_ptr = create_task(conn_id, mr_id, TaskType::RECV_NET, data, size);
+  if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  *transfer_id = reinterpret_cast<uint64_t>(task);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
-         1) {
+  UnifiedTask* task_raw = task_ptr.get();
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
+                               nullptr) != 1) {
   }
 
   return true;
@@ -890,16 +897,21 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
 bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, FifoItem const& slot_item,
                           uint64_t* transfer_id) {
-  UnifiedTask* rw_task =
+  auto task_ptr =
       create_net_task(conn_id, mr_id, TaskType::READ_NET, dst, size, slot_item);
-  if (unlikely(rw_task == nullptr)) {
+  if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  *transfer_id = reinterpret_cast<uint64_t>(rw_task);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, rw_task, 1, nullptr) !=
-         1) {
+  UnifiedTask* task_raw = task_ptr.get();
+
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
+                               nullptr) != 1) {
   }
 
   return true;
@@ -914,17 +926,21 @@ bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
   auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
 
-  UnifiedTask* task =
-      create_sendv_task(conn_id, std::move(const_data_ptr), std::move(size_ptr),
-                        std::move(mr_id_ptr));
-  if (unlikely(task == nullptr)) {
+  auto task_ptr = create_sendv_task(conn_id, std::move(const_data_ptr),
+                                    std::move(size_ptr), std::move(mr_id_ptr));
+  if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  *transfer_id = reinterpret_cast<uint64_t>(task);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
-         1) {
+  UnifiedTask* task_raw = task_ptr.get();
+
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
+                               nullptr) != 1) {
   }
 
   return true;
@@ -935,16 +951,21 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                            std::vector<size_t> size_v, size_t num_iovs,
                            uint64_t* transfer_id) {
   // Use move semantics to reduce memory copies
-  UnifiedTask* task = create_recvv_task(conn_id, std::move(data_v),
-                                        std::move(size_v), std::move(mr_id_v));
-  if (unlikely(task == nullptr)) {
+  auto task_ptr = create_recvv_task(conn_id, std::move(data_v),
+                                    std::move(size_v), std::move(mr_id_v));
+  if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  *transfer_id = reinterpret_cast<uint64_t>(task);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
-         1) {
+  UnifiedTask* task_raw = task_ptr.get();
+
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
+                               nullptr) != 1) {
   }
 
   return true;
@@ -1045,17 +1066,22 @@ bool Endpoint::readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                            std::vector<FifoItem> slot_item_v, size_t num_iovs,
                            uint64_t* transfer_id) {
   // Use move semantics to reduce memory copies
-  UnifiedTask* task =
+  auto task_ptr =
       create_readv_task(conn_id, std::move(dst_v), std::move(size_v),
                         std::move(mr_id_v), std::move(slot_item_v));
-  if (unlikely(task == nullptr)) {
+  if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  *transfer_id = reinterpret_cast<uint64_t>(task);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
-         1) {
+  UnifiedTask* task_raw = task_ptr.get();
+
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
+                               nullptr) != 1) {
   }
 
   return true;
@@ -1064,15 +1090,21 @@ bool Endpoint::readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
                            size_t size, FifoItem const& slot_item,
                            uint64_t* transfer_id) {
-  UnifiedTask* rw_task = create_net_task(conn_id, mr_id, TaskType::WRITE_NET,
-                                         src, size, slot_item);
-  if (unlikely(rw_task == nullptr)) {
+  auto task_ptr = create_net_task(conn_id, mr_id, TaskType::WRITE_NET, src,
+                                  size, slot_item);
+  if (unlikely(task_ptr == nullptr)) {
     return false;
   }
-  *transfer_id = reinterpret_cast<uint64_t>(rw_task);
 
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, rw_task, 1, nullptr) !=
-         1) {
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
+
+  UnifiedTask* task_raw = task_ptr.get();
+
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
+                               nullptr) != 1) {
   }
 
   return true;
@@ -1174,17 +1206,22 @@ bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                             std::vector<FifoItem> slot_item_v, size_t num_iovs,
                             uint64_t* transfer_id) {
   // Use move semantics to reduce memory copies
-  UnifiedTask* task =
+  auto task_ptr =
       create_writev_task(conn_id, std::move(src_v), std::move(size_v),
                          std::move(mr_id_v), std::move(slot_item_v));
-  if (unlikely(task == nullptr)) {
+  if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  *transfer_id = reinterpret_cast<uint64_t>(task);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
-         1) {
+  UnifiedTask* task_raw = task_ptr.get();
+
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
+                               nullptr) != 1) {
   }
 
   return true;
@@ -1442,7 +1479,7 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
   // async. Update: moving async does not help, as gpuIpcOpenMemHandle will be
   // slower.
   // std::thread close_mem_handle(
-  //     [raw_dst_ptr]() { GPU_RT_CHECK(gpuIpcCloseMemHandle(raw_dst_ptr)); });
+  //     [dst_ptr]() { GPU_RT_CHECK(gpuIpcCloseMemHandle(dst_ptr)); });
   // close_mem_handle.detach();
 
   // We close all IPC memory handles when releasing this endpoint.
@@ -1511,18 +1548,23 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
 bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
                               uint64_t* transfer_id) {
   // Create a task for IPC send operation
-  UnifiedTask* task = create_task(conn_id, 0, TaskType::SEND_IPC,
-                                  const_cast<void*>(data), size);
-  if (unlikely(task == nullptr)) {
+  auto task_ptr = create_task(conn_id, 0, TaskType::SEND_IPC,
+                              const_cast<void*>(data), size);
+  if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  *transfer_id = reinterpret_cast<uint64_t>(task);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
+
+  UnifiedTask* task_raw = task_ptr.get();
 
   // For now, we'll use the existing async infrastructure but call our IPC
   // function In a real implementation, you might want a separate IPC task ring
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
-         1) {
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
+                               nullptr) != 1) {
   }
 
   return true;
@@ -1531,17 +1573,22 @@ bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
 bool Endpoint::recv_ipc_async(uint64_t conn_id, void* data, size_t size,
                               uint64_t* transfer_id) {
   // Create a task for IPC receive operation
-  UnifiedTask* task = create_task(conn_id, 0, TaskType::RECV_IPC, data, size);
-  if (unlikely(task == nullptr)) {
+  auto task_ptr = create_task(conn_id, 0, TaskType::RECV_IPC, data, size);
+  if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  *transfer_id = reinterpret_cast<uint64_t>(task);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
+
+  UnifiedTask* task_raw = task_ptr.get();
 
   // For now, we'll use the existing async infrastructure but call our IPC
   // function In a real implementation, you might want a separate IPC task ring
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
-         1) {
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
+                               nullptr) != 1) {
   }
 
   return true;
@@ -1671,17 +1718,22 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
                                IpcTransferInfo const& info,
                                uint64_t* transfer_id) {
   // Create an IPC task for IPC write operation
-  UnifiedTask* task = create_ipc_task(conn_id, 0, TaskType::WRITE_IPC,
-                                      const_cast<void*>(data), size, info);
-  if (unlikely(task == nullptr)) {
+  auto task_ptr = create_ipc_task(conn_id, 0, TaskType::WRITE_IPC,
+                                  const_cast<void*>(data), size, info);
+  if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  *transfer_id = reinterpret_cast<uint64_t>(task);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
+
+  UnifiedTask* task_raw = task_ptr.get();
 
   // Enqueue the task for processing by proxy thread
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, task, 1, nullptr) !=
-         1) {
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
+                               nullptr) != 1) {
   }
 
   return true;
@@ -1691,17 +1743,22 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
                               IpcTransferInfo const& info,
                               uint64_t* transfer_id) {
   // Create an IPC task for IPC read operation
-  UnifiedTask* task =
+  auto task_ptr =
       create_ipc_task(conn_id, 0, TaskType::READ_IPC, data, size, info);
-  if (unlikely(task == nullptr)) {
+  if (unlikely(task_ptr == nullptr)) {
     return false;
   }
 
-  *transfer_id = reinterpret_cast<uint64_t>(task);
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
+
+  UnifiedTask* task_raw = task_ptr.get();
 
   // Enqueue the task for processing by proxy thread
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, task, 1, nullptr) !=
-         1) {
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
+                               nullptr) != 1) {
   }
 
   return true;
@@ -1780,11 +1837,10 @@ bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
 }
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
-  auto task = reinterpret_cast<UnifiedTask*>(transfer_id);
-  *is_done = task->done.load(std::memory_order_acquire);
+  auto* status = reinterpret_cast<TransferStatus*>(transfer_id);
+  *is_done = status->done.load(std::memory_order_acquire);
   if (*is_done) {
-    // std::cout << "transfer_id is done:" << transfer_id << std::endl;
-    delete task;
+    delete status;
   }
   return true;
 }
@@ -1846,27 +1902,27 @@ void Endpoint::cleanup_uds_socket() {
 
 void Endpoint::send_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
-  UnifiedTask task;
+  UnifiedTask* task;
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(send_unified_task_ring_, &task, 1, nullptr) ==
         1) {
-      switch (task.type) {
+      switch (task->type) {
         case TaskType::SEND_IPC:
-          send_ipc(task.conn_id, task.data, task.size);
+          send_ipc(task->conn_id, task->data, task->size);
           break;
         case TaskType::WRITE_NET:
-          write(task.conn_id, task.mr_id, task.data, task.size,
-                task.slot_item());
+          write(task->conn_id, task->mr_id, task->data, task->size,
+                task->slot_item());
           break;
         case TaskType::WRITE_IPC:
-          write_ipc(task.conn_id, task.data, task.size, task.ipc_info());
+          write_ipc(task->conn_id, task->data, task->size, task->ipc_info());
           break;
         case TaskType::SEND_NET:
-          send(task.conn_id, task.mr_id, task.data, task.size);
+          send(task->conn_id, task->mr_id, task->data, task->size);
           break;
         case TaskType::SENDV: {
-          TaskBatch const& batch = task.task_batch();
+          TaskBatch const& batch = task->task_batch();
           std::vector<void const*> const_data_v(
               batch.const_data_v(), batch.const_data_v() + batch.num_iovs);
           std::vector<size_t> size_v(batch.size_v(),
@@ -1874,11 +1930,11 @@ void Endpoint::send_proxy_thread_func() {
           std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
                                         batch.mr_id_v() + batch.num_iovs);
 
-          sendv(task.conn_id, mr_id_v, const_data_v, size_v, batch.num_iovs);
+          sendv(task->conn_id, mr_id_v, const_data_v, size_v, batch.num_iovs);
           break;
         }
         case TaskType::WRITEV: {
-          TaskBatch const& batch = task.task_batch();
+          TaskBatch const& batch = task->task_batch();
           std::vector<void*> data_v(batch.data_v(),
                                     batch.data_v() + batch.num_iovs);
           std::vector<size_t> size_v(batch.size_v(),
@@ -1888,43 +1944,44 @@ void Endpoint::send_proxy_thread_func() {
           std::vector<FifoItem> slot_item_v(
               batch.slot_item_v(), batch.slot_item_v() + batch.num_iovs);
 
-          writev(task.conn_id, mr_id_v, data_v, size_v, slot_item_v,
+          writev(task->conn_id, mr_id_v, data_v, size_v, slot_item_v,
                  batch.num_iovs);
           break;
         }
         default:
           LOG(ERROR) << "Unexpected task type in send processing: "
-                     << static_cast<int>(task.type);
+                     << static_cast<int>(task->type);
           break;
       }
-      task.self_ptr->done.store(true, std::memory_order_release);
+      task->status_ptr->done.store(true, std::memory_order_release);
+      task->status_ptr->task_ptr.reset();
     }
   }
 }
 
 void Endpoint::recv_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
-  UnifiedTask task;
+  UnifiedTask* task;
 
   while (!stop_.load(std::memory_order_acquire)) {
     if (jring_sc_dequeue_bulk(recv_unified_task_ring_, &task, 1, nullptr) ==
         1) {
-      switch (task.type) {
+      switch (task->type) {
         case TaskType::RECV_IPC:
-          recv_ipc(task.conn_id, task.data, task.size);
+          recv_ipc(task->conn_id, task->data, task->size);
           break;
         case TaskType::READ_NET:
-          read(task.conn_id, task.mr_id, task.data, task.size,
-               task.slot_item());
+          read(task->conn_id, task->mr_id, task->data, task->size,
+               task->slot_item());
           break;
         case TaskType::READ_IPC:
-          read_ipc(task.conn_id, task.data, task.size, task.ipc_info());
+          read_ipc(task->conn_id, task->data, task->size, task->ipc_info());
           break;
         case TaskType::RECV_NET:
-          recv(task.conn_id, task.mr_id, task.data, task.size);
+          recv(task->conn_id, task->mr_id, task->data, task->size);
           break;
         case TaskType::RECVV: {
-          TaskBatch const& batch = task.task_batch();
+          TaskBatch const& batch = task->task_batch();
           std::vector<void*> data_v(batch.data_v(),
                                     batch.data_v() + batch.num_iovs);
           std::vector<size_t> size_v(batch.size_v(),
@@ -1932,11 +1989,11 @@ void Endpoint::recv_proxy_thread_func() {
           std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
                                         batch.mr_id_v() + batch.num_iovs);
 
-          recvv(task.conn_id, mr_id_v, data_v, size_v, batch.num_iovs);
+          recvv(task->conn_id, mr_id_v, data_v, size_v, batch.num_iovs);
           break;
         }
         case TaskType::READV: {
-          TaskBatch const& batch = task.task_batch();
+          TaskBatch const& batch = task->task_batch();
           std::vector<void*> data_v(batch.data_v(),
                                     batch.data_v() + batch.num_iovs);
           std::vector<size_t> size_v(batch.size_v(),
@@ -1946,7 +2003,7 @@ void Endpoint::recv_proxy_thread_func() {
           std::vector<FifoItem> slot_item_v(
               batch.slot_item_v(), batch.slot_item_v() + batch.num_iovs);
 
-          readv(task.conn_id, mr_id_v, data_v, size_v, slot_item_v,
+          readv(task->conn_id, mr_id_v, data_v, size_v, slot_item_v,
                 batch.num_iovs);
           break;
         }
@@ -1956,10 +2013,11 @@ void Endpoint::recv_proxy_thread_func() {
         case TaskType::WRITE_IPC:
         default:
           LOG(ERROR) << "Unexpected task type in receive processing: "
-                     << static_cast<int>(task.type);
+                     << static_cast<int>(task->type);
           break;
       }
-      task.self_ptr->done.store(true, std::memory_order_release);
+      task->status_ptr->done.store(true, std::memory_order_release);
+      task->status_ptr->task_ptr.reset();
     }
   }
 }
