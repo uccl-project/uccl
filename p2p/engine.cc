@@ -69,6 +69,13 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   ep_ = std::shared_ptr<NICEndpoint>(
       new NICEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
   numa_node_ = 0;
+#elif defined(UCCL_P2P_USE_TCP)
+  ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
+  numa_node_ = 0;
+  // Initialize GPU to device mapping (use 0 for TCP since no RDMA devices)
+  for (int i = 0; i < kMaxNumGPUs; i++) {
+    gpu_to_dev[i] = 0;
+  }
 #else
   ep_ = new uccl::RDMAEndpoint(num_cpus_);
 
@@ -130,6 +137,15 @@ Endpoint::Endpoint(uint32_t const num_cpus) : num_cpus_(num_cpus) {
 #ifdef UCCL_P2P_USE_NATIVE_RDMA
   ep_ = std::shared_ptr<NICEndpoint>(
       new NICEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
+#elif defined(UCCL_P2P_USE_TCP)
+  // Initialize the TCP endpoint
+  ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
+  // Initialize GPU to device mapping (use 0 for TCP since no RDMA devices)
+  int ngpus_detected = 0;
+  GPU_RT_CHECK(gpuGetDeviceCount(&ngpus_detected));
+  for (int i = 0; i < kMaxNumGPUs; i++) {
+    gpu_to_dev[i] = 0;
+  }
 #else
   // Initialize the RDMA endpoint with lazy creation.
   ep_ = new uccl::RDMAEndpoint(num_cpus_);
@@ -198,14 +214,18 @@ void Endpoint::initialize_engine() {
     GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i], gpuStreamNonBlocking));
   }
 
+#if defined(UCCL_P2P_USE_TCP)
+  numa_node_ = 0;  // TCP doesn't have RDMA devices
+#else
   numa_node_ =
       uccl::RDMAFactory::get_factory_dev(gpu_to_dev[local_gpu_idx_])->numa_node;
+#endif
 
   // Initialize the engine based on the GPU index.
   std::cout << "Lazy creation of engine, GPU index: " << local_gpu_idx_
             << std::endl;
   // Initialize engine by fixed engine offset since we did lazy initialization
-#ifndef UCCL_P2P_USE_NATIVE_RDMA
+#if !defined(UCCL_P2P_USE_NATIVE_RDMA) && !defined(UCCL_P2P_USE_TCP)
   unified::initialize_engine_by_dev(ep_, gpu_to_dev[local_gpu_idx_], false);
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
 #endif
@@ -581,7 +601,6 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
       }
       if (unified::uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightChunks])) {
         // Just mark it as completed, DO NOT increment ureq_finished here.
-        LOG(INFO) << "chunk recv::::" << i;
         done[i % kMaxInflightChunks] = true;
       }
     }

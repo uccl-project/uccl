@@ -7,6 +7,9 @@ USE_EFA ?= $(shell echo $${USE_EFA:-0})
 # IB optional integration
 USE_IB ?= $(shell echo $${USE_IB:-0})
 
+# TCP endpoint integration
+USE_TCP ?= $(shell echo $${USE_TCP:-0})
+
 # Compiler and flags
 CUDA_HOME ?= /usr/local/cuda
 CUDA_INC  := $(CUDA_HOME)/include
@@ -36,6 +39,11 @@ else ifeq ($(USE_IB),1)
 	LIBS += -libverbs
 else
 	LIBS2 += -lglog -lgflags -lgtest -lz -lelf -lpthread -libverbs
+endif
+
+# Add TCP endpoint flag
+ifeq ($(USE_TCP),1)
+	CXXFLAGS += -DUCCL_P2P_USE_TCP
 endif
 
 # Python and pybind11 configuration
@@ -73,8 +81,13 @@ CXXFLAGS += -DUCCL_P2P_USE_TCPX -I$(NCCL_INC)
 LDFLAGS  += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
 OBJECTS := $(CORE_OBJECTS)
 else
-SOURCES := engine.cc engine_pybind.cc
-CORE_OBJECT := engine.o
+SOURCES := engine.cc engine_pybind.cc tcp/tcp_endpoint.cc tcp/tcp_worker_pool.cc
+CORE_OBJECT := engine.o tcp/tcp_endpoint.o tcp/tcp_worker_pool.o
+endif
+
+ifeq ($(USE_TCPX),1)
+OBJECTS := $(CORE_OBJECTS)
+else
 OBJECTS := $(SOURCES:.cc=.o)
 endif
 
@@ -121,6 +134,11 @@ endif
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
 
+# Compile TCP source files
+tcp/%.o: tcp/%.cc
+	@mkdir -p tcp
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -I. -c $< -o $@
+
 ifeq ($(USE_TCPX),1)
 install: $(P2P_SHARED_LIB)
 	install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/
@@ -138,6 +156,7 @@ endif
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB)
+	rm -f tcp/*.o
 ifneq ($(USE_TCPX),1)
 	rm -f $(P2P_PYTHON_EXT) $(RDMA_PLUGIN_LIB) $(RDMA_OBJECTS)
 endif

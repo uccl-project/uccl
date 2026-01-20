@@ -1,6 +1,10 @@
 #pragma once
 #include "engine.h"
 
+#ifdef UCCL_P2P_USE_TCP
+#include "tcp/tcp_endpoint.h"
+#endif
+
 namespace unified {
 
 template <class T>
@@ -17,6 +21,12 @@ inline void delete_ep(RDMAEndPoint const& s) {
         }
 #ifdef UCCL_P2P_USE_NATIVE_RDMA
         else if constexpr (std::is_same_v<T, std::shared_ptr<NICEndpoint>>) {
+          // shared_ptr: do nothing (shared_ptr handles lifetime)
+        }
+#endif
+#ifdef UCCL_P2P_USE_TCP
+        else if constexpr (std::is_same_v<T,
+                                          std::shared_ptr<tcp::TCPEndpoint>>) {
           // shared_ptr: do nothing (shared_ptr handles lifetime)
         }
 #endif
@@ -53,6 +63,32 @@ inline int set_request(std::shared_ptr<NICEndpoint> const& obj, Conn* conn,
 }
 #endif
 
+#ifdef UCCL_P2P_USE_TCP
+inline int tcp_set_request_write(std::shared_ptr<tcp::TCPEndpoint> const& obj,
+                                 Conn* conn, unified::P2PMhandle* local_mh,
+                                 void* src, size_t size,
+                                 FifoItem const& slot_item,
+                                 uccl::ucclRequest* ureq) {
+  ureq->type = uccl::ReqType::ReqWrite;
+  ureq->n = conn->uccl_conn_id_.flow_id;
+  return obj->uccl_write_async(
+      reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), nullptr,
+      src, size, slot_item, ureq);
+}
+
+inline int tcp_set_request_read(std::shared_ptr<tcp::TCPEndpoint> const& obj,
+                                Conn* conn, unified::P2PMhandle* local_mh,
+                                void* dst, size_t size,
+                                FifoItem const& slot_item,
+                                uccl::ucclRequest* ureq) {
+  ureq->type = uccl::ReqType::ReqRead;
+  ureq->n = conn->uccl_conn_id_.flow_id;
+  return obj->uccl_read_async(
+      reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), nullptr,
+      dst, size, slot_item, ureq);
+}
+#endif
+
 inline uccl::ConnID uccl_connect(RDMAEndPoint const& s, int dev,
                                  int local_gpuidx, int remote_dev,
                                  int remote_gpuidx, std::string remote_ip,
@@ -60,8 +96,17 @@ inline uccl::ConnID uccl_connect(RDMAEndPoint const& s, int dev,
   return std::visit(
       [dev, local_gpuidx, remote_dev, remote_gpuidx, remote_ip,
        remote_port](auto&& obj) -> uccl::ConnID {
-        return obj->uccl_connect(dev, local_gpuidx, remote_dev, remote_gpuidx,
-                                 remote_ip, remote_port);
+        using T = std::decay_t<decltype(obj)>;
+#ifdef UCCL_P2P_USE_TCP
+        if constexpr (std::is_same_v<T, std::shared_ptr<tcp::TCPEndpoint>>) {
+          return obj->uccl_connect(dev, local_gpuidx, remote_dev, remote_gpuidx,
+                                   remote_ip, remote_port);
+        } else
+#endif
+        {
+          return obj->uccl_connect(dev, local_gpuidx, remote_dev, remote_gpuidx,
+                                   remote_ip, remote_port);
+        }
       },
       s);
 }
@@ -116,6 +161,13 @@ inline bool uccl_regmr(RDMAEndPoint const& s, int dev, void* data, size_t len,
           }
         }
 #endif
+#ifdef UCCL_P2P_USE_TCP
+        else if constexpr (std::is_same_v<T,
+                                          std::shared_ptr<tcp::TCPEndpoint>>) {
+          // TCP doesn't need memory registration
+          mhandle->mhandle_ = nullptr;
+        }
+#endif
         else {
           static_assert(always_false<T>::value,
                         "Unhandled type in RDMAEndPoint variant");
@@ -158,6 +210,16 @@ inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
           return ureq->engine_idx;
         }
 #endif
+#ifdef UCCL_P2P_USE_TCP
+        else if constexpr (std::is_same_v<T,
+                                          std::shared_ptr<tcp::TCPEndpoint>>) {
+          ureq->type = uccl::ReqType::ReqTx;
+          ureq->n = conn->uccl_conn_id_.flow_id;
+          return obj->uccl_send_async(
+              reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
+              nullptr, data, size, ureq);
+        }
+#endif
         else {
           static_assert(always_false<T>::value,
                         "Unhandled type in RDMAEndPoint variant");
@@ -191,6 +253,16 @@ inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
           return ureq->engine_idx;
         }
 #endif
+#ifdef UCCL_P2P_USE_TCP
+        else if constexpr (std::is_same_v<T,
+                                          std::shared_ptr<tcp::TCPEndpoint>>) {
+          ureq->type = uccl::ReqType::ReqRx;
+          ureq->n = conn->uccl_conn_id_.flow_id;
+          return obj->uccl_recv_async(
+              reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
+              nullptr, data, size, n, ureq);
+        }
+#endif
         else {
           static_assert(always_false<T>::value,
                         "Unhandled type in RDMAEndPoint variant");
@@ -221,6 +293,13 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
           }
         }
 #endif
+#ifdef UCCL_P2P_USE_TCP
+        else if constexpr (std::is_same_v<T,
+                                          std::shared_ptr<tcp::TCPEndpoint>>) {
+          // TCP operations are blocking, so always complete immediately
+          return obj->uccl_poll_ureq_once(ureq);
+        }
+#endif
         else {
           static_assert(always_false<T>::value,
                         "Unhandled type in RDMAEndPoint variant");
@@ -249,6 +328,13 @@ inline int uccl_read_async(RDMAEndPoint const& s, Conn* conn,
           return set_request(obj, conn, local_mh, dst, size, slot_item, ureq);
         }
 #endif
+#ifdef UCCL_P2P_USE_TCP
+        else if constexpr (std::is_same_v<T,
+                                          std::shared_ptr<tcp::TCPEndpoint>>) {
+          return tcp_set_request_read(obj, conn, local_mh, dst, size, slot_item,
+                                      ureq);
+        }
+#endif
         else {
           static_assert(always_false<T>::value,
                         "Unhandled type in RDMAEndPoint variant");
@@ -275,6 +361,13 @@ inline int uccl_write_async(RDMAEndPoint const& s, Conn* conn,
         else if constexpr (std::is_same_v<T, std::shared_ptr<NICEndpoint>>) {
           ureq->type = uccl::ReqType::ReqWrite;
           return set_request(obj, conn, local_mh, src, size, slot_item, ureq);
+        }
+#endif
+#ifdef UCCL_P2P_USE_TCP
+        else if constexpr (std::is_same_v<T,
+                                          std::shared_ptr<tcp::TCPEndpoint>>) {
+          return tcp_set_request_write(obj, conn, local_mh, src, size,
+                                       slot_item, ureq);
         }
 #endif
         else {
@@ -313,6 +406,19 @@ inline int prepare_fifo_metadata(RDMAEndPoint const& s, Conn* conn,
           return 0;
         }
 #endif
+#ifdef UCCL_P2P_USE_TCP
+        else if constexpr (std::is_same_v<T,
+                                          std::shared_ptr<tcp::TCPEndpoint>>) {
+          // For TCP, just store address and size (no rkeys needed)
+          FifoItem remote_mem_info;
+          remote_mem_info.addr = reinterpret_cast<uint64_t>(data);
+          remote_mem_info.size = size;
+          std::memset(remote_mem_info.padding, 0,
+                      sizeof(remote_mem_info.padding));
+          uccl::serialize_fifo_item(remote_mem_info, out_buf);
+          return 0;
+        }
+#endif
         else {
           static_assert(always_false<T>::value,
                         "Unhandled type in RDMAEndPoint variant");
@@ -333,6 +439,12 @@ inline void uccl_deregmr(RDMAEndPoint const& s, P2PMhandle* mhandle) {
 #ifdef UCCL_P2P_USE_NATIVE_RDMA
         else if constexpr (std::is_same_v<T, std::shared_ptr<NICEndpoint>>) {
           obj->uccl_deregmr(mhandle->mr_array);
+        }
+#endif
+#ifdef UCCL_P2P_USE_TCP
+        else if constexpr (std::is_same_v<T,
+                                          std::shared_ptr<tcp::TCPEndpoint>>) {
+          // TCP doesn't need memory deregistration - no-op
         }
 #endif
         else {
