@@ -4,6 +4,9 @@
 #include <cstring>
 #include <iostream>
 
+namespace UKernel {
+namespace Transport {
+
 static constexpr int kMaxPollEntriesDefault = 16;
 
 CQPoller::CQPoller(Communicator* comm, ibv_cq* assign_cq, int poll_batch)
@@ -130,3 +133,6 @@ void CQPoller::run_loop() {
 
   std::cerr << "[CQPoller] exiting poll loop\n";
 }
+
+}  // namespace Transport
+}  // namespace UKernel

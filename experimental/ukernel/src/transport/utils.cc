@@ -12,6 +12,9 @@
 #include <netdb.h>
 #include <unistd.h>
 
+namespace UKernel {
+namespace Transport {
+
 // helper: check if RDMA device (by name) has at least one port UP & LinkUp
 static bool rdma_device_has_up_port(std::string const& devname) {
   struct ibv_device** dev_list = ibv_get_device_list(nullptr);
@@ -167,3 +170,6 @@ std::string generate_host_id(bool include_ip) {
   }
   return id;
 }
+
+}  // namespace Transport
+}  // namespace UKernel

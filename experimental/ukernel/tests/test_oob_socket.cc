@@ -10,6 +10,11 @@
 #include <thread>
 #include <vector>
 
+using SockExchanger = UKernel::Transport::SockExchanger;
+using RDMAInfo = UKernel::Transport::RDMAInfo;
+using QpInfo = UKernel::Transport::QpInfo;
+using CommunicatorMeta = UKernel::Transport::CommunicatorMeta;
+
 void publisher_socket() {
   SockExchanger ex(false, "127.0.0.1", 6379);
   if (!ex.valid()) {
@@ -89,7 +94,8 @@ void rank_thread_socket(int rank, int world_size, std::string const& ip,
   }
 
   CommunicatorMeta local;
-  local.host_id = generate_host_id() + "_" + std::to_string(rank);
+  local.host_id =
+      UKernel::Transport::generate_host_id() + "_" + std::to_string(rank);
   local.ip = "127.0.0.1";
   local.is_ready = true;
 

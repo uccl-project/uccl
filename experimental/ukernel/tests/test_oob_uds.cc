@@ -5,6 +5,9 @@
 #include <iostream>
 #include <thread>
 
+using UdsExchanger = UKernel::Transport::UdsExchanger;
+using IpcCacheWire = UKernel::Transport::IpcCacheWire;
+
 void test_uds_oob() {
   std::cout << "[TEST] UDS OOB test start\n";
 

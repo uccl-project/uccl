@@ -22,7 +22,7 @@ LDFLAGS    := -L$(CONDA_LIB_HOME) \
               -lcudart -lcuda \
               -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -lglog
 
-INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../../include
+INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../../include -Isrc/transport
 
 # Redis support: when USE_REDIS_OOB=1
 ifeq ($(USE_REDIS_OOB),1)
@@ -78,7 +78,7 @@ run_test: $(TARGET_TEST)
 
 # Clean
 clean:
-	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) $(TARGET_TEST) $(STATIC_LIB) $(SHARED_LIB) *.d src/*.d tests/*.d
+	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) $(TARGET_TEST) $(STATIC_LIB) $(SHARED_LIB) *.d src/*.d src/transport/*.d tests/*.d
 
 # Include dependencies
 -include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_TEST:.o=.d)

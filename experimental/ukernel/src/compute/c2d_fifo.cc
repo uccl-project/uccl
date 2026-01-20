@@ -7,7 +7,7 @@
 
 namespace mscclpp {
 
-template class CpuToGpuFifo<UKernel::Task>;
+template class CpuToGpuFifo<UKernel::Compute::Task>;
 
 template <typename T>
 CpuToGpuFifo<T>::CpuToGpuFifo(int size) {

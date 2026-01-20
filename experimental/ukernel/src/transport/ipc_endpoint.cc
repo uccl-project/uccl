@@ -1,7 +1,11 @@
 #include "transport.h"
 #include "util/util.h"
 
-IPCEndpoint::IPCEndpoint(std::shared_ptr<Config> config, Communicator* comm)
+namespace UKernel {
+namespace Transport {
+
+IPCEndpoint::IPCEndpoint(std::shared_ptr<CommunicatorConfig> config,
+                         Communicator* comm)
     : config_(config), comm_(comm) {
   task_ring_ = uccl::create_ring(sizeof(IpcTask), kTaskRingSize);
   stop_.store(false);
@@ -218,3 +222,6 @@ void IPCEndpoint::proxy_thread_func() {
     if (t.req) t.req->on_comm_done(false);
   }
 }
+
+}  // namespace Transport
+}  // namespace UKernel

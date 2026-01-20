@@ -4,6 +4,9 @@
 #include "utils.h"
 #include <unordered_set>
 
+namespace UKernel {
+namespace Transport {
+
 std::string get_local_ip() {
   if (char const* env_ip = std::getenv("UHM_LOCAL_IP")) {
     if (std::strlen(env_ip) > 0) return env_ip;
@@ -30,7 +33,7 @@ std::string get_local_ip() {
 }
 
 Communicator::Communicator(int gpu_id, int rank, int world_size,
-                           std::shared_ptr<Config> config)
+                           std::shared_ptr<CommunicatorConfig> config)
     : local_rank_(gpu_id),
       global_rank_(rank),
       world_size_(world_size),
@@ -836,3 +839,6 @@ ibv_cq* Communicator::get_cq_by_index(int index) {
   }
   return cq_list_[index];
 }
+
+}  // namespace Transport
+}  // namespace UKernel
