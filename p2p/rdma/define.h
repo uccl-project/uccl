@@ -611,6 +611,7 @@ struct MetaInfoToExchange {
   ChannelMetaData channel_meta;
   RemoteMemInfo mem_meta;
   int gpu_id;
+  uint16_t oob_port;  // OOB server port for back-connection (notifications)
 
   // Default constructor
   MetaInfoToExchange()
@@ -619,20 +620,23 @@ struct MetaInfoToExchange {
         flag(ChannelType::Normal),
         channel_meta{},
         mem_meta{},
-        gpu_id(0) {}
+        gpu_id(0),
+        oob_port(0) {}
 
   // Constructor with required rank_id and channel_id, optional channel_meta and
   // mem_meta
   MetaInfoToExchange(int32_t rid, int32_t cid,
                      std::shared_ptr<ChannelMetaData> ch_meta = nullptr,
                      std::shared_ptr<RemoteMemInfo> mem_meta_ptr = nullptr,
-                     ChannelType flag_in = ChannelType::Normal, int gid = 0)
+                     ChannelType flag_in = ChannelType::Normal, int gid = 0,
+                     uint16_t oob_p = 0)
       : rank_id(rid),
         channel_id(cid),
         channel_meta{},
         mem_meta{},
         flag(flag_in),
-        gpu_id(gid) {
+        gpu_id(gid),
+        oob_port(oob_p) {
     if (ch_meta) {
       channel_meta = *ch_meta;
     }

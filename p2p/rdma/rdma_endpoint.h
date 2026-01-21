@@ -282,6 +282,7 @@ class NICEndpoint {
   // Get OOB conn_key for a given rank
   std::string get_oob_conn_key(uint64_t rank_id) {
     auto it = rank_oob_conn_keys_.find(rank_id);
+    printf("Getting oob conn key for rank_id=%lu\n", rank_id);
     return (it != rank_oob_conn_keys_.end()) ? it->second : "";
   }
 
@@ -517,11 +518,12 @@ class NICEndpoint {
       auto recv_ctrl_channel = std::make_shared<RecvControlChannel>(
           ctx_ptr, meta, ctrl_mem, meta.channel_id);
 
-      // Create respons
+      // Create response (include our OOB port for potential future use)
       RemoteMemInfo ctrl_info(ctrl_mem);
       MetaInfoToExchange response(rank_id_, meta.channel_id,
                                   recv_ctrl_channel->get_local_meta(), nullptr,
-                                  ChannelType::Control, gpu_index_);
+                                  ChannelType::Control, gpu_index_,
+                                  oob_server_->get_port());
       response.mem_meta = ctrl_info;
       LOG(INFO) << "response (control channel):::::::" << response;
       output = serialize(response);
@@ -542,6 +544,18 @@ class NICEndpoint {
         LOG(INFO) << "Stored accepted connection: rank_id=" << actual_rank_id
                   << ", ip=" << client_ip << ", port=" << client_port
                   << ", gpu_id=" << meta.gpu_id;
+      }
+
+      // Connect back to connector's OOB server for bidirectional notifications
+      if (meta.oob_port > 0) {
+        std::string back_conn_key = oob_client_->connect_to_server(client_ip, meta.oob_port);
+        if (!back_conn_key.empty()) {
+          rank_oob_conn_keys_[actual_rank_id] = back_conn_key;
+          LOG(INFO) << "Established back-connection to " << client_ip << ":" << meta.oob_port
+                    << " for rank_id=" << actual_rank_id << ", conn_key=" << back_conn_key;
+        } else {
+          LOG(WARNING) << "Failed to establish back-connection to " << client_ip << ":" << meta.oob_port;
+        }
       }
     } else {
       // Normal channel
@@ -666,9 +680,11 @@ class NICEndpoint {
         contexts_[0], ctrl_mem, kControlChannelID);
     auto ctrl_info = std::make_shared<RemoteMemInfo>(ctrl_mem);
 
+    // Include OOB server port for back-connection (notifications)
     MetaInfoToExchange ctrl_meta(rank_id_, kControlChannelID,
                                  control_channel->get_local_meta(), ctrl_info,
-                                 ChannelType::Control, gpu_index_);
+                                 ChannelType::Control, gpu_index_,
+                                 oob_server_->get_port());
 
     LOG(INFO) << "Control Meta: " << ctrl_meta
               << " Local Channel Meta: " << control_channel->get_local_meta()
