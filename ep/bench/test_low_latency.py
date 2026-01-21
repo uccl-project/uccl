@@ -537,7 +537,9 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                 )
                 if args.debug_hash and ref_hash_details and current_hash_details:
                     diffs = []
-                    keys = set(ref_hash_details.keys()) | set(current_hash_details.keys())
+                    keys = set(ref_hash_details.keys()) | set(
+                        current_hash_details.keys()
+                    )
                     for k in sorted(keys):
                         a = ref_hash_details.get(k, 0)
                         b = current_hash_details.get(k, 0)
@@ -551,7 +553,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                             f"[rank {rank}] Total differing labels: {len(diffs)}",
                             flush=True,
                         )
-                        for (k, a, b) in diffs[:10]:
+                        for k, a, b in diffs[:10]:
                             print(f"[rank {rank}] DIFF {k} ref={a} cur={b}", flush=True)
                     else:
                         print(

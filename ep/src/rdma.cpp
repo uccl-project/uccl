@@ -829,7 +829,8 @@ static void post_rdma_async_batched_normal_mode(
             fprintf(stderr, "[EFA] atomic value=%d won't fit in 15 bits\n", v);
             std::abort();
           }
-          size_t index = static_cast<size_t>(cmd.atomic_offset / sizeof(int64_t));
+          size_t index =
+              static_cast<size_t>(cmd.atomic_offset / sizeof(int64_t));
           // Initialize missing entries lazily
           auto key = ctx->seq_key(dst_rank, index);
           if (ctx->next_seq_per_index.find(key) ==
@@ -938,7 +939,8 @@ static void post_rdma_async_batched_normal_mode(
               fprintf(stderr, "atomic value=%d won't fit in 15 bits\n", v);
               std::abort();
             }
-            size_t index = static_cast<size_t>(cmd.atomic_offset / sizeof(int64_t));
+            size_t index =
+                static_cast<size_t>(cmd.atomic_offset / sizeof(int64_t));
             // Initialize missing entries lazily
             auto key = ctx->seq_key(dst_rank, index);
             if (ctx->next_seq_per_index.find(key) ==
