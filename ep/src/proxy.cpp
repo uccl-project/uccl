@@ -179,6 +179,7 @@ void Proxy::init_common() {
 
   // Register atomic_buffer_ptr as a separate RDMA memory region if it was set
   // This must be done after PD is initialized by per_thread_rdma_init
+  // TODO(MaoZiming): Skip registering for EFA. 
   if (atomic_buffer_ptr_ && !ctx_.atomic_buffer_mr) {
     ctx_.atomic_buffer_mr =
         ibv_reg_mr(ctx_.pd, atomic_buffer_ptr_, kAtomicBufferSize,

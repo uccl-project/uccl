@@ -137,7 +137,6 @@ def test_main(
     # Check dispatch correctness
     do_check = True
     hash_value, num_times = 0, 0
-    # Optional per-tensor hash breakdown to localize non-determinism.
     hash_details = {} if debug_hash else None
 
     def _record_hash(label: str, t: torch.Tensor, include_in_overall: bool = True):
@@ -317,13 +316,6 @@ def test_main(
                                         f"dispatch_bf16|{tag}",
                                         packed_recv_x[i, :num_valid_tokens],
                                     )
-                                # Also record metadata that defines token placement/order,
-                                # but do NOT include it in the overall hash_value (so we
-                                # don't change the existing determinism criterion).
-                                #
-                                # If these differ while data differs, it's "assignment/order"
-                                # non-determinism. If these match but data differs, it's
-                                # "payload/visibility/cast" non-determinism.
                                 _record_hash(
                                     f"dispatch_meta_count|{tag}",
                                     packed_recv_count[i],

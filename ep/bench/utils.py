@@ -452,6 +452,7 @@ def bench_kineto(
             durations = [event["dur"] / 1e6 for event in events]
             
             # Handle incomplete periods gracefully (due to dropped samples)
+            # NOTE(MaoZiming): This sometimes happen, suspect it is the profiler's issue. 
             num_complete_periods = len(durations) // num_kernels_per_period
             if len(durations) % num_kernels_per_period != 0:
                 dropped_samples = len(durations) % num_kernels_per_period
