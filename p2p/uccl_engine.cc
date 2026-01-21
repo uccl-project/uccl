@@ -303,7 +303,7 @@ int uccl_engine_start_listener(uccl_conn_t* conn) {
   conn->listener_running = true;
 #ifdef UCCL_P2P_USE_TCPX
   conn->listener_thread = new std::thread(listener_thread_func, conn);
-#else
+#endif
 
   return 0;
 }
@@ -344,14 +344,7 @@ int uccl_engine_stop_listener(uccl_conn_t* conn) {
 void uccl_engine_conn_destroy(uccl_conn_t* conn) {
   if (conn) {
     uccl_engine_stop_listener(conn);
-    {
-      std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
-      auto it = fifo_item_map.find(conn);
-      if (it != fifo_item_map.end()) {
-        delete it->second;
-        fifo_item_map.erase(it);
-      }
-    }
+
     delete conn;
   }
 }

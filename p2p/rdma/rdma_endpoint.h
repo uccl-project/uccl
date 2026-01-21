@@ -485,12 +485,11 @@ class NICEndpoint {
                     std::string const& client_ip, int client_port) {
     if (input.size() >= sizeof(NotifyMsg)) {
       NotifyMsg const* notify_msg = reinterpret_cast<NotifyMsg const*>(input.data());
-      if (notify_msg->magic == OOB_MSG_MAGIC ) {
+      if (notify_msg->magic == NOTIFY_MSG_MAGIC ) {
         std::lock_guard<std::mutex> lock(notify_mutex);
         notify_list.push_back(*notify_msg);
         output = "";
-        LOG(INFO) << "Received notification from "
-                  << " name=" << notify_msg->name;
+        LOG(INFO) << "Received notification from" << notify_msg->name
                   << " msg=" << notify_msg->msg;
         return;
       }

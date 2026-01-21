@@ -298,7 +298,7 @@ class Endpoint {
   }
 
   std::shared_ptr<EpollClient> get_oob_client() const {
-    return get_oob_client(ep_);
+    return ep_->get_oob_client();
   }
 
   std::string get_oob_conn_key(uint64_t conn_id) const {
@@ -307,7 +307,7 @@ class Endpoint {
       return "";
     }
     uint64_t rank_id = it->second->uccl_conn_id_.flow_id;
-    return ::get_oob_conn_key(ep_, rank_id);
+    return ep_->get_oob_conn_key(rank_id);
   }
 
  private:
