@@ -239,6 +239,9 @@ class Endpoint {
   bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
                  char* out_buf);
 
+  /* Prepare Fifo without requiring a connection (for pre-computing fifo_item). */
+  bool prepare_fifo(uint64_t mr_id, void* addr, size_t len, char* out_buf);
+
   /* Advertise a vector of data chunks. */
   bool advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                   std::vector<void*> addr_v, std::vector<size_t> len_v,

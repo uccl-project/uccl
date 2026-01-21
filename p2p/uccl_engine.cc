@@ -3,6 +3,7 @@
 #include "nccl_tcpx_endpoint.h"
 #else
 #include "engine.h"
+#include "endpoint_wrapper.h"
 #endif
 #include "util/util.h"
 #include <arpa/inet.h>
@@ -530,6 +531,19 @@ void uccl_engine_mr_destroy(uccl_mr_t* mr) {
   delete mr;
 }
 
+
+int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t* mr,
+                                    void const* data, size_t size,
+                                    char* fifo_buf) {
+  if (!engine || !mr || !data || !fifo_buf) return -1;
+
+  return engine->endpoint->prepare_fifo(mr->mr_id,
+                                           const_cast<void*>(data), size,
+                                           fifo_buf)
+             ? 0
+             : -1;
+}
+
 int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md) {
   if (!conn || !md) return -1;
 
@@ -621,6 +635,8 @@ int uccl_engine_get_sock_fd(uccl_conn_t* conn) {
   if (!conn) return -1;
   return conn->sock_fd;
 }
+
+
 
 int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
   if (!engine || !metadata) return -1;

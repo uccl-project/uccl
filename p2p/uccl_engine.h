@@ -235,6 +235,20 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg);
 int uccl_engine_get_sock_fd(uccl_conn_t* conn);
 
 /**
+ * Prepare FIFO metadata for a memory region without requiring a connection.
+ * This can be called at memory registration time to pre-compute the fifo_item
+ * for true one-sided RDMA operations.
+ * @param engine        The engine instance.
+ * @param mr            Memory region handle.
+ * @param data          Pointer to the data buffer.
+ * @param size          Size of the data.
+ * @param fifo_buf      Output buffer to store the serialized FifoItem (64 bytes).
+ * @return              0 on success, -1 on failure.
+ */
+int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t* mr,
+                                    void const* data, size_t size, char* fifo_buf);
+
+/**
  * Free endpoint metadata buffer.
  * @param metadata      The metadata buffer to free.
  */

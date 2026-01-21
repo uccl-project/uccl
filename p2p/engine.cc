@@ -958,6 +958,15 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
   return true;
 }
 
+bool Endpoint::prepare_fifo(uint64_t mr_id, void* addr, size_t len,
+                               char* out_buf) {
+  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  // prepare_fifo_metadata doesn't actually use the endpoint or conn parameters
+  if (prepare_fifo_metadata(ep_, nullptr, mhandle, addr, len, out_buf) == -1)
+    return false;
+  return true;
+}
+
 bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                           std::vector<void*> addr_v, std::vector<size_t> len_v,
                           std::vector<char*> out_buf_v, size_t num_iovs) {
@@ -1620,8 +1629,9 @@ void Endpoint::send_proxy_thread_func() {
                      << static_cast<int>(task->type);
           break;
       }
-      task->status_ptr->done.store(true, std::memory_order_release);
-      task->status_ptr->task_ptr.reset();
+      auto* status = task->status_ptr;
+      status->task_ptr.reset();
+      status->done.store(true, std::memory_order_release);
     }
   }
 }
@@ -1687,8 +1697,9 @@ void Endpoint::recv_proxy_thread_func() {
                      << static_cast<int>(task->type);
           break;
       }
-      task->status_ptr->done.store(true, std::memory_order_release);
-      task->status_ptr->task_ptr.reset();
+      auto* status = task->status_ptr;
+      status->task_ptr.reset();
+      status->done.store(true, std::memory_order_release);
     }
   }
 }
