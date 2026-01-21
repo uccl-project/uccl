@@ -67,5 +67,6 @@ inline void deserialize_fifo_item(char const* buf, FifoItem* item) {
   std::memcpy(&item->idx, buf + 24, sizeof(uint64_t));
   std::memcpy(item->padding, buf + 32, sizeof(item->padding));
 }
+enum class MemoryType { HOST, GPU };
 
 #endif

@@ -458,6 +458,26 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
         "[Endpoint::regv] data_v/size_v length mismatch");
 
   size_t const n = data_v.size();
+
+  // Early return if empty
+  if (n == 0) {
+    mr_id_v.clear();
+    return true;
+  }
+
+  if (!engine_initialized_) {
+    int idx = uccl::get_dev_idx((void*)data_v[0]);
+    if (idx != -1) {
+      // Pointer is on device idx
+      local_gpu_idx_ = idx;
+    } else {
+      // Host memory/unknown memory type - fallback to dev 0
+      local_gpu_idx_ = 0;
+    }
+    initialize_engine();
+    engine_initialized_ = true;
+  }
+
   mr_id_v.resize(n);
 
   {
@@ -1738,4 +1758,34 @@ void Endpoint::recv_proxy_thread_func() {
       status->done.store(true, std::memory_order_release);
     }
   }
+}
+
+std::vector<XferDesc> Endpoint::register_memory(
+    std::vector<void const*> const& data_v, std::vector<size_t> const& size_v) {
+  std::vector<uint64_t> mr_id_v;
+  auto ok = regv(data_v, size_v, mr_id_v);
+  if (!ok) {
+    return {};
+  }
+
+  std::vector<XferDesc> xfer_desc_v;
+
+  auto size = data_v.size();
+
+  for (size_t i = 0; i < size; i++) {
+    auto mhandle = get_mhandle(mr_id_v[i]);
+    assert(mhandle != nullptr);
+    XferDesc xfer_desc;
+    xfer_desc.addr = data_v[i];
+    xfer_desc.size = size_v[i];
+    for (size_t j = 0; j < kNICContextNumber; j++) {
+      auto mr = mhandle->mr_array.getKeyByContextID(j);
+      assert(mr != nullptr);
+      xfer_desc.lkeys.push_back(mr->lkey);
+      xfer_desc.rkeys.push_back(mr->rkey);
+    }
+    xfer_desc_v.push_back(xfer_desc);
+  }
+
+  return xfer_desc_v;
 }

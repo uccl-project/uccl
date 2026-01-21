@@ -9,6 +9,33 @@ struct InsidePythonGuard {
   ~InsidePythonGuard() { inside_python = false; }
 };
 
+// Helper function to extract pointer and size from PyTorch tensor
+std::pair<void const*, size_t> get_tensor_info(py::object tensor_obj) {
+  // Get data pointer using Python's data_ptr() method
+  if (!py::hasattr(tensor_obj, "data_ptr")) {
+    throw std::runtime_error("Tensor does not have data_ptr() method");
+  }
+  py::object data_ptr_result = tensor_obj.attr("data_ptr")();
+  uint64_t ptr = py::cast<uint64_t>(data_ptr_result);
+
+  // Get number of elements
+  if (!py::hasattr(tensor_obj, "numel")) {
+    throw std::runtime_error("Tensor does not have numel() method");
+  }
+  py::object numel_result = tensor_obj.attr("numel")();
+  int64_t numel = py::cast<int64_t>(numel_result);
+
+  // Get element size
+  if (!py::hasattr(tensor_obj, "element_size")) {
+    throw std::runtime_error("Tensor does not have element_size() method");
+  }
+  py::object element_size_result = tensor_obj.attr("element_size")();
+  int64_t element_size = py::cast<int64_t>(element_size_result);
+
+  size_t total_size = static_cast<size_t>(numel * element_size);
+  return std::make_pair(reinterpret_cast<void const*>(ptr), total_size);
+}
+
 PYBIND11_MODULE(p2p, m) {
   m.doc() = "P2P Engine - High-performance RDMA-based peer-to-peer transport";
 
@@ -115,6 +142,54 @@ PYBIND11_MODULE(p2p, m) {
           },
           py::arg("ptrs"), py::arg("sizes"),
           "Batch-register multiple memory regions and return [ok, mr_id_list]")
+      .def(
+          "register_memory",
+          [](Endpoint& self, py::list tensor_list) {
+            // Extract pointers and sizes from PyTorch tensors
+            std::vector<void const*> ptrs;
+            std::vector<size_t> sizes;
+            size_t list_len = py::len(tensor_list);
+            ptrs.reserve(list_len);
+            sizes.reserve(list_len);
+
+            for (size_t i = 0; i < list_len; ++i) {
+              py::object tensor_obj = tensor_list[i];
+
+              // Verify it's a tensor-like object
+              if (!py::hasattr(tensor_obj, "data_ptr")) {
+                throw std::runtime_error(
+                    "Object at index " + std::to_string(i) +
+                    " is not a tensor (missing data_ptr() method)");
+              }
+
+              auto [ptr, size] = get_tensor_info(tensor_obj);
+              ptrs.push_back(ptr);
+              sizes.push_back(size);
+            }
+
+            // Call C++ register_memory
+            std::vector<XferDesc> xfer_desc_v;
+            {
+              py::gil_scoped_release release;
+              InsidePythonGuard guard;
+              xfer_desc_v = self.register_memory(ptrs, sizes);
+            }
+
+            // Convert XferDesc to Python objects
+            py::list result;
+            for (const auto& desc : xfer_desc_v) {
+              py::dict desc_dict;
+              desc_dict["addr"] = reinterpret_cast<uint64_t>(desc.addr);
+              desc_dict["size"] = desc.size;
+              desc_dict["lkeys"] = py::cast(desc.lkeys);
+              desc_dict["rkeys"] = py::cast(desc.rkeys);
+              result.append(desc_dict);
+            }
+            return result;
+          },
+          "Register memory for a list of PyTorch tensors and return transfer "
+          "descriptors",
+          py::arg("tensor_list"))
       .def(
           "dereg",
           [](Endpoint& self, uint64_t mr_id) {
