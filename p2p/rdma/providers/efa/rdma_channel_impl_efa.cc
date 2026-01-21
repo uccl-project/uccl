@@ -80,7 +80,7 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   assert(ibv_modify_qp(*qp, &attr,
                        IBV_QP_STATE | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN) == 0);
 
-  local_meta->gid = ctx->queryGid(GID_INDEX_EFA);
+  local_meta->gid = ctx->queryGid(get_gid_index_from_env(GID_INDEX_EFA));
   local_meta->qpn = (*qp)->qp_num;
   local_meta->lid = LID_EFA;
 }
