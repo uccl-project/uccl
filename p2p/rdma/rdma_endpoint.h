@@ -277,6 +277,14 @@ class NICEndpoint {
 
   inline int get_p2p_listen_fd() { return oob_server_->get_listen_fd(); };
 
+  std::shared_ptr<EpollClient> get_oob_client() { return oob_client_; }
+
+  // Get OOB conn_key for a given rank
+  std::string get_oob_conn_key(uint64_t rank_id) {
+    auto it = rank_oob_conn_keys_.find(rank_id);
+    return (it != rank_oob_conn_keys_.end()) ? it->second : "";
+  }
+
   inline ConnID uccl_accept(std::string& remote_ip, int* remote_gpuidx) {
     AcceptedMeta accepted;
     uint64_t rank_id = 0;
@@ -475,6 +483,19 @@ class NICEndpoint {
 
   void process_meta(std::string const& input, std::string& output,
                     std::string const& client_ip, int client_port) {
+    if (input.size() >= sizeof(NotifyMsg)) {
+      NotifyMsg const* notify_msg = reinterpret_cast<NotifyMsg const*>(input.data());
+      if (notify_msg->magic == OOB_MSG_MAGIC ) {
+        std::lock_guard<std::mutex> lock(notify_mutex);
+        notify_list.push_back(*notify_msg);
+        output = "";
+        LOG(INFO) << "Received notification from "
+                  << " name=" << notify_msg->name;
+                  << " msg=" << notify_msg->msg;
+        return;
+      }
+    }
+
     MetaInfoToExchange meta = deserialize<MetaInfoToExchange>(input);
     LOG(INFO) << "Received from " << client_ip << ":" << client_port << " - "
               << meta;
@@ -633,6 +654,8 @@ class NICEndpoint {
                                                ip_port_ptr->server_port);
       std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
+    // Store conn_key for later use (e.g., notifications)
+    rank_oob_conn_keys_[rank_id] = oob_con;
     return oob_con;
   }
 
@@ -767,6 +790,7 @@ class NICEndpoint {
       send_channel_groups_;
 
   std::unordered_map<uint64_t, std::shared_ptr<OOBMetaData>> rank_oob_meta_;
+  std::unordered_map<uint64_t, std::string> rank_oob_conn_keys_;  // Track conn_key per rank
   std::shared_ptr<EpollClient> oob_client_;
   std::shared_ptr<EpollServer> oob_server_;
   std::shared_ptr<MemoryAllocator> allocator_;

@@ -137,3 +137,11 @@ inline bool initialize_rdma_ctx_for_gpu(RDMAEndPoint const& s, int dev) {
 inline void create_unified_p2p_socket(RDMAEndPoint const& s) {
   s->create_unified_p2p_socket();
 }
+
+inline std::shared_ptr<EpollClient> get_oob_client(RDMAEndPoint const& s) {
+  return s->get_oob_client();
+}
+
+inline std::string get_oob_conn_key(RDMAEndPoint const& s, uint64_t rank_id) {
+  return s->get_oob_conn_key(rank_id);
+}

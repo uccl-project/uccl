@@ -297,6 +297,19 @@ class Endpoint {
     return it != rank2conn_.end() ? it->second : UINT64_MAX;
   }
 
+  std::shared_ptr<EpollClient> get_oob_client() const {
+    return get_oob_client(ep_);
+  }
+
+  std::string get_oob_conn_key(uint64_t conn_id) const {
+    auto it = conn_id_to_conn_.find(conn_id);
+    if (it == conn_id_to_conn_.end()) {
+      return "";
+    }
+    uint64_t rank_id = it->second->uccl_conn_id_.flow_id;
+    return ::get_oob_conn_key(ep_, rank_id);
+  }
+
  private:
   gpuStream_t pick_stream() {
     if (streams_.empty()) return nullptr;

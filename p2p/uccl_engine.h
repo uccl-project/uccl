@@ -17,50 +17,27 @@ typedef struct uccl_mr uccl_mr_t;
 
 // UCCL operation types
 enum uccl_msg_type {
-  UCCL_RW_RC = 0,  // Used by both READ/WRITE in RCMODE
   UCCL_WRITE = 1,
-  UCCL_VECTOR_RW_RC = 2,  // Used by both READ/WRITE in RCMODE
-  UCCL_VECTOR_WRITE = 3,
-  UCCL_FIFO = 4,
-  UCCL_NOTIFY = 5
+  UCCL_NOTIFY = 2
 };
-
-typedef struct notify_msg {
-  char name[MSG_SIZE];
-  char msg[MSG_SIZE];
-} notify_msg_t;
-
-typedef struct fifo_msg {
-  int id;
-  char fifo_buf[FIFO_SIZE];
-} fifo_msg_t;
 
 typedef struct tx_msg {
   uint64_t data_ptr;  // Memory address for data reception
   size_t data_size;   // Size of data to receive
 } tx_msg_t;
 
-typedef struct vector_msg {
-  size_t count;  // Number of items in the vector
-
-} vector_msg_t;
+typedef struct notify_msg {
+  char name[MSG_SIZE];
+  char msg[MSG_SIZE];
+} notify_msg_t;
 
 typedef struct md {
   uccl_msg_type op;
   union {
     tx_msg_t tx_data;
-    fifo_msg_t fifo_data;
     notify_msg_t notify_data;
-    vector_msg_t vector_data;
   } data;
 } md_t;
-
-typedef struct metadata {
-  uccl_msg_type op;
-  char fifo_buf[64];
-  uint64_t data_ptr;
-  size_t data_size;
-} metadata_t;
 
 /**
  * Create and initialize an engine instance.
@@ -124,14 +101,6 @@ uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size);
  */
 int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
                      size_t size, void* slot_item, uint64_t* transfer_id);
-/**
- * Get a FIFO item.
- * @param conn          Connection handle.
- * @param id            FIFO item ID.
- * @param fifo_item     Pointer to the FIFO item.
- * @return              0 on success, non-zero on failure.
- */
-int uccl_engine_get_fifo_item(uccl_conn_t* conn, int id, void* fifo_item);
 
 /**
  * Send data (Non blocking).
@@ -196,24 +165,6 @@ void uccl_engine_mr_destroy(uccl_mr_t* mr);
 int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata_str);
 
 /**
- * Send the transfer metadata.
- * @param conn          Connection handle.
- * @param md            Transfer metadata.
- * @return              Number of bytes sent, or -1 on failure.
- */
-int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md);
-
-/**
- * Send multiple transfer metadata as a vector.
- * @param conn          Connection handle.
- * @param md_array      Array of transfer metadata.
- * @param count         Number of metadata items in the array.
- * @return              Number of bytes sent, or -1 on failure.
- */
-int uccl_engine_send_tx_md_vector(uccl_conn_t* conn, md_t* md_array,
-                                  size_t count);
-
-/**
  * Get all notification messages and clear the list.
  * @return              Vector of notification messages.
  */
@@ -228,13 +179,6 @@ std::vector<notify_msg_t> uccl_engine_get_notifs();
 int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg);
 
 /**
- * Get socket file descriptor for a connection.
- * @param conn          Connection handle.
- * @return              Socket file descriptor, or -1 on failure.
- */
-int uccl_engine_get_sock_fd(uccl_conn_t* conn);
-
-/**
  * Prepare FIFO metadata for a memory region without requiring a connection.
  * This can be called at memory registration time to pre-compute the fifo_item
  * for true one-sided RDMA operations.
@@ -247,9 +191,3 @@ int uccl_engine_get_sock_fd(uccl_conn_t* conn);
  */
 int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t* mr,
                                     void const* data, size_t size, char* fifo_buf);
-
-/**
- * Free endpoint metadata buffer.
- * @param metadata      The metadata buffer to free.
- */
-void uccl_engine_free_endpoint_metadata(uint8_t* metadata);

@@ -713,3 +713,17 @@ typedef struct AcceptedMeta {
   int gpu_id;
   uint64_t rank_id;
 } AcceptedMeta;
+
+// Notifications 
+static constexpr uint32_t NOTIFY_MSG_MAGIC = 0xDEADDEAD;
+static constexpr size_t NOTIFY_MSG_SIZE = 256;
+
+struct NotifyMsg {
+  uint32_t magic;
+  uint32_t msg_type;
+  char name[NOTIFY_MSG_SIZE];
+  char msg[NOTIFY_MSG_SIZE];
+};
+
+inline std::vector<NotifyMsg> notify_list;
+inline std::mutex notify_mutex;

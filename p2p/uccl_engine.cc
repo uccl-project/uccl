@@ -4,6 +4,7 @@
 #else
 #include "engine.h"
 #include "endpoint_wrapper.h"
+#include "rdma/define.h"  // For OOB notification types
 #endif
 #include "util/util.h"
 #include <arpa/inet.h>
@@ -45,7 +46,8 @@ struct uccl_engine {
 struct uccl_conn {
   uint64_t conn_id;
   uccl_engine* engine;
-  int sock_fd;
+  int sock_fd;  // Keep for backward compatibility
+  std::string oob_conn_key;  // For epoll-based notifications
   std::thread* listener_thread;
   bool listener_running;
   std::mutex listener_mutex;
@@ -67,10 +69,8 @@ typedef struct {
 } mem_reg_entry_t;
 
 std::unordered_map<uintptr_t, mem_reg_entry_t> mem_reg_info;
-std::unordered_map<uccl_conn_t*, fifo_item_t*> fifo_item_map;
 std::vector<notify_msg_t> notify_msg_list;
 
-std::mutex fifo_item_map_mutex;
 std::mutex notify_msg_list_mutex;
 
 // Helper function to find the base address and mr_id for any address within a
@@ -88,7 +88,7 @@ bool find_mem_reg(uintptr_t addr, uintptr_t& base_addr, uint64_t& mr_id) {
 
 // Helper function for the listener thread
 void listener_thread_func(uccl_conn_t* conn) {
-  std::cout << "Listener thread: Waiting for metadata." << std::endl;
+  std::cout << "Listener thread: Waiting for notifs" << std::endl;
 
   while (conn->listener_running) {
     struct timeval timeout;
@@ -112,7 +112,6 @@ void listener_thread_func(uccl_conn_t* conn) {
         }
         break;
       }
-
       total_received += recv_size;
     }
 
@@ -125,40 +124,6 @@ void listener_thread_func(uccl_conn_t* conn) {
 
     uint64_t mr_id = 0;
     switch (md.op) {
-      case UCCL_RW_RC: {
-        tx_msg_t tx_data = md.data.tx_data;
-        uintptr_t base_addr;
-        if (!find_mem_reg(tx_data.data_ptr, base_addr, mr_id)) {
-          std::cerr << "Local memory not registered for address: "
-                    << tx_data.data_ptr << std::endl;
-          break;
-        }
-
-        char out_buf[sizeof(FifoItem)];
-        conn->engine->endpoint->advertise(conn->conn_id, mr_id,
-                                          (void*)tx_data.data_ptr,
-                                          tx_data.data_size, out_buf);
-
-        md_t response_md;
-        response_md.op = UCCL_FIFO;
-        fifo_msg_t fifo_data;
-        memcpy(fifo_data.fifo_buf, out_buf, sizeof(FifoItem));
-        response_md.data.fifo_data = fifo_data;
-
-        ssize_t result = send(conn->sock_fd, &response_md, sizeof(md_t), 0);
-        if (result < 0) {
-          std::cerr << "Failed to send FifoItem data: " << strerror(errno)
-                    << std::endl;
-        }
-
-#ifdef UCCL_P2P_USE_TCPX
-        // we can remove this #ifdef after engine Endpoint has get_out_buf API
-        if (!conn->engine->endpoint->get_out_buf(conn->conn_id, out_buf)) {
-          std::cerr << "Failed to deal out_buf" << std::endl;
-        }
-#endif
-        break;
-      }
       case UCCL_WRITE: {
         tx_msg_t tx_data = md.data.tx_data;
         uintptr_t base_addr;
@@ -178,147 +143,14 @@ void listener_thread_func(uccl_conn_t* conn) {
         }
         break;
       }
-      case UCCL_VECTOR_RW_RC: {
-        size_t count = md.data.vector_data.count;
-
-        tx_msg_t* tx_data_array = new tx_msg_t[count];
-        ssize_t data_size = count * sizeof(tx_msg_t);
-
-        ssize_t total_received = 0;
-        ssize_t recv_data_size = 0;
-        char* buffer = reinterpret_cast<char*>(tx_data_array);
-
-        while (total_received < data_size) {
-          recv_data_size = recv(conn->sock_fd, buffer + total_received,
-                                data_size - total_received, 0);
-
-          if (recv_data_size <= 0) {
-            std::cerr << "Failed to receive tx_data array. Expected: "
-                      << data_size << ", Received: " << total_received
-                      << ", Last recv: " << recv_data_size << std::endl;
-            delete[] tx_data_array;
-            break;
-          }
-
-          total_received += recv_data_size;
-        }
-
-        if (total_received != data_size) {
-          delete[] tx_data_array;
-          break;
-        }
-
-        for (size_t i = 0; i < count; i++) {
-          tx_msg_t tx_data = tx_data_array[i];
-          uintptr_t base_addr;
-          if (!find_mem_reg(tx_data.data_ptr, base_addr, mr_id)) {
-            std::cerr << "Local memory not registered for address: "
-                      << tx_data.data_ptr << " (item " << i << ")" << std::endl;
-            continue;
-          }
-
-          char out_buf[sizeof(FifoItem)];
-          conn->engine->endpoint->advertise(conn->conn_id, mr_id,
-                                            (void*)tx_data.data_ptr,
-                                            tx_data.data_size, out_buf);
-
-          md_t response_md;
-          response_md.op = UCCL_FIFO;
-          fifo_msg_t fifo_data;
-          fifo_data.id = i;
-          memcpy(fifo_data.fifo_buf, out_buf, sizeof(FifoItem));
-          response_md.data.fifo_data = fifo_data;
-
-          // TODO: Check if this has to sent in bulk or individually
-          ssize_t result = send(conn->sock_fd, &response_md, sizeof(md_t), 0);
-          if (result < 0) {
-            std::cerr << "Failed to send FifoItem data for item " << i << ": "
-                      << strerror(errno) << std::endl;
-          }
-
-#ifdef UCCL_P2P_USE_TCPX
-          if (!conn->engine->endpoint->get_out_buf(conn->conn_id, out_buf)) {
-            std::cerr << "Failed to deal out_buf" << std::endl;
-          }
-#endif
-        }
-
-        delete[] tx_data_array;
-        break;
-      }
-      case UCCL_VECTOR_WRITE: {
-        size_t count = md.data.vector_data.count;
-        tx_msg_t* tx_data_array = new tx_msg_t[count];
-        ssize_t data_size = count * sizeof(tx_msg_t);
-
-        ssize_t total_received = 0;
-        ssize_t recv_data_size = 0;
-        char* buffer = reinterpret_cast<char*>(tx_data_array);
-
-        while (total_received < data_size) {
-          recv_data_size = recv(conn->sock_fd, buffer + total_received,
-                                data_size - total_received, 0);
-
-          if (recv_data_size <= 0) {
-            std::cerr << "Failed to receive tx_data array. Expected: "
-                      << data_size << ", Received: " << total_received
-                      << ", Last recv: " << recv_data_size << std::endl;
-            delete[] tx_data_array;
-            break;
-          }
-
-          total_received += recv_data_size;
-        }
-
-        if (total_received != data_size) {
-          delete[] tx_data_array;
-          break;
-        }
-
-        for (size_t i = 0; i < count; i++) {
-          tx_msg_t tx_data = tx_data_array[i];
-          uintptr_t base_addr;
-          if (!find_mem_reg(tx_data.data_ptr, base_addr, mr_id)) {
-            std::cerr << "Local memory not registered for address: "
-                      << tx_data.data_ptr << " (item " << i << ")" << std::endl;
-            continue;
-          }
-
-          uccl_mr_t temp_mr;
-          temp_mr.mr_id = mr_id;
-          temp_mr.engine = conn->engine;
-          int result = uccl_engine_recv(conn, &temp_mr, (void*)tx_data.data_ptr,
-                                        tx_data.data_size);
-          if (result < 0) {
-            std::cerr << "Failed to perform uccl_engine_recv for item " << i
-                      << std::endl;
-          }
-        }
-
-        delete[] tx_data_array;
-        break;
-      }
-      case UCCL_FIFO: {
-        fifo_msg_t fifo_data = md.data.fifo_data;
-        FifoItem fifo_item;
-        memcpy(&fifo_item, fifo_data.fifo_buf, sizeof(FifoItem));
-        fifo_item_t* f_item = new fifo_item_t;
-        f_item->fifo_item = fifo_item;
-        f_item->is_valid = true;
-
-        {
-          std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
-          fifo_item_map[conn + fifo_data.id] = f_item;
-        }
-        break;
-      }
       case UCCL_NOTIFY: {
-        std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
-        notify_msg_t notify_msg = {};
-        strncpy(notify_msg.name, md.data.notify_data.name,
-                sizeof(notify_msg.name) - 1);
-        memcpy(notify_msg.msg, md.data.notify_data.msg, sizeof(notify_msg.msg));
-        notify_msg_list.push_back(notify_msg);
+        // Legacy socket-based notification handling (fallback)
+        std::lock_guard<std::mutex> lock(notify_mutex);
+        NotifyMsg oob_msg;
+        strncpy(oob_msg.name, md.data.notify_data.name, sizeof(oob_msg.name) - 1);
+        oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
+        memcpy(oob_msg.msg, md.data.notify_data.msg, sizeof(oob_msg.msg));
+        notify_list.push_back(oob_msg);
         break;
       }
       default:
@@ -354,7 +186,9 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
     return nullptr;
   }
   conn->conn_id = conn_id;
+  // Keeping this for TCP-X
   conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
+  conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
   conn->engine = engine;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
@@ -377,6 +211,7 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   *remote_gpu_idx = gpu_idx;
   conn->conn_id = conn_id;
   conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
+  conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
   conn->engine = engine;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
@@ -466,8 +301,9 @@ int uccl_engine_start_listener(uccl_conn_t* conn) {
   }
 
   conn->listener_running = true;
-
+#ifdef UCCL_P2P_USE_TCPX
   conn->listener_thread = new std::thread(listener_thread_func, conn);
+#else
 
   return 0;
 }
@@ -544,99 +380,56 @@ int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t* mr,
              : -1;
 }
 
-int uccl_engine_send_tx_md(uccl_conn_t* conn, md_t* md) {
-  if (!conn || !md) return -1;
-
-  return send(conn->sock_fd, md, sizeof(md_t), 0);
-}
-
-int uccl_engine_send_tx_md_vector(uccl_conn_t* conn, md_t* md_array,
-                                  size_t count) {
-  if (!conn || !md_array || count == 0) return -1;
-
-  // Check UCCL_RCMODE environment variable
-  bool rc_mode = false;
-  char const* rc_mode_env = getenv("UCCL_RCMODE");
-  if (rc_mode_env != nullptr) {
-    rc_mode = (std::strcmp(rc_mode_env, "1") == 0);
-  }
-  // Determine the operation type based on the first item
-  uccl_msg_type op_type = (rc_mode || md_array[0].op == UCCL_RW_RC)
-                              ? UCCL_VECTOR_RW_RC
-                              : UCCL_VECTOR_WRITE;
-  md_t vector_md;
-  vector_md.op = op_type;
-  vector_md.data.vector_data.count = count;
-
-  ssize_t bytes_sent = send(conn->sock_fd, &vector_md, sizeof(md_t), 0);
-  if (bytes_sent != sizeof(md_t)) {
-    std::cerr << "Failed to send vector metadata header. Expected: "
-              << sizeof(md_t) << ", Sent: " << bytes_sent << std::endl;
-    return -1;
-  }
-
-  tx_msg_t* tx_data_array = new tx_msg_t[count];
-  for (size_t i = 0; i < count; i++) {
-    tx_data_array[i] = md_array[i].data.tx_data;
-  }
-
-  ssize_t data_size = count * sizeof(tx_msg_t);
-  bytes_sent = send(conn->sock_fd, tx_data_array, data_size, 0);
-
-  delete[] tx_data_array;
-
-  if (bytes_sent != data_size) {
-    std::cerr << "Failed to send vector tx_data array. Expected: " << data_size
-              << ", Sent: " << bytes_sent << std::endl;
-    return -1;
-  }
-
-  return sizeof(md_t) + data_size;
-}
-
 std::vector<notify_msg_t> uccl_engine_get_notifs() {
-  std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
+  std::lock_guard<std::mutex> lock(notify_mutex);
 
   std::vector<notify_msg_t> result;
-  result = std::move(notify_msg_list);
+  for (auto const& oob_msg : notify_list) {
+    notify_msg_t msg;
+    strncpy(msg.name, oob_msg.name, sizeof(msg.name) - 1);
+    msg.name[sizeof(msg.name) - 1] = '\0';
+    memcpy(msg.msg, oob_msg.msg, sizeof(msg.msg));
+    result.push_back(msg);
+  }
 
-  notify_msg_list.clear();
+  notify_list.clear();
 
   return result;
 }
 
 int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   if (!conn || !notify_msg) return -1;
+#ifdef UCCL_P2P_USE_TCPX   
   md_t md;
   md.op = UCCL_NOTIFY;
   md.data.notify_data = *notify_msg;
 
   return send(conn->sock_fd, &md, sizeof(md_t), 0);
-}
-
-int uccl_engine_get_fifo_item(uccl_conn_t* conn, int id, void* fifo_item) {
-  if (!conn || !fifo_item) return -1;
-
-  std::lock_guard<std::mutex> lock(fifo_item_map_mutex);
-  auto it = fifo_item_map.find(conn + id);
-  if (it == fifo_item_map.end()) {
+#endif
+  // Use epoll-based OOB channel for notifications
+  if (conn->oob_conn_key.empty()) {
+    std::cerr << "No OOB connection key available for notification" << std::endl;
     return -1;
   }
-  if (it->second->is_valid) {
-    memcpy(fifo_item, &it->second->fifo_item, sizeof(FifoItem));
-    it->second->is_valid = false;
-    return 0;
-  } else {
+  
+  auto oob_client = conn->engine->endpoint->get_oob_client();
+  if (!oob_client) {
+    std::cerr << "No OOB client available for notification" << std::endl;
     return -1;
   }
+  
+  // Create OOB notification message
+  NotifyMsg oob_msg;
+  oob_msg.magic = NOTIFY_MSG_MAGIC;
+  strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
+  oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
+  memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
+  
+  std::string payload(reinterpret_cast<char*>(&oob_msg), sizeof(NotifyMsg));
+  bool ok = oob_client->send_meta(conn->oob_conn_key, payload);
+  
+  return ok ? sizeof(NotifyMsg) : -1;
 }
-
-int uccl_engine_get_sock_fd(uccl_conn_t* conn) {
-  if (!conn) return -1;
-  return conn->sock_fd;
-}
-
-
 
 int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
   if (!engine || !metadata) return -1;
