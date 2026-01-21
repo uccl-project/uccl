@@ -50,7 +50,7 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
 
   struct efadv_qp_init_attr efa_attr = {};
   efa_attr.driver_qp_type = EFADV_QP_DRIVER_TYPE_SRD;
-  efa_attr.sl = SERVICE_LEVEL;
+  efa_attr.sl = get_sl_from_env(SERVICE_LEVEL);
   efa_attr.flags = 0;
   // If set, Receive WRs will not be consumed for RDMA write with imm.
   efa_attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;

@@ -20,18 +20,6 @@
 #define MAX_DEST_RD_ATOMIC 1
 #define MAX_CQE 1024
 
-static inline int get_gid_index_from_env() {
-  static int gid_index = -1;
-  if (gid_index == -1) {
-    char const* env = getenv("UCCL_IB_GID_INDEX");
-    if (env)
-      gid_index = std::atoi(env);
-    else
-      gid_index = GID_INDEX_DEFAULT;
-  }
-  return gid_index;
-}
-
 inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
                                   struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
                                   ChannelMetaData* local_meta) {
@@ -74,7 +62,7 @@ inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
                        IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
                            IBV_QP_ACCESS_FLAGS) == 0);
 
-  local_meta->gid = ctx->queryGid(get_gid_index_from_env());
+  local_meta->gid = ctx->queryGid(get_gid_index_from_env(GID_INDEX_DEFAULT));
   local_meta->qpn = (*qp)->qp_num;
   local_meta->lid = ctx->queryLid(kPortNum);
 }
@@ -105,12 +93,12 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
     // RoCE
     attr.ah_attr.is_global = 1;
     attr.ah_attr.port_num = kPortNum;
-    attr.ah_attr.sl = SERVICE_LEVEL;
+    attr.ah_attr.sl = get_sl_from_env(SERVICE_LEVEL);
     attr.ah_attr.src_path_bits = 0;
-    attr.ah_attr.grh.traffic_class = TRAFFIC_CLASS;
+    attr.ah_attr.grh.traffic_class = get_tc_from_env(TRAFFIC_CLASS);
     attr.ah_attr.grh.hop_limit = 64;
     memcpy(&attr.ah_attr.grh.dgid, remote_meta.gid.raw, 16);
-    attr.ah_attr.grh.sgid_index = get_gid_index_from_env();
+    attr.ah_attr.grh.sgid_index = get_gid_index_from_env(GID_INDEX_DEFAULT);
   } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
     // Infiniband
     attr.ah_attr.is_global = 0;
