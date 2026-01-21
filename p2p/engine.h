@@ -112,6 +112,13 @@ using FifoItem = nccl_tcpx::FifoItem;
 using FifoItem = FifoItem;
 #endif
 
+struct XferDesc {
+  void const* addr;
+  size_t size;
+  std::vector<uint32_t> lkeys;
+  std::vector<uint32_t> rkeys;
+};
+
 class Endpoint {
   static constexpr uint32_t kMaxVector = 8;
   static constexpr size_t kIpcAlignment = 1ul << 20;
@@ -276,6 +283,9 @@ class Endpoint {
   bool advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
                       std::vector<size_t> len_v, std::vector<char*> out_buf_v,
                       size_t num_iovs);
+
+  std::vector<XferDesc> register_memory(std::vector<void const*> const& data_v,
+                                        std::vector<size_t> const& size_v);
 
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);

@@ -13,4 +13,6 @@ struct ConnID {
   FlowID flow_id;
 };
 
+enum class MemoryType { HOST, GPU };
+
 #endif
