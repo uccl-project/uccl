@@ -1,6 +1,7 @@
 #pragma once
 
-#include "transport.h"
+#include "common.h"
+#include "rdma/rdma_endpoint.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
 #include "util/net.h"
@@ -25,8 +26,7 @@ namespace py = pybind11;
 
 extern thread_local bool inside_python;
 
-// Forward declaration
-struct ibv_mr;
+using RDMAEndPoint = std::shared_ptr<NICEndpoint>;
 
 inline int parseLogLevelFromEnv() {
   char const* env = std::getenv("UCCL_P2P_LOG_LEVEL");
@@ -48,115 +48,72 @@ inline int parseLogLevelFromEnv() {
   return google::WARNING;
 }
 
-namespace unified {
-static constexpr int kNICContextNumber = 4;
+enum ReqType { ReqTx, ReqRx, ReqRead, ReqWrite };
+struct ucclRequest {
+  enum ReqType type;
+  uint32_t n;
+  uint32_t engine_idx;
+};
+struct Mhandle {
+  struct ibv_mr* mr;
+};
+struct FifoItem {
+  uint64_t addr;
+  uint32_t size;
+  uint32_t rkey;
+  uint32_t nmsgs;
+  uint32_t rid;
+  uint64_t idx;
+  char padding[32];
+};
+static_assert(sizeof(struct FifoItem) == 64, "FifoItem size is not 64 bytes");
+inline void serialize_fifo_item(FifoItem const& item, char* buf) {
+  static_assert(sizeof(FifoItem) == 64, "FifoItem must be 64 bytes");
 
-inline size_t channelIdToContextId(uint32_t channel_id) {
-  return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;
+  std::memcpy(buf + 0, &item.addr, sizeof(uint64_t));
+  std::memcpy(buf + 8, &item.size, sizeof(uint32_t));
+  std::memcpy(buf + 12, &item.rkey, sizeof(uint32_t));
+  std::memcpy(buf + 16, &item.nmsgs, sizeof(uint32_t));
+  std::memcpy(buf + 20, &item.rid, sizeof(uint32_t));
+  std::memcpy(buf + 24, &item.idx, sizeof(uint64_t));
+  std::memcpy(buf + 32, &item.padding, sizeof(item.padding));
 }
 
-template <typename T = uint32_t>
-struct RKeyArrayT {
-  T keys[kNICContextNumber];
-
-  RKeyArrayT() { std::memset(keys, 0, sizeof(keys)); }
-
-  inline void copyFrom(RKeyArrayT<T> const& other) {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "RKeyArrayT::copyFrom requires trivially copyable T");
-    std::memcpy(keys, other.keys, sizeof(keys));
-  }
-
-  inline void copyFrom(char const* other) {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "RKeyArrayT::copyFrom requires trivially copyable T");
-    std::memcpy(keys, other, sizeof(keys));
-  }
-
-  inline T getKeyByChannelID(uint32_t channel_id) const {
-    return getKeyByContextID(channelIdToContextId(channel_id));
-  }
-
-  inline T getKeyByContextID(size_t context_id) const {
-    return keys[context_id];
-  }
-
-  inline void setKeyByContextID(uint32_t context_id, T key) {
-    keys[context_id] = key;
-  }
-
-  inline void setKeyByChannelID(uint32_t channel_id, T key) {
-    setKeyByContextID(channelIdToContextId(channel_id), key);
-  }
-
-  T& operator[](int index) { return keys[index]; }
-  T const& operator[](int index) const { return keys[index]; }
-
-  friend std::ostream& operator<<(std::ostream& os, RKeyArrayT<T> const& arr) {
-    os << "RKeyArrayT{";
-    for (int i = 0; i < kNICContextNumber; ++i) {
-      if (i > 0) os << ", ";
-      if constexpr (std::is_integral_v<T>) {
-        os << "0x" << std::hex << arr.keys[i] << std::dec;
-      } else {
-        os << arr.keys[i];
-      }
-    }
-    os << "}";
-    return os;
-  }
-};
-
-using MRArray = RKeyArrayT<struct ibv_mr*>;
-}  // namespace unified
-
-#ifdef UCCL_P2P_USE_NATIVE_RDMA
-#include "rdma/define.h"
-#include "rdma/rdma_endpoint.h"
-#endif
-
-namespace unified {
+inline void deserialize_fifo_item(char const* buf, FifoItem* item) {
+  std::memcpy(&item->addr, buf + 0, sizeof(uint64_t));
+  std::memcpy(&item->size, buf + 8, sizeof(uint32_t));
+  std::memcpy(&item->rkey, buf + 12, sizeof(uint32_t));
+  std::memcpy(&item->nmsgs, buf + 16, sizeof(uint32_t));
+  std::memcpy(&item->rid, buf + 20, sizeof(uint32_t));
+  std::memcpy(&item->idx, buf + 24, sizeof(uint64_t));
+  std::memcpy(&item->padding, buf + 32, sizeof(item->padding));
+}
 
 struct P2PMhandle {
-  struct uccl::Mhandle* mhandle_;
   MRArray mr_array;
 };
 
-#ifdef UCCL_P2P_USE_NATIVE_RDMA
-using RDMAEndPoint =
-    std::variant<uccl::RDMAEndpoint*, std::shared_ptr<NICEndpoint>>;
-#else
-using RDMAEndPoint = std::variant<uccl::RDMAEndpoint*>;
-#endif
-}  // namespace unified
-
 struct MR {
   uint64_t mr_id_;
-  unified::P2PMhandle* mhandle_;
+  P2PMhandle* mhandle_;
 };
 
 struct Conn {
   uint64_t conn_id_;
-  uccl::ConnID uccl_conn_id_;
+  ConnID uccl_conn_id_;
   std::string ip_addr_;
   int remote_gpu_idx_;
   int uds_sockfd_ = -1;  // Unix Domain Socket file descriptor for local IPC
 };
 
-struct PeerInfo {
-  std::string ip_addr;  // IP address of the peer
-  int gpu_idx;          // GPU index of the peer
-};
-
-using FifoItem = uccl::FifoItem;
+#ifdef UCCL_P2P_USE_TCPX
+using FifoItem = nccl_tcpx::FifoItem;
+#else
+using FifoItem = FifoItem;
+#endif
 
 class Endpoint {
-#ifdef UCCL_P2P_USE_NATIVE_RDMA
-  uint64_t const kChunkSize = 1024 * 1024 * 1024;
-#else
-  uint64_t const kChunkSize = 1024 * 1024;
-#endif
-  static constexpr uint32_t kMaxInflightChunks = 8;
+  static constexpr uint32_t kMaxVector = 8;
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
 
@@ -368,7 +325,7 @@ class Endpoint {
   uint32_t num_cpus_;
   int numa_node_;
 
-  unified::RDMAEndPoint ep_;
+  RDMAEndPoint ep_;
   bool engine_initialized_ = false;
 
   std::atomic<uint64_t> next_conn_id_ = 0;

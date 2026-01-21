@@ -21,6 +21,11 @@ PYBIND11_MODULE(p2p, m) {
         InsidePythonGuard guard;
         return std::make_unique<Endpoint>(local_gpu_idx, num_cpus);
       }))
+      .def(py::init([](uint32_t num_cpus) {
+        py::gil_scoped_release release;
+        InsidePythonGuard guard;
+        return std::make_unique<Endpoint>(num_cpus);
+      }))
       .def(
           "connect",
           [](Endpoint& self, std::string const& remote_ip_addr,

@@ -4,14 +4,11 @@
 USE_TCPX ?= $(shell echo $${USE_TCPX:-0})
 # EFA optional integration
 USE_EFA ?= $(shell echo $${USE_EFA:-0})
-# IB optional integration
-USE_IB ?= $(shell echo $${USE_IB:-0})
 
 # Compiler and flags
 CUDA_HOME ?= /usr/local/cuda
 CUDA_INC  := $(CUDA_HOME)/include
 CUDA_LIB  := $(CUDA_HOME)/lib64
-RDMA_HOME := ../collective/rdma
 EFA_HOME ?= /opt/amazon/efa
 
 # Building with the following settings:
@@ -20,7 +17,7 @@ LIBS = -L ${CUDA_HOME}/lib64 -libverbs -lcudart -lcuda -lpthread -lglog -lgflags
 LIBS2 =
 
 CXX := g++
-CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I../include -I$(RDMA_HOME) -I$(CUDA_INC) \
+CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(CUDA_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu
 
@@ -28,12 +25,9 @@ ifeq ($(USE_TCPX),1)
 	CXXFLAGS += -DUCCL_P2P_USE_TCPX
 	LIBS2 += -lglog -lgflags -lpthread -ldl
 else ifeq ($(USE_EFA),1)
-	CXXFLAGS += -DUCCL_P2P_USE_NATIVE_RDMA
+	CXXFLAGS += -DUCCL_P2P_USE_EFA
 	INC += -I${EFA_HOME}/include
 	LIBS += -L ${EFA_HOME}/lib -lefa
-else ifeq ($(USE_IB),1)
-	CXXFLAGS += -DUCCL_P2P_USE_NATIVE_RDMA -DUCCL_P2P_USE_IB
-	LIBS += -libverbs
 else
 	LIBS2 += -lglog -lgflags -lgtest -lz -lelf -lpthread -libverbs
 endif
@@ -58,7 +52,6 @@ LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LIBS2)
 # Target and source files
 P2P_PYTHON_EXT := p2p$(PYEXT)
 P2P_SHARED_LIB := libuccl_p2p.so
-RDMA_PLUGIN_LIB := librdma_plugin.a
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
@@ -93,28 +86,17 @@ else
 # Default target
 all: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 
-$(P2P_PYTHON_EXT): $(OBJECTS) $(RDMA_HOME)/librdma.a
-	$(CXX) $(OBJECTS) $(RDMA_HOME)/librdma.a \
+$(P2P_PYTHON_EXT): $(OBJECTS)
+	$(CXX) $(OBJECTS) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB) $(INC) $(LIBS)
 
-$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB)
-	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) $(RDMA_PLUGIN_LIB) \
+$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT)
+	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) $(INC) $(LIBS)
-
-$(RDMA_HOME)/librdma.a: $(filter-out $(RDMA_HOME)/nccl_plugin.cc, $(wildcard $(RDMA_HOME)/*.cc)) $(RDMA_HOME)/*.h
-	make -C $(RDMA_HOME) librdma.a -j$(nproc)
-
-RDMA_OBJECTS := $(patsubst $(RDMA_HOME)/%.cc,%.o,$(filter-out $(RDMA_HOME)/nccl_plugin.cc,$(wildcard $(RDMA_HOME)/*.cc)))
-
-$(RDMA_PLUGIN_LIB): $(RDMA_OBJECTS)
-	ar rcs $@ $(RDMA_OBJECTS)
-
-$(RDMA_OBJECTS): %.o: $(RDMA_HOME)/%.cc
-	$(CXX) -c $< -o $@ $(CXXFLAGS) -DDISABLE_CALL_ONCE_STATIC -DUSE_CUDA -I$(RDMA_HOME)
 endif
 
 # Compile source files
@@ -132,14 +114,13 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	@cp $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
 	install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/
-	install -m 755 $(RDMA_PLUGIN_LIB) $(LIBDIR)/
 	install -m 644 $(CAPI_HEADER) $(INCDIR)/
 endif
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB)
 ifneq ($(USE_TCPX),1)
-	rm -f $(P2P_PYTHON_EXT) $(RDMA_PLUGIN_LIB) $(RDMA_OBJECTS)
+	rm -f $(P2P_PYTHON_EXT)
 endif
 
 # Test the module
