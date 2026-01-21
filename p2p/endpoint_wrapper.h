@@ -1,8 +1,8 @@
 #pragma once
 #include "engine.h"
 
-#ifdef UCCL_P2P_USE_TCP
-#include "tcp/tcp_endpoint.h"
+#ifdef UCCL_P2P_USE_NCCL
+#include "nccl/nccl_endpoint.h"
 #endif
 
 namespace unified {
@@ -24,7 +24,7 @@ inline void delete_ep(RDMAEndPoint const& s) {
           // shared_ptr: do nothing (shared_ptr handles lifetime)
         }
 #endif
-#ifdef UCCL_P2P_USE_TCP
+#ifdef UCCL_P2P_USE_NCCL
         else if constexpr (std::is_same_v<T,
                                           std::shared_ptr<tcp::TCPEndpoint>>) {
           // shared_ptr: do nothing (shared_ptr handles lifetime)
@@ -63,7 +63,7 @@ inline int set_request(std::shared_ptr<NICEndpoint> const& obj, Conn* conn,
 }
 #endif
 
-#ifdef UCCL_P2P_USE_TCP
+#ifdef UCCL_P2P_USE_NCCL
 inline int tcp_set_request_write(std::shared_ptr<tcp::TCPEndpoint> const& obj,
                                  Conn* conn, unified::P2PMhandle* local_mh,
                                  void* src, size_t size,
@@ -97,7 +97,7 @@ inline uccl::ConnID uccl_connect(RDMAEndPoint const& s, int dev,
       [dev, local_gpuidx, remote_dev, remote_gpuidx, remote_ip,
        remote_port](auto&& obj) -> uccl::ConnID {
         using T = std::decay_t<decltype(obj)>;
-#ifdef UCCL_P2P_USE_TCP
+#ifdef UCCL_P2P_USE_NCCL
         if constexpr (std::is_same_v<T, std::shared_ptr<tcp::TCPEndpoint>>) {
           return obj->uccl_connect(dev, local_gpuidx, remote_dev, remote_gpuidx,
                                    remote_ip, remote_port);
@@ -161,7 +161,7 @@ inline bool uccl_regmr(RDMAEndPoint const& s, int dev, void* data, size_t len,
           }
         }
 #endif
-#ifdef UCCL_P2P_USE_TCP
+#ifdef UCCL_P2P_USE_NCCL
         else if constexpr (std::is_same_v<T,
                                           std::shared_ptr<tcp::TCPEndpoint>>) {
           // TCP doesn't need memory registration
@@ -210,7 +210,7 @@ inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
           return ureq->engine_idx;
         }
 #endif
-#ifdef UCCL_P2P_USE_TCP
+#ifdef UCCL_P2P_USE_NCCL
         else if constexpr (std::is_same_v<T,
                                           std::shared_ptr<tcp::TCPEndpoint>>) {
           ureq->type = uccl::ReqType::ReqTx;
@@ -253,7 +253,7 @@ inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
           return ureq->engine_idx;
         }
 #endif
-#ifdef UCCL_P2P_USE_TCP
+#ifdef UCCL_P2P_USE_NCCL
         else if constexpr (std::is_same_v<T,
                                           std::shared_ptr<tcp::TCPEndpoint>>) {
           ureq->type = uccl::ReqType::ReqRx;
@@ -293,7 +293,7 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
           }
         }
 #endif
-#ifdef UCCL_P2P_USE_TCP
+#ifdef UCCL_P2P_USE_NCCL
         else if constexpr (std::is_same_v<T,
                                           std::shared_ptr<tcp::TCPEndpoint>>) {
           // TCP operations are blocking, so always complete immediately
@@ -328,7 +328,7 @@ inline int uccl_read_async(RDMAEndPoint const& s, Conn* conn,
           return set_request(obj, conn, local_mh, dst, size, slot_item, ureq);
         }
 #endif
-#ifdef UCCL_P2P_USE_TCP
+#ifdef UCCL_P2P_USE_NCCL
         else if constexpr (std::is_same_v<T,
                                           std::shared_ptr<tcp::TCPEndpoint>>) {
           return tcp_set_request_read(obj, conn, local_mh, dst, size, slot_item,
@@ -363,7 +363,7 @@ inline int uccl_write_async(RDMAEndPoint const& s, Conn* conn,
           return set_request(obj, conn, local_mh, src, size, slot_item, ureq);
         }
 #endif
-#ifdef UCCL_P2P_USE_TCP
+#ifdef UCCL_P2P_USE_NCCL
         else if constexpr (std::is_same_v<T,
                                           std::shared_ptr<tcp::TCPEndpoint>>) {
           return tcp_set_request_write(obj, conn, local_mh, src, size,
@@ -406,7 +406,7 @@ inline int prepare_fifo_metadata(RDMAEndPoint const& s, Conn* conn,
           return 0;
         }
 #endif
-#ifdef UCCL_P2P_USE_TCP
+#ifdef UCCL_P2P_USE_NCCL
         else if constexpr (std::is_same_v<T,
                                           std::shared_ptr<tcp::TCPEndpoint>>) {
           // For TCP, just store address and size (no rkeys needed)
@@ -441,7 +441,7 @@ inline void uccl_deregmr(RDMAEndPoint const& s, P2PMhandle* mhandle) {
           obj->uccl_deregmr(mhandle->mr_array);
         }
 #endif
-#ifdef UCCL_P2P_USE_TCP
+#ifdef UCCL_P2P_USE_NCCL
         else if constexpr (std::is_same_v<T,
                                           std::shared_ptr<tcp::TCPEndpoint>>) {
           // TCP doesn't need memory deregistration - no-op

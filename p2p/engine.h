@@ -115,8 +115,8 @@ using MRArray = RKeyArrayT<struct ibv_mr*>;
 #include "rdma/rdma_endpoint.h"
 #endif
 
-#ifdef UCCL_P2P_USE_TCP
-#include "tcp/tcp_endpoint.h"
+#ifdef UCCL_P2P_USE_NCCL
+#include "nccl/nccl_endpoint.h"
 #endif
 
 namespace unified {
@@ -129,7 +129,7 @@ struct P2PMhandle {
 #ifdef UCCL_P2P_USE_NATIVE_RDMA
 using RDMAEndPoint =
     std::variant<uccl::RDMAEndpoint*, std::shared_ptr<NICEndpoint>>;
-#elif defined(UCCL_P2P_USE_TCP)
+#elif defined(UCCL_P2P_USE_NCCL)
 using RDMAEndPoint =
     std::variant<uccl::RDMAEndpoint*, std::shared_ptr<tcp::TCPEndpoint>>;
 #else
@@ -162,7 +162,7 @@ using FifoItem = uccl::FifoItem;
 #endif
 
 class Endpoint {
-#if defined(UCCL_P2P_USE_NATIVE_RDMA) || defined(UCCL_P2P_USE_TCP)
+#if defined(UCCL_P2P_USE_NATIVE_RDMA) || defined(UCCL_P2P_USE_NCCL)
   uint64_t const kChunkSize = 1024 * 1024 * 1024;  // 1GB for EFA
 #else
   uint64_t const kChunkSize = 1024 * 1024;

@@ -45,7 +45,7 @@ CXXFLAGS       += -D__HIP_PLATFORM_AMD__
 
 # Add TCP endpoint flag
 ifeq ($(USE_TCP),1)
-	CXXFLAGS += -DUCCL_P2P_USE_TCP
+	CXXFLAGS += -DUCCL_P2P_USE_NCCL
 endif
 LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
                   -Wl,-rpath,$(HIP_LIB) -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest \
@@ -55,8 +55,8 @@ LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
 P2P_PYTHON_EXT   := p2p$(PYEXT)
 P2P_SHARED_LIB := libuccl_p2p.so
 RDMA_PLUGIN_LIB := librdma_plugin.a
-SOURCES := engine.cc engine_pybind.cc tcp/tcp_endpoint.cc
-OBJECTS := engine.o engine_pybind.o tcp/tcp_endpoint.o
+SOURCES := engine.cc engine_pybind.cc nccl/nccl_endpoint.cc
+OBJECTS := engine.o engine_pybind.o nccl/nccl_endpoint.o
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
@@ -92,9 +92,9 @@ $(RDMA_OBJECTS): %.o: $(RDMA_HOME)/%.cc
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
 
-# Compile TCP source files
-tcp/%.o: tcp/%.cc
-	@mkdir -p tcp
+# Compile NCCL-over-TCP source files
+nccl/%.o: nccl/%.cc
+	@mkdir -p nccl
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -I. -c $< -o $@
 
 # Install the module
@@ -108,7 +108,7 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB) $(P2P_PYTHON_EXT) $(RDMA_PLUGIN_LIB) $(RDMA_OBJECTS)
-	rm -f tcp/*.o
+	rm -f nccl/*.o
 	make -C $(RDMA_HOME) -f Makefile.rocm clean -j$(nproc)
 
 # Test the module

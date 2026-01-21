@@ -41,9 +41,9 @@ else
 	LIBS2 += -lglog -lgflags -lgtest -lz -lelf -lpthread -libverbs
 endif
 
-# Add TCP endpoint flag
+# Add NCCL-over-TCP endpoint flag
 ifeq ($(USE_TCP),1)
-	CXXFLAGS += -DUCCL_P2P_USE_TCP
+	CXXFLAGS += -DUCCL_P2P_USE_NCCL
 endif
 
 # Python and pybind11 configuration
@@ -89,8 +89,8 @@ CXXFLAGS += -DUCCL_P2P_USE_TCPX -I$(NCCL_INC)
 LDFLAGS  += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
 OBJECTS := $(CORE_OBJECTS)
 else
-SOURCES := engine.cc engine_pybind.cc tcp/tcp_endpoint.cc
-CORE_OBJECT := engine.o tcp/tcp_endpoint.o
+SOURCES := engine.cc engine_pybind.cc nccl/nccl_endpoint.cc
+CORE_OBJECT := engine.o nccl/nccl_endpoint.o
 endif
 
 ifeq ($(USE_TCPX),1)
@@ -142,9 +142,9 @@ endif
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
 
-# Compile TCP source files
-tcp/%.o: tcp/%.cc
-	@mkdir -p tcp
+# Compile NCCL-over-TCP source files
+nccl/%.o: nccl/%.cc
+	@mkdir -p nccl
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -I. -c $< -o $@
 
 ifeq ($(USE_TCPX),1)
@@ -164,7 +164,7 @@ endif
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB)
-	rm -f tcp/*.o
+	rm -f nccl/*.o
 ifneq ($(USE_TCPX),1)
 	rm -f $(P2P_PYTHON_EXT) $(RDMA_PLUGIN_LIB) $(RDMA_OBJECTS)
 endif

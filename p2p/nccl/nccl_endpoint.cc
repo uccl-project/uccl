@@ -1,4 +1,4 @@
-#include "tcp/tcp_endpoint.h"
+#include "nccl/nccl_endpoint.h"
 
 #include <arpa/inet.h>
 #include <cerrno>
@@ -14,6 +14,7 @@
 
 namespace tcp {
 namespace {
+// Control-plane handshake constants.
 constexpr uint32_t kMagic = 0x4e43434c;  // "NCCL"
 constexpr uint32_t kVersion = 1;
 
@@ -34,6 +35,8 @@ struct ServerHello {
 enum CtrlMsgType : uint8_t { kWriteReq = 1, kReadReq = 2 };
 
 struct CtrlMsg {
+  // type: kWriteReq => peer should recv into addr; kReadReq => peer should send
+  // from addr. addr is the peer-local pointer from the FIFO descriptor.
   uint8_t type;
   uint8_t reserved[3];
   uint32_t size;
@@ -50,6 +53,7 @@ int get_env_int(char const* key, int def) {
   return static_cast<int>(parsed);
 }
 
+// Record an event on record_stream and make wait_stream wait on it.
 bool record_and_wait(cudaStream_t record_stream, cudaStream_t wait_stream) {
   cudaEvent_t evt = nullptr;
   if (cudaEventCreateWithFlags(&evt, cudaEventDisableTiming) != cudaSuccess) {
@@ -71,6 +75,7 @@ bool fence_default_stream(int device, cudaStream_t stream) {
   if (!stream) return false;
   if (cudaSetDevice(device) != cudaSuccess) return false;
 
+  // Fence both legacy and per-thread default streams.
   if (!record_and_wait(cudaStreamLegacy, stream)) return false;
   if (cudaStreamPerThread != cudaStreamLegacy) {
     if (!record_and_wait(cudaStreamPerThread, stream)) return false;
@@ -79,6 +84,7 @@ bool fence_default_stream(int device, cudaStream_t stream) {
 }
 
 uccl::ConnID make_invalid_conn() {
+  // Helper to return a consistent "invalid" connection.
   uccl::ConnID invalid{};
   invalid.context = nullptr;
   invalid.sock_fd = -1;
@@ -90,24 +96,28 @@ uccl::ConnID make_invalid_conn() {
 }  // namespace
 
 struct TCPEndpoint::Conn {
+  // One TCP control socket + two NCCL communicators (one per direction).
   int sock_fd = -1;
   int rank = -1;
   int remote_rank = -1;
   int local_gpu_idx = 0;
-  int remote_gpu_idx = 0;
   ncclComm_t comm[2] = {nullptr, nullptr};
   cudaStream_t stream[2] = {nullptr, nullptr};
   std::atomic<bool> stop{false};
+  // Serialize control messages (read/write requests).
   std::mutex ctrl_send_mu;
+  // Dedicated control-plane thread for this connection.
   std::thread ctrl_thread;
 };
 
 struct TCPEndpoint::AsyncHandle {
+  // Completion event for a single NCCL op.
   cudaEvent_t event = nullptr;
 };
 
 TCPEndpoint::TCPEndpoint(int gpu_index, uint16_t port)
     : gpu_index_(gpu_index), listen_port_(0), listen_fd_(-1) {
+  // Port selection priority: explicit port arg, then env overrides.
   uint16_t chosen_port = port;
   if (chosen_port == 0) {
     int env_port = get_env_int("UCCL_TCP_OOB_PORT", 0);
@@ -124,6 +134,7 @@ TCPEndpoint::TCPEndpoint(int gpu_index, uint16_t port)
 TCPEndpoint::~TCPEndpoint() {
   {
     std::lock_guard<std::mutex> lock(conn_mu_);
+    // Stop control threads and release NCCL/CUDA resources.
     for (auto& kv : conn_map_) {
       cleanup_conn_(*kv.second);
     }
@@ -136,6 +147,7 @@ TCPEndpoint::~TCPEndpoint() {
 }
 
 bool TCPEndpoint::setup_listener_(uint16_t port) {
+  // Create the TCP control-plane listen socket.
   int fd = ::socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return false;
 
@@ -161,6 +173,7 @@ bool TCPEndpoint::setup_listener_(uint16_t port) {
   }
 
   if (port == 0) {
+    // Resolve ephemeral port chosen by the OS.
     sockaddr_in bound{};
     socklen_t len = sizeof(bound);
     if (getsockname(fd, reinterpret_cast<sockaddr*>(&bound), &len) == 0) {
@@ -174,6 +187,7 @@ bool TCPEndpoint::setup_listener_(uint16_t port) {
 }
 
 bool TCPEndpoint::send_all_(int fd, void const* buf, size_t len) const {
+  // Blocking send helper used by the control-plane.
   char const* p = static_cast<char const*>(buf);
   size_t sent = 0;
   while (sent < len) {
@@ -185,6 +199,7 @@ bool TCPEndpoint::send_all_(int fd, void const* buf, size_t len) const {
 }
 
 bool TCPEndpoint::recv_all_(int fd, void* buf, size_t len) const {
+  // Blocking recv helper used by the control-plane.
   char* p = static_cast<char*>(buf);
   size_t recvd = 0;
   while (recvd < len) {
@@ -197,6 +212,7 @@ bool TCPEndpoint::recv_all_(int fd, void* buf, size_t len) const {
 
 bool TCPEndpoint::init_comm_(Conn& conn, ncclUniqueId const& uid,
                              int comm_index) {
+  // comm_index selects which NCCL communicator (0 or 1) to init.
   if (comm_index < 0 || comm_index > 1) return false;
   if (cudaSetDevice(conn.local_gpu_idx) != cudaSuccess) return false;
   if (cudaStreamCreateWithFlags(&conn.stream[comm_index],
@@ -215,6 +231,7 @@ bool TCPEndpoint::init_comm_(Conn& conn, ncclUniqueId const& uid,
 
 bool TCPEndpoint::init_comms_(Conn& conn, ncclUniqueId const& uid_rank0,
                               ncclUniqueId const& uid_rank1) {
+  // Two communicators: one is used for the "send" direction, one for "recv".
   if (!init_comm_(conn, uid_rank0, 0)) return false;
   if (!init_comm_(conn, uid_rank1, 1)) return false;
   return true;
@@ -222,6 +239,7 @@ bool TCPEndpoint::init_comms_(Conn& conn, ncclUniqueId const& uid_rank0,
 
 void TCPEndpoint::control_loop_(Conn* conn) {
   if (!conn) return;
+  // Control thread: handle one-sided read/write requests from the peer.
   while (!conn->stop.load(std::memory_order_acquire)) {
     CtrlMsg msg{};
     if (!recv_all_(conn->sock_fd, &msg, sizeof(msg))) {
@@ -255,6 +273,7 @@ void TCPEndpoint::control_loop_(Conn* conn) {
       return;
     }
 
+    // Block until the NCCL op completes before processing the next request.
     while (!uccl_poll_ureq_once(&ureq)) {
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
@@ -262,11 +281,13 @@ void TCPEndpoint::control_loop_(Conn* conn) {
 }
 
 int TCPEndpoint::comm_index_for_send_(Conn const& conn) const {
+  // Each side sends on its own rank's communicator.
   if (conn.rank == 0 || conn.rank == 1) return conn.rank;
   return 0;
 }
 
 int TCPEndpoint::comm_index_for_recv_(Conn const& conn) const {
+  // Each side receives on the peer rank's communicator.
   if (conn.remote_rank == 0 || conn.remote_rank == 1) return conn.remote_rank;
   return 1;
 }
@@ -285,6 +306,7 @@ bool TCPEndpoint::send_internal_(Conn& conn, void const* data, size_t size,
   if (!fence_default_stream(conn.local_gpu_idx, conn.stream[comm_index])) {
     return false;
   }
+  // Enqueue NCCL send on the selected communicator/stream.
   ncclResult_t rc =
       ncclSend(data, size, ncclChar, conn.remote_rank, conn.comm[comm_index],
                conn.stream[comm_index]);
@@ -303,6 +325,7 @@ bool TCPEndpoint::send_internal_(Conn& conn, void const* data, size_t size,
     return false;
   }
 
+  // Track completion via ucclRequest.
   auto* handle = new AsyncHandle();
   handle->event = evt;
   ureq->context = handle;
@@ -324,6 +347,7 @@ bool TCPEndpoint::recv_internal_(Conn& conn, void* data, size_t size,
   if (!fence_default_stream(conn.local_gpu_idx, conn.stream[comm_index])) {
     return false;
   }
+  // Enqueue NCCL recv on the selected communicator/stream.
   ncclResult_t rc =
       ncclRecv(data, size, ncclChar, conn.remote_rank, conn.comm[comm_index],
                conn.stream[comm_index]);
@@ -342,6 +366,7 @@ bool TCPEndpoint::recv_internal_(Conn& conn, void* data, size_t size,
     return false;
   }
 
+  // Track completion via ucclRequest.
   auto* handle = new AsyncHandle();
   handle->event = evt;
   ureq->context = handle;
@@ -350,6 +375,7 @@ bool TCPEndpoint::recv_internal_(Conn& conn, void* data, size_t size,
 }
 
 void TCPEndpoint::cleanup_conn_(Conn& conn) {
+  // Stop control thread, then destroy streams/comms and close the socket.
   conn.stop.store(true, std::memory_order_release);
   if (conn.sock_fd >= 0) {
     ::shutdown(conn.sock_fd, SHUT_RDWR);
@@ -380,6 +406,7 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
                                        int remote_dev, int remote_gpuidx,
                                        std::string remote_ip,
                                        uint16_t remote_port) {
+  // remote_dev/gpuidx are unused for TCP but part of the common API.
   (void)remote_dev;
   (void)remote_gpuidx;
   int local_idx = local_gpuidx >= 0 ? local_gpuidx : gpu_index_;
@@ -400,6 +427,7 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
     return make_invalid_conn();
   }
 
+  // Handshake: send client hello and receive two NCCL unique IDs.
   ClientHello ch{.magic = kMagic, .version = kVersion, .gpu_idx = local_idx};
   if (!send_all_(fd, &ch, sizeof(ch))) {
     ::close(fd);
@@ -416,12 +444,12 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
     return make_invalid_conn();
   }
 
+  // Build connection state and initialize NCCL communicators.
   auto conn = std::make_unique<Conn>();
   conn->sock_fd = fd;
   conn->rank = 1;
   conn->remote_rank = 0;
   conn->local_gpu_idx = local_idx;
-  conn->remote_gpu_idx = sh.gpu_idx;
 
   if (!init_comms_(*conn, sh.uid_rank0, sh.uid_rank1)) {
     cleanup_conn_(*conn);
@@ -466,6 +494,7 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   }
   remote_ip = std::string(ip_buf);
 
+  // Receive client hello.
   ClientHello ch{};
   if (!recv_all_(conn_fd, &ch, sizeof(ch))) {
     ::close(conn_fd);
@@ -478,6 +507,7 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   if (remote_dev) *remote_dev = 0;
   if (remote_gpuidx) *remote_gpuidx = ch.gpu_idx;
 
+  // Generate two NCCL unique IDs, one per direction.
   ncclUniqueId uid_rank0;
   ncclUniqueId uid_rank1;
   if (ncclGetUniqueId(&uid_rank0) != ncclSuccess) {
@@ -500,12 +530,12 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
     return make_invalid_conn();
   }
 
+  // Build connection state and initialize NCCL communicators.
   auto conn = std::make_unique<Conn>();
   conn->sock_fd = conn_fd;
   conn->rank = 0;
   conn->remote_rank = 1;
   conn->local_gpu_idx = local_idx;
-  conn->remote_gpu_idx = ch.gpu_idx;
 
   if (!init_comms_(*conn, uid_rank0, uid_rank1)) {
     cleanup_conn_(*conn);
@@ -532,6 +562,7 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
 
 int TCPEndpoint::uccl_regmr(uccl::UcclFlow* flow, void* data, size_t len,
                             int type, struct uccl::Mhandle** mhandle) {
+  // TCP path does not register memory; keep for API compatibility.
   (void)flow;
   (void)data;
   (void)len;
@@ -541,6 +572,7 @@ int TCPEndpoint::uccl_regmr(uccl::UcclFlow* flow, void* data, size_t len,
 }
 
 int TCPEndpoint::uccl_regmr(void* data, size_t len, MRArray& mr_array) {
+  // No-op for TCP.
   (void)data;
   (void)len;
   (void)mr_array;
@@ -549,6 +581,7 @@ int TCPEndpoint::uccl_regmr(void* data, size_t len, MRArray& mr_array) {
 
 int TCPEndpoint::uccl_regmr(int dev, void* data, size_t len, int type,
                             struct uccl::Mhandle** mhandle) {
+  // No-op for TCP.
   (void)dev;
   (void)data;
   (void)len;
@@ -558,6 +591,7 @@ int TCPEndpoint::uccl_regmr(int dev, void* data, size_t len, int type,
 }
 
 void TCPEndpoint::uccl_deregmr(struct uccl::Mhandle* mhandle) {
+  // No-op for TCP.
   (void)mhandle;
 }
 
@@ -567,6 +601,7 @@ int TCPEndpoint::uccl_send_async(uccl::UcclFlow* flow,
                                  struct uccl::Mhandle* mh, void const* data,
                                  size_t size,
                                  struct uccl::ucclRequest* ureq) {
+  // Two-sided send: enqueue ncclSend on the send communicator.
   (void)mh;
   if (!flow || !ureq) return -1;
   Conn* conn = reinterpret_cast<Conn*>(flow);
@@ -578,6 +613,7 @@ int TCPEndpoint::uccl_recv_async(uccl::UcclFlow* flow,
                                  struct uccl::Mhandle** mhandles, void** data,
                                  int* sizes, int n,
                                  struct uccl::ucclRequest* ureq) {
+  // Two-sided recv: enqueue ncclRecv on the recv communicator.
   (void)mhandles;
   if (!flow || !ureq || !data || !sizes || n != 1) return -1;
   Conn* conn = reinterpret_cast<Conn*>(flow);
@@ -591,6 +627,7 @@ int TCPEndpoint::uccl_read_async(uccl::UcclFlow* flow,
                                  size_t size,
                                  uccl::FifoItem const& slot_item,
                                  uccl::ucclRequest* ureq) {
+  // One-sided read: tell the peer to send, then post a local recv.
   (void)mh;
   if (!flow || !ureq) return -1;
   if (size == 0) {
@@ -624,6 +661,7 @@ int TCPEndpoint::uccl_write_async(uccl::UcclFlow* flow,
                                   size_t size,
                                   uccl::FifoItem const& slot_item,
                                   uccl::ucclRequest* ureq) {
+  // One-sided write: tell the peer to recv, then post a local send.
   (void)mh;
   if (!flow || !ureq) return -1;
   if (size == 0) {
@@ -656,6 +694,7 @@ bool TCPEndpoint::uccl_poll_ureq_once(struct uccl::ucclRequest* ureq) {
   if (!ureq) return true;
   auto* handle = reinterpret_cast<AsyncHandle*>(ureq->context);
   if (!handle) return true;
+  // Poll CUDA event for completion.
   cudaError_t rc = cudaEventQuery(handle->event);
   if (rc == cudaSuccess) {
     cudaEventDestroy(handle->event);
@@ -678,6 +717,7 @@ int TCPEndpoint::prepare_fifo_metadata(uccl::UcclFlow* flow,
                                        struct uccl::Mhandle** mhandle,
                                        void const* data, size_t size,
                                        char* out_buf) {
+  // Encode addr/size into uccl::FifoItem and serialize.
   (void)flow;
   (void)mhandle;
   uccl::FifoItem item{};
