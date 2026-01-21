@@ -6,8 +6,6 @@ CUDA_HOME:=/usr/local/cuda
 CXXFLAGS = -I /opt/amazon/efa/include -L /opt/amazon/efa/lib -lfabric -libverbs -lefa -lpthread \
 	-I$(CUDA_HOME)/include -L ${CUDA_HOME}/lib64 -lcudart -lcuda -I ../../../include -I ../../../collective/rdma -std=c++17 -lglog -lgflags
 	
-CXXFLAGS += -DUCCL_ENABLE_GPU
-
 all: test_efa_endpoint 
 
 test_efa_endpoint: test_efa_endpoint.cpp ../define.h ../rdma_device.h ../rdma_context.h ../efa_channel.h ../efa_endpoint.h ../epoll_client.h ../epoll_server.h ../../../collective/rdma/param.cc
