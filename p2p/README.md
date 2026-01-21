@@ -85,7 +85,7 @@ torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> ben
 
 Notes: 
 * You may consider exporting `GLOO_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
-* You may consider exporting `UCCL_IB_GID_INDEX` if your cluster requires it for NCCL to run (usually 1, or 3 in some testbed).
+* You may consider exporting `UCCL_P2P_RDMA_GID_INDEX` if your cluster requires it for NCCL to run (usually 1, or 3 in some testbed).
 * **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to work. 
 * To benchmark dual direction transfer, `benchmark_uccl.py --dual`.
 * To benchmark intra-node transfer via CUDA/HIP IPC, `torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --ipc`.
@@ -96,7 +96,9 @@ Notes:
 | Environment Variable | Description | Default Value |
 |---------------------|-------------|---------------|
 | UCCL_P2P_LOG_LEVEL | Logging level | WARNING (others: INFO, ERROR, FATAL) |
-| UCCL_IB_GID_INDEX | Global ID index in RDMA network | 0 |
+| UCCL_P2P_RDMA_GID_INDEX | GID index in RDMA network | 0/3 (EFA/IB) |
+| UCCL_P2P_RDMA_SL | Service level in RDMA network | 8/135 (EFA/IB) |
+| UCCL_P2P_RDMA_TC | Traffic class in RDMA network | 3 (IB) |
 
 ### Running NCCL
 

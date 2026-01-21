@@ -38,13 +38,19 @@ class RdmaContext {
       throw std::runtime_error("query_gid failed");
     }
     auto ip = *(struct in_addr*)&gid->raw[8];
-    std::cout << "GID[" << gid_index << "]: " << inet_ntoa(ip) << std::endl;
+    LOG(INFO) << "GID[" << gid_index << "]: " << inet_ntoa(ip);
   }
 
   union ibv_gid queryGid(int gid_index, int port = 1) const {
     union ibv_gid gid {};
     getGID(gid_index, &gid, port);
     return gid;
+  }
+
+  uint16_t queryLid(int port = 1) const {
+    struct ibv_port_attr port_attr;
+    assert(ibv_query_port(ctx_.get(), port, &port_attr) == 0);
+    return port_attr.lid;
   }
 
   // Create address handle from remote GID
@@ -56,10 +62,6 @@ class RdmaContext {
     struct ibv_ah* ah = ibv_create_ah(pd_.get(), &attr);
     if (!ah) throw std::runtime_error("create_ah failed");
     return ah;
-  }
-
-  struct ibv_ah* createAh(union ibv_gid remote_gid, int port = 1) const {
-    return createAH(remote_gid, port);
   }
 
   struct ibv_mr* regMem(void* addr, size_t size) const {
