@@ -7,7 +7,7 @@
 #include <cstdlib>
 #include <cstring>
 
-#define GID_INDEX_DEFAULT 0
+#define GID_INDEX_DEFAULT 3
 #define MAX_INLINE_DATA 128
 #define SERVICE_LEVEL 135
 #define MIN_RNR_TIMER 12

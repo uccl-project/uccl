@@ -12,7 +12,7 @@ from uccl import collective
 
 """
 Benchmark UCCL Collective for Alltoall
-UCCL_IB_GID_INDEX=3 torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=10.21.9.41 --master_port=19999 benchmark_uccl_alltoall.py --block-size 1024 4096 16384 65536 264114 --num-qo-heads 32 --gqa-group-size 4 --head-dim 128 --num-iters 100
+UCCL_P2P_RDMA_GID_INDEX=3 torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=10.21.9.41 --master_port=19999 benchmark_uccl_alltoall.py --block-size 1024 4096 16384 65536 264114 --num-qo-heads 32 --gqa-group-size 4 --head-dim 128 --num-iters 100
 """
 
 
