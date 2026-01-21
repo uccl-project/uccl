@@ -423,11 +423,12 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
 bool Endpoint::dereg(uint64_t mr_id) {
   {
     std::unique_lock<std::shared_mutex> lock(mr_mu_);
-    auto mr = get_mr(mr_id);
-    if (unlikely(mr == nullptr)) {
+    auto it = mr_id_to_mr_.find(mr_id);
+    if (it == mr_id_to_mr_.end()) {
       std::cerr << "[dereg] Error: Invalid mr_id " << mr_id << std::endl;
       return false;
     }
+    auto mr = it->second;
     uccl_deregmr(ep_, mr->mhandle_);
     delete mr;
     mr_id_to_mr_.erase(mr_id);
