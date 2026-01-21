@@ -302,6 +302,7 @@ class Endpoint {
   }
 
   std::string get_oob_conn_key(uint64_t conn_id) const {
+    printf("Getting oob conn key for connid %lu", conn_id)
     auto it = conn_id_to_conn_.find(conn_id);
     if (it == conn_id_to_conn_.end()) {
       return "";

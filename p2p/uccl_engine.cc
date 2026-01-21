@@ -189,6 +189,7 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   // Keeping this for TCP-X
   conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
   conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
+  printf("Got oob conn key=%s", conn->oob_conn_key.c_str());
   conn->engine = engine;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
@@ -212,6 +213,7 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   conn->conn_id = conn_id;
   conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
   conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
+  printf("Got oob conn key=%s", conn->oob_conn_key.c_str());
   conn->engine = engine;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
