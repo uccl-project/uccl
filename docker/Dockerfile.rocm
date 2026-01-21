@@ -28,7 +28,7 @@ RUN apt-get update && \
     ln -sf /usr/bin/pip${PY_VER} /usr/local/bin/pip && \
     ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python${PY_VER} && \
 \
-# ───── eccl use hiredis as oob backend ─────
+# ───── ukernel use hiredis as oob backend ─────
     apt-get install -y libhiredis-dev && \
     apt-get install -y hipsolver hipblas hipsparse rocthrust hipblaslt && \
 \

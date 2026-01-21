@@ -102,8 +102,9 @@ class ChannelGroup {
 
 class SendChannelGroup : public ChannelGroup {
  public:
-  SendChannelGroup(bool auto_start_polling = true)
-      : running_(false),
+  SendChannelGroup(int numa_node, bool auto_start_polling = true)
+      : numa_node_(numa_node),
+        running_(false),
         poll_thread_(nullptr),
         auto_start_polling_(auto_start_polling) {
     tracker_ = std::make_shared<AtomicBitmapPacketTrackerMultiAck>();
@@ -266,6 +267,7 @@ class SendChannelGroup : public ChannelGroup {
       request_queue_;
   std::shared_ptr<AtomicBitmapPacketTrackerMultiAck> tracker_;
   bool auto_start_polling_;
+  int numa_node_ = 0;
 
   // Send a request through the appropriate channel
   // Returns true on success, false on failure
@@ -406,7 +408,7 @@ class SendChannelGroup : public ChannelGroup {
 
   void pollingLoop() {
     LOG(INFO) << "SendChannelGroup::pollingLoop - Started";
-    uccl::pin_thread_to_numa(0);
+    uccl::pin_thread_to_numa(numa_node_);
     while (running_.load(std::memory_order_acquire)) {
       pollControlChannel();
       processSendRequests();
@@ -421,8 +423,9 @@ class SendChannelGroup : public ChannelGroup {
 
 class RecvChannelGroup : public ChannelGroup {
  public:
-  RecvChannelGroup(bool auto_start_polling = true)
-      : running_(false),
+  RecvChannelGroup(int numa_node, bool auto_start_polling = true)
+      : numa_node_(numa_node),
+        running_(false),
         poll_thread_(nullptr),
         auto_start_polling_(auto_start_polling) {}
 
@@ -535,6 +538,7 @@ class RecvChannelGroup : public ChannelGroup {
 
   void pollingLoop() {
     LOG(INFO) << "RecvChannelGroup::pollingLoop - Started";
+    uccl::pin_thread_to_numa(numa_node_);
     while (running_.load(std::memory_order_acquire)) {
       pollAndProcessCompletions();
       // optional small sleep/yield to avoid busy-looping if desired:
@@ -548,6 +552,7 @@ class RecvChannelGroup : public ChannelGroup {
   std::atomic<bool> running_;
   std::unique_ptr<std::thread> poll_thread_;
   bool auto_start_polling_;
+  int numa_node_ = 0;
 
   // Collect rkey for a specific channel
   // Returns: true on success, false on failure

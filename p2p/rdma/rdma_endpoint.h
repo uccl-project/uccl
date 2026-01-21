@@ -13,24 +13,17 @@
 class NICEndpoint {
  public:
   explicit NICEndpoint(
-      int gpu_index, uint64_t rank_id = INVALID_RANK_ID, uint64_t port = 0,
-      bool auto_start_polling = true,
+      int gpu_index = INVALID_GPU, uint64_t rank_id = INVALID_RANK_ID,
+      uint64_t port = 0, bool auto_start_polling = true,
       std::vector<size_t> const& device_ids = std::vector<size_t>())
       : gpu_index_(gpu_index),
         rank_id_(rank_id),
         auto_start_polling_(auto_start_polling),
         send_id_(0),
         recv_id_(0) {
-    std::vector<size_t> actual_device_ids;
-    if (device_ids.size() == 0) {
-      actual_device_ids =
-          RdmaDeviceManager::instance().get_best_dev_idx(gpu_index);
-    } else {
-      actual_device_ids = device_ids;
+    if (gpu_index != INVALID_GPU) {
+      initialize_rdma_ctx_for_gpu(gpu_index, device_ids);
     }
-    initializeContexts(actual_device_ids);
-    LOG(INFO) << "NICEndpoint initialized with " << contexts_.size()
-              << " context(s) for GPU " << gpu_index_;
 
     oob_server_ = std::make_shared<EpollServer>(
         port, [this](std::string const& input, std::string& output,
@@ -261,10 +254,11 @@ class NICEndpoint {
       rank_oob_meta_[rank_id] = meta_ptr;
     }
   }
-  uccl::ConnID uccl_connect(int dev, int local_gpuidx, int remote_dev,
-                            int remote_gpuidx, std::string remote_ip,
-                            uint16_t remote_port) {
+  ConnID uccl_connect(int remote_gpuidx, std::string remote_ip,
+                      uint16_t remote_port) {
     int32_t current_send_id = send_id_.fetch_add(1, std::memory_order_relaxed);
+
+    assert(gpu_index_ != INVALID_GPU);
 
     add_rank_oob_meta({{current_send_id, std::make_shared<OOBMetaData>(
                                              remote_ip, remote_port)}});
@@ -272,24 +266,18 @@ class NICEndpoint {
               << ", remote_ip: " << remote_ip
               << ", remote_port: " << remote_port;
     build_connect(current_send_id);  // sync mode (default)
-    uccl::ConnID conn_id;
+    ConnID conn_id;
     conn_id.context =
         reinterpret_cast<void*>(static_cast<intptr_t>(current_send_id));
     conn_id.flow_id = current_send_id;
     return conn_id;
   };
 
-  inline uint16_t get_p2p_listen_port(int dev) {
-    return oob_server_->get_port();
-  };
+  inline uint16_t get_p2p_listen_port() { return oob_server_->get_port(); };
 
-  inline int get_p2p_listen_fd(int dev) {
-    return oob_server_->get_listen_fd();
-  };
+  inline int get_p2p_listen_fd() { return oob_server_->get_listen_fd(); };
 
-  inline uccl::ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
-                                  std::string& remote_ip, int* remote_dev,
-                                  int* remote_gpuidx) {
+  inline ConnID uccl_accept(std::string& remote_ip, int* remote_gpuidx) {
     AcceptedMeta accepted;
     uint64_t rank_id = 0;
 
@@ -326,20 +314,12 @@ class NICEndpoint {
     if (remote_gpuidx != nullptr) {
       *remote_gpuidx = accepted.gpu_id;
     }
-    if (remote_dev != nullptr) {
-      *remote_dev = 0;  // Default device
-    }
 
     // Create and return ConnID
-    uccl::ConnID conn_id;
+    ConnID conn_id;
     conn_id.context = reinterpret_cast<void*>(static_cast<intptr_t>(rank_id));
     conn_id.flow_id = rank_id;
     return conn_id;
-  }
-
-  inline int uccl_regmr(uccl::UcclFlow* flow, void* data, size_t len, int type,
-                        struct uccl::Mhandle** mhandle) {
-    return 0;
   }
 
   inline int uccl_regmr(void* const data, size_t const len, MRArray& mr_array) {
@@ -381,9 +361,29 @@ class NICEndpoint {
     }
   }
 
-  int get_best_dev_idx(int gpu_idx) { return 0; }
+  bool initialize_rdma_ctx_for_gpu(
+      int gpu_index,
+      std::vector<size_t> const& device_ids = std::vector<size_t>()) {
+    gpu_index_ = gpu_index;
 
-  bool initialize_engine_by_dev(int dev, bool enable_p2p_listen) {
+    // Find all devices used by the GPU
+    std::vector<size_t> actual_device_ids;
+    if (device_ids.size() == 0) {
+      actual_device_ids =
+          RdmaDeviceManager::instance().get_best_dev_idx(gpu_index);
+    } else {
+      actual_device_ids = device_ids;
+    }
+
+    initializeContexts(actual_device_ids);
+    LOG(INFO) << "NICEndpoint initialized with " << contexts_.size()
+              << " context(s) for GPU " << gpu_index;
+
+    for (auto dev : actual_device_ids) {
+      auto device = RdmaDeviceManager::instance().getDevice(dev);
+      std::cout << "GPU " << gpu_index << " uses device " << dev << " ("
+                << device->name() << ")" << std::endl;
+    }
     return true;
   }
 
@@ -558,7 +558,7 @@ class NICEndpoint {
     MetaInfoToExchange response_meta =
         deserialize<MetaInfoToExchange>(response);
     LOG(INFO) << response_meta;
-    channel->connect(response_meta.channel_meta);
+    channel->establishChannel(response_meta.channel_meta);
     return response_meta.rank_id;
   }
 
@@ -570,14 +570,14 @@ class NICEndpoint {
         return it->second;
       }
     }
-
+    auto numa_node = RdmaDeviceManager::instance().get_numa_node(gpu_index_);
     {
       std::unique_lock write_lock(recv_channel_mutex_);
       auto [it, inserted] = recv_channel_groups_.try_emplace(
           rank_id,
           std::make_shared<RecvChannelGroup>(
-              auto_start_polling_));  // try_emplace constructs only
-                                      // if inserting
+              numa_node, auto_start_polling_));  // try_emplace constructs only
+                                                 // if inserting
       return it->second;
     }
   }
@@ -601,10 +601,12 @@ class NICEndpoint {
       auto it = send_channel_groups_.find(rank_id);
       if (it != send_channel_groups_.end()) return it->second;
     }
+    auto numa_node = RdmaDeviceManager::instance().get_numa_node(gpu_index_);
     {
       std::unique_lock write_lock(send_channel_mutex_);
       auto [it, inserted] = send_channel_groups_.try_emplace(
-          rank_id, std::make_shared<SendChannelGroup>(auto_start_polling_));
+          rank_id,
+          std::make_shared<SendChannelGroup>(numa_node, auto_start_polling_));
       return it->second;
     }
   }
