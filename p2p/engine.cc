@@ -653,7 +653,12 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                     FifoItem const& slot_item) {
   DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
-  auto* conn = conn_id_to_conn_[conn_id];
+  auto* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[read] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
+  }
+
   P2PMhandle* mhandle = get_mhandle(mr_id);
   if (unlikely(mhandle == nullptr)) {
     std::cerr << "[read] Error: Invalid mr_id " << mr_id << std::endl;
@@ -760,19 +765,23 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> dst_v, std::vector<size_t> size_v,
                      std::vector<FifoItem> slot_item_v, size_t num_iovs) {
-  auto conn = conn_id_to_conn_[conn_id];
-
-  ucclRequest ureq[kMaxVector] = {};
-  FifoItem curr_slot_item[kMaxVector] = {};
-  bool done[kMaxVector] = {false};
-  bool read[kMaxVector] = {false};
-  P2PMhandle* mhandles[kMaxVector] = {};
+  auto* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[readv] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
+  }
 
   if (num_iovs > kMaxVector) {
     std::cerr << "[readv] Error: num_iovs > kMaxVector (" << kMaxVector << ")"
               << std::endl;
     return false;
   }
+
+  ucclRequest ureq[kMaxVector] = {};
+  FifoItem curr_slot_item[kMaxVector] = {};
+  bool done[kMaxVector] = {false};
+  bool read[kMaxVector] = {false};
+  P2PMhandle* mhandles[kMaxVector] = {};
 
   // Check if mhandles are all valid
   for (int i = 0; i < num_iovs; i++) {
@@ -864,19 +873,23 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
 bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                       std::vector<void*> src_v, std::vector<size_t> size_v,
                       std::vector<FifoItem> slot_item_v, size_t num_iovs) {
-  auto conn = conn_id_to_conn_[conn_id];
-
-  ucclRequest ureq[kMaxVector] = {};
-  FifoItem curr_slot_item[kMaxVector] = {};
-  bool done[kMaxVector] = {false};
-  bool written[kMaxVector] = {false};
-  P2PMhandle* mhandles[kMaxVector] = {};
+  auto* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[writev] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
+  }
 
   if (num_iovs > kMaxVector) {
     std::cerr << "[writev] Error: num_iovs > kMaxVector (" << kMaxVector << ")"
               << std::endl;
     return false;
   }
+
+  ucclRequest ureq[kMaxVector] = {};
+  FifoItem curr_slot_item[kMaxVector] = {};
+  bool done[kMaxVector] = {false};
+  bool written[kMaxVector] = {false};
+  P2PMhandle* mhandles[kMaxVector] = {};
 
   // Check if mhandles are all valid
   for (int i = 0; i < num_iovs; i++) {
@@ -949,7 +962,11 @@ bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
                      FifoItem const& slot_item) {
   DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
-  auto* conn = conn_id_to_conn_[conn_id];
+  auto* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[write] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
+  }
   P2PMhandle* mhandle = get_mhandle(mr_id);
   if (unlikely(mhandle == nullptr)) {
     std::cerr << "[write] Error: Invalid mr_id " << mr_id << std::endl;
@@ -971,7 +988,11 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
 
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
-  auto* conn = conn_id_to_conn_[conn_id];
+  auto* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[advertise] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
+  }
   auto mhandle = get_mhandle(mr_id);
   if (unlikely(mhandle == nullptr)) {
     std::cerr << "[advertise] Error: Invalid mr_id " << mr_id << std::endl;
@@ -985,14 +1006,18 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
 bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                           std::vector<void*> addr_v, std::vector<size_t> len_v,
                           std::vector<char*> out_buf_v, size_t num_iovs) {
-  auto* conn = conn_id_to_conn_[conn_id];
-  P2PMhandle* mhandles[kMaxVector] = {};
+  auto* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[advertisev] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
+  }
   if (num_iovs > kMaxVector) {
     std::cerr << "[advertisev] Error: num_iovs > kMaxVector (" << kMaxVector
               << ")" << std::endl;
     return false;
   }
 
+  P2PMhandle* mhandles[kMaxVector] = {};
   // Check if mhandles are all valid
   for (int i = 0; i < num_iovs; i++) {
     mhandles[i] = get_mhandle(mr_id_v[i]);
