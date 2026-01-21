@@ -191,6 +191,70 @@ PYBIND11_MODULE(p2p, m) {
           "descriptors",
           py::arg("tensor_list"))
       .def(
+          "get_serialized_descs",
+          [](Endpoint& self, py::list desc_list) {
+            // Convert Python list of dicts to C++ vector of XferDesc
+            std::vector<XferDesc> xfer_desc_v;
+            size_t list_len = py::len(desc_list);
+            xfer_desc_v.reserve(list_len);
+
+            for (size_t i = 0; i < list_len; ++i) {
+              py::dict desc_dict = py::cast<py::dict>(desc_list[i]);
+
+              XferDesc desc;
+              desc.addr = reinterpret_cast<void const*>(
+                  py::cast<uint64_t>(desc_dict["addr"]));
+              desc.size = py::cast<size_t>(desc_dict["size"]);
+              desc.lkeys = py::cast<std::vector<uint32_t>>(desc_dict["lkeys"]);
+              desc.rkeys = py::cast<std::vector<uint32_t>>(desc_dict["rkeys"]);
+
+              xfer_desc_v.push_back(desc);
+            }
+
+            // Serialize descriptors
+            std::vector<uint8_t> serialized;
+            {
+              py::gil_scoped_release release;
+              InsidePythonGuard guard;
+              serialized = self.get_serialized_descs(xfer_desc_v);
+            }
+
+            // Return as Python bytes
+            return py::bytes(reinterpret_cast<const char*>(serialized.data()),
+                             serialized.size());
+          },
+          "Serialize transfer descriptors to bytes for network transmission",
+          py::arg("desc_list"))
+      .def(
+          "deserialize_descs",
+          [](Endpoint& self, py::bytes serialized_bytes) {
+            // Convert Python bytes to C++ vector
+            std::string buf = serialized_bytes;
+            std::vector<uint8_t> serialized_data(buf.begin(), buf.end());
+
+            // Deserialize descriptors
+            std::vector<XferDesc> xfer_desc_v;
+            {
+              py::gil_scoped_release release;
+              InsidePythonGuard guard;
+              xfer_desc_v = self.deserialize_descs(serialized_data);
+            }
+
+            // Convert XferDesc to Python objects
+            py::list result;
+            for (const auto& desc : xfer_desc_v) {
+              py::dict desc_dict;
+              desc_dict["addr"] = reinterpret_cast<uint64_t>(desc.addr);
+              desc_dict["size"] = desc.size;
+              desc_dict["lkeys"] = py::cast(desc.lkeys);
+              desc_dict["rkeys"] = py::cast(desc.rkeys);
+              result.append(desc_dict);
+            }
+            return result;
+          },
+          "Deserialize bytes to transfer descriptors",
+          py::arg("serialized_bytes"))
+      .def(
           "dereg",
           [](Endpoint& self, uint64_t mr_id) {
             bool ok;

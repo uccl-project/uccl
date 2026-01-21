@@ -1789,3 +1789,145 @@ std::vector<XferDesc> Endpoint::register_memory(
 
   return xfer_desc_v;
 }
+
+std::vector<uint8_t> Endpoint::get_serialized_descs(
+    std::vector<XferDesc> const& xfer_desc_v) {
+  std::vector<uint8_t> result;
+
+  // Calculate total size needed
+  size_t total_size = sizeof(size_t);  // Number of descriptors
+  for (auto const& desc : xfer_desc_v) {
+    total_size += sizeof(uint64_t);  // addr
+    total_size += sizeof(size_t);    // size
+    total_size += sizeof(size_t);    // keys count (same for lkeys and rkeys)
+    total_size += desc.lkeys.size() * sizeof(uint32_t);  // lkeys array
+    total_size += desc.rkeys.size() * sizeof(uint32_t);  // rkeys array
+  }
+
+  result.reserve(total_size);
+
+  // Serialize number of descriptors
+  size_t num_descs = xfer_desc_v.size();
+  uint8_t const* num_descs_ptr = reinterpret_cast<uint8_t const*>(&num_descs);
+  result.insert(result.end(), num_descs_ptr, num_descs_ptr + sizeof(size_t));
+
+  // Serialize each descriptor
+  for (auto const& desc : xfer_desc_v) {
+    // Serialize addr
+    uint64_t addr = reinterpret_cast<uint64_t>(desc.addr);
+    uint8_t const* addr_ptr = reinterpret_cast<uint8_t const*>(&addr);
+    result.insert(result.end(), addr_ptr, addr_ptr + sizeof(uint64_t));
+
+    // Serialize size
+    uint8_t const* size_ptr = reinterpret_cast<uint8_t const*>(&desc.size);
+    result.insert(result.end(), size_ptr, size_ptr + sizeof(size_t));
+
+    // Serialize keys count (lkeys and rkeys have the same count)
+    size_t keys_count = desc.lkeys.size();
+    // Verify lkeys and rkeys have the same count
+    assert(desc.lkeys.size() == desc.rkeys.size() &&
+           "lkeys and rkeys must have the same count");
+    uint8_t const* keys_count_ptr =
+        reinterpret_cast<uint8_t const*>(&keys_count);
+    result.insert(result.end(), keys_count_ptr,
+                  keys_count_ptr + sizeof(size_t));
+
+    // Serialize lkeys
+    if (keys_count > 0) {
+      uint8_t const* lkeys_ptr =
+          reinterpret_cast<uint8_t const*>(desc.lkeys.data());
+      result.insert(result.end(), lkeys_ptr,
+                    lkeys_ptr + keys_count * sizeof(uint32_t));
+    }
+
+    // Serialize rkeys
+    if (keys_count > 0) {
+      uint8_t const* rkeys_ptr =
+          reinterpret_cast<uint8_t const*>(desc.rkeys.data());
+      result.insert(result.end(), rkeys_ptr,
+                    rkeys_ptr + keys_count * sizeof(uint32_t));
+    }
+  }
+
+  return result;
+}
+
+std::vector<XferDesc> Endpoint::deserialize_descs(
+    std::vector<uint8_t> const& serialized_data) {
+  std::vector<XferDesc> xfer_desc_v;
+
+  if (serialized_data.empty()) {
+    return xfer_desc_v;
+  }
+
+  uint8_t const* data_ptr = serialized_data.data();
+  size_t offset = 0;
+  size_t data_size = serialized_data.size();
+
+  // Deserialize number of descriptors
+  if (offset + sizeof(size_t) > data_size) {
+    throw std::runtime_error(
+        "Invalid serialized data: insufficient data for descriptor count");
+  }
+  size_t num_descs;
+  std::memcpy(&num_descs, data_ptr + offset, sizeof(size_t));
+  offset += sizeof(size_t);
+
+  xfer_desc_v.reserve(num_descs);
+
+  // Deserialize each descriptor
+  for (size_t i = 0; i < num_descs; ++i) {
+    XferDesc desc;
+
+    // Deserialize addr
+    if (offset + sizeof(uint64_t) > data_size) {
+      throw std::runtime_error(
+          "Invalid serialized data: insufficient data for addr");
+    }
+    uint64_t addr;
+    std::memcpy(&addr, data_ptr + offset, sizeof(uint64_t));
+    desc.addr = reinterpret_cast<void const*>(addr);
+    offset += sizeof(uint64_t);
+
+    // Deserialize size
+    if (offset + sizeof(size_t) > data_size) {
+      throw std::runtime_error(
+          "Invalid serialized data: insufficient data for size");
+    }
+    std::memcpy(&desc.size, data_ptr + offset, sizeof(size_t));
+    offset += sizeof(size_t);
+
+    // Deserialize keys count
+    if (offset + sizeof(size_t) > data_size) {
+      throw std::runtime_error(
+          "Invalid serialized data: insufficient data for keys count");
+    }
+    size_t keys_count;
+    std::memcpy(&keys_count, data_ptr + offset, sizeof(size_t));
+    offset += sizeof(size_t);
+
+    // Deserialize lkeys
+    if (offset + keys_count * sizeof(uint32_t) > data_size) {
+      throw std::runtime_error(
+          "Invalid serialized data: insufficient data for lkeys");
+    }
+    desc.lkeys.resize(keys_count);
+    std::memcpy(desc.lkeys.data(), data_ptr + offset,
+                keys_count * sizeof(uint32_t));
+    offset += keys_count * sizeof(uint32_t);
+
+    // Deserialize rkeys
+    if (offset + keys_count * sizeof(uint32_t) > data_size) {
+      throw std::runtime_error(
+          "Invalid serialized data: insufficient data for rkeys");
+    }
+    desc.rkeys.resize(keys_count);
+    std::memcpy(desc.rkeys.data(), data_ptr + offset,
+                keys_count * sizeof(uint32_t));
+    offset += keys_count * sizeof(uint32_t);
+
+    xfer_desc_v.push_back(desc);
+  }
+
+  return xfer_desc_v;
+}

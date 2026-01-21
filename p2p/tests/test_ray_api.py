@@ -277,9 +277,159 @@ def test_register_memory_different_dtypes():
     return True
 
 
+def test_get_serialized_descs():
+    """Test get_serialized_descs functionality."""
+    print("\n" + "=" * 60)
+    print("Test 7: get_serialized_descs")
+    print("=" * 60)
+
+    if not torch.cuda.is_available():
+        print("Skipping test: CUDA not available")
+        return True
+
+    # Create endpoint
+    ep = p2p.Endpoint(4)
+    print(f"Created Endpoint with 4 CPUs")
+
+    # Create tensors
+    tensors = [
+        torch.ones(1024, dtype=torch.float32, device="cuda:0"),
+        torch.zeros(512, dtype=torch.float32, device="cuda:0"),
+    ]
+
+    # Register memory
+    descriptors = ep.register_memory(tensors)
+    print(f"Registered {len(descriptors)} tensor(s)")
+
+    # Serialize descriptors
+    serialized = ep.get_serialized_descs(descriptors)
+    print(f"Serialized to {len(serialized)} bytes")
+
+    # Verify serialized data is not empty
+    assert len(serialized) > 0, "Serialized data should not be empty"
+    assert isinstance(serialized, bytes), "Serialized data should be bytes"
+
+    print(f"✓ Test 7 passed: get_serialized_descs works correctly")
+    return True
+
+
+def test_deserialize_descs():
+    """Test deserialize_descs functionality."""
+    print("\n" + "=" * 60)
+    print("Test 8: deserialize_descs")
+    print("=" * 60)
+
+    if not torch.cuda.is_available():
+        print("Skipping test: CUDA not available")
+        return True
+
+    # Create endpoint
+    ep = p2p.Endpoint(4)
+    print(f"Created Endpoint with 4 CPUs")
+
+    # Create tensors
+    tensors = [
+        torch.ones(1024, dtype=torch.float32, device="cuda:0"),
+        torch.zeros(512, dtype=torch.float32, device="cuda:0"),
+        torch.randn(256, dtype=torch.float32, device="cuda:0"),
+    ]
+
+    # Register memory and get descriptors
+    original_descriptors = ep.register_memory(tensors)
+    print(f"Registered {len(original_descriptors)} tensor(s)")
+
+    # Serialize descriptors
+    serialized = ep.get_serialized_descs(original_descriptors)
+    print(f"Serialized to {len(serialized)} bytes")
+
+    # Deserialize descriptors
+    deserialized_descriptors = ep.deserialize_descs(serialized)
+    print(f"Deserialized {len(deserialized_descriptors)} descriptor(s)")
+
+    # Verify count matches
+    assert len(deserialized_descriptors) == len(
+        original_descriptors
+    ), f"Descriptor count mismatch: {len(deserialized_descriptors)} != {len(original_descriptors)}"
+
+    # Verify each descriptor matches
+    for i, (orig, deser) in enumerate(
+        zip(original_descriptors, deserialized_descriptors)
+    ):
+        assert (
+            orig["addr"] == deser["addr"]
+        ), f"Descriptor {i}: addr mismatch: {orig['addr']} != {deser['addr']}"
+        assert (
+            orig["size"] == deser["size"]
+        ), f"Descriptor {i}: size mismatch: {orig['size']} != {deser['size']}"
+        assert (
+            orig["lkeys"] == deser["lkeys"]
+        ), f"Descriptor {i}: lkeys mismatch: {orig['lkeys']} != {deser['lkeys']}"
+        assert (
+            orig["rkeys"] == deser["rkeys"]
+        ), f"Descriptor {i}: rkeys mismatch: {orig['rkeys']} != {deser['rkeys']}"
+        print(
+            f"  Descriptor {i}: verified (addr={orig['addr']}, size={orig['size']}, "
+            f"keys={len(orig['lkeys'])})"
+        )
+
+    print(f"✓ Test 8 passed: deserialize_descs works correctly")
+    return True
+
+
+def test_serialize_deserialize_roundtrip():
+    """Test roundtrip serialization and deserialization."""
+    print("\n" + "=" * 60)
+    print("Test 9: serialize/deserialize roundtrip")
+    print("=" * 60)
+
+    if not torch.cuda.is_available():
+        print("Skipping test: CUDA not available")
+        return True
+
+    # Create endpoint
+    ep = p2p.Endpoint(4)
+    print(f"Created Endpoint with 4 CPUs")
+
+    # Create tensors with different sizes and dtypes
+    # Note: Use ones/zeros instead of randn for integer types (randn doesn't support int types)
+    tensors = [
+        torch.ones(1024, dtype=torch.float32, device="cuda:0"),
+        torch.zeros(512, dtype=torch.float16, device="cuda:0"),
+        torch.ones(256, dtype=torch.int32, device="cuda:0"),
+    ]
+
+    # Register memory
+    original_descriptors = ep.register_memory(tensors)
+    print(f"Registered {len(original_descriptors)} tensor(s)")
+
+    # Serialize
+    serialized = ep.get_serialized_descs(original_descriptors)
+    print(f"Serialized to {len(serialized)} bytes")
+
+    # Deserialize
+    deserialized = ep.deserialize_descs(serialized)
+    print(f"Deserialized {len(deserialized)} descriptor(s)")
+
+    # Verify roundtrip
+    assert len(deserialized) == len(
+        original_descriptors
+    ), "Roundtrip failed: descriptor count mismatch"
+
+    for i, (orig, deser) in enumerate(zip(original_descriptors, deserialized)):
+        assert orig == deser, f"Roundtrip failed for descriptor {i}: {orig} != {deser}"
+
+    # Test with empty list
+    empty_serialized = ep.get_serialized_descs([])
+    empty_deserialized = ep.deserialize_descs(empty_serialized)
+    assert len(empty_deserialized) == 0, "Empty list roundtrip failed"
+
+    print(f"✓ Test 9 passed: serialize/deserialize roundtrip works correctly")
+    return True
+
+
 def main():
     """Run all tests."""
-    print("UCCL P2P Engine - register_memory API Test")
+    print("UCCL P2P Engine - Ray API Test")
     print("=" * 60)
 
     if not torch.cuda.is_available():
@@ -303,6 +453,9 @@ def main():
         ("Invalid input", test_register_memory_invalid_input),
         ("Mixed valid/invalid", test_register_memory_mixed_valid_invalid),
         ("Different dtypes", test_register_memory_different_dtypes),
+        ("get_serialized_descs", test_get_serialized_descs),
+        ("deserialize_descs", test_deserialize_descs),
+        ("serialize/deserialize roundtrip", test_serialize_deserialize_roundtrip),
     ]
 
     passed = 0

@@ -296,6 +296,14 @@ class Endpoint {
   std::vector<XferDesc> register_memory(std::vector<void const*> const& data_v,
                                         std::vector<size_t> const& size_v);
 
+  /* Serialize XferDesc vector to bytes for network transmission */
+  std::vector<uint8_t> get_serialized_descs(
+      std::vector<XferDesc> const& xfer_desc_v);
+
+  /* Deserialize bytes to XferDesc vector */
+  std::vector<XferDesc> deserialize_descs(
+      std::vector<uint8_t> const& serialized_data);
+
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);
 
