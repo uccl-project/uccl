@@ -12,7 +12,7 @@ class EFADeviceSelectionStrategy : public RDMADeviceSelectionStrategy {
  public:
   std::vector<std::string> selectNICs(
       std::vector<std::string> const& candidates, int gpu_idx) override {
-    // NOTE(xzhiying): This is a temporary hack.
+    // NOTE(yzhou): This is a temporary hack.
     // On p5/p5en/p6-b200, there are 8/4/2 NICs with the same distance.
     // E.g., on p5en, GPU0 uses candidates[0/1], GPU1 uses candidates[2/3], etc.
     assert(candidates.size() == 8 || candidates.size() == 4 ||

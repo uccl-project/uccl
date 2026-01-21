@@ -42,8 +42,9 @@ static constexpr int kNumGpuRtStreams = 4;
 static constexpr int kRankIDPlaceHolder = 9999;
 static constexpr uint8_t kPortNum = 1;
 
-static constexpr int kQpNumPerChannel = 2;
-static constexpr int kNICContextNumber = 2;
+// Use max 4 to accommodate AWS p5 instance
+static constexpr int kQpNumPerChannel = 4;
+static constexpr int kNICContextNumber = 4;
 static constexpr int kControlChannelID = 0;
 
 static constexpr int kMaxSendWr = 1024;
