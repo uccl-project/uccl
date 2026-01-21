@@ -115,11 +115,19 @@ Endpoint::~Endpoint() {
 
   stop_.store(true, std::memory_order_release);
 
-  send_proxy_thread_.join();
-  recv_proxy_thread_.join();
+  if (send_proxy_thread_.joinable()) {
+    send_proxy_thread_.join();
+  }
+  if (recv_proxy_thread_.joinable()) {
+    recv_proxy_thread_.join();
+  }
 
-  free(send_unified_task_ring_);
-  free(recv_unified_task_ring_);
+  if (send_unified_task_ring_ != nullptr) {
+    free(send_unified_task_ring_);
+  }
+  if (recv_unified_task_ring_ != nullptr) {
+    free(recv_unified_task_ring_);
+  }
 
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
