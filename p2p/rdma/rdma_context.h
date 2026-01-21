@@ -38,7 +38,7 @@ class RdmaContext {
       throw std::runtime_error("query_gid failed");
     }
     auto ip = *(struct in_addr*)&gid->raw[8];
-    std::cout << "GID[" << gid_index << "]: " << inet_ntoa(ip) << std::endl;
+    LOG(INFO) << "GID[" << gid_index << "]: " << inet_ntoa(ip);
   }
 
   union ibv_gid queryGid(int gid_index, int port = 1) const {

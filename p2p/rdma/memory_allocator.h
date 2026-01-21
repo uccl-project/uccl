@@ -2,16 +2,7 @@
 
 #include "define.h"
 #include "rdma_context.h"
-
-// GPU runtime support
-#if defined(UCCL_ENABLE_GPU)
-#include <cuda_runtime.h>
-#define gpuMalloc cudaMalloc
-#define gpuFree cudaFree
-#define gpuError_t cudaError_t
-#define gpuSuccess cudaSuccess
-#define gpuGetErrorString cudaGetErrorString
-#endif
+#include "util/gpu_rt.h"
 
 class MemoryAllocator {
  public:
@@ -42,7 +33,7 @@ class MemoryAllocator {
     // Create RegMemBlock with custom deleter
     auto deleter = [this, type](RegMemBlock* block) {
       if (block) {
-        std::cout << "memory freed" << std::endl;
+        LOG(INFO) << "memory freed";
         if (block->addr) deallocateRaw(block->addr, type);
         delete block;
       }
@@ -78,17 +69,11 @@ class MemoryAllocator {
 
   void* allocateGPU(size_t size) {
     void* addr = nullptr;
-#if defined(UCCL_ENABLE_GPU)
     gpuError_t err = gpuMalloc(&addr, size);
     if (err != gpuSuccess) {
       std::cerr << "gpuMalloc failed: " << gpuGetErrorString(err) << std::endl;
       return nullptr;
     }
-#else
-    std::cerr << "GPU support not available (neither CUDA nor HIP)"
-              << std::endl;
-    return nullptr;
-#endif
     return addr;
   }
 
@@ -97,15 +82,10 @@ class MemoryAllocator {
     if (!addr) return;
 
     if (type == MemoryType::GPU) {
-#if defined(UCCL_ENABLE_GPU)
       gpuError_t err = gpuFree(addr);
       if (err != gpuSuccess) {
         std::cerr << "gpuFree failed: " << gpuGetErrorString(err) << std::endl;
       }
-#else
-      std::cerr << "GPU support not available (neither CUDA nor HIP)"
-                << std::endl;
-#endif
     } else {  // MemoryType::HOST
       free(addr);
     }
