@@ -712,5 +712,4 @@ typedef struct AcceptedMeta {
   uint16_t port;
   int gpu_id;
   uint64_t rank_id;
-  int sock_fd;
 } AcceptedMeta;

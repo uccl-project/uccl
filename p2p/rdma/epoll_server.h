@@ -111,7 +111,7 @@ struct Connection {
 class EpollServer {
  public:
   using MetaHandler = std::function<void(std::string const&, std::string&,
-                                         std::string const&, int, int)>;
+                                         std::string const&, int)>;
 
   EpollServer(int port, MetaHandler handler, int max_events = 1024)
       : port_(port),
@@ -365,8 +365,7 @@ class EpollServer {
           int client_port = ntohs(conn.addr.sin_port);
 
           try {
-            handler_(payload, response, std::string(client_ip), client_port,
-                     conn.fd);
+            handler_(payload, response, std::string(client_ip), client_port);
           } catch (std::exception const& e) {
             std::cerr << "Handler exception: " << e.what() << "\n";
             remove_connection(conn.fd);

@@ -135,13 +135,6 @@ class EpollClient {
     return conn_key;
   }
 
-  int get_sock_fd(std::string const& conn_key) {
-    std::lock_guard<std::mutex> lk(conns_mtx_);
-    auto it = conns_.find(conn_key);
-    if (it == conns_.end()) return -1;
-    return it->second.fd;
-  }
-
   // Send serialized payload to server with callback for response
   bool send_meta(std::string const& conn_key, std::string const& payload,
                  ResponseCallback callback = nullptr) {
