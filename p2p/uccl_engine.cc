@@ -69,9 +69,11 @@ typedef struct {
 } mem_reg_entry_t;
 
 std::unordered_map<uintptr_t, mem_reg_entry_t> mem_reg_info;
-std::vector<notify_msg_t> notify_msg_list;
 
+#ifdef UCCL_P2P_USE_TCPX
+std::vector<notify_msg_t> notify_msg_list;
 std::mutex notify_msg_list_mutex;
+#endif
 
 // Helper function to find the base address and mr_id for any address within a
 // registered region
@@ -144,13 +146,12 @@ void listener_thread_func(uccl_conn_t* conn) {
         break;
       }
       case UCCL_NOTIFY: {
-        // Legacy socket-based notification handling (fallback)
-        std::lock_guard<std::mutex> lock(notify_mutex);
-        NotifyMsg oob_msg;
-        strncpy(oob_msg.name, md.data.notify_data.name, sizeof(oob_msg.name) - 1);
-        oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
-        memcpy(oob_msg.msg, md.data.notify_data.msg, sizeof(oob_msg.msg));
-        notify_list.push_back(oob_msg);
+        std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
+        notify_msg_t notify_msg = {};
+        strncpy(notify_msg.name, md.data.notify_data.name,
+                sizeof(notify_msg.name) - 1);
+        memcpy(notify_msg.msg, md.data.notify_data.msg, sizeof(notify_msg.msg));
+        notify_msg_list.push_back(notify_msg);
         break;
       }
       default:
@@ -186,10 +187,10 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
     return nullptr;
   }
   conn->conn_id = conn_id;
-  // Keeping this for TCP-X
   conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
+#ifndef UCCL_P2P_USE_TCPX
   conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
-  printf("Got oob conn key=%s\n", conn->oob_conn_key.c_str());
+#endif
   conn->engine = engine;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
@@ -212,8 +213,9 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   *remote_gpu_idx = gpu_idx;
   conn->conn_id = conn_id;
   conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
+#ifndef UCCL_P2P_USE_TCPX
   conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
-  printf("Got oob conn key=%s\n", conn->oob_conn_key.c_str());
+#endif
   conn->engine = engine;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
@@ -376,6 +378,12 @@ int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t* mr,
 }
 
 std::vector<notify_msg_t> uccl_engine_get_notifs() {
+#ifdef UCCL_P2P_USE_TCPX
+  std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
+  std::vector<notify_msg_t> result = std::move(notify_msg_list);
+  notify_msg_list.clear();
+  return result;
+#else
   std::lock_guard<std::mutex> lock(notify_mutex);
 
   std::vector<notify_msg_t> result;
@@ -390,18 +398,19 @@ std::vector<notify_msg_t> uccl_engine_get_notifs() {
   notify_list.clear();
 
   return result;
+#endif
 }
 
 int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   if (!conn || !notify_msg) return -1;
-#ifdef UCCL_P2P_USE_TCPX   
+  
+#ifdef UCCL_P2P_USE_TCPX
   md_t md;
   md.op = UCCL_NOTIFY;
   md.data.notify_data = *notify_msg;
-
+  
   return send(conn->sock_fd, &md, sizeof(md_t), 0);
-#endif
-  // Use epoll-based OOB channel for notifications
+#else
   if (conn->oob_conn_key.empty()) {
     std::cerr << "No OOB connection key available for notification" << std::endl;
     return -1;
@@ -424,6 +433,7 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   bool ok = oob_client->send_meta(conn->oob_conn_key, payload);
   
   return ok ? sizeof(NotifyMsg) : -1;
+#endif
 }
 
 int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {

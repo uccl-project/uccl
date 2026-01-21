@@ -279,10 +279,8 @@ class NICEndpoint {
 
   std::shared_ptr<EpollClient> get_oob_client() { return oob_client_; }
 
-  // Get OOB conn_key for a given rank
   std::string get_oob_conn_key(uint64_t rank_id) {
     auto it = rank_oob_conn_keys_.find(rank_id);
-    printf("Getting oob conn key for rank_id=%lu\n", rank_id);
     return (it != rank_oob_conn_keys_.end()) ? it->second : "";
   }
 
