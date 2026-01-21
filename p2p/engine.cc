@@ -415,7 +415,11 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
 bool Endpoint::dereg(uint64_t mr_id) {
   {
     std::unique_lock<std::shared_mutex> lock(mr_mu_);
-    MR* mr = mr_id_to_mr_[mr_id];
+    auto mr = get_mr(mr_id);
+    if (unlikely(mr == nullptr)) {
+      std::cerr << "[dereg] Error: Invalid mr_id " << mr_id << std::endl;
+      return false;
+    }
     uccl_deregmr(ep_, mr->mhandle_);
     delete mr;
     mr_id_to_mr_.erase(mr_id);
@@ -427,16 +431,16 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
                     size_t size) {
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
 
-  Conn* conn;
-  {
-    std::shared_lock<std::shared_mutex> lock(conn_mu_);
-    conn = conn_id_to_conn_[conn_id];
+  Conn* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[send] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
   }
 
-  P2PMhandle* mhandle;
-  {
-    std::shared_lock<std::shared_mutex> lock(mr_mu_);
-    mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  P2PMhandle* mhandle = get_mhandle(mr_id);
+  if (unlikely(mhandle == nullptr)) {
+    std::cerr << "[send] Error: Invalid mr_id " << mr_id << std::endl;
+    return false;
   }
 
   ucclRequest ureq;
@@ -453,16 +457,16 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
 }
 
 bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
-  Conn* conn;
-  {
-    std::shared_lock<std::shared_mutex> lock(conn_mu_);
-    conn = conn_id_to_conn_[conn_id];
+  Conn* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[recv] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
   }
 
-  P2PMhandle* mhandle;
-  {
-    std::shared_lock<std::shared_mutex> lock(mr_mu_);
-    mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  P2PMhandle* mhandle = get_mhandle(mr_id);
+  if (unlikely(mhandle == nullptr)) {
+    std::cerr << "[recv] Error: Invalid mr_id " << mr_id << std::endl;
+    return false;
   }
   int size_int = static_cast<int>(size);
 
@@ -523,15 +527,10 @@ bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
 bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void const*> data_v,
                      std::vector<size_t> size_v, size_t num_iovs) {
-  Conn* conn;
-  {
-    std::shared_lock<std::shared_mutex> lock(conn_mu_);
-    auto it = conn_id_to_conn_.find(conn_id);
-    if (it == conn_id_to_conn_.end()) {
-      std::cerr << "[sendv] Error: Invalid conn_id " << conn_id << std::endl;
-      return false;
-    }
-    conn = it->second;
+  Conn* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[sendv] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
   }
 
   if (num_iovs > kMaxVector) {
@@ -543,6 +542,16 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   ucclRequest ureq[kMaxVector] = {};
   bool sent[kMaxVector] = {false};
   bool done[kMaxVector] = {false};
+  P2PMhandle* mhandles[kMaxVector] = {};
+
+  // Check if mhandles are all valid
+  for (int i = 0; i < num_iovs; i++) {
+    mhandles[i] = get_mhandle(mr_id_v[i]);
+    if (unlikely(mhandles[i] == nullptr)) {
+      std::cerr << "[sendv] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
+      return false;
+    }
+  }
 
   while (1) {
     for (int i = 0; i < num_iovs; i++) {
@@ -551,17 +560,7 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
         void* cur_data = (void*)data_v[i];
         size_t cur_size = size_v[i];
 
-        P2PMhandle* mhandle = nullptr;
-        {
-          std::shared_lock<std::shared_mutex> lock(mr_mu_);
-          auto it = mr_id_to_mr_.find(mr_id_v[i]);
-          if (it == mr_id_to_mr_.end()) {
-            std::cerr << "[sendv] Error: Invalid mr_id " << mr_id_v[i]
-                      << std::endl;
-            return false;
-          }
-          mhandle = it->second->mhandle_;
-        }
+        auto mhandle = mhandles[i];
 
         auto rc =
             uccl_send_async(ep_, conn, mhandle, cur_data, cur_size, &ureq[i]);
@@ -590,15 +589,10 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> data_v, std::vector<size_t> size_v,
                      size_t num_iovs) {
-  Conn* conn;
-  {
-    std::shared_lock<std::shared_mutex> lock(conn_mu_);
-    auto it = conn_id_to_conn_.find(conn_id);
-    if (it == conn_id_to_conn_.end()) {
-      std::cerr << "[recvv] Error: Invalid conn_id " << conn_id << std::endl;
-      return false;
-    }
-    conn = it->second;
+  Conn* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[recvv] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
   }
 
   if (num_iovs > kMaxVector) {
@@ -610,7 +604,16 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   ucclRequest ureq[kMaxVector] = {};
   bool done[kMaxVector] = {false};
   bool received[kMaxVector] = {false};
+  P2PMhandle* mhandles[kMaxVector] = {};
 
+  // Check if mhandles are all valid
+  for (int i = 0; i < num_iovs; i++) {
+    mhandles[i] = get_mhandle(mr_id_v[i]);
+    if (unlikely(mhandles[i] == nullptr)) {
+      std::cerr << "[recvv] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
+      return false;
+    }
+  }
   while (1) {
     for (int i = 0; i < num_iovs; i++) {
       if (done[i]) continue;
@@ -619,17 +622,7 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
         void* cur_data = data_v[i];
         size_t cur_size = size_v[i];
 
-        P2PMhandle* mhandle = nullptr;
-        {
-          std::shared_lock<std::shared_mutex> lock(mr_mu_);
-          auto it = mr_id_to_mr_.find(mr_id_v[i]);
-          if (it == mr_id_to_mr_.end()) {
-            std::cerr << "[recvv] Error: Invalid mr_id " << mr_id_v[i]
-                      << std::endl;
-            return false;
-          }
-          mhandle = it->second->mhandle_;
-        }
+        auto mhandle = mhandles[i];
 
         int size_int = static_cast<int>(cur_size);
 
@@ -661,7 +654,11 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                     FifoItem const& slot_item) {
   DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
   auto* conn = conn_id_to_conn_[conn_id];
-  auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  P2PMhandle* mhandle = get_mhandle(mr_id);
+  if (unlikely(mhandle == nullptr)) {
+    std::cerr << "[read] Error: Invalid mr_id " << mr_id << std::endl;
+    return false;
+  }
 
   ucclRequest ureq = {};
   FifoItem curr_slot_item = slot_item;
@@ -769,11 +766,21 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   FifoItem curr_slot_item[kMaxVector] = {};
   bool done[kMaxVector] = {false};
   bool read[kMaxVector] = {false};
+  P2PMhandle* mhandles[kMaxVector] = {};
 
   if (num_iovs > kMaxVector) {
     std::cerr << "[readv] Error: num_iovs > kMaxVector (" << kMaxVector << ")"
               << std::endl;
     return false;
+  }
+
+  // Check if mhandles are all valid
+  for (int i = 0; i < num_iovs; i++) {
+    mhandles[i] = get_mhandle(mr_id_v[i]);
+    if (unlikely(mhandles[i] == nullptr)) {
+      std::cerr << "[readv] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
+      return false;
+    }
   }
 
   while (1) {
@@ -782,8 +789,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
       if (!read[i]) {
         curr_slot_item[i] = slot_item_v[i];
-
-        auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
+        auto mhandle = mhandles[i];
         auto rc = uccl_read_async(ep_, conn, mhandle, dst_v[i], size_v[i],
                                   curr_slot_item[i], &ureq[i]);
         if (rc != -1) {
@@ -864,11 +870,21 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   FifoItem curr_slot_item[kMaxVector] = {};
   bool done[kMaxVector] = {false};
   bool written[kMaxVector] = {false};
+  P2PMhandle* mhandles[kMaxVector] = {};
 
   if (num_iovs > kMaxVector) {
     std::cerr << "[writev] Error: num_iovs > kMaxVector (" << kMaxVector << ")"
               << std::endl;
     return false;
+  }
+
+  // Check if mhandles are all valid
+  for (int i = 0; i < num_iovs; i++) {
+    mhandles[i] = get_mhandle(mr_id_v[i]);
+    if (unlikely(mhandles[i] == nullptr)) {
+      std::cerr << "[writev] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
+      return false;
+    }
   }
 
   while (1) {
@@ -878,7 +894,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       if (!written[i]) {
         curr_slot_item[i] = slot_item_v[i];
 
-        auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
+        auto mhandle = mhandles[i];
         auto rc = uccl_write_async(ep_, conn, mhandle, src_v[i], size_v[i],
                                    curr_slot_item[i], &ureq[i]);
         if (rc != -1) {
@@ -934,7 +950,11 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
                      FifoItem const& slot_item) {
   DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
   auto* conn = conn_id_to_conn_[conn_id];
-  auto* mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  P2PMhandle* mhandle = get_mhandle(mr_id);
+  if (unlikely(mhandle == nullptr)) {
+    std::cerr << "[write] Error: Invalid mr_id " << mr_id << std::endl;
+    return false;
+  }
 
   ucclRequest ureq = {};
   FifoItem cur_slot_item = slot_item;
@@ -952,7 +972,11 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
 bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
                          size_t len, char* out_buf) {
   auto* conn = conn_id_to_conn_[conn_id];
-  auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
+  auto mhandle = get_mhandle(mr_id);
+  if (unlikely(mhandle == nullptr)) {
+    std::cerr << "[advertise] Error: Invalid mr_id " << mr_id << std::endl;
+    return false;
+  }
   if (prepare_fifo_metadata(ep_, conn, mhandle, addr, len, out_buf) == -1)
     return false;
   return true;
@@ -962,15 +986,25 @@ bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                           std::vector<void*> addr_v, std::vector<size_t> len_v,
                           std::vector<char*> out_buf_v, size_t num_iovs) {
   auto* conn = conn_id_to_conn_[conn_id];
-
+  P2PMhandle* mhandles[kMaxVector] = {};
   if (num_iovs > kMaxVector) {
     std::cerr << "[advertisev] Error: num_iovs > kMaxVector (" << kMaxVector
               << ")" << std::endl;
     return false;
   }
 
+  // Check if mhandles are all valid
+  for (int i = 0; i < num_iovs; i++) {
+    mhandles[i] = get_mhandle(mr_id_v[i]);
+    if (unlikely(mhandles[i] == nullptr)) {
+      std::cerr << "[advertisev] Error: Invalid mr_id " << mr_id_v[i]
+                << std::endl;
+      return false;
+    }
+  }
+
   for (size_t i = 0; i < num_iovs; ++i) {
-    auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
+    auto mhandle = mhandles[i];
     if (prepare_fifo_metadata(ep_, conn, mhandle, addr_v[i], len_v[i],
                               out_buf_v[i]) == -1) {
       return false;
@@ -1071,13 +1105,10 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
   CHECK(data != nullptr) << "send_ipc: data pointer is null!";
 
   // Get connection info
-  Conn* conn;
-  {
-    std::shared_lock<std::shared_mutex> lock(conn_mu_);
-    auto it = conn_id_to_conn_.find(conn_id);
-    CHECK(it != conn_id_to_conn_.end())
-        << "Connection not found for conn_id: " << conn_id;
-    conn = it->second;
+  Conn* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[send_ipc] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
   }
 
   // Check if we have a valid persistent UDS socket (faster than string
@@ -1154,13 +1185,10 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
   CHECK(data != nullptr) << "recv_ipc: data pointer is null!";
 
   // Get connection info
-  Conn* conn;
-  {
-    std::shared_lock<std::shared_mutex> lock(conn_mu_);
-    auto it = conn_id_to_conn_.find(conn_id);
-    CHECK(it != conn_id_to_conn_.end())
-        << "Connection not found for conn_id: " << conn_id;
-    conn = it->second;
+  Conn* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[recv_ipc] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
   }
 
   // Check if we have a valid persistent UDS socket (faster than string
@@ -1262,13 +1290,10 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
   CHECK(data != nullptr) << "write_ipc: data pointer is null!";
 
   // Get connection info
-  Conn* conn;
-  {
-    std::shared_lock<std::shared_mutex> lock(conn_mu_);
-    auto it = conn_id_to_conn_.find(conn_id);
-    CHECK(it != conn_id_to_conn_.end())
-        << "Connection not found for conn_id: " << conn_id;
-    conn = it->second;
+  Conn* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[write_ipc] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
   }
 
   int orig_device;
@@ -1322,13 +1347,10 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
   CHECK(data != nullptr) << "read_ipc: data pointer is null!";
 
   // Get connection info
-  Conn* conn;
-  {
-    std::shared_lock<std::shared_mutex> lock(conn_mu_);
-    auto it = conn_id_to_conn_.find(conn_id);
-    CHECK(it != conn_id_to_conn_.end())
-        << "Connection not found for conn_id: " << conn_id;
-    conn = it->second;
+  Conn* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[read_ipc] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
   }
 
   int orig_device;
