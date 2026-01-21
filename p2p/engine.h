@@ -696,8 +696,8 @@ class Endpoint {
   }
 
   // For both net and ipc send/recv tasks.
-  jring_t* send_unified_task_ring_;
-  jring_t* recv_unified_task_ring_;
+  jring_t* send_unified_task_ring_ = nullptr;
+  jring_t* recv_unified_task_ring_ = nullptr;
 
   std::atomic<bool> stop_{false};
   std::thread send_proxy_thread_;
