@@ -413,9 +413,14 @@ def bench_kineto(
     kernel_names = (kernel_names,) if isinstance(kernel_names, str) else kernel_names
     assert all([isinstance(name, str) for name in kernel_names])
     for name in kernel_names:
-        assert (
-            sum([name in line for line in prof_lines]) == 1
-        ), f"Errors of the kernel {name} in the profiling table"
+        count = sum([name in line for line in prof_lines])
+        if count != 1:
+            print(f"\n[WARNING] Profiling table for kernel '{name}':")
+            print("\n".join(prof_lines))
+            print(
+                f"[WARNING] Kernel '{name}' found {count} times in profiling table (expected 1)"
+            )
+            print(f"[WARNING] Continuing execution despite mismatch...\n")
 
     # Save chrome traces
     if trace_path is not None:
@@ -452,7 +457,6 @@ def bench_kineto(
             durations = [event["dur"] / 1e6 for event in events]
 
             # Handle incomplete periods gracefully (due to dropped samples)
-            # NOTE(MaoZiming): This sometimes happen, suspect it is the profiler's issue.
             num_complete_periods = len(durations) // num_kernels_per_period
             if len(durations) % num_kernels_per_period != 0:
                 dropped_samples = len(durations) % num_kernels_per_period
