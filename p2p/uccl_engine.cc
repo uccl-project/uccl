@@ -299,6 +299,9 @@ int uccl_engine_write_rc_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids
                             int num_iovs, uint64_t* transfer_id) {
   if (!conn || num_iovs <= 0) return -1;
 
+#ifdef UCCL_P2P_USE_TCPX
+  return -1;  // TODO: support write_rc for TCPX
+#else
   return conn->engine->endpoint->writev_async(conn->conn_id, mr_ids, dst_v, size_v,
                                           fifo_items, num_iovs, transfer_id)
           ? 0
