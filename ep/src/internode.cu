@@ -2493,6 +2493,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
       // no need to sync_forwarder_smem for AMD GPUs, because no coordinator
       // warp anymore
+      sync_forwarder_smem();
 #else
       sync_forwarder_smem();
 #endif
@@ -2634,6 +2635,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                 : (forwarder_nvl_head[warp_id][lane_id] = expected_head + 1);
         }
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+        __threadfence_block();
         if (sub_warp_id == 0) forwarder_coordinator();
 #endif
         sync_large_warp();
@@ -2731,6 +2733,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
 
       // no need to sync_rdma_receiver_smem for AMD GPUs, because no coordinator
       // warp anymore
+    sync_rdma_receiver_smem();
 #else
       sync_rdma_receiver_smem();
 #endif
@@ -2756,6 +2759,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
               : (rdma_receiver_rdma_head[warp_id][lane_id] = expected_head);
         }
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+__threadfence_block();
         if (warp_id == 0) receiver_corordinator();
 #endif
 
