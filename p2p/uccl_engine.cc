@@ -53,11 +53,6 @@ struct uccl_conn {
   std::mutex listener_mutex;
 };
 
-struct uccl_mr {
-  uint64_t mr_id;
-  uccl_engine* engine;
-};
-
 typedef struct {
   FifoItem fifo_item;
   bool is_valid;
@@ -220,32 +215,27 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   return conn;
 }
 
-uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size) {
-  if (!engine || !data) return nullptr;
-  uccl_mr_t* mr = new uccl_mr;
-  uint64_t mr_id;
+int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size, uccl_mr_t& mr_id) {
+  if (!engine || !data) return -1;
   bool ok = engine->endpoint->reg((void*)data, size, mr_id);
   if (!ok) {
-    delete mr;
-    return nullptr;
+    return -1;
   }
-  mr->mr_id = mr_id;
-  mr->engine = engine;
   mem_reg_entry_t entry;
   entry.mr_id = mr_id;
   entry.size = size;
   mem_reg_info[data] = entry;
-  return mr;
+  return 0;
 }
 
-int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                      size_t size, void* slot_item_ptr, uint64_t* transfer_id) {
-  if (!conn || !mr || !data) return -1;
+  if (!conn || !data) return -1;
 
   FifoItem slot_item;
   slot_item = *static_cast<FifoItem*>(slot_item_ptr);
 
-  return conn->engine->endpoint->read_async(conn->conn_id, mr->mr_id,
+  return conn->engine->endpoint->read_async(conn->conn_id, mr,
                                             const_cast<void*>(data), size,
                                             slot_item, transfer_id)
              ? 0
@@ -265,19 +255,19 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
 
 }
 
-int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                       size_t size, uint64_t* transfer_id) {
-  if (!conn || !mr || !data) return -1;
-  return conn->engine->endpoint->send_async(conn->conn_id, mr->mr_id, data,
+  if (!conn || !data) return -1;
+  return conn->engine->endpoint->send_async(conn->conn_id, mr, data,
                                             size, transfer_id)
              ? 0
              : -1;
 }
 
-int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
+int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                          size_t size, void* slot_item_ptr,
                          uint64_t* transfer_id) {
-  if (!conn || !mr || !data) return -1;
+  if (!conn || !data) return -1;
 
 #ifdef UCCL_P2P_USE_TCPX
   return -1;  // TODO: support write_rc for TCPX
@@ -285,7 +275,7 @@ int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
   FifoItem slot_item;
   slot_item = *static_cast<FifoItem*>(slot_item_ptr);
 
-  return conn->engine->endpoint->write_async(conn->conn_id, mr->mr_id,
+  return conn->engine->endpoint->write_async(conn->conn_id, mr,
                                              const_cast<void*>(data), size,
                                              slot_item, transfer_id)
              ? 0
@@ -308,11 +298,11 @@ int uccl_engine_write_rc_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids
           : -1;
 
 }
-int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
+int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
                      size_t data_size) {
-  if (!conn || !mr || !data) return -1;
+  if (!conn || !data) return -1;
 
-  return conn->engine->endpoint->recv(conn->conn_id, mr->mr_id, data, data_size)
+  return conn->engine->endpoint->recv(conn->conn_id, mr, data, data_size)
              ? 0
              : -1;
 }
@@ -379,24 +369,22 @@ void uccl_engine_conn_destroy(uccl_conn_t* conn) {
   }
 }
 
-void uccl_engine_mr_destroy(uccl_mr_t* mr) {
+void uccl_engine_mr_destroy(uccl_engine_t* engine, uccl_mr_t mr) {
   for (auto it = mem_reg_info.begin(); it != mem_reg_info.end(); ++it) {
-    if (it->second.mr_id == mr->mr_id) {
-      mr->engine->endpoint->dereg(mr->mr_id);
+    if (it->second.mr_id == mr) {
+      engine->endpoint->dereg(mr);
       mem_reg_info.erase(it);
       break;
     }
   }
-  delete mr;
 }
 
-
-int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t* mr,
+int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t mr,
                                     void const* data, size_t size,
                                     char* fifo_buf) {
-  if (!engine || !mr || !data || !fifo_buf) return -1;
+  if (!engine || !data || !fifo_buf) return -1;
 
-  return engine->endpoint->prepare_fifo(mr->mr_id,
+  return engine->endpoint->prepare_fifo(mr,
                                            const_cast<void*>(data), size,
                                            fifo_buf)
              ? 0
