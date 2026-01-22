@@ -121,8 +121,10 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
-Endpoint::Endpoint(uint32_t const num_cpus)
-    : local_gpu_idx_(INVALID_GPU), num_cpus_(num_cpus) {
+Endpoint::Endpoint(uint32_t const num_cpus, bool passive_accept)
+    : local_gpu_idx_(INVALID_GPU),
+      num_cpus_(num_cpus),
+      passive_accept_(passive_accept) {
   std::cout << "Creating Engine with CPUs: " << num_cpus << std::endl;
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
 
@@ -148,7 +150,12 @@ Endpoint::Endpoint(uint32_t const num_cpus)
   // Initialize the RDMA endpoint with lazy creation.
   ep_ = std::shared_ptr<NICEndpoint>(
       new NICEndpoint(INVALID_GPU, INVALID_RANK_ID, 0, false));
-#endif
+
+  if (passive_accept_) {
+    passive_accept_thread_ =
+        std::thread(&Endpoint::passive_accept_thread_func, this);
+  }
+
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
@@ -156,6 +163,10 @@ Endpoint::~Endpoint() {
   std::cout << "Destroying Engine..." << std::endl;
 
   stop_.store(true, std::memory_order_release);
+
+  if (passive_accept_ && passive_accept_thread_.joinable()) {
+    passive_accept_thread_.join();
+  }
 
   if (send_proxy_thread_.joinable()) {
     send_proxy_thread_.join();
@@ -1930,4 +1941,34 @@ std::vector<XferDesc> Endpoint::deserialize_descs(
   }
 
   return xfer_desc_v;
+}
+
+bool Endpoint::add_remote_endpoint(std::vector<uint8_t> const& metadata,
+                                   uint64_t& conn_id) {
+  {
+    // Check if we have connected to the remote endpoint before
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = remote_endpoint_to_conn_id_.find(metadata);
+    if (it != remote_endpoint_to_conn_id_.end()) {
+      conn_id = it->second;
+      return true;
+    }
+  }
+  auto [remote_ip, remote_port, remote_gpu_idx] = parse_metadata(metadata);
+  bool success = connect(remote_ip, remote_gpu_idx, remote_port, conn_id);
+  if (success) {
+    std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    remote_endpoint_to_conn_id_[metadata] = conn_id;
+    return true;
+  }
+  return false;
+}
+
+void Endpoint::passive_accept_thread_func() {
+  std::string ip_addr;
+  int remote_gpu_idx;
+  uint64_t conn_id;
+  while (!stop_.load(std::memory_order_acquire)) {
+    (void)accept(ip_addr, remote_gpu_idx, conn_id);
+  }
 }

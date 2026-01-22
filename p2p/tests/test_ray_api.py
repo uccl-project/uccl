@@ -28,7 +28,7 @@ def test_register_memory_basic():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(4, true)
     print(f"Created Endpoint with 4 CPUs")
 
     # Create a single tensor
@@ -93,7 +93,7 @@ def test_register_memory_multiple():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(4, true)
     print(f"Created Endpoint with 4 CPUs")
 
     # Create multiple tensors with different sizes
@@ -154,7 +154,7 @@ def test_register_memory_empty_list():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(4, true)
     print(f"Created Endpoint with 4 CPUs")
 
     # Register empty list
@@ -181,7 +181,7 @@ def test_register_memory_invalid_input():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(4, true)
     print(f"Created Endpoint with 4 CPUs")
 
     # Try to register a non-tensor object
@@ -210,7 +210,7 @@ def test_register_memory_mixed_valid_invalid():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(4, true)
     print(f"Created Endpoint with 4 CPUs")
 
     # Create valid tensor
@@ -240,7 +240,7 @@ def test_register_memory_different_dtypes():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(4, true)
     print(f"Created Endpoint with 4 CPUs")
 
     # Create tensors with different dtypes
@@ -288,7 +288,7 @@ def test_get_serialized_descs():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(4, true)
     print(f"Created Endpoint with 4 CPUs")
 
     # Create tensors
@@ -324,7 +324,7 @@ def test_deserialize_descs():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(4, true)
     print(f"Created Endpoint with 4 CPUs")
 
     # Create tensors
@@ -387,7 +387,7 @@ def test_serialize_deserialize_roundtrip():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4)
+    ep = p2p.Endpoint(4, true)
     print(f"Created Endpoint with 4 CPUs")
 
     # Create tensors with different sizes and dtypes

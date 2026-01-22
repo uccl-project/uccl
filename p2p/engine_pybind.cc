@@ -72,6 +72,22 @@ PYBIND11_MODULE(p2p, m) {
           "Connect to a remote server", py::arg("remote_ip_addr"),
           py::arg("remote_gpu_idx"), py::arg("remote_port") = -1)
       .def(
+          "add_remote_endpoint",
+          [](Endpoint& self, py::bytes metadata_bytes) {
+            uint64_t conn_id;
+            bool success;
+            {
+              py::gil_scoped_release release;
+              InsidePythonGuard guard;
+              std::string buf = metadata_bytes;
+              std::vector<uint8_t> metadata(buf.begin(), buf.end());
+              success = self.add_remote_endpoint(metadata, conn_id);
+            }
+            return py::make_tuple(success, conn_id);
+          },
+          "Add remote endpoint - connect only once per remote endpoint.",
+          py::arg("metadata_bytes"))
+      .def(
           "get_metadata",
           [](Endpoint& self) {
             std::vector<uint8_t> metadata = self.get_metadata();
