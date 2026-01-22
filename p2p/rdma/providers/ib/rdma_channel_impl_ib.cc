@@ -9,9 +9,9 @@
 
 #define GID_INDEX_DEFAULT 3
 #define MAX_INLINE_DATA 128
-#define SERVICE_LEVEL 135
+#define SERVICE_LEVEL 3
 #define MIN_RNR_TIMER 12
-#define TRAFFIC_CLASS 3
+#define TRAFFIC_CLASS 104
 
 #define RNR_RETRY 7
 #define RETRY_CNT 7
