@@ -159,7 +159,32 @@ if __name__ == "__main__":
         device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", default_arch)
         os.environ["TORCH_CUDA_ARCH_LIST"] = device_arch
     else:
-        device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", "gfx942")
+        # AMD GPU Architecture Detection
+        detected_amd_arch = None
+        try:
+            rocminfo_output = subprocess.check_output(
+                ["rocminfo"], stderr=subprocess.DEVNULL
+            ).decode("ascii")
+            # Parse rocminfo output to find GPU architecture (e.g., gfx942, gfx90a)
+            for line in rocminfo_output.split("\n"):
+                if "Name:" in line and "gfx" in line.lower():
+                    # Extract architecture like "gfx942" from the line
+                    parts = line.split()
+                    for part in parts:
+                        if part.lower().startswith("gfx"):
+                            detected_amd_arch = part.lower()
+                            break
+                    if detected_amd_arch:
+                        break
+            if detected_amd_arch:
+                print(f"Detected AMD GPU architecture: {detected_amd_arch}")
+        except Exception as e:
+            print(f"Warning: Could not detect AMD GPU info via rocminfo: {e}")
+
+        # Use environment variable, then detected arch, then fallback
+        device_arch = os.getenv(
+            "TORCH_CUDA_ARCH_LIST", detected_amd_arch if detected_amd_arch else "gfx420"
+        )
 
         for arch in device_arch.split(","):
             nvcc_flags.append(f"--offload-arch={arch.lower()}")

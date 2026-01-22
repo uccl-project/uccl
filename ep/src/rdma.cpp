@@ -575,9 +575,11 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
   if (is_roce) {
     attr.ah_attr.is_global = 1;
     attr.ah_attr.port_num = 1;
-    attr.ah_attr.sl = 135;
+    const char* sl_env = getenv("UCCL_IB_SL");
+    attr.ah_attr.sl = sl_env ? atoi(sl_env) : 0;
     attr.ah_attr.src_path_bits = 0;
-    attr.ah_attr.grh.traffic_class = 3;
+    const char* tc_env = getenv("UCCL_IB_TC");
+    attr.ah_attr.grh.traffic_class = tc_env ? atoi(tc_env) : 0;
     attr.ah_attr.grh.hop_limit = 64;
     // Fill GID from remote_info
     memcpy(&attr.ah_attr.grh.dgid, remote->gid, 16);
