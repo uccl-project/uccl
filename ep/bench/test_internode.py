@@ -219,6 +219,7 @@ def test_main(
                         )
                     if previous_mode:
                         dispatch_args.update({"previous_event": buffer.capture()})
+                    group.barrier()
                     (
                         recv_x,
                         recv_topk_idx,
@@ -227,6 +228,7 @@ def test_main(
                         handle,
                         event,
                     ) = buffer.dispatch(**dispatch_args)
+                    group.barrier()
                     event.current_stream_wait() if async_mode else ()
 
                     if current_x is x_pure_rand or current_x is x:
@@ -279,6 +281,7 @@ def test_main(
                     if with_topk:
                         num_worst_tokens = num_tokens * num_ranks
                         dispatch_args.update({"num_worst_tokens": num_worst_tokens})
+                        group.barrier()
                         (
                             recv_worst_x,
                             recv_worst_topk_idx,
@@ -287,6 +290,7 @@ def test_main(
                             _,
                             event,
                         ) = buffer.dispatch(**dispatch_args)
+                        group.barrier()
                         event.current_stream_wait() if async_mode else ()
                         recv_worst_x = (
                             per_token_cast_back(*recv_worst_x)
@@ -319,7 +323,9 @@ def test_main(
                         }
                         if previous_mode:
                             dispatch_args.update({"previous_event": buffer.capture()})
+                        group.barrier()
                         recv_x, _, _, _, _, event = buffer.dispatch(**dispatch_args)
+                        group.barrier()
                         event.current_stream_wait() if async_mode else ()
                         recv_x = (
                             per_token_cast_back(*recv_x)
@@ -347,9 +353,11 @@ def test_main(
                         combine_args.update({"topk_weights": recv_topk_weights})
                     if previous_mode:
                         combine_args.update({"previous_event": buffer.capture()})
+                    group.barrier()
                     combined_x, combined_topk_weights, event = buffer.combine(
                         **combine_args
                     )
+                    group.barrier()
                     event.current_stream_wait() if async_mode else ()
                     check_x = (
                         combined_x.float() - bias_0.float() - bias_1.float()
@@ -520,9 +528,9 @@ def test_loop(
         num_nvlink_bytes = int(2e9)
         num_rdma_bytes = int(1e9)
     elif torch.version.hip:
-        num_sms = 64 if num_nodes < 8 else 32
-        num_nvlink_bytes = int(4e9)
-        num_rdma_bytes = int(2e9)
+        num_sms = 64 if num_nodes < 4 else 32
+        num_nvlink_bytes = int(2e9)
+        num_rdma_bytes = int(1e9)
     else:
         raise ValueError("Unsupported platform")
 

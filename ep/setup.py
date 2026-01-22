@@ -204,6 +204,9 @@ if __name__ == "__main__":
             cxx_flags.append("-DDISABLE_BUILTIN_SHLF_SYNC")
             nvcc_flags.append("-DDISABLE_BUILTIN_SHLF_SYNC")
 
+        cxx_flags.append("-DENABLE_FAST_DEBUG")
+        nvcc_flags.append("-DENABLE_FAST_DEBUG")
+
     # Disable LD/ST tricks, as some CUDA version does not support `.L1::no_allocate`
     # Only enable aggressive PTX instructions for SM 9.0+ (H100/H800/B200)
     try:
