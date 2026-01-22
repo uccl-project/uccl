@@ -259,7 +259,7 @@ def test_main(
                                                 recv_x[:, -1], recv_src_info.view(-1)
                                             )
                                             < 0.007
-                                        )
+                                        ), f"{calc_diff(recv_x[:, -1], recv_src_info.view(-1))}"
                                     else:
                                         assert (
                                             recv_x[:, -128:]
