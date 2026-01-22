@@ -459,8 +459,9 @@ def bench_kineto(
             ]
             events = sorted(events, key=lambda event: event["ts"])
             durations = [event["dur"] / 1e6 for event in events]
-            
+
             # Handle incomplete periods gracefully (due to dropped samples)
+            # NOTE(MaoZiming): This sometimes happen, suspect it is the profiler's issue.
             num_complete_periods = len(durations) // num_kernels_per_period
             if len(durations) % num_kernels_per_period != 0:
                 dropped_samples = len(durations) % num_kernels_per_period
@@ -473,7 +474,6 @@ def bench_kineto(
                     )
                 # Truncate to only use complete periods
                 durations = durations[: num_complete_periods * num_kernels_per_period]
-            
             if num_complete_periods > 0:
                 kernel_durations[i] = [
                     sum(durations[j::num_kernels_per_period]) / num_complete_periods
