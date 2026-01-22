@@ -417,9 +417,7 @@ def bench_kineto(
         if count != 1:
             print(f"\n[WARNING] Profiling table for kernel '{name}':")
             print("\n".join(prof_lines))
-            print(
-                f"[WARNING] Kernel '{name}' found {count} times in profiling table (expected 1)"
-            )
+            print(f"[WARNING] Kernel '{name}' found {count} times in profiling table (expected 1)")
             print(f"[WARNING] Continuing execution despite mismatch...\n")
 
     # Save chrome traces
@@ -430,6 +428,7 @@ def bench_kineto(
     units = {"ms": 1e3, "us": 1e6}
     kernel_durations = []
     for name in kernel_names:
+        found = False
         for line in prof_lines:
             if name in line:
                 time_str = line.split()[-2]
@@ -438,8 +437,13 @@ def bench_kineto(
                         kernel_durations.append(
                             float(time_str.replace(unit, "")) / scale
                         )
+                        found = True
                         break
                 break
+        # NOTE(MaoZiming): in rare cases it misses certain events. 
+        if not found:
+            print(f"[WARNING] Kernel '{name}' not found in profiling table, using 0.0 as placeholder")
+            kernel_durations.append(0.0)
 
     # Expand the kernels by periods
     if num_kernels_per_period > 1:
@@ -455,7 +459,7 @@ def bench_kineto(
             ]
             events = sorted(events, key=lambda event: event["ts"])
             durations = [event["dur"] / 1e6 for event in events]
-
+            
             # Handle incomplete periods gracefully (due to dropped samples)
             num_complete_periods = len(durations) // num_kernels_per_period
             if len(durations) % num_kernels_per_period != 0:
@@ -469,7 +473,7 @@ def bench_kineto(
                     )
                 # Truncate to only use complete periods
                 durations = durations[: num_complete_periods * num_kernels_per_period]
-
+            
             if num_complete_periods > 0:
                 kernel_durations[i] = [
                     sum(durations[j::num_kernels_per_period]) / num_complete_periods

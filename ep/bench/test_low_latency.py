@@ -445,6 +445,9 @@ def test_main(
             suppress_kineto_output=True,
             num_kernels_per_period=2 if return_recv_hook else 1,
         )
+        # kineto profiling failed.
+        if dispatch_t == 0 or combine_t == 0:
+            continue
         if not return_recv_hook:
             print(
                 f"[rank {rank}] Dispatch bandwidth: {num_dispatch_comm_bytes / 1e9 / dispatch_t:.2f} GB/s, avg_t={dispatch_t * 1e6:.2f} us | "
