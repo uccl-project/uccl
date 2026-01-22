@@ -275,7 +275,9 @@ def test_main(
                         dim=1
                     ).unsqueeze(1)
                     ref_x = x_pure_rand if current_x is x_pure_rand else x
-                    assert calc_diff(check_x, ref_x) < 5e-6
+                    assert (
+                        calc_diff(check_x, ref_x) < 5e-6
+                    ), f"{calc_diff(check_x, ref_x)}"
                     if with_topk:
                         check_topk_weights = (
                             combined_topk_weights
@@ -290,7 +292,9 @@ def test_main(
                             if current_x is x_pure_rand
                             else topk_weights
                         )
-                        assert calc_diff(check_topk_weights, ref_topk_weights) < 1e-9
+                        assert (
+                            calc_diff(check_topk_weights, ref_topk_weights) < 1e-9
+                        ), f"{calc_diff(check_topk_weights, ref_topk_weights)}"
 
                     # For later tuning
                     dispatch_bf16_nvl_recv_bytes = recv_x.numel() * 2
