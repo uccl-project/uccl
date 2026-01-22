@@ -128,10 +128,7 @@ void listener_thread_func(uccl_conn_t* conn) {
           break;
         }
 
-        uccl_mr_t temp_mr;
-        temp_mr.mr_id = mr_id;
-        temp_mr.engine = conn->engine;
-        int result = uccl_engine_recv(conn, &temp_mr, (void*)tx_data.data_ptr,
+        int result = uccl_engine_recv(conn, mr_id, (void*)tx_data.data_ptr,
                                       tx_data.data_size);
         if (result < 0) {
           std::cerr << "Failed to perform uccl_engine_recv" << std::endl;
@@ -296,7 +293,7 @@ int uccl_engine_write_rc_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids
                                           fifo_items, num_iovs, transfer_id)
           ? 0
           : -1;
-
+#endif
 }
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
                      size_t data_size) {

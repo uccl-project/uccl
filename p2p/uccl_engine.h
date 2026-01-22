@@ -86,9 +86,10 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
  * @param engine        The engine instance.
  * @param data          Pointer to the data to register.
  * @param size          Size of the data.
+ * @param mr_id         Pointer to store the memory region handle.
  * @return              Memory region handle, or NULL on failure.
  */
-uccl_mr_t* uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size, uccl_mr_t& mr_id);
+int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size, uccl_mr_t& mr_id);
 
 /**
  * Read data (Non blocking).
