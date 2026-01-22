@@ -106,14 +106,9 @@ using FifoItem = FifoItem;
 struct XferDesc {
   void const* addr;
   size_t size;
+  uint64_t mr_id;
   std::vector<uint32_t> lkeys;
   std::vector<uint32_t> rkeys;
-};
-
-enum XferHandleState {
-  Pending = 0,
-  Completed,
-  Failed,
 };
 
 enum XferType {
@@ -122,7 +117,11 @@ enum XferType {
 };
 
 struct XferHandle {
-  ucclRequest ureq;
+  uint64_t conn_id;
+  std::string op_name;
+  std::vector<XferDesc> local_descs;
+  std::vector<XferDesc> remote_descs;
+  uint64_t transfer_id;
 };
 
 // Custom hash function for std::vector<uint8_t>
@@ -341,6 +340,19 @@ class Endpoint {
   /* Deserialize bytes to XferDesc vector */
   std::vector<XferDesc> deserialize_descs(
       std::vector<uint8_t> const& serialized_data);
+
+  /* Start a transfer and return a transfer handle */
+  std::shared_ptr<XferHandle> transfer(
+      uint64_t const& conn_id, std::string const& op_name,
+      std::vector<XferDesc> const& local_descs,
+      std::vector<XferDesc> const& remote_descs);
+
+  /* Check the state of a transfer */
+  bool check_xfer_state(std::shared_ptr<XferHandle> const& xfer_handle);
+
+  /***************************************************/
+  /* API for Ray */
+  /***************************************************/
 
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);

@@ -271,6 +271,63 @@ PYBIND11_MODULE(p2p, m) {
           "Deserialize bytes to transfer descriptors",
           py::arg("serialized_bytes"))
       .def(
+          "trasnfer",
+          [](Endpoint& self, uint64_t conn_id, std::string const& op_name,
+             py::list local_desc_list, py::list remote_desc_list) {
+            std::vector<XferDesc> local_desc_v;
+            std::vector<XferDesc> remote_desc_v;
+            size_t list_len = py::len(local_desc_list);
+            local_desc_v.reserve(list_len);
+            remote_desc_v.reserve(list_len);
+            for (size_t i = 0; i < list_len; ++i) {
+              // Conver local_desc_list and remote_desc_list to XferDesc vector
+              py::dict local_desc_dict = py::cast<py::dict>(local_desc_list[i]);
+              py::dict remote_desc_dict =
+                  py::cast<py::dict>(remote_desc_list[i]);
+              XferDesc local_desc;
+              local_desc.addr = reinterpret_cast<void const*>(
+                  py::cast<uint64_t>(local_desc_dict["addr"]));
+              local_desc.size = py::cast<size_t>(local_desc_dict["size"]);
+              local_desc.lkeys =
+                  py::cast<std::vector<uint32_t>>(local_desc_dict["lkeys"]);
+              local_desc.rkeys =
+                  py::cast<std::vector<uint32_t>>(local_desc_dict["rkeys"]);
+              local_desc_v.push_back(local_desc);
+              XferDesc remote_desc;
+              remote_desc.addr = reinterpret_cast<void const*>(
+                  py::cast<uint64_t>(remote_desc_dict["addr"]));
+              remote_desc.size = py::cast<size_t>(remote_desc_dict["size"]);
+              remote_desc.lkeys =
+                  py::cast<std::vector<uint32_t>>(remote_desc_dict["lkeys"]);
+              remote_desc.rkeys =
+                  py::cast<std::vector<uint32_t>>(remote_desc_dict["rkeys"]);
+              remote_desc_v.push_back(remote_desc);
+            }
+            std::shared_ptr<XferHandle> xfer_handle;
+            {
+              py::gil_scoped_release release;
+              InsidePythonGuard guard;
+              xfer_handle =
+                  self.transfer(conn_id, op_name, local_desc_v, remote_desc_v);
+            }
+            return xfer_handle;
+          },
+          "Start a transfer and return a transfer handle", py::arg("conn_id"),
+          py::arg("op_name"), py::arg("local_desc_list"),
+          py::arg("remote_desc_list"))
+      .def(
+          "check_xfer_state",
+          [](Endpoint& self, std::shared_ptr<XferHandle> const& xfer_handle) {
+            bool is_done;
+            {
+              py::gil_scoped_release release;
+              InsidePythonGuard guard;
+              is_done = self.check_xfer_state(xfer_handle);
+            }
+            return is_done;
+          },
+          "Check the state of a transfer", py::arg("xfer_handle"))
+      .def(
           "dereg",
           [](Endpoint& self, uint64_t mr_id) {
             bool ok;

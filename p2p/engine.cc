@@ -1789,6 +1789,7 @@ std::vector<XferDesc> Endpoint::register_memory(
     XferDesc xfer_desc;
     xfer_desc.addr = data_v[i];
     xfer_desc.size = size_v[i];
+    xfer_desc.mr_id = mr_id_v[i];
     for (size_t j = 0; j < kNICContextNumber; j++) {
       auto mr = mhandle->mr_array.getKeyByContextID(j);
       assert(mr != nullptr);
@@ -1971,4 +1972,78 @@ void Endpoint::passive_accept_thread_func() {
   while (!stop_.load(std::memory_order_acquire)) {
     (void)accept(ip_addr, remote_gpu_idx, conn_id);
   }
+}
+
+std::shared_ptr<XferHandle> Endpoint::transfer(
+    uint64_t const& conn_id, std::string const& op_name,
+    std::vector<XferDesc> const& local_descs,
+    std::vector<XferDesc> const& remote_descs) {
+  auto conn = get_conn(conn_id);
+  if (conn == nullptr) {
+    std::cerr << "Invalid conn_id: " << conn_id << std::endl;
+    return nullptr;
+  }
+
+  if (local_descs.size() != remote_descs.size()) {
+    std::cerr << "Local and remote descriptors must have the same size"
+              << std::endl;
+    return nullptr;
+  }
+
+  if (op_name != "WRITE" && op_name != "READ") {
+    std::cerr << "Invalid op_name: " << op_name << std::endl;
+    return nullptr;
+  }
+
+  std::shared_ptr<XferHandle> xfer_handle = std::make_shared<XferHandle>();
+  xfer_handle->conn_id = conn_id;
+  xfer_handle->op_name = op_name;
+  xfer_handle->local_descs = local_descs;
+  xfer_handle->remote_descs = remote_descs;
+
+  std::vector<FifoItem> slot_item_v;
+  std::vector<uint64_t> mr_id_v;
+  std::vector<void*> src_v;
+  std::vector<size_t> size_v;
+  auto num_iovs = local_descs.size();
+  slot_item_v.reserve(num_iovs);
+  mr_id_v.reserve(num_iovs);
+  src_v.reserve(num_iovs);
+  size_v.reserve(num_iovs);
+  for (size_t i = 0; i < num_iovs; i++) {
+    FifoItem fifo_item;
+    auto ldesc = local_descs[i];
+    auto rdesc = remote_descs[i];
+
+    fifo_item.addr = reinterpret_cast<uint64_t>(rdesc.addr);
+    fifo_item.size = rdesc.size;
+    // Copy rdesc.rkeys to fifo_item.padding
+    std::memcpy(fifo_item.padding, rdesc.rkeys.data(),
+                rdesc.rkeys.size() * sizeof(uint32_t));
+
+    slot_item_v.push_back(fifo_item);
+    mr_id_v.push_back(ldesc.mr_id);
+    src_v.push_back(const_cast<void*>(ldesc.addr));
+    size_v.push_back(ldesc.size);
+  }
+
+  bool success;
+  if (op_name == "WRITE") {
+    success = writev_async(conn_id, mr_id_v, src_v, size_v, slot_item_v,
+                           num_iovs, &xfer_handle->transfer_id);
+  } else {
+    success = readv_async(conn_id, mr_id_v, src_v, size_v, slot_item_v,
+                          num_iovs, &xfer_handle->transfer_id);
+  }
+  if (!success) {
+    return nullptr;
+  }
+  return xfer_handle;
+}
+
+bool Endpoint::check_xfer_state(
+    std::shared_ptr<XferHandle> const& xfer_handle) {
+  bool is_done;
+  poll_async(xfer_handle->transfer_id, &is_done);
+  return is_done;
 }
