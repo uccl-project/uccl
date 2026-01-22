@@ -46,10 +46,14 @@ CXXFLAGS       += -D__HIP_PLATFORM_AMD__
 # Add TCP endpoint flag
 ifeq ($(USE_TCP),1)
 	CXXFLAGS += -DUCCL_P2P_USE_NCCL
+	CXXFLAGS += -DUCCL_P2P_USE_RCCL
 endif
 LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
                   -Wl,-rpath,$(HIP_LIB) -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest \
                   -lz -lelf -libverbs -lpthread
+ifeq ($(USE_TCP),1)
+	LDFLAGS += -lrccl
+endif
 
 # Target and source files
 P2P_PYTHON_EXT   := p2p$(PYEXT)

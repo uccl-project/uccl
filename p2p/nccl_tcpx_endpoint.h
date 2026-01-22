@@ -8,7 +8,11 @@
 #include <unordered_map>
 #include <vector>
 #include <cuda_runtime_api.h>
+#if defined(UCCL_P2P_USE_RCCL)
+#include <rccl.h>
+#else
 #include <nccl.h>
+#endif
 
 namespace nccl_tcpx {
 
