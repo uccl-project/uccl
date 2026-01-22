@@ -1047,7 +1047,7 @@ __global__ void __launch_bounds__(
           // CPU-emulated atomics, allow us to piggyback the atomic operation
           // with the RDMA send.
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-              -1,
+              -1
 #else
               -1,
               reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)) -
@@ -2658,9 +2658,10 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                 translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank,
                                                          nvl_rank),
                 channel_id,  // NOTE(MaoZiming): use channel_id for rb.
-                lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false, -1,
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+                lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false, -1
 #else
+                lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false, -1,
                 reinterpret_cast<uint64_t>(
                     rdma_channel_tail.buffer(rdma_rank)) -
                     reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
