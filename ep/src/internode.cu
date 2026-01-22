@@ -1,5 +1,3 @@
-
-
 #include "buffer.cuh"
 #include "ep_configs.cuh"
 #include "ep_launch.cuh"
