@@ -70,10 +70,8 @@ typedef struct {
 
 std::unordered_map<uintptr_t, mem_reg_entry_t> mem_reg_info;
 
-#ifdef UCCL_P2P_USE_TCPX
 std::vector<notify_msg_t> notify_msg_list;
 std::mutex notify_msg_list_mutex;
-#endif
 
 // Helper function to find the base address and mr_id for any address within a
 // registered region
@@ -408,7 +406,7 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   md_t md;
   md.op = UCCL_NOTIFY;
   md.data.notify_data = *notify_msg;
-  
+
   return send(conn->sock_fd, &md, sizeof(md_t), 0);
 #else
   if (conn->oob_conn_key.empty()) {
