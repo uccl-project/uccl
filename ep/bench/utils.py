@@ -417,7 +417,9 @@ def bench_kineto(
         if count != 1:
             print(f"\n[WARNING] Profiling table for kernel '{name}':")
             print("\n".join(prof_lines))
-            print(f"[WARNING] Kernel '{name}' found {count} times in profiling table (expected 1)")
+            print(
+                f"[WARNING] Kernel '{name}' found {count} times in profiling table (expected 1)"
+            )
             print(f"[WARNING] Continuing execution despite mismatch...\n")
 
     # Save chrome traces
@@ -440,9 +442,11 @@ def bench_kineto(
                         found = True
                         break
                 break
-        # NOTE(MaoZiming): in rare cases it misses certain events. 
+        # NOTE(MaoZiming): in rare cases it misses certain events.
         if not found:
-            print(f"[WARNING] Kernel '{name}' not found in profiling table, using 0.0 as placeholder")
+            print(
+                f"[WARNING] Kernel '{name}' not found in profiling table, using 0.0 as placeholder"
+            )
             kernel_durations.append(0.0)
 
     # Expand the kernels by periods
