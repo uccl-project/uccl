@@ -111,7 +111,9 @@ torchrun --nnodes=4 --nproc_per_node=8 --node_rank=<rank> \
   --hidden=7168 --num-topk=8 --num-experts=288 --test-ll-compatibility
 ```
 
-Please refer to [bench/baseline](bench/baseline) for running more baselines including Torch, NVSHMEM, and pplx-kernels on EFA. 
+Notes:
+* You need to set env variables `UCCL_IB_GID_INDEX` and `UCCL_SOCKET_IFNAME` properly based on your cluster setup. `UCCL_IB_GID_INDEX` should be the same as `NCCL_IB_GID_INDEX` if you were using NCCL; `UCCL_SOCKET_IFNAME` should be the interface that you would use for the `--master_addr` in `torchrun`. 
+* Please refer to [bench/baseline](bench/baseline) for running more baselines including Torch, NVSHMEM, and pplx-kernels on EFA. 
 
 ## Results
 
@@ -144,8 +146,10 @@ We test normal kernels on **8x B200 + 8x 400Gb/s EFA** with each GPU connected t
 
 |   Type    | FP8 Dispatch #EP | Bottleneck bandwidth| BF16 Dispatch #EP |Bottleneck bandwidth | Combine #EP | Bottleneck bandwidth |
 |:---------:|:------------:|:--------------------:|:-----------:|:--------------------:|:--------------------:|:--------------------:|
-| Internode |      16      |    71 GB/s (RDMA)    |     16      |    81 GB/s (RDMA)    | 16      |    54 GB/s (RDMA)    |
-| Internode |      32      |    57 GB/s (RDMA)    |     32      |    60 GB/s (RDMA)    |  32      |    57 GB/s (RDMA)    |
+| Intranode |       8      |    260 GB/s (xGMI)   |     8       |   295 GB/s (xGMI)    |  8       |  304GB/s (xGMI)     |
+| Internode |      16      |    74 GB/s (RDMA)    |     16      |    82 GB/s (RDMA)    |  16      |   78 GB/s (RDMA)    |
+| Internode |      32      |    60 GB/s (RDMA)    |     32      |    61 GB/s (RDMA)    |  32      |   60 GB/s (RDMA)    |
+| Internode |      64      |    52 GB/s (RDMA)    |     32      |    53 GB/s (RDMA)    |  64      |   51 GB/s (RDMA)    |
 
 #### On AMD MI300X with Broadcom Thor2
 

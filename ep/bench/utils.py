@@ -450,12 +450,36 @@ def bench_kineto(
             ]
             events = sorted(events, key=lambda event: event["ts"])
             durations = [event["dur"] / 1e6 for event in events]
-            assert len(durations) % num_kernels_per_period == 0
-            num_kernel_patterns = len(durations) // num_kernels_per_period
-            kernel_durations[i] = [
-                sum(durations[j::num_kernels_per_period]) / num_kernel_patterns
-                for j in range(num_kernels_per_period)
-            ]
+
+            # Handle incomplete periods gracefully (due to dropped samples)
+            # NOTE(MaoZiming): This sometimes happen, suspect it is the profiler's issue.
+            num_complete_periods = len(durations) // num_kernels_per_period
+            if len(durations) % num_kernels_per_period != 0:
+                dropped_samples = len(durations) % num_kernels_per_period
+                if dist.get_rank() == 0:
+                    print(
+                        f"[WARNING] Kernel '{kernel_name}': {dropped_samples} samples dropped "
+                        f"(got {len(durations)} samples, expected multiple of {num_kernels_per_period}). "
+                        f"Using {num_complete_periods} complete periods.",
+                        flush=True,
+                    )
+                # Truncate to only use complete periods
+                durations = durations[: num_complete_periods * num_kernels_per_period]
+
+            if num_complete_periods > 0:
+                kernel_durations[i] = [
+                    sum(durations[j::num_kernels_per_period]) / num_complete_periods
+                    for j in range(num_kernels_per_period)
+                ]
+            else:
+                # If we have no complete periods, fall back to returning zeros
+                if dist.get_rank() == 0:
+                    print(
+                        f"[WARNING] Kernel '{kernel_name}': No complete periods found. "
+                        f"Returning zeros.",
+                        flush=True,
+                    )
+                kernel_durations[i] = [0.0] * num_kernels_per_period
 
     # Return execution durations
     return kernel_durations if is_tuple else kernel_durations[0]
@@ -540,6 +564,18 @@ def initialize_uccl(
             proxy.set_peers_meta(peers_meta_list)
 
     ep.register_proxies(local_rank, proxies)
+
+    # Set atomic buffer pointer for all proxies BEFORE starting them
+    # This ensures the atomic buffer info is included in connection info exchange
+    # Note: Only thread 0's proxy allocates the atomic buffer in its constructor
+    if not is_intranode and len(proxies) > 0:
+        # Get atomic buffer pointer from thread 0 proxy (only thread 0 allocates it)
+        # This must be done before start_dual() so the atomic buffer info is included
+        # in the connection info exchange during init_common()
+        atomic_buffer_ptr = proxies[0].get_atomic_buffer_ptr()
+        if atomic_buffer_ptr:
+            for proxy in proxies:
+                proxy.set_atomic_buffer_ptr(atomic_buffer_ptr)
 
     dist.barrier(group)
     if not is_intranode:

@@ -385,13 +385,13 @@ class EpollServer {
             pkt.append(reinterpret_cast<char const*>(&len), sizeof(len));
             pkt.append(response);
 
-            std::cout << "Sending response: len=" << response.size()
-                      << " total_with_header=" << pkt.size() << "\n";
+            LOG(INFO) << "Sending response: len=" << response.size()
+                      << " total_with_header=" << pkt.size();
 
             ssize_t s = try_send(conn.fd, pkt.data(), pkt.size());
             if (s < 0) {
               // fatal send error -> close connection
-              std::cerr << "Error sending response on fd=" << conn.fd << "\n";
+              LOG(ERROR) << "Error sending response on fd=" << conn.fd;
               remove_connection(conn.fd);
               return;
             } else if ((size_t)s < pkt.size()) {
@@ -452,7 +452,7 @@ class EpollServer {
     if (epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr) < 0) {
       // ignore
     }
-    std::cout << "Closed connection fd=" << fd << "\n";
+    LOG(INFO) << "Closed connection fd=" << fd;
   }
 
  private:

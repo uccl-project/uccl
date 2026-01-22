@@ -436,7 +436,7 @@ void notify_dispatch(
   break
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  constexpr int kNumThreads = 1024;
+  constexpr int kNumThreads = MAX_NTHREADS;
 #else
   constexpr int kNumThreads = 512;
 #endif
@@ -455,6 +455,8 @@ void notify_dispatch(
   EP_HOST_ASSERT((nvl_clean_meta.first + nvl_clean_meta.second) * sizeof(int) <=
                  static_cast<size_t>(num_nvl_bytes));
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  // NOTE(zhuang12): num_nvl_bytes and num_rdma_bytes may exceed the int32_t
+  // range, due to use larger channel size
   EP_HOST_ASSERT(num_rdma_bytes < std::numeric_limits<int64_t>::max());
   EP_HOST_ASSERT(num_nvl_bytes < std::numeric_limits<int64_t>::max());
 #else
@@ -734,7 +736,7 @@ __global__ void __launch_bounds__(
       // Read RDMA rank existence
       uint64_t is_token_in_rank_uint64 = 0;
       if (lane_id < kNumRDMARanks) {
-        is_token_in_rank_uint64 = __ldg(reinterpret_cast<uint64_t const*>(
+        is_token_in_rank_uint64 = *(reinterpret_cast<uint64_t const*>(
             is_token_in_rank + token_idx * num_ranks +
             lane_id * NUM_MAX_NVL_PEERS));
       }
@@ -752,8 +754,8 @@ __global__ void __launch_bounds__(
         // Wait the remote buffer to be released
         while (rdma_tail_idx - cached_rdma_channel_head >=
                num_max_rdma_chunked_recv_tokens) {
-          cached_rdma_channel_head = static_cast<int>(__atomic_load_n(
-              rdma_channel_head.buffer(lane_id), __ATOMIC_SEQ_CST));
+          cached_rdma_channel_head = static_cast<int>(
+              ld_acquire_sys_global(rdma_channel_head.buffer(lane_id)));
 
           // Timeout check
           if (clock64() - start_time >= NUM_TIMEOUT_CYCLES) {
@@ -1039,10 +1041,20 @@ __global__ void __launch_bounds__(
               num_bytes_per_msg,
               translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
               channel_id,  // NOTE(MaoZiming): use channel_id for rb.
-              lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false, -1,
+              lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false,
+          // NOTE(MaoZiming): for AMD GPUs, we directly send a subsequent RDMA
+          // to update the tail. For other GPUs and EFA NICs, we use the
+          // CPU-emulated atomics, allow us to piggyback the atomic operation
+          // with the RDMA send.
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+              -1,
+#else
+              -1,
               reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)) -
                   reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
-              num_tokens_to_issue);
+              num_tokens_to_issue
+#endif
+          );
         } else {
           // Lighter fence for local RDMA rank
           memory_fence();
@@ -1060,7 +1072,13 @@ __global__ void __launch_bounds__(
               translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
               channel_id,  // NOTE(MaoZiming): use channel_id for rb.
               dst_rdma_rank == rdma_rank, d2h_channel_addrs,
-              num_d2h_channel_addrs, false, -1, true);
+              num_d2h_channel_addrs, false, -1,
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+              false
+#else
+              true
+#endif
+          );
         }
         __syncwarp();
       }
@@ -1166,13 +1184,8 @@ __global__ void __launch_bounds__(
         if (__shfl_sync(WARP_MASK, num_tokens_to_recv_from_rdma,
                         src_rdma_rank) > 0) {
           if (lane_id == src_rdma_rank)
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-            cached_rdma_channel_tail = static_cast<int>(__atomic_load_n(
-                rdma_channel_tail.buffer(src_rdma_rank), __ATOMIC_SEQ_CST));
-#else
             cached_rdma_channel_tail = static_cast<int>(
                 ld_acquire_sys_global(rdma_channel_tail.buffer(src_rdma_rank)));
-#endif
           if (__shfl_sync(WARP_MASK,
                           cached_rdma_channel_tail > cached_rdma_channel_head,
                           src_rdma_rank))
@@ -1192,9 +1205,6 @@ __global__ void __launch_bounds__(
           trap();
         }
       }
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-      memory_fence();
-#endif
       auto src_rdma_head =
           __shfl_sync(WARP_MASK, cached_rdma_channel_head, src_rdma_rank);
       auto src_rdma_tail =
@@ -1263,13 +1273,8 @@ __global__ void __launch_bounds__(
       // Move tail index
       __syncwarp();
       if (lane_id == 0)
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-        __atomic_store_n(nvl_channel_tail.buffer(), cached_nvl_channel_tail,
-                         __ATOMIC_RELEASE);
-#else
         st_release_sys_global(nvl_channel_tail.buffer(),
                               cached_nvl_channel_tail);
-#endif
     }
     // Retired
     __syncwarp();
@@ -1666,6 +1671,8 @@ __global__ void cached_notify(
 
     // Iterate in reverse order
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    // NOTE(zhuang12): for support channel numbers >= WARP_SIZE, we need to
+    // iterate over the channels in a warp-wise manner
     int remain_warp_id = warp_id;
     for (int i = 0; i < num_channels; i += num_warps) {
       warp_id = i * num_warps + remain_warp_id;
@@ -1704,6 +1711,8 @@ __global__ void cached_notify(
     EP_STATIC_ASSERT(NUM_MAX_NVL_PEERS <= WARP_SIZE, "Too many NVL peers");
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    // NOTE(zhuang12): for support channel numbers >= WARP_SIZE, we need to
+    // iterate over the channels in a warp-wise manner
     int remain_warp_id = warp_id;
     for (int i = 0; i < num_channels; i += num_warps) {
       warp_id = i * num_warps + remain_warp_id;
@@ -1859,6 +1868,8 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
   EP_HOST_ASSERT((nvl_clean_meta.first + nvl_clean_meta.second) * sizeof(int) <=
                  static_cast<size_t>(num_nvl_bytes));
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  // NOTE(zhuang12): num_nvl_bytes and num_rdma_bytes may exceed the int64_t
+  // range, due to use larger channel size
   EP_HOST_ASSERT(num_rdma_bytes < std::numeric_limits<int64_t>::max());
   EP_HOST_ASSERT(num_nvl_bytes < std::numeric_limits<int64_t>::max());
 #else
@@ -2479,7 +2490,12 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
       lane_id < NUM_MAX_NVL_PEERS ? (forwarder_nvl_head[warp_id][lane_id] = 0)
                                   : 0;
       lane_id == 0 ? (forwarder_retired[warp_id] = false) : false;
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+      // no need to sync_forwarder_smem for AMD GPUs, because no coordinator
+      // warp anymore
+#else
       sync_forwarder_smem();
+#endif
 
       // Get count and cached head
       int cached_nvl_channel_tail_idx = 0;
@@ -2617,6 +2633,9 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                 ? (forwarder_nvl_head[warp_id][lane_id] = -expected_head - 1)
                 : (forwarder_nvl_head[warp_id][lane_id] = expected_head + 1);
         }
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+        if (sub_warp_id == 0) forwarder_coordinator();
+#endif
         sync_large_warp();
 
         // Issue RDMA send
@@ -2640,10 +2659,14 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                                                          nvl_rank),
                 channel_id,  // NOTE(MaoZiming): use channel_id for rb.
                 lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false, -1,
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#else
                 reinterpret_cast<uint64_t>(
                     rdma_channel_tail.buffer(rdma_rank)) -
                     reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
-                num_chunked_tokens);
+                num_chunked_tokens
+#endif
+            );
           } else {
             memory_fence();
           }
@@ -2659,7 +2682,13 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                                                          nvl_rank),
                 channel_id,  // NOTE(MaoZiming): use warp_id for rb.
                 dst_rdma_rank == rdma_rank, d2h_channel_addrs,
-                num_d2h_channel_addrs, false, -1, true);
+                num_d2h_channel_addrs, false, -1,
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+                false
+#else
+                true
+#endif
+            );
           }
         }
       }
@@ -2677,6 +2706,29 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
       int last_rdma_head = 0;
+      auto receiver_corordinator = [&]() {
+        int dst_rdma_rank = lane_id < kNumRDMARanks ? lane_id : 0;
+        int min_head = std::numeric_limits<int>::max();
+#pragma unroll
+        for (int i = 0; i < kNumRDMAReceivers; ++i)
+          if (not rdma_receiver_retired[i])
+            min_head = min(min_head, rdma_receiver_rdma_head[i][dst_rdma_rank]);
+        if (min_head != std::numeric_limits<int>::max() and
+            min_head >= last_rdma_head + num_max_rdma_chunked_send_tokens and
+            lane_id < kNumRDMARanks) {
+          uccl::nvshmemi_ibgda_amo_nonfetch_add</*use_normal_mode=*/true>(
+              reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
+              reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
+              min_head - last_rdma_head,
+              translate_dst_rdma_rank<kLowLatencyMode>(dst_rdma_rank, nvl_rank),
+              channel_id +
+                  num_channels,  // NOTE(MaoZiming): use channel_id for rb.
+              dst_rdma_rank == rdma_rank, d2h_channel_addrs,
+              num_d2h_channel_addrs, false, -1, false);
+          last_rdma_head = min_head;
+        }
+      };
+
       // no need to sync_rdma_receiver_smem for AMD GPUs, because no coordinator
       // warp anymore
 #else
@@ -2704,29 +2756,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
               : (rdma_receiver_rdma_head[warp_id][lane_id] = expected_head);
         }
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-        sync_rdma_receiver_smem();
-        if (warp_id == NUM_MAX_NVL_PEERS) {
-          int min_head = std::numeric_limits<int>::max();
-          int warp_dst_rdma_rank = lane_id < kNumRDMARanks ? lane_id : 0;
-          for (int i = 0; i < kNumRDMAReceivers; ++i)
-            min_head =
-                min(min_head, rdma_receiver_rdma_head[i][warp_dst_rdma_rank]);
-          if (min_head != std::numeric_limits<int>::max() and
-              min_head >= last_rdma_head + num_max_rdma_chunked_send_tokens and
-              lane_id < kNumRDMARanks) {
-            uccl::nvshmemi_ibgda_amo_nonfetch_add</*use_normal_mode=*/true>(
-                reinterpret_cast<uint64_t>(rdma_channel_head.buffer(rdma_rank)),
-                reinterpret_cast<uint64_t>(original_atomic_buffer_ptr),
-                min_head - last_rdma_head,
-                translate_dst_rdma_rank<kLowLatencyMode>(warp_dst_rdma_rank,
-                                                         nvl_rank),
-                channel_id +
-                    num_channels,  // NOTE(MaoZiming): use channel_id for rb.
-                warp_dst_rdma_rank == rdma_rank, d2h_channel_addrs,
-                num_d2h_channel_addrs, false, -1, false);
-            last_rdma_head = min_head;
-          }
-        }
+        if (warp_id == 0) receiver_corordinator();
 #endif
 
         // Wait lanes to be ready

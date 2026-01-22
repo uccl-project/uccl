@@ -355,7 +355,9 @@ def test_main(
                         combined_x.float() - bias_0.float() - bias_1.float()
                     ) / is_token_in_rank.sum(dim=1).unsqueeze(1)
                     ref_x = x_pure_rand if current_x is x_pure_rand else x
-                    assert calc_diff(check_x, ref_x) < 5e-6
+                    assert (
+                        calc_diff(check_x, ref_x) < 5e-6
+                    ), f"{calc_diff(check_x, ref_x)}"
                     if with_topk:
                         check_topk_weights = (
                             combined_topk_weights
@@ -370,7 +372,9 @@ def test_main(
                             if current_x is x_pure_rand
                             else topk_weights
                         )
-                        assert calc_diff(check_topk_weights, ref_topk_weights) < 1e-9
+                        assert (
+                            calc_diff(check_topk_weights, ref_topk_weights) < 1e-9
+                        ), f"{calc_diff(check_topk_weights, ref_topk_weights)}"
 
                     hash_value += hash_tensor(recv_x)
 

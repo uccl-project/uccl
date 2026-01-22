@@ -6,7 +6,8 @@
 #include <cstring>
 #include <errno.h>
 
-#define GID_INDEX 0
+#define GID_INDEX_EFA 0
+#define LID_EFA 0
 #define MAX_INLINE_DATA 0
 #define SERVICE_LEVEL 8
 #define QKEY 0x15695
@@ -49,7 +50,7 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
 
   struct efadv_qp_init_attr efa_attr = {};
   efa_attr.driver_qp_type = EFADV_QP_DRIVER_TYPE_SRD;
-  efa_attr.sl = SERVICE_LEVEL;
+  efa_attr.sl = get_sl_from_env(SERVICE_LEVEL);
   efa_attr.flags = 0;
   // If set, Receive WRs will not be consumed for RDMA write with imm.
   efa_attr.flags |= EFADV_QP_FLAGS_UNSOLICITED_WRITE_RECV;
@@ -79,8 +80,9 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   assert(ibv_modify_qp(*qp, &attr,
                        IBV_QP_STATE | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN) == 0);
 
-  local_meta->gid = ctx->queryGid(GID_INDEX);
+  local_meta->gid = ctx->queryGid(get_gid_index_from_env(GID_INDEX_EFA));
   local_meta->qpn = (*qp)->qp_num;
+  local_meta->lid = LID_EFA;
 }
 
 inline void EFAChannelImpl::connectQP(struct ibv_qp* qp,

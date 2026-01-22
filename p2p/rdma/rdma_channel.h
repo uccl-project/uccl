@@ -6,19 +6,19 @@
 #include "util/util.h"
 #include <glog/logging.h>
 
-#ifdef UCCL_P2P_USE_IB
-#include "providers/ib/rdma_channel_impl_ib.h"
-#else
+#ifdef UCCL_P2P_USE_EFA
 #include "providers/efa/rdma_channel_impl_efa.h"
+#else
+#include "providers/ib/rdma_channel_impl_ib.h"
 #endif
 
 // Factory function implementation (inline, defined after including impl
 // headers)
 inline std::unique_ptr<RDMAChannelImpl> createRDMAChannelImpl() {
-#ifdef UCCL_P2P_USE_IB
-  return std::make_unique<IBChannelImpl>();
-#else
+#ifdef UCCL_P2P_USE_EFA
   return std::make_unique<EFAChannelImpl>();
+#else
+  return std::make_unique<IBChannelImpl>();
 #endif
 }
 
@@ -49,17 +49,17 @@ class RDMAChannel {
         remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)),
         impl_(createRDMAChannelImpl()) {
     initQP();
-    ah_ = ctx_->createAH(remote_meta_->gid);
-    impl_->connectQP(qp_, ctx_, *remote_meta_);
-    UCCL_LOG_EP << "RDMAChannel connected to remote qpn=" << remote_meta.qpn;
+    establishChannel(remote_meta);
   }
 
   RDMAChannel(RDMAChannel const&) = delete;
   RDMAChannel& operator=(RDMAChannel const&) = delete;
 
-  void connect(ChannelMetaData const& remote_meta) {
+  void establishChannel(ChannelMetaData const& remote_meta) {
     remote_meta_ = std::make_shared<ChannelMetaData>(remote_meta);
+#ifdef UCCL_P2P_USE_EFA
     ah_ = ctx_->createAH(remote_meta_->gid);
+#endif
     impl_->connectQP(qp_, ctx_, *remote_meta_);
     UCCL_LOG_EP << "RDMAChannel connected to remote qpn=" << remote_meta.qpn;
   }
