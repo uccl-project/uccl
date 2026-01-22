@@ -191,3 +191,12 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg);
  */
 int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t* mr,
                                     void const* data, size_t size, char* fifo_buf);
+
+/**
+ * Update the address and size in a FIFO item.
+ * @param fifo_buf      Pointer to the FIFO item buffer (64 bytes).
+ * @param remote_addr   New remote address to set.
+ * @param size          New size to set.
+ * @return              0 on success, -1 on failure.
+ */
+int uccl_engine_update_fifo(char* fifo_buf, uint64_t remote_addr, uint32_t size);

@@ -252,6 +252,19 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
              : -1;
 }
 
+int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
+                            std::vector<void*> dst_v,
+                            std::vector<size_t> size_v, std::vector<FifoItem> fifo_items,
+                            int num_iovs, uint64_t* transfer_id) {
+  if (!conn || num_iovs <= 0) return -1;
+
+  return conn->engine->endpoint->readv_async(conn->conn_id, mr_ids, dst_v, size_v,
+                                          fifo_items, num_iovs, transfer_id)
+          ? 0
+          : -1;
+
+}
+
 int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
                       size_t size, uint64_t* transfer_id) {
   if (!conn || !mr || !data) return -1;
@@ -280,6 +293,18 @@ int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t* mr, void const* data,
 #endif
 }
 
+int uccl_engine_write_rc_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
+                            std::vector<void*> dst_v,
+                            std::vector<size_t> size_v, std::vector<FifoItem> fifo_items,
+                            int num_iovs, uint64_t* transfer_id) {
+  if (!conn || num_iovs <= 0) return -1;
+
+  return conn->engine->endpoint->writev_async(conn->conn_id, mr_ids, dst_v, size_v,
+                                          fifo_items, num_iovs, transfer_id)
+          ? 0
+          : -1;
+
+}
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t* mr, void* data,
                      size_t data_size) {
   if (!conn || !mr || !data) return -1;
@@ -481,4 +506,15 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
   } catch (...) {
     return -1;
   }
+}
+
+int uccl_engine_update_fifo(char* fifo_buf, uint64_t remote_addr, uint32_t size) {
+  if (!fifo_buf) return -1;
+
+  uint64_t *fifo_addr = reinterpret_cast<uint64_t *>(fifo_buf);
+  uint32_t *fifo_size = reinterpret_cast<uint32_t *>(fifo_buf + 8);
+  *fifo_addr = remote_addr;
+  *fifo_size = size;
+
+  return 0;
 }
