@@ -484,11 +484,11 @@ class NICEndpoint {
                     std::string const& client_ip, int client_port) {
     if (input.size() >= sizeof(NotifyMsg)) {
       NotifyMsg const* notify_msg = reinterpret_cast<NotifyMsg const*>(input.data());
-      if (notify_msg->magic == NOTIFY_MSG_MAGIC ) {
+      if (notify_msg->magic == NOTIFY_MSG_MAGIC) {
         std::lock_guard<std::mutex> lock(notify_mutex);
         notify_list.push_back(*notify_msg);
         output = "";
-        LOG(INFO) << "Received notification from" << notify_msg->name
+        LOG(INFO) << "process_meta: Received notification from" << notify_msg->name
                   << " msg=" << notify_msg->msg;
         return;
       }
@@ -544,15 +544,14 @@ class NICEndpoint {
                   << ", gpu_id=" << meta.gpu_id;
       }
 
-      // Connect back to connector's OOB server for bidirectional notifications
       if (meta.oob_port > 0) {
-        std::string back_conn_key = oob_client_->connect_to_server(client_ip, meta.oob_port);
-        if (!back_conn_key.empty()) {
-          rank_oob_conn_keys_[actual_rank_id] = back_conn_key;
-          LOG(INFO) << "Established back-connection to " << client_ip << ":" << meta.oob_port
-                    << " for rank_id=" << actual_rank_id << ", conn_key=" << back_conn_key;
+        std::string rev_conn_key = oob_client_->connect_to_server(client_ip, meta.oob_port);
+        if (!rev_conn_key.empty()) {
+          rank_oob_conn_keys_[actual_rank_id] = rev_conn_key;
+          LOG(INFO) << "Established reverse connection to " << client_ip << ":" << meta.oob_port
+                    << " for rank_id=" << actual_rank_id << ", conn_key=" << rev_conn_key;
         } else {
-          LOG(WARNING) << "Failed to establish back-connection to " << client_ip << ":" << meta.oob_port;
+          LOG(WARNING) << "Failed to establish reverse connection to " << client_ip << ":" << meta.oob_port;
         }
       }
     } else {

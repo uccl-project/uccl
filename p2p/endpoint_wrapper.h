@@ -21,7 +21,11 @@ static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
   auto req = std::make_shared<RDMASendRequest>(local_mem, remote_mem);
   req->to_rank_id = conn->uccl_conn_id_.flow_id;
 
-  req->send_type = SendType::Write;
+  req->send_type = (ureq->type == ReqType::ReqRead) ? SendType::Read : SendType::Write;
+  std::cout << "DEBUG set_request: ureq->type=" << ureq->type 
+            << " (ReqRead=" << ReqType::ReqRead << ")"
+            << " send_type=" << static_cast<int>(req->send_type) 
+            << " (Read=" << static_cast<int>(SendType::Read) << ")" << std::endl;
   ureq->engine_idx = obj->writeOrRead(req);
   ureq->n = conn->uccl_conn_id_.flow_id;
 
