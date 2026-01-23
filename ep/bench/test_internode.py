@@ -59,6 +59,24 @@ except ImportError as exc:
     raise
 
 
+def compute_buffer_sizes(num_sms: int, hidden: int, num_ranks: int) -> tuple[int, int]:
+    """Compute NVLink and RDMA buffer sizes dynamically based on workload parameters."""
+    hidden_bytes = hidden * 2  # BF16 = 2 bytes
+    config = Config(num_sms, 8, 512, 16, 512)  # nvl_chunk=512, rdma_chunk=512
+
+    def align_buffer(size: int, margin: float = 1.2, alignment: int = 128) -> int:
+        """Apply safety margin and align to NUM_BUFFER_ALIGNMENT_BYTES."""
+        return ((int(size * margin) + alignment - 1) // alignment) * alignment
+
+    num_nvlink_bytes = align_buffer(
+        config.get_nvl_buffer_size_hint(hidden_bytes, num_ranks)
+    )
+    num_rdma_bytes = align_buffer(
+        config.get_rdma_buffer_size_hint(hidden_bytes, num_ranks)
+    )
+    return num_nvlink_bytes, num_rdma_bytes
+
+
 # noinspection PyShadowingNames
 def test_main(
     args: argparse.Namespace,
@@ -525,14 +543,22 @@ def test_loop(
 
     if torch.version.cuda:
         num_sms = 24
-        num_nvlink_bytes = int(2e9)
-        num_rdma_bytes = int(1e9)
+        num_nvlink_bytes, num_rdma_bytes = compute_buffer_sizes(
+            num_sms, args.hidden, num_ranks
+        )
     elif torch.version.hip:
+        # TODO: Apply dynamic buffer sizing for HIP once validated
         num_sms = 64 if num_nodes < 4 else 32
         num_nvlink_bytes = int(2e9)
         num_rdma_bytes = int(1e9)
     else:
         raise ValueError("Unsupported platform")
+
+    if local_rank == 0:
+        print(
+            f"[buffer] num_nvlink_bytes={num_nvlink_bytes / 1e9:.2f} GB, num_rdma_bytes={num_rdma_bytes / 1e9:.2f} GB",
+            flush=True,
+        )
 
     num_qps_per_rank = max(
         num_sms,

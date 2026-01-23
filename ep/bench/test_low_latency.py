@@ -259,7 +259,7 @@ def test_main(
                                                 recv_x[:, -1], recv_src_info.view(-1)
                                             )
                                             < 0.007
-                                        ), f"{calc_diff(recv_x[:, -1], recv_src_info.view(-1))}"
+                                        )
                                     else:
                                         assert (
                                             recv_x[:, -128:]
@@ -410,7 +410,6 @@ def test_main(
             return_recv_hook=return_recv_hook,
         )
         large_gemm_with_hook(hook) if return_recv_hook else None
-        dist.barrier(group=group)
 
     print("✓ All correctness tests passed!", flush=True)
 
@@ -437,7 +436,6 @@ def test_main(
     )
     # Separate profiling
     for return_recv_hook in (False, True):
-        group.barrier()
         dispatch_t, combine_t = bench_kineto(
             partial(test_func, return_recv_hook=return_recv_hook),
             kernel_names=("dispatch", "combine"),
@@ -445,6 +443,9 @@ def test_main(
             suppress_kineto_output=True,
             num_kernels_per_period=2 if return_recv_hook else 1,
         )
+        # kineto profiling failed.
+        if dispatch_t == 0 or combine_t == 0:
+            continue
         if not return_recv_hook:
             print(
                 f"[rank {rank}] Dispatch bandwidth: {num_dispatch_comm_bytes / 1e9 / dispatch_t:.2f} GB/s, avg_t={dispatch_t * 1e6:.2f} us | "
