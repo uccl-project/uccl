@@ -41,6 +41,12 @@ PYBIND11_MODULE(p2p, m) {
 
   m.def("get_oob_ip", &uccl::get_oob_ip, "Get the OOB IP address");
 
+  // Register XferHandle type
+  py::class_<XferHandle, std::shared_ptr<XferHandle>>(m, "XferHandle")
+      .def_readonly("conn_id", &XferHandle::conn_id)
+      .def_readonly("op_name", &XferHandle::op_name)
+      .def_readonly("transfer_id", &XferHandle::transfer_id);
+
   // Endpoint class binding
   py::class_<Endpoint>(m, "Endpoint")
       .def(py::init([](uint32_t local_gpu_idx, uint32_t num_cpus) {
@@ -197,6 +203,7 @@ PYBIND11_MODULE(p2p, m) {
               py::dict desc_dict;
               desc_dict["addr"] = reinterpret_cast<uint64_t>(desc.addr);
               desc_dict["size"] = desc.size;
+              desc_dict["mr_id"] = desc.mr_id;
               desc_dict["lkeys"] = py::cast(desc.lkeys);
               desc_dict["rkeys"] = py::cast(desc.rkeys);
               result.append(desc_dict);
@@ -262,6 +269,7 @@ PYBIND11_MODULE(p2p, m) {
               py::dict desc_dict;
               desc_dict["addr"] = reinterpret_cast<uint64_t>(desc.addr);
               desc_dict["size"] = desc.size;
+              desc_dict["mr_id"] = desc.mr_id;
               desc_dict["lkeys"] = py::cast(desc.lkeys);
               desc_dict["rkeys"] = py::cast(desc.rkeys);
               result.append(desc_dict);
@@ -288,6 +296,7 @@ PYBIND11_MODULE(p2p, m) {
               local_desc.addr = reinterpret_cast<void const*>(
                   py::cast<uint64_t>(local_desc_dict["addr"]));
               local_desc.size = py::cast<size_t>(local_desc_dict["size"]);
+              local_desc.mr_id = py::cast<uint64_t>(local_desc_dict["mr_id"]);
               local_desc.lkeys =
                   py::cast<std::vector<uint32_t>>(local_desc_dict["lkeys"]);
               local_desc.rkeys =
@@ -297,6 +306,9 @@ PYBIND11_MODULE(p2p, m) {
               remote_desc.addr = reinterpret_cast<void const*>(
                   py::cast<uint64_t>(remote_desc_dict["addr"]));
               remote_desc.size = py::cast<size_t>(remote_desc_dict["size"]);
+              // Remote desc doesn't need mr_id for transfer, but we can set it
+              // to 0
+              remote_desc.mr_id = 0;
               remote_desc.lkeys =
                   py::cast<std::vector<uint32_t>>(remote_desc_dict["lkeys"]);
               remote_desc.rkeys =
