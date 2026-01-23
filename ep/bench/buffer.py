@@ -88,7 +88,10 @@ class Buffer:
         else:
             device_index = torch.cuda.current_device()
 
-        if torch.version.cuda:
+        # Prefer HIP detection first: ROCm builds may also set torch.version.cuda.
+        if torch.version.hip:
+            self.scratch = ep.get_rdma_buffer(num_rdma_bytes, device_index)
+        elif torch.version.cuda:
             self.scratch = torch.zeros(
                 num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
             )
@@ -521,7 +524,7 @@ class Buffer:
             4: Config(Buffer.num_sms, 6, 256, 6, 128),
             8: Config(Buffer.num_sms, 6, 256, 6, 128),
             16: Config(Buffer.num_sms, 36, 288, 20, 128),
-            24: Config(Buffer.num_sms, 8, 288, 32, 128),
+            24: Config(Buffer.num_sms, 32, 288, 8, 128),
             32: Config(Buffer.num_sms, 32, 288, 32, 128),
             64: Config(Buffer.num_sms, 20, 288, 28, 128),
             128: Config(Buffer.num_sms, 20, 560, 32, 128),

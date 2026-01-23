@@ -173,6 +173,7 @@ def test_main(
 
     # Config
     # This seems really high.
+    print(f"num_ranks = {num_ranks}")
     rdma_buffer_size, nvl_buffer_size = 128, (720 if num_ranks in (24, 48, 96, 144, 160) else 512)
     config = Config(num_sms, 8, nvl_buffer_size, 16, rdma_buffer_size)
 
@@ -521,12 +522,14 @@ def test_loop(
     if args.test_ll_compatibility:
         ll_num_tokens, ll_hidden, ll_num_experts, ll_num_topk = 16, 5120, 256, 9
 
-    if torch.version.cuda:
-        num_sms = 24
-        num_nvlink_bytes = int(2e9)
-        num_rdma_bytes = int(1e9)
-    elif torch.version.hip:
+    # Prefer HIP detection first: ROCm builds may also set torch.version.cuda.
+    if torch.version.hip:
         num_sms = 64 if num_nodes < 4 else 32
+        # EP=24 needs large NVLink buffers on ROCm; 2e9 can be insufficient.
+        num_nvlink_bytes = int(6e9)
+        num_rdma_bytes = int(2e9)
+    elif torch.version.cuda:
+        num_sms = 24
         num_nvlink_bytes = int(2e9)
         num_rdma_bytes = int(1e9)
     else:

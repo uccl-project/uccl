@@ -50,18 +50,28 @@ __host__ __device__ __forceinline__ int get_num_bytes_per_token(
             sizeof(int4)));
 }
 
-__host__ __device__ __forceinline__ std::pair<int, int> get_rdma_clean_meta(
+__host__ __device__ __forceinline__ std::pair<int64_t, int64_t>
+get_rdma_clean_meta(
     int hidden_int4, int num_scales, int num_topk_idx, int num_topk_weights,
     int num_rdma_ranks, int num_rdma_recv_buffer_tokens, int num_channels) {
-  // Return `int32_t` offset and count to clean
-  return {(get_num_bytes_per_token(hidden_int4, num_scales, num_topk_idx,
-                                   num_topk_weights) *
-           num_rdma_recv_buffer_tokens * num_rdma_ranks * 2 * num_channels) /
-              sizeof(int),
-          (NUM_MAX_NVL_PEERS * 2 + 4) * num_rdma_ranks * 2 * num_channels};
+  // Return offset/count (in int32 units) to clean.
+  // NOTE: offset can exceed int32 when buffers are >2GB (e.g. HIP, large NVLink
+  // buffers), so keep it int64_t to avoid overflow.
+  int64_t const bytes_per_token = static_cast<int64_t>(get_num_bytes_per_token(
+      hidden_int4, num_scales, num_topk_idx, num_topk_weights));
+  int64_t const total_bytes =
+      bytes_per_token * static_cast<int64_t>(num_rdma_recv_buffer_tokens) *
+      static_cast<int64_t>(num_rdma_ranks) * 2LL *
+      static_cast<int64_t>(num_channels);
+  int64_t const offset_int = total_bytes / static_cast<int64_t>(sizeof(int));
+  int64_t const count_int = static_cast<int64_t>(NUM_MAX_NVL_PEERS * 2 + 4) *
+                            static_cast<int64_t>(num_rdma_ranks) * 2LL *
+                            static_cast<int64_t>(num_channels);
+  return {offset_int, count_int};
 }
 
-__host__ __device__ __forceinline__ std::pair<int, int> get_nvl_clean_meta(
+__host__ __device__ __forceinline__ std::pair<int64_t, int64_t>
+get_nvl_clean_meta(
     int hidden_int4, int num_scales, int num_topk_idx, int num_topk_weights,
     int num_rdma_ranks, int num_nvl_ranks, int num_nvl_recv_buffer_tokens,
     int num_channels, bool is_dispatch) {
@@ -69,14 +79,20 @@ __host__ __device__ __forceinline__ std::pair<int, int> get_nvl_clean_meta(
   EP_STATIC_ASSERT(sizeof(SourceMeta) % sizeof(int) == 0,
                    "Invalid size of `SourceMeta`");
 
-  return {
-      (num_nvl_recv_buffer_tokens *
-       get_num_bytes_per_token(hidden_int4, num_scales, num_topk_idx,
-                               num_topk_weights) *
-       num_nvl_ranks * num_channels) /
-          sizeof(int),
-      num_nvl_ranks * (2 * num_rdma_ranks + 2) * num_channels,
-  };
+  // NOTE: offset can exceed int32 when buffers are >2GB (e.g. HIP, large NVLink
+  // buffers), so keep it int64_t to avoid overflow.
+  int64_t const bytes_per_token = static_cast<int64_t>(get_num_bytes_per_token(
+      hidden_int4, num_scales, num_topk_idx, num_topk_weights));
+  int64_t const total_bytes =
+      static_cast<int64_t>(num_nvl_recv_buffer_tokens) * bytes_per_token *
+      static_cast<int64_t>(num_nvl_ranks) *
+      static_cast<int64_t>(num_channels);
+  int64_t const offset_int = total_bytes / static_cast<int64_t>(sizeof(int));
+  int64_t const count_int =
+      static_cast<int64_t>(num_nvl_ranks) *
+      static_cast<int64_t>(2 * num_rdma_ranks + 2) *
+      static_cast<int64_t>(num_channels);
+  return {offset_int, count_int};
 }
 
 template <bool kLowLatencyMode>
@@ -96,8 +112,8 @@ __global__ void notify_dispatch(
     int const* num_tokens_per_expert, int* moe_recv_expert_counter_mapped,
     int num_experts, bool const* is_token_in_rank, int num_tokens,
     int num_worst_tokens, int num_channels, int expert_alignment,
-    int const rdma_clean_offset, int const rdma_num_int_clean,
-    int const nvl_clean_offset, int const nvl_num_int_clean,
+    int64_t const rdma_clean_offset, int const rdma_num_int_clean,
+    int64_t const nvl_clean_offset, int const nvl_num_int_clean,
     int* rdma_channel_prefix_matrix, int* recv_rdma_rank_prefix_sum,
     int* gbl_channel_prefix_matrix, int* recv_gbl_rank_prefix_sum,
     void* rdma_buffer_ptr, void** buffer_ptrs, int** barrier_signal_ptrs,
@@ -144,10 +160,11 @@ __global__ void notify_dispatch(
 
     // Clean up for later data dispatch
     EP_DEVICE_ASSERT(rdma_recv_num_tokens_mixed.total_bytes <=
-                     rdma_clean_offset * sizeof(int));
+                     static_cast<size_t>(rdma_clean_offset) * sizeof(int));
 #pragma unroll
     for (int i = thread_id; i < rdma_num_int_clean; i += num_threads)
-      rdma_buffer_ptr_int[rdma_clean_offset + i] = 0;
+      rdma_buffer_ptr_int[static_cast<size_t>(rdma_clean_offset) +
+                          static_cast<size_t>(i)] = 0;
 
     auto atomic_ptr_u64 = reinterpret_cast<uint64_t*>(atomic_buffer_ptr);
     auto rdma_channel_head = SymBuffer<uint64_t, false>(
@@ -245,10 +262,11 @@ __global__ void notify_dispatch(
     EP_DEVICE_ASSERT(nvl_reduced_num_tokens_per_expert.total_bytes +
                          nvl_send_num_tokens_per_rank.total_bytes +
                          nvl_send_num_tokens_per_expert.total_bytes <=
-                     nvl_clean_offset * sizeof(int));
+                     static_cast<size_t>(nvl_clean_offset) * sizeof(int));
 #pragma unroll
     for (int i = thread_id; i < nvl_num_int_clean; i += num_threads)
-      nvl_buffer_ptr_int[nvl_clean_offset + i] = 0;
+      nvl_buffer_ptr_int[static_cast<size_t>(nvl_clean_offset) +
+                         static_cast<size_t>(i)] = 0;
 
     // Reduce number of tokens per expert into the NVL send buffer
     // TODO: may use NVSHMEM reduction
@@ -424,8 +442,9 @@ void notify_dispatch(
                   num_tokens_per_expert, moe_recv_expert_counter_mapped,       \
                   num_experts, is_token_in_rank, num_tokens, num_worst_tokens, \
                   num_channels, expert_alignment, rdma_clean_meta.first,       \
-                  rdma_clean_meta.second, nvl_clean_meta.first,                \
-                  nvl_clean_meta.second, rdma_channel_prefix_matrix,           \
+                  static_cast<int>(rdma_clean_meta.second),                    \
+                  nvl_clean_meta.first, static_cast<int>(nvl_clean_meta.second),\
+                  rdma_channel_prefix_matrix,                                  \
                   recv_rdma_rank_prefix_sum, gbl_channel_prefix_matrix,        \
                   recv_gbl_rank_prefix_sum, rdma_buffer_ptr, buffer_ptrs,      \
                   barrier_signal_ptrs, rank, d2h_channel_addrs,                \
@@ -447,10 +466,28 @@ void notify_dispatch(
   auto nvl_clean_meta = get_nvl_clean_meta(
       hidden_int4, num_scales, num_topk, num_topk, num_rdma_ranks,
       NUM_MAX_NVL_PEERS, num_max_nvl_chunked_recv_tokens, num_channels, true);
-  EP_HOST_ASSERT((rdma_clean_meta.first + rdma_clean_meta.second) *
+  EP_HOST_ASSERT(rdma_clean_meta.first >= 0 && rdma_clean_meta.second >= 0);
+  EP_HOST_ASSERT(nvl_clean_meta.first >= 0 && nvl_clean_meta.second >= 0);
+  EP_HOST_ASSERT(static_cast<size_t>(rdma_clean_meta.first +
+                                     rdma_clean_meta.second) *
                      sizeof(int) <=
                  static_cast<size_t>(num_rdma_bytes));
-  EP_HOST_ASSERT((nvl_clean_meta.first + nvl_clean_meta.second) * sizeof(int) <=
+  if (static_cast<size_t>(nvl_clean_meta.first + nvl_clean_meta.second) *
+          sizeof(int) >
+      static_cast<size_t>(num_nvl_bytes)) {
+    printf(
+        "nvl_clean_meta.first = %lld, nvl_clean_meta.second = %lld, "
+        "num_nvl_bytes = %zu, (nvl_clean_meta.first + nvl_clean_meta.second) * "
+        "sizeof(int) = %zu\n",
+        static_cast<long long>(nvl_clean_meta.first),
+        static_cast<long long>(nvl_clean_meta.second),
+        static_cast<size_t>(num_nvl_bytes),
+        static_cast<size_t>(nvl_clean_meta.first + nvl_clean_meta.second) *
+            sizeof(int));
+  }
+  EP_HOST_ASSERT(static_cast<size_t>(nvl_clean_meta.first +
+                                     nvl_clean_meta.second) *
+                     sizeof(int) <=
                  static_cast<size_t>(num_nvl_bytes));
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   // NOTE(zhuang12): num_nvl_bytes and num_rdma_bytes may exceed the int32_t
@@ -1104,9 +1141,12 @@ __global__ void __launch_bounds__(
           int start_sum = -meta_0 - 1, end_sum = -meta_1 - 1;
           EP_DEVICE_ASSERT(start_sum >= 0 and end_sum >= 0 and
                            end_sum >= start_sum);
-          st_relaxed_sys_global(nvl_channel_prefix_start.buffer() + lane_id,
+          // NOTE: these are written to peer-accessible NVL buffers; use
+          // system-scope release stores so receivers on other GPUs reliably
+          // observe the update.
+          st_release_sys_global(nvl_channel_prefix_start.buffer() + lane_id,
                                 -start_sum - 1);
-          st_relaxed_sys_global(nvl_channel_prefix_end.buffer() + lane_id,
+          st_release_sys_global(nvl_channel_prefix_end.buffer() + lane_id,
                                 -end_sum - 1);
 
           // Save RDMA channel received token count
@@ -1340,10 +1380,12 @@ __global__ void __launch_bounds__(
     int start_offset = 0, end_offset = 0, num_tokens_to_recv;
     auto start_time = clock64();
     while (lane_id < kNumRDMARanks) {
+      // NOTE: these are updated by forwarders on peer GPUs; use system-scope
+      // acquire loads to avoid observing stale zeros.
       start_offset =
-          ld_volatile_global(nvl_channel_prefix_start.buffer() + lane_id);
+          ld_acquire_sys_global(nvl_channel_prefix_start.buffer() + lane_id);
       end_offset =
-          ld_volatile_global(nvl_channel_prefix_end.buffer() + lane_id);
+          ld_acquire_sys_global(nvl_channel_prefix_end.buffer() + lane_id);
       if (start_offset < 0 and end_offset < 0) {
         start_offset = -start_offset - 1, end_offset = -end_offset - 1;
         total_offset += start_offset;
@@ -1589,8 +1631,8 @@ void dispatch(
 
 template <bool kLowLatencyMode, int kNumTMABytesPerWarp>
 __global__ void cached_notify(
-    int const rdma_clean_offset, int const rdma_num_int_clean,
-    int const nvl_clean_offset, int const nvl_num_int_clean,
+    int64_t const rdma_clean_offset, int const rdma_num_int_clean,
+    int64_t const nvl_clean_offset, int const nvl_num_int_clean,
     int* combined_rdma_head, int num_combined_tokens, int num_channels,
     int const* rdma_channel_prefix_matrix, int const* rdma_rank_prefix_sum,
     int* combined_nvl_head, void* rdma_buffer_ptr, void** buffer_ptrs,
@@ -1626,13 +1668,15 @@ __global__ void cached_notify(
     auto rdma_buffer_ptr_int = static_cast<int*>(rdma_buffer_ptr);
 #pragma unroll
     for (int i = thread_id; i < rdma_num_int_clean; i += num_threads)
-      rdma_buffer_ptr_int[rdma_clean_offset + i] = 0;
+      rdma_buffer_ptr_int[static_cast<size_t>(rdma_clean_offset) +
+                          static_cast<size_t>(i)] = 0;
 
     // Clean NVL buffer
     auto nvl_buffer_ptr_int = static_cast<int*>(buffer_ptrs[nvl_rank]);
 #pragma unroll
     for (int i = thread_id; i < nvl_num_int_clean; i += num_threads)
-      nvl_buffer_ptr_int[nvl_clean_offset + i] = 0;
+      nvl_buffer_ptr_int[static_cast<size_t>(nvl_clean_offset) +
+                         static_cast<size_t>(i)] = 0;
 
     auto atomic_ptr_u64 = reinterpret_cast<uint64_t*>(atomic_buffer_ptr);
     auto rdma_channel_head = SymBuffer<uint64_t, false>(
@@ -1859,10 +1903,28 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
       hidden_int4, num_scales, num_topk_idx, num_topk_weights, num_rdma_ranks,
       NUM_MAX_NVL_PEERS, num_max_nvl_chunked_recv_tokens, num_channels,
       is_cached_dispatch);
-  EP_HOST_ASSERT((rdma_clean_meta.first + rdma_clean_meta.second) *
+  EP_HOST_ASSERT(rdma_clean_meta.first >= 0 && rdma_clean_meta.second >= 0);
+  EP_HOST_ASSERT(nvl_clean_meta.first >= 0 && nvl_clean_meta.second >= 0);
+  EP_HOST_ASSERT(static_cast<size_t>(rdma_clean_meta.first +
+                                     rdma_clean_meta.second) *
                      sizeof(int) <=
                  static_cast<size_t>(num_rdma_bytes));
-  EP_HOST_ASSERT((nvl_clean_meta.first + nvl_clean_meta.second) * sizeof(int) <=
+  if (static_cast<size_t>(nvl_clean_meta.first + nvl_clean_meta.second) *
+          sizeof(int) >
+      static_cast<size_t>(num_nvl_bytes)) {
+    printf(
+        "nvl_clean_meta.first = %lld, nvl_clean_meta.second = %lld, "
+        "num_nvl_bytes = %zu, (nvl_clean_meta.first + nvl_clean_meta.second) * "
+        "sizeof(int) = %zu\n",
+        static_cast<long long>(nvl_clean_meta.first),
+        static_cast<long long>(nvl_clean_meta.second),
+        static_cast<size_t>(num_nvl_bytes),
+        static_cast<size_t>(nvl_clean_meta.first + nvl_clean_meta.second) *
+            sizeof(int));
+  }
+  EP_HOST_ASSERT(static_cast<size_t>(nvl_clean_meta.first +
+                                     nvl_clean_meta.second) *
+                     sizeof(int) <=
                  static_cast<size_t>(num_nvl_bytes));
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   // NOTE(zhuang12): num_nvl_bytes and num_rdma_bytes may exceed the int64_t
@@ -1882,12 +1944,13 @@ void cached_notify(int hidden_int4, int num_scales, int num_topk_idx,
   SETUP_LAUNCH_CONFIG(num_channels * 2, num_threads, stream);
   SET_SHARED_MEMORY_FOR_TMA(cached_notify_func);
   LAUNCH_KERNEL(&cfg, cached_notify_func, rdma_clean_meta.first,
-                rdma_clean_meta.second, nvl_clean_meta.first,
-                nvl_clean_meta.second, combined_rdma_head, num_combined_tokens,
-                num_channels, rdma_channel_prefix_matrix, rdma_rank_prefix_sum,
-                combined_nvl_head, rdma_buffer_ptr, buffer_ptrs,
-                barrier_signal_ptrs, rank, num_ranks, is_cached_dispatch,
-                d2h_channel_addrs, num_d2h_channel_addrs, atomic_buffer_ptr);
+                static_cast<int>(rdma_clean_meta.second), nvl_clean_meta.first,
+                static_cast<int>(nvl_clean_meta.second), combined_rdma_head,
+                num_combined_tokens, num_channels, rdma_channel_prefix_matrix,
+                rdma_rank_prefix_sum, combined_nvl_head, rdma_buffer_ptr,
+                buffer_ptrs, barrier_signal_ptrs, rank, num_ranks,
+                is_cached_dispatch, d2h_channel_addrs, num_d2h_channel_addrs,
+                atomic_buffer_ptr);
 }
 
 template <int kNumRanks, bool kMaybeWithBias, typename dtype_t,

@@ -17,11 +17,13 @@ int get_source_meta_bytes();
 __host__ __device__ __forceinline__ int get_num_bytes_per_token(
     int hidden_int4, int num_scales, int num_topk_idx, int num_topk_weights);
 
-__host__ __device__ __forceinline__ std::pair<int, int> get_rdma_clean_meta(
+__host__ __device__ __forceinline__ std::pair<int64_t, int64_t>
+get_rdma_clean_meta(
     int hidden_int4, int num_scales, int num_topk_idx, int num_topk_weights,
     int num_rdma_ranks, int num_rdma_recv_buffer_tokens, int num_channels);
 
-__host__ __device__ __forceinline__ std::pair<int, int> get_nvl_clean_meta(
+__host__ __device__ __forceinline__ std::pair<int64_t, int64_t>
+get_nvl_clean_meta(
     int hidden_int4, int num_scales, int num_topk_idx, int num_topk_weights,
     int num_rdma_ranks, int num_nvl_ranks, int num_nvl_recv_buffer_tokens,
     int num_channels, bool is_dispatch);
