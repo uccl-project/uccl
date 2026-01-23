@@ -1,0 +1,266 @@
+from __future__ import annotations
+import argparse
+import sys
+import time
+import torch.distributed as dist
+import torch
+from typing import List
+import os
+
+# Only RC mode is supported for now.
+os.environ["UCCL_RCMODE"] = "1"
+
+try:
+    from uccl import p2p
+except ImportError:
+    sys.stderr.write("Failed to import p2p\n")
+    raise
+
+
+def _send_bytes(payload: bytes, dst: int):
+    """Send bytes via PyTorch distributed."""
+    n = len(payload)
+    t_size = torch.tensor([n], dtype=torch.int64)
+    dist.send(t_size, dst=dst)
+    if n == 0:
+        return
+    buf = torch.frombuffer(bytearray(payload), dtype=torch.uint8)
+    dist.send(buf, dst=dst)
+
+
+def _recv_bytes(src: int) -> bytes:
+    """Receive bytes via PyTorch distributed."""
+    t_size = torch.empty(1, dtype=torch.int64)
+    dist.recv(t_size, src=src)
+    n = int(t_size.item())
+    if n == 0:
+        return b""
+    buf = torch.empty(n, dtype=torch.uint8)
+    dist.recv(buf, src=src)
+    return buf.numpy().tobytes()
+
+
+def _make_buffer(n_bytes: int, device: str, gpu: int):
+    """Create a buffer of specified size."""
+    n = n_bytes // 4
+    if device == "gpu":
+        buf = torch.ones(n, dtype=torch.float32, device=f"cuda:{gpu}")
+    else:
+        buf = torch.ones(n, dtype=torch.float32, pin_memory=True)
+    return buf
+
+
+def _pretty(num: int):
+    """Format bytes to human-readable format."""
+    units, val = ["B", "KB", "MB", "GB"], float(num)
+    for u in units:
+        if val < 1024 or u == units[-1]:
+            return f"{val:.0f} {u}" if u == "B" else f"{val:.1f} {u}"
+        val /= 1024
+
+
+def _run_server(args, ep):
+    """Server side: receives data via WRITE operations."""
+    peer = 0
+
+    # Get local metadata first
+    local_metadata = ep.get_metadata()
+    print(f"[Server] Got local metadata, size={len(local_metadata)}")
+
+    # Exchange metadata with client (server receives first, then sends)
+    remote_metadata = _recv_bytes(src=peer)
+    _send_bytes(local_metadata, dst=peer)
+    print(f"[Server] Exchanged metadata with client")
+
+    # Server uses passive_accept, so connection is handled automatically
+    # Wait a bit for connection to establish
+    import time
+
+    time.sleep(0.5)  # Give time for connection to establish
+    print("[Server] Connection should be established (passive accept)")
+
+    for sz in args.sizes:
+        # For each size, handle multiple iterations
+        for iter_idx in range(args.iters + 1):  # +1 for warmup
+            # Create new memory buffer for each iteration
+            size_per_block = sz // args.num_iovs
+            buf_v = []
+            for _ in range(args.num_iovs):
+                buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                buf_v.append(buf)
+
+            # Register remote memory (new memory for each iteration)
+            remote_descs = ep.register_memory(buf_v)
+
+            # Serialize and send remote descriptors to client
+            remote_descs_serialized = ep.get_serialized_descs(remote_descs)
+            _send_bytes(remote_descs_serialized, dst=peer)
+
+            # Wait for transfer to complete
+            dist.barrier()
+
+        print(f"[Server] Completed {args.iters} iterations for size {_pretty(sz)}")
+
+    print("[Server] Benchmark complete")
+
+
+def _run_client(args, ep):
+    """Client side: sends data via WRITE operations."""
+    peer = 1
+
+    # Exchange metadata with server (only once at the beginning)
+    local_metadata = ep.get_metadata()
+    _send_bytes(local_metadata, dst=peer)
+    remote_metadata = _recv_bytes(src=peer)
+    print(f"[Client] Exchanged metadata with server")
+
+    for sz in args.sizes:
+        # Warmup iteration
+        # Add remote endpoint
+        success, conn_id = ep.add_remote_endpoint(remote_metadata)
+        assert success, "Failed to add remote endpoint"
+
+        # Create new memory buffer
+        size_per_block = sz // args.num_iovs
+        buf_v = []
+        for _ in range(args.num_iovs):
+            buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+            buf_v.append(buf)
+
+        # Register local memory
+        local_descs = ep.register_memory(buf_v)
+
+        # Wait for server to send remote descriptors
+        remote_descs_serialized = _recv_bytes(src=peer)
+        remote_descs = ep.deserialize_descs(remote_descs_serialized)
+
+        # Warmup transfer
+        xfer_handle = ep.trasnfer(conn_id, "WRITE", local_descs, remote_descs)
+        assert xfer_handle is not None, "Failed to start warmup transfer"
+        while not ep.check_xfer_state(xfer_handle):
+            time.sleep(0.001)
+
+        dist.barrier()
+
+        # Benchmark iterations
+        start = time.perf_counter()
+        total = 0
+        for iter_idx in range(args.iters):
+            # Add remote endpoint
+            success, conn_id = ep.add_remote_endpoint(remote_metadata)
+            assert success, "Failed to add remote endpoint"
+
+            # Create new memory buffer for each iteration
+            buf_v = []
+            for _ in range(args.num_iovs):
+                buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                buf_v.append(buf)
+
+            # Register local memory (new memory for each iteration)
+            local_descs = ep.register_memory(buf_v)
+
+            # Wait for server to send remote descriptors (exchange memory addresses)
+            remote_descs_serialized = _recv_bytes(src=peer)
+            remote_descs = ep.deserialize_descs(remote_descs_serialized)
+
+            # Start transfer
+            xfer_handle = ep.trasnfer(conn_id, "WRITE", local_descs, remote_descs)
+            assert xfer_handle is not None, "Failed to start transfer"
+
+            # Check transfer state until complete
+            while not ep.check_xfer_state(xfer_handle):
+                time.sleep(0.001)
+
+            total += sz
+            dist.barrier()
+
+        elapsed = time.perf_counter() - start
+
+        print(
+            f"[Client] {_pretty(sz):>8} : "
+            f"{(total * 8) / elapsed / 1e9:6.2f} Gbps | "
+            f"{total / elapsed / 1e9:6.2f} GB/s | "
+            f"{elapsed / args.iters:6.6f} s"
+        )
+    print("[Client] Benchmark complete")
+
+
+def parse_sizes(v: str) -> List[int]:
+    """Parse comma-separated size list."""
+    try:
+        return [int(x) for x in v.split(",") if x]
+    except ValueError:
+        raise argparse.ArgumentTypeError("bad --sizes")
+
+
+def main():
+    p = argparse.ArgumentParser("UCCL Ray P2P benchmark using transfer API")
+    p.add_argument(
+        "--lazy",
+        action="store_true",
+        help="Pre-register all memory before benchmark",
+    )
+    p.add_argument("--local-gpu-idx", type=int, default=0)
+    p.add_argument("--num-cpus", type=int, default=4)
+    p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
+    p.add_argument(
+        "--sizes",
+        type=parse_sizes,
+        default=[
+            256,
+            1024,
+            4096,
+            16384,
+            65536,
+            262144,
+            1048576,
+            10485760,
+            67108864,
+            104857600,
+        ],
+        help="Comma-separated list of message sizes in bytes",
+    )
+    p.add_argument("--iters", type=int, default=10, help="Number of iterations")
+    p.add_argument(
+        "--num-iovs",
+        type=int,
+        default=1,
+        help="Number of iovs to transfer in a single call",
+    )
+    args = p.parse_args()
+
+    print("UCCL Ray P2P Benchmark")
+    print("=" * 60)
+    print(f"Mode: WRITE")
+    print("Sizes:", ", ".join(_pretty(s) for s in args.sizes))
+    print(f"Iterations: {args.iters}")
+    print(f"Number of IOVs: {args.num_iovs}")
+    if args.lazy:
+        print("Lazy mode: Pre-registering all memory")
+    print("=" * 60)
+
+    dist.init_process_group(backend="gloo")
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    assert world_size == 2, "This benchmark only supports 2 processes"
+
+    # Create endpoint: server uses passive_accept=True, client uses normal mode
+    if rank == 1:  # Server
+        ep = p2p.Endpoint(args.num_cpus, True)  # passive_accept=True
+    else:  # Client
+        ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+
+    if rank == 0:
+        _run_client(args, ep)
+    elif rank == 1:
+        _run_server(args, ep)
+
+    dist.destroy_process_group()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n[Ctrl-C] Aborted.")
+        sys.exit(1)
