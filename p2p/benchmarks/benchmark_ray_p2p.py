@@ -138,7 +138,7 @@ def _run_client(args, ep):
         xfer_handle = ep.trasnfer(conn_id, "WRITE", local_descs, remote_descs)
         assert xfer_handle is not None, "Failed to start warmup transfer"
         while not ep.check_xfer_state(xfer_handle):
-            time.sleep(0.001)
+            pass
 
         dist.barrier()
 
@@ -169,7 +169,7 @@ def _run_client(args, ep):
 
             # Check transfer state until complete
             while not ep.check_xfer_state(xfer_handle):
-                time.sleep(0.001)
+                pass
 
             total += sz
             dist.barrier()
