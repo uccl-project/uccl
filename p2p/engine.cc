@@ -870,12 +870,6 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     return false;
   }
 
-  if (num_iovs > kMaxVector) {
-    std::cerr << "[writev] Error: num_iovs > kMaxVector (" << kMaxVector << ")"
-              << std::endl;
-    return false;
-  }
-
   std::vector<ucclRequest> ureq(num_iovs);
   std::vector<FifoItem> curr_slot_item(num_iovs);
   std::vector<bool> done(num_iovs, false);
