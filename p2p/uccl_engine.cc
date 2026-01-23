@@ -4,7 +4,6 @@
 #else
 #include "endpoint_wrapper.h"
 #include "engine.h"
-#include "rdma/define.h"  // For OOB notification types
 #endif
 #include "util/util.h"
 #include <arpa/inet.h>

@@ -45,7 +45,7 @@ PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import site; print(site.getsitepac
 INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
 PREFIX ?= /usr/local
 LIBDIR ?= $(PREFIX)/lib
-INCDIR ?= $(PREFIX)/include/
+INCDIR ?= $(PREFIX)/include
 
 LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LIBS2)
 
