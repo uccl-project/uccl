@@ -1047,7 +1047,7 @@ __global__ void __launch_bounds__(
           // CPU-emulated atomics, allow us to piggyback the atomic operation
           // with the RDMA send.
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-              -1,
+              -1, 0
 #else
               -1,
               reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)) -
@@ -2560,7 +2560,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
           // Coordinator
-          sync_barrier(MAX_NUM_BARRIERS - 1,
+          sync_barrier(MAX_NUM_BARRIERS - dst_rdma_rank - 1,
                        min(kNumWarpsPerForwarder,
                            token_end_idx - token_idx + sub_warp_id) *
                            WARP_SIZE);
@@ -2660,6 +2660,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                 channel_id,  // NOTE(MaoZiming): use channel_id for rb.
                 lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false, -1,
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+                0, 0
 #else
                 reinterpret_cast<uint64_t>(
                     rdma_channel_tail.buffer(rdma_rank)) -
@@ -2754,7 +2755,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
         }
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         sync_barrier(
-            MAX_NUM_BARRIERS - 2,
+            MAX_NUM_BARRIERS - kNumRDMARanks - 1,
             min(kNumRDMAReceivers, token_end_idx - token_idx + warp_id) *
                 WARP_SIZE);
         if (warp_id == 0) receiver_corordinator();
