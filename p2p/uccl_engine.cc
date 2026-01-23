@@ -248,7 +248,7 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
              : -1;
 }
 
-int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
+int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                       size_t size, uint64_t* transfer_id) {
   if (!conn || !data) return -1;
   return conn->engine->endpoint->send_async(conn->conn_id, mr, data, size,
@@ -257,7 +257,15 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
              : -1;
 }
 
-int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
+int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
+  size_t data_size) {
+if (!conn || !data) return -1;
+
+return conn->engine->endpoint->recv(conn->conn_id, mr, data, data_size) ? 0
+                                                       : -1;
+}
+
+int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                          size_t size, FifoItem fifo_item,
                          uint64_t* transfer_id) {
   if (!conn || !data) return -1;
@@ -274,7 +282,7 @@ int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
 #endif
 }
 
-int uccl_engine_write_rc_vector(uccl_conn_t* conn,
+int uccl_engine_write_vector(uccl_conn_t* conn,
                                 std::vector<uccl_mr_t> mr_ids,
                                 std::vector<void*> dst_v,
                                 std::vector<size_t> size_v,
@@ -291,13 +299,6 @@ int uccl_engine_write_rc_vector(uccl_conn_t* conn,
              ? 0
              : -1;
 #endif
-}
-int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
-                     size_t data_size) {
-  if (!conn || !data) return -1;
-
-  return conn->engine->endpoint->recv(conn->conn_id, mr, data, data_size) ? 0
-                                                                          : -1;
 }
 
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {

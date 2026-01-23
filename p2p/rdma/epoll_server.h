@@ -385,9 +385,6 @@ class EpollServer {
             pkt.append(reinterpret_cast<char const*>(&len), sizeof(len));
             pkt.append(response);
 
-            std::cout << "Sending response: len=" << response.size()
-                      << " total_with_header=" << pkt.size() << "\n";
-
             ssize_t s = try_send(conn.fd, pkt.data(), pkt.size());
             if (s < 0) {
               // fatal send error -> close connection
