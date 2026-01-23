@@ -59,6 +59,24 @@ except ImportError as exc:
     raise
 
 
+def compute_buffer_sizes(num_sms: int, hidden: int, num_ranks: int) -> tuple[int, int]:
+    """Compute NVLink and RDMA buffer sizes dynamically based on workload parameters."""
+    hidden_bytes = hidden * 2  # BF16 = 2 bytes
+    config = Config(num_sms, 8, 512, 16, 512)  # nvl_chunk=512, rdma_chunk=512
+
+    def align_buffer(size: int, margin: float = 1.2, alignment: int = 128) -> int:
+        """Apply safety margin and align to NUM_BUFFER_ALIGNMENT_BYTES."""
+        return ((int(size * margin) + alignment - 1) // alignment) * alignment
+
+    num_nvlink_bytes = align_buffer(
+        config.get_nvl_buffer_size_hint(hidden_bytes, num_ranks)
+    )
+    num_rdma_bytes = align_buffer(
+        config.get_rdma_buffer_size_hint(hidden_bytes, num_ranks)
+    )
+    return num_nvlink_bytes, num_rdma_bytes
+
+
 # noinspection PyShadowingNames
 def test_main(
     args: argparse.Namespace,
@@ -219,6 +237,7 @@ def test_main(
                         )
                     if previous_mode:
                         dispatch_args.update({"previous_event": buffer.capture()})
+                    group.barrier()
                     (
                         recv_x,
                         recv_topk_idx,
@@ -227,6 +246,7 @@ def test_main(
                         handle,
                         event,
                     ) = buffer.dispatch(**dispatch_args)
+                    group.barrier()
                     event.current_stream_wait() if async_mode else ()
 
                     if current_x is x_pure_rand or current_x is x:
@@ -279,6 +299,7 @@ def test_main(
                     if with_topk:
                         num_worst_tokens = num_tokens * num_ranks
                         dispatch_args.update({"num_worst_tokens": num_worst_tokens})
+                        group.barrier()
                         (
                             recv_worst_x,
                             recv_worst_topk_idx,
@@ -287,6 +308,7 @@ def test_main(
                             _,
                             event,
                         ) = buffer.dispatch(**dispatch_args)
+                        group.barrier()
                         event.current_stream_wait() if async_mode else ()
                         recv_worst_x = (
                             per_token_cast_back(*recv_worst_x)
@@ -319,7 +341,9 @@ def test_main(
                         }
                         if previous_mode:
                             dispatch_args.update({"previous_event": buffer.capture()})
+                        group.barrier()
                         recv_x, _, _, _, _, event = buffer.dispatch(**dispatch_args)
+                        group.barrier()
                         event.current_stream_wait() if async_mode else ()
                         recv_x = (
                             per_token_cast_back(*recv_x)
@@ -347,9 +371,11 @@ def test_main(
                         combine_args.update({"topk_weights": recv_topk_weights})
                     if previous_mode:
                         combine_args.update({"previous_event": buffer.capture()})
+                    group.barrier()
                     combined_x, combined_topk_weights, event = buffer.combine(
                         **combine_args
                     )
+                    group.barrier()
                     event.current_stream_wait() if async_mode else ()
                     check_x = (
                         combined_x.float() - bias_0.float() - bias_1.float()
@@ -517,14 +543,22 @@ def test_loop(
 
     if torch.version.cuda:
         num_sms = 24
+        num_nvlink_bytes, num_rdma_bytes = compute_buffer_sizes(
+            num_sms, args.hidden, num_ranks
+        )
+    elif torch.version.hip:
+        # TODO: Apply dynamic buffer sizing for HIP once validated
+        num_sms = 64 if num_nodes < 4 else 32
         num_nvlink_bytes = int(2e9)
         num_rdma_bytes = int(1e9)
-    elif torch.version.hip:
-        num_sms = 64 if num_nodes < 8 else 32
-        num_nvlink_bytes = int(4e9)
-        num_rdma_bytes = int(2e9)
     else:
         raise ValueError("Unsupported platform")
+
+    if local_rank == 0:
+        print(
+            f"[buffer] num_nvlink_bytes={num_nvlink_bytes / 1e9:.2f} GB, num_rdma_bytes={num_rdma_bytes / 1e9:.2f} GB",
+            flush=True,
+        )
 
     num_qps_per_rank = max(
         num_sms,
