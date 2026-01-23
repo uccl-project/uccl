@@ -391,6 +391,8 @@ def test_main(
                     dispatch_bf16_nvl_recv_bytes = recv_x.numel() * 2
                     combine_bf16_nvl_send_bytes = dispatch_bf16_nvl_recv_bytes
                     combine_bf16_rdma_recv_bytes = dispatch_bf16_rdma_send_bytes
+                    
+                    torch.cuda.synchronize()
     if local_rank == 0:
         print("", flush=True)
 
