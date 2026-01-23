@@ -174,7 +174,6 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       // For example, pass in `local_rank` or derive gpu_index from device path
       selected_nic_name = candidates[thread_idx % candidates.size()];
 #ifdef EFA
-      // NOTE(MaoZiming): This is a temporary hack.
       if (num_efas == 32) {
         assert(candidates.size() == 4);
         // On p5, there are 4 NICs with the same distance.
