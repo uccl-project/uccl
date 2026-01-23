@@ -534,18 +534,12 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     conn = it->second;
   }
 
-  if (num_iovs > kMaxVector) {
-    std::cerr << "[sendv] Error: num_iovs > kMaxVector (" << kMaxVector << ")"
-              << std::endl;
-    return false;
-  }
-
-  ucclRequest ureq[kMaxVector] = {};
-  bool sent[kMaxVector] = {false};
-  bool done[kMaxVector] = {false};
+  std::vector<ucclRequest> ureq(num_iovs);
+  std::vector<bool> sent(num_iovs, false);
+  std::vector<bool> done(num_iovs, false);
 
   while (1) {
-    for (int i = 0; i < num_iovs; i++) {
+    for (size_t i = 0; i < num_iovs; i++) {
       if (done[i]) continue;
       if (!sent[i]) {
         void* cur_data = (void*)data_v[i];
@@ -577,7 +571,7 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       }
     }
 
-    if (std::all_of(done, done + num_iovs, [](bool b) { return b; })) {
+    if (std::all_of(done.begin(), done.end(), [](bool b) { return b; })) {
       break;
     }
 
@@ -601,18 +595,12 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     conn = it->second;
   }
 
-  if (num_iovs > kMaxVector) {
-    std::cerr << "[recvv] Error: num_iovs > kMaxVector (" << kMaxVector << ")"
-              << std::endl;
-    return false;
-  }
-
-  ucclRequest ureq[kMaxVector] = {};
-  bool done[kMaxVector] = {false};
-  bool received[kMaxVector] = {false};
+  std::vector<ucclRequest> ureq(num_iovs);
+  std::vector<bool> done(num_iovs, false);
+  std::vector<bool> received(num_iovs, false);
 
   while (1) {
-    for (int i = 0; i < num_iovs; i++) {
+    for (size_t i = 0; i < num_iovs; i++) {
       if (done[i]) continue;
 
       if (!received[i]) {
@@ -647,7 +635,7 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       }
     }
 
-    if (std::all_of(done, done + num_iovs, [](bool b) { return b; })) {
+    if (std::all_of(done.begin(), done.end(), [](bool b) { return b; })) {
       break;
     }
 
@@ -765,19 +753,13 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<FifoItem> slot_item_v, size_t num_iovs) {
   auto conn = conn_id_to_conn_[conn_id];
 
-  ucclRequest ureq[kMaxVector] = {};
-  FifoItem curr_slot_item[kMaxVector] = {};
-  bool done[kMaxVector] = {false};
-  bool read[kMaxVector] = {false};
-
-  if (num_iovs > kMaxVector) {
-    std::cerr << "[readv] Error: num_iovs > kMaxVector (" << kMaxVector << ")"
-              << std::endl;
-    return false;
-  }
+  std::vector<ucclRequest> ureq(num_iovs);
+  std::vector<FifoItem> curr_slot_item(num_iovs);
+  std::vector<bool> done(num_iovs, false);
+  std::vector<bool> read(num_iovs, false);
 
   while (1) {
-    for (int i = 0; i < num_iovs; i++) {
+    for (size_t i = 0; i < num_iovs; i++) {
       if (done[i]) continue;
 
       if (!read[i]) {
@@ -797,7 +779,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
         }
       }
     }
-    if (std::all_of(done, done + num_iovs, [](bool b) { return b; })) {
+    if (std::all_of(done.begin(), done.end(), [](bool b) { return b; })) {
       break;
     }
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
@@ -860,19 +842,13 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                       std::vector<FifoItem> slot_item_v, size_t num_iovs) {
   auto conn = conn_id_to_conn_[conn_id];
 
-  ucclRequest ureq[kMaxVector] = {};
-  FifoItem curr_slot_item[kMaxVector] = {};
-  bool done[kMaxVector] = {false};
-  bool written[kMaxVector] = {false};
-
-  if (num_iovs > kMaxVector) {
-    std::cerr << "[writev] Error: num_iovs > kMaxVector (" << kMaxVector << ")"
-              << std::endl;
-    return false;
-  }
+  std::vector<ucclRequest> ureq(num_iovs);
+  std::vector<FifoItem> curr_slot_item(num_iovs);
+  std::vector<bool> done(num_iovs, false);
+  std::vector<bool> written(num_iovs, false);
 
   while (1) {
-    for (int i = 0; i < num_iovs; i++) {
+    for (size_t i = 0; i < num_iovs; i++) {
       if (done[i]) continue;
 
       if (!written[i]) {
@@ -893,7 +869,7 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       }
     }
 
-    if (std::all_of(done, done + num_iovs, [](bool b) { return b; })) {
+    if (std::all_of(done.begin(), done.end(), [](bool b) { return b; })) {
       break;
     }
 
