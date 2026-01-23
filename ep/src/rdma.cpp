@@ -157,9 +157,10 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 #endif
     for (auto& p : dist) {
 #ifdef EFA
-      if (strncmp(p.first.c_str(), "rdmap", 5) == 0) num_efas++;
-      if (p.second == min_d && strncmp(p.first.c_str(), "rdmap", 5) == 0)
-        candidates.push_back(p.first);
+      if (strncmp(p.first.c_str(), "rdmap", 5) == 0) {
+        num_efas++;
+        if (p.second == min_d) candidates.push_back(p.first);
+      }
 #else
       if (!uccl::is_iface_up(p.first)) continue;
       if (p.second == min_d) candidates.push_back(p.first);
