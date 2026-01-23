@@ -1,0 +1,38 @@
+# Makefile.test
+# Build test executable for dietgpu float codec (AMD HIP)
+
+HIPCC = hipcc
+
+# Paths
+DIETGPU_ROOT = ../..
+LIB_DIR      = .
+
+# Include paths
+INCLUDES = -I$(DIETGPU_ROOT)
+
+# Compiler flags
+HIPCC_FLAGS = -O3 -std=c++17
+HIPCC_FLAGS += -D__HIP_PLATFORM_AMD__
+HIPCC_FLAGS += $(INCLUDES)
+
+# AMD GPU architecture
+GPU_ARCH ?= gfx942
+HIPCC_FLAGS += --offload-arch=$(GPU_ARCH)
+
+# Libraries
+LIBS = -L$(LIB_DIR) -ldietgpu_float -lglog
+RPATH = -Wl,-rpath,$(shell pwd)
+
+# Test target
+TEST_TARGET = float_compress_test
+TEST_SRC    = float_compress_test.cpp
+
+.PHONY: all clean
+
+all: $(TEST_TARGET)
+
+$(TEST_TARGET): $(TEST_SRC)
+	$(HIPCC) $(HIPCC_FLAGS) -o $@ $< $(LIBS) $(RPATH)
+
+clean:
+	rm -f $(TEST_TARGET)

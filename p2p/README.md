@@ -62,7 +62,7 @@ sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
 
 To build AWS EFA support, you can: 
 ```bash
-USE_EFA=1 bash build_and_install.sh cuda p2p
+USE_IB=1 bash build_and_install.sh cuda p2p
 # or
 make -j USE_EFA=1 install
 ```

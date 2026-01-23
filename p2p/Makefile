@@ -86,13 +86,13 @@ else
 # Default target
 all: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 
-$(P2P_PYTHON_EXT): $(OBJECTS)
+$(P2P_PYTHON_EXT): $(OBJECTS) $(DIETGPU_LIB)
 	$(CXX) $(OBJECTS) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB) $(INC) $(LIBS)
 
-$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT)
+$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT) $(DIETGPU_LIB)
 	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \

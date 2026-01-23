@@ -368,7 +368,7 @@ def main():
     p.add_argument(
         "--ring",
         action="store_true",
-        help="Test ring communication pattern (rank i sends to rank (i+1) % world_size).",
+        help="Test ring communication pattern (rank i sends to rank (i+1) %% world_size).",
     )
     args = p.parse_args()
 

@@ -22,6 +22,16 @@
 #include <variant>
 #include <vector>
 
+#include <hip/hip_runtime.h>
+#include <hip/hip_fp16.h>
+
+#include <iostream>
+#include <vector>
+
+#include "dietgpu/float/GpuFloatCodec_hip.h"
+
+#include "dietgpu/utils/StackDeviceMemory_hip.h"
+
 namespace py = pybind11;
 
 extern thread_local bool inside_python;

@@ -122,6 +122,12 @@ build_p2p() {
   set -euo pipefail
   echo "[container] build_p2p Target: $TARGET"
 
+  if [[ "$TARGET" == rocm* ]]; then
+    cd thirdparty/dietgpu/dietgpu/float
+    make clean -f Makefile.lib && make -j$(nproc) -f Makefile.lib
+    cd ../../../..
+  fi
+
   cd p2p
   if [[ "$TARGET" == cuda* ]]; then
     make clean && make -j$(nproc)
@@ -131,11 +137,12 @@ build_p2p() {
     make clean -f Makefile.therock && make -j$(nproc) -f Makefile.therock HIP_HOME=$(rocm-sdk path --root) CONDA_LIB_HOME=$VIRTUAL_ENV/lib
   fi
   cd ..
-
+  echo $(pwd)
   echo "[container] Copying P2P .so, collective.py and utils.py to uccl/"
   mkdir -p uccl
   mkdir -p uccl/lib
   if [[ -z "${USE_TCPX:-}" || "$USE_TCPX" != "1" ]]; then
+    cp thirdparty/dietgpu/dietgpu/float/libdietgpu_float.so uccl/lib/
     cp p2p/libuccl_p2p.so uccl/lib/
     cp p2p/p2p.*.so uccl/
     cp p2p/collective.py uccl/
@@ -327,6 +334,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e USE_TCPX="${USE_TCPX:-0}" \
   -e USE_EFA="${USE_EFA:-0}" \
   -e USE_IB="${USE_IB:-0}" \
+  -e USE_DIETGPU="${USE_DIETGPU:-0}" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
   -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
   -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_ccl_rdma build_ccl_efa build_p2p build_ep build_ukernel)" \

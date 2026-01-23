@@ -10,11 +10,28 @@ HIP_LIB  := $(HIP_HOME)/lib
 CONDA_LIB_HOME?=/usr/lib
 CXX := g++
 
+# ---------------- DietGPU ----------------
+USE_DIETGPU ?= 0
+
+DIETGPU_ROOT      := ../thirdparty/dietgpu
+DIETGPU_FLOAT_DIR := $(DIETGPU_ROOT)/dietgpu/float
+DIETGPU_LIB       := $(DIETGPU_FLOAT_DIR)/libdietgpu_float.so
+
+ifeq ($(USE_DIETGPU),1)
+	CXXFLAGS_TRANS += -DUSE_DIETGPU -DUSE_DIETGPU_HIP
+	DIETGPU_INC  := -I$(DIETGPU_ROOT)
+	DIETGPU_LIBS := -L$(DIETGPU_FLOAT_DIR) -ldietgpu_float \
+	                -Wl,-rpath,$(abspath $(DIETGPU_FLOAT_DIR))
+else
+	DIETGPU_INC  :=
+	DIETGPU_LIBS :=
+endif
+
 ifeq ($(USE_EFA),1)
 	CXXFLAGS_TRANS := -DUCCL_P2P_USE_EFA
 endif
 
-CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(HIP_INC) \
+CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(HIP_INC) $(DIETGPU_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=${CONDA_LIB_HOME} -I${CONDA_LIB_HOME}/../include \
 	$(CXXFLAGS_TRANS)
@@ -35,7 +52,9 @@ INCDIR ?= $(PREFIX)/include
 
 CXXFLAGS       += -D__HIP_PLATFORM_AMD__
 LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
-                  -Wl,-rpath,$(HIP_LIB) -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest \
+				  -L$(DIETGPU_FLOAT_DIR) -ldietgpu_float\
+                  -Wl,-rpath,$(HIP_LIB) -lglog -lgflags -lgtest \
+				  -Wl,-rpath,'$$ORIGIN/lib' \
                   -lz -lelf -libverbs -lpthread
 
 # Target and source files
@@ -55,13 +74,13 @@ $(P2P_PYTHON_EXT): $(OBJECTS)
 	$(CXX) $(OBJECTS) \
 	      -L$(HIP_LIB) -lamdhip64 \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(HIP_LIB)
+	      -Wl,-rpath
 
 $(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT)
 	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) \
 	      -L$(HIP_LIB) -lamdhip64 \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(HIP_LIB) $(PYTHON_LIB)
+	      -Wl,-rpath $(PYTHON_LIB)
 
 # Compile source files
 %.o: %.cc
