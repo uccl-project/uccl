@@ -1,6 +1,6 @@
 #pragma once
 
-#include "util/gpu_rt.h"
+#include "../compute/gpu_rt.h"
 #include <map>
 #include <string>
 

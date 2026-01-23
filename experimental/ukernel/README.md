@@ -6,7 +6,7 @@ sudo apt-get update
 sudo apt-get install -y libelf-dev
 ```
 
-## transport develpment:
+## transport/runtime develpment:
 on AMD
 ```
 cd experimental/ukernel
