@@ -388,7 +388,7 @@ class EpollServer {
             ssize_t s = try_send(conn.fd, pkt.data(), pkt.size());
             if (s < 0) {
               // fatal send error -> close connection
-              std::cerr << "Error sending response on fd=" << conn.fd << "\n";
+              LOG(ERROR) << "Error sending response on fd=" << conn.fd;
               remove_connection(conn.fd);
               return;
             } else if ((size_t)s < pkt.size()) {

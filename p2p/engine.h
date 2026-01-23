@@ -121,7 +121,7 @@ class Endpoint {
   /* Accept an incoming connection via TCP, then build RDMA QP connections. */
   bool accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
 
-  /*Register the data with a specific interface. */
+  /* Register the data with a specific interface. */
   bool reg(void const* data, size_t size, uint64_t& mr_id);
 
   bool regv(std::vector<void const*> const& data_v,
@@ -278,6 +278,32 @@ class Endpoint {
     uint64_t rank_id = it->second->uccl_conn_id_.flow_id;
 
     return ep_->get_oob_conn_key(rank_id);
+  }
+  
+  inline MR* get_mr(uint64_t mr_id) const {
+    std::shared_lock<std::shared_mutex> lock(mr_mu_);
+    auto it = mr_id_to_mr_.find(mr_id);
+    if (it == mr_id_to_mr_.end()) {
+      return nullptr;
+    }
+    return it->second;
+  }
+
+  inline P2PMhandle* get_mhandle(uint64_t mr_id) const {
+    auto mr = get_mr(mr_id);
+    if (unlikely(mr == nullptr)) {
+      return nullptr;
+    }
+    return mr->mhandle_;
+  }
+
+  inline Conn* get_conn(uint64_t conn_id) const {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    if (it == conn_id_to_conn_.end()) {
+      return nullptr;
+    }
+    return it->second;
   }
 
  private:
@@ -656,8 +682,8 @@ class Endpoint {
   }
 
   // For both net and ipc send/recv tasks.
-  jring_t* send_unified_task_ring_;
-  jring_t* recv_unified_task_ring_;
+  jring_t* send_unified_task_ring_ = nullptr;
+  jring_t* recv_unified_task_ring_ = nullptr;
 
   std::atomic<bool> stop_{false};
   std::thread send_proxy_thread_;

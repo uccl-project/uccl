@@ -152,10 +152,15 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 
     // Collect all NICs with equal minimum distance
     std::vector<std::string> candidates;
+#ifdef EFA
+    int num_efas = 0;
+#endif
     for (auto& p : dist) {
 #ifdef EFA
-      if (p.second == min_d && strncmp(p.first.c_str(), "rdmap", 5) == 0)
-        candidates.push_back(p.first);
+      if (strncmp(p.first.c_str(), "rdmap", 5) == 0) {
+        num_efas++;
+        if (p.second == min_d) candidates.push_back(p.first);
+      }
 #else
       if (!uccl::is_iface_up(p.first)) continue;
       if (p.second == min_d) candidates.push_back(p.first);
@@ -170,14 +175,13 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       // For example, pass in `local_rank` or derive gpu_index from device path
       selected_nic_name = candidates[thread_idx % candidates.size()];
 #ifdef EFA
-      // NOTE(MaoZiming): This is a temporary hack.
-      if (candidates.size() == 8) {
-        // On p5, there are 8 NICs with the same distance.
-        auto half = (local_rank % 2) * 4;
-        // GPU0 uses candidates[0/1/2/3], GPU1 uses candidates[4/5/6/7], etc.
-        selected_nic_name = candidates[thread_idx % 4 + half];
+      if (num_efas == 32) {
+        assert(candidates.size() == 4);
+        // On p5, there are 4 NICs with the same distance.
+        selected_nic_name = candidates[thread_idx % 4];
         use_ll_sl = true;
-      } else if (candidates.size() == 4) {
+      } else if (num_efas == 16) {
+        assert(candidates.size() == 4);
         // On p5e/p5en, there are 4 NICs with the same distance.
         // We hardcode the first half Proxies to use the first NIC, and the
         // second half to use the second NIC.
@@ -187,6 +191,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
         use_ll_sl = true;
       } else {
         // On p6-b200, there is 2 NICs with the same distance.
+        assert(num_efas == 8);
         assert(candidates.size() == 2);
         auto half = (local_rank % 2) * 1;
         selected_nic_name = candidates[thread_idx % 1 + half];
@@ -229,8 +234,8 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 #ifndef EFA
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                              IBV_ACCESS_REMOTE_ATOMIC |
-                              IBV_ACCESS_RELAXED_ORDERING);
+                              IBV_ACCESS_REMOTE_ATOMIC);
+  // | IBV_ACCESS_RELAXED_ORDERING
 #else
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
@@ -437,9 +442,6 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   // for this thread) This ensures all threads exchange the same atomic buffer
   // info
   if (S.atomic_buffer_mr) {
-#ifdef EFA
-    assert(false && "This path should not happen for EFA");
-#endif
     local_info->atomic_buffer_rkey = S.atomic_buffer_mr->rkey;
     local_info->atomic_buffer_addr =
         reinterpret_cast<uintptr_t>(S.atomic_buffer_mr->addr);
@@ -578,10 +580,12 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
   if (is_roce) {
     attr.ah_attr.is_global = 1;
     attr.ah_attr.port_num = 1;
-    attr.ah_attr.sl = 135;
+    char const* sl_env = getenv("UCCL_IB_SL");
+    attr.ah_attr.sl = sl_env ? atoi(sl_env) : 3;
     attr.ah_attr.src_path_bits = 0;
-    attr.ah_attr.grh.traffic_class = 3;
-    attr.ah_attr.grh.hop_limit = 64;
+    char const* tc_env = getenv("UCCL_IB_TC");
+    attr.ah_attr.grh.traffic_class = tc_env ? atoi(tc_env) : 104;
+    attr.ah_attr.grh.hop_limit = 255;
     // Fill GID from remote_info
     memcpy(&attr.ah_attr.grh.dgid, remote->gid, 16);
     attr.ah_attr.grh.sgid_index = S.gid_index;
@@ -832,7 +836,8 @@ static void post_rdma_async_batched_normal_mode(
             fprintf(stderr, "[EFA] atomic value=%d won't fit in 15 bits\n", v);
             std::abort();
           }
-          size_t index = static_cast<size_t>(cmd.atomic_offset / sizeof(int));
+          size_t index =
+              static_cast<size_t>(cmd.atomic_offset / sizeof(int64_t));
           // Initialize missing entries lazily
           auto key = ctx->seq_key(dst_rank, index);
           if (ctx->next_seq_per_index.find(key) ==
@@ -941,7 +946,8 @@ static void post_rdma_async_batched_normal_mode(
               fprintf(stderr, "atomic value=%d won't fit in 15 bits\n", v);
               std::abort();
             }
-            size_t index = static_cast<size_t>(cmd.atomic_offset / sizeof(int));
+            size_t index =
+                static_cast<size_t>(cmd.atomic_offset / sizeof(int64_t));
             // Initialize missing entries lazily
             auto key = ctx->seq_key(dst_rank, index);
             if (ctx->next_seq_per_index.find(key) ==
@@ -1576,14 +1582,14 @@ void remote_process_completions_normal_mode(
       AtomicsImm aimm(ntohl(cqe.imm_data));
       int value = aimm.GetValue();
       uint32_t offset = aimm.GetOff();
-      size_t index = offset / sizeof(int);
-      auto* addr32 =
-          reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
+      size_t index = offset / sizeof(int64_t);
+      auto* addr64 =
+          reinterpret_cast<std::atomic<int64_t>*>(atomic_buffer_ptr) + index;
 
       if (value == kMaxSendAtomicValue) value = kLargeAtomicValue;
 
       if (!aimm.IsReorderable()) {
-        addr32->fetch_add(value, std::memory_order_release);
+        addr64->fetch_add(value, std::memory_order_release);
       } else {
 #ifndef EFA
         assert(false &&
@@ -1600,7 +1606,7 @@ void remote_process_completions_normal_mode(
         auto& sb = seqbufs[index];
 
         auto commit = [&](int delta) {
-          addr32->fetch_add(delta, std::memory_order_release);
+          addr64->fetch_add(delta, std::memory_order_release);
         };
         uint8_t seq = aimm.GetSeq();
         if (seq >= kReorderingBufferSize) {
@@ -1752,15 +1758,15 @@ void remote_process_completions_fast_mode(
       AtomicsImm aimm(ntohl(cqe.imm_data));
       int value = aimm.GetValue();
       uint32_t offset = aimm.GetOff();
-      size_t index = offset / sizeof(int);
+      size_t index = offset / sizeof(int64_t);
 #ifdef USE_RECEIVER_BARRIER
       // ep_config.hpp
       bool is_combine = aimm.IsCombine();
       int low_latency_buffer_idx = aimm.GetBufferIdx();
       uint32_t new_offset =
           offset - low_latency_buffer_idx *
-                       align<size_t>(num_experts * sizeof(int), 128);
-      size_t new_index = new_offset / sizeof(int);
+                       align<size_t>(num_experts * sizeof(int64_t), 128);
+      size_t new_index = new_offset / sizeof(int64_t);
       int src_rank = -1;
       bool is_atomic_ready = false;
       int expert_idx = -1;
@@ -1808,19 +1814,19 @@ void remote_process_completions_fast_mode(
           S.combine_token_counter.Reset({low_latency_buffer_idx, expert_idx});
         }
       }
-      auto* addr32 =
-          reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
+      auto* addr64 =
+          reinterpret_cast<std::atomic<int64_t>*>(atomic_buffer_ptr) + index;
       if (is_atomic_ready) {
         if (is_combine) value = 1;
-        addr32->fetch_add(value, std::memory_order_release);
+        addr64->fetch_add(value, std::memory_order_release);
       } else {
-        pending_atomic_updates.insert({addr32, value, aimm.GetImmData(),
+        pending_atomic_updates.insert({addr64, value, aimm.GetImmData(),
                                        low_latency_buffer_idx, expert_idx,
                                        is_combine, src_rank});
       }
 #else
-      auto* addr32 =
-          reinterpret_cast<std::atomic<int>*>(atomic_buffer_ptr) + index;
+      auto* addr64 =
+          reinterpret_cast<std::atomic<int64_t>*>(atomic_buffer_ptr) + index;
 #ifdef USE_SENDER_BARRIER
       if (aimm.IsCombine()) value = 1;
 #ifndef EFA
@@ -1853,7 +1859,7 @@ void remote_process_completions_fast_mode(
         assert(value <= -1 && "Dispatch atomic value should be <= -1");
       }
       if (is_combine) value = 1;
-      addr32->fetch_add(value, std::memory_order_release);
+      addr64->fetch_add(value, std::memory_order_release);
 #endif
     } else if (cqe.opcode == IBV_WC_RECV_RDMA_WITH_IMM &&
                ImmType::IsBarrier(ntohl(cqe.imm_data))) {

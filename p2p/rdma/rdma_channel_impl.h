@@ -28,11 +28,18 @@ static inline int get_sl_from_env(int default_value) {
   static int sl = -1;
   if (sl == -1) {
     char const* env = getenv("UCCL_P2P_RDMA_SL");
-    if (env)
+    if (env) {
       sl = std::atoi(env);
-    else
+      if (sl < 0 || sl > 15) {
+        LOG(ERROR) << "A valid service level must be between 0 and 15, use "
+                      "default value "
+                   << default_value;
+        sl = default_value;
+      }
+    } else
       sl = default_value;
   }
+
   return sl;
 }
 
@@ -40,9 +47,15 @@ static inline int get_tc_from_env(int default_value) {
   static int tc = -1;
   if (tc == -1) {
     char const* env = getenv("UCCL_P2P_RDMA_TC");
-    if (env)
+    if (env) {
       tc = std::atoi(env);
-    else
+      if (tc < 0 || tc > 255) {
+        LOG(ERROR) << "A valid traffic class must be between 0 and 255, use "
+                      "default value "
+                   << default_value;
+        tc = default_value;
+      }
+    } else
       tc = default_value;
   }
   return tc;

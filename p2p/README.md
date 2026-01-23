@@ -97,8 +97,8 @@ Notes:
 |---------------------|-------------|---------------|
 | UCCL_P2P_LOG_LEVEL | Logging level | WARNING (others: INFO, ERROR, FATAL) |
 | UCCL_P2P_RDMA_GID_INDEX | GID index in RDMA network | 0/3 (EFA/IB) |
-| UCCL_P2P_RDMA_SL | Service level in RDMA network | 8/135 (EFA/IB) |
-| UCCL_P2P_RDMA_TC | Traffic class in RDMA network | 3 (IB) |
+| UCCL_P2P_RDMA_SL | Service level in RDMA network | 8/3 (EFA/IB) |
+| UCCL_P2P_RDMA_TC | Traffic class in RDMA network | 104 (IB) |
 
 ### Running NCCL
 

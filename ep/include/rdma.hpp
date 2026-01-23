@@ -43,7 +43,7 @@ struct RDMAConnectionInfo {
 };
 
 struct PendingUpdate {
-  std::atomic<int>* addr;
+  std::atomic<int64_t>* addr;
   int value;
   uint32_t imm;
   int low_latency_buffer_idx;
