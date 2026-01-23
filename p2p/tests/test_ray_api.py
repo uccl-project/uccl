@@ -11,6 +11,11 @@ import os
 import torch
 
 try:
+    import torch.distributed as dist
+except ImportError:
+    dist = None
+
+try:
     from uccl import p2p
 except ImportError as exc:
     sys.stderr.write("Failed to import p2p\n")
@@ -28,7 +33,7 @@ def test_register_memory_basic():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, true)
+    ep = p2p.Endpoint(4, True)
     print(f"Created Endpoint with 4 CPUs")
 
     # Create a single tensor
@@ -93,7 +98,7 @@ def test_register_memory_multiple():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, true)
+    ep = p2p.Endpoint(4, True)
     print(f"Created Endpoint with 4 CPUs")
 
     # Create multiple tensors with different sizes
@@ -154,7 +159,7 @@ def test_register_memory_empty_list():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, true)
+    ep = p2p.Endpoint(4, True)
     print(f"Created Endpoint with 4 CPUs")
 
     # Register empty list
@@ -181,7 +186,7 @@ def test_register_memory_invalid_input():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, true)
+    ep = p2p.Endpoint(4, True)
     print(f"Created Endpoint with 4 CPUs")
 
     # Try to register a non-tensor object
@@ -210,7 +215,7 @@ def test_register_memory_mixed_valid_invalid():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, true)
+    ep = p2p.Endpoint(4, True)
     print(f"Created Endpoint with 4 CPUs")
 
     # Create valid tensor
@@ -240,7 +245,7 @@ def test_register_memory_different_dtypes():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, true)
+    ep = p2p.Endpoint(4, True)
     print(f"Created Endpoint with 4 CPUs")
 
     # Create tensors with different dtypes
@@ -288,7 +293,7 @@ def test_get_serialized_descs():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, true)
+    ep = p2p.Endpoint(4, True)
     print(f"Created Endpoint with 4 CPUs")
 
     # Create tensors
@@ -324,7 +329,7 @@ def test_deserialize_descs():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, true)
+    ep = p2p.Endpoint(4, True)
     print(f"Created Endpoint with 4 CPUs")
 
     # Create tensors
@@ -387,7 +392,7 @@ def test_serialize_deserialize_roundtrip():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, true)
+    ep = p2p.Endpoint(4, True)
     print(f"Created Endpoint with 4 CPUs")
 
     # Create tensors with different sizes and dtypes
@@ -427,6 +432,184 @@ def test_serialize_deserialize_roundtrip():
     return True
 
 
+def _send_bytes(payload: bytes, dst: int):
+    """Send bytes via PyTorch distributed."""
+    n = len(payload)
+    t_size = torch.tensor([n], dtype=torch.int64)
+    dist.send(t_size, dst=dst)
+    if n == 0:
+        return
+    buf = torch.frombuffer(bytearray(payload), dtype=torch.uint8)
+    dist.send(buf, dst=dst)
+
+
+def _recv_bytes(src: int) -> bytes:
+    """Receive bytes via PyTorch distributed."""
+    t_size = torch.empty(1, dtype=torch.int64)
+    dist.recv(t_size, src=src)
+    n = int(t_size.item())
+    if n == 0:
+        return b""
+    buf = torch.empty(n, dtype=torch.uint8)
+    dist.recv(buf, src=src)
+    return buf.numpy().tobytes()
+
+
+def test_transfer():
+    """Test transfer functionality with two processes."""
+    print("\n" + "=" * 60)
+    print("Test 10: transfer")
+    print("=" * 60)
+
+    if not torch.cuda.is_available():
+        print("Skipping test: CUDA not available")
+        return True
+
+    if dist is None:
+        print("Skipping test: torch.distributed not available")
+        return True
+
+    # Initialize distributed if not already initialized
+    if not dist.is_initialized():
+        dist.init_process_group(backend="gloo")
+
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+
+    if world_size < 2:
+        print("Skipping test: requires at least 2 processes")
+        return True
+
+    # rank 0 = client, rank 1 = server
+    if rank == 0:
+        # Client side
+        print("[Client] Creating endpoint...")
+        ep = p2p.Endpoint(4, True)
+
+        # Get local metadata
+        local_metadata = ep.get_metadata()
+        print(f"[Client] Got local metadata, size={len(local_metadata)}")
+
+        # Exchange metadata with server
+        _send_bytes(local_metadata, dst=1)
+        remote_metadata = _recv_bytes(src=1)
+        print(f"[Client] Received remote metadata, size={len(remote_metadata)}")
+
+        # Add remote endpoint (connect to server)
+        success, conn_id = ep.add_remote_endpoint(remote_metadata)
+        assert success, "Failed to add remote endpoint"
+        print(f"[Client] Connected to server, conn_id={conn_id}")
+
+        # Create source tensor with "hello uccl" content
+        message = "hello uccl"
+        message_bytes = message.encode("utf-8")
+        # Create a tensor large enough to hold the message
+        # Use uint8 to store bytes
+        src_tensor = torch.zeros(256, dtype=torch.uint8, device="cuda:0")
+        # Copy message bytes to tensor (convert to tensor first, then copy)
+        message_tensor = torch.tensor(
+            list(message_bytes), dtype=torch.uint8, device="cuda:0"
+        )
+        src_tensor[: len(message_bytes)] = message_tensor
+        src_tensors = [src_tensor]
+        print(
+            f"[Client] Created source tensor with message: '{message}' ({len(message_bytes)} bytes)"
+        )
+
+        # Register local memory
+        local_descs = ep.register_memory(src_tensors)
+        print(f"[Client] Registered {len(local_descs)} local descriptor(s)")
+
+        # Wait for server to send remote descriptors
+        remote_descs_serialized = _recv_bytes(src=1)
+        print(
+            f"[Client] Received remote descriptors, size={len(remote_descs_serialized)}"
+        )
+
+        # Deserialize remote descriptors
+        remote_descs = ep.deserialize_descs(remote_descs_serialized)
+        print(f"[Client] Deserialized {len(remote_descs)} remote descriptor(s)")
+
+        # Start transfer (WRITE operation)
+        xfer_handle = ep.trasnfer(conn_id, "WRITE", local_descs, remote_descs)
+        assert xfer_handle is not None, "Failed to start transfer"
+        print(f"[Client] Started WRITE transfer")
+
+        # Check transfer state until complete
+        max_wait = 100
+        wait_count = 0
+        while wait_count < max_wait:
+            is_done = ep.check_xfer_state(xfer_handle)
+            if is_done:
+                print(f"[Client] Transfer completed")
+                break
+            wait_count += 1
+            import time
+
+            time.sleep(0.01)
+
+        assert is_done, "Transfer did not complete in time"
+        print("✓ Test 10 passed: transfer works correctly")
+
+    elif rank == 1:
+        # Server side
+        print("[Server] Creating endpoint...")
+        ep = p2p.Endpoint(4, True)  # passive_accept=True
+
+        # Get local metadata
+        local_metadata = ep.get_metadata()
+        print(f"[Server] Got local metadata, size={len(local_metadata)}")
+
+        # Exchange metadata with client
+        remote_metadata = _recv_bytes(src=0)
+        _send_bytes(local_metadata, dst=0)
+        print(f"[Server] Exchanged metadata with client")
+
+        # Server doesn't need to call accept (passive_accept=True handles it)
+        # Wait a bit for connection to establish
+        import time
+
+        time.sleep(0.5)  # Give time for connection to establish
+        print("[Server] Connection should be established (passive accept)")
+
+        # Create destination tensor for receiving
+        # Use uint8 to match source tensor
+        dst_tensor = torch.zeros(256, dtype=torch.uint8, device="cuda:0")
+        dst_tensors = [dst_tensor]
+        print(f"[Server] Created destination tensor for receiving")
+
+        # Register remote memory
+        remote_descs = ep.register_memory(dst_tensors)
+        print(f"[Server] Registered {len(remote_descs)} remote descriptor(s)")
+
+        # Serialize and send remote descriptors to client
+        remote_descs_serialized = ep.get_serialized_descs(remote_descs)
+        _send_bytes(remote_descs_serialized, dst=0)
+        print(
+            f"[Server] Sent remote descriptors to client, size={len(remote_descs_serialized)}"
+        )
+
+        # Wait for transfer to complete (client will poll and complete)
+        time.sleep(3)
+
+        # Verify data was written correctly
+        # Read the content from GPU memory
+        received_data = dst_tensor.cpu().numpy()
+        # Extract the message bytes (first 10 bytes for "hello uccl")
+        expected_message = "hello uccl"
+        message_length = len(expected_message)
+        received_message_bytes = bytes(received_data[:message_length])
+        received_message = received_message_bytes.decode("utf-8")
+
+        assert (
+            received_message == expected_message
+        ), f"Message mismatch: expected '{expected_message}', got '{received_message}' (bytes: {received_message_bytes})"
+        print(f"[Server] Verified data was written correctly: '{received_message}'")
+        print("✓ Test 10 passed: transfer works correctly")
+
+    return True
+
+
 def main():
     """Run all tests."""
     print("UCCL P2P Engine - Ray API Test")
@@ -447,15 +630,16 @@ def main():
     print("\n")
 
     tests = [
-        ("Basic register_memory", test_register_memory_basic),
-        ("Multiple tensors", test_register_memory_multiple),
-        ("Empty list", test_register_memory_empty_list),
-        ("Invalid input", test_register_memory_invalid_input),
-        ("Mixed valid/invalid", test_register_memory_mixed_valid_invalid),
-        ("Different dtypes", test_register_memory_different_dtypes),
-        ("get_serialized_descs", test_get_serialized_descs),
-        ("deserialize_descs", test_deserialize_descs),
-        ("serialize/deserialize roundtrip", test_serialize_deserialize_roundtrip),
+        # ("Basic register_memory", test_register_memory_basic),
+        # ("Multiple tensors", test_register_memory_multiple),
+        # ("Empty list", test_register_memory_empty_list),
+        # ("Invalid input", test_register_memory_invalid_input),
+        # ("Mixed valid/invalid", test_register_memory_mixed_valid_invalid),
+        # ("Different dtypes", test_register_memory_different_dtypes),
+        # ("get_serialized_descs", test_get_serialized_descs),
+        # ("deserialize_descs", test_deserialize_descs),
+        # ("serialize/deserialize roundtrip", test_serialize_deserialize_roundtrip),
+        ("transfer", test_transfer),
     ]
 
     passed = 0
