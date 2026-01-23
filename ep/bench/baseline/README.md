@@ -34,6 +34,11 @@ cd pplx-kernels
 python3 -m tests.bench_all_to_all
 ```
 
+### 4. Run Pack/Unpack Benchmark (Triton vs CUDA)
+
+```bash
+python benchmark_pack_unpack.py
+```
 
 ## Multi-Node Setup
 
