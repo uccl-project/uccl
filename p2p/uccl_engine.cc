@@ -384,8 +384,6 @@ int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t mr,
 
 int uccl_engine_update_fifo(FifoItem& fifo_item, uint64_t remote_addr,
                             uint32_t size) {
-  if (!fifo_item) return -1;
-
   fifo_item.addr = remote_addr;
   fifo_item.size = size;
 
