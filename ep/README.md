@@ -47,7 +47,8 @@ python -c "import torch; import uccl.ep"
 ```
 
 Note: 
-* If you hit some `CUDA error: invalid device function`, it is likely that the GPU arch auto-detection fails; you can forcely specify the arch by `export TORCH_CUDA_ARCH_LIST=gfx950` (eg, default gfx942 for MI300X/MI325X, gfx950 for MI355X). 
+* If you hit some `CUDA error: invalid device function`, it is likely that the GPU arch auto-detection fails. You can forcely specify the arch by setting `TORCH_CUDA_ARCH_LIST=gfx950` (eg, default gfx942 for MI300X/MI325X, gfx950 for MI355X) during compilation. 
+* If you hit value errors on AMD platform, we suggest set `DISABLE_AGGRESSIVE_ATOMIC=1` during compilation. 
 
 ## Example APIs
 
