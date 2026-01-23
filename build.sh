@@ -329,6 +329,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e USE_IB="${USE_IB:-0}" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
   -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
+  -e DISABLE_AGGRESSIVE_ATOMIC="${DISABLE_AGGRESSIVE_ATOMIC:-0}" \
   -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_ccl_rdma build_ccl_efa build_p2p build_ep build_ukernel)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
