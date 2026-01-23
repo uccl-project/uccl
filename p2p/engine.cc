@@ -768,12 +768,6 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     return false;
   }
 
-  if (num_iovs > kMaxVector) {
-    std::cerr << "[readv] Error: num_iovs > kMaxVector (" << kMaxVector << ")"
-              << std::endl;
-    return false;
-  }
-
   std::vector<ucclRequest> ureq(num_iovs);
   std::vector<FifoItem> curr_slot_item(num_iovs);
   std::vector<bool> done(num_iovs, false);
@@ -1019,7 +1013,7 @@ bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   }
 
   std::vector<P2PMhandle*> mhandles(num_iovs);
-  
+
   // Check if mhandles are all valid
   for (int i = 0; i < num_iovs; i++) {
     mhandles[i] = get_mhandle(mr_id_v[i]);

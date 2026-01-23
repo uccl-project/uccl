@@ -116,7 +116,7 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
  * @return              0 on success, non-zero on failure.
  */
 int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
-                      size_t size, uint64_t* transfer_id);
+                     size_t size, uint64_t* transfer_id);
 
 /**
  * Send a vector of data chunks (Non blocking).
@@ -129,9 +129,9 @@ int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
  * @return              0 on success, non-zero on failure.
  */
 int uccl_engine_send_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
-                             std::vector<void const*> src_v,
-                             std::vector<size_t> size_v, int num_iovs,
-                             uint64_t* transfer_id);
+                            std::vector<void const*> src_v,
+                            std::vector<size_t> size_v, int num_iovs,
+                            uint64_t* transfer_id);
 /**
  * Send data with RC mode (Non blocking).
  * @param conn          Connection handle.
@@ -143,8 +143,7 @@ int uccl_engine_send_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
  * @return              0 on success, non-zero on failure.
  */
 int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
-                         size_t size, FifoItem fifo_item,
-                         uint64_t* transfer_id);
+                      size_t size, FifoItem fifo_item, uint64_t* transfer_id);
 /**
  * Send a vector of data chunks with RC mode (Non blocking).
  * @param conn          Connection handle.
@@ -156,12 +155,11 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
  * @param transfer_id   Pointer to store the transfer ID.
  * @return              0 on success, non-zero on failure.
  */
-int uccl_engine_write_vector(uccl_conn_t* conn,
-                                std::vector<uccl_mr_t> mr_ids,
-                                std::vector<void*> dst_v,
-                                std::vector<size_t> size_v,
-                                std::vector<FifoItem> fifo_items, int num_iovs,
-                                uint64_t* transfer_id);
+int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
+                             std::vector<void*> dst_v,
+                             std::vector<size_t> size_v,
+                             std::vector<FifoItem> fifo_items, int num_iovs,
+                             uint64_t* transfer_id);
 /**
  * Receive data (blocking).
  * @param conn          Connection handle.

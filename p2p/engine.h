@@ -279,7 +279,7 @@ class Endpoint {
 
     return ep_->get_oob_conn_key(rank_id);
   }
-  
+
   inline MR* get_mr(uint64_t mr_id) const {
     std::shared_lock<std::shared_mutex> lock(mr_mu_);
     auto it = mr_id_to_mr_.find(mr_id);
