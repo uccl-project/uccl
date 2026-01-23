@@ -2,8 +2,8 @@
 #ifdef UCCL_P2P_USE_TCPX
 #include "nccl_tcpx_endpoint.h"
 #else
-#include "engine.h"
 #include "endpoint_wrapper.h"
+#include "engine.h"
 #include "rdma/define.h"  // For OOB notification types
 #endif
 #include "util/util.h"
@@ -31,11 +31,8 @@
 // uccl_engine.
 thread_local bool inside_python = false;
 
-// Reuse NCCL FIFO descriptor (64B ABI) directly.
-using FifoItem = nccl_tcpx::FifoItem;
 using Endpoint = nccl_tcpx::Endpoint;
 #else
-using FifoItem = FifoItem;
 using Endpoint = ::Endpoint;
 #endif
 
@@ -46,7 +43,7 @@ struct uccl_engine {
 struct uccl_conn {
   uint64_t conn_id;
   uccl_engine* engine;
-  int sock_fd;  // Keep for backward compatibility
+  int sock_fd;               // Keep for backward compatibility
   std::string oob_conn_key;  // For epoll-based notifications
   std::thread* listener_thread;
   bool listener_running;
@@ -212,7 +209,8 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   return conn;
 }
 
-int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size, uccl_mr_t& mr_id) {
+int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size,
+                    uccl_mr_t& mr_id) {
   if (!engine || !data) return -1;
   bool ok = engine->endpoint->reg((void*)data, size, mr_id);
   if (!ok) {
@@ -226,82 +224,80 @@ int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size, uccl_mr_
 }
 
 int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
-                     size_t size, void* slot_item_ptr, uint64_t* transfer_id) {
+                     size_t size, FifoItem fifo_item, uint64_t* transfer_id) {
   if (!conn || !data) return -1;
-
-  FifoItem slot_item;
-  slot_item = *static_cast<FifoItem*>(slot_item_ptr);
 
   return conn->engine->endpoint->read_async(conn->conn_id, mr,
                                             const_cast<void*>(data), size,
-                                            slot_item, transfer_id)
+                                            fifo_item, transfer_id)
              ? 0
              : -1;
 }
 
 int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<void*> dst_v,
-                            std::vector<size_t> size_v, std::vector<FifoItem> fifo_items,
-                            int num_iovs, uint64_t* transfer_id) {
+                            std::vector<size_t> size_v,
+                            std::vector<FifoItem> fifo_items, int num_iovs,
+                            uint64_t* transfer_id) {
   if (!conn || num_iovs <= 0) return -1;
 
-  return conn->engine->endpoint->readv_async(conn->conn_id, mr_ids, dst_v, size_v,
-                                          fifo_items, num_iovs, transfer_id)
-          ? 0
-          : -1;
-
+  return conn->engine->endpoint->readv_async(conn->conn_id, mr_ids, dst_v,
+                                             size_v, fifo_items, num_iovs,
+                                             transfer_id)
+             ? 0
+             : -1;
 }
 
 int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                       size_t size, uint64_t* transfer_id) {
   if (!conn || !data) return -1;
-  return conn->engine->endpoint->send_async(conn->conn_id, mr, data,
-                                            size, transfer_id)
+  return conn->engine->endpoint->send_async(conn->conn_id, mr, data, size,
+                                            transfer_id)
              ? 0
              : -1;
 }
 
 int uccl_engine_write_rc(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
-                         size_t size, void* slot_item_ptr,
+                         size_t size, FifoItem fifo_item,
                          uint64_t* transfer_id) {
   if (!conn || !data) return -1;
 
 #ifdef UCCL_P2P_USE_TCPX
   return -1;  // TODO: support write_rc for TCPX
 #else
-  FifoItem slot_item;
-  slot_item = *static_cast<FifoItem*>(slot_item_ptr);
 
   return conn->engine->endpoint->write_async(conn->conn_id, mr,
                                              const_cast<void*>(data), size,
-                                             slot_item, transfer_id)
+                                             fifo_item, transfer_id)
              ? 0
              : -1;
 #endif
 }
 
-int uccl_engine_write_rc_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
-                            std::vector<void*> dst_v,
-                            std::vector<size_t> size_v, std::vector<FifoItem> fifo_items,
-                            int num_iovs, uint64_t* transfer_id) {
+int uccl_engine_write_rc_vector(uccl_conn_t* conn,
+                                std::vector<uccl_mr_t> mr_ids,
+                                std::vector<void*> dst_v,
+                                std::vector<size_t> size_v,
+                                std::vector<FifoItem> fifo_items, int num_iovs,
+                                uint64_t* transfer_id) {
   if (!conn || num_iovs <= 0) return -1;
 
 #ifdef UCCL_P2P_USE_TCPX
   return -1;  // TODO: support write_rc for TCPX
 #else
-  return conn->engine->endpoint->writev_async(conn->conn_id, mr_ids, dst_v, size_v,
-                                          fifo_items, num_iovs, transfer_id)
-          ? 0
-          : -1;
+  return conn->engine->endpoint->writev_async(conn->conn_id, mr_ids, dst_v,
+                                              size_v, fifo_items, num_iovs,
+                                              transfer_id)
+             ? 0
+             : -1;
 #endif
 }
 int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
                      size_t data_size) {
   if (!conn || !data) return -1;
 
-  return conn->engine->endpoint->recv(conn->conn_id, mr, data, data_size)
-             ? 0
-             : -1;
+  return conn->engine->endpoint->recv(conn->conn_id, mr, data, data_size) ? 0
+                                                                          : -1;
 }
 
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {
@@ -377,15 +373,25 @@ void uccl_engine_mr_destroy(uccl_engine_t* engine, uccl_mr_t mr) {
 }
 
 int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t mr,
-                                    void const* data, size_t size,
-                                    char* fifo_buf) {
+                             void const* data, size_t size, char* fifo_buf) {
   if (!engine || !data || !fifo_buf) return -1;
 
-  return engine->endpoint->prepare_fifo(mr,
-                                           const_cast<void*>(data), size,
-                                           fifo_buf)
+  return engine->endpoint->prepare_fifo(mr, const_cast<void*>(data), size,
+                                        fifo_buf)
              ? 0
              : -1;
+}
+
+int uccl_engine_update_fifo(char* fifo_buf, uint64_t remote_addr,
+                            uint32_t size) {
+  if (!fifo_buf) return -1;
+
+  uint64_t* fifo_addr = reinterpret_cast<uint64_t*>(fifo_buf);
+  uint32_t* fifo_size = reinterpret_cast<uint32_t*>(fifo_buf + 8);
+  *fifo_addr = remote_addr;
+  *fifo_size = size;
+
+  return 0;
 }
 
 std::vector<notify_msg_t> uccl_engine_get_notifs() {
@@ -414,7 +420,7 @@ std::vector<notify_msg_t> uccl_engine_get_notifs() {
 
 int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   if (!conn || !notify_msg) return -1;
-  
+
 #ifdef UCCL_P2P_USE_TCPX
   md_t md;
   md.op = UCCL_NOTIFY;
@@ -423,26 +429,26 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   return send(conn->sock_fd, &md, sizeof(md_t), 0);
 #else
   if (conn->oob_conn_key.empty()) {
-    std::cerr << "No OOB connection key available for notification" << std::endl;
+    std::cerr << "No OOB connection key available for notification"
+              << std::endl;
     return -1;
   }
-  
+
   auto oob_client = conn->engine->endpoint->get_oob_client();
   if (!oob_client) {
     std::cerr << "No OOB client available for notification" << std::endl;
     return -1;
   }
-  
-  // Create OOB notification message
+
   NotifyMsg oob_msg;
   oob_msg.magic = NOTIFY_MSG_MAGIC;
   strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
   oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
   memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
-  
+
   std::string payload(reinterpret_cast<char*>(&oob_msg), sizeof(NotifyMsg));
   bool ok = oob_client->send_meta(conn->oob_conn_key, payload);
-  
+
   return ok ? sizeof(NotifyMsg) : -1;
 #endif
 }
@@ -494,15 +500,4 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
   } catch (...) {
     return -1;
   }
-}
-
-int uccl_engine_update_fifo(char* fifo_buf, uint64_t remote_addr, uint32_t size) {
-  if (!fifo_buf) return -1;
-
-  uint64_t *fifo_addr = reinterpret_cast<uint64_t *>(fifo_buf);
-  uint32_t *fifo_size = reinterpret_cast<uint32_t *>(fifo_buf + 8);
-  *fifo_addr = remote_addr;
-  *fifo_size = size;
-
-  return 0;
 }

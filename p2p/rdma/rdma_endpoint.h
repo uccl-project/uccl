@@ -483,13 +483,14 @@ class NICEndpoint {
   void process_meta(std::string const& input, std::string& output,
                     std::string const& client_ip, int client_port) {
     if (input.size() >= sizeof(NotifyMsg)) {
-      NotifyMsg const* notify_msg = reinterpret_cast<NotifyMsg const*>(input.data());
+      NotifyMsg const* notify_msg =
+          reinterpret_cast<NotifyMsg const*>(input.data());
       if (notify_msg->magic == NOTIFY_MSG_MAGIC) {
         std::lock_guard<std::mutex> lock(notify_mutex);
         notify_list.push_back(*notify_msg);
         output = "";
-        LOG(INFO) << "process_meta: Received notification from" << notify_msg->name
-                  << " msg=" << notify_msg->msg;
+        LOG(INFO) << "process_meta: Received notification from"
+                  << notify_msg->name << " msg=" << notify_msg->msg;
         return;
       }
     }
@@ -518,10 +519,9 @@ class NICEndpoint {
 
       // Create response (include our OOB port for potential future use)
       RemoteMemInfo ctrl_info(ctrl_mem);
-      MetaInfoToExchange response(rank_id_, meta.channel_id,
-                                  recv_ctrl_channel->get_local_meta(), nullptr,
-                                  ChannelType::Control, gpu_index_,
-                                  oob_server_->get_port());
+      MetaInfoToExchange response(
+          rank_id_, meta.channel_id, recv_ctrl_channel->get_local_meta(),
+          nullptr, ChannelType::Control, gpu_index_, oob_server_->get_port());
       response.mem_meta = ctrl_info;
       LOG(INFO) << "response (control channel):::::::" << response;
       output = serialize(response);
@@ -545,13 +545,16 @@ class NICEndpoint {
       }
 
       if (meta.oob_port > 0) {
-        std::string rev_conn_key = oob_client_->connect_to_server(client_ip, meta.oob_port);
+        std::string rev_conn_key =
+            oob_client_->connect_to_server(client_ip, meta.oob_port);
         if (!rev_conn_key.empty()) {
           rank_oob_conn_keys_[actual_rank_id] = rev_conn_key;
-          LOG(INFO) << "Established reverse connection to " << client_ip << ":" << meta.oob_port
-                    << " for rank_id=" << actual_rank_id << ", conn_key=" << rev_conn_key;
+          LOG(INFO) << "Established reverse connection to " << client_ip << ":"
+                    << meta.oob_port << " for rank_id=" << actual_rank_id
+                    << ", conn_key=" << rev_conn_key;
         } else {
-          LOG(WARNING) << "Failed to establish reverse connection to " << client_ip << ":" << meta.oob_port;
+          LOG(WARNING) << "Failed to establish reverse connection to "
+                       << client_ip << ":" << meta.oob_port;
         }
       }
     } else {
@@ -678,10 +681,9 @@ class NICEndpoint {
     auto ctrl_info = std::make_shared<RemoteMemInfo>(ctrl_mem);
 
     // Include OOB server port for back-connection (notifications)
-    MetaInfoToExchange ctrl_meta(rank_id_, kControlChannelID,
-                                 control_channel->get_local_meta(), ctrl_info,
-                                 ChannelType::Control, gpu_index_,
-                                 oob_server_->get_port());
+    MetaInfoToExchange ctrl_meta(
+        rank_id_, kControlChannelID, control_channel->get_local_meta(),
+        ctrl_info, ChannelType::Control, gpu_index_, oob_server_->get_port());
 
     LOG(INFO) << "Control Meta: " << ctrl_meta
               << " Local Channel Meta: " << control_channel->get_local_meta()
@@ -802,7 +804,8 @@ class NICEndpoint {
       send_channel_groups_;
 
   std::unordered_map<uint64_t, std::shared_ptr<OOBMetaData>> rank_oob_meta_;
-  std::unordered_map<uint64_t, std::string> rank_oob_conn_keys_;  // Track conn_key per rank
+  std::unordered_map<uint64_t, std::string>
+      rank_oob_conn_keys_;  // Track conn_key per rank
   std::shared_ptr<EpollClient> oob_client_;
   std::shared_ptr<EpollServer> oob_server_;
   std::shared_ptr<MemoryAllocator> allocator_;

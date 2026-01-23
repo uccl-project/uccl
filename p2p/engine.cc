@@ -959,7 +959,7 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
 }
 
 bool Endpoint::prepare_fifo(uint64_t mr_id, void* addr, size_t len,
-                               char* out_buf) {
+                            char* out_buf) {
   auto mhandle = mr_id_to_mr_[mr_id]->mhandle_;
   // prepare_fifo_metadata doesn't actually use the endpoint or conn parameters
   if (prepare_fifo_metadata(ep_, nullptr, mhandle, addr, len, out_buf) == -1)
