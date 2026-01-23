@@ -42,7 +42,6 @@ class MemoryAllocator {
     // Create RegMemBlock with custom deleter
     auto deleter = [this, type](RegMemBlock* block) {
       if (block) {
-        std::cout << "memory freed" << std::endl;
         if (block->addr) deallocateRaw(block->addr, type);
         delete block;
       }

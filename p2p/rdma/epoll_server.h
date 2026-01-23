@@ -452,7 +452,6 @@ class EpollServer {
     if (epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr) < 0) {
       // ignore
     }
-    std::cout << "Closed connection fd=" << fd << "\n";
   }
 
  private:

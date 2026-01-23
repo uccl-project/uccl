@@ -257,8 +257,6 @@ class EpollClient {
           // Erase header
           conn.in_buf.erase(conn.in_buf.begin(),
                             conn.in_buf.begin() + sizeof(uint32_t));
-
-          std::cout << "Parsed response header: expected_len=" << len << "\n";
         } else {
           break;  // Wait for more data
         }
@@ -273,8 +271,6 @@ class EpollClient {
                             conn.in_buf.begin() + conn.expected_len);
           uint32_t got_len = conn.expected_len;
           conn.expected_len = 0;
-
-          std::cout << "Got full response payload: len=" << got_len << "\n";
 
           // Call the next callback if available
           if (!conn.response_callbacks.empty()) {
@@ -333,7 +329,6 @@ class EpollClient {
       ::close(it->second.fd);
     }
     conns_.erase(it);
-    std::cout << "Closed connection: " << conn_key << "\n";
   }
 
  private:
