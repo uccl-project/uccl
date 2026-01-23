@@ -2413,30 +2413,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
       // NOTES: this part is using "large warps" for each RDMA ranks
       auto const dst_rdma_rank = warp_id / kNumWarpsPerForwarder;
       auto const sub_warp_id = warp_id % kNumWarpsPerForwarder;
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-      // Receiver with Coordinator
-      auto const num_warps_per_rdma_rank = kNumForwarders / kNumRDMARanks;
-      int last_nvl_head[kNumRDMARanks] = {0};
 
-      auto forwarder_coordinator = [&]() {
-        EP_DEVICE_ASSERT(dst_rdma_rank < kNumRDMARanks);
-        int min_head = std::numeric_limits<int>::max();
-        int dst_nvl_rank = lane_id < NUM_MAX_NVL_PEERS ? lane_id : 0;
-#pragma unroll
-        for (int j = 0; j < num_warps_per_rdma_rank; ++j)
-          if (not forwarder_retired[dst_rdma_rank * num_warps_per_rdma_rank +
-                                    j])
-            min_head = min(
-                min_head,
-                forwarder_nvl_head[dst_rdma_rank * num_warps_per_rdma_rank + j]
-                                  [dst_nvl_rank]);
-        if (min_head != std::numeric_limits<int>::max() and
-            min_head > last_nvl_head[dst_rdma_rank] and
-            lane_id < NUM_MAX_NVL_PEERS)
-          st_relaxed_sys_global(nvl_channel_head.buffer_by(dst_nvl_rank),
-                                last_nvl_head[dst_rdma_rank] = min_head);
-      };
-#endif
       auto send_buffer = dst_rdma_rank == rdma_rank
                              ? rdma_channel_data.recv_buffer(dst_rdma_rank)
                              : rdma_channel_data.send_buffer(dst_rdma_rank);
@@ -2483,6 +2460,30 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                             num_bytes_per_token);
       nvl_channel_head.advance(dst_rdma_rank);
       nvl_channel_tail.advance(dst_rdma_rank);
+
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+      // Receiver with Coordinator
+      constexpr auto num_warps_per_rdma_rank = kNumForwarders / kNumRDMARanks;
+      int last_nvl_head = 0;
+
+      auto forwarder_coordinator = [&]() {
+        EP_DEVICE_ASSERT(dst_rdma_rank < kNumRDMARanks);
+        int min_head = std::numeric_limits<int>::max();
+        int dst_nvl_rank = lane_id < NUM_MAX_NVL_PEERS ? lane_id : 0;
+#pragma unroll
+        for (int j = 0; j < num_warps_per_rdma_rank; ++j)
+          if (not forwarder_retired[dst_rdma_rank * num_warps_per_rdma_rank +
+                                    j])
+            min_head = min(
+                min_head,
+                forwarder_nvl_head[dst_rdma_rank * num_warps_per_rdma_rank + j]
+                                  [dst_nvl_rank]);
+        if (min_head != std::numeric_limits<int>::max() and
+            min_head > last_nvl_head and lane_id < NUM_MAX_NVL_PEERS)
+          st_relaxed_sys_global(nvl_channel_head.buffer_by(dst_nvl_rank),
+                                last_nvl_head = min_head);
+      };
+#endif
 
       // Clean shared memory and sync
       EP_STATIC_ASSERT(NUM_MAX_NVL_PEERS <= WARP_SIZE,
@@ -2559,6 +2560,10 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
           // Coordinator
+          sync_barrier(MAX_NUM_BARRIERS - 1,
+                       min(kNumWarpsPerForwarder,
+                           token_end_idx - token_idx + sub_warp_id) *
+                           WARP_SIZE);
           if (sub_warp_id == 0) forwarder_coordinator();
 #endif
           // Wait lanes to be ready
@@ -2630,7 +2635,6 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
         }
         sync_large_warp();
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-        __threadfence_block();
         if (sub_warp_id == 0) forwarder_coordinator();
 #endif
 
