@@ -948,12 +948,6 @@ bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                           std::vector<char*> out_buf_v, size_t num_iovs) {
   auto* conn = conn_id_to_conn_[conn_id];
 
-  if (num_iovs > kMaxVector) {
-    std::cerr << "[advertisev] Error: num_iovs > kMaxVector (" << kMaxVector
-              << ")" << std::endl;
-    return false;
-  }
-
   for (size_t i = 0; i < num_iovs; ++i) {
     auto mhandle = mr_id_to_mr_[mr_id_v[i]]->mhandle_;
     if (prepare_fifo_metadata(ep_, conn, mhandle, addr_v[i], len_v[i],
