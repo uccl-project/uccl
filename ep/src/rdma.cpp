@@ -152,10 +152,15 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 
     // Collect all NICs with equal minimum distance
     std::vector<std::string> candidates;
+#ifdef EFA
+    int num_efas = 0;
+#endif
     for (auto& p : dist) {
 #ifdef EFA
-      if (p.second == min_d && strncmp(p.first.c_str(), "rdmap", 5) == 0)
-        candidates.push_back(p.first);
+      if (strncmp(p.first.c_str(), "rdmap", 5) == 0) {
+        num_efas++;
+        if (p.second == min_d) candidates.push_back(p.first);
+      }
 #else
       if (!uccl::is_iface_up(p.first)) continue;
       if (p.second == min_d) candidates.push_back(p.first);
@@ -170,14 +175,13 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       // For example, pass in `local_rank` or derive gpu_index from device path
       selected_nic_name = candidates[thread_idx % candidates.size()];
 #ifdef EFA
-      // NOTE(MaoZiming): This is a temporary hack.
-      if (candidates.size() == 8) {
-        // On p5, there are 8 NICs with the same distance.
-        auto half = (local_rank % 2) * 4;
-        // GPU0 uses candidates[0/1/2/3], GPU1 uses candidates[4/5/6/7], etc.
-        selected_nic_name = candidates[thread_idx % 4 + half];
+      if (num_efas == 32) {
+        assert(candidates.size() == 4);
+        // On p5, there are 4 NICs with the same distance.
+        selected_nic_name = candidates[thread_idx % 4];
         use_ll_sl = true;
-      } else if (candidates.size() == 4) {
+      } else if (num_efas == 16) {
+        assert(candidates.size() == 4);
         // On p5e/p5en, there are 4 NICs with the same distance.
         // We hardcode the first half Proxies to use the first NIC, and the
         // second half to use the second NIC.
@@ -187,6 +191,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
         use_ll_sl = true;
       } else {
         // On p6-b200, there is 2 NICs with the same distance.
+        assert(num_efas == 8);
         assert(candidates.size() == 2);
         auto half = (local_rank % 2) * 1;
         selected_nic_name = candidates[thread_idx % 1 + half];
