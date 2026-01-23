@@ -3,9 +3,9 @@
 
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <vector>
-#include <mutex>
 
 typedef uint64_t FlowID;
 struct ConnID {

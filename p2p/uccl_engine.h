@@ -248,5 +248,5 @@ int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t mr,
  * @param size          New size to set.
  * @return              0 on success, -1 on failure.
  */
-int uccl_engine_update_fifo(char* fifo_buf, uint64_t remote_addr,
+int uccl_engine_update_fifo(FifoItem& fifo_item, uint64_t remote_addr,
                             uint32_t size);

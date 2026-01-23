@@ -382,14 +382,12 @@ int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t mr,
              : -1;
 }
 
-int uccl_engine_update_fifo(char* fifo_buf, uint64_t remote_addr,
+int uccl_engine_update_fifo(FifoItem& fifo_item, uint64_t remote_addr,
                             uint32_t size) {
-  if (!fifo_buf) return -1;
+  if (!fifo_item) return -1;
 
-  uint64_t* fifo_addr = reinterpret_cast<uint64_t*>(fifo_buf);
-  uint32_t* fifo_size = reinterpret_cast<uint32_t*>(fifo_buf + 8);
-  *fifo_addr = remote_addr;
-  *fifo_size = size;
+  fifo_item.addr = remote_addr;
+  fifo_item.size = size;
 
   return 0;
 }
