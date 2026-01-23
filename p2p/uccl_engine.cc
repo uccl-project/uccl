@@ -113,36 +113,13 @@ void listener_thread_func(uccl_conn_t* conn) {
       continue;
     }
 
-    uint64_t mr_id = 0;
-    switch (md.op) {
-      case UCCL_WRITE: {
-        tx_msg_t tx_data = md.data.tx_data;
-        uintptr_t base_addr;
-        if (!find_mem_reg(tx_data.data_ptr, base_addr, mr_id)) {
-          std::cerr << "Local memory not registered for address: "
-                    << tx_data.data_ptr << std::endl;
-          break;
-        }
-
-        int result = uccl_engine_recv(conn, mr_id, (void*)tx_data.data_ptr,
-                                      tx_data.data_size);
-        if (result < 0) {
-          std::cerr << "Failed to perform uccl_engine_recv" << std::endl;
-        }
-        break;
-      }
-      case UCCL_NOTIFY: {
-        std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
-        notify_msg_t notify_msg = {};
-        strncpy(notify_msg.name, md.data.notify_data.name,
-                sizeof(notify_msg.name) - 1);
-        memcpy(notify_msg.msg, md.data.notify_data.msg, sizeof(notify_msg.msg));
-        notify_msg_list.push_back(notify_msg);
-        break;
-      }
-      default:
-        std::cerr << "Invalid operation type: " << md.op << std::endl;
-        continue;
+    {
+      std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
+      notify_msg_t notify_msg = {};
+      strncpy(notify_msg.name, md.notify_data.name,
+              sizeof(notify_msg.name) - 1);
+      memcpy(notify_msg.msg, md.notify_data.msg, sizeof(notify_msg.msg));
+      notify_msg_list.push_back(notify_msg);
     }
   }
 }
@@ -419,8 +396,7 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
 
 #ifdef UCCL_P2P_USE_TCPX
   md_t md;
-  md.op = UCCL_NOTIFY;
-  md.data.notify_data = *notify_msg;
+  md.notify_data = *notify_msg;
 
   return send(conn->sock_fd, &md, sizeof(md_t), 0);
 #else

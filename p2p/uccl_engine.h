@@ -16,25 +16,13 @@ typedef struct uccl_conn uccl_conn_t;
 // Handle for a memory region
 typedef uint64_t uccl_mr_t;
 
-// UCCL operation types
-enum uccl_msg_type { UCCL_WRITE = 1, UCCL_NOTIFY = 2 };
-
-typedef struct tx_msg {
-  uint64_t data_ptr;  // Memory address for data reception
-  size_t data_size;   // Size of data to receive
-} tx_msg_t;
-
 typedef struct notify_msg {
   char name[MSG_SIZE];
   char msg[MSG_SIZE];
 } notify_msg_t;
 
 typedef struct md {
-  uccl_msg_type op;
-  union {
-    tx_msg_t tx_data;
-    notify_msg_t notify_data;
-  } data;
+  notify_msg_t notify_data;
 } md_t;
 
 /**
