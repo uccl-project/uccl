@@ -11,7 +11,7 @@ if [ "$MODE" = "ll" ]; then
     torchrun --nnodes=$NNODES --nproc_per_node=8 --node_rank=$RANK \
         --master_addr=$MAIN_IP --master_port=12355 \
         test_low_latency.py --num-tokens=128 \
-        --hidden=7168 --num-topk=8 --num-experts=288 --pressure-test-mode=2
+        --hidden=7168 --num-topk=8 --num-experts=288
 elif [ "$MODE" = "ht" ]; then
     torchrun --nnodes=$NNODES --nproc_per_node=8 --node_rank=$RANK \
         --master_addr=$MAIN_IP --master_port=12355 \
