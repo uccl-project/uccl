@@ -147,6 +147,12 @@ PYBIND11_MODULE(p2p, m) {
                " size=" + std::to_string(d.size) +
                " mr_id=" + std::to_string(d.mr_id) + ">";
       });
+  py::enum_<dietgpu::FloatType>(m, "FloatType")
+      .value("kUndefined", dietgpu::FloatType::kUndefined)
+      .value("kFloat16",   dietgpu::FloatType::kFloat16)
+      .value("kBFloat16",  dietgpu::FloatType::kBFloat16)
+      .value("kFloat32",   dietgpu::FloatType::kFloat32)
+      .export_values();
 
   // Endpoint class binding
   py::class_<Endpoint>(m, "Endpoint")
@@ -234,18 +240,18 @@ PYBIND11_MODULE(p2p, m) {
           "Accept an incoming connection")
       .def(
           "reg",
-          [](Endpoint& self, uint64_t ptr, size_t size) {
+          [](Endpoint& self, uint64_t ptr, size_t size, dietgpu::FloatType floatType) {
             uint64_t mr_id;
             bool success;
             {
               py::gil_scoped_release release;
               InsidePythonGuard guard;
               success =
-                  self.reg(reinterpret_cast<void const*>(ptr), size, mr_id);
+                  self.reg(reinterpret_cast<void const*>(ptr), size, mr_id, floatType);
             }
             return py::make_tuple(success, mr_id);
           },
-          "Register a data buffer", py::arg("ptr"), py::arg("size"))
+          "Register a data buffer", py::arg("ptr"), py::arg("size"), py::arg("floatType"))
       .def(
           "regv",
           [](Endpoint& self, std::vector<uintptr_t> const& ptrs,

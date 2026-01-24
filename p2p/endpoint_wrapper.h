@@ -19,6 +19,7 @@ static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
   local_mem->mr_array = local_mh->mr_array;
 
   auto req = std::make_shared<RDMASendRequest>(local_mem, remote_mem);
+  req->float_type = local_mh->float_type; 
   req->to_rank_id = conn->uccl_conn_id_.flow_id;
 
   req->send_type =
@@ -181,8 +182,10 @@ inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
                                                 MemoryType::GPU);
   send_mem->mr_array = mhandle->mr_array;
   auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
+  
   auto send_req =
       std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
+  send_req->float_type = mhandle->float_type;
   ureq->type = ReqType::ReqTx;
   send_req->to_rank_id = conn->uccl_conn_id_.flow_id;
   ureq->engine_idx = s->sendWithoutInnerQueue(send_req);
@@ -200,6 +203,7 @@ inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
       std::make_shared<RegMemBlock>(data[0], size[0], MemoryType::GPU);
   recv_mem->mr_array = mhandles->mr_array;
   auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
+  recv_req->float_type = mhandles->float_type;
   ureq->type = ReqType::ReqRx;
   ureq->engine_idx = s->recv(conn->uccl_conn_id_.flow_id, recv_req);
   ureq->n = conn->uccl_conn_id_.flow_id;

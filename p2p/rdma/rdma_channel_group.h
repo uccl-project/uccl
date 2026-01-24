@@ -6,7 +6,11 @@
 
 class ChannelGroup {
  public:
-  ChannelGroup() : last_channel_id_(0) {}
+  ChannelGroup() : last_channel_id_(0) {
+    auto allocator = std::make_shared<MemoryAllocator>();
+    buffer_compression_ = allocator->allocate(kCompressBufferSize,
+                                           MemoryType::GPU, nullptr);
+  }
   virtual ~ChannelGroup() = default;
 
   virtual void addChannel(uint32_t channel_id,
@@ -16,6 +20,17 @@ class ChannelGroup {
     }
     std::unique_lock<std::shared_mutex> lock(mutex_);
 
+    auto ctx_ptr = channel->getContext();
+    if (!ctx_ptr) {
+      throw std::invalid_argument("addChannel called with channel having null RdmaContext");
+    }else{
+      ctx_ptr->regMem(buffer_compression_->addr,
+                      buffer_compression_->size);
+      buffer_compression_->setMRByChannelID(
+          channel_id,
+          ctx_ptr->regMem(buffer_compression_->addr,
+                          buffer_compression_->size));
+    }
     channels_[channel_id] = std::move(channel);
   }
 
@@ -98,6 +113,9 @@ class ChannelGroup {
   mutable std::shared_mutex mutex_;
   std::unordered_map<uint32_t, std::shared_ptr<RDMAChannel>> channels_;
   std::atomic<uint32_t> last_channel_id_;
+
+  std::shared_ptr<RegMemBlock> buffer_compression_;
+
 };
 
 class SendChannelGroup : public ChannelGroup {
@@ -110,6 +128,12 @@ class SendChannelGroup : public ChannelGroup {
     tracker_ = std::make_shared<AtomicBitmapPacketTrackerMultiAck>();
     request_queue_ = std::make_unique<
         RingBuffer<std::shared_ptr<RDMASendRequest>, kRingCapacity>>();
+    // Initialize CudaStream for compression
+    compress_stream_ = std::make_shared<dietgpu::CudaStream>(
+        dietgpu::CudaStream::make());
+    // Initialize StackDeviceMemory for compression
+    compress_res_ = std::make_shared<dietgpu::StackDeviceMemory>(
+        dietgpu::makeStackMemory());
   }
 
   ~SendChannelGroup() { stopPolling(); }
@@ -118,7 +142,6 @@ class SendChannelGroup : public ChannelGroup {
                   std::shared_ptr<RDMAChannel> channel) override {
     ChannelGroup::addChannel(channel_id, channel);
   }
-
   std::shared_ptr<RDMAChannel> getChannel(uint32_t channel_id) const override {
     auto result = ChannelGroup::getChannel(channel_id);
     return result;
@@ -269,6 +292,10 @@ class SendChannelGroup : public ChannelGroup {
   bool auto_start_polling_;
   int numa_node_ = 0;
 
+  // Compression resources
+  std::shared_ptr<dietgpu::CudaStream> compress_stream_;
+  std::shared_ptr<dietgpu::StackDeviceMemory> compress_res_;
+
   // Send a request through the appropriate channel
   // Returns true on success, false on failure
   bool postRequestOnChannel(std::shared_ptr<RDMASendRequest> req) {
@@ -381,11 +408,69 @@ class SendChannelGroup : public ChannelGroup {
     }
   }
 
+  inline void compressSendRequest(std::shared_ptr<RDMASendRequest> req) {
+    if (!req || !compress_stream_ || !compress_res_) {
+      return;
+    }
+
+    // Setup compression config
+    dietgpu::FloatCompressConfig compressConfig;
+    compressConfig.floatType = req->float_type;
+    compressConfig.useChecksum = false;
+    compressConfig.is16ByteAligned = true;
+
+    // Calculate element count from bytes
+    uint32_t numFloats = getElementCountFromBytes(
+        req->float_type, req->local_mem->size);
+
+    // Setup batch (single element batch)
+    const void* inPtrs[1] = {req->local_mem->addr};
+    uint32_t inSizes[1] = {numFloats};
+    void* outPtrs[1] = {buffer_compression_->addr};
+
+    // Allocate device memory for compressed size output
+    uint32_t* devCompressedSize = nullptr;
+    GPU_CHECK(hipMalloc(&devCompressedSize, sizeof(uint32_t)));
+
+    // Compress
+    dietgpu::floatCompress(
+        *compress_res_,
+        compressConfig,
+        1,  // numInBatch
+        inPtrs,
+        inSizes,
+        outPtrs,
+        devCompressedSize,
+        compress_stream_->get());
+
+    // Get compressed size
+    uint32_t compressedSize = 0;
+    GPU_CHECK(hipMemcpyAsync(&compressedSize, devCompressedSize,
+                              sizeof(uint32_t), hipMemcpyDeviceToHost,
+                              compress_stream_->get()));
+    GPU_CHECK(hipStreamSynchronize(compress_stream_->get()));
+
+    LOG(INFO) << "SendChannelGroup: Compressed " << req->local_mem->size
+              << " bytes to " << compressedSize << " bytes, ratio: "
+              << static_cast<float>(req->local_mem->size) / compressedSize << "x";
+
+    // Update request to use compressed buffer
+    req->local_mem = std::make_shared<RegMemBlock>(
+        buffer_compression_->addr, compressedSize,
+        buffer_compression_->mr_array, buffer_compression_->type);
+
+    // Cleanup
+    GPU_CHECK(hipFree(devCompressedSize));
+  }
+
   inline void processOnceSendRequests(std::shared_ptr<RDMASendRequest> req,
                                       SendReqMeta& meta, int index) {
     req->imm_data = index;
     req->channel_id = meta.channel_id;
     req->remote_mem = std::make_shared<RemoteMemInfo>(meta.remote_mem);
+    if (req->local_mem->size >= kMinCompressBytes) {
+      compressSendRequest(req);
+    }
     if (meta.expected_chunk_count > 1) {
       postChunkedRequest(req);
     } else {
@@ -429,7 +514,14 @@ class RecvChannelGroup : public ChannelGroup {
       : numa_node_(numa_node),
         running_(false),
         poll_thread_(nullptr),
-        auto_start_polling_(auto_start_polling) {}
+        auto_start_polling_(auto_start_polling) {
+    // Initialize CudaStream for decompression
+    decompress_stream_ = std::make_shared<dietgpu::CudaStream>(
+        dietgpu::CudaStream::make());
+    // Initialize StackDeviceMemory for decompression
+    decompress_res_ = std::make_shared<dietgpu::StackDeviceMemory>(
+        dietgpu::makeStackMemory());
+  }
 
   ~RecvChannelGroup() { stopPolling(); }
 
@@ -555,6 +647,54 @@ class RecvChannelGroup : public ChannelGroup {
   std::unique_ptr<std::thread> poll_thread_;
   bool auto_start_polling_;
   int numa_node_ = 0;
+
+  // Decompression resources
+  std::shared_ptr<dietgpu::CudaStream> decompress_stream_;
+  std::shared_ptr<dietgpu::StackDeviceMemory> decompress_res_;
+
+  inline void decompressRecvRequest(std::shared_ptr<RDMARecvRequest> req) {
+    if (unlikely(!req) || !decompress_stream_ || !decompress_res_) {
+      return;
+    }
+
+    // Setup decompression config
+    dietgpu::FloatDecompressConfig decompressConfig;
+    decompressConfig.floatType = req->float_type;
+    decompressConfig.useChecksum = false;
+    decompressConfig.is16ByteAligned = true;
+
+    // Calculate element count from bytes for output capacity
+    uint32_t numFloats = getElementCountFromBytes(req->float_type, req->local_mem->size);
+
+    // Setup batch for decompression
+    // Input is the compressed data in buffer_compression_
+    // Output is the original local_mem buffer
+    const void* compInPtrs[1] = {buffer_compression_->addr};
+    void* decompOutPtrs[1] = {req->local_mem->addr};
+    uint32_t outCapacities[1] = {numFloats};
+
+    // Decompress
+    dietgpu::FloatDecompressStatus status = dietgpu::floatDecompress(
+        *decompress_res_,
+        decompressConfig,
+        1,  // numInBatch
+        compInPtrs,
+        decompOutPtrs,
+        outCapacities,
+        nullptr,  // outSuccess_dev (optional)
+        nullptr,  // outSize_dev (optional)
+        decompress_stream_->get());
+
+    GPU_CHECK(hipStreamSynchronize(decompress_stream_->get()));
+
+    if (status.error != dietgpu::FloatDecompressError::None) {
+      LOG(ERROR) << "RecvChannelGroup: Decompression failed!";
+      return;
+    }
+
+    LOG(INFO) << "RecvChannelGroup: Decompressed data to "
+              << req->local_mem->size << " bytes";
+  }
 
   // Collect rkey for a specific channel
   // Returns: true on success, false on failure
