@@ -1675,7 +1675,7 @@ __global__ void cached_notify(
     // iterate over the channels in a warp-wise manner
     int remain_warp_id = warp_id;
     for (int i = 0; i < num_channels; i += num_warps) {
-      warp_id = i * num_warps + remain_warp_id;
+      warp_id = i + remain_warp_id;
 #endif
       if (lane_id < num_rdma_ranks and warp_id < num_channels) {
         int token_start_idx, token_end_idx;
@@ -1715,7 +1715,7 @@ __global__ void cached_notify(
     // iterate over the channels in a warp-wise manner
     int remain_warp_id = warp_id;
     for (int i = 0; i < num_channels; i += num_warps) {
-      warp_id = i * num_warps + remain_warp_id;
+      warp_id = i + remain_warp_id;
 #endif
       if (warp_id < num_channels) {
         constexpr int tma_batch_size = kNumTMABytesPerWarp - sizeof(uint64_t);
