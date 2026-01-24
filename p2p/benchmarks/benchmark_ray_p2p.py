@@ -57,7 +57,7 @@ def _pretty(num: int):
 
 
 def _run_server(args, ep):
-    """Server side: receives data via WRITE operations."""
+    """Server side: receives data via WRITE/READ operations."""
     peer = 0
 
     # Get local metadata first
@@ -68,13 +68,6 @@ def _run_server(args, ep):
     remote_metadata = _recv_bytes(src=peer)
     _send_bytes(local_metadata, dst=peer)
     print(f"[Server] Exchanged metadata with client")
-
-    # Server uses passive_accept, so connection is handled automatically
-    # Wait a bit for connection to establish
-    import time
-
-    time.sleep(0.5)  # Give time for connection to establish
-    print("[Server] Connection should be established (passive accept)")
 
     for sz in args.sizes:
         # For each size, handle multiple iterations
@@ -102,7 +95,7 @@ def _run_server(args, ep):
 
 
 def _run_client(args, ep):
-    """Client side: sends data via WRITE operations."""
+    """Client side: sends data via WRITE/READ operations."""
     peer = 1
 
     # Exchange metadata with server (only once at the beginning)
@@ -132,11 +125,10 @@ def _run_client(args, ep):
         remote_descs = ep.deserialize_descs(remote_descs_serialized)
 
         # Warmup transfer
-        xfer_handle = ep.transfer(conn_id, "READ", local_descs, remote_descs)
+        xfer_handle = ep.transfer(conn_id, args.mode, local_descs, remote_descs)
         assert xfer_handle is not None, "Failed to start warmup transfer"
         while not ep.check_xfer_state(xfer_handle):
             pass
-
         dist.barrier()
 
         # Benchmark iterations
@@ -161,7 +153,7 @@ def _run_client(args, ep):
             remote_descs = ep.deserialize_descs(remote_descs_serialized)
 
             # Start transfer
-            xfer_handle = ep.transfer(conn_id, "WRITE", local_descs, remote_descs)
+            xfer_handle = ep.transfer(conn_id, args.mode, local_descs, remote_descs)
             assert xfer_handle is not None, "Failed to start transfer"
 
             # Check transfer state until complete
@@ -195,7 +187,10 @@ def main():
     p.add_argument("--local-gpu-idx", type=int, default=0)
     p.add_argument("--num-cpus", type=int, default=4)
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
-    p.add_argument("--mode", choices=["read", "write"], default="write")
+    p.add_argument("--mode", choices=["READ", "WRITE"], default="WRITE")
+    p.add_argument(
+        "--perf", action="store_true", help="Measure pure transfer performance"
+    )
     p.add_argument(
         "--sizes",
         type=parse_sizes,
