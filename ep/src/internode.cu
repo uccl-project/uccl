@@ -2731,7 +2731,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
       };
 #endif
 
-      sync_rdma_receiver_smem();
+      // sync_rdma_receiver_smem();
 
       // The same tokens as the dispatch process
       int token_start_idx, token_end_idx;
