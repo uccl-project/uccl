@@ -321,12 +321,22 @@ class CollectiveContext:
         size = tensor.numel() * tensor.element_size()
         return ptr, size
 
-    def _register_memory(self, ptr: int, size: int) -> int:
+    def float_type_from_tensor(self, t: torch.Tensor) -> p2p.FloatType:
+        if t.dtype == torch.float16:
+            return p2p.FloatType.kFloat16
+        elif t.dtype == torch.bfloat16:
+            return p2p.FloatType.kBFloat16
+        elif t.dtype == torch.float32:
+            return p2p.FloatType.kFloat32
+        else:
+            raise TypeError(f"Unsupported tensor dtype: {t.dtype}")
+
+    def _register_memory(self, ptr: int, size: int, float_type: p2p.FloatType) -> int:
         """Register memory and cache the memory region information."""
         existing_mr_id = self._check_register(ptr, size)
         if existing_mr_id is not None:
             return existing_mr_id
-        ok, mr_id = self.ep.reg(ptr, size)
+        ok, mr_id = self.ep.reg(ptr, size, float_type)
         if not ok:
             raise RuntimeError("Failed to register memory")
         self.memory_regions.add(ptr, ptr + size, mr_id)
@@ -351,7 +361,7 @@ class CollectiveContext:
         if not self.initialized:
             raise RuntimeError("CollectiveContext not initialized. Call init() first.")
         ptr, size = self._get_buffer_info(tensor)
-        return self._register_memory(ptr, size)
+        return self._register_memory(ptr, size, self.float_type_from_tensor(tensor))
 
     def deregister_tensor(self, tensor: torch.Tensor) -> bool:
         """Deregister a previously registered tensor."""

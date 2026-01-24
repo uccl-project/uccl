@@ -529,7 +529,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   return true;
 }
 
-bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
+bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id, dietgpu::FloatType float_type) {
   mr_id = next_mr_id_.fetch_add(1);
 
   if (!engine_initialized_) {
@@ -546,9 +546,12 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   }
 
   P2PMhandle* mhandle = new P2PMhandle();
+  mhandle->compress_ctx = std::make_shared<dietgpu::FloatCompressSplitContext>();
+  mhandle->compress_ctx->float_type = float_type;
   if (!uccl_regmr(ep_, const_cast<void*>(data), size, mhandle)) {
     return false;
   }
+
   {
     std::unique_lock<std::shared_mutex> lock(mr_mu_);
     mr_id_to_mr_[mr_id] = new MR{mr_id, mhandle};
@@ -619,6 +622,7 @@ bool Endpoint::dereg(uint64_t mr_id) {
       return false;
     }
     auto mr = it->second;
+    mr->mhandle_->compress_ctx.reset();
     uccl_deregmr(ep_, mr->mhandle_);
     delete mr;
     mr_id_to_mr_.erase(mr_id);

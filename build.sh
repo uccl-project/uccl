@@ -239,6 +239,7 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
   -e USE_TCPX="${USE_TCPX:-0}" \
   -e USE_EFA="${USE_EFA:-0}" \
+  -e USE_DIETGPU="${USE_DIETGPU:-0}" \
   -e USE_IB="${USE_IB:-0}" \
   -e USE_TCP="${USE_TCP:-0}" \
   -e USE_INTEL_RDMA_NIC="${USE_INTEL_RDMA_NIC:-0}" \
