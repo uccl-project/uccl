@@ -279,7 +279,7 @@ PYBIND11_MODULE(p2p, m) {
           "Deserialize bytes to transfer descriptors",
           py::arg("serialized_bytes"))
       .def(
-          "trasnfer",
+          "transfer",
           [](Endpoint& self, uint64_t conn_id, std::string const& op_name,
              py::list local_desc_list, py::list remote_desc_list) {
             std::vector<XferDesc> local_desc_v;

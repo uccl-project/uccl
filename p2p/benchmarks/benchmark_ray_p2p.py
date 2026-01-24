@@ -7,9 +7,6 @@ import torch
 from typing import List
 import os
 
-# Only RC mode is supported for now.
-os.environ["UCCL_RCMODE"] = "1"
-
 try:
     from uccl import p2p
 except ImportError:
@@ -116,10 +113,6 @@ def _run_client(args, ep):
 
     for sz in args.sizes:
         # Warmup iteration
-        # Add remote endpoint
-        success, conn_id = ep.add_remote_endpoint(remote_metadata)
-        assert success, "Failed to add remote endpoint"
-
         # Create new memory buffer
         size_per_block = sz // args.num_iovs
         buf_v = []
@@ -130,12 +123,16 @@ def _run_client(args, ep):
         # Register local memory
         local_descs = ep.register_memory(buf_v)
 
+        # Add remote endpoint
+        success, conn_id = ep.add_remote_endpoint(remote_metadata)
+        assert success, "Failed to add remote endpoint"
+
         # Wait for server to send remote descriptors
         remote_descs_serialized = _recv_bytes(src=peer)
         remote_descs = ep.deserialize_descs(remote_descs_serialized)
 
         # Warmup transfer
-        xfer_handle = ep.trasnfer(conn_id, "WRITE", local_descs, remote_descs)
+        xfer_handle = ep.transfer(conn_id, "READ", local_descs, remote_descs)
         assert xfer_handle is not None, "Failed to start warmup transfer"
         while not ep.check_xfer_state(xfer_handle):
             pass
@@ -146,10 +143,6 @@ def _run_client(args, ep):
         start = time.perf_counter()
         total = 0
         for iter_idx in range(args.iters):
-            # Add remote endpoint
-            success, conn_id = ep.add_remote_endpoint(remote_metadata)
-            assert success, "Failed to add remote endpoint"
-
             # Create new memory buffer for each iteration
             buf_v = []
             for _ in range(args.num_iovs):
@@ -159,12 +152,16 @@ def _run_client(args, ep):
             # Register local memory (new memory for each iteration)
             local_descs = ep.register_memory(buf_v)
 
+            # Add remote endpoint
+            success, conn_id = ep.add_remote_endpoint(remote_metadata)
+            assert success, "Failed to add remote endpoint"
+
             # Wait for server to send remote descriptors (exchange memory addresses)
             remote_descs_serialized = _recv_bytes(src=peer)
             remote_descs = ep.deserialize_descs(remote_descs_serialized)
 
             # Start transfer
-            xfer_handle = ep.trasnfer(conn_id, "WRITE", local_descs, remote_descs)
+            xfer_handle = ep.transfer(conn_id, "WRITE", local_descs, remote_descs)
             assert xfer_handle is not None, "Failed to start transfer"
 
             # Check transfer state until complete
@@ -195,14 +192,10 @@ def parse_sizes(v: str) -> List[int]:
 
 def main():
     p = argparse.ArgumentParser("UCCL Ray P2P benchmark using transfer API")
-    p.add_argument(
-        "--lazy",
-        action="store_true",
-        help="Pre-register all memory before benchmark",
-    )
     p.add_argument("--local-gpu-idx", type=int, default=0)
     p.add_argument("--num-cpus", type=int, default=4)
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
+    p.add_argument("--mode", choices=["read", "write"], default="write")
     p.add_argument(
         "--sizes",
         type=parse_sizes,
@@ -231,12 +224,10 @@ def main():
 
     print("UCCL Ray P2P Benchmark")
     print("=" * 60)
-    print(f"Mode: WRITE")
+    print(f"Mode: {args.mode.upper()}")
     print("Sizes:", ", ".join(_pretty(s) for s in args.sizes))
     print(f"Iterations: {args.iters}")
     print(f"Number of IOVs: {args.num_iovs}")
-    if args.lazy:
-        print("Lazy mode: Pre-registering all memory")
     print("=" * 60)
 
     dist.init_process_group(backend="gloo")
@@ -244,11 +235,7 @@ def main():
     world_size = dist.get_world_size()
     assert world_size == 2, "This benchmark only supports 2 processes"
 
-    # Create endpoint: server uses passive_accept=True, client uses normal mode
-    if rank == 1:  # Server
-        ep = p2p.Endpoint(args.num_cpus, True)  # passive_accept=True
-    else:  # Client
-        ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+    ep = p2p.Endpoint(args.num_cpus, True)
 
     if rank == 0:
         _run_client(args, ep)

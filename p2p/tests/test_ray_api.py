@@ -531,7 +531,7 @@ def test_transfer():
         print(f"[Client] Deserialized {len(remote_descs)} remote descriptor(s)")
 
         # Start transfer (WRITE operation)
-        xfer_handle = ep.trasnfer(conn_id, "WRITE", local_descs, remote_descs)
+        xfer_handle = ep.transfer(conn_id, "WRITE", local_descs, remote_descs)
         assert xfer_handle is not None, "Failed to start transfer"
         print(f"[Client] Started WRITE transfer")
 
