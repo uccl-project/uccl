@@ -22,15 +22,23 @@
 #include <variant>
 #include <vector>
 
-#include <hip/hip_runtime.h>
-#include <hip/hip_fp16.h>
 
 #include <iostream>
 #include <vector>
 
-#include "dietgpu/float/GpuFloatCodec_hip.h"
-
-#include "dietgpu/utils/StackDeviceMemory_hip.h"
+#ifdef USE_DIETGPU
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__)
+  #include <hip/hip_runtime.h>
+  #include <hip/hip_fp16.h>
+  #include "dietgpu/float/GpuFloatCodec_hip.h"
+  #include "dietgpu/utils/StackDeviceMemory_hip.h"
+#else
+  #include <cuda_runtime.h>
+  #include <cuda_fp16.h>
+  #include "dietgpu/float/GpuFloatCodec_cuda.h"
+  #include "dietgpu/utils/StackDeviceMemory_cuda.h"
+#endif
+#endif
 
 namespace py = pybind11;
 
@@ -100,6 +108,7 @@ inline void deserialize_fifo_item(char const* buf, FifoItem* item) {
 }
 
 struct P2PMhandle {
+  dietgpu::FloatType float_type;
   MRArray mr_array;
 };
 
@@ -164,7 +173,7 @@ class Endpoint {
   bool accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
 
   /* Register the data with a specific interface. */
-  bool reg(void const* data, size_t size, uint64_t& mr_id);
+  bool reg(void const* data, size_t size, uint64_t& mr_id, dietgpu::FloatType float_type = dietgpu::FloatType::kFloat32);
 
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);

@@ -36,6 +36,75 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__)
+
+  #include <hip/hip_runtime.h>
+  #include <hip/hip_fp16.h>
+  #include "dietgpu/float/GpuFloatCodec_hip.h"
+  #include "dietgpu/utils/StackDeviceMemory_hip.h"
+  #include "dietgpu/utils/DeviceUtils_hip.h"
+  // #include "dietgpu/float/GpuFloatUtils_hip.cuh"
+  #define GPU_CHECK(cmd)                                                       \
+    do {                                                                        \
+      hipError_t error = (cmd);                                                 \
+      if (error != hipSuccess) {                                                \
+        LOG(ERROR) << "HIP error: " << hipGetErrorString(error)                 \
+                   << " at " << __FILE__ << ":" << __LINE__;                   \
+        std::abort();                                                          \
+      }                                                                         \
+    } while (0)
+
+  using GpuStream_t = hipStream_t;
+  using GpuError_t  = hipError_t;
+
+#else
+  #include <cuda_runtime.h>
+  #include <cuda_fp16.h>
+
+  #include "dietgpu/float/GpuFloatCodec.h"
+  #include "dietgpu/utils/StackDeviceMemory.h"
+  #include "dietgpu/utils/DeviceUtils.h"
+  // #include "dietgpu/float/GpuFloatUtils.cuh"
+
+  #define GPU_CHECK(cmd)                                                       \
+    do {                                                                        \
+      cudaError_t error = (cmd);                                                \
+      if (error != cudaSuccess) {                                               \
+        LOG(ERROR) << "CUDA error: " << cudaGetErrorString(error)               \
+                   << " at " << __FILE__ << ":" << __LINE__;                   \
+        std::abort();                                                          \
+      }                                                                         \
+    } while (0)
+
+  using GpuStream_t = cudaStream_t;
+  using GpuError_t  = cudaError_t;
+
+#endif
+
+inline size_t getWordSizeFromFloatType(dietgpu::FloatType ft) {
+  switch (ft) {
+    case dietgpu::FloatType::kFloat16:
+    case dietgpu::FloatType::kBFloat16:
+      return sizeof(uint16_t);
+    case dietgpu::FloatType::kFloat32:
+      return sizeof(uint32_t);
+    default:
+      CHECK(false);
+      return 0;
+  }
+}
+
+inline size_t getElementCountFromBytes(dietgpu::FloatType ft, size_t bytes) {
+  const size_t wordSize = getWordSizeFromFloatType(ft);
+
+  // 必须整除，否则说明数据损坏或类型不匹配
+  CHECK(bytes % wordSize == 0)
+      << "Bytes (" << bytes << ") not aligned with FloatType word size ("
+      << wordSize << ")";
+
+  return bytes / wordSize;
+}
+
 static constexpr int kNumEngines = 4;
 static constexpr int kNumGpuRtStreams = 4;
 
@@ -61,6 +130,10 @@ static constexpr size_t kRingCapacity = 16384;  // Must be power of 2
 
 static constexpr size_t kInFlightMaxSizeKB =
     10240000;  // Max in-flight packets per channel
+
+constexpr size_t kMinCompressBytes = 4 * 1024;  // 4KB
+
+constexpr size_t kCompressBufferSize = 100 * 1024 * 1024;  // 100MB
 
 static constexpr uint32_t INVALID_RANK_ID =
     std::numeric_limits<uint32_t>::max();
@@ -361,6 +434,7 @@ typedef struct RDMARecvRequest {
   uint32_t channel_id;
   int64_t wr_id;
   std::shared_ptr<RegMemBlock> local_mem;
+  dietgpu::FloatType float_type;
 
   // Constructor
   RDMARecvRequest(std::shared_ptr<RegMemBlock> local) : local_mem(local) {}
@@ -520,7 +594,7 @@ struct RDMASendRequest {
   int64_t wr_id;
   bool need_signaled;  // Whether to use IBV_SEND_SIGNALED flag
   SendType send_type = SendType::Send;
-
+  dietgpu::FloatType float_type;
   // Constructor
   RDMASendRequest(std::shared_ptr<RegMemBlock> local,
                   std::shared_ptr<RemoteMemInfo> remote, uint32_t imm = 0,

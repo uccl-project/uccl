@@ -359,7 +359,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   return true;
 }
 
-bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
+bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id, dietgpu::FloatType float_type) {
   mr_id = next_mr_id_.fetch_add(1);
 
   if (!engine_initialized_) {
@@ -376,6 +376,7 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id) {
   }
 
   P2PMhandle* mhandle = new P2PMhandle();
+  mhandle->float_type = float_type;
   if (!uccl_regmr(ep_, const_cast<void*>(data), size, mhandle)) {
     return false;
   }
@@ -451,6 +452,7 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   }
 
   P2PMhandle* mhandle = get_mhandle(mr_id);
+  printf("mhandle->float_type:%d\n", mhandle->float_type);
   if (unlikely(mhandle == nullptr)) {
     std::cerr << "[send] Error: Invalid mr_id " << mr_id << std::endl;
     return false;
