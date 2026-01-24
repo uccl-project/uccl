@@ -3,7 +3,6 @@
 #include "config.h"
 #include "oob.h"
 #include "request.h"
-#include "util/gpu_rt.h"
 #include "util/jring.h"
 #include <infiniband/verbs.h>
 #include <condition_variable>
