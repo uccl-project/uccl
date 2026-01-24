@@ -7,12 +7,13 @@
 
 #pragma once
 
-#include <cuda.h>
 #include "dietgpu/ans/GpuANSCodec.h"
+#include "dietgpu/utils/StackDeviceMemory.h"
+#include <atomic>
+#include <memory>
+#include <cuda.h>
 
 namespace dietgpu {
-
-class StackDeviceMemory;
 
 // The various floating point types we support for compression
 enum class FloatType : uint32_t {
@@ -36,11 +37,8 @@ struct FloatCodecConfig {
         useChecksum(false),
         is16ByteAligned(false) {}
 
-  inline FloatCodecConfig(
-      FloatType ft,
-      const ANSCodecConfig& ansConf,
-      bool align,
-      bool checksum = false)
+  inline FloatCodecConfig(FloatType ft, ANSCodecConfig const& ansConf,
+                          bool align, bool checksum = false)
       : floatType(ft),
         useChecksum(checksum),
         ansConfig(ansConf),
@@ -80,10 +78,122 @@ struct FloatCodecConfig {
 using FloatCompressConfig = FloatCodecConfig;
 using FloatDecompressConfig = FloatCodecConfig;
 
+// Marker for observing compression progress from the host side.
+// Records CUDA events after the split phase and after the full compress,
+// so the host can poll whether each phase has completed on the GPU.
+struct CompressMarker {
+  CompressMarker()
+      : splitDone(nullptr),
+        compressDone(nullptr),
+        splitRecorded_(false),
+        compressRecorded_(false),
+        uncompDataSize_(0) {}
+
+  ~CompressMarker() {
+    if (splitDone) {
+      CUDA_VERIFY(cudaEventDestroy(splitDone));
+      splitDone = nullptr;
+    }
+    if (compressDone) {
+      CUDA_VERIFY(cudaEventDestroy(compressDone));
+      compressDone = nullptr;
+    }
+  }
+
+  CompressMarker(CompressMarker const&) = delete;
+  CompressMarker& operator=(CompressMarker const&) = delete;
+
+  CompressMarker(CompressMarker&&) = delete;
+  CompressMarker& operator=(CompressMarker&&) = delete;
+
+  // Must be called before use
+  void create() {
+    CUDA_VERIFY(cudaEventCreateWithFlags(&splitDone, cudaEventDisableTiming));
+    CUDA_VERIFY(
+        cudaEventCreateWithFlags(&compressDone, cudaEventDisableTiming));
+  }
+
+  /* ---------------- Event record APIs ---------------- */
+
+  inline void recordSplit(cudaStream_t stream) {
+    if (!splitDone) return;
+    CUDA_VERIFY(cudaEventRecord(splitDone, stream));
+    splitRecorded_.store(true, std::memory_order_release);
+  }
+
+  inline void recordCompress(cudaStream_t stream) {
+    if (!compressDone) return;
+    CUDA_VERIFY(cudaEventRecord(compressDone, stream));
+    compressRecorded_.store(true, std::memory_order_release);
+  }
+
+  /* ---------------- Query APIs ---------------- */
+
+  inline bool isSplitRecorded() const {
+    return splitRecorded_.load(std::memory_order_acquire);
+  }
+
+  inline bool isCompressRecorded() const {
+    return compressRecorded_.load(std::memory_order_acquire);
+  }
+
+  inline bool isSplitDone() const {
+    if (!isSplitRecorded() || !splitDone) return false;
+    return cudaEventQuery(splitDone) == cudaSuccess;
+  }
+
+  inline bool isCompressDone() const {
+    if (!isCompressRecorded() || !compressDone) return false;
+    return cudaEventQuery(compressDone) == cudaSuccess;
+  }
+
+  /* ---------------- Blocking waits ---------------- */
+
+  inline void waitSplit() const {
+    if (!isSplitRecorded() || !splitDone) return;
+    CUDA_VERIFY(cudaEventSynchronize(splitDone));
+  }
+
+  inline void waitCompress() const {
+    if (!isCompressRecorded() || !compressDone) return;
+    CUDA_VERIFY(cudaEventSynchronize(compressDone));
+  }
+
+  /* ---------------- Metadata ---------------- */
+
+  inline uint32_t getUncompDataSize() const { return uncompDataSize_; }
+
+  inline void setUncompDataSize(uint32_t size) { uncompDataSize_ = size; }
+
+ private:
+  cudaEvent_t splitDone;
+  cudaEvent_t compressDone;
+
+  std::atomic<bool> splitRecorded_;
+  std::atomic<bool> compressRecorded_;
+
+  uint32_t uncompDataSize_;
+};
+
 enum class FloatDecompressError : uint32_t {
   None = 0,
   ChecksumMismatch = 1,
 };
+
+void floatCompressOneBatch(StackDeviceMemory& res,
+                           FloatCompressConfig const& config,
+                           uint32_t numInBatch, uintptr_t* params_dev,
+                           uint32_t maxSize, uint32_t* outSize_dev,
+                           cudaStream_t stream,
+                           std::shared_ptr<dietgpu::CompressMarker> marker);
+
+template <typename InProvider, typename OutProvider>
+void floatCompressDevice(StackDeviceMemory& res,
+                         FloatCompressConfig const& config, uint32_t numInBatch,
+                         InProvider& inProvider, uint32_t maxSize,
+                         OutProvider& outProvider, uint32_t* outSize_dev,
+                         cudaStream_t stream,
+                         std::shared_ptr<CompressMarker> marker = nullptr);
 
 // Error status for decompression
 struct FloatDecompressStatus {
@@ -103,7 +213,7 @@ struct FloatDecompressStatus {
 void floatCompress(
     StackDeviceMemory& res,
     // How should we compress our data?
-    const FloatCompressConfig& config,
+    FloatCompressConfig const& config,
 
     // Optional region of device temporary memory provided for our use
     // Usage of this region of memory is ordered with respect to `stream`,
@@ -123,9 +233,9 @@ void floatCompress(
     uint32_t numInBatch,
 
     // Host array with addresses of device pointers comprising the batch
-    const void** in,
+    void const** in,
     // Host array with sizes of batch members (in float words, NOT bytes)
-    const uint32_t* inSize,
+    uint32_t const* inSize,
 
     // Host array with addresses of device pointers of outputs, each pointing
     // to a valid region of memory of at least size
@@ -136,24 +246,27 @@ void floatCompress(
     uint32_t* outSize_dev,
 
     // stream on the current device on which this runs
-    cudaStream_t stream);
+    cudaStream_t stream,
+
+    // Optional marker for observing compression progress from the host side
+    std::shared_ptr<CompressMarker> marker = nullptr);
 
 void floatCompressSplitSize(
     StackDeviceMemory& res,
     // How should we compress our data?
-    const FloatCompressConfig& config,
+    FloatCompressConfig const& config,
 
     // Number of separate, independent compression problems
     uint32_t numInBatch,
 
     // Device pointer into a valid region of memory of size at least
     // sum_i(inSplitSizes[i]) float words.
-    const void* in_dev,
+    void const* in_dev,
 
     // Host array with the size (in floating point words) of the input
     // floating point arrays in the batch.
     // Each array in the batch is read starting at offset splitSize[i].
-    const uint32_t* inSplitSizes,
+    uint32_t const* inSplitSizes,
 
     // Device pointer to a matrix of at least size
     // numInBatch x getMaxFloatCompressedSize(ft, max(inSplitSizes[i]))
@@ -176,12 +289,12 @@ void floatCompressSplitSize(
 FloatDecompressStatus floatDecompress(
     StackDeviceMemory& res,
     // How should we decompress our data?
-    const FloatDecompressConfig& config,
+    FloatDecompressConfig const& config,
     // Number of separate, independent compression problems
     uint32_t numInBatch,
 
     // Host array with addresses of device pointers comprising the batch
-    const void** in,
+    void const** in,
 
     // Host array with addresses of device pointers of outputs, each pointing
     // to a valid region of memory of at least size outCapacity[i]
@@ -189,7 +302,7 @@ FloatDecompressStatus floatDecompress(
     // Host memory array of size numInBatch (optional)
     // Provides the maximum amount of space present for decopressing each batch
     // problem
-    const uint32_t* outCapacity,
+    uint32_t const* outCapacity,
 
     // Decode success/fail status (optional, can be nullptr)
     // If present, this is a device pointer to an array of length numInBatch,
@@ -210,12 +323,12 @@ FloatDecompressStatus floatDecompress(
 FloatDecompressStatus floatDecompressSplitSize(
     StackDeviceMemory& res,
     // How should we decompress our data?
-    const FloatDecompressConfig& config,
+    FloatDecompressConfig const& config,
     // Number of separate, independent compression problems
     uint32_t numInBatch,
 
     // Host array with addresses of device pointers comprising the batch
-    const void** in,
+    void const** in,
 
     // Device pointer into a valid region of memory of size at least
     // sum_i(outSplitSizes[i]) float words
@@ -227,7 +340,7 @@ FloatDecompressStatus floatDecompressSplitSize(
     // outSplitSizes[i].
     // The decompressed size must match exactly these sizes, otherwise there's a
     // decompression error
-    const uint32_t* outSplitSizes,
+    uint32_t const* outSplitSizes,
 
     // Decode success/fail status (optional, can be nullptr)
     // If present, this is a device pointer to an array of length numInBatch,
@@ -253,7 +366,7 @@ void floatGetCompressedInfo(
     StackDeviceMemory& res,
     // Host array with addresses of device pointers comprising the batch of
     // compressed float data
-    const void** in,
+    void const** in,
     // Number of compressed arrays in the batch
     uint32_t numInBatch,
     // Optional device array to receive the resulting sizes. 0 is reported if
@@ -274,7 +387,7 @@ void floatGetCompressedInfoDevice(
     StackDeviceMemory& res,
     // Device array with addresses of device pointers comprising the batch of
     // compressed float data
-    const void** in_dev,
+    void const** in_dev,
     // Number of compressed arrays in the batch
     uint32_t numInBatch,
     // Optional device array to receive the resulting sizes. 0 is reported if
@@ -291,4 +404,25 @@ void floatGetCompressedInfoDevice(
     // stream on the current device on which this runs
     cudaStream_t stream);
 
-} // namespace dietgpu
+struct FloatCompressSplitContext {
+  dietgpu::FloatType float_type;
+  // ---- immutable per-batch inputs ----
+  GpuMemoryReservation<uintptr_t> params_dev;  // [in, inSize, out]
+  uint32_t maxSize = 0;
+
+  // ---- split outputs (RAII-managed, freed when context is destroyed) ----
+  GpuMemoryReservation<uint8_t> toComp_dev;
+  GpuMemoryReservation<uint32_t> histogram_dev;
+  uint32_t compRowStride = 0;
+};
+void floatCompressSplitOneBatch(dietgpu::StackDeviceMemory& res,
+                                dietgpu::FloatCompressConfig const& config,
+                                cudaStream_t stream,
+                                FloatCompressSplitContext& ctx);
+
+void floatCompressEncodeOneBatch(dietgpu::StackDeviceMemory& res,
+                                 dietgpu::FloatCompressConfig const& config,
+                                 FloatCompressSplitContext& ctx,
+                                 uint32_t* outSize_dev, cudaStream_t stream);
+uint32_t getUncompDataSizeFromByteSize(FloatType floatType, uint32_t datasize);
+}  // namespace dietgpu
