@@ -10,7 +10,7 @@
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
-#include <cuda_runtime_api.h>
+#include "util/gpu_rt.h"
 
 namespace tcp {
 namespace {
@@ -54,26 +54,33 @@ int get_env_int(char const* key, int def) {
 }
 
 // Record an event on record_stream and make wait_stream wait on it.
-bool record_and_wait(cudaStream_t record_stream, cudaStream_t wait_stream) {
-  cudaEvent_t evt = nullptr;
-  if (cudaEventCreateWithFlags(&evt, cudaEventDisableTiming) != cudaSuccess) {
+bool record_and_wait(gpuStream_t record_stream, gpuStream_t wait_stream) {
+  gpuEvent_t evt = nullptr;
+  if (gpuEventCreateWithFlags(&evt, gpuEventDisableTiming) != gpuSuccess) {
     return false;
   }
-  if (cudaEventRecord(evt, record_stream) != cudaSuccess) {
-    cudaEventDestroy(evt);
+  if (gpuEventRecord(evt, record_stream) != gpuSuccess) {
+    gpuEventDestroy(evt);
     return false;
   }
-  if (cudaStreamWaitEvent(wait_stream, evt, 0) != cudaSuccess) {
-    cudaEventDestroy(evt);
+  if (gpuStreamWaitEvent(wait_stream, evt, 0) != gpuSuccess) {
+    gpuEventDestroy(evt);
     return false;
   }
-  cudaEventDestroy(evt);
+  gpuEventDestroy(evt);
   return true;
 }
 
-bool fence_default_stream(int device, cudaStream_t stream) {
+bool fence_default_stream(int device, gpuStream_t stream) {
+#if defined(UCCL_P2P_USE_RCCL)
+  // HIP does not guarantee legacy/PTDS semantics identical to CUDA.
+  // Keep the RCCL path simple to avoid stream/event edge cases.
   if (!stream) return false;
-  if (cudaSetDevice(device) != cudaSuccess) return false;
+  if (gpuSetDevice(device) != gpuSuccess) return false;
+  return true;
+#else
+  if (!stream) return false;
+  if (gpuSetDevice(device) != gpuSuccess) return false;
 
   // Fence both legacy and per-thread default streams.
   if (!record_and_wait(cudaStreamLegacy, stream)) return false;
@@ -81,6 +88,7 @@ bool fence_default_stream(int device, cudaStream_t stream) {
     if (!record_and_wait(cudaStreamPerThread, stream)) return false;
   }
   return true;
+#endif
 }
 
 uccl::ConnID make_invalid_conn() {
@@ -102,7 +110,7 @@ struct TCPEndpoint::Conn {
   int remote_rank = -1;
   int local_gpu_idx = 0;
   ncclComm_t comm[2] = {nullptr, nullptr};
-  cudaStream_t stream[2] = {nullptr, nullptr};
+  gpuStream_t stream[2] = {nullptr, nullptr};
   std::atomic<bool> stop{false};
   // Serialize control messages (read/write requests).
   std::mutex ctrl_send_mu;
@@ -112,7 +120,7 @@ struct TCPEndpoint::Conn {
 
 struct TCPEndpoint::AsyncHandle {
   // Completion event for a single NCCL op.
-  cudaEvent_t event = nullptr;
+  gpuEvent_t event = nullptr;
 };
 
 TCPEndpoint::TCPEndpoint(int gpu_index, uint16_t port)
@@ -214,9 +222,9 @@ bool TCPEndpoint::init_comm_(Conn& conn, ncclUniqueId const& uid,
                              int comm_index) {
   // comm_index selects which NCCL communicator (0 or 1) to init.
   if (comm_index < 0 || comm_index > 1) return false;
-  if (cudaSetDevice(conn.local_gpu_idx) != cudaSuccess) return false;
-  if (cudaStreamCreateWithFlags(&conn.stream[comm_index],
-                                cudaStreamNonBlocking) != cudaSuccess) {
+  if (gpuSetDevice(conn.local_gpu_idx) != gpuSuccess) return false;
+  if (gpuStreamCreateWithFlags(&conn.stream[comm_index],
+                               gpuStreamNonBlocking) != gpuSuccess) {
     return false;
   }
   ncclResult_t rc =
@@ -316,12 +324,12 @@ bool TCPEndpoint::send_internal_(Conn& conn, void const* data, size_t size,
     return false;
   }
 
-  cudaEvent_t evt = nullptr;
-  if (cudaEventCreateWithFlags(&evt, cudaEventDisableTiming) != cudaSuccess) {
+  gpuEvent_t evt = nullptr;
+  if (gpuEventCreateWithFlags(&evt, gpuEventDisableTiming) != gpuSuccess) {
     return false;
   }
-  if (cudaEventRecord(evt, conn.stream[comm_index]) != cudaSuccess) {
-    cudaEventDestroy(evt);
+  if (gpuEventRecord(evt, conn.stream[comm_index]) != gpuSuccess) {
+    gpuEventDestroy(evt);
     return false;
   }
 
@@ -357,12 +365,12 @@ bool TCPEndpoint::recv_internal_(Conn& conn, void* data, size_t size,
     return false;
   }
 
-  cudaEvent_t evt = nullptr;
-  if (cudaEventCreateWithFlags(&evt, cudaEventDisableTiming) != cudaSuccess) {
+  gpuEvent_t evt = nullptr;
+  if (gpuEventCreateWithFlags(&evt, gpuEventDisableTiming) != gpuSuccess) {
     return false;
   }
-  if (cudaEventRecord(evt, conn.stream[comm_index]) != cudaSuccess) {
-    cudaEventDestroy(evt);
+  if (gpuEventRecord(evt, conn.stream[comm_index]) != gpuSuccess) {
+    gpuEventDestroy(evt);
     return false;
   }
 
@@ -383,10 +391,10 @@ void TCPEndpoint::cleanup_conn_(Conn& conn) {
   if (conn.ctrl_thread.joinable()) {
     conn.ctrl_thread.join();
   }
-  if (conn.local_gpu_idx >= 0) cudaSetDevice(conn.local_gpu_idx);
+  if (conn.local_gpu_idx >= 0) gpuSetDevice(conn.local_gpu_idx);
   for (int i = 0; i < 2; ++i) {
     if (conn.stream[i]) {
-      cudaStreamDestroy(conn.stream[i]);
+      gpuStreamDestroy(conn.stream[i]);
       conn.stream[i] = nullptr;
     }
   }
@@ -695,19 +703,19 @@ bool TCPEndpoint::uccl_poll_ureq_once(struct uccl::ucclRequest* ureq) {
   auto* handle = reinterpret_cast<AsyncHandle*>(ureq->context);
   if (!handle) return true;
   // Poll CUDA event for completion.
-  cudaError_t rc = cudaEventQuery(handle->event);
-  if (rc == cudaSuccess) {
-    cudaEventDestroy(handle->event);
+  gpuError_t rc = gpuEventQuery(handle->event);
+  if (rc == gpuSuccess) {
+    gpuEventDestroy(handle->event);
     delete handle;
     ureq->context = nullptr;
     return true;
   }
-  if (rc == cudaErrorNotReady) {
+  if (rc == gpuErrorNotReady) {
     return false;
   }
-  std::cerr << "[tcp] cudaEventQuery failed: " << cudaGetErrorString(rc)
+  std::cerr << "[tcp] gpuEventQuery failed: " << gpuGetErrorString(rc)
             << std::endl;
-  cudaEventDestroy(handle->event);
+  gpuEventDestroy(handle->event);
   delete handle;
   ureq->context = nullptr;
   return true;
