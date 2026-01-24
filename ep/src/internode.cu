@@ -2754,10 +2754,10 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
               : (rdma_receiver_rdma_head[warp_id][lane_id] = expected_head);
         }
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-        sync_barrier(
-            MAX_NUM_BARRIERS - kNumRDMARanks - 1,
-            min(kNumRDMAReceivers, token_end_idx - token_idx + warp_id) *
-                WARP_SIZE);
+        // sync_barrier(
+        //     MAX_NUM_BARRIERS - kNumRDMARanks - 1,
+        //     min(kNumRDMAReceivers, token_end_idx - token_idx + warp_id) *
+        //         WARP_SIZE);
         if (warp_id == 0) receiver_corordinator();
 #endif
 
