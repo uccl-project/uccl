@@ -28,7 +28,7 @@ RUN apt-get update && \
     ln -sf /usr/bin/pip${PY_VER} /usr/local/bin/pip && \
     ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python${PY_VER} && \
 \
-# ───── eccl use hiredis as oob backend ─────
+# ───── ukernel use hiredis as oob backend ─────
     apt-get install -y libhiredis-dev && \
     apt-get install -y hipsolver hipblas hipsparse rocthrust hipblaslt && \
 \
@@ -41,7 +41,7 @@ RUN apt-get update && \
 RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11
 
 RUN python${PY_VER} -m pip install --no-cache-dir --pre torch torchvision \
-    --index-url https://download.pytorch.org/whl/nightly/rocm7.0
+    --index-url https://download.pytorch.org/whl/nightly/rocm7.1
 
 RUN python${PY_VER} -m pip install --no-cache-dir --upgrade setuptools
 

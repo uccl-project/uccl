@@ -59,13 +59,22 @@ struct ProxyCtx {
   uint32_t remote_rkey = 0;
   uint32_t rkey = 0;
 
+  // Atomic buffer (separate from main RDMA buffer)
+  ibv_mr* atomic_buffer_mr = nullptr;       // MR for local atomic_buffer_ptr
+  uintptr_t remote_atomic_buffer_addr = 0;  // Remote atomic_buffer_ptr address
+  uint64_t remote_atomic_buffer_len = 0;    // Remote atomic_buffer_ptr length
+  uint32_t remote_atomic_buffer_rkey = 0;   // Remote atomic_buffer_ptr rkey
+
   // Buffer offset within rdma_buffer for address translation
   uintptr_t dispatch_recv_data_offset =
       0;  // offset of dispatch_rdma_recv_data_buffer from rdma_buffer base
 
-  // Atomic operations buffer (GPU memory for receiving old values)
-  uint32_t* atomic_old_values_buf =
-      nullptr;  // GPU buffer for atomic old values
+  // Local scratch buffer for native RDMA atomics (e.g.,
+  // IBV_WR_ATOMIC_FETCH_AND_ADD). The NIC writes the "old value" into this
+  // local buffer; it must be registered and 8-byte aligned because verbs
+  // atomics are 64-bit.
+  uint64_t* atomic_old_values_buf = nullptr;
+  ibv_mr* atomic_old_values_mr = nullptr;
   static constexpr size_t kMaxAtomicOps =
       1024;  // Maximum concurrent atomic operations
 

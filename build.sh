@@ -137,7 +137,6 @@ build_p2p() {
   mkdir -p uccl/lib
   if [[ -z "${USE_TCPX:-}" || "$USE_TCPX" != "1" ]]; then
     cp p2p/libuccl_p2p.so uccl/lib/
-    cp p2p/librdma_plugin.a uccl/lib/
     cp p2p/p2p.*.so uccl/
     cp p2p/collective.py uccl/
     cp p2p/transfer.py uccl/
@@ -176,15 +175,15 @@ build_ep() {
   fi
 }
 
-build_eccl() {
+build_ukernel() {
   local TARGET="$1"
   local ARCH="$2"
   local IS_EFA="$3"
 
   set -euo pipefail
-  echo "[container] build_eccl Target: $TARGET"
+  echo "[container] build_ukernel Target: $TARGET"
 
-  cd experimental/eccl
+  cd experimental/ukernel
   if [[ "$TARGET" == cuda* ]]; then
     make clean -f Makefile && make -j$(nproc) -f Makefile
   elif [[ "$TARGET" == rocm* ]]; then
@@ -192,9 +191,9 @@ build_eccl() {
   fi
   cd ../..
 
-  echo "[container] Copying eccl .so to uccl/"
+  echo "[container] Copying ukernel .so to uccl/"
   mkdir -p uccl/lib # mkdir anyway
-  cp experimental/eccl/*eccl*.so uccl/lib
+  cp experimental/ukernel/*ukernel*.so uccl/lib
 }
 
 # Determine the Docker image to use based on the target and architecture
@@ -331,7 +330,8 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e USE_TCP="${USE_TCP:-0}" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
   -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
-  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_ccl_rdma build_ccl_efa build_p2p build_ep build_eccl)" \
+  -e DISABLE_AGGRESSIVE_ATOMIC="${DISABLE_AGGRESSIVE_ATOMIC:-0}" \
+  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_ccl_rdma build_ccl_efa build_p2p build_ep build_ukernel)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
     set -euo pipefail
@@ -363,14 +363,14 @@ docker run --rm --user "$(id -u):$(id -g)" \
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "ep" ]]; then
       build_ep "$TARGET" "$ARCH" "$IS_EFA"
-    elif [[ "$BUILD_TYPE" == "eccl" ]]; then
-      build_eccl "$TARGET" "$ARCH" "$IS_EFA"
+    elif [[ "$BUILD_TYPE" == "ukernel" ]]; then
+      build_ukernel "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "all" ]]; then
       build_ccl_rdma "$TARGET" "$ARCH" "$IS_EFA"
       build_ccl_efa "$TARGET" "$ARCH" "$IS_EFA"
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
       # build_ep "$TARGET" "$ARCH" "$IS_EFA"
-      # build_eccl "$TARGET" "$ARCH" "$IS_EFA"
+      # build_ukernel "$TARGET" "$ARCH" "$IS_EFA"
     fi
 
     ls -lh uccl/

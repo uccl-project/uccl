@@ -31,14 +31,6 @@ class SendControlChannel : public RDMAChannel {
         mem_block);
   }
 
-  void connect(ChannelMetaData const& remote_meta,
-               std::shared_ptr<RegMemBlock> mem_block) {
-    // Initialize rb_ with the shared_ptr<RegMemBlock>
-    rb_ = std::make_unique<RingBuffer<SendReqMetaOnRing, kRingCapacity>>(
-        mem_block);
-    RDMAChannel::connect(remote_meta);
-  }
-
   int getOneSendRequestMeta(SendReqMeta& meta) {
     // Pop from rb_ and generate req, return false if empty
     return rb_->pop_with_convert(meta, from_ring_meta);
@@ -113,16 +105,6 @@ class RecvControlChannel : public RDMAChannel {
     empty_rb_ =
         std::make_unique<EmptyRingBuffer<SendReqMetaOnRing, kRingCapacity>>(
             reinterpret_cast<void*>(remote_meta.mem_meta.addr));
-  }
-
-  void connect(MetaInfoToExchange const& remote_meta) {
-    // Initialize remote info and empty ring buffer (assumes local_info_ and rb_
-    // already initialized)
-    remote_info_ = std::make_unique<RemoteMemInfo>(remote_meta.mem_meta);
-    empty_rb_ =
-        std::make_unique<EmptyRingBuffer<SendReqMetaOnRing, kRingCapacity>>(
-            reinterpret_cast<void*>(remote_meta.mem_meta.addr));
-    RDMAChannel::connect(remote_meta.channel_meta);
   }
 
   int postSendReq(std::shared_ptr<RDMARecvRequest> rev_req) {

@@ -138,10 +138,6 @@ class Buffer {
 #endif
           }
 
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-          // Note(huangzhen): It will make d_handles turn to nullptr in rocm7.0,
-          // so we don't prefetch d_handles.
-#else
           // Prefetch so the device immediately sees initialized contents
           CUDA_CHECK(cudaMemPrefetchAsync(
               d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
@@ -150,7 +146,6 @@ class Buffer {
               d_handles, num_d2h_channel_addrs * sizeof(uint64_t),
               device_index));
           CUDA_CHECK(cudaDeviceSynchronize());
-#endif
         }
         // Allocate device memory for IPC base pointers
         CUDA_CHECK(

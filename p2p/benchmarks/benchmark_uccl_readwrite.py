@@ -40,24 +40,59 @@ def _pretty(num: int):
 
 def _run_server(args, ep, remote_metadata):
     peer = 0
+    # Pre-register all memory if lazy mode
+    pre_registered = {}
+    if args.lazy:
+        print("[Server] Pre-registering all memory...")
+        for sz in args.sizes:
+            size_per_block = sz // args.num_iovs
+            buf_v = []
+            ptr_v = []
+            mr_id_v = []
+            size_v = []
+            for _ in range(args.num_iovs):
+                buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                ok, mr_id = ep.reg(ptr, size_per_block)
+                assert ok
+                buf_v.append(buf)
+                ptr_v.append(ptr)
+                mr_id_v.append(mr_id)
+                size_v.append(size_per_block)
+            pre_registered[sz] = {
+                "buf_v": buf_v,
+                "ptr_v": ptr_v,
+                "mr_id_v": mr_id_v,
+                "size_v": size_v,
+            }
+        print("[Server] All memory pre-registered")
+
     print("[Server] Waiting for connection …")
     ok, r_ip, r_gpu, conn_id = ep.accept()
     assert ok
     print(f"[Server] Connected to {r_ip} (GPU {r_gpu}) id={conn_id}")
+
     for sz in args.sizes:
-        size_per_block = sz // args.num_iovs
-        buf_v = []
-        ptr_v = []
-        mr_id_v = []
-        size_v = []
-        for _ in range(args.num_iovs):
-            buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
-            ok, mr_id = ep.reg(ptr, size_per_block)
-            assert ok
-            buf_v.append(buf)
-            ptr_v.append(ptr)
-            mr_id_v.append(mr_id)
-            size_v.append(size_per_block)
+        if args.lazy:
+            # Use pre-registered memory
+            buf_v = pre_registered[sz]["buf_v"]
+            ptr_v = pre_registered[sz]["ptr_v"]
+            mr_id_v = pre_registered[sz]["mr_id_v"]
+            size_v = pre_registered[sz]["size_v"]
+        else:
+            # Register memory on the fly
+            size_per_block = sz // args.num_iovs
+            buf_v = []
+            ptr_v = []
+            mr_id_v = []
+            size_v = []
+            for _ in range(args.num_iovs):
+                buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                ok, mr_id = ep.reg(ptr, size_per_block)
+                assert ok
+                buf_v.append(buf)
+                ptr_v.append(ptr)
+                mr_id_v.append(mr_id)
+                size_v.append(size_per_block)
         # Use advertisev to advertise all blocks at once
         ok, fifo_blob_v = ep.advertisev(conn_id, mr_id_v, ptr_v, size_v, args.num_iovs)
         assert ok
@@ -71,26 +106,61 @@ def _run_server(args, ep, remote_metadata):
 
 def _run_client(args, ep, remote_metadata):
     peer = 1
+    # Pre-register all memory if lazy mode
+    pre_registered = {}
+    if args.lazy:
+        print("[Client] Pre-registering all memory...")
+        for sz in args.sizes:
+            size_per_block = sz // args.num_iovs
+            buf_v = []
+            ptr_v = []
+            mr_id_v = []
+            size_v = []
+            for _ in range(args.num_iovs):
+                buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                ok, mr_id = ep.reg(ptr, size_per_block)
+                assert ok
+                buf_v.append(buf)
+                ptr_v.append(ptr)
+                mr_id_v.append(mr_id)
+                size_v.append(size_per_block)
+            pre_registered[sz] = {
+                "buf_v": buf_v,
+                "ptr_v": ptr_v,
+                "mr_id_v": mr_id_v,
+                "size_v": size_v,
+            }
+        print("[Client] All memory pre-registered")
+
     ip, port, r_gpu = p2p.Endpoint.parse_metadata(remote_metadata)
     ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
     assert ok
     print(f"[Client] Connected to {ip}:{port} id={conn_id}")
 
     for sz in args.sizes:
-        size_per_block = sz // args.num_iovs
-        buf_v = []
-        ptr_v = []
-        mr_id_v = []
-        size_v = []
+        if args.lazy:
+            # Use pre-registered memory
+            buf_v = pre_registered[sz]["buf_v"]
+            ptr_v = pre_registered[sz]["ptr_v"]
+            mr_id_v = pre_registered[sz]["mr_id_v"]
+            size_v = pre_registered[sz]["size_v"]
+        else:
+            # Register memory on the fly
+            size_per_block = sz // args.num_iovs
+            buf_v = []
+            ptr_v = []
+            mr_id_v = []
+            size_v = []
+            for _ in range(args.num_iovs):
+                buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                ok, mr_id = ep.reg(ptr, size_per_block)
+                assert ok
+                buf_v.append(buf)
+                ptr_v.append(ptr)
+                mr_id_v.append(mr_id)
+                size_v.append(size_per_block)
+
         fifo_blob_v = []
-        for _ in range(args.num_iovs):
-            buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
-            ok, mr_id = ep.reg(ptr, size_per_block)
-            assert ok
-            buf_v.append(buf)
-            ptr_v.append(ptr)
-            mr_id_v.append(mr_id)
-            size_v.append(size_per_block)
         for _ in range(args.num_iovs):
             fifo_blob = torch.zeros(fifo_blob_size, dtype=torch.uint8)
             dist.recv(fifo_blob, src=peer)
@@ -245,6 +315,7 @@ def main():
         default="write",
         help="Benchmark mode: read or write",
     )
+    p.add_argument("--lazy", action="store_true")
     p.add_argument("--local-gpu-idx", type=int, default=0)
     p.add_argument("--num-cpus", type=int, default=4)
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
@@ -284,7 +355,10 @@ def main():
     world_size = dist.get_world_size()
     assert world_size == 2, "This benchmark only supports 2 processes"
 
-    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+    if args.lazy:
+        ep = p2p.Endpoint(args.num_cpus)
+    else:
+        ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
     local_metadata = ep.get_metadata()
 
     if rank == 0:

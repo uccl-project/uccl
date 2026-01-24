@@ -12,7 +12,7 @@
 #else
 #include <nccl.h>
 #endif
-#include <transport.h>  // For uccl::ConnID, uccl::FifoItem, uccl::ucclRequest.
+#include "../../collective/rdma/transport.h"  // For uccl::ConnID, uccl::FifoItem, uccl::ucclRequest.
 
 namespace tcp {
 

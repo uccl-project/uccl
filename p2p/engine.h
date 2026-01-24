@@ -1,11 +1,13 @@
 #pragma once
 
-#include "transport.h"
+#include "common.h"
+#include "rdma/rdma_endpoint.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
 #include "util/net.h"
 #include "util/shared_pool.h"
 #include "util/util.h"
+#include "../collective/rdma/rdma_io.h"
 #include <glog/logging.h>
 #include <infiniband/verbs.h>
 #include <pybind11/pybind11.h>
@@ -21,12 +23,21 @@
 #include <variant>
 #include <vector>
 
+#ifdef UCCL_P2P_USE_NCCL
+#include "nccl/nccl_endpoint.h"
+#endif
+
 namespace py = pybind11;
 
 extern thread_local bool inside_python;
 
-// Forward declaration
-struct ibv_mr;
+using RDMAEndPoint =
+    std::variant<std::shared_ptr<NICEndpoint>, std::shared_ptr<tcp::TCPEndpoint>>;
+#else
+using RDMAEndPoint = std::variant<std::shared_ptr<NICEndpoint>>;
+#endif
+
+using ucclRequest = uccl::ucclRequest;
 
 inline int parseLogLevelFromEnv() {
   char const* env = std::getenv("UCCL_P2P_LOG_LEVEL");
@@ -48,126 +59,66 @@ inline int parseLogLevelFromEnv() {
   return google::WARNING;
 }
 
-namespace unified {
-static constexpr int kNICContextNumber = 4;
+struct Mhandle {
+  struct ibv_mr* mr;
+};
+struct FifoItem {
+  uint64_t addr;
+  uint32_t size;
+  uint32_t rkey;
+  uint32_t nmsgs;
+  uint32_t rid;
+  uint64_t idx;
+  char padding[32];
+};
+static_assert(sizeof(struct FifoItem) == 64, "FifoItem size is not 64 bytes");
+inline void serialize_fifo_item(FifoItem const& item, char* buf) {
+  static_assert(sizeof(FifoItem) == 64, "FifoItem must be 64 bytes");
 
-inline size_t channelIdToContextId(uint32_t channel_id) {
-  return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;
+  std::memcpy(buf + 0, &item.addr, sizeof(uint64_t));
+  std::memcpy(buf + 8, &item.size, sizeof(uint32_t));
+  std::memcpy(buf + 12, &item.rkey, sizeof(uint32_t));
+  std::memcpy(buf + 16, &item.nmsgs, sizeof(uint32_t));
+  std::memcpy(buf + 20, &item.rid, sizeof(uint32_t));
+  std::memcpy(buf + 24, &item.idx, sizeof(uint64_t));
+  std::memcpy(buf + 32, &item.padding, sizeof(item.padding));
 }
 
-template <typename T = uint32_t>
-struct RKeyArrayT {
-  T keys[kNICContextNumber];
-
-  RKeyArrayT() { std::memset(keys, 0, sizeof(keys)); }
-
-  inline void copyFrom(RKeyArrayT<T> const& other) {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "RKeyArrayT::copyFrom requires trivially copyable T");
-    std::memcpy(keys, other.keys, sizeof(keys));
-  }
-
-  inline void copyFrom(char const* other) {
-    static_assert(std::is_trivially_copyable_v<T>,
-                  "RKeyArrayT::copyFrom requires trivially copyable T");
-    std::memcpy(keys, other, sizeof(keys));
-  }
-
-  inline T getKeyByChannelID(uint32_t channel_id) const {
-    return getKeyByContextID(channelIdToContextId(channel_id));
-  }
-
-  inline T getKeyByContextID(size_t context_id) const {
-    return keys[context_id];
-  }
-
-  inline void setKeyByContextID(uint32_t context_id, T key) {
-    keys[context_id] = key;
-  }
-
-  inline void setKeyByChannelID(uint32_t channel_id, T key) {
-    setKeyByContextID(channelIdToContextId(channel_id), key);
-  }
-
-  T& operator[](int index) { return keys[index]; }
-  T const& operator[](int index) const { return keys[index]; }
-
-  friend std::ostream& operator<<(std::ostream& os, RKeyArrayT<T> const& arr) {
-    os << "RKeyArrayT{";
-    for (int i = 0; i < kNICContextNumber; ++i) {
-      if (i > 0) os << ", ";
-      if constexpr (std::is_integral_v<T>) {
-        os << "0x" << std::hex << arr.keys[i] << std::dec;
-      } else {
-        os << arr.keys[i];
-      }
-    }
-    os << "}";
-    return os;
-  }
-};
-
-using MRArray = RKeyArrayT<struct ibv_mr*>;
-}  // namespace unified
-
-#ifdef UCCL_P2P_USE_NATIVE_RDMA
-#include "rdma/define.h"
-#include "rdma/rdma_endpoint.h"
-#endif
-
-#ifdef UCCL_P2P_USE_NCCL
-#include "nccl/nccl_endpoint.h"
-#endif
-
-namespace unified {
+inline void deserialize_fifo_item(char const* buf, FifoItem* item) {
+  std::memcpy(&item->addr, buf + 0, sizeof(uint64_t));
+  std::memcpy(&item->size, buf + 8, sizeof(uint32_t));
+  std::memcpy(&item->rkey, buf + 12, sizeof(uint32_t));
+  std::memcpy(&item->nmsgs, buf + 16, sizeof(uint32_t));
+  std::memcpy(&item->rid, buf + 20, sizeof(uint32_t));
+  std::memcpy(&item->idx, buf + 24, sizeof(uint64_t));
+  std::memcpy(&item->padding, buf + 32, sizeof(item->padding));
+}
 
 struct P2PMhandle {
-  struct uccl::Mhandle* mhandle_;
   MRArray mr_array;
 };
 
-#ifdef UCCL_P2P_USE_NATIVE_RDMA
-using RDMAEndPoint =
-    std::variant<uccl::RDMAEndpoint*, std::shared_ptr<NICEndpoint>>;
-#elif defined(UCCL_P2P_USE_NCCL)
-using RDMAEndPoint =
-    std::variant<uccl::RDMAEndpoint*, std::shared_ptr<tcp::TCPEndpoint>>;
-#else
-using RDMAEndPoint = std::variant<uccl::RDMAEndpoint*>;
-#endif
-}  // namespace unified
-
 struct MR {
   uint64_t mr_id_;
-  unified::P2PMhandle* mhandle_;
+  P2PMhandle* mhandle_;
 };
 
 struct Conn {
   uint64_t conn_id_;
-  uccl::ConnID uccl_conn_id_;
+  ConnID uccl_conn_id_;
   std::string ip_addr_;
   int remote_gpu_idx_;
   int uds_sockfd_ = -1;  // Unix Domain Socket file descriptor for local IPC
 };
 
-struct PeerInfo {
-  std::string ip_addr;  // IP address of the peer
-  int gpu_idx;          // GPU index of the peer
-};
-
 #ifdef UCCL_P2P_USE_TCPX
 using FifoItem = nccl_tcpx::FifoItem;
 #else
-using FifoItem = uccl::FifoItem;
+using FifoItem = FifoItem;
 #endif
 
 class Endpoint {
-#if defined(UCCL_P2P_USE_NATIVE_RDMA) || defined(UCCL_P2P_USE_NCCL)
-  uint64_t const kChunkSize = 1024 * 1024 * 1024;  // 1GB for EFA
-#else
-  uint64_t const kChunkSize = 1024 * 1024;
-#endif
-  static constexpr uint32_t kMaxInflightChunks = 8;
+  static constexpr uint32_t kMaxVector = 8;
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
 
@@ -207,7 +158,7 @@ class Endpoint {
   /* Accept an incoming connection via TCP, then build RDMA QP connections. */
   bool accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
 
-  /*Register the data with a specific interface. */
+  /* Register the data with a specific interface. */
   bool reg(void const* data, size_t size, uint64_t& mr_id);
 
   bool regv(std::vector<void const*> const& data_v,
@@ -348,6 +299,32 @@ class Endpoint {
     return it != rank2conn_.end() ? it->second : UINT64_MAX;
   }
 
+  inline MR* get_mr(uint64_t mr_id) const {
+    std::shared_lock<std::shared_mutex> lock(mr_mu_);
+    auto it = mr_id_to_mr_.find(mr_id);
+    if (it == mr_id_to_mr_.end()) {
+      return nullptr;
+    }
+    return it->second;
+  }
+
+  inline P2PMhandle* get_mhandle(uint64_t mr_id) const {
+    auto mr = get_mr(mr_id);
+    if (unlikely(mr == nullptr)) {
+      return nullptr;
+    }
+    return mr->mhandle_;
+  }
+
+  inline Conn* get_conn(uint64_t conn_id) const {
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = conn_id_to_conn_.find(conn_id);
+    if (it == conn_id_to_conn_.end()) {
+      return nullptr;
+    }
+    return it->second;
+  }
+
  private:
   gpuStream_t pick_stream() {
     if (streams_.empty()) return nullptr;
@@ -379,7 +356,7 @@ class Endpoint {
   uint32_t num_cpus_;
   int numa_node_;
 
-  unified::RDMAEndPoint ep_;
+  RDMAEndPoint ep_;
   bool engine_initialized_ = false;
 
   std::atomic<uint64_t> next_conn_id_ = 0;
@@ -483,9 +460,6 @@ class Endpoint {
     size_t size;
     uint64_t conn_id;
     uint64_t mr_id;
-    std::atomic<bool> done;
-    // For proxy to access the task.done
-    Task* self_ptr;
   };
 
   struct alignas(64) NetRwTask {
@@ -494,9 +468,6 @@ class Endpoint {
     size_t size;
     uint64_t conn_id;
     uint64_t mr_id;
-    std::atomic<bool> done;
-    // For proxy to access the task.done
-    NetRwTask* self_ptr;
     FifoItem slot_item;
   };
 
@@ -506,14 +477,18 @@ class Endpoint {
     size_t size;
     uint64_t conn_id;
     uint64_t mr_id;
-    std::atomic<bool> done;
-    // For proxy to access the task.done
-    IpcRwTask* self_ptr;
     IpcTransferInfo ipc_info;
   };
 
   static constexpr size_t MAX_RESERVE_SIZE =
       uccl::max_sizeof<FifoItem, IpcTransferInfo, TaskBatch>();
+
+  struct UnifiedTask;
+
+  struct TransferStatus {
+    std::atomic<bool> done{false};
+    std::shared_ptr<UnifiedTask> task_ptr;
+  };
 
   struct alignas(64) UnifiedTask {
     TaskType type;
@@ -521,8 +496,7 @@ class Endpoint {
     size_t size;
     uint64_t conn_id;
     uint64_t mr_id;
-    std::atomic<bool> done;
-    UnifiedTask* self_ptr;
+    TransferStatus* status_ptr{nullptr};
 
     union SpecificData {
       struct {
@@ -555,8 +529,7 @@ class Endpoint {
           size(0),
           conn_id(0),
           mr_id(0),
-          done(false),
-          self_ptr(this),
+          status_ptr(nullptr),
           specific() {}
 
     ~UnifiedTask() {
@@ -587,26 +560,24 @@ class Endpoint {
     }
   };
 
-  inline UnifiedTask* create_task(uint64_t conn_id, uint64_t mr_id,
-                                  TaskType type, void* data, size_t size) {
-    UnifiedTask* task = new UnifiedTask();
+  inline std::shared_ptr<UnifiedTask> create_task(uint64_t conn_id,
+                                                  uint64_t mr_id, TaskType type,
+                                                  void* data, size_t size) {
+    auto task = std::make_shared<UnifiedTask>();
     task->type = type;
     task->data = data;
     task->size = size;
     task->conn_id = conn_id;
     task->mr_id = mr_id;
-    task->done = false;
-    task->self_ptr = task;
     return task;
   }
 
-  inline UnifiedTask* create_batch_task(uint64_t conn_id, TaskType type,
-                                        TaskBatch&& batch) {
-    UnifiedTask* task = new UnifiedTask();
+  inline std::shared_ptr<UnifiedTask> create_batch_task(uint64_t conn_id,
+                                                        TaskType type,
+                                                        TaskBatch&& batch) {
+    auto task = std::make_shared<UnifiedTask>();
     task->type = type;
     task->conn_id = conn_id;
-    task->done = false;
-    task->self_ptr = task;
     // Not used for batch operations
     task->mr_id = 0;
     task->data = nullptr;
@@ -616,7 +587,7 @@ class Endpoint {
     return task;
   }
 
-  inline UnifiedTask* create_sendv_task(
+  inline std::shared_ptr<UnifiedTask> create_sendv_task(
       uint64_t conn_id,
       std::shared_ptr<std::vector<void const*>> const_data_ptr,
       std::shared_ptr<std::vector<size_t>> size_ptr,
@@ -637,10 +608,9 @@ class Endpoint {
     return create_batch_task(conn_id, TaskType::SENDV, std::move(batch));
   }
 
-  inline UnifiedTask* create_recvv_task(uint64_t conn_id,
-                                        std::vector<void*>&& data_v,
-                                        std::vector<size_t>&& size_v,
-                                        std::vector<uint64_t>&& mr_id_v) {
+  inline std::shared_ptr<UnifiedTask> create_recvv_task(
+      uint64_t conn_id, std::vector<void*>&& data_v,
+      std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v) {
     if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size()) {
       return nullptr;
     }
@@ -660,11 +630,10 @@ class Endpoint {
     return create_batch_task(conn_id, TaskType::RECVV, std::move(batch));
   }
 
-  inline UnifiedTask* create_writev_task(uint64_t conn_id,
-                                         std::vector<void*>&& data_v,
-                                         std::vector<size_t>&& size_v,
-                                         std::vector<uint64_t>&& mr_id_v,
-                                         std::vector<FifoItem>&& slot_item_v) {
+  inline std::shared_ptr<UnifiedTask> create_writev_task(
+      uint64_t conn_id, std::vector<void*>&& data_v,
+      std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
+      std::vector<FifoItem>&& slot_item_v) {
     if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
         mr_id_v.size() != slot_item_v.size()) {
       return nullptr;
@@ -688,11 +657,10 @@ class Endpoint {
     return create_batch_task(conn_id, TaskType::WRITEV, std::move(batch));
   }
 
-  inline UnifiedTask* create_readv_task(uint64_t conn_id,
-                                        std::vector<void*>&& data_v,
-                                        std::vector<size_t>&& size_v,
-                                        std::vector<uint64_t>&& mr_id_v,
-                                        std::vector<FifoItem>&& slot_item_v) {
+  inline std::shared_ptr<UnifiedTask> create_readv_task(
+      uint64_t conn_id, std::vector<void*>&& data_v,
+      std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
+      std::vector<FifoItem>&& slot_item_v) {
     if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
         mr_id_v.size() != slot_item_v.size()) {
       return nullptr;
@@ -716,25 +684,25 @@ class Endpoint {
     return create_batch_task(conn_id, TaskType::READV, std::move(batch));
   }
 
-  inline UnifiedTask* create_net_task(uint64_t conn_id, uint64_t mr_id,
-                                      TaskType type, void* data, size_t size,
-                                      FifoItem const& slot_item) {
-    UnifiedTask* task = create_task(conn_id, mr_id, type, data, size);
+  inline std::shared_ptr<UnifiedTask> create_net_task(
+      uint64_t conn_id, uint64_t mr_id, TaskType type, void* data, size_t size,
+      FifoItem const& slot_item) {
+    auto task = create_task(conn_id, mr_id, type, data, size);
     task->slot_item() = slot_item;
     return task;
   }
 
-  inline UnifiedTask* create_ipc_task(uint64_t conn_id, uint64_t mr_id,
-                                      TaskType type, void* data, size_t size,
-                                      IpcTransferInfo const& ipc_info) {
-    UnifiedTask* task = create_task(conn_id, mr_id, type, data, size);
+  inline std::shared_ptr<UnifiedTask> create_ipc_task(
+      uint64_t conn_id, uint64_t mr_id, TaskType type, void* data, size_t size,
+      IpcTransferInfo const& ipc_info) {
+    auto task = create_task(conn_id, mr_id, type, data, size);
     task->ipc_info() = ipc_info;
     return task;
   }
 
   // For both net and ipc send/recv tasks.
-  jring_t* send_unified_task_ring_;
-  jring_t* recv_unified_task_ring_;
+  jring_t* send_unified_task_ring_ = nullptr;
+  jring_t* recv_unified_task_ring_ = nullptr;
 
   std::atomic<bool> stop_{false};
   std::thread send_proxy_thread_;

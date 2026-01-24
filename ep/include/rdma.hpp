@@ -31,6 +31,11 @@ struct RDMAConnectionInfo {
   uint16_t lid;     // Local ID
   uint8_t gid[16];  // Global ID for RoCE (optional)
 
+  // Atomic buffer info (separate from main GPU buffer)
+  uint32_t atomic_buffer_rkey = 0;   // Atomic buffer memory region key
+  uintptr_t atomic_buffer_addr = 0;  // Atomic buffer address
+  uint64_t atomic_buffer_len = 0;    // Atomic buffer length
+
   // #ifdef EFA
   uint32_t num_rings;
   uint32_t data_qp_num[kChannelPerProxy];
@@ -38,7 +43,7 @@ struct RDMAConnectionInfo {
 };
 
 struct PendingUpdate {
-  std::atomic<int>* addr;
+  std::atomic<int64_t>* addr;
   int value;
   uint32_t imm;
   int low_latency_buffer_idx;
@@ -288,13 +293,14 @@ struct BarrierImm {
   // [28:8]=SEQ (21 bits), [7:0]=SRC_RANK
   static constexpr uint32_t kCtrlBit = 1u << 30;
   static constexpr uint32_t kAckBit = 1u << 29;
+  static constexpr uint32_t kSeqMask = 0x1FFFFFu;
   static inline bool IsAck(uint32_t imm) { return (imm & kAckBit) != 0u; }
   static inline uint32_t Pack(bool ack, uint32_t seq, uint8_t src_rank) {
     return kCtrlBit | (ack ? kAckBit : 0u) |
-           ((seq & 0x1FFFFFu) << 8)  // 21 bits for seq
+           ((seq & kSeqMask) << 8)  // 21 bits for seq
            | uint32_t(src_rank);
   }
-  static inline uint32_t Seq(uint32_t imm) { return (imm >> 8) & 0x1FFFFFu; }
+  static inline uint32_t Seq(uint32_t imm) { return (imm >> 8) & kSeqMask; }
   static inline uint8_t Rank(uint32_t imm) { return imm & 0xFFu; }
   explicit BarrierImm(uint32_t imm = 0) : value(imm) {}
   bool GetIsAck() const { return IsAck(value); }
@@ -334,7 +340,8 @@ void remote_process_completions(
     int my_rank, int num_nodes, bool use_normal_mode = false);
 void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
                           RDMAConnectionInfo* local_info, int rank,
-                          size_t num_rings, bool use_normal_mode);
+                          size_t num_rings, bool use_normal_mode,
+                          void* atomic_buffer_ptr = nullptr);
 ibv_cq* create_per_thread_cq(ProxyCtx& S);
 void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              std::vector<ProxyCtx*>& ctx_by_tag,

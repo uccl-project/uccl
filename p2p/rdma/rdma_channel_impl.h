@@ -12,6 +12,55 @@ struct ibv_sge;
 struct ibv_recv_wr;
 struct ibv_wc;
 
+static inline int get_gid_index_from_env(int default_value) {
+  static int gid_index = -1;
+  if (gid_index == -1) {
+    char const* env = getenv("UCCL_P2P_RDMA_GID_INDEX");
+    if (env)
+      gid_index = std::atoi(env);
+    else
+      gid_index = default_value;
+  }
+  return gid_index;
+}
+
+static inline int get_sl_from_env(int default_value) {
+  static int sl = -1;
+  if (sl == -1) {
+    char const* env = getenv("UCCL_P2P_RDMA_SL");
+    if (env) {
+      sl = std::atoi(env);
+      if (sl < 0 || sl > 15) {
+        LOG(ERROR) << "A valid service level must be between 0 and 15, use "
+                      "default value "
+                   << default_value;
+        sl = default_value;
+      }
+    } else
+      sl = default_value;
+  }
+
+  return sl;
+}
+
+static inline int get_tc_from_env(int default_value) {
+  static int tc = -1;
+  if (tc == -1) {
+    char const* env = getenv("UCCL_P2P_RDMA_TC");
+    if (env) {
+      tc = std::atoi(env);
+      if (tc < 0 || tc > 255) {
+        LOG(ERROR) << "A valid traffic class must be between 0 and 255, use "
+                      "default value "
+                   << default_value;
+        tc = default_value;
+      }
+    } else
+      tc = default_value;
+  }
+  return tc;
+}
+
 // Base class for RDMA channel implementations
 class RDMAChannelImpl {
  public:
@@ -50,10 +99,10 @@ class RDMAChannelImpl {
 };
 
 // Forward declarations for implementations
-#ifdef UCCL_P2P_USE_IB
-class IBChannelImpl;
-#else
+#ifdef UCCL_P2P_USE_EFA
 class EFAChannelImpl;
+#else
+class IBChannelImpl;
 #endif
 
 // Factory function declaration (implementation in rdma_channel.h after
