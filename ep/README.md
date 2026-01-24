@@ -48,6 +48,7 @@ python -c "import torch; import uccl.ep"
 
 Note: 
 * If you hit some `CUDA error: invalid device function`, it is likely that the GPU arch auto-detection fails. You can forcely specify the arch by setting `TORCH_CUDA_ARCH_LIST=gfx950` (eg, default gfx942 for MI300X/MI325X, gfx950 for MI355X) during compilation. 
+* If you hit any weird compilation errors, try `python setup.py clean`.
 
 ## Example APIs
 
@@ -122,10 +123,11 @@ Notes:
 
 | Environment Variable | Description | Default Value |
 |---------------------|-------------|---------------|
-| UCCL_IB_GID_INDEX | GID index in RDMA network | -1 |
 | UCCL_SOCKET_IFNAME | Boostrapping interface | null |
-| UCCL_IB_SL | Service level in RDMA network | 8/3 (EFA/IB) |
-| UCCL_IB_TC | Traffic class in RDMA network | 0/104 (EFA/IB) |
+| UCCL_IB_GID_INDEX | GID index in RDMA network | -1 |
+| UCCL_IB_MAX_INFLIGHT_BYTES | Max inflight bytes per GPU/NIC | 2097152/8388608 (IB/EFA) |
+| UCCL_IB_SL | Service level in RDMA network | 3/8 (IB/EFA) |
+| UCCL_IB_TC | Traffic class in RDMA network | 104/0 (IB/EFA) |
 
 
 ## Results

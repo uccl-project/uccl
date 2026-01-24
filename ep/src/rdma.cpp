@@ -937,7 +937,7 @@ static void post_rdma_async_batched_normal_mode(
           wrs[j].wr.rdma.remote_addr = remote_addr;
           wrs[j].wr.rdma.rkey = ctx->remote_rkey;
           wrs[j].opcode = IBV_WR_RDMA_WRITE;  // default
-          wrs[j].send_flags = (j + 1 == kgroup) ? IBV_SEND_SIGNALED : 0;
+          wrs[j].send_flags = IBV_SEND_SIGNALED;
           wrs[j].next = (j + 1 < kgroup) ? &wrs[j + 1] : nullptr;
 
           if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
@@ -1058,7 +1058,7 @@ static void post_rdma_async_batched_normal_mode(
           wrs[j].wr.rdma.remote_addr = remote_addr;
           wrs[j].wr.rdma.rkey = ctx->remote_rkey;
           wrs[j].opcode = IBV_WR_RDMA_WRITE;  // default
-          wrs[j].send_flags = (j + 1 == kgroup) ? IBV_SEND_SIGNALED : 0;
+          wrs[j].send_flags = IBV_SEND_SIGNALED;
           wrs[j].next = (j + 1 < kgroup) ? &wrs[j + 1] : nullptr;
 
           if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
@@ -1302,7 +1302,7 @@ static void post_rdma_async_batched_fast_mode(
 
       wrs[j].wr.rdma.rkey = ctx->remote_rkey;
       wrs[j].opcode = IBV_WR_RDMA_WRITE;
-      wrs[j].send_flags = 0;
+      wrs[j].send_flags = IBV_SEND_SIGNALED;
       wrs[j].next = (j + 1 < k) ? &wrs[j + 1] : nullptr;
     }
     size_t const last = k - 1;
@@ -1420,10 +1420,11 @@ void local_process_completions(ProxyCtx& S,
               acked_wrs.insert(sub_wr);
             }
             S.wr_id_to_wr_ids.erase(it);
-          } else {
-            printf("Error: Write ACK for unknown wr_id %lu\n", wr_done);
-            std::abort();
           }
+          // else {
+          //   printf("Error: Write ACK for unknown wr_id %lu\n", wr_done);
+          //   std::abort();
+          // }
 #endif
         }
       } break;
@@ -1441,12 +1442,14 @@ void local_process_completions(ProxyCtx& S,
             acked_wrs.insert(sub_wr);
           }
           S.wr_id_to_wr_ids.erase(it);
-        } else {
-          fprintf(stderr,
-                  "[Atomic] No batch found for wr_id=0x%lx, treating as single "
-                  "(map_size=%zu)\n",
-                  wrid, S.wr_id_to_wr_ids.size());
         }
+        // else {
+        //   fprintf(stderr,
+        //           "[Atomic] No batch found for wr_id=0x%lx, treating as
+        //           single "
+        //           "(map_size=%zu)\n",
+        //           wrid, S.wr_id_to_wr_ids.size());
+        // }
       } break;
       default:
         break;
@@ -2260,7 +2263,7 @@ static void post_atomic_operations_normal_mode(
         std::memset(&wr[t], 0, sizeof(wr[t]));
         wr[t].wr_id = kAtomicWrTag | (wr_id & kAtomicMask);
         wr[t].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-        wr[t].send_flags = (t + 1 == k) ? IBV_SEND_SIGNALED : 0;
+        wr[t].send_flags = IBV_SEND_SIGNALED;
         wr[t].imm_data = htonl(imm);
         wr[t].sg_list = &sge[t];
         wr[t].num_sge = 1;
@@ -2402,7 +2405,7 @@ static void post_atomic_operations_fast_mode(
       std::memset(&wr[i], 0, sizeof(wr[i]));
       wr[i].wr_id = kAtomicWrTag | (wrid & kAtomicMask);
       wr[i].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-      wr[i].send_flags = (i + 1 == k) ? IBV_SEND_SIGNALED : 0;
+      wr[i].send_flags = IBV_SEND_SIGNALED;
       wr[i].imm_data = htonl(imm);
       wr[i].sg_list = &sge[i];
       wr[i].num_sge = 1;
@@ -2568,7 +2571,7 @@ static void post_atomic_operations_fast_mode_native_rdma(
       std::memset(&wr[t], 0, sizeof(wr[t]));
       wr[t].wr_id = wr_id;
       wr[t].opcode = IBV_WR_ATOMIC_FETCH_AND_ADD;
-      wr[t].send_flags = (t + 1 == k) ? IBV_SEND_SIGNALED : 0;
+      wr[t].send_flags = IBV_SEND_SIGNALED;
       wr[t].sg_list = &sge[t];
       wr[t].num_sge = 1;
       wr[t].wr.atomic.remote_addr = remote_atomic_addr;
@@ -2740,7 +2743,7 @@ static void post_atomic_operations_native_rdma(
         std::memset(&wr[t], 0, sizeof(wr[t]));
         wr[t].wr_id = wr_id;
         wr[t].opcode = IBV_WR_ATOMIC_FETCH_AND_ADD;
-        wr[t].send_flags = (t + 1 == k) ? IBV_SEND_SIGNALED : 0;
+        wr[t].send_flags = IBV_SEND_SIGNALED;
         wr[t].sg_list = &sge[t];
         wr[t].num_sge = 1;
         wr[t].wr.atomic.remote_addr = remote_atomic_addr;
