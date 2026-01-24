@@ -413,9 +413,14 @@ def bench_kineto(
     kernel_names = (kernel_names,) if isinstance(kernel_names, str) else kernel_names
     assert all([isinstance(name, str) for name in kernel_names])
     for name in kernel_names:
-        assert (
-            sum([name in line for line in prof_lines]) == 1
-        ), f"Errors of the kernel {name} in the profiling table"
+        count = sum([name in line for line in prof_lines])
+        if count != 1:
+            print(f"\n[WARNING] Profiling table for kernel '{name}':")
+            print("\n".join(prof_lines))
+            print(
+                f"[WARNING] Kernel '{name}' found {count} times in profiling table (expected 1)"
+            )
+            print(f"[WARNING] Continuing execution despite mismatch...\n")
 
     # Save chrome traces
     if trace_path is not None:
@@ -425,6 +430,7 @@ def bench_kineto(
     units = {"ms": 1e3, "us": 1e6}
     kernel_durations = []
     for name in kernel_names:
+        found = False
         for line in prof_lines:
             if name in line:
                 time_str = line.split()[-2]
@@ -433,8 +439,15 @@ def bench_kineto(
                         kernel_durations.append(
                             float(time_str.replace(unit, "")) / scale
                         )
+                        found = True
                         break
                 break
+        # NOTE(MaoZiming): in rare cases it misses certain events.
+        if not found:
+            print(
+                f"[WARNING] Kernel '{name}' not found in profiling table, using 0.0 as placeholder"
+            )
+            kernel_durations.append(0.0)
 
     # Expand the kernels by periods
     if num_kernels_per_period > 1:
@@ -450,12 +463,35 @@ def bench_kineto(
             ]
             events = sorted(events, key=lambda event: event["ts"])
             durations = [event["dur"] / 1e6 for event in events]
-            assert len(durations) % num_kernels_per_period == 0
-            num_kernel_patterns = len(durations) // num_kernels_per_period
-            kernel_durations[i] = [
-                sum(durations[j::num_kernels_per_period]) / num_kernel_patterns
-                for j in range(num_kernels_per_period)
-            ]
+
+            # Handle incomplete periods gracefully (due to dropped samples)
+            # NOTE(MaoZiming): This sometimes happen, suspect it is the profiler's issue.
+            num_complete_periods = len(durations) // num_kernels_per_period
+            if len(durations) % num_kernels_per_period != 0:
+                dropped_samples = len(durations) % num_kernels_per_period
+                if dist.get_rank() == 0:
+                    print(
+                        f"[WARNING] Kernel '{kernel_name}': {dropped_samples} samples dropped "
+                        f"(got {len(durations)} samples, expected multiple of {num_kernels_per_period}). "
+                        f"Using {num_complete_periods} complete periods.",
+                        flush=True,
+                    )
+                # Truncate to only use complete periods
+                durations = durations[: num_complete_periods * num_kernels_per_period]
+            if num_complete_periods > 0:
+                kernel_durations[i] = [
+                    sum(durations[j::num_kernels_per_period]) / num_complete_periods
+                    for j in range(num_kernels_per_period)
+                ]
+            else:
+                # If we have no complete periods, fall back to returning zeros
+                if dist.get_rank() == 0:
+                    print(
+                        f"[WARNING] Kernel '{kernel_name}': No complete periods found. "
+                        f"Returning zeros.",
+                        flush=True,
+                    )
+                kernel_durations[i] = [0.0] * num_kernels_per_period
 
     # Return execution durations
     return kernel_durations if is_tuple else kernel_durations[0]

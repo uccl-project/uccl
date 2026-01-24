@@ -34,6 +34,11 @@ cd pplx-kernels
 python3 -m tests.bench_all_to_all
 ```
 
+### 4. Run Pack/Unpack Benchmark (Triton vs CUDA)
+
+```bash
+python benchmark_pack_unpack.py
+```
 
 ## Multi-Node Setup
 
@@ -64,6 +69,16 @@ python bench_nvshmem_sparse_uccl.py --dp-size 1
 ## Run PPLX Kernel
 python3 -m tests.bench_all_to_all
 ```
+
+## Triton Backend
+
+A vendor-agnostic Triton implementation of the MoE pack/unpack kernels is available as an alternative to the CUDA kernels. To use it, set:
+
+```bash
+export UCCL_PACK_UNPACK_BACKEND=triton
+```
+
+Valid values: `cuda` (default), `triton`, `cpu`
 
 ## Output
 

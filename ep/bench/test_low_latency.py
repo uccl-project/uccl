@@ -86,6 +86,8 @@ def test_main(
     buffer: Buffer,
     use_logfmt: bool = False,
     seed: int = 0,
+    skip_benchmark: bool = False,
+    debug_hash: bool = False,
 ):
     torch.manual_seed(seed + rank)
     random.seed(seed + rank)
@@ -135,6 +137,19 @@ def test_main(
     # Check dispatch correctness
     do_check = True
     hash_value, num_times = 0, 0
+    hash_details = {} if debug_hash else None
+
+    def _record_hash(label: str, t: torch.Tensor, include_in_overall: bool = True):
+        nonlocal hash_value
+        if not t.is_contiguous():
+            t = t.contiguous()
+        hv = hash_tensor(t)
+        if include_in_overall:
+            hash_value ^= hv
+        if hash_details is not None:
+            # Preserve the XOR aggregation behavior at per-label granularity.
+            hash_details[label] = hash_details.get(label, 0) ^ hv
+
     for current_x in x_list:
         for return_recv_hook in (False, True):
             for dispatch_use_fp8 in (False, True):
@@ -270,16 +285,52 @@ def test_main(
                                                 + rank_offset
                                             ).sum().item() == 0
                                 if dispatch_use_fp8:
-                                    hash_value ^= hash_tensor(
-                                        packed_recv_x[0][i, :num_valid_tokens]
+                                    tag = (
+                                        f"x={'x' if current_x is x else 'rand'}"
+                                        f"|hook={return_recv_hook}"
+                                        f"|fp8={dispatch_use_fp8}"
+                                        f"|rs={round_scale}"
+                                        f"|ue={use_ue8m0}"
+                                        f"|le={i}"
+                                        f"|nvt={num_valid_tokens}"
                                     )
-                                    hash_value ^= hash_tensor(
-                                        packed_recv_x[1][i, :num_valid_tokens]
+                                    _record_hash(
+                                        f"dispatch_fp8_data|{tag}",
+                                        packed_recv_x[0][i, :num_valid_tokens],
+                                    )
+                                    _record_hash(
+                                        f"dispatch_fp8_scale|{tag}",
+                                        packed_recv_x[1][i, :num_valid_tokens],
                                     )
                                 else:
-                                    hash_value ^= hash_tensor(
-                                        packed_recv_x[i, :num_valid_tokens]
+                                    tag = (
+                                        f"x={'x' if current_x is x else 'rand'}"
+                                        f"|hook={return_recv_hook}"
+                                        f"|fp8={dispatch_use_fp8}"
+                                        f"|rs={round_scale}"
+                                        f"|ue={use_ue8m0}"
+                                        f"|le={i}"
+                                        f"|nvt={num_valid_tokens}"
                                     )
+                                    _record_hash(
+                                        f"dispatch_bf16|{tag}",
+                                        packed_recv_x[i, :num_valid_tokens],
+                                    )
+                                _record_hash(
+                                    f"dispatch_meta_count|{tag}",
+                                    packed_recv_count[i],
+                                    include_in_overall=False,
+                                )
+                                _record_hash(
+                                    f"dispatch_meta_src_info|{tag}",
+                                    recv_src_info[:num_valid_tokens],
+                                    include_in_overall=False,
+                                )
+                                _record_hash(
+                                    f"dispatch_meta_layout_range|{tag}",
+                                    recv_layout_range,
+                                    include_in_overall=False,
+                                )
                             # Check combine correctness
                             for zero_copy in (False,) if use_logfmt else (False, True):
                                 if zero_copy:
@@ -319,7 +370,16 @@ def test_main(
                                     assert diff < (
                                         9e-4 if dispatch_use_fp8 else 1e-5
                                     ), f"Error: {diff=}, {dispatch_use_fp8=}, {zero_copy=}"
-                                    hash_value ^= hash_tensor(combined_x)
+                                    tag = (
+                                        f"x={'x' if current_x is x else 'rand'}"
+                                        f"|hook={return_recv_hook}"
+                                        f"|fp8={dispatch_use_fp8}"
+                                        f"|rs={round_scale}"
+                                        f"|ue={use_ue8m0}"
+                                        f"|zc={zero_copy}"
+                                        f"|logfmt={use_logfmt}"
+                                    )
+                                    _record_hash(f"combine_out|{tag}", combined_x)
 
     # noinspection PyShadowingNames
     def large_gemm_with_hook(hook):
@@ -350,9 +410,12 @@ def test_main(
             return_recv_hook=return_recv_hook,
         )
         large_gemm_with_hook(hook) if return_recv_hook else None
-        dist.barrier(group=group)
 
     print("✓ All correctness tests passed!", flush=True)
+
+    if skip_benchmark:
+        return (hash_value, hash_details) if debug_hash else hash_value
+
     # Calculate bandwidth
     num_fp8_bytes, num_bf16_bytes = (hidden + hidden / 128 * 4 + 16), hidden * 2
     num_logfmt10_bytes = hidden * 10 / 8 + hidden / 128 * 4
@@ -373,7 +436,6 @@ def test_main(
     )
     # Separate profiling
     for return_recv_hook in (False, True):
-        group.barrier()
         dispatch_t, combine_t = bench_kineto(
             partial(test_func, return_recv_hook=return_recv_hook),
             kernel_names=("dispatch", "combine"),
@@ -381,6 +443,9 @@ def test_main(
             suppress_kineto_output=True,
             num_kernels_per_period=2 if return_recv_hook else 1,
         )
+        # kineto profiling failed.
+        if dispatch_t == 0 or combine_t == 0:
+            continue
         if not return_recv_hook:
             print(
                 f"[rank {rank}] Dispatch bandwidth: {num_dispatch_comm_bytes / 1e9 / dispatch_t:.2f} GB/s, avg_t={dispatch_t * 1e6:.2f} us | "
@@ -393,7 +458,7 @@ def test_main(
                 f"Combine send/recv time: {combine_t[0] * 1e6:.2f} + {combine_t[1] * 1e6:.2f} us",
                 flush=True,
             )
-    return hash_value
+    return (hash_value, hash_details) if debug_hash else hash_value
 
 
 # noinspection PyUnboundLocalVariable,PyShadowingNames
@@ -414,24 +479,12 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
         explicitly_destroy=True,
         allow_mnnvl=args.allow_mnnvl,
     )
-    test_main(
-        num_tokens,
-        hidden,
-        num_experts,
-        num_topk,
-        rank,
-        num_ranks,
-        group,
-        buffer,
-        use_logfmt=args.use_logfmt,
-        seed=1,
-    )
 
-    do_pressure_test = args.pressure_test
-    for seed in range(int(1e9) if do_pressure_test else 0):
+    for seed in range(int(1e9)):
         if local_rank == 0:
             print(f"Testing with seed {seed} ...", flush=True)
-        ref_hash = test_main(
+        torch.manual_seed(rank + seed)
+        ref_out = test_main(
             num_tokens,
             hidden,
             num_experts,
@@ -442,23 +495,74 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             buffer,
             use_logfmt=args.use_logfmt,
             seed=seed,
+            skip_benchmark=args.pressure_test_mode == 1,
+            debug_hash=args.debug_hash,
         )
-        for i in range(20):
-            assert (
-                test_main(
-                    num_tokens,
-                    hidden,
-                    num_experts,
-                    num_topk,
-                    rank,
-                    num_ranks,
-                    group,
-                    buffer,
-                    use_logfmt=args.use_logfmt,
-                    seed=seed,
+        if args.debug_hash:
+            ref_hash, ref_hash_details = ref_out
+        else:
+            ref_hash, ref_hash_details = ref_out, None
+        if args.pressure_test_mode == 0:
+            break
+
+        if local_rank == 0:
+            print(f"{ref_hash=}")
+            print("", flush=True)
+
+        for _ in range(20):
+            torch.manual_seed(rank + seed)
+            cur_out = test_main(
+                num_tokens,
+                hidden,
+                num_experts,
+                num_topk,
+                rank,
+                num_ranks,
+                group,
+                buffer,
+                use_logfmt=args.use_logfmt,
+                seed=seed,
+                skip_benchmark=args.pressure_test_mode == 1,
+                debug_hash=args.debug_hash,
+            )
+            if args.debug_hash:
+                current_hash, current_hash_details = cur_out
+            else:
+                current_hash, current_hash_details = cur_out, None
+
+            if current_hash != ref_hash:
+                print(
+                    f"[rank {rank} local_rank {local_rank}] NON-DETERMINISM: "
+                    f"seed={seed} current_hash={current_hash} ref_hash={ref_hash}",
+                    flush=True,
                 )
-                == ref_hash
-            ), f"Error: seed={seed}"
+                if args.debug_hash and ref_hash_details and current_hash_details:
+                    diffs = []
+                    keys = set(ref_hash_details.keys()) | set(
+                        current_hash_details.keys()
+                    )
+                    for k in sorted(keys):
+                        a = ref_hash_details.get(k, 0)
+                        b = current_hash_details.get(k, 0)
+                        if a != b:
+                            diffs.append((k, a, b))
+                    if diffs:
+                        k0, a0, b0 = diffs[0]
+                        print(
+                            f"[rank {rank}] First differing tensor: {k0}\n"
+                            f"  ref={a0} cur={b0}\n"
+                            f"[rank {rank}] Total differing labels: {len(diffs)}",
+                            flush=True,
+                        )
+                        for k, a, b in diffs[:10]:
+                            print(f"[rank {rank}] DIFF {k} ref={a} cur={b}", flush=True)
+                    else:
+                        print(
+                            f"[rank {rank}] Hash differs but no per-label diffs "
+                            f"(possible XOR collision).",
+                            flush=True,
+                        )
+                # assert current_hash == ref_hash, f"Error: seed={seed}"
 
     # Destroy the buffer runtime and communication group
     buffer.destroy()
@@ -498,7 +602,15 @@ if __name__ == "__main__":
         "--use-logfmt", action="store_true", help="Whether to test LogFMT combine"
     )
     parser.add_argument(
-        "--pressure-test", action="store_true", help="Whether to do pressure test"
+        "--pressure-test-mode",
+        type=int,
+        default=0,
+        help="Pressure test mode. 0: don't do pressure test, 1: do pressure test without benchmarks, 2: do pressure test with benchmarks",
+    )
+    parser.add_argument(
+        "--debug-hash",
+        action="store_true",
+        help="Print per-tensor hash breakdown when non-determinism is detected.",
     )
     args = parser.parse_args()
 

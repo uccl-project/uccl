@@ -46,6 +46,9 @@ bash build_and_install.sh rocm ep
 python -c "import torch; import uccl.ep"
 ```
 
+Note: 
+* If you hit some `CUDA error: invalid device function`, it is likely that the GPU arch auto-detection fails. You can forcely specify the arch by setting `TORCH_CUDA_ARCH_LIST=gfx950` (eg, default gfx942 for MI300X/MI325X, gfx950 for MI355X) during compilation. 
+
 ## Example APIs
 
 Dispatch and combine: 
@@ -112,8 +115,18 @@ torchrun --nnodes=4 --nproc_per_node=8 --node_rank=<rank> \
 ```
 
 Notes:
-* You need to set env variables `UCCL_IB_GID_INDEX` and `UCCL_SOCKET_IFNAME` properly based on your cluster setup. `UCCL_IB_GID_INDEX` should be the same as `NCCL_IB_GID_INDEX` if you were using NCCL; `UCCL_SOCKET_IFNAME` should be the interface that you would use for the `--master_addr` in `torchrun`. 
+* To avoid possible hangs, we suggest setting env variables explicitly including `NCCL_IB_GID_INDEX`, `UCCL_IB_GID_INDEX`, `NCCL_SOCKET_IFNAME`, and `UCCL_SOCKET_IFNAME`:
+  * `UCCL_IB_GID_INDEX` should be the same as `NCCL_IB_GID_INDEX` like if you were using NCCL. 
+  * `UCCL_SOCKET_IFNAME` should be the interface that you would use for the `--master_addr` in `torchrun`. 
 * Please refer to [bench/baseline](bench/baseline) for running more baselines including Torch, NVSHMEM, and pplx-kernels on EFA. 
+
+| Environment Variable | Description | Default Value |
+|---------------------|-------------|---------------|
+| UCCL_IB_GID_INDEX | GID index in RDMA network | -1 |
+| UCCL_SOCKET_IFNAME | Boostrapping interface | null |
+| UCCL_IB_SL | Service level in RDMA network | 8/3 (EFA/IB) |
+| UCCL_IB_TC | Traffic class in RDMA network | 0/104 (EFA/IB) |
+
 
 ## Results
 
