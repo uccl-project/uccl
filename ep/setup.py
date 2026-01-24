@@ -193,9 +193,9 @@ if __name__ == "__main__":
         cxx_flags.append("-DDISABLE_SM90_FEATURES")
         nvcc_flags.append("-DDISABLE_SM90_FEATURES")
 
-        if int(os.getenv("DISABLE_AGGRESSIVE_ATOMIC", 0)):
+        if int(os.getenv("DISABLE_AGGRESSIVE_ATOMIC", 1)):
             # NOTE(zhuang12): Enable aggressive atomic operations will have better performance on MI300X and MI355X.
-            # Set DISABLE_AGGRESSIVE_ATOMIC=1 to disable this optimization. Turn off (set to 0) if you encounter errors.
+            # Set DISABLE_AGGRESSIVE_ATOMIC=0 to enable this optimization. Turn off (default) if you encounter errors.
             cxx_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
             nvcc_flags.append("-DDISABLE_AGGRESSIVE_ATOMIC")
 
@@ -204,8 +204,8 @@ if __name__ == "__main__":
             cxx_flags.append("-DDISABLE_BUILTIN_SHLF_SYNC")
             nvcc_flags.append("-DDISABLE_BUILTIN_SHLF_SYNC")
 
-        cxx_flags.append("-DENABLE_FAST_DEBUG")
-        nvcc_flags.append("-DENABLE_FAST_DEBUG")
+        # cxx_flags.append("-DENABLE_FAST_DEBUG")
+        # nvcc_flags.append("-DENABLE_FAST_DEBUG")
 
     # Disable LD/ST tricks, as some CUDA version does not support `.L1::no_allocate`
     # Only enable aggressive PTX instructions for SM 9.0+ (H100/H800/B200)
