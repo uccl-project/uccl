@@ -280,8 +280,7 @@ __global__ void notify_dispatch(
       // know why. num_worst_tokens = 0, but somehow wrapping it with the
       // conditional will cause deadlock. Removing the ``if" is logically
       // redundant but harmless. if (num_worst_tokens == 0) {
-      while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1)
-        ;
+      while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1);
       *moe_recv_rdma_counter_mapped = sum;
       // }
     }
@@ -312,8 +311,7 @@ __global__ void notify_dispatch(
         recv_gbl_rank_prefix_sum[i] = sum;
       }
       // if (num_worst_tokens == 0) {
-      while (ld_volatile_global(moe_recv_counter_mapped) != -1)
-        ;
+      while (ld_volatile_global(moe_recv_counter_mapped) != -1);
       *moe_recv_counter_mapped = sum;
       // }
     }
@@ -325,8 +323,7 @@ __global__ void notify_dispatch(
       sum = (sum + expert_alignment - 1) / expert_alignment * expert_alignment;
       // if (num_worst_tokens == 0) {
       while (ld_volatile_global(moe_recv_expert_counter_mapped + thread_id) !=
-             -1)
-        ;
+             -1);
       // }
       moe_recv_expert_counter_mapped[thread_id] = sum;
     }
@@ -742,8 +739,7 @@ __global__ void __launch_bounds__(
       }
 
       // Acquire sequential lock
-      while (lane_id == 0 and rdma_send_next_token_idx != token_idx)
-        ;
+      while (lane_id == 0 and rdma_send_next_token_idx != token_idx);
       __syncwarp();
 
       // Acquire next tail
@@ -937,8 +933,7 @@ __global__ void __launch_bounds__(
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
     // Epilogue
     // Acquire sequential lock
-    while (lane_id == 0 and rdma_send_next_token_idx != token_idx)
-      ;
+    while (lane_id == 0 and rdma_send_next_token_idx != token_idx);
     __syncwarp();
 
     // Update last token tail
@@ -2073,7 +2068,7 @@ template <
     int kNumWarpsPerForwarder = (kNumCombineForwarderWarps / kNumRDMARanks > 0)
                                     ? kNumCombineForwarderWarps / kNumRDMARanks
                                     : 1,
-    int kNumForwarders = kNumRDMARanks* kNumWarpsPerForwarder,
+    int kNumForwarders = kNumRDMARanks * kNumWarpsPerForwarder,
     int kNumRDMAReceivers = kNumForwarders - NUM_MAX_NVL_PEERS>
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
 __global__ void __launch_bounds__(kNumForwarders* WARP_SIZE, 1)
@@ -2560,10 +2555,10 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
           // Coordinator
-          sync_barrier(MAX_NUM_BARRIERS - dst_rdma_rank - 1,
-                       min(kNumWarpsPerForwarder,
-                           token_end_idx - token_idx + sub_warp_id) *
-                           WARP_SIZE);
+          // sync_barrier(MAX_NUM_BARRIERS - dst_rdma_rank - 2,
+          //              min(kNumWarpsPerForwarder,
+          //                  token_end_idx - token_idx + sub_warp_id) *
+          //                  WARP_SIZE);
           if (sub_warp_id == 0) forwarder_coordinator();
 #endif
           // Wait lanes to be ready
@@ -2634,9 +2629,9 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                 : (forwarder_nvl_head[warp_id][lane_id] = expected_head + 1);
         }
         sync_large_warp();
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-        if (sub_warp_id == 0) forwarder_coordinator();
-#endif
+        // #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+        //         if (sub_warp_id == 0) forwarder_coordinator();
+        // #endif
 
         // Issue RDMA send
         if (sub_warp_id == kNumWarpsPerForwarder - 1) {
@@ -2731,7 +2726,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
       };
 #endif
 
-      // sync_rdma_receiver_smem();
+      sync_rdma_receiver_smem();
 
       // The same tokens as the dispatch process
       int token_start_idx, token_end_idx;
@@ -2754,8 +2749,9 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
               : (rdma_receiver_rdma_head[warp_id][lane_id] = expected_head);
         }
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+        // 
         // sync_barrier(
-        //     MAX_NUM_BARRIERS - kNumRDMARanks - 1,
+        //     MAX_NUM_BARRIERS - 1,
         //     min(kNumRDMAReceivers, token_end_idx - token_idx + warp_id) *
         //         WARP_SIZE);
         if (warp_id == 0) receiver_corordinator();
