@@ -120,7 +120,7 @@ Notes:
   * `UCCL_IB_GID_INDEX` should be the same as `NCCL_IB_GID_INDEX` like if you were using NCCL. 
   * `UCCL_SOCKET_IFNAME` should be the interface that you would use for the `--master_addr` in `torchrun`. 
 * For Broadcom Thor-2, we suggest setting `UCCL_IB_MAX_INFLIGHT_BYTES=1048576 UCCL_IB_MAX_INFLIGHT_NORMAL=1` to enforce strict flow control, avoiding CQE error 12 (Transport Retry Counter Exceeded).
-* For AMD Pollara AI NIC, we suggest setting `UCCL_IB_MAX_INFLIGHT_NORMAL=1`. 
+* For AMD Pollara AI NIC, we suggest setting `UCCL_IB_MAX_INFLIGHT_BYTES=2097152 UCCL_IB_MAX_INFLIGHT_NORMAL=1`. 
 * Please refer to [bench/baseline](bench/baseline) for running more baselines including Torch, NVSHMEM, and pplx-kernels on EFA. 
 
 | Environment Variable | Description | Default Value |
