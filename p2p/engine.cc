@@ -439,10 +439,6 @@ bool Endpoint::dereg(uint64_t mr_id) {
 
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
                     size_t size) {
-  printf("Send called: conn_id=%lu, mr_id=%lu, data=%p, size=%lu\n",
-         conn_id, mr_id, data, size);
-  printf("dietgpu::getMaxFloatCompressedSize(dietgpu::FloatType::kFloat16, 1024):%d",
-         dietgpu::getMaxFloatCompressedSize(dietgpu::FloatType::kFloat16, 1024));
   DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
 
   Conn* conn = get_conn(conn_id);
@@ -452,7 +448,6 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   }
 
   P2PMhandle* mhandle = get_mhandle(mr_id);
-  printf("mhandle->float_type:%d\n", mhandle->float_type);
   if (unlikely(mhandle == nullptr)) {
     std::cerr << "[send] Error: Invalid mr_id " << mr_id << std::endl;
     return false;
