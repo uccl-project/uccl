@@ -244,7 +244,7 @@ class Buffer {
                               cudaHostAllocMapped));
     CUDA_CHECK(cudaHostGetDevicePointer(
         reinterpret_cast<void**>(&moe_recv_expert_counter_mapped),
-        moe_recv_expert_counter, 0));
+        const_cast<int*>(moe_recv_expert_counter), 0));
     for (int i = 0; i < NUM_MAX_LOCAL_EXPERTS; ++i)
       moe_recv_expert_counter[i] = -1;
 
@@ -253,7 +253,7 @@ class Buffer {
                                 cudaHostAllocMapped));
       CUDA_CHECK(cudaHostGetDevicePointer(
           reinterpret_cast<void**>(&moe_recv_rdma_counter_mapped),
-          moe_recv_rdma_counter, 0));
+          const_cast<int*>(moe_recv_rdma_counter), 0));
       *moe_recv_rdma_counter = -1;
     }
   }
