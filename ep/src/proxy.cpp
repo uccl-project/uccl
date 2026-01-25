@@ -583,8 +583,8 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
 
     // Available budget for this FIFO, constrainted by the 32bit imm.
     size_t pending = fifo_pending_[rb_idx].size();
-    size_t kMaxInflight =
-        cfg_.use_normal_mode ? kMaxInflightNormal : kMaxInflightLowLatency;
+    size_t kMaxInflight = cfg_.use_normal_mode ? get_max_inflight_normal()
+                                               : get_max_inflight_low_latency();
     size_t budget = (kMaxInflight > pending) ? (kMaxInflight - pending) : 0;
     size_t max_inflight_bytes = get_max_inflight_bytes() / kNumProxyThs;
 

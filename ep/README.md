@@ -119,6 +119,7 @@ Notes:
 * To avoid possible hangs, we suggest setting env variables explicitly including `NCCL_IB_GID_INDEX`, `UCCL_IB_GID_INDEX`, `NCCL_SOCKET_IFNAME`, and `UCCL_SOCKET_IFNAME`:
   * `UCCL_IB_GID_INDEX` should be the same as `NCCL_IB_GID_INDEX` like if you were using NCCL. 
   * `UCCL_SOCKET_IFNAME` should be the interface that you would use for the `--master_addr` in `torchrun`. 
+* For Broadcom Thor-2 and AMD Pollara AI NIC, we suggest setting `UCCL_IB_MAX_INFLIGHT_NORMAL=1` to enforce stricter flow control, avoiding CQE error 12.  
 * Please refer to [bench/baseline](bench/baseline) for running more baselines including Torch, NVSHMEM, and pplx-kernels on EFA. 
 
 | Environment Variable | Description | Default Value |
@@ -126,6 +127,8 @@ Notes:
 | UCCL_SOCKET_IFNAME | Boostrapping interface | null |
 | UCCL_IB_GID_INDEX | GID index in RDMA network | -1 |
 | UCCL_IB_MAX_INFLIGHT_BYTES | Max inflight bytes per GPU/NIC | 2097152/8388608 (IB/EFA) |
+| UCCL_IB_MAX_INFLIGHT_LOW_LATENCY | Max inflight writes per GPU/NIC in LL | 32 |
+| UCCL_IB_MAX_INFLIGHT_NORMAL | Max inflight writes per GPU/NIC in HT | 8 |
 | UCCL_IB_SL | Service level in RDMA network | 3/8 (IB/EFA) |
 | UCCL_IB_TC | Traffic class in RDMA network | 104/0 (IB/EFA) |
 

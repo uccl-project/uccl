@@ -37,15 +37,15 @@ extern bool use_ll_sl;
 // This is the highest we can get due to the number of bits we allocate in the
 // imm for reordering buffer sequence tracking.
 #define kMaxInflightLowLatency 32
-#define kMaxInflightNormal 1
+#define kMaxInflightNormal 8
 #define kChannelPerProxy 8
 #define kNumProxyThs 4
 #ifdef EFA
 // 8 MB mimicing NCCL EFA plugin default (512KB*16)
-#define kMaxInflightBytesDefault (512 * 1024 * 16ULL)
+#define kMaxInflightBytes (512 * 1024 * 16ULL)
 #else
 // 2 MB mimicing NCCL net.cc default (128KB*16)
-#define kMaxInflightBytesDefault (128 * 1024 * 16ULL)
+#define kMaxInflightBytes (128 * 1024 * 16ULL)
 #endif
 #define kBatchSize 32
 #define kIterations 40000
@@ -90,6 +90,7 @@ uint64_t make_wr_id(uint32_t tag, uint32_t slot);
 uint32_t wr_tag(uint64_t wrid);
 uint32_t wr_slot(uint64_t wrid);
 
+extern thread_local std::atomic<size_t> current_inflight_bytes;
 static inline size_t get_max_inflight_bytes() {
   static size_t max_inflight_bytes = -1;
   if (max_inflight_bytes != -1) return max_inflight_bytes;
@@ -97,9 +98,30 @@ static inline size_t get_max_inflight_bytes() {
   if (env)
     max_inflight_bytes = static_cast<size_t>(atoi(env));
   else
-    max_inflight_bytes = kMaxInflightBytesDefault;
+    max_inflight_bytes = kMaxInflightBytes;
   return max_inflight_bytes;
 }
-extern thread_local std::atomic<size_t> current_inflight_bytes;
+
+static inline uint32_t get_max_inflight_low_latency() {
+  static uint32_t max_inflight_low_latency = -1;
+  if (max_inflight_low_latency != -1) return max_inflight_low_latency;
+  char const* env = getenv("UCCL_IB_MAX_INFLIGHT_LOW_LATENCY");
+  if (env)
+    max_inflight_low_latency = static_cast<uint32_t>(atoi(env));
+  else
+    max_inflight_low_latency = kMaxInflightLowLatency;
+  return max_inflight_low_latency;
+}
+
+static inline uint32_t get_max_inflight_normal() {
+  static uint32_t max_inflight_normal = -1;
+  if (max_inflight_normal != -1) return max_inflight_normal;
+  char const* env = getenv("UCCL_IB_MAX_INFLIGHT_NORMAL");
+  if (env)
+    max_inflight_normal = static_cast<uint32_t>(atoi(env));
+  else
+    max_inflight_normal = kMaxInflightNormal;
+  return max_inflight_normal;
+}
 
 #endif  // COMMON_HPP
