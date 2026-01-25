@@ -141,8 +141,8 @@ class NICEndpoint {
   }
 
   bool checkRecvComplete_once(uint64_t rank_id, uint64_t index) {
-    // LOG(INFO) << "checkRecvComplete - Checking for rank_id: " << rank_id
-    //           << ", index: " << index;
+    LOG(INFO) << "checkRecvComplete - Checking for rank_id: " << rank_id
+              << ", index: " << index;
     auto it = recv_channel_groups_.find(rank_id);
     if (unlikely(it == recv_channel_groups_.end())) {
       throw std::runtime_error("Recv channel group not found for rank_id: " +

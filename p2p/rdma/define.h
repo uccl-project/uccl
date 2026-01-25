@@ -120,7 +120,7 @@ static constexpr int kMaxSendWr = 1024;
 static constexpr int kMaxRecvWr = 1024;
 static constexpr int kMaxSendSeg = 2;
 static constexpr int kMaxRecvSeg = 2;
-static constexpr uint64_t kMessageChunkSizeKB = 256;  // 1 MB
+static constexpr uint64_t kMessageChunkSizeKB = 256;  // 256KB
 static constexpr uint64_t kMaxSplitNum = 16;
 static constexpr uint32_t kBatchPostRecvWr = 32;
 static constexpr uint32_t kBatchPollCqe = 32;
@@ -131,9 +131,11 @@ static constexpr size_t kRingCapacity = 16384;  // Must be power of 2
 static constexpr size_t kInFlightMaxSizeKB =
     10240000;  // Max in-flight packets per channel
 
-constexpr size_t kMinCompressBytes = 4 * 1024;  // 4KB
 
-constexpr size_t kCompressBufferSize = 100 * 1024 * 1024;  // 100MB
+// constexpr size_t kMinCompressBytes = 1024* 1024* 1024;  // 256KB
+
+constexpr size_t kMinCompressBytes = 256 * 1024;  // 256KB
+constexpr size_t kCompressBufferSize = 400 * 1024 * 1024;  // 400MB
 
 static constexpr uint32_t INVALID_RANK_ID =
     std::numeric_limits<uint32_t>::max();
@@ -198,6 +200,71 @@ struct ContextArrayT {
 
 using RKeyArray = ContextArrayT<uint32_t>;
 using MRArray = ContextArrayT<struct ibv_mr*>;
+
+// ImmData class: encapsulates immediate data with chunk_count (high 16 bits) and index (low 16 bits)
+class ImmData {
+ public:
+  // Default constructor
+  constexpr ImmData() : data_(0) {}
+
+  // Constructor from raw uint32_t value
+  constexpr ImmData(uint32_t raw) : data_(raw) {}
+  constexpr ImmData(int raw) : data_(raw) {}
+  // Constructor from chunk_count and index
+  constexpr ImmData(uint16_t chunk_count, uint16_t index)
+      : data_((static_cast<uint32_t>(chunk_count) << 16) | index) {}
+
+  // Get chunk_count (high 16 bits)
+  constexpr uint16_t chunk_count() const {
+    return static_cast<uint16_t>(data_ >> 16);
+  }
+
+  // Get index (low 16 bits)
+  constexpr uint16_t index() const {
+    return static_cast<uint16_t>(data_ & 0xFFFF);
+  }
+
+  // Set chunk_count (preserves index)
+  void set_chunk_count(uint16_t chunk_count) {
+    data_ = (static_cast<uint32_t>(chunk_count) << 16) | (data_ & 0xFFFF);
+  }
+
+  // Set index (preserves chunk_count)
+  void set_index(uint16_t index) {
+    data_ = (data_ & 0xFFFF0000) | index;
+  }
+
+  // Implicit conversion to uint32_t for compatibility
+  constexpr operator uint32_t() const { return data_; }
+
+  // Assignment from uint32_t
+  ImmData& operator=(uint32_t raw) {
+    data_ = raw;
+    return *this;
+  }
+
+  // Get raw value
+  constexpr uint32_t raw() const { return data_; }
+
+  // Comparison operators
+  constexpr bool operator==(ImmData const& other) const {
+    return data_ == other.data_;
+  }
+  constexpr bool operator!=(ImmData const& other) const {
+    return data_ != other.data_;
+  }
+  constexpr bool operator==(uint32_t other) const { return data_ == other; }
+  constexpr bool operator!=(uint32_t other) const { return data_ != other; }
+
+  friend std::ostream& operator<<(std::ostream& os, ImmData const& imm) {
+    os << "ImmData{raw: " << imm.data_ << ", chunk_count: " << imm.chunk_count()
+       << ", index: " << imm.index() << "}";
+    return os;
+  }
+
+ private:
+  uint32_t data_;
+};
 
 struct MessageChunk {
   uint64_t offset;  // Offset from the start of the message
@@ -306,7 +373,7 @@ struct CQMeta {
   uint64_t wr_id;
   ibv_wc_opcode op_code;
   uint32_t len;
-  int imm;
+  ImmData imm;
   inline bool hasIMM() const { return op_code == IBV_WC_RECV_RDMA_WITH_IMM; };
 
   friend std::ostream& operator<<(std::ostream& os, CQMeta const& meta) {
@@ -324,6 +391,7 @@ typedef struct RegMemBlock {
   MemoryType type;
   MRArray mr_array;  // Array of MR pointers for multiple contexts
 
+  RegMemBlock() : addr(nullptr), size(0), type(MemoryType::HOST) {}
   RegMemBlock(void* a, size_t s, MemoryType t) : addr(a), size(s), type(t) {}
 
   RegMemBlock(void* a, size_t s, MRArray const& mr_array_in, MemoryType t)
@@ -432,6 +500,7 @@ typedef struct RDMARecvRequest {
   uint32_t channel_id;
   int64_t wr_id;
   std::shared_ptr<RegMemBlock> local_mem;
+  std::shared_ptr<RegMemBlock> local_compression_mem;
   dietgpu::FloatType float_type;
 
   // Constructor
@@ -470,6 +539,8 @@ struct alignas(64) SendReqMeta {
   uint32_t rank_id;
   uint32_t channel_id;
   RemoteMemInfo remote_mem;
+  RegMemBlock local_mem;
+  dietgpu::FloatType float_type;
   uint32_t expected_chunk_count;  // Expected number of chunks to receive
   uint32_t received_chunk_count;  // Number of chunks already received
 
@@ -492,7 +563,10 @@ struct alignas(64) SendReqMeta {
     rank_id = rev_req->from_rank_id;
     channel_id = rev_req->channel_id;
     remote_mem = rev_req->local_mem;
-    expected_chunk_count = getMessageChunkCount(rev_req->local_mem->size);
+    local_mem = *(rev_req->local_compression_mem ? rev_req->local_compression_mem
+                                        : rev_req->local_mem);
+    float_type = rev_req->float_type;
+    expected_chunk_count = getMessageChunkCount(local_mem.size);
     received_chunk_count = 0;
   }
 
@@ -588,14 +662,14 @@ struct RDMASendRequest {
   uint32_t from_rank_id;
   uint32_t to_rank_id;
   uint32_t channel_id;
-  uint32_t imm_data;  // immediate data
+  ImmData imm_data;  // immediate data with chunk_count (high 16 bits) and index (low 16 bits)
   int64_t wr_id;
   bool need_signaled;  // Whether to use IBV_SEND_SIGNALED flag
   SendType send_type = SendType::Send;
   dietgpu::FloatType float_type;
   // Constructor
   RDMASendRequest(std::shared_ptr<RegMemBlock> local,
-                  std::shared_ptr<RemoteMemInfo> remote, uint32_t imm = 0,
+                  std::shared_ptr<RemoteMemInfo> remote, ImmData imm = ImmData(),
                   bool signaled = true)
       : local_mem(local),
         remote_mem(remote),
@@ -604,7 +678,7 @@ struct RDMASendRequest {
 
   // Constructor from shared_ptr<RDMASendRequest>
   RDMASendRequest(std::shared_ptr<RDMASendRequest> other,
-                  std::shared_ptr<RegMemBlock> local, uint32_t imm = 0,
+                  std::shared_ptr<RegMemBlock> local, ImmData imm = ImmData(),
                   bool signaled = true)
       : local_mem(local),
         remote_mem(other->remote_mem),
@@ -613,7 +687,7 @@ struct RDMASendRequest {
 
   // Constructor from const RDMASendRequest&
   RDMASendRequest(RDMASendRequest const& other,
-                  std::shared_ptr<RegMemBlock> local, uint32_t imm = 0,
+                  std::shared_ptr<RegMemBlock> local, ImmData imm = ImmData(),
                   bool signaled = true)
       : local_mem(local),
         remote_mem(other.remote_mem),
@@ -635,7 +709,7 @@ struct RDMASendRequest {
 
   inline uint64_t getRemoteAddress() const { return remote_mem->addr; }
 
-  inline uint32_t getImm() const { return imm_data; }
+  inline ImmData getImm() const { return imm_data; }
 
   inline uint32_t getLocalLen() const { return local_mem->size; }
 

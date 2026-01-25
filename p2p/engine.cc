@@ -541,7 +541,6 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
   }
 
   P2PMhandle* mhandle = get_mhandle(mr_id);
-  printf("mhandle->float_type:%d\n", mhandle->float_type);
   if (unlikely(mhandle == nullptr)) {
     std::cerr << "[send] Error: Invalid mr_id " << mr_id << std::endl;
     return false;
