@@ -586,7 +586,7 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     size_t kMaxInflight =
         cfg_.use_normal_mode ? kMaxInflightNormal : kMaxInflightLowLatency;
     size_t budget = (kMaxInflight > pending) ? (kMaxInflight - pending) : 0;
-    size_t max_inflight_bytes = get_max_inflight_bytes();
+    size_t max_inflight_bytes = get_max_inflight_bytes() / kNumProxyThs;
 
     // Pop commands from the FIFO until the budget is reached or the max
     // inflight bytes is reached.

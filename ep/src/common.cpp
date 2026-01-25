@@ -167,4 +167,4 @@ uint64_t make_wr_id(uint32_t tag, uint32_t slot) {
 uint32_t wr_tag(uint64_t wrid) { return uint32_t(wrid >> 32); }
 uint32_t wr_slot(uint64_t wrid) { return uint32_t(wrid); }
 
-std::atomic<size_t> current_inflight_bytes{0};
+thread_local std::atomic<size_t> current_inflight_bytes{0};

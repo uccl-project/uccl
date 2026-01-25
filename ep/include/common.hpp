@@ -100,6 +100,6 @@ static inline size_t get_max_inflight_bytes() {
     max_inflight_bytes = kMaxInflightBytesDefault;
   return max_inflight_bytes;
 }
-extern std::atomic<size_t> current_inflight_bytes;
+extern thread_local std::atomic<size_t> current_inflight_bytes;
 
 #endif  // COMMON_HPP
