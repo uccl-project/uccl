@@ -614,13 +614,14 @@ class Buffer {
         auto start_time = std::chrono::high_resolution_clock::now();
         while (true) {
           // Read total count
-          num_recv_tokens = static_cast<int>(*moe_recv_counter);
-          num_rdma_recv_tokens = static_cast<int>(*moe_recv_rdma_counter);
+          num_recv_tokens = static_cast<int>(*(int volatile*)moe_recv_counter);
+          num_rdma_recv_tokens =
+              static_cast<int>(*(int volatile*)moe_recv_rdma_counter);
 
           // Read per-expert count
           bool ready = (num_recv_tokens >= 0) and (num_rdma_recv_tokens >= 0);
           for (int i = 0; i < num_local_experts and ready; ++i)
-            ready &= moe_recv_expert_counter[i] >= 0;
+            ready &= *((int volatile*)(moe_recv_expert_counter + i)) >= 0;
 
           if (ready) break;
 
