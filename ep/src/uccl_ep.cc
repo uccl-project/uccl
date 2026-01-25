@@ -614,14 +614,13 @@ class Buffer {
         auto start_time = std::chrono::high_resolution_clock::now();
         while (true) {
           // Read total count
-          num_recv_tokens = static_cast<int>(*(int volatile*)moe_recv_counter);
-          num_rdma_recv_tokens =
-              static_cast<int>(*(int volatile*)moe_recv_rdma_counter);
+          num_recv_tokens = static_cast<int>(*moe_recv_counter);
+          num_rdma_recv_tokens = static_cast<int>(*moe_recv_rdma_counter);
 
           // Read per-expert count
           bool ready = (num_recv_tokens >= 0) and (num_rdma_recv_tokens >= 0);
           for (int i = 0; i < num_local_experts and ready; ++i)
-            ready &= *((int volatile*)(moe_recv_expert_counter + i)) >= 0;
+            ready &= moe_recv_expert_counter[i] >= 0;
 
           if (ready) break;
 
@@ -1932,13 +1931,16 @@ class Buffer {
   cudaIpcMemHandle_t rdma_ipc_handles[NUM_MAX_NVL_PEERS]{};
   void* ipc_rdma_base_ptrs[NUM_MAX_NVL_PEERS]{};
 
+  // clang-format would change to int volatile*
+  // clang-format off
   // MoE counters (host mapped)
-  int volatile* moe_recv_counter = nullptr;
+  volatile int* moe_recv_counter = nullptr;
   int* moe_recv_counter_mapped{nullptr};  // device pointer
-  int* moe_recv_expert_counter{nullptr};
+  volatile int* moe_recv_expert_counter{nullptr};
   int* moe_recv_expert_counter_mapped{nullptr};
-  int* moe_recv_rdma_counter{nullptr};
+  volatile int* moe_recv_rdma_counter{nullptr};
   int* moe_recv_rdma_counter_mapped{nullptr};
+  // clang-format on
 
   bool destroyed = false;
 
