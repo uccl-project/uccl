@@ -440,9 +440,13 @@ def test_main(
                     rdma_buffer_size,
                 )
                 tune_args = {"x": current_x, "handle": handle, "config": config}
+                group.barrier()
                 t, notify_t = bench_kineto(
                     lambda: buffer.dispatch(**tune_args), ("dispatch", "notify")
                 )
+                group.barrier()
+                if t == 0 or notify_t == 0:
+                    continue
                 if t < best_time:
                     best_time, best_results = t, (
                         num_sms,
@@ -507,9 +511,11 @@ def test_main(
                 rdma_buffer_size,
             )
             tune_args = {"x": recv_x, "handle": handle, "config": config}
+            group.barrier()
             t, notify_t = bench_kineto(
                 lambda: buffer.combine(**tune_args), ("combine", "notify")
             )
+            group.barrier()
             if t == 0 or notify_t == 0:
                 continue
             if local_rank == 0:

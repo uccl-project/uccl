@@ -38,7 +38,7 @@ extern bool use_ll_sl;
 // imm for reordering buffer sequence tracking.
 #define kMaxInflightLowLatency 32
 #define kMaxInflightNormal 1
-#define kChannelPerProxy 8
+#define kChannelPerProxy 32
 #define kNumProxyThs 1
 #ifdef EFA
 // 8 MB mimicing NCCL EFA plugin default (512KB*16)
