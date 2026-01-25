@@ -40,13 +40,9 @@ extern bool use_ll_sl;
 #define kMaxInflightNormal 8
 #define kChannelPerProxy 8
 #define kNumProxyThs 4
-#ifdef EFA
-// 8 MB mimicing NCCL EFA plugin default (512KB*16)
-#define kMaxInflightBytes (512 * 1024 * 16ULL)
-#else
-// 2 MB mimicing NCCL net.cc default (128KB*16)
-#define kMaxInflightBytes (128 * 1024 * 16ULL)
-#endif
+// NCCL EFA plugin default: 8 MB mimicing (512KB*16)
+// NCCL IB net.cc default: 2 MB (128KB*16)
+#define kMaxInflightBytes SIZE_MAX
 #define kBatchSize 32
 #define kIterations 40000
 #define kTestNumGpuThPerBlock 1

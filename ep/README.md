@@ -127,7 +127,7 @@ Notes:
 |---------------------|-------------|---------------|
 | UCCL_SOCKET_IFNAME | Boostrapping interface | null |
 | UCCL_IB_GID_INDEX | GID index in RDMA network | -1 |
-| UCCL_IB_MAX_INFLIGHT_BYTES | Max inflight bytes per GPU/NIC | 2097152/8388608 (IB/EFA) |
+| UCCL_IB_MAX_INFLIGHT_BYTES | Max inflight bytes per GPU/NIC | SIZE_MAX (no limit) |
 | UCCL_IB_MAX_INFLIGHT_NORMAL | Max inflight writes per GPU/NIC in HT | 8 |
 | UCCL_IB_MAX_INFLIGHT_LOW_LATENCY | Max inflight writes per GPU/NIC in LL | 32 |
 | UCCL_IB_SL | Service level in RDMA network | 3/8 (IB/EFA) |
