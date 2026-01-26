@@ -83,8 +83,10 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
-Endpoint::Endpoint(uint32_t const num_cpus)
-    : local_gpu_idx_(INVALID_GPU), num_cpus_(num_cpus) {
+Endpoint::Endpoint(uint32_t const num_cpus, bool passive_accept)
+    : local_gpu_idx_(INVALID_GPU),
+      num_cpus_(num_cpus),
+      passive_accept_(passive_accept) {
   std::cout << "Creating Engine with CPUs: " << num_cpus << std::endl;
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
 
@@ -107,6 +109,12 @@ Endpoint::Endpoint(uint32_t const num_cpus)
   // Initialize the RDMA endpoint with lazy creation.
   ep_ = std::shared_ptr<NICEndpoint>(
       new NICEndpoint(INVALID_GPU, INVALID_RANK_ID, 0, false));
+
+  if (passive_accept_) {
+    passive_accept_thread_ =
+        std::thread(&Endpoint::passive_accept_thread_func, this);
+  }
+
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
@@ -114,6 +122,10 @@ Endpoint::~Endpoint() {
   std::cout << "Destroying Engine..." << std::endl;
 
   stop_.store(true, std::memory_order_release);
+
+  if (passive_accept_ && passive_accept_thread_.joinable()) {
+    passive_accept_thread_.join();
+  }
 
   if (send_proxy_thread_.joinable()) {
     send_proxy_thread_.join();
@@ -395,6 +407,26 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
         "[Endpoint::regv] data_v/size_v length mismatch");
 
   size_t const n = data_v.size();
+
+  // Early return if empty
+  if (n == 0) {
+    mr_id_v.clear();
+    return true;
+  }
+
+  if (!engine_initialized_) {
+    int idx = uccl::get_dev_idx((void*)data_v[0]);
+    if (idx != -1) {
+      // Pointer is on device idx
+      local_gpu_idx_ = idx;
+    } else {
+      // Host memory/unknown memory type - fallback to dev 0
+      local_gpu_idx_ = 0;
+    }
+    initialize_engine();
+    engine_initialized_ = true;
+  }
+
   mr_id_v.resize(n);
 
   {
@@ -1747,4 +1779,281 @@ void Endpoint::recv_proxy_thread_func() {
       task->status_ptr->task_ptr.reset();
     }
   }
+}
+
+std::vector<XferDesc> Endpoint::register_memory(
+    std::vector<void const*> const& data_v, std::vector<size_t> const& size_v) {
+  std::vector<uint64_t> mr_id_v;
+  auto ok = regv(data_v, size_v, mr_id_v);
+  if (!ok) {
+    return {};
+  }
+
+  std::vector<XferDesc> xfer_desc_v;
+
+  auto size = data_v.size();
+
+  for (size_t i = 0; i < size; i++) {
+    auto mhandle = get_mhandle(mr_id_v[i]);
+    assert(mhandle != nullptr);
+    XferDesc xfer_desc;
+    xfer_desc.addr = data_v[i];
+    xfer_desc.size = size_v[i];
+    xfer_desc.mr_id = mr_id_v[i];
+    for (size_t j = 0; j < kNICContextNumber; j++) {
+      auto mr = mhandle->mr_array.getKeyByContextID(j);
+      assert(mr != nullptr);
+      xfer_desc.lkeys.push_back(mr->lkey);
+      xfer_desc.rkeys.push_back(mr->rkey);
+    }
+    xfer_desc_v.push_back(xfer_desc);
+  }
+
+  return xfer_desc_v;
+}
+
+std::vector<uint8_t> Endpoint::get_serialized_descs(
+    std::vector<XferDesc> const& xfer_desc_v) {
+  std::vector<uint8_t> result;
+
+  // Calculate total size needed
+  size_t total_size = sizeof(size_t);  // Number of descriptors
+  for (auto const& desc : xfer_desc_v) {
+    total_size += sizeof(uint64_t);  // addr
+    total_size += sizeof(size_t);    // size
+    total_size += sizeof(size_t);    // keys count (same for lkeys and rkeys)
+    total_size += desc.lkeys.size() * sizeof(uint32_t);  // lkeys array
+    total_size += desc.rkeys.size() * sizeof(uint32_t);  // rkeys array
+  }
+
+  result.reserve(total_size);
+
+  // Serialize number of descriptors
+  size_t num_descs = xfer_desc_v.size();
+  uint8_t const* num_descs_ptr = reinterpret_cast<uint8_t const*>(&num_descs);
+  result.insert(result.end(), num_descs_ptr, num_descs_ptr + sizeof(size_t));
+
+  // Serialize each descriptor
+  for (auto const& desc : xfer_desc_v) {
+    // Serialize addr
+    uint64_t addr = reinterpret_cast<uint64_t>(desc.addr);
+    uint8_t const* addr_ptr = reinterpret_cast<uint8_t const*>(&addr);
+    result.insert(result.end(), addr_ptr, addr_ptr + sizeof(uint64_t));
+
+    // Serialize size
+    uint8_t const* size_ptr = reinterpret_cast<uint8_t const*>(&desc.size);
+    result.insert(result.end(), size_ptr, size_ptr + sizeof(size_t));
+
+    // Serialize keys count (lkeys and rkeys have the same count)
+    size_t keys_count = desc.lkeys.size();
+    // Verify lkeys and rkeys have the same count
+    assert(desc.lkeys.size() == desc.rkeys.size() &&
+           "lkeys and rkeys must have the same count");
+    uint8_t const* keys_count_ptr =
+        reinterpret_cast<uint8_t const*>(&keys_count);
+    result.insert(result.end(), keys_count_ptr,
+                  keys_count_ptr + sizeof(size_t));
+
+    // Serialize lkeys
+    if (keys_count > 0) {
+      uint8_t const* lkeys_ptr =
+          reinterpret_cast<uint8_t const*>(desc.lkeys.data());
+      result.insert(result.end(), lkeys_ptr,
+                    lkeys_ptr + keys_count * sizeof(uint32_t));
+    }
+
+    // Serialize rkeys
+    if (keys_count > 0) {
+      uint8_t const* rkeys_ptr =
+          reinterpret_cast<uint8_t const*>(desc.rkeys.data());
+      result.insert(result.end(), rkeys_ptr,
+                    rkeys_ptr + keys_count * sizeof(uint32_t));
+    }
+  }
+
+  return result;
+}
+
+std::vector<XferDesc> Endpoint::deserialize_descs(
+    std::vector<uint8_t> const& serialized_data) {
+  std::vector<XferDesc> xfer_desc_v;
+
+  if (serialized_data.empty()) {
+    return xfer_desc_v;
+  }
+
+  uint8_t const* data_ptr = serialized_data.data();
+  size_t offset = 0;
+  size_t data_size = serialized_data.size();
+
+  // Deserialize number of descriptors
+  if (offset + sizeof(size_t) > data_size) {
+    throw std::runtime_error(
+        "Invalid serialized data: insufficient data for descriptor count");
+  }
+  size_t num_descs;
+  std::memcpy(&num_descs, data_ptr + offset, sizeof(size_t));
+  offset += sizeof(size_t);
+
+  xfer_desc_v.reserve(num_descs);
+
+  // Deserialize each descriptor
+  for (size_t i = 0; i < num_descs; ++i) {
+    XferDesc desc;
+
+    // Deserialize addr
+    if (offset + sizeof(uint64_t) > data_size) {
+      throw std::runtime_error(
+          "Invalid serialized data: insufficient data for addr");
+    }
+    uint64_t addr;
+    std::memcpy(&addr, data_ptr + offset, sizeof(uint64_t));
+    desc.addr = reinterpret_cast<void const*>(addr);
+    offset += sizeof(uint64_t);
+
+    // Deserialize size
+    if (offset + sizeof(size_t) > data_size) {
+      throw std::runtime_error(
+          "Invalid serialized data: insufficient data for size");
+    }
+    std::memcpy(&desc.size, data_ptr + offset, sizeof(size_t));
+    offset += sizeof(size_t);
+
+    // Deserialize keys count
+    if (offset + sizeof(size_t) > data_size) {
+      throw std::runtime_error(
+          "Invalid serialized data: insufficient data for keys count");
+    }
+    size_t keys_count;
+    std::memcpy(&keys_count, data_ptr + offset, sizeof(size_t));
+    offset += sizeof(size_t);
+
+    // Deserialize lkeys
+    if (offset + keys_count * sizeof(uint32_t) > data_size) {
+      throw std::runtime_error(
+          "Invalid serialized data: insufficient data for lkeys");
+    }
+    desc.lkeys.resize(keys_count);
+    std::memcpy(desc.lkeys.data(), data_ptr + offset,
+                keys_count * sizeof(uint32_t));
+    offset += keys_count * sizeof(uint32_t);
+
+    // Deserialize rkeys
+    if (offset + keys_count * sizeof(uint32_t) > data_size) {
+      throw std::runtime_error(
+          "Invalid serialized data: insufficient data for rkeys");
+    }
+    desc.rkeys.resize(keys_count);
+    std::memcpy(desc.rkeys.data(), data_ptr + offset,
+                keys_count * sizeof(uint32_t));
+    offset += keys_count * sizeof(uint32_t);
+
+    xfer_desc_v.push_back(desc);
+  }
+
+  return xfer_desc_v;
+}
+
+bool Endpoint::add_remote_endpoint(std::vector<uint8_t> const& metadata,
+                                   uint64_t& conn_id) {
+  {
+    // Check if we have connected to the remote endpoint before
+    std::shared_lock<std::shared_mutex> lock(conn_mu_);
+    auto it = remote_endpoint_to_conn_id_.find(metadata);
+    if (it != remote_endpoint_to_conn_id_.end()) {
+      conn_id = it->second;
+      return true;
+    }
+  }
+  auto [remote_ip, remote_port, remote_gpu_idx] = parse_metadata(metadata);
+  bool success = connect(remote_ip, remote_gpu_idx, remote_port, conn_id);
+  if (success) {
+    std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    remote_endpoint_to_conn_id_[metadata] = conn_id;
+    return true;
+  }
+  return false;
+}
+
+void Endpoint::passive_accept_thread_func() {
+  std::string ip_addr;
+  int remote_gpu_idx;
+  uint64_t conn_id;
+  while (!stop_.load(std::memory_order_acquire)) {
+    (void)accept(ip_addr, remote_gpu_idx, conn_id);
+  }
+}
+
+std::shared_ptr<XferHandle> Endpoint::transfer(
+    uint64_t const& conn_id, std::string const& op_name,
+    std::vector<XferDesc> const& local_descs,
+    std::vector<XferDesc> const& remote_descs) {
+  auto conn = get_conn(conn_id);
+  if (conn == nullptr) {
+    std::cerr << "Invalid conn_id: " << conn_id << std::endl;
+    return nullptr;
+  }
+
+  if (local_descs.size() != remote_descs.size()) {
+    std::cerr << "Local and remote descriptors must have the same size"
+              << std::endl;
+    return nullptr;
+  }
+
+  if (op_name != "WRITE" && op_name != "READ") {
+    std::cerr << "Invalid op_name: " << op_name << std::endl;
+    return nullptr;
+  }
+
+  std::shared_ptr<XferHandle> xfer_handle = std::make_shared<XferHandle>();
+  xfer_handle->conn_id = conn_id;
+  xfer_handle->op_name = op_name;
+  xfer_handle->local_descs = local_descs;
+  xfer_handle->remote_descs = remote_descs;
+
+  std::vector<FifoItem> slot_item_v;
+  std::vector<uint64_t> mr_id_v;
+  std::vector<void*> src_v;
+  std::vector<size_t> size_v;
+  auto num_iovs = local_descs.size();
+  slot_item_v.reserve(num_iovs);
+  mr_id_v.reserve(num_iovs);
+  src_v.reserve(num_iovs);
+  size_v.reserve(num_iovs);
+  for (size_t i = 0; i < num_iovs; i++) {
+    FifoItem fifo_item;
+    auto ldesc = local_descs[i];
+    auto rdesc = remote_descs[i];
+
+    fifo_item.addr = reinterpret_cast<uint64_t>(rdesc.addr);
+    fifo_item.size = rdesc.size;
+    // Copy rdesc.rkeys to fifo_item.padding
+    std::memcpy(fifo_item.padding, rdesc.rkeys.data(),
+                rdesc.rkeys.size() * sizeof(uint32_t));
+
+    slot_item_v.push_back(fifo_item);
+    mr_id_v.push_back(ldesc.mr_id);
+    src_v.push_back(const_cast<void*>(ldesc.addr));
+    size_v.push_back(ldesc.size);
+  }
+
+  bool success;
+  if (op_name == "WRITE") {
+    success = writev_async(conn_id, mr_id_v, src_v, size_v, slot_item_v,
+                           num_iovs, &xfer_handle->transfer_id);
+  } else {
+    success = readv_async(conn_id, mr_id_v, src_v, size_v, slot_item_v,
+                          num_iovs, &xfer_handle->transfer_id);
+  }
+  if (!success) {
+    return nullptr;
+  }
+  return xfer_handle;
+}
+
+bool Endpoint::check_xfer_state(
+    std::shared_ptr<XferHandle> const& xfer_handle) {
+  bool is_done;
+  poll_async(xfer_handle->transfer_id, &is_done);
+  return is_done;
 }

@@ -112,6 +112,39 @@ using FifoItem = nccl_tcpx::FifoItem;
 using FifoItem = FifoItem;
 #endif
 
+/* Ray API */
+struct XferDesc {
+  void const* addr;
+  size_t size;
+  uint64_t mr_id;
+  std::vector<uint32_t> lkeys;
+  std::vector<uint32_t> rkeys;
+};
+
+enum XferType {
+  XferWrite,
+  XferRead,
+};
+
+struct XferHandle {
+  uint64_t conn_id;
+  std::string op_name;
+  std::vector<XferDesc> local_descs;
+  std::vector<XferDesc> remote_descs;
+  uint64_t transfer_id;
+};
+
+// Custom hash function for std::vector<uint8_t>
+struct VectorUint8Hash {
+  std::size_t operator()(std::vector<uint8_t> const& vec) const {
+    std::size_t hash = vec.size();
+    for (uint8_t byte : vec) {
+      hash = hash * 31 + static_cast<std::size_t>(byte);
+    }
+    return hash;
+  }
+};
+
 class Endpoint {
   static constexpr uint32_t kMaxVector = 8;
   static constexpr size_t kIpcAlignment = 1ul << 20;
@@ -132,8 +165,10 @@ class Endpoint {
 
   /* Create endpoint without intializing the engine. Lazy creation of engine is
    * done during  memory registration. Additionally, open a unified P2P socket
-   * for metadata exchanges. */
-  Endpoint(uint32_t const num_cpus);
+   * for metadata exchanges. If passive_accept is true, the endpoint will not
+   * call accept() but delegate it to a background thread.
+   */
+  Endpoint(uint32_t const num_cpus, bool passive_accept = false);
   ~Endpoint();
 
   /* Connect to a remote server via TCP, then build RDMA QP connections. */
@@ -276,6 +311,39 @@ class Endpoint {
   bool advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
                       std::vector<size_t> len_v, std::vector<char*> out_buf_v,
                       size_t num_iovs);
+  /***************************************************/
+  /* API for Ray */
+  /***************************************************/
+
+  /* Add a remote endpoint with metadata - connect only once per remote
+   * endpoint. */
+  bool add_remote_endpoint(std::vector<uint8_t> const& metadata,
+                           uint64_t& conn_id);
+
+  /* Register memory for a list of tensors and return transfer descriptors */
+  std::vector<XferDesc> register_memory(std::vector<void const*> const& data_v,
+                                        std::vector<size_t> const& size_v);
+
+  /* Serialize XferDesc vector to bytes for network transmission */
+  std::vector<uint8_t> get_serialized_descs(
+      std::vector<XferDesc> const& xfer_desc_v);
+
+  /* Deserialize bytes to XferDesc vector */
+  std::vector<XferDesc> deserialize_descs(
+      std::vector<uint8_t> const& serialized_data);
+
+  /* Start a transfer and return a transfer handle */
+  std::shared_ptr<XferHandle> transfer(
+      uint64_t const& conn_id, std::string const& op_name,
+      std::vector<XferDesc> const& local_descs,
+      std::vector<XferDesc> const& remote_descs);
+
+  /* Check the state of a transfer */
+  bool check_xfer_state(std::shared_ptr<XferHandle> const& xfer_handle);
+
+  /***************************************************/
+  /* API for Ray */
+  /***************************************************/
 
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);
@@ -364,6 +432,9 @@ class Endpoint {
   std::unordered_map<uint64_t, uint64_t> conn_id_to_conn_efa_;
   mutable std::shared_mutex mr_mu_;
   std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
+
+  std::unordered_map<std::vector<uint8_t>, uint64_t, VectorUint8Hash>
+      remote_endpoint_to_conn_id_;
 
   // Single-threaded.
   std::unordered_map<int, uint64_t> rank2conn_;
@@ -704,4 +775,8 @@ class Endpoint {
   std::thread recv_proxy_thread_;
   void send_proxy_thread_func();
   void recv_proxy_thread_func();
+
+  bool passive_accept_;
+  std::thread passive_accept_thread_;
+  void passive_accept_thread_func();
 };

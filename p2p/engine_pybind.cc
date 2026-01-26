@@ -9,10 +9,43 @@ struct InsidePythonGuard {
   ~InsidePythonGuard() { inside_python = false; }
 };
 
+// Helper function to extract pointer and size from PyTorch tensor
+std::pair<void const*, size_t> get_tensor_info(py::object tensor_obj) {
+  // Get data pointer using Python's data_ptr() method
+  if (!py::hasattr(tensor_obj, "data_ptr")) {
+    throw std::runtime_error("Tensor does not have data_ptr() method");
+  }
+  py::object data_ptr_result = tensor_obj.attr("data_ptr")();
+  uint64_t ptr = py::cast<uint64_t>(data_ptr_result);
+
+  // Get number of elements
+  if (!py::hasattr(tensor_obj, "numel")) {
+    throw std::runtime_error("Tensor does not have numel() method");
+  }
+  py::object numel_result = tensor_obj.attr("numel")();
+  int64_t numel = py::cast<int64_t>(numel_result);
+
+  // Get element size
+  if (!py::hasattr(tensor_obj, "element_size")) {
+    throw std::runtime_error("Tensor does not have element_size() method");
+  }
+  py::object element_size_result = tensor_obj.attr("element_size")();
+  int64_t element_size = py::cast<int64_t>(element_size_result);
+
+  size_t total_size = static_cast<size_t>(numel * element_size);
+  return std::make_pair(reinterpret_cast<void const*>(ptr), total_size);
+}
+
 PYBIND11_MODULE(p2p, m) {
   m.doc() = "P2P Engine - High-performance RDMA-based peer-to-peer transport";
 
   m.def("get_oob_ip", &uccl::get_oob_ip, "Get the OOB IP address");
+
+  // Register XferHandle type
+  py::class_<XferHandle, std::shared_ptr<XferHandle>>(m, "XferHandle")
+      .def_readonly("conn_id", &XferHandle::conn_id)
+      .def_readonly("op_name", &XferHandle::op_name)
+      .def_readonly("transfer_id", &XferHandle::transfer_id);
 
   // Endpoint class binding
   py::class_<Endpoint>(m, "Endpoint")
@@ -21,10 +54,10 @@ PYBIND11_MODULE(p2p, m) {
         InsidePythonGuard guard;
         return std::make_unique<Endpoint>(local_gpu_idx, num_cpus);
       }))
-      .def(py::init([](uint32_t num_cpus) {
+      .def(py::init([](uint32_t num_cpus, bool passive_accept = false) {
         py::gil_scoped_release release;
         InsidePythonGuard guard;
-        return std::make_unique<Endpoint>(num_cpus);
+        return std::make_unique<Endpoint>(num_cpus, passive_accept);
       }))
       .def(
           "connect",
@@ -42,6 +75,22 @@ PYBIND11_MODULE(p2p, m) {
           },
           "Connect to a remote server", py::arg("remote_ip_addr"),
           py::arg("remote_gpu_idx"), py::arg("remote_port") = -1)
+      .def(
+          "add_remote_endpoint",
+          [](Endpoint& self, py::bytes metadata_bytes) {
+            uint64_t conn_id;
+            bool success;
+            {
+              py::gil_scoped_release release;
+              InsidePythonGuard guard;
+              std::string buf = metadata_bytes;
+              std::vector<uint8_t> metadata(buf.begin(), buf.end());
+              success = self.add_remote_endpoint(metadata, conn_id);
+            }
+            return py::make_tuple(success, conn_id);
+          },
+          "Add remote endpoint - connect only once per remote endpoint.",
+          py::arg("metadata_bytes"))
       .def(
           "get_metadata",
           [](Endpoint& self) {
@@ -113,6 +162,181 @@ PYBIND11_MODULE(p2p, m) {
           },
           py::arg("ptrs"), py::arg("sizes"),
           "Batch-register multiple memory regions and return [ok, mr_id_list]")
+      .def(
+          "register_memory",
+          [](Endpoint& self, py::list tensor_list) {
+            // Extract pointers and sizes from PyTorch tensors
+            std::vector<void const*> ptrs;
+            std::vector<size_t> sizes;
+            size_t list_len = py::len(tensor_list);
+            ptrs.reserve(list_len);
+            sizes.reserve(list_len);
+
+            for (size_t i = 0; i < list_len; ++i) {
+              py::object tensor_obj = tensor_list[i];
+
+              // Verify it's a tensor-like object
+              if (!py::hasattr(tensor_obj, "data_ptr")) {
+                throw std::runtime_error(
+                    "Object at index " + std::to_string(i) +
+                    " is not a tensor (missing data_ptr() method)");
+              }
+
+              auto [ptr, size] = get_tensor_info(tensor_obj);
+              ptrs.push_back(ptr);
+              sizes.push_back(size);
+            }
+
+            // Call C++ register_memory
+            std::vector<XferDesc> xfer_desc_v;
+            {
+              py::gil_scoped_release release;
+              InsidePythonGuard guard;
+              xfer_desc_v = self.register_memory(ptrs, sizes);
+            }
+
+            // Convert XferDesc to Python objects
+            py::list result;
+            for (const auto& desc : xfer_desc_v) {
+              py::dict desc_dict;
+              desc_dict["addr"] = reinterpret_cast<uint64_t>(desc.addr);
+              desc_dict["size"] = desc.size;
+              desc_dict["mr_id"] = desc.mr_id;
+              desc_dict["lkeys"] = py::cast(desc.lkeys);
+              desc_dict["rkeys"] = py::cast(desc.rkeys);
+              result.append(desc_dict);
+            }
+            return result;
+          },
+          "Register memory for a list of PyTorch tensors and return transfer "
+          "descriptors",
+          py::arg("tensor_list"))
+      .def(
+          "get_serialized_descs",
+          [](Endpoint& self, py::list desc_list) {
+            // Convert Python list of dicts to C++ vector of XferDesc
+            std::vector<XferDesc> xfer_desc_v;
+            size_t list_len = py::len(desc_list);
+            xfer_desc_v.reserve(list_len);
+
+            for (size_t i = 0; i < list_len; ++i) {
+              py::dict desc_dict = py::cast<py::dict>(desc_list[i]);
+
+              XferDesc desc;
+              desc.addr = reinterpret_cast<void const*>(
+                  py::cast<uint64_t>(desc_dict["addr"]));
+              desc.size = py::cast<size_t>(desc_dict["size"]);
+              desc.lkeys = py::cast<std::vector<uint32_t>>(desc_dict["lkeys"]);
+              desc.rkeys = py::cast<std::vector<uint32_t>>(desc_dict["rkeys"]);
+
+              xfer_desc_v.push_back(desc);
+            }
+
+            // Serialize descriptors
+            std::vector<uint8_t> serialized;
+            {
+              py::gil_scoped_release release;
+              InsidePythonGuard guard;
+              serialized = self.get_serialized_descs(xfer_desc_v);
+            }
+
+            // Return as Python bytes
+            return py::bytes(reinterpret_cast<const char*>(serialized.data()),
+                             serialized.size());
+          },
+          "Serialize transfer descriptors to bytes for network transmission",
+          py::arg("desc_list"))
+      .def(
+          "deserialize_descs",
+          [](Endpoint& self, py::bytes serialized_bytes) {
+            // Convert Python bytes to C++ vector
+            std::string buf = serialized_bytes;
+            std::vector<uint8_t> serialized_data(buf.begin(), buf.end());
+
+            // Deserialize descriptors
+            std::vector<XferDesc> xfer_desc_v;
+            {
+              py::gil_scoped_release release;
+              InsidePythonGuard guard;
+              xfer_desc_v = self.deserialize_descs(serialized_data);
+            }
+
+            // Convert XferDesc to Python objects
+            py::list result;
+            for (const auto& desc : xfer_desc_v) {
+              py::dict desc_dict;
+              desc_dict["addr"] = reinterpret_cast<uint64_t>(desc.addr);
+              desc_dict["size"] = desc.size;
+              desc_dict["mr_id"] = desc.mr_id;
+              desc_dict["lkeys"] = py::cast(desc.lkeys);
+              desc_dict["rkeys"] = py::cast(desc.rkeys);
+              result.append(desc_dict);
+            }
+            return result;
+          },
+          "Deserialize bytes to transfer descriptors",
+          py::arg("serialized_bytes"))
+      .def(
+          "transfer",
+          [](Endpoint& self, uint64_t conn_id, std::string const& op_name,
+             py::list local_desc_list, py::list remote_desc_list) {
+            std::vector<XferDesc> local_desc_v;
+            std::vector<XferDesc> remote_desc_v;
+            size_t list_len = py::len(local_desc_list);
+            local_desc_v.reserve(list_len);
+            remote_desc_v.reserve(list_len);
+            for (size_t i = 0; i < list_len; ++i) {
+              // Conver local_desc_list and remote_desc_list to XferDesc vector
+              py::dict local_desc_dict = py::cast<py::dict>(local_desc_list[i]);
+              py::dict remote_desc_dict =
+                  py::cast<py::dict>(remote_desc_list[i]);
+              XferDesc local_desc;
+              local_desc.addr = reinterpret_cast<void const*>(
+                  py::cast<uint64_t>(local_desc_dict["addr"]));
+              local_desc.size = py::cast<size_t>(local_desc_dict["size"]);
+              local_desc.mr_id = py::cast<uint64_t>(local_desc_dict["mr_id"]);
+              local_desc.lkeys =
+                  py::cast<std::vector<uint32_t>>(local_desc_dict["lkeys"]);
+              local_desc.rkeys =
+                  py::cast<std::vector<uint32_t>>(local_desc_dict["rkeys"]);
+              local_desc_v.push_back(local_desc);
+              XferDesc remote_desc;
+              remote_desc.addr = reinterpret_cast<void const*>(
+                  py::cast<uint64_t>(remote_desc_dict["addr"]));
+              remote_desc.size = py::cast<size_t>(remote_desc_dict["size"]);
+              // Remote desc doesn't need mr_id for transfer, but we can set it
+              // to 0
+              remote_desc.mr_id = 0;
+              remote_desc.lkeys =
+                  py::cast<std::vector<uint32_t>>(remote_desc_dict["lkeys"]);
+              remote_desc.rkeys =
+                  py::cast<std::vector<uint32_t>>(remote_desc_dict["rkeys"]);
+              remote_desc_v.push_back(remote_desc);
+            }
+            std::shared_ptr<XferHandle> xfer_handle;
+            {
+              py::gil_scoped_release release;
+              InsidePythonGuard guard;
+              xfer_handle =
+                  self.transfer(conn_id, op_name, local_desc_v, remote_desc_v);
+            }
+            return xfer_handle;
+          },
+          "Start a transfer and return a transfer handle", py::arg("conn_id"),
+          py::arg("op_name"), py::arg("local_desc_list"),
+          py::arg("remote_desc_list"))
+      .def(
+          "check_xfer_state",
+          [](Endpoint& self, std::shared_ptr<XferHandle> const& xfer_handle) {
+            bool is_done;
+            {
+              py::gil_scoped_release release;
+              InsidePythonGuard guard;
+              is_done = self.check_xfer_state(xfer_handle);
+            }
+            return is_done;
+          },
+          "Check the state of a transfer", py::arg("xfer_handle"))
       .def(
           "dereg",
           [](Endpoint& self, uint64_t mr_id) {
