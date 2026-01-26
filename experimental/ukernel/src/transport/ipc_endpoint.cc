@@ -211,7 +211,7 @@ void IPCEndpoint::proxy_thread_func() {
     if (t.req) {
       if (!ok) t.req->failed.store(true, std::memory_order_release);
       t.req->running.store(false, std::memory_order_release);
-      t.req->on_comm_done(ok);
+      t.req->on_comm_done();
     }
   }
 
@@ -219,7 +219,10 @@ void IPCEndpoint::proxy_thread_func() {
   while (true) {
     IpcTask t;
     if (jring_mc_dequeue_bulk(task_ring_, &t, 1, nullptr) != 1) break;
-    if (t.req) t.req->on_comm_done(false);
+    if (t.req) {
+      t.req->failed.store(true, std::memory_order_release);
+      t.req->on_comm_done();
+    }
   }
 }
 
