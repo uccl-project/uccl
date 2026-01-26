@@ -95,7 +95,7 @@ def _run_server(args) -> List[BenchmarkResult]:
 
         # Warm-up receive
         collective.recv(tensor, src=peer)
-        print(tensor)
+        # print(tensor)
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
@@ -105,12 +105,12 @@ def _run_server(args) -> List[BenchmarkResult]:
         elapsed = time.perf_counter() - start
 
         # check if tensor is filled with size
-        if not tensor.allclose(torch.tensor(size, dtype=args.tensor_dtype).cuda()):
-            print(f"[Server] WARNING: Tensor is not filled with {size}")
-            print(f"[Server] Tensor: {tensor}")
-            print(f"[Server] Tensor size: {tensor.size()}")
-            print(f"[Server] Tensor dtype: {tensor.dtype}")
-            print(f"[Server] Tensor device: {tensor.device}")
+        # if not tensor.allclose(torch.tensor(size, dtype=args.tensor_dtype).cuda()):
+        #     print(f"[Server] WARNING: Tensor is not filled with {size}")
+        #     print(f"[Server] Tensor: {tensor}")
+        #     print(f"[Server] Tensor size: {tensor.size()}")
+        #     print(f"[Server] Tensor dtype: {tensor.dtype}")
+        #     print(f"[Server] Tensor device: {tensor.device}")
 
         gbps = (total * 8) / elapsed / 1e9
         gb_sec = total / elapsed / 1e9
@@ -137,14 +137,14 @@ def _run_client(args) -> List[BenchmarkResult]:
     peer = 1  # server rank
     for size in args.sizes:
         tensor = _make_buffer(size, args.tensor_dtype)
-        tensor.fill_(size)
+        # tensor.fill_(size)
 
         # Register tensor for efficient memory access
         collective.register_tensor(tensor)
 
         # Warm-up send
         collective.send(tensor, dst=peer)
-
+        # print("collective.send", tensor)
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):

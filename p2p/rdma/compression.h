@@ -27,7 +27,7 @@ class Compressor {
     // Initialize StackDeviceMemory using placement new to avoid move/copy issues
     // Allocate on heap and manage manually
     res_ = new dietgpu::StackDeviceMemory(dietgpu::getCurrentDevice(),
-                                          256 * 1024 * 1024);  // 256MB workspace
+                                          2*kCompressBufferSize); 
   }
 
   ~Compressor() {
@@ -154,7 +154,7 @@ class Compressor {
     GPU_CHECK(cudaStreamSynchronize(stream_));
 #endif
 
-    LOG(ERROR) << "Compressor: Compressed " << req->local_mem->size
+    LOG(INFO) << "Compressor: Compressed " << req->local_mem->size
               << " bytes to " << compressedSize << " bytes, ratio: "
               <<  static_cast<float>(compressedSize)/static_cast<float>(req->local_mem->size) << "x";
 
