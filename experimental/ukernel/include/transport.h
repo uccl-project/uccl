@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -109,6 +110,11 @@ class IPCEndpoint : public EndpointBase {
   Communicator* comm_;
 };
 
+struct ReqCompletionEvent {
+  unsigned req_id;
+  std::chrono::steady_clock::time_point finish_ts;
+};
+
 // one gpu with the best nic
 class Communicator {
  public:
@@ -127,13 +133,15 @@ class Communicator {
   unsigned isend(int rank, void* ptr, size_t offset, size_t len,
                  uint16_t local_mr_id, uint16_t remote_mr_id, bool on_gpu);
   unsigned irecv(int rank, void* ptr, size_t offset, size_t len, bool on_gpu);
-  unsigned irecv_red(int rank, void* ptr, size_t offset, size_t len,
-                     bool on_gpu, ReductionType red_op);
-  unsigned ired(void* ptr, size_t offset, size_t len, bool on_gpu,
-                ReductionType red_op);
+  bool _is_finished_locked(unsigned id);
   bool wait_finish(unsigned const req);
   bool wait_finish(
       std::vector<unsigned> const& reqs);  // wait before works finished
+
+  // Req Completion notifier register a notifier
+  std::shared_ptr<void> register_completion_notifier(
+      std::function<void(unsigned, std::chrono::steady_clock::time_point)> cb);
+  void completion_notifier_loop();
 
   // ---------- Meta info -------------
   void set_communicator_meta_with_rank(int rank, CommunicatorMeta const& meta);
@@ -224,6 +232,18 @@ class Communicator {
       nullptr;  // For which request has not been added to requests_map_,
                 // cqpoller add unaddressed req_id to this queue, and
                 // irecv/recv_red consume it
+
+  // Req Completion notifier
+  std::atomic<bool> notifier_running_{false};
+  std::atomic<bool> notifier_started_{false};
+  std::thread notifier_thread_;
+  std::condition_variable notifier_cv_;
+  std::mutex notifier_mu_;
+
+  struct NotifyTarget {
+    std::function<void(unsigned, std::chrono::steady_clock::time_point)> emit;
+  };
+  std::vector<std::shared_ptr<NotifyTarget>> notify_targets_;
 
   friend class RDMAEndpoint;
   friend class IPCEndpoint;
