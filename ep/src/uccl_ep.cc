@@ -244,7 +244,7 @@ class Buffer {
                               cudaHostAllocMapped));
     CUDA_CHECK(cudaHostGetDevicePointer(
         reinterpret_cast<void**>(&moe_recv_expert_counter_mapped),
-        moe_recv_expert_counter, 0));
+        const_cast<int*>(moe_recv_expert_counter), 0));
     for (int i = 0; i < NUM_MAX_LOCAL_EXPERTS; ++i)
       moe_recv_expert_counter[i] = -1;
 
@@ -253,7 +253,7 @@ class Buffer {
                                 cudaHostAllocMapped));
       CUDA_CHECK(cudaHostGetDevicePointer(
           reinterpret_cast<void**>(&moe_recv_rdma_counter_mapped),
-          moe_recv_rdma_counter, 0));
+          const_cast<int*>(moe_recv_rdma_counter), 0));
       *moe_recv_rdma_counter = -1;
     }
   }
@@ -1931,13 +1931,16 @@ class Buffer {
   cudaIpcMemHandle_t rdma_ipc_handles[NUM_MAX_NVL_PEERS]{};
   void* ipc_rdma_base_ptrs[NUM_MAX_NVL_PEERS]{};
 
+  // clang-format would change to int volatile*
+  // clang-format off
   // MoE counters (host mapped)
-  int volatile* moe_recv_counter = nullptr;
+  volatile int* moe_recv_counter = nullptr;
   int* moe_recv_counter_mapped{nullptr};  // device pointer
-  int* moe_recv_expert_counter{nullptr};
+  volatile int* moe_recv_expert_counter{nullptr};
   int* moe_recv_expert_counter_mapped{nullptr};
-  int* moe_recv_rdma_counter{nullptr};
+  volatile int* moe_recv_rdma_counter{nullptr};
   int* moe_recv_rdma_counter_mapped{nullptr};
+  // clang-format on
 
   bool destroyed = false;
 
