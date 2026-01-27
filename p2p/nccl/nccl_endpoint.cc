@@ -1,16 +1,15 @@
 #include "nccl/nccl_endpoint.h"
-
-#include <arpa/inet.h>
-#include <cerrno>
-#include <cstring>
-#include <cstdlib>
-#include <chrono>
-#include <iostream>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <thread>
-#include <unistd.h>
 #include "util/gpu_rt.h"
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <cerrno>
+#include <chrono>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <thread>
+#include <sys/socket.h>
+#include <unistd.h>
 
 namespace tcp {
 namespace {
@@ -169,8 +168,8 @@ bool TCPEndpoint::setup_listener_(uint16_t port) {
   addr.sin_port = htons(port);
 
   if (bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
-    std::cerr << "[tcp] bind failed: " << strerror(errno)
-              << " port=" << port << std::endl;
+    std::cerr << "[tcp] bind failed: " << strerror(errno) << " port=" << port
+              << std::endl;
     ::close(fd);
     return false;
   }
@@ -227,11 +226,10 @@ bool TCPEndpoint::init_comm_(Conn& conn, ncclUniqueId const& uid,
                                gpuStreamNonBlocking) != gpuSuccess) {
     return false;
   }
-  ncclResult_t rc =
-      ncclCommInitRank(&conn.comm[comm_index], 2, uid, conn.rank);
+  ncclResult_t rc = ncclCommInitRank(&conn.comm[comm_index], 2, uid, conn.rank);
   if (rc != ncclSuccess) {
-    std::cerr << "[tcp] ncclCommInitRank failed: "
-              << ncclGetErrorString(rc) << std::endl;
+    std::cerr << "[tcp] ncclCommInitRank failed: " << ncclGetErrorString(rc)
+              << std::endl;
     return false;
   }
   return true;
@@ -315,9 +313,8 @@ bool TCPEndpoint::send_internal_(Conn& conn, void const* data, size_t size,
     return false;
   }
   // Enqueue NCCL send on the selected communicator/stream.
-  ncclResult_t rc =
-      ncclSend(data, size, ncclChar, conn.remote_rank, conn.comm[comm_index],
-               conn.stream[comm_index]);
+  ncclResult_t rc = ncclSend(data, size, ncclChar, conn.remote_rank,
+                             conn.comm[comm_index], conn.stream[comm_index]);
   if (rc != ncclSuccess) {
     std::cerr << "[tcp] ncclSend failed: " << ncclGetErrorString(rc)
               << std::endl;
@@ -356,9 +353,8 @@ bool TCPEndpoint::recv_internal_(Conn& conn, void* data, size_t size,
     return false;
   }
   // Enqueue NCCL recv on the selected communicator/stream.
-  ncclResult_t rc =
-      ncclRecv(data, size, ncclChar, conn.remote_rank, conn.comm[comm_index],
-               conn.stream[comm_index]);
+  ncclResult_t rc = ncclRecv(data, size, ncclChar, conn.remote_rank,
+                             conn.comm[comm_index], conn.stream[comm_index]);
   if (rc != ncclSuccess) {
     std::cerr << "[tcp] ncclRecv failed: " << ncclGetErrorString(rc)
               << std::endl;
@@ -605,9 +601,8 @@ void TCPEndpoint::uccl_deregmr(struct uccl::Mhandle* mhandle) {
 
 void TCPEndpoint::uccl_deregmr(MRArray const& mr_array) { (void)mr_array; }
 
-int TCPEndpoint::uccl_send_async(uccl::UcclFlow* flow,
-                                 struct uccl::Mhandle* mh, void const* data,
-                                 size_t size,
+int TCPEndpoint::uccl_send_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
+                                 void const* data, size_t size,
                                  struct uccl::ucclRequest* ureq) {
   // Two-sided send: enqueue ncclSend on the send communicator.
   (void)mh;
@@ -630,9 +625,8 @@ int TCPEndpoint::uccl_recv_async(uccl::UcclFlow* flow,
   return recv_internal_(*conn, data[0], size, comm_index, ureq) ? 0 : -1;
 }
 
-int TCPEndpoint::uccl_read_async(uccl::UcclFlow* flow,
-                                 struct uccl::Mhandle* mh, void* dst,
-                                 size_t size,
+int TCPEndpoint::uccl_read_async(uccl::UcclFlow* flow, struct uccl::Mhandle* mh,
+                                 void* dst, size_t size,
                                  uccl::FifoItem const& slot_item,
                                  uccl::ucclRequest* ureq) {
   // One-sided read: tell the peer to send, then post a local recv.
@@ -666,8 +660,7 @@ int TCPEndpoint::uccl_read_async(uccl::UcclFlow* flow,
 
 int TCPEndpoint::uccl_write_async(uccl::UcclFlow* flow,
                                   struct uccl::Mhandle* mh, void* src,
-                                  size_t size,
-                                  uccl::FifoItem const& slot_item,
+                                  size_t size, uccl::FifoItem const& slot_item,
                                   uccl::ucclRequest* ureq) {
   // One-sided write: tell the peer to recv, then post a local send.
   (void)mh;

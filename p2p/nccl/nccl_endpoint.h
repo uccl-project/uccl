@@ -78,6 +78,10 @@ class TCPEndpoint {
   int get_best_dev_idx(int gpu_idx) { return 0; }
 
   bool initialize_engine_by_dev(int dev, bool enable_p2p_listen) {
+    if (dev >= 0) {
+      gpu_index_ = dev;
+    }
+    (void)enable_p2p_listen;
     return true;
   }
 
@@ -100,8 +104,8 @@ class TCPEndpoint {
   int comm_index_for_send_(Conn const& conn) const;
   int comm_index_for_recv_(Conn const& conn) const;
   // Internal NCCL send/recv with completion events in ucclRequest.
-  bool send_internal_(Conn& conn, void const* data, size_t size,
-                      int comm_index, uccl::ucclRequest* ureq);
+  bool send_internal_(Conn& conn, void const* data, size_t size, int comm_index,
+                      uccl::ucclRequest* ureq);
   bool recv_internal_(Conn& conn, void* data, size_t size, int comm_index,
                       uccl::ucclRequest* ureq);
   void cleanup_conn_(Conn& conn);

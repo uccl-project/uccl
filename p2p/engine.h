@@ -7,7 +7,10 @@
 #include "util/net.h"
 #include "util/shared_pool.h"
 #include "util/util.h"
+#ifdef UCCL_P2P_USE_NCCL
 #include "../collective/rdma/rdma_io.h"
+#include "nccl/nccl_endpoint.h"
+#endif
 #include <glog/logging.h>
 #include <infiniband/verbs.h>
 #include <pybind11/pybind11.h>
@@ -23,21 +26,9 @@
 #include <variant>
 #include <vector>
 
-#ifdef UCCL_P2P_USE_NCCL
-#include "nccl/nccl_endpoint.h"
-#endif
-
 namespace py = pybind11;
 
 extern thread_local bool inside_python;
-
-using RDMAEndPoint =
-    std::variant<std::shared_ptr<NICEndpoint>, std::shared_ptr<tcp::TCPEndpoint>>;
-#else
-using RDMAEndPoint = std::variant<std::shared_ptr<NICEndpoint>>;
-#endif
-
-using ucclRequest = uccl::ucclRequest;
 
 inline int parseLogLevelFromEnv() {
   char const* env = std::getenv("UCCL_P2P_LOG_LEVEL");
@@ -59,6 +50,19 @@ inline int parseLogLevelFromEnv() {
   return google::WARNING;
 }
 
+#ifdef UCCL_P2P_USE_NCCL
+using RDMAEndPoint = std::shared_ptr<tcp::TCPEndpoint>;
+using ReqType = uccl::ReqType;
+using ucclRequest = uccl::ucclRequest;
+#else
+using RDMAEndPoint = std::shared_ptr<NICEndpoint>;
+enum ReqType { ReqTx, ReqRx, ReqRead, ReqWrite };
+struct ucclRequest {
+  enum ReqType type;
+  uint32_t n;
+  uint32_t engine_idx;
+};
+#endif
 struct Mhandle {
   struct ibv_mr* mr;
 };

@@ -208,10 +208,9 @@ def _run_client(args, ep, remote_metadata):
 
         start = time.perf_counter()
         total = 0
-        for iter_idx in range(args.iters):
+        for _ in range(args.iters):
             if args.async_api:
                 if args.num_iovs == 1:
-                    op_start = time.perf_counter()
                     if args.mode == "write":
                         ok, transfer_id = ep.write_async(
                             conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0]
@@ -221,26 +220,12 @@ def _run_client(args, ep, remote_metadata):
                             conn_id, mr_id_v[0], ptr_v[0], size_v[0], fifo_blob_v[0]
                         )
                     assert ok
-                    if iter_idx == 0:
-                        print(
-                            "[Client][Async] submit "
-                            f"id={transfer_id} bytes={size_v[0]} mode={args.mode} iovs=1"
-                        )
                     is_done = False
-                    poll_count = 0
                     while not is_done:
                         ok, is_done = ep.poll_async(transfer_id)
                         assert ok
-                        poll_count += 1
-                    if iter_idx == 0:
-                        op_elapsed = time.perf_counter() - op_start
-                        print(
-                            "[Client][Async] complete "
-                            f"id={transfer_id} polls={poll_count} elapsed={op_elapsed:.6f}s"
-                        )
                     total += size_v[0]
                 else:
-                    op_start = time.perf_counter()
                     if args.mode == "write":
                         ok, transfer_id = ep.writev_async(
                             conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs
@@ -250,24 +235,10 @@ def _run_client(args, ep, remote_metadata):
                             conn_id, mr_id_v, ptr_v, size_v, fifo_blob_v, args.num_iovs
                         )
                     assert ok
-                    if iter_idx == 0:
-                        print(
-                            "[Client][Async] submit "
-                            f"id={transfer_id} bytes={sum(size_v)} "
-                            f"mode={args.mode} iovs={args.num_iovs}"
-                        )
                     is_done = False
-                    poll_count = 0
                     while not is_done:
                         ok, is_done = ep.poll_async(transfer_id)
                         assert ok
-                        poll_count += 1
-                    if iter_idx == 0:
-                        op_elapsed = time.perf_counter() - op_start
-                        print(
-                            "[Client][Async] complete "
-                            f"id={transfer_id} polls={poll_count} elapsed={op_elapsed:.6f}s"
-                        )
                     total += sum(size_v)
             else:
                 if args.mode == "write":
@@ -336,7 +307,7 @@ def main():
         ],
     )
     p.add_argument("--iters", type=int, default=10)
-    p.add_argument("--async-api", action="store_true", default=True)
+    p.add_argument("--async-api", action="store_true")
     p.add_argument(
         "--num-iovs",
         type=int,

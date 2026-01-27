@@ -62,12 +62,13 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   FLAGS_logtostderr = true;
   google::InstallFailureSignalHandler();
 
-  // Initialize the endpoint.
 #ifdef UCCL_P2P_USE_NCCL
   ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
   numa_node_ = 0;
 #else
-  ep_ = std::make_shared<NICEndpoint>(local_gpu_idx_, INVALID_RANK_ID, 0, false);
+  // Initialize the RDMA endpoint.
+  ep_ = std::shared_ptr<NICEndpoint>(
+      new NICEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
   numa_node_ = RdmaDeviceManager::instance().get_numa_node(local_gpu_idx_);
 #endif
 
@@ -113,7 +114,8 @@ Endpoint::Endpoint(uint32_t const num_cpus)
   ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
 #else
   // Initialize the RDMA endpoint with lazy creation.
-  ep_ = std::make_shared<NICEndpoint>(INVALID_GPU, INVALID_RANK_ID, 0, false);
+  ep_ = std::shared_ptr<NICEndpoint>(
+      new NICEndpoint(INVALID_GPU, INVALID_RANK_ID, 0, false));
 #endif
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
@@ -209,8 +211,7 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
 
   std::future<ConnID> uccl_conn_id_future = std::async(
       std::launch::async, [this, remote_gpu_idx, &ip_addr, remote_port]() {
-        return uccl_connect(ep_, local_gpu_idx_, remote_gpu_idx, ip_addr,
-                            remote_port);
+        return uccl_connect(ep_, remote_gpu_idx, ip_addr, remote_port);
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
@@ -351,7 +352,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   }
   std::future<ConnID> uccl_conn_id_future =
       std::async(std::launch::async, [this, &ip_addr, &remote_gpu_idx]() {
-        return uccl_accept(ep_, local_gpu_idx_, ip_addr, &remote_gpu_idx);
+        return uccl_accept(ep_, ip_addr, &remote_gpu_idx);
       });
 
   // Check for Python signals (eg, ctrl+c) while waiting for connection
