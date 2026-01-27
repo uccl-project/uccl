@@ -119,6 +119,46 @@ Notes:
 * Consider tune `NCCL_IB_GID_INDEX=3` if NCCL triggers errors.
 * This also works for AMD GPUs.
 
+### Running NIXL with UCCL backend
+
+If you have not installed nixl, you can follow:
+<details><summary>Click me</summary>
+
+```bash
+sudo apt install build-essential cmake pkg-config autoconf automake libtool -y
+pip3 install meson pybind11
+
+git clone https://github.com/NVIDIA/gdrcopy.git
+cd gdrcopy
+sudo make prefix=/usr/local/gdrcopy CUDA=/usr/local/cuda all install
+cd ..
+
+# Run these if you find there is no libcuda.so under /usr/local/cuda. Using GH200 as an example.
+sudo ln -s /usr/lib/aarch64-linux-gnu/libcuda.so.1 /usr/local/cuda/lib64/libcuda.so
+
+git clone https://github.com/ai-dynamo/nixl.git && cd nixl && git checkout 0.5.0
+meson setup build --prefix=/usr/local/nixl -Ducx_path=/usr/local/ucx -Ddisable_gds_backend=true
+cd build
+ninja
+yes | ninja install
+cd ..
+pip install .
+cd ..
+
+export LD_LIBRARY_PATH="/usr/local/nixl/lib/`uname -m`-linux-gnu/plugins"
+```
+</details>
+
+On Server:
+```bash
+python benchmark_nixl.py --role server --backend uccl
+```
+
+On Client:
+```bash
+python benchmark_nixl.py --role client --remote-ip <Server IP> --backend uccl
+```
+
 ### Running NIXL with UCX backend
 
 If you have not installed nixl with UCX backend, you can follow: 
