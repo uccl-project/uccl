@@ -713,4 +713,4 @@ class Endpoint {
   std::thread recv_proxy_thread_;
   void send_proxy_thread_func();
   void recv_proxy_thread_func();
-}; 
+};
