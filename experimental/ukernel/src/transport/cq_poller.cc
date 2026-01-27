@@ -39,7 +39,7 @@ void CQPoller::process_pending() {
     }
 
     if (req) {
-      req->on_comm_done(true);
+      req->on_comm_done();
       std::cout << "[CQPoller] processed pending req: " << req_id << std::endl;
     } else {
       while (jring_mp_enqueue_bulk(comm_->pending_req_id_to_deal_, &req_id, 1,
@@ -117,7 +117,7 @@ void CQPoller::run_loop() {
       }
 
       if (req) {
-        req->on_comm_done(true);
+        req->on_comm_done();
       } else {
         std::cout << "[CQPoller] add req: " << req_id << " to pending queue"
                   << std::endl;

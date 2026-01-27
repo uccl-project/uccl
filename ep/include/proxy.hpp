@@ -135,7 +135,7 @@ class Proxy {
 
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   std::vector<uint64_t> fifo_seq_;
-  std::vector<std::deque<uint64_t>> fifo_pending_;
+  std::vector<std::deque<std::pair<uint64_t, size_t>>> fifo_pending_;
 #else
   std::vector<uint64_t> ring_tails_;
   std::vector<size_t> ring_seen_;

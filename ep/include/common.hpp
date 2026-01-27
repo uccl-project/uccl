@@ -38,9 +38,13 @@ extern bool use_ll_sl;
 // imm for reordering buffer sequence tracking.
 #define kMaxInflightLowLatency 32
 #define kMaxInflightNormal 8
+#define kChannelPerProxy 8
+#define kNumProxyThs 4
+// NCCL EFA plugin default: 8 MB mimicing (512KB*16)
+// NCCL IB net.cc default: 2 MB (128KB*16)
+#define kMaxInflightBytes SIZE_MAX
 #define kBatchSize 32
 #define kIterations 40000
-#define kNumProxyThs 4
 #define kTestNumGpuThPerBlock 1
 #define kObjectSize 7168  // 7 KB
 // #define kObjectSize 10752  // 10.5 KB
@@ -49,7 +53,6 @@ extern bool use_ll_sl;
 #define kMaxOutstandingRecvs 2048
 #define kSenderAckQueueDepth 2048
 #define kWarmupOps 10000
-#define kChannelPerProxy 8
 // TODO(MaoZiming): I tried to fit more bits, but this eats into offset and
 // values.
 #define kReorderingBufferSize 16  // Right now only 4 bits.
@@ -82,5 +85,39 @@ void maybe_enable_peer_access(int src_dev, int dst_dev);
 uint64_t make_wr_id(uint32_t tag, uint32_t slot);
 uint32_t wr_tag(uint64_t wrid);
 uint32_t wr_slot(uint64_t wrid);
+
+extern thread_local std::atomic<size_t> current_inflight_bytes;
+static inline size_t get_max_inflight_bytes() {
+  static size_t max_inflight_bytes = -1;
+  if (max_inflight_bytes != -1) return max_inflight_bytes;
+  char const* env = getenv("UCCL_IB_MAX_INFLIGHT_BYTES");
+  if (env)
+    max_inflight_bytes = static_cast<size_t>(atoi(env));
+  else
+    max_inflight_bytes = kMaxInflightBytes;
+  return max_inflight_bytes;
+}
+
+static inline uint32_t get_max_inflight_low_latency() {
+  static uint32_t max_inflight_low_latency = -1;
+  if (max_inflight_low_latency != -1) return max_inflight_low_latency;
+  char const* env = getenv("UCCL_IB_MAX_INFLIGHT_LOW_LATENCY");
+  if (env)
+    max_inflight_low_latency = static_cast<uint32_t>(atoi(env));
+  else
+    max_inflight_low_latency = kMaxInflightLowLatency;
+  return max_inflight_low_latency;
+}
+
+static inline uint32_t get_max_inflight_normal() {
+  static uint32_t max_inflight_normal = -1;
+  if (max_inflight_normal != -1) return max_inflight_normal;
+  char const* env = getenv("UCCL_IB_MAX_INFLIGHT_NORMAL");
+  if (env)
+    max_inflight_normal = static_cast<uint32_t>(atoi(env));
+  else
+    max_inflight_normal = kMaxInflightNormal;
+  return max_inflight_normal;
+}
 
 #endif  // COMMON_HPP
