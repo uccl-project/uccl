@@ -7,7 +7,6 @@ namespace UKernel {
 namespace Transport {
 
 enum class RequestType { NONE, SEND, RECV };
-enum class ReductionType { NONE, SUM, MAX };
 
 struct Request {
   unsigned id;
@@ -18,25 +17,20 @@ struct Request {
   uint16_t remote_mr_id;
   bool on_gpu;
   RequestType request_type;
-  bool do_reduction;
-  ReductionType reduction_op;
 
   std::atomic<bool> running{false};
   std::atomic<bool> finished{false};
   std::atomic<bool> failed{false};
+  std::atomic<bool> notified{false};
   static std::atomic<unsigned> global_id_counter;
 
   std::atomic<int> pending_signaled{0};  // How many qps we used
-  std::atomic<int> pending_computed{0};  // How many compute events
 
-  void on_comm_done(bool done = true);
-  void on_compute_done();
-  void start_compute();
+  void on_comm_done();
 
   Request(unsigned id, void* buf, size_t offset, size_t len,
           uint16_t local_mr_id, uint16_t remote_mr_id, bool gpu,
-          RequestType reqtype = RequestType::SEND, bool reduction = false,
-          ReductionType op = ReductionType::NONE)
+          RequestType reqtype = RequestType::SEND)
       : id(id),
         buf(buf),
         offset(offset),
@@ -44,9 +38,7 @@ struct Request {
         local_mr_id(local_mr_id),
         remote_mr_id(remote_mr_id),
         on_gpu(gpu),
-        request_type(reqtype),
-        do_reduction(reduction),
-        reduction_op(op) {}
+        request_type(reqtype) {}
 };
 
 static inline unsigned make_request_id(uint16_t receiver_rank, uint8_t mr_id,

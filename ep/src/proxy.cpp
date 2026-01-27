@@ -406,7 +406,8 @@ void Proxy::init_common() {
 
 #ifdef USE_MSCCLPP_FIFO_BACKEND
   fifo_seq_.assign(cfg_.d2h_queues.size(), 0);
-  fifo_pending_.assign(cfg_.d2h_queues.size(), std::deque<uint64_t>{});
+  fifo_pending_.assign(cfg_.d2h_queues.size(),
+                       std::deque<std::pair<uint64_t, size_t>>{});
 #endif
 }
 
@@ -521,10 +522,15 @@ void Proxy::notify_gpu_completion(uint64_t& my_tail) {
     if (!fifo) continue;
     auto& pend = fifo_pending_[rb_idx];
     while (!pend.empty()) {
-      uint64_t front_wr = pend.front();
+      auto [front_wr, front_bytes] = pend.front();
       if (acked_wrs_.find(front_wr) == acked_wrs_.end()) break;
       acked_wrs_.erase(front_wr);  // consume this completion
       pend.pop_front();            // retire pending entry
+
+      if (front_bytes) {
+        current_inflight_bytes.fetch_sub(front_bytes,
+                                         std::memory_order_release);
+      }
 
       if (ctx_.quiet_wr != -1 && front_wr == (uint64_t)ctx_.quiet_wr) {
         ctx_.quiet_inflight = false;
@@ -574,12 +580,21 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
     // FIFO path: one trigger == one command. Do NOT pop yet.
     auto* fifo = h->fifo;
     if (!fifo) continue;
-    // Available budget for this FIFO.
+
+    // Available budget for this FIFO, constrainted by the 32bit imm.
     size_t pending = fifo_pending_[rb_idx].size();
-    size_t kMaxInflight =
-        cfg_.use_normal_mode ? kMaxInflightNormal : kMaxInflightLowLatency;
+    size_t kMaxInflight = cfg_.use_normal_mode ? get_max_inflight_normal()
+                                               : get_max_inflight_low_latency();
     size_t budget = (kMaxInflight > pending) ? (kMaxInflight - pending) : 0;
+    size_t max_inflight_bytes = get_max_inflight_bytes() / kNumProxyThs;
+
+    // Pop commands from the FIFO until the budget is reached or the max
+    // inflight bytes is reached.
     for (size_t take = 0; take < budget; ++take) {
+      if (current_inflight_bytes.load(std::memory_order_acquire) >=
+          max_inflight_bytes) {
+        break;
+      }
       auto trig = fifo->poll();
       if (trig.fst == 0) break;
       TransferCmd cmd = d2hq::decode_from_trigger(trig);
@@ -599,7 +614,12 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
                               (fifo_seq_[rb_idx]++ & 0xFFFFFFFFULL);
       wrs_to_post.push_back(unique_wr_id);
       cmds_to_post.push_back(cmd);
-      fifo_pending_[rb_idx].push_back(unique_wr_id);
+      fifo_pending_[rb_idx].push_back(
+          std::make_pair(unique_wr_id, static_cast<size_t>(cmd.bytes)));
+      if (get_base_cmd(cmd.cmd_type) == CmdType::WRITE && cmd.bytes > 0) {
+        current_inflight_bytes.fetch_add(static_cast<size_t>(cmd.bytes),
+                                         std::memory_order_release);
+      }
 
       if (get_base_cmd(cmd.cmd_type) == CmdType::BARRIER ||
           get_base_cmd(cmd.cmd_type) == CmdType::QUIET) {

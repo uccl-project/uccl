@@ -9,6 +9,7 @@ from pathlib import Path
 import torch
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 from setuptools.command.install import install
+from setuptools import Command
 
 PROJECT_ROOT = Path(os.path.dirname(__file__)).resolve()
 
@@ -43,6 +44,44 @@ class CustomInstall(install):
         print(f"Installation complete. Module installed as: {dest_path}")
 
 
+class CustomClean(Command):
+    """Custom clean command that removes build artifacts"""
+
+    description = "Clean build artifacts"
+    user_options = []
+
+    def initialize_options(self):
+        pass
+
+    def finalize_options(self):
+        pass
+
+    def run(self):
+        # Remove build directory
+        build_dir = PROJECT_ROOT / "build"
+        if build_dir.exists():
+            print(f"Removing {build_dir}")
+            shutil.rmtree(build_dir)
+
+        # Remove egg-info directory
+        for egg_info in PROJECT_ROOT.glob("*.egg-info"):
+            print(f"Removing {egg_info}")
+            shutil.rmtree(egg_info)
+
+        # Remove any .so files in the current directory
+        for so_file in PROJECT_ROOT.glob("*.so"):
+            print(f"Removing {so_file}")
+            so_file.unlink()
+
+        # Run make clean if Makefile exists
+        makefile = PROJECT_ROOT / "Makefile"
+        if makefile.exists():
+            print("Running make clean")
+            subprocess.run(["make", "clean"], cwd=PROJECT_ROOT)
+
+        print("Clean complete.")
+
+
 if __name__ == "__main__":
     cxx_flags = [
         "-O3",
@@ -58,6 +97,13 @@ if __name__ == "__main__":
     sources = glob("./src/*.cu") + glob("./src/*.cpp") + glob("./src/*.cc")
     libraries = ["ibverbs", "glog", "nl-3", "nl-route-3", "numa"]
     include_dirs = [PROJECT_ROOT / "include", PROJECT_ROOT / ".." / "include"]
+
+    # Collect header files for dependency tracking
+    header_files = []
+    for inc_dir in include_dirs:
+        header_files.extend(glob(str(inc_dir / "**" / "*.h"), recursive=True))
+        header_files.extend(glob(str(inc_dir / "**" / "*.hpp"), recursive=True))
+        header_files.extend(glob(str(inc_dir / "**" / "*.cuh"), recursive=True))
     library_dirs = []
     nvcc_dlink = []
     extra_link_args = []
@@ -183,7 +229,8 @@ if __name__ == "__main__":
 
         # Use environment variable, then detected arch, then fallback
         device_arch = os.getenv(
-            "TORCH_CUDA_ARCH_LIST", detected_amd_arch if detected_amd_arch else "gfx420"
+            "TORCH_CUDA_ARCH_LIST",
+            detected_amd_arch if detected_amd_arch else "gfx420",
         )
 
         for arch in device_arch.split(","):
@@ -249,6 +296,7 @@ if __name__ == "__main__":
         print(f" > GH200 Support: {'Yes' if has_gh200 else 'No'}")
     print(f" > Device Arch: {device_arch}")
     print(f" > Sources: {len(sources)} files")
+    print(f" > Headers (tracked): {len(header_files)} files")
     print(f" > Include Dirs: {include_dirs}")
     print(f" > Library Dirs: {library_dirs}")
     print(f" > Libraries: {libraries}")
@@ -276,10 +324,12 @@ if __name__ == "__main__":
                 libraries=libraries,
                 extra_compile_args=extra_compile_args,
                 extra_link_args=extra_link_args,
+                depends=header_files,
             )
         ],
         cmdclass={
             "build_ext": BuildExtension,
             "install": CustomInstall,
+            "clean": CustomClean,
         },
     )

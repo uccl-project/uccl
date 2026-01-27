@@ -241,6 +241,7 @@ bool RDMAEndpoint::send_async(int to_rank, std::shared_ptr<Request> creq) {
   if (ret) {
     perror("ibv_post_send failed");
     creq->pending_signaled.store(0, std::memory_order_relaxed);
+    creq->failed.store(true, std::memory_order_release);
     creq->running.store(false, std::memory_order_release);
     return false;
   }
@@ -288,6 +289,7 @@ bool RDMAEndpoint::recv_async(int from_rank, std::shared_ptr<Request> creq) {
   auto ok = post_recv_imm_(qp_cur, 1);
   if (!ok) {
     creq->pending_signaled.store(0, std::memory_order_relaxed);
+    creq->failed.store(true, std::memory_order_release);
     creq->running.store(false, std::memory_order_release);
     return false;
   }
