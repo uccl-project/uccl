@@ -6,7 +6,7 @@ sudo apt-get update
 sudo apt-get install -y libelf-dev
 ```
 
-## transport develpment:
+## transport/runtime develpment:
 on AMD
 ```
 cd experimental/ukernel
@@ -24,6 +24,10 @@ make clean -f Makefile && make -j$(nproc) -f Makefile
 ```
 CUDA_VISIBLE_DEVICES=5 ./test_main --role=server
 CUDA_VISIBLE_DEVICES=5 ./test_main --role=client
+
+# notifier version transport
+CUDA_VISIBLE_DEVICES=5 ./test_main --role=server-notifier
+CUDA_VISIBLE_DEVICES=5 ./test_main --role=client-notifier
 ```
 
 

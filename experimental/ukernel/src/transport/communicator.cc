@@ -264,6 +264,15 @@ Communicator::~Communicator() {
     pending_req_id_to_deal_ = nullptr;
   }
 
+  // Stop notifier
+  if (notifier_started_.load()) {
+    notifier_running_.store(false);
+    notifier_cv_.notify_all();
+    if (notifier_thread_.joinable()) {
+      notifier_thread_.join();
+    }
+  }
+
   std::cout << "[INFO] Communicator " << global_rank_ << " resources released"
             << std::endl;
 }
@@ -423,6 +432,7 @@ unsigned Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
     requests_map_.erase(rid);
     return 0;
   }
+  notifier_cv_.notify_all();
 
   return rid;
 }
@@ -452,6 +462,7 @@ unsigned Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
     requests_map_.erase(rid);
     return 0;
   }
+  notifier_cv_.notify_all();
 
   // Add a pending queue. RECV work requests (WRs) may have already
   // generated CQEs before irecv is called. For such CQEs that are not yet
@@ -462,131 +473,65 @@ unsigned Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
   return rid;
 }
 
-unsigned Communicator::irecv_red(int rank, void* ptr, size_t offset, size_t len,
-                                 bool on_gpu, ReductionType red_op) {
-  auto [ep, ok] = get_endpoint_by_rank(rank);
-  if (!ok || !ep) return 0;
-
-  auto local_mr = get_local_mr(ptr);
-  // make sure rid never eq 0
-  uint16_t seq_val =
-      ep->next_recv_seq_.fetch_add(1, std::memory_order_relaxed) % 4095;
-  uint16_t safe_seq = seq_val + 1;  // [1, 4095]
-  unsigned rid = make_request_id(global_rank_, local_mr.id, safe_seq);
-
-  auto req = std::make_shared<Request>(rid, ptr, offset, len, -1, -1, on_gpu,
-                                       RequestType::RECV, true, red_op);
-
-  {
-    std::lock_guard<std::mutex> lk(req_mu_);
-    requests_map_[rid] = req;
+bool Communicator::_is_finished_locked(unsigned id) {
+  auto it = requests_map_.find(id);
+  if (it == requests_map_.end()) {
+    // not found → already finished
+    return true;
   }
-
-  if (!ep->recv_async(rank, req)) {
-    std::lock_guard<std::mutex> lk(req_mu_);
-    requests_map_.erase(rid);
-    return 0;
+  if (!it->second) {
+    return true;
   }
-
-  if (!cq_poller_list_.empty()) cq_poller_list_[0]->process_pending();
-
-  return rid;
-}
-
-unsigned Communicator::ired(void* ptr, size_t offset, size_t len, bool on_gpu,
-                            ReductionType red_op) {
-  unsigned rid = make_request_id(
-      0, 0, next_red_seq_.fetch_add(1, std::memory_order_relaxed), true);
-  auto req = std::make_shared<Request>(rid, ptr, offset, len, -1, -1, on_gpu,
-                                       RequestType::NONE, true, red_op);
-  {
-    std::lock_guard<std::mutex> lk(req_mu_);
-    requests_map_[rid] = req;
-  }
-
-  // requestion only with computation
-  req->pending_signaled.store(1, std::memory_order_relaxed);
-  req->start_compute();  // we don't need communication, so just trigger the
-                         // computation
-
-  return rid;
-}
-
-bool Communicator::wait_finish(unsigned const req) {
-  while (true) {
-    {
-      std::lock_guard<std::mutex> lk(req_mu_);
-      auto it = requests_map_.find(req);
-      if (it != requests_map_.end() && it->second) {
-        if (it->second->finished.load(std::memory_order_acquire)) {
-          requests_map_.erase(it);
-          return true;
-        }
-        // not finished
-      } else {
-        // not found req
-        return true;
-      }
-    }
-    std::this_thread::yield();
-  }
+  return it->second->finished.load(std::memory_order_acquire);
 }
 
 bool Communicator::wait_finish(std::vector<unsigned> const& reqs) {
+  bool const wait_all = reqs.empty();
   std::unordered_set<unsigned> remaining;
-  bool wait_all = reqs.empty();
 
   if (!wait_all) {
     remaining.insert(reqs.begin(), reqs.end());
   }
 
   while (true) {
-    std::vector<unsigned> finished_ids;
+    std::vector<unsigned> finished;
 
     {
       std::lock_guard<std::mutex> lk(req_mu_);
 
       if (wait_all) {
-        if (requests_map_.empty()) {
-          break;
-        }
-        for (auto it = requests_map_.begin(); it != requests_map_.end(); ++it) {
-          if (it->second &&
-              it->second->finished.load(std::memory_order_acquire)) {
-            finished_ids.push_back(it->first);
+        for (auto const& [id, req] : requests_map_) {
+          if (_is_finished_locked(id)) {
+            finished.push_back(id);
           }
         }
       } else {
         for (auto id : remaining) {
-          auto it = requests_map_.find(id);
-          if (it != requests_map_.end() && it->second &&
-              it->second->finished.load(std::memory_order_acquire)) {
-            finished_ids.push_back(id);
+          if (_is_finished_locked(id)) {
+            finished.push_back(id);
           }
         }
       }
 
-      for (auto id : finished_ids) {
+      for (auto id : finished) {
         requests_map_.erase(id);
         if (!wait_all) {
           remaining.erase(id);
         }
       }
+
+      if ((wait_all && requests_map_.empty()) ||
+          (!wait_all && remaining.empty())) {
+        return true;
+      }
     }
 
-    if (!wait_all && remaining.empty()) {
-      break;
-    }
-    if (wait_all && requests_map_.empty()) {
-      break;
-    }
-
-    if (finished_ids.empty()) {
-      std::this_thread::yield();
-    }
+    std::this_thread::yield();
   }
+}
 
-  return true;
+bool Communicator::wait_finish(unsigned const req) {
+  return wait_finish(std::vector<unsigned>{req});
 }
 
 void Communicator::set_communicator_meta_with_rank(
@@ -838,6 +783,81 @@ ibv_cq* Communicator::get_cq_by_index(int index) {
     return nullptr;
   }
   return cq_list_[index];
+}
+
+std::shared_ptr<void> Communicator::register_completion_notifier(
+    std::function<void(unsigned, std::chrono::steady_clock::time_point)> cb) {
+  auto target = std::make_shared<NotifyTarget>();
+  target->emit = std::move(cb);
+
+  {
+    std::lock_guard<std::mutex> lk(notifier_mu_);
+    notify_targets_.push_back(target);
+  }
+
+  bool expected = false;
+  if (notifier_started_.compare_exchange_strong(expected, true)) {
+    notifier_running_.store(true);
+    notifier_thread_ =
+        std::thread(&Communicator::completion_notifier_loop, this);
+  }
+
+  notifier_cv_.notify_all();
+
+  return std::shared_ptr<void>(nullptr, [this, target](void*) {
+    std::lock_guard<std::mutex> lk(notifier_mu_);
+    notify_targets_.erase(
+        std::remove(notify_targets_.begin(), notify_targets_.end(), target),
+        notify_targets_.end());
+  });
+}
+
+void Communicator::completion_notifier_loop() {
+  while (notifier_running_.load(std::memory_order_acquire)) {
+    // no req, sleep
+    {
+      std::unique_lock<std::mutex> lk(notifier_mu_);
+      notifier_cv_.wait(lk, [&] {
+        if (!notifier_running_.load()) return true;
+
+        std::lock_guard<std::mutex> rlk(req_mu_);
+        return !requests_map_.empty();
+      });
+    }
+
+    if (!notifier_running_.load()) break;
+
+    bool progress = false;
+    auto now = std::chrono::steady_clock::now();
+
+    {
+      std::lock_guard<std::mutex> rlk(req_mu_);
+      std::lock_guard<std::mutex> nlk(notifier_mu_);
+
+      for (auto& [id, req] : requests_map_) {
+        if (!req) continue;
+
+        if (!req->finished.load(std::memory_order_acquire)) {
+          continue;
+        }
+
+        if (req->notified.exchange(true, std::memory_order_acq_rel)) {
+          continue;
+        }
+
+        for (auto& tgt : notify_targets_) {
+          if (!tgt) continue;
+          tgt->emit(id, now);
+        }
+
+        progress = true;
+      }
+    }
+
+    if (!progress) {
+      std::this_thread::yield();
+    }
+  }
 }
 
 }  // namespace Transport
