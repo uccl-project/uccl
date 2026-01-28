@@ -66,37 +66,6 @@ struct ucclRequest {
 struct Mhandle {
   struct ibv_mr* mr;
 };
-struct FifoItem {
-  uint64_t addr;
-  uint32_t size;
-  uint32_t rkey;
-  uint32_t nmsgs;
-  uint32_t rid;
-  uint64_t idx;
-  char padding[32];
-};
-static_assert(sizeof(struct FifoItem) == 64, "FifoItem size is not 64 bytes");
-inline void serialize_fifo_item(FifoItem const& item, char* buf) {
-  static_assert(sizeof(FifoItem) == 64, "FifoItem must be 64 bytes");
-
-  std::memcpy(buf + 0, &item.addr, sizeof(uint64_t));
-  std::memcpy(buf + 8, &item.size, sizeof(uint32_t));
-  std::memcpy(buf + 12, &item.rkey, sizeof(uint32_t));
-  std::memcpy(buf + 16, &item.nmsgs, sizeof(uint32_t));
-  std::memcpy(buf + 20, &item.rid, sizeof(uint32_t));
-  std::memcpy(buf + 24, &item.idx, sizeof(uint64_t));
-  std::memcpy(buf + 32, &item.padding, sizeof(item.padding));
-}
-
-inline void deserialize_fifo_item(char const* buf, FifoItem* item) {
-  std::memcpy(&item->addr, buf + 0, sizeof(uint64_t));
-  std::memcpy(&item->size, buf + 8, sizeof(uint32_t));
-  std::memcpy(&item->rkey, buf + 12, sizeof(uint32_t));
-  std::memcpy(&item->nmsgs, buf + 16, sizeof(uint32_t));
-  std::memcpy(&item->rid, buf + 20, sizeof(uint32_t));
-  std::memcpy(&item->idx, buf + 24, sizeof(uint64_t));
-  std::memcpy(&item->padding, buf + 32, sizeof(item->padding));
-}
 
 struct P2PMhandle {
   MRArray mr_array;
@@ -122,7 +91,6 @@ using FifoItem = FifoItem;
 #endif
 
 class Endpoint {
-  static constexpr uint32_t kMaxVector = 8;
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
 
@@ -248,6 +216,10 @@ class Endpoint {
   bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
                  char* out_buf);
 
+  /* Prepare Fifo without requiring a connection (for pre-computing fifo_item).
+   */
+  bool prepare_fifo(uint64_t mr_id, void* addr, size_t len, char* out_buf);
+
   /* Advertise a vector of data chunks. */
   bool advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                   std::vector<void*> addr_v, std::vector<size_t> len_v,
@@ -301,6 +273,20 @@ class Endpoint {
   uint64_t conn_id_of_rank(int rank) const {
     auto it = rank2conn_.find(rank);
     return it != rank2conn_.end() ? it->second : UINT64_MAX;
+  }
+
+  std::shared_ptr<EpollClient> get_oob_client() const {
+    return ep_->get_oob_client();
+  }
+
+  std::string get_oob_conn_key(uint64_t conn_id) const {
+    auto it = conn_id_to_conn_.find(conn_id);
+    if (it == conn_id_to_conn_.end()) {
+      return "";
+    }
+    uint64_t rank_id = it->second->uccl_conn_id_.flow_id;
+
+    return ep_->get_oob_conn_key(rank_id);
   }
 
   inline MR* get_mr(uint64_t mr_id) const {

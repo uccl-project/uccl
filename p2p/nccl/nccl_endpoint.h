@@ -14,6 +14,8 @@
 #endif
 #include "../../collective/rdma/transport.h"  // For uccl::ConnID, uccl::FifoItem, uccl::ucclRequest.
 
+class EpollClient;
+
 namespace tcp {
 
 // Placeholder for RDMA-style MR arrays. TCP does not register memory, but the
@@ -30,6 +32,14 @@ class TCPEndpoint {
 
   // GPU index selected by the engine; may be overridden by uccl_connect/accept.
   int gpuIndex() const { return gpu_index_; }
+
+  // RDMA endpoint exposes these for OOB metadata exchange; TCP path doesn't
+  // use EpollClient but we keep stubs so engine code can compile unchanged.
+  std::shared_ptr<EpollClient> get_oob_client() const { return nullptr; }
+  std::string get_oob_conn_key(uint64_t rank_id) const {
+    (void)rank_id;
+    return "";
+  }
 
   // Establish a TCP control connection, exchange NCCL IDs, and start a control
   // thread for one-sided read/write requests.

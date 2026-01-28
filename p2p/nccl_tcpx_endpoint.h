@@ -1,5 +1,6 @@
 #pragma once
 
+#include "common.h"
 #include <atomic>
 #include <cstdint>
 #include <mutex>
@@ -11,18 +12,6 @@
 #include <nccl.h>
 
 namespace nccl_tcpx {
-
-// 64-byte FIFO descriptor matching tcpx::FifoItem layout so uccl_engine can
-// swap implementations.
-struct FifoItem {
-  uint64_t mr_id;
-  uint32_t size;
-  uint32_t tag;
-  uint64_t offset;
-  uint64_t token;
-  char padding[32];
-};
-static_assert(sizeof(FifoItem) == 64, "FifoItem must be 64 bytes");
 
 class Endpoint {
  public:
