@@ -33,7 +33,6 @@ class MemoryAllocator {
     // Create RegMemBlock with custom deleter
     auto deleter = [this, type](RegMemBlock* block) {
       if (block) {
-        LOG(INFO) << "memory freed";
         if (block->addr) deallocateRaw(block->addr, type);
         delete block;
       }

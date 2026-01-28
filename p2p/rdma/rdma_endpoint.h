@@ -277,6 +277,14 @@ class NICEndpoint {
 
   inline int get_p2p_listen_fd() { return oob_server_->get_listen_fd(); };
 
+  std::shared_ptr<EpollClient> get_oob_client() { return oob_client_; }
+
+  std::string get_oob_conn_key(uint64_t rank_id) {
+    std::shared_lock<std::shared_mutex> lock(rank_oob_conn_keys_mutex_);
+    auto it = rank_oob_conn_keys_.find(rank_id);
+    return (it != rank_oob_conn_keys_.end()) ? it->second : "";
+  }
+
   inline ConnID uccl_accept(std::string& remote_ip, int* remote_gpuidx) {
     AcceptedMeta accepted;
     uint64_t rank_id = 0;
@@ -475,6 +483,19 @@ class NICEndpoint {
 
   void process_meta(std::string const& input, std::string& output,
                     std::string const& client_ip, int client_port) {
+    if (input.size() >= sizeof(NotifyMsg)) {
+      NotifyMsg const* notify_msg =
+          reinterpret_cast<NotifyMsg const*>(input.data());
+      if (notify_msg->magic == NOTIFY_MSG_MAGIC) {
+        std::lock_guard<std::mutex> lock(notify_mutex);
+        notify_list.push_back(*notify_msg);
+        output = "";
+        LOG(INFO) << "process_meta: Received notification from"
+                  << notify_msg->name << " msg=" << notify_msg->msg;
+        return;
+      }
+    }
+
     MetaInfoToExchange meta = deserialize<MetaInfoToExchange>(input);
     LOG(INFO) << "Received from " << client_ip << ":" << client_port << " - "
               << meta;
@@ -497,11 +518,11 @@ class NICEndpoint {
       auto recv_ctrl_channel = std::make_shared<RecvControlChannel>(
           ctx_ptr, meta, ctrl_mem, meta.channel_id);
 
-      // Create respons
+      // Create response (include our OOB port for potential future use)
       RemoteMemInfo ctrl_info(ctrl_mem);
-      MetaInfoToExchange response(rank_id_, meta.channel_id,
-                                  recv_ctrl_channel->get_local_meta(), nullptr,
-                                  ChannelType::Control, gpu_index_);
+      MetaInfoToExchange response(
+          rank_id_, meta.channel_id, recv_ctrl_channel->get_local_meta(),
+          nullptr, ChannelType::Control, gpu_index_, oob_server_->get_port());
       response.mem_meta = ctrl_info;
       LOG(INFO) << "response (control channel):::::::" << response;
       output = serialize(response);
@@ -522,6 +543,21 @@ class NICEndpoint {
         LOG(INFO) << "Stored accepted connection: rank_id=" << actual_rank_id
                   << ", ip=" << client_ip << ", port=" << client_port
                   << ", gpu_id=" << meta.gpu_id;
+      }
+
+      if (meta.oob_port > 0) {
+        std::string rev_conn_key =
+            oob_client_->connect_to_server(client_ip, meta.oob_port);
+        if (!rev_conn_key.empty()) {
+          std::unique_lock<std::shared_mutex> lock(rank_oob_conn_keys_mutex_);
+          rank_oob_conn_keys_[actual_rank_id] = rev_conn_key;
+          LOG(INFO) << "Established reverse connection to " << client_ip << ":"
+                    << meta.oob_port << " for rank_id=" << actual_rank_id
+                    << ", conn_key=" << rev_conn_key;
+        } else {
+          LOG(WARNING) << "Failed to establish reverse connection to "
+                       << client_ip << ":" << meta.oob_port;
+        }
       }
     } else {
       // Normal channel
@@ -633,6 +669,9 @@ class NICEndpoint {
                                                ip_port_ptr->server_port);
       std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
+    // Store conn_key for later use (e.g., notifications)
+    std::unique_lock<std::shared_mutex> lock(rank_oob_conn_keys_mutex_);
+    rank_oob_conn_keys_[rank_id] = oob_con;
     return oob_con;
   }
 
@@ -644,9 +683,10 @@ class NICEndpoint {
         contexts_[0], ctrl_mem, kControlChannelID);
     auto ctrl_info = std::make_shared<RemoteMemInfo>(ctrl_mem);
 
-    MetaInfoToExchange ctrl_meta(rank_id_, kControlChannelID,
-                                 control_channel->get_local_meta(), ctrl_info,
-                                 ChannelType::Control, gpu_index_);
+    // Include OOB server port for back-connection (notifications)
+    MetaInfoToExchange ctrl_meta(
+        rank_id_, kControlChannelID, control_channel->get_local_meta(),
+        ctrl_info, ChannelType::Control, gpu_index_, oob_server_->get_port());
 
     LOG(INFO) << "Control Meta: " << ctrl_meta
               << " Local Channel Meta: " << control_channel->get_local_meta()
@@ -767,6 +807,9 @@ class NICEndpoint {
       send_channel_groups_;
 
   std::unordered_map<uint64_t, std::shared_ptr<OOBMetaData>> rank_oob_meta_;
+  mutable std::shared_mutex rank_oob_conn_keys_mutex_;
+  std::unordered_map<uint64_t, std::string>
+      rank_oob_conn_keys_;  // Track conn_key per rank
   std::shared_ptr<EpollClient> oob_client_;
   std::shared_ptr<EpollServer> oob_server_;
   std::shared_ptr<MemoryAllocator> allocator_;

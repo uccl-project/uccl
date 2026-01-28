@@ -53,7 +53,7 @@ LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LIBS2)
 P2P_PYTHON_EXT := p2p$(PYEXT)
 P2P_SHARED_LIB := libuccl_p2p.so
 CAPI_SOURCE := uccl_engine.cc
-CAPI_HEADER := uccl_engine.h
+CAPI_HEADER := uccl_engine.h include/common.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
 ifeq ($(USE_TCPX),1)
 NCCL_HOME ?= ../thirdparty/nccl/build
