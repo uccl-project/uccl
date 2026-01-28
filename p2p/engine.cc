@@ -69,7 +69,6 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   // Initialize the RDMA endpoint.
   ep_ = std::shared_ptr<NICEndpoint>(
       new NICEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
-  numa_node_ = RdmaDeviceManager::instance().get_numa_node(local_gpu_idx_);
 #endif
 
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
