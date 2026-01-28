@@ -280,6 +280,7 @@ class NICEndpoint {
   std::shared_ptr<EpollClient> get_oob_client() { return oob_client_; }
 
   std::string get_oob_conn_key(uint64_t rank_id) {
+    std::shared_lock<std::shared_mutex> lock(rank_oob_conn_keys_mutex_);
     auto it = rank_oob_conn_keys_.find(rank_id);
     return (it != rank_oob_conn_keys_.end()) ? it->second : "";
   }
@@ -548,6 +549,7 @@ class NICEndpoint {
         std::string rev_conn_key =
             oob_client_->connect_to_server(client_ip, meta.oob_port);
         if (!rev_conn_key.empty()) {
+          std::unique_lock<std::shared_mutex> lock(rank_oob_conn_keys_mutex_);
           rank_oob_conn_keys_[actual_rank_id] = rev_conn_key;
           LOG(INFO) << "Established reverse connection to " << client_ip << ":"
                     << meta.oob_port << " for rank_id=" << actual_rank_id
@@ -668,6 +670,7 @@ class NICEndpoint {
       std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
     // Store conn_key for later use (e.g., notifications)
+    std::unique_lock<std::shared_mutex> lock(rank_oob_conn_keys_mutex_);
     rank_oob_conn_keys_[rank_id] = oob_con;
     return oob_con;
   }
@@ -804,6 +807,7 @@ class NICEndpoint {
       send_channel_groups_;
 
   std::unordered_map<uint64_t, std::shared_ptr<OOBMetaData>> rank_oob_meta_;
+  mutable std::shared_mutex rank_oob_conn_keys_mutex_;
   std::unordered_map<uint64_t, std::string>
       rank_oob_conn_keys_;  // Track conn_key per rank
   std::shared_ptr<EpollClient> oob_client_;
