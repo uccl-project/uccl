@@ -74,7 +74,7 @@ inline bool uccl_regmr(RDMAEndPoint const& s, void* data, size_t len,
 
 inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
                            P2PMhandle* mhandle, void const* data,
-                           size_t const size, struct ucclRequest* ureq) {
+                           size_t const size, ucclRequest* ureq) {
   (void)mhandle;
   ureq->type = ReqType::ReqTx;
   ureq->n = conn->uccl_conn_id_.flow_id;
@@ -85,7 +85,7 @@ inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
 
 inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
                            P2PMhandle* mhandles, void** data, int* size, int n,
-                           struct ucclRequest* ureq) {
+                           ucclRequest* ureq) {
   (void)mhandles;
   ureq->type = ReqType::ReqRx;
   ureq->n = conn->uccl_conn_id_.flow_id;
@@ -94,8 +94,7 @@ inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
       data, size, n, ureq);
 }
 
-inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
-                                struct ucclRequest* ureq) {
+inline bool uccl_poll_ureq_once(RDMAEndPoint const& s, ucclRequest* ureq) {
   return s->uccl_poll_ureq_once(ureq);
 }
 
@@ -172,7 +171,7 @@ inline bool uccl_regmr(RDMAEndPoint const& s, void* data, size_t len,
 
 inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
                            P2PMhandle* mhandle, void const* data,
-                           size_t const size, struct ucclRequest* ureq) {
+                           size_t const size, ucclRequest* ureq) {
   auto send_mem = std::make_shared<RegMemBlock>(const_cast<void*>(data), size,
                                                 MemoryType::GPU);
   send_mem->mr_array = mhandle->mr_array;
@@ -191,7 +190,7 @@ inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
 
 inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
                            P2PMhandle* mhandles, void** data, int* size, int n,
-                           struct ucclRequest* ureq) {
+                           ucclRequest* ureq) {
   auto recv_mem =
       std::make_shared<RegMemBlock>(data[0], size[0], MemoryType::GPU);
   recv_mem->mr_array = mhandles->mr_array;
@@ -202,8 +201,7 @@ inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
   return ureq->engine_idx;
 }
 
-inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
-                                struct ucclRequest* ureq) {
+inline bool uccl_poll_ureq_once(RDMAEndPoint const& s, ucclRequest* ureq) {
   if (ureq->type == ReqType::ReqTx || ureq->type == ReqType::ReqWrite ||
       ureq->type == ReqType::ReqRead) {
     s->sendRoutine();

@@ -4,6 +4,7 @@
 #include <netinet/in.h>
 #include <cerrno>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -11,7 +12,39 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+// Minimal param loader to satisfy UCCL_PARAM() references pulled by
+// transport_config.h (via transport.h). Avoid linking full RDMA param.cc.
+void ucclLoadParam(char const* env, int64_t deftVal, int64_t uninitialized,
+                   int64_t* cache) {
+  if (!cache) return;
+  if (__atomic_load_n(cache, __ATOMIC_RELAXED) != uninitialized) return;
+  char const* str = std::getenv(env);
+  int64_t value = deftVal;
+  if (str && *str) {
+    errno = 0;
+    char* end = nullptr;
+    int64_t parsed = std::strtoll(str, &end, 0);
+    if (errno == 0 && end != str) {
+      value = parsed;
+    }
+  }
+  __atomic_store_n(cache, value, __ATOMIC_RELAXED);
+}
+
 namespace tcp {
+namespace {
+inline void serialize_uccl_fifo_item(uccl::FifoItem const& item, char* buf) {
+  static_assert(sizeof(uccl::FifoItem) == 64, "FifoItem must be 64 bytes");
+  std::memcpy(buf + 0, &item.addr, sizeof(uint64_t));
+  std::memcpy(buf + 8, &item.size, sizeof(uint32_t));
+  std::memcpy(buf + 12, &item.rkey, sizeof(uint32_t));
+  std::memcpy(buf + 16, &item.nmsgs, sizeof(uint32_t));
+  std::memcpy(buf + 20, &item.rid, sizeof(uint32_t));
+  std::memcpy(buf + 24, &item.idx, sizeof(uint64_t));
+  std::memcpy(buf + 32, &item.engine_offset, sizeof(uint32_t));
+  std::memcpy(buf + 36, &item.padding, sizeof(item.padding));
+}
+}  // namespace
 namespace {
 // Control-plane handshake constants.
 constexpr uint32_t kMagic = 0x4e43434c;  // "NCCL"
@@ -725,7 +758,7 @@ int TCPEndpoint::prepare_fifo_metadata(uccl::UcclFlow* flow,
   item.addr = reinterpret_cast<uint64_t>(data);
   item.size = static_cast<uint32_t>(size);
   std::memset(item.padding, 0, sizeof(item.padding));
-  uccl::serialize_fifo_item(item, out_buf);
+  serialize_uccl_fifo_item(item, out_buf);
   return 0;
 }
 
