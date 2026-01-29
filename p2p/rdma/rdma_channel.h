@@ -156,7 +156,7 @@ class RDMAChannel {
 
   // Post send request based on send_type
   // Returns 0 on success, error code on failure
-  inline int postRequest(std::shared_ptr<RDMASendRequest> req) {
+  inline int __postRequest_ex(std::shared_ptr<RDMASendRequest> req) {
     auto* qpx = ibv_qp_to_qp_ex(qp_);
     ibv_wr_start(qpx);
     LOG(INFO) << *req;
@@ -212,6 +212,77 @@ class RDMAChannel {
                  << std::dec;
     }
     return ret;
+  }
+
+  inline int __postRequest(std::shared_ptr<RDMASendRequest> req) {
+    struct ibv_send_wr wr;
+    struct ibv_send_wr* bad_wr = nullptr;
+    struct ibv_sge sge[1];
+
+    memset(&wr, 0, sizeof(wr));
+    LOG(INFO) << *req;
+
+    wr.wr_id = req->wr_id;
+    wr.send_flags = IBV_SEND_SIGNALED;
+
+    int num_sge = prepareSGEList(sge, req);
+    wr.sg_list = sge;
+    wr.num_sge = num_sge;
+
+    if (req->send_type == SendType::Send) {
+      wr.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+      wr.wr.rdma.remote_addr = req->getRemoteAddress();
+      wr.wr.rdma.rkey = req->getRemoteKey();
+      wr.imm_data = req->imm_data;
+    } else if (req->send_type == SendType::Write) {
+      wr.opcode = IBV_WR_RDMA_WRITE;
+      wr.wr.rdma.remote_addr = req->getRemoteAddress();
+      wr.wr.rdma.rkey = req->getRemoteKey();
+    } else if (req->send_type == SendType::Read) {
+      wr.opcode = IBV_WR_RDMA_READ;
+      wr.wr.rdma.remote_addr = req->getRemoteAddress();
+      wr.wr.rdma.rkey = req->getRemoteKey();
+    } else {
+      LOG(ERROR) << "Unknown SendType in RDMAChannel::postRequest";
+      return -1;
+    }
+
+    uint32_t max_inline = impl_->getMaxInlineData();
+    if (req->getLocalLen() <= max_inline) {
+      wr.send_flags |= IBV_SEND_INLINE;
+    }
+
+    int ret = ibv_post_send(qp_, &wr, &bad_wr);
+
+    if (ret) {
+      std::ostringstream sge_info;
+      sge_info << "[";
+      for (int i = 0; i < num_sge; ++i) {
+        if (i > 0) sge_info << ", ";
+        sge_info << "{addr:0x" << std::hex << sge[i].addr
+                 << ", len:" << std::dec << sge[i].length << ", lkey:0x"
+                 << std::hex << sge[i].lkey << std::dec << "}";
+      }
+      sge_info << "]";
+
+      LOG(ERROR) << "ibv_post_send failed: " << ret << " " << strerror(ret)
+                 << ", ah_=" << (void*)ah_
+                 << ", remote_qpn=" << remote_meta_->qpn
+                 << ", local_qpn=" << qp_->qp_num << ", wr_id=" << req->wr_id
+                 << ", remote_key=" << req->getRemoteKey() << ", remote_addr=0x"
+                 << std::hex << req->getRemoteAddress()
+                 << ", num_sge=" << num_sge << ", sge_list=" << sge_info.str();
+    }
+    return ret;
+  }
+
+  inline int postRequest(std::shared_ptr<RDMASendRequest> req) {
+    if (ctx_->getVendorID() == 0x1dd8) {
+      // Devices that don't support ibv_wr_xxx API
+      return __postRequest(req);
+    }
+
+    return __postRequest_ex(req);
   }
 
   void initQP() {
