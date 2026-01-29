@@ -5,7 +5,7 @@
 #include "util/gpu_rt.h"
 #include "util/jring.h"
 #include <arpa/inet.h>
-#include <glog/logging.h>
+#include "util/logging.h"
 #include <infiniband/verbs.h>
 #include <linux/in.h>
 #include <linux/tcp.h>
