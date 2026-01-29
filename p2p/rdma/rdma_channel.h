@@ -55,6 +55,11 @@ class RDMAChannel {
   RDMAChannel(RDMAChannel const&) = delete;
   RDMAChannel& operator=(RDMAChannel const&) = delete;
 
+  ~RDMAChannel() {
+    if (qp_) ibv_destroy_qp(qp_);
+    if (cq_ex_) ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex_));
+  }
+
   void establishChannel(ChannelMetaData const& remote_meta) {
     remote_meta_ = std::make_shared<ChannelMetaData>(remote_meta);
 #ifdef UCCL_P2P_USE_EFA
