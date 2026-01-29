@@ -74,12 +74,7 @@ def build_moe_dag():
     combine_op.set_inputs([gathered_output, token_index_local])
     combine_op.set_outputs([output])
 
-    # Optional: follow-up collective
-    allreduce_op = ukernel.all_reduce(5, output, output, ukernel.ReduceKind.Sum, rule, deps=[combine_op.id])
-    allreduce_op.set_inputs([output])
-    allreduce_op.set_outputs([output])
-
-    ops = [router_op, dispatch_op, ffn_op, gather_op, combine_op, allreduce_op]
+    ops = [router_op, dispatch_op, ffn_op, gather_op, combine_op]
 
     # Return ops and metadata (for future wiring once inputs/outputs/attrs are writable)
     meta = {
