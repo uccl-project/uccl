@@ -4,8 +4,6 @@
 #ifndef MSCCLPP_FIFO_HPP_
 #define MSCCLPP_FIFO_HPP_
 
-// TODO: delete later
-
 #include "fifo_device.hpp"
 #include <memory>
 

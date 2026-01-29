@@ -7,8 +7,6 @@
 #include "fifo_util.hpp"
 #include <cstdint>
 
-// TODO: delete later
-
 namespace mscclpp {
 
 using TriggerType = uint64_t;

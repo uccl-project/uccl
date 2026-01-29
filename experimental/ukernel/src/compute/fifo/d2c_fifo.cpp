@@ -4,8 +4,6 @@
 #include "fifo.hpp"
 #include "fifo_util.hpp"
 
-// TODO: delete later
-
 namespace mscclpp {
 
 struct Fifo::Impl {

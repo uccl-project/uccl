@@ -49,6 +49,6 @@ make clean -f Makefile && make -j$(nproc) -f Makefile
 CUDA_VISIBLE_DEVICES=5 ./test_persistent
 
 # bench
-CUDA_VISIBLE_DEVICES=5 ./bench_fifo
-CUDA_VISIBLE_DEVICES=5 ./bench_full_fifo
+CUDA_VISIBLE_DEVICES=5 ./benchmarks/bench_fifo
+CUDA_VISIBLE_DEVICES=5 ./benchmarks/bench_full_fifo
 ```
