@@ -12,7 +12,7 @@ LIBS := -L$(CUDA_HOME)/lib -lcudart -lcuda -lnuma \
 
 RPATH = -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR)
 
-COMMON_CPP := fifo/c2d_fifo.cc # fifo/d2c_fifo.cc
+COMMON_CPP := fifo/c2d_fifo.cc fifo/d2c_fifo.cpp
 COMMON_CU  := operator.cu
 
 TEST_SRC   := test_persistent.cc

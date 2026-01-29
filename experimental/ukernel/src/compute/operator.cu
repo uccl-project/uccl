@@ -1,3 +1,4 @@
+#include "d2c_fifo_device.hpp"
 #include "operator.h"
 
 // TODO: ThunderKitten/Tilelang? based operators
@@ -77,13 +78,14 @@ template __device__ void run_reduce_inplace<__half>(CollArgs const&);
 
 // TODO: using sm id to assign task
 template <typename T>
-__global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* fifos,
+__global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* c2d_fifos,
+                                     mscclpp::FifoDeviceHandle* d2c_fifo,
                                      CollArgs* d_coll, MoeArgs* d_moe,
                                      bool* should_stop) {
   (void)d_moe;
 
   const uint32_t bid = blockIdx.x;
-  auto& fifo = fifos[bid];  // block => fifo
+  auto& fifo = c2d_fifos[bid];  // block => fifo
 
   while (true) {
     if (should_stop && *should_stop) break;
@@ -125,15 +127,24 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* fifos,
     }
 
     __threadfence();
+
     if (threadIdx.x == 0) {
+      // Push completion trigger to host
+      if (d2c_fifo) {
+        mscclpp::ProxyTrigger trig(ttype, dtype, block_id, idx);
+        d2c_fifo->push(trig);
+      }
+      // Pop task from C2D fifo
       fifo.pop();
     }
+
     __syncthreads();
   }
 }
 
 template __global__ void basePersistentKernel<Task>(
-    mscclpp::C2DDeviceHandle<Task>* fifos, CollArgs* d_coll, MoeArgs* d_moe,
+    mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
+    mscclpp::FifoDeviceHandle* d2c_fifo, CollArgs* d_coll, MoeArgs* d_moe,
     bool* should_stop);
 
 }  // namespace Compute

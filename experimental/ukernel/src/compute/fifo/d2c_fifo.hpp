@@ -4,7 +4,7 @@
 #ifndef MSCCLPP_FIFO_HPP_
 #define MSCCLPP_FIFO_HPP_
 
-#include "fifo_device.hpp"
+#include "d2c_fifo_device.hpp"
 #include <memory>
 
 namespace mscclpp {

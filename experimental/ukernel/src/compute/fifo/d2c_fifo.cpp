@@ -1,8 +1,9 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 
-#include "fifo.hpp"
+#include "d2c_fifo.hpp"
 #include "fifo_util.hpp"
+#include <numaif.h>
 
 namespace mscclpp {
 
@@ -24,9 +25,15 @@ struct Fifo::Impl {
 Fifo::Fifo(int size) {
   int device;
   MSCCLPP_CUDATHROW(cudaGetDevice(&device));
+  MSCCLPP_CUDATHROW(cudaFree(0));
   int numaNode = getDeviceNumaNode(device);
   if (numaNode >= 0) {
-    numaBind(numaNode);
+    unsigned long nodemask = 1UL << numaNode;
+    if (set_mempolicy(MPOL_PREFERRED, &nodemask, 8 * sizeof(nodemask)) != 0) {
+      throw std::runtime_error(
+          "Failed to set mempolicy device: " + std::to_string(device) +
+          " numaNode: " + std::to_string(numaNode));
+    }
   }
   pimpl_ = std::make_unique<Impl>(size);
 }
