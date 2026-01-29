@@ -3,6 +3,9 @@
 # EFA optional integration
 USE_EFA ?= $(shell echo $${USE_EFA:-0})
 
+# TCP endpoint integration
+USE_TCP ?= $(shell echo $${USE_TCP:-0})
+
 # Compiler and flags
 HIP_HOME?=/opt/rocm
 HIP_INC  := $(HIP_HOME)/include
@@ -34,15 +37,30 @@ LIBDIR ?= $(PREFIX)/lib
 INCDIR ?= $(PREFIX)/include
 
 CXXFLAGS       += -D__HIP_PLATFORM_AMD__
+
+# Add TCP endpoint flag
+ifeq ($(USE_TCP),1)
+	CXXFLAGS += -DUCCL_P2P_USE_NCCL
+	CXXFLAGS += -DUCCL_P2P_USE_RCCL
+endif
 LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
                   -Wl,-rpath,$(HIP_LIB) -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest \
                   -lz -lelf -libverbs -lpthread
+ifeq ($(USE_TCP),1)
+	LDFLAGS += -lrccl
+endif
 
 # Target and source files
 P2P_PYTHON_EXT   := p2p$(PYEXT)
 P2P_SHARED_LIB := libuccl_p2p.so
 SOURCES := engine.cc engine_pybind.cc
 OBJECTS := $(SOURCES:.cc=.o)
+CORE_OBJECT := engine.o
+ifeq ($(USE_TCP),1)
+SOURCES += nccl/nccl_endpoint.cc
+OBJECTS += nccl/nccl_endpoint.o
+CORE_OBJECT += nccl/nccl_endpoint.o
+endif
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
@@ -67,6 +85,11 @@ $(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT)
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
 
+# Compile NCCL-over-TCP source files
+nccl/%.o: nccl/%.cc
+	@mkdir -p nccl
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -I. -c $< -o $@
+
 # Install the module
 install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	@mkdir -p $(INSTALL_DIR)
@@ -78,6 +101,7 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 clean:
 	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB) $(P2P_PYTHON_EXT)
 	make clean -j$(nproc)
+	rm -f nccl/*.o
 
 # Test the module
 test: $(P2P_PYTHON_EXT)

@@ -23,13 +23,130 @@ static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
 
   req->send_type =
       (ureq->type == ReqType::ReqRead) ? SendType::Read : SendType::Write;
-
   ureq->engine_idx = obj->writeOrRead(req);
   ureq->n = conn->uccl_conn_id_.flow_id;
 
   return ureq->engine_idx;
 }
 
+#ifdef UCCL_P2P_USE_NCCL
+static inline ConnID to_conn_id(uccl::ConnID const& in) {
+  ConnID out{};
+  out.context = in.context;
+  out.sock_fd = in.sock_fd;
+  out.dev = in.dev;
+  out.flow_id = in.flow_id;
+  return out;
+}
+
+inline ConnID uccl_connect(RDMAEndPoint const& s, int remote_gpuidx,
+                           std::string remote_ip, uint16_t remote_port) {
+  int local_gpu = s->gpuIndex();
+  auto uccl_conn =
+      s->uccl_connect(0, local_gpu, 0, remote_gpuidx, remote_ip, remote_port);
+  return to_conn_id(uccl_conn);
+}
+inline uint16_t get_p2p_listen_port(RDMAEndPoint const& s) {
+  return s->get_p2p_listen_port(0);
+}
+
+inline int get_p2p_listen_fd(RDMAEndPoint const& s) {
+  return s->get_p2p_listen_fd(0);
+}
+
+inline ConnID uccl_accept(RDMAEndPoint const& s, std::string& remote_ip,
+                          int* remote_gpuidx) {
+  int remote_dev = 0;
+  int local_gpu = s->gpuIndex();
+  auto uccl_conn =
+      s->uccl_accept(0, -1, local_gpu, remote_ip, &remote_dev, remote_gpuidx);
+  return to_conn_id(uccl_conn);
+}
+
+inline bool uccl_regmr(RDMAEndPoint const& s, void* data, size_t len,
+                       struct P2PMhandle* mhandle) {
+  (void)s;
+  (void)data;
+  (void)len;
+  (void)mhandle;
+  return true;
+}
+
+inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
+                           P2PMhandle* mhandle, void const* data,
+                           size_t const size, ucclRequest* ureq) {
+  (void)mhandle;
+  ureq->type = ReqType::ReqTx;
+  ureq->n = conn->uccl_conn_id_.flow_id;
+  return s->uccl_send_async(
+      reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), nullptr,
+      data, size, ureq);
+}
+
+inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
+                           P2PMhandle* mhandles, void** data, int* size, int n,
+                           ucclRequest* ureq) {
+  (void)mhandles;
+  ureq->type = ReqType::ReqRx;
+  ureq->n = conn->uccl_conn_id_.flow_id;
+  return s->uccl_recv_async(
+      reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), nullptr,
+      data, size, n, ureq);
+}
+
+inline bool uccl_poll_ureq_once(RDMAEndPoint const& s, ucclRequest* ureq) {
+  return s->uccl_poll_ureq_once(ureq);
+}
+
+inline int uccl_read_async(RDMAEndPoint const& s, Conn* conn,
+                           P2PMhandle* local_mh, void* dst, size_t size,
+                           FifoItem const& slot_item, ucclRequest* ureq) {
+  (void)local_mh;
+  ureq->type = ReqType::ReqRead;
+  ureq->n = conn->uccl_conn_id_.flow_id;
+  uccl::FifoItem tcp_item{};
+  tcp_item.addr = slot_item.addr;
+  tcp_item.size = static_cast<uint32_t>(size);
+  std::memset(tcp_item.padding, 0, sizeof(tcp_item.padding));
+  return s->uccl_read_async(
+      reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), nullptr,
+      dst, size, tcp_item, ureq);
+}
+
+inline int uccl_write_async(RDMAEndPoint const& s, Conn* conn,
+                            P2PMhandle* local_mh, void* src, size_t size,
+                            FifoItem const& slot_item, ucclRequest* ureq) {
+  (void)local_mh;
+  ureq->type = ReqType::ReqWrite;
+  ureq->n = conn->uccl_conn_id_.flow_id;
+  uccl::FifoItem tcp_item{};
+  tcp_item.addr = slot_item.addr;
+  tcp_item.size = static_cast<uint32_t>(size);
+  std::memset(tcp_item.padding, 0, sizeof(tcp_item.padding));
+  return s->uccl_write_async(
+      reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context), nullptr,
+      src, size, tcp_item, ureq);
+}
+
+inline int prepare_fifo_metadata(RDMAEndPoint const& s, Conn* conn,
+                                 P2PMhandle* mhandle, void const* data,
+                                 size_t size, char* out_buf) {
+  (void)conn;
+  (void)mhandle;
+  return s->prepare_fifo_metadata(nullptr, nullptr, data, size, out_buf);
+}
+
+inline void uccl_deregmr(RDMAEndPoint const& s, P2PMhandle* mhandle) {
+  (void)s;
+  (void)mhandle;
+}
+
+inline bool initialize_rdma_ctx_for_gpu(RDMAEndPoint const& s, int dev) {
+  return s->initialize_engine_by_dev(dev, true);
+}
+
+inline void create_unified_p2p_socket(RDMAEndPoint const& s) { (void)s; }
+#else
 inline ConnID uccl_connect(RDMAEndPoint const& s, int remote_gpuidx,
                            std::string remote_ip, uint16_t remote_port) {
   return s->uccl_connect(remote_gpuidx, remote_ip, remote_port);
@@ -54,7 +171,7 @@ inline bool uccl_regmr(RDMAEndPoint const& s, void* data, size_t len,
 
 inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
                            P2PMhandle* mhandle, void const* data,
-                           size_t const size, struct ucclRequest* ureq) {
+                           size_t const size, ucclRequest* ureq) {
   auto send_mem = std::make_shared<RegMemBlock>(const_cast<void*>(data), size,
                                                 MemoryType::GPU);
   send_mem->mr_array = mhandle->mr_array;
@@ -73,7 +190,7 @@ inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
 
 inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
                            P2PMhandle* mhandles, void** data, int* size, int n,
-                           struct ucclRequest* ureq) {
+                           ucclRequest* ureq) {
   auto recv_mem =
       std::make_shared<RegMemBlock>(data[0], size[0], MemoryType::GPU);
   recv_mem->mr_array = mhandles->mr_array;
@@ -84,8 +201,7 @@ inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
   return ureq->engine_idx;
 }
 
-inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
-                                struct ucclRequest* ureq) {
+inline bool uccl_poll_ureq_once(RDMAEndPoint const& s, ucclRequest* ureq) {
   if (ureq->type == ReqType::ReqTx || ureq->type == ReqType::ReqWrite ||
       ureq->type == ReqType::ReqRead) {
     s->sendRoutine();
@@ -147,3 +263,4 @@ inline std::shared_ptr<EpollClient> get_oob_client(RDMAEndPoint const& s) {
 inline std::string get_oob_conn_key(RDMAEndPoint const& s, uint64_t rank_id) {
   return s->get_oob_conn_key(rank_id);
 }
+#endif

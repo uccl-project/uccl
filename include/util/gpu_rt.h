@@ -46,6 +46,7 @@
 #define gpuMemsetAsync cudaMemsetAsync
 #define gpuGetLastError cudaGetLastError
 #define gpuErrorPeerAccessAlreadyEnabled cudaErrorPeerAccessAlreadyEnabled
+#define gpuErrorNotReady cudaErrorNotReady
 #define gpuEvent_t cudaEvent_t
 #define gpuEventCreate cudaEventCreate
 #define gpuEventDestroy cudaEventDestroy
@@ -118,6 +119,7 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuMemsetAsync hipMemsetAsync
 #define gpuGetLastError hipGetLastError
 #define gpuErrorPeerAccessAlreadyEnabled hipErrorPeerAccessAlreadyEnabled
+#define gpuErrorNotReady hipErrorNotReady
 #define gpuEvent_t hipEvent_t
 #define gpuEventCreate hipEventCreate
 #define gpuEventDestroy hipEventDestroy

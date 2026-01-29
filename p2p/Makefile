@@ -5,6 +5,9 @@ USE_TCPX ?= $(shell echo $${USE_TCPX:-0})
 # EFA optional integration
 USE_EFA ?= $(shell echo $${USE_EFA:-0})
 
+# TCP endpoint integration
+USE_TCP ?= $(shell echo $${USE_TCP:-0})
+
 # Compiler and flags
 CUDA_HOME ?= /usr/local/cuda
 CUDA_INC  := $(CUDA_HOME)/include
@@ -32,6 +35,11 @@ else
 	LIBS2 += -lglog -lgflags -lgtest -lz -lelf -lpthread -libverbs
 endif
 
+# Add NCCL-over-TCP endpoint flag
+ifeq ($(USE_TCP),1)
+	CXXFLAGS += -DUCCL_P2P_USE_NCCL
+endif
+
 # Python and pybind11 configuration
 PYTHON          ?= python3
 PYTHON_CONFIG    = $(PYTHON)-config
@@ -48,6 +56,14 @@ LIBDIR ?= $(PREFIX)/lib
 INCDIR ?= $(PREFIX)/include
 
 LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LIBS2)
+
+ifeq ($(USE_TCP),1)
+NCCL_HOME ?= ../thirdparty/nccl/build
+NCCL_INC  ?= $(NCCL_HOME)/include
+NCCL_LIB  ?= $(NCCL_HOME)/lib
+CXXFLAGS  += -I$(NCCL_INC)
+LDFLAGS   += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
+endif
 
 # Target and source files
 P2P_PYTHON_EXT := p2p$(PYEXT)
@@ -66,8 +82,13 @@ CXXFLAGS += -DUCCL_P2P_USE_TCPX -I$(NCCL_INC)
 LDFLAGS  += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
 OBJECTS := $(CORE_OBJECTS)
 else
-SOURCES := engine.cc engine_pybind.cc
-CORE_OBJECT := engine.o
+SOURCES := engine.cc engine_pybind.cc nccl/nccl_endpoint.cc
+CORE_OBJECT := engine.o nccl/nccl_endpoint.o
+endif
+
+ifeq ($(USE_TCPX),1)
+OBJECTS := $(CORE_OBJECTS)
+else
 OBJECTS := $(SOURCES:.cc=.o)
 endif
 
@@ -103,6 +124,11 @@ endif
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
 
+# Compile NCCL-over-TCP source files
+nccl/%.o: nccl/%.cc
+	@mkdir -p nccl
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -I. -c $< -o $@
+
 ifeq ($(USE_TCPX),1)
 install: $(P2P_SHARED_LIB)
 	install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/
@@ -119,6 +145,7 @@ endif
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB)
+	rm -f nccl/*.o
 ifneq ($(USE_TCPX),1)
 	rm -f $(P2P_PYTHON_EXT)
 endif
