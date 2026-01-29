@@ -294,6 +294,14 @@ void RXTracking::try_copy_msgbuf_to_appbuf(Channel::Msg* rx_work) {
 
 void RXTracking::try_copy_msgbuf_to_appbuf(Channel::Msg* rx_work) {
   if (rx_work) {
+    if (rx_work->opcode == Channel::Msg::kRxFreePtrs) {
+      int iov_n = rx_work->len;
+      void** iov_addrs = (void**)rx_work->data;
+      for (int i = 0; i < iov_n; i++) {
+        socket_->push_pkt_data((uint64_t)iov_addrs[i]);
+      }
+      return;
+    }
     VLOG(3) << "num_unconsumed_msgbufs: " << num_unconsumed_msgbufs()
             << " app_buf_queue_ size: " << app_buf_queue_.size();
     app_buf_queue_.push_back({*rx_work});
