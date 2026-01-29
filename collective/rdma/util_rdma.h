@@ -293,8 +293,10 @@ static inline struct ibv_cq_ex* util_rdma_create_cq_ex(
       IBV_WC_EX_WITH_SRC_QP |
       IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;  // Timestamp support.
   cq_ex_attr.comp_mask = IBV_CQ_INIT_ATTR_MASK_FLAGS;
-  cq_ex_attr.flags =
-      IBV_CREATE_CQ_ATTR_SINGLE_THREADED | IBV_CREATE_CQ_ATTR_IGNORE_OVERRUN;
+  cq_ex_attr.flags = IBV_CREATE_CQ_ATTR_SINGLE_THREADED;
+  if constexpr (kEnableCQIgnoreOverrun) {
+    cq_ex_attr.flags |= IBV_CREATE_CQ_ATTR_IGNORE_OVERRUN;
+  }
 
   if constexpr (kTestNoHWTimestamp)
     cq_ex_attr.wc_flags &= ~IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;
@@ -306,6 +308,10 @@ static inline struct ibv_cq_ex* util_rdma_create_cq_ex(
 static inline int util_rdma_modify_cq_attr(struct ibv_cq_ex* cq_ex,
                                            uint32_t cq_count,
                                            uint32_t cq_period) {
+  if constexpr (!kEnableCQModeration) {
+    return 0;
+  }
+
   struct ibv_modify_cq_attr cq_attr;
   cq_attr.attr_mask = IBV_CQ_ATTR_MODERATE;
   cq_attr.moderate.cq_count = cq_count;

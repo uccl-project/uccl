@@ -210,3 +210,7 @@ static constexpr bool kTestConstantRate = false;
 // Test lossy network.
 static constexpr bool kTestLoss = false;
 static constexpr double kTestLossRate = 0.0;
+// Enable CQ ignore overrun flag.
+static constexpr bool kEnableCQIgnoreOverrun = true;
+// Enable CQ moderation.
+static constexpr bool kEnableCQModeration = true;
