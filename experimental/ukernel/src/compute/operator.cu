@@ -79,6 +79,7 @@ template __device__ void run_reduce_inplace<__half>(CollArgs const&);
 // TODO: using sm id to assign task
 template <typename T>
 __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* c2d_fifos,
+                                     mscclpp::SmDeviceHandle<T>* sm_fifos,
                                      mscclpp::FifoDeviceHandle* d2c_fifo,
                                      CollArgs* d_coll, MoeArgs* d_moe,
                                      bool* should_stop) {
@@ -92,6 +93,12 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* c2d_fifos,
 
     T* task = fifo.poll();
     if (task == nullptr) continue;
+
+    /*
+    sm 2 sm 的任务，thread0
+    做任务boradcast，然后依次sync那几个被发布task的fifoHead，
+    等待并发的任务完成，其余sm 只 poll task，完成后thread0负责pop
+    */
 
     __syncthreads();
 
@@ -130,10 +137,10 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* c2d_fifos,
 
     if (threadIdx.x == 0) {
       // Push completion trigger to host
-      if (d2c_fifo) {
-        mscclpp::ProxyTrigger trig(ttype, dtype, block_id, idx);
-        d2c_fifo->push(trig);
-      }
+      // if (d2c_fifo) {
+      //   mscclpp::ProxyTrigger trig(ttype, dtype, block_id, idx);
+      //   d2c_fifo->push(trig);
+      // }
       // Pop task from C2D fifo
       fifo.pop();
     }
@@ -144,6 +151,7 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* c2d_fifos,
 
 template __global__ void basePersistentKernel<Task>(
     mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
+    mscclpp::SmDeviceHandle<Task>* sm_fifos,
     mscclpp::FifoDeviceHandle* d2c_fifo, CollArgs* d_coll, MoeArgs* d_moe,
     bool* should_stop);
 

@@ -4,6 +4,7 @@
 #include "d2c_fifo.hpp"
 #include "gpu_rt.h"
 #include "operator.h"
+#include "sm_fifo.h"
 #include <atomic>
 #include <iostream>
 #include <thread>
@@ -34,6 +35,12 @@ class PersistentKernel {
     for (uint32_t i = 0; i < cfg_.numBlocks; ++i) {
       c2d_fifos_.emplace_back(
           std::make_unique<FifoWithPending>(cfg_.fifoCapacity));
+    }
+    // sm to sm fifos init
+    sm_fifos_.reserve(cfg_.numBlocks);
+    for (uint32_t i = 0; i < cfg_.numBlocks; ++i) {
+      sm_fifos_.emplace_back(
+          std::make_unique<mscclpp::SmFifo<T>>(cfg_.fifoCapacity));
     }
 
     d2c_fifo_ = std::make_unique<mscclpp::Fifo>();
@@ -67,6 +74,9 @@ class PersistentKernel {
     GPU_RT_CHECK(gpuFreeHost(h_stopFlag_));
     if (d_c2d_fifo_handles_) {
       GPU_RT_CHECK(gpuFree(d_c2d_fifo_handles_));
+    }
+    if (d_sm_fifo_handles_) {
+      GPU_RT_CHECK(gpuFree(d_sm_fifo_handles_));
     }
     if (d_d2c_fifo_handles_) {
       GPU_RT_CHECK(gpuFree(d_d2c_fifo_handles_));
@@ -102,7 +112,6 @@ class PersistentKernel {
 
     std::vector<mscclpp::C2DDeviceHandle<T>> h_c2d_fifo_handles;
     h_c2d_fifo_handles.reserve(cfg_.numBlocks);
-
     for (auto& f : c2d_fifos_) {
       h_c2d_fifo_handles.push_back(f->fifo.deviceHandle());
     }
@@ -110,6 +119,17 @@ class PersistentKernel {
                            sizeof(*d_c2d_fifo_handles_) * cfg_.numBlocks));
     GPU_RT_CHECK(gpuMemcpyAsync(d_c2d_fifo_handles_, h_c2d_fifo_handles.data(),
                                 sizeof(*d_c2d_fifo_handles_) * cfg_.numBlocks,
+                                gpuMemcpyHostToDevice, copy_stream_));
+
+    std::vector<mscclpp::SmDeviceHandle<T>> h_sm_fifo_handles;
+    h_sm_fifo_handles.reserve(cfg_.numBlocks);
+    for (auto& f : sm_fifos_) {
+      h_sm_fifo_handles.push_back(f->deviceHandle());
+    }
+    GPU_RT_CHECK(gpuMalloc(&d_sm_fifo_handles_,
+                           sizeof(*d_sm_fifo_handles_) * cfg_.numBlocks));
+    GPU_RT_CHECK(gpuMemcpyAsync(d_sm_fifo_handles_, h_sm_fifo_handles.data(),
+                                sizeof(*d_sm_fifo_handles_) * cfg_.numBlocks,
                                 gpuMemcpyHostToDevice, copy_stream_));
 
     mscclpp::FifoDeviceHandle h_d2c_fifo_handle =
@@ -122,7 +142,11 @@ class PersistentKernel {
 
     GPU_RT_CHECK(gpuStreamSynchronize(copy_stream_));
 
-    void* args[] = {&d_c2d_fifo_handles_, &d_d2c_fifo_handles_, &d_coll, &d_moe,
+    void* args[] = {&d_c2d_fifo_handles_,
+                    &d_sm_fifo_handles_,
+                    &d_d2c_fifo_handles_,
+                    &d_coll,
+                    &d_moe,
                     &d_stopFlag_};
 
     dim3 grid(cfg_.numBlocks);
@@ -254,7 +278,9 @@ class PersistentKernel {
   PersistentKernelConfig cfg_;
   std::vector<std::unique_ptr<FifoWithPending>>
       c2d_fifos_;  // cpu -> gpu : Multi fifos for multi Blocks
-  std::unique_ptr<mscclpp::Fifo> d2c_fifo_;  // multi-gpus -> cpu
+  std::vector<std::unique_ptr<mscclpp::SmFifo<T>>> sm_fifos_;  // multi-sm -> sm
+  std::unique_ptr<mscclpp::Fifo>
+      d2c_fifo_;  // multi-gpus -> cpu, slower than busy-poll
   std::thread reclaim_thread_;
   std::atomic<bool> reclaim_running_{false};
 
@@ -263,6 +289,7 @@ class PersistentKernel {
   bool* h_stopFlag_ = nullptr;  // Host side stop flag
   mscclpp::C2DDeviceHandle<T>* d_c2d_fifo_handles_ = nullptr;
   mscclpp::FifoDeviceHandle* d_d2c_fifo_handles_ = nullptr;
+  mscclpp::SmDeviceHandle<T>* d_sm_fifo_handles_ = nullptr;
 
   gpuStream_t stream_ = nullptr;       // compute stream（persistent kernel）
   gpuStream_t copy_stream_ = nullptr;  // copy stream（push/stop）

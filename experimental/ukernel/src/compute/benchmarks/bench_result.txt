@@ -37,3 +37,30 @@ Warmup done.
 Latency (us): min 4.19 | p50 6.84 | p90 7.92 | p99 10.25 | max 199.99
 Throughput: 141.28 K tasks/s
 Done.
+
+
+=============================
+SM FIFO Benchmark
+Producers : 1
+Consumer  : 1
+Tasks/prod: 100000
+Total     : 100000
+=============================
+Init SmFifo at device NVIDIA A40 !
+Elapsed    : 3819.696 ms
+Throughput : 26.18 K tasks/s
+
+Done.
+
+=============================
+SM FIFO Benchmark
+Producers : 8
+Consumer  : 1
+Tasks/prod: 100000
+Total     : 800000
+=============================
+Init SmFifo at device NVIDIA A40 !
+Elapsed    : 21073.410 ms
+Throughput : 37.96 K tasks/s
+
+Done.
