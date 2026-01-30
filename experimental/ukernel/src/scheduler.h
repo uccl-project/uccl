@@ -37,13 +37,17 @@ struct Executor {
     std::cout << "[COMPUTE]"
               << " task=" << task.id << " op=" << op.id
               << " tile_offset=" << task.tile_offset
-              << " tile_count=" << task.tile_count << std::endl;
+              << " tile_count=" << task.tile_count
+              << " inputs=" << op.inputs.size()
+              << " outputs=" << op.outputs.size() << std::endl;
   }
 
   static void run_comm(Task const& task, Operator const& op) {
     std::cout << "[COMM]"
               << " task=" << task.id << " op=" << op.id
-              << " op_type=" << static_cast<int>(op.type) << std::endl;
+              << " op_type=" << static_cast<int>(op.type)
+              << " inputs=" << op.inputs.size()
+              << " outputs=" << op.outputs.size() << std::endl;
   }
 };
 
