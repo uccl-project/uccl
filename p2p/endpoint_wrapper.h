@@ -88,10 +88,12 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
                                 struct ucclRequest* ureq) {
   if (ureq->type == ReqType::ReqTx || ureq->type == ReqType::ReqWrite ||
       ureq->type == ReqType::ReqRead) {
-    s->sendRoutine();
+    // Use targeted polling instead of polling all channels
+    s->pollSendChannel(ureq->n);
     return s->checkSendComplete_once(ureq->n, ureq->engine_idx);
   } else if (ureq->type == ReqType::ReqRx) {
-    s->recvRoutine();
+    // Use targeted polling instead of polling all channels
+    s->pollRecvChannel(ureq->n);
     return s->checkRecvComplete_once(ureq->n, ureq->engine_idx);
   }
   LOG(ERROR) << "Invalid request type: " << ureq->type;

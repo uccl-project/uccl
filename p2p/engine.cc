@@ -908,14 +908,14 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   double total_time_us = total_timer.get_us();
   
   // Log timing breakdown
-  LOG(INFO) << "[readv TIMING] num_iovs=" << num_iovs
+  std::cout << "[readv TIMING] num_iovs=" << num_iovs
             << " chunks=" << ureq_max
             << " total=" << total_time_us << "us"
             << " prep=" << prep_time_us << "us (" << (prep_time_us/total_time_us*100) << "%)"
             << " issue=" << total_issue_time_us << "us (" << (total_issue_time_us/total_time_us*100) << "%)"
             << " poll=" << total_poll_time_us << "us (" << (total_poll_time_us/total_time_us*100) << "%)"
             << " poll_iters=" << poll_iterations
-            << " avg_poll=" << (total_poll_time_us/poll_iterations) << "us";
+            << " avg_poll=" << (total_poll_time_us/poll_iterations) << "us\n";
 
   return true;
 }

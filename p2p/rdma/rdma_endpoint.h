@@ -420,6 +420,30 @@ class NICEndpoint {
         send_group->pollingLoopForMeta();
       }
     }
+
+  // Targeted polling for a specific send channel (more efficient than sendRoutine)
+  void pollSendChannel(uint32_t rank_id) {
+    if (auto_start_polling_) {
+      return;  // Do nothing if auto polling is enabled
+    }
+    std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
+    auto it = send_channel_groups_.find(rank_id);
+    if (it != send_channel_groups_.end() && it->second) {
+      it->second->pollingLoopForMeta();
+    }
+  }
+
+  // Targeted polling for a specific recv channel (more efficient than recvRoutine)
+  void pollRecvChannel(uint32_t rank_id) {
+    if (auto_start_polling_) {
+      return;  // Do nothing if auto polling is enabled
+    }
+    std::shared_lock<std::shared_mutex> lock(recv_channel_mutex_);
+    auto it = recv_channel_groups_.find(rank_id);
+    if (it != recv_channel_groups_.end() && it->second) {
+      it->second->pollAndProcessCompletions();
+    }
+  }
   }
 
   // Manual polling routine for send channels when auto_start_polling_ is false
