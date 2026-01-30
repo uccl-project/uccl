@@ -36,10 +36,10 @@ extern bool use_ll_sl;
 #define kQueueMask (kQueueSize - 1)
 // This is the highest we can get due to the number of bits we allocate in the
 // imm for reordering buffer sequence tracking.
-#define kMaxInflightLowLatency 32
+#define kMaxInflightLowLatency 1
 #define kMaxInflightNormal 8
-#define kChannelPerProxy 8
-#define kNumProxyThs 4
+#define kChannelPerProxy 1
+#define kNumProxyThs 1
 // NCCL EFA plugin default: 8 MB mimicing (512KB*16)
 // NCCL IB net.cc default: 2 MB (128KB*16)
 #define kMaxInflightBytes SIZE_MAX

@@ -367,12 +367,30 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   S.ack_qp = create_srd_qp_ex(S);
   S.recv_ack_qp = create_srd_qp_ex(S);
 #else
+  // RoCE (e.g. AMD AINIC/ionic) + fast mode: single QP per peer with many
+  // outstanding sends can hit "transport retry counter exceeded". Cap queue depth.
+  struct ibv_port_attr port_attr_early;
+  int query_ok = ibv_query_port(S.context, 1, &port_attr_early);
+  int const max_wr =
+      (query_ok == 0 &&
+       port_attr_early.link_layer == IBV_LINK_LAYER_ETHERNET &&
+       !use_normal_mode)
+          ? std::min(kMaxOutstandingSends, 512)
+          : kMaxOutstandingSends;
+  if (query_ok == 0 && port_attr_early.link_layer == IBV_LINK_LAYER_ETHERNET &&
+      !use_normal_mode && max_wr < kMaxOutstandingSends) {
+    fprintf(stderr,
+            "[RDMA] RoCE fast mode: capping max_send_wr/max_recv_wr to %d "
+            "(avoid transport retry exceeded on ionic/AINIC)\n",
+            max_wr);
+  }
+
   struct ibv_qp_init_attr qp_init_attr = {};
   qp_init_attr.send_cq = S.cq;
   qp_init_attr.recv_cq = S.cq;
-  qp_init_attr.qp_type = IBV_QPT_RC;                    // Reliable Connection
-  qp_init_attr.cap.max_send_wr = kMaxOutstandingSends;  // max outstanding sends
-  qp_init_attr.cap.max_recv_wr = kMaxOutstandingSends;  // max outstanding recvs
+  qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
+  qp_init_attr.cap.max_send_wr = max_wr;
+  qp_init_attr.cap.max_recv_wr = max_wr;
   qp_init_attr.cap.max_send_sge = 1;
   qp_init_attr.cap.max_recv_sge = 1;
   qp_init_attr.sq_sig_all = 0;
@@ -420,12 +438,20 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
     }
   }
 
-  // Query port
+  // Use port attr (already queried above for non-EFA RoCE cap; query here for EFA)
   struct ibv_port_attr port_attr;
+#ifdef EFA
   if (ibv_query_port(S.context, 1, &port_attr)) {
     perror("Failed to query port");
     exit(1);
   }
+#else
+  port_attr = port_attr_early;
+  if (query_ok != 0) {
+    perror("Failed to query port");
+    exit(1);
+  }
+#endif
   ncclIbGetGidIndex(S.context, 1, &port_attr, &S.gid_index);
   local_info->qp_num = S.qp->qp_num;
   local_info->ack_qp_num = S.ack_qp->qp_num;
@@ -663,7 +689,9 @@ void modify_qp_to_rts(ProxyCtx& S, RDMAConnectionInfo* local_info) {
   struct ibv_qp_attr attr;
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTS;
-  attr.timeout = 14;
+  // RoCE/ionic: use larger timeout to reduce "transport retry counter exceeded"
+  // (timeout 14 = ~67ms, 18 = ~1s per retry)
+  attr.timeout = 18;
   attr.retry_cnt = 7;
   attr.rnr_retry = 7;
   attr.sq_psn = local_info->psn;

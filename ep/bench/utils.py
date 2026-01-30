@@ -81,6 +81,8 @@ def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
     torch.set_default_dtype(torch.bfloat16)
     torch.set_default_device(f"cuda:{local_rank}")
     torch.cuda.set_device(local_rank)
+    
+    print(f"init_dist_under_torchrun: local_rank = {local_rank}, num_local_ranks = {num_local_ranks}")
 
     return (
         dist.get_rank(),

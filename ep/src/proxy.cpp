@@ -920,6 +920,8 @@ void Proxy::post_gpu_commands_mixed(
       0) {
     return;
   }
+
+  printf("post_gpu_commands_mixed: rdma_wrs.size() = %zu, atomic_wrs.size() = %zu, barrier_cmds.size() = %zu, quiet_cmds.size() = %zu\n", rdma_wrs.size(), atomic_wrs.size(), barrier_cmds.size(), quiet_cmds.size());
   // Handle regular RDMA writes
   if (!rdma_wrs.empty()) {
     post_rdma_async_batched(ctx_, cfg_.gpu_buffer, rdma_wrs.size(), rdma_wrs,
@@ -1011,19 +1013,24 @@ void Proxy::quiet(std::vector<uint64_t> wrs, std::vector<TransferCmd> cmds) {
 }
 
 void Proxy::destroy(bool free_gpu_buffer) {
+  // Teardown so driver sees no child objects at ibv_close_device: QP->ERROR,
+  // wait for error completions, drain CQ, destroy QPs, drain CQ again, destroy
+  // CQ, destroy AHs, dereg MRs, dealloc PD, close context.
+  static const int kDrainEmptyRounds = 15;
+
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
     qp_to_error(ctx_ptr->qp);
     qp_to_error(ctx_ptr->ack_qp);
+    qp_to_error(ctx_ptr->recv_ack_qp);
     for (auto* q : ctx_ptr->data_qps_by_channel) {
       if (q) qp_to_error(q);
     }
   }
+  // Let driver post error completions before we drain.
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-  for (auto& ctx_ptr : ctxs_for_all_ranks_) {
-    if (!ctx_ptr) continue;
-  }
-  if (ctx_.cq) drain_cq(ctx_.cq);
+  if (ctx_.cq) drain_cq(ctx_.cq, kDrainEmptyRounds);
 
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
@@ -1042,20 +1049,28 @@ void Proxy::destroy(bool free_gpu_buffer) {
       ibv_destroy_qp(ctx_ptr->ack_qp);
       ctx_ptr->ack_qp = nullptr;
     }
+    if (ctx_ptr->recv_ack_qp) {
+      ibv_destroy_qp(ctx_ptr->recv_ack_qp);
+      ctx_ptr->recv_ack_qp = nullptr;
+    }
   }
   ring.ack_qp = nullptr;
 
-  for (auto& ctx_ptr : ctxs_for_all_ranks_) {
-    if (!ctx_ptr) continue;
-  }
-  if (ctx_.cq) drain_cq(ctx_.cq);
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  if (ctx_.cq) drain_cq(ctx_.cq, kDrainEmptyRounds);
 
-  for (auto& ctx_ptr : ctxs_for_all_ranks_) {
-    if (!ctx_ptr) continue;
-  }
   if (ctx_.cq) {
     ibv_destroy_cq(ctx_.cq);
     ctx_.cq = nullptr;
+  }
+
+  // Destroy AHs (PD children) before deregistering MRs.
+  for (auto& ctx_ptr : ctxs_for_all_ranks_) {
+    if (!ctx_ptr) continue;
+    if (ctx_ptr->dst_ah) {
+      ibv_destroy_ah(ctx_ptr->dst_ah);
+      ctx_ptr->dst_ah = nullptr;
+    }
   }
 
   auto dereg = [&](ibv_mr*& mr) {
@@ -1072,6 +1087,7 @@ void Proxy::destroy(bool free_gpu_buffer) {
     }
   };
   dereg(ring.ack_mr);
+  dereg(ctx_.ack_recv_mr);
   dereg(ctx_.atomic_old_values_mr);
   dereg(ctx_.atomic_buffer_mr);
   dereg(ctx_.mr);
