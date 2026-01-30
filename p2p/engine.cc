@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <future>
 #include <iostream>
 #include <optional>
@@ -22,6 +23,25 @@ int const kMaxNumGPUs = 8;
 std::once_flag glog_init_once;
 constexpr uint32_t kGpuStreamId = 0;
 thread_local bool inside_python = false;
+
+#ifdef UCCL_P2P_USE_NCCL
+static int get_tcp_numa_node_from_iface() {
+  char if_names[uccl::MAX_IF_NAME_SIZE] = {};
+  uccl::socketAddress if_addrs[1];
+  int n = uccl::find_interfaces(if_names, if_addrs, uccl::MAX_IF_NAME_SIZE, 1);
+  if (n <= 0) {
+    return 0;
+  }
+  std::string ifname(if_names);
+  std::string path = "/sys/class/net/" + ifname + "/device/numa_node";
+  std::ifstream file(path);
+  int numa_node = -1;
+  if (!(file >> numa_node)) {
+    return 0;
+  }
+  return numa_node < 0 ? 0 : numa_node;
+}
+#endif
 
 inline void check_python_signals() {
   PyGILState_STATE gstate = PyGILState_Ensure();
@@ -64,7 +84,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
 
 #ifdef UCCL_P2P_USE_NCCL
   ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
-  numa_node_ = 0;
+  numa_node_ = get_tcp_numa_node_from_iface();
 #else
   // Initialize the RDMA endpoint.
   ep_ = std::shared_ptr<NICEndpoint>(
@@ -79,7 +99,9 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   recv_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
 
+#ifndef UCCL_P2P_USE_NCCL
   numa_node_ = RdmaDeviceManager::instance().get_numa_node(local_gpu_idx_);
+#endif
 
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
@@ -178,7 +200,7 @@ void Endpoint::initialize_engine() {
   }
 
 #ifdef UCCL_P2P_USE_NCCL
-  numa_node_ = 0;  // TCP doesn't have RDMA devices
+  numa_node_ = get_tcp_numa_node_from_iface();
 #else
   numa_node_ = RdmaDeviceManager::instance().get_numa_node(local_gpu_idx_);
 #endif
