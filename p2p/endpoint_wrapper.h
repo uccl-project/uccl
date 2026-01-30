@@ -23,7 +23,7 @@ static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
 
   req->send_type =
       (ureq->type == ReqType::ReqRead) ? SendType::Read : SendType::Write;
-      
+
   ureq->engine_idx = obj->writeOrRead(req);
   ureq->n = conn->uccl_conn_id_.flow_id;
 
