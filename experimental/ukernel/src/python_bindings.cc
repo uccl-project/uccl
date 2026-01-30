@@ -28,8 +28,33 @@ void bind_parallel_rule(py::module_& m) {
 
 void bind_operator(py::module_& m) {
   py::class_<ur::Operator>(m, "Operator")
-      .def_property_readonly("id",
-                             [](ur::Operator const& op) { return op.id; });
+      .def_property_readonly("id", [](ur::Operator const& op) { return op.id; })
+      .def_property_readonly("inputs",
+                             [](ur::Operator const& op) { return op.inputs; })
+      .def_property_readonly("outputs",
+                             [](ur::Operator const& op) { return op.outputs; })
+      .def_property_readonly("attrs",
+                             [](ur::Operator const& op) { return op.attrs; })
+      .def_property_readonly(
+          "layout",
+          [](ur::Operator const& op)
+              -> std::optional<std::pair<std::string, std::string>> {
+            return op.layout;
+          })
+      .def("set_inputs",
+           [](ur::Operator& op, std::vector<torch::Tensor> inputs) {
+             op.inputs = std::move(inputs);
+           })
+      .def("set_outputs",
+           [](ur::Operator& op, std::vector<torch::Tensor> outputs) {
+             op.outputs = std::move(outputs);
+           })
+      .def("set_attr", [](ur::Operator& op, std::string const& key,
+                          std::string const& value) { op.attrs[key] = value; })
+      .def("set_layout", [](ur::Operator& op, std::string const& in_layout,
+                            std::string const& out_layout) {
+        op.layout = std::make_pair(in_layout, out_layout);
+      });
 }
 
 void bind_factory(py::module_& m) {

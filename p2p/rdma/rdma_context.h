@@ -11,6 +11,10 @@ class RdmaContext {
     ctx_ = dev->open();
     if (!ctx_) throw std::runtime_error("Failed to open context");
 
+    struct ibv_device_attr dev_attr;
+    assert(ibv_query_device(ctx_.get(), &dev_attr) == 0);
+    vendor_id_ = dev_attr.vendor_id;
+
     struct ibv_pd* pd = ibv_alloc_pd(ctx_.get());
     if (!pd) throw std::runtime_error("Failed to alloc pd");
 
@@ -30,6 +34,8 @@ class RdmaContext {
   struct ibv_pd* pd() const {
     return pd_.get();
   }
+
+  uint32_t getVendorID() const { return vendor_id_; }
 
   // Query GID by index
   void getGID(int gid_index, union ibv_gid* gid, int port = 1) const {
@@ -79,4 +85,5 @@ class RdmaContext {
   std::shared_ptr<struct ibv_context> ctx_;
   std::shared_ptr<struct ibv_pd> pd_;
   uint64_t context_id_;
+  uint32_t vendor_id_;
 };
