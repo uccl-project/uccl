@@ -1,6 +1,8 @@
 #pragma once
 #include <torch/extension.h>
 #include <optional>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace UKernel {
@@ -84,6 +86,13 @@ struct Operator {
   torch::Tensor src;
   torch::Tensor dst;
 
+  // New-style IO/attrs (placeholders; keep src/dst for compatibility)
+  std::vector<torch::Tensor> inputs;
+  std::vector<torch::Tensor> outputs;
+  std::unordered_map<std::string, std::string> attrs;
+  std::optional<std::pair<std::string, std::string>>
+      layout;  // in_layout, out_layout
+
   std::vector<int64_t> shape;
   int64_t numel = 0;
 };
@@ -99,6 +108,9 @@ struct OperatorFactory {
     op.dst = dst;
     op.parallel_rule = rule;
     op.deps = std::move(deps);
+
+    op.inputs = {src};
+    op.outputs = {dst};
 
     op.shape = src.sizes().vec();
     op.numel = src.numel();
