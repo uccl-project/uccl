@@ -257,9 +257,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 
 ibv_cq* create_per_thread_cq(ProxyCtx& S) {
   int cq_depth = kMaxOutstandingSends * 2;
-  // Use extended CQ for EFA, AMD Ionic, and other drivers that expect
-  // ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex)) to avoid "context freed with
-  // active resources".
+  // Use extended CQ for EFA, AMD Ionic, and other drivers that are compatible.
   struct ibv_cq_init_attr_ex cq_ex_attr = {};
   cq_ex_attr.cqe = cq_depth;
   cq_ex_attr.cq_context = nullptr;
@@ -267,7 +265,6 @@ ibv_cq* create_per_thread_cq(ProxyCtx& S) {
   cq_ex_attr.comp_vector = 0;
   cq_ex_attr.comp_mask = 0;
   cq_ex_attr.flags = 0;
-  // EFA and many drivers (e.g. AMD Ionic) expect STANDARD_FLAGS.
   cq_ex_attr.wc_flags = IBV_WC_STANDARD_FLAGS;
 
   S.cq_ex = ibv_create_cq_ex(S.context, &cq_ex_attr);
