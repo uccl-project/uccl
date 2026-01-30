@@ -257,31 +257,25 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 
 ibv_cq* create_per_thread_cq(ProxyCtx& S) {
   int cq_depth = kMaxOutstandingSends * 2;
-#ifdef EFA
+  // Use extended CQ for EFA, AMD Ionic, and other drivers that expect
+  // ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex)) to avoid "context freed with
+  // active resources".
   struct ibv_cq_init_attr_ex cq_ex_attr = {};
   cq_ex_attr.cqe = cq_depth;
   cq_ex_attr.cq_context = nullptr;
   cq_ex_attr.channel = nullptr;
   cq_ex_attr.comp_vector = 0;
-  // cq_ex_attr.wc_flags =
-  //     IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;  // Timestamp support.
   cq_ex_attr.comp_mask = 0;
   cq_ex_attr.flags = 0;
-  // EFA requires these values for wc_flags and comp_mask.
-  // See `efa_create_cq_ex` in rdma-core.
+  // EFA and many drivers (e.g. AMD Ionic) expect STANDARD_FLAGS.
   cq_ex_attr.wc_flags = IBV_WC_STANDARD_FLAGS;
 
-  S.cq = (struct ibv_cq*)ibv_create_cq_ex(S.context, &cq_ex_attr);
-#else
-  S.cq =
-      ibv_create_cq(S.context, /* cqe */ cq_depth, /* user_context */ nullptr,
-                    /* channel */ nullptr, /* comp_vector */ 0);
-#endif
-  if (!S.cq) {
-    perror("Failed to create CQ");
+  S.cq_ex = ibv_create_cq_ex(S.context, &cq_ex_attr);
+  if (!S.cq_ex) {
+    perror("Failed to create CQ (ibv_create_cq_ex)");
     exit(1);
   }
-  return S.cq;
+  return ibv_cq_ex_to_cq(S.cq_ex);
 }
 
 #ifdef EFA
@@ -305,8 +299,8 @@ struct ibv_qp* create_srd_qp_ex(ProxyCtx& S) {
   qp_attr_ex.qp_context = S.context;
   qp_attr_ex.sq_sig_all = 1;
 
-  qp_attr_ex.send_cq = S.cq;
-  qp_attr_ex.recv_cq = S.cq;
+  qp_attr_ex.send_cq = get_cq(S);
+  qp_attr_ex.recv_cq = get_cq(S);
 
   qp_attr_ex.qp_type = IBV_QPT_DRIVER;
 
@@ -368,8 +362,8 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   S.recv_ack_qp = create_srd_qp_ex(S);
 #else
   struct ibv_qp_init_attr qp_init_attr = {};
-  qp_init_attr.send_cq = S.cq;
-  qp_init_attr.recv_cq = S.cq;
+  qp_init_attr.send_cq = get_cq(S);
+  qp_init_attr.recv_cq = get_cq(S);
   qp_init_attr.qp_type = IBV_QPT_RC;                    // Reliable Connection
   qp_init_attr.cap.max_send_wr = kMaxOutstandingSends;  // max outstanding sends
   qp_init_attr.cap.max_recv_wr = kMaxOutstandingSends;  // max outstanding recvs
@@ -1492,7 +1486,7 @@ void local_poll_completions(ProxyCtx& S,
       local_process_completions(S, acked_wrs, thread_idx, wc, ne, ctx_by_tag);
     }
   };
-  if (S.cq) poll_one(S.cq);
+  if (get_cq(S)) poll_one(get_cq(S));
   // for (auto* cq : S.extra_cqs) poll_one(cq);
 }
 
@@ -1513,7 +1507,7 @@ void poll_cq_dual(ProxyCtx& S, std::unordered_set<uint64_t>& acked_wrs,
                                  use_normal_mode);
     }
   };
-  if (S.cq) poll_one(S.cq);
+  if (get_cq(S)) poll_one(get_cq(S));
   // for (auto* cq : S.extra_cqs) poll_one(cq);
 }
 
@@ -1995,7 +1989,7 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                                  use_normal_mode);
     }
   };
-  if (S.cq) poll_one(S.cq);
+  if (get_cq(S)) poll_one(get_cq(S));
   // for (auto* cq : S.extra_cqs) poll_one(cq);
 }
 

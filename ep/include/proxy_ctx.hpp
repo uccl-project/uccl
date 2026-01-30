@@ -39,7 +39,8 @@ struct ProxyCtx {
   ibv_context* context = nullptr;
   ibv_pd* pd = nullptr;
   ibv_mr* mr = nullptr;
-  ibv_cq* cq = nullptr;
+  ibv_cq* cq = nullptr;        // non-EFA path
+  ibv_cq_ex* cq_ex = nullptr;  // EFA path (created with ibv_create_cq_ex)
   ibv_qp* qp = nullptr;
   std::vector<ibv_qp*> data_qps_by_channel;
   std::vector<uint32_t> dst_data_qpn_by_ring;
@@ -140,3 +141,9 @@ struct ProxyCtx {
            static_cast<uint64_t>(static_cast<uint32_t>(index));
   }
 };
+
+// Return the CQ as ibv_cq* for polling/destroy. When EFA we store cq_ex and
+// destroy with ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex)).
+inline ibv_cq* get_cq(ProxyCtx& S) {
+  return S.cq_ex ? ibv_cq_ex_to_cq(S.cq_ex) : S.cq;
+}
