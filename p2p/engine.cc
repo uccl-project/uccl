@@ -796,7 +796,7 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> dst_v, std::vector<size_t> size_v,
                      std::vector<FifoItem> slot_item_v, size_t num_iovs) {
-  ChronoTimer total_timer;
+  uccl::ChronoTimer total_timer;
   auto* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
     std::cerr << "[readv] Error: Invalid conn_id " << conn_id << std::endl;
@@ -808,7 +808,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   FifoItem curr_slot_item[kMaxInflightChunks] = {};
   bool done[kMaxInflightChunks] = {false};
 
-  ChronoTimer prep_timer;
+  uccl::ChronoTimer prep_timer;
   // Estimate total number of chunks needed
   int estimated_ureq_max = 0;
   for (size_t i = 0; i < num_iovs; i++) {
@@ -858,14 +858,14 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   int ureq_max = data_read_vec.size();
   int ureq_issued = 0, ureq_finished = 0;
 
-  ChronoTimer issue_timer;
+  uccl::ChronoTimer issue_timer;
   double total_issue_time_us = 0;
   double total_poll_time_us = 0;
   int poll_iterations = 0;
 
   while (ureq_finished < ureq_max) {
     // Issue new requests up to kMaxInflightChunks limit
-    ChronoTimer issue_batch_timer;
+    uccl::ChronoTimer issue_batch_timer;
     while (ureq_issued < ureq_max &&
            ureq_issued - ureq_finished < kMaxInflightChunks &&
            size_read_vec[ureq_issued] > 0) {
@@ -886,7 +886,7 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
 
     // Poll all outstanding requests and mark which ones are done
-    ChronoTimer poll_timer;
+    uccl::ChronoTimer poll_timer;
     for (int i = ureq_finished; i < ureq_issued; i++) {
       if (done[i % kMaxInflightChunks]) {
         continue;
