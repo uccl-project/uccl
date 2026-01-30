@@ -420,6 +420,7 @@ class NICEndpoint {
         send_group->pollingLoopForMeta();
       }
     }
+  }
 
   // Targeted polling for a specific send channel (more efficient than sendRoutine)
   void pollSendChannel(uint32_t rank_id) {
@@ -443,7 +444,6 @@ class NICEndpoint {
     if (it != recv_channel_groups_.end() && it->second) {
       it->second->pollAndProcessCompletions();
     }
-  }
   }
 
   // Manual polling routine for send channels when auto_start_polling_ is false
