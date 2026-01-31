@@ -38,7 +38,7 @@ Latency (us): min 4.19 | p50 6.84 | p90 7.92 | p99 10.25 | max 199.99
 Throughput: 141.28 K tasks/s
 Done.
 
-
+CUDA_VISIBLE_DEVICES=5 ./benchmarks/bench_sm_fifo 1 100000
 =============================
 SM FIFO Benchmark
 Producers : 1
@@ -50,8 +50,7 @@ Init SmFifo at device NVIDIA A40 !
 Elapsed    : 3819.696 ms
 Throughput : 26.18 K tasks/s
 
-Done.
-
+CUDA_VISIBLE_DEVICES=5 ./benchmarks/bench_sm_fifo 8 100000
 =============================
 SM FIFO Benchmark
 Producers : 8
@@ -63,4 +62,50 @@ Init SmFifo at device NVIDIA A40 !
 Elapsed    : 21073.410 ms
 Throughput : 37.96 K tasks/s
 
-Done.
+CUDA_VISIBLE_DEVICES=5 ./benchmarks/bench_sm_fifo 1 1
+=============================
+SM FIFO Benchmark
+Producers : 1
+Consumer  : 1
+Tasks/prod: 1
+Total     : 1
+=============================
+Init SmFifo at device NVIDIA A40 !
+Elapsed    : 6.594 ms
+Throughput : 0.15 K tasks/s
+
+CUDA_VISIBLE_DEVICES=5 ./benchmarks/bench_sm_fifo 83 1
+=============================
+SM FIFO Benchmark
+Producers : 83
+Consumer  : 1
+Tasks/prod: 1
+Total     : 83
+=============================
+Init SmFifo at device NVIDIA A40 !
+Elapsed    : 8.754 ms
+Throughput : 9.48 K tasks/s
+
+CUDA_VISIBLE_DEVICES=5 ./benchmarks/bench_sm_fifo 83 1000
+=============================
+SM FIFO Benchmark
+Producers : 83
+Consumer  : 1
+Tasks/prod: 1000
+Total     : 83000
+=============================
+Init SmFifo at device NVIDIA A40 !
+Elapsed    : 2189.801 ms
+Throughput : 37.90 K tasks/s
+
+CUDA_VISIBLE_DEVICES=5 ./benchmarks/bench_sm_fifo 83 10000
+=============================
+SM FIFO Benchmark
+Producers : 83
+Consumer  : 1
+Tasks/prod: 10000
+Total     : 830000
+=============================
+Init SmFifo at device NVIDIA A40 !
+Elapsed    : 21821.494 ms
+Throughput : 38.04 K tasks/s

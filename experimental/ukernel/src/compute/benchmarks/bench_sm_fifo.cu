@@ -104,7 +104,7 @@ void run_bench(int num_producers, int iters) {
 
 int main(int argc, char** argv) {
   int num_producers = 1;
-  int iters = 100'000;
+  int iters = 1000;
 
   if (argc >= 2) num_producers = atoi(argv[1]);
   if (argc >= 3) iters = atoi(argv[2]);
