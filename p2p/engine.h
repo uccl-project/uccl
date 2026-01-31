@@ -8,7 +8,6 @@
 #include "util/shared_pool.h"
 #include "util/util.h"
 #ifdef UCCL_P2P_USE_NCCL
-#include "../collective/rdma/rdma_io.h"
 #include "nccl/nccl_endpoint.h"
 #endif
 #include <glog/logging.h>

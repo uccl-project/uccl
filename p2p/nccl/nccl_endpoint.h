@@ -12,7 +12,45 @@
 #else
 #include <nccl.h>
 #endif
-#include "../../collective/rdma/transport.h"  // For uccl::ConnID, uccl::FifoItem, uccl::ucclRequest.
+
+namespace uccl {
+
+using FlowID = uint64_t;
+using PeerID = uint64_t;
+
+struct ConnID {
+  void* context;
+  int sock_fd;
+  FlowID flow_id;
+  PeerID peer_id;
+  int dev;
+};
+
+struct Mhandle;
+class UcclFlow;
+
+struct FifoItem {
+  uint64_t addr;
+  uint32_t size;
+  uint32_t rkey;
+  uint32_t nmsgs;
+  uint32_t rid;
+  uint64_t idx;
+  uint32_t engine_offset;
+  char padding[28];
+};
+static_assert(sizeof(struct FifoItem) == 64, "FifoItem must be 64 bytes");
+
+enum ReqType { ReqTx, ReqRx, ReqRead, ReqWrite };
+
+struct ucclRequest {
+  enum ReqType type;
+  uint32_t n;
+  void* context;
+  uint32_t engine_idx;
+};
+
+}  // namespace uccl
 
 class EpollClient;
 

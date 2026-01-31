@@ -206,7 +206,7 @@ bool TCPEndpoint::setup_listener_(uint16_t port) {
     ::close(fd);
     return false;
   }
-  if (listen(fd, 8) < 0) {
+  if (listen(fd, 64) < 0) {
     std::cerr << "[tcp] listen failed: " << strerror(errno) << std::endl;
     ::close(fd);
     return false;
