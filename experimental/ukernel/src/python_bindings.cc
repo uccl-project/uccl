@@ -97,12 +97,47 @@ void bind_factory(py::module_& m) {
         py::arg("deps") = std::vector<uint64_t>{});
 }
 
-void run_ops(std::vector<ur::Operator> const& ops) {
-  ur::Scheduler sched;
-  for (auto const& op : ops) {
-    sched.add_operator(op);
-  }
-  sched.run();
+void bind_scheduler(py::module_& m) {
+  py::class_<ur::SchedulerConfig>(m, "SchedulerConfig")
+      .def(py::init<>())
+      .def_readwrite("dummy", &ur::SchedulerConfig::dummy);
+
+  m.def(
+      "init",
+      [](ur::SchedulerConfig cfg) { ur::Scheduler::instance().init(cfg); },
+      py::arg("config"));
+
+  m.def("reset", []() { ur::Scheduler::instance().reset(); });
+
+  m.def(
+      "add",
+      [](ur::Operator const& op) {
+        ur::Scheduler::instance().add_operator(op);
+      },
+      py::arg("op"));
+
+  m.def("run", []() {
+    py::gil_scoped_release release;
+    ur::Scheduler::instance().run();
+  });
+
+  m.def(
+      "poll",
+      [](uint64_t op_id) { return ur::Scheduler::instance().poll(op_id); },
+      py::arg("op_id"));
+
+  m.def(
+      "sync",
+      [](uint64_t op_id) {
+        py::gil_scoped_release release;
+        ur::Scheduler::instance().sync(op_id);
+      },
+      py::arg("op_id"));
+
+  m.def("sync_all", []() {
+    py::gil_scoped_release release;
+    ur::Scheduler::instance().sync_all();
+  });
 }
 
 PYBIND11_MODULE(ukernel, m) {
@@ -112,6 +147,5 @@ PYBIND11_MODULE(ukernel, m) {
   bind_parallel_rule(m);
   bind_operator(m);
   bind_factory(m);
-
-  m.def("run", &run_ops, "Run a list of operators");
+  bind_scheduler(m);
 }

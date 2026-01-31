@@ -4,7 +4,9 @@
 #include "transport.h"
 #include <iostream>
 #include <queue>
+#include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace UKernel {
@@ -51,17 +53,50 @@ struct Executor {
   }
 };
 
+struct SchedulerConfig {
+  // TODO:
+  int dummy = 0;
+};
+
 class Scheduler {
  public:
+  static Scheduler& instance() {
+    static Scheduler inst;
+    return inst;
+  }
+
+  void init(SchedulerConfig cfg);
+  bool is_initialized() const;
+
+  void reset();
+
+  // enqueue
   void add_operator(Operator const& op);
+  // execution
   void run();
 
+  void sync(uint64_t op_id);
+  void sync_all();
+  bool poll(uint64_t op_id) const;
+
  private:
+  Scheduler() = default;
+  ~Scheduler() = default;
+  Scheduler(Scheduler const&) = delete;
+  Scheduler& operator=(Scheduler const&) = delete;
+
   TaskType task_type_for_op(Operator const& op) const;
   void expand_operator(Operator const& op);
   void on_task_finish(uint64_t tid);
 
+  // execute a single ready task
+  bool step_one();
+  bool idle() const;
+
  private:
+  bool initialized_ = false;
+  SchedulerConfig cfg_{};
+
   std::unordered_map<uint64_t, Operator> ops_;
   std::unordered_map<uint64_t, Task> tasks_;
 
@@ -69,6 +104,10 @@ class Scheduler {
   std::queue<uint64_t> ready_comm_;
 
   uint64_t next_task_id_ = 0;
+  size_t pending_tasks_ = 0;
+
+  std::unordered_map<uint64_t, int> op_remaining_tasks_;
+  std::unordered_set<uint64_t> completed_ops_;
 };
 
 }  // namespace Runtime

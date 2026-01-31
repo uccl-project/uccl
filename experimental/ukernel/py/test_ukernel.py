@@ -86,9 +86,16 @@ def build_moe_dag():
 
 
 def main():
-    ops, _ = build_moe_dag()
-    ukernel.run(ops)
+    cfg = ukernel.SchedulerConfig()
+    cfg.dummy = 0
+    ukernel.init(cfg)
 
+    ops, _ = build_moe_dag()
+    for op in ops:
+        ukernel.add(op)
+    
+    ukernel.run()
+    ukernel.sync_all()
 
 if __name__ == "__main__":
     main()
