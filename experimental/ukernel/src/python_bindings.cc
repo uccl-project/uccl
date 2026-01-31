@@ -58,40 +58,42 @@ void bind_operator(py::module_& m) {
 }
 
 void bind_factory(py::module_& m) {
+  m.def("reset_op_id", &ur::OperatorFactory::ResetId,
+        py::arg("start_from") = 1);
+
   // P2P
-  m.def("p2p_send", &ur::OperatorFactory::P2PSend, py::arg("id"),
-        py::arg("src"), py::arg("dst"), py::arg("parallel_rule"),
-        py::arg("deps") = std::vector<uint64_t>{});
-
-  m.def("p2p_recv", &ur::OperatorFactory::P2PRecv, py::arg("id"),
-        py::arg("src"), py::arg("dst"), py::arg("parallel_rule"),
-        py::arg("deps") = std::vector<uint64_t>{});
-
-  // Collective
-  m.def("all_reduce", &ur::OperatorFactory::AllReduce, py::arg("id"),
-        py::arg("src"), py::arg("dst"), py::arg("reduce_kind"),
-        py::arg("parallel_rule"), py::arg("deps") = std::vector<uint64_t>{});
-
-  m.def("all_to_all", &ur::OperatorFactory::AllToAll, py::arg("id"),
-        py::arg("src"), py::arg("dst"), py::arg("parallel_rule"),
-        py::arg("deps") = std::vector<uint64_t>{});
-
-  // Compute
-  m.def("gemm", &ur::OperatorFactory::Gemm, py::arg("id"), py::arg("src"),
+  m.def("p2p_send", &ur::OperatorFactory::P2PSend, py::arg("src"),
         py::arg("dst"), py::arg("parallel_rule"),
         py::arg("deps") = std::vector<uint64_t>{});
 
+  m.def("p2p_recv", &ur::OperatorFactory::P2PRecv, py::arg("src"),
+        py::arg("dst"), py::arg("parallel_rule"),
+        py::arg("deps") = std::vector<uint64_t>{});
+
+  // Collective
+  m.def("all_reduce", &ur::OperatorFactory::AllReduce, py::arg("src"),
+        py::arg("dst"), py::arg("reduce_kind"), py::arg("parallel_rule"),
+        py::arg("deps") = std::vector<uint64_t>{});
+
+  m.def("all_to_all", &ur::OperatorFactory::AllToAll, py::arg("src"),
+        py::arg("dst"), py::arg("parallel_rule"),
+        py::arg("deps") = std::vector<uint64_t>{});
+
+  // Compute
+  m.def("gemm", &ur::OperatorFactory::Gemm, py::arg("src"), py::arg("dst"),
+        py::arg("parallel_rule"), py::arg("deps") = std::vector<uint64_t>{});
+
   // MoE
-  m.def("moe_routing", &ur::OperatorFactory::MoeRouting, py::arg("id"),
-        py::arg("src"), py::arg("dst"), py::arg("parallel_rule"),
+  m.def("moe_routing", &ur::OperatorFactory::MoeRouting, py::arg("src"),
+        py::arg("dst"), py::arg("parallel_rule"),
         py::arg("deps") = std::vector<uint64_t>{});
 
-  m.def("moe_expert_gemm", &ur::OperatorFactory::MoeExpertGemm, py::arg("id"),
-        py::arg("src"), py::arg("dst"), py::arg("parallel_rule"),
+  m.def("moe_expert_gemm", &ur::OperatorFactory::MoeExpertGemm, py::arg("src"),
+        py::arg("dst"), py::arg("parallel_rule"),
         py::arg("deps") = std::vector<uint64_t>{});
 
-  m.def("moe_combine", &ur::OperatorFactory::MoeCombine, py::arg("id"),
-        py::arg("src"), py::arg("dst"), py::arg("parallel_rule"),
+  m.def("moe_combine", &ur::OperatorFactory::MoeCombine, py::arg("src"),
+        py::arg("dst"), py::arg("parallel_rule"),
         py::arg("deps") = std::vector<uint64_t>{});
 }
 

@@ -98,11 +98,16 @@ struct Operator {
 };
 
 struct OperatorFactory {
-  static Operator base(uint64_t id, OpType type, torch::Tensor src,
-                       torch::Tensor dst, ParallelRule rule,
-                       std::vector<uint64_t> deps) {
+ private:
+  static inline std::atomic<uint64_t> g_next_id{1};
+  static uint64_t next_id() {
+    return g_next_id.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  static Operator base(OpType type, torch::Tensor src, torch::Tensor dst,
+                       ParallelRule rule, std::vector<uint64_t> deps) {
     Operator op;
-    op.id = id;
+    op.id = next_id();
     op.type = type;
     op.src = src;
     op.dst = dst;
@@ -117,65 +122,70 @@ struct OperatorFactory {
     return op;
   }
 
+ public:
+  static void ResetId(uint64_t start_from = 1) {
+    g_next_id.store(start_from, std::memory_order_relaxed);
+  }
+
   // P2P
-  static Operator P2PSend(uint64_t id, torch::Tensor src, torch::Tensor dst,
+  static Operator P2PSend(torch::Tensor src, torch::Tensor dst,
                           ParallelRule rule, std::vector<uint64_t> deps = {}) {
-    Operator op = base(id, OpType::P2P, src, dst, rule, std::move(deps));
+    Operator op = base(OpType::P2P, src, dst, rule, std::move(deps));
     op.p2p_kind = P2PKind::Send;
     return op;
   }
 
-  static Operator P2PRecv(uint64_t id, torch::Tensor src, torch::Tensor dst,
+  static Operator P2PRecv(torch::Tensor src, torch::Tensor dst,
                           ParallelRule rule, std::vector<uint64_t> deps = {}) {
-    Operator op = base(id, OpType::P2P, src, dst, rule, std::move(deps));
+    Operator op = base(OpType::P2P, src, dst, rule, std::move(deps));
     op.p2p_kind = P2PKind::Recv;
     return op;
   }
 
   // Collective
-  static Operator AllReduce(uint64_t id, torch::Tensor src, torch::Tensor dst,
+  static Operator AllReduce(torch::Tensor src, torch::Tensor dst,
                             ReduceKind kind, ParallelRule rule,
                             std::vector<uint64_t> deps = {}) {
-    Operator op = base(id, OpType::Collective, src, dst, rule, std::move(deps));
+    Operator op = base(OpType::Collective, src, dst, rule, std::move(deps));
     op.collective_kind = CollectiveKind::AllReduce;
     op.reduce_kind = kind;
     return op;
   }
 
-  static Operator AllToAll(uint64_t id, torch::Tensor src, torch::Tensor dst,
+  static Operator AllToAll(torch::Tensor src, torch::Tensor dst,
                            ParallelRule rule, std::vector<uint64_t> deps = {}) {
-    Operator op = base(id, OpType::Collective, src, dst, rule, std::move(deps));
+    Operator op = base(OpType::Collective, src, dst, rule, std::move(deps));
     op.collective_kind = CollectiveKind::AllToAll;
     return op;
   }
 
   // Generic Compute
-  static Operator Gemm(uint64_t id, torch::Tensor src, torch::Tensor dst,
-                       ParallelRule rule, std::vector<uint64_t> deps = {}) {
-    return base(id, OpType::Compute, src, dst, rule, std::move(deps));
+  static Operator Gemm(torch::Tensor src, torch::Tensor dst, ParallelRule rule,
+                       std::vector<uint64_t> deps = {}) {
+    return base(OpType::Compute, src, dst, rule, std::move(deps));
   }
 
   // MoE
-  static Operator MoeRouting(uint64_t id, torch::Tensor src, torch::Tensor dst,
+  static Operator MoeRouting(torch::Tensor src, torch::Tensor dst,
                              ParallelRule rule,
                              std::vector<uint64_t> deps = {}) {
-    Operator op = base(id, OpType::Moe, src, dst, rule, std::move(deps));
+    Operator op = base(OpType::Moe, src, dst, rule, std::move(deps));
     op.moe_kind = MoeKind::Routing;
     return op;
   }
 
-  static Operator MoeExpertGemm(uint64_t id, torch::Tensor src,
-                                torch::Tensor dst, ParallelRule rule,
+  static Operator MoeExpertGemm(torch::Tensor src, torch::Tensor dst,
+                                ParallelRule rule,
                                 std::vector<uint64_t> deps = {}) {
-    Operator op = base(id, OpType::Moe, src, dst, rule, std::move(deps));
+    Operator op = base(OpType::Moe, src, dst, rule, std::move(deps));
     op.moe_kind = MoeKind::ExpertGemm;
     return op;
   }
 
-  static Operator MoeCombine(uint64_t id, torch::Tensor src, torch::Tensor dst,
+  static Operator MoeCombine(torch::Tensor src, torch::Tensor dst,
                              ParallelRule rule,
                              std::vector<uint64_t> deps = {}) {
-    Operator op = base(id, OpType::Moe, src, dst, rule, std::move(deps));
+    Operator op = base(OpType::Moe, src, dst, rule, std::move(deps));
     op.moe_kind = MoeKind::Combine;
     return op;
   }
