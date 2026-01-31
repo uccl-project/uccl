@@ -1,5 +1,6 @@
 #include "nccl/nccl_endpoint.h"
 #include "util/gpu_rt.h"
+#include "util/net.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <cerrno>
@@ -7,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <thread>
 #include <sys/socket.h>
@@ -83,6 +85,23 @@ int get_env_int(char const* key, int def) {
   long parsed = std::strtol(v, &end, 10);
   if (end == v || parsed <= 0 || parsed > 65535) return def;
   return static_cast<int>(parsed);
+}
+
+int get_tcp_numa_node_from_iface() {
+  char if_names[uccl::MAX_IF_NAME_SIZE] = {};
+  uccl::socketAddress if_addrs[1];
+  int n = uccl::find_interfaces(if_names, if_addrs, uccl::MAX_IF_NAME_SIZE, 1);
+  if (n <= 0) {
+    return 0;
+  }
+  std::string ifname(if_names);
+  std::string path = "/sys/class/net/" + ifname + "/device/numa_node";
+  std::ifstream file(path);
+  int numa_node = -1;
+  if (!(file >> numa_node)) {
+    return 0;
+  }
+  return numa_node < 0 ? 0 : numa_node;
 }
 
 // Record an event on record_stream and make wait_stream wait on it.

@@ -56,6 +56,8 @@ class EpollClient;
 
 namespace tcp {
 
+int get_tcp_numa_node_from_iface();
+
 // Placeholder for RDMA-style MR arrays. TCP does not register memory, but the
 // unified interface expects the type.
 struct MRArray {
