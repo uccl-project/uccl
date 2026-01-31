@@ -66,23 +66,6 @@ int get_env_int(char const* key, int def) {
   return static_cast<int>(parsed);
 }
 
-int get_tcp_numa_node_from_iface() {
-  char if_names[uccl::MAX_IF_NAME_SIZE] = {};
-  uccl::socketAddress if_addrs[1];
-  int n = uccl::find_interfaces(if_names, if_addrs, uccl::MAX_IF_NAME_SIZE, 1);
-  if (n <= 0) {
-    return 0;
-  }
-  std::string ifname(if_names);
-  std::string path = "/sys/class/net/" + ifname + "/device/numa_node";
-  std::ifstream file(path);
-  int numa_node = -1;
-  if (!(file >> numa_node)) {
-    return 0;
-  }
-  return numa_node < 0 ? 0 : numa_node;
-}
-
 // Record an event on record_stream and make wait_stream wait on it.
 bool record_and_wait(gpuStream_t record_stream, gpuStream_t wait_stream) {
   gpuEvent_t evt = nullptr;
@@ -98,23 +81,6 @@ bool record_and_wait(gpuStream_t record_stream, gpuStream_t wait_stream) {
     return false;
   }
   gpuEventDestroy(evt);
-  return true;
-}
-
-bool record_request_event(gpuStream_t stream, uccl::ucclRequest* ureq,
-                          int comm_index) {
-  gpuEvent_t evt = nullptr;
-  if (gpuEventCreateWithFlags(&evt, gpuEventDisableTiming) != gpuSuccess) {
-    return false;
-  }
-  if (gpuEventRecord(evt, stream) != gpuSuccess) {
-    gpuEventDestroy(evt);
-    return false;
-  }
-  auto* handle = new AsyncHandle();
-  handle->event = evt;
-  ureq->context = handle;
-  ureq->engine_idx = comm_index;
   return true;
 }
 
@@ -149,6 +115,23 @@ uccl::ConnID make_invalid_conn() {
   return invalid;
 }
 }  // namespace
+
+int get_tcp_numa_node_from_iface() {
+  char if_names[MAX_IF_NAME_SIZE] = {};
+  uccl::socketAddress if_addrs[1];
+  int n = uccl::find_interfaces(if_names, if_addrs, MAX_IF_NAME_SIZE, 1);
+  if (n <= 0) {
+    return 0;
+  }
+  std::string ifname(if_names);
+  std::string path = "/sys/class/net/" + ifname + "/device/numa_node";
+  std::ifstream file(path);
+  int numa_node = -1;
+  if (!(file >> numa_node)) {
+    return 0;
+  }
+  return numa_node < 0 ? 0 : numa_node;
+}
 
 struct TCPEndpoint::Conn {
   // One TCP control socket + two NCCL communicators (one per direction).
@@ -369,7 +352,21 @@ bool TCPEndpoint::send_internal_(Conn& conn, void const* data, size_t size,
     return false;
   }
 
-  return record_request_event(conn.stream[comm_index], ureq, comm_index);
+  gpuEvent_t evt = nullptr;
+  if (gpuEventCreateWithFlags(&evt, gpuEventDisableTiming) != gpuSuccess) {
+    return false;
+  }
+  if (gpuEventRecord(evt, conn.stream[comm_index]) != gpuSuccess) {
+    gpuEventDestroy(evt);
+    return false;
+  }
+
+  // Track completion via ucclRequest.
+  auto* handle = new AsyncHandle();
+  handle->event = evt;
+  ureq->context = handle;
+  ureq->engine_idx = comm_index;
+  return true;
 }
 
 bool TCPEndpoint::recv_internal_(Conn& conn, void* data, size_t size,
@@ -395,7 +392,21 @@ bool TCPEndpoint::recv_internal_(Conn& conn, void* data, size_t size,
     return false;
   }
 
-  return record_request_event(conn.stream[comm_index], ureq, comm_index);
+  gpuEvent_t evt = nullptr;
+  if (gpuEventCreateWithFlags(&evt, gpuEventDisableTiming) != gpuSuccess) {
+    return false;
+  }
+  if (gpuEventRecord(evt, conn.stream[comm_index]) != gpuSuccess) {
+    gpuEventDestroy(evt);
+    return false;
+  }
+
+  // Track completion via ucclRequest.
+  auto* handle = new AsyncHandle();
+  handle->event = evt;
+  ureq->context = handle;
+  ureq->engine_idx = comm_index;
+  return true;
 }
 
 void TCPEndpoint::cleanup_conn_(Conn& conn) {
