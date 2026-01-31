@@ -413,4 +413,6 @@ auto gpuCallocHostUnique(size_t nelems = 1,
 
 }  // namespace detail
 
+constexpr size_t DEFAULT_FIFO_SIZE = 512;
+
 }  // namespace mscclpp
