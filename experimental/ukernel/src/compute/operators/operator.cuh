@@ -39,8 +39,9 @@ struct TkMatmulGlobals {
 };
 
 // Level_08 GEMM device kernel
-__device__ void run_tk_gemm(TkMatmulGlobals const& g, int tile_row,
-                            int tile_col, char* smem) {
+__device__ __forceinline__ void run_tk_gemm(TkMatmulGlobals const& g,
+                                            int tile_row, int tile_col,
+                                            char* smem) {
   shared_allocator al((int*)smem);
   st_bf<TK_BLOCK_SIZE, TK_BLOCK_SIZE>(&As)[2][TK_M_BLOCK] =
       al.allocate<st_bf<TK_BLOCK_SIZE, TK_BLOCK_SIZE>, 2, TK_M_BLOCK>();
