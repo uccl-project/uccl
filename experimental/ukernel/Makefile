@@ -7,9 +7,8 @@ CONDA_LIB_HOME ?= /usr/lib
 # ThunderKittens
 TK_ROOT := /home/calebzhang/uccl/thirdparty/ThunderKittens
 
-# GPU architecture detection
-DETECTED_SM := $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -d '.')
-SM ?= $(if $(DETECTED_SM),$(DETECTED_SM),90a)
+# GPU architecture - use sm_90a for TMA/wgmma support
+SM ?= 90a
 
 # Base compilation flags
 CXXFLAGS   := -O0 -std=c++17 -Wall -Wno-unused-function -pthread -fPIC \
@@ -142,4 +141,11 @@ clean:
 # Include dependencies
 -include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_TEST:.o=.d)
 
-.PHONY: all clean run_test
+# [TODO: Yihan]Build only TK GEMM operator , need python binding later
+tk_gemm: src/compute/operator.o
+	@echo "TK GEMM operator compiled: src/compute/operator.o"
+
+src/compute/operator.o: src/compute/operator.cu
+	$(NVCC) $(NVCCFLAGS) -Iinclude -Isrc/transport -Isrc/compute -Isrc/compute/fifo -MMD -MP -c $< -o $@
+
+.PHONY: all clean run_test tk_gemm
