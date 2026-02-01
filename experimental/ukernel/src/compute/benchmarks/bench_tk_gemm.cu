@@ -3,8 +3,8 @@
 #include "task.h"
 #include <chrono>
 #include <cstdio>
-#include <cuda_bf16.h>
 #include <random>
+#include <cuda_bf16.h>
 
 using namespace UKernel::Compute;
 using bf16 = __nv_bfloat16;
@@ -101,12 +101,13 @@ int main() {
   for (int tr = 0; tr < num_tile_rows; tr++) {
     for (int tc = 0; tc < num_tile_cols; tc++) {
       GemmArgs gemm_args{d_globals, (uint32_t)tr, (uint32_t)tc, 0};
-      Task task =
-          TaskManager::instance().create_gemm_task(gemm_args, DataType::Fp16, 0);
+      Task task = TaskManager::instance().create_gemm_task(gemm_args,
+                                                           DataType::Fp16, 0);
       last_task_id = kernel.submit(task);
     }
   }
-  while (!kernel.is_done(0, last_task_id)) {}
+  while (!kernel.is_done(0, last_task_id)) {
+  }
   uint64_t t1 = now_ns();
 
   printf("GEMM completed: %.2f us (%d tiles)\n", (t1 - t0) / 1e3,
