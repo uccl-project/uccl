@@ -1,0 +1,4 @@
+obj/
+*.so
+test_float_compress
+!test_float_compress.cu
