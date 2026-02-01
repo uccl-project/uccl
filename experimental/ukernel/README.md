@@ -30,6 +30,10 @@ CUDA_VISIBLE_DEVICES=5 ./test_main --role=server-notifier
 CUDA_VISIBLE_DEVICES=5 ./test_main --role=client-notifier
 ```
 
+```
+CUDA_VISIBLE_DEVICES=5 python py/test_p2p.py
+```
+
 
 ## compute develpment
 on AMD
