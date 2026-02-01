@@ -2,7 +2,7 @@
 
 #include "cb.h"
 #include "util.h"
-#include <glog/logging.h>
+#include "util/logging.h"
 #include <atomic>
 #include <deque>
 #include <functional>
