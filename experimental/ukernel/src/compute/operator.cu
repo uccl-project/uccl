@@ -83,8 +83,7 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* c2d_fifos,
                                      mscclpp::SmDeviceHandle<T>* sm_fifos,
                                      mscclpp::FifoDeviceHandle* d2c_fifo,
                                      CollArgs* d_coll, MoeArgs* d_moe,
-                                     GemmArgs* d_gemm,
-                                     bool* should_stop) {
+                                     GemmArgs* d_gemm, bool* should_stop) {
   extern __shared__ char smem[];
   (void)d_moe;
 

@@ -205,7 +205,8 @@ class PersistentKernel {
               UKernel::Compute::TaskManager::instance().free_moe_args(p.argsId);
               break;
             case TaskType::TkGemm:
-              UKernel::Compute::TaskManager::instance().free_gemm_args(p.argsId);
+              UKernel::Compute::TaskManager::instance().free_gemm_args(
+                  p.argsId);
               break;
             case TaskType::BenchNop:
               break;
