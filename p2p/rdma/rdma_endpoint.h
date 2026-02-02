@@ -8,6 +8,7 @@
 #include "rdma_ctrl_channel.h"
 #include "rdma_device.h"
 #include "util/net.h"
+#include "util/timer.h"
 #include <glog/logging.h>
 
 class NICEndpoint {
