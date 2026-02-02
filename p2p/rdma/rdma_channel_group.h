@@ -2,7 +2,6 @@
 #include "define.h"
 #include "rdma_channel.h"
 #include "rdma_ctrl_channel.h"
-#include "util/timer.h"
 #include <random>
 
 class ChannelGroup {
@@ -303,42 +302,18 @@ class SendChannelGroup : public ChannelGroup {
   // Send a request through the appropriate channel
   // Returns true on success, false on failure
   bool postRequestOnChannel(std::shared_ptr<RDMASendRequest> req) {
-    static thread_local double g_getchannel_time_us = 0;
-    static thread_local double g_submit_time_us = 0;
-    static thread_local int g_call_count = 0;
-    
-    uccl::ChronoTimer getchannel_timer;
     auto channel = getChannel(req->channel_id);
     if (unlikely(!channel)) {
       LOG(WARNING) << "SendChannelGroup: Channel not found for channel_id "
                    << req->channel_id;
       return false;
     }
-    g_getchannel_time_us += getchannel_timer.get_us();
 
-    uccl::ChronoTimer submit_timer;
     int64_t send_ret = channel->submitRequest(req);
     if (send_ret < 0) {
       LOG(WARNING) << "SendChannelGroup: Failed to send on channel_id "
                    << req->channel_id;
       return false;
-    }
-    g_submit_time_us += submit_timer.get_us();
-    
-    g_call_count++;
-    
-    // Log every 100 calls
-    if (g_call_count % 100 == 0) {
-      double total = g_getchannel_time_us + g_submit_time_us;
-      std::cout << "[postRequestOnChannel TIMING] calls=" << g_call_count
-                << " getChannel=" << g_getchannel_time_us << "us ("
-                << (g_getchannel_time_us/total*100) << "%)"
-                << " submitRequest=" << g_submit_time_us << "us ("
-                << (g_submit_time_us/total*100) << "%)\n";
-      // Reset for next batch
-      g_getchannel_time_us = 0;
-      g_submit_time_us = 0;
-      g_call_count = 0;
     }
 
     return true;
@@ -355,32 +330,20 @@ class SendChannelGroup : public ChannelGroup {
   }
 
   void postChunkedRequest(std::shared_ptr<RDMASendRequest> req) {
-    static thread_local double g_split_time_us = 0;
-    static thread_local double g_setup_time_us = 0;
-    static thread_local double g_create_time_us = 0;
-    static thread_local double g_post_time_us = 0;
-    static thread_local int g_call_count = 0;
-    
     // Split message into chunks
-    uccl::ChronoTimer split_timer;
     size_t message_size = req->local_mem->size;
     auto chunks = splitMessageToChunks(message_size);
-    // LOG(INFO) << "SendChannelGroup: Splitting message into " << chunks.size()
-    //           << " chunks (message_size: " << message_size << ")";
+
     size_t num_channels = normalChannelCount();
     tracker_->updateExpectedAckCount(req->wr_id, chunks.size());
-    g_split_time_us += split_timer.get_us();
-        
+
     for (size_t i = 0; i < chunks.size(); ++i) {
       auto const& chunk = chunks[i];
 
-      uccl::ChronoTimer setup_timer;
       // Use different channel for each chunk: round-robin
       uint32_t chunk_channel_id =
           ((req->channel_id - 1 + i) % num_channels) + 1;
-      g_setup_time_us += setup_timer.get_us();
 
-      uccl::ChronoTimer create_timer;
       // Create RegMemBlock for this chunk
       auto chunk_local_mem = std::make_shared<RegMemBlock>(
           static_cast<char*>(req->local_mem->addr) + chunk.offset, chunk.size,
@@ -402,47 +365,15 @@ class SendChannelGroup : public ChannelGroup {
       chunk_req->wr_id = req->wr_id;
       // Inherit the send type from the original request.
       chunk_req->send_type = req->send_type;
-      g_create_time_us += create_timer.get_us();
-      
+
       // Send the chunk
-      uccl::ChronoTimer post_timer;
-      if (postRequestOnChannel(chunk_req)) {
-        // LOG(INFO) << "SendChannelGroup: Sent chunk " << i << "/"
-        //           << chunks.size() << " (offset: " << chunk.offset
-        //           << ", size: " << chunk.size
-        //           << ", channel_id: " << chunk_channel_id << ")" << std::endl;
-      } else {
+      if (!postRequestOnChannel(chunk_req)) {
         LOG(WARNING) << "SendChannelGroup: Failed to send chunk " << i
                      << " (offset: " << chunk.offset << ", size: " << chunk.size
                      << ", channel_id: " << chunk_channel_id << ")";
       }
-      g_post_time_us += post_timer.get_us();
-    }
-    
-    g_call_count++;
-    
-    // Log every 100 calls
-    if (g_call_count % 100 == 0) {
-      double total = g_split_time_us + g_setup_time_us + g_create_time_us + g_post_time_us;
-      std::cout << "[postChunkedRequest TIMING] calls=" << g_call_count
-                << " total_chunks=" << chunks.size()
-                << " split=" << g_split_time_us << "us ("
-                << (g_split_time_us/total*100) << "%)"
-                << " setup=" << g_setup_time_us << "us ("
-                << (g_setup_time_us/total*100) << "%)"
-                << " create=" << g_create_time_us << "us ("
-                << (g_create_time_us/total*100) << "%)"
-                << " post=" << g_post_time_us << "us ("
-                << (g_post_time_us/total*100) << "%)\n";
-      // Reset for next batch
-      g_split_time_us = 0;
-      g_setup_time_us = 0;
-      g_create_time_us = 0;
-      g_post_time_us = 0;
-      g_call_count = 0;
     }
   }
-
   void processSendRequests() {
     if (unlikely(ctrl_channel_ == nullptr)) {
       return;

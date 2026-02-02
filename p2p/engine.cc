@@ -1,5 +1,4 @@
 #include "engine.h"
-#include "util/timer.h"
 #include "endpoint_wrapper.h"
 #include "util/util.h"
 #include <arpa/inet.h>
@@ -796,7 +795,6 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> dst_v, std::vector<size_t> size_v,
                      std::vector<FifoItem> slot_item_v, size_t num_iovs) {
-  uccl::ChronoTimer total_timer;
   auto* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
     std::cerr << "[readv] Error: Invalid conn_id " << conn_id << std::endl;
@@ -809,7 +807,6 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   std::vector<bool> read(num_iovs, false);
   std::vector<P2PMhandle*> mhandles(num_iovs);
 
-  uccl::ChronoTimer prep_timer;
   // Check if mhandles are all valid
   for (size_t i = 0; i < num_iovs; i++) {
     mhandles[i] = get_mhandle(mr_id_v[i]);
@@ -818,15 +815,8 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       return false;
     }
   }
-  double prep_time_us = prep_timer.get_us();
-
-  uccl::ChronoTimer issue_timer;
-  double total_issue_time_us = 0;
-  double total_poll_time_us = 0;
-  int poll_iterations = 0;
 
   while (true) {
-    uccl::ChronoTimer issue_batch_timer;
     for (size_t i = 0; i < num_iovs; i++) {
       if (done[i]) continue;
 
@@ -839,35 +829,19 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
           read[i] = true;
         }
       }
-    }
-    total_issue_time_us += issue_batch_timer.get_us();
 
-    uccl::ChronoTimer poll_timer;
-    for (size_t i = 0; i < num_iovs; i++) {
       if (read[i] && !done[i]) {
         if (uccl_poll_ureq_once(ep_, &ureq[i])) {
           done[i] = true;
         }
       }
     }
-    total_poll_time_us += poll_timer.get_us();
-    poll_iterations++;
 
     if (std::all_of(done.begin(), done.end(), [](bool b) { return b; })) {
       break;
     }
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
   }
-
-  double total_time_us = total_timer.get_us();
-
-  std::cout << "[readv TIMING] num_iovs=" << num_iovs
-            << " total=" << total_time_us << "us"
-            << " prep=" << prep_time_us << "us (" << (prep_time_us/total_time_us*100) << "%)"
-            << " issue=" << total_issue_time_us << "us (" << (total_issue_time_us/total_time_us*100) << "%)"
-            << " poll=" << total_poll_time_us << "us (" << (total_poll_time_us/total_time_us*100) << "%)"
-            << " poll_iters=" << poll_iterations
-            << " avg_poll=" << (total_poll_time_us/poll_iterations) << "us\n";
 
   return true;
 }

@@ -8,7 +8,6 @@
 #include "rdma_ctrl_channel.h"
 #include "rdma_device.h"
 #include "util/net.h"
-#include "util/timer.h"
 #include <glog/logging.h>
 
 class NICEndpoint {
@@ -173,12 +172,6 @@ class NICEndpoint {
   }
 
   int64_t writeOrRead(std::shared_ptr<RDMASendRequest> req) {
-    static thread_local double g_find_time_us = 0;
-    static thread_local double g_post_time_us = 0;
-    static thread_local int g_call_count = 0;
-    static thread_local int g_retry_count = 0;
-    
-    uccl::ChronoTimer find_timer;
     uint64_t rank_id = req->to_rank_id;
     auto it = send_channel_groups_.find(rank_id);
     if (it == send_channel_groups_.end()) {
@@ -186,38 +179,16 @@ class NICEndpoint {
                                std::to_string(rank_id));
     }
     auto send_group = it->second;
-    g_find_time_us += find_timer.get_us();
     
     int64_t wr_id = -1;
 
     // Blocking call until send succeeds
-    uccl::ChronoTimer post_timer;
     while (wr_id < 0) {
-      // LOG(INFO) << "NICEndpoint::write - Attempting to send to rank_id: "
-      //           << rank_id << ", peer rank_id " << rank_id;
       wr_id = send_group->postWriteOrRead(req);
 
       if (wr_id < 0) {
-        g_retry_count++;
         std::this_thread::sleep_for(std::chrono::microseconds(10));
       }
-    }
-    g_post_time_us += post_timer.get_us();
-    g_call_count++;
-    
-    // Log every 100 calls
-    if (g_call_count % 100 == 0) {
-      std::cout << "[writeOrRead TIMING] calls=" << g_call_count
-                << " find=" << g_find_time_us << "us ("
-                << (g_find_time_us/(g_find_time_us+g_post_time_us)*100) << "%)"
-                << " post=" << g_post_time_us << "us ("
-                << (g_post_time_us/(g_find_time_us+g_post_time_us)*100) << "%)"
-                << " retries=" << g_retry_count << "\n";
-      // Reset for next batch
-      g_find_time_us = 0;
-      g_post_time_us = 0;
-      g_call_count = 0;
-      g_retry_count = 0;
     }
 
     return wr_id;

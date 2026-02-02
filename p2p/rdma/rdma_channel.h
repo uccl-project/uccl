@@ -33,7 +33,9 @@ class RDMAChannel {
         channel_id_(channel_id),
         local_meta_(std::make_shared<ChannelMetaData>()),
         remote_meta_(std::make_shared<ChannelMetaData>()),
-        impl_(createRDMAChannelImpl()) {
+        impl_(createRDMAChannelImpl()),
+        inflight_requests_(0),
+        max_inflight_requests_(kMaxSendWr / 2) {  // Use half of queue depth for safety
     initQP();
   }
 
@@ -47,7 +49,9 @@ class RDMAChannel {
         channel_id_(channel_id),
         local_meta_(std::make_shared<ChannelMetaData>()),
         remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)),
-        impl_(createRDMAChannelImpl()) {
+        impl_(createRDMAChannelImpl()),
+        inflight_requests_(0),
+        max_inflight_requests_(kMaxSendWr / 2) {  // Use half of queue depth for safety
     initQP();
     establishChannel(remote_meta);
   }
@@ -107,6 +111,13 @@ class RDMAChannel {
     uint32_t nb_post_recv = 0;
     bool result = impl_->poll_once(cq_ex_, cq_datas, channel_id_, nb_post_recv);
     impl_->lazy_post_recv_wrs_n(qp_, nb_post_recv, false);
+    
+    // Decrement inflight counter for each completed request
+    if (result && !cq_datas.empty()) {
+      uint32_t completed = cq_datas.size();
+      inflight_requests_.fetch_sub(completed, std::memory_order_release);
+    }
+    
     return result;
   }
 
@@ -141,6 +152,10 @@ class RDMAChannel {
   std::shared_ptr<AtomicBitmapPacketTracker> tracker_;
   std::unique_ptr<RDMAChannelImpl> impl_;
 
+  // Flow control members
+  std::atomic<uint32_t> inflight_requests_;
+  uint32_t max_inflight_requests_;
+
   struct ibv_cq_ex* getCQ() const {
     return cq_ex_;
   }
@@ -152,6 +167,15 @@ class RDMAChannel {
   // Post send request based on send_type
   // Returns 0 on success, error code on failure
   inline int postRequest(std::shared_ptr<RDMASendRequest> req) {
+    // Flow control: wait if too many requests are in flight
+    while (inflight_requests_.load(std::memory_order_acquire) >= max_inflight_requests_) {
+      // Busy wait - could be optimized with a condition variable if needed
+      std::this_thread::yield();
+    }
+    
+    // Increment inflight counter before posting
+    inflight_requests_.fetch_add(1, std::memory_order_release);
+    
     auto* qpx = ibv_qp_to_qp_ex(qp_);
     ibv_wr_start(qpx);
     // LOG(INFO) << *req;
