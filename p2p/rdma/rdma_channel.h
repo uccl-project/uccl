@@ -58,6 +58,7 @@ class RDMAChannel {
   ~RDMAChannel() {
     if (qp_) ibv_destroy_qp(qp_);
     if (cq_ex_) ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex_));
+    if (ah_) ibv_destroy_ah(ah_);
   }
 
   void establishChannel(ChannelMetaData const& remote_meta) {
