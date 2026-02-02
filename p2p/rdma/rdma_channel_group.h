@@ -303,18 +303,42 @@ class SendChannelGroup : public ChannelGroup {
   // Send a request through the appropriate channel
   // Returns true on success, false on failure
   bool postRequestOnChannel(std::shared_ptr<RDMASendRequest> req) {
+    static thread_local double g_getchannel_time_us = 0;
+    static thread_local double g_submit_time_us = 0;
+    static thread_local int g_call_count = 0;
+    
+    uccl::ChronoTimer getchannel_timer;
     auto channel = getChannel(req->channel_id);
     if (unlikely(!channel)) {
       LOG(WARNING) << "SendChannelGroup: Channel not found for channel_id "
                    << req->channel_id;
       return false;
     }
+    g_getchannel_time_us += getchannel_timer.get_us();
 
+    uccl::ChronoTimer submit_timer;
     int64_t send_ret = channel->submitRequest(req);
     if (send_ret < 0) {
       LOG(WARNING) << "SendChannelGroup: Failed to send on channel_id "
                    << req->channel_id;
       return false;
+    }
+    g_submit_time_us += submit_timer.get_us();
+    
+    g_call_count++;
+    
+    // Log every 100 calls
+    if (g_call_count % 100 == 0) {
+      double total = g_getchannel_time_us + g_submit_time_us;
+      std::cout << "[postRequestOnChannel TIMING] calls=" << g_call_count
+                << " getChannel=" << g_getchannel_time_us << "us ("
+                << (g_getchannel_time_us/total*100) << "%)"
+                << " submitRequest=" << g_submit_time_us << "us ("
+                << (g_submit_time_us/total*100) << "%)\n";
+      // Reset for next batch
+      g_getchannel_time_us = 0;
+      g_submit_time_us = 0;
+      g_call_count = 0;
     }
 
     return true;
@@ -341,8 +365,8 @@ class SendChannelGroup : public ChannelGroup {
     uccl::ChronoTimer split_timer;
     size_t message_size = req->local_mem->size;
     auto chunks = splitMessageToChunks(message_size);
-    LOG(INFO) << "SendChannelGroup: Splitting message into " << chunks.size()
-              << " chunks (message_size: " << message_size << ")";
+    // LOG(INFO) << "SendChannelGroup: Splitting message into " << chunks.size()
+    //           << " chunks (message_size: " << message_size << ")";
     size_t num_channels = normalChannelCount();
     tracker_->updateExpectedAckCount(req->wr_id, chunks.size());
     g_split_time_us += split_timer.get_us();
