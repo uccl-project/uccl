@@ -803,112 +803,65 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     return false;
   }
 
-  // Throttling mechanism: split each vector element into chunks
-  ucclRequest ureq[kMaxInflightChunks] = {};
-  FifoItem curr_slot_item[kMaxInflightChunks] = {};
-  bool done[kMaxInflightChunks] = {false};
+  std::vector<ucclRequest> ureq(num_iovs);
+  std::vector<FifoItem> curr_slot_item(num_iovs);
+  std::vector<bool> done(num_iovs, false);
+  std::vector<bool> read(num_iovs, false);
+  std::vector<P2PMhandle*> mhandles(num_iovs);
 
   uccl::ChronoTimer prep_timer;
-  // Estimate total number of chunks needed
-  int estimated_ureq_max = 0;
+  // Check if mhandles are all valid
   for (size_t i = 0; i < num_iovs; i++) {
-    estimated_ureq_max += (size_v[i] + kChunkSize - 1) / kChunkSize;
-  }
-
-  // Pre-allocate vectors to avoid reallocations
-  std::vector<void*> data_read_vec;
-  std::vector<size_t> size_read_vec;
-  std::vector<P2PMhandle*> mhandle_read_vec;
-  std::vector<FifoItem> slot_item_vec;
-  data_read_vec.reserve(estimated_ureq_max);
-  size_read_vec.reserve(estimated_ureq_max);
-  mhandle_read_vec.reserve(estimated_ureq_max);
-  slot_item_vec.reserve(estimated_ureq_max);
-
-  // Split each iov into chunks
-  for (size_t i = 0; i < num_iovs; i++) {
-    P2PMhandle* mhandle = get_mhandle(mr_id_v[i]);
-    if (unlikely(mhandle == nullptr)) {
+    mhandles[i] = get_mhandle(mr_id_v[i]);
+    if (unlikely(mhandles[i] == nullptr)) {
       std::cerr << "[readv] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
       return false;
     }
-
-    void* cur_data = dst_v[i];
-    size_t cur_size_expected = size_v[i];
-    size_t cur_size_post_read = 0;
-    FifoItem base_slot_item = slot_item_v[i];
-
-    while (cur_size_post_read < cur_size_expected) {
-      size_t chunk_size = std::min(cur_size_expected - cur_size_post_read, kChunkSize);
-      FifoItem chunk_slot_item = base_slot_item;
-      chunk_slot_item.addr += cur_size_post_read;
-      chunk_slot_item.size = chunk_size;
-      
-      data_read_vec.push_back(cur_data);
-      size_read_vec.push_back(chunk_size);
-      mhandle_read_vec.push_back(mhandle);
-      slot_item_vec.push_back(chunk_slot_item);
-      
-      cur_data = static_cast<char*>(cur_data) + chunk_size;
-      cur_size_post_read += chunk_size;
-    }
   }
   double prep_time_us = prep_timer.get_us();
-
-  int ureq_max = data_read_vec.size();
-  int ureq_issued = 0, ureq_finished = 0;
 
   uccl::ChronoTimer issue_timer;
   double total_issue_time_us = 0;
   double total_poll_time_us = 0;
   int poll_iterations = 0;
 
-  while (ureq_finished < ureq_max) {
-    // Issue new requests up to kMaxInflightChunks limit
+  while (true) {
     uccl::ChronoTimer issue_batch_timer;
-    while (ureq_issued < ureq_max &&
-           ureq_issued - ureq_finished < kMaxInflightChunks &&
-           size_read_vec[ureq_issued] > 0) {
-      curr_slot_item[ureq_issued % kMaxInflightChunks] = slot_item_vec[ureq_issued];
-      memset(&ureq[ureq_issued % kMaxInflightChunks], 0, sizeof(ucclRequest));
-      
-      auto rc = uccl_read_async(ep_, conn, mhandle_read_vec[ureq_issued],
-                                data_read_vec[ureq_issued], size_read_vec[ureq_issued],
-                                curr_slot_item[ureq_issued % kMaxInflightChunks],
-                                &ureq[ureq_issued % kMaxInflightChunks]);
-      if (rc == -1) break;
-      
-      done[ureq_issued % kMaxInflightChunks] = false;
-      ureq_issued++;
+    for (size_t i = 0; i < num_iovs; i++) {
+      if (done[i]) continue;
+
+      if (!read[i]) {
+        curr_slot_item[i] = slot_item_v[i];
+        auto mhandle = mhandles[i];
+        auto rc = uccl_read_async(ep_, conn, mhandle, dst_v[i], size_v[i],
+                                  curr_slot_item[i], &ureq[i]);
+        if (rc != -1) {
+          read[i] = true;
+        }
+      }
     }
     total_issue_time_us += issue_batch_timer.get_us();
-    
-    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
 
-    // Poll all outstanding requests and mark which ones are done
     uccl::ChronoTimer poll_timer;
-    for (int i = ureq_finished; i < ureq_issued; i++) {
-      if (done[i % kMaxInflightChunks]) {
-        continue;
-      }
-      if (uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightChunks])) {
-        done[i % kMaxInflightChunks] = true;
+    for (size_t i = 0; i < num_iovs; i++) {
+      if (read[i] && !done[i]) {
+        if (uccl_poll_ureq_once(ep_, &ureq[i])) {
+          done[i] = true;
+        }
       }
     }
     total_poll_time_us += poll_timer.get_us();
     poll_iterations++;
 
-    // Advance the ureq_finished counter as far as possible
-    while (ureq_finished < ureq_issued &&
-           done[ureq_finished % kMaxInflightChunks]) {
-      ureq_finished++;
+    if (std::all_of(done.begin(), done.end(), [](bool b) { return b; })) {
+      break;
     }
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
   }
 
   double total_time_us = total_timer.get_us();
 
   std::cout << "[readv TIMING] num_iovs=" << num_iovs
-            << " chunks=" << ureq_max
             << " total=" << total_time_us << "us"
             << " prep=" << prep_time_us << "us (" << (prep_time_us/total_time_us*100) << "%)"
             << " issue=" << total_issue_time_us << "us (" << (total_issue_time_us/total_time_us*100) << "%)"

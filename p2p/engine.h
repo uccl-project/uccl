@@ -85,9 +85,6 @@ class Endpoint {
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
 
-  static constexpr uint64_t kChunkSize = 1024 * 1024;  
-  static constexpr uint32_t kMaxInflightChunks = 8;
-
  public:
   // Prepare transfer info structure for receiving IPC handle
   struct IpcTransferInfo {
