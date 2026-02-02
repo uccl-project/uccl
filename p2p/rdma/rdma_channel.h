@@ -25,7 +25,8 @@ inline std::unique_ptr<RDMAChannelImpl> createRDMAChannelImpl() {
 class RDMAChannel {
  public:
   explicit RDMAChannel(std::shared_ptr<RdmaContext> ctx,
-                       uint32_t channel_id = 0)
+                       uint32_t channel_id = 0,
+                       std::shared_ptr<RDMAFlowControl> flow_control = nullptr)
       : ctx_(ctx),
         qp_(nullptr),
         cq_ex_(nullptr),
@@ -33,13 +34,15 @@ class RDMAChannel {
         channel_id_(channel_id),
         local_meta_(std::make_shared<ChannelMetaData>()),
         remote_meta_(std::make_shared<ChannelMetaData>()),
-        impl_(createRDMAChannelImpl()) {
+        impl_(createRDMAChannelImpl()),
+        flow_control_(flow_control) {
     initQP();
   }
 
   explicit RDMAChannel(std::shared_ptr<RdmaContext> ctx,
                        ChannelMetaData const& remote_meta,
-                       uint32_t channel_id = 0)
+                       uint32_t channel_id = 0,
+                       std::shared_ptr<RDMAFlowControl> flow_control = nullptr)
       : ctx_(ctx),
         qp_(nullptr),
         cq_ex_(nullptr),
@@ -47,7 +50,8 @@ class RDMAChannel {
         channel_id_(channel_id),
         local_meta_(std::make_shared<ChannelMetaData>()),
         remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)),
-        impl_(createRDMAChannelImpl()) {
+        impl_(createRDMAChannelImpl()),
+        flow_control_(flow_control) {
     initQP();
     establishChannel(remote_meta);
   }
@@ -107,6 +111,12 @@ class RDMAChannel {
     uint32_t nb_post_recv = 0;
     bool result = impl_->poll_once(cq_ex_, cq_datas, channel_id_, nb_post_recv);
     impl_->lazy_post_recv_wrs_n(qp_, nb_post_recv, false);
+    
+    // Release flow control slots for completed operations
+    if (flow_control_ && !cq_datas.empty()) {
+      flow_control_->releaseSlot(cq_datas.size());
+    }
+    
     return result;
   }
 
@@ -141,6 +151,8 @@ class RDMAChannel {
   std::shared_ptr<AtomicBitmapPacketTracker> tracker_;
   std::unique_ptr<RDMAChannelImpl> impl_;
 
+  std::shared_ptr<RDMAFlowControl> flow_control_;
+
   struct ibv_cq_ex* getCQ() const {
     return cq_ex_;
   }
@@ -152,6 +164,11 @@ class RDMAChannel {
   // Post send request based on send_type
   // Returns 0 on success, error code on failure
   inline int postRequest(std::shared_ptr<RDMASendRequest> req) {
+    // Apply flow control - wait for slot availability
+    if (flow_control_) {
+      flow_control_->acquireSlot();
+    }
+    
     auto* qpx = ibv_qp_to_qp_ex(qp_);
     ibv_wr_start(qpx);
     // LOG(INFO) << *req;
@@ -205,6 +222,11 @@ class RDMAChannel {
                  << ", local_key=" << req->getLocalKey()
                  << ", num_sge=" << num_sge << ", sge_list=" << sge_info.str()
                  << std::dec;
+      
+      // Release the flow control slot on failure
+      if (flow_control_) {
+        flow_control_->releaseSlot(1);
+      }
     }
     return ret;
   }
