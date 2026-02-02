@@ -154,7 +154,7 @@ class RDMAChannel {
   inline int postRequest(std::shared_ptr<RDMASendRequest> req) {
     auto* qpx = ibv_qp_to_qp_ex(qp_);
     ibv_wr_start(qpx);
-    LOG(INFO) << *req;
+    // LOG(INFO) << *req;
     qpx->wr_id = req->wr_id;
     qpx->comp_mask = 0;
     qpx->wr_flags = IBV_SEND_SIGNALED;
