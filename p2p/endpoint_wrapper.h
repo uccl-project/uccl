@@ -5,10 +5,10 @@
 template <class T>
 struct always_false : std::false_type {};
 
-// Thread-local accumulators for timing
-thread_local double g_set_request_alloc_time_us = 0;
-thread_local double g_set_request_writeorread_time_us = 0;
-thread_local int g_set_request_count = 0;
+// Thread-local accumulators for timing (declared extern, defined in engine.cc)
+extern thread_local double g_set_request_alloc_time_us;
+extern thread_local double g_set_request_writeorread_time_us;
+extern thread_local int g_set_request_count;
 
 static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
                               Conn* conn, P2PMhandle* local_mh, void* src,
@@ -98,12 +98,12 @@ inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
   return ureq->engine_idx;
 }
 
-// Thread-local accumulators for polling timing
-thread_local double g_poll_sendchannel_time_us = 0;
-thread_local double g_poll_checksend_time_us = 0;
-thread_local double g_poll_recvchannel_time_us = 0;
-thread_local double g_poll_checkrecv_time_us = 0;
-thread_local int g_poll_count = 0;
+// Thread-local accumulators for polling timing (declared extern, defined in engine.cc)
+extern thread_local double g_poll_sendchannel_time_us;
+extern thread_local double g_poll_checksend_time_us;
+extern thread_local double g_poll_recvchannel_time_us;
+extern thread_local double g_poll_checkrecv_time_us;
+extern thread_local int g_poll_count;
 
 inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
                                 struct ucclRequest* ureq) {
