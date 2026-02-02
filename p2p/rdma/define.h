@@ -43,8 +43,8 @@ static constexpr int kRankIDPlaceHolder = 9999;
 static constexpr uint8_t kPortNum = 1;
 
 // Use max 4 to accommodate AWS p5 instance
-static constexpr int kQpNumPerChannel = 4;
-static constexpr int kNICContextNumber = 4;
+static constexpr int kQpNumPerChannel = 2;
+static constexpr int kNICContextNumber = 2;
 static constexpr int kControlChannelID = 0;
 
 static constexpr int kMaxSendWr = 1024;
@@ -54,7 +54,7 @@ static constexpr int kMaxRecvSeg = 2;
 static constexpr uint64_t kMessageChunkSizeKB = 1024;  // 1 MB
 static constexpr uint64_t kMaxSplitNum = 16;
 static constexpr uint32_t kBatchPostRecvWr = 32;
-static constexpr uint32_t kBatchPollCqe = 32;
+static constexpr uint32_t kBatchPollCqe = 16;
 
 static constexpr size_t kTaskRingSize = 1024;
 static constexpr size_t kRingCapacity = 16384;  // Must be power of 2
