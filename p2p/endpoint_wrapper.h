@@ -5,17 +5,10 @@
 template <class T>
 struct always_false : std::false_type {};
 
-// Thread-local accumulators for timing (declared extern, defined in engine.cc)
-extern thread_local double g_set_request_alloc_time_us;
-extern thread_local double g_set_request_writeorread_time_us;
-extern thread_local int g_set_request_count;
-
 static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
                               Conn* conn, P2PMhandle* local_mh, void* src,
                               size_t size, FifoItem const& slot_item,
                               ucclRequest* ureq) {
-  uccl::ChronoTimer alloc_timer;
-  
   // Create RemoteMemInfo from FifoItem
   auto remote_mem = std::make_shared<RemoteMemInfo>();
   remote_mem->addr = slot_item.addr;
@@ -32,14 +25,8 @@ static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
   req->send_type =
       (ureq->type == ReqType::ReqRead) ? SendType::Read : SendType::Write;
 
-  g_set_request_alloc_time_us += alloc_timer.get_us();
-  
-  uccl::ChronoTimer writeorread_timer;
   ureq->engine_idx = obj->writeOrRead(req);
-  g_set_request_writeorread_time_us += writeorread_timer.get_us();
-  
   ureq->n = conn->uccl_conn_id_.flow_id;
-  g_set_request_count++;
 
   return ureq->engine_idx;
 }
@@ -98,38 +85,17 @@ inline int uccl_recv_async(RDMAEndPoint const& s, Conn* conn,
   return ureq->engine_idx;
 }
 
-// Thread-local accumulators for polling timing (declared extern, defined in engine.cc)
-extern thread_local double g_poll_sendchannel_time_us;
-extern thread_local double g_poll_checksend_time_us;
-extern thread_local double g_poll_recvchannel_time_us;
-extern thread_local double g_poll_checkrecv_time_us;
-extern thread_local int g_poll_count;
-
 inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
                                 struct ucclRequest* ureq) {
   if (ureq->type == ReqType::ReqTx || ureq->type == ReqType::ReqWrite ||
       ureq->type == ReqType::ReqRead) {
     // Use targeted polling instead of polling all channels
-    uccl::ChronoTimer poll_timer;
     s->pollSendChannel(ureq->n);
-    g_poll_sendchannel_time_us += poll_timer.get_us();
-    
-    uccl::ChronoTimer check_timer;
-    bool result = s->checkSendComplete_once(ureq->n, ureq->engine_idx);
-    g_poll_checksend_time_us += check_timer.get_us();
-    g_poll_count++;
-    return result;
+    return s->checkSendComplete_once(ureq->n, ureq->engine_idx);
   } else if (ureq->type == ReqType::ReqRx) {
     // Use targeted polling instead of polling all channels
-    uccl::ChronoTimer poll_timer;
     s->pollRecvChannel(ureq->n);
-    g_poll_recvchannel_time_us += poll_timer.get_us();
-    
-    uccl::ChronoTimer check_timer;
-    bool result = s->checkRecvComplete_once(ureq->n, ureq->engine_idx);
-    g_poll_checkrecv_time_us += check_timer.get_us();
-    g_poll_count++;
-    return result;
+    return s->checkRecvComplete_once(ureq->n, ureq->engine_idx);
   }
   LOG(ERROR) << "Invalid request type: " << ureq->type;
   return false;
