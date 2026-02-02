@@ -29,6 +29,8 @@ void bind_parallel_rule(py::module_& m) {
 void bind_operator(py::module_& m) {
   py::class_<ur::Operator>(m, "Operator")
       .def_property_readonly("id", [](ur::Operator const& op) { return op.id; })
+      .def_property_readonly("deps",
+                             [](ur::Operator const& op) { return op.deps; })
       .def_property_readonly("inputs",
                              [](ur::Operator const& op) { return op.inputs; })
       .def_property_readonly("outputs",
@@ -40,67 +42,114 @@ void bind_operator(py::module_& m) {
           [](ur::Operator const& op)
               -> std::optional<std::pair<std::string, std::string>> {
             return op.layout;
-          })
-      .def("set_inputs",
-           [](ur::Operator& op, std::vector<torch::Tensor> inputs) {
-             op.inputs = std::move(inputs);
-           })
-      .def("set_outputs",
-           [](ur::Operator& op, std::vector<torch::Tensor> outputs) {
-             op.outputs = std::move(outputs);
-           })
-      .def("set_attr", [](ur::Operator& op, std::string const& key,
-                          std::string const& value) { op.attrs[key] = value; })
-      .def("set_layout", [](ur::Operator& op, std::string const& in_layout,
-                            std::string const& out_layout) {
-        op.layout = std::make_pair(in_layout, out_layout);
-      });
+          });
 }
 
 void bind_factory(py::module_& m) {
-  // P2P
-  m.def("p2p_send", &ur::OperatorFactory::P2PSend, py::arg("id"),
-        py::arg("src"), py::arg("dst"), py::arg("parallel_rule"),
-        py::arg("deps") = std::vector<uint64_t>{});
+  m.def("reset_op_id", &ur::OperatorFactory::ResetId,
+        py::arg("start_from") = 1);
 
-  m.def("p2p_recv", &ur::OperatorFactory::P2PRecv, py::arg("id"),
-        py::arg("src"), py::arg("dst"), py::arg("parallel_rule"),
-        py::arg("deps") = std::vector<uint64_t>{});
+  // P2P
+  m.def("p2p_send", &ur::OperatorFactory::P2PSend, py::arg("src"),
+        py::arg("parallel_rule"), py::arg("peer_rank"),
+        py::arg("offset") = size_t(0), py::arg("len") = std::optional<size_t>{},
+        py::arg("on_gpu") = true, py::arg("deps") = std::vector<uint64_t>{});
+
+  m.def("p2p_recv", &ur::OperatorFactory::P2PRecv, py::arg("dst"),
+        py::arg("parallel_rule"), py::arg("peer_rank"),
+        py::arg("offset") = size_t(0), py::arg("len") = std::optional<size_t>{},
+        py::arg("on_gpu") = true, py::arg("deps") = std::vector<uint64_t>{});
 
   // Collective
-  m.def("all_reduce", &ur::OperatorFactory::AllReduce, py::arg("id"),
-        py::arg("src"), py::arg("dst"), py::arg("reduce_kind"),
-        py::arg("parallel_rule"), py::arg("deps") = std::vector<uint64_t>{});
-
-  m.def("all_to_all", &ur::OperatorFactory::AllToAll, py::arg("id"),
-        py::arg("src"), py::arg("dst"), py::arg("parallel_rule"),
+  m.def("all_reduce", &ur::OperatorFactory::AllReduce, py::arg("src"),
+        py::arg("dst"), py::arg("reduce_kind"), py::arg("parallel_rule"),
         py::arg("deps") = std::vector<uint64_t>{});
 
-  // Compute
-  m.def("gemm", &ur::OperatorFactory::Gemm, py::arg("id"), py::arg("src"),
+  m.def("all_to_all", &ur::OperatorFactory::AllToAll, py::arg("src"),
         py::arg("dst"), py::arg("parallel_rule"),
         py::arg("deps") = std::vector<uint64_t>{});
 
+  // Compute
+  m.def("gemm", &ur::OperatorFactory::Gemm, py::arg("src"), py::arg("dst"),
+        py::arg("parallel_rule"), py::arg("deps") = std::vector<uint64_t>{});
+
   // MoE
-  m.def("moe_routing", &ur::OperatorFactory::MoeRouting, py::arg("id"),
-        py::arg("src"), py::arg("dst"), py::arg("parallel_rule"),
+  m.def("moe_routing", &ur::OperatorFactory::MoeRouting, py::arg("src"),
+        py::arg("dst"), py::arg("parallel_rule"),
         py::arg("deps") = std::vector<uint64_t>{});
 
-  m.def("moe_expert_gemm", &ur::OperatorFactory::MoeExpertGemm, py::arg("id"),
-        py::arg("src"), py::arg("dst"), py::arg("parallel_rule"),
+  m.def("moe_dispatch", &ur::OperatorFactory::MoeDispatch, py::arg("src"),
+        py::arg("dst"), py::arg("parallel_rule"),
         py::arg("deps") = std::vector<uint64_t>{});
 
-  m.def("moe_combine", &ur::OperatorFactory::MoeCombine, py::arg("id"),
-        py::arg("src"), py::arg("dst"), py::arg("parallel_rule"),
+  m.def("moe_expert_gemm", &ur::OperatorFactory::MoeExpertGemm, py::arg("src"),
+        py::arg("dst"), py::arg("parallel_rule"),
+        py::arg("deps") = std::vector<uint64_t>{});
+
+  m.def("moe_combine", &ur::OperatorFactory::MoeCombine, py::arg("src"),
+        py::arg("dst"), py::arg("parallel_rule"),
         py::arg("deps") = std::vector<uint64_t>{});
 }
 
-void run_ops(std::vector<ur::Operator> const& ops) {
-  ur::Scheduler sched;
-  for (auto const& op : ops) {
-    sched.add_operator(op);
-  }
-  sched.run();
+void bind_scheduler(py::module_& m) {
+  py::class_<ur::SchedulerConfig>(m, "SchedulerConfig")
+      .def(py::init<>())
+      .def_readwrite("gpu_id", &ur::SchedulerConfig::gpu_id)
+      .def_readwrite("rank", &ur::SchedulerConfig::rank)
+      .def_readwrite("world_size", &ur::SchedulerConfig::world_size);
+
+  m.def(
+      "init",
+      [](ur::SchedulerConfig cfg) { ur::Scheduler::instance().init(cfg); },
+      py::arg("config"));
+
+  m.def("reset", []() { ur::Scheduler::instance().reset(); });
+
+  m.def(
+      "add",
+      [](ur::Operator const& op) {
+        ur::Scheduler::instance().add_operator(op);
+      },
+      py::arg("op"));
+
+  m.def("run", []() {
+    py::gil_scoped_release release;
+    ur::Scheduler::instance().run();
+  });
+
+  m.def(
+      "poll",
+      [](uint64_t op_id) { return ur::Scheduler::instance().poll(op_id); },
+      py::arg("op_id"));
+
+  m.def(
+      "sync",
+      [](uint64_t op_id) {
+        py::gil_scoped_release release;
+        ur::Scheduler::instance().sync(op_id);
+      },
+      py::arg("op_id"));
+
+  m.def("sync_all", []() {
+    py::gil_scoped_release release;
+    ur::Scheduler::instance().sync_all();
+  });
+
+  m.def(
+      "connect_to",
+      [](int peer_rank) {
+        py::gil_scoped_release release;
+        ur::Scheduler::instance().connect_to(peer_rank);
+      },
+      py::arg("peer_rank"));
+
+  m.def(
+      "accept_from",
+      [](int peer_rank) {
+        py::gil_scoped_release release;
+        ur::Scheduler::instance().accept_from(peer_rank);
+      },
+      py::arg("peer_rank"));
 }
 
 PYBIND11_MODULE(ukernel, m) {
@@ -110,6 +159,5 @@ PYBIND11_MODULE(ukernel, m) {
   bind_parallel_rule(m);
   bind_operator(m);
   bind_factory(m);
-
-  m.def("run", &run_ops, "Run a list of operators");
+  bind_scheduler(m);
 }

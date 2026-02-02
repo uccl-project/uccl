@@ -3,6 +3,7 @@
 #include "gpu_rt.h"
 #include <cassert>
 #include <cstdint>
+#include <cstdio>
 #include <mutex>
 #include <vector>
 
@@ -17,6 +18,8 @@ enum class TaskType : uint64_t {
   MoePreGemm,
   MoePostGemm,
   MoeCombine,
+  // TK GEMM
+  TkGemm,
   // more Type
   BenchNop,  // for benchmark
 };
@@ -109,6 +112,15 @@ struct alignas(16) MoeArgs {
   uint32_t _pad[3];
 };
 
+// TK GEMM args: pointer to pre-constructed TkMatmulGlobals (with TMA
+// descriptors).
+// [TODO: Yihan] perf tuning for GEMM later, change the args if more info needed
+struct alignas(16) GemmArgs {
+  void* globals;                          // TkMatmulGlobals* on device
+  uint32_t num_tile_rows, num_tile_cols;  // total tiles for multi-block
+  uint32_t _pad;
+};
+
 class TaskManager {
  public:
   // -------- Singleton entry --------
@@ -124,35 +136,40 @@ class TaskManager {
 
   ~TaskManager() { release(); }
 
-  // init: pre-allocate pools on GPU
-  void init(uint32_t collCap, uint32_t moeCap) {
+  void init(uint32_t collCap, uint32_t moeCap, uint32_t gemmCap = 64) {
     std::lock_guard<std::mutex> gc(coll_mu_);
     std::lock_guard<std::mutex> gm(moe_mu_);
-    release_nolock_();  // re-init
+    std::lock_guard<std::mutex> gg(gemm_mu_);
+    release_nolock_();
 
     cap_coll_ = collCap;
     cap_moe_ = moeCap;
+    cap_gemm_ = gemmCap;
 
     GPU_RT_CHECK(gpuMalloc(&d_coll_, sizeof(CollArgs) * cap_coll_));
     GPU_RT_CHECK(gpuMalloc(&d_moe_, sizeof(MoeArgs) * cap_moe_));
+    GPU_RT_CHECK(gpuMalloc(&d_gemm_, sizeof(GemmArgs) * cap_gemm_));
 
-    // host-side freelists
     free_coll_.clear();
     free_moe_.clear();
+    free_gemm_.clear();
     free_coll_.reserve(cap_coll_);
     for (uint32_t i = 0; i < cap_coll_; ++i)
       free_coll_.push_back(cap_coll_ - 1 - i);
     free_moe_.reserve(cap_moe_);
     for (uint32_t i = 0; i < cap_moe_; ++i)
       free_moe_.push_back(cap_moe_ - 1 - i);
+    free_gemm_.reserve(cap_gemm_);
+    for (uint32_t i = 0; i < cap_gemm_; ++i)
+      free_gemm_.push_back(cap_gemm_ - 1 - i);
 
     inited_ = true;
   }
 
-  // explicit release
   void release() {
     std::lock_guard<std::mutex> gc(coll_mu_);
     std::lock_guard<std::mutex> gm(moe_mu_);
+    std::lock_guard<std::mutex> gg(gemm_mu_);
     release_nolock_();
     inited_ = false;
   }
@@ -206,12 +223,33 @@ class TaskManager {
     return Task(tt, dt, blockId, idx);
   }
 
-  // CPU: free slot back
   void free_moe_args(uint32_t idx) {
     std::lock_guard<std::mutex> g(moe_mu_);
     assert(inited_ && "TaskManager not initialized");
     assert(idx < cap_moe_ && "free_moe idx out of range");
     free_moe_.push_back(idx);
+  }
+
+  // tk level-8 gemm task creation
+  Task create_gemm_task(GemmArgs const& h, DataType dt, uint32_t blockId) {
+    uint32_t idx;
+    {
+      std::lock_guard<std::mutex> g(gemm_mu_);
+      assert(inited_ && "TaskManager not initialized");
+      assert(!free_gemm_.empty() && "gemm args pool exhausted");
+      idx = free_gemm_.back();
+      free_gemm_.pop_back();
+    }
+    GPU_RT_CHECK(
+        gpuMemcpy(d_gemm_ + idx, &h, sizeof(GemmArgs), gpuMemcpyHostToDevice));
+    return Task(TaskType::TkGemm, dt, blockId, idx);
+  }
+
+  void free_gemm_args(uint32_t idx) {
+    std::lock_guard<std::mutex> g(gemm_mu_);
+    assert(inited_ && "TaskManager not initialized");
+    assert(idx < cap_gemm_ && "free_gemm idx out of range");
+    free_gemm_.push_back(idx);
   }
 
   // GPU: get args pointer by index
@@ -223,9 +261,13 @@ class TaskManager {
     return d_moe_ + idx;
   }
 
-  // Expose device pointers for kernels that need them
+  __device__ __forceinline__ GemmArgs* gemm_args(uint32_t idx) const {
+    return d_gemm_ + idx;
+  }
+
   CollArgs* d_coll() const { return d_coll_; }
   MoeArgs* d_moe() const { return d_moe_; }
+  GemmArgs* d_gemm() const { return d_gemm_; }
 
  private:
   TaskManager() = default;
@@ -233,29 +275,34 @@ class TaskManager {
   void release_nolock_() {
     if (d_coll_) gpuFree(d_coll_);
     if (d_moe_) gpuFree(d_moe_);
+    if (d_gemm_) gpuFree(d_gemm_);
 
     d_coll_ = nullptr;
     d_moe_ = nullptr;
+    d_gemm_ = nullptr;
 
     free_coll_.clear();
     free_moe_.clear();
+    free_gemm_.clear();
 
     cap_coll_ = 0;
     cap_moe_ = 0;
+    cap_gemm_ = 0;
   }
 
  private:
-  // device pools
   CollArgs* d_coll_{nullptr};
   MoeArgs* d_moe_{nullptr};
+  GemmArgs* d_gemm_{nullptr};
 
   uint32_t cap_coll_{0};
   uint32_t cap_moe_{0};
+  uint32_t cap_gemm_{0};
 
-  // host freelists
-  std::vector<uint32_t> free_coll_, free_moe_;
+  std::vector<uint32_t> free_coll_, free_moe_, free_gemm_;
   mutable std::mutex coll_mu_;
   mutable std::mutex moe_mu_;
+  mutable std::mutex gemm_mu_;
   bool inited_{false};
 };
 }  // namespace Compute

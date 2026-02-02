@@ -4,16 +4,22 @@ override CXX   := /usr/bin/g++
 NVCC           := $(CUDA_PATH)/bin/nvcc
 CONDA_LIB_HOME ?= /usr/lib
 
-# GPU architecture detection
-DETECTED_SM := $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader,nounits 2>/dev/null | head -n1 | tr -d '.')
-SM ?= $(if $(DETECTED_SM),$(DETECTED_SM),70)
+# ThunderKittens
+TK_ROOT := /home/calebzhang/uccl/thirdparty/ThunderKittens
+
+# GPU architecture - use sm_90a for TMA/wgmma support
+SM ?= 90a
 
 # Base compilation flags
 CXXFLAGS   := -O0 -std=c++17 -Wall -Wno-unused-function -pthread -fPIC \
               -I$(CUDA_PATH)/include -I$(CONDA_LIB_HOME)/../include
 
-NVCCFLAGS  := -g -O0 -std=c++17 \
+NVCCFLAGS  := -g -O0 -std=c++20 \
               --compiler-options "-fPIC -Wall -pthread -I$(CONDA_LIB_HOME)/../include" \
+              --expt-extended-lambda \
+              --expt-relaxed-constexpr \
+              -I$(TK_ROOT)/include \
+              -DKITTENS_HOPPER \
               -arch=sm_$(SM) \
               -ccbin $(CXX)
 
@@ -22,7 +28,7 @@ LDFLAGS    := -L$(CONDA_LIB_HOME) \
               -lcudart -lcuda \
               -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -lglog
 
-INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../../include -Isrc/transport
+INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../../include -Isrc/transport -Isrc/compute -Isrc/compute/fifo
 
 # Redis support: when USE_REDIS_OOB=1
 ifeq ($(USE_REDIS_OOB),1)
@@ -77,8 +83,8 @@ TORCH_LDFLAGS := \
 LDFLAGS += -Wl,-rpath,$(PYTORCH_RPATH)
 
 # Source files
-SRC_CPP := $(shell find src -name '*.cc' | grep -v 'src/compute') # skip device now
-SRC_CU  := $(shell find src -name '*.cu' | grep -v 'src/compute')
+SRC_CPP := $(shell find src -name '*.cc' | grep -v 'src/compute')
+SRC_CU  := $(shell find src -name '*.cu')
 TEST_DIR := tests
 SRC_TEST := $(shell find $(TEST_DIR) -name 'test_*.cc')
 
@@ -135,4 +141,11 @@ clean:
 # Include dependencies
 -include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_TEST:.o=.d)
 
-.PHONY: all clean run_test
+# [TODO: Yihan]Build only TK GEMM operator , need python binding later
+tk_gemm: src/compute/operator.o
+	@echo "TK GEMM operator compiled: src/compute/operator.o"
+
+src/compute/operator.o: src/compute/operator.cu
+	$(NVCC) $(NVCCFLAGS) -Iinclude -Isrc/transport -Isrc/compute -Isrc/compute/fifo -MMD -MP -c $< -o $@
+
+.PHONY: all clean run_test tk_gemm
