@@ -25,6 +25,9 @@ class NICEndpoint {
       initialize_rdma_ctx_for_gpu(gpu_index, device_ids);
     }
 
+    // Create shared flow control for all channels (limit 512 in-flight requests total)
+    flow_control_ = std::make_shared<RDMAFlowControl>(512);
+
     oob_server_ = std::make_shared<EpollServer>(
         port, [this](std::string const& input, std::string& output,
                      std::string const& ip, int port) {
@@ -597,9 +600,8 @@ class NICEndpoint {
         }
       }
 
-      auto flow_control = std::make_shared<RDMAFlowControl>(512);  // Limit to 512 in-flight requests
       std::shared_ptr<RDMAChannel> new_channel = std::make_shared<RDMAChannel>(
-          ctx_ptr, meta.channel_meta, meta.channel_id, flow_control);
+          ctx_ptr, meta.channel_meta, meta.channel_id, flow_control_);
       // Create response (echo back the same data)
       MetaInfoToExchange response(rank_id_, meta.channel_id,
                                   new_channel->get_local_meta(), nullptr,
@@ -763,9 +765,8 @@ class NICEndpoint {
     for (int i = 0; i < kQpNumPerChannel; i++) {
       uint32_t channel_id = i + 1;
 
-      auto flow_control = std::make_shared<RDMAFlowControl>(512);  // Limit to 512 in-flight requests
       auto channel = std::make_shared<RDMAChannel>(
-          getContextByChannelId(channel_id), channel_id, flow_control);
+          getContextByChannelId(channel_id), channel_id, flow_control_);
 
       MetaInfoToExchange meta(rank_id_, channel_id, channel->get_local_meta(),
                               nullptr, ChannelType::Normal, gpu_index_);
@@ -823,6 +824,7 @@ class NICEndpoint {
   uint64_t rank_id_;
   int gpu_index_;
   std::vector<std::shared_ptr<RdmaContext>> contexts_;
+  std::shared_ptr<RDMAFlowControl> flow_control_;  // Shared flow control for all channels
   mutable std::shared_mutex recv_channel_mutex_;
   std::unordered_map<uint64_t, std::shared_ptr<RecvChannelGroup>>
       recv_channel_groups_;
