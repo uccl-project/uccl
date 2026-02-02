@@ -83,8 +83,9 @@ static inline void util_rdma_create_qp_seperate_cq(
       if constexpr (kTestNoHWTimestamp)
         cq_ex_attr.wc_flags &= ~IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;
       cq_ex_attr.comp_mask = IBV_CQ_INIT_ATTR_MASK_FLAGS;
-      cq_ex_attr.flags = IBV_CREATE_CQ_ATTR_SINGLE_THREADED |
-                         IBV_CREATE_CQ_ATTR_IGNORE_OVERRUN;
+      cq_ex_attr.flags = IBV_CREATE_CQ_ATTR_SINGLE_THREADED;
+      if constexpr (kEnableCQIgnoreOverrun)
+        cq_ex_attr.flags |= IBV_CREATE_CQ_ATTR_IGNORE_OVERRUN;
       auto scq_ex = (struct ibv_cq_ex**)scq;
       *scq_ex = ibv_create_cq_ex(context, &cq_ex_attr);
       UCCL_INIT_CHECK(*scq_ex != nullptr, "ibv_create_cq_ex failed");
@@ -156,8 +157,9 @@ static inline void util_rdma_create_qp(
       if constexpr (kTestNoHWTimestamp)
         cq_ex_attr.wc_flags &= ~IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;
       cq_ex_attr.comp_mask = IBV_CQ_INIT_ATTR_MASK_FLAGS;
-      cq_ex_attr.flags = IBV_CREATE_CQ_ATTR_SINGLE_THREADED |
-                         IBV_CREATE_CQ_ATTR_IGNORE_OVERRUN;
+      cq_ex_attr.flags = IBV_CREATE_CQ_ATTR_SINGLE_THREADED;
+      if constexpr (kEnableCQIgnoreOverrun)
+        cq_ex_attr.flags |= IBV_CREATE_CQ_ATTR_IGNORE_OVERRUN;
       auto cq_ex = (struct ibv_cq_ex**)cq;
       *cq_ex = ibv_create_cq_ex(context, &cq_ex_attr);
       UCCL_INIT_CHECK(*cq_ex != nullptr, "ibv_create_cq_ex failed");
