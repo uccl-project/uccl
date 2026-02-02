@@ -370,7 +370,7 @@ class SendChannelGroup : public ChannelGroup {
     size_t num_channels = normalChannelCount();
     tracker_->updateExpectedAckCount(req->wr_id, chunks.size());
     g_split_time_us += split_timer.get_us();
-    
+        
     for (size_t i = 0; i < chunks.size(); ++i) {
       auto const& chunk = chunks[i];
 
@@ -407,10 +407,10 @@ class SendChannelGroup : public ChannelGroup {
       // Send the chunk
       uccl::ChronoTimer post_timer;
       if (postRequestOnChannel(chunk_req)) {
-        LOG(INFO) << "SendChannelGroup: Sent chunk " << i << "/"
-                  << chunks.size() << " (offset: " << chunk.offset
-                  << ", size: " << chunk.size
-                  << ", channel_id: " << chunk_channel_id << ")" << std::endl;
+        // LOG(INFO) << "SendChannelGroup: Sent chunk " << i << "/"
+        //           << chunks.size() << " (offset: " << chunk.offset
+        //           << ", size: " << chunk.size
+        //           << ", channel_id: " << chunk_channel_id << ")" << std::endl;
       } else {
         LOG(WARNING) << "SendChannelGroup: Failed to send chunk " << i
                      << " (offset: " << chunk.offset << ", size: " << chunk.size
@@ -425,6 +425,7 @@ class SendChannelGroup : public ChannelGroup {
     if (g_call_count % 100 == 0) {
       double total = g_split_time_us + g_setup_time_us + g_create_time_us + g_post_time_us;
       std::cout << "[postChunkedRequest TIMING] calls=" << g_call_count
+                << " total_chunks=" << chunks.size()
                 << " split=" << g_split_time_us << "us ("
                 << (g_split_time_us/total*100) << "%)"
                 << " setup=" << g_setup_time_us << "us ("
