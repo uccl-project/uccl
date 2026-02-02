@@ -70,24 +70,40 @@ def _run_server(args, ep):
     print(f"[Server] Exchanged metadata with client")
 
     for sz in args.sizes:
-        # For each size, handle multiple iterations
-        for iter_idx in range(args.iters + 1):  # +1 for warmup
-            # Create new memory buffer for each iteration
+        if args.raw:
+            # Raw mode: register memory and send descriptors only once
             size_per_block = sz // args.num_iovs
             buf_v = []
             for _ in range(args.num_iovs):
                 buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
                 buf_v.append(buf)
 
-            # Register remote memory (new memory for each iteration)
             remote_descs = ep.register_memory(buf_v)
-
-            # Serialize and send remote descriptors to client
             remote_descs_serialized = ep.get_serialized_descs(remote_descs)
             _send_bytes(remote_descs_serialized, dst=peer)
 
-            # Wait for transfer to complete
-            dist.barrier()
+            # Wait for all iterations (warmup + benchmark)
+            for iter_idx in range(args.iters + 1):
+                dist.barrier()
+        else:
+            # Normal mode: register memory and send descriptors for each iteration
+            for iter_idx in range(args.iters + 1):  # +1 for warmup
+                # Create new memory buffer for each iteration
+                size_per_block = sz // args.num_iovs
+                buf_v = []
+                for _ in range(args.num_iovs):
+                    buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                    buf_v.append(buf)
+
+                # Register remote memory (new memory for each iteration)
+                remote_descs = ep.register_memory(buf_v)
+
+                # Serialize and send remote descriptors to client
+                remote_descs_serialized = ep.get_serialized_descs(remote_descs)
+                _send_bytes(remote_descs_serialized, dst=peer)
+
+                # Wait for transfer to complete
+                dist.barrier()
 
         print(f"[Server] Completed {args.iters} iterations for size {_pretty(sz)}")
 
@@ -105,65 +121,89 @@ def _run_client(args, ep):
     print(f"[Client] Exchanged metadata with server")
 
     for sz in args.sizes:
-        # Warmup iteration
-        # Create new memory buffer
         size_per_block = sz // args.num_iovs
-        buf_v = []
-        for _ in range(args.num_iovs):
-            buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
-            buf_v.append(buf)
 
-        # Register local memory
-        local_descs = ep.register_memory(buf_v)
-
-        # Add remote endpoint
-        success, conn_id = ep.add_remote_endpoint(remote_metadata)
-        assert success, "Failed to add remote endpoint"
-
-        # Wait for server to send remote descriptors
-        remote_descs_serialized = _recv_bytes(src=peer)
-        remote_descs = ep.deserialize_descs(remote_descs_serialized)
-
-        # Warmup transfer
-        xfer_handle = ep.transfer(conn_id, args.mode, local_descs, remote_descs)
-        assert xfer_handle is not None, "Failed to start warmup transfer"
-        while not ep.check_xfer_state(xfer_handle):
-            pass
-        dist.barrier()
-
-        # Benchmark iterations
-        start = time.perf_counter()
-        total = 0
-        for iter_idx in range(args.iters):
-            # Create new memory buffer for each iteration
+        if args.raw:
+            # Raw mode: setup once, reuse for all iterations
             buf_v = []
             for _ in range(args.num_iovs):
                 buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
                 buf_v.append(buf)
 
-            # Register local memory (new memory for each iteration)
             local_descs = ep.register_memory(buf_v)
-
-            # Add remote endpoint
             success, conn_id = ep.add_remote_endpoint(remote_metadata)
             assert success, "Failed to add remote endpoint"
 
-            # Wait for server to send remote descriptors (exchange memory addresses)
             remote_descs_serialized = _recv_bytes(src=peer)
             remote_descs = ep.deserialize_descs(remote_descs_serialized)
 
-            # Start transfer
+            # Warmup transfer
             xfer_handle = ep.transfer(conn_id, args.mode, local_descs, remote_descs)
-            assert xfer_handle is not None, "Failed to start transfer"
-
-            # Check transfer state until complete
+            assert xfer_handle is not None, "Failed to start warmup transfer"
             while not ep.check_xfer_state(xfer_handle):
                 pass
-
-            total += sz
             dist.barrier()
 
-        elapsed = time.perf_counter() - start
+            # Benchmark iterations - reuse everything
+            start = time.perf_counter()
+            total = 0
+            for _ in range(args.iters):
+                xfer_handle = ep.transfer(conn_id, args.mode, local_descs, remote_descs)
+                assert xfer_handle is not None, "Failed to start transfer"
+                while not ep.check_xfer_state(xfer_handle):
+                    pass
+                total += sz
+                dist.barrier()
+
+            elapsed = time.perf_counter() - start
+        else:
+            # Normal mode: setup for each iteration
+            # Warmup iteration
+            buf_v = []
+            for _ in range(args.num_iovs):
+                buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                buf_v.append(buf)
+
+            local_descs = ep.register_memory(buf_v)
+            success, conn_id = ep.add_remote_endpoint(remote_metadata)
+            assert success, "Failed to add remote endpoint"
+
+            remote_descs_serialized = _recv_bytes(src=peer)
+            remote_descs = ep.deserialize_descs(remote_descs_serialized)
+
+            # Warmup transfer
+            xfer_handle = ep.transfer(conn_id, args.mode, local_descs, remote_descs)
+            assert xfer_handle is not None, "Failed to start warmup transfer"
+            while not ep.check_xfer_state(xfer_handle):
+                pass
+            dist.barrier()
+
+            # Benchmark iterations
+            start = time.perf_counter()
+            total = 0
+            for _ in range(args.iters):
+                buf_v = []
+                for _ in range(args.num_iovs):
+                    buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                    buf_v.append(buf)
+
+                local_descs = ep.register_memory(buf_v)
+                success, conn_id = ep.add_remote_endpoint(remote_metadata)
+                assert success, "Failed to add remote endpoint"
+
+                remote_descs_serialized = _recv_bytes(src=peer)
+                remote_descs = ep.deserialize_descs(remote_descs_serialized)
+
+                xfer_handle = ep.transfer(conn_id, args.mode, local_descs, remote_descs)
+                assert xfer_handle is not None, "Failed to start transfer"
+
+                while not ep.check_xfer_state(xfer_handle):
+                    pass
+
+                total += sz
+                dist.barrier()
+
+            elapsed = time.perf_counter() - start
 
         print(
             f"[Client] {_pretty(sz):>8} : "
@@ -190,6 +230,11 @@ def main():
     p.add_argument("--mode", choices=["READ", "WRITE"], default="WRITE")
     p.add_argument(
         "--perf", action="store_true", help="Measure pure transfer performance"
+    )
+    p.add_argument(
+        "--raw",
+        action="store_true",
+        help="Raw mode: exchange metadata only once, reuse for all iterations to measure pure transfer performance",
     )
     p.add_argument(
         "--sizes",
@@ -220,6 +265,7 @@ def main():
     print("UCCL Ray P2P Benchmark")
     print("=" * 60)
     print(f"Mode: {args.mode.upper()}")
+    print(f"Raw mode: {args.raw}")
     print("Sizes:", ", ".join(_pretty(s) for s in args.sizes))
     print(f"Iterations: {args.iters}")
     print(f"Number of IOVs: {args.num_iovs}")
