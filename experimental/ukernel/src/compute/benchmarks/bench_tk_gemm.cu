@@ -44,7 +44,7 @@ bool validate(bf16* gpu_result, bf16* cpu_result, int M, int N,
 }
 
 int main() {
-  constexpr int M = 256, N = 256, K = 256;
+  constexpr int M = 256 * 4, N = 256 * 4, K = 256 * 4;
   printf("=== TK GEMM Benchmark: M=%d N=%d K=%d ===\n", M, N, K);
 
   size_t size_A = M * K * sizeof(bf16);
@@ -79,7 +79,7 @@ int main() {
   TaskManager::instance().init(1, 1, 64);
 
   PersistentKernelConfig cfg;
-  cfg.numBlocks = 1;
+  cfg.numBlocks = 1;  // 2 blocks parallel
   cfg.threadsPerBlock = TK_NUM_THREADS;
   cfg.fifoCapacity = 16;
   cfg.smemSize = 200000;
@@ -96,22 +96,20 @@ int main() {
   int num_tile_rows = (M + TILE_M - 1) / TILE_M;
   int num_tile_cols = (N + TILE_N - 1) / TILE_N;
 
+  // Single task for entire GEMM
+  GemmArgs gemm_args{d_globals, (uint32_t)num_tile_rows,
+                     (uint32_t)num_tile_cols, 0};
+
   uint64_t t0 = now_ns();
-  uint64_t last_task_id = 0;
-  for (int tr = 0; tr < num_tile_rows; tr++) {
-    for (int tc = 0; tc < num_tile_cols; tc++) {
-      GemmArgs gemm_args{d_globals, (uint32_t)tr, (uint32_t)tc, 0};
-      Task task = TaskManager::instance().create_gemm_task(gemm_args,
-                                                           DataType::Fp16, 0);
-      last_task_id = kernel.submit(task);
-    }
-  }
-  while (!kernel.is_done(0, last_task_id)) {
+  Task task =
+      TaskManager::instance().create_gemm_task(gemm_args, DataType::Fp16, 0);
+  uint64_t task_id = kernel.submit(task);
+  while (!kernel.is_done(0, task_id)) {
   }
   uint64_t t1 = now_ns();
 
-  printf("GEMM completed: %.2f us (%d tiles)\n", (t1 - t0) / 1e3,
-         num_tile_rows * num_tile_cols);
+  printf("GEMM completed: %.2f us (%d tiles, %d blocks)\n", (t1 - t0) / 1e3,
+         num_tile_rows * num_tile_cols, cfg.numBlocks);
 
   cudaMemcpy(h_C, d_C, size_C, cudaMemcpyDeviceToHost);
   cpu_gemm(h_A, h_B, h_C_ref, M, N, K);
