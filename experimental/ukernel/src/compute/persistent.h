@@ -109,6 +109,7 @@ class PersistentKernel {
 
     auto* d_coll = UKernel::Compute::TaskManager::instance().d_coll();
     auto* d_moe = UKernel::Compute::TaskManager::instance().d_moe();
+    auto* d_gemm = UKernel::Compute::TaskManager::instance().d_gemm();
 
     std::vector<mscclpp::C2DDeviceHandle<T>> h_c2d_fifo_handles;
     h_c2d_fifo_handles.reserve(cfg_.numBlocks);
@@ -147,6 +148,7 @@ class PersistentKernel {
                     &d_d2c_fifo_handles_,
                     &d_coll,
                     &d_moe,
+                    &d_gemm,
                     &d_stopFlag_};
 
     dim3 grid(cfg_.numBlocks);
@@ -202,6 +204,10 @@ class PersistentKernel {
             case TaskType::MoeCombine:
               UKernel::Compute::TaskManager::instance().free_moe_args(p.argsId);
               break;
+            case TaskType::TkGemm:
+              UKernel::Compute::TaskManager::instance().free_gemm_args(
+                  p.argsId);
+              break;
             case TaskType::BenchNop:
               break;
             default:
@@ -249,6 +255,10 @@ class PersistentKernel {
       case TaskType::MoePostGemm:
       case TaskType::MoeCombine:
         UKernel::Compute::TaskManager::instance().free_moe_args(argsId);
+        break;
+
+      case TaskType::TkGemm:
+        UKernel::Compute::TaskManager::instance().free_gemm_args(argsId);
         break;
 
       case TaskType::BenchNop:

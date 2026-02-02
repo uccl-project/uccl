@@ -25,6 +25,7 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* fifos,
                                      mscclpp::SmDeviceHandle<T>* sm_fifos,
                                      mscclpp::FifoDeviceHandle* d2c_fifo,
                                      CollArgs* d_coll, MoeArgs* d_moe,
+                                     GemmArgs* d_gemm,
                                      bool* should_stop = nullptr);
 
 }  // namespace Compute

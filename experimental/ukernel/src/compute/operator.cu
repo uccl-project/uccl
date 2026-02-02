@@ -1,5 +1,6 @@
-#include "d2c_fifo_device.hpp"
+#include "fifo/d2c_fifo_device.hpp"
 #include "operator.h"
+#include "operators/operator.cuh"
 
 // TODO: ThunderKitten/Tilelang? based operators
 
@@ -82,7 +83,8 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* c2d_fifos,
                                      mscclpp::SmDeviceHandle<T>* sm_fifos,
                                      mscclpp::FifoDeviceHandle* d2c_fifo,
                                      CollArgs* d_coll, MoeArgs* d_moe,
-                                     bool* should_stop) {
+                                     GemmArgs* d_gemm, bool* should_stop) {
+  extern __shared__ char smem[];
   (void)d_moe;
 
   const uint32_t bid = blockIdx.x;
@@ -129,6 +131,12 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* c2d_fifos,
         }
         break;
       }
+      case TaskType::TkGemm: {
+        GemmArgs const& ga = d_gemm[idx];
+        TkMatmulGlobals* g = (TkMatmulGlobals*)ga.globals;
+        run_tk_gemm(*g, ga.tile_row, ga.tile_col, smem);
+        break;
+      }
       default:
         break;
     }
@@ -153,7 +161,7 @@ template __global__ void basePersistentKernel<Task>(
     mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
     mscclpp::SmDeviceHandle<Task>* sm_fifos,
     mscclpp::FifoDeviceHandle* d2c_fifo, CollArgs* d_coll, MoeArgs* d_moe,
-    bool* should_stop);
+    GemmArgs* d_gemm, bool* should_stop);
 
 }  // namespace Compute
 }  // namespace UKernel
