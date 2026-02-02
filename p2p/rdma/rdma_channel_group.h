@@ -2,6 +2,7 @@
 #include "define.h"
 #include "rdma_channel.h"
 #include "rdma_ctrl_channel.h"
+#include "util/timer.h"
 #include <random>
 
 class ChannelGroup {
@@ -166,6 +167,11 @@ class SendChannelGroup : public ChannelGroup {
   }
 
   int64_t postWriteOrRead(std::shared_ptr<RDMASendRequest> req) {
+    static thread_local double g_sendpacket_time_us = 0;
+    static thread_local double g_select_time_us = 0;
+    static thread_local double g_postchunk_time_us = 0;
+    static thread_local int g_call_count = 0;
+    
     if (unlikely(req->send_type != SendType::Write &&
                  req->send_type != SendType::Read)) {
       LOG(ERROR) << "SendChannelGroup::write - Invalid send_type, expected "
@@ -173,17 +179,42 @@ class SendChannelGroup : public ChannelGroup {
       return -1;
     }
 
+    uccl::ChronoTimer sendpacket_timer;
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
+    g_sendpacket_time_us += sendpacket_timer.get_us();
 
+    uccl::ChronoTimer select_timer;
     auto [channel_id, context_id] = selectNextChannelRoundRobin();
     if (unlikely(channel_id == 0)) {
       LOG(ERROR) << "SendChannelGroup::write - Failed to select channel";
       return -1;
     }
-
     req->channel_id = channel_id;
+    g_select_time_us += select_timer.get_us();
+
+    uccl::ChronoTimer postchunk_timer;
     postChunkedRequest(req);
+    g_postchunk_time_us += postchunk_timer.get_us();
+    
+    g_call_count++;
+    
+    // Log every 100 calls
+    if (g_call_count % 100 == 0) {
+      double total = g_sendpacket_time_us + g_select_time_us + g_postchunk_time_us;
+      std::cout << "[postWriteOrRead TIMING] calls=" << g_call_count
+                << " sendPacket=" << g_sendpacket_time_us << "us ("
+                << (g_sendpacket_time_us/total*100) << "%)"
+                << " select=" << g_select_time_us << "us ("
+                << (g_select_time_us/total*100) << "%)"
+                << " postChunk=" << g_postchunk_time_us << "us ("
+                << (g_postchunk_time_us/total*100) << "%)\n";
+      // Reset for next batch
+      g_sendpacket_time_us = 0;
+      g_select_time_us = 0;
+      g_postchunk_time_us = 0;
+      g_call_count = 0;
+    }
 
     return wr_id;
   }
