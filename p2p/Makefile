@@ -66,8 +66,8 @@ CXXFLAGS += -DUCCL_P2P_USE_TCPX -I$(NCCL_INC)
 LDFLAGS  += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
 OBJECTS := $(CORE_OBJECTS)
 else
-SOURCES := engine.cc engine_pybind.cc
-CORE_OBJECT := engine.o
+SOURCES := engine.cc engine_pybind.cc timing_globals.cc
+CORE_OBJECT := engine.o timing_globals.o
 OBJECTS := $(SOURCES:.cc=.o)
 endif
 
@@ -118,7 +118,7 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 endif
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB)
+	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB) timing_globals.o
 ifneq ($(USE_TCPX),1)
 	rm -f $(P2P_PYTHON_EXT)
 endif
