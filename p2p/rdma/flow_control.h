@@ -15,7 +15,8 @@ class RDMAFlowControl {
   void acquireSlot() {
     std::unique_lock<std::mutex> lock(mutex_);
     cv_.wait(lock, [this]() {
-      return outstanding_count_.load(std::memory_order_acquire) < max_outstanding_;
+      return outstanding_count_.load(std::memory_order_acquire) <
+             max_outstanding_;
     });
     outstanding_count_.fetch_add(1, std::memory_order_release);
   }

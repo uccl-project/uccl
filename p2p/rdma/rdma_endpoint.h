@@ -179,7 +179,7 @@ class NICEndpoint {
                                std::to_string(rank_id));
     }
     auto send_group = it->second;
-    
+
     int64_t wr_id = -1;
 
     // Blocking call until send succeeds
@@ -420,7 +420,8 @@ class NICEndpoint {
     }
   }
 
-  // Targeted polling for a specific send channel (more efficient than sendRoutine)
+  // Targeted polling for a specific send channel (more efficient than
+  // sendRoutine)
   void pollSendChannel(uint32_t rank_id) {
     if (auto_start_polling_) {
       return;  // Do nothing if auto polling is enabled
@@ -432,7 +433,8 @@ class NICEndpoint {
     }
   }
 
-  // Targeted polling for a specific recv channel (more efficient than recvRoutine)
+  // Targeted polling for a specific recv channel (more efficient than
+  // recvRoutine)
   void pollRecvChannel(uint32_t rank_id) {
     if (auto_start_polling_) {
       return;  // Do nothing if auto polling is enabled

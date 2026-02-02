@@ -677,17 +677,18 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
       FifoItem curr_slot_item = slot_item;
       curr_slot_item.addr += size_read;
       curr_slot_item.size = chunk_size;
-      
-      auto rc = uccl_read_async(ep_, conn, mhandle, cur_data, chunk_size,
-                                curr_slot_item, &ureq[ureq_issued % kMaxInflightOps]);
+
+      auto rc =
+          uccl_read_async(ep_, conn, mhandle, cur_data, chunk_size,
+                          curr_slot_item, &ureq[ureq_issued % kMaxInflightOps]);
       if (rc == -1) break;
-      
+
       cur_data = static_cast<char*>(cur_data) + chunk_size;
       size_read += chunk_size;
       done[ureq_issued % kMaxInflightOps] = false;
       ureq_issued++;
     }
-    
+
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
 
     for (int i = ureq_finished; i < ureq_issued; i++) {
@@ -697,7 +698,8 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
       }
     }
 
-    while (ureq_finished < ureq_issued && done[ureq_finished % kMaxInflightOps]) {
+    while (ureq_finished < ureq_issued &&
+           done[ureq_finished % kMaxInflightOps]) {
       ureq_finished++;
     }
   }
@@ -846,11 +848,10 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     // Issue up to kMaxInflightOps requests
     while (ureq_issued < ureq_max &&
            ureq_issued - ureq_finished < kMaxInflightOps) {
-      auto rc = uccl_read_async(ep_, conn, mhandle_read_vec[ureq_issued],
-                                data_read_vec[ureq_issued],
-                                size_read_vec[ureq_issued],
-                                slot_item_vec[ureq_issued],
-                                &ureq[ureq_issued % kMaxInflightOps]);
+      auto rc = uccl_read_async(
+          ep_, conn, mhandle_read_vec[ureq_issued], data_read_vec[ureq_issued],
+          size_read_vec[ureq_issued], slot_item_vec[ureq_issued],
+          &ureq[ureq_issued % kMaxInflightOps]);
       if (rc == -1) break;
       done[ureq_issued % kMaxInflightOps] = false;
       ureq_issued++;
@@ -867,7 +868,8 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     }
 
     // Advance finished counter
-    while (ureq_finished < ureq_issued && done[ureq_finished % kMaxInflightOps]) {
+    while (ureq_finished < ureq_issued &&
+           done[ureq_finished % kMaxInflightOps]) {
       ureq_finished++;
     }
   }
@@ -988,11 +990,10 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     // Issue up to kMaxInflightOps requests
     while (ureq_issued < ureq_max &&
            ureq_issued - ureq_finished < kMaxInflightOps) {
-      auto rc = uccl_write_async(ep_, conn, mhandle_write_vec[ureq_issued],
-                                 data_write_vec[ureq_issued],
-                                 size_write_vec[ureq_issued],
-                                 slot_item_vec[ureq_issued],
-                                 &ureq[ureq_issued % kMaxInflightOps]);
+      auto rc = uccl_write_async(
+          ep_, conn, mhandle_write_vec[ureq_issued],
+          data_write_vec[ureq_issued], size_write_vec[ureq_issued],
+          slot_item_vec[ureq_issued], &ureq[ureq_issued % kMaxInflightOps]);
       if (rc == -1) break;
       done[ureq_issued % kMaxInflightOps] = false;
       ureq_issued++;
@@ -1009,7 +1010,8 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     }
 
     // Advance finished counter
-    while (ureq_finished < ureq_issued && done[ureq_finished % kMaxInflightOps]) {
+    while (ureq_finished < ureq_issued &&
+           done[ureq_finished % kMaxInflightOps]) {
       ureq_finished++;
     }
   }
@@ -1059,7 +1061,6 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
   }
   constexpr size_t kChunkSize = kMessageChunkSizeKB * 1024;
 
-
   ucclRequest ureq[kMaxInflightOps] = {};
   bool done[kMaxInflightOps] = {false};
 
@@ -1074,17 +1075,18 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
       FifoItem curr_slot_item = slot_item;
       curr_slot_item.addr += size_write;
       curr_slot_item.size = chunk_size;
-      
+
       auto rc = uccl_write_async(ep_, conn, mhandle, cur_data, chunk_size,
-                                 curr_slot_item, &ureq[ureq_issued % kMaxInflightOps]);
+                                 curr_slot_item,
+                                 &ureq[ureq_issued % kMaxInflightOps]);
       if (rc == -1) break;
-      
+
       cur_data = static_cast<char*>(cur_data) + chunk_size;
       size_write += chunk_size;
       done[ureq_issued % kMaxInflightOps] = false;
       ureq_issued++;
     }
-    
+
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
 
     for (int i = ureq_finished; i < ureq_issued; i++) {
@@ -1094,11 +1096,12 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
       }
     }
 
-    while (ureq_finished < ureq_issued && done[ureq_finished % kMaxInflightOps]) {
+    while (ureq_finished < ureq_issued &&
+           done[ureq_finished % kMaxInflightOps]) {
       ureq_finished++;
     }
   }
-  
+
   return true;
 }
 

@@ -392,7 +392,8 @@ class SendChannelGroup : public ChannelGroup {
       std::vector<CQMeta> cq_datas;
       if (channel && channel->poll_once(cq_datas)) {
         for (auto const& cq_data : cq_datas) {
-          // LOG(INFO) << "SendChannelGroup::pollingLoop - Channel " << channel_id
+          // LOG(INFO) << "SendChannelGroup::pollingLoop - Channel " <<
+          // channel_id
           //           << " polled completion: " << cq_data;
           tracker_->acknowledge(cq_data.wr_id);
         }
