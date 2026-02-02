@@ -597,8 +597,9 @@ class NICEndpoint {
         }
       }
 
+      auto flow_control = std::make_shared<RDMAFlowControl>(512);  // Limit to 512 in-flight requests
       std::shared_ptr<RDMAChannel> new_channel = std::make_shared<RDMAChannel>(
-          ctx_ptr, meta.channel_meta, meta.channel_id);
+          ctx_ptr, meta.channel_meta, meta.channel_id, flow_control);
       // Create response (echo back the same data)
       MetaInfoToExchange response(rank_id_, meta.channel_id,
                                   new_channel->get_local_meta(), nullptr,
@@ -762,8 +763,9 @@ class NICEndpoint {
     for (int i = 0; i < kQpNumPerChannel; i++) {
       uint32_t channel_id = i + 1;
 
+      auto flow_control = std::make_shared<RDMAFlowControl>(512);  // Limit to 512 in-flight requests
       auto channel = std::make_shared<RDMAChannel>(
-          getContextByChannelId(channel_id), channel_id);
+          getContextByChannelId(channel_id), channel_id, flow_control);
 
       MetaInfoToExchange meta(rank_id_, channel_id, channel->get_local_meta(),
                               nullptr, ChannelType::Normal, gpu_index_);

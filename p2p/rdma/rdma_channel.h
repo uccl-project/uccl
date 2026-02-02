@@ -1,5 +1,6 @@
 #pragma once
 #include "define.h"
+#include "flow_control.h"
 #include "rdma_channel_impl.h"
 #include "rdma_context.h"
 #include "seq_num.h"
