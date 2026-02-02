@@ -184,8 +184,8 @@ class NICEndpoint {
 
     // Blocking call until send succeeds
     while (wr_id < 0) {
-      LOG(INFO) << "NICEndpoint::write - Attempting to send to rank_id: "
-                << rank_id << ", peer rank_id " << rank_id;
+      // LOG(INFO) << "NICEndpoint::write - Attempting to send to rank_id: "
+      //           << rank_id << ", peer rank_id " << rank_id;
       wr_id = send_group->postWriteOrRead(req);
 
       if (wr_id < 0) {
