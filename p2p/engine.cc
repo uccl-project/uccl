@@ -662,20 +662,43 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
     return false;
   }
 
-  ucclRequest ureq = {};
-  FifoItem curr_slot_item = slot_item;
-  curr_slot_item.size = size;
+  constexpr size_t kChunkSize = kMessageChunkSizeKB * 1024;
+  ucclRequest ureq[kMaxInflightOps] = {};
+  bool done[kMaxInflightOps] = {false};
 
-  bool done = false;
+  void* cur_data = dst;
+  size_t size_read = 0;
+  int ureq_max = (size + kChunkSize - 1) / kChunkSize;
+  int ureq_issued = 0, ureq_finished = 0;
 
-  while (uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item,
-                         &ureq) == -1)
-    ;
-
-  while (!done) {
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued - ureq_finished < kMaxInflightOps && size_read < size) {
+      size_t chunk_size = std::min(size - size_read, kChunkSize);
+      FifoItem curr_slot_item = slot_item;
+      curr_slot_item.addr += size_read;
+      curr_slot_item.size = chunk_size;
+      
+      auto rc = uccl_read_async(ep_, conn, mhandle, cur_data, chunk_size,
+                                curr_slot_item, &ureq[ureq_issued % kMaxInflightOps]);
+      if (rc == -1) break;
+      
+      cur_data = static_cast<char*>(cur_data) + chunk_size;
+      size_read += chunk_size;
+      done[ureq_issued % kMaxInflightOps] = false;
+      ureq_issued++;
+    }
+    
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-    if (uccl_poll_ureq_once(ep_, &ureq)) {
-      done = true;
+
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (done[i % kMaxInflightOps]) continue;
+      if (uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightOps])) {
+        done[i % kMaxInflightOps] = true;
+      }
+    }
+
+    while (ureq_finished < ureq_issued && done[ureq_finished % kMaxInflightOps]) {
+      ureq_finished++;
     }
   }
 
@@ -768,46 +791,85 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     return false;
   }
 
-  std::vector<ucclRequest> ureq(num_iovs);
-  std::vector<FifoItem> curr_slot_item(num_iovs);
-  std::vector<bool> done(num_iovs, false);
-  std::vector<bool> read(num_iovs, false);
-  std::vector<P2PMhandle*> mhandles(num_iovs);
+  constexpr size_t kChunkSize = kMessageChunkSizeKB * 1024;
+  ucclRequest ureq[kMaxInflightOps] = {};
+  bool done[kMaxInflightOps] = {false};
 
-  // Check if mhandles are all valid
+  // Pre-compute all chunks from all IOVs
+  std::vector<void*> data_read_vec;
+  std::vector<size_t> size_read_vec;
+  std::vector<P2PMhandle*> mhandle_read_vec;
+  std::vector<FifoItem> slot_item_vec;
+
+  int estimated_ureq_max = 0;
   for (size_t i = 0; i < num_iovs; i++) {
-    mhandles[i] = get_mhandle(mr_id_v[i]);
-    if (unlikely(mhandles[i] == nullptr)) {
+    estimated_ureq_max += (size_v[i] + kChunkSize - 1) / kChunkSize;
+  }
+  data_read_vec.reserve(estimated_ureq_max);
+  size_read_vec.reserve(estimated_ureq_max);
+  mhandle_read_vec.reserve(estimated_ureq_max);
+  slot_item_vec.reserve(estimated_ureq_max);
+
+  // Check mhandles and chunk each IOV
+  for (size_t i = 0; i < num_iovs; i++) {
+    P2PMhandle* mhandle = get_mhandle(mr_id_v[i]);
+    if (unlikely(mhandle == nullptr)) {
       std::cerr << "[readv] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
       return false;
     }
+
+    void* cur_data = dst_v[i];
+    size_t size_read = 0;
+    FifoItem base_slot_item = slot_item_v[i];
+
+    while (size_read < size_v[i]) {
+      size_t chunk_size = std::min(size_v[i] - size_read, kChunkSize);
+      FifoItem chunk_slot_item = base_slot_item;
+      chunk_slot_item.addr += size_read;
+      chunk_slot_item.size = chunk_size;
+
+      data_read_vec.push_back(cur_data);
+      size_read_vec.push_back(chunk_size);
+      mhandle_read_vec.push_back(mhandle);
+      slot_item_vec.push_back(chunk_slot_item);
+
+      cur_data = static_cast<char*>(cur_data) + chunk_size;
+      size_read += chunk_size;
+    }
   }
 
-  while (true) {
-    for (size_t i = 0; i < num_iovs; i++) {
-      if (done[i]) continue;
+  // Process all chunks with throttling
+  int ureq_max = data_read_vec.size();
+  int ureq_issued = 0, ureq_finished = 0;
 
-      if (!read[i]) {
-        curr_slot_item[i] = slot_item_v[i];
-        auto mhandle = mhandles[i];
-        auto rc = uccl_read_async(ep_, conn, mhandle, dst_v[i], size_v[i],
-                                  curr_slot_item[i], &ureq[i]);
-        if (rc != -1) {
-          read[i] = true;
-        }
-      }
-
-      if (read[i] && !done[i]) {
-        if (uccl_poll_ureq_once(ep_, &ureq[i])) {
-          done[i] = true;
-        }
-      }
+  while (ureq_finished < ureq_max) {
+    // Issue up to kMaxInflightOps requests
+    while (ureq_issued < ureq_max &&
+           ureq_issued - ureq_finished < kMaxInflightOps) {
+      auto rc = uccl_read_async(ep_, conn, mhandle_read_vec[ureq_issued],
+                                data_read_vec[ureq_issued],
+                                size_read_vec[ureq_issued],
+                                slot_item_vec[ureq_issued],
+                                &ureq[ureq_issued % kMaxInflightOps]);
+      if (rc == -1) break;
+      done[ureq_issued % kMaxInflightOps] = false;
+      ureq_issued++;
     }
 
-    if (std::all_of(done.begin(), done.end(), [](bool b) { return b; })) {
-      break;
-    }
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+
+    // Poll for completions
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (done[i % kMaxInflightOps]) continue;
+      if (uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightOps])) {
+        done[i % kMaxInflightOps] = true;
+      }
+    }
+
+    // Advance finished counter
+    while (ureq_finished < ureq_issued && done[ureq_finished % kMaxInflightOps]) {
+      ureq_finished++;
+    }
   }
 
   return true;
@@ -870,49 +932,86 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     std::cerr << "[writev] Error: Invalid conn_id " << conn_id << std::endl;
     return false;
   }
+  constexpr size_t kChunkSize = kMessageChunkSizeKB * 1024;
 
-  std::vector<ucclRequest> ureq(num_iovs);
-  std::vector<FifoItem> curr_slot_item(num_iovs);
-  std::vector<bool> done(num_iovs, false);
-  std::vector<bool> written(num_iovs, false);
-  std::vector<P2PMhandle*> mhandles(num_iovs);
+  ucclRequest ureq[kMaxInflightOps] = {};
+  bool done[kMaxInflightOps] = {false};
 
-  // Check if mhandles are all valid
-  for (int i = 0; i < num_iovs; i++) {
-    mhandles[i] = get_mhandle(mr_id_v[i]);
-    if (unlikely(mhandles[i] == nullptr)) {
+  // Pre-compute all chunks from all IOVs
+  std::vector<void*> data_write_vec;
+  std::vector<size_t> size_write_vec;
+  std::vector<P2PMhandle*> mhandle_write_vec;
+  std::vector<FifoItem> slot_item_vec;
+
+  int estimated_ureq_max = 0;
+  for (size_t i = 0; i < num_iovs; i++) {
+    estimated_ureq_max += (size_v[i] + kChunkSize - 1) / kChunkSize;
+  }
+  data_write_vec.reserve(estimated_ureq_max);
+  size_write_vec.reserve(estimated_ureq_max);
+  mhandle_write_vec.reserve(estimated_ureq_max);
+  slot_item_vec.reserve(estimated_ureq_max);
+
+  // Check mhandles and chunk each IOV
+  for (size_t i = 0; i < num_iovs; i++) {
+    P2PMhandle* mhandle = get_mhandle(mr_id_v[i]);
+    if (unlikely(mhandle == nullptr)) {
       std::cerr << "[writev] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
       return false;
     }
+
+    void* cur_data = src_v[i];
+    size_t size_write = 0;
+    FifoItem base_slot_item = slot_item_v[i];
+
+    while (size_write < size_v[i]) {
+      size_t chunk_size = std::min(size_v[i] - size_write, kChunkSize);
+      FifoItem chunk_slot_item = base_slot_item;
+      chunk_slot_item.addr += size_write;
+      chunk_slot_item.size = chunk_size;
+
+      data_write_vec.push_back(cur_data);
+      size_write_vec.push_back(chunk_size);
+      mhandle_write_vec.push_back(mhandle);
+      slot_item_vec.push_back(chunk_slot_item);
+
+      cur_data = static_cast<char*>(cur_data) + chunk_size;
+      size_write += chunk_size;
+    }
   }
 
-  while (1) {
-    for (size_t i = 0; i < num_iovs; i++) {
-      if (done[i]) continue;
+  // Process all chunks with throttling
+  int ureq_max = data_write_vec.size();
+  int ureq_issued = 0, ureq_finished = 0;
 
-      if (!written[i]) {
-        curr_slot_item[i] = slot_item_v[i];
-
-        auto mhandle = mhandles[i];
-        auto rc = uccl_write_async(ep_, conn, mhandle, src_v[i], size_v[i],
-                                   curr_slot_item[i], &ureq[i]);
-        if (rc != -1) {
-          written[i] = true;
-        }
-      }
-
-      if (written[i] && !done[i]) {
-        if (uccl_poll_ureq_once(ep_, &ureq[i])) {
-          done[i] = true;
-        }
-      }
-    }
-
-    if (std::all_of(done.begin(), done.end(), [](bool b) { return b; })) {
-      break;
+  while (ureq_finished < ureq_max) {
+    // Issue up to kMaxInflightOps requests
+    while (ureq_issued < ureq_max &&
+           ureq_issued - ureq_finished < kMaxInflightOps) {
+      auto rc = uccl_write_async(ep_, conn, mhandle_write_vec[ureq_issued],
+                                 data_write_vec[ureq_issued],
+                                 size_write_vec[ureq_issued],
+                                 slot_item_vec[ureq_issued],
+                                 &ureq[ureq_issued % kMaxInflightOps]);
+      if (rc == -1) break;
+      done[ureq_issued % kMaxInflightOps] = false;
+      ureq_issued++;
     }
 
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+
+    // Poll for completions
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (done[i % kMaxInflightOps]) continue;
+      if (uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightOps])) {
+        done[i % kMaxInflightOps] = true;
+      }
+    }
+
+    // Advance finished counter
+    while (ureq_finished < ureq_issued && done[ureq_finished % kMaxInflightOps]) {
+      ureq_finished++;
+    }
   }
 
   return true;
@@ -958,17 +1057,48 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
     std::cerr << "[write] Error: Invalid mr_id " << mr_id << std::endl;
     return false;
   }
+  constexpr size_t kChunkSize = kMessageChunkSizeKB * 1024;
 
-  ucclRequest ureq = {};
-  FifoItem cur_slot_item = slot_item;
-  cur_slot_item.size = size;
-  while (uccl_write_async(ep_, conn, mhandle, src, size, cur_slot_item,
-                          &ureq) == -1)
-    ;
 
-  while (!uccl_poll_ureq_once(ep_, &ureq)) {
+  ucclRequest ureq[kMaxInflightOps] = {};
+  bool done[kMaxInflightOps] = {false};
+
+  void* cur_data = src;
+  size_t size_write = 0;
+  int ureq_max = (size + kChunkSize - 1) / kChunkSize;
+  int ureq_issued = 0, ureq_finished = 0;
+
+  while (ureq_finished < ureq_max) {
+    while (ureq_issued - ureq_finished < kMaxInflightOps && size_write < size) {
+      size_t chunk_size = std::min(size - size_write, kChunkSize);
+      FifoItem curr_slot_item = slot_item;
+      curr_slot_item.addr += size_write;
+      curr_slot_item.size = chunk_size;
+      
+      auto rc = uccl_write_async(ep_, conn, mhandle, cur_data, chunk_size,
+                                 curr_slot_item, &ureq[ureq_issued % kMaxInflightOps]);
+      if (rc == -1) break;
+      
+      cur_data = static_cast<char*>(cur_data) + chunk_size;
+      size_write += chunk_size;
+      done[ureq_issued % kMaxInflightOps] = false;
+      ureq_issued++;
+    }
+    
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+
+    for (int i = ureq_finished; i < ureq_issued; i++) {
+      if (done[i % kMaxInflightOps]) continue;
+      if (uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightOps])) {
+        done[i % kMaxInflightOps] = true;
+      }
+    }
+
+    while (ureq_finished < ureq_issued && done[ureq_finished % kMaxInflightOps]) {
+      ureq_finished++;
+    }
   }
+  
   return true;
 }
 
