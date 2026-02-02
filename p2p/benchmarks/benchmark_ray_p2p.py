@@ -82,9 +82,8 @@ def _run_server(args, ep):
             remote_descs_serialized = ep.get_serialized_descs(remote_descs)
             _send_bytes(remote_descs_serialized, dst=peer)
 
-            # Wait for all iterations (warmup + benchmark)
-            for iter_idx in range(args.iters + 1):
-                dist.barrier()
+            # Wait for all iterations to complete
+            dist.barrier()
         else:
             # Normal mode: register memory and send descriptors for each iteration
             for iter_idx in range(args.iters + 1):  # +1 for warmup
@@ -142,7 +141,6 @@ def _run_client(args, ep):
             assert xfer_handle is not None, "Failed to start warmup transfer"
             while not ep.check_xfer_state(xfer_handle):
                 pass
-            dist.barrier()
 
             # Benchmark iterations - reuse everything
             start = time.perf_counter()
@@ -153,9 +151,9 @@ def _run_client(args, ep):
                 while not ep.check_xfer_state(xfer_handle):
                     pass
                 total += sz
-                dist.barrier()
 
             elapsed = time.perf_counter() - start
+            dist.barrier()
         else:
             # Normal mode: setup for each iteration
             # Warmup iteration
