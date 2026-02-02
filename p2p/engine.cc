@@ -676,7 +676,7 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   while (ureq_finished < ureq_max) {
     while (ureq_issued - ureq_finished < kMaxInflightOps && size_read < size) {
       size_t chunk_size = std::min(size - size_read, kChunkSize);
-  FifoItem curr_slot_item = slot_item;
+      FifoItem curr_slot_item = slot_item;
       curr_slot_item.addr += size_read;
       curr_slot_item.size = chunk_size;
 
@@ -842,12 +842,10 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     }
   }
 
-  // Process all chunks with throttling
   int ureq_max = data_read_vec.size();
   int ureq_issued = 0, ureq_finished = 0;
 
   while (ureq_finished < ureq_max) {
-    // Issue up to kMaxInflightOps requests
     while (ureq_issued < ureq_max &&
            ureq_issued - ureq_finished < kMaxInflightOps) {
       auto rc = uccl_read_async(
@@ -857,19 +855,17 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       if (rc == -1) break;
       done[ureq_issued % kMaxInflightOps] = false;
       ureq_issued++;
-        }
+    }
 
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
 
-    // Poll for completions
     for (int i = ureq_finished; i < ureq_issued; i++) {
       if (done[i % kMaxInflightOps]) continue;
       if (uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightOps])) {
         done[i % kMaxInflightOps] = true;
-        }
       }
+    }
 
-    // Advance finished counter
     while (ureq_finished < ureq_issued &&
            done[ureq_finished % kMaxInflightOps]) {
       ureq_finished++;
@@ -941,7 +937,6 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   ucclRequest ureq[kMaxInflightOps] = {};
   bool done[kMaxInflightOps] = {false};
 
-  // Pre-compute all chunks from all IOVs
   std::vector<void*> data_write_vec;
   std::vector<size_t> size_write_vec;
   std::vector<P2PMhandle*> mhandle_write_vec;
@@ -956,7 +951,6 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   mhandle_write_vec.reserve(estimated_ureq_max);
   slot_item_vec.reserve(estimated_ureq_max);
 
-  // Check mhandles and chunk each IOV
   for (size_t i = 0; i < num_iovs; i++) {
     P2PMhandle* mhandle = get_mhandle(mr_id_v[i]);
     if (unlikely(mhandle == nullptr)) {
@@ -984,12 +978,10 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     }
   }
 
-  // Process all chunks with throttling
   int ureq_max = data_write_vec.size();
   int ureq_issued = 0, ureq_finished = 0;
 
   while (ureq_finished < ureq_max) {
-    // Issue up to kMaxInflightOps requests
     while (ureq_issued < ureq_max &&
            ureq_issued - ureq_finished < kMaxInflightOps) {
       auto rc = uccl_write_async(
@@ -999,19 +991,17 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
       if (rc == -1) break;
       done[ureq_issued % kMaxInflightOps] = false;
       ureq_issued++;
-        }
+    }
 
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
 
-    // Poll for completions
     for (int i = ureq_finished; i < ureq_issued; i++) {
       if (done[i % kMaxInflightOps]) continue;
       if (uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightOps])) {
         done[i % kMaxInflightOps] = true;
-        }
+      }
     }
 
-    // Advance finished counter
     while (ureq_finished < ureq_issued &&
            done[ureq_finished % kMaxInflightOps]) {
       ureq_finished++;
