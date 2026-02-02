@@ -907,6 +907,14 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
   double total_time_us = total_timer.get_us();
   
+  // Get detailed timing from endpoint_wrapper.h
+  extern thread_local double g_set_request_alloc_time_us;
+  extern thread_local double g_set_request_writeorread_time_us;
+  extern thread_local int g_set_request_count;
+  extern thread_local double g_poll_sendchannel_time_us;
+  extern thread_local double g_poll_checksend_time_us;
+  extern thread_local int g_poll_count;
+  
   // Log timing breakdown
   std::cout << "[readv TIMING] num_iovs=" << num_iovs
             << " chunks=" << ureq_max
@@ -916,6 +924,27 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
             << " poll=" << total_poll_time_us << "us (" << (total_poll_time_us/total_time_us*100) << "%)"
             << " poll_iters=" << poll_iterations
             << " avg_poll=" << (total_poll_time_us/poll_iterations) << "us\n";
+  
+  // Log detailed breakdown
+  std::cout << "[readv DETAIL] "
+            << "set_request_calls=" << g_set_request_count
+            << " alloc=" << g_set_request_alloc_time_us << "us ("
+            << (g_set_request_alloc_time_us/total_issue_time_us*100) << "% of issue)"
+            << " writeOrRead=" << g_set_request_writeorread_time_us << "us ("
+            << (g_set_request_writeorread_time_us/total_issue_time_us*100) << "% of issue)"
+            << " | poll_calls=" << g_poll_count
+            << " pollSendChannel=" << g_poll_sendchannel_time_us << "us ("
+            << (g_poll_sendchannel_time_us/total_poll_time_us*100) << "% of poll)"
+            << " checkSend=" << g_poll_checksend_time_us << "us ("
+            << (g_poll_checksend_time_us/total_poll_time_us*100) << "% of poll)\n";
+  
+  // Reset counters for next call
+  g_set_request_alloc_time_us = 0;
+  g_set_request_writeorread_time_us = 0;
+  g_set_request_count = 0;
+  g_poll_sendchannel_time_us = 0;
+  g_poll_checksend_time_us = 0;
+  g_poll_count = 0;
 
   return true;
 }
