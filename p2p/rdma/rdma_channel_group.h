@@ -304,8 +304,8 @@ class SendChannelGroup : public ChannelGroup {
     size_t message_size = req->local_mem->size;
     auto chunks = splitMessageToChunks(message_size);
 
-    LOG(INFO) << "SendChannelGroup: Splitting message into " << chunks.size()
-              << " chunks (message_size: " << message_size << ")";
+    // LOG(INFO) << "SendChannelGroup: Splitting message into " << chunks.size()
+    //           << " chunks (message_size: " << message_size << ")";
     size_t num_channels = normalChannelCount();
     tracker_->updateExpectedAckCount(req->wr_id, chunks.size());
     for (size_t i = 0; i < chunks.size(); ++i) {
@@ -338,10 +338,11 @@ class SendChannelGroup : public ChannelGroup {
       chunk_req->send_type = req->send_type;
       // Send the chunk
       if (postRequestOnChannel(chunk_req)) {
-        LOG(INFO) << "SendChannelGroup: Sent chunk " << i << "/"
-                  << chunks.size() << " (offset: " << chunk.offset
-                  << ", size: " << chunk.size
-                  << ", channel_id: " << chunk_channel_id << ")" << std::endl;
+        // LOG(INFO) << "SendChannelGroup: Sent chunk " << i << "/"
+        //           << chunks.size() << " (offset: " << chunk.offset
+        //           << ", size: " << chunk.size
+        //           << ", channel_id: " << chunk_channel_id << ")" <<
+        //           std::endl;
       } else {
         LOG(WARNING) << "SendChannelGroup: Failed to send chunk " << i
                      << " (offset: " << chunk.offset << ", size: " << chunk.size
@@ -398,8 +399,9 @@ class SendChannelGroup : public ChannelGroup {
       std::vector<CQMeta> cq_datas;
       if (channel && channel->poll_once(cq_datas)) {
         for (auto const& cq_data : cq_datas) {
-          LOG(INFO) << "SendChannelGroup::pollingLoop - Channel " << channel_id
-                    << " polled completion: " << cq_data;
+          // LOG(INFO) << "SendChannelGroup::pollingLoop - Channel " <<
+          // channel_id
+          //           << " polled completion: " << cq_data;
           tracker_->acknowledge(cq_data.wr_id);
         }
       }
