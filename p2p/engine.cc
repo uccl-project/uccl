@@ -62,9 +62,14 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   FLAGS_logtostderr = true;
   google::InstallFailureSignalHandler();
 
+#ifdef UCCL_P2P_USE_NCCL
+  ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
+  numa_node_ = tcp::get_tcp_numa_node_from_iface();
+#else
   // Initialize the RDMA endpoint.
   ep_ = std::shared_ptr<NICEndpoint>(
       new NICEndpoint(local_gpu_idx_, INVALID_RANK_ID, 0, false));
+#endif
 
   std::cout << "Engine initialized for GPU " << local_gpu_idx_ << std::endl;
   engine_initialized_ = true;
@@ -74,7 +79,9 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   recv_unified_task_ring_ =
       uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
 
+#ifndef UCCL_P2P_USE_NCCL
   numa_node_ = RdmaDeviceManager::instance().get_numa_node(local_gpu_idx_);
+#endif
 
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
@@ -106,9 +113,13 @@ Endpoint::Endpoint(uint32_t const num_cpus)
                  []() { google::InitGoogleLogging("uccl_p2p"); });
 
   google::InstallFailureSignalHandler();
+#ifdef UCCL_P2P_USE_NCCL
+  ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
+#else
   // Initialize the RDMA endpoint with lazy creation.
   ep_ = std::shared_ptr<NICEndpoint>(
       new NICEndpoint(INVALID_GPU, INVALID_RANK_ID, 0, false));
+#endif
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
@@ -168,7 +179,11 @@ void Endpoint::initialize_engine() {
     GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i], gpuStreamNonBlocking));
   }
 
+#ifdef UCCL_P2P_USE_NCCL
+  numa_node_ = tcp::get_tcp_numa_node_from_iface();
+#else
   numa_node_ = RdmaDeviceManager::instance().get_numa_node(local_gpu_idx_);
+#endif
 
   // Initialize rdma contexts for devices used by the GPU
   initialize_rdma_ctx_for_gpu(ep_, local_gpu_idx_);
