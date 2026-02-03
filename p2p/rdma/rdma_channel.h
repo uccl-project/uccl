@@ -178,8 +178,9 @@ class RDMAChannel {
 
     struct ibv_sge sge[1];
     int num_sge = prepareSGEList(sge, req);
-    uint32_t max_inline = impl_->getMaxInlineData();
-    if (req->getLocalLen() <= max_inline) {
+
+    if (req->send_type != SendType::Read &&
+        req->getLocalLen() <= impl_->getMaxInlineData()) {
       qpx->wr_flags |= IBV_SEND_INLINE;
       ibv_wr_set_inline_data(qpx, (void*)req->getLocalAddress(),
                              req->getLocalLen());
@@ -247,8 +248,8 @@ class RDMAChannel {
       return -1;
     }
 
-    uint32_t max_inline = impl_->getMaxInlineData();
-    if (req->getLocalLen() <= max_inline) {
+    if (req->send_type != SendType::Read &&
+        req->getLocalLen() <= impl_->getMaxInlineData()) {
       wr.send_flags |= IBV_SEND_INLINE;
     }
 
