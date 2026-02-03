@@ -340,17 +340,38 @@ EFASocket::EFASocket(int gpu_idx, int dev_idx, int socket_idx)
 
   // Allocate memory for packet data.
   void* pkt_data_buf_ = nullptr;
+#ifdef MANAGED
+  // If NIC doesn't support registering memory allocated with cudaMalloc(),
+  // ibv_reg_mr will fail. cudaMallocManaged allocates a unified single virtual
+  // address range that is accessible from both CPU and GPU. Runtime migrates
+  // pages on demand between host and device when either side accesses them,
+  // using page faults to trigger migration.
+  auto cuda_ret = cudaMallocManaged(
+      &pkt_data_buf_,
+      PktDataBuffPool::kNumPktData * PktDataBuffPool::kPktDataSize,
+      cudaMemAttachGlobal);
+  DCHECK(cuda_ret == cudaSuccess) << "cudaMallocManaged failed";
+#else
   auto cuda_ret = cudaMalloc(&pkt_data_buf_, PktDataBuffPool::kNumPktData *
                                                  PktDataBuffPool::kPktDataSize);
   DCHECK(cuda_ret == cudaSuccess) << "cudaMalloc failed";
+#endif
   LOG(INFO) << "[EFA] gpu_idx " << gpu_idx << " pkt_data_buf_ " << std::hex
             << pkt_data_buf_ << " to "
             << pkt_data_buf_ +
                    PktDataBuffPool::kNumPktData * PktDataBuffPool::kPktDataSize;
+#ifdef MANAGED
+  auto* pkt_data_mr_ =
+      ibv_reg_mr(pd_, pkt_data_buf_,
+                 PktDataBuffPool::kNumPktData * PktDataBuffPool::kPktDataSize,
+                 IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                     IBV_ACCESS_REMOTE_READ);
+#else
   auto* pkt_data_mr_ =
       ibv_reg_mr(pd_, pkt_data_buf_,
                  PktDataBuffPool::kNumPktData * PktDataBuffPool::kPktDataSize,
                  IBV_ACCESS_LOCAL_WRITE);
+#endif
   DCHECK(pkt_data_mr_ != nullptr) << "ibv_reg_mr failed";
   pkt_data_pool_ = new PktDataBuffPool(pkt_data_mr_);
 

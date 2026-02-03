@@ -92,6 +92,7 @@ using FifoItem = FifoItem;
 class Endpoint {
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
+  static constexpr int kMaxInflightOps = 8;  // Max 8 concurrent Ops
 
  public:
   // Prepare transfer info structure for receiving IPC handle
