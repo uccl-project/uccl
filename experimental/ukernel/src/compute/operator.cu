@@ -134,7 +134,7 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* c2d_fifos,
       case TaskType::TkGemm: {
         GemmArgs const& ga = d_gemm[idx];
         TkMatmulGlobals* g = (TkMatmulGlobals*)ga.globals;
-        run_tk_gemm(*g, ga.tile_row, ga.tile_col, smem);
+        run_tk_gemm(*g, ga.num_tile_rows, ga.num_tile_cols, smem);
         break;
       }
       default:

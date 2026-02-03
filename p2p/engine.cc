@@ -668,12 +668,11 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
   FifoItem curr_slot_item = slot_item;
   curr_slot_item.size = size;
 
-  bool done = false;
-
   while (uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item,
                          &ureq) == -1)
     ;
 
+  bool done = false;
   while (!done) {
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
     if (uccl_poll_ureq_once(ep_, &ureq)) {
@@ -770,45 +769,42 @@ bool Endpoint::readv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     return false;
   }
 
-  std::vector<ucclRequest> ureq(num_iovs);
-  std::vector<FifoItem> curr_slot_item(num_iovs);
-  std::vector<bool> done(num_iovs, false);
-  std::vector<bool> read(num_iovs, false);
-  std::vector<P2PMhandle*> mhandles(num_iovs);
+  ucclRequest ureq[kMaxInflightOps] = {};
+  bool done[kMaxInflightOps] = {false};
 
-  // Check if mhandles are all valid
-  for (int i = 0; i < num_iovs; i++) {
-    mhandles[i] = get_mhandle(mr_id_v[i]);
-    if (unlikely(mhandles[i] == nullptr)) {
-      std::cerr << "[readv] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
-      return false;
-    }
-  }
+  size_t iov_issued = 0, iov_finished = 0;
 
-  while (1) {
-    for (size_t i = 0; i < num_iovs; i++) {
-      if (done[i]) continue;
-
-      if (!read[i]) {
-        curr_slot_item[i] = slot_item_v[i];
-        auto mhandle = mhandles[i];
-        auto rc = uccl_read_async(ep_, conn, mhandle, dst_v[i], size_v[i],
-                                  curr_slot_item[i], &ureq[i]);
-        if (rc != -1) {
-          read[i] = true;
-        }
+  while (iov_finished < num_iovs) {
+    // Issue up to kMaxInflightOps IOVs
+    while (iov_issued < num_iovs &&
+           iov_issued - iov_finished < kMaxInflightOps) {
+      P2PMhandle* mhandle = get_mhandle(mr_id_v[iov_issued]);
+      if (unlikely(mhandle == nullptr)) {
+        std::cerr << "[readv] Error: Invalid mr_id " << mr_id_v[iov_issued]
+                  << std::endl;
+        return false;
       }
 
-      if (read[i] && !done[i]) {
-        if (uccl_poll_ureq_once(ep_, &ureq[i])) {
-          done[i] = true;
-        }
-      }
+      auto rc = uccl_read_async(ep_, conn, mhandle, dst_v[iov_issued],
+                                size_v[iov_issued], slot_item_v[iov_issued],
+                                &ureq[iov_issued % kMaxInflightOps]);
+      if (rc == -1) break;
+      done[iov_issued % kMaxInflightOps] = false;
+      iov_issued++;
     }
-    if (std::all_of(done.begin(), done.end(), [](bool b) { return b; })) {
-      break;
-    }
+
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+
+    for (size_t i = iov_finished; i < iov_issued; i++) {
+      if (done[i % kMaxInflightOps]) continue;
+      if (uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightOps])) {
+        done[i % kMaxInflightOps] = true;
+      }
+    }
+
+    while (iov_finished < iov_issued && done[iov_finished % kMaxInflightOps]) {
+      iov_finished++;
+    }
   }
 
   return true;
@@ -872,48 +868,41 @@ bool Endpoint::writev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
     return false;
   }
 
-  std::vector<ucclRequest> ureq(num_iovs);
-  std::vector<FifoItem> curr_slot_item(num_iovs);
-  std::vector<bool> done(num_iovs, false);
-  std::vector<bool> written(num_iovs, false);
-  std::vector<P2PMhandle*> mhandles(num_iovs);
+  ucclRequest ureq[kMaxInflightOps] = {};
+  bool done[kMaxInflightOps] = {false};
 
-  // Check if mhandles are all valid
-  for (int i = 0; i < num_iovs; i++) {
-    mhandles[i] = get_mhandle(mr_id_v[i]);
-    if (unlikely(mhandles[i] == nullptr)) {
-      std::cerr << "[writev] Error: Invalid mr_id " << mr_id_v[i] << std::endl;
-      return false;
-    }
-  }
+  size_t iov_issued = 0, iov_finished = 0;
 
-  while (1) {
-    for (size_t i = 0; i < num_iovs; i++) {
-      if (done[i]) continue;
-
-      if (!written[i]) {
-        curr_slot_item[i] = slot_item_v[i];
-
-        auto mhandle = mhandles[i];
-        auto rc = uccl_write_async(ep_, conn, mhandle, src_v[i], size_v[i],
-                                   curr_slot_item[i], &ureq[i]);
-        if (rc != -1) {
-          written[i] = true;
-        }
+  while (iov_finished < num_iovs) {
+    while (iov_issued < num_iovs &&
+           iov_issued - iov_finished < kMaxInflightOps) {
+      P2PMhandle* mhandle = get_mhandle(mr_id_v[iov_issued]);
+      if (unlikely(mhandle == nullptr)) {
+        std::cerr << "[writev] Error: Invalid mr_id " << mr_id_v[iov_issued]
+                  << std::endl;
+        return false;
       }
 
-      if (written[i] && !done[i]) {
-        if (uccl_poll_ureq_once(ep_, &ureq[i])) {
-          done[i] = true;
-        }
-      }
-    }
-
-    if (std::all_of(done.begin(), done.end(), [](bool b) { return b; })) {
-      break;
+      auto rc = uccl_write_async(ep_, conn, mhandle, src_v[iov_issued],
+                                 size_v[iov_issued], slot_item_v[iov_issued],
+                                 &ureq[iov_issued % kMaxInflightOps]);
+      if (rc == -1) break;
+      done[iov_issued % kMaxInflightOps] = false;
+      iov_issued++;
     }
 
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+
+    for (size_t i = iov_finished; i < iov_issued; i++) {
+      if (done[i % kMaxInflightOps]) continue;
+      if (uccl_poll_ureq_once(ep_, &ureq[i % kMaxInflightOps])) {
+        done[i % kMaxInflightOps] = true;
+      }
+    }
+
+    while (iov_finished < iov_issued && done[iov_finished % kMaxInflightOps]) {
+      iov_finished++;
+    }
   }
 
   return true;
@@ -959,17 +948,22 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
     std::cerr << "[write] Error: Invalid mr_id " << mr_id << std::endl;
     return false;
   }
-
   ucclRequest ureq = {};
-  FifoItem cur_slot_item = slot_item;
-  cur_slot_item.size = size;
-  while (uccl_write_async(ep_, conn, mhandle, src, size, cur_slot_item,
+  FifoItem curr_slot_item = slot_item;
+  curr_slot_item.size = size;
+
+  while (uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
                           &ureq) == -1)
     ;
 
-  while (!uccl_poll_ureq_once(ep_, &ureq)) {
+  bool done = false;
+  while (!done) {
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+    if (uccl_poll_ureq_once(ep_, &ureq)) {
+      done = true;
+    }
   }
+
   return true;
 }
 

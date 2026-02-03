@@ -38,10 +38,10 @@ struct TkMatmulGlobals {
       : A(other.A), B(other.B), C(other.C) {}
 };
 
-// Level_08 GEMM device kernel
+// Multi-block GEMM: each block processes tiles in round-robin
 __device__ __forceinline__ void run_tk_gemm(TkMatmulGlobals const& g,
-                                            int tile_row, int tile_col,
-                                            char* smem) {
+                                            int num_tile_rows,
+                                            int num_tile_cols, char* smem) {
   shared_allocator al((int*)smem);
   st_bf<TK_BLOCK_SIZE, TK_BLOCK_SIZE>(&As)[2][TK_M_BLOCK] =
       al.allocate<st_bf<TK_BLOCK_SIZE, TK_BLOCK_SIZE>, 2, TK_M_BLOCK>();
@@ -51,76 +51,79 @@ __device__ __forceinline__ void run_tk_gemm(TkMatmulGlobals const& g,
       al.allocate<st_bf<TK_BLOCK_SIZE, TK_BLOCK_SIZE>, TK_M_BLOCK,
                   TK_N_BLOCK>();
 
-  int tic = 0, toc = 1;
-
   using wide_tile = st_bf<TK_BLOCK_SIZE, TK_BLOCK_SIZE * TK_N_BLOCK>;
-  rt_fl<16, TK_BLOCK_SIZE * TK_N_BLOCK> C_accum;
 
-  int row = tile_row * TK_M_BLOCK;
-  int col = tile_col * TK_N_BLOCK;
-
-  // Warpgroup roles: 0=producer, 1..M_BLOCK=consumers
   int const warpid = kittens::warpid();
   int const warpgroupid = warpid / 4;
   bool is_producer = (warpgroupid == 0);
   bool is_consumer = (warpgroupid > 0 && warpgroupid <= TK_M_BLOCK);
   int consumer_idx = is_consumer ? (warpgroupid - 1) : 0;
 
-  // Initial TMA load
-  __shared__ semaphore bar;
-  if (threadIdx.x == 0) {
-    init_semaphore(bar, 0, 1);
-    tma::expect_bytes(bar, TK_M_BLOCK * size_bytes<typeof(As[0][0])> +
-                               TK_N_BLOCK * size_bytes<typeof(Bs[0][0])>);
-    for (int m = 0; m < TK_M_BLOCK; m++)
-      tma::load_async(As[tic][m], g.A, {0, 0, row + m, 0}, bar);
-    for (int n = 0; n < TK_N_BLOCK; n++)
-      tma::load_async(Bs[tic][n], g.B, {0, 0, 0, col + n}, bar);
-  }
-  __syncthreads();
+  int total_tiles = num_tile_rows * num_tile_cols;
+  int K_tiles = (g.A.cols() + TK_BLOCK_SIZE - 1) / TK_BLOCK_SIZE;
 
-  if (is_consumer) kittens::warp::zero(C_accum);
+  // Each block processes tiles in round-robin
+  for (int t = blockIdx.x; t < total_tiles; t += gridDim.x) {
+    int tile_row = t / num_tile_cols;
+    int tile_col = t % num_tile_cols;
+    int row = tile_row * TK_M_BLOCK;
+    int col = tile_col * TK_N_BLOCK;
 
-  // Main loop: producer prefetches, consumers compute
-  int K = g.A.cols();
-  int num_tiles = (K + TK_BLOCK_SIZE - 1) / TK_BLOCK_SIZE;
-  for (int tile = 0; tile < num_tiles; ++tile, tic ^= 1, toc ^= 1) {
-    wait(bar, tic);
-    __syncthreads();
+    int tic = 0, toc = 1;
+    rt_fl<16, TK_BLOCK_SIZE * TK_N_BLOCK> C_accum;
 
-    if (is_producer) {
-      warpgroup::decrease_registers<40>();
-      if (threadIdx.x == 0 && tile + 1 < num_tiles) {
-        tma::expect_bytes(bar, TK_M_BLOCK * size_bytes<typeof(As[0][0])> +
-                                   TK_N_BLOCK * size_bytes<typeof(Bs[0][0])>);
-        for (int m = 0; m < TK_M_BLOCK; m++)
-          tma::load_async(As[toc][m], g.A, {0, 0, row + m, tile + 1}, bar);
-        for (int n = 0; n < TK_N_BLOCK; n++)
-          tma::load_async(Bs[toc][n], g.B, {0, 0, tile + 1, col + n}, bar);
-      }
-    } else if (is_consumer) {
-      warpgroup::increase_registers<232>();
-      warpgroup::mma_AB(C_accum, As[tic][consumer_idx],
-                        reinterpret_cast<wide_tile&>(Bs[tic][0]));
-      warpgroup::mma_async_wait();
+    __shared__ semaphore bar;
+    if (threadIdx.x == 0) {
+      init_semaphore(bar, 0, 1);
+      tma::expect_bytes(bar, TK_M_BLOCK * size_bytes<typeof(As[0][0])> +
+                                 TK_N_BLOCK * size_bytes<typeof(Bs[0][0])>);
+      for (int m = 0; m < TK_M_BLOCK; m++)
+        tma::load_async(As[tic][m], g.A, {0, 0, row + m, 0}, bar);
+      for (int n = 0; n < TK_N_BLOCK; n++)
+        tma::load_async(Bs[tic][n], g.B, {0, 0, 0, col + n}, bar);
     }
     __syncthreads();
-  }
 
-  // Store result using TMA
-  if (is_consumer) {
-    wide_tile& wide_C_temp =
-        reinterpret_cast<wide_tile&>(C_tiles[consumer_idx][0]);
-    warpgroup::store(wide_C_temp, C_accum);
-    warpgroup::sync(warpgroupid + 4);
+    if (is_consumer) kittens::warp::zero(C_accum);
 
-    if (warpid % 4 == 0) {
-      for (int n = 0; n < TK_N_BLOCK; n++) {
-        tma::store_async(g.C, C_tiles[consumer_idx][n],
-                         {0, 0, row + consumer_idx, col + n});
-        tma::store_async_read_wait();
+    for (int tile = 0; tile < K_tiles; ++tile, tic ^= 1, toc ^= 1) {
+      wait(bar, tic);
+      __syncthreads();
+
+      if (is_producer) {
+        warpgroup::decrease_registers<40>();
+        if (threadIdx.x == 0 && tile + 1 < K_tiles) {
+          tma::expect_bytes(bar, TK_M_BLOCK * size_bytes<typeof(As[0][0])> +
+                                     TK_N_BLOCK * size_bytes<typeof(Bs[0][0])>);
+          for (int m = 0; m < TK_M_BLOCK; m++)
+            tma::load_async(As[toc][m], g.A, {0, 0, row + m, tile + 1}, bar);
+          for (int n = 0; n < TK_N_BLOCK; n++)
+            tma::load_async(Bs[toc][n], g.B, {0, 0, tile + 1, col + n}, bar);
+        }
+      } else if (is_consumer) {
+        warpgroup::increase_registers<232>();
+        warpgroup::mma_AB(C_accum, As[tic][consumer_idx],
+                          reinterpret_cast<wide_tile&>(Bs[tic][0]));
+        warpgroup::mma_async_wait();
+      }
+      __syncthreads();
+    }
+
+    if (is_consumer) {
+      wide_tile& wide_C_temp =
+          reinterpret_cast<wide_tile&>(C_tiles[consumer_idx][0]);
+      warpgroup::store(wide_C_temp, C_accum);
+      warpgroup::sync(warpgroupid + 4);
+
+      if (warpid % 4 == 0) {
+        for (int n = 0; n < TK_N_BLOCK; n++) {
+          tma::store_async(g.C, C_tiles[consumer_idx][n],
+                           {0, 0, row + consumer_idx, col + n});
+          tma::store_async_read_wait();
+        }
       }
     }
+    __syncthreads();
   }
 }
 

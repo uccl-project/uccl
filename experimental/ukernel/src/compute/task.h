@@ -113,10 +113,11 @@ struct alignas(16) MoeArgs {
 };
 
 // TK GEMM args: pointer to pre-constructed TkMatmulGlobals (with TMA
-// descriptors)
+// descriptors).
+// [TODO: Yihan] perf tuning for GEMM later, change the args if more info needed
 struct alignas(16) GemmArgs {
-  void* globals;  // TkMatmulGlobals* on device
-  uint32_t tile_row, tile_col;
+  void* globals;                          // TkMatmulGlobals* on device
+  uint32_t num_tile_rows, num_tile_cols;  // total tiles for multi-block
   uint32_t _pad;
 };
 
