@@ -67,8 +67,37 @@ enum class MoeKind {
 };
 
 struct ParallelRule {
-  int num_tasks = 1;       // logical partitions
-  int tiles_per_task = 1;  // tile-group size
+  // Partition
+  int num_tasks = 1;       // number of micro tasks
+  int tiles_per_task = 1;  // tile-group size per task
+  bool balanced = true;    // evenly sized?
+
+  // Placement
+  enum class PlacementPolicy {
+    RoundRobin,    // Distribute tasks cyclically across available SMs.
+    Compact,       // Pack tasks into a contiguous SM range for better locality.
+    FixedMapping,  // Explicitly assign each task to a specific SM.
+  };
+
+  PlacementPolicy placement = PlacementPolicy::RoundRobin;
+
+  int sm_start = 0;   // first SM to use
+  int sm_count = -1;  // -1 means all available SMs
+
+  std::vector<int> fixed_sm;  // explicit mapping if needed
+
+  // Synchronization
+  enum class CompletionPolicy {
+    AllTasks,
+    // The operator is considered finished only when ALL micro-tasks complete.
+    // This enforces an operator-level barrier before successors can start.
+
+    PerTask
+    // Each micro-task completion may unlock downstream execution early.
+    // This enables cross-operator task pipelining.
+  };
+
+  CompletionPolicy completion = CompletionPolicy::AllTasks;
 };
 
 struct Operator {
