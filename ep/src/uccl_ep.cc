@@ -192,8 +192,9 @@ class Buffer {
     num_device_sms = prop.multiProcessorCount;
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-    fp8_dtype = prop.gcnArchName == "gfx942" ? torch::kFloat8_e4m3fnuz
-                                             : torch::kFloat8_e4m3;
+    fp8_dtype = strcmp(prop.gcnArchName, "gfx942") == 0
+                    ? torch::kFloat8_e4m3fnuz
+                    : torch::kFloat8_e4m3fn;
 #endif
     if (num_nvl_bytes > 0) {
       size_t total_bytes = static_cast<size_t>(num_nvl_bytes) +
