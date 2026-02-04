@@ -61,7 +61,7 @@ class RdmaContext {
       int env_gid_index = std::atoi(env);
       LOG(INFO) << "Using GID index from environment: " << env_gid_index;
       gid_index_ = env_gid_index;
-      return queryGid(gid_index);
+      return queryGid(gid_index_);
     }
 
     if (ibv_query_port(ctx_.get(), port, &port_attr)) {
