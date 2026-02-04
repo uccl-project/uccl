@@ -85,7 +85,7 @@ class RdmaContext {
       for (int i = 0; i < port_attr.gid_tbl_len; i++) {
         union ibv_gid gid;
         if (ibv_query_gid(ctx_.get(), port, i, &gid) == 0) {
-          if (gid_index == GID_INDEX_EFA) {
+          if (gid_index == 0) { // EFA
             gid_index_ = i;
             return gid;
           }
@@ -125,7 +125,7 @@ class RdmaContext {
       return gid_index_;
     }
 
-    gid = detectGid(int gid_index, port);
+    gid = detectGid(gid_index, port);
 
     return gid_index_;
   }
