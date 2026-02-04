@@ -11,6 +11,7 @@
 #define SCATTERED_MEMCPY
 // #define RTT_STATS
 #define LAZY_CREATE_ENGINE
+//#define MANAGED            // Use cudaMallocManaged not cudaMalloc
 
 enum class SenderCCType {
   kNone,
