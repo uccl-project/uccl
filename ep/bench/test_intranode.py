@@ -57,13 +57,6 @@ def test_main(
         + 1
     )
     topk_idx = torch.topk(scores, num_topk, dim=-1, largest=True, sorted=False)[1]
-    
-    topk_idx = (
-                torch.arange(num_tokens * num_topk, device=scores.device).view(
-                    num_tokens, num_topk
-                )
-                % num_experts
-            )
     topk_weights = (
         torch.ones((num_tokens, num_topk), dtype=torch.float32, device="cuda") * rank
     )
@@ -174,8 +167,6 @@ def test_main(
                         if isinstance(recv_x, tuple)
                         else recv_x
                     )
-                    
-                    raise Exception(recv_x.shape)
 
                     # Checks
                     rank_prefix_matrix = handle[0]
