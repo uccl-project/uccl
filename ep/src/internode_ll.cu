@@ -179,7 +179,17 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             float2 fp32x2 = {fp32_values[j] * scale,
                              fp32_values[j + 1] * scale};
             fp8x2_values[j / 2] =
-                __nv_cvt_float2_to_fp8x2(fp32x2, __NV_SATFINITE, __NV_E4M3);
+                __nv_cvt_float2_to_fp8x2(fp32x2, __NV_SATFINITE,
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#if defined(__gfx942__)
+                                         __HIP_E4M3_FNUZ
+#else
+                                         __HIP_E4M3
+#endif
+#else
+                                         __NV_E4M3
+#endif
+                );
           }
           rdma_x_vec[i] = int2_value;
         } else {
