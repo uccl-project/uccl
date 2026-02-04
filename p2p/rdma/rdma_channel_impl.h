@@ -1,6 +1,10 @@
 #pragma once
 #include "define.h"
 #include "rdma_context.h"
+#include <infiniband/verbs.h>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <vector>
 
 // Forward declarations
@@ -11,18 +15,6 @@ struct ibv_ah;
 struct ibv_sge;
 struct ibv_recv_wr;
 struct ibv_wc;
-
-static inline int get_gid_index_from_env(int default_value) {
-  static int gid_index = -1;
-  if (gid_index == -1) {
-    char const* env = getenv("UCCL_P2P_RDMA_GID_INDEX");
-    if (env)
-      gid_index = std::atoi(env);
-    else
-      gid_index = default_value;
-  }
-  return gid_index;
-}
 
 static inline int get_sl_from_env(int default_value) {
   static int sl = -1;
