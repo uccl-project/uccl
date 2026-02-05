@@ -62,7 +62,7 @@ inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
                        IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
                            IBV_QP_ACCESS_FLAGS) == 0);
 
-  local_meta->gid = ctx->queryGid(get_gid_index_from_env(GID_INDEX_DEFAULT));
+  local_meta->gid = ctx->detectGid(GID_INDEX_DEFAULT);
   local_meta->qpn = (*qp)->qp_num;
   local_meta->lid = ctx->queryLid(kPortNum);
 }
@@ -98,7 +98,7 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
     attr.ah_attr.grh.traffic_class = get_tc_from_env(TRAFFIC_CLASS);
     attr.ah_attr.grh.hop_limit = 64;
     memcpy(&attr.ah_attr.grh.dgid, remote_meta.gid.raw, 16);
-    attr.ah_attr.grh.sgid_index = get_gid_index_from_env(GID_INDEX_DEFAULT);
+    attr.ah_attr.grh.sgid_index = ctx->getGidIndex(GID_INDEX_DEFAULT);
   } else if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
     // Infiniband
     attr.ah_attr.is_global = 0;

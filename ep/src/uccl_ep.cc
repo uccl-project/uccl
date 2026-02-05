@@ -191,6 +191,11 @@ class Buffer {
     CUDA_CHECK(cudaGetDeviceProperties(&prop, device_index));
     num_device_sms = prop.multiProcessorCount;
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    fp8_dtype = strcmp(prop.gcnArchName, "gfx942") == 0
+                    ? torch::kFloat8_e4m3fnuz
+                    : torch::kFloat8_e4m3fn;
+#endif
     if (num_nvl_bytes > 0) {
       size_t total_bytes = static_cast<size_t>(num_nvl_bytes) +
                            static_cast<size_t>(barrier_signal_bytes) +
@@ -1473,8 +1478,8 @@ class Buffer {
         torch::empty({num_local_experts,
                       num_ranks * num_max_dispatch_tokens_per_rank, hidden},
                      x.options().dtype(use_fp8 ?
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__) && defined(__gfx942__)
-                                               torch::kFloat8_e4m3fnuz
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+                                               fp8_dtype
 #else
                                                torch::kFloat8_e4m3fn
 #endif
@@ -1952,6 +1957,11 @@ class Buffer {
   // IPC base pointers for GPU access (for replacing nvshmemi_get_p2p_ptr)
   void** d_ipc_rdma_base_ptrs{
       nullptr};  // Device pointer to array of IPC base addresses
+
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  // support select fp8 dtype for different gcn arch in runtime
+  c10::ScalarType fp8_dtype{torch::kFloat8_e4m3fnuz};
+#endif
 };
 
 PYBIND11_MODULE(ep, m) {
