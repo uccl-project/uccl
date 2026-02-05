@@ -77,6 +77,11 @@ struct alignas(8) iov {
 };
 const uint32_t kIovSize = sizeof(struct iov);
 
+// Use shared memory for IOV when kMaxIovs is <= 64, otherwise use HBM pointer to avoid shared memory overflow
+#if kMaxIovs <= 64
+#define USE_SHARED_MEMORY
+#endif
+
 #include <stdio.h>
 
 template<typename T>

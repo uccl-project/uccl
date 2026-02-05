@@ -23,6 +23,12 @@ static constexpr int kNumThPerBlock = 512;
 
 // Yang: 64 max scattered IOVs
 #define kMaxIovs 64
+
+// Use shared memory for IOV when kMaxIovs is <= 64, otherwise use HBM pointer to avoid shared memory overflow
+#if kMaxIovs <= 64
+#define USE_SHARED_MEMORY
+#endif
+
 // proxy.h: NCCL_PROXY_MAX_SUBS = 32, NCCL_STEPS = 8; double provisioning
 static constexpr int kFifoCap = 32 * 8 / kNumThBlocks * 2;
 static constexpr uint64_t kAbortTailValue = (uint64_t)-2;
