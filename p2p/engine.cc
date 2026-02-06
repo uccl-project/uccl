@@ -150,6 +150,7 @@ Endpoint::Endpoint(uint32_t const num_cpus, bool passive_accept)
   // Initialize the RDMA endpoint with lazy creation.
   ep_ = std::shared_ptr<NICEndpoint>(
       new NICEndpoint(INVALID_GPU, INVALID_RANK_ID, 0, false));
+#endif
 
   if (passive_accept_) {
     passive_accept_thread_ =
