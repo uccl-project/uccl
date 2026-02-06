@@ -140,19 +140,25 @@ def _run_client(args, ep):
             remote_descs = ep.deserialize_descs(remote_descs_serialized)
 
             # Warmup transfer
-            xfer_handle = ep.transfer(conn_id, args.mode, local_descs, remote_descs)
-            assert xfer_handle is not None, "Failed to start warmup transfer"
-            while not ep.check_xfer_state(xfer_handle):
-                pass
+            success, transfer_id = ep.transfer(
+                conn_id, args.mode, local_descs, remote_descs
+            )
+            assert success, "Failed to start warmup transfer"
+            is_done = False
+            while not is_done:
+                _, is_done = ep.poll_async(transfer_id)
 
             # Benchmark iterations - reuse everything
             start = time.perf_counter()
             total = 0
             for _ in range(args.iters):
-                xfer_handle = ep.transfer(conn_id, args.mode, local_descs, remote_descs)
-                assert xfer_handle is not None, "Failed to start transfer"
-                while not ep.check_xfer_state(xfer_handle):
-                    pass
+                success, transfer_id = ep.transfer(
+                    conn_id, args.mode, local_descs, remote_descs
+                )
+                assert success, "Failed to start transfer"
+                is_done = False
+                while not is_done:
+                    _, is_done = ep.poll_async(transfer_id)
                 total += sz
 
             elapsed = time.perf_counter() - start
@@ -173,10 +179,13 @@ def _run_client(args, ep):
             remote_descs = ep.deserialize_descs(remote_descs_serialized)
 
             # Warmup transfer
-            xfer_handle = ep.transfer(conn_id, args.mode, local_descs, remote_descs)
-            assert xfer_handle is not None, "Failed to start warmup transfer"
-            while not ep.check_xfer_state(xfer_handle):
-                pass
+            success, transfer_id = ep.transfer(
+                conn_id, args.mode, local_descs, remote_descs
+            )
+            assert success, "Failed to start warmup transfer"
+            is_done = False
+            while not is_done:
+                _, is_done = ep.poll_async(transfer_id)
             dist.barrier()
 
             # Benchmark iterations
@@ -195,11 +204,14 @@ def _run_client(args, ep):
                 remote_descs_serialized = _recv_bytes(src=peer)
                 remote_descs = ep.deserialize_descs(remote_descs_serialized)
 
-                xfer_handle = ep.transfer(conn_id, args.mode, local_descs, remote_descs)
-                assert xfer_handle is not None, "Failed to start transfer"
+                success, transfer_id = ep.transfer(
+                    conn_id, args.mode, local_descs, remote_descs
+                )
+                assert success, "Failed to start transfer"
 
-                while not ep.check_xfer_state(xfer_handle):
-                    pass
+                is_done = False
+                while not is_done:
+                    _, is_done = ep.poll_async(transfer_id)
 
                 total += sz
                 dist.barrier()
@@ -228,7 +240,7 @@ def main():
     p.add_argument("--local-gpu-idx", type=int, default=0)
     p.add_argument("--num-cpus", type=int, default=4)
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
-    p.add_argument("--mode", choices=["READ", "WRITE"], default="WRITE")
+    p.add_argument("--mode", choices=["read", "write"], default="write")
     p.add_argument(
         "--perf", action="store_true", help="Measure pure transfer performance"
     )
