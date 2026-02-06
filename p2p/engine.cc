@@ -55,7 +55,9 @@ static inline void shm_ring_recv(jring_t* ring, Endpoint::ShmMsg& msg) {
 }
 
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
-    : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
+    : local_gpu_idx_(local_gpu_idx),
+      num_cpus_(num_cpus),
+      passive_accept_(false) {
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
             << ", CPUs: " << num_cpus << std::endl;
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
@@ -121,10 +123,8 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
-Endpoint::Endpoint(uint32_t const num_cpus, bool passive_accept)
-    : local_gpu_idx_(INVALID_GPU),
-      num_cpus_(num_cpus),
-      passive_accept_(passive_accept) {
+Endpoint::Endpoint(uint32_t const num_cpus)
+    : local_gpu_idx_(INVALID_GPU), num_cpus_(num_cpus), passive_accept_(false) {
   std::cout << "Creating Engine with CPUs: " << num_cpus << std::endl;
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
 
@@ -152,11 +152,6 @@ Endpoint::Endpoint(uint32_t const num_cpus, bool passive_accept)
       new NICEndpoint(INVALID_GPU, INVALID_RANK_ID, 0, false));
 #endif
 
-  if (passive_accept_) {
-    passive_accept_thread_ =
-        std::thread(&Endpoint::passive_accept_thread_func, this);
-  }
-
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
@@ -165,8 +160,11 @@ Endpoint::~Endpoint() {
 
   stop_.store(true, std::memory_order_release);
 
-  if (passive_accept_ && passive_accept_thread_.joinable()) {
-    passive_accept_thread_.join();
+  if (passive_accept_) {
+    passive_accept_stop_.store(true, std::memory_order_release);
+    if (passive_accept_thread_.joinable()) {
+      passive_accept_thread_.join();
+    }
   }
 
   if (send_proxy_thread_.joinable()) {
@@ -220,6 +218,16 @@ Endpoint::~Endpoint() {
   }
 
   std::cout << "Engine destroyed" << std::endl;
+}
+
+bool Endpoint::start_passive_accept() {
+  if (!passive_accept_) {
+    passive_accept_stop_.store(false, std::memory_order_release);
+    passive_accept_thread_ =
+        std::thread(&Endpoint::passive_accept_thread_func, this);
+    passive_accept_ = true;
+  }
+  return true;
 }
 
 void Endpoint::initialize_engine() {
@@ -419,6 +427,11 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   // Check for Python signals (eg, ctrl+c) while waiting for connection
   while (uccl_conn_id_future.wait_for(std::chrono::seconds(0)) !=
          std::future_status::ready) {
+    if (passive_accept_ &&
+        passive_accept_stop_.load(std::memory_order_acquire)) {
+      std::cout << "Stop background accept..." << std::endl;
+      stop_accept(ep_);
+    }
     auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
     std::this_thread::sleep_for(std::chrono::seconds(1));
   }

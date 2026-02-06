@@ -62,6 +62,10 @@ PYBIND11_MODULE(p2p, m) {
            }),
            py::arg("num_cpus"))
       .def(
+          "start_passive_accept",
+          [](Endpoint& self) { return self.start_passive_accept(); },
+          "Start a background thread for accepting.")
+      .def(
           "connect",
           [](Endpoint& self, std::string const& remote_ip_addr,
              int remote_gpu_idx, int remote_port) {

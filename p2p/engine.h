@@ -173,7 +173,7 @@ class Endpoint {
    * for metadata exchanges. If passive_accept is true, the endpoint will not
    * call accept() but delegate it to a background thread.
    */
-  Endpoint(uint32_t const num_cpus, bool passive_accept = false);
+  Endpoint(uint32_t const num_cpus);
   ~Endpoint();
 
   /* Connect to a remote server via TCP, then build RDMA QP connections. */
@@ -349,6 +349,9 @@ class Endpoint {
 
   /* Check the state of a transfer */
   bool check_xfer_state(std::shared_ptr<XferHandle> const& xfer_handle);
+
+  /* Start a background thread for accepting. */
+  bool start_passive_accept();
 
   /***************************************************/
   /* API for Ray */
@@ -788,6 +791,7 @@ class Endpoint {
   void send_proxy_thread_func();
   void recv_proxy_thread_func();
 
+  std::atomic<bool> passive_accept_stop_{false};
   bool passive_accept_;
   std::thread passive_accept_thread_;
   void passive_accept_thread_func();

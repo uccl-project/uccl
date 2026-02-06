@@ -37,14 +37,16 @@ def _recv_bytes(src: int) -> bytes:
     return buf.numpy().tobytes()
 
 
-def _make_buffer(n_bytes: int, device: str, gpu: int):
-    """Create a buffer of specified size."""
+def _make_buffer(n_bytes: int, device: str, gpu: int = 0):
+    assert n_bytes % 4 == 0, "n_bytes must be multiple of 4 for float32"
     n = n_bytes // 4
-    if device == "gpu":
-        buf = torch.ones(n, dtype=torch.float32, device=f"cuda:{gpu}")
+
+    if device in ("gpu", "cuda"):
+        dev = torch.device(f"cuda:{gpu}")
+        return torch.ones(n, dtype=torch.float32, device=dev)
     else:
-        buf = torch.ones(n, dtype=torch.float32, pin_memory=True)
-    return buf
+        pin = torch.cuda.is_available()
+        return torch.ones(n, dtype=torch.float32, pin_memory=pin)
 
 
 def _pretty(num: int):
@@ -79,6 +81,7 @@ def _run_server(args, ep):
                 buf_v.append(buf)
 
             remote_descs = ep.register_memory(buf_v)
+
             remote_descs_serialized = ep.get_serialized_descs(remote_descs)
             _send_bytes(remote_descs_serialized, dst=peer)
 
@@ -274,7 +277,9 @@ def main():
     world_size = dist.get_world_size()
     assert world_size == 2, "This benchmark only supports 2 processes"
 
-    ep = p2p.Endpoint(args.num_cpus, True)
+    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+
+    ep.start_passive_accept()
 
     if rank == 0:
         _run_client(args, ep)
