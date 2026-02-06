@@ -21,8 +21,12 @@
 static constexpr int kNumThBlocks = 4;
 static constexpr int kNumThPerBlock = 512;
 
-// Yang: 64 max scattered IOVs
+// Yang: 64 max scattered IOVs; 256 for MTU 4096
+#ifdef MTU_4096
+#define kMaxIovs 256
+#else
 #define kMaxIovs 64
+#endif
 
 // Use shared memory for IOV when kMaxIovs is <= 64, otherwise use HBM pointer to avoid shared memory overflow
 #if kMaxIovs <= 64

@@ -10,6 +10,12 @@ LIBS = -L ${CUDA_HOME}/lib64 -L ${EFA_HOME}/lib -libverbs -lefa -lcudart -lcuda 
 LIBS_SHARED = ${LIBS}
 # Added -MMD -MP for automatic dependency generation
 override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC -DUSE_CUDA -MMD -MP
+
+# Add Intel RDMA NIC support if USE_INTEL_RDMA_NIC=1
+ifeq ($(USE_INTEL_RDMA_NIC),1)
+  override CXXFLAGS += -DINTEL_RDMA_NIC -DMTU_4096
+endif
+
 PLUGIN_SO = libnccl-net-efa.so
 
 lib_src = $(wildcard *.cc)
