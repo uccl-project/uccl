@@ -65,8 +65,12 @@ struct ncclConnFifo {
   void* ptr;
 };
 
-// Yang: 64 max scattered IOVs
+// Yang: 64 max scattered IOVs; 256 for MTU 4096
+#ifdef MTU_4096
+#define kMaxIovs 256
+#else
 #define kMaxIovs 64
+#endif
 struct alignas(8) iov {
   void* src_addrs[kMaxIovs];
   void* dst_addrs[kMaxIovs];

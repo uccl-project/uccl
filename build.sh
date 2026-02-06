@@ -9,6 +9,10 @@ set -e
 # Usage:
 #   ./build.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image]
 #
+# Environment Variables:
+#   USE_INTEL_RDMA_NIC=1   Enable Intel RDMA NIC support (irdma driver, vendor 0x8086)
+#                          Example: USE_INTEL_RDMA_NIC=1 ./build.sh cuda ccl_efa
+#
 # The wheels are written to wheelhouse-[cuda|rocm|therock]
 # -----------------------
 
@@ -58,8 +62,12 @@ build_ccl_rdma() {
   set -euo pipefail
   echo "[container] build_ccl_rdma Target: $TARGET"
   
+  if [[ "${USE_INTEL_RDMA_NIC:-0}" == "1" ]]; then
+    echo "[container] Building with Intel RDMA NIC support (USE_INTEL_RDMA_NIC=1)"
+  fi
+
   if [[ "$TARGET" == cuda* ]]; then
-    cd collective/rdma && make clean && make -j$(nproc) && cd ../../
+    cd collective/rdma && make clean && make -j$(nproc) USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} && cd ../../
     TARGET_SO=collective/rdma/libnccl-net-uccl.so
   elif [[ "$TARGET" == rocm* ]]; then
     if [[ "$ARCH" == "aarch64" ]]; then
@@ -101,11 +109,16 @@ build_ccl_efa() {
     echo "Skipping EFA build on Arm64 (no EFA installer) or ROCm (no CUDA)."
     return
   fi
-  cd collective/efa && make clean && make -j$(nproc) && cd ../../
+
+  if [[ "${USE_INTEL_RDMA_NIC:-0}" == "1" ]]; then
+    echo "[container] Building with Intel RDMA NIC support (USE_INTEL_RDMA_NIC=1)"
+  fi
+
+  cd collective/efa && make clean && make -j$(nproc) USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} && cd ../../
 
   # EFA requires a custom NCCL.
   cd thirdparty/nccl-sg
-  make src.build -j$(nproc) NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90"
+  make src.build -j$(nproc) NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90" USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0}
   cd ../..
 
   echo "[container] Copying EFA .so to uccl/lib/"
@@ -328,6 +341,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e USE_EFA="${USE_EFA:-0}" \
   -e USE_IB="${USE_IB:-0}" \
   -e USE_TCP="${USE_TCP:-0}" \
+  -e USE_INTEL_RDMA_NIC="${USE_INTEL_RDMA_NIC:-0}" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
   -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
   -e DISABLE_AGGRESSIVE_ATOMIC="${DISABLE_AGGRESSIVE_ATOMIC:-0}" \
