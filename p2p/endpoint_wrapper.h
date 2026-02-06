@@ -64,6 +64,8 @@ inline ConnID uccl_accept(RDMAEndPoint const& s, std::string& remote_ip,
   return to_conn_id(uccl_conn);
 }
 
+inline void stop_accept(RDMAEndPoint const& s) { s->stop_accept(); }
+
 inline bool uccl_regmr(RDMAEndPoint const& s, void* data, size_t len,
                        struct P2PMhandle* mhandle) {
   (void)s;
@@ -164,6 +166,8 @@ inline ConnID uccl_accept(RDMAEndPoint const& s, std::string& remote_ip,
                           int* remote_gpuidx) {
   return s->uccl_accept(remote_ip, remote_gpuidx);
 }
+
+inline void stop_accept(RDMAEndPoint const& s) { s->stop_accept(); }
 
 inline bool uccl_regmr(RDMAEndPoint const& s, void* data, size_t len,
                        struct P2PMhandle* mhandle) {

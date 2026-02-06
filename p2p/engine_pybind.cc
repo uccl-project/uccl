@@ -54,11 +54,15 @@ PYBIND11_MODULE(p2p, m) {
         InsidePythonGuard guard;
         return std::make_unique<Endpoint>(local_gpu_idx, num_cpus);
       }))
-      .def(py::init([](uint32_t num_cpus, bool passive_accept = false) {
+      .def(py::init([](uint32_t num_cpus) {
         py::gil_scoped_release release;
         InsidePythonGuard guard;
-        return std::make_unique<Endpoint>(num_cpus, passive_accept);
+        return std::make_unique<Endpoint>(num_cpus);
       }))
+      .def(
+          "start_passive_accept",
+          [](Endpoint& self) { return self.start_passive_accept(); },
+          "Start a background thread for accepting.")
       .def(
           "connect",
           [](Endpoint& self, std::string const& remote_ip_addr,
