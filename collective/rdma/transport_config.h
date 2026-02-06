@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 // #define STATS
+// #define INTEL_RDMA_NIC
 
 // Whether to pin the thread to the NUMA node.
 UCCL_PARAM(PIN_TO_NUMA, "PIN_TO_NUMA", 1);
@@ -210,7 +211,14 @@ static constexpr bool kTestConstantRate = false;
 // Test lossy network.
 static constexpr bool kTestLoss = false;
 static constexpr double kTestLossRate = 0.0;
+#ifdef INTEL_RDMA_NIC
+// Enable CQ ignore overrun flag.
+static constexpr bool kEnableCQIgnoreOverrun = false;
+// Enable CQ moderation.
+static constexpr bool kEnableCQModeration = false;
+#else
 // Enable CQ ignore overrun flag.
 static constexpr bool kEnableCQIgnoreOverrun = true;
 // Enable CQ moderation.
 static constexpr bool kEnableCQModeration = true;
+#endif
