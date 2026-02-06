@@ -119,8 +119,6 @@ enum XferType {
 struct XferHandle {
   uint64_t conn_id;
   std::string op_name;
-  std::vector<XferDesc> local_descs;
-  std::vector<XferDesc> remote_descs;
   uint64_t transfer_id;
 };
 

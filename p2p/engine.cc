@@ -2012,8 +2012,6 @@ std::shared_ptr<XferHandle> Endpoint::transfer(
   std::shared_ptr<XferHandle> xfer_handle = std::make_shared<XferHandle>();
   xfer_handle->conn_id = conn_id;
   xfer_handle->op_name = op_name;
-  xfer_handle->local_descs = local_descs;
-  xfer_handle->remote_descs = remote_descs;
 
   std::vector<FifoItem> slot_item_v;
   std::vector<uint64_t> mr_id_v;
@@ -2026,8 +2024,8 @@ std::shared_ptr<XferHandle> Endpoint::transfer(
   size_v.reserve(num_iovs);
   for (size_t i = 0; i < num_iovs; i++) {
     FifoItem fifo_item;
-    auto ldesc = local_descs[i];
-    auto rdesc = remote_descs[i];
+    auto const& ldesc = local_descs[i];
+    auto const& rdesc = remote_descs[i];
 
     fifo_item.addr = reinterpret_cast<uint64_t>(rdesc.addr);
     fifo_item.size = rdesc.size;
