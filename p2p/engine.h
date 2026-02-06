@@ -339,15 +339,6 @@ class Endpoint {
   std::vector<XferDesc> deserialize_descs(
       std::vector<uint8_t> const& serialized_data);
 
-  /* Start a transfer and return a transfer handle */
-  std::shared_ptr<XferHandle> transfer(
-      uint64_t const& conn_id, std::string const& op_name,
-      std::vector<XferDesc> const& local_descs,
-      std::vector<XferDesc> const& remote_descs);
-
-  /* Check the state of a transfer */
-  bool check_xfer_state(std::shared_ptr<XferHandle> const& xfer_handle);
-
   /* Start a background thread for accepting. */
   bool start_passive_accept();
 
