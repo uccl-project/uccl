@@ -159,23 +159,14 @@ class TransferManager:
         transfer_state = self.transfer_table[transfer_id]
         conn_state = transfer_state.conn_state
 
-        if conn_state.is_local:
-            success, transfer_metadata = self.ep.advertise_ipc(
-                conn_state.conn_id, transfer_state.data, transfer_state.size
-            )
-            assert (
-                success
-            ), f"Failed to advertise tensor on GPU {self.local_gpu_idx} for IPC"
-        else:
-            success, transfer_metadata = self.ep.advertise(
-                conn_state.conn_id,
-                transfer_state.mr_id,
-                transfer_state.data,
-                transfer_state.size,
-            )
-            assert (
-                success
-            ), f"Failed to advertise tensor on GPU {self.local_gpu_idx} for RDMA"
+        mr_id = 0 if conn_state.is_local else transfer_state.mr_id
+        success, transfer_metadata = self.ep.advertise(
+            conn_state.conn_id,
+            mr_id,
+            transfer_state.data,
+            transfer_state.size,
+        )
+        assert success, f"Failed to advertise tensor on GPU {self.local_gpu_idx}"
 
         send_obj(conn_state.socket, transfer_metadata)
         return True
@@ -196,21 +187,14 @@ class TransferManager:
     def do_transfer_async(self, transfer_id: int, transfer_metadata: bytes) -> int:
         transfer_state = self.transfer_table[transfer_id]
         conn_state = transfer_state.conn_state
-        if conn_state.is_local:
-            success, poll_id = self.ep.write_ipc_async(
-                conn_state.conn_id,
-                transfer_state.data,
-                transfer_state.size,
-                transfer_metadata,
-            )
-        else:
-            success, poll_id = self.ep.write_async(
-                conn_state.conn_id,
-                transfer_state.mr_id,
-                transfer_state.data,
-                transfer_state.size,
-                transfer_metadata,
-            )
+        mr_id = 0 if conn_state.is_local else transfer_state.mr_id
+        success, poll_id = self.ep.write_async(
+            conn_state.conn_id,
+            mr_id,
+            transfer_state.data,
+            transfer_state.size,
+            transfer_metadata,
+        )
         assert success, f"Failed to transfer tensor on GPU {self.local_gpu_idx}"
         return poll_id
 

@@ -89,8 +89,8 @@ def test_local_dist():
         tensor = torch.zeros(1024, dtype=torch.float32, device="cuda:0")
         assert tensor.is_contiguous()
         mr_id = 0
-        ok, fifo_blob = engine.advertise_ipc(
-            conn_id, tensor.data_ptr(), tensor.numel() * 4
+        ok, fifo_blob = engine.advertise(
+            conn_id, 0, tensor.data_ptr(), tensor.numel() * 4
         )
         assert ok and isinstance(fifo_blob, (bytes, bytearray))
         print("[server] Buffer exposed for IPC READ")
@@ -125,8 +125,8 @@ def test_local_dist():
         print("[client] Received FIFO blob from server")
         assert isinstance(fifo_blob, (bytes, bytearray))
 
-        success = engine.write_ipc(
-            conn_id, tensor.data_ptr(), tensor.numel() * 4, fifo_blob
+        success = engine.write(
+            conn_id, 0, tensor.data_ptr(), tensor.numel() * 4, fifo_blob
         )
         assert success
         print("[client] Sent data")

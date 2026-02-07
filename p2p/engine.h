@@ -81,6 +81,7 @@ struct Conn {
   std::string ip_addr_;
   int remote_gpu_idx_;
   int uds_sockfd_ = -1;  // Unix Domain Socket file descriptor for local IPC
+  bool is_local() const { return uds_sockfd_ >= 0; }
 };
 
 #ifdef UCCL_P2P_USE_TCPX
@@ -209,9 +210,21 @@ class Endpoint {
                     std::vector<FifoItem> slot_item_v, size_t num_iovs,
                     uint64_t* transfer_id);
 
-  /* Write data to the remote server via CUDA/HIP IPC. Blocking. */
-  bool write_ipc(uint64_t conn_id, uint64_t mr_id, void const* data,
-                 size_t size, void const* meta, size_t meta_len);
+  /* Write data (opaque metadata, dispatches to RDMA or IPC). */
+  bool write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
+             void const* meta, size_t meta_len);
+
+  /* Read data (opaque metadata, dispatches to RDMA or IPC). */
+  bool read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+            void const* meta, size_t meta_len);
+
+  /* Write data asynchronously (opaque metadata). */
+  bool write_async(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
+                   void const* meta, size_t meta_len, uint64_t* transfer_id);
+
+  /* Read data asynchronously (opaque metadata). */
+  bool read_async(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+                  void const* meta, size_t meta_len, uint64_t* transfer_id);
 
   bool advertise(uint64_t conn_id, uint64_t mr_id, void* addr, size_t len,
                  char* out_buf);
@@ -230,33 +243,6 @@ class Endpoint {
 
   /*Accept an incoming local connection via Unix Domain Socket. */
   bool accept_local(int& remote_gpu_idx, uint64_t& conn_id);
-
-  /* Send data to the remote server via CUDA/HIP IPC. Blocking. The
-   * gpuIpcMemHandle_t will be passed via UDS from recv_ipc to send_ipc
-   * function. */
-  bool send_ipc(uint64_t conn_id, void* data, size_t size);
-
-  bool recv_ipc(uint64_t conn_id, void* data, size_t size);
-
-  bool send_ipc_async(uint64_t conn_id, void const* data, size_t size,
-                      uint64_t* transfer_id);
-
-  bool recv_ipc_async(uint64_t conn_id, void* data, size_t size,
-                      uint64_t* transfer_id);
-
-  /* One-sided write and read via IPC. */
-  bool write_ipc(uint64_t conn_id, void const* data, size_t size,
-                 IpcTransferInfo const& info);
-  bool read_ipc(uint64_t conn_id, void* data, size_t size,
-                IpcTransferInfo const& info);
-  bool write_ipc_async(uint64_t conn_id, void const* data, size_t size,
-                       IpcTransferInfo const& info, uint64_t* transfer_id);
-  bool read_ipc_async(uint64_t conn_id, void* data, size_t size,
-                      IpcTransferInfo const& info, uint64_t* transfer_id);
-  bool advertise_ipc(uint64_t conn_id, void* addr, size_t len, char* out_buf);
-  bool advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
-                      std::vector<size_t> len_v, std::vector<char*> out_buf_v,
-                      size_t num_iovs);
 
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);
@@ -316,6 +302,27 @@ class Endpoint {
   }
 
  private:
+  /* IPC implementation methods (intra-node via UDS + GPU IPC). */
+  bool send_ipc_impl(uint64_t conn_id, void* data, size_t size);
+  bool recv_ipc_impl(uint64_t conn_id, void* data, size_t size);
+  bool send_ipc_async_impl(uint64_t conn_id, void const* data, size_t size,
+                           uint64_t* transfer_id);
+  bool recv_ipc_async_impl(uint64_t conn_id, void* data, size_t size,
+                           uint64_t* transfer_id);
+  bool write_ipc_impl(uint64_t conn_id, void const* data, size_t size,
+                      IpcTransferInfo const& info);
+  bool read_ipc_impl(uint64_t conn_id, void* data, size_t size,
+                     IpcTransferInfo const& info);
+  bool write_ipc_async_impl(uint64_t conn_id, void const* data, size_t size,
+                            IpcTransferInfo const& info, uint64_t* transfer_id);
+  bool read_ipc_async_impl(uint64_t conn_id, void* data, size_t size,
+                           IpcTransferInfo const& info, uint64_t* transfer_id);
+  bool advertise_ipc_impl(uint64_t conn_id, void* addr, size_t len,
+                          char* out_buf);
+  bool advertisev_ipc_impl(uint64_t conn_id, std::vector<void*> addr_v,
+                           std::vector<size_t> len_v,
+                           std::vector<char*> out_buf_v, size_t num_iovs);
+
   gpuStream_t pick_stream() {
     if (streams_.empty()) return nullptr;
     uint32_t i =
