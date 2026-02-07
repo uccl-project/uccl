@@ -32,6 +32,24 @@ inline void check_python_signals() {
   PyGILState_Release(gstate);
 }
 
+// ShmChannel helper function
+static inline std::string ring_name(int gpu_a, int gpu_b, char const* suffix) {
+  return "/uccl_ring_" + std::to_string(gpu_a) + "_" + std::to_string(gpu_b) +
+         "_" + suffix;
+}
+
+static inline void shm_ring_send(jring_t* ring, Endpoint::ShmMsg const& msg) {
+  while (jring_enqueue(ring, (void*)&msg) != 0) {
+    _mm_pause();
+  }
+}
+
+static inline void shm_ring_recv(jring_t* ring, Endpoint::ShmMsg& msg) {
+  while (jring_dequeue(ring, (void*)&msg) != 0) {
+    _mm_pause();
+  }
+}
+
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
     : local_gpu_idx_(local_gpu_idx), num_cpus_(num_cpus) {
   std::cout << "Creating Engine with GPU index: " << local_gpu_idx
@@ -145,9 +163,19 @@ Endpoint::~Endpoint() {
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
     for (auto& [conn_id, conn] : conn_id_to_conn_) {
-      // Close UDS socket if it exists
-      if (conn->uds_sockfd_ >= 0) {
-        close(conn->uds_sockfd_);
+      auto& ab = conn->shm_ring_.ring_ab;
+      auto& ba = conn->shm_ring_.ring_ba;
+
+      if (conn->shm_creator_) {
+        destroy_shared_ring(ab.shm_name.c_str(), ab.ring, ab.shm_fd,
+                            ab.shm_size);
+
+        destroy_shared_ring(ba.shm_name.c_str(), ba.ring, ba.shm_fd,
+                            ba.shm_size);
+      } else {
+        detach_shared_ring(ab.ring, ab.shm_fd, ab.shm_size);
+
+        detach_shared_ring(ba.ring, ba.shm_fd, ba.shm_size);
       }
       delete conn;
     }
@@ -1093,37 +1121,156 @@ bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
   return true;
 }
 
-bool Endpoint::accept_local(int& remote_gpu_idx, uint64_t& conn_id) {
-  std::cout << "Waiting to accept UDS connection" << std::endl;
+bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
+  std::cout << "Connecting to GPU " << remote_gpu_idx << std::endl;
 
-  CHECK(uds_listen_fd_ >= 0) << "UDS socket not initialized";
+  // bootstrap socket
+  std::string remote_socket_path = get_uds_socket_path(remote_gpu_idx);
 
-  // Accept incoming connection
-  struct sockaddr_un client_addr;
-  socklen_t client_len = sizeof(client_addr);
-  int client_fd =
-      ::accept(uds_listen_fd_, (struct sockaddr*)&client_addr, &client_len);
-  CHECK_GE(client_fd, 0) << "Failed to accept UDS connection: "
-                         << strerror(errno);
+  int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+  CHECK_GE(sockfd, 0);
 
-  fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL) | O_NONBLOCK);
+  struct sockaddr_un addr;
+  memset(&addr, 0, sizeof(addr));
+  addr.sun_family = AF_UNIX;
+  strncpy(addr.sun_path, remote_socket_path.c_str(), sizeof(addr.sun_path) - 1);
 
-  // Receive remote GPU index
-  auto ret = uccl::receive_message_nonblock(
-      client_fd, static_cast<void*>(&remote_gpu_idx), sizeof(remote_gpu_idx));
-  CHECK_EQ(ret, sizeof(remote_gpu_idx)) << "Failed to receive remote GPU index";
+  int ret = ::connect(sockfd, (struct sockaddr*)&addr, sizeof(addr));
+  CHECK_EQ(ret, 0) << "connect failed: " << strerror(errno);
 
-  // Create connection ID
+  // send local gpu idx
+  ret = uccl::send_message_nonblock(sockfd,
+                                    static_cast<void const*>(&local_gpu_idx_),
+                                    sizeof(local_gpu_idx_));
+  CHECK_EQ(ret, sizeof(local_gpu_idx_));
+
+  close(sockfd);
+  // bootstrap done
+
   conn_id = next_conn_id_.fetch_add(1);
 
-  // Store the connection with persistent socket
+  Conn* conn = new Conn;
+  conn->conn_id_ = conn_id;
+  conn->remote_gpu_idx_ = remote_gpu_idx;
+  conn->shm_creator_ = false;
+
+  // shm ring names
+  std::string name_ab = ring_name(local_gpu_idx_, remote_gpu_idx, "ab");
+  std::string name_ba = ring_name(local_gpu_idx_, remote_gpu_idx, "ba");
+
+  size_t elem_sz = sizeof(ShmMsg);
+  size_t elem_cnt = ShmRingDefaultElemCnt;
+  size_t shm_size = jring_get_buf_ring_size(elem_sz, elem_cnt);
+
+  int retries = 20;
+
+  // attach ring_ab
+  {
+    auto& ab = conn->shm_ring_.ring_ab;
+    ab.shm_name = name_ab;
+    ab.shm_size = shm_size;
+
+    for (int i = 0; i < retries; i++) {
+      ab.ring = attach_shared_ring(ab.shm_name.c_str(), ab.shm_fd, ab.shm_size);
+      if (ab.ring) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    CHECK(ab.ring) << "Failed to attach ring_ab";
+  }
+
+  // attach ring_ba
+  {
+    auto& ba = conn->shm_ring_.ring_ba;
+    ba.shm_name = name_ba;
+    ba.shm_size = shm_size;
+
+    for (int i = 0; i < retries; i++) {
+      ba.ring = attach_shared_ring(ba.shm_name.c_str(), ba.shm_fd, ba.shm_size);
+      if (ba.ring) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    CHECK(ba.ring) << "Failed to attach ring_ba";
+  }
+
+  // store connection
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
     ConnID dummy_conn_id{nullptr, 0, 0, 0};
-    conn_id_to_conn_[conn_id] = new Conn{conn_id, dummy_conn_id, "localhost",
-                                         remote_gpu_idx, client_fd};
+    conn->uccl_conn_id_ = dummy_conn_id;
+    conn_id_to_conn_[conn_id] = conn;
   }
 
+  std::cout << "Shared-memory channel attached successfully." << std::endl;
+  return true;
+}
+
+bool Endpoint::accept_local(int& remote_gpu_idx, uint64_t& conn_id) {
+  std::cout << "Accepting shared-memory connection..." << std::endl;
+  CHECK(uds_listen_fd_ >= 0);
+
+  // bootstrap accept
+  struct sockaddr_un client_addr;
+  socklen_t client_len = sizeof(client_addr);
+
+  int client_fd =
+      ::accept(uds_listen_fd_, (struct sockaddr*)&client_addr, &client_len);
+
+  CHECK_GE(client_fd, 0) << "accept failed: " << strerror(errno);
+
+  auto ret = uccl::receive_message_nonblock(
+      client_fd, static_cast<void*>(&remote_gpu_idx), sizeof(remote_gpu_idx));
+
+  CHECK_EQ(ret, sizeof(remote_gpu_idx));
+
+  close(client_fd);
+  // bootstrap done
+
+  conn_id = next_conn_id_.fetch_add(1);
+
+  Conn* conn = new Conn;
+  conn->conn_id_ = conn_id;
+  conn->remote_gpu_idx_ = remote_gpu_idx;
+  conn->shm_creator_ = true;
+
+  // shm ring names
+  std::string name_ab = ring_name(local_gpu_idx_, remote_gpu_idx, "ab");
+  std::string name_ba = ring_name(local_gpu_idx_, remote_gpu_idx, "ba");
+
+  size_t elem_sz = sizeof(ShmMsg);
+  size_t elem_cnt = ShmRingDefaultElemCnt;
+
+  // create ring_ab
+  {
+    auto& ab = conn->shm_ring_.ring_ab;
+    ab.shm_name = name_ab;
+
+    ab.ring = create_shared_ring(ab.shm_name.c_str(), elem_sz, elem_cnt,
+                                 ab.shm_fd, ab.shm_size);
+
+    CHECK(ab.ring) << "Failed to create ring_ab";
+  }
+
+  // create ring_ba
+  {
+    auto& ba = conn->shm_ring_.ring_ba;
+    ba.shm_name = name_ba;
+
+    ba.ring = create_shared_ring(ba.shm_name.c_str(), elem_sz, elem_cnt,
+                                 ba.shm_fd, ba.shm_size);
+
+    CHECK(ba.ring) << "Failed to create ring_ba";
+  }
+
+  // store connection
+  {
+    std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    ConnID dummy_conn_id{nullptr, 0, 0, 0};
+    conn->uccl_conn_id_ = dummy_conn_id;
+    conn_id_to_conn_[conn_id] = conn;
+  }
+
+  std::cout << "Shared-memory channel created for GPU " << remote_gpu_idx
+            << std::endl;
   return true;
 }
 
@@ -1137,29 +1284,31 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
     return false;
   }
 
-  // Check if we have a valid persistent UDS socket (faster than string
-  // comparison)
-  CHECK_GE(conn->uds_sockfd_, 0)
-      << "send_ipc only supports local connections with valid UDS socket";
+  // Sender:
+  //   recv handle from ring_ba
+  //   send completion on ring_ab
+  jring_t* ring_recv = conn->shm_ring_.ring_ba.ring;  // receiver -> sender
+  jring_t* ring_send = conn->shm_ring_.ring_ab.ring;  // sender -> receiver
 
-  // Use the persistent UDS connection
-  int sockfd = conn->uds_sockfd_;
+  CHECK(ring_recv);
+  CHECK(ring_send);
 
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  IpcTransferInfo transfer_info = {};  // Initialize to zero
-  // Wait for receiver's IPC handle (receiver will send this proactively)
-  auto ret = uccl::receive_message_nonblock(
-      sockfd, static_cast<void*>(&transfer_info), sizeof(transfer_info));
-  CHECK_EQ(ret, sizeof(transfer_info))
+  // Wait for receiver's IPC handle msg
+  ShmMsg msg;
+  shm_ring_recv(ring_recv, msg);
+  CHECK_EQ(msg.type == ShmMsgType::IPC_HANDLE)
       << "Failed to receive IPC handle from receiver";
+  IpcTransferInfo transfer_info = msg.info;
   CHECK_EQ(transfer_info.operation, 1) << "Invalid response from receiver";
   CHECK_EQ(transfer_info.size, size)
       << "Size mismatch: expected " << size << ", got " << transfer_info.size;
 
+  // Open remote IPC handle
   void* base = nullptr;
   GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&base, transfer_info.handle,
@@ -1167,6 +1316,7 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
   void* dst_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) +
                                           transfer_info.offset);
 
+  // Copy payload
   std::vector<gpuStream_t>& dst_streams = ipc_streams_[conn->remote_gpu_idx_];
   int num_streams =
       std::min(dst_streams.size(),
@@ -1189,11 +1339,11 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
     GPU_RT_CHECK(gpuStreamSynchronize(stream));
   }
 
-  // Notify receiver of completion
-  uint32_t completion = 1;
-  ret = uccl::send_message_nonblock(
-      sockfd, static_cast<void const*>(&completion), sizeof(completion));
-  CHECK_EQ(ret, sizeof(completion)) << "Failed to send completion ack";
+  // Notify receiver completion
+  ShmMsg ack;
+  ack.type = ShmMsgType::COMPLETION;
+  ack.completion = 1;
+  shm_ring_send(ring_send, ack);
 
   // Okay, this is the slowest part, 46GB/s -> 28GB/s for 100MB, so moving it
   // async. Update: moving async does not help, as gpuIpcOpenMemHandle will be
@@ -1217,13 +1367,13 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
     return false;
   }
 
-  // Check if we have a valid persistent UDS socket (faster than string
-  // comparison)
-  CHECK_GE(conn->uds_sockfd_, 0)
-      << "recv_ipc only supports local connections with valid UDS socket";
-
-  // Use the persistent UDS connection
-  int client_fd = conn->uds_sockfd_;
+  // Receiver:
+  //   send handle on ring_ba
+  //   recv completion on ring_ab
+  jring_t* ring_send = conn->shm_ring_.ring_ba.ring;  // receiver -> sender
+  jring_t* ring_recv = conn->shm_ring_.ring_ab.ring;  // sender -> receiver
+  CHECK(ring_send);
+  CHECK(ring_recv);
 
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
@@ -1232,7 +1382,7 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
 
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   // Generate IPC memory handle for our receive buffer
-  IpcTransferInfo transfer_info = {};  // Initialize to zero
+  IpcTransferInfo transfer_info = {};
   transfer_info.size = size;
   transfer_info.operation = 1;  // response
   GPU_RT_CHECK(
@@ -1242,22 +1392,22 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
   void* base = nullptr;
   size_t base_size;
   GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, data));
-  auto data_offset =
+  transfer_info.offset =
       reinterpret_cast<uintptr_t>(data) - reinterpret_cast<uintptr_t>(base);
-  transfer_info.offset = data_offset;
 
-  auto ret = uccl::send_message_nonblock(
-      client_fd, static_cast<void const*>(&transfer_info),
-      sizeof(transfer_info));
-  CHECK_EQ(ret, sizeof(transfer_info)) << "Failed to send IPC handle to sender";
+  // Send IPC_HANDLE msg to sender
+  ShmMsg msg;
+  msg.type = ShmMsgType::IPC_HANDLE;
+  msg.info = transfer_info;
+  shm_ring_send(ring_send, msg);
 
   // Notify sender of completion
-  uint32_t completion = 0;
-  ret = uccl::receive_message_nonblock(
-      client_fd, static_cast<void*>(&completion), sizeof(completion));
-  CHECK_EQ(ret, sizeof(completion))
+  ShmMsg ack;
+  shm_ring_recv(ring_recv, ack);
+
+  CHECK_EQ(ack.type == ShmMsgType::COMPLETION)
       << "Failed to receive completion notification";
-  CHECK_EQ(completion, 1) << "Sender reported failure";
+  CHECK_EQ(ack.completion, 1) << "Sender reported failure";
 
   return true;
 }

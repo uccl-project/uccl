@@ -75,12 +75,28 @@ struct MR {
   P2PMhandle* mhandle_;
 };
 
+const size_t ShmRingDefaultElemCnt = 16;
+
+struct ShmRingHandle {
+  jring_t* ring = nullptr;
+  int shm_fd = -1;
+  size_t shm_size = 0;
+  std::string shm_name;
+};
+
+struct ShmChannel {
+  ShmRingHandle ring_ab;  // A → B
+  ShmRingHandle ring_ba;  // B → A
+};
+
 struct Conn {
   uint64_t conn_id_;
   ConnID uccl_conn_id_;
   std::string ip_addr_;
   int remote_gpu_idx_;
-  int uds_sockfd_ = -1;  // Unix Domain Socket file descriptor for local IPC
+
+  ShmChannel shm_ring_;
+  bool shm_creator_ = false;
 };
 
 #ifdef UCCL_P2P_USE_TCPX
@@ -101,6 +117,18 @@ class Endpoint {
     uintptr_t offset;
     size_t size;
     uint32_t operation;  // 0 = send_ipc request, 1 = recv_ipc response
+  };
+  // For ShmChannel
+  enum class ShmMsgType : uint32_t {
+    IPC_HANDLE = 1,
+    COMPLETION = 2,
+  };
+  struct ShmMsg {
+    ShmMsgType type;
+    union {
+      Endpoint::IpcTransferInfo info;
+      uint32_t completion;
+    };
   };
 
   /* Create engine threads running in background for a single interface. It also
