@@ -22,3 +22,6 @@
 [submodule "thirdparty/gdrcopy"]
 	path = thirdparty/gdrcopy
 	url = https://github.com/NVIDIA/gdrcopy.git
+[submodule "thirdparty/ThunderKittens"]
+    path = thirdparty/ThunderKittens
+    url = https://github.com/HazyResearch/ThunderKittens.git
