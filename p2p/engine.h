@@ -84,19 +84,14 @@ struct ShmRingHandle {
   std::string shm_name;
 };
 
-struct ShmChannel {
-  ShmRingHandle ring_ab;  // A → B
-  ShmRingHandle ring_ba;  // B → A
-};
-
 struct Conn {
   uint64_t conn_id_;
   ConnID uccl_conn_id_;
   std::string ip_addr_;
   int remote_gpu_idx_;
 
-  ShmChannel shm_ring_;
-  bool shm_creator_ = false;
+  ShmRingHandle remote_inbox_;
+  bool shm_attached_ = false;
 };
 
 #ifdef UCCL_P2P_USE_TCPX
@@ -120,15 +115,18 @@ class Endpoint {
   };
   // For ShmChannel
   enum class ShmMsgType : uint32_t {
+    CONNECT = 0,
     IPC_HANDLE = 1,
     COMPLETION = 2,
   };
   struct ShmMsg {
+    uint32_t src_gpu;
     ShmMsgType type;
     union {
       Endpoint::IpcTransferInfo info;
       uint32_t completion;
     };
+    ShmMsg() : src_gpu(0), type(ShmMsgType::COMPLETION), completion(0) {}
   };
 
   /* Create engine threads running in background for a single interface. It also
@@ -356,17 +354,6 @@ class Endpoint {
     return rank2conn_;
   }
 
-  /* Create UDS socket path based on GPU index. */
-  std::string get_uds_socket_path(int gpu_idx) const {
-    return "/tmp/uccl_gpu_" + std::to_string(gpu_idx) + ".sock";
-  }
-
-  /* Initialize UDS socket for listening. */
-  void init_uds_socket();
-
-  /* Cleanup UDS socket resources. */
-  void cleanup_uds_socket();
-
   /* Initialize the engine Internal helper function for lazy initialization. */
   void initialize_engine();
 
@@ -391,9 +378,9 @@ class Endpoint {
   // Single-threaded.
   std::unordered_map<int, uint64_t> rank2conn_;
 
-  // UDS socket for local connections
-  int uds_listen_fd_ = -1;
-  std::string uds_socket_path_;
+  // JRing for local
+  ShmRingHandle inbox_ring_;
+  bool inbox_creator_{false};
 
   // Assuming 1TB GPU memory, 128KB KV block size.
   static constexpr size_t kMaxNumChunksPerTransfer = 1024ul * 1024 * 1024 / 128;
