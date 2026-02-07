@@ -10,6 +10,20 @@ struct InsidePythonGuard {
   ~InsidePythonGuard() { inside_python = false; }
 };
 
+struct XferDesc {
+  void const* addr;
+  size_t size;
+  uint64_t mr_id;
+  std::vector<uint32_t> lkeys;
+  std::vector<uint32_t> rkeys;
+};
+
+struct XferHandle {
+  uint64_t conn_id;
+  std::string op_name;
+  uint64_t transfer_id;
+};
+
 std::vector<uint8_t> serialize_xfer_descs(
     std::vector<XferDesc> const& xfer_desc_v) {
   size_t total_size = sizeof(size_t);

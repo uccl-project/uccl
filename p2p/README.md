@@ -486,6 +486,26 @@ Accept an incoming connection (blocking).
 - `remote_gpu_idx` (int): GPU index of connecting client
 - `conn_id` (int): Connection ID for subsequent operations
 
+```python
+add_remote_endpoint(metadata_bytes) -> (success, conn_id)
+```
+Add a remote endpoint using serialized metadata. Connects only once per remote endpoint — if a connection to the same remote endpoint already exists, the cached `conn_id` is returned directly.
+
+**Parameters:**
+- `metadata_bytes` (bytes): Serialized endpoint metadata (obtained from `get_metadata()`) containing IP address, port, and GPU index
+
+**Returns:**
+- `success` (bool): Whether connection succeeded (or was already cached)
+- `conn_id` (int): Connection ID for subsequent operations
+
+```python
+start_passive_accept() -> success
+```
+Start a background thread that continuously accepts incoming connections. This is useful when you don't want to block the main thread on `accept()` calls — the background thread will automatically accept all incoming connections.
+
+**Returns:**
+- `success` (bool): Whether the background accept thread was started
+
 #### Memory Registration
 
 ```python
