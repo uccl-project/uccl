@@ -65,7 +65,11 @@ class PollCtxPool : public BuffPool {
   ~PollCtxPool() = default;
 };
 
+#ifdef MTU_4096
+int const kMaxIovs = 256;
+#else
 int const kMaxIovs = 64;
+#endif
 
 enum ReqType {
   ReqTx,

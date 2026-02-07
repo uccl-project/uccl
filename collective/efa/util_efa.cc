@@ -44,13 +44,21 @@ static void init_device_name_lists() {
         char const* name = ibv_get_device_name(list[i]);
         bool ok = false;
         if (name &&
+#ifdef INTEL_RDMA_NIC
+            strncmp(name, "irdma", 5) == 0) {
+#else
             (strncmp(name, "rdmap", 5) == 0 || strncmp(name, "efa", 3) == 0)) {
+#endif
           ok = true;
         }
         struct ibv_context* ctx = ibv_open_device(list[i]);
         if (ctx) {
           struct ibv_device_attr attr;
+#ifdef INTEL_RDMA_NIC
+          if (ibv_query_device(ctx, &attr) == 0 && attr.vendor_id == 0x8086) {
+#else
           if (ibv_query_device(ctx, &attr) == 0 && attr.vendor_id == 0x1d0f) {
+#endif
             ok = true;
           }
           ibv_close_device(ctx);
@@ -184,10 +192,18 @@ void EFAFactory::InitDev(int dev_idx) {
     goto close_device;
   }
 
+#ifdef INTEL_RDMA_NIC
+  if (port_attr.link_layer != IBV_LINK_LAYER_ETHERNET) {
+    fprintf(stderr, "Link layer %d not supported (expected ETHERNET)\n",
+            port_attr.link_layer);
+    goto close_device;
+  }
+#else
   if (port_attr.link_layer != IBV_LINK_LAYER_UNSPECIFIED) {
     fprintf(stderr, "EFA link layer is not supported\n");
     goto close_device;
   }
+#endif
 
   dev->dev_attr = dev_attr;
   dev->port_attr = port_attr;
