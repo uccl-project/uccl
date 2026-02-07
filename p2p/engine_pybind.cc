@@ -4,10 +4,76 @@
 #include <pybind11/stl.h>
 namespace py = pybind11;
 
+namespace {
 struct InsidePythonGuard {
   InsidePythonGuard() { inside_python = true; }
   ~InsidePythonGuard() { inside_python = false; }
 };
+
+std::vector<uint8_t> serialize_xfer_descs(
+    std::vector<XferDesc> const& xfer_desc_v) {
+  size_t total_size = sizeof(size_t);
+  for (auto const& desc : xfer_desc_v) {
+    assert(desc.lkeys.size() == desc.rkeys.size());
+    total_size += sizeof(uint64_t) + sizeof(size_t) + sizeof(size_t) +
+                  desc.lkeys.size() * sizeof(uint32_t) * 2;
+  }
+
+  std::vector<uint8_t> result(total_size);
+  uint8_t* p = result.data();
+  auto emit = [&p](void const* src, size_t n) {
+    std::memcpy(p, src, n);
+    p += n;
+  };
+
+  size_t num_descs = xfer_desc_v.size();
+  emit(&num_descs, sizeof(size_t));
+  for (auto const& desc : xfer_desc_v) {
+    uint64_t addr = reinterpret_cast<uint64_t>(desc.addr);
+    size_t keys_count = desc.lkeys.size();
+    emit(&addr, sizeof(uint64_t));
+    emit(&desc.size, sizeof(size_t));
+    emit(&keys_count, sizeof(size_t));
+    emit(desc.lkeys.data(), keys_count * sizeof(uint32_t));
+    emit(desc.rkeys.data(), keys_count * sizeof(uint32_t));
+  }
+  return result;
+}
+
+std::vector<XferDesc> deserialize_xfer_descs(
+    std::vector<uint8_t> const& serialized_data) {
+  if (serialized_data.empty()) return {};
+
+  uint8_t const* p = serialized_data.data();
+  uint8_t const* end = p + serialized_data.size();
+  auto consume = [&p, end](void* dst, size_t n) {
+    if (p + n > end)
+      throw std::runtime_error("Invalid serialized XferDesc data");
+    std::memcpy(dst, p, n);
+    p += n;
+  };
+
+  size_t num_descs;
+  consume(&num_descs, sizeof(size_t));
+
+  std::vector<XferDesc> xfer_desc_v;
+  xfer_desc_v.reserve(num_descs);
+  for (size_t i = 0; i < num_descs; ++i) {
+    XferDesc desc;
+    uint64_t addr;
+    size_t keys_count;
+    consume(&addr, sizeof(uint64_t));
+    desc.addr = reinterpret_cast<void const*>(addr);
+    consume(&desc.size, sizeof(size_t));
+    consume(&keys_count, sizeof(size_t));
+    desc.lkeys.resize(keys_count);
+    consume(desc.lkeys.data(), keys_count * sizeof(uint32_t));
+    desc.rkeys.resize(keys_count);
+    consume(desc.rkeys.data(), keys_count * sizeof(uint32_t));
+    xfer_desc_v.push_back(std::move(desc));
+  }
+  return xfer_desc_v;
+}
 
 // Helper function to extract pointer and size from PyTorch tensor
 std::pair<void const*, size_t> get_tensor_info(py::object tensor_obj) {
@@ -35,6 +101,7 @@ std::pair<void const*, size_t> get_tensor_info(py::object tensor_obj) {
   size_t total_size = static_cast<size_t>(numel * element_size);
   return std::make_pair(reinterpret_cast<void const*>(ptr), total_size);
 }
+}  // namespace
 
 PYBIND11_MODULE(p2p, m) {
   m.doc() = "P2P Engine - High-performance RDMA-based peer-to-peer transport";
@@ -191,7 +258,6 @@ PYBIND11_MODULE(p2p, m) {
       .def(
           "register_memory",
           [](Endpoint& self, py::list tensor_list) {
-            // Extract pointers and sizes from PyTorch tensors
             std::vector<void const*> ptrs;
             std::vector<size_t> sizes;
             size_t list_len = py::len(tensor_list);
@@ -200,27 +266,43 @@ PYBIND11_MODULE(p2p, m) {
 
             for (size_t i = 0; i < list_len; ++i) {
               py::object tensor_obj = tensor_list[i];
-
-              // Verify it's a tensor-like object
               if (!py::hasattr(tensor_obj, "data_ptr")) {
                 throw std::runtime_error(
                     "Object at index " + std::to_string(i) +
                     " is not a tensor (missing data_ptr() method)");
               }
-
               auto [ptr, size] = get_tensor_info(tensor_obj);
               ptrs.push_back(ptr);
               sizes.push_back(size);
             }
 
-            // Call C++ register_memory
             std::vector<XferDesc> xfer_desc_v;
             {
               py::gil_scoped_release release;
               InsidePythonGuard guard;
-              xfer_desc_v = self.register_memory(ptrs, sizes);
-            }
 
+              std::vector<uint64_t> mr_id_v;
+              if (!self.regv(ptrs, sizes, mr_id_v)) {
+                return std::vector<XferDesc>{};
+              }
+
+              xfer_desc_v.reserve(list_len);
+              for (size_t i = 0; i < list_len; i++) {
+                auto mhandle = self.get_mhandle(mr_id_v[i]);
+                assert(mhandle != nullptr);
+                XferDesc xfer_desc;
+                xfer_desc.addr = ptrs[i];
+                xfer_desc.size = sizes[i];
+                xfer_desc.mr_id = mr_id_v[i];
+                for (size_t j = 0; j < kNICContextNumber; j++) {
+                  auto mr = mhandle->mr_array.getKeyByContextID(j);
+                  assert(mr != nullptr);
+                  xfer_desc.lkeys.push_back(mr->lkey);
+                  xfer_desc.rkeys.push_back(mr->rkey);
+                }
+                xfer_desc_v.push_back(std::move(xfer_desc));
+              }
+            }
             return xfer_desc_v;
           },
           "Register memory for a list of PyTorch tensors and return transfer "
@@ -228,7 +310,7 @@ PYBIND11_MODULE(p2p, m) {
           py::arg("tensor_list"))
       .def(
           "get_serialized_descs",
-          [](Endpoint& self, py::list desc_list) {
+          [](Endpoint& /*self*/, py::list desc_list) {
             std::vector<XferDesc> xfer_desc_v;
             size_t list_len = py::len(desc_list);
             xfer_desc_v.reserve(list_len);
@@ -236,14 +318,7 @@ PYBIND11_MODULE(p2p, m) {
               xfer_desc_v.push_back(py::cast<XferDesc const&>(desc_list[i]));
             }
 
-            std::vector<uint8_t> serialized;
-            {
-              py::gil_scoped_release release;
-              InsidePythonGuard guard;
-              serialized = self.get_serialized_descs(xfer_desc_v);
-            }
-
-            // Return as Python bytes
+            auto serialized = serialize_xfer_descs(xfer_desc_v);
             return py::bytes(reinterpret_cast<const char*>(serialized.data()),
                              serialized.size());
           },
@@ -251,20 +326,10 @@ PYBIND11_MODULE(p2p, m) {
           py::arg("desc_list"))
       .def(
           "deserialize_descs",
-          [](Endpoint& self, py::bytes serialized_bytes) {
-            // Convert Python bytes to C++ vector
+          [](Endpoint& /*self*/, py::bytes serialized_bytes) {
             std::string buf = serialized_bytes;
             std::vector<uint8_t> serialized_data(buf.begin(), buf.end());
-
-            // Deserialize descriptors
-            std::vector<XferDesc> xfer_desc_v;
-            {
-              py::gil_scoped_release release;
-              InsidePythonGuard guard;
-              xfer_desc_v = self.deserialize_descs(serialized_data);
-            }
-
-            return xfer_desc_v;
+            return deserialize_xfer_descs(serialized_data);
           },
           "Deserialize bytes to transfer descriptors",
           py::arg("serialized_bytes"))

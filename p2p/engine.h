@@ -318,26 +318,11 @@ class Endpoint {
   bool advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
                       std::vector<size_t> len_v, std::vector<char*> out_buf_v,
                       size_t num_iovs);
-  /***************************************************/
-  /* API for Ray */
-  /***************************************************/
 
   /* Add a remote endpoint with metadata - connect only once per remote
    * endpoint. */
   bool add_remote_endpoint(std::vector<uint8_t> const& metadata,
                            uint64_t& conn_id);
-
-  /* Register memory for a list of tensors and return transfer descriptors */
-  std::vector<XferDesc> register_memory(std::vector<void const*> const& data_v,
-                                        std::vector<size_t> const& size_v);
-
-  /* Serialize XferDesc vector to bytes for network transmission */
-  std::vector<uint8_t> get_serialized_descs(
-      std::vector<XferDesc> const& xfer_desc_v);
-
-  /* Deserialize bytes to XferDesc vector */
-  std::vector<XferDesc> deserialize_descs(
-      std::vector<uint8_t> const& serialized_data);
 
   /* Start a background thread for accepting. */
   bool start_passive_accept();

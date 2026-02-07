@@ -144,7 +144,9 @@ def _run_client(args, ep, peer_rank: int, mode: str):
             start = time.perf_counter()
             total = 0
             for _ in range(args.iters):
-                success, transfer_id = ep.transfer(conn_id, mode, local_descs, remote_descs)
+                success, transfer_id = ep.transfer(
+                    conn_id, mode, local_descs, remote_descs
+                )
                 assert success, "Failed to start transfer"
                 is_done = False
                 while not is_done:
@@ -192,7 +194,9 @@ def _run_client(args, ep, peer_rank: int, mode: str):
                 remote_descs_serialized = _recv_bytes(src=peer)
                 remote_descs = ep.deserialize_descs(remote_descs_serialized)
 
-                success, transfer_id = ep.transfer(conn_id, mode, local_descs, remote_descs)
+                success, transfer_id = ep.transfer(
+                    conn_id, mode, local_descs, remote_descs
+                )
                 assert success, "Failed to start transfer"
 
                 is_done = False
@@ -241,7 +245,9 @@ def _run_phase(args, ep, mode: str):
     dist.barrier()
     if rank == 0:
         print("=" * 60)
-        print(f"PHASE: {mode.upper()}  (client=rank{client_rank}, server=rank{server_rank})")
+        print(
+            f"PHASE: {mode.upper()}  (client=rank{client_rank}, server=rank{server_rank})"
+        )
         print("=" * 60)
     dist.barrier()
 
