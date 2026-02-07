@@ -5,7 +5,7 @@ NVCC           := $(CUDA_PATH)/bin/nvcc
 CONDA_LIB_HOME ?= /usr/lib
 
 # ThunderKittens
-TK_ROOT := /home/calebzhang/uccl/thirdparty/ThunderKittens
+TK_ROOT := $(abspath ../../thirdparty/ThunderKittens)
 
 # GPU architecture - use sm_90a for TMA/wgmma support
 SM ?= 90a
