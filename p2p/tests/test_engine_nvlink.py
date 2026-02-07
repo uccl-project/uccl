@@ -69,12 +69,12 @@ def test_local_dist():
     assert world_size == 2, "This benchmark only supports 2 processes"
 
     if torch.cuda.is_available():
-        torch.cuda.set_device(0)
+        torch.cuda.set_device(rank)
 
     if rank == 0:
         print("Running test_local (server)…")
 
-        engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
+        engine = p2p.Endpoint(rank, 4)
         metadata = engine.get_metadata()
         ip, port, remote_gpu_idx = p2p.Endpoint.parse_metadata(metadata)
         print(f"[server] Parsed IP: {ip}")
@@ -83,12 +83,13 @@ def test_local_dist():
 
         _send_bytes(bytes(metadata), dst=1)
 
-        conn_id = _recv_int(src=1)
-        print(f"[server] Received conn_id={conn_id} from client")
+        # Accept the local IPC connection (blocks until client connects)
+        ok, remote_gpu_idx, conn_id = engine.accept_local()
+        assert ok
+        print(f"[server] Accepted local connection: conn_id={conn_id}")
 
-        tensor = torch.zeros(1024, dtype=torch.float32, device="cuda:0")
+        tensor = torch.zeros(1024, dtype=torch.float32, device=f"cuda:{rank}")
         assert tensor.is_contiguous()
-        mr_id = 0
         ok, fifo_blob = engine.advertise(
             conn_id, 0, tensor.data_ptr(), tensor.numel() * 4
         )
@@ -100,7 +101,9 @@ def test_local_dist():
         success = _recv_int(src=1)
         assert success
 
-        assert tensor.allclose(torch.ones(1024, dtype=torch.float32, device="cuda:0"))
+        assert tensor.allclose(
+            torch.ones(1024, dtype=torch.float32, device=f"cuda:{rank}")
+        )
         print("[server] Received correct data")
 
     else:
@@ -112,13 +115,12 @@ def test_local_dist():
             f"[client] Parsed server IP: {ip}, port: {port}, remote_gpu_idx: {remote_gpu_idx}"
         )
 
-        engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
+        engine = p2p.Endpoint(rank, 4)
         success, conn_id = engine.connect_local(remote_gpu_idx)
         assert success
         print(f"[client] Connected successfully: conn_id={conn_id}")
-        _send_int(conn_id, dst=0)
 
-        tensor = torch.ones(1024, dtype=torch.float32, device="cuda:0")
+        tensor = torch.ones(1024, dtype=torch.float32, device=f"cuda:{rank}")
         assert tensor.is_contiguous()
 
         fifo_blob = _recv_bytes(src=0)
