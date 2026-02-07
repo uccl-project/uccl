@@ -102,26 +102,6 @@ using FifoItem = nccl_tcpx::FifoItem;
 using FifoItem = FifoItem;
 #endif
 
-/* Ray API */
-struct XferDesc {
-  void const* addr;
-  size_t size;
-  uint64_t mr_id;
-  std::vector<uint32_t> lkeys;
-  std::vector<uint32_t> rkeys;
-};
-
-enum XferType {
-  XferWrite,
-  XferRead,
-};
-
-struct XferHandle {
-  uint64_t conn_id;
-  std::string op_name;
-  uint64_t transfer_id;
-};
-
 // Custom hash function for std::vector<uint8_t>
 struct VectorUint8Hash {
   std::size_t operator()(std::vector<uint8_t> const& vec) const {
