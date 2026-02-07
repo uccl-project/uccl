@@ -393,25 +393,22 @@ class CollectiveContext:
         ptr, size = self._get_buffer_info(tensor)
         conn_id = self.send_connections[dst]
 
-        if self.local_connections[dst]:
-            if self.use_copy_engine_for_intra:
-                # Use IPC for local connection (no memory registration needed)
-                ok = self.ep.send_ipc(conn_id, ptr, size)
-                if not ok:
-                    raise RuntimeError(f"Failed to initiate IPC send to rank {dst}")
-            else:
-                dist.send(tensor, dst, group=self.group)
+        if self.local_connections[dst] and not self.use_copy_engine_for_intra:
+            dist.send(tensor, dst, group=self.group)
         else:
-            # Use RDMA for remote connection (requires memory registration)
-            mr_id = self.check_tensor_registered(tensor)
-            if mr_id == None:
+            mr_id = (
+                0
+                if self.local_connections[dst]
+                else self.check_tensor_registered(tensor)
+            )
+            if mr_id is None:
                 raise RuntimeError(
                     f"Tensor memory not registered for remote communication with rank {dst}. "
                     f"Call register_tensor() first for tensors used with remote ranks."
                 )
             ok = self.ep.send(conn_id, mr_id, ptr, size)
             if not ok:
-                raise RuntimeError(f"Failed to initiate RDMA send to rank {dst}")
+                raise RuntimeError(f"Failed to send to rank {dst}")
 
     def recv(self, tensor: torch.Tensor, src: int):
         """Receive tensor from source rank (synchronous)."""
@@ -427,25 +424,22 @@ class CollectiveContext:
         ptr, size = self._get_buffer_info(tensor)
         conn_id = self.recv_connections[src]
 
-        if self.local_connections[src]:
-            if self.use_copy_engine_for_intra:
-                # Use IPC for local connection (no memory registration needed)
-                ok = self.ep.recv_ipc(conn_id, ptr, size)
-                if not ok:
-                    raise RuntimeError(f"Failed to initiate IPC recv from rank {src}")
-            else:
-                dist.recv(tensor, src, group=self.group)
+        if self.local_connections[src] and not self.use_copy_engine_for_intra:
+            dist.recv(tensor, src, group=self.group)
         else:
-            # Use RDMA for remote connection (requires memory registration)
-            mr_id = self.check_tensor_registered(tensor)
-            if mr_id == None:
+            mr_id = (
+                0
+                if self.local_connections[src]
+                else self.check_tensor_registered(tensor)
+            )
+            if mr_id is None:
                 raise RuntimeError(
                     f"Tensor memory not registered for remote communication with rank {src}. "
                     f"Call register_tensor() first for tensors used with remote ranks."
                 )
             ok = self.ep.recv(conn_id, mr_id, ptr, size)
             if not ok:
-                raise RuntimeError(f"Failed to initiate RDMA recv from rank {src}")
+                raise RuntimeError(f"Failed to recv from rank {src}")
 
     def isend(self, tensor: torch.Tensor, dst: int) -> Union[int, dist.Work]:
         """Initiate asynchronous send (non-blocking)."""
@@ -461,31 +455,25 @@ class CollectiveContext:
         ptr, size = self._get_buffer_info(tensor)
         conn_id = self.send_connections[dst]
 
-        if self.local_connections[dst]:
-            if self.use_copy_engine_for_intra:
-                # Use IPC async for local connection (no memory registration needed)
-                ok, transfer_handle = self.ep.send_ipc_async(conn_id, ptr, size)
-                if not ok:
-                    raise RuntimeError(
-                        f"Failed to initiate async IPC send to rank {dst}"
-                    )
-                return transfer_handle
-            else:
-                # Use NCCL - start immediately and return Work object
-                op = dist.P2POp(dist.isend, tensor, dst, group=self.group)
-                reqs = dist.batch_isend_irecv([op])
-                return reqs[0]
+        if self.local_connections[dst] and not self.use_copy_engine_for_intra:
+            # Use NCCL - start immediately and return Work object
+            op = dist.P2POp(dist.isend, tensor, dst, group=self.group)
+            reqs = dist.batch_isend_irecv([op])
+            return reqs[0]
         else:
-            # Use RDMA async for remote connection (requires memory registration)
-            mr_id = self.check_tensor_registered(tensor)
-            if mr_id == None:
+            mr_id = (
+                0
+                if self.local_connections[dst]
+                else self.check_tensor_registered(tensor)
+            )
+            if mr_id is None:
                 raise RuntimeError(
                     f"Tensor memory not registered for remote communication with rank {dst}. "
                     f"Call register_tensor() first for tensors used with remote ranks."
                 )
             ok, transfer_handle = self.ep.send_async(conn_id, mr_id, ptr, size)
             if not ok:
-                raise RuntimeError(f"Failed to initiate async RDMA send to rank {dst}")
+                raise RuntimeError(f"Failed to initiate async send to rank {dst}")
             return transfer_handle
 
     def irecv(self, tensor: torch.Tensor, src: int) -> Union[int, dist.Work]:
@@ -504,33 +492,25 @@ class CollectiveContext:
         ptr, size = self._get_buffer_info(tensor)
         conn_id = self.recv_connections[src]
 
-        if self.local_connections[src]:
-            if self.use_copy_engine_for_intra:
-                # Use IPC async for local connection (no memory registration needed)
-                ok, transfer_handle = self.ep.recv_ipc_async(conn_id, ptr, size)
-                if not ok:
-                    raise RuntimeError(
-                        f"Failed to initiate async IPC recv from rank {src}"
-                    )
-                return transfer_handle
-            else:
-                # Use NCCL - start immediately and return Work object
-                op = dist.P2POp(dist.irecv, tensor, src, group=self.group)
-                reqs = dist.batch_isend_irecv([op])
-                return reqs[0]
+        if self.local_connections[src] and not self.use_copy_engine_for_intra:
+            # Use NCCL - start immediately and return Work object
+            op = dist.P2POp(dist.irecv, tensor, src, group=self.group)
+            reqs = dist.batch_isend_irecv([op])
+            return reqs[0]
         else:
-            # Use RDMA async for remote connection (requires memory registration)
-            mr_id = self.check_tensor_registered(tensor)
-            if mr_id == None:
+            mr_id = (
+                0
+                if self.local_connections[src]
+                else self.check_tensor_registered(tensor)
+            )
+            if mr_id is None:
                 raise RuntimeError(
                     f"Tensor memory not registered for remote communication with rank {src}. "
                     f"Call register_tensor() first for tensors used with remote ranks."
                 )
             ok, transfer_handle = self.ep.recv_async(conn_id, mr_id, ptr, size)
             if not ok:
-                raise RuntimeError(
-                    f"Failed to initiate async RDMA recv from rank {src}"
-                )
+                raise RuntimeError(f"Failed to initiate async recv from rank {src}")
             return transfer_handle
 
     def test(self, transfer_handle: Union[int, dist.Work]) -> bool:
@@ -643,50 +623,42 @@ class CollectiveContext:
                 continue  # Skip self-communication
 
             if op_type == "send":
-                if self.local_connections[peer]:
-                    if self.use_copy_engine_for_intra:
-                        ptr, size = self._get_buffer_info(tensor)
-                        conn_id = self.send_connections[peer]
-                        ok, handle = self.ep.send_ipc_async(conn_id, ptr, size)
-                        if not ok:
-                            raise RuntimeError(f"Failed IPC send to {peer}")
-                        int_handles.append(handle)
-                    else:
-                        p2p_ops.append(
-                            dist.P2POp(dist.isend, tensor, peer, group=self.group)
-                        )
+                if self.local_connections[peer] and not self.use_copy_engine_for_intra:
+                    p2p_ops.append(
+                        dist.P2POp(dist.isend, tensor, peer, group=self.group)
+                    )
                 else:
                     ptr, size = self._get_buffer_info(tensor)
                     conn_id = self.send_connections[peer]
-                    mr_id = self.check_tensor_registered(tensor)
+                    mr_id = (
+                        0
+                        if self.local_connections[peer]
+                        else self.check_tensor_registered(tensor)
+                    )
                     if mr_id is None:
                         raise RuntimeError(f"Tensor not registered for rank {peer}")
                     ok, handle = self.ep.send_async(conn_id, mr_id, ptr, size)
                     if not ok:
-                        raise RuntimeError(f"Failed RDMA send to {peer}")
+                        raise RuntimeError(f"Failed send to {peer}")
                     int_handles.append(handle)
             else:  # recv
-                if self.local_connections[peer]:
-                    if self.use_copy_engine_for_intra:
-                        ptr, size = self._get_buffer_info(tensor)
-                        conn_id = self.recv_connections[peer]
-                        ok, handle = self.ep.recv_ipc_async(conn_id, ptr, size)
-                        if not ok:
-                            raise RuntimeError(f"Failed IPC recv from {peer}")
-                        int_handles.append(handle)
-                    else:
-                        p2p_ops.append(
-                            dist.P2POp(dist.irecv, tensor, peer, group=self.group)
-                        )
+                if self.local_connections[peer] and not self.use_copy_engine_for_intra:
+                    p2p_ops.append(
+                        dist.P2POp(dist.irecv, tensor, peer, group=self.group)
+                    )
                 else:
                     ptr, size = self._get_buffer_info(tensor)
                     conn_id = self.recv_connections[peer]
-                    mr_id = self.check_tensor_registered(tensor)
+                    mr_id = (
+                        0
+                        if self.local_connections[peer]
+                        else self.check_tensor_registered(tensor)
+                    )
                     if mr_id is None:
                         raise RuntimeError(f"Tensor not registered for rank {peer}")
                     ok, handle = self.ep.recv_async(conn_id, mr_id, ptr, size)
                     if not ok:
-                        raise RuntimeError(f"Failed RDMA recv from {peer}")
+                        raise RuntimeError(f"Failed recv from {peer}")
                     int_handles.append(handle)
 
         # Batch execute NCCL P2POps

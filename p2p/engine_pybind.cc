@@ -272,23 +272,16 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size, py::bytes meta_blob) {
             std::string buf = meta_blob;
-            if (buf.size() != sizeof(FifoItem))
-              throw std::runtime_error(
-                  "meta must be exactly 64 bytes (serialized FifoItem)");
-
-            FifoItem item;
-            deserialize_fifo_item(buf.data(), &item);
             bool success;
             {
               py::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.read(conn_id, mr_id, reinterpret_cast<void*>(ptr),
-                                  size, item);
+                                  size, buf.data(), buf.size());
             }
             return success;
           },
-          "RDMA-READ into a local buffer using metadata from advertise(); "
-          "`meta` is the 64-byte serialized FifoItem returned by the peer",
+          "Read data using opaque metadata from advertise()",
           py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
           py::arg("meta"))
       .def(
@@ -296,12 +289,6 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size, py::bytes meta_blob) {
             std::string buf = meta_blob;
-            if (buf.size() != sizeof(FifoItem))
-              throw std::runtime_error(
-                  "meta must be exactly 64 bytes (serialized FifoItem)");
-
-            FifoItem item;
-            deserialize_fifo_item(buf.data(), &item);
             uint64_t transfer_id;
             bool success;
             {
@@ -309,12 +296,11 @@ PYBIND11_MODULE(p2p, m) {
               InsidePythonGuard guard;
               success =
                   self.read_async(conn_id, mr_id, reinterpret_cast<void*>(ptr),
-                                  size, item, &transfer_id);
+                                  size, buf.data(), buf.size(), &transfer_id);
             }
             return py::make_tuple(success, transfer_id);
           },
-          "RDMA-READ into a local buffer using metadata from advertise(); "
-          "`meta` is the 64-byte serialized FifoItem returned by the peer",
+          "Read data asynchronously using opaque metadata from advertise()",
           py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
           py::arg("meta"))
       .def(
@@ -405,23 +391,16 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size, py::bytes meta_blob) {
             std::string buf = meta_blob;
-            if (buf.size() != sizeof(FifoItem))
-              throw std::runtime_error(
-                  "meta must be exactly 64 bytes (serialized FifoItem)");
-
-            FifoItem item;
-            deserialize_fifo_item(buf.data(), &item);
             bool success;
             {
               py::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.write(conn_id, mr_id, reinterpret_cast<void*>(ptr),
-                                   size, item);
+                                   size, buf.data(), buf.size());
             }
             return success;
           },
-          "RDMA-WRITE into a remote buffer using metadata from advertise(); "
-          "`meta` is the 64-byte serialized FifoItem returned by the peer",
+          "Write data using opaque metadata from advertise()",
           py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
           py::arg("meta"))
       .def(
@@ -429,12 +408,6 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size, py::bytes meta_blob) {
             std::string buf = meta_blob;
-            if (buf.size() != sizeof(FifoItem))
-              throw std::runtime_error(
-                  "meta must be exactly 64 bytes (serialized FifoItem)");
-
-            FifoItem item;
-            deserialize_fifo_item(buf.data(), &item);
             uint64_t transfer_id;
             bool success;
             {
@@ -442,12 +415,11 @@ PYBIND11_MODULE(p2p, m) {
               InsidePythonGuard guard;
               success =
                   self.write_async(conn_id, mr_id, reinterpret_cast<void*>(ptr),
-                                   size, item, &transfer_id);
+                                   size, buf.data(), buf.size(), &transfer_id);
             }
             return py::make_tuple(success, transfer_id);
           },
-          "RDMA-WRITE into a remote buffer using metadata from advertise(); "
-          "`meta` is the 64-byte serialized FifoItem returned by the peer",
+          "Write data asynchronously using opaque metadata from advertise()",
           py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
           py::arg("meta"))
       .def(
@@ -538,29 +510,39 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
              uint64_t ptr,  // raw pointer passed from Python
              size_t size) {
-            char serialized[sizeof(FifoItem)]{};  // 64-byte scratch buffer
+            Conn* conn = self.get_conn(conn_id);
+            if (!conn) throw std::runtime_error("Invalid conn_id in advertise");
+            size_t out_size = conn->is_local()
+                                  ? sizeof(Endpoint::IpcTransferInfo)
+                                  : sizeof(FifoItem);
+            std::vector<char> serialized(out_size, 0);
             bool ok;
             {
               py::gil_scoped_release release;
               InsidePythonGuard guard;
               ok = self.advertise(conn_id, mr_id, reinterpret_cast<void*>(ptr),
-                                  size, serialized);
+                                  size, serialized.data());
             }
-            /* return (success, bytes) — empty bytes when failed */
             return py::make_tuple(
-                ok, ok ? py::bytes(serialized, sizeof(FifoItem)) : py::bytes());
+                ok, ok ? py::bytes(serialized.data(), out_size) : py::bytes());
           },
-          "Expose a registered buffer for the peer to RDMA-READ or RDMA-WRITE",
+          "Expose a buffer for one-sided read/write (dispatches RDMA or IPC)",
           py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"))
       .def(
           "advertisev",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<uint64_t> ptr_v, std::vector<size_t> size_v,
              size_t num_iovs) {
+            Conn* conn = self.get_conn(conn_id);
+            if (!conn)
+              throw std::runtime_error("Invalid conn_id in advertisev");
+            size_t item_size = conn->is_local()
+                                   ? sizeof(Endpoint::IpcTransferInfo)
+                                   : sizeof(FifoItem);
             std::vector<char*> serialized_vec(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
-              serialized_vec[i] = new char[sizeof(FifoItem)];
-              memset(serialized_vec[i], 0, sizeof(FifoItem));
+              serialized_vec[i] = new char[item_size];
+              memset(serialized_vec[i], 0, item_size);
             }
             std::vector<void*> data_v;
             data_v.reserve(ptr_v.size());
@@ -577,19 +559,18 @@ PYBIND11_MODULE(p2p, m) {
 
             py::list py_bytes_list;
             for (size_t i = 0; i < num_iovs; ++i) {
-              py_bytes_list.append(
-                  py::bytes(serialized_vec[i], sizeof(FifoItem)));
+              py_bytes_list.append(py::bytes(serialized_vec[i], item_size));
             }
             for (size_t i = 0; i < num_iovs; ++i) {
               delete[] serialized_vec[i];
             }
             return py::make_tuple(ok, py_bytes_list);
           },
-          "Expose multiple registered buffers for the peer to RDMA-READ or "
-          "RDMA-WRITE",
+          "Expose multiple buffers for one-sided read/write (dispatches RDMA "
+          "or IPC)",
           py::arg("conn_id"), py::arg("mr_id_v"), py::arg("ptr_v"),
           py::arg("size_v"), py::arg("num_iovs"))
-      // IPC-specific functions for local connections via Unix Domain Sockets
+      // Local connection functions via Unix Domain Sockets
       .def(
           "connect_local",
           [](Endpoint& self, int remote_gpu_idx) {
@@ -618,201 +599,6 @@ PYBIND11_MODULE(p2p, m) {
             return py::make_tuple(success, remote_gpu_idx, conn_id);
           },
           "Accept an incoming local connection via Unix Domain Socket")
-      .def(
-          "send_ipc",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
-            bool success;
-            {
-              py::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success =
-                  self.send_ipc(conn_id, reinterpret_cast<void*>(ptr), size);
-            }
-            return success;
-          },
-          "Send data via IPC (Inter-Process Communication) using CUDA/HIP "
-          "memory handles",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
-      .def(
-          "recv_ipc",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
-            bool success;
-            {
-              py::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success =
-                  self.recv_ipc(conn_id, reinterpret_cast<void*>(ptr), size);
-            }
-            return success;
-          },
-          "Receive data via IPC (Inter-Process Communication) using CUDA/HIP "
-          "memory handles",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
-      .def(
-          "send_ipc_async",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
-            uint64_t transfer_id;
-            bool success;
-            {
-              py::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.send_ipc_async(conn_id,
-                                            reinterpret_cast<void const*>(ptr),
-                                            size, &transfer_id);
-            }
-            return py::make_tuple(success, transfer_id);
-          },
-          "Send data asynchronously via IPC using CUDA/HIP memory handles",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
-      .def(
-          "recv_ipc_async",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
-            uint64_t transfer_id;
-            bool success;
-            {
-              py::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.recv_ipc_async(
-                  conn_id, reinterpret_cast<void*>(ptr), size, &transfer_id);
-            }
-            return py::make_tuple(success, transfer_id);
-          },
-          "Receive data asynchronously via IPC using CUDA/HIP memory handles",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
-      .def(
-          "write_ipc",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
-             py::bytes info_blob) {
-            std::string buf = info_blob;
-            CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
-                << "IpcTransferInfo size mismatch";
-            Endpoint::IpcTransferInfo info;
-            std::memcpy(&info, buf.data(), sizeof(info));
-            bool success;
-            {
-              py::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.write_ipc(
-                  conn_id, reinterpret_cast<void const*>(ptr), size, info);
-            }
-            return success;
-          },
-          "Write data via one-sided IPC using IpcTransferInfo",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"), py::arg("info"))
-      .def(
-          "read_ipc",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
-             py::bytes info_blob) {
-            std::string buf = info_blob;
-            CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
-                << "IpcTransferInfo size mismatch";
-            Endpoint::IpcTransferInfo info;
-            std::memcpy(&info, buf.data(), sizeof(info));
-            bool success;
-            {
-              py::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.read_ipc(conn_id, reinterpret_cast<void*>(ptr),
-                                      size, info);
-            }
-            return success;
-          },
-          "Read data via one-sided IPC using IpcTransferInfo",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"), py::arg("info"))
-      .def(
-          "write_ipc_async",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
-             py::bytes info_blob) {
-            std::string buf = info_blob;
-            CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
-                << "IpcTransferInfo size mismatch";
-            Endpoint::IpcTransferInfo info;
-            std::memcpy(&info, buf.data(), sizeof(info));
-            uint64_t transfer_id;
-            bool success;
-            {
-              py::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.write_ipc_async(conn_id,
-                                             reinterpret_cast<void const*>(ptr),
-                                             size, info, &transfer_id);
-            }
-            return success;
-          },
-          "Write data asynchronously via one-sided IPC using IpcTransferInfo",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"), py::arg("info"))
-      .def(
-          "read_ipc_async",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
-             py::bytes info_blob) {
-            std::string buf = info_blob;
-            CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
-                << "IpcTransferInfo size mismatch";
-            Endpoint::IpcTransferInfo info;
-            std::memcpy(&info, buf.data(), sizeof(info));
-            uint64_t transfer_id;
-            bool success;
-            {
-              py::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success =
-                  self.read_ipc_async(conn_id, reinterpret_cast<void*>(ptr),
-                                      size, info, &transfer_id);
-            }
-            return py::make_tuple(success, transfer_id);
-          },
-          "Read data asynchronously via one-sided IPC using IpcTransferInfo",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"), py::arg("info"))
-      .def(
-          "advertise_ipc",
-          [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
-            char serialized[sizeof(Endpoint::IpcTransferInfo)]{};
-            bool success;
-            {
-              py::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.advertise_ipc(
-                  conn_id, reinterpret_cast<void*>(ptr), size, serialized);
-            }
-            return py::make_tuple(success,
-                                  py::bytes(serialized, sizeof(serialized)));
-          },
-          "Advertise memory for IPC access and return IpcTransferInfo",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
-      .def(
-          "advertisev_ipc",
-          [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> ptr_v,
-             std::vector<size_t> size_v) {
-            size_t num_iovs = ptr_v.size();
-            CHECK_EQ(size_v.size(), num_iovs) << "Size vector mismatch";
-
-            std::vector<void*> addr_v(num_iovs);
-            std::vector<char*> out_buf_v(num_iovs);
-            std::vector<std::string> buffers(num_iovs);
-
-            for (size_t i = 0; i < num_iovs; ++i) {
-              addr_v[i] = reinterpret_cast<void*>(ptr_v[i]);
-              buffers[i].resize(sizeof(Endpoint::IpcTransferInfo));
-              out_buf_v[i] = buffers[i].data();
-            }
-
-            bool success;
-            {
-              py::gil_scoped_release release;
-              InsidePythonGuard guard;
-              success = self.advertisev_ipc(conn_id, addr_v, size_v, out_buf_v,
-                                            num_iovs);
-            }
-
-            std::vector<py::bytes> result_v;
-            for (size_t i = 0; i < num_iovs; ++i) {
-              result_v.push_back(py::bytes(buffers[i]));
-            }
-
-            return py::make_tuple(success, result_v);
-          },
-          "Advertise multiple memory regions for IPC access",
-          py::arg("conn_id"), py::arg("ptr_v"), py::arg("size_v"))
       .def(
           "poll_async",
           [](Endpoint& self, uint64_t transfer_id) {

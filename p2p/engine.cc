@@ -463,6 +463,10 @@ bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
     return false;
   }
 
+  if (conn->is_local()) {
+    return send_ipc_impl(conn_id, const_cast<void*>(data), size);
+  }
+
   P2PMhandle* mhandle = get_mhandle(mr_id);
   if (unlikely(mhandle == nullptr)) {
     std::cerr << "[send] Error: Invalid mr_id " << mr_id << std::endl;
@@ -489,6 +493,10 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
     return false;
   }
 
+  if (conn->is_local()) {
+    return recv_ipc_impl(conn_id, data, size);
+  }
+
   P2PMhandle* mhandle = get_mhandle(mr_id);
   if (unlikely(mhandle == nullptr)) {
     std::cerr << "[recv] Error: Invalid mr_id " << mr_id << std::endl;
@@ -511,6 +519,16 @@ bool Endpoint::recv(uint64_t conn_id, uint64_t mr_id, void* data, size_t size) {
 
 bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
                           size_t size, uint64_t* transfer_id) {
+  Conn* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[send_async] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
+  }
+
+  if (conn->is_local()) {
+    return send_ipc_async_impl(conn_id, data, size, transfer_id);
+  }
+
   auto task_ptr = create_task(conn_id, mr_id, TaskType::SEND_NET,
                               const_cast<void*>(data), size);
   if (unlikely(task_ptr == nullptr)) {
@@ -532,6 +550,16 @@ bool Endpoint::send_async(uint64_t conn_id, uint64_t mr_id, void const* data,
 
 bool Endpoint::recv_async(uint64_t conn_id, uint64_t mr_id, void* data,
                           size_t size, uint64_t* transfer_id) {
+  Conn* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[recv_async] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
+  }
+
+  if (conn->is_local()) {
+    return recv_ipc_async_impl(conn_id, data, size, transfer_id);
+  }
+
   auto task_ptr = create_task(conn_id, mr_id, TaskType::RECV_NET, data, size);
   if (unlikely(task_ptr == nullptr)) {
     return false;
@@ -989,6 +1017,11 @@ bool Endpoint::advertise(uint64_t conn_id, uint64_t mr_id, void* addr,
     std::cerr << "[advertise] Error: Invalid conn_id " << conn_id << std::endl;
     return false;
   }
+
+  if (conn->is_local()) {
+    return advertise_ipc_impl(conn_id, addr, len, out_buf);
+  }
+
   auto mhandle = get_mhandle(mr_id);
   if (unlikely(mhandle == nullptr)) {
     std::cerr << "[advertise] Error: Invalid mr_id " << mr_id << std::endl;
@@ -1015,6 +1048,11 @@ bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   if (unlikely(conn == nullptr)) {
     std::cerr << "[advertisev] Error: Invalid conn_id " << conn_id << std::endl;
     return false;
+  }
+
+  if (conn->is_local()) {
+    return advertisev_ipc_impl(conn_id, std::move(addr_v), std::move(len_v),
+                               std::move(out_buf_v), num_iovs);
   }
 
   std::vector<P2PMhandle*> mhandles(num_iovs);
@@ -1127,7 +1165,7 @@ bool Endpoint::accept_local(int& remote_gpu_idx, uint64_t& conn_id) {
   return true;
 }
 
-bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
+bool Endpoint::send_ipc_impl(uint64_t conn_id, void* data, size_t size) {
   CHECK(data != nullptr) << "send_ipc: data pointer is null!";
 
   // Get connection info
@@ -1207,7 +1245,7 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
   return true;
 }
 
-bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
+bool Endpoint::recv_ipc_impl(uint64_t conn_id, void* data, size_t size) {
   CHECK(data != nullptr) << "recv_ipc: data pointer is null!";
 
   // Get connection info
@@ -1262,8 +1300,8 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
   return true;
 }
 
-bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
-                              uint64_t* transfer_id) {
+bool Endpoint::send_ipc_async_impl(uint64_t conn_id, void const* data,
+                                   size_t size, uint64_t* transfer_id) {
   // Create a task for IPC send operation
   auto task_ptr = create_task(conn_id, 0, TaskType::SEND_IPC,
                               const_cast<void*>(data), size);
@@ -1287,8 +1325,8 @@ bool Endpoint::send_ipc_async(uint64_t conn_id, void const* data, size_t size,
   return true;
 }
 
-bool Endpoint::recv_ipc_async(uint64_t conn_id, void* data, size_t size,
-                              uint64_t* transfer_id) {
+bool Endpoint::recv_ipc_async_impl(uint64_t conn_id, void* data, size_t size,
+                                   uint64_t* transfer_id) {
   // Create a task for IPC receive operation
   auto task_ptr = create_task(conn_id, 0, TaskType::RECV_IPC, data, size);
   if (unlikely(task_ptr == nullptr)) {
@@ -1311,8 +1349,8 @@ bool Endpoint::recv_ipc_async(uint64_t conn_id, void* data, size_t size,
   return true;
 }
 
-bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
-                         IpcTransferInfo const& info) {
+bool Endpoint::write_ipc_impl(uint64_t conn_id, void const* data, size_t size,
+                              IpcTransferInfo const& info) {
   CHECK(data != nullptr) << "write_ipc: data pointer is null!";
 
   // Get connection info
@@ -1368,8 +1406,8 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
   return true;
 }
 
-bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
-                        IpcTransferInfo const& info) {
+bool Endpoint::read_ipc_impl(uint64_t conn_id, void* data, size_t size,
+                             IpcTransferInfo const& info) {
   CHECK(data != nullptr) << "read_ipc: data pointer is null!";
 
   // Get connection info
@@ -1425,9 +1463,9 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
   return true;
 }
 
-bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
-                               IpcTransferInfo const& info,
-                               uint64_t* transfer_id) {
+bool Endpoint::write_ipc_async_impl(uint64_t conn_id, void const* data,
+                                    size_t size, IpcTransferInfo const& info,
+                                    uint64_t* transfer_id) {
   // Create an IPC task for IPC write operation
   auto task_ptr = create_ipc_task(conn_id, 0, TaskType::WRITE_IPC,
                                   const_cast<void*>(data), size, info);
@@ -1450,9 +1488,9 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
   return true;
 }
 
-bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
-                              IpcTransferInfo const& info,
-                              uint64_t* transfer_id) {
+bool Endpoint::read_ipc_async_impl(uint64_t conn_id, void* data, size_t size,
+                                   IpcTransferInfo const& info,
+                                   uint64_t* transfer_id) {
   // Create an IPC task for IPC read operation
   auto task_ptr =
       create_ipc_task(conn_id, 0, TaskType::READ_IPC, data, size, info);
@@ -1475,8 +1513,8 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
   return true;
 }
 
-bool Endpoint::advertise_ipc(uint64_t conn_id, void* addr, size_t len,
-                             char* out_buf) {
+bool Endpoint::advertise_ipc_impl(uint64_t conn_id, void* addr, size_t len,
+                                  char* out_buf) {
   CHECK(addr != nullptr) << "advertise_ipc: addr pointer is null!";
   CHECK(out_buf != nullptr) << "advertise_ipc: out_buf pointer is null!";
 
@@ -1506,9 +1544,10 @@ bool Endpoint::advertise_ipc(uint64_t conn_id, void* addr, size_t len,
   return true;
 }
 
-bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
-                              std::vector<size_t> len_v,
-                              std::vector<char*> out_buf_v, size_t num_iovs) {
+bool Endpoint::advertisev_ipc_impl(uint64_t conn_id, std::vector<void*> addr_v,
+                                   std::vector<size_t> len_v,
+                                   std::vector<char*> out_buf_v,
+                                   size_t num_iovs) {
   CHECK_EQ(addr_v.size(), num_iovs) << "addr_v size mismatch";
   CHECK_EQ(len_v.size(), num_iovs) << "len_v size mismatch";
   CHECK_EQ(out_buf_v.size(), num_iovs) << "out_buf_v size mismatch";
@@ -1554,6 +1593,91 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
     delete status;
   }
   return true;
+}
+
+/* Opaque-metadata overloads: dispatch to IPC or RDMA based on connection. */
+
+bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
+                     void const* meta, size_t meta_len) {
+  auto* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[write] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
+  }
+  if (conn->is_local()) {
+    CHECK_EQ(meta_len, sizeof(IpcTransferInfo));
+    IpcTransferInfo info;
+    std::memcpy(&info, meta, sizeof(info));
+    return write_ipc_impl(conn_id, src, size, info);
+  } else {
+    CHECK_EQ(meta_len, sizeof(FifoItem));
+    FifoItem item;
+    std::memcpy(&item, meta, sizeof(item));
+    return write(conn_id, mr_id, src, size, item);
+  }
+}
+
+bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
+                    void const* meta, size_t meta_len) {
+  auto* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[read] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
+  }
+  if (conn->is_local()) {
+    CHECK_EQ(meta_len, sizeof(IpcTransferInfo));
+    IpcTransferInfo info;
+    std::memcpy(&info, meta, sizeof(info));
+    return read_ipc_impl(conn_id, dst, size, info);
+  } else {
+    CHECK_EQ(meta_len, sizeof(FifoItem));
+    FifoItem item;
+    std::memcpy(&item, meta, sizeof(item));
+    return read(conn_id, mr_id, dst, size, item);
+  }
+}
+
+bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
+                           size_t size, void const* meta, size_t meta_len,
+                           uint64_t* transfer_id) {
+  auto* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[write_async] Error: Invalid conn_id " << conn_id
+              << std::endl;
+    return false;
+  }
+  if (conn->is_local()) {
+    CHECK_EQ(meta_len, sizeof(IpcTransferInfo));
+    IpcTransferInfo info;
+    std::memcpy(&info, meta, sizeof(info));
+    return write_ipc_async_impl(conn_id, src, size, info, transfer_id);
+  } else {
+    CHECK_EQ(meta_len, sizeof(FifoItem));
+    FifoItem item;
+    std::memcpy(&item, meta, sizeof(item));
+    return write_async(conn_id, mr_id, src, size, item, transfer_id);
+  }
+}
+
+bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
+                          size_t size, void const* meta, size_t meta_len,
+                          uint64_t* transfer_id) {
+  auto* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[read_async] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
+  }
+  if (conn->is_local()) {
+    CHECK_EQ(meta_len, sizeof(IpcTransferInfo));
+    IpcTransferInfo info;
+    std::memcpy(&info, meta, sizeof(info));
+    return read_ipc_async_impl(conn_id, dst, size, info, transfer_id);
+  } else {
+    CHECK_EQ(meta_len, sizeof(FifoItem));
+    FifoItem item;
+    std::memcpy(&item, meta, sizeof(item));
+    return read_async(conn_id, mr_id, dst, size, item, transfer_id);
+  }
 }
 
 void Endpoint::init_uds_socket() {
@@ -1624,14 +1748,15 @@ void Endpoint::send_proxy_thread_func() {
       task = *reinterpret_cast<UnifiedTask**>(task_buffer);
       switch (task->type) {
         case TaskType::SEND_IPC:
-          send_ipc(task->conn_id, task->data, task->size);
+          send_ipc_impl(task->conn_id, task->data, task->size);
           break;
         case TaskType::WRITE_NET:
           write(task->conn_id, task->mr_id, task->data, task->size,
                 task->slot_item());
           break;
         case TaskType::WRITE_IPC:
-          write_ipc(task->conn_id, task->data, task->size, task->ipc_info());
+          write_ipc_impl(task->conn_id, task->data, task->size,
+                         task->ipc_info());
           break;
         case TaskType::SEND_NET:
           send(task->conn_id, task->mr_id, task->data, task->size);
@@ -1688,14 +1813,15 @@ void Endpoint::recv_proxy_thread_func() {
       task = *reinterpret_cast<UnifiedTask**>(task_buffer);
       switch (task->type) {
         case TaskType::RECV_IPC:
-          recv_ipc(task->conn_id, task->data, task->size);
+          recv_ipc_impl(task->conn_id, task->data, task->size);
           break;
         case TaskType::READ_NET:
           read(task->conn_id, task->mr_id, task->data, task->size,
                task->slot_item());
           break;
         case TaskType::READ_IPC:
-          read_ipc(task->conn_id, task->data, task->size, task->ipc_info());
+          read_ipc_impl(task->conn_id, task->data, task->size,
+                        task->ipc_info());
           break;
         case TaskType::RECV_NET:
           recv(task->conn_id, task->mr_id, task->data, task->size);
