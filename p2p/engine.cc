@@ -1086,6 +1086,9 @@ bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 }
 
 bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
+  constexpr int kMaxRetry = 20;
+  constexpr int kRetrySleepMs = 10;
+
   std::cout << "Connecting to GPU " << remote_gpu_idx << std::endl;
 
   Conn* conn = new Conn;
@@ -1098,11 +1101,30 @@ bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
   } else {
     // cross GPU: attach remote inbox
     conn->remote_inbox_.shm_name =
-        shm_ring_name(local_gpu_idx_, conn->remote_gpu_idx_);
-    conn->remote_inbox_.shm_size = inbox_rings_[conn->remote_gpu_idx_].shm_size;
-    conn->remote_inbox_.ring = uccl::attach_shared_ring(
-        conn->remote_inbox_.shm_name.c_str(), conn->remote_inbox_.shm_fd,
-        conn->remote_inbox_.shm_size);
+        shm_ring_name(local_gpu_idx_, remote_gpu_idx);
+    conn->remote_inbox_.shm_size = inbox_rings_[remote_gpu_idx].shm_size;
+
+    jring_t* ring = nullptr;
+    for (int attempt = 0; attempt < kMaxRetry; attempt++) {
+      ring = uccl::attach_shared_ring(conn->remote_inbox_.shm_name.c_str(),
+                                      conn->remote_inbox_.shm_fd,
+                                      conn->remote_inbox_.shm_size);
+      if (ring != nullptr) {
+        break;
+      }
+      // retry
+      std::this_thread::sleep_for(std::chrono::milliseconds(kRetrySleepMs));
+    }
+
+    if (ring == nullptr) {
+      std::cout << "connect_local failed: cannot attach remote inbox ring "
+                << conn->remote_inbox_.shm_name << " after " << kMaxRetry
+                << " retries" << std::endl;
+      delete conn;
+      return false;
+    }
+
+    conn->remote_inbox_.ring = ring;
     conn->shm_attached_ = true;
   }
 
@@ -1132,25 +1154,21 @@ bool Endpoint::accept_local(int& remote_gpu_idx, uint64_t& conn_id) {
   // recv CONNECT
   ShmMsg msg;
   while (true) {
-    bool got_msg = false;
     for (int peer = 0; peer < kMaxNumGPUs; peer++) {
-      auto* ring = inbox_rings_[peer].ring;
-      if (!ring) continue;
-      if (!jring_empty(ring)) {
-        shm_ring_recv(ring, msg);
-        got_msg = true;
-        break;
+      if (peer == local_gpu_idx_) continue;
+
+      if (!jring_empty(inbox_rings_[peer].ring)) {
+        shm_ring_recv(inbox_rings_[peer].ring, msg);
+        remote_gpu_idx = peer;
+        goto got;
       }
     }
-    if (!got_msg) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
+got:
   CHECK(msg.type == ShmMsgType::CONNECT);
 
   remote_gpu_idx = msg.src_gpu;
-  std::cout << "Received CONNECT from GPU " << remote_gpu_idx << std::endl;
-
   conn_id = next_conn_id_.fetch_add(1);
 
   Conn* conn = new Conn;
