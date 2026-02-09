@@ -15,10 +15,8 @@
 #include <sstream>
 #include <thread>
 #include <sys/socket.h>
-#include <sys/un.h>
 #include <unistd.h>
 
-int const kMaxNumGPUs = 8;
 std::once_flag glog_init_once;
 constexpr uint32_t kGpuStreamId = 0;
 thread_local bool inside_python = false;
@@ -30,6 +28,30 @@ inline void check_python_signals() {
     std::abort();
   }
   PyGILState_Release(gstate);
+}
+
+// ShmChannel helper function
+static inline std::string shm_ring_name(int from_idx, int to_idx) {
+  return "/uccl_gpu_jring_" + std::to_string(from_idx) + "_" +
+         std::to_string(to_idx);
+}
+
+static inline void shm_ring_send(jring_t* ring, Endpoint::ShmMsg const& msg) {
+  // jring bulk copy requires 16B aligned buffer
+  alignas(16) Endpoint::ShmMsg tmp = msg;
+
+  while (jring_mp_enqueue_bulk(ring, (void*)&tmp, 1, nullptr) != 1) {
+    _mm_pause();
+  }
+}
+
+static inline void shm_ring_recv(jring_t* ring, Endpoint::ShmMsg& msg) {
+  alignas(16) Endpoint::ShmMsg tmp;
+
+  while (jring_sc_dequeue_bulk(ring, (void*)&tmp, 1, nullptr) != 1) {
+    _mm_pause();
+  }
+  msg = tmp;
 }
 
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
@@ -86,8 +108,15 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
-  // Initialize UDS socket for local connections
-  init_uds_socket();
+  // Initialize ShmChnnel for local connections
+  size_t elem_sz = sizeof(ShmMsg);
+  size_t elem_cnt = ShmRingDefaultElemCnt;
+  for (int i = 0; i < kMaxNumGPUs; i++) {
+    inbox_rings_[i].shm_name = shm_ring_name(i, local_gpu_idx_);
+    inbox_rings_[i].ring = uccl::create_shared_ring(
+        inbox_rings_[i].shm_name.c_str(), elem_sz, elem_cnt,
+        inbox_rings_[i].shm_fd, inbox_rings_[i].shm_size, &inbox_creators_[i]);
+  }
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
@@ -145,13 +174,26 @@ Endpoint::~Endpoint() {
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
     for (auto& [conn_id, conn] : conn_id_to_conn_) {
-      // Close UDS socket if it exists
-      if (conn->uds_sockfd_ >= 0) {
-        close(conn->uds_sockfd_);
+      auto& shm_channel_ = conn->remote_inbox_;
+
+      if (conn->shm_attached_) {
+        uccl::detach_shared_ring(shm_channel_.ring, shm_channel_.shm_fd,
+                                 shm_channel_.shm_size);
       }
       delete conn;
     }
   }
+
+  for (int i = 0; i < kMaxNumGPUs; i++) {
+    if (inbox_creators_[i])
+      uccl::destroy_shared_ring(inbox_rings_[i].shm_name.c_str(),
+                                inbox_rings_[i].ring, inbox_rings_[i].shm_fd,
+                                inbox_rings_[i].shm_size);
+    else
+      uccl::detach_shared_ring(inbox_rings_[i].ring, inbox_rings_[i].shm_fd,
+                               inbox_rings_[i].shm_size);
+  }
+
   {
     std::shared_lock<std::shared_mutex> lock(mr_mu_);
     for (auto& [mr_id, mr] : mr_id_to_mr_) {
@@ -164,9 +206,6 @@ Endpoint::~Endpoint() {
     for (auto s : streams_)
       if (s) GPU_RT_CHECK(gpuStreamDestroy(s));
   }
-
-  // Cleanup UDS socket
-  cleanup_uds_socket();
 
   std::cout << "Engine destroyed" << std::endl;
 }
@@ -199,8 +238,15 @@ void Endpoint::initialize_engine() {
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
-  // Initialize UDS socket for local connections
-  init_uds_socket();
+  // Initialize ShmChnnel for local connections
+  size_t elem_sz = sizeof(ShmMsg);
+  size_t elem_cnt = ShmRingDefaultElemCnt;
+  for (int i = 0; i < kMaxNumGPUs; i++) {
+    inbox_rings_[i].shm_name = shm_ring_name(i, local_gpu_idx_);
+    inbox_rings_[i].ring = uccl::create_shared_ring(
+        inbox_rings_[i].shm_name.c_str(), elem_sz, elem_cnt,
+        inbox_rings_[i].shm_fd, inbox_rings_[i].shm_size, &inbox_creators_[i]);
+  }
 }
 
 bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
@@ -1040,88 +1086,115 @@ bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 }
 
 bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
-  int retries = 5;
-  int ret = -1;
-  std::cout << "Connecting to remote GPU " << remote_gpu_idx << std::endl;
+  constexpr int kMaxRetry = 20;
+  constexpr int kRetrySleepMs = 10;
 
-  std::string remote_socket_path = get_uds_socket_path(remote_gpu_idx);
+  std::cout << "Connecting to GPU " << remote_gpu_idx << std::endl;
 
-  // Create socket for connection
-  int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
-  CHECK_GE(sockfd, 0) << "Failed to create UDS socket for connection: "
-                      << strerror(errno);
-  fcntl(sockfd, F_SETFL, fcntl(sockfd, F_GETFL) | O_NONBLOCK);
+  Conn* conn = new Conn;
+  conn->remote_gpu_idx_ = remote_gpu_idx;
 
-  // Set up socket address
-  struct sockaddr_un addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, remote_socket_path.c_str(), sizeof(addr.sun_path) - 1);
+  if (conn->remote_gpu_idx_ == local_gpu_idx_) {
+    // same GPU: no attach, bind inbox_rings_[remote_gpu_idx] directly
+    conn->remote_inbox_ = inbox_rings_[remote_gpu_idx];
+    conn->shm_attached_ = false;
+  } else {
+    // cross GPU: attach remote inbox
+    conn->remote_inbox_.shm_name =
+        shm_ring_name(local_gpu_idx_, remote_gpu_idx);
+    conn->remote_inbox_.shm_size = inbox_rings_[remote_gpu_idx].shm_size;
 
-  // Connect to remote socket
-  for (int i = 0; i < retries; ++i) {
-    ret = ::connect(sockfd, (struct sockaddr*)&addr, sizeof(addr));
-    if (ret == 0) break;
-
-    if (errno == ECONNREFUSED || errno == EAGAIN) {
-      std::cerr << "Connect failed: " << strerror(errno) << ", retry "
-                << (i + 1) << "/" << retries << std::endl;
-      std::this_thread::sleep_for(std::chrono::milliseconds(200 * (i + 1)));
-      continue;
+    jring_t* ring = nullptr;
+    for (int attempt = 0; attempt < kMaxRetry; attempt++) {
+      ring = uccl::attach_shared_ring(conn->remote_inbox_.shm_name.c_str(),
+                                      conn->remote_inbox_.shm_fd,
+                                      conn->remote_inbox_.shm_size);
+      if (ring != nullptr) {
+        break;
+      }
+      // retry
+      std::this_thread::sleep_for(std::chrono::milliseconds(kRetrySleepMs));
     }
-    break;
+
+    if (ring == nullptr) {
+      std::cout << "connect_local failed: cannot attach remote inbox ring "
+                << conn->remote_inbox_.shm_name << " after " << kMaxRetry
+                << " retries" << std::endl;
+      delete conn;
+      return false;
+    }
+
+    conn->remote_inbox_.ring = ring;
+    conn->shm_attached_ = true;
   }
 
-  // Send our GPU index to the remote endpoint
-  ret = uccl::send_message_nonblock(sockfd,
-                                    static_cast<void const*>(&local_gpu_idx_),
-                                    sizeof(local_gpu_idx_));
-  CHECK_EQ(ret, sizeof(local_gpu_idx_)) << "Failed to send local GPU index";
-
-  // Create a new connection ID for this local connection
+  // allocate conn_id
   conn_id = next_conn_id_.fetch_add(1);
+  conn->conn_id_ = conn_id;
 
-  // Create a special connection entry for local UDS connection with persistent
-  // socket
+  ShmMsg msg;
+  msg.src_gpu = local_gpu_idx_;
+  msg.type = ShmMsgType::CONNECT;
+  msg.completion = 0;
+  shm_ring_send(conn->remote_inbox_.ring, msg);
+
   {
-    std::unique_lock<std::shared_mutex> lock(conn_mu_);
-    ConnID dummy_conn_id{nullptr, 0, 0, 0};
-    conn_id_to_conn_[conn_id] =
-        new Conn{conn_id, dummy_conn_id, "localhost", remote_gpu_idx, sockfd};
+    std::unique_lock lock(conn_mu_);
+    ConnID dummy{nullptr, 0, 0, 0};
+    conn->uccl_conn_id_ = dummy;
+    conn_id_to_conn_[conn_id] = conn;
   }
 
   return true;
 }
 
 bool Endpoint::accept_local(int& remote_gpu_idx, uint64_t& conn_id) {
-  std::cout << "Waiting to accept UDS connection" << std::endl;
+  std::cout << "Waiting for local CONNECT..." << std::endl;
 
-  CHECK(uds_listen_fd_ >= 0) << "UDS socket not initialized";
+  // recv CONNECT
+  ShmMsg msg;
+  while (true) {
+    for (int peer = 0; peer < kMaxNumGPUs; peer++) {
+      if (peer == local_gpu_idx_) continue;
 
-  // Accept incoming connection
-  struct sockaddr_un client_addr;
-  socklen_t client_len = sizeof(client_addr);
-  int client_fd =
-      ::accept(uds_listen_fd_, (struct sockaddr*)&client_addr, &client_len);
-  CHECK_GE(client_fd, 0) << "Failed to accept UDS connection: "
-                         << strerror(errno);
+      if (!jring_empty(inbox_rings_[peer].ring)) {
+        shm_ring_recv(inbox_rings_[peer].ring, msg);
+        remote_gpu_idx = peer;
+        goto got;
+      }
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+got:
+  CHECK(msg.type == ShmMsgType::CONNECT);
 
-  fcntl(client_fd, F_SETFL, fcntl(client_fd, F_GETFL) | O_NONBLOCK);
-
-  // Receive remote GPU index
-  auto ret = uccl::receive_message_nonblock(
-      client_fd, static_cast<void*>(&remote_gpu_idx), sizeof(remote_gpu_idx));
-  CHECK_EQ(ret, sizeof(remote_gpu_idx)) << "Failed to receive remote GPU index";
-
-  // Create connection ID
+  remote_gpu_idx = msg.src_gpu;
   conn_id = next_conn_id_.fetch_add(1);
 
-  // Store the connection with persistent socket
+  Conn* conn = new Conn;
+  conn->conn_id_ = conn_id;
+  conn->remote_gpu_idx_ = remote_gpu_idx;
+
+  if (conn->remote_gpu_idx_ == local_gpu_idx_) {
+    // same GPU: no attach, bind inbox_rings_[remote_gpu_idx] directly
+    conn->remote_inbox_ = inbox_rings_[conn->remote_gpu_idx_];
+    conn->shm_attached_ = false;
+  } else {
+    // cross GPU: attach client inbox
+    conn->remote_inbox_.shm_name =
+        shm_ring_name(local_gpu_idx_, conn->remote_gpu_idx_);
+    conn->remote_inbox_.shm_size = inbox_rings_[conn->remote_gpu_idx_].shm_size;
+    conn->remote_inbox_.ring = uccl::attach_shared_ring(
+        conn->remote_inbox_.shm_name.c_str(), conn->remote_inbox_.shm_fd,
+        conn->remote_inbox_.shm_size);
+    conn->shm_attached_ = true;
+  }
+
   {
-    std::unique_lock<std::shared_mutex> lock(conn_mu_);
-    ConnID dummy_conn_id{nullptr, 0, 0, 0};
-    conn_id_to_conn_[conn_id] = new Conn{conn_id, dummy_conn_id, "localhost",
-                                         remote_gpu_idx, client_fd};
+    std::unique_lock lock(conn_mu_);
+    ConnID dummy{nullptr, 0, 0, 0};
+    conn->uccl_conn_id_ = dummy;
+    conn_id_to_conn_[conn_id] = conn;
   }
 
   return true;
@@ -1137,36 +1210,25 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
     return false;
   }
 
-  // Check if we have a valid persistent UDS socket (faster than string
-  // comparison)
-  CHECK_GE(conn->uds_sockfd_, 0)
-      << "send_ipc only supports local connections with valid UDS socket";
-
-  // Use the persistent UDS connection
-  int sockfd = conn->uds_sockfd_;
-
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  IpcTransferInfo transfer_info = {};  // Initialize to zero
-  // Wait for receiver's IPC handle (receiver will send this proactively)
-  auto ret = uccl::receive_message_nonblock(
-      sockfd, static_cast<void*>(&transfer_info), sizeof(transfer_info));
-  CHECK_EQ(ret, sizeof(transfer_info))
-      << "Failed to receive IPC handle from receiver";
-  CHECK_EQ(transfer_info.operation, 1) << "Invalid response from receiver";
-  CHECK_EQ(transfer_info.size, size)
-      << "Size mismatch: expected " << size << ", got " << transfer_info.size;
+  ShmMsg msg;
+  shm_ring_recv(inbox_rings_[conn->remote_gpu_idx_].ring, msg);
+  CHECK(msg.type == ShmMsgType::IPC_HANDLE);
+  auto info = msg.info;
 
+  // Open remote IPC handle
   void* base = nullptr;
   GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
-  GPU_RT_CHECK(gpuIpcOpenMemHandle(&base, transfer_info.handle,
-                                   gpuIpcMemLazyEnablePeerAccess));
-  void* dst_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) +
-                                          transfer_info.offset);
+  GPU_RT_CHECK(
+      gpuIpcOpenMemHandle(&base, info.handle, gpuIpcMemLazyEnablePeerAccess));
+  void* dst_ptr =
+      reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) + info.offset);
 
+  // Copy payload
   std::vector<gpuStream_t>& dst_streams = ipc_streams_[conn->remote_gpu_idx_];
   int num_streams =
       std::min(dst_streams.size(),
@@ -1189,11 +1251,12 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
     GPU_RT_CHECK(gpuStreamSynchronize(stream));
   }
 
-  // Notify receiver of completion
-  uint32_t completion = 1;
-  ret = uccl::send_message_nonblock(
-      sockfd, static_cast<void const*>(&completion), sizeof(completion));
-  CHECK_EQ(ret, sizeof(completion)) << "Failed to send completion ack";
+  // Notify receiver completion
+  ShmMsg ack;
+  ack.src_gpu = local_gpu_idx_;
+  ack.type = ShmMsgType::COMPLETION;
+  ack.completion = 1;
+  shm_ring_send(conn->remote_inbox_.ring, ack);
 
   // Okay, this is the slowest part, 46GB/s -> 28GB/s for 100MB, so moving it
   // async. Update: moving async does not help, as gpuIpcOpenMemHandle will be
@@ -1217,47 +1280,36 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
     return false;
   }
 
-  // Check if we have a valid persistent UDS socket (faster than string
-  // comparison)
-  CHECK_GE(conn->uds_sockfd_, 0)
-      << "recv_ipc only supports local connections with valid UDS socket";
-
-  // Use the persistent UDS connection
-  int client_fd = conn->uds_sockfd_;
-
-  int orig_device;
-  GPU_RT_CHECK(gpuGetDevice(&orig_device));
-  auto dev_reset =
-      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
-
-  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-  // Generate IPC memory handle for our receive buffer
-  IpcTransferInfo transfer_info = {};  // Initialize to zero
-  transfer_info.size = size;
-  transfer_info.operation = 1;  // response
-  GPU_RT_CHECK(
-      gpuIpcGetMemHandle(&transfer_info.handle, reinterpret_cast<void*>(data)));
+  IpcTransferInfo info = {};
+  info.size = size;
+  info.operation = 1;
+  gpuIpcGetMemHandle(&info.handle, data);
 
   // Getting the base address.
   void* base = nullptr;
   size_t base_size;
   GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, data));
-  auto data_offset =
+  info.offset =
       reinterpret_cast<uintptr_t>(data) - reinterpret_cast<uintptr_t>(base);
-  transfer_info.offset = data_offset;
 
-  auto ret = uccl::send_message_nonblock(
-      client_fd, static_cast<void const*>(&transfer_info),
-      sizeof(transfer_info));
-  CHECK_EQ(ret, sizeof(transfer_info)) << "Failed to send IPC handle to sender";
+  // Send IPC_HANDLE msg to sender
+  ShmMsg msg;
+  msg.type = ShmMsgType::IPC_HANDLE;
+  msg.src_gpu = local_gpu_idx_;
+  msg.info = info;
+  shm_ring_send(conn->remote_inbox_.ring, msg);
 
-  // Notify sender of completion
-  uint32_t completion = 0;
-  ret = uccl::receive_message_nonblock(
-      client_fd, static_cast<void*>(&completion), sizeof(completion));
-  CHECK_EQ(ret, sizeof(completion))
-      << "Failed to receive completion notification";
-  CHECK_EQ(completion, 1) << "Sender reported failure";
+  // Wait completion on local inbox
+  ShmMsg ack;
+  shm_ring_recv(inbox_rings_[conn->remote_gpu_idx_].ring, ack);
+
+  CHECK(ack.type == ShmMsgType::COMPLETION)
+      << "Failed to receive completion notification, unexpected ack.type="
+      << static_cast<uint32_t>(ack.type);
+  CHECK(ack.src_gpu == conn->remote_gpu_idx_)
+      << "Failed to receive completion notification, unexpected ack.src_gpu="
+      << static_cast<uint32_t>(ack.src_gpu);
+  CHECK_EQ(ack.completion, 1) << "Sender reported failure";
 
   return true;
 }
@@ -1554,61 +1606,6 @@ bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
     delete status;
   }
   return true;
-}
-
-void Endpoint::init_uds_socket() {
-  // Create UDS socket path based on local GPU index
-  uds_socket_path_ = get_uds_socket_path(local_gpu_idx_);
-
-  // Remove existing socket file if it exists
-  unlink(uds_socket_path_.c_str());
-
-  // Create socket
-  uds_listen_fd_ = socket(AF_UNIX, SOCK_STREAM, 0);
-  if (uds_listen_fd_ < 0) {
-    std::cerr << "Failed to create UDS socket: " << strerror(errno)
-              << std::endl;
-    return;
-  }
-
-  // Set up socket address
-  struct sockaddr_un addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sun_family = AF_UNIX;
-  strncpy(addr.sun_path, uds_socket_path_.c_str(), sizeof(addr.sun_path) - 1);
-
-  // Bind socket
-  if (bind(uds_listen_fd_, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-    std::cerr << "Failed to bind UDS socket to " << uds_socket_path_ << ": "
-              << strerror(errno) << std::endl;
-    close(uds_listen_fd_);
-    uds_listen_fd_ = -1;
-    return;
-  }
-
-  // Start listening
-  if (listen(uds_listen_fd_, 5) < 0) {
-    std::cerr << "Failed to listen on UDS socket: " << strerror(errno)
-              << std::endl;
-    close(uds_listen_fd_);
-    uds_listen_fd_ = -1;
-    unlink(uds_socket_path_.c_str());
-    return;
-  }
-
-  std::cout << "UDS socket initialized at " << uds_socket_path_ << std::endl;
-}
-
-void Endpoint::cleanup_uds_socket() {
-  if (uds_listen_fd_ >= 0) {
-    close(uds_listen_fd_);
-    uds_listen_fd_ = -1;
-  }
-
-  if (!uds_socket_path_.empty()) {
-    unlink(uds_socket_path_.c_str());
-    uds_socket_path_.clear();
-  }
 }
 
 void Endpoint::send_proxy_thread_func() {

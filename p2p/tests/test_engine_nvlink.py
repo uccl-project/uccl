@@ -1,21 +1,11 @@
-#!/usr/bin/env python3
 """
-Test script for the UCCL P2P Engine
-using NVLink for inter-process communication.
+Test script for UCCL P2P Engine local NVLink IPC path.
 
 Run with:
-  OMP_NUM_THREADS=4 torchrun --nproc_per_node=2 test_engine_nvlink.py
-or:
-  python -m torch.distributed.run --nproc_per_node=2 test_engine_nvlink.py
+torchrun --nproc_per_node=2 test_engine_nvlink.py
 """
 
 import sys
-import os
-import time
-import struct
-import socket
-import numpy as np
-
 import torch
 import torch.distributed as dist
 
@@ -25,13 +15,10 @@ try:
     print("✓ Successfully imported p2p")
 except ImportError as e:
     print(f"✗ Failed to import p2p: {e}")
-    print("Make sure to run 'make' first to build the module")
     sys.exit(1)
 
 
-# parse_metadata is now provided by the C++ layer via p2p.Endpoint.parse_metadata()
-
-
+# Torch dist helper functions
 def _send_int(value: int, dst: int):
     t = torch.tensor([int(value)], dtype=torch.uint64)
     dist.send(t, dst=dst)
@@ -48,8 +35,7 @@ def _send_bytes(payload: bytes, dst: int):
     _send_int(n, dst)
     if n == 0:
         return
-    mv = memoryview(bytearray(payload))  # copies once, writable
-    buf = torch.frombuffer(mv, dtype=torch.uint8)  # no warning
+    buf = torch.frombuffer(memoryview(payload), dtype=torch.uint8)
     dist.send(buf, dst=dst)
 
 
@@ -62,86 +48,84 @@ def _recv_bytes(src: int) -> bytes:
     return buf.numpy().tobytes()
 
 
-def test_local_dist():
-    """Two-process local test: rank 0 = server, rank 1 = client."""
+# Main local IPC test
+def test_local_ipc():
+    """
+    Two-process test:
+      rank0 = server  → accept_local()
+      rank1 = client  → connect_local()
+    """
+
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    assert world_size == 2, "This benchmark only supports 2 processes"
+    assert world_size == 2
 
-    if torch.cuda.is_available():
-        torch.cuda.set_device(0)
+    # each rank binds its own visible GPU
+    torch.cuda.set_device(0)
 
+    ep = p2p.Endpoint(local_gpu_idx=rank, num_cpus=4)
+
+    # Rank 0: server
     if rank == 0:
-        print("Running test_local (server)…")
+        ok, remote_gpu_idx, conn_id = ep.accept_local()
+        assert ok
+        print(f"[server] accepted from remote_gpu={remote_gpu_idx}, conn_id={conn_id}")
 
-        engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
-        metadata = engine.get_metadata()
-        ip, port, remote_gpu_idx = p2p.Endpoint.parse_metadata(metadata)
-        print(f"[server] Parsed IP: {ip}")
-        print(f"[server] Parsed Port: {port}")
-        print(f"[server] Parsed Remote GPU Index: {remote_gpu_idx}")
-
-        _send_bytes(bytes(metadata), dst=1)
-
-        conn_id = _recv_int(src=1)
-        print(f"[server] Received conn_id={conn_id} from client")
-
+        # allocate GPU buffer
         tensor = torch.zeros(1024, dtype=torch.float32, device="cuda:0")
         assert tensor.is_contiguous()
-        mr_id = 0
-        ok, fifo_blob = engine.advertise_ipc(
-            conn_id, tensor.data_ptr(), tensor.numel() * 4
+
+        # advertise fifo blob for client write_ipc
+        ok, fifo_blob = ep.advertise_ipc(
+            conn_id,
+            tensor.data_ptr(),
+            tensor.numel() * 4,
         )
-        assert ok and isinstance(fifo_blob, (bytes, bytearray))
-        print("[server] Buffer exposed for IPC READ")
+        assert ok
+        print("[server] advertised IPC fifo")
 
         _send_bytes(bytes(fifo_blob), dst=1)
 
         success = _recv_int(src=1)
         assert success
 
-        assert tensor.allclose(torch.ones(1024, dtype=torch.float32, device="cuda:0"))
-        print("[server] Received correct data")
+        assert tensor.allclose(torch.ones_like(tensor))
+        print("[server] received correct data!")
 
+    # Rank 1: client
     else:
-        print("Running test_local (client)…")
+        # connect to server
+        ok, conn_id = ep.connect_local(remote_gpu_idx=0)
+        assert ok
+        print(f"[client] connected successfully: conn_id={conn_id}")
 
-        metadata = _recv_bytes(src=0)
-        ip, port, remote_gpu_idx = p2p.Endpoint.parse_metadata(metadata)
-        print(
-            f"[client] Parsed server IP: {ip}, port: {port}, remote_gpu_idx: {remote_gpu_idx}"
-        )
-
-        engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
-        success, conn_id = engine.connect_local(remote_gpu_idx)
-        assert success
-        print(f"[client] Connected successfully: conn_id={conn_id}")
-        _send_int(conn_id, dst=0)
+        fifo_blob = _recv_bytes(src=0)
+        print("[client] received fifo blob")
 
         tensor = torch.ones(1024, dtype=torch.float32, device="cuda:0")
         assert tensor.is_contiguous()
 
-        fifo_blob = _recv_bytes(src=0)
-        print("[client] Received FIFO blob from server")
-        assert isinstance(fifo_blob, (bytes, bytearray))
-
-        success = engine.write_ipc(
-            conn_id, tensor.data_ptr(), tensor.numel() * 4, fifo_blob
+        ok = ep.write_ipc(
+            conn_id,
+            tensor.data_ptr(),
+            tensor.numel() * 4,
+            fifo_blob,
         )
-        assert success
-        print("[client] Sent data")
+        assert ok
+        print("[client] write_ipc done")
 
-        _send_int(success, dst=0)
+        # notify server
+        _send_int(1, dst=0)
 
 
 def main():
-    dist.init_process_group(backend="gloo")
+    dist.init_process_group("gloo")
     try:
-        print(f"=== UCCL P2P test (rank {dist.get_rank()}/{dist.get_world_size()}) ===")
-        test_local_dist()
+        print(f"=== UCCL Local IPC Test (rank {dist.get_rank()}) ===")
+        test_local_ipc()
         dist.barrier()
         if dist.get_rank() == 0:
-            print("\n=== All UCCL P2P Engine tests completed! ===")
+            print("\nAll local IPC tests passed!")
     finally:
         dist.destroy_process_group()
 
