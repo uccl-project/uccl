@@ -29,6 +29,8 @@ namespace py = pybind11;
 
 extern thread_local bool inside_python;
 
+int const kMaxNumGPUs = 8;
+
 inline int parseLogLevelFromEnv() {
   char const* env = std::getenv("UCCL_P2P_LOG_LEVEL");
   if (!env) {
@@ -379,8 +381,8 @@ class Endpoint {
   std::unordered_map<int, uint64_t> rank2conn_;
 
   // JRing for local
-  ShmRingHandle inbox_ring_;
-  bool inbox_creator_{false};
+  std::array<ShmRingHandle, kMaxNumGPUs> inbox_rings_;
+  std::array<bool, kMaxNumGPUs> inbox_creators_;
 
   // Assuming 1TB GPU memory, 128KB KV block size.
   static constexpr size_t kMaxNumChunksPerTransfer = 1024ul * 1024 * 1024 / 128;

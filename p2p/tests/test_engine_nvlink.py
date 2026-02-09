@@ -75,6 +75,9 @@ def test_local_dist():
         print("Running test_local (server)…")
 
         engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
+        success, remote_gpu_idx, conn_id = engine.accept_local()
+        assert success
+
         metadata = engine.get_metadata()
         ip, port, remote_gpu_idx = p2p.Endpoint.parse_metadata(metadata)
         print(f"[server] Parsed IP: {ip}")

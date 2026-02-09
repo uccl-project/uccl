@@ -17,7 +17,6 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-int const kMaxNumGPUs = 8;
 std::once_flag glog_init_once;
 constexpr uint32_t kGpuStreamId = 0;
 thread_local bool inside_python = false;
@@ -32,8 +31,9 @@ inline void check_python_signals() {
 }
 
 // ShmChannel helper function
-static inline std::string shm_ring_name(int gpu_idx) {
-  return "/uccl_gpu_jring_" + std::to_string(gpu_idx);
+static inline std::string shm_ring_name(int from_idx, int to_idx) {
+  return "/uccl_gpu_jring_" + std::to_string(from_idx) + "_" +
+         std::to_string(to_idx);
 }
 
 static inline void shm_ring_send(jring_t* ring, Endpoint::ShmMsg const& msg) {
@@ -109,12 +109,14 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
   // Initialize ShmChnnel for local connections
-  inbox_ring_.shm_name = shm_ring_name(local_gpu_idx_);
   size_t elem_sz = sizeof(ShmMsg);
   size_t elem_cnt = ShmRingDefaultElemCnt;
-  inbox_ring_.ring = uccl::create_shared_ring(
-      inbox_ring_.shm_name.c_str(), elem_sz, elem_cnt, inbox_ring_.shm_fd,
-      inbox_ring_.shm_size, &inbox_creator_);
+  for (int i = 0; i < kMaxNumGPUs; i++) {
+    inbox_rings_[i].shm_name = shm_ring_name(i, local_gpu_idx_);
+    inbox_rings_[i].ring = uccl::create_shared_ring(
+        inbox_rings_[i].shm_name.c_str(), elem_sz, elem_cnt,
+        inbox_rings_[i].shm_fd, inbox_rings_[i].shm_size, &inbox_creators_[i]);
+  }
 
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
@@ -182,12 +184,15 @@ Endpoint::~Endpoint() {
     }
   }
 
-  if (inbox_creator_)
-    uccl::destroy_shared_ring(inbox_ring_.shm_name.c_str(), inbox_ring_.ring,
-                              inbox_ring_.shm_fd, inbox_ring_.shm_size);
-  else
-    uccl::detach_shared_ring(inbox_ring_.ring, inbox_ring_.shm_fd,
-                             inbox_ring_.shm_size);
+  for (int i = 0; i < kMaxNumGPUs; i++) {
+    if (inbox_creators_[i])
+      uccl::destroy_shared_ring(inbox_rings_[i].shm_name.c_str(),
+                                inbox_rings_[i].ring, inbox_rings_[i].shm_fd,
+                                inbox_rings_[i].shm_size);
+    else
+      uccl::detach_shared_ring(inbox_rings_[i].ring, inbox_rings_[i].shm_fd,
+                               inbox_rings_[i].shm_size);
+  }
 
   {
     std::shared_lock<std::shared_mutex> lock(mr_mu_);
@@ -234,12 +239,14 @@ void Endpoint::initialize_engine() {
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
   // Initialize ShmChnnel for local connections
-  inbox_ring_.shm_name = shm_ring_name(local_gpu_idx_);
   size_t elem_sz = sizeof(ShmMsg);
   size_t elem_cnt = ShmRingDefaultElemCnt;
-  inbox_ring_.ring = uccl::create_shared_ring(
-      inbox_ring_.shm_name.c_str(), elem_sz, elem_cnt, inbox_ring_.shm_fd,
-      inbox_ring_.shm_size, &inbox_creator_);
+  for (int i = 0; i < kMaxNumGPUs; i++) {
+    inbox_rings_[i].shm_name = shm_ring_name(i, local_gpu_idx_);
+    inbox_rings_[i].ring = uccl::create_shared_ring(
+        inbox_rings_[i].shm_name.c_str(), elem_sz, elem_cnt,
+        inbox_rings_[i].shm_fd, inbox_rings_[i].shm_size, &inbox_creators_[i]);
+  }
 }
 
 bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
@@ -1084,22 +1091,18 @@ bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
   Conn* conn = new Conn;
   conn->remote_gpu_idx_ = remote_gpu_idx;
 
-  // same GPU: no attach, bind directly
-  if (remote_gpu_idx == local_gpu_idx_) {
-    std::cout << "[connect_local] Same GPU: bind inbox_ring_ directly\n";
-
-    conn->remote_inbox_ = inbox_ring_;
+  if (conn->remote_gpu_idx_ == local_gpu_idx_) {
+    // same GPU: no attach, bind inbox_rings_[remote_gpu_idx] directly
+    conn->remote_inbox_ = inbox_rings_[remote_gpu_idx];
     conn->shm_attached_ = false;
-
   } else {
     // cross GPU: attach remote inbox
-    conn->remote_inbox_.shm_name = shm_ring_name(remote_gpu_idx);
-
+    conn->remote_inbox_.shm_name =
+        shm_ring_name(local_gpu_idx_, conn->remote_gpu_idx_);
+    conn->remote_inbox_.shm_size = inbox_rings_[conn->remote_gpu_idx_].shm_size;
     conn->remote_inbox_.ring = uccl::attach_shared_ring(
         conn->remote_inbox_.shm_name.c_str(), conn->remote_inbox_.shm_fd,
-        inbox_ring_.shm_size);
-
-    conn->remote_inbox_.shm_size = inbox_ring_.shm_size;
+        conn->remote_inbox_.shm_size);
     conn->shm_attached_ = true;
   }
 
@@ -1128,8 +1131,21 @@ bool Endpoint::accept_local(int& remote_gpu_idx, uint64_t& conn_id) {
 
   // recv CONNECT
   ShmMsg msg;
-  shm_ring_recv(inbox_ring_.ring, msg);
-
+  while (true) {
+    bool got_msg = false;
+    for (int peer = 0; peer < kMaxNumGPUs; peer++) {
+      auto* ring = inbox_rings_[peer].ring;
+      if (!ring) continue;
+      if (!jring_empty(ring)) {
+        shm_ring_recv(ring, msg);
+        got_msg = true;
+        break;
+      }
+    }
+    if (!got_msg) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+  }
   CHECK(msg.type == ShmMsgType::CONNECT);
 
   remote_gpu_idx = msg.src_gpu;
@@ -1141,22 +1157,18 @@ bool Endpoint::accept_local(int& remote_gpu_idx, uint64_t& conn_id) {
   conn->conn_id_ = conn_id;
   conn->remote_gpu_idx_ = remote_gpu_idx;
 
-  // same GPU special binding
-  if (remote_gpu_idx == local_gpu_idx_) {
-    conn->remote_inbox_ = inbox_ring_;
-    conn->shm_attached_ = false;  // don't detach shared ring
-
-    std::cout << "[accept_local] Same GPU: bind inbox_ring_ directly\n";
-
+  if (conn->remote_gpu_idx_ == local_gpu_idx_) {
+    // same GPU: no attach, bind inbox_rings_[remote_gpu_idx] directly
+    conn->remote_inbox_ = inbox_rings_[conn->remote_gpu_idx_];
+    conn->shm_attached_ = false;
   } else {
     // cross GPU: attach client inbox
-    conn->remote_inbox_.shm_name = shm_ring_name(remote_gpu_idx);
-
+    conn->remote_inbox_.shm_name =
+        shm_ring_name(local_gpu_idx_, conn->remote_gpu_idx_);
+    conn->remote_inbox_.shm_size = inbox_rings_[conn->remote_gpu_idx_].shm_size;
     conn->remote_inbox_.ring = uccl::attach_shared_ring(
         conn->remote_inbox_.shm_name.c_str(), conn->remote_inbox_.shm_fd,
-        inbox_ring_.shm_size);
-
-    conn->remote_inbox_.shm_size = inbox_ring_.shm_size;
+        conn->remote_inbox_.shm_size);
     conn->shm_attached_ = true;
   }
 
@@ -1186,7 +1198,7 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   ShmMsg msg;
-  shm_ring_recv(inbox_ring_.ring, msg);
+  shm_ring_recv(inbox_rings_[conn->remote_gpu_idx_].ring, msg);
   CHECK(msg.type == ShmMsgType::IPC_HANDLE);
   auto info = msg.info;
 
@@ -1271,7 +1283,7 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
 
   // Wait completion on local inbox
   ShmMsg ack;
-  shm_ring_recv(inbox_ring_.ring, ack);
+  shm_ring_recv(inbox_rings_[conn->remote_gpu_idx_].ring, ack);
 
   CHECK(ack.type == ShmMsgType::COMPLETION)
       << "Failed to receive completion notification, unexpected ack.type="
