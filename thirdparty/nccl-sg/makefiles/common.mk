@@ -62,10 +62,17 @@ CXXFLAGS   := -DCUDA_MAJOR=$(CUDA_MAJOR) -DCUDA_MINOR=$(CUDA_MINOR) -fPIC -fvisi
               -Wall -Wno-unused-function -Wno-sign-compare -std=c++11 -Wvla \
               -I $(CUDA_INC) \
               $(CXXFLAGS)
+
+# Add Intel RDMA NIC support if USE_INTEL_RDMA_NIC=1
+ifeq ($(USE_INTEL_RDMA_NIC),1)
+  CXXFLAGS += -DINTEL_RDMA_NIC -DMTU_4096
+  NVCUFLAGS_EXTRA := -DINTEL_RDMA_NIC -DMTU_4096
+endif
+
 # Maxrregcount needs to be set accordingly to NCCL_MAX_NTHREADS (otherwise it will cause kernel launch errors)
 # 512 : 120, 640 : 96, 768 : 80, 1024 : 60
 # We would not have to set this if we used __launch_bounds__, but this only works on kernels, not on functions.
-NVCUFLAGS  := -ccbin $(CXX) $(NVCC_GENCODE) -std=c++11 --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all
+NVCUFLAGS  := -ccbin $(CXX) $(NVCC_GENCODE) -std=c++11 --expt-extended-lambda -Xptxas -maxrregcount=96 -Xfatbin -compress-all $(NVCUFLAGS_EXTRA)
 # Use addprefix so that we can specify more than one path
 NVLDFLAGS  := -L${CUDA_LIB} -lcudart -lrt
 

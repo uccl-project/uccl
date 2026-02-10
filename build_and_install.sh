@@ -1,5 +1,14 @@
 #!/bin/bash
 
+# Build and install UCCL
+#
+# Usage:
+#   ./build_and_install.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image]
+#
+# Environment Variables:
+#   USE_INTEL_RDMA_NIC=1   Enable Intel RDMA NIC support
+#                          Example: USE_INTEL_RDMA_NIC=1 bash ./build_and_install.sh cuda ccl_efa
+
 TARGET=${1:-cuda}
 BUILD_TYPE=${2:-all}
 PY_VER=${3:-$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")}
@@ -14,7 +23,13 @@ if [[ $TARGET != cuda* && $TARGET != rocm* && $TARGET != "therock" ]]; then
 fi
 
 ARCH_SUFFIX=$(uname -m)
-./build.sh $TARGET $BUILD_TYPE $PY_VER $ROCM_IDX_URL $THEROCK_BASE_IMAGE
+
+# Pass through USE_INTEL_RDMA_NIC environment variable to build.sh
+if [[ "${USE_INTEL_RDMA_NIC:-0}" == "1" ]]; then
+  echo "Building with Intel RDMA NIC support (USE_INTEL_RDMA_NIC=1)"
+fi
+
+USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} ./build.sh $TARGET $BUILD_TYPE $PY_VER $ROCM_IDX_URL $THEROCK_BASE_IMAGE
 pip install -r requirements.txt
 pip uninstall uccl -y || true
 if [[ $TARGET != "therock" ]]; then
