@@ -325,6 +325,24 @@ fi
 
 export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-${DETECTED_GPU_ARCH}}"
 
+# The build container (Ubuntu 22.04, glibc 2.35) produces wheels tagged
+# manylinux_2_35 by default.  Rocky Linux 9.x only ships glibc 2.34, so
+# those wheels won't install there.  Detect the host distro and, when
+# running on Rocky 9, retag the wheel to manylinux_2_34 after auditwheel
+# repair.  Note: this does not verify glibc symbol compatibility -- the
+# binaries are built against glibc 2.35 and may use 2.35-only symbols.
+# UCCL collectives has been tested and working on Rocky Linux 9.4 with this
+# retagged wheel.
+UCCL_WHEEL_PLAT=""
+if [[ -f /etc/os-release ]]; then
+  HOST_ID=$(. /etc/os-release && echo "${ID:-}")
+  HOST_VERSION_ID=$(. /etc/os-release && echo "${VERSION_ID:-}")
+  if [[ "$HOST_ID" == "rocky" && "$HOST_VERSION_ID" == 9* ]]; then
+    UCCL_WHEEL_PLAT="manylinux_2_34_${ARCH}"
+    echo "[INFO] Rocky Linux 9 detected wheel will be tagged ${UCCL_WHEEL_PLAT}"
+  fi
+fi
+
 docker run --rm --user "$(id -u):$(id -g)" \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
@@ -345,6 +363,7 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
   -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
   -e DISABLE_AGGRESSIVE_ATOMIC="${DISABLE_AGGRESSIVE_ATOMIC:-0}" \
+  -e UCCL_WHEEL_PLAT="${UCCL_WHEEL_PLAT:-}" \
   -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_ccl_rdma build_ccl_efa build_p2p build_ep build_ukernel)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
@@ -436,6 +455,19 @@ def initialize():
       --exclude "libcuda.so.1" \
       --exclude "libefa.so.1" \
       -w /io/${WHEEL_DIR}
+
+    # If UCCL_WHEEL_PLAT is set (i.e. host glibc differs from the build
+    # container default of manylinux_2_35), retag the wheel accordingly.
+    if [[ -n "${UCCL_WHEEL_PLAT:-}" ]]; then
+      echo "[container] Retagging wheel platform to ${UCCL_WHEEL_PLAT}"
+      cd /io/${WHEEL_DIR}
+      for whl in uccl-*.whl; do
+        if [[ -f "$whl" ]]; then
+          python3 -m wheel tags --platform-tag "${UCCL_WHEEL_PLAT}" --remove "$whl"
+        fi
+      done
+      cd /io
+    fi
 
     # Add backend tag to wheel filename using local version identifier
     if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
