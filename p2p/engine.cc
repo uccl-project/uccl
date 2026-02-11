@@ -1328,7 +1328,7 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
   IpcTransferInfo info = {};
   info.size = size;
   info.operation = 1;
-  gpuIpcGetMemHandle(&info.handle, data);
+  GPU_RT_CHECK(gpuIpcGetMemHandle(&info.handle, data));
 
   // Getting the base address.
   void* base = nullptr;
