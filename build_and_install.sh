@@ -6,6 +6,8 @@
 #   ./build_and_install.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image]
 #
 # Environment Variables:
+#   CONTAINER_ENGINE=podman Use podman instead of docker.
+#                          Example: CONTAINER_ENGINE=podman bash ./build_and_install.sh cuda all
 #   USE_INTEL_RDMA_NIC=1   Enable Intel RDMA NIC support
 #                          Example: USE_INTEL_RDMA_NIC=1 bash ./build_and_install.sh cuda ccl_efa
 
@@ -24,12 +26,16 @@ fi
 
 ARCH_SUFFIX=$(uname -m)
 
-# Pass through USE_INTEL_RDMA_NIC environment variable to build.sh
+# Pass through CONTAINER_ENGINE and USE_INTEL_RDMA_NIC environment variables to build.sh
+if [[ "${CONTAINER_ENGINE:-docker}" == "podman" ]]; then
+  echo "Using podman as container engine"
+fi
+
 if [[ "${USE_INTEL_RDMA_NIC:-0}" == "1" ]]; then
   echo "Building with Intel RDMA NIC support (USE_INTEL_RDMA_NIC=1)"
 fi
 
-USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} ./build.sh $TARGET $BUILD_TYPE $PY_VER $ROCM_IDX_URL $THEROCK_BASE_IMAGE
+CONTAINER_ENGINE=${CONTAINER_ENGINE:-docker} USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} ./build.sh $TARGET $BUILD_TYPE $PY_VER $ROCM_IDX_URL $THEROCK_BASE_IMAGE
 pip install -r requirements.txt
 pip uninstall uccl -y || true
 if [[ $TARGET != "therock" ]]; then
