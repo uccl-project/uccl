@@ -290,7 +290,7 @@ class NICEndpoint {
     uint64_t rank_id = 0;
 
     // Block until there's an accepted connection
-    while (true) {
+    while (!stop_accept_.load(std::memory_order_acquire)) {
       {
         {
           std::unique_lock<std::shared_mutex> lock(accepted_meta_mutex_);
@@ -452,6 +452,8 @@ class NICEndpoint {
 
     return send_group->processSendRequests(req);
   }
+
+  void stop_accept() { stop_accept_.store(true, std::memory_order_release); }
 
  private:
   // Get context from channel_id
@@ -818,4 +820,6 @@ class NICEndpoint {
   bool auto_start_polling_;
   std::atomic<int32_t> send_id_;
   std::atomic<int32_t> recv_id_;
+
+  std::atomic<bool> stop_accept_{false};
 };

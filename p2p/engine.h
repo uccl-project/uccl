@@ -102,6 +102,17 @@ using FifoItem = nccl_tcpx::FifoItem;
 using FifoItem = FifoItem;
 #endif
 
+// Custom hash function for std::vector<uint8_t>
+struct VectorUint8Hash {
+  std::size_t operator()(std::vector<uint8_t> const& vec) const {
+    std::size_t hash = vec.size();
+    for (uint8_t byte : vec) {
+      hash = hash * 31 + static_cast<std::size_t>(byte);
+    }
+    return hash;
+  }
+};
+
 class Endpoint {
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
@@ -137,7 +148,9 @@ class Endpoint {
 
   /* Create endpoint without intializing the engine. Lazy creation of engine is
    * done during  memory registration. Additionally, open a unified P2P socket
-   * for metadata exchanges. */
+   * for metadata exchanges. If passive_accept is true, the endpoint will not
+   * call accept() but delegate it to a background thread.
+   */
   Endpoint(uint32_t const num_cpus);
   ~Endpoint();
 
@@ -286,6 +299,18 @@ class Endpoint {
                       std::vector<size_t> len_v, std::vector<char*> out_buf_v,
                       size_t num_iovs);
 
+  /* Add a remote endpoint with metadata - connect only once per remote
+   * endpoint. */
+  bool add_remote_endpoint(std::vector<uint8_t> const& metadata,
+                           uint64_t& conn_id);
+
+  /* Start a background thread for accepting. */
+  bool start_passive_accept();
+
+  /***************************************************/
+  /* API for Ray */
+  /***************************************************/
+
   /* Poll the status of the asynchronous receive. */
   bool poll_async(uint64_t transfer_id, bool* is_done);
 
@@ -376,6 +401,9 @@ class Endpoint {
   std::unordered_map<uint64_t, uint64_t> conn_id_to_conn_efa_;
   mutable std::shared_mutex mr_mu_;
   std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
+
+  std::unordered_map<std::vector<uint8_t>, uint64_t, VectorUint8Hash>
+      remote_endpoint_to_conn_id_;
 
   // Single-threaded.
   std::unordered_map<int, uint64_t> rank2conn_;
@@ -716,4 +744,9 @@ class Endpoint {
   std::thread recv_proxy_thread_;
   void send_proxy_thread_func();
   void recv_proxy_thread_func();
+
+  std::atomic<bool> passive_accept_stop_{false};
+  bool passive_accept_;
+  std::thread passive_accept_thread_;
+  void passive_accept_thread_func();
 };

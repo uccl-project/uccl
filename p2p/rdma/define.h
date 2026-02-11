@@ -190,8 +190,6 @@ struct ChannelMetaData {
   }
 };
 
-enum class MemoryType { HOST, GPU };
-
 enum class ChannelType : int16_t { Control, Normal };
 
 inline void copyRKeyArrayFromMRArray(MRArray const& mr_array,
