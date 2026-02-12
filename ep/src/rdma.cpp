@@ -985,20 +985,7 @@ static void post_rdma_async_batched_normal_mode(
           std::abort();
         }
 
-        // Track wr_id mappings for SOFTWARE_ORDERING
-        size_t const last = kgroup - 1;
-        uint64_t const batch_tail_wr = ring_wrids[last];
-        {
-          auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
-              batch_tail_wr, std::move(ring_wrids));
-          if (!inserted) {
-            fprintf(stderr,
-                    "thread_idx: %d, Error: tail wr_id %lu already exists "
-                    "(map=%p)\n",
-                    thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
-            std::abort();
-          }
-        }
+        // All WRs in this group are signaled; no batched WR bookkeeping needed.
       }
 #else
       {
@@ -1093,19 +1080,7 @@ static void post_rdma_async_batched_normal_mode(
                     bad->wr_id);
           std::abort();
         }
-        size_t const last = kgroup - 1;
-        uint64_t const batch_tail_wr = ring_wrids[last];
-        {
-          auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
-              batch_tail_wr, std::move(ring_wrids));
-          if (!inserted) {
-            fprintf(stderr,
-                    "thread_idx: %d, Error: tail wr_id %lu already exists "
-                    "(map=%p)\n",
-                    thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
-            std::abort();
-          }
-        }
+        // All WRs in this group are signaled; no batched WR bookkeeping needed.
       }
 #endif
     }
@@ -1231,32 +1206,11 @@ static void post_rdma_async_batched_fast_mode(
       }
 
 #ifdef USE_RECEIVER_BARRIER
-      uint64_t const expert_tail_wr = expert_wr_ids.back();
-      {
-        auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
-            expert_tail_wr, std::move(expert_wr_ids));
-        if (!inserted) {
-          fprintf(stderr,
-                  "thread_idx: %d, Error: tail wr_id %lu already exists "
-                  "(map=%p)\n",
-                  thread_idx, expert_tail_wr, (void*)&S.wr_id_to_wr_ids);
-          std::abort();
-        }
-      }
+      (void)expert_wr_ids;
     }
 #else
-    uint64_t const tail_wr = wr_ids.back();
-    {
-      auto [it, inserted] =
-          S.wr_id_to_wr_ids.try_emplace(tail_wr, std::move(wr_ids));
-      if (!inserted) {
-        fprintf(stderr,
-                "thread_idx: %d, Error: tail wr_id %lu already exists "
-                "(map=%p)\n",
-                thread_idx, tail_wr, (void*)&S.wr_id_to_wr_ids);
-        std::abort();
-      }
-    }
+    // All WRs are signaled; no batched WR bookkeeping needed.
+    (void)wr_ids;
 #endif
 
     int ret = ibv_wr_complete(qpx);
@@ -1319,17 +1273,7 @@ static void post_rdma_async_batched_fast_mode(
         fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
       std::abort();
     }
-    {
-      auto [it, inserted] =
-          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
-      if (!inserted) {
-        fprintf(stderr,
-                "thread_idx: %d, Error: tail wr_id %lu already exists "
-                "(map=%p)\n",
-                thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
-        std::abort();
-      }
-    }
+    // All WRs are signaled; no batched WR bookkeeping needed.
 #endif
   }
 }
@@ -1372,20 +1316,7 @@ void local_process_completions(ProxyCtx& S,
         uint64_t wrid = wc[i].wr_id;
         if ((wrid & kAtomicWrTag) == kAtomicWrTag) {
           wrid &= kAtomicMask;
-#ifdef EFA
           acked_wrs.insert(wrid);
-#else
-          auto it = S.wr_id_to_wr_ids.find(wrid);
-          if (it != S.wr_id_to_wr_ids.end()) {
-            for (uint64_t sub_wr : it->second) {
-              acked_wrs.insert(sub_wr);
-            }
-            S.wr_id_to_wr_ids.erase(it);
-          } else {
-            printf("Error: Atomic ACK for unknown wr_id %lu\n", wrid);
-            std::abort();
-          }
-#endif
           break;
         }
         if ((wrid & kBarrierWrTag) == kBarrierWrTag) {
@@ -1409,24 +1340,7 @@ void local_process_completions(ProxyCtx& S,
           }
         }
 #endif
-        {
-          uint64_t const wr_done = wc[i].wr_id;
-#ifdef EFA
-          acked_wrs.insert(wr_done);
-#else
-          auto it = S.wr_id_to_wr_ids.find(wr_done);
-          if (it != S.wr_id_to_wr_ids.end()) {
-            for (uint64_t sub_wr : it->second) {
-              acked_wrs.insert(sub_wr);
-            }
-            S.wr_id_to_wr_ids.erase(it);
-          }
-          // else {
-          //   printf("Error: Write ACK for unknown wr_id %lu\n", wr_done);
-          //   std::abort();
-          // }
-#endif
-        }
+        acked_wrs.insert(wc[i].wr_id);
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM &&
@@ -1434,23 +1348,10 @@ void local_process_completions(ProxyCtx& S,
           assert(false && "Explicit Ack is deprecated on local proxy");
         }
         break;
-      case IBV_WC_FETCH_ADD: {
-        uint64_t wrid = wc[i].wr_id;
-        auto it = S.wr_id_to_wr_ids.find(wrid);
-        if (it != S.wr_id_to_wr_ids.end()) {
-          for (uint64_t sub_wr : it->second) {
-            acked_wrs.insert(sub_wr);
-          }
-          S.wr_id_to_wr_ids.erase(it);
-        }
-        // else {
-        //   fprintf(stderr,
-        //           "[Atomic] No batch found for wr_id=0x%lx, treating as
-        //           single "
-        //           "(map_size=%zu)\n",
-        //           wrid, S.wr_id_to_wr_ids.size());
-        // }
-      } break;
+      case IBV_WC_FETCH_ADD:
+        // All atomic FETCH_ADD WRs are signaled individually.
+        acked_wrs.insert(wc[i].wr_id);
+        break;
       default:
         break;
     }
@@ -2283,20 +2184,6 @@ static void post_atomic_operations_normal_mode(
         }
         std::abort();
       }
-      uint64_t const batch_tail_wr = group_wrids.back();
-      {
-        auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
-            batch_tail_wr, std::move(group_wrids));
-        if (!inserted) {
-          fprintf(stderr,
-                  "thread_idx: %d, Error: tail wr_id %lu already exists "
-                  "(map=%p, "
-                  "size=%zu, dst_rank=%d)\n",
-                  thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
-                  S.wr_id_to_wr_ids.size(), dst_rank);
-          std::abort();
-        }
-      }
 #endif
     }
   }
@@ -2426,20 +2313,7 @@ static void post_atomic_operations_fast_mode(
       }
     }
 #endif
-    uint64_t const batch_tail_wr = wr_ids.back();
-    {
-      auto [it, inserted] =
-          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
-      if (!inserted) {
-        fprintf(stderr,
-                "thread_idx: %d, Error: tail wr_id %lu already exists "
-                "(map=%p, "
-                "size=%zu, dst_rank=%d)\n",
-                thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
-                S.wr_id_to_wr_ids.size(), dst_rank);
-        std::abort();
-      }
-    }
+    // All WRs are signaled; no batched WR bookkeeping needed.
   }
 }
 
@@ -2592,20 +2466,7 @@ static void post_atomic_operations_fast_mode_native_rdma(
       }
       std::abort();
     }
-
-    uint64_t const batch_tail_wr = group_wrids.back();
-    {
-      auto [it, inserted] =
-          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(group_wrids));
-      if (!inserted) {
-        fprintf(stderr,
-                "thread_idx: %d, Error: tail wr_id %lu already exists "
-                "(map=%p, size=%zu, dst_rank=%d)\n",
-                thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
-                S.wr_id_to_wr_ids.size(), dst_rank);
-        std::abort();
-      }
-    }
+    // All WRs are signaled; no batched WR bookkeeping needed.
   }
 #endif
 }
@@ -2778,22 +2639,6 @@ static void post_atomic_operations_native_rdma(
             batch_tail_wr, group_wrids.back());
         std::abort();
       }
-      {
-        auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
-            batch_tail_wr, std::move(group_wrids));
-
-        // printf("[Native RDMA] batch_tail_wr: 0x%lx, map_size: %zu, dst_rank:
-        // %d\n", batch_tail_wr, it->second.size(), dst_rank);
-        if (!inserted) {
-          fprintf(stderr,
-                  "thread_idx: %d, Error: tail wr_id %lu already exists "
-                  "(map=%p, "
-                  "size=%zu, dst_rank=%d)\n",
-                  thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
-                  S.wr_id_to_wr_ids.size(), dst_rank);
-          std::abort();
-        }
-      }
     }
   }
 }
@@ -2807,7 +2652,7 @@ void post_atomic_operations(ProxyCtx& S,
                             std::unordered_set<uint64_t>& acked_wrs,
                             bool use_normal_mode) {
   if (use_normal_mode) {
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#ifndef EFA
     post_atomic_operations_native_rdma(S, wrs_to_post, cmds_to_post, ctxs,
                                        my_rank, thread_idx, acked_wrs);
 #else
@@ -2815,7 +2660,7 @@ void post_atomic_operations(ProxyCtx& S,
                                        my_rank, thread_idx, acked_wrs);
 #endif
   } else {
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#ifndef EFA
     post_atomic_operations_fast_mode_native_rdma(
         S, wrs_to_post, cmds_to_post, ctxs, my_rank, thread_idx, acked_wrs);
 #else
