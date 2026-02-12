@@ -60,9 +60,11 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
 #elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
     hipExtMallocWithFlags(&atomic_buffer_ptr_, kAtomicBufferSize,
                           hipDeviceMallocUncached);
-#else
+#elif defined(EFA)
     cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
                   cudaHostAllocMapped | cudaHostAllocWriteCombined);
+#else
+    cudaMalloc(&atomic_buffer_ptr_, kAtomicBufferSize);
 #endif
     cudaMemset(atomic_buffer_ptr_, 0, kAtomicBufferSize);
     proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);
