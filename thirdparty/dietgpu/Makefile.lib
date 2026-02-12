@@ -1,0 +1,79 @@
+# Makefile for building libdietgpu.so (standalone, no PyTorch dependency)
+#
+# Usage:
+#   make -f Makefile.lib              # build libdietgpu.so
+#   make -f Makefile.lib clean        # remove build artifacts
+#   make -f Makefile.lib SM=80        # override GPU architecture
+
+CUDA_HOME ?= /usr/local/cuda
+NVCC      := $(CUDA_HOME)/bin/nvcc
+CXX       := g++
+
+# GPU architecture (override with: make SM=80)
+SM ?= 90
+
+# Directories
+DIETGPU   := dietgpu
+BUILDDIR  := build_lib
+
+# Output
+LIB := libdietgpu.so
+
+# Source files
+CU_SRCS := \
+	$(DIETGPU)/ans/GpuANSEncode.cu \
+	$(DIETGPU)/ans/GpuANSDecode.cu \
+	$(DIETGPU)/ans/GpuANSInfo.cu \
+	$(DIETGPU)/float/GpuFloatCompress.cu \
+	$(DIETGPU)/float/GpuFloatDecompress.cu \
+	$(DIETGPU)/float/GpuFloatInfo.cu
+
+CPP_SRCS := \
+	$(DIETGPU)/utils/DeviceUtils.cpp \
+	$(DIETGPU)/utils/StackDeviceMemory.cpp
+
+# Object files
+CU_OBJS  := $(patsubst $(DIETGPU)/%.cu,$(BUILDDIR)/%.o,$(CU_SRCS))
+CPP_OBJS := $(patsubst $(DIETGPU)/%.cpp,$(BUILDDIR)/%.o,$(CPP_SRCS))
+LIB_OBJS := $(CU_OBJS) $(CPP_OBJS)
+
+# -I. resolves #include "dietgpu/ans/..." to ./dietgpu/ans/...
+INCLUDES := -I. -I$(CUDA_HOME)/include
+
+# Compiler flags
+CXXFLAGS := -O3 -fPIC -std=c++17 \
+	-Wno-deprecated-declarations \
+	-Wno-unused-variable \
+	-Wno-sign-compare \
+	-Wno-reorder \
+	-Wno-attributes \
+	-Wno-unused-result \
+	-Wno-unused-function
+
+NVCCFLAGS := -O3 -std=c++17 --compiler-options '-fPIC' \
+	-gencode=arch=compute_$(SM),code=sm_$(SM) \
+	-gencode=arch=compute_$(SM),code=compute_$(SM) \
+	-DDISABLE_AGGRESSIVE_PTX_INSTRS
+
+LDLIBS := -lglog -L$(CUDA_HOME)/lib64 -lcudart
+
+# ---- Targets ----
+
+all: $(LIB)
+
+$(LIB): $(LIB_OBJS)
+	$(CXX) -shared -o $@ $^ $(LDLIBS)
+	@echo "Built: $@"
+
+$(BUILDDIR)/%.o: $(DIETGPU)/%.cu
+	@mkdir -p $(dir $@)
+	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -c $< -o $@
+
+$(BUILDDIR)/%.o: $(DIETGPU)/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+
+clean:
+	rm -rf $(BUILDDIR) $(LIB)
+
+.PHONY: all clean
