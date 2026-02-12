@@ -115,7 +115,10 @@ class RdmaContext {
       }
     }
 
-    throw std::runtime_error("detect_gid failed");
+    // On p5 EFA, the link_layer is IBV_LINK_LAYER_UNSPECIFIED.
+    LOG(INFO) << "Auto-detect GID failed, using default " << gid_index;
+    gid_index_ = gid_index;
+    return queryGid(gid_index_, port);
   }
 
   int getGidIndex(int gid_index, int port = 1) const {
