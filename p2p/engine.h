@@ -369,13 +369,6 @@ class Endpoint {
   }
 
  private:
-  gpuStream_t pick_stream() {
-    if (streams_.empty()) return nullptr;
-    uint32_t i =
-        rr_stream_.fetch_add(1, std::memory_order_relaxed) % streams_.size();
-    return streams_[i];
-  }
-
   /** Rank‑indexed view of established connections (read‑only). */
   std::unordered_map<int, uint64_t> const& rank2conn() const {
     return rank2conn_;
@@ -412,10 +405,6 @@ class Endpoint {
   std::array<ShmRingHandle, kMaxNumGPUs> inbox_rings_;
   std::array<bool, kMaxNumGPUs> inbox_creators_;
 
-  // Assuming 1TB GPU memory, 128KB KV block size.
-  static constexpr size_t kMaxNumChunksPerTransfer = 1024ul * 1024 * 1024 / 128;
-  std::atomic<uint32_t> rr_stream_{0};
-  std::vector<gpuStream_t> streams_;
   std::vector<std::vector<gpuStream_t>> ipc_streams_;
 
   static constexpr size_t kTaskRingSize = 1024;

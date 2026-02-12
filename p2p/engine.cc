@@ -73,12 +73,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
           gpuStreamCreateWithFlags(&ipc_streams_[i][j], gpuStreamNonBlocking));
     }
   }
-
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-  streams_.resize(n_streams);
-  for (int i = 0; i < n_streams; ++i) {
-    GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i], gpuStreamNonBlocking));
-  }
 
   std::call_once(glog_init_once,
                  []() { google::InitGoogleLogging("uccl_p2p"); });
@@ -211,12 +206,6 @@ Endpoint::~Endpoint() {
     }
   }
 
-  if (!streams_.empty()) {
-    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-    for (auto s : streams_)
-      if (s) GPU_RT_CHECK(gpuStreamDestroy(s));
-  }
-
   std::cout << "Engine destroyed" << std::endl;
 }
 
@@ -233,10 +222,6 @@ bool Endpoint::start_passive_accept() {
 void Endpoint::initialize_engine() {
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-  streams_.resize(n_streams);
-  for (int i = 0; i < n_streams; ++i) {
-    GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i], gpuStreamNonBlocking));
-  }
 
 #ifdef UCCL_P2P_USE_NCCL
   numa_node_ = tcp::get_tcp_numa_node_from_iface();
