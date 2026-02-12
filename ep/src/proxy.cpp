@@ -959,14 +959,7 @@ void Proxy::post_gpu_commands_mixed(
 }
 
 void Proxy::quiet_cq() {
-  auto outstanding_batches = [&]() -> size_t {
-    size_t sum = 0;
-    for (auto& ctx_ptr : ctxs_for_all_ranks_) {
-      if (!ctx_ptr) continue;
-      sum += ctx_ptr->wr_id_to_wr_ids.size();
-    }
-    return sum;
-  };
+  auto outstanding_batches = [&]() -> size_t { return 0; };
   constexpr int kConsecutiveEmptyToExit = 3;
   int empty_iters = 0;
   ibv_wc wc[kMaxOutstandingSends];
