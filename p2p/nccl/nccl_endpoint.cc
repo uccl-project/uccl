@@ -760,4 +760,13 @@ int TCPEndpoint::prepare_fifo_metadata(uccl::UcclFlow* flow,
   return 0;
 }
 
+int TCPEndpoint::get_sock_fd(uint64_t flow_id) const {
+  std::lock_guard<std::mutex> lock(conn_mu_);
+  auto it = conn_map_.find(flow_id);
+  if (it == conn_map_.end()) {
+    return -1;
+  }
+  return it->second->sock_fd;
+}
+
 }  // namespace tcp

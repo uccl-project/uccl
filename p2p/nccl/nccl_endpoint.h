@@ -127,6 +127,9 @@ class TCPEndpoint {
   // TCP has no device selection or unified socket; keep these as no-ops.
   int get_best_dev_idx(int gpu_idx) { return 0; }
 
+  // Get the socket file descriptor for a connection.
+  int get_sock_fd(uint64_t flow_id) const;
+
   bool initialize_engine_by_dev(int dev, bool enable_p2p_listen) {
     if (dev >= 0) {
       gpu_index_ = dev;
@@ -136,6 +139,9 @@ class TCPEndpoint {
   }
 
   void create_unified_p2p_socket() {}
+  
+  void stop_accept() {}
+
 
  private:
   struct Conn;
