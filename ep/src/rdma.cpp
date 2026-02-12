@@ -1206,7 +1206,6 @@ static void post_rdma_async_batched_fast_mode(
       }
 
 #ifdef USE_RECEIVER_BARRIER
-      // All WRs are signaled; no batched WR bookkeeping needed.
       (void)expert_wr_ids;
     }
 #else
@@ -2185,7 +2184,6 @@ static void post_atomic_operations_normal_mode(
         }
         std::abort();
       }
-      // All WRs are signaled; no batched WR bookkeeping needed.
 #endif
     }
   }
@@ -2641,7 +2639,6 @@ static void post_atomic_operations_native_rdma(
             batch_tail_wr, group_wrids.back());
         std::abort();
       }
-      // All WRs are signaled; no batched WR bookkeeping needed.
     }
   }
 }
