@@ -937,7 +937,7 @@ static void post_rdma_async_batched_normal_mode(
           wrs[j].wr.rdma.remote_addr = remote_addr;
           wrs[j].wr.rdma.rkey = ctx->remote_rkey;
           wrs[j].opcode = IBV_WR_RDMA_WRITE;  // default
-          wrs[j].send_flags = IBV_SEND_SIGNALED;
+          wrs[j].send_flags = (j + 1 == kgroup) ? IBV_SEND_SIGNALED : 0;
           wrs[j].next = (j + 1 < kgroup) ? &wrs[j + 1] : nullptr;
 
           if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
@@ -1058,7 +1058,7 @@ static void post_rdma_async_batched_normal_mode(
           wrs[j].wr.rdma.remote_addr = remote_addr;
           wrs[j].wr.rdma.rkey = ctx->remote_rkey;
           wrs[j].opcode = IBV_WR_RDMA_WRITE;  // default
-          wrs[j].send_flags = IBV_SEND_SIGNALED;
+          wrs[j].send_flags = (j + 1 == kgroup) ? IBV_SEND_SIGNALED : 0;
           wrs[j].next = (j + 1 < kgroup) ? &wrs[j + 1] : nullptr;
 
           if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
@@ -1302,7 +1302,7 @@ static void post_rdma_async_batched_fast_mode(
 
       wrs[j].wr.rdma.rkey = ctx->remote_rkey;
       wrs[j].opcode = IBV_WR_RDMA_WRITE;
-      wrs[j].send_flags = IBV_SEND_SIGNALED;
+      wrs[j].send_flags = (j + 1 == k) ? IBV_SEND_SIGNALED : 0;
       wrs[j].next = (j + 1 < k) ? &wrs[j + 1] : nullptr;
     }
     size_t const last = k - 1;
