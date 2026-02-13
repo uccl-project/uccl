@@ -145,7 +145,7 @@ class TCPEndpoint {
 
   void create_unified_p2p_socket() {}
   
-  void stop_accept() {}
+  void stop_accept() { stop_accept_.store(true, std::memory_order_release); }
 
 
  private:
@@ -177,6 +177,7 @@ class TCPEndpoint {
   uint16_t listen_port_;
   int listen_fd_;
   std::atomic<uint64_t> next_flow_id_{1};
+  std::atomic<bool> stop_accept_{false};
   std::mutex conn_mu_;
   std::unordered_map<uint64_t, std::unique_ptr<Conn>> conn_map_;
 };
