@@ -2,6 +2,8 @@
 
 Unit: **GB/s**
 
+RDMA cross-rail all-to-all results
+
 | Message Size (KB) | 2 Nodes | 3 Nodes | 4 Nodes |
 |-------------------|---------|---------|---------|
 | 8                 | 4.8     | 8.6     | 10.9    |
@@ -36,3 +38,8 @@ RDMA rail-optimized (no cross-rail traffic) all-to-all results
 - **2 Nodes**: Throughput increases steadily with message size and reaches ~41 Gb/s at around 2 MB, which is close to the peak of the platform.  
 - **3 Nodes**: Throughput grows until ~32 KB, then flattens and stabilizes at ~29 Gb/s.  
 - **4 Nodes**: Throughput saturates early (around 128 KB) and stays nearly constant at ~25 Gb/s.  
+
+## To reproduce
+
+Run [test_alltoall_rail.cpp](./test_alltoall_rail.cpp) and [test_alltoall.cpp](test_alltoall.cpp).
+
