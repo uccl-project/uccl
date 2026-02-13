@@ -16,10 +16,10 @@ INCLUDES = $(CUDA_INCLUDE)
 LDFLAGS = $(CUDA_LDFLAGS) $(RDMA_LDFLAGS)
 
 # Target
-TARGET = test_multi_nic_alltoall
+TARGET = test_alltoall
 
 # Source file
-SRC = test_multi_nic_alltoall.cpp
+SRC = test_alltoall.cpp
 
 .PHONY: all clean run
 
