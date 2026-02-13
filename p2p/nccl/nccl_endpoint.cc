@@ -245,7 +245,15 @@ bool TCPEndpoint::recv_all_(int fd, void* buf, size_t len) const {
   size_t recvd = 0;
   while (recvd < len) {
     ssize_t rc = ::recv(fd, p + recvd, len - recvd, 0);
-    if (rc <= 0) return false;
+    if (rc < 0) {
+      // Check if it's a real error or just interrupted
+      if (errno == EINTR) continue;
+      return false;
+    }
+    if (rc == 0) {
+      // Connection closed by peer or shutdown
+      return false;
+    }
     recvd += static_cast<size_t>(rc);
   }
   return true;
