@@ -3,6 +3,7 @@
 #include "nccl_tcpx_endpoint.h"
 #elif defined(UCCL_P2P_USE_NCCL)
 #include "nccl/nccl_endpoint.h"
+#include "engine.h"
 #else
 #include "endpoint_wrapper.h"
 #include "engine.h"
