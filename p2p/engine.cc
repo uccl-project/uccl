@@ -160,6 +160,7 @@ Endpoint::~Endpoint() {
 
   stop_.store(true, std::memory_order_release);
 
+  // Stop and join passive accept thread FIRST, before destroying ep_
   if (passive_accept_) {
     passive_accept_stop_.store(true, std::memory_order_release);
     if (passive_accept_thread_.joinable()) {
@@ -180,6 +181,10 @@ Endpoint::~Endpoint() {
   if (recv_unified_task_ring_ != nullptr) {
     free(recv_unified_task_ring_);
   }
+
+  // Destroy the endpoint AFTER joining all threads that use it
+  // This must happen before we delete Endpoint::Conn objects
+  ep_.reset();
 
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
