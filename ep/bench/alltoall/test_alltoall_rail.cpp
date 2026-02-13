@@ -95,8 +95,8 @@ std::vector<std::string> parse_ip_list(std::string const& ip_str) {
 }
 
 // Simple TCP barrier
-void tcp_barrier(int node_id, int num_nodes, std::vector<std::string> const& ips,
-                 int port_offset) {
+void tcp_barrier(int node_id, int num_nodes,
+                 std::vector<std::string> const& ips, int port_offset) {
   int port = TCP_PORT_BASE + port_offset;
   if (node_id == 0) {
     // Node 0 waits for all others to connect
@@ -362,8 +362,7 @@ void run_gpu_thread(int gpu_id, int my_node, int num_nodes,
 
   std::vector<std::string> efa_devs = get_efa_device_names();
   if ((int)efa_devs.size() < NUM_NICS_PER_GPU) {
-    fprintf(stderr,
-            "[GPU %d] ERROR: Need at least %d EFA devices, found %zu\n",
+    fprintf(stderr, "[GPU %d] ERROR: Need at least %d EFA devices, found %zu\n",
             gpu_id, NUM_NICS_PER_GPU, efa_devs.size());
     exit(EXIT_FAILURE);
   }
