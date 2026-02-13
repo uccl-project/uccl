@@ -246,8 +246,10 @@ bool TCPEndpoint::recv_all_(int fd, void* buf, size_t len) const {
   while (recvd < len) {
     ssize_t rc = ::recv(fd, p + recvd, len - recvd, 0);
     if (rc < 0) {
-      // Check if it's a real error or just interrupted
-      if (errno == EINTR) continue;
+      // Check if it's a real error or just interrupted/timeout
+      if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
+        continue;
+      }
       return false;
     }
     if (rc == 0) {
@@ -478,6 +480,11 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
   int fd = ::socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return make_invalid_conn();
 
+  struct timeval tv;
+  tv.tv_sec = 1;
+  tv.tv_usec = 0;
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_port = htons(remote_port);
@@ -549,6 +556,11 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   socklen_t len = sizeof(cli_addr);
   int conn_fd = ::accept(fd, reinterpret_cast<sockaddr*>(&cli_addr), &len);
   if (conn_fd < 0) return make_invalid_conn();
+
+  struct timeval tv;
+  tv.tv_sec = 1;
+  tv.tv_usec = 0;
+  setsockopt(conn_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
   char ip_buf[INET_ADDRSTRLEN] = {};
   if (!inet_ntop(AF_INET, &cli_addr.sin_addr, ip_buf, sizeof(ip_buf))) {
