@@ -128,7 +128,7 @@ class TCPEndpoint {
   int get_best_dev_idx(int gpu_idx) { return 0; }
 
   // Get the socket file descriptor for a connection.
-  int get_sock_fd(uint64_t flow_id) const;
+  int get_sock_fd(uint64_t flow_id);
 
   bool initialize_engine_by_dev(int dev, bool enable_p2p_listen) {
     if (dev >= 0) {
