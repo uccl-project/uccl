@@ -199,7 +199,7 @@ void uccl_engine_mr_destroy(uccl_engine_t* engine, uccl_mr_t mr);
 int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata_str);
 
 /**
- * Get all notification messages and clear the list.
+ * Get all notification messages and clear the list (global for all backends).
  * @return              Vector of notification messages.
  */
 std::vector<notify_msg_t> uccl_engine_get_notifs();

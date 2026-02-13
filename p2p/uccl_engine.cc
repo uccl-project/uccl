@@ -292,8 +292,12 @@ int uccl_engine_start_listener(uccl_conn_t* conn) {
   }
 
   conn->listener_running = true;
-#if defined(UCCL_P2P_USE_TCPX) || defined(UCCL_P2P_USE_NCCL)
+#if defined(UCCL_P2P_USE_TCPX)
+  // TCPX uses a separate listener thread
   conn->listener_thread = new std::thread(listener_thread_func, conn);
+#elif defined(UCCL_P2P_USE_NCCL)
+  // NCCL handles notifications in the control thread, no separate listener needed
+  conn->listener_thread = nullptr;
 #endif
 
   return 0;
@@ -369,7 +373,7 @@ int uccl_engine_update_fifo(FifoItem& fifo_item, uint64_t remote_addr,
 }
 
 std::vector<notify_msg_t> uccl_engine_get_notifs() {
-#if defined(UCCL_P2P_USE_TCPX) || defined(UCCL_P2P_USE_NCCL)
+#if defined(UCCL_P2P_USE_TCPX)
   std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
   std::vector<notify_msg_t> result = std::move(notify_msg_list);
   notify_msg_list.clear();
@@ -395,11 +399,28 @@ std::vector<notify_msg_t> uccl_engine_get_notifs() {
 int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   if (!conn || !notify_msg) return -1;
 
-#if defined(UCCL_P2P_USE_TCPX) || defined(UCCL_P2P_USE_NCCL)
+#if defined(UCCL_P2P_USE_TCPX)
   md_t md;
   md.notify_data = *notify_msg;
 
   return send(conn->sock_fd, &md, sizeof(md_t), 0);
+#elif defined(UCCL_P2P_USE_NCCL)
+  // Use NCCL endpoint's send_notification API with NotifyMsg from common.h
+  NotifyMsg oob_msg;
+  oob_msg.magic = NOTIFY_MSG_MAGIC;
+  oob_msg.msg_type = 0;  // Can be used for future message types
+  strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
+  oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
+  memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
+  
+  auto* tcp_endpoint = dynamic_cast<tcp::TCPEndpoint*>(conn->engine->endpoint.get());
+  if (!tcp_endpoint) {
+    return -1;
+  }
+  
+  // Get flow_id from conn_id
+  uint64_t flow_id = conn->conn_id;
+  return tcp_endpoint->send_notification(flow_id, oob_msg);
 #else
   if (conn->oob_conn_key.empty()) {
     std::cerr << "No OOB connection key available for notification"
