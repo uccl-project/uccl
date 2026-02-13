@@ -34,12 +34,6 @@
 thread_local bool inside_python = false;
 
 using Endpoint = nccl_tcpx::Endpoint;
-#elif defined(UCCL_P2P_USE_NCCL)
-// NCCL TCP endpoint does not declare inside_python; define it here for
-// uccl_engine.
-thread_local bool inside_python = false;
-
-using Endpoint = tcp::TCPEndpoint;
 #else
 using Endpoint = ::Endpoint;
 #endif
@@ -298,7 +292,7 @@ int uccl_engine_start_listener(uccl_conn_t* conn) {
   }
 
   conn->listener_running = true;
-#if defined(UCCL_P2P_USE_TCPX) && defined(UCCL_P2P_USE_NCCL)
+#if defined(UCCL_P2P_USE_TCPX) || defined(UCCL_P2P_USE_NCCL)
   conn->listener_thread = new std::thread(listener_thread_func, conn);
 #endif
 
@@ -375,7 +369,7 @@ int uccl_engine_update_fifo(FifoItem& fifo_item, uint64_t remote_addr,
 }
 
 std::vector<notify_msg_t> uccl_engine_get_notifs() {
-#if defined(UCCL_P2P_USE_TCPX) && defined(UCCL_P2P_USE_NCCL)
+#if defined(UCCL_P2P_USE_TCPX) || defined(UCCL_P2P_USE_NCCL)
   std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
   std::vector<notify_msg_t> result = std::move(notify_msg_list);
   notify_msg_list.clear();
@@ -401,7 +395,7 @@ std::vector<notify_msg_t> uccl_engine_get_notifs() {
 int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   if (!conn || !notify_msg) return -1;
 
-#if defined(UCCL_P2P_USE_TCPX) && defined(UCCL_P2P_USE_NCCL)
+#if defined(UCCL_P2P_USE_TCPX) || defined(UCCL_P2P_USE_NCCL)
   md_t md;
   md.notify_data = *notify_msg;
 
