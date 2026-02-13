@@ -289,16 +289,16 @@ void TCPEndpoint::control_loop_(Conn* conn) {
 
     // Handle notification messages
     if (msg.type == kNotification) {
-      printf("Received Notif\n")
-      NotifyMsg notification{};
-      if (!recv_all_(conn->sock_fd, &notification, sizeof(notification))) {
+      printf("Received Notif\n");
+      ::NotifyMsg notification{};
+      if (!recv_all_(conn->sock_fd, &notification, sizeof(::NotifyMsg))) {
         std::cerr << "[tcp] failed to receive notification payload" << std::endl;
         break;
       }
       // Store notification in global notify_list from common.h
       {
-        std::lock_guard<std::mutex> lock(notify_mutex);
-        notify_list.push_back(notification);
+        std::lock_guard<std::mutex> lock(::notify_mutex);
+        ::notify_list.push_back(notification);
       }
       continue;
     }
@@ -789,7 +789,7 @@ int TCPEndpoint::get_sock_fd(uint64_t flow_id) {
   return it->second->sock_fd;
 }
 
-int TCPEndpoint::send_notification(uint64_t flow_id, NotifyMsg const& notification) {
+int TCPEndpoint::send_notification(uint64_t flow_id, ::NotifyMsg const& notification) {
   std::lock_guard<std::mutex> lock(conn_mu_);
   auto it = conn_map_.find(flow_id);
   if (it == conn_map_.end()) {
@@ -800,7 +800,7 @@ int TCPEndpoint::send_notification(uint64_t flow_id, NotifyMsg const& notificati
   // Send notification header
   CtrlMsg msg{};
   msg.type = kNotification;
-  msg.size = sizeof(NotifyMsg);
+  msg.size = sizeof(::NotifyMsg);
   msg.addr = 0;
   
   {
@@ -809,7 +809,7 @@ int TCPEndpoint::send_notification(uint64_t flow_id, NotifyMsg const& notificati
       return -1;
     }
     // Send notification payload (NotifyMsg from common.h)
-    if (!send_all_(conn->sock_fd, &notification, sizeof(notification))) {
+    if (!send_all_(conn->sock_fd, &notification, sizeof(::NotifyMsg))) {
       return -1;
     }
   }

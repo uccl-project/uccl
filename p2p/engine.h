@@ -368,6 +368,10 @@ class Endpoint {
     return it->second;
   }
 
+  inline RDMAEndPoint get_endpoint() const {
+    return ep_;
+  }
+
  private:
   gpuStream_t pick_stream() {
     if (streams_.empty()) return nullptr;

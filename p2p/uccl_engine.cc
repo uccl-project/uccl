@@ -413,8 +413,11 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
   memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
   
-  auto* tcp_endpoint = dynamic_cast<tcp::TCPEndpoint*>(conn->engine->endpoint.get());
+  // For NCCL, endpoint is RDMAEndPoint which is std::shared_ptr<tcp::TCPEndpoint>
+  // Access the underlying TCPEndpoint using the getter
+  auto tcp_endpoint = conn->engine->endpoint->get_endpoint();
   if (!tcp_endpoint) {
+    LOG(ERROR) << "Failed to get TCP endpoint for notification";
     return -1;
   }
   
