@@ -12,6 +12,15 @@ namespace cg = cooperative_groups;
 namespace uccl {
 namespace internode_ll {
 
+#ifdef LAM_DEV
+// Lam: Global lock for debug printing (ensures printf calls don't interleave)
+__device__ int g_print_lock = 0;
+// Lam: Helper macro for conditional kernel arguments
+#define LAM_DEV_ARG(x) x,
+#else
+#define LAM_DEV_ARG(x)
+#endif
+
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
 constexpr int kNumMaxWarpGroups = 16;
 #else
@@ -53,6 +62,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     int64_t* dispatch_wait_recv_cost_stats, void* rdma_recv_x,
     int* rdma_recv_count, void* rdma_x, void const* x, int64_t const* topk_idx,
     int* atomic_counter_per_expert, int* atomic_finish_counter_per_expert,
+#ifdef LAM_DEV
+    int* atomic_send_counter_per_expert,
+#endif
     int* next_clean, int64_t* next_clean_second, int num_next_clean_int,
     int num_tokens, int num_max_dispatch_tokens_per_rank, int num_topk,
     int num_experts, int rank, int num_ranks, int num_warp_groups,
@@ -63,6 +75,11 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     void* atomic_buffer_ptr = nullptr,
     int64_t* rdma_recv_count_internode = nullptr,
     int* grid_sync_barrier_ptr = nullptr) {
+// #ifdef LAM_DEV
+  // if (blockIdx.x == 0 && threadIdx.x == 0) {
+  //   printf("[LAM_DEV] dispatch called\n");
+  // }
+// #endif
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const thread_id = static_cast<int>(threadIdx.x);
   auto const warp_id = thread_id / WARP_SIZE, lane_id = get_lane_id();
@@ -97,6 +114,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
   // Expert counts
   __shared__ int shared_num_tokens_sent_per_expert[kNumMaxWarpGroups];
+
+#ifdef LAM_DEV
+  // Lam: Send slots for each topk destination (for batched send buffer layout)
+  constexpr int kNumMaxTopK = 9;
+  __shared__ int shared_send_slots[kNumMaxTopK];
+  __shared__ int shared_dst_experts[kNumMaxTopK];
+#endif
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   // initialize barrier
@@ -135,6 +159,41 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                    topk_idx + token_idx * num_topk + warp_id))
                              : -1;
       thread_id == 0 ? (*rdma_x_src_idx = token_idx) : 0;
+
+#ifdef LAM_DEV
+      // Lam: Allocate send slots for each topk destination
+      // Each warp (warp_id < num_topk) allocates a slot for its destination expert
+      if (warp_id < num_topk && lane_id == 0) {
+        shared_dst_experts[warp_id] = dst_expert_idx;
+        if (dst_expert_idx >= 0) {
+          shared_send_slots[warp_id] =
+              atomicAdd(atomic_send_counter_per_expert + dst_expert_idx, 1);
+        } else {
+          shared_send_slots[warp_id] = -1;
+        }
+      }
+      // Sync to make shared_send_slots visible to all threads
+      sync_barrier_1((num_warps - 1) * WARP_SIZE);
+
+      // // Lam: Debug print: verify send slot allocation (only first SM, first few tokens)
+      // // Uses spinlock to prevent interleaved output from different threads
+      // if (thread_id == 0) {
+      //   // Acquire print lock
+      //   while (atomicCAS(&g_print_lock, 0, 1) != 0);
+      //   __threadfence();
+
+      //   printf("[LAM_DEV] rank=%d token_idx=%d send_slots: ", rank, token_idx);
+      //   for (int k = 0; k < num_topk; k++) {
+      //     printf("(expert=%d, slot=%d) ", shared_dst_experts[k],
+      //            shared_send_slots[k]);
+      //   }
+      //   printf("\n");
+
+      //   __threadfence();
+      //   atomicExch(&g_print_lock, 0);  // Release print lock
+      // }
+      // sync_barrier_1((num_warps - 1) * WARP_SIZE);
+#endif  // LAM_DEV (slot allocation + debug print)
 
 // FP8 cast
 #pragma unroll
@@ -199,6 +258,11 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       }
       sync_barrier_1(num_threads);
 
+      // if (warp_id < num_topk && lane_id == 0 && dst_expert_idx < 0) {
+      //   printf("[SKIP] rank=%d token=%d topk_slot=%d expert=-1\n",
+      //          rank, token_idx, warp_id);
+      // }
+
       // Issue IBGDA sends
       if (dst_expert_idx >= 0) {
         int slot_idx =
@@ -221,6 +285,53 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                         dst_rank, max_nvl_peers, 0)
                 : 0;
         if (dst_p2p_ptr == 0) {
+          //  if (lane_id == 0) printf("rank=%d dst_rank=%d dst_expert_idx=%d num_local_experts=%d dst_expert_local_idx=%d\n", rank, dst_rank, dst_expert_idx, num_local_experts, dst_expert_local_idx);
+#ifdef LAM_DEV
+          // Lam: IBGDA -> copy temp to rdma_batch_buffer, batch send later
+          auto const lam_slot = shared_send_slots[warp_id];
+          auto const batch_buf_offset = num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
+          auto const batch_buf_ptr = static_cast<uint8_t*>(rdma_x) + batch_buf_offset +
+              (dst_expert_idx * num_max_dispatch_tokens_per_rank + lam_slot) * num_bytes_per_msg;
+          auto const* src_int4_ptr = reinterpret_cast<int4 const*>(rdma_x_src_idx);
+          auto* batch_buf_int4_ptr = reinterpret_cast<int4*>(batch_buf_ptr);
+          UNROLLED_WARP_COPY(8, lane_id, num_int4_per_msg, batch_buf_int4_ptr,
+                             src_int4_ptr, ld_nc_global, st_na_global);
+          // Debug: print copy info (payload[0..3] matches RECV format)
+          // if (lane_id == 0) {
+          //   auto const* payload =
+          //       reinterpret_cast<int const*>(
+          //           reinterpret_cast<uint8_t const*>(rdma_x_src_idx) + sizeof(int4));
+          //   printf("[IBGDA] rank=%d token=%d expert=%d slot=%d [IBGDA COPY LAM] "
+          //          "from=%p to=%p payload[0..3]=%08x %08x %08x %08x\n",
+          //          rank, token_idx, dst_expert_idx, lam_slot,
+          //          (void*)rdma_x_src_idx, (void*)batch_buf_ptr,
+          //          payload[0], payload[1], payload[2], payload[3]);
+          // }
+#else
+          // Debug: print send info (payload[0..3] matches RECV format)
+          // if (lane_id == 0) {
+          //   auto const* payload =
+          //       reinterpret_cast<int const*>(
+          //           reinterpret_cast<uint8_t const*>(src_ptr) + sizeof(int4));
+          //   printf("[IBGDA] rank=%d token=%d expert=%d slot=%d [IBGDA SEND] "
+          //          "from=%p to=0x%lx dst_rank=%d payload[0..3]=%08x %08x %08x %08x\n",
+          //          rank, token_idx, dst_expert_idx, slot_idx,
+          //          (void*)src_ptr, dst_ptr, dst_rank,
+          //          payload[0], payload[1], payload[2], payload[3]);
+          // }
+          // if (lane_id == 0) {
+            //   printf(
+              //     "[IBGDA PARAMS] rank=%d "
+              //     "num_bytes_per_msg=%lu dst_rank=%d dst_expert_local_idx=%d "
+              //     "lane_id=%d slot_idx=%d d2h_channel_addrs=%p num_d2h_channel_addrs=%d "
+              //     "low_latency_buffer_idx=%d\n",
+              //     rank,
+              //     (unsigned long)num_bytes_per_msg, dst_rank,
+              //     dst_expert_local_idx, lane_id, slot_idx, d2h_channel_addrs,
+              //     num_d2h_channel_addrs,
+              //     low_latency_buffer_idx
+              //   );
+              // }
           __threadfence_system();
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
@@ -230,12 +341,24 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                                  // rb.
               lane_id, slot_idx, d2h_channel_addrs, num_d2h_channel_addrs,
               false, low_latency_buffer_idx);
+#endif
         } else {
           // Intra-node: use direct memory copy via IPC
           auto const* src_int4_ptr = reinterpret_cast<int4 const*>(src_ptr);
           auto* dst_int4_ptr = reinterpret_cast<int4*>(dst_p2p_ptr);
           UNROLLED_WARP_COPY(8, lane_id, num_int4_per_msg, dst_int4_ptr,
                              src_int4_ptr, ld_nc_global, st_na_global);
+          // Debug: print IPC copy info (payload data[0..3] matches RECV format)
+          // if (lane_id == 0) {
+          //   auto const* payload =
+          //       reinterpret_cast<int const*>(
+          //           reinterpret_cast<uint8_t const*>(src_ptr) + sizeof(int4));
+          //   printf("[IPC] rank=%d token=%d expert=%d slot=%d [IPC COPY] "
+          //          "from=%p to=%p dst_rank=%d payload[0..3]=%08x %08x %08x %08x\n",
+          //          rank, token_idx, dst_expert_idx, slot_idx,
+          //          (void*)src_ptr, (void*)dst_p2p_ptr, dst_rank,
+          //          payload[0], payload[1], payload[2], payload[3]);
+          // }
         }
         // Increase counter after finishing
         __syncwarp();
@@ -288,6 +411,114 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     }
   }
   __syncthreads();
+
+#ifdef LAM_DEV
+  // Lam: Grid-wide sync before batch send phase.
+  // __syncthreads() only syncs within a single thread block (SM).
+  // The token loop distributes tokens round-robin across SMs
+  // (token_idx = sm_id, stepping by num_sms). When num_tokens < num_sms,
+  // most SMs skip the token loop and pass __syncthreads() immediately,
+  // while the SMs processing tokens are still writing to the batch buffer
+  // and incrementing atomic_send_counter_per_expert.
+  // Without grid sync, the batch send phase can read a stale/partial
+  // counter and send fewer tokens than actually produced, causing the
+  // receiver to hang waiting for data that never arrives.
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  amd::grid_sync(grid_sync_barrier_ptr, num_sms);
+#else
+  cg::this_grid().sync();
+#endif
+
+  // Lam: Batch RDMA send phase - send entire expert buffer in ONE IBGDA call
+  // Each warp group handles one expert (only first sub_warp does the send)
+  if (responsible_expert_idx < num_experts && sub_warp_id == 0) {
+    auto const dst_rank = responsible_expert_idx / num_local_experts;
+    auto const dst_expert_local_idx = responsible_expert_idx % num_local_experts;
+
+    // Check if this destination is inter-node (needs IBGDA batch send)
+    // IPC destinations were already sent in the token loop
+    auto const test_dst_ptr = reinterpret_cast<uint64_t>(rdma_recv_x);
+    auto const dst_p2p_ptr =
+        ipc_rdma_base_ptrs
+            ? uccl::get_ipc_p2p_ptr(test_dst_ptr, ipc_rdma_base_ptrs, rank,
+                                    dst_rank, max_nvl_peers, 0)
+            : 0;
+
+    if (dst_p2p_ptr == 0) {
+      // Inter-node: batch send ALL tokens for this expert in ONE call
+      auto const num_tokens_to_send =
+          atomic_send_counter_per_expert[responsible_expert_idx];
+
+      if (num_tokens_to_send > 0) {
+        auto const batch_buf_offset =
+            num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
+        // Source: start of this expert's batch buffer (contiguous)
+        auto const batch_buf_ptr =
+            static_cast<uint8_t*>(rdma_x) + batch_buf_offset +
+            responsible_expert_idx * num_max_dispatch_tokens_per_rank *
+                num_bytes_per_msg;
+        auto const src_ptr = reinterpret_cast<uint64_t>(batch_buf_ptr);
+        // Destination: start of this expert's recv buffer on remote rank
+        auto const dst_ptr =
+            reinterpret_cast<uint64_t>(rdma_recv_x) +
+            dst_expert_local_idx * num_ranks *
+                num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
+            rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
+        // Total bytes: all tokens for this expert
+        auto const total_bytes = num_tokens_to_send * num_bytes_per_msg;
+
+        // Debug: print batch send info
+        // if (lane_id == 0) {
+        //   printf("[LAM_DEV] rank=%d dst_rank=%d local_expert=%d [IBGDA BATCH SEND] "
+        //          "from=%p to=0x%lx num_tokens=%d total_bytes=%d\n",
+        //          rank, dst_rank, dst_expert_local_idx,
+        //          (void*)src_ptr, dst_ptr,
+        //          num_tokens_to_send, static_cast<int>(total_bytes));
+        // }
+        __threadfence_system();
+
+        // if (lane_id == 0) {
+        //   printf("[LAM_DEV] rank=%d dst_rank=%d local_expert=%d [BEFORE IBGDA BATCH SEND]\n",
+        //          rank, dst_rank, dst_expert_local_idx);
+        // }
+        // if (lane_id == 0) {
+        //   auto const* payload =
+        //       reinterpret_cast<int const*>(
+        //           reinterpret_cast<uint8_t const*>(src_ptr) + sizeof(int4));
+        //   printf(
+        //       "[IBGDA PARAMS] rank=%d "
+        //       "num_bytes_per_msg=%lu dst_rank=%d dst_expert_local_idx=%d "
+        //       "lane_id=%d slot_idx=%d d2h_channel_addrs=%p num_d2h_channel_addrs=%d "
+        //       "low_latency_buffer_idx=%d, num_tokens_to_send=%d\n",
+        //       rank,
+        //       (unsigned long)total_bytes, dst_rank,
+        //       dst_expert_local_idx, lane_id, 0,
+        //       d2h_channel_addrs, num_d2h_channel_addrs,
+        //       low_latency_buffer_idx, num_tokens_to_send
+        //   );                  
+        // }
+        uccl::nvshmemi_ibgda_put_nbi_warp(
+            dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+            src_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+            total_bytes, dst_rank,
+            /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting rb.
+            lane_id, /*slot=*/0, d2h_channel_addrs, num_d2h_channel_addrs,
+            false, low_latency_buffer_idx, 0, 0, num_tokens_to_send);
+        
+        // Debug: print after send
+        // if (lane_id == 0) {
+        //   printf("[LAM_DEV] rank=%d dst_rank=%d local_expert=%d [IBGDA BATCH SEND DONE]\n",
+        //          rank, dst_rank, dst_expert_local_idx);
+        // }
+      }
+    }
+    // IPC: already sent in the token loop, nothing to do here
+  }
+
+  __threadfence_system();  // Ensure batch sends are visible before count sends
+
+#endif  // LAM_DEV batch send
+
   // Issue count sends
   if (responsible_expert_idx < num_experts and sub_warp_id == 0 and
       lane_id == 0) {
@@ -310,6 +541,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         rdma_recv_count + dst_expert_local_idx * num_ranks + rank);
     auto dst_ptr_internode = reinterpret_cast<uint64_t>(
         rdma_recv_count_internode + dst_expert_local_idx * num_ranks + rank);
+    // printf("dst_ptr_internode: %llu (rank=%d dst_rank=%d dst_expert_local_idx=%d)\n",
+    //        static_cast<unsigned long long>(dst_ptr_internode), rank, dst_rank,
+    //        dst_expert_local_idx);
     // Try to use IPC for intra-node atomic operations
     auto const dst_p2p_ptr =
         ipc_rdma_base_ptrs
@@ -317,6 +551,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                     max_nvl_peers, 0)
             : 0;
     if (dst_p2p_ptr == 0) {
+      // printf(
+      //     "nvshmemi_ibgda_amo_nonfetch_add: dst_ptr_internode=%llu "
+      //     "before=N/A(remote) after=N/A(non-fetch) add_val=%d dst_rank=%d "
+      //     "warp_id=%d num_d2h_channel_addrs=%d low_latency_buffer_idx=%d\n",
+      //     static_cast<unsigned long long>(dst_ptr_internode),
+      //     -num_tokens_sent - 1, dst_rank, dst_expert_local_idx,
+      //     num_d2h_channel_addrs, low_latency_buffer_idx);
       // Inter-node or no IPC: use IBGDA atomic
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
           dst_ptr_internode, reinterpret_cast<uint64_t>(atomic_buffer_ptr),
@@ -329,10 +570,29 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr),
                             -num_tokens_sent - 1);
     }
+
+#ifdef LAM_DEV
+    // Lam: Debug print: verify send counter matches expected count
+    // {
+    //   auto const send_counter_val =
+    //       atomic_send_counter_per_expert[responsible_expert_idx];
+    //   if (rank == 0 && responsible_expert_idx < 8) {
+    //     printf(
+    //         "[LAM_DEV] rank=%d expert=%d: expected_count=%d, send_counter=%d, "
+    //         "match=%s\n",
+    //         rank, responsible_expert_idx, num_tokens_sent, send_counter_val,
+    //         (num_tokens_sent == send_counter_val) ? "YES" : "NO");
+    //   }
+    // }
+#endif
+
     // Clean workspace for next use
     atomic_counter_per_expert[responsible_expert_idx] = 0;
     atomic_finish_counter_per_expert[responsible_expert_idx] = 0;
 
+#ifdef LAM_DEV
+    atomic_send_counter_per_expert[responsible_expert_idx] = 0;
+#endif
     // Clean `packed_recv_count`
     if (dst_rank == 0) packed_recv_count[dst_expert_local_idx] = 0;
   }
@@ -462,6 +722,14 @@ LOW_LATENCY_DISPATCH_RECV:
         atomicAdd(reinterpret_cast<unsigned long long*>(
                       dispatch_wait_recv_cost_stats + src_rank),
                   wait_recv_cost);
+      // Debug: print recv summary (sub_warp 1, lane 0 only - where internode/ipc are known)
+      // if (num_recv_tokens > 0) {
+      //   printf("[RECV SUMMARY] rank=%d local_expert=%d src_rank=%d "
+      //          "num_tokens=%d (internode=%d ipc=%d) begin_idx=%d\n",
+      //          rank, local_expert_idx, src_rank,
+      //          num_recv_tokens, num_recv_tokens_internode, num_recv_tokens_ipc,
+      //          recv_token_begin_idx);
+      // }
     }
     sync_barrier<true>(warp_group_id + 2, num_warps_per_group * WARP_SIZE);
 
@@ -488,6 +756,17 @@ LOW_LATENCY_DISPATCH_RECV:
           reinterpret_cast<uint8_t*>(src_src_idx) + sizeof(int4));
       auto const dst_data =
           recv_x_int4 + (recv_token_begin_idx + i) * hidden_int4;
+      // Debug: print per-token recv info
+      // Note: src_local_token_idx is the token index on the SENDER's side (not global)
+      // if (lane_id == 0) {
+      //   auto const src_local_token_idx = ld_nc_global(src_src_idx);
+      //   auto const* data = reinterpret_cast<int const*>(src_data);
+      //   printf("[RECV] rank=%d local_expert=%d src_rank=%d slot=%d "
+      //          "from=%p to=%p src_local_token_idx=%d data[0..3]=%08x %08x %08x %08x\n",
+      //          rank, local_expert_idx, src_rank, i,
+      //          (void*)src_data, (void*)dst_data, src_local_token_idx,
+      //          data[0], data[1], data[2], data[3]);
+      // }
       UNROLLED_WARP_COPY(7, lane_id, hidden_int4, dst_data, src_data,
                          ld_nc_global, st_na_global);
 
@@ -556,8 +835,15 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   auto atomic_counter_per_expert = static_cast<int*>(workspace);
   auto atomic_finish_counter_per_expert =
       atomic_counter_per_expert + num_experts;
+#ifdef LAM_DEV
+  auto atomic_send_counter_per_expert =
+      atomic_finish_counter_per_expert + num_experts;
+  auto grid_sync_barrier_ptr = atomic_send_counter_per_expert + num_experts;
+  EP_HOST_ASSERT((num_experts * 3 + 1) * sizeof(int) <= NUM_WORKSPACE_BYTES);
+#else
   auto grid_sync_barrier_ptr = atomic_finish_counter_per_expert + num_experts;
   EP_HOST_ASSERT((num_experts * 2 + 1) * sizeof(int) <= NUM_WORKSPACE_BYTES);
+#endif
 
   // FP8 checks
   if (use_ue8m0)
@@ -575,6 +861,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
         cumulative_local_expert_recv_stats, dispatch_wait_recv_cost_stats,    \
         rdma_recv_x, rdma_recv_count, rdma_x, x, topk_idx,                    \
         atomic_counter_per_expert, atomic_finish_counter_per_expert,          \
+        LAM_DEV_ARG(atomic_send_counter_per_expert)                         \
         next_clean, next_clean_second, num_next_clean_int, num_tokens,        \
         num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,        \
         num_ranks, num_warp_groups, num_warps_per_group, round_scale, phases, \
