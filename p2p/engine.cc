@@ -182,10 +182,6 @@ Endpoint::~Endpoint() {
     free(recv_unified_task_ring_);
   }
 
-  // Destroy the endpoint AFTER joining all threads that use it
-  // This must happen before we delete Endpoint::Conn objects
-  ep_.reset();
-
   {
     std::shared_lock<std::shared_mutex> lock(conn_mu_);
     for (auto& [conn_id, conn] : conn_id_to_conn_) {
