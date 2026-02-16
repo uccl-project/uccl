@@ -160,7 +160,6 @@ Endpoint::~Endpoint() {
 
   stop_.store(true, std::memory_order_release);
 
-  // Stop and join passive accept thread FIRST, before destroying ep_
   if (passive_accept_) {
     passive_accept_stop_.store(true, std::memory_order_release);
     if (passive_accept_thread_.joinable()) {
