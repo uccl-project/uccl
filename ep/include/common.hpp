@@ -31,6 +31,18 @@ extern bool use_ll_sl;
 
 #define USE_MSCCLPP_FIFO_BACKEND
 // #define USE_SUBSET_BARRIER
+
+// Intel RDMA NIC support
+#ifdef INTEL_RDMA_NIC
+// Use DMA-BUF for GPU memory registration (avoids nvidia_peermem dependency).
+// Falls back to ibv_reg_mr_iova2 at runtime if DMA-BUF is unsupported.
+#define USE_DMABUF
+// Use pinned host memory for the atomic buffer instead of cudaMalloc.
+// Required for NICs without nvidia_peermem (e.g. Intel irdma) so that
+// ibv_reg_mr succeeds, and allows CPU proxy threads to do std::atomic ops.
+#define ATOMICS_USE_HOST_MEMORY
+#endif
+
 #define kAtomicBufferSize 81960
 #define kQueueSize 2048
 #define kQueueMask (kQueueSize - 1)
