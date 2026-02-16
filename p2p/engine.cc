@@ -1,5 +1,6 @@
 #include "engine.h"
 #include "endpoint_wrapper.h"
+#include "util/pause.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
@@ -41,7 +42,7 @@ static inline void shm_ring_send(jring_t* ring, Endpoint::ShmMsg const& msg) {
   alignas(16) Endpoint::ShmMsg tmp = msg;
 
   while (jring_mp_enqueue_bulk(ring, (void*)&tmp, 1, nullptr) != 1) {
-    _mm_pause();
+    machnet_pause();
   }
 }
 
@@ -49,7 +50,7 @@ static inline void shm_ring_recv(jring_t* ring, Endpoint::ShmMsg& msg) {
   alignas(16) Endpoint::ShmMsg tmp;
 
   while (jring_sc_dequeue_bulk(ring, (void*)&tmp, 1, nullptr) != 1) {
-    _mm_pause();
+    machnet_pause();
   }
   msg = tmp;
 }
@@ -73,12 +74,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
           gpuStreamCreateWithFlags(&ipc_streams_[i][j], gpuStreamNonBlocking));
     }
   }
-
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-  streams_.resize(n_streams);
-  for (int i = 0; i < n_streams; ++i) {
-    GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i], gpuStreamNonBlocking));
-  }
 
   std::call_once(glog_init_once,
                  []() { google::InitGoogleLogging("uccl_p2p"); });
@@ -211,12 +207,6 @@ Endpoint::~Endpoint() {
     }
   }
 
-  if (!streams_.empty()) {
-    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-    for (auto s : streams_)
-      if (s) GPU_RT_CHECK(gpuStreamDestroy(s));
-  }
-
   std::cout << "Engine destroyed" << std::endl;
 }
 
@@ -233,10 +223,6 @@ bool Endpoint::start_passive_accept() {
 void Endpoint::initialize_engine() {
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-  streams_.resize(n_streams);
-  for (int i = 0; i < n_streams; ++i) {
-    GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i], gpuStreamNonBlocking));
-  }
 
 #ifdef UCCL_P2P_USE_NCCL
   numa_node_ = tcp::get_tcp_numa_node_from_iface();

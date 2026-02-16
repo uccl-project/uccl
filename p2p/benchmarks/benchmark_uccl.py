@@ -31,7 +31,7 @@ def _make_buffer(size_bytes: int, device: str, gpu_idx: int):
         assert buf.is_contiguous()
         ptr = buf.data_ptr()
     else:  # cpu
-        dtype = np.float32 if size_bytes >= 4 else np.uint8
+        dtype = np.dtype(np.float32) if size_bytes >= 4 else np.dtype(np.uint8)
         n_elems = size_bytes // dtype.itemsize
         buf = np.ones(n_elems, dtype=dtype)
         ptr = buf.ctypes.data
