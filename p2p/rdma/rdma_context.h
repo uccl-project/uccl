@@ -153,7 +153,8 @@ class RdmaContext {
   struct ibv_mr* regMem(void* addr, size_t size) const {
     int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                        IBV_ACCESS_REMOTE_READ;
-    return ibv_reg_mr(pd_.get(), addr, size, access_flags);
+    uint64_t iova = reinterpret_cast<uintptr_t>(addr);
+    return ibv_reg_mr_iova2(pd_.get(), addr, size, iova, access_flags);
   }
 
   static void deregMem(struct ibv_mr* mr) {
