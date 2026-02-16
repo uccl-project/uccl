@@ -406,24 +406,18 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
 
   return send(conn->sock_fd, &md, sizeof(md_t), 0);
 #elif defined(UCCL_P2P_USE_NCCL)
-  // Use NCCL endpoint's send_notification API with NotifyMsg from common.h
   NotifyMsg oob_msg;
   oob_msg.magic = NOTIFY_MSG_MAGIC;
-  oob_msg.msg_type = 0;  // Can be used for future message types
   strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
   oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
   memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
 
-  // For NCCL, endpoint is RDMAEndPoint which is
-  // std::shared_ptr<tcp::TCPEndpoint> Access the underlying TCPEndpoint using
-  // the getter
   auto tcp_endpoint = conn->engine->endpoint->get_endpoint();
   if (!tcp_endpoint) {
     LOG(ERROR) << "Failed to get TCP endpoint for notification";
     return -1;
   }
 
-  // Get flow_id from conn_id
   uint64_t flow_id = conn->conn_id;
   return tcp_endpoint->send_notification(flow_id, oob_msg);
 #else

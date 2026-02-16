@@ -245,14 +245,12 @@ bool TCPEndpoint::recv_all_(int fd, void* buf, size_t len) const {
   while (recvd < len) {
     ssize_t rc = ::recv(fd, p + recvd, len - recvd, 0);
     if (rc < 0) {
-      // Check if it's a real error or just interrupted/timeout
       if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
         continue;
       }
       return false;
     }
     if (rc == 0) {
-      // Connection closed by peer or shutdown
       return false;
     }
     recvd += static_cast<size_t>(rc);
@@ -305,7 +303,6 @@ void TCPEndpoint::control_loop_(Conn* conn) {
                   << std::endl;
         break;
       }
-      // Store notification in global notify_list from common.h
       {
         std::lock_guard<std::mutex> lock(::notify_mutex);
         ::notify_list.push_back(notification);
@@ -848,7 +845,6 @@ int TCPEndpoint::send_notification(uint64_t flow_id,
     if (!send_all_(conn->sock_fd, &msg, sizeof(msg))) {
       return -1;
     }
-    // Send notification payload (NotifyMsg from common.h)
     if (!send_all_(conn->sock_fd, &notification, sizeof(::NotifyMsg))) {
       return -1;
     }
