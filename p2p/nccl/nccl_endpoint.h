@@ -133,7 +133,8 @@ class TCPEndpoint {
   int get_sock_fd(uint64_t flow_id);
 
   // Send a notification message to a peer (uses NotifyMsg from common.h)
-  int send_notification(uint64_t flow_id, struct ::NotifyMsg const& notification);
+  int send_notification(uint64_t flow_id,
+                        struct ::NotifyMsg const& notification);
 
   bool initialize_engine_by_dev(int dev, bool enable_p2p_listen) {
     if (dev >= 0) {
@@ -144,9 +145,8 @@ class TCPEndpoint {
   }
 
   void create_unified_p2p_socket() {}
-  
-  void stop_accept() { stop_accept_.store(true, std::memory_order_release); }
 
+  void stop_accept() { stop_accept_.store(true, std::memory_order_release); }
 
  private:
   struct Conn;

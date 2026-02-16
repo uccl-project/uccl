@@ -51,7 +51,7 @@ enum CtrlMsgType : uint8_t { kWriteReq = 1, kReadReq = 2, kNotification = 3 };
 struct CtrlMsg {
   // type: kWriteReq => peer should recv into addr; kReadReq => peer should send
   // from addr. addr is the peer-local pointer from the FIFO descriptor.
-  // type: kNotification => notification message follows (NotifyMsg from common.h)
+  // type: kNotification => notification message follows
   uint8_t type;
   uint8_t reserved[3];
   uint32_t size;
@@ -148,7 +148,6 @@ struct TCPEndpoint::Conn {
   std::mutex ctrl_send_mu;
   // Dedicated control-plane thread for this connection.
   std::thread ctrl_thread;
-  // Notifications are stored in global notify_list from common.h
 };
 
 struct TCPEndpoint::AsyncHandle {
@@ -289,7 +288,8 @@ bool TCPEndpoint::init_comms_(Conn& conn, ncclUniqueId const& uid_rank0,
 
 void TCPEndpoint::control_loop_(Conn* conn) {
   if (!conn) return;
-  // Control thread: handle one-sided read/write requests and notifications from the peer.
+  // Control thread: handle one-sided read/write requests and notifications from
+  // the peer.
   while (!conn->stop.load(std::memory_order_acquire)) {
     CtrlMsg msg{};
     if (!recv_all_(conn->sock_fd, &msg, sizeof(msg))) {
@@ -299,10 +299,10 @@ void TCPEndpoint::control_loop_(Conn* conn) {
 
     // Handle notification messages
     if (msg.type == kNotification) {
-      printf("Received Notif\n");
       ::NotifyMsg notification{};
       if (!recv_all_(conn->sock_fd, &notification, sizeof(::NotifyMsg))) {
-        std::cerr << "[tcp] failed to receive notification payload" << std::endl;
+        std::cerr << "[tcp] failed to receive notification payload"
+                  << std::endl;
         break;
       }
       // Store notification in global notify_list from common.h
@@ -313,7 +313,6 @@ void TCPEndpoint::control_loop_(Conn* conn) {
       continue;
     }
 
-    // Handle control messages (read/write requests)
     size_t size = static_cast<size_t>(msg.size);
     if (size == 0) continue;
 
@@ -552,32 +551,26 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   int fd = listen_fd >= 0 ? listen_fd : listen_fd_;
   if (fd < 0) return make_invalid_conn();
 
-  // Set listen socket to non-blocking mode to allow checking stop_accept_ flag
   int flags = fcntl(fd, F_GETFL, 0);
   fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 
   sockaddr_in cli_addr{};
   socklen_t len = sizeof(cli_addr);
   int conn_fd = -1;
-  
-  // Loop until we get a connection or stop_accept_ is set
+
   while (conn_fd < 0 && !stop_accept_.load(std::memory_order_acquire)) {
     conn_fd = ::accept(fd, reinterpret_cast<sockaddr*>(&cli_addr), &len);
     if (conn_fd < 0) {
       if (errno == EAGAIN || errno == EWOULDBLOCK) {
-        // No connection available, sleep and retry
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         continue;
       }
-      // Real error
       return make_invalid_conn();
     }
   }
-  
-  // Restore blocking mode on listen socket
+
   fcntl(fd, F_SETFL, flags);
-  
-  // Check if we stopped due to stop_accept_ flag
+
   if (stop_accept_.load(std::memory_order_acquire)) {
     if (conn_fd >= 0) ::close(conn_fd);
     return make_invalid_conn();
@@ -835,20 +828,21 @@ int TCPEndpoint::get_sock_fd(uint64_t flow_id) {
   return it->second->sock_fd;
 }
 
-int TCPEndpoint::send_notification(uint64_t flow_id, ::NotifyMsg const& notification) {
+int TCPEndpoint::send_notification(uint64_t flow_id,
+                                   ::NotifyMsg const& notification) {
   std::lock_guard<std::mutex> lock(conn_mu_);
   auto it = conn_map_.find(flow_id);
   if (it == conn_map_.end()) {
     return -1;
   }
   Conn* conn = it->second.get();
-  
+
   // Send notification header
   CtrlMsg msg{};
   msg.type = kNotification;
   msg.size = sizeof(::NotifyMsg);
   msg.addr = 0;
-  
+
   {
     std::lock_guard<std::mutex> send_lock(conn->ctrl_send_mu);
     if (!send_all_(conn->sock_fd, &msg, sizeof(msg))) {

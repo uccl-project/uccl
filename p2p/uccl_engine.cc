@@ -2,8 +2,8 @@
 #ifdef UCCL_P2P_USE_TCPX
 #include "nccl_tcpx_endpoint.h"
 #elif defined(UCCL_P2P_USE_NCCL)
-#include "nccl/nccl_endpoint.h"
 #include "engine.h"
+#include "nccl/nccl_endpoint.h"
 #else
 #include "endpoint_wrapper.h"
 #include "engine.h"
@@ -296,7 +296,8 @@ int uccl_engine_start_listener(uccl_conn_t* conn) {
   // TCPX uses a separate listener thread
   conn->listener_thread = new std::thread(listener_thread_func, conn);
 #elif defined(UCCL_P2P_USE_NCCL)
-  // NCCL handles notifications in the control thread, no separate listener needed
+  // NCCL handles notifications in the control thread, no separate listener
+  // needed
   conn->listener_thread = nullptr;
 #endif
 
@@ -412,15 +413,16 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
   oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
   memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
-  
-  // For NCCL, endpoint is RDMAEndPoint which is std::shared_ptr<tcp::TCPEndpoint>
-  // Access the underlying TCPEndpoint using the getter
+
+  // For NCCL, endpoint is RDMAEndPoint which is
+  // std::shared_ptr<tcp::TCPEndpoint> Access the underlying TCPEndpoint using
+  // the getter
   auto tcp_endpoint = conn->engine->endpoint->get_endpoint();
   if (!tcp_endpoint) {
     LOG(ERROR) << "Failed to get TCP endpoint for notification";
     return -1;
   }
-  
+
   // Get flow_id from conn_id
   uint64_t flow_id = conn->conn_id;
   return tcp_endpoint->send_notification(flow_id, oob_msg);
