@@ -1,5 +1,6 @@
 #include "engine.h"
 #include "endpoint_wrapper.h"
+#include "util/pause.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
@@ -41,7 +42,7 @@ static inline void shm_ring_send(jring_t* ring, Endpoint::ShmMsg const& msg) {
   alignas(16) Endpoint::ShmMsg tmp = msg;
 
   while (jring_mp_enqueue_bulk(ring, (void*)&tmp, 1, nullptr) != 1) {
-    _mm_pause();
+    machnet_pause();
   }
 }
 
@@ -49,7 +50,7 @@ static inline void shm_ring_recv(jring_t* ring, Endpoint::ShmMsg& msg) {
   alignas(16) Endpoint::ShmMsg tmp;
 
   while (jring_sc_dequeue_bulk(ring, (void*)&tmp, 1, nullptr) != 1) {
-    _mm_pause();
+    machnet_pause();
   }
   msg = tmp;
 }

@@ -21,6 +21,7 @@ LIBS2 =
 
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(CUDA_INC) \
+	-MMD -MP \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu
 
@@ -132,6 +133,10 @@ nccl/%.o: nccl/%.cc
 	@mkdir -p nccl
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -I. -c $< -o $@
 
+# Auto-generated header dependencies
+DEPS := $(OBJECTS:.o=.d) $(CAPI_OBJECT:.o=.d)
+-include $(DEPS)
+
 ifeq ($(USE_TCPX),1)
 install: $(P2P_SHARED_LIB)
 	install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/
@@ -142,13 +147,12 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	@mkdir -p $(INSTALL_DIR)
 	@cp $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
-	install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/
-	install -m 644 $(CAPI_HEADER) $(INCDIR)/
 endif
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB)
-	rm -f nccl/*.o
+	rm -f $(DEPS)
+	rm -f nccl/*.o nccl/*.d
 ifneq ($(USE_TCPX),1)
 	rm -f $(P2P_PYTHON_EXT)
 endif

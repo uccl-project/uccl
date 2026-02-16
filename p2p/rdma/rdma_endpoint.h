@@ -348,7 +348,8 @@ class NICEndpoint {
       struct ibv_mr* mr = context->regMem(data, len);
 
       if (unlikely(!mr)) {
-        LOG(ERROR) << "Error: ibv_reg_mr failed for data at " << data
+        LOG(ERROR) << "Error " << errno << " " << strerror(errno)
+                   << ": ibv_reg_mr_iova2 failed for data at " << data
                    << " size " << len << " context_id " << context_id;
         return -1;
       }
