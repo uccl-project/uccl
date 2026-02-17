@@ -87,8 +87,8 @@ struct Mhandle {
 };
 
 struct P2PMhandle {
-  dietgpu::FloatType float_type;
   MRArray mr_array;
+  std::shared_ptr<dietgpu::FloatCompressSplitContext> compress_ctx;
 };
 
 struct MR {

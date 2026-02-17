@@ -1,0 +1,90 @@
+# Makefile.lib
+# Build shared library for dietgpu float codec (AMD HIP)
+#
+# Produces:
+#   libdietgpu_float.so  - float codec with bundled ans + utils dependencies
+#
+# Usage:
+#   make -f Makefile.lib            # build with default GPU arch (gfx942)
+#   make -f Makefile.lib GPU_ARCH=gfx950
+
+#   make -f Makefile.lib clean
+
+HIPCC ?= hipcc
+
+# Paths
+DIETGPU_ROOT = ../..
+ANS_DIR      = $(DIETGPU_ROOT)/dietgpu/ans
+UTILS_DIR    = $(DIETGPU_ROOT)/dietgpu/utils
+FLOAT_DIR    = .
+
+# Output
+LIB_TARGET = libdietgpu_float.so
+
+# Include paths
+INCLUDES = -I$(DIETGPU_ROOT)
+
+# Compiler flags
+HIPCC_FLAGS = -O3 -std=c++17 -fPIC
+HIPCC_FLAGS += -D__HIP_PLATFORM_AMD__
+HIPCC_FLAGS += $(INCLUDES)
+
+# AMD GPU architecture
+GPU_ARCH ?= gfx950
+HIPCC_FLAGS += --offload-arch=$(GPU_ARCH)
+
+# Linker flags
+LDFLAGS = -shared -lglog
+
+# Object directory
+OBJ_DIR = obj
+
+# Sources
+UTILS_SRCS = \
+	$(UTILS_DIR)/DeviceUtils_hip.cpp \
+	$(UTILS_DIR)/StackDeviceMemory_hip.cpp
+
+ANS_SRCS = \
+	$(ANS_DIR)/GpuANSDecode.hip \
+	$(ANS_DIR)/GpuANSEncode.hip \
+	$(ANS_DIR)/GpuANSInfo.hip
+
+FLOAT_SRCS = \
+	$(FLOAT_DIR)/GpuFloatCompress.hip \
+	$(FLOAT_DIR)/GpuFloatDecompress.hip \
+	$(FLOAT_DIR)/GpuFloatInfo.hip
+
+ALL_SRCS = $(UTILS_SRCS) $(ANS_SRCS) $(FLOAT_SRCS)
+
+# Generate object file paths under OBJ_DIR, preserving uniqueness via basename
+UTILS_OBJS = $(patsubst $(UTILS_DIR)/%.cpp,$(OBJ_DIR)/utils_%.o,$(UTILS_SRCS))
+ANS_OBJS   = $(patsubst $(ANS_DIR)/%.hip,$(OBJ_DIR)/ans_%.o,$(ANS_SRCS))
+FLOAT_OBJS = $(patsubst $(FLOAT_DIR)/%.hip,$(OBJ_DIR)/float_%.o,$(FLOAT_SRCS))
+
+ALL_OBJS = $(UTILS_OBJS) $(ANS_OBJS) $(FLOAT_OBJS)
+
+.PHONY: all clean
+
+all: $(LIB_TARGET)
+
+$(OBJ_DIR):
+	mkdir -p $(OBJ_DIR)
+
+# Utils object rules (C++ sources)
+$(OBJ_DIR)/utils_%.o: $(UTILS_DIR)/%.cpp | $(OBJ_DIR)
+	$(HIPCC) $(HIPCC_FLAGS) -c -o $@ $<
+
+# ANS object rules (HIP sources)
+$(OBJ_DIR)/ans_%.o: $(ANS_DIR)/%.hip | $(OBJ_DIR)
+	$(HIPCC) $(HIPCC_FLAGS) -c -o $@ $<
+
+# Float object rules (HIP sources)
+$(OBJ_DIR)/float_%.o: $(FLOAT_DIR)/%.hip | $(OBJ_DIR)
+	$(HIPCC) $(HIPCC_FLAGS) -c -o $@ $<
+
+# Link shared library
+$(LIB_TARGET): $(ALL_OBJS)
+	$(HIPCC) $(LDFLAGS) -o $@ $^ --offload-arch=$(GPU_ARCH)
+
+clean:
+	rm -rf $(OBJ_DIR) $(LIB_TARGET)

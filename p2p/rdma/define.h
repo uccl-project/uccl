@@ -36,13 +36,14 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__)  || defined(__HIPCC__)
 
   #include <hip/hip_runtime.h>
   #include <hip/hip_fp16.h>
   #include "dietgpu/float/GpuFloatCodec_hip.h"
   #include "dietgpu/utils/StackDeviceMemory_hip.h"
   #include "dietgpu/utils/DeviceUtils_hip.h"
+
   // #include "dietgpu/float/GpuFloatUtils_hip.cuh"
   #define GPU_CHECK(cmd)                                                       \
     do {                                                                        \
@@ -57,13 +58,25 @@
   using GpuStream_t = hipStream_t;
   using GpuError_t  = hipError_t;
 
+  #define GPU_MEMCPY_ASYNC    hipMemcpyAsync
+  #define GPU_STREAM_SYNC     hipStreamSynchronize
+  #define GPU_MEMCPY_D2H      hipMemcpyDeviceToHost
+  #define GPU_STREAM_CREATE   hipStreamCreate
+  #define GPU_STREAM_DESTROY  hipStreamDestroy
+  #define GPU_MALLOC           hipMalloc
+  #define GPU_FREE             hipFree
+  #define GPU_MEMCPY_H2D       hipMemcpyHostToDevice
+  #define GPU_MEMCPY           hipMemcpy
+  #define GPU_MEMSET           hipMemset
+  #define GPU_SET_DEVICE       hipSetDevice
+  #define GPU_MEMCPY_D2D       hipMemcpyDeviceToDevice
 #else
   #include <cuda_runtime.h>
   #include <cuda_fp16.h>
 
   #include "dietgpu/float/GpuFloatCodec.h"
-  #include "dietgpu/utils/StackDeviceMemory.h"
   #include "dietgpu/utils/DeviceUtils.h"
+  #include "dietgpu/utils/StackDeviceMemory.h"
   // #include "dietgpu/float/GpuFloatUtils.cuh"
 
   #define GPU_CHECK(cmd)                                                       \
@@ -78,7 +91,18 @@
 
   using GpuStream_t = cudaStream_t;
   using GpuError_t  = cudaError_t;
-
+  #define GPU_MEMCPY_ASYNC    cudaMemcpyAsync
+  #define GPU_STREAM_SYNC     cudaStreamSynchronize
+  #define GPU_MEMCPY_D2H      cudaMemcpyDeviceToHost
+  #define GPU_STREAM_CREATE   cudaStreamCreate
+  #define GPU_STREAM_DESTROY  cudaStreamDestroy
+  #define GPU_MALLOC           cudaMalloc
+  #define GPU_FREE             cudaFree
+  #define GPU_MEMCPY_H2D       cudaMemcpyHostToDevice
+  #define GPU_MEMCPY           cudaMemcpy
+  #define GPU_MEMSET           cudaMemset
+  #define GPU_SET_DEVICE       cudaSetDevice
+  #define GPU_MEMCPY_D2D       cudaMemcpyDeviceToDevice
 #endif
 
 inline size_t getWordSizeFromFloatType(dietgpu::FloatType ft) {
@@ -92,6 +116,52 @@ inline size_t getWordSizeFromFloatType(dietgpu::FloatType ft) {
       CHECK(false);
       return 0;
   }
+}
+template <typename T>
+inline void copyDeviceToHostSync(
+    T* dst_host,
+    const T* src_device,
+    GpuStream_t stream) {
+
+  static_assert(std::is_trivially_copyable<T>::value,
+                "copyDeviceToHostSync requires trivially copyable type");
+
+  GPU_CHECK(GPU_MEMCPY_ASYNC(
+      dst_host,
+      src_device,
+      sizeof(T),
+      GPU_MEMCPY_D2H,
+      stream));
+
+  GPU_CHECK(GPU_STREAM_SYNC(stream));
+}
+
+inline uintptr_t* allocAndCopyParamsSync(
+    const void** in,
+    const uint32_t* inSize,
+    void** out,
+    GpuStream_t stream) {
+
+  static_assert(sizeof(void*) == sizeof(uintptr_t), "");
+  static_assert(sizeof(uint32_t) <= sizeof(uintptr_t), "");
+  uintptr_t host_params[3];
+  host_params[0] = reinterpret_cast<uintptr_t>(*in);
+  host_params[1] = static_cast<uintptr_t>(*inSize);
+  host_params[2] = reinterpret_cast<uintptr_t>(*out);
+
+  // device allocation
+  uintptr_t* dev_params = nullptr;
+  GPU_CHECK(GPU_MALLOC(&dev_params, 3 * sizeof(uintptr_t)));
+
+  // async copy H2D
+  GPU_CHECK(GPU_MEMCPY_ASYNC(
+      dev_params,
+      host_params,
+      3 * sizeof(uintptr_t),
+      GPU_MEMCPY_H2D,
+      stream));
+  GPU_CHECK(GPU_STREAM_SYNC(stream));
+  return dev_params;
 }
 
 inline size_t getElementCountFromBytes(dietgpu::FloatType ft, size_t bytes) {
@@ -120,7 +190,7 @@ static constexpr int kMaxSendWr = 1024;
 static constexpr int kMaxRecvWr = 1024;
 static constexpr int kMaxSendSeg = 2;
 static constexpr int kMaxRecvSeg = 2;
-static constexpr uint64_t kMessageChunkSizeKB = 256;  // 256KB
+static constexpr uint64_t kMessageChunkSizeKB = 512;  // 256KB
 static constexpr uint64_t kMaxSplitNum = 16;
 static constexpr uint32_t kBatchPostRecvWr = 32;
 static constexpr uint32_t kBatchPollCqe = 32;
@@ -134,8 +204,13 @@ static constexpr size_t kInFlightMaxSizeKB =
 
 // constexpr size_t kMinCompressBytes = 1024* 1024* 1024;  // 256KB
 
-constexpr size_t kMinCompressBytes = 256 * 1024;  // 256KB
+constexpr size_t kMinCompressBytes = 2 * 1024 * 1024;  // 1MB
 constexpr size_t kCompressBufferSize = 400 * 1024 * 1024;  // 400MB
+
+static_assert(
+    kMinCompressBytes > 4 * kMessageChunkSizeKB,
+    "kMinCompressBytes must be > 4 * kMessageChunkSizeKB"
+);
 
 static constexpr uint32_t INVALID_RANK_ID =
     std::numeric_limits<uint32_t>::max();
@@ -501,7 +576,7 @@ typedef struct RDMARecvRequest {
   int64_t wr_id;
   std::shared_ptr<RegMemBlock> local_mem;
   std::shared_ptr<RegMemBlock> local_compression_mem;
-  dietgpu::FloatType float_type;
+  std::shared_ptr<dietgpu::FloatCompressSplitContext> compress_ctx;
 
   // Constructor
   RDMARecvRequest(std::shared_ptr<RegMemBlock> local) : local_mem(local) {}
@@ -565,7 +640,7 @@ struct alignas(64) SendReqMeta {
     remote_mem = rev_req->local_mem;
     local_mem = *(rev_req->local_compression_mem ? rev_req->local_compression_mem
                                         : rev_req->local_mem);
-    float_type = rev_req->float_type;
+    float_type = rev_req->compress_ctx->float_type;
     expected_chunk_count = getMessageChunkCount(local_mem.size);
     received_chunk_count = 0;
   }
@@ -666,7 +741,7 @@ struct RDMASendRequest {
   int64_t wr_id;
   bool need_signaled;  // Whether to use IBV_SEND_SIGNALED flag
   SendType send_type = SendType::Send;
-  dietgpu::FloatType float_type;
+  std::shared_ptr<dietgpu::FloatCompressSplitContext> compress_ctx;
   // Constructor
   RDMASendRequest(std::shared_ptr<RegMemBlock> local,
                   std::shared_ptr<RemoteMemInfo> remote, ImmData imm = ImmData(),
@@ -857,3 +932,38 @@ struct hash<RegMemBlock> {
 };
 
 }  // namespace std
+
+enum class CompressStrategy {
+  kNone,          // no compression
+  kSplitOnly,     // only split, no encode
+  kSplitEncode,   // split + encode (default)
+};
+
+inline CompressStrategy getCompressStrategyFromEnv() {
+  const char* env = std::getenv("P2P_COMPRESS_STRATEGY");
+
+  // default strategy
+  if (!env || env[0] == '\0') {
+    return CompressStrategy::kNone;
+  }
+
+  std::string s(env);
+  std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+
+  // ---- accepted values ----
+  if (s == "none" || s == "off" || s == "0") {
+    return CompressStrategy::kNone;
+  }
+
+  if (s == "split" || s == "split_only") {
+    return CompressStrategy::kSplitOnly;
+  }
+
+  if (s == "encode" || s == "split_encode" || s == "full" || s == "1") {
+    return CompressStrategy::kSplitEncode;
+  }
+
+  // ---- fallback ----
+  // unknown value -> default
+  return CompressStrategy::kSplitEncode;
+}

@@ -144,6 +144,19 @@ build_p2p() {
   set -euo pipefail
   echo "[container] build_p2p Target: $TARGET"
 
+  if [[ "$TARGET" == rocm* ]]; then
+    cd thirdparty/dietgpu
+    rm -rf build/
+    python3 setup.py build
+    cd dietgpu/float
+    make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm
+    cd ../..
+    cd ../..
+    cp thirdparty/dietgpu/dietgpu/float/libdietgpu_float.so uccl/lib
+    cp thirdparty/dietgpu/build/**/*.so uccl/
+  fi
+
+
   cd p2p
   if [[ "$TARGET" == cuda* ]]; then
     make clean && make -j$(nproc)
@@ -166,13 +179,7 @@ build_p2p() {
   else
     echo "[container] USE_TCPX=1, skipping copying p2p runtime files"
   fi
-  if [[ "$TARGET" == rocm* ]]; then
-    cd thirdparty/dietgpu
-    rm -rf build/
-    python3 setup.py build
-    cd ../..
-    cp thirdparty/dietgpu/build/**/*.so uccl/
-  fi
+
 }
 
 build_ep() {
@@ -376,6 +383,7 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
   -e BUILD_TYPE="${BUILD_TYPE}" \
   -e USE_TCPX="${USE_TCPX:-0}" \
   -e USE_EFA="${USE_EFA:-0}" \
+  -e USE_DIETGPU="${USE_DIETGPU:-0}" \
   -e USE_IB="${USE_IB:-0}" \
   -e USE_TCP="${USE_TCP:-0}" \
   -e USE_INTEL_RDMA_NIC="${USE_INTEL_RDMA_NIC:-0}" \

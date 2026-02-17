@@ -11,7 +11,7 @@ DIETGPU_ROOT := ../../../thirdparty/dietgpu
 DIETGPU_FLOAT_DIR := $(DIETGPU_ROOT)/dietgpu/float
 
 # Common flags
-COMMON_FLAGS := -I /opt/amazon/efa/include -L /opt/amazon/efa/lib -libverbs -lefa -lpthread \
+COMMON_FLAGS := -I ../ -I /opt/amazon/efa/include -L /opt/amazon/efa/lib -libverbs -lefa -lpthread \
 	-I ../../../include -I ../../../collective/rdma -I ../../include -I $(DIETGPU_ROOT) -std=c++17 -lglog -lgflags
 
 ifeq ($(USE_HIP),1)

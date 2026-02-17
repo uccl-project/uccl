@@ -8,6 +8,7 @@
 #include "rdma_ctrl_channel.h"
 #include "rdma_device.h"
 #include "util/net.h"
+#include "compression.h"
 #include <glog/logging.h>
 
 class NICEndpoint {
@@ -35,8 +36,8 @@ class NICEndpoint {
     allocator_ = std::make_shared<MemoryAllocator>();
     assert(oob_server_->start());
     assert(oob_client_->start());
+    initCompressor();
   }
-
   // Destructor
   ~NICEndpoint() {
     if (oob_client_) {
@@ -47,6 +48,20 @@ class NICEndpoint {
     }
   }
 
+  void initCompressor(){
+    Compressor& compressor = Compressor::getInstance();
+    for(auto ctx_ptr:contexts_) {
+      auto buffer = compressor.getBuffer();
+      if (buffer) {
+        buffer->setMRByContextID(ctx_ptr->getContextID(),ctx_ptr->regMem(buffer->addr, buffer->size));
+      }
+      // Register decompression buffer
+      auto decompressBuffer = compressor.getDecompressBuffer();
+      if (decompressBuffer) {
+        decompressBuffer->setMRByContextID(ctx_ptr->getContextID(),ctx_ptr->regMem(decompressBuffer->addr, decompressBuffer->size));
+      }
+    }
+  }
   int gpuIndex() const { return gpu_index_; }
 
   size_t contextCount() const { return contexts_.size(); }
@@ -330,12 +345,12 @@ class NICEndpoint {
     return conn_id;
   }
 
-  inline int uccl_regmr(void* const data, size_t const len, MRArray& mr_array) {
+  inline int uccl_regmr(void* const data, size_t const len, MRArray& mr_array, std::shared_ptr<dietgpu::FloatCompressSplitContext> compress_ctx = nullptr) {
     if (unlikely(!data)) {
       LOG(ERROR) << "Error: uccl_regmr called with null data";
       return -1;
     }
-
+    Compressor::getInstance().prepareSplitContext(data,len,compress_ctx);
     for (size_t context_id = 0; context_id < contexts_.size(); ++context_id) {
       auto context = contexts_[context_id];
       if (unlikely(!context)) {

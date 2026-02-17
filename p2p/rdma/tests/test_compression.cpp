@@ -13,16 +13,23 @@
  * Build (ROCm/HIP):
  *   g++ -O3 -g test_compression.cpp -o test_compression \
  *       -D__HIP_PLATFORM_AMD__ \
- *       -I../../include -I../../../include -I../../../../thirdparty/dietgpu \
+ *       -I../../include -I../../../include -I/io/uccl/thirdparty/dietgpu/dietgpu/float \
  *       -I/opt/rocm/include -L/opt/rocm/lib \
- *       -L../../../../thirdparty/dietgpu/dietgpu/float -ldietgpu_float \
- *       -Wl,-rpath,../../../../thirdparty/dietgpu/dietgpu/float \
+ *       -L/io/uccl/thirdparty/dietgpu/dietgpu/float -ldietgpu_float \
+ *       -Wl,-rpath,/io/uccl/thirdparty/dietgpu/dietgpu/float \
  *       -lamdhip64 -libverbs -lglog -lgflags -lpthread -std=c++17
  *
  * Run:
  *   ./test_compression [--gpu_index=0] [--buffer_size=1048576] [--float_type=fp32]
  */
 
+    // g++ -O3 -g test_compression.cpp -o test_compression \
+    //     -D__HIP_PLATFORM_AMD__ \
+    //     -I../ -I../../include -I../../../include -I/io/uccl/thirdparty/dietgpu \
+    //     -I/opt/rocm/include -L/opt/rocm/lib \
+    //     -L/io/uccl/thirdparty/dietgpu/dietgpu/float -ldietgpu_float \
+    //    -Wl,-rpath,/io/uccl/thirdparty/dietgpu/dietgpu/float \
+    //     -lamdhip64 -libverbs -lglog -lgflags -lpthread -std=c++17
 #include "../compression.h"
 #include "../memory_allocator.h"
 #include <gflags/gflags.h>
@@ -179,15 +186,9 @@ bool testCompressionRoundtrip(Compressor& compressor,
   fillRandomFloatData(h_input.data(), num_elements, float_type);
 
   // Copy input to GPU
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__)
-  GPU_CHECK(hipMemcpy(input_mem->addr, h_input.data(), buffer_size,
-                      hipMemcpyHostToDevice));
-  GPU_CHECK(hipMemset(output_mem->addr, 0, buffer_size));
-#else
-  GPU_CHECK(cudaMemcpy(input_mem->addr, h_input.data(), buffer_size,
-                       cudaMemcpyHostToDevice));
-  GPU_CHECK(cudaMemset(output_mem->addr, 0, buffer_size));
-#endif
+  GPU_CHECK(GPU_MEMCPY(input_mem->addr, h_input.data(), buffer_size,
+                       GPU_MEMCPY_H2D));
+  GPU_CHECK(GPU_MEMSET(output_mem->addr, 0, buffer_size));
 
   // Create a send request for compression
   auto remote_mem = std::make_shared<RemoteMemInfo>();
@@ -239,13 +240,8 @@ bool testCompressionRoundtrip(Compressor& compressor,
   LOG(INFO) << "Decompression time: " << decompress_time << " us";
 
   // Copy output back to host
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__)
-  GPU_CHECK(hipMemcpy(h_output.data(), output_mem->addr, buffer_size,
-                      hipMemcpyDeviceToHost));
-#else
-  GPU_CHECK(cudaMemcpy(h_output.data(), output_mem->addr, buffer_size,
-                       cudaMemcpyDeviceToHost));
-#endif
+  GPU_CHECK(GPU_MEMCPY(h_output.data(), output_mem->addr, buffer_size,
+                       GPU_MEMCPY_D2H));
 
   // Compare
   bool match = compareBuffers(h_input.data(), h_output.data(), num_elements,
@@ -282,15 +278,9 @@ bool testRequestWorkflow(Compressor& compressor, MemoryAllocator& allocator,
   fillRandomFloatData(h_input.data(), num_elements, float_type);
 
   // Copy input to GPU
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__)
-  GPU_CHECK(hipMemcpy(sender_input_mem->addr, h_input.data(), buffer_size,
-                      hipMemcpyHostToDevice));
-  GPU_CHECK(hipMemset(receiver_output_mem->addr, 0, buffer_size));
-#else
-  GPU_CHECK(cudaMemcpy(sender_input_mem->addr, h_input.data(), buffer_size,
-                       cudaMemcpyHostToDevice));
-  GPU_CHECK(cudaMemset(receiver_output_mem->addr, 0, buffer_size));
-#endif
+  GPU_CHECK(GPU_MEMCPY(sender_input_mem->addr, h_input.data(), buffer_size,
+                       GPU_MEMCPY_H2D));
+  GPU_CHECK(GPU_MEMSET(receiver_output_mem->addr, 0, buffer_size));
 
   // === Sender side ===
   auto remote_mem = std::make_shared<RemoteMemInfo>();
@@ -312,13 +302,8 @@ bool testRequestWorkflow(Compressor& compressor, MemoryAllocator& allocator,
   // (In real RDMA, this would be done by the NIC via RDMA write)
   auto receiver_compressed_mem =
       allocator.allocate(compressed_size, MemoryType::GPU, nullptr);
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__)
-  GPU_CHECK(hipMemcpy(receiver_compressed_mem->addr, send_req->local_mem->addr,
-                      compressed_size, hipMemcpyDeviceToDevice));
-#else
-  GPU_CHECK(cudaMemcpy(receiver_compressed_mem->addr, send_req->local_mem->addr,
-                       compressed_size, cudaMemcpyDeviceToDevice));
-#endif
+  GPU_CHECK(GPU_MEMCPY(receiver_compressed_mem->addr, send_req->local_mem->addr,
+                       compressed_size, GPU_MEMCPY_D2D));
 
   // === Receiver side ===
   // Receiver has compressed data and needs to decompress to output buffer
@@ -340,13 +325,8 @@ bool testRequestWorkflow(Compressor& compressor, MemoryAllocator& allocator,
   LOG(INFO) << "Receiver decompressed data to output buffer";
 
   // Copy output back to host
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__)
-  GPU_CHECK(hipMemcpy(h_output.data(), receiver_output_mem->addr, buffer_size,
-                      hipMemcpyDeviceToHost));
-#else
-  GPU_CHECK(cudaMemcpy(h_output.data(), receiver_output_mem->addr, buffer_size,
-                       cudaMemcpyDeviceToHost));
-#endif
+  GPU_CHECK(GPU_MEMCPY(h_output.data(), receiver_output_mem->addr, buffer_size,
+                       GPU_MEMCPY_D2H));
 
   // Compare
   bool match = compareBuffers(h_input.data(), h_output.data(), num_elements,
@@ -378,13 +358,8 @@ void testBandwidth(Compressor& compressor, MemoryAllocator& allocator,
   std::vector<char> h_input(buffer_size);
   fillRandomFloatData(h_input.data(), num_elements, float_type);
 
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__)
-  GPU_CHECK(hipMemcpy(input_mem->addr, h_input.data(), buffer_size,
-                      hipMemcpyHostToDevice));
-#else
-  GPU_CHECK(cudaMemcpy(input_mem->addr, h_input.data(), buffer_size,
-                       cudaMemcpyHostToDevice));
-#endif
+  GPU_CHECK(GPU_MEMCPY(input_mem->addr, h_input.data(), buffer_size,
+                       GPU_MEMCPY_H2D));
 
   double total_compress_time = 0;
   double total_decompress_time = 0;
@@ -444,42 +419,6 @@ void testBandwidth(Compressor& compressor, MemoryAllocator& allocator,
   LOG(INFO) << "  Decompression bandwidth: " << decompress_bandwidth << " GB/s";
 }
 
-// Test shouldCompress static method
-void testShouldCompress() {
-  LOG(INFO) << "=== Testing shouldCompress() ===";
-
-  struct TestCase {
-    size_t size;
-    bool expected;
-  };
-
-  std::vector<TestCase> test_cases = {
-      {0, false},
-      {1024, false},                          // 1KB - below threshold
-      {kMinCompressBytes - 1, false},         // Just below threshold
-      {kMinCompressBytes, true},              // Exactly at threshold
-      {kMinCompressBytes + 1, true},          // Just above threshold
-      {1024 * 1024, true},                    // 1MB
-      {100 * 1024 * 1024, true},              // 100MB
-  };
-
-  bool all_passed = true;
-  for (const auto& tc : test_cases) {
-    bool result = Compressor::shouldCompress(tc.size);
-    bool passed = (result == tc.expected);
-    if (FLAGS_verbose || !passed) {
-      LOG(INFO) << "  size=" << tc.size << " bytes: expected=" << tc.expected
-                << ", got=" << result << " -> " << (passed ? "PASS" : "FAIL");
-    }
-    if (!passed) all_passed = false;
-  }
-
-  if (all_passed) {
-    LOG(INFO) << "shouldCompress() test PASSED!";
-  } else {
-    LOG(ERROR) << "shouldCompress() test FAILED!";
-  }
-}
 
 int main(int argc, char* argv[]) {
   // Initialize gflags and glog
@@ -492,13 +431,8 @@ int main(int argc, char* argv[]) {
   LOG(INFO) << "========================================";
 
   // Set GPU device
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__)
-  GPU_CHECK(hipSetDevice(FLAGS_gpu_index));
-  LOG(INFO) << "Using HIP device: " << FLAGS_gpu_index;
-#else
-  GPU_CHECK(cudaSetDevice(FLAGS_gpu_index));
-  LOG(INFO) << "Using CUDA device: " << FLAGS_gpu_index;
-#endif
+  GPU_CHECK(GPU_SET_DEVICE(FLAGS_gpu_index));
+  LOG(INFO) << "Using GPU device: " << FLAGS_gpu_index;
 
   // Get float type
   dietgpu::FloatType float_type = getFloatTypeFromString(FLAGS_float_type);
@@ -511,10 +445,6 @@ int main(int argc, char* argv[]) {
   Compressor compressor;
 
   bool all_passed = true;
-
-  // Test shouldCompress
-  testShouldCompress();
-  LOG(INFO) << "";
 
   // Test compression roundtrip
   if (!testCompressionRoundtrip(compressor, allocator, FLAGS_buffer_size,

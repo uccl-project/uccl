@@ -251,7 +251,7 @@ PYBIND11_MODULE(p2p, m) {
             }
             return py::make_tuple(success, mr_id);
           },
-          "Register a data buffer", py::arg("ptr"), py::arg("size"), py::arg("floatType"))
+          "Register a data buffer", py::arg("ptr"), py::arg("size"), py::arg("floatType") = dietgpu::FloatType::kUndefined)
       .def(
           "regv",
           [](Endpoint& self, std::vector<uintptr_t> const& ptrs,

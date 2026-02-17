@@ -94,6 +94,7 @@ def _run_server(args) -> List[BenchmarkResult]:
         collective.register_tensor(tensor)
 
         # Warm-up receive
+        # for _ in range(args.iters):
         collective.recv(tensor, src=peer)
         # print(tensor)
         start = time.perf_counter()
@@ -103,7 +104,7 @@ def _run_server(args) -> List[BenchmarkResult]:
             total += size
 
         elapsed = time.perf_counter() - start
-
+        collective.deregister_tensor(tensor)
         # check if tensor is filled with size
         # if not tensor.allclose(torch.tensor(size, dtype=args.tensor_dtype).cuda()):
         #     print(f"[Server] WARNING: Tensor is not filled with {size}")
@@ -143,6 +144,7 @@ def _run_client(args) -> List[BenchmarkResult]:
         collective.register_tensor(tensor)
 
         # Warm-up send
+        # for _ in range(args.iters):
         collective.send(tensor, dst=peer)
         # print("collective.send", tensor)
         start = time.perf_counter()
@@ -150,9 +152,9 @@ def _run_client(args) -> List[BenchmarkResult]:
         for _ in range(args.iters):
             collective.send(tensor, dst=peer)
             total += size
-
+        
         elapsed = time.perf_counter() - start
-
+        collective.deregister_tensor(tensor)
         gbps = (total * 8) / elapsed / 1e9
         gb_sec = total / elapsed / 1e9
         print(
@@ -184,8 +186,9 @@ def _run_async_server(args) -> List[BenchmarkResult]:
         collective.register_tensor(tensor)
 
         # Warm-up
-        req = collective.irecv(tensor, src=peer)
-        collective.wait(req)
+        for _ in range(args.iters):
+            req = collective.irecv(tensor, src=peer)
+            collective.wait(req)
 
         start = time.perf_counter()
         total = 0
@@ -227,8 +230,9 @@ def _run_async_client(args) -> List[BenchmarkResult]:
         collective.register_tensor(tensor)
 
         # Warm-up
-        req = collective.isend(tensor, dst=peer)
-        collective.wait(req)
+        for _ in range(args.iters):
+            req = collective.isend(tensor, dst=peer)
+            collective.wait(req)
 
         start = time.perf_counter()
         total = 0
@@ -492,22 +496,24 @@ def main():
         "--sizes",
         type=parse_size_list,
         default=[
-            256,
-            1024,
-            4096,
-            16384,
-            65536,
-            262144,
-            1048576,
-            10485760,
-            16777216,
+            256, # 256 B 
+            1024, # 1.0 KB
+            4096, #  4.0 KB
+            16384, # 16.0 KB
+            65536, # 64.0 KB 
+            262144, # 256.0 KB
+            1048576, # 1.0 MB 
+            2097152, # 2.0 MB 
+            4194304, # 4.0 MB
+            10485760, #10.0 MB
+            16777216, # 16.0 MB
             104857600,
             104857600*2,
             104857600*3,
             104857600*4,
         ],
     )
-    p.add_argument("--iters", type=int, default=10)
+    p.add_argument("--iters", type=int, default=100)
     p.add_argument(
         "--dtype",
         type=str,
