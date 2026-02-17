@@ -17,11 +17,71 @@ import argparse
 import random
 import time
 import os
+import sys
 import torch
 import torch.distributed as dist
 import numpy as np
 from functools import partial
 from typing import Optional
+
+
+class TeeWriter:
+    """Write to multiple file handles simultaneously."""
+    def __init__(self, *files):
+        self.files = files
+        self._fileno = files[0].fileno() if files else None
+    
+    def write(self, data):
+        for f in self.files:
+            f.write(data)
+            f.flush()
+    
+    def flush(self):
+        for f in self.files:
+            f.flush()
+    
+    def fileno(self):
+        """Return fileno of the first file (needed for some redirections)."""
+        return self._fileno
+
+
+def setup_rank_logging():
+    """Redirect stdout/stderr to rank{N}.log if UCCL_LOG_DIR is set.
+    
+    This does fd-level redirection so C/CUDA code output is also captured.
+    """
+    log_dir = os.environ.get("UCCL_LOG_DIR")
+    if log_dir is None:
+        return
+    
+    rank = int(os.environ.get("RANK", 0))
+    
+    # Per-rank log file
+    rank_log = os.path.join(log_dir, f"rank{rank}.log")
+    rank_file = open(rank_log, "w", buffering=1)
+    
+    # Redirect fd 1 (stdout) and fd 2 (stderr) to the rank log file
+    # This captures C/CUDA printf output as well
+    os.dup2(rank_file.fileno(), 1)  # stdout
+    os.dup2(rank_file.fileno(), 2)  # stderr
+    
+    # Also update Python's sys.stdout/sys.stderr to use the file
+    sys.stdout = rank_file
+    sys.stderr = rank_file
+
+
+def mark_done():
+    """Create a marker file to indicate this rank is done."""
+    log_dir = os.environ.get("UCCL_LOG_DIR")
+    if log_dir is None:
+        return
+    rank = int(os.environ.get("RANK", 0))
+    marker_file = os.path.join(log_dir, f".done.{rank}")
+    open(marker_file, "w").close()
+
+
+# Setup logging as early as possible
+setup_rank_logging()
 
 from buffer import Buffer
 from utils import (
@@ -88,6 +148,7 @@ def test_main(
     seed: int = 0,
     skip_benchmark: bool = False,
     debug_hash: bool = False,
+    stop_after_first: bool = False,
 ):
     torch.manual_seed(seed + rank)
     random.seed(seed + rank)
@@ -150,11 +211,22 @@ def test_main(
             # Preserve the XOR aggregation behavior at per-label granularity.
             hash_details[label] = hash_details.get(label, 0) ^ hv
 
+    stop_now = False
     for current_x in x_list:
+        if stop_now:
+            break
         for return_recv_hook in (False, True):
+            if stop_now:
+                break
             for dispatch_use_fp8 in (False, True):
+                if stop_now:
+                    break
                 for round_scale in (False,):
+                    if stop_now:
+                        break
                     for round_scale in (False, True) if dispatch_use_fp8 else (False,):
+                        if stop_now:
+                            break
                         for use_ue8m0 in (False, True) if round_scale else (False,):
                             print(
                                 "Start experiment with settings:"
@@ -165,10 +237,15 @@ def test_main(
                                 flush=True,
                             )
                             num_times += 1
-                            for i in range((num_times % 2) + 1):
+                            running_count = (num_times % 2) + 1
+                            # Lam: If stop_after_first, just run once to check the code
+                            if stop_after_first:
+                                running_count = 1
+                            for i in range(running_count):
                                 cumulative_local_expert_recv_stats = torch.zeros(
                                     (num_local_experts,), dtype=torch.int, device="cuda"
                                 )
+                                # print(f"[python] dispatch called", flush=True)
                                 (
                                     packed_recv_x,
                                     packed_recv_count,
@@ -380,6 +457,17 @@ def test_main(
                                         f"|logfmt={use_logfmt}"
                                     )
                                     _record_hash(f"combine_out|{tag}", combined_x)
+                            if stop_after_first:
+                                stop_now = True
+                                break
+                        if stop_now:
+                            break
+                    if stop_now:
+                        break
+                if stop_now:
+                    break
+            if stop_now:
+                break
 
     # noinspection PyShadowingNames
     def large_gemm_with_hook(hook):
@@ -401,6 +489,8 @@ def test_main(
             return_recv_hook=return_recv_hook,
         )
         large_gemm_with_hook(hook) if return_recv_hook else None
+        # Phase alignment: ensure all ranks finish dispatch before any starts combine
+        # dist.barrier(group=group)
         combined_x, event, hook = buffer.low_latency_combine(
             simulated_gemm_x,
             topk_idx,
@@ -410,9 +500,13 @@ def test_main(
             return_recv_hook=return_recv_hook,
         )
         large_gemm_with_hook(hook) if return_recv_hook else None
+        # Phase alignment: ensure all ranks finish dispatch before any starts combine
+        # dist.barrier(group=group)
 
     print("✓ All correctness tests passed!", flush=True)
 
+    # Lam: If stop_after_first, just run once to check the code
+    #  or stop_after_first
     if skip_benchmark:
         return (hash_value, hash_details) if debug_hash else hash_value
 
@@ -497,6 +591,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             seed=seed,
             skip_benchmark=args.pressure_test_mode == 1,
             debug_hash=args.debug_hash,
+            stop_after_first=args.stop_after_first,
         )
         if args.debug_hash:
             ref_hash, ref_hash_details = ref_out
@@ -524,6 +619,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                 seed=seed,
                 skip_benchmark=args.pressure_test_mode == 1,
                 debug_hash=args.debug_hash,
+                stop_after_first=args.stop_after_first,
             )
             if args.debug_hash:
                 current_hash, current_hash_details = cur_out
@@ -568,6 +664,9 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
     buffer.destroy()
     dist.barrier()
     dist.destroy_process_group()
+    
+    # Mark this rank as done
+    mark_done()
 
 
 if __name__ == "__main__":
@@ -611,6 +710,11 @@ if __name__ == "__main__":
         "--debug-hash",
         action="store_true",
         help="Print per-tensor hash breakdown when non-determinism is detected.",
+    )
+    parser.add_argument(
+        "--stop-after-first",
+        action="store_true",
+        help="Stop after the first experiment (return_recv_hook=False, dispatch_use_fp8=False, round_scale=False, use_ue8m0=False).",
     )
     args = parser.parse_args()
 

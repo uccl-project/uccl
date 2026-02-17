@@ -55,8 +55,29 @@ LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -lnuma -Xlinker -rpath
 NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++ --expt-relaxed-constexpr
 INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include 
 
-CXXFLAGS  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
-NVCCFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
+# LAM_DEV: Enable Lam's development/debug code (set LAM_DEV=1 to enable)
+# Auto-detects changes and only rebuilds affected files
+LAM_DEV ?= 0
+LAM_DEV_STATE_FILE := .lam_dev_state
+LAM_DEV_CURRENT := $(shell cat $(LAM_DEV_STATE_FILE) 2>/dev/null || echo 0)
+# Files affected by LAM_DEV: internode_ll.cu, ep_config.hpp (used by rdma.cpp, uccl_ep.cc)
+LAM_DEV_AFFECTED_OBJS := src/internode_ll.o src/rdma.o src/uccl_ep.o
+
+ifneq ($(LAM_DEV),$(LAM_DEV_CURRENT))
+  $(info LAM_DEV changed from $(LAM_DEV_CURRENT) to $(LAM_DEV), will rebuild affected files)
+  $(shell rm -f $(LAM_DEV_AFFECTED_OBJS))
+  $(shell echo $(LAM_DEV) > $(LAM_DEV_STATE_FILE))
+endif
+
+ifeq ($(LAM_DEV),1)
+  LAM_DEV_FLAGS := -DLAM_DEV
+  $(info LAM_DEV enabled)
+else
+  LAM_DEV_FLAGS :=
+endif
+
+CXXFLAGS  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS) $(LAM_DEV_FLAGS)
+NVCCFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS) $(LAM_DEV_FLAGS)
 LDFLAGS   += $(EFA_LDFLAGS)
 INCLUDES  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
 
@@ -106,7 +127,7 @@ install: $(EP_EXT)
 # Clean all generated files
 clean:
 	rm -f $(OBJ_CPP) $(OBJ_CC) $(OBJ_CU) \
-	      $(EP_EXT) \
+	      $(EP_EXT) $(LAM_DEV_STATE_FILE) \
 	      *.d src/*.d bench/*.d src/*.o **/*.hip **/*_hip.*
 
 # Automatically include dependency files if they exist
