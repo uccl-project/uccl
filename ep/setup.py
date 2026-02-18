@@ -183,6 +183,12 @@ if __name__ == "__main__":
             cxx_flags.append("-DUSE_GRACE_HOPPER")
             nvcc_flags.append("-DUSE_GRACE_HOPPER")
 
+        # Add Intel RDMA NIC support if USE_INTEL_RDMA_NIC=1
+        if int(os.getenv("USE_INTEL_RDMA_NIC", 0)):
+            print("Building with Intel RDMA NIC support (INTEL_RDMA_NIC)")
+            cxx_flags.append("-DINTEL_RDMA_NIC")
+            nvcc_flags.append("-DINTEL_RDMA_NIC")
+
         # Use auto-detected compute capability if available
         if detected_compute_cap:
             default_arch = detected_compute_cap

@@ -5,6 +5,10 @@
 #include "proxy_ctx.hpp"
 #include "rdma_util.hpp"
 #include "util/gpu_rt.h"
+#ifdef USE_DMABUF
+#include <cuda.h>
+#include <dlfcn.h>
+#endif
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <algorithm>
@@ -37,6 +41,124 @@
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+#ifdef USE_DMABUF
+// ---------------------------------------------------------------------------
+// DMA-BUF based GPU memory registration (avoids nvidia_peermem dependency)
+// Requires CUDA >= 11.7 (driver API) and kernel DMA-BUF support.
+// Falls back to ibv_reg_mr_iova2 when DMA-BUF is unavailable.
+//
+// PyTorch's caching allocator suballocates from large cudaMalloc blocks,
+// so the user pointer may not be at the start of an allocation.
+// cuMemGetHandleForAddressRange requires the exact allocation base.
+// We use cuMemGetAddressRange to find the real base, get the DMA-BUF fd
+// for the full allocation, then tell ibv_reg_dmabuf_mr the offset.
+// ---------------------------------------------------------------------------
+
+ibv_mr* reg_mr_gpu_dmabuf(ibv_pd* pd, void* gpu_buf, size_t bytes,
+                          uint64_t iova, int access) {
+  // Load CUDA Driver API functions via dlsym at runtime for forward
+  // compatibility and to avoid hard dependency on specific driver versions.
+  // Note: Symbol names must use versioned names (e.g. _v2) matching cuda.h
+  // #defines.
+  typedef CUresult (*cuMemGetAddressRange_t)(CUdeviceptr*, size_t*,
+                                             CUdeviceptr);
+  typedef CUresult (*cuMemGetHandleForAddressRange_t)(
+      int*, CUdeviceptr, size_t, CUmemRangeHandleType, unsigned long long);
+
+  static cuMemGetAddressRange_t cuMemGetAddressRange_func = nullptr;
+  static cuMemGetHandleForAddressRange_t cuMemGetHandleForAddressRange_func =
+      nullptr;
+  static std::once_flag init_flag;
+
+  std::call_once(init_flag, []() {
+    // Try the real driver library first, then fall back to unversioned name.
+    void* handle = dlopen("libcuda.so.1", RTLD_LAZY);
+    if (!handle) handle = dlopen("libcuda.so", RTLD_LAZY);
+    if (handle) {
+      cuMemGetAddressRange_func =
+          (cuMemGetAddressRange_t)dlsym(handle, "cuMemGetAddressRange_v2");
+      cuMemGetHandleForAddressRange_func =
+          (cuMemGetHandleForAddressRange_t)dlsym(
+              handle, "cuMemGetHandleForAddressRange");
+      // Don't dlclose — keep the library mapped so function pointers stay
+      // valid.
+    }
+  });
+
+  if (!cuMemGetAddressRange_func || !cuMemGetHandleForAddressRange_func) {
+    fprintf(
+        stderr,
+        "[RDMA] CUDA Driver API functions not available (requires CUDA 11.7+), "
+        "falling back to ibv_reg_mr_iova2 (needs nvidia_peermem)\n");
+    return ibv_reg_mr_iova2(pd, gpu_buf, bytes, iova, access);
+  }
+
+  // Find the real cudaMalloc allocation that contains this pointer.
+  // PyTorch's caching allocator suballocates, so gpu_buf may be in the
+  // middle of a larger block.
+  CUdeviceptr alloc_base = 0;
+  size_t alloc_size = 0;
+  CUresult cu_err =
+      cuMemGetAddressRange_func(&alloc_base, &alloc_size, (CUdeviceptr)gpu_buf);
+  if (cu_err != CUDA_SUCCESS) {
+    fprintf(stderr,
+            "[RDMA] cuMemGetAddressRange failed (CUresult=%d), "
+            "falling back to ibv_reg_mr_iova2 (needs nvidia_peermem)\n",
+            (int)cu_err);
+    return ibv_reg_mr_iova2(pd, gpu_buf, bytes, iova, access);
+  }
+
+  uint64_t offset_in_alloc = (uintptr_t)gpu_buf - (uintptr_t)alloc_base;
+  fprintf(stderr,
+          "[RDMA] DMA-BUF: alloc_base=%p alloc_size=%zu, "
+          "gpu_buf=%p offset=%lu bytes=%zu\n",
+          (void*)alloc_base, alloc_size, gpu_buf, offset_in_alloc, bytes);
+
+  // Get DMA-BUF fd for the entire allocation (must start at alloc base).
+  int dmabuf_fd = -1;
+  cu_err = cuMemGetHandleForAddressRange_func(
+      &dmabuf_fd, alloc_base, alloc_size, CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
+      0);
+
+  if (cu_err != CUDA_SUCCESS) {
+    fprintf(stderr,
+            "[RDMA] cuMemGetHandleForAddressRange failed (CUresult=%d), "
+            "falling back to ibv_reg_mr_iova2 (needs nvidia_peermem)\n",
+            (int)cu_err);
+    return ibv_reg_mr_iova2(pd, gpu_buf, bytes, iova, access);
+  }
+
+  // Register only the sub-range we care about via offset into the DMA-BUF fd.
+  ibv_mr* mr =
+      ibv_reg_dmabuf_mr(pd, offset_in_alloc, bytes, iova, dmabuf_fd, access);
+  if (!mr) {
+    fprintf(stderr,
+            "[RDMA] ibv_reg_dmabuf_mr failed (errno=%d: %s), "
+            "falling back to ibv_reg_mr_iova2 (needs nvidia_peermem)\n",
+            errno, strerror(errno));
+    close(dmabuf_fd);
+    return ibv_reg_mr_iova2(pd, gpu_buf, bytes, iova, access);
+  }
+
+  close(dmabuf_fd);  // fd can be closed after registration
+
+  // ibv_reg_dmabuf_mr() sets mr->addr to the offset parameter
+  // (offset_in_alloc), not the GPU virtual address. Downstream code uses
+  // mr->addr as the base for SGE addresses, so we must override it with iova
+  // (the GPU virtual address). ibv_reg_mr_iova2() sets mr->addr to the addr
+  // parameter. Since we pass addr=gpu_buf and iova=gpu_buf (same value),
+  // mr->addr is correctly set to the GPU virtual address without manual
+  // intervention.
+  mr->addr = reinterpret_cast<void*>(iova);
+
+  fprintf(stderr,
+          "[RDMA] Registered GPU memory via DMA-BUF "
+          "(addr=%p, len=%zu, rkey=0x%x) — no nvidia_peermem needed\n",
+          mr->addr, bytes, mr->rkey);
+  return mr;
+}
+#endif  // USE_DMABUF
 
 void recv_connection_info_as_server(int my_rank, int* actual_peer,
                                     int listen_fd,
@@ -232,18 +354,21 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   }
   uint64_t iova = (uintptr_t)gpu_buf;
 #ifndef EFA
-  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                              IBV_ACCESS_REMOTE_ATOMIC);
-  // | IBV_ACCESS_RELAXED_ORDERING
+  int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                     IBV_ACCESS_REMOTE_ATOMIC;
 #else
-  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                              IBV_ACCESS_RELAXED_ORDERING);
+  int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                     IBV_ACCESS_RELAXED_ORDERING;
 #endif
 
+#ifdef USE_DMABUF
+  // Try DMA-BUF first (works without nvidia_peermem), falls back automatically.
+  S.mr = reg_mr_gpu_dmabuf(S.pd, gpu_buf, bytes, iova, access_flags);
+#else
+  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova, access_flags);
+#endif
   if (!S.mr) {
-    perror("ibv_reg_mr failed");
+    perror("GPU MR registration failed");
     exit(1);
   }
 
