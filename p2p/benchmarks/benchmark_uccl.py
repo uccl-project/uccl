@@ -366,7 +366,7 @@ def _run_server_ipc(args, ep):
 
     for size in args.sizes:
         # Allocate receive buffer - no memory registration needed for IPC
-        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
+        buf, ptr = _make_buffer(size, args.receiver_device, args.local_gpu_idx)
 
         # Warm-up transfer
         if args.async_api:
@@ -413,7 +413,7 @@ def _run_client_ipc(args, ep, remote_gpu_idx):
 
     for size in args.sizes:
         # Allocate send buffer - no memory registration needed for IPC
-        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
+        buf, ptr = _make_buffer(size, args.sender_device, args.local_gpu_idx)
 
         # Warm-up transfer
         if args.async_api:
@@ -519,7 +519,25 @@ def main():
         action="store_true",
         help="Run IPC benchmark using Unix Domain Sockets and CUDA/HIP memory handles",
     )
+    p.add_argument(
+        "--sender-device",
+        choices=["cpu", "gpu"],
+        default=None,
+        help="Buffer location for sender (IPC mode). Defaults to --device value.",
+    )
+    p.add_argument(
+        "--receiver-device",
+        choices=["cpu", "gpu"],
+        default=None,
+        help="Buffer location for receiver (IPC mode). Defaults to --device value.",
+    )
     args = p.parse_args()
+
+    # Default sender/receiver device to --device if not specified
+    if args.sender_device is None:
+        args.sender_device = args.device
+    if args.receiver_device is None:
+        args.receiver_device = args.device
 
     # Check for incompatible options
     if args.dual and args.ipc:
@@ -545,9 +563,14 @@ def main():
         args.local_gpu_idx = rank
 
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
-    print(
-        f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
-    )
+    if args.ipc:
+        print(
+            f"Sender device: {args.sender_device} | Receiver device: {args.receiver_device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
+        )
+    else:
+        print(
+            f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
+        )
     torch.cuda.set_device(f"cuda:{args.local_gpu_idx}")
 
     ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)

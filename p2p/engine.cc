@@ -1241,62 +1241,96 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
     return false;
   }
 
+  bool sender_is_host = (uccl::get_dev_idx(data) == -1);
+
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
+  // Receive receiver's IPC_HANDLE message
   ShmMsg msg;
   shm_ring_recv(inbox_rings_[conn->remote_gpu_idx_].ring, msg);
   CHECK(msg.type == ShmMsgType::IPC_HANDLE);
   auto info = msg.info;
 
-  // Open remote IPC handle
-  void* base = nullptr;
-  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
-  GPU_RT_CHECK(
-      gpuIpcOpenMemHandle(&base, info.handle, gpuIpcMemLazyEnablePeerAccess));
-  void* dst_ptr =
-      reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) + info.offset);
+  if (!info.is_host) {
+    // GPU receiver: open remote handle and copy into it
+    void* base = nullptr;
+    GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+    GPU_RT_CHECK(
+        gpuIpcOpenMemHandle(&base, info.handle, gpuIpcMemLazyEnablePeerAccess));
+    void* dst_ptr = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(base) + info.offset);
 
-  // Copy payload
-  std::vector<gpuStream_t>& dst_streams = ipc_streams_[conn->remote_gpu_idx_];
-  int num_streams =
-      std::min(dst_streams.size(),
-               size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
-  size_t chunk_size = size / num_streams;
+    auto copy_kind =
+        sender_is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
 
-  for (int i = 0; i < num_streams; ++i) {
-    // Split data and dst_ptr into n_streams chunks
-    void* chunk_data = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(data) + i * chunk_size);
-    void* chunk_dst_ptr = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
-    auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
-    // Works for both intra-GPU and inter-GPU copy
-    GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst_ptr, chunk_data, copy_size,
-                                gpuMemcpyDeviceToDevice, dst_streams[i]));
+    std::vector<gpuStream_t>& dst_streams =
+        ipc_streams_[conn->remote_gpu_idx_];
+    int num_streams = std::min(
+        dst_streams.size(),
+        size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
+    size_t chunk_size = size / num_streams;
+
+    for (int i = 0; i < num_streams; ++i) {
+      void* chunk_data = reinterpret_cast<void*>(
+          reinterpret_cast<uintptr_t>(data) + i * chunk_size);
+      void* chunk_dst_ptr = reinterpret_cast<void*>(
+          reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
+      auto copy_size =
+          i == num_streams - 1 ? size - i * chunk_size : chunk_size;
+      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst_ptr, chunk_data, copy_size,
+                                  copy_kind, dst_streams[i]));
+    }
+
+    for (auto& stream : dst_streams) {
+      GPU_RT_CHECK(gpuStreamSynchronize(stream));
+    }
+
+    // Notify receiver completion
+    ShmMsg ack;
+    ack.src_gpu = local_gpu_idx_;
+    ack.type = ShmMsgType::COMPLETION;
+    ack.completion = 1;
+    shm_ring_send(conn->remote_inbox_.ring, ack);
+  } else {
+    // CPU receiver, GPU sender: role reversal - sender shares its GPU handle,
+    // receiver does the copy
+    CHECK(!sender_is_host)
+        << "send_ipc: both sender and receiver are CPU - not supported";
+
+    // Create IPC handle for our GPU buffer
+    IpcTransferInfo sender_info = {};
+    sender_info.size = size;
+    sender_info.operation = 0;
+    sender_info.is_host = false;
+    GPU_RT_CHECK(gpuIpcGetMemHandle(&sender_info.handle, data));
+
+    void* base = nullptr;
+    size_t base_size;
+    GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, data));
+    sender_info.offset =
+        reinterpret_cast<uintptr_t>(data) - reinterpret_cast<uintptr_t>(base);
+
+    // Send our handle to the receiver
+    ShmMsg handle_msg;
+    handle_msg.type = ShmMsgType::IPC_HANDLE;
+    handle_msg.src_gpu = local_gpu_idx_;
+    handle_msg.info = sender_info;
+    shm_ring_send(conn->remote_inbox_.ring, handle_msg);
+
+    // Wait for receiver to complete the copy
+    ShmMsg ack;
+    shm_ring_recv(inbox_rings_[conn->remote_gpu_idx_].ring, ack);
+    CHECK(ack.type == ShmMsgType::COMPLETION)
+        << "Failed to receive completion notification, unexpected ack.type="
+        << static_cast<uint32_t>(ack.type);
+    CHECK(ack.src_gpu == conn->remote_gpu_idx_)
+        << "Failed to receive completion notification, unexpected ack.src_gpu="
+        << static_cast<uint32_t>(ack.src_gpu);
+    CHECK_EQ(ack.completion, 1) << "Receiver reported failure";
   }
-
-  for (auto& stream : dst_streams) {
-    GPU_RT_CHECK(gpuStreamSynchronize(stream));
-  }
-
-  // Notify receiver completion
-  ShmMsg ack;
-  ack.src_gpu = local_gpu_idx_;
-  ack.type = ShmMsgType::COMPLETION;
-  ack.completion = 1;
-  shm_ring_send(conn->remote_inbox_.ring, ack);
-
-  // Okay, this is the slowest part, 46GB/s -> 28GB/s for 100MB, so moving it
-  // async. Update: moving async does not help, as gpuIpcOpenMemHandle will be
-  // slower.
-  // std::thread close_mem_handle(
-  //     [dst_ptr]() { GPU_RT_CHECK(gpuIpcCloseMemHandle(dst_ptr)); });
-  // close_mem_handle.detach();
-
-  // We close all IPC memory handles when releasing this endpoint.
 
   return true;
 }
@@ -1311,36 +1345,102 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
     return false;
   }
 
-  IpcTransferInfo info = {};
-  info.size = size;
-  info.operation = 1;
-  GPU_RT_CHECK(gpuIpcGetMemHandle(&info.handle, data));
+  bool is_host = (uccl::get_dev_idx(data) == -1);
 
-  // Getting the base address.
-  void* base = nullptr;
-  size_t base_size;
-  GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, data));
-  info.offset =
-      reinterpret_cast<uintptr_t>(data) - reinterpret_cast<uintptr_t>(base);
+  if (!is_host) {
+    // GPU receiver: share our GPU buffer handle, sender copies into it
+    IpcTransferInfo info = {};
+    info.size = size;
+    info.operation = 1;
+    info.is_host = false;
+    GPU_RT_CHECK(gpuIpcGetMemHandle(&info.handle, data));
 
-  // Send IPC_HANDLE msg to sender
-  ShmMsg msg;
-  msg.type = ShmMsgType::IPC_HANDLE;
-  msg.src_gpu = local_gpu_idx_;
-  msg.info = info;
-  shm_ring_send(conn->remote_inbox_.ring, msg);
+    void* base = nullptr;
+    size_t base_size;
+    GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, data));
+    info.offset =
+        reinterpret_cast<uintptr_t>(data) - reinterpret_cast<uintptr_t>(base);
 
-  // Wait completion on local inbox
-  ShmMsg ack;
-  shm_ring_recv(inbox_rings_[conn->remote_gpu_idx_].ring, ack);
+    ShmMsg msg;
+    msg.type = ShmMsgType::IPC_HANDLE;
+    msg.src_gpu = local_gpu_idx_;
+    msg.info = info;
+    shm_ring_send(conn->remote_inbox_.ring, msg);
 
-  CHECK(ack.type == ShmMsgType::COMPLETION)
-      << "Failed to receive completion notification, unexpected ack.type="
-      << static_cast<uint32_t>(ack.type);
-  CHECK(ack.src_gpu == conn->remote_gpu_idx_)
-      << "Failed to receive completion notification, unexpected ack.src_gpu="
-      << static_cast<uint32_t>(ack.src_gpu);
-  CHECK_EQ(ack.completion, 1) << "Sender reported failure";
+    // Wait completion on local inbox
+    ShmMsg ack;
+    shm_ring_recv(inbox_rings_[conn->remote_gpu_idx_].ring, ack);
+    CHECK(ack.type == ShmMsgType::COMPLETION)
+        << "Failed to receive completion notification, unexpected ack.type="
+        << static_cast<uint32_t>(ack.type);
+    CHECK(ack.src_gpu == conn->remote_gpu_idx_)
+        << "Failed to receive completion notification, unexpected ack.src_gpu="
+        << static_cast<uint32_t>(ack.src_gpu);
+    CHECK_EQ(ack.completion, 1) << "Sender reported failure";
+  } else {
+    // CPU receiver: tell sender we are host, then receive sender's GPU handle
+    // and copy D2H ourselves (zero-copy role reversal)
+    IpcTransferInfo info = {};
+    info.size = size;
+    info.operation = 1;
+    info.is_host = true;
+
+    ShmMsg msg;
+    msg.type = ShmMsgType::IPC_HANDLE;
+    msg.src_gpu = local_gpu_idx_;
+    msg.info = info;
+    shm_ring_send(conn->remote_inbox_.ring, msg);
+
+    // Wait for sender's GPU handle
+    ShmMsg sender_msg;
+    shm_ring_recv(inbox_rings_[conn->remote_gpu_idx_].ring, sender_msg);
+    CHECK(sender_msg.type == ShmMsgType::IPC_HANDLE);
+    auto sender_info = sender_msg.info;
+    CHECK(!sender_info.is_host)
+        << "recv_ipc: both sender and receiver are CPU - not supported";
+
+    int orig_device;
+    GPU_RT_CHECK(gpuGetDevice(&orig_device));
+    auto dev_reset =
+        uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+
+    // Open sender's GPU buffer
+    void* base = nullptr;
+    GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+    GPU_RT_CHECK(gpuIpcOpenMemHandle(&base, sender_info.handle,
+                                     gpuIpcMemLazyEnablePeerAccess));
+    void* src_ptr = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(base) + sender_info.offset);
+
+    // Copy from sender's GPU to our CPU buffer using multiple streams
+    std::vector<gpuStream_t>& streams = ipc_streams_[conn->remote_gpu_idx_];
+    int num_streams =
+        std::min(streams.size(),
+                 size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
+    size_t chunk_size = size / num_streams;
+
+    for (int i = 0; i < num_streams; ++i) {
+      void* chunk_src = reinterpret_cast<void*>(
+          reinterpret_cast<uintptr_t>(src_ptr) + i * chunk_size);
+      void* chunk_dst = reinterpret_cast<void*>(
+          reinterpret_cast<uintptr_t>(data) + i * chunk_size);
+      auto copy_size =
+          i == num_streams - 1 ? size - i * chunk_size : chunk_size;
+      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size,
+                                  gpuMemcpyDeviceToHost, streams[i]));
+    }
+
+    for (auto& stream : streams) {
+      GPU_RT_CHECK(gpuStreamSynchronize(stream));
+    }
+
+    // Send completion to sender
+    ShmMsg ack;
+    ack.src_gpu = local_gpu_idx_;
+    ack.type = ShmMsgType::COMPLETION;
+    ack.completion = 1;
+    shm_ring_send(conn->remote_inbox_.ring, ack);
+  }
 
   return true;
 }
