@@ -460,6 +460,136 @@ def _run_client_ipc(args, ep, remote_gpu_idx):
     print("[Client] IPC Benchmark complete")
 
 
+def _send_bytes_dist(payload: bytes, dst: int):
+    """Send a byte blob to another rank via torch.distributed."""
+    n = len(payload)
+    dist.send(torch.tensor([n], dtype=torch.int64), dst=dst)
+    if n == 0:
+        return
+    buf = torch.frombuffer(memoryview(payload), dtype=torch.uint8)
+    dist.send(buf, dst=dst)
+
+
+def _recv_bytes_dist(src: int) -> bytes:
+    """Receive a byte blob from another rank via torch.distributed."""
+    n_tensor = torch.empty(1, dtype=torch.int64)
+    dist.recv(n_tensor, src=src)
+    n = int(n_tensor.item())
+    if n == 0:
+        return b""
+    buf = torch.empty(n, dtype=torch.uint8)
+    dist.recv(buf, src=src)
+    return buf.numpy().tobytes()
+
+
+def _run_server_write_ipc(args, ep):
+    """Server for write_ipc benchmark: advertises buffer, client writes into it."""
+    ok, remote_gpu_idx, conn_id = ep.accept_local()
+    assert ok, "[Server] Failed to accept local IPC connection"
+
+    for size in args.sizes:
+        buf, ptr = _make_buffer(size, "gpu", args.local_gpu_idx)
+
+        # Advertise buffer so client can write into it
+        ok, info_blob = ep.advertise_ipc(conn_id, ptr, size)
+        assert ok, "[Server] advertise_ipc failed"
+        _send_bytes_dist(bytes(info_blob), dst=0)
+
+        # Wait for client to finish all iterations
+        _recv_bytes_dist(src=0)
+
+    print("[Server] write_ipc benchmark complete")
+
+
+def _run_client_write_ipc(args, ep, remote_gpu_idx):
+    """Client for write_ipc benchmark: writes local buffer into server's advertised buffer."""
+    ok, conn_id = ep.connect_local(remote_gpu_idx)
+    assert ok, "[Client] Failed to connect to local server via IPC"
+
+    for size in args.sizes:
+        buf, ptr = _make_buffer(size, "gpu", args.local_gpu_idx)
+        info_blob = _recv_bytes_dist(src=1)
+
+        # Warm-up
+        ok = ep.write_ipc(conn_id, ptr, size, info_blob)
+        assert ok, "[Client] write_ipc warm-up error"
+
+        start = time.perf_counter()
+        total = 0
+        for _ in range(args.iters):
+            ok = ep.write_ipc(conn_id, ptr, size, info_blob)
+            assert ok, "[Client] write_ipc error"
+            total += size
+        elapsed = time.perf_counter() - start
+
+        gbps = (total * 8) / elapsed / 1e9
+        gb_sec = total / elapsed / 1e9
+        lat = elapsed / args.iters
+
+        print(
+            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+        )
+
+        # Signal server we're done with this size
+        _send_bytes_dist(b"\x01", dst=1)
+
+    print("[Client] write_ipc benchmark complete")
+
+
+def _run_server_read_ipc(args, ep):
+    """Server for read_ipc benchmark: advertises buffer, client reads from it."""
+    ok, remote_gpu_idx, conn_id = ep.accept_local()
+    assert ok, "[Server] Failed to accept local IPC connection"
+
+    for size in args.sizes:
+        buf, ptr = _make_buffer(size, "gpu", args.local_gpu_idx)
+
+        # Advertise buffer so client can read from it
+        ok, info_blob = ep.advertise_ipc(conn_id, ptr, size)
+        assert ok, "[Server] advertise_ipc failed"
+        _send_bytes_dist(bytes(info_blob), dst=0)
+
+        # Wait for client to finish all iterations
+        _recv_bytes_dist(src=0)
+
+    print("[Server] read_ipc benchmark complete")
+
+
+def _run_client_read_ipc(args, ep, remote_gpu_idx):
+    """Client for read_ipc benchmark: reads from server's advertised buffer into local buffer."""
+    ok, conn_id = ep.connect_local(remote_gpu_idx)
+    assert ok, "[Client] Failed to connect to local server via IPC"
+
+    for size in args.sizes:
+        buf, ptr = _make_buffer(size, "gpu", args.local_gpu_idx)
+        info_blob = _recv_bytes_dist(src=1)
+
+        # Warm-up
+        ok = ep.read_ipc(conn_id, ptr, size, info_blob)
+        assert ok, "[Client] read_ipc warm-up error"
+
+        start = time.perf_counter()
+        total = 0
+        for _ in range(args.iters):
+            ok = ep.read_ipc(conn_id, ptr, size, info_blob)
+            assert ok, "[Client] read_ipc error"
+            total += size
+        elapsed = time.perf_counter() - start
+
+        gbps = (total * 8) / elapsed / 1e9
+        gb_sec = total / elapsed / 1e9
+        lat = elapsed / args.iters
+
+        print(
+            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+        )
+
+        # Signal server we're done with this size
+        _send_bytes_dist(b"\x01", dst=1)
+
+    print("[Client] read_ipc benchmark complete")
+
+
 def parse_size_list(val: str) -> List[int]:
     try:
         return [int(s) for s in val.split(",") if s]
@@ -543,6 +673,16 @@ def main():
         default=None,
         help="Buffer location for receiver (IPC mode). Defaults to --device value.",
     )
+    p.add_argument(
+        "--write-ipc",
+        action="store_true",
+        help="Benchmark one-sided write_ipc (client writes into server's advertised buffer)",
+    )
+    p.add_argument(
+        "--read-ipc",
+        action="store_true",
+        help="Benchmark one-sided read_ipc (client reads from server's advertised buffer)",
+    )
     args = p.parse_args()
 
     # Default sender/receiver device to --device if not specified
@@ -552,8 +692,9 @@ def main():
         args.receiver_device = args.device
 
     # Check for incompatible options
-    if args.dual and args.ipc:
-        print("Error: --dual and --ipc options are incompatible")
+    mode_flags = sum([args.dual, args.ipc, args.write_ipc, args.read_ipc])
+    if mode_flags > 1:
+        print("Error: --dual, --ipc, --write-ipc, and --read-ipc are mutually exclusive")
         sys.exit(1)
 
     dist.init_process_group(backend="gloo")
@@ -561,13 +702,23 @@ def main():
     world_size = dist.get_world_size()
     assert world_size == 2, "This benchmark only supports 2 processes"
 
-    mode = "IPC" if args.ipc else ("Dual" if args.dual else "Standard")
+    is_ipc_mode = args.ipc or args.write_ipc or args.read_ipc
+    if args.write_ipc:
+        mode = "write_ipc"
+    elif args.read_ipc:
+        mode = "read_ipc"
+    elif args.ipc:
+        mode = "IPC"
+    elif args.dual:
+        mode = "Dual"
+    else:
+        mode = "Standard"
     api_type = "Async" if args.async_api else "Sync"
     print(
         f"UCCL P2P Benchmark — mode: {mode} | API: {api_type} | role:",
         "client" if rank == 0 else "server",
     )
-    if not args.ipc:
+    if not is_ipc_mode:
         print("Number of key-value blocks per message:", args.num_kvblocks)
     else:
         # Use the rank as the local GPU index for IPC
@@ -576,7 +727,7 @@ def main():
 
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
     pinned_str = " (pinned)" if args.pinned else ""
-    if args.ipc:
+    if is_ipc_mode:
         print(
             f"Sender device: {args.sender_device}{pinned_str} | Receiver device: {args.receiver_device}{pinned_str} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
         )
@@ -612,6 +763,18 @@ def main():
             _run_client_ipc(args, ep, remote_gpu_idx)
         else:
             _run_server_ipc(args, ep)
+    elif args.write_ipc:
+        _, _, remote_gpu_idx = p2p.Endpoint.parse_metadata(remote_metadata)
+        if rank == 0:
+            _run_client_write_ipc(args, ep, remote_gpu_idx)
+        else:
+            _run_server_write_ipc(args, ep)
+    elif args.read_ipc:
+        _, _, remote_gpu_idx = p2p.Endpoint.parse_metadata(remote_metadata)
+        if rank == 0:
+            _run_client_read_ipc(args, ep, remote_gpu_idx)
+        else:
+            _run_server_read_ipc(args, ep)
     else:
         if rank == 0:
             _run_client(args, ep, remote_metadata)
