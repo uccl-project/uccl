@@ -18,6 +18,6 @@ torchrun --nproc_per_node=2 p2p/benchmarks/benchmark_uccl.py --write-ipc
 torchrun --nproc_per_node=2 p2p/benchmarks/benchmark_uccl.py --read-ipc
 ```
 
-### Note
-`--async-api` is not yet wired for write/read_ipc (sync only for now).
-`write_ipc_async` pybind has a bug: returns only `success`, not `(success, transfer_id)`.
+### Done
+- `--async-api` supported for both write/read_ipc via `write_ipc_async`/`read_ipc_async` + `poll_async`
+- Fixed `write_ipc_async` pybind bug: was returning only `success`, now returns `(success, transfer_id)`
