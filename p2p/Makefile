@@ -147,6 +147,8 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	@mkdir -p $(INSTALL_DIR)
 	@cp $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
+	install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/
+	install -m 644 $(CAPI_HEADER) $(INCDIR)/
 endif
 # Clean build artifacts
 clean:
