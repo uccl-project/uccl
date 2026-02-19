@@ -507,7 +507,7 @@ def _run_client_write_ipc(args, ep, remote_gpu_idx):
     assert ok, "[Client] Failed to connect to local server via IPC"
 
     for size in args.sizes:
-        buf, ptr = _make_buffer(size, "gpu", args.local_gpu_idx)
+        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx, args.pinned)
         info_blob = _recv_bytes_dist(src=1)
 
         # Warm-up
@@ -577,7 +577,7 @@ def _run_client_read_ipc(args, ep, remote_gpu_idx):
     assert ok, "[Client] Failed to connect to local server via IPC"
 
     for size in args.sizes:
-        buf, ptr = _make_buffer(size, "gpu", args.local_gpu_idx)
+        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx, args.pinned)
         info_blob = _recv_bytes_dist(src=1)
 
         # Warm-up
