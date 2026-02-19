@@ -3,6 +3,7 @@
 
 Add `--write-ipc` and `--read-ipc` modes to `benchmark_uccl.py`.
 
+## Add support to cpu buffer
 ### write_ipc benchmark
 - Server (rank 1): allocate GPU buffer, `advertise_ipc`, send blob to client
 - Client (rank 0): receive blob, `write_ipc` in a loop, measure throughput

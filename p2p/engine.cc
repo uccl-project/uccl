@@ -1505,6 +1505,9 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
     return false;
   }
 
+  bool is_host = (uccl::get_dev_idx(data) == -1);
+  auto memcpy_kind = is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
+
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
   auto dev_reset =
@@ -1535,9 +1538,8 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
         reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
     auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
 
-    // Works for both intra-GPU and inter-GPU copy
     GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst_ptr, chunk_data, copy_size,
-                                gpuMemcpyDeviceToDevice, dst_streams[i]));
+                                memcpy_kind, dst_streams[i]));
   }
 
   // Wait for all streams to complete
@@ -1561,6 +1563,9 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
     std::cerr << "[read_ipc] Error: Invalid conn_id " << conn_id << std::endl;
     return false;
   }
+
+  bool is_host = (uccl::get_dev_idx(data) == -1);
+  auto memcpy_kind = is_host ? gpuMemcpyDeviceToHost : gpuMemcpyDeviceToDevice;
 
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
@@ -1592,9 +1597,8 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
         reinterpret_cast<uintptr_t>(data) + i * chunk_size);
     auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
 
-    // Works for both intra-GPU and inter-GPU copy
     GPU_RT_CHECK(gpuMemcpyAsync(chunk_data, chunk_src_ptr, copy_size,
-                                gpuMemcpyDeviceToDevice, src_streams[i]));
+                                memcpy_kind, src_streams[i]));
   }
 
   // Wait for all streams to complete
