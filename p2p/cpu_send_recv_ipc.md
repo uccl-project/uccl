@@ -39,4 +39,24 @@ CPU-to-CPU is not supported (CHECK/abort).
 ### Benchmark changes (benchmark_uccl.py)
 1. Add --sender-device and --receiver-device flags (default: gpu)
 2. rank 0 (client/sender) uses --sender-device, rank 1 (server/receiver) uses --receiver-device
-3. Test combinations: gpu/gpu, cpu/gpu, gpu/cpu
+3. Device options: gpu, cpu. Separate --pinned flag for page-locked host memory
+4. --pinned uses torch pin_memory() for page-locked host memory — important because
+   gpuMemcpyAsync with pageable memory falls back to synchronous copy internally
+
+### Test commands
+```bash
+# GPU -> GPU (existing)
+torchrun --nproc_per_node=2 benchmark_uccl.py --ipc
+
+# CPU (pageable) -> GPU
+torchrun --nproc_per_node=2 benchmark_uccl.py --ipc --sender-device cpu --receiver-device gpu
+
+# CPU (pinned) -> GPU
+torchrun --nproc_per_node=2 benchmark_uccl.py --ipc --sender-device cpu --receiver-device gpu --pinned
+
+# GPU -> CPU (pinned)
+torchrun --nproc_per_node=2 benchmark_uccl.py --ipc --sender-device gpu --receiver-device cpu --pinned
+
+# GPU -> CPU (pageable)
+torchrun --nproc_per_node=2 benchmark_uccl.py --ipc --sender-device gpu --receiver-device cpu
+```
