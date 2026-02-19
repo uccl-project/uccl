@@ -1505,7 +1505,7 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
     return false;
   }
 
-  bool is_host = (uccl::get_dev_idx(data) == -1);
+  bool is_host = (uccl::get_dev_idx(const_cast<void*>(data)) == -1);
   auto memcpy_kind = is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
 
   int orig_device;
