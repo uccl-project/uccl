@@ -511,14 +511,30 @@ def _run_client_write_ipc(args, ep, remote_gpu_idx):
         info_blob = _recv_bytes_dist(src=1)
 
         # Warm-up
-        ok = ep.write_ipc(conn_id, ptr, size, info_blob)
-        assert ok, "[Client] write_ipc warm-up error"
+        if args.async_api:
+            ok, transfer_id = ep.write_ipc_async(conn_id, ptr, size, info_blob)
+            assert ok, "[Client] write_ipc_async warm-up error"
+            is_done = False
+            while not is_done:
+                ok, is_done = ep.poll_async(transfer_id)
+                assert ok, "[Client] poll_async error"
+        else:
+            ok = ep.write_ipc(conn_id, ptr, size, info_blob)
+            assert ok, "[Client] write_ipc warm-up error"
 
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
-            ok = ep.write_ipc(conn_id, ptr, size, info_blob)
-            assert ok, "[Client] write_ipc error"
+            if args.async_api:
+                ok, transfer_id = ep.write_ipc_async(conn_id, ptr, size, info_blob)
+                assert ok, "[Client] write_ipc_async error"
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Client] poll_async error"
+            else:
+                ok = ep.write_ipc(conn_id, ptr, size, info_blob)
+                assert ok, "[Client] write_ipc error"
             total += size
         elapsed = time.perf_counter() - start
 
@@ -565,14 +581,30 @@ def _run_client_read_ipc(args, ep, remote_gpu_idx):
         info_blob = _recv_bytes_dist(src=1)
 
         # Warm-up
-        ok = ep.read_ipc(conn_id, ptr, size, info_blob)
-        assert ok, "[Client] read_ipc warm-up error"
+        if args.async_api:
+            ok, transfer_id = ep.read_ipc_async(conn_id, ptr, size, info_blob)
+            assert ok, "[Client] read_ipc_async warm-up error"
+            is_done = False
+            while not is_done:
+                ok, is_done = ep.poll_async(transfer_id)
+                assert ok, "[Client] poll_async error"
+        else:
+            ok = ep.read_ipc(conn_id, ptr, size, info_blob)
+            assert ok, "[Client] read_ipc warm-up error"
 
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
-            ok = ep.read_ipc(conn_id, ptr, size, info_blob)
-            assert ok, "[Client] read_ipc error"
+            if args.async_api:
+                ok, transfer_id = ep.read_ipc_async(conn_id, ptr, size, info_blob)
+                assert ok, "[Client] read_ipc_async error"
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Client] poll_async error"
+            else:
+                ok = ep.read_ipc(conn_id, ptr, size, info_blob)
+                assert ok, "[Client] read_ipc error"
             total += size
         elapsed = time.perf_counter() - start
 
