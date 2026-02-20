@@ -169,7 +169,7 @@ rdma_factory.o: rdma_factory.cc
 
 # TCP transport (with NCCL flag)
 libuccl_p2p_tcp.so: engine_tcp.o nccl/nccl_endpoint_tcp.o tcp_factory.o
-	$(CXX) -shared $^ -o $@ -L$(CUDA_LIB) -lcudart -lcuda -L$(NCCL_LIB) -lnccl -lglog -lgflags -lpthread -Wl,-rpath,$(CUDA_LIB):$(NCCL_LIB)
+	$(CXX) -shared $^ -o $@ -L$(CUDA_LIB) -lcudart -lcuda -L$(NCCL_LIB) -lnccl -libverbs -lglog -lgflags -lpthread -Wl,-rpath,$(CUDA_LIB):$(NCCL_LIB)
 
 engine_tcp.o: engine.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_NCCL -I$(NCCL_INC) -I. -c $< -o $@
@@ -183,7 +183,7 @@ tcp_factory.o: tcp_factory.cc
 
 # TCPX transport
 libuccl_p2p_tcpx.so: nccl_tcpx_endpoint_lib.o tcpx_factory.o
-	$(CXX) -shared $^ -o $@ -L$(CUDA_LIB) -lcudart -lcuda -L$(NCCL_LIB) -lnccl -lglog -lgflags -lpthread -Wl,-rpath,$(CUDA_LIB):$(NCCL_LIB)
+	$(CXX) -shared $^ -o $@ -L$(CUDA_LIB) -lcudart -lcuda -L$(NCCL_LIB) -lnccl -libverbs -lglog -lgflags -lpthread -Wl,-rpath,$(CUDA_LIB):$(NCCL_LIB)
 
 nccl_tcpx_endpoint_lib.o: nccl_tcpx_endpoint.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_TCPX -I$(NCCL_INC) -I. -c $< -o $@
