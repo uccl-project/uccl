@@ -58,14 +58,6 @@ INCDIR ?= $(PREFIX)/include
 
 LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LIBS2)
 
-# Set up NCCL paths if building TCP or TCPX transports
-ifneq (,$(findstring tcp,$(TRANSPORTS)))
-NCCL_HOME ?= ../thirdparty/nccl/build
-NCCL_INC  ?= $(NCCL_HOME)/include
-NCCL_LIB  ?= $(NCCL_HOME)/lib
-endif
-
-# Also set NCCL paths if using old USE_TCP flag for backward compatibility
 ifeq ($(USE_TCP),1)
 NCCL_HOME ?= ../thirdparty/nccl/build
 NCCL_INC  ?= $(NCCL_HOME)/include
@@ -235,6 +227,9 @@ clean:
 	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB)
 	rm -f $(DEPS)
 	rm -f nccl/*.o nccl/*.d
+	rm -f engine_rdma.o engine_tcp.o engine_efa.o
+	rm -f rdma_factory.o tcp_factory.o tcpx_factory.o efa_factory.o
+	rm -f nccl/nccl_endpoint_tcp.o nccl_tcpx_endpoint_lib.o
 	rm -f $(TRANSPORT_LIBS)
 ifneq ($(USE_TCPX),1)
 	rm -f $(P2P_PYTHON_EXT)

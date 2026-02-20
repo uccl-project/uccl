@@ -4,6 +4,32 @@
 template <class T>
 struct always_false : std::false_type {};
 
+static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
+                              Conn* conn, P2PMhandle* local_mh, void* src,
+                              size_t size, FifoItem const& slot_item,
+                              ucclRequest* ureq) {
+  // Create RemoteMemInfo from FifoItem
+  auto remote_mem = std::make_shared<RemoteMemInfo>();
+  remote_mem->addr = slot_item.addr;
+  remote_mem->length = slot_item.size;
+  remote_mem->type = MemoryType::GPU;
+  remote_mem->rkey_array.copyFrom(slot_item.padding);
+  // Create RegMemBlock for local memory
+  auto local_mem = std::make_shared<RegMemBlock>(src, size, MemoryType::GPU);
+  local_mem->mr_array = local_mh->mr_array;
+
+  auto req = std::make_shared<RDMASendRequest>(local_mem, remote_mem);
+  req->to_rank_id = conn->uccl_conn_id_.flow_id;
+
+  req->send_type =
+      (ureq->type == ReqType::ReqRead) ? SendType::Read : SendType::Write;
+
+  ureq->engine_idx = obj->writeOrRead(req);
+  ureq->n = conn->uccl_conn_id_.flow_id;
+
+  return ureq->engine_idx;
+}
+
 #ifdef UCCL_P2P_USE_NCCL
 static inline ConnID to_conn_id(uccl::ConnID const& in) {
   ConnID out{};
@@ -124,33 +150,6 @@ inline bool initialize_rdma_ctx_for_gpu(RDMAEndPoint const& s, int dev) {
 
 inline void create_unified_p2p_socket(RDMAEndPoint const& s) { (void)s; }
 #else
-// RDMA-specific helper function
-static inline int set_request(std::shared_ptr<NICEndpoint> const& obj,
-                              Conn* conn, P2PMhandle* local_mh, void* src,
-                              size_t size, FifoItem const& slot_item,
-                              ucclRequest* ureq) {
-  // Create RemoteMemInfo from FifoItem
-  auto remote_mem = std::make_shared<RemoteMemInfo>();
-  remote_mem->addr = slot_item.addr;
-  remote_mem->length = slot_item.size;
-  remote_mem->type = MemoryType::GPU;
-  remote_mem->rkey_array.copyFrom(slot_item.padding);
-  // Create RegMemBlock for local memory
-  auto local_mem = std::make_shared<RegMemBlock>(src, size, MemoryType::GPU);
-  local_mem->mr_array = local_mh->mr_array;
-
-  auto req = std::make_shared<RDMASendRequest>(local_mem, remote_mem);
-  req->to_rank_id = conn->uccl_conn_id_.flow_id;
-
-  req->send_type =
-      (ureq->type == ReqType::ReqRead) ? SendType::Read : SendType::Write;
-
-  ureq->engine_idx = obj->writeOrRead(req);
-  ureq->n = conn->uccl_conn_id_.flow_id;
-
-  return ureq->engine_idx;
-}
-
 inline ConnID uccl_connect(RDMAEndPoint const& s, int remote_gpuidx,
                            std::string remote_ip, uint16_t remote_port) {
   return s->uccl_connect(remote_gpuidx, remote_ip, remote_port);

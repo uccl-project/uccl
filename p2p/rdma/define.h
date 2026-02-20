@@ -37,7 +37,7 @@
 #include <unistd.h>
 
 static constexpr int kNumEngines = 4;
-// kNumGpuRtStreams moved to common.h
+static constexpr int kNumGpuRtStreams = 4;
 
 static constexpr int kRankIDPlaceHolder = 9999;
 static constexpr uint8_t kPortNum = 1;
@@ -64,7 +64,7 @@ static constexpr size_t kInFlightMaxSizeKB =
 
 static constexpr uint32_t INVALID_RANK_ID =
     std::numeric_limits<uint32_t>::max();
-// INVALID_GPU moved to common.h
+static constexpr uint32_t INVALID_GPU = std::numeric_limits<uint32_t>::max();
 
 inline size_t channelIdToContextId(uint32_t channel_id) {
   return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;

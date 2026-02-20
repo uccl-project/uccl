@@ -68,21 +68,9 @@ struct ucclRequest {
   uint32_t engine_idx;
 };
 #endif
-#if !defined(UCCL_P2P_USE_NCCL) && !defined(UCCL_P2P_USE_TCPX)
 struct Mhandle {
   struct ibv_mr* mr;
 };
-#else
-struct Mhandle {
-  void* mr;
-};
-#endif
-
-#if defined(UCCL_P2P_USE_NCCL) || defined(UCCL_P2P_USE_TCPX)
-struct MRArray {
-  void* dummy = nullptr;
-};
-#endif
 
 struct P2PMhandle {
   MRArray mr_array;
