@@ -127,7 +127,7 @@ vllm serve "${MODEL}" \
     --data-parallel-start-rank "${START_RANK}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
-    --gpu-memory-utilization 0.8 \
+    --gpu-memory-utilization 0.85 \
     --headless
 
 # Additional useful options (uncomment as needed, must match Node 0):

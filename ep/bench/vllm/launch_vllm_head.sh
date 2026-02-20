@@ -123,7 +123,7 @@ vllm serve "${MODEL}" \
     --data-parallel-size-local "${LOCAL_DP_SIZE}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
-    --gpu-memory-utilization 0.8 \
+    --gpu-memory-utilization 0.85 \
     --api-server-count="${API_SERVERS}"
 
 # Additional useful options (uncomment as needed):

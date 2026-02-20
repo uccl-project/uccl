@@ -23,10 +23,9 @@ cd vllm
 # This may take 5-10 minutes.
 uv pip install -e .
 ```
+Last tested commit: https://github.com/vllm-project/vllm/pull/27444
 
 For detailed EP setup, refer to [vLLM Expert Parallel Deployment](https://docs.vllm.ai/en/stable/serving/expert_parallel_deployment.html)
-
-Last tested commit hash: 8c328c6
 
 ### 2. Install DeepGEMM Library
 
@@ -124,6 +123,27 @@ bash launch_vllm_worker.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 deepep
 - `1` - For node 0, number of API servers; for others, starting rank (= sum of previous nodes' local DP)
 
 ## vLLM Serving Benchmark Results
+
+```
+vllm bench serve \
+  --backend openai-chat \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --endpoint /v1/chat/completions \
+  --model deepseek-ai/DeepSeek-V3-0324 \
+  --dataset-name random \
+  --random-input-len 1024 \
+  --random-output-len 256 \
+  --num-prompts 1000 \
+  --request-rate 10 \
+  --max-concurrency 256 \
+  --seed 42 \
+  --ignore-eos \
+  --save-result \
+  --result-dir ./results \
+  --percentile-metrics ttft,tpot,itl,e2el \
+  --metric-percentiles 50,90,95,99
+```
 
 **Model:** `deepseek-ai/DeepSeek-V3-0324`  
 **Request rate:** 10 RPS  
