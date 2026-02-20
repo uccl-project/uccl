@@ -171,15 +171,14 @@ launch_node() {
         --num-tokens=${NUM_TOKENS} \
         --hidden=${HIDDEN} \
         --num-topk=${NUM_TOPK} \
-        --single-run \
         --num-experts=${NUM_EXPERTS}" 
     
     # Set required environment variables for network interfaces
     local env_vars="export NCCL_SOCKET_IFNAME=enp49s0f1np1 && \
 export GLOO_SOCKET_IFNAME=enp49s0f1np1 && \
 export UCCL_IB_GID_INDEX=3 && \
-export NCCL_IB_GID_INDEX=3"
-    
+export NCCL_IB_GID_INDEX=3 && \
+export DEBUG_DISPATCH=1"
     local cmd="${env_vars} && cd ${SCRIPT_DIR}/.. && ${torchrun_cmd}"
     
     # Write command to log file first
