@@ -21,7 +21,6 @@ import sys
 import torch
 import torch.distributed as dist
 import numpy as np
-from functools import partial
 from typing import Optional
 
 
@@ -87,8 +86,6 @@ from buffer import Buffer
 from utils import (
     init_dist,
     init_dist_under_torchrun,
-    bench,
-    bench_kineto,
     calc_diff,
     hash_tensor,
     per_token_cast_back,
@@ -150,6 +147,8 @@ def test_main(
     skip_benchmark: bool = False,
     debug_hash: bool = False,
     stop_after_first: bool = False,
+    num_warmup: int = 10000,
+    num_repeats: int = 10000,
 ):
     torch.manual_seed(seed + rank)
     random.seed(seed + rank)
@@ -470,40 +469,6 @@ def test_main(
             if stop_now:
                 break
 
-    # noinspection PyShadowingNames
-    def large_gemm_with_hook(hook):
-        mat_0 = torch.randn((8192, 8192), dtype=torch.float)
-        mat_1 = torch.randn((8192, 8192), dtype=torch.float)
-        mat_0 @ mat_1
-        hook()
-
-    # noinspection PyShadowingNames
-    def test_func(return_recv_hook: bool):
-        recv_x, recv_count, handle, event, hook = buffer.low_latency_dispatch(
-            current_x,
-            topk_idx,
-            num_tokens,
-            num_experts,
-            cumulative_local_expert_recv_stats=cumulative_local_expert_recv_stats,
-            use_fp8=dispatch_use_fp8,
-            async_finish=False,
-            return_recv_hook=return_recv_hook,
-        )
-        large_gemm_with_hook(hook) if return_recv_hook else None
-        # Phase alignment: ensure all ranks finish dispatch before any starts combine
-        dist.barrier(group=group)
-        combined_x, event, hook = buffer.low_latency_combine(
-            simulated_gemm_x,
-            topk_idx,
-            topk_weights,
-            handle,
-            use_logfmt=use_logfmt,
-            return_recv_hook=return_recv_hook,
-        )
-        large_gemm_with_hook(hook) if return_recv_hook else None
-        # Phase alignment: ensure all ranks finish dispatch before any starts combine
-        dist.barrier(group=group)
-
     print("✓ All correctness tests passed!", flush=True)
 
     # Lam: If stop_after_first, just run once to check the code
@@ -523,37 +488,291 @@ def test_main(
             num_logfmt10_bytes if use_logfmt else num_bf16_bytes
         ) * num_selections
 
-    # Dispatch + combine testing
-    avg_t, min_t, max_t = bench(partial(test_func, return_recv_hook=False))
-    print(
-        f"[rank {rank}] Dispatch + combine bandwidth: {(num_dispatch_comm_bytes + num_combine_comm_bytes) / 1e9 / avg_t:.2f} GB/s, "
-        f"avg_t={avg_t * 1e6:.2f} us, min_t={min_t * 1e6:.2f} us, max_t={max_t * 1e6:.2f} us",
-        flush=True,
+    # Benchmark with the same timing structure as pplx/benchmarks/bench_all_to_all.py
+    out_dummy = torch.empty((1,), dtype=torch.float32, device="cuda")
+    gemm = torch.empty(
+        (2048, 2048) if num_tokens <= 128 else (8192, 8192),
+        dtype=torch.float32,
+        device="cuda",
     )
-    # Separate profiling
-    for return_recv_hook in (False, True):
-        dispatch_t, combine_t = bench_kineto(
-            partial(test_func, return_recv_hook=return_recv_hook),
-            kernel_names=("dispatch", "combine"),
-            barrier_comm_profiling=True,
-            suppress_kineto_output=True,
-            num_kernels_per_period=2 if return_recv_hook else 1,
+    rng = torch.Generator(device="cuda")
+    rng.manual_seed(rank + seed + 123)
+
+    pending_dispatch_hook = None
+    pending_combine_hook = None
+    pending_recv_x = None
+    pending_handle = None
+    bench_topk_idx = topk_idx
+
+    def wait():
+        # Same "wait" structure as bench_all_to_all.py
+        dist.all_reduce(out_dummy, group=group)
+        _ = gemm @ gemm
+        dist.all_reduce(out_dummy, group=group)
+
+    def _rand_topk_idx() -> torch.Tensor:
+        scores = torch.randn(
+            (num_tokens, num_experts),
+            dtype=torch.float32,
+            device="cuda",
+            generator=rng,
         )
-        # kineto profiling failed.
-        if dispatch_t == 0 or combine_t == 0:
-            continue
-        if not return_recv_hook:
+        scores = scores.abs() + 1
+        return torch.topk(scores, num_topk, dim=-1, largest=True, sorted=True)[1]
+
+    def dispatch(do_send: bool, do_recv: bool):
+        nonlocal pending_dispatch_hook
+        nonlocal pending_recv_x
+        nonlocal pending_handle
+        if do_send:
+            recv_x, _, handle, _, hook = buffer.low_latency_dispatch(
+                current_x,
+                bench_topk_idx,
+                num_tokens,
+                num_experts,
+                cumulative_local_expert_recv_stats=None,
+                use_fp8=dispatch_use_fp8,
+                async_finish=False,
+                return_recv_hook=not do_recv,
+            )
+            if do_recv:
+                return recv_x, handle
+            pending_dispatch_hook = hook
+            pending_recv_x = recv_x
+            pending_handle = handle
+            return None, None
+        assert do_recv, "Invalid dispatch mode"
+        assert pending_dispatch_hook is not None
+        pending_dispatch_hook()
+        out = (pending_recv_x, pending_handle)
+        pending_dispatch_hook = None
+        pending_recv_x = None
+        pending_handle = None
+        return out
+
+    def materialize_for_combine(recv_x):
+        if dispatch_use_fp8:
+            return per_token_cast_back(
+                recv_x[0].view(-1, hidden),
+                recv_x[1].contiguous().view(-1, hidden // 128),
+            ).view(recv_x[0].shape)
+        return recv_x
+
+    def combine(simulated_x, handle, do_send: bool, do_recv: bool):
+        nonlocal pending_combine_hook
+        if do_send:
+            _, _, hook = buffer.low_latency_combine(
+                simulated_x,
+                bench_topk_idx,
+                topk_weights,
+                handle,
+                use_logfmt=use_logfmt,
+                return_recv_hook=not do_recv,
+            )
+            if not do_recv:
+                pending_combine_hook = hook
+            return
+        assert do_recv, "Invalid combine mode"
+        assert pending_combine_hook is not None
+        pending_combine_hook()
+        pending_combine_hook = None
+
+    events = []
+    for _ in range(num_warmup + num_repeats):
+        dispatch_start = torch.cuda.Event(enable_timing=True)
+        dispatch_end = torch.cuda.Event(enable_timing=True)
+        combine_start = torch.cuda.Event(enable_timing=True)
+        combine_end = torch.cuda.Event(enable_timing=True)
+        dispatch_send_start = torch.cuda.Event(enable_timing=True)
+        dispatch_send_end = torch.cuda.Event(enable_timing=True)
+        dispatch_recv_start = torch.cuda.Event(enable_timing=True)
+        dispatch_recv_end = torch.cuda.Event(enable_timing=True)
+        combine_send_start = torch.cuda.Event(enable_timing=True)
+        combine_send_end = torch.cuda.Event(enable_timing=True)
+        combine_recv_start = torch.cuda.Event(enable_timing=True)
+        combine_recv_end = torch.cuda.Event(enable_timing=True)
+        dispatch_start.record()
+        dispatch_end.record()
+        combine_start.record()
+        combine_end.record()
+        dispatch_send_start.record()
+        dispatch_send_end.record()
+        dispatch_recv_start.record()
+        dispatch_recv_end.record()
+        combine_send_start.record()
+        combine_send_end.record()
+        combine_recv_start.record()
+        combine_recv_end.record()
+        events.append(
+            (
+                dispatch_start,
+                dispatch_end,
+                combine_start,
+                combine_end,
+                dispatch_send_start,
+                dispatch_send_end,
+                dispatch_recv_start,
+                dispatch_recv_end,
+                combine_send_start,
+                combine_send_end,
+                combine_recv_start,
+                combine_recv_end,
+            )
+        )
+
+    last_report_time = time.time()
+    profiler_started = False
+    for i in range(num_warmup + num_repeats):
+        if i + 1 == num_warmup and num_warmup > 0:
+            torch.cuda.profiler.start()
+            profiler_started = True
+        now = time.time()
+        if rank == 0 and (
+            now - last_report_time > 1 or i + 1 == num_warmup + num_repeats
+        ):
             print(
-                f"[rank {rank}] Dispatch bandwidth: {num_dispatch_comm_bytes / 1e9 / dispatch_t:.2f} GB/s, avg_t={dispatch_t * 1e6:.2f} us | "
-                f"Combine bandwidth: {num_combine_comm_bytes / 1e9 / combine_t:.2f} GB/s, avg_t={combine_t * 1e6:.2f} us",
+                f"[rank 0] Iteration {i + 1}/{num_warmup + num_repeats}",
                 flush=True,
             )
-        else:
-            print(
-                f"[rank {rank}] Dispatch send/recv time: {dispatch_t[0] * 1e6:.2f} + {dispatch_t[1] * 1e6:.2f} us | "
-                f"Combine send/recv time: {combine_t[0] * 1e6:.2f} + {combine_t[1] * 1e6:.2f} us",
-                flush=True,
-            )
+            last_report_time = now
+
+        (
+            dispatch_start,
+            dispatch_end,
+            combine_start,
+            combine_end,
+            dispatch_send_start,
+            dispatch_send_end,
+            dispatch_recv_start,
+            dispatch_recv_end,
+            combine_send_start,
+            combine_send_end,
+            combine_recv_start,
+            combine_recv_end,
+        ) = events[i]
+
+        bench_topk_idx = _rand_topk_idx()
+
+        # Send + recv back-to-back
+        wait()
+        dispatch_start.record()
+        recv_x, handle = dispatch(do_send=True, do_recv=True)
+        dispatch_end.record()
+        simulated_x = materialize_for_combine(recv_x)
+
+        wait()
+        combine_start.record()
+        combine(simulated_x, handle, do_send=True, do_recv=True)
+        combine_end.record()
+
+        # Send and recv split by long kernels
+        wait()
+        dispatch_send_start.record()
+        dispatch(do_send=True, do_recv=False)
+        dispatch_send_end.record()
+
+        wait()
+        dispatch_recv_start.record()
+        recv_x, handle = dispatch(do_send=False, do_recv=True)
+        dispatch_recv_end.record()
+        simulated_x = materialize_for_combine(recv_x)
+
+        wait()
+        combine_send_start.record()
+        combine(simulated_x, handle, do_send=True, do_recv=False)
+        combine_send_end.record()
+
+        wait()
+        combine_recv_start.record()
+        combine(None, None, do_send=False, do_recv=True)
+        combine_recv_end.record()
+
+    torch.cuda.synchronize()
+    if profiler_started:
+        torch.cuda.profiler.stop()
+
+    dispatch_times_us = []
+    dispatch_send_times_us = []
+    dispatch_recv_times_us = []
+    combine_times_us = []
+    combine_send_times_us = []
+    combine_recv_times_us = []
+    for (
+        dispatch_st,
+        dispatch_en,
+        combine_st,
+        combine_en,
+        dispatch_send_st,
+        dispatch_send_en,
+        dispatch_recv_st,
+        dispatch_recv_en,
+        combine_send_st,
+        combine_send_en,
+        combine_recv_st,
+        combine_recv_en,
+    ) in events[num_warmup:]:
+        dispatch_times_us.append(dispatch_st.elapsed_time(dispatch_en) * 1000.0)
+        combine_times_us.append(combine_st.elapsed_time(combine_en) * 1000.0)
+        dispatch_send_times_us.append(
+            dispatch_send_st.elapsed_time(dispatch_send_en) * 1000.0
+        )
+        dispatch_recv_times_us.append(
+            dispatch_recv_st.elapsed_time(dispatch_recv_en) * 1000.0
+        )
+        combine_send_times_us.append(
+            combine_send_st.elapsed_time(combine_send_en) * 1000.0
+        )
+        combine_recv_times_us.append(
+            combine_recv_st.elapsed_time(combine_recv_en) * 1000.0
+        )
+
+    gathered = [None for _ in range(num_ranks)]
+    dist.all_gather_object(gathered, dispatch_times_us, group=group)
+    dispatch_times_us = [v for per_rank in gathered for v in per_rank]
+    dist.all_gather_object(gathered, dispatch_send_times_us, group=group)
+    dispatch_send_times_us = [v for per_rank in gathered for v in per_rank]
+    dist.all_gather_object(gathered, dispatch_recv_times_us, group=group)
+    dispatch_recv_times_us = [v for per_rank in gathered for v in per_rank]
+    dist.all_gather_object(gathered, combine_times_us, group=group)
+    combine_times_us = [v for per_rank in gathered for v in per_rank]
+    dist.all_gather_object(gathered, combine_send_times_us, group=group)
+    combine_send_times_us = [v for per_rank in gathered for v in per_rank]
+    dist.all_gather_object(gathered, combine_recv_times_us, group=group)
+    combine_recv_times_us = [v for per_rank in gathered for v in per_rank]
+
+    def _p50(values):
+        return float(np.percentile(np.asarray(values), 50))
+
+    if rank == 0:
+        dispatch_p50_s = _p50(dispatch_times_us) / 1e6
+        combine_p50_s = _p50(combine_times_us) / 1e6
+        dispatch_bw = num_dispatch_comm_bytes / 1e9 / dispatch_p50_s
+        combine_bw = num_combine_comm_bytes / 1e9 / combine_p50_s
+
+        print(
+            f"[rank 0] Dispatch both p50: {_p50(dispatch_times_us):.2f} us, {dispatch_bw:.2f} GB/s",
+            flush=True,
+        )
+        print(
+            f"[rank 0] Dispatch send p50: {_p50(dispatch_send_times_us):.2f} us",
+            flush=True,
+        )
+        print(
+            f"[rank 0] Dispatch recv p50: {_p50(dispatch_recv_times_us):.2f} us",
+            flush=True,
+        )
+        print(
+            f"[rank 0] Combine both p50: {_p50(combine_times_us):.2f} us, {combine_bw:.2f} GB/s",
+            flush=True,
+        )
+        print(
+            f"[rank 0] Combine send p50: {_p50(combine_send_times_us):.2f} us",
+            flush=True,
+        )
+        print(
+            f"[rank 0] Combine recv p50: {_p50(combine_recv_times_us):.2f} us",
+            flush=True,
+        )
     return (hash_value, hash_details) if debug_hash else hash_value
 
 
@@ -595,6 +814,8 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             skip_benchmark=args.pressure_test_mode == 1,
             debug_hash=args.debug_hash,
             stop_after_first=args.stop_after_first,
+            num_warmup=args.num_warmup,
+            num_repeats=args.num_repeats,
         )
         if args.debug_hash:
             ref_hash, ref_hash_details = ref_out
@@ -624,6 +845,8 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                 skip_benchmark=args.pressure_test_mode == 1,
                 debug_hash=args.debug_hash,
                 stop_after_first=args.stop_after_first,
+                num_warmup=args.num_warmup,
+                num_repeats=args.num_repeats,
             )
             if args.debug_hash:
                 current_hash, current_hash_details = cur_out
@@ -726,6 +949,18 @@ if __name__ == "__main__":
         "--stop-after-first",
         action="store_true",
         help="Stop after the first experiment (return_recv_hook=False, dispatch_use_fp8=False, round_scale=False, use_ue8m0=False).",
+    )
+    parser.add_argument(
+        "--num-warmup",
+        type=int,
+        default=200,
+        help="Number of warmup iterations for event timing benchmark.",
+    )
+    parser.add_argument(
+        "--num-repeats",
+        type=int,
+        default=500,
+        help="Number of measured iterations for event timing benchmark.",
     )
     args = parser.parse_args()
 
