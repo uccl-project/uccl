@@ -11,12 +11,12 @@
 #
 # Options:
 #   --docker    Run inside Docker container (default container: lam_rocm)
-#   --conda     Run inside conda environment (default: /home/ubuntu/lam/conda_lam_local)
+#   --conda     Run inside conda environment (default: /home/ubuntu/lam/uccl_lam_local)
 #
 # Environment variables:
 #   MASTER_PORT   - Master port (default: random 29500-30499)
 #   CONTAINER     - Docker container name (default: lam_rocm, only for --docker)
-#   CONDA_ENV     - Conda environment path (default: /home/ubuntu/lam/conda_lam_local, only for --conda)
+#   CONDA_ENV     - Conda environment path (default: /home/ubuntu/lam/uccl_lam_local, only for --conda)
 #   NUM_TOKENS    - Number of tokens (default: 128)
 #   HIDDEN        - Hidden size (default: 7168)
 #   NUM_TOPK      - Top-k value (default: 8)
@@ -52,8 +52,8 @@ done
 
 # Node IPs (in order of node_rank)
 NODES=(
-    "172.31.24.178"
-    "172.31.20.184"
+    "172.31.16.74"   # master
+    "172.31.18.162"
 )
 
 # Configuration - MASTER_ADDR automatically set to first node
@@ -66,7 +66,7 @@ NPROC_PER_NODE=8
 CONTAINER="${CONTAINER:-lam_rocm}"
 
 # Conda environment path
-CONDA_ENV="${CONDA_ENV:-/home/ubuntu/lam/conda_lam_local}"
+CONDA_ENV="${CONDA_ENV:-/home/ubuntu/lam/uccl_lam_local}"
 
 # Kill command - kills processes based on mode
 if [ "$1" == "kill" ]; then
@@ -200,6 +200,8 @@ export UCCL_LOG_DIR=${RUN_LOG_DIR}"
             --num-experts=${NUM_EXPERTS} \
             --stop-after-first"
         local exec_cmd="docker exec ${CONTAINER} bash -c '${env_vars} && cd ${SCRIPT_DIR} && ${torchrun_cmd}'"
+        echo "[$(date '+%H:%M:%S')] Command to launch on node ${node_rank}:"
+        echo "${exec_cmd}"
         ssh -o StrictHostKeyChecking=no \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=10 \
@@ -217,8 +219,9 @@ export UCCL_LOG_DIR=${RUN_LOG_DIR}"
             --num-tokens=${NUM_TOKENS} \
             --hidden=${HIDDEN} \
             --num-topk=${NUM_TOPK} \
-            --num-experts=${NUM_EXPERTS} \
-            --stop-after-first"
+            --num-experts=${NUM_EXPERTS}"
+        echo "[$(date '+%H:%M:%S')] Command to launch on node ${node_rank}:"
+        echo "${conda_cmd}"
         ssh -o StrictHostKeyChecking=no \
             -o ServerAliveInterval=30 \
             -o ServerAliveCountMax=10 \

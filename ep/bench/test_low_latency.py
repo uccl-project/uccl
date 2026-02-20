@@ -245,7 +245,7 @@ def test_main(
                                 cumulative_local_expert_recv_stats = torch.zeros(
                                     (num_local_experts,), dtype=torch.int, device="cuda"
                                 )
-                                print(f"[python] dispatch called", flush=True)
+                                # print(f"[python] dispatch called", flush=True)
                                 (
                                     packed_recv_x,
                                     packed_recv_count,
@@ -489,6 +489,8 @@ def test_main(
             return_recv_hook=return_recv_hook,
         )
         large_gemm_with_hook(hook) if return_recv_hook else None
+        # Phase alignment: ensure all ranks finish dispatch before any starts combine
+        # dist.barrier(group=group)
         combined_x, event, hook = buffer.low_latency_combine(
             simulated_gemm_x,
             topk_idx,
@@ -498,6 +500,8 @@ def test_main(
             return_recv_hook=return_recv_hook,
         )
         large_gemm_with_hook(hook) if return_recv_hook else None
+        # Phase alignment: ensure all ranks finish dispatch before any starts combine
+        # dist.barrier(group=group)
 
     print("✓ All correctness tests passed!", flush=True)
 
