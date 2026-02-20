@@ -58,6 +58,12 @@ INCDIR ?= $(PREFIX)/include
 
 LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LIBS2)
 
+ifneq (,$(findstring tcp,$(TRANSPORTS)))
+NCCL_HOME ?= ../thirdparty/nccl/build
+NCCL_INC  ?= $(NCCL_HOME)/include
+NCCL_LIB  ?= $(NCCL_HOME)/lib
+endif
+
 ifeq ($(USE_TCP),1)
 NCCL_HOME ?= ../thirdparty/nccl/build
 NCCL_INC  ?= $(NCCL_HOME)/include
