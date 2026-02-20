@@ -52,8 +52,8 @@ done
 
 # Node IPs (in order of node_rank)
 NODES=(
-    "172.31.16.74"   # master
-    "172.31.18.162"
+    "172.31.5.88"    # master (ip-172-31-5-88)
+    "172.31.6.215"   # ip-172-31-6-215
 )
 
 # Configuration - MASTER_ADDR automatically set to first node
@@ -219,7 +219,8 @@ export UCCL_LOG_DIR=${RUN_LOG_DIR}"
             --num-tokens=${NUM_TOKENS} \
             --hidden=${HIDDEN} \
             --num-topk=${NUM_TOPK} \
-            --num-experts=${NUM_EXPERTS}"
+            --num-experts=${NUM_EXPERTS} \
+            --stop-after-first"
         echo "[$(date '+%H:%M:%S')] Command to launch on node ${node_rank}:"
         echo "${conda_cmd}"
         ssh -o StrictHostKeyChecking=no \

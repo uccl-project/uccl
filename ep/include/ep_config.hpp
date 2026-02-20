@@ -197,15 +197,20 @@ struct LowLatencyLayout {
 
     // Send buffer
 #ifdef LAM_DEV
+    constexpr size_t kNumMaxTopK = 9;
     // Lam: Buffer layout for batched RDMA sends:
-    // ┌─────────────────────────────────┬──────────────────────────────────────────────┐
-    // │ Temp buffer (offset 0)          │ RDMA batch buffer (offset num_max_tokens)    │
-    // │ rdma_x[token_idx]               │ rdma_x[num_max_tokens + expert*max + slot]   │
-    // │ Size: num_max_tokens * msg_size │ Size: num_experts * num_max_tokens * msg_size│
-    // └─────────────────────────────────┴──────────────────────────────────────────────┘
-    // Flow: FP8 cast -> temp buffer -> copy to rdma_batch_buffer -> batch RDMA send
+    // ┌─────────────────────────────────┬──────────────────────────────────────────────┬──────────────────────────────────────────────┐
+    // │ Temp buffer (offset 0)          │ Expert batch buffer                          │ Rank batch buffer                            │
+    // │ rdma_x[token_idx]               │ rdma_x[num_max_tokens + expert*max + slot]   │ rdma_x[... + rank*rank_cap + rank_slot]      │
+    // │ Size: num_max_tokens * msg_size │ Size: num_experts * num_max_tokens * msg_size│ Size: num_ranks*max*kNumMaxTopK*msg_size     │
+    // └─────────────────────────────────┴──────────────────────────────────────────────┴──────────────────────────────────────────────┘
+    // Flow: FP8 cast -> temp -> expert batch (legacy path) + rank batch (new path)
+    size_t rank_batch_capacity_per_rank =
+        num_max_dispatch_tokens_per_rank * kNumMaxTopK;
     size_t dispatch_send_buffer_bytes =
-        (num_experts + 1) * num_max_dispatch_tokens_per_rank * num_bytes_per_dispatch_msg;
+        ((1 + num_experts) * num_max_dispatch_tokens_per_rank +
+         num_ranks * rank_batch_capacity_per_rank) *
+        num_bytes_per_dispatch_msg;
 #else
     size_t dispatch_send_buffer_bytes =
         num_max_dispatch_tokens_per_rank * num_bytes_per_dispatch_msg;

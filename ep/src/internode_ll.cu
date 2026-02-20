@@ -64,6 +64,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     int* atomic_counter_per_expert, int* atomic_finish_counter_per_expert,
 #ifdef LAM_DEV
     int* atomic_send_counter_per_expert,
+    int* atomic_send_counter_per_rank, int* rank_send_prefix,
 #endif
     int* next_clean, int64_t* next_clean_second, int num_next_clean_int,
     int num_tokens, int num_max_dispatch_tokens_per_rank, int num_topk,
@@ -253,15 +254,80 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                 : 0;
         if (dst_p2p_ptr == 0) {
 #ifdef LAM_DEV
+          int lam_rank_slot = lane_id == 0
+                                  ? atomicAdd(atomic_send_counter_per_rank +
+                                                  dst_rank,
+                                              1)
+                                  : 0;
+          lam_rank_slot = __shfl_sync(WARP_MASK, lam_rank_slot, 0);
           // Lam: IBGDA -> copy temp to rdma_batch_buffer, batch send later
           auto const lam_slot = shared_send_slots[warp_id];
-          auto const batch_buf_offset = num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
-          auto const batch_buf_ptr = static_cast<uint8_t*>(rdma_x) + batch_buf_offset +
-              (dst_expert_idx * num_max_dispatch_tokens_per_rank + lam_slot) * num_bytes_per_msg;
+          auto const rank_batch_capacity =
+              num_max_dispatch_tokens_per_rank * kNumMaxTopK;
+          EP_DEVICE_ASSERT(lam_rank_slot >= 0);
+          EP_DEVICE_ASSERT(lam_rank_slot < rank_batch_capacity);
+          auto const batch_buf_offset =
+              num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
+          auto const rank_batch_buf_offset =
+              (1 + num_experts) * num_max_dispatch_tokens_per_rank *
+              num_bytes_per_msg;
+          auto const batch_buf_ptr =
+              static_cast<uint8_t*>(rdma_x) + batch_buf_offset +
+              (dst_expert_idx * num_max_dispatch_tokens_per_rank + lam_slot) *
+                  num_bytes_per_msg;
+          auto const rank_batch_buf_ptr =
+              static_cast<uint8_t*>(rdma_x) + rank_batch_buf_offset +
+              (dst_rank * rank_batch_capacity + lam_rank_slot) *
+                  num_bytes_per_msg;
           auto const* src_int4_ptr = reinterpret_cast<int4 const*>(rdma_x_src_idx);
           auto* batch_buf_int4_ptr = reinterpret_cast<int4*>(batch_buf_ptr);
+          auto* rank_batch_buf_int4_ptr =
+              reinterpret_cast<int4*>(rank_batch_buf_ptr);
           UNROLLED_WARP_COPY(8, lane_id, num_int4_per_msg, batch_buf_int4_ptr,
                              src_int4_ptr, ld_nc_global, st_na_global);
+          // New path: write into per-dst-rank contiguous staging buffer.
+          UNROLLED_WARP_COPY(8, lane_id, num_int4_per_msg, rank_batch_buf_int4_ptr,
+                             src_int4_ptr, ld_nc_global, st_na_global);
+          if (lane_id == 0) {
+            // Populate reserved header fields for future rank-batched recv
+            // demux:
+            //   [0] src_token_idx (already written),
+            //   [1] dst_local_expert_idx,
+            //   [2] dst_rank,
+            //   [3] rank_slot.
+            auto* batch_msg_header = reinterpret_cast<int*>(batch_buf_ptr);
+            batch_msg_header[1] = dst_expert_local_idx;
+            batch_msg_header[2] = dst_rank;
+            batch_msg_header[3] = lam_rank_slot;
+            auto* rank_batch_msg_header = reinterpret_cast<int*>(rank_batch_buf_ptr);
+            rank_batch_msg_header[1] = dst_expert_local_idx;
+            rank_batch_msg_header[2] = dst_rank;
+            rank_batch_msg_header[3] = lam_rank_slot;
+
+            // Full mapping print (rank0 only): print every inter-node mapped
+            // entry at write time, so we can inspect exact slot assignments.
+            if (rank == 0) {
+              while (atomicCAS(&g_print_lock, 0, 1) != 0)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+                __builtin_amdgcn_s_sleep(1);
+#else
+                ;
+#endif
+              printf(
+                  "[LAM_DEV][dispatch] write src_idx=%d dst_expert=%d "
+                  "dst_local=%d dst_rank=%d expert_slot=%d local_rank_slot=%d "
+                  "expert_buf_index=%d rank_buf_index=%d "
+                  "dst_rank_expert_begin=%d dst_rank_expert_end=%d\n",
+                  batch_msg_header[0], dst_expert_idx, batch_msg_header[1],
+                  batch_msg_header[2], lam_slot, batch_msg_header[3],
+                  dst_expert_idx * num_max_dispatch_tokens_per_rank + lam_slot,
+                  dst_rank * rank_batch_capacity + lam_rank_slot,
+                  dst_rank * num_local_experts,
+                  min((dst_rank + 1) * num_local_experts, num_experts) - 1);
+              __threadfence_system();
+              atomicExch(&g_print_lock, 0);
+            }
+          }
 #else
           __threadfence_system();
           uccl::nvshmemi_ibgda_put_nbi_warp(
@@ -349,14 +415,15 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   cg::this_grid().sync();
 #endif
 
-  // Lam: Batch RDMA send phase - send entire expert buffer in ONE IBGDA call
-  // Each warp group handles one expert (only first sub_warp does the send)
-  if (responsible_expert_idx < num_experts && sub_warp_id == 0) {
-    auto const dst_rank = responsible_expert_idx / num_local_experts;
-    auto const dst_expert_local_idx = responsible_expert_idx % num_local_experts;
+  // Lam: Batch RDMA send phase - send one rank-contiguous buffer per dst rank.
+  // Each warp group handles one destination rank (only first sub_warp sends).
+  if (responsible_expert_idx < num_ranks && sub_warp_id == 0) {
+    auto const dst_rank = responsible_expert_idx;
+    auto const rank_batch_capacity =
+        num_max_dispatch_tokens_per_rank * kNumMaxTopK;
 
     // Check if this destination is inter-node (needs IBGDA batch send)
-    // IPC destinations were already sent in the token loop
+    // IPC destinations were already sent in the token loop.
     auto const test_dst_ptr = reinterpret_cast<uint64_t>(rdma_recv_x);
     auto const dst_p2p_ptr =
         ipc_rdma_base_ptrs
@@ -365,27 +432,44 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             : 0;
 
     if (dst_p2p_ptr == 0) {
-      // Inter-node: batch send ALL tokens for this expert in ONE call
-      auto const num_tokens_to_send =
-          atomic_send_counter_per_expert[responsible_expert_idx];
-
+      // Inter-node: batch send ALL tokens for this destination rank in ONE call.
+      auto const num_tokens_to_send = atomic_send_counter_per_rank[dst_rank];
       if (num_tokens_to_send > 0) {
-        auto const batch_buf_offset =
-            num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
-        // Source: start of this expert's batch buffer (contiguous)
-        auto const batch_buf_ptr =
-            static_cast<uint8_t*>(rdma_x) + batch_buf_offset +
-            responsible_expert_idx * num_max_dispatch_tokens_per_rank *
-                num_bytes_per_msg;
-        auto const src_ptr = reinterpret_cast<uint64_t>(batch_buf_ptr);
-        // Destination: start of this expert's recv buffer on remote rank
+        auto const rank_batch_buf_offset =
+            (1 + num_experts) * num_max_dispatch_tokens_per_rank *
+            num_bytes_per_msg;
+        // Source: start of this dst-rank's rank-batch buffer (contiguous).
+        auto const rank_batch_buf_ptr =
+            static_cast<uint8_t*>(rdma_x) + rank_batch_buf_offset +
+            dst_rank * rank_batch_capacity * num_bytes_per_msg;
+        auto const src_ptr = reinterpret_cast<uint64_t>(rank_batch_buf_ptr);
+        auto const rank_batch_recv_offset =
+            num_experts * num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
+        // Destination: start of this src-rank's slot in remote rank-batch area.
         auto const dst_ptr =
             reinterpret_cast<uint64_t>(rdma_recv_x) +
-            dst_expert_local_idx * num_ranks *
-                num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
-            rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
-        // Total bytes: all tokens for this expert
+            rank_batch_recv_offset +
+            rank * rank_batch_capacity * num_bytes_per_msg;
         auto const total_bytes = num_tokens_to_send * num_bytes_per_msg;
+
+#ifdef LAM_DEV
+        if (rank == 0 && lane_id == 0) {
+          while (atomicCAS(&g_print_lock, 0, 1) != 0)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+            __builtin_amdgcn_s_sleep(1);
+#else
+            ;
+#endif
+          printf(
+              "[LAM_DEV][dispatch] send_ready src_rank=%d dst_rank=%d "
+              "tokens=%d bytes=%llu rank_capacity=%d src_rank_base_idx=%d\n",
+              rank, dst_rank, num_tokens_to_send,
+              static_cast<unsigned long long>(total_bytes), rank_batch_capacity,
+              dst_rank * rank_batch_capacity);
+          __threadfence_system();
+          atomicExch(&g_print_lock, 0);
+        }
+#endif
 
         __threadfence_system();
 
@@ -393,13 +477,31 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
             src_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
             total_bytes, dst_rank,
-            /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting rb.
+            /*warp_id=*/
+            dst_rank % ((num_local_experts > 0) ? num_local_experts : 1),
             lane_id, /*slot=*/0, d2h_channel_addrs, num_d2h_channel_addrs,
             false, low_latency_buffer_idx, 0, 0, num_tokens_to_send);
-        
+
+#ifdef LAM_DEV
+        if (rank == 0 && lane_id == 0) {
+          while (atomicCAS(&g_print_lock, 0, 1) != 0)
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+            __builtin_amdgcn_s_sleep(1);
+#else
+            ;
+#endif
+          printf(
+              "[LAM_DEV][dispatch] send_done src_rank=%d dst_rank=%d "
+              "tokens=%d bytes=%llu\n",
+              rank, dst_rank, num_tokens_to_send,
+              static_cast<unsigned long long>(total_bytes));
+          __threadfence_system();
+          atomicExch(&g_print_lock, 0);
+        }
+#endif
       }
     }
-    // IPC: already sent in the token loop, nothing to do here
+    // IPC: already sent in the token loop, nothing to do here.
   }
 
   __threadfence_system();  // Ensure batch sends are visible before count sends
@@ -454,6 +556,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
 #ifdef LAM_DEV
     atomic_send_counter_per_expert[responsible_expert_idx] = 0;
+    if (responsible_expert_idx < num_ranks) {
+      atomic_send_counter_per_rank[responsible_expert_idx] = 0;
+      rank_send_prefix[responsible_expert_idx] = 0;
+    }
 #endif
     // Clean `packed_recv_count`
     if (dst_rank == 0) packed_recv_count[dst_expert_local_idx] = 0;
@@ -589,10 +695,40 @@ LOW_LATENCY_DISPATCH_RECV:
 
     // Copy tokens
     EP_DEVICE_ASSERT(num_scales <= 64);
+    auto const rank_batch_capacity =
+        num_max_dispatch_tokens_per_rank * kNumMaxTopK;
+    auto const rank_batch_recv_offset =
+        num_experts * num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
+    auto const rank_batch_recv_x_uint8 =
+        static_cast<uint8_t*>(rdma_recv_x) +
+        rank_batch_recv_offset +
+        src_rank * rank_batch_capacity * num_bytes_per_msg;
+    int inter_rank_scan_cursor = 0;
     for (int i = sub_warp_id; i < num_recv_tokens; i += num_warps_per_group) {
       // Copy source info
-      auto const src_src_idx =
-          reinterpret_cast<int*>(rdma_recv_x_uint8 + i * num_bytes_per_msg);
+      int matched_rank_slot = i;
+      if (src_rank / max_nvl_peers != rank / max_nvl_peers) {
+        if (lane_id == 0) {
+          matched_rank_slot = -1;
+          for (int s = inter_rank_scan_cursor; s < rank_batch_capacity; ++s) {
+            auto const* hdr = reinterpret_cast<int const*>(
+                rank_batch_recv_x_uint8 + s * num_bytes_per_msg);
+            auto const dst_local_expert = ld_nc_global(hdr + 1);
+            if (dst_local_expert == local_expert_idx) {
+              matched_rank_slot = s;
+              inter_rank_scan_cursor = s + 1;
+              break;
+            }
+          }
+          EP_DEVICE_ASSERT(matched_rank_slot >= 0);
+        }
+        matched_rank_slot = __shfl_sync(WARP_MASK, matched_rank_slot, 0);
+      }
+      auto const src_src_idx = reinterpret_cast<int*>(
+          (src_rank / max_nvl_peers == rank / max_nvl_peers)
+              ? (rdma_recv_x_uint8 + i * num_bytes_per_msg)
+              : (rank_batch_recv_x_uint8 +
+                 matched_rank_slot * num_bytes_per_msg));
       if (lane_id == 0)
         recv_src_info[recv_token_begin_idx + i] = ld_nc_global(src_src_idx);
       __syncwarp();
@@ -672,8 +808,12 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
 #ifdef LAM_DEV
   auto atomic_send_counter_per_expert =
       atomic_finish_counter_per_expert + num_experts;
-  auto grid_sync_barrier_ptr = atomic_send_counter_per_expert + num_experts;
-  EP_HOST_ASSERT((num_experts * 3 + 1) * sizeof(int) <= NUM_WORKSPACE_BYTES);
+  auto atomic_send_counter_per_rank =
+      atomic_send_counter_per_expert + num_experts;
+  auto rank_send_prefix = atomic_send_counter_per_rank + num_ranks;
+  auto grid_sync_barrier_ptr = rank_send_prefix + num_ranks;
+  EP_HOST_ASSERT((num_experts * 3 + num_ranks * 2 + 1) * sizeof(int) <=
+                 NUM_WORKSPACE_BYTES);
 #else
   auto grid_sync_barrier_ptr = atomic_finish_counter_per_expert + num_experts;
   EP_HOST_ASSERT((num_experts * 2 + 1) * sizeof(int) <= NUM_WORKSPACE_BYTES);
@@ -696,6 +836,8 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
         rdma_recv_x, rdma_recv_count, rdma_x, x, topk_idx,                    \
         atomic_counter_per_expert, atomic_finish_counter_per_expert,          \
         LAM_DEV_ARG(atomic_send_counter_per_expert)                         \
+        LAM_DEV_ARG(atomic_send_counter_per_rank)                           \
+        LAM_DEV_ARG(rank_send_prefix)                                        \
         next_clean, next_clean_second, num_next_clean_int, num_tokens,        \
         num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,        \
         num_ranks, num_warp_groups, num_warps_per_group, round_scale, phases, \
