@@ -12,6 +12,10 @@ namespace cg = cooperative_groups;
 namespace uccl {
 namespace internode_ll {
 
+#ifndef LAM_DEV
+#define LAM_DEV
+#endif
+
 #ifdef LAM_DEV
 // Lam: Global lock for debug printing (ensures printf calls don't interleave)
 __device__ int g_print_lock = 0;

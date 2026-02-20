@@ -96,8 +96,8 @@ elif [ "$TEST" = "ud" ]; then
 
     # LIBNCCL_PATH="${UCCL_HOME}/thirdparty/nccl-sg/build/lib/libnccl.so"
     # PLUGIN_PATH="${UCCL_HOME}/collective/efa/libnccl-net-efa.so"
-    LIBNCCL_PATH=`python -c "import uccl; print(uccl.efa_nccl_path())"`
-    PLUGIN_PATH=`python -c "import uccl; print(uccl.efa_plugin_path())"`
+    LIBNCCL_PATH=`python3 -c "import uccl; print(uccl.efa_nccl_path())"`
+    PLUGIN_PATH=`python3 -c "import uccl; print(uccl.efa_plugin_path())"`
     echo "LIBNCCL_PATH: ${LIBNCCL_PATH}"
     echo "PLUGIN_PATH: ${PLUGIN_PATH}"
 
