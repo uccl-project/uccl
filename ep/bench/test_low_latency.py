@@ -237,8 +237,11 @@ def test_main(
                                 flush=True,
                             )
                             num_times += 1
-                            # for i in range((num_times % 2) + 1):
-                            for i in range(1):
+                            running_count = (num_times % 2) + 1
+                            # Lam: If stop_after_first, just run once to check the code
+                            if stop_after_first:
+                                running_count = 1
+                            for i in range(running_count):
                                 cumulative_local_expert_recv_stats = torch.zeros(
                                     (num_local_experts,), dtype=torch.int, device="cuda"
                                 )
@@ -498,7 +501,9 @@ def test_main(
 
     print("✓ All correctness tests passed!", flush=True)
 
-    if skip_benchmark or stop_after_first:
+    # Lam: If stop_after_first, just run once to check the code
+    #  or stop_after_first
+    if skip_benchmark:
         return (hash_value, hash_details) if debug_hash else hash_value
 
     # Calculate bandwidth
