@@ -1,10 +1,6 @@
 #include "uccl_engine.h"
-#ifdef UCCL_P2P_USE_TCPX
-#include "nccl_tcpx_endpoint.h"
-#else
-#include "endpoint_wrapper.h"
-#include "engine.h"
-#endif
+#include "include/common.h"
+#include "transport_factory.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <algorithm>
@@ -14,6 +10,7 @@
 #include <cstdbool>
 #include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
 #include <functional>
 #include <future>
 #include <iostream>
@@ -25,18 +22,14 @@
 #include <unordered_map>
 #include <utility>
 
-#ifdef UCCL_P2P_USE_TCPX
-// nccl_tcpx_endpoint does not declare inside_python; define it here for
-// uccl_engine.
-thread_local bool inside_python = false;
-
-using Endpoint = nccl_tcpx::Endpoint;
-#else
-using Endpoint = ::Endpoint;
-#endif
+// Forward declarations
+class Endpoint;
+extern thread_local bool inside_python;
 
 struct uccl_engine {
-  std::unique_ptr<Endpoint> endpoint;
+  void* dl_handle;                    // Handle from dlopen
+  Endpoint* endpoint;                 // The actual endpoint (raw pointer now)
+  destroy_endpoint_fn destroy_fn;     // Cleanup function from transport
 };
 
 struct uccl_conn {
@@ -126,14 +119,69 @@ void listener_thread_func(uccl_conn_t* conn) {
 
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   inside_python = in_python;
+
+  // Get transport from environment variable (default to rdma)
+  const char* transport = std::getenv("UCCL_P2P_TRANSPORT");
+  if (!transport) transport = "rdma";
+
+  // Build library name
+  std::string lib_name = std::string("libuccl_p2p_") + transport + ".so";
+
+  // dlopen the transport library
+  void* handle = dlopen(lib_name.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (!handle) {
+    std::cerr << "Failed to load " << lib_name << ": " << dlerror() << std::endl;
+    std::cerr << "Please ensure the transport library is in LD_LIBRARY_PATH" << std::endl;
+    return nullptr;
+  }
+
+  // Get factory function
+  std::string factory_name = std::string("create_uccl_endpoint_") + transport;
+  dlerror();  // Clear any existing error
+  auto create_fn = reinterpret_cast<create_endpoint_fn>(dlsym(handle, factory_name.c_str()));
+  const char* dlsym_error = dlerror();
+  if (dlsym_error) {
+    std::cerr << "Failed to find " << factory_name << ": " << dlsym_error << std::endl;
+    dlclose(handle);
+    return nullptr;
+  }
+
+  // Create endpoint
   uccl_engine_t* eng = new uccl_engine;
-  eng->endpoint = std::unique_ptr<Endpoint>(new Endpoint(num_cpus));
+  eng->dl_handle = handle;
+  eng->endpoint = static_cast<Endpoint*>(create_fn(num_cpus));
+  if (!eng->endpoint) {
+    std::cerr << "Failed to create endpoint from " << lib_name << std::endl;
+    dlclose(handle);
+    delete eng;
+    return nullptr;
+  }
+
+  // Get destroy function
+  std::string destroy_name = std::string("destroy_uccl_endpoint_") + transport;
+  dlerror();  // Clear any existing error
+  eng->destroy_fn = reinterpret_cast<destroy_endpoint_fn>(dlsym(handle, destroy_name.c_str()));
+  dlsym_error = dlerror();
+  if (dlsym_error) {
+    std::cerr << "Warning: Failed to find " << destroy_name << ": " << dlsym_error << std::endl;
+    // Continue anyway, we can still call delete directly
+  }
+
+  std::cout << "Loaded transport: " << transport << " from " << lib_name << std::endl;
   return eng;
 }
 
 void uccl_engine_destroy(uccl_engine_t* engine) {
   if (engine) {
-    engine->endpoint.reset();
+    if (engine->destroy_fn && engine->endpoint) {
+      engine->destroy_fn(engine->endpoint);
+    } else if (engine->endpoint) {
+      // Fallback: directly delete if destroy_fn not available
+      delete engine->endpoint;
+    }
+    if (engine->dl_handle) {
+      dlclose(engine->dl_handle);
+    }
     delete engine;
   }
 }

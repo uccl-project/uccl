@@ -60,11 +60,37 @@ sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
 
 </details>
 
-To build AWS EFA support, you can: 
+### Building Multiple Transports (Runtime Selection)
+
+You can build multiple transport backends and select at runtime using `UCCL_P2P_TRANSPORT`:
+
 ```bash
-USE_EFA=1 bash build_and_install.sh cuda p2p
-# or
-make -j USE_EFA=1 install
+# Build all transports (RDMA, TCP, TCPX, EFA) - default
+make -j
+
+# Build specific transports only
+make -j TRANSPORTS=rdma,tcp
+make -j TRANSPORTS=rdma
+make -j TRANSPORTS=efa
+make -j TRANSPORTS=rdma,efa
+
+# Install
+make install
+```
+
+**Runtime selection:**
+```bash
+# Use RDMA (default)
+export UCCL_P2P_TRANSPORT=rdma
+
+# Use TCP/NCCL
+export UCCL_P2P_TRANSPORT=tcp
+
+# Use TCPX
+export UCCL_P2P_TRANSPORT=tcpx
+
+# Use AWS EFA
+export UCCL_P2P_TRANSPORT=efa
 ```
 
 To build GCP TCPX support, you can refer to [NIXL_plugin_readme.md](./NIXL_plugin_readme.md). 
@@ -95,6 +121,7 @@ Notes:
 
 | Environment Variable | Description | Default Value |
 |---------------------|-------------|---------------|
+| UCCL_P2P_TRANSPORT | Select transport backend at runtime | rdma (others: tcp, tcpx, efa) |
 | UCCL_P2P_LOG_LEVEL | Logging level | WARNING (others: INFO, ERROR, FATAL) |
 | UCCL_P2P_RDMA_GID_INDEX | GID index in RDMA network | 0/3 (EFA/IB) |
 | UCCL_P2P_RDMA_SL | Service level in RDMA network | 8/3 (EFA/IB) |
