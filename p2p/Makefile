@@ -21,6 +21,7 @@ LIBS2 =
 
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(CUDA_INC) \
+	-MMD -MP \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu
 
@@ -193,29 +194,39 @@ engine_efa.o: engine.cc
 
 efa_factory.o: efa_factory.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_EFA -I$(EFA_HOME)/include -I. -c $< -o $@
+# Auto-generated header dependencies
+DEPS := $(OBJECTS:.o=.d) $(CAPI_OBJECT:.o=.d)
+-include $(DEPS)
+
+define safe_install
+	@echo "Installing $(1) to $(2)..."
+	@install -m $(3) $(1) $(2)/ || \
+		{ echo "Warning: Unable to install $(1) to $(2)/"; \
+		  echo "  Make sure $(2) exists and you have write permissions (try sudo make install)"; \
+		  exit 0; }
+endef
 
 ifeq ($(USE_TCPX),1)
 install: $(P2P_SHARED_LIB)
-	install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/
-	install -m 644 $(CAPI_HEADER) $(INCDIR)/
+	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
+	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
+	@echo "Installation complete!"
 else
 install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB) $(TRANSPORT_LIBS)
 	$(MAKE) $(P2P_PYTHON_EXT)
 	@mkdir -p $(INSTALL_DIR)
 	@cp $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
-	install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/
-	install -m 755 $(TRANSPORT_LIBS) $(LIBDIR)/
-	install -m 644 $(CAPI_HEADER) $(INCDIR)/
-	@echo "Installed transport libraries: $(TRANSPORT_LIBS)"
+	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
+	$(call safe_install,$(TRANSPORT_LIBS),$(LIBDIR),755)
+	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
+	@echo "Installation complete!"
 endif
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB)
-	rm -f nccl/*.o
-	rm -f engine_rdma.o engine_tcp.o engine_efa.o
-	rm -f rdma_factory.o tcp_factory.o tcpx_factory.o efa_factory.o
-	rm -f nccl/nccl_endpoint_tcp.o nccl_tcpx_endpoint_lib.o
+	rm -f $(DEPS)
+	rm -f nccl/*.o nccl/*.d
 	rm -f $(TRANSPORT_LIBS)
 ifneq ($(USE_TCPX),1)
 	rm -f $(P2P_PYTHON_EXT)

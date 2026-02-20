@@ -1,4 +1,5 @@
 #include "nccl/nccl_endpoint.h"
+#include "include/common.h"
 #include "util/gpu_rt.h"
 #include "util/net.h"
 #include <arpa/inet.h>
@@ -45,11 +46,12 @@ struct ServerHello {
   ncclUniqueId uid_rank1;
 };
 
-enum CtrlMsgType : uint8_t { kWriteReq = 1, kReadReq = 2 };
+enum CtrlMsgType : uint8_t { kWriteReq = 1, kReadReq = 2, kNotification = 3 };
 
 struct CtrlMsg {
   // type: kWriteReq => peer should recv into addr; kReadReq => peer should send
   // from addr. addr is the peer-local pointer from the FIFO descriptor.
+  // type: kNotification => notification message follows
   uint8_t type;
   uint8_t reserved[3];
   uint32_t size;
@@ -242,7 +244,15 @@ bool TCPEndpoint::recv_all_(int fd, void* buf, size_t len) const {
   size_t recvd = 0;
   while (recvd < len) {
     ssize_t rc = ::recv(fd, p + recvd, len - recvd, 0);
-    if (rc <= 0) return false;
+    if (rc < 0) {
+      if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
+        continue;
+      }
+      return false;
+    }
+    if (rc == 0) {
+      return false;
+    }
     recvd += static_cast<size_t>(rc);
   }
   return true;
@@ -276,13 +286,29 @@ bool TCPEndpoint::init_comms_(Conn& conn, ncclUniqueId const& uid_rank0,
 
 void TCPEndpoint::control_loop_(Conn* conn) {
   if (!conn) return;
-  // Control thread: handle one-sided read/write requests from the peer.
+  // Control thread: handle one-sided read/write requests and notifications from
+  // the peer.
   while (!conn->stop.load(std::memory_order_acquire)) {
     CtrlMsg msg{};
     if (!recv_all_(conn->sock_fd, &msg, sizeof(msg))) {
       break;
     }
     if (conn->stop.load(std::memory_order_acquire)) break;
+
+    // Handle notification messages
+    if (msg.type == kNotification) {
+      ::NotifyMsg notification{};
+      if (!recv_all_(conn->sock_fd, &notification, sizeof(::NotifyMsg))) {
+        std::cerr << "[tcp] failed to receive notification payload"
+                  << std::endl;
+        break;
+      }
+      {
+        std::lock_guard<std::mutex> lock(::notify_mutex);
+        ::notify_list.push_back(notification);
+      }
+      continue;
+    }
 
     size_t size = static_cast<size_t>(msg.size);
     if (size == 0) continue;
@@ -450,6 +476,11 @@ uccl::ConnID TCPEndpoint::uccl_connect(int dev, int local_gpuidx,
   int fd = ::socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return make_invalid_conn();
 
+  struct timeval tv;
+  tv.tv_sec = 1;
+  tv.tv_usec = 0;
+  setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_port = htons(remote_port);
@@ -517,10 +548,35 @@ uccl::ConnID TCPEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
   int fd = listen_fd >= 0 ? listen_fd : listen_fd_;
   if (fd < 0) return make_invalid_conn();
 
+  int flags = fcntl(fd, F_GETFL, 0);
+  fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
   sockaddr_in cli_addr{};
   socklen_t len = sizeof(cli_addr);
-  int conn_fd = ::accept(fd, reinterpret_cast<sockaddr*>(&cli_addr), &len);
-  if (conn_fd < 0) return make_invalid_conn();
+  int conn_fd = -1;
+
+  while (conn_fd < 0 && !stop_accept_.load(std::memory_order_acquire)) {
+    conn_fd = ::accept(fd, reinterpret_cast<sockaddr*>(&cli_addr), &len);
+    if (conn_fd < 0) {
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        continue;
+      }
+      return make_invalid_conn();
+    }
+  }
+
+  fcntl(fd, F_SETFL, flags);
+
+  if (stop_accept_.load(std::memory_order_acquire)) {
+    if (conn_fd >= 0) ::close(conn_fd);
+    return make_invalid_conn();
+  }
+
+  struct timeval tv;
+  tv.tv_sec = 1;
+  tv.tv_usec = 0;
+  setsockopt(conn_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
   char ip_buf[INET_ADDRSTRLEN] = {};
   if (!inet_ntop(AF_INET, &cli_addr.sin_addr, ip_buf, sizeof(ip_buf))) {
@@ -757,6 +813,42 @@ int TCPEndpoint::prepare_fifo_metadata(uccl::UcclFlow* flow,
   item.size = static_cast<uint32_t>(size);
   std::memset(item.padding, 0, sizeof(item.padding));
   serialize_uccl_fifo_item(item, out_buf);
+  return 0;
+}
+
+int TCPEndpoint::get_sock_fd(uint64_t flow_id) {
+  std::lock_guard<std::mutex> lock(conn_mu_);
+  auto it = conn_map_.find(flow_id);
+  if (it == conn_map_.end()) {
+    return -1;
+  }
+  return it->second->sock_fd;
+}
+
+int TCPEndpoint::send_notification(uint64_t flow_id,
+                                   ::NotifyMsg const& notification) {
+  std::lock_guard<std::mutex> lock(conn_mu_);
+  auto it = conn_map_.find(flow_id);
+  if (it == conn_map_.end()) {
+    return -1;
+  }
+  Conn* conn = it->second.get();
+
+  // Send notification header
+  CtrlMsg msg{};
+  msg.type = kNotification;
+  msg.size = sizeof(::NotifyMsg);
+  msg.addr = 0;
+
+  {
+    std::lock_guard<std::mutex> send_lock(conn->ctrl_send_mu);
+    if (!send_all_(conn->sock_fd, &msg, sizeof(msg))) {
+      return -1;
+    }
+    if (!send_all_(conn->sock_fd, &notification, sizeof(::NotifyMsg))) {
+      return -1;
+    }
+  }
   return 0;
 }
 

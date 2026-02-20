@@ -60,9 +60,18 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
 #elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
     hipExtMallocWithFlags(&atomic_buffer_ptr_, kAtomicBufferSize,
                           hipDeviceMallocUncached);
-#else
+#elif defined(EFA)
     cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
                   cudaHostAllocMapped | cudaHostAllocWriteCombined);
+#else
+#ifdef ATOMICS_USE_HOST_MEMORY
+    // Pinned host memory: ibv_reg_mr works on NICs without nvidia_peermem
+    // (e.g. irdma), CPU proxy threads can do std::atomic ops, and GPU
+    // kernels can still access it via CUDA host-mapped addressing.
+    cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize, cudaHostAllocMapped);
+#else
+    cudaMalloc(&atomic_buffer_ptr_, kAtomicBufferSize);
+#endif
 #endif
     cudaMemset(atomic_buffer_ptr_, 0, kAtomicBufferSize);
     proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);

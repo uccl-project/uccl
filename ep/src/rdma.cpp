@@ -5,6 +5,10 @@
 #include "proxy_ctx.hpp"
 #include "rdma_util.hpp"
 #include "util/gpu_rt.h"
+#ifdef USE_DMABUF
+#include <cuda.h>
+#include <dlfcn.h>
+#endif
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <algorithm>
@@ -37,6 +41,124 @@
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+#ifdef USE_DMABUF
+// ---------------------------------------------------------------------------
+// DMA-BUF based GPU memory registration (avoids nvidia_peermem dependency)
+// Requires CUDA >= 11.7 (driver API) and kernel DMA-BUF support.
+// Falls back to ibv_reg_mr_iova2 when DMA-BUF is unavailable.
+//
+// PyTorch's caching allocator suballocates from large cudaMalloc blocks,
+// so the user pointer may not be at the start of an allocation.
+// cuMemGetHandleForAddressRange requires the exact allocation base.
+// We use cuMemGetAddressRange to find the real base, get the DMA-BUF fd
+// for the full allocation, then tell ibv_reg_dmabuf_mr the offset.
+// ---------------------------------------------------------------------------
+
+ibv_mr* reg_mr_gpu_dmabuf(ibv_pd* pd, void* gpu_buf, size_t bytes,
+                          uint64_t iova, int access) {
+  // Load CUDA Driver API functions via dlsym at runtime for forward
+  // compatibility and to avoid hard dependency on specific driver versions.
+  // Note: Symbol names must use versioned names (e.g. _v2) matching cuda.h
+  // #defines.
+  typedef CUresult (*cuMemGetAddressRange_t)(CUdeviceptr*, size_t*,
+                                             CUdeviceptr);
+  typedef CUresult (*cuMemGetHandleForAddressRange_t)(
+      int*, CUdeviceptr, size_t, CUmemRangeHandleType, unsigned long long);
+
+  static cuMemGetAddressRange_t cuMemGetAddressRange_func = nullptr;
+  static cuMemGetHandleForAddressRange_t cuMemGetHandleForAddressRange_func =
+      nullptr;
+  static std::once_flag init_flag;
+
+  std::call_once(init_flag, []() {
+    // Try the real driver library first, then fall back to unversioned name.
+    void* handle = dlopen("libcuda.so.1", RTLD_LAZY);
+    if (!handle) handle = dlopen("libcuda.so", RTLD_LAZY);
+    if (handle) {
+      cuMemGetAddressRange_func =
+          (cuMemGetAddressRange_t)dlsym(handle, "cuMemGetAddressRange_v2");
+      cuMemGetHandleForAddressRange_func =
+          (cuMemGetHandleForAddressRange_t)dlsym(
+              handle, "cuMemGetHandleForAddressRange");
+      // Don't dlclose — keep the library mapped so function pointers stay
+      // valid.
+    }
+  });
+
+  if (!cuMemGetAddressRange_func || !cuMemGetHandleForAddressRange_func) {
+    fprintf(
+        stderr,
+        "[RDMA] CUDA Driver API functions not available (requires CUDA 11.7+), "
+        "falling back to ibv_reg_mr_iova2 (needs nvidia_peermem)\n");
+    return ibv_reg_mr_iova2(pd, gpu_buf, bytes, iova, access);
+  }
+
+  // Find the real cudaMalloc allocation that contains this pointer.
+  // PyTorch's caching allocator suballocates, so gpu_buf may be in the
+  // middle of a larger block.
+  CUdeviceptr alloc_base = 0;
+  size_t alloc_size = 0;
+  CUresult cu_err =
+      cuMemGetAddressRange_func(&alloc_base, &alloc_size, (CUdeviceptr)gpu_buf);
+  if (cu_err != CUDA_SUCCESS) {
+    fprintf(stderr,
+            "[RDMA] cuMemGetAddressRange failed (CUresult=%d), "
+            "falling back to ibv_reg_mr_iova2 (needs nvidia_peermem)\n",
+            (int)cu_err);
+    return ibv_reg_mr_iova2(pd, gpu_buf, bytes, iova, access);
+  }
+
+  uint64_t offset_in_alloc = (uintptr_t)gpu_buf - (uintptr_t)alloc_base;
+  fprintf(stderr,
+          "[RDMA] DMA-BUF: alloc_base=%p alloc_size=%zu, "
+          "gpu_buf=%p offset=%lu bytes=%zu\n",
+          (void*)alloc_base, alloc_size, gpu_buf, offset_in_alloc, bytes);
+
+  // Get DMA-BUF fd for the entire allocation (must start at alloc base).
+  int dmabuf_fd = -1;
+  cu_err = cuMemGetHandleForAddressRange_func(
+      &dmabuf_fd, alloc_base, alloc_size, CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
+      0);
+
+  if (cu_err != CUDA_SUCCESS) {
+    fprintf(stderr,
+            "[RDMA] cuMemGetHandleForAddressRange failed (CUresult=%d), "
+            "falling back to ibv_reg_mr_iova2 (needs nvidia_peermem)\n",
+            (int)cu_err);
+    return ibv_reg_mr_iova2(pd, gpu_buf, bytes, iova, access);
+  }
+
+  // Register only the sub-range we care about via offset into the DMA-BUF fd.
+  ibv_mr* mr =
+      ibv_reg_dmabuf_mr(pd, offset_in_alloc, bytes, iova, dmabuf_fd, access);
+  if (!mr) {
+    fprintf(stderr,
+            "[RDMA] ibv_reg_dmabuf_mr failed (errno=%d: %s), "
+            "falling back to ibv_reg_mr_iova2 (needs nvidia_peermem)\n",
+            errno, strerror(errno));
+    close(dmabuf_fd);
+    return ibv_reg_mr_iova2(pd, gpu_buf, bytes, iova, access);
+  }
+
+  close(dmabuf_fd);  // fd can be closed after registration
+
+  // ibv_reg_dmabuf_mr() sets mr->addr to the offset parameter
+  // (offset_in_alloc), not the GPU virtual address. Downstream code uses
+  // mr->addr as the base for SGE addresses, so we must override it with iova
+  // (the GPU virtual address). ibv_reg_mr_iova2() sets mr->addr to the addr
+  // parameter. Since we pass addr=gpu_buf and iova=gpu_buf (same value),
+  // mr->addr is correctly set to the GPU virtual address without manual
+  // intervention.
+  mr->addr = reinterpret_cast<void*>(iova);
+
+  fprintf(stderr,
+          "[RDMA] Registered GPU memory via DMA-BUF "
+          "(addr=%p, len=%zu, rkey=0x%x) — no nvidia_peermem needed\n",
+          mr->addr, bytes, mr->rkey);
+  return mr;
+}
+#endif  // USE_DMABUF
 
 void recv_connection_info_as_server(int my_rank, int* actual_peer,
                                     int listen_fd,
@@ -232,18 +354,21 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   }
   uint64_t iova = (uintptr_t)gpu_buf;
 #ifndef EFA
-  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                              IBV_ACCESS_REMOTE_ATOMIC);
-  // | IBV_ACCESS_RELAXED_ORDERING
+  int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                     IBV_ACCESS_REMOTE_ATOMIC;
 #else
-  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                              IBV_ACCESS_RELAXED_ORDERING);
+  int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                     IBV_ACCESS_RELAXED_ORDERING;
 #endif
 
+#ifdef USE_DMABUF
+  // Try DMA-BUF first (works without nvidia_peermem), falls back automatically.
+  S.mr = reg_mr_gpu_dmabuf(S.pd, gpu_buf, bytes, iova, access_flags);
+#else
+  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova, access_flags);
+#endif
   if (!S.mr) {
-    perror("ibv_reg_mr failed");
+    perror("GPU MR registration failed");
     exit(1);
   }
 
@@ -985,20 +1110,7 @@ static void post_rdma_async_batched_normal_mode(
           std::abort();
         }
 
-        // Track wr_id mappings for SOFTWARE_ORDERING
-        size_t const last = kgroup - 1;
-        uint64_t const batch_tail_wr = ring_wrids[last];
-        {
-          auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
-              batch_tail_wr, std::move(ring_wrids));
-          if (!inserted) {
-            fprintf(stderr,
-                    "thread_idx: %d, Error: tail wr_id %lu already exists "
-                    "(map=%p)\n",
-                    thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
-            std::abort();
-          }
-        }
+        // All WRs in this group are signaled; no batched WR bookkeeping needed.
       }
 #else
       {
@@ -1093,19 +1205,7 @@ static void post_rdma_async_batched_normal_mode(
                     bad->wr_id);
           std::abort();
         }
-        size_t const last = kgroup - 1;
-        uint64_t const batch_tail_wr = ring_wrids[last];
-        {
-          auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
-              batch_tail_wr, std::move(ring_wrids));
-          if (!inserted) {
-            fprintf(stderr,
-                    "thread_idx: %d, Error: tail wr_id %lu already exists "
-                    "(map=%p)\n",
-                    thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
-            std::abort();
-          }
-        }
+        // All WRs in this group are signaled; no batched WR bookkeeping needed.
       }
 #endif
     }
@@ -1231,32 +1331,11 @@ static void post_rdma_async_batched_fast_mode(
       }
 
 #ifdef USE_RECEIVER_BARRIER
-      uint64_t const expert_tail_wr = expert_wr_ids.back();
-      {
-        auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
-            expert_tail_wr, std::move(expert_wr_ids));
-        if (!inserted) {
-          fprintf(stderr,
-                  "thread_idx: %d, Error: tail wr_id %lu already exists "
-                  "(map=%p)\n",
-                  thread_idx, expert_tail_wr, (void*)&S.wr_id_to_wr_ids);
-          std::abort();
-        }
-      }
+      (void)expert_wr_ids;
     }
 #else
-    uint64_t const tail_wr = wr_ids.back();
-    {
-      auto [it, inserted] =
-          S.wr_id_to_wr_ids.try_emplace(tail_wr, std::move(wr_ids));
-      if (!inserted) {
-        fprintf(stderr,
-                "thread_idx: %d, Error: tail wr_id %lu already exists "
-                "(map=%p)\n",
-                thread_idx, tail_wr, (void*)&S.wr_id_to_wr_ids);
-        std::abort();
-      }
-    }
+    // All WRs are signaled; no batched WR bookkeeping needed.
+    (void)wr_ids;
 #endif
 
     int ret = ibv_wr_complete(qpx);
@@ -1319,17 +1398,7 @@ static void post_rdma_async_batched_fast_mode(
         fprintf(stderr, "Bad WR at %p (wr_id=%lu)\n", (void*)bad, bad->wr_id);
       std::abort();
     }
-    {
-      auto [it, inserted] =
-          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
-      if (!inserted) {
-        fprintf(stderr,
-                "thread_idx: %d, Error: tail wr_id %lu already exists "
-                "(map=%p)\n",
-                thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids);
-        std::abort();
-      }
-    }
+    // All WRs are signaled; no batched WR bookkeeping needed.
 #endif
   }
 }
@@ -1372,20 +1441,7 @@ void local_process_completions(ProxyCtx& S,
         uint64_t wrid = wc[i].wr_id;
         if ((wrid & kAtomicWrTag) == kAtomicWrTag) {
           wrid &= kAtomicMask;
-#ifdef EFA
           acked_wrs.insert(wrid);
-#else
-          auto it = S.wr_id_to_wr_ids.find(wrid);
-          if (it != S.wr_id_to_wr_ids.end()) {
-            for (uint64_t sub_wr : it->second) {
-              acked_wrs.insert(sub_wr);
-            }
-            S.wr_id_to_wr_ids.erase(it);
-          } else {
-            printf("Error: Atomic ACK for unknown wr_id %lu\n", wrid);
-            std::abort();
-          }
-#endif
           break;
         }
         if ((wrid & kBarrierWrTag) == kBarrierWrTag) {
@@ -1409,24 +1465,7 @@ void local_process_completions(ProxyCtx& S,
           }
         }
 #endif
-        {
-          uint64_t const wr_done = wc[i].wr_id;
-#ifdef EFA
-          acked_wrs.insert(wr_done);
-#else
-          auto it = S.wr_id_to_wr_ids.find(wr_done);
-          if (it != S.wr_id_to_wr_ids.end()) {
-            for (uint64_t sub_wr : it->second) {
-              acked_wrs.insert(sub_wr);
-            }
-            S.wr_id_to_wr_ids.erase(it);
-          }
-          // else {
-          //   printf("Error: Write ACK for unknown wr_id %lu\n", wr_done);
-          //   std::abort();
-          // }
-#endif
-        }
+        acked_wrs.insert(wc[i].wr_id);
       } break;
       case IBV_WC_RECV:
         if (wc[i].wc_flags & IBV_WC_WITH_IMM &&
@@ -1434,23 +1473,10 @@ void local_process_completions(ProxyCtx& S,
           assert(false && "Explicit Ack is deprecated on local proxy");
         }
         break;
-      case IBV_WC_FETCH_ADD: {
-        uint64_t wrid = wc[i].wr_id;
-        auto it = S.wr_id_to_wr_ids.find(wrid);
-        if (it != S.wr_id_to_wr_ids.end()) {
-          for (uint64_t sub_wr : it->second) {
-            acked_wrs.insert(sub_wr);
-          }
-          S.wr_id_to_wr_ids.erase(it);
-        }
-        // else {
-        //   fprintf(stderr,
-        //           "[Atomic] No batch found for wr_id=0x%lx, treating as
-        //           single "
-        //           "(map_size=%zu)\n",
-        //           wrid, S.wr_id_to_wr_ids.size());
-        // }
-      } break;
+      case IBV_WC_FETCH_ADD:
+        // All atomic FETCH_ADD WRs are signaled individually.
+        acked_wrs.insert(wc[i].wr_id);
+        break;
       default:
         break;
     }
@@ -2283,20 +2309,6 @@ static void post_atomic_operations_normal_mode(
         }
         std::abort();
       }
-      uint64_t const batch_tail_wr = group_wrids.back();
-      {
-        auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
-            batch_tail_wr, std::move(group_wrids));
-        if (!inserted) {
-          fprintf(stderr,
-                  "thread_idx: %d, Error: tail wr_id %lu already exists "
-                  "(map=%p, "
-                  "size=%zu, dst_rank=%d)\n",
-                  thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
-                  S.wr_id_to_wr_ids.size(), dst_rank);
-          std::abort();
-        }
-      }
 #endif
     }
   }
@@ -2426,20 +2438,7 @@ static void post_atomic_operations_fast_mode(
       }
     }
 #endif
-    uint64_t const batch_tail_wr = wr_ids.back();
-    {
-      auto [it, inserted] =
-          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(wr_ids));
-      if (!inserted) {
-        fprintf(stderr,
-                "thread_idx: %d, Error: tail wr_id %lu already exists "
-                "(map=%p, "
-                "size=%zu, dst_rank=%d)\n",
-                thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
-                S.wr_id_to_wr_ids.size(), dst_rank);
-        std::abort();
-      }
-    }
+    // All WRs are signaled; no batched WR bookkeeping needed.
   }
 }
 
@@ -2592,20 +2591,7 @@ static void post_atomic_operations_fast_mode_native_rdma(
       }
       std::abort();
     }
-
-    uint64_t const batch_tail_wr = group_wrids.back();
-    {
-      auto [it, inserted] =
-          S.wr_id_to_wr_ids.try_emplace(batch_tail_wr, std::move(group_wrids));
-      if (!inserted) {
-        fprintf(stderr,
-                "thread_idx: %d, Error: tail wr_id %lu already exists "
-                "(map=%p, size=%zu, dst_rank=%d)\n",
-                thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
-                S.wr_id_to_wr_ids.size(), dst_rank);
-        std::abort();
-      }
-    }
+    // All WRs are signaled; no batched WR bookkeeping needed.
   }
 #endif
 }
@@ -2778,22 +2764,6 @@ static void post_atomic_operations_native_rdma(
             batch_tail_wr, group_wrids.back());
         std::abort();
       }
-      {
-        auto [it, inserted] = S.wr_id_to_wr_ids.try_emplace(
-            batch_tail_wr, std::move(group_wrids));
-
-        // printf("[Native RDMA] batch_tail_wr: 0x%lx, map_size: %zu, dst_rank:
-        // %d\n", batch_tail_wr, it->second.size(), dst_rank);
-        if (!inserted) {
-          fprintf(stderr,
-                  "thread_idx: %d, Error: tail wr_id %lu already exists "
-                  "(map=%p, "
-                  "size=%zu, dst_rank=%d)\n",
-                  thread_idx, batch_tail_wr, (void*)&S.wr_id_to_wr_ids,
-                  S.wr_id_to_wr_ids.size(), dst_rank);
-          std::abort();
-        }
-      }
     }
   }
 }
@@ -2807,7 +2777,7 @@ void post_atomic_operations(ProxyCtx& S,
                             std::unordered_set<uint64_t>& acked_wrs,
                             bool use_normal_mode) {
   if (use_normal_mode) {
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#ifndef EFA
     post_atomic_operations_native_rdma(S, wrs_to_post, cmds_to_post, ctxs,
                                        my_rank, thread_idx, acked_wrs);
 #else
@@ -2815,7 +2785,7 @@ void post_atomic_operations(ProxyCtx& S,
                                        my_rank, thread_idx, acked_wrs);
 #endif
   } else {
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#ifndef EFA
     post_atomic_operations_fast_mode_native_rdma(
         S, wrs_to_post, cmds_to_post, ctxs, my_rank, thread_idx, acked_wrs);
 #else
