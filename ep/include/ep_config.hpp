@@ -196,8 +196,14 @@ struct LowLatencyLayout {
     size_t num_bytes_per_combine_msg = hidden * sizeof(nv_bfloat16);
 
     // Send buffer
+#ifdef LAM_DEV
+    // Lam: Change the layout to [slot][dst_expert] to enable batched RDMA sends
+    size_t dispatch_send_buffer_bytes =
+        num_experts * num_max_dispatch_tokens_per_rank * num_bytes_per_dispatch_msg;
+#else
     size_t dispatch_send_buffer_bytes =
         num_max_dispatch_tokens_per_rank * num_bytes_per_dispatch_msg;
+#endif
     size_t combine_send_buffer_bytes = num_experts *
                                        num_max_dispatch_tokens_per_rank *
                                        num_bytes_per_combine_msg;

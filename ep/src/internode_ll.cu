@@ -12,6 +12,15 @@ namespace cg = cooperative_groups;
 namespace uccl {
 namespace internode_ll {
 
+#ifdef LAM_DEV
+// Lam: Global lock for debug printing (ensures printf calls don't interleave)
+__device__ int g_print_lock = 0;
+// Lam: Helper macro for conditional kernel arguments
+#define LAM_DEV_ARG(x) x,
+#else
+#define LAM_DEV_ARG(x)
+#endif
+
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
 constexpr int kNumMaxWarpGroups = 16;
 #else
@@ -53,6 +62,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     int64_t* dispatch_wait_recv_cost_stats, void* rdma_recv_x,
     int* rdma_recv_count, void* rdma_x, void const* x, int64_t const* topk_idx,
     int* atomic_counter_per_expert, int* atomic_finish_counter_per_expert,
+#ifdef LAM_DEV
+    int* atomic_send_counter_per_expert,
+#endif
     int* next_clean, int64_t* next_clean_second, int num_next_clean_int,
     int num_tokens, int num_max_dispatch_tokens_per_rank, int num_topk,
     int num_experts, int rank, int num_ranks, int num_warp_groups,
@@ -63,6 +75,11 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     void* atomic_buffer_ptr = nullptr,
     int64_t* rdma_recv_count_internode = nullptr,
     int* grid_sync_barrier_ptr = nullptr) {
+#ifdef LAM_DEV
+  if (blockIdx.x == 0 && threadIdx.x == 0) {
+    // printf("[LAM_DEV] dispatch called\n");
+  }
+#endif
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const thread_id = static_cast<int>(threadIdx.x);
   auto const warp_id = thread_id / WARP_SIZE, lane_id = get_lane_id();
@@ -97,6 +114,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
   // Expert counts
   __shared__ int shared_num_tokens_sent_per_expert[kNumMaxWarpGroups];
+
+#ifdef LAM_DEV
+  // Lam: Send slots for each topk destination (for batched send buffer layout)
+  constexpr int kNumMaxTopK = 9;
+  __shared__ int shared_send_slots[kNumMaxTopK];
+  __shared__ int shared_dst_experts[kNumMaxTopK];
+#endif
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   // initialize barrier
@@ -135,6 +159,41 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                    topk_idx + token_idx * num_topk + warp_id))
                              : -1;
       thread_id == 0 ? (*rdma_x_src_idx = token_idx) : 0;
+
+#ifdef LAM_DEV
+      // Lam: Allocate send slots for each topk destination
+      // Each warp (warp_id < num_topk) allocates a slot for its destination expert
+      if (warp_id < num_topk && lane_id == 0) {
+        shared_dst_experts[warp_id] = dst_expert_idx;
+        if (dst_expert_idx >= 0) {
+          shared_send_slots[warp_id] =
+              atomicAdd(atomic_send_counter_per_expert + dst_expert_idx, 1);
+        } else {
+          shared_send_slots[warp_id] = -1;
+        }
+      }
+      // Sync to make shared_send_slots visible to all threads
+      sync_barrier_1((num_warps - 1) * WARP_SIZE);
+
+      // // Lam: Debug print: verify send slot allocation (only first SM, first few tokens)
+      // // Uses spinlock to prevent interleaved output from different threads
+      // if (thread_id == 0) {
+      //   // Acquire print lock
+      //   while (atomicCAS(&g_print_lock, 0, 1) != 0);
+      //   __threadfence();
+
+      //   printf("[LAM_DEV] rank=%d token_idx=%d send_slots: ", rank, token_idx);
+      //   for (int k = 0; k < num_topk; k++) {
+      //     printf("(expert=%d, slot=%d) ", shared_dst_experts[k],
+      //            shared_send_slots[k]);
+      //   }
+      //   printf("\n");
+
+      //   __threadfence();
+      //   atomicExch(&g_print_lock, 0);  // Release print lock
+      // }
+      // sync_barrier_1((num_warps - 1) * WARP_SIZE);
+#endif  // LAM_DEV (slot allocation + debug print)
 
 // FP8 cast
 #pragma unroll
@@ -319,10 +378,29 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr),
                             -num_tokens_sent - 1);
     }
+
+#ifdef LAM_DEV
+    // Lam: Debug print: verify send counter matches expected count
+    // {
+    //   auto const send_counter_val =
+    //       atomic_send_counter_per_expert[responsible_expert_idx];
+    //   if (rank == 0 && responsible_expert_idx < 8) {
+    //     printf(
+    //         "[LAM_DEV] rank=%d expert=%d: expected_count=%d, send_counter=%d, "
+    //         "match=%s\n",
+    //         rank, responsible_expert_idx, num_tokens_sent, send_counter_val,
+    //         (num_tokens_sent == send_counter_val) ? "YES" : "NO");
+    //   }
+    // }
+#endif
+
     // Clean workspace for next use
     atomic_counter_per_expert[responsible_expert_idx] = 0;
     atomic_finish_counter_per_expert[responsible_expert_idx] = 0;
 
+#ifdef LAM_DEV
+    atomic_send_counter_per_expert[responsible_expert_idx] = 0;
+#endif
     // Clean `packed_recv_count`
     if (dst_rank == 0) packed_recv_count[dst_expert_local_idx] = 0;
   }
@@ -546,8 +624,15 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   auto atomic_counter_per_expert = static_cast<int*>(workspace);
   auto atomic_finish_counter_per_expert =
       atomic_counter_per_expert + num_experts;
+#ifdef LAM_DEV
+  auto atomic_send_counter_per_expert =
+      atomic_finish_counter_per_expert + num_experts;
+  auto grid_sync_barrier_ptr = atomic_send_counter_per_expert + num_experts;
+  EP_HOST_ASSERT((num_experts * 3 + 1) * sizeof(int) <= NUM_WORKSPACE_BYTES);
+#else
   auto grid_sync_barrier_ptr = atomic_finish_counter_per_expert + num_experts;
   EP_HOST_ASSERT((num_experts * 2 + 1) * sizeof(int) <= NUM_WORKSPACE_BYTES);
+#endif
 
   // FP8 checks
   if (use_ue8m0)
@@ -565,6 +650,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
         cumulative_local_expert_recv_stats, dispatch_wait_recv_cost_stats,    \
         rdma_recv_x, rdma_recv_count, rdma_x, x, topk_idx,                    \
         atomic_counter_per_expert, atomic_finish_counter_per_expert,          \
+        LAM_DEV_ARG(atomic_send_counter_per_expert)                         \
         next_clean, next_clean_second, num_next_clean_int, num_tokens,        \
         num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,        \
         num_ranks, num_warp_groups, num_warps_per_group, round_scale, phases, \
