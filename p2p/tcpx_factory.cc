@@ -1,3 +1,4 @@
+// Must include nccl_tcpx_endpoint.h to get full Endpoint definition
 #include "nccl_tcpx_endpoint.h"
 
 extern "C" {

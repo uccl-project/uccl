@@ -96,7 +96,7 @@ OBJECTS := $(SOURCES:.cc=.o)
 endif
 
 # Transport library configuration (comma-separated)
-TRANSPORTS ?= rdma,tcp,tcpx,efa
+TRANSPORTS ?= rdma
 TRANSPORT_LIBS :=
 ifneq (,$(findstring rdma,$(TRANSPORTS)))
     TRANSPORT_LIBS += libuccl_p2p_rdma.so
@@ -155,44 +155,44 @@ libuccl_p2p_rdma.so: engine_rdma.o rdma_factory.o
 	$(CXX) -shared $^ -o $@ -L$(CUDA_LIB) -lcudart -lcuda -libverbs -lglog -lgflags -lpthread -Wl,-rpath,$(CUDA_LIB)
 
 engine_rdma.o: engine.cc
-	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -I. -c $< -o $@
 
 rdma_factory.o: rdma_factory.cc
-	$(CXX) $(CXXFLAGS) -I. -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -I. -c $< -o $@
 
 # TCP transport (with NCCL flag)
 libuccl_p2p_tcp.so: engine_tcp.o nccl/nccl_endpoint_tcp.o tcp_factory.o
 	$(CXX) -shared $^ -o $@ -L$(CUDA_LIB) -lcudart -lcuda -L$(NCCL_LIB) -lnccl -lglog -lgflags -lpthread -Wl,-rpath,$(CUDA_LIB):$(NCCL_LIB)
 
 engine_tcp.o: engine.cc
-	$(CXX) $(CXXFLAGS) -DUCCL_P2P_USE_NCCL -I$(NCCL_INC) -I. -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_NCCL -I$(NCCL_INC) -I. -c $< -o $@
 
 nccl/nccl_endpoint_tcp.o: nccl/nccl_endpoint.cc
 	@mkdir -p nccl
-	$(CXX) $(CXXFLAGS) -DUCCL_P2P_USE_NCCL -I$(NCCL_INC) -I. -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_NCCL -I$(NCCL_INC) -I. -c $< -o $@
 
 tcp_factory.o: tcp_factory.cc
-	$(CXX) $(CXXFLAGS) -DUCCL_P2P_USE_NCCL -I$(NCCL_INC) -I. -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_NCCL -I$(NCCL_INC) -I. -c $< -o $@
 
 # TCPX transport
 libuccl_p2p_tcpx.so: nccl_tcpx_endpoint_lib.o tcpx_factory.o
 	$(CXX) -shared $^ -o $@ -L$(CUDA_LIB) -lcudart -lcuda -L$(NCCL_LIB) -lnccl -lglog -lgflags -lpthread -Wl,-rpath,$(CUDA_LIB):$(NCCL_LIB)
 
 nccl_tcpx_endpoint_lib.o: nccl_tcpx_endpoint.cc
-	$(CXX) $(CXXFLAGS) -DUCCL_P2P_USE_TCPX -I$(NCCL_INC) -I. -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_TCPX -I$(NCCL_INC) -I. -c $< -o $@
 
 tcpx_factory.o: tcpx_factory.cc
-	$(CXX) $(CXXFLAGS) -DUCCL_P2P_USE_TCPX -I$(NCCL_INC) -I. -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_TCPX -I$(NCCL_INC) -I. -c $< -o $@
 
 # EFA transport (AWS Elastic Fabric Adapter)
 libuccl_p2p_efa.so: engine_efa.o efa_factory.o
 	$(CXX) -shared $^ -o $@ -L$(CUDA_LIB) -lcudart -lcuda -L$(EFA_HOME)/lib -lefa -libverbs -lglog -lgflags -lpthread -Wl,-rpath,$(CUDA_LIB):$(EFA_HOME)/lib
 
 engine_efa.o: engine.cc
-	$(CXX) $(CXXFLAGS) -DUCCL_P2P_USE_EFA -I$(EFA_HOME)/include -I. -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_EFA -I$(EFA_HOME)/include -I. -c $< -o $@
 
 efa_factory.o: efa_factory.cc
-	$(CXX) $(CXXFLAGS) -DUCCL_P2P_USE_EFA -I$(EFA_HOME)/include -I. -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_EFA -I$(EFA_HOME)/include -I. -c $< -o $@
 
 ifeq ($(USE_TCPX),1)
 install: $(P2P_SHARED_LIB)

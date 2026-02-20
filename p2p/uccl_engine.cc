@@ -1,4 +1,6 @@
 #include "uccl_engine.h"
+#include "engine.h"
+#include "endpoint_wrapper.h"
 #include "include/common.h"
 #include "transport_factory.h"
 #include "util/util.h"
@@ -22,9 +24,8 @@
 #include <unordered_map>
 #include <utility>
 
-// Forward declarations
-class Endpoint;
-extern thread_local bool inside_python;
+// Endpoint is defined in engine.h
+using Endpoint = ::Endpoint;
 
 struct uccl_engine {
   void* dl_handle;                    // Handle from dlopen

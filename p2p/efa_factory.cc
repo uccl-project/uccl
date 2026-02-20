@@ -1,3 +1,5 @@
+// Must include engine.h to get full Endpoint definition
+// Note: This will pull in pybind11 headers, but that's OK for factory compilation
 #include "engine.h"
 
 extern "C" {
