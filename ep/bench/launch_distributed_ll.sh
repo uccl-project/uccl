@@ -3,14 +3,15 @@
 # Launch Low Latency Test Script (Distributed)
 #
 # Launches test_low_latency.py across multiple nodes via SSH
+# Executes inside Docker container "lam_rocm" on each node
 #
 # Usage:
 #   ./launch_distributed.sh          # Launch the test
-#   ./launch_distributed.sh kill     # Kill lam conda env GPU processes only
+#   ./launch_distributed.sh kill     # Kill GPU processes in lam_rocm container
 #
 # Environment variables:
 #   MASTER_PORT   - Master port (default: random 29500-30499)
-#   CONDA_ENV     - Conda environment to use (default: lam)
+#   CONTAINER     - Docker container name (default: lam_rocm)
 #   NUM_TOKENS    - Number of tokens (default: 128)
 #   HIDDEN        - Hidden size (default: 7168)
 #   NUM_TOPK      - Top-k value (default: 8)
@@ -18,41 +19,43 @@
 #   PER_RANK_LOG  - Enable per-GPU/rank logging (default: 1, set to 0 to disable)
 #
 # Example:
-#   CONDA_ENV=lam NUM_TOKENS=256 ./launch_distributed.sh
+#   CONTAINER=lam_rocm NUM_TOKENS=256 ./launch_distributed.sh
 #   PER_RANK_LOG=0 ./launch_distributed.sh   # disable per-GPU logs (node-level only)
 #
 
 # Configuration
-MASTER_ADDR="10.162.224.129"
+MASTER_ADDR="chi2762"
 MASTER_PORT="${MASTER_PORT:-$((29500 + RANDOM % 1000))}"  # Random port 29500-30499 if not specified
 NNODES=4
 NPROC_PER_NODE=8
 
 # Node IPs (in order of node_rank)
 NODES=(
-    "10.162.224.129"
-    "10.162.224.132"
-    "10.162.224.133"
-    "10.162.224.134"
+    "chi2762" 
+    "chi2766" 
+    "chi2877" 
+    "chi2888"
 )
 
-# Kill command - only kills processes running under the lam conda environment
+# Docker container name
+CONTAINER="${CONTAINER:-lam_rocm}"
+
+# Kill command - kills python processes inside the lam_rocm container
 # Two-stage: first shows PIDs, then asks for confirmation
 if [ "$1" == "kill" ]; then
-    echo "Scanning for lam conda env GPU processes on all nodes..."
-    LAM_PYTHON_PATH="/home/yangzhou/miniconda3/envs/lam/bin/python"
+    echo "Scanning for python processes in ${CONTAINER} container on all nodes..."
     
     # Declare associative array to store PIDs per node
     declare -A NODE_PIDS
     TOTAL_PIDS=0
     
-    # Stage 1: Collect PIDs from all nodes
+    # Stage 1: Collect PIDs from all nodes (inside docker containers)
     for node_ip in "${NODES[@]}"; do
         echo "  Checking ${node_ip}..."
         if [ "${node_ip}" == "${MASTER_ADDR}" ]; then
-            pids=$(sudo amd-smi process 2>/dev/null | grep -A1 "NAME: ${LAM_PYTHON_PATH}" | grep 'PID:' | awk '{print $2}' | sort -u | tr '\n' ' ')
+            pids=$(docker exec ${CONTAINER} pgrep -f "python.*torch" 2>/dev/null | tr '\n' ' ')
         else
-            pids=$(ssh -o StrictHostKeyChecking=no "${node_ip}" "sudo amd-smi process 2>/dev/null | grep -A1 'NAME: ${LAM_PYTHON_PATH}' | grep 'PID:' | awk '{print \$2}' | sort -u | tr '\n' ' '" 2>/dev/null)
+            pids=$(ssh -o StrictHostKeyChecking=no "${node_ip}" "docker exec ${CONTAINER} pgrep -f 'python.*torch'" 2>/dev/null | tr '\n' ' ')
         fi
         pids=$(echo "$pids" | xargs)  # trim whitespace
         if [ -n "$pids" ]; then
@@ -61,14 +64,14 @@ if [ "$1" == "kill" ]; then
             TOTAL_PIDS=$((TOTAL_PIDS + pid_count))
             echo "    Found PIDs: $pids"
         else
-            echo "    No lam processes found"
+            echo "    No torch processes found in container"
         fi
     done
     
     # Check if any PIDs found
     if [ "$TOTAL_PIDS" -eq 0 ]; then
         echo ""
-        echo "No lam processes found on any node."
+        echo "No torch processes found in ${CONTAINER} container on any node."
         exit 0
     fi
     
@@ -88,25 +91,23 @@ if [ "$1" == "kill" ]; then
         exit 0
     fi
     
-    # Stage 3: Kill confirmed PIDs
+    # Stage 3: Kill confirmed PIDs (inside docker containers)
     echo ""
     echo "Killing processes..."
     for node_ip in "${!NODE_PIDS[@]}"; do
         pids="${NODE_PIDS[$node_ip]}"
         echo "  Killing on ${node_ip}: $pids"
         if [ "${node_ip}" == "${MASTER_ADDR}" ]; then
-            echo "$pids" | xargs -r kill -9 2>/dev/null
+            for pid in $pids; do
+                docker exec ${CONTAINER} kill -9 $pid 2>/dev/null
+            done
         else
-            ssh -o StrictHostKeyChecking=no "${node_ip}" "echo '$pids' | xargs -r kill -9" 2>/dev/null
+            ssh -o StrictHostKeyChecking=no "${node_ip}" "for pid in $pids; do docker exec ${CONTAINER} kill -9 \$pid 2>/dev/null; done"
         fi
     done
     echo "Done."
     exit 0
 fi
-
-# Conda configuration
-CONDA_PATH="/home/yangzhou/miniconda3"
-CONDA_ENV="${CONDA_ENV:-lam}"  # Can override with CONDA_ENV=myenv
 
 # Default benchmark parameters
 NUM_TOKENS="${NUM_TOKENS:-128}"
@@ -128,7 +129,7 @@ echo "Launching distributed test_low_latency.py"
 echo "=============================================="
 echo "Master: ${MASTER_ADDR}:${MASTER_PORT}"
 echo "Nodes: ${NNODES}, GPUs per node: ${NPROC_PER_NODE}"
-echo "Conda env: ${CONDA_ENV}"
+echo "Container: ${CONTAINER}"
 echo "Parameters: tokens=${NUM_TOKENS}, hidden=${HIDDEN}, topk=${NUM_TOPK}, experts=${NUM_EXPERTS}"
 echo "Logs: ${RUN_LOG_DIR}"
 if [ "${PER_RANK_LOG:-1}" == "1" ]; then
@@ -146,9 +147,6 @@ launch_node() {
     
     echo "[$(date '+%H:%M:%S')] Launching on node ${node_rank} (${node_ip})..."
     
-    # Build the command using explicit Python path (more reliable than conda activate)
-    local PYTHON_BIN="${CONDA_PATH}/envs/${CONDA_ENV}/bin/python"
-    
     # Per-rank logging: use torchrun's --log-dir and --tee options
     local LOG_OPTS=""
     if [ "${PER_RANK_LOG:-1}" == "1" ]; then
@@ -160,7 +158,7 @@ launch_node() {
         LOG_OPTS="--log-dir ${RANK_LOG_DIR} --tee 3"
     fi
     
-    local torchrun_cmd="${PYTHON_BIN} -m torch.distributed.run \
+    local torchrun_cmd="python -m torch.distributed.run \
         --nnodes=${NNODES} \
         --nproc_per_node=${NPROC_PER_NODE} \
         --node_rank=${node_rank} \
@@ -174,40 +172,37 @@ launch_node() {
         --num-experts=${NUM_EXPERTS}" 
     
     # Set required environment variables for network interfaces
-    local env_vars="export NCCL_SOCKET_IFNAME=enp49s0f1np1 && \
-export GLOO_SOCKET_IFNAME=enp49s0f1np1 && \
-export UCCL_IB_GID_INDEX=3 && \
-export NCCL_IB_GID_INDEX=3 && \
+    local env_vars="export NCCL_SOCKET_IFNAME=enp193s0f1np1 && \
+export GLOO_SOCKET_IFNAME=enp193s0f1np1 && \
+export UCCL_IB_GID_INDEX=1 && \
+export NCCL_IB_GID_INDEX=1 && \
 export DEBUG_DISPATCH=1"
-    local cmd="${env_vars} && cd ${SCRIPT_DIR}/.. && ${torchrun_cmd}"
+    
+    # Build the command to run inside docker container
+    local docker_cmd="docker exec ${CONTAINER} bash -c '${env_vars} && cd /io/ep && ${torchrun_cmd}'"
     
     # Write command to log file first
     {
         echo "=============================================="
+        echo "Container: ${CONTAINER}"
         echo "Command: ${torchrun_cmd}"
         echo "Node: ${node_rank} (${node_ip})"
         echo "Time: $(date)"
         echo "Environment:"
-        echo "  NCCL_SOCKET_IFNAME=enp49s0f1np1"
-        echo "  GLOO_SOCKET_IFNAME=enp49s0f1np1"
-        echo "  UCCL_IB_GID_INDEX=3"
-        echo "  NCCL_IB_GID_INDEX=3"
+        echo "  NCCL_SOCKET_IFNAME=enp193s0f1np1"
+        echo "  GLOO_SOCKET_IFNAME=enp193s0f1np1"
+        echo "  UCCL_IB_GID_INDEX=1"
+        echo "  NCCL_IB_GID_INDEX=1"
         echo "=============================================="
         echo ""
     } > "${log_file}"
     
-    if [ "${node_ip}" == "${MASTER_ADDR}" ] && [ "${node_rank}" -eq 0 ]; then
-        # Local execution for master node
-        nohup bash -c "${cmd}" >> "${log_file}" 2>&1 &
-    else
-        # SSH to remote node
-        # Write output to shared filesystem log file on remote side
-        # Use nohup so process survives SSH disconnect
-        ssh -o StrictHostKeyChecking=no \
-            -o ServerAliveInterval=30 \
-            -o ServerAliveCountMax=10 \
-            "${node_ip}" "nohup bash -c '${cmd}' >> ${log_file} 2>&1 &" &
-    fi
+    # SSH to node (including master) and run inside docker container
+    # This ensures consistent behavior across all nodes
+    ssh -o StrictHostKeyChecking=no \
+        -o ServerAliveInterval=30 \
+        -o ServerAliveCountMax=10 \
+        "${node_ip}" "nohup ${docker_cmd} >> ${log_file} 2>&1 &" &
     
     echo "[$(date '+%H:%M:%S')] Node ${node_rank} launched, PID: $!, log: ${log_file}"
 }
