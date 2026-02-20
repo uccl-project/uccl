@@ -38,6 +38,10 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+#ifndef UCCL_RDMA_POST_DEBUG
+#define UCCL_RDMA_POST_DEBUG 0
+#endif
+
 void recv_connection_info_as_server(int my_rank, int* actual_peer,
                                     int listen_fd,
                                     RDMAConnectionInfo* remote_array) {
@@ -732,6 +736,67 @@ void post_receive_buffer_for_imm(ProxyCtx& S) {
   }
 }
 
+static inline void log_dispatch_rdma_post(int thread_idx, int src_rank,
+                                          int dst_rank, size_t dispatch_wrs,
+                                          uint64_t dispatch_bytes,
+                                          size_t total_wrs,
+                                          uint64_t total_bytes) {
+#if UCCL_RDMA_POST_DEBUG
+  if (dispatch_wrs == 0) return;
+
+  static std::atomic<uint64_t> g_dispatch_post_count{0};
+  static std::atomic<uint64_t> g_dispatch_wr_count{0};
+  static std::atomic<uint64_t> g_dispatch_bytes_sum{0};
+  static std::once_flag g_dispatch_summary_once;
+  std::call_once(g_dispatch_summary_once, []() {
+    std::atexit([]() {
+      uint64_t post_count = g_dispatch_post_count.load(std::memory_order_relaxed);
+      uint64_t wr_count = g_dispatch_wr_count.load(std::memory_order_relaxed);
+      uint64_t bytes_sum = g_dispatch_bytes_sum.load(std::memory_order_relaxed);
+      if (post_count == 0) return;
+      fprintf(stderr,
+              "[RDMA POST dispatch summary] posts=%llu dispatch_wrs=%llu "
+              "dispatch_bytes=%llu\n",
+              (unsigned long long)post_count, (unsigned long long)wr_count,
+              (unsigned long long)bytes_sum);
+    });
+  });
+
+  g_dispatch_post_count.fetch_add(1, std::memory_order_relaxed);
+  g_dispatch_wr_count.fetch_add(dispatch_wrs, std::memory_order_relaxed);
+  g_dispatch_bytes_sum.fetch_add(dispatch_bytes, std::memory_order_relaxed);
+  fprintf(stderr,
+          "[RDMA POST dispatch-only] th=%d src=%d dst=%d dispatch_wrs=%zu "
+          "dispatch_bytes=%llu total_wrs=%zu total_bytes=%llu\n",
+          thread_idx, src_rank, dst_rank, dispatch_wrs,
+          (unsigned long long)dispatch_bytes, total_wrs,
+          (unsigned long long)total_bytes);
+#else
+  (void)thread_idx;
+  (void)src_rank;
+  (void)dst_rank;
+  (void)dispatch_wrs;
+  (void)dispatch_bytes;
+  (void)total_wrs;
+  (void)total_bytes;
+#endif
+}
+
+static inline void log_dispatch_rdma_message_size(int thread_idx, int src_rank,
+                                                  int dst_rank,
+                                                  uint32_t msg_bytes) {
+#if UCCL_RDMA_POST_DEBUG
+  fprintf(stderr,
+          "[RDMA MSG dispatch] th=%d src=%d dst=%d msg_bytes=%u\n", thread_idx,
+          src_rank, dst_rank, msg_bytes);
+#else
+  (void)thread_idx;
+  (void)src_rank;
+  (void)dst_rank;
+  (void)msg_bytes;
+#endif
+}
+
 // Normal mode implementation
 static void post_rdma_async_batched_normal_mode(
     ProxyCtx& S, void* buf, size_t num_wrs,
@@ -873,6 +938,22 @@ static void post_rdma_async_batched_normal_mode(
 
         ring_wrids.push_back(wrs_to_post[i]);
       }
+#if UCCL_RDMA_POST_DEBUG
+      uint64_t total_bytes = 0;
+      uint64_t dispatch_bytes = 0;
+      size_t dispatch_wrs = 0;
+      for (size_t i : idxs) {
+        total_bytes += cmds_to_post[i].bytes;
+        if (!get_is_combine(cmds_to_post[i].cmd_type)) {
+          dispatch_bytes += cmds_to_post[i].bytes;
+          ++dispatch_wrs;
+          log_dispatch_rdma_message_size(thread_idx, my_rank, dst_rank,
+                                         cmds_to_post[i].bytes);
+        }
+      }
+      log_dispatch_rdma_post(thread_idx, my_rank, dst_rank, dispatch_wrs,
+                             dispatch_bytes, idxs.size(), total_bytes);
+#endif
       int ret = ibv_wr_complete(qpx);
       if (ret) {
         fprintf(stderr, "ibv_wr_complete failed (dst=%d): %s (ret=%d)\n",
@@ -974,6 +1055,22 @@ static void post_rdma_async_batched_normal_mode(
         }
 
         // Post the chain
+#if UCCL_RDMA_POST_DEBUG
+        uint64_t total_bytes = 0;
+        uint64_t dispatch_bytes = 0;
+        size_t dispatch_wrs = 0;
+        for (size_t i : idxs) {
+          total_bytes += cmds_to_post[i].bytes;
+          if (!get_is_combine(cmds_to_post[i].cmd_type)) {
+            dispatch_bytes += cmds_to_post[i].bytes;
+            ++dispatch_wrs;
+            log_dispatch_rdma_message_size(thread_idx, my_rank, dst_rank,
+                                           cmds_to_post[i].bytes);
+          }
+        }
+        log_dispatch_rdma_post(thread_idx, my_rank, dst_rank, dispatch_wrs,
+                               dispatch_bytes, kgroup, total_bytes);
+#endif
         ibv_send_wr* bad = nullptr;
         int ret = ibv_post_send(qp, &wrs[0], &bad);
         if (ret) {
@@ -1083,6 +1180,22 @@ static void post_rdma_async_batched_normal_mode(
         }
 
         // Post the chain
+#if UCCL_RDMA_POST_DEBUG
+        uint64_t total_bytes = 0;
+        uint64_t dispatch_bytes = 0;
+        size_t dispatch_wrs = 0;
+        for (size_t i : idxs) {
+          total_bytes += cmds_to_post[i].bytes;
+          if (!get_is_combine(cmds_to_post[i].cmd_type)) {
+            dispatch_bytes += cmds_to_post[i].bytes;
+            ++dispatch_wrs;
+            log_dispatch_rdma_message_size(thread_idx, my_rank, dst_rank,
+                                           cmds_to_post[i].bytes);
+          }
+        }
+        log_dispatch_rdma_post(thread_idx, my_rank, dst_rank, dispatch_wrs,
+                               dispatch_bytes, kgroup, total_bytes);
+#endif
         ibv_send_wr* bad = nullptr;
         int ret = ibv_post_send(qp, &wrs[0], &bad);
         if (ret) {
@@ -1148,6 +1261,20 @@ static void post_rdma_async_batched_fast_mode(
       std::abort();
     }
     size_t const k = wr_ids.size();
+#if UCCL_RDMA_POST_DEBUG
+    uint64_t dst_total_bytes = 0;
+    for (size_t i : wr_ids) dst_total_bytes += cmds_to_post[i].bytes;
+    uint64_t dst_dispatch_bytes = 0;
+    size_t dst_dispatch_wrs = 0;
+    for (size_t i : wr_ids) {
+      if (!get_is_combine(cmds_to_post[i].cmd_type)) {
+        dst_dispatch_bytes += cmds_to_post[i].bytes;
+        ++dst_dispatch_wrs;
+        log_dispatch_rdma_message_size(thread_idx, my_rank, dst_rank,
+                                       cmds_to_post[i].bytes);
+      }
+    }
+#endif
 #ifdef EFA
     struct ibv_qp_ex* qpx = (struct ibv_qp_ex*)ctx->qp;
     ibv_wr_start(qpx);
@@ -1266,6 +1393,10 @@ static void post_rdma_async_batched_fast_mode(
     }
 #endif
 
+#if UCCL_RDMA_POST_DEBUG
+    log_dispatch_rdma_post(thread_idx, my_rank, dst_rank, dst_dispatch_wrs,
+                           dst_dispatch_bytes, k, dst_total_bytes);
+#endif
     int ret = ibv_wr_complete(qpx);
     if (ret) {
       fprintf(stderr, "ibv_wr_complete failed (dst=%d): %s (ret=%d)\n",
@@ -1317,6 +1448,10 @@ static void post_rdma_async_batched_fast_mode(
     wrs[last].send_flags |= IBV_SEND_SIGNALED;
     wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
     wrs[last].imm_data = htonl(static_cast<uint32_t>(batch_tail_wr));
+#if UCCL_RDMA_POST_DEBUG
+    log_dispatch_rdma_post(thread_idx, my_rank, dst_rank, dst_dispatch_wrs,
+                           dst_dispatch_bytes, k, dst_total_bytes);
+#endif
     ibv_send_wr* bad = nullptr;
     int ret = ibv_post_send(ctx->qp, &wrs[0], &bad);
     if (ret) {
