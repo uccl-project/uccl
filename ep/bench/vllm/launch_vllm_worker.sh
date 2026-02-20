@@ -52,20 +52,20 @@ export TP_SOCKET_IFNAME=enp71s0         # Uncomment if using tensor parallel
 # CRITICAL: Must match Node 0 exactly!
 
 # AWS EFA NCCL plugin (uncomment if using AWS EFA):
-export NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/x86_64-linux-gnu/libnccl-net.so"
+export NCCL_NET_PLUGIN="/opt/amazon/ofi-nccl/lib/libnccl-net.so"
 
 # NCCL performance tuning (optional):
 export NCCL_P2P_NET_CHUNKSIZE=524288
 export NCCL_BUFFSIZE=8388608
 
 # NCCL debugging (for diagnosing connection issues):
-# export NCCL_DEBUG=INFO
+export NCCL_DEBUG=INFO
 # export NCCL_DEBUG_SUBSYS=INIT,NET
 
 # https://github.com/vllm-project/vllm/pull/27444
 export VLLM_ENGINE_READY_TIMEOUT_S=3600
 # Set to local non-shared disk like "/opt/dlami/nvme"
-export DG_JIT_CACHE_DIR="/local_storage"
+export DG_JIT_CACHE_DIR="/home/ubuntu"
 
 # ============================================================================
 # ARGUMENTS PARSING
