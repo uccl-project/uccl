@@ -7,7 +7,7 @@
 #else
 #include "endpoint_wrapper.h"
 #include "engine.h"
-#include "endpoint_wrapper.h"
+#endif
 #include "include/common.h"
 #include "transport_factory.h"
 #include "util/util.h"
