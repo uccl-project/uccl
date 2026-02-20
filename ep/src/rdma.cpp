@@ -1315,17 +1315,17 @@ static void post_rdma_async_batched_normal_mode(
         qpx->wr_flags = IBV_SEND_SIGNALED;
 
         uint64_t remote_addr =
-            ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
+            ctx->remote_addr + decode_write_offset(cmd.req_rptr);
         uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
         if (remote_addr < ctx->remote_addr ||
             remote_addr + cmd.bytes > remote_end) {
           fprintf(stderr,
                   "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
-                  "size=%zu), cmd.req_rptr: 0x%llx\n",
+                  "size=%zu), offset: 0x%llx\n",
                   (unsigned long long)remote_addr, cmd.bytes,
                   (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
-                  (unsigned long long)cmd.req_rptr);
+                  (unsigned long long)decode_write_offset(cmd.req_rptr));
           cudaError_t err = cudaDeviceSynchronize();
           if (err != cudaSuccess) {
             fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
@@ -1369,8 +1369,8 @@ static void post_rdma_async_batched_normal_mode(
           ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
         }
 
-        uintptr_t laddr =
-            cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
+        uintptr_t laddr = decode_write_offset(cmd.req_lptr) +
+                          reinterpret_cast<uintptr_t>(ctx->mr->addr);
         ibv_wr_set_ud_addr(qpx, ctx->dst_ah, dst_qpn, QKEY);
         ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
                        static_cast<uint32_t>(cmd.bytes));
@@ -1406,7 +1406,7 @@ static void post_rdma_async_batched_normal_mode(
 
           // Remote address bounds check
           uint64_t remote_addr =
-              ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
+              ctx->remote_addr + decode_write_offset(cmd.req_rptr);
           uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
           if (remote_addr < ctx->remote_addr ||
@@ -1414,10 +1414,10 @@ static void post_rdma_async_batched_normal_mode(
             fprintf(
                 stderr,
                 "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
-                "size=%zu), cmd.req_rptr: 0x%llx\n",
+                "size=%zu), offset: 0x%llx\n",
                 (unsigned long long)remote_addr, cmd.bytes,
                 (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
-                (unsigned long long)cmd.req_rptr);
+                (unsigned long long)decode_write_offset(cmd.req_rptr));
             cudaError_t err = cudaDeviceSynchronize();
             if (err != cudaSuccess) {
               fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
@@ -1427,8 +1427,8 @@ static void post_rdma_async_batched_normal_mode(
           }
 
           // Local SGE
-          uintptr_t laddr =
-              cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
+          uintptr_t laddr = decode_write_offset(cmd.req_lptr) +
+                            reinterpret_cast<uintptr_t>(ctx->mr->addr);
 
 #ifdef USE_DMABUF
           // Split across chunk boundaries so each sub-WR stays within one
@@ -1553,7 +1553,7 @@ static void post_rdma_async_batched_normal_mode(
 
           // Remote address bounds check
           uint64_t remote_addr =
-              ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
+              ctx->remote_addr + decode_write_offset(cmd.req_rptr);
           uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
           if (remote_addr < ctx->remote_addr ||
@@ -1561,10 +1561,10 @@ static void post_rdma_async_batched_normal_mode(
             fprintf(
                 stderr,
                 "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
-                "size=%zu), cmd.req_rptr: 0x%llx\n",
+                "size=%zu), offset: 0x%llx\n",
                 (unsigned long long)remote_addr, cmd.bytes,
                 (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
-                (unsigned long long)cmd.req_rptr);
+                (unsigned long long)decode_write_offset(cmd.req_rptr));
             cudaError_t err = cudaDeviceSynchronize();
             if (err != cudaSuccess) {
               fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
@@ -1574,8 +1574,8 @@ static void post_rdma_async_batched_normal_mode(
           }
 
           // Local SGE
-          uintptr_t laddr =
-              cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
+          uintptr_t laddr = decode_write_offset(cmd.req_lptr) +
+                            reinterpret_cast<uintptr_t>(ctx->mr->addr);
 
 #ifdef USE_DMABUF
           // Split across chunk boundaries so each sub-WR stays within one
@@ -1739,17 +1739,17 @@ static void post_rdma_async_batched_fast_mode(
         qpx->wr_flags = IBV_SEND_SIGNALED;
 
         uint64_t remote_addr =
-            ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
+            ctx->remote_addr + decode_write_offset(cmd.req_rptr);
         uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
         if (remote_addr < ctx->remote_addr ||
             remote_addr + cmd.bytes > remote_end) {
           fprintf(stderr,
                   "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
-                  "size=%zu), cmd.req_rptr: 0x%llx\n",
+                  "size=%zu), offset: 0x%llx\n",
                   (unsigned long long)remote_addr, cmd.bytes,
                   (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
-                  (unsigned long long)cmd.req_rptr);
+                  (unsigned long long)decode_write_offset(cmd.req_rptr));
           cudaError_t err = cudaDeviceSynchronize();
           if (err != cudaSuccess) {
             fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
@@ -1782,8 +1782,8 @@ static void post_rdma_async_batched_fast_mode(
         ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
       }
 #endif
-        uintptr_t laddr =
-            cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
+        uintptr_t laddr = decode_write_offset(cmd.req_lptr) +
+                          reinterpret_cast<uintptr_t>(ctx->mr->addr);
         ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
         ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
                        static_cast<uint32_t>(cmd.bytes));
@@ -1813,19 +1813,20 @@ static void post_rdma_async_batched_fast_mode(
       auto const& cmd = cmds_to_post[i];
       wr_ids[j] = wrs_to_post[i];
 
-      uintptr_t laddr =
-          cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
-      uint64_t remote_addr = ctx->remote_addr + cmd.req_rptr;
+      uintptr_t laddr = decode_write_offset(cmd.req_lptr) +
+                        reinterpret_cast<uintptr_t>(ctx->mr->addr);
+      uint64_t remote_addr =
+          ctx->remote_addr + decode_write_offset(cmd.req_rptr);
 
       uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
       if (remote_addr < ctx->remote_addr ||
           remote_addr + cmd.bytes > remote_end) {
         fprintf(stderr,
                 "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
-                "size=%zu), cmd.req_rptr: 0x%llx\n",
+                "size=%zu), offset: 0x%llx\n",
                 (unsigned long long)remote_addr, cmd.bytes,
                 (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
-                (unsigned long long)cmd.req_rptr);
+                (unsigned long long)decode_write_offset(cmd.req_rptr));
         cudaError_t err = cudaDeviceSynchronize();
         if (err != cudaSuccess) {
           fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
