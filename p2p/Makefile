@@ -139,12 +139,13 @@ $(P2P_PYTHON_EXT): $(OBJECTS)
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB) $(INC) $(LIBS)
 
-$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT)
-	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECT) \
-	      -L$(CUDA_LIB) -lcudart -lcuda \
-	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) $(INC) $(LIBS)
+$(P2P_SHARED_LIB): $(CAPI_OBJECT)
+	$(CXX) $(CAPI_OBJECT) -shared -o $@ -ldl -Wl,-rpath,$(CUDA_LIB)
 endif
+
+# Main lib's uccl_engine.o is compiled in loader mode (thin dlopen forwarder)
+uccl_engine.o: uccl_engine.cc
+	$(CXX) $(CXXFLAGS) -DUCCL_P2P_LOADER -I. -I./include -c $< -o $@
 
 # Compile source files
 %.o: %.cc
@@ -158,18 +159,21 @@ nccl/%.o: nccl/%.cc
 # Transport library build rules
 
 # RDMA transport (default, no flags needed)
-libuccl_p2p_rdma.so: engine_rdma.o rdma_factory.o
+libuccl_p2p_rdma.so: uccl_engine_rdma.o engine_rdma.o
 	$(CXX) -shared $^ -o $@ -L$(CUDA_LIB) -lcudart -lcuda -libverbs -lglog -lgflags -lpthread -Wl,-rpath,$(CUDA_LIB)
+
+uccl_engine_rdma.o: uccl_engine.cc
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -I. -c $< -o $@
 
 engine_rdma.o: engine.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -I. -c $< -o $@
 
-rdma_factory.o: rdma_factory.cc
-	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -I. -c $< -o $@
-
 # TCP transport (with NCCL flag)
-libuccl_p2p_tcp.so: engine_tcp.o nccl/nccl_endpoint_tcp.o tcp_factory.o
+libuccl_p2p_tcp.so: uccl_engine_tcp.o engine_tcp.o nccl/nccl_endpoint_tcp.o
 	$(CXX) -shared $^ -o $@ -L$(CUDA_LIB) -lcudart -lcuda -L$(NCCL_LIB) -lnccl -libverbs -lglog -lgflags -lpthread -Wl,-rpath,$(CUDA_LIB):$(NCCL_LIB)
+
+uccl_engine_tcp.o: uccl_engine.cc
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_NCCL -I$(NCCL_INC) -I. -c $< -o $@
 
 engine_tcp.o: engine.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_NCCL -I$(NCCL_INC) -I. -c $< -o $@
@@ -178,27 +182,24 @@ nccl/nccl_endpoint_tcp.o: nccl/nccl_endpoint.cc
 	@mkdir -p nccl
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_NCCL -I$(NCCL_INC) -I. -c $< -o $@
 
-tcp_factory.o: tcp_factory.cc
-	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_NCCL -I$(NCCL_INC) -I. -c $< -o $@
-
 # TCPX transport
-libuccl_p2p_tcpx.so: nccl_tcpx_endpoint_lib.o tcpx_factory.o
+libuccl_p2p_tcpx.so: uccl_engine_tcpx.o nccl_tcpx_endpoint_lib.o
 	$(CXX) -shared $^ -o $@ -L$(CUDA_LIB) -lcudart -lcuda -L$(NCCL_LIB) -lnccl -libverbs -lglog -lgflags -lpthread -Wl,-rpath,$(CUDA_LIB):$(NCCL_LIB)
+
+uccl_engine_tcpx.o: uccl_engine.cc
+	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_TCPX -I$(NCCL_INC) -I. -c $< -o $@
 
 nccl_tcpx_endpoint_lib.o: nccl_tcpx_endpoint.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_TCPX -I$(NCCL_INC) -I. -c $< -o $@
 
-tcpx_factory.o: tcpx_factory.cc
-	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_TCPX -I$(NCCL_INC) -I. -c $< -o $@
-
 # EFA transport (AWS Elastic Fabric Adapter)
-libuccl_p2p_efa.so: engine_efa.o efa_factory.o
+libuccl_p2p_efa.so: uccl_engine_efa.o engine_efa.o
 	$(CXX) -shared $^ -o $@ -L$(CUDA_LIB) -lcudart -lcuda -L$(EFA_HOME)/lib -lefa -libverbs -lglog -lgflags -lpthread -Wl,-rpath,$(CUDA_LIB):$(EFA_HOME)/lib
 
-engine_efa.o: engine.cc
+uccl_engine_efa.o: uccl_engine.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_EFA -I$(EFA_HOME)/include -I. -c $< -o $@
 
-efa_factory.o: efa_factory.cc
+engine_efa.o: engine.cc
 	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -DUCCL_P2P_USE_EFA -I$(EFA_HOME)/include -I. -c $< -o $@
 # Auto-generated header dependencies
 DEPS := $(OBJECTS:.o=.d) $(CAPI_OBJECT:.o=.d)
@@ -234,7 +235,7 @@ clean:
 	rm -f $(DEPS)
 	rm -f nccl/*.o nccl/*.d
 	rm -f engine_rdma.o engine_tcp.o engine_efa.o
-	rm -f rdma_factory.o tcp_factory.o tcpx_factory.o efa_factory.o
+	rm -f uccl_engine_rdma.o uccl_engine_tcp.o uccl_engine_tcpx.o uccl_engine_efa.o
 	rm -f nccl/nccl_endpoint_tcp.o nccl_tcpx_endpoint_lib.o
 	rm -f $(TRANSPORT_LIBS)
 ifneq ($(USE_TCPX),1)
@@ -270,9 +271,9 @@ help:
 	@echo "                   make TRANSPORTS=efa"
 	@echo "                   make TRANSPORTS=rdma,efa"
 	@echo ""
+	@echo ""
 	@echo "Runtime configuration:"
-	@echo "  UCCL_P2P_TRANSPORT - Select transport at runtime: rdma | tcp | tcpx | efa"
-	@echo "                       Default: rdma"
+	@echo "  UCCL_P2P_TRANSPORT - Select transport at runtime (default: rdma)"
 	@echo "                       Example: export UCCL_P2P_TRANSPORT=tcp"
 	@echo "                       Example: export UCCL_P2P_TRANSPORT=efa"
 

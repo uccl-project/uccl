@@ -1,3 +1,181 @@
+#ifdef UCCL_P2P_LOADER
+// ============================================================
+// Thin loader mode: libuccl_p2p.so reads UCCL_P2P_TRANSPORT
+// env var and forwards all calls to libuccl_p2p_<transport>.so
+// ============================================================
+#include "uccl_engine.h"
+#include "include/common.h"
+#include <dlfcn.h>
+#include <cstdlib>
+#include <iostream>
+#include <string>
+#include <vector>
+
+static void* g_dl = nullptr;
+
+static struct {
+  decltype(&uccl_engine_create) create;
+  decltype(&uccl_engine_destroy) destroy;
+  decltype(&uccl_engine_connect) connect;
+  decltype(&uccl_engine_start_listener) start_listener;
+  decltype(&uccl_engine_accept) accept;
+  decltype(&uccl_engine_reg) reg;
+  decltype(&uccl_engine_read) read;
+  decltype(&uccl_engine_read_vector) read_vector;
+  decltype(&uccl_engine_send) send;
+  decltype(&uccl_engine_send_vector) send_vector;
+  decltype(&uccl_engine_write) write;
+  decltype(&uccl_engine_write_vector) write_vector;
+  decltype(&uccl_engine_recv) recv;
+  decltype(&uccl_engine_xfer_status) xfer_status;
+  decltype(&uccl_engine_conn_destroy) conn_destroy;
+  decltype(&uccl_engine_mr_destroy) mr_destroy;
+  decltype(&uccl_engine_get_metadata) get_metadata;
+  decltype(&uccl_engine_get_notifs) get_notifs;
+  decltype(&uccl_engine_send_notif) send_notif;
+  decltype(&uccl_engine_prepare_fifo) prepare_fifo;
+  decltype(&uccl_engine_update_fifo) update_fifo;
+} ops = {};
+
+static bool load_transport() {
+  if (g_dl) return true;
+  const char* t = std::getenv("UCCL_P2P_TRANSPORT");
+  if (!t) t = "rdma";
+  std::string lib = std::string("libuccl_p2p_") + t + ".so";
+  g_dl = dlopen(lib.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (!g_dl) {
+    std::cerr << "Failed to load " << lib << ": " << dlerror() << std::endl;
+    return false;
+  }
+#define LOAD(f, s) ops.f = (decltype(ops.f))dlsym(g_dl, #s)
+  LOAD(create, uccl_engine_create);
+  LOAD(destroy, uccl_engine_destroy);
+  LOAD(connect, uccl_engine_connect);
+  LOAD(start_listener, uccl_engine_start_listener);
+  LOAD(accept, uccl_engine_accept);
+  LOAD(reg, uccl_engine_reg);
+  LOAD(read, uccl_engine_read);
+  LOAD(read_vector, uccl_engine_read_vector);
+  LOAD(send, uccl_engine_send);
+  LOAD(send_vector, uccl_engine_send_vector);
+  LOAD(write, uccl_engine_write);
+  LOAD(write_vector, uccl_engine_write_vector);
+  LOAD(recv, uccl_engine_recv);
+  LOAD(xfer_status, uccl_engine_xfer_status);
+  LOAD(conn_destroy, uccl_engine_conn_destroy);
+  LOAD(mr_destroy, uccl_engine_mr_destroy);
+  LOAD(get_metadata, uccl_engine_get_metadata);
+  LOAD(get_notifs, uccl_engine_get_notifs);
+  LOAD(send_notif, uccl_engine_send_notif);
+  LOAD(prepare_fifo, uccl_engine_prepare_fifo);
+  LOAD(update_fifo, uccl_engine_update_fifo);
+#undef LOAD
+  std::cout << "Loaded transport: " << t << " from " << lib << std::endl;
+  return true;
+}
+
+uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
+  if (!load_transport()) return nullptr;
+  return ops.create(num_cpus, in_python);
+}
+void uccl_engine_destroy(uccl_engine_t* engine) {
+  if (ops.destroy) ops.destroy(engine);
+}
+uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
+                                 int remote_gpu_idx, int remote_port) {
+  return ops.connect ? ops.connect(engine, ip_addr, remote_gpu_idx, remote_port)
+                     : nullptr;
+}
+int uccl_engine_start_listener(uccl_conn_t* conn) {
+  return ops.start_listener ? ops.start_listener(conn) : -1;
+}
+uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
+                                size_t ip_addr_buf_len, int* remote_gpu_idx) {
+  return ops.accept
+             ? ops.accept(engine, ip_addr_buf, ip_addr_buf_len, remote_gpu_idx)
+             : nullptr;
+}
+int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size,
+                    uccl_mr_t& mr_id) {
+  return ops.reg ? ops.reg(engine, data, size, mr_id) : -1;
+}
+int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
+                     size_t size, FifoItem fifo_item, uint64_t* transfer_id) {
+  return ops.read ? ops.read(conn, mr, data, size, fifo_item, transfer_id) : -1;
+}
+int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
+                            std::vector<void*> dst_v,
+                            std::vector<size_t> size_v,
+                            std::vector<FifoItem> fifo_items, int num_iovs,
+                            uint64_t* transfer_id) {
+  return ops.read_vector
+             ? ops.read_vector(conn, mr_ids, dst_v, size_v, fifo_items,
+                               num_iovs, transfer_id)
+             : -1;
+}
+int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
+                     size_t size, uint64_t* transfer_id) {
+  return ops.send ? ops.send(conn, mr, data, size, transfer_id) : -1;
+}
+int uccl_engine_send_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
+                            std::vector<void const*> src_v,
+                            std::vector<size_t> size_v, int num_iovs,
+                            uint64_t* transfer_id) {
+  return ops.send_vector
+             ? ops.send_vector(conn, mr_ids, src_v, size_v, num_iovs,
+                               transfer_id)
+             : -1;
+}
+int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
+                      size_t size, FifoItem fifo_item, uint64_t* transfer_id) {
+  return ops.write ? ops.write(conn, mr, data, size, fifo_item, transfer_id)
+                   : -1;
+}
+int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
+                             std::vector<void*> dst_v,
+                             std::vector<size_t> size_v,
+                             std::vector<FifoItem> fifo_items, int num_iovs,
+                             uint64_t* transfer_id) {
+  return ops.write_vector
+             ? ops.write_vector(conn, mr_ids, dst_v, size_v, fifo_items,
+                                num_iovs, transfer_id)
+             : -1;
+}
+int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
+                     size_t max_size) {
+  return ops.recv ? ops.recv(conn, mr, data, max_size) : -1;
+}
+bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {
+  return ops.xfer_status ? ops.xfer_status(conn, transfer_id) : false;
+}
+void uccl_engine_conn_destroy(uccl_conn_t* conn) {
+  if (ops.conn_destroy) ops.conn_destroy(conn);
+}
+void uccl_engine_mr_destroy(uccl_engine_t* engine, uccl_mr_t mr) {
+  if (ops.mr_destroy) ops.mr_destroy(engine, mr);
+}
+int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata_str) {
+  return ops.get_metadata ? ops.get_metadata(engine, metadata_str) : -1;
+}
+std::vector<notify_msg_t> uccl_engine_get_notifs() {
+  return ops.get_notifs ? ops.get_notifs() : std::vector<notify_msg_t>{};
+}
+int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
+  return ops.send_notif ? ops.send_notif(conn, notify_msg) : -1;
+}
+int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t mr,
+                             void const* data, size_t size, char* fifo_buf) {
+  return ops.prepare_fifo ? ops.prepare_fifo(engine, mr, data, size, fifo_buf)
+                          : -1;
+}
+int uccl_engine_update_fifo(FifoItem& fifo_item, uint64_t remote_addr,
+                            uint32_t size) {
+  return ops.update_fifo ? ops.update_fifo(fifo_item, remote_addr, size) : -1;
+}
+
+#else // !UCCL_P2P_LOADER — full transport implementation
+// ============================================================
+
 #include "uccl_engine.h"
 #ifdef UCCL_P2P_USE_TCPX
 #include "nccl_tcpx_endpoint.h"
@@ -9,7 +187,6 @@
 #include "engine.h"
 #endif
 #include "include/common.h"
-#include "transport_factory.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <algorithm>
@@ -19,7 +196,6 @@
 #include <cstdbool>
 #include <cstdlib>
 #include <cstring>
-#include <dlfcn.h>
 #include <functional>
 #include <future>
 #include <iostream>
@@ -31,13 +207,12 @@
 #include <unordered_map>
 #include <utility>
 
-// Endpoint is defined in engine.h
-using Endpoint = ::Endpoint;
+#ifdef UCCL_P2P_USE_TCPX
+using Endpoint = nccl_tcpx::Endpoint;
+#endif
 
 struct uccl_engine {
-  void* dl_handle;                    // Handle from dlopen
-  Endpoint* endpoint;                 // The actual endpoint (raw pointer now)
-  destroy_endpoint_fn destroy_fn;     // Cleanup function from transport
+  Endpoint* endpoint;
 };
 
 struct uccl_conn {
@@ -128,68 +303,20 @@ void listener_thread_func(uccl_conn_t* conn) {
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   inside_python = in_python;
 
-  // Get transport from environment variable (default to rdma)
-  const char* transport = std::getenv("UCCL_P2P_TRANSPORT");
-  if (!transport) transport = "rdma";
-
-  // Build library name
-  std::string lib_name = std::string("libuccl_p2p_") + transport + ".so";
-
-  // dlopen the transport library
-  void* handle = dlopen(lib_name.c_str(), RTLD_NOW | RTLD_LOCAL);
-  if (!handle) {
-    std::cerr << "Failed to load " << lib_name << ": " << dlerror() << std::endl;
-    std::cerr << "Please ensure the transport library is in LD_LIBRARY_PATH" << std::endl;
-    return nullptr;
-  }
-
-  // Get factory function
-  std::string factory_name = std::string("create_uccl_endpoint_") + transport;
-  dlerror();  // Clear any existing error
-  auto create_fn = reinterpret_cast<create_endpoint_fn>(dlsym(handle, factory_name.c_str()));
-  const char* dlsym_error = dlerror();
-  if (dlsym_error) {
-    std::cerr << "Failed to find " << factory_name << ": " << dlsym_error << std::endl;
-    dlclose(handle);
-    return nullptr;
-  }
-
-  // Create endpoint
   uccl_engine_t* eng = new uccl_engine;
-  eng->dl_handle = handle;
-  eng->endpoint = static_cast<Endpoint*>(create_fn(num_cpus));
+  eng->endpoint = new Endpoint(num_cpus);
   if (!eng->endpoint) {
-    std::cerr << "Failed to create endpoint from " << lib_name << std::endl;
-    dlclose(handle);
     delete eng;
     return nullptr;
   }
 
-  // Get destroy function
-  std::string destroy_name = std::string("destroy_uccl_endpoint_") + transport;
-  dlerror();  // Clear any existing error
-  eng->destroy_fn = reinterpret_cast<destroy_endpoint_fn>(dlsym(handle, destroy_name.c_str()));
-  dlsym_error = dlerror();
-  if (dlsym_error) {
-    std::cerr << "Warning: Failed to find " << destroy_name << ": " << dlsym_error << std::endl;
-    // Continue anyway, we can still call delete directly
-  }
-
-  std::cout << "Loaded transport: " << transport << " from " << lib_name << std::endl;
+  std::cout << "Endpoint initialized successfully" << std::endl;
   return eng;
 }
 
 void uccl_engine_destroy(uccl_engine_t* engine) {
   if (engine) {
-    if (engine->destroy_fn && engine->endpoint) {
-      engine->destroy_fn(engine->endpoint);
-    } else if (engine->endpoint) {
-      // Fallback: directly delete if destroy_fn not available
-      delete engine->endpoint;
-    }
-    if (engine->dl_handle) {
-      dlclose(engine->dl_handle);
-    }
+    delete engine->endpoint;
     delete engine;
   }
 }
@@ -547,3 +674,5 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
     return -1;
   }
 }
+
+#endif // UCCL_P2P_LOADER
