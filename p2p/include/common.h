@@ -3,9 +3,14 @@
 
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <mutex>
 #include <string>
 #include <vector>
+
+// Common constants used across all transports
+static constexpr uint32_t INVALID_GPU = std::numeric_limits<uint32_t>::max();
+static constexpr int kNumGpuRtStreams = 4;
 
 typedef uint64_t FlowID;
 struct ConnID {

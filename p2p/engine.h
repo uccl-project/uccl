@@ -1,7 +1,9 @@
 #pragma once
 
 #include "common.h"
+#if !defined(UCCL_P2P_USE_NCCL) && !defined(UCCL_P2P_USE_TCPX)
 #include "rdma/rdma_endpoint.h"
+#endif
 #include "util/gpu_rt.h"
 #include "util/jring.h"
 #include "util/net.h"
@@ -11,7 +13,9 @@
 #include "nccl/nccl_endpoint.h"
 #endif
 #include <glog/logging.h>
+#if !defined(UCCL_P2P_USE_NCCL) && !defined(UCCL_P2P_USE_TCPX)
 #include <infiniband/verbs.h>
+#endif
 #include <pybind11/pybind11.h>
 #include <atomic>
 #include <cstdlib>
@@ -64,9 +68,21 @@ struct ucclRequest {
   uint32_t engine_idx;
 };
 #endif
+#if !defined(UCCL_P2P_USE_NCCL) && !defined(UCCL_P2P_USE_TCPX)
 struct Mhandle {
   struct ibv_mr* mr;
 };
+#else
+struct Mhandle {
+  void* mr;
+};
+#endif
+
+#if defined(UCCL_P2P_USE_NCCL) || defined(UCCL_P2P_USE_TCPX)
+struct MRArray {
+  void* dummy = nullptr;
+};
+#endif
 
 struct P2PMhandle {
   MRArray mr_array;

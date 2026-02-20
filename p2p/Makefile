@@ -58,6 +58,14 @@ INCDIR ?= $(PREFIX)/include
 
 LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LIBS2)
 
+# Set up NCCL paths if building TCP or TCPX transports
+ifneq (,$(findstring tcp,$(TRANSPORTS)))
+NCCL_HOME ?= ../thirdparty/nccl/build
+NCCL_INC  ?= $(NCCL_HOME)/include
+NCCL_LIB  ?= $(NCCL_HOME)/lib
+endif
+
+# Also set NCCL paths if using old USE_TCP flag for backward compatibility
 ifeq ($(USE_TCP),1)
 NCCL_HOME ?= ../thirdparty/nccl/build
 NCCL_INC  ?= $(NCCL_HOME)/include
