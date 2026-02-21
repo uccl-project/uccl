@@ -139,12 +139,26 @@ class Buffer {
           }
 
           // Prefetch so the device immediately sees initialized contents
+#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__) && CUDA_VERSION >= 12000
+          // CUDA 12+: cudaMemPrefetchAsync(ptr, count, cudaMemLocation, flags, stream)
+          cudaMemLocation loc;
+          loc.type = cudaMemLocationTypeDevice;
+          loc.id = device_index;
+          CUDA_CHECK(cudaMemPrefetchAsync(
+              d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
+              loc, 0));
+          CUDA_CHECK(cudaMemPrefetchAsync(
+              d_handles, num_d2h_channel_addrs * sizeof(uint64_t),
+              loc, 0));
+#else
+          // CUDA 11.x / HIP: cudaMemPrefetchAsync(ptr, count, dstDevice, stream)
           CUDA_CHECK(cudaMemPrefetchAsync(
               d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
               device_index));
           CUDA_CHECK(cudaMemPrefetchAsync(
               d_handles, num_d2h_channel_addrs * sizeof(uint64_t),
               device_index));
+#endif
           CUDA_CHECK(cudaDeviceSynchronize());
         }
         // Allocate device memory for IPC base pointers
