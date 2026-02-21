@@ -359,6 +359,11 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 bool can_register_gpu_memory_for_atomics(int gpu_idx);
 
 #ifdef USE_DMABUF
+// Release shared RDMA resources (context/pd/mr) for a given NIC + gpu_buf.
+// Must be called before Proxy::destroy() frees ctx.mr / ctx.pd / ctx.context.
+// When resources are shared with other threads, nulls the pointers so the
+// caller skips the actual ibv_dereg / dealloc / close.
+void release_shared_rdma_resources(ProxyCtx& ctx, void* gpu_buf);
 // Register GPU memory using DMA-BUF (no nvidia_peermem needed).
 // Falls back to ibv_reg_mr_iova2 if DMA-BUF is unsupported.
 ibv_mr* reg_mr_gpu_dmabuf(ibv_pd* pd, void* gpu_buf, size_t bytes,

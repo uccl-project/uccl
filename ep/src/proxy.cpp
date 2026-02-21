@@ -1067,6 +1067,14 @@ void Proxy::destroy(bool free_gpu_buffer) {
   dereg(ring.ack_mr);
   dereg(ctx_.atomic_old_values_mr);
   dereg(ctx_.atomic_buffer_mr);
+
+#ifdef USE_DMABUF
+  // If context/pd/mr are shared with other proxy threads (USE_DMABUF path),
+  // release our reference.  If we're not the last holder, this nulls the
+  // pointers so the dereg/dealloc/close below become no-ops.
+  release_shared_rdma_resources(ctx_, cfg_.gpu_buffer);
+#endif
+
   dereg(ctx_.mr);
 
   if (ctx_.atomic_old_values_buf) {
