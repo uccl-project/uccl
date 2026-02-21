@@ -183,13 +183,17 @@ build_ep() {
   set -euo pipefail
   echo "[container] build_ep Target: $TARGET"
 
+  if [[ "${USE_INTEL_RDMA_NIC:-0}" == "1" ]]; then
+    echo "[container] Building EP with Intel RDMA NIC support (USE_INTEL_RDMA_NIC=1)"
+  fi
+
   if [[ "$TARGET" == "therock" ]]; then
     echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
   elif [[ "$TARGET" == rocm* || "$TARGET" == cuda* ]]; then
     cd ep
     # This may be needed if you traverse through different git commits
     # make clean && rm -r build || true
-    python3 setup.py build
+    USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} python3 setup.py build
     cd ..
     echo "[container] Copying GPU-driven .so to uccl/"
     mkdir -p uccl/lib

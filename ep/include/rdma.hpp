@@ -352,6 +352,19 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              bool use_normal_mode = false);
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                           int thread_idx, int local_rank);
+
+// Returns true if a cudaMalloc'd buffer can be registered with ibv_reg_mr on
+// this node (e.g. with nvidia_peermem). If false, use host memory for the
+// atomic buffer. Result is cached per thread. gpu_idx is the local GPU index.
+bool can_register_gpu_memory_for_atomics(int gpu_idx);
+
+#ifdef USE_DMABUF
+// Register GPU memory using DMA-BUF (no nvidia_peermem needed).
+// Falls back to ibv_reg_mr_iova2 if DMA-BUF is unsupported.
+ibv_mr* reg_mr_gpu_dmabuf(ibv_pd* pd, void* gpu_buf, size_t bytes,
+                          uint64_t iova, int access);
+#endif
+
 void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
                      ibv_mr* local_ack_mr, uint64_t* ack_buf, int worker_idx);
 void local_post_ack_buf(ProxyCtx& S, int depth);

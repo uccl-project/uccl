@@ -95,6 +95,8 @@ class UcclProxy {
   std::vector<PeerMeta> peers_;
   int local_rank_;
   void* atomic_buffer_ptr_;
+  bool atomic_buffer_is_host_allocated_ =
+      false;  // true => cudaFreeHost, false => cudaFree
   int node_idx_;
   bool is_intranode_;
   std::vector<d2hq::HostD2HHandle> d2h_queues;
