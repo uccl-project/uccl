@@ -16,6 +16,7 @@
 #include "ring_buffer.cuh"
 #include "uccl_bench.hpp"
 #include "uccl_proxy.hpp"
+#include "rdma.hpp"
 #include <ATen/cuda/CUDAContext.h>
 #include <ATen/cuda/CUDADataType.h>
 #include <pybind11/chrono.h>
@@ -2057,23 +2058,48 @@ PYBIND11_MODULE(ep, m) {
 
   m.def("get_oob_ip", &uccl::get_oob_ip, "Get the OOB IP address");
 
-  m.def("get_rdma_buffer", [](int64_t num_rdma_bytes, int device_index) {
-    void* ptr;
-    CUDA_CHECK(cudaSetDevice(device_index));
+  m.def(
+      "get_rdma_buffer",
+      [](int64_t num_rdma_bytes, int device_index) {
+        void* ptr;
+        bool is_host_allocated = false;
+        CUDA_CHECK(cudaSetDevice(device_index));
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-    CUDA_CHECK(
-        hipExtMallocWithFlags(&ptr, num_rdma_bytes, hipDeviceMallocUncached));
-    CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
-    return torch::from_blob(ptr, {num_rdma_bytes},
-                            dtype(torch::kUInt8).device(torch::kCUDA));
+        CUDA_CHECK(
+            hipExtMallocWithFlags(&ptr, num_rdma_bytes, hipDeviceMallocUncached));
+        CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
+        torch::Tensor tensor = torch::from_blob(
+            ptr, {num_rdma_bytes},
+            dtype(torch::kUInt8).device(torch::kCUDA));
+        return py::make_tuple(tensor, false);
 #else
-    // Pinned host memory for reliable RDMA registration (e.g. RoCE with
-    // ibv_reg_mr).
-    CUDA_CHECK(cudaMallocHost(&ptr, num_rdma_bytes));
-    CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
-    return torch::from_blob(ptr, {num_rdma_bytes}, dtype(torch::kUInt8));
+        // Prefer cudaMalloc when GPU memory can be registered (e.g. with
+        // nvidia_peermem); fall back to pinned host for NICs where
+        // ibv_reg_mr fails on GPU memory (e.g. GH10).
+        torch::Tensor tensor;
+        if (can_register_gpu_memory_for_atomics(device_index)) {
+          CUDA_CHECK(cudaMalloc(&ptr, num_rdma_bytes));
+          CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
+          tensor = torch::from_blob(
+              ptr, {num_rdma_bytes},
+              dtype(torch::kUInt8).device(torch::kCUDA));
+        } else {
+          CUDA_CHECK(cudaMallocHost(&ptr, num_rdma_bytes));
+          CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
+          tensor = torch::from_blob(ptr, {num_rdma_bytes},
+                                   dtype(torch::kUInt8));
+          is_host_allocated = true;
+        }
+        return py::make_tuple(tensor, is_host_allocated);
 #endif
-  });
+      },
+      py::arg("num_rdma_bytes"),
+      py::arg("device_index"),
+      R"doc(
+        Allocate RDMA buffer. Prefers device memory (cudaMalloc) when the NIC
+        can register it; otherwise uses pinned host memory (cudaMallocHost).
+        Returns (tensor, is_host_allocated).
+      )doc");
 
   py::class_<EventHandle>(m, "EventHandle")
       .def(py::init<>())

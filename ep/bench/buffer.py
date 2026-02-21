@@ -88,13 +88,15 @@ class Buffer:
         else:
             device_index = torch.cuda.current_device()
 
-        # Use pinned host memory (cudaMallocHost) for RDMA buffer so that
-        # ibv_reg_mr works reliably on RoCE NICs.
-        self.scratch = ep.get_rdma_buffer(num_rdma_bytes, device_index)
+        # Prefer cudaMalloc when NIC can register GPU memory; else cudaMallocHost.
+        result = ep.get_rdma_buffer(num_rdma_bytes, device_index)
+        if isinstance(result, tuple):
+            self.scratch, rdma_buffer_is_host_allocated = result
+        else:
+            self.scratch = result
+            rdma_buffer_is_host_allocated = bool(torch.version.cuda)
 
         rdma_buffer_ptr = self.scratch.data_ptr()
-        # CUDA get_rdma_buffer uses cudaMallocHost; HIP uses device memory.
-        rdma_buffer_is_host_allocated = bool(torch.version.cuda)
         self.proxies, self.workers = initialize_uccl(
             rdma_buffer_ptr,
             num_rdma_bytes,
