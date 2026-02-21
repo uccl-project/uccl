@@ -1261,6 +1261,35 @@ inline void pin_thread_to_numa(int numa_node) {
 
 namespace fs = std::filesystem;
 
+// Best-effort sysfs path resolution:
+// - Prefer `canonical()` to walk the real PCI topology under /sys/devices/...
+// - If `canonical()` fails (containers / restricted sysfs), fall back to
+//   resolving symlinks and then `weakly_canonical()`.
+// - Never throw: callers rely on this to keep distance ranking stable.
+static inline fs::path resolve_sysfs_path_best_effort(fs::path const& in) {
+  try {
+    return fs::canonical(in);
+  } catch (...) {
+  }
+  try {
+    if (fs::is_symlink(in)) {
+      fs::path t = fs::read_symlink(in);
+      if (t.is_relative()) t = in.parent_path() / t;
+      try {
+        return fs::weakly_canonical(t);
+      } catch (...) {
+        return t;
+      }
+    }
+  } catch (...) {
+  }
+  try {
+    return fs::weakly_canonical(in);
+  } catch (...) {
+  }
+  return in;
+}
+
 static bool is_bdf(std::string const& s) {
   // Match full PCI BDF allowing hexadecimal digits
   static const std::regex re(
@@ -1268,44 +1297,77 @@ static bool is_bdf(std::string const& s) {
   return std::regex_match(s, re);
 }
 
+static inline bool is_pci_segment(std::string const& s) {
+  // Root/segment/controller nodes can look different across platforms:
+  // - x86: "pci0000:00", sometimes also "pcie0000:00"
+  // - DT/SoC (e.g. Broadcom): "pcie@<addr>", "soc0:pcie@<addr>", "pci@<addr>"
+  //
+  // We intentionally keep this loose: these nodes are only used as "anchors"
+  // for the LCA walk, not for any sysfs IO.
+  if (s.find("pcie@") != std::string::npos || s.find("pci@") != std::string::npos) {
+    return true;
+  }
+  if ((s.rfind("pci", 0) == 0 || s.rfind("pcie", 0) == 0) &&
+      s.find(':') != std::string::npos) {
+    return true;
+  }
+  return false;
+}
+
 static int cal_pcie_distance(fs::path const& devA, fs::path const& devB) {
-  auto devA_parent = devA.parent_path();
-  auto devB_parent = devB.parent_path();
+  // `devA/devB` might be:
+  // - a PCI device dir: /sys/devices/.../<BDF>
+  // - a symlink to it: /sys/bus/pci/devices/<BDF>
+  // - a child path under it (e.g. ".../<BDF>/net/eth0")
+  //
+  // We normalize to the nearest ancestor that looks like a PCI node (BDF or
+  // root/controller marker) so the chain includes the endpoint BDF and also
+  // captures platform-specific PCI roots (important on Broadcom/DT systems).
+  auto normalize_anchor = [](fs::path const& in) -> fs::path {
+    fs::path p = resolve_sysfs_path_best_effort(in);
+    for (;; p = p.parent_path()) {
+      std::string leaf = p.filename().string();
+      if (is_bdf(leaf) || is_pci_segment(leaf)) return p;
+      if (p == p.root_path()) break;
+    }
+    return in;
+  };
+
+  fs::path devA_anchor = normalize_anchor(devA);
+  fs::path devB_anchor = normalize_anchor(devB);
 
   auto build_chain = [](fs::path const& dev) {
     std::vector<std::string> chain;
-    fs::path p = fs::canonical(dev);
+    fs::path p = resolve_sysfs_path_best_effort(dev);
     for (;; p = p.parent_path()) {
-      std::string leaf = p.filename();
-      if (is_bdf(leaf)) {
-        chain.push_back(leaf);  // collect BDF components
+      std::string leaf = p.filename().string();
+
+      // Include BOTH:
+      // 1) BDF nodes: "0000:15:00.0", "0000:00:01.1", etc.
+      // 2) PCI segment/root nodes: "pci0000:00", "pci0000:10", ...
+      if (is_bdf(leaf) || is_pci_segment(leaf)) {
+        chain.push_back(leaf);
       }
-      if (p == p.root_path()) break;  // reached filesystem root
+
+      if (p == p.root_path()) break;
     }
     return chain;  // self → root
   };
 
   // thread-safe cache
   static std::mutex cache_mutex;
-  static std::unordered_map<fs::path, std::vector<std::string>>
-      dev_to_chain_cache;
+  static std::unordered_map<fs::path, std::vector<std::string>> cache;
 
   std::vector<std::string> chainA, chainB;
   {
     std::lock_guard<std::mutex> g(cache_mutex);
 
-    auto itA = dev_to_chain_cache.find(devA_parent);
-    if (itA == dev_to_chain_cache.end()) {
-      itA = dev_to_chain_cache.emplace(devA_parent, build_chain(devA_parent))
-                .first;
-    }
+    auto itA = cache.find(devA_anchor);
+    if (itA == cache.end()) itA = cache.emplace(devA_anchor, build_chain(devA_anchor)).first;
     chainA = itA->second;
 
-    auto itB = dev_to_chain_cache.find(devB_parent);
-    if (itB == dev_to_chain_cache.end()) {
-      itB = dev_to_chain_cache.emplace(devB_parent, build_chain(devB_parent))
-                .first;
-    }
+    auto itB = cache.find(devB_anchor);
+    if (itB == cache.end()) itB = cache.emplace(devB_anchor, build_chain(devB_anchor)).first;
     chainB = itB->second;
   }
 
