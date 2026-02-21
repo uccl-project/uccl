@@ -139,12 +139,14 @@ class Buffer {
           }
 
           // Prefetch so the device immediately sees initialized contents
+          cudaMemLocation loc = {};
+          loc.type = cudaMemLocationTypeDevice;
+          loc.id = device_index;
           CUDA_CHECK(cudaMemPrefetchAsync(
               d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
-              device_index));
+              loc, 0, 0));
           CUDA_CHECK(cudaMemPrefetchAsync(
-              d_handles, num_d2h_channel_addrs * sizeof(uint64_t),
-              device_index));
+              d_handles, num_d2h_channel_addrs * sizeof(uint64_t), loc, 0, 0));
           CUDA_CHECK(cudaDeviceSynchronize());
         }
         // Allocate device memory for IPC base pointers
@@ -1839,12 +1841,13 @@ class Buffer {
            ++i) {
         int global_rank = offset + i;
         int local_rank_idx = global_rank % max_nvl_peers;
-        EP_HOST_ASSERT(all_gathered_rdma_handles[global_rank].has_value());
-        auto handle_str =
-            std::string(all_gathered_rdma_handles[global_rank].value());
-        EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
 
-        if (global_rank != rank) {
+        if (global_rank == rank) {
+          ipc_rdma_base_ptrs[local_rank_idx] = rdma_buffer_ptr;
+        } else if (all_gathered_rdma_handles[global_rank].has_value()) {
+          auto handle_str =
+              std::string(all_gathered_rdma_handles[global_rank].value());
+          EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
           std::memcpy(rdma_ipc_handles[local_rank_idx].reserved,
                       handle_str.c_str(), CUDA_IPC_HANDLE_SIZE);
           CUDA_CHECK(cudaSetDevice(device_index));
@@ -1852,7 +1855,8 @@ class Buffer {
                                           rdma_ipc_handles[local_rank_idx],
                                           cudaIpcMemLazyEnablePeerAccess));
         } else {
-          ipc_rdma_base_ptrs[local_rank_idx] = rdma_buffer_ptr;
+          // Host-allocated RDMA buffer (cudaMallocHost): no IPC handle
+          ipc_rdma_base_ptrs[local_rank_idx] = nullptr;
         }
       }
       if (d_ipc_rdma_base_ptrs != nullptr) {
@@ -2045,12 +2049,16 @@ PYBIND11_MODULE(ep, m) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
     CUDA_CHECK(
         hipExtMallocWithFlags(&ptr, num_rdma_bytes, hipDeviceMallocUncached));
-#else
-    EP_HOST_ASSERT(false and "Please use torch.zeros instead on CUDA platform.");
-#endif
     CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
     return torch::from_blob(ptr, {num_rdma_bytes},
                             dtype(torch::kUInt8).device(torch::kCUDA));
+#else
+    // Pinned host memory for reliable RDMA registration (e.g. RoCE with
+    // ibv_reg_mr).
+    CUDA_CHECK(cudaMallocHost(&ptr, num_rdma_bytes));
+    CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
+    return torch::from_blob(ptr, {num_rdma_bytes}, dtype(torch::kUInt8));
+#endif
   });
 
   py::class_<EventHandle>(m, "EventHandle")
@@ -2180,12 +2188,13 @@ PYBIND11_MODULE(ep, m) {
   py::class_<Stats>(m, "Stats");
   py::class_<UcclProxy>(m, "Proxy")
       .def(py::init<int, uintptr_t, size_t, int, int, int, int, int, int, bool,
-                    bool>(),
+                    bool, bool>(),
            py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
            py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
            py::arg("local_rank") = 0, py::arg("num_experts") = -1,
            py::arg("num_ranks") = -1, py::arg("num_nodes") = 0,
-           py::arg("use_normal_mode") = false, py::arg("is_intranode") = false)
+           py::arg("use_normal_mode") = false, py::arg("is_intranode") = false,
+           py::arg("gpu_buffer_is_host_allocated") = false)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)

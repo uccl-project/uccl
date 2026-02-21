@@ -13,7 +13,8 @@
 UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      size_t total_size, int rank, int node_idx, int local_rank,
                      int num_experts, int num_ranks, int num_nodes,
-                     bool use_normal_mode, bool is_intranode)
+                     bool use_normal_mode, bool is_intranode,
+                     bool gpu_buffer_is_host_allocated)
     : thread_{},
       mode_{Mode::None},
       running_{false},
@@ -50,6 +51,7 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.num_nodes = num_nodes;
   cfg.use_normal_mode = use_normal_mode;
   cfg.is_intranode = is_intranode;
+  cfg.free_buffer_with_cuda_free_host = gpu_buffer_is_host_allocated;
   proxy_ = std::make_unique<Proxy>(cfg);
   local_rank_ = local_rank;
   node_idx_ = node_idx;
@@ -60,11 +62,9 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
 #elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
     hipExtMallocWithFlags(&atomic_buffer_ptr_, kAtomicBufferSize,
                           hipDeviceMallocUncached);
-#elif defined(EFA)
-    cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
-                  cudaHostAllocMapped | cudaHostAllocWriteCombined);
 #else
-    cudaMalloc(&atomic_buffer_ptr_, kAtomicBufferSize);
+    // Pinned host memory for reliable RDMA registration (same as gpu_buffer).
+    cudaMallocHost(&atomic_buffer_ptr_, kAtomicBufferSize);
 #endif
     cudaMemset(atomic_buffer_ptr_, 0, kAtomicBufferSize);
     proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);
@@ -75,6 +75,17 @@ UcclProxy::~UcclProxy() {
   try {
     stop();
   } catch (...) {
+  }
+
+  if (thread_idx_ == 0 && atomic_buffer_ptr_) {
+#if defined(USE_GRACE_HOPPER)
+    cudaFree(atomic_buffer_ptr_);
+#elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    hipFree(atomic_buffer_ptr_);
+#else
+    cudaFreeHost(atomic_buffer_ptr_);
+#endif
+    atomic_buffer_ptr_ = nullptr;
   }
 
   // Free all allocated ring buffers

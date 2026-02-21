@@ -10,9 +10,11 @@ DIRECTORIES=("collective" "ep" "p2p" "include" "experimental")
 EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
 EXCLUDE=("collective/afxdp/lib")
 
+CLANG_FORMAT="${CLANG_FORMAT:-clang-format}"
+
 # Check if clang-format is installed
-if ! command -v clang-format &> /dev/null; then
-    echo "clang-format could not be found. Please install it first."
+if ! command -v "$CLANG_FORMAT" &> /dev/null; then
+    echo "$CLANG_FORMAT could not be found. Please install it first."
     exit 1
 fi
 
@@ -20,10 +22,10 @@ fi
 REQUIRED_VERSION="14"
 
 # Get major version
-INSTALLED_VERSION=$(clang-format --version | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' | head -1 | cut -d. -f1)
+INSTALLED_VERSION=$("$CLANG_FORMAT" --version | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' | head -1 | cut -d. -f1)
 
 if [ "$INSTALLED_VERSION" != "$REQUIRED_VERSION" ]; then
-    echo "clang-format version $REQUIRED_VERSION is required. Found version: $INSTALLED_VERSION."
+    echo "clang-format version $REQUIRED_VERSION is required. Found version: $INSTALLED_VERSION ($CLANG_FORMAT)."
     exit 1
 fi
 
@@ -53,7 +55,7 @@ fi
 
 for FILE in "${FILES[@]}"; do
     echo "Formatting $FILE"
-    clang-format -i "$FILE"
+    "$CLANG_FORMAT" -i "$FILE"
 done
 
 echo "Formatting Python files with black..."

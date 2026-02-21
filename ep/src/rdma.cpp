@@ -242,6 +242,19 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                               IBV_ACCESS_RELAXED_ORDERING);
 #endif
 
+  // Fallback when iova2 fails (e.g. "Bad address" on some RoCE NICs with GPU
+  // memory where the driver cannot use GPU VA as IOVA).
+  if (!S.mr) {
+#ifndef EFA
+    S.mr = ibv_reg_mr(S.pd, gpu_buf, bytes,
+                      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                          IBV_ACCESS_REMOTE_ATOMIC);
+#else
+    S.mr = ibv_reg_mr(S.pd, gpu_buf, bytes,
+                      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                          IBV_ACCESS_RELAXED_ORDERING);
+#endif
+  }
   if (!S.mr) {
     perror("ibv_reg_mr failed");
     exit(1);
@@ -432,7 +445,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   local_info->recv_ack_qp_num = S.recv_ack_qp->qp_num;
   local_info->lid = port_attr.lid;
   local_info->rkey = S.rkey;
-  local_info->addr = reinterpret_cast<uintptr_t>(gpu_buffer);
+  local_info->addr = reinterpret_cast<uintptr_t>(S.mr->addr);
   local_info->len = size;
   local_info->psn = 0;
   local_info->ack_psn = 0;
