@@ -402,6 +402,13 @@ bool can_register_gpu_memory_for_atomics(int gpu_idx) {
   if (probed) return result;
   probed = true;
 
+#ifdef ATOMICS_USE_HOST_MEMORY
+  // Build with INTEL_RDMA_NIC (or ATOMICS_USE_HOST_MEMORY): use host memory for
+  // atomic and RDMA buffers so ibv_reg_mr succeeds.
+  result = false;
+  return result;
+#endif
+
   char* force_host = getenv("UCCL_ATOMICS_USE_HOST_MEMORY");
   if (force_host &&
       (force_host[0] == '1' || force_host[0] == 'y' || force_host[0] == 'Y')) {
