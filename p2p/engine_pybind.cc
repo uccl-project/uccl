@@ -1057,7 +1057,7 @@ PYBIND11_MODULE(p2p, m) {
                                              reinterpret_cast<void const*>(ptr),
                                              size, info, &transfer_id);
             }
-            return success;
+            return py::make_tuple(success, transfer_id);
           },
           "Write data asynchronously via one-sided IPC using IpcTransferInfo",
           py::arg("conn_id"), py::arg("ptr"), py::arg("size"), py::arg("info"))

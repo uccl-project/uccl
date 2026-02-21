@@ -125,6 +125,7 @@ class Endpoint {
     uintptr_t offset;
     size_t size;
     uint32_t operation;  // 0 = send_ipc request, 1 = recv_ipc response
+    bool is_host;        // true if this side's buffer is CPU memory
   };
   // For ShmChannel
   enum class ShmMsgType : uint32_t {
