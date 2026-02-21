@@ -26,8 +26,8 @@
 #include <vector>
 
 namespace dietgpu {
-#if defined(__HIP_PLATFORM_AMD__)
-  // HIP does not support thrust exec check disabling
+#if defined(__HIP_PLATFORM_AMD__) || !defined(__thrust_exec_check_disable__)
+  // HIP or newer CUDA versions do not support __thrust_exec_check_disable__
   #define THRUST_DISABLE_EXEC_CHECK
 #else
   #define THRUST_DISABLE_EXEC_CHECK __thrust_exec_check_disable__
