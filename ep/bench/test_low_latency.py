@@ -85,6 +85,7 @@ def test_main(
     group: dist.ProcessGroup,
     buffer: Buffer,
     use_logfmt: bool = False,
+    dispatch_use_fp8: bool = True,
     seed: int = 0,
     skip_benchmark: bool = False,
     debug_hash: bool = False,
@@ -152,14 +153,16 @@ def test_main(
 
     for current_x in x_list:
         for return_recv_hook in (False, True):
-            for dispatch_use_fp8 in (False, True):
+            for dispatch_use_fp8_case in (False, True):
                 for round_scale in (False,):
-                    for round_scale in (False, True) if dispatch_use_fp8 else (False,):
+                    for round_scale in (
+                        (False, True) if dispatch_use_fp8_case else (False,)
+                    ):
                         for use_ue8m0 in (False, True) if round_scale else (False,):
                             print(
                                 "Start experiment with settings:"
                                 f" return_recv_hook={return_recv_hook}"
-                                f" dispatch_use_fp8={dispatch_use_fp8}"
+                                f" dispatch_use_fp8={dispatch_use_fp8_case}"
                                 f" round_scale={round_scale}"
                                 f" use_ue8m0={use_ue8m0}",
                                 flush=True,
@@ -180,7 +183,7 @@ def test_main(
                                     topk_idx,
                                     num_tokens,
                                     num_experts,
-                                    use_fp8=dispatch_use_fp8,
+                                    use_fp8=dispatch_use_fp8_case,
                                     round_scale=round_scale,
                                     use_ue8m0=use_ue8m0,
                                     cumulative_local_expert_recv_stats=cumulative_local_expert_recv_stats,
@@ -194,7 +197,7 @@ def test_main(
                                 )
                             packed_recv_x = (
                                 (packed_recv_x[0], packed_recv_x[1].contiguous())
-                                if dispatch_use_fp8
+                                if dispatch_use_fp8_case
                                 else packed_recv_x
                             )
                             simulated_gemm_x = (
@@ -202,7 +205,7 @@ def test_main(
                                     packed_recv_x[0].view(-1, hidden),
                                     packed_recv_x[1].view(-1, hidden // 128),
                                 ).view(packed_recv_x[0].shape)
-                                if dispatch_use_fp8
+                                if dispatch_use_fp8_case
                                 else packed_recv_x.clone()
                             )
                             all_topk_idx = torch.empty(
@@ -219,7 +222,7 @@ def test_main(
                                     per_token_cast_back(
                                         packed_recv_x[0][i], packed_recv_x[1][i]
                                     )
-                                    if dispatch_use_fp8
+                                    if dispatch_use_fp8_case
                                     else packed_recv_x[i]
                                 )
                                 recv_count, recv_src_info, recv_layout_range = (
@@ -284,11 +287,11 @@ def test_main(
                                                 - j
                                                 + rank_offset
                                             ).sum().item() == 0
-                                if dispatch_use_fp8:
+                                if dispatch_use_fp8_case:
                                     tag = (
                                         f"x={'x' if current_x is x else 'rand'}"
                                         f"|hook={return_recv_hook}"
-                                        f"|fp8={dispatch_use_fp8}"
+                                        f"|fp8={dispatch_use_fp8_case}"
                                         f"|rs={round_scale}"
                                         f"|ue={use_ue8m0}"
                                         f"|le={i}"
@@ -306,7 +309,7 @@ def test_main(
                                     tag = (
                                         f"x={'x' if current_x is x else 'rand'}"
                                         f"|hook={return_recv_hook}"
-                                        f"|fp8={dispatch_use_fp8}"
+                                        f"|fp8={dispatch_use_fp8_case}"
                                         f"|rs={round_scale}"
                                         f"|ue={use_ue8m0}"
                                         f"|le={i}"
@@ -368,12 +371,12 @@ def test_main(
                                     )
                                     assert torch.isnan(combined_x).sum().item() == 0
                                     assert diff < (
-                                        9e-4 if dispatch_use_fp8 else 1e-5
-                                    ), f"Error: {diff=}, {dispatch_use_fp8=}, {zero_copy=}"
+                                        9e-4 if dispatch_use_fp8_case else 1e-5
+                                    ), f"Error: {diff=}, {dispatch_use_fp8_case=}, {zero_copy=}"
                                     tag = (
                                         f"x={'x' if current_x is x else 'rand'}"
                                         f"|hook={return_recv_hook}"
-                                        f"|fp8={dispatch_use_fp8}"
+                                        f"|fp8={dispatch_use_fp8_case}"
                                         f"|rs={round_scale}"
                                         f"|ue={use_ue8m0}"
                                         f"|zc={zero_copy}"
@@ -396,7 +399,7 @@ def test_main(
             num_tokens,
             num_experts,
             cumulative_local_expert_recv_stats=cumulative_local_expert_recv_stats,
-            use_fp8=True,
+            use_fp8=dispatch_use_fp8,
             async_finish=False,
             return_recv_hook=return_recv_hook,
         )
@@ -422,7 +425,9 @@ def test_main(
     num_dispatch_comm_bytes, num_combine_comm_bytes = 0, 0
     for i in range(num_tokens):
         num_selections = (topk_idx[i] != -1).sum().item()
-        num_dispatch_comm_bytes += num_fp8_bytes * num_selections
+        num_dispatch_comm_bytes += (
+            num_fp8_bytes if dispatch_use_fp8 else num_bf16_bytes
+        ) * num_selections
         num_combine_comm_bytes += (
             num_logfmt10_bytes if use_logfmt else num_bf16_bytes
         ) * num_selections
@@ -494,6 +499,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
             group,
             buffer,
             use_logfmt=args.use_logfmt,
+            dispatch_use_fp8=args.dispatch_use_fp8,
             seed=seed,
             skip_benchmark=args.pressure_test_mode == 1,
             debug_hash=args.debug_hash,
@@ -521,6 +527,7 @@ def test_loop(local_rank: int, num_local_ranks: int, args: argparse.Namespace):
                 group,
                 buffer,
                 use_logfmt=args.use_logfmt,
+                dispatch_use_fp8=args.dispatch_use_fp8,
                 seed=seed,
                 skip_benchmark=args.pressure_test_mode == 1,
                 debug_hash=args.debug_hash,
@@ -600,6 +607,13 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--use-logfmt", action="store_true", help="Whether to test LogFMT combine"
+    )
+    parser.add_argument(
+        "--dispatch-use-fp8",
+        type=bool,
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Whether dispatch path uses FP8 casting (default: true).",
     )
     parser.add_argument(
         "--pressure-test-mode",
