@@ -196,8 +196,20 @@ struct LowLatencyLayout {
     size_t num_bytes_per_combine_msg = hidden * sizeof(nv_bfloat16);
 
     // Send buffer
+#ifdef LAM_DEV
+    // Lam: Buffer layout for batched RDMA sends:
+    // ┌─────────────────────────────────┬──────────────────────────────────────────────┐
+    // │ Temp buffer (offset 0)          │ RDMA batch buffer (offset num_max_tokens)    │
+    // │ rdma_x[token_idx]               │ rdma_x[num_max_tokens + expert*max + slot]   │
+    // │ Size: num_max_tokens * msg_size │ Size: num_experts * num_max_tokens * msg_size│
+    // └─────────────────────────────────┴──────────────────────────────────────────────┘
+    // Flow: FP8 cast -> temp buffer -> copy to rdma_batch_buffer -> batch RDMA send
+    size_t dispatch_send_buffer_bytes =
+        (num_experts + 1) * num_max_dispatch_tokens_per_rank * num_bytes_per_dispatch_msg;
+#else
     size_t dispatch_send_buffer_bytes =
         num_max_dispatch_tokens_per_rank * num_bytes_per_dispatch_msg;
+#endif
     size_t combine_send_buffer_bytes = num_experts *
                                        num_max_dispatch_tokens_per_rank *
                                        num_bytes_per_combine_msg;
