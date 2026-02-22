@@ -62,7 +62,11 @@ class UcclProxy {
         num_experts * num_tokens * hidden * 2;  // sizeof(bfloat16)
     size_t send_buffer_bytes =
         std::max(dispatch_send_buffer_bytes, combine_send_buffer_bytes);
-    size_t dispatch_recv_count_buffer_bytes = num_experts * 4;
+    size_t const signaling_slots = std::max(
+        static_cast<size_t>(num_experts),
+        static_cast<size_t>(proxy_->cfg_.num_ranks) *
+            static_cast<size_t>(proxy_->cfg_.num_ranks));
+    size_t dispatch_recv_count_buffer_bytes = signaling_slots * 4;
     size_t signaling_buffer_bytes_aligned =
         ((dispatch_recv_count_buffer_bytes + 127) / 128) * 128;
     uintptr_t dispatch_recv_data_offset =

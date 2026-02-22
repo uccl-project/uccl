@@ -1886,9 +1886,13 @@ void remote_process_completions_fast_mode(
       // ep_config.hpp
       bool is_combine = aimm.IsCombine();
       int low_latency_buffer_idx = aimm.GetBufferIdx();
-      uint32_t new_offset =
-          offset - low_latency_buffer_idx *
-                       align<size_t>(num_experts * sizeof(int64_t), 128);
+      size_t const signaling_slots = std::max(
+          static_cast<size_t>(num_experts),
+          static_cast<size_t>(num_ranks) * static_cast<size_t>(num_ranks));
+      uint32_t new_offset = offset - low_latency_buffer_idx *
+                                         align<size_t>(signaling_slots *
+                                                           sizeof(int64_t),
+                                                       128);
       size_t new_index = new_offset / sizeof(int64_t);
       int src_rank = -1;
       bool is_atomic_ready = false;
