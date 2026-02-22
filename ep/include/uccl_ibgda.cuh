@@ -68,9 +68,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     } else {
       cmd.expert_idx = expert_idx;
       // Low-latency WRITE: use atomic_val byte for num_tokens (1..255).
-      cmd.atomic_val = (num_tokens <= 0 || num_tokens > 255)
-                           ? 1
-                           : static_cast<uint8_t>(num_tokens);
+      EP_DEVICE_ASSERT(num_tokens > 0 && num_tokens <= 255);
+      cmd.atomic_val = static_cast<uint8_t>(num_tokens);
     }
     h->atomic_set_and_commit(cmd, &slot);
   }
@@ -120,9 +119,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       } else {
         cmd.expert_idx = expert_idx;
         // Low-latency WRITE: use atomic_val byte for num_tokens (1..255).
-        cmd.atomic_val = (num_tokens <= 0 || num_tokens > 255)
-                             ? 1
-                             : static_cast<uint8_t>(num_tokens);
+        EP_DEVICE_ASSERT(num_tokens > 0 && num_tokens <= 255);
+        cmd.atomic_val = static_cast<uint8_t>(num_tokens);
       }
       h->atomic_set_and_commit(cmd, &slot);
       break;

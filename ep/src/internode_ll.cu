@@ -67,11 +67,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     void* atomic_buffer_ptr = nullptr,
     int64_t* rdma_recv_count_internode = nullptr,
     int* grid_sync_barrier_ptr = nullptr) {
-// #ifdef LAM_DEV
-  // if (blockIdx.x == 0 && threadIdx.x == 0) {
-  //   printf("[LAM_DEV] dispatch called\n");
-  // }
-// #endif
   auto const sm_id = static_cast<int>(blockIdx.x);
   auto const thread_id = static_cast<int>(threadIdx.x);
   auto const warp_id = thread_id / WARP_SIZE, lane_id = get_lane_id();
@@ -443,6 +438,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 // Receiving phase
 LOW_LATENCY_DISPATCH_RECV:
   if ((phases & LOW_LATENCY_RECV_PHASE) == 0) {
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[combine] SEND finished\n");
     return;
   }
 
@@ -542,6 +539,13 @@ LOW_LATENCY_DISPATCH_RECV:
           num_recv_tokens_internode != 0 ? -num_recv_tokens_internode - 1 : 0;
       num_recv_tokens_ipc =
           num_recv_tokens_ipc != 0 ? -num_recv_tokens_ipc - 1 : 0;
+      // printf(
+      //     "num_recv_tokens_internode: %d, num_recv_tokens_ipc: %d, src_rank:"
+      //     "%d, rank: %d, max_nvl_peers: %d, responsible_expert_idx: %d,"
+      //     "num_experts: %d, num_local_experts: %d\n",
+      //     num_recv_tokens_internode, num_recv_tokens_ipc, src_rank, rank,
+      //     max_nvl_peers, responsible_expert_idx, num_experts,
+      //     num_local_experts);
       num_recv_tokens = num_recv_tokens_internode + num_recv_tokens_ipc;
       recv_token_begin_idx =
           atomicAdd(packed_recv_count + local_expert_idx, num_recv_tokens);
@@ -617,6 +621,8 @@ LOW_LATENCY_DISPATCH_RECV:
         }
       }
     }
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[dispatch] RECV finished\n");
   }
 }
 
@@ -1153,7 +1159,9 @@ LOW_LATENCY_COMBINE_RECV:
       (static_cast<int4*>(combined_x) +
        token_idx * hidden_bf16_int4)[hidden_idx] = combined_int4;
     }
-
+    
+      // if (blockIdx.x == 0 && threadIdx.x == 0)
+      //   printf("[combine] RECV finished\n");
   }
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)

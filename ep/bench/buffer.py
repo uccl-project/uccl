@@ -284,24 +284,6 @@ class Buffer:
                 hidden=x.shape[1],
                 num_experts=num_experts,
             )
-        
-        # DEBUG: Print data before CUDA kernel launch
-        if os.environ.get("DEBUG_DISPATCH", "0") == "1":
-            print(f"\n{'='*60}", flush=True)
-            print(f"[DEBUG] low_latency_dispatch - BEFORE CUDA kernel", flush=True)
-            print(f"{'='*60}", flush=True)
-            print(f"  rank: {self.rank}", flush=True)
-            print(f"  x.shape: {x.shape}, dtype: {x.dtype}", flush=True)
-            print(f"  x.data_ptr: {hex(x.data_ptr())}", flush=True)
-            print(f"  x[:3, :8]:\n{x[:3, :8]}", flush=True)
-            print(f"  topk_idx.shape: {topk_idx.shape}, dtype: {topk_idx.dtype}", flush=True)
-            print(f"  topk_idx[:5]:\n{topk_idx[:5]}", flush=True)
-            print(f"  num_max_dispatch_tokens_per_rank: {num_max_dispatch_tokens_per_rank}", flush=True)
-            print(f"  num_experts: {num_experts}", flush=True)
-            print(f"  use_fp8: {use_fp8}, round_scale: {round_scale}, use_ue8m0: {use_ue8m0}", flush=True)
-            print(f"  async_finish: {async_finish}, return_recv_hook: {return_recv_hook}", flush=True)
-            print(f"{'='*60}\n", flush=True)
-        
         (
             packed_recv_x,
             packed_recv_x_scales,
@@ -330,22 +312,6 @@ class Buffer:
             x.size(1),
             num_experts,
         )
-        
-        # DEBUG: Print data after CUDA kernel returns
-        if os.environ.get("DEBUG_DISPATCH", "0") == "1":
-            import torch
-            torch.cuda.synchronize()  # Wait for kernel to complete
-            print(f"\n{'='*60}", flush=True)
-            print(f"[DEBUG] low_latency_dispatch - AFTER CUDA kernel", flush=True)
-            print(f"{'='*60}", flush=True)
-            print(f"  packed_recv_x.shape: {packed_recv_x.shape}, dtype: {packed_recv_x.dtype}", flush=True)
-            print(f"  packed_recv_count: {packed_recv_count}", flush=True)
-            print(f"  packed_recv_src_info.shape: {packed_recv_src_info.shape}", flush=True)
-            print(f"  packed_recv_layout_range.shape: {packed_recv_layout_range.shape}", flush=True)
-            if packed_recv_x_scales is not None:
-                print(f"  packed_recv_x_scales.shape: {packed_recv_x_scales.shape}", flush=True)
-            print(f"{'='*60}\n", flush=True)
-        
         tensors_to_record = (
             x,
             topk_idx,
