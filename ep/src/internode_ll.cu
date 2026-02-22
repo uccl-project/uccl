@@ -12,9 +12,6 @@ namespace cg = cooperative_groups;
 namespace uccl {
 namespace internode_ll {
 
-// Lam: Global lock for debug printing (ensures printf calls don't interleave)
-__device__ int g_print_lock = 0;
-
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
 constexpr int kNumMaxWarpGroups = 16;
 #else
@@ -56,13 +53,12 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     int64_t* dispatch_wait_recv_cost_stats, void* rdma_recv_x,
     int* rdma_recv_count, void* rdma_x, void const* x, int64_t const* topk_idx,
     int* atomic_counter_per_expert, int* atomic_finish_counter_per_expert,
-    int* atomic_send_counter_per_expert,
-    int* next_clean, int64_t* next_clean_second, int num_next_clean_int,
-    int num_tokens, int num_max_dispatch_tokens_per_rank, int num_topk,
-    int num_experts, int rank, int num_ranks, int num_warp_groups,
-    int num_warps_per_group, bool round_scale, int phases,
-    uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
-    int max_nvl_peers, int low_latency_buffer_idx,
+    int* atomic_send_counter_per_expert, int* next_clean,
+    int64_t* next_clean_second, int num_next_clean_int, int num_tokens,
+    int num_max_dispatch_tokens_per_rank, int num_topk, int num_experts,
+    int rank, int num_ranks, int num_warp_groups, int num_warps_per_group,
+    bool round_scale, int phases, uint64_t const* d2h_channel_addrs,
+    int num_d2h_channel_addrs, int max_nvl_peers, int low_latency_buffer_idx,
     void** ipc_rdma_base_ptrs = nullptr, void* rdma_buffer_ptr = nullptr,
     void* atomic_buffer_ptr = nullptr,
     int64_t* rdma_recv_count_internode = nullptr,
@@ -102,7 +98,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   // Expert counts
   __shared__ int shared_num_tokens_sent_per_expert[kNumMaxWarpGroups];
 
-  // Lam: Send slots for each topk destination (for batched send buffer layout)
+  // Global counter slots used for batching sends to each top-k destination.
   constexpr int kNumMaxTopK = 9;
   __shared__ int shared_send_slots[kNumMaxTopK];
   __shared__ int shared_dst_experts[kNumMaxTopK];
@@ -145,8 +141,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                              : -1;
       thread_id == 0 ? (*rdma_x_src_idx = token_idx) : 0;
 
-      // Lam: Allocate send slots for each topk destination
-      // Each warp (warp_id < num_topk) allocates a slot for its destination expert
+      // Allocate per-expert send slots for top-k destinations.
+      // Each warp (warp_id < num_topk) reserves one slot for its destination
+      // expert.
       if (warp_id < num_topk && lane_id == 0) {
         shared_dst_experts[warp_id] = dst_expert_idx;
         if (dst_expert_idx >= 0) {
@@ -244,12 +241,19 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                         dst_rank, max_nvl_peers, 0)
                 : 0;
         if (dst_p2p_ptr == 0) {
-          // Lam: IBGDA -> copy temp to rdma_batch_buffer, batch send later
-          auto const lam_slot = shared_send_slots[warp_id];
-          auto const batch_buf_offset = num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
-          auto const batch_buf_ptr = static_cast<uint8_t*>(rdma_x) + batch_buf_offset +
-              (dst_expert_idx * num_max_dispatch_tokens_per_rank + lam_slot) * num_bytes_per_msg;
-          auto const* src_int4_ptr = reinterpret_cast<int4 const*>(rdma_x_src_idx);
+          // For inter-node send path, copy temp data to the per-expert batch
+          // buffer, then issue a batched RDMA send.
+          // TODO: This has an extra temp->per-expert copy in the FP8 path.
+          // FP8 output is written to the temp buffer first, then copied here.
+          auto const slot_idx = shared_send_slots[warp_id];
+          auto const batch_buf_offset =
+              num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
+          auto const batch_buf_ptr =
+              static_cast<uint8_t*>(rdma_x) + batch_buf_offset +
+              (dst_expert_idx * num_max_dispatch_tokens_per_rank + slot_idx) *
+                  num_bytes_per_msg;
+          auto const* src_int4_ptr =
+              reinterpret_cast<int4 const*>(rdma_x_src_idx);
           auto* batch_buf_int4_ptr = reinterpret_cast<int4*>(batch_buf_ptr);
           UNROLLED_WARP_COPY(8, lane_id, num_int4_per_msg, batch_buf_int4_ptr,
                              src_int4_ptr, ld_nc_global, st_na_global);
@@ -312,27 +316,19 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   }
   __syncthreads();
 
-  // Lam: Grid-wide sync before batch send phase.
-  // __syncthreads() only syncs within a single thread block (SM).
-  // The token loop distributes tokens round-robin across SMs
-  // (token_idx = sm_id, stepping by num_sms). When num_tokens < num_sms,
-  // most SMs skip the token loop and pass __syncthreads() immediately,
-  // while the SMs processing tokens are still writing to the batch buffer
-  // and incrementing atomic_send_counter_per_expert.
-  // Without grid sync, the batch send phase can read a stale/partial
-  // counter and send fewer tokens than actually produced, causing the
-  // receiver to hang waiting for data that never arrives.
+  // Grid-wide sync before batch-send.
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   amd::grid_sync(grid_sync_barrier_ptr, num_sms);
 #else
   cg::this_grid().sync();
 #endif
 
-  // Lam: Batch RDMA send phase - send entire expert buffer in ONE IBGDA call
+  // Batch RDMA send phase - send entire expert buffer in ONE IBGDA call
   // Each warp group handles one expert (only first sub_warp does the send)
   if (responsible_expert_idx < num_experts && sub_warp_id == 0) {
     auto const dst_rank = responsible_expert_idx / num_local_experts;
-    auto const dst_expert_local_idx = responsible_expert_idx % num_local_experts;
+    auto const dst_expert_local_idx =
+        responsible_expert_idx % num_local_experts;
 
     // Check if this destination is inter-node (needs IBGDA batch send)
     // IPC destinations were already sent in the token loop
@@ -370,12 +366,11 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
         uccl::nvshmemi_ibgda_put_nbi_warp(
             dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
-            src_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
-            total_bytes, dst_rank,
+            src_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), total_bytes,
+            dst_rank,
             /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting rb.
             lane_id, /*slot=*/0, d2h_channel_addrs, num_d2h_channel_addrs,
             false, low_latency_buffer_idx, 0, 0, num_tokens_to_send);
-        
       }
     }
     // IPC: already sent in the token loop, nothing to do here
@@ -424,11 +419,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr),
                             -num_tokens_sent - 1);
     }
-
     // Clean workspace for next use
     atomic_counter_per_expert[responsible_expert_idx] = 0;
     atomic_finish_counter_per_expert[responsible_expert_idx] = 0;
-
     atomic_send_counter_per_expert[responsible_expert_idx] = 0;
     // Clean `packed_recv_count`
     if (dst_rank == 0) packed_recv_count[dst_expert_local_idx] = 0;
@@ -438,8 +431,6 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 // Receiving phase
 LOW_LATENCY_DISPATCH_RECV:
   if ((phases & LOW_LATENCY_RECV_PHASE) == 0) {
-    // if (blockIdx.x == 0 && threadIdx.x == 0)
-    //   printf("[combine] SEND finished\n");
     return;
   }
 
@@ -664,26 +655,26 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   if (use_ue8m0)
     EP_HOST_ASSERT(round_scale and "UE8M0 SF requires `round_scale=True`");
 
-#define DISPATCH_LAUNCH_CASE(hidden)                                          \
-  {                                                                           \
-    auto dispatch_func = dispatch<false, false, hidden>;                      \
-    if (use_fp8 and not use_ue8m0)                                            \
-      dispatch_func = dispatch<true, false, hidden>;                          \
-    if (use_fp8 and use_ue8m0) dispatch_func = dispatch<true, true, hidden>;  \
-    LAUNCH_KERNEL(                                                            \
-        &cfg, dispatch_func, packed_recv_x, packed_recv_x_scales,             \
-        packed_recv_src_info, packed_recv_layout_range, packed_recv_count,    \
-        cumulative_local_expert_recv_stats, dispatch_wait_recv_cost_stats,    \
-        rdma_recv_x, rdma_recv_count, rdma_x, x, topk_idx,                    \
-        atomic_counter_per_expert, atomic_finish_counter_per_expert,          \
-        atomic_send_counter_per_expert,                                        \
-        next_clean, next_clean_second, num_next_clean_int, num_tokens,        \
-        num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,        \
-        num_ranks, num_warp_groups, num_warps_per_group, round_scale, phases, \
-        d2h_channel_addrs, num_d2h_channel_addrs, max_nvl_peers,              \
-        low_latency_buffer_idx, ipc_rdma_base_ptrs, rdma_buffer_ptr,          \
-        atomic_buffer_ptr, rdma_recv_count_internode, grid_sync_barrier_ptr); \
-  }                                                                           \
+#define DISPATCH_LAUNCH_CASE(hidden)                                         \
+  {                                                                          \
+    auto dispatch_func = dispatch<false, false, hidden>;                     \
+    if (use_fp8 and not use_ue8m0)                                           \
+      dispatch_func = dispatch<true, false, hidden>;                         \
+    if (use_fp8 and use_ue8m0) dispatch_func = dispatch<true, true, hidden>; \
+    LAUNCH_KERNEL(                                                           \
+        &cfg, dispatch_func, packed_recv_x, packed_recv_x_scales,            \
+        packed_recv_src_info, packed_recv_layout_range, packed_recv_count,   \
+        cumulative_local_expert_recv_stats, dispatch_wait_recv_cost_stats,   \
+        rdma_recv_x, rdma_recv_count, rdma_x, x, topk_idx,                   \
+        atomic_counter_per_expert, atomic_finish_counter_per_expert,         \
+        atomic_send_counter_per_expert, next_clean, next_clean_second,       \
+        num_next_clean_int, num_tokens, num_max_dispatch_tokens_per_rank,    \
+        num_topk, num_experts, rank, num_ranks, num_warp_groups,             \
+        num_warps_per_group, round_scale, phases, d2h_channel_addrs,         \
+        num_d2h_channel_addrs, max_nvl_peers, low_latency_buffer_idx,        \
+        ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,              \
+        rdma_recv_count_internode, grid_sync_barrier_ptr);                   \
+  }                                                                          \
   break
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   EP_HOST_ASSERT(num_warps * WARP_SIZE <= MAX_NTHREADS);

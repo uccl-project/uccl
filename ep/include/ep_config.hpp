@@ -196,16 +196,19 @@ struct LowLatencyLayout {
     size_t num_bytes_per_combine_msg = hidden * sizeof(nv_bfloat16);
 
     // Send buffer
-    // Buffer layout for RDMA sends, used by the batched RDMA-send path in the dispatch-LL kernel.
+    // Buffer layout for RDMA sends, used by the batched RDMA-send path in the
+    // dispatch-LL kernel.
     // ┌──────────────────────────────────────────┬──────────────────────────────────────────────────────────┐
     // │ Temp buffer (offset 0)                   │ Per-expert RDMA batch buffer (offset num_max_token)      │
     // │ rdma_x[token_idx]                        │ rdma_x[num_max_token + expert * num_max_token + slot]    │
     // │ Size: num_max_token * msg_size           │ Size: num_experts * num_max_token * msg_size             │
     // └──────────────────────────────────────────┴──────────────────────────────────────────────────────────┘
-    // Flow: (optional FP8 cast) -> temp buffer -> copy to per-expert batch buffer -> batched RDMA send
+    // Flow: (optional FP8 cast) -> temp buffer -> copy to per-expert batch
+    // buffer -> batched RDMA send
     // TODO: Support per-GPU destination batching in this path.
-    size_t dispatch_send_buffer_bytes =
-        (num_experts + 1) * num_max_dispatch_tokens_per_rank * num_bytes_per_dispatch_msg;
+    size_t dispatch_send_buffer_bytes = (num_experts + 1) *
+                                        num_max_dispatch_tokens_per_rank *
+                                        num_bytes_per_dispatch_msg;
     size_t combine_send_buffer_bytes = num_experts *
                                        num_max_dispatch_tokens_per_rank *
                                        num_bytes_per_combine_msg;
