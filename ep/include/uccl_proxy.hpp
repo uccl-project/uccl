@@ -19,7 +19,8 @@ class UcclProxy {
   UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr, size_t total_size,
             int rank, int node_idx, int local_rank, int num_experts = 0,
             int num_ranks = 0, int num_nodes = 0, bool use_normal_mode = false,
-            bool is_intranode = false);
+            bool is_intranode = false,
+            bool gpu_buffer_is_host_allocated = false);
   ~UcclProxy();
 
   void start_sender();
@@ -94,6 +95,8 @@ class UcclProxy {
   std::vector<PeerMeta> peers_;
   int local_rank_;
   void* atomic_buffer_ptr_;
+  bool atomic_buffer_is_host_allocated_ =
+      false;  // true => cudaFreeHost, false => cudaFree
   int node_idx_;
   bool is_intranode_;
   std::vector<d2hq::HostD2HHandle> d2h_queues;

@@ -367,6 +367,19 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 #else
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova, access_flags);
 #endif
+  // Fallback when iova2/dmabuf fails (e.g. "Bad address" on some RoCE NICs or
+  // NICs without nvidia_peermem where the driver cannot use GPU VA as IOVA).
+  if (!S.mr) {
+#ifndef EFA
+    S.mr = ibv_reg_mr(S.pd, gpu_buf, bytes,
+                      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                          IBV_ACCESS_REMOTE_ATOMIC);
+#else
+    S.mr = ibv_reg_mr(S.pd, gpu_buf, bytes,
+                      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                          IBV_ACCESS_RELAXED_ORDERING);
+#endif
+  }
   if (!S.mr) {
     perror("GPU MR registration failed");
     exit(1);
@@ -378,6 +391,85 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   }
 
   S.rkey = S.mr->rkey;
+}
+
+bool can_register_gpu_memory_for_atomics(int gpu_idx) {
+  // Probe: can we register a cudaMalloc'd buffer with ibv_reg_mr on this node?
+  // On some NICs (e.g. without nvidia_peermem) registration fails; use host
+  // memory for the atomic buffer in that case.
+  static thread_local bool probed = false;
+  static thread_local bool result = false;
+  if (probed) return result;
+  probed = true;
+
+#ifdef ATOMICS_USE_HOST_MEMORY
+  // Build with INTEL_RDMA_NIC (or ATOMICS_USE_HOST_MEMORY): use host memory for
+  // atomic and RDMA buffers so ibv_reg_mr succeeds.
+  result = false;
+  return result;
+#endif
+
+  char* force_host = getenv("UCCL_ATOMICS_USE_HOST_MEMORY");
+  if (force_host &&
+      (force_host[0] == '1' || force_host[0] == 'y' || force_host[0] == 'Y')) {
+    result = false;
+    return result;
+  }
+
+  int num_devices = 0;
+  struct ibv_device** dev_list = ibv_get_device_list(&num_devices);
+  if (!dev_list || num_devices == 0) {
+    result = false;
+    if (dev_list) ibv_free_device_list(dev_list);
+    return result;
+  }
+  struct ibv_context* ctx = ibv_open_device(dev_list[0]);
+  ibv_free_device_list(dev_list);
+  if (!ctx) {
+    result = false;
+    return result;
+  }
+  struct ibv_pd* pd = ibv_alloc_pd(ctx);
+  if (!pd) {
+    ibv_close_device(ctx);
+    result = false;
+    return result;
+  }
+
+  void* probe_buf = nullptr;
+  cudaError_t cuerr = cudaSetDevice(gpu_idx);
+  if (cuerr != cudaSuccess) {
+    ibv_dealloc_pd(pd);
+    ibv_close_device(ctx);
+    result = false;
+    return result;
+  }
+  cuerr = cudaMalloc(&probe_buf, 4096);
+  if (cuerr != cudaSuccess || !probe_buf) {
+    ibv_dealloc_pd(pd);
+    ibv_close_device(ctx);
+    result = false;
+    return result;
+  }
+
+#ifndef EFA
+  int access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+               IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC;
+#else
+  int access =
+      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
+#endif
+  struct ibv_mr* mr = ibv_reg_mr(pd, probe_buf, 4096, access);
+  if (mr) {
+    ibv_dereg_mr(mr);
+    result = true;
+  } else {
+    result = false;
+  }
+  cudaFree(probe_buf);
+  ibv_dealloc_pd(pd);
+  ibv_close_device(ctx);
+  return result;
 }
 
 ibv_cq* create_per_thread_cq(ProxyCtx& S) {
@@ -557,7 +649,7 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   local_info->recv_ack_qp_num = S.recv_ack_qp->qp_num;
   local_info->lid = port_attr.lid;
   local_info->rkey = S.rkey;
-  local_info->addr = reinterpret_cast<uintptr_t>(gpu_buffer);
+  local_info->addr = reinterpret_cast<uintptr_t>(S.mr->addr);
   local_info->len = size;
   local_info->psn = 0;
   local_info->ack_psn = 0;

@@ -513,6 +513,7 @@ def initialize_uccl(
     num_experts=0,
     is_intranode=False,
     use_normal_mode=False,
+    rdma_buffer_is_host_allocated=False,
 ):
     try:
         for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
@@ -570,6 +571,7 @@ def initialize_uccl(
             num_nodes=num_nodes,
             use_normal_mode=use_normal_mode,
             is_intranode=is_intranode,
+            gpu_buffer_is_host_allocated=rdma_buffer_is_host_allocated,
         )
         proxies.append(proxy)
 

@@ -1194,7 +1194,35 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
   EP_HOST_ASSERT(not(zero_copy and use_logfmt));
 
   constexpr int kNumTMABytesPerWarp = 12 * (512 + 16);
-  int const smem_size = kNumTMABytesPerWarp * num_warps;
+  int num_warps_launch = num_warps;
+  int num_warps_per_group_launch = num_warps_per_group;
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
+  int device_id = 0;
+  if (cudaGetDevice(&device_id) == cudaSuccess) {
+    int max_smem = 0;
+    if (cudaDeviceGetAttribute(&max_smem,
+                               cudaDevAttrMaxSharedMemoryPerBlockOptin,
+                               device_id) == cudaSuccess &&
+        max_smem > 0) {
+      size_t const requested_smem = kNumTMABytesPerWarp * num_warps;
+      if (requested_smem > static_cast<size_t>(max_smem)) {
+        int const max_warps_by_smem = max_smem / kNumTMABytesPerWarp;
+        num_warps_launch =
+            (max_warps_by_smem / num_warp_groups) * num_warp_groups;
+        if (num_warps_launch < num_warp_groups)
+          num_warps_launch = num_warp_groups;
+        if (num_warps_launch >= 2 * num_warp_groups) {
+          num_warps_per_group_launch = num_warps_launch / num_warp_groups;
+        } else {
+          num_warps_launch = num_warps;
+          num_warps_per_group_launch = num_warps_per_group;
+        }
+      }
+    }
+  }
+#endif
+  int const smem_size = kNumTMABytesPerWarp * num_warps_launch;
+  // printf("Combine launched\n");
 
 #define COMBINE_LAUNCH_CASE(hidden)                                          \
   {                                                                          \
@@ -1207,18 +1235,18 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
         combine_wait_recv_cost_stats, next_clean, next_clean_second,         \
         num_next_clean_int, atomic_clean_flag, num_combined_tokens, hidden,  \
         num_topk, num_max_dispatch_tokens_per_rank, num_experts, rank,       \
-        num_ranks, num_warp_groups, num_warps_per_group, phases, zero_copy,  \
-        d2h_channel_addrs, num_d2h_channel_addrs, max_nvl_peers,             \
+        num_ranks, num_warp_groups, num_warps_per_group_launch, phases,      \
+        zero_copy, d2h_channel_addrs, num_d2h_channel_addrs, max_nvl_peers,  \
         low_latency_buffer_idx, ipc_rdma_base_ptrs, rdma_buffer_ptr,         \
         atomic_buffer_ptr, rdma_recv_flag_internode, grid_sync_barrier_ptr); \
   }                                                                          \
   break
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  EP_HOST_ASSERT(num_warps * WARP_SIZE <= MAX_NTHREADS);
+  EP_HOST_ASSERT(num_warps_launch * WARP_SIZE <= MAX_NTHREADS);
 #endif
 
-  SETUP_LAUNCH_CONFIG(num_sms, num_warps * WARP_SIZE, stream);
+  SETUP_LAUNCH_CONFIG(num_sms, num_warps_launch * WARP_SIZE, stream);
   SWITCH_HIDDEN(COMBINE_LAUNCH_CASE);
   auto err = cudaGetLastError();
   if (err != cudaSuccess) {

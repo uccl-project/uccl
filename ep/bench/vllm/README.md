@@ -4,29 +4,30 @@ This guide provides example scripts and instructions for deploying vLLM with Exp
 
 ## Installation
 
+### Rrerequisite
+
+Run `nvcc --version` to see which cuda toolkit you are using. This will be the one all the following libraries compile with. 
+Note that `nvidia-smi` shows the driver-supported max CUDA version. 
+Below assumes `cu129`. 
+
 ### 0. Install uv
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv
 source .venv/bin/activate
-uv pip install numpy torch setuptools
+uv pip install numpy setuptools
+uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu129
 ```
 
 ### 1. Install vLLM with EP Support
 
-Follow the official guide:
+Follow the [vLLM official guide](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/#pre-built-wheels):
 ```bash
-# Install vLLM: latest version with timeout fix (https://github.com/vllm-project/vllm/pull/27444)
-git clone https://github.com/vllm-project/vllm.git
-cd vllm
-# This may take 5-10 minutes.
-uv pip install -e .
+uv pip install vllm --torch-backend=cu129
 ```
 
-For detailed EP setup, refer to [vLLM Expert Parallel Deployment](https://docs.vllm.ai/en/stable/serving/expert_parallel_deployment.html)
-
-Last tested commit hash: 8c328c6
+For EP details, refer to [vLLM Expert Parallel Deployment](https://docs.vllm.ai/en/stable/serving/expert_parallel_deployment.html)
 
 ### 2. Install DeepGEMM Library
 
@@ -34,14 +35,15 @@ DeepGEMM provides optimized kernels for MoE operations:
 
 ```bash
 # Clone and install DeepGEMM
-git clone --recursive https://github.com/deepseek-ai/DeepGEMM.git
-cd DeepGEMM
-cat install.sh
+git clone --recursive https://github.com/deepseek-ai/DeepGEMM.git && cd DeepGEMM
+
 # cuobjdump used by https://github.com/deepseek-ai/DeepGEMM/blob/9b680f428484625f4f35dc3617f134187c6bcd4a/csrc/jit/kernel_runtime.hpp#L44
 # If you could not find cuobjdump in your servers, install it by: 
 sudo apt install nvidia-cuda-toolkit -y
 # If your server's cuobjdump is under /bin instead of $CUDA_HOME/bin, set soft link to make DeepGEMM happy: 
 sudo ln -s /bin/cuobjdump /usr/local/cuda/bin/cuobjdump
+
+# Ignore the final install error, as it was targetting non-uv env
 ./install.sh
 uv pip install dist/*.whl --force-reinstall
 ```
@@ -124,6 +126,27 @@ bash launch_vllm_worker.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 deepep
 - `1` - For node 0, number of API servers; for others, starting rank (= sum of previous nodes' local DP)
 
 ## vLLM Serving Benchmark Results
+
+```
+vllm bench serve \
+  --backend openai-chat \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --endpoint /v1/chat/completions \
+  --model deepseek-ai/DeepSeek-V3-0324 \
+  --dataset-name random \
+  --random-input-len 1024 \
+  --random-output-len 256 \
+  --num-prompts 1000 \
+  --request-rate 10 \
+  --max-concurrency 256 \
+  --seed 42 \
+  --ignore-eos \
+  --save-result \
+  --result-dir ./results \
+  --percentile-metrics ttft,tpot,itl,e2el \
+  --metric-percentiles 50,90,95,99
+```
 
 **Model:** `deepseek-ai/DeepSeek-V3-0324`  
 **Request rate:** 10 RPS  

@@ -13,7 +13,8 @@
 UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      size_t total_size, int rank, int node_idx, int local_rank,
                      int num_experts, int num_ranks, int num_nodes,
-                     bool use_normal_mode, bool is_intranode)
+                     bool use_normal_mode, bool is_intranode,
+                     bool gpu_buffer_is_host_allocated)
     : thread_{},
       mode_{Mode::None},
       running_{false},
@@ -50,6 +51,7 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.num_nodes = num_nodes;
   cfg.use_normal_mode = use_normal_mode;
   cfg.is_intranode = is_intranode;
+  cfg.free_buffer_with_cuda_free_host = gpu_buffer_is_host_allocated;
   proxy_ = std::make_unique<Proxy>(cfg);
   local_rank_ = local_rank;
   node_idx_ = node_idx;
@@ -57,21 +59,26 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   if (thread_idx == 0) {
 #ifdef USE_GRACE_HOPPER
     cudaMallocManaged(&atomic_buffer_ptr_, kAtomicBufferSize);
+    atomic_buffer_is_host_allocated_ = false;
 #elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
     hipExtMallocWithFlags(&atomic_buffer_ptr_, kAtomicBufferSize,
                           hipDeviceMallocUncached);
+    atomic_buffer_is_host_allocated_ = false;
 #elif defined(EFA)
-    cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
-                  cudaHostAllocMapped | cudaHostAllocWriteCombined);
+    // EFA: atomic buffer is always pinned host memory (cudaMallocHost).
+    cudaMallocHost(&atomic_buffer_ptr_, kAtomicBufferSize);
+    atomic_buffer_is_host_allocated_ = true;
 #else
-#ifdef ATOMICS_USE_HOST_MEMORY
-    // Pinned host memory: ibv_reg_mr works on NICs without nvidia_peermem
-    // (e.g. irdma), CPU proxy threads can do std::atomic ops, and GPU
-    // kernels can still access it via CUDA host-mapped addressing.
-    cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize, cudaHostAllocMapped);
-#else
-    cudaMalloc(&atomic_buffer_ptr_, kAtomicBufferSize);
-#endif
+    // Dynamically detect: on some nodes (e.g. GH10) ibv_reg_mr fails for
+    // cudaMalloc; use pinned host memory then. Override with
+    // UCCL_ATOMICS_USE_HOST_MEMORY=1 to force host memory.
+    if (can_register_gpu_memory_for_atomics(local_rank)) {
+      cudaMalloc(&atomic_buffer_ptr_, kAtomicBufferSize);
+      atomic_buffer_is_host_allocated_ = false;
+    } else {
+      cudaMallocHost(&atomic_buffer_ptr_, kAtomicBufferSize);
+      atomic_buffer_is_host_allocated_ = true;
+    }
 #endif
     cudaMemset(atomic_buffer_ptr_, 0, kAtomicBufferSize);
     proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);
@@ -82,6 +89,20 @@ UcclProxy::~UcclProxy() {
   try {
     stop();
   } catch (...) {
+  }
+
+  if (thread_idx_ == 0 && atomic_buffer_ptr_) {
+#if defined(USE_GRACE_HOPPER)
+    cudaFree(atomic_buffer_ptr_);
+#elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    hipFree(atomic_buffer_ptr_);
+#else
+    if (atomic_buffer_is_host_allocated_)
+      cudaFreeHost(atomic_buffer_ptr_);
+    else
+      cudaFree(atomic_buffer_ptr_);
+#endif
+    atomic_buffer_ptr_ = nullptr;
   }
 
   // Free all allocated ring buffers

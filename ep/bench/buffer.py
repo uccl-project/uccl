@@ -88,12 +88,13 @@ class Buffer:
         else:
             device_index = torch.cuda.current_device()
 
-        if torch.version.cuda:
-            self.scratch = torch.zeros(
-                num_rdma_bytes, dtype=torch.uint8, device=f"cuda:{device_index}"
-            )
+        # Prefer cudaMalloc when NIC can register GPU memory; else cudaMallocHost.
+        result = ep.get_rdma_buffer(num_rdma_bytes, device_index)
+        if isinstance(result, tuple):
+            self.scratch, rdma_buffer_is_host_allocated = result
         else:
-            self.scratch = ep.get_rdma_buffer(num_rdma_bytes, device_index)
+            self.scratch = result
+            rdma_buffer_is_host_allocated = bool(torch.version.cuda)
 
         rdma_buffer_ptr = self.scratch.data_ptr()
         self.proxies, self.workers = initialize_uccl(
@@ -104,6 +105,7 @@ class Buffer:
             group,
             use_normal_mode=not low_latency_mode,
             is_intranode=is_intranode,
+            rdma_buffer_is_host_allocated=rdma_buffer_is_host_allocated,
         )
         check_nvlink_connections(group)
 
@@ -143,9 +145,10 @@ class Buffer:
         dist.all_gather_object(ipc_handles, local_ipc_handle, group)
 
         rdma_ipc_handles = [None] * self.group_size
+        # CUDA IPC only works with device memory; skip when using cudaMallocHost.
         local_rdma_ipc_handle = (
             self.runtime.get_local_rdma_ipc_handle()
-            if self.num_rdma_bytes > 0
+            if self.num_rdma_bytes > 0 and not rdma_buffer_is_host_allocated
             else None
         )
         dist.all_gather_object(rdma_ipc_handles, local_rdma_ipc_handle, group)
