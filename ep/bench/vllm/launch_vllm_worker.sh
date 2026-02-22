@@ -17,6 +17,11 @@ set -e
 
 echo "🚀 Launching vLLM Secondary Node (Headless) with Expert Parallel..."
 
+# Hugging Face cache (DPSK v3 weights in ~/efs/yzhou/hf_cache)
+export HF_HOME="${HF_HOME:-$HOME/efs/yzhou/hf_cache}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-$HF_HOME}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME}"
+
 # Check if primary node IP is provided
 if [ -z "$1" ]; then
     echo "❌ Error: Primary Node (Node 0) IP address is required!"
@@ -115,6 +120,28 @@ echo "════════════════════════�
 echo ""
 
 # ============================================================================
+# CONFIRM CUDA GRAPH IS ENABLED
+# ============================================================================
+# After the server starts, search the log output for:
+#
+#   ENABLED:  "Graph capturing finished in N secs, took X.XX GiB"
+#   DISABLED: "Skipping CUDA graph capture..."
+#
+# Example (if logging to file): grep -E "Graph capturing finished|Skipping CUDA graph" <your_log>
+#
+# To force-enable and get the confirmation line, uncomment below:
+#   -cc.cudagraph_mode=FULL_AND_PIECEWISE
+# To log runtime CUDA graph usage (per interval), uncomment:
+#   -observability-config.cudagraph_metrics=true
+
+# ============================================================================
+# PROFILING / TIMELINE TRACE
+# ============================================================================
+# Same as Node 0: VLLM_PROFILER_DIR default below; trigger from head:
+# POST /start_profile, run workload, POST /stop_profile.
+export VLLM_PROFILER_DIR="${VLLM_PROFILER_DIR:-$HOME/efs/ziming/uccl/ep/bench/vllm}"
+
+# ============================================================================
 # LAUNCH vLLM SERVER (HEADLESS MODE)
 # ============================================================================
 
@@ -128,7 +155,11 @@ vllm serve "${MODEL}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
     --gpu-memory-utilization 0.85 \
-    --headless
+    --headless \
+    --profiler-config '{"profiler": "torch", "torch_profiler_dir": "'"${VLLM_PROFILER_DIR}"'"}'
+    # -cc.cudagraph_mode=FULL_AND_PIECEWISE \
+    # -observability-config.cudagraph_metrics=true
+    # -observability-config.enable_layerwise_nvtx_tracing=true
 
 # Additional useful options (uncomment as needed, must match Node 0):
 #   --max-model-len 8192 \

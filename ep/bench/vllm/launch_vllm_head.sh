@@ -15,6 +15,11 @@ set -e
 
 echo "🚀 Launching vLLM Node 0 (Primary) with Expert Parallel..."
 
+# Hugging Face cache (DPSK v3 weights in ~/efs/yzhou/hf_cache)
+export HF_HOME="${HF_HOME:-$HOME/efs/yzhou/hf_cache}"
+export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-$HF_HOME}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-$HF_HOME}"
+
 # Check if IP is provided
 if [ -z "$1" ]; then
     echo "❌ Error: Node IP address is required!"
@@ -112,6 +117,42 @@ echo "════════════════════════�
 echo ""
 
 # ============================================================================
+# CONFIRM CUDA GRAPH IS ENABLED
+# ============================================================================
+# After the server starts, search the log output for:
+#
+#   ENABLED:  "Graph capturing finished in N secs, took X.XX GiB"
+#   DISABLED: "Skipping CUDA graph capture..."
+#
+# Example (after starting): grep -E "Graph capturing finished|Skipping CUDA graph" <your_log>
+#
+# To force-enable and get the confirmation line, uncomment below:
+#   -cc.cudagraph_mode=FULL_AND_PIECEWISE
+# To log runtime CUDA graph usage (per interval), uncomment:
+#   -observability-config.cudagraph_metrics=true
+
+# ============================================================================
+# PROFILING / TIMELINE TRACE
+# ============================================================================
+# To get a timeline trace:
+#
+# 1) PyTorch profiler (Chrome trace → open at https://ui.perfetto.dev/):
+#    - Traces go to VLLM_PROFILER_DIR (default: this directory). Profiler is ON by default below.
+#    - For vllm bench: use ./run_bench_with_profile.sh ... so capture wraps the whole benchmark.
+#    - Or manually: curl -X POST http://localhost:8000/start_profile; <workload>; curl -X POST .../stop_profile.
+#    - Traces (head + workers) in VLLM_PROFILER_DIR; open .json/.json.gz at https://ui.perfetto.dev/
+#
+# 2) NVTX layerwise tracing (for Nsight Systems):
+#    - Uncomment: -observability-config.enable_layerwise_nvtx_tracing=true
+#    - Note: not compatible with CUDA graphs; disable cudagraph or use for nsys only.
+#
+# 3) Nsight Systems (nsys) for GPU timeline:
+#    - Run with: VLLM_WORKER_MULTIPROC_METHOD=spawn nsys profile -t cuda,nvtx -o vllm_report -- vllm serve ...
+#
+# Default: under this repo; override with VLLM_PROFILER_DIR if needed
+export VLLM_PROFILER_DIR="${VLLM_PROFILER_DIR:-$HOME/efs/ziming/uccl/ep/bench/vllm}"
+
+# ============================================================================
 # LAUNCH vLLM SERVER
 # ============================================================================
 
@@ -124,7 +165,12 @@ vllm serve "${MODEL}" \
     --data-parallel-address "${NODE1_IP}" \
     --data-parallel-rpc-port "${RPC_PORT}" \
     --gpu-memory-utilization 0.85 \
-    --api-server-count="${API_SERVERS}"
+    --api-server-count="${API_SERVERS}" \
+    --profiler-config '{"profiler": "torch", "torch_profiler_dir": "'"${VLLM_PROFILER_DIR}"'"}'
+    # -cc.cudagraph_mode=FULL_AND_PIECEWISE \
+    # -observability-config.cudagraph_metrics=true
+    # NVTX layerwise (for nsys; incompatible with CUDA graphs):
+    # -observability-config.enable_layerwise_nvtx_tracing=true
 
 # Additional useful options (uncomment as needed):
 #   --max-model-len 8192 \

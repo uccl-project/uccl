@@ -7,11 +7,37 @@ import site
 from pathlib import Path
 
 import torch
+from torch.utils import cpp_extension
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 from setuptools.command.install import install
 from setuptools import Command
 
 PROJECT_ROOT = Path(os.path.dirname(__file__)).resolve()
+
+# Set UCCL_SKIP_CUDA_VERSION_CHECK=1 to build when system CUDA (e.g. 13.1) differs from
+# PyTorch's CUDA (e.g. 12.8). Use only if you don't have a matching CUDA toolkit.
+_SKIP_CUDA_VERSION_CHECK = os.environ.get("UCCL_SKIP_CUDA_VERSION_CHECK", "").upper() in (
+    "1",
+    "ON",
+    "YES",
+    "TRUE",
+    "Y",
+)
+
+
+class CustomBuildExtension(BuildExtension):
+    """BuildExtension that can skip PyTorch's CUDA version check via UCCL_SKIP_CUDA_VERSION_CHECK=1."""
+
+    def build_extensions(self):
+        if _SKIP_CUDA_VERSION_CHECK:
+            _check_orig = cpp_extension._check_cuda_version
+            cpp_extension._check_cuda_version = lambda *args, **kwargs: None
+            try:
+                super().build_extensions()
+            finally:
+                cpp_extension._check_cuda_version = _check_orig
+        else:
+            super().build_extensions()
 
 
 class CustomInstall(install):
