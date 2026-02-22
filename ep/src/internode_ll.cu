@@ -373,7 +373,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             reinterpret_cast<uint64_t>(batch_buf_base) -
                 reinterpret_cast<uint64_t>(rdma_buffer_ptr),
             total_bytes, responsible_rank,
-            /*warp_id=*/responsible_rank, lane_id, /*slot=*/0,
+            /*warp_id=*/rank, lane_id, /*slot=*/0,
             d2h_channel_addrs, num_d2h_channel_addrs, false,
             low_latency_buffer_idx, 0, 0, num_tokens_to_send);
       }
@@ -403,9 +403,11 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       uccl::nvshmemi_ibgda_amo_nonfetch_add(
           dst_ptr_internode, reinterpret_cast<uint64_t>(atomic_buffer_ptr),
           -num_tokens_sent - 1, dst_rank,
-          /*warp_id=*/dst_rank, false, d2h_channel_addrs, num_d2h_channel_addrs,
+          /*warp_id=*/rank, false, d2h_channel_addrs, num_d2h_channel_addrs,
           false, low_latency_buffer_idx);
     } else {
+      EP_DEVICE_ASSERT(dst_rank / max_nvl_peers == rank / max_nvl_peers && 
+                    "IPC path should only be used for intra-node communication");
       // Intra-node: use direct atomic operation
       st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr),
                             -num_tokens_sent - 1);

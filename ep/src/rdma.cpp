@@ -1648,11 +1648,11 @@ void apply_pending_updates(ProxyCtx& ctx,
     int value = upd.value;
     if (!upd.is_combine) {
       int num_tokens = ctx.dispatch_token_counter.Get(
-          {upd.low_latency_buffer_idx, upd.expert_idx, upd.src_rank});
+          {upd.low_latency_buffer_idx, upd.src_rank, upd.src_rank});
       if ((-value - 1) == num_tokens) {
         is_atomic_ready = true;
         ctx.dispatch_token_counter.Reset(
-            {upd.low_latency_buffer_idx, upd.expert_idx, upd.src_rank});
+            {upd.low_latency_buffer_idx, upd.src_rank, upd.src_rank});
       }
     } else {
       int combine_num_tokens = ctx.combine_token_counter.Get(
@@ -1894,10 +1894,9 @@ void remote_process_completions_fast_mode(
       bool is_atomic_ready = false;
       int expert_idx = -1;
       if (!is_combine) {
-        expert_idx = new_index / num_ranks;
         src_rank = new_index % num_ranks;
         int num_tokens = S.dispatch_token_counter.Get(
-            {low_latency_buffer_idx, expert_idx, src_rank});
+            {low_latency_buffer_idx, src_rank, src_rank});
         if ((-value - 1) == num_tokens) {
           is_atomic_ready = true;
         }
@@ -1905,12 +1904,12 @@ void remote_process_completions_fast_mode(
           fprintf(stderr,
                   "[Error] Required Dispatch value %d is smaller than received "
                   "counter %d for "
-                  "expert_idx %d, src_rank %d\n",
-                  -value - 1, num_tokens, expert_idx, src_rank);
+                  "src_rank %d, src_rank %d\n",
+                  -value - 1, num_tokens, src_rank, src_rank);
         }
         if (is_atomic_ready) {
           S.dispatch_token_counter.Reset(
-              {low_latency_buffer_idx, expert_idx, src_rank});
+              {low_latency_buffer_idx, src_rank, src_rank});
         }
 
       } else {
@@ -2031,6 +2030,7 @@ void remote_process_completions_fast_mode(
 
       if (!is_combine) {
         /* expert_idx here is the local expert index of the receiver. */
+        assert(src_rank == expert_idx && "For dispatch tokens, src_rank should match expert_idx");
         S.dispatch_token_counter.Add({buffer_idx, expert_idx, src_rank}, k);
       } else {
         /* expert_idx here is the global expert index of the sender. */
