@@ -1048,6 +1048,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
 // Receiving phase
 LOW_LATENCY_COMBINE_RECV:
   if ((phases & LOW_LATENCY_RECV_PHASE) == 0) {
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[combine] SEND finished\n");
     return;
   }
   // Wait all ranks to arrive
@@ -1159,9 +1161,9 @@ LOW_LATENCY_COMBINE_RECV:
       (static_cast<int4*>(combined_x) +
        token_idx * hidden_bf16_int4)[hidden_idx] = combined_int4;
     }
-    
-      // if (blockIdx.x == 0 && threadIdx.x == 0)
-      //   printf("[combine] RECV finished\n");
+
+    // if (blockIdx.x == 0 && threadIdx.x == 0)
+    //   printf("[combine] RECV finished\n");
   }
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
