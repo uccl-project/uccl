@@ -7,8 +7,8 @@ This guide provides example scripts and instructions for deploying vLLM with Exp
 ### Rrerequisite
 
 Run `nvcc --version` to see which cuda toolkit you are using. This will be the one all the following libraries compile with. 
-Note that `nvidia-smi` shows the driver-supported max CUDA version. 
-Below assumes `cu129`. 
+Note that `nvidia-smi` shows the driver-supported max CUDA version instead of the cuda toolkit. 
+Below assumes `cu128`. 
 
 ### 0. Install uv
 
@@ -16,15 +16,23 @@ Below assumes `cu129`.
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv
 source .venv/bin/activate
-uv pip install numpy setuptools
-uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu129
+uv pip install numpy setuptools pybind11
+uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 ```
 
 ### 1. Install vLLM with EP Support
 
 Follow the [vLLM official guide](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/#pre-built-wheels):
 ```bash
-uv pip install vllm --torch-backend=cu129
+uv pip install vllm --torch-backend=cu128
+```
+
+If you use `cu130` or above, we suggest building vllm from source, as we find its wheel still relies on `cu12x` libcudart.so.12 (as of 02/21/2026). 
+```bash
+git clone https://github.com/vllm-project/vllm.git
+cd vllm
+# This may take 20-30 minutes.
+uv pip install -e .
 ```
 
 For EP details, refer to [vLLM Expert Parallel Deployment](https://docs.vllm.ai/en/stable/serving/expert_parallel_deployment.html)
@@ -88,7 +96,7 @@ vLLM provides three EP communication backends:
 
 ### Environment Setup
 
-Edit the provided scripts (`launch_vllm_head.sh` and `launch_vllm_worker.sh`) to configure:
+Edit the provided script `launch_vllm.sh` to configure:
 
 1. **Network interfaces** - Set `GLOO_SOCKET_IFNAME`, `NCCL_SOCKET_IFNAME`
 1. **Backend** - Choose appropriate `VLLM_ALL2ALL_BACKEND`
@@ -98,12 +106,18 @@ Edit the provided scripts (`launch_vllm_head.sh` and `launch_vllm_worker.sh`) to
 
 ## Deployment
 
+Use the unified script **`launch_vllm.sh`** with role `head` or `worker`:
+
+```bash
+# Usage: launch_vllm.sh <head|worker> <NODE1_IP> [RPC_PORT] [MODEL] [BACKEND] [TOTAL_DP_SIZE] [LOCAL_DP_SIZE] [LOCAL_TP_SIZE] [API_SERVERS_or_START_RANK]
+```
+
 ### Step 1: Start Node 0 (Primary)
 
 On the **first node** (primary node that handles API requests):
 
 ```bash
-bash launch_vllm_head.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 deepep_high_throughput 2 1 8 1
+bash launch_vllm.sh head 172.31.41.55 13345 deepseek-ai/DeepSeek-V3-0324 deepep_high_throughput 2 1 8 1
 ```
 
 ### Step 2: Start Node 1+ (Secondary)
@@ -111,19 +125,19 @@ bash launch_vllm_head.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 deepep_h
 On **each additional node** (secondary nodes in headless mode):
 
 ```bash
-# Launch Node 1 (headless)
-bash launch_vllm_worker.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 deepep_high_throughput 2 1 8 1
+bash launch_vllm.sh worker 172.31.41.55 13345 deepseek-ai/DeepSeek-V3-0324 deepep_high_throughput 2 1 8 1
 ```
 
-**Arguments:**
-- `10.4.147.22` - IP address of **Node 0**, should be the IP of the `NCCL_SOCKET_IFNAME`
-- `13345` - RPC port
-- `deepseek-ai/DeepSeek-V3-0324` - Same model as Node 1
-- `allgather_reducescatter` - EP communication backend
-- `2` - Total DP size
-- `1` - Local DP size on this node
-- `8` - Local TP size on this node
-- `1` - For node 0, number of API servers; for others, starting rank (= sum of previous nodes' local DP)
+**Arguments (positional):**
+- `head` | `worker` - Role: primary (API) or secondary (headless).
+- `NODE1_IP` - IP of Node 0 (use `hostname -I` on Node 0).
+- `RPC_PORT` - e.g. 13345.
+- `MODEL` - e.g. deepseek-ai/DeepSeek-V3-0324.
+- `BACKEND` - e.g. allgather_reducescatter, deepep_high_throughput, deepep_low_latency.
+- `TOTAL_DP_SIZE` - Total data-parallel size across all nodes (e.g. 2 for 2×8-GPU nodes).
+- `LOCAL_DP_SIZE` - Data-parallel size on this node (e.g. 1).
+- `LOCAL_TP_SIZE` - Tensor-parallel size on this node (e.g. 8).
+- **Head:** 9th = API_SERVERS (e.g. 1). **Worker:** 9th = START_RANK (node 1: 1; node 2: 2; etc.).
 
 ## vLLM Serving Benchmark Results
 
