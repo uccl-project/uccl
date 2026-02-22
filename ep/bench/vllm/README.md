@@ -170,6 +170,5 @@ vllm bench serve \
 
 | Mode | Req Throughput (req/s) | Output Tok Throughput (tok/s) | Mean TTFT (ms) | P99 TTFT (ms) | Mean TPOT (ms) | P99 TPOT (ms) |
 |------|------------------------|-------------------------------|----------------|---------------|----------------|---------------|
-| Allgather + ReduceScatter | 0.61 | 155.15 | 80643.16 | 275588.12 | 1312.63 | 1563.97 |
-| DeepEP – High Throughput | 3.58 | 915.66 | 3503.18 | 11950.74 | 248.03 | 297.82 |
-| DeepEP – Low Latency | 5.25 | 1345.26 | 6391.41 | 21805.85 | 152.02 | 235.48 |
+| Allgather + ReduceScatter | 8.93 | 2285.11 | 303.50 | 655.98 | 81.11 | 95.55 |
+| UCCL-EP - Low Latency | 9.22 | 2359.13 | 278.52 | 775.17 | 59.35 | 78.61 |
