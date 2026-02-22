@@ -67,7 +67,9 @@ def _run_server(args, ep, remote_metadata):
         data_ptr_v = []
         size_v = []
         for _ in range(args.num_kvblocks):
-            buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx, args.pinned)
+            buf, ptr = _make_buffer(
+                size_per_block, args.device, args.local_gpu_idx, args.pinned
+            )
             ok, mr_id = ep.reg(ptr, size_per_block)
             assert ok, "[Server] register failed"
             buf_v.append(buf)
@@ -167,7 +169,9 @@ def _run_client(args, ep, remote_metadata):
         data_ptr_v = []
         size_v = []
         for _ in range(args.num_kvblocks):
-            buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx, args.pinned)
+            buf, ptr = _make_buffer(
+                size_per_block, args.device, args.local_gpu_idx, args.pinned
+            )
             ok, mr_id = ep.reg(ptr, size_per_block)
             assert ok, "[Client] register failed"
             buf_v.append(buf)
@@ -373,7 +377,9 @@ def _run_server_ipc(args, ep):
 
     for size in args.sizes:
         # Allocate receive buffer - no memory registration needed for IPC
-        buf, ptr = _make_buffer(size, args.receiver_device, args.local_gpu_idx, args.pinned)
+        buf, ptr = _make_buffer(
+            size, args.receiver_device, args.local_gpu_idx, args.pinned
+        )
 
         # Warm-up transfer
         if args.async_api:
@@ -420,7 +426,9 @@ def _run_client_ipc(args, ep, remote_gpu_idx):
 
     for size in args.sizes:
         # Allocate send buffer - no memory registration needed for IPC
-        buf, ptr = _make_buffer(size, args.sender_device, args.local_gpu_idx, args.pinned)
+        buf, ptr = _make_buffer(
+            size, args.sender_device, args.local_gpu_idx, args.pinned
+        )
 
         # Warm-up transfer
         if args.async_api:
@@ -726,7 +734,9 @@ def main():
     # Check for incompatible options
     mode_flags = sum([args.dual, args.ipc, args.write_ipc, args.read_ipc])
     if mode_flags > 1:
-        print("Error: --dual, --ipc, --write-ipc, and --read-ipc are mutually exclusive")
+        print(
+            "Error: --dual, --ipc, --write-ipc, and --read-ipc are mutually exclusive"
+        )
         sys.exit(1)
 
     dist.init_process_group(backend="gloo")

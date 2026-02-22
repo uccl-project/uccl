@@ -1260,14 +1260,13 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
     GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
     GPU_RT_CHECK(
         gpuIpcOpenMemHandle(&base, info.handle, gpuIpcMemLazyEnablePeerAccess));
-    void* dst_ptr = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(base) + info.offset);
+    void* dst_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) +
+                                            info.offset);
 
     auto copy_kind =
         sender_is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
 
-    std::vector<gpuStream_t>& dst_streams =
-        ipc_streams_[conn->remote_gpu_idx_];
+    std::vector<gpuStream_t>& dst_streams = ipc_streams_[conn->remote_gpu_idx_];
     int num_streams = std::min(
         dst_streams.size(),
         size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
@@ -1409,14 +1408,14 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
     GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
     GPU_RT_CHECK(gpuIpcOpenMemHandle(&base, sender_info.handle,
                                      gpuIpcMemLazyEnablePeerAccess));
-    void* src_ptr = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(base) + sender_info.offset);
+    void* src_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) +
+                                            sender_info.offset);
 
     // Copy from sender's GPU to our CPU buffer using multiple streams
     std::vector<gpuStream_t>& streams = ipc_streams_[conn->remote_gpu_idx_];
-    int num_streams =
-        std::min(streams.size(),
-                 size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
+    int num_streams = std::min(
+        streams.size(),
+        size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
     size_t chunk_size = size / num_streams;
 
     for (int i = 0; i < num_streams; ++i) {
