@@ -155,7 +155,9 @@ def test_main(
         for return_recv_hook in (False, True):
             for dispatch_use_fp8_case in (False, True):
                 for round_scale in (False,):
-                    for round_scale in (False, True) if dispatch_use_fp8_case else (False,):
+                    for round_scale in (
+                        (False, True) if dispatch_use_fp8_case else (False,)
+                    ):
                         for use_ue8m0 in (False, True) if round_scale else (False,):
                             print(
                                 "Start experiment with settings:"
