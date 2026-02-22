@@ -3,7 +3,7 @@ This is the same test_low_latency.py test in DeepEP's repo.
 On first node:
 torchrun --nnodes=2 --nproc_per_node=8 --node_rank=0 \
   --master_addr=10.1.1.171 --master_port=12355 \
-  bench/test_low_latency.py --num-tokens=128 \
+  bench/test_low_latency_pplx.py --num-tokens=128 \
   --hidden=7168 --num-topk=8 --num-experts=288
 
 On second node:
