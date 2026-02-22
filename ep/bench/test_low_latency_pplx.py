@@ -153,7 +153,9 @@ def test_main(
         for return_recv_hook in (False, True):
             for dispatch_use_fp8_case in (False, True):
                 for round_scale in (False,):
-                    for round_scale in (False, True) if dispatch_use_fp8_case else (False,):
+                    for round_scale in (
+                        (False, True) if dispatch_use_fp8_case else (False,)
+                    ):
                         for use_ue8m0 in (False, True) if round_scale else (False,):
                             print(
                                 "Start experiment with settings:"
@@ -420,11 +422,11 @@ def test_main(
     num_logfmt10_bytes = hidden * 10 / 8 + hidden / 128 * 4
     # For pplx-style benchmark, each token routes to exactly num_topk experts.
     # Use benchmark-route bytes (not correctness masked routes) for apples-to-apples bandwidth.
-    num_dispatch_comm_bytes = num_tokens * num_topk * (
-        num_fp8_bytes if dispatch_use_fp8 else num_bf16_bytes
+    num_dispatch_comm_bytes = (
+        num_tokens * num_topk * (num_fp8_bytes if dispatch_use_fp8 else num_bf16_bytes)
     )
-    num_combine_comm_bytes = num_tokens * num_topk * (
-        num_logfmt10_bytes if use_logfmt else num_bf16_bytes
+    num_combine_comm_bytes = (
+        num_tokens * num_topk * (num_logfmt10_bytes if use_logfmt else num_bf16_bytes)
     )
 
     # Benchmark with the same timing structure as pplx/benchmarks/bench_all_to_all.py
