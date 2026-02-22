@@ -198,11 +198,13 @@ struct LowLatencyLayout {
     // Send buffer
     // Buffer layout for RDMA sends, used by the batched RDMA-send path in the
     // dispatch-LL kernel.
+    // clang-format off
     // ┌──────────────────────────────────────────┬──────────────────────────────────────────────────────────┐
     // │ Temp buffer (offset 0)                   │ Per-expert RDMA batch buffer (offset num_max_token)      │
     // │ rdma_x[token_idx]                        │ rdma_x[num_max_token + expert * num_max_token + slot]    │
     // │ Size: num_max_token * msg_size           │ Size: num_experts * num_max_token * msg_size             │
     // └──────────────────────────────────────────┴──────────────────────────────────────────────────────────┘
+    // clang-format on
     // Flow: (optional FP8 cast) -> temp buffer -> copy to per-expert batch
     // buffer -> batched RDMA send
     // TODO: Support per-GPU destination batching in this path.
