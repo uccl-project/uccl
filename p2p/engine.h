@@ -741,4 +741,26 @@ class Endpoint {
   bool passive_accept_;
   std::thread passive_accept_thread_;
   void passive_accept_thread_func();
+
+  // Tracks a single in-flight IPC async copy: the stream it runs on, the
+  // opened IPC handle to close on completion, and the status to signal.
+  struct IpcInflightOp {
+    gpuStream_t stream;
+    void* raw_ptr;
+    TransferStatus* status;
+    int gpu_idx;
+  };
+
+  // MPSC ring: caller threads push IpcInflightOp*, poller thread drains it.
+  jring_t* ipc_inflight_ring_ = nullptr;
+  // Per-GPU pool of reusable non-blocking streams for IPC copies.
+  std::array<std::mutex, kMaxNumGPUs> ipc_stream_pool_mu_;
+
+  std::thread ipc_poller_thread_;
+  void ipc_poller_thread_func();
+
+  // Returns a stream for gpu_idx from the pool, creating one if the pool is
+  // empty. Caller must have already called gpuSetDevice(gpu_idx).
+  gpuStream_t acquire_ipc_stream(int gpu_idx);
+  void release_ipc_stream(int gpu_idx, gpuStream_t stream);
 };

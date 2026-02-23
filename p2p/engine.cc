@@ -106,6 +106,10 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
+  ipc_inflight_ring_ =
+      uccl::create_ring(sizeof(IpcInflightOp*), kTaskRingSize);
+  ipc_poller_thread_ = std::thread(&Endpoint::ipc_poller_thread_func, this);
+
   // Initialize ShmChnnel for local connections
   size_t elem_sz = sizeof(ShmMsg);
   size_t elem_cnt = ShmRingDefaultElemCnt;
@@ -169,12 +173,18 @@ Endpoint::~Endpoint() {
   if (recv_proxy_thread_.joinable()) {
     recv_proxy_thread_.join();
   }
+  if (ipc_poller_thread_.joinable()) {
+    ipc_poller_thread_.join();
+  }
 
   if (send_unified_task_ring_ != nullptr) {
     free(send_unified_task_ring_);
   }
   if (recv_unified_task_ring_ != nullptr) {
     free(recv_unified_task_ring_);
+  }
+  if (ipc_inflight_ring_ != nullptr) {
+    free(ipc_inflight_ring_);
   }
 
   {
@@ -243,6 +253,10 @@ void Endpoint::initialize_engine() {
 
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
+
+  ipc_inflight_ring_ =
+      uccl::create_ring(sizeof(IpcInflightOp*), kTaskRingSize);
+  ipc_poller_thread_ = std::thread(&Endpoint::ipc_poller_thread_func, this);
 
   // Initialize ShmChnnel for local connections
   size_t elem_sz = sizeof(ShmMsg);
@@ -1616,26 +1630,93 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
   return true;
 }
 
+gpuStream_t Endpoint::acquire_ipc_stream(int gpu_idx) {
+  std::lock_guard<std::mutex> lock(ipc_stream_pool_mu_[gpu_idx]);
+  auto& pool = ipc_streams_[gpu_idx];
+  if (!pool.empty()) {
+    auto stream = pool.back();
+    pool.pop_back();
+    return stream;
+  }
+  // Pool exhausted; create a new stream on the already-set device.
+  gpuStream_t stream;
+  GPU_RT_CHECK(gpuStreamCreateWithFlags(&stream, gpuStreamNonBlocking));
+  return stream;
+}
+
+void Endpoint::release_ipc_stream(int gpu_idx, gpuStream_t stream) {
+  std::lock_guard<std::mutex> lock(ipc_stream_pool_mu_[gpu_idx]);
+  ipc_streams_[gpu_idx].push_back(stream);
+}
+
+void Endpoint::ipc_poller_thread_func() {
+  std::deque<IpcInflightOp*> active_ops;
+  alignas(16) char buf[16];
+  int cur_device = -1;
+
+  while (!stop_.load(std::memory_order_acquire) || !active_ops.empty()) {
+    // Drain newly submitted ops into the local active list.
+    while (jring_sc_dequeue_bulk(ipc_inflight_ring_, buf, 1, nullptr) == 1) {
+      active_ops.push_back(*reinterpret_cast<IpcInflightOp**>(buf));
+    }
+
+    for (auto it = active_ops.begin(); it != active_ops.end();) {
+      IpcInflightOp* op = *it;
+      auto result = gpuStreamQuery(op->stream);
+      if (result == gpuSuccess) {
+        if (cur_device != op->gpu_idx) {
+          GPU_RT_CHECK(gpuSetDevice(op->gpu_idx));
+          cur_device = op->gpu_idx;
+        }
+        GPU_RT_CHECK(gpuIpcCloseMemHandle(op->raw_ptr));
+        release_ipc_stream(op->gpu_idx, op->stream);
+        op->status->done.store(true, std::memory_order_release);
+        delete op;
+        it = active_ops.erase(it);
+      } else if (result == gpuErrorNotReady) {
+        ++it;
+      } else {
+        GPU_RT_CHECK(result);
+        ++it;
+      }
+    }
+  }
+}
+
 bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
                                IpcTransferInfo const& info,
                                uint64_t* transfer_id) {
-  // Create an IPC task for IPC write operation
-  auto task_ptr = create_ipc_task(conn_id, 0, TaskType::WRITE_IPC,
-                                  const_cast<void*>(data), size, info);
-  if (unlikely(task_ptr == nullptr)) {
+  Conn* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[write_ipc_async] Error: Invalid conn_id " << conn_id
+              << std::endl;
     return false;
   }
 
+  bool is_host = (uccl::get_dev_idx(const_cast<void*>(data)) == -1);
+  auto memcpy_kind = is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
+
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+
+  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+  void* raw_dst_ptr = nullptr;
+  GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, info.handle,
+                                   gpuIpcMemLazyEnablePeerAccess));
+  void* dst_ptr = reinterpret_cast<void*>(
+      reinterpret_cast<uintptr_t>(raw_dst_ptr) + info.offset);
+
+  gpuStream_t stream = acquire_ipc_stream(conn->remote_gpu_idx_);
+  GPU_RT_CHECK(gpuMemcpyAsync(dst_ptr, data, size, memcpy_kind, stream));
+
   auto* status = new TransferStatus();
-  status->task_ptr = task_ptr;
-  task_ptr->status_ptr = status;
   *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  UnifiedTask* task_raw = task_ptr.get();
-
-  // Enqueue the task for processing by proxy thread
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
-                               nullptr) != 1) {
+  auto* op =
+      new IpcInflightOp{stream, raw_dst_ptr, status, conn->remote_gpu_idx_};
+  while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &op, 1, nullptr) != 1) {
   }
 
   return true;
@@ -1644,23 +1725,37 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
 bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
                               IpcTransferInfo const& info,
                               uint64_t* transfer_id) {
-  // Create an IPC task for IPC read operation
-  auto task_ptr =
-      create_ipc_task(conn_id, 0, TaskType::READ_IPC, data, size, info);
-  if (unlikely(task_ptr == nullptr)) {
+  Conn* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[read_ipc_async] Error: Invalid conn_id " << conn_id
+              << std::endl;
     return false;
   }
 
+  bool is_host = (uccl::get_dev_idx(data) == -1);
+  auto memcpy_kind = is_host ? gpuMemcpyDeviceToHost : gpuMemcpyDeviceToDevice;
+
+  int orig_device;
+  GPU_RT_CHECK(gpuGetDevice(&orig_device));
+  auto dev_reset =
+      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+
+  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+  void* raw_src_ptr = nullptr;
+  GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_src_ptr, info.handle,
+                                   gpuIpcMemLazyEnablePeerAccess));
+  void* src_ptr = reinterpret_cast<void*>(
+      reinterpret_cast<uintptr_t>(raw_src_ptr) + info.offset);
+
+  gpuStream_t stream = acquire_ipc_stream(conn->remote_gpu_idx_);
+  GPU_RT_CHECK(gpuMemcpyAsync(data, src_ptr, size, memcpy_kind, stream));
+
   auto* status = new TransferStatus();
-  status->task_ptr = task_ptr;
-  task_ptr->status_ptr = status;
   *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  UnifiedTask* task_raw = task_ptr.get();
-
-  // Enqueue the task for processing by proxy thread
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
-                               nullptr) != 1) {
+  auto* op =
+      new IpcInflightOp{stream, raw_src_ptr, status, conn->remote_gpu_idx_};
+  while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &op, 1, nullptr) != 1) {
   }
 
   return true;
@@ -1766,9 +1861,6 @@ void Endpoint::send_proxy_thread_func() {
           write(task->conn_id, task->mr_id, task->data, task->size,
                 task->slot_item());
           break;
-        case TaskType::WRITE_IPC:
-          write_ipc(task->conn_id, task->data, task->size, task->ipc_info());
-          break;
         case TaskType::SEND_NET:
           send(task->conn_id, task->mr_id, task->data, task->size);
           break;
@@ -1830,9 +1922,6 @@ void Endpoint::recv_proxy_thread_func() {
           read(task->conn_id, task->mr_id, task->data, task->size,
                task->slot_item());
           break;
-        case TaskType::READ_IPC:
-          read_ipc(task->conn_id, task->data, task->size, task->ipc_info());
-          break;
         case TaskType::RECV_NET:
           recv(task->conn_id, task->mr_id, task->data, task->size);
           break;
@@ -1866,7 +1955,6 @@ void Endpoint::recv_proxy_thread_func() {
         case TaskType::SEND_NET:
         case TaskType::SEND_IPC:
         case TaskType::WRITE_NET:
-        case TaskType::WRITE_IPC:
         default:
           LOG(ERROR) << "Unexpected task type in receive processing: "
                      << static_cast<int>(task->type);
