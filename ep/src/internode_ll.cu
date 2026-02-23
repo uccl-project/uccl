@@ -360,6 +360,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       // writes before any lane starts copying the rank slice.
       __syncwarp();
       auto const total_bytes = rank_region_bytes;
+      constexpr size_t kMaxCmdBytes = (1u << 26) - 1;
+      EP_DEVICE_ASSERT(
+          total_bytes <= kMaxCmdBytes &&
+          "Low-latency dispatch rank slice exceeds command byte encoding");
 
       __threadfence_system();
 
@@ -690,6 +694,23 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   auto const num_warps = num_warp_groups * num_warps_per_group;
   auto const num_sms = ceil_div(num_experts, num_warp_groups);
   EP_HOST_ASSERT(num_topk <= kNumMaxTopK);
+  // Low-latency dispatch encodes write size in an extended 26-bit field.
+  // Guard here to fail fast for oversized rank slices.
+  {
+    auto const num_local_experts = num_experts / num_ranks;
+    auto const num_scales = hidden / 128;
+    size_t const num_bytes_per_msg =
+        sizeof(int4) + (use_fp8 ? (hidden + num_scales * sizeof(float))
+                                : (hidden * sizeof(nv_bfloat16)));
+    size_t const rank_region_bytes =
+        static_cast<size_t>(num_local_experts) *
+        static_cast<size_t>(num_max_dispatch_tokens_per_rank) *
+        num_bytes_per_msg;
+    constexpr size_t kMaxCmdBytes = (1u << 26) - 1;
+    EP_HOST_ASSERT(
+        rank_region_bytes <= kMaxCmdBytes &&
+        "Low-latency dispatch rank slice exceeds command byte encoding");
+  }
 
   // Workspace checks
   auto atomic_counter_per_expert = static_cast<int*>(workspace);
