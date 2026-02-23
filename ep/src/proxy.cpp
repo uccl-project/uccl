@@ -614,10 +614,11 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
                               (fifo_seq_[rb_idx]++ & 0xFFFFFFFFULL);
       wrs_to_post.push_back(unique_wr_id);
       cmds_to_post.push_back(cmd);
+      auto const cmd_bytes = get_transfer_cmd_bytes(cmd);
       fifo_pending_[rb_idx].push_back(
-          std::make_pair(unique_wr_id, static_cast<size_t>(cmd.bytes)));
-      if (get_base_cmd(cmd.cmd_type) == CmdType::WRITE && cmd.bytes > 0) {
-        current_inflight_bytes.fetch_add(static_cast<size_t>(cmd.bytes),
+          std::make_pair(unique_wr_id, static_cast<size_t>(cmd_bytes)));
+      if (get_base_cmd(cmd.cmd_type) == CmdType::WRITE && cmd_bytes > 0) {
+        current_inflight_bytes.fetch_add(static_cast<size_t>(cmd_bytes),
                                          std::memory_order_release);
       }
 
