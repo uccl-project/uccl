@@ -91,23 +91,22 @@ struct TransferCmd {
 static_assert(sizeof(TransferCmd) * 8 == 128, "TransferCmd must be 128 bits");
 #endif
 
-// TransferCmd::bytes is 24-bit. For low-latency dispatch WRITE commands we can
+// TransferCmd::bytes is 24-bit. For dispatch WRITE commands (non-combine), we
 // borrow the top 2 bits from expert_idx to extend bytes to 26-bit.
 constexpr uint32_t kTransferCmdBytesMask = (1u << 24) - 1;
 constexpr uint16_t kTransferCmdBytesExtShift = 14;
 constexpr uint16_t kTransferCmdBytesExtMask = (1u << 2) - 1;
 constexpr uint16_t kTransferCmdExpertIdxMask = (1u << 14) - 1;
 
-__host__ __device__ inline bool is_low_latency_dispatch_write(
+__host__ __device__ inline bool is_dispatch_write_cmd(
     TransferCmd const& cmd) {
-  return get_base_cmd(cmd.cmd_type) == CmdType::WRITE &&
-         get_low_latency(cmd.cmd_type) && !get_is_combine(cmd.cmd_type);
+  return get_base_cmd(cmd.cmd_type) == CmdType::WRITE && !get_is_combine(cmd.cmd_type);
 }
 
 __host__ __device__ inline uint32_t get_transfer_cmd_bytes(
     TransferCmd const& cmd) {
   uint32_t bytes = cmd.bytes;
-  if (is_low_latency_dispatch_write(cmd)) {
+  if (is_dispatch_write_cmd(cmd)) {
     bytes |=
         (static_cast<uint32_t>(cmd.expert_idx >> kTransferCmdBytesExtShift)
          << 24);
@@ -117,7 +116,7 @@ __host__ __device__ inline uint32_t get_transfer_cmd_bytes(
 
 __host__ __device__ inline uint16_t get_transfer_cmd_expert_idx(
     TransferCmd const& cmd) {
-  if (is_low_latency_dispatch_write(cmd))
+  if (is_dispatch_write_cmd(cmd))
     return static_cast<uint16_t>(cmd.expert_idx & kTransferCmdExpertIdxMask);
   return cmd.expert_idx;
 }
