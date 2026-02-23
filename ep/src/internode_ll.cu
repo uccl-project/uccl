@@ -53,7 +53,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     int64_t* dispatch_wait_recv_cost_stats, void* rdma_recv_x,
     int* rdma_recv_count, void* rdma_x, void const* x, int64_t const* topk_idx,
     int* atomic_counter_per_expert, int* atomic_finish_counter_per_expert,
-    int* atomic_send_counter_per_expert, int* next_clean,
+    int* atomic_send_counter_per_expert, int* atomic_tokens_per_rank,
+    int* atomic_done_experts_per_rank, int* next_clean,
     int64_t* next_clean_second, int num_next_clean_int, int num_tokens,
     int num_max_dispatch_tokens_per_rank, int num_topk, int num_experts,
     int rank, int num_ranks, int num_warp_groups, int num_warps_per_group,
@@ -148,8 +149,10 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       // expert.
       if (warp_id < num_topk && lane_id == 0) {
         if (dst_expert_idx >= 0) {
+          auto const dst_rank = dst_expert_idx / num_local_experts;
           shared_send_slots[warp_id] =
               atomicAdd(atomic_counter_per_expert + dst_expert_idx, 1);
+          atomicAdd(atomic_tokens_per_rank + dst_rank, 1);
         } else {
           shared_send_slots[warp_id] = -1;
         }
@@ -238,9 +241,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                            src_int4_ptr, ld_nc_global, st_na_global);
         // Increase counter after finishing
         __syncwarp();
-        lane_id == 0 ? atomic_add_release_global(
-                           atomic_finish_counter_per_expert + dst_expert_idx, 1)
-                     : 0;
+        if (lane_id == 0) {
+          auto const old = atomic_add_release_global(
+              atomic_finish_counter_per_expert + dst_expert_idx, 1);
+          if (old + 1 == FINISHED_SUM_TAG * 2) {
+            atomicAdd(atomic_done_experts_per_rank + dst_rank, 1);
+          }
+        }
       }
     }
   } else if (warp_id == num_warps - 1) {
@@ -280,8 +287,11 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     for (int i = expert_begin_idx; i < expert_end_idx; ++i) {
       auto sum = warp_reduce_sum(expert_count[i - expert_begin_idx]);
       if (lane_id == 0) {
-        atomic_add_release_global(atomic_finish_counter_per_expert + i,
-                                  FINISHED_SUM_TAG - sum);
+        auto const old = atomic_add_release_global(
+            atomic_finish_counter_per_expert + i, FINISHED_SUM_TAG - sum);
+        if (old + FINISHED_SUM_TAG - sum == FINISHED_SUM_TAG * 2) {
+          atomicAdd(atomic_done_experts_per_rank + i / num_local_experts, 1);
+        }
       }
     }
   }
@@ -299,17 +309,15 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   if (responsible_rank < num_ranks && sub_warp_id == 0) {
     // Wait for all experts on this rank to finish copying to batch buffer.
     int num_tokens_to_send = 0;
-    for (int e = 0; e < num_local_experts; ++e) {
-      int expert_idx = responsible_rank * num_local_experts + e;
-      while (ld_acquire_global(atomic_finish_counter_per_expert + expert_idx) !=
-             FINISHED_SUM_TAG * 2)
+    if (lane_id == 0) {
+      while (ld_acquire_global(atomic_done_experts_per_rank + responsible_rank) !=
+             num_local_experts)
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-          __builtin_amdgcn_s_sleep(1);
+        __builtin_amdgcn_s_sleep(1);
 #else
-          ;
+        ;
 #endif
-      if (lane_id == 0)
-        num_tokens_to_send += atomic_counter_per_expert[expert_idx];
+      num_tokens_to_send = ld_acquire_global(atomic_tokens_per_rank + responsible_rank);
     }
     num_tokens_to_send = __shfl_sync(WARP_MASK, num_tokens_to_send, 0);
     if (lane_id == 0)
@@ -426,6 +434,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       atomic_finish_counter_per_expert[expert_idx] = 0;
       atomic_send_counter_per_expert[expert_idx] = 0;
     }
+    atomic_tokens_per_rank[dst_rank] = 0;
+    atomic_done_experts_per_rank[dst_rank] = 0;
     if (dst_rank == 0) {
       for (int e = 0; e < num_local_experts; ++e) packed_recv_count[e] = 0;
     }
@@ -718,8 +728,11 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
       atomic_counter_per_expert + num_experts;
   auto atomic_send_counter_per_expert =
       atomic_finish_counter_per_expert + num_experts;
-  auto grid_sync_barrier_ptr = atomic_send_counter_per_expert + num_experts;
-  EP_HOST_ASSERT((num_experts * 3 + 1) * sizeof(int) <= NUM_WORKSPACE_BYTES);
+  auto atomic_tokens_per_rank = atomic_send_counter_per_expert + num_experts;
+  auto atomic_done_experts_per_rank = atomic_tokens_per_rank + num_ranks;
+  auto grid_sync_barrier_ptr = atomic_done_experts_per_rank + num_ranks;
+  EP_HOST_ASSERT((num_experts * 3 + num_ranks * 2 + 1) * sizeof(int) <=
+                 NUM_WORKSPACE_BYTES);
 
   // FP8 checks
   if (use_ue8m0)
@@ -737,7 +750,8 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
         cumulative_local_expert_recv_stats, dispatch_wait_recv_cost_stats,   \
         rdma_recv_x, rdma_recv_count, rdma_x, x, topk_idx,                   \
         atomic_counter_per_expert, atomic_finish_counter_per_expert,         \
-        atomic_send_counter_per_expert, next_clean, next_clean_second,       \
+        atomic_send_counter_per_expert, atomic_tokens_per_rank,              \
+        atomic_done_experts_per_rank, next_clean, next_clean_second,         \
         num_next_clean_int, num_tokens, num_max_dispatch_tokens_per_rank,    \
         num_topk, num_experts, rank, num_ranks, num_warp_groups,             \
         num_warps_per_group, round_scale, phases, d2h_channel_addrs,         \
