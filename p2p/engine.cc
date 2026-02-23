@@ -423,6 +423,11 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   }
   ConnID uccl_conn_id = uccl_conn_id_future.get();
 
+  // Return if Conn ID is invalid
+  if (uccl_conn_id.sock_fd < 0 || uccl_conn_id.flow_id == UINT64_MAX) {
+    return false;
+  }
+
   // Store the connection ID.
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);

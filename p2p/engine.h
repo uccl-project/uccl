@@ -369,6 +369,8 @@ class Endpoint {
     return it->second;
   }
 
+  inline RDMAEndPoint get_endpoint() const { return ep_; }
+
  private:
   /** Rank‑indexed view of established connections (read‑only). */
   std::unordered_map<int, uint64_t> const& rank2conn() const {

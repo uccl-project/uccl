@@ -1075,11 +1075,19 @@ void Proxy::destroy(bool free_gpu_buffer) {
   }
 
   if (free_gpu_buffer && cfg_.gpu_buffer) {
-    cudaError_t e = cudaFree(cfg_.gpu_buffer);
-    if (e != cudaSuccess)
-      fprintf(stderr, "[destroy] cudaFree failed: %s\n", cudaGetErrorString(e));
-    else
-      cfg_.gpu_buffer = nullptr;
+    cudaError_t e;
+    if (cfg_.free_buffer_with_cuda_free_host) {
+      e = cudaFreeHost(cfg_.gpu_buffer);
+      if (e != cudaSuccess)
+        fprintf(stderr, "[destroy] cudaFreeHost failed: %s\n",
+                cudaGetErrorString(e));
+    } else {
+      e = cudaFree(cfg_.gpu_buffer);
+      if (e != cudaSuccess)
+        fprintf(stderr, "[destroy] cudaFree failed: %s\n",
+                cudaGetErrorString(e));
+    }
+    if (e == cudaSuccess) cfg_.gpu_buffer = nullptr;
   }
 
   if (ctx_.pd) {
