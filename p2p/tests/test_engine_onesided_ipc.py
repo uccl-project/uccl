@@ -76,7 +76,9 @@ def _poll_done(ep, transfer_id):
 
 def _unpack_info_blobs(packed: bytes, num_iovs: int):
     blob_size = (len(packed) - 4) // num_iovs
-    return [packed[4 + i * blob_size: 4 + (i + 1) * blob_size] for i in range(num_iovs)]
+    return [
+        packed[4 + i * blob_size : 4 + (i + 1) * blob_size] for i in range(num_iovs)
+    ]
 
 
 # ── buffer allocation helpers ─────────────────────────────────────────────────
@@ -123,8 +125,9 @@ def test_write_ipc(ep, conn_id, rank, use_cpu: bool):
         assert ok, "advertise_ipc failed"
         _send_bytes(bytes(info_blob), dst=1)
         _recv_int(src=1)
-        assert dst.allclose(torch.ones_like(dst)), \
-            f"write_ipc: destination mismatch\n{dst}"
+        assert dst.allclose(
+            torch.ones_like(dst)
+        ), f"write_ipc: destination mismatch\n{dst}"
         print(f"[server] test_write_ipc ({'cpu' if use_cpu else 'gpu'}) PASSED")
     else:  # client — source (GPU or CPU)
         src, ptr = _make_client_buf(1.0, use_cpu)
@@ -146,8 +149,9 @@ def test_write_ipc_async(ep, conn_id, rank, use_cpu: bool):
         assert ok, "advertise_ipc failed"
         _send_bytes(bytes(info_blob), dst=1)
         _recv_int(src=1)
-        assert dst.allclose(torch.ones_like(dst)), \
-            f"write_ipc_async: destination mismatch\n{dst}"
+        assert dst.allclose(
+            torch.ones_like(dst)
+        ), f"write_ipc_async: destination mismatch\n{dst}"
         print(f"[server] test_write_ipc_async ({'cpu' if use_cpu else 'gpu'}) PASSED")
     else:
         src, ptr = _make_client_buf(1.0, use_cpu)
@@ -179,8 +183,9 @@ def test_read_ipc(ep, conn_id, rank, use_cpu: bool):
         info_blob = _recv_bytes(src=0)
         ok = ep.read_ipc(conn_id, ptr, size, info_blob)
         assert ok, "read_ipc failed"
-        assert dst.allclose(_expected(1.0, use_cpu)), \
-            f"read_ipc: destination mismatch\n{dst}"
+        assert dst.allclose(
+            _expected(1.0, use_cpu)
+        ), f"read_ipc: destination mismatch\n{dst}"
         print(f"[client] test_read_ipc ({'cpu' if use_cpu else 'gpu'}) PASSED")
         _send_int(1, dst=0)
 
@@ -204,8 +209,9 @@ def test_read_ipc_async(ep, conn_id, rank, use_cpu: bool):
         ok, transfer_id = ep.read_ipc_async(conn_id, ptr, size, info_blob)
         assert ok, "read_ipc_async failed"
         _poll_done(ep, transfer_id)
-        assert dst.allclose(_expected(1.0, use_cpu)), \
-            f"read_ipc_async: destination mismatch\n{dst}"
+        assert dst.allclose(
+            _expected(1.0, use_cpu)
+        ), f"read_ipc_async: destination mismatch\n{dst}"
         print(f"[client] test_read_ipc_async ({'cpu' if use_cpu else 'gpu'}) PASSED")
         _send_int(1, dst=0)
 
@@ -221,8 +227,10 @@ def test_writev_ipc(ep, conn_id, rank, use_cpu: bool):
     """
     size_per = BUF_ELEMS * 4
     if rank == 0:  # server — GPU destinations
-        dsts = [torch.zeros(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
-                for _ in range(NUM_IOVS)]
+        dsts = [
+            torch.zeros(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
+            for _ in range(NUM_IOVS)
+        ]
         ptrs = [t.data_ptr() for t in dsts]
         ok, info_blobs = ep.advertisev_ipc(conn_id, ptrs, [size_per] * NUM_IOVS)
         assert ok, "advertisev_ipc failed"
@@ -230,11 +238,15 @@ def test_writev_ipc(ep, conn_id, rank, use_cpu: bool):
         _send_bytes(packed, dst=1)
         _recv_int(src=1)
         for i, dst in enumerate(dsts):
-            expected = torch.full((BUF_ELEMS,), float(i + 1),
-                                  dtype=torch.float32, device="cuda:0")
-            assert dst.allclose(expected), \
-                f"writev_ipc: destination[{i}] mismatch (expected {i+1}.0)\n{dst}"
-        print(f"[server] test_writev_ipc ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED")
+            expected = torch.full(
+                (BUF_ELEMS,), float(i + 1), dtype=torch.float32, device="cuda:0"
+            )
+            assert dst.allclose(
+                expected
+            ), f"writev_ipc: destination[{i}] mismatch (expected {i+1}.0)\n{dst}"
+        print(
+            f"[server] test_writev_ipc ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED"
+        )
     else:  # client — sources (GPU or CPU)
         srcs, ptrs = _make_client_bufs([float(i + 1) for i in range(NUM_IOVS)], use_cpu)
         packed = _recv_bytes(src=0)
@@ -251,8 +263,10 @@ def test_writev_ipc_async(ep, conn_id, rank, use_cpu: bool):
     """Same as test_writev_ipc but uses the async API + poll_async."""
     size_per = BUF_ELEMS * 4
     if rank == 0:
-        dsts = [torch.zeros(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
-                for _ in range(NUM_IOVS)]
+        dsts = [
+            torch.zeros(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
+            for _ in range(NUM_IOVS)
+        ]
         ptrs = [t.data_ptr() for t in dsts]
         ok, info_blobs = ep.advertisev_ipc(conn_id, ptrs, [size_per] * NUM_IOVS)
         assert ok, "advertisev_ipc failed"
@@ -260,16 +274,22 @@ def test_writev_ipc_async(ep, conn_id, rank, use_cpu: bool):
         _send_bytes(packed, dst=1)
         _recv_int(src=1)
         for i, dst in enumerate(dsts):
-            expected = torch.full((BUF_ELEMS,), float(i + 1),
-                                  dtype=torch.float32, device="cuda:0")
-            assert dst.allclose(expected), \
-                f"writev_ipc_async: destination[{i}] mismatch (expected {i+1}.0)\n{dst}"
-        print(f"[server] test_writev_ipc_async ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED")
+            expected = torch.full(
+                (BUF_ELEMS,), float(i + 1), dtype=torch.float32, device="cuda:0"
+            )
+            assert dst.allclose(
+                expected
+            ), f"writev_ipc_async: destination[{i}] mismatch (expected {i+1}.0)\n{dst}"
+        print(
+            f"[server] test_writev_ipc_async ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED"
+        )
     else:
         srcs, ptrs = _make_client_bufs([float(i + 1) for i in range(NUM_IOVS)], use_cpu)
         packed = _recv_bytes(src=0)
         info_blobs = _unpack_info_blobs(packed, NUM_IOVS)
-        ok, transfer_id = ep.writev_ipc_async(conn_id, ptrs, [size_per] * NUM_IOVS, info_blobs)
+        ok, transfer_id = ep.writev_ipc_async(
+            conn_id, ptrs, [size_per] * NUM_IOVS, info_blobs
+        )
         assert ok, "writev_ipc_async failed"
         _poll_done(ep, transfer_id)
         _send_int(1, dst=0)
@@ -286,15 +306,19 @@ def test_readv_ipc(ep, conn_id, rank, use_cpu: bool):
     """
     size_per = BUF_ELEMS * 4
     if rank == 0:  # server — GPU sources
-        srcs = [torch.full((BUF_ELEMS,), float(i + 1), dtype=torch.float32, device="cuda:0")
-                for i in range(NUM_IOVS)]
+        srcs = [
+            torch.full((BUF_ELEMS,), float(i + 1), dtype=torch.float32, device="cuda:0")
+            for i in range(NUM_IOVS)
+        ]
         ptrs = [t.data_ptr() for t in srcs]
         ok, info_blobs = ep.advertisev_ipc(conn_id, ptrs, [size_per] * NUM_IOVS)
         assert ok, "advertisev_ipc failed"
         packed = struct.pack("I", NUM_IOVS) + b"".join(bytes(b) for b in info_blobs)
         _send_bytes(packed, dst=1)
         _recv_int(src=1)
-        print(f"[server] test_readv_ipc ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED")
+        print(
+            f"[server] test_readv_ipc ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED"
+        )
     else:  # client — destinations (GPU or CPU)
         dsts, ptrs = _make_client_bufs([0.0] * NUM_IOVS, use_cpu)
         packed = _recv_bytes(src=0)
@@ -302,9 +326,12 @@ def test_readv_ipc(ep, conn_id, rank, use_cpu: bool):
         ok = ep.readv_ipc(conn_id, ptrs, [size_per] * NUM_IOVS, info_blobs)
         assert ok, "readv_ipc failed"
         for i, dst in enumerate(dsts):
-            assert dst.allclose(_expected(float(i + 1), use_cpu)), \
-                f"readv_ipc: destination[{i}] mismatch (expected {i+1}.0)\n{dst}"
-        print(f"[client] test_readv_ipc ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED")
+            assert dst.allclose(
+                _expected(float(i + 1), use_cpu)
+            ), f"readv_ipc: destination[{i}] mismatch (expected {i+1}.0)\n{dst}"
+        print(
+            f"[client] test_readv_ipc ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED"
+        )
         _send_int(1, dst=0)
 
 
@@ -315,26 +342,35 @@ def test_readv_ipc_async(ep, conn_id, rank, use_cpu: bool):
     """Same as test_readv_ipc but uses the async API + poll_async."""
     size_per = BUF_ELEMS * 4
     if rank == 0:
-        srcs = [torch.full((BUF_ELEMS,), float(i + 1), dtype=torch.float32, device="cuda:0")
-                for i in range(NUM_IOVS)]
+        srcs = [
+            torch.full((BUF_ELEMS,), float(i + 1), dtype=torch.float32, device="cuda:0")
+            for i in range(NUM_IOVS)
+        ]
         ptrs = [t.data_ptr() for t in srcs]
         ok, info_blobs = ep.advertisev_ipc(conn_id, ptrs, [size_per] * NUM_IOVS)
         assert ok, "advertisev_ipc failed"
         packed = struct.pack("I", NUM_IOVS) + b"".join(bytes(b) for b in info_blobs)
         _send_bytes(packed, dst=1)
         _recv_int(src=1)
-        print(f"[server] test_readv_ipc_async ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED")
+        print(
+            f"[server] test_readv_ipc_async ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED"
+        )
     else:
         dsts, ptrs = _make_client_bufs([0.0] * NUM_IOVS, use_cpu)
         packed = _recv_bytes(src=0)
         info_blobs = _unpack_info_blobs(packed, NUM_IOVS)
-        ok, transfer_id = ep.readv_ipc_async(conn_id, ptrs, [size_per] * NUM_IOVS, info_blobs)
+        ok, transfer_id = ep.readv_ipc_async(
+            conn_id, ptrs, [size_per] * NUM_IOVS, info_blobs
+        )
         assert ok, "readv_ipc_async failed"
         _poll_done(ep, transfer_id)
         for i, dst in enumerate(dsts):
-            assert dst.allclose(_expected(float(i + 1), use_cpu)), \
-                f"readv_ipc_async: destination[{i}] mismatch (expected {i+1}.0)\n{dst}"
-        print(f"[client] test_readv_ipc_async ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED")
+            assert dst.allclose(
+                _expected(float(i + 1), use_cpu)
+            ), f"readv_ipc_async: destination[{i}] mismatch (expected {i+1}.0)\n{dst}"
+        print(
+            f"[client] test_readv_ipc_async ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED"
+        )
         _send_int(1, dst=0)
 
 
@@ -359,14 +395,14 @@ def main():
         assert ok, "connect_local failed"
 
     tests = [
-        ("write_ipc",        test_write_ipc),
-        ("write_ipc_async",  test_write_ipc_async),
-        ("read_ipc",         test_read_ipc),
-        ("read_ipc_async",   test_read_ipc_async),
-        ("writev_ipc",       test_writev_ipc),
+        ("write_ipc", test_write_ipc),
+        ("write_ipc_async", test_write_ipc_async),
+        ("read_ipc", test_read_ipc),
+        ("read_ipc_async", test_read_ipc_async),
+        ("writev_ipc", test_writev_ipc),
         ("writev_ipc_async", test_writev_ipc_async),
-        ("readv_ipc",        test_readv_ipc),
-        ("readv_ipc_async",  test_readv_ipc_async),
+        ("readv_ipc", test_readv_ipc),
+        ("readv_ipc_async", test_readv_ipc_async),
     ]
 
     for use_cpu in (False, True):
