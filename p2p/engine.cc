@@ -1630,25 +1630,6 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
   return true;
 }
 
-gpuStream_t Endpoint::acquire_ipc_stream(int gpu_idx) {
-  std::lock_guard<std::mutex> lock(ipc_stream_pool_mu_[gpu_idx]);
-  auto& pool = ipc_streams_[gpu_idx];
-  if (!pool.empty()) {
-    auto stream = pool.back();
-    pool.pop_back();
-    return stream;
-  }
-  // Pool exhausted; create a new stream on the already-set device.
-  gpuStream_t stream;
-  GPU_RT_CHECK(gpuStreamCreateWithFlags(&stream, gpuStreamNonBlocking));
-  return stream;
-}
-
-void Endpoint::release_ipc_stream(int gpu_idx, gpuStream_t stream) {
-  std::lock_guard<std::mutex> lock(ipc_stream_pool_mu_[gpu_idx]);
-  ipc_streams_[gpu_idx].push_back(stream);
-}
-
 void Endpoint::ipc_poller_thread_func() {
   std::deque<IpcInflightOp*> active_ops;
   alignas(16) char buf[16];
@@ -1662,21 +1643,28 @@ void Endpoint::ipc_poller_thread_func() {
 
     for (auto it = active_ops.begin(); it != active_ops.end();) {
       IpcInflightOp* op = *it;
-      auto result = gpuStreamQuery(op->stream);
-      if (result == gpuSuccess) {
+      bool all_done = true;
+      for (auto& event : op->events) {
+        auto result = gpuEventQuery(event);
+        if (result == gpuErrorNotReady) {
+          all_done = false;
+          break;
+        }
+        GPU_RT_CHECK(result);
+      }
+      if (all_done) {
+        for (auto& event : op->events) {
+          GPU_RT_CHECK(gpuEventDestroy(event));
+        }
         if (cur_device != op->gpu_idx) {
           GPU_RT_CHECK(gpuSetDevice(op->gpu_idx));
           cur_device = op->gpu_idx;
         }
         GPU_RT_CHECK(gpuIpcCloseMemHandle(op->raw_ptr));
-        release_ipc_stream(op->gpu_idx, op->stream);
         op->status->done.store(true, std::memory_order_release);
         delete op;
         it = active_ops.erase(it);
-      } else if (result == gpuErrorNotReady) {
-        ++it;
       } else {
-        GPU_RT_CHECK(result);
         ++it;
       }
     }
@@ -1708,14 +1696,30 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
   void* dst_ptr = reinterpret_cast<void*>(
       reinterpret_cast<uintptr_t>(raw_dst_ptr) + info.offset);
 
-  gpuStream_t stream = acquire_ipc_stream(conn->remote_gpu_idx_);
-  GPU_RT_CHECK(gpuMemcpyAsync(dst_ptr, data, size, memcpy_kind, stream));
+  std::vector<gpuStream_t>& streams = ipc_streams_[conn->remote_gpu_idx_];
+  int num_streams =
+      std::min(streams.size(),
+               size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
+  size_t chunk_size = size / num_streams;
+
+  auto* op = new IpcInflightOp{{}, raw_dst_ptr, nullptr, conn->remote_gpu_idx_};
+  op->events.resize(num_streams);
+  for (int i = 0; i < num_streams; ++i) {
+    void* chunk_data = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(data) + i * chunk_size);
+    void* chunk_dst = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
+    auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
+    GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_data, copy_size,
+                                memcpy_kind, streams[i]));
+    GPU_RT_CHECK(gpuEventCreateWithFlags(&op->events[i], gpuEventDisableTiming));
+    GPU_RT_CHECK(gpuEventRecord(op->events[i], streams[i]));
+  }
 
   auto* status = new TransferStatus();
+  op->status = status;
   *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  auto* op =
-      new IpcInflightOp{stream, raw_dst_ptr, status, conn->remote_gpu_idx_};
   while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &op, 1, nullptr) != 1) {
   }
 
@@ -1747,14 +1751,30 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
   void* src_ptr = reinterpret_cast<void*>(
       reinterpret_cast<uintptr_t>(raw_src_ptr) + info.offset);
 
-  gpuStream_t stream = acquire_ipc_stream(conn->remote_gpu_idx_);
-  GPU_RT_CHECK(gpuMemcpyAsync(data, src_ptr, size, memcpy_kind, stream));
+  std::vector<gpuStream_t>& streams = ipc_streams_[conn->remote_gpu_idx_];
+  int num_streams =
+      std::min(streams.size(),
+               size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
+  size_t chunk_size = size / num_streams;
+
+  auto* op = new IpcInflightOp{{}, raw_src_ptr, nullptr, conn->remote_gpu_idx_};
+  op->events.resize(num_streams);
+  for (int i = 0; i < num_streams; ++i) {
+    void* chunk_src = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(src_ptr) + i * chunk_size);
+    void* chunk_data = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(data) + i * chunk_size);
+    auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
+    GPU_RT_CHECK(gpuMemcpyAsync(chunk_data, chunk_src, copy_size,
+                                memcpy_kind, streams[i]));
+    GPU_RT_CHECK(gpuEventCreateWithFlags(&op->events[i], gpuEventDisableTiming));
+    GPU_RT_CHECK(gpuEventRecord(op->events[i], streams[i]));
+  }
 
   auto* status = new TransferStatus();
+  op->status = status;
   *transfer_id = reinterpret_cast<uint64_t>(status);
 
-  auto* op =
-      new IpcInflightOp{stream, raw_src_ptr, status, conn->remote_gpu_idx_};
   while (jring_mp_enqueue_bulk(ipc_inflight_ring_, &op, 1, nullptr) != 1) {
   }
 
