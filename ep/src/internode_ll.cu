@@ -542,36 +542,36 @@ LOW_LATENCY_DISPATCH_RECV:
       if (num_recv_tokens_total == 0) {
         num_recv_tokens = 0;
       } else {
-        bool metadata_ready = true;
+        // bool metadata_ready = true;
         bool saw_sentinel = false;
-        int mismatch_slot = -1;
-        int mismatch_meta = 0;
-        int mismatch_src_idx = 0;
+        // int mismatch_slot = -1;
+        // int mismatch_meta = 0;
+        // int mismatch_src_idx = 0;
         num_recv_tokens = 0;
         for (; num_recv_tokens < num_max_dispatch_tokens_per_rank;
              ++num_recv_tokens) {
           auto const src_src_idx = reinterpret_cast<int*>(
               rdma_recv_x_uint8 + num_recv_tokens * num_bytes_per_msg);
-          auto const token_meta = ld_acquire_sys_global(src_src_idx + 1);
-          if (token_meta != num_recv_tokens_total) {
-            metadata_ready = false;
-            mismatch_slot = num_recv_tokens;
-            mismatch_meta = token_meta;
-            mismatch_src_idx = ld_nc_global(src_src_idx);
-            break;
-          }
+          // auto const token_meta = ld_acquire_sys_global(src_src_idx + 1);
+          // if (token_meta != num_recv_tokens_total) {
+          //   metadata_ready = false;
+          //   mismatch_slot = num_recv_tokens;
+          //   mismatch_meta = token_meta;
+          //   mismatch_src_idx = ld_nc_global(src_src_idx);
+          //   break;
+          // }
           if (ld_nc_global(src_src_idx) < 0) {
             saw_sentinel = true;
             break;
           }
         }
-        if (!metadata_ready) {
-          printf(
-              "[dispatch recv meta mismatch] rank=%d src_rank=%d expert=%d "
-              "slot=%d meta=%d expected=%d src_idx=%d\n",
-              rank, src_rank, local_expert_idx, mismatch_slot,
-              mismatch_meta, num_recv_tokens_total, mismatch_src_idx);
-        }
+        // if (!metadata_ready) {
+        //   printf(
+        //       "[dispatch recv meta mismatch] rank=%d src_rank=%d expert=%d "
+        //       "slot=%d meta=%d expected=%d src_idx=%d\n",
+        //       rank, src_rank, local_expert_idx, mismatch_slot,
+        //       mismatch_meta, num_recv_tokens_total, mismatch_src_idx);
+        // }
         EP_DEVICE_ASSERT(saw_sentinel ||
                          num_recv_tokens == num_max_dispatch_tokens_per_rank);
       }

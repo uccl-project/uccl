@@ -1424,10 +1424,6 @@ class Buffer {
 
     uccl::internode_ll::clean_low_latency_buffer(
         ptr0, count0, ptr1, count1, at::cuda::getCurrentCUDAStream());
-    CUDA_CHECK(cudaMemsetAsync(ptr_internode0, 0, count0 * sizeof(int64_t),
-                               at::cuda::getCurrentCUDAStream()));
-    CUDA_CHECK(cudaMemsetAsync(ptr_internode1, 0, count1 * sizeof(int64_t),
-                               at::cuda::getCurrentCUDAStream()));
   }
 
   std::tuple<torch::Tensor, std::optional<torch::Tensor>, torch::Tensor,
