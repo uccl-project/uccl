@@ -1104,8 +1104,8 @@ PYBIND11_MODULE(p2p, m) {
             {
               py::gil_scoped_release release;
               InsidePythonGuard guard;
-              success = self.writev_ipc(conn_id, data_ptrs, size_v, infos,
-                                        num_iovs);
+              success =
+                  self.writev_ipc(conn_id, data_ptrs, size_v, infos, num_iovs);
             }
             return success;
           },
@@ -1133,8 +1133,8 @@ PYBIND11_MODULE(p2p, m) {
             {
               py::gil_scoped_release release;
               InsidePythonGuard guard;
-              success = self.readv_ipc(conn_id, data_ptrs, size_v, infos,
-                                       num_iovs);
+              success =
+                  self.readv_ipc(conn_id, data_ptrs, size_v, infos, num_iovs);
             }
             return success;
           },
@@ -1165,8 +1165,8 @@ PYBIND11_MODULE(p2p, m) {
             {
               py::gil_scoped_release release;
               InsidePythonGuard guard;
-              success = self.writev_ipc_async(conn_id, data_ptrs, size_v,
-                                              infos, num_iovs, &transfer_id);
+              success = self.writev_ipc_async(conn_id, data_ptrs, size_v, infos,
+                                              num_iovs, &transfer_id);
             }
             return py::make_tuple(success, transfer_id);
           },
@@ -1197,8 +1197,8 @@ PYBIND11_MODULE(p2p, m) {
             {
               py::gil_scoped_release release;
               InsidePythonGuard guard;
-              success = self.readv_ipc_async(conn_id, data_ptrs, size_v,
-                                             infos, num_iovs, &transfer_id);
+              success = self.readv_ipc_async(conn_id, data_ptrs, size_v, infos,
+                                             num_iovs, &transfer_id);
             }
             return py::make_tuple(success, transfer_id);
           },

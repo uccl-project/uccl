@@ -106,8 +106,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
-  ipc_inflight_ring_ =
-      uccl::create_ring(sizeof(IpcInflightOp*), kTaskRingSize);
+  ipc_inflight_ring_ = uccl::create_ring(sizeof(IpcInflightOp*), kTaskRingSize);
   ipc_poller_thread_ = std::thread(&Endpoint::ipc_poller_thread_func, this);
 
   // Initialize ShmChnnel for local connections
@@ -254,8 +253,7 @@ void Endpoint::initialize_engine() {
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
   recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
 
-  ipc_inflight_ring_ =
-      uccl::create_ring(sizeof(IpcInflightOp*), kTaskRingSize);
+  ipc_inflight_ring_ = uccl::create_ring(sizeof(IpcInflightOp*), kTaskRingSize);
   ipc_poller_thread_ = std::thread(&Endpoint::ipc_poller_thread_func, this);
 
   // Initialize ShmChnnel for local connections
@@ -1630,8 +1628,7 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
   return true;
 }
 
-bool Endpoint::writev_ipc(uint64_t conn_id,
-                          std::vector<void const*> data_v,
+bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
                           std::vector<size_t> size_v,
                           std::vector<IpcTransferInfo> info_v,
                           size_t num_iovs) {
@@ -1659,12 +1656,11 @@ bool Endpoint::writev_ipc(uint64_t conn_id,
     CHECK(data_v[iov] != nullptr)
         << "writev_ipc: data_v[" << iov << "] is null";
     GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_ptrs[iov], info_v[iov].handle,
-                                    gpuIpcMemLazyEnablePeerAccess));
+                                     gpuIpcMemLazyEnablePeerAccess));
     void* dst_ptr = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(raw_ptrs[iov]) + info_v[iov].offset);
 
-    bool is_host =
-        (uccl::get_dev_idx(const_cast<void*>(data_v[iov])) == -1);
+    bool is_host = (uccl::get_dev_idx(const_cast<void*>(data_v[iov])) == -1);
     auto memcpy_kind =
         is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
 
@@ -1679,8 +1675,8 @@ bool Endpoint::writev_ipc(uint64_t conn_id,
       void* chunk_dst = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
       auto copy_size = i == num_streams - 1 ? sz - i * chunk_size : chunk_size;
-      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size,
-                                  memcpy_kind, streams[i]));
+      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size, memcpy_kind,
+                                  streams[i]));
     }
   }
 
@@ -1695,11 +1691,9 @@ bool Endpoint::writev_ipc(uint64_t conn_id,
   return true;
 }
 
-bool Endpoint::readv_ipc(uint64_t conn_id,
-                         std::vector<void*> data_v,
+bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
                          std::vector<size_t> size_v,
-                         std::vector<IpcTransferInfo> info_v,
-                         size_t num_iovs) {
+                         std::vector<IpcTransferInfo> info_v, size_t num_iovs) {
   CHECK_EQ(data_v.size(), num_iovs) << "readv_ipc: data_v size mismatch";
   CHECK_EQ(size_v.size(), num_iovs) << "readv_ipc: size_v size mismatch";
   CHECK_EQ(info_v.size(), num_iovs) << "readv_ipc: info_v size mismatch";
@@ -1721,10 +1715,9 @@ bool Endpoint::readv_ipc(uint64_t conn_id,
   // Open all handles and issue all memcpys before syncing any stream.
   std::vector<void*> raw_ptrs(num_iovs, nullptr);
   for (size_t iov = 0; iov < num_iovs; ++iov) {
-    CHECK(data_v[iov] != nullptr)
-        << "readv_ipc: data_v[" << iov << "] is null";
+    CHECK(data_v[iov] != nullptr) << "readv_ipc: data_v[" << iov << "] is null";
     GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_ptrs[iov], info_v[iov].handle,
-                                    gpuIpcMemLazyEnablePeerAccess));
+                                     gpuIpcMemLazyEnablePeerAccess));
     void* src_ptr = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(raw_ptrs[iov]) + info_v[iov].offset);
 
@@ -1743,8 +1736,8 @@ bool Endpoint::readv_ipc(uint64_t conn_id,
       void* chunk_dst = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(data_v[iov]) + i * chunk_size);
       auto copy_size = i == num_streams - 1 ? sz - i * chunk_size : chunk_size;
-      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size,
-                                  memcpy_kind, streams[i]));
+      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size, memcpy_kind,
+                                  streams[i]));
     }
   }
 
@@ -1852,9 +1845,10 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
     void* chunk_dst = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
     auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
-    GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_data, copy_size,
-                                memcpy_kind, streams[i]));
-    GPU_RT_CHECK(gpuEventCreateWithFlags(&op->events[i], gpuEventDisableTiming));
+    GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_data, copy_size, memcpy_kind,
+                                streams[i]));
+    GPU_RT_CHECK(
+        gpuEventCreateWithFlags(&op->events[i], gpuEventDisableTiming));
     GPU_RT_CHECK(gpuEventRecord(op->events[i], streams[i]));
   }
 
@@ -1907,9 +1901,10 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
     void* chunk_data = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(data) + i * chunk_size);
     auto copy_size = i == num_streams - 1 ? size - i * chunk_size : chunk_size;
-    GPU_RT_CHECK(gpuMemcpyAsync(chunk_data, chunk_src, copy_size,
-                                memcpy_kind, streams[i]));
-    GPU_RT_CHECK(gpuEventCreateWithFlags(&op->events[i], gpuEventDisableTiming));
+    GPU_RT_CHECK(gpuMemcpyAsync(chunk_data, chunk_src, copy_size, memcpy_kind,
+                                streams[i]));
+    GPU_RT_CHECK(
+        gpuEventCreateWithFlags(&op->events[i], gpuEventDisableTiming));
     GPU_RT_CHECK(gpuEventRecord(op->events[i], streams[i]));
   }
 
@@ -1954,12 +1949,11 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
 
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
-                                    gpuIpcMemLazyEnablePeerAccess));
+                                     gpuIpcMemLazyEnablePeerAccess));
     void* dst_ptr = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) + info_v[iov].offset);
 
-    bool is_host =
-        (uccl::get_dev_idx(const_cast<void*>(data_v[iov])) == -1);
+    bool is_host = (uccl::get_dev_idx(const_cast<void*>(data_v[iov])) == -1);
     auto memcpy_kind =
         is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
 
@@ -1974,8 +1968,8 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
       void* chunk_dst = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
       auto copy_size = i == num_streams - 1 ? sz - i * chunk_size : chunk_size;
-      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size,
-                                  memcpy_kind, streams[i]));
+      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size, memcpy_kind,
+                                  streams[i]));
       gpuEvent_t ev;
       GPU_RT_CHECK(gpuEventCreateWithFlags(&ev, gpuEventDisableTiming));
       GPU_RT_CHECK(gpuEventRecord(ev, streams[i]));
@@ -1993,8 +1987,7 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
   return true;
 }
 
-bool Endpoint::readv_ipc_async(uint64_t conn_id,
-                               std::vector<void*> data_v,
+bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
                                std::vector<size_t> size_v,
                                std::vector<IpcTransferInfo> info_v,
                                size_t num_iovs, uint64_t* transfer_id) {
@@ -2024,7 +2017,7 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id,
 
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
-                                    gpuIpcMemLazyEnablePeerAccess));
+                                     gpuIpcMemLazyEnablePeerAccess));
     void* src_ptr = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) + info_v[iov].offset);
 
@@ -2043,8 +2036,8 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id,
       void* chunk_dst = reinterpret_cast<void*>(
           reinterpret_cast<uintptr_t>(data_v[iov]) + i * chunk_size);
       auto copy_size = i == num_streams - 1 ? sz - i * chunk_size : chunk_size;
-      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size,
-                                  memcpy_kind, streams[i]));
+      GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size, memcpy_kind,
+                                  streams[i]));
       gpuEvent_t ev;
       GPU_RT_CHECK(gpuEventCreateWithFlags(&ev, gpuEventDisableTiming));
       GPU_RT_CHECK(gpuEventRecord(ev, streams[i]));

@@ -760,10 +760,11 @@ class Endpoint {
   // IPC handle to close on completion, and the status to signal.
   // For vectorized ops raw_ptr is nullptr and raw_ptrs_v / gpu_idxs_v are used.
   struct IpcInflightOp {
-    std::vector<gpuEvent_t> events;  // flattened events (all iovs × all streams)
-    void* raw_ptr;                   // non-null for scalar ops
+    std::vector<gpuEvent_t>
+        events;     // flattened events (all iovs × all streams)
+    void* raw_ptr;  // non-null for scalar ops
     TransferStatus* status;
-    int gpu_idx;                     // used for scalar ops
+    int gpu_idx;  // used for scalar ops
     // Vectorized only (populated when raw_ptr == nullptr):
     std::vector<void*> raw_ptrs_v;
     std::vector<int> gpu_idxs_v;

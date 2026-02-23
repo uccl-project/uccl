@@ -505,11 +505,18 @@ def _run_server_write_ipc(args, ep):
             assert ok, "[Server] advertise_ipc failed"
             _send_bytes_dist(bytes(info_blob), dst=0)
         else:
-            bufs_ptrs = [_make_buffer(size_per_block, "gpu", args.local_gpu_idx) for _ in range(num_kvblocks)]
+            bufs_ptrs = [
+                _make_buffer(size_per_block, "gpu", args.local_gpu_idx)
+                for _ in range(num_kvblocks)
+            ]
             ptrs = [p for _, p in bufs_ptrs]
-            ok, info_blobs = ep.advertisev_ipc(conn_id, ptrs, [size_per_block] * num_kvblocks)
+            ok, info_blobs = ep.advertisev_ipc(
+                conn_id, ptrs, [size_per_block] * num_kvblocks
+            )
             assert ok, "[Server] advertisev_ipc failed"
-            packed = struct.pack("I", num_kvblocks) + b"".join(bytes(b) for b in info_blobs)
+            packed = struct.pack("I", num_kvblocks) + b"".join(
+                bytes(b) for b in info_blobs
+            )
             _send_bytes_dist(packed, dst=0)
 
         _recv_bytes_dist(src=0)
@@ -527,12 +534,16 @@ def _run_client_write_ipc(args, ep, remote_gpu_idx):
         size_per_block = size // num_kvblocks
 
         if num_kvblocks == 1:
-            buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx, args.pinned)
+            buf, ptr = _make_buffer(
+                size_per_block, args.device, args.local_gpu_idx, args.pinned
+            )
             info_blob = _recv_bytes_dist(src=1)
 
             # Warm-up
             if args.async_api:
-                ok, transfer_id = ep.write_ipc_async(conn_id, ptr, size_per_block, info_blob)
+                ok, transfer_id = ep.write_ipc_async(
+                    conn_id, ptr, size_per_block, info_blob
+                )
                 assert ok, "[Client] write_ipc_async warm-up error"
                 is_done = False
                 while not is_done:
@@ -546,7 +557,9 @@ def _run_client_write_ipc(args, ep, remote_gpu_idx):
             total = 0
             for _ in range(args.iters):
                 if args.async_api:
-                    ok, transfer_id = ep.write_ipc_async(conn_id, ptr, size_per_block, info_blob)
+                    ok, transfer_id = ep.write_ipc_async(
+                        conn_id, ptr, size_per_block, info_blob
+                    )
                     assert ok, "[Client] write_ipc_async error"
                     is_done = False
                     while not is_done:
@@ -557,11 +570,19 @@ def _run_client_write_ipc(args, ep, remote_gpu_idx):
                     assert ok, "[Client] write_ipc error"
                 total += size_per_block
         else:
-            bufs_ptrs = [_make_buffer(size_per_block, args.device, args.local_gpu_idx, args.pinned) for _ in range(num_kvblocks)]
+            bufs_ptrs = [
+                _make_buffer(
+                    size_per_block, args.device, args.local_gpu_idx, args.pinned
+                )
+                for _ in range(num_kvblocks)
+            ]
             ptrs = [p for _, p in bufs_ptrs]
             packed = _recv_bytes_dist(src=1)
             blob_size = (len(packed) - 4) // num_kvblocks
-            info_blobs = [packed[4 + i * blob_size: 4 + (i + 1) * blob_size] for i in range(num_kvblocks)]
+            info_blobs = [
+                packed[4 + i * blob_size : 4 + (i + 1) * blob_size]
+                for i in range(num_kvblocks)
+            ]
             size_v = [size_per_block] * num_kvblocks
 
             # Warm-up
@@ -580,7 +601,9 @@ def _run_client_write_ipc(args, ep, remote_gpu_idx):
             total = 0
             for _ in range(args.iters):
                 if args.async_api:
-                    ok, transfer_id = ep.writev_ipc_async(conn_id, ptrs, size_v, info_blobs)
+                    ok, transfer_id = ep.writev_ipc_async(
+                        conn_id, ptrs, size_v, info_blobs
+                    )
                     assert ok, "[Client] writev_ipc_async error"
                     is_done = False
                     while not is_done:
@@ -620,11 +643,18 @@ def _run_server_read_ipc(args, ep):
             assert ok, "[Server] advertise_ipc failed"
             _send_bytes_dist(bytes(info_blob), dst=0)
         else:
-            bufs_ptrs = [_make_buffer(size_per_block, "gpu", args.local_gpu_idx) for _ in range(num_kvblocks)]
+            bufs_ptrs = [
+                _make_buffer(size_per_block, "gpu", args.local_gpu_idx)
+                for _ in range(num_kvblocks)
+            ]
             ptrs = [p for _, p in bufs_ptrs]
-            ok, info_blobs = ep.advertisev_ipc(conn_id, ptrs, [size_per_block] * num_kvblocks)
+            ok, info_blobs = ep.advertisev_ipc(
+                conn_id, ptrs, [size_per_block] * num_kvblocks
+            )
             assert ok, "[Server] advertisev_ipc failed"
-            packed = struct.pack("I", num_kvblocks) + b"".join(bytes(b) for b in info_blobs)
+            packed = struct.pack("I", num_kvblocks) + b"".join(
+                bytes(b) for b in info_blobs
+            )
             _send_bytes_dist(packed, dst=0)
 
         _recv_bytes_dist(src=0)
@@ -642,12 +672,16 @@ def _run_client_read_ipc(args, ep, remote_gpu_idx):
         size_per_block = size // num_kvblocks
 
         if num_kvblocks == 1:
-            buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx, args.pinned)
+            buf, ptr = _make_buffer(
+                size_per_block, args.device, args.local_gpu_idx, args.pinned
+            )
             info_blob = _recv_bytes_dist(src=1)
 
             # Warm-up
             if args.async_api:
-                ok, transfer_id = ep.read_ipc_async(conn_id, ptr, size_per_block, info_blob)
+                ok, transfer_id = ep.read_ipc_async(
+                    conn_id, ptr, size_per_block, info_blob
+                )
                 assert ok, "[Client] read_ipc_async warm-up error"
                 is_done = False
                 while not is_done:
@@ -661,7 +695,9 @@ def _run_client_read_ipc(args, ep, remote_gpu_idx):
             total = 0
             for _ in range(args.iters):
                 if args.async_api:
-                    ok, transfer_id = ep.read_ipc_async(conn_id, ptr, size_per_block, info_blob)
+                    ok, transfer_id = ep.read_ipc_async(
+                        conn_id, ptr, size_per_block, info_blob
+                    )
                     assert ok, "[Client] read_ipc_async error"
                     is_done = False
                     while not is_done:
@@ -672,11 +708,19 @@ def _run_client_read_ipc(args, ep, remote_gpu_idx):
                     assert ok, "[Client] read_ipc error"
                 total += size_per_block
         else:
-            bufs_ptrs = [_make_buffer(size_per_block, args.device, args.local_gpu_idx, args.pinned) for _ in range(num_kvblocks)]
+            bufs_ptrs = [
+                _make_buffer(
+                    size_per_block, args.device, args.local_gpu_idx, args.pinned
+                )
+                for _ in range(num_kvblocks)
+            ]
             ptrs = [p for _, p in bufs_ptrs]
             packed = _recv_bytes_dist(src=1)
             blob_size = (len(packed) - 4) // num_kvblocks
-            info_blobs = [packed[4 + i * blob_size: 4 + (i + 1) * blob_size] for i in range(num_kvblocks)]
+            info_blobs = [
+                packed[4 + i * blob_size : 4 + (i + 1) * blob_size]
+                for i in range(num_kvblocks)
+            ]
             size_v = [size_per_block] * num_kvblocks
 
             # Warm-up
@@ -695,7 +739,9 @@ def _run_client_read_ipc(args, ep, remote_gpu_idx):
             total = 0
             for _ in range(args.iters):
                 if args.async_api:
-                    ok, transfer_id = ep.readv_ipc_async(conn_id, ptrs, size_v, info_blobs)
+                    ok, transfer_id = ep.readv_ipc_async(
+                        conn_id, ptrs, size_v, info_blobs
+                    )
                     assert ok, "[Client] readv_ipc_async error"
                     is_done = False
                     while not is_done:
@@ -860,7 +906,11 @@ def main():
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
     pinned_str = " (pinned)" if args.pinned else ""
     if is_ipc_mode:
-        kvblocks_str = f" | Blocks per call: {args.num_kvblocks}" if (args.write_ipc or args.read_ipc) else ""
+        kvblocks_str = (
+            f" | Blocks per call: {args.num_kvblocks}"
+            if (args.write_ipc or args.read_ipc)
+            else ""
+        )
         print(
             f"Sender device: {args.sender_device}{pinned_str} | Receiver device: {args.receiver_device}{pinned_str} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}{kvblocks_str}"
         )
