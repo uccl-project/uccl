@@ -1631,6 +1631,7 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
 }
 
 void Endpoint::ipc_poller_thread_func() {
+  uccl::pin_thread_to_numa(numa_node_);
   std::deque<IpcInflightOp*> active_ops;
   alignas(16) char buf[16];
   int cur_device = -1;
