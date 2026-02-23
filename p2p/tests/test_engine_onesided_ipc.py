@@ -1,8 +1,12 @@
 """
 Test script for UCCL P2P Engine one-sided IPC operations.
 
-Each test fills the source buffer with a known pattern and verifies the
-destination buffer contains the same data after the operation completes.
+Each test runs twice — once GPU-to-GPU, once CPU-to-GPU (or GPU-to-CPU):
+  - Server (rank 0) always owns GPU-resident buffers advertised via IPC.
+  - Client (rank 1) uses GPU buffers in GPU mode, pinned CPU buffers in CPU mode.
+
+Each test fills the source with a known pattern and asserts the destination
+matches after the operation completes.
 
   write_ipc / writev_ipc : client fills source → writes → server checks destination
   read_ipc  / readv_ipc  : server fills source → client reads → client checks destination
@@ -75,28 +79,57 @@ def _unpack_info_blobs(packed: bytes, num_iovs: int):
     return [packed[4 + i * blob_size: 4 + (i + 1) * blob_size] for i in range(num_iovs)]
 
 
+# ── buffer allocation helpers ─────────────────────────────────────────────────
+
+
+def _make_client_buf(fill_val: float, use_cpu: bool) -> tuple:
+    """Return (tensor, data_ptr) filled with fill_val on the client's device."""
+    if use_cpu:
+        t = torch.full((BUF_ELEMS,), fill_val, dtype=torch.float32).pin_memory()
+    else:
+        t = torch.full((BUF_ELEMS,), fill_val, dtype=torch.float32, device="cuda:0")
+    return t, t.data_ptr()
+
+
+def _make_client_bufs(fill_vals, use_cpu: bool) -> tuple:
+    """Return (list[tensor], list[ptr]) for each fill value."""
+    tensors, ptrs = [], []
+    for v in fill_vals:
+        t, p = _make_client_buf(v, use_cpu)
+        tensors.append(t)
+        ptrs.append(p)
+    return tensors, ptrs
+
+
+def _expected(fill_val: float, use_cpu: bool) -> torch.Tensor:
+    """Reference tensor on the same device as the client buffer."""
+    if use_cpu:
+        return torch.full((BUF_ELEMS,), fill_val, dtype=torch.float32)
+    return torch.full((BUF_ELEMS,), fill_val, dtype=torch.float32, device="cuda:0")
+
+
 # ── scalar write_ipc (sync) ───────────────────────────────────────────────────
 
 
-def test_write_ipc(ep, conn_id, rank):
+def test_write_ipc(ep, conn_id, rank, use_cpu: bool):
     """
-    Client fills source with 1.0 and writes it into server's zero-filled buffer.
-    Server verifies its destination buffer now contains 1.0 everywhere.
+    Client fills source with 1.0 (GPU or pinned CPU) and writes into server's
+    GPU-resident zero buffer. Server verifies destination == 1.0.
     """
     size = BUF_ELEMS * 4
-    if rank == 0:  # server — owns destination
+    if rank == 0:  # server — GPU destination
         dst = torch.zeros(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
         ok, info_blob = ep.advertise_ipc(conn_id, dst.data_ptr(), size)
         assert ok, "advertise_ipc failed"
         _send_bytes(bytes(info_blob), dst=1)
-        _recv_int(src=1)  # wait for write to complete
-        expected = torch.ones(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
-        assert dst.allclose(expected), f"write_ipc: destination mismatch\n{dst}"
-        print("[server] test_write_ipc PASSED")
-    else:  # client — source data
-        src = torch.ones(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
+        _recv_int(src=1)
+        assert dst.allclose(torch.ones_like(dst)), \
+            f"write_ipc: destination mismatch\n{dst}"
+        print(f"[server] test_write_ipc ({'cpu' if use_cpu else 'gpu'}) PASSED")
+    else:  # client — source (GPU or CPU)
+        src, ptr = _make_client_buf(1.0, use_cpu)
         info_blob = _recv_bytes(src=0)
-        ok = ep.write_ipc(conn_id, src.data_ptr(), size, info_blob)
+        ok = ep.write_ipc(conn_id, ptr, size, info_blob)
         assert ok, "write_ipc failed"
         _send_int(1, dst=0)
 
@@ -104,7 +137,7 @@ def test_write_ipc(ep, conn_id, rank):
 # ── scalar write_ipc_async ────────────────────────────────────────────────────
 
 
-def test_write_ipc_async(ep, conn_id, rank):
+def test_write_ipc_async(ep, conn_id, rank, use_cpu: bool):
     """Same as test_write_ipc but uses the async API + poll_async."""
     size = BUF_ELEMS * 4
     if rank == 0:
@@ -113,13 +146,13 @@ def test_write_ipc_async(ep, conn_id, rank):
         assert ok, "advertise_ipc failed"
         _send_bytes(bytes(info_blob), dst=1)
         _recv_int(src=1)
-        expected = torch.ones(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
-        assert dst.allclose(expected), f"write_ipc_async: destination mismatch\n{dst}"
-        print("[server] test_write_ipc_async PASSED")
+        assert dst.allclose(torch.ones_like(dst)), \
+            f"write_ipc_async: destination mismatch\n{dst}"
+        print(f"[server] test_write_ipc_async ({'cpu' if use_cpu else 'gpu'}) PASSED")
     else:
-        src = torch.ones(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
+        src, ptr = _make_client_buf(1.0, use_cpu)
         info_blob = _recv_bytes(src=0)
-        ok, transfer_id = ep.write_ipc_async(conn_id, src.data_ptr(), size, info_blob)
+        ok, transfer_id = ep.write_ipc_async(conn_id, ptr, size, info_blob)
         assert ok, "write_ipc_async failed"
         _poll_done(ep, transfer_id)
         _send_int(1, dst=0)
@@ -128,34 +161,34 @@ def test_write_ipc_async(ep, conn_id, rank):
 # ── scalar read_ipc (sync) ────────────────────────────────────────────────────
 
 
-def test_read_ipc(ep, conn_id, rank):
+def test_read_ipc(ep, conn_id, rank, use_cpu: bool):
     """
-    Server fills its buffer with 1.0. Client reads it into a zero-filled local
-    buffer and verifies the destination now contains 1.0 everywhere.
+    Server fills its GPU buffer with 1.0. Client reads it into a zero buffer
+    (GPU or pinned CPU) and verifies destination == 1.0.
     """
     size = BUF_ELEMS * 4
-    if rank == 0:  # server — owns source
+    if rank == 0:  # server — GPU source
         src = torch.ones(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
         ok, info_blob = ep.advertise_ipc(conn_id, src.data_ptr(), size)
         assert ok, "advertise_ipc failed"
         _send_bytes(bytes(info_blob), dst=1)
         _recv_int(src=1)
-        print("[server] test_read_ipc PASSED")
-    else:  # client — destination
-        dst = torch.zeros(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
+        print(f"[server] test_read_ipc ({'cpu' if use_cpu else 'gpu'}) PASSED")
+    else:  # client — destination (GPU or CPU)
+        dst, ptr = _make_client_buf(0.0, use_cpu)
         info_blob = _recv_bytes(src=0)
-        ok = ep.read_ipc(conn_id, dst.data_ptr(), size, info_blob)
+        ok = ep.read_ipc(conn_id, ptr, size, info_blob)
         assert ok, "read_ipc failed"
-        expected = torch.ones(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
-        assert dst.allclose(expected), f"read_ipc: destination mismatch\n{dst}"
-        print("[client] test_read_ipc PASSED")
+        assert dst.allclose(_expected(1.0, use_cpu)), \
+            f"read_ipc: destination mismatch\n{dst}"
+        print(f"[client] test_read_ipc ({'cpu' if use_cpu else 'gpu'}) PASSED")
         _send_int(1, dst=0)
 
 
 # ── scalar read_ipc_async ─────────────────────────────────────────────────────
 
 
-def test_read_ipc_async(ep, conn_id, rank):
+def test_read_ipc_async(ep, conn_id, rank, use_cpu: bool):
     """Same as test_read_ipc but uses the async API + poll_async."""
     size = BUF_ELEMS * 4
     if rank == 0:
@@ -164,30 +197,30 @@ def test_read_ipc_async(ep, conn_id, rank):
         assert ok, "advertise_ipc failed"
         _send_bytes(bytes(info_blob), dst=1)
         _recv_int(src=1)
-        print("[server] test_read_ipc_async PASSED")
+        print(f"[server] test_read_ipc_async ({'cpu' if use_cpu else 'gpu'}) PASSED")
     else:
-        dst = torch.zeros(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
+        dst, ptr = _make_client_buf(0.0, use_cpu)
         info_blob = _recv_bytes(src=0)
-        ok, transfer_id = ep.read_ipc_async(conn_id, dst.data_ptr(), size, info_blob)
+        ok, transfer_id = ep.read_ipc_async(conn_id, ptr, size, info_blob)
         assert ok, "read_ipc_async failed"
         _poll_done(ep, transfer_id)
-        expected = torch.ones(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
-        assert dst.allclose(expected), f"read_ipc_async: destination mismatch\n{dst}"
-        print("[client] test_read_ipc_async PASSED")
+        assert dst.allclose(_expected(1.0, use_cpu)), \
+            f"read_ipc_async: destination mismatch\n{dst}"
+        print(f"[client] test_read_ipc_async ({'cpu' if use_cpu else 'gpu'}) PASSED")
         _send_int(1, dst=0)
 
 
 # ── vectorized writev_ipc (sync) ──────────────────────────────────────────────
 
 
-def test_writev_ipc(ep, conn_id, rank):
+def test_writev_ipc(ep, conn_id, rank, use_cpu: bool):
     """
-    Client fills iov i with float(i+1) and writes all NUM_IOVS buffers into
-    the server's zero-filled destination buffers. Server verifies each
-    destination[i] contains float(i+1), catching any misrouted copies.
+    Client fills iov i with float(i+1) (GPU or pinned CPU) and writes all
+    NUM_IOVS buffers into the server's zero-filled GPU destinations. Server
+    verifies destination[i] == float(i+1), catching any misrouted copies.
     """
     size_per = BUF_ELEMS * 4
-    if rank == 0:  # server — owns destinations
+    if rank == 0:  # server — GPU destinations
         dsts = [torch.zeros(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
                 for _ in range(NUM_IOVS)]
         ptrs = [t.data_ptr() for t in dsts]
@@ -201,11 +234,9 @@ def test_writev_ipc(ep, conn_id, rank):
                                   dtype=torch.float32, device="cuda:0")
             assert dst.allclose(expected), \
                 f"writev_ipc: destination[{i}] mismatch (expected {i+1}.0)\n{dst}"
-        print(f"[server] test_writev_ipc PASSED (num_iovs={NUM_IOVS})")
-    else:  # client — source data
-        srcs = [torch.full((BUF_ELEMS,), float(i + 1), dtype=torch.float32, device="cuda:0")
-                for i in range(NUM_IOVS)]
-        ptrs = [t.data_ptr() for t in srcs]
+        print(f"[server] test_writev_ipc ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED")
+    else:  # client — sources (GPU or CPU)
+        srcs, ptrs = _make_client_bufs([float(i + 1) for i in range(NUM_IOVS)], use_cpu)
         packed = _recv_bytes(src=0)
         info_blobs = _unpack_info_blobs(packed, NUM_IOVS)
         ok = ep.writev_ipc(conn_id, ptrs, [size_per] * NUM_IOVS, info_blobs)
@@ -216,7 +247,7 @@ def test_writev_ipc(ep, conn_id, rank):
 # ── vectorized writev_ipc_async ───────────────────────────────────────────────
 
 
-def test_writev_ipc_async(ep, conn_id, rank):
+def test_writev_ipc_async(ep, conn_id, rank, use_cpu: bool):
     """Same as test_writev_ipc but uses the async API + poll_async."""
     size_per = BUF_ELEMS * 4
     if rank == 0:
@@ -233,11 +264,9 @@ def test_writev_ipc_async(ep, conn_id, rank):
                                   dtype=torch.float32, device="cuda:0")
             assert dst.allclose(expected), \
                 f"writev_ipc_async: destination[{i}] mismatch (expected {i+1}.0)\n{dst}"
-        print(f"[server] test_writev_ipc_async PASSED (num_iovs={NUM_IOVS})")
+        print(f"[server] test_writev_ipc_async ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED")
     else:
-        srcs = [torch.full((BUF_ELEMS,), float(i + 1), dtype=torch.float32, device="cuda:0")
-                for i in range(NUM_IOVS)]
-        ptrs = [t.data_ptr() for t in srcs]
+        srcs, ptrs = _make_client_bufs([float(i + 1) for i in range(NUM_IOVS)], use_cpu)
         packed = _recv_bytes(src=0)
         info_blobs = _unpack_info_blobs(packed, NUM_IOVS)
         ok, transfer_id = ep.writev_ipc_async(conn_id, ptrs, [size_per] * NUM_IOVS, info_blobs)
@@ -249,14 +278,14 @@ def test_writev_ipc_async(ep, conn_id, rank):
 # ── vectorized readv_ipc (sync) ───────────────────────────────────────────────
 
 
-def test_readv_ipc(ep, conn_id, rank):
+def test_readv_ipc(ep, conn_id, rank, use_cpu: bool):
     """
-    Server fills source[i] with float(i+1). Client reads all NUM_IOVS buffers
-    into zero-filled local buffers and verifies destination[i] == float(i+1),
-    catching any misrouted copies.
+    Server fills source[i] with float(i+1) on GPU. Client reads all NUM_IOVS
+    buffers into zero buffers (GPU or pinned CPU) and verifies destination[i]
+    == float(i+1), catching any misrouted copies.
     """
     size_per = BUF_ELEMS * 4
-    if rank == 0:  # server — owns sources
+    if rank == 0:  # server — GPU sources
         srcs = [torch.full((BUF_ELEMS,), float(i + 1), dtype=torch.float32, device="cuda:0")
                 for i in range(NUM_IOVS)]
         ptrs = [t.data_ptr() for t in srcs]
@@ -265,28 +294,24 @@ def test_readv_ipc(ep, conn_id, rank):
         packed = struct.pack("I", NUM_IOVS) + b"".join(bytes(b) for b in info_blobs)
         _send_bytes(packed, dst=1)
         _recv_int(src=1)
-        print(f"[server] test_readv_ipc PASSED (num_iovs={NUM_IOVS})")
-    else:  # client — destinations
-        dsts = [torch.zeros(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
-                for _ in range(NUM_IOVS)]
-        ptrs = [t.data_ptr() for t in dsts]
+        print(f"[server] test_readv_ipc ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED")
+    else:  # client — destinations (GPU or CPU)
+        dsts, ptrs = _make_client_bufs([0.0] * NUM_IOVS, use_cpu)
         packed = _recv_bytes(src=0)
         info_blobs = _unpack_info_blobs(packed, NUM_IOVS)
         ok = ep.readv_ipc(conn_id, ptrs, [size_per] * NUM_IOVS, info_blobs)
         assert ok, "readv_ipc failed"
         for i, dst in enumerate(dsts):
-            expected = torch.full((BUF_ELEMS,), float(i + 1),
-                                  dtype=torch.float32, device="cuda:0")
-            assert dst.allclose(expected), \
+            assert dst.allclose(_expected(float(i + 1), use_cpu)), \
                 f"readv_ipc: destination[{i}] mismatch (expected {i+1}.0)\n{dst}"
-        print(f"[client] test_readv_ipc PASSED (num_iovs={NUM_IOVS})")
+        print(f"[client] test_readv_ipc ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED")
         _send_int(1, dst=0)
 
 
 # ── vectorized readv_ipc_async ────────────────────────────────────────────────
 
 
-def test_readv_ipc_async(ep, conn_id, rank):
+def test_readv_ipc_async(ep, conn_id, rank, use_cpu: bool):
     """Same as test_readv_ipc but uses the async API + poll_async."""
     size_per = BUF_ELEMS * 4
     if rank == 0:
@@ -298,22 +323,18 @@ def test_readv_ipc_async(ep, conn_id, rank):
         packed = struct.pack("I", NUM_IOVS) + b"".join(bytes(b) for b in info_blobs)
         _send_bytes(packed, dst=1)
         _recv_int(src=1)
-        print(f"[server] test_readv_ipc_async PASSED (num_iovs={NUM_IOVS})")
+        print(f"[server] test_readv_ipc_async ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED")
     else:
-        dsts = [torch.zeros(BUF_ELEMS, dtype=torch.float32, device="cuda:0")
-                for _ in range(NUM_IOVS)]
-        ptrs = [t.data_ptr() for t in dsts]
+        dsts, ptrs = _make_client_bufs([0.0] * NUM_IOVS, use_cpu)
         packed = _recv_bytes(src=0)
         info_blobs = _unpack_info_blobs(packed, NUM_IOVS)
         ok, transfer_id = ep.readv_ipc_async(conn_id, ptrs, [size_per] * NUM_IOVS, info_blobs)
         assert ok, "readv_ipc_async failed"
         _poll_done(ep, transfer_id)
         for i, dst in enumerate(dsts):
-            expected = torch.full((BUF_ELEMS,), float(i + 1),
-                                  dtype=torch.float32, device="cuda:0")
-            assert dst.allclose(expected), \
+            assert dst.allclose(_expected(float(i + 1), use_cpu)), \
                 f"readv_ipc_async: destination[{i}] mismatch (expected {i+1}.0)\n{dst}"
-        print(f"[client] test_readv_ipc_async PASSED (num_iovs={NUM_IOVS})")
+        print(f"[client] test_readv_ipc_async ({'cpu' if use_cpu else 'gpu'}, num_iovs={NUM_IOVS}) PASSED")
         _send_int(1, dst=0)
 
 
@@ -348,11 +369,17 @@ def main():
         ("readv_ipc_async",  test_readv_ipc_async),
     ]
 
-    for name, fn in tests:
-        dist.barrier()
+    for use_cpu in (False, True):
+        mode = "cpu" if use_cpu else "gpu"
         if rank == 0:
-            print(f"\n--- {name} ---")
-        fn(ep, conn_id, rank)
+            print(f"\n{'='*50}")
+            print(f"  Client buffer mode: {mode.upper()}")
+            print(f"{'='*50}")
+        for name, fn in tests:
+            dist.barrier()
+            if rank == 0:
+                print(f"\n--- {name} [{mode}] ---")
+            fn(ep, conn_id, rank, use_cpu)
 
     dist.barrier()
     if rank == 0:
