@@ -1,6 +1,7 @@
 import inspect
 from typing import Any, Optional, Tuple, Union
 import os
+import datetime
 import torch
 import torch.distributed as dist
 from typing import Optional
@@ -74,13 +75,16 @@ def init_dist(local_rank: int, num_local_ranks: int):
 
 def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
     # torchrun already sets RANK, WORLD_SIZE, MASTER_ADDR, MASTER_PORT
+    torch.cuda.set_device(local_rank)
+    timeout_secs = int(os.getenv("UCCL_PG_TIMEOUT_SECS", "120"))
     dist.init_process_group(
-        backend="nccl", device_id=torch.device(f"cuda:{local_rank}")
+        backend="nccl",
+        device_id=torch.device(f"cuda:{local_rank}"),
+        timeout=datetime.timedelta(seconds=timeout_secs),
     )
 
     torch.set_default_dtype(torch.bfloat16)
     torch.set_default_device(f"cuda:{local_rank}")
-    torch.cuda.set_device(local_rank)
 
     return (
         dist.get_rank(),
