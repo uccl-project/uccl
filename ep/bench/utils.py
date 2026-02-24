@@ -114,7 +114,9 @@ def get_peer_ip(rank: int, num_ranks: int, group: dist.ProcessGroup):
     return peer_ip if peer_ip else ""
 
 
-def get_cpu_proxies_meta(proxies, rank, scratch_ptr, scratch_bytes, num_ranks, group):
+def get_cpu_proxies_meta(
+    proxies, rank, scratch_ptr, scratch_bytes, num_ranks, group, object_group=None
+):
     my_ip = ep.get_oob_ip()
     meta = {
         "rank": rank,
@@ -130,7 +132,8 @@ def get_cpu_proxies_meta(proxies, rank, scratch_ptr, scratch_bytes, num_ranks, g
     else:
         device_index = torch.cuda.current_device()
     # torch.cuda.set_device(device_index)
-    dist.all_gather_object(all_meta, meta, group=group)
+    collect_group = object_group if object_group is not None else group
+    dist.all_gather_object(all_meta, meta, group=collect_group)
     rank2meta = {m["rank"]: m for m in all_meta}
 
     # Debug: print IP distribution
@@ -146,7 +149,9 @@ def get_cpu_proxies_meta(proxies, rank, scratch_ptr, scratch_bytes, num_ranks, g
     return rank2meta
 
 
-def check_nvlink_connections(group: dist.ProcessGroup):
+def check_nvlink_connections(
+    group: dist.ProcessGroup, object_group: Optional[dist.ProcessGroup] = None
+):
     """
     Check NVLink connection between every pair of GPUs.
 
@@ -174,7 +179,10 @@ def check_nvlink_connections(group: dist.ProcessGroup):
         physical_device_indices = [
             0,
         ] * group.size()
-        dist.all_gather_object(physical_device_indices, physical_device_idx, group)
+        collect_group = object_group if object_group is not None else group
+        dist.all_gather_object(
+            physical_device_indices, physical_device_idx, collect_group
+        )
 
         # Check whether they are all connected via NVLink
         # Reference: https://github.com/vllm-project/vllm/blob/b8e809a057765c574726a6077fd124db5077ce1f/vllm/platforms/cuda.py#L438
@@ -518,6 +526,7 @@ def initialize_uccl(
     is_intranode=False,
     use_normal_mode=False,
     rdma_buffer_is_host_allocated=False,
+    object_group=None,
 ):
     try:
         for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
@@ -580,7 +589,13 @@ def initialize_uccl(
         proxies.append(proxy)
 
     rank2meta = get_cpu_proxies_meta(
-        proxies, rank, scratch_ptr, scratch_nbytes, num_ranks, group
+        proxies,
+        rank,
+        scratch_ptr,
+        scratch_nbytes,
+        num_ranks,
+        group,
+        object_group=object_group,
     )
     peers_meta_list = [rank2meta[r] for r in range(num_ranks)]
 

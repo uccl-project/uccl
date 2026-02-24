@@ -1,4 +1,5 @@
 import os
+import datetime
 import torch
 import torch.distributed as dist
 from typing import Callable, Tuple, Optional, Union, List
@@ -97,6 +98,16 @@ class Buffer:
             rdma_buffer_is_host_allocated = bool(torch.version.cuda)
 
         rdma_buffer_ptr = self.scratch.data_ptr()
+        obj_timeout_secs = int(
+            os.getenv(
+                "UCCL_OBJ_PG_TIMEOUT_SECS", os.getenv("UCCL_PG_TIMEOUT_SECS", "120")
+            )
+        )
+        self.object_group = dist.new_group(
+            list(range(dist.get_world_size(group))),
+            backend="gloo",
+            timeout=datetime.timedelta(seconds=obj_timeout_secs),
+        )
         self.proxies, self.workers = initialize_uccl(
             rdma_buffer_ptr,
             num_rdma_bytes,
@@ -106,8 +117,9 @@ class Buffer:
             use_normal_mode=not low_latency_mode,
             is_intranode=is_intranode,
             rdma_buffer_is_host_allocated=rdma_buffer_is_host_allocated,
+            object_group=self.object_group,
         )
-        check_nvlink_connections(group)
+        check_nvlink_connections(group, object_group=self.object_group)
 
         # Initialize the CPP runtime
         self.rank = group.rank()
@@ -135,14 +147,14 @@ class Buffer:
         ] * self.group_size
         local_device_id = self.runtime.get_local_device_id()
         # print("Before all_gather_object device_ids", local_device_id, flush=True)
-        dist.all_gather_object(device_ids, local_device_id, group)
+        dist.all_gather_object(device_ids, local_device_id, self.object_group)
         # Synchronize IPC handles
         ipc_handles = [
             None,
         ] * self.group_size
         local_ipc_handle = self.runtime.get_local_ipc_handle()
         # print("Before all_gather_object ipc_handles", local_ipc_handle, flush=True)
-        dist.all_gather_object(ipc_handles, local_ipc_handle, group)
+        dist.all_gather_object(ipc_handles, local_ipc_handle, self.object_group)
 
         rdma_ipc_handles = [None] * self.group_size
         # CUDA IPC only works with device memory; skip when using cudaMallocHost.
@@ -151,7 +163,9 @@ class Buffer:
             if self.num_rdma_bytes > 0 and not rdma_buffer_is_host_allocated
             else None
         )
-        dist.all_gather_object(rdma_ipc_handles, local_rdma_ipc_handle, group)
+        dist.all_gather_object(
+            rdma_ipc_handles, local_rdma_ipc_handle, self.object_group
+        )
         root_unique_id = None
         # Make CPP runtime available
         self.runtime.sync(
