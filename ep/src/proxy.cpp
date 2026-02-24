@@ -614,10 +614,11 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
                               (fifo_seq_[rb_idx]++ & 0xFFFFFFFFULL);
       wrs_to_post.push_back(unique_wr_id);
       cmds_to_post.push_back(cmd);
+      auto const cmd_bytes = get_transfer_cmd_bytes(cmd);
       fifo_pending_[rb_idx].push_back(
-          std::make_pair(unique_wr_id, static_cast<size_t>(cmd.bytes)));
-      if (get_base_cmd(cmd.cmd_type) == CmdType::WRITE && cmd.bytes > 0) {
-        current_inflight_bytes.fetch_add(static_cast<size_t>(cmd.bytes),
+          std::make_pair(unique_wr_id, static_cast<size_t>(cmd_bytes)));
+      if (get_base_cmd(cmd.cmd_type) == CmdType::WRITE && cmd_bytes > 0) {
+        current_inflight_bytes.fetch_add(static_cast<size_t>(cmd_bytes),
                                          std::memory_order_release);
       }
 
@@ -839,9 +840,13 @@ void Proxy::post_gpu_commands_mixed(
         if (!cfg_.use_normal_mode) {
           int value = cmds_to_post[i].value;
           uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
-          uint32_t new_offset =
-              offset - get_low_latency(cmds_to_post[i].cmd_type) *
-                           align<size_t>(cfg_.num_experts * sizeof(int), 128);
+          size_t const signaling_slots = std::max(
+              static_cast<size_t>(cfg_.num_experts),
+              static_cast<size_t>(cfg_.num_ranks) *
+                  static_cast<size_t>(cfg_.num_ranks));
+          uint32_t new_offset = offset -
+              get_low_latency(cmds_to_post[i].cmd_type) *
+                  align<size_t>(signaling_slots * sizeof(int), 128);
           size_t new_index = new_offset / sizeof(int);
           int expected_value;
           int expert_idx;
@@ -873,9 +878,13 @@ void Proxy::post_gpu_commands_mixed(
 #ifdef USE_SENDER_BARRIER
         if (!cfg_.use_normal_mode) {
           uint32_t offset = static_cast<int64_t>(cmds_to_post[i].req_rptr);
-          uint32_t new_offset =
-              offset - get_low_latency(cmds_to_post[i].cmd_type) *
-                           align<size_t>(cfg_.num_experts * sizeof(int), 128);
+          size_t const signaling_slots = std::max(
+              static_cast<size_t>(cfg_.num_experts),
+              static_cast<size_t>(cfg_.num_ranks) *
+                  static_cast<size_t>(cfg_.num_ranks));
+          uint32_t new_offset = offset -
+              get_low_latency(cmds_to_post[i].cmd_type) *
+                  align<size_t>(signaling_slots * sizeof(int), 128);
           size_t new_index = new_offset / sizeof(int);
           int expert_idx;
           if (get_is_combine(cmds_to_post[i].cmd_type)) {

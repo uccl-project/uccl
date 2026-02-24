@@ -1022,6 +1022,8 @@ static void post_rdma_async_batched_normal_mode(
       for (size_t j = 0; j < idxs.size(); ++j) {
         size_t i = idxs[j];
         auto const& cmd = cmds_to_post[i];
+        auto const cmd_bytes = get_transfer_cmd_bytes(cmd);
+        auto const cmd_expert_idx = get_transfer_cmd_expert_idx(cmd);
 
         qpx->wr_id = wrs_to_post[i];
         qpx->comp_mask = 0;
@@ -1032,11 +1034,11 @@ static void post_rdma_async_batched_normal_mode(
         uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
         if (remote_addr < ctx->remote_addr ||
-            remote_addr + cmd.bytes > remote_end) {
+            remote_addr + cmd_bytes > remote_end) {
           fprintf(stderr,
                   "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
                   "size=%zu), cmd.req_rptr: 0x%llx\n",
-                  (unsigned long long)remote_addr, cmd.bytes,
+                  (unsigned long long)remote_addr, cmd_bytes,
                   (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
                   (unsigned long long)cmd.req_rptr);
           cudaError_t err = cudaDeviceSynchronize();
@@ -1074,7 +1076,7 @@ static void post_rdma_async_batched_normal_mode(
         } else if (j + 1 == idxs.size()) {
           uint32_t imm =
               WriteImm::Pack(get_is_combine(cmd.cmd_type),
-                             get_low_latency(cmd.cmd_type), cmd.expert_idx,
+                             get_low_latency(cmd.cmd_type), cmd_expert_idx,
                              (uint32_t)idxs.size(), my_rank)
                   .GetImmData();
           ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
@@ -1086,7 +1088,7 @@ static void post_rdma_async_batched_normal_mode(
             cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
         ibv_wr_set_ud_addr(qpx, ctx->dst_ah, dst_qpn, QKEY);
         ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
-                       static_cast<uint32_t>(cmd.bytes));
+                       cmd_bytes);
 
         ring_wrids.push_back(wrs_to_post[i]);
       }
@@ -1113,6 +1115,7 @@ static void post_rdma_async_batched_normal_mode(
         for (size_t j = 0; j < kgroup; ++j) {
           size_t i = idxs[j];
           auto const& cmd = cmds_to_post[i];
+          auto const cmd_bytes = get_transfer_cmd_bytes(cmd);
           ring_wrids.push_back(wrs_to_post[i]);
 
           // Remote address bounds check
@@ -1121,12 +1124,12 @@ static void post_rdma_async_batched_normal_mode(
           uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
           if (remote_addr < ctx->remote_addr ||
-              remote_addr + cmd.bytes > remote_end) {
+              remote_addr + cmd_bytes > remote_end) {
             fprintf(
                 stderr,
                 "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
                 "size=%zu), cmd.req_rptr: 0x%llx\n",
-                (unsigned long long)remote_addr, cmd.bytes,
+                (unsigned long long)remote_addr, cmd_bytes,
                 (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
                 (unsigned long long)cmd.req_rptr);
             cudaError_t err = cudaDeviceSynchronize();
@@ -1142,7 +1145,7 @@ static void post_rdma_async_batched_normal_mode(
               cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
           sges[j] = {
               .addr = laddr,
-              .length = static_cast<uint32_t>(cmd.bytes),
+              .length = cmd_bytes,
               .lkey = ctx->mr->lkey,
           };
 
@@ -1221,6 +1224,7 @@ static void post_rdma_async_batched_normal_mode(
         for (size_t j = 0; j < kgroup; ++j) {
           size_t i = idxs[j];
           auto const& cmd = cmds_to_post[i];
+          auto const cmd_bytes = get_transfer_cmd_bytes(cmd);
           ring_wrids.push_back(wrs_to_post[i]);
 
           // Remote address bounds check
@@ -1229,12 +1233,12 @@ static void post_rdma_async_batched_normal_mode(
           uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
           if (remote_addr < ctx->remote_addr ||
-              remote_addr + cmd.bytes > remote_end) {
+              remote_addr + cmd_bytes > remote_end) {
             fprintf(
                 stderr,
                 "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
                 "size=%zu), cmd.req_rptr: 0x%llx\n",
-                (unsigned long long)remote_addr, cmd.bytes,
+                (unsigned long long)remote_addr, cmd_bytes,
                 (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
                 (unsigned long long)cmd.req_rptr);
             cudaError_t err = cudaDeviceSynchronize();
@@ -1250,7 +1254,7 @@ static void post_rdma_async_batched_normal_mode(
               cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
           sges[j] = {
               .addr = laddr,
-              .length = static_cast<uint32_t>(cmd.bytes),
+              .length = cmd_bytes,
               .lkey = ctx->mr->lkey,
           };
 
@@ -1348,7 +1352,7 @@ static void post_rdma_async_batched_fast_mode(
     std::unordered_map<int, std::vector<size_t>> dst_expert_wr_ids;
     for (size_t j = 0; j < k; ++j) {
       size_t i = wr_ids[j];
-      int expert_idx = cmds_to_post[i].expert_idx;
+      int expert_idx = get_transfer_cmd_expert_idx(cmds_to_post[i]);
       dst_expert_wr_ids[expert_idx].push_back(i);
     }
 #endif
@@ -1364,6 +1368,8 @@ static void post_rdma_async_batched_fast_mode(
 #endif
 
         auto const& cmd = cmds_to_post[i];
+        auto const cmd_bytes = get_transfer_cmd_bytes(cmd);
+        auto const cmd_expert_idx = get_transfer_cmd_expert_idx(cmd);
 #ifdef USE_RECEIVER_BARRIER
         expert_wr_ids[j] = wrs_to_post[i];
 #else
@@ -1378,11 +1384,11 @@ static void post_rdma_async_batched_fast_mode(
         uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
         if (remote_addr < ctx->remote_addr ||
-            remote_addr + cmd.bytes > remote_end) {
+            remote_addr + cmd_bytes > remote_end) {
           fprintf(stderr,
                   "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
                   "size=%zu), cmd.req_rptr: 0x%llx\n",
-                  (unsigned long long)remote_addr, cmd.bytes,
+                  (unsigned long long)remote_addr, cmd_bytes,
                   (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
                   (unsigned long long)cmd.req_rptr);
           cudaError_t err = cudaDeviceSynchronize();
@@ -1394,7 +1400,7 @@ static void post_rdma_async_batched_fast_mode(
           std::abort();
         }
 #ifdef USE_SENDER_BARRIER
-        S.wr_id_to_write_struct[qpx->wr_id] = {cmd.expert_idx, dst_rank,
+        S.wr_id_to_write_struct[qpx->wr_id] = {cmd_expert_idx, dst_rank,
                                                get_is_combine(cmd.cmd_type),
                                                get_low_latency(cmd.cmd_type)};
 #endif
@@ -1403,14 +1409,14 @@ static void post_rdma_async_batched_fast_mode(
             cmd.atomic_val ? static_cast<uint32_t>(cmd.atomic_val) : 1u;
         uint32_t imm = WriteImm::Pack(get_is_combine(cmd.cmd_type),
                                       get_low_latency(cmd.cmd_type),
-                                      cmd.expert_idx, num_tokens_imm, my_rank)
+                                      cmd_expert_idx, num_tokens_imm, my_rank)
                            .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
 #else
       if (j + 1 == k) {
         uint32_t imm = WriteImm::Pack(get_is_combine(cmd.cmd_type),
                                       get_low_latency(cmd.cmd_type),
-                                      cmd.expert_idx, k, my_rank)
+                                      cmd_expert_idx, k, my_rank)
                            .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
       } else {
@@ -1421,7 +1427,7 @@ static void post_rdma_async_batched_fast_mode(
             cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
         ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
         ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
-                       static_cast<uint32_t>(cmd.bytes));
+                       cmd_bytes);
       }
 
 #ifdef USE_RECEIVER_BARRIER
@@ -1444,9 +1450,10 @@ static void post_rdma_async_batched_fast_mode(
     for (size_t j = 0; j < k; ++j) {
       size_t i = wr_ids[j];
       auto const& cmd = cmds_to_post[i];
+      auto const cmd_bytes = get_transfer_cmd_bytes(cmd);
       wr_ids[j] = wrs_to_post[i];
       sges[j].addr = cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
-      sges[j].length = static_cast<uint32_t>(cmd.bytes);
+      sges[j].length = cmd_bytes;
       sges[j].lkey = ctx->mr->lkey;
       std::memset(&wrs[j], 0, sizeof(wrs[j]));
       wrs[j].sg_list = &sges[j];
@@ -1457,11 +1464,11 @@ static void post_rdma_async_batched_fast_mode(
 
       uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
       if (wrs[j].wr.rdma.remote_addr < ctx->remote_addr ||
-          wrs[j].wr.rdma.remote_addr + cmd.bytes > remote_end) {
+          wrs[j].wr.rdma.remote_addr + cmd_bytes > remote_end) {
         fprintf(stderr,
                 "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
                 "size=%zu), cmd.req_rptr: 0x%llx\n",
-                (unsigned long long)wrs[j].wr.rdma.remote_addr, cmd.bytes,
+                (unsigned long long)wrs[j].wr.rdma.remote_addr, cmd_bytes,
                 (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
                 (unsigned long long)cmd.req_rptr);
         cudaError_t err = cudaDeviceSynchronize();
@@ -1648,11 +1655,11 @@ void apply_pending_updates(ProxyCtx& ctx,
     int value = upd.value;
     if (!upd.is_combine) {
       int num_tokens = ctx.dispatch_token_counter.Get(
-          {upd.low_latency_buffer_idx, upd.expert_idx, upd.src_rank});
+          {upd.low_latency_buffer_idx, upd.src_rank, upd.src_rank});
       if ((-value - 1) == num_tokens) {
         is_atomic_ready = true;
         ctx.dispatch_token_counter.Reset(
-            {upd.low_latency_buffer_idx, upd.expert_idx, upd.src_rank});
+            {upd.low_latency_buffer_idx, upd.src_rank, upd.src_rank});
       }
     } else {
       int combine_num_tokens = ctx.combine_token_counter.Get(
@@ -1886,18 +1893,21 @@ void remote_process_completions_fast_mode(
       // ep_config.hpp
       bool is_combine = aimm.IsCombine();
       int low_latency_buffer_idx = aimm.GetBufferIdx();
-      uint32_t new_offset =
-          offset - low_latency_buffer_idx *
-                       align<size_t>(num_experts * sizeof(int64_t), 128);
+      size_t const signaling_slots = std::max(
+          static_cast<size_t>(num_experts),
+          static_cast<size_t>(num_ranks) * static_cast<size_t>(num_ranks));
+      uint32_t new_offset = offset - low_latency_buffer_idx *
+                                         align<size_t>(signaling_slots *
+                                                           sizeof(int64_t),
+                                                       128);
       size_t new_index = new_offset / sizeof(int64_t);
       int src_rank = -1;
       bool is_atomic_ready = false;
       int expert_idx = -1;
       if (!is_combine) {
-        expert_idx = new_index / num_ranks;
         src_rank = new_index % num_ranks;
         int num_tokens = S.dispatch_token_counter.Get(
-            {low_latency_buffer_idx, expert_idx, src_rank});
+            {low_latency_buffer_idx, src_rank, src_rank});
         if ((-value - 1) == num_tokens) {
           is_atomic_ready = true;
         }
@@ -1905,12 +1915,12 @@ void remote_process_completions_fast_mode(
           fprintf(stderr,
                   "[Error] Required Dispatch value %d is smaller than received "
                   "counter %d for "
-                  "expert_idx %d, src_rank %d\n",
-                  -value - 1, num_tokens, expert_idx, src_rank);
+                  "src_rank %d, src_rank %d\n",
+                  -value - 1, num_tokens, src_rank, src_rank);
         }
         if (is_atomic_ready) {
           S.dispatch_token_counter.Reset(
-              {low_latency_buffer_idx, expert_idx, src_rank});
+              {low_latency_buffer_idx, src_rank, src_rank});
         }
 
       } else {
@@ -2031,6 +2041,7 @@ void remote_process_completions_fast_mode(
 
       if (!is_combine) {
         /* expert_idx here is the local expert index of the receiver. */
+        assert(src_rank == expert_idx && "For dispatch tokens, src_rank should match expert_idx");
         S.dispatch_token_counter.Add({buffer_idx, expert_idx, src_rank}, k);
       } else {
         /* expert_idx here is the global expert index of the sender. */

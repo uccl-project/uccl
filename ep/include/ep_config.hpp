@@ -233,8 +233,11 @@ struct LowLatencyLayout {
     total_bytes += recv_buffer_bytes * 2;
 
     // Symmetric signaling buffers
-    size_t dispatch_recv_count_buffer_bytes = num_experts * sizeof(int);
-    size_t combine_recv_flag_buffer_bytes = dispatch_recv_count_buffer_bytes;
+    // Dispatch-LL uses one count per (dst_rank, src_rank); combine uses one
+    // flag per expert. Both share the same signaling region, so size by max.
+    size_t dispatch_recv_count_buffer_bytes =
+        static_cast<size_t>(num_ranks * num_ranks) * sizeof(int);
+    size_t combine_recv_flag_buffer_bytes = num_experts * sizeof(int);
     size_t signaling_buffer_bytes = std::max(dispatch_recv_count_buffer_bytes,
                                              combine_recv_flag_buffer_bytes);
     size_t signaling_buffer_bytes_aligned =
@@ -242,7 +245,14 @@ struct LowLatencyLayout {
     total_bytes += signaling_buffer_bytes_aligned * 2;
 
     // Internode signaling buffers (for RDMA atomics): use 64-bit slots.
-    size_t signaling_buffer_bytes_internode = num_experts * sizeof(int64_t);
+    // Dispatch count and combine flag internode buffers share this region.
+    size_t dispatch_recv_count_buffer_bytes_internode =
+        static_cast<size_t>(num_ranks * num_ranks) * sizeof(int64_t);
+    size_t combine_recv_flag_buffer_bytes_internode =
+        num_experts * sizeof(int64_t);
+    size_t signaling_buffer_bytes_internode = std::max(
+        dispatch_recv_count_buffer_bytes_internode,
+        combine_recv_flag_buffer_bytes_internode);
     size_t signaling_buffer_bytes_internode_aligned =
         align<size_t>(signaling_buffer_bytes_internode, 128);
     // These internode signaling buffers live inside `atomic_buffer_ptr` (not
