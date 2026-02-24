@@ -295,6 +295,20 @@ class Endpoint {
                        IpcTransferInfo const& info, uint64_t* transfer_id);
   bool read_ipc_async(uint64_t conn_id, void* data, size_t size,
                       IpcTransferInfo const& info, uint64_t* transfer_id);
+  bool writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
+                  std::vector<size_t> size_v,
+                  std::vector<IpcTransferInfo> info_v, size_t num_iovs);
+  bool readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
+                 std::vector<size_t> size_v,
+                 std::vector<IpcTransferInfo> info_v, size_t num_iovs);
+  bool writev_ipc_async(uint64_t conn_id, std::vector<void const*> data_v,
+                        std::vector<size_t> size_v,
+                        std::vector<IpcTransferInfo> info_v, size_t num_iovs,
+                        uint64_t* transfer_id);
+  bool readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
+                       std::vector<size_t> size_v,
+                       std::vector<IpcTransferInfo> info_v, size_t num_iovs,
+                       uint64_t* transfer_id);
   bool advertise_ipc(uint64_t conn_id, void* addr, size_t len, char* out_buf);
   bool advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
                       std::vector<size_t> len_v, std::vector<char*> out_buf_v,
@@ -741,4 +755,24 @@ class Endpoint {
   bool passive_accept_;
   std::thread passive_accept_thread_;
   void passive_accept_thread_func();
+
+  // Tracks an in-flight IPC async copy: one event per chunk stream, the opened
+  // IPC handle to close on completion, and the status to signal.
+  // For vectorized ops raw_ptr is nullptr and raw_ptrs_v / gpu_idxs_v are used.
+  struct IpcInflightOp {
+    std::vector<gpuEvent_t>
+        events;     // flattened events (all iovs × all streams)
+    void* raw_ptr;  // non-null for scalar ops
+    TransferStatus* status;
+    int gpu_idx;  // used for scalar ops
+    // Vectorized only (populated when raw_ptr == nullptr):
+    std::vector<void*> raw_ptrs_v;
+    std::vector<int> gpu_idxs_v;
+  };
+
+  // MPSC ring: caller threads push IpcInflightOp*, poller thread drains it.
+  jring_t* ipc_inflight_ring_ = nullptr;
+
+  std::thread ipc_poller_thread_;
+  void ipc_poller_thread_func();
 };
