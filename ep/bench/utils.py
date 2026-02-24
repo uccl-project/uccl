@@ -129,7 +129,7 @@ def get_cpu_proxies_meta(proxies, rank, scratch_ptr, scratch_bytes, num_ranks, g
         device_index = int(os.environ["LOCAL_RANK"])
     else:
         device_index = torch.cuda.current_device()
-    torch.cuda.set_device(device_index)
+    # torch.cuda.set_device(device_index)
     dist.all_gather_object(all_meta, meta, group=group)
     rank2meta = {m["rank"]: m for m in all_meta}
 
