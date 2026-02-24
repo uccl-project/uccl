@@ -27,11 +27,13 @@
 
 namespace py = pybind11;
 
+#ifdef UCCL_P2P_USE_TCPX
+using FifoItem = nccl_tcpx::FifoItem;
+#else
+using FifoItem = FifoItem;
+#endif
+
 extern thread_local bool inside_python;
-
-int const kMaxNumGPUs = 8;
-
-int parseLogLevelFromEnv();
 
 #ifdef UCCL_P2P_USE_NCCL
 using RDMAEndPoint = std::shared_ptr<tcp::TCPEndpoint>;
@@ -46,6 +48,7 @@ struct ucclRequest {
   uint32_t engine_idx;
 };
 #endif
+
 struct Mhandle {
   struct ibv_mr* mr;
 };
@@ -58,8 +61,6 @@ struct MR {
   uint64_t mr_id_;
   P2PMhandle* mhandle_;
 };
-
-const size_t ShmRingDefaultElemCnt = 16;
 
 struct ShmRingHandle {
   jring_t* ring = nullptr;
@@ -78,49 +79,184 @@ struct Conn {
   bool shm_attached_ = false;
 };
 
-#ifdef UCCL_P2P_USE_TCPX
-using FifoItem = nccl_tcpx::FifoItem;
-#else
-using FifoItem = FifoItem;
-#endif
-
 // Custom hash function for std::vector<uint8_t>
 struct VectorUint8Hash {
   std::size_t operator()(std::vector<uint8_t> const& vec) const;
 };
 
+// Prepare transfer info structure for receiving IPC handle
+struct IpcTransferInfo {
+  gpuIpcMemHandle_t handle;
+  uintptr_t offset;
+  size_t size;
+  uint32_t operation;  // 0 = send_ipc request, 1 = recv_ipc response
+  bool is_host;        // true if this side's buffer is CPU memory
+};
+
+// For ShmChannel
+enum class ShmMsgType : uint32_t {
+  CONNECT = 0,
+  IPC_HANDLE = 1,
+  COMPLETION = 2,
+};
+
+struct ShmMsg {
+  uint32_t src_gpu;
+  ShmMsgType type;
+  union {
+    IpcTransferInfo info;
+    uint32_t completion;
+  };
+  ShmMsg();
+};
+
+enum class TaskType {
+  SEND_NET,
+  RECV_NET,
+  SEND_IPC,
+  RECV_IPC,
+  WRITE_NET,
+  READ_NET,
+  WRITE_IPC,
+  READ_IPC,
+  SENDV,
+  RECVV,
+  WRITEV,
+  READV,
+};
+
+struct TaskBatch {
+  size_t num_iovs;  // Number of IO vectors
+  std::shared_ptr<std::vector<void const*>> const_data_ptr;  // for SENDV
+  std::shared_ptr<std::vector<void*>> data_ptr;  // for RECVV/READV/WRITEV
+  std::shared_ptr<std::vector<size_t>> size_ptr;
+  std::shared_ptr<std::vector<uint64_t>> mr_id_ptr;
+  std::shared_ptr<std::vector<FifoItem>> slot_item_ptr;  // for READV/WRITEV
+
+  TaskBatch();
+  TaskBatch(TaskBatch&& other) noexcept;
+  TaskBatch& operator=(TaskBatch&& other) noexcept;
+
+  TaskBatch(TaskBatch const&) = delete;
+  TaskBatch& operator=(TaskBatch const&) = delete;
+
+  void const** const_data_v() const;
+  void** data_v() const;
+  size_t* size_v() const;
+  uint64_t* mr_id_v() const;
+  FifoItem* slot_item_v() const;
+};
+
+struct alignas(64) Task {
+  TaskType type;
+  void* data;
+  size_t size;
+  uint64_t conn_id;
+  uint64_t mr_id;
+};
+
+struct alignas(64) NetRwTask {
+  TaskType type;
+  void* data;
+  size_t size;
+  uint64_t conn_id;
+  uint64_t mr_id;
+  FifoItem slot_item;
+};
+
+struct alignas(64) IpcRwTask {
+  TaskType type;
+  void* data;
+  size_t size;
+  uint64_t conn_id;
+  uint64_t mr_id;
+  IpcTransferInfo ipc_info;
+};
+
+static constexpr size_t kEndpointMaxReserveSize =
+    uccl::max_sizeof<FifoItem, IpcTransferInfo, TaskBatch>();
+
+struct UnifiedTask;
+
+struct TransferStatus {
+  std::atomic<bool> done{false};
+  std::shared_ptr<UnifiedTask> task_ptr;
+};
+
+struct alignas(64) UnifiedTask {
+  TaskType type;
+  void* data;
+  size_t size;
+  uint64_t conn_id;
+  uint64_t mr_id;
+  TransferStatus* status_ptr{nullptr};
+
+  union SpecificData {
+    struct {
+      uint8_t reserved[kEndpointMaxReserveSize];
+    } base;
+
+    struct {
+      FifoItem slot_item;
+      uint8_t reserved[kEndpointMaxReserveSize - sizeof(FifoItem)];
+    } net;
+
+    struct {
+      IpcTransferInfo ipc_info;
+      uint8_t reserved[kEndpointMaxReserveSize - sizeof(IpcTransferInfo)];
+    } ipc;
+
+    struct {
+      TaskBatch task_batch;
+      uint8_t reserved[kEndpointMaxReserveSize - sizeof(TaskBatch)];
+    } batch;
+
+    SpecificData();
+    ~SpecificData();
+  } specific;
+
+  UnifiedTask();
+  ~UnifiedTask();
+
+  FifoItem& slot_item();
+  FifoItem const& slot_item() const;
+
+  IpcTransferInfo& ipc_info();
+  IpcTransferInfo const& ipc_info() const;
+
+  TaskBatch& task_batch();
+  TaskBatch const& task_batch() const;
+
+  bool is_batch_task() const;
+};
+
+// Tracks an in-flight IPC async copy (used by Endpoint).
+struct IpcInflightOp {
+  std::vector<gpuEvent_t> events;  // flattened events (all iovs × all streams)
+  void* raw_ptr;                   // non-null for scalar ops
+  TransferStatus* status;
+  int gpu_idx;  // used for scalar ops
+  // Vectorized only (populated when raw_ptr == nullptr):
+  std::vector<void*> raw_ptrs_v;
+  std::vector<int> gpu_idxs_v;
+};
+
+// -----------------------------------------------------------------------------
+// The main P2P Endpoint class declaration
+// -----------------------------------------------------------------------------
+
 class Endpoint {
+  static constexpr int kMaxNumGPUs = 8;
   static constexpr size_t kIpcAlignment = 1ul << 20;
   static constexpr size_t kIpcSizePerEngine = 1ul << 20;
   static constexpr int kMaxInflightOps = 8;  // Max 8 concurrent Ops
+  static constexpr size_t ShmRingDefaultElemCnt = 16;
+  static constexpr size_t kTaskRingSize = 1024;
 
-  // For ShmChannel
-  enum class ShmMsgType : uint32_t {
-    CONNECT = 0,
-    IPC_HANDLE = 1,
-    COMPLETION = 2,
-  };
-
-  struct ShmMsg {
-    uint32_t src_gpu;
-    ShmMsgType type;
-    union {
-      Endpoint::IpcTransferInfo info;
-      uint32_t completion;
-    };
-    ShmMsg();
-  };
+  static std::once_flag glog_init_once;
+  static int parse_log_level_from_env();
 
  public:
-  // Prepare transfer info structure for receiving IPC handle
-  struct IpcTransferInfo {
-    gpuIpcMemHandle_t handle;
-    uintptr_t offset;
-    size_t size;
-    uint32_t operation;  // 0 = send_ipc request, 1 = recv_ipc response
-    bool is_host;        // true if this side's buffer is CPU memory
-  };
-
   /* Create engine threads running in background for a single interface. It also
    * opens a TCP listening thread waiting for incoming connections. */
   Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus);
@@ -131,6 +267,7 @@ class Endpoint {
    * call accept() but delegate it to a background thread.
    */
   Endpoint(uint32_t const num_cpus);
+
   ~Endpoint();
 
   /* Connect to a remote server via TCP, then build RDMA QP connections. */
@@ -328,167 +465,54 @@ class Endpoint {
   int local_gpu_idx_;
   uint32_t num_cpus_;
   int numa_node_;
-
   RDMAEndPoint ep_;
   bool engine_initialized_ = false;
-
   std::atomic<uint64_t> next_conn_id_ = 0;
   std::atomic<uint64_t> next_mr_id_ = 0;
   std::atomic<uint64_t> next_transfer_id_ = 0;
-
-  // Accessed by both app thread and proxy thread.
+  /* Accessed by both app thread and proxy thread. */
   mutable std::shared_mutex conn_mu_;
   std::unordered_map<uint64_t, Conn*> conn_id_to_conn_;
   std::unordered_map<uint64_t, uint64_t> conn_id_to_conn_efa_;
   mutable std::shared_mutex mr_mu_;
   std::unordered_map<uint64_t, MR*> mr_id_to_mr_;
-
   std::unordered_map<std::vector<uint8_t>, uint64_t, VectorUint8Hash>
       remote_endpoint_to_conn_id_;
-
-  // Single-threaded.
+  /* Single-threaded access only. */
   std::unordered_map<int, uint64_t> rank2conn_;
-
-  // JRing for local
+  /* JRing for local */
   std::array<ShmRingHandle, kMaxNumGPUs> inbox_rings_;
   std::array<bool, kMaxNumGPUs> inbox_creators_;
-
   std::vector<std::vector<gpuStream_t>> ipc_streams_;
-
-  static constexpr size_t kTaskRingSize = 1024;
-
-  enum class TaskType {
-    SEND_NET,
-    RECV_NET,
-    SEND_IPC,
-    RECV_IPC,
-    WRITE_NET,
-    READ_NET,
-    WRITE_IPC,
-    READ_IPC,
-    SENDV,
-    RECVV,
-    WRITEV,
-    READV,
-  };
-  
-  struct TaskBatch {
-    size_t num_iovs;  // Number of IO vectors
-    std::shared_ptr<std::vector<void const*>> const_data_ptr;  // for SENDV
-    std::shared_ptr<std::vector<void*>> data_ptr;  // for RECVV/READV/WRITEV
-    std::shared_ptr<std::vector<size_t>> size_ptr;
-    std::shared_ptr<std::vector<uint64_t>> mr_id_ptr;
-    std::shared_ptr<std::vector<FifoItem>> slot_item_ptr;  // for READV/WRITEV
-
-    TaskBatch();
-    TaskBatch(TaskBatch&& other) noexcept;
-    TaskBatch& operator=(TaskBatch&& other) noexcept;
-
-    TaskBatch(TaskBatch const&) = delete;
-    TaskBatch& operator=(TaskBatch const&) = delete;
-
-    void const** const_data_v() const;
-    void** data_v() const;
-    size_t* size_v() const;
-    uint64_t* mr_id_v() const;
-    FifoItem* slot_item_v() const;
-  };
-
-  struct alignas(64) Task {
-    TaskType type;
-    void* data;
-    size_t size;
-    uint64_t conn_id;
-    uint64_t mr_id;
-  };
-
-  struct alignas(64) NetRwTask {
-    TaskType type;
-    void* data;
-    size_t size;
-    uint64_t conn_id;
-    uint64_t mr_id;
-    FifoItem slot_item;
-  };
-
-  struct alignas(64) IpcRwTask {
-    TaskType type;
-    void* data;
-    size_t size;
-    uint64_t conn_id;
-    uint64_t mr_id;
-    IpcTransferInfo ipc_info;
-  };
-
-  static constexpr size_t MAX_RESERVE_SIZE =
-      uccl::max_sizeof<FifoItem, IpcTransferInfo, TaskBatch>();
-
-  struct UnifiedTask;
-
-  struct TransferStatus {
-    std::atomic<bool> done{false};
-    std::shared_ptr<UnifiedTask> task_ptr;
-  };
-
-  struct alignas(64) UnifiedTask {
-    TaskType type;
-    void* data;
-    size_t size;
-    uint64_t conn_id;
-    uint64_t mr_id;
-    TransferStatus* status_ptr{nullptr};
-
-    union SpecificData {
-      struct {
-        uint8_t reserved[MAX_RESERVE_SIZE];
-      } base;
-
-      struct {
-        FifoItem slot_item;
-        uint8_t reserved[MAX_RESERVE_SIZE - sizeof(FifoItem)];
-      } net;
-
-      struct {
-        IpcTransferInfo ipc_info;
-        uint8_t reserved[MAX_RESERVE_SIZE - sizeof(IpcTransferInfo)];
-      } ipc;
-
-      struct {
-        TaskBatch task_batch;
-        uint8_t reserved[MAX_RESERVE_SIZE - sizeof(TaskBatch)];
-      } batch;
-
-      SpecificData();
-      // Explicit trivial destructor so the union is not implicitly deleted
-      ~SpecificData();
-    } specific;
-
-    UnifiedTask();
-    ~UnifiedTask();
-
-    FifoItem& slot_item();
-    FifoItem const& slot_item() const;
-
-    IpcTransferInfo& ipc_info();
-    IpcTransferInfo const& ipc_info() const;
-
-    TaskBatch& task_batch();
-    TaskBatch const& task_batch() const;
-
-    bool is_batch_task() const;
-  };
-
-  /** Rank‑indexed view of established connections (read‑only). */
-  std::unordered_map<int, uint64_t> const& rank2conn() const;
+  /* For both net and ipc send/recv tasks. */
+  jring_t* send_unified_task_ring_ = nullptr;
+  jring_t* recv_unified_task_ring_ = nullptr;
+  jring_t* ipc_inflight_ring_ = nullptr;
+  std::atomic<bool> stop_{false};
+  std::thread send_proxy_thread_;
+  std::thread recv_proxy_thread_;
+  /* MPSC ring: caller threads push IpcInflightOp*, poller thread drains it. */
+  std::thread ipc_poller_thread_;
+  /* For background passive accept thread. */
+  bool passive_accept_;
+  std::atomic<bool> passive_accept_stop_{false};
+  std::thread passive_accept_thread_;
 
   /* Initialize the engine Internal helper function for lazy initialization. */
   void initialize_engine();
 
+  /* Background threads for send/recv/ipc/passive accept. */
+  void send_proxy_thread_func();
+  void recv_proxy_thread_func();
+  void passive_accept_thread_func();
+  void ipc_poller_thread_func();
+
   std::shared_ptr<UnifiedTask> create_task(uint64_t conn_id, uint64_t mr_id,
                                            TaskType type, void* data,
                                            size_t size);
-  std::shared_ptr<UnifiedTask> create_batch_task(uint64_t conn_id, TaskType type,
-                                                TaskBatch&& batch);
+  std::shared_ptr<UnifiedTask> create_batch_task(uint64_t conn_id,
+                                                 TaskType type,
+                                                 TaskBatch&& batch);
   std::shared_ptr<UnifiedTask> create_sendv_task(
       uint64_t conn_id,
       std::shared_ptr<std::vector<void const*>> const_data_ptr,
@@ -506,45 +530,11 @@ class Endpoint {
       std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
       std::vector<FifoItem>&& slot_item_v);
   std::shared_ptr<UnifiedTask> create_net_task(uint64_t conn_id, uint64_t mr_id,
-                                                TaskType type, void* data,
-                                                size_t size,
-                                                FifoItem const& slot_item);
-  std::shared_ptr<UnifiedTask> create_ipc_task(
-      uint64_t conn_id, uint64_t mr_id, TaskType type, void* data, size_t size,
-      IpcTransferInfo const& ipc_info);
-
-  // For both net and ipc send/recv tasks.
-  jring_t* send_unified_task_ring_ = nullptr;
-  jring_t* recv_unified_task_ring_ = nullptr;
-
-  std::atomic<bool> stop_{false};
-  std::thread send_proxy_thread_;
-  std::thread recv_proxy_thread_;
-  void send_proxy_thread_func();
-  void recv_proxy_thread_func();
-
-  std::atomic<bool> passive_accept_stop_{false};
-  bool passive_accept_;
-  std::thread passive_accept_thread_;
-  void passive_accept_thread_func();
-
-  // Tracks an in-flight IPC async copy: one event per chunk stream, the opened
-  // IPC handle to close on completion, and the status to signal.
-  // For vectorized ops raw_ptr is nullptr and raw_ptrs_v / gpu_idxs_v are used.
-  struct IpcInflightOp {
-    std::vector<gpuEvent_t>
-        events;     // flattened events (all iovs × all streams)
-    void* raw_ptr;  // non-null for scalar ops
-    TransferStatus* status;
-    int gpu_idx;  // used for scalar ops
-    // Vectorized only (populated when raw_ptr == nullptr):
-    std::vector<void*> raw_ptrs_v;
-    std::vector<int> gpu_idxs_v;
-  };
-
-  // MPSC ring: caller threads push IpcInflightOp*, poller thread drains it.
-  jring_t* ipc_inflight_ring_ = nullptr;
-
-  std::thread ipc_poller_thread_;
-  void ipc_poller_thread_func();
+                                               TaskType type, void* data,
+                                               size_t size,
+                                               FifoItem const& slot_item);
+  std::shared_ptr<UnifiedTask> create_ipc_task(uint64_t conn_id, uint64_t mr_id,
+                                               TaskType type, void* data,
+                                               size_t size,
+                                               IpcTransferInfo const& ipc_info);
 };

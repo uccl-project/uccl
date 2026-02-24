@@ -1004,9 +1004,9 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
              py::bytes info_blob) {
             std::string buf = info_blob;
-            CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
+            CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                 << "IpcTransferInfo size mismatch";
-            Endpoint::IpcTransferInfo info;
+            IpcTransferInfo info;
             std::memcpy(&info, buf.data(), sizeof(info));
             bool success;
             {
@@ -1024,9 +1024,9 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
              py::bytes info_blob) {
             std::string buf = info_blob;
-            CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
+            CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                 << "IpcTransferInfo size mismatch";
-            Endpoint::IpcTransferInfo info;
+            IpcTransferInfo info;
             std::memcpy(&info, buf.data(), sizeof(info));
             bool success;
             {
@@ -1044,9 +1044,9 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
              py::bytes info_blob) {
             std::string buf = info_blob;
-            CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
+            CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                 << "IpcTransferInfo size mismatch";
-            Endpoint::IpcTransferInfo info;
+            IpcTransferInfo info;
             std::memcpy(&info, buf.data(), sizeof(info));
             uint64_t transfer_id;
             bool success;
@@ -1066,9 +1066,9 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
              py::bytes info_blob) {
             std::string buf = info_blob;
-            CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
+            CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                 << "IpcTransferInfo size mismatch";
-            Endpoint::IpcTransferInfo info;
+            IpcTransferInfo info;
             std::memcpy(&info, buf.data(), sizeof(info));
             uint64_t transfer_id;
             bool success;
@@ -1092,11 +1092,11 @@ PYBIND11_MODULE(p2p, m) {
             CHECK_EQ(info_v.size(), num_iovs) << "writev_ipc: info_v mismatch";
 
             std::vector<void const*> data_ptrs(num_iovs);
-            std::vector<Endpoint::IpcTransferInfo> infos(num_iovs);
+            std::vector<IpcTransferInfo> infos(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
               data_ptrs[i] = reinterpret_cast<void const*>(ptr_v[i]);
               std::string buf = info_v[i];
-              CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
+              CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                   << "IpcTransferInfo size mismatch at index " << i;
               std::memcpy(&infos[i], buf.data(), sizeof(infos[i]));
             }
@@ -1121,11 +1121,11 @@ PYBIND11_MODULE(p2p, m) {
             CHECK_EQ(info_v.size(), num_iovs) << "readv_ipc: info_v mismatch";
 
             std::vector<void*> data_ptrs(num_iovs);
-            std::vector<Endpoint::IpcTransferInfo> infos(num_iovs);
+            std::vector<IpcTransferInfo> infos(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
               data_ptrs[i] = reinterpret_cast<void*>(ptr_v[i]);
               std::string buf = info_v[i];
-              CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
+              CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                   << "IpcTransferInfo size mismatch at index " << i;
               std::memcpy(&infos[i], buf.data(), sizeof(infos[i]));
             }
@@ -1152,11 +1152,11 @@ PYBIND11_MODULE(p2p, m) {
                 << "writev_ipc_async: info_v mismatch";
 
             std::vector<void const*> data_ptrs(num_iovs);
-            std::vector<Endpoint::IpcTransferInfo> infos(num_iovs);
+            std::vector<IpcTransferInfo> infos(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
               data_ptrs[i] = reinterpret_cast<void const*>(ptr_v[i]);
               std::string buf = info_v[i];
-              CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
+              CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                   << "IpcTransferInfo size mismatch at index " << i;
               std::memcpy(&infos[i], buf.data(), sizeof(infos[i]));
             }
@@ -1184,11 +1184,11 @@ PYBIND11_MODULE(p2p, m) {
                 << "readv_ipc_async: info_v mismatch";
 
             std::vector<void*> data_ptrs(num_iovs);
-            std::vector<Endpoint::IpcTransferInfo> infos(num_iovs);
+            std::vector<IpcTransferInfo> infos(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
               data_ptrs[i] = reinterpret_cast<void*>(ptr_v[i]);
               std::string buf = info_v[i];
-              CHECK_EQ(buf.size(), sizeof(Endpoint::IpcTransferInfo))
+              CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                   << "IpcTransferInfo size mismatch at index " << i;
               std::memcpy(&infos[i], buf.data(), sizeof(infos[i]));
             }
@@ -1208,7 +1208,7 @@ PYBIND11_MODULE(p2p, m) {
       .def(
           "advertise_ipc",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
-            char serialized[sizeof(Endpoint::IpcTransferInfo)]{};
+            char serialized[sizeof(IpcTransferInfo)]{};
             bool success;
             {
               py::gil_scoped_release release;
@@ -1234,7 +1234,7 @@ PYBIND11_MODULE(p2p, m) {
 
             for (size_t i = 0; i < num_iovs; ++i) {
               addr_v[i] = reinterpret_cast<void*>(ptr_v[i]);
-              buffers[i].resize(sizeof(Endpoint::IpcTransferInfo));
+              buffers[i].resize(sizeof(IpcTransferInfo));
               out_buf_v[i] = buffers[i].data();
             }
 

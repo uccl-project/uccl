@@ -18,11 +18,147 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-std::once_flag glog_init_once;
-constexpr uint32_t kGpuStreamId = 0;
 thread_local bool inside_python = false;
 
-int parseLogLevelFromEnv() {
+std::size_t VectorUint8Hash::operator()(
+    std::vector<uint8_t> const& vec) const {
+  std::size_t hash = vec.size();
+  for (uint8_t byte : vec) {
+    hash = hash * 31 + static_cast<std::size_t>(byte);
+  }
+  return hash;
+}
+
+ShmMsg::ShmMsg()
+    : src_gpu(0), type(ShmMsgType::COMPLETION), completion(0) {}
+
+// TaskBatch (declaration order: after ShmMsg, before Endpoint)
+TaskBatch::TaskBatch() : num_iovs(0) {}
+
+TaskBatch::TaskBatch(TaskBatch&& other) noexcept
+    : num_iovs(other.num_iovs),
+      const_data_ptr(std::move(other.const_data_ptr)),
+      data_ptr(std::move(other.data_ptr)),
+      size_ptr(std::move(other.size_ptr)),
+      mr_id_ptr(std::move(other.mr_id_ptr)),
+      slot_item_ptr(std::move(other.slot_item_ptr)) {}
+
+TaskBatch& TaskBatch::operator=(TaskBatch&& other) noexcept {
+  if (this != &other) {
+    num_iovs = other.num_iovs;
+    const_data_ptr = std::move(other.const_data_ptr);
+    data_ptr = std::move(other.data_ptr);
+    size_ptr = std::move(other.size_ptr);
+    mr_id_ptr = std::move(other.mr_id_ptr);
+    slot_item_ptr = std::move(other.slot_item_ptr);
+  }
+  return *this;
+}
+
+void const** TaskBatch::const_data_v() const {
+  if (!const_data_ptr) return nullptr;
+  return const_data_ptr->data();
+}
+void** TaskBatch::data_v() const {
+  if (!data_ptr) return nullptr;
+  return data_ptr->data();
+}
+size_t* TaskBatch::size_v() const {
+  if (!size_ptr) return nullptr;
+  return size_ptr->data();
+}
+uint64_t* TaskBatch::mr_id_v() const {
+  if (!mr_id_ptr) return nullptr;
+  return mr_id_ptr->data();
+}
+FifoItem* TaskBatch::slot_item_v() const {
+  if (!slot_item_ptr) return nullptr;
+  return slot_item_ptr->data();
+}
+
+// UnifiedTask (declaration order: after TaskBatch, before Endpoint)
+UnifiedTask::UnifiedTask()
+    : type(TaskType::SEND_NET),
+      data(nullptr),
+      size(0),
+      conn_id(0),
+      mr_id(0),
+      status_ptr(nullptr),
+      specific() {}
+
+UnifiedTask::~UnifiedTask() {
+  if (is_batch_task()) {
+    specific.batch.task_batch.~TaskBatch();
+  }
+}
+
+FifoItem& UnifiedTask::slot_item() { return specific.net.slot_item; }
+
+FifoItem const& UnifiedTask::slot_item() const {
+  return specific.net.slot_item;
+}
+
+IpcTransferInfo& UnifiedTask::ipc_info() {
+  return specific.ipc.ipc_info;
+}
+
+IpcTransferInfo const& UnifiedTask::ipc_info() const {
+  return specific.ipc.ipc_info;
+}
+
+TaskBatch& UnifiedTask::task_batch() {
+  return specific.batch.task_batch;
+}
+
+TaskBatch const& UnifiedTask::task_batch() const {
+  return specific.batch.task_batch;
+}
+
+bool UnifiedTask::is_batch_task() const {
+  return type == TaskType::SENDV || type == TaskType::RECVV ||
+         type == TaskType::WRITEV || type == TaskType::READV;
+}
+
+UnifiedTask::SpecificData::SpecificData() : base{} {}
+
+UnifiedTask::SpecificData::~SpecificData() {}
+
+static inline void check_python_signals() {
+  PyGILState_STATE gstate = PyGILState_Ensure();
+  if (PyErr_CheckSignals() != 0) {
+    std::cerr << "Python signal caught, exiting..." << std::endl;
+    std::abort();
+  }
+  PyGILState_Release(gstate);
+}
+
+// ShmChannel helper function
+static inline std::string shm_ring_name(int from_idx, int to_idx) {
+  return "/uccl_gpu_jring_" + std::to_string(from_idx) + "_" +
+         std::to_string(to_idx);
+}
+
+static inline void shm_ring_send(jring_t* ring, ShmMsg const& msg) {
+  // jring bulk copy requires 16B aligned buffer
+  alignas(16) ShmMsg tmp = msg;
+
+  while (jring_mp_enqueue_bulk(ring, (void*)&tmp, 1, nullptr) != 1) {
+    machnet_pause();
+  }
+}
+
+static inline void shm_ring_recv(jring_t* ring, ShmMsg& msg) {
+  alignas(16) ShmMsg tmp;
+
+  while (jring_sc_dequeue_bulk(ring, (void*)&tmp, 1, nullptr) != 1) {
+    machnet_pause();
+  }
+  msg = tmp;
+}
+
+std::once_flag Endpoint::glog_init_once;
+
+int Endpoint::parse_log_level_from_env() {
   char const* env = std::getenv("UCCL_P2P_LOG_LEVEL");
   if (!env) {
     return google::WARNING;
@@ -42,50 +178,9 @@ int parseLogLevelFromEnv() {
   return google::WARNING;
 }
 
-std::size_t VectorUint8Hash::operator()(
-    std::vector<uint8_t> const& vec) const {
-  std::size_t hash = vec.size();
-  for (uint8_t byte : vec) {
-    hash = hash * 31 + static_cast<std::size_t>(byte);
-  }
-  return hash;
-}
-
-Endpoint::ShmMsg::ShmMsg()
-    : src_gpu(0), type(ShmMsgType::COMPLETION), completion(0) {}
-
-inline void check_python_signals() {
-  PyGILState_STATE gstate = PyGILState_Ensure();
-  if (PyErr_CheckSignals() != 0) {
-    std::cerr << "Python signal caught, exiting..." << std::endl;
-    std::abort();
-  }
-  PyGILState_Release(gstate);
-}
-
-// ShmChannel helper function
-static inline std::string shm_ring_name(int from_idx, int to_idx) {
-  return "/uccl_gpu_jring_" + std::to_string(from_idx) + "_" +
-         std::to_string(to_idx);
-}
-
-static inline void shm_ring_send(jring_t* ring, Endpoint::ShmMsg const& msg) {
-  // jring bulk copy requires 16B aligned buffer
-  alignas(16) Endpoint::ShmMsg tmp = msg;
-
-  while (jring_mp_enqueue_bulk(ring, (void*)&tmp, 1, nullptr) != 1) {
-    machnet_pause();
-  }
-}
-
-static inline void shm_ring_recv(jring_t* ring, Endpoint::ShmMsg& msg) {
-  alignas(16) Endpoint::ShmMsg tmp;
-
-  while (jring_sc_dequeue_bulk(ring, (void*)&tmp, 1, nullptr) != 1) {
-    machnet_pause();
-  }
-  msg = tmp;
-}
+// -----------------------------------------------------------------------------
+// The main P2P Endpoint class implementation
+// -----------------------------------------------------------------------------
 
 Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
     : local_gpu_idx_(local_gpu_idx),
@@ -108,9 +203,9 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   }
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
-  std::call_once(glog_init_once,
+  std::call_once(Endpoint::glog_init_once,
                  []() { google::InitGoogleLogging("uccl_p2p"); });
-  FLAGS_minloglevel = parseLogLevelFromEnv();
+  FLAGS_minloglevel = Endpoint::parse_log_level_from_env();
   FLAGS_logtostderr = true;
   google::InstallFailureSignalHandler();
 
@@ -684,6 +779,35 @@ bool Endpoint::sendv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   return true;
 }
 
+bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                           std::vector<void const*> data_v,
+                           std::vector<size_t> size_v, size_t num_iovs,
+                           uint64_t* transfer_id) {
+  auto const_data_ptr =
+      std::make_shared<std::vector<void const*>>(std::move(data_v));
+  auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
+  auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
+
+  auto task_ptr = create_sendv_task(conn_id, std::move(const_data_ptr),
+                                    std::move(size_ptr), std::move(mr_id_ptr));
+  if (unlikely(task_ptr == nullptr)) {
+    return false;
+  }
+
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
+
+  UnifiedTask* task_raw = task_ptr.get();
+
+  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
+                               nullptr) != 1) {
+  }
+
+  return true;
+}
+
 bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
                      std::vector<void*> data_v, std::vector<size_t> size_v,
                      size_t num_iovs) {
@@ -742,6 +866,31 @@ bool Endpoint::recvv(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   return true;
 }
 
+bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
+                           std::vector<void*> data_v,
+                           std::vector<size_t> size_v, size_t num_iovs,
+                           uint64_t* transfer_id) {
+  // Use move semantics to reduce memory copies
+  auto task_ptr = create_recvv_task(conn_id, std::move(data_v),
+                                    std::move(size_v), std::move(mr_id_v));
+  if (unlikely(task_ptr == nullptr)) {
+    return false;
+  }
+
+  auto* status = new TransferStatus();
+  status->task_ptr = task_ptr;
+  task_ptr->status_ptr = status;
+  *transfer_id = reinterpret_cast<uint64_t>(status);
+
+  UnifiedTask* task_raw = task_ptr.get();
+
+  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
+                               nullptr) != 1) {
+  }
+
+  return true;
+}
+
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                     FifoItem const& slot_item) {
   DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
@@ -781,60 +930,6 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           uint64_t* transfer_id) {
   auto task_ptr =
       create_net_task(conn_id, mr_id, TaskType::READ_NET, dst, size, slot_item);
-  if (unlikely(task_ptr == nullptr)) {
-    return false;
-  }
-
-  auto* status = new TransferStatus();
-  status->task_ptr = task_ptr;
-  task_ptr->status_ptr = status;
-  *transfer_id = reinterpret_cast<uint64_t>(status);
-
-  UnifiedTask* task_raw = task_ptr.get();
-
-  while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
-                               nullptr) != 1) {
-  }
-
-  return true;
-}
-
-bool Endpoint::sendv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                           std::vector<void const*> data_v,
-                           std::vector<size_t> size_v, size_t num_iovs,
-                           uint64_t* transfer_id) {
-  auto const_data_ptr =
-      std::make_shared<std::vector<void const*>>(std::move(data_v));
-  auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
-  auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
-
-  auto task_ptr = create_sendv_task(conn_id, std::move(const_data_ptr),
-                                    std::move(size_ptr), std::move(mr_id_ptr));
-  if (unlikely(task_ptr == nullptr)) {
-    return false;
-  }
-
-  auto* status = new TransferStatus();
-  status->task_ptr = task_ptr;
-  task_ptr->status_ptr = status;
-  *transfer_id = reinterpret_cast<uint64_t>(status);
-
-  UnifiedTask* task_raw = task_ptr.get();
-
-  while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
-                               nullptr) != 1) {
-  }
-
-  return true;
-}
-
-bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
-                           std::vector<void*> data_v,
-                           std::vector<size_t> size_v, size_t num_iovs,
-                           uint64_t* transfer_id) {
-  // Use move semantics to reduce memory copies
-  auto task_ptr = create_recvv_task(conn_id, std::move(data_v),
-                                    std::move(size_v), std::move(mr_id_v));
   if (unlikely(task_ptr == nullptr)) {
     return false;
   }
@@ -924,6 +1019,38 @@ bool Endpoint::readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
   while (jring_mp_enqueue_bulk(recv_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
+  }
+
+  return true;
+}
+
+bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
+                     FifoItem const& slot_item) {
+  DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
+  auto* conn = get_conn(conn_id);
+  if (unlikely(conn == nullptr)) {
+    std::cerr << "[write] Error: Invalid conn_id " << conn_id << std::endl;
+    return false;
+  }
+  P2PMhandle* mhandle = get_mhandle(mr_id);
+  if (unlikely(mhandle == nullptr)) {
+    std::cerr << "[write] Error: Invalid mr_id " << mr_id << std::endl;
+    return false;
+  }
+  ucclRequest ureq = {};
+  FifoItem curr_slot_item = slot_item;
+  curr_slot_item.size = size;
+
+  while (uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
+                          &ureq) == -1)
+    ;
+
+  bool done = false;
+  while (!done) {
+    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
+    if (uccl_poll_ureq_once(ep_, &ureq)) {
+      done = true;
+    }
   }
 
   return true;
@@ -1023,38 +1150,6 @@ bool Endpoint::writev_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
   while (jring_mp_enqueue_bulk(send_unified_task_ring_, &task_raw, 1,
                                nullptr) != 1) {
-  }
-
-  return true;
-}
-
-bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
-                     FifoItem const& slot_item) {
-  DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
-  auto* conn = get_conn(conn_id);
-  if (unlikely(conn == nullptr)) {
-    std::cerr << "[write] Error: Invalid conn_id " << conn_id << std::endl;
-    return false;
-  }
-  P2PMhandle* mhandle = get_mhandle(mr_id);
-  if (unlikely(mhandle == nullptr)) {
-    std::cerr << "[write] Error: Invalid mr_id " << mr_id << std::endl;
-    return false;
-  }
-  ucclRequest ureq = {};
-  FifoItem curr_slot_item = slot_item;
-  curr_slot_item.size = size;
-
-  while (uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
-                          &ureq) == -1)
-    ;
-
-  bool done = false;
-  while (!done) {
-    auto _ = inside_python ? (check_python_signals(), nullptr) : nullptr;
-    if (uccl_poll_ureq_once(ep_, &ureq)) {
-      done = true;
-    }
   }
 
   return true;
@@ -2152,10 +2247,6 @@ Conn* Endpoint::get_conn(uint64_t conn_id) const {
 
 RDMAEndPoint Endpoint::get_endpoint() const { return ep_; }
 
-std::unordered_map<int, uint64_t> const& Endpoint::rank2conn() const {
-  return rank2conn_;
-}
-
 void Endpoint::initialize_engine() {
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
@@ -2192,223 +2283,6 @@ void Endpoint::initialize_engine() {
         inbox_rings_[i].shm_name.c_str(), elem_sz, elem_cnt,
         inbox_rings_[i].shm_fd, inbox_rings_[i].shm_size, &inbox_creators_[i]);
   }
-}
-
-// TaskBatch
-Endpoint::TaskBatch::TaskBatch() : num_iovs(0) {}
-
-Endpoint::TaskBatch::TaskBatch(TaskBatch&& other) noexcept
-    : num_iovs(other.num_iovs),
-      const_data_ptr(std::move(other.const_data_ptr)),
-      data_ptr(std::move(other.data_ptr)),
-      size_ptr(std::move(other.size_ptr)),
-      mr_id_ptr(std::move(other.mr_id_ptr)),
-      slot_item_ptr(std::move(other.slot_item_ptr)) {}
-
-Endpoint::TaskBatch& Endpoint::TaskBatch::operator=(TaskBatch&& other) noexcept {
-  if (this != &other) {
-    num_iovs = other.num_iovs;
-    const_data_ptr = std::move(other.const_data_ptr);
-    data_ptr = std::move(other.data_ptr);
-    size_ptr = std::move(other.size_ptr);
-    mr_id_ptr = std::move(other.mr_id_ptr);
-    slot_item_ptr = std::move(other.slot_item_ptr);
-  }
-  return *this;
-}
-
-void const** Endpoint::TaskBatch::const_data_v() const {
-  if (!const_data_ptr) return nullptr;
-  return const_data_ptr->data();
-}
-void** Endpoint::TaskBatch::data_v() const {
-  if (!data_ptr) return nullptr;
-  return data_ptr->data();
-}
-size_t* Endpoint::TaskBatch::size_v() const {
-  if (!size_ptr) return nullptr;
-  return size_ptr->data();
-}
-uint64_t* Endpoint::TaskBatch::mr_id_v() const {
-  if (!mr_id_ptr) return nullptr;
-  return mr_id_ptr->data();
-}
-FifoItem* Endpoint::TaskBatch::slot_item_v() const {
-  if (!slot_item_ptr) return nullptr;
-  return slot_item_ptr->data();
-}
-
-// UnifiedTask
-Endpoint::UnifiedTask::UnifiedTask()
-    : type(TaskType::SEND_NET),
-      data(nullptr),
-      size(0),
-      conn_id(0),
-      mr_id(0),
-      status_ptr(nullptr),
-      specific() {}
-
-Endpoint::UnifiedTask::~UnifiedTask() {
-  if (is_batch_task()) {
-    specific.batch.task_batch.~TaskBatch();
-  }
-}
-
-FifoItem& Endpoint::UnifiedTask::slot_item() { return specific.net.slot_item; }
-
-FifoItem const& Endpoint::UnifiedTask::slot_item() const {
-  return specific.net.slot_item;
-}
-
-Endpoint::IpcTransferInfo& Endpoint::UnifiedTask::ipc_info() {
-  return specific.ipc.ipc_info;
-}
-
-Endpoint::IpcTransferInfo const& Endpoint::UnifiedTask::ipc_info() const {
-  return specific.ipc.ipc_info;
-}
-
-Endpoint::TaskBatch& Endpoint::UnifiedTask::task_batch() {
-  return specific.batch.task_batch;
-}
-
-Endpoint::TaskBatch const& Endpoint::UnifiedTask::task_batch() const {
-  return specific.batch.task_batch;
-}
-
-bool Endpoint::UnifiedTask::is_batch_task() const {
-  return type == TaskType::SENDV || type == TaskType::RECVV ||
-         type == TaskType::WRITEV || type == TaskType::READV;
-}
-
-Endpoint::UnifiedTask::SpecificData::SpecificData() : base{} {}
-
-Endpoint::UnifiedTask::SpecificData::~SpecificData() {}
-
-// create_* helpers
-std::shared_ptr<Endpoint::UnifiedTask> Endpoint::create_task(
-    uint64_t conn_id, uint64_t mr_id, TaskType type, void* data, size_t size) {
-  auto task = std::make_shared<UnifiedTask>();
-  task->type = type;
-  task->data = data;
-  task->size = size;
-  task->conn_id = conn_id;
-  task->mr_id = mr_id;
-  return task;
-}
-
-std::shared_ptr<Endpoint::UnifiedTask> Endpoint::create_batch_task(
-    uint64_t conn_id, TaskType type, TaskBatch&& batch) {
-  auto task = std::make_shared<UnifiedTask>();
-  task->type = type;
-  task->conn_id = conn_id;
-  task->mr_id = 0;
-  task->data = nullptr;
-  task->size = 0;
-  new (&task->specific.batch.task_batch) TaskBatch(std::move(batch));
-  return task;
-}
-
-std::shared_ptr<Endpoint::UnifiedTask> Endpoint::create_sendv_task(
-    uint64_t conn_id,
-    std::shared_ptr<std::vector<void const*>> const_data_ptr,
-    std::shared_ptr<std::vector<size_t>> size_ptr,
-    std::shared_ptr<std::vector<uint64_t>> mr_id_ptr) {
-  if (!const_data_ptr || !size_ptr || !mr_id_ptr ||
-      const_data_ptr->size() != size_ptr->size() ||
-      size_ptr->size() != mr_id_ptr->size()) {
-    return nullptr;
-  }
-  size_t num_iovs = const_data_ptr->size();
-  TaskBatch batch;
-  batch.num_iovs = num_iovs;
-  batch.const_data_ptr = std::move(const_data_ptr);
-  batch.size_ptr = std::move(size_ptr);
-  batch.mr_id_ptr = std::move(mr_id_ptr);
-  return create_batch_task(conn_id, TaskType::SENDV, std::move(batch));
-}
-
-std::shared_ptr<Endpoint::UnifiedTask> Endpoint::create_recvv_task(
-    uint64_t conn_id, std::vector<void*>&& data_v,
-    std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v) {
-  if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size()) {
-    return nullptr;
-  }
-  size_t num_iovs = data_v.size();
-  auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
-  auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
-  auto mr_id_ptr =
-      std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
-  TaskBatch batch;
-  batch.num_iovs = num_iovs;
-  batch.data_ptr = std::move(data_ptr);
-  batch.size_ptr = std::move(size_ptr);
-  batch.mr_id_ptr = std::move(mr_id_ptr);
-  return create_batch_task(conn_id, TaskType::RECVV, std::move(batch));
-}
-
-std::shared_ptr<Endpoint::UnifiedTask> Endpoint::create_writev_task(
-    uint64_t conn_id, std::vector<void*>&& data_v,
-    std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
-    std::vector<FifoItem>&& slot_item_v) {
-  if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
-      mr_id_v.size() != slot_item_v.size()) {
-    return nullptr;
-  }
-  size_t num_iovs = data_v.size();
-  auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
-  auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
-  auto mr_id_ptr =
-      std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
-  auto slot_item_ptr =
-      std::make_shared<std::vector<FifoItem>>(std::move(slot_item_v));
-  TaskBatch batch;
-  batch.num_iovs = num_iovs;
-  batch.data_ptr = std::move(data_ptr);
-  batch.size_ptr = std::move(size_ptr);
-  batch.mr_id_ptr = std::move(mr_id_ptr);
-  batch.slot_item_ptr = std::move(slot_item_ptr);
-  return create_batch_task(conn_id, TaskType::WRITEV, std::move(batch));
-}
-
-std::shared_ptr<Endpoint::UnifiedTask> Endpoint::create_readv_task(
-    uint64_t conn_id, std::vector<void*>&& data_v,
-    std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
-    std::vector<FifoItem>&& slot_item_v) {
-  if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
-      mr_id_v.size() != slot_item_v.size()) {
-    return nullptr;
-  }
-  size_t num_iovs = data_v.size();
-  auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
-  auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
-  auto mr_id_ptr =
-      std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
-  auto slot_item_ptr =
-      std::make_shared<std::vector<FifoItem>>(std::move(slot_item_v));
-  TaskBatch batch;
-  batch.num_iovs = num_iovs;
-  batch.data_ptr = std::move(data_ptr);
-  batch.size_ptr = std::move(size_ptr);
-  batch.mr_id_ptr = std::move(mr_id_ptr);
-  batch.slot_item_ptr = std::move(slot_item_ptr);
-  return create_batch_task(conn_id, TaskType::READV, std::move(batch));
-}
-
-std::shared_ptr<Endpoint::UnifiedTask> Endpoint::create_net_task(
-    uint64_t conn_id, uint64_t mr_id, TaskType type, void* data, size_t size,
-    FifoItem const& slot_item) {
-  auto task = create_task(conn_id, mr_id, type, data, size);
-  task->slot_item() = slot_item;
-  return task;
-}
-
-std::shared_ptr<Endpoint::UnifiedTask> Endpoint::create_ipc_task(
-    uint64_t conn_id, uint64_t mr_id, TaskType type, void* data, size_t size,
-    IpcTransferInfo const& ipc_info) {
-  auto task = create_task(conn_id, mr_id, type, data, size);
-  task->ipc_info() = ipc_info;
-  return task;
 }
 
 void Endpoint::send_proxy_thread_func() {
@@ -2597,4 +2471,129 @@ void Endpoint::ipc_poller_thread_func() {
       }
     }
   }
+}
+
+std::shared_ptr<UnifiedTask> Endpoint::create_task(
+    uint64_t conn_id, uint64_t mr_id, TaskType type, void* data, size_t size) {
+  auto task = std::make_shared<UnifiedTask>();
+  task->type = type;
+  task->data = data;
+  task->size = size;
+  task->conn_id = conn_id;
+  task->mr_id = mr_id;
+  return task;
+}
+
+std::shared_ptr<UnifiedTask> Endpoint::create_batch_task(
+    uint64_t conn_id, TaskType type, TaskBatch&& batch) {
+  auto task = std::make_shared<UnifiedTask>();
+  task->type = type;
+  task->conn_id = conn_id;
+  task->mr_id = 0;
+  task->data = nullptr;
+  task->size = 0;
+  new (&task->specific.batch.task_batch) TaskBatch(std::move(batch));
+  return task;
+}
+
+std::shared_ptr<UnifiedTask> Endpoint::create_sendv_task(
+    uint64_t conn_id,
+    std::shared_ptr<std::vector<void const*>> const_data_ptr,
+    std::shared_ptr<std::vector<size_t>> size_ptr,
+    std::shared_ptr<std::vector<uint64_t>> mr_id_ptr) {
+  if (!const_data_ptr || !size_ptr || !mr_id_ptr ||
+      const_data_ptr->size() != size_ptr->size() ||
+      size_ptr->size() != mr_id_ptr->size()) {
+    return nullptr;
+  }
+  size_t num_iovs = const_data_ptr->size();
+  TaskBatch batch;
+  batch.num_iovs = num_iovs;
+  batch.const_data_ptr = std::move(const_data_ptr);
+  batch.size_ptr = std::move(size_ptr);
+  batch.mr_id_ptr = std::move(mr_id_ptr);
+  return create_batch_task(conn_id, TaskType::SENDV, std::move(batch));
+}
+
+std::shared_ptr<UnifiedTask> Endpoint::create_recvv_task(
+    uint64_t conn_id, std::vector<void*>&& data_v,
+    std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v) {
+  if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size()) {
+    return nullptr;
+  }
+  size_t num_iovs = data_v.size();
+  auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
+  auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
+  auto mr_id_ptr =
+      std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
+  TaskBatch batch;
+  batch.num_iovs = num_iovs;
+  batch.data_ptr = std::move(data_ptr);
+  batch.size_ptr = std::move(size_ptr);
+  batch.mr_id_ptr = std::move(mr_id_ptr);
+  return create_batch_task(conn_id, TaskType::RECVV, std::move(batch));
+}
+
+std::shared_ptr<UnifiedTask> Endpoint::create_writev_task(
+    uint64_t conn_id, std::vector<void*>&& data_v,
+    std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
+    std::vector<FifoItem>&& slot_item_v) {
+  if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
+      mr_id_v.size() != slot_item_v.size()) {
+    return nullptr;
+  }
+  size_t num_iovs = data_v.size();
+  auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
+  auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
+  auto mr_id_ptr =
+      std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
+  auto slot_item_ptr =
+      std::make_shared<std::vector<FifoItem>>(std::move(slot_item_v));
+  TaskBatch batch;
+  batch.num_iovs = num_iovs;
+  batch.data_ptr = std::move(data_ptr);
+  batch.size_ptr = std::move(size_ptr);
+  batch.mr_id_ptr = std::move(mr_id_ptr);
+  batch.slot_item_ptr = std::move(slot_item_ptr);
+  return create_batch_task(conn_id, TaskType::WRITEV, std::move(batch));
+}
+
+std::shared_ptr<UnifiedTask> Endpoint::create_readv_task(
+    uint64_t conn_id, std::vector<void*>&& data_v,
+    std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
+    std::vector<FifoItem>&& slot_item_v) {
+  if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
+      mr_id_v.size() != slot_item_v.size()) {
+    return nullptr;
+  }
+  size_t num_iovs = data_v.size();
+  auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
+  auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
+  auto mr_id_ptr =
+      std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
+  auto slot_item_ptr =
+      std::make_shared<std::vector<FifoItem>>(std::move(slot_item_v));
+  TaskBatch batch;
+  batch.num_iovs = num_iovs;
+  batch.data_ptr = std::move(data_ptr);
+  batch.size_ptr = std::move(size_ptr);
+  batch.mr_id_ptr = std::move(mr_id_ptr);
+  batch.slot_item_ptr = std::move(slot_item_ptr);
+  return create_batch_task(conn_id, TaskType::READV, std::move(batch));
+}
+
+std::shared_ptr<UnifiedTask> Endpoint::create_net_task(
+    uint64_t conn_id, uint64_t mr_id, TaskType type, void* data, size_t size,
+    FifoItem const& slot_item) {
+  auto task = create_task(conn_id, mr_id, type, data, size);
+  task->slot_item() = slot_item;
+  return task;
+}
+
+std::shared_ptr<UnifiedTask> Endpoint::create_ipc_task(
+    uint64_t conn_id, uint64_t mr_id, TaskType type, void* data, size_t size,
+    IpcTransferInfo const& ipc_info) {
+  auto task = create_task(conn_id, mr_id, type, data, size);
+  task->ipc_info() = ipc_info;
+  return task;
 }
