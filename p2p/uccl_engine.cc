@@ -329,6 +329,12 @@ int uccl_engine_stop_listener(uccl_conn_t* conn) {
   return 0;
 }
 
+void uccl_engine_stop_accept(uccl_engine_t* engine) {
+  if (engine && engine->endpoint) {
+    engine->endpoint->stop_accepting();
+  }
+}
+
 void uccl_engine_conn_destroy(uccl_conn_t* conn) {
   if (conn) {
     uccl_engine_stop_listener(conn);

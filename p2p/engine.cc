@@ -220,6 +220,8 @@ Endpoint::~Endpoint() {
   std::cout << "Engine destroyed" << std::endl;
 }
 
+void Endpoint::stop_accepting() { stop_accept(ep_); }
+
 bool Endpoint::start_passive_accept() {
   if (!passive_accept_) {
     passive_accept_stop_.store(false, std::memory_order_release);
