@@ -340,6 +340,8 @@ Endpoint::~Endpoint() {
   std::cout << "Engine destroyed" << std::endl;
 }
 
+void Endpoint::stop_accepting() { stop_accept(ep_); }
+
 bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                        uint64_t& conn_id) {
   std::cout << "Attempting to connect to " << ip_addr << ":" << remote_gpu_idx
