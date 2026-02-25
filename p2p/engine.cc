@@ -20,8 +20,7 @@
 
 thread_local bool inside_python = false;
 
-std::size_t VectorUint8Hash::operator()(
-    std::vector<uint8_t> const& vec) const {
+std::size_t VectorUint8Hash::operator()(std::vector<uint8_t> const& vec) const {
   std::size_t hash = vec.size();
   for (uint8_t byte : vec) {
     hash = hash * 31 + static_cast<std::size_t>(byte);
@@ -29,8 +28,7 @@ std::size_t VectorUint8Hash::operator()(
   return hash;
 }
 
-ShmMsg::ShmMsg()
-    : src_gpu(0), type(ShmMsgType::COMPLETION), completion(0) {}
+ShmMsg::ShmMsg() : src_gpu(0), type(ShmMsgType::COMPLETION), completion(0) {}
 
 // TaskBatch (declaration order: after ShmMsg, before Endpoint)
 TaskBatch::TaskBatch() : num_iovs(0) {}
@@ -98,17 +96,13 @@ FifoItem const& UnifiedTask::slot_item() const {
   return specific.net.slot_item;
 }
 
-IpcTransferInfo& UnifiedTask::ipc_info() {
-  return specific.ipc.ipc_info;
-}
+IpcTransferInfo& UnifiedTask::ipc_info() { return specific.ipc.ipc_info; }
 
 IpcTransferInfo const& UnifiedTask::ipc_info() const {
   return specific.ipc.ipc_info;
 }
 
-TaskBatch& UnifiedTask::task_batch() {
-  return specific.batch.task_batch;
-}
+TaskBatch& UnifiedTask::task_batch() { return specific.batch.task_batch; }
 
 TaskBatch const& UnifiedTask::task_batch() const {
   return specific.batch.task_batch;
@@ -2473,8 +2467,10 @@ void Endpoint::ipc_poller_thread_func() {
   }
 }
 
-std::shared_ptr<UnifiedTask> Endpoint::create_task(
-    uint64_t conn_id, uint64_t mr_id, TaskType type, void* data, size_t size) {
+std::shared_ptr<UnifiedTask> Endpoint::create_task(uint64_t conn_id,
+                                                   uint64_t mr_id,
+                                                   TaskType type, void* data,
+                                                   size_t size) {
   auto task = std::make_shared<UnifiedTask>();
   task->type = type;
   task->data = data;
@@ -2484,8 +2480,9 @@ std::shared_ptr<UnifiedTask> Endpoint::create_task(
   return task;
 }
 
-std::shared_ptr<UnifiedTask> Endpoint::create_batch_task(
-    uint64_t conn_id, TaskType type, TaskBatch&& batch) {
+std::shared_ptr<UnifiedTask> Endpoint::create_batch_task(uint64_t conn_id,
+                                                         TaskType type,
+                                                         TaskBatch&& batch) {
   auto task = std::make_shared<UnifiedTask>();
   task->type = type;
   task->conn_id = conn_id;
@@ -2497,8 +2494,7 @@ std::shared_ptr<UnifiedTask> Endpoint::create_batch_task(
 }
 
 std::shared_ptr<UnifiedTask> Endpoint::create_sendv_task(
-    uint64_t conn_id,
-    std::shared_ptr<std::vector<void const*>> const_data_ptr,
+    uint64_t conn_id, std::shared_ptr<std::vector<void const*>> const_data_ptr,
     std::shared_ptr<std::vector<size_t>> size_ptr,
     std::shared_ptr<std::vector<uint64_t>> mr_id_ptr) {
   if (!const_data_ptr || !size_ptr || !mr_id_ptr ||
@@ -2516,16 +2512,15 @@ std::shared_ptr<UnifiedTask> Endpoint::create_sendv_task(
 }
 
 std::shared_ptr<UnifiedTask> Endpoint::create_recvv_task(
-    uint64_t conn_id, std::vector<void*>&& data_v,
-    std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v) {
+    uint64_t conn_id, std::vector<void*>&& data_v, std::vector<size_t>&& size_v,
+    std::vector<uint64_t>&& mr_id_v) {
   if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size()) {
     return nullptr;
   }
   size_t num_iovs = data_v.size();
   auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
   auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
-  auto mr_id_ptr =
-      std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
+  auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
   TaskBatch batch;
   batch.num_iovs = num_iovs;
   batch.data_ptr = std::move(data_ptr);
@@ -2535,9 +2530,8 @@ std::shared_ptr<UnifiedTask> Endpoint::create_recvv_task(
 }
 
 std::shared_ptr<UnifiedTask> Endpoint::create_writev_task(
-    uint64_t conn_id, std::vector<void*>&& data_v,
-    std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
-    std::vector<FifoItem>&& slot_item_v) {
+    uint64_t conn_id, std::vector<void*>&& data_v, std::vector<size_t>&& size_v,
+    std::vector<uint64_t>&& mr_id_v, std::vector<FifoItem>&& slot_item_v) {
   if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
       mr_id_v.size() != slot_item_v.size()) {
     return nullptr;
@@ -2545,8 +2539,7 @@ std::shared_ptr<UnifiedTask> Endpoint::create_writev_task(
   size_t num_iovs = data_v.size();
   auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
   auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
-  auto mr_id_ptr =
-      std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
+  auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
   auto slot_item_ptr =
       std::make_shared<std::vector<FifoItem>>(std::move(slot_item_v));
   TaskBatch batch;
@@ -2559,9 +2552,8 @@ std::shared_ptr<UnifiedTask> Endpoint::create_writev_task(
 }
 
 std::shared_ptr<UnifiedTask> Endpoint::create_readv_task(
-    uint64_t conn_id, std::vector<void*>&& data_v,
-    std::vector<size_t>&& size_v, std::vector<uint64_t>&& mr_id_v,
-    std::vector<FifoItem>&& slot_item_v) {
+    uint64_t conn_id, std::vector<void*>&& data_v, std::vector<size_t>&& size_v,
+    std::vector<uint64_t>&& mr_id_v, std::vector<FifoItem>&& slot_item_v) {
   if (data_v.size() != size_v.size() || size_v.size() != mr_id_v.size() ||
       mr_id_v.size() != slot_item_v.size()) {
     return nullptr;
@@ -2569,8 +2561,7 @@ std::shared_ptr<UnifiedTask> Endpoint::create_readv_task(
   size_t num_iovs = data_v.size();
   auto data_ptr = std::make_shared<std::vector<void*>>(std::move(data_v));
   auto size_ptr = std::make_shared<std::vector<size_t>>(std::move(size_v));
-  auto mr_id_ptr =
-      std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
+  auto mr_id_ptr = std::make_shared<std::vector<uint64_t>>(std::move(mr_id_v));
   auto slot_item_ptr =
       std::make_shared<std::vector<FifoItem>>(std::move(slot_item_v));
   TaskBatch batch;
