@@ -98,10 +98,12 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   // Expert counts
   __shared__ int shared_num_tokens_sent_per_expert[kNumMaxWarpGroups];
 
+#ifdef PER_EXPERT_BATCHING
   // Global counter slots used for batching sends to each top-k destination.
   constexpr int kNumMaxTopK = 9;
   __shared__ int shared_send_slots[kNumMaxTopK];
   __shared__ int shared_dst_experts[kNumMaxTopK];
+#endif
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   // initialize barrier
@@ -141,6 +143,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                              : -1;
       thread_id == 0 ? (*rdma_x_src_idx = token_idx) : 0;
 
+#ifdef PER_EXPERT_BATCHING
       // Allocate per-expert send slots for top-k destinations.
       // Each warp (warp_id < num_topk) reserves one slot for its destination
       // expert.
@@ -155,6 +158,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       }
       // Sync to make shared_send_slots visible to all threads
       sync_barrier_1((num_warps - 1) * WARP_SIZE);
+#endif
 
 // FP8 cast
 #pragma unroll
@@ -241,6 +245,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                         dst_rank, max_nvl_peers, 0)
                 : 0;
         if (dst_p2p_ptr == 0) {
+#ifdef PER_EXPERT_BATCHING
           // For inter-node send path, copy temp data to the per-expert batch
           // buffer, then issue a batched RDMA send.
           // TODO: This has an extra temp->per-expert copy in the FP8 path.
@@ -257,6 +262,17 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           auto* batch_buf_int4_ptr = reinterpret_cast<int4*>(batch_buf_ptr);
           UNROLLED_WARP_COPY(8, lane_id, num_int4_per_msg, batch_buf_int4_ptr,
                              src_int4_ptr, ld_nc_global, st_na_global);
+#else
+          // Legacy path: directly issue one RDMA send per token.
+          __threadfence_system();
+          uccl::nvshmemi_ibgda_put_nbi_warp(
+              dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+              src_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+              num_bytes_per_msg, dst_rank,
+              /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting rb.
+              lane_id, slot_idx, d2h_channel_addrs, num_d2h_channel_addrs,
+              false, low_latency_buffer_idx);
+#endif
         } else {
           // Intra-node: use direct memory copy via IPC
           auto const* src_int4_ptr = reinterpret_cast<int4 const*>(src_ptr);
@@ -316,6 +332,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   }
   __syncthreads();
 
+#ifdef PER_EXPERT_BATCHING
   // Grid-wide sync before batch-send.
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   amd::grid_sync(grid_sync_barrier_ptr, num_sms);
@@ -377,6 +394,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   }
 
   __threadfence_system();  // Ensure batch sends are visible before count sends
+#endif
 
   // Issue count sends
   if (responsible_expert_idx < num_experts and sub_warp_id == 0 and
@@ -422,7 +440,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     // Clean workspace for next use
     atomic_counter_per_expert[responsible_expert_idx] = 0;
     atomic_finish_counter_per_expert[responsible_expert_idx] = 0;
+#ifdef PER_EXPERT_BATCHING
     atomic_send_counter_per_expert[responsible_expert_idx] = 0;
+#endif
     // Clean `packed_recv_count`
     if (dst_rank == 0) packed_recv_count[dst_expert_local_idx] = 0;
   }
@@ -646,10 +666,17 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   auto atomic_counter_per_expert = static_cast<int*>(workspace);
   auto atomic_finish_counter_per_expert =
       atomic_counter_per_expert + num_experts;
+#ifdef PER_EXPERT_BATCHING
   auto atomic_send_counter_per_expert =
       atomic_finish_counter_per_expert + num_experts;
   auto grid_sync_barrier_ptr = atomic_send_counter_per_expert + num_experts;
   EP_HOST_ASSERT((num_experts * 3 + 1) * sizeof(int) <= NUM_WORKSPACE_BYTES);
+#else
+  auto atomic_send_counter_per_expert =
+      atomic_finish_counter_per_expert + num_experts;  // Unused in legacy path.
+  auto grid_sync_barrier_ptr = atomic_finish_counter_per_expert + num_experts;
+  EP_HOST_ASSERT((num_experts * 2 + 1) * sizeof(int) <= NUM_WORKSPACE_BYTES);
+#endif
 
   // FP8 checks
   if (use_ue8m0)

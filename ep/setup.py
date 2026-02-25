@@ -260,6 +260,12 @@ if __name__ == "__main__":
         # cxx_flags.append("-DENABLE_FAST_DEBUG")
         # nvcc_flags.append("-DENABLE_FAST_DEBUG")
 
+    # Per-expert batching path in dispatch-LL (default: disabled).
+    # Set PER_EXPERT_BATCHING=1 to compile with this path.
+    if int(os.getenv("PER_EXPERT_BATCHING", "0")):
+        cxx_flags.append("-DPER_EXPERT_BATCHING")
+        nvcc_flags.append("-DPER_EXPERT_BATCHING")
+
     # Disable LD/ST tricks, as some CUDA version does not support `.L1::no_allocate`
     # Only enable aggressive PTX instructions for SM 9.0+ (H100/H800/B200)
     try:

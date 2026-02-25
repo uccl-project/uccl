@@ -196,6 +196,7 @@ struct LowLatencyLayout {
     size_t num_bytes_per_combine_msg = hidden * sizeof(nv_bfloat16);
 
     // Send buffer
+#ifdef PER_EXPERT_BATCHING
     // Buffer layout for RDMA sends, used by the batched RDMA-send path in the
     // dispatch-LL kernel.
     // clang-format off
@@ -211,6 +212,12 @@ struct LowLatencyLayout {
     size_t dispatch_send_buffer_bytes = (num_experts + 1) *
                                         num_max_dispatch_tokens_per_rank *
                                         num_bytes_per_dispatch_msg;
+#else
+    // Send buffer
+    // Uses only per-token temporary send buffer.
+    size_t dispatch_send_buffer_bytes = num_max_dispatch_tokens_per_rank *
+                                        num_bytes_per_dispatch_msg;
+#endif
     size_t combine_send_buffer_bytes = num_experts *
                                        num_max_dispatch_tokens_per_rank *
                                        num_bytes_per_combine_msg;
@@ -233,8 +240,15 @@ struct LowLatencyLayout {
     total_bytes += recv_buffer_bytes * 2;
 
     // Symmetric signaling buffers
+#ifdef PER_EXPERT_BATCHING
+    // Batched dispatch needs one count per (dst_rank, src_rank).
+    size_t dispatch_recv_count_buffer_bytes =
+        static_cast<size_t>(num_ranks * num_ranks) * sizeof(int);
+#else
+    // Default dispatch path tracks one counter per expert.
     size_t dispatch_recv_count_buffer_bytes = num_experts * sizeof(int);
-    size_t combine_recv_flag_buffer_bytes = dispatch_recv_count_buffer_bytes;
+#endif
+    size_t combine_recv_flag_buffer_bytes = num_experts * sizeof(int);
     size_t signaling_buffer_bytes = std::max(dispatch_recv_count_buffer_bytes,
                                              combine_recv_flag_buffer_bytes);
     size_t signaling_buffer_bytes_aligned =
@@ -242,7 +256,20 @@ struct LowLatencyLayout {
     total_bytes += signaling_buffer_bytes_aligned * 2;
 
     // Internode signaling buffers (for RDMA atomics): use 64-bit slots.
-    size_t signaling_buffer_bytes_internode = num_experts * sizeof(int64_t);
+#ifdef PER_EXPERT_BATCHING
+    // Batched dispatch needs one count per (dst_rank, src_rank).
+    size_t dispatch_recv_count_buffer_bytes_internode =
+        static_cast<size_t>(num_ranks * num_ranks) * sizeof(int64_t);
+#else
+    // Legacy dispatch tracks one count per expert.
+    size_t dispatch_recv_count_buffer_bytes_internode =
+        num_experts * sizeof(int64_t);
+#endif
+    size_t combine_recv_flag_buffer_bytes_internode =
+        num_experts * sizeof(int64_t);
+    size_t signaling_buffer_bytes_internode = std::max(
+        dispatch_recv_count_buffer_bytes_internode,
+        combine_recv_flag_buffer_bytes_internode);
     size_t signaling_buffer_bytes_internode_aligned =
         align<size_t>(signaling_buffer_bytes_internode, 128);
     // These internode signaling buffers live inside `atomic_buffer_ptr` (not
