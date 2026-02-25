@@ -1,0 +1,276 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag (e.g. v0.0.2) — used for artifact naming in dry-run'
+        required: false
+        default: 'dry-run'
+      dry_run:
+        description: 'Dry run — build wheels but skip PyPI publish'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  packages: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+# ---------------------------------------------------------------------------
+# Build matrix summary
+# ---------------------------------------------------------------------------
+# Individual component wheels (GitHub Release only, Python 3.13):
+#   target     ccl_rdma  ccl_efa  p2p   ep
+#   cuda       yes       yes      yes   yes
+#   rocm       yes       (skip)   yes   yes
+#   therock    yes       (skip)   yes   (skip)   = 9 jobs
+#
+# Bundled "all" wheels (GitHub Release + PyPI, Python 3.9-3.13):
+#   cuda x5, rocm x5, therock x5                 = 15 jobs
+#
+# Total: 24 parallel jobs + 1 source tarball
+# ---------------------------------------------------------------------------
+
+jobs:
+  # ==========================================================================
+  # Job 1: Build all wheel variants
+  # ==========================================================================
+  build-wheels:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ----- Individual component wheels (GitHub Release, py3.13) -----
+          # Collective RDMA
+          - { target: cuda,    build_type: ccl_rdma, py_version: "3.13", for_pypi: false }
+          - { target: rocm,    build_type: ccl_rdma, py_version: "3.13", for_pypi: false }
+          - { target: therock, build_type: ccl_rdma, py_version: "3.13", for_pypi: false }
+          # Collective EFA (CUDA only — ROCm/TheRock have no EFA support)
+          - { target: cuda,    build_type: ccl_efa,  py_version: "3.13", for_pypi: false }
+          # P2P
+          - { target: cuda,    build_type: p2p,      py_version: "3.13", for_pypi: false }
+          - { target: rocm,    build_type: p2p,      py_version: "3.13", for_pypi: false }
+          - { target: therock, build_type: p2p,      py_version: "3.13", for_pypi: false }
+          # EP (no TheRock support yet)
+          - { target: cuda,    build_type: ep,       py_version: "3.13", for_pypi: false }
+          - { target: rocm,    build_type: ep,       py_version: "3.13", for_pypi: false }
+
+          # ----- Bundled "all" wheels (GitHub Release + PyPI) -----
+          # CUDA
+          - { target: cuda,    build_type: all, py_version: "3.9",  for_pypi: true }
+          - { target: cuda,    build_type: all, py_version: "3.10", for_pypi: true }
+          - { target: cuda,    build_type: all, py_version: "3.11", for_pypi: true }
+          - { target: cuda,    build_type: all, py_version: "3.12", for_pypi: true }
+          - { target: cuda,    build_type: all, py_version: "3.13", for_pypi: true }
+          # ROCm
+          - { target: rocm,    build_type: all, py_version: "3.9",  for_pypi: true }
+          - { target: rocm,    build_type: all, py_version: "3.10", for_pypi: true }
+          - { target: rocm,    build_type: all, py_version: "3.11", for_pypi: true }
+          - { target: rocm,    build_type: all, py_version: "3.12", for_pypi: true }
+          - { target: rocm,    build_type: all, py_version: "3.13", for_pypi: true }
+          # TheRock
+          - { target: therock, build_type: all, py_version: "3.9",  for_pypi: true }
+          - { target: therock, build_type: all, py_version: "3.10", for_pypi: true }
+          - { target: therock, build_type: all, py_version: "3.11", for_pypi: true }
+          - { target: therock, build_type: all, py_version: "3.12", for_pypi: true }
+          - { target: therock, build_type: all, py_version: "3.13", for_pypi: true }
+
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine Docker image and pull
+        id: docker
+        run: |
+          PY_TAG="py${{ matrix.py_version }}"
+
+          if [[ "${{ matrix.target }}" == "cuda" && "${{ matrix.build_type }}" == "ccl_efa" ]]; then
+            IMAGE_NAME="uccl-builder-efa"
+          elif [[ "${{ matrix.target }}" == "cuda" ]]; then
+            IMAGE_NAME="uccl-builder-cuda"
+          elif [[ "${{ matrix.target }}" == "rocm" ]]; then
+            IMAGE_NAME="uccl-builder-rocm"
+          elif [[ "${{ matrix.target }}" == "therock" ]]; then
+            IMAGE_NAME="uccl-builder-therock"
+          fi
+
+          FULL_IMAGE="${IMAGE_PREFIX}/${IMAGE_NAME}:${PY_TAG}"
+          echo "Pulling ${FULL_IMAGE}..."
+          docker pull "${FULL_IMAGE}"
+
+          # Tag with the local name that build.sh expects
+          LOCAL_NAME="${IMAGE_NAME}"
+          docker tag "${FULL_IMAGE}" "${LOCAL_NAME}"
+
+          echo "image_name=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "local_name=${LOCAL_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Build wheel
+        env:
+          SKIP_DOCKER_BUILD: "1"
+          TORCH_CUDA_ARCH_LIST: ${{ matrix.target == 'cuda' && '8.0+PTX;9.0+PTX' || 'gfx942' }}
+          UCCL_PACKAGE_NAME: ${{ matrix.for_pypi && format('uccl-{0}', matrix.target) || 'uccl' }}
+          UCCL_SKIP_LOCAL_VERSION: ${{ matrix.for_pypi && '1' || '0' }}
+        run: |
+          ./build.sh "${{ matrix.target }}" "${{ matrix.build_type }}" "${{ matrix.py_version }}"
+
+      - name: Retag wheel with Python/ABI tags (PyPI builds)
+        if: matrix.for_pypi
+        run: |
+          pip install wheel
+          PY_VER_NODOT=$(echo "${{ matrix.py_version }}" | tr -d '.')
+          cd wheelhouse-${{ matrix.target }}
+          for whl in *.whl; do
+            if [[ -f "$whl" ]]; then
+              echo "Retagging $whl -> cp${PY_VER_NODOT}-cp${PY_VER_NODOT}-..."
+              python3 -m wheel tags \
+                --python-tag "cp${PY_VER_NODOT}" \
+                --abi-tag "cp${PY_VER_NODOT}" \
+                --remove "$whl"
+            fi
+          done
+          echo "Wheels after retagging:"
+          ls -lh *.whl
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.target }}-${{ matrix.build_type }}-py${{ matrix.py_version }}
+          path: wheelhouse-${{ matrix.target }}/*.whl
+          if-no-files-found: error
+
+  # ==========================================================================
+  # Job 2: Create source tarball (includes submodules)
+  # ==========================================================================
+  create-source-tarball:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Create source tarball
+        run: |
+          VERSION=$(grep '__version__' uccl/__init__.py | sed 's/.*"\(.*\)".*/\1/')
+          echo "Version: ${VERSION}"
+
+          # Start with the main repo
+          git archive --format=tar --prefix=uccl-${VERSION}/ HEAD > uccl-${VERSION}.tar
+
+          # Append each submodule's contents
+          git submodule foreach --recursive \
+            'git archive --format=tar --prefix=uccl-'"${VERSION}"'/$sm_path/ HEAD | \
+             tar --concatenate --file='"$(pwd)"'/uccl-'"${VERSION}"'.tar'
+
+          gzip uccl-${VERSION}.tar
+          ls -lh uccl-${VERSION}.tar.gz
+
+      - name: Upload source tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-tarball
+          path: uccl-*.tar.gz
+          if-no-files-found: error
+
+  # ==========================================================================
+  # Job 3: Upload all artifacts to GitHub Release
+  # ==========================================================================
+  upload-release-assets:
+    needs: [build-wheels, create-source-tarball]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          pattern: wheel-*
+
+      - name: Download source tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: source-tarball
+          path: artifacts/source/
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          echo "Uploading assets to release ${TAG}..."
+
+          # Upload all wheels (flatten from per-job subdirectories)
+          find artifacts/ -name '*.whl' -print0 | while IFS= read -r -d '' whl; do
+            echo "  Uploading $(basename "$whl")"
+            gh release upload "${TAG}" "$whl" --repo "${{ github.repository }}" --clobber
+          done
+
+          # Upload source tarball
+          find artifacts/source/ -name '*.tar.gz' -print0 | while IFS= read -r -d '' tarball; do
+            echo "  Uploading $(basename "$tarball")"
+            gh release upload "${TAG}" "$tarball" --repo "${{ github.repository }}" --clobber
+          done
+
+          echo "Done. All assets uploaded."
+
+  # ==========================================================================
+  # Job 4: Publish bundled wheels to PyPI
+  # ==========================================================================
+  publish-pypi:
+    needs: [build-wheels]
+    if: >
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # OIDC for trusted publishing
+    environment:
+      name: pypi
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [cuda, rocm, therock]
+    steps:
+      - name: Download bundled wheels for ${{ matrix.target }}
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts/
+          pattern: wheel-${{ matrix.target }}-all-*
+
+      - name: Collect PyPI wheels
+        run: |
+          mkdir -p dist/
+          find all-artifacts/ -name '*.whl' -exec cp {} dist/ \;
+          echo "Wheels to publish for uccl-${{ matrix.target }}:"
+          ls -lh dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

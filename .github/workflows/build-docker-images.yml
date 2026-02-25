@@ -1,0 +1,109 @@
+name: Build Docker Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: 'Targets to build (comma-separated: cuda,rocm,efa,therock)'
+        default: 'cuda,rocm,efa,therock'
+  push:
+    branches: [main]
+    paths:
+      - 'docker/Dockerfile.*'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # CUDA / ROCm / EFA images: one per (target, python_version)
+  # ---------------------------------------------------------------------------
+  build-platform-images:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # CUDA images
+          - { dockerfile: docker/Dockerfile.cuda,  image_name: uccl-builder-cuda, py_version: "3.9"  }
+          - { dockerfile: docker/Dockerfile.cuda,  image_name: uccl-builder-cuda, py_version: "3.10" }
+          - { dockerfile: docker/Dockerfile.cuda,  image_name: uccl-builder-cuda, py_version: "3.11" }
+          - { dockerfile: docker/Dockerfile.cuda,  image_name: uccl-builder-cuda, py_version: "3.12" }
+          - { dockerfile: docker/Dockerfile.cuda,  image_name: uccl-builder-cuda, py_version: "3.13" }
+          # ROCm images
+          - { dockerfile: docker/Dockerfile.rocm,  image_name: uccl-builder-rocm, py_version: "3.9"  }
+          - { dockerfile: docker/Dockerfile.rocm,  image_name: uccl-builder-rocm, py_version: "3.10" }
+          - { dockerfile: docker/Dockerfile.rocm,  image_name: uccl-builder-rocm, py_version: "3.11" }
+          - { dockerfile: docker/Dockerfile.rocm,  image_name: uccl-builder-rocm, py_version: "3.12" }
+          - { dockerfile: docker/Dockerfile.rocm,  image_name: uccl-builder-rocm, py_version: "3.13" }
+          # EFA images (CUDA-based with EFA installer)
+          - { dockerfile: docker/Dockerfile.efa,   image_name: uccl-builder-efa,  py_version: "3.9"  }
+          - { dockerfile: docker/Dockerfile.efa,   image_name: uccl-builder-efa,  py_version: "3.10" }
+          - { dockerfile: docker/Dockerfile.efa,   image_name: uccl-builder-efa,  py_version: "3.11" }
+          - { dockerfile: docker/Dockerfile.efa,   image_name: uccl-builder-efa,  py_version: "3.12" }
+          - { dockerfile: docker/Dockerfile.efa,   image_name: uccl-builder-efa,  py_version: "3.13" }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          build-args: PY_VER=${{ matrix.py_version }}
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/${{ matrix.image_name }}:py${{ matrix.py_version }}
+          cache-from: type=gha,scope=${{ matrix.image_name }}-py${{ matrix.py_version }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image_name }}-py${{ matrix.py_version }}
+
+  # ---------------------------------------------------------------------------
+  # TheRock image: PyPA manylinux base has all Python versions pre-installed,
+  # so we only need one image.
+  # ---------------------------------------------------------------------------
+  build-therock-image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push TheRock image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.therock
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}/uccl-builder-therock:latest
+            ${{ env.IMAGE_PREFIX }}/uccl-builder-therock:py3.9
+            ${{ env.IMAGE_PREFIX }}/uccl-builder-therock:py3.10
+            ${{ env.IMAGE_PREFIX }}/uccl-builder-therock:py3.11
+            ${{ env.IMAGE_PREFIX }}/uccl-builder-therock:py3.12
+            ${{ env.IMAGE_PREFIX }}/uccl-builder-therock:py3.13
+          cache-from: type=gha,scope=uccl-builder-therock
+          cache-to: type=gha,mode=max,scope=uccl-builder-therock
