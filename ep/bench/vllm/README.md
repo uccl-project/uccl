@@ -4,29 +4,38 @@ This guide provides example scripts and instructions for deploying vLLM with Exp
 
 ## Installation
 
+### Rrerequisite
+
+Run `nvcc --version` to see which cuda toolkit you are using. This will be the one all the following libraries compile with. 
+Note that `nvidia-smi` shows the driver-supported max CUDA version instead of the cuda toolkit. 
+Below assumes `cu128`. 
+
 ### 0. Install uv
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv
 source .venv/bin/activate
-uv pip install numpy torch setuptools
+uv pip install numpy setuptools pybind11
+uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 ```
 
 ### 1. Install vLLM with EP Support
 
-Follow the official guide:
+Follow the [vLLM official guide](https://docs.vllm.ai/en/latest/getting_started/installation/gpu/#pre-built-wheels):
 ```bash
-# Install vLLM: latest version with timeout fix (https://github.com/vllm-project/vllm/pull/27444)
+uv pip install vllm --torch-backend=cu128
+```
+
+If you use `cu130` or above, we suggest building vllm from source, as we find its wheel still relies on `cu12x` libcudart.so.12 (as of 02/21/2026). 
+```bash
 git clone https://github.com/vllm-project/vllm.git
 cd vllm
-# This may take 5-10 minutes.
+# This may take 20-30 minutes.
 uv pip install -e .
 ```
 
-For detailed EP setup, refer to [vLLM Expert Parallel Deployment](https://docs.vllm.ai/en/stable/serving/expert_parallel_deployment.html)
-
-Last tested commit hash: 8c328c6
+For EP details, refer to [vLLM Expert Parallel Deployment](https://docs.vllm.ai/en/stable/serving/expert_parallel_deployment.html)
 
 ### 2. Install DeepGEMM Library
 
@@ -34,14 +43,15 @@ DeepGEMM provides optimized kernels for MoE operations:
 
 ```bash
 # Clone and install DeepGEMM
-git clone --recursive https://github.com/deepseek-ai/DeepGEMM.git
-cd DeepGEMM
-cat install.sh
+git clone --recursive https://github.com/deepseek-ai/DeepGEMM.git && cd DeepGEMM
+
 # cuobjdump used by https://github.com/deepseek-ai/DeepGEMM/blob/9b680f428484625f4f35dc3617f134187c6bcd4a/csrc/jit/kernel_runtime.hpp#L44
 # If you could not find cuobjdump in your servers, install it by: 
 sudo apt install nvidia-cuda-toolkit -y
 # If your server's cuobjdump is under /bin instead of $CUDA_HOME/bin, set soft link to make DeepGEMM happy: 
 sudo ln -s /bin/cuobjdump /usr/local/cuda/bin/cuobjdump
+
+# Ignore the final install error, as it was targetting non-uv env
 ./install.sh
 uv pip install dist/*.whl --force-reinstall
 ```
@@ -86,7 +96,7 @@ vLLM provides three EP communication backends:
 
 ### Environment Setup
 
-Edit the provided scripts (`launch_vllm_head.sh` and `launch_vllm_worker.sh`) to configure:
+Edit the provided script `launch_vllm.sh` to configure:
 
 1. **Network interfaces** - Set `GLOO_SOCKET_IFNAME`, `NCCL_SOCKET_IFNAME`
 1. **Backend** - Choose appropriate `VLLM_ALL2ALL_BACKEND`
@@ -96,12 +106,18 @@ Edit the provided scripts (`launch_vllm_head.sh` and `launch_vllm_worker.sh`) to
 
 ## Deployment
 
+Use the unified script **`launch_vllm.sh`** with role `head` or `worker`:
+
+```bash
+# Usage: launch_vllm.sh <head|worker> <NODE1_IP> [RPC_PORT] [MODEL] [BACKEND] [TOTAL_DP_SIZE] [LOCAL_DP_SIZE] [LOCAL_TP_SIZE] [API_SERVERS_or_START_RANK]
+```
+
 ### Step 1: Start Node 0 (Primary)
 
 On the **first node** (primary node that handles API requests):
 
 ```bash
-bash launch_vllm_head.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 deepep_high_throughput 2 1 8 1
+bash launch_vllm.sh head 172.31.41.55 13345 deepseek-ai/DeepSeek-V3-0324 deepep_high_throughput 2 1 8 1
 ```
 
 ### Step 2: Start Node 1+ (Secondary)
@@ -109,21 +125,42 @@ bash launch_vllm_head.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 deepep_h
 On **each additional node** (secondary nodes in headless mode):
 
 ```bash
-# Launch Node 1 (headless)
-bash launch_vllm_worker.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 deepep_high_throughput 2 1 8 1
+bash launch_vllm.sh worker 172.31.41.55 13345 deepseek-ai/DeepSeek-V3-0324 deepep_high_throughput 2 1 8 1
 ```
 
-**Arguments:**
-- `10.4.147.22` - IP address of **Node 0**, should be the IP of the `NCCL_SOCKET_IFNAME`
-- `13345` - RPC port
-- `deepseek-ai/DeepSeek-V3-0324` - Same model as Node 1
-- `allgather_reducescatter` - EP communication backend
-- `2` - Total DP size
-- `1` - Local DP size on this node
-- `8` - Local TP size on this node
-- `1` - For node 0, number of API servers; for others, starting rank (= sum of previous nodes' local DP)
+**Arguments (positional):**
+- `head` | `worker` - Role: primary (API) or secondary (headless).
+- `NODE1_IP` - IP of Node 0 (use `hostname -I` on Node 0).
+- `RPC_PORT` - e.g. 13345.
+- `MODEL` - e.g. deepseek-ai/DeepSeek-V3-0324.
+- `BACKEND` - e.g. allgather_reducescatter, deepep_high_throughput, deepep_low_latency.
+- `TOTAL_DP_SIZE` - Total data-parallel size across all nodes (e.g. 2 for 2×8-GPU nodes).
+- `LOCAL_DP_SIZE` - Data-parallel size on this node (e.g. 1).
+- `LOCAL_TP_SIZE` - Tensor-parallel size on this node (e.g. 8).
+- **Head:** 9th = API_SERVERS (e.g. 1). **Worker:** 9th = START_RANK (node 1: 1; node 2: 2; etc.).
 
 ## vLLM Serving Benchmark Results
+
+```
+vllm bench serve \
+  --backend openai-chat \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --endpoint /v1/chat/completions \
+  --model deepseek-ai/DeepSeek-V3-0324 \
+  --dataset-name random \
+  --random-input-len 1024 \
+  --random-output-len 256 \
+  --num-prompts 1000 \
+  --request-rate 10 \
+  --max-concurrency 256 \
+  --seed 42 \
+  --ignore-eos \
+  --save-result \
+  --result-dir ./results \
+  --percentile-metrics ttft,tpot,itl,e2el \
+  --metric-percentiles 50,90,95,99
+```
 
 **Model:** `deepseek-ai/DeepSeek-V3-0324`  
 **Request rate:** 10 RPS  
@@ -133,6 +170,5 @@ bash launch_vllm_worker.sh 10.4.147.22 13345 deepseek-ai/DeepSeek-V3-0324 deepep
 
 | Mode | Req Throughput (req/s) | Output Tok Throughput (tok/s) | Mean TTFT (ms) | P99 TTFT (ms) | Mean TPOT (ms) | P99 TPOT (ms) |
 |------|------------------------|-------------------------------|----------------|---------------|----------------|---------------|
-| Allgather + ReduceScatter | 0.61 | 155.15 | 80643.16 | 275588.12 | 1312.63 | 1563.97 |
-| DeepEP – High Throughput | 3.58 | 915.66 | 3503.18 | 11950.74 | 248.03 | 297.82 |
-| DeepEP – Low Latency | 5.25 | 1345.26 | 6391.41 | 21805.85 | 152.02 | 235.48 |
+| Allgather + ReduceScatter | 8.93 | 2285.11 | 303.50 | 655.98 | 81.11 | 95.55 |
+| UCCL-EP - Low Latency | 9.22 | 2359.13 | 278.52 | 775.17 | 59.35 | 78.61 |

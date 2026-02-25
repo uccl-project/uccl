@@ -1,6 +1,9 @@
 #include "uccl_engine.h"
 #ifdef UCCL_P2P_USE_TCPX
 #include "nccl_tcpx_endpoint.h"
+#elif defined(UCCL_P2P_USE_NCCL)
+#include "engine.h"
+#include "nccl/nccl_endpoint.h"
 #else
 #include "endpoint_wrapper.h"
 #include "engine.h"
@@ -151,7 +154,7 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   }
   conn->conn_id = conn_id;
   conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
-#ifndef UCCL_P2P_USE_TCPX
+#if !defined(UCCL_P2P_USE_TCPX) && !defined(UCCL_P2P_USE_NCCL)
   conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
 #endif
   conn->engine = engine;
@@ -176,7 +179,7 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   *remote_gpu_idx = gpu_idx;
   conn->conn_id = conn_id;
   conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
-#ifndef UCCL_P2P_USE_TCPX
+#if !defined(UCCL_P2P_USE_TCPX) && !defined(UCCL_P2P_USE_NCCL)
   conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
 #endif
   conn->engine = engine;
@@ -289,8 +292,13 @@ int uccl_engine_start_listener(uccl_conn_t* conn) {
   }
 
   conn->listener_running = true;
-#ifdef UCCL_P2P_USE_TCPX
+#if defined(UCCL_P2P_USE_TCPX)
+  // TCPX uses a separate listener thread
   conn->listener_thread = new std::thread(listener_thread_func, conn);
+#elif defined(UCCL_P2P_USE_NCCL)
+  // NCCL handles notifications in the control thread, no separate listener
+  // needed
+  conn->listener_thread = nullptr;
 #endif
 
   return 0;
@@ -372,7 +380,7 @@ int uccl_engine_update_fifo(FifoItem& fifo_item, uint64_t remote_addr,
 }
 
 std::vector<notify_msg_t> uccl_engine_get_notifs() {
-#ifdef UCCL_P2P_USE_TCPX
+#if defined(UCCL_P2P_USE_TCPX)
   std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
   std::vector<notify_msg_t> result = std::move(notify_msg_list);
   notify_msg_list.clear();
@@ -398,11 +406,26 @@ std::vector<notify_msg_t> uccl_engine_get_notifs() {
 int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   if (!conn || !notify_msg) return -1;
 
-#ifdef UCCL_P2P_USE_TCPX
+#if defined(UCCL_P2P_USE_TCPX)
   md_t md;
   md.notify_data = *notify_msg;
 
   return send(conn->sock_fd, &md, sizeof(md_t), 0);
+#elif defined(UCCL_P2P_USE_NCCL)
+  NotifyMsg oob_msg;
+  oob_msg.magic = NOTIFY_MSG_MAGIC;
+  strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
+  oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
+  memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
+
+  auto tcp_endpoint = conn->engine->endpoint->get_endpoint();
+  if (!tcp_endpoint) {
+    LOG(ERROR) << "Failed to get TCP endpoint for notification";
+    return -1;
+  }
+
+  uint64_t flow_id = conn->conn_id;
+  return tcp_endpoint->send_notification(flow_id, oob_msg);
 #else
   if (conn->oob_conn_key.empty()) {
     std::cerr << "No OOB connection key available for notification"

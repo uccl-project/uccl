@@ -1,43 +1,25 @@
-# ===============================================================================
-# Makefile for All-to-All RDMA Benchmark
-# ===============================================================================
+# Makefile for All-to-All RDMA Benchmarks
 
-CUDA_PATH ?= /usr/local/cuda
 CXX := g++
+CUDA_HOME ?= /usr/local/cuda
 
-TARGET := benchmark
+CXXFLAGS := -std=c++17 -O3 -Wall -Wextra -march=native -pthread
+INCLUDES := -I$(CUDA_HOME)/include
+LDFLAGS  := -L$(CUDA_HOME)/lib64 -lcudart -libverbs -lefa
 
-CXX_FLAGS := -std=c++17 -Wall -Wextra -pthread
-CXX_FLAGS += -O3 -DNDEBUG
-
-INCLUDES := -I$(CUDA_PATH)/include
-
-LIBS := -lpthread -lcudart -libverbs -lefa -lnuma
-LIBS += -L$(CUDA_PATH)/lib64
-
-SRC_CPP := alltoall_efa.cpp
-
-OBJ_CPP := $(SRC_CPP:.cpp=.o)
-
-# ===============================================================================
-# Build Rules
-# ===============================================================================
-.DEFAULT_GOAL := all
-
-all: $(TARGET)
-
-$(TARGET): $(OBJ_CPP)
-	@echo "Linking $@..."
-	$(CXX) $(CXX_FLAGS) $(INCLUDES) -o $@ $^ $(LIBS)
-	@echo "Build complete: $@"
-
-%.o: %.cpp
-	@echo "Compiling C++: $<"
-	$(CXX) $(CXX_FLAGS) $(INCLUDES) -c $< -o $@
-
-clean:
-	@echo "Cleaning..."
-	@rm -f $(TARGET) *.o
-	@echo "Done."
+TARGETS := benchmark test_alltoall test_alltoall_rail
 
 .PHONY: all clean
+all: $(TARGETS)
+
+benchmark: benchmark.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $< $(LDFLAGS) -lpthread -lnuma
+
+test_alltoall: test_alltoall.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $< $(LDFLAGS)
+
+test_alltoall_rail: test_alltoall_rail.cpp
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -o $@ $< $(LDFLAGS)
+
+clean:
+	rm -f $(TARGETS) *.o
