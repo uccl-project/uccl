@@ -65,8 +65,9 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                           hipDeviceMallocUncached);
     atomic_buffer_is_host_allocated_ = false;
 #elif defined(EFA)
-    // EFA: atomic buffer is always pinned host memory (cudaMallocHost).
-    cudaMallocHost(&atomic_buffer_ptr_, kAtomicBufferSize);
+    // EFA: atomic buffer is always pinned host memory (cudaHostAlloc).
+    cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
+                  cudaHostAllocMapped | cudaHostAllocWriteCombined);
     atomic_buffer_is_host_allocated_ = true;
 #else
     // Dynamically detect: on some nodes (e.g. GH10) ibv_reg_mr fails for
@@ -76,7 +77,8 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
       cudaMalloc(&atomic_buffer_ptr_, kAtomicBufferSize);
       atomic_buffer_is_host_allocated_ = false;
     } else {
-      cudaMallocHost(&atomic_buffer_ptr_, kAtomicBufferSize);
+      cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
+                    cudaHostAllocMapped);
       atomic_buffer_is_host_allocated_ = true;
     }
 #endif

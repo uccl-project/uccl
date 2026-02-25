@@ -112,15 +112,27 @@ ibv_mr* reg_mr_gpu_dmabuf(ibv_pd* pd, void* gpu_buf, size_t bytes,
   }
 
   uint64_t offset_in_alloc = (uintptr_t)gpu_buf - (uintptr_t)alloc_base;
+
+  // cuMemGetHandleForAddressRange requires the size to be aligned to the GPU
+  // page granularity (2 MiB on Hopper/Ada).  cuMemGetAddressRange reports the
+  // *requested* allocation size, not the actual internally-rounded size, so
+  // alloc_size may not be aligned.  Round up — cudaMalloc always rounds up to
+  // at least this granularity, so the aligned size is within the real alloc.
+  static constexpr size_t kDmabufGranularity = 2ULL << 20;  // 2 MiB
+  size_t export_size =
+      ((alloc_size + kDmabufGranularity - 1) / kDmabufGranularity) *
+      kDmabufGranularity;
+
   fprintf(stderr,
-          "[RDMA] DMA-BUF: alloc_base=%p alloc_size=%zu, "
+          "[RDMA] DMA-BUF: alloc_base=%p alloc_size=%zu export_size=%zu, "
           "gpu_buf=%p offset=%lu bytes=%zu\n",
-          (void*)alloc_base, alloc_size, gpu_buf, offset_in_alloc, bytes);
+          (void*)alloc_base, alloc_size, export_size, gpu_buf, offset_in_alloc,
+          bytes);
 
   // Get DMA-BUF fd for the entire allocation (must start at alloc base).
   int dmabuf_fd = -1;
   cu_err = cuMemGetHandleForAddressRange_func(
-      &dmabuf_fd, alloc_base, alloc_size, CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
+      &dmabuf_fd, alloc_base, export_size, CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
       0);
 
   if (cu_err != CUDA_SUCCESS) {
