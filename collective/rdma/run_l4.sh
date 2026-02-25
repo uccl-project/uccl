@@ -6,7 +6,7 @@ source ../../scripts/shared.sh
 
 UCCL=${1:-0}
 NUM_PROCS=${2:-2}
-NUM_GPUS_PER_PROC=${3:-1}
+NUM_GPUS_PER_PROC=${3:-4}
 PROG_OPTION=${4:-0}
 PROCS_PER_NODE=${5:-1}
 HOSTNAME=${6:-"../../scripts/node_ips/l4.txt"}
