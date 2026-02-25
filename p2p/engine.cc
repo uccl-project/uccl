@@ -342,55 +342,6 @@ Endpoint::~Endpoint() {
 
 void Endpoint::stop_accepting() { stop_accept(ep_); }
 
-bool Endpoint::start_passive_accept() {
-  if (!passive_accept_) {
-    passive_accept_stop_.store(false, std::memory_order_release);
-    passive_accept_thread_ =
-        std::thread(&Endpoint::passive_accept_thread_func, this);
-    passive_accept_ = true;
-  }
-  return true;
-}
-
-void Endpoint::initialize_engine() {
-  int n_streams = std::max(1, (int)kNumGpuRtStreams);
-  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-  streams_.resize(n_streams);
-  for (int i = 0; i < n_streams; ++i) {
-    GPU_RT_CHECK(gpuStreamCreateWithFlags(&streams_[i], gpuStreamNonBlocking));
-  }
-
-#ifdef UCCL_P2P_USE_NCCL
-  numa_node_ = tcp::get_tcp_numa_node_from_iface();
-#else
-  numa_node_ = RdmaDeviceManager::instance().get_numa_node(local_gpu_idx_);
-#endif
-
-  // Initialize rdma contexts for devices used by the GPU
-  initialize_rdma_ctx_for_gpu(ep_, local_gpu_idx_);
-  std::cout << "Lazy creation of engine for GPU " << local_gpu_idx_
-            << std::endl;
-
-  // Initialize task rings
-  send_unified_task_ring_ =
-      uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
-  recv_unified_task_ring_ =
-      uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
-
-  send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
-  recv_proxy_thread_ = std::thread(&Endpoint::recv_proxy_thread_func, this);
-
-  // Initialize ShmChnnel for local connections
-  size_t elem_sz = sizeof(ShmMsg);
-  size_t elem_cnt = ShmRingDefaultElemCnt;
-  for (int i = 0; i < kMaxNumGPUs; i++) {
-    inbox_rings_[i].shm_name = shm_ring_name(i, local_gpu_idx_);
-    inbox_rings_[i].ring = uccl::create_shared_ring(
-        inbox_rings_[i].shm_name.c_str(), elem_sz, elem_cnt,
-        inbox_rings_[i].shm_fd, inbox_rings_[i].shm_size, &inbox_creators_[i]);
-  }
-}
-
 bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                        uint64_t& conn_id) {
   std::cout << "Attempting to connect to " << ip_addr << ":" << remote_gpu_idx
