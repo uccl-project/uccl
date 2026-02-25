@@ -22,7 +22,18 @@ class CustomInstall(install):
         self.run_command("build_ext")
 
         # Get the install directory
-        python_site_packages = site.getsitepackages()[0]
+        candidates = []
+        if hasattr(site, "getsitepackages"):
+            candidates.extend(site.getsitepackages())
+        candidates.append(site.getusersitepackages())
+        python_site_packages = next(
+            (
+                p
+                for p in candidates
+                if p and os.path.isdir(p) and os.access(p, os.W_OK)
+            ),
+            site.getusersitepackages(),
+        )
         install_dir = os.getenv(
             "INSTALL_DIR", os.path.join(python_site_packages, "uccl")
         )
@@ -95,7 +106,15 @@ if __name__ == "__main__":
     ]
     nvcc_flags = ["-O3", "-Xcompiler", "-O3"]
     sources = glob("./src/*.cu") + glob("./src/*.cpp") + glob("./src/*.cc")
-    libraries = ["ibverbs", "glog", "nl-3", "nl-route-3", "numa"]
+    libraries = ["ibverbs", "nl-3", "nl-route-3", "numa"]
+    use_system_glog = int(os.getenv("USE_SYSTEM_GLOG", 0))
+    if use_system_glog:
+        print("Building EP with system glog support")
+        libraries.append("glog")
+    else:
+        print("Building EP without glog (using c10 logging compatibility)")
+        cxx_flags.append("-DUCCL_NO_GLOG")
+        nvcc_flags.append("-DUCCL_NO_GLOG")
     include_dirs = [PROJECT_ROOT / "include", PROJECT_ROOT / ".." / "include"]
 
     # Collect header files for dependency tracking

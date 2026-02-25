@@ -5,7 +5,11 @@
 #include "util/gpu_rt.h"
 #include "util/jring.h"
 #include <arpa/inet.h>
+#ifdef UCCL_NO_GLOG
+#include "util/fake_glog.h"
+#else
 #include <glog/logging.h>
+#endif
 #include <infiniband/verbs.h>
 #include <linux/in.h>
 #include <linux/tcp.h>

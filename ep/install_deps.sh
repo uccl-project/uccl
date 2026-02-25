@@ -17,7 +17,12 @@ get_cuda_version() {
 }
 
 # Install common dependencies
-sudo apt install -y nvtop libgoogle-glog-dev clang-format-14 python3-pip
+if [[ $EUID -eq 0 ]]; then
+    apt install -y nvtop clang-format-14 python3-pip
+else
+    echo "Not running as root; skipping apt install of system packages."
+    echo "Please install these manually if needed: nvtop clang-format-14 python3-pip"
+fi
 pip install pybind11 --upgrade
 pip install black
 

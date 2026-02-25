@@ -35,6 +35,15 @@ PYTHON            ?= python3
 PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
 EXT_SUFFIX        := $(shell $(PYTHON) -c "import sysconfig as s; print(s.get_config_var('EXT_SUFFIX') or '.so')")
 
+USE_SYSTEM_GLOG ?= 0
+ifeq ($(USE_SYSTEM_GLOG),1)
+  GLOG_CFLAGS :=
+  GLOG_LDFLAGS := -lglog
+else
+  GLOG_CFLAGS := -DUCCL_NO_GLOG
+  GLOG_LDFLAGS :=
+endif
+
 TORCH_ROOT        := $(shell $(PYTHON) -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent)")
 TORCH_INCLUDE     := $(TORCH_ROOT)/include
 TORCH_INCLUDE_API := $(TORCH_ROOT)/include/torch/csrc/api/include
@@ -42,8 +51,8 @@ TORCH_LIBDIR      := $(TORCH_ROOT)/lib
 TORCH_ABI          := $(shell $(PYTHON) -c "import torch; print(int(torch._C._GLIBCXX_USE_CXX11_ABI))")
 TORCH_INCS := -I$(TORCH_INCLUDE) -I$(TORCH_INCLUDE_API)
 
-# Python installation path
-PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")
+# Python installation path (prefer a writable location)
+PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import os, site; candidates = list(getattr(site, 'getsitepackages', lambda: [])()) + [site.getusersitepackages()]; print(next((p for p in candidates if p and os.path.isdir(p) and os.access(p, os.W_OK)), site.getusersitepackages()))")
 INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
 
 # GPU arch (auto-detected, override with: make SM=90)
@@ -51,7 +60,7 @@ DETECTED_SM := $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader 
 SM ?= $(DETECTED_SM)
 
 CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden -Wno-interference-size -Wno-unused-function
-LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -lnuma -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
+LDFLAGS := -lpthread $(GLOG_LDFLAGS) -libverbs -lnl-3 -lnl-route-3 -lnuma -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
 NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++ --expt-relaxed-constexpr
 INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include 
 
@@ -61,8 +70,8 @@ ifeq ($(USE_INTEL_RDMA_NIC),1)
   override NVCCFLAGS += -DINTEL_RDMA_NIC
 endif
 
-CXXFLAGS  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
-NVCCFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
+CXXFLAGS  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS) $(GLOG_CFLAGS)
+NVCCFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS) $(GLOG_CFLAGS)
 LDFLAGS   += $(EFA_LDFLAGS)
 INCLUDES  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
 

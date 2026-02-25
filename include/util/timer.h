@@ -5,7 +5,11 @@
 
 #pragma once
 
+#ifdef UCCL_NO_GLOG
+#include "util/fake_glog.h"
+#else
 #include "glog/logging.h"
+#endif
 #include <chrono>
 #include <stdint.h>
 #include <stdlib.h>
