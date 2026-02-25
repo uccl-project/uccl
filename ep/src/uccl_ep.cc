@@ -2078,6 +2078,18 @@ PYBIND11_MODULE(ep, m) {
         torch::Tensor tensor = torch::from_blob(
             ptr, {num_rdma_bytes}, dtype(torch::kUInt8).device(torch::kCUDA));
         return py::make_tuple(tensor, false);
+#elif defined(USE_DMABUF)
+        // DMA-BUF path (e.g. INTEL_RDMA_NIC): the RDMA data buffer is always
+        // GPU memory — per_thread_rdma_init registers it via
+        // ibv_reg_dmabuf_mr, so ibv_reg_mr / nvidia_peermem is not needed.
+        // Note: can_register_gpu_memory_for_atomics() is only meant for the
+        // small atomic buffer (which needs ibv_reg_mr + CPU atomics), not the
+        // bulk data buffer.  Do NOT gate this path on that probe.
+        CUDA_CHECK(cudaMalloc(&ptr, num_rdma_bytes));
+        CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
+        torch::Tensor tensor = torch::from_blob(
+            ptr, {num_rdma_bytes}, dtype(torch::kUInt8).device(torch::kCUDA));
+        return py::make_tuple(tensor, false);
 #else
         // Prefer cudaMalloc when GPU memory can be registered (e.g. with
         // nvidia_peermem); fall back to pinned host for NICs where
