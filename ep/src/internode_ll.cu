@@ -269,7 +269,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
               dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
               src_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
               num_bytes_per_msg, dst_rank,
-              /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting rb.
+              /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting
+                                                 // rb.
               lane_id, slot_idx, d2h_channel_addrs, num_d2h_channel_addrs,
               false, low_latency_buffer_idx);
 #endif

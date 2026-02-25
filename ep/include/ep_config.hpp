@@ -215,8 +215,8 @@ struct LowLatencyLayout {
 #else
     // Send buffer
     // Uses only per-token temporary send buffer.
-    size_t dispatch_send_buffer_bytes = num_max_dispatch_tokens_per_rank *
-                                        num_bytes_per_dispatch_msg;
+    size_t dispatch_send_buffer_bytes =
+        num_max_dispatch_tokens_per_rank * num_bytes_per_dispatch_msg;
 #endif
     size_t combine_send_buffer_bytes = num_experts *
                                        num_max_dispatch_tokens_per_rank *
@@ -267,9 +267,9 @@ struct LowLatencyLayout {
 #endif
     size_t combine_recv_flag_buffer_bytes_internode =
         num_experts * sizeof(int64_t);
-    size_t signaling_buffer_bytes_internode = std::max(
-        dispatch_recv_count_buffer_bytes_internode,
-        combine_recv_flag_buffer_bytes_internode);
+    size_t signaling_buffer_bytes_internode =
+        std::max(dispatch_recv_count_buffer_bytes_internode,
+                 combine_recv_flag_buffer_bytes_internode);
     size_t signaling_buffer_bytes_internode_aligned =
         align<size_t>(signaling_buffer_bytes_internode, 128);
     // These internode signaling buffers live inside `atomic_buffer_ptr` (not
