@@ -16,9 +16,7 @@ jobs:
   build-on-gpu-host:
     if: >
       github.event_name == 'push' ||
-      (github.event_name == 'pull_request' &&
-      !github.event.pull_request.head.repo.fork &&
-      github.event.pull_request.draft == false)
+      github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -95,8 +93,9 @@ jobs:
           path: build.log
 
   run-benchmarks-on-gb10:
-    needs: [build-on-gpu-host]
-    if: github.event_name == 'push'
+    # needs: [build-on-gpu-host]
+    if: github.event_name == 'push' ||
+      github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
