@@ -61,6 +61,13 @@ ifeq ($(USE_INTEL_RDMA_NIC),1)
   override NVCCFLAGS += -DINTEL_RDMA_NIC
 endif
 
+# Enable per-expert batching path in dispatch-LL (default: disabled)
+PER_EXPERT_BATCHING ?= 0
+ifeq ($(PER_EXPERT_BATCHING),1)
+  override CXXFLAGS += -DPER_EXPERT_BATCHING
+  override NVCCFLAGS += -DPER_EXPERT_BATCHING
+endif
+
 CXXFLAGS  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
 NVCCFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
 LDFLAGS   += $(EFA_LDFLAGS)
