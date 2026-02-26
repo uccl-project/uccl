@@ -6,6 +6,8 @@
 #include "rdma_util.hpp"
 #include "util/gpu_rt.h"
 #ifdef USE_DMABUF
+#include <condition_variable>
+#include <map>
 #include <cuda.h>
 #include <dlfcn.h>
 #endif
@@ -110,15 +112,27 @@ ibv_mr* reg_mr_gpu_dmabuf(ibv_pd* pd, void* gpu_buf, size_t bytes,
   }
 
   uint64_t offset_in_alloc = (uintptr_t)gpu_buf - (uintptr_t)alloc_base;
+
+  // cuMemGetHandleForAddressRange requires the size to be aligned to the GPU
+  // page granularity (2 MiB on Hopper/Ada).  cuMemGetAddressRange reports the
+  // *requested* allocation size, not the actual internally-rounded size, so
+  // alloc_size may not be aligned.  Round up — cudaMalloc always rounds up to
+  // at least this granularity, so the aligned size is within the real alloc.
+  static constexpr size_t kDmabufGranularity = 2ULL << 20;  // 2 MiB
+  size_t export_size =
+      ((alloc_size + kDmabufGranularity - 1) / kDmabufGranularity) *
+      kDmabufGranularity;
+
   fprintf(stderr,
-          "[RDMA] DMA-BUF: alloc_base=%p alloc_size=%zu, "
+          "[RDMA] DMA-BUF: alloc_base=%p alloc_size=%zu export_size=%zu, "
           "gpu_buf=%p offset=%lu bytes=%zu\n",
-          (void*)alloc_base, alloc_size, gpu_buf, offset_in_alloc, bytes);
+          (void*)alloc_base, alloc_size, export_size, gpu_buf, offset_in_alloc,
+          bytes);
 
   // Get DMA-BUF fd for the entire allocation (must start at alloc base).
   int dmabuf_fd = -1;
   cu_err = cuMemGetHandleForAddressRange_func(
-      &dmabuf_fd, alloc_base, alloc_size, CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
+      &dmabuf_fd, alloc_base, export_size, CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
       0);
 
   if (cu_err != CUDA_SUCCESS) {
@@ -157,6 +171,61 @@ ibv_mr* reg_mr_gpu_dmabuf(ibv_pd* pd, void* gpu_buf, size_t bytes,
           "(addr=%p, len=%zu, rkey=0x%x) — no nvidia_peermem needed\n",
           mr->addr, bytes, mr->rkey);
   return mr;
+}
+
+// ---------------------------------------------------------------------------
+// Shared RDMA resources cache
+// When multiple proxy threads select the same NIC for the same GPU buffer,
+// share a single ibv_context / pd / mr to avoid duplicate DMA-BUF IOMMU
+// mappings.  Each NIC can only handle one set of IOMMU page tables for
+// a given GPU buffer; registering the same 64+ GB buffer N times causes
+// ENOMEM on irdma (and wastes resources on any provider).
+//
+// The cache is keyed by (NIC device name, gpu_buf pointer).  A refcount
+// tracks how many ProxyCtx instances share the resources.  The last one
+// to call release_shared_rdma_resources() does the actual ibv_dereg/dealloc/
+// close.
+// ---------------------------------------------------------------------------
+struct SharedRdmaEntry {
+  ibv_context* context = nullptr;
+  ibv_pd* pd = nullptr;
+  ibv_mr* mr = nullptr;
+  uint32_t rkey = 0;
+  int numa_node = 0;
+  int refcount = 0;
+  bool ready = false;   // true once MR registration is complete
+  bool failed = false;  // true if the registering thread hit an error
+};
+
+using SharedRdmaKey = std::pair<std::string, void*>;  // (nic_name, gpu_buf)
+
+static std::mutex g_shared_rdma_mu;
+static std::condition_variable g_shared_rdma_cv;
+static std::map<SharedRdmaKey, SharedRdmaEntry> g_shared_rdma_cache;
+// Release shared RDMA resources (context/pd/mr) for a given NIC + gpu_buf.
+// Only the last holder actually frees them.  Safe to call even when sharing
+// is not active (no-op when the key is not found).
+void release_shared_rdma_resources(ProxyCtx& ctx, void* gpu_buf) {
+  // We need to find which cache entry (if any) owns this context.
+  std::lock_guard<std::mutex> lock(g_shared_rdma_mu);
+  for (auto it = g_shared_rdma_cache.begin(); it != g_shared_rdma_cache.end();
+       ++it) {
+    if (it->first.second == gpu_buf && it->second.context == ctx.context) {
+      it->second.refcount--;
+      if (it->second.refcount <= 0) {
+        // Last holder — actually free.  Caller should still do dereg/dealloc/
+        // close in their normal cleanup path, so we just erase the entry.
+        g_shared_rdma_cache.erase(it);
+        return;  // let caller free
+      }
+      // Not the last holder — prevent caller from freeing shared objects.
+      ctx.mr = nullptr;
+      ctx.pd = nullptr;
+      ctx.context = nullptr;
+      return;
+    }
+  }
+  // Not in cache (single-NIC path or already released) — caller frees normally.
 }
 #endif  // USE_DMABUF
 
@@ -338,9 +407,65 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     std::abort();
   }
 
+#ifdef USE_DMABUF
+  // Check if another thread already opened this NIC for the same GPU buffer.
+  // If so, share the ibv_context / pd / mr to avoid duplicate IOMMU mappings.
+  // Use a placeholder + condvar to handle the race where multiple threads
+  // check the cache before the first thread finishes MR registration.
+  {
+    std::unique_lock<std::mutex> lock(g_shared_rdma_mu);
+    SharedRdmaKey key{selected_nic_name, gpu_buf};
+    auto it = g_shared_rdma_cache.find(key);
+    if (it != g_shared_rdma_cache.end()) {
+      // Entry exists — wait for the first thread to finish registration.
+      auto& entry = it->second;
+      g_shared_rdma_cv.wait(lock, [&entry] { return entry.ready; });
+      if (entry.failed) {
+        fprintf(stderr,
+                "[RDMA] Thread %d: shared MR registration for NIC %s "
+                "failed on another thread, exiting.\n",
+                thread_idx, selected_nic_name.c_str());
+        ibv_free_device_list(dev_list);
+        exit(1);
+      }
+      // Ready — reuse existing resources.
+      S.context = entry.context;
+      S.pd = entry.pd;
+      S.mr = entry.mr;
+      S.rkey = entry.rkey;
+      S.numa_node = entry.numa_node;
+      entry.refcount++;
+      printf(
+          "[RDMA] Thread %d sharing NIC %s context with %d other thread(s) "
+          "for GPU %d\n",
+          thread_idx, selected_nic_name.c_str(), entry.refcount - 1, gpu_idx);
+      ibv_free_device_list(dev_list);
+      return;
+    }
+    // No entry — insert a placeholder so other threads will wait on us.
+    g_shared_rdma_cache[key] = {};  // ready=false, failed=false
+  }
+
+  // Helper: on any fatal error below, mark the cache entry as failed and
+  // wake waiting threads so they can exit gracefully instead of hanging.
+  auto signal_failure = [&]() {
+    std::lock_guard<std::mutex> lk(g_shared_rdma_mu);
+    SharedRdmaKey key{selected_nic_name, gpu_buf};
+    auto it = g_shared_rdma_cache.find(key);
+    if (it != g_shared_rdma_cache.end()) {
+      it->second.failed = true;
+      it->second.ready = true;  // unblock waiters
+    }
+    g_shared_rdma_cv.notify_all();
+  };
+#endif
+
   S.context = ibv_open_device(dev_list[selected_dev_idx]);
   if (!S.context) {
     perror("Failed to open device");
+#ifdef USE_DMABUF
+    signal_failure();
+#endif
     exit(1);
   }
   S.numa_node = uccl::get_dev_numa_node(selected_nic_name.c_str());
@@ -350,6 +475,9 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   S.pd = ibv_alloc_pd(S.context);
   if (!S.pd) {
     perror("Failed to allocate PD");
+#ifdef USE_DMABUF
+    signal_failure();
+#endif
     exit(1);
   }
   uint64_t iova = (uintptr_t)gpu_buf;
@@ -382,15 +510,38 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
   }
   if (!S.mr) {
     perror("GPU MR registration failed");
+#ifdef USE_DMABUF
+    signal_failure();
+#endif
     exit(1);
   }
 
   if (S.rkey != 0) {
     fprintf(stderr, "Warning: rkey already set (%x), overwriting\n", S.rkey);
+#ifdef USE_DMABUF
+    signal_failure();
+#endif
     exit(1);
   }
 
   S.rkey = S.mr->rkey;
+
+#ifdef USE_DMABUF
+  // Update the placeholder entry with real values and wake waiting threads.
+  {
+    std::lock_guard<std::mutex> lock(g_shared_rdma_mu);
+    SharedRdmaKey key{selected_nic_name, gpu_buf};
+    auto& entry = g_shared_rdma_cache[key];
+    entry.context = S.context;
+    entry.pd = S.pd;
+    entry.mr = S.mr;
+    entry.rkey = S.rkey;
+    entry.numa_node = S.numa_node;
+    entry.refcount = 1;
+    entry.ready = true;
+  }
+  g_shared_rdma_cv.notify_all();
+#endif
 }
 
 bool can_register_gpu_memory_for_atomics(int gpu_idx) {
@@ -1399,9 +1550,11 @@ static void post_rdma_async_batched_fast_mode(
                                                get_low_latency(cmd.cmd_type)};
 #endif
 #ifdef USE_RECEIVER_BARRIER
+        uint32_t num_tokens_imm =
+            cmd.atomic_val ? static_cast<uint32_t>(cmd.atomic_val) : 1u;
         uint32_t imm = WriteImm::Pack(get_is_combine(cmd.cmd_type),
                                       get_low_latency(cmd.cmd_type),
-                                      cmd.expert_idx, 1, my_rank)
+                                      cmd.expert_idx, num_tokens_imm, my_rank)
                            .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
 #else

@@ -88,7 +88,7 @@ class Buffer:
         else:
             device_index = torch.cuda.current_device()
 
-        # Prefer cudaMalloc when NIC can register GPU memory; else cudaMallocHost.
+        # Prefer cudaMalloc when NIC can register GPU memory; else cudaHostAlloc.
         result = ep.get_rdma_buffer(num_rdma_bytes, device_index)
         if isinstance(result, tuple):
             self.scratch, rdma_buffer_is_host_allocated = result
@@ -145,7 +145,7 @@ class Buffer:
         dist.all_gather_object(ipc_handles, local_ipc_handle, group)
 
         rdma_ipc_handles = [None] * self.group_size
-        # CUDA IPC only works with device memory; skip when using cudaMallocHost.
+        # CUDA IPC only works with device memory; skip when using cudaHostAlloc.
         local_rdma_ipc_handle = (
             self.runtime.get_local_rdma_ipc_handle()
             if self.num_rdma_bytes > 0 and not rdma_buffer_is_host_allocated

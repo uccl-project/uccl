@@ -79,8 +79,8 @@ def measure_pcie_bandwidth(buffer_size_bytes, num_iters=100, device_index=1):
 
 
 if __name__ == "__main__":
-    buffer_size = 64 * 1024 * 1024  # 64 MB buffer
-    num_iters = 100
+    buffer_size = 1024 * 1024 * 1024  # 1 GB buffer
+    num_iters = 10
     device_index = 0  # Second GPU (index 0 in PyTorch)
 
     h2d, d2h, d2d, peer = measure_pcie_bandwidth(buffer_size, num_iters, device_index)

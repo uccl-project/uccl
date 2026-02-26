@@ -766,6 +766,10 @@ python tests/test_engine_write.py
 python tests/test_engine_metadata.py
 torchrun --nnodes=1 --nproc_per_node=2 tests/test_engine_nvlink.py
 
+# One-sided IPC correctness tests (write_ipc, read_ipc, writev_ipc, readv_ipc — sync and async)
+# Verifies that each API correctly copies data from source to destination buffers.
+torchrun --nnodes=1 --nproc_per_node=2 tests/test_engine_onesided_ipc.py
+
 # One-sided IPC benchmarks (write_ipc / read_ipc)
 torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc
 torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc
@@ -773,4 +777,10 @@ torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc --device cp
 torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc --device cpu --pinned
 torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc --async-api
 torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc --async-api
+
+# Vectorized one-sided IPC benchmarks (writev_ipc / readv_ipc), e.g. 4 buffers per call
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc --num-kvblocks 4
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc --num-kvblocks 4
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc --num-kvblocks 4 --async-api
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc --num-kvblocks 4 --async-api
 ```
