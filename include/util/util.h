@@ -552,19 +552,11 @@ static inline std::string FormatVarg(char const* fmt, va_list ap) {
   return s;
 }
 
-#ifdef __cpp_lib_hardware_interference_size
-using std::hardware_constructive_interference_size;
-using std::hardware_destructive_interference_size;
-#else
-// 64 bytes on x86-64 │ L1_CACHE_BYTES │ L1_CACHE_SHIFT │ __cacheline_aligned │
-// ...
+// Use 64 bytes unconditionally to match the jring C library's CACHE_LINE_SIZE.
+// Do NOT use std::hardware_{constructive,destructive}_interference_size here
+// because it is 256 on aarch64, which would break jring alignment assumptions.
 constexpr std::size_t hardware_constructive_interference_size = 64;
 constexpr std::size_t hardware_destructive_interference_size = 64;
-#endif
-// TODO(ilias): Adding an assertion for now, to prevent incompatibilities
-// with the C helper library.
-static_assert(hardware_constructive_interference_size == 64);
-static_assert(hardware_destructive_interference_size == 64);
 
 static inline jring_t* create_ring(size_t element_size, size_t element_count) {
   size_t ring_sz = jring_get_buf_ring_size(element_size, element_count);
@@ -578,6 +570,99 @@ static inline jring_t* create_ring(size_t element_size, size_t element_count) {
     exit(EXIT_FAILURE);
   }
   return ring;
+}
+
+// for consumer
+static inline jring_t* attach_shared_ring(char const* shm_name, int& shm_fd,
+                                          size_t shm_size) {
+  shm_fd = shm_open(shm_name, O_RDWR, 0666);
+  if (shm_fd < 0) {
+    perror("shm_open attach failed");
+    return nullptr;
+  }
+
+  void* ptr =
+      mmap(nullptr, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+
+  if (ptr == MAP_FAILED) {
+    perror("mmap attach failed");
+    close(shm_fd);
+    return nullptr;
+  }
+
+  return reinterpret_cast<jring_t*>(ptr);
+}
+
+// for creator
+static inline jring_t* create_shared_ring(char const* shm_name,
+                                          size_t element_size,
+                                          size_t element_count, int& shm_fd,
+                                          size_t& shm_size, bool* is_creator) {
+  shm_size = jring_get_buf_ring_size(element_size, element_count);
+
+  // try exclusive create
+  shm_fd = shm_open(shm_name, O_CREAT | O_EXCL | O_RDWR, 0666);
+
+  if (shm_fd >= 0) {
+    *is_creator = true;
+  } else {
+    if (errno != EEXIST) {
+      perror("shm_open failed");
+      return nullptr;
+    }
+
+    *is_creator = false;
+    return attach_shared_ring(shm_name, shm_fd, shm_size);
+  }
+
+  // creator does truncate
+  if (ftruncate(shm_fd, shm_size) < 0) {
+    perror("ftruncate failed");
+    close(shm_fd);
+    shm_unlink(shm_name);
+    return nullptr;
+  }
+
+  void* ptr =
+      mmap(nullptr, shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+
+  if (ptr == MAP_FAILED) {
+    perror("mmap failed");
+    close(shm_fd);
+    shm_unlink(shm_name);
+    return nullptr;
+  }
+
+  auto* ring = reinterpret_cast<jring_t*>(ptr);
+
+  if (jring_init(ring, element_count, element_size, 1, 1) < 0) {
+    munmap(ptr, shm_size);
+    close(shm_fd);
+    shm_unlink(shm_name);
+    return nullptr;
+  }
+
+  return ring;
+}
+
+// for consumer
+static inline void detach_shared_ring(jring_t* ring, int shm_fd,
+                                      size_t shm_size) {
+  if (ring) {
+    munmap(reinterpret_cast<void*>(ring), shm_size);
+  }
+
+  if (shm_fd >= 0) {
+    close(shm_fd);
+  }
+}
+
+// for creator
+static inline void destroy_shared_ring(char const* shm_name, jring_t* ring,
+                                       int shm_fd, size_t shm_size) {
+  detach_shared_ring(ring, shm_fd, shm_size);
+
+  shm_unlink(shm_name);
 }
 
 static inline uint16_t ipv4_checksum(void const* data, size_t header_length) {
@@ -1114,7 +1199,11 @@ inline int get_dev_numa_node(char const* dev_name) {
   }
 
   auto numa_node = std::stoi(line);
-  DCHECK(numa_node != -1) << "NUMA node is -1 for " << dev_name;
+  if (numa_node == -1) {
+    LOG(WARNING) << "NUMA node is -1 for " << dev_name
+                 << ", defaulting to node 0";
+    numa_node = 0;
+  }
   return numa_node;
 }
 

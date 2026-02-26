@@ -13,6 +13,7 @@
 #include "intranode.cuh"
 #include "layout.hpp"
 #include "peer_copy_manager.hpp"
+#include "rdma.hpp"
 #include "ring_buffer.cuh"
 #include "uccl_bench.hpp"
 #include "uccl_proxy.hpp"
@@ -139,12 +140,28 @@ class Buffer {
           }
 
           // Prefetch so the device immediately sees initialized contents
+#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__) && \
+    CUDA_VERSION >= 12000
+          // CUDA 12+: cudaMemPrefetchAsync(ptr, count, cudaMemLocation, flags,
+          // stream)
+          cudaMemLocation loc;
+          loc.type = cudaMemLocationTypeDevice;
+          loc.id = device_index;
           CUDA_CHECK(cudaMemPrefetchAsync(
               d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
-              device_index));
+              loc, 0));
+          CUDA_CHECK(cudaMemPrefetchAsync(
+              d_handles, num_d2h_channel_addrs * sizeof(uint64_t), loc, 0));
+#else
+          // CUDA 11.x / HIP: cudaMemPrefetchAsync(ptr, count, dstDevice,
+          // stream)
+          CUDA_CHECK(cudaMemPrefetchAsync(
+              d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
+              loc, 0, 0));
           CUDA_CHECK(cudaMemPrefetchAsync(
               d_handles, num_d2h_channel_addrs * sizeof(uint64_t),
               device_index));
+#endif
           CUDA_CHECK(cudaDeviceSynchronize());
         }
         // Allocate device memory for IPC base pointers
@@ -191,6 +208,11 @@ class Buffer {
     CUDA_CHECK(cudaGetDeviceProperties(&prop, device_index));
     num_device_sms = prop.multiProcessorCount;
 
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    fp8_dtype = strcmp(prop.gcnArchName, "gfx942") == 0
+                    ? torch::kFloat8_e4m3fnuz
+                    : torch::kFloat8_e4m3fn;
+#endif
     if (num_nvl_bytes > 0) {
       size_t total_bytes = static_cast<size_t>(num_nvl_bytes) +
                            static_cast<size_t>(barrier_signal_bytes) +
@@ -1473,8 +1495,8 @@ class Buffer {
         torch::empty({num_local_experts,
                       num_ranks * num_max_dispatch_tokens_per_rank, hidden},
                      x.options().dtype(use_fp8 ?
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__) && defined(__gfx942__)
-                                               torch::kFloat8_e4m3fnuz
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+                                               fp8_dtype
 #else
                                                torch::kFloat8_e4m3fn
 #endif
@@ -1834,12 +1856,13 @@ class Buffer {
            ++i) {
         int global_rank = offset + i;
         int local_rank_idx = global_rank % max_nvl_peers;
-        EP_HOST_ASSERT(all_gathered_rdma_handles[global_rank].has_value());
-        auto handle_str =
-            std::string(all_gathered_rdma_handles[global_rank].value());
-        EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
 
-        if (global_rank != rank) {
+        if (global_rank == rank) {
+          ipc_rdma_base_ptrs[local_rank_idx] = rdma_buffer_ptr;
+        } else if (all_gathered_rdma_handles[global_rank].has_value()) {
+          auto handle_str =
+              std::string(all_gathered_rdma_handles[global_rank].value());
+          EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
           std::memcpy(rdma_ipc_handles[local_rank_idx].reserved,
                       handle_str.c_str(), CUDA_IPC_HANDLE_SIZE);
           CUDA_CHECK(cudaSetDevice(device_index));
@@ -1847,7 +1870,8 @@ class Buffer {
                                           rdma_ipc_handles[local_rank_idx],
                                           cudaIpcMemLazyEnablePeerAccess));
         } else {
-          ipc_rdma_base_ptrs[local_rank_idx] = rdma_buffer_ptr;
+          // Host-allocated RDMA buffer (cudaMallocHost): no IPC handle
+          ipc_rdma_base_ptrs[local_rank_idx] = nullptr;
         }
       }
       if (d_ipc_rdma_base_ptrs != nullptr) {
@@ -1952,6 +1976,11 @@ class Buffer {
   // IPC base pointers for GPU access (for replacing nvshmemi_get_p2p_ptr)
   void** d_ipc_rdma_base_ptrs{
       nullptr};  // Device pointer to array of IPC base addresses
+
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  // support select fp8 dtype for different gcn arch in runtime
+  c10::ScalarType fp8_dtype{torch::kFloat8_e4m3fnuz};
+#endif
 };
 
 PYBIND11_MODULE(ep, m) {
@@ -2029,19 +2058,64 @@ PYBIND11_MODULE(ep, m) {
 
   m.def("get_oob_ip", &uccl::get_oob_ip, "Get the OOB IP address");
 
-  m.def("get_rdma_buffer", [](int64_t num_rdma_bytes, int device_index) {
-    void* ptr;
-    CUDA_CHECK(cudaSetDevice(device_index));
+  m.def(
+      "get_rdma_buffer",
+      [](int64_t num_rdma_bytes, int device_index) {
+        void* ptr;
+        bool is_host_allocated = false;
+        CUDA_CHECK(cudaSetDevice(device_index));
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-    CUDA_CHECK(
-        hipExtMallocWithFlags(&ptr, num_rdma_bytes, hipDeviceMallocUncached));
+        CUDA_CHECK(hipExtMallocWithFlags(&ptr, num_rdma_bytes,
+                                         hipDeviceMallocUncached));
+        CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
+        torch::Tensor tensor = torch::from_blob(
+            ptr, {num_rdma_bytes}, dtype(torch::kUInt8).device(torch::kCUDA));
+        return py::make_tuple(tensor, false);
+#elif defined(EFA)
+        // EFA: GPU buffer is always device memory (cudaMalloc).
+        CUDA_CHECK(cudaMalloc(&ptr, num_rdma_bytes));
+        CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
+        torch::Tensor tensor = torch::from_blob(
+            ptr, {num_rdma_bytes}, dtype(torch::kUInt8).device(torch::kCUDA));
+        return py::make_tuple(tensor, false);
+#elif defined(USE_DMABUF)
+        // DMA-BUF path (e.g. INTEL_RDMA_NIC): the RDMA data buffer is always
+        // GPU memory — per_thread_rdma_init registers it via
+        // ibv_reg_dmabuf_mr, so ibv_reg_mr / nvidia_peermem is not needed.
+        // Note: can_register_gpu_memory_for_atomics() is only meant for the
+        // small atomic buffer (which needs ibv_reg_mr + CPU atomics), not the
+        // bulk data buffer.  Do NOT gate this path on that probe.
+        CUDA_CHECK(cudaMalloc(&ptr, num_rdma_bytes));
+        CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
+        torch::Tensor tensor = torch::from_blob(
+            ptr, {num_rdma_bytes}, dtype(torch::kUInt8).device(torch::kCUDA));
+        return py::make_tuple(tensor, false);
 #else
-    EP_HOST_ASSERT(false and "Please use torch.zeros instead on CUDA platform.");
+        // Prefer cudaMalloc when GPU memory can be registered (e.g. with
+        // nvidia_peermem); fall back to pinned host for NICs where
+        // ibv_reg_mr fails on GPU memory (e.g. GH10).
+        torch::Tensor tensor;
+        if (can_register_gpu_memory_for_atomics(device_index)) {
+          CUDA_CHECK(cudaMalloc(&ptr, num_rdma_bytes));
+          CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
+          tensor = torch::from_blob(ptr, {num_rdma_bytes},
+                                    dtype(torch::kUInt8).device(torch::kCUDA));
+        } else {
+          CUDA_CHECK(cudaMallocHost(&ptr, num_rdma_bytes));
+          CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
+          tensor =
+              torch::from_blob(ptr, {num_rdma_bytes}, dtype(torch::kUInt8));
+          is_host_allocated = true;
+        }
+        return py::make_tuple(tensor, is_host_allocated);
 #endif
-    CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
-    return torch::from_blob(ptr, {num_rdma_bytes},
-                            dtype(torch::kUInt8).device(torch::kCUDA));
-  });
+      },
+      py::arg("num_rdma_bytes"), py::arg("device_index"),
+      R"doc(
+        Allocate RDMA buffer. Prefers device memory (cudaMalloc) when the NIC
+        can register it; otherwise uses pinned host memory (cudaMallocHost).
+        Returns (tensor, is_host_allocated).
+      )doc");
 
   py::class_<EventHandle>(m, "EventHandle")
       .def(py::init<>())
@@ -2170,12 +2244,13 @@ PYBIND11_MODULE(ep, m) {
   py::class_<Stats>(m, "Stats");
   py::class_<UcclProxy>(m, "Proxy")
       .def(py::init<int, uintptr_t, size_t, int, int, int, int, int, int, bool,
-                    bool>(),
+                    bool, bool>(),
            py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
            py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
            py::arg("local_rank") = 0, py::arg("num_experts") = -1,
            py::arg("num_ranks") = -1, py::arg("num_nodes") = 0,
-           py::arg("use_normal_mode") = false, py::arg("is_intranode") = false)
+           py::arg("use_normal_mode") = false, py::arg("is_intranode") = false,
+           py::arg("gpu_buffer_is_host_allocated") = false)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)

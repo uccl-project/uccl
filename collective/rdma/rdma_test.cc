@@ -10,6 +10,7 @@
     - Client performs atomic operations on server's atomic buffer
     - Server displays final atomic values after completion
  */
+#include "transport_config.h"
 #include <arpa/inet.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
@@ -428,8 +429,9 @@ void create_cq(struct rdma_context* rdma) {
       IBV_WC_EX_WITH_SRC_QP |
       IBV_WC_EX_WITH_COMPLETION_TIMESTAMP;  // Timestamp support.
   cq_ex_attr.comp_mask = IBV_CQ_INIT_ATTR_MASK_FLAGS;
-  cq_ex_attr.flags =
-      IBV_CREATE_CQ_ATTR_SINGLE_THREADED | IBV_CREATE_CQ_ATTR_IGNORE_OVERRUN;
+  cq_ex_attr.flags = IBV_CREATE_CQ_ATTR_SINGLE_THREADED;
+  if constexpr (kEnableCQIgnoreOverrun)
+    cq_ex_attr.flags |= IBV_CREATE_CQ_ATTR_IGNORE_OVERRUN;
 
   rdma->cq_ex = ibv_create_cq_ex(rdma->ctx, &cq_ex_attr);
   DCHECK(rdma->cq_ex) << "Failed to create CQ";

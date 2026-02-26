@@ -4,10 +4,16 @@ set -e
 # -----------------------
 # Build uccl wheels for CUDA (NVIDIA) and ROCm (AMD) backends/targets.
 # The host machine does *not* need CUDA or ROCm – everything lives inside
-# a purpose-built Docker image derived from Ubuntu 22.04.
+# a purpose-built Docker/Podman image derived from Ubuntu 22.04.
 #
 # Usage:
 #   ./build.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image]
+#
+# Environment Variables:
+#   CONTAINER_ENGINE=podman Use podman instead of docker.
+#                          Example: CONTAINER_ENGINE=podman ./build.sh cuda all
+#   USE_INTEL_RDMA_NIC=1   Enable Intel RDMA NIC support (irdma driver, vendor 0x8086)
+#                          Example: USE_INTEL_RDMA_NIC=1 ./build.sh cuda ccl_efa
 #
 # The wheels are written to wheelhouse-[cuda|rocm|therock]
 # -----------------------
@@ -16,6 +22,13 @@ TARGET=${1:-cuda}
 BUILD_TYPE=${2:-all}
 PY_VER=${3:-$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")}
 ARCH="$(uname -m)"
+
+# Container engine: "docker" (default) or "podman"
+CONTAINER_ENGINE=${CONTAINER_ENGINE:-docker}
+if [[ "$CONTAINER_ENGINE" != "docker" && "$CONTAINER_ENGINE" != "podman" ]]; then
+  echo "Error: CONTAINER_ENGINE must be 'docker' or 'podman', got '${CONTAINER_ENGINE}'" >&2
+  exit 1
+fi
 # The default for ROCM_IDX_URL depends on the gfx architecture of your GPU and the index URLs may change.
 ROCM_IDX_URL=${4:-https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu}
 # The default for THEROCK_BASE_IMAGE is current, but may change. Make sure to track TheRock's dockerfile.
@@ -58,8 +71,12 @@ build_ccl_rdma() {
   set -euo pipefail
   echo "[container] build_ccl_rdma Target: $TARGET"
   
+  if [[ "${USE_INTEL_RDMA_NIC:-0}" == "1" ]]; then
+    echo "[container] Building with Intel RDMA NIC support (USE_INTEL_RDMA_NIC=1)"
+  fi
+
   if [[ "$TARGET" == cuda* ]]; then
-    cd collective/rdma && make clean && make -j$(nproc) && cd ../../
+    cd collective/rdma && make clean && make -j$(nproc) USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} && cd ../../
     TARGET_SO=collective/rdma/libnccl-net-uccl.so
   elif [[ "$TARGET" == rocm* ]]; then
     if [[ "$ARCH" == "aarch64" ]]; then
@@ -101,11 +118,16 @@ build_ccl_efa() {
     echo "Skipping EFA build on Arm64 (no EFA installer) or ROCm (no CUDA)."
     return
   fi
-  cd collective/efa && make clean && make -j$(nproc) && cd ../../
+
+  if [[ "${USE_INTEL_RDMA_NIC:-0}" == "1" ]]; then
+    echo "[container] Building with Intel RDMA NIC support (USE_INTEL_RDMA_NIC=1)"
+  fi
+
+  cd collective/efa && make clean && make -j$(nproc) USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} && cd ../../
 
   # EFA requires a custom NCCL.
   cd thirdparty/nccl-sg
-  make src.build -j$(nproc) NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90"
+  make src.build -j$(nproc) NVCC_GENCODE="-gencode=arch=compute_90,code=sm_90" USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0}
   cd ../..
 
   echo "[container] Copying EFA .so to uccl/lib/"
@@ -161,13 +183,17 @@ build_ep() {
   set -euo pipefail
   echo "[container] build_ep Target: $TARGET"
 
+  if [[ "${USE_INTEL_RDMA_NIC:-0}" == "1" ]]; then
+    echo "[container] Building EP with Intel RDMA NIC support (USE_INTEL_RDMA_NIC=1)"
+  fi
+
   if [[ "$TARGET" == "therock" ]]; then
     echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
   elif [[ "$TARGET" == rocm* || "$TARGET" == cuda* ]]; then
     cd ep
     # This may be needed if you traverse through different git commits
     # make clean && rm -r build || true
-    python3 setup.py build
+    USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} python3 setup.py build
     cd ..
     echo "[container] Copying GPU-driven .so to uccl/"
     mkdir -p uccl/lib
@@ -237,20 +263,20 @@ fi
 
 # Detect stale builder image
 # If a builder image exists...
-hash_image=$(docker images -q ${IMAGE_NAME})
+hash_image=$(${CONTAINER_ENGINE} images -q ${IMAGE_NAME})
 if [[ "${hash_image}" != "" ]]; then
 
   # Get its and its dockerfile's timestamps
   ts_dockerfile=$(date -r ${DOCKERFILE} --iso-8601=seconds)
-  ts_image=$(docker inspect -f '{{ .Created }}' ${IMAGE_NAME})
+  ts_image=$(${CONTAINER_ENGINE} inspect -f '{{ .Created }}' ${IMAGE_NAME})
 
   # If image is stale, suggest deleting & purging it
   if [[ "${ts_dockerfile}" > "${ts_image}" ]]; then
       echo "WARNING: builder image '${IMAGE_NAME}' is older than its source (${DOCKERFILE})" >&2
       echo "Please consider removing it, pruning the builder cache, and retrying the build to regenerate it." >&2
       echo " " >&2
-      echo "  $ docker image rm '${IMAGE_NAME}'" >&2
-      echo "  $ docker buildx prune -f" >&2
+      echo "  $ ${CONTAINER_ENGINE} image rm '${IMAGE_NAME}'" >&2
+      echo "  $ ${CONTAINER_ENGINE} buildx prune -f" >&2
       echo " " >&2
       echo "NOTE: this may also prune unrelated builder cache images!" >&2
       sleep 1
@@ -258,7 +284,7 @@ if [[ "${hash_image}" != "" ]]; then
 fi
 
 # Build the builder image (contains toolchain + CUDA/ROCm)
-echo "[1/3] Building Docker image ${IMAGE_NAME} using ${DOCKERFILE}..."
+echo "[1/3] Building container image ${IMAGE_NAME} using ${DOCKERFILE} (engine: ${CONTAINER_ENGINE})..."
 echo "Python version: ${PY_VER}"
 if [[ "$TARGET" == "therock" ]]; then
   echo "ROCm index URL: ${ROCM_IDX_URL}"
@@ -268,9 +294,9 @@ if [[ -n "${BASE_IMAGE:-}" ]]; then
   BUILD_ARGS+=" --build-arg BASE_IMAGE=${BASE_IMAGE}"
 fi
 if [[ "$ARCH" == "aarch64" ]]; then
-  docker build --platform=linux/arm64 $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+  ${CONTAINER_ENGINE} build --platform=linux/arm64 $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
 else
-  docker build $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+  ${CONTAINER_ENGINE} build $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
 fi
 
 echo "[2/3] Running build inside container..."
@@ -312,7 +338,35 @@ fi
 
 export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-${DETECTED_GPU_ARCH}}"
 
-docker run --rm --user "$(id -u):$(id -g)" \
+# The build container (Ubuntu 22.04, glibc 2.35) produces wheels tagged
+# manylinux_2_35 by default.  Rocky Linux 9.x only ships glibc 2.34, so
+# those wheels won't install there.  Detect the host distro and, when
+# running on Rocky 9, retag the wheel to manylinux_2_34 after auditwheel
+# repair.  Note: this does not verify glibc symbol compatibility -- the
+# binaries are built against glibc 2.35 and may use 2.35-only symbols.
+# UCCL collectives has been tested and working on Rocky Linux 9.4 with this
+# retagged wheel.
+UCCL_WHEEL_PLAT=""
+if [[ -f /etc/os-release ]]; then
+  HOST_ID=$(. /etc/os-release && echo "${ID:-}")
+  HOST_VERSION_ID=$(. /etc/os-release && echo "${VERSION_ID:-}")
+  if [[ "$HOST_ID" == "rocky" && "$HOST_VERSION_ID" == 9* ]]; then
+    UCCL_WHEEL_PLAT="manylinux_2_34_${ARCH}"
+    echo "[INFO] Rocky Linux 9 detected wheel will be tagged ${UCCL_WHEEL_PLAT}"
+  fi
+fi
+
+# Build container run command – podman runs as --user root since it works well
+# with NFS volume permissions and is suitable for development and testing;
+# docker uses the host uid:gid.
+CONTAINER_RUN_ARGS=(run --rm)
+if [[ "$CONTAINER_ENGINE" == "podman" ]]; then
+  CONTAINER_RUN_ARGS+=(--user root)
+else
+  CONTAINER_RUN_ARGS+=(--user "$(id -u):$(id -g)")
+fi
+
+${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
   -v $HOME:$HOME \
@@ -327,9 +381,12 @@ docker run --rm --user "$(id -u):$(id -g)" \
   -e USE_TCPX="${USE_TCPX:-0}" \
   -e USE_EFA="${USE_EFA:-0}" \
   -e USE_IB="${USE_IB:-0}" \
+  -e USE_TCP="${USE_TCP:-0}" \
+  -e USE_INTEL_RDMA_NIC="${USE_INTEL_RDMA_NIC:-0}" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
   -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
   -e DISABLE_AGGRESSIVE_ATOMIC="${DISABLE_AGGRESSIVE_ATOMIC:-0}" \
+  -e UCCL_WHEEL_PLAT="${UCCL_WHEEL_PLAT:-}" \
   -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_ccl_rdma build_ccl_efa build_p2p build_ep build_ukernel)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
@@ -421,6 +478,19 @@ def initialize():
       --exclude "libcuda.so.1" \
       --exclude "libefa.so.1" \
       -w /io/${WHEEL_DIR}
+
+    # If UCCL_WHEEL_PLAT is set (i.e. host glibc differs from the build
+    # container default of manylinux_2_35), retag the wheel accordingly.
+    if [[ -n "${UCCL_WHEEL_PLAT:-}" ]]; then
+      echo "[container] Retagging wheel platform to ${UCCL_WHEEL_PLAT}"
+      cd /io/${WHEEL_DIR}
+      for whl in uccl-*.whl; do
+        if [[ -f "$whl" ]]; then
+          python3 -m wheel tags --platform-tag "${UCCL_WHEEL_PLAT}" --remove "$whl"
+        fi
+      done
+      cd /io
+    fi
 
     # Add backend tag to wheel filename using local version identifier
     if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then

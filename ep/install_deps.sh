@@ -39,8 +39,12 @@ if check_cuda; then
     PYTORCH_SUFFIX="cu$((10#$CUDA_MAJOR * 10 + 10#$CUDA_MINOR))"
     
     # Verify PyTorch wheel exists for this version, fallback to latest if not
-    if curl --output /dev/null --silent --head "https://download.pytorch.org/whl/$PYTORCH_SUFFIX/torch/" &> /dev/null; then
+    if curl --fail --output /dev/null --silent --head "https://download.pytorch.org/whl/$PYTORCH_SUFFIX/torch/" &> /dev/null; then
         echo "Using PyTorch suffix: $PYTORCH_SUFFIX"
+    # temporary fallback since cu131 is not available now
+    elif [[ "$PYTORCH_SUFFIX" == "cu131" ]]; then
+        echo "Detected PyTorch suffix cu131, which is currently not available, temporarily falling back to cu130 for now"
+        PYTORCH_SUFFIX="cu130"
     else
         echo "No exact match for $PYTORCH_SUFFIX, using latest compatible version"
         PYTORCH_SUFFIX="cu${CUDA_MAJOR}1"  # Fallback to major version + .1

@@ -89,6 +89,8 @@ Notes:
 * **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to work. 
 * To benchmark dual direction transfer, `benchmark_uccl.py --dual`.
 * To benchmark intra-node transfer via CUDA/HIP IPC, `torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --ipc`.
+* To benchmark one-sided IPC write (GPU-to-GPU or CPU-to-GPU), `torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc`. Use `--device cpu --pinned` for CPU source buffers.
+* To benchmark one-sided IPC read (GPU-to-GPU or GPU-to-CPU), `torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc`. Use `--device cpu --pinned` for CPU destination buffers.
 * To benchmark one-sided READ/WRITE transfer, `benchmark_uccl_readwrite.py`.
 * To benchmark UCCL copy-only collectives (eg, sendrecv, allgather), `benchmark_uccl_collective.py`. You can also run ring-like communication pattern with `--ring`.
 * From CollectiveContext, the default parameter `use_copy_engine_for_intra` is `False`, which means it will use NCCL/RCCL via `torch.distributed` for intra-node communication; if setting to `True`, it will use GPU copy engine (eg, `cudaMemcpy`) via UCCL for intranode communication. 
@@ -486,6 +488,26 @@ Accept an incoming connection (blocking).
 - `remote_gpu_idx` (int): GPU index of connecting client
 - `conn_id` (int): Connection ID for subsequent operations
 
+```python
+add_remote_endpoint(metadata_bytes) -> (success, conn_id)
+```
+Add a remote endpoint using serialized metadata. Connects only once per remote endpoint — if a connection to the same remote endpoint already exists, the cached `conn_id` is returned directly.
+
+**Parameters:**
+- `metadata_bytes` (bytes): Serialized endpoint metadata (obtained from `get_metadata()`) containing IP address, port, and GPU index
+
+**Returns:**
+- `success` (bool): Whether connection succeeded (or was already cached)
+- `conn_id` (int): Connection ID for subsequent operations
+
+```python
+start_passive_accept() -> success
+```
+Start a background thread that continuously accepts incoming connections. This is useful when you don't want to block the main thread on `accept()` calls — the background thread will automatically accept all incoming connections.
+
+**Returns:**
+- `success` (bool): Whether the background accept thread was started
+
 #### Memory Registration
 
 ```python
@@ -743,4 +765,22 @@ python tests/test_engine_read.py
 python tests/test_engine_write.py
 python tests/test_engine_metadata.py
 torchrun --nnodes=1 --nproc_per_node=2 tests/test_engine_nvlink.py
+
+# One-sided IPC correctness tests (write_ipc, read_ipc, writev_ipc, readv_ipc — sync and async)
+# Verifies that each API correctly copies data from source to destination buffers.
+torchrun --nnodes=1 --nproc_per_node=2 tests/test_engine_onesided_ipc.py
+
+# One-sided IPC benchmarks (write_ipc / read_ipc)
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc --device cpu --pinned
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc --device cpu --pinned
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc --async-api
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc --async-api
+
+# Vectorized one-sided IPC benchmarks (writev_ipc / readv_ipc), e.g. 4 buffers per call
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc --num-kvblocks 4
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc --num-kvblocks 4
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc --num-kvblocks 4 --async-api
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc --num-kvblocks 4 --async-api
 ```

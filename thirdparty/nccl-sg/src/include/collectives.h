@@ -65,8 +65,12 @@ struct ncclConnFifo {
   void* ptr;
 };
 
-// Yang: 64 max scattered IOVs
+// Yang: 64 max scattered IOVs; 256 for MTU 4096
+#ifdef MTU_4096
+#define kMaxIovs 256
+#else
 #define kMaxIovs 64
+#endif
 struct alignas(8) iov {
   void* src_addrs[kMaxIovs];
   void* dst_addrs[kMaxIovs];
@@ -76,6 +80,11 @@ struct alignas(8) iov {
   int step; // for debugging
 };
 const uint32_t kIovSize = sizeof(struct iov);
+
+// Use shared memory for IOV when kMaxIovs is <= 64, otherwise use HBM pointer to avoid shared memory overflow
+#if kMaxIovs <= 64
+#define USE_SHARED_MEMORY
+#endif
 
 #include <stdio.h>
 

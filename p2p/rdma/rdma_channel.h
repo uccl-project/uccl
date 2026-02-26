@@ -159,7 +159,7 @@ class RDMAChannel {
   inline int __postRequest_ex(std::shared_ptr<RDMASendRequest> req) {
     auto* qpx = ibv_qp_to_qp_ex(qp_);
     ibv_wr_start(qpx);
-    LOG(INFO) << *req;
+    // LOG(INFO) << *req;
     qpx->wr_id = req->wr_id;
     qpx->comp_mask = 0;
     qpx->wr_flags = IBV_SEND_SIGNALED;
@@ -178,8 +178,9 @@ class RDMAChannel {
 
     struct ibv_sge sge[1];
     int num_sge = prepareSGEList(sge, req);
-    uint32_t max_inline = impl_->getMaxInlineData();
-    if (req->getLocalLen() <= max_inline) {
+
+    if (req->send_type != SendType::Read &&
+        req->getLocalLen() <= impl_->getMaxInlineData()) {
       qpx->wr_flags |= IBV_SEND_INLINE;
       ibv_wr_set_inline_data(qpx, (void*)req->getLocalAddress(),
                              req->getLocalLen());
@@ -220,7 +221,7 @@ class RDMAChannel {
     struct ibv_sge sge[1];
 
     memset(&wr, 0, sizeof(wr));
-    LOG(INFO) << *req;
+    // LOG(INFO) << *req;
 
     wr.wr_id = req->wr_id;
     wr.send_flags = IBV_SEND_SIGNALED;
@@ -247,8 +248,8 @@ class RDMAChannel {
       return -1;
     }
 
-    uint32_t max_inline = impl_->getMaxInlineData();
-    if (req->getLocalLen() <= max_inline) {
+    if (req->send_type != SendType::Read &&
+        req->getLocalLen() <= impl_->getMaxInlineData()) {
       wr.send_flags |= IBV_SEND_INLINE;
     }
 

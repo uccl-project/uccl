@@ -51,6 +51,7 @@ class Proxy {
     bool use_normal_mode =
         false;  // Runtime flag for normal mode (batching optimization)
     bool is_intranode = false;
+    bool free_buffer_with_cuda_free_host = false;
   };
 
   Proxy(Config const& cfg);

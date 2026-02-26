@@ -184,8 +184,8 @@ class NICEndpoint {
 
     // Blocking call until send succeeds
     while (wr_id < 0) {
-      LOG(INFO) << "NICEndpoint::write - Attempting to send to rank_id: "
-                << rank_id << ", peer rank_id " << rank_id;
+      // LOG(INFO) << "NICEndpoint::write - Attempting to send to rank_id: "
+      //           << rank_id << ", peer rank_id " << rank_id;
       wr_id = send_group->postWriteOrRead(req);
 
       if (wr_id < 0) {
@@ -290,7 +290,7 @@ class NICEndpoint {
     uint64_t rank_id = 0;
 
     // Block until there's an accepted connection
-    while (true) {
+    while (!stop_accept_.load(std::memory_order_acquire)) {
       {
         {
           std::unique_lock<std::shared_mutex> lock(accepted_meta_mutex_);
@@ -348,7 +348,8 @@ class NICEndpoint {
       struct ibv_mr* mr = context->regMem(data, len);
 
       if (unlikely(!mr)) {
-        LOG(ERROR) << "Error: ibv_reg_mr failed for data at " << data
+        LOG(ERROR) << "Error " << errno << " " << strerror(errno)
+                   << ": ibv_reg_mr_iova2 failed for data at " << data
                    << " size " << len << " context_id " << context_id;
         return -1;
       }
@@ -452,6 +453,8 @@ class NICEndpoint {
 
     return send_group->processSendRequests(req);
   }
+
+  void stop_accept() { stop_accept_.store(true, std::memory_order_release); }
 
  private:
   // Get context from channel_id
@@ -818,4 +821,6 @@ class NICEndpoint {
   bool auto_start_polling_;
   std::atomic<int32_t> send_id_;
   std::atomic<int32_t> recv_id_;
+
+  std::atomic<bool> stop_accept_{false};
 };

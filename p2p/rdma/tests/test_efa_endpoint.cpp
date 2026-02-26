@@ -306,8 +306,7 @@ void unidirectional_test(NICEndpoint& endpoint, MemoryAllocator& allocator,
   double elapsed_seconds =
       std::chrono::duration<double>(end_time - start_time).count();
   double total_bytes = static_cast<double>(test_buffer_size) * iterations;
-  double bandwidth_gbps =
-      (total_bytes / elapsed_seconds) / (1024.0 * 1024.0 * 1024.0);
+  double bandwidth_gbps = (total_bytes / elapsed_seconds) / 1e9;
   double latency_us = (elapsed_seconds / iterations) * 1000000.0;
 
   std::cout << "\n=== Unidirectional Bandwidth Test Results (Rank "
@@ -316,8 +315,7 @@ void unidirectional_test(NICEndpoint& endpoint, MemoryAllocator& allocator,
   std::cout << "Iterations: " << iterations << "\n";
   std::cout << "Buffer size: " << test_buffer_size << " bytes\n";
   std::cout << "Total time: " << elapsed_seconds << " seconds\n";
-  std::cout << "Total data transferred: "
-            << (total_bytes / (1024.0 * 1024.0 * 1024.0)) << " GB\n";
+  std::cout << "Total data transferred: " << (total_bytes / 1e9) << " GB\n";
   std::cout << "Bandwidth: " << bandwidth_gbps << " GB/s\n";
   std::cout << "Average latency: " << latency_us << " us\n";
   std::cout << "Operations per second: " << (iterations / elapsed_seconds)
@@ -428,8 +426,7 @@ void bandwidth_test(NICEndpoint& endpoint, MemoryAllocator& allocator,
       std::chrono::duration<double>(end_time - start_time).count();
   double total_bytes =
       static_cast<double>(test_buffer_size) * iterations * 2;  // send + recv
-  double bandwidth_gbps =
-      (total_bytes / elapsed_seconds) / (1024.0 * 1024.0 * 1024.0);
+  double bandwidth_gbps = (total_bytes / elapsed_seconds) / 1e9;
   double latency_us = (elapsed_seconds / iterations) * 1000000.0;
   if (!endpoint.deregMem(send_mem)) {
     throw std::runtime_error("Failed to deregMem send_mem");
@@ -441,8 +438,7 @@ void bandwidth_test(NICEndpoint& endpoint, MemoryAllocator& allocator,
   std::cout << "Iterations: " << iterations << "\n" << std::flush;
 
   std::cout << "Total time: " << elapsed_seconds << " seconds\n" << std::flush;
-  std::cout << "Total data transferred: "
-            << (total_bytes / (1024.0 * 1024.0 * 1024.0)) << " GB\n"
+  std::cout << "Total data transferred: " << (total_bytes / 1e9) << " GB\n"
             << std::flush;
   std::cout << "Message size: " << test_buffer_size << " bytes ("
             << (test_buffer_size / (1024.0 * 1024.0)) << " MB)\n"

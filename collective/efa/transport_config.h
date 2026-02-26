@@ -11,6 +11,7 @@
 #define SCATTERED_MEMCPY
 // #define RTT_STATS
 #define LAZY_CREATE_ENGINE
+//#define MANAGED            // Use cudaMallocManaged not cudaMalloc
 
 enum class SenderCCType {
   kNone,
@@ -31,6 +32,11 @@ static_assert(
     "kSenderCCType and kReceiverCCType can not be kNone at the same time.");
 
 #define P4D
+// #define INTEL_RDMA_NIC
+
+#ifdef INTEL_RDMA_NIC
+#define MANAGED
+#endif
 
 static const uint32_t kNumVdevices = 8;        // # of vEFA/GPUs.
 static const uint32_t kNumEnginesPerVdev = 2;  // # of engines per vEFA/GPU.
@@ -41,20 +47,29 @@ static bool const kSplitSendRecvEngine =
 /// Interface configuration.
 #ifdef P4D
 static const uint8_t NUM_DEVICES = (kNumVdevices + 1) / 2;
+#ifdef INTEL_RDMA_NIC
+static const uint8_t EFA_GID_IDX = 1;
+static constexpr double kLinkBandwidth = 200.0 * 1e9 / 8;  // 200Gbps
+#else
 static const uint8_t EFA_GID_IDX = 0;
-
 static constexpr double kLinkBandwidth = 100.0 * 1e9 / 8;  // 100Gbps
 #endif
+#endif
 static const uint8_t EFA_PORT_NUM = 1;  // The port of EFA device to use.
+#ifdef INTEL_RDMA_NIC
+static const uint32_t EFA_MTU = 4096;  // Max frame on fabric, includng headers.
+static const uint32_t EFA_MAX_PAYLOAD = 4056;  // this excludes EFA_UD_ADDITION.
+#else
 static const uint32_t EFA_MTU = 9000;  // Max frame on fabric, includng headers.
 static const uint32_t EFA_MAX_PAYLOAD = 8928;  // this excludes EFA_UD_ADDITION.
+#endif
 static const uint32_t EFA_HDR_OVERHEAD = EFA_MTU - EFA_MAX_PAYLOAD;
 static const uint32_t EFA_MAX_QPS = 256;         // Max QPs per EFA device.
 static const uint32_t EFA_MAX_INLINE_SIZE = 32;  // Max inline data size.
 #ifdef USE_SRD
 static const uint32_t EFA_UD_ADDITION = 0;  // Auto-added by EFA during recv.
 #else
-static const uint32_t EFA_UD_ADDITION = 40;  // Auto-added by EFA during recv.
+static const uint32_t EFA_UD_ADDITION = 40;    // Auto-added by EFA during recv.
 #endif
 /// Interface configuration.
 static_assert(kNumEngines >= NUM_DEVICES * 2,
@@ -72,8 +87,13 @@ static const uint32_t PACER_CPU_START[2] = {
     ENGINE_CPU_START[1] + 8 /* 4 VDEV * 2 EnginePerVdev */};
 static const uint16_t BASE_PORT = 10000;
 static const uint64_t NUM_FRAMES = 4 * 65536;  // # of frames.
+#ifdef INTEL_RDMA_NIC
+static const uint32_t RECV_BATCH_SIZE = 512;
+static const uint32_t SEND_BATCH_SIZE = 256;
+#else
 static const uint32_t RECV_BATCH_SIZE = 32;
 static const uint32_t SEND_BATCH_SIZE = 16;
+#endif
 static const uint32_t QKEY = 0x12345;
 static const uint32_t SQ_PSN = 0x12345;
 static const uint64_t MAX_FLOW_ID = 1000000;
@@ -84,7 +104,11 @@ static const uint32_t kMaxRecvWr = 256;
 static const uint32_t kMaxSendRecvWrForCtrl = 1024;
 static const uint32_t kMaxSendRecvWrForCredit = 1024;
 static const uint32_t kMaxCqeTotal = 16384;
+#ifdef INTEL_RDMA_NIC
+static const uint32_t kMaxPollBatch = 512;
+#else
 static const uint32_t kMaxPollBatch = 32;
+#endif
 static const uint32_t kMaxRecvWrDeficit = 32;
 static const uint32_t kMaxChainedWr = 32;
 static const uint32_t kMaxUnconsumedRxMsgbufs = NUM_FRAMES / 16;
@@ -115,11 +139,19 @@ static_assert((kMaxSrcQP + kMaxSrcQPCtrl) * kNumEnginesPerVdev * 2 +
               EFA_MAX_QPS);
 
 // CC parameters.
+#ifdef INTEL_RDMA_NIC
+static double const kMaxUnackedPktsPP = 4u;
+#else
 static double const kMaxUnackedPktsPP = 1u;
+#endif
 static const uint32_t kMaxUnackedPktsPerEngine = kMaxUnackedPktsPP * kMaxPath;
 static const std::size_t kSackBitmapSize = 1024;
 static const std::size_t kFastRexmitDupAckThres = 128;
+#ifdef INTEL_RDMA_NIC
+static double const kMaxBwPP = 10.0 * 1e9 / 8;
+#else
 static double const kMaxBwPP = 5.0 * 1e9 / 8;
+#endif
 static const uint32_t kSwitchPathThres = 1u;
 static const uint32_t kMaxPktsInTimingWheel = 1024;
 static const uint32_t kMaxPathHistoryPerEngine = 4096;

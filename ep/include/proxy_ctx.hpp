@@ -87,9 +87,6 @@ struct ProxyCtx {
   std::vector<uint64_t> ack_recv_buf;
   ibv_mr* ack_recv_mr = nullptr;
 
-  // For batched WR bookkeeping (largest_wr -> component wr_ids)
-  std::unordered_map<uint64_t, std::vector<uint64_t>> wr_id_to_wr_ids{};
-
   // GPU copy helpers (moved from function-static thread_local)
   gpuStream_t copy_stream = nullptr;
   bool peer_enabled[MAX_NUM_GPUS][MAX_NUM_GPUS] = {};
