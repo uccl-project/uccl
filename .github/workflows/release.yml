@@ -141,8 +141,8 @@ jobs:
         run: |
           pip install wheel
           PY_VER_NODOT=$(echo "${{ matrix.py_version }}" | tr -d '.')
-          cd wheelhouse-${{ matrix.target }}
-          for whl in *.whl; do
+          cd "wheelhouse-${{ matrix.target }}"
+          for whl in ./*.whl; do
             if [[ -f "$whl" ]]; then
               echo "Retagging $whl -> cp${PY_VER_NODOT}-cp${PY_VER_NODOT}-..."
               python3 -m wheel tags \
@@ -152,7 +152,7 @@ jobs:
             fi
           done
           echo "Wheels after retagging:"
-          ls -lh *.whl
+          ls -lh ./*.whl
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
@@ -179,15 +179,16 @@ jobs:
           echo "Version: ${VERSION}"
 
           # Start with the main repo
-          git archive --format=tar --prefix=uccl-${VERSION}/ HEAD > uccl-${VERSION}.tar
+          git archive --format=tar "--prefix=uccl-${VERSION}/" HEAD > "uccl-${VERSION}.tar"
 
           # Append each submodule's contents
+          TARBALL="$(pwd)/uccl-${VERSION}.tar"
           git submodule foreach --recursive \
-            'git archive --format=tar --prefix=uccl-'"${VERSION}"'/$sm_path/ HEAD | \
-             tar --concatenate --file='"$(pwd)"'/uccl-'"${VERSION}"'.tar'
+            "git archive --format=tar --prefix=uccl-${VERSION}/\$sm_path/ HEAD | \
+             tar --concatenate --file=\"${TARBALL}\""
 
-          gzip uccl-${VERSION}.tar
-          ls -lh uccl-${VERSION}.tar.gz
+          gzip "uccl-${VERSION}.tar"
+          ls -lh "uccl-${VERSION}.tar.gz"
 
       - name: Upload source tarball
         uses: actions/upload-artifact@v4
