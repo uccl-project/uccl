@@ -93,3 +93,169 @@ jobs:
         with:
           name: build-log
           path: build.log
+
+  run-benchmarks-on-gb10:
+    needs: [build-on-gpu-host]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH for gb10
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${{secrets.UCCL_DEV_SSH_KEY}}" > ~/.ssh/uccl-dev
+          chmod 600 ~/.ssh/uccl-dev
+
+          cat >> ~/.ssh/config << 'EOF'
+          Host spark0
+              HostName "${{secrets.UCCL_DEV_HOSTNAME}}"
+              Port "${{secrets.UCCL_DEV_SPARK0_PORT}}"
+              User "${{secrets.UCCL_DEV_USER}}"
+              IdentityFile ~/.ssh/uccl-dev
+              IdentitiesOnly yes
+
+          Host spark1
+              HostName "${{secrets.UCCL_DEV_HOSTNAME}}"
+              Port "${{secrets.UCCL_DEV_SPARK1_PORT}}"
+              User "${{secrets.UCCL_DEV_USER}}"
+              IdentityFile ~/.ssh/uccl-dev
+              IdentitiesOnly yes
+          EOF
+
+          ssh-keyscan -p "${{secrets.UCCL_DEV_SPARK0_PORT}}" -H "${{secrets.UCCL_DEV_HOSTNAME}}" >> ~/.ssh/known_hosts
+          ssh-keyscan -p "${{secrets.UCCL_DEV_SPARK1_PORT}}" -H "${{secrets.UCCL_DEV_HOSTNAME}}" >> ~/.ssh/known_hosts
+
+      - name: Sync pushed code to gb10
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule update --init --recursive thirdparty/nccl
+          rsync -az --delete \
+            --rsync-path="mkdir -p /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox && rsync" \
+            ./ep ./ \
+            spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox
+
+      - name: Build and verify UCCL on gb10
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes spark1 << 'EOF'
+            set -euo pipefail
+
+            # startup conda
+            source /home/${{secrets.UCCL_DEV_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
+
+            conda info --envs | awk '{print $1}' | grep -qx uccl-ci-sandbox || conda create -y -n uccl-ci-sandbox python=3.13
+            conda activate uccl-ci-sandbox
+
+            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/ep
+
+            ./install_deps.sh 2>&1 | tee build.log
+            grep -q 'All dependencies installed and environment configured' build.log
+
+            # manually configure the cuda path to prevent include errors
+            export CUDA_HOME="/usr/local/cuda-13.0"
+            export PATH="$CUDA_HOME/bin:$PATH"
+
+            python setup.py clean
+            if ! python setup.py install 2>&1 | tee build.log; then
+              echo 'Could not set up after successful install'
+              exit 1
+            fi
+
+            if ! python -c 'import torch; import uccl.ep'; then
+              echo 'Import of torch and uccl.ep failed. Cleaning up and exiting...'
+              python setup.py clean
+              exit 1
+            fi
+
+            echo 'Build and Verification Successful!'
+          EOF
+
+      - name: Run inter-node latency test
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          ssh -o BatchMode=yes spark1 << 'EOF' &
+            set -euo pipefail
+            active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
+
+            # abort if there are active jobs on the cluster
+            if [ -n "$active_jobs" ]; then
+                echo "spark0 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
+
+            source /home/${{secrets.UCCL_DEV_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
+            conda activate uccl-ci-sandbox
+
+            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl/ep
+
+            export UCCL_SOCKET_IFNAME=enP2p1s0f0np0
+            /home/${{secrets.UCCL_DEV_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun   --nnodes=2 --nproc_per_node=1   --node_rank=0   --master_addr=10.0.0.2 --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
+          EOF
+          PID_SERVER=$!
+
+          sleep 2
+          echo "Started test on server..."
+
+          ssh -o BatchMode=yes spark0 << 'EOF' &
+            set -euo pipefail
+            active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
+
+            # abort if there are active jobs on the cluster
+            if [ -n "$active_jobs" ]; then
+                echo "spark0 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
+
+            source /home/${{secrets.UCCL_DEV_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
+            conda activate uccl-ci-sandbox
+
+            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl/ep
+            export UCCL_SOCKET_IFNAME=enP2p1s0f0np0
+
+            /home/${{secrets.UCCL_DEV_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun --nnodes=2 --nproc_per_node=1   --node_rank=1   --master_addr=10.0.0.2 --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
+          EOF
+          PID_CLIENT=$!
+
+          echo "Started test on client..."
+
+          wait $PID_SERVER
+          STATUS_SERVER=$?
+          echo "Server exit code: $STATUS_SERVER"
+
+          wait $PID_CLIENT
+          STATUS_CLIENT=$?
+          echo "Client exit code: $STATUS_CLIENT"
+
+          if [ $STATUS_SERVER -ne 0 ] || [ $STATUS_CLIENT -ne 0 ]; then
+            echo "2-Node Latency Test Failed!"
+            exit 1
+          fi
+
+      - name: Fetch remote build.log
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          scp -o BatchMode=yes spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/ep/build.log ./build.log || true
+          ssh -o BatchMode=yes spark1 << 'EOF'
+            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/ep
+            rm build.log
+          EOF
+
+      - name: Upload build.log artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
