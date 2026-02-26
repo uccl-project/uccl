@@ -39,6 +39,10 @@ Based on https://github.com/uccl-project/uccl/commit/0cdfcf5286c0438ecb0df1820a3
 
 ### On two p5en
 
+Based on https://github.com/uccl-project/uccl/commit/0cdfcf5286c0438ecb0df1820a3028558659ff89 (incast scenario).
+
+We find 6.168 GB/s vs. 14.438 GB/s for cross-rail vs. rail-aligned.
+
 Based on the lastest code (random scenario). 
 
 We find 9.930 GB/s vs. 15.673 GB/s for cross-rail vs. rail-aligned. 
