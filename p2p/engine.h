@@ -270,6 +270,9 @@ class Endpoint {
 
   ~Endpoint();
 
+  /* Stop accepting incoming connections. */
+  void stop_accepting();
+
   /* Connect to a remote server via TCP, then build RDMA QP connections. */
   bool connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
                uint64_t& conn_id);
