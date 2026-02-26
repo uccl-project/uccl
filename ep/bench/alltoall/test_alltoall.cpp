@@ -20,6 +20,7 @@
 #include <cstring>
 #include <iostream>
 #include <mutex>
+#include <random>
 #include <sstream>
 #include <thread>
 #include <vector>
@@ -479,40 +480,34 @@ void run_gpu_thread(int gpu_id, int my_node, int num_nodes,
   std::vector<std::vector<uint64_t>> posted_per_remote(
       num_nodes, std::vector<uint64_t>(NUM_GPUS_PER_NODE, 0));
 
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<int> node_dist(0, num_nodes - 1);
+  std::uniform_int_distribution<int> gpu_dist(0, NUM_GPUS_PER_NODE - 1);
+
   uint64_t completed_per_nic[NUM_NICS_PER_GPU] = {0};
   int inflight_per_nic[NUM_NICS_PER_GPU] = {0};
 
   uint64_t total_posted = 0;
   uint64_t total_completed = 0;
 
-  int next_remote_node = (my_node + 1) % num_nodes;  // Start with next node
-  int next_remote_gpu = 0;
-
   while (total_completed < total_msgs) {
-    // Post phase: round-robin across all remote (node, gpu) pairs
+    // Post phase: pick random (node, gpu) per send
     while (total_posted < total_msgs) {
-      // Find next remote (node, gpu) that needs more messages
+      // Pick a random remote (node, gpu) that still has capacity
+      int next_remote_node = -1;
+      int next_remote_gpu = -1;
       int attempts = 0;
-      while (attempts < total_remote_gpus) {
-        if (next_remote_node == my_node) {
-          // Skip to next node
-          next_remote_node = (next_remote_node + 1) % num_nodes;
-          continue;
-        }
-
-        if (posted_per_remote[next_remote_node][next_remote_gpu] <
-            (uint64_t)MSGS_PER_REMOTE_GPU) {
+      do {
+        next_remote_node = node_dist(gen);
+        next_remote_gpu = gpu_dist(gen);
+        if (next_remote_node != my_node &&
+            posted_per_remote[next_remote_node][next_remote_gpu] <
+                (uint64_t)MSGS_PER_REMOTE_GPU) {
           break;
         }
-
-        // Move to next GPU/node
-        next_remote_gpu++;
-        if (next_remote_gpu >= NUM_GPUS_PER_NODE) {
-          next_remote_gpu = 0;
-          next_remote_node = (next_remote_node + 1) % num_nodes;
-        }
         attempts++;
-      }
+      } while (attempts < total_remote_gpus);
       if (attempts >= total_remote_gpus) break;  // All done posting
 
       // Striping: alternate NICs based on message sequence
@@ -564,13 +559,6 @@ void run_gpu_thread(int gpu_id, int my_node, int num_nodes,
       inflight_per_nic[nic]++;
       total_posted++;
       base_nics[nic].posted.fetch_add(1, std::memory_order_relaxed);
-
-      // Move to next GPU/node
-      next_remote_gpu++;
-      if (next_remote_gpu >= NUM_GPUS_PER_NODE) {
-        next_remote_gpu = 0;
-        next_remote_node = (next_remote_node + 1) % num_nodes;
-      }
     }
 
     // Poll phase: poll both NICs
