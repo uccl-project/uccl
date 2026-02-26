@@ -619,7 +619,7 @@ void run_gpu_thread(int gpu_id, int my_node, int num_nodes,
   thread_barrier(NUM_GPUS_PER_NODE);
 
   uint64_t total_bytes = total_msgs * MSG_SIZE;
-  double bw_gbps = (total_bytes / elapsed) / (1024.0 * 1024.0 * 1024.0);
+  double bw_gbps = (total_bytes / elapsed) / 1e9;
 
   {
     std::lock_guard<std::mutex> lock(print_mutex);
