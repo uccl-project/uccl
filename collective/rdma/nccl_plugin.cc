@@ -2,7 +2,7 @@
 #include "transport.h"
 #include "transport_config.h"
 #include "util_rdma.h"
-#include <glog/logging.h>
+#include "util/logging.h"
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -83,7 +83,8 @@ struct ucclSendComm {
 };
 
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
-  std::cout << "Hello UCCL from PID: " << getpid() << std::endl;
+  uccl::logging::initLogger(logFunction);
+  INFO(UCCL_INIT, "UCCL RDMA plugin initialized, PID: %d", getpid());
 
   ep = std::make_shared<RDMAEndpoint>(ucclParamNUM_ENGINES());
 
