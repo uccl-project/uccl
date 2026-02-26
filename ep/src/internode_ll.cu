@@ -53,12 +53,12 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     int64_t* dispatch_wait_recv_cost_stats, void* rdma_recv_x,
     int* rdma_recv_count, void* rdma_x, void const* x, int64_t const* topk_idx,
     int* atomic_counter_per_expert, int* atomic_finish_counter_per_expert,
-    int* next_clean, int64_t* next_clean_second, int num_next_clean_int,
-    int num_tokens, int num_max_dispatch_tokens_per_rank, int num_topk,
-    int num_experts, int rank, int num_ranks, int num_warp_groups,
-    int num_warps_per_group, bool round_scale, int phases,
-    uint64_t const* d2h_channel_addrs, int num_d2h_channel_addrs,
-    int max_nvl_peers, int low_latency_buffer_idx,
+    int* atomic_send_counter_per_expert, int* next_clean,
+    int64_t* next_clean_second, int num_next_clean_int, int num_tokens,
+    int num_max_dispatch_tokens_per_rank, int num_topk, int num_experts,
+    int rank, int num_ranks, int num_warp_groups, int num_warps_per_group,
+    bool round_scale, int phases, uint64_t const* d2h_channel_addrs,
+    int num_d2h_channel_addrs, int max_nvl_peers, int low_latency_buffer_idx,
     void** ipc_rdma_base_ptrs = nullptr, void* rdma_buffer_ptr = nullptr,
     void* atomic_buffer_ptr = nullptr,
     int64_t* rdma_recv_count_internode = nullptr,
@@ -98,6 +98,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   // Expert counts
   __shared__ int shared_num_tokens_sent_per_expert[kNumMaxWarpGroups];
 
+#ifdef PER_EXPERT_BATCHING
+  // Global counter slots used for batching sends to each top-k destination.
+  constexpr int kNumMaxTopK = 9;
+  __shared__ int shared_send_slots[kNumMaxTopK];
+  __shared__ int shared_dst_experts[kNumMaxTopK];
+#endif
+
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   // initialize barrier
   amd::barrier_init(1);
@@ -135,6 +142,23 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                    topk_idx + token_idx * num_topk + warp_id))
                              : -1;
       thread_id == 0 ? (*rdma_x_src_idx = token_idx) : 0;
+
+#ifdef PER_EXPERT_BATCHING
+      // Allocate per-expert send slots for top-k destinations.
+      // Each warp (warp_id < num_topk) reserves one slot for its destination
+      // expert.
+      if (warp_id < num_topk && lane_id == 0) {
+        shared_dst_experts[warp_id] = dst_expert_idx;
+        if (dst_expert_idx >= 0) {
+          shared_send_slots[warp_id] =
+              atomicAdd(atomic_send_counter_per_expert + dst_expert_idx, 1);
+        } else {
+          shared_send_slots[warp_id] = -1;
+        }
+      }
+      // Sync to make shared_send_slots visible to all threads
+      sync_barrier_1((num_warps - 1) * WARP_SIZE);
+#endif
 
 // FP8 cast
 #pragma unroll
@@ -221,6 +245,25 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                         dst_rank, max_nvl_peers, 0)
                 : 0;
         if (dst_p2p_ptr == 0) {
+#ifdef PER_EXPERT_BATCHING
+          // For inter-node send path, copy temp data to the per-expert batch
+          // buffer, then issue a batched RDMA send.
+          // TODO: This has an extra temp->per-expert copy in the FP8 path.
+          // FP8 output is written to the temp buffer first, then copied here.
+          auto const slot_idx = shared_send_slots[warp_id];
+          auto const batch_buf_offset =
+              num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
+          auto const batch_buf_ptr =
+              static_cast<uint8_t*>(rdma_x) + batch_buf_offset +
+              (dst_expert_idx * num_max_dispatch_tokens_per_rank + slot_idx) *
+                  num_bytes_per_msg;
+          auto const* src_int4_ptr =
+              reinterpret_cast<int4 const*>(rdma_x_src_idx);
+          auto* batch_buf_int4_ptr = reinterpret_cast<int4*>(batch_buf_ptr);
+          UNROLLED_WARP_COPY(8, lane_id, num_int4_per_msg, batch_buf_int4_ptr,
+                             src_int4_ptr, ld_nc_global, st_na_global);
+#else
+          // Legacy path: directly issue one RDMA send per token.
           __threadfence_system();
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
@@ -230,6 +273,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                                  // rb.
               lane_id, slot_idx, d2h_channel_addrs, num_d2h_channel_addrs,
               false, low_latency_buffer_idx);
+#endif
         } else {
           // Intra-node: use direct memory copy via IPC
           auto const* src_int4_ptr = reinterpret_cast<int4 const*>(src_ptr);
@@ -288,6 +332,71 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     }
   }
   __syncthreads();
+
+#ifdef PER_EXPERT_BATCHING
+  // Grid-wide sync before batch-send.
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  amd::grid_sync(grid_sync_barrier_ptr, num_sms);
+#else
+  cg::this_grid().sync();
+#endif
+
+  // Batch RDMA send phase - send entire expert buffer in ONE IBGDA call
+  // Each warp group handles one expert (only first sub_warp does the send)
+  if (responsible_expert_idx < num_experts && sub_warp_id == 0) {
+    auto const dst_rank = responsible_expert_idx / num_local_experts;
+    auto const dst_expert_local_idx =
+        responsible_expert_idx % num_local_experts;
+
+    // Check if this destination is inter-node (needs IBGDA batch send)
+    // IPC destinations were already sent in the token loop
+    auto const test_dst_ptr = reinterpret_cast<uint64_t>(rdma_recv_x);
+    auto const dst_p2p_ptr =
+        ipc_rdma_base_ptrs
+            ? uccl::get_ipc_p2p_ptr(test_dst_ptr, ipc_rdma_base_ptrs, rank,
+                                    dst_rank, max_nvl_peers, 0)
+            : 0;
+
+    if (dst_p2p_ptr == 0) {
+      // Inter-node: batch send ALL tokens for this expert in ONE call
+      auto const num_tokens_to_send =
+          atomic_send_counter_per_expert[responsible_expert_idx];
+
+      if (num_tokens_to_send > 0) {
+        auto const batch_buf_offset =
+            num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
+        // Source: start of this expert's batch buffer (contiguous)
+        auto const batch_buf_ptr =
+            static_cast<uint8_t*>(rdma_x) + batch_buf_offset +
+            responsible_expert_idx * num_max_dispatch_tokens_per_rank *
+                num_bytes_per_msg;
+        auto const src_ptr = reinterpret_cast<uint64_t>(batch_buf_ptr);
+        // Destination: start of this expert's recv buffer on remote rank
+        auto const dst_ptr =
+            reinterpret_cast<uint64_t>(rdma_recv_x) +
+            dst_expert_local_idx * num_ranks *
+                num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
+            rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
+        // Total bytes: all tokens for this expert
+        auto const total_bytes = num_tokens_to_send * num_bytes_per_msg;
+
+        __threadfence_system();
+
+        uccl::nvshmemi_ibgda_put_nbi_warp(
+            dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+            src_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), total_bytes,
+            dst_rank,
+            /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting rb.
+            lane_id, /*slot=*/0, d2h_channel_addrs, num_d2h_channel_addrs,
+            false, low_latency_buffer_idx, 0, 0, num_tokens_to_send);
+      }
+    }
+    // IPC: already sent in the token loop, nothing to do here
+  }
+
+  __threadfence_system();  // Ensure batch sends are visible before count sends
+#endif
+
   // Issue count sends
   if (responsible_expert_idx < num_experts and sub_warp_id == 0 and
       lane_id == 0) {
@@ -332,7 +441,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
     // Clean workspace for next use
     atomic_counter_per_expert[responsible_expert_idx] = 0;
     atomic_finish_counter_per_expert[responsible_expert_idx] = 0;
-
+#ifdef PER_EXPERT_BATCHING
+    atomic_send_counter_per_expert[responsible_expert_idx] = 0;
+#endif
     // Clean `packed_recv_count`
     if (dst_rank == 0) packed_recv_count[dst_expert_local_idx] = 0;
   }
@@ -556,32 +667,42 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   auto atomic_counter_per_expert = static_cast<int*>(workspace);
   auto atomic_finish_counter_per_expert =
       atomic_counter_per_expert + num_experts;
+#ifdef PER_EXPERT_BATCHING
+  auto atomic_send_counter_per_expert =
+      atomic_finish_counter_per_expert + num_experts;
+  auto grid_sync_barrier_ptr = atomic_send_counter_per_expert + num_experts;
+  EP_HOST_ASSERT((num_experts * 3 + 1) * sizeof(int) <= NUM_WORKSPACE_BYTES);
+#else
+  auto atomic_send_counter_per_expert =
+      atomic_finish_counter_per_expert + num_experts;  // Unused in legacy path.
   auto grid_sync_barrier_ptr = atomic_finish_counter_per_expert + num_experts;
   EP_HOST_ASSERT((num_experts * 2 + 1) * sizeof(int) <= NUM_WORKSPACE_BYTES);
+#endif
 
   // FP8 checks
   if (use_ue8m0)
     EP_HOST_ASSERT(round_scale and "UE8M0 SF requires `round_scale=True`");
 
-#define DISPATCH_LAUNCH_CASE(hidden)                                          \
-  {                                                                           \
-    auto dispatch_func = dispatch<false, false, hidden>;                      \
-    if (use_fp8 and not use_ue8m0)                                            \
-      dispatch_func = dispatch<true, false, hidden>;                          \
-    if (use_fp8 and use_ue8m0) dispatch_func = dispatch<true, true, hidden>;  \
-    LAUNCH_KERNEL(                                                            \
-        &cfg, dispatch_func, packed_recv_x, packed_recv_x_scales,             \
-        packed_recv_src_info, packed_recv_layout_range, packed_recv_count,    \
-        cumulative_local_expert_recv_stats, dispatch_wait_recv_cost_stats,    \
-        rdma_recv_x, rdma_recv_count, rdma_x, x, topk_idx,                    \
-        atomic_counter_per_expert, atomic_finish_counter_per_expert,          \
-        next_clean, next_clean_second, num_next_clean_int, num_tokens,        \
-        num_max_dispatch_tokens_per_rank, num_topk, num_experts, rank,        \
-        num_ranks, num_warp_groups, num_warps_per_group, round_scale, phases, \
-        d2h_channel_addrs, num_d2h_channel_addrs, max_nvl_peers,              \
-        low_latency_buffer_idx, ipc_rdma_base_ptrs, rdma_buffer_ptr,          \
-        atomic_buffer_ptr, rdma_recv_count_internode, grid_sync_barrier_ptr); \
-  }                                                                           \
+#define DISPATCH_LAUNCH_CASE(hidden)                                         \
+  {                                                                          \
+    auto dispatch_func = dispatch<false, false, hidden>;                     \
+    if (use_fp8 and not use_ue8m0)                                           \
+      dispatch_func = dispatch<true, false, hidden>;                         \
+    if (use_fp8 and use_ue8m0) dispatch_func = dispatch<true, true, hidden>; \
+    LAUNCH_KERNEL(                                                           \
+        &cfg, dispatch_func, packed_recv_x, packed_recv_x_scales,            \
+        packed_recv_src_info, packed_recv_layout_range, packed_recv_count,   \
+        cumulative_local_expert_recv_stats, dispatch_wait_recv_cost_stats,   \
+        rdma_recv_x, rdma_recv_count, rdma_x, x, topk_idx,                   \
+        atomic_counter_per_expert, atomic_finish_counter_per_expert,         \
+        atomic_send_counter_per_expert, next_clean, next_clean_second,       \
+        num_next_clean_int, num_tokens, num_max_dispatch_tokens_per_rank,    \
+        num_topk, num_experts, rank, num_ranks, num_warp_groups,             \
+        num_warps_per_group, round_scale, phases, d2h_channel_addrs,         \
+        num_d2h_channel_addrs, max_nvl_peers, low_latency_buffer_idx,        \
+        ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,              \
+        rdma_recv_count_internode, grid_sync_barrier_ptr);                   \
+  }                                                                          \
   break
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   EP_HOST_ASSERT(num_warps * WARP_SIZE <= MAX_NTHREADS);
@@ -1102,7 +1223,34 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
   EP_HOST_ASSERT(not(zero_copy and use_logfmt));
 
   constexpr int kNumTMABytesPerWarp = 12 * (512 + 16);
-  int const smem_size = kNumTMABytesPerWarp * num_warps;
+  int num_warps_launch = num_warps;
+  int num_warps_per_group_launch = num_warps_per_group;
+#if defined(__NVCC__) && !defined(DISABLE_SM90_FEATURES)
+  int device_id = 0;
+  if (cudaGetDevice(&device_id) == cudaSuccess) {
+    int max_smem = 0;
+    if (cudaDeviceGetAttribute(&max_smem,
+                               cudaDevAttrMaxSharedMemoryPerBlockOptin,
+                               device_id) == cudaSuccess &&
+        max_smem > 0) {
+      size_t const requested_smem = kNumTMABytesPerWarp * num_warps;
+      if (requested_smem > static_cast<size_t>(max_smem)) {
+        int const max_warps_by_smem = max_smem / kNumTMABytesPerWarp;
+        num_warps_launch =
+            (max_warps_by_smem / num_warp_groups) * num_warp_groups;
+        if (num_warps_launch < num_warp_groups)
+          num_warps_launch = num_warp_groups;
+        if (num_warps_launch >= 2 * num_warp_groups) {
+          num_warps_per_group_launch = num_warps_launch / num_warp_groups;
+        } else {
+          num_warps_launch = num_warps;
+          num_warps_per_group_launch = num_warps_per_group;
+        }
+      }
+    }
+  }
+#endif
+  int const smem_size = kNumTMABytesPerWarp * num_warps_launch;
   // printf("Combine launched\n");
 
 #define COMBINE_LAUNCH_CASE(hidden)                                          \
@@ -1116,18 +1264,18 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
         combine_wait_recv_cost_stats, next_clean, next_clean_second,         \
         num_next_clean_int, atomic_clean_flag, num_combined_tokens, hidden,  \
         num_topk, num_max_dispatch_tokens_per_rank, num_experts, rank,       \
-        num_ranks, num_warp_groups, num_warps_per_group, phases, zero_copy,  \
-        d2h_channel_addrs, num_d2h_channel_addrs, max_nvl_peers,             \
+        num_ranks, num_warp_groups, num_warps_per_group_launch, phases,      \
+        zero_copy, d2h_channel_addrs, num_d2h_channel_addrs, max_nvl_peers,  \
         low_latency_buffer_idx, ipc_rdma_base_ptrs, rdma_buffer_ptr,         \
         atomic_buffer_ptr, rdma_recv_flag_internode, grid_sync_barrier_ptr); \
   }                                                                          \
   break
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  EP_HOST_ASSERT(num_warps * WARP_SIZE <= MAX_NTHREADS);
+  EP_HOST_ASSERT(num_warps_launch * WARP_SIZE <= MAX_NTHREADS);
 #endif
 
-  SETUP_LAUNCH_CONFIG(num_sms, num_warps * WARP_SIZE, stream);
+  SETUP_LAUNCH_CONFIG(num_sms, num_warps_launch * WARP_SIZE, stream);
   SWITCH_HIDDEN(COMBINE_LAUNCH_CASE);
   auto err = cudaGetLastError();
   if (err != cudaSuccess) {

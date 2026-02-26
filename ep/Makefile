@@ -55,6 +55,19 @@ LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -lnuma -Xlinker -rpath
 NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++ --expt-relaxed-constexpr
 INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include 
 
+# Add Intel RDMA NIC support if USE_INTEL_RDMA_NIC=1
+ifeq ($(USE_INTEL_RDMA_NIC),1)
+  override CXXFLAGS += -DINTEL_RDMA_NIC
+  override NVCCFLAGS += -DINTEL_RDMA_NIC
+endif
+
+# Enable per-expert batching path in dispatch-LL (default: disabled)
+PER_EXPERT_BATCHING ?= 0
+ifeq ($(PER_EXPERT_BATCHING),1)
+  override CXXFLAGS += -DPER_EXPERT_BATCHING
+  override NVCCFLAGS += -DPER_EXPERT_BATCHING
+endif
+
 CXXFLAGS  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
 NVCCFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
 LDFLAGS   += $(EFA_LDFLAGS)

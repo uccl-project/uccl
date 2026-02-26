@@ -959,14 +959,7 @@ void Proxy::post_gpu_commands_mixed(
 }
 
 void Proxy::quiet_cq() {
-  auto outstanding_batches = [&]() -> size_t {
-    size_t sum = 0;
-    for (auto& ctx_ptr : ctxs_for_all_ranks_) {
-      if (!ctx_ptr) continue;
-      sum += ctx_ptr->wr_id_to_wr_ids.size();
-    }
-    return sum;
-  };
+  auto outstanding_batches = [&]() -> size_t { return 0; };
   constexpr int kConsecutiveEmptyToExit = 3;
   int empty_iters = 0;
   ibv_wc wc[kMaxOutstandingSends];
@@ -1074,6 +1067,14 @@ void Proxy::destroy(bool free_gpu_buffer) {
   dereg(ring.ack_mr);
   dereg(ctx_.atomic_old_values_mr);
   dereg(ctx_.atomic_buffer_mr);
+
+#ifdef USE_DMABUF
+  // If context/pd/mr are shared with other proxy threads (USE_DMABUF path),
+  // release our reference.  If we're not the last holder, this nulls the
+  // pointers so the dereg/dealloc/close below become no-ops.
+  release_shared_rdma_resources(ctx_, cfg_.gpu_buffer);
+#endif
+
   dereg(ctx_.mr);
 
   if (ctx_.atomic_old_values_buf) {
@@ -1082,11 +1083,19 @@ void Proxy::destroy(bool free_gpu_buffer) {
   }
 
   if (free_gpu_buffer && cfg_.gpu_buffer) {
-    cudaError_t e = cudaFree(cfg_.gpu_buffer);
-    if (e != cudaSuccess)
-      fprintf(stderr, "[destroy] cudaFree failed: %s\n", cudaGetErrorString(e));
-    else
-      cfg_.gpu_buffer = nullptr;
+    cudaError_t e;
+    if (cfg_.free_buffer_with_cuda_free_host) {
+      e = cudaFreeHost(cfg_.gpu_buffer);
+      if (e != cudaSuccess)
+        fprintf(stderr, "[destroy] cudaFreeHost failed: %s\n",
+                cudaGetErrorString(e));
+    } else {
+      e = cudaFree(cfg_.gpu_buffer);
+      if (e != cudaSuccess)
+        fprintf(stderr, "[destroy] cudaFree failed: %s\n",
+                cudaGetErrorString(e));
+    }
+    if (e == cudaSuccess) cfg_.gpu_buffer = nullptr;
   }
 
   if (ctx_.pd) {

@@ -4,12 +4,14 @@ set -e
 # -----------------------
 # Build uccl wheels for CUDA (NVIDIA) and ROCm (AMD) backends/targets.
 # The host machine does *not* need CUDA or ROCm – everything lives inside
-# a purpose-built Docker image derived from Ubuntu 22.04.
+# a purpose-built Docker/Podman image derived from Ubuntu 22.04.
 #
 # Usage:
 #   ./build.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image]
 #
 # Environment Variables:
+#   CONTAINER_ENGINE=podman Use podman instead of docker.
+#                          Example: CONTAINER_ENGINE=podman ./build.sh cuda all
 #   USE_INTEL_RDMA_NIC=1   Enable Intel RDMA NIC support (irdma driver, vendor 0x8086)
 #                          Example: USE_INTEL_RDMA_NIC=1 ./build.sh cuda ccl_efa
 #
@@ -20,6 +22,13 @@ TARGET=${1:-cuda}
 BUILD_TYPE=${2:-all}
 PY_VER=${3:-$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")}
 ARCH="$(uname -m)"
+
+# Container engine: "docker" (default) or "podman"
+CONTAINER_ENGINE=${CONTAINER_ENGINE:-docker}
+if [[ "$CONTAINER_ENGINE" != "docker" && "$CONTAINER_ENGINE" != "podman" ]]; then
+  echo "Error: CONTAINER_ENGINE must be 'docker' or 'podman', got '${CONTAINER_ENGINE}'" >&2
+  exit 1
+fi
 # The default for ROCM_IDX_URL depends on the gfx architecture of your GPU and the index URLs may change.
 ROCM_IDX_URL=${4:-https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu}
 # The default for THEROCK_BASE_IMAGE is current, but may change. Make sure to track TheRock's dockerfile.
@@ -174,13 +183,17 @@ build_ep() {
   set -euo pipefail
   echo "[container] build_ep Target: $TARGET"
 
+  if [[ "${USE_INTEL_RDMA_NIC:-0}" == "1" ]]; then
+    echo "[container] Building EP with Intel RDMA NIC support (USE_INTEL_RDMA_NIC=1)"
+  fi
+
   if [[ "$TARGET" == "therock" ]]; then
     echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
   elif [[ "$TARGET" == rocm* || "$TARGET" == cuda* ]]; then
     cd ep
     # This may be needed if you traverse through different git commits
     # make clean && rm -r build || true
-    python3 setup.py build
+    USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} python3 setup.py build
     cd ..
     echo "[container] Copying GPU-driven .so to uccl/"
     mkdir -p uccl/lib
@@ -250,20 +263,20 @@ fi
 
 # Detect stale builder image
 # If a builder image exists...
-hash_image=$(docker images -q ${IMAGE_NAME})
+hash_image=$(${CONTAINER_ENGINE} images -q ${IMAGE_NAME})
 if [[ "${hash_image}" != "" ]]; then
 
   # Get its and its dockerfile's timestamps
   ts_dockerfile=$(date -r ${DOCKERFILE} --iso-8601=seconds)
-  ts_image=$(docker inspect -f '{{ .Created }}' ${IMAGE_NAME})
+  ts_image=$(${CONTAINER_ENGINE} inspect -f '{{ .Created }}' ${IMAGE_NAME})
 
   # If image is stale, suggest deleting & purging it
   if [[ "${ts_dockerfile}" > "${ts_image}" ]]; then
       echo "WARNING: builder image '${IMAGE_NAME}' is older than its source (${DOCKERFILE})" >&2
       echo "Please consider removing it, pruning the builder cache, and retrying the build to regenerate it." >&2
       echo " " >&2
-      echo "  $ docker image rm '${IMAGE_NAME}'" >&2
-      echo "  $ docker buildx prune -f" >&2
+      echo "  $ ${CONTAINER_ENGINE} image rm '${IMAGE_NAME}'" >&2
+      echo "  $ ${CONTAINER_ENGINE} buildx prune -f" >&2
       echo " " >&2
       echo "NOTE: this may also prune unrelated builder cache images!" >&2
       sleep 1
@@ -273,7 +286,7 @@ fi
 # Build the builder image (contains toolchain + CUDA/ROCm)
 # Set SKIP_DOCKER_BUILD=1 to use a pre-pulled/tagged image (e.g. from GHCR in CI)
 if [[ "${SKIP_DOCKER_BUILD:-0}" != "1" ]]; then
-  echo "[1/3] Building Docker image ${IMAGE_NAME} using ${DOCKERFILE}..."
+  echo "[1/3] Building Docker image ${IMAGE_NAME} using ${DOCKERFILE} (engine: ${CONTAINER_ENGINE})..."
   echo "Python version: ${PY_VER}"
   if [[ "$TARGET" == "therock" ]]; then
     echo "ROCm index URL: ${ROCM_IDX_URL}"
@@ -283,9 +296,9 @@ if [[ "${SKIP_DOCKER_BUILD:-0}" != "1" ]]; then
     BUILD_ARGS+=" --build-arg BASE_IMAGE=${BASE_IMAGE}"
   fi
   if [[ "$ARCH" == "aarch64" ]]; then
-    docker build --platform=linux/arm64 $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+    ${CONTAINER_ENGINE} build --platform=linux/arm64 $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
   else
-    docker build $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+    ${CONTAINER_ENGINE} build $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
   fi
 else
   echo "[1/3] Skipping Docker build (SKIP_DOCKER_BUILD=1), using existing image: ${IMAGE_NAME}"
@@ -348,7 +361,17 @@ if [[ -f /etc/os-release ]]; then
   fi
 fi
 
-docker run --rm --user "$(id -u):$(id -g)" \
+# Build container run command – podman runs as --user root since it works well
+# with NFS volume permissions and is suitable for development and testing;
+# docker uses the host uid:gid.
+CONTAINER_RUN_ARGS=(run --rm)
+if [[ "$CONTAINER_ENGINE" == "podman" ]]; then
+  CONTAINER_RUN_ARGS+=(--user root)
+else
+  CONTAINER_RUN_ARGS+=(--user "$(id -u):$(id -g)")
+fi
+
+${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
   -v $HOME:$HOME \

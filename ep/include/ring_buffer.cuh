@@ -5,12 +5,13 @@
 #include "util/gpu_rt.h"
 #include <infiniband/verbs.h>
 #include <atomic>
+#include <cassert>
 #include <cstdint>
 #include <cstdlib>
 #include <stdexcept>
 #include <vector>
+
 #if defined(__x86_64__) || defined(_M_X64)
-#include <cassert>
 #include <immintrin.h>
 #endif
 #ifndef COPY_RING_CAP
