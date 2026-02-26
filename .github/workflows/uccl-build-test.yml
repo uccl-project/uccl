@@ -197,7 +197,7 @@ jobs:
             source /home/${{secrets.UCCL_DEV_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
             conda activate uccl-ci-sandbox
 
-            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl/ep
+            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/ep
 
             export UCCL_SOCKET_IFNAME=enP2p1s0f0np0
             /home/${{secrets.UCCL_DEV_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun   --nnodes=2 --nproc_per_node=1   --node_rank=0   --master_addr=10.0.0.2 --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
@@ -220,7 +220,7 @@ jobs:
             source /home/${{secrets.UCCL_DEV_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
             conda activate uccl-ci-sandbox
 
-            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl/ep
+            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/ep
             export UCCL_SOCKET_IFNAME=enP2p1s0f0np0
 
             /home/${{secrets.UCCL_DEV_USER}}/nfs/miniconda3/envs/uccl-ci-sandbox/bin/torchrun --nnodes=2 --nproc_per_node=1   --node_rank=1   --master_addr=10.0.0.2 --master_port=29501   bench/test_low_latency.py   --num-tokens=32 --hidden=7168 --num-topk=8 --num-experts=16
@@ -246,8 +246,8 @@ jobs:
         if: always()
         shell: bash
         run: |
-          set -euo pipefail
-          scp -o BatchMode=yes spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/ep/build.log ./build.log || true
+          set -eu
+          scp -o BatchMode=yes spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/ep/build.log ./gb10-build.log || true
           ssh -o BatchMode=yes spark1 << 'EOF'
             cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/ep
             rm build.log
@@ -257,5 +257,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-log
-          path: build.log
+          name: gb10-build-log
+          path: gb10-build.log
+          if-no-files-found: warn
