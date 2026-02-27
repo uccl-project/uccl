@@ -21,9 +21,7 @@ def get_version():
         return "0.0.1"
     with open(init_py, "r") as f:
         content = f.read()
-    match = re.search(
-        r'^__version__\s*=\s*["\']([^"\']+)["\']', content, re.MULTILINE
-    )
+    match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', content, re.MULTILINE)
     if match:
         return match.group(1)
     return "0.0.1"
@@ -109,7 +107,8 @@ class bdist_wheel_audit(bdist_wheel):
                 "auditwheel",
                 "repair",
                 str(whl),
-                "-w", str(wheel_house),
+                "-w",
+                str(wheel_house),
             ]
             for exc in AUDITWHEEL_EXCLUDE:
                 args.extend(["--exclude", exc])
