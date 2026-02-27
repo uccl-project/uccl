@@ -41,6 +41,8 @@ extern bool use_ll_sl;
 // Required for NICs without nvidia_peermem (e.g. Intel irdma) so that
 // ibv_reg_mr succeeds, and allows CPU proxy threads to do std::atomic ops.
 #define ATOMICS_USE_HOST_MEMORY
+// Ethernet-based RDMA (iWARP/RoCEv2) — no IB-specific CQ attributes.
+#define ETHERNET_RDMA
 #endif
 
 #define kAtomicBufferSize 81960
