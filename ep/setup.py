@@ -231,7 +231,7 @@ if __name__ == "__main__":
             if detected_amd_arch:
                 print(f"Detected AMD GPU architecture: {detected_amd_arch}")
         except Exception as e:
-            print(f"Warning: Could not detect AMD GPU info via rocminfo: {e}")
+            print(f"Warning: could not detect AMD GPU info via rocminfo: {e} (perhaps inside a container)")
 
         # Use environment variable, then detected arch, then fallback
         device_arch = os.getenv(

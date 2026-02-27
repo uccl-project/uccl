@@ -157,7 +157,7 @@ class Buffer {
           // stream)
           CUDA_CHECK(cudaMemPrefetchAsync(
               d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
-              loc, 0, 0));
+              device_index, 0));
           CUDA_CHECK(cudaMemPrefetchAsync(
               d_handles, num_d2h_channel_addrs * sizeof(uint64_t),
               device_index));
