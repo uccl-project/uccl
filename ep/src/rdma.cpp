@@ -633,7 +633,17 @@ ibv_cq* create_per_thread_cq(ProxyCtx& S) {
   cq_ex_attr.comp_vector = 0;
   cq_ex_attr.comp_mask = 0;
   cq_ex_attr.flags = 0;
+#ifdef ETHERNET_RDMA
+  // IBV_WC_EX_WITH_SLID and IBV_WC_EX_WITH_DLID_PATH_BITS which are set in
+  // IBV_WC_STANDARD_FLAGS are not supported by Ethernet-based RDMA NICs
+  // (iWARP/RoCEv2) because these attributes are specific to InfiniBand (IB)
+  // architecture.
+  cq_ex_attr.wc_flags = IBV_WC_EX_WITH_BYTE_LEN | IBV_WC_EX_WITH_IMM |
+                        IBV_WC_EX_WITH_QP_NUM | IBV_WC_EX_WITH_SRC_QP |
+                        IBV_WC_EX_WITH_SL;
+#else
   cq_ex_attr.wc_flags = IBV_WC_STANDARD_FLAGS;
+#endif
 
   S.cq_ex = ibv_create_cq_ex(S.context, &cq_ex_attr);
   if (!S.cq_ex) {
