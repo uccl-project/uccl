@@ -81,7 +81,9 @@ if [[ "$BUILD_TYPE" =~ (ep|all|p2p) ]]; then
       PYTHONWARNINGS=ignore \
         amd-smi static -g 0 --asic --json 2>/dev/null |
         jq -r '
-          if .gpu_data and (.gpu_data | length > 0) then
+          if type == "array" then
+            if length > 0 then .[0].asic.target_graphics_version else empty end
+          elif .gpu_data and (.gpu_data | length > 0) then
             .gpu_data[0].asic.target_graphics_version
           else
             empty
