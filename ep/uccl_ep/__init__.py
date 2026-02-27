@@ -6,6 +6,6 @@ Use::
     import uccl_ep
 """
 
-__version__ = "0.0.1"
+__version__ = "0.0.1.post0"
 
 from uccl_ep._C import *  # noqa: F401,F403

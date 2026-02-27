@@ -371,7 +371,7 @@ if __name__ == "__main__":
         license="Apache-2.0",
         python_requires=">=3.8",
         packages=["uccl_ep"],
-        install_requires=["torch"],
+        install_requires=[],
         ext_modules=[
             CUDAExtension(
                 name="uccl_ep._C",
