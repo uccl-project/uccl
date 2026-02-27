@@ -4,12 +4,10 @@ import subprocess
 import setuptools
 from glob import glob
 import shutil
-import site
 from pathlib import Path
 
 import torch
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
-from setuptools.command.install import install
 from setuptools.command.bdist_wheel import bdist_wheel
 from setuptools import Command
 
@@ -29,28 +27,6 @@ def get_version():
     if match:
         return match.group(1)
     return "0.0.1"
-
-
-class CustomInstall(install):
-    """Install: standard wheel/sdist layout, or copy .so to INSTALL_DIR if set."""
-
-    def run(self):
-        self.run_command("build_ext")
-        install_dir = os.getenv("INSTALL_DIR")
-        if install_dir:
-            # Legacy: copy built uccl_ep*.so to INSTALL_DIR (e.g. for uccl monorepo)
-            os.makedirs(install_dir, exist_ok=True)
-            build_lib = self.get_finalized_command("build_ext").build_lib
-            so_files = list(Path(build_lib).glob("uccl_ep*.so"))
-            if not so_files:
-                raise RuntimeError(f"Could not find built uccl_ep*.so in {build_lib}")
-            so_file = so_files[0]
-            dest_path = os.path.join(install_dir, so_file.name)
-            print(f"Installing {so_file.name} to {install_dir}")
-            shutil.copy2(so_file, dest_path)
-            print(f"Installation complete. Module installed as: {dest_path}")
-        else:
-            install.run(self)
 
 
 class CustomClean(Command):
@@ -158,12 +134,13 @@ if __name__ == "__main__":
     libraries = ["ibverbs", "glog", "nl-3", "nl-route-3", "numa"]
     include_dirs = [PROJECT_ROOT / "include", PROJECT_ROOT / ".." / "include"]
 
-    # Collect header files for dependency tracking
+    # Collect header files for dependency tracking.
     header_files = []
     for inc_dir in include_dirs:
-        header_files.extend(glob(str(inc_dir / "**" / "*.h"), recursive=True))
-        header_files.extend(glob(str(inc_dir / "**" / "*.hpp"), recursive=True))
-        header_files.extend(glob(str(inc_dir / "**" / "*.cuh"), recursive=True))
+        for pattern in ("**/*.h", "**/*.hpp", "**/*.cuh"):
+            for p in Path(inc_dir).resolve().glob(pattern):
+                rel = os.path.relpath(str(p), PROJECT_ROOT)
+                header_files.append(rel)
     library_dirs = []
     nvcc_dlink = []
     extra_link_args = []
@@ -391,9 +368,10 @@ if __name__ == "__main__":
         description="UCCL-EP: GPU-initiated expert-parallel communication (DeepEP-compatible)",
         long_description=long_description,
         long_description_content_type=long_description_content_type,
-        url="https://github.com/uccl-project/uccl",
+        url="https://github.com/uccl-project/uccl/ep",
         license="Apache-2.0",
         python_requires=">=3.8",
+        packages=["uccl_ep"],
         install_requires=["torch"],
         ext_modules=[
             CUDAExtension(
@@ -420,7 +398,6 @@ if __name__ == "__main__":
         ],
         cmdclass={
             "build_ext": BuildExtension,
-            "install": CustomInstall,
             "clean": CustomClean,
             "bdist_wheel": bdist_wheel_audit,
         },

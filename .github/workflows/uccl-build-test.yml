@@ -75,7 +75,7 @@ jobs:
             conda activate uccl
 
             cd /home/skytestuser/uccl-test
-            ./build_and_install.sh cuda all 3.11 2>&1 | tee build.log
+            ./build.sh cuda all 3.11 --install 2>&1 | tee build.log
 
             grep -q \"Successfully installed uccl-0.0.1.post4\" build.log
           "'
