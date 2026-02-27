@@ -374,7 +374,7 @@ if __name__ == "__main__":
         install_requires=["torch"],
         ext_modules=[
             CUDAExtension(
-                name="uccl_ep",
+                name="uccl_ep._C",
                 include_dirs=include_dirs,
                 library_dirs=library_dirs,
                 sources=sources,

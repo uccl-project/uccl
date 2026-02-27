@@ -23,11 +23,7 @@ import time
 import torch
 import torch.distributed as dist
 
-try:
-    from uccl import ep
-except ImportError as exc:
-    sys.stderr.write("Failed to import ep\n")
-    raise
+import uccl_ep as ep
 
 from utils import init_dist, detect_ib_hca, get_cpu_proxies_meta
 

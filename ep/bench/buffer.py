@@ -3,14 +3,7 @@ import torch
 import torch.distributed as dist
 from typing import Callable, Tuple, Optional, Union, List
 
-try:
-    from uccl import ep
-except ImportError as exc:
-    import sys
-
-    sys.stderr.write("Failed to import uccl_ep\n")
-    raise
-
+import uccl_ep as ep
 from uccl_ep import EventHandle, Config
 
 # Support both execution modes:

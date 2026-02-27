@@ -28,7 +28,6 @@ setup(
         "uccl": [
             "lib/*.so",
             "p2p*.so",
-            "ep*.so",
             "lib/*.a",
             "collective.py",
             "transfer.py",

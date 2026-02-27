@@ -1983,7 +1983,7 @@ class Buffer {
 #endif
 };
 
-PYBIND11_MODULE(uccl_ep, m) {
+PYBIND11_MODULE(_C, m) {
   m.doc() = "Minimal DeepEP-compatible shim with UCCL";
 
   pybind11::class_<uccl::Config>(m, "Config")
