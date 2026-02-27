@@ -103,7 +103,7 @@ class Buffer {
           throw std::runtime_error(
               "ep.Buffer: no UcclProxy registered for device " +
               std::to_string(device_index) +
-              ". Call uccl.ep.register_proxy(device_index, proxies) "
+              ". Call uccl_ep.register_proxy(device_index, proxies) "
               "first.");
         }
       }
@@ -1983,7 +1983,7 @@ class Buffer {
 #endif
 };
 
-PYBIND11_MODULE(ep, m) {
+PYBIND11_MODULE(uccl_ep, m) {
   m.doc() = "Minimal DeepEP-compatible shim with UCCL";
 
   pybind11::class_<uccl::Config>(m, "Config")

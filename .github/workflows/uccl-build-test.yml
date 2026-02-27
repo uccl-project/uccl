@@ -170,8 +170,8 @@ jobs:
               exit 1
             fi
 
-            if ! python -c 'import torch; import uccl.ep'; then
-              echo 'Import of torch and uccl.ep failed. Cleaning up and exiting...'
+            if ! python -c 'import torch; import uccl_ep'; then
+              echo 'Import of torch and uccl_ep failed. Cleaning up and exiting...'
               python setup.py clean
               exit 1
             fi

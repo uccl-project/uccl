@@ -39,7 +39,7 @@ try:
 except ImportError as exc:
     import sys
 
-    sys.stderr.write("Failed to import uccl.ep\n")
+    sys.stderr.write("Failed to import uccl_ep\n")
     raise
 
 

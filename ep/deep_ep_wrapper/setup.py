@@ -8,6 +8,6 @@ setup(
         "uccl",
     ],
     author="uccl",
-    description="A wrapper package for uccl.ep with additional functionality",
+    description="A wrapper package for uccl_ep with additional functionality",
     python_requires=">=3.6",
 )

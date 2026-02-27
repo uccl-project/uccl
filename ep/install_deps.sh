@@ -17,9 +17,10 @@ get_cuda_version() {
 }
 
 # Install common dependencies
-sudo apt install -y nvtop libgoogle-glog-dev clang-format-14 python3-pip
+sudo apt install -y nvtop libgoogle-glog-dev clang-format-14 python3-pip patchelf
 pip install pybind11 --upgrade
 pip install black
+pip install auditwheel
 
 # Check if we're in a conda environment
 if [[ ! -z "${CONDA_PREFIX}" ]]; then

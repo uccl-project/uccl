@@ -8,10 +8,10 @@ try:
 except ImportError as exc:
     import sys
 
-    sys.stderr.write("Failed to import uccl.ep\n")
+    sys.stderr.write("Failed to import uccl_ep\n")
     raise
 
-from uccl.ep import EventHandle, Config
+from uccl_ep import EventHandle, Config
 
 # Support both execution modes:
 # 1) As part of the packaged deep_ep_wrapper (symlinked buffer inside a package): uses relative import `.utils`.

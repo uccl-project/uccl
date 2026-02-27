@@ -6,7 +6,7 @@ import torch.distributed as dist
 from typing import Optional
 import glob
 import sys
-from uccl.ep import EventHandle
+from uccl_ep import EventHandle
 import tempfile
 import json
 from pathlib import Path
@@ -19,7 +19,7 @@ try:
 except ImportError as exc:
     import sys
 
-    sys.stderr.write("Failed to import uccl.ep\n")
+    sys.stderr.write("Failed to import uccl_ep\n")
     raise
 
 # import deep_ep as ep
@@ -28,7 +28,7 @@ try:
 except ImportError as exc:
     import sys
 
-    sys.stderr.write("Failed to import uccl.ep\n")
+    sys.stderr.write("Failed to import uccl_ep\n")
     raise
 
 

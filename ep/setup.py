@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import setuptools
 from glob import glob
@@ -9,39 +10,47 @@ from pathlib import Path
 import torch
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 from setuptools.command.install import install
+from setuptools.command.bdist_wheel import bdist_wheel
 from setuptools import Command
 
 PROJECT_ROOT = Path(os.path.dirname(__file__)).resolve()
 
 
+def get_version():
+    """Parse version from uccl_ep/__init__.py without importing."""
+    init_py = PROJECT_ROOT / "uccl_ep" / "__init__.py"
+    if not init_py.exists():
+        return "0.0.1"
+    with open(init_py, "r") as f:
+        content = f.read()
+    match = re.search(
+        r'^__version__\s*=\s*["\']([^"\']+)["\']', content, re.MULTILINE
+    )
+    if match:
+        return match.group(1)
+    return "0.0.1"
+
+
 class CustomInstall(install):
-    """Custom install command that installs .so file to INSTALL_DIR"""
+    """Install: standard wheel/sdist layout, or copy .so to INSTALL_DIR if set."""
 
     def run(self):
-        # Run the standard build first
         self.run_command("build_ext")
-
-        # Get the install directory
-        python_site_packages = site.getsitepackages()[0]
-        install_dir = os.getenv(
-            "INSTALL_DIR", os.path.join(python_site_packages, "uccl")
-        )
-        os.makedirs(install_dir, exist_ok=True)
-
-        # Find the built .so file
-        build_lib = self.get_finalized_command("build_ext").build_lib
-        so_files = list(Path(build_lib).glob("ep*.so"))
-
-        if not so_files:
-            raise RuntimeError(f"Could not find built .so file in {build_lib}")
-
-        so_file = so_files[0]
-        dest_path = os.path.join(install_dir, so_file.name)
-
-        # Copy the .so file to the install directory
-        print(f"Installing {so_file.name} to {install_dir}")
-        shutil.copy2(so_file, dest_path)
-        print(f"Installation complete. Module installed as: {dest_path}")
+        install_dir = os.getenv("INSTALL_DIR")
+        if install_dir:
+            # Legacy: copy built uccl_ep*.so to INSTALL_DIR (e.g. for uccl monorepo)
+            os.makedirs(install_dir, exist_ok=True)
+            build_lib = self.get_finalized_command("build_ext").build_lib
+            so_files = list(Path(build_lib).glob("uccl_ep*.so"))
+            if not so_files:
+                raise RuntimeError(f"Could not find built uccl_ep*.so in {build_lib}")
+            so_file = so_files[0]
+            dest_path = os.path.join(install_dir, so_file.name)
+            print(f"Installing {so_file.name} to {install_dir}")
+            shutil.copy2(so_file, dest_path)
+            print(f"Installation complete. Module installed as: {dest_path}")
+        else:
+            install.run(self)
 
 
 class CustomClean(Command):
@@ -63,6 +72,12 @@ class CustomClean(Command):
             print(f"Removing {build_dir}")
             shutil.rmtree(build_dir)
 
+        # Remove dist directory (wheels, sdist)
+        dist_dir = PROJECT_ROOT / "dist"
+        if dist_dir.exists():
+            print(f"Removing {dist_dir}")
+            shutil.rmtree(dist_dir)
+
         # Remove egg-info directory
         for egg_info in PROJECT_ROOT.glob("*.egg-info"):
             print(f"Removing {egg_info}")
@@ -80,6 +95,51 @@ class CustomClean(Command):
             subprocess.run(["make", "clean"], cwd=PROJECT_ROOT)
 
         print("Clean complete.")
+
+
+# Excludes for auditwheel repair (match build.sh so we don't bundle torch/CUDA/EFA)
+AUDITWHEEL_EXCLUDE = [
+    "libtorch*.so",
+    "libc10*.so",
+    "libibverbs.so.1",
+    "libcudart.so.12",
+    "libamdhip64.so.*",
+    "libcuda.so.1",
+    "libefa.so.1",
+]
+
+
+class bdist_wheel_audit(bdist_wheel):
+    """Build wheel then run auditwheel repair (manylinux)."""
+
+    description = "Build wheel and run auditwheel repair"
+
+    def run(self):
+        bdist_wheel.run(self)
+        try:
+            import auditwheel
+        except ImportError:
+            print("auditwheel not installed; skip repair. pip install auditwheel")
+            return
+        dist_dir = PROJECT_ROOT / "dist"
+        wheels = list(dist_dir.glob("uccl_ep-*.whl"))
+        if not wheels:
+            print("No uccl_ep wheel found in dist/")
+            return
+        wheel_house = PROJECT_ROOT / "wheelhouse"
+        wheel_house.mkdir(exist_ok=True)
+        for whl in wheels:
+            args = [
+                "auditwheel",
+                "repair",
+                str(whl),
+                "-w", str(wheel_house),
+            ]
+            for exc in AUDITWHEEL_EXCLUDE:
+                args.extend(["--exclude", exc])
+            print("Running:", " ".join(args))
+            subprocess.run(args, check=True, cwd=PROJECT_ROOT)
+        print(f"Repaired wheel(s) in {wheel_house}")
 
 
 if __name__ == "__main__":
@@ -317,19 +377,27 @@ if __name__ == "__main__":
     print(f" > Link Flags: {extra_link_args}")
     print("=" * 60 + "\n")
 
-    # noinspection PyBroadException
-    try:
-        cmd = ["git", "rev-parse", "--short", "HEAD"]
-        revision = "+" + subprocess.check_output(cmd).decode("ascii").rstrip()
-    except Exception as _:
-        revision = ""
+    # PyPI / wheel metadata
+    readme_path = PROJECT_ROOT / "README.md"
+    long_description = ""
+    if readme_path.exists():
+        long_description = readme_path.read_text(encoding="utf-8", errors="replace")
+    long_description_content_type = "text/markdown" if long_description else None
 
     setuptools.setup(
-        name="ep",
-        version="0.0.1" + revision,
+        name="uccl_ep",
+        version=get_version(),
+        author="UCCL Team",
+        description="UCCL-EP: GPU-initiated expert-parallel communication (DeepEP-compatible)",
+        long_description=long_description,
+        long_description_content_type=long_description_content_type,
+        url="https://github.com/uccl-project/uccl",
+        license="Apache-2.0",
+        python_requires=">=3.8",
+        install_requires=["torch"],
         ext_modules=[
             CUDAExtension(
-                name="ep",
+                name="uccl_ep",
                 include_dirs=include_dirs,
                 library_dirs=library_dirs,
                 sources=sources,
@@ -339,9 +407,21 @@ if __name__ == "__main__":
                 depends=header_files,
             )
         ],
+        classifiers=[
+            "Development Status :: 4 - Beta",
+            "Intended Audience :: Developers",
+            "Programming Language :: Python :: 3",
+            "Programming Language :: Python :: 3.8",
+            "Programming Language :: Python :: 3.9",
+            "Programming Language :: Python :: 3.10",
+            "Programming Language :: Python :: 3.11",
+            "Programming Language :: Python :: 3.12",
+            "Topic :: Scientific/Engineering",
+        ],
         cmdclass={
             "build_ext": BuildExtension,
             "install": CustomInstall,
             "clean": CustomClean,
+            "bdist_wheel": bdist_wheel_audit,
         },
     )
