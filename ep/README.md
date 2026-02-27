@@ -23,7 +23,7 @@ make -j install
 
 Alternatively, you can build `uccl_ep` wheel using docker then install:
 ```bash
-bash build.sh cuda ep --install
+bash build.sh cuda --install
 ```
 > Note: docker-built `uccl_ep` wheel currently does not work on p6-b200, see https://github.com/uccl-project/uccl/issues/554. 
 
@@ -36,7 +36,7 @@ python setup.py install
 
 Alternatively, you can build `uccl_ep` wheel for ROCm7 using docker then install:
 ```bash
-bash build.sh rocm ep --install
+bash build.sh rocm --install
 ```
 
 ## Test import `uccl_ep`
