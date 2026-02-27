@@ -1856,7 +1856,8 @@ void remote_process_completions_normal_mode(
         ImmType::IsAtomics(ntohl(cqe.imm_data))) {
       AtomicsImm aimm(ntohl(cqe.imm_data));
       int value = aimm.GetValue();
-      uint32_t offset = aimm.GetOff();
+      // off13 stores int64_t index (byte_offset >> 3); decode back to bytes.
+      uint32_t offset = static_cast<uint32_t>(aimm.GetOff()) << 3;
       size_t index = offset / sizeof(int64_t);
       auto* addr64 =
           reinterpret_cast<std::atomic<int64_t>*>(atomic_buffer_ptr) + index;
@@ -2032,15 +2033,28 @@ void remote_process_completions_fast_mode(
         ImmType::IsAtomics(ntohl(cqe.imm_data))) {
       AtomicsImm aimm(ntohl(cqe.imm_data));
       int value = aimm.GetValue();
-      uint32_t offset = aimm.GetOff();
+      // off13 stores int64_t index (byte_offset >> 3); decode back to bytes.
+      uint32_t offset = static_cast<uint32_t>(aimm.GetOff()) << 3;
       size_t index = offset / sizeof(int64_t);
 #ifdef USE_RECEIVER_BARRIER
       // ep_config.hpp
       bool is_combine = aimm.IsCombine();
       int low_latency_buffer_idx = aimm.GetBufferIdx();
+      // Double-buffer stride must match ep_config.hpp:
+      // signaling_buffer_bytes_internode_aligned =
+      //   align(max(dispatch_bytes, combine_bytes), 128)
+#ifdef PER_EXPERT_BATCHING
+      size_t per_buffer_stride = align<size_t>(
+          std::max(static_cast<size_t>(num_ranks) * num_ranks,
+                   static_cast<size_t>(num_experts)) *
+              sizeof(int64_t),
+          128);
+#else
+      size_t per_buffer_stride =
+          align<size_t>(num_experts * sizeof(int64_t), 128);
+#endif
       uint32_t new_offset =
-          offset - low_latency_buffer_idx *
-                       align<size_t>(num_experts * sizeof(int64_t), 128);
+          offset - low_latency_buffer_idx * per_buffer_stride;
       size_t new_index = new_offset / sizeof(int64_t);
       int src_rank = -1;
       bool is_atomic_ready = false;
@@ -2458,7 +2472,9 @@ static void post_atomic_operations_normal_mode(
           std::abort();
         }
 
-        uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
+        // Encode byte offset as int64_t index (>> 3) to fit in 13-bit off13.
+        // req_rptr is always 8-byte aligned (points into int64_t atomic buffer).
+        uint32_t offset = static_cast<uint32_t>(cmd.req_rptr >> 3);
         int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
         if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
           fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
@@ -2512,9 +2528,8 @@ static void post_atomic_operations_normal_mode(
           std::abort();
         }
 
-        // If your AtomicsImm for non-EFA expects 16-bit offsets, keep the
-        // mask:
-        uint32_t off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
+        // Encode byte offset as int64_t index (>> 3) to fit in 13-bit off13.
+        uint32_t off13 = static_cast<uint32_t>(cmd.req_rptr >> 3);
         int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
         if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
           fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
@@ -2524,7 +2539,7 @@ static void post_atomic_operations_normal_mode(
         uint32_t imm = AtomicsImm::Pack(
                            /*is_atomic*/ true,
                            /*is_combine*/ get_is_combine(cmd.cmd_type), v,
-                           /*offset*/ off16, low_latency_buffer_idx)
+                           /*offset*/ off13, low_latency_buffer_idx)
                            .GetImmData();
 
         // Zero-length write-with-imm on RC QP
@@ -2605,7 +2620,8 @@ static void post_atomic_operations_fast_mode(
                 v, (unsigned long)cmd.value);
         std::abort();
       }
-      uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
+      // Encode byte offset as int64_t index (>> 3) to fit in 13-bit off13.
+      uint32_t offset = static_cast<uint32_t>(cmd.req_rptr >> 3);
       int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
       if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
         fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
@@ -2646,7 +2662,8 @@ static void post_atomic_operations_fast_mode(
         fprintf(stderr, "value=%d won't fit in 15 bits\n", v);
         std::abort();
       }
-      uint32_t const off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
+      // Encode byte offset as int64_t index (>> 3) to fit in 13-bit off13.
+      uint32_t const off13 = static_cast<uint32_t>(cmd.req_rptr >> 3);
       int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
       if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
         fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
@@ -2654,7 +2671,7 @@ static void post_atomic_operations_fast_mode(
         std::abort();
       }
       uint32_t const imm = AtomicsImm::Pack(true, get_is_combine(cmd.cmd_type),
-                                            v, off16, low_latency_buffer_idx)
+                                            v, off13, low_latency_buffer_idx)
                                .GetImmData();
       sge[i].addr = reinterpret_cast<uintptr_t>(ctx->mr->addr);
       sge[i].length = 0;
