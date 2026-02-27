@@ -99,9 +99,9 @@ bash build.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] \
               [py_version] [rocm_index_url] --install
 ```
 > Note: 
+> - By default, `build.sh` uses CUDA 12.8 or ROCm 7.1, but you can also specify `cuda13` or `rocm6` to use CUDA 13.0 or ROCm 6.4.
 > - When building for ROCm with python packaging through TheRock, please specify your ROCm index url; the default is `https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu` and it may not be what you want. When installing UCCL wheels for TheRock, please provide pip with the index url and add the optional extra `[rocm]` to the wheel, e.g., `pip install --extra-index-url https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu wheelhouse-therock/uccl-0.0.1.post4-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl[rocm]`.
 > - You can build with different CUDA or ROCm versions by specifying tags such as cuda13 or rocm6. The default versions are CUDA 12.x for the "cuda" tag and ROCm 7.x for the "rocm" tag.
-> - Check [wheels.md](./docs/wheels.md) for details.
 
 Then, when running your PyTorch applications, set the environment variable accordingly: 
 ```bash

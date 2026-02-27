@@ -130,7 +130,7 @@ mkdir -p "${WHEEL_DIR}"
 # 4. Determine the Docker image to use based on the target and architecture
 ########################################################
 if [[ $TARGET == "cuda" ]]; then
-  # default is cuda 12 from `nvidia/cuda:12.3.2-devel-ubuntu22.04`/`nvidia/cuda:12.4.1-devel-ubuntu22.04`
+  # default is cuda 12.8 from `nvidia/cuda:12.8.0-devel-ubuntu22.04`
   if [[ "$ARCH" == "aarch64" ]]; then
     DOCKERFILE="docker/Dockerfile.gh"
     IMAGE_NAME="uccl-builder-gh"
@@ -154,7 +154,7 @@ elif [[ $TARGET == "cuda13" ]]; then
     IMAGE_NAME="uccl-builder-cuda"
   fi
 elif [[ $TARGET == "rocm" ]]; then
-  # default is latest rocm version from `rocm/dev-ubuntu-22.04`
+  # default is latest rocm 7 version from `rocm/dev-ubuntu-22.04`
   DOCKERFILE="docker/Dockerfile.rocm"
   IMAGE_NAME="uccl-builder-rocm"
 elif [[ $TARGET == "rocm6" ]]; then
@@ -244,6 +244,7 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
   -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
   -e DISABLE_AGGRESSIVE_ATOMIC="${DISABLE_AGGRESSIVE_ATOMIC:-0}" \
   -e UCCL_WHEEL_PLAT="${UCCL_WHEEL_PLAT:-}" \
+  -e PYTHONUNBUFFERED=1 \
   -e FUNCTION_DEF="$(declare -f build_rccl_nccl_header build_ccl_rdma build_ccl_efa build_p2p build_ep build_ukernel)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
