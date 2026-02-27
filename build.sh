@@ -284,19 +284,24 @@ if [[ "${hash_image}" != "" ]]; then
 fi
 
 # Build the builder image (contains toolchain + CUDA/ROCm)
-echo "[1/3] Building container image ${IMAGE_NAME} using ${DOCKERFILE} (engine: ${CONTAINER_ENGINE})..."
-echo "Python version: ${PY_VER}"
-if [[ "$TARGET" == "therock" ]]; then
-  echo "ROCm index URL: ${ROCM_IDX_URL}"
-fi
-BUILD_ARGS="--build-arg PY_VER=${PY_VER}"
-if [[ -n "${BASE_IMAGE:-}" ]]; then
-  BUILD_ARGS+=" --build-arg BASE_IMAGE=${BASE_IMAGE}"
-fi
-if [[ "$ARCH" == "aarch64" ]]; then
-  ${CONTAINER_ENGINE} build --platform=linux/arm64 $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+# Set SKIP_DOCKER_BUILD=1 to use a pre-pulled/tagged image (e.g. from GHCR in CI)
+if [[ "${SKIP_DOCKER_BUILD:-0}" != "1" ]]; then
+  echo "[1/3] Building Docker image ${IMAGE_NAME} using ${DOCKERFILE} (engine: ${CONTAINER_ENGINE})..."
+  echo "Python version: ${PY_VER}"
+  if [[ "$TARGET" == "therock" ]]; then
+    echo "ROCm index URL: ${ROCM_IDX_URL}"
+  fi
+  BUILD_ARGS="--build-arg PY_VER=${PY_VER}"
+  if [[ -n "${BASE_IMAGE:-}" ]]; then
+    BUILD_ARGS+=" --build-arg BASE_IMAGE=${BASE_IMAGE}"
+  fi
+  if [[ "$ARCH" == "aarch64" ]]; then
+    ${CONTAINER_ENGINE} build --platform=linux/arm64 $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+  else
+    ${CONTAINER_ENGINE} build $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+  fi
 else
-  ${CONTAINER_ENGINE} build $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+  echo "[1/3] Skipping Docker build (SKIP_DOCKER_BUILD=1), using existing image: ${IMAGE_NAME}"
 fi
 
 echo "[2/3] Running build inside container..."
@@ -387,6 +392,8 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
   -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
   -e DISABLE_AGGRESSIVE_ATOMIC="${DISABLE_AGGRESSIVE_ATOMIC:-0}" \
   -e UCCL_WHEEL_PLAT="${UCCL_WHEEL_PLAT:-}" \
+  -e UCCL_PACKAGE_NAME="${UCCL_PACKAGE_NAME:-uccl}" \
+  -e UCCL_SKIP_LOCAL_VERSION="${UCCL_SKIP_LOCAL_VERSION:-0}" \
   -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_ccl_rdma build_ccl_efa build_p2p build_ep build_ukernel)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
@@ -493,7 +500,8 @@ def initialize():
     fi
 
     # Add backend tag to wheel filename using local version identifier
-    if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
+    # Set UCCL_SKIP_LOCAL_VERSION=1 to skip this (e.g. for PyPI where local versions are rejected)
+    if [[ "${UCCL_SKIP_LOCAL_VERSION:-0}" != "1" ]] && [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
       # Adjust TARGET to the preferred wheel name suffix for python-packaged ROCm, e.g. "rocm7.9.0rc1"
       if [[ "$TARGET" == "therock" ]]; then
         TARGET="rocm$(rocm-sdk version)"

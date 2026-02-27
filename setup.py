@@ -16,7 +16,7 @@ def get_version():
 
 
 setup(
-    name="uccl",
+    name=os.environ.get("UCCL_PACKAGE_NAME", "uccl"),
     version=get_version(),
     author="UCCL Team",
     description="UCCL: Ultra and Unified CCL",
