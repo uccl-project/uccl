@@ -91,7 +91,7 @@ class CollectiveContext:
         self.memory_regions = utils.ClosedIntervalTree()
         self.initialized = False
 
-        # check and setup fd limit and somaxconn for UDS
+        # check and setup fd limit and somaxconn for shm-jring
         utils.set_files_limit()
 
     def _get_local_gpu_idx(self) -> int:

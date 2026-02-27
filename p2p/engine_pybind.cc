@@ -16,6 +16,7 @@ struct XferDesc {
   uint64_t mr_id;
   std::vector<uint32_t> lkeys;
   std::vector<uint32_t> rkeys;
+  std::string ipc_info;  // serialized IpcTransferInfo (empty if unavailable)
 };
 
 struct XferHandle {
@@ -30,7 +31,8 @@ std::vector<uint8_t> serialize_xfer_descs(
   for (auto const& desc : xfer_desc_v) {
     assert(desc.lkeys.size() == desc.rkeys.size());
     total_size += sizeof(uint64_t) + sizeof(size_t) + sizeof(size_t) +
-                  desc.lkeys.size() * sizeof(uint32_t) * 2;
+                  desc.lkeys.size() * sizeof(uint32_t) * 2 + sizeof(size_t) +
+                  desc.ipc_info.size();
   }
 
   std::vector<uint8_t> result(total_size);
@@ -50,6 +52,11 @@ std::vector<uint8_t> serialize_xfer_descs(
     emit(&keys_count, sizeof(size_t));
     emit(desc.lkeys.data(), keys_count * sizeof(uint32_t));
     emit(desc.rkeys.data(), keys_count * sizeof(uint32_t));
+    size_t ipc_len = desc.ipc_info.size();
+    emit(&ipc_len, sizeof(size_t));
+    if (ipc_len > 0) {
+      emit(desc.ipc_info.data(), ipc_len);
+    }
   }
   return result;
 }
@@ -84,6 +91,14 @@ std::vector<XferDesc> deserialize_xfer_descs(
     consume(desc.lkeys.data(), keys_count * sizeof(uint32_t));
     desc.rkeys.resize(keys_count);
     consume(desc.rkeys.data(), keys_count * sizeof(uint32_t));
+    if (p < end) {
+      size_t ipc_len;
+      consume(&ipc_len, sizeof(size_t));
+      if (ipc_len > 0) {
+        desc.ipc_info.resize(ipc_len);
+        consume(desc.ipc_info.data(), ipc_len);
+      }
+    }
     xfer_desc_v.push_back(std::move(desc));
   }
   return xfer_desc_v;
@@ -314,6 +329,26 @@ PYBIND11_MODULE(p2p, m) {
                   xfer_desc.lkeys.push_back(mr->lkey);
                   xfer_desc.rkeys.push_back(mr->rkey);
                 }
+                // Also generate IPC handle for intra-node transfers
+                {
+                  constexpr size_t kIpcAlign = 1ul << 20;
+                  IpcTransferInfo ipc_info = {};
+                  ipc_info.size = sizes[i];
+                  ipc_info.operation = 1;
+                  auto addr_val = reinterpret_cast<uintptr_t>(ptrs[i]);
+                  auto addr_aligned = addr_val & ~(kIpcAlign - 1);
+                  ipc_info.offset = addr_val - addr_aligned;
+                  auto err = gpuIpcGetMemHandle(
+                      &ipc_info.handle,
+                      reinterpret_cast<void*>(addr_aligned));
+                  if (err == gpuSuccess) {
+                    xfer_desc.ipc_info.assign(
+                        reinterpret_cast<char const*>(&ipc_info),
+                        sizeof(ipc_info));
+                  } else {
+                    gpuGetLastError();
+                  }
+                }
                 xfer_desc_v.push_back(std::move(xfer_desc));
               }
             }
@@ -361,48 +396,88 @@ PYBIND11_MODULE(p2p, m) {
               throw std::runtime_error("Invalid op_name: " + op_name);
             }
 
+            Conn* conn = self.get_conn(conn_id);
+            if (conn == nullptr) {
+              throw std::runtime_error("Invalid conn_id");
+            }
+            bool is_local = conn->is_local_;
+
             uint64_t transfer_id;
             bool success;
 
-            if (n == 1) {
-              auto const& ldesc = py::cast<XferDesc const&>(local_desc_list[0]);
-              auto const& rdesc =
-                  py::cast<XferDesc const&>(remote_desc_list[0]);
+            if (is_local) {
+              // IPC path for intra-node
+              if (n == 1) {
+                auto const& ldesc =
+                    py::cast<XferDesc const&>(local_desc_list[0]);
+                auto const& rdesc =
+                    py::cast<XferDesc const&>(remote_desc_list[0]);
+                CHECK(!rdesc.ipc_info.empty())
+                    << "Remote descriptor has no IPC info for local transfer";
+                IpcTransferInfo info;
+                std::memcpy(&info, rdesc.ipc_info.data(), sizeof(info));
+                {
+                  py::gil_scoped_release release;
+                  InsidePythonGuard guard;
+                  if (is_write) {
+                    success = self.write_ipc_async(conn_id, ldesc.addr,
+                                                   ldesc.size, info,
+                                                   &transfer_id);
+                  } else {
+                    success = self.read_ipc_async(
+                        conn_id, const_cast<void*>(ldesc.addr), ldesc.size,
+                        info, &transfer_id);
+                  }
+                }
+              } else {
+                std::vector<IpcTransferInfo> info_v;
+                std::vector<size_t> size_v;
+                info_v.reserve(n);
+                size_v.reserve(n);
 
-              FifoItem fifo_item;
-              fifo_item.addr = reinterpret_cast<uint64_t>(rdesc.addr);
-              fifo_item.size = rdesc.size;
-              std::memcpy(fifo_item.padding, rdesc.rkeys.data(),
-                          rdesc.rkeys.size() * sizeof(uint32_t));
+                // Collect write ptrs (const) and read ptrs (mutable) together
+                std::vector<void const*> wdata_v;
+                std::vector<void*> rdata_v;
+                if (is_write)
+                  wdata_v.reserve(n);
+                else
+                  rdata_v.reserve(n);
 
-              {
-                py::gil_scoped_release release;
-                InsidePythonGuard guard;
-                if (is_write) {
-                  success = self.write_async(
-                      conn_id, ldesc.mr_id, const_cast<void*>(ldesc.addr),
-                      ldesc.size, fifo_item, &transfer_id);
-                } else {
-                  success = self.read_async(
-                      conn_id, ldesc.mr_id, const_cast<void*>(ldesc.addr),
-                      ldesc.size, fifo_item, &transfer_id);
+                for (size_t i = 0; i < n; ++i) {
+                  auto const& ldesc =
+                      py::cast<XferDesc const&>(local_desc_list[i]);
+                  auto const& rdesc =
+                      py::cast<XferDesc const&>(remote_desc_list[i]);
+                  CHECK(!rdesc.ipc_info.empty())
+                      << "Remote descriptor has no IPC info for local transfer";
+                  IpcTransferInfo info;
+                  std::memcpy(&info, rdesc.ipc_info.data(), sizeof(info));
+                  info_v.push_back(info);
+                  size_v.push_back(ldesc.size);
+                  if (is_write)
+                    wdata_v.push_back(ldesc.addr);
+                  else
+                    rdata_v.push_back(const_cast<void*>(ldesc.addr));
+                }
+                {
+                  py::gil_scoped_release release;
+                  InsidePythonGuard guard;
+                  if (is_write) {
+                    success = self.writev_ipc_async(conn_id, wdata_v, size_v,
+                                                    info_v, n, &transfer_id);
+                  } else {
+                    success = self.readv_ipc_async(conn_id, rdata_v, size_v,
+                                                   info_v, n, &transfer_id);
+                  }
                 }
               }
             } else {
-              std::vector<FifoItem> slot_item_v;
-              std::vector<uint64_t> mr_id_v;
-              std::vector<void*> src_v;
-              std::vector<size_t> size_v;
-              slot_item_v.reserve(n);
-              mr_id_v.reserve(n);
-              src_v.reserve(n);
-              size_v.reserve(n);
-
-              for (size_t i = 0; i < n; ++i) {
+              // RDMA path for inter-node
+              if (n == 1) {
                 auto const& ldesc =
-                    py::cast<XferDesc const&>(local_desc_list[i]);
+                    py::cast<XferDesc const&>(local_desc_list[0]);
                 auto const& rdesc =
-                    py::cast<XferDesc const&>(remote_desc_list[i]);
+                    py::cast<XferDesc const&>(remote_desc_list[0]);
 
                 FifoItem fifo_item;
                 fifo_item.addr = reinterpret_cast<uint64_t>(rdesc.addr);
@@ -410,21 +485,57 @@ PYBIND11_MODULE(p2p, m) {
                 std::memcpy(fifo_item.padding, rdesc.rkeys.data(),
                             rdesc.rkeys.size() * sizeof(uint32_t));
 
-                slot_item_v.push_back(fifo_item);
-                mr_id_v.push_back(ldesc.mr_id);
-                src_v.push_back(const_cast<void*>(ldesc.addr));
-                size_v.push_back(ldesc.size);
-              }
+                {
+                  py::gil_scoped_release release;
+                  InsidePythonGuard guard;
+                  if (is_write) {
+                    success = self.write_async(
+                        conn_id, ldesc.mr_id, const_cast<void*>(ldesc.addr),
+                        ldesc.size, fifo_item, &transfer_id);
+                  } else {
+                    success = self.read_async(
+                        conn_id, ldesc.mr_id, const_cast<void*>(ldesc.addr),
+                        ldesc.size, fifo_item, &transfer_id);
+                  }
+                }
+              } else {
+                std::vector<FifoItem> slot_item_v;
+                std::vector<uint64_t> mr_id_v;
+                std::vector<void*> src_v;
+                std::vector<size_t> size_v;
+                slot_item_v.reserve(n);
+                mr_id_v.reserve(n);
+                src_v.reserve(n);
+                size_v.reserve(n);
 
-              {
-                py::gil_scoped_release release;
-                InsidePythonGuard guard;
-                if (is_write) {
-                  success = self.writev_async(conn_id, mr_id_v, src_v, size_v,
-                                              slot_item_v, n, &transfer_id);
-                } else {
-                  success = self.readv_async(conn_id, mr_id_v, src_v, size_v,
-                                             slot_item_v, n, &transfer_id);
+                for (size_t i = 0; i < n; ++i) {
+                  auto const& ldesc =
+                      py::cast<XferDesc const&>(local_desc_list[i]);
+                  auto const& rdesc =
+                      py::cast<XferDesc const&>(remote_desc_list[i]);
+
+                  FifoItem fifo_item;
+                  fifo_item.addr = reinterpret_cast<uint64_t>(rdesc.addr);
+                  fifo_item.size = rdesc.size;
+                  std::memcpy(fifo_item.padding, rdesc.rkeys.data(),
+                              rdesc.rkeys.size() * sizeof(uint32_t));
+
+                  slot_item_v.push_back(fifo_item);
+                  mr_id_v.push_back(ldesc.mr_id);
+                  src_v.push_back(const_cast<void*>(ldesc.addr));
+                  size_v.push_back(ldesc.size);
+                }
+
+                {
+                  py::gil_scoped_release release;
+                  InsidePythonGuard guard;
+                  if (is_write) {
+                    success = self.writev_async(conn_id, mr_id_v, src_v, size_v,
+                                                slot_item_v, n, &transfer_id);
+                  } else {
+                    success = self.readv_async(conn_id, mr_id_v, src_v, size_v,
+                                               slot_item_v, n, &transfer_id);
+                  }
                 }
               }
             }
