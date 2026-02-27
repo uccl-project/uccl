@@ -93,7 +93,7 @@ if [[ "$BUILD_TYPE" =~ (ep|all|p2p) ]]; then
       echo "Auto-detected ROCm architecture: ${DETECTED_GPU_ARCH}"
     fi
   else
-    echo "[INFO] No compatible GPU detection tool found, skipping auto-detect"
+    echo "No compatible GPU detection tool found, skipping auto-detect"
   fi
 fi
 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-${DETECTED_GPU_ARCH}}"
@@ -112,7 +112,7 @@ if [[ -f /etc/os-release ]]; then
   HOST_VERSION_ID=$(. /etc/os-release && echo "${VERSION_ID:-}")
   if [[ "$HOST_ID" == "rocky" && "$HOST_VERSION_ID" == 9* ]]; then
     UCCL_WHEEL_PLAT="manylinux_2_34_${ARCH}"
-    echo "[INFO] Rocky Linux 9 detected wheel will be tagged ${UCCL_WHEEL_PLAT}"
+    echo "Rocky Linux 9 detected wheel will be tagged ${UCCL_WHEEL_PLAT}"
   fi
 fi
 
