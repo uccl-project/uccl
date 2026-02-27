@@ -6,7 +6,7 @@ GPU-initiated expert-parallel communication (e.g., DeepEP) is the key to efficie
 
 We provide a script to install dependencies (tested on p5en, p6-b200, AMD MI300x), assuming under a Python environment: 
 ```bash
-./install_deps.sh
+bash install_deps.sh
 ```
 
 ## Build on CUDA
