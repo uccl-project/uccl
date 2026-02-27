@@ -339,15 +339,13 @@ PYBIND11_MODULE(p2p, m) {
                   auto addr_aligned = addr_val & ~(kIpcAlign - 1);
                   ipc_info.offset = addr_val - addr_aligned;
                   auto err = gpuIpcGetMemHandle(
-                      &ipc_info.handle,
-                      reinterpret_cast<void*>(addr_aligned));
-                  if (err == gpuSuccess) {
-                    xfer_desc.ipc_info.assign(
-                        reinterpret_cast<char const*>(&ipc_info),
-                        sizeof(ipc_info));
-                  } else {
-                    gpuGetLastError();
+                      &ipc_info.handle, reinterpret_cast<void*>(addr_aligned));
+                  if (err != gpuSuccess) {
+                    throw std::runtime_error(gpuGetErrorString(err));
                   }
+                  xfer_desc.ipc_info.assign(
+                      reinterpret_cast<char const*>(&ipc_info),
+                      sizeof(ipc_info));
                 }
                 xfer_desc_v.push_back(std::move(xfer_desc));
               }
@@ -420,9 +418,8 @@ PYBIND11_MODULE(p2p, m) {
                   py::gil_scoped_release release;
                   InsidePythonGuard guard;
                   if (is_write) {
-                    success = self.write_ipc_async(conn_id, ldesc.addr,
-                                                   ldesc.size, info,
-                                                   &transfer_id);
+                    success = self.write_ipc_async(
+                        conn_id, ldesc.addr, ldesc.size, info, &transfer_id);
                   } else {
                     success = self.read_ipc_async(
                         conn_id, const_cast<void*>(ldesc.addr), ldesc.size,
