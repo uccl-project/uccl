@@ -1153,7 +1153,7 @@ static void post_rdma_async_batched_normal_mode(
 
     for (auto& [ring_idx_raw, idxs] : ring_to_indices) {
 #ifdef EFA
-      const size_t local_ring_count = ctx->data_qps_by_channel.size();
+      size_t const local_ring_count = ctx->data_qps_by_channel.size();
       struct ibv_qp_ex* qpx =
           (struct ibv_qp_ex*)(local_ring_count
                                   ? ctx->data_qps_by_channel[ring_idx_raw %
@@ -2044,17 +2044,16 @@ void remote_process_completions_fast_mode(
       // signaling_buffer_bytes_internode_aligned =
       //   align(max(dispatch_bytes, combine_bytes), 128)
 #ifdef PER_EXPERT_BATCHING
-      size_t per_buffer_stride = align<size_t>(
-          std::max(static_cast<size_t>(num_ranks) * num_ranks,
-                   static_cast<size_t>(num_experts)) *
-              sizeof(int64_t),
-          128);
+      size_t per_buffer_stride =
+          align<size_t>(std::max(static_cast<size_t>(num_ranks) * num_ranks,
+                                 static_cast<size_t>(num_experts)) *
+                            sizeof(int64_t),
+                        128);
 #else
       size_t per_buffer_stride =
           align<size_t>(num_experts * sizeof(int64_t), 128);
 #endif
-      uint32_t new_offset =
-          offset - low_latency_buffer_idx * per_buffer_stride;
+      uint32_t new_offset = offset - low_latency_buffer_idx * per_buffer_stride;
       size_t new_index = new_offset / sizeof(int64_t);
       int src_rank = -1;
       bool is_atomic_ready = false;
@@ -2119,7 +2118,7 @@ void remote_process_completions_fast_mode(
 #ifdef USE_SENDER_BARRIER
       if (aimm.IsCombine()) value = 1;
 #ifndef EFA
-      const uint32_t tag = wr_tag(cqe.wr_id);
+      uint32_t const tag = wr_tag(cqe.wr_id);
       ProxyCtx& S_atomic = *ctx_by_tag[tag];
       ibv_sge sge = {
           .addr = reinterpret_cast<uintptr_t>(S_atomic.mr->addr),
@@ -2473,7 +2472,8 @@ static void post_atomic_operations_normal_mode(
         }
 
         // Encode byte offset as int64_t index (>> 3) to fit in 13-bit off13.
-        // req_rptr is always 8-byte aligned (points into int64_t atomic buffer).
+        // req_rptr is always 8-byte aligned (points into int64_t atomic
+        // buffer).
         uint32_t offset = static_cast<uint32_t>(cmd.req_rptr >> 3);
         int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
         if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
