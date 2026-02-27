@@ -327,6 +327,7 @@ class NICEndpoint {
     ConnID conn_id;
     conn_id.context = reinterpret_cast<void*>(static_cast<intptr_t>(rank_id));
     conn_id.flow_id = rank_id;
+    conn_id.sock_fd = 0;
     return conn_id;
   }
 
