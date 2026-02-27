@@ -37,14 +37,7 @@ from utils import (
     detect_ib_hca,
 )
 
-# UCCL import
-try:
-    from uccl import ep
-except ImportError as exc:
-    import sys
-
-    sys.stderr.write("Failed to import uccl.ep\n")
-    raise
+import uccl_ep as ep
 
 
 def peek_slot_from_handle(packed_recv_x, handle, le, src_rank, n_words=4):

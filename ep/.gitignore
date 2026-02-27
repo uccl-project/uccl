@@ -2,3 +2,6 @@ benchmark
 *.hip
 *_hip.*
 *.egg-info
+dist/
+build/
+wheelhouse/

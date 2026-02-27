@@ -15,8 +15,8 @@ Include any tests here.
 - [ ] Manual testing
 
 ## Checklist
-- [ ] My code follows the style guidelines, e.g. `format.sh`.
-- [ ] I have run `build_and_install.sh` to verify compilation.
+- [ ] I have run `format.sh` to follow the style guidelines.
+- [ ] I have run `build.sh` to verify compilation.
 - [ ] I have removed redundant variables and comments.
 - [ ] I have updated the documentation.
 - [ ] I have added tests.

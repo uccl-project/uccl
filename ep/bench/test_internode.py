@@ -51,11 +51,11 @@ from utils import (
 from buffer import Buffer
 
 try:
-    from uccl.ep import Config
+    from uccl_ep import Config
 except ImportError as exc:
     import sys
 
-    sys.stderr.write("Failed to import uccl.ep\n")
+    sys.stderr.write("Failed to import uccl_ep\n")
     raise
 
 

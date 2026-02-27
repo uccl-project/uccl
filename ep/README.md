@@ -6,7 +6,7 @@ GPU-initiated expert-parallel communication (e.g., DeepEP) is the key to efficie
 
 We provide a script to install dependencies (tested on p5en, p6-b200, AMD MI300x), assuming under a Python environment: 
 ```bash
-./install_deps.sh
+bash install_deps.sh
 ```
 
 ## Build on CUDA
@@ -21,12 +21,11 @@ You can also use `make` to build and install (might deprecate in the future):
 make -j install
 ```
 
-Alternatively, you can build `uccl.ep` wheel using docker then install:
+Alternatively, you can build `uccl_ep` wheel using docker then install:
 ```bash
-# Under uccl
-bash build_and_install.sh cuda ep
+bash build.sh cuda --install
 ```
-> Note: docker-built `uccl.ep` wheel currently does not work on p6-b200, see https://github.com/uccl-project/uccl/issues/554. 
+> Note: docker-built `uccl_ep` wheel currently does not work on p6-b200, see https://github.com/uccl-project/uccl/issues/554. 
 
 ## Build on ROCm
 
@@ -35,15 +34,14 @@ You can directly build and install into your Python env:
 python setup.py install
 ```
 
-Alternatively, you can build `uccl.ep` wheel for ROCm7 using docker then install:
+Alternatively, you can build `uccl_ep` wheel for ROCm7 using docker then install:
 ```bash
-# Under uccl
-bash build_and_install.sh rocm ep
+bash build.sh rocm --install
 ```
 
-## Test import `uccl.ep`
+## Test import `uccl_ep`
 ```bash
-python -c "import torch; import uccl.ep"
+python -c "import torch; import uccl_ep"
 ```
 
 Note: 

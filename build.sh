@@ -7,7 +7,7 @@ set -e
 # a purpose-built Docker/Podman image derived from Ubuntu 22.04.
 #
 # Usage:
-#   ./build.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image]
+#   ./build.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p] [py_version] [rocm_index_url] [therock_base_image] [--install]
 #
 # Environment Variables:
 #   CONTAINER_ENGINE=podman Use podman instead of docker.
@@ -18,9 +18,19 @@ set -e
 # The wheels are written to wheelhouse-[cuda|rocm|therock]
 # -----------------------
 
-TARGET=${1:-cuda}
-BUILD_TYPE=${2:-all}
-PY_VER=${3:-$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")}
+# Parse arguments: positional args + --install flag
+DO_INSTALL=0
+POSITIONAL_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --install) DO_INSTALL=1 ;;
+    *) POSITIONAL_ARGS+=("$arg") ;;
+  esac
+done
+
+TARGET=${POSITIONAL_ARGS[0]:-cuda}
+BUILD_TYPE=${POSITIONAL_ARGS[1]:-all}
+PY_VER=${POSITIONAL_ARGS[2]:-$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")}
 ARCH="$(uname -m)"
 
 # Container engine: "docker" (default) or "podman"
@@ -30,14 +40,14 @@ if [[ "$CONTAINER_ENGINE" != "docker" && "$CONTAINER_ENGINE" != "podman" ]]; the
   exit 1
 fi
 # The default for ROCM_IDX_URL depends on the gfx architecture of your GPU and the index URLs may change.
-ROCM_IDX_URL=${4:-https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu}
+ROCM_IDX_URL=${POSITIONAL_ARGS[3]:-https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu}
 # The default for THEROCK_BASE_IMAGE is current, but may change. Make sure to track TheRock's dockerfile.
-THEROCK_BASE_IMAGE=${5:-quay.io/pypa/manylinux_2_28_x86_64@sha256:d632b5e68ab39e59e128dcf0e59e438b26f122d7f2d45f3eea69ffd2877ab017}
+THEROCK_BASE_IMAGE=${POSITIONAL_ARGS[4]:-quay.io/pypa/manylinux_2_28_x86_64@sha256:d632b5e68ab39e59e128dcf0e59e438b26f122d7f2d45f3eea69ffd2877ab017}
 IS_EFA=$( [ -d "/sys/class/infiniband/" ] && ls /sys/class/infiniband/ 2>/dev/null | grep -q rdmap && echo "EFA support: true" ) || echo "EFA support: false"
 
 
 if [[ $TARGET != cuda* && $TARGET != rocm* && $TARGET != "therock" ]]; then
-  echo "Usage: $0 [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image]" >&2
+  echo "Usage: $0 [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p] [py_version] [rocm_index_url] [therock_base_image] [--install]" >&2
   exit 1
 fi
 
@@ -175,32 +185,6 @@ build_p2p() {
   fi
 }
 
-build_ep() {
-  local TARGET="$1"
-  local ARCH="$2"
-  local IS_EFA="$3"
-
-  set -euo pipefail
-  echo "[container] build_ep Target: $TARGET"
-
-  if [[ "${USE_INTEL_RDMA_NIC:-0}" == "1" ]]; then
-    echo "[container] Building EP with Intel RDMA NIC support (USE_INTEL_RDMA_NIC=1)"
-  fi
-
-  if [[ "$TARGET" == "therock" ]]; then
-    echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
-  elif [[ "$TARGET" == rocm* || "$TARGET" == cuda* ]]; then
-    cd ep
-    # This may be needed if you traverse through different git commits
-    # make clean && rm -r build || true
-    USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} python3 setup.py build
-    cd ..
-    echo "[container] Copying GPU-driven .so to uccl/"
-    mkdir -p uccl/lib
-    cp ep/build/**/*.so uccl/
-  fi
-}
-
 build_ukernel() {
   local TARGET="$1"
   local ARCH="$2"
@@ -303,7 +287,7 @@ echo "[2/3] Running build inside container..."
 
 # Auto-detect CUDA architecture for ep build
 DETECTED_GPU_ARCH=""
-if [[ "$BUILD_TYPE" =~ (ep|all|p2p) ]];then
+if [[ "$BUILD_TYPE" =~ (all|p2p) ]];then
   if [[ "$TARGET" == cuda* ]] && command -v nvidia-smi &> /dev/null; then
     DETECTED_GPU_ARCH="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ' || true)"
 
@@ -387,7 +371,7 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
   -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
   -e DISABLE_AGGRESSIVE_ATOMIC="${DISABLE_AGGRESSIVE_ATOMIC:-0}" \
   -e UCCL_WHEEL_PLAT="${UCCL_WHEEL_PLAT:-}" \
-  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_ccl_rdma build_ccl_efa build_p2p build_ep build_ukernel)" \
+  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_h build_ccl_rdma build_ccl_efa build_p2p build_ukernel)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
     set -euo pipefail
@@ -417,15 +401,12 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
       build_ccl_efa "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "p2p" ]]; then
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
-    elif [[ "$BUILD_TYPE" == "ep" ]]; then
-      build_ep "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "ukernel" ]]; then
       build_ukernel "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "all" ]]; then
       build_ccl_rdma "$TARGET" "$ARCH" "$IS_EFA"
       build_ccl_efa "$TARGET" "$ARCH" "$IS_EFA"
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
-      # build_ep "$TARGET" "$ARCH" "$IS_EFA"
       # build_ukernel "$TARGET" "$ARCH" "$IS_EFA"
     fi
 
@@ -527,3 +508,34 @@ def initialize():
 # 3. Done
 echo "[3/3] Wheel built successfully (stored in ${WHEEL_DIR}):"
 ls -lh "${WHEEL_DIR}"/uccl-*.whl || true
+
+# 4. Optionally install the built wheel
+if [[ "$DO_INSTALL" == "1" ]]; then
+  # Auto-detect uv vs pip
+  if command -v uv &> /dev/null && [[ -n "${VIRTUAL_ENV:-}" ]]; then
+    PIP_CMD="uv pip"
+  else
+    PIP_CMD="pip"
+  fi
+  echo "[4/4] Installing uccl wheel (using ${PIP_CMD})..."
+  ${PIP_CMD} install -r requirements.txt 2>/dev/null || true
+  ${PIP_CMD} uninstall uccl -y 2>/dev/null || true
+  if [[ "$TARGET" != "therock" ]]; then
+    ${PIP_CMD} install "${WHEEL_DIR}"/uccl-*.whl --no-deps
+  else
+    ${PIP_CMD} install --extra-index-url "${ROCM_IDX_URL}" "$(ls "${WHEEL_DIR}"/uccl-*.whl)[rocm]"
+  fi
+
+  UCCL_INSTALL_PATH=$(${PIP_CMD} show uccl 2>/dev/null | grep "^Location:" | cut -d' ' -f2 || echo "")
+  if [[ -n "$UCCL_INSTALL_PATH" && -d "$UCCL_INSTALL_PATH" ]]; then
+    UCCL_PACKAGE_PATH="$UCCL_INSTALL_PATH/uccl"
+    if [[ -d "$UCCL_PACKAGE_PATH" ]]; then
+      echo "UCCL installed at: $UCCL_PACKAGE_PATH"
+      echo "Set LIBRARY_PATH: export LIBRARY_PATH=\"$UCCL_PACKAGE_PATH/lib:\$LIBRARY_PATH\""
+    else
+      echo "UCCL package directory not found at: $UCCL_PACKAGE_PATH"
+    fi
+  else
+    echo "Warning: Could not detect UCCL installation path"
+  fi
+fi

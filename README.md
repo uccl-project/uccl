@@ -93,12 +93,17 @@ The easiest way to use UCCL is to first build based on your platform. The build 
 
 ```bash
 git clone https://github.com/uccl-project/uccl.git --recursive && cd uccl
-bash build_and_install.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url]
-# Eg, bash build_and_install.sh cuda ep
+
+# For collective and p2p: eg, bash build.sh cuda ccl_rdma --install
+bash build.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p] [py_version] [rocm_index_url] --install
+
+# For ep: 
+cd ep && bash build.sh [cuda|rocm] [py_version] --install
 ```
 > Note: 
 > - when building for ROCm with python packaging through TheRock, please specify your ROCm index url; the default is `https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu` and it may not be what you want. When installing UCCL wheels for TheRock, please provide pip with the index url and add the optional extra `[rocm]` to the wheel, e.g., `pip install --extra-index-url https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu wheelhouse-therock/uccl-0.0.1.post4-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl[rocm]`.
 > - you can build with different CUDA or ROCm versions by specifying tags such as cuda13 or rocm6. The default versions are CUDA 12.x for the "cuda" tag and ROCm 7.x for the "rocm" tag.
+> - check [docs/wheel_build.md](./docs/wheel_build.md) for details.
 
 Then, when running your PyTorch applications, set the environment variable accordingly: 
 ```bash
@@ -127,8 +132,6 @@ export UCCL_HOME=$(pwd)/uccl
 ```
 
 To build UCCL for development, you need to install some common dependencies: 
-<details><summary>Click me</summary>
-
 ```bash
 # Note if you are using docker+wheel build, there is no need to install the following dependencies. 
 sudo apt update
@@ -149,7 +152,6 @@ pip install paramiko pybind11
 # Upgrade conda glic to modern ones
 conda install -c conda-forge "libstdcxx-ng>=12" "libgcc-ng>=12"
 ```
-</details>
 
 For quick installation with docker, you can directly dive into: 
 * [`UCCL-Collective RDMA`](collective/rdma/README.md): Collectives for Nvidia/AMD GPUs + IB/RoCE RDMA NICs (currently support Nvidia and Broadcom NICs)
@@ -159,44 +161,6 @@ For quick installation with docker, you can directly dive into:
 * [`UCCL-Collective AFXDP`](collective/afxdp/README.md): Collectives for Non-RDMA NICs (currently support AWS ENA NICs and IBM VirtIO NICs)
 * [`UCCL-P2P`](p2p/README.md): P2P for RDMA NICs and GPU IPCs (currently support Nvidia/AMD GPUs and Nvidia/Broadcom NICs)
 * [`UCCL-EP`](ep/README.md): EP for MoE training and inference with DeepEP-compatible APIs (currently support Nvidia/AMD GPUs and Nvidia/Broadcom/EFA NICs)
-
-### Python Wheel Build
-
-Run the following to build Python wheels: 
-```bash
-cd $UCCL_HOME
-./build.sh [cuda|rocm|therock] [all|rdma|p2p|efa|ep] [py_version] [rocm_index_url]
-```
-
-Run the following to install the wheels locally: 
-```bash
-cd $UCCL_HOME
-pip install wheelhouse-[cuda/rocm]/uccl-*.whl
-```
-
-The cross-compilation matrix is as follows:
-
-| Platform/Feature   | rdma-cuda | rdma-rocm | rdma-arm | p2p-cuda | p2p-rocm | p2p-arm | efa |
-|--------------------|-----------|-----------|----------|----------|----------|---------|-----|
-| cuda + x86         | ✓         | ✓         | x        | ✓        | ✓        | x       | ✓   |
-| cuda + arm (gh200) | ✓         | x         | x        | ✓        | x        | x       | x   |
-| rocm + x86         | ✓         | ✓         | ✓        | ✓        | ✓        | ✓       | x   |
-| aws p4d/p4de       | ✓         | ✓         | x        | ✓        | x        | x       | ✓   |
-
-Note that you need ARM hosts to build ARM wheels, as cross-compilation tool `qemu-user-static` cannot emulate CUDA or ROCm. 
-
-### On Cloudlab CPU Machines
-
-If you want to build nccl and nccl-tests on cloudlab ubuntu22, you need to install cuda and openmpi: 
-
-```bash
-wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
-sudo apt install ./cuda-keyring_1.1-1_all.deb
-sudo apt update
-sudo apt install cuda-toolkit -y
-sudo apt install nvidia-driver-550 nvidia-utils-550 -y
-sudo apt-get install openmpi-bin openmpi-doc libopenmpi-dev -y
-```
 
 </details>
 
@@ -212,7 +176,7 @@ The code in this repository is mostly described in the papers below. Please cons
 }
 ```
 ```bibtex
-@article{mao2025uccl,
+@article{uccl_ep,
   title={UCCL-EP: Portable Expert-Parallel Communication},
   author={Mao, Ziming and Zhang, Yihan and Cui, Chihan and You, Kaichao and Chen, Zhongjie and Xu, Zhiying and Shenker, Scott and Raiciu, Costin and Zhou, Yang and Stoica, Ion},
   journal={arXiv preprint arXiv:2512.19849},

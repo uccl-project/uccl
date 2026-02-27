@@ -26,7 +26,7 @@ runcmd:
   - [sudo, "-u", "ubuntu", bash, -lc, "cd /home/ubuntu && git clone https://github.com/uccl-project/uccl.git --recursive"]
   - [sudo, "-u", "ubuntu", bash, -lc, "printf '%s\n' 'export UCCL_HOME=$HOME/uccl' >> /home/ubuntu/.bashrc"]
   - [sudo, "-u", "ubuntu", bash, -lc, "export PATH=$HOME/miniconda3/bin:$PATH && cd $HOME/uccl/ep && ./install_deps.sh && make -j install"]
-  - [sudo, "-u", "ubuntu", bash, -lc, "export PATH=$HOME/miniconda3/bin:$PATH && python -c 'import torch, uccl.ep' || echo 'WARNING: torch/uccl.ep import test failed'"]
+  - [sudo, "-u", "ubuntu", bash, -lc, "export PATH=$HOME/miniconda3/bin:$PATH && python -c 'import torch, uccl_ep' || echo 'WARNING: torch/uccl_ep import test failed'"]
   - [sudo, "-u", "ubuntu", bash, -lc, "export PATH=$HOME/miniconda3/bin:$PATH && cd $HOME/uccl/thirdparty/DeepEP && python setup.py install"]
   - [sudo, "-u", "ubuntu", bash, -lc, "export PATH=$HOME/miniconda3/bin:$PATH && python -c 'import deep_ep' || echo 'WARNING: deep_ep import test failed'"]
 
