@@ -244,11 +244,11 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
   -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
   -e DISABLE_AGGRESSIVE_ATOMIC="${DISABLE_AGGRESSIVE_ATOMIC:-0}" \
   -e UCCL_WHEEL_PLAT="${UCCL_WHEEL_PLAT:-}" \
-  -e PYTHONUNBUFFERED=1 \
   -e FUNCTION_DEF="$(declare -f build_rccl_nccl_header build_ccl_rdma build_ccl_efa build_p2p build_ep build_ukernel)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
     set -euo pipefail
+    eval "$FUNCTION_DEF"
 
     if [[ "$TARGET" == "therock" ]]; then
 
@@ -262,8 +262,6 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
       pip3 install --no-cache-dir build auditwheel pybind11
       pip3 install --no-cache-dir rocm[libraries,devel] --index-url ${ROCM_IDX_URL}
     fi
-
-    eval "$FUNCTION_DEF"
 
     if [[ "$TARGET" == rocm* ]]; then
       build_rccl_nccl_header
