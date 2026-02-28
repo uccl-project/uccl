@@ -1856,8 +1856,7 @@ void remote_process_completions_normal_mode(
         ImmType::IsAtomics(ntohl(cqe.imm_data))) {
       AtomicsImm aimm(ntohl(cqe.imm_data));
       int value = aimm.GetValue();
-      // off13 stores int64_t index (byte_offset >> 3); decode back to bytes.
-      uint32_t offset = static_cast<uint32_t>(aimm.GetOff()) << 3;
+      uint32_t offset = aimm.GetOff();
       size_t index = offset / sizeof(int64_t);
       auto* addr64 =
           reinterpret_cast<std::atomic<int64_t>*>(atomic_buffer_ptr) + index;
@@ -2471,10 +2470,7 @@ static void post_atomic_operations_normal_mode(
           std::abort();
         }
 
-        // Encode byte offset as int64_t index (>> 3) to fit in 13-bit off13.
-        // req_rptr is always 8-byte aligned (points into int64_t atomic
-        // buffer).
-        uint32_t offset = static_cast<uint32_t>(cmd.req_rptr >> 3);
+        uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
         int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
         if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
           fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
@@ -2528,8 +2524,9 @@ static void post_atomic_operations_normal_mode(
           std::abort();
         }
 
-        // Encode byte offset as int64_t index (>> 3) to fit in 13-bit off13.
-        uint32_t off13 = static_cast<uint32_t>(cmd.req_rptr >> 3);
+        // If your AtomicsImm for non-EFA expects 16-bit offsets, keep the
+        // mask:
+        uint32_t off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
         int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
         if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
           fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
@@ -2539,7 +2536,7 @@ static void post_atomic_operations_normal_mode(
         uint32_t imm = AtomicsImm::Pack(
                            /*is_atomic*/ true,
                            /*is_combine*/ get_is_combine(cmd.cmd_type), v,
-                           /*offset*/ off13, low_latency_buffer_idx)
+                           /*offset*/ off16, low_latency_buffer_idx)
                            .GetImmData();
 
         // Zero-length write-with-imm on RC QP
