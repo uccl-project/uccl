@@ -68,9 +68,6 @@ class CollectiveContext:
         self.world_size = dist.get_world_size()
         self.rank = dist.get_rank()
         self.dist_backend = "gloo" if use_copy_engine_for_intra else "nccl"
-        self.group = dist.new_group(
-            ranks=range(self.world_size), backend=self.dist_backend
-        )
         self.num_cpus = num_cpus
         self.use_copy_engine_for_intra = use_copy_engine_for_intra
 
@@ -117,7 +114,7 @@ class CollectiveContext:
         try:
             # This requires torch.distributed to have local rank support
             if hasattr(dist, "get_local_rank"):
-                return dist.get_local_rank(group=self.group)
+                return dist.get_local_rank()
         except (AttributeError, RuntimeError):
             pass
 
@@ -160,7 +157,7 @@ class CollectiveContext:
             torch.zeros_like(metadata_tensor, device=device)
             for _ in range(self.world_size)
         ]
-        dist.all_gather(gathered_tensors, metadata_tensor, group=self.group)
+        dist.all_gather(gathered_tensors, metadata_tensor)
 
         for i, tensor in enumerate(gathered_tensors):
             if tensor.is_cuda:
@@ -400,7 +397,7 @@ class CollectiveContext:
                 if not ok:
                     raise RuntimeError(f"Failed to initiate IPC send to rank {dst}")
             else:
-                dist.send(tensor, dst, group=self.group)
+                dist.send(tensor, dst)
         else:
             # Use RDMA for remote connection (requires memory registration)
             mr_id = self.check_tensor_registered(tensor)
@@ -434,7 +431,7 @@ class CollectiveContext:
                 if not ok:
                     raise RuntimeError(f"Failed to initiate IPC recv from rank {src}")
             else:
-                dist.recv(tensor, src, group=self.group)
+                dist.recv(tensor, src)
         else:
             # Use RDMA for remote connection (requires memory registration)
             mr_id = self.check_tensor_registered(tensor)
@@ -472,7 +469,7 @@ class CollectiveContext:
                 return transfer_handle
             else:
                 # Use NCCL - start immediately and return Work object
-                op = dist.P2POp(dist.isend, tensor, dst, group=self.group)
+                op = dist.P2POp(dist.isend, tensor, dst)
                 reqs = dist.batch_isend_irecv([op])
                 return reqs[0]
         else:
@@ -515,7 +512,7 @@ class CollectiveContext:
                 return transfer_handle
             else:
                 # Use NCCL - start immediately and return Work object
-                op = dist.P2POp(dist.irecv, tensor, src, group=self.group)
+                op = dist.P2POp(dist.irecv, tensor, src)
                 reqs = dist.batch_isend_irecv([op])
                 return reqs[0]
         else:
@@ -652,9 +649,7 @@ class CollectiveContext:
                             raise RuntimeError(f"Failed IPC send to {peer}")
                         int_handles.append(handle)
                     else:
-                        p2p_ops.append(
-                            dist.P2POp(dist.isend, tensor, peer, group=self.group)
-                        )
+                        p2p_ops.append(dist.P2POp(dist.isend, tensor, peer))
                 else:
                     ptr, size = self._get_buffer_info(tensor)
                     conn_id = self.send_connections[peer]
@@ -675,9 +670,7 @@ class CollectiveContext:
                             raise RuntimeError(f"Failed IPC recv from {peer}")
                         int_handles.append(handle)
                     else:
-                        p2p_ops.append(
-                            dist.P2POp(dist.irecv, tensor, peer, group=self.group)
-                        )
+                        p2p_ops.append(dist.P2POp(dist.irecv, tensor, peer))
                 else:
                     ptr, size = self._get_buffer_info(tensor)
                     conn_id = self.recv_connections[peer]
