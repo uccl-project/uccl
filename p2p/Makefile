@@ -83,10 +83,10 @@ CXXFLAGS += -DUCCL_P2P_USE_TCPX -I$(NCCL_INC)
 LDFLAGS  += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
 OBJECTS := $(CORE_OBJECTS)
 else ifeq ($(USE_TCP),1)
-SOURCES := engine.cc engine_pybind.cc nccl/nccl_endpoint.cc
+SOURCES := engine.cc engine_api.cc nccl/nccl_endpoint.cc
 CORE_OBJECT := engine.o nccl/nccl_endpoint.o
 else
-SOURCES := engine.cc engine_pybind.cc
+SOURCES := engine.cc engine_api.cc
 CORE_OBJECT := engine.o
 endif
 
