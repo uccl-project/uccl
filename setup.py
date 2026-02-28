@@ -1,6 +1,11 @@
 import re
 import os
+import sysconfig
 from setuptools import setup, find_packages, Extension
+
+
+def _is_freethreaded():
+    return bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
 
 
 def get_version():
@@ -15,6 +20,16 @@ def get_version():
     raise RuntimeError("Unable to find version string in uccl/__init__.py")
 
 
+# Stable-ABI stub so setuptools emits a cp38-abi3 platform tag (same trick as vLLM).
+_use_limited_api = not _is_freethreaded()
+
+abi3_ext = Extension(
+    "uccl._abi3_stub",
+    sources=["uccl/_abi3_stub.c"],
+    py_limited_api=_use_limited_api,
+    define_macros=[("Py_LIMITED_API", "0x03080000")] if _use_limited_api else [],
+)
+
 setup(
     name="uccl",
     version=get_version(),
@@ -24,6 +39,7 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/uccl-project/uccl",
     packages=find_packages(),
+    ext_modules=[abi3_ext],
     package_data={
         "uccl": [
             "lib/*.so",
@@ -40,6 +56,7 @@ setup(
         "Programming Language :: Python :: 3",
     ],
     python_requires=">=3.8",
+    options={"bdist_wheel": {"py_limited_api": "cp38"}} if _use_limited_api else {},
     extras_require={
         "cuda": [],
         "rocm": [],

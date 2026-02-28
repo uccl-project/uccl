@@ -18,7 +18,7 @@ get_cuda_version() {
 
 # Install common dependencies
 sudo apt install -y nvtop libgoogle-glog-dev clang-format-14 python3-pip
-pip install pybind11 --upgrade
+pip install pybind11 nanobind --upgrade
 pip install black
 
 # Check if we're in a conda environment

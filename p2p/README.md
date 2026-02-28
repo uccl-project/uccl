@@ -10,7 +10,7 @@ UCCL has an experimental GPU-driven P2P engine, see [ep](../ep/) folder.
 p2p/
 ├── engine.h          # C++ Endpoint class header with RDMA functionality
 ├── engine.cc         # C++ Endpoint implementation
-├── engine_api.cc     # pybind11 wrapper for Python integration
+├── engine_api.cc     # nanobind wrapper for Python integration
 ├── Makefile          # Build configuration
 ├── tests/            # Comprehensive test suite
 ├── benchmarks/       # Comprehensive benchmark suite
@@ -33,7 +33,7 @@ Alternatively, you can setup your local dev environment by:
 - Linux with RDMA support
 - Python 3.7+ with development headers
 - C++17 compatible compiler
-- pybind11 library
+- nanobind library
 - PyTorch (for tensor/array operations)
 
 ```bash
@@ -43,7 +43,7 @@ sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
 
 ### Installation
 
-1. **Install Pybind11 dependency:**
+1. **Install nanobind dependency:**
    ```bash
    make install-deps
    ```

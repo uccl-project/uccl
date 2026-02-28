@@ -1,3 +1,4 @@
+#include <Python.h>
 #include "engine.h"
 #include "endpoint_wrapper.h"
 #include "util/pause.h"
