@@ -15,6 +15,7 @@
 #include <optional>
 #include <sstream>
 #include <thread>
+#include <Python.h>
 #include <sys/socket.h>
 #include <unistd.h>
 

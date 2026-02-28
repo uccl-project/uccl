@@ -144,8 +144,8 @@ source ~/miniconda3/bin/activate
 source ~/.bashrc # or .zshrc and others
 conda init
 
-# Install python ssh lib
-pip install paramiko pybind11
+# Install python ssh lib and more
+pip install paramiko intervaltree pybind11 nanobind
 # Upgrade conda glic to modern ones
 conda install -c conda-forge "libstdcxx-ng>=12" "libgcc-ng>=12"
 ```

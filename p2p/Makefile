@@ -1,4 +1,4 @@
-# Makefile for UCCL P2P Engine pybind11 project
+# Makefile for UCCL P2P Engine nanobind project (stable ABI)
 
 # TCPX optional integration
 USE_TCPX ?= $(shell echo $${USE_TCPX:-0})
@@ -41,13 +41,20 @@ ifeq ($(USE_TCP),1)
 	CXXFLAGS += -DUCCL_P2P_USE_NCCL
 endif
 
-# Python and pybind11 configuration
+# Python and nanobind configuration (stable ABI)
 PYTHON          ?= python3
 PYTHON_CONFIG    = $(PYTHON)-config
-PYEXT           := $(shell $(PYTHON_CONFIG) --extension-suffix)
-PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
-PYTHON_LDFLAGS := $(shell $(PYTHON_CONFIG) --ldflags)
-PYTHON_LIB := $(shell $(PYTHON_CONFIG) --ldflags | grep -o 'python[0-9.]*' | head -1 | sed 's/^/-l/')
+PYEXT           := .abi3.so
+NB_DIR          := $(shell $(PYTHON) -c "import nanobind as _nb, os; print(os.path.dirname(_nb.__file__))")
+NB_INCLUDES     := -I$(NB_DIR)/include -I$(NB_DIR)/ext/robin_map/include -I$(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_path('include'))")
+NB_ABI_FLAGS    := -DPy_LIMITED_API=0x030C0000 -DNB_STABLE_ABI=1
+NB_SRC_DIR      := $(NB_DIR)/src
+NB_SRCS         := nb_internals.cpp nb_func.cpp nb_type.cpp nb_enum.cpp \
+                   nb_ndarray.cpp nb_static_property.cpp common.cpp error.cpp \
+                   trampoline.cpp implicit.cpp
+NB_OBJECTS      := $(addprefix nb_,$(NB_SRCS:.cpp=.o))
+PYTHON_LDFLAGS  := $(shell $(PYTHON_CONFIG) --ldflags)
+PYTHON_LIB      := $(shell $(PYTHON_CONFIG) --ldflags | grep -o 'python[0-9.]*' | head -1 | sed 's/^/-l/')
 
 # Installation path
 PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")
@@ -111,8 +118,8 @@ else
 # Default target
 all: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 
-$(P2P_PYTHON_EXT): $(OBJECTS)
-	$(CXX) $(OBJECTS) \
+$(P2P_PYTHON_EXT): $(OBJECTS) $(NB_OBJECTS)
+	$(CXX) $(OBJECTS) $(NB_OBJECTS) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB) $(INC) $(LIBS)
@@ -124,14 +131,18 @@ $(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT)
 	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) $(INC) $(LIBS)
 endif
 
+# Compile nanobind source files for stable ABI
+nb_%.o: $(NB_SRC_DIR)/%.cpp
+	$(CXX) -O3 -std=c++17 -fPIC -fvisibility=hidden $(NB_ABI_FLAGS) $(NB_INCLUDES) -c $< -o $@
+
 # Compile source files
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -c $< -o $@
 
 # Compile NCCL-over-TCP source files
 nccl/%.o: nccl/%.cc
 	@mkdir -p nccl
-	$(CXX) $(CXXFLAGS) $(PYBIND11_INCLUDES) -I. -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -I. -c $< -o $@
 
 # Auto-generated header dependencies
 DEPS := $(OBJECTS:.o=.d) $(CAPI_OBJECT:.o=.d)
@@ -162,7 +173,7 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 endif
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(CAPI_OBJECT) $(P2P_SHARED_LIB)
+	rm -f $(OBJECTS) $(CAPI_OBJECT) $(NB_OBJECTS) $(P2P_SHARED_LIB)
 	rm -f $(DEPS)
 	rm -f nccl/*.o nccl/*.d
 ifneq ($(USE_TCPX),1)
@@ -176,18 +187,18 @@ ifneq ($(USE_TCPX),1)
 	$(PYTHON) tests/test_engine_write.py
 endif
 
-# Install pybind11 if not available
+# Install nanobind if not available
 install-deps:
-	pip3 install pybind11
+	pip3 install nanobind
 
 # Help target
 help:
 	@echo "Available targets:"
-	@echo "  all          - Build the pybind11 module"
+	@echo "  all          - Build the nanobind module (stable ABI)"
 	@echo "  install      - Install the module to Python site-packages"
 	@echo "  clean        - Remove build artifacts"
 	@echo "  test         - Run the test script"
-	@echo "  install-deps - Install pybind11 dependency"
+	@echo "  install-deps - Install nanobind dependency"
 	@echo "  help         - Show this help message"
 
 .PHONY: all clean test install-deps help install

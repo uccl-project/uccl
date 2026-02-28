@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Test script for the UCCL P2P Engine pybind11 extension
+Test script for the UCCL P2P Engine nanobind extension
 """
 
 import sys

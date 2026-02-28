@@ -246,7 +246,7 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
   -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
   -e DISABLE_AGGRESSIVE_ATOMIC="${DISABLE_AGGRESSIVE_ATOMIC:-0}" \
   -e UCCL_WHEEL_PLAT="${UCCL_WHEEL_PLAT:-}" \
-  -e FUNCTION_DEF="$(declare -f build_rccl_nccl_header build_ccl_rdma build_ccl_efa build_p2p build_ep build_ukernel)" \
+  -e FUNCTION_DEF="$(declare -f rename_to_abi3 build_rccl_nccl_header build_ccl_rdma build_ccl_efa build_p2p build_ep build_ukernel)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
     set -euo pipefail
@@ -261,7 +261,7 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
       # Python environment with ROCm from TheRock
       python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
       pip3 install --no-cache-dir --upgrade pip
-      pip3 install --no-cache-dir build auditwheel pybind11
+      pip3 install --no-cache-dir build auditwheel pybind11 nanobind
       pip3 install --no-cache-dir rocm[libraries,devel] --index-url ${ROCM_IDX_URL}
     fi
 
@@ -326,7 +326,15 @@ def initialize():
       mv ${BACKUP_FN} setup.py
     fi
 
+    # The _abi3_stub.so is too minimal for auditwheel to detect libc
+    # on its own, so we must supply --plat explicitly.
+    if [[ -z "${UCCL_WHEEL_PLAT:-}" ]]; then
+      GLIBC_VER=$(python3 -c "import platform; print(platform.libc_ver()[1])")
+      UCCL_WHEEL_PLAT="manylinux_${GLIBC_VER//./_}_$(uname -m)"
+    fi
+
     auditwheel repair dist/uccl-*.whl \
+      --plat "${UCCL_WHEEL_PLAT}" \
       --exclude "libtorch*.so" \
       --exclude "libc10*.so" \
       --exclude "libibverbs.so.1" \
@@ -336,18 +344,14 @@ def initialize():
       --exclude "libefa.so.1" \
       -w /io/${WHEEL_DIR}
 
-    # If UCCL_WHEEL_PLAT is set (i.e. host glibc differs from the build
-    # container default of manylinux_2_35), retag the wheel accordingly.
-    if [[ -n "${UCCL_WHEEL_PLAT:-}" ]]; then
-      echo "[container] Retagging wheel platform to ${UCCL_WHEEL_PLAT}"
-      cd /io/${WHEEL_DIR}
-      for whl in uccl-*.whl; do
-        if [[ -f "$whl" ]]; then
-          python3 -m wheel tags --platform-tag "${UCCL_WHEEL_PLAT}" --remove "$whl"
-        fi
-      done
-      cd /io
-    fi
+    # auditwheel may emit compressed dual tags (e.g. manylinux_2_34.manylinux_2_35).
+    # Collapse to the single requested platform tag via simple rename.
+    cd /io/${WHEEL_DIR}
+    for whl in uccl-*.whl; do
+      new="${whl%%abi3-*}abi3-${UCCL_WHEEL_PLAT}.whl"
+      [[ "$whl" != "$new" ]] && mv "$whl" "$new"
+    done
+    cd /io
 
     # Add backend tag to wheel filename using local version identifier
     if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then

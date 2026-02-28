@@ -1,5 +1,18 @@
 #!/bin/bash
 
+# Rename cpython-versioned .so files to .abi3.so for stable ABI compatibility.
+rename_to_abi3() {
+  local dir="$1"
+  for f in "$dir"/*.cpython-*.so; do
+    if [[ -f "$f" ]]; then
+      local newname
+      newname=$(echo "$f" | sed 's/\.cpython-[^.]*-[^.]*-[^.]*\.so/.abi3.so/')
+      echo "Renaming $(basename "$f") -> $(basename "$newname")"
+      mv "$f" "$newname"
+    fi
+  done
+}
+
 build_rccl_nccl_header() {
   # Unlike CUDA, ROCM does not include nccl.h. So we need to build rccl to get nccl.h.
   if [[ ! -f "thirdparty/rccl/build/release/include/nccl.h" ]]; then
@@ -119,6 +132,7 @@ build_p2p() {
     cd ../..
     cp thirdparty/dietgpu/build/**/*.so uccl/
   fi
+  rename_to_abi3 uccl
 }
 
 build_ep() {
@@ -145,6 +159,7 @@ build_ep() {
     mkdir -p uccl/lib
     cp ep/build/**/*.so uccl/
   fi
+  rename_to_abi3 uccl
 }
 
 build_ukernel() {

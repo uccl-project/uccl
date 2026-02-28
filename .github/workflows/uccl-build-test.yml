@@ -71,13 +71,13 @@ jobs:
             fi
 
             # Create env if missing
-            conda info --envs | awk \x27{print \$1}\x27 | grep -qx uccl || conda create -y -n uccl python=3.11
+            conda info --envs | awk \x27{print \$1}\x27 | grep -qx uccl || conda create -y -n uccl python=3.12
             conda activate uccl
 
             cd /home/skytestuser/uccl-test
-            ./build.sh cuda all 3.11 --install 2>&1 | tee build.log
+            ./build.sh cuda all 3.12 --install 2>&1 | tee build.log
 
-            grep -q \"Successfully installed uccl-0.0.1.post4\" build.log
+            grep -q \"Successfully installed uccl-\" build.log
           "'
 
       - name: Fetch remote build.log
