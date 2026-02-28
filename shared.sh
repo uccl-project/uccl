@@ -108,7 +108,6 @@ build_p2p() {
     cp p2p/libuccl_p2p.so uccl/lib/
     cp p2p/p2p.*.so uccl/
     cp p2p/collective.py uccl/
-    cp p2p/transfer.py uccl/
     cp p2p/utils.py uccl/
   else
     echo "[container] USE_TCPX=1, skipping copying p2p runtime files"

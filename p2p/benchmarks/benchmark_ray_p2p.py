@@ -227,7 +227,7 @@ def parse_sizes(v: str) -> List[int]:
 
 def _run_phase(args, ep, mode: str):
     """
-    Phase规则：
+    Phase rules:
       - WRITE phase: rank0=client, rank1=server
       - READ  phase: rank0=server, rank1=client
     """

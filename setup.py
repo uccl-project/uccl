@@ -31,7 +31,6 @@ setup(
             "ep*.so",
             "lib/*.a",
             "collective.py",
-            "transfer.py",
             "utils.py",
         ],
     },
