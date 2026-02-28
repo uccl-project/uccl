@@ -71,22 +71,7 @@ def _run_server(args, ep, peer_rank: int):
     print(f"[Server] Exchanged metadata with client")
 
     for sz in args.sizes:
-        if args.raw:
-            # Raw mode: register memory and send descriptors only once
-            size_per_block = sz // args.num_iovs
-            buf_v = []
-            for _ in range(args.num_iovs):
-                buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
-                buf_v.append(buf)
-
-            remote_descs = ep.register_memory(buf_v)
-
-            remote_descs_serialized = ep.get_serialized_descs(remote_descs)
-            _send_bytes(remote_descs_serialized, dst=peer)
-
-            # Wait for all iterations to complete
-            dist.barrier()
-        else:
+        if args.normal:
             # Normal mode: register memory and send descriptors for each iteration
             for _iter_idx in range(args.iters + 1):  # +1 for warmup
                 size_per_block = sz // args.num_iovs
@@ -100,6 +85,21 @@ def _run_server(args, ep, peer_rank: int):
                 _send_bytes(remote_descs_serialized, dst=peer)
 
                 dist.barrier()
+        else:
+            # Raw mode (default): register memory and send descriptors only once
+            size_per_block = sz // args.num_iovs
+            buf_v = []
+            for _ in range(args.num_iovs):
+                buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                buf_v.append(buf)
+
+            remote_descs = ep.register_memory(buf_v)
+
+            remote_descs_serialized = ep.get_serialized_descs(remote_descs)
+            _send_bytes(remote_descs_serialized, dst=peer)
+
+            # Wait for all iterations to complete
+            dist.barrier()
 
         print(f"[Server] Completed {args.iters} iterations for size {_pretty(sz)}")
 
@@ -119,43 +119,7 @@ def _run_client(args, ep, peer_rank: int, mode: str):
     for sz in args.sizes:
         size_per_block = sz // args.num_iovs
 
-        if args.raw:
-            # Raw mode: setup once, reuse for all iterations
-            buf_v = []
-            for _ in range(args.num_iovs):
-                buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
-                buf_v.append(buf)
-
-            local_descs = ep.register_memory(buf_v)
-            success, conn_id = ep.add_remote_endpoint(remote_metadata)
-            assert success, "Failed to add remote endpoint"
-
-            remote_descs_serialized = _recv_bytes(src=peer)
-            remote_descs = ep.deserialize_descs(remote_descs_serialized)
-
-            # Warmup transfer
-            success, transfer_id = ep.transfer(conn_id, mode, local_descs, remote_descs)
-            assert success, "Failed to start warmup transfer"
-            is_done = False
-            while not is_done:
-                _, is_done = ep.poll_async(transfer_id)
-
-            # Benchmark iterations - reuse everything
-            start = time.perf_counter()
-            total = 0
-            for _ in range(args.iters):
-                success, transfer_id = ep.transfer(
-                    conn_id, mode, local_descs, remote_descs
-                )
-                assert success, "Failed to start transfer"
-                is_done = False
-                while not is_done:
-                    _, is_done = ep.poll_async(transfer_id)
-                total += sz
-
-            elapsed = time.perf_counter() - start
-            dist.barrier()
-        else:
+        if args.normal:
             # Normal mode: setup for each iteration
             # Warmup iteration
             buf_v = []
@@ -207,6 +171,42 @@ def _run_client(args, ep, peer_rank: int, mode: str):
                 dist.barrier()
 
             elapsed = time.perf_counter() - start
+        else:
+            # Raw mode (default): setup once, reuse for all iterations
+            buf_v = []
+            for _ in range(args.num_iovs):
+                buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                buf_v.append(buf)
+
+            local_descs = ep.register_memory(buf_v)
+            success, conn_id = ep.add_remote_endpoint(remote_metadata)
+            assert success, "Failed to add remote endpoint"
+
+            remote_descs_serialized = _recv_bytes(src=peer)
+            remote_descs = ep.deserialize_descs(remote_descs_serialized)
+
+            # Warmup transfer
+            success, transfer_id = ep.transfer(conn_id, mode, local_descs, remote_descs)
+            assert success, "Failed to start warmup transfer"
+            is_done = False
+            while not is_done:
+                _, is_done = ep.poll_async(transfer_id)
+
+            # Benchmark iterations - reuse everything
+            start = time.perf_counter()
+            total = 0
+            for _ in range(args.iters):
+                success, transfer_id = ep.transfer(
+                    conn_id, mode, local_descs, remote_descs
+                )
+                assert success, "Failed to start transfer"
+                is_done = False
+                while not is_done:
+                    _, is_done = ep.poll_async(transfer_id)
+                total += sz
+
+            elapsed = time.perf_counter() - start
+            dist.barrier()
 
         print(
             f"[Client/{mode.upper()}] {_pretty(sz):>8} : "
@@ -268,9 +268,9 @@ def main():
         "--perf", action="store_true", help="Measure pure transfer performance"
     )
     p.add_argument(
-        "--raw",
+        "--normal",
         action="store_true",
-        help="Raw mode: exchange metadata only once, reuse for all iterations to measure pure transfer performance",
+        help="Normal mode: re-register and exchange metadata every iteration (default is raw mode)",
     )
     p.add_argument(
         "--sizes",
@@ -301,7 +301,10 @@ def main():
     print("UCCL Ray P2P Benchmark")
     print("=" * 60)
     print("Phases: WRITE then READ (auto, no --mode)")
-    print(f"Raw mode: {args.raw}")
+    if args.normal:
+        print("Normal mode: re-register and exchange metadata every iteration")
+    else:
+        print("Raw mode: exchange metadata only once, reuse for all iterations")
     print("Sizes:", ", ".join(_pretty(s) for s in args.sizes))
     print(f"Iterations: {args.iters}")
     print(f"Number of IOVs: {args.num_iovs}")
