@@ -10,7 +10,7 @@ UCCL has an experimental GPU-driven P2P engine, see [ep](../ep/) folder.
 p2p/
 ├── engine.h          # C++ Endpoint class header with RDMA functionality
 ├── engine.cc         # C++ Endpoint implementation
-├── engine_pybind.cc  # pybind11 wrapper for Python integration
+├── engine_api.cc     # pybind11 wrapper for Python integration
 ├── Makefile          # Build configuration
 ├── tests/            # Comprehensive test suite
 ├── benchmarks/       # Comprehensive benchmark suite
