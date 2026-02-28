@@ -285,6 +285,9 @@ Endpoint::~Endpoint() {
     if (passive_accept_thread_.joinable()) {
       passive_accept_thread_.join();
     }
+    if (passive_accept_local_thread_.joinable()) {
+      passive_accept_local_thread_.join();
+    }
   }
 
   if (send_proxy_thread_.joinable()) {
@@ -1265,6 +1268,7 @@ bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
     std::unique_lock lock(conn_mu_);
     ConnID dummy{nullptr, 0, 0, 0};
     conn->uccl_conn_id_ = dummy;
+    conn->is_local_ = true;
     conn_id_to_conn_[conn_id] = conn;
   }
 
@@ -1317,6 +1321,7 @@ got:
     std::unique_lock lock(conn_mu_);
     ConnID dummy{nullptr, 0, 0, 0};
     conn->uccl_conn_id_ = dummy;
+    conn->is_local_ = true;
     conn_id_to_conn_[conn_id] = conn;
   }
 
@@ -2160,7 +2165,14 @@ bool Endpoint::add_remote_endpoint(std::vector<uint8_t> const& metadata,
     }
   }
   auto [remote_ip, remote_port, remote_gpu_idx] = parse_metadata(metadata);
-  bool success = connect(remote_ip, remote_gpu_idx, remote_port, conn_id);
+  std::string local_ip = uccl::get_oob_ip();
+  bool is_local = (remote_ip == local_ip);
+  bool success;
+  if (is_local) {
+    success = connect_local(remote_gpu_idx, conn_id);
+  } else {
+    success = connect(remote_ip, remote_gpu_idx, remote_port, conn_id);
+  }
   if (success) {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
     remote_endpoint_to_conn_id_[metadata] = conn_id;
@@ -2174,6 +2186,8 @@ bool Endpoint::start_passive_accept() {
     passive_accept_stop_.store(false, std::memory_order_release);
     passive_accept_thread_ =
         std::thread(&Endpoint::passive_accept_thread_func, this);
+    passive_accept_local_thread_ =
+        std::thread(&Endpoint::passive_accept_local_thread_func, this);
     passive_accept_ = true;
   }
   return true;
@@ -2412,6 +2426,26 @@ void Endpoint::passive_accept_thread_func() {
   uint64_t conn_id;
   while (!stop_.load(std::memory_order_acquire)) {
     (void)accept(ip_addr, remote_gpu_idx, conn_id);
+  }
+}
+
+void Endpoint::passive_accept_local_thread_func() {
+  while (!passive_accept_stop_.load(std::memory_order_acquire)) {
+    bool found = false;
+    for (int peer = 0; peer < kMaxNumGPUs; ++peer) {
+      if (peer == local_gpu_idx_) continue;
+      if (inbox_rings_[peer].ring == nullptr) continue;
+      if (jring_empty(inbox_rings_[peer].ring)) continue;
+
+      int remote_gpu_idx;
+      uint64_t conn_id;
+      (void)accept_local(remote_gpu_idx, conn_id);
+      found = true;
+      break;
+    }
+    if (!found) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
   }
 }
 

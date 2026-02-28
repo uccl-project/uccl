@@ -53,7 +53,7 @@ endif
 # Target and source files
 P2P_PYTHON_EXT   := p2p$(PYEXT)
 P2P_SHARED_LIB := libuccl_p2p.so
-SOURCES := engine.cc engine_pybind.cc
+SOURCES := engine.cc engine_api.cc
 OBJECTS := $(SOURCES:.cc=.o)
 CORE_OBJECT := engine.o
 ifeq ($(USE_TCP),1)
