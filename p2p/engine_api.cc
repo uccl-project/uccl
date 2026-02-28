@@ -167,20 +167,22 @@ NB_MODULE(p2p, m) {
 
   // Endpoint class binding
   nb::class_<Endpoint>(m, "Endpoint")
-      .def("__init__",
-           [](Endpoint *self, uint32_t local_gpu_idx, uint32_t num_cpus) {
-             nb::gil_scoped_release release;
-             InsidePythonGuard guard;
-             new (self) Endpoint(local_gpu_idx, num_cpus);
-           },
-           nb::arg("local_gpu_idx"), nb::arg("num_cpus"))
-      .def("__init__",
-           [](Endpoint *self, uint32_t num_cpus) {
-             nb::gil_scoped_release release;
-             InsidePythonGuard guard;
-             new (self) Endpoint(num_cpus);
-           },
-           nb::arg("num_cpus"))
+      .def(
+          "__init__",
+          [](Endpoint* self, uint32_t local_gpu_idx, uint32_t num_cpus) {
+            nb::gil_scoped_release release;
+            InsidePythonGuard guard;
+            new (self) Endpoint(local_gpu_idx, num_cpus);
+          },
+          nb::arg("local_gpu_idx"), nb::arg("num_cpus"))
+      .def(
+          "__init__",
+          [](Endpoint* self, uint32_t num_cpus) {
+            nb::gil_scoped_release release;
+            InsidePythonGuard guard;
+            new (self) Endpoint(num_cpus);
+          },
+          nb::arg("num_cpus"))
       .def(
           "start_passive_accept",
           [](Endpoint& self) { return self.start_passive_accept(); },
@@ -983,8 +985,9 @@ NB_MODULE(p2p, m) {
                                   size, serialized);
             }
             /* return (success, bytes) — empty bytes when failed */
-            return nb::make_tuple(
-                ok, ok ? nb::bytes(serialized, sizeof(FifoItem)) : nb::bytes("", 0));
+            return nb::make_tuple(ok,
+                                  ok ? nb::bytes(serialized, sizeof(FifoItem))
+                                     : nb::bytes("", 0));
           },
           "Expose a registered buffer for the peer to RDMA-READ or RDMA-WRITE",
           nb::arg("conn_id"), nb::arg("mr_id"), nb::arg("ptr"), nb::arg("size"))
@@ -1205,7 +1208,8 @@ NB_MODULE(p2p, m) {
              std::vector<size_t> size_v, nb::list info_v) {
             size_t num_iovs = ptr_v.size();
             CHECK_EQ(size_v.size(), num_iovs) << "writev_ipc: size_v mismatch";
-            CHECK_EQ(nb::len(info_v), num_iovs) << "writev_ipc: info_v mismatch";
+            CHECK_EQ(nb::len(info_v), num_iovs)
+                << "writev_ipc: info_v mismatch";
 
             std::vector<void const*> data_ptrs(num_iovs);
             std::vector<IpcTransferInfo> infos(num_iovs);

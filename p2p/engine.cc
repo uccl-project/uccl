@@ -1,4 +1,3 @@
-#include <Python.h>
 #include "engine.h"
 #include "endpoint_wrapper.h"
 #include "util/pause.h"
@@ -16,6 +15,7 @@
 #include <optional>
 #include <sstream>
 #include <thread>
+#include <Python.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
