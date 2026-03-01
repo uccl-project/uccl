@@ -417,7 +417,7 @@ class SendChannelGroup : public ChannelGroup {
     Compressor::getInstance().compressSplitOneBatch(req);
 
     // compressed data / chunk size = chunk count
-    uint32_t send_chunks_first = req->local_mem->size / ChunkSplitStrategy::getRegularChunkSize(req->ctx->max_size, expected_chunk_count);
+    uint32_t send_chunks_first = req->local_mem->size / ChunkSplitStrategy::getRegularChunkSize(req->compress_ctx->maxSize, expected_chunk_count);
     if (send_chunks_first > 0) {
       postChunkedRequest(req, send_chunks_first);
     }
