@@ -55,7 +55,7 @@ class CustomInstall(install):
 
         # Find the built .so file
         build_lib = self.get_finalized_command("build_ext").build_lib
-        so_files = list(Path(build_lib).glob("ep*.so"))
+        so_files = list(Path(build_lib).glob("_ep_native*.so"))
 
         if not so_files:
             raise RuntimeError(f"Could not find built .so file in {build_lib}")
@@ -371,7 +371,7 @@ if __name__ == "__main__":
         version="0.0.1" + revision,
         ext_modules=[
             CUDAExtension(
-                name="ep",
+                name="_ep_native",
                 include_dirs=include_dirs,
                 library_dirs=library_dirs,
                 sources=sources,

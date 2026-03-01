@@ -44,7 +44,7 @@ setup(
         "uccl": [
             "lib/*.so",
             "p2p*.so",
-            "ep*.so",
+            "_ep_native*.so",
             "lib/*.a",
             "collective.py",
             "utils.py",

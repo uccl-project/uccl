@@ -36,8 +36,9 @@
 
 // Forward declarations from libtorch_python (resolved at link time).
 extern const at::Tensor& THPVariable_Unpack(PyObject* obj);
-// Use exact signature to avoid overload ambiguity with torch's declaration.
-extern PyObject* THPVariable_Wrap(const at::Tensor& var);
+// Use TensorBase in the declaration so we match the symbol exported by
+// libtorch_python.so (THPVariable_Wrap(const at::TensorBase&)).
+extern PyObject* THPVariable_Wrap(const at::TensorBase& var);
 
 namespace nanobind::detail {
 
@@ -2016,7 +2017,7 @@ class Buffer {
 #endif
 };
 
-NB_MODULE(ep, m) {
+NB_MODULE(_ep_native, m) {
   m.doc() = "Minimal DeepEP-compatible shim with UCCL";
 
   nanobind::class_<uccl::Config>(m, "Config")
@@ -2100,7 +2101,7 @@ NB_MODULE(ep, m) {
         if (num_rdma_bytes <= 0) {
           auto tensor =
               torch::empty({0}, dtype(torch::kUInt8).device(torch::kCUDA));
-          return py::make_tuple(tensor, false);
+          return nanobind::make_tuple(tensor, false);
         }
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         CUDA_CHECK(hipExtMallocWithFlags(&ptr, num_rdma_bytes,
