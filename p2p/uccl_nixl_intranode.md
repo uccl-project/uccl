@@ -187,24 +187,30 @@ Set by comparing remote IP with local IP (via `get_local_ip_from_engine()`) in b
 
 #### Phase 1 unit test
 
-Run `benchmark_nixl.py` (UCCL backend) as two separate processes on the **same node**.
-The benchmark uses ZMQ for coordination; the two processes call the full nixl plugin code path
-(`getConnInfo` → `loadRemoteConnInfo` → `uccl_engine_connect` / `uccl_engine_accept`).
+`tests/test_nixl_intranode.py` — a self-contained test that runs two nixl agents
+as separate processes on the same node using `multiprocessing.Pipe` for coordination
+(no ZMQ dependency). It replicates the exact nixl code path:
+
+```
+getConnInfo → add_remote_agent (loadRemoteConnInfo) → registerMem
+→ initialize_xfer (prepXfer) → transfer (postXfer) → check_xfer_state (checkXfer)
+```
+
+A GPU-to-GPU WRITE (client GPU ones → server GPU zeros) is used to confirm the
+connection is functional end-to-end, not just established.
 
 ```bash
-# Terminal 1 — server (receiver)
 cd /home/lirans/uccl/p2p
-python benchmarks/benchmark_nixl.py --role server --backend uccl --device cpu
-
-# Terminal 2 — client (sender), pointing to localhost
-cd /home/lirans/uccl/p2p
-python benchmarks/benchmark_nixl.py --role client --backend uccl --device cpu --remote-ip 127.0.0.1
+python tests/test_nixl_intranode.py
 ```
 
-Expected output (from our `std::cout` in `uccl_engine.cc`):
+Expected output (from `std::cout` in `uccl_engine.cc`):
 ```
-uccl_engine_connect: connection to 127.0.0.1 is intra-node
-uccl_engine_accept: connection from 127.0.0.1 is intra-node
+uccl_engine_connect: connection to <real-NIC-IP> is intra-node
+uccl_engine_accept:  connection from <real-NIC-IP> is intra-node
+[server] PASS: GPU buffer filled with ones by client WRITE
+[client] PASS: GPU-to-GPU WRITE completed successfully
+=== test_nixl_intranode PASSED ===
 ```
 
 ## Status
