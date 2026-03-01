@@ -29,9 +29,11 @@ typedef struct md {
  * Create and initialize an engine instance.
  * @param num_cpus      The number of CPUs to use for the engine.
  * @param in_python     Whether the engine is being created in Python.
+ * @param local_gpu_idx Local GPU index to use for RDMA (default 0).
  * @return              Pointer to the engine instance, or NULL on failure.
  */
-uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python);
+uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python,
+                                   int local_gpu_idx = 0);
 
 /**
  * Destroy the engine instance and free resources.

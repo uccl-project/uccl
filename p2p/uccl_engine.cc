@@ -142,10 +142,12 @@ static bool uccl_conn_is_intra_node(uccl_conn_t* conn) {
   return conn && conn->is_intra_node;
 }
 
-uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
+uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python,
+                                   int local_gpu_idx) {
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
-  eng->endpoint = std::unique_ptr<Endpoint>(new Endpoint(num_cpus));
+  eng->endpoint = std::unique_ptr<Endpoint>(
+      new Endpoint(static_cast<uint32_t>(local_gpu_idx), num_cpus));
   return eng;
 }
 
