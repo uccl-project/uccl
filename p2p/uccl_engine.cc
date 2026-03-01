@@ -49,6 +49,7 @@ struct uccl_conn {
   std::string oob_conn_key;  // For epoll-based notifications
   std::thread* listener_thread;
   bool listener_running;
+  bool is_intra_node;        // true if peer is on the same physical node
   std::mutex listener_mutex;
 };
 
@@ -127,6 +128,20 @@ void listener_thread_func(uccl_conn_t* conn) {
   }
 }
 
+static std::string get_local_ip_from_engine(uccl_engine_t* engine) {
+  char* metadata = nullptr;
+  if (uccl_engine_get_metadata(engine, &metadata) != 0 || !metadata) return "";
+  std::string meta(metadata);
+  delete[] metadata;
+  size_t colon = meta.find(':');
+  if (colon == std::string::npos) return "";
+  return meta.substr(0, colon);
+}
+
+static bool uccl_conn_is_intra_node(uccl_conn_t* conn) {
+  return conn && conn->is_intra_node;
+}
+
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
@@ -160,6 +175,9 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   conn->engine = engine;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
+  conn->is_intra_node = (std::string(ip_addr) == get_local_ip_from_engine(engine));
+  std::cout << "uccl_engine_connect: connection to " << ip_addr << " is "
+            << (uccl_conn_is_intra_node(conn) ? "intra" : "inter") << "-node\n";
   return conn;
 }
 
@@ -185,6 +203,9 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   conn->engine = engine;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
+  conn->is_intra_node = (ip_addr == get_local_ip_from_engine(engine));
+  std::cout << "uccl_engine_accept: connection from " << ip_addr << " is "
+            << (uccl_conn_is_intra_node(conn) ? "intra" : "inter") << "-node\n";
   return conn;
 }
 
