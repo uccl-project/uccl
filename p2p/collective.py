@@ -329,7 +329,7 @@ class CollectiveContext:
         elif t.dtype == torch.float32:
             return p2p.FloatType.kFloat32
         else:
-            raise TypeError(f"Unsupported tensor dtype: {t.dtype}")
+            return p2p.FloatType.kUndefined
 
     def _register_memory(self, ptr: int, size: int, float_type: p2p.FloatType) -> int:
         """Register memory and cache the memory region information."""

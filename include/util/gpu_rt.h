@@ -1,73 +1,6 @@
 #pragma once
 
-
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__)  || defined(__HIPCC__)
-#include <hip/hip_runtime.h>
-#include <hip/hip_runtime_api.h>
-#define gpuSuccess hipSuccess
-#define gpuError_t hipError_t
-#define gpuGetErrorString hipGetErrorString
-#define gpuStream_t hipStream_t
-#define gpuStreamNonBlocking hipStreamNonBlocking
-#define gpuStreamCreate hipStreamCreate
-#define gpuStreamCreateWithFlags hipStreamCreateWithFlags
-#define gpuStreamSynchronize hipStreamSynchronize
-#define gpuStreamDestroy hipStreamDestroy
-#define gpuSetDevice hipSetDevice
-#define gpuDeviceMapHost hipDeviceMapHost
-#define gpuSetDeviceFlags hipSetDeviceFlags
-#define gpuGetDevice hipGetDevice
-#define gpuGetDeviceCount hipGetDeviceCount
-#define gpuGetDeviceProperties hipGetDeviceProperties
-#define gpuDeviceProp hipDeviceProp_t
-#define gpuDeviceGetPCIBusId hipDeviceGetPCIBusId
-#define gpuDeviceCanAccessPeer hipDeviceCanAccessPeer
-#define gpuDeviceEnablePeerAccess hipDeviceEnablePeerAccess
-#define gpuIpcMemHandle_t hipIpcMemHandle_t
-#define gpuIpcMemLazyEnablePeerAccess hipIpcMemLazyEnablePeerAccess
-#define gpuIpcOpenMemHandle hipIpcOpenMemHandle
-#define gpuIpcGetMemHandle hipIpcGetMemHandle
-#define gpuIpcCloseMemHandle hipIpcCloseMemHandle
-#define gpuHostMalloc hipHostMalloc
-#define gpuHostAlloc hipHostAlloc
-#define gpuHostFree hipHostFree
-#define gpuHostAllocMapped hipHostAllocMapped
-#define gpuMalloc hipMalloc
-#define gpuMallocAsync hipMallocAsync
-#define gpuMallocHost hipHostMalloc  // cudaMallocHost Deprecated in ROCm
-#define gpuFree hipFree
-#define gpuFreeAsync hipFreeAsync
-#define gpuFreeHost hipFreeHost
-#define gpuMemcpyHostToDevice hipMemcpyHostToDevice
-#define gpuMemcpyDeviceToHost hipMemcpyDeviceToHost
-#define gpuMemcpy hipMemcpy
-#define gpuMemcpyAsync hipMemcpyAsync
-#define gpuMemcpyPeerAsync hipMemcpyPeerAsync
-#define gpuMemcpyDeviceToDevice hipMemcpyDeviceToDevice
-#define gpuMemcpyFromSymbol hipMemcpyFromSymbol
-#define gpuMemsetAsync hipMemsetAsync
-#define gpuGetLastError hipGetLastError
-#define gpuErrorPeerAccessAlreadyEnabled hipErrorPeerAccessAlreadyEnabled
-#define gpuErrorNotReady hipErrorNotReady
-#define gpuEvent_t hipEvent_t
-#define gpuEventCreate hipEventCreate
-#define gpuEventDestroy hipEventDestroy
-#define gpuEventRecord hipEventRecord
-#define gpuEventSynchronize hipEventSynchronize
-#define gpuEventQuery hipEventQuery
-#define gpuStreamWaitEvent hipStreamWaitEvent
-#define gpuEventCreateWithFlags hipEventCreateWithFlags
-#define gpuEventDefault hipEventDefault
-#define gpuEventDisableTiming hipEventDisableTiming
-#define gpuEventInterprocess hipEventInterprocess
-#define gpuIpcEventHandle_t hipIpcEventHandle_t
-#define gpuIpcGetEventHandle hipIpcGetEventHandle
-#define gpuIpcOpenEventHandle hipIpcOpenEventHandle
-#define gpuIpcCloseEventHandle(handle) (gpuSuccess)
-#define gpuMemGetAddressRange hipMemGetAddressRange
-
-#else
-
+#ifndef __HIP_PLATFORM_AMD__
 #include <cuda.h>
 #include <cuda_runtime.h>
 #define gpuSuccess cudaSuccess
@@ -139,6 +72,70 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
   }
   return gpuError_t(result);
 }
+#else
+#include <hip/hip_runtime.h>
+#include <hip/hip_runtime_api.h>
+#define gpuSuccess hipSuccess
+#define gpuError_t hipError_t
+#define gpuGetErrorString hipGetErrorString
+#define gpuStream_t hipStream_t
+#define gpuStreamNonBlocking hipStreamNonBlocking
+#define gpuStreamCreate hipStreamCreate
+#define gpuStreamCreateWithFlags hipStreamCreateWithFlags
+#define gpuStreamSynchronize hipStreamSynchronize
+#define gpuStreamDestroy hipStreamDestroy
+#define gpuSetDevice hipSetDevice
+#define gpuDeviceMapHost hipDeviceMapHost
+#define gpuSetDeviceFlags hipSetDeviceFlags
+#define gpuGetDevice hipGetDevice
+#define gpuGetDeviceCount hipGetDeviceCount
+#define gpuGetDeviceProperties hipGetDeviceProperties
+#define gpuDeviceProp hipDeviceProp_t
+#define gpuDeviceGetPCIBusId hipDeviceGetPCIBusId
+#define gpuDeviceCanAccessPeer hipDeviceCanAccessPeer
+#define gpuDeviceEnablePeerAccess hipDeviceEnablePeerAccess
+#define gpuIpcMemHandle_t hipIpcMemHandle_t
+#define gpuIpcMemLazyEnablePeerAccess hipIpcMemLazyEnablePeerAccess
+#define gpuIpcOpenMemHandle hipIpcOpenMemHandle
+#define gpuIpcGetMemHandle hipIpcGetMemHandle
+#define gpuIpcCloseMemHandle hipIpcCloseMemHandle
+#define gpuHostMalloc hipHostMalloc
+#define gpuHostAlloc hipHostAlloc
+#define gpuHostFree hipHostFree
+#define gpuHostAllocMapped hipHostAllocMapped
+#define gpuMalloc hipMalloc
+#define gpuMallocAsync hipMallocAsync
+#define gpuMallocHost hipHostMalloc  // cudaMallocHost Deprecated in ROCm
+#define gpuFree hipFree
+#define gpuFreeAsync hipFreeAsync
+#define gpuFreeHost hipFreeHost
+#define gpuMemcpyHostToDevice hipMemcpyHostToDevice
+#define gpuMemcpyDeviceToHost hipMemcpyDeviceToHost
+#define gpuMemcpy hipMemcpy
+#define gpuMemcpyAsync hipMemcpyAsync
+#define gpuMemcpyPeerAsync hipMemcpyPeerAsync
+#define gpuMemcpyDeviceToDevice hipMemcpyDeviceToDevice
+#define gpuMemcpyFromSymbol hipMemcpyFromSymbol
+#define gpuMemsetAsync hipMemsetAsync
+#define gpuGetLastError hipGetLastError
+#define gpuErrorPeerAccessAlreadyEnabled hipErrorPeerAccessAlreadyEnabled
+#define gpuErrorNotReady hipErrorNotReady
+#define gpuEvent_t hipEvent_t
+#define gpuEventCreate hipEventCreate
+#define gpuEventDestroy hipEventDestroy
+#define gpuEventRecord hipEventRecord
+#define gpuEventSynchronize hipEventSynchronize
+#define gpuEventQuery hipEventQuery
+#define gpuStreamWaitEvent hipStreamWaitEvent
+#define gpuEventCreateWithFlags hipEventCreateWithFlags
+#define gpuEventDefault hipEventDefault
+#define gpuEventDisableTiming hipEventDisableTiming
+#define gpuEventInterprocess hipEventInterprocess
+#define gpuIpcEventHandle_t hipIpcEventHandle_t
+#define gpuIpcGetEventHandle hipIpcGetEventHandle
+#define gpuIpcOpenEventHandle hipIpcOpenEventHandle
+#define gpuIpcCloseEventHandle(handle) (gpuSuccess)
+#define gpuMemGetAddressRange hipMemGetAddressRange
 #endif
 
 #define GPU_RT_CHECK(call)                                         \

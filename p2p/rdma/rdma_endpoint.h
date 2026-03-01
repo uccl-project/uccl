@@ -1,4 +1,6 @@
 #pragma once
+#include <glog/logging.h>
+#include "compression.h"
 #include "define.h"
 #include "epoll_client.h"
 #include "epoll_server.h"
@@ -8,8 +10,6 @@
 #include "rdma_ctrl_channel.h"
 #include "rdma_device.h"
 #include "util/net.h"
-#include "compression.h"
-#include <glog/logging.h>
 
 class NICEndpoint {
  public:
@@ -48,17 +48,19 @@ class NICEndpoint {
     }
   }
 
-  void initCompressor(){
+  void initCompressor() {
     Compressor& compressor = Compressor::getInstance();
-    for(auto ctx_ptr:contexts_) {
-      auto buffer = compressor.getBuffer();
+    for (auto ctx_ptr : contexts_) {
+      auto buffer = compressor.getCompressBuffer();
       if (buffer) {
-        buffer->setMRByContextID(ctx_ptr->getContextID(),ctx_ptr->regMem(buffer->addr, buffer->size));
+        buffer->setMRByContextID(ctx_ptr->getContextID(),
+                                 ctx_ptr->regMem(buffer->addr, buffer->size));
       }
-      // Register decompression buffer
       auto decompressBuffer = compressor.getDecompressBuffer();
       if (decompressBuffer) {
-        decompressBuffer->setMRByContextID(ctx_ptr->getContextID(),ctx_ptr->regMem(decompressBuffer->addr, decompressBuffer->size));
+        decompressBuffer->setMRByContextID(
+            ctx_ptr->getContextID(),
+            ctx_ptr->regMem(decompressBuffer->addr, decompressBuffer->size));
       }
     }
   }
@@ -346,12 +348,13 @@ class NICEndpoint {
     return conn_id;
   }
 
-  inline int uccl_regmr(void* const data, size_t const len, MRArray& mr_array, std::shared_ptr<dietgpu::FloatCompressSplitContext> compress_ctx = nullptr) {
+  inline int uccl_regmr(void* const data, size_t const len, MRArray& mr_array,
+                        CompressCtx compress_ctx = nullptr) {
     if (unlikely(!data)) {
       LOG(ERROR) << "Error: uccl_regmr called with null data";
       return -1;
     }
-    Compressor::getInstance().prepareSplitContext(data,len,compress_ctx);
+    Compressor::getInstance().prepareSplitContext(data, len, compress_ctx);
     for (size_t context_id = 0; context_id < contexts_.size(); ++context_id) {
       auto context = contexts_[context_id];
       if (unlikely(!context)) {

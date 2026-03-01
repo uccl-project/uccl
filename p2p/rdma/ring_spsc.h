@@ -254,14 +254,10 @@ class RingBuffer {
   }
 
   // Operator[] for element access (no bounds checking, index is masked)
-  T& operator[](size_t index) {
-    return at(index);
-  }
+  T& operator[](size_t index) { return at(index); }
 
   // Operator[] for element access (const version)
-  const T& operator[](size_t index) const {
-    return at(index);
-  }
+  const T& operator[](size_t index) const { return at(index); }
 
   // Check if the ring buffer is empty
   bool empty() const {

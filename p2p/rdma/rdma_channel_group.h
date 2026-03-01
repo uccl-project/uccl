@@ -1,15 +1,13 @@
 #pragma once
-#include "define.h"
 #include "compression.h"
+#include "define.h"
 #include "rdma_channel.h"
 #include "rdma_ctrl_channel.h"
 #include <random>
-#include <chrono>
 
 class ChannelGroup {
  public:
-  ChannelGroup() : last_channel_id_(0) {
-  }
+  ChannelGroup() : last_channel_id_(0) {}
   virtual ~ChannelGroup() = default;
 
   virtual void addChannel(uint32_t channel_id,
@@ -18,6 +16,7 @@ class ChannelGroup {
       throw std::invalid_argument("addChannel called with null channel");
     }
     std::unique_lock<std::shared_mutex> lock(mutex_);
+
     channels_[channel_id] = std::move(channel);
   }
 
@@ -100,7 +99,6 @@ class ChannelGroup {
   mutable std::shared_mutex mutex_;
   std::unordered_map<uint32_t, std::shared_ptr<RDMAChannel>> channels_;
   std::atomic<uint32_t> last_channel_id_;
-
 };
 
 class SendChannelGroup : public ChannelGroup {
@@ -121,6 +119,7 @@ class SendChannelGroup : public ChannelGroup {
                   std::shared_ptr<RDMAChannel> channel) override {
     ChannelGroup::addChannel(channel_id, channel);
   }
+
   std::shared_ptr<RDMAChannel> getChannel(uint32_t channel_id) const override {
     auto result = ChannelGroup::getChannel(channel_id);
     return result;
@@ -301,20 +300,29 @@ class SendChannelGroup : public ChannelGroup {
     }
   }
 
-  void postChunkedRequest(std::shared_ptr<RDMASendRequest> req, int expected_chunk_count = 0) {
+  void postChunkedRequest(std::shared_ptr<RDMASendRequest> req,
+                          int expected_chunk_count = 0) {
+    if (expected_chunk_count == 1) {
+      req->imm_data.set_chunk_count(1);
+      if (!postRequestOnChannel(req)) {
+        LOG(WARNING)
+            << "SendChannelGroup: Failed to send request on channel_id "
+            << req->channel_id;
+      }
+      return;
+    }
     // Split message into chunks
     size_t message_size = req->local_mem->size;
-    auto chunks = splitMessageToChunks(message_size);
-    if(expected_chunk_count == 0) {
+    auto chunks = ChunkSplitStrategy::splitMessageToChunks(message_size);
+    if (expected_chunk_count == 0) {
       expected_chunk_count = chunks.size();
       tracker_->updateExpectedAckCount(req->wr_id, expected_chunk_count);
     }
     LOG(INFO) << "SendChannelGroup: Splitting message into " << chunks.size()
               << " chunks (message_size: " << message_size << ")";
     size_t num_channels = normalChannelCount();
-    
-    for (size_t i = 0; i < chunks.size(); ++i) {
 
+    for (size_t i = 0; i < chunks.size(); ++i) {
       auto const& chunk = chunks[i];
 
       // Use different channel for each chunk: round-robin
@@ -337,6 +345,9 @@ class SendChannelGroup : public ChannelGroup {
       auto chunk_req = std::make_shared<RDMASendRequest>(
           chunk_local_mem, chunk_remote_mem, req->imm_data, is_last_chunk);
 
+      // due to the compression, the chunk count may be different from the
+      // original split, so we need to set the expected chunk count for each
+      // chunk request
       if (expected_chunk_count > 0) {
         if (is_last_chunk && expected_chunk_count > 1) {
           chunk_req->imm_data.set_chunk_count(expected_chunk_count);
@@ -398,27 +409,24 @@ class SendChannelGroup : public ChannelGroup {
   }
 
   inline void compressSendRequest(std::shared_ptr<RDMASendRequest> req) {
-      Compressor::getInstance().compress(req);
-
-      // Compressor::getInstance().compressSplitOneBatch(req);
-      // Compressor::getInstance().compressEncodeOneBatch(req);
+    Compressor::getInstance().compress(req);
   }
 
-  inline void compressSendRequestSplitFirst(std::shared_ptr<RDMASendRequest> req, int expected_chunk_count ) {
-      
-      Compressor::getInstance().compressSplitOneBatch(req);
+  inline void compressSendRequestSplitFirst(
+      std::shared_ptr<RDMASendRequest> req, size_t expected_chunk_count) {
+    Compressor::getInstance().compressSplitOneBatch(req);
 
-      uint32_t send_chunks_first = (req->local_mem->size*expected_chunk_count)/req->compress_ctx->maxSize;
-      // std::cout<<*req->local_mem <<std::endl;
-      // std::cout<<*req->remote_mem<<std::endl;
-      if(send_chunks_first>0) {
-        postChunkedRequest(req, send_chunks_first);
-      }
-      uint32_t uncompressed_size = Compressor::getInstance().compressEncodeOneBatch(req);
-      // std::cout<<*req->local_mem <<std::endl;
-      // std::cout<<*req->remote_mem<<std::endl;
-      postChunkedRequest(req, expected_chunk_count - send_chunks_first);
-      tracker_->updateExpectedAckCount(req->wr_id, getMessageChunkCount(uncompressed_size));
+    // compressed data / chunk size = chunk count
+    uint32_t send_chunks_first = req->local_mem->size / ChunkSplitStrategy::getRegularChunkSize(req->ctx->max_size, expected_chunk_count);
+    if (send_chunks_first > 0) {
+      postChunkedRequest(req, send_chunks_first);
+    }
+    uint32_t uncompressed_size =
+        Compressor::getInstance().compressEncodeOneBatch(req);
+    postChunkedRequest(req, expected_chunk_count - send_chunks_first);
+    tracker_->updateExpectedAckCount(
+        req->wr_id,
+        ChunkSplitStrategy::getMessageChunkCount(uncompressed_size));
   }
 
   inline void processOnceSendRequests(std::shared_ptr<RDMASendRequest> req,
@@ -426,21 +434,18 @@ class SendChannelGroup : public ChannelGroup {
     req->imm_data.set_index(index);
     req->channel_id = meta.channel_id;
     req->remote_mem = std::make_shared<RemoteMemInfo>(meta.remote_mem);
-    // std::cout<<" meta.expected_chunk_count:"<< meta.expected_chunk_count<<std::endl;
-    if (Compressor::getInstance().shouldCompressAndSplitFirst(req->local_mem->size)){
+    if (Compressor::getInstance().shouldCompressAndSplitFirst(
+            req->local_mem->size)) {
       compressSendRequestSplitFirst(req, meta.expected_chunk_count);
       return;
     }
     if (Compressor::getInstance().shouldCompress(req->local_mem->size)) {
       compressSendRequest(req);
     }
-    if (meta.expected_chunk_count > 1) {
-      tracker_->updateExpectedAckCount(req->wr_id, getMessageChunkCount(req->local_mem->size));
-      postChunkedRequest(req, meta.expected_chunk_count);
-    } else {
-      req->imm_data.set_chunk_count(1);
-      postRequestOnChannel(req);
-    }
+    tracker_->updateExpectedAckCount(
+        req->wr_id,
+        ChunkSplitStrategy::getMessageChunkCount(req->local_mem->size));
+    postChunkedRequest(req, meta.expected_chunk_count);
   }
 
   void pollDataChannels() {
@@ -479,8 +484,7 @@ class RecvChannelGroup : public ChannelGroup {
       : numa_node_(numa_node),
         running_(false),
         poll_thread_(nullptr),
-        auto_start_polling_(auto_start_polling) {
-  }
+        auto_start_polling_(auto_start_polling) {}
 
   ~RecvChannelGroup() { stopPolling(); }
 
@@ -549,8 +553,8 @@ class RecvChannelGroup : public ChannelGroup {
           << "RecvChannelGroup: Failed to setup recv request with round robin";
       return -1;
     }
-    if(Compressor::getInstance().shouldCompress(req->local_mem->size)) {
-      Compressor::getInstance().prepare_for_decompress(req);
+    if (Compressor::getInstance().shouldCompress(req->local_mem->size)) {
+      Compressor::getInstance().prepareDecompress(req);
     }
     return ctrl_channel_->postSendReq(req);
   }
@@ -575,15 +579,18 @@ class RecvChannelGroup : public ChannelGroup {
                 << channel_id << " polled completion: " << cq_data;
             if (ctrl_channel_) {
               std::shared_ptr<SendReqMeta> req_meta;
-              for(int i = 0; i < cq_data.imm.chunk_count(); ++i) {
+              for (int i = 0; i < cq_data.imm.chunk_count(); ++i) {
                 req_meta = ctrl_channel_->recv_done(cq_data.imm.index());
                 LOG(INFO)
                     << "RecvChannelGroup::pollAndProcessCompletions - Called "
-                      "recv_done("
+                       "recv_done("
                     << cq_data.imm.index() << ")";
               }
-              if (req_meta && Compressor::getInstance().shouldCompress(req_meta->local_mem.size)) {
-                Compressor::getInstance().decompress(req_meta->remote_mem, req_meta->local_mem, req_meta->float_type);
+              if (req_meta && Compressor::getInstance().shouldCompress(
+                                  req_meta->local_mem.size)) {
+                Compressor::getInstance().decompress(
+                    req_meta->remote_mem, req_meta->local_mem,
+                    req_meta->float_type);
               }
 
             } else {
@@ -616,11 +623,6 @@ class RecvChannelGroup : public ChannelGroup {
   std::unique_ptr<std::thread> poll_thread_;
   bool auto_start_polling_;
   int numa_node_ = 0;
-
-  inline void decompressRecvRequest(std::shared_ptr<RDMARecvRequest> req) {
-      Compressor::getInstance().prepare_for_decompress(req);
-      Compressor::getInstance().decompress(req);
-  }
 
   // Collect rkey for a specific channel
   // Returns: true on success, false on failure

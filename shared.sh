@@ -104,6 +104,17 @@ build_p2p() {
   set -euo pipefail
   echo "[container] build_p2p Target: $TARGET"
 
+  if [[ "${USE_DIETGPU:-0}" == "1" ]]; then
+    cd thirdparty/dietgpu
+    rm -rf build/
+    python3 setup.py build
+    cd dietgpu/float
+    echo $TORCH_CUDA_ARCH_LIST
+    make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm GPU_ARCH=$TORCH_CUDA_ARCH_LIST
+    cd ../../../..
+    cp thirdparty/dietgpu/dietgpu/float/libdietgpu_float.so uccl/lib
+  fi
+
   cd p2p
   if [[ "$TARGET" == cuda* ]]; then
     make clean && make -j$(nproc)

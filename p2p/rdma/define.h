@@ -1,6 +1,4 @@
 #pragma once
-#include "common.h"
-#include "util/util.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
 #include <infiniband/efadv.h>
@@ -35,145 +33,117 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include "common.h"
+#include "util/gpu_rt.h"
+#include "util/util.h"
 
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__)  || defined(__HIPCC__)
+namespace uccl {
+enum class FloatType : uint32_t {
+  kUndefined = 0,
+  kFloat16 = 1,
+  kBFloat16 = 2,
+  kFloat32 = 3,
+};
+}
 
-  #include <hip/hip_runtime.h>
-  #include <hip/hip_fp16.h>
-  #include "dietgpu/float/GpuFloatCodec_hip.h"
-  #include "dietgpu/utils/StackDeviceMemory_hip.h"
-  #include "dietgpu/utils/DeviceUtils_hip.h"
-
-  // #include "dietgpu/float/GpuFloatUtils_hip.cuh"
-  #define GPU_CHECK(cmd)                                                       \
-    do {                                                                        \
-      hipError_t error = (cmd);                                                 \
-      if (error != hipSuccess) {                                                \
-        LOG(ERROR) << "HIP error: " << hipGetErrorString(error)                 \
-                   << " at " << __FILE__ << ":" << __LINE__;                   \
-        std::abort();                                                          \
-      }                                                                         \
-    } while (0)
-
-  using GpuStream_t = hipStream_t;
-  using GpuError_t  = hipError_t;
-
-  #define GPU_MEMCPY_ASYNC    hipMemcpyAsync
-  #define GPU_STREAM_SYNC     hipStreamSynchronize
-  #define GPU_MEMCPY_D2H      hipMemcpyDeviceToHost
-  #define GPU_STREAM_CREATE   hipStreamCreate
-  #define GPU_STREAM_DESTROY  hipStreamDestroy
-  #define GPU_MALLOC           hipMalloc
-  #define GPU_FREE             hipFree
-  #define GPU_MEMCPY_H2D       hipMemcpyHostToDevice
-  #define GPU_MEMCPY           hipMemcpy
-  #define GPU_MEMSET           hipMemset
-  #define GPU_SET_DEVICE       hipSetDevice
-  #define GPU_MEMCPY_D2D       hipMemcpyDeviceToDevice
+#if defined USE_DIETGPU
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__) || \
+    defined(__HIPCC__)
+#include "dietgpu/float/GpuFloatCodec_hip.h"
+#include "dietgpu/utils/DeviceUtils_hip.h"
+#include "dietgpu/utils/StackDeviceMemory_hip.h"
+#include <hip/hip_fp16.h>
 #else
-  #include <cuda_runtime.h>
-  #include <cuda_fp16.h>
-
-  #include "dietgpu/float/GpuFloatCodec.h"
-  #include "dietgpu/utils/DeviceUtils.h"
-  #include "dietgpu/utils/StackDeviceMemory.h"
-  // #include "dietgpu/float/GpuFloatUtils.cuh"
-
-  #define GPU_CHECK(cmd)                                                       \
-    do {                                                                        \
-      cudaError_t error = (cmd);                                                \
-      if (error != cudaSuccess) {                                               \
-        LOG(ERROR) << "CUDA error: " << cudaGetErrorString(error)               \
-                   << " at " << __FILE__ << ":" << __LINE__;                   \
-        std::abort();                                                          \
-      }                                                                         \
-    } while (0)
-
-  using GpuStream_t = cudaStream_t;
-  using GpuError_t  = cudaError_t;
-  #define GPU_MEMCPY_ASYNC    cudaMemcpyAsync
-  #define GPU_STREAM_SYNC     cudaStreamSynchronize
-  #define GPU_MEMCPY_D2H      cudaMemcpyDeviceToHost
-  #define GPU_STREAM_CREATE   cudaStreamCreate
-  #define GPU_STREAM_DESTROY  cudaStreamDestroy
-  #define GPU_MALLOC           cudaMalloc
-  #define GPU_FREE             cudaFree
-  #define GPU_MEMCPY_H2D       cudaMemcpyHostToDevice
-  #define GPU_MEMCPY           cudaMemcpy
-  #define GPU_MEMSET           cudaMemset
-  #define GPU_SET_DEVICE       cudaSetDevice
-  #define GPU_MEMCPY_D2D       cudaMemcpyDeviceToDevice
+#include "dietgpu/float/GpuFloatCodec.h"
+#include "dietgpu/utils/DeviceUtils.h"
+#include "dietgpu/utils/StackDeviceMemory.h"
+#include <cuda_fp16.h>
 #endif
 
-inline size_t getWordSizeFromFloatType(dietgpu::FloatType ft) {
-  switch (ft) {
-    case dietgpu::FloatType::kFloat16:
-    case dietgpu::FloatType::kBFloat16:
-      return sizeof(uint16_t);
-    case dietgpu::FloatType::kFloat32:
-      return sizeof(uint32_t);
+
+inline dietgpu::FloatType to_dietgpu(uccl::FloatType t) {
+  switch (t) {
+    case uccl::FloatType::kFloat16:
+      return dietgpu::FloatType::kFloat16;
+    case uccl::FloatType::kBFloat16:
+      return dietgpu::FloatType::kBFloat16;
+    case uccl::FloatType::kFloat32:
+      return dietgpu::FloatType::kFloat32;
+    case uccl::FloatType::kUndefined:
     default:
-      CHECK(false);
-      return 0;
+      return dietgpu::FloatType::kUndefined;
   }
 }
-template <typename T>
-inline void copyDeviceToHostSync(
-    T* dst_host,
-    const T* src_device,
-    GpuStream_t stream) {
 
-  static_assert(std::is_trivially_copyable<T>::value,
-                "copyDeviceToHostSync requires trivially copyable type");
-
-  GPU_CHECK(GPU_MEMCPY_ASYNC(
-      dst_host,
-      src_device,
-      sizeof(T),
-      GPU_MEMCPY_D2H,
-      stream));
-
-  GPU_CHECK(GPU_STREAM_SYNC(stream));
+inline uccl::FloatType from_dietgpu(dietgpu::FloatType t) {
+  switch (t) {
+    case dietgpu::FloatType::kFloat16:
+      return uccl::FloatType::kFloat16;
+    case dietgpu::FloatType::kBFloat16:
+      return uccl::FloatType::kBFloat16;
+    case dietgpu::FloatType::kFloat32:
+      return uccl::FloatType::kFloat32;
+    default:
+      return uccl::FloatType::kUndefined;
+  }
 }
 
-inline uintptr_t* allocAndCopyParamsSync(
-    const void** in,
-    const uint32_t* inSize,
-    void** out,
-    GpuStream_t stream) {
+/**
+ * @brief Wrapper around dietgpu::FloatCompressSplitContext that exposes a
+ * uccl::FloatType-based constructor and getFloatType() accessor, hiding the
+ * internal dietgpu::FloatType from external callers.
+ */
+struct FloatCompressCtx : public dietgpu::FloatCompressSplitContext {
+  FloatCompressCtx() = default;
+  explicit FloatCompressCtx(uccl::FloatType ft)
+      : dietgpu::FloatCompressSplitContext(to_dietgpu(ft)) {}
 
-  static_assert(sizeof(void*) == sizeof(uintptr_t), "");
-  static_assert(sizeof(uint32_t) <= sizeof(uintptr_t), "");
-  uintptr_t host_params[3];
-  host_params[0] = reinterpret_cast<uintptr_t>(*in);
-  host_params[1] = static_cast<uintptr_t>(*inSize);
-  host_params[2] = reinterpret_cast<uintptr_t>(*out);
+  uccl::FloatType getFloatType() const { return from_dietgpu(float_type); }
+};
 
-  // device allocation
-  uintptr_t* dev_params = nullptr;
-  GPU_CHECK(GPU_MALLOC(&dev_params, 3 * sizeof(uintptr_t)));
+using CompressCtx = std::shared_ptr<FloatCompressCtx>;
 
-  // async copy H2D
-  GPU_CHECK(GPU_MEMCPY_ASYNC(
-      dev_params,
-      host_params,
-      3 * sizeof(uintptr_t),
-      GPU_MEMCPY_H2D,
-      stream));
-  GPU_CHECK(GPU_STREAM_SYNC(stream));
-  return dev_params;
+inline CompressCtx makeCompressCtx(uccl::FloatType ft) {
+  return std::make_shared<FloatCompressCtx>(ft);
 }
 
-inline size_t getElementCountFromBytes(dietgpu::FloatType ft, size_t bytes) {
-  const size_t wordSize = getWordSizeFromFloatType(ft);
+#else
 
-  // 必须整除，否则说明数据损坏或类型不匹配
-  CHECK(bytes % wordSize == 0)
-      << "Bytes (" << bytes << ") not aligned with FloatType word size ("
-      << wordSize << ")";
+/**
+ * @brief Dummy device allocation that mimics dietgpu's
+ * StackDeviceMemory::Reservation. Provides a no-op release() method for
+ * compatibility.
+ */
+struct DummyDevAlloc {
+  void release() {}
+  void* data() { return nullptr; }
+};
 
-  return bytes / wordSize;
+/**
+ * @brief Dummy compression context that mirrors the interface of
+ * dietgpu::FloatCompressSplitContext. This allows code to compile
+ * without #ifdef guards scattered throughout.
+ */
+struct DummyCompressCtx {
+  uccl::FloatType float_type = uccl::FloatType::kUndefined;
+  size_t maxSize = 0;
+  DummyDevAlloc params_dev;
+  DummyDevAlloc histogram_dev;
+  DummyDevAlloc toComp_dev;
+
+  DummyCompressCtx() = default;
+  explicit DummyCompressCtx(uccl::FloatType ft) : float_type(ft), maxSize(0) {}
+
+  uccl::FloatType getFloatType() const { return float_type; }
+};
+
+using CompressCtx = std::shared_ptr<DummyCompressCtx>;
+
+inline CompressCtx makeCompressCtx(uccl::FloatType ft) {
+  return std::make_shared<DummyCompressCtx>(ft);
 }
+
+#endif
 
 static constexpr int kNumEngines = 4;
 static constexpr int kNumGpuRtStreams = 4;
@@ -190,8 +160,6 @@ static constexpr int kMaxSendWr = 1024;
 static constexpr int kMaxRecvWr = 1024;
 static constexpr int kMaxSendSeg = 2;
 static constexpr int kMaxRecvSeg = 2;
-static constexpr uint64_t kMessageChunkSizeKB = 512;  // 256KB
-static constexpr uint64_t kMaxSplitNum = 16;
 static constexpr uint32_t kBatchPostRecvWr = 32;
 static constexpr uint32_t kBatchPollCqe = 32;
 
@@ -201,16 +169,8 @@ static constexpr size_t kRingCapacity = 16384;  // Must be power of 2
 static constexpr size_t kInFlightMaxSizeKB =
     10240000;  // Max in-flight packets per channel
 
-
-// constexpr size_t kMinCompressBytes = 1024* 1024* 1024;  // 256KB
-
-constexpr size_t kMinCompressBytes = 2 * 1024 * 1024;  // 1MB
+constexpr size_t kMinCompressBytes = 2 * 1024 * 1024;      // 1MB
 constexpr size_t kCompressBufferSize = 400 * 1024 * 1024;  // 400MB
-
-static_assert(
-    kMinCompressBytes > 4 * kMessageChunkSizeKB,
-    "kMinCompressBytes must be > 4 * kMessageChunkSizeKB"
-);
 
 static constexpr uint32_t INVALID_RANK_ID =
     std::numeric_limits<uint32_t>::max();
@@ -276,7 +236,8 @@ struct ContextArrayT {
 using RKeyArray = ContextArrayT<uint32_t>;
 using MRArray = ContextArrayT<struct ibv_mr*>;
 
-// ImmData class: encapsulates immediate data with chunk_count (high 16 bits) and index (low 16 bits)
+// ImmData class: encapsulates immediate data with chunk_count (high 16 bits)
+// and index (low 16 bits)
 class ImmData {
  public:
   // Default constructor
@@ -305,9 +266,7 @@ class ImmData {
   }
 
   // Set index (preserves chunk_count)
-  void set_index(uint16_t index) {
-    data_ = (data_ & 0xFFFF0000) | index;
-  }
+  void set_index(uint16_t index) { data_ = (data_ & 0xFFFF0000) | index; }
 
   // Implicit conversion to uint32_t for compatibility
   constexpr operator uint32_t() const { return data_; }
@@ -354,31 +313,42 @@ struct MessageChunk {
   }
 };
 
-inline size_t getMessageChunkCount(size_t message_size) {
-  constexpr size_t chunk_size_bytes = kMessageChunkSizeKB * 1024;
-  if (message_size == 0) return 0;
-  size_t chunk_count = (message_size + chunk_size_bytes - 1) / chunk_size_bytes;
-  return std::min(chunk_count, static_cast<size_t>(kMaxSplitNum));
-}
+struct ChunkSplitStrategy {
+  static constexpr uint64_t kMessageChunkSizeKB = 512;
+  static constexpr uint64_t kMaxSplitNum = 16;
 
-inline std::vector<MessageChunk> splitMessageToChunks(size_t message_size) {
-  constexpr size_t chunk_size_bytes = kMessageChunkSizeKB * 1024;
-  size_t chunk_count = getMessageChunkCount(message_size);
-
-  std::vector<MessageChunk> chunks;
-  chunks.reserve(chunk_count);
-
-  // Calculate actual chunk size based on the limited chunk count
-  size_t actual_chunk_size = (message_size + chunk_count - 1) / chunk_count;
-
-  for (size_t i = 0; i < chunk_count; ++i) {
-    uint64_t offset = i * actual_chunk_size;
-    size_t size = std::min(actual_chunk_size, message_size - offset);
-    chunks.emplace_back(offset, size);
+  static size_t getMessageChunkCount(size_t message_size) {
+    constexpr size_t chunk_size_bytes = kMessageChunkSizeKB * 1024;
+    if (message_size == 0) return 0;
+    size_t chunk_count =
+        (message_size + chunk_size_bytes - 1) / chunk_size_bytes;
+    return std::min(chunk_count, static_cast<size_t>(kMaxSplitNum));
   }
 
-  return chunks;
-}
+  static std::vector<MessageChunk> splitMessageToChunks(size_t message_size) {
+    size_t chunk_count = getMessageChunkCount(message_size);
+    std::vector<MessageChunk> chunks;
+    chunks.reserve(chunk_count);
+    size_t actual_chunk_size = getRegularChunkSize(message_size, chunk_count);
+    for (size_t i = 0; i < chunk_count; ++i) {
+      uint64_t offset = i * actual_chunk_size;
+      size_t size = std::min(actual_chunk_size, message_size - offset);
+      chunks.emplace_back(offset, size);
+    }
+    return chunks;
+  }
+
+  // Given message_size and chunk_count, return the uniform chunk size used for
+  // all but the (potentially smaller) last chunk.
+  static size_t getRegularChunkSize(size_t message_size, size_t chunk_count) {
+    if (chunk_count == 0 || message_size == 0) return 0;
+    return (message_size + chunk_count - 1) / chunk_count;
+  }
+};
+
+static_assert(
+    kMinCompressBytes > 4 * ChunkSplitStrategy::kMessageChunkSizeKB,
+    "kMinCompressBytes must be > 4 * ChunkSplitStrategy::kMessageChunkSizeKB");
 
 #define LOG_EVERY_N_ENDPOINT(severity, freq)             \
   static std::atomic<int> LOG_OCCURRENCES_##__LINE__(0); \
@@ -576,7 +546,7 @@ typedef struct RDMARecvRequest {
   int64_t wr_id;
   std::shared_ptr<RegMemBlock> local_mem;
   std::shared_ptr<RegMemBlock> local_compression_mem;
-  std::shared_ptr<dietgpu::FloatCompressSplitContext> compress_ctx;
+  CompressCtx compress_ctx;
 
   // Constructor
   RDMARecvRequest(std::shared_ptr<RegMemBlock> local) : local_mem(local) {}
@@ -615,7 +585,7 @@ struct alignas(64) SendReqMeta {
   uint32_t channel_id;
   RemoteMemInfo remote_mem;
   RegMemBlock local_mem;
-  dietgpu::FloatType float_type;
+  uccl::FloatType float_type = uccl::FloatType::kUndefined;
   uint32_t expected_chunk_count;  // Expected number of chunks to receive
   uint32_t received_chunk_count;  // Number of chunks already received
 
@@ -638,10 +608,12 @@ struct alignas(64) SendReqMeta {
     rank_id = rev_req->from_rank_id;
     channel_id = rev_req->channel_id;
     remote_mem = rev_req->local_mem;
-    local_mem = *(rev_req->local_compression_mem ? rev_req->local_compression_mem
-                                        : rev_req->local_mem);
-    float_type = rev_req->compress_ctx->float_type;
-    expected_chunk_count = getMessageChunkCount(local_mem.size);
+    local_mem =
+        *(rev_req->local_compression_mem ? rev_req->local_compression_mem
+                                         : rev_req->local_mem);
+    float_type = rev_req->compress_ctx->getFloatType();
+    expected_chunk_count =
+        ChunkSplitStrategy::getMessageChunkCount(local_mem.size);
     received_chunk_count = 0;
   }
 
@@ -737,15 +709,16 @@ struct RDMASendRequest {
   uint32_t from_rank_id;
   uint32_t to_rank_id;
   uint32_t channel_id;
-  ImmData imm_data;  // immediate data with chunk_count (high 16 bits) and index (low 16 bits)
+  ImmData imm_data = 0;  // immediate data with chunk_count (high 16 bits) and
+                         // index (low 16 bits)
   int64_t wr_id;
   bool need_signaled;  // Whether to use IBV_SEND_SIGNALED flag
   SendType send_type = SendType::Send;
-  std::shared_ptr<dietgpu::FloatCompressSplitContext> compress_ctx;
+  CompressCtx compress_ctx;
   // Constructor
   RDMASendRequest(std::shared_ptr<RegMemBlock> local,
-                  std::shared_ptr<RemoteMemInfo> remote, ImmData imm = ImmData(),
-                  bool signaled = true)
+                  std::shared_ptr<RemoteMemInfo> remote,
+                  ImmData imm = ImmData(), bool signaled = true)
       : local_mem(local),
         remote_mem(remote),
         imm_data(imm),
@@ -934,13 +907,13 @@ struct hash<RegMemBlock> {
 }  // namespace std
 
 enum class CompressStrategy {
-  kNone,          // no compression
-  kSplitOnly,     // only split, no encode
-  kSplitEncode,   // split + encode (default)
+  kNone,         // no compression
+  kSplitOnly,    // only split, no encode
+  kSplitEncode,  // split + encode (default)
 };
 
 inline CompressStrategy getCompressStrategyFromEnv() {
-  const char* env = std::getenv("P2P_COMPRESS_STRATEGY");
+  char const* env = std::getenv("P2P_COMPRESS_STRATEGY");
 
   // default strategy
   if (!env || env[0] == '\0') {
