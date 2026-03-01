@@ -101,22 +101,16 @@ fi
 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-${DETECTED_GPU_ARCH}}"
 
 # The build container (Ubuntu 22.04, glibc 2.35) produces wheels tagged
-# manylinux_2_35 by default.  Rocky Linux 9.x only ships glibc 2.34, so
-# those wheels won't install there.  Detect the host distro and, when
-# running on Rocky 9, retag the wheel to manylinux_2_34 after auditwheel
-# repair.  Note: this does not verify glibc symbol compatibility -- the
-# binaries are built against glibc 2.35 and may use 2.35-only symbols.
-# UCCL collectives has been tested and working on Rocky Linux 9.4 with this
-# retagged wheel.
-UCCL_WHEEL_PLAT=""
-if [[ -f /etc/os-release ]]; then
-  HOST_ID=$(. /etc/os-release && echo "${ID:-}")
-  HOST_VERSION_ID=$(. /etc/os-release && echo "${VERSION_ID:-}")
-  if [[ "$HOST_ID" == "rocky" && "$HOST_VERSION_ID" == 9* ]]; then
-    UCCL_WHEEL_PLAT="manylinux_2_34_${ARCH}"
-    echo "Rocky Linux 9 detected wheel will be tagged ${UCCL_WHEEL_PLAT}"
-  fi
-fi
+# manylinux_2_35 by default.  If the host has an older glibc (e.g. Rocky
+# Linux 9.x ships glibc 2.34), the wheel won't install there.  Detect the
+# host glibc and, when it is older than the container's, retag the wheel
+# accordingly.  Note: this does not verify glibc symbol compatibility --
+# the binaries are built against the container's glibc and may use newer
+# symbols.  UCCL collectives and ep has been tested and working on Rocky Linux 9.4
+# with this retagged wheel.
+HOST_GLIBC_VER=$(python3 -c "import platform; print(platform.libc_ver()[1])")
+UCCL_WHEEL_PLAT="manylinux_${HOST_GLIBC_VER//./_}_${ARCH}"
+echo "Host glibc ${HOST_GLIBC_VER} detected, wheel will be tagged ${UCCL_WHEEL_PLAT}"
 
 ########################################################
 # 3. Clean up previous builds
@@ -328,13 +322,17 @@ def initialize():
 
     # The _abi3_stub.so is too minimal for auditwheel to detect libc
     # on its own, so we must supply --plat explicitly.
-    if [[ -z "${UCCL_WHEEL_PLAT:-}" ]]; then
-      GLIBC_VER=$(python3 -c "import platform; print(platform.libc_ver()[1])")
-      UCCL_WHEEL_PLAT="manylinux_${GLIBC_VER//./_}_$(uname -m)"
-    fi
+    # Always use the *container* glibc for auditwheel repair (symbol
+    # validation), then retag the wheel to the desired host platform
+    # (UCCL_WHEEL_PLAT) afterwards.  This avoids "too-recent versioned
+    # symbols" failures when the host requests a lower glibc tag (e.g.
+    # Rocky 9 / manylinux_2_34) while the build container is Ubuntu 22.04
+    # (glibc 2.35).
+    GLIBC_VER=$(python3 -c "import platform; print(platform.libc_ver()[1])")
+    AUDIT_PLAT="manylinux_${GLIBC_VER//./_}_$(uname -m)"
 
     auditwheel repair dist/uccl-*.whl \
-      --plat "${UCCL_WHEEL_PLAT}" \
+      --plat "${AUDIT_PLAT}" \
       --exclude "libtorch*.so" \
       --exclude "libc10*.so" \
       --exclude "libibverbs.so.1" \
@@ -346,6 +344,8 @@ def initialize():
 
     # auditwheel may emit compressed dual tags (e.g. manylinux_2_34.manylinux_2_35).
     # Collapse to the single requested platform tag via simple rename.
+    # When cross-targeting (e.g. manylinux_2_34 on a glibc-2.35 builder),
+    # this also retags the wheel to the host-requested UCCL_WHEEL_PLAT.
     cd /io/${WHEEL_DIR}
     for whl in uccl-*.whl; do
       new="${whl%%abi3-*}abi3-${UCCL_WHEEL_PLAT}.whl"
