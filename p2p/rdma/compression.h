@@ -115,6 +115,10 @@ class NullCompressorBackend : public ICompressorBackend {
     return false;
   }
 
+  bool prepareDecompress(std::shared_ptr<RDMARecvRequest> /*req*/) override {
+    return false;
+  }
+
   bool decompress(RemoteMemInfo const& /*input*/, RegMemBlock& /*output*/,
                   uccl::FloatType /*float_type*/) override {
     return false;
