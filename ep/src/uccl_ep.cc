@@ -19,12 +19,13 @@
 #include "uccl_proxy.hpp"
 #include <ATen/cuda/CUDAContext.h>
 #include <ATen/cuda/CUDADataType.h>
-#include <pybind11/chrono.h>
-#include <pybind11/functional.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/pytypes.h>
-#include <pybind11/stl.h>
-#include <torch/extension.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/function.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
+#include <nanobind/stl/vector.h>
 #include <torch/torch.h>
 #include <atomic>
 #include <mutex>
@@ -33,17 +34,54 @@
 #include <vector>
 #include <cuda_runtime.h>
 
-namespace uccl {
-std::unordered_map<int, std::vector<py::object>> g_proxies_by_dev;
+// Forward declarations from libtorch_python (resolved at link time).
+extern const at::Tensor& THPVariable_Unpack(PyObject* obj);
+// Use exact signature to avoid overload ambiguity with torch's declaration.
+extern PyObject* THPVariable_Wrap(const at::Tensor& var);
 
-std::unordered_map<int, std::vector<py::object>>& proxies_by_dev() {
+namespace nanobind::detail {
+
+template <>
+struct type_caster<at::Tensor> {
+  NB_TYPE_CASTER(at::Tensor, const_name("torch.Tensor"))
+  bool from_python(handle src, uint8_t flags, cleanup_list* cleanup) noexcept {
+    if (src.is_none()) {
+      value = at::Tensor();
+      return true;
+    }
+    try {
+      value = THPVariable_Unpack(src.ptr());
+      return true;
+    } catch (...) {
+      return false;
+    }
+  }
+  static handle from_cpp(const at::Tensor& src, rv_policy, cleanup_list*) noexcept {
+    if (!src.defined()) {
+      Py_INCREF(Py_None);
+      return Py_None;
+    }
+    return THPVariable_Wrap(src);
+  }
+};
+
+}  // namespace nanobind::detail
+
+namespace uccl {
+std::unordered_map<int, std::vector<nanobind::object>> g_proxies_by_dev;
+
+std::unordered_map<int, std::vector<nanobind::object>>& proxies_by_dev() {
   return g_proxies_by_dev;
 }
 }  // namespace uccl
 
 #define NUM_MAX_LOCAL_EXPERTS 1024
 
-namespace py = pybind11;
+// Dtype object layout (matches PyTorch THPDtype for reinterpret_cast)
+struct UcclDtypeView {
+  PyObject_HEAD
+  at::ScalarType scalar_type;
+};
 
 static std::mutex g_proxies_mu;
 
@@ -66,8 +104,8 @@ static std::vector<uint64_t> collect_d2h_channel_addrs_for_device(
   // Collect all ring buffer addresses from all proxies
   for (auto& proxy : it->second) {
     // Each proxy now manages multiple ring buffers
-    auto proxy_addrs =
-        proxy.attr("get_d2h_channel_addrs")().cast<std::vector<uint64_t>>();
+    auto proxy_addrs = nanobind::cast<std::vector<uint64_t>>(
+        proxy.attr("get_d2h_channel_addrs")());
     all_addrs.insert(all_addrs.end(), proxy_addrs.begin(), proxy_addrs.end());
   }
   return all_addrs;
@@ -440,7 +478,7 @@ class Buffer {
     // from other ranks, which can be quite long. If users of DeepEP need to
     // execute other Python code on other threads, such as KV transfer, their
     // code will get stuck due to GIL unless we release GIL here.
-    pybind11::gil_scoped_release release;
+    nanobind::gil_scoped_release release;
 
     int const num_channels = config.num_sms / 2;
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
@@ -1714,37 +1752,38 @@ class Buffer {
 
   int get_local_device_id() { return device_index; }
 
-  pybind11::bytearray get_local_ipc_handle() const {
-    return {ipc_handles[nvl_rank].reserved, CUDA_IPC_HANDLE_SIZE};
+  nanobind::bytes get_local_ipc_handle() const {
+    return nanobind::bytes(ipc_handles[nvl_rank].reserved, CUDA_IPC_HANDLE_SIZE);
   }
 
-  pybind11::bytearray get_local_rdma_ipc_handle() {
+  nanobind::bytes get_local_rdma_ipc_handle() {
     EP_HOST_ASSERT(
         rdma_buffer_ptr != nullptr &&
         "set_rdma_buffer_raw must be called before requesting RDMA IPC handle");
     cudaIpcMemHandle_t h{};
     CUDA_CHECK(cudaIpcGetMemHandle(&h, rdma_buffer_ptr));
-    return {h.reserved, CUDA_IPC_HANDLE_SIZE};
+    return nanobind::bytes(h.reserved, CUDA_IPC_HANDLE_SIZE);
   }
 
-  pybind11::bytearray get_local_atomics_ipc_handle() {
+  nanobind::bytes get_local_atomics_ipc_handle() {
     EP_HOST_ASSERT(atomic_buffer_ptr != nullptr &&
                    "set_atomic_buffer_raw must be called before requesting "
                    "atomic IPC handle");
     cudaIpcMemHandle_t h{};
     CUDA_CHECK(cudaIpcGetMemHandle(&h, atomic_buffer_ptr));
-    return {h.reserved, CUDA_IPC_HANDLE_SIZE};
+    return nanobind::bytes(h.reserved, CUDA_IPC_HANDLE_SIZE);
   }
 
   int get_num_rdma_ranks() const { return num_rdma_ranks; }
   int get_rdma_rank() const { return rdma_rank; }
   int get_root_rdma_rank(bool global) const { return global ? nvl_rank : 0; }
 
-  pybind11::bytearray get_local_uccl_shmem_unique_id() const {
+  nanobind::bytes get_local_uccl_shmem_unique_id() const {
     EP_HOST_ASSERT(rdma_rank == 0 and
                    "Only RDMA rank 0 can get UCCL unique ID");
     auto unique_id = internode::get_unique_id();
-    return {reinterpret_cast<char const*>(unique_id.data()), unique_id.size()};
+    return nanobind::bytes(reinterpret_cast<char const*>(unique_id.data()),
+                     unique_id.size());
   }
 
   torch::Tensor get_next_low_latency_combine_buffer(
@@ -1784,10 +1823,9 @@ class Buffer {
 
   void sync(
       std::vector<int> const& device_ids,
-      std::vector<std::optional<pybind11::bytearray>> const&
-          all_gathered_handles,
-      std::optional<pybind11::bytearray> const& root_unique_id_opt,
-      std::optional<std::vector<std::optional<pybind11::bytearray>>> const&
+      std::vector<std::optional<nanobind::bytes>> const& all_gathered_handles,
+      std::optional<nanobind::bytes> const& root_unique_id_opt,
+      std::optional<std::vector<std::optional<nanobind::bytes>>> const&
           all_gathered_rdma_handles_opt = std::nullopt) {
     EP_HOST_ASSERT(not is_available());
     // Sync IPC handles
@@ -1801,12 +1839,11 @@ class Buffer {
             global_rank % max_nvl_peers;  // Map to correct buffer_ptrs index
 
         EP_HOST_ASSERT(all_gathered_handles[global_rank].has_value());
-        auto handle_str =
-            std::string(all_gathered_handles[global_rank].value());
-        EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
+        auto const& handle_bytes = all_gathered_handles[global_rank].value();
+        EP_HOST_ASSERT(handle_bytes.size() == CUDA_IPC_HANDLE_SIZE);
         if (global_rank != rank) {
-          std::memcpy(ipc_handles[local_rank_idx].reserved, handle_str.c_str(),
-                      CUDA_IPC_HANDLE_SIZE);
+          std::memcpy(ipc_handles[local_rank_idx].reserved,
+                      handle_bytes.c_str(), CUDA_IPC_HANDLE_SIZE);
           // Ensure we're on the correct device before opening IPC handle
           CUDA_CHECK(cudaSetDevice(device_index));
           CUDA_CHECK(cudaIpcOpenMemHandle(&buffer_ptrs[local_rank_idx],
@@ -1816,12 +1853,9 @@ class Buffer {
               static_cast<uint8_t*>(buffer_ptrs[local_rank_idx]) +
               num_nvl_bytes);
         } else {
-          // This is our own rank - buffer_ptrs[local_rank_idx] should already
-          // be set from constructor But let's verify it's not null and the IPC
-          // handle matches
           EP_HOST_ASSERT(buffer_ptrs[local_rank_idx] != nullptr);
           EP_HOST_ASSERT(std::memcmp(ipc_handles[local_rank_idx].reserved,
-                                     handle_str.c_str(),
+                                     handle_bytes.c_str(),
                                      CUDA_IPC_HANDLE_SIZE) == 0);
         }
       }
@@ -1860,11 +1894,11 @@ class Buffer {
         if (global_rank == rank) {
           ipc_rdma_base_ptrs[local_rank_idx] = rdma_buffer_ptr;
         } else if (all_gathered_rdma_handles[global_rank].has_value()) {
-          auto handle_str =
-              std::string(all_gathered_rdma_handles[global_rank].value());
-          EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
+          auto const& rdma_bytes =
+              all_gathered_rdma_handles[global_rank].value();
+          EP_HOST_ASSERT(rdma_bytes.size() == CUDA_IPC_HANDLE_SIZE);
           std::memcpy(rdma_ipc_handles[local_rank_idx].reserved,
-                      handle_str.c_str(), CUDA_IPC_HANDLE_SIZE);
+                      rdma_bytes.c_str(), CUDA_IPC_HANDLE_SIZE);
           CUDA_CHECK(cudaSetDevice(device_index));
           CUDA_CHECK(cudaIpcOpenMemHandle(&ipc_rdma_base_ptrs[local_rank_idx],
                                           rdma_ipc_handles[local_rank_idx],
@@ -1900,11 +1934,10 @@ class Buffer {
     atomic_buffer_ptr = ptr;
   }
 
-  torch::Tensor get_local_buffer_tensor(pybind11::object const& dtype,
-                                        int64_t offset,
+  torch::Tensor get_local_buffer_tensor(nanobind::handle dtype, int64_t offset,
                                         bool use_rdma_buffer) const {
     torch::ScalarType casted_dtype =
-        torch::python::detail::py_object_to_dtype(dtype);
+        reinterpret_cast<UcclDtypeView*>(dtype.ptr())->scalar_type;
     auto element_bytes = static_cast<int64_t>(elementSize(casted_dtype));
     auto base_ptr =
         static_cast<uint8_t*>(use_rdma_buffer ? rdma_buffer_ptr
@@ -1931,7 +1964,7 @@ class Buffer {
   bool low_latency_mode{false};
   bool explicitly_destroy{false};
   int device_index{0};
-  std::vector<py::object> proxies_;
+  std::vector<nanobind::object> proxies_;
   bool available{false};
   void* rdma_buffer_ptr = nullptr;
   void* atomic_buffer_ptr = nullptr;
@@ -1983,22 +2016,22 @@ class Buffer {
 #endif
 };
 
-PYBIND11_MODULE(ep, m) {
+NB_MODULE(ep, m) {
   m.doc() = "Minimal DeepEP-compatible shim with UCCL";
 
-  pybind11::class_<uccl::Config>(m, "Config")
-      .def(pybind11::init<int, int, int, int, int>(), py::arg("num_sms") = 20,
-           py::arg("num_max_nvl_chunked_send_tokens") = 6,
-           py::arg("num_max_nvl_chunked_recv_tokens") = 256,
-           py::arg("num_max_rdma_chunked_send_tokens") = 6,
-           py::arg("num_max_rdma_chunked_recv_tokens") = 256)
+  nanobind::class_<uccl::Config>(m, "Config")
+      .def(nanobind::init<int, int, int, int, int>(), nanobind::arg("num_sms") = 20,
+           nanobind::arg("num_max_nvl_chunked_send_tokens") = 6,
+           nanobind::arg("num_max_nvl_chunked_recv_tokens") = 256,
+           nanobind::arg("num_max_rdma_chunked_send_tokens") = 6,
+           nanobind::arg("num_max_rdma_chunked_recv_tokens") = 256)
       .def("get_nvl_buffer_size_hint", &uccl::Config::get_nvl_buffer_size_hint)
       .def("get_rdma_buffer_size_hint",
            &uccl::Config::get_rdma_buffer_size_hint);
 
   m.def(
       "register_proxy",
-      [](int device_index, py::object proxy) {
+      [](int device_index, nanobind::object proxy) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
         auto& vec = uccl::g_proxies_by_dev[device_index];
         if (!vec.empty()) {
@@ -2010,10 +2043,10 @@ PYBIND11_MODULE(ep, m) {
         vec.push_back(std::move(proxy));
         printf("Registered proxy for device %d\n", device_index);
       },
-      py::arg("device_index"), py::arg("proxy"));
+      nanobind::arg("device_index"), nanobind::arg("proxy"));
   m.def(
       "register_proxies",
-      [](int device_index, std::vector<py::object> proxies) {
+      [](int device_index, std::vector<nanobind::object> proxies) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
         auto& vec = uccl::g_proxies_by_dev[device_index];
         if (!vec.empty()) {
@@ -2027,14 +2060,14 @@ PYBIND11_MODULE(ep, m) {
         }
         printf("Registered proxies for device %d\n", device_index);
       },
-      py::arg("device_index"), py::arg("proxies"));
+      nanobind::arg("device_index"), nanobind::arg("proxies"));
   m.def(
       "unregister_proxy",
       [](int device_index) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
         uccl::g_proxies_by_dev.erase(device_index);
       },
-      py::arg("device_index"));
+      nanobind::arg("device_index"));
   m.def(
       "has_proxy",
       [](int device_index) {
@@ -2042,7 +2075,7 @@ PYBIND11_MODULE(ep, m) {
         auto it = uccl::g_proxies_by_dev.find(device_index);
         return it != uccl::g_proxies_by_dev.end() && !it->second.empty();
       },
-      py::arg("device_index"));
+      nanobind::arg("device_index"));
   m.def("stop_all_registered_proxies", []() {
     std::lock_guard<std::mutex> lk(g_proxies_mu);
     for (auto& kv : uccl::g_proxies_by_dev) {
@@ -2070,14 +2103,14 @@ PYBIND11_MODULE(ep, m) {
         CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
         torch::Tensor tensor = torch::from_blob(
             ptr, {num_rdma_bytes}, dtype(torch::kUInt8).device(torch::kCUDA));
-        return py::make_tuple(tensor, false);
+        return nanobind::make_tuple(tensor, false);
 #elif defined(EFA)
         // EFA: GPU buffer is always device memory (cudaMalloc).
         CUDA_CHECK(cudaMalloc(&ptr, num_rdma_bytes));
         CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
         torch::Tensor tensor = torch::from_blob(
             ptr, {num_rdma_bytes}, dtype(torch::kUInt8).device(torch::kCUDA));
-        return py::make_tuple(tensor, false);
+        return nanobind::make_tuple(tensor, false);
 #elif defined(USE_DMABUF)
         // DMA-BUF path (e.g. INTEL_RDMA_NIC): the RDMA data buffer is always
         // GPU memory — per_thread_rdma_init registers it via
@@ -2089,7 +2122,7 @@ PYBIND11_MODULE(ep, m) {
         CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
         torch::Tensor tensor = torch::from_blob(
             ptr, {num_rdma_bytes}, dtype(torch::kUInt8).device(torch::kCUDA));
-        return py::make_tuple(tensor, false);
+        return nanobind::make_tuple(tensor, false);
 #else
         // Prefer cudaMalloc when GPU memory can be registered (e.g. with
         // nvidia_peermem); fall back to pinned host for NICs where
@@ -2107,48 +2140,48 @@ PYBIND11_MODULE(ep, m) {
               torch::from_blob(ptr, {num_rdma_bytes}, dtype(torch::kUInt8));
           is_host_allocated = true;
         }
-        return py::make_tuple(tensor, is_host_allocated);
+        return nanobind::make_tuple(tensor, is_host_allocated);
 #endif
       },
-      py::arg("num_rdma_bytes"), py::arg("device_index"),
+      nanobind::arg("num_rdma_bytes"), nanobind::arg("device_index"),
       R"doc(
         Allocate RDMA buffer. Prefers device memory (cudaMalloc) when the NIC
         can register it; otherwise uses pinned host memory (cudaMallocHost).
         Returns (tensor, is_host_allocated).
       )doc");
 
-  py::class_<EventHandle>(m, "EventHandle")
-      .def(py::init<>())
+  nanobind::class_<EventHandle>(m, "EventHandle")
+      .def(nanobind::init<>())
       .def("current_stream_wait", &EventHandle::current_stream_wait);
 
   m.def("connect_atomic_buffer", [](UcclProxy& p, Buffer& b) {
     b.set_atomic_buffer_ptr(p.get_atomic_buffer_ptr());
   });
 
-  py::class_<EventOverlap>(m, "EventOverlap").def(py::init<>());
-  py::class_<Buffer>(m, "Buffer")
-      .def(py::init<int, int, long, long, bool, bool, int>(), py::arg("rank"),
-           py::arg("num_ranks"), py::arg("num_nvl_bytes") = 0,
-           py::arg("num_rdma_bytes") = 0, py::arg("low_latency_mode") = false,
-           py::arg("explicitly_destroy") = false,
-           py::arg("num_local_ranks") = -1)
+  nanobind::class_<EventOverlap>(m, "EventOverlap").def(nanobind::init<>());
+  nanobind::class_<Buffer>(m, "Buffer")
+      .def(nanobind::init<int, int, long, long, bool, bool, int>(), nanobind::arg("rank"),
+           nanobind::arg("num_ranks"), nanobind::arg("num_nvl_bytes") = 0,
+           nanobind::arg("num_rdma_bytes") = 0, nanobind::arg("low_latency_mode") = false,
+           nanobind::arg("explicitly_destroy") = false,
+           nanobind::arg("num_local_ranks") = -1)
       .def("destroy", &Buffer::destroy)
       .def(
           "set_rdma_buffer_raw",
           [](Buffer& self, std::uintptr_t addr) {
             self.set_rdma_buffer_raw(reinterpret_cast<void*>(addr));
           },
-          py::arg("addr"),
+          nanobind::arg("addr"),
           R"doc(Set RDMA buffer from a raw address. Caller must keep the memory alive.)doc")
       .def("reset_rdma_buffer", &Buffer::reset_rdma_buffer)
-      .def("low_latency_dispatch", &Buffer::low_latency_dispatch, py::arg("x"),
-           py::arg("topk_idx"),
-           py::arg("cumulative_local_expert_recv_stats") = py::none(),
-           py::arg("dispatch_wait_recv_cost_stats") = py::none(),
-           py::arg("num_max_dispatch_tokens_per_rank") = 0,
-           py::arg("num_experts") = 1, py::arg("use_fp8") = true,
-           py::arg("round_scale") = false, py::arg("use_ue8m0") = false,
-           py::arg("async") = false, py::arg("return_recv_hook") = false)
+      .def("low_latency_dispatch", &Buffer::low_latency_dispatch, nanobind::arg("x"),
+           nanobind::arg("topk_idx"),
+           nanobind::arg("cumulative_local_expert_recv_stats") = nanobind::none(),
+           nanobind::arg("dispatch_wait_recv_cost_stats") = nanobind::none(),
+           nanobind::arg("num_max_dispatch_tokens_per_rank") = 0,
+           nanobind::arg("num_experts") = 1, nanobind::arg("use_fp8") = true,
+           nanobind::arg("round_scale") = false, nanobind::arg("use_ue8m0") = false,
+           nanobind::arg("async") = false, nanobind::arg("return_recv_hook") = false)
       .def("get_local_device_id", &Buffer::get_local_device_id)
       .def("get_local_ipc_handle", &Buffer::get_local_ipc_handle)
       .def("get_local_rdma_ipc_handle", &Buffer::get_local_rdma_ipc_handle)
@@ -2158,13 +2191,36 @@ PYBIND11_MODULE(ep, m) {
       .def("get_rdma_rank", &Buffer::get_rdma_rank)
       .def("get_root_rdma_rank", &Buffer::get_root_rdma_rank)
       .def("get_local_buffer_tensor", &Buffer::get_local_buffer_tensor)
-      .def("get_comm_stream", &Buffer::get_comm_stream)
+      .def("get_comm_stream",
+           [](Buffer const& self) -> nanobind::object {
+             c10::Stream s = self.get_comm_stream();
+             PyObject* mod = PyImport_ImportModule("torch");
+             PyObject* cls = PyObject_GetAttrString(mod, "Stream");
+             Py_DECREF(mod);
+             PyObject* kw = PyDict_New();
+             PyObject* v;
+             v = PyLong_FromLongLong(s.id());
+             PyDict_SetItemString(kw, "stream_id", v);
+             Py_DECREF(v);
+             v = PyLong_FromLong(s.device_index());
+             PyDict_SetItemString(kw, "device_index", v);
+             Py_DECREF(v);
+             v = PyLong_FromLong(static_cast<int>(s.device_type()));
+             PyDict_SetItemString(kw, "device_type", v);
+             Py_DECREF(v);
+             PyObject* args = PyTuple_New(0);
+             PyObject* result = PyObject_Call(cls, args, kw);
+             Py_DECREF(cls);
+             Py_DECREF(args);
+             Py_DECREF(kw);
+             return nanobind::steal(result);
+           })
       .def("get_local_uccl_shmem_unique_id",
            &Buffer::get_local_uccl_shmem_unique_id)
-      .def("sync", &Buffer::sync, py::arg("device_ids"),
-           py::arg("all_gathered_handles"),
-           py::arg("root_unique_id_opt") = py::none(),
-           py::arg("all_gathered_rdma_handles") = py::none())
+      .def("sync", &Buffer::sync, nanobind::arg("device_ids"),
+           nanobind::arg("all_gathered_handles"),
+           nanobind::arg("root_unique_id_opt") = nanobind::none(),
+           nanobind::arg("all_gathered_rdma_handles") = nanobind::none())
       .def("is_available", &Buffer::is_available)
       .def("get_next_low_latency_combine_buffer",
            &Buffer::get_next_low_latency_combine_buffer)
@@ -2174,14 +2230,14 @@ PYBIND11_MODULE(ep, m) {
       .def("internode_dispatch", &Buffer::internode_dispatch)
       .def("internode_combine", &Buffer::internode_combine)
       .def("clean_low_latency_buffer", &Buffer::clean_low_latency_buffer)
-      .def("low_latency_combine", &Buffer::low_latency_combine, py::arg("x"),
-           py::arg("topk_idx"), py::arg("topk_weights"), py::arg("src_info"),
-           py::arg("layout_range"),
-           py::arg("combine_wait_recv_cost_stats") = py::none(),
-           py::arg("num_max_dispatch_tokens_per_rank") = 0,
-           py::arg("num_experts") = 1, py::arg("use_logfmt") = false,
-           py::arg("zero_copy") = false, py::arg("async") = false,
-           py::arg("return_recv_hook") = false, py::arg("out") = py::none());
+      .def("low_latency_combine", &Buffer::low_latency_combine, nanobind::arg("x"),
+           nanobind::arg("topk_idx"), nanobind::arg("topk_weights"), nanobind::arg("src_info"),
+           nanobind::arg("layout_range"),
+           nanobind::arg("combine_wait_recv_cost_stats") = nanobind::none(),
+           nanobind::arg("num_max_dispatch_tokens_per_rank") = 0,
+           nanobind::arg("num_experts") = 1, nanobind::arg("use_logfmt") = false,
+           nanobind::arg("zero_copy") = false, nanobind::arg("async") = false,
+           nanobind::arg("return_recv_hook") = false, nanobind::arg("out") = nanobind::none());
   m.def("alloc_cmd_ring", &alloc_cmd_ring);
   m.def("free_cmd_ring", &free_cmd_ring);
   m.def("launch_gpu_issue_kernel", [](int blocks, int threads_per_block,
@@ -2234,23 +2290,23 @@ PYBIND11_MODULE(ep, m) {
         if (st == cudaErrorNotReady) return std::string("not_ready");
         return std::string("error: ") + cudaGetErrorString(st);
       },
-      py::arg("stream_ptr"));
+      nanobind::arg("stream_ptr"));
   m.def("device_reset", []() {
     auto st = cudaDeviceReset();
     if (st != cudaSuccess)
       throw std::runtime_error(std::string("cudaDeviceReset failed: ") +
                                cudaGetErrorString(st));
   });
-  py::class_<Stats>(m, "Stats");
-  py::class_<UcclProxy>(m, "Proxy")
-      .def(py::init<int, uintptr_t, size_t, int, int, int, int, int, int, bool,
+  nanobind::class_<Stats>(m, "Stats");
+  nanobind::class_<UcclProxy>(m, "Proxy")
+      .def(nanobind::init<int, uintptr_t, size_t, int, int, int, int, int, int, bool,
                     bool, bool>(),
-           py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
-           py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
-           py::arg("local_rank") = 0, py::arg("num_experts") = -1,
-           py::arg("num_ranks") = -1, py::arg("num_nodes") = 0,
-           py::arg("use_normal_mode") = false, py::arg("is_intranode") = false,
-           py::arg("gpu_buffer_is_host_allocated") = false)
+           nanobind::arg("thread_idx"), nanobind::arg("gpu_buffer_addr"),
+           nanobind::arg("total_size"), nanobind::arg("rank") = 0, nanobind::arg("node_idx") = -1,
+           nanobind::arg("local_rank") = 0, nanobind::arg("num_experts") = -1,
+           nanobind::arg("num_ranks") = -1, nanobind::arg("num_nodes") = 0,
+           nanobind::arg("use_normal_mode") = false, nanobind::arg("is_intranode") = false,
+           nanobind::arg("gpu_buffer_is_host_allocated") = false)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)
@@ -2260,70 +2316,63 @@ PYBIND11_MODULE(ep, m) {
       .def("get_atomic_buffer_ptr", &UcclProxy::get_atomic_buffer_ptr)
       .def("set_atomic_buffer_ptr", &UcclProxy::set_atomic_buffer_ptr)
       .def("set_dispatch_recv_data_offset",
-           &UcclProxy::set_dispatch_recv_data_offset, py::arg("offset"))
+           &UcclProxy::set_dispatch_recv_data_offset, nanobind::arg("offset"))
       .def("calculate_and_set_dispatch_recv_data_offset",
            &UcclProxy::calculate_and_set_dispatch_recv_data_offset,
-           py::arg("num_tokens"), py::arg("hidden"), py::arg("num_experts"))
+           nanobind::arg("num_tokens"), nanobind::arg("hidden"), nanobind::arg("num_experts"))
       .def("get_d2h_channel_addrs", &UcclProxy::get_d2h_channel_addrs)
-      .def_property_readonly("thread_idx", &UcclProxy::thread_idx)
-      .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr)
+      .def_prop_ro("thread_idx", &UcclProxy::thread_idx)
+      .def_prop_ro("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr)
       .def("avg_rdma_write_us", &UcclProxy::avg_rdma_write_us)
       .def("avg_wr_latency_us", &UcclProxy::avg_wr_latency_us)
       .def(
           "set_peers_meta",
-          [](UcclProxy& self, py::object metas) {
+          [](UcclProxy& self, nanobind::object metas) {
             std::vector<PeerMeta> v;
-            if (py::isinstance<py::list>(metas)) {
-              for (auto obj : metas.cast<py::list>()) {
-                if (py::isinstance<py::dict>(obj)) {
-                  auto d = obj.cast<py::dict>();
+            if (nanobind::isinstance<nanobind::list>(metas)) {
+              for (nanobind::handle obj : nanobind::borrow<nanobind::list>(metas)) {
+                if (nanobind::isinstance<nanobind::dict>(obj)) {
+                  nanobind::dict meta_dict = nanobind::borrow<nanobind::dict>(obj);
                   PeerMeta pm;
-                  pm.rank = py::cast<int>(d["rank"]);
+                  pm.rank = nanobind::cast<int>(meta_dict["rank"]);
                   pm.ptr = static_cast<uintptr_t>(
-                      py::cast<unsigned long long>(d["ptr"]));
+                      nanobind::cast<unsigned long long>(meta_dict["ptr"]));
                   pm.nbytes = static_cast<size_t>(
-                      py::cast<unsigned long long>(d["nbytes"]));
-                  pm.ip = py::cast<std::string>(d["ip"]);
+                      nanobind::cast<unsigned long long>(meta_dict["nbytes"]));
+                  pm.ip = nanobind::cast<std::string>(meta_dict["ip"]);
 
-                  // Handle listen_ports array (always present)
-                  auto ports = d["listen_ports"].cast<py::sequence>();
+                  nanobind::list ports = nanobind::borrow<nanobind::list>(meta_dict["listen_ports"]);
                   size_t port_count =
-                      std::min(static_cast<size_t>(py::len(ports)),
+                      std::min(static_cast<size_t>(nanobind::len(ports)),
                                static_cast<size_t>(kNumProxyThs));
                   for (size_t i = 0; i < port_count; ++i) {
-                    pm.listen_ports[i] = ports[i].cast<int>();
+                    pm.listen_ports[i] = nanobind::cast<int>(ports[i]);
                   }
-                  // Initialize remaining ports to 0 if fewer than kNumProxyThs
-                  // provided
                   for (size_t i = port_count; i < kNumProxyThs; ++i) {
                     pm.listen_ports[i] = 0;
                   }
 
                   v.push_back(std::move(pm));
                 } else {
-                  v.push_back(obj.cast<PeerMeta>());
+                  v.push_back(nanobind::cast<PeerMeta>(obj));
                 }
               }
             } else {
-              // allow passing a dict directly
-              auto d = metas.cast<py::dict>();
+              nanobind::dict meta_dict = nanobind::borrow<nanobind::dict>(metas);
               PeerMeta pm;
-              pm.rank = py::cast<int>(d["rank"]);
+              pm.rank = nanobind::cast<int>(meta_dict["rank"]);
               pm.ptr = static_cast<uintptr_t>(
-                  py::cast<unsigned long long>(d["ptr"]));
+                  nanobind::cast<unsigned long long>(meta_dict["ptr"]));
               pm.nbytes = static_cast<size_t>(
-                  py::cast<unsigned long long>(d["nbytes"]));
-              pm.ip = py::cast<std::string>(d["ip"]);
+                  nanobind::cast<unsigned long long>(meta_dict["nbytes"]));
+              pm.ip = nanobind::cast<std::string>(meta_dict["ip"]);
 
-              // Handle listen_ports array (always present)
-              auto ports = d["listen_ports"].cast<py::sequence>();
-              size_t port_count = std::min(static_cast<size_t>(py::len(ports)),
+              nanobind::list ports = nanobind::borrow<nanobind::list>(meta_dict["listen_ports"]);
+              size_t port_count = std::min(static_cast<size_t>(nanobind::len(ports)),
                                            static_cast<size_t>(kNumProxyThs));
               for (size_t i = 0; i < port_count; ++i) {
-                pm.listen_ports[i] = ports[i].cast<int>();
+                pm.listen_ports[i] = nanobind::cast<int>(ports[i]);
               }
-              // Initialize remaining ports to 0 if fewer than kNumProxyThs
-              // provided
               for (size_t i = port_count; i < kNumProxyThs; ++i) {
                 pm.listen_ports[i] = 0;
               }
@@ -2332,26 +2381,26 @@ PYBIND11_MODULE(ep, m) {
             }
             self.set_peers_meta(v);
           },
-          py::arg("metas"),
+          nanobind::arg("metas"),
           "Attach peer metadata (list of dicts or PeerMeta objects).")
       .def(
           "set_bench_d2h_channel_addrs",
-          [](UcclProxy& self, py::iterable addrs) {
+          [](UcclProxy& self, nanobind::list addrs) {
             std::vector<uintptr_t> v;
-            for (py::handle h : addrs) v.push_back(h.cast<uintptr_t>());
+            for (nanobind::handle h : addrs) v.push_back(nanobind::cast<uintptr_t>(h));
             self.set_bench_d2h_channel_addrs(v);
           },
-          py::arg("addrs"), "Attach ring buffer addresses for benchmarking.");
-  // .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr);
-  py::class_<EnvInfo>(m, "EnvInfo")
-      .def_readonly("blocks", &EnvInfo::blocks)
-      .def_readonly("queue_size", &EnvInfo::queue_size)
-      .def_readonly("threads_per_block", &EnvInfo::threads_per_block)
-      .def_readonly("iterations", &EnvInfo::iterations)
-      .def_readonly("stream_addr", &EnvInfo::stream_addr)
-      .def_readonly("rbs_addr", &EnvInfo::rbs_addr);
-  py::class_<Bench>(m, "Bench")
-      .def(py::init<>())
+          nanobind::arg("addrs"), "Attach ring buffer addresses for benchmarking.");
+  // .def_prop_ro("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr);
+  nanobind::class_<EnvInfo>(m, "EnvInfo")
+      .def_ro("blocks", &EnvInfo::blocks)
+      .def_ro("queue_size", &EnvInfo::queue_size)
+      .def_ro("threads_per_block", &EnvInfo::threads_per_block)
+      .def_ro("iterations", &EnvInfo::iterations)
+      .def_ro("stream_addr", &EnvInfo::stream_addr)
+      .def_ro("rbs_addr", &EnvInfo::rbs_addr);
+  nanobind::class_<Bench>(m, "Bench")
+      .def(nanobind::init<>())
       .def("env_info", &Bench::env_info)
       .def("blocks", &Bench::blocks)
       .def("num_proxies", &Bench::num_proxies)
@@ -2363,36 +2412,36 @@ PYBIND11_MODULE(ep, m) {
            &Bench::launch_gpu_issue_batched_commands)
       .def("sync_stream", &Bench::sync_stream)
       .def("sync_stream_interruptible", &Bench::sync_stream_interruptible,
-           py::arg("poll_ms") = 5, py::arg("timeout_ms") = -1,
-           py::arg("should_abort") = nullptr)
+           nanobind::arg("poll_ms") = 5, nanobind::arg("timeout_ms") = -1,
+           nanobind::arg("should_abort") = nanobind::none())
       .def("join_proxies", &Bench::join_proxies)
       .def("print_block_latencies", &Bench::print_block_latencies)
       .def("compute_stats", &Bench::compute_stats)
       .def("print_summary", &Bench::print_summary)
       .def("print_summary_last", &Bench::print_summary_last)
       .def("last_elapsed_ms", &Bench::last_elapsed_ms);
-  py::class_<PeerCopyManager>(m, "PeerCopyManager")
-      .def(py::init<int>(), py::arg("src_device") = 0)
+  nanobind::class_<PeerCopyManager>(m, "PeerCopyManager")
+      .def(nanobind::init<int>(), nanobind::arg("src_device") = 0)
       .def("start_for_proxies",
-           [](PeerCopyManager& mgr, py::iterable proxy_list) {
+           [](PeerCopyManager& mgr, nanobind::list proxy_list) {
              std::vector<UcclProxy*> vec;
-             for (py::handle h : proxy_list)
-               vec.push_back(h.cast<UcclProxy*>());
+             for (nanobind::handle h : proxy_list)
+               vec.push_back(nanobind::cast<UcclProxy*>(h));
              mgr.start_for_proxies(vec);
            })
       .def("stop", &PeerCopyManager::stop);
 
   // MSCCLPP Fifo class - must be registered before BenchFifo which uses it
-  py::class_<mscclpp::Fifo>(m, "Fifo").def(py::init<uint32_t>(),
-                                           py::arg("size") = 2048);
+  nanobind::class_<mscclpp::Fifo>(m, "Fifo").def(nanobind::init<uint32_t>(),
+                                           nanobind::arg("size") = 2048);
 
   // FIFO-based benchmarking classes
-  py::class_<BenchFifo>(m, "BenchFifo")
-      .def(py::init<>())
+  nanobind::class_<BenchFifo>(m, "BenchFifo")
+      .def(nanobind::init<>())
       .def("env_info", &BenchFifo::env_info)
       .def("blocks", &BenchFifo::blocks)
       .def("num_proxies", &BenchFifo::num_proxies)
-      .def("get_fifo", &BenchFifo::get_fifo, py::return_value_policy::reference)
+      .def("get_fifo", &BenchFifo::get_fifo, nanobind::rv_policy::reference)
       .def("timing_start", &BenchFifo::timing_start)
       .def("timing_stop", &BenchFifo::timing_stop)
       .def("is_running", &BenchFifo::is_running)
@@ -2400,8 +2449,8 @@ PYBIND11_MODULE(ep, m) {
            &BenchFifo::launch_gpu_issue_batched_commands)
       .def("sync_stream", &BenchFifo::sync_stream)
       .def("sync_stream_interruptible", &BenchFifo::sync_stream_interruptible,
-           py::arg("poll_ms") = 5, py::arg("timeout_ms") = -1,
-           py::arg("should_abort") = nullptr)
+           nanobind::arg("poll_ms") = 5, nanobind::arg("timeout_ms") = -1,
+           nanobind::arg("should_abort") = nanobind::none())
       .def("join_proxies", &BenchFifo::join_proxies)
       .def("print_block_latencies", &BenchFifo::print_block_latencies)
       .def("compute_stats", &BenchFifo::compute_stats)
@@ -2409,41 +2458,38 @@ PYBIND11_MODULE(ep, m) {
       .def("print_summary_last", &BenchFifo::print_summary_last)
       .def("last_elapsed_ms", &BenchFifo::last_elapsed_ms);
 
-  py::class_<FifoProxy>(m, "FifoProxy")
-      .def(py::init<int, uintptr_t, size_t, int, int, int, bool>(),
-           py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
-           py::arg("total_size"), py::arg("rank"), py::arg("node_idx"),
-           py::arg("local_rank"), py::arg("is_intranode"))
-      .def("set_fifo", &FifoProxy::set_fifo, py::arg("fifo"))
+  nanobind::class_<FifoProxy>(m, "FifoProxy")
+      .def(nanobind::init<int, uintptr_t, size_t, int, int, int, bool>(),
+           nanobind::arg("thread_idx"), nanobind::arg("gpu_buffer_addr"),
+           nanobind::arg("total_size"), nanobind::arg("rank"), nanobind::arg("node_idx"),
+           nanobind::arg("local_rank"), nanobind::arg("is_intranode"))
+      .def("set_fifo", &FifoProxy::set_fifo, nanobind::arg("fifo"))
       .def("set_peers_meta",
-           [](FifoProxy& proxy, py::list meta_list) {
+           [](FifoProxy& proxy, nanobind::list meta_list) {
              std::vector<PeerMeta> vec;
-             for (py::handle h : meta_list) {
-               if (py::isinstance<py::dict>(h)) {
-                 auto d = h.cast<py::dict>();
+             for (nanobind::handle h : meta_list) {
+               if (nanobind::isinstance<nanobind::dict>(h)) {
+                 nanobind::dict d = nanobind::borrow<nanobind::dict>(h);
                  PeerMeta pm;
-                 pm.rank = d["rank"].cast<int>();
-                 pm.ptr = d["ptr"].cast<uintptr_t>();
-                 pm.nbytes = d["nbytes"].cast<size_t>();
-                 pm.ip = d["ip"].cast<std::string>();
+                 pm.rank = nanobind::cast<int>(d["rank"]);
+                 pm.ptr = nanobind::cast<uintptr_t>(d["ptr"]);
+                 pm.nbytes = nanobind::cast<size_t>(d["nbytes"]);
+                 pm.ip = nanobind::cast<std::string>(d["ip"]);
 
-                 // Handle listen_ports array (always present)
-                 auto ports = d["listen_ports"].cast<py::sequence>();
+                 nanobind::list ports = nanobind::borrow<nanobind::list>(d["listen_ports"]);
                  size_t port_count =
-                     std::min(static_cast<size_t>(py::len(ports)),
+                     std::min(static_cast<size_t>(nanobind::len(ports)),
                               static_cast<size_t>(kNumProxyThs));
                  for (size_t i = 0; i < port_count; ++i) {
-                   pm.listen_ports[i] = ports[i].cast<int>();
+                   pm.listen_ports[i] = nanobind::cast<int>(ports[i]);
                  }
-                 // Initialize remaining ports to 0 if fewer than kNumProxyThs
-                 // provided
                  for (size_t i = port_count; i < kNumProxyThs; ++i) {
                    pm.listen_ports[i] = 0;
                  }
 
                  vec.push_back(std::move(pm));
                } else {
-                 vec.push_back(h.cast<PeerMeta>());
+                 vec.push_back(nanobind::cast<PeerMeta>(h));
                }
              }
              proxy.set_peers_meta(vec);
@@ -2454,5 +2500,5 @@ PYBIND11_MODULE(ep, m) {
       .def("get_listen_port", &FifoProxy::get_listen_port)
       .def("avg_wr_latency_us", &FifoProxy::avg_wr_latency_us)
       .def("processed_count", &FifoProxy::processed_count)
-      .def_readonly("thread_idx", &FifoProxy::thread_idx);
+      .def_ro("thread_idx", &FifoProxy::thread_idx);
 }
