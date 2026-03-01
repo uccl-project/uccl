@@ -27,8 +27,9 @@ if ! command -v "$CLANG_FORMAT" &> /dev/null; then
     exit 1
 fi
 
-# Ensure clang-format version is exactly 14
-INSTALLED_VERSION=$("$CLANG_FORMAT" --version | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' | head -1 | cut -d. -f1)
+# Ensure clang-format version is exactly 14.
+# Use sed for portability (BSD grep on macOS does not support -P).
+INSTALLED_VERSION=$("$CLANG_FORMAT" --version | sed -nE 's/.*[Vv]ersion[[:space:]]+([0-9]+)(\.[0-9]+){1,2}.*/\1/p' | head -1)
 
 if [ "$INSTALLED_VERSION" != "$REQUIRED_VERSION" ]; then
     echo "clang-format version $REQUIRED_VERSION is required. Found version: $INSTALLED_VERSION ($CLANG_FORMAT)."
