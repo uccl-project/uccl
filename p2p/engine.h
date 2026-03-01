@@ -12,7 +12,6 @@
 #endif
 #include <glog/logging.h>
 #include <infiniband/verbs.h>
-#include <pybind11/pybind11.h>
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -24,8 +23,6 @@
 #include <unordered_map>
 #include <variant>
 #include <vector>
-
-namespace py = pybind11;
 
 #ifdef UCCL_P2P_USE_TCPX
 using FifoItem = nccl_tcpx::FifoItem;

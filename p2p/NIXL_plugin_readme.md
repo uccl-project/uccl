@@ -13,7 +13,8 @@ export UCCL_HOME=/path/to/your/uccl
 sudo apt update
 sudo apt install -y build-essential net-tools libelf-dev libibverbs-dev \
                     libgoogle-glog-dev libgtest-dev libgflags-dev libaio-dev \
-                    python3-dev pybind11-dev python3-pip python3-pybind11
+                    python3-dev pybind11-dev python3-pip python3-pybind11 \
+                    nanobind-dev
 sudo apt install -y libaio-dev # nixl need this for POSIX
 
 cd $UCCL_HOME/thirdparty/nccl

@@ -1,8 +1,10 @@
 #include "endpoint_wrapper.h"
-#include <pybind11/numpy.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-namespace py = pybind11;
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/pair.h>
+#include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
+namespace nb = nanobind;
 
 namespace {
 struct InsidePythonGuard {
@@ -105,57 +107,57 @@ std::vector<XferDesc> deserialize_xfer_descs(
 }
 
 // Helper function to extract pointer and size from PyTorch tensor
-std::pair<void const*, size_t> get_tensor_info(py::object tensor_obj) {
+std::pair<void const*, size_t> get_tensor_info(nb::object tensor_obj) {
   // Get data pointer using Python's data_ptr() method
-  if (!py::hasattr(tensor_obj, "data_ptr")) {
+  if (!nb::hasattr(tensor_obj, "data_ptr")) {
     throw std::runtime_error("Tensor does not have data_ptr() method");
   }
-  py::object data_ptr_result = tensor_obj.attr("data_ptr")();
-  uint64_t ptr = py::cast<uint64_t>(data_ptr_result);
+  nb::object data_ptr_result = tensor_obj.attr("data_ptr")();
+  uint64_t ptr = nb::cast<uint64_t>(data_ptr_result);
 
   // Get number of elements
-  if (!py::hasattr(tensor_obj, "numel")) {
+  if (!nb::hasattr(tensor_obj, "numel")) {
     throw std::runtime_error("Tensor does not have numel() method");
   }
-  py::object numel_result = tensor_obj.attr("numel")();
-  int64_t numel = py::cast<int64_t>(numel_result);
+  nb::object numel_result = tensor_obj.attr("numel")();
+  int64_t numel = nb::cast<int64_t>(numel_result);
 
   // Get element size
-  if (!py::hasattr(tensor_obj, "element_size")) {
+  if (!nb::hasattr(tensor_obj, "element_size")) {
     throw std::runtime_error("Tensor does not have element_size() method");
   }
-  py::object element_size_result = tensor_obj.attr("element_size")();
-  int64_t element_size = py::cast<int64_t>(element_size_result);
+  nb::object element_size_result = tensor_obj.attr("element_size")();
+  int64_t element_size = nb::cast<int64_t>(element_size_result);
 
   size_t total_size = static_cast<size_t>(numel * element_size);
   return std::make_pair(reinterpret_cast<void const*>(ptr), total_size);
 }
 }  // namespace
 
-PYBIND11_MODULE(p2p, m) {
+NB_MODULE(p2p, m) {
   m.doc() = "P2P Engine - High-performance RDMA-based peer-to-peer transport";
 
   m.def("get_oob_ip", &uccl::get_oob_ip, "Get the OOB IP address");
 
   // Register XferHandle type
-  py::class_<XferHandle, std::shared_ptr<XferHandle>>(m, "XferHandle")
-      .def_readonly("conn_id", &XferHandle::conn_id)
-      .def_readonly("op_name", &XferHandle::op_name)
-      .def_readonly("transfer_id", &XferHandle::transfer_id);
+  nb::class_<XferHandle>(m, "XferHandle")
+      .def_ro("conn_id", &XferHandle::conn_id)
+      .def_ro("op_name", &XferHandle::op_name)
+      .def_ro("transfer_id", &XferHandle::transfer_id);
 
   // Register XferDesc type
-  py::class_<XferDesc>(m, "XferDesc")
-      .def(py::init<>())
-      .def_property(
+  nb::class_<XferDesc>(m, "XferDesc")
+      .def(nb::init<>())
+      .def_prop_rw(
           "addr",
           [](XferDesc const& d) { return reinterpret_cast<uint64_t>(d.addr); },
           [](XferDesc& d, uint64_t v) {
             d.addr = reinterpret_cast<void const*>(v);
           })
-      .def_readwrite("size", &XferDesc::size)
-      .def_readwrite("mr_id", &XferDesc::mr_id)
-      .def_readwrite("lkeys", &XferDesc::lkeys)
-      .def_readwrite("rkeys", &XferDesc::rkeys)
+      .def_rw("size", &XferDesc::size)
+      .def_rw("mr_id", &XferDesc::mr_id)
+      .def_rw("lkeys", &XferDesc::lkeys)
+      .def_rw("rkeys", &XferDesc::rkeys)
       .def("__repr__", [](XferDesc const& d) {
         return "<XferDesc addr=" +
                std::to_string(reinterpret_cast<uint64_t>(d.addr)) +
@@ -164,19 +166,23 @@ PYBIND11_MODULE(p2p, m) {
       });
 
   // Endpoint class binding
-  py::class_<Endpoint>(m, "Endpoint")
-      .def(py::init([](uint32_t local_gpu_idx, uint32_t num_cpus) {
-             py::gil_scoped_release release;
-             InsidePythonGuard guard;
-             return std::make_unique<Endpoint>(local_gpu_idx, num_cpus);
-           }),
-           py::arg("local_gpu_idx"), py::arg("num_cpus"))
-      .def(py::init([](uint32_t num_cpus) {
-             py::gil_scoped_release release;
-             InsidePythonGuard guard;
-             return std::make_unique<Endpoint>(num_cpus);
-           }),
-           py::arg("num_cpus"))
+  nb::class_<Endpoint>(m, "Endpoint")
+      .def(
+          "__init__",
+          [](Endpoint* self, uint32_t local_gpu_idx, uint32_t num_cpus) {
+            nb::gil_scoped_release release;
+            InsidePythonGuard guard;
+            new (self) Endpoint(local_gpu_idx, num_cpus);
+          },
+          nb::arg("local_gpu_idx"), nb::arg("num_cpus"))
+      .def(
+          "__init__",
+          [](Endpoint* self, uint32_t num_cpus) {
+            nb::gil_scoped_release release;
+            InsidePythonGuard guard;
+            new (self) Endpoint(num_cpus);
+          },
+          nb::arg("num_cpus"))
       .def(
           "start_passive_accept",
           [](Endpoint& self) { return self.start_passive_accept(); },
@@ -188,49 +194,49 @@ PYBIND11_MODULE(p2p, m) {
             uint64_t conn_id;
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.connect(remote_ip_addr, remote_gpu_idx,
                                      remote_port, conn_id);
             }
-            return py::make_tuple(success, conn_id);
+            return nb::make_tuple(success, conn_id);
           },
-          "Connect to a remote server", py::arg("remote_ip_addr"),
-          py::arg("remote_gpu_idx"), py::arg("remote_port") = -1)
+          "Connect to a remote server", nb::arg("remote_ip_addr"),
+          nb::arg("remote_gpu_idx"), nb::arg("remote_port") = -1)
       .def(
           "add_remote_endpoint",
-          [](Endpoint& self, py::bytes metadata_bytes) {
+          [](Endpoint& self, nb::bytes metadata_bytes) {
             uint64_t conn_id;
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
-              std::string buf = metadata_bytes;
+              std::string buf(metadata_bytes.c_str(), metadata_bytes.size());
               std::vector<uint8_t> metadata(buf.begin(), buf.end());
               success = self.add_remote_endpoint(metadata, conn_id);
             }
-            return py::make_tuple(success, conn_id);
+            return nb::make_tuple(success, conn_id);
           },
           "Add remote endpoint - connect only once per remote endpoint.",
-          py::arg("metadata_bytes"))
+          nb::arg("metadata_bytes"))
       .def(
           "get_metadata",
           [](Endpoint& self) {
             std::vector<uint8_t> metadata = self.get_metadata();
-            return py::bytes(reinterpret_cast<char const*>(metadata.data()),
+            return nb::bytes(reinterpret_cast<char const*>(metadata.data()),
                              metadata.size());
           },
           "Return endpoint metadata as a list of bytes")
       .def_static(
           "parse_metadata",
-          [](py::bytes metadata_bytes) {
-            std::string buf = metadata_bytes;
+          [](nb::bytes metadata_bytes) {
+            std::string buf(metadata_bytes.c_str(), metadata_bytes.size());
             std::vector<uint8_t> metadata(buf.begin(), buf.end());
             auto [ip, port, gpu_idx] = Endpoint::parse_metadata(metadata);
-            return py::make_tuple(ip, port, gpu_idx);
+            return nb::make_tuple(ip, port, gpu_idx);
           },
           "Parse endpoint metadata to extract IP address, port, and GPU index",
-          py::arg("metadata"))
+          nb::arg("metadata"))
       .def(
           "accept",
           [](Endpoint& self) {
@@ -239,11 +245,11 @@ PYBIND11_MODULE(p2p, m) {
             int remote_gpu_idx;
             uint64_t conn_id;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.accept(remote_ip_addr, remote_gpu_idx, conn_id);
             }
-            return py::make_tuple(success, remote_ip_addr, remote_gpu_idx,
+            return nb::make_tuple(success, remote_ip_addr, remote_gpu_idx,
                                   conn_id);
           },
           "Accept an incoming connection")
@@ -253,14 +259,14 @@ PYBIND11_MODULE(p2p, m) {
             uint64_t mr_id;
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success =
                   self.reg(reinterpret_cast<void const*>(ptr), size, mr_id);
             }
-            return py::make_tuple(success, mr_id);
+            return nb::make_tuple(success, mr_id);
           },
-          "Register a data buffer", py::arg("ptr"), py::arg("size"))
+          "Register a data buffer", nb::arg("ptr"), nb::arg("size"))
       .def(
           "regv",
           [](Endpoint& self, std::vector<uintptr_t> const& ptrs,
@@ -276,26 +282,26 @@ PYBIND11_MODULE(p2p, m) {
             std::vector<uint64_t> mr_ids;
             bool ok;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               ok = self.regv(data_v, sizes, mr_ids);
             }
-            return py::make_tuple(ok, py::cast(mr_ids));
+            return nb::make_tuple(ok, nb::cast(mr_ids));
           },
-          py::arg("ptrs"), py::arg("sizes"),
+          nb::arg("ptrs"), nb::arg("sizes"),
           "Batch-register multiple memory regions and return [ok, mr_id_list]")
       .def(
           "register_memory",
-          [](Endpoint& self, py::list tensor_list) {
+          [](Endpoint& self, nb::list tensor_list) {
             std::vector<void const*> ptrs;
             std::vector<size_t> sizes;
-            size_t list_len = py::len(tensor_list);
+            size_t list_len = nb::len(tensor_list);
             ptrs.reserve(list_len);
             sizes.reserve(list_len);
 
             for (size_t i = 0; i < list_len; ++i) {
-              py::object tensor_obj = tensor_list[i];
-              if (!py::hasattr(tensor_obj, "data_ptr")) {
+              nb::object tensor_obj = tensor_list[i];
+              if (!nb::hasattr(tensor_obj, "data_ptr")) {
                 throw std::runtime_error(
                     "Object at index " + std::to_string(i) +
                     " is not a tensor (missing data_ptr() method)");
@@ -307,7 +313,7 @@ PYBIND11_MODULE(p2p, m) {
 
             std::vector<XferDesc> xfer_desc_v;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
 
               std::vector<uint64_t> mr_id_v;
@@ -354,38 +360,38 @@ PYBIND11_MODULE(p2p, m) {
           },
           "Register memory for a list of PyTorch tensors and return transfer "
           "descriptors",
-          py::arg("tensor_list"))
+          nb::arg("tensor_list"))
       .def(
           "get_serialized_descs",
-          [](Endpoint& /*self*/, py::list desc_list) {
+          [](Endpoint& /*self*/, nb::list desc_list) {
             std::vector<XferDesc> xfer_desc_v;
-            size_t list_len = py::len(desc_list);
+            size_t list_len = nb::len(desc_list);
             xfer_desc_v.reserve(list_len);
             for (size_t i = 0; i < list_len; ++i) {
-              xfer_desc_v.push_back(py::cast<XferDesc const&>(desc_list[i]));
+              xfer_desc_v.push_back(nb::cast<XferDesc const&>(desc_list[i]));
             }
 
             auto serialized = serialize_xfer_descs(xfer_desc_v);
-            return py::bytes(reinterpret_cast<const char*>(serialized.data()),
+            return nb::bytes(reinterpret_cast<const char*>(serialized.data()),
                              serialized.size());
           },
           "Serialize transfer descriptors to bytes for network transmission",
-          py::arg("desc_list"))
+          nb::arg("desc_list"))
       .def(
           "deserialize_descs",
-          [](Endpoint& /*self*/, py::bytes serialized_bytes) {
-            std::string buf = serialized_bytes;
+          [](Endpoint& /*self*/, nb::bytes serialized_bytes) {
+            std::string buf(serialized_bytes.c_str(), serialized_bytes.size());
             std::vector<uint8_t> serialized_data(buf.begin(), buf.end());
             return deserialize_xfer_descs(serialized_data);
           },
           "Deserialize bytes to transfer descriptors",
-          py::arg("serialized_bytes"))
+          nb::arg("serialized_bytes"))
       .def(
           "transfer",
           [](Endpoint& self, uint64_t conn_id, std::string const& op_name,
-             py::list local_desc_list, py::list remote_desc_list) {
-            size_t n = py::len(local_desc_list);
-            if (n != py::len(remote_desc_list)) {
+             nb::list local_desc_list, nb::list remote_desc_list) {
+            size_t n = nb::len(local_desc_list);
+            if (n != nb::len(remote_desc_list)) {
               throw std::runtime_error(
                   "Local and remote descriptors must have the same size");
             }
@@ -407,15 +413,15 @@ PYBIND11_MODULE(p2p, m) {
               // IPC path for intra-node
               if (n == 1) {
                 auto const& ldesc =
-                    py::cast<XferDesc const&>(local_desc_list[0]);
+                    nb::cast<XferDesc const&>(local_desc_list[0]);
                 auto const& rdesc =
-                    py::cast<XferDesc const&>(remote_desc_list[0]);
+                    nb::cast<XferDesc const&>(remote_desc_list[0]);
                 CHECK(!rdesc.ipc_info.empty())
                     << "Remote descriptor has no IPC info for local transfer";
                 IpcTransferInfo info;
                 std::memcpy(&info, rdesc.ipc_info.data(), sizeof(info));
                 {
-                  py::gil_scoped_release release;
+                  nb::gil_scoped_release release;
                   InsidePythonGuard guard;
                   if (is_write) {
                     success = self.write_ipc_async(
@@ -442,9 +448,9 @@ PYBIND11_MODULE(p2p, m) {
 
                 for (size_t i = 0; i < n; ++i) {
                   auto const& ldesc =
-                      py::cast<XferDesc const&>(local_desc_list[i]);
+                      nb::cast<XferDesc const&>(local_desc_list[i]);
                   auto const& rdesc =
-                      py::cast<XferDesc const&>(remote_desc_list[i]);
+                      nb::cast<XferDesc const&>(remote_desc_list[i]);
                   CHECK(!rdesc.ipc_info.empty())
                       << "Remote descriptor has no IPC info for local transfer";
                   IpcTransferInfo info;
@@ -457,7 +463,7 @@ PYBIND11_MODULE(p2p, m) {
                     rdata_v.push_back(const_cast<void*>(ldesc.addr));
                 }
                 {
-                  py::gil_scoped_release release;
+                  nb::gil_scoped_release release;
                   InsidePythonGuard guard;
                   if (is_write) {
                     success = self.writev_ipc_async(conn_id, wdata_v, size_v,
@@ -472,9 +478,9 @@ PYBIND11_MODULE(p2p, m) {
               // RDMA path for inter-node
               if (n == 1) {
                 auto const& ldesc =
-                    py::cast<XferDesc const&>(local_desc_list[0]);
+                    nb::cast<XferDesc const&>(local_desc_list[0]);
                 auto const& rdesc =
-                    py::cast<XferDesc const&>(remote_desc_list[0]);
+                    nb::cast<XferDesc const&>(remote_desc_list[0]);
 
                 FifoItem fifo_item;
                 fifo_item.addr = reinterpret_cast<uint64_t>(rdesc.addr);
@@ -483,7 +489,7 @@ PYBIND11_MODULE(p2p, m) {
                             rdesc.rkeys.size() * sizeof(uint32_t));
 
                 {
-                  py::gil_scoped_release release;
+                  nb::gil_scoped_release release;
                   InsidePythonGuard guard;
                   if (is_write) {
                     success = self.write_async(
@@ -507,9 +513,9 @@ PYBIND11_MODULE(p2p, m) {
 
                 for (size_t i = 0; i < n; ++i) {
                   auto const& ldesc =
-                      py::cast<XferDesc const&>(local_desc_list[i]);
+                      nb::cast<XferDesc const&>(local_desc_list[i]);
                   auto const& rdesc =
-                      py::cast<XferDesc const&>(remote_desc_list[i]);
+                      nb::cast<XferDesc const&>(remote_desc_list[i]);
 
                   FifoItem fifo_item;
                   fifo_item.addr = reinterpret_cast<uint64_t>(rdesc.addr);
@@ -524,7 +530,7 @@ PYBIND11_MODULE(p2p, m) {
                 }
 
                 {
-                  py::gil_scoped_release release;
+                  nb::gil_scoped_release release;
                   InsidePythonGuard guard;
                   if (is_write) {
                     success = self.writev_async(conn_id, mr_id_v, src_v, size_v,
@@ -536,30 +542,30 @@ PYBIND11_MODULE(p2p, m) {
                 }
               }
             }
-            return py::make_tuple(success, transfer_id);
+            return nb::make_tuple(success, transfer_id);
           },
           "Start a transfer and return (success, transfer_id)",
-          py::arg("conn_id"), py::arg("op_name"), py::arg("local_desc_list"),
-          py::arg("remote_desc_list"))
+          nb::arg("conn_id"), nb::arg("op_name"), nb::arg("local_desc_list"),
+          nb::arg("remote_desc_list"))
       .def(
           "dereg",
           [](Endpoint& self, uint64_t mr_id) {
             bool ok;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               ok = self.dereg(mr_id);
             }
             return ok;
           },
-          "Deregister a memory region", py::arg("mr_id"))
+          "Deregister a memory region", nb::arg("mr_id"))
       .def(
           "send",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size) {
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.send(conn_id, mr_id,
                                   reinterpret_cast<void const*>(ptr), size);
@@ -567,22 +573,22 @@ PYBIND11_MODULE(p2p, m) {
             return success;
           },
           "Send a data buffer, optionally using metadata (serialized FifoItem)",
-          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"))
+          nb::arg("conn_id"), nb::arg("mr_id"), nb::arg("ptr"), nb::arg("size"))
       .def(
           "recv",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
              size_t size) {
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success =
                   self.recv(conn_id, mr_id, reinterpret_cast<void*>(ptr), size);
             }
             return success;
           },
-          "Receive a key-value buffer", py::arg("conn_id"), py::arg("mr_id"),
-          py::arg("ptr"), py::arg("size"))
+          "Receive a key-value buffer", nb::arg("conn_id"), nb::arg("mr_id"),
+          nb::arg("ptr"), nb::arg("size"))
       .def(
           "send_async",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
@@ -590,16 +596,16 @@ PYBIND11_MODULE(p2p, m) {
             uint64_t transfer_id;
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.send_async(conn_id, mr_id,
                                         reinterpret_cast<void const*>(ptr),
                                         size, &transfer_id);
             }
-            return py::make_tuple(success, transfer_id);
+            return nb::make_tuple(success, transfer_id);
           },
-          "Send data asynchronously", py::arg("conn_id"), py::arg("mr_id"),
-          py::arg("ptr"), py::arg("size"))
+          "Send data asynchronously", nb::arg("conn_id"), nb::arg("mr_id"),
+          nb::arg("ptr"), nb::arg("size"))
       .def(
           "recv_async",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
@@ -607,16 +613,16 @@ PYBIND11_MODULE(p2p, m) {
             uint64_t transfer_id;
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success =
                   self.recv_async(conn_id, mr_id, reinterpret_cast<void*>(ptr),
                                   size, &transfer_id);
             }
-            return py::make_tuple(success, transfer_id);
+            return nb::make_tuple(success, transfer_id);
           },
-          "Receive data asynchronously", py::arg("conn_id"), py::arg("mr_id"),
-          py::arg("ptr"), py::arg("size"))
+          "Receive data asynchronously", nb::arg("conn_id"), nb::arg("mr_id"),
+          nb::arg("ptr"), nb::arg("size"))
       .def(
           "sendv",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -629,14 +635,14 @@ PYBIND11_MODULE(p2p, m) {
             }
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.sendv(conn_id, mr_id_v, data_v, size_v, num_iovs);
             }
             return success;
           },
-          "Send multiple data buffers", py::arg("conn_id"), py::arg("mr_id_v"),
-          py::arg("data_ptr_v"), py::arg("size_v"), py::arg("num_iovs"))
+          "Send multiple data buffers", nb::arg("conn_id"), nb::arg("mr_id_v"),
+          nb::arg("data_ptr_v"), nb::arg("size_v"), nb::arg("num_iovs"))
       .def(
           "recvv",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -649,15 +655,15 @@ PYBIND11_MODULE(p2p, m) {
             }
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.recvv(conn_id, mr_id_v, data_v, size_v, num_iovs);
             }
             return success;
           },
-          "Receive multiple data buffers asynchronously", py::arg("conn_id"),
-          py::arg("mr_id_v"), py::arg("data_ptr_v"), py::arg("size_v"),
-          py::arg("num_iovs"))
+          "Receive multiple data buffers asynchronously", nb::arg("conn_id"),
+          nb::arg("mr_id_v"), nb::arg("data_ptr_v"), nb::arg("size_v"),
+          nb::arg("num_iovs"))
       .def(
           "sendv_async",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -671,11 +677,11 @@ PYBIND11_MODULE(p2p, m) {
             uint64_t transfer_id;
             bool success = self.sendv_async(conn_id, mr_id_v, data_v, size_v,
                                             num_iovs, &transfer_id);
-            return py::make_tuple(success, transfer_id);
+            return nb::make_tuple(success, transfer_id);
           },
-          "Send multiple data buffers asynchronously", py::arg("conn_id"),
-          py::arg("mr_id_v"), py::arg("data_ptr_v"), py::arg("size_v"),
-          py::arg("num_iovs"))
+          "Send multiple data buffers asynchronously", nb::arg("conn_id"),
+          nb::arg("mr_id_v"), nb::arg("data_ptr_v"), nb::arg("size_v"),
+          nb::arg("num_iovs"))
       .def(
           "recvv_async",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -690,16 +696,16 @@ PYBIND11_MODULE(p2p, m) {
             bool success = self.recvv_async(conn_id, mr_id_v, data_v, size_v,
                                             num_iovs, &transfer_id);
 
-            return py::make_tuple(success, transfer_id);
+            return nb::make_tuple(success, transfer_id);
           },
-          "Receive multiple data buffers asynchronously", py::arg("conn_id"),
-          py::arg("mr_id_v"), py::arg("data_ptr_v"), py::arg("size_v"),
-          py::arg("num_iovs"))
+          "Receive multiple data buffers asynchronously", nb::arg("conn_id"),
+          nb::arg("mr_id_v"), nb::arg("data_ptr_v"), nb::arg("size_v"),
+          nb::arg("num_iovs"))
       .def(
           "read",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size, py::bytes meta_blob) {
-            std::string buf = meta_blob;
+             size_t size, nb::bytes meta_blob) {
+            std::string buf(meta_blob.c_str(), meta_blob.size());
             if (buf.size() != sizeof(FifoItem))
               throw std::runtime_error(
                   "meta must be exactly 64 bytes (serialized FifoItem)");
@@ -708,7 +714,7 @@ PYBIND11_MODULE(p2p, m) {
             deserialize_fifo_item(buf.data(), &item);
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.read(conn_id, mr_id, reinterpret_cast<void*>(ptr),
                                   size, item);
@@ -717,13 +723,13 @@ PYBIND11_MODULE(p2p, m) {
           },
           "RDMA-READ into a local buffer using metadata from advertise(); "
           "`meta` is the 64-byte serialized FifoItem returned by the peer",
-          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
-          py::arg("meta"))
+          nb::arg("conn_id"), nb::arg("mr_id"), nb::arg("ptr"), nb::arg("size"),
+          nb::arg("meta"))
       .def(
           "read_async",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size, py::bytes meta_blob) {
-            std::string buf = meta_blob;
+             size_t size, nb::bytes meta_blob) {
+            std::string buf(meta_blob.c_str(), meta_blob.size());
             if (buf.size() != sizeof(FifoItem))
               throw std::runtime_error(
                   "meta must be exactly 64 bytes (serialized FifoItem)");
@@ -733,32 +739,33 @@ PYBIND11_MODULE(p2p, m) {
             uint64_t transfer_id;
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success =
                   self.read_async(conn_id, mr_id, reinterpret_cast<void*>(ptr),
                                   size, item, &transfer_id);
             }
-            return py::make_tuple(success, transfer_id);
+            return nb::make_tuple(success, transfer_id);
           },
           "RDMA-READ into a local buffer using metadata from advertise(); "
           "`meta` is the 64-byte serialized FifoItem returned by the peer",
-          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
-          py::arg("meta"))
+          nb::arg("conn_id"), nb::arg("mr_id"), nb::arg("ptr"), nb::arg("size"),
+          nb::arg("meta"))
       .def(
           "readv",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<uint64_t> ptr_v, std::vector<size_t> size_v,
-             py::list meta_blob_v, size_t num_iovs) {
+             nb::list meta_blob_v, size_t num_iovs) {
             if (mr_id_v.size() != num_iovs || ptr_v.size() != num_iovs ||
-                size_v.size() != num_iovs || py::len(meta_blob_v) != num_iovs) {
+                size_v.size() != num_iovs || nb::len(meta_blob_v) != num_iovs) {
               throw std::runtime_error(
                   "All input vectors/lists must have length num_iovs");
             }
             std::vector<FifoItem> item_v;
             item_v.reserve(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
-              std::string buf = py::cast<py::bytes>(meta_blob_v[i]);
+              nb::bytes _b = nb::cast<nb::bytes>(meta_blob_v[i]);
+              std::string buf(_b.c_str(), _b.size());
               if (buf.size() != sizeof(FifoItem))
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
@@ -773,7 +780,7 @@ PYBIND11_MODULE(p2p, m) {
             }
             bool ok;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               ok = self.readv(conn_id, mr_id_v, data_v, size_v, item_v,
                               num_iovs);
@@ -784,22 +791,23 @@ PYBIND11_MODULE(p2p, m) {
           "advertisev(); "
           "`meta_blob_v` is a list of 64-byte serialized FifoItem returned by "
           "the peer",
-          py::arg("conn_id"), py::arg("mr_id_v"), py::arg("ptr_v"),
-          py::arg("size_v"), py::arg("meta_blob_v"), py::arg("num_iovs"))
+          nb::arg("conn_id"), nb::arg("mr_id_v"), nb::arg("ptr_v"),
+          nb::arg("size_v"), nb::arg("meta_blob_v"), nb::arg("num_iovs"))
       .def(
           "readv_async",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<uint64_t> ptr_v, std::vector<size_t> size_v,
-             py::list meta_blob_v, size_t num_iovs) {
+             nb::list meta_blob_v, size_t num_iovs) {
             if (mr_id_v.size() != num_iovs || ptr_v.size() != num_iovs ||
-                size_v.size() != num_iovs || py::len(meta_blob_v) != num_iovs) {
+                size_v.size() != num_iovs || nb::len(meta_blob_v) != num_iovs) {
               throw std::runtime_error(
                   "All input vectors/lists must have length num_iovs");
             }
             std::vector<FifoItem> item_v;
             item_v.reserve(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
-              std::string buf = py::cast<py::bytes>(meta_blob_v[i]);
+              nb::bytes _b = nb::cast<nb::bytes>(meta_blob_v[i]);
+              std::string buf(_b.c_str(), _b.size());
               if (buf.size() != sizeof(FifoItem))
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
@@ -815,24 +823,24 @@ PYBIND11_MODULE(p2p, m) {
             uint64_t transfer_id;
             bool ok;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               ok = self.readv_async(conn_id, mr_id_v, data_v, size_v, item_v,
                                     num_iovs, &transfer_id);
             }
-            return py::make_tuple(ok, transfer_id);
+            return nb::make_tuple(ok, transfer_id);
           },
           "RDMA-READ into multiple local buffers asynchronously using metadata "
           "from advertisev(); "
           "`meta_blob_v` is a list of 64-byte serialized FifoItem returned by "
           "the peer",
-          py::arg("conn_id"), py::arg("mr_id_v"), py::arg("ptr_v"),
-          py::arg("size_v"), py::arg("meta_blob_v"), py::arg("num_iovs"))
+          nb::arg("conn_id"), nb::arg("mr_id_v"), nb::arg("ptr_v"),
+          nb::arg("size_v"), nb::arg("meta_blob_v"), nb::arg("num_iovs"))
       .def(
           "write",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size, py::bytes meta_blob) {
-            std::string buf = meta_blob;
+             size_t size, nb::bytes meta_blob) {
+            std::string buf(meta_blob.c_str(), meta_blob.size());
             if (buf.size() != sizeof(FifoItem))
               throw std::runtime_error(
                   "meta must be exactly 64 bytes (serialized FifoItem)");
@@ -841,7 +849,7 @@ PYBIND11_MODULE(p2p, m) {
             deserialize_fifo_item(buf.data(), &item);
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.write(conn_id, mr_id, reinterpret_cast<void*>(ptr),
                                    size, item);
@@ -850,13 +858,13 @@ PYBIND11_MODULE(p2p, m) {
           },
           "RDMA-WRITE into a remote buffer using metadata from advertise(); "
           "`meta` is the 64-byte serialized FifoItem returned by the peer",
-          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
-          py::arg("meta"))
+          nb::arg("conn_id"), nb::arg("mr_id"), nb::arg("ptr"), nb::arg("size"),
+          nb::arg("meta"))
       .def(
           "write_async",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id, uint64_t ptr,
-             size_t size, py::bytes meta_blob) {
-            std::string buf = meta_blob;
+             size_t size, nb::bytes meta_blob) {
+            std::string buf(meta_blob.c_str(), meta_blob.size());
             if (buf.size() != sizeof(FifoItem))
               throw std::runtime_error(
                   "meta must be exactly 64 bytes (serialized FifoItem)");
@@ -866,32 +874,33 @@ PYBIND11_MODULE(p2p, m) {
             uint64_t transfer_id;
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success =
                   self.write_async(conn_id, mr_id, reinterpret_cast<void*>(ptr),
                                    size, item, &transfer_id);
             }
-            return py::make_tuple(success, transfer_id);
+            return nb::make_tuple(success, transfer_id);
           },
           "RDMA-WRITE into a remote buffer using metadata from advertise(); "
           "`meta` is the 64-byte serialized FifoItem returned by the peer",
-          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"),
-          py::arg("meta"))
+          nb::arg("conn_id"), nb::arg("mr_id"), nb::arg("ptr"), nb::arg("size"),
+          nb::arg("meta"))
       .def(
           "writev",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<uint64_t> ptr_v, std::vector<size_t> size_v,
-             py::list meta_blob_v, size_t num_iovs) {
+             nb::list meta_blob_v, size_t num_iovs) {
             if (mr_id_v.size() != num_iovs || ptr_v.size() != num_iovs ||
-                size_v.size() != num_iovs || py::len(meta_blob_v) != num_iovs) {
+                size_v.size() != num_iovs || nb::len(meta_blob_v) != num_iovs) {
               throw std::runtime_error(
                   "All input vectors/lists must have length num_iovs");
             }
             std::vector<FifoItem> item_v;
             item_v.reserve(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
-              std::string buf = py::cast<py::bytes>(meta_blob_v[i]);
+              nb::bytes _b = nb::cast<nb::bytes>(meta_blob_v[i]);
+              std::string buf(_b.c_str(), _b.size());
               if (buf.size() != sizeof(FifoItem))
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
@@ -906,7 +915,7 @@ PYBIND11_MODULE(p2p, m) {
             }
             bool ok;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               ok = self.writev(conn_id, mr_id_v, data_v, size_v, item_v,
                                num_iovs);
@@ -917,22 +926,23 @@ PYBIND11_MODULE(p2p, m) {
           "advertisev(); "
           "`meta_blob_v` is a list of 64-byte serialized FifoItem returned by "
           "the peer",
-          py::arg("conn_id"), py::arg("mr_id_v"), py::arg("ptr_v"),
-          py::arg("size_v"), py::arg("meta_blob_v"), py::arg("num_iovs"))
+          nb::arg("conn_id"), nb::arg("mr_id_v"), nb::arg("ptr_v"),
+          nb::arg("size_v"), nb::arg("meta_blob_v"), nb::arg("num_iovs"))
       .def(
           "writev_async",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
              std::vector<uint64_t> ptr_v, std::vector<size_t> size_v,
-             py::list meta_blob_v, size_t num_iovs) {
+             nb::list meta_blob_v, size_t num_iovs) {
             if (mr_id_v.size() != num_iovs || ptr_v.size() != num_iovs ||
-                size_v.size() != num_iovs || py::len(meta_blob_v) != num_iovs) {
+                size_v.size() != num_iovs || nb::len(meta_blob_v) != num_iovs) {
               throw std::runtime_error(
                   "All input vectors/lists must have length num_iovs");
             }
             std::vector<FifoItem> item_v;
             item_v.reserve(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
-              std::string buf = py::cast<py::bytes>(meta_blob_v[i]);
+              nb::bytes _b = nb::cast<nb::bytes>(meta_blob_v[i]);
+              std::string buf(_b.c_str(), _b.size());
               if (buf.size() != sizeof(FifoItem))
                 throw std::runtime_error(
                     "meta must be exactly 64 bytes (serialized FifoItem)");
@@ -948,19 +958,19 @@ PYBIND11_MODULE(p2p, m) {
             uint64_t transfer_id;
             bool ok;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               ok = self.writev_async(conn_id, mr_id_v, data_v, size_v, item_v,
                                      num_iovs, &transfer_id);
             }
-            return py::make_tuple(ok, transfer_id);
+            return nb::make_tuple(ok, transfer_id);
           },
           "RDMA-WRITE into multiple remote buffers asynchronously using "
           "metadata from advertisev(); "
           "`meta_blob_v` is a list of 64-byte serialized FifoItem returned by "
           "the peer",
-          py::arg("conn_id"), py::arg("mr_id_v"), py::arg("ptr_v"),
-          py::arg("size_v"), py::arg("meta_blob_v"), py::arg("num_iovs"))
+          nb::arg("conn_id"), nb::arg("mr_id_v"), nb::arg("ptr_v"),
+          nb::arg("size_v"), nb::arg("meta_blob_v"), nb::arg("num_iovs"))
       .def(
           "advertise",
           [](Endpoint& self, uint64_t conn_id, uint64_t mr_id,
@@ -969,17 +979,18 @@ PYBIND11_MODULE(p2p, m) {
             char serialized[sizeof(FifoItem)]{};  // 64-byte scratch buffer
             bool ok;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               ok = self.advertise(conn_id, mr_id, reinterpret_cast<void*>(ptr),
                                   size, serialized);
             }
             /* return (success, bytes) — empty bytes when failed */
-            return py::make_tuple(
-                ok, ok ? py::bytes(serialized, sizeof(FifoItem)) : py::bytes());
+            return nb::make_tuple(ok,
+                                  ok ? nb::bytes(serialized, sizeof(FifoItem))
+                                     : nb::bytes("", 0));
           },
           "Expose a registered buffer for the peer to RDMA-READ or RDMA-WRITE",
-          py::arg("conn_id"), py::arg("mr_id"), py::arg("ptr"), py::arg("size"))
+          nb::arg("conn_id"), nb::arg("mr_id"), nb::arg("ptr"), nb::arg("size"))
       .def(
           "advertisev",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> mr_id_v,
@@ -997,26 +1008,26 @@ PYBIND11_MODULE(p2p, m) {
             }
             bool ok;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               ok = self.advertisev(conn_id, mr_id_v, data_v, size_v,
                                    serialized_vec, num_iovs);
             }
 
-            py::list py_bytes_list;
+            nb::list py_bytes_list;
             for (size_t i = 0; i < num_iovs; ++i) {
               py_bytes_list.append(
-                  py::bytes(serialized_vec[i], sizeof(FifoItem)));
+                  nb::bytes(serialized_vec[i], sizeof(FifoItem)));
             }
             for (size_t i = 0; i < num_iovs; ++i) {
               delete[] serialized_vec[i];
             }
-            return py::make_tuple(ok, py_bytes_list);
+            return nb::make_tuple(ok, py_bytes_list);
           },
           "Expose multiple registered buffers for the peer to RDMA-READ or "
           "RDMA-WRITE",
-          py::arg("conn_id"), py::arg("mr_id_v"), py::arg("ptr_v"),
-          py::arg("size_v"), py::arg("num_iovs"))
+          nb::arg("conn_id"), nb::arg("mr_id_v"), nb::arg("ptr_v"),
+          nb::arg("size_v"), nb::arg("num_iovs"))
       // IPC-specific functions for local connections via Unix Domain Sockets
       .def(
           "connect_local",
@@ -1024,14 +1035,14 @@ PYBIND11_MODULE(p2p, m) {
             uint64_t conn_id;
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.connect_local(remote_gpu_idx, conn_id);
             }
-            return py::make_tuple(success, conn_id);
+            return nb::make_tuple(success, conn_id);
           },
           "Connect to a local process via Unix Domain Socket",
-          py::arg("remote_gpu_idx"))
+          nb::arg("remote_gpu_idx"))
       .def(
           "accept_local",
           [](Endpoint& self) {
@@ -1039,11 +1050,11 @@ PYBIND11_MODULE(p2p, m) {
             uint64_t conn_id;
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.accept_local(remote_gpu_idx, conn_id);
             }
-            return py::make_tuple(success, remote_gpu_idx, conn_id);
+            return nb::make_tuple(success, remote_gpu_idx, conn_id);
           },
           "Accept an incoming local connection via Unix Domain Socket")
       .def(
@@ -1051,7 +1062,7 @@ PYBIND11_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success =
                   self.send_ipc(conn_id, reinterpret_cast<void*>(ptr), size);
@@ -1060,13 +1071,13 @@ PYBIND11_MODULE(p2p, m) {
           },
           "Send data via IPC (Inter-Process Communication) using CUDA/HIP "
           "memory handles",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"))
       .def(
           "recv_ipc",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success =
                   self.recv_ipc(conn_id, reinterpret_cast<void*>(ptr), size);
@@ -1075,50 +1086,50 @@ PYBIND11_MODULE(p2p, m) {
           },
           "Receive data via IPC (Inter-Process Communication) using CUDA/HIP "
           "memory handles",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"))
       .def(
           "send_ipc_async",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
             uint64_t transfer_id;
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.send_ipc_async(conn_id,
                                             reinterpret_cast<void const*>(ptr),
                                             size, &transfer_id);
             }
-            return py::make_tuple(success, transfer_id);
+            return nb::make_tuple(success, transfer_id);
           },
           "Send data asynchronously via IPC using CUDA/HIP memory handles",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"))
       .def(
           "recv_ipc_async",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
             uint64_t transfer_id;
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.recv_ipc_async(
                   conn_id, reinterpret_cast<void*>(ptr), size, &transfer_id);
             }
-            return py::make_tuple(success, transfer_id);
+            return nb::make_tuple(success, transfer_id);
           },
           "Receive data asynchronously via IPC using CUDA/HIP memory handles",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"))
       .def(
           "write_ipc",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
-             py::bytes info_blob) {
-            std::string buf = info_blob;
+             nb::bytes info_blob) {
+            std::string buf(info_blob.c_str(), info_blob.size());
             CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                 << "IpcTransferInfo size mismatch";
             IpcTransferInfo info;
             std::memcpy(&info, buf.data(), sizeof(info));
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.write_ipc(
                   conn_id, reinterpret_cast<void const*>(ptr), size, info);
@@ -1126,19 +1137,19 @@ PYBIND11_MODULE(p2p, m) {
             return success;
           },
           "Write data via one-sided IPC using IpcTransferInfo",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"), py::arg("info"))
+          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"), nb::arg("info"))
       .def(
           "read_ipc",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
-             py::bytes info_blob) {
-            std::string buf = info_blob;
+             nb::bytes info_blob) {
+            std::string buf(info_blob.c_str(), info_blob.size());
             CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                 << "IpcTransferInfo size mismatch";
             IpcTransferInfo info;
             std::memcpy(&info, buf.data(), sizeof(info));
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.read_ipc(conn_id, reinterpret_cast<void*>(ptr),
                                       size, info);
@@ -1146,12 +1157,12 @@ PYBIND11_MODULE(p2p, m) {
             return success;
           },
           "Read data via one-sided IPC using IpcTransferInfo",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"), py::arg("info"))
+          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"), nb::arg("info"))
       .def(
           "write_ipc_async",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
-             py::bytes info_blob) {
-            std::string buf = info_blob;
+             nb::bytes info_blob) {
+            std::string buf(info_blob.c_str(), info_blob.size());
             CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                 << "IpcTransferInfo size mismatch";
             IpcTransferInfo info;
@@ -1159,21 +1170,21 @@ PYBIND11_MODULE(p2p, m) {
             uint64_t transfer_id;
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.write_ipc_async(conn_id,
                                              reinterpret_cast<void const*>(ptr),
                                              size, info, &transfer_id);
             }
-            return py::make_tuple(success, transfer_id);
+            return nb::make_tuple(success, transfer_id);
           },
           "Write data asynchronously via one-sided IPC using IpcTransferInfo",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"), py::arg("info"))
+          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"), nb::arg("info"))
       .def(
           "read_ipc_async",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
-             py::bytes info_blob) {
-            std::string buf = info_blob;
+             nb::bytes info_blob) {
+            std::string buf(info_blob.c_str(), info_blob.size());
             CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                 << "IpcTransferInfo size mismatch";
             IpcTransferInfo info;
@@ -1181,36 +1192,38 @@ PYBIND11_MODULE(p2p, m) {
             uint64_t transfer_id;
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success =
                   self.read_ipc_async(conn_id, reinterpret_cast<void*>(ptr),
                                       size, info, &transfer_id);
             }
-            return py::make_tuple(success, transfer_id);
+            return nb::make_tuple(success, transfer_id);
           },
           "Read data asynchronously via one-sided IPC using IpcTransferInfo",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"), py::arg("info"))
+          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"), nb::arg("info"))
       .def(
           "writev_ipc",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> ptr_v,
-             std::vector<size_t> size_v, std::vector<py::bytes> info_v) {
+             std::vector<size_t> size_v, nb::list info_v) {
             size_t num_iovs = ptr_v.size();
             CHECK_EQ(size_v.size(), num_iovs) << "writev_ipc: size_v mismatch";
-            CHECK_EQ(info_v.size(), num_iovs) << "writev_ipc: info_v mismatch";
+            CHECK_EQ(nb::len(info_v), num_iovs)
+                << "writev_ipc: info_v mismatch";
 
             std::vector<void const*> data_ptrs(num_iovs);
             std::vector<IpcTransferInfo> infos(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
               data_ptrs[i] = reinterpret_cast<void const*>(ptr_v[i]);
-              std::string buf = info_v[i];
+              nb::bytes b = nb::cast<nb::bytes>(info_v[i]);
+              std::string buf(b.c_str(), b.size());
               CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                   << "IpcTransferInfo size mismatch at index " << i;
               std::memcpy(&infos[i], buf.data(), sizeof(infos[i]));
             }
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success =
                   self.writev_ipc(conn_id, data_ptrs, size_v, infos, num_iovs);
@@ -1218,28 +1231,29 @@ PYBIND11_MODULE(p2p, m) {
             return success;
           },
           "Write multiple buffers via one-sided IPC using IpcTransferInfo",
-          py::arg("conn_id"), py::arg("ptr_v"), py::arg("size_v"),
-          py::arg("info_v"))
+          nb::arg("conn_id"), nb::arg("ptr_v"), nb::arg("size_v"),
+          nb::arg("info_v"))
       .def(
           "readv_ipc",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> ptr_v,
-             std::vector<size_t> size_v, std::vector<py::bytes> info_v) {
+             std::vector<size_t> size_v, nb::list info_v) {
             size_t num_iovs = ptr_v.size();
             CHECK_EQ(size_v.size(), num_iovs) << "readv_ipc: size_v mismatch";
-            CHECK_EQ(info_v.size(), num_iovs) << "readv_ipc: info_v mismatch";
+            CHECK_EQ(nb::len(info_v), num_iovs) << "readv_ipc: info_v mismatch";
 
             std::vector<void*> data_ptrs(num_iovs);
             std::vector<IpcTransferInfo> infos(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
               data_ptrs[i] = reinterpret_cast<void*>(ptr_v[i]);
-              std::string buf = info_v[i];
+              nb::bytes b = nb::cast<nb::bytes>(info_v[i]);
+              std::string buf(b.c_str(), b.size());
               CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                   << "IpcTransferInfo size mismatch at index " << i;
               std::memcpy(&infos[i], buf.data(), sizeof(infos[i]));
             }
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success =
                   self.readv_ipc(conn_id, data_ptrs, size_v, infos, num_iovs);
@@ -1247,23 +1261,24 @@ PYBIND11_MODULE(p2p, m) {
             return success;
           },
           "Read multiple buffers via one-sided IPC using IpcTransferInfo",
-          py::arg("conn_id"), py::arg("ptr_v"), py::arg("size_v"),
-          py::arg("info_v"))
+          nb::arg("conn_id"), nb::arg("ptr_v"), nb::arg("size_v"),
+          nb::arg("info_v"))
       .def(
           "writev_ipc_async",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> ptr_v,
-             std::vector<size_t> size_v, std::vector<py::bytes> info_v) {
+             std::vector<size_t> size_v, nb::list info_v) {
             size_t num_iovs = ptr_v.size();
             CHECK_EQ(size_v.size(), num_iovs)
                 << "writev_ipc_async: size_v mismatch";
-            CHECK_EQ(info_v.size(), num_iovs)
+            CHECK_EQ(nb::len(info_v), num_iovs)
                 << "writev_ipc_async: info_v mismatch";
 
             std::vector<void const*> data_ptrs(num_iovs);
             std::vector<IpcTransferInfo> infos(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
               data_ptrs[i] = reinterpret_cast<void const*>(ptr_v[i]);
-              std::string buf = info_v[i];
+              nb::bytes b = nb::cast<nb::bytes>(info_v[i]);
+              std::string buf(b.c_str(), b.size());
               CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                   << "IpcTransferInfo size mismatch at index " << i;
               std::memcpy(&infos[i], buf.data(), sizeof(infos[i]));
@@ -1271,31 +1286,32 @@ PYBIND11_MODULE(p2p, m) {
             uint64_t transfer_id;
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.writev_ipc_async(conn_id, data_ptrs, size_v, infos,
                                               num_iovs, &transfer_id);
             }
-            return py::make_tuple(success, transfer_id);
+            return nb::make_tuple(success, transfer_id);
           },
           "Write multiple buffers asynchronously via one-sided IPC",
-          py::arg("conn_id"), py::arg("ptr_v"), py::arg("size_v"),
-          py::arg("info_v"))
+          nb::arg("conn_id"), nb::arg("ptr_v"), nb::arg("size_v"),
+          nb::arg("info_v"))
       .def(
           "readv_ipc_async",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> ptr_v,
-             std::vector<size_t> size_v, std::vector<py::bytes> info_v) {
+             std::vector<size_t> size_v, nb::list info_v) {
             size_t num_iovs = ptr_v.size();
             CHECK_EQ(size_v.size(), num_iovs)
                 << "readv_ipc_async: size_v mismatch";
-            CHECK_EQ(info_v.size(), num_iovs)
+            CHECK_EQ(nb::len(info_v), num_iovs)
                 << "readv_ipc_async: info_v mismatch";
 
             std::vector<void*> data_ptrs(num_iovs);
             std::vector<IpcTransferInfo> infos(num_iovs);
             for (size_t i = 0; i < num_iovs; ++i) {
               data_ptrs[i] = reinterpret_cast<void*>(ptr_v[i]);
-              std::string buf = info_v[i];
+              nb::bytes b = nb::cast<nb::bytes>(info_v[i]);
+              std::string buf(b.c_str(), b.size());
               CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                   << "IpcTransferInfo size mismatch at index " << i;
               std::memcpy(&infos[i], buf.data(), sizeof(infos[i]));
@@ -1303,32 +1319,32 @@ PYBIND11_MODULE(p2p, m) {
             uint64_t transfer_id;
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.readv_ipc_async(conn_id, data_ptrs, size_v, infos,
                                              num_iovs, &transfer_id);
             }
-            return py::make_tuple(success, transfer_id);
+            return nb::make_tuple(success, transfer_id);
           },
           "Read multiple buffers asynchronously via one-sided IPC",
-          py::arg("conn_id"), py::arg("ptr_v"), py::arg("size_v"),
-          py::arg("info_v"))
+          nb::arg("conn_id"), nb::arg("ptr_v"), nb::arg("size_v"),
+          nb::arg("info_v"))
       .def(
           "advertise_ipc",
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size) {
             char serialized[sizeof(IpcTransferInfo)]{};
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.advertise_ipc(
                   conn_id, reinterpret_cast<void*>(ptr), size, serialized);
             }
-            return py::make_tuple(success,
-                                  py::bytes(serialized, sizeof(serialized)));
+            return nb::make_tuple(success,
+                                  nb::bytes(serialized, sizeof(serialized)));
           },
           "Advertise memory for IPC access and return IpcTransferInfo",
-          py::arg("conn_id"), py::arg("ptr"), py::arg("size"))
+          nb::arg("conn_id"), nb::arg("ptr"), nb::arg("size"))
       .def(
           "advertisev_ipc",
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> ptr_v,
@@ -1348,38 +1364,38 @@ PYBIND11_MODULE(p2p, m) {
 
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
               success = self.advertisev_ipc(conn_id, addr_v, size_v, out_buf_v,
                                             num_iovs);
             }
 
-            std::vector<py::bytes> result_v;
+            nb::list result_v;
             for (size_t i = 0; i < num_iovs; ++i) {
-              result_v.push_back(py::bytes(buffers[i]));
+              result_v.append(nb::bytes(buffers[i].data(), buffers[i].size()));
             }
 
-            return py::make_tuple(success, result_v);
+            return nb::make_tuple(success, result_v);
           },
           "Advertise multiple memory regions for IPC access",
-          py::arg("conn_id"), py::arg("ptr_v"), py::arg("size_v"))
+          nb::arg("conn_id"), nb::arg("ptr_v"), nb::arg("size_v"))
       .def(
           "poll_async",
           [](Endpoint& self, uint64_t transfer_id) {
             bool is_done;
             bool success;
             {
-              py::gil_scoped_release release;
+              nb::gil_scoped_release release;
               InsidePythonGuard guard;
 
               success = self.poll_async(transfer_id, &is_done);
             }
-            return py::make_tuple(success, is_done);
+            return nb::make_tuple(success, is_done);
           },
-          "Poll the status of an asynchronous transfer", py::arg("transfer_id"))
+          "Poll the status of an asynchronous transfer", nb::arg("transfer_id"))
       .def(
           "conn_id_of_rank", &Endpoint::conn_id_of_rank,
           "Get the connection ID for a given peer rank (or UINT64_MAX if none)",
-          py::arg("rank"))
+          nb::arg("rank"))
       .def("__repr__", [](Endpoint const& e) { return "<UCCL P2P Endpoint>"; });
 }
