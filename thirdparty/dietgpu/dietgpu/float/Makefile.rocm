@@ -1,14 +1,14 @@
-# Makefile.lib
+# Makefile.rocm
 # Build shared library for dietgpu float codec (AMD HIP)
 #
 # Produces:
 #   libdietgpu_float.so  - float codec with bundled ans + utils dependencies
 #
 # Usage:
-#   make -f Makefile.lib            # build with default GPU arch (gfx942)
-#   make -f Makefile.lib GPU_ARCH=gfx950
+#   make -f Makefile.rocm            # build with default GPU arch (gfx942)
+#   make -f Makefile.rocm GPU_ARCH=gfx950
 
-#   make -f Makefile.lib clean
+#   make -f Makefile.rocm clean
 
 HIPCC ?= hipcc
 

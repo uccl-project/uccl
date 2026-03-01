@@ -13,17 +13,19 @@
  * Build (ROCm/HIP):
  *   g++ -O3 -g test_compression.cpp -o test_compression \
  *       -D__HIP_PLATFORM_AMD__ \
- *       -I../../include -I../../../include -I/io/uccl/thirdparty/dietgpu/dietgpu/float \
+ *       -I../../include -I../../../include
+ * -I/io/uccl/thirdparty/dietgpu/dietgpu/float \
  *       -I/opt/rocm/include -L/opt/rocm/lib \
  *       -L/io/uccl/thirdparty/dietgpu/dietgpu/float -ldietgpu_float \
  *       -Wl,-rpath,/io/uccl/thirdparty/dietgpu/dietgpu/float \
  *       -lamdhip64 -libverbs -lglog -lgflags -lpthread -std=c++17
  *
  * Run:
- *   ./test_compression [--gpu_index=0] [--buffer_size=1048576] [--float_type=fp32]
+ *   ./test_compression [--gpu_index=0] [--buffer_size=1048576]
+ * [--float_type=fp32]
  */
 
-    // g++ -O3 -g test_compression.cpp -o test_compression \
+// g++ -O3 -g test_compression.cpp -o test_compression \
     //     -D__HIP_PLATFORM_AMD__ \
     //     -I../ -I../../include -I../../../include -I/io/uccl/thirdparty/dietgpu \
     //     -I/opt/rocm/include -L/opt/rocm/lib \
@@ -51,7 +53,7 @@ DEFINE_int32(iterations, 10, "Number of iterations for the test");
 DEFINE_bool(verbose, false, "Enable verbose output");
 
 // Helper to get FloatType from string
-dietgpu::FloatType getFloatTypeFromString(const std::string& type_str) {
+dietgpu::FloatType getFloatTypeFromString(std::string const& type_str) {
   if (type_str == "fp16" || type_str == "float16") {
     return dietgpu::FloatType::kFloat16;
   } else if (type_str == "bf16" || type_str == "bfloat16") {
@@ -59,7 +61,8 @@ dietgpu::FloatType getFloatTypeFromString(const std::string& type_str) {
   } else if (type_str == "fp32" || type_str == "float32") {
     return dietgpu::FloatType::kFloat32;
   } else {
-    LOG(WARNING) << "Unknown float type '" << type_str << "', defaulting to fp32";
+    LOG(WARNING) << "Unknown float type '" << type_str
+                 << "', defaulting to fp32";
     return dietgpu::FloatType::kFloat32;
   }
 }
@@ -120,14 +123,14 @@ void fillRandomFloatData(void* host_buf, size_t num_elements,
 }
 
 // Compare two buffers with tolerance
-bool compareBuffers(const void* buf1, const void* buf2, size_t num_elements,
+bool compareBuffers(void const* buf1, void const* buf2, size_t num_elements,
                     dietgpu::FloatType float_type, float tolerance = 1e-5f) {
   size_t mismatches = 0;
   const size_t max_print = 10;
 
   if (float_type == dietgpu::FloatType::kFloat32) {
-    const float* data1 = static_cast<const float*>(buf1);
-    const float* data2 = static_cast<const float*>(buf2);
+    float const* data1 = static_cast<float const*>(buf1);
+    float const* data2 = static_cast<float const*>(buf2);
     for (size_t i = 0; i < num_elements; ++i) {
       if (std::fabs(data1[i] - data2[i]) > tolerance) {
         if (mismatches < max_print) {
@@ -139,8 +142,8 @@ bool compareBuffers(const void* buf1, const void* buf2, size_t num_elements,
     }
   } else {
     // For fp16/bf16, compare raw bits (lossless compression should be exact)
-    const uint16_t* data1 = static_cast<const uint16_t*>(buf1);
-    const uint16_t* data2 = static_cast<const uint16_t*>(buf2);
+    uint16_t const* data1 = static_cast<uint16_t const*>(buf1);
+    uint16_t const* data2 = static_cast<uint16_t const*>(buf2);
     for (size_t i = 0; i < num_elements; ++i) {
       if (data1[i] != data2[i]) {
         if (mismatches < max_print) {
@@ -162,8 +165,7 @@ bool compareBuffers(const void* buf1, const void* buf2, size_t num_elements,
 
 // Test basic compression and decompression roundtrip
 bool testCompressionRoundtrip(Compressor& compressor,
-                              MemoryAllocator& allocator,
-                              size_t buffer_size,
+                              MemoryAllocator& allocator, size_t buffer_size,
                               dietgpu::FloatType float_type) {
   LOG(INFO) << "=== Testing Compression Roundtrip ===";
 
@@ -186,9 +188,9 @@ bool testCompressionRoundtrip(Compressor& compressor,
   fillRandomFloatData(h_input.data(), num_elements, float_type);
 
   // Copy input to GPU
-  GPU_CHECK(GPU_MEMCPY(input_mem->addr, h_input.data(), buffer_size,
-                       GPU_MEMCPY_H2D));
-  GPU_CHECK(GPU_MEMSET(output_mem->addr, 0, buffer_size));
+  GPU_RT_CHECK(
+      GPU_MEMCPY(input_mem->addr, h_input.data(), buffer_size, GPU_MEMCPY_H2D));
+  GPU_RT_CHECK(GPU_MEMSET(output_mem->addr, 0, buffer_size));
 
   // Create a send request for compression
   auto remote_mem = std::make_shared<RemoteMemInfo>();
@@ -219,8 +221,7 @@ bool testCompressionRoundtrip(Compressor& compressor,
   // Prepare for decompression using the overload with RemoteMemInfo and
   // RegMemBlock
   RemoteMemInfo compressed_input;
-  compressed_input.addr =
-      reinterpret_cast<uint64_t>(send_req->local_mem->addr);
+  compressed_input.addr = reinterpret_cast<uint64_t>(send_req->local_mem->addr);
   compressed_input.length = compressed_size;
 
   // Decompress
@@ -240,12 +241,12 @@ bool testCompressionRoundtrip(Compressor& compressor,
   LOG(INFO) << "Decompression time: " << decompress_time << " us";
 
   // Copy output back to host
-  GPU_CHECK(GPU_MEMCPY(h_output.data(), output_mem->addr, buffer_size,
-                       GPU_MEMCPY_D2H));
+  GPU_RT_CHECK(GPU_MEMCPY(h_output.data(), output_mem->addr, buffer_size,
+                          GPU_MEMCPY_D2H));
 
   // Compare
-  bool match = compareBuffers(h_input.data(), h_output.data(), num_elements,
-                              float_type);
+  bool match =
+      compareBuffers(h_input.data(), h_output.data(), num_elements, float_type);
 
   if (match) {
     LOG(INFO) << "Roundtrip test PASSED!";
@@ -278,13 +279,14 @@ bool testRequestWorkflow(Compressor& compressor, MemoryAllocator& allocator,
   fillRandomFloatData(h_input.data(), num_elements, float_type);
 
   // Copy input to GPU
-  GPU_CHECK(GPU_MEMCPY(sender_input_mem->addr, h_input.data(), buffer_size,
-                       GPU_MEMCPY_H2D));
-  GPU_CHECK(GPU_MEMSET(receiver_output_mem->addr, 0, buffer_size));
+  GPU_RT_CHECK(GPU_MEMCPY(sender_input_mem->addr, h_input.data(), buffer_size,
+                          GPU_MEMCPY_H2D));
+  GPU_RT_CHECK(GPU_MEMSET(receiver_output_mem->addr, 0, buffer_size));
 
   // === Sender side ===
   auto remote_mem = std::make_shared<RemoteMemInfo>();
-  auto send_req = std::make_shared<RDMASendRequest>(sender_input_mem, remote_mem);
+  auto send_req =
+      std::make_shared<RDMASendRequest>(sender_input_mem, remote_mem);
   send_req->float_type = float_type;
 
   // Compress on sender
@@ -302,8 +304,9 @@ bool testRequestWorkflow(Compressor& compressor, MemoryAllocator& allocator,
   // (In real RDMA, this would be done by the NIC via RDMA write)
   auto receiver_compressed_mem =
       allocator.allocate(compressed_size, MemoryType::GPU, nullptr);
-  GPU_CHECK(GPU_MEMCPY(receiver_compressed_mem->addr, send_req->local_mem->addr,
-                       compressed_size, GPU_MEMCPY_D2D));
+  GPU_RT_CHECK(GPU_MEMCPY(receiver_compressed_mem->addr,
+                          send_req->local_mem->addr, compressed_size,
+                          GPU_MEMCPY_D2D));
 
   // === Receiver side ===
   // Receiver has compressed data and needs to decompress to output buffer
@@ -325,12 +328,12 @@ bool testRequestWorkflow(Compressor& compressor, MemoryAllocator& allocator,
   LOG(INFO) << "Receiver decompressed data to output buffer";
 
   // Copy output back to host
-  GPU_CHECK(GPU_MEMCPY(h_output.data(), receiver_output_mem->addr, buffer_size,
-                       GPU_MEMCPY_D2H));
+  GPU_RT_CHECK(GPU_MEMCPY(h_output.data(), receiver_output_mem->addr,
+                          buffer_size, GPU_MEMCPY_D2H));
 
   // Compare
-  bool match = compareBuffers(h_input.data(), h_output.data(), num_elements,
-                              float_type);
+  bool match =
+      compareBuffers(h_input.data(), h_output.data(), num_elements, float_type);
 
   if (match) {
     LOG(INFO) << "Request workflow test PASSED!";
@@ -358,8 +361,8 @@ void testBandwidth(Compressor& compressor, MemoryAllocator& allocator,
   std::vector<char> h_input(buffer_size);
   fillRandomFloatData(h_input.data(), num_elements, float_type);
 
-  GPU_CHECK(GPU_MEMCPY(input_mem->addr, h_input.data(), buffer_size,
-                       GPU_MEMCPY_H2D));
+  GPU_RT_CHECK(
+      GPU_MEMCPY(input_mem->addr, h_input.data(), buffer_size, GPU_MEMCPY_H2D));
 
   double total_compress_time = 0;
   double total_decompress_time = 0;
@@ -407,8 +410,8 @@ void testBandwidth(Compressor& compressor, MemoryAllocator& allocator,
 
   double compress_bandwidth =
       (buffer_size / (1024.0 * 1024.0 * 1024.0)) / (avg_compress_time / 1000.0);
-  double decompress_bandwidth =
-      (buffer_size / (1024.0 * 1024.0 * 1024.0)) / (avg_decompress_time / 1000.0);
+  double decompress_bandwidth = (buffer_size / (1024.0 * 1024.0 * 1024.0)) /
+                                (avg_decompress_time / 1000.0);
 
   LOG(INFO) << "Results:";
   LOG(INFO) << "  Buffer size: " << buffer_size / (1024.0 * 1024.0) << " MB";
@@ -418,7 +421,6 @@ void testBandwidth(Compressor& compressor, MemoryAllocator& allocator,
   LOG(INFO) << "  Compression bandwidth: " << compress_bandwidth << " GB/s";
   LOG(INFO) << "  Decompression bandwidth: " << decompress_bandwidth << " GB/s";
 }
-
 
 int main(int argc, char* argv[]) {
   // Initialize gflags and glog
@@ -431,7 +433,7 @@ int main(int argc, char* argv[]) {
   LOG(INFO) << "========================================";
 
   // Set GPU device
-  GPU_CHECK(GPU_SET_DEVICE(FLAGS_gpu_index));
+  GPU_RT_CHECK(GPU_SET_DEVICE(FLAGS_gpu_index));
   LOG(INFO) << "Using GPU device: " << FLAGS_gpu_index;
 
   // Get float type
@@ -448,7 +450,7 @@ int main(int argc, char* argv[]) {
 
   // Test compression roundtrip
   if (!testCompressionRoundtrip(compressor, allocator, FLAGS_buffer_size,
-                                 float_type)) {
+                                float_type)) {
     all_passed = false;
   }
   LOG(INFO) << "";

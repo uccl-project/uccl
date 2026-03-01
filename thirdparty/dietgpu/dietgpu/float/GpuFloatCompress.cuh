@@ -15,7 +15,7 @@
 #include "dietgpu/utils/DeviceUtils.h"
 #include "dietgpu/utils/StackDeviceMemory.h"
 #include "dietgpu/utils/StaticUtils.h"
-#include <chrono>
+
 #include <glog/logging.h>
 #include <cmath>
 #include <memory>
@@ -439,14 +439,145 @@ struct FloatANSOutProvider {
     return BatchWriter(getBatchStart(batch));
   }
 
-  // Returns the uncompressed data size in bytes for a given batch element
-  __host__ uint32_t getUncompDataSize(uint32_t batchSize) const {
-    return FTI::getUncompDataSize(batchSize);
-  }
-
   OutProvider outProvider_;
   SizeProvider sizeProvider_;
 };
+
+template <typename InProvider, typename OutProvider>
+void floatCompressDevice(
+    StackDeviceMemory& res,
+    const FloatCompressConfig& config,
+    uint32_t numInBatch,
+    InProvider& inProvider,
+    uint32_t maxSize,
+    OutProvider& outProvider,
+    uint32_t* outSize_dev,
+    cudaStream_t stream) {
+  auto maxUncompressedWords = maxSize / sizeof(ANSDecodedT);
+  uint32_t maxNumCompressedBlocks =
+      divUp(maxUncompressedWords, kDefaultBlockSize);
+
+  // Compute checksum on input data (optional)
+  auto checksum_dev = res.alloc<uint32_t>(stream, numInBatch);
+
+  // not allowed in float mode
+  assert(!config.ansConfig.useChecksum);
+
+  if (config.useChecksum) {
+    checksumBatch(numInBatch, inProvider, checksum_dev.data(), stream);
+  }
+
+  // Temporary space for the extracted exponents; all rows must be 16 byte
+  // aligned
+  uint32_t compRowStride = roundUp(maxSize, sizeof(uint4));
+  auto toComp_dev = res.alloc<uint8_t>(stream, numInBatch * compRowStride);
+
+  // We calculate a histogram of the symbols to be compressed as part of
+  // extracting the compressible symbol from the float
+  auto histogram_dev = res.alloc<uint32_t>(stream, numInBatch * kNumSymbols);
+
+  // zero out buckets before proceeding, as we aggregate with atomic adds
+  CUDA_VERIFY(cudaMemsetAsync(
+      histogram_dev.data(),
+      0,
+      sizeof(uint32_t) * numInBatch * kNumSymbols,
+      stream));
+
+#define RUN_SPLIT(FLOAT_TYPE)                                      \
+  do {                                                             \
+    constexpr int kBlock = 256;                                    \
+    auto& props = getCurrentDeviceProperties();                    \
+    int maxBlocksPerSM = 0;                                        \
+    CUDA_VERIFY(cudaOccupancyMaxActiveBlocksPerMultiprocessor(     \
+        &maxBlocksPerSM,                                           \
+        splitFloat<InProvider, OutProvider, FLOAT_TYPE, kBlock>,   \
+        kBlock,                                                    \
+        0));                                                       \
+    uint32_t maxGrid = maxBlocksPerSM * props.multiProcessorCount; \
+    uint32_t perBatchGrid = 4 * divUp(maxGrid, numInBatch);        \
+    auto grid = dim3(perBatchGrid, numInBatch);                    \
+                                                                   \
+    splitFloat<InProvider, OutProvider, FLOAT_TYPE, kBlock>        \
+        <<<grid, kBlock, 0, stream>>>(                             \
+            inProvider,                                            \
+            config.useChecksum,                                    \
+            checksum_dev.data(),                                   \
+            toComp_dev.data(),                                     \
+            compRowStride,                                         \
+            outProvider,                                           \
+            histogram_dev.data());                                 \
+  } while (false)
+
+  switch (config.floatType) {
+    case FloatType::kFloat16:
+      RUN_SPLIT(FloatType::kFloat16);
+      break;
+    case FloatType::kBFloat16:
+      RUN_SPLIT(FloatType::kBFloat16);
+      break;
+    case FloatType::kFloat32:
+      RUN_SPLIT(FloatType::kFloat32);
+      break;
+    default:
+      assert(false);
+      break;
+  }
+
+#undef RUN_SPLIT
+
+    // outSize as reported by ansEncode is just the ANS-encoded portion of the
+    // data.
+    // We need to increment the sizes by the uncompressed portion (header plus
+    // uncompressed float data) with incOutputSizes
+#define RUN_ANS(FT)                                                         \
+  do {                                                                      \
+    auto inProviderANS = FloatANSInProvider<InProvider>(                    \
+        toComp_dev.data(), compRowStride, inProvider);                      \
+                                                                            \
+    auto outProviderANS = FloatANSOutProvider<FT, OutProvider, InProvider>( \
+        outProvider, inProvider);                                           \
+                                                                            \
+    ansEncodeBatchDevice(                                                   \
+        res,                                                                \
+        config.ansConfig,                                                   \
+        numInBatch,                                                         \
+        inProviderANS,                                                      \
+        histogram_dev.data(),                                               \
+        maxSize,                                                            \
+        outProviderANS,                                                     \
+        outSize_dev,                                                        \
+        stream);                                                            \
+                                                                            \
+    incOutputSizes<FT><<<divUp(numInBatch, 128), 128, 0, stream>>>(         \
+        inProvider, outSize_dev, numInBatch);                               \
+                                                                            \
+  } while (false)
+
+  // We have written the non-compressed portions of the floats into the output,
+  // along with a header that indicates how many floats there are.
+  // For compression, we need to increment the address in which the compressed
+  // outputs are written.
+
+  switch (config.floatType) {
+    case FloatType::kFloat16:
+      RUN_ANS(FloatType::kFloat16);
+      break;
+    case FloatType::kBFloat16:
+      RUN_ANS(FloatType::kBFloat16);
+      break;
+    case FloatType::kFloat32:
+      RUN_ANS(FloatType::kFloat32);
+      break;
+    default:
+      assert(false);
+      break;
+  }
+
+#undef RUN_ANS
+
+  CUDA_TEST_ERROR();
+}
+
 template <FloatType FT, typename InProvider, typename OutProvider>
 inline void runSplitFloatForType(
     uint32_t numInBatch,

@@ -12,6 +12,7 @@ HIP_INC  := $(HIP_HOME)/include
 HIP_LIB  := $(HIP_HOME)/lib
 CONDA_LIB_HOME?=/usr/lib
 CXX := g++
+CXXFLAGS := 
 
 # ---------------- DietGPU ----------------
 USE_DIETGPU ?= $(shell echo $${USE_DIETGPU:-0})
@@ -21,10 +22,11 @@ DIETGPU_FLOAT_DIR := $(DIETGPU_ROOT)/dietgpu/float
 DIETGPU_LIB       := $(DIETGPU_FLOAT_DIR)/libdietgpu_float.so
 
 ifeq ($(USE_DIETGPU),1)
-	CXXFLAGS_TRANS += -DUSE_DIETGPU -DUSE_DIETGPU_HIP
 	DIETGPU_INC  := -I$(DIETGPU_ROOT)
 	DIETGPU_LIBS := -L$(DIETGPU_FLOAT_DIR) -ldietgpu_float \
-	                -Wl,-rpath,$(abspath $(DIETGPU_FLOAT_DIR))
+	                -Wl,-rpath,$(abspath $(DIETGPU_FLOAT_DIR)) \
+					-Wl,-rpath,'$$ORIGIN/lib'
+	CXXFLAGS += -DUSE_DIETGPU
 else
 	DIETGPU_INC  :=
 	DIETGPU_LIBS :=
@@ -34,11 +36,7 @@ ifeq ($(USE_EFA),1)
 	CXXFLAGS_TRANS := -DUCCL_P2P_USE_EFA
 endif
 
-$(info [Makefile] USE_DIETGPU=$(USE_DIETGPU))
-$(info [Makefile] DIETGPU_INC=$(DIETGPU_INC))
-$(info [Makefile] DIETGPU_LIBS=$(DIETGPU_LIBS))
-
-CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(HIP_INC) $(DIETGPU_INC) \
+CXXFLAGS += -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(HIP_INC) $(DIETGPU_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=${CONDA_LIB_HOME} -I${CONDA_LIB_HOME}/../include \
 	$(CXXFLAGS_TRANS)
@@ -72,9 +70,8 @@ ifeq ($(USE_TCP),1)
 	CXXFLAGS += -DUCCL_P2P_USE_RCCL
 endif
 LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
-				  -L$(DIETGPU_FLOAT_DIR) -ldietgpu_float\
+				  ${DIETGPU_LIBS}\
                   -Wl,-rpath,$(HIP_LIB) -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest \
-				  -Wl,-rpath,'$$ORIGIN/lib' \
                   -lz -lelf -libverbs -lpthread
 ifeq ($(USE_TCP),1)
 	LDFLAGS += -lrccl

@@ -224,15 +224,4 @@ inline size_t getWordSizeFromFloatType(FloatType ft) {
   }
 }
 
-inline size_t getElementCountFromBytes(FloatType ft, size_t bytes) {
-  const size_t wordSize = getWordSizeFromFloatType(ft);
-
-  // 必须整除，否则说明数据损坏或类型不匹配
-  CHECK(bytes % wordSize == 0)
-      << "Bytes (" << bytes << ") not aligned with FloatType word size ("
-      << wordSize << ")";
-
-  return bytes / wordSize;
-}
-
 } // namespace dietgpu

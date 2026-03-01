@@ -30,25 +30,6 @@ using FifoItem = nccl_tcpx::FifoItem;
 using FifoItem = FifoItem;
 #endif
 
-#include <iostream>
-#include <vector>
-
-#ifdef USE_DIETGPU
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__)
-  #include <hip/hip_runtime.h>
-  #include <hip/hip_fp16.h>
-  #include "dietgpu/float/GpuFloatCodec_hip.h"
-  #include "dietgpu/utils/StackDeviceMemory_hip.h"
-#else
-  #include <cuda_runtime.h>
-  #include <cuda_fp16.h>
-  #include "dietgpu/float/GpuFloatCodec_cuda.h"
-  #include "dietgpu/utils/StackDeviceMemory_cuda.h"
-#endif
-#endif
-
-namespace py = pybind11;
-
 extern thread_local bool inside_python;
 
 #ifdef UCCL_P2P_USE_NCCL
@@ -71,7 +52,7 @@ struct Mhandle {
 
 struct P2PMhandle {
   MRArray mr_array;
-  std::shared_ptr<dietgpu::FloatCompressSplitContext> compress_ctx;
+  CompressCtx compress_ctx;
 };
 
 struct MR {
@@ -309,7 +290,8 @@ class Endpoint {
   bool accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
 
   /* Register the data with a specific interface. */
-  bool reg(void const* data, size_t size, uint64_t& mr_id, dietgpu::FloatType float_type = dietgpu::FloatType::kFloat32);
+  bool reg(void const* data, size_t size, uint64_t& mr_id,
+           uccl::FloatType float_type = uccl::FloatType::kFloat32);
 
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);
