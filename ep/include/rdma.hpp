@@ -9,7 +9,9 @@
 // clang-format on
 #include "ring_buffer.cuh"
 #include "unistd.h"
+#ifdef EFA
 #include <infiniband/efadv.h>
+#endif
 #include <infiniband/verbs.h>
 #include <atomic>
 #include <cassert>

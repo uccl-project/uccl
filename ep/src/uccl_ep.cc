@@ -2097,6 +2097,11 @@ NB_MODULE(ep, m) {
         void* ptr;
         bool is_host_allocated = false;
         CUDA_CHECK(cudaSetDevice(device_index));
+        if (num_rdma_bytes <= 0) {
+          auto tensor =
+              torch::empty({0}, dtype(torch::kUInt8).device(torch::kCUDA));
+          return py::make_tuple(tensor, false);
+        }
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         CUDA_CHECK(hipExtMallocWithFlags(&ptr, num_rdma_bytes,
                                          hipDeviceMallocUncached));
