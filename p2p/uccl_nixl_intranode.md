@@ -59,20 +59,7 @@ agent  = nixl_agent("client", config)   # or "server"
 
 ---
 
-### Step 2 — Advertise connection info (`getConnInfo`)
-
-```python
-local_meta = agent.get_agent_metadata()   # returns bytes
-# user sends local_meta to the peer out-of-band (e.g. ZMQ)
-```
-
-**C++:**
-- `getConnInfo()` → `uccl_engine_get_metadata()` → returns `"<ip>:<port>?<gpu_idx>"`
-- This string is the only thing the peer needs to connect.
-
----
-
-### Step 3 — Memory Registration (both sides, before transfer)
+### Step 2 — Memory Registration (both sides, BEFORE metadata exchange)
 
 ```python
 descs          = agent.get_reg_descs(dataset)    # list of (addr, len, devId) descriptors
@@ -86,35 +73,49 @@ register_descs = agent.register_memory(descs)    # pins memory with RDMA engine
   64-byte `FifoItem` (contains rkey + lkey + base address) needed for one-sided RDMA
 - Stores `nixlUcclBackendMD{ addr, len, mr_id, fifo_item }` in `mem_reg_info_`
 
-The `fifo_item` is serialised as a hex string in `getPublicData()` and travels with the
-descriptor to the peer in Step 4.
+The `fifo_item` is serialised as a hex string in `getPublicData()`.
+
+> **Critical ordering**: `register_memory` must precede `get_agent_metadata()`.
+> `getLocalMD()` serialises both connection info AND the registered memory's public data.
+> If memory is not yet registered when the peer calls `add_remote_agent`, the remote
+> memory section (`remoteSections[agent]`) stays empty, and `createXferReq` cannot find
+> any backend capable of the transfer.
 
 ---
 
-### Step 4 — Exchange descriptors / connect (out-of-band)
+### Step 3 — Exchange metadata / connect (out-of-band)
 
 ```python
-# client side
-agent.add_remote_agent(server_meta)           # connect to server
+local_meta = agent.get_agent_metadata()   # returns bytes (conn info + memory section)
+# user sends local_meta to the peer out-of-band (e.g. ZMQ)
+agent.add_remote_agent(peer_meta)         # connect + load remote memory metadata
 local_xfer_descs  = register_descs.trim()
-remote_xfer_descs = agent.deserialize_descs(server_xfer_desc_bytes)
+remote_xfer_descs = agent.deserialize_descs(peer_xfer_desc_bytes)
 ```
 
-**C++ (`loadRemoteConnInfo`):**
-- Parses `"ip:port?gpu"` from server metadata
-- `uccl_engine_connect(engine_, ip, gpu, port)` — TCP + RDMA handshake to server
-- `uccl_engine_start_listener(conn)` — spawns a thread that calls `recv()` to receive
-  completion notifications
+**`getLocalMD()` (`get_agent_metadata`):**
+- Serialises connection string (`"ip:port?gpu"`) from `getConnInfo()`
+- Serialises registered memory section: for each descriptor, calls `getPublicData()`
+  which emits the hex-encoded `fifo_item`
 
-**C++ (server `startListener` thread):**
+**C++ (`loadRemoteConnInfo`)** — called inside `add_remote_agent` → `loadRemoteMD`:
+- Parses `"ip:port?gpu"` from peer metadata
+- `uccl_engine_connect(engine_, ip, gpu, port)` — TCP + RDMA handshake to peer
+- `uccl_engine_start_listener(conn)` — spawns completion-notification receiver thread
+
+**C++ (peer `startListener` thread):**
 - `uccl_engine_accept()` returns a new `uccl_conn_t*`
-- `uccl_engine_start_listener(conn)` — same notification receiver thread on server side
+- `uccl_engine_start_listener(conn)` — same receiver thread on accepting side
 - Stores `conn` in `connected_agents_[remote_ip]`
 
-**C++ (`loadRemoteMD`)** — called when deserializing the remote descriptor list:
-- Decodes hex → `fifo_item[64]` and stores in a new `nixlUcclBackendMD` (remote side)
-- This MD is never registered with the RDMA engine; it is only a container for the remote
-  rkey + address needed to address the remote buffer.
+**C++ (`loadRemoteSections`)** — also called inside `add_remote_agent` → `loadRemoteMD`:
+- For each descriptor in the peer's serialised memory section, calls `loadRemoteMD`
+  on the backend, which decodes the hex fifo_item into a new `nixlUcclBackendMD`
+- Stores the result in `data->remoteSections[peer_name]`
+
+**`deserialize_descs`** — Python `pickle.loads` of the peer's `nixlXferDList`:
+- Carries addr/len/devId so `createXferReq` can look up the remote buffer in
+  the already-loaded `remoteSections[peer_name]` via `populate()`
 
 ---
 
@@ -193,14 +194,22 @@ threads handle the actual UCCL connections in the background. Replicates the exa
 nixl code path:
 
 ```
-getConnInfo → add_remote_agent (loadRemoteConnInfo) → registerMem
+registerMem → getConnInfo (get_agent_metadata) → add_remote_agent (loadRemoteConnInfo + loadRemoteSections)
 → initialize_xfer (prepXfer) → transfer (postXfer) → check_xfer_state (checkXfer)
 ```
 
 A GPU-to-GPU WRITE (client GPU ones → server GPU zeros) is used to confirm the
 connection is functional end-to-end, not just established.
 
+**Runtime requirements:**
+- nixl must be built from source with the UCCL plugin (`-Dplugins=UCCL` meson option).
+  The plugin is output as `libplugin_UCCL.so` in the build tree.
+- Set `NIXL_PLUGIN_DIR` to the directory containing `libplugin_UCCL.so` before running.
+  nixl's plugin manager reads this env var at agent-creation time (before the C++ singleton
+  initialises). Alternatively it looks for a `plugins/` directory next to the nixl `.so`.
+
 ```bash
+export NIXL_PLUGIN_DIR=/path/to/nixl/build/src/plugins/uccl
 cd /home/lirans/uccl/p2p
 python tests/test_nixl_intranode.py
 ```
@@ -213,6 +222,9 @@ uccl_engine_accept:  connection from <real-NIC-IP> is intra-node
 [client] PASS: GPU-to-GPU WRITE completed successfully
 === test_nixl_intranode PASSED ===
 ```
+
+The test raises `RuntimeError` immediately if the UCCL backend was not loaded (e.g. if
+`NIXL_PLUGIN_DIR` is wrong), before reaching any transfer code.
 
 ## Status
 
