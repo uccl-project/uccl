@@ -50,12 +50,17 @@
 // Requires CUDA >= 11.7 (driver API) and kernel DMA-BUF support.
 // Falls back to ibv_reg_mr_iova2 when DMA-BUF is unavailable.
 //
-// PyTorch's caching allocator suballocates from large cudaMalloc blocks,
-// so the user pointer may not be at the start of an allocation.
-// cuMemGetHandleForAddressRange requires the exact allocation base.
-// We use cuMemGetAddressRange to find the real base, get the DMA-BUF fd
-// for the full allocation, then tell ibv_reg_dmabuf_mr the offset.
+// We export a DMA-BUF fd covering [gpu_buf, gpu_buf + export_size) where
+// export_size is `bytes` rounded up to the GPU page granularity (2 MiB).
+// cuMemGetHandleForAddressRange requires this alignment.
+// Under full IOMMU translation the kernel builds per-page IOMMU mappings for
+// the entire scatter-gather list of the fd, so we keep the export as small as
+// possible (never the entire allocation) to avoid exhausting mapping resources.
 // ---------------------------------------------------------------------------
+
+// GPU page granularity for cuMemGetHandleForAddressRange DMA-BUF export.
+// On modern NVIDIA GPUs (Hopper, Ada, etc.) this is 2 MiB.
+static constexpr size_t kDmabufGranularity = 2ULL << 20;  // 2 MiB
 
 ibv_mr* reg_mr_gpu_dmabuf(ibv_pd* pd, void* gpu_buf, size_t bytes,
                           uint64_t iova, int access) {
@@ -63,12 +68,9 @@ ibv_mr* reg_mr_gpu_dmabuf(ibv_pd* pd, void* gpu_buf, size_t bytes,
   // compatibility and to avoid hard dependency on specific driver versions.
   // Note: Symbol names must use versioned names (e.g. _v2) matching cuda.h
   // #defines.
-  typedef CUresult (*cuMemGetAddressRange_t)(CUdeviceptr*, size_t*,
-                                             CUdeviceptr);
   typedef CUresult (*cuMemGetHandleForAddressRange_t)(
       int*, CUdeviceptr, size_t, CUmemRangeHandleType, unsigned long long);
 
-  static cuMemGetAddressRange_t cuMemGetAddressRange_func = nullptr;
   static cuMemGetHandleForAddressRange_t cuMemGetHandleForAddressRange_func =
       nullptr;
   static std::once_flag init_flag;
@@ -78,8 +80,6 @@ ibv_mr* reg_mr_gpu_dmabuf(ibv_pd* pd, void* gpu_buf, size_t bytes,
     void* handle = dlopen("libcuda.so.1", RTLD_LAZY);
     if (!handle) handle = dlopen("libcuda.so", RTLD_LAZY);
     if (handle) {
-      cuMemGetAddressRange_func =
-          (cuMemGetAddressRange_t)dlsym(handle, "cuMemGetAddressRange_v2");
       cuMemGetHandleForAddressRange_func =
           (cuMemGetHandleForAddressRange_t)dlsym(
               handle, "cuMemGetHandleForAddressRange");
@@ -88,7 +88,7 @@ ibv_mr* reg_mr_gpu_dmabuf(ibv_pd* pd, void* gpu_buf, size_t bytes,
     }
   });
 
-  if (!cuMemGetAddressRange_func || !cuMemGetHandleForAddressRange_func) {
+  if (!cuMemGetHandleForAddressRange_func) {
     fprintf(
         stderr,
         "[RDMA] CUDA Driver API functions not available (requires CUDA 11.7+), "
@@ -96,44 +96,26 @@ ibv_mr* reg_mr_gpu_dmabuf(ibv_pd* pd, void* gpu_buf, size_t bytes,
     return ibv_reg_mr_iova2(pd, gpu_buf, bytes, iova, access);
   }
 
-  // Find the real cudaMalloc allocation that contains this pointer.
-  // PyTorch's caching allocator suballocates, so gpu_buf may be in the
-  // middle of a larger block.
-  CUdeviceptr alloc_base = 0;
-  size_t alloc_size = 0;
-  CUresult cu_err =
-      cuMemGetAddressRange_func(&alloc_base, &alloc_size, (CUdeviceptr)gpu_buf);
-  if (cu_err != CUDA_SUCCESS) {
-    fprintf(stderr,
-            "[RDMA] cuMemGetAddressRange failed (CUresult=%d), "
-            "falling back to ibv_reg_mr_iova2 (needs nvidia_peermem)\n",
-            (int)cu_err);
-    return ibv_reg_mr_iova2(pd, gpu_buf, bytes, iova, access);
-  }
-
-  uint64_t offset_in_alloc = (uintptr_t)gpu_buf - (uintptr_t)alloc_base;
-
   // cuMemGetHandleForAddressRange requires the size to be aligned to the GPU
-  // page granularity (2 MiB on Hopper/Ada).  cuMemGetAddressRange reports the
-  // *requested* allocation size, not the actual internally-rounded size, so
-  // alloc_size may not be aligned.  Round up — cudaMalloc always rounds up to
-  // at least this granularity, so the aligned size is within the real alloc.
-  static constexpr size_t kDmabufGranularity = 2ULL << 20;  // 2 MiB
-  size_t export_size =
-      ((alloc_size + kDmabufGranularity - 1) / kDmabufGranularity) *
-      kDmabufGranularity;
+  // page granularity (2 MiB).  Round up bytes to the next multiple.
+  // NOTE: Do NOT cap at cuMemGetAddressRange's reported alloc_size — that API
+  // returns the *requested* size, not the actual (internally rounded-up) size.
+  // cudaMalloc always rounds up to at least 2 MiB, so the aligned export_size
+  // is safe.
+  size_t export_size = ((bytes + kDmabufGranularity - 1) / kDmabufGranularity) *
+                       kDmabufGranularity;
+  CUresult cu_err;
 
   fprintf(stderr,
-          "[RDMA] DMA-BUF: alloc_base=%p alloc_size=%zu export_size=%zu, "
-          "gpu_buf=%p offset=%lu bytes=%zu\n",
-          (void*)alloc_base, alloc_size, export_size, gpu_buf, offset_in_alloc,
-          bytes);
+          "[RDMA] DMA-BUF: gpu_buf=%p bytes=%zu export_size=%zu (%.1f GiB)\n",
+          gpu_buf, bytes, export_size,
+          export_size / (1024.0 * 1024.0 * 1024.0));
 
-  // Get DMA-BUF fd for the entire allocation (must start at alloc base).
+  // Export DMA-BUF fd for the aligned region.
   int dmabuf_fd = -1;
   cu_err = cuMemGetHandleForAddressRange_func(
-      &dmabuf_fd, alloc_base, export_size, CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD,
-      0);
+      &dmabuf_fd, (CUdeviceptr)gpu_buf, export_size,
+      CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0);
 
   if (cu_err != CUDA_SUCCESS) {
     fprintf(stderr,
@@ -143,22 +125,25 @@ ibv_mr* reg_mr_gpu_dmabuf(ibv_pd* pd, void* gpu_buf, size_t bytes,
     return ibv_reg_mr_iova2(pd, gpu_buf, bytes, iova, access);
   }
 
-  // Register only the sub-range we care about via offset into the DMA-BUF fd.
+  // Register only the actual bytes needed (fd covers export_size ≥ bytes).
   ibv_mr* mr =
-      ibv_reg_dmabuf_mr(pd, offset_in_alloc, bytes, iova, dmabuf_fd, access);
+      ibv_reg_dmabuf_mr(pd, /*fd_offset=*/0, bytes, iova, dmabuf_fd, access);
   if (!mr) {
+    // Return NULL so the caller can try chunked DMA-BUF registration.
+    // Under full IOMMU translation, large registrations exhaust IOMMU mapping
+    // resources (ENOMEM); chunking keeps each call within the safe size limit.
     fprintf(stderr,
             "[RDMA] ibv_reg_dmabuf_mr failed (errno=%d: %s), "
-            "falling back to ibv_reg_mr_iova2 (needs nvidia_peermem)\n",
+            "will try chunked registration\n",
             errno, strerror(errno));
     close(dmabuf_fd);
-    return ibv_reg_mr_iova2(pd, gpu_buf, bytes, iova, access);
+    return nullptr;
   }
 
   close(dmabuf_fd);  // fd can be closed after registration
 
   // ibv_reg_dmabuf_mr() sets mr->addr to the offset parameter
-  // (offset_in_alloc), not the GPU virtual address. Downstream code uses
+  // , not the GPU virtual address. Downstream code uses
   // mr->addr as the base for SGE addresses, so we must override it with iova
   // (the GPU virtual address). ibv_reg_mr_iova2() sets mr->addr to the addr
   // parameter. Since we pass addr=gpu_buf and iova=gpu_buf (same value),
@@ -171,6 +156,116 @@ ibv_mr* reg_mr_gpu_dmabuf(ibv_pd* pd, void* gpu_buf, size_t bytes,
           "(addr=%p, len=%zu, rkey=0x%x) — no nvidia_peermem needed\n",
           mr->addr, bytes, mr->rkey);
   return mr;
+}
+
+// Register GPU memory in multiple DMA-BUF chunks when a single registration
+// fails Returns the vector of MRChunk on success, empty vector on failure.
+std::vector<MRChunk> reg_mr_gpu_dmabuf_chunked(ibv_pd* pd, void* gpu_buf,
+                                               size_t bytes, uint64_t iova,
+                                               int access,
+                                               size_t max_chunk_size) {
+  typedef CUresult (*cuMemGetHandleForAddressRange_t)(
+      int*, CUdeviceptr, size_t, CUmemRangeHandleType, unsigned long long);
+
+  // Re-resolve (call_once in reg_mr_gpu_dmabuf may already have run).
+  static cuMemGetHandleForAddressRange_t cuMemGetHandleForAddressRange_func =
+      nullptr;
+  if (!cuMemGetHandleForAddressRange_func) {
+    void* handle = dlopen("libcuda.so.1", RTLD_LAZY);
+    if (!handle) handle = dlopen("libcuda.so", RTLD_LAZY);
+    if (handle) {
+      cuMemGetHandleForAddressRange_func =
+          (cuMemGetHandleForAddressRange_t)dlsym(
+              handle, "cuMemGetHandleForAddressRange");
+    }
+  }
+  if (!cuMemGetHandleForAddressRange_func) {
+    fprintf(stderr,
+            "[RDMA] CUDA Driver API not available for chunked DMA-BUF\n");
+    return {};
+  }
+
+  CUresult cu_err;
+
+  // NOTE: We must NOT export a single DMA-BUF fd for the entire CUDA
+  // allocation.  Under full IOMMU translation, the kernel builds per-page
+  // IOMMU mappings for the complete scatter-gather list of the fd, regardless
+  // of the sub-region being registered.  A large fd therefore exhausts IOMMU
+  // mapping resources even when registering a small chunk from it.  Instead,
+  // export a separate DMA-BUF fd for each chunk, covering exactly that chunk's
+  // address range.
+
+  size_t num_chunks = (bytes + max_chunk_size - 1) / max_chunk_size;
+  fprintf(stderr,
+          "[RDMA] Splitting %.1f GiB GPU buffer into %zu chunks of %.1f GiB "
+          "each (irdma DMA-BUF limit workaround)\n",
+          bytes / (1024.0 * 1024.0 * 1024.0), num_chunks,
+          max_chunk_size / (1024.0 * 1024.0 * 1024.0));
+
+  std::vector<MRChunk> chunks;
+  chunks.reserve(num_chunks);
+  size_t registered = 0;
+
+  while (registered < bytes) {
+    size_t chunk_len = std::min(max_chunk_size, bytes - registered);
+    CUdeviceptr chunk_start = (CUdeviceptr)((uintptr_t)gpu_buf + registered);
+    uint64_t chunk_iova = iova + registered;
+
+    // Round up chunk export size to GPU page granularity (required by
+    // cuMemGetHandleForAddressRange).  We do NOT cap at cuMemGetAddressRange's
+    // reported size — that API returns the *requested* allocation size, not the
+    // actual (internally rounded-up) size.  cudaMalloc always rounds up to at
+    // least 2 MiB, so the aligned export_size is always within bounds.
+    size_t export_size =
+        ((chunk_len + kDmabufGranularity - 1) / kDmabufGranularity) *
+        kDmabufGranularity;
+
+    // Export a DMA-BUF fd covering this chunk (with aligned size).
+    int dmabuf_fd = -1;
+    cu_err = cuMemGetHandleForAddressRange_func(
+        &dmabuf_fd, chunk_start, export_size,
+        CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0);
+    if (cu_err != CUDA_SUCCESS) {
+      fprintf(stderr,
+              "[RDMA] cuMemGetHandleForAddressRange chunk %zu/%zu failed "
+              "(CUresult=%d, offset=%zu, len=%zu, export_size=%zu)\n",
+              chunks.size() + 1, num_chunks, (int)cu_err, registered, chunk_len,
+              export_size);
+      for (auto& c : chunks) ibv_dereg_mr(c.mr);
+      return {};
+    }
+
+    // Register only the actual bytes needed (fd covers export_size >=
+    // chunk_len). fd_offset=0 because each chunk has its own DMA-BUF fd
+    // exported via cuMemGetHandleForAddressRange with chunk_start as the base
+    // address — the fd already begins at that chunk's GPU virtual address, so
+    // the registration always starts at offset 0 within the fd.
+    ibv_mr* mr = ibv_reg_dmabuf_mr(pd, /*fd_offset=*/0, chunk_len, chunk_iova,
+                                   dmabuf_fd, access);
+    int saved_errno = errno;
+    close(dmabuf_fd);
+
+    if (!mr) {
+      fprintf(stderr,
+              "[RDMA] ibv_reg_dmabuf_mr chunk %zu/%zu failed (offset=%zu, "
+              "len=%zu, errno=%d: %s)\n",
+              chunks.size() + 1, num_chunks, registered, chunk_len, saved_errno,
+              strerror(saved_errno));
+      for (auto& c : chunks) ibv_dereg_mr(c.mr);
+      return {};
+    }
+    if (!mr->addr) mr->addr = reinterpret_cast<void*>(chunk_iova);
+
+    chunks.push_back({(uintptr_t)gpu_buf + registered, chunk_len, mr});
+    fprintf(stderr,
+            "[RDMA] Registered DMA-BUF chunk %zu/%zu: addr=%p len=%.1f GiB "
+            "rkey=0x%x lkey=0x%x\n",
+            chunks.size(), num_chunks, mr->addr,
+            chunk_len / (1024.0 * 1024.0 * 1024.0), mr->rkey, mr->lkey);
+    registered += chunk_len;
+  }
+
+  return chunks;
 }
 
 // ---------------------------------------------------------------------------
@@ -191,6 +286,7 @@ struct SharedRdmaEntry {
   ibv_pd* pd = nullptr;
   ibv_mr* mr = nullptr;
   uint32_t rkey = 0;
+  std::vector<MRChunk> mr_chunks;  // populated when chunked
   int numa_node = 0;
   int refcount = 0;
   bool ready = false;   // true once MR registration is complete
@@ -220,6 +316,7 @@ void release_shared_rdma_resources(ProxyCtx& ctx, void* gpu_buf) {
       }
       // Not the last holder — prevent caller from freeing shared objects.
       ctx.mr = nullptr;
+      ctx.gpu_mr_chunks.clear();
       ctx.pd = nullptr;
       ctx.context = nullptr;
       return;
@@ -433,6 +530,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       S.pd = entry.pd;
       S.mr = entry.mr;
       S.rkey = entry.rkey;
+      S.gpu_mr_chunks = entry.mr_chunks;
       S.numa_node = entry.numa_node;
       entry.refcount++;
       printf(
@@ -490,8 +588,22 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 #endif
 
 #ifdef USE_DMABUF
-  // Try DMA-BUF first (works without nvidia_peermem), falls back automatically.
+  // Try full-buffer DMA-BUF first; if that fails due to IOMMU mapping
+  // resource exhaustion (ENOMEM for buffers > 2 GiB under full IOMMU
+  // translation), fall back to chunked registration.
   S.mr = reg_mr_gpu_dmabuf(S.pd, gpu_buf, bytes, iova, access_flags);
+  if (!S.mr) {
+    S.gpu_mr_chunks = reg_mr_gpu_dmabuf_chunked(
+        S.pd, gpu_buf, bytes, iova, access_flags, kMaxDmabufChunkSize);
+    if (S.gpu_mr_chunks.empty()) {
+      fprintf(stderr,
+              "[RDMA] FATAL: Both single and chunked DMA-BUF registration "
+              "failed for %.1f GiB buffer\n",
+              bytes / (1024.0 * 1024.0 * 1024.0));
+      exit(1);
+    }
+    S.mr = S.gpu_mr_chunks[0].mr;  // first chunk for backward compat
+  }
 #else
   S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova, access_flags);
 #endif
@@ -536,6 +648,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
     entry.pd = S.pd;
     entry.mr = S.mr;
     entry.rkey = S.rkey;
+    entry.mr_chunks = S.gpu_mr_chunks;
     entry.numa_node = S.numa_node;
     entry.refcount = 1;
     entry.ready = true;
@@ -805,6 +918,23 @@ void create_per_thread_qp(ProxyCtx& S, void* gpu_buffer, size_t size,
   local_info->len = size;
   local_info->psn = 0;
   local_info->ack_psn = 0;
+
+#ifdef USE_DMABUF
+  // Populate chunked MR info for exchange with the remote side.
+  if (!S.gpu_mr_chunks.empty()) {
+    if ((int)S.gpu_mr_chunks.size() > kMaxMRChunks) {
+      fprintf(stderr, "[RDMA] FATAL: too many MR chunks (%zu > %d)\n",
+              S.gpu_mr_chunks.size(), kMaxMRChunks);
+      std::abort();
+    }
+    local_info->num_mr_chunks = static_cast<uint32_t>(S.gpu_mr_chunks.size());
+    for (size_t i = 0; i < S.gpu_mr_chunks.size(); ++i) {
+      local_info->mr_chunk_info[i].rkey = S.gpu_mr_chunks[i].mr->rkey;
+      local_info->mr_chunk_info[i].addr = S.gpu_mr_chunks[i].base;
+      local_info->mr_chunk_info[i].len = S.gpu_mr_chunks[i].len;
+    }
+  }
+#endif
 
   // Populate atomic buffer info if available
   // Use S.atomic_buffer_mr if it exists (even if atomic_buffer_ptr is nullptr
@@ -1080,8 +1210,13 @@ void post_receive_buffer_for_imm_on_qp(ProxyCtx& S, ibv_qp* qp) {
   std::vector<ibv_sge> sges(kMaxOutstandingRecvs);
   for (size_t i = 0; i < kMaxOutstandingRecvs; ++i) {
     size_t offset = (i < kNumProxyThs) ? i : (i % kNumProxyThs);
-    sges[i] = {(uintptr_t)S.mr->addr + offset * kObjectSize, kObjectSize,
-               S.mr->lkey};
+    uintptr_t recv_addr = (uintptr_t)S.mr->addr + offset * kObjectSize;
+#ifdef USE_DMABUF
+    uint32_t lkey = S.lkey_for(recv_addr);
+#else
+    uint32_t lkey = S.mr->lkey;
+#endif
+    sges[i] = {recv_addr, kObjectSize, lkey};
     wrs[i] = {.wr_id = make_wr_id(S.tag, (uint32_t)i),
               .next = (i + 1 < kMaxOutstandingRecvs) ? &wrs[i + 1] : nullptr,
               .sg_list = &sges[i],
@@ -1257,8 +1392,10 @@ static void post_rdma_async_batched_normal_mode(
                 : ctx->ack_qp;
 
         size_t const kgroup = idxs.size();
-        std::vector<ibv_sge> sges(kgroup);
-        std::vector<ibv_send_wr> wrs(kgroup);
+        std::vector<ibv_sge> sges;
+        std::vector<ibv_send_wr> wrs;
+        sges.reserve(kgroup);
+        wrs.reserve(kgroup);
         std::vector<uint64_t> ring_wrids;
         ring_wrids.reserve(kgroup);
 
@@ -1292,23 +1429,54 @@ static void post_rdma_async_batched_normal_mode(
           // Local SGE
           uintptr_t laddr =
               cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
-          sges[j] = {
-              .addr = laddr,
-              .length = static_cast<uint32_t>(cmd.bytes),
-              .lkey = ctx->mr->lkey,
-          };
 
-          // Build WR
-          std::memset(&wrs[j], 0, sizeof(wrs[j]));
-          wrs[j].wr_id = wrs_to_post[i];
-          wrs[j].sg_list = &sges[j];
-          wrs[j].num_sge = 1;
-          wrs[j].wr.rdma.remote_addr = remote_addr;
-          wrs[j].wr.rdma.rkey = ctx->remote_rkey;
-          wrs[j].opcode = IBV_WR_RDMA_WRITE;  // default
-          wrs[j].send_flags = IBV_SEND_SIGNALED;
-          wrs[j].next = (j + 1 < kgroup) ? &wrs[j + 1] : nullptr;
+#ifdef USE_DMABUF
+          // Split across chunk boundaries so each sub-WR stays within one
+          // local MR chunk AND one remote MR chunk.  Individual MoE RDMA
+          // transfers are typically tens to hundreds of KB, far smaller than
+          // the 1 GiB chunk size, so this almost always returns 1 segment;
+          // at most 2 when a transfer straddles a chunk boundary.
+          auto segments = ctx->split_for_chunks(
+              laddr, static_cast<uintptr_t>(remote_addr), cmd.bytes);
 
+          for (auto const& seg : segments) {
+            ibv_sge sge{};
+            sge.addr = seg.laddr;
+            sge.length = seg.len;
+            sge.lkey = seg.lkey;
+            sges.push_back(sge);
+
+            ibv_send_wr wr{};
+            // All sub-WRs share the same wr_id; only the last is
+            // signaled, so exactly one CQE is generated per command.
+            wr.wr_id = wrs_to_post[i];
+            wr.num_sge = 1;
+            wr.wr.rdma.remote_addr = seg.raddr;
+            wr.wr.rdma.rkey = seg.rkey;
+            wr.opcode = IBV_WR_RDMA_WRITE;
+            wrs.push_back(wr);
+          }
+          // Only signal the last sub-WR per command; QP ordering
+          // guarantees prior sub-WRs are complete when it completes.
+          wrs.back().send_flags = IBV_SEND_SIGNALED;
+#else
+          ibv_sge sge{};
+          sge.addr = laddr;
+          sge.length = static_cast<uint32_t>(cmd.bytes);
+          sge.lkey = ctx->mr->lkey;
+          sges.push_back(sge);
+
+          ibv_send_wr wr{};
+          wr.wr_id = wrs_to_post[i];
+          wr.num_sge = 1;
+          wr.wr.rdma.remote_addr = remote_addr;
+          wr.wr.rdma.rkey = ctx->remote_rkey;
+          wr.opcode = IBV_WR_RDMA_WRITE;
+          wr.send_flags = IBV_SEND_SIGNALED;
+          wrs.push_back(wr);
+#endif
+
+          // Put IMM on the last sub-WR of this command (if applicable).
           if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
             int v = static_cast<int>(cmd.atomic_val);
             if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
@@ -1332,14 +1500,20 @@ static void post_rdma_async_batched_normal_mode(
             AtomicsImm aimm(imm);
             assert(aimm.GetSeq() == seq);
 
-            wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-            wrs[j].imm_data = htonl(imm);
+            wrs.back().opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+            wrs.back().imm_data = htonl(imm);
 
             assert(aimm.GetValue() == cmd.atomic_val);
             assert(aimm.GetOff() == cmd.atomic_offset);
           } else {
-            wrs[j].opcode = IBV_WR_RDMA_WRITE;
+            wrs.back().opcode = IBV_WR_RDMA_WRITE;
           }
+        }
+
+        // Fix up sg_list / next pointers (vector may have reallocated).
+        for (size_t w = 0; w < wrs.size(); ++w) {
+          wrs[w].sg_list = &sges[w];
+          wrs[w].next = (w + 1 < wrs.size()) ? &wrs[w + 1] : nullptr;
         }
 
         // Post the chain
@@ -1365,8 +1539,10 @@ static void post_rdma_async_batched_normal_mode(
                 : ctx->ack_qp;
 
         size_t const kgroup = idxs.size();
-        std::vector<ibv_sge> sges(kgroup);
-        std::vector<ibv_send_wr> wrs(kgroup);
+        std::vector<ibv_sge> sges;
+        std::vector<ibv_send_wr> wrs;
+        sges.reserve(kgroup);
+        wrs.reserve(kgroup);
         std::vector<uint64_t> ring_wrids;
         ring_wrids.reserve(kgroup);
 
@@ -1400,23 +1576,54 @@ static void post_rdma_async_batched_normal_mode(
           // Local SGE
           uintptr_t laddr =
               cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
-          sges[j] = {
-              .addr = laddr,
-              .length = static_cast<uint32_t>(cmd.bytes),
-              .lkey = ctx->mr->lkey,
-          };
 
-          // Build WR
-          std::memset(&wrs[j], 0, sizeof(wrs[j]));
-          wrs[j].wr_id = wrs_to_post[i];
-          wrs[j].sg_list = &sges[j];
-          wrs[j].num_sge = 1;
-          wrs[j].wr.rdma.remote_addr = remote_addr;
-          wrs[j].wr.rdma.rkey = ctx->remote_rkey;
-          wrs[j].opcode = IBV_WR_RDMA_WRITE;  // default
-          wrs[j].send_flags = IBV_SEND_SIGNALED;
-          wrs[j].next = (j + 1 < kgroup) ? &wrs[j + 1] : nullptr;
+#ifdef USE_DMABUF
+          // Split across chunk boundaries so each sub-WR stays within one
+          // local MR chunk AND one remote MR chunk.  Individual MoE RDMA
+          // transfers are typically tens to hundreds of KB, far smaller than
+          // the 1 GiB chunk size, so this almost always returns 1 segment;
+          // at most 2 when a transfer straddles a chunk boundary.
+          auto segments = ctx->split_for_chunks(
+              laddr, static_cast<uintptr_t>(remote_addr), cmd.bytes);
 
+          for (auto const& seg : segments) {
+            ibv_sge sge{};
+            sge.addr = seg.laddr;
+            sge.length = seg.len;
+            sge.lkey = seg.lkey;
+            sges.push_back(sge);
+
+            ibv_send_wr wr{};
+            // All sub-WRs share the same wr_id; only the last is
+            // signaled, so exactly one CQE is generated per command.
+            wr.wr_id = wrs_to_post[i];
+            wr.num_sge = 1;
+            wr.wr.rdma.remote_addr = seg.raddr;
+            wr.wr.rdma.rkey = seg.rkey;
+            wr.opcode = IBV_WR_RDMA_WRITE;
+            wrs.push_back(wr);
+          }
+          // Only signal the last sub-WR per command; QP ordering
+          // guarantees prior sub-WRs are complete when it completes.
+          wrs.back().send_flags = IBV_SEND_SIGNALED;
+#else
+          ibv_sge sge{};
+          sge.addr = laddr;
+          sge.length = static_cast<uint32_t>(cmd.bytes);
+          sge.lkey = ctx->mr->lkey;
+          sges.push_back(sge);
+
+          ibv_send_wr wr{};
+          wr.wr_id = wrs_to_post[i];
+          wr.num_sge = 1;
+          wr.wr.rdma.remote_addr = remote_addr;
+          wr.wr.rdma.rkey = ctx->remote_rkey;
+          wr.opcode = IBV_WR_RDMA_WRITE;
+          wr.send_flags = IBV_SEND_SIGNALED;
+          wrs.push_back(wr);
+#endif
+
+          // Put IMM on the last sub-WR of this command (if applicable).
           if (cmd.atomic_offset > 0 && cmd.atomic_val > 0) {
             int v = static_cast<int>(cmd.atomic_val);
             if (v < -kMaxSendAtomicValue || v > kMaxSendAtomicValue) {
@@ -1427,15 +1634,21 @@ static void post_rdma_async_batched_normal_mode(
                 AtomicsImm::Pack(true, false, cmd.atomic_val, cmd.atomic_offset,
                                  get_low_latency(cmd.cmd_type))
                     .GetImmData();
-            wrs[j].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-            wrs[j].imm_data = htonl(imm);
+            wrs.back().opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+            wrs.back().imm_data = htonl(imm);
 
             AtomicsImm aimm(imm);
             assert(aimm.GetValue() == cmd.atomic_val);
             assert(aimm.GetOff() == cmd.atomic_offset);
           } else {
-            wrs[j].opcode = IBV_WR_RDMA_WRITE;
+            wrs.back().opcode = IBV_WR_RDMA_WRITE;
           }
+        }
+
+        // Fix up sg_list / next pointers (vector may have reallocated).
+        for (size_t w = 0; w < wrs.size(); ++w) {
+          wrs[w].sg_list = &sges[w];
+          wrs[w].next = (w + 1 < wrs.size()) ? &wrs[w + 1] : nullptr;
         }
 
         // Post the chain
@@ -1591,29 +1804,26 @@ static void post_rdma_async_batched_fast_mode(
       std::abort();
     }
 #else
-    std::vector<ibv_sge> sges(k);
-    std::vector<ibv_send_wr> wrs(k);
+    std::vector<ibv_sge> sges;
+    std::vector<ibv_send_wr> wrs;
+    sges.reserve(k);
+    wrs.reserve(k);
     for (size_t j = 0; j < k; ++j) {
       size_t i = wr_ids[j];
       auto const& cmd = cmds_to_post[i];
       wr_ids[j] = wrs_to_post[i];
-      sges[j].addr = cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
-      sges[j].length = static_cast<uint32_t>(cmd.bytes);
-      sges[j].lkey = ctx->mr->lkey;
-      std::memset(&wrs[j], 0, sizeof(wrs[j]));
-      wrs[j].sg_list = &sges[j];
-      wrs[j].num_sge = 1;
-      wrs[j].wr_id = wr_ids[j];
 
-      wrs[j].wr.rdma.remote_addr = ctx->remote_addr + cmd.req_rptr;
+      uintptr_t laddr =
+          cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
+      uint64_t remote_addr = ctx->remote_addr + cmd.req_rptr;
 
       uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
-      if (wrs[j].wr.rdma.remote_addr < ctx->remote_addr ||
-          wrs[j].wr.rdma.remote_addr + cmd.bytes > remote_end) {
+      if (remote_addr < ctx->remote_addr ||
+          remote_addr + cmd.bytes > remote_end) {
         fprintf(stderr,
                 "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
                 "size=%zu), cmd.req_rptr: 0x%llx\n",
-                (unsigned long long)wrs[j].wr.rdma.remote_addr, cmd.bytes,
+                (unsigned long long)remote_addr, cmd.bytes,
                 (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
                 (unsigned long long)cmd.req_rptr);
         cudaError_t err = cudaDeviceSynchronize();
@@ -1625,13 +1835,61 @@ static void post_rdma_async_batched_fast_mode(
         std::abort();
       }
 
-      wrs[j].wr.rdma.rkey = ctx->remote_rkey;
-      wrs[j].opcode = IBV_WR_RDMA_WRITE;
-      wrs[j].send_flags = IBV_SEND_SIGNALED;
-      wrs[j].next = (j + 1 < k) ? &wrs[j + 1] : nullptr;
+#ifdef USE_DMABUF
+      // Split across chunk boundaries — may produce multiple segments.
+      // Individual MoE RDMA transfers are typically tens to hundreds of KB,
+      // far smaller than the 1 GiB chunk size, so this almost always returns
+      // 1 segment; at most 2 when a transfer straddles a chunk boundary.
+      auto segments = ctx->split_for_chunks(
+          laddr, static_cast<uintptr_t>(remote_addr), cmd.bytes);
+
+      for (auto const& seg : segments) {
+        ibv_sge sge{};
+        sge.addr = seg.laddr;
+        sge.length = seg.len;
+        sge.lkey = seg.lkey;
+        sges.push_back(sge);
+
+        ibv_send_wr wr{};
+        // All sub-WRs share the same wr_id; only the last is
+        // signaled, so exactly one CQE is generated per command.
+        wr.wr_id = wr_ids[j];
+        wr.num_sge = 1;
+        wr.wr.rdma.remote_addr = seg.raddr;
+        wr.wr.rdma.rkey = seg.rkey;
+        wr.opcode = IBV_WR_RDMA_WRITE;
+        wrs.push_back(wr);
+      }
+      // Only signal the last sub-WR per command; QP ordering
+      // guarantees prior sub-WRs are complete when it completes.
+      wrs.back().send_flags = IBV_SEND_SIGNALED;
+#else
+      ibv_sge sge{};
+      sge.addr = laddr;
+      sge.length = static_cast<uint32_t>(cmd.bytes);
+      sge.lkey = ctx->mr->lkey;
+      sges.push_back(sge);
+
+      ibv_send_wr wr{};
+      wr.wr_id = wr_ids[j];
+      wr.num_sge = 1;
+      wr.wr.rdma.remote_addr = remote_addr;
+      wr.wr.rdma.rkey = ctx->remote_rkey;
+      wr.opcode = IBV_WR_RDMA_WRITE;
+      wr.send_flags = IBV_SEND_SIGNALED;
+      wrs.push_back(wr);
+#endif
     }
-    size_t const last = k - 1;
-    uint64_t const batch_tail_wr = wr_ids[last];
+
+    // Fix up sg_list / next pointers (vector may have reallocated).
+    for (size_t w = 0; w < wrs.size(); ++w) {
+      wrs[w].sg_list = &sges[w];
+      wrs[w].next = (w + 1 < wrs.size()) ? &wrs[w + 1] : nullptr;
+    }
+
+    // Last WR in the list gets IMM.
+    size_t const last = wrs.size() - 1;
+    uint64_t const batch_tail_wr = wr_ids[k - 1];
     wrs[last].send_flags |= IBV_SEND_SIGNALED;
     wrs[last].opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
     wrs[last].imm_data = htonl(static_cast<uint32_t>(batch_tail_wr));

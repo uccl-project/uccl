@@ -34,6 +34,32 @@ struct WriteStruct {
   int low_latency_buffer_idx;
 };
 
+#ifdef USE_DMABUF
+// Describes one chunk of a GPU-buffer MR registration.
+struct MRChunk {
+  uintptr_t base;  // virtual (iova) start address of this chunk
+  size_t len;
+  ibv_mr* mr;
+};
+
+// Describes one chunk on the remote side (exchanged during connection setup).
+struct RemoteMRChunk {
+  uintptr_t base;
+  size_t len;
+  uint32_t rkey;
+};
+
+// A single segment produced by ProxyCtx::split_for_chunks().  Each segment is
+// wholly contained within one local MR chunk AND one remote MR chunk.
+struct WRSegment {
+  uintptr_t laddr;
+  uint32_t lkey;
+  uintptr_t raddr;
+  uint32_t rkey;
+  uint32_t len;
+};
+#endif  // USE_DMABUF
+
 struct ProxyCtx {
   // RDMA objects
   ibv_context* context = nullptr;
@@ -59,6 +85,67 @@ struct ProxyCtx {
   uint64_t remote_len = 0;
   uint32_t remote_rkey = 0;
   uint32_t rkey = 0;
+
+#ifdef USE_DMABUF
+  // Chunked MR support — populated when the GPU buffer exceeds the per-MR
+  // size limit (e.g. 2 GiB limit with full IOMMU translation using DMA-BUF).
+  // When empty, the single ctx.mr / ctx.rkey / ctx.remote_rkey are
+  // used directly.
+  std::vector<MRChunk> gpu_mr_chunks;
+  std::vector<RemoteMRChunk> remote_mr_chunks;
+
+  // Look up the local lkey for the MR chunk containing |addr|.
+  uint32_t lkey_for(uintptr_t addr) const {
+    for (auto& c : gpu_mr_chunks) {
+      if (addr >= c.base && addr < c.base + c.len) return c.mr->lkey;
+    }
+    return mr->lkey;  // single-MR path or zero-length SGE
+  }
+
+  // Look up the remote rkey for the chunk containing |addr|.
+  uint32_t rkey_for(uintptr_t addr) const {
+    for (auto& c : remote_mr_chunks) {
+      if (addr >= c.base && addr < c.base + c.len) return c.rkey;
+    }
+    return remote_rkey;  // single-MR path or zero-length SGE
+  }
+
+  // Split an (laddr, raddr, total_len) range into segments where each
+  // segment is wholly contained within one local MR chunk AND one remote
+  // MR chunk.  When chunking is not active (≤1 chunk on either side),
+  // returns a single segment covering the full range.
+  std::vector<WRSegment> split_for_chunks(uintptr_t laddr, uintptr_t raddr,
+                                          uint32_t total_len) const {
+    if (gpu_mr_chunks.size() <= 1 && remote_mr_chunks.size() <= 1) {
+      return {{laddr, lkey_for(laddr), raddr, rkey_for(raddr), total_len}};
+    }
+    std::vector<WRSegment> segs;
+    uint32_t off = 0;
+    while (off < total_len) {
+      uint32_t remain = total_len - off;
+      uintptr_t la = laddr + off;
+      uintptr_t ra = raddr + off;
+      uint32_t seg_len = remain;
+      for (auto const& c : gpu_mr_chunks) {
+        if (la >= c.base && la < c.base + c.len) {
+          uint32_t avail = static_cast<uint32_t>(c.base + c.len - la);
+          if (avail < seg_len) seg_len = avail;
+          break;
+        }
+      }
+      for (auto const& c : remote_mr_chunks) {
+        if (ra >= c.base && ra < c.base + c.len) {
+          uint32_t avail = static_cast<uint32_t>(c.base + c.len - ra);
+          if (avail < seg_len) seg_len = avail;
+          break;
+        }
+      }
+      segs.push_back({la, lkey_for(la), ra, rkey_for(ra), seg_len});
+      off += seg_len;
+    }
+    return segs;
+  }
+#endif  // USE_DMABUF
 
   // Atomic buffer (separate from main RDMA buffer)
   ibv_mr* atomic_buffer_mr = nullptr;       // MR for local atomic_buffer_ptr

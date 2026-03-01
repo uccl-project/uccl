@@ -45,6 +45,17 @@ extern bool use_ll_sl;
 #define ETHERNET_RDMA
 #endif
 
+#ifdef USE_DMABUF
+// Maximum size for a single DMA-BUF MR registration.  Under full IOMMU
+// translation (intel_iommu=on without iommu=pt), each registration requires
+// per-page IOMMU mappings for the full DMA-BUF scatter-gather list.  For
+// larger buffers, this exhausts IOMMU mapping resources, causing ENOMEM on
+// ibv_reg_dmabuf_mr if size is greater than 2 GiB.  Splitting into chunks of
+// 1 GiB size avoids the issue.
+static constexpr size_t kMaxDmabufChunkSize = 1ULL << 30;  // 1 GiB
+static constexpr int kMaxMRChunks = 128;
+#endif
+
 #define kAtomicBufferSize 81960
 #define kQueueSize 2048
 #define kQueueMask (kQueueSize - 1)
