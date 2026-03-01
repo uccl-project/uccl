@@ -187,9 +187,10 @@ Set by comparing remote IP with local IP (via `get_local_ip_from_engine()`) in b
 
 #### Phase 1 unit test
 
-`tests/test_nixl_intranode.py` — a self-contained test that runs two nixl agents
-as separate processes on the same node using `multiprocessing.Pipe` for coordination
-(no ZMQ dependency). It replicates the exact nixl code path:
+`tests/test_nixl_intranode.py` — a self-contained test that creates two nixl agents
+in the same process. Metadata is exchanged as plain variables; the C++ listener
+threads handle the actual UCCL connections in the background. Replicates the exact
+nixl code path:
 
 ```
 getConnInfo → add_remote_agent (loadRemoteConnInfo) → registerMem
