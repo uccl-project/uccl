@@ -1,17 +1,42 @@
 import os
 import subprocess
+import sysconfig
 import setuptools
 from glob import glob
 import shutil
 import site
 from pathlib import Path
 
+import nanobind
 import torch
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 from setuptools.command.install import install
 from setuptools import Command
 
 PROJECT_ROOT = Path(os.path.dirname(__file__)).resolve()
+
+# Nanobind source and include paths
+NB_DIR = Path(os.path.dirname(nanobind.__file__))
+NB_INCLUDE = str(NB_DIR / "include")
+NB_ROBIN_MAP_INCLUDE = str(NB_DIR / "ext" / "robin_map" / "include")
+NB_SRC_DIR = NB_DIR / "src"
+PYTHON_INCLUDE = sysconfig.get_path("include")
+
+NB_SOURCES = [
+    str(NB_SRC_DIR / f)
+    for f in [
+        "nb_internals.cpp",
+        "nb_func.cpp",
+        "nb_type.cpp",
+        "nb_enum.cpp",
+        "nb_ndarray.cpp",
+        "nb_static_property.cpp",
+        "common.cpp",
+        "error.cpp",
+        "trampoline.cpp",
+        "implicit.cpp",
+    ]
+]
 
 
 class CustomInstall(install):
@@ -30,7 +55,7 @@ class CustomInstall(install):
 
         # Find the built .so file
         build_lib = self.get_finalized_command("build_ext").build_lib
-        so_files = list(Path(build_lib).glob("ep*.so"))
+        so_files = list(Path(build_lib).glob("_ep_native*.so"))
 
         if not so_files:
             raise RuntimeError(f"Could not find built .so file in {build_lib}")
@@ -92,21 +117,36 @@ if __name__ == "__main__":
         "-Wno-attributes",
         "-Wno-unused-result",
         "-Wno-unused-function",
+        # Omit Py_LIMITED_API/NB_STABLE_ABI when building with torch: torch's
+        # headers pull in pybind11 code that requires the full Python API.
+        # The wheel still gets abi3 tag from the root package's _abi3_stub.
     ]
     nvcc_flags = ["-O3", "-Xcompiler", "-O3"]
-    sources = glob("./src/*.cu") + glob("./src/*.cpp") + glob("./src/*.cc")
+    sources = glob("./src/*.cu") + glob("./src/*.cpp") + glob("./src/*.cc") + NB_SOURCES
     libraries = ["ibverbs", "glog", "nl-3", "nl-route-3", "numa"]
-    include_dirs = [PROJECT_ROOT / "include", PROJECT_ROOT / ".." / "include"]
+    include_dirs = [
+        PROJECT_ROOT / "include",
+        PROJECT_ROOT / ".." / "include",
+        NB_INCLUDE,
+        NB_ROBIN_MAP_INCLUDE,
+        PYTHON_INCLUDE,
+    ]
 
     # Collect header files for dependency tracking
     header_files = []
     for inc_dir in include_dirs:
-        header_files.extend(glob(str(inc_dir / "**" / "*.h"), recursive=True))
-        header_files.extend(glob(str(inc_dir / "**" / "*.hpp"), recursive=True))
-        header_files.extend(glob(str(inc_dir / "**" / "*.cuh"), recursive=True))
+        inc_path = Path(inc_dir) if not isinstance(inc_dir, Path) else inc_dir
+        header_files.extend(glob(str(inc_path / "**" / "*.h"), recursive=True))
+        header_files.extend(glob(str(inc_path / "**" / "*.hpp"), recursive=True))
+        header_files.extend(glob(str(inc_path / "**" / "*.cuh"), recursive=True))
     library_dirs = []
     nvcc_dlink = []
-    extra_link_args = []
+    torch_lib_dir = str(Path(torch.__file__).parent / "lib")
+    extra_link_args = [
+        f"-L{torch_lib_dir}",
+        "-ltorch_python",
+        f"-Wl,-rpath,{torch_lib_dir}",
+    ]
 
     if torch.version.cuda:
         # Add CUDA library directory to library_dirs
@@ -331,7 +371,7 @@ if __name__ == "__main__":
         version="0.0.1" + revision,
         ext_modules=[
             CUDAExtension(
-                name="ep",
+                name="_ep_native",
                 include_dirs=include_dirs,
                 library_dirs=library_dirs,
                 sources=sources,

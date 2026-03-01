@@ -31,15 +31,25 @@ else
   GH_CFLAGS := -DUSE_GRACE_HOPPER
 endif
 
+# Python and nanobind configuration (stable ABI)
 PYTHON            ?= python3
-PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
+PYTHON_CONFIG      = $(PYTHON)-config
 EXT_SUFFIX        := .abi3.so
+NB_DIR            := $(shell $(PYTHON) -c "import nanobind as _nb, os; print(os.path.dirname(_nb.__file__))")
+NB_INCLUDES       := -I$(NB_DIR)/include -I$(NB_DIR)/ext/robin_map/include -I$(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_path('include'))")
+NB_ABI_FLAGS      := -DPy_LIMITED_API=0x030C0000 -DNB_STABLE_ABI=1
+NB_SRC_DIR        := $(NB_DIR)/src
+NB_SRCS           := nb_internals.cpp nb_func.cpp nb_type.cpp nb_enum.cpp \
+                     nb_ndarray.cpp nb_static_property.cpp common.cpp error.cpp \
+                     trampoline.cpp implicit.cpp
+NB_OBJECTS        := $(addprefix nb_,$(NB_SRCS:.cpp=.o))
+PYTHON_LDFLAGS    := $(shell $(PYTHON_CONFIG) --ldflags)
 
 TORCH_ROOT        := $(shell $(PYTHON) -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent)")
 TORCH_INCLUDE     := $(TORCH_ROOT)/include
 TORCH_INCLUDE_API := $(TORCH_ROOT)/include/torch/csrc/api/include
 TORCH_LIBDIR      := $(TORCH_ROOT)/lib
-TORCH_ABI          := $(shell $(PYTHON) -c "import torch; print(int(torch._C._GLIBCXX_USE_CXX11_ABI))")
+TORCH_ABI         := $(shell $(PYTHON) -c "import torch; print(int(torch._C._GLIBCXX_USE_CXX11_ABI))")
 TORCH_INCS := -I$(TORCH_INCLUDE) -I$(TORCH_INCLUDE_API)
 
 # Python installation path
@@ -53,7 +63,7 @@ SM ?= $(DETECTED_SM)
 CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden -Wno-interference-size -Wno-unused-function
 LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -lnuma -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
 NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++ --expt-relaxed-constexpr
-INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include 
+INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include
 
 # Add Intel RDMA NIC support if USE_INTEL_RDMA_NIC=1
 ifeq ($(USE_INTEL_RDMA_NIC),1)
@@ -88,25 +98,29 @@ PYTARGET      := ep$(EXT_SUFFIX)
 
 all: $(EP_EXT)
 
+# Compile nanobind source files for stable ABI
+nb_%.o: $(NB_SRC_DIR)/%.cpp
+	$(CXX) -O3 -std=c++17 -fPIC -fvisibility=hidden $(NB_ABI_FLAGS) $(NB_INCLUDES) -c $< -o $@
+
 # C++ compilation rule with dependency generation
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(PYBIND11_INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(NB_INCLUDES) $(NB_ABI_FLAGS) -MMD -MP -c $< -o $@
 # CUDA compilation rule with dependency generation
 %.o: %.cu
 	$(NVCC) -arch=sm_$(SM) $(NVCCFLAGS) $(TORCH_INCS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-# Linking rules
+# Binding source compilation
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(PYBIND11_INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(NB_INCLUDES) $(NB_ABI_FLAGS) -MMD -MP -c $< -o $@
 
-$(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND)
+$(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND) $(NB_OBJECTS)
 	$(CXX) $(CXXFLAGS) -shared -fPIC \
 	    -D_GLIBCXX_USE_CXX11_ABI=$(TORCH_ABI) \
-	    $(INCLUDES) $(PYBIND11_INCLUDES) $^ \
+	    $(INCLUDES) $(NB_INCLUDES) $^ \
 	    -L$(TORCH_LIBDIR) -Wl,-rpath,$(TORCH_LIBDIR) \
 	    -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
 	    -ltorch_python -ltorch -ltorch_cpu -ltorch_cuda -lc10 -lc10_cuda \
-	    -lcuda -lcudart $(LDFLAGS) -o $@
+	    -lcuda -lcudart $(LDFLAGS) $(PYTHON_LDFLAGS) -o $@
 
 py: $(PYTARGET) $(EP_EXT)
 
@@ -118,7 +132,7 @@ install: $(EP_EXT)
 
 # Clean all generated files
 clean:
-	rm -f $(OBJ_CPP) $(OBJ_CC) $(OBJ_CU) \
+	rm -f $(OBJ_CPP) $(OBJ_CC) $(OBJ_CU) $(NB_OBJECTS) \
 	      $(EP_EXT) \
 	      *.d src/*.d bench/*.d src/*.o **/*.hip **/*_hip.*
 
