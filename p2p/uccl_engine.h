@@ -6,7 +6,7 @@
 #include <stdint.h>
 
 #define MSG_SIZE 256
-#define FIFO_SIZE 64
+// FIFO_SIZE is defined in common.h
 // Handle for the UCCL engine instance
 typedef struct uccl_engine uccl_engine_t;
 

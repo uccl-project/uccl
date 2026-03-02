@@ -2,6 +2,8 @@
 #define COMMON_H
 
 #include <cstdint>
+
+#define FIFO_SIZE 64
 #include <cstring>
 #include <mutex>
 #include <string>
