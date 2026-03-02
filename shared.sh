@@ -106,11 +106,18 @@ build_p2p() {
 
   if [[ "${USE_DIETGPU:-0}" == "1" ]]; then
     cd thirdparty/dietgpu
-    rm -rf build/
-    python3 setup.py build
-    cd dietgpu/float
-    echo $TORCH_CUDA_ARCH_LIST
-    make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm GPU_ARCH=$TORCH_CUDA_ARCH_LIST
+    if [[ "$TARGET" == cuda* ]]; then
+      cd dietgpu/float
+      CUDA_GPU_ARCH="sm_$(echo "${TORCH_CUDA_ARCH_LIST:-9.0}" | awk '{print $1}' | sed 's/+PTX//; s/\.//')"
+      echo "Building dietgpu float for CUDA: $CUDA_GPU_ARCH"
+      make clean -f Makefile && make -j$(nproc) -f Makefile
+    else
+      rm -rf build/
+      python3 setup.py build
+      cd dietgpu/float
+      echo $TORCH_CUDA_ARCH_LIST
+      make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm GPU_ARCH=$TORCH_CUDA_ARCH_LIST
+    fi
     cd ../../../..
     cp thirdparty/dietgpu/dietgpu/float/libdietgpu_float.so uccl/lib
   fi

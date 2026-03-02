@@ -121,11 +121,11 @@ fi
 ########################################################
 # 3. Clean up previous builds
 ########################################################
-rm -r uccl.egg-info >/dev/null 2>&1 || true
-rm -r dist >/dev/null 2>&1 || true
-rm -r build >/dev/null 2>&1 || true
+rm -rf uccl.egg-info >/dev/null 2>&1 || true
+rm -rf dist >/dev/null 2>&1 || true
+rm -rf build >/dev/null 2>&1 || true
 WHEEL_DIR="wheelhouse-${TARGET}"
-rm -r "${WHEEL_DIR}" >/dev/null 2>&1 || true
+rm -rf "${WHEEL_DIR}" >/dev/null 2>&1 || true
 mkdir -p "${WHEEL_DIR}"
 
 ########################################################
@@ -205,9 +205,9 @@ if [[ -n "${BASE_IMAGE:-}" ]]; then
   BUILD_ARGS+=" --build-arg BASE_IMAGE=${BASE_IMAGE}"
 fi
 if [[ "$ARCH" == "aarch64" ]]; then
-  ${CONTAINER_ENGINE} build --platform=linux/arm64 $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+  sudo ${CONTAINER_ENGINE} build --platform=linux/arm64 $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
 else
-  ${CONTAINER_ENGINE} build $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+  sudo ${CONTAINER_ENGINE} build $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
 fi
 
 ########################################################
@@ -225,7 +225,7 @@ else
   CONTAINER_RUN_ARGS+=(--user "$(id -u):$(id -g)")
 fi
 
-${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
+sudo ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
   -v /etc/passwd:/etc/passwd:ro \
   -v /etc/group:/etc/group:ro \
   -v $HOME:$HOME \
