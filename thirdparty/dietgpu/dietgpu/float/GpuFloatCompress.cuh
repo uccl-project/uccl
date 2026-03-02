@@ -578,4 +578,104 @@ void floatCompressDevice(
   CUDA_TEST_ERROR();
 }
 
+template <FloatType FT, typename InProvider, typename OutProvider>
+inline void runSplitFloatForType(
+    uint32_t numInBatch,
+    InProvider& inProvider,
+    bool useChecksum,
+    const uint32_t* checksum_data,
+    void* toComp_data,
+    uint32_t compRowStride,
+    OutProvider& outProvider,
+    uint32_t* histogram_data,
+    cudaStream_t stream) {
+  constexpr int kBlock = 256;
+  auto& props = getCurrentDeviceProperties();
+  int maxBlocksPerSM = 0;
+  CUDA_VERIFY(cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+      &maxBlocksPerSM,
+      splitFloat<InProvider, OutProvider, FT, kBlock>,
+      kBlock,
+      0));
+  uint32_t maxGrid = maxBlocksPerSM * props.multiProcessorCount;
+  uint32_t perBatchGrid = 4 * divUp(maxGrid, numInBatch);
+  auto grid = dim3(perBatchGrid, numInBatch);
+
+  splitFloat<InProvider, OutProvider, FT, kBlock>
+      <<<grid, kBlock, 0, stream>>>(
+          inProvider,
+          useChecksum,
+          checksum_data,
+          toComp_data,
+          compRowStride,
+          outProvider,
+          histogram_data);
+}
+
+template <typename InProvider, typename OutProvider>
+inline void runSplitFloat(
+    FloatType floatType,
+    uint32_t numInBatch,
+    InProvider& inProvider,
+    bool useChecksum,
+    const uint32_t* checksum_data,
+    void* toComp_data,
+    uint32_t compRowStride,
+    OutProvider& outProvider,
+    uint32_t* histogram_data,
+    cudaStream_t stream) {
+  switch (floatType) {
+    case FloatType::kFloat16:
+      runSplitFloatForType<FloatType::kFloat16>(
+          numInBatch, inProvider, useChecksum, checksum_data,
+          toComp_data, compRowStride, outProvider, histogram_data, stream);
+      break;
+    case FloatType::kBFloat16:
+      runSplitFloatForType<FloatType::kBFloat16>(
+          numInBatch, inProvider, useChecksum, checksum_data,
+          toComp_data, compRowStride, outProvider, histogram_data, stream);
+      break;
+    case FloatType::kFloat32:
+      runSplitFloatForType<FloatType::kFloat32>(
+          numInBatch, inProvider, useChecksum, checksum_data,
+          toComp_data, compRowStride, outProvider, histogram_data, stream);
+      break;
+    default:
+      assert(false);
+      break;
+  }
+}
+
+template <
+    FloatType FT,
+    typename InProvider,
+    typename ANSInProvider,
+    typename ANSOutProvider>
+inline void runANSEncodeForType(
+    StackDeviceMemory& res,
+    const ANSCodecConfig& ansConfig,
+    uint32_t numInBatch,
+    InProvider& inProvider,
+    ANSInProvider& inProviderANS,
+    uint32_t* histogram_data,
+    uint32_t maxSize,
+    ANSOutProvider& outProviderANS,
+    uint32_t* outSize_dev,
+    cudaStream_t stream) {
+  ansEncodeBatchDevice(
+      res,
+      ansConfig,
+      numInBatch,
+      inProviderANS,
+      histogram_data,
+      maxSize,
+      outProviderANS,
+      outSize_dev,
+      stream);
+
+  incOutputSizes<FT><<<divUp(numInBatch, 128), 128, 0, stream>>>(
+      inProvider, outSize_dev, numInBatch);
+}
+
+
 } // namespace dietgpu

@@ -12,12 +12,31 @@ HIP_INC  := $(HIP_HOME)/include
 HIP_LIB  := $(HIP_HOME)/lib
 CONDA_LIB_HOME?=/usr/lib
 CXX := g++
+CXXFLAGS := 
+
+# ---------------- DietGPU ----------------
+USE_DIETGPU ?= $(shell echo $${USE_DIETGPU:-0})
+
+DIETGPU_ROOT      := ../thirdparty/dietgpu
+DIETGPU_FLOAT_DIR := $(DIETGPU_ROOT)/dietgpu/float
+DIETGPU_LIB       := $(DIETGPU_FLOAT_DIR)/libdietgpu_float.so
+
+ifeq ($(USE_DIETGPU),1)
+	DIETGPU_INC  := -I$(DIETGPU_ROOT)
+	DIETGPU_LIBS := -L$(DIETGPU_FLOAT_DIR) -ldietgpu_float \
+	                -Wl,-rpath,$(abspath $(DIETGPU_FLOAT_DIR)) \
+					-Wl,-rpath,'$$ORIGIN/lib'
+	CXXFLAGS += -DUSE_DIETGPU
+else
+	DIETGPU_INC  :=
+	DIETGPU_LIBS :=
+endif
 
 ifeq ($(USE_EFA),1)
 	CXXFLAGS_TRANS := -DUCCL_P2P_USE_EFA
 endif
 
-CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(HIP_INC) \
+CXXFLAGS += -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(HIP_INC) $(DIETGPU_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=${CONDA_LIB_HOME} -I${CONDA_LIB_HOME}/../include \
 	$(CXXFLAGS_TRANS)
@@ -51,6 +70,7 @@ ifeq ($(USE_TCP),1)
 	CXXFLAGS += -DUCCL_P2P_USE_RCCL
 endif
 LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
+				  ${DIETGPU_LIBS}\
                   -Wl,-rpath,$(HIP_LIB) -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest \
                   -lz -lelf -libverbs -lpthread
 ifeq ($(USE_TCP),1)

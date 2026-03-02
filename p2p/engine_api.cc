@@ -164,6 +164,12 @@ NB_MODULE(p2p, m) {
                " size=" + std::to_string(d.size) +
                " mr_id=" + std::to_string(d.mr_id) + ">";
       });
+  nb::enum_<uccl::FloatType>(m, "FloatType")
+      .value("kUndefined", uccl::FloatType::kUndefined)
+      .value("kFloat16", uccl::FloatType::kFloat16)
+      .value("kBFloat16", uccl::FloatType::kBFloat16)
+      .value("kFloat32", uccl::FloatType::kFloat32)
+      .export_values();
 
   // Endpoint class binding
   nb::class_<Endpoint>(m, "Endpoint")
@@ -255,18 +261,20 @@ NB_MODULE(p2p, m) {
           "Accept an incoming connection")
       .def(
           "reg",
-          [](Endpoint& self, uint64_t ptr, size_t size) {
+          [](Endpoint& self, uint64_t ptr, size_t size,
+             uccl::FloatType floatType) {
             uint64_t mr_id;
             bool success;
             {
               nb::gil_scoped_release release;
               InsidePythonGuard guard;
-              success =
-                  self.reg(reinterpret_cast<void const*>(ptr), size, mr_id);
+              success = self.reg(reinterpret_cast<void const*>(ptr), size,
+                                 mr_id, floatType);
             }
             return nb::make_tuple(success, mr_id);
           },
-          "Register a data buffer", nb::arg("ptr"), nb::arg("size"))
+          "Register a data buffer", nb::arg("ptr"), nb::arg("size"),
+          nb::arg("floatType") = uccl::FloatType::kUndefined)
       .def(
           "regv",
           [](Endpoint& self, std::vector<uintptr_t> const& ptrs,

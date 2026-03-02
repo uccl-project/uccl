@@ -73,6 +73,7 @@ def _run_server(args):
 
         gbps = (total * 8) / elapsed / 1e9
         gb_sec = total / elapsed / 1e9
+        collective.deregister_tensor(tensor)
         print(
             f"[Server] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
@@ -101,6 +102,7 @@ def _run_client(args):
 
         gbps = (total * 8) / elapsed / 1e9
         gb_sec = total / elapsed / 1e9
+        collective.deregister_tensor(tensor)
         print(
             f"[Client] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
