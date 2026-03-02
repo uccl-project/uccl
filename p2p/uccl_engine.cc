@@ -26,7 +26,26 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
+
+// Process-global registry of (ip, port) pairs belonging to uccl_engine instances
+// created in this process.  Populated by uccl_engine_get_metadata(); consulted
+// by uccl_engine_connect() to detect same-process connections without any
+// protocol changes.
+static std::unordered_map<std::string, std::unordered_set<int>> s_local_listen_ports;
+static std::mutex s_local_listen_ports_mutex;
+
+static void register_local_listen_addr(const std::string& ip, int port) {
+  std::lock_guard<std::mutex> lk(s_local_listen_ports_mutex);
+  s_local_listen_ports[ip].insert(port);
+}
+
+static bool is_local_engine_addr(const std::string& ip, int port) {
+  std::lock_guard<std::mutex> lk(s_local_listen_ports_mutex);
+  auto it = s_local_listen_ports.find(ip);
+  return it != s_local_listen_ports.end() && it->second.count(port) > 0;
+}
 
 #ifdef UCCL_P2P_USE_TCPX
 // nccl_tcpx_endpoint does not declare inside_python; define it here for
@@ -179,9 +198,13 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   conn->listener_thread = nullptr;
   conn->listener_running = false;
   conn->is_intra_node = (std::string(ip_addr) == get_local_ip_from_engine(engine));
-  conn->is_same_process = false;  // may be updated by uccl_engine_set_same_process
+  // Same-process: remote port belongs to another uccl_engine in this process.
+  // Detected via the process-global registry populated by uccl_engine_get_metadata.
+  conn->is_same_process = conn->is_intra_node &&
+                          is_local_engine_addr(std::string(ip_addr), remote_port);
   std::cout << "uccl_engine_connect: connection to " << ip_addr << " is "
-            << (uccl_conn_is_intra_node(conn) ? "intra" : "inter") << "-node\n";
+            << (uccl_conn_is_intra_node(conn) ? "intra" : "inter") << "-node"
+            << (conn->is_same_process ? " (same-process)" : "") << "\n";
   return conn;
 }
 
@@ -607,7 +630,8 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
       std::memcpy(&gpu_idx, &metadata_vec[6], sizeof(int));
 
       result = "" + ip_addr + ":" + std::to_string(port) + "?" +
-               std::to_string(gpu_idx) + "|" + std::to_string(getpid());
+               std::to_string(gpu_idx);
+      register_local_listen_addr(ip_addr, static_cast<int>(port));
     } else if (metadata_vec.size() == 22) {  // IPv6 format
       char ip6_str[INET6_ADDRSTRLEN];
       struct in6_addr ip6_addr;
@@ -619,7 +643,8 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
       std::memcpy(&gpu_idx, &metadata_vec[18], sizeof(int));
 
       result = "" + std::string(ip6_str) + "]:" + std::to_string(port) + "?" +
-               std::to_string(gpu_idx) + "|" + std::to_string(getpid());
+               std::to_string(gpu_idx);
+      register_local_listen_addr(std::string(ip6_str), static_cast<int>(port));
     } else {  // Fallback: return hex representation
       result = "";
       for (size_t i = 0; i < metadata_vec.size(); ++i) {
