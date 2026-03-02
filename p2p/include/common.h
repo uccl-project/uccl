@@ -69,4 +69,23 @@ inline void deserialize_fifo_item(char const* buf, FifoItem* item) {
 }
 enum class MemoryType { HOST, GPU };
 
+// IPC token constants.
+// IPC_TOKEN_SIZE must equal sizeof(IpcTransferInfo) — verified by static_assert
+// in uccl_engine.cc.  Layout: gpuIpcMemHandle_t(64) + uintptr_t(8) + size_t(8)
+// + uint32_t(4) + bool(1) + 3-byte padding = 88 bytes.
+#define IPC_TOKEN_SIZE 88
+// CUDA IPC requires the base address of a cudaMalloc allocation to be aligned
+// to this boundary (1 MiB) before calling cudaIpcGetMemHandle.
+#define IPC_ALIGNMENT (1ul << 20)
+
+// Unified memory token carrying both an RDMA FifoItem and a CUDA IPC handle.
+// Exactly one of the two sub-tokens is used at transfer time, selected by
+// uccl_engine based on conn->is_intra_node and has_ipc.
+struct uccl_mem_token_t {
+  char     fifo_buf[FIFO_SIZE];     // serialised RDMA FifoItem — always valid
+  char     ipc_buf[IPC_TOKEN_SIZE]; // serialised IpcTransferInfo — valid iff has_ipc
+  uint64_t base_addr;               // registered region base (used for IPC sub-buf patching)
+  bool     has_ipc;                 // true iff buffer is VRAM and IPC handle was obtained
+};
+
 #endif

@@ -239,10 +239,34 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
 int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<void*> dst_v,
                             std::vector<size_t> size_v,
-                            std::vector<FifoItem> fifo_items, int num_iovs,
+                            std::vector<uccl_mem_token_t> tokens, int num_iovs,
                             uint64_t* transfer_id) {
   if (!conn || num_iovs <= 0) return -1;
 
+#if !defined(UCCL_P2P_USE_TCPX) && !defined(UCCL_P2P_USE_NCCL)
+  if (conn->is_intra_node && !tokens.empty() && tokens[0].has_ipc) {
+    std::vector<IpcTransferInfo> ipc_infos;
+    ipc_infos.reserve(num_iovs);
+    for (int i = 0; i < num_iovs; i++) {
+      IpcTransferInfo info;
+      memcpy(&info, tokens[i].ipc_buf, sizeof(IpcTransferInfo));
+      ipc_infos.push_back(info);
+    }
+    return conn->engine->endpoint->readv_ipc_async(conn->conn_id, dst_v,
+                                                   size_v, ipc_infos, num_iovs,
+                                                   transfer_id)
+               ? 0
+               : -1;
+  }
+#endif
+
+  std::vector<FifoItem> fifo_items;
+  fifo_items.reserve(num_iovs);
+  for (int i = 0; i < num_iovs; i++) {
+    FifoItem fi;
+    deserialize_fifo_item(tokens[i].fifo_buf, &fi);
+    fifo_items.push_back(fi);
+  }
   return conn->engine->endpoint->readv_async(conn->conn_id, mr_ids, dst_v,
                                              size_v, fifo_items, num_iovs,
                                              transfer_id)
@@ -286,13 +310,39 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
 int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                              std::vector<void*> dst_v,
                              std::vector<size_t> size_v,
-                             std::vector<FifoItem> fifo_items, int num_iovs,
+                             std::vector<uccl_mem_token_t> tokens, int num_iovs,
                              uint64_t* transfer_id) {
   if (!conn || num_iovs <= 0) return -1;
 
 #ifdef UCCL_P2P_USE_TCPX
   return -1;  // TODO: support write_rc for TCPX
 #else
+
+#if !defined(UCCL_P2P_USE_NCCL)
+  if (conn->is_intra_node && !tokens.empty() && tokens[0].has_ipc) {
+    std::vector<IpcTransferInfo> ipc_infos;
+    ipc_infos.reserve(num_iovs);
+    for (int i = 0; i < num_iovs; i++) {
+      IpcTransferInfo info;
+      memcpy(&info, tokens[i].ipc_buf, sizeof(IpcTransferInfo));
+      ipc_infos.push_back(info);
+    }
+    std::vector<void const*> const_src_v(dst_v.begin(), dst_v.end());
+    return conn->engine->endpoint->writev_ipc_async(conn->conn_id, const_src_v,
+                                                    size_v, ipc_infos, num_iovs,
+                                                    transfer_id)
+               ? 0
+               : -1;
+  }
+#endif
+
+  std::vector<FifoItem> fifo_items;
+  fifo_items.reserve(num_iovs);
+  for (int i = 0; i < num_iovs; i++) {
+    FifoItem fi;
+    deserialize_fifo_item(tokens[i].fifo_buf, &fi);
+    fifo_items.push_back(fi);
+  }
   return conn->engine->endpoint->writev_async(conn->conn_id, mr_ids, dst_v,
                                               size_v, fifo_items, num_iovs,
                                               transfer_id)
@@ -378,20 +428,58 @@ void uccl_engine_mr_destroy(uccl_engine_t* engine, uccl_mr_t mr) {
   }
 }
 
-int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t mr,
-                             void const* data, size_t size, char* fifo_buf) {
-  if (!engine || !data || !fifo_buf) return -1;
+#if !defined(UCCL_P2P_USE_TCPX) && !defined(UCCL_P2P_USE_NCCL)
+static_assert(sizeof(IpcTransferInfo) == IPC_TOKEN_SIZE,
+              "IPC_TOKEN_SIZE in common.h does not match sizeof(IpcTransferInfo)");
+#endif
 
-  return engine->endpoint->prepare_fifo(mr, const_cast<void*>(data), size,
-                                        fifo_buf)
-             ? 0
-             : -1;
+int uccl_engine_prepare_token(uccl_engine_t* engine, uccl_mr_t mr,
+                              void const* data, size_t size, bool is_gpu,
+                              uccl_mem_token_t* out_token) {
+  if (!engine || !data || !out_token) return -1;
+
+  memset(out_token, 0, sizeof(uccl_mem_token_t));
+  out_token->base_addr = reinterpret_cast<uint64_t>(data);
+  out_token->has_ipc = false;
+
+  // RDMA token — always computed.
+  bool ok = engine->endpoint->prepare_fifo(mr, const_cast<void*>(data), size,
+                                           out_token->fifo_buf);
+  if (!ok) return -1;
+
+#if !defined(UCCL_P2P_USE_TCPX) && !defined(UCCL_P2P_USE_NCCL)
+  // IPC token — GPU memory only (conn_id arg is unused by advertise_ipc).
+  if (is_gpu) {
+    ok = engine->endpoint->advertise_ipc(0, const_cast<void*>(data), size,
+                                         out_token->ipc_buf);
+    out_token->has_ipc = ok;
+  }
+#endif
+
+  return 0;
 }
 
-int uccl_engine_update_fifo(FifoItem& fifo_item, uint64_t remote_addr,
-                            uint32_t size) {
-  fifo_item.addr = remote_addr;
-  fifo_item.size = size;
+int uccl_engine_update_token(uccl_mem_token_t* token, uint64_t sub_addr,
+                             uint32_t size) {
+  if (!token) return -1;
+
+  // RDMA: patch the absolute sub-buffer address and size into the FifoItem.
+  FifoItem fi;
+  deserialize_fifo_item(token->fifo_buf, &fi);
+  fi.addr = sub_addr;
+  fi.size = size;
+  serialize_fifo_item(fi, token->fifo_buf);
+
+#if !defined(UCCL_P2P_USE_TCPX) && !defined(UCCL_P2P_USE_NCCL)
+  // IPC: recompute the byte offset from the CUDA-aligned allocation base to
+  // sub_addr, and update the transfer size.
+  if (token->has_ipc) {
+    IpcTransferInfo* ipc = reinterpret_cast<IpcTransferInfo*>(token->ipc_buf);
+    uintptr_t aligned = token->base_addr & ~(static_cast<uintptr_t>(IPC_ALIGNMENT) - 1);
+    ipc->offset = sub_addr - aligned;
+    ipc->size = size;
+  }
+#endif
 
   return 0;
 }

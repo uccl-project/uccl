@@ -102,11 +102,17 @@ remote_xfer_descs = agent.deserialize_descs(peer_xfer_desc_bytes)
 - Parses `"ip:port?gpu"` from peer metadata
 - `uccl_engine_connect(engine_, ip, gpu, port)` — TCP + RDMA handshake to peer
 - `uccl_engine_start_listener(conn)` — spawns completion-notification receiver thread
+- Stores `conn` in `connected_agents_[remote_agent]` — keyed by **agent name** (string)
 
 **C++ (peer `startListener` thread):**
 - `uccl_engine_accept()` returns a new `uccl_conn_t*`
 - `uccl_engine_start_listener(conn)` — same receiver thread on accepting side
-- Stores `conn` in `connected_agents_[remote_ip]`
+- Stores `conn` in `connected_agents_[remote_ip]` — keyed by **remote IP** (string)
+
+> **Key asymmetry**: the connecting side keys `connected_agents_` by agent name; the
+> accepting side keys it by remote IP. Both sides look up by agent name in `prepXfer`,
+> so the accepting side's entry must be re-keyed (or looked up differently) if agent
+> name ≠ IP — this is the current behaviour and a known quirk.
 
 **C++ (`loadRemoteSections`)** — also called inside `add_remote_agent` → `loadRemoteMD`:
 - For each descriptor in the peer's serialised memory section, calls `loadRemoteMD`
@@ -226,9 +232,124 @@ uccl_engine_accept:  connection from <real-NIC-IP> is intra-node
 The test raises `RuntimeError` immediately if the UCCL backend was not loaded (e.g. if
 `NIXL_PLUGIN_DIR` is wrong), before reaching any transfer code.
 
+---
+
+### Phase 2 — Unified token + IPC fast path (all branching in `uccl_engine`)
+
+**Design principle:** the nixl plugin never sees RDMA vs IPC. All path selection lives in
+`uccl_engine`. A new `uccl_mem_token_t` struct carries both tokens; C API functions branch
+internally on `conn->is_intra_node && token.has_ipc`.
+
+**Key implementation facts:**
+- `advertise_ipc` does **not** use `conn_id` — it only calls `cudaIpcGetMemHandle`. Token can
+  be computed at `registerMem` time, same as `FifoItem`. No ordering problem.
+- `uccl_engine_xfer_status` (via `poll_async`) works for both RDMA and IPC `transfer_id`s —
+  both use `TransferStatus*` cast to `uint64_t`. `checkXfer` needs **no changes**.
+
+#### Step 1 — Add `uccl_mem_token_t` to `common.h`
+
+```c
+#define IPC_TOKEN_SIZE sizeof(IpcTransferInfo)   // ~88 bytes
+
+typedef struct uccl_mem_token {
+    char     fifo_buf[FIFO_SIZE];    // RDMA FifoItem — always computed
+    char     ipc_buf[IPC_TOKEN_SIZE];// IpcTransferInfo — zeroed for CPU buffers
+    uint64_t base_addr;              // registered region base address (for sub-buf patching)
+    bool     has_ipc;                // true iff buffer is VRAM
+} uccl_mem_token_t;
+```
+
+`IpcTransferInfo` must be moved from `engine.h` into `common.h` so that `uccl_engine.h`
+exposes it without pulling in the full C++ `Endpoint` header.
+
+#### Step 2 — Replace C API token functions in `uccl_engine.h` / `uccl_engine.cc`
+
+| Old | New | Notes |
+|-----|-----|-------|
+| `uccl_engine_prepare_fifo(engine, mr, addr, len, fifo_buf)` | `uccl_engine_prepare_token(engine, mr, addr, len, token*)` | Calls `prepare_fifo` + `advertise_ipc` for VRAM |
+| `uccl_engine_update_fifo(fifo_item, remote_addr, size)` | `uccl_engine_update_token(token*, sub_addr, size)` | Patches FifoItem addr **and** IPC offset from `base_addr` |
+| `uccl_engine_write_vector(…, FifoItem vec, …)` | `uccl_engine_write_vector(…, uccl_mem_token_t vec, …)` | Dispatches to `writev_async` or `writev_ipc_async` |
+| `uccl_engine_read_vector(…, FifoItem vec, …)` | `uccl_engine_read_vector(…, uccl_mem_token_t vec, …)` | Same |
+
+**`uccl_engine_prepare_token` internals:**
+```cpp
+// RDMA token (always)
+prepare_fifo(engine, mr, addr, len, token->fifo_buf);
+token->base_addr = (uint64_t)addr;
+// IPC token (GPU memory only)
+if (get_dev_idx(addr) != -1) {
+    advertise_ipc(engine, addr, len, token->ipc_buf);  // conn_id unused
+    token->has_ipc = true;
+}
+```
+
+**`uccl_engine_update_token` internals:**
+```cpp
+// RDMA: patch absolute sub-buffer address into FifoItem
+FifoItem fi; deserialize_fifo_item(token->fifo_buf, &fi);
+update_fifo_item(&fi, sub_addr, size);
+serialize_fifo_item(fi, token->fifo_buf);
+// IPC: recompute offset from CUDA-aligned base to sub_addr
+if (token->has_ipc) {
+    IpcTransferInfo* ipc = (IpcTransferInfo*)token->ipc_buf;
+    uintptr_t aligned = token->base_addr & ~(kIpcAlignment - 1);
+    ipc->offset = sub_addr - aligned;
+    ipc->size   = size;
+}
+```
+
+**`uccl_engine_write/read_vector` internals:**
+```cpp
+if (conn->is_intra_node && tokens[0].has_ipc) {
+    // build IpcTransferInfo vec from token.ipc_buf
+    endpoint->writev_ipc_async(conn->conn_id_, src_v, size_v, ipc_infos, n, transfer_id);
+} else {
+    // build FifoItem vec from token.fifo_buf
+    endpoint->writev_async(conn->conn_id_, mr_ids, src_v, size_v, fifo_items, n, transfer_id);
+}
+```
+
+#### Step 3 — Update nixl plugin (`uccl_backend.h` / `uccl_backend.cpp`)
+
+**`nixlUcclBackendMD`:** replace `char fifo_item[FIFO_SIZE]` with `uccl_mem_token_t token`.
+
+**`nixlUcclReqH`:** replace `std::vector<FifoItem> fifo_items` with
+`std::vector<uccl_mem_token_t> tokens`.
+
+Call-site changes (type rename only, no logic change):
+
+| Function | Old | New |
+|----------|-----|-----|
+| `registerMem` | `uccl_engine_prepare_fifo(…, priv->fifo_item)` | `uccl_engine_prepare_token(…, &priv->token)` |
+| `getPublicData` | hex-encode `priv->fifo_item` | hex-encode `priv->token` |
+| `loadRemoteMD` | decode hex → `fifo_item` | decode hex → `token` |
+| `prepXfer` | `deserialize_fifo_item` + `uccl_engine_update_fifo` | `uccl_engine_update_token(&rmd->token, …)` |
+| `postXfer` | `uccl_engine_write_vector(…, fifo_items, …)` | `uccl_engine_write_vector(…, tokens, …)` |
+| `checkXfer` | unchanged | unchanged |
+
+The nixl plugin contains **zero** `is_intra_node` checks and **zero** IPC-specific code.
+
+#### Step 4 — Unit test
+
+Extend `tests/test_nixl_intranode.py`: after a successful intra-node transfer, verify that
+the log contains `writev_ipc_async` (or add a counter/flag to the engine) rather than the
+RDMA path. A second run with `is_intra_node` forced off (or a cross-node pair) should still
+pass via RDMA, confirming the fallback works.
+
+**Files changed:**
+- `uccl/p2p/include/common.h` — add `uccl_mem_token_t`; move `IpcTransferInfo` here
+- `uccl/p2p/engine.h` — remove `IpcTransferInfo` (now in `common.h`)
+- `uccl/p2p/uccl_engine.h` — replace `prepare_fifo`/`update_fifo`, update `write/read_vector` signatures
+- `uccl/p2p/uccl_engine.cc` — implement `prepare_token`, `update_token`, updated dispatch in `write/read_vector`
+- `nixl/src/plugins/uccl/uccl_backend.h` — token type changes
+- `nixl/src/plugins/uccl/uccl_backend.cpp` — call-site renames only
+
+---
+
 ## Status
 
 | Phase | Status |
 |-------|--------|
 | Phase 1 — `uccl_conn::is_intra_node` in `uccl_engine.cc` | ✅ Done |
-| Phase 1 unit test — `benchmark_nixl.py` intra-node log check | 🔲 Next |
+| Phase 1 unit test — intra-node log check | 🔲 Next |
+| Phase 2 — `uccl_mem_token_t` + IPC dispatch in `uccl_engine` + nixl wiring | 🔲 Pending |
