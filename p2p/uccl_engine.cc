@@ -50,6 +50,7 @@ struct uccl_conn {
   std::thread* listener_thread;
   bool listener_running;
   bool is_intra_node;        // true if peer is on the same physical node
+  bool is_same_process;      // true if peer is in the same OS process (IPC forbidden)
   std::mutex listener_mutex;
 };
 
@@ -178,6 +179,7 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   conn->listener_thread = nullptr;
   conn->listener_running = false;
   conn->is_intra_node = (std::string(ip_addr) == get_local_ip_from_engine(engine));
+  conn->is_same_process = false;  // may be updated by uccl_engine_set_same_process
   std::cout << "uccl_engine_connect: connection to " << ip_addr << " is "
             << (uccl_conn_is_intra_node(conn) ? "intra" : "inter") << "-node\n";
   return conn;
@@ -206,6 +208,7 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   conn->listener_thread = nullptr;
   conn->listener_running = false;
   conn->is_intra_node = (ip_addr == get_local_ip_from_engine(engine));
+  conn->is_same_process = false;  // may be updated by uccl_engine_set_same_process
   std::cout << "uccl_engine_accept: connection from " << ip_addr << " is "
             << (uccl_conn_is_intra_node(conn) ? "intra" : "inter") << "-node\n";
   return conn;
@@ -244,6 +247,18 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
   if (!conn || num_iovs <= 0) return -1;
 
 #if !defined(UCCL_P2P_USE_TCPX) && !defined(UCCL_P2P_USE_NCCL)
+  // Same-process: cudaIpcOpenMemHandle is forbidden; fi.addr is a valid device
+  // pointer accessible directly from this process.
+  if (conn->is_intra_node && conn->is_same_process) {
+    for (int i = 0; i < num_iovs; i++) {
+      FifoItem fi;
+      deserialize_fifo_item(tokens[i].fifo_buf, &fi);
+      void* src = reinterpret_cast<void*>(fi.addr);
+      GPU_RT_CHECK(gpuMemcpy(dst_v[i], src, size_v[i], gpuMemcpyDeviceToDevice));
+    }
+    *transfer_id = 0;  // sentinel: already done
+    return 0;
+  }
   if (conn->is_intra_node && !tokens.empty() && tokens[0].has_ipc) {
     std::vector<IpcTransferInfo> ipc_infos;
     ipc_infos.reserve(num_iovs);
@@ -319,6 +334,18 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
 #else
 
 #if !defined(UCCL_P2P_USE_NCCL)
+  // Same-process: cudaIpcOpenMemHandle is forbidden; fi.addr is a valid device
+  // pointer accessible directly from this process.
+  if (conn->is_intra_node && conn->is_same_process) {
+    for (int i = 0; i < num_iovs; i++) {
+      FifoItem fi;
+      deserialize_fifo_item(tokens[i].fifo_buf, &fi);
+      void* dst = reinterpret_cast<void*>(fi.addr);
+      GPU_RT_CHECK(gpuMemcpy(dst, dst_v[i], size_v[i], gpuMemcpyDeviceToDevice));
+    }
+    *transfer_id = 0;  // sentinel: already done
+    return 0;
+  }
   if (conn->is_intra_node && !tokens.empty() && tokens[0].has_ipc) {
     std::vector<IpcTransferInfo> ipc_infos;
     ipc_infos.reserve(num_iovs);
@@ -352,6 +379,7 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
 }
 
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {
+  if (transfer_id == 0) return true;  // same-process direct memcpy: already done
   bool is_done;
   conn->engine->endpoint->poll_async(transfer_id, &is_done);
   return is_done;
@@ -426,6 +454,10 @@ void uccl_engine_mr_destroy(uccl_engine_t* engine, uccl_mr_t mr) {
       break;
     }
   }
+}
+
+void uccl_engine_set_same_process(uccl_conn_t* conn, bool val) {
+  if (conn) conn->is_same_process = val;
 }
 
 #if !defined(UCCL_P2P_USE_TCPX) && !defined(UCCL_P2P_USE_NCCL)
@@ -575,7 +607,7 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
       std::memcpy(&gpu_idx, &metadata_vec[6], sizeof(int));
 
       result = "" + ip_addr + ":" + std::to_string(port) + "?" +
-               std::to_string(gpu_idx);
+               std::to_string(gpu_idx) + "|" + std::to_string(getpid());
     } else if (metadata_vec.size() == 22) {  // IPv6 format
       char ip6_str[INET6_ADDRSTRLEN];
       struct in6_addr ip6_addr;
@@ -587,7 +619,7 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
       std::memcpy(&gpu_idx, &metadata_vec[18], sizeof(int));
 
       result = "" + std::string(ip6_str) + "]:" + std::to_string(port) + "?" +
-               std::to_string(gpu_idx);
+               std::to_string(gpu_idx) + "|" + std::to_string(getpid());
     } else {  // Fallback: return hex representation
       result = "";
       for (size_t i = 0; i < metadata_vec.size(); ++i) {

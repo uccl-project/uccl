@@ -195,6 +195,15 @@ void uccl_engine_conn_destroy(uccl_conn_t* conn);
 void uccl_engine_mr_destroy(uccl_engine_t* engine, uccl_mr_t mr);
 
 /**
+ * Mark a connection as same-process (CUDA IPC is forbidden; direct GPU
+ * memcpy will be used instead).  Call after uccl_engine_connect when
+ * the remote PID equals the local PID.
+ * @param conn          Connection handle.
+ * @param val           True to enable same-process mode.
+ */
+void uccl_engine_set_same_process(uccl_conn_t* conn, bool val);
+
+/**
  * Get endpoint metadata for connection establishment.
  * @param engine        The engine instance.
  * @param metadata      Pointer to store the metadata in string.
