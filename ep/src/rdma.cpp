@@ -1288,7 +1288,7 @@ static void post_rdma_async_batched_normal_mode(
 
     for (auto& [ring_idx_raw, idxs] : ring_to_indices) {
 #ifdef EFA
-      const size_t local_ring_count = ctx->data_qps_by_channel.size();
+      size_t const local_ring_count = ctx->data_qps_by_channel.size();
       struct ibv_qp_ex* qpx =
           (struct ibv_qp_ex*)(local_ring_count
                                   ? ctx->data_qps_by_channel[ring_idx_raw %
@@ -2290,15 +2290,27 @@ void remote_process_completions_fast_mode(
         ImmType::IsAtomics(ntohl(cqe.imm_data))) {
       AtomicsImm aimm(ntohl(cqe.imm_data));
       int value = aimm.GetValue();
-      uint32_t offset = aimm.GetOff();
+      // off13 stores int64_t index (byte_offset >> 3); decode back to bytes.
+      uint32_t offset = static_cast<uint32_t>(aimm.GetOff()) << 3;
       size_t index = offset / sizeof(int64_t);
 #ifdef USE_RECEIVER_BARRIER
       // ep_config.hpp
       bool is_combine = aimm.IsCombine();
       int low_latency_buffer_idx = aimm.GetBufferIdx();
-      uint32_t new_offset =
-          offset - low_latency_buffer_idx *
-                       align<size_t>(num_experts * sizeof(int64_t), 128);
+      // Double-buffer stride must match ep_config.hpp:
+      // signaling_buffer_bytes_internode_aligned =
+      //   align(max(dispatch_bytes, combine_bytes), 128)
+#ifdef PER_EXPERT_BATCHING
+      size_t per_buffer_stride =
+          align<size_t>(std::max(static_cast<size_t>(num_ranks) * num_ranks,
+                                 static_cast<size_t>(num_experts)) *
+                            sizeof(int64_t),
+                        128);
+#else
+      size_t per_buffer_stride =
+          align<size_t>(num_experts * sizeof(int64_t), 128);
+#endif
+      uint32_t new_offset = offset - low_latency_buffer_idx * per_buffer_stride;
       size_t new_index = new_offset / sizeof(int64_t);
       int src_rank = -1;
       bool is_atomic_ready = false;
@@ -2363,7 +2375,7 @@ void remote_process_completions_fast_mode(
 #ifdef USE_SENDER_BARRIER
       if (aimm.IsCombine()) value = 1;
 #ifndef EFA
-      const uint32_t tag = wr_tag(cqe.wr_id);
+      uint32_t const tag = wr_tag(cqe.wr_id);
       ProxyCtx& S_atomic = *ctx_by_tag[tag];
       ibv_sge sge = {
           .addr = reinterpret_cast<uintptr_t>(S_atomic.mr->addr),
@@ -2863,7 +2875,8 @@ static void post_atomic_operations_fast_mode(
                 v, (unsigned long)cmd.value);
         std::abort();
       }
-      uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
+      // Encode byte offset as int64_t index (>> 3) to fit in 13-bit off13.
+      uint32_t offset = static_cast<uint32_t>(cmd.req_rptr >> 3);
       int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
       if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
         fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
@@ -2904,7 +2917,8 @@ static void post_atomic_operations_fast_mode(
         fprintf(stderr, "value=%d won't fit in 15 bits\n", v);
         std::abort();
       }
-      uint32_t const off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
+      // Encode byte offset as int64_t index (>> 3) to fit in 13-bit off13.
+      uint32_t const off13 = static_cast<uint32_t>(cmd.req_rptr >> 3);
       int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
       if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
         fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
@@ -2912,7 +2926,7 @@ static void post_atomic_operations_fast_mode(
         std::abort();
       }
       uint32_t const imm = AtomicsImm::Pack(true, get_is_combine(cmd.cmd_type),
-                                            v, off16, low_latency_buffer_idx)
+                                            v, off13, low_latency_buffer_idx)
                                .GetImmData();
       sge[i].addr = reinterpret_cast<uintptr_t>(ctx->mr->addr);
       sge[i].length = 0;

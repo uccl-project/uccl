@@ -89,7 +89,8 @@ class Buffer:
             device_index = torch.cuda.current_device()
 
         # Prefer cudaMalloc when NIC can register GPU memory; else cudaHostAlloc.
-        result = ep.get_rdma_buffer(num_rdma_bytes, device_index)
+        # Guard: cudaMalloc(0) returns NULL which torch::from_blob rejects.
+        result = ep.get_rdma_buffer(max(num_rdma_bytes, 1), device_index)
         if isinstance(result, tuple):
             self.scratch, rdma_buffer_is_host_allocated = result
         else:
