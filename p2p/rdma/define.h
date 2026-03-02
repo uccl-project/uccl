@@ -1,4 +1,7 @@
 #pragma once
+#include "common.h"
+#include "util/gpu_rt.h"
+#include "util/util.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
 #include <infiniband/efadv.h>
@@ -33,9 +36,6 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include "common.h"
-#include "util/gpu_rt.h"
-#include "util/util.h"
 
 namespace uccl {
 enum class FloatType : uint32_t {
@@ -59,7 +59,6 @@ enum class FloatType : uint32_t {
 #include "dietgpu/utils/StackDeviceMemory.h"
 #include <cuda_fp16.h>
 #endif
-
 
 inline dietgpu::FloatType to_dietgpu(uccl::FloatType t) {
   switch (t) {

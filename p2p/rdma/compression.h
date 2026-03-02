@@ -105,7 +105,9 @@ class NullCompressorBackend : public ICompressorBackend {
   NullCompressorBackend() : compress_strategy_(CompressStrategy::kNone) {}
   ~NullCompressorBackend() override = default;
 
-  std::shared_ptr<RegMemBlock> getCompressBuffer() const override { return nullptr; }
+  std::shared_ptr<RegMemBlock> getCompressBuffer() const override {
+    return nullptr;
+  }
 
   std::shared_ptr<RegMemBlock> getDecompressBuffer() const override {
     return nullptr;
@@ -206,7 +208,9 @@ class DietGPUCompressorBackend : public ICompressorBackend {
     }
   }
 
-  std::shared_ptr<RegMemBlock> getCompressBuffer() const override { return buffer_; }
+  std::shared_ptr<RegMemBlock> getCompressBuffer() const override {
+    return buffer_;
+  }
 
   std::shared_ptr<RegMemBlock> getDecompressBuffer() const override {
     return decompressBuffer_;
@@ -347,7 +351,8 @@ class DietGPUCompressorBackend : public ICompressorBackend {
   }
 
   bool shouldCompressAndSplitFirst(size_t size) override {
-    return compress_strategy_ == CompressStrategy::kSplitOnly && shouldCompress(size);
+    return compress_strategy_ == CompressStrategy::kSplitOnly &&
+           shouldCompress(size);
   }
 
   void prepareSplitContext(void* addr, size_t size, CompressCtx ctx) override {
@@ -359,8 +364,8 @@ class DietGPUCompressorBackend : public ICompressorBackend {
       return;
     }
     dietgpu::FloatType float_type = to_dietgpu(ctx->getFloatType());
-    uint32_t numFloats =
-        static_cast<uint32_t>(dietgpu::getElementCountFromBytes(float_type, size));
+    uint32_t numFloats = static_cast<uint32_t>(
+        dietgpu::getElementCountFromBytes(float_type, size));
 
     // Build params_dev on device: layout is [in_ptr, inSize, out_ptr]
     uintptr_t hostParams[3];

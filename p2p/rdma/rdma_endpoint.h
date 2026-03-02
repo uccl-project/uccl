@@ -1,5 +1,4 @@
 #pragma once
-#include <glog/logging.h>
 #include "compression.h"
 #include "define.h"
 #include "epoll_client.h"
@@ -10,6 +9,7 @@
 #include "rdma_ctrl_channel.h"
 #include "rdma_device.h"
 #include "util/net.h"
+#include <glog/logging.h>
 
 class NICEndpoint {
  public:
