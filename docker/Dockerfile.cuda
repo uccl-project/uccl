@@ -32,15 +32,14 @@ RUN apt-get update && \
 # ───── Clean up apt cache ─────
     rm -rf /var/lib/apt/lists/*
 
-# ─────────────────────────────────────────────────────────
-# Install Python build back-end (for Python ${PY_VER})
-# ─────────────────────────────────────────────────────────
-RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11
-
 # ───── Install PyTorch with CUDA support ─────
 RUN python${PY_VER} -m pip install --no-cache-dir torch torchvision torchaudio \
     --index-url https://download.pytorch.org/whl/cu128
 
+# ─────────────────────────────────────────────────────────
+# Install Python build back-end (for Python ${PY_VER})
+# ─────────────────────────────────────────────────────────
+RUN python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11 nanobind
 RUN python${PY_VER} -m pip install --no-cache-dir --upgrade setuptools
 
 # ───── Set Python ${PY_VER} as default python3 and python3-config ─────

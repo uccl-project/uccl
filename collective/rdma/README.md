@@ -58,7 +58,7 @@ make MPI=1 MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi CUDA_HOME=/usr/local/cuda 
 
 The easiest way is to use docker, which packs all needed external libraries into a python wheel and install into your local python env: 
 ```bash
-cd $UCCL_HOME && bash build_and_install.sh cuda rdma
+cd $UCCL_HOME && bash build.sh cuda rdma --install
 ```
 
 The following alternative is best for development where you have installed all needed external libraries: 
@@ -107,7 +107,7 @@ make MPI=1 MPI_HOME=/opt/ohpc/pub/mpi/openmpi4-gnu12/4.1.5 HIP_HOME=/opt/rocm-6.
 
 The easiest way is to use docker: 
 ```bash
-cd $UCCL_HOME && bash build_and_install.sh rocm rdma
+cd $UCCL_HOME && bash build.sh rocm rdma --install
 ```
 
 The following alternative is best for development where you have installed all needed external libraries:

@@ -44,7 +44,7 @@ make MPI=1 MPI_HOME=/opt/amazon/openmpi CUDA_HOME=/usr/local/cuda NCCL_HOME=$UCC
 
 The easiest way is to use docker, which packs all needed external libraries into a python wheel and install into your local python env: 
 ```bash
-cd $UCCL_HOME && bash build_and_install.sh cuda efa
+cd $UCCL_HOME && bash build.sh cuda efa --install
 ```
 
 The following alternative is best for development where you have installed all needed external libraries: 

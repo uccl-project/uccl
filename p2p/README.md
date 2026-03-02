@@ -10,7 +10,7 @@ UCCL has an experimental GPU-driven P2P engine, see [ep](../ep/) folder.
 p2p/
 ├── engine.h          # C++ Endpoint class header with RDMA functionality
 ├── engine.cc         # C++ Endpoint implementation
-├── engine_pybind.cc  # pybind11 wrapper for Python integration
+├── engine_api.cc     # nanobind wrapper for Python integration
 ├── Makefile          # Build configuration
 ├── tests/            # Comprehensive test suite
 ├── benchmarks/       # Comprehensive benchmark suite
@@ -22,7 +22,7 @@ p2p/
 The easiest way is to: 
 ```bash
 git clone https://github.com/uccl-project/uccl.git --recursive
-cd uccl && bash build_and_install.sh [cuda|rocm] p2p [py_version]
+cd uccl && bash build.sh [cuda|rocm] p2p [py_version] --install
 ```
 
 Alternatively, you can setup your local dev environment by: 
@@ -33,7 +33,7 @@ Alternatively, you can setup your local dev environment by:
 - Linux with RDMA support
 - Python 3.7+ with development headers
 - C++17 compatible compiler
-- pybind11 library
+- nanobind library
 - PyTorch (for tensor/array operations)
 
 ```bash
@@ -43,7 +43,7 @@ sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
 
 ### Installation
 
-1. **Install Pybind11 dependency:**
+1. **Install nanobind dependency:**
    ```bash
    make install-deps
    ```
@@ -62,7 +62,7 @@ sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
 
 To build AWS EFA support, you can: 
 ```bash
-USE_EFA=1 bash build_and_install.sh cuda p2p
+USE_EFA=1 bash build.sh cuda p2p --install
 # or
 make -j USE_EFA=1 install
 ```
@@ -84,7 +84,7 @@ torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> ben
 ```
 
 Notes: 
-* You may consider exporting `GLOO_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
+* You may consider exporting `GLOO_SOCKET_IFNAME=xxx NCCL_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
 * You may consider exporting `UCCL_P2P_RDMA_GID_INDEX` if your cluster requires it for NCCL to run (usually 1, or 3 in some testbed).
 * **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to work. 
 * To benchmark dual direction transfer, `benchmark_uccl.py --dual`.

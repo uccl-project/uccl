@@ -157,7 +157,7 @@ class Buffer {
           // stream)
           CUDA_CHECK(cudaMemPrefetchAsync(
               d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
-              loc, 0, 0));
+              device_index, 0));
           CUDA_CHECK(cudaMemPrefetchAsync(
               d_handles, num_d2h_channel_addrs * sizeof(uint64_t),
               device_index));
@@ -2064,6 +2064,11 @@ PYBIND11_MODULE(ep, m) {
         void* ptr;
         bool is_host_allocated = false;
         CUDA_CHECK(cudaSetDevice(device_index));
+        if (num_rdma_bytes <= 0) {
+          auto tensor =
+              torch::empty({0}, dtype(torch::kUInt8).device(torch::kCUDA));
+          return py::make_tuple(tensor, false);
+        }
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         CUDA_CHECK(hipExtMallocWithFlags(&ptr, num_rdma_bytes,
                                          hipDeviceMallocUncached));

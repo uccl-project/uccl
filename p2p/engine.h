@@ -12,7 +12,6 @@
 #endif
 #include <glog/logging.h>
 #include <infiniband/verbs.h>
-#include <pybind11/pybind11.h>
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -24,8 +23,6 @@
 #include <unordered_map>
 #include <variant>
 #include <vector>
-
-namespace py = pybind11;
 
 #ifdef UCCL_P2P_USE_TCPX
 using FifoItem = nccl_tcpx::FifoItem;
@@ -74,6 +71,7 @@ struct Conn {
   ConnID uccl_conn_id_;
   std::string ip_addr_;
   int remote_gpu_idx_;
+  bool is_local_ = false;
 
   ShmRingHandle remote_inbox_;
   bool shm_attached_ = false;
@@ -392,7 +390,7 @@ class Endpoint {
   bool accept_local(int& remote_gpu_idx, uint64_t& conn_id);
 
   /* Send data to the remote server via CUDA/HIP IPC. Blocking. The
-   * gpuIpcMemHandle_t will be passed via UDS from recv_ipc to send_ipc
+   * gpuIpcMemHandle_t will be passed via shm-jring from recv_ipc to send_ipc
    * function. */
   bool send_ipc(uint64_t conn_id, void* data, size_t size);
 
@@ -500,6 +498,7 @@ class Endpoint {
   bool passive_accept_;
   std::atomic<bool> passive_accept_stop_{false};
   std::thread passive_accept_thread_;
+  std::thread passive_accept_local_thread_;
 
   /* Initialize the engine Internal helper function for lazy initialization. */
   void initialize_engine();
@@ -508,6 +507,7 @@ class Endpoint {
   void send_proxy_thread_func();
   void recv_proxy_thread_func();
   void passive_accept_thread_func();
+  void passive_accept_local_thread_func();
   void ipc_poller_thread_func();
 
   std::shared_ptr<UnifiedTask> create_task(uint64_t conn_id, uint64_t mr_id,

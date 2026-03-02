@@ -23,12 +23,13 @@ fi
 
 # Check if clang-format is installed
 if ! command -v "$CLANG_FORMAT" &> /dev/null; then
-    echo "$CLANG_FORMAT could not be found. Please install clang-format-14 (e.g. apt install clang-format-14)."
+    echo "$CLANG_FORMAT could not be found. Please install clang-format-14 (e.g. pip install clang-format==14)."
     exit 1
 fi
 
-# Ensure clang-format version is exactly 14
-INSTALLED_VERSION=$("$CLANG_FORMAT" --version | grep -oP '[0-9]+\.[0-9]+\.[0-9]+' | head -1 | cut -d. -f1)
+# Ensure clang-format version is exactly 14.
+# Use sed for portability (BSD grep on macOS does not support -P).
+INSTALLED_VERSION=$("$CLANG_FORMAT" --version | sed -nE 's/.*[Vv]ersion[[:space:]]+([0-9]+)(\.[0-9]+){1,2}.*/\1/p' | head -1)
 
 if [ "$INSTALLED_VERSION" != "$REQUIRED_VERSION" ]; then
     echo "clang-format version $REQUIRED_VERSION is required. Found version: $INSTALLED_VERSION ($CLANG_FORMAT)."
@@ -73,11 +74,16 @@ BLACK_EXCLUDES=("thirdparty" "docs" "build")
 # Convert to exclude args
 BLACK_EXCLUDE_ARGS=$(IFS="|"; echo "${BLACK_EXCLUDES[*]}")
 
-for DIR in "${PYTHON_DIRS[@]}"; do
-    if [ -d "$DIR" ]; then
-        echo "  → $DIR"
-        black "$DIR" --exclude "$BLACK_EXCLUDE_ARGS"
-    fi
-done
+if command -v black &>/dev/null; then
+    for DIR in "${PYTHON_DIRS[@]}"; do
+        if [ -d "$DIR" ]; then
+            echo "  → $DIR"
+            black "$DIR" --exclude "$BLACK_EXCLUDE_ARGS"
+        fi
+    done
+else
+    echo "black could not be found. Please install black (e.g. pip install black)."
+    exit 1
+fi
 
 echo "Formatting complete."

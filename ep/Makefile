@@ -33,7 +33,7 @@ endif
 
 PYTHON            ?= python3
 PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
-EXT_SUFFIX        := $(shell $(PYTHON) -c "import sysconfig as s; print(s.get_config_var('EXT_SUFFIX') or '.so')")
+EXT_SUFFIX        := .abi3.so
 
 TORCH_ROOT        := $(shell $(PYTHON) -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent)")
 TORCH_INCLUDE     := $(TORCH_ROOT)/include
