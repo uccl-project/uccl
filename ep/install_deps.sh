@@ -16,8 +16,24 @@ get_cuda_version() {
     nvcc --version | grep -oE 'release [0-9]+\.[0-9]+' | awk '{print $2}' | head -n1
 }
 
+# Run system-level commands with sudo when available, otherwise directly.
+if [[ "$(id -u)" -eq 0 ]]; then
+    SUDO_CMD=()
+    CAN_INSTALL_APT=1
+elif command -v sudo &> /dev/null && sudo -n true &> /dev/null; then
+    SUDO_CMD=(sudo)
+    CAN_INSTALL_APT=1
+else
+    SUDO_CMD=()
+    CAN_INSTALL_APT=0
+fi
+
 # Install common dependencies
-sudo apt install -y nvtop libgoogle-glog-dev clang-format-14 python3-pip
+if [[ "$CAN_INSTALL_APT" -eq 1 ]]; then
+    "${SUDO_CMD[@]}" apt install -y nvtop libgoogle-glog-dev clang-format-14 python3-pip
+else
+    echo "No root/passwordless sudo. Skipping apt dependencies: nvtop libgoogle-glog-dev clang-format-14 python3-pip"
+fi
 pip install pybind11 nanobind --upgrade
 pip install black
 
