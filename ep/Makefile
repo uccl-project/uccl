@@ -33,7 +33,7 @@ endif
 
 PYTHON            ?= python3
 PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
-EXT_SUFFIX        := $(shell $(PYTHON) -c "import sysconfig as s; print(s.get_config_var('EXT_SUFFIX') or '.so')")
+EXT_SUFFIX        := .abi3.so
 
 TORCH_ROOT        := $(shell $(PYTHON) -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent)")
 TORCH_INCLUDE     := $(TORCH_ROOT)/include
@@ -54,6 +54,19 @@ CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden -Wno-interf
 LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -lnuma -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
 NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++ --expt-relaxed-constexpr
 INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include 
+
+# Add Intel RDMA NIC support if USE_INTEL_RDMA_NIC=1
+ifeq ($(USE_INTEL_RDMA_NIC),1)
+  override CXXFLAGS += -DINTEL_RDMA_NIC
+  override NVCCFLAGS += -DINTEL_RDMA_NIC
+endif
+
+# Enable per-expert batching path in dispatch-LL (default: disabled)
+PER_EXPERT_BATCHING ?= 0
+ifeq ($(PER_EXPERT_BATCHING),1)
+  override CXXFLAGS += -DPER_EXPERT_BATCHING
+  override NVCCFLAGS += -DPER_EXPERT_BATCHING
+endif
 
 CXXFLAGS  += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)
 NVCCFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS) $(NORMAL_CFLAGS)

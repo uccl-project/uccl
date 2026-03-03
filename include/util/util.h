@@ -552,19 +552,11 @@ static inline std::string FormatVarg(char const* fmt, va_list ap) {
   return s;
 }
 
-#ifdef __cpp_lib_hardware_interference_size
-using std::hardware_constructive_interference_size;
-using std::hardware_destructive_interference_size;
-#else
-// 64 bytes on x86-64 │ L1_CACHE_BYTES │ L1_CACHE_SHIFT │ __cacheline_aligned │
-// ...
+// Use 64 bytes unconditionally to match the jring C library's CACHE_LINE_SIZE.
+// Do NOT use std::hardware_{constructive,destructive}_interference_size here
+// because it is 256 on aarch64, which would break jring alignment assumptions.
 constexpr std::size_t hardware_constructive_interference_size = 64;
 constexpr std::size_t hardware_destructive_interference_size = 64;
-#endif
-// TODO(ilias): Adding an assertion for now, to prevent incompatibilities
-// with the C helper library.
-static_assert(hardware_constructive_interference_size == 64);
-static_assert(hardware_destructive_interference_size == 64);
 
 static inline jring_t* create_ring(size_t element_size, size_t element_count) {
   size_t ring_sz = jring_get_buf_ring_size(element_size, element_count);
@@ -1207,7 +1199,11 @@ inline int get_dev_numa_node(char const* dev_name) {
   }
 
   auto numa_node = std::stoi(line);
-  DCHECK(numa_node != -1) << "NUMA node is -1 for " << dev_name;
+  if (numa_node == -1) {
+    LOG(WARNING) << "NUMA node is -1 for " << dev_name
+                 << ", defaulting to node 0";
+    numa_node = 0;
+  }
   return numa_node;
 }
 

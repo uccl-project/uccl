@@ -1044,7 +1044,7 @@ __global__ void __launch_bounds__(
           // to update the tail. For other GPUs and EFA NICs, we use the
           // CPU-emulated atomics, allow us to piggyback the atomic operation
           // with the RDMA send.
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#ifndef EFA
               0, 0
 #else
               reinterpret_cast<uint64_t>(rdma_channel_tail.buffer(rdma_rank)) -
@@ -1070,7 +1070,7 @@ __global__ void __launch_bounds__(
               channel_id,  // NOTE(MaoZiming): use channel_id for rb.
               dst_rdma_rank == rdma_rank, d2h_channel_addrs,
               num_d2h_channel_addrs, false, -1,
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#ifndef EFA
               false
 #else
               true
@@ -2658,7 +2658,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                                                          nvl_rank),
                 channel_id,  // NOTE(MaoZiming): use channel_id for rb.
                 lane_id, 0, d2h_channel_addrs, num_d2h_channel_addrs, false, -1,
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#ifndef EFA
                 0, 0
 #else
                 reinterpret_cast<uint64_t>(
@@ -2683,7 +2683,7 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                 channel_id,  // NOTE(MaoZiming): use warp_id for rb.
                 dst_rdma_rank == rdma_rank, d2h_channel_addrs,
                 num_d2h_channel_addrs, false, -1,
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#ifndef EFA
                 false
 #else
                 true

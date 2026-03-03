@@ -1,3 +1,4 @@
-pybind11>=2.6.0
 paramiko
 intervaltree
+pybind11>=2.6.0
+nanobind>=2.0.0

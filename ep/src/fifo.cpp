@@ -3,6 +3,9 @@
 
 #include "fifo.hpp"
 #include "fifo_util.hpp"
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
 #include <numaif.h>
 
 namespace mscclpp {
@@ -26,11 +29,16 @@ Fifo::Fifo(int size) {
   int device;
   MSCCLPP_CUDATHROW(cudaGetDevice(&device));
   int numaNode = getDeviceNumaNode(device);
-  unsigned long nodemask = 1UL << numaNode;
-  if (set_mempolicy(MPOL_PREFERRED, &nodemask, 8 * sizeof(nodemask)) != 0) {
-    throw std::runtime_error(
-        "Failed to set mempolicy device: " + std::to_string(device) +
-        " numaNode: " + std::to_string(numaNode));
+  if (numaNode >= 0) {
+    unsigned long nodemask = 1UL << numaNode;
+    if (set_mempolicy(MPOL_PREFERRED, &nodemask, 8 * sizeof(nodemask)) != 0) {
+      // Some containerized environments disallow set_mempolicy; continue
+      // without NUMA memory policy instead of failing proxy initialization.
+      std::fprintf(stderr,
+                   "Warning: set_mempolicy failed for device %d numaNode %d: "
+                   "%s (errno=%d). Continuing without NUMA mempolicy.\n",
+                   device, numaNode, std::strerror(errno), errno);
+    }
   }
   pimpl_ = std::make_unique<Impl>(size);
 }

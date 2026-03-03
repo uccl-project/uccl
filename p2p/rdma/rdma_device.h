@@ -2,6 +2,7 @@
 #include "define.h"
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 // Base class for device selection strategy
@@ -9,9 +10,11 @@ class RDMADeviceSelectionStrategy {
  public:
   virtual ~RDMADeviceSelectionStrategy() = default;
 
-  // Select NIC names from candidates based on GPU index
+  // Select NIC names from dist based on GPU index
+  // dist: all NICs with their PCIe distances
   virtual std::vector<std::string> selectNICs(
-      std::vector<std::string> const& candidates, int gpu_idx) = 0;
+      std::vector<std::pair<std::string, uint32_t>> const& dist,
+      int gpu_idx) = 0;
 };
 
 // Include device selection strategy based on build configuration
@@ -100,25 +103,12 @@ class RdmaDeviceManager {
     if (dist.empty()) {
       LOG(WARNING) << "no NIC found, defaulting to empty";
     } else {
-      // Find the minimum distance
-      auto min_it = std::min_element(
-          dist.begin(), dist.end(),
-          [](auto const& a, auto const& b) { return a.second < b.second; });
-      auto min_d = min_it->second;
-
-      // Collect all NICs with equal minimum distance
-      std::vector<std::string> candidates;
-      for (auto& p : dist) {
-        if (p.second == min_d) candidates.push_back(p.first);
-      }
-
-      if (candidates.empty()) {
+      auto strategy = createDeviceSelectionStrategy();
+      auto selected = strategy->selectNICs(dist, gpu_idx);
+      if (selected.empty()) {
         LOG(WARNING) << "no candidate NIC found, defaulting to first";
         selected_nic_names.push_back(dist.front().first);
       } else {
-        auto strategy = createDeviceSelectionStrategy();
-        // Select NICs based on the strategy among candidates
-        auto selected = strategy->selectNICs(candidates, gpu_idx);
         selected_nic_names.insert(selected_nic_names.end(), selected.begin(),
                                   selected.end());
       }

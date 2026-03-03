@@ -31,6 +31,31 @@ extern bool use_ll_sl;
 
 #define USE_MSCCLPP_FIFO_BACKEND
 // #define USE_SUBSET_BARRIER
+
+// Intel RDMA NIC support
+#ifdef INTEL_RDMA_NIC
+// Use DMA-BUF for GPU memory registration (avoids nvidia_peermem dependency).
+// Falls back to ibv_reg_mr_iova2 at runtime if DMA-BUF is unsupported.
+#define USE_DMABUF
+// Use pinned host memory for the atomic buffer instead of cudaMalloc.
+// Required for NICs without nvidia_peermem (e.g. Intel irdma) so that
+// ibv_reg_mr succeeds, and allows CPU proxy threads to do std::atomic ops.
+#define ATOMICS_USE_HOST_MEMORY
+// Ethernet-based RDMA (iWARP/RoCEv2) — no IB-specific CQ attributes.
+#define ETHERNET_RDMA
+#endif
+
+#ifdef USE_DMABUF
+// Maximum size for a single DMA-BUF MR registration.  Under full IOMMU
+// translation (intel_iommu=on without iommu=pt), each registration requires
+// per-page IOMMU mappings for the full DMA-BUF scatter-gather list.  For
+// larger buffers, this exhausts IOMMU mapping resources, causing ENOMEM on
+// ibv_reg_dmabuf_mr if size is greater than 2 GiB.  Splitting into chunks of
+// 1 GiB size avoids the issue.
+static constexpr size_t kMaxDmabufChunkSize = 1ULL << 30;  // 1 GiB
+static constexpr int kMaxMRChunks = 128;
+#endif
+
 #define kAtomicBufferSize 81960
 #define kQueueSize 2048
 #define kQueueMask (kQueueSize - 1)
@@ -87,37 +112,32 @@ uint32_t wr_tag(uint64_t wrid);
 uint32_t wr_slot(uint64_t wrid);
 
 extern thread_local std::atomic<size_t> current_inflight_bytes;
+
+// C++11 guarantees that a static local variable's initializer runs exactly
+// once, even under concurrent access — the compiler emits a guard variable and
+// lock. This eliminates both the data race and the redundant getenv calls.
 static inline size_t get_max_inflight_bytes() {
-  static size_t max_inflight_bytes = -1;
-  if (max_inflight_bytes != -1) return max_inflight_bytes;
-  char const* env = getenv("UCCL_IB_MAX_INFLIGHT_BYTES");
-  if (env)
-    max_inflight_bytes = static_cast<size_t>(atoi(env));
-  else
-    max_inflight_bytes = kMaxInflightBytes;
-  return max_inflight_bytes;
+  static size_t val = []() -> size_t {
+    char const* env = getenv("UCCL_IB_MAX_INFLIGHT_BYTES");
+    return env ? static_cast<size_t>(atoi(env)) : kMaxInflightBytes;
+  }();
+  return val;
 }
 
 static inline uint32_t get_max_inflight_low_latency() {
-  static uint32_t max_inflight_low_latency = -1;
-  if (max_inflight_low_latency != -1) return max_inflight_low_latency;
-  char const* env = getenv("UCCL_IB_MAX_INFLIGHT_LOW_LATENCY");
-  if (env)
-    max_inflight_low_latency = static_cast<uint32_t>(atoi(env));
-  else
-    max_inflight_low_latency = kMaxInflightLowLatency;
-  return max_inflight_low_latency;
+  static uint32_t val = []() -> uint32_t {
+    char const* env = getenv("UCCL_IB_MAX_INFLIGHT_LOW_LATENCY");
+    return env ? static_cast<uint32_t>(atoi(env)) : kMaxInflightLowLatency;
+  }();
+  return val;
 }
 
 static inline uint32_t get_max_inflight_normal() {
-  static uint32_t max_inflight_normal = -1;
-  if (max_inflight_normal != -1) return max_inflight_normal;
-  char const* env = getenv("UCCL_IB_MAX_INFLIGHT_NORMAL");
-  if (env)
-    max_inflight_normal = static_cast<uint32_t>(atoi(env));
-  else
-    max_inflight_normal = kMaxInflightNormal;
-  return max_inflight_normal;
+  static uint32_t val = []() -> uint32_t {
+    char const* env = getenv("UCCL_IB_MAX_INFLIGHT_NORMAL");
+    return env ? static_cast<uint32_t>(atoi(env)) : kMaxInflightNormal;
+  }();
+  return val;
 }
 
 #endif  // COMMON_HPP

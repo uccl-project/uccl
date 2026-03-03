@@ -175,7 +175,7 @@ void Proxy::init_common() {
   per_thread_rdma_init(ctx_, cfg_.gpu_buffer, cfg_.total_size, my_rank,
                        cfg_.thread_idx, cfg_.local_rank);
   pin_thread_to_numa_wrapper();
-  if (!ctx_.cq) ctx_.cq = create_per_thread_cq(ctx_);
+  if (!get_cq(ctx_)) (void)create_per_thread_cq(ctx_);
 
   // Register atomic_buffer_ptr as a separate RDMA memory region if it was set
   // This must be done after PD is initialized by per_thread_rdma_init
@@ -255,9 +255,13 @@ void Proxy::init_common() {
     c.pd = ctx_.pd;
     c.mr = ctx_.mr;
     c.rkey = ctx_.rkey;
+#ifdef USE_DMABUF
+    c.gpu_mr_chunks = ctx_.gpu_mr_chunks;
+#endif
     // NOTE(MaoZiming): each context can share the same cq, pd, mr.
     // but the qp must be different.
     c.cq = ctx_.cq;
+    c.cq_ex = ctx_.cq_ex;
     // Share the atomic buffer MR with peer contexts
     c.atomic_buffer_mr = ctx_.atomic_buffer_mr;
     // Share local atomic scratch buffer MR (used for native atomics)
@@ -336,6 +340,33 @@ void Proxy::init_common() {
     c.remote_addr = remote_infos_[peer].addr;
     c.remote_rkey = remote_infos_[peer].rkey;
     c.remote_len = remote_infos_[peer].len;
+
+#ifdef USE_DMABUF
+    // Populate remote MR chunks from exchanged connection info.
+    if (remote_infos_[peer].num_mr_chunks > 0) {
+      c.remote_mr_chunks.resize(remote_infos_[peer].num_mr_chunks);
+      for (uint32_t ci = 0; ci < remote_infos_[peer].num_mr_chunks; ++ci) {
+        c.remote_mr_chunks[ci] = {remote_infos_[peer].mr_chunk_info[ci].addr,
+                                  remote_infos_[peer].mr_chunk_info[ci].len,
+                                  remote_infos_[peer].mr_chunk_info[ci].rkey};
+      }
+      if (cfg_.thread_idx == 0) {
+        fprintf(stderr, "[Proxy] Received %u remote MR chunks from peer %d:\n",
+                remote_infos_[peer].num_mr_chunks, peer);
+        for (uint32_t ci = 0; ci < remote_infos_[peer].num_mr_chunks; ++ci) {
+          fprintf(stderr, "  [%u] base=0x%llx len=%zu rkey=0x%x\n", ci,
+                  (unsigned long long)c.remote_mr_chunks[ci].base,
+                  c.remote_mr_chunks[ci].len, c.remote_mr_chunks[ci].rkey);
+        }
+      }
+    } else {
+      if (cfg_.thread_idx == 0) {
+        fprintf(stderr,
+                "[Proxy] Peer %d has num_mr_chunks=0 (single MR: rkey=0x%x)\n",
+                peer, remote_infos_[peer].rkey);
+      }
+    }
+#endif
 
     // Set remote atomic buffer info from exchanged connection info
     c.remote_atomic_buffer_addr = remote_infos_[peer].atomic_buffer_addr;
@@ -959,14 +990,7 @@ void Proxy::post_gpu_commands_mixed(
 }
 
 void Proxy::quiet_cq() {
-  auto outstanding_batches = [&]() -> size_t {
-    size_t sum = 0;
-    for (auto& ctx_ptr : ctxs_for_all_ranks_) {
-      if (!ctx_ptr) continue;
-      sum += ctx_ptr->wr_id_to_wr_ids.size();
-    }
-    return sum;
-  };
+  auto outstanding_batches = [&]() -> size_t { return 0; };
   constexpr int kConsecutiveEmptyToExit = 3;
   int empty_iters = 0;
   ibv_wc wc[kMaxOutstandingSends];
@@ -974,7 +998,7 @@ void Proxy::quiet_cq() {
   auto last_log = clock::now();
   std::set<PendingUpdate> pending_atomic_updates;
   for (;;) {
-    int ne = poll_cq_once(ctx_.cq, wc, kMaxOutstandingSends);
+    int ne = poll_cq_once(get_cq(ctx_), wc, kMaxOutstandingSends);
     if (ne > 0) {
       empty_iters = 0;
       local_process_completions(ctx_, acked_wrs_, cfg_.thread_idx, wc, ne,
@@ -1015,6 +1039,7 @@ void Proxy::destroy(bool free_gpu_buffer) {
     if (!ctx_ptr) continue;
     qp_to_error(ctx_ptr->qp);
     qp_to_error(ctx_ptr->ack_qp);
+    qp_to_error(ctx_ptr->recv_ack_qp);
     for (auto* q : ctx_ptr->data_qps_by_channel) {
       if (q) qp_to_error(q);
     }
@@ -1023,7 +1048,7 @@ void Proxy::destroy(bool free_gpu_buffer) {
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
   }
-  if (ctx_.cq) drain_cq(ctx_.cq);
+  if (get_cq(ctx_)) drain_cq(get_cq(ctx_));
 
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
@@ -1042,20 +1067,37 @@ void Proxy::destroy(bool free_gpu_buffer) {
       ibv_destroy_qp(ctx_ptr->ack_qp);
       ctx_ptr->ack_qp = nullptr;
     }
+    if (ctx_ptr->recv_ack_qp) {
+      ibv_destroy_qp(ctx_ptr->recv_ack_qp);
+      ctx_ptr->recv_ack_qp = nullptr;
+    }
   }
   ring.ack_qp = nullptr;
 
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
   }
-  if (ctx_.cq) drain_cq(ctx_.cq);
+  if (get_cq(ctx_)) drain_cq(get_cq(ctx_));
 
   for (auto& ctx_ptr : ctxs_for_all_ranks_) {
     if (!ctx_ptr) continue;
   }
-  if (ctx_.cq) {
+  if (ctx_.cq_ex) {
+    ibv_destroy_cq(ibv_cq_ex_to_cq(ctx_.cq_ex));
+    ctx_.cq_ex = nullptr;
+  } else if (ctx_.cq) {
     ibv_destroy_cq(ctx_.cq);
     ctx_.cq = nullptr;
+  }
+
+  // Destroy Address Handles before PD/context so the driver does not warn
+  // "context freed with active resources"
+  for (auto& ctx_ptr : ctxs_for_all_ranks_) {
+    if (!ctx_ptr) continue;
+    if (ctx_ptr->dst_ah) {
+      ibv_destroy_ah(ctx_ptr->dst_ah);
+      ctx_ptr->dst_ah = nullptr;
+    }
   }
 
   auto dereg = [&](ibv_mr*& mr) {
@@ -1071,10 +1113,34 @@ void Proxy::destroy(bool free_gpu_buffer) {
       std::this_thread::sleep_for(std::chrono::milliseconds(2 << i));
     }
   };
+  // Deregister per-peer MRs before shared ones
+  for (auto& ctx_ptr : ctxs_for_all_ranks_) {
+    if (!ctx_ptr) continue;
+    dereg(ctx_ptr->ack_recv_mr);
+  }
   dereg(ring.ack_mr);
   dereg(ctx_.atomic_old_values_mr);
   dereg(ctx_.atomic_buffer_mr);
+
+#ifdef USE_DMABUF
+  // If context/pd/mr are shared with other proxy threads (USE_DMABUF path),
+  // release our reference.  If we're not the last holder, this nulls the
+  // pointers so the dereg/dealloc/close below become no-ops.
+  release_shared_rdma_resources(ctx_, cfg_.gpu_buffer);
+#endif
+
+  // Deregister all GPU buffer MR chunks (or the single MR).
+#ifdef USE_DMABUF
+  if (!ctx_.gpu_mr_chunks.empty()) {
+    for (auto& c : ctx_.gpu_mr_chunks) dereg(c.mr);
+    ctx_.gpu_mr_chunks.clear();
+    ctx_.mr = nullptr;  // already deregistered as part of chunks
+  } else {
+    dereg(ctx_.mr);
+  }
+#else
   dereg(ctx_.mr);
+#endif
 
   if (ctx_.atomic_old_values_buf) {
     free(ctx_.atomic_old_values_buf);
@@ -1082,11 +1148,19 @@ void Proxy::destroy(bool free_gpu_buffer) {
   }
 
   if (free_gpu_buffer && cfg_.gpu_buffer) {
-    cudaError_t e = cudaFree(cfg_.gpu_buffer);
-    if (e != cudaSuccess)
-      fprintf(stderr, "[destroy] cudaFree failed: %s\n", cudaGetErrorString(e));
-    else
-      cfg_.gpu_buffer = nullptr;
+    cudaError_t e;
+    if (cfg_.free_buffer_with_cuda_free_host) {
+      e = cudaFreeHost(cfg_.gpu_buffer);
+      if (e != cudaSuccess)
+        fprintf(stderr, "[destroy] cudaFreeHost failed: %s\n",
+                cudaGetErrorString(e));
+    } else {
+      e = cudaFree(cfg_.gpu_buffer);
+      if (e != cudaSuccess)
+        fprintf(stderr, "[destroy] cudaFree failed: %s\n",
+                cudaGetErrorString(e));
+    }
+    if (e == cudaSuccess) cfg_.gpu_buffer = nullptr;
   }
 
   if (ctx_.pd) {

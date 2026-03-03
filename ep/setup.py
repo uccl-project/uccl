@@ -183,6 +183,12 @@ if __name__ == "__main__":
             cxx_flags.append("-DUSE_GRACE_HOPPER")
             nvcc_flags.append("-DUSE_GRACE_HOPPER")
 
+        # Add Intel RDMA NIC support if USE_INTEL_RDMA_NIC=1
+        if int(os.getenv("USE_INTEL_RDMA_NIC", 0)):
+            print("Building with Intel RDMA NIC support (INTEL_RDMA_NIC)")
+            cxx_flags.append("-DINTEL_RDMA_NIC")
+            nvcc_flags.append("-DINTEL_RDMA_NIC")
+
         # Use auto-detected compute capability if available
         if detected_compute_cap:
             default_arch = detected_compute_cap
@@ -225,7 +231,9 @@ if __name__ == "__main__":
             if detected_amd_arch:
                 print(f"Detected AMD GPU architecture: {detected_amd_arch}")
         except Exception as e:
-            print(f"Warning: Could not detect AMD GPU info via rocminfo: {e}")
+            print(
+                f"Warning: could not detect AMD GPU info via rocminfo: {e} (perhaps inside a container)"
+            )
 
         # Use environment variable, then detected arch, then fallback
         device_arch = os.getenv(
@@ -253,6 +261,12 @@ if __name__ == "__main__":
 
         # cxx_flags.append("-DENABLE_FAST_DEBUG")
         # nvcc_flags.append("-DENABLE_FAST_DEBUG")
+
+    # Per-expert batching path in dispatch-LL (default: disabled).
+    # Set PER_EXPERT_BATCHING=1 to compile with this path.
+    if int(os.getenv("PER_EXPERT_BATCHING", "0")):
+        cxx_flags.append("-DPER_EXPERT_BATCHING")
+        nvcc_flags.append("-DPER_EXPERT_BATCHING")
 
     # Disable LD/ST tricks, as some CUDA version does not support `.L1::no_allocate`
     # Only enable aggressive PTX instructions for SM 9.0+ (H100/H800/B200)

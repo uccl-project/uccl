@@ -236,3 +236,9 @@ int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t mr,
  */
 int uccl_engine_update_fifo(FifoItem& fifo_item, uint64_t remote_addr,
                             uint32_t size);
+
+/**
+ * Stop the accept thread for the engine.
+ * @param engine        The engine instance.
+ */
+void uccl_engine_stop_accept(uccl_engine_t* engine);

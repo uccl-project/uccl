@@ -251,10 +251,10 @@ class EventOverlap:
 
 
 def detect_ib_hca():
-    """Detect InfiniBand HCA device.
+    """Detect InfiniBand/RDMA HCA device.
 
-    Returns the first mlx5 device name found, or None if no InfiniBand
-    devices are available (e.g., on systems without IB).
+    Returns the first RDMA device name found (mlx5 for Mellanox, irdma for Intel),
+    or None if no InfiniBand devices are available.
     """
     try:
         devices = sorted(glob.glob("/sys/class/infiniband/*"))
@@ -265,12 +265,19 @@ def detect_ib_hca():
         # No InfiniBand devices found - this is okay on systems without RDMA
         return None
 
+    # Check for Mellanox devices first
     ib_devs = [
         os.path.basename(d) for d in devices if os.path.basename(d).startswith("mlx5")
     ]
-    if not ib_devs:
-        return None
-    return ib_devs[0]
+    if ib_devs:
+        return ib_devs[0]
+
+    # Check for Intel RDMA devices (irdma)
+    ib_devs = [
+        os.path.basename(d) for d in devices if os.path.basename(d).startswith("irdma")
+    ]
+    if ib_devs:
+        return ib_devs[0]
 
 
 def per_token_cast_back(x_fp8: torch.Tensor, x_scales: torch.Tensor):
@@ -506,6 +513,7 @@ def initialize_uccl(
     num_experts=0,
     is_intranode=False,
     use_normal_mode=False,
+    rdma_buffer_is_host_allocated=False,
 ):
     try:
         for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
@@ -563,6 +571,7 @@ def initialize_uccl(
             num_nodes=num_nodes,
             use_normal_mode=use_normal_mode,
             is_intranode=is_intranode,
+            gpu_buffer_is_host_allocated=rdma_buffer_is_host_allocated,
         )
         proxies.append(proxy)
 

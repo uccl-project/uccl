@@ -21,7 +21,7 @@ except ImportError as exc:
 # parse_metadata is now provided by the C++ layer via p2p.Endpoint.parse_metadata()
 
 
-def _make_buffer(size_bytes: int, device: str, gpu_idx: int):
+def _make_buffer(size_bytes: int, device: str, gpu_idx: int, pinned: bool = False):
     """Allocate a contiguous buffer of *size_bytes* and return (buffer, ptr)."""
     if device == "gpu":
         dtype = torch.float32 if size_bytes >= 4 else torch.uint8
@@ -30,8 +30,15 @@ def _make_buffer(size_bytes: int, device: str, gpu_idx: int):
         assert buf.device.type == "cuda"
         assert buf.is_contiguous()
         ptr = buf.data_ptr()
-    else:  # cpu
-        dtype = np.float32 if size_bytes >= 4 else np.uint8
+    elif device == "cpu" and pinned:
+        dtype = torch.float32 if size_bytes >= 4 else torch.uint8
+        n_elems = size_bytes // dtype.itemsize
+        buf = torch.ones(n_elems, dtype=dtype).pin_memory()
+        assert buf.is_pinned()
+        assert buf.is_contiguous()
+        ptr = buf.data_ptr()
+    else:  # cpu (pageable)
+        dtype = np.dtype(np.float32) if size_bytes >= 4 else np.dtype(np.uint8)
         n_elems = size_bytes // dtype.itemsize
         buf = np.ones(n_elems, dtype=dtype)
         ptr = buf.ctypes.data
@@ -60,7 +67,9 @@ def _run_server(args, ep, remote_metadata):
         data_ptr_v = []
         size_v = []
         for _ in range(args.num_kvblocks):
-            buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+            buf, ptr = _make_buffer(
+                size_per_block, args.device, args.local_gpu_idx, args.pinned
+            )
             ok, mr_id = ep.reg(ptr, size_per_block)
             assert ok, "[Server] register failed"
             buf_v.append(buf)
@@ -160,7 +169,9 @@ def _run_client(args, ep, remote_metadata):
         data_ptr_v = []
         size_v = []
         for _ in range(args.num_kvblocks):
-            buf, ptr = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+            buf, ptr = _make_buffer(
+                size_per_block, args.device, args.local_gpu_idx, args.pinned
+            )
             ok, mr_id = ep.reg(ptr, size_per_block)
             assert ok, "[Client] register failed"
             buf_v.append(buf)
@@ -257,12 +268,12 @@ def _run_server_dual(args, ep, remote_metadata):
     print(f"[Server] Connected to {ip}:{port} (GPU {r_gpu}) conn_id={conn_id2}")
 
     for size in args.sizes:
-        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
+        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx, args.pinned)
         ok, mr_id = ep.reg(ptr, size)
         assert ok, "[Server] register failed"
         # ep.recv(conn_id, mr_id, ptr, size)
 
-        buf2, ptr2 = _make_buffer(size, args.device, args.local_gpu_idx)
+        buf2, ptr2 = _make_buffer(size, args.device, args.local_gpu_idx, args.pinned)
         ok, mr_id2 = ep.reg(ptr2, size)
         assert ok, "[Server] register failed"
         # ep.send(conn_id, mr_id2, ptr2, size)
@@ -314,12 +325,12 @@ def _run_client_dual(args, ep, remote_metadata):
     print(f"[Client] Accept from {r_ip} (GPU {r_gpu2}) conn_id={conn_id2}")
 
     for size in args.sizes:
-        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
+        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx, args.pinned)
         ok, mr_id = ep.reg(ptr, size)
         assert ok, "[Client] register failed"
         # ep.send(conn_id, mr_id, ptr, size)
 
-        buf2, ptr2 = _make_buffer(size, args.device, args.local_gpu_idx)
+        buf2, ptr2 = _make_buffer(size, args.device, args.local_gpu_idx, args.pinned)
         ok, mr_id2 = ep.reg(ptr2, size)
         assert ok, "[Client] register failed"
         # ep.recv(conn_id, mr_id2, ptr2, size)
@@ -366,7 +377,9 @@ def _run_server_ipc(args, ep):
 
     for size in args.sizes:
         # Allocate receive buffer - no memory registration needed for IPC
-        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
+        buf, ptr = _make_buffer(
+            size, args.receiver_device, args.local_gpu_idx, args.pinned
+        )
 
         # Warm-up transfer
         if args.async_api:
@@ -413,7 +426,9 @@ def _run_client_ipc(args, ep, remote_gpu_idx):
 
     for size in args.sizes:
         # Allocate send buffer - no memory registration needed for IPC
-        buf, ptr = _make_buffer(size, args.device, args.local_gpu_idx)
+        buf, ptr = _make_buffer(
+            size, args.sender_device, args.local_gpu_idx, args.pinned
+        )
 
         # Warm-up transfer
         if args.async_api:
@@ -453,6 +468,304 @@ def _run_client_ipc(args, ep, remote_gpu_idx):
     print("[Client] IPC Benchmark complete")
 
 
+def _send_bytes_dist(payload: bytes, dst: int):
+    """Send a byte blob to another rank via torch.distributed."""
+    n = len(payload)
+    dist.send(torch.tensor([n], dtype=torch.int64), dst=dst)
+    if n == 0:
+        return
+    buf = torch.frombuffer(memoryview(payload), dtype=torch.uint8)
+    dist.send(buf, dst=dst)
+
+
+def _recv_bytes_dist(src: int) -> bytes:
+    """Receive a byte blob from another rank via torch.distributed."""
+    n_tensor = torch.empty(1, dtype=torch.int64)
+    dist.recv(n_tensor, src=src)
+    n = int(n_tensor.item())
+    if n == 0:
+        return b""
+    buf = torch.empty(n, dtype=torch.uint8)
+    dist.recv(buf, src=src)
+    return buf.numpy().tobytes()
+
+
+def _run_server_write_ipc(args, ep):
+    """Server for write_ipc benchmark: advertises buffer(s), client writes into them."""
+    ok, remote_gpu_idx, conn_id = ep.accept_local()
+    assert ok, "[Server] Failed to accept local IPC connection"
+
+    num_kvblocks = args.num_kvblocks
+    for size in args.sizes:
+        size_per_block = size // num_kvblocks
+
+        if num_kvblocks == 1:
+            buf, ptr = _make_buffer(size_per_block, "gpu", args.local_gpu_idx)
+            ok, info_blob = ep.advertise_ipc(conn_id, ptr, size_per_block)
+            assert ok, "[Server] advertise_ipc failed"
+            _send_bytes_dist(bytes(info_blob), dst=0)
+        else:
+            bufs_ptrs = [
+                _make_buffer(size_per_block, "gpu", args.local_gpu_idx)
+                for _ in range(num_kvblocks)
+            ]
+            ptrs = [p for _, p in bufs_ptrs]
+            ok, info_blobs = ep.advertisev_ipc(
+                conn_id, ptrs, [size_per_block] * num_kvblocks
+            )
+            assert ok, "[Server] advertisev_ipc failed"
+            packed = struct.pack("I", num_kvblocks) + b"".join(
+                bytes(b) for b in info_blobs
+            )
+            _send_bytes_dist(packed, dst=0)
+
+        _recv_bytes_dist(src=0)
+
+    print("[Server] write_ipc benchmark complete")
+
+
+def _run_client_write_ipc(args, ep, remote_gpu_idx):
+    """Client for write_ipc benchmark: writes local buffer(s) into server's advertised buffer(s)."""
+    ok, conn_id = ep.connect_local(remote_gpu_idx)
+    assert ok, "[Client] Failed to connect to local server via IPC"
+
+    num_kvblocks = args.num_kvblocks
+    for size in args.sizes:
+        size_per_block = size // num_kvblocks
+
+        if num_kvblocks == 1:
+            buf, ptr = _make_buffer(
+                size_per_block, args.device, args.local_gpu_idx, args.pinned
+            )
+            info_blob = _recv_bytes_dist(src=1)
+
+            # Warm-up
+            if args.async_api:
+                ok, transfer_id = ep.write_ipc_async(
+                    conn_id, ptr, size_per_block, info_blob
+                )
+                assert ok, "[Client] write_ipc_async warm-up error"
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Client] poll_async error"
+            else:
+                ok = ep.write_ipc(conn_id, ptr, size_per_block, info_blob)
+                assert ok, "[Client] write_ipc warm-up error"
+
+            start = time.perf_counter()
+            total = 0
+            for _ in range(args.iters):
+                if args.async_api:
+                    ok, transfer_id = ep.write_ipc_async(
+                        conn_id, ptr, size_per_block, info_blob
+                    )
+                    assert ok, "[Client] write_ipc_async error"
+                    is_done = False
+                    while not is_done:
+                        ok, is_done = ep.poll_async(transfer_id)
+                        assert ok, "[Client] poll_async error"
+                else:
+                    ok = ep.write_ipc(conn_id, ptr, size_per_block, info_blob)
+                    assert ok, "[Client] write_ipc error"
+                total += size_per_block
+        else:
+            bufs_ptrs = [
+                _make_buffer(
+                    size_per_block, args.device, args.local_gpu_idx, args.pinned
+                )
+                for _ in range(num_kvblocks)
+            ]
+            ptrs = [p for _, p in bufs_ptrs]
+            packed = _recv_bytes_dist(src=1)
+            blob_size = (len(packed) - 4) // num_kvblocks
+            info_blobs = [
+                packed[4 + i * blob_size : 4 + (i + 1) * blob_size]
+                for i in range(num_kvblocks)
+            ]
+            size_v = [size_per_block] * num_kvblocks
+
+            # Warm-up
+            if args.async_api:
+                ok, transfer_id = ep.writev_ipc_async(conn_id, ptrs, size_v, info_blobs)
+                assert ok, "[Client] writev_ipc_async warm-up error"
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Client] poll_async error"
+            else:
+                ok = ep.writev_ipc(conn_id, ptrs, size_v, info_blobs)
+                assert ok, "[Client] writev_ipc warm-up error"
+
+            start = time.perf_counter()
+            total = 0
+            for _ in range(args.iters):
+                if args.async_api:
+                    ok, transfer_id = ep.writev_ipc_async(
+                        conn_id, ptrs, size_v, info_blobs
+                    )
+                    assert ok, "[Client] writev_ipc_async error"
+                    is_done = False
+                    while not is_done:
+                        ok, is_done = ep.poll_async(transfer_id)
+                        assert ok, "[Client] poll_async error"
+                else:
+                    ok = ep.writev_ipc(conn_id, ptrs, size_v, info_blobs)
+                    assert ok, "[Client] writev_ipc error"
+                total += size_per_block * num_kvblocks
+
+        elapsed = time.perf_counter() - start
+        gbps = (total * 8) / elapsed / 1e9
+        gb_sec = total / elapsed / 1e9
+        lat = elapsed / args.iters
+
+        print(
+            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+        )
+
+        _send_bytes_dist(b"\x01", dst=1)
+
+    print("[Client] write_ipc benchmark complete")
+
+
+def _run_server_read_ipc(args, ep):
+    """Server for read_ipc benchmark: advertises buffer(s), client reads from them."""
+    ok, remote_gpu_idx, conn_id = ep.accept_local()
+    assert ok, "[Server] Failed to accept local IPC connection"
+
+    num_kvblocks = args.num_kvblocks
+    for size in args.sizes:
+        size_per_block = size // num_kvblocks
+
+        if num_kvblocks == 1:
+            buf, ptr = _make_buffer(size_per_block, "gpu", args.local_gpu_idx)
+            ok, info_blob = ep.advertise_ipc(conn_id, ptr, size_per_block)
+            assert ok, "[Server] advertise_ipc failed"
+            _send_bytes_dist(bytes(info_blob), dst=0)
+        else:
+            bufs_ptrs = [
+                _make_buffer(size_per_block, "gpu", args.local_gpu_idx)
+                for _ in range(num_kvblocks)
+            ]
+            ptrs = [p for _, p in bufs_ptrs]
+            ok, info_blobs = ep.advertisev_ipc(
+                conn_id, ptrs, [size_per_block] * num_kvblocks
+            )
+            assert ok, "[Server] advertisev_ipc failed"
+            packed = struct.pack("I", num_kvblocks) + b"".join(
+                bytes(b) for b in info_blobs
+            )
+            _send_bytes_dist(packed, dst=0)
+
+        _recv_bytes_dist(src=0)
+
+    print("[Server] read_ipc benchmark complete")
+
+
+def _run_client_read_ipc(args, ep, remote_gpu_idx):
+    """Client for read_ipc benchmark: reads from server's advertised buffer(s) into local buffer(s)."""
+    ok, conn_id = ep.connect_local(remote_gpu_idx)
+    assert ok, "[Client] Failed to connect to local server via IPC"
+
+    num_kvblocks = args.num_kvblocks
+    for size in args.sizes:
+        size_per_block = size // num_kvblocks
+
+        if num_kvblocks == 1:
+            buf, ptr = _make_buffer(
+                size_per_block, args.device, args.local_gpu_idx, args.pinned
+            )
+            info_blob = _recv_bytes_dist(src=1)
+
+            # Warm-up
+            if args.async_api:
+                ok, transfer_id = ep.read_ipc_async(
+                    conn_id, ptr, size_per_block, info_blob
+                )
+                assert ok, "[Client] read_ipc_async warm-up error"
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Client] poll_async error"
+            else:
+                ok = ep.read_ipc(conn_id, ptr, size_per_block, info_blob)
+                assert ok, "[Client] read_ipc warm-up error"
+
+            start = time.perf_counter()
+            total = 0
+            for _ in range(args.iters):
+                if args.async_api:
+                    ok, transfer_id = ep.read_ipc_async(
+                        conn_id, ptr, size_per_block, info_blob
+                    )
+                    assert ok, "[Client] read_ipc_async error"
+                    is_done = False
+                    while not is_done:
+                        ok, is_done = ep.poll_async(transfer_id)
+                        assert ok, "[Client] poll_async error"
+                else:
+                    ok = ep.read_ipc(conn_id, ptr, size_per_block, info_blob)
+                    assert ok, "[Client] read_ipc error"
+                total += size_per_block
+        else:
+            bufs_ptrs = [
+                _make_buffer(
+                    size_per_block, args.device, args.local_gpu_idx, args.pinned
+                )
+                for _ in range(num_kvblocks)
+            ]
+            ptrs = [p for _, p in bufs_ptrs]
+            packed = _recv_bytes_dist(src=1)
+            blob_size = (len(packed) - 4) // num_kvblocks
+            info_blobs = [
+                packed[4 + i * blob_size : 4 + (i + 1) * blob_size]
+                for i in range(num_kvblocks)
+            ]
+            size_v = [size_per_block] * num_kvblocks
+
+            # Warm-up
+            if args.async_api:
+                ok, transfer_id = ep.readv_ipc_async(conn_id, ptrs, size_v, info_blobs)
+                assert ok, "[Client] readv_ipc_async warm-up error"
+                is_done = False
+                while not is_done:
+                    ok, is_done = ep.poll_async(transfer_id)
+                    assert ok, "[Client] poll_async error"
+            else:
+                ok = ep.readv_ipc(conn_id, ptrs, size_v, info_blobs)
+                assert ok, "[Client] readv_ipc warm-up error"
+
+            start = time.perf_counter()
+            total = 0
+            for _ in range(args.iters):
+                if args.async_api:
+                    ok, transfer_id = ep.readv_ipc_async(
+                        conn_id, ptrs, size_v, info_blobs
+                    )
+                    assert ok, "[Client] readv_ipc_async error"
+                    is_done = False
+                    while not is_done:
+                        ok, is_done = ep.poll_async(transfer_id)
+                        assert ok, "[Client] poll_async error"
+                else:
+                    ok = ep.readv_ipc(conn_id, ptrs, size_v, info_blobs)
+                    assert ok, "[Client] readv_ipc error"
+                total += size_per_block * num_kvblocks
+
+        elapsed = time.perf_counter() - start
+        gbps = (total * 8) / elapsed / 1e9
+        gb_sec = total / elapsed / 1e9
+        lat = elapsed / args.iters
+
+        print(
+            f"[Client] {_pretty_size(size):>8} : {gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s  | {lat:6.6f} s"
+        )
+
+        _send_bytes_dist(b"\x01", dst=1)
+
+    print("[Client] read_ipc benchmark complete")
+
+
 def parse_size_list(val: str) -> List[int]:
     try:
         return [int(s) for s in val.split(",") if s]
@@ -474,6 +787,11 @@ def main():
         choices=["cpu", "gpu"],
         default="gpu",
         help="Buffer location (cpu or gpu)",
+    )
+    p.add_argument(
+        "--pinned",
+        action="store_true",
+        help="Use pinned (page-locked) memory for CPU buffers",
     )
     p.add_argument(
         "--sizes",
@@ -519,11 +837,42 @@ def main():
         action="store_true",
         help="Run IPC benchmark using Unix Domain Sockets and CUDA/HIP memory handles",
     )
+    p.add_argument(
+        "--sender-device",
+        choices=["cpu", "gpu"],
+        default=None,
+        help="Buffer location for sender (IPC mode). Defaults to --device value.",
+    )
+    p.add_argument(
+        "--receiver-device",
+        choices=["cpu", "gpu"],
+        default=None,
+        help="Buffer location for receiver (IPC mode). Defaults to --device value.",
+    )
+    p.add_argument(
+        "--write-ipc",
+        action="store_true",
+        help="Benchmark one-sided write_ipc (client writes into server's advertised buffer)",
+    )
+    p.add_argument(
+        "--read-ipc",
+        action="store_true",
+        help="Benchmark one-sided read_ipc (client reads from server's advertised buffer)",
+    )
     args = p.parse_args()
 
+    # Default sender/receiver device to --device if not specified
+    if args.sender_device is None:
+        args.sender_device = args.device
+    if args.receiver_device is None:
+        args.receiver_device = args.device
+
     # Check for incompatible options
-    if args.dual and args.ipc:
-        print("Error: --dual and --ipc options are incompatible")
+    mode_flags = sum([args.dual, args.ipc, args.write_ipc, args.read_ipc])
+    if mode_flags > 1:
+        print(
+            "Error: --dual, --ipc, --write-ipc, and --read-ipc are mutually exclusive"
+        )
         sys.exit(1)
 
     dist.init_process_group(backend="gloo")
@@ -531,13 +880,23 @@ def main():
     world_size = dist.get_world_size()
     assert world_size == 2, "This benchmark only supports 2 processes"
 
-    mode = "IPC" if args.ipc else ("Dual" if args.dual else "Standard")
+    is_ipc_mode = args.ipc or args.write_ipc or args.read_ipc
+    if args.write_ipc:
+        mode = "write_ipc"
+    elif args.read_ipc:
+        mode = "read_ipc"
+    elif args.ipc:
+        mode = "IPC"
+    elif args.dual:
+        mode = "Dual"
+    else:
+        mode = "Standard"
     api_type = "Async" if args.async_api else "Sync"
     print(
         f"UCCL P2P Benchmark — mode: {mode} | API: {api_type} | role:",
         "client" if rank == 0 else "server",
     )
-    if not args.ipc:
+    if not is_ipc_mode:
         print("Number of key-value blocks per message:", args.num_kvblocks)
     else:
         # Use the rank as the local GPU index for IPC
@@ -545,9 +904,20 @@ def main():
         args.local_gpu_idx = rank
 
     print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
-    print(
-        f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
-    )
+    pinned_str = " (pinned)" if args.pinned else ""
+    if is_ipc_mode:
+        kvblocks_str = (
+            f" | Blocks per call: {args.num_kvblocks}"
+            if (args.write_ipc or args.read_ipc)
+            else ""
+        )
+        print(
+            f"Sender device: {args.sender_device}{pinned_str} | Receiver device: {args.receiver_device}{pinned_str} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}{kvblocks_str}"
+        )
+    else:
+        print(
+            f"Device: {args.device}{pinned_str} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
+        )
     torch.cuda.set_device(f"cuda:{args.local_gpu_idx}")
 
     ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
@@ -576,6 +946,18 @@ def main():
             _run_client_ipc(args, ep, remote_gpu_idx)
         else:
             _run_server_ipc(args, ep)
+    elif args.write_ipc:
+        _, _, remote_gpu_idx = p2p.Endpoint.parse_metadata(remote_metadata)
+        if rank == 0:
+            _run_client_write_ipc(args, ep, remote_gpu_idx)
+        else:
+            _run_server_write_ipc(args, ep)
+    elif args.read_ipc:
+        _, _, remote_gpu_idx = p2p.Endpoint.parse_metadata(remote_metadata)
+        if rank == 0:
+            _run_client_read_ipc(args, ep, remote_gpu_idx)
+        else:
+            _run_server_read_ipc(args, ep)
     else:
         if rank == 0:
             _run_client(args, ep, remote_metadata)

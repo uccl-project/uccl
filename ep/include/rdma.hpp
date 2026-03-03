@@ -9,7 +9,9 @@
 // clang-format on
 #include "ring_buffer.cuh"
 #include "unistd.h"
+#ifdef EFA
 #include <infiniband/efadv.h>
+#endif
 #include <infiniband/verbs.h>
 #include <atomic>
 #include <cassert>
@@ -40,6 +42,18 @@ struct RDMAConnectionInfo {
   uint32_t num_rings;
   uint32_t data_qp_num[kChannelPerProxy];
   // #endif
+
+#ifdef USE_DMABUF
+  // Chunked MR info — exchanged when the GPU buffer is split across
+  // multiple MRs (with IOMMU DMA-BUF 2 GiB limit).  num_mr_chunks == 0 means
+  // a single MR whose rkey is in the |rkey| field above.
+  uint32_t num_mr_chunks = 0;
+  struct {
+    uint32_t rkey;
+    uintptr_t addr;
+    uint64_t len;
+  } mr_chunk_info[kMaxMRChunks];
+#endif
 };
 
 struct PendingUpdate {
@@ -352,6 +366,31 @@ void remote_poll_completions(ProxyCtx& S, int idx, CopyRingBuffer& g_ring,
                              bool use_normal_mode = false);
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                           int thread_idx, int local_rank);
+
+// Returns true if a cudaMalloc'd buffer can be registered with ibv_reg_mr on
+// this node (e.g. with nvidia_peermem). If false, use host memory for the
+// atomic buffer. Result is cached per thread. gpu_idx is the local GPU index.
+bool can_register_gpu_memory_for_atomics(int gpu_idx);
+
+#ifdef USE_DMABUF
+// Release shared RDMA resources (context/pd/mr) for a given NIC + gpu_buf.
+// Must be called before Proxy::destroy() frees ctx.mr / ctx.pd / ctx.context.
+// When resources are shared with other threads, nulls the pointers so the
+// caller skips the actual ibv_dereg / dealloc / close.
+void release_shared_rdma_resources(ProxyCtx& ctx, void* gpu_buf);
+// Register GPU memory using DMA-BUF (no nvidia_peermem needed).
+// Falls back to ibv_reg_mr_iova2 if DMA-BUF is unsupported.
+ibv_mr* reg_mr_gpu_dmabuf(ibv_pd* pd, void* gpu_buf, size_t bytes,
+                          uint64_t iova, int access);
+
+// Register GPU memory in multiple DMA-BUF chunks when a single registration
+// exceeds the driver limit (with IOMMU ~2 GiB per-MR limit).
+std::vector<MRChunk> reg_mr_gpu_dmabuf_chunked(ibv_pd* pd, void* gpu_buf,
+                                               size_t bytes, uint64_t iova,
+                                               int access,
+                                               size_t max_chunk_size);
+#endif
+
 void remote_send_ack(ProxyCtx* ctx, struct ibv_qp* ack_qp, uint64_t& wr_id,
                      ibv_mr* local_ack_mr, uint64_t* ack_buf, int worker_idx);
 void local_post_ack_buf(ProxyCtx& S, int depth);

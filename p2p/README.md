@@ -10,7 +10,7 @@ UCCL has an experimental GPU-driven P2P engine, see [ep](../ep/) folder.
 p2p/
 ├── engine.h          # C++ Endpoint class header with RDMA functionality
 ├── engine.cc         # C++ Endpoint implementation
-├── engine_pybind.cc  # pybind11 wrapper for Python integration
+├── engine_api.cc     # nanobind wrapper for Python integration
 ├── Makefile          # Build configuration
 ├── tests/            # Comprehensive test suite
 ├── benchmarks/       # Comprehensive benchmark suite
@@ -22,7 +22,7 @@ p2p/
 The easiest way is to: 
 ```bash
 git clone https://github.com/uccl-project/uccl.git --recursive
-cd uccl && bash build_and_install.sh [cuda|rocm] p2p [py_version]
+cd uccl && bash build.sh [cuda|rocm] p2p [py_version] --install
 ```
 
 Alternatively, you can setup your local dev environment by: 
@@ -33,7 +33,7 @@ Alternatively, you can setup your local dev environment by:
 - Linux with RDMA support
 - Python 3.7+ with development headers
 - C++17 compatible compiler
-- pybind11 library
+- nanobind library
 - PyTorch (for tensor/array operations)
 
 ```bash
@@ -43,7 +43,7 @@ sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
 
 ### Installation
 
-1. **Install Pybind11 dependency:**
+1. **Install nanobind dependency:**
    ```bash
    make install-deps
    ```
@@ -62,7 +62,7 @@ sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
 
 To build AWS EFA support, you can: 
 ```bash
-USE_EFA=1 bash build_and_install.sh cuda p2p
+USE_EFA=1 bash build.sh cuda p2p --install
 # or
 make -j USE_EFA=1 install
 ```
@@ -84,11 +84,13 @@ torchrun --nnodes=2 --nproc_per_node=1 --node-rank=1 --master_addr=<IP addr> ben
 ```
 
 Notes: 
-* You may consider exporting `GLOO_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
+* You may consider exporting `GLOO_SOCKET_IFNAME=xxx NCCL_SOCKET_IFNAME=xxx` if triggering Gloo connectFullMesh failure.
 * You may consider exporting `UCCL_P2P_RDMA_GID_INDEX` if your cluster requires it for NCCL to run (usually 1, or 3 in some testbed).
 * **You must first import `torch` before importing `uccl.p2p` for AMD GPUs**, otherwise, `RuntimeError: No HIP GPUs are available` will occur. We guess this is because torch does some extra init for AMD GPUs, in order for Pybind-C++ code to work. 
 * To benchmark dual direction transfer, `benchmark_uccl.py --dual`.
 * To benchmark intra-node transfer via CUDA/HIP IPC, `torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --ipc`.
+* To benchmark one-sided IPC write (GPU-to-GPU or CPU-to-GPU), `torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc`. Use `--device cpu --pinned` for CPU source buffers.
+* To benchmark one-sided IPC read (GPU-to-GPU or GPU-to-CPU), `torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc`. Use `--device cpu --pinned` for CPU destination buffers.
 * To benchmark one-sided READ/WRITE transfer, `benchmark_uccl_readwrite.py`.
 * To benchmark UCCL copy-only collectives (eg, sendrecv, allgather), `benchmark_uccl_collective.py`. You can also run ring-like communication pattern with `--ring`.
 * From CollectiveContext, the default parameter `use_copy_engine_for_intra` is `False`, which means it will use NCCL/RCCL via `torch.distributed` for intra-node communication; if setting to `True`, it will use GPU copy engine (eg, `cudaMemcpy`) via UCCL for intranode communication. 
@@ -763,4 +765,22 @@ python tests/test_engine_read.py
 python tests/test_engine_write.py
 python tests/test_engine_metadata.py
 torchrun --nnodes=1 --nproc_per_node=2 tests/test_engine_nvlink.py
+
+# One-sided IPC correctness tests (write_ipc, read_ipc, writev_ipc, readv_ipc — sync and async)
+# Verifies that each API correctly copies data from source to destination buffers.
+torchrun --nnodes=1 --nproc_per_node=2 tests/test_engine_onesided_ipc.py
+
+# One-sided IPC benchmarks (write_ipc / read_ipc)
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc --device cpu --pinned
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc --device cpu --pinned
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc --async-api
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc --async-api
+
+# Vectorized one-sided IPC benchmarks (writev_ipc / readv_ipc), e.g. 4 buffers per call
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc --num-kvblocks 4
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc --num-kvblocks 4
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --write-ipc --num-kvblocks 4 --async-api
+torchrun --nproc_per_node=2 benchmarks/benchmark_uccl.py --read-ipc --num-kvblocks 4 --async-api
 ```
