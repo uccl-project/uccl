@@ -50,9 +50,9 @@ INSTALL_DIR          := $(PYTHON_SITE_PACKAGES)/uccl
 DETECTED_SM := $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -n1 | tr -d '.')
 SM ?= $(DETECTED_SM)
 
-CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden -Wno-interference-size -Wno-unused-function
+CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden -Wno-interference-size -Wno-unused-function -D_GLIBCXX_USE_CXX11_ABI=$(TORCH_ABI)
 LDFLAGS := -lpthread -lglog -libverbs -lnl-3 -lnl-route-3 -lnuma -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
-NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++ --expt-relaxed-constexpr
+NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++ --expt-relaxed-constexpr -D_GLIBCXX_USE_CXX11_ABI=$(TORCH_ABI)
 INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../include 
 
 # Add Intel RDMA NIC support if USE_INTEL_RDMA_NIC=1
@@ -101,7 +101,6 @@ all: $(EP_EXT)
 
 $(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND)
 	$(CXX) $(CXXFLAGS) -shared -fPIC \
-	    -D_GLIBCXX_USE_CXX11_ABI=$(TORCH_ABI) \
 	    $(INCLUDES) $(PYBIND11_INCLUDES) $^ \
 	    -L$(TORCH_LIBDIR) -Wl,-rpath,$(TORCH_LIBDIR) \
 	    -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
