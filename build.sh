@@ -130,8 +130,11 @@ mkdir -p "${WHEEL_DIR}"
 
 ########################################################
 # 4. Determine the Docker image to use based on the target and architecture
+#    Set IMAGE_NAME externally to skip auto-detection (e.g. in CI).
 ########################################################
-if [[ $TARGET == "cuda" ]]; then
+if [[ -n "${IMAGE_NAME:-}" ]]; then
+  echo "Using caller-provided IMAGE_NAME=${IMAGE_NAME}"
+elif [[ $TARGET == "cuda" ]]; then
   # default is cuda 12.8 from `nvidia/cuda:12.8.0-devel-ubuntu22.04`
   if [[ "$ARCH" == "aarch64" ]]; then
     DOCKERFILE="docker/Dockerfile.gh"

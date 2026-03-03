@@ -121,6 +121,7 @@ jobs:
       - name: Build wheel
         env:
           SKIP_DOCKER_BUILD: "1"
+          IMAGE_NAME: ${{ matrix.variant.image_name }}
           TORCH_CUDA_ARCH_LIST: ${{ matrix.variant.gpu_arch }}
           UCCL_PACKAGE_NAME: ${{ matrix.variant.package_name }}
           UCCL_SKIP_LOCAL_VERSION: ${{ matrix.variant.for_pypi && '1' || '0' }}
