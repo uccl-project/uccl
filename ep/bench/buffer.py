@@ -88,14 +88,17 @@ class Buffer:
         else:
             device_index = torch.cuda.current_device()
 
-        # Prefer cudaMalloc when NIC can register GPU memory; else cudaHostAlloc.
-        # Guard: cudaMalloc(0) returns NULL which torch::from_blob rejects.
-        result = ep.get_rdma_buffer(max(num_rdma_bytes, 1), device_index)
-        if isinstance(result, tuple):
-            self.scratch, rdma_buffer_is_host_allocated = result
+        rdma_buffer_is_host_allocated = False
+        if num_rdma_bytes > 0 and hasattr(ep, "get_rdma_buffer"):
+            # Keep platform-specific RDMA allocation policy.
+            self.scratch, rdma_buffer_is_host_allocated = ep.get_rdma_buffer(
+                num_rdma_bytes, device_index
+            )
         else:
-            self.scratch = result
-            rdma_buffer_is_host_allocated = bool(torch.version.cuda)
+            # Keep a valid pointer even when RDMA is disabled.
+            self.scratch = torch.empty(
+                max(num_rdma_bytes, 1), dtype=torch.uint8, device=f"cuda:{device_index}"
+            )
 
         rdma_buffer_ptr = self.scratch.data_ptr()
         self.proxies, self.workers = initialize_uccl(
@@ -118,6 +121,7 @@ class Buffer:
         self.num_rdma_bytes = num_rdma_bytes
         self.low_latency_mode = low_latency_mode
         self.explicitly_destroy = explicitly_destroy
+        self._next_low_latency_combine_buffer = None
         self.runtime = ep.Buffer(
             self.rank,
             self.group_size,
@@ -128,7 +132,7 @@ class Buffer:
             int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
         )
         if num_rdma_bytes:
-            self.runtime.set_rdma_buffer_raw(rdma_buffer_ptr)
+            self.runtime.set_rdma_buffer(rdma_buffer_ptr)
 
         # Synchronize device IDs
         device_ids = [
@@ -285,26 +289,71 @@ class Buffer:
                 hidden=x.shape[1],
                 num_experts=num_experts,
             )
-        (
-            packed_recv_x,
-            packed_recv_x_scales,
-            packed_recv_count,
-            packed_recv_src_info,
-            packed_recv_layout_range,
-            event,
-            hook,
-        ) = self.runtime.low_latency_dispatch(
-            x,
-            topk_idx,
-            cumulative_local_expert_recv_stats,
-            dispatch_wait_recv_cost_stats,
-            num_max_dispatch_tokens_per_rank,
-            num_experts,
-            use_fp8,
-            round_scale,
-            use_ue8m0,
-            async_finish,
-            return_recv_hook,
+        num_ranks = self.group.size()
+        num_local_experts = num_experts // num_ranks
+        num_recv_tokens = num_ranks * num_max_dispatch_tokens_per_rank
+        packed_recv_x = torch.empty(
+            (num_local_experts, num_recv_tokens, x.size(1)),
+            device=x.device,
+            dtype=torch.float8_e4m3fn if use_fp8 else torch.bfloat16,
+        )
+        packed_recv_count = torch.empty(
+            (num_local_experts,), device=x.device, dtype=torch.int32
+        )
+        packed_recv_src_info = torch.empty(
+            (num_local_experts, num_recv_tokens), device=x.device, dtype=torch.int32
+        )
+        packed_recv_layout_range = torch.empty(
+            (num_local_experts, num_ranks), device=x.device, dtype=torch.int64
+        )
+        packed_recv_x_scales_storage = None
+        packed_recv_x_scales = None
+        packed_recv_x_scales_ptr = 0
+        if use_fp8:
+            if use_ue8m0:
+                packed_recv_x_scales_storage = torch.empty(
+                    (num_local_experts, x.size(1) // 512, num_recv_tokens),
+                    device=x.device,
+                    dtype=torch.int32,
+                )
+            else:
+                packed_recv_x_scales_storage = torch.empty(
+                    (num_local_experts, x.size(1) // 128, num_recv_tokens),
+                    device=x.device,
+                    dtype=torch.float32,
+                )
+            packed_recv_x_scales = packed_recv_x_scales_storage.transpose(1, 2)
+            packed_recv_x_scales_ptr = packed_recv_x_scales.data_ptr()
+
+        event, hook = self.runtime.low_latency_dispatch(
+            x.data_ptr(),
+            x.size(0),
+            x.size(1),
+            topk_idx.data_ptr(),
+            topk_idx.size(0),
+            topk_idx.size(1),
+            packed_recv_x.data_ptr(),
+            packed_recv_x_scales_ptr,
+            packed_recv_count.data_ptr(),
+            packed_recv_src_info.data_ptr(),
+            packed_recv_layout_range.data_ptr(),
+            (
+                0
+                if cumulative_local_expert_recv_stats is None
+                else cumulative_local_expert_recv_stats.data_ptr()
+            ),
+            (
+                0
+                if dispatch_wait_recv_cost_stats is None
+                else dispatch_wait_recv_cost_stats.data_ptr()
+            ),
+            int(num_max_dispatch_tokens_per_rank),
+            int(num_experts),
+            bool(use_fp8),
+            bool(round_scale),
+            bool(use_ue8m0),
+            bool(async_finish),
+            bool(return_recv_hook),
         )
         handle = (
             packed_recv_src_info,
@@ -321,6 +370,7 @@ class Buffer:
             packed_recv_count,
             packed_recv_src_info,
             packed_recv_layout_range,
+            packed_recv_x_scales_storage,
             cumulative_local_expert_recv_stats,
         )
         return (
@@ -385,23 +435,50 @@ class Buffer:
             hidden,
             num_experts,
         ) = handle
-        combined_x, event, hook = self.runtime.low_latency_combine(
-            x,
-            topk_idx,
-            topk_weights,
-            src_info,
-            layout_range,
-            combine_wait_recv_cost_stats,
-            num_max_dispatch_tokens_per_rank,
-            num_experts,
-            use_logfmt,
-            zero_copy,
-            async_finish,
-            return_recv_hook,
-            out,
+        x_for_combine = x
+        if zero_copy and self._next_low_latency_combine_buffer is not None:
+            staged = self._next_low_latency_combine_buffer
+            if (
+                staged.shape == x.shape
+                and staged.dtype == x.dtype
+                and staged.device == x.device
+            ):
+                x_for_combine = staged
+        combined_x = (
+            out
+            if out is not None
+            else torch.empty((topk_idx.size(0), hidden), device=x.device, dtype=x.dtype)
+        )
+        event, hook = self.runtime.low_latency_combine(
+            x_for_combine.data_ptr(),
+            x_for_combine.size(0),
+            x_for_combine.size(1),
+            x_for_combine.size(2),
+            topk_idx.data_ptr(),
+            topk_idx.size(0),
+            topk_idx.size(1),
+            topk_weights.data_ptr(),
+            src_info.data_ptr(),
+            src_info.size(0),
+            src_info.size(1),
+            layout_range.data_ptr(),
+            layout_range.size(0),
+            layout_range.size(1),
+            (
+                0
+                if combine_wait_recv_cost_stats is None
+                else combine_wait_recv_cost_stats.data_ptr()
+            ),
+            int(num_max_dispatch_tokens_per_rank),
+            int(num_experts),
+            bool(use_logfmt),
+            False,
+            bool(async_finish),
+            bool(return_recv_hook),
+            combined_x.data_ptr(),
         )
         tensors_to_record = (
-            x,
+            x_for_combine,
             topk_idx,
             topk_weights,
             src_info,
@@ -433,9 +510,15 @@ class Buffer:
             hidden,
             num_experts,
         ) = handle
-        return self.runtime.get_next_low_latency_combine_buffer(
-            num_max_dispatch_tokens_per_rank, hidden, num_experts
+        num_ranks = self.group.size()
+        num_local_experts = num_experts // num_ranks
+        num_recv_tokens = num_ranks * num_max_dispatch_tokens_per_rank
+        self._next_low_latency_combine_buffer = torch.empty(
+            (num_local_experts, num_recv_tokens, hidden),
+            dtype=torch.bfloat16,
+            device="cuda",
         )
+        return self._next_low_latency_combine_buffer
 
     @staticmethod
     def get_low_latency_rdma_size_hint(
@@ -490,6 +573,18 @@ class Buffer:
             offset: the offset of the beginning element.
             use_rdma_buffer: whether to return the RDMA buffer.
         """
+        assert dtype in {
+            torch.uint8,
+            torch.int8,
+            torch.int16,
+            torch.int32,
+            torch.int64,
+            torch.float16,
+            torch.bfloat16,
+            torch.float32,
+            torch.float64,
+            torch.bool,
+        }, f"Unsupported dtype for get_local_buffer_tensor: {dtype}"
         tensor = self.runtime.get_local_buffer_tensor(dtype, offset, use_rdma_buffer)
         if size is None:
             return tensor
@@ -599,12 +694,18 @@ class Buffer:
             num_tokens_per_expert,
             is_token_in_rank,
             event,
-        ) = self.runtime.get_dispatch_layout(
-            topk_idx,
-            num_experts,
-            getattr(previous_event, "event", None),
-            async_finish,
-            allocate_on_comm_stream,
+        ) = (
+            self.runtime.get_dispatch_layout(topk_idx, num_experts)
+            if previous_event is None
+            and not async_finish
+            and not allocate_on_comm_stream
+            else self.runtime.get_dispatch_layout(
+                topk_idx,
+                num_experts,
+                getattr(previous_event, "event", None),
+                async_finish,
+                allocate_on_comm_stream,
+            )
         )
         return (
             num_tokens_per_rank,
