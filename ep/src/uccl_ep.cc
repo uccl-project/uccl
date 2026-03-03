@@ -35,10 +35,10 @@
 #include <cuda_runtime.h>
 
 // Forward declarations from libtorch_python (resolved at link time).
-extern const at::Tensor& THPVariable_Unpack(PyObject* obj);
+extern at::Tensor const& THPVariable_Unpack(PyObject* obj);
 // Use TensorBase in the declaration so we match the symbol exported by
 // libtorch_python.so (THPVariable_Wrap(const at::TensorBase&)).
-extern PyObject* THPVariable_Wrap(const at::TensorBase& var);
+extern PyObject* THPVariable_Wrap(at::TensorBase const& var);
 
 namespace nanobind::detail {
 
@@ -57,7 +57,8 @@ struct type_caster<at::Tensor> {
       return false;
     }
   }
-  static handle from_cpp(const at::Tensor& src, rv_policy, cleanup_list*) noexcept {
+  static handle from_cpp(at::Tensor const& src, rv_policy,
+                         cleanup_list*) noexcept {
     if (!src.defined()) {
       Py_INCREF(Py_None);
       return Py_None;
@@ -80,8 +81,7 @@ std::unordered_map<int, std::vector<nanobind::object>>& proxies_by_dev() {
 
 // Dtype object layout (matches PyTorch THPDtype for reinterpret_cast)
 struct UcclDtypeView {
-  PyObject_HEAD
-  at::ScalarType scalar_type;
+  PyObject_HEAD at::ScalarType scalar_type;
 };
 
 static std::mutex g_proxies_mu;
@@ -1754,7 +1754,8 @@ class Buffer {
   int get_local_device_id() { return device_index; }
 
   nanobind::bytes get_local_ipc_handle() const {
-    return nanobind::bytes(ipc_handles[nvl_rank].reserved, CUDA_IPC_HANDLE_SIZE);
+    return nanobind::bytes(ipc_handles[nvl_rank].reserved,
+                           CUDA_IPC_HANDLE_SIZE);
   }
 
   nanobind::bytes get_local_rdma_ipc_handle() {
@@ -1784,7 +1785,7 @@ class Buffer {
                    "Only RDMA rank 0 can get UCCL unique ID");
     auto unique_id = internode::get_unique_id();
     return nanobind::bytes(reinterpret_cast<char const*>(unique_id.data()),
-                     unique_id.size());
+                           unique_id.size());
   }
 
   torch::Tensor get_next_low_latency_combine_buffer(
@@ -2021,7 +2022,8 @@ NB_MODULE(_ep_native, m) {
   m.doc() = "Minimal DeepEP-compatible shim with UCCL";
 
   nanobind::class_<uccl::Config>(m, "Config")
-      .def(nanobind::init<int, int, int, int, int>(), nanobind::arg("num_sms") = 20,
+      .def(nanobind::init<int, int, int, int, int>(),
+           nanobind::arg("num_sms") = 20,
            nanobind::arg("num_max_nvl_chunked_send_tokens") = 6,
            nanobind::arg("num_max_nvl_chunked_recv_tokens") = 256,
            nanobind::arg("num_max_rdma_chunked_send_tokens") = 6,
@@ -2166,9 +2168,11 @@ NB_MODULE(_ep_native, m) {
 
   nanobind::class_<EventOverlap>(m, "EventOverlap").def(nanobind::init<>());
   nanobind::class_<Buffer>(m, "Buffer")
-      .def(nanobind::init<int, int, long, long, bool, bool, int>(), nanobind::arg("rank"),
-           nanobind::arg("num_ranks"), nanobind::arg("num_nvl_bytes") = 0,
-           nanobind::arg("num_rdma_bytes") = 0, nanobind::arg("low_latency_mode") = false,
+      .def(nanobind::init<int, int, long, long, bool, bool, int>(),
+           nanobind::arg("rank"), nanobind::arg("num_ranks"),
+           nanobind::arg("num_nvl_bytes") = 0,
+           nanobind::arg("num_rdma_bytes") = 0,
+           nanobind::arg("low_latency_mode") = false,
            nanobind::arg("explicitly_destroy") = false,
            nanobind::arg("num_local_ranks") = -1)
       .def("destroy", &Buffer::destroy)
@@ -2180,14 +2184,16 @@ NB_MODULE(_ep_native, m) {
           nanobind::arg("addr"),
           R"doc(Set RDMA buffer from a raw address. Caller must keep the memory alive.)doc")
       .def("reset_rdma_buffer", &Buffer::reset_rdma_buffer)
-      .def("low_latency_dispatch", &Buffer::low_latency_dispatch, nanobind::arg("x"),
-           nanobind::arg("topk_idx"),
-           nanobind::arg("cumulative_local_expert_recv_stats") = nanobind::none(),
+      .def("low_latency_dispatch", &Buffer::low_latency_dispatch,
+           nanobind::arg("x"), nanobind::arg("topk_idx"),
+           nanobind::arg("cumulative_local_expert_recv_stats") =
+               nanobind::none(),
            nanobind::arg("dispatch_wait_recv_cost_stats") = nanobind::none(),
            nanobind::arg("num_max_dispatch_tokens_per_rank") = 0,
            nanobind::arg("num_experts") = 1, nanobind::arg("use_fp8") = true,
-           nanobind::arg("round_scale") = false, nanobind::arg("use_ue8m0") = false,
-           nanobind::arg("async") = false, nanobind::arg("return_recv_hook") = false)
+           nanobind::arg("round_scale") = false,
+           nanobind::arg("use_ue8m0") = false, nanobind::arg("async") = false,
+           nanobind::arg("return_recv_hook") = false)
       .def("get_local_device_id", &Buffer::get_local_device_id)
       .def("get_local_ipc_handle", &Buffer::get_local_ipc_handle)
       .def("get_local_rdma_ipc_handle", &Buffer::get_local_rdma_ipc_handle)
@@ -2236,14 +2242,17 @@ NB_MODULE(_ep_native, m) {
       .def("internode_dispatch", &Buffer::internode_dispatch)
       .def("internode_combine", &Buffer::internode_combine)
       .def("clean_low_latency_buffer", &Buffer::clean_low_latency_buffer)
-      .def("low_latency_combine", &Buffer::low_latency_combine, nanobind::arg("x"),
-           nanobind::arg("topk_idx"), nanobind::arg("topk_weights"), nanobind::arg("src_info"),
+      .def("low_latency_combine", &Buffer::low_latency_combine,
+           nanobind::arg("x"), nanobind::arg("topk_idx"),
+           nanobind::arg("topk_weights"), nanobind::arg("src_info"),
            nanobind::arg("layout_range"),
            nanobind::arg("combine_wait_recv_cost_stats") = nanobind::none(),
            nanobind::arg("num_max_dispatch_tokens_per_rank") = 0,
-           nanobind::arg("num_experts") = 1, nanobind::arg("use_logfmt") = false,
+           nanobind::arg("num_experts") = 1,
+           nanobind::arg("use_logfmt") = false,
            nanobind::arg("zero_copy") = false, nanobind::arg("async") = false,
-           nanobind::arg("return_recv_hook") = false, nanobind::arg("out") = nanobind::none());
+           nanobind::arg("return_recv_hook") = false,
+           nanobind::arg("out") = nanobind::none());
   m.def("alloc_cmd_ring", &alloc_cmd_ring);
   m.def("free_cmd_ring", &free_cmd_ring);
   m.def("launch_gpu_issue_kernel", [](int blocks, int threads_per_block,
@@ -2305,13 +2314,15 @@ NB_MODULE(_ep_native, m) {
   });
   nanobind::class_<Stats>(m, "Stats");
   nanobind::class_<UcclProxy>(m, "Proxy")
-      .def(nanobind::init<int, uintptr_t, size_t, int, int, int, int, int, int, bool,
-                    bool, bool>(),
+      .def(nanobind::init<int, uintptr_t, size_t, int, int, int, int, int, int,
+                          bool, bool, bool>(),
            nanobind::arg("thread_idx"), nanobind::arg("gpu_buffer_addr"),
-           nanobind::arg("total_size"), nanobind::arg("rank") = 0, nanobind::arg("node_idx") = -1,
-           nanobind::arg("local_rank") = 0, nanobind::arg("num_experts") = -1,
-           nanobind::arg("num_ranks") = -1, nanobind::arg("num_nodes") = 0,
-           nanobind::arg("use_normal_mode") = false, nanobind::arg("is_intranode") = false,
+           nanobind::arg("total_size"), nanobind::arg("rank") = 0,
+           nanobind::arg("node_idx") = -1, nanobind::arg("local_rank") = 0,
+           nanobind::arg("num_experts") = -1, nanobind::arg("num_ranks") = -1,
+           nanobind::arg("num_nodes") = 0,
+           nanobind::arg("use_normal_mode") = false,
+           nanobind::arg("is_intranode") = false,
            nanobind::arg("gpu_buffer_is_host_allocated") = false)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
@@ -2325,7 +2336,8 @@ NB_MODULE(_ep_native, m) {
            &UcclProxy::set_dispatch_recv_data_offset, nanobind::arg("offset"))
       .def("calculate_and_set_dispatch_recv_data_offset",
            &UcclProxy::calculate_and_set_dispatch_recv_data_offset,
-           nanobind::arg("num_tokens"), nanobind::arg("hidden"), nanobind::arg("num_experts"))
+           nanobind::arg("num_tokens"), nanobind::arg("hidden"),
+           nanobind::arg("num_experts"))
       .def("get_d2h_channel_addrs", &UcclProxy::get_d2h_channel_addrs)
       .def_prop_ro("thread_idx", &UcclProxy::thread_idx)
       .def_prop_ro("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr)
@@ -2336,9 +2348,11 @@ NB_MODULE(_ep_native, m) {
           [](UcclProxy& self, nanobind::object metas) {
             std::vector<PeerMeta> v;
             if (nanobind::isinstance<nanobind::list>(metas)) {
-              for (nanobind::handle obj : nanobind::borrow<nanobind::list>(metas)) {
+              for (nanobind::handle obj :
+                   nanobind::borrow<nanobind::list>(metas)) {
                 if (nanobind::isinstance<nanobind::dict>(obj)) {
-                  nanobind::dict meta_dict = nanobind::borrow<nanobind::dict>(obj);
+                  nanobind::dict meta_dict =
+                      nanobind::borrow<nanobind::dict>(obj);
                   PeerMeta pm;
                   pm.rank = nanobind::cast<int>(meta_dict["rank"]);
                   pm.ptr = static_cast<uintptr_t>(
@@ -2347,7 +2361,8 @@ NB_MODULE(_ep_native, m) {
                       nanobind::cast<unsigned long long>(meta_dict["nbytes"]));
                   pm.ip = nanobind::cast<std::string>(meta_dict["ip"]);
 
-                  nanobind::list ports = nanobind::borrow<nanobind::list>(meta_dict["listen_ports"]);
+                  nanobind::list ports = nanobind::borrow<nanobind::list>(
+                      meta_dict["listen_ports"]);
                   size_t port_count =
                       std::min(static_cast<size_t>(nanobind::len(ports)),
                                static_cast<size_t>(kNumProxyThs));
@@ -2364,7 +2379,8 @@ NB_MODULE(_ep_native, m) {
                 }
               }
             } else {
-              nanobind::dict meta_dict = nanobind::borrow<nanobind::dict>(metas);
+              nanobind::dict meta_dict =
+                  nanobind::borrow<nanobind::dict>(metas);
               PeerMeta pm;
               pm.rank = nanobind::cast<int>(meta_dict["rank"]);
               pm.ptr = static_cast<uintptr_t>(
@@ -2373,9 +2389,11 @@ NB_MODULE(_ep_native, m) {
                   nanobind::cast<unsigned long long>(meta_dict["nbytes"]));
               pm.ip = nanobind::cast<std::string>(meta_dict["ip"]);
 
-              nanobind::list ports = nanobind::borrow<nanobind::list>(meta_dict["listen_ports"]);
-              size_t port_count = std::min(static_cast<size_t>(nanobind::len(ports)),
-                                           static_cast<size_t>(kNumProxyThs));
+              nanobind::list ports =
+                  nanobind::borrow<nanobind::list>(meta_dict["listen_ports"]);
+              size_t port_count =
+                  std::min(static_cast<size_t>(nanobind::len(ports)),
+                           static_cast<size_t>(kNumProxyThs));
               for (size_t i = 0; i < port_count; ++i) {
                 pm.listen_ports[i] = nanobind::cast<int>(ports[i]);
               }
@@ -2393,10 +2411,12 @@ NB_MODULE(_ep_native, m) {
           "set_bench_d2h_channel_addrs",
           [](UcclProxy& self, nanobind::list addrs) {
             std::vector<uintptr_t> v;
-            for (nanobind::handle h : addrs) v.push_back(nanobind::cast<uintptr_t>(h));
+            for (nanobind::handle h : addrs)
+              v.push_back(nanobind::cast<uintptr_t>(h));
             self.set_bench_d2h_channel_addrs(v);
           },
-          nanobind::arg("addrs"), "Attach ring buffer addresses for benchmarking.");
+          nanobind::arg("addrs"),
+          "Attach ring buffer addresses for benchmarking.");
   // .def_prop_ro("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr);
   nanobind::class_<EnvInfo>(m, "EnvInfo")
       .def_ro("blocks", &EnvInfo::blocks)
@@ -2439,7 +2459,7 @@ NB_MODULE(_ep_native, m) {
 
   // MSCCLPP Fifo class - must be registered before BenchFifo which uses it
   nanobind::class_<mscclpp::Fifo>(m, "Fifo").def(nanobind::init<uint32_t>(),
-                                           nanobind::arg("size") = 2048);
+                                                 nanobind::arg("size") = 2048);
 
   // FIFO-based benchmarking classes
   nanobind::class_<BenchFifo>(m, "BenchFifo")
@@ -2467,8 +2487,9 @@ NB_MODULE(_ep_native, m) {
   nanobind::class_<FifoProxy>(m, "FifoProxy")
       .def(nanobind::init<int, uintptr_t, size_t, int, int, int, bool>(),
            nanobind::arg("thread_idx"), nanobind::arg("gpu_buffer_addr"),
-           nanobind::arg("total_size"), nanobind::arg("rank"), nanobind::arg("node_idx"),
-           nanobind::arg("local_rank"), nanobind::arg("is_intranode"))
+           nanobind::arg("total_size"), nanobind::arg("rank"),
+           nanobind::arg("node_idx"), nanobind::arg("local_rank"),
+           nanobind::arg("is_intranode"))
       .def("set_fifo", &FifoProxy::set_fifo, nanobind::arg("fifo"))
       .def("set_peers_meta",
            [](FifoProxy& proxy, nanobind::list meta_list) {
@@ -2482,7 +2503,8 @@ NB_MODULE(_ep_native, m) {
                  pm.nbytes = nanobind::cast<size_t>(d["nbytes"]);
                  pm.ip = nanobind::cast<std::string>(d["ip"]);
 
-                 nanobind::list ports = nanobind::borrow<nanobind::list>(d["listen_ports"]);
+                 nanobind::list ports =
+                     nanobind::borrow<nanobind::list>(d["listen_ports"]);
                  size_t port_count =
                      std::min(static_cast<size_t>(nanobind::len(ports)),
                               static_cast<size_t>(kNumProxyThs));
