@@ -249,7 +249,7 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
   -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
   -e DISABLE_AGGRESSIVE_ATOMIC="${DISABLE_AGGRESSIVE_ATOMIC:-0}" \
   -e UCCL_WHEEL_PLAT="${UCCL_WHEEL_PLAT:-}" \
-  -e UCCL_PACKAGE_NAME="${UCCL_PACKAGE_NAME:-uccl}" \
+  -e UCCL_PACKAGE_NAME="${UCCL_PACKAGE_NAME:-uccl-${TARGET}}" \
   -e UCCL_SKIP_LOCAL_VERSION="${UCCL_SKIP_LOCAL_VERSION:-0}" \
   -e FUNCTION_DEF="$(declare -f rename_to_abi3 build_rccl_nccl_header build_ccl_rdma build_ccl_efa build_p2p build_ep build_ukernel)" \
   -w /io \
@@ -341,7 +341,7 @@ def initialize():
       UCCL_WHEEL_PLAT="manylinux_${GLIBC_VER//./_}_$(uname -m)"
     fi
 
-    auditwheel repair dist/uccl-*.whl \
+    auditwheel repair dist/uccl*.whl \
       --plat "${UCCL_WHEEL_PLAT}" \
       --exclude "libtorch*.so" \
       --exclude "libc10*.so" \
@@ -355,7 +355,7 @@ def initialize():
     # auditwheel may emit compressed dual tags (e.g. manylinux_2_34.manylinux_2_35).
     # Collapse to the single requested platform tag via simple rename.
     cd /io/${WHEEL_DIR}
-    for whl in uccl-*.whl; do
+    for whl in uccl*.whl; do
       new="${whl%%abi3-*}abi3-${UCCL_WHEEL_PLAT}.whl"
       [[ "$whl" != "$new" ]] && mv "$whl" "$new"
     done
@@ -369,10 +369,10 @@ def initialize():
         TARGET="rocm$(rocm-sdk version)"
       fi
       cd /io/${WHEEL_DIR}
-      for wheel in uccl-*.whl; do
+      for wheel in uccl*.whl; do
         if [[ -f "$wheel" ]]; then
           # Extract wheel name components: uccl-version-python-abi-platform.whl
-          if [[ "$wheel" =~ ^(uccl-)([^-]+)-([^-]+-[^-]+-.+)(\.whl)$ ]]; then
+          if [[ "$wheel" =~ ^(uccl[^-]*-)([^-]+)-([^-]+-[^-]+-.+)(\.whl)$ ]]; then
             name="${BASH_REMATCH[1]}"
             version="${BASH_REMATCH[2]}"
             python_abi_platform="${BASH_REMATCH[3]}"
@@ -398,7 +398,7 @@ def initialize():
 # 8. Print the built wheel
 ########################################################
 echo "Wheel built successfully (stored in ${WHEEL_DIR}):"
-ls -lh "${WHEEL_DIR}"/uccl-*.whl || true
+ls -lh "${WHEEL_DIR}"/uccl*.whl || true
 
 ########################################################
 # 9. Optionally install the built wheel
@@ -414,9 +414,9 @@ if [[ "$DO_INSTALL" == "1" ]]; then
   ${PIP_CMD} install -r requirements.txt
   ${PIP_CMD} uninstall uccl -y 2>/dev/null || true
   if [[ "$TARGET" != "therock" ]]; then
-    ${PIP_CMD} install "${WHEEL_DIR}"/uccl-*.whl --no-deps
+    ${PIP_CMD} install "${WHEEL_DIR}"/uccl*.whl --no-deps
   else
-    ${PIP_CMD} install --extra-index-url "${ROCM_IDX_URL}" "$(ls "${WHEEL_DIR}"/uccl-*.whl)[rocm]"
+    ${PIP_CMD} install --extra-index-url "${ROCM_IDX_URL}" "$(ls "${WHEEL_DIR}"/uccl*.whl)[rocm]"
   fi
 
   UCCL_INSTALL_PATH=$(${PIP_CMD} show uccl 2>/dev/null | grep "^Location:" | cut -d' ' -f2 || echo "")
