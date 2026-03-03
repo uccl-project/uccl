@@ -253,7 +253,7 @@ class UCCLLogCapture {
         subsys_(subsys),
         fileName_(fileName),
         lineNumber_(lineNumber),
-        functionName_(functionName) {};
+        functionName_(functionName){};
 
   ~UCCLLogCapture() {
     logger_.log(level_, subsys_, fileName_, lineNumber_, functionName_,
