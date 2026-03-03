@@ -2,10 +2,6 @@ name: Build Docker Images
 
 on:
   workflow_dispatch:
-    inputs:
-      targets:
-        description: 'Targets to build (comma-separated: cuda,rocm,efa,therock)'
-        default: 'cuda,rocm,efa,therock'
   push:
     branches: [main]
     paths:
@@ -20,33 +16,30 @@ env:
   IMAGE_PREFIX: ghcr.io/${{ github.repository }}
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # CUDA / ROCm / EFA images: one per (target, python_version)
-  # ---------------------------------------------------------------------------
-  build-platform-images:
+  build-images:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # CUDA images
-          - { dockerfile: docker/Dockerfile.cuda,  image_name: uccl-builder-cuda, py_version: "3.9"  }
-          - { dockerfile: docker/Dockerfile.cuda,  image_name: uccl-builder-cuda, py_version: "3.10" }
-          - { dockerfile: docker/Dockerfile.cuda,  image_name: uccl-builder-cuda, py_version: "3.11" }
-          - { dockerfile: docker/Dockerfile.cuda,  image_name: uccl-builder-cuda, py_version: "3.12" }
-          - { dockerfile: docker/Dockerfile.cuda,  image_name: uccl-builder-cuda, py_version: "3.13" }
-          # ROCm images
-          - { dockerfile: docker/Dockerfile.rocm,  image_name: uccl-builder-rocm, py_version: "3.9"  }
-          - { dockerfile: docker/Dockerfile.rocm,  image_name: uccl-builder-rocm, py_version: "3.10" }
-          - { dockerfile: docker/Dockerfile.rocm,  image_name: uccl-builder-rocm, py_version: "3.11" }
-          - { dockerfile: docker/Dockerfile.rocm,  image_name: uccl-builder-rocm, py_version: "3.12" }
-          - { dockerfile: docker/Dockerfile.rocm,  image_name: uccl-builder-rocm, py_version: "3.13" }
-          # EFA images (CUDA-based with EFA installer)
-          - { dockerfile: docker/Dockerfile.efa,   image_name: uccl-builder-efa,  py_version: "3.9"  }
-          - { dockerfile: docker/Dockerfile.efa,   image_name: uccl-builder-efa,  py_version: "3.10" }
-          - { dockerfile: docker/Dockerfile.efa,   image_name: uccl-builder-efa,  py_version: "3.11" }
-          - { dockerfile: docker/Dockerfile.efa,   image_name: uccl-builder-efa,  py_version: "3.12" }
-          - { dockerfile: docker/Dockerfile.efa,   image_name: uccl-builder-efa,  py_version: "3.13" }
+        py_version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        include_entry:
+          # CUDA 12
+          - dockerfile: docker/Dockerfile.cuda
+            image_name: uccl-builder-cuda
+          # CUDA 13
+          - dockerfile: docker/Dockerfile.cuda
+            image_name: uccl-builder-cuda13
+            base_image: "nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04"
+          # EFA + CUDA 12
+          - dockerfile: docker/Dockerfile.efa
+            image_name: uccl-builder-efa
+          # EFA + CUDA 13
+          - dockerfile: docker/Dockerfile.efa
+            image_name: uccl-builder-efa13
+            base_image: "nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04"
+          # ROCm
+          - dockerfile: docker/Dockerfile.rocm
+            image_name: uccl-builder-rocm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -65,17 +58,16 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
-          build-args: PY_VER=${{ matrix.py_version }}
+          file: ${{ matrix.include_entry.dockerfile }}
+          build-args: |
+            PY_VER=${{ matrix.py_version }}
+            ${{ matrix.include_entry.base_image && format('BASE_IMAGE={0}', matrix.include_entry.base_image) || '' }}
           push: true
-          tags: ${{ env.IMAGE_PREFIX }}/${{ matrix.image_name }}:py${{ matrix.py_version }}
-          cache-from: type=gha,scope=${{ matrix.image_name }}-py${{ matrix.py_version }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image_name }}-py${{ matrix.py_version }}
+          tags: ${{ env.IMAGE_PREFIX }}/${{ matrix.include_entry.image_name }}:py${{ matrix.py_version }}
+          cache-from: type=gha,scope=${{ matrix.include_entry.image_name }}-py${{ matrix.py_version }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.include_entry.image_name }}-py${{ matrix.py_version }}
 
-  # ---------------------------------------------------------------------------
-  # TheRock image: PyPA manylinux base has all Python versions pre-installed,
-  # so we only need one image.
-  # ---------------------------------------------------------------------------
+  # TheRock: PyPA manylinux base has all Python versions pre-installed
   build-therock-image:
     runs-on: ubuntu-latest
     steps:
@@ -100,7 +92,6 @@ jobs:
           push: true
           tags: |
             ${{ env.IMAGE_PREFIX }}/uccl-builder-therock:latest
-            ${{ env.IMAGE_PREFIX }}/uccl-builder-therock:py3.9
             ${{ env.IMAGE_PREFIX }}/uccl-builder-therock:py3.10
             ${{ env.IMAGE_PREFIX }}/uccl-builder-therock:py3.11
             ${{ env.IMAGE_PREFIX }}/uccl-builder-therock:py3.12

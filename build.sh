@@ -282,6 +282,9 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "ep" ]]; then
       build_ep "$TARGET" "$ARCH" "$IS_EFA"
+    elif [[ "$BUILD_TYPE" == "p2p_ep" ]]; then
+      build_p2p "$TARGET" "$ARCH" "$IS_EFA"
+      build_ep "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "ukernel" ]]; then
       build_ukernel "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "all" ]]; then
