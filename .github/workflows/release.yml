@@ -67,6 +67,7 @@ jobs:
             target: cuda
             image_name: uccl-builder-efa
             package_name: uccl-cu12-efa
+            is_efa: "1"
             for_pypi: true
             gpu_arch: "8.0+PTX;9.0+PTX"
           # CUDA 13 + EFA
@@ -74,6 +75,7 @@ jobs:
             target: cuda13
             image_name: uccl-builder-efa13
             package_name: uccl-cu13-efa
+            is_efa: "1"
             for_pypi: true
             gpu_arch: "8.0+PTX;9.0+PTX"
           # ROCm
@@ -122,6 +124,7 @@ jobs:
         env:
           SKIP_DOCKER_BUILD: "1"
           IMAGE_NAME: ${{ matrix.variant.image_name }}
+          IS_EFA: ${{ matrix.variant.is_efa || '' }}
           TORCH_CUDA_ARCH_LIST: ${{ matrix.variant.gpu_arch }}
           UCCL_PACKAGE_NAME: ${{ matrix.variant.package_name }}
           UCCL_SKIP_LOCAL_VERSION: ${{ matrix.variant.for_pypi && '1' || '0' }}

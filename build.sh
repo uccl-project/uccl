@@ -60,7 +60,7 @@ if [[ "$CONTAINER_ENGINE" != "docker" && "$CONTAINER_ENGINE" != "podman" ]]; the
   echo "Error: CONTAINER_ENGINE must be 'docker' or 'podman', got '${CONTAINER_ENGINE}'" >&2
   exit 1
 fi
-IS_EFA=$([ -d "/sys/class/infiniband/" ] && ls /sys/class/infiniband/ 2>/dev/null | grep -q rdmap && echo "EFA support: true") || echo "EFA support: false"
+IS_EFA="${IS_EFA:-$([ -d "/sys/class/infiniband/" ] && ls /sys/class/infiniband/ 2>/dev/null | grep -q rdmap && echo "EFA support: true")}" || echo "EFA support: false"
 
 # Auto-detect CUDA architecture for ep build, auto-detect ROCm architecture for ep build
 DETECTED_GPU_ARCH=""
@@ -130,46 +130,45 @@ mkdir -p "${WHEEL_DIR}"
 
 ########################################################
 # 4. Determine the Docker image to use based on the target and architecture
-#    Set IMAGE_NAME externally to skip auto-detection (e.g. in CI).
+#    Override IMAGE_NAME and/or DOCKERFILE via env vars to force a specific
+#    image (e.g. EFA on a non-EFA host, or pre-pulled images in CI).
 ########################################################
-if [[ -n "${IMAGE_NAME:-}" ]]; then
-  echo "Using caller-provided IMAGE_NAME=${IMAGE_NAME}"
-elif [[ $TARGET == "cuda" ]]; then
+if [[ $TARGET == "cuda" ]]; then
   # default is cuda 12.8 from `nvidia/cuda:12.8.0-devel-ubuntu22.04`
   if [[ "$ARCH" == "aarch64" ]]; then
-    DOCKERFILE="docker/Dockerfile.gh"
-    IMAGE_NAME="uccl-builder-gh"
+    : "${DOCKERFILE:=docker/Dockerfile.gh}"
+    : "${IMAGE_NAME:=uccl-builder-gh}"
   elif [[ -n "$IS_EFA" ]]; then
-    DOCKERFILE="docker/Dockerfile.efa"
-    IMAGE_NAME="uccl-builder-efa"
+    : "${DOCKERFILE:=docker/Dockerfile.efa}"
+    : "${IMAGE_NAME:=uccl-builder-efa}"
   else
-    DOCKERFILE="docker/Dockerfile.cuda"
-    IMAGE_NAME="uccl-builder-cuda"
+    : "${DOCKERFILE:=docker/Dockerfile.cuda}"
+    : "${IMAGE_NAME:=uccl-builder-cuda}"
   fi
 elif [[ $TARGET == "cuda13" ]]; then
-  BASE_IMAGE="nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04"
+  : "${BASE_IMAGE:=nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04}"
   if [[ "$ARCH" == "aarch64" ]]; then
-    DOCKERFILE="docker/Dockerfile.gh"
-    IMAGE_NAME="uccl-builder-gh"
+    : "${DOCKERFILE:=docker/Dockerfile.gh}"
+    : "${IMAGE_NAME:=uccl-builder-gh}"
   elif [[ -n "$IS_EFA" ]]; then
-    DOCKERFILE="docker/Dockerfile.efa"
-    IMAGE_NAME="uccl-builder-efa"
+    : "${DOCKERFILE:=docker/Dockerfile.efa}"
+    : "${IMAGE_NAME:=uccl-builder-efa}"
   else
-    DOCKERFILE="docker/Dockerfile.cuda"
-    IMAGE_NAME="uccl-builder-cuda"
+    : "${DOCKERFILE:=docker/Dockerfile.cuda}"
+    : "${IMAGE_NAME:=uccl-builder-cuda}"
   fi
 elif [[ $TARGET == "rocm" ]]; then
   # default is latest rocm 7 version from `rocm/dev-ubuntu-22.04`
-  DOCKERFILE="docker/Dockerfile.rocm"
-  IMAGE_NAME="uccl-builder-rocm"
+  : "${DOCKERFILE:=docker/Dockerfile.rocm}"
+  : "${IMAGE_NAME:=uccl-builder-rocm}"
 elif [[ $TARGET == "rocm6" ]]; then
-  DOCKERFILE="docker/Dockerfile.rocm"
-  BASE_IMAGE="rocm/dev-ubuntu-22.04:6.4.3-complete"
-  IMAGE_NAME="uccl-builder-rocm"
+  : "${DOCKERFILE:=docker/Dockerfile.rocm}"
+  : "${BASE_IMAGE:=rocm/dev-ubuntu-22.04:6.4.3-complete}"
+  : "${IMAGE_NAME:=uccl-builder-rocm}"
 elif [[ $TARGET == "therock" ]]; then
-  DOCKERFILE="docker/Dockerfile.therock"
-  BASE_IMAGE="${THEROCK_BASE_IMAGE}"
-  IMAGE_NAME="uccl-builder-therock"
+  : "${DOCKERFILE:=docker/Dockerfile.therock}"
+  : "${BASE_IMAGE:=${THEROCK_BASE_IMAGE}}"
+  : "${IMAGE_NAME:=uccl-builder-therock}"
 fi
 
 ########################################################
