@@ -368,6 +368,26 @@ NB_MODULE(p2p, m) {
           "descriptors",
           nb::arg("tensor_list"))
       .def(
+          "deregister_memory",
+          [](Endpoint& self, nb::list desc_list) {
+            std::vector<uint64_t> mr_ids;
+            size_t list_len = nb::len(desc_list);
+            mr_ids.reserve(list_len);
+            for (size_t i = 0; i < list_len; ++i) {
+              auto const& desc = nb::cast<XferDesc const&>(desc_list[i]);
+              mr_ids.push_back(desc.mr_id);
+            }
+            {
+              nb::gil_scoped_release release;
+              InsidePythonGuard guard;
+              for (auto mr_id : mr_ids) {
+                self.dereg(mr_id);
+              }
+            }
+          },
+          "Deregister memory for a list of transfer descriptors",
+          nb::arg("desc_list"))
+      .def(
           "get_serialized_descs",
           [](Endpoint& /*self*/, nb::list desc_list) {
             std::vector<XferDesc> xfer_desc_v;
