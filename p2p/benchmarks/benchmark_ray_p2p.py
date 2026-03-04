@@ -265,6 +265,11 @@ def main():
     p.add_argument("--num-cpus", type=int, default=4)
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
     p.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Use CPU (pinned) memory for buffers (shorthand for --device cpu)",
+    )
+    p.add_argument(
         "--perf", action="store_true", help="Measure pure transfer performance"
     )
     p.add_argument(
@@ -297,6 +302,8 @@ def main():
         help="Number of iovs to transfer in a single call",
     )
     args = p.parse_args()
+    if args.cpu:
+        args.device = "cpu"
 
     print("UCCL Ray P2P Benchmark")
     print("=" * 60)

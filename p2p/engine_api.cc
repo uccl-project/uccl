@@ -352,10 +352,16 @@ NB_MODULE(p2p, m) {
                   auto addr_val = reinterpret_cast<uintptr_t>(ptrs[i]);
                   auto addr_aligned = addr_val & ~(kIpcAlign - 1);
                   ipc_info.offset = addr_val - addr_aligned;
-                  auto err = gpuIpcGetMemHandle(
-                      &ipc_info.handle, reinterpret_cast<void*>(addr_aligned));
-                  if (err != gpuSuccess) {
-                    throw std::runtime_error(gpuGetErrorString(err));
+                  bool is_host = (uccl::get_dev_idx(
+                                      const_cast<void*>(ptrs[i])) == -1);
+                  ipc_info.is_host = is_host;
+                  if (!is_host) {
+                    auto err = gpuIpcGetMemHandle(
+                        &ipc_info.handle,
+                        reinterpret_cast<void*>(addr_aligned));
+                    if (err != gpuSuccess) {
+                      throw std::runtime_error(gpuGetErrorString(err));
+                    }
                   }
                   xfer_desc.ipc_info.assign(
                       reinterpret_cast<char const*>(&ipc_info),
