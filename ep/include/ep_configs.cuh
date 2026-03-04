@@ -56,11 +56,25 @@
 #include <cuda_runtime.h>
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#include <hip/hip_bfloat16.h>
+#if defined(__HIPCC__)
+#include <hip/hip_fp8.h>
+#endif
 #define nv_bfloat16 hip_bfloat16
+#if defined(__HIPCC__)
 #define __nv_fp8x2_storage_t __hip_fp8x2_storage_t
 #define __nv_fp8_storage_t __hip_fp8_storage_t
 #define __nv_cvt_float2_to_fp8x2 __hip_cvt_float2_to_fp8x2
 #define __NV_SATFINITE __HIP_SATFINITE
+#else
+typedef uint16_t __nv_fp8x2_storage_t;
+typedef uint8_t __nv_fp8_storage_t;
+#define __nv_cvt_float2_to_fp8x2(...) \
+  (static_cast<__nv_fp8x2_storage_t>(0))
+#define __NV_SATFINITE 1
+#define __HIP_E4M3 0
+#define __HIP_E4M3_FNUZ 0
+#endif
 #define WARP_SIZE 64
 #define WARP_MASK 0xffffffffffffffffu
 #define MAX_NTHREADS 1024
