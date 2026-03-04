@@ -436,6 +436,9 @@ class Endpoint {
   bool add_remote_endpoint(std::vector<uint8_t> const& metadata,
                            uint64_t& conn_id);
 
+  /* Remove a remote endpoint previously added via add_remote_endpoint. */
+  bool remove_remote_endpoint(uint64_t conn_id);
+
   /* Start a background thread for accepting. */
   bool start_passive_accept();
 

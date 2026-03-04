@@ -2183,6 +2183,39 @@ bool Endpoint::add_remote_endpoint(std::vector<uint8_t> const& metadata,
   return false;
 }
 
+bool Endpoint::remove_remote_endpoint(uint64_t conn_id) {
+  std::unique_lock<std::shared_mutex> lock(conn_mu_);
+
+  auto it = conn_id_to_conn_.find(conn_id);
+  if (it == conn_id_to_conn_.end()) {
+    std::cerr << "[remove_remote_endpoint] Error: Invalid conn_id " << conn_id
+              << std::endl;
+    return false;
+  }
+
+  Conn* conn = it->second;
+
+  // Detach shared memory if this was a local connection
+  if (conn->shm_attached_) {
+    auto& shm = conn->remote_inbox_;
+    uccl::detach_shared_ring(shm.ring, shm.shm_fd, shm.shm_size);
+  }
+
+  // Remove from the metadata memoization map
+  for (auto mit = remote_endpoint_to_conn_id_.begin();
+       mit != remote_endpoint_to_conn_id_.end(); ++mit) {
+    if (mit->second == conn_id) {
+      remote_endpoint_to_conn_id_.erase(mit);
+      break;
+    }
+  }
+
+  delete conn;
+  conn_id_to_conn_.erase(it);
+
+  return true;
+}
+
 bool Endpoint::start_passive_accept() {
   if (!passive_accept_) {
     passive_accept_stop_.store(false, std::memory_order_release);

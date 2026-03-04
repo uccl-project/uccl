@@ -118,6 +118,7 @@ def _run_client(args, ep, peer_rank: int, mode: str):
     remote_metadata = _recv_bytes(src=peer)
     print(f"[Client] Exchanged metadata with server")
 
+    conn_id = None
     for sz in args.sizes:
         size_per_block = sz // args.num_iovs
 
@@ -144,6 +145,7 @@ def _run_client(args, ep, peer_rank: int, mode: str):
                 _, is_done = ep.poll_async(transfer_id)
             dist.barrier()
             ep.deregister_memory(local_descs)
+            ep.remove_remote_endpoint(conn_id)
 
             # Benchmark iterations
             start = time.perf_counter()
@@ -173,6 +175,7 @@ def _run_client(args, ep, peer_rank: int, mode: str):
                 total += sz
                 dist.barrier()
                 ep.deregister_memory(local_descs)
+                ep.remove_remote_endpoint(conn_id)
 
             elapsed = time.perf_counter() - start
         else:
@@ -219,6 +222,11 @@ def _run_client(args, ep, peer_rank: int, mode: str):
             f"{total / elapsed / 1e9:6.2f} GB/s | "
             f"{elapsed / args.iters:6.6f} s"
         )
+
+    # Clean up connection once after all sizes (raw mode reuses it across sizes)
+    if not args.normal and conn_id is not None:
+        ep.remove_remote_endpoint(conn_id)
+
     print(f"[Client/{mode.upper()}] Benchmark complete")
 
 

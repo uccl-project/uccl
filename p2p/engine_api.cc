@@ -226,6 +226,19 @@ NB_MODULE(p2p, m) {
           "Add remote endpoint - connect only once per remote endpoint.",
           nb::arg("metadata_bytes"))
       .def(
+          "remove_remote_endpoint",
+          [](Endpoint& self, uint64_t conn_id) {
+            bool success;
+            {
+              nb::gil_scoped_release release;
+              InsidePythonGuard guard;
+              success = self.remove_remote_endpoint(conn_id);
+            }
+            return success;
+          },
+          "Remove a remote endpoint previously added via add_remote_endpoint.",
+          nb::arg("conn_id"))
+      .def(
           "get_metadata",
           [](Endpoint& self) {
             std::vector<uint8_t> metadata = self.get_metadata();
