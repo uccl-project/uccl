@@ -735,7 +735,6 @@ class Buffer:
             is_token_in_rank: `[num_tokens, num_ranks]` with `torch.bool`, whether a token be sent to a rank.
             event: the event after executing the kernel (valid only if `async_finish` is set).
         """
-        compute_stream = torch.cuda.current_stream(device=topk_idx.device)
         if allocate_on_comm_stream:
             assert previous_event is not None and async_finish
 
