@@ -13,22 +13,24 @@
  */
 #pragma once
 
-#include <bitset>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <mutex>
 #include <ostream>
 #include <sstream>
+#include <string>
 #include <string_view>
-#include <unordered_map>
 #include <unistd.h>
 
 namespace uccl {
-enum UCCLLogLevel { FATAL = 0, ERROR, WARN, INFO };
+enum UCCLLogLevel { FATAL = 0, ERROR, WARNING, INFO };
 
 class UCCLLogger;
 class UCCLLogCapture;
+class UCCLVLogCapture;
 class UCCLCheckCapture;
 struct UCCLVoidify;
 
@@ -39,6 +41,18 @@ struct UCCLVoidify;
 
 #define LOG(level) UCCL_LOG_INTERNAL(level)
 
+#define UCCL_LOG_EVERY_N_INTERNAL(level, n)                                    \
+  static std::atomic<int> log_every_n_counter_{0};                             \
+  log_every_n_counter_.fetch_add(1);                                           \
+  (uccl::ucclLogger.shouldLog(level) && (log_every_n_counter_ % (n) != 0))     \
+      ? (void)0                                                                \
+      : uccl::UCCLVoidify() &                                                  \
+            (uccl::UCCLLogCapture(uccl::ucclLogger, level, __FILE__, __LINE__, \
+                                  __func__)                                    \
+                 .stream())
+
+#define LOG_EVERY_N(level, n) UCCL_LOG_EVERY_N_INTERNAL(level, n)
+
 #define UCCL_LOG_IF_INTERNAL(level, condition)                                \
   if (condition && uccl::ucclLogger.shouldLog(level))                         \
   uccl::UCCLLogCapture(uccl::ucclLogger, level, __FILE__, __LINE__, __func__) \
@@ -46,15 +60,27 @@ struct UCCLVoidify;
 
 #define LOG_IF(level, condition) UCCL_LOG_IF_INTERNAL(level, condition)
 
+#define UCCL_VLOG_INTERNAL(vlogLevel)                                      \
+  if (uccl::ucclLogger.shouldVLog(vlogLevel)) {                            \
+    uccl::UCCLVLogCapture(uccl::ucclLogger, vLogLevel, __FILE__, __LINE__, \
+                          __func__)                                        \
+        .stream()                                                          \
+  }
+
+#define VLOG(level) UCCL_VLOG_INTERNAL(level)
+
 // here, the & operator has a lower precedence than the << operator
 // hence, it the << would resolve first and the type of the : branch would also
 // be void
 #define UCCL_CHECK_INTERNAL(condition)                                    \
-  condition ? (void)0                                                     \
-            : uccl::UCCLVoidify() &                                       \
-                  (uccl::UCCLCheckCapture(uccl::ucclLogger, __FILE__,     \
-                                          __LINE__, __func__, #condition) \
-                       .stream())
+  condition                                                               \
+      ? (void)0                                                           \
+      : uccl::UCCLVoidify() &                                             \
+            (uccl::UCCLCheckCapture(uccl::ucclLogger, __FILE__, __LINE__, \
+                                    __func__, #condition, "CHECK")        \
+                 .stream())
+
+#define CHECK(condition) UCCL_CHECK_INTERNAL((condition))
 
 #define CHECK_EQ(first, second) UCCL_CHECK_INTERNAL(((first) == (second)))
 
@@ -96,9 +122,21 @@ struct UCCLVoidify;
 #define DCHECK_GTE(first, second) CHECK_GTE(first, second)
 #endif
 
+#define UCCL_PCHECK_INTERNAL(check)                                         \
+  check ? (void)0                                                           \
+        : uccl::UCCLVoidify() &                                             \
+              (uccl::UCCLCheckCapture(uccl::ucclLogger, __FILE__, __LINE__, \
+                                      __func__, #check, "PCHECK", errno)    \
+                   .stream())
+
+#define PCHECK(condition) UCCL_PCHECK_INTERNAL(condition)
+
 class UCCLLogger {
  public:
-  UCCLLogger(std::ostream& stream) : stream_(stream) { _initializeLogLevel(); };
+  UCCLLogger(std::ostream& stream) : stream_(stream) {
+    _initializeLogLevel();
+    _initializeVlogLevel();
+  };
 
   std::ostream& stream() { return stream_; }
 
@@ -109,25 +147,37 @@ class UCCLLogger {
 
     // NOTE: flush on every write, not sure if that is what we want though
     // TODO: add time?
-    stream_ << "[" << logLevelToString(logLevel) << " | " << " | "
-            << function_name << " | " << filename << ":" << line_number << "] "
-            << message << std::endl;
+    stream_ << "[" << logLevelToString(logLevel) << " | " << function_name
+            << " | " << filename << ":" << line_number << "] " << message
+            << std::endl;
   };
 
   bool shouldLog(UCCLLogLevel logLevel) { return logLevel <= logLevel_; }
+
+  void vlog(int vlogLevel, std::string_view filename, int line_number,
+            std::string_view function_name, std::string const& message) {
+    std::lock_guard<std::mutex> lock(mu_);
+
+    stream_ << "["
+            << "VLOG " << vlogLevel << " | " << function_name << " | "
+            << filename << ":" << line_number << "] " << message << std::endl;
+  }
+
+  bool shouldVLog(int vlogLevel) { return vlogLevel <= vlogLevel_; }
 
  private:
   std::ostream& stream_;
   std::mutex mu_;
   int logLevel_;
+  int vlogLevel_{5};
 
   constexpr std::string_view logLevelToString(UCCLLogLevel level) {
     switch (level) {
       case UCCLLogLevel::ERROR: {
         return "ERROR";
       }
-      case UCCLLogLevel::WARN: {
-        return "WARN";
+      case UCCLLogLevel::WARNING: {
+        return "WARNING";
       }
       case UCCLLogLevel::INFO: {
         return "INFO";
@@ -155,10 +205,17 @@ class UCCLLogger {
       logLevel_ = UCCLLogLevel::FATAL;
     } else if (sv == "ERROR") {
       logLevel_ = UCCLLogLevel::ERROR;
-    } else if (sv == "WARN") {
-      logLevel_ = UCCLLogLevel::WARN;
+    } else if (sv == "WARNING") {
+      logLevel_ = UCCLLogLevel::WARNING;
     } else if (sv == "INFO") {
       logLevel_ = UCCLLogLevel::INFO;
+    }
+  }
+
+  void _initializeVlogLevel() {
+    char const* vlog_level_str = std::getenv("UCCL_VLOG_LEVEL");
+    if (vlog_level_str) {
+      vlogLevel_ = std::stoi(vlog_level_str);
     }
   }
 
@@ -173,7 +230,7 @@ class UCCLLogCapture {
         level_(level),
         fileName_(fileName),
         lineNumber_(lineNumber),
-        functionName_(functionName) {};
+        functionName_(functionName){};
 
   ~UCCLLogCapture() {
     logger_.log(level_, fileName_, lineNumber_, functionName_, stream_.str());
@@ -192,20 +249,52 @@ class UCCLLogCapture {
   int lineNumber_;
 };
 
+class UCCLVLogCapture {
+ public:
+  UCCLVLogCapture(UCCLLogger& logger, int vLogLevel, std::string_view fileName,
+                  int lineNumber, std::string_view functionName)
+      : logger_(logger),
+        vLogLevel_(vLogLevel),
+        fileName_(fileName),
+        lineNumber_(lineNumber),
+        functionName_(functionName){};
+
+  ~UCCLVLogCapture() {
+    logger_.vlog(vLogLevel_, fileName_, lineNumber_, functionName_,
+                 stream_.str());
+  }
+
+  std::ostringstream& stream() { return stream_; }
+
+ private:
+  UCCLLogger& logger_;
+  int vLogLevel_;
+  std::ostringstream stream_;
+  std::string_view fileName_;
+  std::string_view functionName_;
+  int lineNumber_;
+};
+
 class UCCLCheckCapture {
  public:
   UCCLCheckCapture(UCCLLogger& logger, std::string_view fileName,
                    int lineNumber, std::string_view functionName,
-                   std::string_view checkCondition)
+                   std::string_view checkCondition, std::string_view checkType,
+                   int capturedErrno = 0)
       : logger_(logger),
         fileName_(fileName),
         lineNumber_(lineNumber),
-        functionName_(functionName) {
+        functionName_(functionName),
+        capturedErrno_(capturedErrno) {
     // add a print message to describe the failed check
-    stream_ << "CHECK failed: " << checkCondition << " ";
+    stream_ << checkType << " failed: " << checkCondition << " ";
   };
 
   ~UCCLCheckCapture() {
+    // mimic perror behavior
+    if (capturedErrno_ != 0) {
+      stream_ << ": " << strerror(capturedErrno_) << " ";
+    }
     logger_.log(UCCLLogLevel::FATAL, fileName_, lineNumber_, functionName_,
                 stream_.str());
   }
@@ -218,6 +307,7 @@ class UCCLCheckCapture {
   std::string_view fileName_;
   int lineNumber_;
   std::string_view functionName_;
+  int capturedErrno_;
 };
 
 struct UCCLVoidify {
