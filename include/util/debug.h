@@ -41,10 +41,21 @@ struct UCCLVoidify;
 
 #define LOG(level) UCCL_LOG_INTERNAL(level)
 
+// https://stackoverflow.com/questions/1489932/how-can-i-concatenate-twice-with-the-c-preprocessor-and-expand-a-macro-as-in-ar
+#define UCCL_FUNC_NAME_CONCAT_INTERNAL(x, y) x##y
+
+#define UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(funcName, identifier) \
+  UCCL_FUNC_NAME_CONCAT_INTERNAL(funcName, identifier)
+
 #define UCCL_LOG_EVERY_N_INTERNAL(level, n)                                    \
-  static std::atomic<int> log_every_n_counter_{0};                             \
-  log_every_n_counter_.fetch_add(1);                                           \
-  (uccl::ucclLogger.shouldLog(level) && (log_every_n_counter_ % (n) != 0))     \
+  static std::atomic<int> UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(                 \
+      log_every_n_counter, __LINE__){0};                                       \
+  UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(log_every_n_counter, __LINE__)           \
+      .fetch_add(1);                                                           \
+  (uccl::ucclLogger.shouldLog(level) &&                                        \
+   (UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(log_every_n_counter, __LINE__) %       \
+        (n) !=                                                                 \
+    0))                                                                        \
       ? (void)0                                                                \
       : uccl::UCCLVoidify() &                                                  \
             (uccl::UCCLLogCapture(uccl::ucclLogger, level, __FILE__, __LINE__, \
@@ -158,8 +169,7 @@ class UCCLLogger {
             std::string_view function_name, std::string const& message) {
     std::lock_guard<std::mutex> lock(mu_);
 
-    stream_ << "["
-            << "VLOG " << vlogLevel << " | " << function_name << " | "
+    stream_ << "[" << "VLOG " << vlogLevel << " | " << function_name << " | "
             << filename << ":" << line_number << "] " << message << std::endl;
   }
 
@@ -230,7 +240,7 @@ class UCCLLogCapture {
         level_(level),
         fileName_(fileName),
         lineNumber_(lineNumber),
-        functionName_(functionName){};
+        functionName_(functionName) {};
 
   ~UCCLLogCapture() {
     logger_.log(level_, fileName_, lineNumber_, functionName_, stream_.str());
@@ -257,7 +267,7 @@ class UCCLVLogCapture {
         vLogLevel_(vLogLevel),
         fileName_(fileName),
         lineNumber_(lineNumber),
-        functionName_(functionName){};
+        functionName_(functionName) {};
 
   ~UCCLVLogCapture() {
     logger_.vlog(vLogLevel_, fileName_, lineNumber_, functionName_,
