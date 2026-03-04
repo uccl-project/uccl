@@ -69,8 +69,7 @@
 #else
 typedef uint16_t __nv_fp8x2_storage_t;
 typedef uint8_t __nv_fp8_storage_t;
-#define __nv_cvt_float2_to_fp8x2(...) \
-  (static_cast<__nv_fp8x2_storage_t>(0))
+#define __nv_cvt_float2_to_fp8x2(...) (static_cast<__nv_fp8x2_storage_t>(0))
 #define __NV_SATFINITE 1
 #define __HIP_E4M3 0
 #define __HIP_E4M3_FNUZ 0
