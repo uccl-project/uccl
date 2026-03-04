@@ -1,18 +1,13 @@
 import os
-import sys
-from pathlib import Path
 import torch
 import torch.distributed as dist
 from typing import Callable, Tuple, Optional, Union, List
 
-# Ensure benchmarks import the in-repo `uccl` package, not a stale installed one.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
-
 try:
     from uccl import ep
 except ImportError as exc:
+    import sys
+
     sys.stderr.write("Failed to import uccl.ep\n")
     raise
 
