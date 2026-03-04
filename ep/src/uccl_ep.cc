@@ -17,8 +17,8 @@
 #include "ring_buffer.cuh"
 #include "uccl_bench.hpp"
 #include "uccl_proxy.hpp"
-#include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAFunctions.h>
+#include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
 #include <pybind11/chrono.h>
 #include <pybind11/functional.h>
@@ -257,8 +257,9 @@ class Buffer {
     num_device_sms = prop.multiProcessorCount;
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-    fp8_dtype = strcmp(prop.gcnArchName, "gfx942") == 0 ? torch::kFloat8_e4m3fnuz
-                                                        : torch::kFloat8_e4m3fn;
+    fp8_dtype = strcmp(prop.gcnArchName, "gfx942") == 0
+                    ? torch::kFloat8_e4m3fnuz
+                    : torch::kFloat8_e4m3fn;
 #endif
     if (num_nvl_bytes > 0) {
       size_t total_bytes = static_cast<size_t>(num_nvl_bytes) +
@@ -327,8 +328,8 @@ class Buffer {
     }
   }
 
-  std::tuple<torch::Tensor, std::optional<torch::Tensor>, torch::Tensor, torch::Tensor,
-             std::optional<EventHandle>>
+  std::tuple<torch::Tensor, std::optional<torch::Tensor>, torch::Tensor,
+             torch::Tensor, std::optional<EventHandle>>
   get_dispatch_layout(torch::Tensor const& topk_idx, int num_experts,
                       std::optional<EventHandle>& previous_event, bool async,
                       bool allocate_on_comm_stream) {
@@ -354,17 +355,19 @@ class Buffer {
     auto num_tokens = static_cast<int>(topk_idx.size(0)),
          num_topk = static_cast<int>(topk_idx.size(1));
     auto num_tokens_per_rank = torch::empty(
-        {num_ranks}, torch::TensorOptions().dtype(torch::kInt).device(torch::kCUDA));
+        {num_ranks},
+        torch::TensorOptions().dtype(torch::kInt).device(torch::kCUDA));
     auto num_tokens_per_rdma_rank = std::optional<torch::Tensor>();
     auto num_tokens_per_expert = torch::empty(
-        {num_experts}, torch::TensorOptions().dtype(torch::kInt).device(torch::kCUDA));
-    auto is_token_in_rank =
-        torch::empty({num_tokens, num_ranks},
-                  torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
+        {num_experts},
+        torch::TensorOptions().dtype(torch::kInt).device(torch::kCUDA));
+    auto is_token_in_rank = torch::empty(
+        {num_tokens, num_ranks},
+        torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
     if (is_internode_available())
-      num_tokens_per_rdma_rank =
-          torch::empty({num_rdma_ranks},
-                    torch::TensorOptions().dtype(torch::kInt).device(torch::kCUDA));
+      num_tokens_per_rdma_rank = torch::empty(
+          {num_rdma_ranks},
+          torch::TensorOptions().dtype(torch::kInt).device(torch::kCUDA));
 
     uccl::layout::get_dispatch_layout(
         topk_idx.data_ptr<int64_t>(), num_tokens_per_rank.data_ptr<int>(),
@@ -394,7 +397,8 @@ class Buffer {
     }
 
     // Switch back compute stream
-    if (allocate_on_comm_stream) c10::cuda::setCurrentCUDAStream(compute_stream);
+    if (allocate_on_comm_stream)
+      c10::cuda::setCurrentCUDAStream(compute_stream);
 
     return {num_tokens_per_rank, num_tokens_per_rdma_rank,
             num_tokens_per_expert, is_token_in_rank, event};
@@ -462,12 +466,13 @@ class Buffer {
     available = false;
   }
 
-  std::tuple<torch::Tensor, std::optional<torch::Tensor>, std::optional<torch::Tensor>,
-             std::optional<torch::Tensor>, std::vector<int>, torch::Tensor,
-             torch::Tensor, std::optional<torch::Tensor>, torch::Tensor,
-             std::optional<torch::Tensor>, torch::Tensor, std::optional<torch::Tensor>,
+  std::tuple<torch::Tensor, std::optional<torch::Tensor>,
              std::optional<torch::Tensor>, std::optional<torch::Tensor>,
-             std::optional<EventHandle>>
+             std::vector<int>, torch::Tensor, torch::Tensor,
+             std::optional<torch::Tensor>, torch::Tensor,
+             std::optional<torch::Tensor>, torch::Tensor,
+             std::optional<torch::Tensor>, std::optional<torch::Tensor>,
+             std::optional<torch::Tensor>, std::optional<EventHandle>>
   internode_dispatch(
       torch::Tensor const& x, std::optional<torch::Tensor> const& x_scales,
       std::optional<torch::Tensor> const& topk_idx,
@@ -646,13 +651,14 @@ class Buffer {
     } else {
       rdma_channel_prefix_matrix =
           torch::empty({num_rdma_ranks, num_channels},
-                    torch::dtype(torch::kInt).device(torch::kCUDA));
-      recv_rdma_rank_prefix_sum =
-          torch::empty({num_rdma_ranks}, torch::dtype(torch::kInt).device(torch::kCUDA));
-      gbl_channel_prefix_matrix = torch::empty(
-          {num_ranks, num_channels}, torch::dtype(torch::kInt).device(torch::kCUDA));
-      recv_gbl_rank_prefix_sum =
-          torch::empty({num_ranks}, torch::dtype(torch::kInt).device(torch::kCUDA));
+                       torch::dtype(torch::kInt).device(torch::kCUDA));
+      recv_rdma_rank_prefix_sum = torch::empty(
+          {num_rdma_ranks}, torch::dtype(torch::kInt).device(torch::kCUDA));
+      gbl_channel_prefix_matrix =
+          torch::empty({num_ranks, num_channels},
+                       torch::dtype(torch::kInt).device(torch::kCUDA));
+      recv_gbl_rank_prefix_sum = torch::empty(
+          {num_ranks}, torch::dtype(torch::kInt).device(torch::kCUDA));
 
       // Send sizes
       *moe_recv_counter = -1, *moe_recv_rdma_counter = -1;
@@ -725,18 +731,21 @@ class Buffer {
     auto send_rdma_head = std::optional<torch::Tensor>();
     auto send_nvl_head = std::optional<torch::Tensor>();
     if (not cached_mode) {
-      recv_src_meta =
-          torch::empty({num_recv_tokens, uccl::internode::get_source_meta_bytes()},
-                    torch::dtype(torch::kByte).device(torch::kCUDA));
+      recv_src_meta = torch::empty(
+          {num_recv_tokens, uccl::internode::get_source_meta_bytes()},
+          torch::dtype(torch::kByte).device(torch::kCUDA));
       recv_rdma_channel_prefix_matrix =
           torch::empty({num_rdma_ranks, num_channels},
-                    torch::dtype(torch::kInt).device(torch::kCUDA));
-      recv_gbl_channel_prefix_matrix = torch::empty(
-          {num_ranks, num_channels}, torch::dtype(torch::kInt).device(torch::kCUDA));
-      send_rdma_head = torch::empty({num_tokens, num_rdma_ranks},
-                                 torch::dtype(torch::kInt).device(torch::kCUDA));
-      send_nvl_head = torch::empty({num_rdma_recv_tokens, NUM_MAX_NVL_PEERS},
-                                torch::dtype(torch::kInt).device(torch::kCUDA));
+                       torch::dtype(torch::kInt).device(torch::kCUDA));
+      recv_gbl_channel_prefix_matrix =
+          torch::empty({num_ranks, num_channels},
+                       torch::dtype(torch::kInt).device(torch::kCUDA));
+      send_rdma_head =
+          torch::empty({num_tokens, num_rdma_ranks},
+                       torch::dtype(torch::kInt).device(torch::kCUDA));
+      send_nvl_head =
+          torch::empty({num_rdma_recv_tokens, NUM_MAX_NVL_PEERS},
+                       torch::dtype(torch::kInt).device(torch::kCUDA));
     }
 
     // Assign pointers
@@ -752,10 +761,10 @@ class Buffer {
       recv_topk_weights_ptr = recv_topk_weights->data_ptr<float>();
     }
     if (x_scales.has_value()) {
-      recv_x_scales =
-          x_scales->dim() == 1
-              ? torch::empty({num_recv_tokens}, x_scales->options())
-              : torch::empty({num_recv_tokens, num_scales}, x_scales->options());
+      recv_x_scales = x_scales->dim() == 1
+                          ? torch::empty({num_recv_tokens}, x_scales->options())
+                          : torch::empty({num_recv_tokens, num_scales},
+                                         x_scales->options());
       recv_x_scales_ptr = static_cast<float*>(recv_x_scales->data_ptr());
     }
 
@@ -811,7 +820,8 @@ class Buffer {
     }
 
     // Switch back compute stream
-    if (allocate_on_comm_stream) c10::cuda::setCurrentCUDAStream(compute_stream);
+    if (allocate_on_comm_stream)
+      c10::cuda::setCurrentCUDAStream(compute_stream);
 
     // Return values
     return {recv_x,
@@ -831,18 +841,22 @@ class Buffer {
             event};
   }
 
-  std::tuple<torch::Tensor, std::optional<torch::Tensor>, std::optional<EventHandle>>
-  internode_combine(
-      torch::Tensor const& x, std::optional<torch::Tensor> const& topk_weights,
-      std::optional<torch::Tensor> const& bias_0,
-      std::optional<torch::Tensor> const& bias_1, torch::Tensor const& src_meta,
-      torch::Tensor const& is_combined_token_in_rank,
-      torch::Tensor const& rdma_channel_prefix_matrix,
-      torch::Tensor const& rdma_rank_prefix_sum,
-      torch::Tensor const& gbl_channel_prefix_matrix,
-      torch::Tensor const& combined_rdma_head, torch::Tensor const& combined_nvl_head,
-      uccl::Config const& config, std::optional<EventHandle>& previous_event,
-      bool async, bool allocate_on_comm_stream) {
+  std::tuple<torch::Tensor, std::optional<torch::Tensor>,
+             std::optional<EventHandle>>
+  internode_combine(torch::Tensor const& x,
+                    std::optional<torch::Tensor> const& topk_weights,
+                    std::optional<torch::Tensor> const& bias_0,
+                    std::optional<torch::Tensor> const& bias_1,
+                    torch::Tensor const& src_meta,
+                    torch::Tensor const& is_combined_token_in_rank,
+                    torch::Tensor const& rdma_channel_prefix_matrix,
+                    torch::Tensor const& rdma_rank_prefix_sum,
+                    torch::Tensor const& gbl_channel_prefix_matrix,
+                    torch::Tensor const& combined_rdma_head,
+                    torch::Tensor const& combined_nvl_head,
+                    uccl::Config const& config,
+                    std::optional<EventHandle>& previous_event, bool async,
+                    bool allocate_on_comm_stream) {
     int const num_channels = config.num_sms / 2;
     EP_HOST_ASSERT(config.num_sms % 2 == 0);
 
@@ -917,8 +931,8 @@ class Buffer {
       EP_HOST_ASSERT(topk_weights->scalar_type() == torch::kFloat);
       num_topk = static_cast<int>(topk_weights->size(1));
       topk_weights_ptr = topk_weights->data_ptr<float>();
-      combined_topk_weights =
-          torch::empty({num_combined_tokens, num_topk}, topk_weights->options());
+      combined_topk_weights = torch::empty({num_combined_tokens, num_topk},
+                                           topk_weights->options());
       combined_topk_weights_ptr = combined_topk_weights->data_ptr<float>();
     }
 
@@ -941,7 +955,8 @@ class Buffer {
         num_nvl_bytes, false, low_latency_mode, d_handles,
         num_d2h_channel_addrs, atomic_buffer_ptr);
     // Assign bias pointers
-    auto bias_opts = std::vector<std::optional<torch::Tensor>>({bias_0, bias_1});
+    auto bias_opts =
+        std::vector<std::optional<torch::Tensor>>({bias_0, bias_1});
     void* bias_ptrs[2] = {nullptr, nullptr};
     for (int i = 0; i < 2; ++i)
       if (bias_opts[i].has_value()) {
@@ -956,10 +971,9 @@ class Buffer {
     // Launch data combine
     auto combined_x = torch::empty({num_combined_tokens, hidden}, x.options());
     uccl::internode::combine(
-        cuda_dtype_from_scalar_type(x.scalar_type()),
-        combined_x.data_ptr(), combined_topk_weights_ptr,
-        is_combined_token_in_rank.data_ptr<bool>(), x.data_ptr(),
-        topk_weights_ptr, bias_ptrs[0], bias_ptrs[1],
+        cuda_dtype_from_scalar_type(x.scalar_type()), combined_x.data_ptr(),
+        combined_topk_weights_ptr, is_combined_token_in_rank.data_ptr<bool>(),
+        x.data_ptr(), topk_weights_ptr, bias_ptrs[0], bias_ptrs[1],
         combined_rdma_head.data_ptr<int>(), combined_nvl_head.data_ptr<int>(),
         src_meta.data_ptr(), rdma_channel_prefix_matrix.data_ptr<int>(),
         rdma_rank_prefix_sum.data_ptr<int>(),
@@ -993,16 +1007,17 @@ class Buffer {
     }
 
     // Switch back compute stream
-    if (allocate_on_comm_stream) c10::cuda::setCurrentCUDAStream(compute_stream);
+    if (allocate_on_comm_stream)
+      c10::cuda::setCurrentCUDAStream(compute_stream);
 
     // Return values
     return {combined_x, combined_topk_weights, event};
   }
 
-  std::tuple<torch::Tensor, std::optional<torch::Tensor>, std::optional<torch::Tensor>,
-             std::optional<torch::Tensor>, std::vector<int>, torch::Tensor,
-             torch::Tensor, torch::Tensor, torch::Tensor, torch::Tensor,
-             std::optional<EventHandle>>
+  std::tuple<torch::Tensor, std::optional<torch::Tensor>,
+             std::optional<torch::Tensor>, std::optional<torch::Tensor>,
+             std::vector<int>, torch::Tensor, torch::Tensor, torch::Tensor,
+             torch::Tensor, torch::Tensor, std::optional<EventHandle>>
   intranode_dispatch(
       torch::Tensor const& x, std::optional<torch::Tensor> const& x_scales,
       std::optional<torch::Tensor> const& topk_idx,
@@ -1034,7 +1049,8 @@ class Buffer {
     EP_HOST_ASSERT(is_token_in_rank.scalar_type() == torch::kBool);
     if (cached_mode) {
       EP_HOST_ASSERT(cached_rank_prefix_matrix->scalar_type() == torch::kInt);
-      EP_HOST_ASSERT(cached_channel_prefix_matrix->scalar_type() == torch::kInt);
+      EP_HOST_ASSERT(cached_channel_prefix_matrix->scalar_type() ==
+                     torch::kInt);
     } else {
       EP_HOST_ASSERT(num_tokens_per_expert->scalar_type() == torch::kInt);
       EP_HOST_ASSERT(num_tokens_per_rank->scalar_type() == torch::kInt);
@@ -1142,10 +1158,12 @@ class Buffer {
           rank_prefix_matrix.data_ptr<int>(), num_memset_int, buffer_ptrs_gpu,
           barrier_signal_ptrs_gpu, rank, num_ranks, comm_stream);
     } else {
-      rank_prefix_matrix = torch::empty({num_ranks, num_ranks},
-                                     torch::dtype(torch::kInt).device(torch::kCUDA));
-      channel_prefix_matrix = torch::empty({num_ranks, num_channels},
-                                        torch::dtype(torch::kInt).device(torch::kCUDA));
+      rank_prefix_matrix =
+          torch::empty({num_ranks, num_ranks},
+                       torch::dtype(torch::kInt).device(torch::kCUDA));
+      channel_prefix_matrix =
+          torch::empty({num_ranks, num_channels},
+                       torch::dtype(torch::kInt).device(torch::kCUDA));
 
       // Send sizes
       // Meta information:
@@ -1204,15 +1222,17 @@ class Buffer {
 
     // Allocate new tensors
     auto recv_x = torch::empty({num_recv_tokens, hidden}, x.options());
-    auto recv_src_idx =
-        torch::empty({num_recv_tokens}, torch::dtype(torch::kInt).device(torch::kCUDA));
+    auto recv_src_idx = torch::empty(
+        {num_recv_tokens}, torch::dtype(torch::kInt).device(torch::kCUDA));
     auto recv_topk_idx = std::optional<torch::Tensor>(),
          recv_topk_weights = std::optional<torch::Tensor>(),
          recv_x_scales = std::optional<torch::Tensor>();
-    auto recv_channel_prefix_matrix = torch::empty(
-        {num_ranks, num_channels}, torch::dtype(torch::kInt).device(torch::kCUDA));
-    auto send_head = torch::empty({num_tokens, num_ranks},
-                               torch::dtype(torch::kInt).device(torch::kCUDA));
+    auto recv_channel_prefix_matrix =
+        torch::empty({num_ranks, num_channels},
+                     torch::dtype(torch::kInt).device(torch::kCUDA));
+    auto send_head =
+        torch::empty({num_tokens, num_ranks},
+                     torch::dtype(torch::kInt).device(torch::kCUDA));
 
     // Assign pointers
     int64_t* recv_topk_idx_ptr = nullptr;
@@ -1227,10 +1247,10 @@ class Buffer {
       recv_topk_weights_ptr = recv_topk_weights->data_ptr<float>();
     }
     if (x_scales.has_value()) {
-      recv_x_scales =
-          x_scales->dim() == 1
-              ? torch::empty({num_recv_tokens}, x_scales->options())
-              : torch::empty({num_recv_tokens, num_scales}, x_scales->options());
+      recv_x_scales = x_scales->dim() == 1
+                          ? torch::empty({num_recv_tokens}, x_scales->options())
+                          : torch::empty({num_recv_tokens, num_scales},
+                                         x_scales->options());
       recv_x_scales_ptr = static_cast<float*>(recv_x_scales->data_ptr());
     }
 
@@ -1288,7 +1308,8 @@ class Buffer {
     }
 
     // Switch back compute stream
-    if (allocate_on_comm_stream) c10::cuda::setCurrentCUDAStream(compute_stream);
+    if (allocate_on_comm_stream)
+      c10::cuda::setCurrentCUDAStream(compute_stream);
 
     // Return values
     return {recv_x,
@@ -1304,7 +1325,8 @@ class Buffer {
             event};
   }
 
-  std::tuple<torch::Tensor, std::optional<torch::Tensor>, std::optional<EventHandle>>
+  std::tuple<torch::Tensor, std::optional<torch::Tensor>,
+             std::optional<EventHandle>>
   intranode_combine(torch::Tensor const& x,
                     std::optional<torch::Tensor> const& topk_weights,
                     std::optional<torch::Tensor> const& bias_0,
@@ -1383,7 +1405,8 @@ class Buffer {
         rank, num_ranks, comm_stream);
 
     // Assign bias pointers
-    auto bias_opts = std::vector<std::optional<torch::Tensor>>({bias_0, bias_1});
+    auto bias_opts =
+        std::vector<std::optional<torch::Tensor>>({bias_0, bias_1});
     void* bias_ptrs[2] = {nullptr, nullptr};
     for (int i = 0; i < 2; ++i)
       if (bias_opts[i].has_value()) {
@@ -1436,7 +1459,8 @@ class Buffer {
     }
 
     // Switch back compute stream
-    if (allocate_on_comm_stream) c10::cuda::setCurrentCUDAStream(compute_stream);
+    if (allocate_on_comm_stream)
+      c10::cuda::setCurrentCUDAStream(compute_stream);
 
     return {recv_x, recv_topk_weights, event};
   }
@@ -1843,8 +1867,8 @@ class Buffer {
   }
 
   torch::Tensor get_local_buffer_tensor(pybind11::object const& dtype,
-                                     int64_t offset,
-                                     bool use_rdma_buffer) const {
+                                        int64_t offset,
+                                        bool use_rdma_buffer) const {
     torch::ScalarType casted_dtype = scalar_type_from_py_dtype(dtype);
     auto element_bytes = static_cast<int64_t>(c10::elementSize(casted_dtype));
     auto base_ptr =
@@ -2006,22 +2030,25 @@ PYBIND11_MODULE(ep, m) {
         bool is_host_allocated = false;
         CUDA_CHECK(cudaSetDevice(device_index));
         if (num_rdma_bytes <= 0) {
-          auto tensor = torch::empty({0}, torch::dtype(torch::kByte).device(torch::kCUDA));
+          auto tensor = torch::empty(
+              {0}, torch::dtype(torch::kByte).device(torch::kCUDA));
           return py::make_tuple(tensor, false);
         }
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         CUDA_CHECK(hipExtMallocWithFlags(&ptr, num_rdma_bytes,
                                          hipDeviceMallocUncached));
         CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
-        torch::Tensor tensor = torch::from_blob(
-            ptr, {num_rdma_bytes}, torch::dtype(torch::kByte).device(torch::kCUDA));
+        torch::Tensor tensor =
+            torch::from_blob(ptr, {num_rdma_bytes},
+                             torch::dtype(torch::kByte).device(torch::kCUDA));
         return py::make_tuple(tensor, false);
 #elif defined(EFA)
         // EFA: GPU buffer is always device memory (cudaMalloc).
         CUDA_CHECK(cudaMalloc(&ptr, num_rdma_bytes));
         CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
-        torch::Tensor tensor = torch::from_blob(
-            ptr, {num_rdma_bytes}, torch::dtype(torch::kByte).device(torch::kCUDA));
+        torch::Tensor tensor =
+            torch::from_blob(ptr, {num_rdma_bytes},
+                             torch::dtype(torch::kByte).device(torch::kCUDA));
         return py::make_tuple(tensor, false);
 #elif defined(USE_DMABUF)
         // DMA-BUF path (e.g. INTEL_RDMA_NIC): the RDMA data buffer is always
@@ -2032,8 +2059,9 @@ PYBIND11_MODULE(ep, m) {
         // bulk data buffer.  Do NOT gate this path on that probe.
         CUDA_CHECK(cudaMalloc(&ptr, num_rdma_bytes));
         CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
-        torch::Tensor tensor = torch::from_blob(
-            ptr, {num_rdma_bytes}, torch::dtype(torch::kByte).device(torch::kCUDA));
+        torch::Tensor tensor =
+            torch::from_blob(ptr, {num_rdma_bytes},
+                             torch::dtype(torch::kByte).device(torch::kCUDA));
         return py::make_tuple(tensor, false);
 #else
         // Prefer cudaMalloc when GPU memory can be registered (e.g. with
@@ -2043,12 +2071,14 @@ PYBIND11_MODULE(ep, m) {
         if (can_register_gpu_memory_for_atomics(device_index)) {
           CUDA_CHECK(cudaMalloc(&ptr, num_rdma_bytes));
           CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
-          tensor = torch::from_blob(ptr, {num_rdma_bytes},
-                                 torch::dtype(torch::kByte).device(torch::kCUDA));
+          tensor =
+              torch::from_blob(ptr, {num_rdma_bytes},
+                               torch::dtype(torch::kByte).device(torch::kCUDA));
         } else {
           CUDA_CHECK(cudaMallocHost(&ptr, num_rdma_bytes));
           CUDA_CHECK(cudaMemset(ptr, 0, num_rdma_bytes));
-          tensor = torch::from_blob(ptr, {num_rdma_bytes}, torch::dtype(torch::kByte));
+          tensor = torch::from_blob(ptr, {num_rdma_bytes},
+                                    torch::dtype(torch::kByte));
           is_host_allocated = true;
         }
         return py::make_tuple(tensor, is_host_allocated);
