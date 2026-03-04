@@ -14,6 +14,7 @@
 #pragma once
 
 #include <atomic>
+#include <bitset>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -23,23 +24,35 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unistd.h>
 
 namespace uccl {
 enum UCCLLogLevel { FATAL = 0, ERROR, WARNING, INFO };
+
+enum UCCLLogSubsys { INIT = 0, AFXDP, DPDK, EFA, RDMA, EP, P2P, SUBSYS_COUNT };
+
+static std::unordered_map<std::string_view, UCCLLogSubsys> subsysMap_ = {
+    {"INIT", UCCLLogSubsys::INIT}, {"AFXDP", UCCLLogSubsys::AFXDP},
+    {"DPDK", UCCLLogSubsys::DPDK}, {"EFA", UCCLLogSubsys::EFA},
+    {"RDMA", UCCLLogSubsys::RDMA}, {"EP", UCCLLogSubsys::EP},
+    {"P2P", UCCLLogSubsys::P2P},
+};
 
 class UCCLLogger;
 class UCCLLogCapture;
 class UCCLVLogCapture;
 class UCCLCheckCapture;
 struct UCCLVoidify;
+class UCCLNullStream;
 
-#define UCCL_LOG_INTERNAL(level)                                              \
-  if (uccl::ucclLogger.shouldLog(level))                                      \
-  uccl::UCCLLogCapture(uccl::ucclLogger, level, __FILE__, __LINE__, __func__) \
+#define UCCL_LOG_INTERNAL(level, subsys)                                    \
+  if (uccl::ucclLogger.shouldLog(level, subsys))                            \
+  uccl::UCCLLogCapture(uccl::ucclLogger, level, subsys, __FILE__, __LINE__, \
+                       __func__)                                            \
       .stream()
 
-#define LOG(level) UCCL_LOG_INTERNAL(level)
+#define LOG(level, subsys) UCCL_LOG_INTERNAL(level, subsys)
 
 // https://stackoverflow.com/questions/1489932/how-can-i-concatenate-twice-with-the-c-preprocessor-and-expand-a-macro-as-in-ar
 #define UCCL_FUNC_NAME_CONCAT_INTERNAL(x, y) x##y
@@ -47,42 +60,46 @@ struct UCCLVoidify;
 #define UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(funcName, identifier) \
   UCCL_FUNC_NAME_CONCAT_INTERNAL(funcName, identifier)
 
-#define UCCL_LOG_EVERY_N_INTERNAL(level, n)                                    \
+#define UCCL_LOG_EVERY_N_INTERNAL(level, subsys, n)                            \
   static std::atomic<int> UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(                 \
-      log_every_n_counter, __LINE__){0};                                       \
-  UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(log_every_n_counter, __LINE__)           \
-      .fetch_add(1);                                                           \
-  (uccl::ucclLogger.shouldLog(level) &&                                        \
-   (UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(log_every_n_counter, __LINE__) %       \
-        (n) !=                                                                 \
-    0))                                                                        \
+      log_every_n_counter, __LINE__){1};                                       \
+  !(uccl::ucclLogger.shouldLog(level, subsys) &&                               \
+    ((UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(log_every_n_counter, __LINE__)       \
+          .fetch_add(1) %                                                      \
+      (n)) == 0))                                                              \
       ? (void)0                                                                \
-      : uccl::UCCLVoidify() &                                                  \
-            (uccl::UCCLLogCapture(uccl::ucclLogger, level, __FILE__, __LINE__, \
-                                  __func__)                                    \
+      : uccl::UCCLVoidify() & uccl::UCCLLogCapture(uccl::ucclLogger, level,    \
+                                                   subsys, __FILE__, __LINE__, \
+                                                   __func__)                   \
+                                  .stream()
+
+#define LOG_EVERY_N(level, subsys, n) \
+  UCCL_LOG_EVERY_N_INTERNAL(level, subsys, n)
+
+#define UCCL_LOG_IF_INTERNAL(level, subsys, condition)                       \
+  !(condition && uccl::ucclLogger.shouldLog(level, subsys))                  \
+      ? (void)0                                                              \
+      : uccl::UCCLVoidify() &                                                \
+            (uccl::UCCLLogCapture(uccl::ucclLogger, level, subsys, __FILE__, \
+                                  __LINE__, __func__)                        \
                  .stream())
 
-#define LOG_EVERY_N(level, n) UCCL_LOG_EVERY_N_INTERNAL(level, n)
+#define LOG_IF(level, subsys, condition) \
+  UCCL_LOG_IF_INTERNAL(level, subsys, condition)
 
-#define UCCL_LOG_IF_INTERNAL(level, condition)                                \
-  if (condition && uccl::ucclLogger.shouldLog(level))                         \
-  uccl::UCCLLogCapture(uccl::ucclLogger, level, __FILE__, __LINE__, __func__) \
-      .stream()
-
-#define LOG_IF(level, condition) UCCL_LOG_IF_INTERNAL(level, condition)
-
-#define UCCL_VLOG_INTERNAL(vlogLevel)                                      \
-  if (uccl::ucclLogger.shouldVLog(vlogLevel)) {                            \
-    uccl::UCCLVLogCapture(uccl::ucclLogger, vLogLevel, __FILE__, __LINE__, \
-                          __func__)                                        \
-        .stream()                                                          \
-  }
+#define UCCL_VLOG_INTERNAL(vLogLevel)                                     \
+  (!uccl::ucclLogger.shouldVLog(vLogLevel))                               \
+      ? (void)0                                                           \
+      : uccl::UCCLVoidify() &                                             \
+            (uccl::UCCLVLogCapture(uccl::ucclLogger, vLogLevel, __FILE__, \
+                                   __LINE__, __func__)                    \
+                 .stream())
 
 #define VLOG(level) UCCL_VLOG_INTERNAL(level)
 
 // here, the & operator has a lower precedence than the << operator
-// hence, it the << would resolve first and the type of the : branch would also
-// be void
+// hence, it the << would resolve first and the type of the : branch would
+// also be void
 #define UCCL_CHECK_INTERNAL(condition)                                    \
   condition                                                               \
       ? (void)0                                                           \
@@ -142,35 +159,91 @@ struct UCCLVoidify;
 
 #define PCHECK(condition) UCCL_PCHECK_INTERNAL(condition)
 
+constexpr std::string_view logLevelToString(UCCLLogLevel level) {
+  switch (level) {
+    case UCCLLogLevel::ERROR: {
+      return "ERROR";
+    }
+    case UCCLLogLevel::WARNING: {
+      return "WARNING";
+    }
+    case UCCLLogLevel::INFO: {
+      return "INFO";
+    }
+    case UCCLLogLevel::FATAL: {
+      return "FATAL";
+    }
+  }
+  return "UNKNOWN";
+}
+
+constexpr std::string_view logSubsysToString(UCCLLogSubsys subsys) {
+  switch (subsys) {
+    case UCCLLogSubsys::INIT:
+      return "INIT";
+    case UCCLLogSubsys::AFXDP:
+      return "AFXDP";
+    case UCCLLogSubsys::DPDK:
+      return "DPDK";
+    case UCCLLogSubsys::EFA:
+      return "EFA";
+    case UCCLLogSubsys::RDMA:
+      return "RDMA";
+    case UCCLLogSubsys::EP:
+      return "EP";
+    case UCCLLogSubsys::P2P:
+      return "P2P";
+    default:
+      return "";
+  }
+}
+
 class UCCLLogger {
  public:
   UCCLLogger(std::ostream& stream) : stream_(stream) {
     _initializeLogLevel();
+    _initializeLoggingSubsystems();
     _initializeVlogLevel();
   };
 
   std::ostream& stream() { return stream_; }
 
-  void log(UCCLLogLevel logLevel, std::string_view filename, int line_number,
-           std::string_view function_name, std::string const& message) {
+  void log(UCCLLogLevel logLevel, UCCLLogSubsys subsys,
+           std::string_view filename, int line_number,
+           std::string_view function_name, std::string_view const& message) {
     // NOTE: also unsure if we want all threads to be stuck on this mutex
     std::lock_guard<std::mutex> lock(mu_);
 
     // NOTE: flush on every write, not sure if that is what we want though
     // TODO: add time?
-    stream_ << "[" << logLevelToString(logLevel) << " | " << function_name
-            << " | " << filename << ":" << line_number << "] " << message
-            << std::endl;
+    stream_ << "[" << logLevelToString(logLevel);
+
+    if (logSubsysToString(subsys).size() > 0) {
+      stream_ << " | " << logSubsysToString(subsys);
+    }
+
+    stream_ << " | " << function_name << " | " << filename << ":" << line_number
+            << "] " << message;
+
+    if (logLevel == UCCLLogLevel::FATAL) {
+      stream_ << std::endl;
+      std::abort();
+    } else {
+      stream_ << '\n';
+    }
   };
 
-  bool shouldLog(UCCLLogLevel logLevel) { return logLevel <= logLevel_; }
+  bool shouldLog(UCCLLogLevel logLevel, UCCLLogSubsys subsys) {
+    return logLevel <= logLevel_ && subsys_bitset_.test(subsys);
+  }
 
   void vlog(int vlogLevel, std::string_view filename, int line_number,
             std::string_view function_name, std::string const& message) {
     std::lock_guard<std::mutex> lock(mu_);
 
-    stream_ << "[" << "VLOG " << vlogLevel << " | " << function_name << " | "
-            << filename << ":" << line_number << "] " << message << std::endl;
+    stream_ << "["
+            << "VLOG (" << vlogLevel << ") | " << function_name << " | "
+            << filename << ":" << line_number << "] " << message << '\n';
   }
 
   bool shouldVLog(int vlogLevel) { return vlogLevel <= vlogLevel_; }
@@ -180,32 +253,16 @@ class UCCLLogger {
   std::mutex mu_;
   int logLevel_;
   int vlogLevel_{5};
-
-  constexpr std::string_view logLevelToString(UCCLLogLevel level) {
-    switch (level) {
-      case UCCLLogLevel::ERROR: {
-        return "ERROR";
-      }
-      case UCCLLogLevel::WARNING: {
-        return "WARNING";
-      }
-      case UCCLLogLevel::INFO: {
-        return "INFO";
-      }
-      case UCCLLogLevel::FATAL: {
-        return "FATAL";
-      }
-    }
-    return "UNKNOWN";
-  }
+  std::bitset<static_cast<std::size_t>(UCCLLogSubsys::SUBSYS_COUNT)>
+      subsys_bitset_;
 
   void _initializeLogLevel() {
-    char const* loggingSubsystems = std::getenv("UCCL_LOG_LEVEL");
+    char const* loggingLevel = std::getenv("UCCL_DEBUG");
 
     std::string_view sv;
 
-    if (loggingSubsystems) {
-      sv = std::string_view{loggingSubsystems};
+    if (loggingLevel) {
+      sv = std::string_view{loggingLevel};
     } else {
       // turn on all logs by default
       logLevel_ = UCCLLogLevel::INFO;
@@ -223,29 +280,53 @@ class UCCLLogger {
   }
 
   void _initializeVlogLevel() {
-    char const* vlog_level_str = std::getenv("UCCL_VLOG_LEVEL");
+    char const* vlog_level_str = std::getenv("UCCL_DEBUG_VLOG_LEVEL");
     if (vlog_level_str) {
       vlogLevel_ = std::stoi(vlog_level_str);
     }
   }
 
+  void _initializeLoggingSubsystems() {
+    char const* loggingSubsystems = std::getenv("UCCL_DEBUG_SUBSYS");
+
+    std::string_view sv;
+
+    if (loggingSubsystems) {
+      sv = std::string_view{loggingSubsystems};
+    } else {
+      // if env is not set, enable all logs by default
+      subsys_bitset_.set();
+    }
+
+    while (!sv.empty()) {
+      auto comma = sv.find(',');
+      auto token = sv.substr(0, comma);
+      if (token == "ALL") {
+        subsys_bitset_.set();
+      } else if (subsysMap_.count(token)) {
+        subsys_bitset_.set(subsysMap_[token]);
+      }
+      if (comma == std::string_view::npos) break;
+      sv = sv.substr(comma + 1);
+    }
+  }
 } ucclLogger(std::cout);
 
 class UCCLLogCapture {
  public:
-  UCCLLogCapture(UCCLLogger& logger, UCCLLogLevel level,
+  UCCLLogCapture(UCCLLogger& logger, UCCLLogLevel level, UCCLLogSubsys subsys,
                  std::string_view fileName, int lineNumber,
                  std::string_view functionName)
       : logger_(logger),
         level_(level),
+        subsys_(subsys),
         fileName_(fileName),
         lineNumber_(lineNumber),
-        functionName_(functionName) {};
+        functionName_(functionName){};
 
   ~UCCLLogCapture() {
-    logger_.log(level_, fileName_, lineNumber_, functionName_, stream_.str());
-
-    if (level_ == UCCLLogLevel::FATAL) std::abort();
+    logger_.log(level_, subsys_, fileName_, lineNumber_, functionName_,
+                stream_.str());
   }
 
   std::ostringstream& stream() { return stream_; }
@@ -253,6 +334,7 @@ class UCCLLogCapture {
  private:
   UCCLLogger& logger_;
   UCCLLogLevel level_;
+  UCCLLogSubsys subsys_;
   std::ostringstream stream_;
   std::string_view fileName_;
   std::string_view functionName_;
@@ -267,7 +349,7 @@ class UCCLVLogCapture {
         vLogLevel_(vLogLevel),
         fileName_(fileName),
         lineNumber_(lineNumber),
-        functionName_(functionName) {};
+        functionName_(functionName){};
 
   ~UCCLVLogCapture() {
     logger_.vlog(vLogLevel_, fileName_, lineNumber_, functionName_,
@@ -305,8 +387,8 @@ class UCCLCheckCapture {
     if (capturedErrno_ != 0) {
       stream_ << ": " << strerror(capturedErrno_) << " ";
     }
-    logger_.log(UCCLLogLevel::FATAL, fileName_, lineNumber_, functionName_,
-                stream_.str());
+    logger_.log(UCCLLogLevel::FATAL, UCCLLogSubsys::SUBSYS_COUNT, fileName_,
+                lineNumber_, functionName_, stream_.str());
   }
 
   std::ostringstream& stream() { return stream_; }
