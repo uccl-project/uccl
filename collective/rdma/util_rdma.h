@@ -245,7 +245,7 @@ static inline struct ibv_ah* util_rdma_create_ah(
   if (roce) {
     ah_attr.is_global = 1;
     ah_attr.grh.dgid = remote_gid;
-    ah_attr.grh.traffic_class = ucclParamROCE_TRAFFIC_CLASS();
+    ah_attr.grh.traffic_class = roceTrafficClass();
     ah_attr.grh.sgid_index = gid_idx;
     ah_attr.grh.flow_label = 0;
     ah_attr.grh.hop_limit = 0xff;
