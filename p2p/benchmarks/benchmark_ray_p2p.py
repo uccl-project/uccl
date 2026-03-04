@@ -85,6 +85,7 @@ def _run_server(args, ep, peer_rank: int):
                 _send_bytes(remote_descs_serialized, dst=peer)
 
                 dist.barrier()
+                ep.deregister_memory(remote_descs)
         else:
             # Raw mode (default): register memory and send descriptors only once
             size_per_block = sz // args.num_iovs
@@ -100,6 +101,7 @@ def _run_server(args, ep, peer_rank: int):
 
             # Wait for all iterations to complete
             dist.barrier()
+            ep.deregister_memory(remote_descs)
 
         print(f"[Server] Completed {args.iters} iterations for size {_pretty(sz)}")
 
@@ -141,6 +143,7 @@ def _run_client(args, ep, peer_rank: int, mode: str):
             while not is_done:
                 _, is_done = ep.poll_async(transfer_id)
             dist.barrier()
+            ep.deregister_memory(local_descs)
 
             # Benchmark iterations
             start = time.perf_counter()
@@ -169,6 +172,7 @@ def _run_client(args, ep, peer_rank: int, mode: str):
 
                 total += sz
                 dist.barrier()
+                ep.deregister_memory(local_descs)
 
             elapsed = time.perf_counter() - start
         else:
@@ -207,6 +211,7 @@ def _run_client(args, ep, peer_rank: int, mode: str):
 
             elapsed = time.perf_counter() - start
             dist.barrier()
+            ep.deregister_memory(local_descs)
 
         print(
             f"[Client/{mode.upper()}] {_pretty(sz):>8} : "
