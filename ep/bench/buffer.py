@@ -1,13 +1,18 @@
 import os
+import sys
+from pathlib import Path
 import torch
 import torch.distributed as dist
 from typing import Callable, Tuple, Optional, Union, List
 
+# Ensure benchmarks import the in-repo `uccl` package, not a stale installed one.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 try:
     from uccl import ep
 except ImportError as exc:
-    import sys
-
     sys.stderr.write("Failed to import uccl.ep\n")
     raise
 
@@ -122,6 +127,8 @@ class Buffer:
         self.low_latency_mode = low_latency_mode
         self.explicitly_destroy = explicitly_destroy
         self._next_low_latency_combine_buffer = None
+        # Fallback streams used when current stream is CUDA default stream (ptr=0).
+        self._ll_compute_streams = {}
         self.runtime = ep.Buffer(
             self.rank,
             self.group_size,
@@ -170,6 +177,24 @@ class Buffer:
 
         for proxy in self.proxies:
             proxy.set_atomic_buffer_ptr(self.proxies[0].get_atomic_buffer_ptr())
+
+    def _ll_compute_stream_ptr(self, device: torch.device):
+        """
+        Return a non-zero CUDA stream pointer for low-latency runtime calls.
+        Some runtime builds assert that compute_stream_ptr must be non-null.
+        """
+        current = torch.cuda.current_stream(device=device)
+        dev_idx = torch.device(device).index
+        if dev_idx is None:
+            dev_idx = torch.cuda.current_device()
+        fallback = self._ll_compute_streams.get(dev_idx)
+        if fallback is None:
+            fallback = torch.cuda.Stream(device=dev_idx)
+            self._ll_compute_streams[dev_idx] = fallback
+        fallback.wait_stream(current)
+        ptr = int(fallback.cuda_stream)
+        assert ptr != 0, "Failed to create non-default CUDA stream for low-latency path"
+        return ptr, fallback
 
     def reset_rdma_buffer(self):
         """
@@ -325,6 +350,7 @@ class Buffer:
             packed_recv_x_scales = packed_recv_x_scales_storage.transpose(1, 2)
             packed_recv_x_scales_ptr = packed_recv_x_scales.data_ptr()
 
+        compute_stream_ptr, fallback_stream = self._ll_compute_stream_ptr(x.device)
         event, hook = self.runtime.low_latency_dispatch(
             x.data_ptr(),
             x.size(0),
@@ -347,6 +373,7 @@ class Buffer:
                 if dispatch_wait_recv_cost_stats is None
                 else dispatch_wait_recv_cost_stats.data_ptr()
             ),
+            compute_stream_ptr,
             int(num_max_dispatch_tokens_per_rank),
             int(num_experts),
             bool(use_fp8),
@@ -355,6 +382,18 @@ class Buffer:
             bool(async_finish),
             bool(return_recv_hook),
         )
+        if fallback_stream is not None and not async_finish:
+            torch.cuda.current_stream(device=x.device).wait_stream(fallback_stream)
+        if fallback_stream is not None and hook is not None:
+            raw_hook = hook
+
+            def _wrapped_hook():
+                cur = torch.cuda.current_stream(device=x.device)
+                fallback_stream.wait_stream(cur)
+                raw_hook()
+                cur.wait_stream(fallback_stream)
+
+            hook = _wrapped_hook
         handle = (
             packed_recv_src_info,
             packed_recv_layout_range,
@@ -449,6 +488,7 @@ class Buffer:
             if out is not None
             else torch.empty((topk_idx.size(0), hidden), device=x.device, dtype=x.dtype)
         )
+        compute_stream_ptr, fallback_stream = self._ll_compute_stream_ptr(x.device)
         event, hook = self.runtime.low_latency_combine(
             x_for_combine.data_ptr(),
             x_for_combine.size(0),
@@ -469,6 +509,7 @@ class Buffer:
                 if combine_wait_recv_cost_stats is None
                 else combine_wait_recv_cost_stats.data_ptr()
             ),
+            compute_stream_ptr,
             int(num_max_dispatch_tokens_per_rank),
             int(num_experts),
             bool(use_logfmt),
@@ -477,6 +518,18 @@ class Buffer:
             bool(return_recv_hook),
             combined_x.data_ptr(),
         )
+        if fallback_stream is not None and not async_finish:
+            torch.cuda.current_stream(device=x.device).wait_stream(fallback_stream)
+        if fallback_stream is not None and hook is not None:
+            raw_hook = hook
+
+            def _wrapped_hook():
+                cur = torch.cuda.current_stream(device=x.device)
+                fallback_stream.wait_stream(cur)
+                raw_hook()
+                cur.wait_stream(fallback_stream)
+
+            hook = _wrapped_hook
         tensors_to_record = (
             x_for_combine,
             topk_idx,
@@ -1185,6 +1238,14 @@ class Buffer:
             hidden: the hidden dimension of each token.
             num_experts: the number of all experts.
         """
-        self.runtime.clean_low_latency_buffer(
-            num_max_dispatch_tokens_per_rank, hidden, num_experts
+        compute_stream_ptr, fallback_stream = self._ll_compute_stream_ptr(
+            torch.device("cuda")
         )
+        self.runtime.clean_low_latency_buffer(
+            num_max_dispatch_tokens_per_rank,
+            hidden,
+            num_experts,
+            compute_stream_ptr,
+        )
+        if fallback_stream is not None:
+            torch.cuda.current_stream().wait_stream(fallback_stream)
