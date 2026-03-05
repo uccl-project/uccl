@@ -4,12 +4,12 @@
 #include "eqds.h"
 #include "pcb.h"
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util/endian.h"
 #include "util/list.h"
 #include "util/util.h"
 #include "util_buffpool.h"
 #include "util_rdma.h"
-#include <glog/logging.h>
 #include <infiniband/verbs.h>
 #include <cstdint>
 #include <cstring>
@@ -607,7 +607,7 @@ static inline int modify_qp_rtr_gpuflush(struct ibv_qp* qp, int dev) {
   attr.max_dest_rd_atomic = 1;
   attr_mask |= IBV_QP_MIN_RNR_TIMER | IBV_QP_MAX_DEST_RD_ATOMIC;
 
-  if (FLAGS_v >= 1) {
+  if (uccl::ucclLogger.shouldVLog(6)) {
     std::ostringstream oss;
     oss << "QP#";
     oss << qp->qp_num;
@@ -646,7 +646,7 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
             factory_dev->gid.global.subnet_prefix) !=
         util_rdma_extract_local_subnet_prefix(
             remote_ctx->remote_gid.global.subnet_prefix)) {
-      LOG(ERROR) << "Only support same subnet communication for now.";
+      LOG(ERROR, RDMA) << "Only support same subnet communication for now.";
     }
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = remote_ctx->remote_port_attr.lid;
@@ -661,7 +661,7 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
     attr_mask |= IBV_QP_MIN_RNR_TIMER | IBV_QP_MAX_DEST_RD_ATOMIC;
   }
 
-  if (FLAGS_v >= 1) {
+  if (uccl::ucclLogger.shouldVLog(6)) {
     std::ostringstream oss;
     oss << "QP#";
     oss << qp->qp_num;
@@ -691,7 +691,7 @@ static inline int modify_qp_rts(struct ibv_qp* qp, bool rc) {
                  IBV_QP_MAX_QP_RD_ATOMIC;
   }
 
-  if (FLAGS_v >= 1) {
+  if (uccl::ucclLogger.shouldVLog(6)) {
     std::ostringstream oss;
     oss << "QP#";
     oss << qp->qp_num;

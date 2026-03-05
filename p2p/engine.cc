@@ -1,9 +1,9 @@
 #include "engine.h"
 #include "endpoint_wrapper.h"
+#include "util/debug.h"
 #include "util/pause.h"
 #include "util/util.h"
 #include <arpa/inet.h>
-#include <glog/logging.h>
 #include <netinet/in.h>
 #include <chrono>
 #include <cstddef>
@@ -121,8 +121,7 @@ UnifiedTask::SpecificData::~SpecificData() {}
 static inline void check_python_signals() {
   PyGILState_STATE gstate = PyGILState_Ensure();
   if (PyErr_CheckSignals() != 0) {
-    std::cerr << "Python signal caught, exiting..." << std::endl;
-    std::abort();
+    LOG(FATAL, P2P) << "Python signal caught, exiting...";
   }
   PyGILState_Release(gstate);
 }
@@ -153,24 +152,24 @@ static inline void shm_ring_recv(jring_t* ring, ShmMsg& msg) {
 
 std::once_flag Endpoint::glog_init_once;
 
-int Endpoint::parse_log_level_from_env() {
+uccl::UCCLLogLevel Endpoint::parse_log_level_from_env() {
   char const* env = std::getenv("UCCL_P2P_LOG_LEVEL");
   if (!env) {
-    return google::WARNING;
+    return uccl::WARNING;
   }
 
-  if (!strcasecmp(env, "INFO")) return google::INFO;
-  if (!strcasecmp(env, "WARNING")) return google::WARNING;
-  if (!strcasecmp(env, "ERROR")) return google::ERROR;
-  if (!strcasecmp(env, "FATAL")) return google::FATAL;
+  if (!strcasecmp(env, "INFO")) return uccl::INFO;
+  if (!strcasecmp(env, "WARNING")) return uccl::WARNING;
+  if (!strcasecmp(env, "ERROR")) return uccl::ERROR;
+  if (!strcasecmp(env, "FATAL")) return uccl::FATAL;
 
   char* end = nullptr;
   long val = std::strtol(env, &end, 10);
   if (end != env && val >= 0 && val <= 3) {
-    return static_cast<int>(val);
+    return static_cast<uccl::UCCLLogLevel>(val);
   }
 
-  return google::WARNING;
+  return uccl::WARNING;
 }
 
 // -----------------------------------------------------------------------------
@@ -198,11 +197,10 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   }
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
-  std::call_once(Endpoint::glog_init_once,
-                 []() { google::InitGoogleLogging("uccl_p2p"); });
-  FLAGS_minloglevel = Endpoint::parse_log_level_from_env();
-  FLAGS_logtostderr = true;
-  google::InstallFailureSignalHandler();
+  // std::call_once(Endpoint::glog_init_once,
+  //                []() { google::InitGoogleLogging("uccl_p2p"); });
+  uccl::ucclLogger.setLogLevel(Endpoint::parse_log_level_from_env());
+  // google::InstallFailureSignalHandler();
 
 #ifdef UCCL_P2P_USE_NCCL
   ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
@@ -261,10 +259,10 @@ Endpoint::Endpoint(uint32_t const num_cpus)
     }
   }
 
-  std::call_once(glog_init_once,
-                 []() { google::InitGoogleLogging("uccl_p2p"); });
+  // std::call_once(glog_init_once,
+  //                []() { google::InitGoogleLogging("uccl_p2p"); });
 
-  google::InstallFailureSignalHandler();
+  // google::InstallFailureSignalHandler();
 #ifdef UCCL_P2P_USE_NCCL
   ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
 #else
@@ -2346,8 +2344,8 @@ void Endpoint::send_proxy_thread_func() {
           break;
         }
         default:
-          LOG(ERROR) << "Unexpected task type in send processing: "
-                     << static_cast<int>(task->type);
+          LOG(ERROR, P2P) << "Unexpected task type in send processing: "
+                          << static_cast<int>(task->type);
           break;
       }
       auto* status = task->status_ptr;
@@ -2410,8 +2408,8 @@ void Endpoint::recv_proxy_thread_func() {
         case TaskType::SEND_IPC:
         case TaskType::WRITE_NET:
         default:
-          LOG(ERROR) << "Unexpected task type in receive processing: "
-                     << static_cast<int>(task->type);
+          LOG(ERROR, P2P) << "Unexpected task type in receive processing: "
+                          << static_cast<int>(task->type);
           break;
       }
       auto* status = task->status_ptr;

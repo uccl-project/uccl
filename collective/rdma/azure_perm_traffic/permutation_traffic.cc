@@ -1,9 +1,9 @@
 #include "transport.h"
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util/timer.h"
 #include <arpa/inet.h>
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <netinet/in.h>
 #include <cstring>
 #include <fstream>
@@ -21,7 +21,7 @@
 #define MAX_NODES 512
 #define BASE_LISTEN_PORT 6666
 
-#define MPI_LOG(level) LOG(level) << "Rank:" << LOCAL_RANK << " "
+#define MPI_LOG(level) LOG(level, RDMA) << "Rank:" << LOCAL_RANK << " "
 
 #define MAX_BUFFER_SIZE (32 * 1024 * 1024)  // 32MB
 #define NET_CHUNK_SIZE (1024 * 1024)        // 1MB
@@ -482,7 +482,7 @@ void get_ips() {
 }
 
 int main(int argc, char** argv) {
-  google::InitGoogleLogging(argv[0]);
+  // google::InitGoogleLogging(argv[0]);
 
   signal(SIGINT, interrupt_handler);
 

@@ -83,7 +83,7 @@ AFXDPSocket::AFXDPSocket(int queue_id)
   int ret = create_afxdp_socket();
   CHECK_EQ(ret, 0) << "xsk_socket__create_shared failed, " << ret;
 
-  LOG(INFO) << "[AF_XDP] socket " << queue_id << " successfully shared";
+  LOG(INFO, AFXDP) << "[AF_XDP] socket " << queue_id << " successfully shared";
 
   // apply_setsockopt(xsk_fd_);
 
@@ -169,9 +169,10 @@ int AFXDPSocket::create_afxdp_socket() {
   frame_pool_ = new SharedPool<uint64_t, /*Sync=*/true>(frame_pool_size,
                                                         [](uint64_t frame) {});
   uint64_t frame_pool_offset = FRAME_SIZE * frame_pool_size * queue_id_;
-  LOG(INFO) << "[AF_XDP] frame pool " << queue_id_
-            << " initialized: frame_pool_size = " << frame_pool_size
-            << " frame_pool_offset = " << std::hex << "0x" << frame_pool_offset;
+  LOG(INFO, AFXDP) << "[AF_XDP] frame pool " << queue_id_
+                   << " initialized: frame_pool_size = " << frame_pool_size
+                   << " frame_pool_offset = " << std::hex << "0x"
+                   << frame_pool_offset;
   for (uint64_t i = 0; i < frame_pool_size; i++) {
     uint64_t frame_offset = frame_pool_offset + XDP_PACKET_HEADROOM;
     push_frame(frame_offset);

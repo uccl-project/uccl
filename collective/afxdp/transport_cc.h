@@ -3,7 +3,7 @@
 #include "tcp_cubic.h"
 #include "timely.h"
 #include "timing_wheel.h"
-#include <glog/logging.h>
+#include "util/debug.h"
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -105,7 +105,7 @@ struct Pcb {
       // Shift the current each bucket to the left by 1 and take the most
       // significant bit from the next bucket
       uint64_t& sack_bitmap_left_bucket = sack_bitmap[i];
-      const uint64_t sack_bitmap_right_bucket = sack_bitmap[i + 1];
+      uint64_t const sack_bitmap_right_bucket = sack_bitmap[i + 1];
 
       sack_bitmap_left_bucket =
           (sack_bitmap_left_bucket >> 1) | (sack_bitmap_right_bucket << 63);
@@ -119,11 +119,12 @@ struct Pcb {
     sack_bitmap_count--;
   }
 
-  void sack_bitmap_bit_set(const size_t index) {
-    const size_t sack_bitmap_bucket_idx = index / kSackBitmapBucketSize;
-    const size_t sack_bitmap_idx_in_bucket = index % kSackBitmapBucketSize;
+  void sack_bitmap_bit_set(size_t const index) {
+    size_t const sack_bitmap_bucket_idx = index / kSackBitmapBucketSize;
+    size_t const sack_bitmap_idx_in_bucket = index % kSackBitmapBucketSize;
 
-    LOG_IF(FATAL, index >= kSackBitmapSize) << "Index out of bounds: " << index;
+    LOG_IF(FATAL, AFXDP, index >= kSackBitmapSize)
+        << "Index out of bounds: " << index;
 
     sack_bitmap[sack_bitmap_bucket_idx] |= (1ULL << sack_bitmap_idx_in_bucket);
 

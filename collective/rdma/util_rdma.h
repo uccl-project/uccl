@@ -3,8 +3,8 @@
 
 #include "param.h"
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util/util.h"
-#include <glog/logging.h>
 #include <infiniband/verbs.h>
 #include <dlfcn.h>
 #include <limits.h>
@@ -398,7 +398,7 @@ static sa_family_t envIbAddrFamily(void) {
     return family;
   }
 
-  LOG(INFO) << "NCCL_IB_ADDR_FAMILY set by environment to " << env;
+  LOG(INFO, RDMA) << "NCCL_IB_ADDR_FAMILY set by environment to " << env;
 
   if (strcmp(env, "AF_INET") == 0) {
     family = AF_INET;
@@ -420,7 +420,7 @@ static void* envIbAddrRange(sa_family_t af, int* mask) {
     return NULL;
   }
 
-  LOG(INFO) << "NCCL_IB_ADDR_RANGE set by environment to " << env;
+  LOG(INFO, RDMA) << "NCCL_IB_ADDR_RANGE set by environment to " << env;
 
   char addrString[128] = {0};
   snprintf(addrString, 128, "%s", env);
@@ -432,26 +432,26 @@ static void* envIbAddrRange(sa_family_t af, int* mask) {
   *(maskStrPtr++) = '\0';
 
   if (inet_pton(af, addrStrPtr, ret) == 0) {
-    LOG(WARNING) << "NET/IB: Ip address '" << addrStrPtr
-                 << "' is invalid for family "
-                 << ((af == AF_INET) ? "AF_INET" : "AF_INET6")
-                 << ", ignoring address";
+    LOG(WARNING, RDMA) << "NET/IB: Ip address '" << addrStrPtr
+                       << "' is invalid for family "
+                       << ((af == AF_INET) ? "AF_INET" : "AF_INET6")
+                       << ", ignoring address";
     return NULL;
   }
 
   *mask = (int)strtol(maskStrPtr, NULL, 10);
   if (af == AF_INET && *mask > 32) {
-    LOG(WARNING) << "NET/IB: Ip address mask '" << *mask
-                 << "' is invalid for family "
-                 << ((af == AF_INET) ? "AF_INET" : "AF_INET6")
-                 << ", ignoring mask";
+    LOG(WARNING, RDMA) << "NET/IB: Ip address mask '" << *mask
+                       << "' is invalid for family "
+                       << ((af == AF_INET) ? "AF_INET" : "AF_INET6")
+                       << ", ignoring mask";
     *mask = 0;
     ret = NULL;
   } else if (af == AF_INET6 && *mask > 128) {
-    LOG(WARNING) << "NET/IB: Ip address mask '" << *mask
-                 << "' is invalid for family "
-                 << ((af == AF_INET) ? "AF_INET" : "AF_INET6")
-                 << ", ignoring mask";
+    LOG(WARNING, RDMA) << "NET/IB: Ip address mask '" << *mask
+                       << "' is invalid for family "
+                       << ((af == AF_INET) ? "AF_INET" : "AF_INET6")
+                       << ", ignoring mask";
     *mask = 0;
     ret = NULL;
   }
@@ -544,16 +544,16 @@ static bool ncclIbRoceGetVersionNum(char const* deviceName, int portNum,
 
   int fd = open(roceTypePath, O_RDONLY);
   if (fd == -1) {
-    LOG(WARNING) << "NET/IB: open failed in ncclIbRoceGetVersionNum: "
-                 << strerror(errno);
+    LOG(WARNING, RDMA) << "NET/IB: open failed in ncclIbRoceGetVersionNum: "
+                       << strerror(errno);
     return false;
   }
   int ret = read(fd, gidRoceVerStr, 15);
   close(fd);
 
   if (ret == -1) {
-    LOG(WARNING) << "NET/IB: read failed in ncclIbRoceGetVersionNum: "
-                 << strerror(errno);
+    LOG(WARNING, RDMA) << "NET/IB: read failed in ncclIbRoceGetVersionNum: "
+                       << strerror(errno);
     return false;
   }
 
@@ -667,7 +667,7 @@ static int has_ibv_reg_mr_iova2() {
   if (!ibvhandle) {
     ibvhandle = dlopen("libibverbs.so.1", RTLD_NOW);
     if (!ibvhandle) {
-      LOG(WARNING) << "Failed to open libibverbs.so[.1]";
+      LOG(WARNING, RDMA) << "Failed to open libibverbs.so[.1]";
       return 0;
     }
   }

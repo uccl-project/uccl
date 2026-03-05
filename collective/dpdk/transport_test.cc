@@ -1,9 +1,9 @@
 #include "transport.h"
 #include "dpdk.h"
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util/util.h"
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <chrono>
 #include <deque>
 #include <thread>
@@ -46,8 +46,8 @@ int main(int argc, char* argv[]) {
   FLAGS_logtostderr = false;
   FLAGS_alsologtostderr = true;
 
-  google::InitGoogleLogging(argv[0]);
-  google::InstallFailureSignalHandler();
+  // google::InitGoogleLogging(argv[0]);
+  // google::InstallFailureSignalHandler();
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   signal(SIGINT, interrupt_handler);
@@ -59,16 +59,16 @@ int main(int argc, char* argv[]) {
   Dpdk dpdk;
   dpdk.InitDpdk(1, argv);
 
-  //   LOG(INFO) << "Getting port ID for device " << DEV_DEFAULT;
+  //   LOG(INFO, DPDK) << "Getting port ID for device " << DEV_DEFAULT;
 
   //   std::string mac_str = get_dev_mac(DEV_DEFAULT);
 
-  LOG(INFO) << "Getting port ID for device " << FLAGS_localmac;
+  LOG(INFO, DPDK) << "Getting port ID for device " << FLAGS_localmac;
   std::string mac_str = FLAGS_localmac;
 
   uint16_t port_id = dpdk.GetPmdPortIdByMac(mac_str.c_str());
   if (port_id == (uint16_t)-1) {
-    LOG(FATAL) << "Client port not found";
+    LOG(FATAL, DPDK) << "Client port not found";
   }
 
   kTestMsgSize = FLAGS_size;
@@ -97,7 +97,7 @@ int main(int argc, char* argv[]) {
   } else if (FLAGS_test == "tput") {
     test_type = kTput;
   } else {
-    LOG(FATAL) << "Unknown test type: " << FLAGS_test;
+    LOG(FATAL, DPDK) << "Unknown test type: " << FLAGS_test;
   }
 
   std::mt19937 generator(42);
@@ -230,7 +230,7 @@ int main(int argc, char* argv[]) {
                   ep.uccl_send_async(conn_id_vec[j], data, send_len);
               poll_ctx->timestamp = rdtsc();
               poll_ctxs.push_back(poll_ctx);
-              // LOG(INFO) << "[Transport Test] send async";
+              // LOG(INFO, DPDK) << "[Transport Test] send async";
             }
           }
           while (poll_ctxs.size() > kMaxInflight * NUM_QUEUES) {
@@ -238,7 +238,7 @@ int main(int argc, char* argv[]) {
             poll_ctxs.pop_front();
             auto async_start = poll_ctx->timestamp;
             ep.uccl_poll(poll_ctx);
-            // LOG(INFO) << "[Transport Test] poll";
+            // LOG(INFO, DPDK) << "[Transport Test] poll";
             rtts.push_back(to_usec(rdtsc() - async_start, freq_ghz));
             sent_bytes += send_len;
           }
@@ -309,9 +309,11 @@ int main(int argc, char* argv[]) {
              1e-6);
         sent_bytes = 0;
 
-        LOG(INFO) << "Sent " << i + 1 << " messages, med rtt: " << med_latency
-                  << " us, tail rtt: " << tail_latency << " us, link bw "
-                  << bw_gbps << " Gbps, app bw " << app_bw_gbps << " Gbps";
+        LOG(INFO, DPDK) << "Sent " << i + 1
+                        << " messages, med rtt: " << med_latency
+                        << " us, tail rtt: " << tail_latency << " us, link bw "
+                        << bw_gbps << " Gbps, app bw " << app_bw_gbps
+                        << " Gbps";
         start_bw_mea = std::chrono::high_resolution_clock::now();
       }
     }
@@ -453,14 +455,14 @@ int main(int argc, char* argv[]) {
         bool data_mismatch = false;
         auto expected_len = FLAGS_rand ? send_len : kTestMsgSize;
         if (recv_len != expected_len) {
-          LOG(ERROR) << "Received message size mismatches, expected "
-                     << expected_len << ", received " << recv_len;
+          LOG(ERROR, DPDK) << "Received message size mismatches, expected "
+                           << expected_len << ", received " << recv_len;
           data_mismatch = true;
         }
         for (size_t j = 0; j < recv_len / sizeof(uint64_t); j++) {
           if (data_u64[j] != (uint64_t)i * (uint64_t)j) {
             data_mismatch = true;
-            LOG_EVERY_N(ERROR, 1000)
+            LOG_EVERY_N(ERROR, DPDK, 1000)
                 << "Data mismatch at index " << j * sizeof(uint64_t)
                 << ", expected " << (uint64_t)i * (uint64_t)j << ", received "
                 << data_u64[j];
@@ -470,8 +472,9 @@ int main(int argc, char* argv[]) {
         memset(data, 0, recv_len);
       }
 
-      LOG_EVERY_N(INFO, kReportIters) << "Received " << i << " messages, rtt "
-                                      << duration_us.count() << " us";
+      LOG_EVERY_N(INFO, DPDK, kReportIters)
+          << "Received " << i << " messages, rtt " << duration_us.count()
+          << " us";
     }
   }
 

@@ -1,7 +1,7 @@
 #include "transport.h"
 #include "transport_config.h"
+#include "util/debug.h"
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <chrono>
 #include <deque>
 #include <thread>
@@ -9,10 +9,10 @@
 
 using namespace uccl;
 
-const size_t kTestIters = 1024000000000UL;
-const std::chrono::duration kReportIntervalSec = std::chrono::seconds(2);
-const size_t kReportIters = 5000;
-const uint32_t kNumConns = 4;
+size_t const kTestIters = 1024000000000UL;
+std::chrono::duration const kReportIntervalSec = std::chrono::seconds(2);
+size_t const kReportIters = 5000;
+uint32_t const kNumConns = 4;
 
 size_t kTestMsgSize = 1024000;
 size_t kMaxInflight = 8;
@@ -37,8 +37,8 @@ uint64_t* get_host_ptr(uint64_t* dev_ptr, size_t size) {
 }
 
 int main(int argc, char* argv[]) {
-  google::InitGoogleLogging(argv[0]);
-  google::InstallFailureSignalHandler();
+  // google::InitGoogleLogging(argv[0]);
+  // google::InstallFailureSignalHandler();
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   kTestMsgSize = FLAGS_size;
@@ -50,7 +50,7 @@ int main(int argc, char* argv[]) {
   } else if (!FLAGS_clientip.empty()) {
     is_client = false;
   } else {
-    LOG(FATAL)
+    LOG(FATAL, EFA)
         << "Please specify server IP or client IP, and only one of them.";
   }
 
@@ -72,7 +72,7 @@ int main(int argc, char* argv[]) {
   } else if (FLAGS_test == "tput") {
     test_type = kTput;
   } else {
-    LOG(FATAL) << "Unknown test type: " << FLAGS_test;
+    LOG(FATAL, EFA) << "Unknown test type: " << FLAGS_test;
   }
 
   std::mt19937 generator(42);
@@ -355,9 +355,10 @@ int main(int argc, char* argv[]) {
             sent_bytes * 8.0 / 1000 / 1000 / 1000 / (duaration_usec * 1e-6);
         sent_bytes = 0;
 
-        LOG(INFO) << "Sent " << i + 1 << " messages, med rtt: " << med_latency
-                  << " us, tail rtt: " << tail_latency << " us, link bw "
-                  << bw_gbps << " Gbps, app bw " << app_bw_gbps << " Gbps";
+        LOG(INFO, EFA) << "Sent " << i + 1
+                       << " messages, med rtt: " << med_latency
+                       << " us, tail rtt: " << tail_latency << " us, link bw "
+                       << bw_gbps << " Gbps, app bw " << app_bw_gbps << " Gbps";
         start_bw_mea = std::chrono::high_resolution_clock::now();
       }
     }
@@ -567,7 +568,7 @@ int main(int argc, char* argv[]) {
             std::chrono::high_resolution_clock::now() - start);
         if (duration_sec < kReportIntervalSec) continue;
 
-        LOG(INFO) << "Received " << i + 1 << " messages";
+        LOG(INFO, EFA) << "Received " << i + 1 << " messages";
 
         start = std::chrono::high_resolution_clock::now();
       }
@@ -578,14 +579,14 @@ int main(int argc, char* argv[]) {
         bool data_mismatch = false;
         auto expected_len = FLAGS_rand ? send_len : kTestMsgSize;
         if (recv_len != expected_len) {
-          LOG(ERROR) << "Received message size mismatches, expected "
-                     << expected_len << ", received " << recv_len;
+          LOG(ERROR, EFA) << "Received message size mismatches, expected "
+                          << expected_len << ", received " << recv_len;
           data_mismatch = true;
         }
         for (int j = 0; j < recv_len / sizeof(uint64_t); j++) {
           if (host_data_u64[j] != (uint64_t)i * (uint64_t)j) {
             data_mismatch = true;
-            LOG_EVERY_N(ERROR, 1000)
+            LOG_EVERY_N(ERROR, EFA, 1000)
                 << "Data mismatch at index " << j * sizeof(uint64_t)
                 << ", expected " << (uint64_t)i * (uint64_t)j << ", received "
                 << host_data_u64[j];

@@ -2,13 +2,13 @@
 
 #include "transport_cc.h"
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util/endian.h"
 #include "util/latency.h"
 #include "util/rss.h"
 #include "util/timer.h"
 #include "util/util.h"
 #include "util_afxdp.h"
-#include <glog/logging.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
 #include <linux/tcp.h>
@@ -158,8 +158,8 @@ struct __attribute__((packed)) UcclSackHdr {
                                                           // SACKs received.
   be16_t sack_bitmap_count;  // Length of the SACK bitmap [0-256].
 };
-static const size_t kUcclHdrLen = sizeof(UcclPktHdr);
-static const size_t kUcclSackHdrLen = sizeof(UcclSackHdr);
+static size_t const kUcclHdrLen = sizeof(UcclPktHdr);
+static size_t const kUcclSackHdrLen = sizeof(UcclSackHdr);
 static_assert(kUcclHdrLen == 40, "UcclPktHdr size mismatch");
 
 #ifdef USE_TCP
@@ -211,10 +211,10 @@ class TXTracking {
               PollCtx* poll_ctx);
   std::optional<FrameBuf*> get_and_update_oldest_unsent();
 
-  inline const uint32_t num_unacked_msgbufs() const {
+  inline uint32_t const num_unacked_msgbufs() const {
     return num_unacked_msgbufs_;
   }
-  inline const uint32_t num_unsent_msgbufs() const {
+  inline uint32_t const num_unsent_msgbufs() const {
     return num_unsent_msgbufs_;
   }
   inline FrameBuf* get_oldest_unacked_msgbuf() const {
@@ -355,7 +355,7 @@ class RXTracking {
  *      converts to network packets and sends them out to the remote recipient.
  */
 class UcclFlow {
-  const static uint32_t kMaxReadyRxMsgbufs = kMaxUnackedPktsPerEngine * 32;
+  static uint32_t const kMaxReadyRxMsgbufs = kMaxUnackedPktsPerEngine * 32;
 
  public:
   /**
@@ -368,7 +368,7 @@ class UcclFlow {
    * @param AFXDPSocket object for packet IOs.
    * @param FlowID Connection ID for the flow.
    */
-  UcclFlow(const uint32_t local_addr, const uint32_t remote_addr,
+  UcclFlow(uint32_t const local_addr, uint32_t const remote_addr,
            char const local_l2_addr[ETH_ALEN],
            char const remote_l2_addr[ETH_ALEN], uint32_t local_engine_idx,
            uint32_t remote_engine_idx, AFXDPSocket* socket, Channel* channel,
@@ -486,10 +486,10 @@ class UcclFlow {
                         uint16_t dst_port) const;
 
   void prepare_datapacket(FrameBuf* msgbuf, uint32_t path_id, uint32_t seqno,
-                          const UcclPktHdr::UcclFlags net_flags);
+                          UcclPktHdr::UcclFlags const net_flags);
   AFXDPSocket::frame_desc craft_ackpacket(uint32_t path_id, uint16_t dst_port,
                                           uint32_t seqno, uint32_t ackno,
-                                          const UcclPktHdr::UcclFlags net_flags,
+                                          UcclPktHdr::UcclFlags const net_flags,
                                           uint64_t ts1, uint64_t ts2);
   AFXDPSocket::frame_desc craft_rssprobe_packet(uint16_t dst_port);
   void reverse_packet_l2l3(FrameBuf* msgbuf);
@@ -570,7 +570,7 @@ class UcclFlow {
 class UcclEngine {
  public:
   // Slow timer (periodic processing) interval in microseconds.
-  const size_t kSlowTimerIntervalUs = 2000;  // 2ms
+  size_t const kSlowTimerIntervalUs = 2000;  // 2ms
   UcclEngine() = delete;
   UcclEngine(UcclEngine const&) = delete;
 
@@ -582,8 +582,8 @@ class UcclEngine {
    * For now, we assume an engine is responsible for a single channel, but
    * future it may be responsible for multiple channels.
    */
-  UcclEngine(int queue_id, Channel* channel, const std::string local_addr,
-             const std::string local_l2_addr)
+  UcclEngine(int queue_id, Channel* channel, std::string const local_addr,
+             std::string const local_l2_addr)
       : local_addr_(htonl(str_to_ip(local_addr))),
         local_engine_idx_(queue_id),
         socket_(AFXDPFactory::CreateSocket(queue_id)),
@@ -706,14 +706,14 @@ class Endpoint {
   ConnID uccl_accept(std::string& remote_ip);
 
   // Sending the data by leveraging multiple port combinations.
-  bool uccl_send(ConnID flow_id, void const* data, const size_t len,
+  bool uccl_send(ConnID flow_id, void const* data, size_t const len,
                  bool busypoll = false);
   // Receiving the data by leveraging multiple port combinations.
   bool uccl_recv(ConnID flow_id, void* data, size_t* len_p,
                  bool busypoll = false);
 
   // Sending the data by leveraging multiple port combinations.
-  PollCtx* uccl_send_async(ConnID flow_id, void const* data, const size_t len);
+  PollCtx* uccl_send_async(ConnID flow_id, void const* data, size_t const len);
   // Receiving the data by leveraging multiple port combinations.
   PollCtx* uccl_recv_async(ConnID flow_id, void* data, size_t* len_p);
 

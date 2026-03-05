@@ -1,12 +1,12 @@
 #pragma once
 
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util/shared_pool.h"
 #include "util/timer.h"
 #include <arpa/inet.h>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
-#include <glog/logging.h>
 #include <linux/if_ether.h>
 #include <linux/if_link.h>
 #include <linux/ip.h>
@@ -202,7 +202,7 @@ class AFXDPFactory {
 
 class AFXDPSocket {
   static_assert(XDP_PACKET_HEADROOM == 0x100, "XDP_PACKET_HEADROOM is 256");
-  static const uint64_t XDP_PACKET_HEADROOM_MASK = 0x1FF;
+  static uint64_t const XDP_PACKET_HEADROOM_MASK = 0x1FF;
 
   int xsk_fd_;
   int umem_fd_;

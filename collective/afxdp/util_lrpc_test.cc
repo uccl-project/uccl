@@ -1,5 +1,5 @@
+#include "util/debug.h"
 #include "util/lrpc.h"  // Include your LRPC-related headers
-#include <glog/logging.h>
 #include <atomic>
 #include <chrono>
 #include <iostream>

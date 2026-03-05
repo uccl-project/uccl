@@ -1,5 +1,5 @@
+#include "util/debug.h"
 #include "util/timer.h"
-#include <glog/logging.h>
 #include <chrono>
 #include <cmath>
 #include <iostream>

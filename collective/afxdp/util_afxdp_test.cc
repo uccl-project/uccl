@@ -12,11 +12,11 @@
 
 using namespace uccl;
 
-const uint32_t MY_NUM_QUEUES = 1;
+uint32_t const MY_NUM_QUEUES = 1;
 
 uint32_t server_addr_u32 = 0x0;
 uint32_t client_addr_u32 = 0x0;
-const uint16_t client_ports[8] = {40000, 40001, 40002, 40003,
+uint16_t const client_ports[8] = {40000, 40001, 40002, 40003,
                                   40004, 40005, 40006, 40007};
 
 // static const char* server_mac_str = "16:ff:d0:73:a9:cf";
@@ -360,8 +360,8 @@ static void* stats_thread(void* arg) {
 // On server: cd misc; sudo ./server_main
 // On client: sudo ./util_afxdp_test
 int main(int argc, char* argv[]) {
-  google::InitGoogleLogging(argv[0]);
-  google::InstallFailureSignalHandler();
+  // google::InitGoogleLogging(argv[0]);
+  // google::InstallFailureSignalHandler();
 
   printf("\n[client]\n");
 

@@ -57,11 +57,13 @@ class UCCLVLogCapture;
 class UCCLCheckCapture;
 struct UCCLVoidify;
 
-#define UCCL_LOG_INTERNAL(level, subsys)                                    \
-  if (uccl::ucclLogger.shouldLog(level, subsys))                            \
-  uccl::UCCLLogCapture(uccl::ucclLogger, level, subsys, __FILE__, __LINE__, \
-                       __func__)                                            \
-      .stream()
+#define UCCL_LOG_INTERNAL(level, subsys)                                       \
+  (!uccl::ucclLogger.shouldLog(uccl::level, uccl::subsys))                     \
+      ? (void)0                                                                \
+      : uccl::UCCLVoidify() &                                                  \
+            (uccl::UCCLLogCapture(uccl::ucclLogger, uccl::level, uccl::subsys, \
+                                  __FILE__, __LINE__, __func__)                \
+                 .stream())
 
 #define LOG(level, subsys) UCCL_LOG_INTERNAL(level, subsys)
 
@@ -71,55 +73,54 @@ struct UCCLVoidify;
 #define UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(funcName, identifier) \
   UCCL_FUNC_NAME_CONCAT_INTERNAL(funcName, identifier)
 
-#define UCCL_LOG_EVERY_N_INTERNAL(level, subsys, n)                            \
-  static std::atomic<int> UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(                 \
-      log_every_n_counter, __LINE__){1};                                       \
-  !(uccl::ucclLogger.shouldLog(level, subsys) &&                               \
-    ((UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(log_every_n_counter, __LINE__)       \
-          .fetch_add(1) %                                                      \
-      (n)) == 0))                                                              \
-      ? (void)0                                                                \
-      : uccl::UCCLVoidify() & uccl::UCCLLogCapture(uccl::ucclLogger, level,    \
-                                                   subsys, __FILE__, __LINE__, \
-                                                   __func__)                   \
-                                  .stream()
+#define UCCL_LOG_EVERY_N_INTERNAL(level, subsys, n)                           \
+  static std::atomic<int> UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(                \
+      log_every_n_counter, __LINE__){1};                                      \
+  (!(uccl::ucclLogger.shouldLog(uccl::level, uccl::subsys) &&                 \
+     ((UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(log_every_n_counter, __LINE__)     \
+           .fetch_add(1) %                                                    \
+       (n)) == 0)))                                                           \
+      ? (void)0                                                               \
+      : uccl::UCCLVoidify() &                                                 \
+            uccl::UCCLLogCapture(uccl::ucclLogger, uccl::level, uccl::subsys, \
+                                 __FILE__, __LINE__, __func__)                \
+                .stream()
 
 #define LOG_EVERY_N(level, subsys, n) \
   UCCL_LOG_EVERY_N_INTERNAL(level, subsys, n)
 
-#define UCCL_LOG_FIRST_N_INTERNAL(level, subsys, n)                            \
-  static std::atomic<int> UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(                 \
-      log_first_n_counter, __LINE__){1};                                       \
-  !(uccl::ucclLogger.shouldLog(level, subsys) &&                               \
-    ((UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(log_first_n_counter, __LINE__)       \
-          .fetch_add(1) <= n)))                                                \
-      ? (void)0                                                                \
-      : uccl::UCCLVoidify() & uccl::UCCLLogCapture(uccl::ucclLogger, level,    \
-                                                   subsys, __FILE__, __LINE__, \
-                                                   __func__)                   \
-                                  .stream()
+#define UCCL_LOG_FIRST_N_INTERNAL(level, subsys, n)                           \
+  static std::atomic<int> UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(                \
+      log_first_n_counter, __LINE__){1};                                      \
+  (!(uccl::ucclLogger.shouldLog(uccl::level, uccl::subsys) &&                 \
+     ((UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(log_first_n_counter, __LINE__)     \
+           .fetch_add(1) <= n))))                                             \
+      ? (void)0                                                               \
+      : uccl::UCCLVoidify() &                                                 \
+            uccl::UCCLLogCapture(uccl::ucclLogger, uccl::level, uccl::subsys, \
+                                 __FILE__, __LINE__, __func__)                \
+                .stream()
 
 #define LOG_FRIST_N(level, subsys, n) \
   UCCL_LOG_FIRST_N_INTERNAL(level, subsys, n)
 
-#define UCCL_LOG_IF_INTERNAL(level, subsys, condition)                       \
-  !(condition && uccl::ucclLogger.shouldLog(level, subsys))                  \
-      ? (void)0                                                              \
-      : uccl::UCCLVoidify() &                                                \
-            (uccl::UCCLLogCapture(uccl::ucclLogger, level, subsys, __FILE__, \
-                                  __LINE__, __func__)                        \
+#define UCCL_LOG_IF_INTERNAL(level, subsys, condition)                         \
+  (!(condition && uccl::ucclLogger.shouldLog(uccl::level, uccl::subsys)))      \
+      ? (void)0                                                                \
+      : uccl::UCCLVoidify() &                                                  \
+            (uccl::UCCLLogCapture(uccl::ucclLogger, uccl::level, uccl::subsys, \
+                                  __FILE__, __LINE__, __func__)                \
                  .stream())
 
 #define LOG_IF(level, subsys, condition) \
   UCCL_LOG_IF_INTERNAL(level, subsys, condition)
 
-
 #define UCCL_VLOG_IF_INTERNAL(vLogLevel, condition)                       \
   !(condition && uccl::ucclLogger.shouldvLog(vLogLevel))                  \
-      ? (void)0                                                              \
-      : uccl::UCCLVoidify() &                                                \
+      ? (void)0                                                           \
+      : uccl::UCCLVoidify() &                                             \
             (uccl::UCCLVLogCapture(uccl::ucclLogger, vLogLevel, __FILE__, \
-                                  __LINE__, __func__)                        \
+                                   __LINE__, __func__)                    \
                  .stream())
 
 #define VLOG_IF(vLogLevel, condition) UCCL_VLOG_INTERNAL(vLogLevel, condition)
@@ -261,6 +262,8 @@ class UCCLLogger {
 
   std::ostream& stream() { return stream_; }
 
+  void setLogLevel(UCCLLogLevel level) { logLevel_ = level; }
+
   void log(UCCLLogLevel logLevel, UCCLLogSubsys subsys,
            std::string_view filename, int line_number,
            std::string_view function_name, int threadId,
@@ -369,7 +372,8 @@ class UCCLLogger {
       sv = sv.substr(comma + 1);
     }
   }
-} ucclLogger(std::cout);
+};
+inline UCCLLogger ucclLogger(std::cout);
 
 class UCCLLogCapture {
  public:
@@ -381,7 +385,7 @@ class UCCLLogCapture {
         subsys_(subsys),
         fileName_(fileName),
         lineNumber_(lineNumber),
-        functionName_(functionName) {};
+        functionName_(functionName){};
 
   ~UCCLLogCapture() {
     logger_.log(level_, subsys_, fileName_, lineNumber_, functionName_,
@@ -416,7 +420,7 @@ class UCCLVLogCapture {
         vLogLevel_(vLogLevel),
         fileName_(fileName),
         lineNumber_(lineNumber),
-        functionName_(functionName) {};
+        functionName_(functionName){};
 
   ~UCCLVLogCapture() {
     logger_.vlog(vLogLevel_, fileName_, lineNumber_, functionName_,

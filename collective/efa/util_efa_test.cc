@@ -164,16 +164,17 @@ void run_server() {
     duration2 += end_time - mid_time;
   }
 
-  LOG(INFO) << "post_send_wr duration "
-            << std::chrono::duration_cast<std::chrono::microseconds>(duration1)
-                       .count() *
-                   1.0 / ITERATIONS
-            << " us"
-            << " poll_send_cq duration "
-            << std::chrono::duration_cast<std::chrono::microseconds>(duration2)
-                       .count() *
-                   1.0 / ITERATIONS
-            << " us";
+  LOG(INFO, EFA)
+      << "post_send_wr duration "
+      << std::chrono::duration_cast<std::chrono::microseconds>(duration1)
+                 .count() *
+             1.0 / ITERATIONS
+      << " us"
+      << " poll_send_cq duration "
+      << std::chrono::duration_cast<std::chrono::microseconds>(duration2)
+                 .count() *
+             1.0 / ITERATIONS
+      << " us";
 
   // Receiving an ack ctrl packet.
   uint32_t polled_send_acks = 0;
@@ -290,8 +291,8 @@ void run_client(char const* server_ip) {
   auto end_time = std::chrono::high_resolution_clock::now();
   auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(
       end_time - start_time);
-  LOG(INFO) << "Round trip time: " << duration_us.count() * 1.0 / ITERATIONS
-            << " us";
+  LOG(INFO, EFA) << "Round trip time: "
+                 << duration_us.count() * 1.0 / ITERATIONS << " us";
 
   // Sending a ctrl packet
   frame_desc = socket->pop_frame_desc();
@@ -365,19 +366,19 @@ void run_client(char const* server_ip) {
 
   duration_us = std::chrono::duration_cast<std::chrono::microseconds>(
       end_time - start_time);
-  LOG(INFO) << "Throughput: " << ITERATIONS * 1.0 / duration_us.count()
-            << " Mops/s "
-            << " bandwidth: "
-            << ITERATIONS * 1.0 / duration_us.count() * EFA_MTU * 8 / 1000
-            << " Gbps";
+  LOG(INFO, EFA) << "Throughput: " << ITERATIONS * 1.0 / duration_us.count()
+                 << " Mops/s "
+                 << " bandwidth: "
+                 << ITERATIONS * 1.0 / duration_us.count() * EFA_MTU * 8 / 1000
+                 << " Gbps";
 }
 
 // TO RUN THE TEST:
 // On server: ./util_efa_test
 // On client: ./util_efa_test server_ip
 int main(int argc, char* argv[]) {
-  google::InitGoogleLogging(argv[0]);
-  google::InstallFailureSignalHandler();
+  // google::InitGoogleLogging(argv[0]);
+  // google::InstallFailureSignalHandler();
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   std::once_flag init_flag;

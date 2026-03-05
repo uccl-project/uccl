@@ -3,12 +3,12 @@
 #include "eqds.h"
 #include "rdma_io.h"
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util/latency.h"
 #include "util/shared_pool.h"
 #include "util/util.h"
 #include "util_rdma.h"
 #include "util_timer.h"
-#include <glog/logging.h>
 #include <infiniband/verbs.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>

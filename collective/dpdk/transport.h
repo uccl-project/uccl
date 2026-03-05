@@ -1,6 +1,7 @@
 #pragma once
 
 #include "transport_cc.h"
+#include "util/debug.h"
 #include "util/endian.h"
 #include "util/latency.h"
 #include "util/rss.h"
@@ -8,7 +9,6 @@
 #include "util/timer.h"
 #include "util/util.h"
 #include "util_dpdk.h"
-#include <glog/logging.h>
 #include <linux/udp.h>
 #include <bitset>
 #include <chrono>

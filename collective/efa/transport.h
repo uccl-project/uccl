@@ -7,13 +7,13 @@
 #include "transport_cc.h"
 #include "transport_config.h"
 #include "transport_header.h"
+#include "util/debug.h"
 #include "util/endian.h"
 #include "util/latency.h"
 #include "util/shared_pool.h"
 #include "util/util.h"
 #include "util_efa.h"
 #include "util_timer.h"
-#include <glog/logging.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
 #include <linux/tcp.h>

@@ -11,10 +11,10 @@
 #include "hip/hip_runtime.h"
 #endif
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util/util.h"
 #include "util_timer.h"
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <chrono>
 #include <thread>
 #include <signal.h>
@@ -420,8 +420,8 @@ static void client_worker(void) {
 // clang-format on
 
 int main(int argc, char* argv[]) {
-  google::InitGoogleLogging(argv[0]);
-  google::InstallFailureSignalHandler();
+  // google::InitGoogleLogging(argv[0]);
+  // google::InstallFailureSignalHandler();
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   ep.emplace(ucclParamNUM_ENGINES());

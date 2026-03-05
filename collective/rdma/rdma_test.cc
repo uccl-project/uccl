@@ -11,9 +11,9 @@
     - Server displays final atomic values after completion
  */
 #include "transport_config.h"
+#include "util/debug.h"
 #include <arpa/inet.h>
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <infiniband/verbs.h>
 #include <netinet/in.h>
 #include <thread>

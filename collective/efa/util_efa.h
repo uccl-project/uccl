@@ -2,13 +2,13 @@
 
 #include "transport_config.h"
 #include "transport_header.h"
+#include "util/debug.h"
 #include "util/list.h"
 #include "util/util.h"
 #include "util_buffpool.h"
 #include "util_flock.h"
 #include "util_timer.h"
 #include <arpa/inet.h>
-#include <glog/logging.h>
 #include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
 #include <linux/if_ether.h>

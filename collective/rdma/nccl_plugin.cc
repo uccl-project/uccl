@@ -1,8 +1,8 @@
 #include "nccl_net.h"
 #include "transport.h"
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util_rdma.h"
-#include <glog/logging.h>
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -101,7 +101,7 @@ ncclResult_t pluginPciPath(char const* ib_name, char** path) {
   snprintf(devicePath, 256, "/sys/class/infiniband/%s/device", ib_name);
   char* p = realpath(devicePath, NULL);
   if (p == NULL) {
-    LOG(ERROR) << "Could not find device path for " << ib_name;
+    LOG(ERROR, RDMA) << "Could not find device path for " << ib_name;
     return ncclInternalError;
   }
   *path = p;
@@ -300,8 +300,9 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   serv_addr.sin_port = 0;  // Let OS assign a free ephemeral port
   ret = bind(listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
   if (ret < 0) {
-    LOG(ERROR) << "ERROR: binding socket, ret: " << ret
-               << ", port: " << ntohs(serv_addr.sin_port) << ", dev: " << dev;
+    LOG(ERROR, RDMA) << "ERROR: binding socket, ret: " << ret
+                     << ", port: " << ntohs(serv_addr.sin_port)
+                     << ", dev: " << dev;
     close(listen_fd);
     return ncclInternalError;
   }

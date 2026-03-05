@@ -137,12 +137,12 @@ class PmdPort {
     auto lsb = rss_hash & (devinfo_.reta_size - 1);
     auto index = lsb / RTE_ETH_RETA_GROUP_SIZE;
     auto shift = lsb % RTE_ETH_RETA_GROUP_SIZE;
-    LOG(INFO) << "index: " << index << " shift: " << shift
-              << "rss_hash: " << rss_hash
-              << " reta_size: " << devinfo_.reta_size
-              << " reta_group_size: " << RTE_ETH_RETA_GROUP_SIZE
-              << " reta: " << rss_reta_conf_[index].reta[shift]
-              << " lsb: " << lsb;
+    LOG(INFO, DPDK) << "index: " << index << " shift: " << shift
+                    << "rss_hash: " << rss_hash
+                    << " reta_size: " << devinfo_.reta_size
+                    << " reta_group_size: " << RTE_ETH_RETA_GROUP_SIZE
+                    << " reta: " << rss_reta_conf_[index].reta[shift]
+                    << " lsb: " << lsb;
     return rss_reta_conf_[index].reta[shift];
   }
 
@@ -202,7 +202,7 @@ class PmdPort {
 
   void DumpStats() {
     UpdatePortStats();
-    LOG(INFO) << Format(
+    LOG(INFO, DPDK) << Format(
         "[STATS - Port: %u] [TX] Pkts: %lu, Bytes: %lu, Drops: %lu [RX] Pkts: "
         "%lu, Bytes: %lu, Drops: %lu, NoRXMbufs: %lu",
         port_id_, GetPortTxPkts(), GetPortTxBytes(), GetPortTxDrops(),
@@ -210,13 +210,13 @@ class PmdPort {
         GetPortRxNoMbufErr());
 
     for (uint16_t i = 0; i < tx_rings_nr_; i++) {
-      LOG(INFO) << Format(
+      LOG(INFO, DPDK) << Format(
           "[STATS - Port: %u, Queue: %u] [TX] Pkts: %lu, Bytes: %lu", port_id_,
           i, GetPortQueueTxPkts(i), GetPortQueueTxBytes(i));
     }
 
     for (uint16_t i = 0; i < rx_rings_nr_; i++) {
-      LOG(INFO) << Format(
+      LOG(INFO, DPDK) << Format(
           "[STATS - Port: %u, Queue: %u] [RX] Pkts: %lu, Bytes: %lu", port_id_,
           i, GetPortQueueRxPkts(i), GetPortQueueRxBytes(i));
     }

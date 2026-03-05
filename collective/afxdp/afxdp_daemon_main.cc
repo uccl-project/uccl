@@ -1,7 +1,7 @@
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util/util.h"
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <linux/if_xdp.h>
 #include <xdp/libxdp.h>
 #include <xdp/xsk.h>
@@ -59,29 +59,29 @@ void load_program(char const* interface_name, char const* ebpf_filename,
       << interface_name;
 
   // load the ebpf program
-  LOG(INFO) << "loading " << section_name << "...";
+  LOG(INFO, AFXDP) << "loading " << section_name << "...";
   program_attach = xdp_program__open_file(ebpf_filename, section_name, NULL);
   CHECK(!libxdp_get_error(program_attach))
       << "error: could not load " << ebpf_filename << " program";
-  LOG(INFO) << ebpf_filename << " loaded successfully.";
+  LOG(INFO, AFXDP) << ebpf_filename << " loaded successfully.";
 
   // attach the ebpf program to the network interface
-  LOG(INFO) << "attaching " << ebpf_filename << " to network interface";
+  LOG(INFO, AFXDP) << "attaching " << ebpf_filename << " to network interface";
   int ret =
       xdp_program__attach(program_attach, interface_index, XDP_MODE_NATIVE, 0);
   if (ret == 0) {
     attached_native = true;
   } else {
-    LOG(INFO) << "falling back to skb mode...";
+    LOG(INFO, AFXDP) << "falling back to skb mode...";
     ret = xdp_program__attach(program_attach, interface_index, XDP_MODE_SKB, 0);
     if (ret == 0) {
       attached_skb = true;
     } else {
-      LOG(ERROR) << "error: failed to attach " << ebpf_filename
-                 << " program to interface";
+      LOG(ERROR, AFXDP) << "error: failed to attach " << ebpf_filename
+                        << " program to interface";
     }
   }
-  LOG(INFO) << ebpf_filename << " attached successfully.";
+  LOG(INFO, AFXDP) << ebpf_filename << " attached successfully.";
 
   // allow unlimited locking of memory, so all memory needed for packet
   // buffers can be locked
@@ -218,8 +218,8 @@ void interrupt_handler(int signal) {
 }
 
 int main(int argc, char* argv[]) {
-  google::InitGoogleLogging(argv[0]);
-  google::InstallFailureSignalHandler();
+  // google::InitGoogleLogging(argv[0]);
+  // google::InstallFailureSignalHandler();
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   signal(SIGINT, interrupt_handler);
@@ -253,7 +253,7 @@ int main(int argc, char* argv[]) {
 
   uint32_t test_word;
   while (true) {
-    printf("Waiting for non-privileged process to connect...\n");
+    LOG(INFO, AFXDP) << "Waiting for non-privileged process to connect...";
     if ((client_sock = accept(server_sock, NULL, NULL)) == -1) {
       perror("accept");
       exit(EXIT_FAILURE);
@@ -271,9 +271,9 @@ int main(int argc, char* argv[]) {
         recv(client_sock, &test_word, sizeof(test_word), 0);
 
     if (bytes_received == 0) {
-      printf(
-          "Peer has closed the connection or crashed, forcely clean up "
-          "all xsks and umem\n");
+      LOG(INFO, AFXDP)
+          << "Peer has closed the connection or crashed, forcely clean up "
+             "all xsks and umem";
       destroy_umem_and_xsk();
     } else if (bytes_received < 0) {
       perror("recv failed");

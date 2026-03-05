@@ -3,7 +3,7 @@
 #include "tcp_cubic.h"
 #include "timely.h"
 #include "timing_wheel.h"
-#include <glog/logging.h>
+#include "util/debug.h"
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -123,7 +123,8 @@ struct Pcb {
     const size_t sack_bitmap_bucket_idx = index / kSackBitmapBucketSize;
     const size_t sack_bitmap_idx_in_bucket = index % kSackBitmapBucketSize;
 
-    LOG_IF(FATAL, index >= kSackBitmapSize) << "Index out of bounds: " << index;
+    LOG_IF(FATAL, DPDK, index >= kSackBitmapSize)
+        << "Index out of bounds: " << index;
 
     sack_bitmap[sack_bitmap_bucket_idx] |= (1ULL << sack_bitmap_idx_in_bucket);
 

@@ -420,7 +420,7 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
 
   auto tcp_endpoint = conn->engine->endpoint->get_endpoint();
   if (!tcp_endpoint) {
-    LOG(ERROR) << "Failed to get TCP endpoint for notification";
+    LOG(ERROR, P2P) << "Failed to get TCP endpoint for notification";
     return -1;
   }
 

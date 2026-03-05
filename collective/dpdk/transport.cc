@@ -3,8 +3,8 @@
 #include "ipv4.h"
 #include "packet.h"
 #include "udp.h"
+#include "util/debug.h"
 #include "util/util.h"
-#include <glog/logging.h>
 #include <cstdint>
 #include <set>
 
@@ -17,7 +17,8 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
           << " oldest_unacked_msgbuf_ " << oldest_unacked_msgbuf_;
   DCHECK_LE(num_acked_pkts, num_tracked_msgbufs_);
   while (num_acked_pkts) {
-    // LOG(INFO) << "receive_acks: " << "\n\tnum_acked_pkts " << num_acked_pkts
+    // LOG(INFO, DPDK) << "receive_acks: " << "\n\tnum_acked_pkts " <<
+    // num_acked_pkts
     //           << "\n\tnum_unacked_msgbufs_ " << num_unacked_msgbufs_
     //           << "\n\tnum_unsent_msgbufs_ " << num_unsent_msgbufs_
     //           << "\n\toldest_unacked_msgbuf_ " << oldest_unacked_msgbuf_
@@ -43,7 +44,7 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
     // }
 
     if (msgbuf->is_last()) {
-      // LOG(INFO) << "Transmitted a complete message";
+      // LOG(INFO, DPDK) << "Transmitted a complete message";
       // Tx a full message; wakeup app thread waiting on endpoint.
       DCHECK(!poll_ctxs_.empty());
       auto poll_ctx = poll_ctxs_.front();
@@ -151,7 +152,7 @@ std::optional<PacketBuf*> TXTracking::get_and_update_oldest_unsent() {
   num_unacked_msgbufs_++;
   num_unsent_msgbufs_--;
 
-  // LOG(INFO) << "get_and_update_oldest_unsent: num_unacked_msgbufs_ "
+  // LOG(INFO, DPDK) << "get_and_update_oldest_unsent: num_unacked_msgbufs_ "
   //           << num_unacked_msgbufs_ << " num_unsent_msgbufs_ "
   //           << num_unsent_msgbufs_ << " oldest_unacked_msgbuf_ "
   //           << oldest_unacked_msgbuf_ << " newest_unacked_msgbuf_ "
@@ -172,11 +173,13 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb* pcb, Packet* pkt) {
   auto const seqno = ucclh->seqno.value();
   auto const expected_seqno = pcb->rcv_nxt;
 
-  //   LOG(INFO) << "Received packet: " << seqno << " < " << expected_seqno;
+  //   LOG(INFO, DPDK) << "Received packet: " << seqno << " < " <<
+  //   expected_seqno;
 
   if (swift::seqno_lt(seqno, expected_seqno)) {
     // VLOG(3) << "Received old packet: " << seqno << " < " << expected_seqno;
-    // LOG(INFO) << "Received old packet: " << seqno << " < " << expected_seqno;
+    // LOG(INFO, DPDK) << "Received old packet: " << seqno << " < " <<
+    // expected_seqno;
     socket_->push_packet(pkt);
     return kOldPkt;
   }
@@ -185,7 +188,8 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb* pcb, Packet* pkt) {
   if (distance >= kReassemblyMaxSeqnoDistance) {
     // VLOG(3) << "Packet too far ahead. Dropping as we can't handle SACK. "
     //         << "seqno: " << seqno << ", expected: " << expected_seqno;
-    // LOG(INFO) << "Packet too far ahead. Dropping as we can't handle SACK. "
+    // LOG(INFO, DPDK) << "Packet too far ahead. Dropping as we can't handle
+    // SACK. "
     //           << "seqno: " << seqno << ", expected: " << expected_seqno;
     socket_->push_packet(pkt);
     return kOOOUntrackable;
@@ -197,7 +201,7 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb* pcb, Packet* pkt) {
     it = reass_q_.lower_bound(seqno);
     if (it != reass_q_.end() && it->first == seqno) {
       //   VLOG(3) << "Received duplicate packet: " << seqno;
-      // LOG(INFO) << "Received duplicate packet: " << seqno;
+      // LOG(INFO, DPDK) << "Received duplicate packet: " << seqno;
       // Duplicate packet. Drop it.
       socket_->push_packet(pkt);
       return kOOOTrackableDup;
@@ -205,13 +209,13 @@ RXTracking::ConsumeRet RXTracking::consume(swift::Pcb* pcb, Packet* pkt) {
     // VLOG(3) << "Received OOO trackable packet: " << seqno
     //         << " payload_len: " << frame_len - kNetHdrLen - kUcclHdrLen
     //         << " reass_q size " << reass_q_.size();
-    // LOG(INFO) << "Received OOO trackable packet: " << seqno
+    // LOG(INFO, DPDK) << "Received OOO trackable packet: " << seqno
     //           << " payload_len: " << frame_len - kNetHdrLen - kUcclHdrLen
     //           << " reass_q size " << reass_q_.size();
   } else {
     // VLOG(3) << "Received expected packet: " << seqno
     //         << " payload_len: " << frame_len - kNetHdrLen - kUcclHdrLen;
-    // LOG(INFO) << "Received expected packet: " << seqno
+    // LOG(INFO, DPDK) << "Received expected packet: " << seqno
     //           << " payload_len: " << frame_len - kNetHdrLen - kUcclHdrLen;
   }
 
@@ -345,7 +349,7 @@ void UcclFlow::rx_messages() {
       case UcclPktHdr::UcclFlags::kData:
         // Data packet, process the payload. The frame will be freed
         // once the engine copies the payload into app buffer
-        // LOG(INFO) << "Received data packet: " << ucclh->seqno.value();
+        // LOG(INFO, DPDK) << "Received data packet: " << ucclh->seqno.value();
         rx_tracking_.consume(&pcb_, pkt);
         num_data_frames_recvd++;
         // Sender's dst_port selection are symmetric.
@@ -366,7 +370,7 @@ void UcclFlow::rx_messages() {
         break;
       case UcclPktHdr::UcclFlags::kRssProbeRsp:
         // RSS probing rsp packet, ignore.
-        LOG_EVERY_N(INFO, 10000)
+        LOG_EVERY_N(INFO, DPDK, 10000)
             << "[Flow] RSS probing rsp packet received, ignoring...";
         socket_->push_packet(pkt);
         break;
@@ -378,7 +382,7 @@ void UcclFlow::rx_messages() {
   pending_rx_frames_.clear();
 
   // Send one ack for a bunch of received packets.
-  //   LOG(INFO) << "num_data_frames_recvd: " << num_data_frames_recvd;
+  //   LOG(INFO, DPDK) << "num_data_frames_recvd: " << num_data_frames_recvd;
 
   if (num_data_frames_recvd) {
     // Avoiding client sending too much packet which would empty msgbuf.
@@ -388,7 +392,7 @@ void UcclFlow::rx_messages() {
       auto dst_port_reverse =
           received_rtt_probe ? dst_port_rtt_probe : dst_port;
 
-      // LOG(INFO) << "Sending ACK packet: " << pcb_.seqno() << " "
+      // LOG(INFO, DPDK) << "Sending ACK packet: " << pcb_.seqno() << " "
       //           << pcb_.ackno();
 
       Packet* ack_pkt =
@@ -475,16 +479,17 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
       reinterpret_cast<uint8_t const*>(ucclh) + kUcclHdrLen);
   auto ackno = ucclh->ackno.value();
 
-  // LOG(INFO) << "process_ack: " << ackno << " snd_una: " << pcb_.snd_una;
+  // LOG(INFO, DPDK) << "process_ack: " << ackno << " snd_una: " <<
+  // pcb_.snd_una;
 
   if (swift::seqno_lt(ackno, pcb_.snd_una)) {
     VLOG(3) << "Received old ACK " << ackno;
-    // LOG(INFO) << "Received old ACK " << ackno;
+    // LOG(INFO, DPDK) << "Received old ACK " << ackno;
     return;
   } else if (swift::seqno_eq(ackno, pcb_.snd_una)) {
     VLOG(3) << "Received duplicate ACK " << ackno;
-    // LOG(INFO) << "Received duplicate ACK " << ackno;
-    // LOG(INFO) << "Received duplicate ACK " << ackno
+    // LOG(INFO, DPDK) << "Received duplicate ACK " << ackno;
+    // LOG(INFO, DPDK) << "Received duplicate ACK " << ackno
     //           << " seqno: " << pcb_.snd_una;
     // Duplicate ACK.
     pcb_.duplicate_acks++;
@@ -509,7 +514,7 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
       auto* msgbuf = tx_tracking_.get_oldest_unacked_msgbuf();
       VLOG(2) << "Fast recovery " << ackno << " sack_bitmap_count "
               << sack_bitmap_count;
-      // LOG(INFO) << "Fast recovery " << ackno << " sack_bitmap_count "
+      // LOG(INFO, DPDK) << "Fast recovery " << ackno << " sack_bitmap_count "
       //           << sack_bitmap_count;
       // Avoid sending too many packets.
 
@@ -540,8 +545,8 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
           auto seqno = pcb_.snd_una + index;
 
           VLOG(2) << "Fast recovery retransmitting " << seqno;
-          // LOG(INFO) << "Fast recovery retransmitting " << seqno << " msgbuf
-          // seqno: " << msgbuf->get_seqno(); auto const* missing_ucclh =
+          // LOG(INFO, DPDK) << "Fast recovery retransmitting " << seqno << "
+          // msgbuf seqno: " << msgbuf->get_seqno(); auto const* missing_ucclh =
           // reinterpret_cast<UcclPktHdr const*>(
           //     msgbuf->get_pkt_addr() + kNetHdrLen);
           // TODO(yang): tmp fix---they should be equal, need to
@@ -554,7 +559,8 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
             set_path_id(seqno, path_id);
 #endif
             // Nelson: re-allocated packet and restore the payload.
-            // LOG(INFO) << "process ack: " << socket_->avail_packets() << " "
+            // LOG(INFO, DPDK) << "process ack: " << socket_->avail_packets() <<
+            // " "
             //           << socket_->in_use_packets();
             prepare_retransmission_payload(msgbuf);
             prepare_datapacket(msgbuf, path_id, seqno,
@@ -573,7 +579,7 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
       if (!missing_frames_.empty()) {
         VLOG(2) << "Fast recovery retransmitting " << missing_frames_.size()
                 << " missing packets";
-        // LOG(INFO) << "Fast recovery retransmitting " <<
+        // LOG(INFO, DPDK) << "Fast recovery retransmitting " <<
         // missing_frames_.size()
         //           << " missing packets";
         // TODO(yang): handling the cases where the number of
@@ -584,10 +590,10 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
     }
   } else if (swift::seqno_gt(ackno, pcb_.snd_nxt)) {
     VLOG(3) << "Received ACK for untransmitted data.";
-    // LOG(INFO) << "Received ACK for untransmitted data.";
+    // LOG(INFO, DPDK) << "Received ACK for untransmitted data.";
   } else {
     VLOG(3) << "Received valid ACK " << ackno;
-    // LOG(INFO) << "Received valid ACK " << ackno;
+    // LOG(INFO, DPDK) << "Received valid ACK " << ackno;
     // This is a valid ACK, acknowledging new data.
     size_t num_acked_packets = ackno - pcb_.snd_una;
     tx_tracking_.receive_acks(num_acked_packets);
@@ -643,7 +649,7 @@ void UcclFlow::fast_retransmit() {
     set_path_id(seqno, path_id);
 #endif
     // Nelson: re-allocated packet and restore the payload.
-    // LOG(INFO) << "fast_retransmit: " << socket_->avail_packets() << " "
+    // LOG(INFO, DPDK) << "fast_retransmit: " << socket_->avail_packets() << " "
     //           << socket_->in_use_packets() << " seqno: " << seqno;
     prepare_retransmission_payload(msgbuf);
     prepare_datapacket(msgbuf, path_id, seqno, UcclPktHdr::UcclFlags::kData);
@@ -651,7 +657,7 @@ void UcclFlow::fast_retransmit() {
         msgbuf->get_pkt_addr() + kNetHdrLen);
     DCHECK_EQ(seqno, ucclh->seqno.value());
     msgbuf->mark_not_txpulltime_free();
-    // LOG(INFO) << "fast_retransmit msgbuf: " << msgbuf
+    // LOG(INFO, DPDK) << "fast_retransmit msgbuf: " << msgbuf
     //           << " packet: " << msgbuf->get_pkt();
     socket_->send_packet(msgbuf->pop_pkt());
     pcb_.add_to_rto_wheel(msgbuf, seqno);
@@ -678,7 +684,7 @@ void UcclFlow::rto_retransmit(PacketBuf* msgbuf, uint32_t seqno) {
   set_path_id(seqno, path_id);
 #endif
   // Nelson: re-allocated packet and restore the payload.
-  // LOG(INFO) << "rto_retransmit: " << socket_->avail_packets() << " "
+  // LOG(INFO, DPDK) << "rto_retransmit: " << socket_->avail_packets() << " "
   //           << socket_->in_use_packets() << " seqno: " << seqno;
   prepare_retransmission_payload(msgbuf);
   prepare_datapacket(msgbuf, path_id, seqno, UcclPktHdr::UcclFlags::kData);
@@ -735,11 +741,11 @@ void UcclFlow::transmit_pending_packets() {
   // transmit_tries++;
   // if (permitted_packets != 0) transmit_success++;
   // if (transmit_tries % 10000 == 0) {
-  //     LOG(INFO) << "transmitting success rate: "
+  //     LOG(INFO, DPDK) << "transmitting success rate: "
   //               << (double)transmit_success / transmit_tries;
   // }
 
-  // LOG_EVERY_N(INFO, 10000)
+  // LOG_EVERY_N(INFO, DPDK, 10000)
   //     << "permitted_packets " << permitted_packets << " num_unacked_pkts "
   //     << num_unacked_pkts << " txq_free_entries " << txq_free_entries
   //     << " num_unsent_pkts " << tx_tracking_.num_unsent_msgbufs()
@@ -803,7 +809,7 @@ void UcclFlow::transmit_pending_packets() {
     prepare_retransmission_payload(msgbuf);
     prepare_datapacket(msgbuf, path_id, seqno, net_flags);
 
-    // LOG(INFO) << "Transmitting seqno: " << seqno
+    // LOG(INFO, DPDK) << "Transmitting seqno: " << seqno
     //           << " Packet: " << msgbuf->get_pkt();
 
     msgbuf->mark_not_txpulltime_free();
@@ -850,7 +856,7 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
 
     auto now_tsc = rdtsc();
 
-    // LOG(INFO) << "deserialize_and_append_to_txtracking [" << i
+    // LOG(INFO, DPDK) << "deserialize_and_append_to_txtracking [" << i
     //           << "] cur_msgbuf: " << cur_msgbuf;
 
     uint32_t j = 0;
@@ -858,7 +864,7 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
       // The flow will free these Tx frames when receiving ACKs.
       // cur_msgbuf->mark_not_txpulltime_free();
 
-      // LOG(INFO) << "deserialize_and_append_to_txtracking [" << j << "]
+      // LOG(INFO, DPDK) << "deserialize_and_append_to_txtracking [" << j << "]
       // cur_msgbuf: " << cur_msgbuf << " " << " next: " << cur_msgbuf->next();
 
       if (remaining_bytes == tx_work.len) cur_msgbuf->mark_first();
@@ -887,7 +893,8 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
         cur_msgbuf->mark_last();
       }
 
-      // LOG(INFO) << "deserialize_and_append_to_txtracking [" << i << "][" << j
+      // LOG(INFO, DPDK) << "deserialize_and_append_to_txtracking [" << i <<
+      // "][" << j
       //           << "] cur_msgbuf: " << cur_msgbuf << " "
       //           << " next: " << cur_msgbuf->next()
       //           << " payload_len: " << payload_len
@@ -906,14 +913,14 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
 
     tx_msgbuf_tail->set_next(nullptr);
 
-    // LOG_EVERY_N(INFO, 10000)
+    // LOG_EVERY_N(INFO, DPDK, 10000)
     //     << "deser unsent_msgbufs " << tx_tracking_.num_unsent_msgbufs()
     //     << " deser_budget " << deser_budget << " pending_tx_msgs "
     //     << pending_tx_msgs_.size() << " successfully added to timingwheel "
     //     << num_tx_frames << " tx_tracking poll_ctxs "
     //     << tx_tracking_.poll_ctxs_.size();
 
-    // LOG(INFO) << "deserialize_and_append_to_txtracking [" << i
+    // LOG(INFO, DPDK) << "deserialize_and_append_to_txtracking [" << i
     //           << "] remaining_bytes: " << remaining_bytes;
 
     if (remaining_bytes == 0) {
@@ -1071,7 +1078,8 @@ Packet* UcclFlow::craft_ackpacket(uint32_t path_id, uint16_t dst_port,
 
 Packet* UcclFlow::craft_rssprobe_packet(uint16_t dst_port) {
   size_t const kRssProbePayloadBytes = kUcclHdrLen;
-  // LOG(INFO) << "craft_rssprobe_packet: " << socket_->avail_packets() << " "
+  // LOG(INFO, DPDK) << "craft_rssprobe_packet: " << socket_->avail_packets() <<
+  // " "
   //           << socket_->in_use_packets();
   auto pkt = socket_->pop_packet(kNetHdrLen + kRssProbePayloadBytes);
   // auto msgbuf = PacketBuf::Create(pkt);
@@ -1151,7 +1159,7 @@ void UcclEngine::run() {
     uint32_t rcvd = socket_->recv_packets(pkts, RECV_BATCH_SIZE);
 
     if (rcvd) {
-      // LOG(INFO) << "rcvd: " << rcvd;
+      // LOG(INFO, DPDK) << "rcvd: " << rcvd;
       process_rx_msg(pkts, rcvd);
     }
 
@@ -1162,7 +1170,7 @@ void UcclEngine::run() {
       tx_deser_work.poll_ctx->read_barrier();
 
       VLOG(3) << "Tx deser jring dequeue";
-      // LOG(INFO) << "Tx deser jring dequeue flow_id: " <<
+      // LOG(INFO, DPDK) << "Tx deser jring dequeue flow_id: " <<
       // tx_deser_work.flow_id;
       active_flows_map_[tx_deser_work.flow_id]->tx_messages(tx_deser_work);
     }
@@ -1199,9 +1207,10 @@ void UcclEngine::deser_th_func(std::vector<UcclEngine*> engines) {
         // Make data written by the app thread visible to the deser
         // thread.
         tx_deser_work.poll_ctx->read_barrier();
-        // LOG(INFO) << "Tx jring dequeue";
+        // LOG(INFO, DPDK) << "Tx jring dequeue";
         VLOG(3) << "Tx jring dequeue";
-        // LOG(INFO) << "Tx jring dequeue flow_id: " << tx_deser_work.flow_id;
+        // LOG(INFO, DPDK) << "Tx jring dequeue flow_id: " <<
+        // tx_deser_work.flow_id;
 
         // deser tx_work into a framebuf chain, then pass to deser_th.
         PacketBuf* deser_msgs_head = nullptr;
@@ -1214,7 +1223,7 @@ void UcclEngine::deser_th_func(std::vector<UcclEngine*> engines) {
         while (remaining_bytes > 0) {
           auto payload_len = std::min(
               remaining_bytes, (size_t)DPDK_MTU - kNetHdrLen - kUcclHdrLen);
-          // LOG(INFO) << "deser_th_func: [" << i << "] " <<
+          // LOG(INFO, DPDK) << "deser_th_func: [" << i << "] " <<
           // engine->socket_->avail_packets() << " " <<
           // engine->socket_->in_use_packets();
           // auto pkt = engine->socket_->pop_packet(payload_len + kNetHdrLen +
@@ -1243,7 +1252,7 @@ void UcclEngine::deser_th_func(std::vector<UcclEngine*> engines) {
             deser_msgs_tail = msgbuf;
           }
 
-          // LOG(INFO) << "deser_th_func [" << i << "] msgbuf: " << msgbuf
+          // LOG(INFO, DPDK) << "deser_th_func [" << i << "] msgbuf: " << msgbuf
           //           << " payload_len: " << payload_len
           //           << " packet: " << msgbuf->get_pkt()
           //           << " packet_len: " << msgbuf->get_packet_len()
@@ -1263,7 +1272,7 @@ void UcclEngine::deser_th_func(std::vector<UcclEngine*> engines) {
         // thread.
         rx_deser_work.poll_ctx->read_barrier();
         VLOG(3) << "Rx ser jring dequeue";
-        // LOG(INFO) << "Rx ser jring dequeue flow_id: " <<
+        // LOG(INFO, DPDK) << "Rx ser jring dequeue flow_id: " <<
         // rx_deser_work.flow_id;
 
         PacketBuf* ready_msg = rx_deser_work.deser_msgs;
@@ -1283,7 +1292,7 @@ void UcclEngine::deser_th_func(std::vector<UcclEngine*> engines) {
 
           // auto const* ucclh =
           //     reinterpret_cast<UcclPktHdr const*>(pkt_addr + kNetHdrLen);
-          // LOG(INFO) << "payload_len: " << payload_len << " seqno: " <<
+          // LOG(INFO, DPDK) << "payload_len: " << payload_len << " seqno: " <<
           // std::dec
           //         << ucclh->seqno.value();
 #ifndef EMULATE_ZC
@@ -1303,7 +1312,7 @@ void UcclEngine::deser_th_func(std::vector<UcclEngine*> engines) {
               poll_ctx->done = true;
               poll_ctx->cv.notify_one();
             }
-            // LOG(INFO) << "Received a complete message " << cur_offset
+            // LOG(INFO, DPDK) << "Received a complete message " << cur_offset
             //           << " bytes";
           }
 
@@ -1351,12 +1360,12 @@ void UcclEngine::process_rx_msg(Packet** pkts, uint32_t rcvd) {
 
     auto it = active_flows_map_.find(flow_id);
     if (it == active_flows_map_.end()) {
-      LOG_EVERY_N(ERROR, 1000000)
+      LOG_EVERY_N(ERROR, DPDK, 1000000)
           << "process_rx_msg unknown flow " << std::hex << "0x" << flow_id
           << " engine_id " << local_engine_idx_ << " pkt->engine_id "
           << (int)ucclh->engine_id;
       for (auto [flow_id, flow] : active_flows_map_) {
-        LOG_EVERY_N(ERROR, 1000000)
+        LOG_EVERY_N(ERROR, DPDK, 1000000)
             << "                active flow " << std::hex << "0x" << flow_id;
       }
       socket_->push_packet(pkt);
@@ -1401,7 +1410,8 @@ void UcclEngine::process_ctl_reqs() {
 }
 
 void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
-  LOG(INFO) << "[Engine] handle_install_flow_on_engine " << local_engine_idx_;
+  LOG(INFO, DPDK) << "[Engine] handle_install_flow_on_engine "
+                  << local_engine_idx_;
   int ret;
   std::string local_ip_str = ip_to_str(htonl(local_addr_));
   auto flow_id = ctrl_work.flow_id;
@@ -1418,7 +1428,7 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
   std::tie(std::ignore, ret) = active_flows_map_.insert({flow_id, flow});
   DCHECK(ret);
 
-  LOG(INFO) << "[Engine] start RSS probing";
+  LOG(INFO, DPDK) << "[Engine] start RSS probing";
 
   // RSS probing to get a list of dst_port matching remote engine queue and,
   // reversely, matching local engine queue. Basically, symmetric dst_ports.
@@ -1430,7 +1440,7 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
     uint16_t dst_port = i;
     uint32_t sent = socket_->send_packet(flow->craft_rssprobe_packet(dst_port));
 
-    // LOG(INFO) << "dst_port: " << dst_port << " sent: " << sent;
+    // LOG(INFO, DPDK) << "dst_port: " << dst_port << " sent: " << sent;
 
     if (!sent) {
       VLOG(3) << "[Engine] failed to send RSS probe packet to port "
@@ -1485,8 +1495,8 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
 
   delete[] pkts;
 
-  LOG(INFO) << "[Engine] handle_install_flow_on_engine dst_ports size: "
-            << dst_ports_set.size();
+  LOG(INFO, DPDK) << "[Engine] handle_install_flow_on_engine dst_ports size: "
+                  << dst_ports_set.size();
   DCHECK_GE(dst_ports_set.size(), kMaxPath);
 
   flow->dst_ports_.reserve(kMaxPath);
@@ -1494,9 +1504,10 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
   std::advance(it, kMaxPath);
   std::copy(dst_ports_set.begin(), it, std::back_inserter(flow->dst_ports_));
 
-  LOG(INFO) << "[Engine] install FlowID " << std::hex << "0x" << flow_id << ": "
-            << local_ip_str << Format("(%d)", local_engine_idx_) << " <-> "
-            << remote_ip_str << Format("(%d)", remote_engine_idx);
+  LOG(INFO, DPDK) << "[Engine] install FlowID " << std::hex << "0x" << flow_id
+                  << ": " << local_ip_str << Format("(%d)", local_engine_idx_)
+                  << " <-> " << remote_ip_str
+                  << Format("(%d)", remote_engine_idx);
 
   // Wakeup app thread waiting on endpoint.
   {
@@ -1527,21 +1538,21 @@ Endpoint::Endpoint(uint16_t port_id, int num_queues, int engine_cpu_start,
       num_queues_(num_queues),
       stats_thread_([this]() { stats_thread_fn(); }),
       dpdk_factory_(port_id, num_queues, num_queues) {
-  LOG(INFO) << "Creating DPDKFactory";
+  LOG(INFO, DPDK) << "Creating DPDKFactory";
   // Create UDS socket and get umem_fd and xsk_ids.
   dpdk_factory_.Init();
 
   CHECK_LE(num_queues, NUM_CPUS / 4)
       << "num_queues should be less than or equal to the number of CPUs / 4";
 
-  LOG(INFO) << "Creating Channels";
+  LOG(INFO, DPDK) << "Creating Channels";
 
   // Create multiple engines, each got its xsk and umem from the
   // daemon. Each engine has its own thread and channel to let the endpoint
   // communicate with.
   for (int i = 0; i < num_queues; i++) channel_vec_[i] = new Channel();
 
-  LOG(INFO) << "Creating Engines";
+  LOG(INFO, DPDK) << "Creating Engines";
 
   std::vector<std::future<std::unique_ptr<UcclEngine>>> engine_futures;
   for (int i = 0; i < num_queues; i++) {
@@ -1554,8 +1565,8 @@ Endpoint::Endpoint(uint16_t port_id, int num_queues, int engine_cpu_start,
         [this, num_queues, i, engine_th_cpuid = engine_cpu_start + i,
          engine_promise = std::move(engine_promise)]() mutable {
           pin_thread_to_cpu(engine_th_cpuid);
-          LOG(INFO) << "[Engine] thread " << i << " running on CPU "
-                    << engine_th_cpuid;
+          LOG(INFO, DPDK) << "[Engine] thread " << i << " running on CPU "
+                          << engine_th_cpuid;
 
           auto engine = std::make_unique<UcclEngine>(
               i, channel_vec_[i], dpdk_factory_.CreateSocket(i), local_ip_str_,
@@ -1579,8 +1590,8 @@ Endpoint::Endpoint(uint16_t port_id, int num_queues, int engine_cpu_start,
         [i, deser_th_cpuid = engine_cpu_start + num_queues + i,
          engines = std::vector<UcclEngine*>{engines[i]}]() {
           pin_thread_to_cpu(deser_th_cpuid);
-          LOG(INFO) << "[Engine] deser thread " << i << " running on CPU "
-                    << deser_th_cpuid;
+          LOG(INFO, DPDK) << "[Engine] deser thread " << i << " running on CPU "
+                          << deser_th_cpuid;
           UcclEngine::deser_th_func(engines);
         }));
   }
@@ -1611,7 +1622,8 @@ Endpoint::Endpoint(uint16_t port_id, int num_queues, int engine_cpu_start,
       << "ERROR: binding";
 
   DCHECK(!listen(listen_fd_, 128)) << "ERROR: listen";
-  LOG(INFO) << "[Endpoint] server ready, listening on port " << kBootstrapPort;
+  LOG(INFO, DPDK) << "[Endpoint] server ready, listening on port "
+                  << kBootstrapPort;
 }
 
 Endpoint::~Endpoint() {
@@ -1669,13 +1681,13 @@ ConnID Endpoint::uccl_connect(std::string bootstrap_remote_ip,
   localaddr.sin_addr.s_addr = str_to_ip(bootstrap_local_ip.c_str());
   bind(bootstrap_fd, (sockaddr*)&localaddr, sizeof(localaddr));
 
-  LOG(INFO) << "[Endpoint] connecting to " << bootstrap_remote_ip << ":"
-            << kBootstrapPort;
+  LOG(INFO, DPDK) << "[Endpoint] connecting to " << bootstrap_remote_ip << ":"
+                  << kBootstrapPort;
 
   // Connect and set nonblocking and nodelay
   while (
       connect(bootstrap_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr))) {
-    LOG(INFO) << "[Endpoint] connecting... Make sure the server is up.";
+    LOG(INFO, DPDK) << "[Endpoint] connecting... Make sure the server is up.";
     sleep(1);
   }
 
@@ -1689,8 +1701,8 @@ ConnID Endpoint::uccl_connect(std::string bootstrap_remote_ip,
   while (true) {
     int ret = receive_message(bootstrap_fd, &flow_id, sizeof(FlowID));
     DCHECK(ret == sizeof(FlowID));
-    LOG(INFO) << "[Endpoint] connect: receive proposed FlowID: " << std::hex
-              << "0x" << flow_id;
+    LOG(INFO, DPDK) << "[Endpoint] connect: receive proposed FlowID: "
+                    << std::hex << "0x" << flow_id;
 
     // Check if the flow ID is unique, and return it to the server.
     bool unique;
@@ -1715,7 +1727,7 @@ ConnID Endpoint::uccl_connect(std::string bootstrap_remote_ip,
   DCHECK(ret == sizeof(remote_ip_int));
   std::string remote_ip = ip_to_str(remote_ip_int);
 
-  LOG(INFO) << "[Endpoint] remote IP: " << remote_ip;
+  LOG(INFO, DPDK) << "[Endpoint] remote IP: " << remote_ip;
 
   // while (true);
 
@@ -1736,8 +1748,8 @@ ConnID Endpoint::uccl_accept() {
   DCHECK(bootstrap_fd >= 0);
   std::string client_ip = ip_to_str(cli_addr.sin_addr.s_addr);
 
-  LOG(INFO) << "[Endpoint] accept from " << client_ip << ":"
-            << cli_addr.sin_port;
+  LOG(INFO, DPDK) << "[Endpoint] accept from " << client_ip << ":"
+                  << cli_addr.sin_port;
 
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
@@ -1761,8 +1773,8 @@ ConnID Endpoint::uccl_accept() {
       }
     }
 
-    LOG(INFO) << "[Endpoint] accept: propose FlowID: " << std::hex << "0x"
-              << flow_id;
+    LOG(INFO, DPDK) << "[Endpoint] accept: propose FlowID: " << std::hex << "0x"
+                    << flow_id;
 
     // Ask client if this is unique
     int ret = send_message(bootstrap_fd, &flow_id, sizeof(FlowID));
@@ -1790,7 +1802,7 @@ ConnID Endpoint::uccl_accept() {
   DCHECK(ret == sizeof(local_ip_int));
 
   std::string remote_ip = ip_to_str(remote_ip_int);
-  LOG(INFO) << "[Endpoint] remote IP: " << remote_ip;
+  LOG(INFO, DPDK) << "[Endpoint] remote IP: " << remote_ip;
 
   // while (true);
 
@@ -1951,7 +1963,7 @@ void Endpoint::stats_thread_fn() {
     }
     if (cnt < engine_vec_.size())
       s += Format("\n\t\t... %d more engines", engine_vec_.size() - cnt);
-    LOG(INFO) << s;
+    LOG(INFO, DPDK) << s;
   }
 }
 

@@ -65,7 +65,7 @@ static void init_device_name_lists() {
         }
         if (ok && name) {
           g_efa_device_names.push_back(name);
-          LOG(INFO) << "Discovered EFA device " << name;
+          LOG(INFO, EFA) << "Discovered EFA device " << name;
         }
       }
       ibv_free_device_list(list);
@@ -81,7 +81,7 @@ static void init_device_name_lists() {
           if (std::find(g_ena_device_names.begin(), g_ena_device_names.end(),
                         ifa->ifa_name) == g_ena_device_names.end()) {
             g_ena_device_names.push_back(ifa->ifa_name);
-            LOG(INFO) << "Discovered ENA device " << ifa->ifa_name;
+            LOG(INFO, EFA) << "Discovered ENA device " << ifa->ifa_name;
           }
         }
       }
@@ -90,13 +90,13 @@ static void init_device_name_lists() {
   }
 
   if (g_efa_device_names.empty()) {
-    LOG(ERROR) << "No EFA devices discovered via environment variables or "
-                  "hardware enumeration";
+    LOG(ERROR, EFA) << "No EFA devices discovered via environment variables or "
+                       "hardware enumeration";
   }
 
   if (g_ena_device_names.empty()) {
-    LOG(ERROR) << "No ENA devices discovered via environment variables or "
-                  "hardware enumeration";
+    LOG(ERROR, EFA) << "No ENA devices discovered via environment variables or "
+                       "hardware enumeration";
   }
 }
 
@@ -160,8 +160,8 @@ void EFAFactory::InitDev(int dev_idx) {
     goto free_devices;
   }
   // DCHECK(i == (dev_idx / 2));
-  LOG(INFO) << "Found device: " << dev->ib_name << " at dev_idx " << i
-            << " with gid_idx " << (uint32_t)EFA_GID_IDX;
+  LOG(INFO, EFA) << "Found device: " << dev->ib_name << " at dev_idx " << i
+                 << " with gid_idx " << (uint32_t)EFA_GID_IDX;
 
   // Open the device.
   memset(&dev_attr, 0, sizeof(dev_attr));
@@ -304,7 +304,7 @@ struct EFADevice* EFAFactory::GetEFADevice(int dev_idx) {
     char hostname[256];
     gethostname(hostname, sizeof(hostname));
     oss << "(host: " << hostname << ")";
-    LOG(ERROR) << oss.str();
+    LOG(ERROR, EFA) << oss.str();
   }
 
   DCHECK(dev_iter != efa_ctl.dev_map.end());
@@ -324,8 +324,8 @@ void EFAFactory::Shutdown() {
 
 EFASocket::EFASocket(int gpu_idx, int dev_idx, int socket_idx)
     : gpu_idx_(gpu_idx), dev_idx_(dev_idx), socket_idx_(socket_idx) {
-  LOG(INFO) << "[EFA] creating gpu_idx " << gpu_idx << " dev_idx_ " << dev_idx_
-            << " socket_idx " << socket_idx;
+  LOG(INFO, EFA) << "[EFA] creating gpu_idx " << gpu_idx << " dev_idx_ "
+                 << dev_idx_ << " socket_idx " << socket_idx;
 
   memset(deficit_cnt_recv_wrs_, 0, sizeof(deficit_cnt_recv_wrs_));
   memset(deficit_cnt_recv_wrs_for_ctrl_, 0,
@@ -372,10 +372,10 @@ EFASocket::EFASocket(int gpu_idx, int dev_idx, int socket_idx)
                                                  PktDataBuffPool::kPktDataSize);
   DCHECK(cuda_ret == cudaSuccess) << "cudaMalloc failed";
 #endif
-  LOG(INFO) << "[EFA] gpu_idx " << gpu_idx << " pkt_data_buf_ " << std::hex
-            << pkt_data_buf_ << " to "
-            << pkt_data_buf_ +
-                   PktDataBuffPool::kNumPktData * PktDataBuffPool::kPktDataSize;
+  LOG(INFO, EFA) << "[EFA] gpu_idx " << gpu_idx << " pkt_data_buf_ " << std::hex
+                 << pkt_data_buf_ << " to "
+                 << pkt_data_buf_ + PktDataBuffPool::kNumPktData *
+                                        PktDataBuffPool::kPktDataSize;
 #ifdef MANAGED
   auto* pkt_data_mr_ =
       ibv_reg_mr(pd_, pkt_data_buf_,

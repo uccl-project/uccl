@@ -3,7 +3,7 @@
 
 #include "ether.h"
 #include "ipv4.h"
-#include <glog/logging.h>
+#include "util/debug.h"
 #include <cstdint>
 #include <rte_mbuf.h>
 

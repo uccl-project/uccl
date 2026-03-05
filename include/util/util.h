@@ -2,10 +2,10 @@
 #ifdef USE_CUDA
 #include "cuda_runtime.h"
 #endif
+#include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
 #include <arpa/inet.h>
-#include <glog/logging.h>
 #include <infiniband/verbs.h>
 #include <linux/in.h>
 #include <linux/tcp.h>
@@ -47,7 +47,7 @@ namespace uccl {
 #define UCCL_LOG_EP VLOG(2) << "[Endpoint] "
 #define UCCL_LOG_ENGINE VLOG(3) << "[Engine] "
 #define UCCL_LOG_IO VLOG(4) << "[IO] "
-#define UCCL_LOG_ERROR LOG(ERROR) << "[Error] "
+#define UCCL_LOG_ERROR LOG(ERROR, UTIL) << "[Error] "
 
 #define POISON_64 UINT64_MAX
 #define POISON_32 UINT32_MAX
@@ -547,7 +547,7 @@ static inline std::string FormatVarg(char const* fmt, va_list ap) {
 [[maybe_unused]] static inline std::string Format(char const* fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  const std::string s = FormatVarg(fmt, ap);
+  std::string const s = FormatVarg(fmt, ap);
   va_end(ap);
   return s;
 }
@@ -565,7 +565,7 @@ static inline jring_t* create_ring(size_t element_size, size_t element_count) {
   jring_t* ring = CHECK_NOTNULL(reinterpret_cast<jring_t*>(
       aligned_alloc(hardware_constructive_interference_size, ring_sz)));
   if (jring_init(ring, element_count, element_size, 1, 1) < 0) {
-    LOG(ERROR) << "Failed to initialize ring buffer";
+    LOG(ERROR, UTIL) << "Failed to initialize ring buffer";
     free(ring);
     exit(EXIT_FAILURE);
   }
@@ -928,7 +928,7 @@ static inline int open_ephemeral_port(uint16_t& assigned_port) {
 // Function to convert MAC string to hex char array
 static inline bool str_to_mac(std::string const& macStr, char mac[6]) {
   if (macStr.length() != 17) {
-    LOG(ERROR) << "Invalid MAC address format.";
+    LOG(ERROR, UTIL) << "Invalid MAC address format.";
     return false;
   }
 
@@ -941,7 +941,7 @@ static inline bool str_to_mac(std::string const& macStr, char mac[6]) {
     }
     return true;
   } else {
-    LOG(ERROR) << "Invalid MAC address format.";
+    LOG(ERROR, UTIL) << "Invalid MAC address format.";
     return false;
   }
 }
@@ -963,13 +963,13 @@ static inline std::string get_dev_mac(char const* dev_name) {
   std::string path = Format("/sys/class/net/%s/address", dev_name);
   std::ifstream file(path);
   if (!file.is_open()) {
-    LOG(ERROR) << "Failed to open " << path;
+    LOG(ERROR, UTIL) << "Failed to open " << path;
     return "";
   }
 
   std::string mac;
   if (!std::getline(file, mac)) {
-    LOG(ERROR) << "Failed to read " << path;
+    LOG(ERROR, UTIL) << "Failed to read " << path;
     return "";
   }
 
@@ -1147,11 +1147,12 @@ inline void checkMemoryLocation(void* ptr) {
 
   if (err == cudaSuccess) {
     if (attributes.type == cudaMemoryTypeDevice) {
-      LOG(INFO) << "Memory belongs to GPU " << attributes.device << std::endl;
+      LOG(INFO, UTIL) << "Memory belongs to GPU " << attributes.device
+                      << std::endl;
     } else if (attributes.type == cudaMemoryTypeHost) {
-      LOG(INFO) << "Memory is allocated on the Host (CPU)." << std::endl;
+      LOG(INFO, UTIL) << "Memory is allocated on the Host (CPU)." << std::endl;
     } else {
-      LOG(INFO) << "Unknown memory type." << std::endl;
+      LOG(INFO, UTIL) << "Unknown memory type." << std::endl;
     }
   } else {
     std::cerr << "Error: " << cudaGetErrorString(err) << std::endl;
@@ -1188,20 +1189,20 @@ inline int get_dev_numa_node(char const* dev_name) {
       Format("/sys/class/infiniband/%s/device/numa_node", dev_name);
   std::ifstream file(path);
   if (!file.is_open()) {
-    LOG(ERROR) << "Failed to open " << path;
+    LOG(ERROR, UTIL) << "Failed to open " << path;
     return -1;
   }
 
   std::string line;
   if (!std::getline(file, line)) {
-    LOG(ERROR) << "Failed to read " << path;
+    LOG(ERROR, UTIL) << "Failed to read " << path;
     return -1;
   }
 
   auto numa_node = std::stoi(line);
   if (numa_node == -1) {
-    LOG(WARNING) << "NUMA node is -1 for " << dev_name
-                 << ", defaulting to node 0";
+    LOG(WARNING, UTIL) << "NUMA node is -1 for " << dev_name
+                       << ", defaulting to node 0";
     numa_node = 0;
   }
   return numa_node;
@@ -1216,7 +1217,7 @@ static inline void pin_thread_to_cpu(int cpu) {
   CPU_SET(cpu, &cpuset);
 
   if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset)) {
-    LOG(ERROR) << "Failed to set thread affinity to CPU " << cpu;
+    LOG(ERROR, UTIL) << "Failed to set thread affinity to CPU " << cpu;
   }
 }
 
@@ -1225,7 +1226,7 @@ inline void pin_thread_to_numa(int numa_node) {
       Format("/sys/devices/system/node/node%d/cpulist", numa_node);
   std::ifstream cpumap_file(cpumap_path);
   if (!cpumap_file.is_open()) {
-    LOG(ERROR) << "Failed to open " << cpumap_path;
+    LOG(ERROR, UTIL) << "Failed to open " << cpumap_path;
     return;
   }
 
@@ -1255,7 +1256,8 @@ inline void pin_thread_to_numa(int numa_node) {
   }
 
   if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset)) {
-    LOG(ERROR) << "Failed to set thread affinity to NUMA node " << numa_node;
+    LOG(ERROR, UTIL) << "Failed to set thread affinity to NUMA node "
+                     << numa_node;
   }
 }
 
@@ -1263,7 +1265,7 @@ namespace fs = std::filesystem;
 
 static bool is_bdf(std::string const& s) {
   // Match full PCI BDF allowing hexadecimal digits
-  static const std::regex re(
+  static std::regex const re(
       R"([0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F])");
   return std::regex_match(s, re);
 }
@@ -1418,11 +1420,11 @@ static inline std::vector<fs::path> get_gpu_cards() {
   // 3) Fallbacks (only if needed): DRM class (cardX) or
   // /proc/driver/nvidia/gpus
   if (gpu_cards.empty()) {
-    const fs::path drm_class{"/sys/class/drm"};
-    const std::regex card_re(R"(card(\d+))");
+    fs::path const drm_class{"/sys/class/drm"};
+    std::regex const card_re(R"(card(\d+))");
     if (fs::exists(drm_class)) {
       for (auto const& entry : fs::directory_iterator(drm_class)) {
-        const std::string name = entry.path().filename().string();
+        std::string const name = entry.path().filename().string();
         std::smatch m;
         if (!std::regex_match(name, m, card_re)) continue;
         fs::path dev_path;
@@ -1443,7 +1445,7 @@ static inline std::vector<fs::path> get_gpu_cards() {
     }
 #ifndef __HIP_PLATFORM_AMD__
     if (gpu_cards.empty()) {
-      const fs::path nvidia_gpus{"/proc/driver/nvidia/gpus"};
+      fs::path const nvidia_gpus{"/proc/driver/nvidia/gpus"};
       if (fs::exists(nvidia_gpus)) {
         for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
           fs::path dev_path;

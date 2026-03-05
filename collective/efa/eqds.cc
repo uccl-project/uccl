@@ -1,7 +1,7 @@
 #include "eqds.h"
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util/list.h"
-#include <glog/logging.h>
 #include <infiniband/verbs.h>
 
 namespace uccl {
@@ -46,7 +46,7 @@ void EQDS::handle_pull_request(void) {
         std::atomic_thread_fence(std::memory_order_acquire);
         break;
       default:
-        LOG(ERROR) << "Unknown opcode: " << msg.opcode;
+        LOG(ERROR, EFA) << "Unknown opcode: " << msg.opcode;
         break;
     }
     if (++budget >= 16) break;
@@ -238,7 +238,7 @@ PullQuanta EQDSCC::compute_pull_target() {
   last_sent_pull_target_ = quantize_ceil(pull_target_bytes);
 
   // if (pull_ > 1040000) {
-  //     LOG_EVERY_N(INFO, 1) << pull_ << ", last_sent_pull_target_: " <<
+  //     LOG_EVERY_N(INFO, EFA, 1) << pull_ << ", last_sent_pull_target_: " <<
   //     last_sent_pull_target_;
   // }
 

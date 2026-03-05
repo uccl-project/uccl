@@ -2,11 +2,11 @@
 #include "eqds.h"
 #include "transport.h"
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util/net.h"
 #include "util/util.h"
 #include "util_rdma.h"
 #include "util_timer.h"
-#include <glog/logging.h>
 #include <infiniband/verbs.h>
 #include <algorithm>
 #include <cstdint>
@@ -46,15 +46,15 @@ int RDMAFactory::init_devs() {
   int num_ifs = find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
   if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");
   std::string oob_ip = get_dev_ip(uccl_ifname);
-  LOG(INFO) << "Using OOB interface " << std::string(uccl_ifname) << " with IP "
-            << oob_ip << " for connection setup";
+  LOG(INFO, RDMA) << "Using OOB interface " << std::string(uccl_ifname)
+                  << " with IP " << oob_ip << " for connection setup";
 
   // Use UCCL_XXX first, if not set, use NCCL_XXX
   char* ib_hca = getenv("UCCL_IB_HCA");
-  LOG(INFO) << "UCCL_IB_HCA: " << ib_hca;
+  LOG(INFO, RDMA) << "UCCL_IB_HCA: " << ib_hca;
   if (!ib_hca) {
     ib_hca = getenv("NCCL_IB_HCA");
-    LOG(INFO) << "NCCL_IB_HCA: " << ib_hca;
+    LOG(INFO, RDMA) << "NCCL_IB_HCA: " << ib_hca;
   }
 
   struct ib_dev user_ib_ifs[MAX_IB_DEVS];
@@ -457,7 +457,7 @@ uint64_t TXTracking::ack_transmitted_chunks(void* subflow_context,
       avg_turnaround_delay =
           (avg_turnaround_delay * count + turnaround_delay) / (count + 1);
     }
-    LOG_EVERY_N(INFO, 1000)
+    LOG_EVERY_N(INFO, RDMA, 1000)
         << "Turnaround delay: " << turnaround_delay
         << "us, Average turnaround delay: " << avg_turnaround_delay << "us";
   }

@@ -1,8 +1,8 @@
 #pragma once
 #include "common.h"
+#include "util/debug.h"
 #include "util/util.h"
 #include <arpa/inet.h>
-#include <glog/logging.h>
 #include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
 #include <netinet/in.h>
@@ -168,7 +168,7 @@ inline std::vector<MessageChunk> splitMessageToChunks(size_t message_size) {
 #define LOG_EVERY_N_ENDPOINT(severity, freq)             \
   static std::atomic<int> LOG_OCCURRENCES_##__LINE__(0); \
   if (++LOG_OCCURRENCES_##__LINE__ % (freq) == 0)        \
-  LOG(severity) << "[count=" << LOG_OCCURRENCES_##__LINE__ << "] "
+  LOG(severity, RDMA) << "[count=" << LOG_OCCURRENCES_##__LINE__ << "] "
 
 struct ChannelMetaData {
   uint32_t qpn;

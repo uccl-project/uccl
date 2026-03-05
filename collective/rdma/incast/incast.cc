@@ -1,10 +1,10 @@
 #include "transport.h"
 #include "transport_config.h"
 #include "util.h"
+#include "util/debug.h"
 #include "util/timer.h"
 #include <arpa/inet.h>
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <netinet/in.h>
 #include <cstring>
 #include <fstream>
@@ -34,7 +34,7 @@
 
 #define INCAST_BASE_LISTEN_PORT 16666
 
-#define MPI_LOG(level) LOG(level) << "Node:" << NODE_ID << " "
+#define MPI_LOG(level) LOG(level, RDMA) << "Node:" << NODE_ID << " "
 
 #define MAX_BUFFER_SIZE (16 * 1024 * 1024)
 #define PT_NET_CHUNK_SIZE (1024 * 1024)
@@ -909,7 +909,7 @@ void get_ips() {
 }
 
 int main(int argc, char** argv) {
-  google::InitGoogleLogging(argv[0]);
+  // google::InitGoogleLogging(argv[0]);
 
   signal(SIGINT, interrupt_handler);
 

@@ -1,7 +1,7 @@
 #include "../thirdparty/nccl-sg/src/include/nccl_net.h"
 #include "transport.h"
 #include "transport_config.h"
-#include <glog/logging.h>
+#include "util/debug.h"
 #include <atomic>
 #include <fstream>
 #include <iostream>
@@ -89,8 +89,8 @@ struct UcclSendComm {
 };
 
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
-  google::InitGoogleLogging("UCCL");
-  google::InstallFailureSignalHandler();
+  // google::InitGoogleLogging("UCCL");
+  // google::InstallFailureSignalHandler();
 
   int gpu;
   cudaGetDevice(&gpu);
@@ -116,7 +116,7 @@ ncclResult_t pluginPciPath(char const* ib_name, char** path) {
   snprintf(devicePath, 256, "/sys/class/infiniband/%s/device", ib_name);
   char* p = realpath(devicePath, NULL);
   if (p == NULL) {
-    LOG(ERROR) << "Could not find device path for " << ib_name;
+    LOG(ERROR, EFA) << "Could not find device path for " << ib_name;
     return ncclInternalError;
   }
   *path = p;
@@ -138,8 +138,9 @@ ncclResult_t pluginGetProperties(int pdev, ncclNetProperties_v8_t* props) {
 
   // Only used to detect NICs with multiple PCI attachments.
   props->guid = factory_dev->dev_attr.sys_image_guid + pdev;
-  LOG(INFO) << "pluginGetProperties dev " << pdev << " guid " << props->guid
-            << " name " << props->name << " pciPath " << props->pciPath;
+  LOG(INFO, EFA) << "pluginGetProperties dev " << pdev << " guid "
+                 << props->guid << " name " << props->name << " pciPath "
+                 << props->pciPath;
 
   props->ptrSupport = NCCL_PTR_HOST;
   if (factory_dev->dma_buf_support)
@@ -183,8 +184,8 @@ ncclResult_t pluginListen(int vdev, void* opaque_handle, void** listenComm) {
     vdev = gpu_idx;
   }
 
-  LOG(INFO) << "[pluginListen] pid=" << getpid() << ", using GPU " << gpu_idx
-            << ", vdev=" << vdev;
+  LOG(INFO, EFA) << "[pluginListen] pid=" << getpid() << ", using GPU "
+                 << gpu_idx << ", vdev=" << vdev;
 
   if (vdev != gpu_idx) {
     LOG_FIRST_N(INFO, 1) << "pluginListen detects different vdev " << vdev
@@ -217,9 +218,9 @@ ncclResult_t pluginListen(int vdev, void* opaque_handle, void** listenComm) {
   lcomm->listen_fd = listen_fd;
   *listenComm = lcomm;
 
-  LOG(INFO) << "pluginListen on vdev: " << vdev << " listen_port "
-            << listen_port << " listen_fd " << listen_fd << " gpu_idx "
-            << gpu_idx;
+  LOG(INFO, EFA) << "pluginListen on vdev: " << vdev << " listen_port "
+                 << listen_port << " listen_fd " << listen_fd << " gpu_idx "
+                 << gpu_idx;
 
   return ncclSuccess;
 }
@@ -249,9 +250,9 @@ ncclResult_t pluginConnect(int vdev, void* opaque_handle, void** sendComm,
       (struct UcclSendComm*)calloc(1, sizeof(struct UcclSendComm));
 
   if (handle->state == kConnInit) {
-    LOG(INFO) << "pluginConnect on vdev: " << vdev << " remote_ip_str "
-              << remote_ip_str << " dest_port " << handle->listen_port
-              << " gpu_idx " << gpu_idx;
+    LOG(INFO, EFA) << "pluginConnect on vdev: " << vdev << " remote_ip_str "
+                   << remote_ip_str << " dest_port " << handle->listen_port
+                   << " gpu_idx " << gpu_idx;
     handle->state = kConnConnecting;
     // Delegate connection to another thread.
     std::thread t = std::thread([vdev, handle, remote_ip_str] {
@@ -276,9 +277,9 @@ ncclResult_t pluginConnect(int vdev, void* opaque_handle, void** sendComm,
   }
 
   if (*sendComm) {
-    LOG(INFO) << Format("Connected to %s/%d on vdev %d with flow_id %lu\n",
-                        remote_ip_str.c_str(), handle->remote_vdev, vdev,
-                        scomm->base.conn_id.flow_id);
+    LOG(INFO, EFA) << Format("Connected to %s/%d on vdev %d with flow_id %lu\n",
+                             remote_ip_str.c_str(), handle->remote_vdev, vdev,
+                             scomm->base.conn_id.flow_id);
   }
 
   return ncclSuccess;
@@ -301,8 +302,8 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
     DCHECK(lcomm->vdev == gpu_idx)
         << "pluginAccept: vdev " << lcomm->vdev << " vs. gpu_idx " << gpu_idx;
     auto vdev = lcomm->vdev;
-    LOG(INFO) << "pluginAccept on vdev: " << vdev << " listen_fd "
-              << lcomm->listen_fd << " gpu_idx " << gpu_idx;
+    LOG(INFO, EFA) << "pluginAccept on vdev: " << vdev << " listen_fd "
+                   << lcomm->listen_fd << " gpu_idx " << gpu_idx;
     lcomm->state = kConnConnecting;
     // Delegate connection to another thread.
     std::thread t = std::thread([lcomm, vdev] {
@@ -333,9 +334,10 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
   }
 
   if (*recvComm) {
-    LOG(INFO) << Format("Accepted from %s/%d on vdev %d with flow_id %lu\n",
-                        rcomm->remote_ip_str.c_str(), rcomm->remote_vdev,
-                        lcomm->vdev, rcomm->base.conn_id.flow_id);
+    LOG(INFO, EFA) << Format(
+        "Accepted from %s/%d on vdev %d with flow_id %lu\n",
+        rcomm->remote_ip_str.c_str(), rcomm->remote_vdev, lcomm->vdev,
+        rcomm->base.conn_id.flow_id);
   }
 
   return ncclSuccess;
@@ -351,9 +353,9 @@ ncclResult_t pluginRegMr(void* collComm, void* data, size_t size, int type,
   auto vdev_idx = base->vdev;
   checkMemoryLocation(data);
 
-  LOG(INFO) << "pluginRegMr, size " << size << " flow_id "
-            << base->conn_id.flow_id << " vdev_idx " << vdev_idx << " data ptr "
-            << std::hex << data;
+  LOG(INFO, EFA) << "pluginRegMr, size " << size << " flow_id "
+                 << base->conn_id.flow_id << " vdev_idx " << vdev_idx
+                 << " data ptr " << std::hex << data;
   ret = ep->uccl_regmr(dev_idx, data, size, type, (struct Mhandle**)mhandle);
   reg_cnt++;
 
@@ -369,9 +371,9 @@ ncclResult_t pluginRegMrDmaBuf(void* collComm, void* data, size_t size,
   auto vdev_idx = base->vdev;
   checkMemoryLocation(data);
 
-  LOG(INFO) << "pluginRegMrDmaBuf, size " << size << " flow_id "
-            << base->conn_id.flow_id << " vdev_idx " << vdev_idx << " data ptr "
-            << std::hex << data;
+  LOG(INFO, EFA) << "pluginRegMrDmaBuf, size " << size << " flow_id "
+                 << base->conn_id.flow_id << " vdev_idx " << vdev_idx
+                 << " data ptr " << std::hex << data;
   ret = ep->uccl_regmr_dmabuf(dev_idx, data, size, type, offset, fd,
                               (struct Mhandle**)mhandle);
   reg_cnt++;
@@ -382,7 +384,7 @@ ncclResult_t pluginRegMrDmaBuf(void* collComm, void* data, size_t size,
 ncclResult_t pluginDeregMr(void* collComm, void* mhandle) {
   struct UcclBaseComm* base = (struct UcclBaseComm*)collComm;
   ep->uccl_deregmr((struct Mhandle*)mhandle);
-  LOG(INFO) << "pluginDeregMr, " << base->conn_id.flow_id;
+  LOG(INFO, EFA) << "pluginDeregMr, " << base->conn_id.flow_id;
   if (--reg_cnt == 0) delete ep;
   return ncclSuccess;
 }
@@ -411,7 +413,7 @@ ncclResult_t pluginIsend(void* sendComm, void* data, int size, int tag,
   req->req_pool = (void*)scomm->base.uccl_req_pool.get();
 
   *request = req;
-  // LOG(INFO) << "pluginIsend on size " << size;
+  // LOG(INFO, EFA) << "pluginIsend on size " << size;
 
   return ncclSuccess;
 }
@@ -552,7 +554,7 @@ ncclResult_t pluginCloseListen(void* listenComm) {
   return ncclSuccess;
 }
 
-volatile ncclNet_v8_t ncclNetPlugin_v8 = {
+ncclNet_v8_t volatile ncclNetPlugin_v8 = {
     .name = PLUGIN_NAME,
     .init = pluginInit,
     .devices = pluginDevices,

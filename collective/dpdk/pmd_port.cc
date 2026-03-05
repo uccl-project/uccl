@@ -11,15 +11,17 @@ namespace uccl {
                                                struct rte_eth_dev_info* devinfo,
                                                Ethernet::Address* lladdr) {
   if (!rte_eth_dev_is_valid_port(port_id)) {
-    LOG(INFO) << "Port id " << static_cast<int>(port_id) << " is not valid.";
+    LOG(INFO, DPDK) << "Port id " << static_cast<int>(port_id)
+                    << " is not valid.";
     return;
   }
 
   int ret = rte_eth_dev_info_get(port_id, devinfo);
   if (ret != 0) {
-    LOG(WARNING) << "rte_eth_dev_info() failed. Cannot retrieve eth device "
-                    "contextual info for port "
-                 << static_cast<int>(port_id);
+    LOG(WARNING, DPDK)
+        << "rte_eth_dev_info_get() failed. Cannot retrieve eth device "
+           "contextual info for port "
+        << static_cast<int>(port_id);
     return;
   }
   CHECK_NOTNULL(devinfo->device);
@@ -27,11 +29,11 @@ namespace uccl {
   rte_eth_macaddr_get(port_id,
                       reinterpret_cast<rte_ether_addr*>(lladdr->bytes));
 
-  LOG(INFO) << "[PMDPORT] [port_id: " << static_cast<uint32_t>(port_id)
-            << ", driver: " << devinfo->driver_name
-            << ", RXQ: " << devinfo->max_rx_queues
-            << ", TXQ: " << devinfo->max_tx_queues
-            << ", l2addr: " << lladdr->ToString() << "]";
+  LOG(INFO, DPDK) << "[PMDPORT] [port_id: " << static_cast<uint32_t>(port_id)
+                  << ", driver: " << devinfo->driver_name
+                  << ", RXQ: " << devinfo->max_rx_queues
+                  << ", TXQ: " << devinfo->max_tx_queues
+                  << ", l2addr: " << lladdr->ToString() << "]";
 }
 
 static rte_eth_conf DefaultEthConf(rte_eth_dev_info const* devinfo) {
@@ -69,7 +71,7 @@ static rte_eth_conf DefaultEthConf(rte_eth_dev_info const* devinfo) {
   if (!(tx_offload_capa & RTE_ETH_TX_OFFLOAD_IPV4_CKSUM) ||
       !(tx_offload_capa & RTE_ETH_TX_OFFLOAD_UDP_CKSUM)) {
     // Making this fatal; not sure what NIC does not support checksum offloads.
-    LOG(FATAL) << "Hardware does not support checksum offloads.";
+    LOG(FATAL, DPDK) << "Hardware does not support checksum offloads.";
   }
 
   port_conf.txmode.mq_mode = RTE_ETH_MQ_TX_NONE;
@@ -78,7 +80,7 @@ static rte_eth_conf DefaultEthConf(rte_eth_dev_info const* devinfo) {
 
   if (tx_offload_capa & RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE) {
     // TODO(ilias): Add option to the constructor to enable this offload.
-    LOG(WARNING)
+    LOG(WARNING, DPDK)
         << "Enabling FAST FREE: use always the same mempool for each queue.";
     port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
   }
@@ -106,13 +108,14 @@ void PmdPort::InitDriver(uint16_t mtu) {
     FetchDpdkPortInfo(port_id_, &devinfo_, &l2_addr_);
     device_ = devinfo_.device;
 
-    LOG(INFO) << "Rings nr: " << rx_rings_nr_;
+    LOG(INFO, DPDK) << "Rings nr: " << rx_rings_nr_;
     const rte_eth_conf portconf = DefaultEthConf(&devinfo_);
     int ret =
         rte_eth_dev_configure(port_id_, rx_rings_nr_, tx_rings_nr_, &portconf);
     if (ret != 0) {
-      LOG(FATAL) << "rte_eth_dev_configure() failed. Cannot configure port id: "
-                 << static_cast<int>(port_id_);
+      LOG(FATAL, DPDK)
+          << "rte_eth_dev_configure() failed. Cannot configure port id: "
+          << static_cast<int>(port_id_);
     }
 
     // Check if the MTU is set correctly.
@@ -122,9 +125,9 @@ void PmdPort::InitDriver(uint16_t mtu) {
       // If there is a mismatch, try to set the MTU.
       ret = rte_eth_dev_set_mtu(port_id_, mtu);
       if (ret != 0) {
-        LOG(FATAL) << "Failed to set MTU for port "
-                   << static_cast<int>(port_id_) << ". Error "
-                   << rte_strerror(ret);
+        LOG(FATAL, DPDK) << "Failed to set MTU for port "
+                         << static_cast<int>(port_id_) << ". Error "
+                         << rte_strerror(ret);
       }
     }
 
@@ -135,9 +138,9 @@ void PmdPort::InitDriver(uint16_t mtu) {
     rss_conf.rss_key_len = devinfo_.hash_key_size;
     ret = rte_eth_dev_rss_hash_conf_get(port_id_, &rss_conf);
     if (ret != 0) {
-      LOG(WARNING) << "Failed to get RSS configuration for port "
-                   << static_cast<int>(port_id_) << ". Error "
-                   << rte_strerror(ret);
+      LOG(WARNING, DPDK) << "Failed to get RSS configuration for port "
+                         << static_cast<int>(port_id_) << ". Error "
+                         << rte_strerror(ret);
     }
 
     rss_reta_conf_.resize(devinfo_.reta_size / RTE_ETH_RETA_GROUP_SIZE,
@@ -161,28 +164,28 @@ void PmdPort::InitDriver(uint16_t mtu) {
       //
       // Explicitly updating the RSS RETA table with the default configuration
       // seems to fix the issue.
-      LOG(WARNING) << "Failed to update RSS RETA configuration for port "
-                   << static_cast<int>(port_id_) << ". Error "
-                   << rte_strerror(ret);
+      LOG(WARNING, DPDK) << "Failed to update RSS RETA configuration for port "
+                         << static_cast<int>(port_id_) << ". Error "
+                         << rte_strerror(ret);
     }
 
     ret = rte_eth_dev_rss_reta_query(port_id_, rss_reta_conf_.data(),
                                      devinfo_.reta_size);
     if (ret != 0) {
-      LOG(WARNING) << "Failed to get RSS RETA configuration for port "
-                   << static_cast<int>(port_id_) << ". Error "
-                   << rte_strerror(ret);
+      LOG(WARNING, DPDK) << "Failed to get RSS RETA configuration for port "
+                         << static_cast<int>(port_id_) << ". Error "
+                         << rte_strerror(ret);
     }
 
-    LOG(INFO) << Format("RSS indirection table (size %d):\n",
-                        devinfo_.reta_size);
+    LOG(INFO, DPDK) << Format("RSS indirection table (size %d):\n",
+                              devinfo_.reta_size);
     for (auto i = 0u; i < devinfo_.reta_size; i++) {
       auto const kColumns = 8;
       auto index = i / RTE_ETH_RETA_GROUP_SIZE;
       auto shift = i % RTE_ETH_RETA_GROUP_SIZE;
       if (!(rss_reta_conf_[index].mask & (1 << shift))) {
-        LOG(WARNING) << "Rss reta conf mask is not set for index " << index
-                     << " and shift " << shift;
+        LOG(WARNING, DPDK) << "Rss reta conf mask is not set for index "
+                           << index << " and shift " << shift;
         continue;
       }
 
@@ -203,7 +206,7 @@ void PmdPort::InitDriver(uint16_t mtu) {
     ret = rte_eth_dev_adjust_nb_rx_tx_desc(port_id_, &rx_ring_desc_nr_,
                                            &tx_ring_desc_nr_);
     if (ret != 0) {
-      LOG(FATAL)
+      LOG(FATAL, DPDK)
           << "rte_eth_dev_adjust_nb_rx_tx_desc() failed for port with id: "
           << static_cast<int>(port_id_);
     }
@@ -213,7 +216,7 @@ void PmdPort::InitDriver(uint16_t mtu) {
 
     // Setup the TX queues.
     for (auto q = 0; q < tx_rings_nr_; q++) {
-      LOG(INFO) << "Initializing TX ring: " << q;
+      LOG(INFO, DPDK) << "Initializing TX ring: " << q;
       auto tx_ring = makeRing<TxRing>(port_id_, q, tx_ring_desc_nr_,
                                       devinfo_.default_txconf,
                                       2 * tx_ring_desc_nr_ - 1, mbuf_data_size);
@@ -225,7 +228,7 @@ void PmdPort::InitDriver(uint16_t mtu) {
 
     // Setup the RX queues.
     for (auto q = 0; q < rx_rings_nr_; q++) {
-      LOG(INFO) << "Initializing RX ring: " << q;
+      LOG(INFO, DPDK) << "Initializing RX ring: " << q;
       auto rx_ring = makeRing<RxRing>(port_id_, q, rx_ring_desc_nr_,
                                       devinfo_.default_rxconf,
                                       2 * rx_ring_desc_nr_ - 1, mbuf_data_size);
@@ -234,25 +237,26 @@ void PmdPort::InitDriver(uint16_t mtu) {
     }
 
     // TODO(Nelson): Cannot Enable Promiscuous Mode.
-    LOG(INFO) << "Promiscuous mode: " << rte_eth_promiscuous_get(port_id_);
+    LOG(INFO, DPDK) << "Promiscuous mode: "
+                    << rte_eth_promiscuous_get(port_id_);
     // ret = rte_eth_promiscuous_enable(port_id_);
     // if (ret != 0)
-    //   LOG(WARNING) << "rte_eth_promiscuous_enable() failed.";
+    //   LOG(WARNING, DPDK) << "rte_eth_promiscuous_enable() failed.";
     // else
-    //   LOG(INFO) << "Promiscuous mode enabled.";
+    //   LOG(INFO, DPDK) << "Promiscuous mode enabled.";
 
     ret = rte_eth_stats_reset(port_id_);
-    if (ret != 0) LOG(WARNING) << "Failed to reset port statistics.";
+    if (ret != 0) LOG(WARNING, DPDK) << "Failed to reset port statistics.";
 
     ret = rte_eth_dev_set_link_up(port_id_);
-    if (ret != 0) LOG(WARNING) << "rte_eth_dev_set_link_up() failed.";
+    if (ret != 0) LOG(WARNING, DPDK) << "rte_eth_dev_set_link_up() failed.";
 
     ret = rte_eth_dev_start(port_id_);
     if (ret != 0) {
-      LOG(FATAL) << "rte_eth_dev_start() failed.";
+      LOG(FATAL, DPDK) << "rte_eth_dev_start() failed.";
     }
 
-    LOG(INFO) << "Waiting for link to get up...";
+    LOG(INFO, DPDK) << "Waiting for link to get up...";
     struct rte_eth_link link;
     memset(&link, '0', sizeof(link));
     int nsecs = 30;
@@ -260,20 +264,20 @@ void PmdPort::InitDriver(uint16_t mtu) {
       memset(&link, '0', sizeof(link));
       int ret = rte_eth_link_get_nowait(port_id_, &link);
       if (ret != 0) {
-        LOG(WARNING) << "rte_eth_link_get_nowait() failed.";
+        LOG(WARNING, DPDK) << "rte_eth_link_get_nowait() failed.";
       }
 
       sleep(1);
     }
 
     if (link.link_status == RTE_ETH_LINK_UP) {
-      LOG(INFO) << "[PMDPORT: " << static_cast<int>(port_id_) << "] "
-                << "Link is UP " << link.link_speed
-                << (link.link_autoneg ? " (AutoNeg)" : " (Fixed)")
-                << (link.link_duplex ? " Full Duplex" : " Half Duplex");
+      LOG(INFO, DPDK) << "[PMDPORT: " << static_cast<int>(port_id_) << "] "
+                      << "Link is UP " << link.link_speed
+                      << (link.link_autoneg ? " (AutoNeg)" : " (Fixed)")
+                      << (link.link_duplex ? " Full Duplex" : " Half Duplex");
     } else {
-      LOG(INFO) << "[PMDPORT: " << static_cast<int>(port_id_) << "] "
-                << "Link is DOWN.";
+      LOG(INFO, DPDK) << "[PMDPORT: " << static_cast<int>(port_id_) << "] "
+                      << "Link is DOWN.";
     }
   } else {
     FetchDpdkPortInfo(port_id_, &devinfo_, &l2_addr_);
@@ -296,7 +300,7 @@ void PmdPort::InitDriver(uint16_t mtu) {
 void PmdPort::UpdatePortStats() {
   int ret = rte_eth_stats_get(port_id_, &port_stats_);
   if (ret != 0) {
-    LOG(WARNING) << "Failed to retrieve DPDK port stats.";
+    LOG(WARNING, DPDK) << "Failed to retrieve DPDK port stats.";
     memset(&port_stats_, 0, sizeof(port_stats_));
   }
 }
@@ -305,7 +309,7 @@ void PmdPort::DeInit() {
   if (!initialized_ || !is_dpdk_primary_process_) return;
   rte_eth_dev_stop(port_id_);
   rte_eth_dev_close(port_id_);
-  LOG(INFO) << Format("[PMDPORT: %u closed.]", port_id_);
+  LOG(INFO, DPDK) << Format("[PMDPORT: %u closed.]", port_id_);
   initialized_ = false;
 }
 }  // namespace uccl

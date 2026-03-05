@@ -1,7 +1,7 @@
 #include "transport.h"
 #include "transport_config.h"
+#include "util/debug.h"
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <chrono>
 #include <deque>
 #include <thread>
@@ -11,9 +11,9 @@ using namespace uccl;
 
 size_t kTestMsgSize = 1024000;
 size_t kReportIters = 5000;
-const size_t kTestIters = 1024000000000UL;
+size_t const kTestIters = 1024000000000UL;
 // Using larger inlights like 64 will cause severe cache miss, impacting perf.
-const size_t kMaxInflight = 8;
+size_t const kMaxInflight = 8;
 
 DEFINE_uint64(size, 1024000, "Size of test message.");
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
@@ -37,8 +37,8 @@ void interrupt_handler(int signal) {
 }
 
 int main(int argc, char* argv[]) {
-  google::InitGoogleLogging(argv[0]);
-  google::InstallFailureSignalHandler();
+  // google::InitGoogleLogging(argv[0]);
+  // google::InstallFailureSignalHandler();
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   signal(SIGINT, interrupt_handler);
@@ -73,7 +73,7 @@ int main(int argc, char* argv[]) {
   } else if (FLAGS_test == "tput") {
     test_type = kTput;
   } else {
-    LOG(FATAL) << "Unknown test type: " << FLAGS_test;
+    LOG(FATAL, AFXDP) << "Unknown test type: " << FLAGS_test;
   }
 
   std::mt19937 generator(42);
@@ -283,9 +283,11 @@ int main(int argc, char* argv[]) {
              1e-6);
         sent_bytes = 0;
 
-        LOG(INFO) << "Sent " << i + 1 << " messages, med rtt: " << med_latency
-                  << " us, tail rtt: " << tail_latency << " us, link bw "
-                  << bw_gbps << " Gbps, app bw " << app_bw_gbps << " Gbps";
+        LOG(INFO, AFXDP) << "Sent " << i + 1
+                         << " messages, med rtt: " << med_latency
+                         << " us, tail rtt: " << tail_latency << " us, link bw "
+                         << bw_gbps << " Gbps, app bw " << app_bw_gbps
+                         << " Gbps";
         start_bw_mea = std::chrono::high_resolution_clock::now();
       }
     }
@@ -428,14 +430,14 @@ int main(int argc, char* argv[]) {
         bool data_mismatch = false;
         auto expected_len = FLAGS_rand ? send_len : kTestMsgSize;
         if (recv_len != expected_len) {
-          LOG(ERROR) << "Received message size mismatches, expected "
-                     << expected_len << ", received " << recv_len;
+          LOG(ERROR, AFXDP) << "Received message size mismatches, expected "
+                            << expected_len << ", received " << recv_len;
           data_mismatch = true;
         }
         for (int j = 0; j < recv_len / sizeof(uint64_t); j++) {
           if (data_u64[j] != (uint64_t)i * (uint64_t)j) {
             data_mismatch = true;
-            LOG_EVERY_N(ERROR, 1000)
+            LOG_EVERY_N(ERROR, AFXDP, 1000)
                 << "Data mismatch at index " << j * sizeof(uint64_t)
                 << ", expected " << (uint64_t)i * (uint64_t)j << ", received "
                 << data_u64[j];
@@ -445,8 +447,9 @@ int main(int argc, char* argv[]) {
         memset(data, 0, recv_len);
       }
 
-      LOG_EVERY_N(INFO, kReportIters) << "Received " << i << " messages, rtt "
-                                      << duration_us.count() << " us";
+      LOG_EVERY_N(INFO, AFXDP, kReportIters)
+          << "Received " << i << " messages, rtt " << duration_us.count()
+          << " us";
     }
   }
 

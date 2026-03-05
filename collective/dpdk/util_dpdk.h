@@ -3,7 +3,7 @@
 #include "pmd_port.h"
 #include "rx_ring.h"
 #include "tx_ring.h"
-#include <glog/logging.h>
+#include "util/debug.h"
 #include <linux/ethtool.h>
 #include <cstdint>
 #include <deque>
@@ -36,7 +36,7 @@ class DPDKSocket {
   }
 
   inline void push_packet(Packet* pkt) {
-    // LOG(INFO) << "push_packet packet: " << pkt;
+    // LOG(INFO, DPDK) << "push_packet packet: " << pkt;
     Packet::Free(pkt);
   }
 
@@ -52,7 +52,7 @@ class DPDKSocket {
       pkt = packet_pool_->PacketAlloc();
     } while (pkt == nullptr);
 
-    // LOG(INFO) << "pop_packet(uint16_t) avail_packets: "
+    // LOG(INFO, DPDK) << "pop_packet(uint16_t) avail_packets: "
     //           << packet_pool_->AvailPacketsCount();
     pkt->append<void*>(pkt_len);
     return pkt;
@@ -60,13 +60,13 @@ class DPDKSocket {
 
   uint32_t send_packets(Packet** pkts, uint32_t nb_pkts) {
     // for (uint32_t i = 0; i < nb_pkts; i++) {
-    //   LOG(INFO) << "send_packets [" << i << "] packet: " << pkts[i];
+    //   LOG(INFO, DPDK) << "send_packets [" << i << "] packet: " << pkts[i];
     // }
-    // LOG(INFO) << "send_packets: " << nb_pkts;
+    // LOG(INFO, DPDK) << "send_packets: " << nb_pkts;
 
     uint32_t sent = tx_ring_->TrySendPackets(pkts, nb_pkts);
     total_sent_packets_ += sent;
-    // LOG(INFO) << "send_packets sent: " << sent;
+    // LOG(INFO, DPDK) << "send_packets sent: " << sent;
     return sent;
   }
 
@@ -87,8 +87,9 @@ class DPDKSocket {
   std::string to_string() {
     struct rte_eth_stats stats;
     rte_eth_stats_get(0, &stats);
-    LOG(INFO) << "rx: " << stats.ipackets << " rx_dropped: " << stats.imissed
-              << " rx_nombuf: " << stats.rx_nombuf;
+    LOG(INFO, DPDK) << "rx: " << stats.ipackets
+                    << " rx_dropped: " << stats.imissed
+                    << " rx_nombuf: " << stats.rx_nombuf;
 
     return Format("[TX] %u [RX] %u [POOL] (%u, %u)", total_sent_packets_,
                   total_recv_packets_, avail_packets(), in_use_packets());
@@ -127,7 +128,7 @@ class DPDKFactory {
 
   DPDKSocket* CreateSocket(int queue_id) {
     if (!initialized_) {
-      LOG(WARNING) << "DPDKFactory is not initialized";
+      LOG(WARNING, DPDK) << "DPDKFactory is not initialized";
       return nullptr;
     }
 
@@ -142,7 +143,7 @@ class DPDKFactory {
 
   void DeInit() {
     if (!initialized_) {
-      LOG(WARNING) << "DPDKFactory is not initialized";
+      LOG(WARNING, DPDK) << "DPDKFactory is not initialized";
       return;
     }
   }

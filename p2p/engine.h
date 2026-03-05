@@ -10,7 +10,7 @@
 #ifdef UCCL_P2P_USE_NCCL
 #include "nccl/nccl_endpoint.h"
 #endif
-#include <glog/logging.h>
+#include "util/debug.h"
 #include <infiniband/verbs.h>
 #include <atomic>
 #include <cstdlib>
@@ -252,7 +252,7 @@ class Endpoint {
   static constexpr size_t kTaskRingSize = 1024;
 
   static std::once_flag glog_init_once;
-  static int parse_log_level_from_env();
+  static uccl::UCCLLogLevel parse_log_level_from_env();
 
  public:
   /* Create engine threads running in background for a single interface. It also
