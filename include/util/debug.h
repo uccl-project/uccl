@@ -33,21 +33,29 @@
 namespace uccl {
 enum UCCLLogLevel { FATAL = 0, ERROR, WARNING, INFO };
 
-enum UCCLLogSubsys { INIT = 0, AFXDP, DPDK, EFA, RDMA, EP, P2P, SUBSYS_COUNT };
+enum UCCLLogSubsys {
+  INIT = 0,
+  AFXDP,
+  DPDK,
+  EFA,
+  RDMA,
+  EP,
+  P2P,
+  UTIL,
+  SUBSYS_COUNT
+};
 
 static std::unordered_map<std::string_view, UCCLLogSubsys> subsysMap_ = {
     {"INIT", UCCLLogSubsys::INIT}, {"AFXDP", UCCLLogSubsys::AFXDP},
     {"DPDK", UCCLLogSubsys::DPDK}, {"EFA", UCCLLogSubsys::EFA},
     {"RDMA", UCCLLogSubsys::RDMA}, {"EP", UCCLLogSubsys::EP},
-    {"P2P", UCCLLogSubsys::P2P},
-};
+    {"P2P", UCCLLogSubsys::P2P},   {"UTIL", UCCLLogSubsys::UTIL}};
 
 class UCCLLogger;
 class UCCLLogCapture;
 class UCCLVLogCapture;
 class UCCLCheckCapture;
 struct UCCLVoidify;
-class UCCLNullStream;
 
 #define UCCL_LOG_INTERNAL(level, subsys)                                    \
   if (uccl::ucclLogger.shouldLog(level, subsys))                            \
@@ -79,6 +87,21 @@ class UCCLNullStream;
 #define LOG_EVERY_N(level, subsys, n) \
   UCCL_LOG_EVERY_N_INTERNAL(level, subsys, n)
 
+#define UCCL_LOG_FIRST_N_INTERNAL(level, subsys, n)                            \
+  static std::atomic<int> UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(                 \
+      log_first_n_counter, __LINE__){1};                                       \
+  !(uccl::ucclLogger.shouldLog(level, subsys) &&                               \
+    ((UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(log_first_n_counter, __LINE__)       \
+          .fetch_add(1) <= n)))                                                \
+      ? (void)0                                                                \
+      : uccl::UCCLVoidify() & uccl::UCCLLogCapture(uccl::ucclLogger, level,    \
+                                                   subsys, __FILE__, __LINE__, \
+                                                   __func__)                   \
+                                  .stream()
+
+#define LOG_FRIST_N(level, subsys, n) \
+  UCCL_LOG_FIRST_N_INTERNAL(level, subsys, n)
+
 #define UCCL_LOG_IF_INTERNAL(level, subsys, condition)                       \
   !(condition && uccl::ucclLogger.shouldLog(level, subsys))                  \
       ? (void)0                                                              \
@@ -89,6 +112,17 @@ class UCCLNullStream;
 
 #define LOG_IF(level, subsys, condition) \
   UCCL_LOG_IF_INTERNAL(level, subsys, condition)
+
+
+#define UCCL_VLOG_IF_INTERNAL(vLogLevel, condition)                       \
+  !(condition && uccl::ucclLogger.shouldvLog(vLogLevel))                  \
+      ? (void)0                                                              \
+      : uccl::UCCLVoidify() &                                                \
+            (uccl::UCCLVLogCapture(uccl::ucclLogger, vLogLevel, __FILE__, \
+                                  __LINE__, __func__)                        \
+                 .stream())
+
+#define VLOG_IF(vLogLevel, condition) UCCL_VLOG_INTERNAL(vLogLevel, condition)
 
 #define UCCL_VLOG_INTERNAL(vLogLevel)                                     \
   (!uccl::ucclLogger.shouldVLog(vLogLevel))                               \
@@ -104,7 +138,7 @@ class UCCLNullStream;
 // hence, it the << would resolve first and the type of the : branch would
 // also be void
 #define UCCL_CHECK_INTERNAL(condition)                                    \
-  condition                                                               \
+  (condition)                                                             \
       ? (void)0                                                           \
       : uccl::UCCLVoidify() &                                             \
             (uccl::UCCLCheckCapture(uccl::ucclLogger, __FILE__, __LINE__, \
@@ -126,6 +160,9 @@ class UCCLNullStream;
 #define CHECK_GTE(first, second) UCCL_CHECK_INTERNAL(((first) >= (second)))
 
 #ifdef NDEBUG
+#define DCHECK(condition) \
+  do {                    \
+  } while (0)
 #define DCHECK_EQ(first, second) \
   do {                           \
   } while (0)
@@ -145,6 +182,7 @@ class UCCLNullStream;
   do {                            \
   } while (0)
 #else
+#define DCHECK(condition) CHECK(condition)
 #define DCHECK_EQ(first, second) CHECK_EQ(first, second)
 #define DCHECK_NE(first, second) CHECK_NE(first, second)
 #define DCHECK_LT(first, second) CHECK_LT(first, second)
@@ -161,6 +199,13 @@ class UCCLNullStream;
                    .stream())
 
 #define PCHECK(condition) UCCL_PCHECK_INTERNAL(condition)
+
+template <typename T>
+inline T* UCCLCheckNotNullCapture(void* ptr, char const* expr);
+
+#define UCCL_CHECK_NOTNULL_INTERNAL(ptr) UCCLCheckNotNullCapture(ptr, #ptr)
+
+#define CHECK_NOTNULL(ptr) UCCL_CHECK_NOTNULL_INTERNAL(ptr)
 
 constexpr std::string_view logLevelToString(UCCLLogLevel level) {
   switch (level) {
@@ -196,6 +241,8 @@ constexpr std::string_view logSubsysToString(UCCLLogSubsys subsys) {
       return "EP";
     case UCCLLogSubsys::P2P:
       return "P2P";
+    case UCCLLogSubsys::UTIL:
+      return "UTIL";
     default:
       return "";
   }
@@ -441,5 +488,15 @@ class UCCLCheckCapture {
 struct UCCLVoidify {
   void operator&(std::ostream&) const {}
 };
+
+template <typename T>
+inline T* UCCLCheckNotNullCapture(T* ptr, char const* expr) {
+  if (ptr == nullptr) {
+    uccl::UCCLCheckCapture(uccl::ucclLogger, __FILE__, __LINE__, __func__, expr,
+                           "CHECK_NOTNULL", 0);
+  }
+
+  return ptr;
+}
 
 }  // namespace uccl
