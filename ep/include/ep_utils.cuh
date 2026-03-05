@@ -8,11 +8,6 @@
 #ifndef clock64
 #define clock64 wall_clock64
 #endif
-// HIP on AMD does not provide CUDA's zero-arg __syncwarp(); map it to a
-// wavefront barrier so existing CUDA-style callsites keep working.
-#ifndef __syncwarp
-#define __syncwarp(...) __builtin_amdgcn_wave_barrier()
-#endif
 
 using i64_gptr = __attribute__((address_space(1))) int64_t*;
 using i32_gptr = __attribute__((address_space(1))) int*;
