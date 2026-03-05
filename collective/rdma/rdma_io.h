@@ -591,7 +591,7 @@ static inline int modify_qp_rtr_gpuflush(struct ibv_qp* qp, int dev) {
     attr.ah_attr.grh.dgid = factory_dev->gid;
     attr.ah_attr.grh.sgid_index = factory_dev->gid_idx;
     attr.ah_attr.grh.hop_limit = 0xff;
-    attr.ah_attr.grh.traffic_class = ucclParamROCE_TRAFFIC_CLASS();
+    attr.ah_attr.grh.traffic_class = roceTrafficClass();
     attr.ah_attr.sl = ucclParamROCE_SERVICE_LEVEL();
   } else {
     attr.ah_attr.is_global = 0;
@@ -639,7 +639,7 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
     attr.ah_attr.grh.dgid = remote_ctx->remote_gid;
     attr.ah_attr.grh.sgid_index = factory_dev->gid_idx;
     attr.ah_attr.grh.hop_limit = 0xff;
-    attr.ah_attr.grh.traffic_class = ucclParamROCE_TRAFFIC_CLASS();
+    attr.ah_attr.grh.traffic_class = roceTrafficClass();
     attr.ah_attr.sl = ucclParamROCE_SERVICE_LEVEL();
   } else {
     if (util_rdma_extract_local_subnet_prefix(

@@ -13,6 +13,13 @@
 #                          Example: CONTAINER_ENGINE=podman ./build.sh cuda all
 #   USE_INTEL_RDMA_NIC=1   Enable Intel RDMA NIC support (irdma driver, vendor 0x8086)
 #                          Example: USE_INTEL_RDMA_NIC=1 ./build.sh cuda ccl_efa
+#   UCCL_WHEEL_ENABLE_FORCE_RETAG=1  Allow retagging the wheel to the host's
+#                          glibc version when it differs from the container's.
+#                          By default the wheel keeps the container's glibc tag.
+#                          WARNING: the wheel is still built against the
+#                          container's glibc and may use symbols not present in
+#                          an older host glibc.
+#                          Example: UCCL_WHEEL_ENABLE_FORCE_RETAG=1 ./build.sh cuda all
 #
 # The wheels are written to wheelhouse-[cuda|rocm|therock]
 # -----------------------
@@ -100,23 +107,15 @@ if [[ "$BUILD_TYPE" =~ (ep|all|p2p) ]]; then
 fi
 TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-${DETECTED_GPU_ARCH}}"
 
-# The build container (Ubuntu 22.04, glibc 2.35) produces wheels tagged
-# manylinux_2_35 by default.  Rocky Linux 9.x only ships glibc 2.34, so
-# those wheels won't install there.  Detect the host distro and, when
-# running on Rocky 9, retag the wheel to manylinux_2_34 after auditwheel
-# repair.  Note: this does not verify glibc symbol compatibility -- the
-# binaries are built against glibc 2.35 and may use 2.35-only symbols.
-# UCCL collectives has been tested and working on Rocky Linux 9.4 with this
-# retagged wheel.
-UCCL_WHEEL_PLAT=""
-if [[ -f /etc/os-release ]]; then
-  HOST_ID=$(. /etc/os-release && echo "${ID:-}")
-  HOST_VERSION_ID=$(. /etc/os-release && echo "${VERSION_ID:-}")
-  if [[ "$HOST_ID" == "rocky" && "$HOST_VERSION_ID" == 9* ]]; then
-    UCCL_WHEEL_PLAT="manylinux_2_34_${ARCH}"
-    echo "Rocky Linux 9 detected wheel will be tagged ${UCCL_WHEEL_PLAT}"
-  fi
-fi
+# The build container produces wheels tagged with the container's glibc
+# version by default.  If the host has an older glibc (e.g. Rocky Linux 9.x
+# ships glibc 2.34), the wheel won't install there.  Set
+# UCCL_WHEEL_ENABLE_FORCE_RETAG=1 to retag the wheel to the host glibc.
+# Note: this does not verify glibc symbol compatibility -- the binaries are
+# built against the container's glibc and may use newer symbols.  UCCL
+# collectives and ep has been tested and working on Rocky Linux 9.4 with
+# this retagged wheel.
+HOST_GLIBC_VER=$(python3 -c "import platform; print(platform.libc_ver()[1])")
 
 ########################################################
 # 3. Clean up previous builds
@@ -245,7 +244,8 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
   -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
   -e DISABLE_AGGRESSIVE_ATOMIC="${DISABLE_AGGRESSIVE_ATOMIC:-0}" \
-  -e UCCL_WHEEL_PLAT="${UCCL_WHEEL_PLAT:-}" \
+  -e HOST_GLIBC_VER="${HOST_GLIBC_VER}" \
+  -e UCCL_WHEEL_ENABLE_FORCE_RETAG="${UCCL_WHEEL_ENABLE_FORCE_RETAG:-0}" \
   -e FUNCTION_DEF="$(declare -f rename_to_abi3 build_rccl_nccl_header build_ccl_rdma build_ccl_efa build_p2p build_ep build_ukernel)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
@@ -328,13 +328,34 @@ def initialize():
 
     # The _abi3_stub.so is too minimal for auditwheel to detect libc
     # on its own, so we must supply --plat explicitly.
-    if [[ -z "${UCCL_WHEEL_PLAT:-}" ]]; then
-      GLIBC_VER=$(python3 -c "import platform; print(platform.libc_ver()[1])")
-      UCCL_WHEEL_PLAT="manylinux_${GLIBC_VER//./_}_$(uname -m)"
+    # Always use the *container* glibc for auditwheel repair (symbol
+    # validation), then retag the wheel to the desired host platform
+    # afterwards if UCCL_WHEEL_ENABLE_FORCE_RETAG=1.
+    CONTAINER_GLIBC_VER=$(python3 -c "import platform; print(platform.libc_ver()[1])")
+    AUDIT_PLAT="manylinux_${CONTAINER_GLIBC_VER//./_}_$(uname -m)"
+
+    # Decide the final wheel platform tag
+    if [[ "${UCCL_WHEEL_ENABLE_FORCE_RETAG}" == "1" ]]; then
+      UCCL_WHEEL_PLAT="manylinux_${HOST_GLIBC_VER//./_}_$(uname -m)"
+      if [[ "${UCCL_WHEEL_PLAT}" != "${AUDIT_PLAT}" ]]; then
+        echo "WARNING: UCCL_WHEEL_ENABLE_FORCE_RETAG is set." >&2
+        echo "  The wheel will be retagged from ${AUDIT_PLAT} to ${UCCL_WHEEL_PLAT}." >&2
+        echo "  The binaries are built against the container glibc (${CONTAINER_GLIBC_VER})." >&2
+        echo "  If the host glibc is older, the wheel may fail at runtime" >&2
+        echo "  due to missing versioned symbols." >&2
+      fi
+      echo "Host glibc ${HOST_GLIBC_VER}, container glibc ${CONTAINER_GLIBC_VER} -> wheel tagged ${UCCL_WHEEL_PLAT} (force-retag enabled)"
+    else
+      UCCL_WHEEL_PLAT="${AUDIT_PLAT}"
+      echo "Container glibc ${CONTAINER_GLIBC_VER} -> wheel tagged ${UCCL_WHEEL_PLAT}"
+      if [[ "${HOST_GLIBC_VER}" != "${CONTAINER_GLIBC_VER}" ]]; then
+        echo "  Note: host glibc (${HOST_GLIBC_VER}) differs from container glibc (${CONTAINER_GLIBC_VER})."
+        echo "  Tip: set UCCL_WHEEL_ENABLE_FORCE_RETAG=1 to retag to host glibc ${HOST_GLIBC_VER}."
+      fi
     fi
 
     auditwheel repair dist/uccl-*.whl \
-      --plat "${UCCL_WHEEL_PLAT}" \
+      --plat "${AUDIT_PLAT}" \
       --exclude "libtorch*.so" \
       --exclude "libc10*.so" \
       --exclude "libibverbs.so.1" \

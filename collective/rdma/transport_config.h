@@ -13,6 +13,16 @@
 UCCL_PARAM(PIN_TO_NUMA, "PIN_TO_NUMA", 1);
 // Traffic class for RoCE.
 UCCL_PARAM(ROCE_TRAFFIC_CLASS, "ROCE_TRAFFIC_CLASS", 3);
+// Returns the traffic class byte for use in grh.traffic_class.
+// For irdma, the driver copies traffic_class directly into IP ToS, so the
+// DSCP value must be shifted left by 2 to keep ECN bits [1:0] clear.
+static inline uint8_t roceTrafficClass() {
+#ifdef INTEL_RDMA_NIC
+  return (uint8_t)(ucclParamROCE_TRAFFIC_CLASS() << 2);
+#else
+  return (uint8_t)ucclParamROCE_TRAFFIC_CLASS();
+#endif
+}
 // Service level for RoCE.
 UCCL_PARAM(ROCE_SERVICE_LEVEL, "ROCE_SERVICE_LEVEL", 135);
 // Service level for IB.

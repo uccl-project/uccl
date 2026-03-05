@@ -1703,6 +1703,7 @@ Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
 
   LOG(INFO, EFA) << "Creating Channels";
   for (int i = 0; i < kNumEngines; i++) channel_vec_[i] = new Channel();
+
   LOG(INFO, EFA) << "Creating Pacers";
   for (int i = 0; i < NUM_DEVICES; i++) eqds_[i] = new eqds::EQDS(i);
 
@@ -1830,7 +1831,9 @@ Endpoint::~Endpoint() {
   delete[] ctx_pool_buf_;
 
   // Receiver-driven CC pacer.
-  for (int i = 0; i < NUM_DEVICES; i++) delete eqds_[i];
+  for (int i = 0; i < NUM_DEVICES; i++) {
+    if (eqds_[i]) delete eqds_[i];
+  }
 
   {
     std::lock_guard<std::mutex> lock(fd_map_mu_);

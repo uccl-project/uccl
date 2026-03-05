@@ -474,6 +474,10 @@ class EFASocket {
 std::vector<std::string> const& GetEfaDeviceNameList();
 std::vector<std::string> const& GetEnaDeviceNameList();
 
+/// Returns the runtime-capped number of physical devices:
+/// min(NUM_DEVICES, #discovered_efa, #discovered_ena).
+uint8_t GetActualNumDevices();
+
 /**
  * @brief This helper function gets the Infiniband name from the dev index.
  *
