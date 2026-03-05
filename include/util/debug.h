@@ -24,9 +24,12 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
+#include <sys/syscall.h>
 #include <unistd.h>
 
+#define UCCL_DEBUG_HOSTNAME_MAX_LEN 1024
 namespace uccl {
 enum UCCLLogLevel { FATAL = 0, ERROR, WARNING, INFO };
 
@@ -204,13 +207,17 @@ class UCCLLogger {
     _initializeLogLevel();
     _initializeLoggingSubsystems();
     _initializeVlogLevel();
+
+    gethostname(hostname_, UCCL_DEBUG_HOSTNAME_MAX_LEN);
+    pid_ = getpid();
   };
 
   std::ostream& stream() { return stream_; }
 
   void log(UCCLLogLevel logLevel, UCCLLogSubsys subsys,
            std::string_view filename, int line_number,
-           std::string_view function_name, std::string_view const& message) {
+           std::string_view function_name, int threadId,
+           std::string_view const& message) {
     // NOTE: also unsure if we want all threads to be stuck on this mutex
     std::lock_guard<std::mutex> lock(mu_);
 
@@ -222,8 +229,9 @@ class UCCLLogger {
       stream_ << " | " << logSubsysToString(subsys);
     }
 
-    stream_ << " | " << function_name << " | " << filename << ":" << line_number
-            << "] " << message;
+    stream_ << " | " << hostname_ << " | " << pid_ << " | " << threadId << " | "
+            << function_name << " | " << filename << ":" << line_number << "] "
+            << message;
 
     if (logLevel == UCCLLogLevel::FATAL) {
       stream_ << std::endl;
@@ -238,12 +246,14 @@ class UCCLLogger {
   }
 
   void vlog(int vlogLevel, std::string_view filename, int line_number,
-            std::string_view function_name, std::string const& message) {
+            std::string_view function_name, int threadId,
+            std::string const& message) {
     std::lock_guard<std::mutex> lock(mu_);
 
     stream_ << "["
-            << "VLOG (" << vlogLevel << ") | " << function_name << " | "
-            << filename << ":" << line_number << "] " << message << '\n';
+            << "VLOG(" << vlogLevel << ") | " << hostname_ << " | " << pid_
+            << " | " << threadId << " | " << function_name << " | " << filename
+            << ":" << line_number << "] " << message << '\n';
   }
 
   bool shouldVLog(int vlogLevel) { return vlogLevel <= vlogLevel_; }
@@ -255,6 +265,8 @@ class UCCLLogger {
   int vlogLevel_{5};
   std::bitset<static_cast<std::size_t>(UCCLLogSubsys::SUBSYS_COUNT)>
       subsys_bitset_;
+  pid_t pid_;
+  char hostname_[UCCL_DEBUG_HOSTNAME_MAX_LEN]{};
 
   void _initializeLogLevel() {
     char const* loggingLevel = std::getenv("UCCL_DEBUG");
@@ -322,11 +334,19 @@ class UCCLLogCapture {
         subsys_(subsys),
         fileName_(fileName),
         lineNumber_(lineNumber),
-        functionName_(functionName){};
+        functionName_(functionName) {};
 
   ~UCCLLogCapture() {
     logger_.log(level_, subsys_, fileName_, lineNumber_, functionName_,
-                stream_.str());
+                getThreadId(), stream_.str());
+  }
+
+  static int getThreadId() {
+    thread_local int threadId_ = -1;
+    if (threadId_ == -1) {
+      threadId_ = static_cast<int>(syscall(SYS_gettid));
+    }
+    return threadId_;
   }
 
   std::ostringstream& stream() { return stream_; }
@@ -349,14 +369,22 @@ class UCCLVLogCapture {
         vLogLevel_(vLogLevel),
         fileName_(fileName),
         lineNumber_(lineNumber),
-        functionName_(functionName){};
+        functionName_(functionName) {};
 
   ~UCCLVLogCapture() {
     logger_.vlog(vLogLevel_, fileName_, lineNumber_, functionName_,
-                 stream_.str());
+                 getThreadId(), stream_.str());
   }
 
   std::ostringstream& stream() { return stream_; }
+
+  static int getThreadId() {
+    thread_local int threadId_ = -1;
+    if (threadId_ == -1) {
+      threadId_ = static_cast<int>(syscall(SYS_gettid));
+    }
+    return threadId_;
+  }
 
  private:
   UCCLLogger& logger_;
@@ -388,10 +416,18 @@ class UCCLCheckCapture {
       stream_ << ": " << strerror(capturedErrno_) << " ";
     }
     logger_.log(UCCLLogLevel::FATAL, UCCLLogSubsys::SUBSYS_COUNT, fileName_,
-                lineNumber_, functionName_, stream_.str());
+                lineNumber_, functionName_, getThreadId(), stream_.str());
   }
 
   std::ostringstream& stream() { return stream_; }
+
+  static int getThreadId() {
+    thread_local int threadId_ = -1;
+    if (threadId_ == -1) {
+      threadId_ = static_cast<int>(syscall(SYS_gettid));
+    }
+    return threadId_;
+  }
 
  private:
   std::ostringstream stream_;
