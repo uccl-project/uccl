@@ -30,9 +30,9 @@ fi
 
 # Install common dependencies
 if [[ "$CAN_INSTALL_APT" -eq 1 ]]; then
-    "${SUDO_CMD[@]}" apt install -y libgoogle-glog-dev clang-format-14
+    "${SUDO_CMD[@]}" apt install -y clang-format-14
 else
-    echo "No root/passwordless sudo. Skipping apt dependencies: libgoogle-glog-dev clang-format-14"
+    echo "No root/passwordless sudo. Skipping apt dependencies: clang-format-14"
 fi
 pip install pybind11 nanobind --upgrade
 pip install black
