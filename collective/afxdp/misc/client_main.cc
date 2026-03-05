@@ -108,7 +108,7 @@ static void* recv_thread(void* arg);
 int client_init(struct client_t* client, char const* interface_name) {
   // we can only run xdp programs as root
   if (geteuid() != 0) {
-    LOG(ERROR, AFXDP) << "\nerror: this program must be run as root\n";
+    UCCL_LOG(ERROR, AFXDP) << "\nerror: this program must be run as root\n";
     return 1;
   }
 
@@ -118,7 +118,7 @@ int client_init(struct client_t* client, char const* interface_name) {
 
     struct ifaddrs* addrs;
     if (getifaddrs(&addrs) != 0) {
-      LOG(ERROR, AFXDP) << "\nerror: getifaddrs failed";
+      UCCL_LOG(ERROR, AFXDP) << "\nerror: getifaddrs failed";
       return 1;
     }
 
@@ -127,11 +127,11 @@ int client_init(struct client_t* client, char const* interface_name) {
           iap->ifa_addr->sa_family == AF_INET) {
         struct sockaddr_in* sa = (struct sockaddr_in*)iap->ifa_addr;
         if (strcmp(interface_name, iap->ifa_name) == 0) {
-          LOG(INFO, AFXDP) << "found network interface: '" << iap->ifa_name
-                           << "'\n";
+          UCCL_LOG(INFO, AFXDP)
+              << "found network interface: '" << iap->ifa_name << "'\n";
           client->interface_index = if_nametoindex(iap->ifa_name);
           if (!client->interface_index) {
-            LOG(ERROR, AFXDP) << "error: if_nametoindex failed\n";
+            UCCL_LOG(ERROR, AFXDP) << "error: if_nametoindex failed\n";
             return 1;
           }
           found = true;
@@ -143,7 +143,7 @@ int client_init(struct client_t* client, char const* interface_name) {
     freeifaddrs(addrs);
 
     if (!found) {
-      LOG(ERROR, AFXDP)
+      UCCL_LOG(ERROR, AFXDP)
           << "\nerror: could not find any network interface matching "
              "'%s'\n"
           << interface_name;
@@ -152,31 +152,32 @@ int client_init(struct client_t* client, char const* interface_name) {
   }
 
   // load the ebpf_client program and attach it to the network interface
-  LOG(INFO, AFXDP) << "loading ebpf_client...";
+  UCCL_LOG(INFO, AFXDP) << "loading ebpf_client...";
 
   client->program =
       xdp_program__open_file("ebpf_client.o", "ebpf_client", NULL);
   if (libxdp_get_error(client->program)) {
-    LOG(ERROR, AFXDP) << "could not load ebpf_client program";
+    UCCL_LOG(ERROR, AFXDP) << "could not load ebpf_client program";
     return 1;
   }
 
-  LOG(INFO, AFXDP) << "ebpf_client loaded successfully.";
+  UCCL_LOG(INFO, AFXDP) << "ebpf_client loaded successfully.";
 
-  LOG(INFO, AFXDP) << "attaching ebpf_client to network interface";
+  UCCL_LOG(INFO, AFXDP) << "attaching ebpf_client to network interface";
 
   int ret = xdp_program__attach(client->program, client->interface_index,
                                 XDP_MODE_NATIVE, 0);
   if (ret == 0) {
     client->attached_native = true;
   } else {
-    LOG(WARNING, AFXDP) << "falling back to skb mode...";
+    UCCL_LOG(WARNING, AFXDP) << "falling back to skb mode...";
     ret = xdp_program__attach(client->program, client->interface_index,
                               XDP_MODE_SKB, 0);
     if (ret == 0) {
       client->attached_skb = true;
     } else {
-      LOG(ERROR, AFXDP) << "failed to attach ebpf_client program to interface";
+      UCCL_LOG(ERROR, AFXDP)
+          << "failed to attach ebpf_client program to interface";
       return 1;
     }
   }
@@ -186,7 +187,7 @@ int client_init(struct client_t* client, char const* interface_name) {
   struct rlimit rlim = {RLIM_INFINITY, RLIM_INFINITY};
 
   if (setrlimit(RLIMIT_MEMLOCK, &rlim)) {
-    LOG(ERROR, AFXDP) << "could not setrlimit";
+    UCCL_LOG(ERROR, AFXDP) << "could not setrlimit";
     return 1;
   }
 
@@ -197,7 +198,7 @@ int client_init(struct client_t* client, char const* interface_name) {
 
     if (posix_memalign(&client->socket[i].umem_buffer, getpagesize(),
                        buffer_size)) {
-      LOG(ERROR, AFXDP) << "could not allocate umem_buffer";
+      UCCL_LOG(ERROR, AFXDP) << "could not allocate umem_buffer";
       return 1;
     }
 
@@ -206,7 +207,7 @@ int client_init(struct client_t* client, char const* interface_name) {
         &client->socket[i].umem, client->socket[i].umem_buffer, buffer_size,
         &client->socket[i].fill_queue, &client->socket[i].complete_queue, NULL);
     if (ret) {
-      LOG(ERROR, AFXDP) << "could not create umem";
+      UCCL_LOG(ERROR, AFXDP) << "could not create umem";
       return 1;
     }
 
@@ -230,7 +231,8 @@ int client_init(struct client_t* client, char const* interface_name) {
                              &client->socket[i].recv_queue,
                              &client->socket[i].send_queue, &xsk_config);
     if (ret) {
-      LOG(ERROR, AFXDP) << "could not create xsk socket [" << queue_id << "]";
+      UCCL_LOG(ERROR, AFXDP)
+          << "could not create xsk socket [" << queue_id << "]";
       return 1;
     }
 
@@ -252,14 +254,14 @@ int client_init(struct client_t* client, char const* interface_name) {
     ret = pthread_create(&client->recv_thread[i], NULL, recv_thread,
                          &client->socket[i]);
     if (ret) {
-      LOG(ERROR, AFXDP) << "could not create socket recv thread #" << i;
+      UCCL_LOG(ERROR, AFXDP) << "could not create socket recv thread #" << i;
       return 1;
     }
 
     ret = pthread_create(&client->send_thread[i], NULL, send_thread,
                          &client->socket[i]);
     if (ret) {
-      LOG(ERROR, AFXDP) << "could not create socket send thread #" << i;
+      UCCL_LOG(ERROR, AFXDP) << "could not create socket send thread #" << i;
       return 1;
     }
   }
@@ -267,7 +269,7 @@ int client_init(struct client_t* client, char const* interface_name) {
   // create stats thread
   ret = pthread_create(&client->stats_thread, NULL, stats_thread, client);
   if (ret) {
-    LOG(ERROR, AFXDP) << "could not create stats thread";
+    UCCL_LOG(ERROR, AFXDP) << "could not create stats thread";
     return 1;
   }
 
@@ -382,8 +384,8 @@ void socket_send(struct socket_t* socket, int queue_id) {
       socket->last_stall_time = now_us;
     } else if (now_us - socket->last_stall_time > RTO_US) {
       // These inflight packets get lost, we just ignore them
-      LOG(WARNING, AFXDP) << "queue " << queue_id
-                          << " tx stall detected, forcing tx...";
+      UCCL_LOG(WARNING, AFXDP)
+          << "queue " << queue_id << " tx stall detected, forcing tx...";
       inflight_pkts = 0;
     }
     return;
@@ -435,13 +437,13 @@ void socket_send(struct socket_t* socket, int queue_id) {
       xsk_ring_cons__peek(&socket->complete_queue,
                           XSK_RING_CONS__DEFAULT_NUM_DESCS, &complete_index);
 
-  VLOG(3) << "tx complete_queue completed = " << completed
-          << ", inflight_pkts = " << inflight_pkts.load();
+  UCCL_VLOG(3) << "tx complete_queue completed = " << completed
+               << ", inflight_pkts = " << inflight_pkts.load();
   if (completed > 0) {
     for (int i = 0; i < completed; i++) {
       uint64_t frame_offset =
           *xsk_ring_cons__comp_addr(&socket->complete_queue, complete_index++);
-      VLOG(3) << "complete: " << std::hex << frame_offset;
+      UCCL_VLOG(3) << "complete: " << std::hex << frame_offset;
       socket->frame_pool->push(frame_offset);
     }
 
@@ -477,9 +479,9 @@ void socket_recv(struct socket_t* socket, int queue_id) {
     xsk_ring_prod__submit(&socket->fill_queue, stock_frames);
   }
 
-  VLOG(3) << "rx fill_queue rcvd = " << rcvd
-          << ", inflight_pkts = " << inflight_pkts.load()
-          << ", stock_frames = " << stock_frames;
+  UCCL_VLOG(3) << "rx fill_queue rcvd = " << rcvd
+               << ", inflight_pkts = " << inflight_pkts.load()
+               << ", stock_frames = " << stock_frames;
   for (int i = 0; i < rcvd; i++) {
     const struct xdp_desc* desc =
         xsk_ring_cons__rx_desc(&socket->recv_queue, idx_rx++);
@@ -487,7 +489,8 @@ void socket_recv(struct socket_t* socket, int queue_id) {
     uint64_t frame_offset = desc->addr;
     uint32_t len = desc->len;
     uint8_t* pkt = (uint8_t*)socket->umem_buffer + frame_offset;
-    VLOG(3) << "recv: " << std::hex << frame_offset << " " << std::dec << len;
+    UCCL_VLOG(3) << "recv: " << std::hex << frame_offset << " " << std::dec
+                 << len;
 
     // Doing some packet processing here...
     struct ethhdr* eth = (struct ethhdr*)pkt;
@@ -516,7 +519,7 @@ static void* send_thread(void* arg) {
 
   int queue_id = socket->queue_id;
 
-  LOG(INFO, AFXDP) << "started socket send thread for queue #" << queue_id;
+  UCCL_LOG(INFO, AFXDP) << "started socket send thread for queue #" << queue_id;
 
   pin_thread_to_cpu(queue_id);
 
@@ -535,12 +538,12 @@ static void* recv_thread(void* arg) {
       xdp_program__bpf_obj(client.program), "xsks_map");
   int xsk_map_fd = bpf_map__fd(map);
   if (xsk_map_fd < 0) {
-    LOG(ERROR, AFXDP) << "no xsks map found: " << strerror(xsk_map_fd);
+    UCCL_LOG(ERROR, AFXDP) << "no xsks map found: " << strerror(xsk_map_fd);
     exit(0);
   }
   int ret = xsk_socket__update_xskmap(socket->xsk, xsk_map_fd);
   if (ret) {
-    LOG(ERROR, AFXDP) << "xsks map update fails: " << strerror(xsk_map_fd);
+    UCCL_LOG(ERROR, AFXDP) << "xsks map update fails: " << strerror(xsk_map_fd);
     exit(0);
   }
 
@@ -558,7 +561,7 @@ static void* recv_thread(void* arg) {
   xsk_ring_prod__submit(&socket->fill_queue, XSK_RING_PROD__DEFAULT_NUM_DESCS);
 
   int queue_id = socket->queue_id;
-  LOG(INFO, AFXDP) << "started socket recv thread for queue #" << queue_id;
+  UCCL_LOG(INFO, AFXDP) << "started socket recv thread for queue #" << queue_id;
 
   pin_thread_to_cpu(MY_NUM_QUEUES + queue_id);
 
@@ -615,9 +618,9 @@ static void* stats_thread(void* arg) {
     uint64_t sent_delta = sent_packets - client->previous_sent_packets;
     client->previous_sent_packets = sent_packets;
 
-    LOG(INFO, AFXDP) << "send delta: " << sent_delta
-                     << ", med rtt: " << med_latency
-                     << " us, tail rtt: " << tail_latency << " us";
+    UCCL_LOG(INFO, AFXDP) << "send delta: " << sent_delta
+                          << ", med rtt: " << med_latency
+                          << " us, tail rtt: " << tail_latency << " us";
   }
   uint64_t duration =
       std::chrono::duration_cast<std::chrono::microseconds>(end - start)
@@ -630,10 +633,10 @@ static void* stats_thread(void* arg) {
   auto med_latency = Percentile(rtts, 50);
   auto tail_latency = Percentile(rtts, 99);
 
-  LOG(INFO, AFXDP) << "Throughput: " << std::fixed << std::setprecision(2)
-                   << throughput << " Kpkts/s, BW: " << bw_gbps
-                   << " Gbps, med rtt: " << med_latency
-                   << " us, tail rtt: " << tail_latency << " us";
+  UCCL_LOG(INFO, AFXDP) << "Throughput: " << std::fixed << std::setprecision(2)
+                        << throughput << " Kpkts/s, BW: " << bw_gbps
+                        << " Gbps, med rtt: " << med_latency
+                        << " us, tail rtt: " << tail_latency << " us";
 
   return NULL;
 }
@@ -642,7 +645,7 @@ int main(int argc, char* argv[]) {
   // google::InitGoogleLogging(argv[0]);
   // google::InstallFailureSignalHandler();
 
-  LOG(INFO, AFXDP) << "[client]";
+  UCCL_LOG(INFO, AFXDP) << "[client]";
 
   signal(SIGINT, interrupt_handler);
   signal(SIGTERM, clean_shutdown_handler);
@@ -652,8 +655,8 @@ int main(int argc, char* argv[]) {
 
   client_addr_u32 = htonl(str_to_ip(client_ip_str));
   server_addr_u32 = htonl(str_to_ip(server_ip_str));
-  CHECK(str_to_mac(client_mac_str, client_mac_char));
-  CHECK(str_to_mac(server_mac_str, server_mac_char));
+  UCCL_CHECK(str_to_mac(client_mac_str, client_mac_char));
+  UCCL_CHECK(str_to_mac(server_mac_str, server_mac_char));
 
   int pshared;
   int ret;
@@ -669,7 +672,7 @@ int main(int argc, char* argv[]) {
 
   cleanup();
 
-  LOG(INFO, AFXDP) << "";
+  UCCL_LOG(INFO, AFXDP) << "";
 
   return 0;
 }

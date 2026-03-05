@@ -252,7 +252,7 @@ class TXTracking {
     unacked_pkts_pp_[path_id]++;
   }
   inline void dec_unacked_pkts_pp(uint32_t path_id) {
-    DCHECK_GT(unacked_pkts_pp_[path_id], 0) << "path_id " << path_id;
+    UCCL_DCHECK_GT(unacked_pkts_pp_[path_id], 0) << "path_id " << path_id;
     unacked_pkts_pp_[path_id]--;
   }
   inline uint32_t get_unacked_pkts_pp(uint32_t path_id) {
@@ -377,7 +377,7 @@ class UcclFlow {
         remote_addr_(remote_addr),
         local_engine_idx_(local_engine_idx),
         remote_engine_idx_(remote_engine_idx),
-        socket_(CHECK_NOTNULL(socket)),
+        socket_(UCCL_CHECK_NOTNULL(socket)),
         channel_(channel),
         flow_id_(flow_id),
         pcb_(),
@@ -550,8 +550,8 @@ class UcclFlow {
     auto idx_u32 = U32Rand(0, UINT32_MAX);
     auto idx1 = idx_u32 % kMaxPath;
     auto idx2 = (idx_u32 >> 16) % kMaxPath;
-    VLOG(3) << "rtt: idx1 " << port_path_rtt_[idx1] << " idx2 "
-            << port_path_rtt_[idx2];
+    UCCL_VLOG(3) << "rtt: idx1 " << port_path_rtt_[idx1] << " idx2 "
+                 << port_path_rtt_[idx2];
     return (port_path_rtt_[idx1] < port_path_rtt_[idx2]) ? idx1 : idx2;
 #else
     static uint32_t next_path_id = 0;
@@ -591,7 +591,7 @@ class UcclEngine {
         last_periodic_tsc_(rdtsc()),
         periodic_ticks_(0),
         kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, freq_ghz)) {
-    CHECK(str_to_mac(local_l2_addr, local_l2_addr_));
+    UCCL_CHECK(str_to_mac(local_l2_addr, local_l2_addr_));
   }
 
   /**
@@ -734,7 +734,7 @@ class Endpoint {
       // Make sure we read exactly n_bytes
       r = read(sockfd, buffer + bytes_read, n_bytes - bytes_read);
       if (r < 0 && !(errno == EINTR)) {
-        CHECK(false) << "ERROR reading from socket";
+        UCCL_CHECK(false) << "ERROR reading from socket";
       }
       if (r > 0) {
         bytes_read += r;
@@ -750,7 +750,7 @@ class Endpoint {
       // Make sure we write exactly n_bytes
       r = write(sockfd, buffer + bytes_sent, n_bytes - bytes_sent);
       if (r < 0 && !(errno == EINTR)) {
-        CHECK(false) << "ERROR writing to socket";
+        UCCL_CHECK(false) << "ERROR writing to socket";
       }
       if (r > 0) {
         bytes_sent += r;
@@ -763,7 +763,7 @@ class Endpoint {
     bool sync = true;
     int ret = send_message(bootstrap_fd, &sync, sizeof(bool));
     ret = receive_message(bootstrap_fd, &sync, sizeof(bool));
-    DCHECK(ret == sizeof(bool) && sync);
+    UCCL_DCHECK(ret == sizeof(bool) && sync);
   }
 
   std::thread stats_thread_;

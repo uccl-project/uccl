@@ -556,18 +556,18 @@ class RDMAFactory {
                                     SharedIOContext* io_ctx);
 
   static inline struct FactoryDevice* get_factory_dev(int dev) {
-    DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
+    UCCL_DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
     return &rdma_ctl->devices_[dev];
   }
 
   static inline bool is_roce(int dev) {
-    DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
+    UCCL_DCHECK(dev >= 0 && dev < rdma_ctl->devices_.size());
     return rdma_ctl->devices_[dev].is_roce;
   }
 
   static inline int get_best_dev_idx(int gpu_idx) {
     auto it = rdma_ctl->gpu_to_dev_idx_.find(gpu_idx);
-    CHECK(it != rdma_ctl->gpu_to_dev_idx_.end())
+    UCCL_CHECK(it != rdma_ctl->gpu_to_dev_idx_.end())
         << "Error: gpu_to_dev_idx_[" << gpu_idx << "] is not set.";
     return it->second;
   }
@@ -615,7 +615,7 @@ static inline int modify_qp_rtr_gpuflush(struct ibv_qp* qp, int dev) {
         << (uint32_t)attr.path_mtu << "," << (uint32_t)attr.ah_attr.port_num
         << "," << (uint32_t)attr.ah_attr.grh.sgid_index << ","
         << attr.dest_qp_num << "," << attr.rq_psn;
-    VLOG(6) << oss.str();
+    UCCL_VLOG(6) << oss.str();
   }
 
   return ibv_modify_qp(qp, &attr, attr_mask);
@@ -646,7 +646,8 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
             factory_dev->gid.global.subnet_prefix) !=
         util_rdma_extract_local_subnet_prefix(
             remote_ctx->remote_gid.global.subnet_prefix)) {
-      LOG(ERROR, RDMA) << "Only support same subnet communication for now.";
+      UCCL_LOG(ERROR, RDMA)
+          << "Only support same subnet communication for now.";
     }
     attr.ah_attr.is_global = 0;
     attr.ah_attr.dlid = remote_ctx->remote_port_attr.lid;
@@ -669,7 +670,7 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
         << (uint32_t)attr.path_mtu << "," << (uint32_t)attr.ah_attr.port_num
         << "," << (uint32_t)attr.ah_attr.grh.sgid_index << ","
         << attr.dest_qp_num << "," << attr.rq_psn;
-    VLOG(6) << oss.str();
+    UCCL_VLOG(6) << oss.str();
   }
 
   return ibv_modify_qp(qp, &attr, attr_mask);
@@ -696,7 +697,7 @@ static inline int modify_qp_rts(struct ibv_qp* qp, bool rc) {
     oss << "QP#";
     oss << qp->qp_num;
     oss << " RTS(sq_psn):" << attr.sq_psn;
-    VLOG(6) << oss.str();
+    UCCL_VLOG(6) << oss.str();
   }
 
   return ibv_modify_qp(qp, &attr, attr_mask);
@@ -886,7 +887,7 @@ class SharedIOContext {
 
   inline CQEDesc* pop_cqe_desc() {
     uint64_t addr;
-    CHECK(cq_desc_pool_->alloc_buff(&addr) == 0)
+    UCCL_CHECK(cq_desc_pool_->alloc_buff(&addr) == 0)
         << "Failed to allocate buffer for CQE descriptor";
     return reinterpret_cast<CQEDesc*>(addr);
   }
@@ -894,7 +895,7 @@ class SharedIOContext {
   inline void push_retr_hdr(uint64_t addr) { retr_hdr_pool_->free_buff(addr); }
   inline uint64_t pop_retr_hdr() {
     uint64_t addr;
-    CHECK(retr_hdr_pool_->alloc_buff(&addr) == 0)
+    UCCL_CHECK(retr_hdr_pool_->alloc_buff(&addr) == 0)
         << "Failed to allocate buffer for retransmission header";
     return addr;
   }
@@ -903,7 +904,7 @@ class SharedIOContext {
   }
   inline uint64_t pop_retr_chunk() {
     uint64_t addr;
-    CHECK(retr_chunk_pool_->alloc_buff(&addr) == 0)
+    UCCL_CHECK(retr_chunk_pool_->alloc_buff(&addr) == 0)
         << "Failed to allocate buffer for retransmission chunk";
     return addr;
   }
@@ -913,7 +914,7 @@ class SharedIOContext {
   }
   inline uint64_t pop_ctrl_chunk() {
     uint64_t addr;
-    CHECK(ctrl_chunk_pool_->alloc_buff(&addr) == 0)
+    UCCL_CHECK(ctrl_chunk_pool_->alloc_buff(&addr) == 0)
         << "Failed to allocate buffer for control chunk";
     return addr;
   }
@@ -923,7 +924,7 @@ class SharedIOContext {
   }
 
   inline void record_qpn_ctx_mapping(int qp_num, RDMAContext* ctx) {
-    DCHECK(qpn_to_rdma_ctx_map_.find(qp_num) == qpn_to_rdma_ctx_map_.end())
+    UCCL_DCHECK(qpn_to_rdma_ctx_map_.find(qp_num) == qpn_to_rdma_ctx_map_.end())
         << "QP " << qp_num << " already exists";
     qpn_to_rdma_ctx_map_[qp_num] = ctx;
   }
@@ -934,8 +935,8 @@ class SharedIOContext {
 
   inline void record_sender_ctx_mapping(uint32_t peer_id, uint32_t fid,
                                         RDMAContext* ctx) {
-    DCHECK(fid_to_rdma_ctx_map_.find(std::make_pair(peer_id, fid)) ==
-           fid_to_rdma_ctx_map_.end())
+    UCCL_DCHECK(fid_to_rdma_ctx_map_.find(std::make_pair(peer_id, fid)) ==
+                fid_to_rdma_ctx_map_.end())
         << "FID " << fid << " already exists";
     fid_to_rdma_ctx_map_[std::make_pair(peer_id, fid)] = ctx;
   }

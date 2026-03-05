@@ -228,14 +228,15 @@ void socket_recv(struct socket_t* socket, int queue_id) {
   uint32_t rcvd = frames.size();
   inflight_pkts -= rcvd;
 
-  VLOG(3) << "rx fill_queue rcvd = " << rcvd
-          << ", inflight_pkts = " << inflight_pkts.load();
+  UCCL_VLOG(3) << "rx fill_queue rcvd = " << rcvd
+               << ", inflight_pkts = " << inflight_pkts.load();
 
   for (int i = 0; i < rcvd; i++) {
     uint64_t frame_offset = frames[i].frame_offset;
     uint32_t len = frames[i].frame_len;
     uint8_t* pkt = (uint8_t*)socket->afxdp_socket->umem_buffer_ + frame_offset;
-    VLOG(3) << "recv: " << std::hex << frame_offset << " " << std::dec << len;
+    UCCL_VLOG(3) << "recv: " << std::hex << frame_offset << " " << std::dec
+                 << len;
 
     // Doing some packet processing here...
     struct ethhdr* eth = (struct ethhdr*)pkt;
@@ -373,8 +374,8 @@ int main(int argc, char* argv[]) {
 
   client_addr_u32 = htonl(str_to_ip(client_ip_str));
   server_addr_u32 = htonl(str_to_ip(server_ip_str));
-  CHECK(str_to_mac(client_mac_str, client_mac_char));
-  CHECK(str_to_mac(server_mac_str, server_mac_char));
+  UCCL_CHECK(str_to_mac(client_mac_str, client_mac_char));
+  UCCL_CHECK(str_to_mac(server_mac_str, server_mac_char));
 
   int pshared;
   int ret;

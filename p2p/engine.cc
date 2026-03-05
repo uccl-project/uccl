@@ -121,7 +121,7 @@ UnifiedTask::SpecificData::~SpecificData() {}
 static inline void check_python_signals() {
   PyGILState_STATE gstate = PyGILState_Ensure();
   if (PyErr_CheckSignals() != 0) {
-    LOG(FATAL, P2P) << "Python signal caught, exiting...";
+    UCCL_LOG(FATAL, P2P) << "Python signal caught, exiting...";
   }
   PyGILState_Release(gstate);
 }
@@ -626,7 +626,7 @@ bool Endpoint::dereg(uint64_t mr_id) {
 
 bool Endpoint::send(uint64_t conn_id, uint64_t mr_id, void const* data,
                     size_t size) {
-  DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
+  UCCL_DCHECK(size <= 0xffffffff) << "size must be less than 4GB";
 
   Conn* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
@@ -891,7 +891,7 @@ bool Endpoint::recvv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
 bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
                     FifoItem const& slot_item) {
-  DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
+  UCCL_DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
   auto* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
     std::cerr << "[read] Error: Invalid conn_id " << conn_id << std::endl;
@@ -1024,7 +1024,7 @@ bool Endpoint::readv_async(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
 
 bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
                      FifoItem const& slot_item) {
-  DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
+  UCCL_DCHECK(size <= 0xffffffff) << "size must be < 4 GB";
   auto* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
     std::cerr << "[write] Error: Invalid conn_id " << conn_id << std::endl;
@@ -1292,7 +1292,7 @@ bool Endpoint::accept_local(int& remote_gpu_idx, uint64_t& conn_id) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 got:
-  CHECK(msg.type == ShmMsgType::CONNECT);
+  UCCL_CHECK(msg.type == ShmMsgType::CONNECT);
 
   remote_gpu_idx = msg.src_gpu;
   conn_id = next_conn_id_.fetch_add(1);
@@ -1328,7 +1328,7 @@ got:
 }
 
 bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
-  CHECK(data != nullptr) << "send_ipc: data pointer is null!";
+  UCCL_CHECK(data != nullptr) << "send_ipc: data pointer is null!";
 
   // Get connection info
   Conn* conn = get_conn(conn_id);
@@ -1347,7 +1347,7 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
   // Receive receiver's IPC_HANDLE message
   ShmMsg msg;
   shm_ring_recv(inbox_rings_[conn->remote_gpu_idx_].ring, msg);
-  CHECK(msg.type == ShmMsgType::IPC_HANDLE);
+  UCCL_CHECK(msg.type == ShmMsgType::IPC_HANDLE);
   auto info = msg.info;
 
   if (!info.is_host) {
@@ -1392,7 +1392,7 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
   } else {
     // CPU receiver, GPU sender: role reversal - sender shares its GPU handle,
     // receiver does the copy
-    CHECK(!sender_is_host)
+    UCCL_CHECK(!sender_is_host)
         << "send_ipc: both sender and receiver are CPU - not supported";
 
     // Create IPC handle for our GPU buffer
@@ -1418,20 +1418,20 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
     // Wait for receiver to complete the copy
     ShmMsg ack;
     shm_ring_recv(inbox_rings_[conn->remote_gpu_idx_].ring, ack);
-    CHECK(ack.type == ShmMsgType::COMPLETION)
+    UCCL_CHECK(ack.type == ShmMsgType::COMPLETION)
         << "Failed to receive completion notification, unexpected ack.type="
         << static_cast<uint32_t>(ack.type);
-    CHECK(ack.src_gpu == conn->remote_gpu_idx_)
+    UCCL_CHECK(ack.src_gpu == conn->remote_gpu_idx_)
         << "Failed to receive completion notification, unexpected ack.src_gpu="
         << static_cast<uint32_t>(ack.src_gpu);
-    CHECK_EQ(ack.completion, 1) << "Receiver reported failure";
+    UCCL_CHECK_EQ(ack.completion, 1) << "Receiver reported failure";
   }
 
   return true;
 }
 
 bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
-  CHECK(data != nullptr) << "recv_ipc: data pointer is null!";
+  UCCL_CHECK(data != nullptr) << "recv_ipc: data pointer is null!";
 
   // Get connection info
   Conn* conn = get_conn(conn_id);
@@ -1465,13 +1465,13 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
     // Wait completion on local inbox
     ShmMsg ack;
     shm_ring_recv(inbox_rings_[conn->remote_gpu_idx_].ring, ack);
-    CHECK(ack.type == ShmMsgType::COMPLETION)
+    UCCL_CHECK(ack.type == ShmMsgType::COMPLETION)
         << "Failed to receive completion notification, unexpected ack.type="
         << static_cast<uint32_t>(ack.type);
-    CHECK(ack.src_gpu == conn->remote_gpu_idx_)
+    UCCL_CHECK(ack.src_gpu == conn->remote_gpu_idx_)
         << "Failed to receive completion notification, unexpected ack.src_gpu="
         << static_cast<uint32_t>(ack.src_gpu);
-    CHECK_EQ(ack.completion, 1) << "Sender reported failure";
+    UCCL_CHECK_EQ(ack.completion, 1) << "Sender reported failure";
   } else {
     // CPU receiver: tell sender we are host, then receive sender's GPU handle
     // and copy D2H ourselves (zero-copy role reversal)
@@ -1489,9 +1489,9 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
     // Wait for sender's GPU handle
     ShmMsg sender_msg;
     shm_ring_recv(inbox_rings_[conn->remote_gpu_idx_].ring, sender_msg);
-    CHECK(sender_msg.type == ShmMsgType::IPC_HANDLE);
+    UCCL_CHECK(sender_msg.type == ShmMsgType::IPC_HANDLE);
     auto sender_info = sender_msg.info;
-    CHECK(!sender_info.is_host)
+    UCCL_CHECK(!sender_info.is_host)
         << "recv_ipc: both sender and receiver are CPU - not supported";
 
     int orig_device;
@@ -1591,7 +1591,7 @@ bool Endpoint::recv_ipc_async(uint64_t conn_id, void* data, size_t size,
 
 bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
                          IpcTransferInfo const& info) {
-  CHECK(data != nullptr) << "write_ipc: data pointer is null!";
+  UCCL_CHECK(data != nullptr) << "write_ipc: data pointer is null!";
 
   // Get connection info
   Conn* conn = get_conn(conn_id);
@@ -1650,7 +1650,7 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
 
 bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
                         IpcTransferInfo const& info) {
-  CHECK(data != nullptr) << "read_ipc: data pointer is null!";
+  UCCL_CHECK(data != nullptr) << "read_ipc: data pointer is null!";
 
   // Get connection info
   Conn* conn = get_conn(conn_id);
@@ -1711,9 +1711,9 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
                           std::vector<size_t> size_v,
                           std::vector<IpcTransferInfo> info_v,
                           size_t num_iovs) {
-  CHECK_EQ(data_v.size(), num_iovs) << "writev_ipc: data_v size mismatch";
-  CHECK_EQ(size_v.size(), num_iovs) << "writev_ipc: size_v size mismatch";
-  CHECK_EQ(info_v.size(), num_iovs) << "writev_ipc: info_v size mismatch";
+  UCCL_CHECK_EQ(data_v.size(), num_iovs) << "writev_ipc: data_v size mismatch";
+  UCCL_CHECK_EQ(size_v.size(), num_iovs) << "writev_ipc: size_v size mismatch";
+  UCCL_CHECK_EQ(info_v.size(), num_iovs) << "writev_ipc: info_v size mismatch";
 
   Conn* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
@@ -1732,7 +1732,7 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
   // Open all handles and issue all memcpys before syncing any stream.
   std::vector<void*> raw_ptrs(num_iovs, nullptr);
   for (size_t iov = 0; iov < num_iovs; ++iov) {
-    CHECK(data_v[iov] != nullptr)
+    UCCL_CHECK(data_v[iov] != nullptr)
         << "writev_ipc: data_v[" << iov << "] is null";
     GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_ptrs[iov], info_v[iov].handle,
                                      gpuIpcMemLazyEnablePeerAccess));
@@ -1773,9 +1773,9 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
 bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
                          std::vector<size_t> size_v,
                          std::vector<IpcTransferInfo> info_v, size_t num_iovs) {
-  CHECK_EQ(data_v.size(), num_iovs) << "readv_ipc: data_v size mismatch";
-  CHECK_EQ(size_v.size(), num_iovs) << "readv_ipc: size_v size mismatch";
-  CHECK_EQ(info_v.size(), num_iovs) << "readv_ipc: info_v size mismatch";
+  UCCL_CHECK_EQ(data_v.size(), num_iovs) << "readv_ipc: data_v size mismatch";
+  UCCL_CHECK_EQ(size_v.size(), num_iovs) << "readv_ipc: size_v size mismatch";
+  UCCL_CHECK_EQ(info_v.size(), num_iovs) << "readv_ipc: info_v size mismatch";
 
   Conn* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
@@ -1794,7 +1794,8 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
   // Open all handles and issue all memcpys before syncing any stream.
   std::vector<void*> raw_ptrs(num_iovs, nullptr);
   for (size_t iov = 0; iov < num_iovs; ++iov) {
-    CHECK(data_v[iov] != nullptr) << "readv_ipc: data_v[" << iov << "] is null";
+    UCCL_CHECK(data_v[iov] != nullptr)
+        << "readv_ipc: data_v[" << iov << "] is null";
     GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_ptrs[iov], info_v[iov].handle,
                                      gpuIpcMemLazyEnablePeerAccess));
     void* src_ptr = reinterpret_cast<void*>(
@@ -1948,9 +1949,12 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
                                 std::vector<size_t> size_v,
                                 std::vector<IpcTransferInfo> info_v,
                                 size_t num_iovs, uint64_t* transfer_id) {
-  CHECK_EQ(data_v.size(), num_iovs) << "writev_ipc_async: data_v size mismatch";
-  CHECK_EQ(size_v.size(), num_iovs) << "writev_ipc_async: size_v size mismatch";
-  CHECK_EQ(info_v.size(), num_iovs) << "writev_ipc_async: info_v size mismatch";
+  UCCL_CHECK_EQ(data_v.size(), num_iovs)
+      << "writev_ipc_async: data_v size mismatch";
+  UCCL_CHECK_EQ(size_v.size(), num_iovs)
+      << "writev_ipc_async: size_v size mismatch";
+  UCCL_CHECK_EQ(info_v.size(), num_iovs)
+      << "writev_ipc_async: info_v size mismatch";
 
   Conn* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
@@ -2016,9 +2020,12 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
                                std::vector<size_t> size_v,
                                std::vector<IpcTransferInfo> info_v,
                                size_t num_iovs, uint64_t* transfer_id) {
-  CHECK_EQ(data_v.size(), num_iovs) << "readv_ipc_async: data_v size mismatch";
-  CHECK_EQ(size_v.size(), num_iovs) << "readv_ipc_async: size_v size mismatch";
-  CHECK_EQ(info_v.size(), num_iovs) << "readv_ipc_async: info_v size mismatch";
+  UCCL_CHECK_EQ(data_v.size(), num_iovs)
+      << "readv_ipc_async: data_v size mismatch";
+  UCCL_CHECK_EQ(size_v.size(), num_iovs)
+      << "readv_ipc_async: size_v size mismatch";
+  UCCL_CHECK_EQ(info_v.size(), num_iovs)
+      << "readv_ipc_async: info_v size mismatch";
 
   Conn* conn = get_conn(conn_id);
   if (unlikely(conn == nullptr)) {
@@ -2082,8 +2089,8 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
 
 bool Endpoint::advertise_ipc(uint64_t conn_id, void* addr, size_t len,
                              char* out_buf) {
-  CHECK(addr != nullptr) << "advertise_ipc: addr pointer is null!";
-  CHECK(out_buf != nullptr) << "advertise_ipc: out_buf pointer is null!";
+  UCCL_CHECK(addr != nullptr) << "advertise_ipc: addr pointer is null!";
+  UCCL_CHECK(out_buf != nullptr) << "advertise_ipc: out_buf pointer is null!";
 
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
@@ -2114,9 +2121,9 @@ bool Endpoint::advertise_ipc(uint64_t conn_id, void* addr, size_t len,
 bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
                               std::vector<size_t> len_v,
                               std::vector<char*> out_buf_v, size_t num_iovs) {
-  CHECK_EQ(addr_v.size(), num_iovs) << "addr_v size mismatch";
-  CHECK_EQ(len_v.size(), num_iovs) << "len_v size mismatch";
-  CHECK_EQ(out_buf_v.size(), num_iovs) << "out_buf_v size mismatch";
+  UCCL_CHECK_EQ(addr_v.size(), num_iovs) << "addr_v size mismatch";
+  UCCL_CHECK_EQ(len_v.size(), num_iovs) << "len_v size mismatch";
+  UCCL_CHECK_EQ(out_buf_v.size(), num_iovs) << "out_buf_v size mismatch";
 
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
@@ -2126,9 +2133,9 @@ bool Endpoint::advertisev_ipc(uint64_t conn_id, std::vector<void*> addr_v,
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
   for (size_t i = 0; i < num_iovs; ++i) {
-    CHECK(addr_v[i] != nullptr)
+    UCCL_CHECK(addr_v[i] != nullptr)
         << "advertisev_ipc: addr_v[" << i << "] is null!";
-    CHECK(out_buf_v[i] != nullptr)
+    UCCL_CHECK(out_buf_v[i] != nullptr)
         << "advertisev_ipc: out_buf_v[" << i << "] is null!";
 
     // Generate IPC memory handle for each address
@@ -2344,8 +2351,8 @@ void Endpoint::send_proxy_thread_func() {
           break;
         }
         default:
-          LOG(ERROR, P2P) << "Unexpected task type in send processing: "
-                          << static_cast<int>(task->type);
+          UCCL_LOG(ERROR, P2P) << "Unexpected task type in send processing: "
+                               << static_cast<int>(task->type);
           break;
       }
       auto* status = task->status_ptr;
@@ -2408,8 +2415,8 @@ void Endpoint::recv_proxy_thread_func() {
         case TaskType::SEND_IPC:
         case TaskType::WRITE_NET:
         default:
-          LOG(ERROR, P2P) << "Unexpected task type in receive processing: "
-                          << static_cast<int>(task->type);
+          UCCL_LOG(ERROR, P2P) << "Unexpected task type in receive processing: "
+                               << static_cast<int>(task->type);
           break;
       }
       auto* status = task->status_ptr;

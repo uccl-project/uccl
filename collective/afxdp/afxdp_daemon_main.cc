@@ -48,45 +48,46 @@ struct xsk_ring_prod tx_ring_vec[NUM_QUEUES];
 void load_program(char const* interface_name, char const* ebpf_filename,
                   char const* section_name) {
   // we can only run xdp programs as root
-  CHECK(geteuid() == 0) << "error: this program must be run as root";
+  UCCL_CHECK(geteuid() == 0) << "error: this program must be run as root";
 
   strcpy(interface_name_attach, interface_name);
   // find the network interface that matches the interface name
   interface_index = get_dev_index(interface_name);
 
-  CHECK(interface_index != -1)
+  UCCL_CHECK(interface_index != -1)
       << "error: could not find any network interface matching "
       << interface_name;
 
   // load the ebpf program
-  LOG(INFO, AFXDP) << "loading " << section_name << "...";
+  UCCL_LOG(INFO, AFXDP) << "loading " << section_name << "...";
   program_attach = xdp_program__open_file(ebpf_filename, section_name, NULL);
-  CHECK(!libxdp_get_error(program_attach))
+  UCCL_CHECK(!libxdp_get_error(program_attach))
       << "error: could not load " << ebpf_filename << " program";
-  LOG(INFO, AFXDP) << ebpf_filename << " loaded successfully.";
+  UCCL_LOG(INFO, AFXDP) << ebpf_filename << " loaded successfully.";
 
   // attach the ebpf program to the network interface
-  LOG(INFO, AFXDP) << "attaching " << ebpf_filename << " to network interface";
+  UCCL_LOG(INFO, AFXDP) << "attaching " << ebpf_filename
+                        << " to network interface";
   int ret =
       xdp_program__attach(program_attach, interface_index, XDP_MODE_NATIVE, 0);
   if (ret == 0) {
     attached_native = true;
   } else {
-    LOG(INFO, AFXDP) << "falling back to skb mode...";
+    UCCL_LOG(INFO, AFXDP) << "falling back to skb mode...";
     ret = xdp_program__attach(program_attach, interface_index, XDP_MODE_SKB, 0);
     if (ret == 0) {
       attached_skb = true;
     } else {
-      LOG(ERROR, AFXDP) << "error: failed to attach " << ebpf_filename
-                        << " program to interface";
+      UCCL_LOG(ERROR, AFXDP) << "error: failed to attach " << ebpf_filename
+                             << " program to interface";
     }
   }
-  LOG(INFO, AFXDP) << ebpf_filename << " attached successfully.";
+  UCCL_LOG(INFO, AFXDP) << ebpf_filename << " attached successfully.";
 
   // allow unlimited locking of memory, so all memory needed for packet
   // buffers can be locked
   struct rlimit rlim = {RLIM_INFINITY, RLIM_INFINITY};
-  CHECK(!setrlimit(RLIMIT_MEMLOCK, &rlim)) << "error: could not setrlimit";
+  UCCL_CHECK(!setrlimit(RLIMIT_MEMLOCK, &rlim)) << "error: could not setrlimit";
 }
 
 void update_xsks_map() {
@@ -94,13 +95,13 @@ void update_xsks_map() {
   struct bpf_map* map = bpf_object__find_map_by_name(
       xdp_program__bpf_obj(program_attach), "xsks_map");
   int xsk_map_fd = bpf_map__fd(map);
-  CHECK(xsk_map_fd >= 0) << "ERROR: no xsks map found: "
-                         << strerror(xsk_map_fd);
+  UCCL_CHECK(xsk_map_fd >= 0)
+      << "ERROR: no xsks map found: " << strerror(xsk_map_fd);
 
   for (auto& xsk : xsk_vec) {
     int ret = xsk_socket__update_xskmap(xsk, xsk_map_fd);
-    CHECK_EQ(ret, 0) << "ERROR: xsks map update fails: "
-                     << strerror(xsk_map_fd);
+    UCCL_CHECK_EQ(ret, 0) << "ERROR: xsks map update fails: "
+                          << strerror(xsk_map_fd);
   }
 }
 
@@ -174,7 +175,7 @@ void create_umem_and_xsk() {
    * binding to the UMEM, the UMEM fd is also created by socket(AF_XDP,
    * SOCK_RAW, 0). See xsk_socket__create_shared()
    */
-  DCHECK_EQ(xsk_socket__fd(xsk_vec[0]), xsk_umem__fd(umem));
+  UCCL_DCHECK_EQ(xsk_socket__fd(xsk_vec[0]), xsk_umem__fd(umem));
 
   // Step4: update the xsks_map for receiving packets
   update_xsks_map();
@@ -253,7 +254,7 @@ int main(int argc, char* argv[]) {
 
   uint32_t test_word;
   while (true) {
-    LOG(INFO, AFXDP) << "Waiting for non-privileged process to connect...";
+    UCCL_LOG(INFO, AFXDP) << "Waiting for non-privileged process to connect...";
     if ((client_sock = accept(server_sock, NULL, NULL)) == -1) {
       perror("accept");
       exit(EXIT_FAILURE);
@@ -271,7 +272,7 @@ int main(int argc, char* argv[]) {
         recv(client_sock, &test_word, sizeof(test_word), 0);
 
     if (bytes_received == 0) {
-      LOG(INFO, AFXDP)
+      UCCL_LOG(INFO, AFXDP)
           << "Peer has closed the connection or crashed, forcely clean up "
              "all xsks and umem";
       destroy_umem_and_xsk();

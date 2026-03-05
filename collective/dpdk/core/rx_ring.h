@@ -27,7 +27,7 @@ class RxRing : public PmdRing {
                                      this->GetDescNum(), SOCKET_ID_ANY, &conf_,
                                      this->GetPacketMemPool());
     if (ret != 0) {
-      LOG(FATAL, DPDK)
+      UCCL_LOG(FATAL, DPDK)
           << "rte_eth_rx_queue_setup() faled. Cannot setup RX queue.";
     }
   }

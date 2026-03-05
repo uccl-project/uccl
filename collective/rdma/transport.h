@@ -299,13 +299,13 @@ class RDMAContext {
   eqds::EQDS* eqds_;
 
   inline void add_sender_flow(void* flow, uint32_t flow_id) {
-    DCHECK(sender_flow_tbl_[flow_id] == nullptr) << flow_id;
+    UCCL_DCHECK(sender_flow_tbl_[flow_id] == nullptr) << flow_id;
     sender_flow_tbl_[flow_id] = flow;
     nr_flows_++;
   }
 
   inline void add_receiver_flow(void* flow, uint32_t flow_id) {
-    DCHECK(receiver_flow_tbl_[flow_id] == nullptr) << flow_id;
+    UCCL_DCHECK(receiver_flow_tbl_[flow_id] == nullptr) << flow_id;
     receiver_flow_tbl_[flow_id] = flow;
     nr_flows_++;
   }
@@ -564,7 +564,8 @@ class EQDSRDMAContext : public RDMAContext {
   void EventOnRxData(SubUcclFlow* subflow, IMMData* imm_data) override {
     auto* imm = reinterpret_cast<IMMDataEQDS*>(imm_data);
     if (subflow->pcb.eqds_cc.handle_pull_target(imm->GetTarget())) {
-      VLOG(5) << "Request pull for new target: " << (uint32_t)imm->GetTarget();
+      UCCL_VLOG(5) << "Request pull for new target: "
+                   << (uint32_t)imm->GetTarget();
       eqds_->request_pull(&subflow->pcb.eqds_cc);
     }
   }
@@ -575,7 +576,7 @@ class EQDSRDMAContext : public RDMAContext {
     if (permitted_bytes < wr_ex->sge.length ||
         !subflow->pcb.eqds_cc.spend_credit(wr_ex->sge.length)) {
       subflow->in_rtx = true;
-      VLOG(5) << "Cannot retransmit chunk due to insufficient credits";
+      UCCL_VLOG(5) << "Cannot retransmit chunk due to insufficient credits";
       return false;
     }
     // Re-compute pull target.
@@ -603,7 +604,7 @@ class EQDSRDMAContext : public RDMAContext {
   void EventOnRxCredit(SubUcclFlow* subflow, eqds::PullQuanta pullno) override {
     subflow->pcb.eqds_cc.stop_speculating();
 
-    VLOG(5) << "Received credit: " << (uint32_t)pullno;
+    UCCL_VLOG(5) << "Received credit: " << (uint32_t)pullno;
     if (subflow->pcb.eqds_cc.handle_pull(pullno)) {
       // TODO: trigger transmission for this subflow immediately.
     }
@@ -1031,21 +1032,21 @@ class RDMAEndpoint {
 
   inline uint16_t get_p2p_listen_port(int dev) {
     if (infer_dev_) dev = 0;
-    CHECK(p2p_listen_ports_[dev] != 0)
+    UCCL_CHECK(p2p_listen_ports_[dev] != 0)
         << "Error: p2p_listen_ports_[" << dev << "] is not set.";
     return p2p_listen_ports_[dev];
   }
 
   inline int get_p2p_listen_fd(int dev) {
     if (infer_dev_) dev = 0;
-    CHECK(p2p_listen_fds_[dev] >= 0)
+    UCCL_CHECK(p2p_listen_fds_[dev] >= 0)
         << "Error: p2p_listen_fds_[" << dev << "] is not set.";
     return p2p_listen_fds_[dev];
   }
 
   inline std::string get_p2p_listen_ip(int dev) {
     auto factory_dev = RDMAFactory::get_factory_dev(dev);
-    CHECK(factory_dev) << "get_p2p_listen_ip: get_factory_dev()";
+    UCCL_CHECK(factory_dev) << "get_p2p_listen_ip: get_factory_dev()";
     return factory_dev->local_ip_str;
   }
 
@@ -1406,11 +1407,11 @@ class UcclFlow {
       // Send QPN to remote peer.
       memcpy(buf, &comm_base->rc_qp->qp_num, sizeof(uint32_t));
       int ret = send_message(bootstrap_fd, buf, sizeof(uint32_t));
-      DCHECK(ret == sizeof(uint32_t));
+      UCCL_DCHECK(ret == sizeof(uint32_t));
 
       // Receive QPN from remote peer.
       ret = receive_message(bootstrap_fd, buf, sizeof(uint32_t));
-      DCHECK(ret == sizeof(uint32_t));
+      UCCL_DCHECK(ret == sizeof(uint32_t));
 
       auto rc_rqpn = *reinterpret_cast<uint32_t*>(buf);
 

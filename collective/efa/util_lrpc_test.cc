@@ -28,7 +28,7 @@ void rcore_thread(LRPC& lrpc, std::atomic<int>& rcore_msg_count) {
   while (!stop_flag) {
     if (lrpc.rcore_recv(&msg) == 0) {
       auto recv_count = *(uint64_t*)msg.data;
-      CHECK(recv_count == rcore_msg_count.load());
+      UCCL_CHECK(recv_count == rcore_msg_count.load());
       rcore_msg_count++;
     }
   }

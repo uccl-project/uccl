@@ -18,6 +18,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <iosfwd>
 #include <iostream>
 #include <mutex>
 #include <ostream>
@@ -56,6 +57,7 @@ class UCCLLogCapture;
 class UCCLVLogCapture;
 class UCCLCheckCapture;
 struct UCCLVoidify;
+struct UCCLNullStream {};
 
 #define UCCL_LOG_INTERNAL(level, subsys)                                       \
   (!uccl::ucclLogger.shouldLog(uccl::level, uccl::subsys))                     \
@@ -65,7 +67,7 @@ struct UCCLVoidify;
                                   __FILE__, __LINE__, __func__)                \
                  .stream())
 
-#define LOG(level, subsys) UCCL_LOG_INTERNAL(level, subsys)
+#define UCCL_LOG(level, subsys) UCCL_LOG_INTERNAL(level, subsys)
 
 // https://stackoverflow.com/questions/1489932/how-can-i-concatenate-twice-with-the-c-preprocessor-and-expand-a-macro-as-in-ar
 #define UCCL_FUNC_NAME_CONCAT_INTERNAL(x, y) x##y
@@ -86,7 +88,7 @@ struct UCCLVoidify;
                                  __FILE__, __LINE__, __func__)                \
                 .stream()
 
-#define LOG_EVERY_N(level, subsys, n) \
+#define UCCL_LOG_EVERY_N(level, subsys, n) \
   UCCL_LOG_EVERY_N_INTERNAL(level, subsys, n)
 
 #define UCCL_LOG_FIRST_N_INTERNAL(level, subsys, n)                           \
@@ -94,14 +96,14 @@ struct UCCLVoidify;
       log_first_n_counter, __LINE__){1};                                      \
   (!(uccl::ucclLogger.shouldLog(uccl::level, uccl::subsys) &&                 \
      ((UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(log_first_n_counter, __LINE__)     \
-           .fetch_add(1) <= n))))                                             \
+           .fetch_add(1) <= (n)))))                                           \
       ? (void)0                                                               \
       : uccl::UCCLVoidify() &                                                 \
             uccl::UCCLLogCapture(uccl::ucclLogger, uccl::level, uccl::subsys, \
                                  __FILE__, __LINE__, __func__)                \
                 .stream()
 
-#define LOG_FRIST_N(level, subsys, n) \
+#define UCCL_LOG_FIRST_N(level, subsys, n) \
   UCCL_LOG_FIRST_N_INTERNAL(level, subsys, n)
 
 #define UCCL_LOG_IF_INTERNAL(level, subsys, condition)                         \
@@ -112,18 +114,19 @@ struct UCCLVoidify;
                                   __FILE__, __LINE__, __func__)                \
                  .stream())
 
-#define LOG_IF(level, subsys, condition) \
+#define UCCL_LOG_IF(level, subsys, condition) \
   UCCL_LOG_IF_INTERNAL(level, subsys, condition)
 
 #define UCCL_VLOG_IF_INTERNAL(vLogLevel, condition)                       \
-  !(condition && uccl::ucclLogger.shouldvLog(vLogLevel))                  \
+  !(condition && uccl::ucclLogger.shouldVLog(vLogLevel))                  \
       ? (void)0                                                           \
       : uccl::UCCLVoidify() &                                             \
             (uccl::UCCLVLogCapture(uccl::ucclLogger, vLogLevel, __FILE__, \
                                    __LINE__, __func__)                    \
                  .stream())
 
-#define VLOG_IF(vLogLevel, condition) UCCL_VLOG_INTERNAL(vLogLevel, condition)
+#define UCCL_VLOG_IF(vLogLevel, condition) \
+  UCCL_VLOG_IF_INTERNAL(vLogLevel, condition)
 
 #define UCCL_VLOG_INTERNAL(vLogLevel)                                     \
   (!uccl::ucclLogger.shouldVLog(vLogLevel))                               \
@@ -133,7 +136,7 @@ struct UCCLVoidify;
                                    __LINE__, __func__)                    \
                  .stream())
 
-#define VLOG(level) UCCL_VLOG_INTERNAL(level)
+#define UCCL_VLOG(level) UCCL_VLOG_INTERNAL(level)
 
 // here, the & operator has a lower precedence than the << operator
 // hence, it the << would resolve first and the type of the : branch would
@@ -146,50 +149,37 @@ struct UCCLVoidify;
                                     __func__, #condition, "CHECK")        \
                  .stream())
 
-#define CHECK(condition) UCCL_CHECK_INTERNAL((condition))
+#define UCCL_CHECK(condition) UCCL_CHECK_INTERNAL((condition))
 
-#define CHECK_EQ(first, second) UCCL_CHECK_INTERNAL(((first) == (second)))
+#define UCCL_CHECK_EQ(first, second) UCCL_CHECK_INTERNAL(((first) == (second)))
 
-#define CHECK_NE(first, second) UCCL_CHECK_INTERNAL(((first) != (second)))
+#define UCCL_CHECK_NE(first, second) UCCL_CHECK_INTERNAL(((first) != (second)))
 
-#define CHECK_LT(first, second) UCCL_CHECK_INTERNAL(((first) < (second)))
+#define UCCL_CHECK_LT(first, second) UCCL_CHECK_INTERNAL(((first) < (second)))
 
-#define CHECK_LE(first, second) UCCL_CHECK_INTERNAL(((first) <= (second)))
+#define UCCL_CHECK_LE(first, second) UCCL_CHECK_INTERNAL(((first) <= (second)))
 
-#define CHECK_GT(first, second) UCCL_CHECK_INTERNAL(((first) > (second)))
+#define UCCL_CHECK_GT(first, second) UCCL_CHECK_INTERNAL(((first) > (second)))
 
-#define CHECK_GTE(first, second) UCCL_CHECK_INTERNAL(((first) >= (second)))
+#define UCCL_CHECK_GTE(first, second) UCCL_CHECK_INTERNAL(((first) >= (second)))
 
 #ifdef NDEBUG
-#define DCHECK(condition) \
-  do {                    \
-  } while (0)
-#define DCHECK_EQ(first, second) \
-  do {                           \
-  } while (0)
-#define DCHECK_NE(first, second) \
-  do {                           \
-  } while (0)
-#define DCHECK_LT(first, second) \
-  do {                           \
-  } while (0)
-#define DCHECK_LE(first, second) \
-  do {                           \
-  } while (0)
-#define DCHECK_GT(first, second) \
-  do {                           \
-  } while (0)
-#define DCHECK_GTE(first, second) \
-  do {                            \
-  } while (0)
+static UCCLNullStream nullstream;
+#define UCCL_DCHECK(condition) ::uccl::nullstream
+#define UCCL_DCHECK_EQ(first, second) ::uccl::nullstream
+#define UCCL_DCHECK_NE(first, second) ::uccl::nullstream
+#define UCCL_DCHECK_LT(first, second) ::uccl::nullstream
+#define UCCL_DCHECK_LE(first, second) ::uccl::nullstream
+#define UCCL_DCHECK_GT(first, second) ::uccl::nullstream
+#define UCCL_DCHECK_GTE(first, second) ::uccl::nullstream
 #else
-#define DCHECK(condition) CHECK(condition)
-#define DCHECK_EQ(first, second) CHECK_EQ(first, second)
-#define DCHECK_NE(first, second) CHECK_NE(first, second)
-#define DCHECK_LT(first, second) CHECK_LT(first, second)
-#define DCHECK_LE(first, second) CHECK_LE(first, second)
-#define DCHECK_GT(first, second) CHECK_GT(first, second)
-#define DCHECK_GTE(first, second) CHECK_GTE(first, second)
+#define UCCL_DCHECK(condition) UCCL_CHECK(condition)
+#define UCCL_DCHECK_EQ(first, second) UCCL_CHECK_EQ(first, second)
+#define UCCL_DCHECK_NE(first, second) UCCL_CHECK_NE(first, second)
+#define UCCL_DCHECK_LT(first, second) UCCL_CHECK_LT(first, second)
+#define UCCL_DCHECK_LE(first, second) UCCL_CHECK_LE(first, second)
+#define UCCL_DCHECK_GT(first, second) UCCL_CHECK_GT(first, second)
+#define UCCL_DCHECK_GTE(first, second) UCCL_CHECK_GTE(first, second)
 #endif
 
 #define UCCL_PCHECK_INTERNAL(check)                                         \
@@ -199,14 +189,14 @@ struct UCCLVoidify;
                                       __func__, #check, "PCHECK", errno)    \
                    .stream())
 
-#define PCHECK(condition) UCCL_PCHECK_INTERNAL(condition)
+#define UCCL_PCHECK(condition) UCCL_PCHECK_INTERNAL(condition)
 
 template <typename T>
 inline T* UCCLCheckNotNullCapture(void* ptr, char const* expr);
 
 #define UCCL_CHECK_NOTNULL_INTERNAL(ptr) UCCLCheckNotNullCapture(ptr, #ptr)
 
-#define CHECK_NOTNULL(ptr) UCCL_CHECK_NOTNULL_INTERNAL(ptr)
+#define UCCL_CHECK_NOTNULL(ptr) UCCL_CHECK_NOTNULL_INTERNAL(ptr)
 
 constexpr std::string_view logLevelToString(UCCLLogLevel level) {
   switch (level) {
@@ -501,6 +491,19 @@ inline T* UCCLCheckNotNullCapture(T* ptr, char const* expr) {
   }
 
   return ptr;
+}
+
+// https://stackoverflow.com/questions/8433302/null-stream-do-i-have-to-include-ostream
+// Swallow all types
+template <typename T>
+inline UCCLNullStream& operator<<(UCCLNullStream& s, T const&) {
+  return s;
+}
+
+// Swallow manipulator templates
+inline UCCLNullStream& operator<<(UCCLNullStream& s,
+                                  std::ostream&(std::ostream&)) {
+  return s;
 }
 
 }  // namespace uccl

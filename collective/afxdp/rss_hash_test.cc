@@ -20,11 +20,11 @@ int main() {
   std::vector<uint32_t> redir_table;
   std::vector<uint8_t> rss_key;
   bool res = get_rss_config(DEV_DEFAULT, redir_table, rss_key);
-  DCHECK(res);
+  UCCL_DCHECK(res);
 
   uint32_t rss_hash =
       calculate_rss_hash(src_ip, dst_ip, src_port, dst_port, default_rss_key);
-  CHECK_EQ(rss_hash, 0x51ccc178);
+  UCCL_CHECK_EQ(rss_hash, 0x51ccc178);
 
   calculate_queue_id(src_ip, dst_ip, src_port, dst_port, default_rss_key,
                      redir_table);

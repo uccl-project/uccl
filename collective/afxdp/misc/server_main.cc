@@ -379,7 +379,7 @@ void complete_tx(struct socket_t* socket) {
   completed = xsk_ring_cons__peek(&socket->complete_queue,
                                   XSK_RING_CONS__DEFAULT_NUM_DESCS, &idx_cq);
 
-  VLOG(3) << "rx complete_tx completed = " << completed;
+  UCCL_VLOG(3) << "rx complete_tx completed = " << completed;
   if (completed > 0) {
     for (int i = 0; i < completed; i++)
       socket->frame_pool->push(
@@ -414,8 +414,8 @@ void socket_recv(struct socket_t* socket, int queue_id) {
     xsk_ring_prod__submit(&socket->fill_queue, stock_frames);
   }
 
-  VLOG(3) << "rx fill_queue rcvd = " << rcvd
-          << ", stock_frames = " << stock_frames;
+  UCCL_VLOG(3) << "rx fill_queue rcvd = " << rcvd
+               << ", stock_frames = " << stock_frames;
   for (int i = 0; i < rcvd; i++) {
     const struct xdp_desc* desc =
         xsk_ring_cons__rx_desc(&socket->recv_queue, idx_rx++);

@@ -26,11 +26,11 @@ void AFXDPFactory::init(char const* interface_name, uint64_t num_frames,
     exit(EXIT_FAILURE);
   }
   // Receive the file descriptor for the UMEM
-  CHECK(receive_fd(afxdp_ctl.client_sock_, &afxdp_ctl.umem_fd_) == 0);
+  UCCL_CHECK(receive_fd(afxdp_ctl.client_sock_, &afxdp_ctl.umem_fd_) == 0);
 
   // Receive the file descriptor for all AF_XDP sockets
   for (int i = 0; i < NUM_QUEUES; i++) {
-    CHECK(receive_fd(afxdp_ctl.client_sock_, &afxdp_ctl.xsk_fds_[i]) == 0);
+    UCCL_CHECK(receive_fd(afxdp_ctl.client_sock_, &afxdp_ctl.xsk_fds_[i]) == 0);
   }
 
   afxdp_ctl.umem_size_ = num_frames * FRAME_SIZE;
@@ -81,9 +81,10 @@ AFXDPSocket::AFXDPSocket(int queue_id)
 
   // Step2: map UMEM and build four rings for the AF_XDP socket
   int ret = create_afxdp_socket();
-  CHECK_EQ(ret, 0) << "xsk_socket__create_shared failed, " << ret;
+  UCCL_CHECK_EQ(ret, 0) << "xsk_socket__create_shared failed, " << ret;
 
-  LOG(INFO, AFXDP) << "[AF_XDP] socket " << queue_id << " successfully shared";
+  UCCL_LOG(INFO, AFXDP) << "[AF_XDP] socket " << queue_id
+                        << " successfully shared";
 
   // apply_setsockopt(xsk_fd_);
 
@@ -169,10 +170,10 @@ int AFXDPSocket::create_afxdp_socket() {
   frame_pool_ = new SharedPool<uint64_t, /*Sync=*/true>(frame_pool_size,
                                                         [](uint64_t frame) {});
   uint64_t frame_pool_offset = FRAME_SIZE * frame_pool_size * queue_id_;
-  LOG(INFO, AFXDP) << "[AF_XDP] frame pool " << queue_id_
-                   << " initialized: frame_pool_size = " << frame_pool_size
-                   << " frame_pool_offset = " << std::hex << "0x"
-                   << frame_pool_offset;
+  UCCL_LOG(INFO, AFXDP) << "[AF_XDP] frame pool " << queue_id_
+                        << " initialized: frame_pool_size = " << frame_pool_size
+                        << " frame_pool_offset = " << std::hex << "0x"
+                        << frame_pool_offset;
   for (uint64_t i = 0; i < frame_pool_size; i++) {
     uint64_t frame_offset = frame_pool_offset + XDP_PACKET_HEADROOM;
     push_frame(frame_offset);
@@ -272,7 +273,8 @@ uint32_t AFXDPSocket::pull_complete_queue() {
       uint64_t frame_offset =
           *xsk_ring_cons__comp_addr(&complete_queue_, idx_cq++);
 
-      DCHECK((frame_offset & XDP_PACKET_HEADROOM_MASK) == XDP_PACKET_HEADROOM)
+      UCCL_DCHECK((frame_offset & XDP_PACKET_HEADROOM_MASK) ==
+                  XDP_PACKET_HEADROOM)
           << std::hex << frame_offset;
 
       // TODO(yang): why collecting stats here is smaller than at tx time?
@@ -299,17 +301,17 @@ uint32_t AFXDPSocket::pull_complete_queue() {
     xsk_ring_cons__release(&complete_queue_, completed);
     unpulled_tx_pkts_ -= completed;
   }
-  VLOG(2) << "tx complete_queue completed = " << completed
-          << " unpulled_tx_pkts = " << unpulled_tx_pkts_;
+  UCCL_VLOG(2) << "tx complete_queue completed = " << completed
+               << " unpulled_tx_pkts = " << unpulled_tx_pkts_;
   return completed;
 }
 
 uint32_t AFXDPSocket::send_packet(frame_desc frame) {
   // reserving a slot in the send queue.
   uint32_t send_index;
-  VLOG(2) << "tx send_packets num_frames = " << 1;
+  UCCL_VLOG(2) << "tx send_packets num_frames = " << 1;
   while (xsk_ring_prod__reserve(&send_queue_, 1, &send_index) != 1) {
-    LOG_EVERY_N(WARNING, 1000000)
+    UCCL_LOG_EVERY_N(WARNING, 1000000)
         << "send_queue is full. Busy waiting... unpulled_tx_pkts "
         << unpulled_tx_pkts_ << " send_queue_free_entries "
         << send_queue_free_entries();
@@ -331,10 +333,10 @@ uint32_t AFXDPSocket::send_packets(std::vector<frame_desc>& frames) {
   // reserving slots in the send queue.
   uint32_t send_index;
   auto num_frames = frames.size();
-  VLOG(2) << "tx send_packets num_frames = " << num_frames;
+  UCCL_VLOG(2) << "tx send_packets num_frames = " << num_frames;
   while (xsk_ring_prod__reserve(&send_queue_, num_frames, &send_index) !=
          num_frames) {
-    LOG_EVERY_N(WARNING, 1000000)
+    UCCL_LOG_EVERY_N(WARNING, 1000000)
         << "send_queue is full. Busy waiting... unpulled_tx_pkts "
         << unpulled_tx_pkts_ << " send_queue_free_entries "
         << send_queue_free_entries() << " num_frames " << num_frames;
@@ -371,8 +373,8 @@ void AFXDPSocket::populate_fill_queue(uint32_t nb_frames) {
     *xsk_ring_prod__fill_addr(&fill_queue_, idx_fq++) = pop_frame();
 
   fill_queue_entries_ += ret;
-  VLOG(2) << "afxdp reserved fill_queue slots = " << ret
-          << " fill_queue_entries_ = " << fill_queue_entries_;
+  UCCL_VLOG(2) << "afxdp reserved fill_queue slots = " << ret
+               << " fill_queue_entries_ = " << fill_queue_entries_;
 
   xsk_ring_prod__submit(&fill_queue_, ret);
 }
@@ -388,8 +390,8 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
     return frames;
   }
   fill_queue_entries_ -= rcvd;
-  VLOG(2) << "rx recv_packets num_frames = " << rcvd
-          << " fill_queue_entries_ = " << fill_queue_entries_;
+  UCCL_VLOG(2) << "rx recv_packets num_frames = " << rcvd
+               << " fill_queue_entries_ = " << fill_queue_entries_;
 
   for (int i = 0; i < rcvd; i++) {
     const struct xdp_desc* desc =
@@ -402,7 +404,7 @@ std::vector<AFXDPSocket::frame_desc> AFXDPSocket::recv_packets(
      * filtering out these packets who normally have a wrong offset.
      */
     if (desc->addr & XDP_PACKET_HEADROOM_MASK != XDP_PACKET_HEADROOM) {
-      LOG_EVERY_N(WARNING, 1000000)
+      UCCL_LOG_EVERY_N(WARNING, 1000000)
           << "Received a frame with wrong offset: 0x" << std::hex << desc->addr;
       // auto frame_offset = desc->addr;
       // frame_offset &= ~XDP_PACKET_HEADROOM_MASK;

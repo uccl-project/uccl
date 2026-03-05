@@ -53,24 +53,24 @@ class NICEndpoint {
 
   bool regMem(std::shared_ptr<RegMemBlock> reg_block) {
     if (unlikely(!reg_block)) {
-      LOG(ERROR, RDMA) << "Error: regMem called with null reg_block";
+      UCCL_LOG(ERROR, RDMA) << "Error: regMem called with null reg_block";
       return false;
     }
 
     for (size_t context_id = 0; context_id < contexts_.size(); ++context_id) {
       auto context = contexts_[context_id];
       if (unlikely(!context)) {
-        LOG(ERROR, RDMA) << "Error: context at context_id " << context_id
-                         << " is null";
+        UCCL_LOG(ERROR, RDMA)
+            << "Error: context at context_id " << context_id << " is null";
         return false;
       }
 
       struct ibv_mr* mr = context->regMem(reg_block->addr, reg_block->size);
 
       if (unlikely(!mr)) {
-        LOG(ERROR, RDMA) << "Error: ibv_reg_mr failed for block at "
-                         << reg_block->addr << " size " << reg_block->size
-                         << " context_id " << context_id;
+        UCCL_LOG(ERROR, RDMA)
+            << "Error: ibv_reg_mr failed for block at " << reg_block->addr
+            << " size " << reg_block->size << " context_id " << context_id;
         return false;
       }
       reg_block->setMRByContextID(context_id, mr);
@@ -81,7 +81,7 @@ class NICEndpoint {
 
   bool deregMem(std::shared_ptr<RegMemBlock> reg_block) {
     if (unlikely(!reg_block)) {
-      LOG(ERROR, RDMA) << "Error: deregMem called with null reg_block";
+      UCCL_LOG(ERROR, RDMA) << "Error: deregMem called with null reg_block";
       return false;
     }
     for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
@@ -109,8 +109,8 @@ class NICEndpoint {
 
   // Blocking check for send completion
   void checkSendComplete(uint64_t rank_id, int64_t wr_id) {
-    LOG(INFO, RDMA) << "checkSendComplete - rank_id: " << rank_id
-                    << ", wr_id: " << wr_id;
+    UCCL_LOG(INFO, RDMA) << "checkSendComplete - rank_id: " << rank_id
+                         << ", wr_id: " << wr_id;
 
     auto it = send_channel_groups_.find(rank_id);
     if (it == send_channel_groups_.end()) {
@@ -122,12 +122,12 @@ class NICEndpoint {
     while (!send_group->check(wr_id)) {
       std::this_thread::sleep_for(std::chrono::microseconds(1));
     }
-    LOG(INFO, RDMA) << "checkSendComplete - Completed for rank_id: " << rank_id
-                    << ", wr_id: " << wr_id;
+    UCCL_LOG(INFO, RDMA) << "checkSendComplete - Completed for rank_id: "
+                         << rank_id << ", wr_id: " << wr_id;
   }
 
   bool checkSendComplete_once(uint64_t rank_id, int64_t wr_id) {
-    // LOG(INFO, RDMA) << "checkSendComplete - rank_id: " << rank_id
+    // UCCL_LOG(INFO, RDMA) << "checkSendComplete - rank_id: " << rank_id
     //           << ", wr_id: " << wr_id;
 
     auto it = send_channel_groups_.find(rank_id);
@@ -141,7 +141,7 @@ class NICEndpoint {
   }
 
   bool checkRecvComplete_once(uint64_t rank_id, uint64_t index) {
-    // LOG(INFO, RDMA) << "checkRecvComplete - Checking for rank_id: " <<
+    // UCCL_LOG(INFO, RDMA) << "checkRecvComplete - Checking for rank_id: " <<
     // rank_id
     //           << ", index: " << index;
     auto it = recv_channel_groups_.find(rank_id);
@@ -156,8 +156,8 @@ class NICEndpoint {
 
   // Blocking check for recv completion
   void checkRecvComplete(uint64_t rank_id, uint64_t index) {
-    LOG(INFO, RDMA) << "checkRecvComplete - Checking for rank_id: " << rank_id
-                    << ", index: " << index;
+    UCCL_LOG(INFO, RDMA) << "checkRecvComplete - Checking for rank_id: "
+                         << rank_id << ", index: " << index;
     auto it = recv_channel_groups_.find(rank_id);
     if (it == recv_channel_groups_.end()) {
       throw std::runtime_error("Recv channel group not found for rank_id: " +
@@ -168,8 +168,8 @@ class NICEndpoint {
     while (!recv_group->check(index)) {
       std::this_thread::sleep_for(std::chrono::microseconds(1));
     }
-    LOG(INFO, RDMA) << "checkRecvComplete - Completed for rank_id: " << rank_id
-                    << ", index: " << index;
+    UCCL_LOG(INFO, RDMA) << "checkRecvComplete - Completed for rank_id: "
+                         << rank_id << ", index: " << index;
   }
 
   int64_t writeOrRead(std::shared_ptr<RDMASendRequest> req) {
@@ -185,7 +185,8 @@ class NICEndpoint {
 
     // Blocking call until send succeeds
     while (wr_id < 0) {
-      // LOG(INFO, RDMA) << "NICEndpoint::write - Attempting to send to rank_id:
+      // UCCL_LOG(INFO, RDMA) << "NICEndpoint::write - Attempting to send to
+      // rank_id:
       // "
       //           << rank_id << ", peer rank_id " << rank_id;
       wr_id = send_group->postWriteOrRead(req);
@@ -212,8 +213,9 @@ class NICEndpoint {
 
     // Blocking call until send succeeds
     while (wr_id < 0) {
-      LOG(INFO, RDMA) << "NICEndpoint::send - Attempting to send to rank_id: "
-                      << rank_id << ", peer rank_id " << rank_id;
+      UCCL_LOG(INFO, RDMA)
+          << "NICEndpoint::send - Attempting to send to rank_id: " << rank_id
+          << ", peer rank_id " << rank_id;
       wr_id = send_group->send(req);
 
       if (wr_id < 0) {
@@ -238,8 +240,9 @@ class NICEndpoint {
     // Blocking call until recv succeeds
     while (index < 0) {
       index = recv_group->recv(req);
-      LOG(INFO, RDMA) << "NICEndpoint::recv - Attempting to recv from rank_id: "
-                      << rank_id << ", peer rank_id " << rank_id;
+      UCCL_LOG(INFO, RDMA)
+          << "NICEndpoint::recv - Attempting to recv from rank_id: " << rank_id
+          << ", peer rank_id " << rank_id;
       if (index < 0) {
         std::this_thread::sleep_for(std::chrono::microseconds(10));
       }
@@ -264,9 +267,9 @@ class NICEndpoint {
 
     add_rank_oob_meta({{current_send_id, std::make_shared<OOBMetaData>(
                                              remote_ip, remote_port)}});
-    LOG(INFO, RDMA) << "remote_gpuidx: " << remote_gpuidx
-                    << ", remote_ip: " << remote_ip
-                    << ", remote_port: " << remote_port;
+    UCCL_LOG(INFO, RDMA) << "remote_gpuidx: " << remote_gpuidx
+                         << ", remote_ip: " << remote_ip
+                         << ", remote_port: " << remote_port;
     build_connect(current_send_id);  // sync mode (default)
     ConnID conn_id;
     conn_id.context =
@@ -305,7 +308,7 @@ class NICEndpoint {
             if (getOrCreateRecvGroup(rank_id)->channelCount() ==
                 kQpNumPerChannel + 1) {
               accepted_meta_.erase(it);
-              LOG(INFO, RDMA)
+              UCCL_LOG(INFO, RDMA)
                   << "Accepted connection: rank_id=" << rank_id
                   << ", ip=" << accepted.ip << ", port=" << accepted.port
                   << ", gpu_id=" << accepted.gpu_id;
@@ -317,9 +320,9 @@ class NICEndpoint {
       // Wait before checking again
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    LOG(INFO, RDMA) << "Done Accepted connection: rank_id=" << rank_id
-                    << ", ip=" << accepted.ip << ", port=" << accepted.port
-                    << ", gpu_id=" << accepted.gpu_id;
+    UCCL_LOG(INFO, RDMA) << "Done Accepted connection: rank_id=" << rank_id
+                         << ", ip=" << accepted.ip << ", port=" << accepted.port
+                         << ", gpu_id=" << accepted.gpu_id;
     // Assign output parameters
     remote_ip = accepted.ip;
     if (remote_gpuidx != nullptr) {
@@ -336,15 +339,15 @@ class NICEndpoint {
 
   inline int uccl_regmr(void* const data, size_t const len, MRArray& mr_array) {
     if (unlikely(!data)) {
-      LOG(ERROR, RDMA) << "Error: uccl_regmr called with null data";
+      UCCL_LOG(ERROR, RDMA) << "Error: uccl_regmr called with null data";
       return -1;
     }
 
     for (size_t context_id = 0; context_id < contexts_.size(); ++context_id) {
       auto context = contexts_[context_id];
       if (unlikely(!context)) {
-        LOG(ERROR, RDMA) << "Error: context at context_id " << context_id
-                         << " is null";
+        UCCL_LOG(ERROR, RDMA)
+            << "Error: context at context_id " << context_id << " is null";
         return -1;
       }
 
@@ -352,9 +355,10 @@ class NICEndpoint {
       struct ibv_mr* mr = context->regMem(data, len);
 
       if (unlikely(!mr)) {
-        LOG(ERROR, RDMA) << "Error " << errno << " " << strerror(errno)
-                         << ": ibv_reg_mr_iova2 failed for data at " << data
-                         << " size " << len << " context_id " << context_id;
+        UCCL_LOG(ERROR, RDMA)
+            << "Error " << errno << " " << strerror(errno)
+            << ": ibv_reg_mr_iova2 failed for data at " << data << " size "
+            << len << " context_id " << context_id;
         return -1;
       }
 
@@ -389,8 +393,8 @@ class NICEndpoint {
     }
 
     initializeContexts(actual_device_ids);
-    LOG(INFO, RDMA) << "NICEndpoint initialized with " << contexts_.size()
-                    << " context(s) for GPU " << gpu_index;
+    UCCL_LOG(INFO, RDMA) << "NICEndpoint initialized with " << contexts_.size()
+                         << " context(s) for GPU " << gpu_index;
 
     for (auto dev : actual_device_ids) {
       auto device = RdmaDeviceManager::instance().getDevice(dev);
@@ -433,7 +437,7 @@ class NICEndpoint {
       return -1;  // Do nothing if auto polling is enabled
     }
     if (!req) {
-      LOG(WARNING, RDMA) << "NICEndpoint::sendRoutine - null request";
+      UCCL_LOG(WARNING, RDMA) << "NICEndpoint::sendRoutine - null request";
       return -1;
     }
 
@@ -441,7 +445,7 @@ class NICEndpoint {
     std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
     auto it = send_channel_groups_.find(rank_id);
     if (it == send_channel_groups_.end()) {
-      LOG(WARNING, RDMA)
+      UCCL_LOG(WARNING, RDMA)
           << "NICEndpoint::sendRoutine - Send channel group not found "
              "for rank_id: "
           << rank_id;
@@ -450,7 +454,7 @@ class NICEndpoint {
 
     auto send_group = it->second;
     if (!send_group) {
-      LOG(WARNING, RDMA)
+      UCCL_LOG(WARNING, RDMA)
           << "NICEndpoint::sendRoutine - Send channel group is null "
              "for rank_id: "
           << rank_id;
@@ -477,14 +481,15 @@ class NICEndpoint {
       size_t device_id = device_ids[i % device_ids.size()];
       auto device = device_manager.getDevice(device_id);
       if (!device) {
-        LOG(ERROR, RDMA) << "Error: Device " << device_id << " not found";
+        UCCL_LOG(ERROR, RDMA) << "Error: Device " << device_id << " not found";
         throw std::runtime_error("Device " + std::to_string(device_id) +
                                  " not found");
       }
       auto context = std::make_shared<RdmaContext>(device, contexts_.size());
       contexts_.push_back(context);
-      LOG(INFO, RDMA) << "NICEndpoint: Created context " << i << " for device "
-                      << device_id << " (" << device->name() << ")";
+      UCCL_LOG(INFO, RDMA) << "NICEndpoint: Created context " << i
+                           << " for device " << device_id << " ("
+                           << device->name() << ")";
     }
 
     assert(contexts_.size() == kNICContextNumber);
@@ -499,15 +504,15 @@ class NICEndpoint {
         std::lock_guard<std::mutex> lock(notify_mutex);
         notify_list.push_back(*notify_msg);
         output = "";
-        LOG(INFO, RDMA) << "process_meta: Received notification from"
-                        << notify_msg->name << " msg=" << notify_msg->msg;
+        UCCL_LOG(INFO, RDMA) << "process_meta: Received notification from"
+                             << notify_msg->name << " msg=" << notify_msg->msg;
         return;
       }
     }
 
     MetaInfoToExchange meta = deserialize<MetaInfoToExchange>(input);
-    LOG(INFO, RDMA) << "Received from " << client_ip << ":" << client_port
-                    << " - " << meta;
+    UCCL_LOG(INFO, RDMA) << "Received from " << client_ip << ":" << client_port
+                         << " - " << meta;
 
     auto context_id = channelIdToContextId(meta.channel_id);
     std::shared_ptr<RdmaContext> ctx_ptr = contexts_[context_id];
@@ -520,9 +525,9 @@ class NICEndpoint {
 
       auto ctrl_mem =
           allocator_->allocate(kRingBufferSize, MemoryType::HOST, ctx_ptr);
-      LOG(INFO, RDMA) << "process_meta: Allocated " << ctrl_mem->size
-                      << " bytes for recv control channel ring buffer at "
-                      << ctrl_mem->addr;
+      UCCL_LOG(INFO, RDMA) << "process_meta: Allocated " << ctrl_mem->size
+                           << " bytes for recv control channel ring buffer at "
+                           << ctrl_mem->addr;
 
       auto recv_ctrl_channel = std::make_shared<RecvControlChannel>(
           ctx_ptr, meta, ctrl_mem, meta.channel_id);
@@ -533,7 +538,7 @@ class NICEndpoint {
           rank_id_, meta.channel_id, recv_ctrl_channel->get_local_meta(),
           nullptr, ChannelType::Control, gpu_index_, oob_server_->get_port());
       response.mem_meta = ctrl_info;
-      LOG(INFO, RDMA) << "response (control channel):::::::" << response;
+      UCCL_LOG(INFO, RDMA) << "response (control channel):::::::" << response;
       output = serialize(response);
 
       // Set the control channel
@@ -549,10 +554,10 @@ class NICEndpoint {
         accepted.gpu_id = meta.gpu_id;
         accepted.rank_id = actual_rank_id;
         accepted_meta_[actual_rank_id] = accepted;
-        LOG(INFO, RDMA) << "Stored accepted connection: rank_id="
-                        << actual_rank_id << ", ip=" << client_ip
-                        << ", port=" << client_port
-                        << ", gpu_id=" << meta.gpu_id;
+        UCCL_LOG(INFO, RDMA)
+            << "Stored accepted connection: rank_id=" << actual_rank_id
+            << ", ip=" << client_ip << ", port=" << client_port
+            << ", gpu_id=" << meta.gpu_id;
       }
 
       if (meta.oob_port > 0) {
@@ -561,13 +566,14 @@ class NICEndpoint {
         if (!rev_conn_key.empty()) {
           std::unique_lock<std::shared_mutex> lock(rank_oob_conn_keys_mutex_);
           rank_oob_conn_keys_[actual_rank_id] = rev_conn_key;
-          LOG(INFO, RDMA) << "Established reverse connection to " << client_ip
-                          << ":" << meta.oob_port
-                          << " for rank_id=" << actual_rank_id
-                          << ", conn_key=" << rev_conn_key;
+          UCCL_LOG(INFO, RDMA)
+              << "Established reverse connection to " << client_ip << ":"
+              << meta.oob_port << " for rank_id=" << actual_rank_id
+              << ", conn_key=" << rev_conn_key;
         } else {
-          LOG(WARNING, RDMA) << "Failed to establish reverse connection to "
-                             << client_ip << ":" << meta.oob_port;
+          UCCL_LOG(WARNING, RDMA)
+              << "Failed to establish reverse connection to " << client_ip
+              << ":" << meta.oob_port;
         }
       }
     } else {
@@ -592,7 +598,7 @@ class NICEndpoint {
       MetaInfoToExchange response(rank_id_, meta.channel_id,
                                   new_channel->get_local_meta(), nullptr,
                                   ChannelType::Normal, gpu_index_);
-      LOG(INFO, RDMA) << "response:::::::" << response;
+      UCCL_LOG(INFO, RDMA) << "response:::::::" << response;
       output = serialize(response);
       addOneRecvChannel(actual_rank_id, meta.channel_id, new_channel);
     }
@@ -604,7 +610,7 @@ class NICEndpoint {
     // Deserialize response as MetaInfoToExchange
     MetaInfoToExchange response_meta =
         deserialize<MetaInfoToExchange>(response);
-    LOG(INFO, RDMA) << response_meta;
+    UCCL_LOG(INFO, RDMA) << response_meta;
     channel->establishChannel(response_meta.channel_meta);
     return response_meta.rank_id;
   }
@@ -699,8 +705,9 @@ class NICEndpoint {
         rank_id_, kControlChannelID, control_channel->get_local_meta(),
         ctrl_info, ChannelType::Control, gpu_index_, oob_server_->get_port());
 
-    LOG(INFO, RDMA) << "Control Meta: " << ctrl_meta << " Local Channel Meta: "
-                    << control_channel->get_local_meta() << std::endl;
+    UCCL_LOG(INFO, RDMA) << "Control Meta: " << ctrl_meta
+                         << " Local Channel Meta: "
+                         << control_channel->get_local_meta() << std::endl;
 
     std::string ctrl_serialized_meta = serialize(ctrl_meta);
 
@@ -718,8 +725,8 @@ class NICEndpoint {
         });
 
     if (!sent) {
-      LOG(ERROR, RDMA) << "Failed to send control channel metadata for rank "
-                       << rank_id;
+      UCCL_LOG(ERROR, RDMA)
+          << "Failed to send control channel metadata for rank " << rank_id;
       return -1;
     }
 
@@ -729,7 +736,7 @@ class NICEndpoint {
 
     if (future.wait_for(std::chrono::milliseconds(timeout_ms)) ==
         std::future_status::timeout) {
-      LOG(ERROR, RDMA)
+      UCCL_LOG(ERROR, RDMA)
           << "Timeout waiting for control channel handshake for rank "
           << rank_id;
       return -1;
@@ -737,7 +744,7 @@ class NICEndpoint {
 
     uint64_t recv_rank_id = future.get();
 
-    LOG(INFO, RDMA)
+    UCCL_LOG(INFO, RDMA)
         << "Control channel handshake completed successfully for rank "
         << recv_rank_id;
 
@@ -758,7 +765,7 @@ class NICEndpoint {
       MetaInfoToExchange meta(rank_id_, channel_id, channel->get_local_meta(),
                               nullptr, ChannelType::Normal, gpu_index_);
 
-      LOG(INFO, RDMA) << meta << std::endl;
+      UCCL_LOG(INFO, RDMA) << meta << std::endl;
       std::string serialized_meta = serialize(meta);
 
       auto promise = std::make_shared<std::promise<void>>();
@@ -775,15 +782,15 @@ class NICEndpoint {
           });
 
       if (!sent) {
-        LOG(ERROR, RDMA) << "Failed to send metadata for channel "
-                         << channel_id;
+        UCCL_LOG(ERROR, RDMA)
+            << "Failed to send metadata for channel " << channel_id;
         return false;
       }
     }
 
     if (!sync) {
-      LOG(INFO, RDMA) << "Normal channels async build initiated for rank "
-                      << rank_id;
+      UCCL_LOG(INFO, RDMA) << "Normal channels async build initiated for rank "
+                           << rank_id;
       return true;
     }
 
@@ -796,17 +803,17 @@ class NICEndpoint {
 
       if (remaining.count() <= 0 ||
           futures[i].wait_for(remaining) == std::future_status::timeout) {
-        LOG(ERROR, RDMA) << "Timeout waiting for channel " << (i + 1)
-                         << " to complete";
+        UCCL_LOG(ERROR, RDMA)
+            << "Timeout waiting for channel " << (i + 1) << " to complete";
         return false;
       }
 
       futures[i].get();
     }
 
-    LOG(INFO, RDMA) << "All " << kQpNumPerChannel
-                    << " normal channels built successfully for rank "
-                    << rank_id;
+    UCCL_LOG(INFO, RDMA) << "All " << kQpNumPerChannel
+                         << " normal channels built successfully for rank "
+                         << rank_id;
 
     return true;
   }
