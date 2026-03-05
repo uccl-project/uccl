@@ -224,7 +224,8 @@ class EventOverlap:
         The current stream `torch.cuda.current_stream()` waits for the event to be finished.
         """
         assert self.event is not None
-        self.event.current_stream_wait()
+        stream_ptr = int(torch.cuda.current_stream().cuda_stream)
+        self.event.current_stream_wait(stream_ptr)
 
     def __enter__(self) -> Any:
         """
@@ -247,7 +248,8 @@ class EventOverlap:
         Please follow the example in the `__enter__` function.
         """
         if self.event is not None:
-            self.event.current_stream_wait()
+            stream_ptr = int(torch.cuda.current_stream().cuda_stream)
+            self.event.current_stream_wait(stream_ptr)
 
 
 def detect_ib_hca():
