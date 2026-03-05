@@ -4,7 +4,7 @@
 
 CUDA_HOME:=/usr/local/cuda
 CXXFLAGS = -I /opt/amazon/efa/include -L /opt/amazon/efa/lib -lfabric -libverbs -lefa -lpthread \
-	-I$(CUDA_HOME)/include -L ${CUDA_HOME}/lib64 -lcudart -lcuda -I ../../../include -I ../../../collective/rdma -std=c++17 -lglog -lgflags
+	-I$(CUDA_HOME)/include -L ${CUDA_HOME}/lib64 -lcudart -lcuda -I ../../../include -I ../../../collective/rdma -std=c++17  -lgflags
 	
 all: test_efa_endpoint 
 
