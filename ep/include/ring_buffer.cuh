@@ -91,6 +91,17 @@ struct TransferCmd {
 static_assert(sizeof(TransferCmd) * 8 == 128, "TransferCmd must be 128 bits");
 #endif
 
+// WRITE command offsets (req_rptr, req_lptr) are always 16-byte aligned
+// (Int4-aligned). By storing them right-shifted by kWriteAddrShift bits in
+// the 32-bit fields, we extend the addressable range from 4 GiB to 64 GiB.
+// ATOMIC commands are unaffected (they use small offsets in a separate buffer).
+static constexpr int kWriteAddrShift = 4;
+
+// Decode a shifted WRITE offset back to a byte offset.
+inline uint64_t decode_write_offset(uint32_t shifted) {
+  return static_cast<uint64_t>(shifted) << kWriteAddrShift;
+}
+
 struct CopyTask {
   uint64_t wr_id;
   int dst_dev;
