@@ -153,11 +153,12 @@ static inline void shm_ring_recv(jring_t* ring, ShmMsg& msg) {
 uccl::UCCLLogLevel Endpoint::parse_log_level_from_env() {
   char const* env = std::getenv("UCCL_P2P_LOG_LEVEL");
   if (!env) {
-    return uccl::WARNING;
+    return uccl::WARN;
   }
 
   if (!strcasecmp(env, "INFO")) return uccl::INFO;
-  if (!strcasecmp(env, "WARNING")) return uccl::WARNING;
+  if (!strcasecmp(env, "WARN") || !strcasecmp(env, "WARNING"))
+    return uccl::WARN;
   if (!strcasecmp(env, "ERROR")) return uccl::ERROR;
   if (!strcasecmp(env, "FATAL")) return uccl::FATAL;
 
@@ -167,7 +168,7 @@ uccl::UCCLLogLevel Endpoint::parse_log_level_from_env() {
     return static_cast<uccl::UCCLLogLevel>(val);
   }
 
-  return uccl::WARNING;
+  return uccl::WARN;
 }
 
 // -----------------------------------------------------------------------------

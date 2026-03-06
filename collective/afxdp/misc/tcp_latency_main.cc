@@ -69,7 +69,7 @@ void runServer() {
     clientSocket =
         accept(serverSocket, (struct sockaddr*)&clientAddr, &clientLen);
     if (clientSocket < 0) {
-      UCCL_LOG(WARNING, UCCL_AFXDP) << "Accept failed: " << strerror(errno);
+      UCCL_LOG(WARN, UCCL_AFXDP) << "Accept failed: " << strerror(errno);
       continue;
     }
     setsockopt(clientSocket, IPPROTO_TCP, TCP_NODELAY, (void*)&flag,
