@@ -388,7 +388,7 @@ class EpollServer {
             ssize_t s = try_send(conn.fd, pkt.data(), pkt.size());
             if (s < 0) {
               // fatal send error -> close connection
-              UCCL_LOG(ERROR, RDMA)
+              UCCL_LOG(ERROR, UCCL_RDMA)
                   << "Error sending response on fd=" << conn.fd;
               remove_connection(conn.fd);
               return;

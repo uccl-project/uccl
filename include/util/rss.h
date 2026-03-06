@@ -48,9 +48,9 @@ inline bool get_rss_config(std::string const& interface_name,
   uint32_t key_size = rss_query->key_size;
   free(rss_query);
 
-  UCCL_LOG(INFO, UTIL) << "Interface " << interface_name
-                       << ": RSS indirection table size " << indir_size
-                       << ", RSS key size " << key_size;
+  UCCL_LOG(INFO, UCCL_UTIL)
+      << "Interface " << interface_name << ": RSS indirection table size "
+      << indir_size << ", RSS key size " << key_size;
 
   if (indir_size == 0 && key_size == 0) {
     std::cerr << "RSS configuration not supported on this NIC." << std::endl;

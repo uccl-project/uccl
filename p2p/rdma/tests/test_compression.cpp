@@ -8,7 +8,7 @@
  *       -I/usr/local/cuda/include -L/usr/local/cuda/lib64 \
  *       -L../../../../thirdparty/dietgpu/dietgpu/float -ldietgpu_float \
  *       -Wl,-rpath,../../../../thirdparty/dietgpu/dietgpu/float \
- *       -lcudart -lcuda -libverbs -lglog -lgflags -lpthread -std=c++17
+ *       -lcudart -lcuda -libverbs -lgflags -lpthread -std=c++17
  *
  * Build (ROCm/HIP):
  *   g++ -O3 -g test_compression.cpp -o test_compression \
@@ -18,7 +18,7 @@
  *       -I/opt/rocm/include -L/opt/rocm/lib \
  *       -L/io/uccl/thirdparty/dietgpu/dietgpu/float -ldietgpu_float \
  *       -Wl,-rpath,/io/uccl/thirdparty/dietgpu/dietgpu/float \
- *       -lamdhip64 -libverbs -lglog -lgflags -lpthread -std=c++17
+ *       -lamdhip64 -libverbs -lgflags -lpthread -std=c++17
  *
  * Run:
  *   ./test_compression [--gpu_index=0] [--buffer_size=1048576]
@@ -26,16 +26,16 @@
  */
 
 // g++ -O3 -g test_compression.cpp -o test_compression \
-    //     -D__HIP_PLATFORM_AMD__ \
-    //     -I../ -I../../include -I../../../include -I/io/uccl/thirdparty/dietgpu \
-    //     -I/opt/rocm/include -L/opt/rocm/lib \
-    //     -L/io/uccl/thirdparty/dietgpu/dietgpu/float -ldietgpu_float \
-    //    -Wl,-rpath,/io/uccl/thirdparty/dietgpu/dietgpu/float \
-    //     -lamdhip64 -libverbs -lglog -lgflags -lpthread -std=c++17
+//     -D__HIP_PLATFORM_AMD__ \
+//     -I../ -I../../include -I../../../include -I/io/uccl/thirdparty/dietgpu \
+//     -I/opt/rocm/include -L/opt/rocm/lib \
+//     -L/io/uccl/thirdparty/dietgpu/dietgpu/float -ldietgpu_float \
+//    -Wl,-rpath,/io/uccl/thirdparty/dietgpu/dietgpu/float \
+//     -lamdhip64 -libverbs -lgflags -lpthread -std=c++17
 #include "../compression.h"
 #include "../memory_allocator.h"
+#include "util/debug.h"
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -61,8 +61,8 @@ dietgpu::FloatType getFloatTypeFromString(std::string const& type_str) {
   } else if (type_str == "fp32" || type_str == "float32") {
     return dietgpu::FloatType::kFloat32;
   } else {
-    LOG(WARNING) << "Unknown float type '" << type_str
-                 << "', defaulting to fp32";
+    UCCL_LOG(WARN, UCCL_RDMA)
+        << "Unknown float type '" << type_str << "', defaulting to fp32";
     return dietgpu::FloatType::kFloat32;
   }
 }
@@ -134,8 +134,8 @@ bool compareBuffers(void const* buf1, void const* buf2, size_t num_elements,
     for (size_t i = 0; i < num_elements; ++i) {
       if (std::fabs(data1[i] - data2[i]) > tolerance) {
         if (mismatches < max_print) {
-          LOG(WARNING) << "Mismatch at index " << i << ": " << data1[i]
-                       << " vs " << data2[i];
+          UCCL_LOG(WARN, UCCL_RDMA) << "Mismatch at index " << i << ": "
+                                    << data1[i] << " vs " << data2[i];
         }
         mismatches++;
       }
@@ -147,8 +147,9 @@ bool compareBuffers(void const* buf1, void const* buf2, size_t num_elements,
     for (size_t i = 0; i < num_elements; ++i) {
       if (data1[i] != data2[i]) {
         if (mismatches < max_print) {
-          LOG(WARNING) << "Mismatch at index " << i << ": 0x" << std::hex
-                       << data1[i] << " vs 0x" << data2[i] << std::dec;
+          UCCL_LOG(WARN, UCCL_RDMA)
+              << "Mismatch at index " << i << ": 0x" << std::hex << data1[i]
+              << " vs 0x" << data2[i] << std::dec;
         }
         mismatches++;
       }
@@ -156,8 +157,8 @@ bool compareBuffers(void const* buf1, void const* buf2, size_t num_elements,
   }
 
   if (mismatches > 0) {
-    LOG(ERROR) << "Total mismatches: " << mismatches << " out of "
-               << num_elements << " elements";
+    UCCL_LOG(ERROR, UCCL_RDMA) << "Total mismatches: " << mismatches
+                               << " out of " << num_elements << " elements";
     return false;
   }
   return true;
@@ -167,14 +168,14 @@ bool compareBuffers(void const* buf1, void const* buf2, size_t num_elements,
 bool testCompressionRoundtrip(Compressor& compressor,
                               MemoryAllocator& allocator, size_t buffer_size,
                               dietgpu::FloatType float_type) {
-  LOG(INFO) << "=== Testing Compression Roundtrip ===";
+  UCCL_LOG(INFO, UCCL_RDMA) << "=== Testing Compression Roundtrip ===";
 
   size_t elem_size = getElementSize(float_type);
   size_t num_elements = buffer_size / elem_size;
 
-  LOG(INFO) << "Buffer size: " << buffer_size << " bytes";
-  LOG(INFO) << "Number of elements: " << num_elements;
-  LOG(INFO) << "Element size: " << elem_size << " bytes";
+  UCCL_LOG(INFO, UCCL_RDMA) << "Buffer size: " << buffer_size << " bytes";
+  UCCL_LOG(INFO, UCCL_RDMA) << "Number of elements: " << num_elements;
+  UCCL_LOG(INFO, UCCL_RDMA) << "Element size: " << elem_size << " bytes";
 
   // Allocate GPU buffers
   auto input_mem = allocator.allocate(buffer_size, MemoryType::GPU, nullptr);
@@ -203,20 +204,22 @@ bool testCompressionRoundtrip(Compressor& compressor,
   auto end_compress = std::chrono::high_resolution_clock::now();
 
   if (!compress_ok) {
-    LOG(ERROR) << "Compression failed!";
+    UCCL_LOG(ERROR, UCCL_RDMA) << "Compression failed!";
     return false;
   }
 
   auto compress_time = std::chrono::duration_cast<std::chrono::microseconds>(
                            end_compress - start_compress)
                            .count();
-  LOG(INFO) << "Compression time: " << compress_time << " us";
+  UCCL_LOG(INFO, UCCL_RDMA) << "Compression time: " << compress_time << " us";
 
   size_t compressed_size = send_req->local_mem->size;
   float compression_ratio =
       static_cast<float>(buffer_size) / static_cast<float>(compressed_size);
-  LOG(INFO) << "Compressed size: " << compressed_size << " bytes";
-  LOG(INFO) << "Compression ratio: " << compression_ratio << "x";
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "Compressed size: " << compressed_size << " bytes";
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "Compression ratio: " << compression_ratio << "x";
 
   // Prepare for decompression using the overload with RemoteMemInfo and
   // RegMemBlock
@@ -231,14 +234,15 @@ bool testCompressionRoundtrip(Compressor& compressor,
   auto end_decompress = std::chrono::high_resolution_clock::now();
 
   if (!decompress_ok) {
-    LOG(ERROR) << "Decompression failed!";
+    UCCL_LOG(ERROR, UCCL_RDMA) << "Decompression failed!";
     return false;
   }
 
   auto decompress_time = std::chrono::duration_cast<std::chrono::microseconds>(
                              end_decompress - start_decompress)
                              .count();
-  LOG(INFO) << "Decompression time: " << decompress_time << " us";
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "Decompression time: " << decompress_time << " us";
 
   // Copy output back to host
   GPU_RT_CHECK(GPU_MEMCPY(h_output.data(), output_mem->addr, buffer_size,
@@ -249,9 +253,9 @@ bool testCompressionRoundtrip(Compressor& compressor,
       compareBuffers(h_input.data(), h_output.data(), num_elements, float_type);
 
   if (match) {
-    LOG(INFO) << "Roundtrip test PASSED!";
+    UCCL_LOG(INFO, UCCL_RDMA) << "Roundtrip test PASSED!";
   } else {
-    LOG(ERROR) << "Roundtrip test FAILED!";
+    UCCL_LOG(ERROR, UCCL_RDMA) << "Roundtrip test FAILED!";
   }
 
   return match;
@@ -260,7 +264,7 @@ bool testCompressionRoundtrip(Compressor& compressor,
 // Test with RDMASendRequest and RDMARecvRequest workflow
 bool testRequestWorkflow(Compressor& compressor, MemoryAllocator& allocator,
                          size_t buffer_size, dietgpu::FloatType float_type) {
-  LOG(INFO) << "=== Testing Request Workflow ===";
+  UCCL_LOG(INFO, UCCL_RDMA) << "=== Testing Request Workflow ===";
 
   size_t elem_size = getElementSize(float_type);
   size_t num_elements = buffer_size / elem_size;
@@ -292,13 +296,13 @@ bool testRequestWorkflow(Compressor& compressor, MemoryAllocator& allocator,
   // Compress on sender
   bool compress_ok = compressor.compress(send_req);
   if (!compress_ok) {
-    LOG(ERROR) << "Sender compression failed!";
+    UCCL_LOG(ERROR, UCCL_RDMA) << "Sender compression failed!";
     return false;
   }
 
   size_t compressed_size = send_req->local_mem->size;
-  LOG(INFO) << "Sender compressed data: " << buffer_size << " -> "
-            << compressed_size << " bytes";
+  UCCL_LOG(INFO, UCCL_RDMA) << "Sender compressed data: " << buffer_size
+                            << " -> " << compressed_size << " bytes";
 
   // Simulate network transfer: copy compressed data to receiver's buffer
   // (In real RDMA, this would be done by the NIC via RDMA write)
@@ -321,11 +325,11 @@ bool testRequestWorkflow(Compressor& compressor, MemoryAllocator& allocator,
   // Decompress
   bool decompress_ok = compressor.decompress(recv_req);
   if (!decompress_ok) {
-    LOG(ERROR) << "Receiver decompression failed!";
+    UCCL_LOG(ERROR, UCCL_RDMA) << "Receiver decompression failed!";
     return false;
   }
 
-  LOG(INFO) << "Receiver decompressed data to output buffer";
+  UCCL_LOG(INFO, UCCL_RDMA) << "Receiver decompressed data to output buffer";
 
   // Copy output back to host
   GPU_RT_CHECK(GPU_MEMCPY(h_output.data(), receiver_output_mem->addr,
@@ -336,9 +340,9 @@ bool testRequestWorkflow(Compressor& compressor, MemoryAllocator& allocator,
       compareBuffers(h_input.data(), h_output.data(), num_elements, float_type);
 
   if (match) {
-    LOG(INFO) << "Request workflow test PASSED!";
+    UCCL_LOG(INFO, UCCL_RDMA) << "Request workflow test PASSED!";
   } else {
-    LOG(ERROR) << "Request workflow test FAILED!";
+    UCCL_LOG(ERROR, UCCL_RDMA) << "Request workflow test FAILED!";
   }
 
   return match;
@@ -348,7 +352,8 @@ bool testRequestWorkflow(Compressor& compressor, MemoryAllocator& allocator,
 void testBandwidth(Compressor& compressor, MemoryAllocator& allocator,
                    size_t buffer_size, dietgpu::FloatType float_type,
                    int iterations) {
-  LOG(INFO) << "=== Testing Bandwidth (" << iterations << " iterations) ===";
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "=== Testing Bandwidth (" << iterations << " iterations) ===";
 
   size_t elem_size = getElementSize(float_type);
   size_t num_elements = buffer_size / elem_size;
@@ -413,34 +418,37 @@ void testBandwidth(Compressor& compressor, MemoryAllocator& allocator,
   double decompress_bandwidth = (buffer_size / (1024.0 * 1024.0 * 1024.0)) /
                                 (avg_decompress_time / 1000.0);
 
-  LOG(INFO) << "Results:";
-  LOG(INFO) << "  Buffer size: " << buffer_size / (1024.0 * 1024.0) << " MB";
-  LOG(INFO) << "  Average compression time: " << avg_compress_time << " ms";
-  LOG(INFO) << "  Average decompression time: " << avg_decompress_time << " ms";
-  LOG(INFO) << "  Average compression ratio: " << compression_ratio << "x";
-  LOG(INFO) << "  Compression bandwidth: " << compress_bandwidth << " GB/s";
-  LOG(INFO) << "  Decompression bandwidth: " << decompress_bandwidth << " GB/s";
+  UCCL_LOG(INFO, UCCL_RDMA) << "Results:";
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "  Buffer size: " << buffer_size / (1024.0 * 1024.0) << " MB";
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "  Average compression time: " << avg_compress_time << " ms";
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "  Average decompression time: " << avg_decompress_time << " ms";
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "  Average compression ratio: " << compression_ratio << "x";
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "  Compression bandwidth: " << compress_bandwidth << " GB/s";
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "  Decompression bandwidth: " << decompress_bandwidth << " GB/s";
 }
 
 int main(int argc, char* argv[]) {
-  // Initialize gflags and glog
   gflags::ParseCommandLineFlags(&argc, &argv, true);
-  google::InitGoogleLogging(argv[0]);
-  FLAGS_logtostderr = 1;
 
-  LOG(INFO) << "========================================";
-  LOG(INFO) << "   Compressor Unit Test";
-  LOG(INFO) << "========================================";
+  UCCL_LOG(INFO, UCCL_RDMA) << "========================================";
+  UCCL_LOG(INFO, UCCL_RDMA) << "   Compressor Unit Test";
+  UCCL_LOG(INFO, UCCL_RDMA) << "========================================";
 
   // Set GPU device
   GPU_RT_CHECK(GPU_SET_DEVICE(FLAGS_gpu_index));
-  LOG(INFO) << "Using GPU device: " << FLAGS_gpu_index;
+  UCCL_LOG(INFO, UCCL_RDMA) << "Using GPU device: " << FLAGS_gpu_index;
 
   // Get float type
   dietgpu::FloatType float_type = getFloatTypeFromString(FLAGS_float_type);
-  LOG(INFO) << "Float type: " << FLAGS_float_type;
-  LOG(INFO) << "Buffer size: " << FLAGS_buffer_size << " bytes";
-  LOG(INFO) << "";
+  UCCL_LOG(INFO, UCCL_RDMA) << "Float type: " << FLAGS_float_type;
+  UCCL_LOG(INFO, UCCL_RDMA) << "Buffer size: " << FLAGS_buffer_size << " bytes";
+  UCCL_LOG(INFO, UCCL_RDMA) << "";
 
   // Create allocator and compressor
   MemoryAllocator allocator;
@@ -453,27 +461,27 @@ int main(int argc, char* argv[]) {
                                 float_type)) {
     all_passed = false;
   }
-  LOG(INFO) << "";
+  UCCL_LOG(INFO, UCCL_RDMA) << "";
 
   // Test request workflow
   if (!testRequestWorkflow(compressor, allocator, FLAGS_buffer_size,
                            float_type)) {
     all_passed = false;
   }
-  LOG(INFO) << "";
+  UCCL_LOG(INFO, UCCL_RDMA) << "";
 
   // Bandwidth test
   testBandwidth(compressor, allocator, FLAGS_buffer_size, float_type,
                 FLAGS_iterations);
-  LOG(INFO) << "";
+  UCCL_LOG(INFO, UCCL_RDMA) << "";
 
-  LOG(INFO) << "========================================";
+  UCCL_LOG(INFO, UCCL_RDMA) << "========================================";
   if (all_passed) {
-    LOG(INFO) << "   ALL TESTS PASSED";
+    UCCL_LOG(INFO, UCCL_RDMA) << "   ALL TESTS PASSED";
   } else {
-    LOG(ERROR) << "   SOME TESTS FAILED";
+    UCCL_LOG(ERROR, UCCL_RDMA) << "   SOME TESTS FAILED";
   }
-  LOG(INFO) << "========================================";
+  UCCL_LOG(INFO, UCCL_RDMA) << "========================================";
 
   return all_passed ? 0 : 1;
 }

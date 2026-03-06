@@ -88,12 +88,12 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     uccl_req_pool.push(req);
   }
 
-  UCCL_LOG(INFO, AFXDP) << "NCCL Plugin initialized";
+  UCCL_LOG(INFO, UCCL_AFXDP) << "NCCL Plugin initialized";
   return ncclSuccess;
 }
 ncclResult_t pluginDevices(int* ndev) {
   *ndev = 1;
-  UCCL_LOG(INFO, AFXDP) << "pluginDevices 1";
+  UCCL_LOG(INFO, UCCL_AFXDP) << "pluginDevices 1";
   return ncclSuccess;
 }
 
@@ -152,7 +152,7 @@ ncclResult_t pluginListen(int dev, void* handle, void** listenComm) {
   std::string local_ip_str = get_dev_ip(DEV_DEFAULT);
   ctx->ip_addr_u32 = str_to_ip(local_ip_str);
   ctx->conn_idx = global_conn_idx++;
-  UCCL_LOG(INFO, AFXDP) << "pluginListen: " << local_ip_str;
+  UCCL_LOG(INFO, UCCL_AFXDP) << "pluginListen: " << local_ip_str;
 
   // Listen is alreday done by Endpoint init.
   *listenComm = ctx;
@@ -180,7 +180,8 @@ ncclResult_t pluginConnect(int dev, void* handle, void** sendComm,
     connect_state->connect_th = std::thread([connect_state, remote_ip] {
       std::string remote_ip_str = ip_to_str(remote_ip);
       connect_state->comm_handler.conn_id = ep->uccl_connect(remote_ip_str);
-      UCCL_LOG(INFO, AFXDP) << "pluginConnect: connected to " << remote_ip_str;
+      UCCL_LOG(INFO, UCCL_AFXDP)
+          << "pluginConnect: connected to " << remote_ip_str;
       std::atomic_thread_fence(std::memory_order_release);
       std::atomic_store_explicit(&connect_state->done, true,
                                  std::memory_order_relaxed);
@@ -217,8 +218,8 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
 
   std::string remote_ip_str;
   comm_handler->conn_id = ep->uccl_accept(remote_ip_str);
-  UCCL_LOG(INFO, AFXDP) << "pluginAccept: accepted connection from "
-                        << remote_ip_str;
+  UCCL_LOG(INFO, UCCL_AFXDP)
+      << "pluginAccept: accepted connection from " << remote_ip_str;
 
   *recvComm = comm_handler;
   return ncclSuccess;
@@ -254,7 +255,8 @@ ncclResult_t pluginIsend(void* sendComm, void* data, int size, int tag,
   req->data_len = size;
   req->poll_ctx = ep->uccl_send_async(conn_id, data, size);
 
-  // UCCL_LOG(INFO, AFXDP) << "pluginIsend " << size << " " << inflight_send;
+  // UCCL_LOG(INFO, UCCL_AFXDP) << "pluginIsend " << size << " " <<
+  // inflight_send;
 
   *request = req;
   return ncclSuccess;
@@ -272,7 +274,7 @@ ncclResult_t pluginIrecv(void* recvComm, int n, void** data, int* sizes,
   req->data_len = sizes[0];
   req->poll_ctx = ep->uccl_recv_async(conn_id, data[0], &req->recv_len);
 
-  // UCCL_LOG(INFO, AFXDP) << "pluginIrecv " << sizes[0];
+  // UCCL_LOG(INFO, UCCL_AFXDP) << "pluginIrecv " << sizes[0];
 
   *request = req;
   return ncclSuccess;

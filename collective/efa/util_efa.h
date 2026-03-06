@@ -488,7 +488,7 @@ uint8_t GetActualNumDevices();
 static inline int util_efa_get_ib_name_from_dev_idx(int dev_idx,
                                                     char* ib_name) {
   auto const& efa_list = GetEfaDeviceNameList();
-  DCHECK_GE(dev_idx, 0);
+  UCCL_DCHECK_GTE(dev_idx, 0);
   UCCL_DCHECK_LT(static_cast<size_t>(dev_idx), efa_list.size())
       << "dev_idx " << dev_idx << " out of range; NUM_DEVICES mismatch";
   sprintf(ib_name, "%s", efa_list[dev_idx].c_str());
@@ -503,7 +503,7 @@ static inline int util_efa_get_ib_name_from_dev_idx(int dev_idx,
  */
 static inline int util_efa_get_ip_from_dev_idx(int dev_idx, std::string* ip) {
   auto const& ena_list = GetEnaDeviceNameList();
-  DCHECK_GE(dev_idx, 0);
+  UCCL_DCHECK_GTE(dev_idx, 0);
   UCCL_DCHECK_LT(static_cast<size_t>(dev_idx), ena_list.size())
       << "dev_idx " << dev_idx << " out of range; NUM_DEVICES mismatch";
   *ip = get_dev_ip(ena_list[dev_idx].c_str());

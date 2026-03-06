@@ -34,13 +34,14 @@ void runServer() {
 
   serverSocket = socket(AF_INET, SOCK_STREAM, 0);
   if (serverSocket == -1) {
-    UCCL_LOG(FATAL, AFXDP) << "Socket creation failed: " << strerror(errno);
+    UCCL_LOG(FATAL, UCCL_AFXDP)
+        << "Socket creation failed: " << strerror(errno);
     exit(EXIT_FAILURE);
   }
   int flag = 1;
   if (setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) <
       0)
-    UCCL_LOG(FATAL, AFXDP) << "setsockopt(SO_REUSEADDR) failed";
+    UCCL_LOG(FATAL, UCCL_AFXDP) << "setsockopt(SO_REUSEADDR) failed";
 
   bzero((char*)&serverAddr, sizeof(serverAddr));
   serverAddr.sin_family = AF_INET;
@@ -49,18 +50,18 @@ void runServer() {
 
   if (bind(serverSocket, (struct sockaddr*)&serverAddr, sizeof(serverAddr)) <
       0) {
-    UCCL_LOG(FATAL, AFXDP) << "Bind failed: " << strerror(errno);
+    UCCL_LOG(FATAL, UCCL_AFXDP) << "Bind failed: " << strerror(errno);
     close(serverSocket);
     exit(EXIT_FAILURE);
   }
 
   if (listen(serverSocket, 5) < 0) {
-    UCCL_LOG(FATAL, AFXDP) << "Listen failed: " << strerror(errno);
+    UCCL_LOG(FATAL, UCCL_AFXDP) << "Listen failed: " << strerror(errno);
     close(serverSocket);
     exit(EXIT_FAILURE);
   }
 
-  UCCL_LOG(INFO, AFXDP) << "Server listening on port " << PORT;
+  UCCL_LOG(INFO, UCCL_AFXDP) << "Server listening on port " << PORT;
   char* buffer = (char*)malloc(BUFFER_SIZE);
   char const confirmation[] = "ACK";
 
@@ -68,15 +69,15 @@ void runServer() {
     clientSocket =
         accept(serverSocket, (struct sockaddr*)&clientAddr, &clientLen);
     if (clientSocket < 0) {
-      UCCL_LOG(WARNING, AFXDP) << "Accept failed: " << strerror(errno);
+      UCCL_LOG(WARN, UCCL_AFXDP) << "Accept failed: " << strerror(errno);
       continue;
     }
     setsockopt(clientSocket, IPPROTO_TCP, TCP_NODELAY, (void*)&flag,
                sizeof(int));
 
-    UCCL_LOG(INFO, AFXDP) << "Connection accepted from "
-                          << inet_ntoa(clientAddr.sin_addr) << ":"
-                          << htons(clientAddr.sin_port);
+    UCCL_LOG(INFO, UCCL_AFXDP)
+        << "Connection accepted from " << inet_ntoa(clientAddr.sin_addr) << ":"
+        << htons(clientAddr.sin_port);
 
     for (int j = 0; j < NUM_MESSAGES; ++j) {
       receive_message(BUFFER_SIZE, clientSocket, (uint8_t*)buffer, &quit);
@@ -86,7 +87,7 @@ void runServer() {
 
     net_barrier(clientSocket);
     close(clientSocket);
-    UCCL_LOG(INFO, AFXDP) << "Client disconnected.";
+    UCCL_LOG(INFO, UCCL_AFXDP) << "Client disconnected.";
   }
 
   free(buffer);
@@ -100,7 +101,7 @@ void runClient(std::string const& serverIP) {
   serverAddr.sin_family = AF_INET;
   serverAddr.sin_port = htons(PORT);
   if (inet_pton(AF_INET, serverIP.c_str(), &serverAddr.sin_addr) <= 0) {
-    UCCL_LOG(FATAL, AFXDP) << "Invalid server IP address: " << serverIP;
+    UCCL_LOG(FATAL, UCCL_AFXDP) << "Invalid server IP address: " << serverIP;
     exit(EXIT_FAILURE);
   }
 
@@ -114,13 +115,14 @@ void runClient(std::string const& serverIP) {
 
     int clientSocket = socket(AF_INET, SOCK_STREAM, 0);
     if (clientSocket < 0) {
-      UCCL_LOG(FATAL, AFXDP) << "Socket creation failed: " << strerror(errno);
+      UCCL_LOG(FATAL, UCCL_AFXDP)
+          << "Socket creation failed: " << strerror(errno);
       exit(EXIT_FAILURE);
     }
 
     if (connect(clientSocket, (struct sockaddr*)&serverAddr,
                 sizeof(serverAddr)) < 0) {
-      UCCL_LOG(FATAL, AFXDP)
+      UCCL_LOG(FATAL, UCCL_AFXDP)
           << "Connection to server failed: " << strerror(errno);
       close(clientSocket);
       exit(EXIT_FAILURE);
@@ -151,21 +153,25 @@ void runClient(std::string const& serverIP) {
     medLatencies.push_back(uccl::Percentile(latencies, 50));
     tailLatencies.push_back(uccl::Percentile(latencies, 99));
 
-    UCCL_LOG(INFO, AFXDP) << "Iteration " << i + 1
-                          << ": Median Latency = " << medLatencies.back()
-                          << " µs, Tail Latency = " << tailLatencies.back()
-                          << " µs";
+    UCCL_LOG(INFO, UCCL_AFXDP)
+        << "Iteration " << i + 1 << ": Median Latency = " << medLatencies.back()
+        << " µs, Tail Latency = " << tailLatencies.back() << " µs";
   }
 
-  UCCL_LOG(INFO, AFXDP) << "Completed " << NUM_ITERATIONS << " iterations.";
-  UCCL_LOG(INFO, AFXDP) << "Median of median Latencies: "
-                        << uccl::Percentile(medLatencies, 50) << " µs";
-  UCCL_LOG(INFO, AFXDP) << "Tail of median Latencies: "
-                        << uccl::Percentile(medLatencies, 99) << " µs";
-  UCCL_LOG(INFO, AFXDP) << "Median of tail Latencies: "
-                        << uccl::Percentile(tailLatencies, 50) << " µs";
-  UCCL_LOG(INFO, AFXDP) << "Tail of tail Latencies: "
-                        << uccl::Percentile(tailLatencies, 99) << " µs";
+  UCCL_LOG(INFO, UCCL_AFXDP)
+      << "Completed " << NUM_ITERATIONS << " iterations.";
+  UCCL_LOG(INFO, UCCL_AFXDP)
+      << "Median of median Latencies: " << uccl::Percentile(medLatencies, 50)
+      << " µs";
+  UCCL_LOG(INFO, UCCL_AFXDP)
+      << "Tail of median Latencies: " << uccl::Percentile(medLatencies, 99)
+      << " µs";
+  UCCL_LOG(INFO, UCCL_AFXDP)
+      << "Median of tail Latencies: " << uccl::Percentile(tailLatencies, 50)
+      << " µs";
+  UCCL_LOG(INFO, UCCL_AFXDP)
+      << "Tail of tail Latencies: " << uccl::Percentile(tailLatencies, 99)
+      << " µs";
 }
 
 DEFINE_string(role, "server", "server or client.");
@@ -189,8 +195,8 @@ int main(int argc, char* argv[]) {
     std::string serverIP = FLAGS_serverip;
     runClient(serverIP);
   } else {
-    UCCL_LOG(FATAL, AFXDP) << "Unknown role: " << FLAGS_role
-                           << ". Use 'server' or 'client'.";
+    UCCL_LOG(FATAL, UCCL_AFXDP)
+        << "Unknown role: " << FLAGS_role << ". Use 'server' or 'client'.";
     return EXIT_FAILURE;
   }
 

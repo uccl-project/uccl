@@ -65,7 +65,7 @@ static void init_device_name_lists() {
         }
         if (ok && name) {
           g_efa_device_names.push_back(name);
-          UCCL_LOG(INFO, EFA) << "Discovered EFA device " << name;
+          UCCL_LOG(INFO, UCCL_EFA) << "Discovered EFA device " << name;
         }
       }
       ibv_free_device_list(list);
@@ -81,7 +81,8 @@ static void init_device_name_lists() {
           if (std::find(g_ena_device_names.begin(), g_ena_device_names.end(),
                         ifa->ifa_name) == g_ena_device_names.end()) {
             g_ena_device_names.push_back(ifa->ifa_name);
-            UCCL_LOG(INFO, EFA) << "Discovered ENA device " << ifa->ifa_name;
+            UCCL_LOG(INFO, UCCL_EFA)
+                << "Discovered ENA device " << ifa->ifa_name;
           }
         }
       }
@@ -90,13 +91,13 @@ static void init_device_name_lists() {
   }
 
   if (g_efa_device_names.empty()) {
-    UCCL_LOG(ERROR, EFA)
+    UCCL_LOG(ERROR, UCCL_EFA)
         << "No EFA devices discovered via environment variables or "
            "hardware enumeration";
   }
 
   if (g_ena_device_names.empty()) {
-    UCCL_LOG(ERROR, EFA)
+    UCCL_LOG(ERROR, UCCL_EFA)
         << "No ENA devices discovered via environment variables or "
            "hardware enumeration";
   }
@@ -122,20 +123,20 @@ uint8_t GetActualNumDevices() {
   if (!efa.empty()) actual = std::min(actual, static_cast<uint8_t>(efa.size()));
   if (!ena.empty()) actual = std::min(actual, static_cast<uint8_t>(ena.size()));
   if (efa.size() > NUM_DEVICES || ena.size() > NUM_DEVICES) {
-    UCCL_LOG(WARNING) << "GetActualNumDevices: more devices discovered than "
-                      << "NUM_DEVICES=" << (int)NUM_DEVICES
-                      << " (EFA=" << efa.size() << ", ENA=" << ena.size()
-                      << "). Capping to " << (int)actual
-                      << " to avoid fixed-size array overflow.";
+    UCCL_LOG(WARN, UCCL_EFA)
+        << "GetActualNumDevices: more devices discovered than "
+        << "NUM_DEVICES=" << (int)NUM_DEVICES << " (EFA=" << efa.size()
+        << ", ENA=" << ena.size() << "). Capping to " << (int)actual
+        << " to avoid fixed-size array overflow.";
   }
   return actual;
 }
 
 void EFAFactory::Init(int gpu) {
   auto num_devs = GetActualNumDevices();
-  UCCL_LOG(INFO) << "EFAFactory::Init(gpu=" << gpu
-                 << ") NUM_DEVICES=" << (int)NUM_DEVICES
-                 << " actual=" << (int)num_devs;
+  UCCL_LOG(INFO, UCCL_EFA) << "EFAFactory::Init(gpu=" << gpu
+                           << ") NUM_DEVICES=" << (int)NUM_DEVICES
+                           << " actual=" << (int)num_devs;
   for (int i = 0; i < num_devs; i++) {
     EFAFactory::InitDev(gpu + i);
   }
@@ -143,8 +144,8 @@ void EFAFactory::Init(int gpu) {
 
 void EFAFactory::Init() {
   auto num_devs = GetActualNumDevices();
-  UCCL_LOG(INFO) << "EFAFactory::Init() NUM_DEVICES=" << (int)NUM_DEVICES
-                 << " actual=" << (int)num_devs;
+  UCCL_LOG(INFO, UCCL_EFA) << "EFAFactory::Init() NUM_DEVICES="
+                           << (int)NUM_DEVICES << " actual=" << (int)num_devs;
   for (int i = 0; i < num_devs; i++) {
     EFAFactory::InitDev(i);
   }
@@ -185,8 +186,8 @@ void EFAFactory::InitDev(int dev_idx) {
     goto free_devices;
   }
   // UCCL_DCHECK(i == (dev_idx / 2));
-  UCCL_LOG(INFO, EFA) << "Found device: " << dev->ib_name << " at dev_idx " << i
-                      << " with gid_idx " << (uint32_t)EFA_GID_IDX;
+  UCCL_LOG(INFO, UCCL_EFA) << "Found device: " << dev->ib_name << " at dev_idx "
+                           << i << " with gid_idx " << (uint32_t)EFA_GID_IDX;
 
   // Open the device.
   memset(&dev_attr, 0, sizeof(dev_attr));
@@ -329,7 +330,7 @@ struct EFADevice* EFAFactory::GetEFADevice(int dev_idx) {
     char hostname[256];
     gethostname(hostname, sizeof(hostname));
     oss << "(host: " << hostname << ")";
-    UCCL_LOG(ERROR, EFA) << oss.str();
+    UCCL_LOG(ERROR, UCCL_EFA) << oss.str();
   }
 
   UCCL_DCHECK(dev_iter != efa_ctl.dev_map.end());
@@ -349,8 +350,9 @@ void EFAFactory::Shutdown() {
 
 EFASocket::EFASocket(int gpu_idx, int dev_idx, int socket_idx)
     : gpu_idx_(gpu_idx), dev_idx_(dev_idx), socket_idx_(socket_idx) {
-  UCCL_LOG(INFO, EFA) << "[EFA] creating gpu_idx " << gpu_idx << " dev_idx_ "
-                      << dev_idx_ << " socket_idx " << socket_idx;
+  UCCL_LOG(INFO, UCCL_EFA) << "[EFA] creating gpu_idx " << gpu_idx
+                           << " dev_idx_ " << dev_idx_ << " socket_idx "
+                           << socket_idx;
 
   memset(deficit_cnt_recv_wrs_, 0, sizeof(deficit_cnt_recv_wrs_));
   memset(deficit_cnt_recv_wrs_for_ctrl_, 0,
@@ -397,10 +399,10 @@ EFASocket::EFASocket(int gpu_idx, int dev_idx, int socket_idx)
                                                  PktDataBuffPool::kPktDataSize);
   UCCL_DCHECK(cuda_ret == cudaSuccess) << "cudaMalloc failed";
 #endif
-  UCCL_LOG(INFO, EFA) << "[EFA] gpu_idx " << gpu_idx << " pkt_data_buf_ "
-                      << std::hex << pkt_data_buf_ << " to "
-                      << pkt_data_buf_ + PktDataBuffPool::kNumPktData *
-                                             PktDataBuffPool::kPktDataSize;
+  UCCL_LOG(INFO, UCCL_EFA) << "[EFA] gpu_idx " << gpu_idx << " pkt_data_buf_ "
+                           << std::hex << pkt_data_buf_ << " to "
+                           << pkt_data_buf_ + PktDataBuffPool::kNumPktData *
+                                                  PktDataBuffPool::kPktDataSize;
 #ifdef MANAGED
   auto* pkt_data_mr_ =
       ibv_reg_mr(pd_, pkt_data_buf_,

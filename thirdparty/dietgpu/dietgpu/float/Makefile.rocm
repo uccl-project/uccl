@@ -22,7 +22,8 @@ FLOAT_DIR    = .
 LIB_TARGET = libdietgpu_float.so
 
 # Include paths
-INCLUDES = -I$(DIETGPU_ROOT)
+UCCL_INCLUDE = $(DIETGPU_ROOT)/../../include
+INCLUDES = -I$(DIETGPU_ROOT) -I$(UCCL_INCLUDE)
 
 # Compiler flags
 HIPCC_FLAGS = -O3 -std=c++17 -fPIC
@@ -34,7 +35,7 @@ GPU_ARCH ?= gfx950
 HIPCC_FLAGS += --offload-arch=$(GPU_ARCH)
 
 # Linker flags
-LDFLAGS = -shared -lglog
+LDFLAGS = -shared
 
 # Object directory
 OBJ_DIR = obj

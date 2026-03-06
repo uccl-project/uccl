@@ -21,7 +21,8 @@ FLOAT_DIR    = .
 LIB_TARGET = libdietgpu_float.so
 
 # Include paths
-INCLUDES = -I$(DIETGPU_ROOT)
+UCCL_INCLUDE = $(DIETGPU_ROOT)/../../include
+INCLUDES = -I$(DIETGPU_ROOT) -I$(UCCL_INCLUDE)
 
 # Compiler flags
 NVCC_FLAGS = -O3 -std=c++17 -Xcompiler -fPIC
@@ -32,7 +33,7 @@ GPU_ARCH ?= sm_90
 NVCC_FLAGS += -arch=$(GPU_ARCH)
 
 # Linker flags
-LDFLAGS = -shared -lglog
+LDFLAGS = -shared
 
 # Object directory
 OBJ_DIR = obj

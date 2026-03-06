@@ -2615,7 +2615,7 @@ void RDMAContext::rc_rx_ack(T* wc_or_cq_ex) {
         avg_react_delay =
             (avg_react_delay * count + reaction_delay) / (count + 1);
       }
-      UCCL_LOG_EVERY_N(INFO, RDMA, 1000)
+      UCCL_LOG_EVERY_N(INFO, UCCL_RDMA, 1000)
           << "CC decision delay: " << reaction_delay
           << "us, Average CC decision delay: " << avg_react_delay << "us";
     }
@@ -2890,7 +2890,8 @@ int RDMAContext::poll_credit_cq(void) {
         }
         engine_credit_chunk_pool_->free_buff(chunk_addr);
       } else {
-        UCCL_LOG(ERROR, RDMA) << "Credit CQ state error: " << cq_ex->status;
+        UCCL_LOG(ERROR, UCCL_RDMA)
+            << "Credit CQ state error: " << cq_ex->status;
       }
 
       if (++cq_budget == kMaxBatchCQ || ibv_next_poll(cq_ex)) break;
@@ -3141,7 +3142,7 @@ void RDMAContext::rc_rx_chunk(T* wc_or_cq_ex) {
   UCCL_DCHECK(req->ureq);
 
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
-    UCCL_LOG(ERROR, RDMA)
+    UCCL_LOG(ERROR, UCCL_RDMA)
         << "Can't find corresponding request or this request is "
            "invalid for this chunk. Dropping. "
         << req->type;

@@ -121,7 +121,7 @@ UnifiedTask::SpecificData::~SpecificData() {}
 static inline void check_python_signals() {
   PyGILState_STATE gstate = PyGILState_Ensure();
   if (PyErr_CheckSignals() != 0) {
-    UCCL_LOG(FATAL, P2P) << "Python signal caught, exiting...";
+    UCCL_LOG(FATAL, UCCL_P2P) << "Python signal caught, exiting...";
   }
   PyGILState_Release(gstate);
 }
@@ -150,16 +150,15 @@ static inline void shm_ring_recv(jring_t* ring, ShmMsg& msg) {
   msg = tmp;
 }
 
-std::once_flag Endpoint::glog_init_once;
-
 uccl::UCCLLogLevel Endpoint::parse_log_level_from_env() {
   char const* env = std::getenv("UCCL_P2P_LOG_LEVEL");
   if (!env) {
-    return uccl::WARNING;
+    return uccl::WARN;
   }
 
   if (!strcasecmp(env, "INFO")) return uccl::INFO;
-  if (!strcasecmp(env, "WARNING")) return uccl::WARNING;
+  if (!strcasecmp(env, "WARN") || !strcasecmp(env, "WARNING"))
+    return uccl::WARN;
   if (!strcasecmp(env, "ERROR")) return uccl::ERROR;
   if (!strcasecmp(env, "FATAL")) return uccl::FATAL;
 
@@ -169,7 +168,7 @@ uccl::UCCLLogLevel Endpoint::parse_log_level_from_env() {
     return static_cast<uccl::UCCLLogLevel>(val);
   }
 
-  return uccl::WARNING;
+  return uccl::WARN;
 }
 
 // -----------------------------------------------------------------------------
@@ -197,10 +196,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   }
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
-  // std::call_once(Endpoint::glog_init_once,
-  //                []() { google::InitGoogleLogging("uccl_p2p"); });
   uccl::ucclLogger.setLogLevel(Endpoint::parse_log_level_from_env());
-  // google::InstallFailureSignalHandler();
 
 #ifdef UCCL_P2P_USE_NCCL
   ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
@@ -259,10 +255,6 @@ Endpoint::Endpoint(uint32_t const num_cpus)
     }
   }
 
-  // std::call_once(glog_init_once,
-  //                []() { google::InitGoogleLogging("uccl_p2p"); });
-
-  // google::InstallFailureSignalHandler();
 #ifdef UCCL_P2P_USE_NCCL
   ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
 #else
@@ -2355,8 +2347,9 @@ void Endpoint::send_proxy_thread_func() {
           break;
         }
         default:
-          UCCL_LOG(ERROR, P2P) << "Unexpected task type in send processing: "
-                               << static_cast<int>(task->type);
+          UCCL_LOG(ERROR, UCCL_P2P)
+              << "Unexpected task type in send processing: "
+              << static_cast<int>(task->type);
           break;
       }
       auto* status = task->status_ptr;
@@ -2419,8 +2412,9 @@ void Endpoint::recv_proxy_thread_func() {
         case TaskType::SEND_IPC:
         case TaskType::WRITE_NET:
         default:
-          UCCL_LOG(ERROR, P2P) << "Unexpected task type in receive processing: "
-                               << static_cast<int>(task->type);
+          UCCL_LOG(ERROR, UCCL_P2P)
+              << "Unexpected task type in receive processing: "
+              << static_cast<int>(task->type);
           break;
       }
       auto* status = task->status_ptr;

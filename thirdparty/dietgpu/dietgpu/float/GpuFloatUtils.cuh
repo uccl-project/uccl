@@ -219,7 +219,7 @@ inline size_t getWordSizeFromFloatType(FloatType ft) {
     case FloatType::kFloat32:
       return sizeof(uint32_t);
     default:
-      CHECK(false);
+      UCCL_CHECK(false);
       return 0;
   }
 }

@@ -73,7 +73,7 @@ struct GpuMemoryReservation {
 
   GpuMemoryReservation& operator=(GpuMemoryReservation&& m) {
     // Can't be both a valid allocation and the same allocation
-    CHECK(!(res && res == m.res && device == m.device && ptr == m.ptr));
+    UCCL_CHECK(!(res && res == m.res && device == m.device && ptr == m.ptr));
 
     release();
     res = m.res;
@@ -274,7 +274,7 @@ class StackDeviceMemory {
 template <typename T>
 GpuMemoryReservation<T>::~GpuMemoryReservation() {
   if (ptr) {
-    CHECK(res);
+    UCCL_CHECK(res);
     res->deallocPointer(device, stream, sizeAllocated, ptr);
   }
 }
@@ -282,7 +282,7 @@ GpuMemoryReservation<T>::~GpuMemoryReservation() {
 template <typename T>
 void GpuMemoryReservation<T>::release() {
   if (ptr) {
-    CHECK(res);
+    UCCL_CHECK(res);
     res->deallocPointer(device, stream, sizeAllocated, ptr);
     res = nullptr;
     device = 0;

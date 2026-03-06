@@ -563,7 +563,7 @@ ANSDecodeStatus ansDecodeBatch(
         RUN_DECODE(11);
         break;
       default:
-        CHECK(false) << "unhandled pdf precision " << config.probBits;
+        UCCL_CHECK(false) << "unhandled pdf precision " << config.probBits;
     }
 
 #undef RUN_DECODE

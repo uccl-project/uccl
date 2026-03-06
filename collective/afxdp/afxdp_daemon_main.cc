@@ -59,30 +59,30 @@ void load_program(char const* interface_name, char const* ebpf_filename,
       << interface_name;
 
   // load the ebpf program
-  UCCL_LOG(INFO, AFXDP) << "loading " << section_name << "...";
+  UCCL_LOG(INFO, UCCL_AFXDP) << "loading " << section_name << "...";
   program_attach = xdp_program__open_file(ebpf_filename, section_name, NULL);
   UCCL_CHECK(!libxdp_get_error(program_attach))
       << "error: could not load " << ebpf_filename << " program";
-  UCCL_LOG(INFO, AFXDP) << ebpf_filename << " loaded successfully.";
+  UCCL_LOG(INFO, UCCL_AFXDP) << ebpf_filename << " loaded successfully.";
 
   // attach the ebpf program to the network interface
-  UCCL_LOG(INFO, AFXDP) << "attaching " << ebpf_filename
-                        << " to network interface";
+  UCCL_LOG(INFO, UCCL_AFXDP)
+      << "attaching " << ebpf_filename << " to network interface";
   int ret =
       xdp_program__attach(program_attach, interface_index, XDP_MODE_NATIVE, 0);
   if (ret == 0) {
     attached_native = true;
   } else {
-    UCCL_LOG(INFO, AFXDP) << "falling back to skb mode...";
+    UCCL_LOG(INFO, UCCL_AFXDP) << "falling back to skb mode...";
     ret = xdp_program__attach(program_attach, interface_index, XDP_MODE_SKB, 0);
     if (ret == 0) {
       attached_skb = true;
     } else {
-      UCCL_LOG(ERROR, AFXDP) << "error: failed to attach " << ebpf_filename
-                             << " program to interface";
+      UCCL_LOG(ERROR, UCCL_AFXDP) << "error: failed to attach " << ebpf_filename
+                                  << " program to interface";
     }
   }
-  UCCL_LOG(INFO, AFXDP) << ebpf_filename << " attached successfully.";
+  UCCL_LOG(INFO, UCCL_AFXDP) << ebpf_filename << " attached successfully.";
 
   // allow unlimited locking of memory, so all memory needed for packet
   // buffers can be locked
@@ -254,7 +254,8 @@ int main(int argc, char* argv[]) {
 
   uint32_t test_word;
   while (true) {
-    UCCL_LOG(INFO, AFXDP) << "Waiting for non-privileged process to connect...";
+    UCCL_LOG(INFO, UCCL_AFXDP)
+        << "Waiting for non-privileged process to connect...";
     if ((client_sock = accept(server_sock, NULL, NULL)) == -1) {
       perror("accept");
       exit(EXIT_FAILURE);
@@ -272,7 +273,7 @@ int main(int argc, char* argv[]) {
         recv(client_sock, &test_word, sizeof(test_word), 0);
 
     if (bytes_received == 0) {
-      UCCL_LOG(INFO, AFXDP)
+      UCCL_LOG(INFO, UCCL_AFXDP)
           << "Peer has closed the connection or crashed, forcely clean up "
              "all xsks and umem";
       destroy_umem_and_xsk();

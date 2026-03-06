@@ -17,21 +17,21 @@
 #define CUDA_VERIFY(X)                                         \
   do {                                                         \
     auto err__ = (X);                                          \
-    CHECK_EQ(err__, cudaSuccess)                               \
+    UCCL_CHECK_EQ(err__, cudaSuccess)                          \
         << "CUDA error " << dietgpu::errorToName(err__) << " " \
         << dietgpu::errorToString(err__);                      \
   } while (0)
 
-#define CURAND_VERIFY(X)                                                     \
-  do {                                                                       \
-    auto err__ = (X);                                                        \
-    CHECK_EQ(err__, CURAND_STATUS_SUCCESS) << "cuRAND error " << (int)err__; \
+#define CURAND_VERIFY(X)                                                        \
+  do {                                                                          \
+    auto err__ = (X);                                                           \
+    UCCL_CHECK_EQ(err__, CURAND_STATUS_SUCCESS) << "cuRAND error " << (int)err__; \
   } while (0)
 
 #ifdef __CUDA_ARCH__
 #define GPU_ASSERT(X) assert(X)
 #else
-#define GPU_ASSERT(X) CHECK(X)
+#define GPU_ASSERT(X) UCCL_CHECK(X)
 #endif // __CUDA_ARCH__
 
 /// Wrapper to synchronously probe for CUDA errors

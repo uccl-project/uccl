@@ -45,7 +45,7 @@ class SendControlChannel : public RDMAChannel {
     SendReqMeta meta;
     int index = getOneSendRequestMeta(meta);
     if (index < 0) {
-      UCCL_LOG(INFO, RDMA)
+      UCCL_LOG(INFO, UCCL_RDMA)
           << "getOneSendRequest - Ring buffer is empty, cannot pop";
       return false;
     }
@@ -58,8 +58,9 @@ class SendControlChannel : public RDMAChannel {
     req->imm_data.set_index(index);
 
     // Log the received request with all information
-    UCCL_LOG(INFO, RDMA) << "getOneSendRequest - Received request: " << *req;
-    UCCL_LOG(INFO, RDMA) << "  SendReqMeta from ring buffer: " << meta;
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "getOneSendRequest - Received request: " << *req;
+    UCCL_LOG(INFO, UCCL_RDMA) << "  SendReqMeta from ring buffer: " << meta;
 
     return true;
   }
@@ -68,7 +69,7 @@ class SendControlChannel : public RDMAChannel {
     std::vector<CQMeta> cq_datas;
     if (RDMAChannel::poll_once(cq_datas)) {
       for (auto const& cq_data : cq_datas) {
-        UCCL_LOG(INFO, RDMA)
+        UCCL_LOG(INFO, UCCL_RDMA)
             << "SendControlChannel::noblockingPoll - Polled completion: "
             << cq_data;
         if (cq_data.hasIMM()) {
@@ -112,16 +113,17 @@ class RecvControlChannel : public RDMAChannel {
 
   int postSendReq(std::shared_ptr<RDMARecvRequest> rev_req) {
     SendReqMeta req_meta(rev_req);
-    UCCL_LOG(INFO, RDMA) << "postSendReq - Created SendReqMeta: " << req_meta;
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "postSendReq - Created SendReqMeta: " << req_meta;
 
     int index = rb_->push_with_convert(req_meta, to_ring_meta);
     if (index < 0) {
-      UCCL_LOG(INFO, RDMA)
+      UCCL_LOG(INFO, UCCL_RDMA)
           << "postSendReq - Failed to push to ring buffer, index: " << index;
       return index;
     }
 
-    UCCL_LOG(INFO, RDMA)
+    UCCL_LOG(INFO, UCCL_RDMA)
         << "postSendReq - Successfully pushed to ring buffer at index: "
         << index;
     if (!remote_mem_ptr_) {
@@ -158,8 +160,9 @@ class RecvControlChannel : public RDMAChannel {
     if (rb_->check_at(index, check_all_chunks_received)) {
       // All chunks received, mark as done and remove completed items
       auto req = std::make_shared<SendReqMeta>(rb_->at(index).meta);
-      UCCL_LOG(INFO, RDMA) << "recv_done - All chunks received for index: "
-                           << index << ", marking as done.";
+      UCCL_LOG(INFO, UCCL_RDMA)
+          << "recv_done - All chunks received for index: " << index
+          << ", marking as done.";
 
       rb_->modify_at(index, set_is_done);
       rb_->remove_while(check_is_done);
@@ -172,7 +175,7 @@ class RecvControlChannel : public RDMAChannel {
     std::vector<CQMeta> cq_datas;
     if (RDMAChannel::poll_once(cq_datas)) {
       for (auto const& cq_data : cq_datas) {
-        UCCL_LOG(INFO, RDMA)
+        UCCL_LOG(INFO, UCCL_RDMA)
             << "RecvControlChannel::noblockingPoll - Polled completion: "
             << cq_data;
       }

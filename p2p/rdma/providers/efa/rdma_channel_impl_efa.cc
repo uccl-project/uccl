@@ -99,8 +99,8 @@ inline bool EFAChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
                                       uint32_t& nb_post_recv) {
   nb_post_recv = 0;
   if (!cq_ex) {
-    UCCL_LOG(INFO, P2P) << "poll_once - channel_id: " << channel_id
-                        << ", cq_ex_ is null";
+    UCCL_LOG(INFO, UCCL_P2P)
+        << "poll_once - channel_id: " << channel_id << ", cq_ex_ is null";
     return false;
   }
 
@@ -111,9 +111,9 @@ inline bool EFAChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
     return false;
   }
   if (ret) {
-    UCCL_LOG(ERROR, P2P) << "poll_once - channel_id: " << channel_id
-                         << ", ibv_start_poll error: " << ret << " ("
-                         << strerror(ret) << ")";
+    UCCL_LOG(ERROR, UCCL_P2P)
+        << "poll_once - channel_id: " << channel_id
+        << ", ibv_start_poll error: " << ret << " (" << strerror(ret) << ")";
     return false;
   }
 
@@ -121,7 +121,7 @@ inline bool EFAChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
     uint64_t wr_id = cq_ex->wr_id;
     auto status = cq_ex->status;
     if (unlikely(status != IBV_WC_SUCCESS)) {
-      UCCL_LOG(WARNING, P2P)
+      UCCL_LOG(WARN, UCCL_P2P)
           << "poll_once - channel_id: " << channel_id
           << ", CQE error, wr_id=" << wr_id << ", status=" << status << " ("
           << ibv_wc_status_str(status) << ")";
@@ -146,9 +146,9 @@ inline bool EFAChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
   ibv_end_poll(cq_ex);
 
   if (ret != ENOENT) {
-    UCCL_LOG(ERROR, P2P) << "poll_once - channel_id: " << channel_id
-                         << ", ibv_next_poll error: " << ret << " ("
-                         << strerror(ret) << ")";
+    UCCL_LOG(ERROR, UCCL_P2P)
+        << "poll_once - channel_id: " << channel_id
+        << ", ibv_next_poll error: " << ret << " (" << strerror(ret) << ")";
   }
 
   return !cq_datas.empty();

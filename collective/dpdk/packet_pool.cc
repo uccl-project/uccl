@@ -24,7 +24,7 @@ namespace uccl {
                           rte_pktmbuf_pool_init, &mbp_priv, rte_pktmbuf_init,
                           NULL, rte_socket_id(), kMemPoolFlags);
   if (mp == nullptr) {
-    UCCL_LOG(ERROR, DPDK) << "rte_mempool_create() failed. ";
+    UCCL_LOG(ERROR, UCCL_DPDK) << "rte_mempool_create() failed. ";
     return nullptr;
   }
 
@@ -43,9 +43,9 @@ PacketPool::PacketPool(uint32_t nmbufs, uint16_t mbuf_size,
     // Create mempool here, choose the name automatically
     id_ = ++next_id_;
     std::string mpool_name = "mbufpool" + std::to_string(id_);
-    UCCL_LOG(INFO, DPDK) << "[ALLOC] [type:mempool, name:" << mpool_name
-                         << ", nmbufs:" << nmbufs << ", mbuf_size:" << mbuf_size
-                         << "]";
+    UCCL_LOG(INFO, UCCL_DPDK)
+        << "[ALLOC] [type:mempool, name:" << mpool_name << ", nmbufs:" << nmbufs
+        << ", mbuf_size:" << mbuf_size << "]";
     // mpool_ = rte_pktmbuf_pool_create(mpool_name.c_str(), nmbufs, 0, 0,
     //                                  mbuf_size, SOCKET_ID_ANY);
     mpool_ = CreateSpScPacketPool(mpool_name, nmbufs, mbuf_size);
@@ -54,20 +54,22 @@ PacketPool::PacketPool(uint32_t nmbufs, uint16_t mbuf_size,
     // Lookup mempool created earlier by the primary
     mpool_ = rte_mempool_lookup(mempool_name);
     if (mpool_ == nullptr) {
-      UCCL_LOG(FATAL, DPDK) << "[LOOKUP] [type: mempool, name: " << mempool_name
-                            << "] failed. rte_errno = " << rte_errno << " ("
-                            << rte_strerror(rte_errno) << ")";
+      UCCL_LOG(FATAL, UCCL_DPDK)
+          << "[LOOKUP] [type: mempool, name: " << mempool_name
+          << "] failed. rte_errno = " << rte_errno << " ("
+          << rte_strerror(rte_errno) << ")";
     } else {
-      UCCL_LOG(INFO, DPDK) << "[LOOKUP] [type: mempool, name " << mempool_name
-                           << "] successful. num mbufs " << mpool_->size
-                           << ", mbuf size " << mpool_->elt_size;
+      UCCL_LOG(INFO, UCCL_DPDK)
+          << "[LOOKUP] [type: mempool, name " << mempool_name
+          << "] successful. num mbufs " << mpool_->size << ", mbuf size "
+          << mpool_->elt_size;
     }
   }
 }
 
 PacketPool::~PacketPool() {
-  UCCL_LOG(INFO, DPDK) << "[FREE] [type:mempool, name:"
-                       << this->GetPacketPoolName() << "]";
+  UCCL_LOG(INFO, UCCL_DPDK)
+      << "[FREE] [type:mempool, name:" << this->GetPacketPoolName() << "]";
   if (is_dpdk_primary_process_) rte_mempool_free(mpool_);
 }
 
