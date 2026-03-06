@@ -34,7 +34,7 @@ if [[ "$CAN_INSTALL_APT" -eq 1 ]]; then
 else
     echo "No root/passwordless sudo. Skipping apt dependencies: libgoogle-glog-dev clang-format-14"
 fi
-pip install pybind11 nanobind --upgrade
+pip install nanobind --upgrade
 pip install black
 
 # Check if we're in a conda environment

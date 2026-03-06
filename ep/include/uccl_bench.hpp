@@ -34,7 +34,7 @@ class Bench {
   void timing_start();
   void timing_stop();
 
-  // pure C++ (no pybind)
+  // pure C++ (no Python bindings)
   void launch_gpu_issue_batched_commands();
   void sync_stream();
 

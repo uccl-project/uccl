@@ -17,11 +17,11 @@
 #include "ring_buffer.cuh"
 #include "uccl_bench.hpp"
 #include "uccl_proxy.hpp"
-#include <pybind11/chrono.h>
-#include <pybind11/functional.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/pytypes.h>
-#include <pybind11/stl.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/function.h>
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -30,16 +30,16 @@
 #include <cuda_runtime.h>
 
 namespace uccl {
-std::unordered_map<int, std::vector<py::object>> g_proxies_by_dev;
+std::unordered_map<int, std::vector<nb::object>> g_proxies_by_dev;
 
-std::unordered_map<int, std::vector<py::object>>& proxies_by_dev() {
+std::unordered_map<int, std::vector<nb::object>>& proxies_by_dev() {
   return g_proxies_by_dev;
 }
 }  // namespace uccl
 
 #define NUM_MAX_LOCAL_EXPERTS 1024
 
-namespace py = pybind11;
+namespace nb = nanobind;
 
 static std::mutex g_proxies_mu;
 
@@ -130,7 +130,7 @@ static std::vector<uint64_t> collect_d2h_channel_addrs_for_device(
   for (auto& proxy : it->second) {
     // Each proxy now manages multiple ring buffers
     auto proxy_addrs =
-        proxy.attr("get_d2h_channel_addrs")().cast<std::vector<uint64_t>>();
+        nb::cast<std::vector<uint64_t>>(proxy.attr("get_d2h_channel_addrs")());
     all_addrs.insert(all_addrs.end(), proxy_addrs.begin(), proxy_addrs.end());
   }
   return all_addrs;
@@ -706,7 +706,7 @@ class Buffer {
                     std::optional<EventHandle>& previous_event, bool async,
                     bool allocate_on_comm_stream,
                     std::uintptr_t compute_stream_ptr) {
-    pybind11::gil_scoped_release release;
+    nb::gil_scoped_release release;
     EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);
     EP_HOST_ASSERT(num_tokens_per_rdma_rank_ptr != 0);
     EP_HOST_ASSERT(num_tokens_per_expert_ptr != 0);
@@ -1213,26 +1213,27 @@ class Buffer {
 
   int get_local_device_id() { return device_index; }
 
-  pybind11::bytearray get_local_ipc_handle() const {
-    return {ipc_handles[nvl_rank].reserved, CUDA_IPC_HANDLE_SIZE};
+  nb::bytes get_local_ipc_handle() const {
+    return nb::bytes(reinterpret_cast<const char*>(ipc_handles[nvl_rank].reserved),
+                     CUDA_IPC_HANDLE_SIZE);
   }
 
-  pybind11::bytearray get_local_rdma_ipc_handle() {
+  nb::bytes get_local_rdma_ipc_handle() {
     EP_HOST_ASSERT(
         rdma_buffer_ptr != nullptr &&
         "set_rdma_buffer must be called before requesting RDMA IPC handle");
     cudaIpcMemHandle_t h{};
     CUDA_CHECK(cudaIpcGetMemHandle(&h, rdma_buffer_ptr));
-    return {h.reserved, CUDA_IPC_HANDLE_SIZE};
+    return nb::bytes(reinterpret_cast<const char*>(h.reserved), CUDA_IPC_HANDLE_SIZE);
   }
 
-  pybind11::bytearray get_local_atomics_ipc_handle() {
+  nb::bytes get_local_atomics_ipc_handle() {
     EP_HOST_ASSERT(atomic_buffer_ptr != nullptr &&
                    "set_atomic_buffer must be called before requesting "
                    "atomic IPC handle");
     cudaIpcMemHandle_t h{};
     CUDA_CHECK(cudaIpcGetMemHandle(&h, atomic_buffer_ptr));
-    return {h.reserved, CUDA_IPC_HANDLE_SIZE};
+    return nb::bytes(reinterpret_cast<const char*>(h.reserved), CUDA_IPC_HANDLE_SIZE);
   }
 
   int get_num_rdma_ranks() const { return num_rdma_ranks; }
@@ -1243,11 +1244,11 @@ class Buffer {
   int get_rdma_rank() const { return rdma_rank; }
   int get_root_rdma_rank(bool global) const { return global ? nvl_rank : 0; }
 
-  pybind11::bytearray get_local_uccl_shmem_unique_id() const {
+  nb::bytes get_local_uccl_shmem_unique_id() const {
     EP_HOST_ASSERT(rdma_rank == 0 and
                    "Only RDMA rank 0 can get UCCL unique ID");
     auto unique_id = internode::get_unique_id();
-    return {reinterpret_cast<char const*>(unique_id.data()), unique_id.size()};
+    return nb::bytes(reinterpret_cast<char const*>(unique_id.data()), unique_id.size());
   }
 
   void reset_rdma_buffer() {
@@ -1264,10 +1265,10 @@ class Buffer {
 
   void sync(
       std::vector<int> const& device_ids,
-      std::vector<std::optional<pybind11::bytearray>> const&
+      std::vector<std::optional<nb::bytes>> const&
           all_gathered_handles,
-      std::optional<pybind11::bytearray> const& root_unique_id_opt,
-      std::optional<std::vector<std::optional<pybind11::bytearray>>> const&
+      std::optional<nb::bytes> const& root_unique_id_opt,
+      std::optional<std::vector<std::optional<nb::bytes>>> const&
           all_gathered_rdma_handles_opt = std::nullopt) {
     EP_HOST_ASSERT(not is_available());
     // Sync IPC handles
@@ -1281,8 +1282,8 @@ class Buffer {
             global_rank % max_nvl_peers;  // Map to correct buffer_ptrs index
 
         EP_HOST_ASSERT(all_gathered_handles[global_rank].has_value());
-        auto handle_str =
-            std::string(all_gathered_handles[global_rank].value());
+        nb::bytes const& h = all_gathered_handles[global_rank].value();
+        std::string handle_str(static_cast<const char*>(h.data()), h.size());
         EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
         if (global_rank != rank) {
           std::memcpy(ipc_handles[local_rank_idx].reserved, handle_str.c_str(),
@@ -1340,8 +1341,8 @@ class Buffer {
         if (global_rank == rank) {
           ipc_rdma_base_ptrs[local_rank_idx] = rdma_buffer_ptr;
         } else if (all_gathered_rdma_handles[global_rank].has_value()) {
-          auto handle_str =
-              std::string(all_gathered_rdma_handles[global_rank].value());
+          nb::bytes const& h = all_gathered_rdma_handles[global_rank].value();
+          std::string handle_str(static_cast<const char*>(h.data()), h.size());
           EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
           std::memcpy(rdma_ipc_handles[local_rank_idx].reserved,
                       handle_str.c_str(), CUDA_IPC_HANDLE_SIZE);
@@ -1424,7 +1425,7 @@ class Buffer {
   bool low_latency_mode{false};
   bool explicitly_destroy{false};
   int device_index{0};
-  std::vector<py::object> proxies_;
+  std::vector<nb::object> proxies_;
   bool available{false};
   void* rdma_buffer_ptr = nullptr;
   void* atomic_buffer_ptr = nullptr;
@@ -1471,23 +1472,23 @@ class Buffer {
       nullptr};  // Device pointer to array of IPC base addresses
 };
 
-PYBIND11_MODULE(ep, m) {
+NB_MODULE(ep, m) {
   m.doc() = "Minimal DeepEP-compatible shim with UCCL";
 
-  pybind11::class_<uccl::Config>(m, "Config")
-      .def(pybind11::init<int, int, int, int, int>(), py::arg("num_sms") = 20,
-           py::arg("num_max_nvl_chunked_send_tokens") = 6,
-           py::arg("num_max_nvl_chunked_recv_tokens") = 256,
-           py::arg("num_max_rdma_chunked_send_tokens") = 6,
-           py::arg("num_max_rdma_chunked_recv_tokens") = 256)
-      .def_readonly("num_sms", &uccl::Config::num_sms)
-      .def_readonly("num_max_nvl_chunked_send_tokens",
+  nb::class_<uccl::Config>(m, "Config")
+      .def(nb::init<int, int, int, int, int>(), nb::arg("num_sms") = 20,
+           nb::arg("num_max_nvl_chunked_send_tokens") = 6,
+           nb::arg("num_max_nvl_chunked_recv_tokens") = 256,
+           nb::arg("num_max_rdma_chunked_send_tokens") = 6,
+           nb::arg("num_max_rdma_chunked_recv_tokens") = 256)
+      .def_ro("num_sms", &uccl::Config::num_sms)
+      .def_ro("num_max_nvl_chunked_send_tokens",
                     &uccl::Config::num_max_nvl_chunked_send_tokens)
-      .def_readonly("num_max_nvl_chunked_recv_tokens",
+      .def_ro("num_max_nvl_chunked_recv_tokens",
                     &uccl::Config::num_max_nvl_chunked_recv_tokens)
-      .def_readonly("num_max_rdma_chunked_send_tokens",
+      .def_ro("num_max_rdma_chunked_send_tokens",
                     &uccl::Config::num_max_rdma_chunked_send_tokens)
-      .def_readonly("num_max_rdma_chunked_recv_tokens",
+      .def_ro("num_max_rdma_chunked_recv_tokens",
                     &uccl::Config::num_max_rdma_chunked_recv_tokens)
       .def("get_nvl_buffer_size_hint", &uccl::Config::get_nvl_buffer_size_hint)
       .def("get_rdma_buffer_size_hint",
@@ -1495,7 +1496,7 @@ PYBIND11_MODULE(ep, m) {
 
   m.def(
       "register_proxy",
-      [](int device_index, py::object proxy) {
+      [](int device_index, nb::object proxy) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
         auto& vec = uccl::g_proxies_by_dev[device_index];
         if (!vec.empty()) {
@@ -1507,10 +1508,10 @@ PYBIND11_MODULE(ep, m) {
         vec.push_back(std::move(proxy));
         printf("Registered proxy for device %d\n", device_index);
       },
-      py::arg("device_index"), py::arg("proxy"));
+      nb::arg("device_index"), nb::arg("proxy"));
   m.def(
       "register_proxies",
-      [](int device_index, std::vector<py::object> proxies) {
+      [](int device_index, std::vector<nb::object> proxies) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
         auto& vec = uccl::g_proxies_by_dev[device_index];
         if (!vec.empty()) {
@@ -1524,14 +1525,14 @@ PYBIND11_MODULE(ep, m) {
         }
         printf("Registered proxies for device %d\n", device_index);
       },
-      py::arg("device_index"), py::arg("proxies"));
+      nb::arg("device_index"), nb::arg("proxies"));
   m.def(
       "unregister_proxy",
       [](int device_index) {
         std::lock_guard<std::mutex> lk(g_proxies_mu);
         uccl::g_proxies_by_dev.erase(device_index);
       },
-      py::arg("device_index"));
+      nb::arg("device_index"));
   m.def(
       "has_proxy",
       [](int device_index) {
@@ -1539,7 +1540,7 @@ PYBIND11_MODULE(ep, m) {
         auto it = uccl::g_proxies_by_dev.find(device_index);
         return it != uccl::g_proxies_by_dev.end() && !it->second.empty();
       },
-      py::arg("device_index"));
+      nb::arg("device_index"));
   m.def("stop_all_registered_proxies", []() {
     std::lock_guard<std::mutex> lk(g_proxies_mu);
     for (auto& kv : uccl::g_proxies_by_dev) {
@@ -1565,7 +1566,7 @@ PYBIND11_MODULE(ep, m) {
         return can_register_gpu_memory_for_rdma(device_index, num_bytes);
 #endif
       },
-      py::arg("device_index"), py::arg("num_bytes"),
+      nb::arg("device_index"), nb::arg("num_bytes"),
       R"doc(
         Return whether the main RDMA scratch buffer can stay in GPU memory for
         this device and buffer size.
@@ -1581,55 +1582,56 @@ PYBIND11_MODULE(ep, m) {
         return !can_register_gpu_memory_for_rdma(device_index, num_bytes);
 #endif
       },
-      py::arg("device_index"), py::arg("num_bytes") = 4096,
+      nb::arg("device_index"), nb::arg("num_bytes") = 4096,
       R"doc(
         Return whether the main RDMA scratch buffer should be host allocated
         for this device and buffer size.
       )doc");
 
-  py::class_<EventHandle>(m, "EventHandle")
-      .def(py::init<>())
-      .def(py::init([](std::uintptr_t stream_ptr) {
-        auto stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-        return EventHandle(stream);
-      }))
+  nb::class_<EventHandle>(m, "EventHandle")
+      .def(nb::init<>())
+      .def("__init__",
+           [](EventHandle* t, std::uintptr_t stream_ptr) {
+             new (t) EventHandle(reinterpret_cast<cudaStream_t>(stream_ptr));
+           },
+           nb::arg("stream_ptr"))
       .def("current_stream_wait", &EventHandle::current_stream_wait,
-           py::arg("stream_ptr"));
+           nb::arg("stream_ptr"));
 
   m.def("connect_atomic_buffer", [](UcclProxy& p, Buffer& b) {
     b.set_atomic_buffer_ptr(p.get_atomic_buffer_ptr());
   });
 
-  py::class_<EventOverlap>(m, "EventOverlap").def(py::init<>());
-  py::class_<Buffer>(m, "Buffer")
-      .def(py::init<int, int, long, long, bool, bool, int>(), py::arg("rank"),
-           py::arg("num_ranks"), py::arg("num_nvl_bytes") = 0,
-           py::arg("num_rdma_bytes") = 0, py::arg("low_latency_mode") = false,
-           py::arg("explicitly_destroy") = false,
-           py::arg("num_local_ranks") = -1)
+  nb::class_<EventOverlap>(m, "EventOverlap").def(nb::init<>());
+  nb::class_<Buffer>(m, "Buffer")
+      .def(nb::init<int, int, long, long, bool, bool, int>(), nb::arg("rank"),
+           nb::arg("num_ranks"), nb::arg("num_nvl_bytes") = 0,
+           nb::arg("num_rdma_bytes") = 0, nb::arg("low_latency_mode") = false,
+           nb::arg("explicitly_destroy") = false,
+           nb::arg("num_local_ranks") = -1)
       .def("destroy", &Buffer::destroy)
       .def(
           "set_rdma_buffer",
           [](Buffer& self, std::uintptr_t addr, bool is_host_ptr) {
             self.set_rdma_buffer(addr, is_host_ptr);
           },
-          py::arg("addr"), py::arg("is_host_ptr") = false,
+          nb::arg("addr"), nb::arg("is_host_ptr") = false,
           R"doc(Set RDMA buffer from a raw address. Caller must keep the memory alive.)doc")
       .def("reset_rdma_buffer", &Buffer::reset_rdma_buffer)
       .def("low_latency_dispatch", &Buffer::low_latency_dispatch,
-           py::arg("x_ptr"), py::arg("x_rows"), py::arg("x_cols"),
-           py::arg("topk_idx_ptr"), py::arg("topk_rows"), py::arg("topk_cols"),
-           py::arg("packed_recv_x_ptr"), py::arg("packed_recv_x_scales_ptr"),
-           py::arg("packed_recv_count_ptr"),
-           py::arg("packed_recv_src_info_ptr"),
-           py::arg("packed_recv_layout_range_ptr"),
-           py::arg("cumulative_local_expert_recv_stats_ptr") = 0,
-           py::arg("dispatch_wait_recv_cost_stats_ptr") = 0,
-           py::arg("compute_stream_ptr"),
-           py::arg("num_max_dispatch_tokens_per_rank") = 0,
-           py::arg("num_experts") = 1, py::arg("use_fp8") = true,
-           py::arg("round_scale") = false, py::arg("use_ue8m0") = false,
-           py::arg("is_async") = false, py::arg("return_recv_hook") = false)
+           nb::arg("x_ptr"), nb::arg("x_rows"), nb::arg("x_cols"),
+           nb::arg("topk_idx_ptr"), nb::arg("topk_rows"), nb::arg("topk_cols"),
+           nb::arg("packed_recv_x_ptr"), nb::arg("packed_recv_x_scales_ptr"),
+           nb::arg("packed_recv_count_ptr"),
+           nb::arg("packed_recv_src_info_ptr"),
+           nb::arg("packed_recv_layout_range_ptr"),
+           nb::arg("cumulative_local_expert_recv_stats_ptr") = 0,
+           nb::arg("dispatch_wait_recv_cost_stats_ptr") = 0,
+           nb::arg("compute_stream_ptr"),
+           nb::arg("num_max_dispatch_tokens_per_rank") = 0,
+           nb::arg("num_experts") = 1, nb::arg("use_fp8") = true,
+           nb::arg("round_scale") = false, nb::arg("use_ue8m0") = false,
+           nb::arg("is_async") = false, nb::arg("return_recv_hook") = false)
       .def("get_local_device_id", &Buffer::get_local_device_id)
       .def("get_local_ipc_handle", &Buffer::get_local_ipc_handle)
       .def("get_local_rdma_ipc_handle", &Buffer::get_local_rdma_ipc_handle)
@@ -1641,16 +1643,16 @@ PYBIND11_MODULE(ep, m) {
       .def("get_rdma_rank", &Buffer::get_rdma_rank)
       .def("get_root_rdma_rank", &Buffer::get_root_rdma_rank)
       .def("get_local_buffer_ptr", &Buffer::get_local_buffer_ptr,
-           py::arg("offset"), py::arg("use_rdma_buffer"))
+           nb::arg("offset"), nb::arg("use_rdma_buffer"))
       .def("get_local_buffer_nbytes", &Buffer::get_local_buffer_nbytes,
-           py::arg("use_rdma_buffer"))
+           nb::arg("use_rdma_buffer"))
       .def("get_comm_stream", &Buffer::get_comm_stream)
       .def("get_local_uccl_shmem_unique_id",
            &Buffer::get_local_uccl_shmem_unique_id)
-      .def("sync", &Buffer::sync, py::arg("device_ids"),
-           py::arg("all_gathered_handles"),
-           py::arg("root_unique_id_opt") = py::none(),
-           py::arg("all_gathered_rdma_handles") = py::none())
+      .def("sync", &Buffer::sync, nb::arg("device_ids"),
+           nb::arg("all_gathered_handles"),
+           nb::arg("root_unique_id_opt") = nb::none(),
+           nb::arg("all_gathered_rdma_handles") = nb::none())
       .def("is_available", &Buffer::is_available)
       .def(
           "get_dispatch_layout",
@@ -1659,25 +1661,25 @@ PYBIND11_MODULE(ep, m) {
              std::uintptr_t num_tokens_per_rank_ptr,
              std::uintptr_t num_tokens_per_rdma_rank_ptr,
              std::uintptr_t num_tokens_per_expert_ptr,
-             std::uintptr_t is_token_in_rank_ptr, py::object previous_event,
+             std::uintptr_t is_token_in_rank_ptr, nb::object previous_event,
              bool async, bool allocate_on_comm_stream,
              std::uintptr_t compute_stream_ptr) {
             std::optional<EventHandle> prev = std::nullopt;
             if (!previous_event.is_none())
-              prev = previous_event.cast<EventHandle>();
+              prev = nb::cast<EventHandle>(previous_event);
             return self.get_dispatch_layout(
                 topk_idx_ptr, num_tokens, num_topk, num_experts,
                 num_tokens_per_rank_ptr, num_tokens_per_rdma_rank_ptr,
                 num_tokens_per_expert_ptr, is_token_in_rank_ptr, prev, async,
                 allocate_on_comm_stream, compute_stream_ptr);
           },
-          py::arg("topk_idx_ptr"), py::arg("num_tokens"), py::arg("num_topk"),
-          py::arg("num_experts"), py::arg("num_tokens_per_rank_ptr"),
-          py::arg("num_tokens_per_rdma_rank_ptr"),
-          py::arg("num_tokens_per_expert_ptr"), py::arg("is_token_in_rank_ptr"),
-          py::arg("previous_event") = py::none(), py::arg("async") = false,
-          py::arg("allocate_on_comm_stream") = false,
-          py::arg("compute_stream_ptr") = 0)
+          nb::arg("topk_idx_ptr"), nb::arg("num_tokens"), nb::arg("num_topk"),
+          nb::arg("num_experts"), nb::arg("num_tokens_per_rank_ptr"),
+          nb::arg("num_tokens_per_rdma_rank_ptr"),
+          nb::arg("num_tokens_per_expert_ptr"), nb::arg("is_token_in_rank_ptr"),
+          nb::arg("previous_event") = nb::none(), nb::arg("async") = false,
+          nb::arg("allocate_on_comm_stream") = false,
+          nb::arg("compute_stream_ptr") = 0)
       .def("intranode_prepare",
            [](Buffer& self, std::uintptr_t num_tokens_per_rank_ptr,
               std::uintptr_t is_token_in_rank_ptr,
@@ -1685,11 +1687,11 @@ PYBIND11_MODULE(ep, m) {
               int num_experts, std::uintptr_t rank_prefix_matrix_ptr,
               std::uintptr_t channel_prefix_matrix_ptr, int expert_alignment,
               int num_worst_tokens, uccl::Config const& config,
-              py::object previous_event, bool async,
+              nb::object previous_event, bool async,
               bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
              std::optional<EventHandle> prev = std::nullopt;
              if (!previous_event.is_none())
-               prev = previous_event.cast<EventHandle>();
+               prev = nb::cast<EventHandle>(previous_event);
              return self.intranode_prepare(
                  num_tokens_per_rank_ptr, is_token_in_rank_ptr,
                  num_tokens_per_expert_ptr, num_tokens, num_experts,
@@ -1713,11 +1715,11 @@ PYBIND11_MODULE(ep, m) {
              std::uintptr_t recv_topk_weights_ptr,
              std::uintptr_t recv_channel_prefix_matrix_ptr,
              std::uintptr_t recv_src_idx_ptr, std::uintptr_t send_head_ptr,
-             py::object previous_event, bool async,
+             nb::object previous_event, bool async,
              bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
             std::optional<EventHandle> prev = std::nullopt;
             if (!previous_event.is_none())
-              prev = previous_event.cast<EventHandle>();
+              prev = nb::cast<EventHandle>(previous_event);
             return self.intranode_dispatch(
                 x_ptr, num_tokens, hidden, x_element_size, x_scales_ptr,
                 num_scales, scale_token_stride, scale_hidden_stride,
@@ -1739,11 +1741,11 @@ PYBIND11_MODULE(ep, m) {
               std::uintptr_t channel_prefix_matrix_ptr,
               std::uintptr_t send_head_ptr, uccl::Config const& config,
               std::uintptr_t recv_x_ptr, std::uintptr_t recv_topk_weights_ptr,
-              py::object previous_event, bool async,
+              nb::object previous_event, bool async,
               bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
              std::optional<EventHandle> prev = std::nullopt;
              if (!previous_event.is_none())
-               prev = previous_event.cast<EventHandle>();
+               prev = nb::cast<EventHandle>(previous_event);
              return self.intranode_combine(
                  x_ptr, num_tokens, hidden, x_dtype_code, x_element_size,
                  topk_weights_ptr, num_topk, bias_0_ptr, bias_1_ptr,
@@ -1764,11 +1766,11 @@ PYBIND11_MODULE(ep, m) {
               std::uintptr_t recv_rdma_rank_prefix_sum_ptr,
               std::uintptr_t gbl_channel_prefix_matrix_ptr,
               std::uintptr_t recv_gbl_rank_prefix_sum_ptr,
-              py::object previous_event, bool async,
+              nb::object previous_event, bool async,
               bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
              std::optional<EventHandle> prev = std::nullopt;
              if (!previous_event.is_none())
-               prev = previous_event.cast<EventHandle>();
+               prev = nb::cast<EventHandle>(previous_event);
              return self.internode_prepare(
                  num_tokens_per_rank_ptr, num_tokens_per_rdma_rank_ptr,
                  num_tokens_per_expert_ptr, is_token_in_rank_ptr, num_tokens,
@@ -1798,12 +1800,12 @@ PYBIND11_MODULE(ep, m) {
              std::uintptr_t recv_rdma_channel_prefix_matrix_ptr,
              std::uintptr_t recv_gbl_channel_prefix_matrix_ptr,
              std::uintptr_t send_rdma_head_ptr,
-             std::uintptr_t send_nvl_head_ptr, py::object previous_event,
+             std::uintptr_t send_nvl_head_ptr, nb::object previous_event,
              bool async, bool allocate_on_comm_stream,
              std::uintptr_t compute_stream_ptr) {
             std::optional<EventHandle> prev = std::nullopt;
             if (!previous_event.is_none())
-              prev = previous_event.cast<EventHandle>();
+              prev = nb::cast<EventHandle>(previous_event);
             return self.internode_dispatch(
                 x_ptr, num_tokens, hidden, x_element_size, x_scales_ptr,
                 num_scales, scale_token_stride, scale_hidden_stride,
@@ -1832,11 +1834,11 @@ PYBIND11_MODULE(ep, m) {
               std::uintptr_t combined_nvl_head_ptr, uccl::Config const& config,
               std::uintptr_t combined_x_ptr,
               std::uintptr_t combined_topk_weights_ptr,
-              py::object previous_event, bool async,
+              nb::object previous_event, bool async,
               bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
              std::optional<EventHandle> prev = std::nullopt;
              if (!previous_event.is_none())
-               prev = previous_event.cast<EventHandle>();
+               prev = nb::cast<EventHandle>(previous_event);
              return self.internode_combine(
                  x_ptr, num_tokens, hidden, x_dtype_code, x_element_size,
                  topk_weights_ptr, num_topk, bias_0_ptr, bias_1_ptr,
@@ -1848,21 +1850,21 @@ PYBIND11_MODULE(ep, m) {
                  allocate_on_comm_stream, compute_stream_ptr);
            })
       .def("clean_low_latency_buffer", &Buffer::clean_low_latency_buffer,
-           py::arg("num_max_dispatch_tokens_per_rank"), py::arg("hidden"),
-           py::arg("num_experts"), py::arg("stream_ptr"))
+           nb::arg("num_max_dispatch_tokens_per_rank"), nb::arg("hidden"),
+           nb::arg("num_experts"), nb::arg("stream_ptr"))
       .def("low_latency_combine", &Buffer::low_latency_combine,
-           py::arg("x_ptr"), py::arg("x_dim0"), py::arg("x_dim1"),
-           py::arg("x_dim2"), py::arg("topk_idx_ptr"), py::arg("topk_rows"),
-           py::arg("topk_cols"), py::arg("topk_weights_ptr"),
-           py::arg("src_info_ptr"), py::arg("src_info_dim0"),
-           py::arg("src_info_dim1"), py::arg("layout_range_ptr"),
-           py::arg("layout_range_dim0"), py::arg("layout_range_dim1"),
-           py::arg("combine_wait_recv_cost_stats_ptr") = 0,
-           py::arg("compute_stream_ptr"),
-           py::arg("num_max_dispatch_tokens_per_rank") = 0,
-           py::arg("num_experts") = 1, py::arg("use_logfmt") = false,
-           py::arg("zero_copy") = false, py::arg("is_async") = false,
-           py::arg("return_recv_hook") = false, py::arg("out_ptr"));
+           nb::arg("x_ptr"), nb::arg("x_dim0"), nb::arg("x_dim1"),
+           nb::arg("x_dim2"), nb::arg("topk_idx_ptr"), nb::arg("topk_rows"),
+           nb::arg("topk_cols"), nb::arg("topk_weights_ptr"),
+           nb::arg("src_info_ptr"), nb::arg("src_info_dim0"),
+           nb::arg("src_info_dim1"), nb::arg("layout_range_ptr"),
+           nb::arg("layout_range_dim0"), nb::arg("layout_range_dim1"),
+           nb::arg("combine_wait_recv_cost_stats_ptr") = 0,
+           nb::arg("compute_stream_ptr"),
+           nb::arg("num_max_dispatch_tokens_per_rank") = 0,
+           nb::arg("num_experts") = 1, nb::arg("use_logfmt") = false,
+           nb::arg("zero_copy") = false, nb::arg("is_async") = false,
+           nb::arg("return_recv_hook") = false, nb::arg("out_ptr"));
   m.def("alloc_cmd_ring", &alloc_cmd_ring);
   m.def("free_cmd_ring", &free_cmd_ring);
   m.def("launch_gpu_issue_kernel", [](int blocks, int threads_per_block,
@@ -1915,23 +1917,23 @@ PYBIND11_MODULE(ep, m) {
         if (st == cudaErrorNotReady) return std::string("not_ready");
         return std::string("error: ") + cudaGetErrorString(st);
       },
-      py::arg("stream_ptr"));
+      nb::arg("stream_ptr"));
   m.def("device_reset", []() {
     auto st = cudaDeviceReset();
     if (st != cudaSuccess)
       throw std::runtime_error(std::string("cudaDeviceReset failed: ") +
                                cudaGetErrorString(st));
   });
-  py::class_<Stats>(m, "Stats");
-  py::class_<UcclProxy>(m, "Proxy")
-      .def(py::init<int, uintptr_t, size_t, int, int, int, int, int, int, bool,
+  nb::class_<Stats>(m, "Stats");
+  nb::class_<UcclProxy>(m, "Proxy")
+      .def(nb::init<int, uintptr_t, size_t, int, int, int, int, int, int, bool,
                     bool, bool>(),
-           py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
-           py::arg("total_size"), py::arg("rank") = 0, py::arg("node_idx") = -1,
-           py::arg("local_rank") = 0, py::arg("num_experts") = -1,
-           py::arg("num_ranks") = -1, py::arg("num_nodes") = 0,
-           py::arg("use_normal_mode") = false, py::arg("is_intranode") = false,
-           py::arg("gpu_buffer_is_host_allocated") = false)
+           nb::arg("thread_idx"), nb::arg("gpu_buffer_addr"),
+           nb::arg("total_size"), nb::arg("rank") = 0, nb::arg("node_idx") = -1,
+           nb::arg("local_rank") = 0, nb::arg("num_experts") = -1,
+           nb::arg("num_ranks") = -1, nb::arg("num_nodes") = 0,
+           nb::arg("use_normal_mode") = false, nb::arg("is_intranode") = false,
+           nb::arg("gpu_buffer_is_host_allocated") = false)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)
@@ -1941,38 +1943,38 @@ PYBIND11_MODULE(ep, m) {
       .def("get_atomic_buffer_ptr", &UcclProxy::get_atomic_buffer_ptr)
       .def("set_atomic_buffer_ptr", &UcclProxy::set_atomic_buffer_ptr)
       .def("set_dispatch_recv_data_offset",
-           &UcclProxy::set_dispatch_recv_data_offset, py::arg("offset"))
+           &UcclProxy::set_dispatch_recv_data_offset, nb::arg("offset"))
       .def("calculate_and_set_dispatch_recv_data_offset",
            &UcclProxy::calculate_and_set_dispatch_recv_data_offset,
-           py::arg("num_tokens"), py::arg("hidden"), py::arg("num_experts"))
+           nb::arg("num_tokens"), nb::arg("hidden"), nb::arg("num_experts"))
       .def("get_d2h_channel_addrs", &UcclProxy::get_d2h_channel_addrs)
-      .def_property_readonly("thread_idx", &UcclProxy::thread_idx)
-      .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr)
+      .def_prop_ro("thread_idx", &UcclProxy::thread_idx)
+      .def_prop_ro("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr)
       .def("avg_rdma_write_us", &UcclProxy::avg_rdma_write_us)
       .def("avg_wr_latency_us", &UcclProxy::avg_wr_latency_us)
       .def(
           "set_peers_meta",
-          [](UcclProxy& self, py::object metas) {
+          [](UcclProxy& self, nb::object metas) {
             std::vector<PeerMeta> v;
-            if (py::isinstance<py::list>(metas)) {
-              for (auto obj : metas.cast<py::list>()) {
-                if (py::isinstance<py::dict>(obj)) {
-                  auto d = obj.cast<py::dict>();
+            if (nb::isinstance<nb::list>(metas)) {
+for (auto obj : nb::cast<nb::list>(metas)) {
+              if (nb::isinstance<nb::dict>(obj)) {
+                  auto d = nb::cast<nb::dict>(obj);
                   PeerMeta pm;
-                  pm.rank = py::cast<int>(d["rank"]);
+                  pm.rank = nb::cast<int>(d["rank"]);
                   pm.ptr = static_cast<uintptr_t>(
-                      py::cast<unsigned long long>(d["ptr"]));
+                      nb::cast<unsigned long long>(d["ptr"]));
                   pm.nbytes = static_cast<size_t>(
-                      py::cast<unsigned long long>(d["nbytes"]));
-                  pm.ip = py::cast<std::string>(d["ip"]);
+                      nb::cast<unsigned long long>(d["nbytes"]));
+                  pm.ip = nb::cast<std::string>(d["ip"]);
 
                   // Handle listen_ports array (always present)
-                  auto ports = d["listen_ports"].cast<py::sequence>();
+                  auto ports = nb::cast<nb::list>(d["listen_ports"]);
                   size_t port_count =
-                      std::min(static_cast<size_t>(py::len(ports)),
+                      std::min(static_cast<size_t>(nb::len(ports)),
                                static_cast<size_t>(kNumProxyThs));
                   for (size_t i = 0; i < port_count; ++i) {
-                    pm.listen_ports[i] = ports[i].cast<int>();
+                    pm.listen_ports[i] = nb::cast<int>(ports[i]);
                   }
                   // Initialize remaining ports to 0 if fewer than kNumProxyThs
                   // provided
@@ -1982,26 +1984,26 @@ PYBIND11_MODULE(ep, m) {
 
                   v.push_back(std::move(pm));
                 } else {
-                  v.push_back(obj.cast<PeerMeta>());
+                  v.push_back(nb::cast<PeerMeta>(obj));
                 }
               }
             } else {
               // allow passing a dict directly
-              auto d = metas.cast<py::dict>();
+              auto d = nb::cast<nb::dict>(metas);
               PeerMeta pm;
-              pm.rank = py::cast<int>(d["rank"]);
+              pm.rank = nb::cast<int>(d["rank"]);
               pm.ptr = static_cast<uintptr_t>(
-                  py::cast<unsigned long long>(d["ptr"]));
+                  nb::cast<unsigned long long>(d["ptr"]));
               pm.nbytes = static_cast<size_t>(
-                  py::cast<unsigned long long>(d["nbytes"]));
-              pm.ip = py::cast<std::string>(d["ip"]);
+                  nb::cast<unsigned long long>(d["nbytes"]));
+              pm.ip = nb::cast<std::string>(d["ip"]);
 
               // Handle listen_ports array (always present)
-              auto ports = d["listen_ports"].cast<py::sequence>();
-              size_t port_count = std::min(static_cast<size_t>(py::len(ports)),
+              auto ports = nb::cast<nb::list>(d["listen_ports"]);
+              size_t port_count = std::min(static_cast<size_t>(nb::len(ports)),
                                            static_cast<size_t>(kNumProxyThs));
               for (size_t i = 0; i < port_count; ++i) {
-                pm.listen_ports[i] = ports[i].cast<int>();
+                pm.listen_ports[i] = nb::cast<int>(ports[i]);
               }
               // Initialize remaining ports to 0 if fewer than kNumProxyThs
               // provided
@@ -2013,26 +2015,26 @@ PYBIND11_MODULE(ep, m) {
             }
             self.set_peers_meta(v);
           },
-          py::arg("metas"),
+          nb::arg("metas"),
           "Attach peer metadata (list of dicts or PeerMeta objects).")
       .def(
           "set_bench_d2h_channel_addrs",
-          [](UcclProxy& self, py::iterable addrs) {
+          [](UcclProxy& self, nb::iterable addrs) {
             std::vector<uintptr_t> v;
-            for (py::handle h : addrs) v.push_back(h.cast<uintptr_t>());
+            for (nb::handle h : addrs) v.push_back(nb::cast<uintptr_t>(h));
             self.set_bench_d2h_channel_addrs(v);
           },
-          py::arg("addrs"), "Attach ring buffer addresses for benchmarking.");
-  // .def_property_readonly("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr);
-  py::class_<EnvInfo>(m, "EnvInfo")
-      .def_readonly("blocks", &EnvInfo::blocks)
-      .def_readonly("queue_size", &EnvInfo::queue_size)
-      .def_readonly("threads_per_block", &EnvInfo::threads_per_block)
-      .def_readonly("iterations", &EnvInfo::iterations)
-      .def_readonly("stream_addr", &EnvInfo::stream_addr)
-      .def_readonly("rbs_addr", &EnvInfo::rbs_addr);
-  py::class_<Bench>(m, "Bench")
-      .def(py::init<>())
+          nb::arg("addrs"), "Attach ring buffer addresses for benchmarking.");
+  // .def_prop_ro("gpu_buffer_addr", &UcclProxy::gpu_buffer_addr);
+  nb::class_<EnvInfo>(m, "EnvInfo")
+      .def_ro("blocks", &EnvInfo::blocks)
+      .def_ro("queue_size", &EnvInfo::queue_size)
+      .def_ro("threads_per_block", &EnvInfo::threads_per_block)
+      .def_ro("iterations", &EnvInfo::iterations)
+      .def_ro("stream_addr", &EnvInfo::stream_addr)
+      .def_ro("rbs_addr", &EnvInfo::rbs_addr);
+  nb::class_<Bench>(m, "Bench")
+      .def(nb::init<>())
       .def("env_info", &Bench::env_info)
       .def("blocks", &Bench::blocks)
       .def("num_proxies", &Bench::num_proxies)
@@ -2044,36 +2046,36 @@ PYBIND11_MODULE(ep, m) {
            &Bench::launch_gpu_issue_batched_commands)
       .def("sync_stream", &Bench::sync_stream)
       .def("sync_stream_interruptible", &Bench::sync_stream_interruptible,
-           py::arg("poll_ms") = 5, py::arg("timeout_ms") = -1,
-           py::arg("should_abort") = nullptr)
+           nb::arg("poll_ms") = 5, nb::arg("timeout_ms") = -1,
+           nb::arg("should_abort") = nullptr)
       .def("join_proxies", &Bench::join_proxies)
       .def("print_block_latencies", &Bench::print_block_latencies)
       .def("compute_stats", &Bench::compute_stats)
       .def("print_summary", &Bench::print_summary)
       .def("print_summary_last", &Bench::print_summary_last)
       .def("last_elapsed_ms", &Bench::last_elapsed_ms);
-  py::class_<PeerCopyManager>(m, "PeerCopyManager")
-      .def(py::init<int>(), py::arg("src_device") = 0)
+  nb::class_<PeerCopyManager>(m, "PeerCopyManager")
+      .def(nb::init<int>(), nb::arg("src_device") = 0)
       .def("start_for_proxies",
-           [](PeerCopyManager& mgr, py::iterable proxy_list) {
+           [](PeerCopyManager& mgr, nb::iterable proxy_list) {
              std::vector<UcclProxy*> vec;
-             for (py::handle h : proxy_list)
-               vec.push_back(h.cast<UcclProxy*>());
+             for (nb::handle h : proxy_list)
+               vec.push_back(nb::cast<UcclProxy*>(h));
              mgr.start_for_proxies(vec);
            })
       .def("stop", &PeerCopyManager::stop);
 
   // MSCCLPP Fifo class - must be registered before BenchFifo which uses it
-  py::class_<mscclpp::Fifo>(m, "Fifo").def(py::init<uint32_t>(),
-                                           py::arg("size") = 2048);
+  nb::class_<mscclpp::Fifo>(m, "Fifo").def(nb::init<uint32_t>(),
+                                           nb::arg("size") = 2048);
 
   // FIFO-based benchmarking classes
-  py::class_<BenchFifo>(m, "BenchFifo")
-      .def(py::init<>())
+  nb::class_<BenchFifo>(m, "BenchFifo")
+      .def(nb::init<>())
       .def("env_info", &BenchFifo::env_info)
       .def("blocks", &BenchFifo::blocks)
       .def("num_proxies", &BenchFifo::num_proxies)
-      .def("get_fifo", &BenchFifo::get_fifo, py::return_value_policy::reference)
+      .def("get_fifo", &BenchFifo::get_fifo, nb::rv_policy::reference)
       .def("timing_start", &BenchFifo::timing_start)
       .def("timing_stop", &BenchFifo::timing_stop)
       .def("is_running", &BenchFifo::is_running)
@@ -2081,8 +2083,8 @@ PYBIND11_MODULE(ep, m) {
            &BenchFifo::launch_gpu_issue_batched_commands)
       .def("sync_stream", &BenchFifo::sync_stream)
       .def("sync_stream_interruptible", &BenchFifo::sync_stream_interruptible,
-           py::arg("poll_ms") = 5, py::arg("timeout_ms") = -1,
-           py::arg("should_abort") = nullptr)
+           nb::arg("poll_ms") = 5, nb::arg("timeout_ms") = -1,
+           nb::arg("should_abort") = nullptr)
       .def("join_proxies", &BenchFifo::join_proxies)
       .def("print_block_latencies", &BenchFifo::print_block_latencies)
       .def("compute_stats", &BenchFifo::compute_stats)
@@ -2090,31 +2092,31 @@ PYBIND11_MODULE(ep, m) {
       .def("print_summary_last", &BenchFifo::print_summary_last)
       .def("last_elapsed_ms", &BenchFifo::last_elapsed_ms);
 
-  py::class_<FifoProxy>(m, "FifoProxy")
-      .def(py::init<int, uintptr_t, size_t, int, int, int, bool>(),
-           py::arg("thread_idx"), py::arg("gpu_buffer_addr"),
-           py::arg("total_size"), py::arg("rank"), py::arg("node_idx"),
-           py::arg("local_rank"), py::arg("is_intranode"))
-      .def("set_fifo", &FifoProxy::set_fifo, py::arg("fifo"))
+  nb::class_<FifoProxy>(m, "FifoProxy")
+      .def(nb::init<int, uintptr_t, size_t, int, int, int, bool>(),
+           nb::arg("thread_idx"), nb::arg("gpu_buffer_addr"),
+           nb::arg("total_size"), nb::arg("rank"), nb::arg("node_idx"),
+           nb::arg("local_rank"), nb::arg("is_intranode"))
+      .def("set_fifo", &FifoProxy::set_fifo, nb::arg("fifo"))
       .def("set_peers_meta",
-           [](FifoProxy& proxy, py::list meta_list) {
+           [](FifoProxy& proxy, nb::list meta_list) {
              std::vector<PeerMeta> vec;
-             for (py::handle h : meta_list) {
-               if (py::isinstance<py::dict>(h)) {
-                 auto d = h.cast<py::dict>();
+             for (nb::handle h : meta_list) {
+               if (nb::isinstance<nb::dict>(h)) {
+                 auto d = nb::cast<nb::dict>(h);
                  PeerMeta pm;
-                 pm.rank = d["rank"].cast<int>();
-                 pm.ptr = d["ptr"].cast<uintptr_t>();
-                 pm.nbytes = d["nbytes"].cast<size_t>();
-                 pm.ip = d["ip"].cast<std::string>();
+                 pm.rank = nb::cast<int>(d["rank"]);
+                 pm.ptr = nb::cast<uintptr_t>(d["ptr"]);
+                 pm.nbytes = nb::cast<size_t>(d["nbytes"]);
+                 pm.ip = nb::cast<std::string>(d["ip"]);
 
                  // Handle listen_ports array (always present)
-                 auto ports = d["listen_ports"].cast<py::sequence>();
+                 auto ports = nb::cast<nb::list>(d["listen_ports"]);
                  size_t port_count =
-                     std::min(static_cast<size_t>(py::len(ports)),
+                     std::min(static_cast<size_t>(nb::len(ports)),
                               static_cast<size_t>(kNumProxyThs));
                  for (size_t i = 0; i < port_count; ++i) {
-                   pm.listen_ports[i] = ports[i].cast<int>();
+                   pm.listen_ports[i] = nb::cast<int>(ports[i]);
                  }
                  // Initialize remaining ports to 0 if fewer than kNumProxyThs
                  // provided
@@ -2124,7 +2126,7 @@ PYBIND11_MODULE(ep, m) {
 
                  vec.push_back(std::move(pm));
                } else {
-                 vec.push_back(h.cast<PeerMeta>());
+                 vec.push_back(nb::cast<PeerMeta>(h));
                }
              }
              proxy.set_peers_meta(vec);
@@ -2135,5 +2137,5 @@ PYBIND11_MODULE(ep, m) {
       .def("get_listen_port", &FifoProxy::get_listen_port)
       .def("avg_wr_latency_us", &FifoProxy::avg_wr_latency_us)
       .def("processed_count", &FifoProxy::processed_count)
-      .def_readonly("thread_idx", &FifoProxy::thread_idx);
+      .def_ro("thread_idx", &FifoProxy::thread_idx);
 }

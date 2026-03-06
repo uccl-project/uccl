@@ -31,9 +31,9 @@ else
   GH_CFLAGS := -DUSE_GRACE_HOPPER
 endif
 
-PYTHON            ?= python3
-PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
-EXT_SUFFIX        := .abi3.so
+PYTHON             ?= python3
+NANOBIND_INCLUDES  := -I$(shell $(PYTHON) -m nanobind --include_dir 2>/dev/null)
+EXT_SUFFIX         := .abi3.so
 
 TORCH_ROOT        := $(shell $(PYTHON) -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent)")
 TORCH_INCLUDE     := $(TORCH_ROOT)/include
@@ -90,18 +90,18 @@ all: $(EP_EXT)
 
 # C++ compilation rule with dependency generation
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(PYBIND11_INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(NANOBIND_INCLUDES) -MMD -MP -c $< -o $@
 # CUDA compilation rule with dependency generation
 %.o: %.cu
 	$(NVCC) -arch=sm_$(SM) $(NVCCFLAGS) $(TORCH_INCS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 # Linking rules
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(PYBIND11_INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(NANOBIND_INCLUDES) -MMD -MP -c $< -o $@
 
 $(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND)
 	$(CXX) $(CXXFLAGS) -shared -fPIC \
-	    $(INCLUDES) $(PYBIND11_INCLUDES) $^ \
+	    $(INCLUDES) $(NANOBIND_INCLUDES) $^ \
 	    -L$(TORCH_LIBDIR) -Wl,-rpath,$(TORCH_LIBDIR) \
 	    -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
 	    -ltorch_python -ltorch -ltorch_cpu -ltorch_cuda -lc10 -lc10_cuda \

@@ -97,6 +97,35 @@ if __name__ == "__main__":
     sources = glob("./src/*.cu") + glob("./src/*.cpp") + glob("./src/*.cc")
     libraries = ["ibverbs", "glog", "nl-3", "nl-route-3", "numa"]
     include_dirs = [PROJECT_ROOT / "include", PROJECT_ROOT / ".." / "include"]
+    # Nanobind for Python ABI-stable bindings (replaces pybind11)
+    try:
+        nanobind_include = subprocess.run(
+            ["python", "-m", "nanobind", "--include_dir"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        if nanobind_include:
+            include_dirs.append(Path(nanobind_include))
+        # Link nanobind core implementation (required; headers are not header-only)
+        nanobind_root = subprocess.run(
+            ["python", "-c", "import nanobind; from pathlib import Path; print(Path(nanobind.__file__).parent)"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        nb_combined = Path(nanobind_root) / "src" / "nb_combined.cpp"
+        if nb_combined.exists():
+            sources.append(str(nb_combined))
+        else:
+            raise RuntimeError(
+                f"nanobind core source not found: {nb_combined}. "
+                "Install/upgrade nanobind: pip install nanobind"
+            ) from None
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        raise RuntimeError(
+            "nanobind not found. Install it with: pip install nanobind"
+        ) from e
 
     # Collect header files for dependency tracking
     header_files = []

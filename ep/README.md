@@ -4,10 +4,13 @@ GPU-initiated expert-parallel communication (e.g., DeepEP) is the key to efficie
 
 ## Prerequisite
 
+The Python extension uses [nanobind](https://github.com/wjakob/nanobind) for ABI-stable bindings (compatible across Python minor versions without recompilation).
+
 We provide a script to install dependencies (tested on p5en, p6-b200, AMD MI300x), assuming under a Python environment: 
 ```bash
 ./install_deps.sh
 ```
+This installs nanobind, PyTorch, and system libraries (e.g. glog, libibverbs) as needed.
 
 ## Build on CUDA
 
