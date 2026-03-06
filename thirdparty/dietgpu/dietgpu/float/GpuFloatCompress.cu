@@ -13,7 +13,7 @@
 #include "dietgpu/utils/StackDeviceMemory.h"
 #include "dietgpu/utils/StaticUtils.h"
 
-#include <glog/logging.h>
+#include "util/debug.h"
 #include <cmath>
 #include <memory>
 #include <vector>
@@ -37,7 +37,7 @@ uint32_t getMaxFloatCompressedSize(FloatType floatType, uint32_t size) {
       baseSize += FloatTypeInfo<FloatType::kFloat32>::getUncompDataSize(size);
       break;
     default:
-      CHECK(false);
+      UCCL_CHECK(false);
       break;
   }
 
@@ -266,7 +266,7 @@ void floatCompressEncodeOneBatch(dietgpu::StackDeviceMemory& res,
 inline size_t getElementCountFromBytes(FloatType ft, size_t bytes) {
   const size_t wordSize = getWordSizeFromFloatType(ft);
 
-  CHECK(bytes % wordSize == 0)
+  UCCL_CHECK(bytes % wordSize == 0)
       << "Bytes (" << bytes << ") not aligned with FloatType word size ("
       << wordSize << ")";
 

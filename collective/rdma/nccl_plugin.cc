@@ -1,8 +1,8 @@
 #include "nccl_net.h"
 #include "transport.h"
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util_rdma.h"
-#include <glog/logging.h>
 #include <atomic>
 #include <mutex>
 #include <thread>
@@ -101,7 +101,7 @@ ncclResult_t pluginPciPath(char const* ib_name, char** path) {
   snprintf(devicePath, 256, "/sys/class/infiniband/%s/device", ib_name);
   char* p = realpath(devicePath, NULL);
   if (p == NULL) {
-    LOG(ERROR) << "Could not find device path for " << ib_name;
+    UCCL_LOG(ERROR, UCCL_RDMA) << "Could not find device path for " << ib_name;
     return ncclInternalError;
   }
   *path = p;
@@ -237,7 +237,7 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
   if (factory_dev->dma_buf_support) props->ptrSupport |= NCCL_PTR_DMABUF;
 
   if (props->ptrSupport == NCCL_PTR_HOST) {
-    DCHECK(0) << "Lack of GPU Direct RDMA support.";
+    UCCL_DCHECK(0) << "Lack of GPU Direct RDMA support.";
   }
 
   // If you regMr has a fast registration cache, set to 1. If set to 0, user
@@ -287,11 +287,11 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
 
   // Create a listening socket.
   int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-  DCHECK(listen_fd >= 0) << "ERROR: opening socket";
+  UCCL_DCHECK(listen_fd >= 0) << "ERROR: opening socket";
 
   int flag = 1;
-  CHECK(setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
-        0);
+  UCCL_CHECK(
+      setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >= 0);
 
   struct sockaddr_in serv_addr;
   bzero((char*)&serv_addr, sizeof(serv_addr));
@@ -300,19 +300,20 @@ ncclResult_t pluginListen(int dev, void* opaqueHandle, void** listenComm) {
   serv_addr.sin_port = 0;  // Let OS assign a free ephemeral port
   ret = bind(listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
   if (ret < 0) {
-    LOG(ERROR) << "ERROR: binding socket, ret: " << ret
-               << ", port: " << ntohs(serv_addr.sin_port) << ", dev: " << dev;
+    UCCL_LOG(ERROR, UCCL_RDMA)
+        << "ERROR: binding socket, ret: " << ret
+        << ", port: " << ntohs(serv_addr.sin_port) << ", dev: " << dev;
     close(listen_fd);
     return ncclInternalError;
   }
-  DCHECK(ret >= 0) << ret;
+  UCCL_DCHECK(ret >= 0) << ret;
 
   // Get the actual port assigned by the OS.
   socklen_t len = sizeof(serv_addr);
   getsockname(listen_fd, (struct sockaddr*)&serv_addr, &len);
 
   ret = listen(listen_fd, 1);
-  DCHECK(ret == 0) << ret;
+  UCCL_DCHECK(ret == 0) << ret;
 
   // Fill out handle which will be passed to the other side.
   auto factory_dev = RDMAFactory::get_factory_dev(dev);
@@ -375,7 +376,7 @@ ncclResult_t pluginConnect(int dev, void* opaque_handle, void** sendComm,
   } else if (handle->state == kConnConnecting) {
     *sendComm = nullptr;
   } else {
-    DCHECK(handle->state == kConnConnected);
+    UCCL_DCHECK(handle->state == kConnConnected);
     struct ucclSendComm* scomm =
         (struct ucclSendComm*)calloc(1, sizeof(struct ucclSendComm));
     scomm->base = handle->connect_buffer.base;
@@ -421,7 +422,7 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
   } else if (lcomm->state == kConnConnecting) {
     *recvComm = nullptr;
   } else {
-    DCHECK(lcomm->state == kConnConnected);
+    UCCL_DCHECK(lcomm->state == kConnConnected);
     struct ucclRecvComm* rcomm =
         (struct ucclRecvComm*)calloc(1, sizeof(struct ucclRecvComm));
     rcomm->base = lcomm->accept_buffer.base;

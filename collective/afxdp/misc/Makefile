@@ -2,11 +2,11 @@ ABS_ROOT_PATH := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
 KERNEL = $(shell uname -r)
 INC = -I ../../lib/install/include -I ../
-LIBS = ../../lib/install/lib/libxdp.a ../../lib/install/lib/libbpf.a -lglog -lgflags -lgtest -lz -lelf
+LIBS = ../../lib/install/lib/libxdp.a ../../lib/install/lib/libbpf.a  -lgflags -lgtest -lz -lelf
 LIBS_SHARED = -Wl,-rpath=$(ABS_ROOT_PATH)/../../lib/xdp-tools/lib/libxdp/ \
 	   		  -Wl,-rpath=$(ABS_ROOT_PATH)/../../lib/libbpf/src/ \
 	   		  -L../../lib/xdp-tools/lib/libxdp -lxdp -L../../lib/libbpf/src -lbpf \
-	   		  -lglog -lgflags -lgtest -lz -lelf
+	   		   -lgflags -lgtest -lz -lelf
 override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC
 CLANGFLAGS = -O3 -g
 DEPS = *.h

@@ -1,10 +1,10 @@
 #include "transport_config.h"
 #include "util.h"
+#include "util/debug.h"
 #include "util/shared_pool.h"
 #include <arpa/inet.h>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
-#include <glog/logging.h>
 #include <linux/if_ether.h>
 #include <linux/if_link.h>
 #include <linux/ip.h>
@@ -163,7 +163,7 @@ int server_init(struct server_t* server, char const* interface_name) {
   // per-CPU socket setup
   for (int i = 0; i < MY_NUM_QUEUES; i++) {
     // allocate umem_buffer for umem
-    const size_t buffer_size = NUM_FRAMES * FRAME_SIZE;
+    size_t const buffer_size = NUM_FRAMES * FRAME_SIZE;
 
     if (posix_memalign(&server->socket[i].umem_buffer, getpagesize(),
                        buffer_size)) {
@@ -379,7 +379,7 @@ void complete_tx(struct socket_t* socket) {
   completed = xsk_ring_cons__peek(&socket->complete_queue,
                                   XSK_RING_CONS__DEFAULT_NUM_DESCS, &idx_cq);
 
-  VLOG(3) << "rx complete_tx completed = " << completed;
+  UCCL_VLOG(3) << "rx complete_tx completed = " << completed;
   if (completed > 0) {
     for (int i = 0; i < completed; i++)
       socket->frame_pool->push(
@@ -414,8 +414,8 @@ void socket_recv(struct socket_t* socket, int queue_id) {
     xsk_ring_prod__submit(&socket->fill_queue, stock_frames);
   }
 
-  VLOG(3) << "rx fill_queue rcvd = " << rcvd
-          << ", stock_frames = " << stock_frames;
+  UCCL_VLOG(3) << "rx fill_queue rcvd = " << rcvd
+               << ", stock_frames = " << stock_frames;
   for (int i = 0; i < rcvd; i++) {
     const struct xdp_desc* desc =
         xsk_ring_cons__rx_desc(&socket->recv_queue, idx_rx++);
@@ -487,8 +487,8 @@ static void* recv_thread(void* arg) {
 }
 
 int main(int argc, char* argv[]) {
-  google::InitGoogleLogging(argv[0]);
-  google::InstallFailureSignalHandler();
+  // google::InitGoogleLogging(argv[0]);
+  // google::InstallFailureSignalHandler();
 
   printf("\n[server]\n");
 

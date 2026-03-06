@@ -4,7 +4,7 @@ ABS_REPO_ROOT := $(shell realpath $(ABS_ROOT_PATH)/../..)
 CUDA_HOME?=/usr/local/cuda
 
 INC = -I$(ABS_REPO_ROOT)/include -I$(CUDA_HOME)/include
-LIBS = -lglog -lgflags -lz -lelf -libverbs -L $(CUDA_HOME)/lib64 -lcudart -lpthread
+LIBS =  -lgflags -lz -lelf -libverbs -L $(CUDA_HOME)/lib64 -lcudart -lpthread
 override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC -D__STDC_FORMAT_MACROS -DUSE_CUDA
 
 DEPS = *.h

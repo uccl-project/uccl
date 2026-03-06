@@ -4,8 +4,8 @@
 #include "swift.h"
 #include "timely.h"
 #include "timing_wheel.h"
+#include "util/debug.h"
 #include "util/util.h"
-#include <glog/logging.h>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -117,7 +117,8 @@ struct PCB {
     const size_t sack_bitmap_bucket_idx = index / kSackBitmapBucketSize;
     const size_t sack_bitmap_idx_in_bucket = index % kSackBitmapBucketSize;
 
-    LOG_IF(FATAL, index >= kSackBitmapSize) << "Index out of bounds: " << index;
+    UCCL_LOG_IF(FATAL, UCCL_RDMA, index >= kSackBitmapSize)
+        << "Index out of bounds: " << index;
 
     sack_bitmap[sack_bitmap_bucket_idx] |= (1ULL << sack_bitmap_idx_in_bucket);
 

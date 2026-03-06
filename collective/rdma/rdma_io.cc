@@ -2,11 +2,11 @@
 #include "eqds.h"
 #include "transport.h"
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util/net.h"
 #include "util/util.h"
 #include "util_rdma.h"
 #include "util_timer.h"
-#include <glog/logging.h>
 #include <infiniband/verbs.h>
 #include <algorithm>
 #include <cstdint>
@@ -46,15 +46,16 @@ int RDMAFactory::init_devs() {
   int num_ifs = find_interfaces(uccl_ifname, &uccl_ifaddr, MAX_IF_NAME_SIZE, 1);
   if (num_ifs != 1) UCCL_INIT_CHECK(false, "No IP interface found");
   std::string oob_ip = get_dev_ip(uccl_ifname);
-  LOG(INFO) << "Using OOB interface " << std::string(uccl_ifname) << " with IP "
-            << oob_ip << " for connection setup";
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "Using OOB interface " << std::string(uccl_ifname) << " with IP "
+      << oob_ip << " for connection setup";
 
   // Use UCCL_XXX first, if not set, use NCCL_XXX
   char* ib_hca = getenv("UCCL_IB_HCA");
-  LOG(INFO) << "UCCL_IB_HCA: " << ib_hca;
+  UCCL_LOG(INFO, UCCL_RDMA) << "UCCL_IB_HCA: " << ib_hca;
   if (!ib_hca) {
     ib_hca = getenv("NCCL_IB_HCA");
-    LOG(INFO) << "NCCL_IB_HCA: " << ib_hca;
+    UCCL_LOG(INFO, UCCL_RDMA) << "NCCL_IB_HCA: " << ib_hca;
   }
 
   struct ib_dev user_ib_ifs[MAX_IB_DEVS];
@@ -126,7 +127,8 @@ int RDMAFactory::init_devs() {
                          1e6 / 8;
         dev.link_bw = link_bw;
 
-        CHECK(ncclIbGetGidIndex(context, port_num, &port_attr, &dev.gid_idx));
+        UCCL_CHECK(
+            ncclIbGetGidIndex(context, port_num, &port_attr, &dev.gid_idx));
         UCCL_LOG_RE << devices[d]->name << " uses gid_idx " << dev.gid_idx;
 
         if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
@@ -267,7 +269,7 @@ int RDMAFactory::init_devs() {
     }
 
     // Make sure both have the same number of NICs.
-    CHECK(ib_nics_with_dev_idx.size() == rdma_ctl->num_devices);
+    UCCL_CHECK(ib_nics_with_dev_idx.size() == rdma_ctl->num_devices);
 
     // Mapping GPU idx to dev_idx in rdma_ctl->devices_.
     rdma_ctl->gpu_to_dev_idx_ = map_gpu_to_dev(gpu_cards, ib_nics_with_dev_idx);
@@ -313,7 +315,7 @@ RDMAContext* RDMAFactory::CreateContext(TimerManager* rto,
     ctx = new SwiftRDMAContext(rto, engine_unacked_bytes, eqds, dev,
                                engine_offset, meta, io_ctx);
 
-  CHECK(ctx != nullptr);
+  UCCL_CHECK(ctx != nullptr);
   return ctx;
 }
 
@@ -373,7 +375,7 @@ uint64_t TXTracking::ack_transmitted_chunks(void* subflow_context,
                                             uint64_t t5, uint64_t t6,
                                             uint64_t remote_queueing_tsc,
                                             uint32_t* flow_unacked_bytes) {
-  DCHECK(num_acked_chunks <= unacked_chunks_.size());
+  UCCL_DCHECK(num_acked_chunks <= unacked_chunks_.size());
 
   auto* subflow = reinterpret_cast<SubUcclFlow*>(subflow_context);
 
@@ -437,7 +439,7 @@ uint64_t TXTracking::ack_transmitted_chunks(void* subflow_context,
               << ", Endpoint delay: " << to_usec(endpoint_delay_tsc, freq_ghz)
               << ", Fabric delay: " << to_usec(fabric_delay_tsc, freq_ghz);
 
-  // LOG_EVERY_N(INFO, 10000) << "Host: " <<
+  // UCCL_LOG_EVERY_N(INFO, 10000) << "Host: " <<
   // std::round(to_usec(endpoint_delay_tsc, freq_ghz)) <<
   //     ", Fabric: " << std::round(to_usec(fabric_delay_tsc, freq_ghz));
 
@@ -457,7 +459,7 @@ uint64_t TXTracking::ack_transmitted_chunks(void* subflow_context,
       avg_turnaround_delay =
           (avg_turnaround_delay * count + turnaround_delay) / (count + 1);
     }
-    LOG_EVERY_N(INFO, 1000)
+    UCCL_LOG_EVERY_N(INFO, UCCL_RDMA, 1000)
         << "Turnaround delay: " << turnaround_delay
         << "us, Average turnaround delay: " << avg_turnaround_delay << "us";
   }
@@ -492,7 +494,8 @@ void SharedIOContext::check_ctrl_rq(bool force) {
   }
 
   struct ibv_recv_wr* bad_wr;
-  CHECK(ibv_post_recv(ctrl_qp_, &ctrl_recv_wrs_.recv_wrs[0], &bad_wr) == 0);
+  UCCL_CHECK(ibv_post_recv(ctrl_qp_, &ctrl_recv_wrs_.recv_wrs[0], &bad_wr) ==
+             0);
   UCCL_LOG_IO << "Posted " << post_batch << " recv requests for Ctrl QP";
   dec_post_ctrl_rq(post_batch);
 }
@@ -527,7 +530,7 @@ void SharedIOContext::check_srq(bool force) {
   }
 
   struct ibv_recv_wr* bad_wr;
-  CHECK(ibv_post_srq_recv(srq_, &dp_recv_wrs_.recv_wrs[0], &bad_wr) == 0);
+  UCCL_CHECK(ibv_post_srq_recv(srq_, &dp_recv_wrs_.recv_wrs[0], &bad_wr) == 0);
   // UCCL_LOG_IO << "Posted " << post_batch << " recv requests for SRQ";
   dec_post_srq(post_batch);
 }
@@ -539,7 +542,7 @@ void SharedIOContext::flush_acks() {
 
   struct ibv_send_wr* bad_wr;
   int ret = ibv_post_send(ctrl_qp_, tx_ack_wr_, &bad_wr);
-  DCHECK(ret == 0) << ret << ", nr_tx_ack_wr_: " << nr_tx_ack_wr_;
+  UCCL_DCHECK(ret == 0) << ret << ", nr_tx_ack_wr_: " << nr_tx_ack_wr_;
 
   UCCL_LOG_IO << "Flush " << nr_tx_ack_wr_ << " ACKs";
 
@@ -561,9 +564,10 @@ int SharedIOContext::_poll_ctrl_cq_ex(void) {
 
     while (1) {
       if (cq_ex->status != IBV_WC_SUCCESS) {
-        CHECK(false) << "Ctrl CQ state error: " << cq_ex->status << ", "
-                     << ibv_wc_read_opcode(cq_ex)
-                     << ", ctrl_chunk_pool_size: " << ctrl_chunk_pool_->size();
+        UCCL_CHECK(false) << "Ctrl CQ state error: " << cq_ex->status << ", "
+                          << ibv_wc_read_opcode(cq_ex)
+                          << ", ctrl_chunk_pool_size: "
+                          << ctrl_chunk_pool_->size();
       }
 
       CQEDesc* cqe_desc = reinterpret_cast<CQEDesc*>(cq_ex->wr_id);
@@ -628,7 +632,7 @@ int SharedIOContext::_poll_ctrl_cq_normal(void) {
 
     for (int i = 0; i < nr_wcs; i++) {
       auto* wc = wcs + i;
-      DCHECK(wc->status == IBV_WC_SUCCESS)
+      UCCL_DCHECK(wc->status == IBV_WC_SUCCESS)
           << "Ctrl CQ state error: " << wc->status;
       CQEDesc* cqe_desc = (CQEDesc*)wc->wr_id;
       auto chunk_addr = (uint64_t)cqe_desc->data;
@@ -686,8 +690,8 @@ int SharedIOContext::_rc_poll_recv_cq_ex(void) {
 
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
-      CHECK(false) << "data path CQ state error: " << cq_ex->status
-                   << " from QP:" << ibv_wc_read_qp_num(cq_ex);
+      UCCL_CHECK(false) << "data path CQ state error: " << cq_ex->status
+                        << " from QP:" << ibv_wc_read_qp_num(cq_ex);
     }
 
     auto* rdma_ctx = qpn_to_rdma_ctx(ibv_wc_read_qp_num(cq_ex));
@@ -713,8 +717,8 @@ int SharedIOContext::_rc_poll_send_cq_ex(void) {
 
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
-      CHECK(false) << "data path CQ state error: " << cq_ex->status
-                   << " from QP:" << ibv_wc_read_qp_num(cq_ex);
+      UCCL_CHECK(false) << "data path CQ state error: " << cq_ex->status
+                        << " from QP:" << ibv_wc_read_qp_num(cq_ex);
     }
 
     auto* rdma_ctx = qpn_to_rdma_ctx(ibv_wc_read_qp_num(cq_ex));
@@ -738,8 +742,8 @@ int SharedIOContext::_uc_poll_send_cq_ex(void) {
 
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
-      CHECK(false) << "data path CQ state error: " << cq_ex->status
-                   << " from QP:" << ibv_wc_read_qp_num(cq_ex);
+      UCCL_CHECK(false) << "data path CQ state error: " << cq_ex->status
+                        << " from QP:" << ibv_wc_read_qp_num(cq_ex);
     }
 
     auto* cqe_desc = (CQEDesc*)cq_ex->wr_id;
@@ -770,8 +774,8 @@ int SharedIOContext::_uc_poll_recv_cq_ex(void) {
 
   while (1) {
     if (cq_ex->status != IBV_WC_SUCCESS) {
-      CHECK(false) << "data path CQ state error: " << cq_ex->status
-                   << " from QP:" << ibv_wc_read_qp_num(cq_ex);
+      UCCL_CHECK(false) << "data path CQ state error: " << cq_ex->status
+                        << " from QP:" << ibv_wc_read_qp_num(cq_ex);
     }
 
     auto* rdma_ctx = qpn_to_rdma_ctx(ibv_wc_read_qp_num(cq_ex));
@@ -818,7 +822,7 @@ int SharedIOContext::_rc_poll_send_cq_normal(void) {
 
   for (int i = 0; i < nr_wcs; i++) {
     auto* wc = wcs + i;
-    DCHECK(wc->status == IBV_WC_SUCCESS)
+    UCCL_DCHECK(wc->status == IBV_WC_SUCCESS)
         << "RC send CQ state error: " << wc->status << ", " << wc->byte_len;
     auto* rdma_ctx = qpn_to_rdma_ctx(wc->qp_num);
     rdma_ctx->rc_rx_ack<struct ibv_wc>(wc);
@@ -836,7 +840,7 @@ int SharedIOContext::_rc_poll_recv_cq_normal(void) {
 
   for (int i = 0; i < nr_wcs; i++) {
     auto* wc = wcs + i;
-    DCHECK(wc->status == IBV_WC_SUCCESS)
+    UCCL_DCHECK(wc->status == IBV_WC_SUCCESS)
         << "RC recv CQ state error: " << wc->status;
     auto* cqe_desc = (CQEDesc*)wc->wr_id;
     auto* rdma_ctx = qpn_to_rdma_ctx(wc->qp_num);
@@ -857,7 +861,7 @@ int SharedIOContext::_uc_poll_send_cq_normal(void) {
 
   for (int i = 0; i < nr_wcs; i++) {
     auto* wc = wcs + i;
-    DCHECK(wc->status == IBV_WC_SUCCESS)
+    UCCL_DCHECK(wc->status == IBV_WC_SUCCESS)
         << "UC send CQ state error: " << wc->status;
     auto* cqe_desc = (CQEDesc*)wc->wr_id;
 
@@ -883,7 +887,7 @@ int SharedIOContext::_uc_poll_recv_cq_normal(void) {
 
   for (int i = 0; i < nr_wcs; i++) {
     auto* wc = wcs + i;
-    DCHECK(wc->status == IBV_WC_SUCCESS)
+    UCCL_DCHECK(wc->status == IBV_WC_SUCCESS)
         << "UC recv CQ state error: " << wc->status;
     auto* cqe_desc = (CQEDesc*)wc->wr_id;
     auto* rdma_ctx = qpn_to_rdma_ctx(wc->qp_num);

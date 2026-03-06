@@ -424,7 +424,7 @@ NB_MODULE(p2p, m) {
                     nb::cast<XferDesc const&>(local_desc_list[0]);
                 auto const& rdesc =
                     nb::cast<XferDesc const&>(remote_desc_list[0]);
-                CHECK(!rdesc.ipc_info.empty())
+                UCCL_CHECK(!rdesc.ipc_info.empty())
                     << "Remote descriptor has no IPC info for local transfer";
                 IpcTransferInfo info;
                 std::memcpy(&info, rdesc.ipc_info.data(), sizeof(info));
@@ -459,7 +459,7 @@ NB_MODULE(p2p, m) {
                       nb::cast<XferDesc const&>(local_desc_list[i]);
                   auto const& rdesc =
                       nb::cast<XferDesc const&>(remote_desc_list[i]);
-                  CHECK(!rdesc.ipc_info.empty())
+                  UCCL_CHECK(!rdesc.ipc_info.empty())
                       << "Remote descriptor has no IPC info for local transfer";
                   IpcTransferInfo info;
                   std::memcpy(&info, rdesc.ipc_info.data(), sizeof(info));
@@ -1131,7 +1131,7 @@ NB_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
              nb::bytes info_blob) {
             std::string buf(info_blob.c_str(), info_blob.size());
-            CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
+            UCCL_CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                 << "IpcTransferInfo size mismatch";
             IpcTransferInfo info;
             std::memcpy(&info, buf.data(), sizeof(info));
@@ -1151,7 +1151,7 @@ NB_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
              nb::bytes info_blob) {
             std::string buf(info_blob.c_str(), info_blob.size());
-            CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
+            UCCL_CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                 << "IpcTransferInfo size mismatch";
             IpcTransferInfo info;
             std::memcpy(&info, buf.data(), sizeof(info));
@@ -1171,7 +1171,7 @@ NB_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
              nb::bytes info_blob) {
             std::string buf(info_blob.c_str(), info_blob.size());
-            CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
+            UCCL_CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                 << "IpcTransferInfo size mismatch";
             IpcTransferInfo info;
             std::memcpy(&info, buf.data(), sizeof(info));
@@ -1193,7 +1193,7 @@ NB_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, uint64_t ptr, size_t size,
              nb::bytes info_blob) {
             std::string buf(info_blob.c_str(), info_blob.size());
-            CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
+            UCCL_CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                 << "IpcTransferInfo size mismatch";
             IpcTransferInfo info;
             std::memcpy(&info, buf.data(), sizeof(info));
@@ -1215,8 +1215,9 @@ NB_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> ptr_v,
              std::vector<size_t> size_v, nb::list info_v) {
             size_t num_iovs = ptr_v.size();
-            CHECK_EQ(size_v.size(), num_iovs) << "writev_ipc: size_v mismatch";
-            CHECK_EQ(nb::len(info_v), num_iovs)
+            UCCL_CHECK_EQ(size_v.size(), num_iovs)
+                << "writev_ipc: size_v mismatch";
+            UCCL_CHECK_EQ(nb::len(info_v), num_iovs)
                 << "writev_ipc: info_v mismatch";
 
             std::vector<void const*> data_ptrs(num_iovs);
@@ -1225,7 +1226,7 @@ NB_MODULE(p2p, m) {
               data_ptrs[i] = reinterpret_cast<void const*>(ptr_v[i]);
               nb::bytes b = nb::cast<nb::bytes>(info_v[i]);
               std::string buf(b.c_str(), b.size());
-              CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
+              UCCL_CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                   << "IpcTransferInfo size mismatch at index " << i;
               std::memcpy(&infos[i], buf.data(), sizeof(infos[i]));
             }
@@ -1246,8 +1247,10 @@ NB_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> ptr_v,
              std::vector<size_t> size_v, nb::list info_v) {
             size_t num_iovs = ptr_v.size();
-            CHECK_EQ(size_v.size(), num_iovs) << "readv_ipc: size_v mismatch";
-            CHECK_EQ(nb::len(info_v), num_iovs) << "readv_ipc: info_v mismatch";
+            UCCL_CHECK_EQ(size_v.size(), num_iovs)
+                << "readv_ipc: size_v mismatch";
+            UCCL_CHECK_EQ(nb::len(info_v), num_iovs)
+                << "readv_ipc: info_v mismatch";
 
             std::vector<void*> data_ptrs(num_iovs);
             std::vector<IpcTransferInfo> infos(num_iovs);
@@ -1255,7 +1258,7 @@ NB_MODULE(p2p, m) {
               data_ptrs[i] = reinterpret_cast<void*>(ptr_v[i]);
               nb::bytes b = nb::cast<nb::bytes>(info_v[i]);
               std::string buf(b.c_str(), b.size());
-              CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
+              UCCL_CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                   << "IpcTransferInfo size mismatch at index " << i;
               std::memcpy(&infos[i], buf.data(), sizeof(infos[i]));
             }
@@ -1276,9 +1279,9 @@ NB_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> ptr_v,
              std::vector<size_t> size_v, nb::list info_v) {
             size_t num_iovs = ptr_v.size();
-            CHECK_EQ(size_v.size(), num_iovs)
+            UCCL_CHECK_EQ(size_v.size(), num_iovs)
                 << "writev_ipc_async: size_v mismatch";
-            CHECK_EQ(nb::len(info_v), num_iovs)
+            UCCL_CHECK_EQ(nb::len(info_v), num_iovs)
                 << "writev_ipc_async: info_v mismatch";
 
             std::vector<void const*> data_ptrs(num_iovs);
@@ -1287,7 +1290,7 @@ NB_MODULE(p2p, m) {
               data_ptrs[i] = reinterpret_cast<void const*>(ptr_v[i]);
               nb::bytes b = nb::cast<nb::bytes>(info_v[i]);
               std::string buf(b.c_str(), b.size());
-              CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
+              UCCL_CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                   << "IpcTransferInfo size mismatch at index " << i;
               std::memcpy(&infos[i], buf.data(), sizeof(infos[i]));
             }
@@ -1309,9 +1312,9 @@ NB_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> ptr_v,
              std::vector<size_t> size_v, nb::list info_v) {
             size_t num_iovs = ptr_v.size();
-            CHECK_EQ(size_v.size(), num_iovs)
+            UCCL_CHECK_EQ(size_v.size(), num_iovs)
                 << "readv_ipc_async: size_v mismatch";
-            CHECK_EQ(nb::len(info_v), num_iovs)
+            UCCL_CHECK_EQ(nb::len(info_v), num_iovs)
                 << "readv_ipc_async: info_v mismatch";
 
             std::vector<void*> data_ptrs(num_iovs);
@@ -1320,7 +1323,7 @@ NB_MODULE(p2p, m) {
               data_ptrs[i] = reinterpret_cast<void*>(ptr_v[i]);
               nb::bytes b = nb::cast<nb::bytes>(info_v[i]);
               std::string buf(b.c_str(), b.size());
-              CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
+              UCCL_CHECK_EQ(buf.size(), sizeof(IpcTransferInfo))
                   << "IpcTransferInfo size mismatch at index " << i;
               std::memcpy(&infos[i], buf.data(), sizeof(infos[i]));
             }
@@ -1358,7 +1361,7 @@ NB_MODULE(p2p, m) {
           [](Endpoint& self, uint64_t conn_id, std::vector<uint64_t> ptr_v,
              std::vector<size_t> size_v) {
             size_t num_iovs = ptr_v.size();
-            CHECK_EQ(size_v.size(), num_iovs) << "Size vector mismatch";
+            UCCL_CHECK_EQ(size_v.size(), num_iovs) << "Size vector mismatch";
 
             std::vector<void*> addr_v(num_iovs);
             std::vector<char*> out_buf_v(num_iovs);

@@ -1,12 +1,12 @@
 #pragma once
 
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util/shared_pool.h"
 #include "util/timer.h"
 #include <arpa/inet.h>
 #include <bpf/bpf.h>
 #include <bpf/libbpf.h>
-#include <glog/logging.h>
 #include <linux/if_ether.h>
 #include <linux/if_link.h>
 #include <linux/ip.h>
@@ -202,7 +202,7 @@ class AFXDPFactory {
 
 class AFXDPSocket {
   static_assert(XDP_PACKET_HEADROOM == 0x100, "XDP_PACKET_HEADROOM is 256");
-  static const uint64_t XDP_PACKET_HEADROOM_MASK = 0x1FF;
+  static uint64_t const XDP_PACKET_HEADROOM_MASK = 0x1FF;
 
   int xsk_fd_;
   int umem_fd_;
@@ -305,7 +305,7 @@ class AFXDPSocket {
   inline uint64_t pop_frame() {
 #ifdef FRAME_POOL_DEBUG
     auto frame_offset = frame_pool_->pop();
-    CHECK(free_frames_.erase(frame_offset) == 1);
+    UCCL_CHECK(free_frames_.erase(frame_offset) == 1);
     FrameBuf::clear_fields(frame_offset, umem_buffer_);
     return frame_offset;
 #else
@@ -322,11 +322,11 @@ class AFXDPSocket {
       free_frames_.insert(frame_offset);
       frame_pool_->push(frame_offset);
     } else {
-      CHECK(false) << "Frame offset " << std::hex << frame_offset << " size "
-                   << std::dec
-                   << FrameBuf::get_msgbuf_ptr(frame_offset, umem_buffer_)
-                          ->get_frame_len()
-                   << " already in free_frames_";
+      UCCL_CHECK(false) << "Frame offset " << std::hex << frame_offset
+                        << " size " << std::dec
+                        << FrameBuf::get_msgbuf_ptr(frame_offset, umem_buffer_)
+                               ->get_frame_len()
+                        << " already in free_frames_";
     }
 #else
     FrameBuf::clear_fields(frame_offset, afxdp_ctl.umem_buffer_);

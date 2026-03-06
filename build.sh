@@ -123,6 +123,10 @@ HOST_GLIBC_VER=$(python3 -c "import platform; print(platform.libc_ver()[1])")
 rm -r uccl.egg-info >/dev/null 2>&1 || true
 rm -r dist >/dev/null 2>&1 || true
 rm -r build >/dev/null 2>&1 || true
+rm collective/rdma/*.so >/dev/null 2>&1 || true
+rm collective/efa/*.so >/dev/null 2>&1 || true
+rm p2p/*.so >/dev/null 2>&1 || true
+rm ep/*.so >/dev/null 2>&1 || true
 WHEEL_DIR="wheelhouse-${TARGET}"
 rm -r "${WHEEL_DIR}" >/dev/null 2>&1 || true
 mkdir -p "${WHEEL_DIR}"
@@ -240,6 +244,7 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
   -e USE_EFA="${USE_EFA:-0}" \
   -e USE_IB="${USE_IB:-0}" \
   -e USE_TCP="${USE_TCP:-0}" \
+  -e USE_DIETGPU="${USE_DIETGPU:-0}" \
   -e USE_INTEL_RDMA_NIC="${USE_INTEL_RDMA_NIC:-0}" \
   -e MAKE_NORMAL_MODE="${MAKE_NORMAL_MODE:-}" \
   -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
@@ -363,6 +368,7 @@ def initialize():
       --exclude "libamdhip64.so.*" \
       --exclude "libcuda.so.1" \
       --exclude "libefa.so.1" \
+      --exclude "libglog.so.0" \
       -w /io/${WHEEL_DIR}
 
     # auditwheel may emit compressed dual tags (e.g. manylinux_2_34.manylinux_2_35).

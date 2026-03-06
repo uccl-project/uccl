@@ -19,7 +19,7 @@ uint32_t getMaxCompressedSize(uint32_t uncompressedBytes) {
   // When used in batches, we must align everything to 16 byte boundaries (due
   // to uint4 read/writes)
   rawSize = roundUp(rawSize, sizeof(uint4));
-  CHECK_LE(rawSize, std::numeric_limits<int32_t>::max());
+  UCCL_CHECK_LE(rawSize, std::numeric_limits<int32_t>::max());
 
   return rawSize;
 }
@@ -129,14 +129,14 @@ void ansEncodeBatchSplitSize(
   uint32_t maxSplitSize = 0;
 
   // check alignment
-  CHECK_EQ(uintptr_t(in_dev) % kANSRequiredAlignment, 0);
+  UCCL_CHECK_EQ(uintptr_t(in_dev) % kANSRequiredAlignment, 0);
 
   for (uint32_t i = 0; i < numInBatch; ++i) {
     auto size = inSplitSizes[i];
 
     if (i != (numInBatch - 1)) {
       // check alignment (internal splits affect alignment of things after it)
-      CHECK_EQ(size % kANSRequiredAlignment, 0);
+      UCCL_CHECK_EQ(size % kANSRequiredAlignment, 0);
     }
 
     splitSize[i] = size;

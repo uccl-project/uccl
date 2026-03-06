@@ -1,10 +1,10 @@
 #include "transport.h"
 #include "transport_config.h"
 #include "util.h"
+#include "util/debug.h"
 #include "util/timer.h"
 #include <arpa/inet.h>
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <netinet/in.h>
 #include <cstring>
 #include <fstream>
@@ -34,7 +34,7 @@
 
 #define INCAST_BASE_LISTEN_PORT 16666
 
-#define MPI_LOG(level) LOG(level) << "Node:" << NODE_ID << " "
+#define MPI_LOG(level) UCCL_LOG(level, UCCL_RDMA) << "Node:" << NODE_ID << " "
 
 #define MAX_BUFFER_SIZE (16 * 1024 * 1024)
 #define PT_NET_CHUNK_SIZE (1024 * 1024)
@@ -138,7 +138,7 @@ class NodeInfo {
  public:
   NodeInfo(std::string& ip, int target_rank)
       : ip_(ip), target_rank_(target_rank), listen_fd_(0) {
-    DCHECK(!ip_.empty());
+    UCCL_DCHECK(!ip_.empty());
   }
   ~NodeInfo() = default;
 
@@ -190,7 +190,7 @@ static void server_setup_func(int local_rank, int target_rank, bool incast) {
     MPI_LOG(INFO) << "Done PT, " << local_rank << " <-- " << target_rank;
   }
 
-  DCHECK(target_rank % NB_THREADS == remote_dev);
+  UCCL_DCHECK(target_rank % NB_THREADS == remote_dev);
 
   if (incast)
     recv_comm->incast[local_rank].conn_id = conn_id;
@@ -273,7 +273,7 @@ void pt_register_recv_buffer(int local_rank, int r) {
   nodes[r].recv_comm_.pt.buffer =
       mmap(nullptr, MAX_BUFFER_SIZE, PROT_READ | PROT_WRITE,
            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  DCHECK(nodes[r].recv_comm_.pt.buffer != MAP_FAILED);
+  UCCL_DCHECK(nodes[r].recv_comm_.pt.buffer != MAP_FAILED);
 #endif
 
   ep->uccl_regmr((UcclFlow*)nodes[r].recv_comm_.pt.conn_id.context,
@@ -290,7 +290,7 @@ void pt_register_send_buffer(int local_rank, int r) {
   nodes[r].send_comm_.pt.buffer =
       mmap(nullptr, MAX_BUFFER_SIZE, PROT_READ | PROT_WRITE,
            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  DCHECK(nodes[r].send_comm_.pt.buffer != MAP_FAILED);
+  UCCL_DCHECK(nodes[r].send_comm_.pt.buffer != MAP_FAILED);
 #endif
 
   ep->uccl_regmr((UcclFlow*)nodes[r].send_comm_.pt.conn_id.context,
@@ -307,7 +307,7 @@ void incast_register_recv_buffer(int local_rank, int r) {
   nodes[r].recv_comm_.incast[local_rank].buffer =
       mmap(nullptr, MAX_BUFFER_SIZE, PROT_READ | PROT_WRITE,
            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  DCHECK(nodes[r].recv_comm_.incast[local_rank].buffer != MAP_FAILED);
+  UCCL_DCHECK(nodes[r].recv_comm_.incast[local_rank].buffer != MAP_FAILED);
 #endif
 
   ep->uccl_regmr(
@@ -325,7 +325,7 @@ void incast_register_send_buffer(int local_rank, int r) {
   nodes[r].send_comm_.incast[local_rank].buffer =
       mmap(nullptr, MAX_BUFFER_SIZE, PROT_READ | PROT_WRITE,
            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  DCHECK(nodes[r].send_comm_.incast[local_rank].buffer != MAP_FAILED);
+  UCCL_DCHECK(nodes[r].send_comm_.incast[local_rank].buffer != MAP_FAILED);
 #endif
 
   ep->uccl_regmr(
@@ -418,10 +418,10 @@ void pt_listen_ports(int local_rank) {
   auto r = find_target_rank("matrix.txt", local_rank);
 
   nodes[r].listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-  DCHECK(nodes[r].listen_fd_ >= 0);
+  UCCL_DCHECK(nodes[r].listen_fd_ >= 0);
   int flag = 1;
-  CHECK(setsockopt(nodes[r].listen_fd_, SOL_SOCKET, SO_REUSEADDR, &flag,
-                   sizeof(int)) >= 0);
+  UCCL_CHECK(setsockopt(nodes[r].listen_fd_, SOL_SOCKET, SO_REUSEADDR, &flag,
+                        sizeof(int)) >= 0);
   struct sockaddr_in serv_addr;
   bzero((char*)&serv_addr, sizeof(serv_addr));
   serv_addr.sin_family = AF_INET;
@@ -429,9 +429,9 @@ void pt_listen_ports(int local_rank) {
   serv_addr.sin_port = htons(base_listen_port + r);
   int ret = bind(nodes[r].listen_fd_, (struct sockaddr*)&serv_addr,
                  sizeof(serv_addr));
-  DCHECK(ret >= 0) << ret;
+  UCCL_DCHECK(ret >= 0) << ret;
   ret = listen(nodes[r].listen_fd_, MAX_NODES);
-  DCHECK(ret == 0) << ret;
+  UCCL_DCHECK(ret == 0) << ret;
 
   MPI_LOG(INFO) << local_rank << " listen on port " << base_listen_port + r
                 << " for PT.";
@@ -443,10 +443,10 @@ void incast_listen_ports() {
   for (int r = 0; r < NRANKS; r++) {
     if (r == INCAST_RANK) continue;
     nodes[r].incast_listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-    DCHECK(nodes[r].incast_listen_fd_ >= 0);
+    UCCL_DCHECK(nodes[r].incast_listen_fd_ >= 0);
     int flag = 1;
-    CHECK(setsockopt(nodes[r].incast_listen_fd_, SOL_SOCKET, SO_REUSEADDR,
-                     &flag, sizeof(int)) >= 0);
+    UCCL_CHECK(setsockopt(nodes[r].incast_listen_fd_, SOL_SOCKET, SO_REUSEADDR,
+                          &flag, sizeof(int)) >= 0);
     struct sockaddr_in serv_addr;
     bzero((char*)&serv_addr, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
@@ -454,9 +454,9 @@ void incast_listen_ports() {
     serv_addr.sin_port = htons(base_listen_port + r);
     int ret = bind(nodes[r].incast_listen_fd_, (struct sockaddr*)&serv_addr,
                    sizeof(serv_addr));
-    DCHECK(ret >= 0) << ret;
+    UCCL_DCHECK(ret >= 0) << ret;
     ret = listen(nodes[r].incast_listen_fd_, MAX_NODES);
-    DCHECK(ret == 0) << ret;
+    UCCL_DCHECK(ret == 0) << ret;
 
     MPI_LOG(INFO) << INCAST_RANK << " listen on port " << base_listen_port + r
                   << " for incast.";
@@ -599,11 +599,11 @@ void p2p_receive(int local_rank, int target_rank, int size, bool incast) {
     while (offset < size) {
       int net_chunk_size =
           std::min(size - offset, (uint32_t)INCAST_NET_CHUNK_SIZE);
-      CHECK(ep->uccl_recv_async(
-                (UcclFlow*)recv_comm_->incast[local_rank].conn_id.context,
-                &recv_comm_->incast[local_rank].mhandle,
-                &recv_comm_->incast[local_rank].buffer, &net_chunk_size, 1,
-                &recv_comm_->incast[local_rank].ureq[chunk_id]) == 0);
+      UCCL_CHECK(ep->uccl_recv_async(
+                     (UcclFlow*)recv_comm_->incast[local_rank].conn_id.context,
+                     &recv_comm_->incast[local_rank].mhandle,
+                     &recv_comm_->incast[local_rank].buffer, &net_chunk_size, 1,
+                     &recv_comm_->incast[local_rank].ureq[chunk_id]) == 0);
 
       recv_comm_->incast[local_rank].done[chunk_id] = false;
       offset += net_chunk_size;
@@ -614,10 +614,10 @@ void p2p_receive(int local_rank, int target_rank, int size, bool incast) {
   } else {
     while (offset < size) {
       int net_chunk_size = std::min(size - offset, (uint32_t)PT_NET_CHUNK_SIZE);
-      CHECK(ep->uccl_recv_async((UcclFlow*)recv_comm_->pt.conn_id.context,
-                                &recv_comm_->pt.mhandle, &recv_comm_->pt.buffer,
-                                &net_chunk_size, 1,
-                                &recv_comm_->pt.ureq[chunk_id]) == 0);
+      UCCL_CHECK(ep->uccl_recv_async((UcclFlow*)recv_comm_->pt.conn_id.context,
+                                     &recv_comm_->pt.mhandle,
+                                     &recv_comm_->pt.buffer, &net_chunk_size, 1,
+                                     &recv_comm_->pt.ureq[chunk_id]) == 0);
 
       recv_comm_->pt.done[chunk_id] = false;
       offset += net_chunk_size;
@@ -754,7 +754,7 @@ void launch_stats_thread() {
   });
 }
 
-void verify_params() { CHECK(FLAGS_pt_size <= MAX_BUFFER_SIZE); }
+void verify_params() { UCCL_CHECK(FLAGS_pt_size <= MAX_BUFFER_SIZE); }
 
 void incast_send(int local_rank) {
   while (incast_cur_iteration[local_rank]++ < 50 * FLAGS_iterations && !quit) {
@@ -909,7 +909,7 @@ void get_ips() {
 }
 
 int main(int argc, char** argv) {
-  google::InitGoogleLogging(argv[0]);
+  // google::InitGoogleLogging(argv[0]);
 
   signal(SIGINT, interrupt_handler);
 
@@ -919,14 +919,14 @@ int main(int argc, char** argv) {
 
   // Get ips from hostname.txt
   get_ips();
-  DCHECK(ips.size() == 2);
+  UCCL_DCHECK(ips.size() == 2);
 
   MPI_Comm_rank(MPI_COMM_WORLD, &NODE_ID);
 
   MPI_Comm_size(MPI_COMM_WORLD, &NRANKS);
 
   NRANKS *= NB_THREADS;
-  DCHECK(NRANKS == 16);
+  UCCL_DCHECK(NRANKS == 16);
 
   pt_rtts.resize(NRANKS);
   incast_rtts.resize(NRANKS);
@@ -936,7 +936,7 @@ int main(int argc, char** argv) {
   }
 
   ep.emplace(DEVNAME_SUFFIX_LIST, NUM_DEVICES, NUM_ENGINES);
-  DCHECK(NUM_DEVICES == 8);
+  UCCL_DCHECK(NUM_DEVICES == 8);
 
   // Initialize connections, allocate buffers, etc.
   for (int i = 0; i < NB_THREADS; i++) {

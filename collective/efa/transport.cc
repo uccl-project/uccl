@@ -1,29 +1,30 @@
 #include "transport.h"
 #include "transport_config.h"
 #include "transport_header.h"
-#include <glog/logging.h>
+#include "util/debug.h"
 #include <infiniband/verbs.h>
 
 namespace uccl {
 
 void TXTracking::receive_acks(uint32_t num_acked_pkts) {
-  VLOG(3) << "Received " << num_acked_pkts << " acks :"
-          << " num_unsent_msgbufs_ " << num_unsent_msgbufs_ << " last_msgbuf_ "
-          << last_msgbuf_ << " oldest_unsent_msgbuf " << oldest_unsent_msgbuf_
-          << " oldest_unacked_msgbuf_ " << oldest_unacked_msgbuf_;
-  DCHECK_LE(num_acked_pkts, num_tracked_msgbufs_);
+  UCCL_VLOG(3) << "Received " << num_acked_pkts << " acks :"
+               << " num_unsent_msgbufs_ " << num_unsent_msgbufs_
+               << " last_msgbuf_ " << last_msgbuf_ << " oldest_unsent_msgbuf "
+               << oldest_unsent_msgbuf_ << " oldest_unacked_msgbuf_ "
+               << oldest_unacked_msgbuf_;
+  UCCL_DCHECK_LE(num_acked_pkts, num_tracked_msgbufs_);
 
   while (num_acked_pkts) {
     auto msgbuf = oldest_unacked_msgbuf_;
-    DCHECK(msgbuf != nullptr);
+    UCCL_DCHECK(msgbuf != nullptr);
     if (num_tracked_msgbufs_ > 1) {
-      DCHECK_NE(msgbuf, last_msgbuf_) << "Releasing the last msgbuf!";
-      DCHECK_NE(oldest_unacked_msgbuf_, oldest_unsent_msgbuf_)
+      UCCL_DCHECK_NE(msgbuf, last_msgbuf_) << "Releasing the last msgbuf!";
+      UCCL_DCHECK_NE(oldest_unacked_msgbuf_, oldest_unsent_msgbuf_)
           << "Releasing an unsent msgbuf!";
       oldest_unacked_msgbuf_ = msgbuf->next();
-      DCHECK(oldest_unacked_msgbuf_ != nullptr) << num_acked_pkts;
+      UCCL_DCHECK(oldest_unacked_msgbuf_ != nullptr) << num_acked_pkts;
     } else {
-      CHECK_EQ(num_tracked_msgbufs_, 1);
+      UCCL_CHECK_EQ(num_tracked_msgbufs_, 1);
       oldest_unacked_msgbuf_ = nullptr;
       oldest_unsent_msgbuf_ = nullptr;
       last_msgbuf_ = nullptr;
@@ -32,7 +33,7 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
     if (msgbuf->is_last()) {
       // Tx a full message; wakeup app thread waiting on endpoint.
       auto poll_ctx = (PollCtx*)msgbuf->get_poll_ctx();
-      DCHECK(poll_ctx);
+      UCCL_DCHECK(poll_ctx);
       if (--(poll_ctx->num_unfinished) == 0) {
         std::lock_guard<std::mutex> lock(poll_ctx->mu);
         poll_ctx->done = true;
@@ -52,15 +53,16 @@ void TXTracking::receive_acks(uint32_t num_acked_pkts) {
 
 void TXTracking::append(FrameDesc* msgbuf_head, FrameDesc* msgbuf_tail,
                         uint32_t num_frames) {
-  VLOG(3) << "Appending " << num_frames << " frames :"
-          << " num_unsent_msgbufs_ " << num_unsent_msgbufs_ << " last_msgbuf_ "
-          << last_msgbuf_ << " oldest_unsent_msgbuf " << oldest_unsent_msgbuf_
-          << " oldest_unacked_msgbuf_ " << oldest_unacked_msgbuf_;
+  UCCL_VLOG(3) << "Appending " << num_frames << " frames :"
+               << " num_unsent_msgbufs_ " << num_unsent_msgbufs_
+               << " last_msgbuf_ " << last_msgbuf_ << " oldest_unsent_msgbuf "
+               << oldest_unsent_msgbuf_ << " oldest_unacked_msgbuf_ "
+               << oldest_unacked_msgbuf_;
 
   // Append the message at the end of the chain of buffers, if any.
   if (last_msgbuf_ == nullptr) {
     // This is the first pending message buffer in the flow.
-    DCHECK(oldest_unsent_msgbuf_ == nullptr);
+    UCCL_DCHECK(oldest_unsent_msgbuf_ == nullptr);
     last_msgbuf_ = msgbuf_tail;
     oldest_unsent_msgbuf_ = msgbuf_head;
   } else {
@@ -112,13 +114,13 @@ uint32_t TXTracking::convert_permitted_bytes_to_packets(
 
 std::optional<FrameDesc*> TXTracking::get_and_update_oldest_unsent() {
   if (num_unsent_msgbufs_)
-    VLOG(3) << "Getting: num_unsent_msgbufs_ " << num_unsent_msgbufs_
-            << " last_msgbuf_ " << last_msgbuf_ << " oldest_unsent_msgbuf "
-            << oldest_unsent_msgbuf_ << " oldest_unacked_msgbuf_ "
-            << oldest_unacked_msgbuf_;
+    UCCL_VLOG(3) << "Getting: num_unsent_msgbufs_ " << num_unsent_msgbufs_
+                 << " last_msgbuf_ " << last_msgbuf_ << " oldest_unsent_msgbuf "
+                 << oldest_unsent_msgbuf_ << " oldest_unacked_msgbuf_ "
+                 << oldest_unacked_msgbuf_;
 
   if (oldest_unsent_msgbuf_ == nullptr) {
-    DCHECK_EQ(num_unsent_msgbufs_, 0);
+    UCCL_DCHECK_EQ(num_unsent_msgbufs_, 0);
     return std::nullopt;
   }
 
@@ -147,7 +149,7 @@ RXTracking::ConsumeRet RXTracking::consume(UcclFlow* flow, FrameDesc* msgbuf) {
   auto const expected_seqno = pcb->rcv_nxt;
 
   if (swift::seqno_lt(seqno, expected_seqno)) {
-    VLOG(3) << "Received old packet: " << seqno << " < " << expected_seqno;
+    UCCL_VLOG(3) << "Received old packet: " << seqno << " < " << expected_seqno;
     socket_->push_pkt_hdr(msgbuf->get_pkt_hdr_addr());
     socket_->push_pkt_data(msgbuf->get_pkt_data_addr());
     socket_->push_frame_desc((uint64_t)msgbuf);
@@ -156,8 +158,8 @@ RXTracking::ConsumeRet RXTracking::consume(UcclFlow* flow, FrameDesc* msgbuf) {
 
   const size_t distance = seqno - expected_seqno;
   if (distance >= kReassemblyMaxSeqnoDistance) {
-    VLOG(3) << "Packet too far ahead. Dropping as we can't handle SACK. "
-            << "seqno: " << seqno << ", expected: " << expected_seqno;
+    UCCL_VLOG(3) << "Packet too far ahead. Dropping as we can't handle SACK. "
+                 << "seqno: " << seqno << ", expected: " << expected_seqno;
     socket_->push_pkt_hdr(msgbuf->get_pkt_hdr_addr());
     socket_->push_pkt_data(msgbuf->get_pkt_data_addr());
     socket_->push_frame_desc((uint64_t)msgbuf);
@@ -169,29 +171,30 @@ RXTracking::ConsumeRet RXTracking::consume(UcclFlow* flow, FrameDesc* msgbuf) {
   if (seqno != expected_seqno) {
     it = reass_q_.lower_bound(seqno);
     if (it != reass_q_.end() && it->first == seqno) {
-      VLOG(3) << "Received duplicate packet: " << seqno;
+      UCCL_VLOG(3) << "Received duplicate packet: " << seqno;
       // Duplicate packet. Drop it.
       socket_->push_pkt_hdr(msgbuf->get_pkt_hdr_addr());
       socket_->push_pkt_data(msgbuf->get_pkt_data_addr());
       socket_->push_frame_desc((uint64_t)msgbuf);
       return kOOOTrackableDup;
     }
-    VLOG(3) << "Received OOO trackable packet: " << seqno
-            << " payload_len: " << frame_len - kUcclPktHdrLen
-            << " reass_q size " << reass_q_.size();
+    UCCL_VLOG(3) << "Received OOO trackable packet: " << seqno
+                 << " payload_len: " << frame_len - kUcclPktHdrLen
+                 << " reass_q size " << reass_q_.size();
   } else {
-    VLOG(3) << "Received expected packet: " << seqno
-            << " payload_len: " << frame_len - kUcclPktHdrLen;
+    UCCL_VLOG(3) << "Received expected packet: " << seqno
+                 << " payload_len: " << frame_len - kUcclPktHdrLen;
   }
 
   num_unconsumed_msgbufs_++;
   // if (num_unconsumed_msgbufs_ >= kMaxUnconsumedRxMsgbufs)
-  //     LOG(INFO) << "num_unconsumed_msgbufs_: " << num_unconsumed_msgbufs_;
+  //     UCCL_LOG(INFO, UCCL_EFA) << "num_unconsumed_msgbufs_: " <<
+  //     num_unconsumed_msgbufs_;
 
   // Buffer the packet in the frame pool. It may be out-of-order.
   reass_q_.insert(it, {seqno, msgbuf});
 
-  VLOG_IF(3, num_unconsumed_msgbufs_ >= kMaxUnconsumedRxMsgbufs)
+  UCCL_VLOG_IF(3, num_unconsumed_msgbufs_ >= kMaxUnconsumedRxMsgbufs)
       << "seqno: " << seqno << " expected_seqno: " << expected_seqno
       << " distance: " << distance << " pcb->rcv_nxt: " << pcb->rcv_nxt
       << " reass_q_.begin()->first: " << reass_q_.begin()->first;
@@ -237,15 +240,15 @@ void RXTracking::try_copy_msgbuf_to_appbuf(Channel::Msg* rx_work) {
       }
       return;
     }
-    VLOG(3) << "num_unconsumed_msgbufs: " << num_unconsumed_msgbufs()
-            << " app_buf_queue_ size: " << app_buf_queue_.size();
+    UCCL_VLOG(3) << "num_unconsumed_msgbufs: " << num_unconsumed_msgbufs()
+                 << " app_buf_queue_ size: " << app_buf_queue_.size();
     app_buf_queue_.push_back({*rx_work});
   }
 
   while (!ready_msg_queue_.empty() && !app_buf_queue_.empty()) {
     FrameDesc* ready_msg = ready_msg_queue_.front();
     ready_msg_queue_.pop_front();
-    DCHECK(ready_msg) << ready_msg->print_chain();
+    UCCL_DCHECK(ready_msg) << ready_msg->print_chain();
     auto& [rx_copy_work] = app_buf_queue_.front();
 
     auto const* ucclh = reinterpret_cast<UcclPktHdr const*>(
@@ -253,10 +256,10 @@ void RXTracking::try_copy_msgbuf_to_appbuf(Channel::Msg* rx_work) {
     auto payload_len = ucclh->frame_len.value() - kUcclPktHdrLen;
 
     auto* req = rx_copy_work.req;
-    DCHECK(iov_n_ < kMaxIovs);
+    UCCL_DCHECK(iov_n_ < kMaxIovs);
     req->iov_addrs[iov_n_] = (void*)ready_msg->get_pkt_data_addr();
-    VLOG(3) << "gpu_idx " << socket_->gpu_idx() << " iov_addrs[" << iov_n_
-            << "]: " << std::hex << req->iov_addrs[iov_n_];
+    UCCL_VLOG(3) << "gpu_idx " << socket_->gpu_idx() << " iov_addrs[" << iov_n_
+                 << "]: " << std::hex << req->iov_addrs[iov_n_];
     req->iov_lens[iov_n_] = (int)payload_len;
     req->dst_offsets[iov_n_] = deser_msg_len_;
     deser_msg_len_ += payload_len;
@@ -302,16 +305,16 @@ void RXTracking::try_copy_msgbuf_to_appbuf(Channel::Msg* rx_work) {
       }
       return;
     }
-    VLOG(3) << "num_unconsumed_msgbufs: " << num_unconsumed_msgbufs()
-            << " app_buf_queue_ size: " << app_buf_queue_.size();
+    UCCL_VLOG(3) << "num_unconsumed_msgbufs: " << num_unconsumed_msgbufs()
+                 << " app_buf_queue_ size: " << app_buf_queue_.size();
     app_buf_queue_.push_back({*rx_work});
   } else {
     // Channel::Msg rx_work2;
     // while (Channel::dequeue_sc(channel_->rx_task_q_, &rx_work2)) {
-    //     VLOG(3) << "Rx jring dequeue";
+    //     UCCL_VLOG(3) << "Rx jring dequeue";
     //     active_flows_map_[rx_work2.flow_id]->rx_supply_app_buf(rx_work2);
     // }
-    // LOG_EVERY_N(INFO, 1000000)
+    // UCCL_LOG_EVERY_N(INFO, 1000000)
     //     << "num_unconsumed_msgbufs: " << num_unconsumed_msgbufs()
     //     << " ready_msg_queue_ size: " << ready_msg_queue_.size()
     //     << " app_buf_queue_ size: " << app_buf_queue_.size();
@@ -320,7 +323,7 @@ void RXTracking::try_copy_msgbuf_to_appbuf(Channel::Msg* rx_work) {
   while (!ready_msg_queue_.empty() && !app_buf_queue_.empty()) {
     FrameDesc* ready_msg = ready_msg_queue_.front();
     ready_msg_queue_.pop_front();
-    DCHECK(ready_msg) << ready_msg->print_chain();
+    UCCL_DCHECK(ready_msg) << ready_msg->print_chain();
 
 #ifdef EMULATE_RC_ZC
     auto const* ucclh = reinterpret_cast<UcclPktHdr const*>(
@@ -394,15 +397,15 @@ void RXTracking::try_copy_msgbuf_to_appbuf(Channel::Msg* rx_work) {
 void RXTracking::copy_thread_func(uint32_t engine_idx, UcclEngine* engine) {
   // see
   // https://forums.developer.nvidia.com/t/persistent-kernel-does-not-work-properly-on-some-gpus/264019/5
-  CHECK(GetEnvVar("CUDA_MODULE_LOADING") == "EAGER");
+  UCCL_CHECK(GetEnvVar("CUDA_MODULE_LOADING") == "EAGER");
 
   copy_param_t* copy_param = new copy_param_t();
   cudaStream_t copy_stream;
 
   auto ret = cudaSetDevice(get_gpu_idx_by_engine_idx(engine_idx));
-  CHECK(ret == cudaSuccess) << "cudaSetDevice failed";
+  UCCL_CHECK(ret == cudaSuccess) << "cudaSetDevice failed";
   ret = cudaStreamCreate(&copy_stream);
-  CHECK(ret == cudaSuccess) << "Failed to create cuda stream";
+  UCCL_CHECK(ret == cudaSuccess) << "Failed to create cuda stream";
 
   // Note: these two macro conflicts with each other.
 
@@ -441,8 +444,8 @@ void RXTracking::copy_thread_func(uint32_t engine_idx, UcclEngine* engine) {
             poll_ctx->done = true;
             poll_ctx->cv.notify_one();
           }
-          VLOG(2) << "copy_thread_func: Received a complete message "
-                  << *app_buf_len_p << " bytes";
+          UCCL_VLOG(2) << "copy_thread_func: Received a complete message "
+                       << *app_buf_len_p << " bytes";
 
           ongoing_copy_queue.pop_back();
         }
@@ -461,18 +464,18 @@ void RXTracking::copy_thread_func(uint32_t engine_idx, UcclEngine* engine) {
       auto* poll_ctx = rx_copy_work.poll_ctx;
       poll_ctx->read_barrier();
 
-      VLOG(2) << "copy_idx: " << copy_idx;
+      UCCL_VLOG(2) << "copy_idx: " << copy_idx;
       size_t cur_offset = 0;
       while (ready_msg != nullptr) {
         auto* pkt_addr =
             (uint8_t*)ready_msg->get_pkt_hdr_addr() + EFA_UD_ADDITION;
-        DCHECK(pkt_addr) << "pkt_addr is nullptr when copy to app buf "
-                         << std::hex << "0x" << ready_msg << std::dec
-                         << ready_msg->to_string();
+        UCCL_DCHECK(pkt_addr)
+            << "pkt_addr is nullptr when copy to app buf " << std::hex << "0x"
+            << ready_msg << std::dec << ready_msg->to_string();
         auto const* ucclh = reinterpret_cast<UcclPktHdr const*>(pkt_addr);
         auto payload_len = ucclh->frame_len.value() - kUcclPktHdrLen;
-        VLOG(2) << "copy_thread_func: payload_len: " << payload_len
-                << " seqno: " << std::dec << ucclh->seqno.value();
+        UCCL_VLOG(2) << "copy_thread_func: payload_len: " << payload_len
+                     << " seqno: " << std::dec << ucclh->seqno.value();
 
         copy_param->dst[copy_idx] = (uint64_t)app_buf + cur_offset;
         copy_param->src[copy_idx] = ready_msg->get_pkt_data_addr();
@@ -520,7 +523,7 @@ std::string UcclFlow::to_string() const {
 }
 
 void UcclFlow::rx_messages() {
-  VLOG(3) << "Received " << pending_rx_msgbufs_.size() << " packets";
+  UCCL_VLOG(3) << "Received " << pending_rx_msgbufs_.size() << " packets";
   RXTracking::ConsumeRet consume_ret;
   uint32_t num_data_frames_recvd = 0;
   uint32_t path_id = 0;
@@ -573,8 +576,8 @@ void UcclFlow::rx_messages() {
         path_id = ucclh->path_id;
         break;
       default:
-        CHECK(false) << "Unsupported UcclFlags: "
-                     << std::bitset<8>((uint8_t)ucclh->net_flags);
+        UCCL_CHECK(false) << "Unsupported UcclFlags: "
+                          << std::bitset<8>((uint8_t)ucclh->net_flags);
     }
   }
   pending_rx_msgbufs_.clear();
@@ -655,7 +658,7 @@ void UcclFlow::tx_prepare_messages(Channel::Msg& tx_work) {
   tx_work.deser_msgs = deser_msgs_head;
   pending_tx_msgs_.push_back({tx_work, 0});
 
-  VLOG(3) << "tx_prepare_messages size: " << tx_work.len << " bytes";
+  UCCL_VLOG(3) << "tx_prepare_messages size: " << tx_work.len << " bytes";
 
   deserialize_and_append_to_txtracking();
   transmit_pending_packets_drr(false);
@@ -678,12 +681,12 @@ void UcclFlow::process_rttprobe_rsp(uint64_t ts1, uint64_t ts2, uint64_t ts3,
     timely_pp_[path_id].timely_update_rate(rdtsc(), sample_rtt_tsc);
   }
 
-  VLOG(3) << "sample_rtt_us " << to_usec(sample_rtt_tsc, freq_ghz)
-          << " us, avg_rtt_diff " << timely_g_.timely_.get_avg_rtt_diff()
-          << " us, timely rate " << timely_g_.timely_.get_rate_gbps()
-          << " Gbps, "
-          << "ts1 " << ts1 << " ts2 " << ts2 << " ts3 " << ts3 << " ts4 "
-          << ts4;
+  UCCL_VLOG(3) << "sample_rtt_us " << to_usec(sample_rtt_tsc, freq_ghz)
+               << " us, avg_rtt_diff " << timely_g_.timely_.get_avg_rtt_diff()
+               << " us, timely rate " << timely_g_.timely_.get_rate_gbps()
+               << " Gbps, "
+               << "ts1 " << ts1 << " ts2 " << ts2 << " ts3 " << ts3 << " ts4 "
+               << ts4;
 
 #ifdef RTT_STATS
   rtt_stats_.update(rtt_ns / 1000);
@@ -698,7 +701,7 @@ void UcclFlow::process_rttprobe_rsp(uint64_t ts1, uint64_t ts2, uint64_t ts3,
 bool UcclFlow::periodic_check() {
   // TODO(yang): send RST packet, indicating removal of the flow.
   if (pcb_.max_rto_rexmits_consectutive_reached()) {
-    CHECK(false) << "Max RTO retransmits reached";
+    UCCL_CHECK(false) << "Max RTO retransmits reached";
   }
 
   pcb_.advance_rto_tick();
@@ -731,10 +734,10 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
   auto ackno = ucclh->ackno.value();
 
   if (swift::seqno_lt(ackno, pcb_.snd_una)) {
-    VLOG(3) << "Received old ACK " << ackno;
+    UCCL_VLOG(3) << "Received old ACK " << ackno;
     return;
   } else if (swift::seqno_eq(ackno, pcb_.snd_una)) {
-    VLOG(3) << "Received duplicate ACK " << ackno;
+    UCCL_VLOG(3) << "Received duplicate ACK " << ackno;
     // Duplicate ACK.
     pcb_.duplicate_acks++;
     // Update the number of out-of-order acknowledgements.
@@ -756,8 +759,8 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
       // find from the SACK bitmap, when enumerating the SACK bitmap
       // for up to sack_bitmap_count ACKs.
       auto* msgbuf = tx_tracking_.get_oldest_unacked_msgbuf();
-      VLOG(2) << "Fast recovery " << ackno << " sack_bitmap_count "
-              << sack_bitmap_count;
+      UCCL_VLOG(2) << "Fast recovery " << ackno << " sack_bitmap_count "
+                   << sack_bitmap_count;
 
       // Avoid sending too many packets.
       if (socket_->send_queue_wrs() >= kMaxUnackedPktsPerEngine) return;
@@ -792,7 +795,7 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
           // relatively high kFastRexmitDupAckThres due to multi-path
           // and out-of-order delivery.
 
-          VLOG(2) << "Fast recovery retransmitting " << seqno;
+          UCCL_VLOG(2) << "Fast recovery retransmitting " << seqno;
           auto const* missing_ucclh =
               reinterpret_cast<UcclPktHdr const*>(msgbuf->get_pkt_hdr_addr());
           // TODO(yang): tmp fix---they should be equal, need to
@@ -823,10 +826,10 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
         msgbuf = msgbuf->next();
       }
       if (!missing_frames_.empty()) {
-        VLOG(2) << "Fast recovery retransmitting " << missing_frames_.size()
-                << " missing packets "
-                << " ackno " << ackno << " duplicate_acks "
-                << pcb_.duplicate_acks;
+        UCCL_VLOG(2) << "Fast recovery retransmitting "
+                     << missing_frames_.size() << " missing packets "
+                     << " ackno " << ackno << " duplicate_acks "
+                     << pcb_.duplicate_acks;
         // TODO(yang): handling the cases where the number of
         // missing frames is larger than the free send_queue size.
         socket_->post_send_wrs(missing_frames_, src_qp_idx);
@@ -834,9 +837,9 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
       }
     }
   } else if (swift::seqno_gt(ackno, pcb_.snd_nxt)) {
-    VLOG(3) << "Received ACK for untransmitted data.";
+    UCCL_VLOG(3) << "Received ACK for untransmitted data.";
   } else {
-    VLOG(3) << "Received valid ACK " << ackno;
+    UCCL_VLOG(3) << "Received valid ACK " << ackno;
     // This is a valid ACK, acknowledging new data.
     size_t num_acked_packets = ackno - pcb_.snd_una;
     tx_tracking_.receive_acks(num_acked_packets);
@@ -857,7 +860,8 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
         last_path_id = path_id;
         accumu_acks++;
         tx_tracking_.dec_unacked_pkts_pp(path_id);
-        VLOG(3) << "Hybrid acked seqno " << seqno << " path_id " << path_id;
+        UCCL_VLOG(3) << "Hybrid acked seqno " << seqno << " path_id "
+                     << path_id;
       }
       if (accumu_acks) {
         cubic_pp_[last_path_id].cubic_on_recv_ack(accumu_acks);
@@ -867,7 +871,8 @@ void UcclFlow::process_ack(UcclPktHdr const* ucclh) {
       for (size_t i = 0; i < num_acked_packets; i++, seqno++) {
         auto path_id = get_path_id(seqno);
         tx_tracking_.dec_unacked_pkts_pp(path_id);
-        VLOG(3) << "Hybrid acked seqno " << seqno << " path_id " << path_id;
+        UCCL_VLOG(3) << "Hybrid acked seqno " << seqno << " path_id "
+                     << path_id;
       }
     }
 
@@ -883,7 +888,7 @@ void UcclFlow::fast_retransmit() {
   auto* msgbuf = tx_tracking_.get_oldest_unacked_msgbuf();
   if (!msgbuf || !can_rtx(msgbuf)) return;
   auto seqno = pcb_.snd_una;
-  VLOG(3) << "Fast retransmitting oldest unacked packet " << pcb_.snd_una;
+  UCCL_VLOG(3) << "Fast retransmitting oldest unacked packet " << pcb_.snd_una;
 
   if (msgbuf && seqno != pcb_.snd_nxt) {
     auto path_id = get_path_id_with_lowest_rtt();
@@ -895,7 +900,7 @@ void UcclFlow::fast_retransmit() {
     prepare_datapacket(msgbuf, path_id, seqno, UcclPktHdr::UcclFlags::kData);
     auto const* ucclh =
         reinterpret_cast<UcclPktHdr const*>(msgbuf->get_pkt_hdr_addr());
-    DCHECK_EQ(seqno, ucclh->seqno.value());
+    UCCL_DCHECK_EQ(seqno, ucclh->seqno.value());
 
     auto [src_qp_idx, dst_qp_idx] = path_id_to_src_dst_qp(path_id);
     msgbuf->set_src_qp_idx(UINT16_MAX);
@@ -911,7 +916,7 @@ bool UcclFlow::rto_retransmit(FrameDesc* msgbuf, uint32_t seqno) {
   // Avoid too many inflight WQEs.
   if (!can_rtx(msgbuf)) return false;
 
-  VLOG(3) << "RTO retransmitting oldest unacked packet " << seqno;
+  UCCL_VLOG(3) << "RTO retransmitting oldest unacked packet " << seqno;
   auto path_id = get_path_id_with_lowest_rtt();
 #ifdef REXMIT_SET_PATH
   tx_tracking_.dec_unacked_pkts_pp(get_path_id(seqno));
@@ -931,9 +936,9 @@ bool UcclFlow::rto_retransmit(FrameDesc* msgbuf, uint32_t seqno) {
 
   if constexpr (kSenderCCType == SenderCCType::kCubic) {
     cubic_g_.cubic_on_packet_loss();
-    VLOG(2) << "rto " << cubic_g_.to_string() << " inflight "
-            << pcb_.snd_nxt - pcb_.snd_una << " "
-            << tx_tracking_.num_unacked_msgbufs();
+    UCCL_VLOG(2) << "rto " << cubic_g_.to_string() << " inflight "
+                 << pcb_.snd_nxt - pcb_.snd_una << " "
+                 << tx_tracking_.num_unacked_msgbufs();
   }
   if constexpr (kSenderCCType == SenderCCType::kCubicPP) {
     auto path_id = get_path_id(seqno);
@@ -1007,7 +1012,7 @@ uint32_t UcclFlow::transmit_pending_packets(uint32_t budget) {
         auto old_check_v = permitted_packets;
         permitted_packets =
             timely_g_.timely_pop_ready_packets(permitted_packets);
-        DCHECK(old_check_v == permitted_packets);
+        UCCL_DCHECK(old_check_v == permitted_packets);
       }
     }
   }
@@ -1017,11 +1022,11 @@ uint32_t UcclFlow::transmit_pending_packets(uint32_t budget) {
   // transmit_tries++;
   // if (permitted_packets != 0) transmit_success++;
   // if (transmit_tries % 10000 == 0) {
-  //     LOG(INFO) << "transmitting success rate: "
+  //     UCCL_LOG(INFO, UCCL_EFA) << "transmitting success rate: "
   //               << (double)transmit_success / transmit_tries;
   // }
 
-  // LOG_EVERY_N(INFO, 10000)
+  // UCCL_LOG_EVERY_N(INFO, 10000)
   //     << "permitted_packets " << permitted_packets << " num_unacked_pkts "
   //     << num_unacked_pkts << " txq_free_entries " << txq_free_entries
   //     << " num_unsent_pkts " << tx_tracking_.num_unsent_msgbufs()
@@ -1054,8 +1059,8 @@ uint32_t UcclFlow::transmit_pending_packets(uint32_t budget) {
         }
         if (!found_path) {
           // We cannot find a path with enough space to send packets.
-          VLOG(2) << "[CubicPP] Cannot find path with available cwnd: "
-                  << tx_tracking_.unacked_pkts_pp_to_string();
+          UCCL_VLOG(2) << "[CubicPP] Cannot find path with available cwnd: "
+                       << tx_tracking_.unacked_pkts_pp_to_string();
           break;
         }
       }
@@ -1071,13 +1076,13 @@ uint32_t UcclFlow::transmit_pending_packets(uint32_t budget) {
     set_path_id(seqno, path_id);
     tx_tracking_.inc_unacked_pkts_pp(path_id);
     tx_tracking_.set_last_tx_tsc_pp(path_id, now_tsc);
-    VLOG(3) << "Transmitting seqno: " << seqno << " path_id: " << path_id;
+    UCCL_VLOG(3) << "Transmitting seqno: " << seqno << " path_id: " << path_id;
 
     if (msgbuf->is_last()) {
       auto const* ucclh =
           reinterpret_cast<UcclPktHdr const*>(msgbuf->get_pkt_hdr_addr());
-      VLOG(2) << "Transmitting seqno: " << seqno
-              << " payload_len: " << ucclh->frame_len.value() - kUcclPktHdrLen;
+      UCCL_VLOG(2) << "Transmitting seqno: " << seqno << " payload_len: "
+                   << ucclh->frame_len.value() - kUcclPktHdrLen;
     }
     auto net_flags = (i == 0) ? UcclPktHdr::UcclFlags::kDataRttProbe
                               : UcclPktHdr::UcclFlags::kData;
@@ -1096,7 +1101,7 @@ uint32_t UcclFlow::transmit_pending_packets(uint32_t budget) {
 
   // TX both data and ack frames.
   if (pending_tx_frames_.empty()) return permitted_packets;
-  VLOG(3) << "tx packets " << pending_tx_frames_.size();
+  UCCL_VLOG(3) << "tx packets " << pending_tx_frames_.size();
   // Considering ack coalescing.
   last_received_rwnd_ -= pending_tx_frames_.size();
 
@@ -1127,7 +1132,7 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
   while (cur_msgbuf != nullptr && num_tx_frames < deser_budget) {
     // The flow will free these Tx frames when receiving ACKs.
     if (remaining_bytes == tx_work.len) {
-      DCHECK(cur_msgbuf->is_first());
+      UCCL_DCHECK(cur_msgbuf->is_first());
     }
 
     auto payload_len = cur_msgbuf->get_pkt_data_len();
@@ -1150,7 +1155,7 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
 
     remaining_bytes -= payload_len;
     if (remaining_bytes == 0) {
-      DCHECK(cur_msgbuf->next() == nullptr && cur_msgbuf->is_last());
+      UCCL_DCHECK(cur_msgbuf->next() == nullptr && cur_msgbuf->is_last());
     }
 
     tx_msgbuf_tail = cur_msgbuf;
@@ -1158,16 +1163,16 @@ void UcclFlow::deserialize_and_append_to_txtracking() {
     num_tx_frames++;
   }
   // This because deser_bugdget is > 0.
-  DCHECK(num_tx_frames > 0);
+  UCCL_DCHECK(num_tx_frames > 0);
   tx_msgbuf_tail->set_next(nullptr);
 
   if (remaining_bytes == 0) {
-    DCHECK(cur_msgbuf == nullptr);
+    UCCL_DCHECK(cur_msgbuf == nullptr);
     // This message has been fully deserialized and added to tx tracking.
     pending_tx_msgs_.pop_front();
   } else {
     // Resuming the deserialization of this message in the next iteration.
-    DCHECK(cur_msgbuf != nullptr);
+    UCCL_DCHECK(cur_msgbuf != nullptr);
     tx_work.deser_msgs = cur_msgbuf;
     cur_offset = tx_work.len - remaining_bytes;
   }
@@ -1186,7 +1191,7 @@ void UcclFlow::prepare_datapacket(FrameDesc* msgbuf, uint32_t path_id,
                                   const UcclPktHdr::UcclFlags net_flags) {
   // Header length after before the payload.
   uint32_t frame_len = msgbuf->get_pkt_hdr_len() + msgbuf->get_pkt_data_len();
-  DCHECK_LE(frame_len, EFA_MTU);
+  UCCL_DCHECK_LE(frame_len, EFA_MTU);
   uint8_t* pkt_addr = (uint8_t*)msgbuf->get_pkt_hdr_addr();
   auto* ucclh = reinterpret_cast<UcclPktHdr*>(pkt_addr);
 
@@ -1253,9 +1258,9 @@ bool UcclFlow::send_pullpacket(PullQuanta const& pullno) {
   wr.wr.ud.remote_qkey = QKEY;
   wr.send_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE;
 
-  CHECK(ibv_post_send(
-            credit_qp_ctx_->get_qp_by_idx(credit_qpidx_rr_ % kMaxSrcQPCredit),
-            &wr, &bad_wr) == 0);
+  UCCL_CHECK(ibv_post_send(credit_qp_ctx_->get_qp_by_idx(credit_qpidx_rr_ %
+                                                         kMaxSrcQPCredit),
+                           &wr, &bad_wr) == 0);
 
   return true;
 }
@@ -1471,24 +1476,25 @@ void UcclEngine::process_rx_msg(std::vector<FrameDesc*>& pkt_msgs) {
     msgbuf->set_msg_flags(ucclh->msg_flags);
 
     if (msgbuf->is_last()) {
-      VLOG(3) << "Received seqno: " << ucclh->seqno.value()
-              << " payload_len: " << frame_len - kUcclPktHdrLen;
+      UCCL_VLOG(3) << "Received seqno: " << ucclh->seqno.value()
+                   << " payload_len: " << frame_len - kUcclPktHdrLen;
     }
 
     auto flow_id = ucclh->flow_id.value();
 
     auto it = active_flows_map_.find(flow_id);
     if (it == active_flows_map_.end()) {
-      LOG_EVERY_N(ERROR, 1000000) << "process_rx_msg unknown flow " << flow_id;
+      UCCL_LOG_EVERY_N(ERROR, UCCL_EFA, 1000000)
+          << "process_rx_msg unknown flow " << flow_id;
       for (auto [flow_id, flow] : active_flows_map_) {
-        LOG_EVERY_N(ERROR, 1000000)
+        UCCL_LOG_EVERY_N(ERROR, UCCL_EFA, 1000000)
             << "                active flow " << flow_id;
       }
       socket_->push_pkt_hdr(msgbuf->get_pkt_hdr_addr());
       // In case of ack packets which have no payload.
       if (msgbuf->get_pkt_data_len()) {
         auto pkt_data_addr = msgbuf->get_pkt_data_addr();
-        CHECK(pkt_data_addr);
+        UCCL_CHECK(pkt_data_addr);
         socket_->push_pkt_data(pkt_data_addr);
       }
       socket_->push_frame_desc((uint64_t)msgbuf);
@@ -1521,7 +1527,7 @@ void UcclEngine::periodic_process() {
 void UcclEngine::handle_rto() {
   for (auto [flow_id, flow] : active_flows_map_) {
     auto is_active_flow = flow->periodic_check();
-    DCHECK(is_active_flow);
+    UCCL_DCHECK(is_active_flow);
   }
 }
 
@@ -1550,8 +1556,8 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
   auto* poll_ctx = ctrl_work.poll_ctx;
   poll_ctx->read_barrier();
 
-  LOG(INFO) << "[Engine] handle_install_flow_on_engine " << local_engine_idx_
-            << " for flow " << flow_id;
+  UCCL_LOG(INFO, UCCL_EFA) << "[Engine] handle_install_flow_on_engine "
+                           << local_engine_idx_ << " for flow " << flow_id;
 
   auto* flow = new UcclFlow(local_ip_str_, remote_ip_str, local_meta,
                             remote_meta, local_engine_idx_, remote_engine_idx,
@@ -1561,12 +1567,13 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
   flow->remote_ah_ = dev->create_ah(remote_meta->gid);
 
   std::tie(std::ignore, ret) = active_flows_map_.insert({flow_id, flow});
-  DCHECK(ret);
+  UCCL_DCHECK(ret);
 
   std::string arrow = is_sender ? "->" : "<-";
-  LOG(INFO) << "[Engine] install FlowID " << flow_id << ": " << local_ip_str_
-            << Format("(%d)", local_engine_idx_) << arrow << remote_ip_str
-            << Format("(%d)", remote_engine_idx);
+  UCCL_LOG(INFO, UCCL_EFA) << "[Engine] install FlowID " << flow_id << ": "
+                           << local_ip_str_ << Format("(%d)", local_engine_idx_)
+                           << arrow << remote_ip_str
+                           << Format("(%d)", remote_engine_idx);
 
   if constexpr (kReceiverCCType == ReceiverCCType::kEQDS) {
     if (!is_sender) flow->request_pull();
@@ -1607,13 +1614,13 @@ std::string UcclEngine::status_to_string(bool abbrev) {
 bool Endpoint::create_engine_and_add_to_engine_future(
     int engine_idx, int gpu_idx,
     std::vector<std::future<std::unique_ptr<UcclEngine>>>& engine_futures) {
-  LOG(INFO) << "Creating Engines by Engine Idx " << engine_idx << " GPU Idx "
-            << gpu_idx;
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating Engines by Engine Idx " << engine_idx
+                           << " GPU Idx " << gpu_idx;
   {
     std::lock_guard<std::mutex> lock(engine_map_mutex_);
     if (engine_id_to_engine_map_.find(engine_idx) !=
         engine_id_to_engine_map_.end()) {
-      LOG(INFO) << "Engine " << engine_idx << " already exists";
+      UCCL_LOG(INFO, UCCL_EFA) << "Engine " << engine_idx << " already exists";
       return false;
     }
   }
@@ -1621,13 +1628,13 @@ bool Endpoint::create_engine_and_add_to_engine_future(
   auto dev_idx = get_dev_idx_by_engine_idx(engine_idx);
   auto socket_idx = engine_idx;
 
-  CHECK_EQ(gpu_idx, get_gpu_idx_by_engine_idx(engine_idx))
+  UCCL_CHECK_EQ(gpu_idx, get_gpu_idx_by_engine_idx(engine_idx))
       << "gpu_idx " << gpu_idx
       << " != " << get_gpu_idx_by_engine_idx(engine_idx);
 
   std::string local_ip_str;
   auto ret = util_efa_get_ip_from_dev_idx(0, &local_ip_str);
-  CHECK_EQ(ret, 0) << "Failed to get IP address from dev idx 0";
+  UCCL_CHECK_EQ(ret, 0) << "Failed to get IP address from dev idx 0";
 
   // Creating engines sequentially to have inorder QPNs.
   auto engine = std::make_unique<UcclEngine>(
@@ -1652,8 +1659,8 @@ bool Endpoint::create_engine_and_add_to_engine_future(
                                      engine_promise = std::move(engine_promise),
                                      engine = std::move(engine)]() mutable {
         pin_thread_to_cpu(engine_th_cpuid);
-        LOG(INFO) << "[Engine] thread " << engine_idx << " running on CPU "
-                  << engine_th_cpuid;
+        UCCL_LOG(INFO, UCCL_EFA) << "[Engine] thread " << engine_idx
+                                 << " running on CPU " << engine_th_cpuid;
 
         auto* engine_ptr = engine.get();
         engine_promise.set_value(std::move(engine));
@@ -1690,24 +1697,25 @@ bool Endpoint::initialize_engine_by_gpu_idx(int gpu_idx) {
 }
 
 Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
-  LOG(INFO) << "Creating EFAFactory (Lazy Init)";
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating EFAFactory (Lazy Init)";
 
   static std::once_flag flag_once;
   std::call_once(flag_once, []() { EFAFactory::Init(); });
 
-  CHECK_LE(kNumEngines, NUM_CPUS / 4)
+  UCCL_CHECK_LE(kNumEngines, NUM_CPUS / 4)
       << "num_queues should be less than or equal to the number of CPUs "
          "/ 4";
 
-  LOG(INFO) << "Creating Channels";
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating Channels";
   for (int i = 0; i < kNumEngines; i++) channel_vec_[i] = new Channel();
-  LOG(INFO) << "Creating Pacers";
-  for (int i = 0; i < GetActualNumDevices(); i++) eqds_[i] = new eqds::EQDS(i);
+
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating Pacers";
+  for (int i = 0; i < NUM_DEVICES; i++) eqds_[i] = new eqds::EQDS(i);
 
 #ifdef LAZY_CREATE_ENGINE
-  LOG(INFO) << "Endpoint() skips creating Engines";
+  UCCL_LOG(INFO, UCCL_EFA) << "Endpoint() skips creating Engines";
 #else
-  LOG(INFO) << "Creating Engines";
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating Engines";
   std::vector<std::future<std::unique_ptr<UcclEngine>>> engine_futures;
 
   for (int i = 0; i < kNumEngines; i++) {
@@ -1742,8 +1750,8 @@ Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
     copy_th_vec_.emplace_back(std::make_unique<std::thread>(
         [this, i, engine = engines[i], copy_th_cpuid]() {
           pin_thread_to_cpu(copy_th_cpuid);
-          LOG(INFO) << "[Copy] thread " << i << " running on CPU "
-                    << copy_th_cpuid;
+          UCCL_LOG(INFO, UCCL_EFA)
+              << "[Copy] thread " << i << " running on CPU " << copy_th_cpuid;
           RXTracking::copy_thread_func(i, engine);
         }));
   }
@@ -1753,26 +1761,26 @@ Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
 // TODO(MaoZiming): Deprecate this constructor. Use Endpoint()
 Endpoint::Endpoint(int gpu)
     : gpu_(gpu), stats_thread_([this]() { stats_thread_fn(); }) {
-  LOG(INFO) << "Creating EFAFactory";
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating EFAFactory";
   // Create UDS socket and get umem_fd and xsk_ids.
   static std::once_flag flag_once;
   std::call_once(flag_once, [gpu]() { EFAFactory::Init(gpu); });
 
-  CHECK_LE(kNumEngines, NUM_CPUS / 4)
+  UCCL_CHECK_LE(kNumEngines, NUM_CPUS / 4)
       << "num_queues should be less than or equal to the number of CPUs "
          "/ 4";
 
-  LOG(INFO) << "Creating Channels";
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating Channels";
 
   // Create multiple engines. Each engine has its own thread and channel to
   // let the endpoint communicate with.
   for (int i = 0; i < kNumEngines; i++) channel_vec_[i] = new Channel();
 
   // Receiver-driven CC pacer.
-  LOG(INFO) << "Creating Pacers";
-  for (int i = 0; i < GetActualNumDevices(); i++) eqds_[i] = new eqds::EQDS(i);
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating Pacers";
+  for (int i = 0; i < NUM_DEVICES; i++) eqds_[i] = new eqds::EQDS(i);
 
-  LOG(INFO) << "Creating Engines";
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating Engines";
 
   std::vector<std::future<std::unique_ptr<UcclEngine>>> engine_futures;
   for (int i = 0; i < kNumEngines; i++) {
@@ -1804,8 +1812,8 @@ Endpoint::Endpoint(int gpu)
     copy_th_vec_.emplace_back(std::make_unique<std::thread>(
         [this, i, engine = engines[i], copy_th_cpuid]() {
           pin_thread_to_cpu(copy_th_cpuid);
-          LOG(INFO) << "[Copy] thread " << i << " running on CPU "
-                    << copy_th_cpuid;
+          UCCL_LOG(INFO, UCCL_EFA)
+              << "[Copy] thread " << i << " running on CPU " << copy_th_cpuid;
           RXTracking::copy_thread_func(i, engine);
         }));
   }
@@ -1853,11 +1861,11 @@ Endpoint::~Endpoint() {
 std::tuple<uint16_t, int> Endpoint::uccl_listen() {
   // Create listening socket
   auto listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-  DCHECK(listen_fd >= 0) << "ERROR: opening socket";
+  UCCL_DCHECK(listen_fd >= 0) << "ERROR: opening socket";
 
   int flag = 1;
-  CHECK(setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
-        0)
+  UCCL_CHECK(
+      setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >= 0)
       << "ERROR: setsockopt SO_REUSEADDR fails";
 
   auto listen_port = 0;  // Let OS assign a port.
@@ -1884,21 +1892,24 @@ std::tuple<uint16_t, int> Endpoint::uccl_listen() {
   int bind_ret =
       bind(listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
   if (bind_ret < 0) {
-    LOG(ERROR) << "[Endpoint] Rank " << localRank << " failed to bind port "
-               << listen_port << " (errno: " << errno << ", " << strerror(errno)
-               << ")";
+    UCCL_LOG(ERROR, UCCL_EFA)
+        << "[Endpoint] Rank " << localRank << " failed to bind port "
+        << listen_port << " (errno: " << errno << ", " << strerror(errno)
+        << ")";
   }
-  DCHECK(bind_ret >= 0) << "ERROR: binding";
+  UCCL_DCHECK(bind_ret >= 0) << "ERROR: binding";
 
   // Get the actual port assigned by the OS.
   socklen_t len = sizeof(serv_addr);
   getsockname(listen_fd, (struct sockaddr*)&serv_addr, &len);
   listen_port = ntohs(serv_addr.sin_port);
-  LOG(INFO) << "[Endpoint] Rank " << localRank << " bound on port "
-            << listen_port << " (fd=" << listen_fd << ")";
+  UCCL_LOG(INFO, UCCL_EFA) << "[Endpoint] Rank " << localRank
+                           << " bound on port " << listen_port
+                           << " (fd=" << listen_fd << ")";
 
-  CHECK(!listen(listen_fd, 128)) << "ERROR: listen";
-  LOG(INFO) << "[Endpoint] server ready, listening on port " << listen_port;
+  UCCL_CHECK(!listen(listen_fd, 128)) << "ERROR: listen";
+  UCCL_LOG(INFO, UCCL_EFA) << "[Endpoint] server ready, listening on port "
+                           << listen_port;
 
   std::lock_guard<std::mutex> lock(listen_mu_);
   listen_port_vec_.push_back(listen_port);
@@ -1920,10 +1931,10 @@ ConnID Endpoint::uccl_connect(int local_vdev, int remote_vdev,
   bool is_sender = true;
 
   bootstrap_fd = socket(AF_INET, SOCK_STREAM, 0);
-  DCHECK(bootstrap_fd >= 0) << "uccl_connect: socket()";
+  UCCL_DCHECK(bootstrap_fd >= 0) << "uccl_connect: socket()";
 
   server = gethostbyname(remote_ip.c_str());
-  DCHECK(server) << "uccl_connect: gethostbyname()";
+  UCCL_DCHECK(server) << "uccl_connect: gethostbyname()";
 
   serv_addr.sin_family = AF_INET;
   serv_addr.sin_addr.s_addr = str_to_ip(remote_ip.c_str());
@@ -1932,12 +1943,14 @@ ConnID Endpoint::uccl_connect(int local_vdev, int remote_vdev,
   // Connect and set nonblocking and nodelay
   while (
       connect(bootstrap_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr))) {
-    LOG(INFO) << "[Endpoint] connecting... Make sure the server is up.";
+    UCCL_LOG(INFO, UCCL_EFA)
+        << "[Endpoint] connecting... Make sure the server is up.";
     std::this_thread::sleep_for(std::chrono::seconds(1));
   }
 
-  LOG(INFO) << "[Endpoint] connected to <" << remote_ip << ", " << remote_vdev
-            << ">:" << listen_port << " bootstrap_fd " << bootstrap_fd;
+  UCCL_LOG(INFO, UCCL_EFA) << "[Endpoint] connected to <" << remote_ip << ", "
+                           << remote_vdev << ">:" << listen_port
+                           << " bootstrap_fd " << bootstrap_fd;
 
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
@@ -1945,8 +1958,9 @@ ConnID Endpoint::uccl_connect(int local_vdev, int remote_vdev,
   FlowID flow_id;
   while (true) {
     int ret = receive_message(bootstrap_fd, &flow_id, sizeof(FlowID));
-    DCHECK(ret == sizeof(FlowID));
-    LOG(INFO) << "[Endpoint] connect: receive proposed FlowID: " << flow_id;
+    UCCL_DCHECK(ret == sizeof(FlowID));
+    UCCL_LOG(INFO, UCCL_EFA)
+        << "[Endpoint] connect: receive proposed FlowID: " << flow_id;
 
     // Check if the flow ID is unique, and return it to the server.
     bool unique;
@@ -1957,12 +1971,12 @@ ConnID Endpoint::uccl_connect(int local_vdev, int remote_vdev,
     }
 
     ret = send_message(bootstrap_fd, &unique, sizeof(bool));
-    DCHECK(ret == sizeof(bool));
+    UCCL_DCHECK(ret == sizeof(bool));
 
     if (unique) {
       // Send our device ID to the server.
       ret = send_message(bootstrap_fd, &local_vdev, sizeof(int));
-      DCHECK(ret == sizeof(int)) << "uccl_connect: send_message()";
+      UCCL_DCHECK(ret == sizeof(int)) << "uccl_connect: send_message()";
       break;
     }
   }
@@ -1972,7 +1986,7 @@ ConnID Endpoint::uccl_connect(int local_vdev, int remote_vdev,
   else
     local_engine_idx =
         find_least_loaded_engine_idx_and_update(local_vdev, flow_id, is_sender);
-  CHECK_GE(local_engine_idx, 0);
+  UCCL_CHECK_GTE(local_engine_idx, 0);
 
   install_flow_on_engine(flow_id, remote_ip, local_engine_idx, bootstrap_fd,
                          is_sender);
@@ -1995,11 +2009,12 @@ ConnID Endpoint::uccl_accept(int local_vdev, int* remote_vdev,
 
   // Accept connection and set nonblocking and nodelay
   bootstrap_fd = accept(listen_fd, (struct sockaddr*)&cli_addr, &clilen);
-  DCHECK(bootstrap_fd >= 0) << "uccl_accept: accept()";
+  UCCL_DCHECK(bootstrap_fd >= 0) << "uccl_accept: accept()";
   remote_ip = ip_to_str(cli_addr.sin_addr.s_addr);
 
-  LOG(INFO) << "[Endpoint] accept from " << remote_ip << ":"
-            << cli_addr.sin_port << " bootstrap_fd " << bootstrap_fd;
+  UCCL_LOG(INFO, UCCL_EFA) << "[Endpoint] accept from " << remote_ip << ":"
+                           << cli_addr.sin_port << " bootstrap_fd "
+                           << bootstrap_fd;
 
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
@@ -2022,26 +2037,27 @@ ConnID Endpoint::uccl_accept(int local_vdev, int* remote_vdev,
       }
     }
 
-    LOG(INFO) << "[Endpoint] accept: propose FlowID: " << flow_id;
+    UCCL_LOG(INFO, UCCL_EFA)
+        << "[Endpoint] accept: propose FlowID: " << flow_id;
 
     // Allowing flow src and dst to be the same process.
     auto peer_flow_id = get_peer_flow_id(flow_id);
     int ret = send_message(bootstrap_fd, &peer_flow_id, sizeof(FlowID));
-    DCHECK(ret == sizeof(FlowID));
+    UCCL_DCHECK(ret == sizeof(FlowID));
 
     bool unique_from_client;
     ret = receive_message(bootstrap_fd, &unique_from_client, sizeof(bool));
-    DCHECK(ret == sizeof(bool));
+    UCCL_DCHECK(ret == sizeof(bool));
 
     if (unique_from_client) {
       // Receive the remote_dev from client.
       ret = receive_message(bootstrap_fd, remote_vdev, sizeof(int));
-      DCHECK(ret == sizeof(int));
+      UCCL_DCHECK(ret == sizeof(int));
       break;
     } else {
       // Remove the speculatively inserted flow ID.
       std::lock_guard<std::mutex> lock(fd_map_mu_);
-      CHECK(1 == fd_map_.erase(flow_id));
+      UCCL_CHECK(1 == fd_map_.erase(flow_id));
     }
   }
 
@@ -2051,7 +2067,7 @@ ConnID Endpoint::uccl_accept(int local_vdev, int* remote_vdev,
   else
     local_engine_idx =
         find_least_loaded_engine_idx_and_update(local_vdev, flow_id, is_sender);
-  CHECK_GE(local_engine_idx, 0);
+  UCCL_CHECK_GTE(local_engine_idx, 0);
 
   install_flow_on_engine(flow_id, remote_ip, local_engine_idx, bootstrap_fd,
                          is_sender);
@@ -2254,7 +2270,7 @@ void Endpoint::install_flow_on_engine(FlowID flow_id,
   uint32_t remote_engine_idx;
   ret = send_message(bootstrap_fd, &local_engine_idx, sizeof(uint32_t));
   ret = receive_message(bootstrap_fd, &remote_engine_idx, sizeof(uint32_t));
-  DCHECK(ret == sizeof(uint32_t));
+  UCCL_DCHECK(ret == sizeof(uint32_t));
 
   // Exchange ConnMeta with the peer.
   auto* efa_socket = engine_id_to_engine_map_[local_engine_idx]->socket_;
@@ -2286,7 +2302,7 @@ void Endpoint::install_flow_on_engine(FlowID flow_id,
       str << local_meta->qpn_list_credit[i] << " ";
     }
   }
-  LOG(INFO) << str.str();
+  UCCL_LOG(INFO, UCCL_EFA) << str.str();
 
   send_message(bootstrap_fd, local_meta, sizeof(ConnMeta));
   receive_message(bootstrap_fd, remote_meta, sizeof(ConnMeta));
@@ -2372,7 +2388,7 @@ void Endpoint::stats_thread_fn() {
     }
     if (cnt < engine_vec_.size())
       s += Format("\n\t... %d more engines", engine_vec_.size() - cnt);
-    LOG(INFO) << s;
+    UCCL_LOG(INFO, UCCL_EFA) << s;
   }
 }
 
