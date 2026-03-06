@@ -1210,7 +1210,7 @@ inline int get_dev_numa_node(char const* dev_name) {
 
   auto numa_node = std::stoi(line);
   if (numa_node == -1) {
-    UCCL_LOG(WARNING, UCCL_UTIL)
+    UCCL_LOG(WARN, UCCL_UTIL)
         << "NUMA node is -1 for " << dev_name << ", defaulting to node 0";
     numa_node = 0;
   }

@@ -123,7 +123,7 @@ uint8_t GetActualNumDevices() {
   if (!efa.empty()) actual = std::min(actual, static_cast<uint8_t>(efa.size()));
   if (!ena.empty()) actual = std::min(actual, static_cast<uint8_t>(ena.size()));
   if (efa.size() > NUM_DEVICES || ena.size() > NUM_DEVICES) {
-    UCCL_LOG(WARNING, UCCL_EFA)
+    UCCL_LOG(WARN, UCCL_EFA)
         << "GetActualNumDevices: more devices discovered than "
         << "NUM_DEVICES=" << (int)NUM_DEVICES << " (EFA=" << efa.size()
         << ", ENA=" << ena.size() << "). Capping to " << (int)actual
