@@ -41,5 +41,5 @@ inline void stream_wait(cudaStream_t dst, cudaStream_t src) {
 }
 
 inline void stream_wait(cudaStream_t stream, EventHandle const& event) {
-  CUDA_CHECK(cudaStreamWaitEvent(stream, *event.event, 0));
+  if (event.event) CUDA_CHECK(cudaStreamWaitEvent(stream, *event.event, 0));
 }

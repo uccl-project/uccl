@@ -31,8 +31,17 @@ else
   GH_CFLAGS := -DUSE_GRACE_HOPPER
 endif
 
+# Nanobind configuration (stable ABI)
 PYTHON             ?= python3
-NANOBIND_INCLUDES  := -I$(shell $(PYTHON) -m nanobind --include_dir 2>/dev/null)
+NB_DIR             := $(shell $(PYTHON) -c "import nanobind as _nb, os; print(os.path.dirname(_nb.__file__))")
+NB_INCLUDES        := -I$(NB_DIR)/include -I$(NB_DIR)/ext/robin_map/include \
+                      -I$(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_path('include'))")
+NB_ABI_FLAGS       := -DPy_LIMITED_API=0x030C0000 -DNB_STABLE_ABI=1
+NB_SRC_DIR         := $(NB_DIR)/src
+NB_SRCS            := nb_internals.cpp nb_func.cpp nb_type.cpp nb_enum.cpp \
+                      nb_ndarray.cpp nb_static_property.cpp common.cpp error.cpp \
+                      trampoline.cpp implicit.cpp
+NB_OBJECTS         := $(addprefix nb_,$(NB_SRCS:.cpp=.o))
 EXT_SUFFIX         := .abi3.so
 
 TORCH_ROOT        := $(shell $(PYTHON) -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent)")
@@ -90,18 +99,22 @@ all: $(EP_EXT)
 
 # C++ compilation rule with dependency generation
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(NANOBIND_INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(NB_ABI_FLAGS) $(TORCH_INCS) $(INCLUDES) $(NB_INCLUDES) -MMD -MP -c $< -o $@
 # CUDA compilation rule with dependency generation
 %.o: %.cu
 	$(NVCC) -arch=sm_$(SM) $(NVCCFLAGS) $(TORCH_INCS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-# Linking rules
+# Binding source compilation
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(NANOBIND_INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(NB_ABI_FLAGS) $(TORCH_INCS) $(INCLUDES) $(NB_INCLUDES) -MMD -MP -c $< -o $@
 
-$(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND)
+# Nanobind core sources (compiled with minimal flags)
+nb_%.o: $(NB_SRC_DIR)/%.cpp
+	$(CXX) -O3 -std=c++17 -fPIC -fvisibility=hidden $(NB_ABI_FLAGS) $(NB_INCLUDES) -c $< -o $@
+
+$(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND) $(NB_OBJECTS)
 	$(CXX) $(CXXFLAGS) -shared -fPIC \
-	    $(INCLUDES) $(NANOBIND_INCLUDES) $^ \
+	    $(INCLUDES) $(NB_INCLUDES) $^ \
 	    -L$(TORCH_LIBDIR) -Wl,-rpath,$(TORCH_LIBDIR) \
 	    -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
 	    -ltorch_python -ltorch -ltorch_cpu -ltorch_cuda -lc10 -lc10_cuda \
@@ -125,7 +138,7 @@ install: $(EP_EXT)
 
 # Clean all generated files
 clean:
-	rm -f $(OBJ_CPP) $(OBJ_CC) $(OBJ_CU) \
+	rm -f $(OBJ_CPP) $(OBJ_CC) $(OBJ_CU) $(OBJ_BIND) $(NB_OBJECTS) \
 	      $(EP_EXT) \
 	      *.d src/*.d bench/*.d src/*.o **/*.hip **/*_hip.*
 

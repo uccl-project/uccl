@@ -18,10 +18,11 @@
 #include "uccl_bench.hpp"
 #include "uccl_proxy.hpp"
 #include <nanobind/nanobind.h>
+#include <nanobind/stl/function.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
-#include <nanobind/stl/function.h>
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -1214,8 +1215,9 @@ class Buffer {
   int get_local_device_id() { return device_index; }
 
   nb::bytes get_local_ipc_handle() const {
-    return nb::bytes(reinterpret_cast<const char*>(ipc_handles[nvl_rank].reserved),
-                     CUDA_IPC_HANDLE_SIZE);
+    return nb::bytes(
+        reinterpret_cast<char const*>(ipc_handles[nvl_rank].reserved),
+        CUDA_IPC_HANDLE_SIZE);
   }
 
   nb::bytes get_local_rdma_ipc_handle() {
@@ -1224,7 +1226,8 @@ class Buffer {
         "set_rdma_buffer must be called before requesting RDMA IPC handle");
     cudaIpcMemHandle_t h{};
     CUDA_CHECK(cudaIpcGetMemHandle(&h, rdma_buffer_ptr));
-    return nb::bytes(reinterpret_cast<const char*>(h.reserved), CUDA_IPC_HANDLE_SIZE);
+    return nb::bytes(reinterpret_cast<char const*>(h.reserved),
+                     CUDA_IPC_HANDLE_SIZE);
   }
 
   nb::bytes get_local_atomics_ipc_handle() {
@@ -1233,7 +1236,8 @@ class Buffer {
                    "atomic IPC handle");
     cudaIpcMemHandle_t h{};
     CUDA_CHECK(cudaIpcGetMemHandle(&h, atomic_buffer_ptr));
-    return nb::bytes(reinterpret_cast<const char*>(h.reserved), CUDA_IPC_HANDLE_SIZE);
+    return nb::bytes(reinterpret_cast<char const*>(h.reserved),
+                     CUDA_IPC_HANDLE_SIZE);
   }
 
   int get_num_rdma_ranks() const { return num_rdma_ranks; }
@@ -1248,7 +1252,8 @@ class Buffer {
     EP_HOST_ASSERT(rdma_rank == 0 and
                    "Only RDMA rank 0 can get UCCL unique ID");
     auto unique_id = internode::get_unique_id();
-    return nb::bytes(reinterpret_cast<char const*>(unique_id.data()), unique_id.size());
+    return nb::bytes(reinterpret_cast<char const*>(unique_id.data()),
+                     unique_id.size());
   }
 
   void reset_rdma_buffer() {
@@ -1263,13 +1268,11 @@ class Buffer {
     }
   }
 
-  void sync(
-      std::vector<int> const& device_ids,
-      std::vector<std::optional<nb::bytes>> const&
-          all_gathered_handles,
-      std::optional<nb::bytes> const& root_unique_id_opt,
-      std::optional<std::vector<std::optional<nb::bytes>>> const&
-          all_gathered_rdma_handles_opt = std::nullopt) {
+  void sync(std::vector<int> const& device_ids,
+            std::vector<std::optional<nb::bytes>> const& all_gathered_handles,
+            std::optional<nb::bytes> const& root_unique_id_opt,
+            std::optional<std::vector<std::optional<nb::bytes>>> const&
+                all_gathered_rdma_handles_opt = std::nullopt) {
     EP_HOST_ASSERT(not is_available());
     // Sync IPC handles
     if (num_nvl_bytes > 0) {
@@ -1283,7 +1286,7 @@ class Buffer {
 
         EP_HOST_ASSERT(all_gathered_handles[global_rank].has_value());
         nb::bytes const& h = all_gathered_handles[global_rank].value();
-        std::string handle_str(static_cast<const char*>(h.data()), h.size());
+        std::string handle_str(static_cast<char const*>(h.data()), h.size());
         EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
         if (global_rank != rank) {
           std::memcpy(ipc_handles[local_rank_idx].reserved, handle_str.c_str(),
@@ -1342,7 +1345,7 @@ class Buffer {
           ipc_rdma_base_ptrs[local_rank_idx] = rdma_buffer_ptr;
         } else if (all_gathered_rdma_handles[global_rank].has_value()) {
           nb::bytes const& h = all_gathered_rdma_handles[global_rank].value();
-          std::string handle_str(static_cast<const char*>(h.data()), h.size());
+          std::string handle_str(static_cast<char const*>(h.data()), h.size());
           EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
           std::memcpy(rdma_ipc_handles[local_rank_idx].reserved,
                       handle_str.c_str(), CUDA_IPC_HANDLE_SIZE);
@@ -1483,13 +1486,13 @@ NB_MODULE(ep, m) {
            nb::arg("num_max_rdma_chunked_recv_tokens") = 256)
       .def_ro("num_sms", &uccl::Config::num_sms)
       .def_ro("num_max_nvl_chunked_send_tokens",
-                    &uccl::Config::num_max_nvl_chunked_send_tokens)
+              &uccl::Config::num_max_nvl_chunked_send_tokens)
       .def_ro("num_max_nvl_chunked_recv_tokens",
-                    &uccl::Config::num_max_nvl_chunked_recv_tokens)
+              &uccl::Config::num_max_nvl_chunked_recv_tokens)
       .def_ro("num_max_rdma_chunked_send_tokens",
-                    &uccl::Config::num_max_rdma_chunked_send_tokens)
+              &uccl::Config::num_max_rdma_chunked_send_tokens)
       .def_ro("num_max_rdma_chunked_recv_tokens",
-                    &uccl::Config::num_max_rdma_chunked_recv_tokens)
+              &uccl::Config::num_max_rdma_chunked_recv_tokens)
       .def("get_nvl_buffer_size_hint", &uccl::Config::get_nvl_buffer_size_hint)
       .def("get_rdma_buffer_size_hint",
            &uccl::Config::get_rdma_buffer_size_hint);
@@ -1590,11 +1593,12 @@ NB_MODULE(ep, m) {
 
   nb::class_<EventHandle>(m, "EventHandle")
       .def(nb::init<>())
-      .def("__init__",
-           [](EventHandle* t, std::uintptr_t stream_ptr) {
-             new (t) EventHandle(reinterpret_cast<cudaStream_t>(stream_ptr));
-           },
-           nb::arg("stream_ptr"))
+      .def(
+          "__init__",
+          [](EventHandle* t, std::uintptr_t stream_ptr) {
+            new (t) EventHandle(reinterpret_cast<cudaStream_t>(stream_ptr));
+          },
+          nb::arg("stream_ptr"))
       .def("current_stream_wait", &EventHandle::current_stream_wait,
            nb::arg("stream_ptr"));
 
@@ -1664,9 +1668,11 @@ NB_MODULE(ep, m) {
              std::uintptr_t is_token_in_rank_ptr, nb::object previous_event,
              bool async, bool allocate_on_comm_stream,
              std::uintptr_t compute_stream_ptr) {
-            std::optional<EventHandle> prev = std::nullopt;
-            if (!previous_event.is_none())
-              prev = nb::cast<EventHandle>(previous_event);
+            std::optional<EventHandle> prev;
+            if (!previous_event.is_none()) {
+              EventHandle ev = nb::cast<EventHandle>(previous_event);
+              prev = ev;
+            }
             return self.get_dispatch_layout(
                 topk_idx_ptr, num_tokens, num_topk, num_experts,
                 num_tokens_per_rank_ptr, num_tokens_per_rdma_rank_ptr,
@@ -1689,9 +1695,11 @@ NB_MODULE(ep, m) {
               int num_worst_tokens, uccl::Config const& config,
               nb::object previous_event, bool async,
               bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-             std::optional<EventHandle> prev = std::nullopt;
-             if (!previous_event.is_none())
-               prev = nb::cast<EventHandle>(previous_event);
+             std::optional<EventHandle> prev;
+             if (!previous_event.is_none()) {
+               EventHandle ev = nb::cast<EventHandle>(previous_event);
+               prev = ev;
+             }
              return self.intranode_prepare(
                  num_tokens_per_rank_ptr, is_token_in_rank_ptr,
                  num_tokens_per_expert_ptr, num_tokens, num_experts,
@@ -1717,9 +1725,11 @@ NB_MODULE(ep, m) {
              std::uintptr_t recv_src_idx_ptr, std::uintptr_t send_head_ptr,
              nb::object previous_event, bool async,
              bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-            std::optional<EventHandle> prev = std::nullopt;
-            if (!previous_event.is_none())
-              prev = nb::cast<EventHandle>(previous_event);
+            std::optional<EventHandle> prev;
+            if (!previous_event.is_none()) {
+              EventHandle ev = nb::cast<EventHandle>(previous_event);
+              prev = ev;
+            }
             return self.intranode_dispatch(
                 x_ptr, num_tokens, hidden, x_element_size, x_scales_ptr,
                 num_scales, scale_token_stride, scale_hidden_stride,
@@ -1743,9 +1753,11 @@ NB_MODULE(ep, m) {
               std::uintptr_t recv_x_ptr, std::uintptr_t recv_topk_weights_ptr,
               nb::object previous_event, bool async,
               bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-             std::optional<EventHandle> prev = std::nullopt;
-             if (!previous_event.is_none())
-               prev = nb::cast<EventHandle>(previous_event);
+             std::optional<EventHandle> prev;
+             if (!previous_event.is_none()) {
+               EventHandle ev = nb::cast<EventHandle>(previous_event);
+               prev = ev;
+             }
              return self.intranode_combine(
                  x_ptr, num_tokens, hidden, x_dtype_code, x_element_size,
                  topk_weights_ptr, num_topk, bias_0_ptr, bias_1_ptr,
@@ -1768,9 +1780,11 @@ NB_MODULE(ep, m) {
               std::uintptr_t recv_gbl_rank_prefix_sum_ptr,
               nb::object previous_event, bool async,
               bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-             std::optional<EventHandle> prev = std::nullopt;
-             if (!previous_event.is_none())
-               prev = nb::cast<EventHandle>(previous_event);
+             std::optional<EventHandle> prev;
+             if (!previous_event.is_none()) {
+               EventHandle ev = nb::cast<EventHandle>(previous_event);
+               prev = ev;
+             }
              return self.internode_prepare(
                  num_tokens_per_rank_ptr, num_tokens_per_rdma_rank_ptr,
                  num_tokens_per_expert_ptr, is_token_in_rank_ptr, num_tokens,
@@ -1803,9 +1817,11 @@ NB_MODULE(ep, m) {
              std::uintptr_t send_nvl_head_ptr, nb::object previous_event,
              bool async, bool allocate_on_comm_stream,
              std::uintptr_t compute_stream_ptr) {
-            std::optional<EventHandle> prev = std::nullopt;
-            if (!previous_event.is_none())
-              prev = nb::cast<EventHandle>(previous_event);
+            std::optional<EventHandle> prev;
+            if (!previous_event.is_none()) {
+              EventHandle ev = nb::cast<EventHandle>(previous_event);
+              prev = ev;
+            }
             return self.internode_dispatch(
                 x_ptr, num_tokens, hidden, x_element_size, x_scales_ptr,
                 num_scales, scale_token_stride, scale_hidden_stride,
@@ -1836,9 +1852,11 @@ NB_MODULE(ep, m) {
               std::uintptr_t combined_topk_weights_ptr,
               nb::object previous_event, bool async,
               bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-             std::optional<EventHandle> prev = std::nullopt;
-             if (!previous_event.is_none())
-               prev = nb::cast<EventHandle>(previous_event);
+             std::optional<EventHandle> prev;
+             if (!previous_event.is_none()) {
+               EventHandle ev = nb::cast<EventHandle>(previous_event);
+               prev = ev;
+             }
              return self.internode_combine(
                  x_ptr, num_tokens, hidden, x_dtype_code, x_element_size,
                  topk_weights_ptr, num_topk, bias_0_ptr, bias_1_ptr,
@@ -1957,8 +1975,8 @@ NB_MODULE(ep, m) {
           [](UcclProxy& self, nb::object metas) {
             std::vector<PeerMeta> v;
             if (nb::isinstance<nb::list>(metas)) {
-for (auto obj : nb::cast<nb::list>(metas)) {
-              if (nb::isinstance<nb::dict>(obj)) {
+              for (auto obj : nb::cast<nb::list>(metas)) {
+                if (nb::isinstance<nb::dict>(obj)) {
                   auto d = nb::cast<nb::dict>(obj);
                   PeerMeta pm;
                   pm.rank = nb::cast<int>(d["rank"]);
@@ -2066,7 +2084,9 @@ for (auto obj : nb::cast<nb::list>(metas)) {
       .def("stop", &PeerCopyManager::stop);
 
   // MSCCLPP Fifo class - must be registered before BenchFifo which uses it
-  nb::class_<mscclpp::Fifo>(m, "Fifo").def(nb::init<uint32_t>(),
+  // Bind init<int> to avoid narrowing conversion warning (Python int -> C++
+  // uint32_t)
+  nb::class_<mscclpp::Fifo>(m, "Fifo").def(nb::init<int>(),
                                            nb::arg("size") = 2048);
 
   // FIFO-based benchmarking classes
