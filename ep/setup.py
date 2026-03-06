@@ -33,6 +33,7 @@ class ABI3BuildExtension(BuildExtension):
             return ext_name + ".abi3.so"
         return super().get_ext_filename(ext_name)
 
+
 PROJECT_ROOT = Path(os.path.dirname(__file__)).resolve()
 
 
