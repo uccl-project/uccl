@@ -1686,27 +1686,36 @@ NB_MODULE(ep, m) {
           nb::arg("previous_event") = nb::none(), nb::arg("async") = false,
           nb::arg("allocate_on_comm_stream") = false,
           nb::arg("compute_stream_ptr") = 0)
-      .def("intranode_prepare",
-           [](Buffer& self, std::uintptr_t num_tokens_per_rank_ptr,
-              std::uintptr_t is_token_in_rank_ptr,
-              std::uintptr_t num_tokens_per_expert_ptr, int num_tokens,
-              int num_experts, std::uintptr_t rank_prefix_matrix_ptr,
-              std::uintptr_t channel_prefix_matrix_ptr, int expert_alignment,
-              int num_worst_tokens, uccl::Config const& config,
-              nb::object previous_event, bool async,
-              bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-             std::optional<EventHandle> prev;
-             if (!previous_event.is_none()) {
-               EventHandle ev = nb::cast<EventHandle>(previous_event);
-               prev = ev;
-             }
-             return self.intranode_prepare(
-                 num_tokens_per_rank_ptr, is_token_in_rank_ptr,
-                 num_tokens_per_expert_ptr, num_tokens, num_experts,
-                 rank_prefix_matrix_ptr, channel_prefix_matrix_ptr,
-                 expert_alignment, num_worst_tokens, config, prev, async,
-                 allocate_on_comm_stream, compute_stream_ptr);
-           })
+      .def(
+          "intranode_prepare",
+          [](Buffer& self, std::uintptr_t num_tokens_per_rank_ptr,
+             std::uintptr_t is_token_in_rank_ptr,
+             std::uintptr_t num_tokens_per_expert_ptr, int num_tokens,
+             int num_experts, std::uintptr_t rank_prefix_matrix_ptr,
+             std::uintptr_t channel_prefix_matrix_ptr, int expert_alignment,
+             int num_worst_tokens, uccl::Config const& config,
+             nb::object previous_event, bool async,
+             bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
+            std::optional<EventHandle> prev;
+            if (!previous_event.is_none()) {
+              EventHandle ev = nb::cast<EventHandle>(previous_event);
+              prev = ev;
+            }
+            return self.intranode_prepare(
+                num_tokens_per_rank_ptr, is_token_in_rank_ptr,
+                num_tokens_per_expert_ptr, num_tokens, num_experts,
+                rank_prefix_matrix_ptr, channel_prefix_matrix_ptr,
+                expert_alignment, num_worst_tokens, config, prev, async,
+                allocate_on_comm_stream, compute_stream_ptr);
+          },
+          nb::arg("num_tokens_per_rank_ptr"), nb::arg("is_token_in_rank_ptr"),
+          nb::arg("num_tokens_per_expert_ptr"), nb::arg("num_tokens"),
+          nb::arg("num_experts"), nb::arg("rank_prefix_matrix_ptr"),
+          nb::arg("channel_prefix_matrix_ptr"), nb::arg("expert_alignment"),
+          nb::arg("num_worst_tokens"), nb::arg("config"),
+          nb::arg("previous_event") = nb::none(), nb::arg("async") = false,
+          nb::arg("allocate_on_comm_stream") = false,
+          nb::arg("compute_stream_ptr") = 0)
       .def(
           "intranode_dispatch",
           [](Buffer& self, std::uintptr_t x_ptr, int num_tokens, int hidden,
@@ -1740,60 +1749,102 @@ NB_MODULE(ep, m) {
                 recv_topk_weights_ptr, recv_channel_prefix_matrix_ptr,
                 recv_src_idx_ptr, send_head_ptr, prev, async,
                 allocate_on_comm_stream, compute_stream_ptr);
-          })
-      .def("intranode_combine",
-           [](Buffer& self, std::uintptr_t x_ptr, int num_tokens, int hidden,
-              int x_dtype_code, int x_element_size,
-              std::uintptr_t topk_weights_ptr, int num_topk,
-              std::uintptr_t bias_0_ptr, std::uintptr_t bias_1_ptr,
-              std::uintptr_t src_idx_ptr, int num_recv_tokens,
-              std::uintptr_t rank_prefix_matrix_ptr,
-              std::uintptr_t channel_prefix_matrix_ptr,
-              std::uintptr_t send_head_ptr, uccl::Config const& config,
-              std::uintptr_t recv_x_ptr, std::uintptr_t recv_topk_weights_ptr,
-              nb::object previous_event, bool async,
-              bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-             std::optional<EventHandle> prev;
-             if (!previous_event.is_none()) {
-               EventHandle ev = nb::cast<EventHandle>(previous_event);
-               prev = ev;
-             }
-             return self.intranode_combine(
-                 x_ptr, num_tokens, hidden, x_dtype_code, x_element_size,
-                 topk_weights_ptr, num_topk, bias_0_ptr, bias_1_ptr,
-                 src_idx_ptr, num_recv_tokens, rank_prefix_matrix_ptr,
-                 channel_prefix_matrix_ptr, send_head_ptr, config, recv_x_ptr,
-                 recv_topk_weights_ptr, prev, async, allocate_on_comm_stream,
-                 compute_stream_ptr);
-           })
-      .def("internode_prepare",
-           [](Buffer& self, std::uintptr_t num_tokens_per_rank_ptr,
-              std::uintptr_t num_tokens_per_rdma_rank_ptr,
-              std::uintptr_t num_tokens_per_expert_ptr,
-              std::uintptr_t is_token_in_rank_ptr, int num_tokens, int hidden,
-              int x_element_size, int num_scales, int num_topk, int num_experts,
-              int expert_alignment, int num_worst_tokens,
-              uccl::Config const& config,
-              std::uintptr_t rdma_channel_prefix_matrix_ptr,
-              std::uintptr_t recv_rdma_rank_prefix_sum_ptr,
-              std::uintptr_t gbl_channel_prefix_matrix_ptr,
-              std::uintptr_t recv_gbl_rank_prefix_sum_ptr,
-              nb::object previous_event, bool async,
-              bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-             std::optional<EventHandle> prev;
-             if (!previous_event.is_none()) {
-               EventHandle ev = nb::cast<EventHandle>(previous_event);
-               prev = ev;
-             }
-             return self.internode_prepare(
-                 num_tokens_per_rank_ptr, num_tokens_per_rdma_rank_ptr,
-                 num_tokens_per_expert_ptr, is_token_in_rank_ptr, num_tokens,
-                 hidden, x_element_size, num_scales, num_topk, num_experts,
-                 expert_alignment, num_worst_tokens, config,
-                 rdma_channel_prefix_matrix_ptr, recv_rdma_rank_prefix_sum_ptr,
-                 gbl_channel_prefix_matrix_ptr, recv_gbl_rank_prefix_sum_ptr,
-                 prev, async, allocate_on_comm_stream, compute_stream_ptr);
-           })
+          },
+          nb::arg("x_ptr"), nb::arg("num_tokens"), nb::arg("hidden"),
+          nb::arg("x_element_size"), nb::arg("x_scales_ptr"),
+          nb::arg("num_scales"), nb::arg("scale_token_stride"),
+          nb::arg("scale_hidden_stride"), nb::arg("topk_idx_ptr"),
+          nb::arg("num_topk"), nb::arg("topk_weights_ptr"),
+          nb::arg("is_token_in_rank_ptr"), nb::arg("rank_prefix_matrix_ptr"),
+          nb::arg("channel_prefix_matrix_ptr"), nb::arg("num_experts"),
+          nb::arg("num_worst_tokens"), nb::arg("cached_mode"),
+          nb::arg("config"), nb::arg("num_recv_tokens"), nb::arg("recv_x_ptr"),
+          nb::arg("recv_x_scales_ptr"), nb::arg("recv_topk_idx_ptr"),
+          nb::arg("recv_topk_weights_ptr"),
+          nb::arg("recv_channel_prefix_matrix_ptr"),
+          nb::arg("recv_src_idx_ptr"), nb::arg("send_head_ptr"),
+          nb::arg("previous_event") = nb::none(), nb::arg("async") = false,
+          nb::arg("allocate_on_comm_stream") = false,
+          nb::arg("compute_stream_ptr") = 0)
+      .def(
+          "intranode_combine",
+          [](Buffer& self, std::uintptr_t x_ptr, int num_tokens, int hidden,
+             int x_dtype_code, int x_element_size,
+             std::uintptr_t topk_weights_ptr, int num_topk,
+             std::uintptr_t bias_0_ptr, std::uintptr_t bias_1_ptr,
+             std::uintptr_t src_idx_ptr, int num_recv_tokens,
+             std::uintptr_t rank_prefix_matrix_ptr,
+             std::uintptr_t channel_prefix_matrix_ptr,
+             std::uintptr_t send_head_ptr, uccl::Config const& config,
+             std::uintptr_t recv_x_ptr, std::uintptr_t recv_topk_weights_ptr,
+             nb::object previous_event, bool async,
+             bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
+            std::optional<EventHandle> prev;
+            if (!previous_event.is_none()) {
+              EventHandle ev = nb::cast<EventHandle>(previous_event);
+              prev = ev;
+            }
+            return self.intranode_combine(
+                x_ptr, num_tokens, hidden, x_dtype_code, x_element_size,
+                topk_weights_ptr, num_topk, bias_0_ptr, bias_1_ptr, src_idx_ptr,
+                num_recv_tokens, rank_prefix_matrix_ptr,
+                channel_prefix_matrix_ptr, send_head_ptr, config, recv_x_ptr,
+                recv_topk_weights_ptr, prev, async, allocate_on_comm_stream,
+                compute_stream_ptr);
+          },
+          nb::arg("x_ptr"), nb::arg("num_tokens"), nb::arg("hidden"),
+          nb::arg("x_dtype_code"), nb::arg("x_element_size"),
+          nb::arg("topk_weights_ptr"), nb::arg("num_topk"),
+          nb::arg("bias_0_ptr"), nb::arg("bias_1_ptr"), nb::arg("src_idx_ptr"),
+          nb::arg("num_recv_tokens"), nb::arg("rank_prefix_matrix_ptr"),
+          nb::arg("channel_prefix_matrix_ptr"), nb::arg("send_head_ptr"),
+          nb::arg("config"), nb::arg("recv_x_ptr"),
+          nb::arg("recv_topk_weights_ptr"),
+          nb::arg("previous_event") = nb::none(), nb::arg("async") = false,
+          nb::arg("allocate_on_comm_stream") = false,
+          nb::arg("compute_stream_ptr") = 0)
+      .def(
+          "internode_prepare",
+          [](Buffer& self, std::uintptr_t num_tokens_per_rank_ptr,
+             std::uintptr_t num_tokens_per_rdma_rank_ptr,
+             std::uintptr_t num_tokens_per_expert_ptr,
+             std::uintptr_t is_token_in_rank_ptr, int num_tokens, int hidden,
+             int x_element_size, int num_scales, int num_topk, int num_experts,
+             int expert_alignment, int num_worst_tokens,
+             uccl::Config const& config,
+             std::uintptr_t rdma_channel_prefix_matrix_ptr,
+             std::uintptr_t recv_rdma_rank_prefix_sum_ptr,
+             std::uintptr_t gbl_channel_prefix_matrix_ptr,
+             std::uintptr_t recv_gbl_rank_prefix_sum_ptr,
+             nb::object previous_event, bool async,
+             bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
+            std::optional<EventHandle> prev;
+            if (!previous_event.is_none()) {
+              EventHandle ev = nb::cast<EventHandle>(previous_event);
+              prev = ev;
+            }
+            return self.internode_prepare(
+                num_tokens_per_rank_ptr, num_tokens_per_rdma_rank_ptr,
+                num_tokens_per_expert_ptr, is_token_in_rank_ptr, num_tokens,
+                hidden, x_element_size, num_scales, num_topk, num_experts,
+                expert_alignment, num_worst_tokens, config,
+                rdma_channel_prefix_matrix_ptr, recv_rdma_rank_prefix_sum_ptr,
+                gbl_channel_prefix_matrix_ptr, recv_gbl_rank_prefix_sum_ptr,
+                prev, async, allocate_on_comm_stream, compute_stream_ptr);
+          },
+          nb::arg("num_tokens_per_rank_ptr"),
+          nb::arg("num_tokens_per_rdma_rank_ptr"),
+          nb::arg("num_tokens_per_expert_ptr"), nb::arg("is_token_in_rank_ptr"),
+          nb::arg("num_tokens"), nb::arg("hidden"), nb::arg("x_element_size"),
+          nb::arg("num_scales"), nb::arg("num_topk"), nb::arg("num_experts"),
+          nb::arg("expert_alignment"), nb::arg("num_worst_tokens"),
+          nb::arg("config"), nb::arg("rdma_channel_prefix_matrix_ptr"),
+          nb::arg("recv_rdma_rank_prefix_sum_ptr"),
+          nb::arg("gbl_channel_prefix_matrix_ptr"),
+          nb::arg("recv_gbl_rank_prefix_sum_ptr"),
+          nb::arg("previous_event") = nb::none(), nb::arg("async") = false,
+          nb::arg("allocate_on_comm_stream") = false,
+          nb::arg("compute_stream_ptr") = 0)
       .def(
           "internode_dispatch",
           [](Buffer& self, std::uintptr_t x_ptr, int num_tokens, int hidden,
@@ -1835,38 +1886,75 @@ NB_MODULE(ep, m) {
                 recv_gbl_channel_prefix_matrix_ptr, send_rdma_head_ptr,
                 send_nvl_head_ptr, prev, async, allocate_on_comm_stream,
                 compute_stream_ptr);
-          })
-      .def("internode_combine",
-           [](Buffer& self, std::uintptr_t x_ptr, int num_tokens, int hidden,
-              int x_dtype_code, int x_element_size,
-              std::uintptr_t topk_weights_ptr, int num_topk,
-              std::uintptr_t bias_0_ptr, std::uintptr_t bias_1_ptr,
-              std::uintptr_t src_meta_ptr, int num_combined_tokens,
-              std::uintptr_t is_combined_token_in_rank_ptr,
-              std::uintptr_t rdma_channel_prefix_matrix_ptr,
-              std::uintptr_t rdma_rank_prefix_sum_ptr,
-              std::uintptr_t gbl_channel_prefix_matrix_ptr,
-              std::uintptr_t combined_rdma_head_ptr,
-              std::uintptr_t combined_nvl_head_ptr, uccl::Config const& config,
-              std::uintptr_t combined_x_ptr,
-              std::uintptr_t combined_topk_weights_ptr,
-              nb::object previous_event, bool async,
-              bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-             std::optional<EventHandle> prev;
-             if (!previous_event.is_none()) {
-               EventHandle ev = nb::cast<EventHandle>(previous_event);
-               prev = ev;
-             }
-             return self.internode_combine(
-                 x_ptr, num_tokens, hidden, x_dtype_code, x_element_size,
-                 topk_weights_ptr, num_topk, bias_0_ptr, bias_1_ptr,
-                 src_meta_ptr, num_combined_tokens,
-                 is_combined_token_in_rank_ptr, rdma_channel_prefix_matrix_ptr,
-                 rdma_rank_prefix_sum_ptr, gbl_channel_prefix_matrix_ptr,
-                 combined_rdma_head_ptr, combined_nvl_head_ptr, config,
-                 combined_x_ptr, combined_topk_weights_ptr, prev, async,
-                 allocate_on_comm_stream, compute_stream_ptr);
-           })
+          },
+          nb::arg("x_ptr"), nb::arg("num_tokens"), nb::arg("hidden"),
+          nb::arg("x_element_size"), nb::arg("x_scales_ptr"),
+          nb::arg("num_scales"), nb::arg("scale_token_stride"),
+          nb::arg("scale_hidden_stride"), nb::arg("topk_idx_ptr"),
+          nb::arg("num_topk"), nb::arg("topk_weights_ptr"),
+          nb::arg("is_token_in_rank_ptr"),
+          nb::arg("rdma_channel_prefix_matrix_ptr"),
+          nb::arg("recv_rdma_rank_prefix_sum_ptr"),
+          nb::arg("gbl_channel_prefix_matrix_ptr"),
+          nb::arg("recv_gbl_rank_prefix_sum_ptr"), nb::arg("num_experts"),
+          nb::arg("num_worst_tokens"), nb::arg("cached_mode"),
+          nb::arg("num_rdma_recv_tokens"), nb::arg("config"),
+          nb::arg("recv_x_ptr"), nb::arg("recv_x_scales_ptr"),
+          nb::arg("recv_topk_idx_ptr"), nb::arg("recv_topk_weights_ptr"),
+          nb::arg("recv_src_meta_ptr"),
+          nb::arg("recv_rdma_channel_prefix_matrix_ptr"),
+          nb::arg("recv_gbl_channel_prefix_matrix_ptr"),
+          nb::arg("send_rdma_head_ptr"), nb::arg("send_nvl_head_ptr"),
+          nb::arg("previous_event") = nb::none(), nb::arg("async") = false,
+          nb::arg("allocate_on_comm_stream") = false,
+          nb::arg("compute_stream_ptr") = 0)
+      .def(
+          "internode_combine",
+          [](Buffer& self, std::uintptr_t x_ptr, int num_tokens, int hidden,
+             int x_dtype_code, int x_element_size,
+             std::uintptr_t topk_weights_ptr, int num_topk,
+             std::uintptr_t bias_0_ptr, std::uintptr_t bias_1_ptr,
+             std::uintptr_t src_meta_ptr, int num_combined_tokens,
+             std::uintptr_t is_combined_token_in_rank_ptr,
+             std::uintptr_t rdma_channel_prefix_matrix_ptr,
+             std::uintptr_t rdma_rank_prefix_sum_ptr,
+             std::uintptr_t gbl_channel_prefix_matrix_ptr,
+             std::uintptr_t combined_rdma_head_ptr,
+             std::uintptr_t combined_nvl_head_ptr, uccl::Config const& config,
+             std::uintptr_t combined_x_ptr,
+             std::uintptr_t combined_topk_weights_ptr,
+             nb::object previous_event, bool async,
+             bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
+            std::optional<EventHandle> prev;
+            if (!previous_event.is_none()) {
+              EventHandle ev = nb::cast<EventHandle>(previous_event);
+              prev = ev;
+            }
+            return self.internode_combine(
+                x_ptr, num_tokens, hidden, x_dtype_code, x_element_size,
+                topk_weights_ptr, num_topk, bias_0_ptr, bias_1_ptr,
+                src_meta_ptr, num_combined_tokens,
+                is_combined_token_in_rank_ptr, rdma_channel_prefix_matrix_ptr,
+                rdma_rank_prefix_sum_ptr, gbl_channel_prefix_matrix_ptr,
+                combined_rdma_head_ptr, combined_nvl_head_ptr, config,
+                combined_x_ptr, combined_topk_weights_ptr, prev, async,
+                allocate_on_comm_stream, compute_stream_ptr);
+          },
+          nb::arg("x_ptr"), nb::arg("num_tokens"), nb::arg("hidden"),
+          nb::arg("x_dtype_code"), nb::arg("x_element_size"),
+          nb::arg("topk_weights_ptr"), nb::arg("num_topk"),
+          nb::arg("bias_0_ptr"), nb::arg("bias_1_ptr"), nb::arg("src_meta_ptr"),
+          nb::arg("num_combined_tokens"),
+          nb::arg("is_combined_token_in_rank_ptr"),
+          nb::arg("rdma_channel_prefix_matrix_ptr"),
+          nb::arg("rdma_rank_prefix_sum_ptr"),
+          nb::arg("gbl_channel_prefix_matrix_ptr"),
+          nb::arg("combined_rdma_head_ptr"), nb::arg("combined_nvl_head_ptr"),
+          nb::arg("config"), nb::arg("combined_x_ptr"),
+          nb::arg("combined_topk_weights_ptr"),
+          nb::arg("previous_event") = nb::none(), nb::arg("async") = false,
+          nb::arg("allocate_on_comm_stream") = false,
+          nb::arg("compute_stream_ptr") = 0)
       .def("clean_low_latency_buffer", &Buffer::clean_low_latency_buffer,
            nb::arg("num_max_dispatch_tokens_per_rank"), nb::arg("hidden"),
            nb::arg("num_experts"), nb::arg("stream_ptr"))
