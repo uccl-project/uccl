@@ -391,7 +391,8 @@ bool is_cuda_host_pointer(void* ptr) {
     (void)cudaGetLastError();
     return false;
   }
-#if defined(__HIP_PLATFORM_AMD__) || (defined(CUDART_VERSION) && CUDART_VERSION >= 10000)
+#if defined(__HIP_PLATFORM_AMD__) || \
+    (defined(CUDART_VERSION) && CUDART_VERSION >= 10000)
   return attr.type == cudaMemoryTypeHost;
 #else
   return attr.memoryType == cudaMemoryTypeHost;
