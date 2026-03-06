@@ -193,6 +193,7 @@ else
 install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	$(MAKE) $(P2P_PYTHON_EXT)
 	@mkdir -p $(INSTALL_DIR)
+	@rm -f $(INSTALL_DIR)/p2p.cpython-*.so $(INSTALL_DIR)/p2p.abi3.so
 	@cp $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
 	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
