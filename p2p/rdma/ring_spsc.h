@@ -241,6 +241,24 @@ class RingBuffer {
     return check(buffer_[pos]);
   }
 
+  // Access element at given index (no bounds checking, index is masked)
+  T& at(size_t index) {
+    size_t pos = index & (Capacity - 1);
+    return buffer_[pos];
+  }
+
+  // Access element at given index (const version)
+  const T& at(size_t index) const {
+    size_t pos = index & (Capacity - 1);
+    return buffer_[pos];
+  }
+
+  // Operator[] for element access (no bounds checking, index is masked)
+  T& operator[](size_t index) { return at(index); }
+
+  // Operator[] for element access (const version)
+  const T& operator[](size_t index) const { return at(index); }
+
   // Check if the ring buffer is empty
   bool empty() const {
     return read_ptr.load(std::memory_order_acquire) ==

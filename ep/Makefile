@@ -109,11 +109,19 @@ $(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND)
 
 py: $(PYTARGET) $(EP_EXT)
 
-# Install the module
+# Repo uccl package dir (so in-repo runs use the same build)
+UCCL_UCCL := $(abspath $(CURDIR)/../uccl/uccl)
+
 install: $(EP_EXT)
 	@mkdir -p $(INSTALL_DIR)
 	@cp $(EP_EXT) $(INSTALL_DIR)/
-	@echo "Installation complete. Modules installed as: $(INSTALL_DIR)/$(PYTARGET), $(INSTALL_DIR)/$(EP_EXT)"
+	@rm -f $(INSTALL_DIR)/ep.cpython-*.so
+	@echo "Installed $(EP_EXT) -> $(INSTALL_DIR)/"
+	@if [ -d "$(UCCL_UCCL)" ]; then \
+		cp $(EP_EXT) "$(UCCL_UCCL)/"; \
+		rm -f "$(UCCL_UCCL)"/ep.cpython-*.so; \
+		echo "Installed $(EP_EXT) -> $(UCCL_UCCL)/ (for in-repo runs)"; \
+	fi
 
 # Clean all generated files
 clean:

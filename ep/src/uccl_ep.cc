@@ -1556,19 +1556,35 @@ PYBIND11_MODULE(ep, m) {
   m.def("get_oob_ip", &uccl::get_oob_ip, "Get the OOB IP address");
 
   m.def(
+      "can_register_rdma_gpu_buffer",
+      [](int device_index, std::size_t num_bytes) {
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__) || defined(EFA)
+        return true;
+#else
+        CUDA_CHECK(cudaSetDevice(device_index));
+        return can_register_gpu_memory_for_rdma(device_index, num_bytes);
+#endif
+      },
+      py::arg("device_index"), py::arg("num_bytes"),
+      R"doc(
+        Return whether the main RDMA scratch buffer can stay in GPU memory for
+        this device and buffer size.
+      )doc");
+
+  m.def(
       "rdma_buffer_should_use_host_alloc",
-      [](int device_index) {
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__) || defined(EFA) || \
-    defined(USE_DMABUF)
+      [](int device_index, std::size_t num_bytes) {
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__) || defined(EFA)
         return false;
 #else
         CUDA_CHECK(cudaSetDevice(device_index));
-        return !can_register_gpu_memory_for_atomics(device_index);
+        return !can_register_gpu_memory_for_rdma(device_index, num_bytes);
 #endif
       },
-      py::arg("device_index"),
+      py::arg("device_index"), py::arg("num_bytes") = 4096,
       R"doc(
-        Return whether RDMA scratch should be host allocated for this device.
+        Return whether the main RDMA scratch buffer should be host allocated
+        for this device and buffer size.
       )doc");
 
   py::class_<EventHandle>(m, "EventHandle")

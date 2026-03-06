@@ -1,0 +1,88 @@
+# Makefile.cuda
+# Build shared library for dietgpu float codec (NVIDIA CUDA)
+#
+# Produces:
+#   libdietgpu_float.so  - float codec with bundled ans + utils dependencies
+#
+# Usage:
+#   make -f Makefile.cuda            # build with default GPU arch (sm_90)
+#   make -f Makefile.cuda GPU_ARCH=sm_80
+#   make -f Makefile.cuda clean
+
+NVCC ?= nvcc
+
+# Paths
+DIETGPU_ROOT = ../..
+ANS_DIR      = $(DIETGPU_ROOT)/dietgpu/ans
+UTILS_DIR    = $(DIETGPU_ROOT)/dietgpu/utils
+FLOAT_DIR    = .
+
+# Output
+LIB_TARGET = libdietgpu_float.so
+
+# Include paths
+INCLUDES = -I$(DIETGPU_ROOT)
+
+# Compiler flags
+NVCC_FLAGS = -O3 -std=c++17 -Xcompiler -fPIC
+NVCC_FLAGS += $(INCLUDES)
+
+# NVIDIA GPU architecture
+GPU_ARCH ?= sm_90
+NVCC_FLAGS += -arch=$(GPU_ARCH)
+
+# Linker flags
+LDFLAGS = -shared -lglog
+
+# Object directory
+OBJ_DIR = obj
+
+# Sources
+UTILS_SRCS = \
+	$(UTILS_DIR)/DeviceUtils.cpp \
+	$(UTILS_DIR)/StackDeviceMemory.cpp
+
+ANS_SRCS = \
+	$(ANS_DIR)/GpuANSDecode.cu \
+	$(ANS_DIR)/GpuANSEncode.cu \
+	$(ANS_DIR)/GpuANSInfo.cu
+
+FLOAT_SRCS = \
+	$(FLOAT_DIR)/GpuFloatCompress.cu \
+	$(FLOAT_DIR)/GpuFloatDecompress.cu \
+	$(FLOAT_DIR)/GpuFloatInfo.cu
+
+ALL_SRCS = $(UTILS_SRCS) $(ANS_SRCS) $(FLOAT_SRCS)
+
+# Generate object file paths under OBJ_DIR, preserving uniqueness via basename
+UTILS_OBJS = $(patsubst $(UTILS_DIR)/%.cpp,$(OBJ_DIR)/utils_%.o,$(UTILS_SRCS))
+ANS_OBJS   = $(patsubst $(ANS_DIR)/%.cu,$(OBJ_DIR)/ans_%.o,$(ANS_SRCS))
+FLOAT_OBJS = $(patsubst $(FLOAT_DIR)/%.cu,$(OBJ_DIR)/float_%.o,$(FLOAT_SRCS))
+
+ALL_OBJS = $(UTILS_OBJS) $(ANS_OBJS) $(FLOAT_OBJS)
+
+.PHONY: all clean
+
+all: $(LIB_TARGET)
+
+$(OBJ_DIR):
+	mkdir -p $(OBJ_DIR)
+
+# Utils object rules (C++ sources)
+$(OBJ_DIR)/utils_%.o: $(UTILS_DIR)/%.cpp | $(OBJ_DIR)
+	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+
+# ANS object rules (CUDA sources)
+$(OBJ_DIR)/ans_%.o: $(ANS_DIR)/%.cu | $(OBJ_DIR)
+	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+
+# Float object rules (CUDA sources)
+$(OBJ_DIR)/float_%.o: $(FLOAT_DIR)/%.cu | $(OBJ_DIR)
+	$(NVCC) $(NVCC_FLAGS) -c -o $@ $<
+
+# Link shared library
+$(LIB_TARGET): $(ALL_OBJS)
+	$(NVCC) $(LDFLAGS) -o $@ $^ -arch=$(GPU_ARCH)
+
+clean:
+	rm -rf $(OBJ_DIR) $(LIB_TARGET)
