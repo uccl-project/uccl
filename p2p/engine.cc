@@ -1843,28 +1843,60 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
     return false;
   }
 
-  bool is_host = (uccl::get_dev_idx(const_cast<void*>(data)) == -1);
-  auto memcpy_kind = is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
+  bool local_is_host = (uccl::get_dev_idx(const_cast<void*>(data)) == -1);
+  bool remote_is_host = info.is_host;
 
+  // Handle host-to-host transfer via memcpy (both source and dest are CPU)
+  if (local_is_host && remote_is_host) {
+    uintptr_t remote_addr;
+    std::memcpy(&remote_addr, &info.handle, sizeof(remote_addr));
+    void* dst_ptr = reinterpret_cast<void*>(remote_addr + info.offset);
+    std::memcpy(dst_ptr, data, size);
+
+    // Create a completed status immediately for synchronous memcpy
+    auto* status = new TransferStatus();
+    status->done = true;
+    *transfer_id = reinterpret_cast<uint64_t>(status);
+    return true;
+  }
+
+  // Determine memcpy kind based on local and remote memory types
+  gpuMemcpyKind memcpy_kind;
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+  void* dst_ptr = nullptr;
+  int gpu_idx = conn->remote_gpu_idx_;
   void* raw_dst_ptr = nullptr;
-  GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, info.handle,
-                                   gpuIpcMemLazyEnablePeerAccess));
-  void* dst_ptr = reinterpret_cast<void*>(
-      reinterpret_cast<uintptr_t>(raw_dst_ptr) + info.offset);
 
-  std::vector<gpuStream_t>& streams = ipc_streams_[conn->remote_gpu_idx_];
+  if (remote_is_host) {
+    // Remote is CPU, local is GPU: D2H copy
+    uintptr_t remote_addr;
+    std::memcpy(&remote_addr, &info.handle, sizeof(remote_addr));
+    dst_ptr = reinterpret_cast<void*>(remote_addr + info.offset);
+    memcpy_kind = gpuMemcpyDeviceToHost;
+    // For D2H, we still need to set device for the source
+    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+    gpu_idx = local_gpu_idx_;
+  } else {
+    // Remote is GPU: open IPC handle
+    GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+    GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, info.handle,
+                                     gpuIpcMemLazyEnablePeerAccess));
+    dst_ptr = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(raw_dst_ptr) + info.offset);
+    memcpy_kind = local_is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
+  }
+
+  std::vector<gpuStream_t>& streams = ipc_streams_[gpu_idx];
   int num_streams =
       std::min(streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
   size_t chunk_size = size / num_streams;
 
-  auto* op = new IpcInflightOp{{}, raw_dst_ptr, nullptr, conn->remote_gpu_idx_};
+  auto* op = new IpcInflightOp{{}, raw_dst_ptr, nullptr, gpu_idx};
   op->events.resize(num_streams);
   for (int i = 0; i < num_streams; ++i) {
     void* chunk_data = reinterpret_cast<void*>(
@@ -1899,28 +1931,60 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
     return false;
   }
 
-  bool is_host = (uccl::get_dev_idx(data) == -1);
-  auto memcpy_kind = is_host ? gpuMemcpyDeviceToHost : gpuMemcpyDeviceToDevice;
+  bool local_is_host = (uccl::get_dev_idx(data) == -1);
+  bool remote_is_host = info.is_host;
 
+  // Handle host-to-host transfer via memcpy (both source and dest are CPU)
+  if (local_is_host && remote_is_host) {
+    uintptr_t remote_addr;
+    std::memcpy(&remote_addr, &info.handle, sizeof(remote_addr));
+    void* src_ptr = reinterpret_cast<void*>(remote_addr + info.offset);
+    std::memcpy(data, src_ptr, size);
+
+    // Create a completed status immediately for synchronous memcpy
+    auto* status = new TransferStatus();
+    status->done = true;
+    *transfer_id = reinterpret_cast<uint64_t>(status);
+    return true;
+  }
+
+  // Determine memcpy kind based on local and remote memory types
+  gpuMemcpyKind memcpy_kind;
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+  void* src_ptr = nullptr;
+  int gpu_idx = conn->remote_gpu_idx_;
   void* raw_src_ptr = nullptr;
-  GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_src_ptr, info.handle,
-                                   gpuIpcMemLazyEnablePeerAccess));
-  void* src_ptr = reinterpret_cast<void*>(
-      reinterpret_cast<uintptr_t>(raw_src_ptr) + info.offset);
 
-  std::vector<gpuStream_t>& streams = ipc_streams_[conn->remote_gpu_idx_];
+  if (remote_is_host) {
+    // Remote is CPU, local is GPU: H2D copy
+    uintptr_t remote_addr;
+    std::memcpy(&remote_addr, &info.handle, sizeof(remote_addr));
+    src_ptr = reinterpret_cast<void*>(remote_addr + info.offset);
+    memcpy_kind = gpuMemcpyHostToDevice;
+    // For H2D, we still need to set device for the destination
+    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+    gpu_idx = local_gpu_idx_;
+  } else {
+    // Remote is GPU: open IPC handle
+    GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+    GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_src_ptr, info.handle,
+                                     gpuIpcMemLazyEnablePeerAccess));
+    src_ptr = reinterpret_cast<void*>(
+        reinterpret_cast<uintptr_t>(raw_src_ptr) + info.offset);
+    memcpy_kind = local_is_host ? gpuMemcpyDeviceToHost : gpuMemcpyDeviceToDevice;
+  }
+
+  std::vector<gpuStream_t>& streams = ipc_streams_[gpu_idx];
   int num_streams =
       std::min(streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
   size_t chunk_size = size / num_streams;
 
-  auto* op = new IpcInflightOp{{}, raw_src_ptr, nullptr, conn->remote_gpu_idx_};
+  auto* op = new IpcInflightOp{{}, raw_src_ptr, nullptr, gpu_idx};
   op->events.resize(num_streams);
   for (int i = 0; i < num_streams; ++i) {
     void* chunk_src = reinterpret_cast<void*>(
@@ -1975,14 +2039,26 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
   op->gpu_idxs_v.assign(num_iovs, conn->remote_gpu_idx_);
 
   for (size_t iov = 0; iov < num_iovs; ++iov) {
-    GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
-                                     gpuIpcMemLazyEnablePeerAccess));
-    void* dst_ptr = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) + info_v[iov].offset);
+    bool local_is_host = (uccl::get_dev_idx(const_cast<void*>(data_v[iov])) == -1);
+    bool remote_is_host = info_v[iov].is_host;
 
-    bool is_host = (uccl::get_dev_idx(const_cast<void*>(data_v[iov])) == -1);
-    auto memcpy_kind =
-        is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
+    void* dst_ptr = nullptr;
+    gpuMemcpyKind memcpy_kind;
+
+    if (remote_is_host) {
+      // Remote destination is CPU memory
+      uintptr_t remote_addr;
+      std::memcpy(&remote_addr, &info_v[iov].handle, sizeof(remote_addr));
+      dst_ptr = reinterpret_cast<void*>(remote_addr + info_v[iov].offset);
+      memcpy_kind = local_is_host ? gpuMemcpyHostToHost : gpuMemcpyDeviceToHost;
+    } else {
+      // Remote destination is GPU memory: open IPC handle
+      GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
+                                       gpuIpcMemLazyEnablePeerAccess));
+      dst_ptr = reinterpret_cast<void*>(
+          reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) + info_v[iov].offset);
+      memcpy_kind = local_is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
+    }
 
     size_t sz = size_v[iov];
     int num_streams = std::min(
@@ -2043,14 +2119,26 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
   op->gpu_idxs_v.assign(num_iovs, conn->remote_gpu_idx_);
 
   for (size_t iov = 0; iov < num_iovs; ++iov) {
-    GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
-                                     gpuIpcMemLazyEnablePeerAccess));
-    void* src_ptr = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) + info_v[iov].offset);
+    bool local_is_host = (uccl::get_dev_idx(data_v[iov]) == -1);
+    bool remote_is_host = info_v[iov].is_host;
 
-    bool is_host = (uccl::get_dev_idx(data_v[iov]) == -1);
-    auto memcpy_kind =
-        is_host ? gpuMemcpyDeviceToHost : gpuMemcpyDeviceToDevice;
+    void* src_ptr = nullptr;
+    gpuMemcpyKind memcpy_kind;
+
+    if (remote_is_host) {
+      // Remote source is CPU memory
+      uintptr_t remote_addr;
+      std::memcpy(&remote_addr, &info_v[iov].handle, sizeof(remote_addr));
+      src_ptr = reinterpret_cast<void*>(remote_addr + info_v[iov].offset);
+      memcpy_kind = local_is_host ? gpuMemcpyHostToHost : gpuMemcpyHostToDevice;
+    } else {
+      // Remote source is GPU memory: open IPC handle
+      GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
+                                       gpuIpcMemLazyEnablePeerAccess));
+      src_ptr = reinterpret_cast<void*>(
+          reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) + info_v[iov].offset);
+      memcpy_kind = local_is_host ? gpuMemcpyDeviceToHost : gpuMemcpyDeviceToDevice;
+    }
 
     size_t sz = size_v[iov];
     int num_streams = std::min(

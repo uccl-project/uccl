@@ -367,6 +367,11 @@ NB_MODULE(p2p, m) {
                     if (err != gpuSuccess) {
                       throw std::runtime_error(gpuGetErrorString(err));
                     }
+                  } else {
+                    // For host memory, store the address in the handle field
+                    // The handle field is 64 bytes, enough to store a pointer
+                    std::memcpy(&ipc_info.handle, &addr_val, sizeof(addr_val));
+                    ipc_info.offset = 0;  // No alignment adjustment for host memory
                   }
                   xfer_desc.ipc_info.assign(
                       reinterpret_cast<char const*>(&ipc_info),
