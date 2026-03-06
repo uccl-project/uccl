@@ -2,6 +2,7 @@
 #include "define.h"
 #include "rdma_channel.h"
 #include "ring_spsc.h"
+#include "util/debug.h"
 
 class SendControlChannel : public RDMAChannel {
  public:
@@ -157,8 +158,8 @@ class RecvControlChannel : public RDMAChannel {
     if (rb_->check_at(index, check_all_chunks_received)) {
       // All chunks received, mark as done and remove completed items
       auto req = std::make_shared<SendReqMeta>(rb_->at(index).meta);
-      LOG(INFO) << "recv_done - All chunks received for index: " << index
-                << ", marking as done.";
+      UCCL_LOG(INFO, RDMA) << "recv_done - All chunks received for index: "
+                           << index << ", marking as done.";
 
       rb_->modify_at(index, set_is_done);
       rb_->remove_while(check_is_done);

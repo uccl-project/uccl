@@ -315,7 +315,7 @@ class SendChannelGroup : public ChannelGroup {
     if (expected_chunk_count == 1) {
       req->imm_data.set_chunk_count(1);
       if (!postRequestOnChannel(req)) {
-        LOG(WARNING)
+        UCCL_LOG(WARNING, RDMA)
             << "SendChannelGroup: Failed to send request on channel_id "
             << req->channel_id;
       }
@@ -328,8 +328,9 @@ class SendChannelGroup : public ChannelGroup {
       expected_chunk_count = chunks.size();
       tracker_->updateExpectedAckCount(req->wr_id, expected_chunk_count);
     }
-    UCCL_LOG(INFO, RDMA) << "SendChannelGroup: Splitting message into " << chunks.size()
-              << " chunks (message_size: " << message_size << ")";
+    UCCL_LOG(INFO, RDMA) << "SendChannelGroup: Splitting message into "
+                         << chunks.size()
+                         << " chunks (message_size: " << message_size << ")";
     size_t num_channels = normalChannelCount();
 
     for (size_t i = 0; i < chunks.size(); ++i) {
@@ -596,7 +597,7 @@ class RecvChannelGroup : public ChannelGroup {
               std::shared_ptr<SendReqMeta> req_meta;
               for (int i = 0; i < cq_data.imm.chunk_count(); ++i) {
                 req_meta = ctrl_channel_->recv_done(cq_data.imm.index());
-                LOG(INFO, INFO)
+                UCCL_LOG(INFO, RDMA)
                     << "RecvChannelGroup::pollAndProcessCompletions - Called "
                        "recv_done("
                     << cq_data.imm.index() << ")";
