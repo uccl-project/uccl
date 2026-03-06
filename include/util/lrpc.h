@@ -140,17 +140,15 @@ class LRPC {
     channel_1 = lcore_recv_head_wb + sizeof(struct head_wb);
     channel_2 = channel_1 + sizeof(lrpc_msg) * LRPC_CHANNEL_SIZE;
 
-    UCCL_CHECK(!lrpc_init_in(&lcore_in_, (lrpc_msg*)channel_1,
-                             LRPC_CHANNEL_SIZE, (uint32_t*)lcore_recv_head_wb));
-    UCCL_CHECK(!lrpc_init_out(&lcore_out_, (lrpc_msg*)channel_2,
-                              LRPC_CHANNEL_SIZE,
-                              (uint32_t*)rcore_recv_head_wb));
+    CHECK(!lrpc_init_in(&lcore_in_, (lrpc_msg*)channel_1, LRPC_CHANNEL_SIZE,
+                        (uint32_t*)lcore_recv_head_wb));
+    CHECK(!lrpc_init_out(&lcore_out_, (lrpc_msg*)channel_2, LRPC_CHANNEL_SIZE,
+                         (uint32_t*)rcore_recv_head_wb));
 
-    UCCL_CHECK(!lrpc_init_out(&rcore_out_, (lrpc_msg*)channel_1,
-                              LRPC_CHANNEL_SIZE,
-                              (uint32_t*)lcore_recv_head_wb));
-    UCCL_CHECK(!lrpc_init_in(&rcore_in_, (lrpc_msg*)channel_2,
-                             LRPC_CHANNEL_SIZE, (uint32_t*)rcore_recv_head_wb));
+    CHECK(!lrpc_init_out(&rcore_out_, (lrpc_msg*)channel_1, LRPC_CHANNEL_SIZE,
+                         (uint32_t*)lcore_recv_head_wb));
+    CHECK(!lrpc_init_in(&rcore_in_, (lrpc_msg*)channel_2, LRPC_CHANNEL_SIZE,
+                        (uint32_t*)rcore_recv_head_wb));
   }
   ~LRPC() { delete[] storage_; }
 

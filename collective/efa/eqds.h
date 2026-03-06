@@ -149,22 +149,22 @@ class EQDSCC {
   inline bool in_idle_list() { return !list_empty(&idle_item.idle_link); }
 
   inline void add_to_active_list(struct list_head* active_senders) {
-    UCCL_DCHECK(!in_active_list());
+    DCHECK(!in_active_list());
     list_add_tail(&active_item.active_link, active_senders);
   }
 
   inline void add_to_idle_list(struct list_head* idle_senders) {
-    UCCL_DCHECK(!in_idle_list());
+    DCHECK(!in_idle_list());
     list_add_tail(&idle_item.idle_link, idle_senders);
   }
 
   inline void remove_from_active_list() {
-    UCCL_DCHECK(in_active_list());
+    DCHECK(in_active_list());
     list_del(&active_item.active_link);
   }
 
   inline void remove_from_idle_list() {
-    UCCL_DCHECK(in_idle_list());
+    DCHECK(in_idle_list());
     list_del(&idle_item.idle_link);
   }
 
@@ -203,7 +203,7 @@ class EQDSCC {
   inline void inc_backlog(uint32_t inc) { backlog_bytes_ += inc; }
 
   inline void dec_backlog(uint32_t dec) {
-    UCCL_DCHECK(backlog_bytes_ >= dec);
+    DCHECK(backlog_bytes_ >= dec);
     backlog_bytes_ -= dec;
   }
 
@@ -269,7 +269,7 @@ class CreditQPContext {
         ibv_create_cq(context_, kMaxCqeTotal, nullptr, nullptr, 0);
     engine_credit_cq_ =
         ibv_create_cq(context_, kMaxCqeTotal, nullptr, nullptr, 0);
-    UCCL_DCHECK(pacer_credit_cq_ && engine_credit_cq_)
+    DCHECK(pacer_credit_cq_ && engine_credit_cq_)
         << "Failed to create pacer/engine_credit_cq.";
 
     for (int i = 0; i < kMaxSrcDstQPCredit; i++) {
@@ -281,26 +281,26 @@ class CreditQPContext {
     void* pacer_hdr_addr = mmap(
         nullptr, PullHdrBuffPool::kNumPktHdr * PullHdrBuffPool::kPullHdrSize,
         PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    UCCL_DCHECK(pacer_hdr_addr != MAP_FAILED);
+    DCHECK(pacer_hdr_addr != MAP_FAILED);
 
     pacer_hdr_mr_ =
         ibv_reg_mr(pd_, pacer_hdr_addr,
                    PullHdrBuffPool::kNumPktHdr * PullHdrBuffPool::kPullHdrSize,
                    IBV_ACCESS_LOCAL_WRITE);
-    UCCL_DCHECK(pacer_hdr_mr_ != nullptr);
+    DCHECK(pacer_hdr_mr_ != nullptr);
 
     pacer_hdr_pool_ = new PullHdrBuffPool(pacer_hdr_mr_);
 
     void* engine_hdr_addr = mmap(
         nullptr, PullHdrBuffPool::kNumPktHdr * PullHdrBuffPool::kPullHdrSize,
         PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    UCCL_DCHECK(engine_hdr_addr != MAP_FAILED);
+    DCHECK(engine_hdr_addr != MAP_FAILED);
 
     engine_hdr_mr_ =
         ibv_reg_mr(pd_, engine_hdr_addr,
                    PullHdrBuffPool::kNumPktHdr * PullHdrBuffPool::kPullHdrSize,
                    IBV_ACCESS_LOCAL_WRITE);
-    UCCL_DCHECK(engine_hdr_mr_ != nullptr);
+    DCHECK(engine_hdr_mr_ != nullptr);
 
     engine_hdr_pool_ = new PullHdrBuffPool(engine_hdr_mr_);
 
@@ -362,12 +362,12 @@ class CreditQPContext {
 
   inline uint64_t engine_pop_frame_desc() {
     uint64_t frame_desc;
-    UCCL_CHECK(engine_frame_desc_pool_->alloc_buff(&frame_desc) == 0);
+    CHECK(engine_frame_desc_pool_->alloc_buff(&frame_desc) == 0);
     return frame_desc;
   }
   inline uint64_t pacer_pop_frame_desc() {
     uint64_t frame_desc;
-    UCCL_CHECK(pacer_frame_desc_pool_->alloc_buff(&frame_desc) == 0);
+    CHECK(pacer_frame_desc_pool_->alloc_buff(&frame_desc) == 0);
     return frame_desc;
   }
 
@@ -380,17 +380,17 @@ class CreditQPContext {
 
   inline uint64_t engine_pop_pkt_hdr() {
     uint64_t pkt_hdr;
-    UCCL_CHECK(engine_hdr_pool_->alloc_buff(&pkt_hdr) == 0);
+    CHECK(engine_hdr_pool_->alloc_buff(&pkt_hdr) == 0);
     return pkt_hdr;
   }
   inline uint64_t pacer_pop_pkt_hdr() {
     uint64_t pkt_hdr;
-    UCCL_CHECK(pacer_hdr_pool_->alloc_buff(&pkt_hdr) == 0);
+    CHECK(pacer_hdr_pool_->alloc_buff(&pkt_hdr) == 0);
     return pkt_hdr;
   }
 
   inline struct ibv_qp* get_qp_by_idx(uint32_t idx) {
-    UCCL_DCHECK(idx < kMaxSrcDstQPCredit);
+    DCHECK(idx < kMaxSrcDstQPCredit);
     return credit_qp_list_[idx];
   }
 
@@ -418,27 +418,27 @@ class CreditQPContext {
 
     qp_attr.qp_type = IBV_QPT_UD;
     struct ibv_qp* qp = ibv_create_qp(pd_, &qp_attr);
-    UCCL_DCHECK(qp) << "Failed to create credit QP.";
+    DCHECK(qp) << "Failed to create credit QP.";
 
     struct ibv_qp_attr attr = {};
     attr.qp_state = IBV_QPS_INIT;
     attr.pkey_index = 0;
     attr.port_num = EFA_PORT_NUM;
     attr.qkey = QKEY;
-    UCCL_CHECK(ibv_modify_qp(qp, &attr,
-                             IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
-                                 IBV_QP_QKEY) == 0)
+    CHECK(ibv_modify_qp(qp, &attr,
+                        IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
+                            IBV_QP_QKEY) == 0)
         << "Failed to modify Credit QP INIT.";
 
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTR;
-    UCCL_CHECK(ibv_modify_qp(qp, &attr, IBV_QP_STATE) == 0)
+    CHECK(ibv_modify_qp(qp, &attr, IBV_QP_STATE) == 0)
         << "Failed to modify Credit QP RTR.";
 
     memset(&attr, 0, sizeof(attr));
     attr.qp_state = IBV_QPS_RTS;
     attr.sq_psn = SQ_PSN;
-    UCCL_CHECK(ibv_modify_qp(qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN) == 0)
+    CHECK(ibv_modify_qp(qp, &attr, IBV_QP_STATE | IBV_QP_SQ_PSN) == 0)
         << "Failed to modify Credit QP RTS.";
 
     return qp;
@@ -526,13 +526,13 @@ class EQDS {
     pacer_th_ = std::thread([this, pacer_cpu, numa_node] {
 #ifdef PIN_TO_NUMA
       pin_thread_to_numa(numa_node);
-      UCCL_LOG(INFO, EFA) << "[Pacer] thread " << pdev_idx_
-                          << " running on NUMA node " << numa_node;
+      LOG(INFO) << "[Pacer] thread " << pdev_idx_ << " running on NUMA node "
+                << numa_node;
 #else
       // Pin the pacer thread to a specific CPU.
       pin_thread_to_cpu(pacer_cpu);
-      UCCL_LOG(INFO, EFA) << "[Pacer] thread " << pdev_idx_
-                          << " running on CPU " << pacer_cpu;
+      LOG(INFO) << "[Pacer] thread " << pdev_idx_ << " running on CPU "
+                << pacer_cpu;
 #endif
       while (!shutdown_) {
         run_pacer();

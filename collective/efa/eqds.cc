@@ -1,7 +1,7 @@
 #include "eqds.h"
 #include "transport_config.h"
-#include "util/debug.h"
 #include "util/list.h"
+#include <glog/logging.h>
 #include <infiniband/verbs.h>
 
 namespace uccl {
@@ -39,14 +39,14 @@ void EQDS::handle_pull_request(void) {
           }
           // Add it to the active list.
           sink->add_to_active_list(&active_senders_);
-          UCCL_VLOG(5) << "Registered in pacer pull queue.";
+          VLOG(5) << "Registered in pacer pull queue.";
         } else {
           // Already in the active list. Do nothing.
         }
         std::atomic_thread_fence(std::memory_order_acquire);
         break;
       default:
-        UCCL_LOG(ERROR, EFA) << "Unknown opcode: " << msg.opcode;
+        LOG(ERROR) << "Unknown opcode: " << msg.opcode;
         break;
     }
     if (++budget >= 16) break;
@@ -80,7 +80,7 @@ bool EQDS::grant_credit(EQDSCC* eqds_cc, bool idle, uint32_t* total_inc) {
 
   if (!send_pull_packet(eqds_cc)) {
     eqds_cc->dec_latest_pull(increment);
-    UCCL_VLOG(5) << "Failed to send pull packet.";
+    VLOG(5) << "Failed to send pull packet.";
   }
 
   return eqds_cc->backlog() == 0;
@@ -101,7 +101,7 @@ void EQDS::handle_grant_credit(void) {
 
         if (grant_credit(sink, false, &total_inc)) {
           // Grant done, add it to idle sender list.
-          UCCL_CHECK(!sink->in_idle_list());
+          CHECK(!sink->in_idle_list());
           sink->add_to_idle_list(&idle_senders_);
         } else {
           // We have not satisfied its demand, re-add it to the active
@@ -164,7 +164,7 @@ void CreditQPContext::__post_recv_wrs_for_credit(int nb, uint32_t qpidx) {
     rq_wrs_[nr_post - 1].next = nullptr;
 
     struct ibv_recv_wr* bad_wr;
-    UCCL_CHECK(ibv_post_recv(credit_qp_list_[qpidx], rq_wrs_, &bad_wr) == 0)
+    CHECK(ibv_post_recv(credit_qp_list_[qpidx], rq_wrs_, &bad_wr) == 0)
         << qpidx;
 
     rq_wrs_[nr_post - 1].next =
@@ -181,8 +181,8 @@ std::vector<FrameDesc*> CreditQPContext::engine_poll_credit_cq(void) {
 
   for (int i = 0; i < nr_cqe; i++) {
     struct ibv_wc* wc = &wcs[i];
-    UCCL_DCHECK(wc->status == IBV_WC_SUCCESS) << wc->status;
-    UCCL_DCHECK(wc->opcode == IBV_WC_RECV);
+    DCHECK(wc->status == IBV_WC_SUCCESS) << wc->status;
+    DCHECK(wc->opcode == IBV_WC_RECV);
 
     auto* frame = (FrameDesc*)wc->wr_id;
 
@@ -200,8 +200,8 @@ int CreditQPContext::pacer_poll_credit_cq(void) {
 
   for (int i = 0; i < nr_cqe; i++) {
     struct ibv_wc* wc = &wcs[i];
-    UCCL_DCHECK(wc->status == IBV_WC_SUCCESS) << wc->status;
-    UCCL_DCHECK(wc->opcode == IBV_WC_SEND);
+    DCHECK(wc->status == IBV_WC_SUCCESS) << wc->status;
+    DCHECK(wc->opcode == IBV_WC_SEND);
 
     auto* frame = (FrameDesc*)wc->wr_id;
 
@@ -238,8 +238,8 @@ PullQuanta EQDSCC::compute_pull_target() {
   last_sent_pull_target_ = quantize_ceil(pull_target_bytes);
 
   // if (pull_ > 1040000) {
-  //     UCCL_LOG_EVERY_N(INFO, EFA, 1) << pull_ << ", last_sent_pull_target_: "
-  //     << last_sent_pull_target_;
+  //     LOG_EVERY_N(INFO, 1) << pull_ << ", last_sent_pull_target_: " <<
+  //     last_sent_pull_target_;
   // }
 
   return last_sent_pull_target_;

@@ -1,7 +1,7 @@
 
 #include "nccl_net.h"
 #include "transport.h"
-#include "util/debug.h"
+#include <glog/logging.h>
 #include <atomic>
 #include <thread>
 #include <signal.h>
@@ -72,8 +72,8 @@ static std::atomic<size_t> inflight_send = 0;
 static std::atomic<size_t> inflight_recv = 0;
 
 ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
-  // google::InitGoogleLogging("nccl_plugin");
-  // google::InstallFailureSignalHandler();
+  google::InitGoogleLogging("nccl_plugin");
+  google::InstallFailureSignalHandler();
 
   signal(SIGINT, interrupt_handler);
   signal(SIGTERM, interrupt_handler);
@@ -88,12 +88,12 @@ ncclResult_t pluginInit(ncclDebugLogger_t logFunction) {
     uccl_req_pool.push(req);
   }
 
-  UCCL_LOG(INFO, AFXDP) << "NCCL Plugin initialized";
+  LOG(INFO) << "NCCL Plugin initialized";
   return ncclSuccess;
 }
 ncclResult_t pluginDevices(int* ndev) {
   *ndev = 1;
-  UCCL_LOG(INFO, AFXDP) << "pluginDevices 1";
+  LOG(INFO) << "pluginDevices 1";
   return ncclSuccess;
 }
 
@@ -141,7 +141,7 @@ ncclResult_t pluginGetProperties(int dev, ncclNetProperties_v8_t* props) {
 // block, but contrary to connect and accept, listenComm should never be NULL if
 // the call succeeds.
 ncclResult_t pluginListen(int dev, void* handle, void** listenComm) {
-  UCCL_DCHECK(dev == 0);
+  DCHECK(dev == 0);
 
   struct ConnectAcceptHandler* ctx =
       static_cast<struct ConnectAcceptHandler*>(handle);
@@ -152,7 +152,7 @@ ncclResult_t pluginListen(int dev, void* handle, void** listenComm) {
   std::string local_ip_str = get_dev_ip(DEV_DEFAULT);
   ctx->ip_addr_u32 = str_to_ip(local_ip_str);
   ctx->conn_idx = global_conn_idx++;
-  UCCL_LOG(INFO, AFXDP) << "pluginListen: " << local_ip_str;
+  LOG(INFO) << "pluginListen: " << local_ip_str;
 
   // Listen is alreday done by Endpoint init.
   *listenComm = ctx;
@@ -166,7 +166,7 @@ ncclResult_t pluginListen(int dev, void* handle, void** listenComm) {
 // again until it succeeds.
 ncclResult_t pluginConnect(int dev, void* handle, void** sendComm,
                            ncclNetDeviceHandle_v8_t** sendDevComm) {
-  UCCL_DCHECK(dev == 0);
+  DCHECK(dev == 0);
 
   // This handle data from pluginListen is transferred from remote via MPI
   struct ConnectAcceptHandler* ctrl_ctx =
@@ -180,7 +180,7 @@ ncclResult_t pluginConnect(int dev, void* handle, void** sendComm,
     connect_state->connect_th = std::thread([connect_state, remote_ip] {
       std::string remote_ip_str = ip_to_str(remote_ip);
       connect_state->comm_handler.conn_id = ep->uccl_connect(remote_ip_str);
-      UCCL_LOG(INFO, AFXDP) << "pluginConnect: connected to " << remote_ip_str;
+      LOG(INFO) << "pluginConnect: connected to " << remote_ip_str;
       std::atomic_thread_fence(std::memory_order_release);
       std::atomic_store_explicit(&connect_state->done, true,
                                  std::memory_order_relaxed);
@@ -217,8 +217,7 @@ ncclResult_t pluginAccept(void* listenComm, void** recvComm,
 
   std::string remote_ip_str;
   comm_handler->conn_id = ep->uccl_accept(remote_ip_str);
-  UCCL_LOG(INFO, AFXDP) << "pluginAccept: accepted connection from "
-                        << remote_ip_str;
+  LOG(INFO) << "pluginAccept: accepted connection from " << remote_ip_str;
 
   *recvComm = comm_handler;
   return ncclSuccess;
@@ -254,7 +253,7 @@ ncclResult_t pluginIsend(void* sendComm, void* data, int size, int tag,
   req->data_len = size;
   req->poll_ctx = ep->uccl_send_async(conn_id, data, size);
 
-  // UCCL_LOG(INFO, AFXDP) << "pluginIsend " << size << " " << inflight_send;
+  // LOG(INFO) << "pluginIsend " << size << " " << inflight_send;
 
   *request = req;
   return ncclSuccess;
@@ -272,7 +271,7 @@ ncclResult_t pluginIrecv(void* recvComm, int n, void** data, int* sizes,
   req->data_len = sizes[0];
   req->poll_ctx = ep->uccl_recv_async(conn_id, data[0], &req->recv_len);
 
-  // UCCL_LOG(INFO, AFXDP) << "pluginIrecv " << sizes[0];
+  // LOG(INFO) << "pluginIrecv " << sizes[0];
 
   *request = req;
   return ncclSuccess;
@@ -294,12 +293,10 @@ ncclResult_t pluginTest(void* request, int* done, int* size) {
 
     if (req->send) {
       inflight_send -= req->data_len;
-      UCCL_VLOG(4) << "pluginTest send " << req->data_len << " "
-                   << inflight_send;
+      VLOG(4) << "pluginTest send " << req->data_len << " " << inflight_send;
     } else {
       inflight_recv -= req->data_len;
-      UCCL_VLOG(4) << "pluginTest recv " << req->data_len << " "
-                   << inflight_recv;
+      VLOG(4) << "pluginTest recv " << req->data_len << " " << inflight_recv;
     }
     *done = 1;
     *size = req->data_len;
@@ -318,7 +315,7 @@ ncclResult_t pluginGetDeviceMr(void* comm, void* mhandle, void** dptr_mhandle) {
   return ncclSuccess;
 }
 
-ncclNet_v8_t volatile ncclNetPlugin_v8 = {
+volatile ncclNet_v8_t ncclNetPlugin_v8 = {
     .name = PLUGIN_NAME,
     .init = pluginInit,
     .devices = pluginDevices,

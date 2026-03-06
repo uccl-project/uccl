@@ -10,6 +10,7 @@ CXXFLAGS += -I$(ABS_ROOT_PATH)/network
 CXXFLAGS += -Wno-unused-function
 
 LDFLAGS := $(shell pkg-config --libs libdpdk)
+LDFLAGS += $(shell pkg-config --libs libglog)
 LDFLAGS += -libverbs
 
 all: transport_test uccl-util-dpdk-test

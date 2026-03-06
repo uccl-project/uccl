@@ -1,7 +1,7 @@
 #include "transport.h"
 #include "transport_config.h"
-#include "util/debug.h"
 #include <gflags/gflags.h>
+#include <glog/logging.h>
 #include <chrono>
 #include <deque>
 #include <thread>
@@ -11,9 +11,9 @@ using namespace uccl;
 
 size_t kTestMsgSize = 1024000;
 size_t kReportIters = 5000;
-size_t const kTestIters = 1024000000000UL;
+const size_t kTestIters = 1024000000000UL;
 // Using larger inlights like 64 will cause severe cache miss, impacting perf.
-size_t const kMaxInflight = 8;
+const size_t kMaxInflight = 8;
 
 DEFINE_uint64(size, 1024000, "Size of test message.");
 DEFINE_bool(client, false, "Whether this is a client sending traffic.");
@@ -37,8 +37,8 @@ void interrupt_handler(int signal) {
 }
 
 int main(int argc, char* argv[]) {
-  // google::InitGoogleLogging(argv[0]);
-  // google::InstallFailureSignalHandler();
+  google::InitGoogleLogging(argv[0]);
+  google::InstallFailureSignalHandler();
   gflags::ParseCommandLineFlags(&argc, &argv, true);
 
   signal(SIGINT, interrupt_handler);
@@ -73,7 +73,7 @@ int main(int argc, char* argv[]) {
   } else if (FLAGS_test == "tput") {
     test_type = kTput;
   } else {
-    UCCL_LOG(FATAL, AFXDP) << "Unknown test type: " << FLAGS_test;
+    LOG(FATAL) << "Unknown test type: " << FLAGS_test;
   }
 
   std::mt19937 generator(42);
@@ -83,7 +83,7 @@ int main(int argc, char* argv[]) {
 
   if (FLAGS_client) {
     auto ep = Endpoint(DEV_DEFAULT, NUM_QUEUES, NUM_FRAMES, ENGINE_CPU_START);
-    UCCL_DCHECK(FLAGS_serverip != "");
+    DCHECK(FLAGS_serverip != "");
     auto conn_id = ep.uccl_connect(FLAGS_serverip);
     ConnID conn_id2;
     ConnID conn_id_vec[NUM_QUEUES];
@@ -237,7 +237,7 @@ int main(int argc, char* argv[]) {
             rtts.push_back(to_usec(rdtsc() - async_start, freq_ghz));
             sent_bytes += send_len;
           }
-          UCCL_CHECK(send_len == recv_len);
+          CHECK(send_len == recv_len);
           break;
         }
         case kTput: {
@@ -283,10 +283,9 @@ int main(int argc, char* argv[]) {
              1e-6);
         sent_bytes = 0;
 
-        UCCL_LOG(INFO, AFXDP)
-            << "Sent " << i + 1 << " messages, med rtt: " << med_latency
-            << " us, tail rtt: " << tail_latency << " us, link bw " << bw_gbps
-            << " Gbps, app bw " << app_bw_gbps << " Gbps";
+        LOG(INFO) << "Sent " << i + 1 << " messages, med rtt: " << med_latency
+                  << " us, tail rtt: " << tail_latency << " us, link bw "
+                  << bw_gbps << " Gbps, app bw " << app_bw_gbps << " Gbps";
         start_bw_mea = std::chrono::high_resolution_clock::now();
       }
     }
@@ -410,7 +409,7 @@ int main(int argc, char* argv[]) {
             poll_ctxs.pop_front();
             ep.uccl_poll(poll_ctx);
           }
-          UCCL_CHECK(recv_len == send_len);
+          CHECK(recv_len == send_len);
           break;
         }
         case kTput: {
@@ -429,27 +428,25 @@ int main(int argc, char* argv[]) {
         bool data_mismatch = false;
         auto expected_len = FLAGS_rand ? send_len : kTestMsgSize;
         if (recv_len != expected_len) {
-          UCCL_LOG(ERROR, AFXDP)
-              << "Received message size mismatches, expected " << expected_len
-              << ", received " << recv_len;
+          LOG(ERROR) << "Received message size mismatches, expected "
+                     << expected_len << ", received " << recv_len;
           data_mismatch = true;
         }
         for (int j = 0; j < recv_len / sizeof(uint64_t); j++) {
           if (data_u64[j] != (uint64_t)i * (uint64_t)j) {
             data_mismatch = true;
-            UCCL_LOG_EVERY_N(ERROR, AFXDP, 1000)
+            LOG_EVERY_N(ERROR, 1000)
                 << "Data mismatch at index " << j * sizeof(uint64_t)
                 << ", expected " << (uint64_t)i * (uint64_t)j << ", received "
                 << data_u64[j];
           }
         }
-        UCCL_CHECK(!data_mismatch) << "Data mismatch at iter " << i;
+        CHECK(!data_mismatch) << "Data mismatch at iter " << i;
         memset(data, 0, recv_len);
       }
 
-      UCCL_LOG_EVERY_N(INFO, AFXDP, kReportIters)
-          << "Received " << i << " messages, rtt " << duration_us.count()
-          << " us";
+      LOG_EVERY_N(INFO, kReportIters) << "Received " << i << " messages, rtt "
+                                      << duration_us.count() << " us";
     }
   }
 

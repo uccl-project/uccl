@@ -65,7 +65,7 @@ struct __attribute__((packed)) Ipv4 {
 
     std::string ToString() const {
       const std::vector<uint8_t> bytes(address.ToByteVector());
-      UCCL_CHECK_EQ(bytes.size(), 4);
+      CHECK_EQ(bytes.size(), 4);
       return Format("%hhu.%hhu.%hhu.%hhu", bytes[0], bytes[1], bytes[2],
                     bytes[3]);
     }

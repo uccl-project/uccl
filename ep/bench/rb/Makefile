@@ -167,7 +167,7 @@ endif
 # Add glog if available
 GLOG_AVAILABLE := $(shell pkg-config --exists libglog 2>/dev/null && echo "yes" || echo "no")
 ifeq ($(GLOG_AVAILABLE),yes)
-    LIBS += 
+    LIBS += -lglog
 endif
 
 # ===============================================================================

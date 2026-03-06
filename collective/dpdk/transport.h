@@ -1,7 +1,6 @@
 #pragma once
 
 #include "transport_cc.h"
-#include "util/debug.h"
 #include "util/endian.h"
 #include "util/latency.h"
 #include "util/rss.h"
@@ -9,6 +8,7 @@
 #include "util/timer.h"
 #include "util/util.h"
 #include "util_dpdk.h"
+#include <glog/logging.h>
 #include <linux/udp.h>
 #include <bitset>
 #include <chrono>
@@ -247,7 +247,7 @@ class TXTracking {
     unacked_pkts_pp_[path_id]++;
   }
   inline void dec_unacked_pkts_pp(uint32_t path_id) {
-    UCCL_DCHECK_GT(unacked_pkts_pp_[path_id], 0) << "path_id " << path_id;
+    DCHECK_GT(unacked_pkts_pp_[path_id], 0) << "path_id " << path_id;
     unacked_pkts_pp_[path_id]--;
   }
   inline uint32_t get_unacked_pkts_pp(uint32_t path_id) {
@@ -372,7 +372,7 @@ class UcclFlow {
         remote_addr_(remote_addr),
         local_engine_idx_(local_engine_idx),
         remote_engine_idx_(remote_engine_idx),
-        socket_(UCCL_CHECK_NOTNULL(socket)),
+        socket_(CHECK_NOTNULL(socket)),
         channel_(channel),
         flow_id_(flow_id),
         // pcb_(),
@@ -547,8 +547,8 @@ class UcclFlow {
     auto idx_u32 = U32Rand(0, UINT32_MAX);
     auto idx1 = idx_u32 % kMaxPath;
     auto idx2 = (idx_u32 >> 16) % kMaxPath;
-    UCCL_VLOG(3) << "rtt: idx1 " << port_path_rtt_[idx1] << " idx2 "
-                 << port_path_rtt_[idx2];
+    VLOG(3) << "rtt: idx1 " << port_path_rtt_[idx1] << " idx2 "
+            << port_path_rtt_[idx2];
     return (port_path_rtt_[idx1] < port_path_rtt_[idx2]) ? idx1 : idx2;
 #else
     static uint32_t next_path_id = 0;
@@ -589,8 +589,7 @@ class UcclEngine {
         last_periodic_tsc_(rdtsc()),
         periodic_ticks_(0),
         kSlowTimerIntervalTsc_(us_to_cycles(kSlowTimerIntervalUs, freq_ghz)) {
-    UCCL_DCHECK(
-        str_to_mac(local_l2_addr, reinterpret_cast<char*>(local_l2_addr_)));
+    DCHECK(str_to_mac(local_l2_addr, reinterpret_cast<char*>(local_l2_addr_)));
   }
 
   /**
@@ -642,23 +641,23 @@ class UcclEngine {
 
     auto* ethh = reinterpret_cast<ethhdr*>(pkt_addr);
     if (ntohs(ethh->h_proto) != ETH_P_IP) {
-      UCCL_VLOG(3) << "Non-IP packet, EtherType: 0x" << std::hex
-                   << ntohs(ethh->h_proto);
+      VLOG(3) << "Non-IP packet, EtherType: 0x" << std::hex
+              << ntohs(ethh->h_proto);
       return false;
     }
 
     auto* iph = reinterpret_cast<iphdr*>(pkt_addr + sizeof(ethhdr));
     if (iph->protocol != IPPROTO_UDP) {
-      UCCL_VLOG(3) << "Non-UDP packet, IP protocol: " << (int)iph->protocol;
+      VLOG(3) << "Non-UDP packet, IP protocol: " << (int)iph->protocol;
       return false;
     }
 
     // Nelson: drop the DHCP packet from 0.0.0.0 and other unrelevant packets.
 
     if (remote_addr_ == 0 || iph->saddr == 0 || iph->saddr != remote_addr_) {
-      UCCL_VLOG(3) << "Non-remote packet, IP source address: "
-                   << ip_to_str(iph->saddr)
-                   << " remote_addr_: " << ip_to_str(remote_addr_);
+      VLOG(3) << "Non-remote packet, IP source address: "
+              << ip_to_str(iph->saddr)
+              << " remote_addr_: " << ip_to_str(remote_addr_);
       return false;
     }
 
@@ -764,7 +763,7 @@ class Endpoint {
       r = read(sockfd, static_cast<char*>(buffer) + bytes_read,
                n_bytes - bytes_read);
       if (r < 0 && !(errno == EINTR)) {
-        UCCL_CHECK(false) << "ERROR reading from socket";
+        CHECK(false) << "ERROR reading from socket";
       }
       if (r > 0) {
         bytes_read += r;
@@ -781,7 +780,7 @@ class Endpoint {
       r = write(sockfd, static_cast<char const*>(buffer) + bytes_sent,
                 n_bytes - bytes_sent);
       if (r < 0 && !(errno == EINTR)) {
-        UCCL_CHECK(false) << "ERROR writing to socket";
+        CHECK(false) << "ERROR writing to socket";
       }
       if (r > 0) {
         bytes_sent += r;
@@ -794,7 +793,7 @@ class Endpoint {
     bool sync = true;
     int ret = send_message(bootstrap_fd, &sync, sizeof(bool));
     ret = receive_message(bootstrap_fd, &sync, sizeof(bool));
-    UCCL_DCHECK(ret == sizeof(bool) && sync);
+    DCHECK(ret == sizeof(bool) && sync);
   }
 
   std::thread stats_thread_;

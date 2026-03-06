@@ -7,7 +7,7 @@
 
 #include <ATen/ATen.h>
 #include <ATen/cuda/CUDAContext.h>
-#include "util/debug.h"
+#include <glog/logging.h>
 #include <torch/types.h>
 #include <vector>
 #include "dietgpu/ans/GpuANSCodec.h"

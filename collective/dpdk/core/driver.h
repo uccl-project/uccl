@@ -1,4 +1,4 @@
-#include "util/debug.h"
+#include <glog/logging.h>
 #include <linux/types.h>
 #include <rte_eal.h>
 #include <rte_ethdev.h>
@@ -27,10 +27,10 @@ class Driver {
     if (rte_eal_init(argc, argv) < 0)
       rte_exit(EXIT_FAILURE, "Error with EAL init\n");
 
-    UCCL_LOG(INFO, DPDK) << "EAL initialized";
+    LOG(INFO) << "EAL initialized";
 
     port_id = get_port_id(MAC_ADDRESS);
-    UCCL_LOG(INFO, DPDK) << "Port ID: " << port_id;
+    LOG(INFO) << "Port ID: " << port_id;
 
     mbuf_pool =
         rte_pktmbuf_pool_create("MBUF_POOL", NUM_MBUFS, MBUF_CACHE_SIZE, 0,
@@ -38,7 +38,7 @@ class Driver {
 
     if (mbuf_pool == NULL) rte_exit(EXIT_FAILURE, "Cannot create mbuf pool\n");
 
-    UCCL_LOG(INFO, DPDK) << "Mbuf pool created";
+    LOG(INFO) << "Mbuf pool created";
 
     struct rte_eth_conf port_conf = {};
 
@@ -46,24 +46,24 @@ class Driver {
     if (rte_eth_dev_configure(port_id, 1, 1, &port_conf) < 0)
       rte_exit(EXIT_FAILURE, "Cannot configure device\n");
 
-    UCCL_LOG(INFO, DPDK) << "Device configured";
+    LOG(INFO) << "Device configured";
 
     if (rte_eth_rx_queue_setup(port_id, 0, RX_RING_SIZE, SOCKET_ID_ANY, NULL,
                                mbuf_pool) < 0)
       rte_exit(EXIT_FAILURE, "rte_eth_rx_queue_setup failed\n");
 
-    UCCL_LOG(INFO, DPDK) << "RX queue setup";
+    LOG(INFO) << "RX queue setup";
 
     if (rte_eth_tx_queue_setup(port_id, 0, TX_RING_SIZE, SOCKET_ID_ANY, NULL) <
         0)
       rte_exit(EXIT_FAILURE, "TX queue setup failed\n");
 
-    UCCL_LOG(INFO, DPDK) << "TX queue setup";
+    LOG(INFO) << "TX queue setup";
 
     if (rte_eth_dev_start(port_id) < 0)
       rte_exit(EXIT_FAILURE, "rte_eth_dev_start failed\n");
 
-    UCCL_LOG(INFO, DPDK) << "Started listening on port " << port_id;
+    LOG(INFO) << "Started listening on port " << port_id;
 
     is_initialized = true;
   }
@@ -73,7 +73,7 @@ class Driver {
       rte_eth_dev_stop(port_id);
       rte_eth_dev_close(port_id);
       is_initialized = false;
-      UCCL_LOG(INFO, DPDK) << "Device closed";
+      LOG(INFO) << "Device closed";
     }
   }
 
@@ -98,11 +98,9 @@ class Driver {
                                   sizeof(struct rte_ipv4_hdr));
 
     if (icmp->icmp_type == RTE_ICMP_TYPE_ECHO_REQUEST) {
-      UCCL_LOG(INFO, DPDK) << "Received ICMP Echo Request from"
-                           << ((ip->src_addr) & 0xff) << "."
-                           << ((ip->src_addr >> 8) & 0xff) << "."
-                           << ((ip->src_addr >> 16) & 0xff) << "."
-                           << ((ip->src_addr >> 24) & 0xff);
+      printf("Received ICMP Echo Request from %u.%u.%u.%u\n",
+             (ip->src_addr) & 0xff, (ip->src_addr >> 8) & 0xff,
+             (ip->src_addr >> 16) & 0xff, (ip->src_addr >> 24) & 0xff);
     }
   }
 

@@ -12,7 +12,7 @@
 #include "dietgpu/utils/StaticUtils.h"
 
 #include <cuda.h>
-#include "util/debug.h"
+#include <glog/logging.h>
 
 namespace dietgpu {
 
