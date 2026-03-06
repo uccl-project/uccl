@@ -218,7 +218,7 @@ class DietGPUCompressorBackend : public ICompressorBackend {
 
   bool compress(std::shared_ptr<RDMASendRequest> req) override {
     if (unlikely(!req || !req->local_mem || !stream_ || !res_ || !buffer_)) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "DietGPUCompressorBackend::compress - Invalid parameters";
       return false;
     }
@@ -263,7 +263,7 @@ class DietGPUCompressorBackend : public ICompressorBackend {
 
   bool prepareDecompress(std::shared_ptr<RDMARecvRequest> req) override {
     if (unlikely(!req || !req->local_mem)) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "DietGPUCompressorBackend::prepareDecompress - Invalid parameters";
       return false;
     }
@@ -285,19 +285,19 @@ class DietGPUCompressorBackend : public ICompressorBackend {
   bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
                   uccl::FloatType float_type) override {
     if (unlikely(!stream_ || !res_)) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "DietGPUCompressorBackend::decompress - Invalid internal state";
       return false;
     }
 
     if (unlikely(input.addr == 0 || input.length == 0)) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "DietGPUCompressorBackend::decompress - Invalid input parameters";
       return false;
     }
 
     if (unlikely(output.addr == nullptr || output.size == 0)) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "DietGPUCompressorBackend::decompress - Invalid output parameters";
       return false;
     }
@@ -391,7 +391,7 @@ class DietGPUCompressorBackend : public ICompressorBackend {
 
   bool compressSplitOneBatch(std::shared_ptr<RDMASendRequest> req) override {
     if (unlikely(!req || !req->compress_ctx || !stream_ || !res_)) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "DietGPUCompressorBackend::compressSplitOneBatch - "
              "Invalid parameters";
       return false;
@@ -417,7 +417,7 @@ class DietGPUCompressorBackend : public ICompressorBackend {
   uint32_t compressEncodeOneBatch(
       std::shared_ptr<RDMASendRequest> req) override {
     if (unlikely(!req || !req->compress_ctx || !stream_ || !res_ || !buffer_)) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "DietGPUCompressorBackend::compressEncodeOneBatch - "
              "Invalid parameters";
       return 0;

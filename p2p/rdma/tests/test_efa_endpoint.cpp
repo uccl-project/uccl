@@ -456,7 +456,7 @@ int main(int argc, char* argv[]) {
   // google::InitGoogleLogging(argv[0]);
 
   // Set logging level
-  uccl::ucclLogger.setLogLevel(uccl::WARNING);
+  uccl::ucclLogger.setLogLevel(uccl::WARN);
 
   // Parse command line flags
   gflags::SetUsageMessage("NICEndpoint usage example");

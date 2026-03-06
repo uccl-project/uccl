@@ -101,12 +101,12 @@ class RdmaDeviceManager {
     }
 
     if (dist.empty()) {
-      UCCL_LOG(WARNING, UCCL_RDMA) << "no NIC found, defaulting to empty";
+      UCCL_LOG(WARN, UCCL_RDMA) << "no NIC found, defaulting to empty";
     } else {
       auto strategy = createDeviceSelectionStrategy();
       auto selected = strategy->selectNICs(dist, gpu_idx);
       if (selected.empty()) {
-        UCCL_LOG(WARNING, UCCL_RDMA)
+        UCCL_LOG(WARN, UCCL_RDMA)
             << "no candidate NIC found, defaulting to first";
         selected_nic_names.push_back(dist.front().first);
       } else {
@@ -145,7 +145,7 @@ class RdmaDeviceManager {
 
   int get_numa_node(size_t id) {
     if (id >= devices_.size()) {
-      UCCL_LOG(WARNING, UCCL_RDMA) << "Invalid device id: " << id;
+      UCCL_LOG(WARN, UCCL_RDMA) << "Invalid device id: " << id;
       return -1;
     }
     std::string device_name = devices_[id]->name();

@@ -18,7 +18,7 @@ class Dpdk {
 
   void InitDpdk(int argc, char** argv) {
     if (initialized_) {
-      UCCL_LOG(WARNING, UCCL_DPDK) << "DPDK is already initialized.";
+      UCCL_LOG(WARN, UCCL_DPDK) << "DPDK is already initialized.";
       return;
     }
 

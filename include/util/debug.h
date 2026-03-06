@@ -35,7 +35,7 @@
 // Everything at global scope so macros always resolve via :: regardless of
 // whether this header is first included from inside namespace uccl.
 
-enum UCCLLogLevel { FATAL = 0, ERROR, WARNING, INFO };
+enum UCCLLogLevel { FATAL = 0, ERROR, WARN, INFO };
 
 enum UCCLLogSubsys {
   UCCL_INIT = 0,
@@ -203,8 +203,8 @@ constexpr std::string_view logLevelToString(UCCLLogLevel level) {
     case UCCLLogLevel::ERROR: {
       return "ERROR";
     }
-    case UCCLLogLevel::WARNING: {
-      return "WARNING";
+    case UCCLLogLevel::WARN: {
+      return "WARN";
     }
     case UCCLLogLevel::INFO: {
       return "INFO";
@@ -324,8 +324,8 @@ class UCCLLogger {
       logLevel_ = UCCLLogLevel::FATAL;
     } else if (sv == "ERROR") {
       logLevel_ = UCCLLogLevel::ERROR;
-    } else if (sv == "WARNING") {
-      logLevel_ = UCCLLogLevel::WARNING;
+    } else if (sv == "WARN" || sv == "WARNING") {
+      logLevel_ = UCCLLogLevel::WARN;
     } else if (sv == "INFO") {
       logLevel_ = UCCLLogLevel::INFO;
     }
@@ -532,5 +532,5 @@ using ::UCCLLogSubsys;
 using ::UCCLNullStream;
 using ::UCCLVLogCapture;
 using ::UCCLVoidify;
-using ::WARNING;
+using ::WARN;
 }  // namespace uccl

@@ -461,7 +461,7 @@ class NICEndpoint {
       return -1;  // Do nothing if auto polling is enabled
     }
     if (!req) {
-      UCCL_LOG(WARNING, UCCL_RDMA) << "NICEndpoint::sendRoutine - null request";
+      UCCL_LOG(WARN, UCCL_RDMA) << "NICEndpoint::sendRoutine - null request";
       return -1;
     }
 
@@ -469,7 +469,7 @@ class NICEndpoint {
     std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
     auto it = send_channel_groups_.find(rank_id);
     if (it == send_channel_groups_.end()) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "NICEndpoint::sendRoutine - Send channel group not found "
              "for rank_id: "
           << rank_id;
@@ -478,7 +478,7 @@ class NICEndpoint {
 
     auto send_group = it->second;
     if (!send_group) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "NICEndpoint::sendRoutine - Send channel group is null "
              "for rank_id: "
           << rank_id;
@@ -599,7 +599,7 @@ class NICEndpoint {
               << meta.oob_port << " for rank_id=" << actual_rank_id
               << ", conn_key=" << rev_conn_key;
         } else {
-          UCCL_LOG(WARNING, UCCL_RDMA)
+          UCCL_LOG(WARN, UCCL_RDMA)
               << "Failed to establish reverse connection to " << client_ip
               << ":" << meta.oob_port;
         }

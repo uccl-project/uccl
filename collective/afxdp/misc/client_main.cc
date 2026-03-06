@@ -171,7 +171,7 @@ int client_init(struct client_t* client, char const* interface_name) {
   if (ret == 0) {
     client->attached_native = true;
   } else {
-    UCCL_LOG(WARNING, UCCL_AFXDP) << "falling back to skb mode...";
+    UCCL_LOG(WARN, UCCL_AFXDP) << "falling back to skb mode...";
     ret = xdp_program__attach(client->program, client->interface_index,
                               XDP_MODE_SKB, 0);
     if (ret == 0) {
@@ -387,7 +387,7 @@ void socket_send(struct socket_t* socket, int queue_id) {
       socket->last_stall_time = now_us;
     } else if (now_us - socket->last_stall_time > RTO_US) {
       // These inflight packets get lost, we just ignore them
-      UCCL_LOG(WARNING, UCCL_AFXDP)
+      UCCL_LOG(WARN, UCCL_AFXDP)
           << "queue " << queue_id << " tx stall detected, forcing tx...";
       inflight_pkts = 0;
     }

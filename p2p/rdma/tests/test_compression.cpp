@@ -61,7 +61,7 @@ dietgpu::FloatType getFloatTypeFromString(std::string const& type_str) {
   } else if (type_str == "fp32" || type_str == "float32") {
     return dietgpu::FloatType::kFloat32;
   } else {
-    UCCL_LOG(WARNING, UCCL_RDMA)
+    UCCL_LOG(WARN, UCCL_RDMA)
         << "Unknown float type '" << type_str << "', defaulting to fp32";
     return dietgpu::FloatType::kFloat32;
   }
@@ -134,8 +134,8 @@ bool compareBuffers(void const* buf1, void const* buf2, size_t num_elements,
     for (size_t i = 0; i < num_elements; ++i) {
       if (std::fabs(data1[i] - data2[i]) > tolerance) {
         if (mismatches < max_print) {
-          UCCL_LOG(WARNING, UCCL_RDMA) << "Mismatch at index " << i << ": "
-                                       << data1[i] << " vs " << data2[i];
+          UCCL_LOG(WARN, UCCL_RDMA) << "Mismatch at index " << i << ": "
+                                    << data1[i] << " vs " << data2[i];
         }
         mismatches++;
       }
@@ -147,7 +147,7 @@ bool compareBuffers(void const* buf1, void const* buf2, size_t num_elements,
     for (size_t i = 0; i < num_elements; ++i) {
       if (data1[i] != data2[i]) {
         if (mismatches < max_print) {
-          UCCL_LOG(WARNING, UCCL_RDMA)
+          UCCL_LOG(WARN, UCCL_RDMA)
               << "Mismatch at index " << i << ": 0x" << std::hex << data1[i]
               << " vs 0x" << data2[i] << std::dec;
         }

@@ -204,8 +204,7 @@ class EpollClient {
         std::string conn_key = *conn_key_ptr;
 
         if ((ev.events & EPOLLERR) || (ev.events & EPOLLHUP)) {
-          UCCL_LOG(WARNING, UCCL_RDMA)
-              << "Error/HUP on connection: " << conn_key;
+          UCCL_LOG(WARN, UCCL_RDMA) << "Error/HUP on connection: " << conn_key;
           close_connection(conn_key);
           continue;
         }
