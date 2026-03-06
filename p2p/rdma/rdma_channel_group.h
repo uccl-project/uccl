@@ -45,7 +45,7 @@ class ChannelGroup {
     // Get the total number of channels
     size_t num_channels = ChannelGroup::channelCount();
     if (unlikely(num_channels == 0)) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "ChannelGroup: No channels available for round-robin selection";
       return {0, 0};
     }
@@ -58,7 +58,7 @@ class ChannelGroup {
     // Get the channel by channel_id
     auto channel = getChannel(next_id);
     if (unlikely(!channel)) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "ChannelGroup: Channel not found for channel_id " << next_id
           << " num_channels " << num_channels;
       return {0, 0};
@@ -74,7 +74,7 @@ class ChannelGroup {
     // Get the total number of channels
     size_t num_channels = ChannelGroup::channelCount();
     if (unlikely(num_channels == 0)) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "ChannelGroup: No channels available for random selection";
       return {0, 0};
     }
@@ -87,7 +87,7 @@ class ChannelGroup {
     // Get the channel by channel_id
     auto channel = getChannel(random_id);
     if (unlikely(!channel)) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "ChannelGroup: Channel not found for channel_id " << random_id
           << " num_channels " << num_channels;
       return {0, 0};
@@ -161,7 +161,7 @@ class SendChannelGroup : public ChannelGroup {
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
     if (unlikely(request_queue_->push(req) < 0)) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "SendChannelGroup: isend request queue is full, wr_id=" << wr_id;
       return -1;
     }
@@ -282,7 +282,7 @@ class SendChannelGroup : public ChannelGroup {
   bool postRequestOnChannel(std::shared_ptr<RDMASendRequest> req) {
     auto channel = getChannel(req->channel_id);
     if (unlikely(!channel)) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "SendChannelGroup: Channel not found for channel_id "
           << req->channel_id;
       return false;
@@ -290,7 +290,7 @@ class SendChannelGroup : public ChannelGroup {
 
     int64_t send_ret = channel->submitRequest(req);
     if (send_ret < 0) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "SendChannelGroup: Failed to send on channel_id "
           << req->channel_id;
       return false;
@@ -315,7 +315,7 @@ class SendChannelGroup : public ChannelGroup {
     if (expected_chunk_count == 1) {
       req->imm_data.set_chunk_count(1);
       if (!postRequestOnChannel(req)) {
-        UCCL_LOG(WARNING, UCCL_RDMA)
+        UCCL_LOG(WARN, UCCL_RDMA)
             << "SendChannelGroup: Failed to send request on channel_id "
             << req->channel_id;
       }
@@ -383,7 +383,7 @@ class SendChannelGroup : public ChannelGroup {
         //           << ", channel_id: " << chunk_channel_id << ")" <<
         //           std::endl;
       } else {
-        UCCL_LOG(WARNING, UCCL_RDMA)
+        UCCL_LOG(WARN, UCCL_RDMA)
             << "SendChannelGroup: Failed to send chunk " << i
             << " (offset: " << chunk.offset << ", size: " << chunk.size
             << ", channel_id: " << chunk_channel_id << ")";
@@ -407,7 +407,7 @@ class SendChannelGroup : public ChannelGroup {
       if (tracker_->getTotalInflightBytes() > kInFlightMaxSizeKB * 1024 ||
           !request_queue_->pop(req)) {
         if (tracker_->getTotalInflightBytes() > kInFlightMaxSizeKB * 1024) {
-          UCCL_LOG(WARNING, UCCL_RDMA)
+          UCCL_LOG(WARN, UCCL_RDMA)
               << "SendChannelGroup: In-flight bytes exceed "
                  "limit,pausing sending."
               << tracker_->getTotalInflightBytes() << " bytes in-flight.";
@@ -567,7 +567,7 @@ class RecvChannelGroup : public ChannelGroup {
 
   int64_t recv(std::shared_ptr<RDMARecvRequest> req) {
     if (unlikely(!setupRecvRequestChannelAndMemoryRegion(req))) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "RecvChannelGroup: Failed to setup recv request with round robin";
       return -1;
     }
@@ -612,7 +612,7 @@ class RecvChannelGroup : public ChannelGroup {
               }
 
             } else {
-              UCCL_LOG(WARNING, UCCL_RDMA)
+              UCCL_LOG(WARN, UCCL_RDMA)
                   << "RecvChannelGroup::pollAndProcessCompletions - "
                      "ctrl_channel_ is null, cannot call recv_done";
             }
@@ -650,7 +650,7 @@ class RecvChannelGroup : public ChannelGroup {
       uint32_t& rkey) {
     auto channel = getChannel(channel_id);
     if (unlikely(!channel)) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "RecvChannelGroup: Channel not found for channel_id "
           << channel_id;
       return false;
@@ -659,7 +659,7 @@ class RecvChannelGroup : public ChannelGroup {
     uint64_t context_id = channel->getContextID();
     auto it = mr_map.find(context_id);
     if (unlikely(it == mr_map.end())) {
-      UCCL_LOG(WARNING, UCCL_RDMA)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "RecvChannelGroup: MR not found for context_id " << context_id;
       return false;
     }

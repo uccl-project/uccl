@@ -156,7 +156,7 @@ inline bool IBChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
     uint64_t wr_id = wc->wr_id;
     auto status = wc->status;
     if (unlikely(status != IBV_WC_SUCCESS)) {
-      UCCL_LOG(WARNING, UCCL_P2P)
+      UCCL_LOG(WARN, UCCL_P2P)
           << "poll_once - channel_id: " << channel_id
           << ", CQE error, wr_id=" << wr_id << ", status=" << status << " ("
           << ibv_wc_status_str(status) << ")";
