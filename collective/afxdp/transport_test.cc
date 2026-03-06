@@ -73,7 +73,7 @@ int main(int argc, char* argv[]) {
   } else if (FLAGS_test == "tput") {
     test_type = kTput;
   } else {
-    UCCL_LOG(FATAL, AFXDP) << "Unknown test type: " << FLAGS_test;
+    UCCL_LOG(FATAL, UCCL_AFXDP) << "Unknown test type: " << FLAGS_test;
   }
 
   std::mt19937 generator(42);
@@ -283,7 +283,7 @@ int main(int argc, char* argv[]) {
              1e-6);
         sent_bytes = 0;
 
-        UCCL_LOG(INFO, AFXDP)
+        UCCL_LOG(INFO, UCCL_AFXDP)
             << "Sent " << i + 1 << " messages, med rtt: " << med_latency
             << " us, tail rtt: " << tail_latency << " us, link bw " << bw_gbps
             << " Gbps, app bw " << app_bw_gbps << " Gbps";
@@ -429,7 +429,7 @@ int main(int argc, char* argv[]) {
         bool data_mismatch = false;
         auto expected_len = FLAGS_rand ? send_len : kTestMsgSize;
         if (recv_len != expected_len) {
-          UCCL_LOG(ERROR, AFXDP)
+          UCCL_LOG(ERROR, UCCL_AFXDP)
               << "Received message size mismatches, expected " << expected_len
               << ", received " << recv_len;
           data_mismatch = true;
@@ -437,7 +437,7 @@ int main(int argc, char* argv[]) {
         for (int j = 0; j < recv_len / sizeof(uint64_t); j++) {
           if (data_u64[j] != (uint64_t)i * (uint64_t)j) {
             data_mismatch = true;
-            UCCL_LOG_EVERY_N(ERROR, AFXDP, 1000)
+            UCCL_LOG_EVERY_N(ERROR, UCCL_AFXDP, 1000)
                 << "Data mismatch at index " << j * sizeof(uint64_t)
                 << ", expected " << (uint64_t)i * (uint64_t)j << ", received "
                 << data_u64[j];
@@ -447,7 +447,7 @@ int main(int argc, char* argv[]) {
         memset(data, 0, recv_len);
       }
 
-      UCCL_LOG_EVERY_N(INFO, AFXDP, kReportIters)
+      UCCL_LOG_EVERY_N(INFO, UCCL_AFXDP, kReportIters)
           << "Received " << i << " messages, rtt " << duration_us.count()
           << " us";
     }

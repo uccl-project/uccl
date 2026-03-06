@@ -352,7 +352,8 @@ static_assert(
 #define LOG_EVERY_N_ENDPOINT(severity, freq)             \
   static std::atomic<int> LOG_OCCURRENCES_##__LINE__(0); \
   if (++LOG_OCCURRENCES_##__LINE__ % (freq) == 0)        \
-  UCCL_LOG(severity, RDMA) << "[count=" << LOG_OCCURRENCES_##__LINE__ << "] "
+  UCCL_LOG(severity, UCCL_RDMA)                          \
+      << "[count=" << LOG_OCCURRENCES_##__LINE__ << "] "
 
 struct ChannelMetaData {
   uint32_t qpn;

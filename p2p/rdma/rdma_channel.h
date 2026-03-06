@@ -76,7 +76,7 @@ class RDMAChannel {
   int64_t read(std::shared_ptr<RDMASendRequest> req) {
     int ret = postRequest(req);
     if (ret != 0) {
-      UCCL_LOG(ERROR, RDMA)
+      UCCL_LOG(ERROR, UCCL_RDMA)
           << "Failed to post read request, wr_id=" << req->wr_id;
       return -1;
     }
@@ -86,7 +86,7 @@ class RDMAChannel {
   int64_t send(std::shared_ptr<RDMASendRequest> req) {
     int ret = postRequest(req);
     if (ret != 0) {
-      UCCL_LOG(ERROR, RDMA)
+      UCCL_LOG(ERROR, UCCL_RDMA)
           << "Failed to post send request, wr_id=" << req->wr_id;
       return -1;
     }
@@ -105,7 +105,7 @@ class RDMAChannel {
     wr.sg_list = &sge;
     wr.num_sge = 1;
     if (ibv_post_recv(qp_, &wr, &bad_wr)) {
-      UCCL_LOG(ERROR, RDMA) << "ibv_post_recv failed: " << strerror(errno);
+      UCCL_LOG(ERROR, UCCL_RDMA) << "ibv_post_recv failed: " << strerror(errno);
     }
     return wr_id;
   }
@@ -161,7 +161,7 @@ class RDMAChannel {
   inline int __postRequest_ex(std::shared_ptr<RDMASendRequest> req) {
     auto* qpx = ibv_qp_to_qp_ex(qp_);
     ibv_wr_start(qpx);
-    // UCCL_LOG(INFO, RDMA) << *req;
+    // UCCL_LOG(INFO, UCCL_RDMA) << *req;
     qpx->wr_id = req->wr_id;
     qpx->comp_mask = 0;
     qpx->wr_flags = IBV_SEND_SIGNALED;
@@ -174,7 +174,8 @@ class RDMAChannel {
     } else if (req->send_type == SendType::Read) {
       ibv_wr_rdma_read(qpx, req->getRemoteKey(), req->getRemoteAddress());
     } else {
-      UCCL_LOG(ERROR, RDMA) << "Unknown SendType in RDMAChannel::postRequest";
+      UCCL_LOG(ERROR, UCCL_RDMA)
+          << "Unknown SendType in RDMAChannel::postRequest";
       return -1;
     }
 
@@ -204,7 +205,7 @@ class RDMAChannel {
       }
       sge_info << "]";
 
-      UCCL_LOG(ERROR, RDMA)
+      UCCL_LOG(ERROR, UCCL_RDMA)
           << "ibv_wr_complete failed in postRequest: " << ret << " "
           << strerror(ret) << ", ah_=" << (void*)ah_
           << ", remote_qpn=" << remote_meta_->qpn
@@ -223,7 +224,7 @@ class RDMAChannel {
     struct ibv_sge sge[1];
 
     memset(&wr, 0, sizeof(wr));
-    // UCCL_LOG(INFO, RDMA) << *req;
+    // UCCL_LOG(INFO, UCCL_RDMA) << *req;
 
     wr.wr_id = req->wr_id;
     wr.send_flags = IBV_SEND_SIGNALED;
@@ -246,7 +247,8 @@ class RDMAChannel {
       wr.wr.rdma.remote_addr = req->getRemoteAddress();
       wr.wr.rdma.rkey = req->getRemoteKey();
     } else {
-      UCCL_LOG(ERROR, RDMA) << "Unknown SendType in RDMAChannel::postRequest";
+      UCCL_LOG(ERROR, UCCL_RDMA)
+          << "Unknown SendType in RDMAChannel::postRequest";
       return -1;
     }
 
@@ -268,7 +270,7 @@ class RDMAChannel {
       }
       sge_info << "]";
 
-      UCCL_LOG(ERROR, RDMA)
+      UCCL_LOG(ERROR, UCCL_RDMA)
           << "ibv_post_send failed: " << ret << " " << strerror(ret)
           << ", ah_=" << (void*)ah_ << ", remote_qpn=" << remote_meta_->qpn
           << ", local_qpn=" << qp_->qp_num << ", wr_id=" << req->wr_id

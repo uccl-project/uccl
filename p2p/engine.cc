@@ -121,7 +121,7 @@ UnifiedTask::SpecificData::~SpecificData() {}
 static inline void check_python_signals() {
   PyGILState_STATE gstate = PyGILState_Ensure();
   if (PyErr_CheckSignals() != 0) {
-    UCCL_LOG(FATAL, P2P) << "Python signal caught, exiting...";
+    UCCL_LOG(FATAL, UCCL_P2P) << "Python signal caught, exiting...";
   }
   PyGILState_Release(gstate);
 }
@@ -2355,8 +2355,9 @@ void Endpoint::send_proxy_thread_func() {
           break;
         }
         default:
-          UCCL_LOG(ERROR, P2P) << "Unexpected task type in send processing: "
-                               << static_cast<int>(task->type);
+          UCCL_LOG(ERROR, UCCL_P2P)
+              << "Unexpected task type in send processing: "
+              << static_cast<int>(task->type);
           break;
       }
       auto* status = task->status_ptr;
@@ -2419,8 +2420,9 @@ void Endpoint::recv_proxy_thread_func() {
         case TaskType::SEND_IPC:
         case TaskType::WRITE_NET:
         default:
-          UCCL_LOG(ERROR, P2P) << "Unexpected task type in receive processing: "
-                               << static_cast<int>(task->type);
+          UCCL_LOG(ERROR, UCCL_P2P)
+              << "Unexpected task type in receive processing: "
+              << static_cast<int>(task->type);
           break;
       }
       auto* status = task->status_ptr;

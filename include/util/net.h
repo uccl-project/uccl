@@ -133,7 +133,8 @@ static inline int env_socket_family(void) {
   char* env = getenv("NCCL_SOCKET_FAMILY");
   if (env == NULL) return family;
 
-  UCCL_LOG(INFO, UTIL) << "NCCL_SOCKET_FAMILY set by environment to " << env;
+  UCCL_LOG(INFO, UCCL_UTIL)
+      << "NCCL_SOCKET_FAMILY set by environment to " << env;
 
   if (strcmp(env, "AF_INET") == 0)
     family = AF_INET;  // IPv4
@@ -248,7 +249,7 @@ static bool match_subnet(struct ifaddrs local_if, union socketAddress* remote) {
     same &= (local_addr->sin6_scope_id == remote_addr.sin6_scope_id);
     return same;
   } else {
-    UCCL_LOG(ERROR, UTIL) << "Net : Unsupported address family type";
+    UCCL_LOG(ERROR, UCCL_UTIL) << "Net : Unsupported address family type";
     return false;
   }
 }
@@ -293,7 +294,7 @@ static int find_interface_match_subnet(char* ifNames,
   }
 
   if (found == 0) {
-    UCCL_LOG(ERROR, UTIL)
+    UCCL_LOG(ERROR, UCCL_UTIL)
         << "Net : No interface found in the same subnet as remote address "
         << socket_to_string(&(remoteAddr->sa), line_a);
   }
@@ -304,7 +305,7 @@ static int find_interface_match_subnet(char* ifNames,
 static bool get_socket_addr_from_string(union socketAddress* ua,
                                         char const* ip_port_pair) {
   if (!(ip_port_pair && strlen(ip_port_pair) > 1)) {
-    UCCL_LOG(ERROR, UTIL) << "Net : string is null";
+    UCCL_LOG(ERROR, UCCL_UTIL) << "Net : string is null";
     return false;
   }
 
@@ -314,7 +315,7 @@ static bool get_socket_addr_from_string(union socketAddress* ua,
     struct ib_dev ni;
     // parse <ip_or_hostname>:<port> string, expect one pair
     if (parse_interfaces(ip_port_pair, &ni, 1) != 1) {
-      UCCL_LOG(ERROR, UTIL)
+      UCCL_LOG(ERROR, UCCL_UTIL)
           << "Net : No valid <IPv4_or_hostname>:<port> pair found";
       return false;
     }
@@ -326,7 +327,7 @@ static bool get_socket_addr_from_string(union socketAddress* ua,
     hints.ai_socktype = SOCK_STREAM;
 
     if ((rv = getaddrinfo(ni.prefix, NULL, &hints, &p)) != 0) {
-      UCCL_LOG(ERROR, UTIL)
+      UCCL_LOG(ERROR, UCCL_UTIL)
           << "Net : error encountered when getting address info : "
           << gai_strerror(rv);
       return false;
@@ -347,7 +348,7 @@ static bool get_socket_addr_from_string(union socketAddress* ua,
       sin6.sin6_flowinfo = 0;           // needed by IPv6, but possibly obsolete
       sin6.sin6_scope_id = 0;           // should be global scope, set to 0
     } else {
-      UCCL_LOG(ERROR, UTIL) << "Net : unsupported IP family";
+      UCCL_LOG(ERROR, UCCL_UTIL) << "Net : unsupported IP family";
       return false;
     }
 
@@ -360,7 +361,7 @@ static bool get_socket_addr_from_string(union socketAddress* ua,
       if (ip_port_pair[i] == ']') break;
     }
     if (i == len) {
-      UCCL_LOG(ERROR, UTIL) << "Net : No valid [IPv6]:port pair found";
+      UCCL_LOG(ERROR, UCCL_UTIL) << "Net : No valid [IPv6]:port pair found";
       return false;
     }
     bool global_scope =
@@ -403,11 +404,11 @@ static int find_interfaces(char* ifNames, union socketAddress* ifAddrs,
   char* env = getenv("UCCL_SOCKET_IFNAME");
   if (!env) env = getenv("NCCL_SOCKET_IFNAME");
   if (env && strlen(env) > 1) {
-    UCCL_LOG(INFO, UTIL) << "UCCL/NCCL_SOCKET_IFNAME set by environment to "
-                         << env;
+    UCCL_LOG(INFO, UCCL_UTIL)
+        << "UCCL/NCCL_SOCKET_IFNAME set by environment to " << env;
     // Specified by user : find or fail
     if (shownIfName++ == 0)
-      UCCL_LOG(INFO, UTIL) << "UCCL/NCCL_SOCKET_IFNAME set to " << env;
+      UCCL_LOG(INFO, UCCL_UTIL) << "UCCL/NCCL_SOCKET_IFNAME set to " << env;
     nIfs = find_interfaces(env, ifNames, ifAddrs, sock_family, ifNameMaxSize,
                            maxIfs);
   } else {
@@ -419,7 +420,8 @@ static int find_interfaces(char* ifNames, union socketAddress* ifAddrs,
     if (nIfs == 0) {
       char* commId = getenv("NCCL_COMM_ID");
       if (commId && strlen(commId) > 1) {
-        UCCL_LOG(INFO, UTIL) << "NCCL_COMM_ID set by environment to " << commId;
+        UCCL_LOG(INFO, UCCL_UTIL)
+            << "NCCL_COMM_ID set by environment to " << commId;
         // Try to find interface that is in the same subnet as the IP in comm id
         union socketAddress idAddr;
         get_socket_addr_from_string(&idAddr, commId);

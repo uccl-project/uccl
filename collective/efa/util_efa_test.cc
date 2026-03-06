@@ -165,7 +165,7 @@ void run_server() {
     duration2 += end_time - mid_time;
   }
 
-  UCCL_LOG(INFO, EFA)
+  UCCL_LOG(INFO, UCCL_EFA)
       << "post_send_wr duration "
       << std::chrono::duration_cast<std::chrono::microseconds>(duration1)
                  .count() *
@@ -292,8 +292,8 @@ void run_client(char const* server_ip) {
   auto end_time = std::chrono::high_resolution_clock::now();
   auto duration_us = std::chrono::duration_cast<std::chrono::microseconds>(
       end_time - start_time);
-  UCCL_LOG(INFO, EFA) << "Round trip time: "
-                      << duration_us.count() * 1.0 / ITERATIONS << " us";
+  UCCL_LOG(INFO, UCCL_EFA) << "Round trip time: "
+                           << duration_us.count() * 1.0 / ITERATIONS << " us";
 
   // Sending a ctrl packet
   frame_desc = socket->pop_frame_desc();
@@ -367,12 +367,13 @@ void run_client(char const* server_ip) {
 
   duration_us = std::chrono::duration_cast<std::chrono::microseconds>(
       end_time - start_time);
-  UCCL_LOG(INFO, EFA) << "Throughput: "
-                      << ITERATIONS * 1.0 / duration_us.count() << " Mops/s "
-                      << " bandwidth: "
-                      << ITERATIONS * 1.0 / duration_us.count() * EFA_MTU * 8 /
-                             1000
-                      << " Gbps";
+  UCCL_LOG(INFO, UCCL_EFA) << "Throughput: "
+                           << ITERATIONS * 1.0 / duration_us.count()
+                           << " Mops/s "
+                           << " bandwidth: "
+                           << ITERATIONS * 1.0 / duration_us.count() * EFA_MTU *
+                                  8 / 1000
+                           << " Gbps";
 }
 
 // TO RUN THE TEST:

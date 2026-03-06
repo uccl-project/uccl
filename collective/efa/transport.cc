@@ -188,7 +188,7 @@ RXTracking::ConsumeRet RXTracking::consume(UcclFlow* flow, FrameDesc* msgbuf) {
 
   num_unconsumed_msgbufs_++;
   // if (num_unconsumed_msgbufs_ >= kMaxUnconsumedRxMsgbufs)
-  //     UCCL_LOG(INFO, EFA) << "num_unconsumed_msgbufs_: " <<
+  //     UCCL_LOG(INFO, UCCL_EFA) << "num_unconsumed_msgbufs_: " <<
   //     num_unconsumed_msgbufs_;
 
   // Buffer the packet in the frame pool. It may be out-of-order.
@@ -1022,7 +1022,7 @@ uint32_t UcclFlow::transmit_pending_packets(uint32_t budget) {
   // transmit_tries++;
   // if (permitted_packets != 0) transmit_success++;
   // if (transmit_tries % 10000 == 0) {
-  //     UCCL_LOG(INFO, EFA) << "transmitting success rate: "
+  //     UCCL_LOG(INFO, UCCL_EFA) << "transmitting success rate: "
   //               << (double)transmit_success / transmit_tries;
   // }
 
@@ -1484,10 +1484,10 @@ void UcclEngine::process_rx_msg(std::vector<FrameDesc*>& pkt_msgs) {
 
     auto it = active_flows_map_.find(flow_id);
     if (it == active_flows_map_.end()) {
-      UCCL_LOG_EVERY_N(ERROR, EFA, 1000000)
+      UCCL_LOG_EVERY_N(ERROR, UCCL_EFA, 1000000)
           << "process_rx_msg unknown flow " << flow_id;
       for (auto [flow_id, flow] : active_flows_map_) {
-        UCCL_LOG_EVERY_N(ERROR, EFA, 1000000)
+        UCCL_LOG_EVERY_N(ERROR, UCCL_EFA, 1000000)
             << "                active flow " << flow_id;
       }
       socket_->push_pkt_hdr(msgbuf->get_pkt_hdr_addr());
@@ -1556,8 +1556,8 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
   auto* poll_ctx = ctrl_work.poll_ctx;
   poll_ctx->read_barrier();
 
-  UCCL_LOG(INFO, EFA) << "[Engine] handle_install_flow_on_engine "
-                      << local_engine_idx_ << " for flow " << flow_id;
+  UCCL_LOG(INFO, UCCL_EFA) << "[Engine] handle_install_flow_on_engine "
+                           << local_engine_idx_ << " for flow " << flow_id;
 
   auto* flow = new UcclFlow(local_ip_str_, remote_ip_str, local_meta,
                             remote_meta, local_engine_idx_, remote_engine_idx,
@@ -1570,10 +1570,10 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
   UCCL_DCHECK(ret);
 
   std::string arrow = is_sender ? "->" : "<-";
-  UCCL_LOG(INFO, EFA) << "[Engine] install FlowID " << flow_id << ": "
-                      << local_ip_str_ << Format("(%d)", local_engine_idx_)
-                      << arrow << remote_ip_str
-                      << Format("(%d)", remote_engine_idx);
+  UCCL_LOG(INFO, UCCL_EFA) << "[Engine] install FlowID " << flow_id << ": "
+                           << local_ip_str_ << Format("(%d)", local_engine_idx_)
+                           << arrow << remote_ip_str
+                           << Format("(%d)", remote_engine_idx);
 
   if constexpr (kReceiverCCType == ReceiverCCType::kEQDS) {
     if (!is_sender) flow->request_pull();
@@ -1614,13 +1614,13 @@ std::string UcclEngine::status_to_string(bool abbrev) {
 bool Endpoint::create_engine_and_add_to_engine_future(
     int engine_idx, int gpu_idx,
     std::vector<std::future<std::unique_ptr<UcclEngine>>>& engine_futures) {
-  UCCL_LOG(INFO, EFA) << "Creating Engines by Engine Idx " << engine_idx
-                      << " GPU Idx " << gpu_idx;
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating Engines by Engine Idx " << engine_idx
+                           << " GPU Idx " << gpu_idx;
   {
     std::lock_guard<std::mutex> lock(engine_map_mutex_);
     if (engine_id_to_engine_map_.find(engine_idx) !=
         engine_id_to_engine_map_.end()) {
-      UCCL_LOG(INFO, EFA) << "Engine " << engine_idx << " already exists";
+      UCCL_LOG(INFO, UCCL_EFA) << "Engine " << engine_idx << " already exists";
       return false;
     }
   }
@@ -1659,8 +1659,8 @@ bool Endpoint::create_engine_and_add_to_engine_future(
                                      engine_promise = std::move(engine_promise),
                                      engine = std::move(engine)]() mutable {
         pin_thread_to_cpu(engine_th_cpuid);
-        UCCL_LOG(INFO, EFA) << "[Engine] thread " << engine_idx
-                            << " running on CPU " << engine_th_cpuid;
+        UCCL_LOG(INFO, UCCL_EFA) << "[Engine] thread " << engine_idx
+                                 << " running on CPU " << engine_th_cpuid;
 
         auto* engine_ptr = engine.get();
         engine_promise.set_value(std::move(engine));
@@ -1697,7 +1697,7 @@ bool Endpoint::initialize_engine_by_gpu_idx(int gpu_idx) {
 }
 
 Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
-  UCCL_LOG(INFO, EFA) << "Creating EFAFactory (Lazy Init)";
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating EFAFactory (Lazy Init)";
 
   static std::once_flag flag_once;
   std::call_once(flag_once, []() { EFAFactory::Init(); });
@@ -1706,16 +1706,16 @@ Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
       << "num_queues should be less than or equal to the number of CPUs "
          "/ 4";
 
-  UCCL_LOG(INFO, EFA) << "Creating Channels";
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating Channels";
   for (int i = 0; i < kNumEngines; i++) channel_vec_[i] = new Channel();
 
-  UCCL_LOG(INFO, EFA) << "Creating Pacers";
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating Pacers";
   for (int i = 0; i < NUM_DEVICES; i++) eqds_[i] = new eqds::EQDS(i);
 
 #ifdef LAZY_CREATE_ENGINE
-  UCCL_LOG(INFO, EFA) << "Endpoint() skips creating Engines";
+  UCCL_LOG(INFO, UCCL_EFA) << "Endpoint() skips creating Engines";
 #else
-  UCCL_LOG(INFO, EFA) << "Creating Engines";
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating Engines";
   std::vector<std::future<std::unique_ptr<UcclEngine>>> engine_futures;
 
   for (int i = 0; i < kNumEngines; i++) {
@@ -1750,7 +1750,7 @@ Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
     copy_th_vec_.emplace_back(std::make_unique<std::thread>(
         [this, i, engine = engines[i], copy_th_cpuid]() {
           pin_thread_to_cpu(copy_th_cpuid);
-          UCCL_LOG(INFO, EFA)
+          UCCL_LOG(INFO, UCCL_EFA)
               << "[Copy] thread " << i << " running on CPU " << copy_th_cpuid;
           RXTracking::copy_thread_func(i, engine);
         }));
@@ -1761,7 +1761,7 @@ Endpoint::Endpoint() : stats_thread_([this]() { stats_thread_fn(); }) {
 // TODO(MaoZiming): Deprecate this constructor. Use Endpoint()
 Endpoint::Endpoint(int gpu)
     : gpu_(gpu), stats_thread_([this]() { stats_thread_fn(); }) {
-  UCCL_LOG(INFO, EFA) << "Creating EFAFactory";
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating EFAFactory";
   // Create UDS socket and get umem_fd and xsk_ids.
   static std::once_flag flag_once;
   std::call_once(flag_once, [gpu]() { EFAFactory::Init(gpu); });
@@ -1770,17 +1770,17 @@ Endpoint::Endpoint(int gpu)
       << "num_queues should be less than or equal to the number of CPUs "
          "/ 4";
 
-  UCCL_LOG(INFO, EFA) << "Creating Channels";
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating Channels";
 
   // Create multiple engines. Each engine has its own thread and channel to
   // let the endpoint communicate with.
   for (int i = 0; i < kNumEngines; i++) channel_vec_[i] = new Channel();
 
   // Receiver-driven CC pacer.
-  UCCL_LOG(INFO, EFA) << "Creating Pacers";
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating Pacers";
   for (int i = 0; i < NUM_DEVICES; i++) eqds_[i] = new eqds::EQDS(i);
 
-  UCCL_LOG(INFO, EFA) << "Creating Engines";
+  UCCL_LOG(INFO, UCCL_EFA) << "Creating Engines";
 
   std::vector<std::future<std::unique_ptr<UcclEngine>>> engine_futures;
   for (int i = 0; i < kNumEngines; i++) {
@@ -1812,7 +1812,7 @@ Endpoint::Endpoint(int gpu)
     copy_th_vec_.emplace_back(std::make_unique<std::thread>(
         [this, i, engine = engines[i], copy_th_cpuid]() {
           pin_thread_to_cpu(copy_th_cpuid);
-          UCCL_LOG(INFO, EFA)
+          UCCL_LOG(INFO, UCCL_EFA)
               << "[Copy] thread " << i << " running on CPU " << copy_th_cpuid;
           RXTracking::copy_thread_func(i, engine);
         }));
@@ -1892,10 +1892,10 @@ std::tuple<uint16_t, int> Endpoint::uccl_listen() {
   int bind_ret =
       bind(listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
   if (bind_ret < 0) {
-    UCCL_LOG(ERROR, EFA) << "[Endpoint] Rank " << localRank
-                         << " failed to bind port " << listen_port
-                         << " (errno: " << errno << ", " << strerror(errno)
-                         << ")";
+    UCCL_LOG(ERROR, UCCL_EFA)
+        << "[Endpoint] Rank " << localRank << " failed to bind port "
+        << listen_port << " (errno: " << errno << ", " << strerror(errno)
+        << ")";
   }
   UCCL_DCHECK(bind_ret >= 0) << "ERROR: binding";
 
@@ -1903,12 +1903,13 @@ std::tuple<uint16_t, int> Endpoint::uccl_listen() {
   socklen_t len = sizeof(serv_addr);
   getsockname(listen_fd, (struct sockaddr*)&serv_addr, &len);
   listen_port = ntohs(serv_addr.sin_port);
-  UCCL_LOG(INFO, EFA) << "[Endpoint] Rank " << localRank << " bound on port "
-                      << listen_port << " (fd=" << listen_fd << ")";
+  UCCL_LOG(INFO, UCCL_EFA) << "[Endpoint] Rank " << localRank
+                           << " bound on port " << listen_port
+                           << " (fd=" << listen_fd << ")";
 
   UCCL_CHECK(!listen(listen_fd, 128)) << "ERROR: listen";
-  UCCL_LOG(INFO, EFA) << "[Endpoint] server ready, listening on port "
-                      << listen_port;
+  UCCL_LOG(INFO, UCCL_EFA) << "[Endpoint] server ready, listening on port "
+                           << listen_port;
 
   std::lock_guard<std::mutex> lock(listen_mu_);
   listen_port_vec_.push_back(listen_port);
@@ -1942,14 +1943,14 @@ ConnID Endpoint::uccl_connect(int local_vdev, int remote_vdev,
   // Connect and set nonblocking and nodelay
   while (
       connect(bootstrap_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr))) {
-    UCCL_LOG(INFO, EFA)
+    UCCL_LOG(INFO, UCCL_EFA)
         << "[Endpoint] connecting... Make sure the server is up.";
     std::this_thread::sleep_for(std::chrono::seconds(1));
   }
 
-  UCCL_LOG(INFO, EFA) << "[Endpoint] connected to <" << remote_ip << ", "
-                      << remote_vdev << ">:" << listen_port << " bootstrap_fd "
-                      << bootstrap_fd;
+  UCCL_LOG(INFO, UCCL_EFA) << "[Endpoint] connected to <" << remote_ip << ", "
+                           << remote_vdev << ">:" << listen_port
+                           << " bootstrap_fd " << bootstrap_fd;
 
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
@@ -1958,8 +1959,8 @@ ConnID Endpoint::uccl_connect(int local_vdev, int remote_vdev,
   while (true) {
     int ret = receive_message(bootstrap_fd, &flow_id, sizeof(FlowID));
     UCCL_DCHECK(ret == sizeof(FlowID));
-    UCCL_LOG(INFO, EFA) << "[Endpoint] connect: receive proposed FlowID: "
-                        << flow_id;
+    UCCL_LOG(INFO, UCCL_EFA)
+        << "[Endpoint] connect: receive proposed FlowID: " << flow_id;
 
     // Check if the flow ID is unique, and return it to the server.
     bool unique;
@@ -2011,8 +2012,9 @@ ConnID Endpoint::uccl_accept(int local_vdev, int* remote_vdev,
   UCCL_DCHECK(bootstrap_fd >= 0) << "uccl_accept: accept()";
   remote_ip = ip_to_str(cli_addr.sin_addr.s_addr);
 
-  UCCL_LOG(INFO, EFA) << "[Endpoint] accept from " << remote_ip << ":"
-                      << cli_addr.sin_port << " bootstrap_fd " << bootstrap_fd;
+  UCCL_LOG(INFO, UCCL_EFA) << "[Endpoint] accept from " << remote_ip << ":"
+                           << cli_addr.sin_port << " bootstrap_fd "
+                           << bootstrap_fd;
 
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
@@ -2035,7 +2037,8 @@ ConnID Endpoint::uccl_accept(int local_vdev, int* remote_vdev,
       }
     }
 
-    UCCL_LOG(INFO, EFA) << "[Endpoint] accept: propose FlowID: " << flow_id;
+    UCCL_LOG(INFO, UCCL_EFA)
+        << "[Endpoint] accept: propose FlowID: " << flow_id;
 
     // Allowing flow src and dst to be the same process.
     auto peer_flow_id = get_peer_flow_id(flow_id);
@@ -2299,7 +2302,7 @@ void Endpoint::install_flow_on_engine(FlowID flow_id,
       str << local_meta->qpn_list_credit[i] << " ";
     }
   }
-  UCCL_LOG(INFO, EFA) << str.str();
+  UCCL_LOG(INFO, UCCL_EFA) << str.str();
 
   send_message(bootstrap_fd, local_meta, sizeof(ConnMeta));
   receive_message(bootstrap_fd, remote_meta, sizeof(ConnMeta));
@@ -2385,7 +2388,7 @@ void Endpoint::stats_thread_fn() {
     }
     if (cnt < engine_vec_.size())
       s += Format("\n\t... %d more engines", engine_vec_.size() - cnt);
-    UCCL_LOG(INFO, EFA) << s;
+    UCCL_LOG(INFO, UCCL_EFA) << s;
   }
 }
 

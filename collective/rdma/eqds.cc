@@ -138,7 +138,8 @@ bool EQDS::poll_cq(struct PacerCreditQPWrapper* pc_qpw) {
       auto chunk_addr = cq_ex->wr_id;
       pc_qpw->pacer_credit_chunk_pool_->free_buff(chunk_addr);
     } else {
-      UCCL_LOG(ERROR, RDMA) << "pacer credit CQ state error: " << cq_ex->status;
+      UCCL_LOG(ERROR, UCCL_RDMA)
+          << "pacer credit CQ state error: " << cq_ex->status;
     }
 
     pc_qpw->poll_cq_cnt_--;
@@ -173,7 +174,7 @@ void EQDS::handle_pull_request(void) {
         std::atomic_thread_fence(std::memory_order_acquire);
         break;
       default:
-        UCCL_LOG(ERROR, RDMA) << "Unknown opcode: " << msg.opcode;
+        UCCL_LOG(ERROR, UCCL_RDMA) << "Unknown opcode: " << msg.opcode;
         break;
     }
     if (++budget >= 16) break;

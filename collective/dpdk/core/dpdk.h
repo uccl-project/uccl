@@ -18,37 +18,37 @@ class Dpdk {
 
   void InitDpdk(int argc, char** argv) {
     if (initialized_) {
-      UCCL_LOG(WARNING, DPDK) << "DPDK is already initialized.";
+      UCCL_LOG(WARNING, UCCL_DPDK) << "DPDK is already initialized.";
       return;
     }
 
-    UCCL_LOG(INFO, DPDK) << "Initializing DPDK with args";
+    UCCL_LOG(INFO, UCCL_DPDK) << "Initializing DPDK with args";
 
     int ret = rte_eal_init(argc, argv);
     if (ret < 0) {
-      UCCL_LOG(FATAL, DPDK) << "rte_eal_init() failed: ret = " << ret
-                            << " rte_errno = " << rte_errno << " ("
-                            << rte_strerror(rte_errno) << ")";
+      UCCL_LOG(FATAL, UCCL_DPDK) << "rte_eal_init() failed: ret = " << ret
+                                 << " rte_errno = " << rte_errno << " ("
+                                 << rte_strerror(rte_errno) << ")";
     }
 
     // Check if DPDK runs in PA or VA mode.
     if (rte_eal_iova_mode() == RTE_IOVA_VA) {
-      UCCL_LOG(INFO, DPDK) << "DPDK runs in VA mode.";
+      UCCL_LOG(INFO, UCCL_DPDK) << "DPDK runs in VA mode.";
     } else {
-      UCCL_LOG(INFO, DPDK) << "DPDK runs in PA mode.";
+      UCCL_LOG(INFO, UCCL_DPDK) << "DPDK runs in PA mode.";
     }
 
     initialized_ = true;
-    UCCL_LOG(INFO, DPDK) << "DPDK initialized successfully";
+    UCCL_LOG(INFO, UCCL_DPDK) << "DPDK initialized successfully";
   }
 
   void DeInitDpdk() {
     if (initialized_) {
       int ret = rte_eal_cleanup();
       if (ret != 0) {
-        UCCL_LOG(FATAL, DPDK) << "rte_eal_cleanup() failed: ret = " << ret
-                              << " rte_errno = " << rte_errno << " ("
-                              << rte_strerror(rte_errno) << ")";
+        UCCL_LOG(FATAL, UCCL_DPDK) << "rte_eal_cleanup() failed: ret = " << ret
+                                   << " rte_errno = " << rte_errno << " ("
+                                   << rte_strerror(rte_errno) << ")";
       }
 
       initialized_ = false;
@@ -64,12 +64,13 @@ class Dpdk {
     struct rte_ether_addr mac;
     char buf[32];
 
-    UCCL_LOG(INFO, DPDK) << "Checking " << nb_ports << " ports";
+    UCCL_LOG(INFO, UCCL_DPDK) << "Checking " << nb_ports << " ports";
     for (uint16_t pid = 0; pid < nb_ports; pid++) {
       if (rte_eth_macaddr_get(pid, &mac) < 0) continue;
 
       mac_to_str(&mac, buf, sizeof(buf));
-      UCCL_LOG(INFO, DPDK) << "Checking port " << pid << " with MAC " << buf;
+      UCCL_LOG(INFO, UCCL_DPDK)
+          << "Checking port " << pid << " with MAC " << buf;
       if (strcasecmp(buf, l2_addr) == 0) {
         return pid;
       }

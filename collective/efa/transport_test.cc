@@ -50,7 +50,7 @@ int main(int argc, char* argv[]) {
   } else if (!FLAGS_clientip.empty()) {
     is_client = false;
   } else {
-    UCCL_LOG(FATAL, EFA)
+    UCCL_LOG(FATAL, UCCL_EFA)
         << "Please specify server IP or client IP, and only one of them.";
   }
 
@@ -72,7 +72,7 @@ int main(int argc, char* argv[]) {
   } else if (FLAGS_test == "tput") {
     test_type = kTput;
   } else {
-    UCCL_LOG(FATAL, EFA) << "Unknown test type: " << FLAGS_test;
+    UCCL_LOG(FATAL, UCCL_EFA) << "Unknown test type: " << FLAGS_test;
   }
 
   std::mt19937 generator(42);
@@ -355,7 +355,7 @@ int main(int argc, char* argv[]) {
             sent_bytes * 8.0 / 1000 / 1000 / 1000 / (duaration_usec * 1e-6);
         sent_bytes = 0;
 
-        UCCL_LOG(INFO, EFA)
+        UCCL_LOG(INFO, UCCL_EFA)
             << "Sent " << i + 1 << " messages, med rtt: " << med_latency
             << " us, tail rtt: " << tail_latency << " us, link bw " << bw_gbps
             << " Gbps, app bw " << app_bw_gbps << " Gbps";
@@ -568,7 +568,7 @@ int main(int argc, char* argv[]) {
             std::chrono::high_resolution_clock::now() - start);
         if (duration_sec < kReportIntervalSec) continue;
 
-        UCCL_LOG(INFO, EFA) << "Received " << i + 1 << " messages";
+        UCCL_LOG(INFO, UCCL_EFA) << "Received " << i + 1 << " messages";
 
         start = std::chrono::high_resolution_clock::now();
       }
@@ -579,14 +579,15 @@ int main(int argc, char* argv[]) {
         bool data_mismatch = false;
         auto expected_len = FLAGS_rand ? send_len : kTestMsgSize;
         if (recv_len != expected_len) {
-          UCCL_LOG(ERROR, EFA) << "Received message size mismatches, expected "
-                               << expected_len << ", received " << recv_len;
+          UCCL_LOG(ERROR, UCCL_EFA)
+              << "Received message size mismatches, expected " << expected_len
+              << ", received " << recv_len;
           data_mismatch = true;
         }
         for (int j = 0; j < recv_len / sizeof(uint64_t); j++) {
           if (host_data_u64[j] != (uint64_t)i * (uint64_t)j) {
             data_mismatch = true;
-            UCCL_LOG_EVERY_N(ERROR, EFA, 1000)
+            UCCL_LOG_EVERY_N(ERROR, UCCL_EFA, 1000)
                 << "Data mismatch at index " << j * sizeof(uint64_t)
                 << ", expected " << (uint64_t)i * (uint64_t)j << ", received "
                 << host_data_u64[j];

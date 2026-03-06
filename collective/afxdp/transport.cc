@@ -613,7 +613,7 @@ void UcclFlow::transmit_pending_packets() {
   // transmit_tries++;
   // if (permitted_packets != 0) transmit_success++;
   // if (transmit_tries % 10000 == 0) {
-  //     UCCL_LOG(INFO, AFXDP) << "transmitting success rate: "
+  //     UCCL_LOG(INFO, UCCL_AFXDP) << "transmitting success rate: "
   //               << (double)transmit_success / transmit_tries;
   // }
 
@@ -1219,8 +1219,8 @@ void UcclEngine::process_ctl_reqs() {
 }
 
 void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
-  UCCL_LOG(INFO, AFXDP) << "[Engine] handle_install_flow_on_engine "
-                        << local_engine_idx_;
+  UCCL_LOG(INFO, UCCL_AFXDP)
+      << "[Engine] handle_install_flow_on_engine " << local_engine_idx_;
   int ret;
   std::string local_ip_str = ip_to_str(htonl(local_addr_));
   auto flow_id = ctrl_work.flow_id;
@@ -1281,7 +1281,7 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
     if (dst_ports_set.size() >= kMaxPath) break;
   }
 
-  UCCL_LOG(INFO, AFXDP)
+  UCCL_LOG(INFO, UCCL_AFXDP)
       << "[Engine] handle_install_flow_on_engine dst_ports size: "
       << dst_ports_set.size();
   DCHECK_GE(dst_ports_set.size(), kMaxPath);
@@ -1291,10 +1291,10 @@ void UcclEngine::handle_install_flow_on_engine(Channel::CtrlMsg& ctrl_work) {
   std::advance(it, kMaxPath);
   std::copy(dst_ports_set.begin(), it, std::back_inserter(flow->dst_ports_));
 
-  UCCL_LOG(INFO, AFXDP) << "[Engine] install FlowID " << std::hex << "0x"
-                        << flow_id << ": " << local_ip_str
-                        << Format("(%d)", local_engine_idx_) << " <-> "
-                        << remote_ip_str << Format("(%d)", remote_engine_idx);
+  UCCL_LOG(INFO, UCCL_AFXDP)
+      << "[Engine] install FlowID " << std::hex << "0x" << flow_id << ": "
+      << local_ip_str << Format("(%d)", local_engine_idx_) << " <-> "
+      << remote_ip_str << Format("(%d)", remote_engine_idx);
 
   // Wakeup app thread waiting on endpoint.
   {
@@ -1321,7 +1321,7 @@ std::string UcclEngine::status_to_string() {
 Endpoint::Endpoint(char const* interface_name, int num_queues,
                    uint64_t num_frames, int engine_cpu_start)
     : num_queues_(num_queues), stats_thread_([this]() { stats_thread_fn(); }) {
-  UCCL_LOG(INFO, AFXDP) << "Creating AFXDPFactory";
+  UCCL_LOG(INFO, UCCL_AFXDP) << "Creating AFXDPFactory";
   // Create UDS socket and get umem_fd and xsk_ids.
   static std::once_flag flag_once;
   std::call_once(flag_once, [interface_name, num_frames]() {
@@ -1335,14 +1335,14 @@ Endpoint::Endpoint(char const* interface_name, int num_queues,
   UCCL_CHECK_LE(num_queues, NUM_CPUS / 4)
       << "num_queues should be less than or equal to the number of CPUs / 4";
 
-  UCCL_LOG(INFO, AFXDP) << "Creating Channels";
+  UCCL_LOG(INFO, UCCL_AFXDP) << "Creating Channels";
 
   // Create multiple engines, each got its xsk and umem from the
   // daemon. Each engine has its own thread and channel to let the endpoint
   // communicate with.
   for (int i = 0; i < num_queues; i++) channel_vec_[i] = new Channel();
 
-  UCCL_LOG(INFO, AFXDP) << "Creating Engines";
+  UCCL_LOG(INFO, UCCL_AFXDP) << "Creating Engines";
 
   std::vector<std::future<std::unique_ptr<UcclEngine>>> engine_futures;
   for (int i = 0; i < num_queues; i++) {
@@ -1355,8 +1355,8 @@ Endpoint::Endpoint(char const* interface_name, int num_queues,
         [this, num_queues, i, engine_th_cpuid = engine_cpu_start + i,
          engine_promise = std::move(engine_promise)]() mutable {
           pin_thread_to_cpu(engine_th_cpuid);
-          UCCL_LOG(INFO, AFXDP) << "[Engine] thread " << i << " running on CPU "
-                                << engine_th_cpuid;
+          UCCL_LOG(INFO, UCCL_AFXDP) << "[Engine] thread " << i
+                                     << " running on CPU " << engine_th_cpuid;
 
           auto engine = std::make_unique<UcclEngine>(
               i, channel_vec_[i], local_ip_str_, local_mac_str_);
@@ -1379,8 +1379,8 @@ Endpoint::Endpoint(char const* interface_name, int num_queues,
         [i, deser_th_cpuid = engine_cpu_start + num_queues + i,
          engines = std::vector<UcclEngine*>{engines[i]}]() {
           pin_thread_to_cpu(deser_th_cpuid);
-          UCCL_LOG(INFO, AFXDP) << "[Engine] deser thread " << i
-                                << " running on CPU " << deser_th_cpuid;
+          UCCL_LOG(INFO, UCCL_AFXDP) << "[Engine] deser thread " << i
+                                     << " running on CPU " << deser_th_cpuid;
           UcclEngine::deser_th_func(engines);
         }));
   }
@@ -1412,8 +1412,8 @@ Endpoint::Endpoint(char const* interface_name, int num_queues,
       << "ERROR: binding";
 
   UCCL_CHECK(!listen(listen_fd_, 128)) << "ERROR: listen";
-  UCCL_LOG(INFO, AFXDP) << "[Endpoint] server ready, listening on port "
-                        << kBootstrapPort;
+  UCCL_LOG(INFO, UCCL_AFXDP)
+      << "[Endpoint] server ready, listening on port " << kBootstrapPort;
 }
 
 Endpoint::~Endpoint() {
@@ -1468,13 +1468,13 @@ ConnID Endpoint::uccl_connect(std::string remote_ip) {
   localaddr.sin_addr.s_addr = str_to_ip(local_ip_str_.c_str());
   bind(bootstrap_fd, (sockaddr*)&localaddr, sizeof(localaddr));
 
-  UCCL_LOG(INFO, AFXDP) << "[Endpoint] connecting to " << remote_ip << ":"
-                        << kBootstrapPort;
+  UCCL_LOG(INFO, UCCL_AFXDP)
+      << "[Endpoint] connecting to " << remote_ip << ":" << kBootstrapPort;
 
   // Connect and set nonblocking and nodelay
   while (
       connect(bootstrap_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr))) {
-    UCCL_LOG(INFO, AFXDP)
+    UCCL_LOG(INFO, UCCL_AFXDP)
         << "[Endpoint] connecting... Make sure the server is up.";
     sleep(1);
   }
@@ -1489,8 +1489,9 @@ ConnID Endpoint::uccl_connect(std::string remote_ip) {
   while (true) {
     int ret = receive_message(bootstrap_fd, &flow_id, sizeof(FlowID));
     UCCL_DCHECK(ret == sizeof(FlowID));
-    UCCL_LOG(INFO, AFXDP) << "[Endpoint] connect: receive proposed FlowID: "
-                          << std::hex << "0x" << flow_id;
+    UCCL_LOG(INFO, UCCL_AFXDP)
+        << "[Endpoint] connect: receive proposed FlowID: " << std::hex << "0x"
+        << flow_id;
 
     // Check if the flow ID is unique, and return it to the server.
     bool unique;
@@ -1523,8 +1524,8 @@ ConnID Endpoint::uccl_accept(std::string& remote_ip) {
   UCCL_DCHECK(bootstrap_fd >= 0);
   remote_ip = ip_to_str(cli_addr.sin_addr.s_addr);
 
-  UCCL_LOG(INFO, AFXDP) << "[Endpoint] accept from " << remote_ip << ":"
-                        << cli_addr.sin_port;
+  UCCL_LOG(INFO, UCCL_AFXDP)
+      << "[Endpoint] accept from " << remote_ip << ":" << cli_addr.sin_port;
 
   int flag = 1;
   setsockopt(bootstrap_fd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
@@ -1548,8 +1549,8 @@ ConnID Endpoint::uccl_accept(std::string& remote_ip) {
       }
     }
 
-    UCCL_LOG(INFO, AFXDP) << "[Endpoint] accept: propose FlowID: " << std::hex
-                          << "0x" << flow_id;
+    UCCL_LOG(INFO, UCCL_AFXDP)
+        << "[Endpoint] accept: propose FlowID: " << std::hex << "0x" << flow_id;
 
     // Ask client if this is unique
     int ret = send_message(bootstrap_fd, &flow_id, sizeof(FlowID));
@@ -1725,7 +1726,7 @@ void Endpoint::stats_thread_fn() {
     }
     if (cnt < engine_vec_.size())
       s += Format("\n\t\t... %d more engines", engine_vec_.size() - cnt);
-    UCCL_LOG(INFO, AFXDP) << s;
+    UCCL_LOG(INFO, UCCL_AFXDP) << s;
   }
 }
 

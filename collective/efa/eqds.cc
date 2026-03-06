@@ -46,7 +46,7 @@ void EQDS::handle_pull_request(void) {
         std::atomic_thread_fence(std::memory_order_acquire);
         break;
       default:
-        UCCL_LOG(ERROR, EFA) << "Unknown opcode: " << msg.opcode;
+        UCCL_LOG(ERROR, UCCL_EFA) << "Unknown opcode: " << msg.opcode;
         break;
     }
     if (++budget >= 16) break;
@@ -238,7 +238,8 @@ PullQuanta EQDSCC::compute_pull_target() {
   last_sent_pull_target_ = quantize_ceil(pull_target_bytes);
 
   // if (pull_ > 1040000) {
-  //     UCCL_LOG_EVERY_N(INFO, EFA, 1) << pull_ << ", last_sent_pull_target_: "
+  //     UCCL_LOG_EVERY_N(INFO, UCCL_EFA, 1) << pull_ << ",
+  //     last_sent_pull_target_: "
   //     << last_sent_pull_target_;
   // }
 

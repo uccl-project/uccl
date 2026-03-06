@@ -646,7 +646,7 @@ static inline int modify_qp_rtr(struct ibv_qp* qp, int dev,
             factory_dev->gid.global.subnet_prefix) !=
         util_rdma_extract_local_subnet_prefix(
             remote_ctx->remote_gid.global.subnet_prefix)) {
-      UCCL_LOG(ERROR, RDMA)
+      UCCL_LOG(ERROR, UCCL_RDMA)
           << "Only support same subnet communication for now.";
     }
     attr.ah_attr.is_global = 0;

@@ -34,7 +34,7 @@
 
 #define INCAST_BASE_LISTEN_PORT 16666
 
-#define MPI_LOG(level) UCCL_LOG(level, RDMA) << "Node:" << NODE_ID << " "
+#define MPI_LOG(level) UCCL_LOG(level, UCCL_RDMA) << "Node:" << NODE_ID << " "
 
 #define MAX_BUFFER_SIZE (16 * 1024 * 1024)
 #define PT_NET_CHUNK_SIZE (1024 * 1024)

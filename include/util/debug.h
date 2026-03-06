@@ -34,31 +34,30 @@
 
 // Everything at global scope so macros always resolve via :: regardless of
 // whether this header is first included from inside namespace uccl.
-//
-// Save and undefine macros that collide with enum value names (e.g. -DEFA).
-#pragma push_macro("EFA")
-#undef EFA
 
 enum UCCLLogLevel { FATAL = 0, ERROR, WARNING, INFO };
 
 enum UCCLLogSubsys {
-  INIT = 0,
-  AFXDP,
-  DPDK,
-  EFA,
-  RDMA,
-  EP,
-  P2P,
-  UTIL,
-  SUBSYS_COUNT
+  UCCL_INIT = 0,
+  UCCL_AFXDP,
+  UCCL_DPDK,
+  UCCL_EFA,
+  UCCL_RDMA,
+  UCCL_EP,
+  UCCL_P2P,
+  UCCL_UTIL,
+  UCCL_SUBSYS_COUNT
 };
 
 static std::unordered_map<std::string_view, UCCLLogSubsys>
-    uccl_log_subsys_map_ = {
-        {"INIT", UCCLLogSubsys::INIT}, {"AFXDP", UCCLLogSubsys::AFXDP},
-        {"DPDK", UCCLLogSubsys::DPDK}, {"EFA", UCCLLogSubsys::EFA},
-        {"RDMA", UCCLLogSubsys::RDMA}, {"EP", UCCLLogSubsys::EP},
-        {"P2P", UCCLLogSubsys::P2P},   {"UTIL", UCCLLogSubsys::UTIL}};
+    uccl_log_subsys_map_ = {{"INIT", UCCLLogSubsys::UCCL_INIT},
+                            {"AFXDP", UCCLLogSubsys::UCCL_AFXDP},
+                            {"DPDK", UCCLLogSubsys::UCCL_DPDK},
+                            {"EFA", UCCLLogSubsys::UCCL_EFA},
+                            {"RDMA", UCCLLogSubsys::UCCL_RDMA},
+                            {"EP", UCCLLogSubsys::UCCL_EP},
+                            {"P2P", UCCLLogSubsys::UCCL_P2P},
+                            {"UTIL", UCCLLogSubsys::UCCL_UTIL}};
 
 class UCCLLogger;
 class UCCLLogCapture;
@@ -219,21 +218,21 @@ constexpr std::string_view logLevelToString(UCCLLogLevel level) {
 
 constexpr std::string_view logSubsysToString(UCCLLogSubsys subsys) {
   switch (subsys) {
-    case UCCLLogSubsys::INIT:
+    case UCCLLogSubsys::UCCL_INIT:
       return "INIT";
-    case UCCLLogSubsys::AFXDP:
+    case UCCLLogSubsys::UCCL_AFXDP:
       return "AFXDP";
-    case UCCLLogSubsys::DPDK:
+    case UCCLLogSubsys::UCCL_DPDK:
       return "DPDK";
-    case UCCLLogSubsys::EFA:
+    case UCCLLogSubsys::UCCL_EFA:
       return "EFA";
-    case UCCLLogSubsys::RDMA:
+    case UCCLLogSubsys::UCCL_RDMA:
       return "RDMA";
-    case UCCLLogSubsys::EP:
+    case UCCLLogSubsys::UCCL_EP:
       return "EP";
-    case UCCLLogSubsys::P2P:
+    case UCCLLogSubsys::UCCL_P2P:
       return "P2P";
-    case UCCLLogSubsys::UTIL:
+    case UCCLLogSubsys::UCCL_UTIL:
       return "UTIL";
     default:
       return "";
@@ -303,8 +302,8 @@ class UCCLLogger {
   std::ostream& stream_;
   std::mutex mu_;
   int logLevel_;
-  int vlogLevel_{5};
-  std::bitset<static_cast<std::size_t>(UCCLLogSubsys::SUBSYS_COUNT)>
+  int vlogLevel_{0};
+  std::bitset<static_cast<std::size_t>(UCCLLogSubsys::UCCL_SUBSYS_COUNT)>
       subsys_bitset_;
   pid_t pid_;
   char hostname_[UCCL_DEBUG_HOSTNAME_MAX_LEN]{};
@@ -457,8 +456,9 @@ class UCCLCheckCapture {
     if (capturedErrno_ != 0) {
       stream_ << ": " << strerror(capturedErrno_) << " ";
     }
-    logger_.log(UCCLLogLevel::FATAL, UCCLLogSubsys::SUBSYS_COUNT, fileName_,
-                lineNumber_, functionName_, getThreadId(), stream_.str());
+    logger_.log(UCCLLogLevel::FATAL, UCCLLogSubsys::UCCL_SUBSYS_COUNT,
+                fileName_, lineNumber_, functionName_, getThreadId(),
+                stream_.str());
   }
 
   std::ostringstream& stream() { return stream_; }
@@ -509,19 +509,20 @@ inline UCCLNullStream& operator<<(UCCLNullStream& s,
 
 // Re-export into uccl for backward compatibility.
 namespace uccl {
-using ::AFXDP;
-using ::DPDK;
-using ::EFA;
-using ::EP;
 using ::ERROR;
 using ::FATAL;
 using ::INFO;
-using ::INIT;
 using ::logLevelToString;
 using ::logSubsysToString;
-using ::P2P;
-using ::RDMA;
-using ::SUBSYS_COUNT;
+using ::UCCL_AFXDP;
+using ::UCCL_DPDK;
+using ::UCCL_EFA;
+using ::UCCL_EP;
+using ::UCCL_INIT;
+using ::UCCL_P2P;
+using ::UCCL_RDMA;
+using ::UCCL_SUBSYS_COUNT;
+using ::UCCL_UTIL;
 using ::UCCLCheckCapture;
 using ::UCCLLogCapture;
 using ::UCCLLogger;
@@ -531,8 +532,5 @@ using ::UCCLLogSubsys;
 using ::UCCLNullStream;
 using ::UCCLVLogCapture;
 using ::UCCLVoidify;
-using ::UTIL;
 using ::WARNING;
 }  // namespace uccl
-
-#pragma pop_macro("EFA")

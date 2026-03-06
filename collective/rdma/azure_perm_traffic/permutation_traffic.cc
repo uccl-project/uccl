@@ -21,7 +21,8 @@
 #define MAX_NODES 512
 #define BASE_LISTEN_PORT 6666
 
-#define MPI_LOG(level) UCCL_LOG(level, RDMA) << "Rank:" << LOCAL_RANK << " "
+#define MPI_LOG(level) \
+  UCCL_LOG(level, UCCL_RDMA) << "Rank:" << LOCAL_RANK << " "
 
 #define MAX_BUFFER_SIZE (32 * 1024 * 1024)  // 32MB
 #define NET_CHUNK_SIZE (1024 * 1024)        // 1MB
