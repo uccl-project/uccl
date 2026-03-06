@@ -44,7 +44,7 @@ class PmdPort {
         initialized_(false) {
     // Get L2 address.
     rte_ether_addr temp;
-    CHECK_EQ(rte_eth_macaddr_get(port_id_, &temp), 0);
+    UCCL_CHECK_EQ(rte_eth_macaddr_get(port_id_, &temp), 0);
     l2_addr_.FromUint8(temp.addr_bytes);
   }
 
@@ -95,7 +95,8 @@ class PmdPort {
   template <typename T>
   decltype(auto) GetRing(uint16_t id) const {
     constexpr bool is_tx_ring = std::is_same<T, TxRing>::value;
-    CHECK_LT(id, (is_tx_ring ? tx_rings_nr_ : rx_rings_nr_)) << "Out-of-bounds";
+    UCCL_CHECK_LT(id, (is_tx_ring ? tx_rings_nr_ : rx_rings_nr_))
+        << "Out-of-bounds";
     return is_tx_ring ? static_cast<T*>(tx_rings_.at(id).get())
                       : static_cast<T*>(rx_rings_.at(id).get());
   }
@@ -137,12 +138,12 @@ class PmdPort {
     auto lsb = rss_hash & (devinfo_.reta_size - 1);
     auto index = lsb / RTE_ETH_RETA_GROUP_SIZE;
     auto shift = lsb % RTE_ETH_RETA_GROUP_SIZE;
-    LOG(INFO) << "index: " << index << " shift: " << shift
-              << "rss_hash: " << rss_hash
-              << " reta_size: " << devinfo_.reta_size
-              << " reta_group_size: " << RTE_ETH_RETA_GROUP_SIZE
-              << " reta: " << rss_reta_conf_[index].reta[shift]
-              << " lsb: " << lsb;
+    UCCL_LOG(INFO, DPDK) << "index: " << index << " shift: " << shift
+                         << "rss_hash: " << rss_hash
+                         << " reta_size: " << devinfo_.reta_size
+                         << " reta_group_size: " << RTE_ETH_RETA_GROUP_SIZE
+                         << " reta: " << rss_reta_conf_[index].reta[shift]
+                         << " lsb: " << lsb;
     return rss_reta_conf_[index].reta[shift];
   }
 
@@ -173,36 +174,36 @@ class PmdPort {
   uint64_t GetPortRxNoMbufErr() const { return port_stats_.rx_nombuf; }
 
   uint64_t GetPortQueueRxPkts(uint16_t queue_id) const {
-    CHECK_LT(queue_id,
-             std::min(rx_rings_.size(),
-                      static_cast<size_t>(RTE_ETHDEV_QUEUE_STAT_CNTRS)));
+    UCCL_CHECK_LT(queue_id,
+                  std::min(rx_rings_.size(),
+                           static_cast<size_t>(RTE_ETHDEV_QUEUE_STAT_CNTRS)));
     return port_stats_.q_ipackets[queue_id];
   }
 
   uint64_t GetPortQueueRxBytes(uint16_t queue_id) const {
-    CHECK_LT(queue_id,
-             std::min(rx_rings_.size(),
-                      static_cast<size_t>(RTE_ETHDEV_QUEUE_STAT_CNTRS)));
+    UCCL_CHECK_LT(queue_id,
+                  std::min(rx_rings_.size(),
+                           static_cast<size_t>(RTE_ETHDEV_QUEUE_STAT_CNTRS)));
     return port_stats_.q_ibytes[queue_id];
   }
 
   uint64_t GetPortQueueTxPkts(uint16_t queue_id) const {
-    CHECK_LT(queue_id,
-             std::min(tx_rings_.size(),
-                      static_cast<size_t>(RTE_ETHDEV_QUEUE_STAT_CNTRS)));
+    UCCL_CHECK_LT(queue_id,
+                  std::min(tx_rings_.size(),
+                           static_cast<size_t>(RTE_ETHDEV_QUEUE_STAT_CNTRS)));
     return port_stats_.q_opackets[queue_id];
   }
 
   uint64_t GetPortQueueTxBytes(uint16_t queue_id) const {
-    CHECK_LT(queue_id,
-             std::min(tx_rings_.size(),
-                      static_cast<size_t>(RTE_ETHDEV_QUEUE_STAT_CNTRS)));
+    UCCL_CHECK_LT(queue_id,
+                  std::min(tx_rings_.size(),
+                           static_cast<size_t>(RTE_ETHDEV_QUEUE_STAT_CNTRS)));
     return port_stats_.q_obytes[queue_id];
   }
 
   void DumpStats() {
     UpdatePortStats();
-    LOG(INFO) << Format(
+    UCCL_LOG(INFO, DPDK) << Format(
         "[STATS - Port: %u] [TX] Pkts: %lu, Bytes: %lu, Drops: %lu [RX] Pkts: "
         "%lu, Bytes: %lu, Drops: %lu, NoRXMbufs: %lu",
         port_id_, GetPortTxPkts(), GetPortTxBytes(), GetPortTxDrops(),
@@ -210,13 +211,13 @@ class PmdPort {
         GetPortRxNoMbufErr());
 
     for (uint16_t i = 0; i < tx_rings_nr_; i++) {
-      LOG(INFO) << Format(
+      UCCL_LOG(INFO, DPDK) << Format(
           "[STATS - Port: %u, Queue: %u] [TX] Pkts: %lu, Bytes: %lu", port_id_,
           i, GetPortQueueTxPkts(i), GetPortQueueTxBytes(i));
     }
 
     for (uint16_t i = 0; i < rx_rings_nr_; i++) {
-      LOG(INFO) << Format(
+      UCCL_LOG(INFO, DPDK) << Format(
           "[STATS - Port: %u, Queue: %u] [RX] Pkts: %lu, Bytes: %lu", port_id_,
           i, GetPortQueueRxPkts(i), GetPortQueueRxBytes(i));
     }

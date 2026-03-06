@@ -220,7 +220,7 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& s,
     s->recvRoutine();
     return s->checkRecvComplete_once(ureq->n, ureq->engine_idx);
   }
-  LOG(ERROR) << "Invalid request type: " << ureq->type;
+  UCCL_LOG(ERROR, P2P) << "Invalid request type: " << ureq->type;
   return false;
 }
 

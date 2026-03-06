@@ -74,7 +74,7 @@ bool IPCEndpoint::recv_async(int from_rank, std::shared_ptr<Request> creq) {
 }
 
 bool IPCEndpoint::send_(int to_rank, std::shared_ptr<Request> creq) {
-  CHECK(creq && creq->buf != nullptr) << "send_ipc: data pointer is null!";
+  UCCL_CHECK(creq && creq->buf != nullptr) << "send_ipc: data pointer is null!";
 
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
@@ -142,7 +142,7 @@ bool IPCEndpoint::send_(int to_rank, std::shared_ptr<Request> creq) {
 }
 
 bool IPCEndpoint::recv_(int from_rank, std::shared_ptr<Request> creq) {
-  CHECK(creq && creq->buf != nullptr) << "recv_ipc: data pointer is null!";
+  UCCL_CHECK(creq && creq->buf != nullptr) << "recv_ipc: data pointer is null!";
 
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
@@ -172,7 +172,7 @@ bool IPCEndpoint::recv_(int from_rank, std::shared_ptr<Request> creq) {
   uint64_t out_seq = 0;
   uint64_t expect_seq = 0;
   comm_->uds_->recv_ack(from_rank, &status, &out_seq, 5000, expect_seq);
-  CHECK_EQ(out_seq, expect_seq) << "Sender reported failure";
+  UCCL_CHECK_EQ(out_seq, expect_seq) << "Sender reported failure";
 
   return true;
 }

@@ -38,7 +38,7 @@ Alternatively, you can setup your local dev environment by:
 
 ```bash
 sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
-                 libgoogle-glog-dev libgtest-dev libgflags-dev -y
+                 libgtest-dev libgflags-dev -y
 ```
 
 ### Installation

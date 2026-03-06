@@ -19,7 +19,7 @@ EFA_HOME ?= /opt/amazon/efa
 
 # Building with the following settings:
 INC = -I./ -I$(CUDA_HOME)/include
-LIBS = -L ${CUDA_HOME}/lib64 -libverbs -lcudart -lcuda -lpthread -lglog -lgflags -lgtest -lz -lelf
+LIBS = -L ${CUDA_HOME}/lib64 -libverbs -lcudart -lcuda -lpthread  -lgflags -lgtest -lz -lelf
 LIBS2 =
 
 CXX := g++
@@ -30,13 +30,13 @@ CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(CUDA_I
 
 ifeq ($(USE_TCPX),1)
 	CXXFLAGS += -DUCCL_P2P_USE_TCPX
-	LIBS2 += -lglog -lgflags -lpthread -ldl
+	LIBS2 +=  -lgflags -lpthread -ldl
 else ifeq ($(USE_EFA),1)
 	CXXFLAGS += -DUCCL_P2P_USE_EFA
 	INC += -I${EFA_HOME}/include
 	LIBS += -L ${EFA_HOME}/lib -lefa
 else
-	LIBS2 += -lglog -lgflags -lgtest -lz -lelf -lpthread -libverbs
+	LIBS2 +=  -lgflags -lgtest -lz -lelf -lpthread -libverbs
 endif
 
 # Add NCCL-over-TCP endpoint flag

@@ -22,7 +22,7 @@ const uint32_t MY_NUM_QUEUES = 1;
 
 uint32_t server_addr_u32 = 0x0;
 uint32_t client_addr_u32 = 0x0;
-const uint16_t client_ports[8] = {40000, 40001, 40002, 40003,
+uint16_t const client_ports[8] = {40000, 40001, 40002, 40003,
                                   40004, 40005, 40006, 40007};
 
 // static char server_mac_str[] = "9c:dc:71:49:a8:81";
@@ -214,7 +214,8 @@ void socket_send(struct socket_t* socket, Packet** pkts, int queue_id) {
       socket->last_stall_time = now_us;
     } else if (now_us - socket->last_stall_time > RTO_US) {
       // These inflight packets get lost, we just ignore them
-      LOG(INFO) << "#queue " << queue_id << " tx stall detected, forcing tx...";
+      UCCL_LOG(INFO, DPDK) << "#queue " << queue_id
+                           << " tx stall detected, forcing tx...";
       inflight_pkts = 0;
     }
     return;
@@ -239,22 +240,22 @@ void socket_recv(struct socket_t* socket, Packet** pkts, int queue_id) {
   uint32_t rcvd = socket->dpdk_socket->recv_packets(pkts, MY_RECV_BATCH_SIZE);
 
   if (rcvd > 0)
-    LOG(INFO) << "rx rcvd = " << rcvd;
+    UCCL_LOG(INFO, DPDK) << "rx rcvd = " << rcvd;
   else
     return;
 
   for (uint32_t i = 0; i < rcvd; i++) {
     auto* pkt = pkts[i];
     if (pkt->length() < sizeof(Ethernet)) {
-      LOG(WARNING) << "received non-ethernet packet " << queue_id;
+      UCCL_LOG(WARNING, DPDK) << "received non-ethernet packet " << queue_id;
       socket->dpdk_socket->push_packet(pkt);
       continue;
     }
 
     Ethernet* eth = pkt->head_data<Ethernet*>();
     if (eth->eth_type.value() != Ethernet::kIpv4) [[unlikely]] {
-      LOG(WARNING) << "received non-ipv4 packet " << std::hex
-                   << eth->eth_type.value();
+      UCCL_LOG(WARNING, DPDK)
+          << "received non-ipv4 packet " << std::hex << eth->eth_type.value();
       socket->dpdk_socket->push_packet(pkt);
       continue;
     }
@@ -262,15 +263,15 @@ void socket_recv(struct socket_t* socket, Packet** pkts, int queue_id) {
     Ipv4* ipv4 = reinterpret_cast<Ipv4*>(eth + 1);
 
     if (pkt->length() != sizeof(Ethernet) + ipv4->total_length.value()) {
-      LOG(WARNING) << "IPv4 packet length mismatch (expected: "
-                   << ipv4->total_length.value()
-                   << ", actual: " << pkt->length() << ")";
+      UCCL_LOG(WARNING, DPDK)
+          << "IPv4 packet length mismatch (expected: "
+          << ipv4->total_length.value() << ", actual: " << pkt->length() << ")";
       socket->dpdk_socket->push_packet(pkt);
       continue;
     }
 
     if (ipv4->next_proto_id != Ipv4::Proto::kUdp) [[unlikely]] {
-      LOG(WARNING) << "received non-udp packet " << queue_id;
+      UCCL_LOG(WARNING, DPDK) << "received non-udp packet " << queue_id;
       socket->dpdk_socket->push_packet(pkt);
       continue;
     }
@@ -308,7 +309,7 @@ static void* send_thread(void* arg) {
 
   int queue_id = socket->dpdk_socket->get_queue_id();
 
-  printf("started socket send thread for queue #%d\n", queue_id);
+  UCCL_LOG(INFO, DPDK) << "started socket send thread for queue #" << queue_id;
 
   pin_thread_to_cpu(queue_id);
 
@@ -328,7 +329,7 @@ static void* recv_thread(void* arg) {
   struct socket_t* socket = (struct socket_t*)arg;
   int queue_id = socket->dpdk_socket->get_queue_id();
 
-  printf("started socket recv thread for queue #%d\n", queue_id);
+  UCCL_LOG(INFO, DPDK) << "started socket recv thread for queue #" << queue_id;
 
   pin_thread_to_cpu(MY_NUM_QUEUES + queue_id);
 
@@ -340,7 +341,7 @@ static void* recv_thread(void* arg) {
 
   delete[] pkts;
 
-  LOG(INFO) << "Stopped socket recv thread for queue #" << queue_id;
+  UCCL_LOG(INFO, DPDK) << "Stopped socket recv thread for queue #" << queue_id;
 
   return NULL;
 }
@@ -409,8 +410,8 @@ static void* stats_thread(void* arg) {
 // On client: GLOG_minloglevel=0 sudo ./uccl-util-dpdk-test --client
 
 int main(int argc, char* argv[]) {
-  google::InitGoogleLogging(argv[0]);
-  google::InstallFailureSignalHandler();
+  // google::InitGoogleLogging(argv[0]);
+  // google::InstallFailureSignalHandler();
   FLAGS_alsologtostderr = false;
 
   if (argc < 2) {
@@ -425,8 +426,10 @@ int main(int argc, char* argv[]) {
 
   client_addr_u32 = str_to_ip(client_ip_str);
   server_addr_u32 = str_to_ip(server_ip_str);
-  DCHECK(str_to_mac(client_mac_str, reinterpret_cast<char*>(client_mac_char)));
-  DCHECK(str_to_mac(server_mac_str, reinterpret_cast<char*>(server_mac_char)));
+  UCCL_DCHECK(
+      str_to_mac(client_mac_str, reinterpret_cast<char*>(client_mac_char)));
+  UCCL_DCHECK(
+      str_to_mac(server_mac_str, reinterpret_cast<char*>(server_mac_char)));
 
   Dpdk dpdk;
   dpdk.InitDpdk(1, argv);
@@ -435,18 +438,20 @@ int main(int argc, char* argv[]) {
 
   if (strcmp(argv[1], "--server") == 0) {
     is_client = false;
-    LOG(INFO) << "[server] " << server_mac_str << " " << server_ip_str;
+    UCCL_LOG(INFO, DPDK) << "[server] " << server_mac_str << " "
+                         << server_ip_str;
     client_port_id = dpdk.GetPmdPortIdByMac(server_mac_str);
   } else if (strcmp(argv[1], "--client") == 0) {
-    LOG(INFO) << "[client] " << client_mac_str << " " << client_ip_str;
+    UCCL_LOG(INFO, DPDK) << "[client] " << client_mac_str << " "
+                         << client_ip_str;
     client_port_id = dpdk.GetPmdPortIdByMac(client_mac_str);
   } else {
-    printf("Usage: %s --server | --client\n", argv[0]);
+    UCCL_LOG(INFO, DPDK) << "Usage: " << argv[0] << " --server | --client";
     return 1;
   }
 
   if (client_port_id == (uint16_t)-1) {
-    LOG(INFO) << "Client port not found";
+    UCCL_LOG(INFO, DPDK) << "Client port not found";
     return 1;
   }
 
@@ -458,7 +463,7 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  LOG(INFO) << "Started running";
+  UCCL_LOG(INFO, DPDK) << "Started running";
 
   while (!quit) {
     usleep(1000);
@@ -466,7 +471,7 @@ int main(int argc, char* argv[]) {
 
   cleanup();
 
-  printf("\n");
+  UCCL_LOG(INFO, DPDK) << "";
 
   return 0;
 }

@@ -10,7 +10,7 @@
 #include "dietgpu/ans/GpuANSUtils.cuh"
 #include "dietgpu/utils/StackDeviceMemory.h"
 
-#include <glog/logging.h>
+#include "util/debug.h"
 #include <cmath>
 #include <memory>
 #include <vector>

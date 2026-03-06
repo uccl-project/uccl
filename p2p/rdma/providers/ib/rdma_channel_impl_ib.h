@@ -1,7 +1,7 @@
 #pragma once
 #include "rdma/define.h"
 #include "rdma/rdma_channel_impl.h"
-#include <glog/logging.h>
+#include "util/debug.h"
 
 class IBChannelImpl : public RDMAChannelImpl {
  public:
