@@ -2,7 +2,7 @@
 
 UCCL P2P Engine is a high-performance, RDMA-based P2P transfer system designed for distributed machine learning and high-throughput data processing applications. It provides a Python API for seamless integration with PyTorch tensors, NumPy arrays, and other data structures while leveraging the performance of InfiniBand/RoCE RDMA for ultra-low latency communication.
 
-UCCL has an experimental GPU-driven P2P engine, see [ep](../ep/) folder.
+UCCL has an GPU-driven P2P engine, see [ep](../ep/) folder.
 
 ## Project Structure
 
@@ -19,6 +19,8 @@ p2p/
 
 ## Prerequisites
 
+Our Python extension uses [nanobind](https://github.com/wjakob/nanobind) for ABI-stable bindings (compatible across Python 3.12+ without recompilation). 
+
 The easiest way is to: 
 ```bash
 git clone https://github.com/uccl-project/uccl.git --recursive
@@ -31,7 +33,7 @@ Alternatively, you can setup your local dev environment by:
 
 ### System Requirements
 - Linux with RDMA support
-- Python 3.7+ with development headers
+- Python 3.12+ with development headers
 - C++17 compatible compiler
 - nanobind library
 - PyTorch (for tensor/array operations)
