@@ -36,6 +36,8 @@
 #define gpuFree cudaFree
 #define gpuFreeAsync cudaFreeAsync
 #define gpuFreeHost cudaFreeHost
+#define gpuMemcpyKind cudaMemcpyKind
+#define gpuMemcpyHostToHost cudaMemcpyHostToHost
 #define gpuMemcpyHostToDevice cudaMemcpyHostToDevice
 #define gpuMemcpyDeviceToHost cudaMemcpyDeviceToHost
 #define gpuMemcpy cudaMemcpy
