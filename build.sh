@@ -123,6 +123,10 @@ HOST_GLIBC_VER=$(python3 -c "import platform; print(platform.libc_ver()[1])")
 rm -r uccl.egg-info >/dev/null 2>&1 || true
 rm -r dist >/dev/null 2>&1 || true
 rm -r build >/dev/null 2>&1 || true
+rm collective/rdma/*.so >/dev/null 2>&1 || true
+rm collective/efa/*.so >/dev/null 2>&1 || true
+rm p2p/*.so >/dev/null 2>&1 || true
+rm ep/*.so >/dev/null 2>&1 || true
 WHEEL_DIR="wheelhouse-${TARGET}"
 rm -r "${WHEEL_DIR}" >/dev/null 2>&1 || true
 mkdir -p "${WHEEL_DIR}"
