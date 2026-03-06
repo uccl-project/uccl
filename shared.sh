@@ -110,7 +110,7 @@ build_p2p() {
       cd dietgpu/float
       CUDA_GPU_ARCH="sm_$(echo "${TORCH_CUDA_ARCH_LIST:-9.0}" | awk '{print $1}' | sed 's/+PTX//; s/\.//')"
       echo "Building dietgpu float for CUDA: $CUDA_GPU_ARCH"
-      make clean -f Makefile && make -j$(nproc) -f Makefile
+      make clean -f Makefile.cuda && make -j$(nproc) -f Makefile.cuda GPU_ARCH=$CUDA_GPU_ARCH
     else
       rm -rf build/
       python3 setup.py build
