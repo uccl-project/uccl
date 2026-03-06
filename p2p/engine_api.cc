@@ -226,6 +226,19 @@ NB_MODULE(p2p, m) {
           "Add remote endpoint - connect only once per remote endpoint.",
           nb::arg("metadata_bytes"))
       .def(
+          "remove_remote_endpoint",
+          [](Endpoint& self, uint64_t conn_id) {
+            bool success;
+            {
+              nb::gil_scoped_release release;
+              InsidePythonGuard guard;
+              success = self.remove_remote_endpoint(conn_id);
+            }
+            return success;
+          },
+          "Remove a remote endpoint previously added via add_remote_endpoint.",
+          nb::arg("conn_id"))
+      .def(
           "get_metadata",
           [](Endpoint& self) {
             std::vector<uint8_t> metadata = self.get_metadata();
@@ -352,10 +365,21 @@ NB_MODULE(p2p, m) {
                   auto addr_val = reinterpret_cast<uintptr_t>(ptrs[i]);
                   auto addr_aligned = addr_val & ~(kIpcAlign - 1);
                   ipc_info.offset = addr_val - addr_aligned;
-                  auto err = gpuIpcGetMemHandle(
-                      &ipc_info.handle, reinterpret_cast<void*>(addr_aligned));
-                  if (err != gpuSuccess) {
-                    throw std::runtime_error(gpuGetErrorString(err));
+                  bool is_host =
+                      (uccl::get_dev_idx(const_cast<void*>(ptrs[i])) == -1);
+                  ipc_info.is_host = is_host;
+                  if (!is_host) {
+                    auto err = gpuIpcGetMemHandle(
+                        &ipc_info.handle,
+                        reinterpret_cast<void*>(addr_aligned));
+                    if (err != gpuSuccess) {
+                      throw std::runtime_error(gpuGetErrorString(err));
+                    }
+                  } else {
+                    // For host memory, store the address in the handle field
+                    // The handle field is 64 bytes, enough to store a pointer
+                    std::memcpy(&ipc_info.handle, &addr_val, sizeof(addr_val));
+                    ipc_info.offset = 0;  // No alignment adjustment for host memory
                   }
                   xfer_desc.ipc_info.assign(
                       reinterpret_cast<char const*>(&ipc_info),
@@ -369,6 +393,26 @@ NB_MODULE(p2p, m) {
           "Register memory for a list of PyTorch tensors and return transfer "
           "descriptors",
           nb::arg("tensor_list"))
+      .def(
+          "deregister_memory",
+          [](Endpoint& self, nb::list desc_list) {
+            std::vector<uint64_t> mr_ids;
+            size_t list_len = nb::len(desc_list);
+            mr_ids.reserve(list_len);
+            for (size_t i = 0; i < list_len; ++i) {
+              auto const& desc = nb::cast<XferDesc const&>(desc_list[i]);
+              mr_ids.push_back(desc.mr_id);
+            }
+            {
+              nb::gil_scoped_release release;
+              InsidePythonGuard guard;
+              for (auto mr_id : mr_ids) {
+                self.dereg(mr_id);
+              }
+            }
+          },
+          "Deregister memory for a list of transfer descriptors",
+          nb::arg("desc_list"))
       .def(
           "get_serialized_descs",
           [](Endpoint& /*self*/, nb::list desc_list) {

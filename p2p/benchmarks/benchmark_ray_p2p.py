@@ -85,6 +85,7 @@ def _run_server(args, ep, peer_rank: int):
                 _send_bytes(remote_descs_serialized, dst=peer)
 
                 dist.barrier()
+                ep.deregister_memory(remote_descs)
         else:
             # Raw mode (default): register memory and send descriptors only once
             size_per_block = sz // args.num_iovs
@@ -100,6 +101,7 @@ def _run_server(args, ep, peer_rank: int):
 
             # Wait for all iterations to complete
             dist.barrier()
+            ep.deregister_memory(remote_descs)
 
         print(f"[Server] Completed {args.iters} iterations for size {_pretty(sz)}")
 
@@ -116,6 +118,7 @@ def _run_client(args, ep, peer_rank: int, mode: str):
     remote_metadata = _recv_bytes(src=peer)
     print(f"[Client] Exchanged metadata with server")
 
+    conn_id = None
     for sz in args.sizes:
         size_per_block = sz // args.num_iovs
 
@@ -141,6 +144,8 @@ def _run_client(args, ep, peer_rank: int, mode: str):
             while not is_done:
                 _, is_done = ep.poll_async(transfer_id)
             dist.barrier()
+            ep.deregister_memory(local_descs)
+            ep.remove_remote_endpoint(conn_id)
 
             # Benchmark iterations
             start = time.perf_counter()
@@ -169,6 +174,8 @@ def _run_client(args, ep, peer_rank: int, mode: str):
 
                 total += sz
                 dist.barrier()
+                ep.deregister_memory(local_descs)
+                ep.remove_remote_endpoint(conn_id)
 
             elapsed = time.perf_counter() - start
         else:
@@ -207,6 +214,7 @@ def _run_client(args, ep, peer_rank: int, mode: str):
 
             elapsed = time.perf_counter() - start
             dist.barrier()
+            ep.deregister_memory(local_descs)
 
         print(
             f"[Client/{mode.upper()}] {_pretty(sz):>8} : "
@@ -214,6 +222,11 @@ def _run_client(args, ep, peer_rank: int, mode: str):
             f"{total / elapsed / 1e9:6.2f} GB/s | "
             f"{elapsed / args.iters:6.6f} s"
         )
+
+    # Clean up connection once after all sizes (raw mode reuses it across sizes)
+    if not args.normal and conn_id is not None:
+        ep.remove_remote_endpoint(conn_id)
+
     print(f"[Client/{mode.upper()}] Benchmark complete")
 
 
@@ -265,6 +278,11 @@ def main():
     p.add_argument("--num-cpus", type=int, default=4)
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
     p.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Use CPU (pinned) memory for buffers (shorthand for --device cpu)",
+    )
+    p.add_argument(
         "--perf", action="store_true", help="Measure pure transfer performance"
     )
     p.add_argument(
@@ -297,6 +315,8 @@ def main():
         help="Number of iovs to transfer in a single call",
     )
     args = p.parse_args()
+    if args.cpu:
+        args.device = "cpu"
 
     print("UCCL Ray P2P Benchmark")
     print("=" * 60)
