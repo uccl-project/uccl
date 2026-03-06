@@ -204,7 +204,7 @@ class EpollClient {
         std::string conn_key = *conn_key_ptr;
 
         if ((ev.events & EPOLLERR) || (ev.events & EPOLLHUP)) {
-          UCCL_LOG(WARNING, RDMA) << "Error/HUP on connection: " << conn_key;
+          LOG(WARNING) << "Error/HUP on connection: " << conn_key;
           close_connection(conn_key);
           continue;
         }
@@ -283,9 +283,8 @@ class EpollClient {
             }
           } else {
             // No callback registered
-            UCCL_LOG(INFO, RDMA)
-                << "Received response (no callback): len=" << response.size()
-                << "\n";
+            LOG(INFO) << "Received response (no callback): len="
+                      << response.size() << "\n";
           }
           // Loop to see if more messages in buffer
         } else {

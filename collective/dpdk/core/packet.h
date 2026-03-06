@@ -3,7 +3,7 @@
 
 #include "ether.h"
 #include "ipv4.h"
-#include "util/debug.h"
+#include <glog/logging.h>
 #include <cstdint>
 #include <rte_mbuf.h>
 
@@ -188,7 +188,7 @@ class PacketBatch {
    * @return Packet at the given index.
    */
   Packet* operator[](uint16_t index) {
-    UCCL_DCHECK(index < cnt_);
+    DCHECK(index < cnt_);
     return pkts_[index];
   }
 
@@ -210,7 +210,7 @@ class PacketBatch {
    * @param incr Number of packets to increase.
    */
   void IncrCount(uint16_t incr) {
-    UCCL_DCHECK(incr <= GetRoom());
+    DCHECK(incr <= GetRoom());
     cnt_ += incr;
   }
 
@@ -220,7 +220,7 @@ class PacketBatch {
    * @attention This method does not check if the batch is full.
    */
   void Append(Packet* pkt) {
-    UCCL_DCHECK(!IsFull());
+    DCHECK(!IsFull());
     pkts_[cnt_++] = pkt;
   }
 
@@ -231,7 +231,7 @@ class PacketBatch {
    * @attention This method does not check if the batch is full.
    */
   void Append(Packet** pkts, uint16_t npkts) {
-    UCCL_DCHECK(npkts <= GetRoom());
+    DCHECK(npkts <= GetRoom());
     std::memcpy(&pkts_[cnt_], pkts, npkts * sizeof(Packet*));
     cnt_ += npkts;
   }

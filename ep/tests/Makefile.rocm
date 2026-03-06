@@ -9,7 +9,7 @@ CXX := g++
 
 # Flags
 INCLUDES := -I../include -I../../include -I$(HIP_HOME)/include -I$(EFA_HOME)/include -I${CONDA_LIB_HOME}/../include
-LDFLAGS := -L$(HIP_HOME)/lib64 -L$(EFA_HOME)/lib -lamdhip64 -libverbs -lpthread -L${CONDA_LIB_HOME}  -lgflags -lgtest -lz -lelf
+LDFLAGS := -L$(HIP_HOME)/lib64 -L$(EFA_HOME)/lib -lamdhip64 -libverbs -lpthread -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest -lz -lelf
 CXXFLAGS := -O3 -g -std=c++17 $(INCLUDES) -D__HIP_PLATFORM_AMD__
 HIPFLAGS := --offload-arch=gfx942 -D__HIP_PLATFORM_AMD__
 

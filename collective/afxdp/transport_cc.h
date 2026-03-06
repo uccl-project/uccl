@@ -3,7 +3,7 @@
 #include "tcp_cubic.h"
 #include "timely.h"
 #include "timing_wheel.h"
-#include "util/debug.h"
+#include <glog/logging.h>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -105,7 +105,7 @@ struct Pcb {
       // Shift the current each bucket to the left by 1 and take the most
       // significant bit from the next bucket
       uint64_t& sack_bitmap_left_bucket = sack_bitmap[i];
-      uint64_t const sack_bitmap_right_bucket = sack_bitmap[i + 1];
+      const uint64_t sack_bitmap_right_bucket = sack_bitmap[i + 1];
 
       sack_bitmap_left_bucket =
           (sack_bitmap_left_bucket >> 1) | (sack_bitmap_right_bucket << 63);
@@ -119,12 +119,11 @@ struct Pcb {
     sack_bitmap_count--;
   }
 
-  void sack_bitmap_bit_set(size_t const index) {
-    size_t const sack_bitmap_bucket_idx = index / kSackBitmapBucketSize;
-    size_t const sack_bitmap_idx_in_bucket = index % kSackBitmapBucketSize;
+  void sack_bitmap_bit_set(const size_t index) {
+    const size_t sack_bitmap_bucket_idx = index / kSackBitmapBucketSize;
+    const size_t sack_bitmap_idx_in_bucket = index % kSackBitmapBucketSize;
 
-    UCCL_LOG_IF(FATAL, AFXDP, index >= kSackBitmapSize)
-        << "Index out of bounds: " << index;
+    LOG_IF(FATAL, index >= kSackBitmapSize) << "Index out of bounds: " << index;
 
     sack_bitmap[sack_bitmap_bucket_idx] |= (1ULL << sack_bitmap_idx_in_bucket);
 
@@ -224,8 +223,8 @@ struct TimelyCtl {
     wheel_.ready_entries_ -= num_ready;
 
     if (unlikely(wheel_.ready_entries_ > 0)) {
-      UCCL_VLOG(3) << "[CC] TimingWheel ready queue not empty "
-                   << wheel_.ready_entries_;
+      VLOG(3) << "[CC] TimingWheel ready queue not empty "
+              << wheel_.ready_entries_;
 
       // Consuming the ready entries.
       while (wheel_.ready_queue_.size() > wheel_.ready_entries_) {
@@ -245,8 +244,8 @@ struct TimelyCtl {
       wheel_.ready_queue_.clear();
     }
 
-    UCCL_DCHECK_EQ(wheel_.ready_entries_, 0);
-    UCCL_DCHECK(wheel_.ready_queue_.empty());
+    DCHECK_EQ(wheel_.ready_entries_, 0);
+    DCHECK(wheel_.ready_queue_.empty());
 
     return num_ready;
   }
@@ -295,8 +294,8 @@ struct Pacer {
     wheel_.ready_entries_ -= num_ready;
 
     if (unlikely(wheel_.ready_entries_ > 0)) {
-      UCCL_VLOG(3) << "[CC] TimingWheel ready queue not empty "
-                   << wheel_.ready_entries_;
+      VLOG(3) << "[CC] TimingWheel ready queue not empty "
+              << wheel_.ready_entries_;
 
       // Consuming the ready entries.
       while (wheel_.ready_queue_.size() > wheel_.ready_entries_) {
@@ -316,8 +315,8 @@ struct Pacer {
       wheel_.ready_queue_.clear();
     }
 
-    UCCL_DCHECK_EQ(wheel_.ready_entries_, 0);
-    UCCL_DCHECK(wheel_.ready_queue_.empty());
+    DCHECK_EQ(wheel_.ready_entries_, 0);
+    DCHECK(wheel_.ready_queue_.empty());
 
     return num_ready;
   }

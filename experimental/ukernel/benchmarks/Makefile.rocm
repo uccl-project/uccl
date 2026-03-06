@@ -7,7 +7,7 @@ HIPCC      := $(HIP_HOME)/bin/hipcc
 # Compilation flags
 CXXFLAGS   := -O0 -std=c++17 -Wall -Wno-unused-function -pthread -fPIC -D__HIP_PLATFORM_AMD__ -I${CONDA_LIB_HOME}/../include -DENABLE_HIP
 HIPCCFLAGS := -g -O0 -std=c++17 -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942
-LDFLAGS    := -L${CONDA_LIB_HOME} -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread 
+LDFLAGS    := -L${CONDA_LIB_HOME} -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -lglog
 
 # Include directories
 INCLUDES := -I./ -I$(HIP_HOME)/include -I/usr/include

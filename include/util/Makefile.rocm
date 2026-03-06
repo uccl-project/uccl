@@ -5,7 +5,7 @@ HIP_HOME?=/opt/rocm
 CONDA_LIB_HOME?=/usr/lib
 
 INC = -I$(ABS_REPO_ROOT)/include -I$(HIP_HOME)/include -I${CONDA_LIB_HOME}/../include -L${CONDA_LIB_HOME}
-LIBS =  -lgflags -lz -lelf -libverbs -L $(HIP_HOME)/lib -lamdhip64 -lpthread
+LIBS = -lglog -lgflags -lz -lelf -libverbs -L $(HIP_HOME)/lib -lamdhip64 -lpthread
 override CXXFLAGS += -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC -D__HIP_PLATFORM_AMD__
 
 DEPS = *.h
