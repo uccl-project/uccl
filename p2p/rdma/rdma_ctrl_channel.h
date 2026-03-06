@@ -53,7 +53,7 @@ class SendControlChannel : public RDMAChannel {
     // req should already have local_mem set, just update remote_mem
     req->remote_mem = remote_mem;
     req->channel_id = meta.channel_id;
-    req->imm_data = index;
+    req->imm_data.set_index(index);
 
     // Log the received request with all information
     LOG(INFO) << "getOneSendRequest - Received request: " << *req;
@@ -69,7 +69,7 @@ class SendControlChannel : public RDMAChannel {
         LOG(INFO) << "SendControlChannel::noblockingPoll - Polled completion: "
                   << cq_data;
         if (cq_data.hasIMM()) {
-          rb_->modify_and_advance_write(cq_data.imm, check_in_progress,
+          rb_->modify_and_advance_write(cq_data.imm.index(), check_in_progress,
                                         set_in_progress);
         }
       }
@@ -146,16 +146,22 @@ class RecvControlChannel : public RDMAChannel {
     return index;
   }
 
-  void recv_done(uint64_t index) {
+  std::shared_ptr<SendReqMeta> recv_done(uint64_t index) {
     // Increment the received chunk count
     rb_->modify_at(index, increment_received_chunk);
 
     // Check if all chunks have been received
     if (rb_->check_at(index, check_all_chunks_received)) {
       // All chunks received, mark as done and remove completed items
+      auto req = std::make_shared<SendReqMeta>(rb_->at(index).meta);
+      LOG(INFO) << "recv_done - All chunks received for index: " << index
+                << ", marking as done.";
+
       rb_->modify_at(index, set_is_done);
       rb_->remove_while(check_is_done);
+      return req;
     }
+    return nullptr;
   }
 
   bool noblockingPoll() {
