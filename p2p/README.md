@@ -67,7 +67,16 @@ USE_EFA=1 bash build.sh cuda p2p --install
 make -j USE_EFA=1 install
 ```
 
-To build GCP TCPX support, you can refer to [NIXL_plugin_readme.md](./NIXL_plugin_readme.md). 
+To build GCP TCPX support, you can refer to [NIXL_plugin_readme.md](./NIXL_plugin_readme.md).
+
+To build with DietGPU float compression support, you can:
+```bash
+USE_DIETGPU=1 make -j install
+# or
+USE_DIETGPU=1 bash build.sh cuda p2p --install
+```
+
+DietGPU provides lossless GPU-side compression for float16/bfloat16/float32 tensors. It only activates for transfers larger than 2 MB. At runtime, control compression behavior via the `P2P_COMPRESS_STRATEGY` environment variable (see the environment variable table below).
 
 ## Performance Benchmarks
 
@@ -101,6 +110,18 @@ Notes:
 | UCCL_P2P_RDMA_GID_INDEX | GID index in RDMA network | 0/3 (EFA/IB) |
 | UCCL_P2P_RDMA_SL | Service level in RDMA network | 8/3 (EFA/IB) |
 | UCCL_P2P_RDMA_TC | Traffic class in RDMA network | 104 (IB) |
+| P2P_COMPRESS_STRATEGY | DietGPU compression strategy (requires `USE_DIETGPU=1` build) | none |
+
+`P2P_COMPRESS_STRATEGY` accepted values:
+* `none` / `off` / `0` — no compression
+* `split` / `split_only` — pipelined: transfer the uncompressed portion of the float data immediately, then ANS-encode and transfer the remainder
+* `encode` / `split_encode` / `full` / `1` — blocking: ANS-encode all float data first, then transfer everything once encoding is complete
+
+Example:
+```bash
+P2P_COMPRESS_STRATEGY=encode torchrun --nnodes=2 --nproc_per_node=1 \
+    --node-rank=0 --master_addr=<IP addr> benchmarks/benchmark_uccl.py
+```
 
 ### Running NCCL
 

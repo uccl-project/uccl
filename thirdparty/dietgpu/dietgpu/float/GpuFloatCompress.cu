@@ -158,4 +158,138 @@ void floatCompressSplitSize(
       stream);
 }
 
-} // namespace dietgpu
+
+void floatCompressSplitOneBatch(dietgpu::StackDeviceMemory& res,
+                                dietgpu::FloatCompressConfig const& config,
+                                cudaStream_t stream,
+                                FloatCompressSplitContext& ctx) {
+  assert(ctx.params_dev.data() != nullptr);
+  assert(ctx.maxSize > 0);
+
+  // ---- unpack params ----
+  auto in_dev = reinterpret_cast<void const**>(ctx.params_dev.data() + 0);
+  auto inSize_dev =
+      reinterpret_cast<uint32_t const*>(ctx.params_dev.data() + 1);
+  auto out_dev = reinterpret_cast<void**>(ctx.params_dev.data() + 2);
+
+  auto inProvider = BatchProviderPointer((void**)in_dev, inSize_dev);
+  auto outProvider = BatchProviderPointer(out_dev);
+
+  // ---- allocate split temporaries (stored as RAII in ctx) ----
+  ctx.compRowStride = roundUp(ctx.maxSize, sizeof(uint4));
+
+  ctx.toComp_dev = res.alloc<uint8_t>(stream, ctx.compRowStride);
+
+  ctx.histogram_dev = res.alloc<uint32_t>(stream, kNumSymbols);
+
+  CUDA_VERIFY(cudaMemsetAsync(ctx.histogram_dev.data(), 0,
+                              sizeof(uint32_t) * kNumSymbols, stream));
+
+  // ---- run split kernel ----
+  runSplitFloat<BatchProviderPointer, BatchProviderPointer>(
+      config.floatType,
+      1,  // numInBatch == 1
+      inProvider, config.useChecksum,
+      nullptr,  // checksum not allowed in float mode
+      ctx.toComp_dev.data(), ctx.compRowStride, outProvider,
+      ctx.histogram_dev.data(), stream);
+
+  // ---- explicit sync: split is complete on return ----
+  CUDA_VERIFY(cudaStreamSynchronize(stream));
+}
+
+void floatCompressEncodeOneBatch(dietgpu::StackDeviceMemory& res,
+                                 dietgpu::FloatCompressConfig const& config,
+                                 FloatCompressSplitContext& ctx,
+                                 uint32_t* outSize_dev, cudaStream_t stream) {
+  assert(ctx.params_dev.data() != nullptr);
+  assert(ctx.toComp_dev.data() != nullptr);
+  assert(ctx.histogram_dev.data() != nullptr);
+  assert(ctx.maxSize > 0);
+
+  // ---- unpack params ----
+  auto in_dev = reinterpret_cast<void const**>(ctx.params_dev.data() + 0);
+  auto inSize_dev =
+      reinterpret_cast<uint32_t const*>(ctx.params_dev.data() + 1);
+  auto out_dev = reinterpret_cast<void**>(ctx.params_dev.data() + 2);
+
+  auto inProvider = BatchProviderPointer((void**)in_dev, inSize_dev);
+  auto outProvider = BatchProviderPointer(out_dev);
+
+  auto inProviderANS = FloatANSInProvider<BatchProviderPointer>(
+      ctx.toComp_dev.data(), ctx.compRowStride, inProvider);
+
+  // ---- ANS encode ----
+  switch (config.floatType) {
+    case FloatType::kFloat16: {
+      auto outProviderANS =
+          FloatANSOutProvider<FloatType::kFloat16, BatchProviderPointer,
+                              BatchProviderPointer>(outProvider, inProvider);
+
+      runANSEncodeForType<FloatType::kFloat16>(
+          res, config.ansConfig, 1, inProvider, inProviderANS,
+          ctx.histogram_dev.data(), ctx.maxSize, outProviderANS, outSize_dev,
+          stream);
+      break;
+    }
+
+    case FloatType::kBFloat16: {
+      auto outProviderANS =
+          FloatANSOutProvider<FloatType::kBFloat16, BatchProviderPointer,
+                              BatchProviderPointer>(outProvider, inProvider);
+
+      runANSEncodeForType<FloatType::kBFloat16>(
+          res, config.ansConfig, 1, inProvider, inProviderANS,
+          ctx.histogram_dev.data(), ctx.maxSize, outProviderANS, outSize_dev,
+          stream);
+      break;
+    }
+
+    case FloatType::kFloat32: {
+      auto outProviderANS =
+          FloatANSOutProvider<FloatType::kFloat32, BatchProviderPointer,
+                              BatchProviderPointer>(outProvider, inProvider);
+
+      runANSEncodeForType<FloatType::kFloat32>(
+          res, config.ansConfig, 1, inProvider, inProviderANS,
+          ctx.histogram_dev.data(), ctx.maxSize, outProviderANS, outSize_dev,
+          stream);
+      break;
+    }
+
+    default:
+      assert(false);
+  }
+  CUDA_VERIFY(cudaStreamSynchronize(stream));
+}
+
+inline size_t getElementCountFromBytes(FloatType ft, size_t bytes) {
+  const size_t wordSize = getWordSizeFromFloatType(ft);
+
+  CHECK(bytes % wordSize == 0)
+      << "Bytes (" << bytes << ") not aligned with FloatType word size ("
+      << wordSize << ")";
+
+  return bytes / wordSize;
+}
+
+uint32_t getUncompDataSizeFromByteSize(FloatType floatType, uint32_t datasize) {
+  uint32_t numFloats =
+      static_cast<uint32_t>(getElementCountFromBytes(floatType, datasize));
+  switch (floatType) {
+    case FloatType::kFloat16: {
+      return FloatTypeInfo<FloatType::kFloat16>::getUncompDataSize(numFloats);
+      break;
+    }
+    case FloatType::kBFloat16: {
+      return FloatTypeInfo<FloatType::kBFloat16>::getUncompDataSize(numFloats);
+      break;
+    }
+    case FloatType::kFloat32: {
+      return FloatTypeInfo<FloatType::kFloat32>::getUncompDataSize(numFloats);
+      break;
+    }
+  }
+  return 0;
+}
+}  // namespace dietgpu

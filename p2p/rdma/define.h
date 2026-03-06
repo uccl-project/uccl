@@ -1,5 +1,6 @@
 #pragma once
 #include "common.h"
+#include "util/gpu_rt.h"
 #include "util/util.h"
 #include <arpa/inet.h>
 #include <glog/logging.h>
@@ -36,6 +37,113 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+namespace uccl {
+enum class FloatType : uint32_t {
+  kUndefined = 0,
+  kFloat16 = 1,
+  kBFloat16 = 2,
+  kFloat32 = 3,
+};
+}
+
+#if defined USE_DIETGPU
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIP_PLATFORM_NVIDIA__) || \
+    defined(__HIPCC__)
+#include "dietgpu/float/GpuFloatCodec_hip.h"
+#include "dietgpu/utils/DeviceUtils_hip.h"
+#include "dietgpu/utils/StackDeviceMemory_hip.h"
+#include <hip/hip_fp16.h>
+#else
+#include "dietgpu/float/GpuFloatCodec.h"
+#include "dietgpu/utils/DeviceUtils.h"
+#include "dietgpu/utils/StackDeviceMemory.h"
+#include <cuda_fp16.h>
+#endif
+
+inline dietgpu::FloatType to_dietgpu(uccl::FloatType t) {
+  switch (t) {
+    case uccl::FloatType::kFloat16:
+      return dietgpu::FloatType::kFloat16;
+    case uccl::FloatType::kBFloat16:
+      return dietgpu::FloatType::kBFloat16;
+    case uccl::FloatType::kFloat32:
+      return dietgpu::FloatType::kFloat32;
+    case uccl::FloatType::kUndefined:
+    default:
+      return dietgpu::FloatType::kUndefined;
+  }
+}
+
+inline uccl::FloatType from_dietgpu(dietgpu::FloatType t) {
+  switch (t) {
+    case dietgpu::FloatType::kFloat16:
+      return uccl::FloatType::kFloat16;
+    case dietgpu::FloatType::kBFloat16:
+      return uccl::FloatType::kBFloat16;
+    case dietgpu::FloatType::kFloat32:
+      return uccl::FloatType::kFloat32;
+    default:
+      return uccl::FloatType::kUndefined;
+  }
+}
+
+/**
+ * @brief Wrapper around dietgpu::FloatCompressSplitContext that exposes a
+ * uccl::FloatType-based constructor and getFloatType() accessor, hiding the
+ * internal dietgpu::FloatType from external callers.
+ */
+struct FloatCompressCtx : public dietgpu::FloatCompressSplitContext {
+  FloatCompressCtx() = default;
+  explicit FloatCompressCtx(uccl::FloatType ft)
+      : dietgpu::FloatCompressSplitContext(to_dietgpu(ft)) {}
+
+  uccl::FloatType getFloatType() const { return from_dietgpu(float_type); }
+};
+
+using CompressCtx = std::shared_ptr<FloatCompressCtx>;
+
+inline CompressCtx makeCompressCtx(uccl::FloatType ft) {
+  return std::make_shared<FloatCompressCtx>(ft);
+}
+
+#else
+
+/**
+ * @brief Dummy device allocation that mimics dietgpu's
+ * StackDeviceMemory::Reservation. Provides a no-op release() method for
+ * compatibility.
+ */
+struct DummyDevAlloc {
+  void release() {}
+  void* data() { return nullptr; }
+};
+
+/**
+ * @brief Dummy compression context that mirrors the interface of
+ * dietgpu::FloatCompressSplitContext. This allows code to compile
+ * without #ifdef guards scattered throughout.
+ */
+struct DummyCompressCtx {
+  uccl::FloatType float_type = uccl::FloatType::kUndefined;
+  size_t maxSize = 0;
+  DummyDevAlloc params_dev;
+  DummyDevAlloc histogram_dev;
+  DummyDevAlloc toComp_dev;
+
+  DummyCompressCtx() = default;
+  explicit DummyCompressCtx(uccl::FloatType ft) : float_type(ft), maxSize(0) {}
+
+  uccl::FloatType getFloatType() const { return float_type; }
+};
+
+using CompressCtx = std::shared_ptr<DummyCompressCtx>;
+
+inline CompressCtx makeCompressCtx(uccl::FloatType ft) {
+  return std::make_shared<DummyCompressCtx>(ft);
+}
+
+#endif
+
 static constexpr int kNumEngines = 4;
 static constexpr int kNumGpuRtStreams = 4;
 
@@ -51,8 +159,6 @@ static constexpr int kMaxSendWr = 1024;
 static constexpr int kMaxRecvWr = 1024;
 static constexpr int kMaxSendSeg = 2;
 static constexpr int kMaxRecvSeg = 2;
-static constexpr uint64_t kMessageChunkSizeKB = 256;  // 1 MB
-static constexpr uint64_t kMaxSplitNum = 16;
 static constexpr uint32_t kBatchPostRecvWr = 32;
 static constexpr uint32_t kBatchPollCqe = 32;
 
@@ -61,6 +167,9 @@ static constexpr size_t kRingCapacity = 16384;  // Must be power of 2
 
 static constexpr size_t kInFlightMaxSizeKB =
     10240000;  // Max in-flight packets per channel
+
+constexpr size_t kMinCompressBytes = 2 * 1024 * 1024;      // 1MB
+constexpr size_t kCompressBufferSize = 400 * 1024 * 1024;  // 400MB
 
 static constexpr uint32_t INVALID_RANK_ID =
     std::numeric_limits<uint32_t>::max();
@@ -126,6 +235,70 @@ struct ContextArrayT {
 using RKeyArray = ContextArrayT<uint32_t>;
 using MRArray = ContextArrayT<struct ibv_mr*>;
 
+// ImmData class: encapsulates immediate data with chunk_count (high 16 bits)
+// and index (low 16 bits)
+class ImmData {
+ public:
+  // Default constructor
+  constexpr ImmData() : data_(0) {}
+
+  // Constructor from raw uint32_t value
+  constexpr ImmData(uint32_t raw) : data_(raw) {}
+  constexpr ImmData(int raw) : data_(raw) {}
+  // Constructor from chunk_count and index
+  constexpr ImmData(uint16_t chunk_count, uint16_t index)
+      : data_((static_cast<uint32_t>(chunk_count) << 16) | index) {}
+
+  // Get chunk_count (high 16 bits)
+  constexpr uint16_t chunk_count() const {
+    return static_cast<uint16_t>(data_ >> 16);
+  }
+
+  // Get index (low 16 bits)
+  constexpr uint16_t index() const {
+    return static_cast<uint16_t>(data_ & 0xFFFF);
+  }
+
+  // Set chunk_count (preserves index)
+  void set_chunk_count(uint16_t chunk_count) {
+    data_ = (static_cast<uint32_t>(chunk_count) << 16) | (data_ & 0xFFFF);
+  }
+
+  // Set index (preserves chunk_count)
+  void set_index(uint16_t index) { data_ = (data_ & 0xFFFF0000) | index; }
+
+  // Implicit conversion to uint32_t for compatibility
+  constexpr operator uint32_t() const { return data_; }
+
+  // Assignment from uint32_t
+  ImmData& operator=(uint32_t raw) {
+    data_ = raw;
+    return *this;
+  }
+
+  // Get raw value
+  constexpr uint32_t raw() const { return data_; }
+
+  // Comparison operators
+  constexpr bool operator==(ImmData const& other) const {
+    return data_ == other.data_;
+  }
+  constexpr bool operator!=(ImmData const& other) const {
+    return data_ != other.data_;
+  }
+  constexpr bool operator==(uint32_t other) const { return data_ == other; }
+  constexpr bool operator!=(uint32_t other) const { return data_ != other; }
+
+  friend std::ostream& operator<<(std::ostream& os, ImmData const& imm) {
+    os << "ImmData{raw: " << imm.data_ << ", chunk_count: " << imm.chunk_count()
+       << ", index: " << imm.index() << "}";
+    return os;
+  }
+
+ private:
+  uint32_t data_;
+};
+
 struct MessageChunk {
   uint64_t offset;  // Offset from the start of the message
   size_t size;      // Size of this chunk in bytes
@@ -139,31 +312,42 @@ struct MessageChunk {
   }
 };
 
-inline size_t getMessageChunkCount(size_t message_size) {
-  constexpr size_t chunk_size_bytes = kMessageChunkSizeKB * 1024;
-  if (message_size == 0) return 0;
-  size_t chunk_count = (message_size + chunk_size_bytes - 1) / chunk_size_bytes;
-  return std::min(chunk_count, static_cast<size_t>(kMaxSplitNum));
-}
+struct ChunkSplitStrategy {
+  static constexpr uint64_t kMessageChunkSizeKB = 512;
+  static constexpr uint64_t kMaxSplitNum = 16;
 
-inline std::vector<MessageChunk> splitMessageToChunks(size_t message_size) {
-  constexpr size_t chunk_size_bytes = kMessageChunkSizeKB * 1024;
-  size_t chunk_count = getMessageChunkCount(message_size);
-
-  std::vector<MessageChunk> chunks;
-  chunks.reserve(chunk_count);
-
-  // Calculate actual chunk size based on the limited chunk count
-  size_t actual_chunk_size = (message_size + chunk_count - 1) / chunk_count;
-
-  for (size_t i = 0; i < chunk_count; ++i) {
-    uint64_t offset = i * actual_chunk_size;
-    size_t size = std::min(actual_chunk_size, message_size - offset);
-    chunks.emplace_back(offset, size);
+  static size_t getMessageChunkCount(size_t message_size) {
+    constexpr size_t chunk_size_bytes = kMessageChunkSizeKB * 1024;
+    if (message_size == 0) return 0;
+    size_t chunk_count =
+        (message_size + chunk_size_bytes - 1) / chunk_size_bytes;
+    return std::min(chunk_count, static_cast<size_t>(kMaxSplitNum));
   }
 
-  return chunks;
-}
+  static std::vector<MessageChunk> splitMessageToChunks(size_t message_size) {
+    size_t chunk_count = getMessageChunkCount(message_size);
+    std::vector<MessageChunk> chunks;
+    chunks.reserve(chunk_count);
+    size_t actual_chunk_size = getRegularChunkSize(message_size, chunk_count);
+    for (size_t i = 0; i < chunk_count; ++i) {
+      uint64_t offset = i * actual_chunk_size;
+      size_t size = std::min(actual_chunk_size, message_size - offset);
+      chunks.emplace_back(offset, size);
+    }
+    return chunks;
+  }
+
+  // Given message_size and chunk_count, return the uniform chunk size used for
+  // all but the (potentially smaller) last chunk.
+  static size_t getRegularChunkSize(size_t message_size, size_t chunk_count) {
+    if (chunk_count == 0 || message_size == 0) return 0;
+    return (message_size + chunk_count - 1) / chunk_count;
+  }
+};
+
+static_assert(
+    kMinCompressBytes > 4 * ChunkSplitStrategy::kMessageChunkSizeKB,
+    "kMinCompressBytes must be > 4 * ChunkSplitStrategy::kMessageChunkSizeKB");
 
 #define LOG_EVERY_N_ENDPOINT(severity, freq)             \
   static std::atomic<int> LOG_OCCURRENCES_##__LINE__(0); \
@@ -233,7 +417,7 @@ struct CQMeta {
   uint64_t wr_id;
   ibv_wc_opcode op_code;
   uint32_t len;
-  int imm;
+  ImmData imm;
   inline bool hasIMM() const { return op_code == IBV_WC_RECV_RDMA_WITH_IMM; };
 
   friend std::ostream& operator<<(std::ostream& os, CQMeta const& meta) {
@@ -251,6 +435,7 @@ typedef struct RegMemBlock {
   MemoryType type;
   MRArray mr_array;  // Array of MR pointers for multiple contexts
 
+  RegMemBlock() : addr(nullptr), size(0), type(MemoryType::HOST) {}
   RegMemBlock(void* a, size_t s, MemoryType t) : addr(a), size(s), type(t) {}
 
   RegMemBlock(void* a, size_t s, MRArray const& mr_array_in, MemoryType t)
@@ -359,6 +544,8 @@ typedef struct RDMARecvRequest {
   uint32_t channel_id;
   int64_t wr_id;
   std::shared_ptr<RegMemBlock> local_mem;
+  std::shared_ptr<RegMemBlock> local_compression_mem;
+  CompressCtx compress_ctx;
 
   // Constructor
   RDMARecvRequest(std::shared_ptr<RegMemBlock> local) : local_mem(local) {}
@@ -396,6 +583,8 @@ struct alignas(64) SendReqMeta {
   uint32_t rank_id;
   uint32_t channel_id;
   RemoteMemInfo remote_mem;
+  RegMemBlock local_mem;
+  uccl::FloatType float_type = uccl::FloatType::kUndefined;
   uint32_t expected_chunk_count;  // Expected number of chunks to receive
   uint32_t received_chunk_count;  // Number of chunks already received
 
@@ -418,7 +607,12 @@ struct alignas(64) SendReqMeta {
     rank_id = rev_req->from_rank_id;
     channel_id = rev_req->channel_id;
     remote_mem = rev_req->local_mem;
-    expected_chunk_count = getMessageChunkCount(rev_req->local_mem->size);
+    local_mem =
+        *(rev_req->local_compression_mem ? rev_req->local_compression_mem
+                                         : rev_req->local_mem);
+    float_type = rev_req->compress_ctx->getFloatType();
+    expected_chunk_count =
+        ChunkSplitStrategy::getMessageChunkCount(local_mem.size);
     received_chunk_count = 0;
   }
 
@@ -514,15 +708,16 @@ struct RDMASendRequest {
   uint32_t from_rank_id;
   uint32_t to_rank_id;
   uint32_t channel_id;
-  uint32_t imm_data;  // immediate data
+  ImmData imm_data = 0;  // immediate data with chunk_count (high 16 bits) and
+                         // index (low 16 bits)
   int64_t wr_id;
   bool need_signaled;  // Whether to use IBV_SEND_SIGNALED flag
   SendType send_type = SendType::Send;
-
+  CompressCtx compress_ctx;
   // Constructor
   RDMASendRequest(std::shared_ptr<RegMemBlock> local,
-                  std::shared_ptr<RemoteMemInfo> remote, uint32_t imm = 0,
-                  bool signaled = true)
+                  std::shared_ptr<RemoteMemInfo> remote,
+                  ImmData imm = ImmData(), bool signaled = true)
       : local_mem(local),
         remote_mem(remote),
         imm_data(imm),
@@ -530,7 +725,7 @@ struct RDMASendRequest {
 
   // Constructor from shared_ptr<RDMASendRequest>
   RDMASendRequest(std::shared_ptr<RDMASendRequest> other,
-                  std::shared_ptr<RegMemBlock> local, uint32_t imm = 0,
+                  std::shared_ptr<RegMemBlock> local, ImmData imm = ImmData(),
                   bool signaled = true)
       : local_mem(local),
         remote_mem(other->remote_mem),
@@ -539,7 +734,7 @@ struct RDMASendRequest {
 
   // Constructor from const RDMASendRequest&
   RDMASendRequest(RDMASendRequest const& other,
-                  std::shared_ptr<RegMemBlock> local, uint32_t imm = 0,
+                  std::shared_ptr<RegMemBlock> local, ImmData imm = ImmData(),
                   bool signaled = true)
       : local_mem(local),
         remote_mem(other.remote_mem),
@@ -561,7 +756,7 @@ struct RDMASendRequest {
 
   inline uint64_t getRemoteAddress() const { return remote_mem->addr; }
 
-  inline uint32_t getImm() const { return imm_data; }
+  inline ImmData getImm() const { return imm_data; }
 
   inline uint32_t getLocalLen() const { return local_mem->size; }
 
@@ -709,3 +904,38 @@ struct hash<RegMemBlock> {
 };
 
 }  // namespace std
+
+enum class CompressStrategy {
+  kNone,         // no compression
+  kSplitOnly,    // only split, no encode
+  kSplitEncode,  // split + encode (default)
+};
+
+inline CompressStrategy getCompressStrategyFromEnv() {
+  char const* env = std::getenv("P2P_COMPRESS_STRATEGY");
+
+  // default strategy
+  if (!env || env[0] == '\0') {
+    return CompressStrategy::kNone;
+  }
+
+  std::string s(env);
+  std::transform(s.begin(), s.end(), s.begin(), ::tolower);
+
+  // ---- accepted values ----
+  if (s == "none" || s == "off" || s == "0") {
+    return CompressStrategy::kNone;
+  }
+
+  if (s == "split" || s == "split_only") {
+    return CompressStrategy::kSplitOnly;
+  }
+
+  if (s == "encode" || s == "split_encode" || s == "full" || s == "1") {
+    return CompressStrategy::kSplitEncode;
+  }
+
+  // ---- fallback ----
+  // unknown value -> default
+  return CompressStrategy::kSplitEncode;
+}

@@ -8,6 +8,9 @@ USE_EFA ?= $(shell echo $${USE_EFA:-0})
 # TCP endpoint integration
 USE_TCP ?= $(shell echo $${USE_TCP:-0})
 
+# DietGPU optional integration
+USE_DIETGPU ?= $(shell echo $${USE_DIETGPU:-0})
+
 # Compiler and flags
 CUDA_HOME ?= /usr/local/cuda
 CUDA_INC  := $(CUDA_HOME)/include
@@ -41,6 +44,24 @@ ifeq ($(USE_TCP),1)
 	CXXFLAGS += -DUCCL_P2P_USE_NCCL
 endif
 
+# ---------------- DietGPU ----------------
+DIETGPU_ROOT      := ../thirdparty/dietgpu
+DIETGPU_FLOAT_DIR := $(DIETGPU_ROOT)/dietgpu/float
+DIETGPU_LIB       := $(DIETGPU_FLOAT_DIR)/libdietgpu_float.so
+
+ifeq ($(USE_DIETGPU),1)
+	DIETGPU_INC  := -I$(DIETGPU_ROOT)
+	DIETGPU_LIBS := -L$(DIETGPU_FLOAT_DIR) -ldietgpu_float \
+	                -Wl,-rpath,$(abspath $(DIETGPU_FLOAT_DIR)) \
+	                -Wl,-rpath,'$$ORIGIN/lib'
+	CXXFLAGS += -DUSE_DIETGPU
+else
+	DIETGPU_INC  :=
+	DIETGPU_LIBS :=
+endif
+
+CXXFLAGS += $(DIETGPU_INC)
+
 # Python and nanobind configuration (stable ABI)
 PYTHON          ?= python3
 PYTHON_CONFIG    = $(PYTHON)-config
@@ -63,7 +84,7 @@ PREFIX ?= /usr/local
 LIBDIR ?= $(PREFIX)/lib
 INCDIR ?= $(PREFIX)/include
 
-LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LIBS2)
+LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LIBS2) $(DIETGPU_LIBS)
 
 ifeq ($(USE_TCP),1)
 NCCL_HOME ?= ../thirdparty/nccl/build
