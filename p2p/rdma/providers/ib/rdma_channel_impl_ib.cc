@@ -2,7 +2,7 @@
 #define RDMA_CHANNEL_IMPL_IB_CC_INCLUDED
 
 #include "rdma_channel_impl_ib.h"
-#include "util/debug.h"
+#include <glog/logging.h>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -109,7 +109,7 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
     attr.ah_attr.static_rate = 0;
     memset(&attr.ah_attr.grh, 0, sizeof(attr.ah_attr.grh));
   } else {
-    UCCL_LOG(ERROR, P2P) << "Unknown link layer: " << port_attr.link_layer;
+    LOG(ERROR) << "Unknown link layer: " << port_attr.link_layer;
     throw std::runtime_error("Unknown link layer");
   }
 
@@ -138,8 +138,7 @@ inline bool IBChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
                                      uint32_t& nb_post_recv) {
   nb_post_recv = 0;
   if (!cq_ex) {
-    UCCL_LOG(INFO, P2P) << "poll_once - channel_id: " << channel_id
-                        << ", cq_ex_ is null";
+    LOG(INFO) << "poll_once - channel_id: " << channel_id << ", cq_ex_ is null";
     return false;
   }
 
@@ -156,10 +155,9 @@ inline bool IBChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
     uint64_t wr_id = wc->wr_id;
     auto status = wc->status;
     if (unlikely(status != IBV_WC_SUCCESS)) {
-      UCCL_LOG(WARNING, P2P)
-          << "poll_once - channel_id: " << channel_id
-          << ", CQE error, wr_id=" << wr_id << ", status=" << status << " ("
-          << ibv_wc_status_str(status) << ")";
+      LOG(WARNING) << "poll_once - channel_id: " << channel_id
+                   << ", CQE error, wr_id=" << wr_id << ", status=" << status
+                   << " (" << ibv_wc_status_str(status) << ")";
     } else {
       CQMeta cq_data{};
       cq_data.wr_id = wr_id;

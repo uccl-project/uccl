@@ -12,7 +12,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential cmake git ninja-build g++ make patchelf \
         rdma-core libibverbs-dev libnuma-dev \
-        libgflags-dev libgtest-dev libelf-dev \
+        libgoogle-glog-dev libgflags-dev libgtest-dev libelf-dev \
         pkg-config zlib1g-dev curl unzip \
         software-properties-common \
         hipcub && \

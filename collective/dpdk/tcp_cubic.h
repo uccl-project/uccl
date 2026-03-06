@@ -1,5 +1,5 @@
-#include "util/debug.h"
 #include "util/timer.h"
+#include <glog/logging.h>
 #include <chrono>
 #include <cmath>
 #include <iostream>
@@ -52,8 +52,8 @@ struct CubicCC {
     cwnd = std::min(cwnd, max_cwnd);  // Cap cwnd at max_cwnd
 
     last_update_time = now;
-    UCCL_VLOG(3) << "ACK received: distance=" << distance << ", cwnd=" << cwnd
-                 << ", ssthresh=" << ssthresh << std::endl;
+    VLOG(3) << "ACK received: distance=" << distance << ", cwnd=" << cwnd
+            << ", ssthresh=" << ssthresh << std::endl;
   }
 
   inline void on_packet_loss() {
@@ -66,8 +66,8 @@ struct CubicCC {
                  last_max_cwnd *
                      (1 - beta));  // Avoid cwnd falling below a minimum of 1.0
     epoch_start = 0;
-    UCCL_VLOG(3) << "Packet loss detected: cwnd=" << cwnd
-                 << ", ssthresh=" << ssthresh << std::endl;
+    VLOG(3) << "Packet loss detected: cwnd=" << cwnd
+            << ", ssthresh=" << ssthresh << std::endl;
   }
 
   inline double get_cwnd() const { return cwnd; }

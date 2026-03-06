@@ -127,7 +127,7 @@ class TimingWheel {
 
     bkt_pool_buf_ = new uint8_t[sizeof(wheel_bkt_t) * kBktPoolSize];
     for (size_t i = 0; i < kBktPoolSize; i++) {
-      UCCL_CHECK(bkt_pool_.push_front((wheel_bkt_t*)bkt_pool_buf_ + i));
+      CHECK(bkt_pool_.push_front((wheel_bkt_t*)bkt_pool_buf_ + i));
     }
   }
 
@@ -174,8 +174,8 @@ class TimingWheel {
    */
   inline void insert(wheel_ent_t const& ent, size_t ref_tsc,
                      size_t desired_tx_tsc) {
-    UCCL_CHECK(desired_tx_tsc >= ref_tsc);
-    UCCL_CHECK(desired_tx_tsc - ref_tsc <= horizon_tsc_)
+    CHECK(desired_tx_tsc >= ref_tsc);
+    CHECK(desired_tx_tsc - ref_tsc <= horizon_tsc_)
         << desired_tx_tsc - ref_tsc << " vs "
         << horizon_tsc_;  // Horizon definition
 
@@ -188,7 +188,7 @@ class TimingWheel {
     } else {
       size_t wslot_delta =
           1 + (desired_tx_tsc - wheel_[cur_wslot_].tx_tsc_) / wslot_width_tsc_;
-      UCCL_CHECK(wslot_delta < kWheelNumWslots)
+      CHECK(wslot_delta < kWheelNumWslots)
           << wslot_delta << " vs " << kWheelNumWslots;
 
       dst_wslot = cur_wslot_ + wslot_delta;
@@ -233,7 +233,7 @@ class TimingWheel {
       wheel_bkt_t* tmp_next = bkt->next_;
 
       reset_bkt(bkt);
-      if (bkt != &wheel_[ws_i]) UCCL_CHECK(bkt_pool_.push_front(bkt));
+      if (bkt != &wheel_[ws_i]) CHECK(bkt_pool_.push_front(bkt));
       bkt = tmp_next;
     }
 
@@ -247,7 +247,7 @@ class TimingWheel {
 
   wheel_bkt_t* alloc_bkt() {
     wheel_bkt_t* bkt;
-    UCCL_CHECK(bkt_pool_.pop_front(&bkt));  // Exception if allocation fails
+    CHECK(bkt_pool_.pop_front(&bkt));  // Exception if allocation fails
     reset_bkt(bkt);
     return bkt;
   }

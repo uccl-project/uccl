@@ -10,7 +10,7 @@
 #include <cuda_runtime.h>
 #include <dietgpu/utils/DeviceUtils.h>
 #include <dietgpu/utils/StaticUtils.h>
-#include "util/debug.h"
+#include <glog/logging.h>
 #include <list>
 #include <memory>
 #include <unordered_map>

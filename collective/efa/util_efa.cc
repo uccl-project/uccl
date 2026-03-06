@@ -65,7 +65,7 @@ static void init_device_name_lists() {
         }
         if (ok && name) {
           g_efa_device_names.push_back(name);
-          UCCL_LOG(INFO, EFA) << "Discovered EFA device " << name;
+          LOG(INFO) << "Discovered EFA device " << name;
         }
       }
       ibv_free_device_list(list);
@@ -81,7 +81,7 @@ static void init_device_name_lists() {
           if (std::find(g_ena_device_names.begin(), g_ena_device_names.end(),
                         ifa->ifa_name) == g_ena_device_names.end()) {
             g_ena_device_names.push_back(ifa->ifa_name);
-            UCCL_LOG(INFO, EFA) << "Discovered ENA device " << ifa->ifa_name;
+            LOG(INFO) << "Discovered ENA device " << ifa->ifa_name;
           }
         }
       }
@@ -90,15 +90,13 @@ static void init_device_name_lists() {
   }
 
   if (g_efa_device_names.empty()) {
-    UCCL_LOG(ERROR, EFA)
-        << "No EFA devices discovered via environment variables or "
-           "hardware enumeration";
+    LOG(ERROR) << "No EFA devices discovered via environment variables or "
+                  "hardware enumeration";
   }
 
   if (g_ena_device_names.empty()) {
-    UCCL_LOG(ERROR, EFA)
-        << "No ENA devices discovered via environment variables or "
-           "hardware enumeration";
+    LOG(ERROR) << "No ENA devices discovered via environment variables or "
+                  "hardware enumeration";
   }
 }
 
@@ -122,20 +120,19 @@ uint8_t GetActualNumDevices() {
   if (!efa.empty()) actual = std::min(actual, static_cast<uint8_t>(efa.size()));
   if (!ena.empty()) actual = std::min(actual, static_cast<uint8_t>(ena.size()));
   if (efa.size() > NUM_DEVICES || ena.size() > NUM_DEVICES) {
-    UCCL_LOG(WARNING) << "GetActualNumDevices: more devices discovered than "
-                      << "NUM_DEVICES=" << (int)NUM_DEVICES
-                      << " (EFA=" << efa.size() << ", ENA=" << ena.size()
-                      << "). Capping to " << (int)actual
-                      << " to avoid fixed-size array overflow.";
+    LOG(WARNING) << "GetActualNumDevices: more devices discovered than "
+                 << "NUM_DEVICES=" << (int)NUM_DEVICES << " (EFA=" << efa.size()
+                 << ", ENA=" << ena.size() << "). Capping to " << (int)actual
+                 << " to avoid fixed-size array overflow.";
   }
   return actual;
 }
 
 void EFAFactory::Init(int gpu) {
   auto num_devs = GetActualNumDevices();
-  UCCL_LOG(INFO) << "EFAFactory::Init(gpu=" << gpu
-                 << ") NUM_DEVICES=" << (int)NUM_DEVICES
-                 << " actual=" << (int)num_devs;
+  LOG(INFO) << "EFAFactory::Init(gpu=" << gpu
+            << ") NUM_DEVICES=" << (int)NUM_DEVICES
+            << " actual=" << (int)num_devs;
   for (int i = 0; i < num_devs; i++) {
     EFAFactory::InitDev(gpu + i);
   }
@@ -143,8 +140,8 @@ void EFAFactory::Init(int gpu) {
 
 void EFAFactory::Init() {
   auto num_devs = GetActualNumDevices();
-  UCCL_LOG(INFO) << "EFAFactory::Init() NUM_DEVICES=" << (int)NUM_DEVICES
-                 << " actual=" << (int)num_devs;
+  LOG(INFO) << "EFAFactory::Init() NUM_DEVICES=" << (int)NUM_DEVICES
+            << " actual=" << (int)num_devs;
   for (int i = 0; i < num_devs; i++) {
     EFAFactory::InitDev(i);
   }
@@ -159,13 +156,13 @@ void EFAFactory::InitDev(int dev_idx) {
   int i, nb_devices;
 
   // Check if the device is already initialized.
-  UCCL_CHECK(efa_ctl.dev_map.find(dev_idx) == efa_ctl.dev_map.end());
+  CHECK(efa_ctl.dev_map.find(dev_idx) == efa_ctl.dev_map.end());
 
   // Get Infiniband name from dev_idx.
-  UCCL_CHECK(util_efa_get_ib_name_from_dev_idx(dev_idx, dev->ib_name) == 0);
+  CHECK(util_efa_get_ib_name_from_dev_idx(dev_idx, dev->ib_name) == 0);
 
   // Get IP address from dev_idx.
-  UCCL_CHECK(util_efa_get_ip_from_dev_idx(dev_idx, &dev->local_ip_str) == 0);
+  CHECK(util_efa_get_ip_from_dev_idx(dev_idx, &dev->local_ip_str) == 0);
 
   // Get the list of RDMA devices.
   device_list = ibv_get_device_list(&nb_devices);
@@ -184,9 +181,9 @@ void EFAFactory::InitDev(int dev_idx) {
     fprintf(stderr, "No device found for %s\n", dev->ib_name);
     goto free_devices;
   }
-  // UCCL_DCHECK(i == (dev_idx / 2));
-  UCCL_LOG(INFO, EFA) << "Found device: " << dev->ib_name << " at dev_idx " << i
-                      << " with gid_idx " << (uint32_t)EFA_GID_IDX;
+  // DCHECK(i == (dev_idx / 2));
+  LOG(INFO) << "Found device: " << dev->ib_name << " at dev_idx " << i
+            << " with gid_idx " << (uint32_t)EFA_GID_IDX;
 
   // Open the device.
   memset(&dev_attr, 0, sizeof(dev_attr));
@@ -263,7 +260,7 @@ void EFAFactory::InitDev(int dev_idx) {
         !((errno == EOPNOTSUPP) || (errno == EPROTONOSUPPORT));
     ibv_dealloc_pd(pd);
 
-    UCCL_VLOG(5) << "DMA-BUF support: " << dev->dma_buf_support;
+    VLOG(5) << "DMA-BUF support: " << dev->dma_buf_support;
   }
 
   // Detect hardware timestamp support.
@@ -280,9 +277,9 @@ void EFAFactory::InitDev(int dev_idx) {
 
     auto send_cq_ex_ = ibv_create_cq_ex(context, &cq_ex_attr);
     if (send_cq_ex_ == nullptr) {
-      UCCL_VLOG(5) << "HW timestamp not supported";
+      VLOG(5) << "HW timestamp not supported";
     } else {
-      UCCL_VLOG(5) << "HW timestamp supported";
+      VLOG(5) << "HW timestamp supported";
       ibv_destroy_cq(ibv_cq_ex_to_cq(send_cq_ex_));
     }
   }
@@ -329,10 +326,10 @@ struct EFADevice* EFAFactory::GetEFADevice(int dev_idx) {
     char hostname[256];
     gethostname(hostname, sizeof(hostname));
     oss << "(host: " << hostname << ")";
-    UCCL_LOG(ERROR, EFA) << oss.str();
+    LOG(ERROR) << oss.str();
   }
 
-  UCCL_DCHECK(dev_iter != efa_ctl.dev_map.end());
+  DCHECK(dev_iter != efa_ctl.dev_map.end());
   auto* dev = dev_iter->second;
   return dev;
 }
@@ -349,8 +346,8 @@ void EFAFactory::Shutdown() {
 
 EFASocket::EFASocket(int gpu_idx, int dev_idx, int socket_idx)
     : gpu_idx_(gpu_idx), dev_idx_(dev_idx), socket_idx_(socket_idx) {
-  UCCL_LOG(INFO, EFA) << "[EFA] creating gpu_idx " << gpu_idx << " dev_idx_ "
-                      << dev_idx_ << " socket_idx " << socket_idx;
+  LOG(INFO) << "[EFA] creating gpu_idx " << gpu_idx << " dev_idx_ " << dev_idx_
+            << " socket_idx " << socket_idx;
 
   memset(deficit_cnt_recv_wrs_, 0, sizeof(deficit_cnt_recv_wrs_));
   memset(deficit_cnt_recv_wrs_for_ctrl_, 0,
@@ -365,19 +362,19 @@ EFASocket::EFASocket(int gpu_idx, int dev_idx, int socket_idx)
   void* pkt_hdr_buf_ =
       mmap(nullptr, PktHdrBuffPool::kNumPktHdr * PktHdrBuffPool::kPktHdrSize,
            PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  UCCL_DCHECK(pkt_hdr_buf_ != nullptr) << "aligned_alloc failed";
+  DCHECK(pkt_hdr_buf_ != nullptr) << "aligned_alloc failed";
   auto* pkt_hdr_mr_ =
       ibv_reg_mr(pd_, pkt_hdr_buf_,
                  PktHdrBuffPool::kNumPktHdr * PktHdrBuffPool::kPktHdrSize,
                  IBV_ACCESS_LOCAL_WRITE);
-  UCCL_DCHECK(pkt_hdr_mr_ != nullptr) << "ibv_reg_mr failed";
+  DCHECK(pkt_hdr_mr_ != nullptr) << "ibv_reg_mr failed";
   pkt_hdr_pool_ = new PktHdrBuffPool(pkt_hdr_mr_);
 
   auto old_gpu_idx = 0;
   auto ret = cudaGetDevice(&old_gpu_idx);
-  UCCL_CHECK(ret == cudaSuccess) << "cudaGetDevice failed ";
+  CHECK(ret == cudaSuccess) << "cudaGetDevice failed ";
   ret = cudaSetDevice(gpu_idx);
-  UCCL_CHECK(ret == cudaSuccess) << "cudaSetDevice failed ";
+  CHECK(ret == cudaSuccess) << "cudaSetDevice failed ";
 
   // Allocate memory for packet data.
   void* pkt_data_buf_ = nullptr;
@@ -391,16 +388,16 @@ EFASocket::EFASocket(int gpu_idx, int dev_idx, int socket_idx)
       &pkt_data_buf_,
       PktDataBuffPool::kNumPktData * PktDataBuffPool::kPktDataSize,
       cudaMemAttachGlobal);
-  UCCL_DCHECK(cuda_ret == cudaSuccess) << "cudaMallocManaged failed";
+  DCHECK(cuda_ret == cudaSuccess) << "cudaMallocManaged failed";
 #else
   auto cuda_ret = cudaMalloc(&pkt_data_buf_, PktDataBuffPool::kNumPktData *
                                                  PktDataBuffPool::kPktDataSize);
-  UCCL_DCHECK(cuda_ret == cudaSuccess) << "cudaMalloc failed";
+  DCHECK(cuda_ret == cudaSuccess) << "cudaMalloc failed";
 #endif
-  UCCL_LOG(INFO, EFA) << "[EFA] gpu_idx " << gpu_idx << " pkt_data_buf_ "
-                      << std::hex << pkt_data_buf_ << " to "
-                      << pkt_data_buf_ + PktDataBuffPool::kNumPktData *
-                                             PktDataBuffPool::kPktDataSize;
+  LOG(INFO) << "[EFA] gpu_idx " << gpu_idx << " pkt_data_buf_ " << std::hex
+            << pkt_data_buf_ << " to "
+            << pkt_data_buf_ +
+                   PktDataBuffPool::kNumPktData * PktDataBuffPool::kPktDataSize;
 #ifdef MANAGED
   auto* pkt_data_mr_ =
       ibv_reg_mr(pd_, pkt_data_buf_,
@@ -413,7 +410,7 @@ EFASocket::EFASocket(int gpu_idx, int dev_idx, int socket_idx)
                  PktDataBuffPool::kNumPktData * PktDataBuffPool::kPktDataSize,
                  IBV_ACCESS_LOCAL_WRITE);
 #endif
-  UCCL_DCHECK(pkt_data_mr_ != nullptr) << "ibv_reg_mr failed";
+  DCHECK(pkt_data_mr_ != nullptr) << "ibv_reg_mr failed";
   pkt_data_pool_ = new PktDataBuffPool(pkt_data_mr_);
 
   // Allocate memory for frame desc.
@@ -422,7 +419,7 @@ EFASocket::EFASocket(int gpu_idx, int dev_idx, int socket_idx)
   // Create completion queue.
   send_cq_ = ibv_create_cq(context_, kMaxCqeTotal, NULL, NULL, 0);
   recv_cq_ = ibv_create_cq(context_, kMaxCqeTotal, NULL, NULL, 0);
-  UCCL_DCHECK(send_cq_ && recv_cq_) << "Failed to allocate send/recv_cq_";
+  DCHECK(send_cq_ && recv_cq_) << "Failed to allocate send/recv_cq_";
 
   auto create_qp_func = &EFASocket::create_qp;
 #ifdef USE_SRD
@@ -438,7 +435,7 @@ EFASocket::EFASocket(int gpu_idx, int dev_idx, int socket_idx)
 
   // Create QP for ACK packets.
   ctrl_cq_ = ibv_create_cq(context_, kMaxCqeTotal, NULL, NULL, 0);
-  UCCL_DCHECK(ctrl_cq_) << "Failed to allocate ctrl CQ";
+  DCHECK(ctrl_cq_) << "Failed to allocate ctrl CQ";
 
 #ifdef USE_SRD_FOR_CTRL
   create_qp_func = &EFASocket::create_srd_qp;
@@ -450,7 +447,7 @@ EFASocket::EFASocket(int gpu_idx, int dev_idx, int socket_idx)
   }
 
   ret = cudaSetDevice(old_gpu_idx);
-  UCCL_CHECK(ret == cudaSuccess) << "cudaSetDevice failed ";
+  CHECK(ret == cudaSuccess) << "cudaSetDevice failed ";
 }
 
 // Create and configure a UD QP
@@ -569,7 +566,7 @@ uint32_t EFASocket::post_send_wr(FrameDesc* frame, uint16_t src_qp_idx) {
               get_pkt_hdr_lkey()};
     send_wr.num_sge = 1;
 
-    UCCL_DCHECK(frame->get_src_qp_idx() == UINT16_MAX);
+    DCHECK(frame->get_src_qp_idx() == UINT16_MAX);
     frame->set_src_qp_idx(src_qp_idx);
     src_qp = ctrl_qp_list_[src_qp_idx];
 
@@ -582,7 +579,7 @@ uint32_t EFASocket::post_send_wr(FrameDesc* frame, uint16_t src_qp_idx) {
               frame->get_pkt_data_lkey_tx()};
     send_wr.num_sge = 2;
 
-    UCCL_DCHECK(frame->get_src_qp_idx() == UINT16_MAX);
+    DCHECK(frame->get_src_qp_idx() == UINT16_MAX);
     frame->set_src_qp_idx(src_qp_idx);
     src_qp = qp_list_[src_qp_idx];
 
@@ -617,9 +614,9 @@ uint32_t EFASocket::post_send_wrs(std::vector<FrameDesc*>& frames,
   for (auto* frame : frames) {
     auto dest_ah = frame->get_dest_ah();
     auto dest_qpn = frame->get_dest_qpn();
-    UCCL_DCHECK(frame->get_src_qp_idx() == UINT16_MAX);
+    DCHECK(frame->get_src_qp_idx() == UINT16_MAX);
     frame->set_src_qp_idx(src_qp_idx);
-    UCCL_VLOG(3) << "post_send_wrs i " << i << " src_qp_idx " << src_qp_idx;
+    VLOG(3) << "post_send_wrs i " << i << " src_qp_idx " << src_qp_idx;
 
     auto* sge = send_sge_vec_[i % kMaxChainedWr];
     auto* wr = &send_wr_vec_[i % kMaxChainedWr];
@@ -645,11 +642,11 @@ uint32_t EFASocket::post_send_wrs(std::vector<FrameDesc*>& frames,
     if (is_last) {
       struct ibv_send_wr* bad_send_wr;
       if (ibv_post_send(qp_list_[src_qp_idx], wr_head, &bad_send_wr)) {
-        UCCL_CHECK(false)
-            << "[util_efa]: Failed to post send wrs send_queue_wrs_ "
-            << send_queue_wrs_ << " send_queue_wrs_per_qp_[src_qp_idx] "
-            << send_queue_wrs_per_qp_[src_qp_idx] << " frames.size() "
-            << frames.size();
+        CHECK(false) << "[util_efa]: Failed to post send wrs send_queue_wrs_ "
+                     << send_queue_wrs_
+                     << " send_queue_wrs_per_qp_[src_qp_idx] "
+                     << send_queue_wrs_per_qp_[src_qp_idx] << " frames.size() "
+                     << frames.size();
       }
       if (i + 1 != frames.size()) {
         wr_head = &send_wr_vec_[(i + 1) % kMaxChainedWr];
@@ -675,8 +672,8 @@ uint32_t EFASocket::post_send_wrs_for_ctrl(std::vector<FrameDesc*>& frames,
   for (auto* frame : frames) {
     auto dest_ah = frame->get_dest_ah();
     auto dest_qpn = frame->get_dest_qpn();
-    UCCL_DCHECK(frame->get_pkt_data_len() == 0);
-    UCCL_DCHECK(frame->get_src_qp_idx() == UINT16_MAX);
+    DCHECK(frame->get_pkt_data_len() == 0);
+    DCHECK(frame->get_src_qp_idx() == UINT16_MAX);
     frame->set_src_qp_idx(src_qp_idx);  // indicating ctrl qp
 
     auto* sge = send_sge_vec_[i % kMaxChainedWr];
@@ -701,9 +698,9 @@ uint32_t EFASocket::post_send_wrs_for_ctrl(std::vector<FrameDesc*>& frames,
     if (is_last) {
       struct ibv_send_wr* bad_send_wr;
       if (ibv_post_send(ctrl_qp_list_[src_qp_idx], wr_head, &bad_send_wr)) {
-        UCCL_CHECK(false) << "[util_efa]: Failed to post send wrs for ctrl "
-                             "ctrl_send_queue_wrs_ "
-                          << ctrl_send_queue_wrs_;
+        CHECK(false) << "[util_efa]: Failed to post send wrs for ctrl "
+                        "ctrl_send_queue_wrs_ "
+                     << ctrl_send_queue_wrs_;
       }
       if (i + 1 != frames.size()) {
         wr_head = &send_wr_vec_[(i + 1) % kMaxChainedWr];
@@ -721,7 +718,7 @@ uint32_t EFASocket::post_send_wrs_for_ctrl(std::vector<FrameDesc*>& frames,
 }
 
 void EFASocket::post_recv_wrs(uint32_t budget, uint16_t qp_idx) {
-  UCCL_DCHECK(qp_idx < kMaxSrcDstQP);
+  DCHECK(qp_idx < kMaxSrcDstQP);
   auto& deficit_cnt = deficit_cnt_recv_wrs_[qp_idx];
   deficit_cnt += budget;
   if (deficit_cnt < kMaxRecvWrDeficit) return;
@@ -735,9 +732,9 @@ void EFASocket::post_recv_wrs(uint32_t budget, uint16_t qp_idx) {
     ret = pkt_hdr_pool_->alloc_buff(&pkt_hdr_buf);
     ret |= pkt_data_pool_->alloc_buff(&pkt_data_buf);
     ret |= frame_desc_pool_->alloc_buff(&frame_desc_buf);
-    UCCL_DCHECK(ret == 0) << pkt_hdr_pool_->avail_slots() << " "
-                          << pkt_data_pool_->avail_slots() << " "
-                          << frame_desc_pool_->avail_slots();
+    DCHECK(ret == 0) << pkt_hdr_pool_->avail_slots() << " "
+                     << pkt_data_pool_->avail_slots() << " "
+                     << frame_desc_pool_->avail_slots();
 
     auto* frame_desc = FrameDesc::Create(
         frame_desc_buf, pkt_hdr_buf, EFA_UD_ADDITION + kUcclPktHdrLen,
@@ -780,7 +777,7 @@ void EFASocket::post_recv_wrs(uint32_t budget, uint16_t qp_idx) {
 void EFASocket::post_recv_wrs_for_ctrl(uint32_t budget, uint16_t qp_idx) {
   auto& deficit_cnt = deficit_cnt_recv_wrs_for_ctrl_[qp_idx];
   deficit_cnt += budget;
-  UCCL_VLOG(3) << "deficit_cnt_recv_wrs_for_ctrl_ deficit_cnt " << deficit_cnt;
+  VLOG(3) << "deficit_cnt_recv_wrs_for_ctrl_ deficit_cnt " << deficit_cnt;
   if (deficit_cnt < kMaxRecvWrDeficit) return;
 
   int ret;
@@ -791,7 +788,7 @@ void EFASocket::post_recv_wrs_for_ctrl(uint32_t budget, uint16_t qp_idx) {
   for (int i = 0; i < deficit_cnt; i++) {
     ret = pkt_hdr_pool_->alloc_buff(&pkt_hdr_buf);
     ret |= frame_desc_pool_->alloc_buff(&frame_desc_buf);
-    UCCL_DCHECK(ret == 0);
+    DCHECK(ret == 0);
 
     auto* frame_desc = FrameDesc::Create(
         frame_desc_buf, pkt_hdr_buf,
@@ -834,16 +831,16 @@ void EFASocket::poll_send_cq() {
 
   // We give a higher budget to poll_send_cq because its work is very light.
   int ne = ibv_poll_cq(send_cq_, 1.25 * kMaxPollBatch, wc_);
-  UCCL_DCHECK(ne >= 0) << "poll_send_cq ibv_poll_cq error";
+  DCHECK(ne >= 0) << "poll_send_cq ibv_poll_cq error";
 
   auto now = rdtsc();
   for (int i = 0; i < ne; i++) {
     // Check the completion status.
-    UCCL_DCHECK(wc_[i].status == IBV_WC_SUCCESS)
+    DCHECK(wc_[i].status == IBV_WC_SUCCESS)
         << "poll_send_cq: completion error: "
         << ibv_wc_status_str(wc_[i].status);
 
-    UCCL_DCHECK(wc_[i].opcode == IBV_WC_SEND);
+    DCHECK(wc_[i].opcode == IBV_WC_SEND);
 
     auto* frame = (FrameDesc*)wc_[i].wr_id;
     auto src_qp_idx = frame->get_src_qp_idx();
@@ -863,15 +860,15 @@ std::vector<FrameDesc*> EFASocket::poll_send_cq(uint32_t budget) {
   while (frames.size() < budget) {
     auto now = rdtsc();
     int ne = ibv_poll_cq(send_cq_, kMaxPollBatch, wc_);
-    UCCL_DCHECK(ne >= 0) << "poll_send_cq ibv_poll_cq error";
+    DCHECK(ne >= 0) << "poll_send_cq ibv_poll_cq error";
 
     for (int i = 0; i < ne; i++) {
       // Check the completion status.
-      UCCL_DCHECK(wc_[i].status == IBV_WC_SUCCESS)
+      DCHECK(wc_[i].status == IBV_WC_SUCCESS)
           << "poll_send_cq: completion error: "
           << ibv_wc_status_str(wc_[i].status);
 
-      UCCL_DCHECK(wc_[i].opcode == IBV_WC_SEND);
+      DCHECK(wc_[i].opcode == IBV_WC_SEND);
 
       auto* frame = (FrameDesc*)wc_[i].wr_id;
       auto src_qp_idx = frame->get_src_qp_idx();
@@ -895,15 +892,15 @@ std::vector<FrameDesc*> EFASocket::poll_recv_cq(uint32_t budget) {
   while (frames.size() < budget) {
     auto now = rdtsc();
     int ne = ibv_poll_cq(recv_cq_, kMaxPollBatch, wc_);
-    UCCL_DCHECK(ne >= 0) << "poll_recv_cq ibv_poll_cq error";
+    DCHECK(ne >= 0) << "poll_recv_cq ibv_poll_cq error";
 
     for (int i = 0; i < ne; i++) {
       // Check the completion status.
-      UCCL_DCHECK(wc_[i].status == IBV_WC_SUCCESS)
+      DCHECK(wc_[i].status == IBV_WC_SUCCESS)
           << "poll_recv_cq: completion error: "
           << ibv_wc_status_str(wc_[i].status);
 
-      UCCL_DCHECK(wc_[i].opcode == IBV_WC_RECV);
+      DCHECK(wc_[i].opcode == IBV_WC_RECV);
 
       auto* frame = (FrameDesc*)wc_[i].wr_id;
       frame->set_cpe_time_tsc(now);
@@ -932,11 +929,11 @@ std::tuple<std::vector<FrameDesc*>, uint32_t> EFASocket::poll_ctrl_cq(
   while (recv_frames.size() + polled_send_acks < budget) {
     auto now = rdtsc();
     int ne = ibv_poll_cq(ctrl_cq_, kMaxPollBatch, wc_);
-    UCCL_DCHECK(ne >= 0) << "recv_acks ibv_poll_cq error";
+    DCHECK(ne >= 0) << "recv_acks ibv_poll_cq error";
 
     for (int i = 0; i < ne; i++) {
       // Check the completion status.
-      UCCL_DCHECK(wc_[i].status == IBV_WC_SUCCESS)
+      DCHECK(wc_[i].status == IBV_WC_SUCCESS)
           << "recv_acks: completion error: "
           << ibv_wc_status_str(wc_[i].status);
 
@@ -961,7 +958,7 @@ std::tuple<std::vector<FrameDesc*>, uint32_t> EFASocket::poll_ctrl_cq(
         polled_send_acks++;
         ctrl_send_queue_wrs_--;
       } else {
-        UCCL_CHECK(false) << "Wrong wc_[i].opcode: " << wc_[i].opcode;
+        CHECK(false) << "Wrong wc_[i].opcode: " << wc_[i].opcode;
       }
     }
 

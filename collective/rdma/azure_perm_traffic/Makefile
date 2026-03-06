@@ -4,7 +4,7 @@ TARGET = permutation_traffic
 
 SRC = permutation_traffic.cc
 
-LDLIBS = -L/usr/lib/x86_64-linux-gnu/openmpi/lib -L/usr/local/cuda/lib64 -lmpi_cxx -lmpi -lcudart  -lgflags -lgtest -lz -lelf -libverbs
+LDLIBS = -L/usr/lib/x86_64-linux-gnu/openmpi/lib -L/usr/local/cuda/lib64 -lmpi_cxx -lmpi -lcudart -lglog -lgflags -lgtest -lz -lelf -libverbs
 
 CFLAGS = -I../ -I/usr/lib/x86_64-linux-gnu/openmpi/include -I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi -O3 -g -std=c++17 -Wno-pointer-arith -Wno-interference-size -fPIC
 

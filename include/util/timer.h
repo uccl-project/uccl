@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "util/debug.h"
+#include "glog/logging.h"
 #include <chrono>
 #include <stdint.h>
 #include <stdlib.h>
@@ -78,12 +78,11 @@ static double measure_rdtsc_freq() {
   for (uint64_t i = 0; i < 1000000; i++) {
     sum += i + (sum + i) * (i % sum);
   }
-  UCCL_CHECK(sum == 13580802877818827968ull)
-      << "Error in RDTSC freq measurement";
+  CHECK(sum == 13580802877818827968ull) << "Error in RDTSC freq measurement";
 
   const uint64_t rdtsc_cycles = rdtsc() - rdtsc_start;
   double const freq_ghz = rdtsc_cycles * 1.0 / chrono_timer.get_ns();
-  UCCL_CHECK(freq_ghz >= 0.5 && freq_ghz <= 5.0) << "Invalid RDTSC frequency";
+  CHECK(freq_ghz >= 0.5 && freq_ghz <= 5.0) << "Invalid RDTSC frequency";
 
   return freq_ghz;
 }

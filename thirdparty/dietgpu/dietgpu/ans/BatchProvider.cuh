@@ -8,7 +8,7 @@
 #pragma once
 
 #include <cuda.h>
-#include "util/debug.h"
+#include <glog/logging.h>
 #include "dietgpu/ans/GpuANSUtils.cuh"
 
 namespace dietgpu {

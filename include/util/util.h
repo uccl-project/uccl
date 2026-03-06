@@ -2,10 +2,10 @@
 #ifdef USE_CUDA
 #include "cuda_runtime.h"
 #endif
-#include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
 #include <arpa/inet.h>
+#include <glog/logging.h>
 #include <infiniband/verbs.h>
 #include <linux/in.h>
 #include <linux/tcp.h>
@@ -42,12 +42,12 @@
 
 namespace uccl {
 
-#define UCCL_LOG_RE UCCL_VLOG(1) << "[Resource] "
-#define UCCL_LOG_PLUGIN UCCL_VLOG(1) << "[Plugin] "
-#define UCCL_LOG_EP UCCL_VLOG(2) << "[Endpoint] "
-#define UCCL_LOG_ENGINE UCCL_VLOG(3) << "[Engine] "
-#define UCCL_LOG_IO UCCL_VLOG(4) << "[IO] "
-#define UCCL_LOG_ERROR UCCL_LOG(ERROR, UTIL) << "[Error] "
+#define UCCL_LOG_RE VLOG(1) << "[Resource] "
+#define UCCL_LOG_PLUGIN VLOG(1) << "[Plugin] "
+#define UCCL_LOG_EP VLOG(2) << "[Endpoint] "
+#define UCCL_LOG_ENGINE VLOG(3) << "[Engine] "
+#define UCCL_LOG_IO VLOG(4) << "[IO] "
+#define UCCL_LOG_ERROR LOG(ERROR) << "[Error] "
 
 #define POISON_64 UINT64_MAX
 #define POISON_32 UINT32_MAX
@@ -76,7 +76,7 @@ inline int receive_message(int sockfd, void* buffer, size_t n_bytes) {
     r = read(sockfd, static_cast<char*>(buffer) + bytes_read,
              static_cast<size_t>(n_bytes - bytes_read));
     if (r < 0 && !(errno == EINTR)) {
-      UCCL_CHECK(false) << "ERROR reading from socket";
+      CHECK(false) << "ERROR reading from socket";
     }
     if (r > 0) {
       bytes_read += r;
@@ -93,7 +93,7 @@ inline int send_message(int sockfd, void const* buffer, size_t n_bytes) {
     r = write(sockfd, static_cast<char const*>(buffer) + bytes_sent,
               n_bytes - bytes_sent);
     if (r < 0 && !(errno == EINTR)) {
-      UCCL_CHECK(false) << "ERROR writing to socket";
+      CHECK(false) << "ERROR writing to socket";
     }
     if (r > 0) {
       bytes_sent += r;
@@ -109,7 +109,7 @@ inline int receive_message_nonblock(int sockfd, void* buffer, size_t n_bytes) {
     r = read(sockfd, static_cast<char*>(buffer) + bytes_read,
              static_cast<size_t>(n_bytes - bytes_read));
     if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
-      UCCL_CHECK(false) << "ERROR reading from socket";
+      CHECK(false) << "ERROR reading from socket";
     }
     if (r > 0) {
       bytes_read += r;
@@ -127,7 +127,7 @@ inline int send_message_nonblock(int sockfd, void const* buffer,
     r = write(sockfd, static_cast<char const*>(buffer) + bytes_sent,
               n_bytes - bytes_sent);
     if (r < 0 && !(errno == EAGAIN || errno == EWOULDBLOCK)) {
-      UCCL_CHECK(false) << "ERROR writing to socket";
+      CHECK(false) << "ERROR writing to socket";
     }
     if (r > 0) {
       bytes_sent += r;
@@ -139,25 +139,25 @@ inline int send_message_nonblock(int sockfd, void const* buffer,
 inline void send_ready(int bootstrap_fd) {
   bool ready = true;
   int ret = send_message(bootstrap_fd, &ready, sizeof(bool));
-  UCCL_DCHECK(ret == sizeof(bool)) << ret;
+  DCHECK(ret == sizeof(bool)) << ret;
 }
 
 inline void send_abort(int bootstrap_fd) {
   bool ready = false;
   int ret = send_message(bootstrap_fd, &ready, sizeof(bool));
-  UCCL_DCHECK(ret == sizeof(bool)) << ret;
+  DCHECK(ret == sizeof(bool)) << ret;
 }
 
 inline void wait_ready(int bootstrap_fd) {
   bool ready;
   int ret = receive_message(bootstrap_fd, &ready, sizeof(bool));
-  UCCL_DCHECK(ret == sizeof(bool) && ready == true) << ret << ", " << ready;
+  DCHECK(ret == sizeof(bool) && ready == true) << ret << ", " << ready;
 }
 
 inline bool wait_sync(int bootstrap_fd) {
   bool ready;
   int ret = receive_message(bootstrap_fd, &ready, sizeof(bool));
-  UCCL_DCHECK(ret == sizeof(bool)) << ret;
+  DCHECK(ret == sizeof(bool)) << ret;
   return ready;
 }
 
@@ -165,36 +165,35 @@ inline void net_barrier(int bootstrap_fd) {
   bool sync = true;
   int ret = send_message(bootstrap_fd, &sync, sizeof(bool));
   ret = receive_message(bootstrap_fd, &sync, sizeof(bool));
-  UCCL_DCHECK(ret == sizeof(bool) && sync) << ret << ", " << sync;
+  DCHECK(ret == sizeof(bool) && sync) << ret << ", " << sync;
 }
 
 inline void create_listen_socket(int* listen_fd, uint16_t listen_port) {
   *listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-  UCCL_DCHECK(*listen_fd >= 0) << "ERROR: opening socket";
+  DCHECK(*listen_fd >= 0) << "ERROR: opening socket";
   int flag = 1;
-  UCCL_CHECK(
-      setsockopt(*listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >= 0)
+  CHECK(setsockopt(*listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
+        0)
       << "ERROR: setsockopt SO_REUSEADDR fails";
   struct sockaddr_in serv_addr;
   bzero((char*)&serv_addr, sizeof(serv_addr));
   serv_addr.sin_family = AF_INET;
   serv_addr.sin_addr.s_addr = INADDR_ANY;
   serv_addr.sin_port = htons(listen_port);
-  UCCL_CHECK(
-      bind(*listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0)
+  CHECK(bind(*listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0)
       << "ERROR: binding";
 
-  UCCL_CHECK(!listen(*listen_fd, 128)) << "ERROR: listen";
-  UCCL_VLOG(5) << "[Endpoint] server ready, listening on port " << listen_port;
+  CHECK(!listen(*listen_fd, 128)) << "ERROR: listen";
+  VLOG(5) << "[Endpoint] server ready, listening on port " << listen_port;
 }
 
 inline uint16_t create_listen_socket(int* listen_fd) {
   *listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-  UCCL_DCHECK(*listen_fd >= 0) << "ERROR: opening socket";
+  DCHECK(*listen_fd >= 0) << "ERROR: opening socket";
 
   int flag = 1;
-  UCCL_CHECK(
-      setsockopt(*listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >= 0)
+  CHECK(setsockopt(*listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(int)) >=
+        0)
       << "ERROR: setsockopt SO_REUSEADDR fails";
 
   struct sockaddr_in serv_addr;
@@ -203,20 +202,19 @@ inline uint16_t create_listen_socket(int* listen_fd) {
   serv_addr.sin_addr.s_addr = INADDR_ANY;
   serv_addr.sin_port = htons(0);  // Ask OS for ephemeral port
 
-  UCCL_CHECK(
-      bind(*listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0)
+  CHECK(bind(*listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) >= 0)
       << "ERROR: binding";
 
   // Get the assigned port
   socklen_t len = sizeof(serv_addr);
-  UCCL_CHECK(getsockname(*listen_fd, (struct sockaddr*)&serv_addr, &len) >= 0)
+  CHECK(getsockname(*listen_fd, (struct sockaddr*)&serv_addr, &len) >= 0)
       << "ERROR: getsockname";
 
   uint16_t assigned_port = ntohs(serv_addr.sin_port);
 
-  UCCL_CHECK(!listen(*listen_fd, 128)) << "ERROR: listen";
-  UCCL_VLOG(5) << "[Endpoint] server ready, listening on ephemeral port "
-               << assigned_port;
+  CHECK(!listen(*listen_fd, 128)) << "ERROR: listen";
+  VLOG(5) << "[Endpoint] server ready, listening on ephemeral port "
+          << assigned_port;
 
   return assigned_port;
 }
@@ -226,16 +224,16 @@ inline static void listen_accept_exchange(int oobport, void* send_data,
                                           int recv_size) {
   int listen_fd;
   create_listen_socket(&listen_fd, oobport);
-  UCCL_CHECK(listen_fd >= 0) << "Failed to listen on port " << oobport;
-  UCCL_VLOG(5) << "[listen_accept_exchange] server ready, listening on port "
-               << oobport;
+  CHECK(listen_fd >= 0) << "Failed to listen on port " << oobport;
+  VLOG(5) << "[listen_accept_exchange] server ready, listening on port "
+          << oobport;
 
   struct sockaddr_in client_addr;
   socklen_t client_len = sizeof(client_addr);
 
   int client_fd =
       accept(listen_fd, (struct sockaddr*)&client_addr, &client_len);
-  UCCL_CHECK(client_fd >= 0) << "Failed to accept connection";
+  CHECK(client_fd >= 0) << "Failed to accept connection";
 
   // Set nodelay
   int flag = 1;
@@ -243,8 +241,7 @@ inline static void listen_accept_exchange(int oobport, void* send_data,
 
   char client_ip[INET_ADDRSTRLEN];
   inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, INET_ADDRSTRLEN);
-  UCCL_VLOG(5) << "[listen_accept_exchange] accepted connection from "
-               << client_ip;
+  VLOG(5) << "[listen_accept_exchange] accepted connection from " << client_ip;
 
   send_message(client_fd, send_data, send_size);
   receive_message(client_fd, recv_data, recv_size);
@@ -257,7 +254,7 @@ inline static void connect_exchange(int oobport, std::string oob_ip,
                                     void* send_data, int send_size,
                                     void* recv_data, int recv_size) {
   int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-  UCCL_CHECK(sockfd >= 0) << "Failed to create socket";
+  CHECK(sockfd >= 0) << "Failed to create socket";
 
   struct sockaddr_in server_addr;
   server_addr.sin_family = AF_INET;
@@ -267,16 +264,14 @@ inline static void connect_exchange(int oobport, std::string oob_ip,
   while (connect(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) <
          0) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    UCCL_VLOG(5) << "[connect_exchange] connecting to " << oob_ip << ":"
-                 << oobport;
+    VLOG(5) << "[connect_exchange] connecting to " << oob_ip << ":" << oobport;
   }
 
   // Set nodelay
   int flag = 1;
   setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, (void*)&flag, sizeof(int));
 
-  UCCL_VLOG(5) << "[connect_exchange] connected to " << oob_ip << ":"
-               << oobport;
+  VLOG(5) << "[connect_exchange] connected to " << oob_ip << ":" << oobport;
 
   send_message(sockfd, send_data, send_size);
   receive_message(sockfd, recv_data, recv_size);
@@ -552,7 +547,7 @@ static inline std::string FormatVarg(char const* fmt, va_list ap) {
 [[maybe_unused]] static inline std::string Format(char const* fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  std::string const s = FormatVarg(fmt, ap);
+  const std::string s = FormatVarg(fmt, ap);
   va_end(ap);
   return s;
 }
@@ -565,13 +560,12 @@ constexpr std::size_t hardware_destructive_interference_size = 64;
 
 static inline jring_t* create_ring(size_t element_size, size_t element_count) {
   size_t ring_sz = jring_get_buf_ring_size(element_size, element_count);
-  UCCL_VLOG(5) << "Ring size: " << ring_sz
-               << " bytes, msg size: " << element_size
-               << " bytes, element count: " << element_count;
-  jring_t* ring = UCCL_CHECK_NOTNULL(reinterpret_cast<jring_t*>(
+  VLOG(5) << "Ring size: " << ring_sz << " bytes, msg size: " << element_size
+          << " bytes, element count: " << element_count;
+  jring_t* ring = CHECK_NOTNULL(reinterpret_cast<jring_t*>(
       aligned_alloc(hardware_constructive_interference_size, ring_sz)));
   if (jring_init(ring, element_count, element_size, 1, 1) < 0) {
-    UCCL_LOG(ERROR, UTIL) << "Failed to initialize ring buffer";
+    LOG(ERROR) << "Failed to initialize ring buffer";
     free(ring);
     exit(EXIT_FAILURE);
   }
@@ -827,7 +821,7 @@ static inline std::string ip_to_str(uint32_t ip) {
 // 1.2.3.4 -> 0x04030201 (network order)
 static inline uint32_t str_to_ip(std::string const& ip) {
   struct sockaddr_in sa;
-  UCCL_CHECK(inet_pton(AF_INET, ip.c_str(), &(sa.sin_addr)) != 0);
+  CHECK(inet_pton(AF_INET, ip.c_str(), &(sa.sin_addr)) != 0);
   return sa.sin_addr.s_addr;
 }
 
@@ -835,15 +829,15 @@ static inline uint32_t str_to_ip(std::string const& ip) {
 static inline int get_dev_index(char const* dev_name) {
   int ret = -1;
   struct ifaddrs* addrs;
-  UCCL_CHECK(getifaddrs(&addrs) == 0) << "error: getifaddrs failed";
+  CHECK(getifaddrs(&addrs) == 0) << "error: getifaddrs failed";
 
   for (struct ifaddrs* iap = addrs; iap != NULL; iap = iap->ifa_next) {
     if (iap->ifa_addr && (iap->ifa_flags & IFF_UP) &&
         iap->ifa_addr->sa_family == AF_INET) {
       if (strcmp(dev_name, iap->ifa_name) == 0) {
-        UCCL_VLOG(5) << "found network interface: " << iap->ifa_name;
+        VLOG(5) << "found network interface: " << iap->ifa_name;
         ret = if_nametoindex(iap->ifa_name);
-        UCCL_CHECK(ret) << "error: if_nametoindex failed";
+        CHECK(ret) << "error: if_nametoindex failed";
         break;
       }
     }
@@ -872,16 +866,14 @@ static inline std::string get_dev_ip(char const* dev_name) {
       tmpAddrPtr = &((struct sockaddr_in*)ifa->ifa_addr)->sin_addr;
       char addressBuffer[INET_ADDRSTRLEN];
       inet_ntop(AF_INET, tmpAddrPtr, addressBuffer, INET_ADDRSTRLEN);
-      UCCL_VLOG(5) << Format("%s IP Address %s\n", ifa->ifa_name,
-                             addressBuffer);
+      VLOG(5) << Format("%s IP Address %s\n", ifa->ifa_name, addressBuffer);
       return std::string(addressBuffer);
     } else if (ifa->ifa_addr->sa_family == AF_INET6) {  // check it is IP6
       // is a valid IP6 Address
       tmpAddrPtr = &((struct sockaddr_in6*)ifa->ifa_addr)->sin6_addr;
       char addressBuffer[INET6_ADDRSTRLEN];
       inet_ntop(AF_INET6, tmpAddrPtr, addressBuffer, INET6_ADDRSTRLEN);
-      UCCL_VLOG(5) << Format("%s IP Address %s\n", ifa->ifa_name,
-                             addressBuffer);
+      VLOG(5) << Format("%s IP Address %s\n", ifa->ifa_name, addressBuffer);
       return std::string(addressBuffer);
     }
   }
@@ -936,7 +928,7 @@ static inline int open_ephemeral_port(uint16_t& assigned_port) {
 // Function to convert MAC string to hex char array
 static inline bool str_to_mac(std::string const& macStr, char mac[6]) {
   if (macStr.length() != 17) {
-    UCCL_LOG(ERROR, UTIL) << "Invalid MAC address format.";
+    LOG(ERROR) << "Invalid MAC address format.";
     return false;
   }
 
@@ -949,7 +941,7 @@ static inline bool str_to_mac(std::string const& macStr, char mac[6]) {
     }
     return true;
   } else {
-    UCCL_LOG(ERROR, UTIL) << "Invalid MAC address format.";
+    LOG(ERROR) << "Invalid MAC address format.";
     return false;
   }
 }
@@ -971,13 +963,13 @@ static inline std::string get_dev_mac(char const* dev_name) {
   std::string path = Format("/sys/class/net/%s/address", dev_name);
   std::ifstream file(path);
   if (!file.is_open()) {
-    UCCL_LOG(ERROR, UTIL) << "Failed to open " << path;
+    LOG(ERROR) << "Failed to open " << path;
     return "";
   }
 
   std::string mac;
   if (!std::getline(file, mac)) {
-    UCCL_LOG(ERROR, UTIL) << "Failed to read " << path;
+    LOG(ERROR) << "Failed to read " << path;
     return "";
   }
 
@@ -1155,13 +1147,11 @@ inline void checkMemoryLocation(void* ptr) {
 
   if (err == cudaSuccess) {
     if (attributes.type == cudaMemoryTypeDevice) {
-      UCCL_LOG(INFO, UTIL) << "Memory belongs to GPU " << attributes.device
-                           << std::endl;
+      LOG(INFO) << "Memory belongs to GPU " << attributes.device << std::endl;
     } else if (attributes.type == cudaMemoryTypeHost) {
-      UCCL_LOG(INFO, UTIL) << "Memory is allocated on the Host (CPU)."
-                           << std::endl;
+      LOG(INFO) << "Memory is allocated on the Host (CPU)." << std::endl;
     } else {
-      UCCL_LOG(INFO, UTIL) << "Unknown memory type." << std::endl;
+      LOG(INFO) << "Unknown memory type." << std::endl;
     }
   } else {
     std::cerr << "Error: " << cudaGetErrorString(err) << std::endl;
@@ -1198,20 +1188,20 @@ inline int get_dev_numa_node(char const* dev_name) {
       Format("/sys/class/infiniband/%s/device/numa_node", dev_name);
   std::ifstream file(path);
   if (!file.is_open()) {
-    UCCL_LOG(ERROR, UTIL) << "Failed to open " << path;
+    LOG(ERROR) << "Failed to open " << path;
     return -1;
   }
 
   std::string line;
   if (!std::getline(file, line)) {
-    UCCL_LOG(ERROR, UTIL) << "Failed to read " << path;
+    LOG(ERROR) << "Failed to read " << path;
     return -1;
   }
 
   auto numa_node = std::stoi(line);
   if (numa_node == -1) {
-    UCCL_LOG(WARNING, UTIL)
-        << "NUMA node is -1 for " << dev_name << ", defaulting to node 0";
+    LOG(WARNING) << "NUMA node is -1 for " << dev_name
+                 << ", defaulting to node 0";
     numa_node = 0;
   }
   return numa_node;
@@ -1219,15 +1209,14 @@ inline int get_dev_numa_node(char const* dev_name) {
 
 static inline void pin_thread_to_cpu(int cpu) {
   int num_cpus = sysconf(_SC_NPROCESSORS_ONLN);
-  UCCL_DCHECK(cpu >= 0 && cpu < num_cpus)
-      << "CPU " << cpu << " is out of range";
+  DCHECK(cpu >= 0 && cpu < num_cpus) << "CPU " << cpu << " is out of range";
 
   cpu_set_t cpuset;
   CPU_ZERO(&cpuset);
   CPU_SET(cpu, &cpuset);
 
   if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset)) {
-    UCCL_LOG(ERROR, UTIL) << "Failed to set thread affinity to CPU " << cpu;
+    LOG(ERROR) << "Failed to set thread affinity to CPU " << cpu;
   }
 }
 
@@ -1236,7 +1225,7 @@ inline void pin_thread_to_numa(int numa_node) {
       Format("/sys/devices/system/node/node%d/cpulist", numa_node);
   std::ifstream cpumap_file(cpumap_path);
   if (!cpumap_file.is_open()) {
-    UCCL_LOG(ERROR, UTIL) << "Failed to open " << cpumap_path;
+    LOG(ERROR) << "Failed to open " << cpumap_path;
     return;
   }
 
@@ -1266,8 +1255,7 @@ inline void pin_thread_to_numa(int numa_node) {
   }
 
   if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset)) {
-    UCCL_LOG(ERROR, UTIL) << "Failed to set thread affinity to NUMA node "
-                          << numa_node;
+    LOG(ERROR) << "Failed to set thread affinity to NUMA node " << numa_node;
   }
 }
 
@@ -1275,7 +1263,7 @@ namespace fs = std::filesystem;
 
 static bool is_bdf(std::string const& s) {
   // Match full PCI BDF allowing hexadecimal digits
-  static std::regex const re(
+  static const std::regex re(
       R"([0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F])");
   return std::regex_match(s, re);
 }
@@ -1430,11 +1418,11 @@ static inline std::vector<fs::path> get_gpu_cards() {
   // 3) Fallbacks (only if needed): DRM class (cardX) or
   // /proc/driver/nvidia/gpus
   if (gpu_cards.empty()) {
-    fs::path const drm_class{"/sys/class/drm"};
-    std::regex const card_re(R"(card(\d+))");
+    const fs::path drm_class{"/sys/class/drm"};
+    const std::regex card_re(R"(card(\d+))");
     if (fs::exists(drm_class)) {
       for (auto const& entry : fs::directory_iterator(drm_class)) {
-        std::string const name = entry.path().filename().string();
+        const std::string name = entry.path().filename().string();
         std::smatch m;
         if (!std::regex_match(name, m, card_re)) continue;
         fs::path dev_path;
@@ -1455,7 +1443,7 @@ static inline std::vector<fs::path> get_gpu_cards() {
     }
 #ifndef __HIP_PLATFORM_AMD__
     if (gpu_cards.empty()) {
-      fs::path const nvidia_gpus{"/proc/driver/nvidia/gpus"};
+      const fs::path nvidia_gpus{"/proc/driver/nvidia/gpus"};
       if (fs::exists(nvidia_gpus)) {
         for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
           fs::path dev_path;
@@ -1568,7 +1556,7 @@ static inline std::map<int, int> map_gpu_to_dev(
                    uccl::cal_pcie_distance(gpu_device_path, std::get<1>(b));
           });
       gpu_to_dev[i] = ib_nic_it - ib_nics.begin();
-      UCCL_CHECK(gpu_to_dev[i] == std::get<2>(*ib_nic_it))
+      CHECK(gpu_to_dev[i] == std::get<2>(*ib_nic_it))
           << "gpu_to_dev[i]: " << gpu_to_dev[i]
           << ", std::get<2>(*ib_nic_it): " << std::get<2>(*ib_nic_it);
     }

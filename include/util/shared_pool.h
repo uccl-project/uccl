@@ -2,7 +2,7 @@
 
 #include "cb.h"
 #include "util.h"
-#include "util/debug.h"
+#include <glog/logging.h>
 #include <atomic>
 #include <deque>
 #include <functional>
@@ -67,13 +67,13 @@ class SharedPool {
         auto _ = finally([&]() { global_spin_.Unlock(); });
         for (uint32_t i = 0; i < kNumCachedItemsPerCPU; i++) {
           T migrated;
-          UCCL_CHECK(cache.pop_front(&migrated));
-          UCCL_CHECK(global_pool_.push_front(migrated));
+          CHECK(cache.pop_front(&migrated));
+          CHECK(global_pool_.push_front(migrated));
         }
       }
-      UCCL_CHECK(cache.push_front(item));
+      CHECK(cache.push_front(item));
     } else {
-      UCCL_CHECK(global_pool_.push_front(item));
+      CHECK(global_pool_.push_front(item));
     }
   }
 
@@ -86,16 +86,16 @@ class SharedPool {
         auto _ = finally([&]() { global_spin_.Unlock(); });
         for (uint32_t i = 0; i < kNumCachedItemsPerCPU; i++) {
           T migrated;
-          UCCL_CHECK(global_pool_.pop_front(&migrated));
-          UCCL_CHECK(cache.push_front(migrated));
+          CHECK(global_pool_.pop_front(&migrated));
+          CHECK(cache.push_front(migrated));
         }
       }
       T item;
-      UCCL_CHECK(cache.pop_front(&item));
+      CHECK(cache.pop_front(&item));
       return item;
     } else {
       T item;
-      UCCL_CHECK(global_pool_.pop_front(&item));
+      CHECK(global_pool_.pop_front(&item));
       return item;
     }
   }

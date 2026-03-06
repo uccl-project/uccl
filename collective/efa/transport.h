@@ -7,13 +7,13 @@
 #include "transport_cc.h"
 #include "transport_config.h"
 #include "transport_header.h"
-#include "util/debug.h"
 #include "util/endian.h"
 #include "util/latency.h"
 #include "util/shared_pool.h"
 #include "util/util.h"
 #include "util_efa.h"
 #include "util_timer.h"
+#include <glog/logging.h>
 #include <linux/if_ether.h>
 #include <linux/ip.h>
 #include <linux/tcp.h>
@@ -269,7 +269,7 @@ class TXTracking {
     unacked_pkts_pp_[path_id]++;
   }
   inline void dec_unacked_pkts_pp(uint32_t path_id) {
-    UCCL_DCHECK_GT(unacked_pkts_pp_[path_id], 0) << "path_id " << path_id;
+    DCHECK_GT(unacked_pkts_pp_[path_id], 0) << "path_id " << path_id;
     unacked_pkts_pp_[path_id]--;
   }
   inline uint32_t get_unacked_pkts_pp(uint32_t path_id) {
@@ -416,7 +416,7 @@ class UcclFlow {
         remote_meta_(remote_meta),
         local_engine_idx_(local_engine_idx),
         remote_engine_idx_(remote_engine_idx),
-        socket_(UCCL_CHECK_NOTNULL(socket)),
+        socket_(CHECK_NOTNULL(socket)),
         credit_qp_ctx_(credit_qp_ctx),
         eqds_channel_(eqds_channel),
         channel_(channel),
@@ -648,7 +648,7 @@ class UcclFlow {
     return {path_id / kMaxDstQP, path_id % kMaxDstQP};
   }
   inline uint32_t src_dst_qp_to_path_id(uint16_t src_qp, uint16_t dst_qp) {
-    UCCL_DCHECK(src_qp < kMaxSrcQP && dst_qp < kMaxDstQP);
+    DCHECK(src_qp < kMaxSrcQP && dst_qp < kMaxDstQP);
     return src_qp * kMaxDstQP + dst_qp;
   }
   inline uint32_t data_path_id_to_ctrl_path_id(uint32_t data_path_id) {
@@ -660,7 +660,7 @@ class UcclFlow {
   }
   inline uint32_t src_dst_qp_to_path_id_for_ctrl(uint16_t src_qp,
                                                  uint16_t dst_qp) {
-    UCCL_DCHECK(src_qp < kMaxSrcQPCtrl && dst_qp < kMaxDstQPCtrl);
+    DCHECK(src_qp < kMaxSrcQPCtrl && dst_qp < kMaxDstQPCtrl);
     return src_qp * kMaxDstQPCtrl + dst_qp;
   }
 
@@ -692,8 +692,8 @@ class UcclFlow {
     auto idx2 = (idx_u32 >> 16) % kMaxDstQP;
     auto path_id1 = src_dst_qp_to_path_id(src_qp_idx, idx1);
     auto path_id2 = src_dst_qp_to_path_id(src_qp_idx, idx2);
-    UCCL_VLOG(3) << "rtt: idx1 " << port_path_rtt_[path_id1] << " idx2 "
-                 << port_path_rtt_[path_id2];
+    VLOG(3) << "rtt: idx1 " << port_path_rtt_[path_id1] << " idx2 "
+            << port_path_rtt_[path_id2];
     return (port_path_rtt_[path_id1] < port_path_rtt_[path_id2]) ? idx1 : idx2;
 #else
     return (next_dst_qp++) % kMaxDstQP;
@@ -706,8 +706,8 @@ class UcclFlow {
     auto idx_u32 = U32Rand(0, UINT32_MAX);
     auto idx1 = idx_u32 % kMaxPath;
     auto idx2 = (idx_u32 >> 16) % kMaxPath;
-    UCCL_VLOG(3) << "rtt: idx1 " << port_path_rtt_[idx1] << " idx2 "
-                 << port_path_rtt_[idx2];
+    VLOG(3) << "rtt: idx1 " << port_path_rtt_[idx1] << " idx2 "
+            << port_path_rtt_[idx2];
     return (port_path_rtt_[idx1] < port_path_rtt_[idx2]) ? idx1 : idx2;
 #else
     return (next_path_id++) % kMaxPath;

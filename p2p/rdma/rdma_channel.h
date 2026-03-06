@@ -3,8 +3,8 @@
 #include "rdma_channel_impl.h"
 #include "rdma_context.h"
 #include "seq_num.h"
-#include "util/debug.h"
 #include "util/util.h"
+#include <glog/logging.h>
 
 #ifdef UCCL_P2P_USE_EFA
 #include "providers/efa/rdma_channel_impl_efa.h"
@@ -76,8 +76,7 @@ class RDMAChannel {
   int64_t read(std::shared_ptr<RDMASendRequest> req) {
     int ret = postRequest(req);
     if (ret != 0) {
-      UCCL_LOG(ERROR, RDMA)
-          << "Failed to post read request, wr_id=" << req->wr_id;
+      LOG(ERROR) << "Failed to post read request, wr_id=" << req->wr_id;
       return -1;
     }
     return req->wr_id;
@@ -86,8 +85,7 @@ class RDMAChannel {
   int64_t send(std::shared_ptr<RDMASendRequest> req) {
     int ret = postRequest(req);
     if (ret != 0) {
-      UCCL_LOG(ERROR, RDMA)
-          << "Failed to post send request, wr_id=" << req->wr_id;
+      LOG(ERROR) << "Failed to post send request, wr_id=" << req->wr_id;
       return -1;
     }
     return req->wr_id;
@@ -105,7 +103,7 @@ class RDMAChannel {
     wr.sg_list = &sge;
     wr.num_sge = 1;
     if (ibv_post_recv(qp_, &wr, &bad_wr)) {
-      UCCL_LOG(ERROR, RDMA) << "ibv_post_recv failed: " << strerror(errno);
+      LOG(ERROR) << "ibv_post_recv failed: " << strerror(errno);
     }
     return wr_id;
   }
@@ -161,7 +159,7 @@ class RDMAChannel {
   inline int __postRequest_ex(std::shared_ptr<RDMASendRequest> req) {
     auto* qpx = ibv_qp_to_qp_ex(qp_);
     ibv_wr_start(qpx);
-    // UCCL_LOG(INFO, RDMA) << *req;
+    // LOG(INFO) << *req;
     qpx->wr_id = req->wr_id;
     qpx->comp_mask = 0;
     qpx->wr_flags = IBV_SEND_SIGNALED;
@@ -174,7 +172,7 @@ class RDMAChannel {
     } else if (req->send_type == SendType::Read) {
       ibv_wr_rdma_read(qpx, req->getRemoteKey(), req->getRemoteAddress());
     } else {
-      UCCL_LOG(ERROR, RDMA) << "Unknown SendType in RDMAChannel::postRequest";
+      LOG(ERROR) << "Unknown SendType in RDMAChannel::postRequest";
       return -1;
     }
 
@@ -204,15 +202,15 @@ class RDMAChannel {
       }
       sge_info << "]";
 
-      UCCL_LOG(ERROR, RDMA)
-          << "ibv_wr_complete failed in postRequest: " << ret << " "
-          << strerror(ret) << ", ah_=" << (void*)ah_
-          << ", remote_qpn=" << remote_meta_->qpn
-          << ", local_qpn=" << qp_->qp_num << ", wr_id=" << req->wr_id
-          << ", remote_key=" << req->getRemoteKey() << ", remote_addr=0x"
-          << std::hex << req->getRemoteAddress()
-          << ", local_key=" << req->getLocalKey() << ", num_sge=" << num_sge
-          << ", sge_list=" << sge_info.str() << std::dec;
+      LOG(ERROR) << "ibv_wr_complete failed in postRequest: " << ret << " "
+                 << strerror(ret) << ", ah_=" << (void*)ah_
+                 << ", remote_qpn=" << remote_meta_->qpn
+                 << ", local_qpn=" << qp_->qp_num << ", wr_id=" << req->wr_id
+                 << ", remote_key=" << req->getRemoteKey() << ", remote_addr=0x"
+                 << std::hex << req->getRemoteAddress()
+                 << ", local_key=" << req->getLocalKey()
+                 << ", num_sge=" << num_sge << ", sge_list=" << sge_info.str()
+                 << std::dec;
     }
     return ret;
   }
@@ -223,7 +221,7 @@ class RDMAChannel {
     struct ibv_sge sge[1];
 
     memset(&wr, 0, sizeof(wr));
-    // UCCL_LOG(INFO, RDMA) << *req;
+    // LOG(INFO) << *req;
 
     wr.wr_id = req->wr_id;
     wr.send_flags = IBV_SEND_SIGNALED;
@@ -246,7 +244,7 @@ class RDMAChannel {
       wr.wr.rdma.remote_addr = req->getRemoteAddress();
       wr.wr.rdma.rkey = req->getRemoteKey();
     } else {
-      UCCL_LOG(ERROR, RDMA) << "Unknown SendType in RDMAChannel::postRequest";
+      LOG(ERROR) << "Unknown SendType in RDMAChannel::postRequest";
       return -1;
     }
 
@@ -268,13 +266,13 @@ class RDMAChannel {
       }
       sge_info << "]";
 
-      UCCL_LOG(ERROR, RDMA)
-          << "ibv_post_send failed: " << ret << " " << strerror(ret)
-          << ", ah_=" << (void*)ah_ << ", remote_qpn=" << remote_meta_->qpn
-          << ", local_qpn=" << qp_->qp_num << ", wr_id=" << req->wr_id
-          << ", remote_key=" << req->getRemoteKey() << ", remote_addr=0x"
-          << std::hex << req->getRemoteAddress() << ", num_sge=" << num_sge
-          << ", sge_list=" << sge_info.str();
+      LOG(ERROR) << "ibv_post_send failed: " << ret << " " << strerror(ret)
+                 << ", ah_=" << (void*)ah_
+                 << ", remote_qpn=" << remote_meta_->qpn
+                 << ", local_qpn=" << qp_->qp_num << ", wr_id=" << req->wr_id
+                 << ", remote_key=" << req->getRemoteKey() << ", remote_addr=0x"
+                 << std::hex << req->getRemoteAddress()
+                 << ", num_sge=" << num_sge << ", sge_list=" << sge_info.str();
     }
     return ret;
   }

@@ -44,7 +44,7 @@ class RdmaContext {
       throw std::runtime_error("query_gid failed");
     }
     auto ip = *(struct in_addr*)&gid->raw[8];
-    UCCL_LOG(INFO, RDMA) << "GID[" << gid_index << "]: " << inet_ntoa(ip);
+    LOG(INFO) << "GID[" << gid_index << "]: " << inet_ntoa(ip);
   }
 
   union ibv_gid queryGid(int gid_index, int port = 1) const {
@@ -59,8 +59,7 @@ class RdmaContext {
     char const* env = getenv("UCCL_P2P_RDMA_GID_INDEX");
     if (env) {
       int env_gid_index = std::atoi(env);
-      UCCL_LOG(INFO, RDMA) << "Using GID index from environment: "
-                           << env_gid_index;
+      LOG(INFO) << "Using GID index from environment: " << env_gid_index;
       gid_index_ = env_gid_index;
       return queryGid(gid_index_);
     }
@@ -103,8 +102,8 @@ class RdmaContext {
               if (fgets(gid_type, sizeof(gid_type), fp)) {
                 if (strstr(gid_type, "RoCE v2") != nullptr) {
                   fclose(fp);
-                  UCCL_LOG(INFO, RDMA) << "RoCE v2 device " << device_name
-                                       << ": using GID index " << i;
+                  LOG(INFO) << "RoCE v2 device " << device_name
+                            << ": using GID index " << i;
                   gid_index_ = i;
                   return gid;
                 }
@@ -117,8 +116,7 @@ class RdmaContext {
     }
 
     // On p5 EFA, the link_layer is IBV_LINK_LAYER_UNSPECIFIED.
-    UCCL_LOG(INFO, RDMA) << "Auto-detect GID failed, using default "
-                         << gid_index;
+    LOG(INFO) << "Auto-detect GID failed, using default " << gid_index;
     gid_index_ = gid_index;
     return queryGid(gid_index_, port);
   }

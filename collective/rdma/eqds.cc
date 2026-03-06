@@ -1,9 +1,9 @@
 #include "eqds.h"
 #include "rdma_io.h"
 #include "transport_config.h"
-#include "util/debug.h"
 #include "util/list.h"
 #include "util_rdma.h"
+#include <glog/logging.h>
 #include <infiniband/verbs.h>
 
 namespace uccl {
@@ -76,7 +76,7 @@ void EQDS::handle_grant_credit() {
         list_del(pos);
         if (grant_credit(sink, false, &consumed)) {
           // Grant done, add it to idle sender list.
-          UCCL_CHECK(list_empty(&sink->idle_item.idle_link));
+          CHECK(list_empty(&sink->idle_item.idle_link));
           list_add_tail(&sink->idle_item.idle_link, &idle_senders_);
         } else {
           // We have not satisfied its demand, re-add it to the active
@@ -138,7 +138,7 @@ bool EQDS::poll_cq(struct PacerCreditQPWrapper* pc_qpw) {
       auto chunk_addr = cq_ex->wr_id;
       pc_qpw->pacer_credit_chunk_pool_->free_buff(chunk_addr);
     } else {
-      UCCL_LOG(ERROR, RDMA) << "pacer credit CQ state error: " << cq_ex->status;
+      LOG(ERROR) << "pacer credit CQ state error: " << cq_ex->status;
     }
 
     pc_qpw->poll_cq_cnt_--;
@@ -166,14 +166,14 @@ void EQDS::handle_pull_request(void) {
           }
           // Add it to the active list.
           list_add_tail(&sink->active_item.active_link, &active_senders_);
-          UCCL_VLOG(5) << "Registered in pacer pull queue.";
+          VLOG(5) << "Registered in pacer pull queue.";
         } else {
           // Already in the active list. Do nothing.
         }
         std::atomic_thread_fence(std::memory_order_acquire);
         break;
       default:
-        UCCL_LOG(ERROR, RDMA) << "Unknown opcode: " << msg.opcode;
+        LOG(ERROR) << "Unknown opcode: " << msg.opcode;
         break;
     }
     if (++budget >= 16) break;
@@ -205,7 +205,7 @@ bool EQDS::send_pull_packet(EQDSCC* eqds_cc) {
   wr.send_flags = IBV_SEND_SIGNALED | IBV_SEND_INLINE;
   wr.next = nullptr;
 
-  UCCL_CHECK(ibv_post_send(pc_qpw->credit_qp_, &wr, &bad_wr) == 0);
+  CHECK(ibv_post_send(pc_qpw->credit_qp_, &wr, &bad_wr) == 0);
 
   pc_qpw->poll_cq_cnt_++;
 
@@ -230,7 +230,7 @@ bool EQDS::grant_credit(EQDSCC* eqds_cc, bool idle, PullQuanta* ret_increment) {
 
   if (!send_pull_packet(eqds_cc)) {
     eqds_cc->latest_pull_ -= increment;
-    UCCL_VLOG(5) << "Failed to send pull packet.";
+    VLOG(5) << "Failed to send pull packet.";
   }
 
   *ret_increment = increment;
