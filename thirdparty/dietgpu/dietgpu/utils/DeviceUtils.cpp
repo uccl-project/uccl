@@ -23,7 +23,7 @@ std::string errorToName(cudaError_t err) {
 int getCurrentDevice() {
   int dev = -1;
   CUDA_VERIFY(cudaGetDevice(&dev));
-  CHECK_NE(dev, -1);
+  UCCL_CHECK_NE(dev, -1);
 
   return dev;
 }
@@ -40,7 +40,7 @@ int getNumDevices() {
   } else {
     CUDA_VERIFY(err);
   }
-  CHECK_NE(numDev, -1);
+  UCCL_CHECK_NE(numDev, -1);
 
   return numDev;
 }
@@ -106,13 +106,13 @@ int getDeviceForAddress(const void* p) {
 
   cudaPointerAttributes att;
   cudaError_t err = cudaPointerGetAttributes(&att, p);
-  CHECK(err == cudaSuccess || err == cudaErrorInvalidValue)
+  UCCL_CHECK(err == cudaSuccess || err == cudaErrorInvalidValue)
       << "unknown error " << static_cast<int>(err);
 
   if (err == cudaErrorInvalidValue) {
     // Make sure the current thread error status has been reset
     err = cudaGetLastError();
-    CHECK_EQ(err, cudaErrorInvalidValue)
+    UCCL_CHECK_EQ(err, cudaErrorInvalidValue)
         << "unknown error " << static_cast<int>(err);
 
     return -1;

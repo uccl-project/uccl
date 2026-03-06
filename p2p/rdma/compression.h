@@ -218,7 +218,8 @@ class DietGPUCompressorBackend : public ICompressorBackend {
 
   bool compress(std::shared_ptr<RDMASendRequest> req) override {
     if (unlikely(!req || !req->local_mem || !stream_ || !res_ || !buffer_)) {
-      LOG(WARNING) << "DietGPUCompressorBackend::compress - Invalid parameters";
+      UCCL_LOG(WARNING, UCCL_RDMA)
+          << "DietGPUCompressorBackend::compress - Invalid parameters";
       return false;
     }
     // Setup compression config
@@ -247,11 +248,12 @@ class DietGPUCompressorBackend : public ICompressorBackend {
     GPU_RT_CHECK(gpuMemcpy(&compressedSize, devCompressedSize_,
                            sizeof(compressedSize), gpuMemcpyDeviceToHost));
 
-    LOG(INFO) << "DietGPUCompressorBackend: Compressed " << req->local_mem->size
-              << " bytes to " << compressedSize << " bytes, ratio: "
-              << static_cast<float>(compressedSize) /
-                     static_cast<float>(req->local_mem->size)
-              << "x";
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "DietGPUCompressorBackend: Compressed " << req->local_mem->size
+        << " bytes to " << compressedSize << " bytes, ratio: "
+        << static_cast<float>(compressedSize) /
+               static_cast<float>(req->local_mem->size)
+        << "x";
 
     // Update request to use compressed buffer
     req->local_mem = std::make_shared<RegMemBlock>(
@@ -261,7 +263,7 @@ class DietGPUCompressorBackend : public ICompressorBackend {
 
   bool prepareDecompress(std::shared_ptr<RDMARecvRequest> req) override {
     if (unlikely(!req || !req->local_mem)) {
-      LOG(WARNING)
+      UCCL_LOG(WARNING, UCCL_RDMA)
           << "DietGPUCompressorBackend::prepareDecompress - Invalid parameters";
       return false;
     }
@@ -271,10 +273,11 @@ class DietGPUCompressorBackend : public ICompressorBackend {
     req->local_mem = std::make_shared<RegMemBlock>(
         decompressBuffer_->addr, decompressBuffer_->size,
         decompressBuffer_->mr_array, decompressBuffer_->type);
-    LOG(INFO) << "DietGPUCompressorBackend: Prepared for decompression, backed "
-                 "up local_mem ("
-              << req->local_compression_mem->size
-              << " bytes) to local_compression_mem";
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "DietGPUCompressorBackend: Prepared for decompression, backed "
+           "up local_mem ("
+        << req->local_compression_mem->size
+        << " bytes) to local_compression_mem";
 
     return true;
   }
@@ -282,19 +285,19 @@ class DietGPUCompressorBackend : public ICompressorBackend {
   bool decompress(RemoteMemInfo const& input, RegMemBlock& output,
                   uccl::FloatType float_type) override {
     if (unlikely(!stream_ || !res_)) {
-      LOG(WARNING)
+      UCCL_LOG(WARNING, UCCL_RDMA)
           << "DietGPUCompressorBackend::decompress - Invalid internal state";
       return false;
     }
 
     if (unlikely(input.addr == 0 || input.length == 0)) {
-      LOG(WARNING)
+      UCCL_LOG(WARNING, UCCL_RDMA)
           << "DietGPUCompressorBackend::decompress - Invalid input parameters";
       return false;
     }
 
     if (unlikely(output.addr == nullptr || output.size == 0)) {
-      LOG(WARNING)
+      UCCL_LOG(WARNING, UCCL_RDMA)
           << "DietGPUCompressorBackend::decompress - Invalid output parameters";
       return false;
     }
@@ -327,12 +330,14 @@ class DietGPUCompressorBackend : public ICompressorBackend {
     GPU_RT_CHECK(gpuStreamSynchronize(stream_));
 
     if (unlikely(status.error != dietgpu::FloatDecompressError::None)) {
-      LOG(ERROR) << "DietGPUCompressorBackend: Decompression failed!";
+      UCCL_LOG(ERROR, UCCL_RDMA)
+          << "DietGPUCompressorBackend: Decompression failed!";
       return false;
     }
 
-    LOG(INFO) << "DietGPUCompressorBackend: Decompressed data from "
-              << input.length << " bytes to " << output.size << " bytes";
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "DietGPUCompressorBackend: Decompressed data from " << input.length
+        << " bytes to " << output.size << " bytes";
 
     return true;
   }
@@ -342,9 +347,10 @@ class DietGPUCompressorBackend : public ICompressorBackend {
       return false;
     }
     if (unlikely(size > buffer_->size)) {
-      LOG(ERROR) << "DietGPUCompressorBackend::shouldCompress: data size ("
-                 << size << " bytes) exceeds compress buffer capacity ("
-                 << buffer_->size << " bytes), skipping compression";
+      UCCL_LOG(ERROR, UCCL_RDMA)
+          << "DietGPUCompressorBackend::shouldCompress: data size (" << size
+          << " bytes) exceeds compress buffer capacity (" << buffer_->size
+          << " bytes), skipping compression";
       return false;
     }
     return size >= kMinCompressBytes;
@@ -385,8 +391,9 @@ class DietGPUCompressorBackend : public ICompressorBackend {
 
   bool compressSplitOneBatch(std::shared_ptr<RDMASendRequest> req) override {
     if (unlikely(!req || !req->compress_ctx || !stream_ || !res_)) {
-      LOG(WARNING) << "DietGPUCompressorBackend::compressSplitOneBatch - "
-                      "Invalid parameters";
+      UCCL_LOG(WARNING, UCCL_RDMA)
+          << "DietGPUCompressorBackend::compressSplitOneBatch - "
+             "Invalid parameters";
       return false;
     }
 
@@ -410,8 +417,9 @@ class DietGPUCompressorBackend : public ICompressorBackend {
   uint32_t compressEncodeOneBatch(
       std::shared_ptr<RDMASendRequest> req) override {
     if (unlikely(!req || !req->compress_ctx || !stream_ || !res_ || !buffer_)) {
-      LOG(WARNING) << "DietGPUCompressorBackend::compressEncodeOneBatch - "
-                      "Invalid parameters";
+      UCCL_LOG(WARNING, UCCL_RDMA)
+          << "DietGPUCompressorBackend::compressEncodeOneBatch - "
+             "Invalid parameters";
       return 0;
     }
 
@@ -428,12 +436,12 @@ class DietGPUCompressorBackend : public ICompressorBackend {
     GPU_RT_CHECK(gpuMemcpy(&compressedSize, devCompressedSize_,
                            sizeof(compressedSize), gpuMemcpyDeviceToHost));
 
-    LOG(INFO) << "DietGPUCompressorBackend: Encode done, "
-              << req->local_mem->size << " bytes -> " << compressedSize
-              << " bytes, ratio: "
-              << static_cast<float>(compressedSize) /
-                     static_cast<float>(req->local_mem->size)
-              << "x";
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "DietGPUCompressorBackend: Encode done, " << req->local_mem->size
+        << " bytes -> " << compressedSize << " bytes, ratio: "
+        << static_cast<float>(compressedSize) /
+               static_cast<float>(req->local_mem->size)
+        << "x";
 
     // Update request to use compressed buffer
     uint32_t uncompressed_size = req->local_mem->size;

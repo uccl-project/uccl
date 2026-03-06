@@ -129,7 +129,7 @@ if __name__ == "__main__":
     ]
     nvcc_flags = ["-O3", "-Xcompiler", "-O3"]
     sources = glob("./src/*.cu") + glob("./src/*.cpp") + glob("./src/*.cc")
-    libraries = ["ibverbs", "glog", "nl-3", "nl-route-3", "numa"]
+    libraries = ["ibverbs", "nl-3", "nl-route-3", "numa"]
     include_dirs = [PROJECT_ROOT / "include", PROJECT_ROOT / ".." / "include"]
     # Nanobind stable-ABI bindings
     nb_dir = Path(nanobind.__file__).parent

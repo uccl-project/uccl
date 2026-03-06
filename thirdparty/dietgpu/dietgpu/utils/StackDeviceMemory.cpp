@@ -46,7 +46,7 @@ StackDeviceMemory::Stack::Stack(int d, size_t sz)
 
   DeviceScope s(device_);
   CUDA_VERIFY(cudaMalloc(&alloc_, allocSize_));
-  CHECK(alloc_);
+  UCCL_CHECK(alloc_);
 
   // In order to disambiguate between our entire region of temporary memory
   // versus the first allocation in the temporary memory region, ensure that the
@@ -65,11 +65,11 @@ StackDeviceMemory::Stack::Stack(int device, void* p, size_t size)
       head_(nullptr),
       overflowSize_(0),
       maxSeenSize_(0) {
-  CHECK(p || size == 0);
+  UCCL_CHECK(p || size == 0);
 
   // the minimum size that can be provided (see adjustStackSize), if we are
   // allocating memory internally
-  CHECK(size == 0 || size >= kSDMAlignment);
+  UCCL_CHECK(size == 0 || size >= kSDMAlignment);
 
   // alloc_ is not used, as we don't own this allocation
   start_ = (char*)p;
@@ -79,9 +79,9 @@ StackDeviceMemory::Stack::Stack(int device, void* p, size_t size)
 
 StackDeviceMemory::Stack::~Stack() {
   // Make sure there are no outstanding memory allocations
-  CHECK_EQ(head_, start_);
-  CHECK(overflowAllocs_.empty());
-  CHECK_EQ(overflowSize_, 0);
+  UCCL_CHECK_EQ(head_, start_);
+  UCCL_CHECK(overflowAllocs_.empty());
+  UCCL_CHECK_EQ(overflowSize_, 0);
 
   // Did we own the stack buffer?
   if (alloc_) {
@@ -108,8 +108,8 @@ void* StackDeviceMemory::Stack::getAlloc(
     AllocType type) {
   // All allocations should have been adjusted to a multiple of kSDMAlignment
   // bytes
-  CHECK_GE(size, kSDMAlignment);
-  CHECK_EQ(size % kSDMAlignment, 0);
+  UCCL_CHECK_GTE(size, kSDMAlignment);
+  UCCL_CHECK_EQ(size % kSDMAlignment, 0);
 
   void* out = nullptr;
 
@@ -133,17 +133,17 @@ void* StackDeviceMemory::Stack::getAlloc(
     }
 
     CUDA_VERIFY(cudaMalloc(&out, size));
-    CHECK(out);
+    UCCL_CHECK(out);
 
     overflowAllocs_[out] = size;
     overflowSize_ += size;
   } else {
     // Space is available in the stack
-    CHECK(head_);
+    UCCL_CHECK(head_);
     out = head_;
 
     head_ = head_ + size;
-    CHECK_LE(head_, end_);
+    UCCL_CHECK_LE(head_, end_);
   }
 
   maxSeenSize_ = std::max(maxSeenSize_, stackMemUsed + overflowSize_);
@@ -158,11 +158,11 @@ void StackDeviceMemory::Stack::returnAlloc(
   auto it = overflowAllocs_.find(p);
   if (it != overflowAllocs_.end()) {
     // This allocation was not made on the stack
-    CHECK_EQ(it->second, size);
+    UCCL_CHECK_EQ(it->second, size);
 
     CUDA_VERIFY(cudaFree(p));
     overflowAllocs_.erase(it);
-    CHECK_GE(overflowSize_, size);
+    UCCL_CHECK_GTE(overflowSize_, size);
     overflowSize_ -= size;
 
     return;
@@ -172,13 +172,13 @@ void StackDeviceMemory::Stack::returnAlloc(
   char* pc = static_cast<char*>(p);
 
   // Otherwise, this allocation should be within ourselves
-  CHECK(pc >= start_ && pc < end_);
+  UCCL_CHECK(pc >= start_ && pc < end_);
 
   // All allocations should have been adjusted
-  CHECK_EQ(size % kSDMAlignment, 0);
+  UCCL_CHECK_EQ(size % kSDMAlignment, 0);
 
   // Allocations should be freed in the reverse order they are made
-  CHECK_EQ(pc + size, head_);
+  UCCL_CHECK_EQ(pc + size, head_);
 
   head_ = pc;
 }
@@ -239,8 +239,8 @@ void StackDeviceMemory::deallocPointer(
     cudaStream_t stream,
     size_t size,
     void* p) {
-  CHECK(p);
-  CHECK_EQ(device, device_);
+  UCCL_CHECK(p);
+  UCCL_CHECK_EQ(device, device_);
 
   stack_.returnAlloc(p, size, stream);
 }

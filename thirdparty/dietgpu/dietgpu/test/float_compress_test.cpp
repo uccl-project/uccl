@@ -9,7 +9,6 @@
  */
 
 #include <hip/hip_runtime.h>
-#include <glog/logging.h>
 #include <iostream>
 #include <vector>
 #include <random>
@@ -341,10 +340,6 @@ void testGetMaxCompressedSize() {
 }
 
 int main(int argc, char* argv[]) {
-    // Initialize glog
-    google::InitGoogleLogging(argv[0]);
-    FLAGS_logtostderr = 1;
-
     // Check for HIP devices
     int deviceCount = 0;
     HIP_CHECK(hipGetDeviceCount(&deviceCount));
