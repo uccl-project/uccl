@@ -178,7 +178,7 @@ ncclResult_t pluginListen(int vdev, void* opaque_handle, void** listenComm) {
   int gpu_idx = 0;
   cudaGetDevice(&gpu_idx);
   if (vdev != gpu_idx) {
-    UCCL_LOG_FIRST_N(INFO, 1)
+    UCCL_LOG_FIRST_N(INFO, EFA, 1)
         << "pluginListen detects different vdev " << vdev << " vs. gpu_idx "
         << gpu_idx << ", forcely setting vdev to gpu_idx";
     vdev = gpu_idx;
@@ -188,7 +188,7 @@ ncclResult_t pluginListen(int vdev, void* opaque_handle, void** listenComm) {
                       << gpu_idx << ", vdev=" << vdev;
 
   if (vdev != gpu_idx) {
-    UCCL_LOG_FIRST_N(INFO, 1)
+    UCCL_LOG_FIRST_N(INFO, EFA, 1)
         << "pluginListen detects different vdev " << vdev << " vs. gpu_idx "
         << gpu_idx << ", forcely setting vdev to gpu_idx";
     vdev = gpu_idx;
@@ -235,7 +235,7 @@ ncclResult_t pluginConnect(int vdev, void* opaque_handle, void** sendComm,
   int gpu_idx = 0;
   cudaGetDevice(&gpu_idx);
   if (vdev != gpu_idx) {
-    UCCL_LOG_FIRST_N(INFO, 1)
+    UCCL_LOG_FIRST_N(INFO, EFA, 1)
         << "pluginConnect detects different vdev " << vdev << " vs. gpu_idx "
         << gpu_idx << ", forcely setting vdev to gpu_idx";
     vdev = gpu_idx;

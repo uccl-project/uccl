@@ -1985,7 +1985,7 @@ ConnID Endpoint::uccl_connect(int local_vdev, int remote_vdev,
   else
     local_engine_idx =
         find_least_loaded_engine_idx_and_update(local_vdev, flow_id, is_sender);
-  CHECK_GE(local_engine_idx, 0);
+  UCCL_CHECK_GTE(local_engine_idx, 0);
 
   install_flow_on_engine(flow_id, remote_ip, local_engine_idx, bootstrap_fd,
                          is_sender);
@@ -2064,7 +2064,7 @@ ConnID Endpoint::uccl_accept(int local_vdev, int* remote_vdev,
   else
     local_engine_idx =
         find_least_loaded_engine_idx_and_update(local_vdev, flow_id, is_sender);
-  CHECK_GE(local_engine_idx, 0);
+  UCCL_CHECK_GTE(local_engine_idx, 0);
 
   install_flow_on_engine(flow_id, remote_ip, local_engine_idx, bootstrap_fd,
                          is_sender);

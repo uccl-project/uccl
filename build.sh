@@ -363,6 +363,7 @@ def initialize():
       --exclude "libamdhip64.so.*" \
       --exclude "libcuda.so.1" \
       --exclude "libefa.so.1" \
+      --exclude "libglog.so.0" \
       -w /io/${WHEEL_DIR}
 
     # auditwheel may emit compressed dual tags (e.g. manylinux_2_34.manylinux_2_35).

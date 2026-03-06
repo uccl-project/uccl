@@ -1,6 +1,7 @@
 #include "util_efa.h"
 #include "transport_config.h"
 #include "util/util.h"
+#include <gflags/gflags.h>
 #include <atomic>
 #include <chrono>
 #include <memory>

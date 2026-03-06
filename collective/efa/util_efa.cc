@@ -122,20 +122,20 @@ uint8_t GetActualNumDevices() {
   if (!efa.empty()) actual = std::min(actual, static_cast<uint8_t>(efa.size()));
   if (!ena.empty()) actual = std::min(actual, static_cast<uint8_t>(ena.size()));
   if (efa.size() > NUM_DEVICES || ena.size() > NUM_DEVICES) {
-    UCCL_LOG(WARNING) << "GetActualNumDevices: more devices discovered than "
-                      << "NUM_DEVICES=" << (int)NUM_DEVICES
-                      << " (EFA=" << efa.size() << ", ENA=" << ena.size()
-                      << "). Capping to " << (int)actual
-                      << " to avoid fixed-size array overflow.";
+    UCCL_LOG(WARNING, EFA)
+        << "GetActualNumDevices: more devices discovered than "
+        << "NUM_DEVICES=" << (int)NUM_DEVICES << " (EFA=" << efa.size()
+        << ", ENA=" << ena.size() << "). Capping to " << (int)actual
+        << " to avoid fixed-size array overflow.";
   }
   return actual;
 }
 
 void EFAFactory::Init(int gpu) {
   auto num_devs = GetActualNumDevices();
-  UCCL_LOG(INFO) << "EFAFactory::Init(gpu=" << gpu
-                 << ") NUM_DEVICES=" << (int)NUM_DEVICES
-                 << " actual=" << (int)num_devs;
+  UCCL_LOG(INFO, EFA) << "EFAFactory::Init(gpu=" << gpu
+                      << ") NUM_DEVICES=" << (int)NUM_DEVICES
+                      << " actual=" << (int)num_devs;
   for (int i = 0; i < num_devs; i++) {
     EFAFactory::InitDev(gpu + i);
   }
@@ -143,8 +143,8 @@ void EFAFactory::Init(int gpu) {
 
 void EFAFactory::Init() {
   auto num_devs = GetActualNumDevices();
-  UCCL_LOG(INFO) << "EFAFactory::Init() NUM_DEVICES=" << (int)NUM_DEVICES
-                 << " actual=" << (int)num_devs;
+  UCCL_LOG(INFO, EFA) << "EFAFactory::Init() NUM_DEVICES=" << (int)NUM_DEVICES
+                      << " actual=" << (int)num_devs;
   for (int i = 0; i < num_devs; i++) {
     EFAFactory::InitDev(i);
   }
