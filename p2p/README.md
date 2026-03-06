@@ -31,7 +31,7 @@ Alternatively, you can setup your local dev environment by:
 
 ### System Requirements
 - Linux with RDMA support
-- Python 3.12+ with development headers
+- Python 3.8+ with development headers
 - C++17 compatible compiler
 - nanobind library
 - PyTorch (for tensor/array operations)
