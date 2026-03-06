@@ -3,7 +3,7 @@
 #include "tcp_cubic.h"
 #include "timely.h"
 #include "timing_wheel.h"
-#include <glog/logging.h>
+#include "util/debug.h"
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -123,7 +123,8 @@ struct Pcb {
     const size_t sack_bitmap_bucket_idx = index / kSackBitmapBucketSize;
     const size_t sack_bitmap_idx_in_bucket = index % kSackBitmapBucketSize;
 
-    LOG_IF(FATAL, index >= kSackBitmapSize) << "Index out of bounds: " << index;
+    UCCL_LOG_IF(FATAL, DPDK, index >= kSackBitmapSize)
+        << "Index out of bounds: " << index;
 
     sack_bitmap[sack_bitmap_bucket_idx] |= (1ULL << sack_bitmap_idx_in_bucket);
 
@@ -223,8 +224,8 @@ struct TimelyCtl {
     wheel_.ready_entries_ -= num_ready;
 
     if (unlikely(wheel_.ready_entries_ > 0)) {
-      VLOG(3) << "[CC] TimingWheel ready queue not empty "
-              << wheel_.ready_entries_;
+      UCCL_VLOG(3) << "[CC] TimingWheel ready queue not empty "
+                   << wheel_.ready_entries_;
 
       // Consuming the ready entries.
       while (wheel_.ready_queue_.size() > wheel_.ready_entries_) {
@@ -244,8 +245,8 @@ struct TimelyCtl {
       wheel_.ready_queue_.clear();
     }
 
-    DCHECK_EQ(wheel_.ready_entries_, 0);
-    DCHECK(wheel_.ready_queue_.empty());
+    UCCL_DCHECK_EQ(wheel_.ready_entries_, 0);
+    UCCL_DCHECK(wheel_.ready_queue_.empty());
 
     return num_ready;
   }
@@ -294,8 +295,8 @@ struct Pacer {
     wheel_.ready_entries_ -= num_ready;
 
     if (unlikely(wheel_.ready_entries_ > 0)) {
-      VLOG(3) << "[CC] TimingWheel ready queue not empty "
-              << wheel_.ready_entries_;
+      UCCL_VLOG(3) << "[CC] TimingWheel ready queue not empty "
+                   << wheel_.ready_entries_;
 
       // Consuming the ready entries.
       while (wheel_.ready_queue_.size() > wheel_.ready_entries_) {
@@ -315,8 +316,8 @@ struct Pacer {
       wheel_.ready_queue_.clear();
     }
 
-    DCHECK_EQ(wheel_.ready_entries_, 0);
-    DCHECK(wheel_.ready_queue_.empty());
+    UCCL_DCHECK_EQ(wheel_.ready_entries_, 0);
+    UCCL_DCHECK(wheel_.ready_queue_.empty());
 
     return num_ready;
   }

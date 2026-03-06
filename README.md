@@ -134,7 +134,7 @@ To build UCCL for development, you need to install some common dependencies:
 # Note if you are using docker+wheel build, there is no need to install the following dependencies. 
 sudo apt update
 sudo apt install linux-tools-$(uname -r) clang llvm cmake m4 build-essential \
-                 net-tools libgoogle-glog-dev libgtest-dev libgflags-dev \
+                 net-tools libgtest-dev libgflags-dev \
                  libelf-dev libpcap-dev libc6-dev-i386 libpci-dev \
                  libopenmpi-dev libibverbs-dev clang-format -y
 

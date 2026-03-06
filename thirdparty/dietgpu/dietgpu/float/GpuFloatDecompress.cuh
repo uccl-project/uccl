@@ -15,7 +15,7 @@
 #include "dietgpu/utils/StackDeviceMemory.h"
 #include "dietgpu/utils/StaticUtils.h"
 
-#include <glog/logging.h>
+#include "util/debug.h"
 #include <cmath>
 #include <sstream>
 #include <vector>

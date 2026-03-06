@@ -1,9 +1,9 @@
 #include "transport.h"
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util/timer.h"
 #include <arpa/inet.h>
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <netinet/in.h>
 #include <cstring>
 #include <fstream>
@@ -21,7 +21,7 @@
 #define MAX_NODES 512
 #define BASE_LISTEN_PORT 6666
 
-#define MPI_LOG(level) LOG(level) << "Rank:" << LOCAL_RANK << " "
+#define MPI_LOG(level) UCCL_LOG(level, RDMA) << "Rank:" << LOCAL_RANK << " "
 
 #define MAX_BUFFER_SIZE (32 * 1024 * 1024)  // 32MB
 #define NET_CHUNK_SIZE (1024 * 1024)        // 1MB
@@ -164,7 +164,7 @@ void allocate_buffers() {
     nodes[r].send_comm_.buffer =
         mmap(nullptr, MAX_BUFFER_SIZE, PROT_READ | PROT_WRITE,
              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    DCHECK(nodes[r].send_comm_.buffer != MAP_FAILED);
+    UCCL_DCHECK(nodes[r].send_comm_.buffer != MAP_FAILED);
 
     ep->uccl_regmr((UcclFlow*)nodes[r].send_comm_.conn_id.context,
                    nodes[r].send_comm_.buffer, MAX_BUFFER_SIZE, 0,
@@ -173,7 +173,7 @@ void allocate_buffers() {
     nodes[r].recv_comm_.buffer =
         mmap(nullptr, MAX_BUFFER_SIZE, PROT_READ | PROT_WRITE,
              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    DCHECK(nodes[r].recv_comm_.buffer != MAP_FAILED);
+    UCCL_DCHECK(nodes[r].recv_comm_.buffer != MAP_FAILED);
 
     ep->uccl_regmr((UcclFlow*)nodes[r].recv_comm_.conn_id.context,
                    nodes[r].recv_comm_.buffer, MAX_BUFFER_SIZE, 0,
@@ -197,10 +197,10 @@ void listen_ports() {
   for (int r = 0; r < NRANKS; r++) {
     if (r == LOCAL_RANK) continue;
     nodes[r].listen_fd_ = socket(AF_INET, SOCK_STREAM, 0);
-    DCHECK(nodes[r].listen_fd_ >= 0);
+    UCCL_DCHECK(nodes[r].listen_fd_ >= 0);
     int flag = 1;
-    CHECK(setsockopt(nodes[r].listen_fd_, SOL_SOCKET, SO_REUSEADDR, &flag,
-                     sizeof(int)) >= 0);
+    UCCL_CHECK(setsockopt(nodes[r].listen_fd_, SOL_SOCKET, SO_REUSEADDR, &flag,
+                          sizeof(int)) >= 0);
     struct sockaddr_in serv_addr;
     bzero((char*)&serv_addr, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
@@ -208,9 +208,9 @@ void listen_ports() {
     serv_addr.sin_port = htons(BASE_LISTEN_PORT + r);
     int ret = bind(nodes[r].listen_fd_, (struct sockaddr*)&serv_addr,
                    sizeof(serv_addr));
-    DCHECK(ret >= 0) << ret;
+    UCCL_DCHECK(ret >= 0) << ret;
     ret = listen(nodes[r].listen_fd_, MAX_NODES);
-    DCHECK(ret == 0) << ret;
+    UCCL_DCHECK(ret == 0) << ret;
   }
 
   MPI_LOG(INFO) << "Listen ports done.";
@@ -284,10 +284,10 @@ void p2p_receive(int target_rank, int size) {
 
   while (offset < size) {
     int net_chunk_size = std::min(size - offset, (uint32_t)NET_CHUNK_SIZE);
-    CHECK(ep->uccl_recv_async((UcclFlow*)recv_comm_->conn_id.context,
-                              &recv_comm_->mhandle, &recv_comm_->buffer,
-                              &net_chunk_size, 1,
-                              &recv_comm_->ureq[chunk_id]) == 0);
+    UCCL_CHECK(ep->uccl_recv_async((UcclFlow*)recv_comm_->conn_id.context,
+                                   &recv_comm_->mhandle, &recv_comm_->buffer,
+                                   &net_chunk_size, 1,
+                                   &recv_comm_->ureq[chunk_id]) == 0);
 
     offset += net_chunk_size;
     chunk_id++;
@@ -338,7 +338,7 @@ void launch_stats_thread() {
   });
 }
 
-void verify_params() { CHECK(FLAGS_size <= MAX_BUFFER_SIZE); }
+void verify_params() { UCCL_CHECK(FLAGS_size <= MAX_BUFFER_SIZE); }
 
 void seq_alltoall() {
   while (cur_iteration++ < FLAGS_iterations && !quit) {
@@ -399,7 +399,7 @@ void permutation_traffic() {
   nodes[target_rank].send_comm_.buffer =
       mmap(nullptr, MAX_BUFFER_SIZE, PROT_READ | PROT_WRITE,
            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  DCHECK(nodes[target_rank].send_comm_.buffer != MAP_FAILED);
+  UCCL_DCHECK(nodes[target_rank].send_comm_.buffer != MAP_FAILED);
 
   ep->uccl_regmr((UcclFlow*)nodes[target_rank].send_comm_.conn_id.context,
                  nodes[target_rank].send_comm_.buffer, MAX_BUFFER_SIZE, 0,
@@ -408,7 +408,7 @@ void permutation_traffic() {
   nodes[target_rank].recv_comm_.buffer =
       mmap(nullptr, MAX_BUFFER_SIZE, PROT_READ | PROT_WRITE,
            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-  DCHECK(nodes[target_rank].recv_comm_.buffer != MAP_FAILED);
+  UCCL_DCHECK(nodes[target_rank].recv_comm_.buffer != MAP_FAILED);
 
   ep->uccl_regmr((UcclFlow*)nodes[target_rank].recv_comm_.conn_id.context,
                  nodes[target_rank].recv_comm_.buffer, MAX_BUFFER_SIZE, 0,
@@ -482,7 +482,7 @@ void get_ips() {
 }
 
 int main(int argc, char** argv) {
-  google::InitGoogleLogging(argv[0]);
+  // google::InitGoogleLogging(argv[0]);
 
   signal(SIGINT, interrupt_handler);
 

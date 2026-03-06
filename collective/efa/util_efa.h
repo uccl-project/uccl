@@ -2,13 +2,13 @@
 
 #include "transport_config.h"
 #include "transport_header.h"
+#include "util/debug.h"
 #include "util/list.h"
 #include "util/util.h"
 #include "util_buffpool.h"
 #include "util_flock.h"
 #include "util_timer.h"
 #include <arpa/inet.h>
-#include <glog/logging.h>
 #include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
 #include <linux/if_ether.h>
@@ -414,7 +414,7 @@ class EFASocket {
   inline uint64_t pop_pkt_hdr() {
     uint64_t pkt_hdr_addr;
     auto ret = pkt_hdr_pool_->alloc_buff(&pkt_hdr_addr);
-    DCHECK(ret == 0);
+    UCCL_DCHECK(ret == 0);
     return pkt_hdr_addr;
   }
   inline void push_pkt_hdr(uint64_t pkt_hdr_addr) {
@@ -425,7 +425,7 @@ class EFASocket {
   inline uint64_t pop_pkt_data() {
     uint64_t pkt_data_addr;
     auto ret = pkt_data_pool_->alloc_buff(&pkt_data_addr);
-    DCHECK(ret == 0);
+    UCCL_DCHECK(ret == 0);
     return pkt_data_addr;
   }
   inline void push_pkt_data(uint64_t pkt_data_addr) {
@@ -436,7 +436,7 @@ class EFASocket {
   inline uint64_t pop_frame_desc() {
     uint64_t pkt_frame_desc;
     auto ret = frame_desc_pool_->alloc_buff(&pkt_frame_desc);
-    DCHECK(ret == 0);
+    UCCL_DCHECK(ret == 0);
     return pkt_frame_desc;
   }
   inline void push_frame_desc(uint64_t pkt_frame_desc) {
@@ -489,7 +489,7 @@ static inline int util_efa_get_ib_name_from_dev_idx(int dev_idx,
                                                     char* ib_name) {
   auto const& efa_list = GetEfaDeviceNameList();
   DCHECK_GE(dev_idx, 0);
-  DCHECK_LT(static_cast<size_t>(dev_idx), efa_list.size())
+  UCCL_DCHECK_LT(static_cast<size_t>(dev_idx), efa_list.size())
       << "dev_idx " << dev_idx << " out of range; NUM_DEVICES mismatch";
   sprintf(ib_name, "%s", efa_list[dev_idx].c_str());
   return 0;
@@ -504,7 +504,7 @@ static inline int util_efa_get_ib_name_from_dev_idx(int dev_idx,
 static inline int util_efa_get_ip_from_dev_idx(int dev_idx, std::string* ip) {
   auto const& ena_list = GetEnaDeviceNameList();
   DCHECK_GE(dev_idx, 0);
-  DCHECK_LT(static_cast<size_t>(dev_idx), ena_list.size())
+  UCCL_DCHECK_LT(static_cast<size_t>(dev_idx), ena_list.size())
       << "dev_idx " << dev_idx << " out of range; NUM_DEVICES mismatch";
   *ip = get_dev_ip(ena_list[dev_idx].c_str());
   return ip->empty() ? -1 : 0;
