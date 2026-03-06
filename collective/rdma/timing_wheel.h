@@ -13,13 +13,10 @@
 #include "timely.h"
 #include "transport_config.h"
 #include "util/cb.h"
+#include "util_timer.h"
 #include <queue>
 
 namespace uccl {
-
-#pragma once
-
-#include "util_timer.h"
 
 struct alignas(64) wr_ex {
   struct ibv_send_wr wr;

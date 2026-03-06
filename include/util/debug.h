@@ -31,7 +31,14 @@
 #include <unistd.h>
 
 #define UCCL_DEBUG_HOSTNAME_MAX_LEN 1024
-namespace uccl {
+
+// Everything at global scope so macros always resolve via :: regardless of
+// whether this header is first included from inside namespace uccl.
+//
+// Save and undefine macros that collide with enum value names (e.g. -DEFA).
+#pragma push_macro("EFA")
+#undef EFA
+
 enum UCCLLogLevel { FATAL = 0, ERROR, WARNING, INFO };
 
 enum UCCLLogSubsys {
@@ -46,7 +53,7 @@ enum UCCLLogSubsys {
   SUBSYS_COUNT
 };
 
-static std::unordered_map<std::string_view, UCCLLogSubsys> subsysMap_ = {
+static std::unordered_map<std::string_view, UCCLLogSubsys> uccl_log_subsys_map_ = {
     {"INIT", UCCLLogSubsys::INIT}, {"AFXDP", UCCLLogSubsys::AFXDP},
     {"DPDK", UCCLLogSubsys::DPDK}, {"EFA", UCCLLogSubsys::EFA},
     {"RDMA", UCCLLogSubsys::RDMA}, {"EP", UCCLLogSubsys::EP},
@@ -60,11 +67,11 @@ struct UCCLVoidify;
 struct UCCLNullStream {};
 
 #define UCCL_LOG_INTERNAL(level, subsys)                                       \
-  (!uccl::ucclLogger.shouldLog(uccl::level, uccl::subsys))                     \
+  (!::ucclLogger.shouldLog(level, subsys))                                    \
       ? (void)0                                                                \
-      : uccl::UCCLVoidify() &                                                  \
-            (uccl::UCCLLogCapture(uccl::ucclLogger, uccl::level, uccl::subsys, \
-                                  __FILE__, __LINE__, __func__)                \
+      : ::UCCLVoidify() &                                                      \
+            (::UCCLLogCapture(::ucclLogger, level, subsys, __FILE__,           \
+                             __LINE__, __func__)                               \
                  .stream())
 
 #define UCCL_LOG(level, subsys) UCCL_LOG_INTERNAL(level, subsys)
@@ -78,14 +85,14 @@ struct UCCLNullStream {};
 #define UCCL_LOG_EVERY_N_INTERNAL(level, subsys, n)                           \
   static std::atomic<int> UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(                \
       log_every_n_counter, __LINE__){1};                                      \
-  (!(uccl::ucclLogger.shouldLog(uccl::level, uccl::subsys) &&                 \
+  (!(::ucclLogger.shouldLog(level, subsys) &&                                 \
      ((UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(log_every_n_counter, __LINE__)     \
            .fetch_add(1) %                                                    \
        (n)) == 0)))                                                           \
       ? (void)0                                                               \
-      : uccl::UCCLVoidify() &                                                 \
-            uccl::UCCLLogCapture(uccl::ucclLogger, uccl::level, uccl::subsys, \
-                                 __FILE__, __LINE__, __func__)                \
+      : ::UCCLVoidify() &                                                     \
+            ::UCCLLogCapture(::ucclLogger, level, subsys, __FILE__,           \
+                            __LINE__, __func__)                               \
                 .stream()
 
 #define UCCL_LOG_EVERY_N(level, subsys, n) \
@@ -94,46 +101,46 @@ struct UCCLNullStream {};
 #define UCCL_LOG_FIRST_N_INTERNAL(level, subsys, n)                           \
   static std::atomic<int> UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(                \
       log_first_n_counter, __LINE__){1};                                      \
-  (!(uccl::ucclLogger.shouldLog(uccl::level, uccl::subsys) &&                 \
+  (!(::ucclLogger.shouldLog(level, subsys) &&                                 \
      ((UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(log_first_n_counter, __LINE__)     \
            .fetch_add(1) <= (n)))))                                           \
       ? (void)0                                                               \
-      : uccl::UCCLVoidify() &                                                 \
-            uccl::UCCLLogCapture(uccl::ucclLogger, uccl::level, uccl::subsys, \
-                                 __FILE__, __LINE__, __func__)                \
+      : ::UCCLVoidify() &                                                     \
+            ::UCCLLogCapture(::ucclLogger, level, subsys, __FILE__,           \
+                            __LINE__, __func__)                               \
                 .stream()
 
 #define UCCL_LOG_FIRST_N(level, subsys, n) \
   UCCL_LOG_FIRST_N_INTERNAL(level, subsys, n)
 
 #define UCCL_LOG_IF_INTERNAL(level, subsys, condition)                         \
-  (!(condition && uccl::ucclLogger.shouldLog(uccl::level, uccl::subsys)))      \
+  (!(condition && ::ucclLogger.shouldLog(level, subsys)))                      \
       ? (void)0                                                                \
-      : uccl::UCCLVoidify() &                                                  \
-            (uccl::UCCLLogCapture(uccl::ucclLogger, uccl::level, uccl::subsys, \
-                                  __FILE__, __LINE__, __func__)                \
+      : ::UCCLVoidify() &                                                      \
+            (::UCCLLogCapture(::ucclLogger, level, subsys, __FILE__,           \
+                             __LINE__, __func__)                               \
                  .stream())
 
 #define UCCL_LOG_IF(level, subsys, condition) \
   UCCL_LOG_IF_INTERNAL(level, subsys, condition)
 
 #define UCCL_VLOG_IF_INTERNAL(vLogLevel, condition)                       \
-  !(condition && uccl::ucclLogger.shouldVLog(vLogLevel))                  \
+  !(condition && ::ucclLogger.shouldVLog(vLogLevel))                    \
       ? (void)0                                                           \
-      : uccl::UCCLVoidify() &                                             \
-            (uccl::UCCLVLogCapture(uccl::ucclLogger, vLogLevel, __FILE__, \
-                                   __LINE__, __func__)                    \
+      : ::UCCLVoidify() &                                                \
+            (::UCCLVLogCapture(::ucclLogger, vLogLevel, __FILE__,         \
+                              __LINE__, __func__)                         \
                  .stream())
 
 #define UCCL_VLOG_IF(vLogLevel, condition) \
   UCCL_VLOG_IF_INTERNAL(vLogLevel, condition)
 
 #define UCCL_VLOG_INTERNAL(vLogLevel)                                     \
-  (!uccl::ucclLogger.shouldVLog(vLogLevel))                               \
+  (!::ucclLogger.shouldVLog(vLogLevel))                                  \
       ? (void)0                                                           \
-      : uccl::UCCLVoidify() &                                             \
-            (uccl::UCCLVLogCapture(uccl::ucclLogger, vLogLevel, __FILE__, \
-                                   __LINE__, __func__)                    \
+      : ::UCCLVoidify() &                                                 \
+            (::UCCLVLogCapture(::ucclLogger, vLogLevel, __FILE__,          \
+                              __LINE__, __func__)                         \
                  .stream())
 
 #define UCCL_VLOG(level) UCCL_VLOG_INTERNAL(level)
@@ -144,9 +151,9 @@ struct UCCLNullStream {};
 #define UCCL_CHECK_INTERNAL(condition)                                    \
   (condition)                                                             \
       ? (void)0                                                           \
-      : uccl::UCCLVoidify() &                                             \
-            (uccl::UCCLCheckCapture(uccl::ucclLogger, __FILE__, __LINE__, \
-                                    __func__, #condition, "CHECK")        \
+      : ::UCCLVoidify() &                                                 \
+            (::UCCLCheckCapture(::ucclLogger, __FILE__, __LINE__,          \
+                               __func__, #condition, "CHECK")              \
                  .stream())
 
 #define UCCL_CHECK(condition) UCCL_CHECK_INTERNAL((condition))
@@ -164,14 +171,14 @@ struct UCCLNullStream {};
 #define UCCL_CHECK_GTE(first, second) UCCL_CHECK_INTERNAL(((first) >= (second)))
 
 #ifdef NDEBUG
-static UCCLNullStream nullstream;
-#define UCCL_DCHECK(condition) ::uccl::nullstream
-#define UCCL_DCHECK_EQ(first, second) ::uccl::nullstream
-#define UCCL_DCHECK_NE(first, second) ::uccl::nullstream
-#define UCCL_DCHECK_LT(first, second) ::uccl::nullstream
-#define UCCL_DCHECK_LE(first, second) ::uccl::nullstream
-#define UCCL_DCHECK_GT(first, second) ::uccl::nullstream
-#define UCCL_DCHECK_GTE(first, second) ::uccl::nullstream
+static UCCLNullStream uccl_nullstream;
+#define UCCL_DCHECK(condition) ::uccl_nullstream
+#define UCCL_DCHECK_EQ(first, second) ::uccl_nullstream
+#define UCCL_DCHECK_NE(first, second) ::uccl_nullstream
+#define UCCL_DCHECK_LT(first, second) ::uccl_nullstream
+#define UCCL_DCHECK_LE(first, second) ::uccl_nullstream
+#define UCCL_DCHECK_GT(first, second) ::uccl_nullstream
+#define UCCL_DCHECK_GTE(first, second) ::uccl_nullstream
 #else
 #define UCCL_DCHECK(condition) UCCL_CHECK(condition)
 #define UCCL_DCHECK_EQ(first, second) UCCL_CHECK_EQ(first, second)
@@ -184,9 +191,9 @@ static UCCLNullStream nullstream;
 
 #define UCCL_PCHECK_INTERNAL(check)                                         \
   check ? (void)0                                                           \
-        : uccl::UCCLVoidify() &                                             \
-              (uccl::UCCLCheckCapture(uccl::ucclLogger, __FILE__, __LINE__, \
-                                      __func__, #check, "PCHECK", errno)    \
+        : ::UCCLVoidify() &                                                 \
+              (::UCCLCheckCapture(::ucclLogger, __FILE__, __LINE__,         \
+                                 __func__, #check, "PCHECK", errno)         \
                    .stream())
 
 #define UCCL_PCHECK(condition) UCCL_PCHECK_INTERNAL(condition)
@@ -355,8 +362,8 @@ class UCCLLogger {
       auto token = sv.substr(0, comma);
       if (token == "ALL") {
         subsys_bitset_.set();
-      } else if (subsysMap_.count(token)) {
-        subsys_bitset_.set(subsysMap_[token]);
+      } else if (uccl_log_subsys_map_.count(token)) {
+        subsys_bitset_.set(uccl_log_subsys_map_[token]);
       }
       if (comma == std::string_view::npos) break;
       sv = sv.substr(comma + 1);
@@ -367,7 +374,8 @@ inline UCCLLogger ucclLogger(std::cout);
 
 class UCCLLogCapture {
  public:
-  UCCLLogCapture(UCCLLogger& logger, UCCLLogLevel level, UCCLLogSubsys subsys,
+  UCCLLogCapture(UCCLLogger& logger, UCCLLogLevel level,
+                 UCCLLogSubsys subsys,
                  std::string_view fileName, int lineNumber,
                  std::string_view functionName)
       : logger_(logger),
@@ -398,8 +406,8 @@ class UCCLLogCapture {
   UCCLLogSubsys subsys_;
   std::ostringstream stream_;
   std::string_view fileName_;
-  std::string_view functionName_;
   int lineNumber_;
+  std::string_view functionName_;
 };
 
 class UCCLVLogCapture {
@@ -432,8 +440,8 @@ class UCCLVLogCapture {
   int vLogLevel_;
   std::ostringstream stream_;
   std::string_view fileName_;
-  std::string_view functionName_;
   int lineNumber_;
+  std::string_view functionName_;
 };
 
 class UCCLCheckCapture {
@@ -486,8 +494,8 @@ struct UCCLVoidify {
 template <typename T>
 inline T* UCCLCheckNotNullCapture(T* ptr, char const* expr) {
   if (ptr == nullptr) {
-    uccl::UCCLCheckCapture(uccl::ucclLogger, __FILE__, __LINE__, __func__, expr,
-                           "CHECK_NOTNULL", 0);
+    ::UCCLCheckCapture(::ucclLogger, __FILE__, __LINE__, __func__, expr,
+                      "CHECK_NOTNULL", 0);
   }
 
   return ptr;
@@ -506,4 +514,32 @@ inline UCCLNullStream& operator<<(UCCLNullStream& s,
   return s;
 }
 
+// Re-export into uccl for backward compatibility.
+namespace uccl {
+using ::UCCLLogLevel;
+using ::FATAL;
+using ::ERROR;
+using ::WARNING;
+using ::INFO;
+using ::UCCLLogSubsys;
+using ::INIT;
+using ::AFXDP;
+using ::DPDK;
+using ::EFA;
+using ::RDMA;
+using ::EP;
+using ::P2P;
+using ::UTIL;
+using ::SUBSYS_COUNT;
+using ::UCCLLogger;
+using ::UCCLLogCapture;
+using ::UCCLVLogCapture;
+using ::UCCLCheckCapture;
+using ::UCCLVoidify;
+using ::UCCLNullStream;
+using ::ucclLogger;
+using ::logLevelToString;
+using ::logSubsysToString;
 }  // namespace uccl
+
+#pragma pop_macro("EFA")
