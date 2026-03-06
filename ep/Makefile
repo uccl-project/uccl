@@ -31,18 +31,25 @@ else
   GH_CFLAGS := -DUSE_GRACE_HOPPER
 endif
 
-# Nanobind configuration (stable ABI)
+# Nanobind configuration
 PYTHON             ?= python3
 NB_DIR             := $(shell $(PYTHON) -c "import nanobind as _nb, os; print(os.path.dirname(_nb.__file__))")
 NB_INCLUDES        := -I$(NB_DIR)/include -I$(NB_DIR)/ext/robin_map/include \
                       -I$(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_path('include'))")
+# Stable ABI requires Python >= 3.12
+PY_STABLE_ABI_OK   := $(shell $(PYTHON) -c "import sys; print(1 if sys.version_info >= (3, 12) else 0)")
+ifeq ($(PY_STABLE_ABI_OK),1)
 NB_ABI_FLAGS       := -DPy_LIMITED_API=0x030C0000 -DNB_STABLE_ABI=1
+EXT_SUFFIX         := .abi3.so
+else
+NB_ABI_FLAGS       :=
+EXT_SUFFIX         := $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))")
+endif
 NB_SRC_DIR         := $(NB_DIR)/src
 NB_SRCS            := nb_internals.cpp nb_func.cpp nb_type.cpp nb_enum.cpp \
                       nb_ndarray.cpp nb_static_property.cpp common.cpp error.cpp \
                       trampoline.cpp implicit.cpp
 NB_OBJECTS         := $(addprefix nb_,$(NB_SRCS:.cpp=.o))
-EXT_SUFFIX         := .abi3.so
 
 TORCH_ROOT        := $(shell $(PYTHON) -c "import torch, pathlib; print(pathlib.Path(torch.__file__).parent)")
 TORCH_INCLUDE     := $(TORCH_ROOT)/include
@@ -127,12 +134,12 @@ UCCL_UCCL := $(abspath $(CURDIR)/../uccl/uccl)
 
 install: $(EP_EXT)
 	@mkdir -p $(INSTALL_DIR)
+	@rm -f $(INSTALL_DIR)/ep.cpython-*.so $(INSTALL_DIR)/ep.abi3.so
 	@cp $(EP_EXT) $(INSTALL_DIR)/
-	@rm -f $(INSTALL_DIR)/ep.cpython-*.so
 	@echo "Installed $(EP_EXT) -> $(INSTALL_DIR)/"
 	@if [ -d "$(UCCL_UCCL)" ]; then \
+		rm -f "$(UCCL_UCCL)"/ep.cpython-*.so "$(UCCL_UCCL)"/ep.abi3.so; \
 		cp $(EP_EXT) "$(UCCL_UCCL)/"; \
-		rm -f "$(UCCL_UCCL)"/ep.cpython-*.so; \
 		echo "Installed $(EP_EXT) -> $(UCCL_UCCL)/ (for in-repo runs)"; \
 	fi
 

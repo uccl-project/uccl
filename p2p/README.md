@@ -19,8 +19,6 @@ p2p/
 
 ## Prerequisites
 
-Our Python extension uses [nanobind](https://github.com/wjakob/nanobind) for ABI-stable bindings (compatible across Python 3.12+ without recompilation). 
-
 The easiest way is to: 
 ```bash
 git clone https://github.com/uccl-project/uccl.git --recursive

@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 import sysconfig
 import setuptools
@@ -22,7 +23,7 @@ def _is_freethreaded():
     return bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
 
 
-_use_abi3 = not _is_freethreaded()
+_use_abi3 = not _is_freethreaded() and sys.version_info >= (3, 12)
 
 
 class ABI3BuildExtension(BuildExtension):
@@ -65,9 +66,12 @@ class CustomInstall(install):
         print(f"Installing {so_file.name} to {install_dir}")
         shutil.copy2(so_file, dest_path)
 
-        # Remove stale cpython-specific .so if we now produce .abi3.so
         if _use_abi3:
             for old in Path(install_dir).glob("ep.cpython-*.so"):
+                print(f"Removing stale {old.name}")
+                old.unlink()
+        else:
+            for old in Path(install_dir).glob("ep.abi3.so"):
                 print(f"Removing stale {old.name}")
                 old.unlink()
 

@@ -1,5 +1,7 @@
-/* Minimal stable-ABI stub so setuptools emits a cp38-abi3 platform tag. */
-#define Py_LIMITED_API 0x03080000
+/* Minimal stable-ABI stub so setuptools emits a cp312-abi3 platform tag. */
+#ifndef Py_LIMITED_API
+#define Py_LIMITED_API 0x030C0000
+#endif
 #include <Python.h>
 
 static PyModuleDef _module = {
