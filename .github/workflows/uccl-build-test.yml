@@ -149,30 +149,17 @@ jobs:
           ssh -o BatchMode=yes spark1 << 'EOF'
             set -euo pipefail
 
-            # startup conda
             source /home/${{secrets.UCCL_DEV_USER}}/nfs/miniconda3/etc/profile.d/conda.sh
 
             conda info --envs | awk '{print $1}' | grep -qx uccl-ci-sandbox || conda create -y -n uccl-ci-sandbox python=3.13
             conda activate uccl-ci-sandbox
 
-            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/ep
+            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox
 
-            ./install_deps.sh 2>&1 | tee build.log
-            grep -q 'All dependencies installed and environment configured' build.log
-
-            # manually configure the cuda path to prevent include errors
-            export CUDA_HOME="/usr/local/cuda-13.0"
-            export PATH="$CUDA_HOME/bin:$PATH"
-
-            python setup.py clean
-            if ! python setup.py install 2>&1 | tee build.log; then
-              echo 'Could not set up after successful install'
-              exit 1
-            fi
+            ./build.sh cuda13 ep 3.13 --install 2>&1 | tee build.log
 
             if ! python -c 'import torch; import uccl.ep'; then
-              echo 'Import of torch and uccl.ep failed. Cleaning up and exiting...'
-              python setup.py clean
+              echo 'Import of torch and uccl.ep failed.'
               exit 1
             fi
 
@@ -247,10 +234,9 @@ jobs:
         shell: bash
         run: |
           set -eu
-          scp -o BatchMode=yes spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/ep/build.log ./gb10-build.log || true
+          scp -o BatchMode=yes spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/build.log ./gb10-build.log || true
           ssh -o BatchMode=yes spark1 << 'EOF'
-            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/ep
-            rm build.log
+            rm -f /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/build.log
           EOF
 
       - name: Upload build.log artifact
