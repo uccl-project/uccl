@@ -43,6 +43,10 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
   unsigned long long rptr_val = static_cast<unsigned long long>(req_rptr);
   unsigned long long lptr_val = static_cast<unsigned long long>(req_lptr);
   unsigned long long bytes_val = static_cast<unsigned long long>(bytes);
+  constexpr int kWriteAddrShift =
+      use_normal_mode ? kWriteAddrShiftNormal : kWriteAddrShiftLowLatency;
+  constexpr unsigned long long kWriteAddrAlignMask =
+      (1ull << kWriteAddrShift) - 1ull;
 
   auto* h = reinterpret_cast<d2hq::D2HHandle*>(
       static_cast<uintptr_t>(d2h_channel_addrs[d2h_channel_idx]));
@@ -58,12 +62,18 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
     TransferCmd cmd{};
     cmd.cmd_type =
         make_cmd_type(CmdType::WRITE, is_combine, low_latency_buffer_idx);
-    // Store offsets shifted right by kWriteAddrShift (all WRITE offsets are
-    // 16-byte aligned) to support RDMA buffers larger than 4 GiB.
-    EP_DEVICE_ASSERT((rptr_val & 0xF) == 0 &&
-                     "req_rptr must be 16-byte aligned for shift");
-    EP_DEVICE_ASSERT((lptr_val & 0xF) == 0 &&
-                     "req_lptr must be 16-byte aligned for shift");
+    // Normal mode may target int-based metadata buffers, while low-latency
+    // mode stays int4-aligned.
+    EP_DEVICE_ASSERT((rptr_val & kWriteAddrAlignMask) == 0 &&
+                     (use_normal_mode ? "req_rptr is not aligned for packed "
+                                        "WRITE offset (high-throughput mode)"
+                                      : "req_rptr is not aligned for packed "
+                                        "WRITE offset (low-latency mode)"));
+    EP_DEVICE_ASSERT((lptr_val & kWriteAddrAlignMask) == 0 &&
+                     (use_normal_mode ? "req_lptr is not aligned for packed "
+                                        "WRITE offset (high-throughput mode)"
+                                      : "req_lptr is not aligned for packed "
+                                        "WRITE offset (low-latency mode)"));
     cmd.req_rptr = rptr_val >> kWriteAddrShift;
     cmd.req_lptr = lptr_val >> kWriteAddrShift;
     cmd.bytes = bytes_val;
@@ -98,12 +108,18 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       // NOTE(MaoZiming): cmd is needed for proxy to process the command.
       cmd.cmd_type =
           make_cmd_type(CmdType::WRITE, is_combine, low_latency_buffer_idx);
-      // Store offsets shifted right by kWriteAddrShift (all WRITE offsets are
-      // 16-byte aligned) to support RDMA buffers larger than 4 GiB.
-      EP_DEVICE_ASSERT((rptr_val & 0xF) == 0 &&
-                       "req_rptr must be 16-byte aligned for shift");
-      EP_DEVICE_ASSERT((lptr_val & 0xF) == 0 &&
-                       "req_lptr must be 16-byte aligned for shift");
+      // Normal mode may target int-based metadata buffers, while low-latency
+      // mode stays int4-aligned.
+      EP_DEVICE_ASSERT((rptr_val & kWriteAddrAlignMask) == 0 &&
+                       (use_normal_mode ? "req_rptr is not aligned for packed "
+                                          "WRITE offset (high-throughput mode)"
+                                        : "req_rptr is not aligned for packed "
+                                          "WRITE offset (low-latency mode)"));
+      EP_DEVICE_ASSERT((lptr_val & kWriteAddrAlignMask) == 0 &&
+                       (use_normal_mode ? "req_lptr is not aligned for packed "
+                                          "WRITE offset (high-throughput mode)"
+                                        : "req_lptr is not aligned for packed "
+                                          "WRITE offset (low-latency mode)"));
       cmd.req_rptr = rptr_val >> kWriteAddrShift;
       cmd.req_lptr = lptr_val >> kWriteAddrShift;
       cmd.bytes = bytes_val;
