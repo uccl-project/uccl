@@ -137,7 +137,7 @@ struct BatchProviderInlinePointer {
   using Writer = BatchWriter;
 
   __host__ BatchProviderInlinePointer(int num, void** ptr_host) {
-    CHECK_LE(num, N);
+    UCCL_CHECK_LE(num, N);
     for (int i = 0; i < num; ++i) {
       ptr_dev_[i] = ptr_host[i];
     }
@@ -166,7 +166,7 @@ struct BatchProviderInlinePointerCapacity {
       int num,
       void** ptr_host,
       const uint32_t* capacity_host) {
-    CHECK_LE(num, N);
+    UCCL_CHECK_LE(num, N);
     for (int i = 0; i < num; ++i) {
       ptr_dev_[i] = ptr_host[i];
       capacity_dev_[i] = capacity_host[i];

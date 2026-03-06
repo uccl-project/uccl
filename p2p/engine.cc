@@ -150,8 +150,6 @@ static inline void shm_ring_recv(jring_t* ring, ShmMsg& msg) {
   msg = tmp;
 }
 
-std::once_flag Endpoint::glog_init_once;
-
 uccl::UCCLLogLevel Endpoint::parse_log_level_from_env() {
   char const* env = std::getenv("UCCL_P2P_LOG_LEVEL");
   if (!env) {
@@ -197,10 +195,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   }
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
-  // std::call_once(Endpoint::glog_init_once,
-  //                []() { google::InitGoogleLogging("uccl_p2p"); });
   uccl::ucclLogger.setLogLevel(Endpoint::parse_log_level_from_env());
-  // google::InstallFailureSignalHandler();
 
 #ifdef UCCL_P2P_USE_NCCL
   ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
@@ -259,10 +254,6 @@ Endpoint::Endpoint(uint32_t const num_cpus)
     }
   }
 
-  // std::call_once(glog_init_once,
-  //                []() { google::InitGoogleLogging("uccl_p2p"); });
-
-  // google::InstallFailureSignalHandler();
 #ifdef UCCL_P2P_USE_NCCL
   ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
 #else

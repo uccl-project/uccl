@@ -135,14 +135,14 @@ ANSDecodeStatus ansDecodeBatchSplitSize(
   uint32_t maxSplitSize = 0;
 
   // check alignment
-  CHECK_EQ(uintptr_t(out_dev) % kANSRequiredAlignment, 0);
+  UCCL_CHECK_EQ(uintptr_t(out_dev) % kANSRequiredAlignment, 0);
 
   for (uint32_t i = 0; i < numInBatch; ++i) {
     auto size = outSplitSizes[i];
 
     if (i != (numInBatch - 1)) {
       // check alignment (internal splits affect alignment of things after it)
-      CHECK_EQ(size % kANSRequiredAlignment, 0);
+      UCCL_CHECK_EQ(size % kANSRequiredAlignment, 0);
     }
 
     splitSize[i] = size;

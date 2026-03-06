@@ -252,7 +252,6 @@ class Endpoint {
   static constexpr size_t ShmRingDefaultElemCnt = 16;
   static constexpr size_t kTaskRingSize = 1024;
 
-  static std::once_flag glog_init_once;
   static uccl::UCCLLogLevel parse_log_level_from_env();
 
  public:

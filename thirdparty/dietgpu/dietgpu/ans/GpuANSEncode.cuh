@@ -26,12 +26,7 @@
 #include <vector>
 
 namespace dietgpu {
-#if defined(__HIP_PLATFORM_AMD__)
-  // HIP does not support thrust exec check disabling
-  #define THRUST_DISABLE_EXEC_CHECK
-#else
-  #define THRUST_DISABLE_EXEC_CHECK __thrust_exec_check_disable__
-#endif
+#define THRUST_DISABLE_EXEC_CHECK
 
 // maximum raw compressed data block size in bytes
 constexpr __host__ __device__ uint32_t
@@ -798,7 +793,7 @@ void ansEncodeBatchDevice(
         RUN_ENCODE(11);
         break;
       default:
-        CHECK(false) << "unhandled pdf precision " << config.probBits;
+        UCCL_CHECK(false) << "unhandled pdf precision " << config.probBits;
     }
 
 #undef RUN_ENCODE
