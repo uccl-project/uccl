@@ -64,8 +64,8 @@ if __name__ == "__main__":
     for d in dirs:
         for ext in exts:
             sources += glob(os.path.join(base, d, ext))
-    libraries = ["ibverbs", "glog", "nl-3", "nl-route-3", "numa"]
-    include_dirs = [PROJECT_ROOT, PROJECT_ROOT / ".." / "include"]
+    libraries = ["ibverbs", "nl-3", "nl-route-3", "numa"]
+    include_dirs = [PROJECT_ROOT, PROJECT_ROOT / ".." / ".." / "include"]
     library_dirs = []
     nvcc_dlink = []
     extra_link_args = []
