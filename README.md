@@ -100,6 +100,7 @@ bash build.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] \
 ```
 > Note: 
 > - By default, `build.sh cuda|rocm` targets CUDA 12.8 or ROCm 7.1, but you can also specify `cuda13|rocm6` to target CUDA 13.0 or ROCm 6.4.
+> - UCCL uses [nanobind](https://github.com/wjakob/nanobind) for C++/Python bindings. On Python 3.12+, wheels are tagged `cp312-abi3` (stable ABI, one wheel for all 3.12+ interpreters); on older Pythons, wheels are CPython-version-specific.
 > - When building for ROCm with python packaging through TheRock, please specify your ROCm index url; the default is `https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu` and it may not be what you want. When installing UCCL wheels for TheRock, please provide pip with the index url and add the optional extra `[rocm]` to the wheel, e.g., `pip install --extra-index-url https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu wheelhouse-therock/uccl-0.0.1.post4-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl[rocm]`.
 
 Then, when running your PyTorch applications, set the environment variable accordingly: 

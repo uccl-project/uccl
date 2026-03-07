@@ -26,7 +26,7 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   gpu_buffer_addr_ = reinterpret_cast<void*>(gpu_buffer_addr);
 
   cfg.d2h_queues.reserve(kChannelPerProxy);
-  d2h_queues.reserve(kChannelPerProxy);
+  d2h_queues.resize(kChannelPerProxy);
   for (size_t i = 0; i < kChannelPerProxy; ++i) {
 #ifdef USE_MSCCLPP_FIFO_BACKEND
     auto fifo = std::make_unique<mscclpp::Fifo>(kQueueSize);

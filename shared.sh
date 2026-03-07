@@ -1,8 +1,15 @@
 #!/bin/bash
 
 # Rename cpython-versioned .so files to .abi3.so for stable ABI compatibility.
+# Only applies on Python >= 3.12 where nanobind stable ABI is enabled.
 rename_to_abi3() {
   local dir="$1"
+  local py_stable_abi_ok
+  py_stable_abi_ok=$(python3 -c "import sys; print(1 if sys.version_info >= (3, 12) else 0)")
+  if [[ "$py_stable_abi_ok" != "1" ]]; then
+    echo "Python < 3.12 detected, skipping abi3 rename (nanobind stable ABI not supported)"
+    return
+  fi
   for f in "$dir"/*.cpython-*.so; do
     if [[ -f "$f" ]]; then
       local newname

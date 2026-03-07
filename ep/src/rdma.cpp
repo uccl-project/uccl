@@ -17,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -1234,8 +1235,15 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
 
   int ret = ibv_modify_qp(S.qp, &attr, flags);
   if (ret) {
-    perror("Failed to modify QP to RTR");
-    fprintf(stderr, "errno: %d\n", errno);
+    int const err = errno;
+    fprintf(stderr, "Failed to modify QP to RTR: %s\n", strerror(err));
+    fprintf(stderr, "errno: %d\n", err);
+    if (is_roce && err == ENODATA) {
+      fprintf(stderr,
+              "[RDMA] RoCE path (ENODATA): try another GID index (e.g. "
+              "UCCL_IB_GID_INDEX=1 or 3). Ensure both nodes use the same "
+              "UCCL_IB_GID_INDEX and that the GID is RoCE v2 and routable.\n");
+    }
     exit(1);
   }
 

@@ -16,7 +16,7 @@ Below assumes `cu128`.
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv
 source .venv/bin/activate
-uv pip install numpy setuptools pybind11
+uv pip install numpy setuptools nanobind
 uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 ```
 

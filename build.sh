@@ -375,7 +375,11 @@ def initialize():
     # Collapse to the single requested platform tag via simple rename.
     cd /io/${WHEEL_DIR}
     for whl in uccl-*.whl; do
-      new="${whl%%abi3-*}abi3-${UCCL_WHEEL_PLAT}.whl"
+      if [[ "$whl" == *-abi3-* ]]; then
+        new="${whl%%abi3-*}abi3-${UCCL_WHEEL_PLAT}.whl"
+      else
+        new="${whl%%-manylinux*}-${UCCL_WHEEL_PLAT}.whl"
+      fi
       [[ "$whl" != "$new" ]] && mv "$whl" "$new"
     done
     cd /io
