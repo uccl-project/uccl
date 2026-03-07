@@ -848,7 +848,8 @@ bool can_register_gpu_memory_for_atomics(int gpu_idx) {
 
 ibv_cq* create_per_thread_cq(ProxyCtx& S) {
   int cq_depth = kMaxOutstandingSends * 2;
-  // Use extended CQ for EFA, AMD Ionic, and other drivers that are compatible.
+  // Use extended CQ for EFA and Intel NICs
+#if defined(EFA) || defined(ETHERNET_RDMA)
   struct ibv_cq_init_attr_ex cq_ex_attr = {};
   cq_ex_attr.cqe = cq_depth;
   cq_ex_attr.cq_context = nullptr;
@@ -867,13 +868,21 @@ ibv_cq* create_per_thread_cq(ProxyCtx& S) {
 #else
   cq_ex_attr.wc_flags = IBV_WC_STANDARD_FLAGS;
 #endif
-
   S.cq_ex = ibv_create_cq_ex(S.context, &cq_ex_attr);
   if (!S.cq_ex) {
     perror("Failed to create CQ (ibv_create_cq_ex)");
     exit(1);
   }
   return ibv_cq_ex_to_cq(S.cq_ex);
+#else
+  // Use standard CQ for other NICs like Broadcom
+  S.cq = ibv_create_cq(S.context, cq_depth, nullptr, nullptr, 0);
+  if (!S.cq) {
+    perror("Failed to create CQ (ibv_create_cq)");
+    exit(1);
+  }
+  return S.cq;
+#endif
 }
 
 #ifdef EFA

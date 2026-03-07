@@ -428,9 +428,15 @@ if [[ "$DO_INSTALL" == "1" ]]; then
   else
     PIP_CMD="pip"
   fi
+  
   echo "Installing uccl wheel (using ${PIP_CMD})..."
   ${PIP_CMD} install -r requirements.txt
   ${PIP_CMD} uninstall uccl -y 2>/dev/null || true
+  UCCL_CLEANUP_DIR="$(python3 -c "import site; print(site.getsitepackages()[0])")/uccl"
+  if [[ -d "$UCCL_CLEANUP_DIR" ]]; then
+    echo "Cleaning up stale files in $UCCL_CLEANUP_DIR"
+    rm -r "$UCCL_CLEANUP_DIR"
+  fi
   if [[ "$TARGET" != "therock" ]]; then
     ${PIP_CMD} install "${WHEEL_DIR}"/uccl-*.whl --no-deps
   else
