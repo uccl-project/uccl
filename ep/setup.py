@@ -23,6 +23,18 @@ def _is_freethreaded():
     return bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
 
 
+def _has_intel_rdma_nic():
+    """Return True if an Intel RDMA NIC (irdma) is present on the system."""
+    ib_dir = Path("/sys/class/infiniband")
+    if not ib_dir.exists():
+        return False
+    try:
+        devices = os.listdir(ib_dir)
+    except OSError:
+        return False
+    return any(name.startswith("irdma") for name in devices)
+
+
 _use_abi3 = not _is_freethreaded() and sys.version_info >= (3, 12)
 
 
@@ -225,8 +237,11 @@ if __name__ == "__main__":
             cxx_flags.append("-DUSE_GRACE_HOPPER")
             nvcc_flags.append("-DUSE_GRACE_HOPPER")
 
-        # Add Intel RDMA NIC support if USE_INTEL_RDMA_NIC=1
-        if int(os.getenv("USE_INTEL_RDMA_NIC", 0)):
+        # Add Intel RDMA NIC support: auto-detect irdma or USE_INTEL_RDMA_NIC=1
+        use_intel_rdma_nic = os.getenv("USE_INTEL_RDMA_NIC")
+        if use_intel_rdma_nic is None or use_intel_rdma_nic == "":
+            use_intel_rdma_nic = "1" if _has_intel_rdma_nic() else "0"
+        if int(use_intel_rdma_nic):
             print("Building with Intel RDMA NIC support (INTEL_RDMA_NIC)")
             cxx_flags.append("-DINTEL_RDMA_NIC")
             nvcc_flags.append("-DINTEL_RDMA_NIC")
