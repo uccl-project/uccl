@@ -143,13 +143,6 @@ build_p2p() {
   else
     echo "[container] USE_TCPX=1, skipping copying p2p runtime files"
   fi
-  if [[ "$TARGET" == rocm* ]]; then
-    cd thirdparty/dietgpu
-    rm -rf build/
-    python3 setup.py build
-    cd ../..
-    cp thirdparty/dietgpu/build/**/*.so uccl/
-  fi
   rename_to_abi3 uccl
 }
 
