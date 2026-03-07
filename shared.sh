@@ -111,15 +111,20 @@ build_p2p() {
       CUDA_GPU_ARCH="sm_$(echo "${TORCH_CUDA_ARCH_LIST:-9.0}" | awk '{print $1}' | sed 's/+PTX//; s/\.//')"
       echo "Building dietgpu float for CUDA: $CUDA_GPU_ARCH"
       make clean -f Makefile.cuda && make -j$(nproc) -f Makefile.cuda GPU_ARCH=$CUDA_GPU_ARCH
-    else
+      cd ../../../..
+    elif [[ "$TARGET" == rocm* ]]; then
       rm -rf build/
       python3 setup.py build
       cd dietgpu/float
       echo $TORCH_CUDA_ARCH_LIST
       make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm GPU_ARCH=$TORCH_CUDA_ARCH_LIST
+      cd ../../../..
     fi
-    cd ../../../..
+    mkdir -p uccl/lib
     cp thirdparty/dietgpu/dietgpu/float/libdietgpu_float.so uccl/lib
+    if [[ "$TARGET" == rocm* ]]; then
+      cp thirdparty/dietgpu/build/**/*.so uccl/
+    fi
   fi
 
   cd p2p
@@ -142,13 +147,6 @@ build_p2p() {
     cp p2p/utils.py uccl/
   else
     echo "[container] USE_TCPX=1, skipping copying p2p runtime files"
-  fi
-  if [[ "$TARGET" == rocm* ]]; then
-    cd thirdparty/dietgpu
-    rm -rf build/
-    python3 setup.py build
-    cd ../..
-    cp thirdparty/dietgpu/build/**/*.so uccl/
   fi
   rename_to_abi3 uccl
 }
