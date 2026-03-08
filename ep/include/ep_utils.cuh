@@ -36,6 +36,11 @@ using f32_gptr = __attribute__((address_space(1))) float*;
 #define __shfl_sync(mask, var, srcLane) __shfl((var), (srcLane))
 #endif
 
+// HIP on AMD may not expose CUDA's __syncwarp; use wave barrier instead.
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+#define __syncwarp(...) __builtin_amdgcn_wave_barrier()
+#endif
+
 // workgroup-level barrier sync used shared memory
 namespace amd {
 
