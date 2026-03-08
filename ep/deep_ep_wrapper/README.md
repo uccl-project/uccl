@@ -3,7 +3,7 @@
 First build and install UCCL-EP:
 ```bash
 cd uccl
-bash build.sh cuda ep
+PER_EXPERT_BATCHING=1 bash build.sh cuda ep
 uv pip install wheelhouse-cuda/uccl-*.whl
 ```
 
