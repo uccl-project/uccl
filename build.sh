@@ -297,8 +297,11 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
     elif [[ "$BUILD_TYPE" == "ukernel" ]]; then
       build_ukernel "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "all" ]]; then
-      build_ccl_rdma "$TARGET" "$ARCH" "$IS_EFA"
-      build_ccl_efa "$TARGET" "$ARCH" "$IS_EFA"
+      if [[ -n "$IS_EFA" ]]; then
+        build_ccl_efa "$TARGET" "$ARCH" "$IS_EFA"
+      else
+        build_ccl_rdma "$TARGET" "$ARCH" "$IS_EFA"
+      fi
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
       build_ep "$TARGET" "$ARCH" "$IS_EFA"
     fi
