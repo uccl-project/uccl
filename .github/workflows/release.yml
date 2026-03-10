@@ -23,7 +23,7 @@ env:
   IMAGE_PREFIX: ghcr.io/${{ github.repository }}
 
 # ---------------------------------------------------------------------------
-# Single wheel containing p2p + ep, per (variant, python_version).
+# Single wheel containing ccl_rdma + ccl_efa + p2p + ep, per variant.
 #
 #   Variant       target   image               package name     distribution
 #   ──────────    ──────   ─────               ────────────     ────────────
@@ -34,7 +34,7 @@ env:
 #   rocm          rocm     uccl-builder-rocm    uccl-rocm        extra-index-url
 #   therock       therock  uccl-builder-therock uccl-rocm        extra-index-url
 #
-# × Python 3.10, 3.11, 3.12, 3.13 = 24 wheel jobs + 1 source tarball
+# × Python 3.12 (abi3 — compatible with 3.12+) = 6 wheel jobs + 1 source tarball
 # ---------------------------------------------------------------------------
 
 jobs:
@@ -46,7 +46,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        py_version: ["3.10", "3.11", "3.12", "3.13"]
+        py_version: ["3.12"]
         variant:
           # CUDA 12
           - name: cu12
@@ -129,25 +129,12 @@ jobs:
           UCCL_PACKAGE_NAME: ${{ matrix.variant.package_name }}
           UCCL_SKIP_LOCAL_VERSION: ${{ matrix.variant.for_pypi && '1' || '0' }}
         run: |
-          ./build.sh "${{ matrix.variant.target }}" p2p_ep "${{ matrix.py_version }}"
+          ./build.sh "${{ matrix.variant.target }}" all "${{ matrix.py_version }}"
 
-      - name: Retag wheel with Python/ABI tags
-        if: matrix.variant.for_pypi
+      - name: Show built wheels
         run: |
-          pip install wheel
-          PY_VER_NODOT=$(echo "${{ matrix.py_version }}" | tr -d '.')
-          cd "wheelhouse-${{ matrix.variant.target }}"
-          for whl in ./*.whl; do
-            if [[ -f "$whl" ]]; then
-              echo "Retagging $whl -> cp${PY_VER_NODOT}-cp${PY_VER_NODOT}-..."
-              python3 -m wheel tags \
-                --python-tag "cp${PY_VER_NODOT}" \
-                --abi-tag "cp${PY_VER_NODOT}" \
-                --remove "$whl"
-            fi
-          done
-          echo "Wheels after retagging:"
-          ls -lh ./*.whl
+          echo "Built wheels:"
+          ls -lh "wheelhouse-${{ matrix.variant.target }}"/*.whl
 
       - name: Upload wheel artifact
         uses: actions/upload-artifact@v4
