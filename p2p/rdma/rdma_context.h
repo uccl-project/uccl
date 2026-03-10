@@ -2,6 +2,8 @@
 #pragma once
 #include "define.h"
 #include "rdma_device.h"
+#include <cuda.h>
+#include <unistd.h>
 
 class RdmaContext {
  public:
@@ -155,6 +157,25 @@ class RdmaContext {
   struct ibv_mr* regMem(void* addr, size_t size) const {
     int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                        IBV_ACCESS_REMOTE_READ;
+
+    // On platforms where nvidia_peermem is unavailable (e.g., GB10/Grace
+    // Blackwell unified memory), use DMA-BUF to register GPU memory with the
+    // RDMA NIC. cuMemGetHandleForAddressRange exports a DMA-BUF fd for any
+    // CUDA allocation (requires CUDA >= 11.7); ibv_reg_dmabuf_mr pins it.
+    int dmabuf_fd = -1;
+    CUresult cu_res = cuMemGetHandleForAddressRange(
+        &dmabuf_fd, (CUdeviceptr)addr, size,
+        CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0ULL);
+    if (cu_res == CUDA_SUCCESS && dmabuf_fd >= 0) {
+      struct ibv_mr* mr = ibv_reg_dmabuf_mr(pd_.get(), 0 /*offset*/, size,
+                                            (uint64_t)addr, dmabuf_fd,
+                                            access_flags);
+      close(dmabuf_fd);
+      return mr;
+    }
+
+    // Fall back to standard registration for host memory or when GPU Direct
+    // RDMA is available via nvidia_peermem.
     return ibv_reg_mr(pd_.get(), addr, size, access_flags);
   }
 
