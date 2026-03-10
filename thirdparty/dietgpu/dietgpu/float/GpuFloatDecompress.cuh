@@ -15,7 +15,7 @@
 #include "dietgpu/utils/StackDeviceMemory.h"
 #include "dietgpu/utils/StaticUtils.h"
 
-#include <glog/logging.h>
+#include "util/debug.h"
 #include <cmath>
 #include <sstream>
 #include <vector>
@@ -355,7 +355,7 @@ struct FloatANSProviderInline {
   using FTI = FloatTypeInfo<FT>;
 
   __host__ FloatANSProviderInline(int num, const void** in) {
-    CHECK_LE(num, N);
+    UCCL_CHECK_LE(num, N);
     for (int i = 0; i < num; ++i) {
       in_[i] = in[i];
     }
@@ -530,7 +530,7 @@ struct FloatOutProviderInline {
       const void** in,
       void** out,
       const uint32_t* outCapacity) {
-    CHECK_LE(num, N);
+    UCCL_CHECK_LE(num, N);
     for (int i = 0; i < num; ++i) {
       in_[i] = in[i];
       out_[i] = out[i];
@@ -612,7 +612,7 @@ FloatDecompressStatus floatDecompressDevice(
         RUN_FUSED(FloatType::kFloat32);
         break;
       default:
-        CHECK(false);
+        UCCL_CHECK(false);
         break;
     }
 
@@ -686,7 +686,7 @@ FloatDecompressStatus floatDecompressDevice(
         RUN_DECODE(FloatType::kFloat32);
         break;
       default:
-        CHECK(false);
+        UCCL_CHECK(false);
         break;
     }
 

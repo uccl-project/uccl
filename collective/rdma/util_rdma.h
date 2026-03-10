@@ -3,8 +3,8 @@
 
 #include "param.h"
 #include "transport_config.h"
+#include "util/debug.h"
 #include "util/util.h"
-#include <glog/logging.h>
 #include <infiniband/verbs.h>
 #include <dlfcn.h>
 #include <limits.h>
@@ -245,7 +245,7 @@ static inline struct ibv_ah* util_rdma_create_ah(
   if (roce) {
     ah_attr.is_global = 1;
     ah_attr.grh.dgid = remote_gid;
-    ah_attr.grh.traffic_class = ucclParamROCE_TRAFFIC_CLASS();
+    ah_attr.grh.traffic_class = roceTrafficClass();
     ah_attr.grh.sgid_index = gid_idx;
     ah_attr.grh.flow_label = 0;
     ah_attr.grh.hop_limit = 0xff;
@@ -398,7 +398,8 @@ static sa_family_t envIbAddrFamily(void) {
     return family;
   }
 
-  LOG(INFO) << "NCCL_IB_ADDR_FAMILY set by environment to " << env;
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "NCCL_IB_ADDR_FAMILY set by environment to " << env;
 
   if (strcmp(env, "AF_INET") == 0) {
     family = AF_INET;
@@ -420,7 +421,8 @@ static void* envIbAddrRange(sa_family_t af, int* mask) {
     return NULL;
   }
 
-  LOG(INFO) << "NCCL_IB_ADDR_RANGE set by environment to " << env;
+  UCCL_LOG(INFO, UCCL_RDMA)
+      << "NCCL_IB_ADDR_RANGE set by environment to " << env;
 
   char addrString[128] = {0};
   snprintf(addrString, 128, "%s", env);
@@ -432,26 +434,23 @@ static void* envIbAddrRange(sa_family_t af, int* mask) {
   *(maskStrPtr++) = '\0';
 
   if (inet_pton(af, addrStrPtr, ret) == 0) {
-    LOG(WARNING) << "NET/IB: Ip address '" << addrStrPtr
-                 << "' is invalid for family "
-                 << ((af == AF_INET) ? "AF_INET" : "AF_INET6")
-                 << ", ignoring address";
+    UCCL_LOG(WARN, UCCL_RDMA)
+        << "NET/IB: Ip address '" << addrStrPtr << "' is invalid for family "
+        << ((af == AF_INET) ? "AF_INET" : "AF_INET6") << ", ignoring address";
     return NULL;
   }
 
   *mask = (int)strtol(maskStrPtr, NULL, 10);
   if (af == AF_INET && *mask > 32) {
-    LOG(WARNING) << "NET/IB: Ip address mask '" << *mask
-                 << "' is invalid for family "
-                 << ((af == AF_INET) ? "AF_INET" : "AF_INET6")
-                 << ", ignoring mask";
+    UCCL_LOG(WARN, UCCL_RDMA)
+        << "NET/IB: Ip address mask '" << *mask << "' is invalid for family "
+        << ((af == AF_INET) ? "AF_INET" : "AF_INET6") << ", ignoring mask";
     *mask = 0;
     ret = NULL;
   } else if (af == AF_INET6 && *mask > 128) {
-    LOG(WARNING) << "NET/IB: Ip address mask '" << *mask
-                 << "' is invalid for family "
-                 << ((af == AF_INET) ? "AF_INET" : "AF_INET6")
-                 << ", ignoring mask";
+    UCCL_LOG(WARN, UCCL_RDMA)
+        << "NET/IB: Ip address mask '" << *mask << "' is invalid for family "
+        << ((af == AF_INET) ? "AF_INET" : "AF_INET6") << ", ignoring mask";
     *mask = 0;
     ret = NULL;
   }
@@ -544,16 +543,18 @@ static bool ncclIbRoceGetVersionNum(char const* deviceName, int portNum,
 
   int fd = open(roceTypePath, O_RDONLY);
   if (fd == -1) {
-    LOG(WARNING) << "NET/IB: open failed in ncclIbRoceGetVersionNum: "
-                 << strerror(errno);
+    UCCL_LOG(WARN, UCCL_RDMA)
+        << "NET/IB: open failed in ncclIbRoceGetVersionNum: "
+        << strerror(errno);
     return false;
   }
   int ret = read(fd, gidRoceVerStr, 15);
   close(fd);
 
   if (ret == -1) {
-    LOG(WARNING) << "NET/IB: read failed in ncclIbRoceGetVersionNum: "
-                 << strerror(errno);
+    UCCL_LOG(WARN, UCCL_RDMA)
+        << "NET/IB: read failed in ncclIbRoceGetVersionNum: "
+        << strerror(errno);
     return false;
   }
 
@@ -574,8 +575,9 @@ static bool ncclUpdateGidIndex(struct ibv_context* context, uint8_t portNum,
                                int roceVer, int gidIndexCandidate,
                                int* gidIndex) {
   union ibv_gid gid, gidCandidate;
-  CHECK(ibv_query_gid(context, portNum, *gidIndex, &gid) == 0);
-  CHECK(ibv_query_gid(context, portNum, gidIndexCandidate, &gidCandidate) == 0);
+  UCCL_CHECK(ibv_query_gid(context, portNum, *gidIndex, &gid) == 0);
+  UCCL_CHECK(
+      ibv_query_gid(context, portNum, gidIndexCandidate, &gidCandidate) == 0);
 
   sa_family_t usrFam = af;
   sa_family_t gidFam = getGidAddrFamily(&gid);
@@ -594,10 +596,10 @@ static bool ncclUpdateGidIndex(struct ibv_context* context, uint8_t portNum,
     int usrRoceVer = roceVer;
     int gidRoceVerNum, gidRoceVerNumCandidate;
     char const* deviceName = ibv_get_device_name(context->device);
-    CHECK(ncclIbRoceGetVersionNum(deviceName, portNum, *gidIndex,
-                                  &gidRoceVerNum));
-    CHECK(ncclIbRoceGetVersionNum(deviceName, portNum, gidIndexCandidate,
-                                  &gidRoceVerNumCandidate));
+    UCCL_CHECK(ncclIbRoceGetVersionNum(deviceName, portNum, *gidIndex,
+                                       &gidRoceVerNum));
+    UCCL_CHECK(ncclIbRoceGetVersionNum(deviceName, portNum, gidIndexCandidate,
+                                       &gidRoceVerNumCandidate));
     if ((gidRoceVerNum != gidRoceVerNumCandidate || !validGid(&gid)) &&
         gidRoceVerNumCandidate == usrRoceVer) {
       *gidIndex = gidIndexCandidate;
@@ -627,7 +629,7 @@ static bool ncclIbGetGidIndex(struct ibv_context* context, uint8_t portNum,
     union ibv_gid gid;
     int routableGidIndex = ncclParamIbRoutableFlidIbGidIndex();
     if (routableGidIndex < gidTblLen) {
-      CHECK(ibv_query_gid(context, portNum, routableGidIndex, &gid) == 0);
+      UCCL_CHECK(ibv_query_gid(context, portNum, routableGidIndex, &gid) == 0);
       if (ncclIbExtractFlid(&gid) != 0) {
         *gidIndex = routableGidIndex;
         return true;
@@ -650,9 +652,9 @@ static bool ncclIbGetGidIndex(struct ibv_context* context, uint8_t portNum,
 
   *gidIndex = 0;
   for (int gidIndexNext = 1; gidIndexNext < gidTblLen; ++gidIndexNext) {
-    CHECK(ncclUpdateGidIndex(context, portNum, userAddrFamily, prefix,
-                             prefixlen, userRoceVersion, gidIndexNext,
-                             gidIndex));
+    UCCL_CHECK(ncclUpdateGidIndex(context, portNum, userAddrFamily, prefix,
+                                  prefixlen, userRoceVersion, gidIndexNext,
+                                  gidIndex));
   }
 
   return true;
@@ -667,7 +669,7 @@ static int has_ibv_reg_mr_iova2() {
   if (!ibvhandle) {
     ibvhandle = dlopen("libibverbs.so.1", RTLD_NOW);
     if (!ibvhandle) {
-      LOG(WARNING) << "Failed to open libibverbs.so[.1]";
+      UCCL_LOG(WARN, UCCL_RDMA) << "Failed to open libibverbs.so[.1]";
       return 0;
     }
   }

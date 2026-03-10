@@ -17,7 +17,7 @@
 #include "dietgpu/utils/StackDeviceMemory.h"
 #include "dietgpu/utils/StaticUtils.h"
 
-#include <glog/logging.h>
+#include "util/debug.h"
 #include <cmath>
 #include <cub/block/block_scan.cuh>
 #include <memory>
@@ -563,7 +563,7 @@ ANSDecodeStatus ansDecodeBatch(
         RUN_DECODE(11);
         break;
       default:
-        CHECK(false) << "unhandled pdf precision " << config.probBits;
+        UCCL_CHECK(false) << "unhandled pdf precision " << config.probBits;
     }
 
 #undef RUN_DECODE

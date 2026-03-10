@@ -12,23 +12,49 @@ HIP_INC  := $(HIP_HOME)/include
 HIP_LIB  := $(HIP_HOME)/lib
 CONDA_LIB_HOME?=/usr/lib
 CXX := g++
+CXXFLAGS := 
+
+# ---------------- DietGPU ----------------
+USE_DIETGPU ?= $(shell echo $${USE_DIETGPU:-0})
+
+DIETGPU_ROOT      := ../thirdparty/dietgpu
+DIETGPU_FLOAT_DIR := $(DIETGPU_ROOT)/dietgpu/float
+DIETGPU_LIB       := $(DIETGPU_FLOAT_DIR)/libdietgpu_float.so
+
+ifeq ($(USE_DIETGPU),1)
+	DIETGPU_INC  := -I$(DIETGPU_ROOT)
+	DIETGPU_LIBS := -L$(DIETGPU_FLOAT_DIR) -ldietgpu_float \
+	                -Wl,-rpath,$(abspath $(DIETGPU_FLOAT_DIR)) \
+					-Wl,-rpath,'$$ORIGIN/lib'
+	CXXFLAGS += -DUSE_DIETGPU
+else
+	DIETGPU_INC  :=
+	DIETGPU_LIBS :=
+endif
 
 ifeq ($(USE_EFA),1)
 	CXXFLAGS_TRANS := -DUCCL_P2P_USE_EFA
 endif
 
-CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(HIP_INC) \
+CXXFLAGS += -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(HIP_INC) $(DIETGPU_INC) \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu -Wl,-rpath=${CONDA_LIB_HOME} -I${CONDA_LIB_HOME}/../include \
 	$(CXXFLAGS_TRANS)
 
-# Python and nanobind configuration (stable ABI)
+# Python and nanobind configuration
 PYTHON          ?= python3
 PYTHON_CONFIG    = $(PYTHON)-config
-PYEXT           := .abi3.so
 NB_DIR          := $(shell $(PYTHON) -c "import nanobind as _nb, os; print(os.path.dirname(_nb.__file__))")
 NB_INCLUDES     := -I$(NB_DIR)/include -I$(NB_DIR)/ext/robin_map/include -I$(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_path('include'))")
+# Stable ABI requires Python >= 3.12
+PY_STABLE_ABI_OK := $(shell $(PYTHON) -c "import sys; print(1 if sys.version_info >= (3, 12) else 0)")
+ifeq ($(PY_STABLE_ABI_OK),1)
 NB_ABI_FLAGS    := -DPy_LIMITED_API=0x030C0000 -DNB_STABLE_ABI=1
+PYEXT           := .abi3.so
+else
+NB_ABI_FLAGS    :=
+PYEXT           := $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))")
+endif
 NB_SRC_DIR      := $(NB_DIR)/src
 NB_SRCS         := nb_internals.cpp nb_func.cpp nb_type.cpp nb_enum.cpp \
                    nb_ndarray.cpp nb_static_property.cpp common.cpp error.cpp \
@@ -51,7 +77,7 @@ ifeq ($(USE_TCP),1)
 	CXXFLAGS += -DUCCL_P2P_USE_RCCL
 endif
 LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
-                  -Wl,-rpath,$(HIP_LIB) -L${CONDA_LIB_HOME} -lglog -lgflags -lgtest \
+                  -Wl,-rpath,$(HIP_LIB) -L${CONDA_LIB_HOME} \
                   -lz -lelf -libverbs -lpthread
 ifeq ($(USE_TCP),1)
 	LDFLAGS += -lrccl
@@ -112,6 +138,7 @@ endef
 # Install the module
 install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	@mkdir -p $(INSTALL_DIR)
+	@rm -f $(INSTALL_DIR)/p2p.cpython-*.so $(INSTALL_DIR)/p2p.abi3.so
 	@cp $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
 	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)

@@ -1,4 +1,5 @@
 #pragma once
+#include "compression.h"
 #include "define.h"
 #include "rdma_channel.h"
 #include "rdma_ctrl_channel.h"
@@ -44,7 +45,7 @@ class ChannelGroup {
     // Get the total number of channels
     size_t num_channels = ChannelGroup::channelCount();
     if (unlikely(num_channels == 0)) {
-      LOG(WARNING)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "ChannelGroup: No channels available for round-robin selection";
       return {0, 0};
     }
@@ -57,8 +58,9 @@ class ChannelGroup {
     // Get the channel by channel_id
     auto channel = getChannel(next_id);
     if (unlikely(!channel)) {
-      LOG(WARNING) << "ChannelGroup: Channel not found for channel_id "
-                   << next_id << " num_channels " << num_channels;
+      UCCL_LOG(WARN, UCCL_RDMA)
+          << "ChannelGroup: Channel not found for channel_id " << next_id
+          << " num_channels " << num_channels;
       return {0, 0};
     }
 
@@ -72,7 +74,7 @@ class ChannelGroup {
     // Get the total number of channels
     size_t num_channels = ChannelGroup::channelCount();
     if (unlikely(num_channels == 0)) {
-      LOG(WARNING)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "ChannelGroup: No channels available for random selection";
       return {0, 0};
     }
@@ -85,8 +87,9 @@ class ChannelGroup {
     // Get the channel by channel_id
     auto channel = getChannel(random_id);
     if (unlikely(!channel)) {
-      LOG(WARNING) << "ChannelGroup: Channel not found for channel_id "
-                   << random_id << " num_channels " << num_channels;
+      UCCL_LOG(WARN, UCCL_RDMA)
+          << "ChannelGroup: Channel not found for channel_id " << random_id
+          << " num_channels " << num_channels;
       return {0, 0};
     }
 
@@ -158,8 +161,8 @@ class SendChannelGroup : public ChannelGroup {
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
     if (unlikely(request_queue_->push(req) < 0)) {
-      LOG(WARNING) << "SendChannelGroup: isend request queue is full, wr_id="
-                   << wr_id;
+      UCCL_LOG(WARN, UCCL_RDMA)
+          << "SendChannelGroup: isend request queue is full, wr_id=" << wr_id;
       return -1;
     }
     return wr_id;
@@ -168,8 +171,9 @@ class SendChannelGroup : public ChannelGroup {
   int64_t postWriteOrRead(std::shared_ptr<RDMASendRequest> req) {
     if (unlikely(req->send_type != SendType::Write &&
                  req->send_type != SendType::Read)) {
-      LOG(ERROR) << "SendChannelGroup::write - Invalid send_type, expected "
-                    "SendType::Write";
+      UCCL_LOG(ERROR, UCCL_RDMA)
+          << "SendChannelGroup::write - Invalid send_type, expected "
+             "SendType::Write";
       return -1;
     }
 
@@ -178,7 +182,8 @@ class SendChannelGroup : public ChannelGroup {
 
     auto [channel_id, context_id] = selectNextChannelRoundRobin();
     if (unlikely(channel_id == 0)) {
-      LOG(ERROR) << "SendChannelGroup::write - Failed to select channel";
+      UCCL_LOG(ERROR, UCCL_RDMA)
+          << "SendChannelGroup::write - Failed to select channel";
       return -1;
     }
 
@@ -190,8 +195,9 @@ class SendChannelGroup : public ChannelGroup {
 
   int64_t read(std::shared_ptr<RDMASendRequest> req) {
     if (unlikely(req->send_type != SendType::Read)) {
-      LOG(ERROR) << "SendChannelGroup::read - Invalid send_type, expected "
-                    "SendType::Read";
+      UCCL_LOG(ERROR, UCCL_RDMA)
+          << "SendChannelGroup::read - Invalid send_type, expected "
+             "SendType::Read";
       return -1;
     }
 
@@ -200,7 +206,8 @@ class SendChannelGroup : public ChannelGroup {
 
     auto [channel_id, context_id] = selectNextChannelRoundRobin();
     if (unlikely(channel_id == 0)) {
-      LOG(ERROR) << "SendChannelGroup::read - Failed to select channel";
+      UCCL_LOG(ERROR, UCCL_RDMA)
+          << "SendChannelGroup::read - Failed to select channel";
       return -1;
     }
 
@@ -253,7 +260,8 @@ class SendChannelGroup : public ChannelGroup {
     }
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
-    LOG(INFO) << "SendChannelGroup: Processing send request meta: " << meta;
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "SendChannelGroup: Processing send request meta: " << meta;
     processOnceSendRequests(req, meta, index);
     return wr_id;
   }
@@ -274,15 +282,17 @@ class SendChannelGroup : public ChannelGroup {
   bool postRequestOnChannel(std::shared_ptr<RDMASendRequest> req) {
     auto channel = getChannel(req->channel_id);
     if (unlikely(!channel)) {
-      LOG(WARNING) << "SendChannelGroup: Channel not found for channel_id "
-                   << req->channel_id;
+      UCCL_LOG(WARN, UCCL_RDMA)
+          << "SendChannelGroup: Channel not found for channel_id "
+          << req->channel_id;
       return false;
     }
 
     int64_t send_ret = channel->submitRequest(req);
     if (send_ret < 0) {
-      LOG(WARNING) << "SendChannelGroup: Failed to send on channel_id "
-                   << req->channel_id;
+      UCCL_LOG(WARN, UCCL_RDMA)
+          << "SendChannelGroup: Failed to send on channel_id "
+          << req->channel_id;
       return false;
     }
 
@@ -293,21 +303,36 @@ class SendChannelGroup : public ChannelGroup {
     std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
     if (ctrl_channel_) {
       if (ctrl_channel_->noblockingPoll()) {
-        LOG(INFO) << "SendChannelGroup::pollingLoop - Control channel polled "
-                     "successfully";
+        UCCL_LOG(INFO, UCCL_RDMA)
+            << "SendChannelGroup::pollingLoop - Control channel polled "
+               "successfully";
       }
     }
   }
 
-  void postChunkedRequest(std::shared_ptr<RDMASendRequest> req) {
+  void postChunkedRequest(std::shared_ptr<RDMASendRequest> req,
+                          int expected_chunk_count = 0) {
+    if (expected_chunk_count == 1) {
+      req->imm_data.set_chunk_count(1);
+      if (!postRequestOnChannel(req)) {
+        UCCL_LOG(WARN, UCCL_RDMA)
+            << "SendChannelGroup: Failed to send request on channel_id "
+            << req->channel_id;
+      }
+      return;
+    }
     // Split message into chunks
     size_t message_size = req->local_mem->size;
-    auto chunks = splitMessageToChunks(message_size);
-
-    // LOG(INFO) << "SendChannelGroup: Splitting message into " << chunks.size()
-    //           << " chunks (message_size: " << message_size << ")";
+    auto chunks = ChunkSplitStrategy::splitMessageToChunks(message_size);
+    if (expected_chunk_count == 0) {
+      expected_chunk_count = chunks.size();
+      tracker_->updateExpectedAckCount(req->wr_id, expected_chunk_count);
+    }
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "SendChannelGroup: Splitting message into " << chunks.size()
+        << " chunks (message_size: " << message_size << ")";
     size_t num_channels = normalChannelCount();
-    tracker_->updateExpectedAckCount(req->wr_id, chunks.size());
+
     for (size_t i = 0; i < chunks.size(); ++i) {
       auto const& chunk = chunks[i];
 
@@ -330,6 +355,19 @@ class SendChannelGroup : public ChannelGroup {
       bool is_last_chunk = (i == chunks.size() - 1);
       auto chunk_req = std::make_shared<RDMASendRequest>(
           chunk_local_mem, chunk_remote_mem, req->imm_data, is_last_chunk);
+
+      // due to the compression, the chunk count may be different from the
+      // original split, so we need to set the expected chunk count for each
+      // chunk request
+      if (expected_chunk_count > 0) {
+        if (is_last_chunk && expected_chunk_count > 1) {
+          chunk_req->imm_data.set_chunk_count(expected_chunk_count);
+        } else {
+          chunk_req->imm_data.set_chunk_count(1);
+        }
+        expected_chunk_count -= 1;
+      }
+
       chunk_req->channel_id = chunk_channel_id;
       chunk_req->from_rank_id = req->from_rank_id;
       chunk_req->to_rank_id = req->to_rank_id;
@@ -338,15 +376,17 @@ class SendChannelGroup : public ChannelGroup {
       chunk_req->send_type = req->send_type;
       // Send the chunk
       if (postRequestOnChannel(chunk_req)) {
-        // LOG(INFO) << "SendChannelGroup: Sent chunk " << i << "/"
+        // UCCL_LOG(INFO, UCCL_RDMA) << "SendChannelGroup: Sent chunk " << i <<
+        // "/"
         //           << chunks.size() << " (offset: " << chunk.offset
         //           << ", size: " << chunk.size
         //           << ", channel_id: " << chunk_channel_id << ")" <<
         //           std::endl;
       } else {
-        LOG(WARNING) << "SendChannelGroup: Failed to send chunk " << i
-                     << " (offset: " << chunk.offset << ", size: " << chunk.size
-                     << ", channel_id: " << chunk_channel_id << ")";
+        UCCL_LOG(WARN, UCCL_RDMA)
+            << "SendChannelGroup: Failed to send chunk " << i
+            << " (offset: " << chunk.offset << ", size: " << chunk.size
+            << ", channel_id: " << chunk_channel_id << ")";
       }
     }
   }
@@ -367,30 +407,62 @@ class SendChannelGroup : public ChannelGroup {
       if (tracker_->getTotalInflightBytes() > kInFlightMaxSizeKB * 1024 ||
           !request_queue_->pop(req)) {
         if (tracker_->getTotalInflightBytes() > kInFlightMaxSizeKB * 1024) {
-          LOG(WARNING) << "SendChannelGroup: In-flight bytes exceed "
-                          "limit,pausing sending."
-                       << tracker_->getTotalInflightBytes()
-                       << " bytes in-flight.";
+          UCCL_LOG(WARN, UCCL_RDMA)
+              << "SendChannelGroup: In-flight bytes exceed "
+                 "limit,pausing sending."
+              << tracker_->getTotalInflightBytes() << " bytes in-flight.";
         }
         break;
       }
       index = ctrl_channel_->getOneSendRequestMeta(meta);
-      LOG(INFO) << "SendChannelGroup: Processing send request meta: " << meta;
+      UCCL_LOG(INFO, UCCL_RDMA)
+          << "SendChannelGroup: Processing send request meta: " << meta;
       processOnceSendRequests(req, meta, index);
       has_meta = ctrl_channel_->hasSendRequest();
     }
   }
 
+  inline void compressSendRequest(std::shared_ptr<RDMASendRequest> req) {
+    Compressor::getInstance().compress(req);
+  }
+
+  inline void compressSendRequestSplitFirst(
+      std::shared_ptr<RDMASendRequest> req, size_t expected_chunk_count) {
+    Compressor::getInstance().compressSplitOneBatch(req);
+
+    // compressed data / chunk size = chunk count
+    uint32_t send_chunks_first =
+        req->local_mem->size /
+        ChunkSplitStrategy::getRegularChunkSize(req->compress_ctx->maxSize,
+                                                expected_chunk_count);
+    if (send_chunks_first > 0) {
+      postChunkedRequest(req, send_chunks_first);
+    }
+    uint32_t uncompressed_size =
+        Compressor::getInstance().compressEncodeOneBatch(req);
+    postChunkedRequest(req, expected_chunk_count - send_chunks_first);
+    tracker_->updateExpectedAckCount(
+        req->wr_id,
+        ChunkSplitStrategy::getMessageChunkCount(uncompressed_size));
+  }
+
   inline void processOnceSendRequests(std::shared_ptr<RDMASendRequest> req,
                                       SendReqMeta& meta, int index) {
-    req->imm_data = index;
+    req->imm_data.set_index(index);
     req->channel_id = meta.channel_id;
     req->remote_mem = std::make_shared<RemoteMemInfo>(meta.remote_mem);
-    if (meta.expected_chunk_count > 1) {
-      postChunkedRequest(req);
-    } else {
-      postRequestOnChannel(req);
+    if (Compressor::getInstance().shouldCompressAndSplitFirst(
+            req->local_mem->size)) {
+      compressSendRequestSplitFirst(req, meta.expected_chunk_count);
+      return;
     }
+    if (Compressor::getInstance().shouldCompress(req->local_mem->size)) {
+      compressSendRequest(req);
+    }
+    tracker_->updateExpectedAckCount(
+        req->wr_id,
+        ChunkSplitStrategy::getMessageChunkCount(req->local_mem->size));
+    postChunkedRequest(req, meta.expected_chunk_count);
   }
 
   void pollDataChannels() {
@@ -399,8 +471,9 @@ class SendChannelGroup : public ChannelGroup {
       std::vector<CQMeta> cq_datas;
       if (channel && channel->poll_once(cq_datas)) {
         for (auto const& cq_data : cq_datas) {
-          // LOG(INFO) << "SendChannelGroup::pollingLoop - Channel " <<
-          // channel_id
+          // UCCL_LOG(INFO, UCCL_RDMA) << "SendChannelGroup::pollingLoop -
+          // Channel "
+          // << channel_id
           //           << " polled completion: " << cq_data;
           tracker_->acknowledge(cq_data.wr_id);
         }
@@ -409,7 +482,7 @@ class SendChannelGroup : public ChannelGroup {
   }
 
   void pollingLoop() {
-    LOG(INFO) << "SendChannelGroup::pollingLoop - Started";
+    UCCL_LOG(INFO, UCCL_RDMA) << "SendChannelGroup::pollingLoop - Started";
     uccl::pin_thread_to_numa(numa_node_);
     while (running_.load(std::memory_order_acquire)) {
       pollControlChannel();
@@ -419,7 +492,7 @@ class SendChannelGroup : public ChannelGroup {
       LOG_EVERY_N_ENDPOINT(INFO, 100000000)
           << "SendChannelGroup::pollingLoop - Still running";
     }
-    LOG(INFO) << "SendChannelGroup::pollingLoop - Stopped";
+    UCCL_LOG(INFO, UCCL_RDMA) << "SendChannelGroup::pollingLoop - Stopped";
   }
 };
 
@@ -494,9 +567,12 @@ class RecvChannelGroup : public ChannelGroup {
 
   int64_t recv(std::shared_ptr<RDMARecvRequest> req) {
     if (unlikely(!setupRecvRequestChannelAndMemoryRegion(req))) {
-      LOG(WARNING)
+      UCCL_LOG(WARN, UCCL_RDMA)
           << "RecvChannelGroup: Failed to setup recv request with round robin";
       return -1;
+    }
+    if (Compressor::getInstance().shouldCompress(req->local_mem->size)) {
+      Compressor::getInstance().prepareDecompress(req);
     }
     return ctrl_channel_->postSendReq(req);
   }
@@ -516,18 +592,29 @@ class RecvChannelGroup : public ChannelGroup {
       if (polled) {
         for (auto const& cq_data : cq_datas) {
           if (cq_data.hasIMM()) {
-            LOG(INFO)
+            UCCL_LOG(INFO, UCCL_RDMA)
                 << "RecvChannelGroup::pollAndProcessCompletions - Channel "
                 << channel_id << " polled completion: " << cq_data;
             if (ctrl_channel_) {
-              ctrl_channel_->recv_done(cq_data.imm);
-              LOG(INFO)
-                  << "RecvChannelGroup::pollAndProcessCompletions - Called "
-                     "recv_done("
-                  << cq_data.imm << ")";
+              std::shared_ptr<SendReqMeta> req_meta;
+              for (int i = 0; i < cq_data.imm.chunk_count(); ++i) {
+                req_meta = ctrl_channel_->recv_done(cq_data.imm.index());
+                UCCL_LOG(INFO, UCCL_RDMA)
+                    << "RecvChannelGroup::pollAndProcessCompletions - Called "
+                       "recv_done("
+                    << cq_data.imm.index() << ")";
+              }
+              if (req_meta && Compressor::getInstance().shouldCompress(
+                                  req_meta->local_mem.size)) {
+                Compressor::getInstance().decompress(req_meta->remote_mem,
+                                                     req_meta->local_mem,
+                                                     req_meta->float_type);
+              }
+
             } else {
-              LOG(WARNING) << "RecvChannelGroup::pollAndProcessCompletions - "
-                              "ctrl_channel_ is null, cannot call recv_done";
+              UCCL_LOG(WARN, UCCL_RDMA)
+                  << "RecvChannelGroup::pollAndProcessCompletions - "
+                     "ctrl_channel_ is null, cannot call recv_done";
             }
           }
         }
@@ -539,14 +626,14 @@ class RecvChannelGroup : public ChannelGroup {
   }
 
   void pollingLoop() {
-    LOG(INFO) << "RecvChannelGroup::pollingLoop - Started";
+    UCCL_LOG(INFO, UCCL_RDMA) << "RecvChannelGroup::pollingLoop - Started";
     uccl::pin_thread_to_numa(numa_node_);
     while (running_.load(std::memory_order_acquire)) {
       pollAndProcessCompletions();
       // optional small sleep/yield to avoid busy-looping if desired:
       // std::this_thread::yield();
     }
-    LOG(INFO) << "RecvChannelGroup::pollingLoop - Stopped";
+    UCCL_LOG(INFO, UCCL_RDMA) << "RecvChannelGroup::pollingLoop - Stopped";
   }
 
  private:
@@ -563,16 +650,17 @@ class RecvChannelGroup : public ChannelGroup {
       uint32_t& rkey) {
     auto channel = getChannel(channel_id);
     if (unlikely(!channel)) {
-      LOG(WARNING) << "RecvChannelGroup: Channel not found for channel_id "
-                   << channel_id;
+      UCCL_LOG(WARN, UCCL_RDMA)
+          << "RecvChannelGroup: Channel not found for channel_id "
+          << channel_id;
       return false;
     }
 
     uint64_t context_id = channel->getContextID();
     auto it = mr_map.find(context_id);
     if (unlikely(it == mr_map.end())) {
-      LOG(WARNING) << "RecvChannelGroup: MR not found for context_id "
-                   << context_id;
+      UCCL_LOG(WARN, UCCL_RDMA)
+          << "RecvChannelGroup: MR not found for context_id " << context_id;
       return false;
     }
 

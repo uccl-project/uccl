@@ -1,8 +1,8 @@
 #include "../efa_endpoint.h"
 #include "../memory_allocator.h"
 #include "../rdma_device.h"
+#include "util/debug.h"
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -453,12 +453,10 @@ void bandwidth_test(NICEndpoint& endpoint, MemoryAllocator& allocator,
 
 int main(int argc, char* argv[]) {
   // Initialize Google's logging library
-  google::InitGoogleLogging(argv[0]);
+  // google::InitGoogleLogging(argv[0]);
 
-  // Set logging level to INFO
-  // FLAGS_minloglevel = google::INFO;
-  FLAGS_minloglevel = google::WARNING;
-  FLAGS_logtostderr = true;
+  // Set logging level
+  uccl::ucclLogger.setLogLevel(uccl::WARN);
 
   // Parse command line flags
   gflags::SetUsageMessage("NICEndpoint usage example");
@@ -595,6 +593,6 @@ int main(int argc, char* argv[]) {
     return 1;
   }
 
-  google::ShutdownGoogleLogging();
+  // google::ShutdownGoogleLogging();
   return 0;
 }

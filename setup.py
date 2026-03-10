@@ -1,5 +1,6 @@
 import re
 import os
+import sys
 import sysconfig
 from setuptools import setup, find_packages, Extension
 
@@ -20,8 +21,11 @@ def get_version():
     raise RuntimeError("Unable to find version string in uccl/__init__.py")
 
 
-# Stable-ABI stub so setuptools emits a cp38-abi3 platform tag (same trick as vLLM).
-_use_limited_api = not _is_freethreaded()
+# Nanobind stable ABI requires Python >= 3.12.  On 3.12+ we emit a
+# cp312-abi3 wheel via the _abi3_stub extension; on older Pythons the
+# stub still exists (to force a platform-specific wheel tag) but without
+# the limited-API flag, producing a cpXY-cpXY version-specific wheel.
+_use_limited_api = not _is_freethreaded() and sys.version_info >= (3, 12)
 
 VERSION = get_version()
 PACKAGE_NAME = os.environ.get("UCCL_PACKAGE_NAME", "uccl")
@@ -32,10 +36,10 @@ _is_backend = PACKAGE_NAME != "uccl"
 # backend via extras.
 if _is_backend:
     abi3_ext = Extension(
-        "uccl._abi3_stub",
-        sources=["uccl/_abi3_stub.c"],
+        "uccl._platform_tag_stub",
+        sources=["uccl/_platform_tag_stub.c"],
         py_limited_api=_use_limited_api,
-        define_macros=[("Py_LIMITED_API", "0x03080000")] if _use_limited_api else [],
+        define_macros=[("Py_LIMITED_API", "0x030C0000")] if _use_limited_api else [],
     )
     setup(
         name=PACKAGE_NAME,
@@ -62,17 +66,20 @@ if _is_backend:
         classifiers=[
             "Programming Language :: Python :: 3",
         ],
-        python_requires=">=3.8",
-        options={"bdist_wheel": {"py_limited_api": "cp38"}} if _use_limited_api else {},
+        python_requires=">=3.12",
+        options={"bdist_wheel": {"py_limited_api": "cp312"}} if _use_limited_api else {},
         extras_require={
             "rocm": [],
         },
     )
 else:
     # Meta-package: no code, extras pull in the right backend.
+    # Default: uccl-cu12 (from install_requires).
+    # Extras are additive — pip always installs the default too, but the
+    # extra's .so files overwrite it, so the result is correct.
     #   pip install uccl            → CUDA 12 (default)
+    #   pip install uccl[cu12-efa]  → CUDA 12 + EFA (EFA .so overwrites)
     #   pip install uccl[cu13]      → CUDA 13
-    #   pip install uccl[cu12-efa]  → CUDA 12 + EFA
     #   pip install uccl[rocm]      → ROCm (needs --extra-index-url)
     setup(
         name="uccl",
@@ -87,7 +94,7 @@ else:
         classifiers=[
             "Programming Language :: Python :: 3",
         ],
-        python_requires=">=3.8",
+        python_requires=">=3.12",
         install_requires=[f"uccl-cu12=={VERSION}"],
         extras_require={
             "cu12": [f"uccl-cu12=={VERSION}"],

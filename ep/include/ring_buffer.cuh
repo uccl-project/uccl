@@ -91,6 +91,23 @@ struct TransferCmd {
 static_assert(sizeof(TransferCmd) * 8 == 128, "TransferCmd must be 128 bits");
 #endif
 
+// WRITE command offsets use mode-dependent packing:
+// - normal/high-throughput mode only guarantees 4-byte alignment
+// - low-latency mode keeps 16-byte alignment
+// Shifting the stored 32-bit offsets extends the addressable range beyond 4 GiB
+// while preserving the alignment each mode already guarantees.
+static constexpr int kWriteAddrShiftNormal = 2;
+static constexpr int kWriteAddrShiftLowLatency = 4;
+
+__host__ __device__ inline int get_write_addr_shift(bool low_latency) {
+  return low_latency ? kWriteAddrShiftLowLatency : kWriteAddrShiftNormal;
+}
+
+// Decode a shifted WRITE offset back to a byte offset.
+inline uint64_t decode_write_offset(uint32_t shifted, bool low_latency) {
+  return static_cast<uint64_t>(shifted) << get_write_addr_shift(low_latency);
+}
+
 struct CopyTask {
   uint64_t wr_id;
   int dst_dev;

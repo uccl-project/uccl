@@ -101,10 +101,10 @@ endif
 # ===============================================================================
 
 PYTHON ?= python3
-PYBIND11_AVAILABLE := $(shell $(PYTHON) -c "import pybind11" 2>/dev/null && echo "yes" || echo "no")
+NANOBIND_AVAILABLE := $(shell $(PYTHON) -c "import nanobind" 2>/dev/null && echo "yes" || echo "no")
 
-ifeq ($(PYBIND11_AVAILABLE),yes)
-    PYBIND11_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
+ifeq ($(NANOBIND_AVAILABLE),yes)
+    NANOBIND_INCLUDES := -I$(shell $(PYTHON) -m nanobind --include_dir 2>/dev/null)
     EXT_SUFFIX := $(shell $(PYTHON) -c "import sysconfig as s; print(s.get_config_var('EXT_SUFFIX') or '.so')")
 
     # PyTorch configuration
@@ -167,7 +167,7 @@ endif
 # Add glog if available
 GLOG_AVAILABLE := $(shell pkg-config --exists libglog 2>/dev/null && echo "yes" || echo "no")
 ifeq ($(GLOG_AVAILABLE),yes)
-    LIBS += -lglog
+    LIBS += 
 endif
 
 # ===============================================================================
@@ -207,7 +207,7 @@ ifeq ($(HAS_EFA),1)
     OBJ_CPP := $(SRC_CPP:.cpp=.o)
     OBJ_CU := $(SRC_CU:.cu=.o)
 
-    ifeq ($(PYBIND11_AVAILABLE),yes)
+    ifeq ($(NANOBIND_AVAILABLE),yes)
         SRC_BIND := ../src/uccl_ep.cc
         OBJ_BIND := $(SRC_BIND:.cc=.o)
     endif
@@ -247,7 +247,7 @@ endif
 
 # C++ compilation rule with dependency generation
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(PYBIND11_INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(NANOBIND_INCLUDES) -MMD -MP -c $< -o $@
 
 # CUDA compilation rule with dependency generation
 %.o: %.cu
@@ -255,7 +255,7 @@ endif
 
 # C++ for binding
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(PYBIND11_INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(NANOBIND_INCLUDES) -MMD -MP -c $< -o $@
 
 # ===============================================================================
 # Benchmark Test Build Rules
@@ -314,12 +314,12 @@ $(CAS_TARGET): test_cas_throughput.cu $(HEADERS)
 # ===============================================================================
 
 ifeq ($(HAS_EFA),1)
-ifeq ($(PYBIND11_AVAILABLE),yes)
+ifeq ($(NANOBIND_AVAILABLE),yes)
 ifeq ($(TORCH_AVAILABLE),yes)
 $(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND)
 	$(CXX) $(CXXFLAGS) -shared -fPIC \
 	    -D_GLIBCXX_USE_CXX11_ABI=$(TORCH_ABI) \
-	    $(INCLUDES) $(PYBIND11_INCLUDES) $^ \
+	    $(INCLUDES) $(NANOBIND_INCLUDES) $^ \
 	    -L$(TORCH_LIBDIR) -Wl,-rpath,$(TORCH_LIBDIR) \
 	    -ltorch_python -ltorch -ltorch_cpu -ltorch_cuda -lc10 -lc10_cuda \
 	    $(LIBS) -o $@
@@ -343,13 +343,13 @@ install:
 endif
 else
 $(EP_EXT):
-	@echo "pybind11 not found. Skipping Python extension build."
+	@echo "nanobind not found. Skipping Python extension build."
 
 py:
-	@echo "pybind11 not found. Cannot build Python extension."
+	@echo "nanobind not found. Cannot build Python extension."
 
 install:
-	@echo "pybind11 not found. Cannot install Python extension."
+	@echo "nanobind not found. Cannot install Python extension."
 endif
 endif
 
@@ -471,7 +471,7 @@ info:
 	@echo "  Features:"
 	@echo "    EFA Support: $(HAS_EFA)"
 	@echo "    Grace-Hopper: $(if $(findstring GRACE,$(GH_CFLAGS)),yes,no)"
-	@echo "    Python Support: $(PYBIND11_AVAILABLE)"
+	@echo "    Python Support: $(NANOBIND_AVAILABLE)"
 	@echo "    PyTorch Support: $(TORCH_AVAILABLE)"
 	@echo "  Benchmark Targets:"
 	@echo "    Flat Combining: $(FC_TARGET)"
@@ -503,7 +503,7 @@ check-deps:
 	@echo -n "  EFA: "; if [ -d "$(EFA_HOME)" ]; then echo "Found at $(EFA_HOME)"; else echo "Not found"; fi
 	@echo -n "  glog: "; if [ "$(GLOG_AVAILABLE)" = "yes" ]; then echo "Found"; else echo "Not found"; fi
 	@echo -n "  Python: "; command -v $(PYTHON) >/dev/null 2>&1 && $(PYTHON) --version || echo "Not found"
-	@echo -n "  pybind11: "; echo "$(PYBIND11_AVAILABLE)"
+	@echo -n "  nanobind: "; echo "$(NANOBIND_AVAILABLE)"
 	@echo -n "  PyTorch: "; echo "$(TORCH_AVAILABLE)"
 
 # Clean build artifacts
@@ -539,7 +539,7 @@ help:
 	@echo "  benchmarks       - Build all benchmark tests"
 ifeq ($(HAS_EFA),1)
 	@echo "  ep-runtime       - Build EP runtime and benchmarks (EFA required)"
-	@echo "  py               - Build Python extension (requires pybind11 and PyTorch)"
+	@echo "  py               - Build Python extension (requires nanobind and PyTorch)"
 endif
 	@echo ""
 	@echo "Individual benchmark targets:"
@@ -589,7 +589,7 @@ endif
 # Automatically include dependency files if they exist
 ifeq ($(HAS_EFA),1)
     DEPS := $(OBJ_CPP:.o=.d) $(OBJ_CU:.o=.d)
-    ifneq ($(PYBIND11_AVAILABLE),no)
+    ifneq ($(NANOBIND_AVAILABLE),no)
         DEPS += $(OBJ_BIND:.o=.d)
     endif
     -include $(DEPS)

@@ -3,7 +3,7 @@ set -e
 
 # Check CUDA availability and get version
 check_cuda() {
-    command -v nvcc &> /dev/null
+    command -v nvcc &> /dev/null || command -v nvidia-smi &> /dev/null
 }
 
 # Check HIP availability and get version
@@ -12,13 +12,36 @@ check_rocm() {
 }
 
 get_cuda_version() {
-    # Extracts version like "12.8" from nvcc output
-    nvcc --version | grep -oE 'release [0-9]+\.[0-9]+' | awk '{print $2}' | head -n1
+    # Prefer nvcc if available
+    if command -v nvcc &> /dev/null; then
+        nvcc --version | grep -oE 'release [0-9]+\.[0-9]+' | awk '{print $2}' | head -n1
+        return
+    fi
+    # Fallback: parse "CUDA Version: 12.8" from nvidia-smi (driver reports supported CUDA)
+    if command -v nvidia-smi &> /dev/null; then
+        nvidia-smi | grep -oE 'CUDA Version: [0-9]+\.[0-9]+' | awk '{print $3}' | head -n1
+    fi
 }
 
+# Run system-level commands with sudo when available, otherwise directly.
+if [[ "$(id -u)" -eq 0 ]]; then
+    SUDO_CMD=()
+    CAN_INSTALL_APT=1
+elif command -v sudo &> /dev/null && sudo -n true &> /dev/null; then
+    SUDO_CMD=(sudo)
+    CAN_INSTALL_APT=1
+else
+    SUDO_CMD=()
+    CAN_INSTALL_APT=0
+fi
+
 # Install common dependencies
-sudo apt install -y nvtop libgoogle-glog-dev clang-format-14 python3-pip
-pip install pybind11 nanobind --upgrade
+if [[ "$CAN_INSTALL_APT" -eq 1 ]]; then
+    "${SUDO_CMD[@]}" apt install -y clang-format-14
+else
+    echo "No root/passwordless sudo. Skipping apt dependencies: clang-format-14"
+fi
+pip install nanobind --upgrade
 pip install black
 
 # Check if we're in a conda environment

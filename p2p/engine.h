@@ -10,7 +10,7 @@
 #ifdef UCCL_P2P_USE_NCCL
 #include "nccl/nccl_endpoint.h"
 #endif
-#include <glog/logging.h>
+#include "util/debug.h"
 #include <infiniband/verbs.h>
 #include <atomic>
 #include <cstdlib>
@@ -52,6 +52,7 @@ struct Mhandle {
 
 struct P2PMhandle {
   MRArray mr_array;
+  CompressCtx compress_ctx;
 };
 
 struct MR {
@@ -251,8 +252,7 @@ class Endpoint {
   static constexpr size_t ShmRingDefaultElemCnt = 16;
   static constexpr size_t kTaskRingSize = 1024;
 
-  static std::once_flag glog_init_once;
-  static int parse_log_level_from_env();
+  static uccl::UCCLLogLevel parse_log_level_from_env();
 
  public:
   /* Create engine threads running in background for a single interface. It also
@@ -289,7 +289,8 @@ class Endpoint {
   bool accept(std::string& ip_addr, int& remote_gpu_idx, uint64_t& conn_id);
 
   /* Register the data with a specific interface. */
-  bool reg(void const* data, size_t size, uint64_t& mr_id);
+  bool reg(void const* data, size_t size, uint64_t& mr_id,
+           uccl::FloatType float_type = uccl::FloatType::kFloat32);
 
   bool regv(std::vector<void const*> const& data_v,
             std::vector<size_t> const& size_v, std::vector<uint64_t>& mr_id_v);

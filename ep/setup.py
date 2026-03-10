@@ -1,5 +1,7 @@
 import os
+import sys
 import subprocess
+import sysconfig
 import setuptools
 from glob import glob
 import shutil
@@ -10,6 +12,40 @@ import torch
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 from setuptools.command.install import install
 from setuptools import Command
+
+try:
+    import nanobind
+except ImportError:
+    raise RuntimeError("nanobind not found. Install it with: pip install nanobind")
+
+
+def _is_freethreaded():
+    return bool(sysconfig.get_config_var("Py_GIL_DISABLED"))
+
+
+def _has_intel_rdma_nic():
+    """Return True if an Intel RDMA NIC (irdma) is present on the system."""
+    ib_dir = Path("/sys/class/infiniband")
+    if not ib_dir.exists():
+        return False
+    try:
+        devices = os.listdir(ib_dir)
+    except OSError:
+        return False
+    return any(name.startswith("irdma") for name in devices)
+
+
+_use_abi3 = not _is_freethreaded() and sys.version_info >= (3, 12)
+
+
+class ABI3BuildExtension(BuildExtension):
+    """Emit .abi3.so for nanobind stable-ABI extensions."""
+
+    def get_ext_filename(self, ext_name):
+        if _use_abi3:
+            return ext_name + ".abi3.so"
+        return super().get_ext_filename(ext_name)
+
 
 PROJECT_ROOT = Path(os.path.dirname(__file__)).resolve()
 
@@ -41,6 +77,16 @@ class CustomInstall(install):
         # Copy the .so file to the install directory
         print(f"Installing {so_file.name} to {install_dir}")
         shutil.copy2(so_file, dest_path)
+
+        if _use_abi3:
+            for old in Path(install_dir).glob("ep.cpython-*.so"):
+                print(f"Removing stale {old.name}")
+                old.unlink()
+        else:
+            for old in Path(install_dir).glob("ep.abi3.so"):
+                print(f"Removing stale {old.name}")
+                old.unlink()
+
         print(f"Installation complete. Module installed as: {dest_path}")
 
 
@@ -95,8 +141,16 @@ if __name__ == "__main__":
     ]
     nvcc_flags = ["-O3", "-Xcompiler", "-O3"]
     sources = glob("./src/*.cu") + glob("./src/*.cpp") + glob("./src/*.cc")
-    libraries = ["ibverbs", "glog", "nl-3", "nl-route-3", "numa"]
+    libraries = ["ibverbs", "nl-3", "nl-route-3", "numa"]
     include_dirs = [PROJECT_ROOT / "include", PROJECT_ROOT / ".." / "include"]
+    # Nanobind stable-ABI bindings
+    nb_dir = Path(nanobind.__file__).parent
+    include_dirs.extend([nb_dir / "include", nb_dir / "ext" / "robin_map" / "include"])
+    sources.append(str(nb_dir / "src" / "nb_combined.cpp"))
+    if _use_abi3:
+        abi_flags = ["-DPy_LIMITED_API=0x030C0000", "-DNB_STABLE_ABI=1"]
+        cxx_flags.extend(abi_flags)
+        nvcc_flags.extend(abi_flags)
 
     # Collect header files for dependency tracking
     header_files = []
@@ -183,8 +237,11 @@ if __name__ == "__main__":
             cxx_flags.append("-DUSE_GRACE_HOPPER")
             nvcc_flags.append("-DUSE_GRACE_HOPPER")
 
-        # Add Intel RDMA NIC support if USE_INTEL_RDMA_NIC=1
-        if int(os.getenv("USE_INTEL_RDMA_NIC", 0)):
+        # Add Intel RDMA NIC support: auto-detect irdma or USE_INTEL_RDMA_NIC=1
+        use_intel_rdma_nic = os.getenv("USE_INTEL_RDMA_NIC")
+        if use_intel_rdma_nic is None or use_intel_rdma_nic == "":
+            use_intel_rdma_nic = "1" if _has_intel_rdma_nic() else "0"
+        if int(use_intel_rdma_nic):
             print("Building with Intel RDMA NIC support (INTEL_RDMA_NIC)")
             cxx_flags.append("-DINTEL_RDMA_NIC")
             nvcc_flags.append("-DINTEL_RDMA_NIC")
@@ -342,7 +399,7 @@ if __name__ == "__main__":
             )
         ],
         cmdclass={
-            "build_ext": BuildExtension,
+            "build_ext": ABI3BuildExtension,
             "install": CustomInstall,
             "clean": CustomClean,
         },

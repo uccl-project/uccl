@@ -8,6 +8,9 @@ USE_EFA ?= $(shell echo $${USE_EFA:-0})
 # TCP endpoint integration
 USE_TCP ?= $(shell echo $${USE_TCP:-0})
 
+# DietGPU optional integration
+USE_DIETGPU ?= $(shell echo $${USE_DIETGPU:-0})
+
 # Compiler and flags
 CUDA_HOME ?= /usr/local/cuda
 CUDA_INC  := $(CUDA_HOME)/include
@@ -16,7 +19,7 @@ EFA_HOME ?= /opt/amazon/efa
 
 # Building with the following settings:
 INC = -I./ -I$(CUDA_HOME)/include
-LIBS = -L ${CUDA_HOME}/lib64 -libverbs -lcudart -lcuda -lpthread -lglog -lgflags -lgtest -lz -lelf
+LIBS = -L ${CUDA_HOME}/lib64 -libverbs -lcudart -lcuda -lpthread -lz -lelf
 LIBS2 =
 
 CXX := g++
@@ -27,13 +30,13 @@ CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(CUDA_I
 
 ifeq ($(USE_TCPX),1)
 	CXXFLAGS += -DUCCL_P2P_USE_TCPX
-	LIBS2 += -lglog -lgflags -lpthread -ldl
+	LIBS2 +=  -lpthread -ldl
 else ifeq ($(USE_EFA),1)
 	CXXFLAGS += -DUCCL_P2P_USE_EFA
 	INC += -I${EFA_HOME}/include
 	LIBS += -L ${EFA_HOME}/lib -lefa
 else
-	LIBS2 += -lglog -lgflags -lgtest -lz -lelf -lpthread -libverbs
+	LIBS2 +=  -lz -lelf -lpthread -libverbs
 endif
 
 # Add NCCL-over-TCP endpoint flag
@@ -41,13 +44,38 @@ ifeq ($(USE_TCP),1)
 	CXXFLAGS += -DUCCL_P2P_USE_NCCL
 endif
 
-# Python and nanobind configuration (stable ABI)
+# ---------------- DietGPU ----------------
+DIETGPU_ROOT      := ../thirdparty/dietgpu
+DIETGPU_FLOAT_DIR := $(DIETGPU_ROOT)/dietgpu/float
+DIETGPU_LIB       := $(DIETGPU_FLOAT_DIR)/libdietgpu_float.so
+
+ifeq ($(USE_DIETGPU),1)
+	DIETGPU_INC  := -I$(DIETGPU_ROOT)
+	DIETGPU_LIBS := -L$(DIETGPU_FLOAT_DIR) -ldietgpu_float \
+	                -Wl,-rpath,$(abspath $(DIETGPU_FLOAT_DIR)) \
+	                -Wl,-rpath,'$$ORIGIN/lib'
+	CXXFLAGS += -DUSE_DIETGPU
+else
+	DIETGPU_INC  :=
+	DIETGPU_LIBS :=
+endif
+
+CXXFLAGS += $(DIETGPU_INC)
+
+# Python and nanobind configuration
 PYTHON          ?= python3
 PYTHON_CONFIG    = $(PYTHON)-config
-PYEXT           := .abi3.so
 NB_DIR          := $(shell $(PYTHON) -c "import nanobind as _nb, os; print(os.path.dirname(_nb.__file__))")
 NB_INCLUDES     := -I$(NB_DIR)/include -I$(NB_DIR)/ext/robin_map/include -I$(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_path('include'))")
+# Stable ABI requires Python >= 3.12
+PY_STABLE_ABI_OK := $(shell $(PYTHON) -c "import sys; print(1 if sys.version_info >= (3, 12) else 0)")
+ifeq ($(PY_STABLE_ABI_OK),1)
 NB_ABI_FLAGS    := -DPy_LIMITED_API=0x030C0000 -DNB_STABLE_ABI=1
+PYEXT           := .abi3.so
+else
+NB_ABI_FLAGS    :=
+PYEXT           := $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('EXT_SUFFIX'))")
+endif
 NB_SRC_DIR      := $(NB_DIR)/src
 NB_SRCS         := nb_internals.cpp nb_func.cpp nb_type.cpp nb_enum.cpp \
                    nb_ndarray.cpp nb_static_property.cpp common.cpp error.cpp \
@@ -63,7 +91,7 @@ PREFIX ?= /usr/local
 LIBDIR ?= $(PREFIX)/lib
 INCDIR ?= $(PREFIX)/include
 
-LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LIBS2)
+LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LIBS2) $(DIETGPU_LIBS)
 
 ifeq ($(USE_TCP),1)
 NCCL_HOME ?= ../thirdparty/nccl/build
@@ -165,6 +193,7 @@ else
 install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	$(MAKE) $(P2P_PYTHON_EXT)
 	@mkdir -p $(INSTALL_DIR)
+	@rm -f $(INSTALL_DIR)/p2p.cpython-*.so $(INSTALL_DIR)/p2p.abi3.so
 	@cp $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
 	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)

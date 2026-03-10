@@ -1,8 +1,15 @@
 #!/bin/bash
 
 # Rename cpython-versioned .so files to .abi3.so for stable ABI compatibility.
+# Only applies on Python >= 3.12 where nanobind stable ABI is enabled.
 rename_to_abi3() {
   local dir="$1"
+  local py_stable_abi_ok
+  py_stable_abi_ok=$(python3 -c "import sys; print(1 if sys.version_info >= (3, 12) else 0)")
+  if [[ "$py_stable_abi_ok" != "1" ]]; then
+    echo "Python < 3.12 detected, skipping abi3 rename (nanobind stable ABI not supported)"
+    return
+  fi
   for f in "$dir"/*.cpython-*.so; do
     if [[ -f "$f" ]]; then
       local newname
@@ -104,6 +111,24 @@ build_p2p() {
   set -euo pipefail
   echo "[container] build_p2p Target: $TARGET"
 
+  if [[ "${USE_DIETGPU:-0}" == "1" ]]; then
+    cd thirdparty/dietgpu
+    if [[ "$TARGET" == cuda* ]]; then
+      cd dietgpu/float
+      CUDA_GPU_ARCH="sm_$(echo "${TORCH_CUDA_ARCH_LIST:-9.0}" | awk '{print $1}' | sed 's/+PTX//; s/\.//')"
+      echo "Building dietgpu float for CUDA: $CUDA_GPU_ARCH"
+      make clean -f Makefile.cuda && make -j$(nproc) -f Makefile.cuda GPU_ARCH=$CUDA_GPU_ARCH
+    else
+      rm -rf build/
+      python3 setup.py build
+      cd dietgpu/float
+      echo $TORCH_CUDA_ARCH_LIST
+      make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm GPU_ARCH=$TORCH_CUDA_ARCH_LIST
+    fi
+    cd ../../../..
+    cp thirdparty/dietgpu/dietgpu/float/libdietgpu_float.so uccl/lib
+  fi
+
   cd p2p
   if [[ "$TARGET" == cuda* ]]; then
     make clean && make -j$(nproc)
@@ -124,13 +149,6 @@ build_p2p() {
     cp p2p/utils.py uccl/
   else
     echo "[container] USE_TCPX=1, skipping copying p2p runtime files"
-  fi
-  if [[ "$TARGET" == rocm* ]]; then
-    cd thirdparty/dietgpu
-    rm -rf build/
-    python3 setup.py build
-    cd ../..
-    cp thirdparty/dietgpu/build/**/*.so uccl/
   fi
   rename_to_abi3 uccl
 }

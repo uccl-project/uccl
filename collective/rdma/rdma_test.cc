@@ -11,9 +11,9 @@
     - Server displays final atomic values after completion
  */
 #include "transport_config.h"
+#include "util/debug.h"
 #include <arpa/inet.h>
 #include <gflags/gflags.h>
-#include <glog/logging.h>
 #include <infiniband/verbs.h>
 #include <netinet/in.h>
 #include <thread>
@@ -134,9 +134,9 @@ void exchange_qpns(char const* peer_ip, metadata* local_meta,
 
   if (mode == 's') {
     int listensock = sock;
-    CHECK(bind(listensock, (struct sockaddr*)&addr, sizeof(addr)) == 0)
+    UCCL_CHECK(bind(listensock, (struct sockaddr*)&addr, sizeof(addr)) == 0)
         << "Failed to bind";
-    CHECK(listen(listensock, 10) == 0) << "Failed to listen";
+    UCCL_CHECK(listen(listensock, 10) == 0) << "Failed to listen";
     printf("Server waiting for connection...\n");
     // accept in a non-blocking way
     while (!force_exit) {
@@ -174,10 +174,10 @@ void exchange_qpns(char const* peer_ip, metadata* local_meta,
   if (recv(sock, remote_meta, sizeof(*remote_meta), 0) <= 0)
     perror("recv() timeout");
 
-  VLOG(1) << "local addr=" << (uint64_t)local_meta->addr
-          << ", local rkey=" << local_meta->rkey
-          << ", remote addr=" << (uint64_t)remote_meta->addr
-          << ", remote rkey=" << remote_meta->rkey;
+  UCCL_VLOG(1) << "local addr=" << (uint64_t)local_meta->addr
+               << ", local rkey=" << local_meta->rkey
+               << ", remote addr=" << (uint64_t)remote_meta->addr
+               << ", remote rkey=" << remote_meta->rkey;
 
   close(sock);
 }
@@ -209,7 +209,7 @@ void init_srq_wr() {
 
 void post_srq(struct rdma_context* rdma, int nb_wr) {
   if (nb_wr == 0) return;
-  DCHECK(nb_wr <= MAX_WR) << "nb_wr is greater than MAX_WR";
+  UCCL_DCHECK(nb_wr <= MAX_WR) << "nb_wr is greater than MAX_WR";
 
   auto* srq = rdma->srq;
 
@@ -217,7 +217,7 @@ void post_srq(struct rdma_context* rdma, int nb_wr) {
   wr[nb_wr - 1].next = nullptr;
 
   struct ibv_recv_wr* bad_wr;
-  CHECK(ibv_post_srq_recv(srq, wr, &bad_wr) == 0);
+  UCCL_CHECK(ibv_post_srq_recv(srq, wr, &bad_wr) == 0);
 
   wr[nb_wr - 1].next = cache_wr;
 }
@@ -252,7 +252,7 @@ void modify_qp_rtr(struct rdma_context* rdma) {
   for (int i = 0; i < NUM_QPS; i++) {
     attr.dest_qp_num = rdma->remote_meta.qpn[i];
     int ret = ibv_modify_qp(rdma->qp[i], &attr, attr_mask);
-    DCHECK(ret == 0) << "Failed to modify QP: " << ret;
+    UCCL_DCHECK(ret == 0) << "Failed to modify QP: " << ret;
   }
 }
 
@@ -271,7 +271,7 @@ void modify_qp_rts(struct rdma_context* rdma) {
 
   for (int i = 0; i < NUM_QPS; i++) {
     int ret = ibv_modify_qp(rdma->qp[i], &attr, attr_mask);
-    DCHECK(ret == 0) << "Failed to modify QP: " << ret;
+    UCCL_DCHECK(ret == 0) << "Failed to modify QP: " << ret;
   }
 }
 
@@ -294,32 +294,33 @@ struct rdma_context* init_rdma(char const* server_ip) {
     }
   }
 
-  DCHECK(i < nb_devices) << "Device " << device_name << " not found";
+  UCCL_DCHECK(i < nb_devices) << "Device " << device_name << " not found";
   auto* open_dev = dev_list[i];
 
   rdma->ctx = ibv_open_device(open_dev);
-  DCHECK(rdma->ctx) << "Failed to open device";
+  UCCL_DCHECK(rdma->ctx) << "Failed to open device";
 
   ibv_free_device_list(dev_list);
 
   rdma->pd = ibv_alloc_pd(rdma->ctx);
-  DCHECK(rdma->pd) << "Failed to allocate pd";
+  UCCL_DCHECK(rdma->pd) << "Failed to allocate pd";
 
-  CHECK(ibv_query_device(rdma->ctx, &rdma->dev_attr) == 0)
+  UCCL_CHECK(ibv_query_device(rdma->ctx, &rdma->dev_attr) == 0)
       << "Failed to query device";
 
-  DCHECK(rdma->dev_attr.phys_port_cnt == 1) << "Only one port is supported";
+  UCCL_DCHECK(rdma->dev_attr.phys_port_cnt == 1)
+      << "Only one port is supported";
 
-  CHECK(ibv_query_port(rdma->ctx, 1, &rdma->port_attr) == 0)
+  UCCL_CHECK(ibv_query_port(rdma->ctx, 1, &rdma->port_attr) == 0)
       << "Failed to query port";
 
-  DCHECK(rdma->port_attr.state == IBV_PORT_ACTIVE) << "Port is not active";
+  UCCL_DCHECK(rdma->port_attr.state == IBV_PORT_ACTIVE) << "Port is not active";
 
-  DCHECK(rdma->port_attr.link_layer ==
-         (ROCE_NET ? IBV_LINK_LAYER_ETHERNET : IBV_LINK_LAYER_INFINIBAND))
+  UCCL_DCHECK(rdma->port_attr.link_layer ==
+              (ROCE_NET ? IBV_LINK_LAYER_ETHERNET : IBV_LINK_LAYER_INFINIBAND))
       << "Link layer error";
 
-  CHECK(ibv_query_gid(rdma->ctx, 1, GID_INDEX, &rdma->gid) == 0)
+  UCCL_CHECK(ibv_query_gid(rdma->ctx, 1, GID_INDEX, &rdma->gid) == 0)
       << "Failed to query gid";
 
 #ifdef USE_GPU
@@ -335,17 +336,17 @@ struct rdma_context* init_rdma(char const* server_ip) {
   }
 
 #ifdef MANAGED
-  CHECK(cudaMemAdvise(rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE,
-                      cudaMemAdviseSetPreferredLocation,
-                      USE_GPU) == cudaSuccess)
+  UCCL_CHECK(cudaMemAdvise(rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE,
+                           cudaMemAdviseSetPreferredLocation,
+                           USE_GPU) == cudaSuccess)
       << "Failed to set preferred location";
-  CHECK(cudaMemAdvise(rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE,
-                      cudaMemAdviseSetAccessedBy, USE_GPU) == cudaSuccess)
+  UCCL_CHECK(cudaMemAdvise(rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE,
+                           cudaMemAdviseSetAccessedBy, USE_GPU) == cudaSuccess)
       << "Failed to set accessed by";
-  CHECK(cudaMemPrefetchAsync(rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE,
-                             USE_GPU) == cudaSuccess)
+  UCCL_CHECK(cudaMemPrefetchAsync(rdma->local_buf, OUTSTNADING_MSG * MSG_SIZE,
+                                  USE_GPU) == cudaSuccess)
       << "Failed to prefetch GPU memory";
-  CHECK(cudaDeviceSynchronize() == cudaSuccess) << "Failed to synchronize";
+  UCCL_CHECK(cudaDeviceSynchronize() == cudaSuccess) << "Failed to synchronize";
 #endif
 
   rdma->mr =
@@ -364,12 +365,12 @@ struct rdma_context* init_rdma(char const* server_ip) {
                      IBV_ACCESS_REMOTE_READ | IBV_ACCESS_RELAXED_ORDERING);
 #endif
 
-  DCHECK(rdma->mr) << "Failed to register memory regions";
+  UCCL_DCHECK(rdma->mr) << "Failed to register memory regions";
   assert((uintptr_t)rdma->mr->addr == (uintptr_t)rdma->local_buf);
 
-  VLOG(1) << "RX MR: addr=" << (uint64_t)rdma->mr->addr
-          << ", len=" << rdma->mr->length << ", lkey=" << rdma->mr->lkey
-          << ", rkey=" << rdma->mr->rkey;
+  UCCL_VLOG(1) << "RX MR: addr=" << (uint64_t)rdma->mr->addr
+               << ", len=" << rdma->mr->length << ", lkey=" << rdma->mr->lkey
+               << ", rkey=" << rdma->mr->rkey;
 
   create_srq(rdma);
 
@@ -403,8 +404,8 @@ struct rdma_context* init_rdma(char const* server_ip) {
   rdma->remote_atomic_addr = rdma->remote_meta.atomic_addr;
   rdma->remote_atomic_rkey = rdma->remote_meta.atomic_rkey;
 
-  VLOG(1) << "Remote atomic buffer: addr=" << rdma->remote_atomic_addr
-          << ", rkey=" << rdma->remote_atomic_rkey;
+  UCCL_VLOG(1) << "Remote atomic buffer: addr=" << rdma->remote_atomic_addr
+               << ", rkey=" << rdma->remote_atomic_rkey;
 #endif
 
   modify_qp_rtr(rdma);
@@ -434,7 +435,7 @@ void create_cq(struct rdma_context* rdma) {
     cq_ex_attr.flags |= IBV_CREATE_CQ_ATTR_IGNORE_OVERRUN;
 
   rdma->cq_ex = ibv_create_cq_ex(rdma->ctx, &cq_ex_attr);
-  DCHECK(rdma->cq_ex) << "Failed to create CQ";
+  UCCL_DCHECK(rdma->cq_ex) << "Failed to create CQ";
 }
 
 void create_srq(struct rdma_context* rdma) {
@@ -444,7 +445,7 @@ void create_srq(struct rdma_context* rdma) {
   srq_init_attr.attr.max_wr = MAX_WR;
   srq_init_attr.attr.srq_limit = 0;
   rdma->srq = ibv_create_srq(rdma->pd, &srq_init_attr);
-  DCHECK(rdma->srq) << "Failed to create SRQ";
+  UCCL_DCHECK(rdma->srq) << "Failed to create SRQ";
 }
 
 // Create and configure a UD QP
@@ -476,11 +477,11 @@ void create_qp(struct rdma_context* rdma) {
 
   for (int i = 0; i < NUM_QPS; i++) {
     rdma->qp[i] = ibv_create_qp(rdma->pd, &attr);
-    DCHECK(rdma->qp[i]) << "Failed to create QP";
+    UCCL_DCHECK(rdma->qp[i]) << "Failed to create QP";
 
-    CHECK(ibv_modify_qp(rdma->qp[i], &qp_attr,
-                        IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
-                            IBV_QP_ACCESS_FLAGS) == 0)
+    UCCL_CHECK(ibv_modify_qp(rdma->qp[i], &qp_attr,
+                             IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
+                                 IBV_QP_ACCESS_FLAGS) == 0)
         << "Failed to modify QP";
   }
 }
@@ -494,9 +495,9 @@ uint32_t poll_cq(struct rdma_context* rdma, uint32_t expect_opcode) {
   if (ibv_start_poll(cq_ex, &poll_cq_attr)) return 0;
 
   while (!force_exit) {
-    DCHECK(cq_ex->status == IBV_WC_SUCCESS)
+    UCCL_DCHECK(cq_ex->status == IBV_WC_SUCCESS)
         << "Failed to poll CQ: " << cq_ex->status;
-    CHECK(ibv_wc_read_opcode(cq_ex) == expect_opcode)
+    UCCL_CHECK(ibv_wc_read_opcode(cq_ex) == expect_opcode)
         << "Unexpected opcode: " << ibv_wc_read_opcode(cq_ex);
 
     if (ibv_wc_read_opcode(cq_ex) == IBV_WC_RECV_RDMA_WITH_IMM) {
@@ -525,11 +526,11 @@ uint32_t poll_atomic_cq(struct rdma_context* rdma) {
   if (ibv_start_poll(cq_ex, &poll_cq_attr)) return 0;
 
   while (!force_exit) {
-    DCHECK(cq_ex->status == IBV_WC_SUCCESS)
+    UCCL_DCHECK(cq_ex->status == IBV_WC_SUCCESS)
         << "Failed to poll CQ: " << cq_ex->status;
 
     uint32_t opcode = ibv_wc_read_opcode(cq_ex);
-    DCHECK(opcode == IBV_WC_COMP_SWAP || opcode == IBV_WC_FETCH_ADD)
+    UCCL_DCHECK(opcode == IBV_WC_COMP_SWAP || opcode == IBV_WC_FETCH_ADD)
         << "Unexpected atomic opcode: " << opcode;
 
     completed_ops++;
@@ -558,19 +559,19 @@ void init_atomic_buffer(struct rdma_context* rdma) {
   }
 
 #ifdef MANAGED
-  CHECK(cudaMemAdvise(
-            rdma->atomic_local_buf, ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
-            cudaMemAdviseSetPreferredLocation, USE_GPU) == cudaSuccess)
+  UCCL_CHECK(cudaMemAdvise(
+                 rdma->atomic_local_buf, ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
+                 cudaMemAdviseSetPreferredLocation, USE_GPU) == cudaSuccess)
       << "Failed to set atomic buffer preferred location";
-  CHECK(cudaMemAdvise(rdma->atomic_local_buf,
-                      ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
-                      cudaMemAdviseSetAccessedBy, USE_GPU) == cudaSuccess)
+  UCCL_CHECK(cudaMemAdvise(rdma->atomic_local_buf,
+                           ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
+                           cudaMemAdviseSetAccessedBy, USE_GPU) == cudaSuccess)
       << "Failed to set atomic buffer accessed by";
-  CHECK(cudaMemPrefetchAsync(rdma->atomic_local_buf,
-                             ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
-                             USE_GPU) == cudaSuccess)
+  UCCL_CHECK(cudaMemPrefetchAsync(rdma->atomic_local_buf,
+                                  ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
+                                  USE_GPU) == cudaSuccess)
       << "Failed to prefetch GPU atomic buffer";
-  CHECK(cudaDeviceSynchronize() == cudaSuccess)
+  UCCL_CHECK(cudaDeviceSynchronize() == cudaSuccess)
       << "Failed to synchronize atomic buffer";
 #endif
 
@@ -589,11 +590,11 @@ void init_atomic_buffer(struct rdma_context* rdma) {
   for (int i = 0; i < ATOMIC_BUFFER_SIZE; i++) {
     host_init_data[i] = i;
   }
-  CHECK(cudaMemcpy(rdma->atomic_local_buf, host_init_data,
-                   ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
-                   cudaMemcpyHostToDevice) == cudaSuccess)
+  UCCL_CHECK(cudaMemcpy(rdma->atomic_local_buf, host_init_data,
+                        ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
+                        cudaMemcpyHostToDevice) == cudaSuccess)
       << "Failed to initialize GPU atomic buffer";
-  CHECK(cudaDeviceSynchronize() == cudaSuccess)
+  UCCL_CHECK(cudaDeviceSynchronize() == cudaSuccess)
       << "Failed to synchronize after atomic buffer initialization";
 #else
   // For host memory, direct access is fine
@@ -613,10 +614,10 @@ void init_atomic_buffer(struct rdma_context* rdma) {
     exit(1);
   }
 
-  VLOG(1) << "Atomic MR: addr=" << (uint64_t)rdma->atomic_mr->addr
-          << ", len=" << rdma->atomic_mr->length
-          << ", lkey=" << rdma->atomic_mr->lkey
-          << ", rkey=" << rdma->atomic_mr->rkey;
+  UCCL_VLOG(1) << "Atomic MR: addr=" << (uint64_t)rdma->atomic_mr->addr
+               << ", len=" << rdma->atomic_mr->length
+               << ", lkey=" << rdma->atomic_mr->lkey
+               << ", rkey=" << rdma->atomic_mr->rkey;
 }
 
 void send_atomic_cmp_swap(struct rdma_context* rdma) {
@@ -695,11 +696,11 @@ void run_atomic_server(struct rdma_context* rdma) {
 #if USE_GPU
   // For GPU memory, copy to host before reading
   uint64_t host_final_data[ATOMIC_BUFFER_SIZE];
-  CHECK(cudaMemcpy(host_final_data, rdma->atomic_local_buf,
-                   ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
-                   cudaMemcpyDeviceToHost) == cudaSuccess)
+  UCCL_CHECK(cudaMemcpy(host_final_data, rdma->atomic_local_buf,
+                        ATOMIC_BUFFER_SIZE * sizeof(uint64_t),
+                        cudaMemcpyDeviceToHost) == cudaSuccess)
       << "Failed to read GPU atomic buffer";
-  CHECK(cudaDeviceSynchronize() == cudaSuccess)
+  UCCL_CHECK(cudaDeviceSynchronize() == cudaSuccess)
       << "Failed to synchronize after reading atomic buffer";
   for (int i = 0; i < ATOMIC_BUFFER_SIZE; i++) {
     printf("  atomic_buf[%d] = %lu\n", i, host_final_data[i]);
@@ -783,7 +784,7 @@ void send_message(struct rdma_context* rdma) {
   wr.send_flags = IBV_SEND_SIGNALED;
 
   struct ibv_send_wr* bad_wr;
-  CHECK(ibv_post_send(rdma->qp[next_send_qp_idx], &wr, &bad_wr) == 0);
+  UCCL_CHECK(ibv_post_send(rdma->qp[next_send_qp_idx], &wr, &bad_wr) == 0);
 
   next_send_qp_idx = (next_send_qp_idx + 1) % NUM_QPS;
   next_data_offset =
@@ -827,7 +828,7 @@ void check_gdr_support() {
 
   int driverVersion;
   cudaDriverGetVersion(&driverVersion);
-  DCHECK(driverVersion >= 11030);
+  UCCL_DCHECK(driverVersion >= 11030);
   for (int i = 0; i < 8; i++) {
     int cudaDev, attr = 0;
     cudaSetDevice(i);

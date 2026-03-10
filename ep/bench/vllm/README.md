@@ -16,7 +16,7 @@ Below assumes `cu128`.
 curl -LsSf https://astral.sh/uv/install.sh | sh
 uv venv
 source .venv/bin/activate
-uv pip install numpy setuptools pybind11
+uv pip install numpy setuptools nanobind
 uv pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 ```
 
@@ -170,5 +170,5 @@ vllm bench serve \
 
 | Mode | Req Throughput (req/s) | Output Tok Throughput (tok/s) | Mean TTFT (ms) | P99 TTFT (ms) | Mean TPOT (ms) | P99 TPOT (ms) |
 |------|------------------------|-------------------------------|----------------|---------------|----------------|---------------|
-| Allgather + ReduceScatter | 8.93 | 2285.11 | 303.50 | 655.98 | 81.11 | 95.55 |
-| UCCL-EP - Low Latency | 9.22 | 2359.13 | 278.52 | 775.17 | 59.35 | 78.61 |
+| Allgather + ReduceScatter | 8.92 | 2282.44 | 303.19 | 659.66 | 81.41 | 94.21 |
+| UCCL-EP - Low Latency | 9.24 | 2365.44 | 271.31 | 688.79 | 61.02 | 77.52 |

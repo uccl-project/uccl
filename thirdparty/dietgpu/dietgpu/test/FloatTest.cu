@@ -245,7 +245,7 @@ void runBatchPointerTest(
       runBatchPointerTest<FloatType::kFloat32>(res, probBits, batchSizes);
       break;
     default:
-      CHECK(false);
+      UCCL_CHECK(false);
       break;
   }
 }

@@ -17,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <cassert>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -381,6 +382,26 @@ void send_connection_info_as_client(int my_rank, int peer, char const* peer_ip,
   close(sockfd);
 }
 
+namespace {
+
+bool is_cuda_host_pointer(void* ptr) {
+  cudaPointerAttributes attr{};
+  cudaError_t err = cudaPointerGetAttributes(&attr, ptr);
+  if (err != cudaSuccess) {
+    // Clear sticky CUDA error state for callers.
+    (void)cudaGetLastError();
+    return false;
+  }
+#if defined(__HIP_PLATFORM_AMD__) || \
+    (defined(CUDART_VERSION) && CUDART_VERSION >= 10000)
+  return attr.type == cudaMemoryTypeHost;
+#else
+  return attr.memoryType == cudaMemoryTypeHost;
+#endif
+}
+
+}  // namespace
+
 void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                           int thread_idx, int local_rank) {
   if (S.context) return;  // already initialized
@@ -587,41 +608,45 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
                      IBV_ACCESS_RELAXED_ORDERING;
 #endif
 
-#ifdef USE_DMABUF
-  // Try full-buffer DMA-BUF first; if that fails due to IOMMU mapping
-  // resource exhaustion (ENOMEM for buffers > 2 GiB under full IOMMU
-  // translation), fall back to chunked registration.
-  S.mr = reg_mr_gpu_dmabuf(S.pd, gpu_buf, bytes, iova, access_flags);
-  if (!S.mr) {
-    S.gpu_mr_chunks = reg_mr_gpu_dmabuf_chunked(
-        S.pd, gpu_buf, bytes, iova, access_flags, kMaxDmabufChunkSize);
-    if (S.gpu_mr_chunks.empty()) {
-      fprintf(stderr,
-              "[RDMA] FATAL: Both single and chunked DMA-BUF registration "
-              "failed for %.1f GiB buffer\n",
-              bytes / (1024.0 * 1024.0 * 1024.0));
-      exit(1);
+  // Host-pinned (cudaHostAlloc/cudaMallocHost) buffers should be registered as
+  // host memory directly. This path is used as a fallback on NICs where GPU MR
+  // registration fails (e.g. "Bad address").
+  bool const gpu_buf_is_host_ptr = is_cuda_host_pointer(gpu_buf);
+  if (gpu_buf_is_host_ptr) {
+    S.mr = ibv_reg_mr(S.pd, gpu_buf, bytes, access_flags);
+    if (!S.mr) {
+      perror("Host MR registration failed");
     }
-    S.mr = S.gpu_mr_chunks[0].mr;  // first chunk for backward compat
-  }
+  } else {
+#ifdef USE_DMABUF
+    // Try full-buffer DMA-BUF first; if that fails due to IOMMU mapping
+    // resource exhaustion (ENOMEM for buffers > 2 GiB under full IOMMU
+    // translation), fall back to chunked registration.
+    S.mr = reg_mr_gpu_dmabuf(S.pd, gpu_buf, bytes, iova, access_flags);
+    if (!S.mr) {
+      S.gpu_mr_chunks = reg_mr_gpu_dmabuf_chunked(
+          S.pd, gpu_buf, bytes, iova, access_flags, kMaxDmabufChunkSize);
+      if (S.gpu_mr_chunks.empty()) {
+        fprintf(stderr,
+                "[RDMA] FATAL: Both single and chunked DMA-BUF registration "
+                "failed for %.1f GiB buffer\n",
+                bytes / (1024.0 * 1024.0 * 1024.0));
+        exit(1);
+      }
+      S.mr = S.gpu_mr_chunks[0].mr;  // first chunk for backward compat
+    }
 #else
-  S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova, access_flags);
+    S.mr = ibv_reg_mr_iova2(S.pd, gpu_buf, bytes, iova, access_flags);
 #endif
-  // Fallback when iova2/dmabuf fails (e.g. "Bad address" on some RoCE NICs or
-  // NICs without nvidia_peermem where the driver cannot use GPU VA as IOVA).
-  if (!S.mr) {
-#ifndef EFA
-    S.mr = ibv_reg_mr(S.pd, gpu_buf, bytes,
-                      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                          IBV_ACCESS_REMOTE_ATOMIC);
-#else
-    S.mr = ibv_reg_mr(S.pd, gpu_buf, bytes,
-                      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                          IBV_ACCESS_RELAXED_ORDERING);
-#endif
+    // Fallback when iova2/dmabuf fails (e.g. "Bad address" on some RoCE NICs
+    // or NICs without nvidia_peermem where the driver cannot use GPU VA as
+    // IOVA).
+    if (!S.mr) {
+      S.mr = ibv_reg_mr(S.pd, gpu_buf, bytes, access_flags);
+    }
   }
   if (!S.mr) {
-    perror("GPU MR registration failed");
+    perror("RDMA buffer MR registration failed");
 #ifdef USE_DMABUF
     signal_failure();
 #endif
@@ -657,88 +682,175 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
 #endif
 }
 
+namespace {
+
+template <typename ProbeFn>
+bool probe_gpu_memory_registration(int gpu_idx, size_t bytes, char const* label,
+                                   ProbeFn&& probe_fn) {
+  size_t const probe_bytes = std::max<size_t>(bytes, 4096);
+
+  cudaError_t cuerr = cudaSetDevice(gpu_idx);
+  if (cuerr != cudaSuccess) return false;
+
+  void* probe_buf = nullptr;
+  cuerr = cudaMalloc(&probe_buf, probe_bytes);
+  if (cuerr != cudaSuccess || !probe_buf) return false;
+
+  int num_devices = 0;
+  struct ibv_device** dev_list = ibv_get_device_list(&num_devices);
+  if (!dev_list || num_devices == 0) {
+    cudaFree(probe_buf);
+    if (dev_list) ibv_free_device_list(dev_list);
+    return false;
+  }
+
+  char* ib_hca = getenv("UCCL_IB_HCA");
+  if (!ib_hca) ib_hca = getenv("NCCL_IB_HCA");
+  struct uccl::ib_dev user_ib_ifs[MAX_IB_DEVS];
+  bool searchNot = ib_hca && ib_hca[0] == '^';
+  if (searchNot) ib_hca++;
+  bool searchExact = ib_hca && ib_hca[0] == '=';
+  if (searchExact) ib_hca++;
+  int num_ib_ifs = uccl::parse_interfaces(ib_hca, user_ib_ifs, MAX_IB_DEVS);
+
+  std::vector<int> candidates;
+  candidates.reserve(num_devices);
+  for (int i = 0; i < num_devices; ++i) {
+    char const* name = ibv_get_device_name(dev_list[i]);
+    if (!(uccl::match_if_list(name, 1, user_ib_ifs, num_ib_ifs, searchExact) ^
+          searchNot)) {
+      continue;
+    }
+#ifndef EFA
+    if (!uccl::is_iface_up(name)) continue;
+#endif
+    candidates.push_back(i);
+  }
+
+  bool ok = !candidates.empty();
+  for (int idx : candidates) {
+    struct ibv_context* ctx = ibv_open_device(dev_list[idx]);
+    if (!ctx) {
+      ok = false;
+      break;
+    }
+    struct ibv_pd* pd = ibv_alloc_pd(ctx);
+    if (!pd) {
+      ibv_close_device(ctx);
+      ok = false;
+      break;
+    }
+
+    errno = 0;
+    bool const probe_ok = probe_fn(pd, probe_buf, probe_bytes);
+    int const saved_errno = errno;
+    if (!probe_ok) {
+      fprintf(stderr,
+              "[RDMA] %s probe failed on NIC %s (bytes=%zu, errno=%d: %s)\n",
+              label, ibv_get_device_name(dev_list[idx]), probe_bytes,
+              saved_errno, strerror(saved_errno));
+      ok = false;
+    }
+
+    ibv_dealloc_pd(pd);
+    ibv_close_device(ctx);
+    if (!ok) break;
+  }
+
+  cudaFree(probe_buf);
+  ibv_free_device_list(dev_list);
+  return ok;
+}
+
+}  // namespace
+
+bool can_register_gpu_memory_for_rdma(int gpu_idx, size_t bytes) {
+  static thread_local std::map<std::pair<int, size_t>, bool> cache;
+  auto const key = std::make_pair(gpu_idx, bytes);
+  auto const it = cache.find(key);
+  if (it != cache.end()) return it->second;
+
+#ifndef EFA
+  int const access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                     IBV_ACCESS_REMOTE_ATOMIC;
+#else
+  int const access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                     IBV_ACCESS_RELAXED_ORDERING;
+#endif
+
+  bool const result = probe_gpu_memory_registration(
+      gpu_idx, bytes, "main RDMA buffer",
+      [&](ibv_pd* pd, void* probe_buf, size_t probe_bytes) {
+        uint64_t const iova = reinterpret_cast<uintptr_t>(probe_buf);
+#ifdef USE_DMABUF
+        ibv_mr* mr =
+            reg_mr_gpu_dmabuf(pd, probe_buf, probe_bytes, iova, access);
+        std::vector<MRChunk> chunks;
+        if (!mr) {
+          chunks = reg_mr_gpu_dmabuf_chunked(pd, probe_buf, probe_bytes, iova,
+                                             access, kMaxDmabufChunkSize);
+          if (!chunks.empty()) mr = chunks[0].mr;
+        }
+        if (!mr) return false;
+        if (!chunks.empty()) {
+          for (auto& c : chunks) ibv_dereg_mr(c.mr);
+        } else {
+          ibv_dereg_mr(mr);
+        }
+        return true;
+#else
+        ibv_mr* mr = ibv_reg_mr_iova2(pd, probe_buf, probe_bytes, iova, access);
+        if (!mr) mr = ibv_reg_mr(pd, probe_buf, probe_bytes, access);
+        if (!mr) return false;
+        ibv_dereg_mr(mr);
+        return true;
+#endif
+      });
+  cache[key] = result;
+  return result;
+}
+
 bool can_register_gpu_memory_for_atomics(int gpu_idx) {
-  // Probe: can we register a cudaMalloc'd buffer with ibv_reg_mr on this node?
-  // On some NICs (e.g. without nvidia_peermem) registration fails; use host
-  // memory for the atomic buffer in that case.
-  static thread_local bool probed = false;
-  static thread_local bool result = false;
-  if (probed) return result;
-  probed = true;
+  static thread_local std::map<int, bool> cache;
+  auto const it = cache.find(gpu_idx);
+  if (it != cache.end()) return it->second;
 
 #ifdef ATOMICS_USE_HOST_MEMORY
-  // Build with INTEL_RDMA_NIC (or ATOMICS_USE_HOST_MEMORY): use host memory for
-  // atomic and RDMA buffers so ibv_reg_mr succeeds.
-  result = false;
-  return result;
+  cache[gpu_idx] = false;
+  return false;
 #endif
 
   char* force_host = getenv("UCCL_ATOMICS_USE_HOST_MEMORY");
   if (force_host &&
       (force_host[0] == '1' || force_host[0] == 'y' || force_host[0] == 'Y')) {
-    result = false;
-    return result;
-  }
-
-  int num_devices = 0;
-  struct ibv_device** dev_list = ibv_get_device_list(&num_devices);
-  if (!dev_list || num_devices == 0) {
-    result = false;
-    if (dev_list) ibv_free_device_list(dev_list);
-    return result;
-  }
-  struct ibv_context* ctx = ibv_open_device(dev_list[0]);
-  ibv_free_device_list(dev_list);
-  if (!ctx) {
-    result = false;
-    return result;
-  }
-  struct ibv_pd* pd = ibv_alloc_pd(ctx);
-  if (!pd) {
-    ibv_close_device(ctx);
-    result = false;
-    return result;
-  }
-
-  void* probe_buf = nullptr;
-  cudaError_t cuerr = cudaSetDevice(gpu_idx);
-  if (cuerr != cudaSuccess) {
-    ibv_dealloc_pd(pd);
-    ibv_close_device(ctx);
-    result = false;
-    return result;
-  }
-  cuerr = cudaMalloc(&probe_buf, 4096);
-  if (cuerr != cudaSuccess || !probe_buf) {
-    ibv_dealloc_pd(pd);
-    ibv_close_device(ctx);
-    result = false;
-    return result;
+    cache[gpu_idx] = false;
+    return false;
   }
 
 #ifndef EFA
-  int access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-               IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC;
+  int const access = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                     IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_ATOMIC;
 #else
-  int access =
+  int const access =
       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ;
 #endif
-  struct ibv_mr* mr = ibv_reg_mr(pd, probe_buf, 4096, access);
-  if (mr) {
-    ibv_dereg_mr(mr);
-    result = true;
-  } else {
-    result = false;
-  }
-  cudaFree(probe_buf);
-  ibv_dealloc_pd(pd);
-  ibv_close_device(ctx);
+
+  bool const result = probe_gpu_memory_registration(
+      gpu_idx, kAtomicBufferSize, "atomic buffer",
+      [&](ibv_pd* pd, void* probe_buf, size_t probe_bytes) {
+        ibv_mr* mr = ibv_reg_mr(pd, probe_buf, probe_bytes, access);
+        if (!mr) return false;
+        ibv_dereg_mr(mr);
+        return true;
+      });
+  cache[gpu_idx] = result;
   return result;
 }
 
 ibv_cq* create_per_thread_cq(ProxyCtx& S) {
   int cq_depth = kMaxOutstandingSends * 2;
-  // Use extended CQ for EFA, AMD Ionic, and other drivers that are compatible.
+  // Use extended CQ for EFA and Intel NICs
+#if defined(EFA) || defined(ETHERNET_RDMA)
   struct ibv_cq_init_attr_ex cq_ex_attr = {};
   cq_ex_attr.cqe = cq_depth;
   cq_ex_attr.cq_context = nullptr;
@@ -757,13 +869,21 @@ ibv_cq* create_per_thread_cq(ProxyCtx& S) {
 #else
   cq_ex_attr.wc_flags = IBV_WC_STANDARD_FLAGS;
 #endif
-
   S.cq_ex = ibv_create_cq_ex(S.context, &cq_ex_attr);
   if (!S.cq_ex) {
     perror("Failed to create CQ (ibv_create_cq_ex)");
     exit(1);
   }
   return ibv_cq_ex_to_cq(S.cq_ex);
+#else
+  // Use standard CQ for other NICs like Broadcom
+  S.cq = ibv_create_cq(S.context, cq_depth, nullptr, nullptr, 0);
+  if (!S.cq) {
+    perror("Failed to create CQ (ibv_create_cq)");
+    exit(1);
+  }
+  return S.cq;
+#endif
 }
 
 #ifdef EFA
@@ -1115,8 +1235,15 @@ void modify_qp_to_rtr(ProxyCtx& S, RDMAConnectionInfo* remote,
 
   int ret = ibv_modify_qp(S.qp, &attr, flags);
   if (ret) {
-    perror("Failed to modify QP to RTR");
-    fprintf(stderr, "errno: %d\n", errno);
+    int const err = errno;
+    fprintf(stderr, "Failed to modify QP to RTR: %s\n", strerror(err));
+    fprintf(stderr, "errno: %d\n", err);
+    if (is_roce && err == ENODATA) {
+      fprintf(stderr,
+              "[RDMA] RoCE path (ENODATA): try another GID index (e.g. "
+              "UCCL_IB_GID_INDEX=1 or 3). Ensure both nodes use the same "
+              "UCCL_IB_GID_INDEX and that the GID is RoCE v2 and routable.\n");
+    }
     exit(1);
   }
 
@@ -1288,7 +1415,7 @@ static void post_rdma_async_batched_normal_mode(
 
     for (auto& [ring_idx_raw, idxs] : ring_to_indices) {
 #ifdef EFA
-      const size_t local_ring_count = ctx->data_qps_by_channel.size();
+      size_t const local_ring_count = ctx->data_qps_by_channel.size();
       struct ibv_qp_ex* qpx =
           (struct ibv_qp_ex*)(local_ring_count
                                   ? ctx->data_qps_by_channel[ring_idx_raw %
@@ -1315,17 +1442,17 @@ static void post_rdma_async_batched_normal_mode(
         qpx->wr_flags = IBV_SEND_SIGNALED;
 
         uint64_t remote_addr =
-            ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
+            ctx->remote_addr + decode_write_offset(cmd.req_rptr, false);
         uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
         if (remote_addr < ctx->remote_addr ||
             remote_addr + cmd.bytes > remote_end) {
           fprintf(stderr,
                   "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
-                  "size=%zu), cmd.req_rptr: 0x%llx\n",
+                  "size=%zu), offset: 0x%llx\n",
                   (unsigned long long)remote_addr, cmd.bytes,
                   (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
-                  (unsigned long long)cmd.req_rptr);
+                  (unsigned long long)decode_write_offset(cmd.req_rptr, false));
           cudaError_t err = cudaDeviceSynchronize();
           if (err != cudaSuccess) {
             fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
@@ -1369,8 +1496,8 @@ static void post_rdma_async_batched_normal_mode(
           ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
         }
 
-        uintptr_t laddr =
-            cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
+        uintptr_t laddr = decode_write_offset(cmd.req_lptr, false) +
+                          reinterpret_cast<uintptr_t>(ctx->mr->addr);
         ibv_wr_set_ud_addr(qpx, ctx->dst_ah, dst_qpn, QKEY);
         ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
                        static_cast<uint32_t>(cmd.bytes));
@@ -1406,7 +1533,7 @@ static void post_rdma_async_batched_normal_mode(
 
           // Remote address bounds check
           uint64_t remote_addr =
-              ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
+              ctx->remote_addr + decode_write_offset(cmd.req_rptr, false);
           uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
           if (remote_addr < ctx->remote_addr ||
@@ -1414,10 +1541,10 @@ static void post_rdma_async_batched_normal_mode(
             fprintf(
                 stderr,
                 "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
-                "size=%zu), cmd.req_rptr: 0x%llx\n",
+                "size=%zu), offset: 0x%llx\n",
                 (unsigned long long)remote_addr, cmd.bytes,
                 (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
-                (unsigned long long)cmd.req_rptr);
+                (unsigned long long)decode_write_offset(cmd.req_rptr, false));
             cudaError_t err = cudaDeviceSynchronize();
             if (err != cudaSuccess) {
               fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
@@ -1427,8 +1554,8 @@ static void post_rdma_async_batched_normal_mode(
           }
 
           // Local SGE
-          uintptr_t laddr =
-              cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
+          uintptr_t laddr = decode_write_offset(cmd.req_lptr, false) +
+                            reinterpret_cast<uintptr_t>(ctx->mr->addr);
 
 #ifdef USE_DMABUF
           // Split across chunk boundaries so each sub-WR stays within one
@@ -1553,7 +1680,7 @@ static void post_rdma_async_batched_normal_mode(
 
           // Remote address bounds check
           uint64_t remote_addr =
-              ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
+              ctx->remote_addr + decode_write_offset(cmd.req_rptr, false);
           uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
           if (remote_addr < ctx->remote_addr ||
@@ -1561,10 +1688,10 @@ static void post_rdma_async_batched_normal_mode(
             fprintf(
                 stderr,
                 "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
-                "size=%zu), cmd.req_rptr: 0x%llx\n",
+                "size=%zu), offset: 0x%llx\n",
                 (unsigned long long)remote_addr, cmd.bytes,
                 (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
-                (unsigned long long)cmd.req_rptr);
+                (unsigned long long)decode_write_offset(cmd.req_rptr, false));
             cudaError_t err = cudaDeviceSynchronize();
             if (err != cudaSuccess) {
               fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
@@ -1574,8 +1701,8 @@ static void post_rdma_async_batched_normal_mode(
           }
 
           // Local SGE
-          uintptr_t laddr =
-              cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
+          uintptr_t laddr = decode_write_offset(cmd.req_lptr, false) +
+                            reinterpret_cast<uintptr_t>(ctx->mr->addr);
 
 #ifdef USE_DMABUF
           // Split across chunk boundaries so each sub-WR stays within one
@@ -1739,17 +1866,17 @@ static void post_rdma_async_batched_fast_mode(
         qpx->wr_flags = IBV_SEND_SIGNALED;
 
         uint64_t remote_addr =
-            ctx->remote_addr + (cmd.req_rptr ? cmd.req_rptr : 0);
+            ctx->remote_addr + decode_write_offset(cmd.req_rptr, true);
         uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
 
         if (remote_addr < ctx->remote_addr ||
             remote_addr + cmd.bytes > remote_end) {
           fprintf(stderr,
                   "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
-                  "size=%zu), cmd.req_rptr: 0x%llx\n",
+                  "size=%zu), offset: 0x%llx\n",
                   (unsigned long long)remote_addr, cmd.bytes,
                   (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
-                  (unsigned long long)cmd.req_rptr);
+                  (unsigned long long)decode_write_offset(cmd.req_rptr, true));
           cudaError_t err = cudaDeviceSynchronize();
           if (err != cudaSuccess) {
             fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
@@ -1759,9 +1886,8 @@ static void post_rdma_async_batched_fast_mode(
           std::abort();
         }
 #ifdef USE_SENDER_BARRIER
-        S.wr_id_to_write_struct[qpx->wr_id] = {cmd.expert_idx, dst_rank,
-                                               get_is_combine(cmd.cmd_type),
-                                               get_low_latency(cmd.cmd_type)};
+        S.wr_id_to_write_struct[qpx->wr_id] = {
+            cmd.expert_idx, dst_rank, get_is_combine(cmd.cmd_type), true};
 #endif
 #ifdef USE_RECEIVER_BARRIER
         uint32_t num_tokens_imm =
@@ -1782,8 +1908,8 @@ static void post_rdma_async_batched_fast_mode(
         ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
       }
 #endif
-        uintptr_t laddr =
-            cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
+        uintptr_t laddr = decode_write_offset(cmd.req_lptr, true) +
+                          reinterpret_cast<uintptr_t>(ctx->mr->addr);
         ibv_wr_set_ud_addr(qpx, ctx->dst_ah, ctx->dst_qpn, QKEY);
         ibv_wr_set_sge(qpx, ctx->mr->lkey, laddr,
                        static_cast<uint32_t>(cmd.bytes));
@@ -1813,19 +1939,20 @@ static void post_rdma_async_batched_fast_mode(
       auto const& cmd = cmds_to_post[i];
       wr_ids[j] = wrs_to_post[i];
 
-      uintptr_t laddr =
-          cmd.req_lptr + reinterpret_cast<uintptr_t>(ctx->mr->addr);
-      uint64_t remote_addr = ctx->remote_addr + cmd.req_rptr;
+      uintptr_t laddr = decode_write_offset(cmd.req_lptr, true) +
+                        reinterpret_cast<uintptr_t>(ctx->mr->addr);
+      uint64_t remote_addr =
+          ctx->remote_addr + decode_write_offset(cmd.req_rptr, true);
 
       uint64_t remote_end = ctx->remote_addr + ctx->remote_len;
       if (remote_addr < ctx->remote_addr ||
           remote_addr + cmd.bytes > remote_end) {
         fprintf(stderr,
                 "[ERROR] Remote write OOB: addr=0x%llx len=%u (base=0x%llx, "
-                "size=%zu), cmd.req_rptr: 0x%llx\n",
+                "size=%zu), offset: 0x%llx\n",
                 (unsigned long long)remote_addr, cmd.bytes,
                 (unsigned long long)ctx->remote_addr, (size_t)ctx->remote_len,
-                (unsigned long long)cmd.req_rptr);
+                (unsigned long long)decode_write_offset(cmd.req_rptr, true));
         cudaError_t err = cudaDeviceSynchronize();
         if (err != cudaSuccess) {
           fprintf(stderr, "cudaDeviceSynchronize failed: %s\n",
@@ -2290,15 +2417,27 @@ void remote_process_completions_fast_mode(
         ImmType::IsAtomics(ntohl(cqe.imm_data))) {
       AtomicsImm aimm(ntohl(cqe.imm_data));
       int value = aimm.GetValue();
-      uint32_t offset = aimm.GetOff();
+      // off13 stores int64_t index (byte_offset >> 3); decode back to bytes.
+      uint32_t offset = static_cast<uint32_t>(aimm.GetOff()) << 3;
       size_t index = offset / sizeof(int64_t);
 #ifdef USE_RECEIVER_BARRIER
       // ep_config.hpp
       bool is_combine = aimm.IsCombine();
       int low_latency_buffer_idx = aimm.GetBufferIdx();
-      uint32_t new_offset =
-          offset - low_latency_buffer_idx *
-                       align<size_t>(num_experts * sizeof(int64_t), 128);
+      // Double-buffer stride must match ep_config.hpp:
+      // signaling_buffer_bytes_internode_aligned =
+      //   align(max(dispatch_bytes, combine_bytes), 128)
+#ifdef PER_EXPERT_BATCHING
+      size_t per_buffer_stride =
+          align<size_t>(std::max(static_cast<size_t>(num_ranks) * num_ranks,
+                                 static_cast<size_t>(num_experts)) *
+                            sizeof(int64_t),
+                        128);
+#else
+      size_t per_buffer_stride =
+          align<size_t>(num_experts * sizeof(int64_t), 128);
+#endif
+      uint32_t new_offset = offset - low_latency_buffer_idx * per_buffer_stride;
       size_t new_index = new_offset / sizeof(int64_t);
       int src_rank = -1;
       bool is_atomic_ready = false;
@@ -2363,7 +2502,7 @@ void remote_process_completions_fast_mode(
 #ifdef USE_SENDER_BARRIER
       if (aimm.IsCombine()) value = 1;
 #ifndef EFA
-      const uint32_t tag = wr_tag(cqe.wr_id);
+      uint32_t const tag = wr_tag(cqe.wr_id);
       ProxyCtx& S_atomic = *ctx_by_tag[tag];
       ibv_sge sge = {
           .addr = reinterpret_cast<uintptr_t>(S_atomic.mr->addr),
@@ -2863,7 +3002,8 @@ static void post_atomic_operations_fast_mode(
                 v, (unsigned long)cmd.value);
         std::abort();
       }
-      uint32_t offset = static_cast<int64_t>(cmd.req_rptr);
+      // Encode byte offset as int64_t index (>> 3) to fit in 13-bit off13.
+      uint32_t offset = static_cast<uint32_t>(cmd.req_rptr >> 3);
       int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
       if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
         fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
@@ -2904,7 +3044,8 @@ static void post_atomic_operations_fast_mode(
         fprintf(stderr, "value=%d won't fit in 15 bits\n", v);
         std::abort();
       }
-      uint32_t const off16 = static_cast<uint32_t>(cmd.req_rptr) & 0xFFFFu;
+      // Encode byte offset as int64_t index (>> 3) to fit in 13-bit off13.
+      uint32_t const off13 = static_cast<uint32_t>(cmd.req_rptr >> 3);
       int low_latency_buffer_idx = get_low_latency(cmd.cmd_type);
       if (low_latency_buffer_idx < 0 || low_latency_buffer_idx > 1) {
         fprintf(stderr, "Invalid low_latency_buffer_idx: %d\n",
@@ -2912,7 +3053,7 @@ static void post_atomic_operations_fast_mode(
         std::abort();
       }
       uint32_t const imm = AtomicsImm::Pack(true, get_is_combine(cmd.cmd_type),
-                                            v, off16, low_latency_buffer_idx)
+                                            v, off13, low_latency_buffer_idx)
                                .GetImmData();
       sge[i].addr = reinterpret_cast<uintptr_t>(ctx->mr->addr);
       sge[i].length = 0;

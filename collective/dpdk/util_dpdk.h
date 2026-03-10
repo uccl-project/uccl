@@ -3,7 +3,7 @@
 #include "pmd_port.h"
 #include "rx_ring.h"
 #include "tx_ring.h"
-#include <glog/logging.h>
+#include "util/debug.h"
 #include <linux/ethtool.h>
 #include <cstdint>
 #include <deque>
@@ -36,7 +36,7 @@ class DPDKSocket {
   }
 
   inline void push_packet(Packet* pkt) {
-    // LOG(INFO) << "push_packet packet: " << pkt;
+    // UCCL_LOG(INFO, UCCL_DPDK) << "push_packet packet: " << pkt;
     Packet::Free(pkt);
   }
 
@@ -52,7 +52,7 @@ class DPDKSocket {
       pkt = packet_pool_->PacketAlloc();
     } while (pkt == nullptr);
 
-    // LOG(INFO) << "pop_packet(uint16_t) avail_packets: "
+    // UCCL_LOG(INFO, UCCL_DPDK) << "pop_packet(uint16_t) avail_packets: "
     //           << packet_pool_->AvailPacketsCount();
     pkt->append<void*>(pkt_len);
     return pkt;
@@ -60,13 +60,14 @@ class DPDKSocket {
 
   uint32_t send_packets(Packet** pkts, uint32_t nb_pkts) {
     // for (uint32_t i = 0; i < nb_pkts; i++) {
-    //   LOG(INFO) << "send_packets [" << i << "] packet: " << pkts[i];
+    //   UCCL_LOG(INFO, UCCL_DPDK) << "send_packets [" << i << "] packet: " <<
+    //   pkts[i];
     // }
-    // LOG(INFO) << "send_packets: " << nb_pkts;
+    // UCCL_LOG(INFO, UCCL_DPDK) << "send_packets: " << nb_pkts;
 
     uint32_t sent = tx_ring_->TrySendPackets(pkts, nb_pkts);
     total_sent_packets_ += sent;
-    // LOG(INFO) << "send_packets sent: " << sent;
+    // UCCL_LOG(INFO, UCCL_DPDK) << "send_packets sent: " << sent;
     return sent;
   }
 
@@ -87,8 +88,9 @@ class DPDKSocket {
   std::string to_string() {
     struct rte_eth_stats stats;
     rte_eth_stats_get(0, &stats);
-    LOG(INFO) << "rx: " << stats.ipackets << " rx_dropped: " << stats.imissed
-              << " rx_nombuf: " << stats.rx_nombuf;
+    UCCL_LOG(INFO, UCCL_DPDK)
+        << "rx: " << stats.ipackets << " rx_dropped: " << stats.imissed
+        << " rx_nombuf: " << stats.rx_nombuf;
 
     return Format("[TX] %u [RX] %u [POOL] (%u, %u)", total_sent_packets_,
                   total_recv_packets_, avail_packets(), in_use_packets());
@@ -127,7 +129,7 @@ class DPDKFactory {
 
   DPDKSocket* CreateSocket(int queue_id) {
     if (!initialized_) {
-      LOG(WARNING) << "DPDKFactory is not initialized";
+      UCCL_LOG(WARN, UCCL_DPDK) << "DPDKFactory is not initialized";
       return nullptr;
     }
 
@@ -142,7 +144,7 @@ class DPDKFactory {
 
   void DeInit() {
     if (!initialized_) {
-      LOG(WARNING) << "DPDKFactory is not initialized";
+      UCCL_LOG(WARN, UCCL_DPDK) << "DPDKFactory is not initialized";
       return;
     }
   }
@@ -198,7 +200,7 @@ class PacketBuf {
   uint32_t get_packet_len() const { return pkt_->length(); }
 
   void set_payload(uint8_t* payload_addr, uint32_t payload_len) {
-    DCHECK(payload_addr_ == nullptr);
+    UCCL_DCHECK(payload_addr_ == nullptr);
     payload_addr_ = new uint8_t[payload_len];
     memcpy(payload_addr_, payload_addr, payload_len);
     payload_len_ = payload_len;
