@@ -1880,9 +1880,10 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
     GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
     GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, info.handle,
                                      gpuIpcMemLazyEnablePeerAccess));
-    dst_ptr = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(raw_dst_ptr) + info.offset);
-    memcpy_kind = local_is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
+    dst_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(raw_dst_ptr) +
+                                      info.offset);
+    memcpy_kind =
+        local_is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
   }
 
   std::vector<gpuStream_t>& streams = ipc_streams_[gpu_idx];
@@ -1968,9 +1969,10 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
     GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
     GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_src_ptr, info.handle,
                                      gpuIpcMemLazyEnablePeerAccess));
-    src_ptr = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(raw_src_ptr) + info.offset);
-    memcpy_kind = local_is_host ? gpuMemcpyDeviceToHost : gpuMemcpyDeviceToDevice;
+    src_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(raw_src_ptr) +
+                                      info.offset);
+    memcpy_kind =
+        local_is_host ? gpuMemcpyDeviceToHost : gpuMemcpyDeviceToDevice;
   }
 
   std::vector<gpuStream_t>& streams = ipc_streams_[gpu_idx];
@@ -2037,7 +2039,8 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
   op->gpu_idxs_v.assign(num_iovs, conn->remote_gpu_idx_);
 
   for (size_t iov = 0; iov < num_iovs; ++iov) {
-    bool local_is_host = (uccl::get_dev_idx(const_cast<void*>(data_v[iov])) == -1);
+    bool local_is_host =
+        (uccl::get_dev_idx(const_cast<void*>(data_v[iov])) == -1);
     bool remote_is_host = info_v[iov].is_host;
 
     void* dst_ptr = nullptr;
@@ -2054,8 +2057,10 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
       GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
                                        gpuIpcMemLazyEnablePeerAccess));
       dst_ptr = reinterpret_cast<void*>(
-          reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) + info_v[iov].offset);
-      memcpy_kind = local_is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
+          reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) +
+          info_v[iov].offset);
+      memcpy_kind =
+          local_is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
     }
 
     size_t sz = size_v[iov];
@@ -2137,8 +2142,10 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
       GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
                                        gpuIpcMemLazyEnablePeerAccess));
       src_ptr = reinterpret_cast<void*>(
-          reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) + info_v[iov].offset);
-      memcpy_kind = local_is_host ? gpuMemcpyDeviceToHost : gpuMemcpyDeviceToDevice;
+          reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) +
+          info_v[iov].offset);
+      memcpy_kind =
+          local_is_host ? gpuMemcpyDeviceToHost : gpuMemcpyDeviceToDevice;
     }
 
     size_t sz = size_v[iov];
@@ -2265,6 +2272,12 @@ bool Endpoint::add_remote_endpoint(std::vector<uint8_t> const& metadata,
   }
   if (success) {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    auto conn_it = conn_id_to_conn_.find(conn_id);
+    if (conn_it != conn_id_to_conn_.end()) {
+      conn_it->second->ip_addr_ = remote_ip;
+      conn_it->second->remote_port_ = remote_port;
+      conn_it->second->remote_gpu_idx_ = remote_gpu_idx;
+    }
     remote_endpoint_to_conn_id_[metadata] = conn_id;
     return true;
   }
@@ -2282,6 +2295,7 @@ bool Endpoint::remove_remote_endpoint(uint64_t conn_id) {
   }
 
   Conn* conn = it->second;
+  uint64_t loopback_conn_id = conn->rdma_loopback_conn_id_;
 
   // Detach shared memory if this was a local connection
   if (conn->shm_attached_) {
@@ -2300,6 +2314,19 @@ bool Endpoint::remove_remote_endpoint(uint64_t conn_id) {
 
   delete conn;
   conn_id_to_conn_.erase(it);
+
+  if (loopback_conn_id != UINT64_MAX) {
+    auto loopback_it = conn_id_to_conn_.find(loopback_conn_id);
+    if (loopback_it != conn_id_to_conn_.end()) {
+      Conn* loopback_conn = loopback_it->second;
+      if (loopback_conn->shm_attached_) {
+        auto& shm = loopback_conn->remote_inbox_;
+        uccl::detach_shared_ring(shm.ring, shm.shm_fd, shm.shm_size);
+      }
+      delete loopback_conn;
+      conn_id_to_conn_.erase(loopback_it);
+    }
+  }
 
   return true;
 }

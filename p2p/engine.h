@@ -71,8 +71,10 @@ struct Conn {
   uint64_t conn_id_;
   ConnID uccl_conn_id_;
   std::string ip_addr_;
+  uint16_t remote_port_ = 0;
   int remote_gpu_idx_;
   bool is_local_ = false;
+  uint64_t rdma_loopback_conn_id_ = UINT64_MAX;
 
   ShmRingHandle remote_inbox_;
   bool shm_attached_ = false;

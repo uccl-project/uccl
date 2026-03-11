@@ -57,7 +57,16 @@ def _pretty(num: int):
         val /= 1024
 
 
-def _run_server(args, ep, peer_rank: int):
+def _assert_descs(
+    descs, expected: int, who: str, buffer_device: str, size_per_block: int
+):
+    assert len(descs) == expected, (
+        f"{who} register_memory returned {len(descs)} descriptors; "
+        f"expected {expected} for device={buffer_device}, size_per_block={size_per_block}"
+    )
+
+
+def _run_server(args, ep, peer_rank: int, buffer_device: str):
     """Server side: receives data via WRITE/READ operations."""
     peer = peer_rank
 
@@ -77,10 +86,15 @@ def _run_server(args, ep, peer_rank: int):
                 size_per_block = sz // args.num_iovs
                 buf_v = []
                 for _ in range(args.num_iovs):
-                    buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                    buf = _make_buffer(
+                        size_per_block, buffer_device, args.local_gpu_idx
+                    )
                     buf_v.append(buf)
 
                 remote_descs = ep.register_memory(buf_v)
+                _assert_descs(
+                    remote_descs, args.num_iovs, "server", buffer_device, size_per_block
+                )
                 remote_descs_serialized = ep.get_serialized_descs(remote_descs)
                 _send_bytes(remote_descs_serialized, dst=peer)
 
@@ -91,10 +105,13 @@ def _run_server(args, ep, peer_rank: int):
             size_per_block = sz // args.num_iovs
             buf_v = []
             for _ in range(args.num_iovs):
-                buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                buf = _make_buffer(size_per_block, buffer_device, args.local_gpu_idx)
                 buf_v.append(buf)
 
             remote_descs = ep.register_memory(buf_v)
+            _assert_descs(
+                remote_descs, args.num_iovs, "server", buffer_device, size_per_block
+            )
 
             remote_descs_serialized = ep.get_serialized_descs(remote_descs)
             _send_bytes(remote_descs_serialized, dst=peer)
@@ -108,7 +125,7 @@ def _run_server(args, ep, peer_rank: int):
     print("[Server] Benchmark complete")
 
 
-def _run_client(args, ep, peer_rank: int, mode: str):
+def _run_client(args, ep, peer_rank: int, mode: str, buffer_device: str):
     """Client side: sends data via WRITE/READ operations."""
     peer = peer_rank
 
@@ -127,10 +144,13 @@ def _run_client(args, ep, peer_rank: int, mode: str):
             # Warmup iteration
             buf_v = []
             for _ in range(args.num_iovs):
-                buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                buf = _make_buffer(size_per_block, buffer_device, args.local_gpu_idx)
                 buf_v.append(buf)
 
             local_descs = ep.register_memory(buf_v)
+            _assert_descs(
+                local_descs, args.num_iovs, "client", buffer_device, size_per_block
+            )
             success, conn_id = ep.add_remote_endpoint(remote_metadata)
             assert success, "Failed to add remote endpoint"
 
@@ -153,10 +173,15 @@ def _run_client(args, ep, peer_rank: int, mode: str):
             for _ in range(args.iters):
                 buf_v = []
                 for _ in range(args.num_iovs):
-                    buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                    buf = _make_buffer(
+                        size_per_block, buffer_device, args.local_gpu_idx
+                    )
                     buf_v.append(buf)
 
                 local_descs = ep.register_memory(buf_v)
+                _assert_descs(
+                    local_descs, args.num_iovs, "client", buffer_device, size_per_block
+                )
                 success, conn_id = ep.add_remote_endpoint(remote_metadata)
                 assert success, "Failed to add remote endpoint"
 
@@ -182,10 +207,13 @@ def _run_client(args, ep, peer_rank: int, mode: str):
             # Raw mode (default): setup once, reuse for all iterations
             buf_v = []
             for _ in range(args.num_iovs):
-                buf = _make_buffer(size_per_block, args.device, args.local_gpu_idx)
+                buf = _make_buffer(size_per_block, buffer_device, args.local_gpu_idx)
                 buf_v.append(buf)
 
             local_descs = ep.register_memory(buf_v)
+            _assert_descs(
+                local_descs, args.num_iovs, "client", buffer_device, size_per_block
+            )
             success, conn_id = ep.add_remote_endpoint(remote_metadata)
             assert success, "Failed to add remote endpoint"
 
@@ -254,6 +282,9 @@ def _run_phase(args, ep, mode: str):
         raise ValueError(f"bad mode: {mode}")
 
     peer = server_rank if rank == client_rank else client_rank
+    sender_device = args.sender_device
+    receiver_device = args.receiver_device
+    buffer_device = sender_device if rank == client_rank else receiver_device
 
     dist.barrier()
     if rank == 0:
@@ -261,13 +292,16 @@ def _run_phase(args, ep, mode: str):
         print(
             f"PHASE: {mode.upper()}  (client=rank{client_rank}, server=rank{server_rank})"
         )
+        print(
+            f"Buffer devices: sender={sender_device.upper()} receiver={receiver_device.upper()}"
+        )
         print("=" * 60)
     dist.barrier()
 
     if rank == client_rank:
-        _run_client(args, ep, peer_rank=peer, mode=mode)
+        _run_client(args, ep, peer_rank=peer, mode=mode, buffer_device=buffer_device)
     else:
-        _run_server(args, ep, peer_rank=peer)
+        _run_server(args, ep, peer_rank=peer, buffer_device=buffer_device)
 
     dist.barrier()
 
@@ -278,9 +312,26 @@ def main():
     p.add_argument("--num-cpus", type=int, default=4)
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
     p.add_argument(
+        "--sender-device",
+        choices=["cpu", "gpu"],
+        default=None,
+        help="Buffer location for the sender. Defaults to --device.",
+    )
+    p.add_argument(
+        "--receiver-device",
+        choices=["cpu", "gpu"],
+        default=None,
+        help="Buffer location for the receiver. Defaults to --device.",
+    )
+    p.add_argument(
         "--cpu",
         action="store_true",
         help="Use CPU (pinned) memory for buffers (shorthand for --device cpu)",
+    )
+    p.add_argument(
+        "--intra",
+        action="store_true",
+        help="Run as an intra-node benchmark. Uses rank as local GPU index.",
     )
     p.add_argument(
         "--perf", action="store_true", help="Measure pure transfer performance"
@@ -317,10 +368,15 @@ def main():
     args = p.parse_args()
     if args.cpu:
         args.device = "cpu"
+    if args.sender_device is None:
+        args.sender_device = args.device
+    if args.receiver_device is None:
+        args.receiver_device = args.device
 
     print("UCCL Ray P2P Benchmark")
     print("=" * 60)
     print("Phases: WRITE then READ (auto, no --mode)")
+    print("Topology:", "intra-node" if args.intra else "inter-node")
     if args.normal:
         print("Normal mode: re-register and exchange metadata every iteration")
     else:
@@ -328,12 +384,19 @@ def main():
     print("Sizes:", ", ".join(_pretty(s) for s in args.sizes))
     print(f"Iterations: {args.iters}")
     print(f"Number of IOVs: {args.num_iovs}")
+    print(
+        f"Sender device: {args.sender_device} | Receiver device: {args.receiver_device}"
+    )
     print("=" * 60)
 
     dist.init_process_group(backend="gloo")
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     assert world_size == 2, "This benchmark only supports 2 processes"
+    if args.intra:
+        args.local_gpu_idx = rank
+    if torch.cuda.is_available():
+        torch.cuda.set_device(f"cuda:{args.local_gpu_idx}")
 
     ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
     ep.start_passive_accept()

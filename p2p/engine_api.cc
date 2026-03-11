@@ -27,6 +27,10 @@ struct XferHandle {
   uint64_t transfer_id;
 };
 
+bool IsHostPtr(void const* ptr) {
+  return uccl::get_dev_idx(const_cast<void*>(ptr)) == -1;
+}
+
 std::vector<uint8_t> serialize_xfer_descs(
     std::vector<XferDesc> const& xfer_desc_v) {
   size_t total_size = sizeof(size_t);
@@ -337,24 +341,29 @@ NB_MODULE(p2p, m) {
               nb::gil_scoped_release release;
               InsidePythonGuard guard;
 
-              std::vector<uint64_t> mr_id_v;
-              if (!self.regv(ptrs, sizes, mr_id_v)) {
-                return std::vector<XferDesc>{};
-              }
-
               xfer_desc_v.reserve(list_len);
               for (size_t i = 0; i < list_len; i++) {
-                auto mhandle = self.get_mhandle(mr_id_v[i]);
-                assert(mhandle != nullptr);
                 XferDesc xfer_desc;
                 xfer_desc.addr = ptrs[i];
                 xfer_desc.size = sizes[i];
-                xfer_desc.mr_id = mr_id_v[i];
-                for (size_t j = 0; j < kNICContextNumber; j++) {
-                  auto mr = mhandle->mr_array.getKeyByContextID(j);
-                  assert(mr != nullptr);
-                  xfer_desc.lkeys.push_back(mr->lkey);
-                  xfer_desc.rkeys.push_back(mr->rkey);
+                xfer_desc.mr_id = UINT64_MAX;
+
+                uint64_t mr_id = UINT64_MAX;
+                if (self.reg(ptrs[i], sizes[i], mr_id)) {
+                  auto mhandle = self.get_mhandle(mr_id);
+                  assert(mhandle != nullptr);
+                  xfer_desc.mr_id = mr_id;
+                  for (size_t j = 0; j < kNICContextNumber; j++) {
+                    auto mr = mhandle->mr_array.getKeyByContextID(j);
+                    assert(mr != nullptr);
+                    xfer_desc.lkeys.push_back(mr->lkey);
+                    xfer_desc.rkeys.push_back(mr->rkey);
+                  }
+                } else {
+                  std::cerr << "[register_memory] RDMA registration "
+                               "unavailable for ptr "
+                            << ptrs[i] << " size " << sizes[i]
+                            << "; keeping IPC metadata only" << std::endl;
                 }
                 // Also generate IPC handle for intra-node transfers
                 {
@@ -379,7 +388,8 @@ NB_MODULE(p2p, m) {
                     // For host memory, store the address in the handle field
                     // The handle field is 64 bytes, enough to store a pointer
                     std::memcpy(&ipc_info.handle, &addr_val, sizeof(addr_val));
-                    ipc_info.offset = 0;  // No alignment adjustment for host memory
+                    ipc_info.offset =
+                        0;  // No alignment adjustment for host memory
                   }
                   xfer_desc.ipc_info.assign(
                       reinterpret_cast<char const*>(&ipc_info),
@@ -401,7 +411,9 @@ NB_MODULE(p2p, m) {
             mr_ids.reserve(list_len);
             for (size_t i = 0; i < list_len; ++i) {
               auto const& desc = nb::cast<XferDesc const&>(desc_list[i]);
-              mr_ids.push_back(desc.mr_id);
+              if (desc.mr_id != UINT64_MAX) {
+                mr_ids.push_back(desc.mr_id);
+              }
             }
             {
               nb::gil_scoped_release release;
@@ -457,9 +469,56 @@ NB_MODULE(p2p, m) {
               throw std::runtime_error("Invalid conn_id");
             }
             bool is_local = conn->is_local_;
-
             uint64_t transfer_id;
-            bool success;
+            bool success = false;
+            bool use_loopback_rdma = false;
+
+            if (is_local) {
+              for (size_t i = 0; i < n; ++i) {
+                auto const& ldesc =
+                    nb::cast<XferDesc const&>(local_desc_list[i]);
+                auto const& rdesc =
+                    nb::cast<XferDesc const&>(remote_desc_list[i]);
+                CHECK(!rdesc.ipc_info.empty())
+                    << "Remote descriptor has no IPC info for local transfer";
+                IpcTransferInfo info;
+                std::memcpy(&info, rdesc.ipc_info.data(), sizeof(info));
+                if (IsHostPtr(ldesc.addr) && info.is_host) {
+                  use_loopback_rdma = true;
+                  break;
+                }
+              }
+
+              if (use_loopback_rdma) {
+                if (conn->rdma_loopback_conn_id_ == UINT64_MAX) {
+                  uint64_t loopback_conn_id;
+                  {
+                    nb::gil_scoped_release release;
+                    InsidePythonGuard guard;
+                    success =
+                        self.connect(conn->ip_addr_, conn->remote_gpu_idx_,
+                                     conn->remote_port_, loopback_conn_id);
+                  }
+                  if (!success) {
+                    return nb::make_tuple(false, uint64_t{0});
+                  }
+                  conn = self.get_conn(conn_id);
+                  if (conn == nullptr) {
+                    throw std::runtime_error(
+                        "Invalid conn_id after loopback connect");
+                  }
+                  conn->rdma_loopback_conn_id_ = loopback_conn_id;
+                }
+
+                conn_id = conn->rdma_loopback_conn_id_;
+                conn = self.get_conn(conn_id);
+                if (conn == nullptr) {
+                  throw std::runtime_error(
+                      "Loopback RDMA connection disappeared");
+                }
+                is_local = false;
+              }
+            }
 
             if (is_local) {
               // IPC path for intra-node
@@ -468,7 +527,7 @@ NB_MODULE(p2p, m) {
                     nb::cast<XferDesc const&>(local_desc_list[0]);
                 auto const& rdesc =
                     nb::cast<XferDesc const&>(remote_desc_list[0]);
-                UCCL_CHECK(!rdesc.ipc_info.empty())
+                CHECK(!rdesc.ipc_info.empty())
                     << "Remote descriptor has no IPC info for local transfer";
                 IpcTransferInfo info;
                 std::memcpy(&info, rdesc.ipc_info.data(), sizeof(info));
@@ -503,7 +562,7 @@ NB_MODULE(p2p, m) {
                       nb::cast<XferDesc const&>(local_desc_list[i]);
                   auto const& rdesc =
                       nb::cast<XferDesc const&>(remote_desc_list[i]);
-                  UCCL_CHECK(!rdesc.ipc_info.empty())
+                  CHECK(!rdesc.ipc_info.empty())
                       << "Remote descriptor has no IPC info for local transfer";
                   IpcTransferInfo info;
                   std::memcpy(&info, rdesc.ipc_info.data(), sizeof(info));
@@ -533,6 +592,11 @@ NB_MODULE(p2p, m) {
                     nb::cast<XferDesc const&>(local_desc_list[0]);
                 auto const& rdesc =
                     nb::cast<XferDesc const&>(remote_desc_list[0]);
+                if (ldesc.mr_id == UINT64_MAX || rdesc.rkeys.empty()) {
+                  throw std::runtime_error(
+                      "RDMA transfer requires RDMA-registered local and remote "
+                      "descriptors");
+                }
 
                 FifoItem fifo_item;
                 fifo_item.addr = reinterpret_cast<uint64_t>(rdesc.addr);
@@ -568,6 +632,11 @@ NB_MODULE(p2p, m) {
                       nb::cast<XferDesc const&>(local_desc_list[i]);
                   auto const& rdesc =
                       nb::cast<XferDesc const&>(remote_desc_list[i]);
+                  if (ldesc.mr_id == UINT64_MAX || rdesc.rkeys.empty()) {
+                    throw std::runtime_error(
+                        "RDMA transfer requires RDMA-registered local and "
+                        "remote descriptors");
+                  }
 
                   FifoItem fifo_item;
                   fifo_item.addr = reinterpret_cast<uint64_t>(rdesc.addr);
