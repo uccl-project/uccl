@@ -362,7 +362,8 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
     conn_id_to_conn_[conn_id] =
-        new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+        new Conn{conn_id, uccl_conn_id, ip_addr,
+                 static_cast<uint16_t>(remote_port), remote_gpu_idx};
   }
   return true;
 }
@@ -513,7 +514,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
     conn_id_to_conn_[conn_id] =
-        new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+        new Conn{conn_id, uccl_conn_id, ip_addr, 0, remote_gpu_idx};
   }
 
   return true;
@@ -1841,21 +1842,13 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
   bool local_is_host = (uccl::get_dev_idx(const_cast<void*>(data)) == -1);
   bool remote_is_host = info.is_host;
 
-  // Handle host-to-host transfer via memcpy (both source and dest are CPU)
   if (local_is_host && remote_is_host) {
-    uintptr_t remote_addr;
-    std::memcpy(&remote_addr, &info.handle, sizeof(remote_addr));
-    void* dst_ptr = reinterpret_cast<void*>(remote_addr + info.offset);
-    std::memcpy(dst_ptr, data, size);
-
-    // Create a completed status immediately for synchronous memcpy
-    auto* status = new TransferStatus();
-    status->done = true;
-    *transfer_id = reinterpret_cast<uint64_t>(status);
-    return true;
+    std::cerr << "[write_ipc_async] Error: CPU-CPU local transfers must use "
+                 "RDMA loopback, not IPC"
+              << std::endl;
+    return false;
   }
 
-  // Determine memcpy kind based on local and remote memory types
   gpuMemcpyKind memcpy_kind;
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
@@ -1930,21 +1923,13 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
   bool local_is_host = (uccl::get_dev_idx(data) == -1);
   bool remote_is_host = info.is_host;
 
-  // Handle host-to-host transfer via memcpy (both source and dest are CPU)
   if (local_is_host && remote_is_host) {
-    uintptr_t remote_addr;
-    std::memcpy(&remote_addr, &info.handle, sizeof(remote_addr));
-    void* src_ptr = reinterpret_cast<void*>(remote_addr + info.offset);
-    std::memcpy(data, src_ptr, size);
-
-    // Create a completed status immediately for synchronous memcpy
-    auto* status = new TransferStatus();
-    status->done = true;
-    *transfer_id = reinterpret_cast<uint64_t>(status);
-    return true;
+    std::cerr << "[read_ipc_async] Error: CPU-CPU local transfers must use "
+                 "RDMA loopback, not IPC"
+              << std::endl;
+    return false;
   }
 
-  // Determine memcpy kind based on local and remote memory types
   gpuMemcpyKind memcpy_kind;
   int orig_device;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
@@ -2043,6 +2028,14 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
         (uccl::get_dev_idx(const_cast<void*>(data_v[iov])) == -1);
     bool remote_is_host = info_v[iov].is_host;
 
+    if (local_is_host && remote_is_host) {
+      std::cerr << "[writev_ipc_async] Error: CPU-CPU local transfers must use "
+                   "RDMA loopback, not IPC"
+                << std::endl;
+      delete op;
+      return false;
+    }
+
     void* dst_ptr = nullptr;
     gpuMemcpyKind memcpy_kind;
 
@@ -2051,7 +2044,7 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
       uintptr_t remote_addr;
       std::memcpy(&remote_addr, &info_v[iov].handle, sizeof(remote_addr));
       dst_ptr = reinterpret_cast<void*>(remote_addr + info_v[iov].offset);
-      memcpy_kind = local_is_host ? gpuMemcpyHostToHost : gpuMemcpyDeviceToHost;
+      memcpy_kind = gpuMemcpyDeviceToHost;
     } else {
       // Remote destination is GPU memory: open IPC handle
       GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
@@ -2128,6 +2121,14 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
     bool local_is_host = (uccl::get_dev_idx(data_v[iov]) == -1);
     bool remote_is_host = info_v[iov].is_host;
 
+    if (local_is_host && remote_is_host) {
+      std::cerr << "[readv_ipc_async] Error: CPU-CPU local transfers must use "
+                   "RDMA loopback, not IPC"
+                << std::endl;
+      delete op;
+      return false;
+    }
+
     void* src_ptr = nullptr;
     gpuMemcpyKind memcpy_kind;
 
@@ -2136,7 +2137,7 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
       uintptr_t remote_addr;
       std::memcpy(&remote_addr, &info_v[iov].handle, sizeof(remote_addr));
       src_ptr = reinterpret_cast<void*>(remote_addr + info_v[iov].offset);
-      memcpy_kind = local_is_host ? gpuMemcpyHostToHost : gpuMemcpyHostToDevice;
+      memcpy_kind = gpuMemcpyHostToDevice;
     } else {
       // Remote source is GPU memory: open IPC handle
       GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
