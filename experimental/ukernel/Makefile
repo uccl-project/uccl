@@ -41,6 +41,15 @@ NVCCFLAGS  += -DUSE_REDIS_OOB --compiler-options "$(REDIS_CFLAGS)"
 LDFLAGS    += $(REDIS_LIBS)
 endif
 
+# UCCL collective support
+UCCL_ROOT := $(abspath ../../)
+UCCL_CFLAGS := -I$(UCCL_ROOT)/collective/rdma -I$(UCCL_ROOT)/include
+UCCL_LDFLAGS := $(UCCL_ROOT)/collective/rdma/librdma.a -libverbs -lrdmacm
+
+CXXFLAGS += $(UCCL_CFLAGS)
+NVCCFLAGS += --compiler-options "$(UCCL_CFLAGS)"
+LDFLAGS += $(UCCL_LDFLAGS)
+
 # pytorch // pybind
 PYTHON ?= python3
 

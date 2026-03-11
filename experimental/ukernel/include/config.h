@@ -19,6 +19,8 @@
 namespace UKernel {
 namespace Transport {
 
+enum class TransportBackend { BasicRDMA, UCCL };
+
 struct CommunicatorConfig {
   int rdma_chunk_size;
   int qp_count_per_ep;
@@ -32,6 +34,7 @@ struct CommunicatorConfig {
   int qp_max_sge;
   std::string exchanger_ip;
   int exchanger_port;
+  TransportBackend backend;
 
   CommunicatorConfig()
       : rdma_chunk_size(getEnvOrDefault("UKERNEL_RDMA_CHUNK_SIZE",
@@ -53,7 +56,8 @@ struct CommunicatorConfig {
         exchanger_ip(getEnvOrDefault("UHM_EXCHANGER_SERVER_IP",
                                      DEFAULT_EXCHANGER_SERVER_IP)),
         exchanger_port(getEnvOrDefault("UHM_EXCHANGER_SERVER_PORT",
-                                       DEFAULT_EXCHANGER_SERVER_PORT)) {}
+                                       DEFAULT_EXCHANGER_SERVER_PORT)),
+        backend(TransportBackend::UCCL) {}
 
  private:
   static int getEnvOrDefault(char const* env_name, int default_val) {

@@ -1,5 +1,6 @@
 #include "cq_poller.h"
 #include "transport.h"
+#include "uccl_transport_adapter.h"
 #include "util/util.h"
 #include "utils.h"
 #include <unordered_set>
@@ -312,6 +313,30 @@ bool Communicator::connect_to(int rank) {
   std::shared_ptr<EndpointBase> ep;
   bool ret = false;
 
+  if (config_->backend == TransportBackend::UCCL) {
+    // Use UCCL transport
+    if (!uccl_adapter_) {
+      UcclTransportConfig uccl_config;
+      uccl_config.num_engines = 8;
+      uccl_config.local_ip = local_meta->ip;
+      uccl_adapter_ = std::make_unique<UcclTransportAdapter>(
+          global_rank_, world_size_, uccl_config);
+    }
+
+    std::string remote_ip = meta->ip;
+    uint16_t remote_port = 12345;
+    ret = uccl_adapter_->connect_to_peer(rank, remote_ip, remote_port);
+    if (ret) {
+      std::cout << "[INFO] Communicator " << global_rank_
+                << " UCCL connect_to succeeded to rank " << rank << std::endl;
+    } else {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " UCCL connect_to failed to rank " << rank << std::endl;
+      return false;
+    }
+    return ret;
+  }
+
   if (same_host) {
     // std::cout << "[INFO] Communicator " << global_rank_
     //           << " same host detected, using IPC endpoint" << std::endl;
@@ -367,6 +392,27 @@ bool Communicator::accept_from(int rank) {
   std::shared_ptr<EndpointBase> ep;
   bool ret = false;
 
+  if (config_->backend == TransportBackend::UCCL) {
+    // Use UCCL transport
+    if (!uccl_adapter_) {
+      UcclTransportConfig uccl_config;
+      uccl_config.num_engines = 8;
+      uccl_config.local_ip = local_meta->ip;
+      uccl_adapter_ = std::make_unique<UcclTransportAdapter>(
+          global_rank_, world_size_, uccl_config);
+    }
+
+    ret = uccl_adapter_->accept_from_peer(rank);
+    if (ret) {
+      std::cout << "[INFO] Communicator " << global_rank_
+                << " UCCL accept_from succeeded from rank " << rank << std::endl;
+    } else {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " UCCL accept_from failed from rank " << rank << std::endl;
+    }
+    return ret;
+  }
+
   if (same_host) {
     ep = std::make_shared<IPCEndpoint>(config_, this);
     ret = ep->accept_from(rank);
@@ -410,6 +456,13 @@ Communicator::get_endpoint_by_rank(int rank) {
 unsigned Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
                              uint16_t local_mr_id, uint16_t remote_mr_id,
                              bool on_gpu) {
+  if (config_->backend == TransportBackend::UCCL && uccl_adapter_) {
+    // Use UCCL transport
+    void* actual_ptr = static_cast<char*>(ptr) + offset;
+    int ret = uccl_adapter_->send_async(rank, actual_ptr, len, local_mr_id, remote_mr_id);
+    return ret == 0 ? 1 : 0;
+  }
+
   auto [ep, ok] = get_endpoint_by_rank(rank);
   if (!ok || !ep) return 0;
 
@@ -439,6 +492,14 @@ unsigned Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
 
 unsigned Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
                              bool on_gpu) {
+  if (config_->backend == TransportBackend::UCCL && uccl_adapter_) {
+    // Use UCCL transport
+    void* actual_ptr = static_cast<char*>(ptr) + offset;
+    auto local_mr = get_local_mr(ptr);
+    int ret = uccl_adapter_->recv_async(rank, actual_ptr, len, local_mr.id);
+    return ret == 0 ? 1 : 0;
+  }
+
   auto [ep, ok] = get_endpoint_by_rank(rank);
   if (!ok || !ep) return 0;
 

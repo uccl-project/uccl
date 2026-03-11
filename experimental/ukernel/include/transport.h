@@ -23,6 +23,7 @@ enum class EndpointType { RDMA, IPC };
 
 class Communicator;
 class CQPoller;
+class UcclTransportAdapter;
 class EndpointBase {
  public:
   virtual bool connect_to(int rank) = 0;
@@ -195,6 +196,9 @@ class Communicator {
       rank_mr_id_to_remote_mr_;  // to_rank remote_ptr -> remote mr
   mutable std::mutex remote_mr_mu_;
   std::atomic<uint16_t> next_mr_id{0};
+
+  // ---------- UCCL transport ----------
+  std::unique_ptr<UcclTransportAdapter> uccl_adapter_;
 
   // ---------- IPC resources ---------
   using HandleKey = std::array<uint8_t, sizeof(gpuIpcMemHandle_t)>;
