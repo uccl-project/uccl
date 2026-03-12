@@ -69,7 +69,7 @@ int main(int argc, char* argv[]) {
 
   uint16_t port_id = dpdk.GetPmdPortIdByMac(mac_str.c_str());
   if (port_id == (uint16_t)-1) {
-    UCCL_LOG(FATAL, UCCL_DPDK) << "Client port not found";
+    UCCL_LOG(FATAL) << "Client port not found";
   }
 
   kTestMsgSize = FLAGS_size;
@@ -98,7 +98,7 @@ int main(int argc, char* argv[]) {
   } else if (FLAGS_test == "tput") {
     test_type = kTput;
   } else {
-    UCCL_LOG(FATAL, UCCL_DPDK) << "Unknown test type: " << FLAGS_test;
+    UCCL_LOG(FATAL) << "Unknown test type: " << FLAGS_test;
   }
 
   std::mt19937 generator(42);
@@ -455,15 +455,14 @@ int main(int argc, char* argv[]) {
         bool data_mismatch = false;
         auto expected_len = FLAGS_rand ? send_len : kTestMsgSize;
         if (recv_len != expected_len) {
-          UCCL_LOG(ERROR, UCCL_DPDK)
-              << "Received message size mismatches, expected " << expected_len
-              << ", received " << recv_len;
+          UCCL_LOG(ERROR) << "Received message size mismatches, expected "
+                          << expected_len << ", received " << recv_len;
           data_mismatch = true;
         }
         for (size_t j = 0; j < recv_len / sizeof(uint64_t); j++) {
           if (data_u64[j] != (uint64_t)i * (uint64_t)j) {
             data_mismatch = true;
-            UCCL_LOG_EVERY_N(ERROR, UCCL_DPDK, 1000)
+            UCCL_LOG_EVERY_N(ERROR, 1000)
                 << "Data mismatch at index " << j * sizeof(uint64_t)
                 << ", expected " << (uint64_t)i * (uint64_t)j << ", received "
                 << data_u64[j];

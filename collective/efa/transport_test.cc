@@ -50,7 +50,7 @@ int main(int argc, char* argv[]) {
   } else if (!FLAGS_clientip.empty()) {
     is_client = false;
   } else {
-    UCCL_LOG(FATAL, UCCL_EFA)
+    UCCL_LOG(FATAL)
         << "Please specify server IP or client IP, and only one of them.";
   }
 
@@ -72,7 +72,7 @@ int main(int argc, char* argv[]) {
   } else if (FLAGS_test == "tput") {
     test_type = kTput;
   } else {
-    UCCL_LOG(FATAL, UCCL_EFA) << "Unknown test type: " << FLAGS_test;
+    UCCL_LOG(FATAL) << "Unknown test type: " << FLAGS_test;
   }
 
   std::mt19937 generator(42);
@@ -579,15 +579,14 @@ int main(int argc, char* argv[]) {
         bool data_mismatch = false;
         auto expected_len = FLAGS_rand ? send_len : kTestMsgSize;
         if (recv_len != expected_len) {
-          UCCL_LOG(ERROR, UCCL_EFA)
-              << "Received message size mismatches, expected " << expected_len
-              << ", received " << recv_len;
+          UCCL_LOG(ERROR) << "Received message size mismatches, expected "
+                          << expected_len << ", received " << recv_len;
           data_mismatch = true;
         }
         for (int j = 0; j < recv_len / sizeof(uint64_t); j++) {
           if (host_data_u64[j] != (uint64_t)i * (uint64_t)j) {
             data_mismatch = true;
-            UCCL_LOG_EVERY_N(ERROR, UCCL_EFA, 1000)
+            UCCL_LOG_EVERY_N(ERROR, 1000)
                 << "Data mismatch at index " << j * sizeof(uint64_t)
                 << ", expected " << (uint64_t)i * (uint64_t)j << ", received "
                 << host_data_u64[j];

@@ -1,15 +1,26 @@
 /**
- * This was designed with the following features in mind:
- * 1. Logging and filtering across multiple levels
- * 2. Logging and filtering across multiple subsystems
- * 3. Support for stream syntax when logging
- * 4. Support for operations like CHECK and DCHECK
- * 5. Regular logging functions and log if functions
+ * UCCL Logging
  *
- * References
- * 1. https://github.com/microsoft/mscclpp/blob/main/src/core/include/debug.h
- * 2. https://github.com/KjellKod/g3log/tree/master
- * 3. https://github.com/microsoft/mscclpp/blob/main/src/core/include/logger.hpp
+ * Levels (high → low severity): FATAL, ERROR, WARN, INFO
+ * Subsystems: INIT, AFXDP, DPDK, EFA, RDMA, EP, P2P, UTIL
+ *
+ * Usage:
+ *   UCCL_LOG(FATAL) << "msg";           // 1-arg: no subsystem
+ *   UCCL_LOG(ERROR) << "msg";           // 1-arg: no subsystem
+ *   UCCL_LOG(WARN)  << "msg";           // 1-arg: no subsystem
+ *   UCCL_LOG(INFO, UCCL_RDMA) << "x";  // 2-arg: subsystem required
+ *
+ * Rules:
+ *   - FATAL/ERROR/WARN bypass subsystem filter; use 1-arg form only.
+ *   - INFO is filtered by UCCL_DEBUG_SUBSYS (default INIT); subsystem arg is
+ * required.
+ *   - UCCL_LOG_EVERY_N, UCCL_LOG_FIRST_N, UCCL_LOG_IF follow the same
+ *     convention: omit subsys for FATAL/ERROR/WARN, include for INFO.
+ *
+ * Env vars:
+ *   UCCL_DEBUG            – log level threshold (default: INFO)
+ *   UCCL_DEBUG_SUBSYS     – comma-separated subsystems or ALL (default: INIT)
+ *   UCCL_DEBUG_VLOG_LEVEL – verbose log level integer (default: 0)
  */
 #pragma once
 
@@ -46,7 +57,8 @@ enum UCCLLogSubsys {
   UCCL_EP,
   UCCL_P2P,
   UCCL_UTIL,
-  UCCL_SUBSYS_COUNT
+  UCCL_SUBSYS_COUNT,
+  UCCL_SUBSYS_NONE
 };
 
 static std::unordered_map<std::string_view, UCCLLogSubsys>
@@ -73,7 +85,13 @@ struct UCCLNullStream {};
                                             __FILE__, __LINE__, __func__) \
                                .stream())
 
-#define UCCL_LOG(level, subsys) UCCL_LOG_INTERNAL(level, subsys)
+// UCCL_LOG(level)         – for FATAL/ERROR/WARN (no subsystem)
+// UCCL_LOG(level, subsys) – for INFO (subsystem required)
+#define UCCL_LOG_1(level) UCCL_LOG_INTERNAL(level, UCCL_SUBSYS_NONE)
+#define UCCL_LOG_2(level, subsys) UCCL_LOG_INTERNAL(level, subsys)
+#define UCCL_LOG_PICK(_1, _2, NAME, ...) NAME
+#define UCCL_LOG(...) \
+  UCCL_LOG_PICK(__VA_ARGS__, UCCL_LOG_2, UCCL_LOG_1)(__VA_ARGS__)
 
 // https://stackoverflow.com/questions/1489932/how-can-i-concatenate-twice-with-the-c-preprocessor-and-expand-a-macro-as-in-ar
 #define UCCL_FUNC_NAME_CONCAT_INTERNAL(x, y) x##y
@@ -93,8 +111,16 @@ struct UCCLNullStream {};
                                            __FILE__, __LINE__, __func__)  \
                               .stream()
 
-#define UCCL_LOG_EVERY_N(level, subsys, n) \
+// UCCL_LOG_EVERY_N(level, n)         – for FATAL/ERROR/WARN
+// UCCL_LOG_EVERY_N(level, subsys, n) – for INFO
+#define UCCL_LOG_EVERY_N_2(level, n) \
+  UCCL_LOG_EVERY_N_INTERNAL(level, UCCL_SUBSYS_NONE, n)
+#define UCCL_LOG_EVERY_N_3(level, subsys, n) \
   UCCL_LOG_EVERY_N_INTERNAL(level, subsys, n)
+#define UCCL_LOG_EVERY_N_PICK(_1, _2, _3, NAME, ...) NAME
+#define UCCL_LOG_EVERY_N(...)                                                \
+  UCCL_LOG_EVERY_N_PICK(__VA_ARGS__, UCCL_LOG_EVERY_N_3, UCCL_LOG_EVERY_N_2) \
+  (__VA_ARGS__)
 
 #define UCCL_LOG_FIRST_N_INTERNAL(level, subsys, n)                       \
   static std::atomic<int> UCCL_LOG_EVERY_N_INTERNAL_ATOM_NAME(            \
@@ -107,8 +133,16 @@ struct UCCLNullStream {};
                                            __FILE__, __LINE__, __func__)  \
                               .stream()
 
-#define UCCL_LOG_FIRST_N(level, subsys, n) \
+// UCCL_LOG_FIRST_N(level, n)         – for FATAL/ERROR/WARN
+// UCCL_LOG_FIRST_N(level, subsys, n) – for INFO
+#define UCCL_LOG_FIRST_N_2(level, n) \
+  UCCL_LOG_FIRST_N_INTERNAL(level, UCCL_SUBSYS_NONE, n)
+#define UCCL_LOG_FIRST_N_3(level, subsys, n) \
   UCCL_LOG_FIRST_N_INTERNAL(level, subsys, n)
+#define UCCL_LOG_FIRST_N_PICK(_1, _2, _3, NAME, ...) NAME
+#define UCCL_LOG_FIRST_N(...)                                                \
+  UCCL_LOG_FIRST_N_PICK(__VA_ARGS__, UCCL_LOG_FIRST_N_3, UCCL_LOG_FIRST_N_2) \
+  (__VA_ARGS__)
 
 #define UCCL_LOG_IF_INTERNAL(level, subsys, condition)                    \
   (!(condition && ::ucclLogger.shouldLog(level, subsys)))                 \
@@ -117,8 +151,15 @@ struct UCCLNullStream {};
                                             __FILE__, __LINE__, __func__) \
                                .stream())
 
-#define UCCL_LOG_IF(level, subsys, condition) \
+// UCCL_LOG_IF(level, condition)         – for FATAL/ERROR/WARN
+// UCCL_LOG_IF(level, subsys, condition) – for INFO
+#define UCCL_LOG_IF_2(level, condition) \
+  UCCL_LOG_IF_INTERNAL(level, UCCL_SUBSYS_NONE, condition)
+#define UCCL_LOG_IF_3(level, subsys, condition) \
   UCCL_LOG_IF_INTERNAL(level, subsys, condition)
+#define UCCL_LOG_IF_PICK(_1, _2, _3, NAME, ...) NAME
+#define UCCL_LOG_IF(...) \
+  UCCL_LOG_IF_PICK(__VA_ARGS__, UCCL_LOG_IF_3, UCCL_LOG_IF_2)(__VA_ARGS__)
 
 #define UCCL_VLOG_IF_INTERNAL(vLogLevel, condition)                        \
   !(condition && ::ucclLogger.shouldVLog(vLogLevel))                       \
@@ -234,6 +275,8 @@ constexpr std::string_view logSubsysToString(UCCLLogSubsys subsys) {
       return "P2P";
     case UCCLLogSubsys::UCCL_UTIL:
       return "UTIL";
+    case UCCLLogSubsys::UCCL_SUBSYS_NONE:
+    case UCCLLogSubsys::UCCL_SUBSYS_COUNT:
     default:
       return "";
   }
@@ -266,11 +309,11 @@ class UCCLLogger {
     stream_ << "[" << logLevelToString(logLevel);
 
     if (logSubsysToString(subsys).size() > 0) {
-      stream_ << " | " << logSubsysToString(subsys);
+      stream_ << " " << logSubsysToString(subsys);
     }
 
-    stream_ << " | " << hostname_ << " | " << pid_ << " | " << threadId << " | "
-            << function_name << " | " << filename << ":" << line_number << "] "
+    stream_ << " " << hostname_ << " " << pid_ << " " << threadId << " "
+            << function_name << " " << filename << ":" << line_number << "] "
             << message;
 
     if (logLevel == UCCLLogLevel::FATAL) {
@@ -282,7 +325,10 @@ class UCCLLogger {
   };
 
   bool shouldLog(UCCLLogLevel logLevel, UCCLLogSubsys subsys) {
-    return logLevel <= logLevel_ && subsys_bitset_.test(subsys);
+    if (logLevel > logLevel_) return false;
+    // FATAL/ERROR/WARN always print regardless of subsystem filter
+    if (logLevel <= UCCLLogLevel::WARN) return true;
+    return subsys_bitset_.test(subsys);
   }
 
   void vlog(int vlogLevel, std::string_view filename, int line_number,
@@ -291,9 +337,9 @@ class UCCLLogger {
     std::lock_guard<std::mutex> lock(mu_);
 
     stream_ << "["
-            << "VLOG(" << vlogLevel << ") | " << hostname_ << " | " << pid_
-            << " | " << threadId << " | " << function_name << " | " << filename
-            << ":" << line_number << "] " << message << '\n';
+            << "VLOG(" << vlogLevel << ") " << hostname_ << " " << pid_ << " "
+            << threadId << " " << function_name << " " << filename << ":"
+            << line_number << "] " << message << '\n';
   }
 
   bool shouldVLog(int vlogLevel) { return vlogLevel <= vlogLevel_; }
@@ -346,8 +392,8 @@ class UCCLLogger {
     if (loggingSubsystems) {
       sv = std::string_view{loggingSubsystems};
     } else {
-      // if env is not set, enable all logs by default
-      subsys_bitset_.set();
+      // if env is not set, only enable INIT logs by default
+      subsys_bitset_.set(UCCLLogSubsys::UCCL_INIT);
     }
 
     while (!sv.empty()) {
@@ -456,9 +502,8 @@ class UCCLCheckCapture {
     if (capturedErrno_ != 0) {
       stream_ << ": " << strerror(capturedErrno_) << " ";
     }
-    logger_.log(UCCLLogLevel::FATAL, UCCLLogSubsys::UCCL_SUBSYS_COUNT,
-                fileName_, lineNumber_, functionName_, getThreadId(),
-                stream_.str());
+    logger_.log(UCCLLogLevel::FATAL, UCCLLogSubsys::UCCL_SUBSYS_NONE, fileName_,
+                lineNumber_, functionName_, getThreadId(), stream_.str());
   }
 
   std::ostringstream& stream() { return stream_; }
@@ -522,6 +567,7 @@ using ::UCCL_INIT;
 using ::UCCL_P2P;
 using ::UCCL_RDMA;
 using ::UCCL_SUBSYS_COUNT;
+using ::UCCL_SUBSYS_NONE;
 using ::UCCL_UTIL;
 using ::UCCLCheckCapture;
 using ::UCCLLogCapture;

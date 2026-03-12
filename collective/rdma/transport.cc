@@ -2890,8 +2890,7 @@ int RDMAContext::poll_credit_cq(void) {
         }
         engine_credit_chunk_pool_->free_buff(chunk_addr);
       } else {
-        UCCL_LOG(ERROR, UCCL_RDMA)
-            << "Credit CQ state error: " << cq_ex->status;
+        UCCL_LOG(ERROR) << "Credit CQ state error: " << cq_ex->status;
       }
 
       if (++cq_budget == kMaxBatchCQ || ibv_next_poll(cq_ex)) break;
@@ -3142,10 +3141,9 @@ void RDMAContext::rc_rx_chunk(T* wc_or_cq_ex) {
   UCCL_DCHECK(req->ureq);
 
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
-    UCCL_LOG(ERROR, UCCL_RDMA)
-        << "Can't find corresponding request or this request is "
-           "invalid for this chunk. Dropping. "
-        << req->type;
+    UCCL_LOG(ERROR) << "Can't find corresponding request or this request is "
+                       "invalid for this chunk. Dropping. "
+                    << req->type;
     // This should never happen.
     UCCL_CHECK(0);
     return;
