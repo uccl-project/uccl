@@ -21,7 +21,7 @@ set -euo pipefail
 NIXL_INSTALL_DIR="${1:?Usage: $0 <NIXL_INSTALL_DIR>}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-UCCL_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+UCCL_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 MINICONDA_DIR="${HOME}/nfs/miniconda3"
 CONDA_ENV="uccl-ci-sandbox"
@@ -73,7 +73,6 @@ rm -rf build
 meson setup build \
     --prefix="${NIXL_INSTALL_DIR}" \
     --buildtype=release \
-    -Denable_plugins=uccl \
     -Dbuild_tests=false \
     -Dbuild_examples=false
 cd build
@@ -98,6 +97,7 @@ export PATH="${NIXL_INSTALL_DIR}/bin:${PATH}"
 export LD_LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu/plugins:${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 export NIXL_PLUGIN_DIR="${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu/plugins"
 export UCCL_SOCKET_IFNAME="${UCCL_SOCKET_IFNAME:-lo}"
+export UCCL_DEBUG="${UCCL_DEBUG:-WARN}"
 
 echo "NIXL_PLUGIN_DIR=${NIXL_PLUGIN_DIR}"
 echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}"
@@ -119,8 +119,6 @@ sleep 2
 ETCDCTL_API=3 etcdctl --endpoints="http://127.0.0.1:${ETCD_PORT}" endpoint health
 
 # ── Run nixlbench (two processes, single node) ────────────────────────────────
-# Process 1 (rank 0 → initiator) and Process 2 (rank 1 → target) coordinate
-# via etcd and transfer data over the UCCL backend.
 echo "=== Running nixlbench UCCL benchmark (single node, 2 processes) ==="
 
 NIXLBENCH_ARGS=(
@@ -128,8 +126,12 @@ NIXLBENCH_ARGS=(
     --backend UCCL
     --initiator_seg_type VRAM
     --target_seg_type VRAM
-    --num_iter 100
-    --warmup_iter 10
+    --total_buffer_size 80000000
+    --start_block_size 16384
+    --max_block_size 16384
+    --start_batch_size 4
+    --max_batch_size 4
+    --check_consistency
 )
 
 nixlbench "${NIXLBENCH_ARGS[@]}" 2>&1 &
@@ -145,8 +147,6 @@ wait "${PID2}"; STATUS2=$?
 
 echo "Process 1 exit code: ${STATUS1}"
 echo "Process 2 exit code: ${STATUS2}"
-
-# etcd is stopped by cleanup() via EXIT trap
 
 if [ "${STATUS1}" -ne 0 ] || [ "${STATUS2}" -ne 0 ]; then
     echo "=== nixlbench UCCL benchmark FAILED ==="

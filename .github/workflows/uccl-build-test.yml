@@ -242,11 +242,9 @@ jobs:
                 exit 1
             fi
 
-            export UCCL_SOCKET_IFNAME=enP2p1s0f0np0
-
             cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox
-            bash .gitlab/nixlbench_test.sh \
-              /home/${{secrets.UCCL_DEV_USER}}/nfs/nixl_install \
+            bash .github/workflows/nixlbench_test.sh \
+              /home/${{secrets.UCCL_DEV_USER}}/nfs/nixl_test \
               2>&1 | tee nixlbench.log
           EOF
 
