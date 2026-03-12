@@ -39,9 +39,19 @@ env:
 
 jobs:
   # ==========================================================================
+  # Job 0: Build Docker images (reuses build-docker-images.yml)
+  # ==========================================================================
+  build-docker-images:
+    uses: ./.github/workflows/build-docker-images.yml
+    permissions:
+      contents: read
+      packages: write
+
+  # ==========================================================================
   # Job 1: Build wheel variants
   # ==========================================================================
   build-wheels:
+    needs: [build-docker-images]
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
