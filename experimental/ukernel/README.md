@@ -91,9 +91,9 @@ The benchmark requires two processes (sender and receiver) running simultaneousl
 **Using UCCL backend (default):**
 ```bash
 # Terminal 1 (Receiver - 先启动)
-./bench_transport --rank 1 --peer-rank 0 --gpu-id 0 --msg-size 1048576 --iterations 10000 --ip 192.168.2.243 --port 6979
+./bench_transport --rank 1 --peer-rank 0 --gpu-id 0 --msg-size 1048576 --iterations 1000 --ip 192.168.2.243 --port 6979
 # Terminal 2 (Sender - 后启动)
-./bench_transport --rank 0 --peer-rank 1 --gpu-id 0 --msg-size 1048576 --iterations 10000 --ip 192.168.2.243 --port 6979
+./bench_transport --rank 0 --peer-rank 1 --gpu-id 0 --msg-size 1048576 --iterations 1000 --ip 192.168.2.243 --port 6979
 ```
 
 **Using BasicRDMA backend:**
@@ -113,8 +113,8 @@ UKERNEL_TRANSPORT_BACKEND=basic ./bench_transport --rank 1 --peer-rank 0 --msg-s
 | `--peer-rank` | Peer process rank | Required |
 | `--gpu-id` | GPU device ID | 0 |
 | `--msg-size` | Message size in bytes | 1024 |
-| `--iterations` | Number of test iterations | 10000 |
-| `--warmup` | Number of warmup iterations | 1000 |
+| `--iterations` | Number of test iterations | 1000 |
+| `--warmup` | Number of warmup iterations | 100 |
 | `--ip` | Local IP address | 127.0.0.1 |
 | `--port` | Listen port | 6979 |
 

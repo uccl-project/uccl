@@ -16,6 +16,11 @@ static inline uint64_t now_ns() {
       .count();
 }
 
+// RDMA UCCL recv flow has a bounded inflight queue (kMaxReq, 16 by default).
+// Keep the benchmark window comfortably below that limit to avoid stalling on
+// transient submission failures.
+static constexpr int kThroughputWindow = 8;
+
 static void print_latency(const std::vector<uint64_t>& v) {
   if (v.empty()) return;
   
@@ -36,6 +41,26 @@ static void print_latency(const std::vector<uint64_t>& v) {
          sorted.back() / 1000.0);
 }
 
+static bool setup_bidirectional_peer(Communicator& comm, int rank,
+                                     int peer_rank) {
+  if (rank < peer_rank) {
+    if (!comm.connect_to(peer_rank)) return false;
+    if (!comm.accept_from(peer_rank)) return false;
+    return true;
+  }
+
+  if (!comm.accept_from(peer_rank)) return false;
+  if (!comm.connect_to(peer_rank)) return false;
+  return true;
+}
+
+static bool wait_all(Communicator& comm, std::vector<unsigned>& reqs) {
+  if (reqs.empty()) return true;
+  bool ok = comm.wait_finish(reqs);
+  reqs.clear();
+  return ok;
+}
+
 void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
                 size_t msg_size, int num_iterations, int num_warmup,
                 const std::string& local_ip, uint16_t listen_port) {
@@ -50,14 +75,20 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   // Create communicator
   Communicator comm(gpu_id, rank, world_size, config);
   
-  // Connect to peer
-  printf("[Sender %d] Connecting to peer %d...\n", rank, peer_rank);
-  if (!comm.connect_to(peer_rank)) {
-    fprintf(stderr, "[Sender %d] Failed to connect to peer %d\n", rank, peer_rank);
+  // Establish both UCCL directions: connect flow for sends, accept flow for receives.
+  printf("[Sender %d] Establishing bidirectional peer flows with %d...\n", rank,
+         peer_rank);
+  if (!setup_bidirectional_peer(comm, rank, peer_rank)) {
+    fprintf(stderr,
+            "[Sender %d] Failed to establish bidirectional flows with peer %d\n",
+            rank, peer_rank);
     return;
   }
   
-  printf("[Sender %d] Connected to peer %d\n", rank, peer_rank);
+  printf("[Sender %d] Bidirectional flows ready with peer %d\n", rank,
+         peer_rank);
+
+  cudaSetDevice(gpu_id);
   
   // Allocate buffer
   void* send_buf = nullptr;
@@ -86,12 +117,12 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   printf("[Sender %d] Memory registered: send_mr=%d, recv_mr=%d\n", 
          rank, local_send_mr.id, local_recv_mr.id);
   
-  // Notify peer of our memory regions
+  // Exchange both directions of buffer metadata.
   comm.notify_mr(peer_rank, local_send_mr);
   comm.notify_mr(peer_rank, local_recv_mr);
   
-  // Wait for peer's memory regions
   MR remote_send_mr;
+  // Wait for peer's receive buffer
   MR remote_recv_mr;
   comm.wait_mr_notify(peer_rank, remote_send_mr);
   comm.wait_mr_notify(peer_rank, remote_recv_mr);
@@ -103,9 +134,9 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   for (int i = 0; i < num_warmup; ++i) {
     unsigned send_req = comm.isend(peer_rank, send_buf, 0, msg_size,
                                    local_send_mr.id, remote_recv_mr.id, true);
-    unsigned recv_req = comm.irecv(peer_rank, recv_buf, 0, msg_size, true);
-    
     comm.wait_finish(send_req);
+
+    unsigned recv_req = comm.irecv(peer_rank, recv_buf, 0, msg_size, true);
     comm.wait_finish(recv_req);
   }
   printf("[Sender %d] Warmup complete\n", rank);
@@ -118,14 +149,11 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   for (int i = 0; i < num_iterations; ++i) {
     uint64_t t0 = now_ns();
     
-    // Send to peer
     unsigned send_req = comm.isend(peer_rank, send_buf, 0, msg_size,
                                    local_send_mr.id, remote_recv_mr.id, true);
-    // Receive from peer
-    unsigned recv_req = comm.irecv(peer_rank, recv_buf, 0, msg_size, true);
-    
-    // Wait for both
     comm.wait_finish(send_req);
+
+    unsigned recv_req = comm.irecv(peer_rank, recv_buf, 0, msg_size, true);
     comm.wait_finish(recv_req);
     
     uint64_t t1 = now_ns();
@@ -140,16 +168,31 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   
   uint64_t t0 = now_ns();
   std::vector<unsigned> send_reqs;
-  send_reqs.reserve(num_iterations);
+  send_reqs.reserve(kThroughputWindow);
   
   for (int i = 0; i < num_iterations; ++i) {
     unsigned req = comm.isend(peer_rank, send_buf, 0, msg_size,
                               local_send_mr.id, remote_recv_mr.id, true);
+    if (req == 0) {
+      fprintf(stderr, "[Sender %d] isend failed during throughput test at iter %d\n",
+              rank, i);
+      return;
+    }
     send_reqs.push_back(req);
+    if (static_cast<int>(send_reqs.size()) == kThroughputWindow &&
+        !wait_all(comm, send_reqs)) {
+      fprintf(stderr,
+              "[Sender %d] wait_finish failed during throughput test\n", rank);
+      return;
+    }
   }
   
   // Wait for all sends to complete
-  comm.wait_finish(send_reqs);
+  if (!wait_all(comm, send_reqs)) {
+    fprintf(stderr, "[Sender %d] wait_finish failed during throughput test\n",
+            rank);
+    return;
+  }
   
   uint64_t t1 = now_ns();
   double elapsed_sec = (t1 - t0) * 1e-9;
@@ -163,35 +206,56 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   printf("  Messages/sec: %.2f M\n", num_iterations / elapsed_sec / 1e6);
   
   // Bidirectional throughput test
-  printf("[Sender %d] Bidirectional throughput test (%d iterations)...\n", rank, num_iterations);
+  printf("[Sender %d] Bidirectional throughput test (%d iterations)...\n", rank,
+         num_iterations);
   
   t0 = now_ns();
   send_reqs.clear();
   std::vector<unsigned> recv_reqs;
-  send_reqs.reserve(num_iterations);
-  recv_reqs.reserve(num_iterations);
+  send_reqs.reserve(kThroughputWindow);
+  recv_reqs.reserve(kThroughputWindow);
   
   for (int i = 0; i < num_iterations; ++i) {
     unsigned send_req = comm.isend(peer_rank, send_buf, 0, msg_size,
                                    local_send_mr.id, remote_recv_mr.id, true);
     unsigned recv_req = comm.irecv(peer_rank, recv_buf, 0, msg_size, true);
+    if (send_req == 0 || recv_req == 0) {
+      fprintf(stderr,
+              "[Sender %d] request submission failed during bidirectional throughput at iter %d\n",
+              rank, i);
+      return;
+    }
     send_reqs.push_back(send_req);
     recv_reqs.push_back(recv_req);
+    if (static_cast<int>(send_reqs.size()) == kThroughputWindow) {
+      if (!wait_all(comm, send_reqs) || !wait_all(comm, recv_reqs)) {
+        fprintf(stderr,
+                "[Sender %d] wait_finish failed during bidirectional throughput\n",
+                rank);
+        return;
+      }
+    }
   }
   
-  // Wait for all operations
-  comm.wait_finish(send_reqs);
-  comm.wait_finish(recv_reqs);
+  if (!wait_all(comm, send_reqs) || !wait_all(comm, recv_reqs)) {
+    fprintf(stderr,
+            "[Sender %d] wait_finish failed during bidirectional throughput\n",
+            rank);
+    return;
+  }
   
   t1 = now_ns();
   elapsed_sec = (t1 - t0) * 1e-9;
-  total_gb = (double)(msg_size * num_iterations * 2) / (1024.0 * 1024.0 * 1024.0);
-  throughput_gbps = (double)(msg_size * num_iterations * 2) * 8.0 / elapsed_sec / 1e9;
+  total_gb =
+      (double)(msg_size * num_iterations * 2) / (1024.0 * 1024.0 * 1024.0);
+  throughput_gbps =
+      (double)(msg_size * num_iterations * 2) * 8.0 / elapsed_sec / 1e9;
   
   printf("[Sender %d] Bidirectional throughput results:\n", rank);
   printf("  Total data: %.2f GB\n", total_gb);
   printf("  Time: %.3f sec\n", elapsed_sec);
-  printf("  Throughput: %.2f GB/s (%.2f Gbps)\n", total_gb / elapsed_sec, throughput_gbps);
+  printf("  Throughput: %.2f GB/s (%.2f Gbps)\n", total_gb / elapsed_sec,
+         throughput_gbps);
   
   // Cleanup
   comm.dereg_mr(send_buf);
@@ -216,14 +280,20 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   // Create communicator
   Communicator comm(gpu_id, rank, world_size, config);
   
-  // Accept connection from peer
-  printf("[Receiver %d] Accepting connection from peer %d...\n", rank, peer_rank);
-  if (!comm.accept_from(peer_rank)) {
-    fprintf(stderr, "[Receiver %d] Failed to accept from peer %d\n", rank, peer_rank);
+  // Establish both UCCL directions: accept flow for receives, connect flow for sends.
+  printf("[Receiver %d] Establishing bidirectional peer flows with %d...\n",
+         rank, peer_rank);
+  if (!setup_bidirectional_peer(comm, rank, peer_rank)) {
+    fprintf(stderr,
+            "[Receiver %d] Failed to establish bidirectional flows with peer %d\n",
+            rank, peer_rank);
     return;
   }
   
-  printf("[Receiver %d] Connected to peer %d\n", rank, peer_rank);
+  printf("[Receiver %d] Bidirectional flows ready with peer %d\n", rank,
+         peer_rank);
+
+  cudaSetDevice(gpu_id);
   
   // Allocate buffer
   void* send_buf = nullptr;
@@ -248,13 +318,12 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   printf("[Receiver %d] Memory registered: send_mr=%d, recv_mr=%d\n", 
          rank, local_send_mr.id, local_recv_mr.id);
   
-  // Wait for peer's memory regions first
+  // Exchange both directions of buffer metadata.
   MR remote_send_mr;
   MR remote_recv_mr;
   comm.wait_mr_notify(peer_rank, remote_send_mr);
   comm.wait_mr_notify(peer_rank, remote_recv_mr);
   
-  // Then notify peer of ours
   comm.notify_mr(peer_rank, local_send_mr);
   comm.notify_mr(peer_rank, local_recv_mr);
   
@@ -264,10 +333,10 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   printf("[Receiver %d] Warmup (%d iterations)...\n", rank, num_warmup);
   for (int i = 0; i < num_warmup; ++i) {
     unsigned recv_req = comm.irecv(peer_rank, recv_buf, 0, msg_size, true);
+    comm.wait_finish(recv_req);
+
     unsigned send_req = comm.isend(peer_rank, send_buf, 0, msg_size,
                                    local_send_mr.id, remote_recv_mr.id, true);
-    
-    comm.wait_finish(recv_req);
     comm.wait_finish(send_req);
   }
   printf("[Receiver %d] Warmup complete\n", rank);
@@ -275,13 +344,11 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   // Latency test (ping-pong) - receiver side
   printf("[Receiver %d] Latency test (%d iterations)...\n", rank, num_iterations);
   for (int i = 0; i < num_iterations; ++i) {
-    // Receive from sender
     unsigned recv_req = comm.irecv(peer_rank, recv_buf, 0, msg_size, true);
-    // Send back (echo)
+    comm.wait_finish(recv_req);
+
     unsigned send_req = comm.isend(peer_rank, send_buf, 0, msg_size,
                                    local_send_mr.id, remote_recv_mr.id, true);
-    
-    comm.wait_finish(recv_req);
     comm.wait_finish(send_req);
   }
   printf("[Receiver %d] Latency test complete\n", rank);
@@ -289,35 +356,70 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   // Throughput test - just receive
   printf("[Receiver %d] Throughput test (%d iterations)...\n", rank, num_iterations);
   std::vector<unsigned> recv_reqs;
-  recv_reqs.reserve(num_iterations);
+  recv_reqs.reserve(kThroughputWindow);
   
   for (int i = 0; i < num_iterations; ++i) {
     unsigned req = comm.irecv(peer_rank, recv_buf, 0, msg_size, true);
+    if (req == 0) {
+      fprintf(stderr,
+              "[Receiver %d] irecv failed during throughput test at iter %d\n",
+              rank, i);
+      return;
+    }
     recv_reqs.push_back(req);
+    if (static_cast<int>(recv_reqs.size()) == kThroughputWindow &&
+        !wait_all(comm, recv_reqs)) {
+      fprintf(stderr,
+              "[Receiver %d] wait_finish failed during throughput test\n",
+              rank);
+      return;
+    }
   }
   
   // Wait for all receives
-  comm.wait_finish(recv_reqs);
+  if (!wait_all(comm, recv_reqs)) {
+    fprintf(stderr, "[Receiver %d] wait_finish failed during throughput test\n",
+            rank);
+    return;
+  }
   printf("[Receiver %d] Throughput test complete\n", rank);
   
   // Bidirectional throughput test
-  printf("[Receiver %d] Bidirectional throughput test (%d iterations)...\n", rank, num_iterations);
+  printf("[Receiver %d] Bidirectional throughput test (%d iterations)...\n",
+         rank, num_iterations);
   recv_reqs.clear();
   std::vector<unsigned> send_reqs;
-  recv_reqs.reserve(num_iterations);
-  send_reqs.reserve(num_iterations);
+  recv_reqs.reserve(kThroughputWindow);
+  send_reqs.reserve(kThroughputWindow);
   
   for (int i = 0; i < num_iterations; ++i) {
     unsigned recv_req = comm.irecv(peer_rank, recv_buf, 0, msg_size, true);
     unsigned send_req = comm.isend(peer_rank, send_buf, 0, msg_size,
                                    local_send_mr.id, remote_recv_mr.id, true);
+    if (send_req == 0 || recv_req == 0) {
+      fprintf(stderr,
+              "[Receiver %d] request submission failed during bidirectional throughput at iter %d\n",
+              rank, i);
+      return;
+    }
     recv_reqs.push_back(recv_req);
     send_reqs.push_back(send_req);
+    if (static_cast<int>(recv_reqs.size()) == kThroughputWindow) {
+      if (!wait_all(comm, recv_reqs) || !wait_all(comm, send_reqs)) {
+        fprintf(stderr,
+                "[Receiver %d] wait_finish failed during bidirectional throughput\n",
+                rank);
+        return;
+      }
+    }
   }
   
-  // Wait for all operations
-  comm.wait_finish(recv_reqs);
-  comm.wait_finish(send_reqs);
+  if (!wait_all(comm, recv_reqs) || !wait_all(comm, send_reqs)) {
+    fprintf(stderr,
+            "[Receiver %d] wait_finish failed during bidirectional throughput\n",
+            rank);
+    return;
+  }
   printf("[Receiver %d] Bidirectional throughput test complete\n", rank);
   
   // Cleanup
@@ -336,8 +438,8 @@ void print_usage(const char* prog) {
   printf("  --peer-rank <n>     Rank of peer process\n");
   printf("  --gpu-id <n>        GPU ID to use\n");
   printf("  --msg-size <bytes>  Message size (default: 1024)\n");
-  printf("  --iterations <n>    Number of iterations (default: 10000)\n");
-  printf("  --warmup <n>        Number of warmup iterations (default: 1000)\n");
+  printf("  --iterations <n>    Number of iterations (default: 1000)\n");
+  printf("  --warmup <n>        Number of warmup iterations (default: 100)\n");
   printf("  --ip <addr>         Local IP address (default: 127.0.0.1)\n");
   printf("  --port <n>          Listen port (default: 6979)\n");
   printf("  --help              Show this help\n");
@@ -348,8 +450,8 @@ int main(int argc, char** argv) {
   int peer_rank = -1;
   int gpu_id = 0;
   size_t msg_size = 1024;
-  int num_iterations = 10000;
-  int num_warmup = 1000;
+  int num_iterations = 1000;
+  int num_warmup = 100;
   std::string local_ip = "127.0.0.1";
   uint16_t listen_port = 6979;
   

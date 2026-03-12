@@ -6,6 +6,7 @@
 #include "util/jring.h"
 #include <infiniband/verbs.h>
 #include <condition_variable>
+#include <deque>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -194,6 +195,7 @@ class Communicator {
   mutable std::mutex local_mr_mu_;
   std::unordered_map<int, std::unordered_map<uint16_t, MR>>
       rank_mr_id_to_remote_mr_;  // to_rank remote_ptr -> remote mr
+  std::unordered_map<int, std::deque<MR>> rank_to_pending_remote_mrs_;
   mutable std::mutex remote_mr_mu_;
   std::atomic<uint16_t> next_mr_id{0};
 
@@ -232,6 +234,7 @@ class Communicator {
   std::unordered_map<unsigned, std::shared_ptr<Request>> requests_map_;
   std::mutex req_mu_;
   std::atomic<uint16_t> next_red_seq_{0};
+  std::atomic<unsigned> next_uccl_req_id_{1};
   jring_t* pending_req_id_to_deal_ =
       nullptr;  // For which request has not been added to requests_map_,
                 // cqpoller add unaddressed req_id to this queue, and
