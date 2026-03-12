@@ -78,6 +78,15 @@ class UCCLCheckCapture;
 struct UCCLVoidify;
 struct UCCLNullStream {};
 
+// Compile-time gate: only INFO may carry a subsystem argument.
+template <UCCLLogLevel L>
+struct UCCLRequireInfoLevel {
+  static_assert(L == INFO,
+                "UCCL_LOG with subsystem is only allowed for INFO. "
+                "Use UCCL_LOG(WARN/ERROR/FATAL) without a subsystem.");
+  static constexpr UCCLLogLevel value = L;
+};
+
 #define UCCL_LOG_INTERNAL(level, subsys)                                  \
   (!::ucclLogger.shouldLog(level, subsys))                                \
       ? (void)0                                                           \
@@ -88,7 +97,8 @@ struct UCCLNullStream {};
 // UCCL_LOG(level)         – for FATAL/ERROR/WARN (no subsystem)
 // UCCL_LOG(level, subsys) – for INFO (subsystem required)
 #define UCCL_LOG_1(level) UCCL_LOG_INTERNAL(level, UCCL_SUBSYS_NONE)
-#define UCCL_LOG_2(level, subsys) UCCL_LOG_INTERNAL(level, subsys)
+#define UCCL_LOG_2(level, subsys) \
+  UCCL_LOG_INTERNAL(::UCCLRequireInfoLevel<level>::value, subsys)
 #define UCCL_LOG_PICK(_1, _2, NAME, ...) NAME
 #define UCCL_LOG(...) \
   UCCL_LOG_PICK(__VA_ARGS__, UCCL_LOG_2, UCCL_LOG_1)(__VA_ARGS__)
@@ -116,7 +126,7 @@ struct UCCLNullStream {};
 #define UCCL_LOG_EVERY_N_2(level, n) \
   UCCL_LOG_EVERY_N_INTERNAL(level, UCCL_SUBSYS_NONE, n)
 #define UCCL_LOG_EVERY_N_3(level, subsys, n) \
-  UCCL_LOG_EVERY_N_INTERNAL(level, subsys, n)
+  UCCL_LOG_EVERY_N_INTERNAL(::UCCLRequireInfoLevel<level>::value, subsys, n)
 #define UCCL_LOG_EVERY_N_PICK(_1, _2, _3, NAME, ...) NAME
 #define UCCL_LOG_EVERY_N(...)                                                \
   UCCL_LOG_EVERY_N_PICK(__VA_ARGS__, UCCL_LOG_EVERY_N_3, UCCL_LOG_EVERY_N_2) \
@@ -138,7 +148,7 @@ struct UCCLNullStream {};
 #define UCCL_LOG_FIRST_N_2(level, n) \
   UCCL_LOG_FIRST_N_INTERNAL(level, UCCL_SUBSYS_NONE, n)
 #define UCCL_LOG_FIRST_N_3(level, subsys, n) \
-  UCCL_LOG_FIRST_N_INTERNAL(level, subsys, n)
+  UCCL_LOG_FIRST_N_INTERNAL(::UCCLRequireInfoLevel<level>::value, subsys, n)
 #define UCCL_LOG_FIRST_N_PICK(_1, _2, _3, NAME, ...) NAME
 #define UCCL_LOG_FIRST_N(...)                                                \
   UCCL_LOG_FIRST_N_PICK(__VA_ARGS__, UCCL_LOG_FIRST_N_3, UCCL_LOG_FIRST_N_2) \
@@ -156,7 +166,7 @@ struct UCCLNullStream {};
 #define UCCL_LOG_IF_2(level, condition) \
   UCCL_LOG_IF_INTERNAL(level, UCCL_SUBSYS_NONE, condition)
 #define UCCL_LOG_IF_3(level, subsys, condition) \
-  UCCL_LOG_IF_INTERNAL(level, subsys, condition)
+  UCCL_LOG_IF_INTERNAL(::UCCLRequireInfoLevel<level>::value, subsys, condition)
 #define UCCL_LOG_IF_PICK(_1, _2, _3, NAME, ...) NAME
 #define UCCL_LOG_IF(...) \
   UCCL_LOG_IF_PICK(__VA_ARGS__, UCCL_LOG_IF_3, UCCL_LOG_IF_2)(__VA_ARGS__)
