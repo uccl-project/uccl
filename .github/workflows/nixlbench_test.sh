@@ -1,20 +1,9 @@
-#!/usr/bin/env bash
-# SPDX-FileCopyrightText: Copyright (c) 2025-2026 UCCL Contributors. All rights reserved.
-# SPDX-License-Identifier: Apache-2.0
-#
-# .gitlab/nixlbench_test.sh
-#
-# Builds UCCL p2p from the current tree, clones latest NIXL, builds it with
-# the UCCL plugin, builds nixlbench, then runs a single-node benchmark
-# (two nixlbench processes on the same host).
-#
 # Usage:
-#   UCCL_SOCKET_IFNAME=<iface> .gitlab/nixlbench_test.sh <NIXL_INSTALL_DIR>
+#   .gitlab/nixlbench_test.sh <NIXL_INSTALL_DIR>
 #
 #   NIXL_INSTALL_DIR  - Where libuccl_p2p, NIXL, and nixlbench are installed
 #                       (e.g. ~/nfs/nixl_install)
 #
-# Run from the root of the uccl repo so that ./p2p/Makefile is reachable.
 
 set -euo pipefail
 
@@ -59,7 +48,6 @@ cd "${UCCL_ROOT}/p2p"
 make -j"$(nproc)" PYTHON=python3
 make install PYTHON=python3 LIBDIR="${NIXL_INSTALL_DIR}/lib" PREFIX="${NIXL_INSTALL_DIR}"
 
-# Make libuccl_p2p.so visible to meson's cc.find_library() during NIXL build
 export LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${LIBRARY_PATH:-}"
 
 # ── Clone NIXL ────────────────────────────────────────────────────────────────
@@ -74,7 +62,8 @@ meson setup build \
     --prefix="${NIXL_INSTALL_DIR}" \
     --buildtype=release \
     -Dbuild_tests=false \
-    -Dbuild_examples=false
+    -Dbuild_examples=false \
+    "-Dcpp_args=-I${NIXL_INSTALL_DIR}/include"
 cd build
 ninja
 ninja install
@@ -124,8 +113,8 @@ echo "=== Running nixlbench UCCL benchmark (single node, 2 processes) ==="
 NIXLBENCH_ARGS=(
     --etcd_endpoints "http://127.0.0.1:${ETCD_PORT}"
     --backend UCCL
-    --initiator_seg_type VRAM
-    --target_seg_type VRAM
+    --initiator_seg_type DRAM
+    --target_seg_type DRAM
     --total_buffer_size 80000000
     --start_block_size 16384
     --max_block_size 16384
@@ -149,8 +138,8 @@ echo "Process 1 exit code: ${STATUS1}"
 echo "Process 2 exit code: ${STATUS2}"
 
 if [ "${STATUS1}" -ne 0 ] || [ "${STATUS2}" -ne 0 ]; then
-    echo "=== nixlbench UCCL benchmark FAILED ==="
+    echo "=== NIXLBench UCCL benchmark FAILED ==="
     exit 1
 fi
 
-echo "=== nixlbench UCCL benchmark PASSED ==="
+echo "=== NIXLBench UCCL benchmark PASSED ==="
