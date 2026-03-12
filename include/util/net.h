@@ -249,7 +249,7 @@ static bool match_subnet(struct ifaddrs local_if, union socketAddress* remote) {
     same &= (local_addr->sin6_scope_id == remote_addr.sin6_scope_id);
     return same;
   } else {
-    UCCL_LOG(ERROR, UCCL_UTIL) << "Net : Unsupported address family type";
+    UCCL_LOG(ERROR) << "Net : Unsupported address family type";
     return false;
   }
 }
@@ -294,7 +294,7 @@ static int find_interface_match_subnet(char* ifNames,
   }
 
   if (found == 0) {
-    UCCL_LOG(ERROR, UCCL_UTIL)
+    UCCL_LOG(ERROR)
         << "Net : No interface found in the same subnet as remote address "
         << socket_to_string(&(remoteAddr->sa), line_a);
   }
@@ -305,7 +305,7 @@ static int find_interface_match_subnet(char* ifNames,
 static bool get_socket_addr_from_string(union socketAddress* ua,
                                         char const* ip_port_pair) {
   if (!(ip_port_pair && strlen(ip_port_pair) > 1)) {
-    UCCL_LOG(ERROR, UCCL_UTIL) << "Net : string is null";
+    UCCL_LOG(ERROR) << "Net : string is null";
     return false;
   }
 
@@ -315,8 +315,7 @@ static bool get_socket_addr_from_string(union socketAddress* ua,
     struct ib_dev ni;
     // parse <ip_or_hostname>:<port> string, expect one pair
     if (parse_interfaces(ip_port_pair, &ni, 1) != 1) {
-      UCCL_LOG(ERROR, UCCL_UTIL)
-          << "Net : No valid <IPv4_or_hostname>:<port> pair found";
+      UCCL_LOG(ERROR) << "Net : No valid <IPv4_or_hostname>:<port> pair found";
       return false;
     }
 
@@ -327,9 +326,8 @@ static bool get_socket_addr_from_string(union socketAddress* ua,
     hints.ai_socktype = SOCK_STREAM;
 
     if ((rv = getaddrinfo(ni.prefix, NULL, &hints, &p)) != 0) {
-      UCCL_LOG(ERROR, UCCL_UTIL)
-          << "Net : error encountered when getting address info : "
-          << gai_strerror(rv);
+      UCCL_LOG(ERROR) << "Net : error encountered when getting address info : "
+                      << gai_strerror(rv);
       return false;
     }
 
@@ -348,7 +346,7 @@ static bool get_socket_addr_from_string(union socketAddress* ua,
       sin6.sin6_flowinfo = 0;           // needed by IPv6, but possibly obsolete
       sin6.sin6_scope_id = 0;           // should be global scope, set to 0
     } else {
-      UCCL_LOG(ERROR, UCCL_UTIL) << "Net : unsupported IP family";
+      UCCL_LOG(ERROR) << "Net : unsupported IP family";
       return false;
     }
 
@@ -361,7 +359,7 @@ static bool get_socket_addr_from_string(union socketAddress* ua,
       if (ip_port_pair[i] == ']') break;
     }
     if (i == len) {
-      UCCL_LOG(ERROR, UCCL_UTIL) << "Net : No valid [IPv6]:port pair found";
+      UCCL_LOG(ERROR) << "Net : No valid [IPv6]:port pair found";
       return false;
     }
     bool global_scope =

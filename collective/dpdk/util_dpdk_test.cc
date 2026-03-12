@@ -247,15 +247,15 @@ void socket_recv(struct socket_t* socket, Packet** pkts, int queue_id) {
   for (uint32_t i = 0; i < rcvd; i++) {
     auto* pkt = pkts[i];
     if (pkt->length() < sizeof(Ethernet)) {
-      UCCL_LOG(WARN, UCCL_DPDK) << "received non-ethernet packet " << queue_id;
+      UCCL_LOG(WARN) << "received non-ethernet packet " << queue_id;
       socket->dpdk_socket->push_packet(pkt);
       continue;
     }
 
     Ethernet* eth = pkt->head_data<Ethernet*>();
     if (eth->eth_type.value() != Ethernet::kIpv4) [[unlikely]] {
-      UCCL_LOG(WARN, UCCL_DPDK)
-          << "received non-ipv4 packet " << std::hex << eth->eth_type.value();
+      UCCL_LOG(WARN) << "received non-ipv4 packet " << std::hex
+                     << eth->eth_type.value();
       socket->dpdk_socket->push_packet(pkt);
       continue;
     }
@@ -263,15 +263,15 @@ void socket_recv(struct socket_t* socket, Packet** pkts, int queue_id) {
     Ipv4* ipv4 = reinterpret_cast<Ipv4*>(eth + 1);
 
     if (pkt->length() != sizeof(Ethernet) + ipv4->total_length.value()) {
-      UCCL_LOG(WARN, UCCL_DPDK)
-          << "IPv4 packet length mismatch (expected: "
-          << ipv4->total_length.value() << ", actual: " << pkt->length() << ")";
+      UCCL_LOG(WARN) << "IPv4 packet length mismatch (expected: "
+                     << ipv4->total_length.value()
+                     << ", actual: " << pkt->length() << ")";
       socket->dpdk_socket->push_packet(pkt);
       continue;
     }
 
     if (ipv4->next_proto_id != Ipv4::Proto::kUdp) [[unlikely]] {
-      UCCL_LOG(WARN, UCCL_DPDK) << "received non-udp packet " << queue_id;
+      UCCL_LOG(WARN) << "received non-udp packet " << queue_id;
       socket->dpdk_socket->push_packet(pkt);
       continue;
     }
