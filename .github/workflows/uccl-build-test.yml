@@ -245,7 +245,7 @@ jobs:
                 echo "spark0 node is currently used by processes with PID: $active_jobs"
                 exit 1
             fi
-
+            export UCCL_P2P_RDMA_GID_INDEX=3
             cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox
             bash .github/workflows/nixlbench_test.sh \
               /home/${{secrets.UCCL_DEV_USER}}/nfs/nixl_test \
