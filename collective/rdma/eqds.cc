@@ -239,13 +239,12 @@ bool EQDS::grant_credit(EQDSCC* eqds_cc, bool idle, PullQuanta* ret_increment) {
 // (i.e., 10%). Here we use resort to RTT-based stall.
 void EQDS::update_cc_state(void) {}
 
-EQDS::EQDS(int dev, double link_bandwidth)
-    : dev_(dev), shutdown_(false) {
+EQDS::EQDS(int dev, double link_bandwidth) : dev_(dev), shutdown_(false) {
   last_pacing_tsc_ = rdtsc();
 
-  // Compute pacing interval: time to transmit (kCreditPerPull * kSendersPerPull)
-  // pull quanta worth of data at link rate.
-  // pacing_interval = (kCreditPerPull * kSendersPerPull * PULL_QUANTUM) /
+  // Compute pacing interval: time to transmit (kCreditPerPull *
+  // kSendersPerPull) pull quanta worth of data at link rate. pacing_interval =
+  // (kCreditPerPull * kSendersPerPull * PULL_QUANTUM) /
   //                   link_bandwidth  [in seconds]
   double pacing_interval_sec =
       static_cast<double>(kCreditPerPull * kSendersPerPull * PULL_QUANTUM) /
