@@ -351,6 +351,37 @@ static bool ncclIbGetGidIndex(struct ibv_context* context, uint8_t portNum,
     }
   }
 
+  // Fallback: when the selected GID is link-local or unconfigured (e.g. on
+  // Broadcom bnxt_re where all GIDs are IPv6 ULA, not IPv4-mapped), the
+  // address-family filter above skips every candidate.  Retry without the
+  // address-family constraint, preferring valid + RoCE v2.
+  {
+    union ibv_gid selectedGid;
+    if (ibv_query_gid(context, portNum, *gidIndex, &selectedGid) == 0 &&
+        !validGid(&selectedGid)) {
+      char const* deviceName = ibv_get_device_name(context->device);
+      int bestIdx = -1;
+      for (int i = 0; i < gidTblLen; ++i) {
+        union ibv_gid gid;
+        if (ibv_query_gid(context, portNum, i, &gid) != 0) continue;
+        if (!validGid(&gid)) continue;
+        int ver = 0;
+        if (ncclIbRoceGetVersionNum(deviceName, portNum, i, &ver) &&
+            ver == userRoceVersion) {
+          bestIdx = i;
+          break;
+        }
+        if (bestIdx < 0) bestIdx = i;
+      }
+      if (bestIdx >= 0) *gidIndex = bestIdx;
+    }
+  }
+
+  char const* deviceName = ibv_get_device_name(context->device);
+  fprintf(stderr,
+          "[RDMA] Auto-detected GID index %d for %s (set UCCL_IB_GID_INDEX to "
+          "override)\n",
+          *gidIndex, deviceName ? deviceName : "unknown");
   return true;
 }
 
