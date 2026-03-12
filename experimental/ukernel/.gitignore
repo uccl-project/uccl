@@ -2,3 +2,5 @@ test_main
 ./src/compute/test_persistent
 ./src/compute/benchmarks/bench_info
 ./src/compute/benchmarks/bench_full_fifo
+./*.so
+bench_transport

@@ -8,7 +8,16 @@
 #include <atomic>
 
 #include "../../include/transport.h"
-#include "collective/rdma/transport.h"
+
+// Forward declare uccl classes
+namespace uccl {
+class RDMAEndpoint;
+class Mhandle;
+class UcclFlow;
+struct ucclRequest;
+class UcclRDMAEngine;
+// Note: ConnID is defined in collective/rdma/transport.h as a struct
+}
 
 namespace UKernel {
 namespace Transport {

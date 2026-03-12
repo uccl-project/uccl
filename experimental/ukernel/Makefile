@@ -4,31 +4,37 @@ override CXX   := /usr/bin/g++
 NVCC           := $(CUDA_PATH)/bin/nvcc
 CONDA_LIB_HOME ?= /usr/lib
 
-# ThunderKittens
-TK_ROOT := $(abspath ../../thirdparty/ThunderKittens)
+# skip ThunderKittens now
+# TK_ROOT := $(abspath ../../thirdparty/ThunderKittens)
 
 # GPU architecture - use sm_90a for TMA/wgmma support
 SM ?= 90a
 
 # Base compilation flags
-CXXFLAGS   := -O0 -std=c++17 -Wall -Wno-unused-function -pthread -fPIC \
-              -I$(CUDA_PATH)/include -I$(CONDA_LIB_HOME)/../include
+CXXFLAGS   := -O0 -std=c++17 -Wall -Wno-unused-function -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -Wno-unused-but-set-variable -Wno-stringop-overread -Wno-narrowing -pthread -fPIC \
+              -I$(CONDA_LIB_HOME)/../include
 
 NVCCFLAGS  := -g -O0 -std=c++20 \
-              --compiler-options "-fPIC -Wall -pthread -I$(CONDA_LIB_HOME)/../include" \
+              --compiler-options "-fPIC -Wall -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -pthread -I$(CONDA_LIB_HOME)/../include" \
               --expt-extended-lambda \
               --expt-relaxed-constexpr \
-              -I$(TK_ROOT)/include \
               -DKITTENS_HOPPER \
               -arch=sm_$(SM) \
               -ccbin $(CXX)
+#             -I$(TK_ROOT)/include \
 
 LDFLAGS    := -L$(CONDA_LIB_HOME) \
               -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
               -lcudart -lcuda \
-              -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread 
+              -lgflags -lz -libverbs -lnl-3 -lnl-route-3 -lpthread 
 
-INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../../include -Isrc/transport -Isrc/compute -Isrc/compute/fifo
+GDRCOPY_ROOT := $(abspath ../../thirdparty/gdrcopy)
+
+# Local includes must come first to avoid conflicts with UCCL headers
+LOCAL_INCLUDES := -Iinclude -Isrc/transport -Isrc/compute -Isrc/compute/fifo
+
+# System and external library includes
+INCLUDES := -I$(CUDA_PATH)/include -I/usr/include -I../../include -I$(GDRCOPY_ROOT)/include
 
 # Redis support: when USE_REDIS_OOB=1
 ifeq ($(USE_REDIS_OOB),1)
@@ -43,7 +49,7 @@ endif
 
 # UCCL collective support
 UCCL_ROOT := $(abspath ../../)
-UCCL_CFLAGS := -I$(UCCL_ROOT)/collective/rdma -I$(UCCL_ROOT)/include
+UCCL_CFLAGS := -I$(UCCL_ROOT) -I$(UCCL_ROOT)/collective/rdma -I$(UCCL_ROOT)/include
 UCCL_LDFLAGS := $(UCCL_ROOT)/collective/rdma/librdma.a -libverbs -lrdmacm
 
 CXXFLAGS += $(UCCL_CFLAGS)
@@ -91,15 +97,20 @@ TORCH_LDFLAGS := \
 
 LDFLAGS += -Wl,-rpath,$(PYTORCH_RPATH)
 
-# Source files
-SRC_CPP := $(shell find src -name '*.cc' | grep -v 'src/compute')
-SRC_CU  := $(shell find src -name '*.cu')
+# Source files - exclude benchmarks and compute directory
+SRC_CPP := $(shell find src -name '*.cc' | grep -v 'src/compute' | grep -v 'benchmarks')
+SRC_CU  := $(shell find src -name '*.cu' | grep -v 'benchmarks')
 TEST_DIR := tests
 SRC_TEST := $(shell find $(TEST_DIR) -name 'test_*.cc')
 
 OBJ_CC   := $(SRC_CPP:.cc=.o)
 OBJ_CU   := $(SRC_CU:.cu=.o)
 OBJ_TEST := $(SRC_TEST:.cc=.o)
+
+# Benchmark files
+BENCH_SRC := benchmarks/bench_transport.cc
+BENCH_OBJ := $(BENCH_SRC:.cc=.o)
+BENCH_BIN := bench_transport
 
 PYBIND_SRC := src/python_bindings.cc
 PYBIND_OBJ := $(PYBIND_SRC:.cc=.o)
@@ -113,12 +124,12 @@ TARGET_TEST := test_main
 # Build both static, shared, and test by default
 all: $(STATIC_LIB) $(SHARED_LIB) $(TARGET_TEST) $(PYBIND_SO)
 
-# Compilation rules
+# Compilation rules - local includes must come before system/UCCL includes to avoid header conflicts
 %.o: %.cc
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 %.o: %.cu
-	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+	$(NVCC) $(LOCAL_INCLUDES) $(NVCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
 # Static library
 $(STATIC_LIB): $(OBJ_CC)
@@ -141,20 +152,29 @@ $(TARGET_TEST): $(OBJ_TEST) $(STATIC_LIB)
 run_test: $(TARGET_TEST)
 	./$(TARGET_TEST)
 
+# Benchmark build rules
+$(BENCH_OBJ): $(BENCH_SRC)
+	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+
+$(BENCH_BIN): $(BENCH_OBJ) $(STATIC_LIB)
+	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) $< $(STATIC_LIB) $(LDFLAGS) -o $@
+
+bench: $(BENCH_BIN)
+
 # Clean
 clean:
-	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) \
-	      $(TARGET_TEST) $(STATIC_LIB) $(SHARED_LIB) $(PYBIND_SO) \
-	      *.d src/*.d src/transport/*.d tests/*.d
+	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) $(BENCH_OBJ) \
+	      $(TARGET_TEST) $(STATIC_LIB) $(SHARED_LIB) $(PYBIND_SO) $(BENCH_BIN) \
+	      *.d src/*.d src/transport/*.d tests/*.d benchmarks/*.d
 
 # Include dependencies
 -include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_TEST:.o=.d)
 
 # [TODO: Yihan]Build only TK GEMM operator , need python binding later
-tk_gemm: src/compute/operator.o
-	@echo "TK GEMM operator compiled: src/compute/operator.o"
+# tk_gemm: src/compute/operator.o
+# 	@echo "TK GEMM operator compiled: src/compute/operator.o"
 
-src/compute/operator.o: src/compute/operator.cu
-	$(NVCC) $(NVCCFLAGS) -Iinclude -Isrc/transport -Isrc/compute -Isrc/compute/fifo -MMD -MP -c $< -o $@
+# src/compute/operator.o: src/compute/operator.cu
+# 	$(NVCC) $(NVCCFLAGS) -Iinclude -Isrc/transport -Isrc/compute -Isrc/compute/fifo -MMD -MP -c $< -o $@
 
-.PHONY: all clean run_test tk_gemm
+.PHONY: all clean run_test

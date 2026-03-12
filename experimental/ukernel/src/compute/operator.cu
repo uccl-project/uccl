@@ -1,8 +1,6 @@
 #include "fifo/d2c_fifo_device.hpp"
 #include "operator.h"
-#include "operators/operator.cuh"
-
-// TODO: ThunderKitten/Tilelang? based operators
+// #include "operators/operator.cuh"
 
 namespace UKernel {
 namespace Compute {
@@ -132,9 +130,10 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* c2d_fifos,
         break;
       }
       case TaskType::TkGemm: {
-        GemmArgs const& ga = d_gemm[idx];
-        TkMatmulGlobals* g = (TkMatmulGlobals*)ga.globals;
-        run_tk_gemm(*g, ga.num_tile_rows, ga.num_tile_cols, smem);
+        // skip TK operator now.
+        // GemmArgs const& ga = d_gemm[idx];
+        // TkMatmulGlobals* g = (TkMatmulGlobals*)ga.globals;
+        // run_tk_gemm(*g, ga.num_tile_rows, ga.num_tile_cols, smem);
         break;
       }
       default:

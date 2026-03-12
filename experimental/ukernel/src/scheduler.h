@@ -1,6 +1,5 @@
 #pragma once
 
-#include "operator.h"
 #include "transport.h"
 #include <iostream>
 #include <memory>
@@ -10,6 +9,21 @@
 #include <unordered_set>
 #include <variant>
 #include <vector>
+
+// Forward declarations for operator.h types
+// This avoids including torch/extension.h in scheduler.h which pollutes the namespace
+namespace UKernel {
+namespace Runtime {
+class Operator;
+}  // namespace Runtime
+
+// Forward declare types from Transport namespace
+namespace Transport {
+struct MR;
+class Communicator;
+class CommunicatorConfig;
+}  // namespace Transport
+}  // namespace UKernel
 
 namespace UKernel {
 namespace Runtime {
@@ -62,8 +76,7 @@ struct SchedulerConfig {
   int gpu_id = 0;
   int rank = 0;
   int world_size = 1;
-  std::shared_ptr<UKernel::Transport::CommunicatorConfig> comm_cfg =
-      std::make_shared<UKernel::Transport::CommunicatorConfig>();
+  std::shared_ptr<Transport::CommunicatorConfig> comm_cfg = nullptr;
 };
 
 class Scheduler {
@@ -106,10 +119,10 @@ class Scheduler {
   bool step_one();
   bool idle() const;
 
-  // Transport
-  UKernel::Transport::MR get_or_reg_local_mr_for_buffer_(void* ptr, size_t len);
-  void notify_local_mr_once_(int peer, UKernel::Transport::MR const& mr);
-  UKernel::Transport::MR get_remote_default_mr_(int peer);
+  // Transport - forward declared types
+  Transport::MR get_or_reg_local_mr_for_buffer_(void* ptr, size_t len);
+  void notify_local_mr_once_(int peer, Transport::MR const& mr);
+  Transport::MR get_remote_default_mr_(int peer);
   void run_comm(Task const& task);
 
  private:
@@ -129,13 +142,13 @@ class Scheduler {
   std::unordered_set<uint64_t> completed_ops_;
 
   // Transport
-  std::shared_ptr<UKernel::Transport::Communicator> comm_;
+  std::shared_ptr<Transport::Communicator> comm_;
   // peer -> default remote mr id
   std::unordered_map<int, uint16_t> peer_default_remote_mr_id_;
   // (peer, local_mr_id), if already notified
   struct NotifiedKey {
     int peer;
-    decltype(UKernel::Transport::MR::id) mr_id;
+    uint16_t mr_id;  // Use uint16_t directly instead of decltype
     bool operator==(NotifiedKey const& o) const noexcept {
       return peer == o.peer && mr_id == o.mr_id;
     }

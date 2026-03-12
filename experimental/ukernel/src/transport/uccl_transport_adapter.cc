@@ -1,4 +1,5 @@
 #include "uccl_transport_adapter.h"
+#include "collective/rdma/transport.h"
 
 namespace UKernel {
 namespace Transport {
