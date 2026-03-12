@@ -83,10 +83,10 @@ ninja install
 # ── Runtime environment ───────────────────────────────────────────────────────
 echo "=== Configuring runtime environment ==="
 export PATH="${NIXL_INSTALL_DIR}/bin:${PATH}"
-export LD_LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu/plugins:${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+export LD_LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu/plugins:/usr/local/lib:/usr/lib/${ARCH}-linux-gnu:${CONDA_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 export NIXL_PLUGIN_DIR="${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu/plugins"
 export UCCL_SOCKET_IFNAME="${UCCL_SOCKET_IFNAME:-lo}"
-export UCCL_DEBUG="${UCCL_DEBUG:-WARN}"
+#export UCCL_DEBUG="${UCCL_DEBUG:-WARN}"
 
 echo "NIXL_PLUGIN_DIR=${NIXL_PLUGIN_DIR}"
 echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH}"
