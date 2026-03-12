@@ -233,7 +233,7 @@ jobs:
             exit 1
           fi
 
-      - name: Run nixlbench UCCL benchmark (spark0, single node)
+      - name: Run nixlbench UCCL benchmark
         shell: bash
         run: |
           set -euo pipefail
@@ -245,6 +245,8 @@ jobs:
                 echo "spark0 node is currently used by processes with PID: $active_jobs"
                 exit 1
             fi
+
+            export UCCL_SOCKET_IFNAME=enP2p1s0f0np0
 
             cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox
             bash .github/workflows/nixlbench_test.sh \
