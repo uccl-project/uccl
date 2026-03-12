@@ -9,13 +9,11 @@ namespace Transport {
 namespace {
 constexpr auto kUcclRetrySleep = std::chrono::microseconds(50);
 constexpr auto kUcclAsyncRetryTimeout = std::chrono::seconds(30);
-}
+}  // namespace
 
 UcclTransportAdapter::UcclTransportAdapter(int local_gpu_idx, int world_size,
                                            UcclTransportConfig config)
-    : local_gpu_idx_(local_gpu_idx),
-      world_size_(world_size),
-      config_(config) {
+    : local_gpu_idx_(local_gpu_idx), world_size_(world_size), config_(config) {
   int num_engines = static_cast<int>(::ucclParamNUM_ENGINES());
   if (config_.num_engines > 0 && config_.num_engines != num_engines) {
     std::cout << "[WARN] UCCL engine count mismatch: requested "
@@ -31,9 +29,7 @@ UcclTransportAdapter::UcclTransportAdapter(int local_gpu_idx, int world_size,
   endpoint_->initialize_engine_by_dev(dev_idx, true);
 }
 
-UcclTransportAdapter::~UcclTransportAdapter() {
-  endpoint_.reset();
-}
+UcclTransportAdapter::~UcclTransportAdapter() { endpoint_.reset(); }
 
 uint16_t UcclTransportAdapter::get_p2p_listen_port(int dev_idx) const {
   return endpoint_->get_p2p_listen_port(dev_idx);
@@ -66,13 +62,16 @@ bool UcclTransportAdapter::has_recv_peer(int peer_rank) const {
   return it != peer_contexts_.end() && it->second.recv_flow != nullptr;
 }
 
-bool UcclTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip, uint16_t remote_port,
+bool UcclTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip,
+                                           uint16_t remote_port,
                                            int local_dev_idx, int local_gpu_idx,
-                                           int remote_dev_idx, int remote_gpu_idx) {
+                                           int remote_dev_idx,
+                                           int remote_gpu_idx) {
   if (has_send_peer(peer_rank)) return true;
 
-  ::uccl::ConnID conn_id = endpoint_->uccl_connect(
-      local_dev_idx, local_gpu_idx, remote_dev_idx, remote_gpu_idx, remote_ip, remote_port);
+  ::uccl::ConnID conn_id =
+      endpoint_->uccl_connect(local_dev_idx, local_gpu_idx, remote_dev_idx,
+                              remote_gpu_idx, remote_ip, remote_port);
 
   std::lock_guard<std::mutex> lk(mu_);
   auto& ctx = peer_contexts_[peer_rank];
@@ -89,8 +88,8 @@ bool UcclTransportAdapter::accept_from_peer(int peer_rank) {
   int remote_dev = 0;
   int remote_gpuidx = 0;
   ::uccl::ConnID conn_id = endpoint_->uccl_accept(
-      dev_idx, endpoint_->get_p2p_listen_fd(dev_idx), local_gpu_idx_,
-      remote_ip, &remote_dev, &remote_gpuidx);
+      dev_idx, endpoint_->get_p2p_listen_fd(dev_idx), local_gpu_idx_, remote_ip,
+      &remote_dev, &remote_gpuidx);
 
   std::lock_guard<std::mutex> lk(mu_);
   auto& ctx = peer_contexts_[peer_rank];
@@ -154,8 +153,8 @@ int UcclTransportAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
   auto deadline = std::chrono::steady_clock::now() + kUcclAsyncRetryTimeout;
   int ret = -1;
   while (std::chrono::steady_clock::now() < deadline) {
-    ret = endpoint_->uccl_send_async(flow, local_mh, local_ptr, len,
-                                     ureq.get());
+    ret =
+        endpoint_->uccl_send_async(flow, local_mh, local_ptr, len, ureq.get());
     if (ret == 0) break;
     std::this_thread::sleep_for(kUcclRetrySleep);
   }
@@ -211,7 +210,8 @@ int UcclTransportAdapter::recv_async(int peer_rank, void* local_ptr, size_t len,
   return 0;
 }
 
-bool UcclTransportAdapter::poll_completion(int* out_peer_rank, uint64_t* out_mr_id) {
+bool UcclTransportAdapter::poll_completion(int* out_peer_rank,
+                                           uint64_t* out_mr_id) {
   return false;
 }
 

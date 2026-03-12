@@ -11,7 +11,8 @@
 #include <vector>
 
 // Forward declarations for operator.h types
-// This avoids including torch/extension.h in scheduler.h which pollutes the namespace
+// This avoids including torch/extension.h in scheduler.h which pollutes the
+// namespace
 namespace UKernel {
 namespace Runtime {
 class Operator;

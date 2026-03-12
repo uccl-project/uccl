@@ -5,8 +5,8 @@
 #include "util/util.h"
 #include "utils.h"
 #include <algorithm>
-#include <ifaddrs.h>
 #include <unordered_set>
+#include <ifaddrs.h>
 
 namespace UKernel {
 namespace Transport {
@@ -19,7 +19,8 @@ bool has_env_value(char const* name) {
 }
 
 bool is_unspecified_ip(std::string const& ip) {
-  return ip.empty() || ip == "0.0.0.0" || ip == "127.0.0.1" || ip == "localhost";
+  return ip.empty() || ip == "0.0.0.0" || ip == "127.0.0.1" ||
+         ip == "localhost";
 }
 
 std::string find_ifname_for_local_ip(std::string const& ip) {
@@ -66,7 +67,8 @@ std::string find_ifname_for_remote_subnet(std::string const& ip) {
 
 void maybe_configure_uccl_socket_ifname(std::string const& remote_hint_ip,
                                         std::string const& local_hint_ip) {
-  if (has_env_value("UCCL_SOCKET_IFNAME") || has_env_value("NCCL_SOCKET_IFNAME")) {
+  if (has_env_value("UCCL_SOCKET_IFNAME") ||
+      has_env_value("NCCL_SOCKET_IFNAME")) {
     return;
   }
 
@@ -410,8 +412,8 @@ bool Communicator::connect_to(int rank) {
     if (!uccl_adapter_) {
       UcclTransportConfig uccl_config;
       uccl_config.local_ip = local_meta->ip;
-      maybe_configure_uccl_socket_ifname(
-          get_uccl_remote_hint_ip(config_, meta), local_meta->ip);
+      maybe_configure_uccl_socket_ifname(get_uccl_remote_hint_ip(config_, meta),
+                                         local_meta->ip);
       uccl_adapter_ = std::make_unique<UcclTransportAdapter>(
           local_rank_, world_size_, uccl_config);
     }
@@ -528,8 +530,8 @@ bool Communicator::accept_from(int rank) {
     if (!uccl_adapter_) {
       UcclTransportConfig uccl_config;
       uccl_config.local_ip = local_meta->ip;
-      maybe_configure_uccl_socket_ifname(
-          get_uccl_remote_hint_ip(config_, meta), local_meta->ip);
+      maybe_configure_uccl_socket_ifname(get_uccl_remote_hint_ip(config_, meta),
+                                         local_meta->ip);
       uccl_adapter_ = std::make_unique<UcclTransportAdapter>(
           local_rank_, world_size_, uccl_config);
     }
@@ -576,7 +578,8 @@ bool Communicator::accept_from(int rank) {
     ret = uccl_adapter_->accept_from_peer(rank);
     if (ret) {
       std::cout << "[INFO] Communicator " << global_rank_
-                << " UCCL accept_from succeeded from rank " << rank << std::endl;
+                << " UCCL accept_from succeeded from rank " << rank
+                << std::endl;
     } else {
       std::cerr << "[ERROR] Communicator " << global_rank_
                 << " UCCL accept_from failed from rank " << rank << std::endl;
@@ -1014,8 +1017,8 @@ bool Communicator::wait_mr_notify(int remote_rank, MR& mr) {
       if (!pending.empty()) {
         mr = pending.front();
         pending.pop_front();
-        std::cout << "[recv MR from rank " << remote_rank << "] addr="
-                  << mr.address << " length=" << mr.length
+        std::cout << "[recv MR from rank " << remote_rank
+                  << "] addr=" << mr.address << " length=" << mr.length
                   << " key=" << mr.key << std::endl;
         return true;
       }

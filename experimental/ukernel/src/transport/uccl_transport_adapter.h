@@ -1,13 +1,12 @@
 #pragma once
 
+#include "../../include/transport.h"
+#include <atomic>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <unordered_map>
 #include <vector>
-#include <string>
-#include <mutex>
-#include <atomic>
-
-#include "../../include/transport.h"
 
 // Forward declare uccl classes
 namespace uccl {
@@ -17,7 +16,7 @@ class UcclFlow;
 struct ucclRequest;
 class UcclRDMAEngine;
 // Note: ConnID is defined in collective/rdma/transport.h as a struct
-}
+}  // namespace uccl
 
 namespace UKernel {
 namespace Transport {
@@ -36,17 +35,18 @@ class UcclTransportAdapter {
                        UcclTransportConfig config);
   ~UcclTransportAdapter();
 
-  bool connect_to_peer(int peer_rank, std::string remote_ip, uint16_t remote_port,
-                       int local_dev_idx, int local_gpu_idx, 
-                       int remote_dev_idx, int remote_gpu_idx);
+  bool connect_to_peer(int peer_rank, std::string remote_ip,
+                       uint16_t remote_port, int local_dev_idx,
+                       int local_gpu_idx, int remote_dev_idx,
+                       int remote_gpu_idx);
   bool accept_from_peer(int peer_rank);
-  
+
   // Get P2P listen port for the given device
   uint16_t get_p2p_listen_port(int dev_idx) const;
-  
+
   // Get P2P listen IP for the given device
   std::string get_p2p_listen_ip(int dev_idx) const;
-  
+
   // Get best RDMA device index for given GPU
   int get_best_dev_idx(int gpu_idx) const;
 

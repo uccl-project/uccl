@@ -171,8 +171,8 @@ struct MRInfos : public Exchangeable {
 struct UCCLP2PInfo : public Exchangeable {
   std::string ip;
   uint16_t port;
-  int dev_idx;      // RDMA device index
-  int gpu_idx;      // GPU index
+  int dev_idx;  // RDMA device index
+  int gpu_idx;  // GPU index
 
   UCCLP2PInfo() = default;
   UCCLP2PInfo(std::string ip_, uint16_t port_, int dev_idx_, int gpu_idx_)

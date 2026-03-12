@@ -1,8 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdlib>
 #include <string>
-#include <algorithm>
 
 #define DEFAULT_RDMA_CHUNK_SIZE 1024 * 1024
 #define DEFAULT_QP_PER_EP 1
@@ -85,9 +85,9 @@ struct CommunicatorConfig {
     if (val) {
       std::string backend_str(val);
       // Convert to lowercase for case-insensitive comparison
-      std::transform(backend_str.begin(), backend_str.end(), 
+      std::transform(backend_str.begin(), backend_str.end(),
                      backend_str.begin(), ::tolower);
-      if (backend_str == "basic" || backend_str == "basicrdma" || 
+      if (backend_str == "basic" || backend_str == "basicrdma" ||
           backend_str == "basic_rdma") {
         return TransportBackend::BasicRDMA;
       }

@@ -6,8 +6,8 @@
 #include "util/jring.h"
 #include <infiniband/verbs.h>
 #include <condition_variable>
-#include <deque>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
