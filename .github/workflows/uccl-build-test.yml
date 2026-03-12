@@ -229,14 +229,39 @@ jobs:
             exit 1
           fi
 
+      - name: Run nixlbench UCCL benchmark (spark0, single node)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ssh -o BatchMode=yes spark0 << 'EOF'
+            set -euo pipefail
+            active_jobs=$(nvidia-smi --query-compute-apps=pid --format=csv,noheader)
+
+            if [ -n "$active_jobs" ]; then
+                echo "spark0 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
+
+            export UCCL_SOCKET_IFNAME=enP2p1s0f0np0
+
+            cd /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox
+            bash .gitlab/nixlbench_test.sh \
+              /home/${{secrets.UCCL_DEV_USER}}/nfs/nixl_install \
+              2>&1 | tee nixlbench.log
+          EOF
+
       - name: Fetch remote build.log
         if: always()
         shell: bash
         run: |
           set -eu
           scp -o BatchMode=yes spark1:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/build.log ./gb10-build.log || true
+          scp -o BatchMode=yes spark0:/home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench.log ./nixlbench.log || true
           ssh -o BatchMode=yes spark1 << 'EOF'
             rm -f /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/build.log
+          EOF
+          ssh -o BatchMode=yes spark0 << 'EOF'
+            rm -f /home/${{secrets.UCCL_DEV_USER}}/nfs/uccl-ci-sandbox/nixlbench.log
           EOF
 
       - name: Upload build.log artifact
@@ -244,5 +269,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: gb10-build-log
-          path: gb10-build.log
+          path: |
+            gb10-build.log
+            nixlbench.log
           if-no-files-found: warn
