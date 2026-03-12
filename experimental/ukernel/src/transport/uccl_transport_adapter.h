@@ -34,8 +34,19 @@ class UcclTransportAdapter {
   UcclTransportAdapter(int local_rank, int world_size, UcclTransportConfig config);
   ~UcclTransportAdapter();
 
-  bool connect_to_peer(int peer_rank, std::string remote_ip, uint16_t remote_port);
+  bool connect_to_peer(int peer_rank, std::string remote_ip, uint16_t remote_port,
+                       int local_dev_idx, int local_gpu_idx, 
+                       int remote_dev_idx, int remote_gpu_idx);
   bool accept_from_peer(int peer_rank);
+  
+  // Get P2P listen port for the given device
+  uint16_t get_p2p_listen_port(int dev_idx) const;
+  
+  // Get P2P listen IP for the given device
+  std::string get_p2p_listen_ip(int dev_idx) const;
+  
+  // Get best RDMA device index for given GPU
+  int get_best_dev_idx(int gpu_idx) const;
 
   uint64_t register_memory(void* ptr, size_t len);
   void deregister_memory(uint64_t mr_id);

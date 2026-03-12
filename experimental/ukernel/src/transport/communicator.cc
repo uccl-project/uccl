@@ -324,15 +324,85 @@ bool Communicator::connect_to(int rank) {
     }
 
     std::string remote_ip = meta->ip;
-    uint16_t remote_port = 12345;
-    ret = uccl_adapter_->connect_to_peer(rank, remote_ip, remote_port);
-    if (ret) {
-      std::cout << "[INFO] Communicator " << global_rank_
-                << " UCCL connect_to succeeded to rank " << rank << std::endl;
+    // Get best RDMA device index for current GPU
+    int dev_idx = uccl_adapter_->get_best_dev_idx(local_rank_);
+    int gpu_idx = local_rank_; // GPU ID is stored in local_rank_
+    
+    // Get our P2P port and IP from UCCL
+    uint16_t local_port = uccl_adapter_->get_p2p_listen_port(dev_idx);
+    std::string local_ip_addr = uccl_adapter_->get_p2p_listen_ip(dev_idx);
+    
+    // Create P2P info for exchange (include GPU and device info)
+    UCCLP2PInfo local_p2p_info(local_ip_addr, local_port, dev_idx, gpu_idx);
+    std::string p2p_key = "uccl_p2p_info_" + std::to_string(global_rank_);
+    
+    if (global_rank_ < rank) {
+      // Lower rank: get peer's P2P port and connect
+      std::string peer_p2p_key = "uccl_p2p_info_" + std::to_string(rank);
+      
+      // Publish our P2P info
+      if (!exchanger_client_->publish(p2p_key, local_p2p_info)) {
+        std::cerr << "[ERROR] Failed to publish P2P info for rank " << global_rank_ << std::endl;
+        return false;
+      }
+      
+      // Fetch peer's P2P info
+      UCCLP2PInfo remote_p2p_info;
+      if (!exchanger_client_->wait_and_fetch(peer_p2p_key, remote_p2p_info, -1)) {
+        std::cerr << "[ERROR] Failed to fetch P2P info for rank " << rank << std::endl;
+        return false;
+      }
+      
+      std::cout << "[INFO] Rank " << global_rank_ << " P2P port " << local_port 
+                << " (GPU " << gpu_idx << ", dev " << dev_idx << ")"
+                << " -> Rank " << rank << " P2P port " << remote_p2p_info.port
+                << " (GPU " << remote_p2p_info.gpu_idx << ", dev " << remote_p2p_info.dev_idx << ")"
+                << std::endl;
+      
+      // Connect to peer using exchanged device info
+      ret = uccl_adapter_->connect_to_peer(rank, remote_p2p_info.ip, remote_p2p_info.port,
+                                           dev_idx, gpu_idx, remote_p2p_info.dev_idx, remote_p2p_info.gpu_idx);
+      if (ret) {
+        std::cout << "[INFO] Communicator " << global_rank_
+                  << " UCCL connect_to succeeded to rank " << rank << std::endl;
+      } else {
+        std::cerr << "[ERROR] Communicator " << global_rank_
+                  << " UCCL connect_to failed to rank " << rank << std::endl;
+        return false;
+      }
     } else {
-      std::cerr << "[ERROR] Communicator " << global_rank_
-                << " UCCL connect_to failed to rank " << rank << std::endl;
-      return false;
+      // Higher rank: accept
+      std::string peer_p2p_key = "uccl_p2p_info_" + std::to_string(rank);
+      
+      // Fetch peer's P2P info first
+      UCCLP2PInfo remote_p2p_info;
+      if (!exchanger_client_->wait_and_fetch(peer_p2p_key, remote_p2p_info, -1)) {
+        std::cerr << "[ERROR] Failed to fetch P2P info for rank " << rank << std::endl;
+        return false;
+      }
+      
+      // Publish our P2P info
+      if (!exchanger_client_->publish(p2p_key, local_p2p_info)) {
+        std::cerr << "[ERROR] Failed to publish P2P info for rank " << global_rank_ << std::endl;
+        return false;
+      }
+      
+      std::cout << "[INFO] Rank " << global_rank_ << " P2P port " << local_port 
+                << " (GPU " << gpu_idx << ", dev " << dev_idx << ")"
+                << " <- Rank " << rank << " P2P port " << remote_p2p_info.port
+                << " (GPU " << remote_p2p_info.gpu_idx << ", dev " << remote_p2p_info.dev_idx << ")"
+                << std::endl;
+      
+      // Accept from peer
+      ret = uccl_adapter_->accept_from_peer(rank);
+      if (ret) {
+        std::cout << "[INFO] Communicator " << global_rank_
+                  << " UCCL accept_from succeeded from rank " << rank << std::endl;
+      } else {
+        std::cerr << "[ERROR] Communicator " << global_rank_
+                  << " UCCL accept_from failed from rank " << rank << std::endl;
+        return false;
+      }
     }
     return ret;
   }
@@ -402,6 +472,43 @@ bool Communicator::accept_from(int rank) {
           global_rank_, world_size_, uccl_config);
     }
 
+    // For UCCL, we need to exchange P2P listen ports via exchanger
+    std::string remote_ip = meta->ip;
+    // Get best RDMA device index for current GPU
+    int dev_idx = uccl_adapter_->get_best_dev_idx(local_rank_);
+    int gpu_idx = local_rank_; // GPU ID is stored in local_rank_
+    
+    // Get our P2P port and IP from UCCL
+    uint16_t local_port = uccl_adapter_->get_p2p_listen_port(dev_idx);
+    std::string local_ip_addr = uccl_adapter_->get_p2p_listen_ip(dev_idx);
+    
+    // Create P2P info for exchange (include GPU and device info)
+    UCCLP2PInfo local_p2p_info(local_ip_addr, local_port, dev_idx, gpu_idx);
+    std::string p2p_key = "uccl_p2p_info_" + std::to_string(global_rank_);
+    
+    // Higher rank: fetch peer's info first, then publish our info, then accept
+    std::string peer_p2p_key = "uccl_p2p_info_" + std::to_string(rank);
+    
+    // Fetch peer's P2P info first
+    UCCLP2PInfo remote_p2p_info;
+    if (!exchanger_client_->wait_and_fetch(peer_p2p_key, remote_p2p_info, -1)) {
+      std::cerr << "[ERROR] Failed to fetch P2P info for rank " << rank << std::endl;
+      return false;
+    }
+    
+    // Publish our P2P info
+    if (!exchanger_client_->publish(p2p_key, local_p2p_info)) {
+      std::cerr << "[ERROR] Failed to publish P2P info for rank " << global_rank_ << std::endl;
+      return false;
+    }
+    
+    std::cout << "[INFO] Rank " << global_rank_ << " P2P port " << local_port 
+              << " (GPU " << gpu_idx << ", dev " << dev_idx << ")"
+              << " <- Rank " << rank << " P2P port " << remote_p2p_info.port
+              << " (GPU " << remote_p2p_info.gpu_idx << ", dev " << remote_p2p_info.dev_idx << ")"
+              << std::endl;
+    
+    // Accept from peer
     ret = uccl_adapter_->accept_from_peer(rank);
     if (ret) {
       std::cout << "[INFO] Communicator " << global_rank_

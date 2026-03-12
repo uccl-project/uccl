@@ -2,6 +2,7 @@
 
 #include <cstdlib>
 #include <string>
+#include <algorithm>
 
 #define DEFAULT_RDMA_CHUNK_SIZE 1024 * 1024
 #define DEFAULT_QP_PER_EP 1
@@ -57,7 +58,7 @@ struct CommunicatorConfig {
                                      DEFAULT_EXCHANGER_SERVER_IP)),
         exchanger_port(getEnvOrDefault("UHM_EXCHANGER_SERVER_PORT",
                                        DEFAULT_EXCHANGER_SERVER_PORT)),
-        backend(TransportBackend::UCCL) {}
+        backend(getBackendFromEnv()) {}
 
  private:
   static int getEnvOrDefault(char const* env_name, int default_val) {
@@ -77,6 +78,22 @@ struct CommunicatorConfig {
     char const* val = std::getenv(env_name);
     if (val) return std::string(val);
     return default_val;
+  }
+
+  static TransportBackend getBackendFromEnv() {
+    char const* val = std::getenv("UKERNEL_TRANSPORT_BACKEND");
+    if (val) {
+      std::string backend_str(val);
+      // Convert to lowercase for case-insensitive comparison
+      std::transform(backend_str.begin(), backend_str.end(), 
+                     backend_str.begin(), ::tolower);
+      if (backend_str == "basic" || backend_str == "basicrdma" || 
+          backend_str == "basic_rdma") {
+        return TransportBackend::BasicRDMA;
+      }
+      // Default to UCCL for any other value
+    }
+    return TransportBackend::UCCL;
   }
 };
 

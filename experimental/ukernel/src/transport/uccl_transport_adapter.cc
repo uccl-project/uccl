@@ -17,15 +17,29 @@ UcclTransportAdapter::~UcclTransportAdapter() {
   endpoint_.reset();
 }
 
-bool UcclTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip, uint16_t remote_port) {
+uint16_t UcclTransportAdapter::get_p2p_listen_port(int dev_idx) const {
+  return endpoint_->get_p2p_listen_port(dev_idx);
+}
+
+std::string UcclTransportAdapter::get_p2p_listen_ip(int dev_idx) const {
+  return endpoint_->get_p2p_listen_ip(dev_idx);
+}
+
+int UcclTransportAdapter::get_best_dev_idx(int gpu_idx) const {
+  return endpoint_->get_best_dev_idx(gpu_idx);
+}
+
+bool UcclTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip, uint16_t remote_port,
+                                           int local_dev_idx, int local_gpu_idx,
+                                           int remote_dev_idx, int remote_gpu_idx) {
   std::lock_guard<std::mutex> lk(mu_);
 
-  int dev_idx = endpoint_->get_best_dev_idx(local_rank_);
   ::uccl::ConnID conn_id = endpoint_->uccl_connect(
-      dev_idx, local_rank_, peer_rank, peer_rank, remote_ip, remote_port);
+      local_dev_idx, local_gpu_idx, remote_dev_idx, remote_gpu_idx, remote_ip, remote_port);
 
   PeerContext ctx;
   ctx.peer_rank = peer_rank;
+  ctx.flow = static_cast<::uccl::UcclFlow*>(conn_id.context);
   peer_contexts_[peer_rank] = std::move(ctx);
   return true;
 }
@@ -43,6 +57,7 @@ bool UcclTransportAdapter::accept_from_peer(int peer_rank) {
 
   PeerContext ctx;
   ctx.peer_rank = peer_rank;
+  ctx.flow = static_cast<::uccl::UcclFlow*>(conn_id.context);
   peer_contexts_[peer_rank] = std::move(ctx);
   return true;
 }
