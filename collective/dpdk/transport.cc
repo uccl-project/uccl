@@ -1386,12 +1386,12 @@ void UcclEngine::process_rx_msg(Packet** pkts, uint32_t rcvd) {
 
     auto it = active_flows_map_.find(flow_id);
     if (it == active_flows_map_.end()) {
-      UCCL_LOG_EVERY_N(ERROR, UCCL_DPDK, 1000000)
+      UCCL_LOG_EVERY_N(ERROR, 1000000)
           << "process_rx_msg unknown flow " << std::hex << "0x" << flow_id
           << " engine_id " << local_engine_idx_ << " pkt->engine_id "
           << (int)ucclh->engine_id;
       for (auto [flow_id, flow] : active_flows_map_) {
-        UCCL_LOG_EVERY_N(ERROR, UCCL_DPDK, 1000000)
+        UCCL_LOG_EVERY_N(ERROR, 1000000)
             << "                active flow " << std::hex << "0x" << flow_id;
       }
       socket_->push_packet(pkt);

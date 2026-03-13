@@ -24,7 +24,7 @@ namespace uccl {
                           rte_pktmbuf_pool_init, &mbp_priv, rte_pktmbuf_init,
                           NULL, rte_socket_id(), kMemPoolFlags);
   if (mp == nullptr) {
-    UCCL_LOG(ERROR, UCCL_DPDK) << "rte_mempool_create() failed. ";
+    UCCL_LOG(ERROR) << "rte_mempool_create() failed. ";
     return nullptr;
   }
 
@@ -54,10 +54,9 @@ PacketPool::PacketPool(uint32_t nmbufs, uint16_t mbuf_size,
     // Lookup mempool created earlier by the primary
     mpool_ = rte_mempool_lookup(mempool_name);
     if (mpool_ == nullptr) {
-      UCCL_LOG(FATAL, UCCL_DPDK)
-          << "[LOOKUP] [type: mempool, name: " << mempool_name
-          << "] failed. rte_errno = " << rte_errno << " ("
-          << rte_strerror(rte_errno) << ")";
+      UCCL_LOG(FATAL) << "[LOOKUP] [type: mempool, name: " << mempool_name
+                      << "] failed. rte_errno = " << rte_errno << " ("
+                      << rte_strerror(rte_errno) << ")";
     } else {
       UCCL_LOG(INFO, UCCL_DPDK)
           << "[LOOKUP] [type: mempool, name " << mempool_name

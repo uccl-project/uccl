@@ -78,8 +78,8 @@ void load_program(char const* interface_name, char const* ebpf_filename,
     if (ret == 0) {
       attached_skb = true;
     } else {
-      UCCL_LOG(ERROR, UCCL_AFXDP) << "error: failed to attach " << ebpf_filename
-                                  << " program to interface";
+      UCCL_LOG(ERROR) << "error: failed to attach " << ebpf_filename
+                      << " program to interface";
     }
   }
   UCCL_LOG(INFO, UCCL_AFXDP) << ebpf_filename << " attached successfully.";
