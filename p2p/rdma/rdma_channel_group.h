@@ -174,7 +174,7 @@ class SendChannelGroup : public ChannelGroup {
              "SendType::Write";
       return -1;
     }
-
+    std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
 
@@ -196,7 +196,7 @@ class SendChannelGroup : public ChannelGroup {
                          "SendType::Read";
       return -1;
     }
-
+    std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
 
