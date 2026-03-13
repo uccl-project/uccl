@@ -21,6 +21,11 @@ void test_ccl_plan() {
   assert(gather_plan.steps.front().ops.front().kind == ExecutionOpKind::PkCopy);
   assert(gather_plan.steps.front().ops.front().src_role == BufferRole::RemoteInput);
   assert(gather_plan.steps.front().ops.front().dst_role == BufferRole::FinalOutput);
+  assert(gather_plan.steps.front().has_forward_chunk);
+  assert(gather_plan.steps.front().forward_src_rank == 1);
+  assert(gather_plan.steps.front().forward_dst_rank == 2);
+  assert(gather_plan.steps.front().forward_chunk.owner_rank == 1);
+  assert(gather_plan.steps.front().forward_src_role == BufferRole::FinalOutput);
   assert(gather_plan.steps.front().chunk.owner_rank == 0);
   assert(gather_plan.steps[4].chunk.owner_rank == 3);
   assert(gather_plan.steps[8].chunk.owner_rank == 2);
@@ -66,6 +71,8 @@ void test_ccl_plan() {
   assert(gather2_plan.steps.front().chunk.offset_bytes == 512);
   assert(gather2_plan.steps.back().chunk.offset_bytes == 768);
   assert(gather2_plan.steps.front().ops.front().src_role == BufferRole::RemoteInput);
+  assert(gather2_plan.steps.front().forward_chunk.owner_rank == 0);
+  assert(gather2_plan.steps.back().forward_chunk.owner_rank == 0);
 
   PlanRequest reduce2{};
   reduce2.collective = CollectiveKind::AllReduce;

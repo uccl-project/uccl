@@ -24,6 +24,34 @@ PlanRequest make_plan_request(CollectiveKind kind, CollectiveConfig const& confi
 
 void assign_copy_backends(CollectivePlan& plan, CollectiveConfig const& config,
                           ExecutorBackends const& backends) {
+  auto rewrite_allgather_rdma_step = [&](CollectiveStep& step) {
+    if (!step.has_forward_chunk) {
+      throw std::invalid_argument("RDMA allgather step missing forward chunk");
+    }
+    if (step.ops.size() != 1 || step.ops.front().kind != ExecutionOpKind::PkCopy) {
+      throw std::invalid_argument(
+          "RDMA allgather rewrite expects a single copy op per step");
+    }
+
+    ExecutionOp send_op;
+    send_op.op_id = step.ops.front().op_id;
+    send_op.kind = ExecutionOpKind::RdmaSend;
+    send_op.src_rank = step.forward_src_rank;
+    send_op.dst_rank = step.forward_dst_rank;
+    send_op.chunk = step.forward_chunk;
+    send_op.flags = step.ops.front().flags;
+    send_op.src_role = step.forward_src_role;
+    send_op.dst_role = BufferRole::None;
+
+    ExecutionOp recv_op = step.ops.front();
+    recv_op.kind = ExecutionOpKind::RdmaRecv;
+    recv_op.src_role = BufferRole::None;
+
+    step.ops.clear();
+    step.ops.push_back(std::move(send_op));
+    step.ops.push_back(std::move(recv_op));
+  };
+
   for (auto& step : plan.steps) {
     for (auto& op : step.ops) {
       if (op.kind != ExecutionOpKind::PkCopy) continue;
@@ -31,6 +59,19 @@ void assign_copy_backends(CollectivePlan& plan, CollectiveConfig const& config,
       auto selected = UKernel::Compute::resolve_cpu_backend_kind(
           config.requested_cpu_backend, true, op.chunk.size_bytes,
           config.device_caps, config.cpu_selector);
+      if (selected == UKernel::Compute::CpuBackendKind::Rdma) {
+        if (plan.collective != CollectiveKind::AllGather) {
+          throw std::invalid_argument(
+              "RDMA path is only wired for AllGather in this phase");
+        }
+        if (backends.rdma == nullptr ||
+            (!backends.rdma->supports(ExecutionOpKind::RdmaSend) &&
+             !backends.rdma->supports(ExecutionOpKind::RdmaRecv))) {
+          throw std::invalid_argument("RDMA backend requested but unavailable");
+        }
+        rewrite_allgather_rdma_step(step);
+        break;
+      }
       if (selected == UKernel::Compute::CpuBackendKind::Ce) {
         if (backends.ce != nullptr &&
             backends.ce->supports(ExecutionOpKind::CeCopy)) {

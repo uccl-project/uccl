@@ -9,6 +9,7 @@ struct CollectiveHostApi::Impl {
   explicit Impl(CollectiveHostApiConfig const& config)
       : pk_backend(build_pk_backend(config)),
         ce_backend(build_ce_backend(config)),
+        external_rdma_backend(config.external_rdma_backend),
         executor(build_backends()) {}
 
   static std::unique_ptr<ComputePersistentKernelBackend> build_pk_backend(
@@ -32,11 +33,13 @@ struct CollectiveHostApi::Impl {
     UKernel::CCL::ExecutorBackends backends{};
     backends.persistent = pk_backend.get();
     backends.ce = ce_backend.get();
+    backends.rdma = external_rdma_backend;
     return backends;
   }
 
   std::unique_ptr<ComputePersistentKernelBackend> pk_backend;
   std::unique_ptr<ComputeCopyEngineBackend> ce_backend;
+  UKernel::CCL::Backend* external_rdma_backend = nullptr;
   UKernel::CCL::Executor executor;
 };
 

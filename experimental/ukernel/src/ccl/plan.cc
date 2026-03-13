@@ -93,6 +93,21 @@ CollectivePlan build_allgather_ring_plan(PlanRequest const& request) {
       step.src_rank = ring.prev(request.rank);
       step.dst_rank = request.rank;
       step.chunk = chunk;
+      step.has_forward_chunk = true;
+      step.forward_src_rank = request.rank;
+      step.forward_dst_rank = ring.next(request.rank);
+      step.forward_chunk.owner_rank =
+          static_cast<uint32_t>(ring.wrap(request.rank - ring_step));
+      step.forward_chunk.chunk_index = static_cast<uint32_t>(chunk_index);
+      step.forward_chunk.channel_id =
+          static_cast<uint32_t>(chunk_index % request.channels);
+      step.forward_chunk.offset_bytes =
+          static_cast<size_t>(step.forward_chunk.owner_rank) *
+              request.bytes_per_rank +
+          chunk_offset(chunk_index, request.chunk_bytes);
+      step.forward_chunk.size_bytes =
+          chunk_size(request.bytes_per_rank, request.chunk_bytes, chunk_index);
+      step.forward_src_role = BufferRole::FinalOutput;
 
       int32_t pred = last_step_for_channel[chunk.channel_id];
       if (pred >= 0) step.predecessors.push_back(static_cast<uint32_t>(pred));

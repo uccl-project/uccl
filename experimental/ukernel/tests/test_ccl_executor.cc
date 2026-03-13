@@ -145,8 +145,33 @@ void test_ccl_executor() {
   assert(pk_selector_backend.submissions() == 0);
   ce_selected_executor.release(ce_gather_handle);
 
+  MockBackend rdma_selector_backend(1);
+  ExecutorBackends rdma_selected_backends{};
+  rdma_selected_backends.rdma = &rdma_selector_backend;
+  Executor rdma_selected_executor(rdma_selected_backends);
+
+  CollectiveConfig rdma_gather{};
+  rdma_gather.algorithm = AlgorithmKind::Ring;
+  rdma_gather.nranks = 4;
+  rdma_gather.rank = 1;
+  rdma_gather.channels = 2;
+  rdma_gather.bytes_per_rank = 1024;
+  rdma_gather.chunk_bytes = 256;
+  rdma_gather.requested_cpu_backend = UKernel::Compute::CpuBackendKind::Auto;
+  rdma_gather.device_caps.is_same_node = false;
+  rdma_gather.device_caps.supports_rdma = true;
+
+  CollectiveOpHandle rdma_gather_handle =
+      rdma_selected_executor.submit_allgather(rdma_gather);
+  rdma_selected_executor.wait(rdma_gather_handle);
+  assert(rdma_selected_executor.status(rdma_gather_handle) ==
+         CollectiveOpStatus::Completed);
+  assert(rdma_selector_backend.submissions() == 24);
+  rdma_selected_executor.release(rdma_gather_handle);
+
   std::cout << "[test_ccl_executor] PK-only executor PASSED\n";
   std::cout << "[test_ccl_executor] collective submit API PASSED\n";
   std::cout << "[test_ccl_executor] mixed backend routing PASSED\n";
   std::cout << "[test_ccl_executor] CE selector routing PASSED\n";
+  std::cout << "[test_ccl_executor] RDMA rewrite routing PASSED\n";
 }

@@ -61,6 +61,11 @@ struct CollectiveStep {
   int src_rank = -1;
   int dst_rank = -1;
   ChunkRange chunk;
+  bool has_forward_chunk = false;
+  int forward_src_rank = -1;
+  int forward_dst_rank = -1;
+  ChunkRange forward_chunk;
+  BufferRole forward_src_role = BufferRole::None;
   std::vector<uint32_t> predecessors;
   std::vector<ExecutionOp> ops;
 };

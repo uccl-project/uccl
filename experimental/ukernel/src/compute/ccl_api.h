@@ -19,6 +19,7 @@ struct CollectiveHostApiConfig {
   int dst_device = -1;
   int src_device = -1;
   gpuStream_t ce_stream = nullptr;
+  UKernel::CCL::Backend* external_rdma_backend = nullptr;
 };
 
 class CollectiveHostApi {
