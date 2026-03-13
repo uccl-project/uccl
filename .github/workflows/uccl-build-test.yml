@@ -76,7 +76,7 @@ jobs:
             conda activate uccl
 
             cd /home/skytestuser/uccl-test
-            TORCH_CUDA_ARCH_LIST=9.0 ./build.sh cuda all 3.12 --install 2>&1 | tee build.log
+            TORCH_CUDA_ARCH_LIST="9.0" ./build.sh cuda all 3.12 --install 2>&1 | tee build.log
 
             grep -q \"Successfully installed uccl-\" build.log
           "'
