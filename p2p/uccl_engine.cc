@@ -40,6 +40,8 @@ using Endpoint = ::Endpoint;
 
 struct uccl_engine {
   std::unique_ptr<Endpoint> endpoint;
+  std::thread local_accept_thread;
+  std::atomic<bool> local_accept_started{false};
 };
 
 struct uccl_conn {
@@ -175,16 +177,10 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
 
   bool ok;
   if (is_local) {
-    // accept_local must be ready before connect_local sends its handshake
-    // message.  Run it on a background thread since both sides live in the
-    // same process.
-    std::thread accept_t([engine] {
-      int gpu_idx;
-      uint64_t cid;
-      engine->endpoint->accept_local(gpu_idx, cid);
-    });
+    // The remote Endpoint's passive_accept_local_thread (started in
+    // uccl_engine_create via start_passive_accept) will accept the CONNECT
+    // message.  Just call connect_local directly — no background thread needed.
     ok = engine->endpoint->connect_local(remote_gpu_idx, conn_id);
-    accept_t.join();
     conn->sock_fd = -1;  // No TCP socket for local connections
   } else {
     ok = engine->endpoint->connect(std::string(ip_addr), remote_gpu_idx,
@@ -212,6 +208,19 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
 uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
                                 size_t ip_addr_buf_len, int* remote_gpu_idx) {
   if (!engine || !ip_addr_buf || !remote_gpu_idx) return nullptr;
+  // Start accept_local loop in a background thread (once per engine) so that
+  // local (IPC) peers can connect concurrently with the blocking RDMA accept.
+  bool expected = false;
+  if (engine->local_accept_started.compare_exchange_strong(expected, true)) {
+    engine->local_accept_thread = std::thread([engine] {
+      while (true) {
+        int remote_gpu_idx;
+        uint64_t conn_id;
+        engine->endpoint->accept_local(remote_gpu_idx, conn_id);
+      }
+    });
+    engine->local_accept_thread.detach();
+  }
   uccl_conn_t* conn = new uccl_conn;
   std::string ip_addr;
   uint64_t conn_id;
