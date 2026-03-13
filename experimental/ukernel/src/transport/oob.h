@@ -167,6 +167,34 @@ struct MRInfos : public Exchangeable {
   }
 };
 
+// UCCL P2P port info for exchange
+struct UCCLP2PInfo : public Exchangeable {
+  std::string ip;
+  uint16_t port;
+  int dev_idx;  // RDMA device index
+  int gpu_idx;  // GPU index
+
+  UCCLP2PInfo() = default;
+  UCCLP2PInfo(std::string ip_, uint16_t port_, int dev_idx_, int gpu_idx_)
+      : ip(std::move(ip_)), port(port_), dev_idx(dev_idx_), gpu_idx(gpu_idx_) {}
+
+  std::map<std::string, std::string> to_map() const override {
+    std::map<std::string, std::string> kv;
+    kv["ip"] = ip;
+    kv["port"] = std::to_string(port);
+    kv["dev_idx"] = std::to_string(dev_idx);
+    kv["gpu_idx"] = std::to_string(gpu_idx);
+    return kv;
+  }
+
+  void from_map(std::map<std::string, std::string> const& kv) override {
+    ip = kv.at("ip");
+    port = static_cast<uint16_t>(std::stoul(kv.at("port")));
+    dev_idx = std::stoi(kv.at("dev_idx"));
+    gpu_idx = std::stoi(kv.at("gpu_idx"));
+  }
+};
+
 class Exchanger {
  public:
   virtual ~Exchanger() = default;

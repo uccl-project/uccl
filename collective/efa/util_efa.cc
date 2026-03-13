@@ -91,15 +91,13 @@ static void init_device_name_lists() {
   }
 
   if (g_efa_device_names.empty()) {
-    UCCL_LOG(ERROR, UCCL_EFA)
-        << "No EFA devices discovered via environment variables or "
-           "hardware enumeration";
+    UCCL_LOG(ERROR) << "No EFA devices discovered via environment variables or "
+                       "hardware enumeration";
   }
 
   if (g_ena_device_names.empty()) {
-    UCCL_LOG(ERROR, UCCL_EFA)
-        << "No ENA devices discovered via environment variables or "
-           "hardware enumeration";
+    UCCL_LOG(ERROR) << "No ENA devices discovered via environment variables or "
+                       "hardware enumeration";
   }
 }
 
@@ -123,11 +121,11 @@ uint8_t GetActualNumDevices() {
   if (!efa.empty()) actual = std::min(actual, static_cast<uint8_t>(efa.size()));
   if (!ena.empty()) actual = std::min(actual, static_cast<uint8_t>(ena.size()));
   if (efa.size() > NUM_DEVICES || ena.size() > NUM_DEVICES) {
-    UCCL_LOG(WARN, UCCL_EFA)
-        << "GetActualNumDevices: more devices discovered than "
-        << "NUM_DEVICES=" << (int)NUM_DEVICES << " (EFA=" << efa.size()
-        << ", ENA=" << ena.size() << "). Capping to " << (int)actual
-        << " to avoid fixed-size array overflow.";
+    UCCL_LOG(WARN) << "GetActualNumDevices: more devices discovered than "
+                   << "NUM_DEVICES=" << (int)NUM_DEVICES
+                   << " (EFA=" << efa.size() << ", ENA=" << ena.size()
+                   << "). Capping to " << (int)actual
+                   << " to avoid fixed-size array overflow.";
   }
   return actual;
 }
@@ -330,7 +328,7 @@ struct EFADevice* EFAFactory::GetEFADevice(int dev_idx) {
     char hostname[256];
     gethostname(hostname, sizeof(hostname));
     oss << "(host: " << hostname << ")";
-    UCCL_LOG(ERROR, UCCL_EFA) << oss.str();
+    UCCL_LOG(ERROR) << oss.str();
   }
 
   UCCL_DCHECK(dev_iter != efa_ctl.dev_map.end());

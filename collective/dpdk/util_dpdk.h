@@ -129,7 +129,7 @@ class DPDKFactory {
 
   DPDKSocket* CreateSocket(int queue_id) {
     if (!initialized_) {
-      UCCL_LOG(WARN, UCCL_DPDK) << "DPDKFactory is not initialized";
+      UCCL_LOG(WARN) << "DPDKFactory is not initialized";
       return nullptr;
     }
 
@@ -144,7 +144,7 @@ class DPDKFactory {
 
   void DeInit() {
     if (!initialized_) {
-      UCCL_LOG(WARN, UCCL_DPDK) << "DPDKFactory is not initialized";
+      UCCL_LOG(WARN) << "DPDKFactory is not initialized";
       return;
     }
   }
