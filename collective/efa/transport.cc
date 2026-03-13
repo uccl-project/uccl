@@ -1484,10 +1484,10 @@ void UcclEngine::process_rx_msg(std::vector<FrameDesc*>& pkt_msgs) {
 
     auto it = active_flows_map_.find(flow_id);
     if (it == active_flows_map_.end()) {
-      UCCL_LOG_EVERY_N(ERROR, UCCL_EFA, 1000000)
+      UCCL_LOG_EVERY_N(ERROR, 1000000)
           << "process_rx_msg unknown flow " << flow_id;
       for (auto [flow_id, flow] : active_flows_map_) {
-        UCCL_LOG_EVERY_N(ERROR, UCCL_EFA, 1000000)
+        UCCL_LOG_EVERY_N(ERROR, 1000000)
             << "                active flow " << flow_id;
       }
       socket_->push_pkt_hdr(msgbuf->get_pkt_hdr_addr());
@@ -1892,10 +1892,9 @@ std::tuple<uint16_t, int> Endpoint::uccl_listen() {
   int bind_ret =
       bind(listen_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
   if (bind_ret < 0) {
-    UCCL_LOG(ERROR, UCCL_EFA)
-        << "[Endpoint] Rank " << localRank << " failed to bind port "
-        << listen_port << " (errno: " << errno << ", " << strerror(errno)
-        << ")";
+    UCCL_LOG(ERROR) << "[Endpoint] Rank " << localRank
+                    << " failed to bind port " << listen_port
+                    << " (errno: " << errno << ", " << strerror(errno) << ")";
   }
   UCCL_DCHECK(bind_ret >= 0) << "ERROR: binding";
 

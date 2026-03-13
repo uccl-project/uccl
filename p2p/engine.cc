@@ -121,7 +121,7 @@ UnifiedTask::SpecificData::~SpecificData() {}
 static inline void check_python_signals() {
   PyGILState_STATE gstate = PyGILState_Ensure();
   if (PyErr_CheckSignals() != 0) {
-    UCCL_LOG(FATAL, UCCL_P2P) << "Python signal caught, exiting...";
+    UCCL_LOG(FATAL) << "Python signal caught, exiting...";
   }
   PyGILState_Release(gstate);
 }
@@ -362,7 +362,8 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
     conn_id_to_conn_[conn_id] =
-        new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+        new Conn{conn_id, uccl_conn_id, ip_addr,
+                 static_cast<uint16_t>(remote_port), remote_gpu_idx};
   }
   return true;
 }
@@ -513,7 +514,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
     conn_id_to_conn_[conn_id] =
-        new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+        new Conn{conn_id, uccl_conn_id, ip_addr, 0, remote_gpu_idx};
   }
 
   return true;
@@ -922,6 +923,33 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
 bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, FifoItem const& slot_item,
                           uint64_t* transfer_id) {
+  if (size <= kDirectAsyncNetThreshold) {
+    auto* conn = get_conn(conn_id);
+    if (unlikely(conn == nullptr)) {
+      std::cerr << "[read_async] Error: Invalid conn_id " << conn_id
+                << std::endl;
+      return false;
+    }
+    P2PMhandle* mhandle = get_mhandle(mr_id);
+    if (unlikely(mhandle == nullptr)) {
+      std::cerr << "[read_async] Error: Invalid mr_id " << mr_id << std::endl;
+      return false;
+    }
+
+    ucclRequest ureq = {};
+    FifoItem curr_slot_item = slot_item;
+    curr_slot_item.size = size;
+    while (uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item,
+                           &ureq) == -1) {
+    }
+
+    auto* status = new TransferStatus();
+    status->poll_net_ureq = true;
+    status->ureq = ureq;
+    *transfer_id = reinterpret_cast<uint64_t>(status);
+    return true;
+  }
+
   auto task_ptr =
       create_net_task(conn_id, mr_id, TaskType::READ_NET, dst, size, slot_item);
   if (unlikely(task_ptr == nullptr)) {
@@ -1053,6 +1081,33 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
 bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
                            size_t size, FifoItem const& slot_item,
                            uint64_t* transfer_id) {
+  if (size <= kDirectAsyncNetThreshold) {
+    auto* conn = get_conn(conn_id);
+    if (unlikely(conn == nullptr)) {
+      std::cerr << "[write_async] Error: Invalid conn_id " << conn_id
+                << std::endl;
+      return false;
+    }
+    P2PMhandle* mhandle = get_mhandle(mr_id);
+    if (unlikely(mhandle == nullptr)) {
+      std::cerr << "[write_async] Error: Invalid mr_id " << mr_id << std::endl;
+      return false;
+    }
+
+    ucclRequest ureq = {};
+    FifoItem curr_slot_item = slot_item;
+    curr_slot_item.size = size;
+    while (uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
+                            &ureq) == -1) {
+    }
+
+    auto* status = new TransferStatus();
+    status->poll_net_ureq = true;
+    status->ureq = ureq;
+    *transfer_id = reinterpret_cast<uint64_t>(status);
+    return true;
+  }
+
   auto task_ptr = create_net_task(conn_id, mr_id, TaskType::WRITE_NET, src,
                                   size, slot_item);
   if (unlikely(task_ptr == nullptr)) {
@@ -2177,10 +2232,63 @@ bool Endpoint::add_remote_endpoint(std::vector<uint8_t> const& metadata,
   }
   if (success) {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    auto conn_it = conn_id_to_conn_.find(conn_id);
+    if (conn_it != conn_id_to_conn_.end()) {
+      conn_it->second->ip_addr_ = remote_ip;
+      conn_it->second->remote_port_ = remote_port;
+      conn_it->second->remote_gpu_idx_ = remote_gpu_idx;
+    }
     remote_endpoint_to_conn_id_[metadata] = conn_id;
     return true;
   }
   return false;
+}
+
+bool Endpoint::remove_remote_endpoint(uint64_t conn_id) {
+  std::unique_lock<std::shared_mutex> lock(conn_mu_);
+
+  auto it = conn_id_to_conn_.find(conn_id);
+  if (it == conn_id_to_conn_.end()) {
+    std::cerr << "[remove_remote_endpoint] Error: Invalid conn_id " << conn_id
+              << std::endl;
+    return false;
+  }
+
+  Conn* conn = it->second;
+  uint64_t loopback_conn_id = conn->rdma_loopback_conn_id_;
+
+  // Detach shared memory if this was a local connection
+  if (conn->shm_attached_) {
+    auto& shm = conn->remote_inbox_;
+    uccl::detach_shared_ring(shm.ring, shm.shm_fd, shm.shm_size);
+  }
+
+  // Remove from the metadata memoization map
+  for (auto mit = remote_endpoint_to_conn_id_.begin();
+       mit != remote_endpoint_to_conn_id_.end(); ++mit) {
+    if (mit->second == conn_id) {
+      remote_endpoint_to_conn_id_.erase(mit);
+      break;
+    }
+  }
+
+  delete conn;
+  conn_id_to_conn_.erase(it);
+
+  if (loopback_conn_id != UINT64_MAX) {
+    auto loopback_it = conn_id_to_conn_.find(loopback_conn_id);
+    if (loopback_it != conn_id_to_conn_.end()) {
+      Conn* loopback_conn = loopback_it->second;
+      if (loopback_conn->shm_attached_) {
+        auto& shm = loopback_conn->remote_inbox_;
+        uccl::detach_shared_ring(shm.ring, shm.shm_fd, shm.shm_size);
+      }
+      delete loopback_conn;
+      conn_id_to_conn_.erase(loopback_it);
+    }
+  }
+
+  return true;
 }
 
 bool Endpoint::start_passive_accept() {
@@ -2197,6 +2305,11 @@ bool Endpoint::start_passive_accept() {
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   auto* status = reinterpret_cast<TransferStatus*>(transfer_id);
+  if (status->poll_net_ureq && !status->done.load(std::memory_order_acquire)) {
+    if (uccl_poll_ureq_once(ep_, &status->ureq)) {
+      status->done.store(true, std::memory_order_release);
+    }
+  }
   *is_done = status->done.load(std::memory_order_acquire);
   if (*is_done) {
     delete status;
@@ -2347,9 +2460,8 @@ void Endpoint::send_proxy_thread_func() {
           break;
         }
         default:
-          UCCL_LOG(ERROR, UCCL_P2P)
-              << "Unexpected task type in send processing: "
-              << static_cast<int>(task->type);
+          UCCL_LOG(ERROR) << "Unexpected task type in send processing: "
+                          << static_cast<int>(task->type);
           break;
       }
       auto* status = task->status_ptr;
@@ -2412,9 +2524,8 @@ void Endpoint::recv_proxy_thread_func() {
         case TaskType::SEND_IPC:
         case TaskType::WRITE_NET:
         default:
-          UCCL_LOG(ERROR, UCCL_P2P)
-              << "Unexpected task type in receive processing: "
-              << static_cast<int>(task->type);
+          UCCL_LOG(ERROR) << "Unexpected task type in receive processing: "
+                          << static_cast<int>(task->type);
           break;
       }
       auto* status = task->status_ptr;

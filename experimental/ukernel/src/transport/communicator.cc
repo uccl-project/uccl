@@ -1,11 +1,106 @@
 #include "cq_poller.h"
 #include "transport.h"
+#include "uccl_transport_adapter.h"
+#include "util/net.h"
 #include "util/util.h"
 #include "utils.h"
+#include <algorithm>
 #include <unordered_set>
+#include <ifaddrs.h>
 
 namespace UKernel {
 namespace Transport {
+
+namespace {
+
+bool has_env_value(char const* name) {
+  char const* value = std::getenv(name);
+  return value != nullptr && value[0] != '\0';
+}
+
+bool is_unspecified_ip(std::string const& ip) {
+  return ip.empty() || ip == "0.0.0.0" || ip == "127.0.0.1" ||
+         ip == "localhost";
+}
+
+std::string find_ifname_for_local_ip(std::string const& ip) {
+  if (is_unspecified_ip(ip)) return {};
+
+  ifaddrs* ifs = nullptr;
+  if (::getifaddrs(&ifs) != 0) return {};
+
+  std::string ifname;
+  for (auto* it = ifs; it != nullptr; it = it->ifa_next) {
+    if (!it->ifa_addr || it->ifa_addr->sa_family != AF_INET) continue;
+
+    char buf[INET_ADDRSTRLEN] = {};
+    auto* addr = reinterpret_cast<sockaddr_in*>(it->ifa_addr);
+    if (!::inet_ntop(AF_INET, &addr->sin_addr, buf, sizeof(buf))) continue;
+    if (ip == buf) {
+      ifname = it->ifa_name;
+      break;
+    }
+  }
+
+  ::freeifaddrs(ifs);
+  return ifname;
+}
+
+std::string find_ifname_for_remote_subnet(std::string const& ip) {
+  if (is_unspecified_ip(ip)) return {};
+
+  uccl::socketAddress remote_addr{};
+  uccl::socketAddress local_addr{};
+  char if_name[MAX_IF_NAME_SIZE + 1] = {};
+  std::string ip_port = ip + ":1";
+
+  if (!uccl::get_socket_addr_from_string(&remote_addr, ip_port.c_str())) {
+    return {};
+  }
+
+  int found = uccl::find_interface_match_subnet(
+      if_name, &local_addr, &remote_addr, MAX_IF_NAME_SIZE, 1);
+  if (found != 1) return {};
+
+  return if_name;
+}
+
+void maybe_configure_uccl_socket_ifname(std::string const& remote_hint_ip,
+                                        std::string const& local_hint_ip) {
+  if (has_env_value("UCCL_SOCKET_IFNAME") ||
+      has_env_value("NCCL_SOCKET_IFNAME")) {
+    return;
+  }
+
+  std::string ifname = find_ifname_for_remote_subnet(remote_hint_ip);
+  if (ifname.empty()) {
+    ifname = find_ifname_for_local_ip(local_hint_ip);
+  }
+  if (ifname.empty()) return;
+
+  ::setenv("UCCL_SOCKET_IFNAME", ifname.c_str(), 0);
+  std::cout << "[INFO] Auto-selected UCCL_SOCKET_IFNAME=" << ifname;
+  if (!is_unspecified_ip(remote_hint_ip)) {
+    std::cout << " using remote hint " << remote_hint_ip;
+  } else if (!is_unspecified_ip(local_hint_ip)) {
+    std::cout << " using local hint " << local_hint_ip;
+  }
+  std::cout << std::endl;
+}
+
+std::string get_uccl_remote_hint_ip(
+    std::shared_ptr<CommunicatorConfig> const& config,
+    std::shared_ptr<CommunicatorMeta> const& peer_meta) {
+  if (config && !is_unspecified_ip(config->exchanger_ip)) {
+    return config->exchanger_ip;
+  }
+  if (peer_meta && !is_unspecified_ip(peer_meta->ip)) {
+    return peer_meta->ip;
+  }
+  return {};
+}
+
+}  // namespace
 
 std::string get_local_ip() {
   if (char const* env_ip = std::getenv("UHM_LOCAL_IP")) {
@@ -312,6 +407,69 @@ bool Communicator::connect_to(int rank) {
   std::shared_ptr<EndpointBase> ep;
   bool ret = false;
 
+  if (config_->backend == TransportBackend::UCCL) {
+    // Use UCCL transport
+    if (!uccl_adapter_) {
+      UcclTransportConfig uccl_config;
+      uccl_config.local_ip = local_meta->ip;
+      maybe_configure_uccl_socket_ifname(get_uccl_remote_hint_ip(config_, meta),
+                                         local_meta->ip);
+      uccl_adapter_ = std::make_unique<UcclTransportAdapter>(
+          local_rank_, world_size_, uccl_config);
+    }
+
+    if (uccl_adapter_->has_send_peer(rank)) {
+      return true;
+    }
+
+    // Get best RDMA device index for current GPU
+    int dev_idx = uccl_adapter_->get_best_dev_idx(local_rank_);
+    int gpu_idx = local_rank_;  // GPU ID is stored in local_rank_
+
+    // Get our P2P port and IP from UCCL
+    uint16_t local_port = uccl_adapter_->get_p2p_listen_port(dev_idx);
+    std::string local_ip_addr = uccl_adapter_->get_p2p_listen_ip(dev_idx);
+
+    // Create P2P info for exchange (include GPU and device info)
+    UCCLP2PInfo local_p2p_info(local_ip_addr, local_port, dev_idx, gpu_idx);
+    std::string p2p_key = "uccl_p2p_info_" + std::to_string(global_rank_);
+
+    std::string peer_p2p_key = "uccl_p2p_info_" + std::to_string(rank);
+
+    // connect_to is the active side: publish local info first, then connect.
+    if (!exchanger_client_->publish(p2p_key, local_p2p_info)) {
+      std::cerr << "[ERROR] Failed to publish P2P info for rank "
+                << global_rank_ << std::endl;
+      return false;
+    }
+
+    UCCLP2PInfo remote_p2p_info;
+    if (!exchanger_client_->wait_and_fetch(peer_p2p_key, remote_p2p_info, -1)) {
+      std::cerr << "[ERROR] Failed to fetch P2P info for rank " << rank
+                << std::endl;
+      return false;
+    }
+
+    std::cout << "[INFO] Rank " << global_rank_ << " P2P port " << local_port
+              << " (GPU " << gpu_idx << ", dev " << dev_idx << ")"
+              << " -> Rank " << rank << " P2P port " << remote_p2p_info.port
+              << " (GPU " << remote_p2p_info.gpu_idx << ", dev "
+              << remote_p2p_info.dev_idx << ")" << std::endl;
+
+    ret = uccl_adapter_->connect_to_peer(
+        rank, remote_p2p_info.ip, remote_p2p_info.port, dev_idx, gpu_idx,
+        remote_p2p_info.dev_idx, remote_p2p_info.gpu_idx);
+    if (ret) {
+      std::cout << "[INFO] Communicator " << global_rank_
+                << " UCCL connect_to succeeded to rank " << rank << std::endl;
+    } else {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " UCCL connect_to failed to rank " << rank << std::endl;
+      return false;
+    }
+    return ret;
+  }
+
   if (same_host) {
     // std::cout << "[INFO] Communicator " << global_rank_
     //           << " same host detected, using IPC endpoint" << std::endl;
@@ -367,6 +525,68 @@ bool Communicator::accept_from(int rank) {
   std::shared_ptr<EndpointBase> ep;
   bool ret = false;
 
+  if (config_->backend == TransportBackend::UCCL) {
+    // Use UCCL transport
+    if (!uccl_adapter_) {
+      UcclTransportConfig uccl_config;
+      uccl_config.local_ip = local_meta->ip;
+      maybe_configure_uccl_socket_ifname(get_uccl_remote_hint_ip(config_, meta),
+                                         local_meta->ip);
+      uccl_adapter_ = std::make_unique<UcclTransportAdapter>(
+          local_rank_, world_size_, uccl_config);
+    }
+
+    if (uccl_adapter_->has_recv_peer(rank)) {
+      return true;
+    }
+
+    // Get best RDMA device index for current GPU
+    int dev_idx = uccl_adapter_->get_best_dev_idx(local_rank_);
+    int gpu_idx = local_rank_;  // GPU ID is stored in local_rank_
+
+    // Get our P2P port and IP from UCCL
+    uint16_t local_port = uccl_adapter_->get_p2p_listen_port(dev_idx);
+    std::string local_ip_addr = uccl_adapter_->get_p2p_listen_ip(dev_idx);
+
+    // Create P2P info for exchange (include GPU and device info)
+    UCCLP2PInfo local_p2p_info(local_ip_addr, local_port, dev_idx, gpu_idx);
+    std::string p2p_key = "uccl_p2p_info_" + std::to_string(global_rank_);
+
+    std::string peer_p2p_key = "uccl_p2p_info_" + std::to_string(rank);
+
+    // accept_from is the passive side: wait for peer info, then publish local
+    // info so connect_to can complete its fetch and initiate the TCP connect.
+    UCCLP2PInfo remote_p2p_info;
+    if (!exchanger_client_->wait_and_fetch(peer_p2p_key, remote_p2p_info, -1)) {
+      std::cerr << "[ERROR] Failed to fetch P2P info for rank " << rank
+                << std::endl;
+      return false;
+    }
+
+    if (!exchanger_client_->publish(p2p_key, local_p2p_info)) {
+      std::cerr << "[ERROR] Failed to publish P2P info for rank "
+                << global_rank_ << std::endl;
+      return false;
+    }
+
+    std::cout << "[INFO] Rank " << global_rank_ << " P2P port " << local_port
+              << " (GPU " << gpu_idx << ", dev " << dev_idx << ")"
+              << " <- Rank " << rank << " P2P port " << remote_p2p_info.port
+              << " (GPU " << remote_p2p_info.gpu_idx << ", dev "
+              << remote_p2p_info.dev_idx << ")" << std::endl;
+
+    ret = uccl_adapter_->accept_from_peer(rank);
+    if (ret) {
+      std::cout << "[INFO] Communicator " << global_rank_
+                << " UCCL accept_from succeeded from rank " << rank
+                << std::endl;
+    } else {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " UCCL accept_from failed from rank " << rank << std::endl;
+    }
+    return ret;
+  }
+
   if (same_host) {
     ep = std::make_shared<IPCEndpoint>(config_, this);
     ret = ep->accept_from(rank);
@@ -410,6 +630,15 @@ Communicator::get_endpoint_by_rank(int rank) {
 unsigned Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
                              uint16_t local_mr_id, uint16_t remote_mr_id,
                              bool on_gpu) {
+  if (config_->backend == TransportBackend::UCCL && uccl_adapter_) {
+    // Use UCCL transport
+    unsigned rid = next_uccl_req_id_.fetch_add(1, std::memory_order_relaxed);
+    void* actual_ptr = static_cast<char*>(ptr) + offset;
+    int ret = uccl_adapter_->send_async(rank, actual_ptr, len, local_mr_id,
+                                        remote_mr_id, rid);
+    return ret == 0 ? rid : 0;
+  }
+
   auto [ep, ok] = get_endpoint_by_rank(rank);
   if (!ok || !ep) return 0;
 
@@ -439,6 +668,16 @@ unsigned Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
 
 unsigned Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
                              bool on_gpu) {
+  if (config_->backend == TransportBackend::UCCL && uccl_adapter_) {
+    // Use UCCL transport
+    unsigned rid = next_uccl_req_id_.fetch_add(1, std::memory_order_relaxed);
+    void* actual_ptr = static_cast<char*>(ptr) + offset;
+    auto local_mr = get_local_mr(ptr);
+    int ret =
+        uccl_adapter_->recv_async(rank, actual_ptr, len, local_mr.id, rid);
+    return ret == 0 ? rid : 0;
+  }
+
   auto [ep, ok] = get_endpoint_by_rank(rank);
   if (!ok || !ep) return 0;
 
@@ -486,6 +725,16 @@ bool Communicator::_is_finished_locked(unsigned id) {
 }
 
 bool Communicator::wait_finish(std::vector<unsigned> const& reqs) {
+  if (config_->backend == TransportBackend::UCCL && uccl_adapter_) {
+    if (reqs.empty()) return true;
+    for (auto req_id : reqs) {
+      if (req_id == 0 || !uccl_adapter_->wait_completion(req_id)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
   bool const wait_all = reqs.empty();
   std::unordered_set<unsigned> remaining;
 
@@ -624,18 +873,45 @@ MR Communicator::reg_mr(void* local_buf, size_t len) {
     mr_id_to_local_mr_[id] = info;
   }
 
+  if (config_->backend == TransportBackend::UCCL && uccl_adapter_) {
+    if (!uccl_adapter_->register_memory(id, local_buf, len)) {
+      throw std::runtime_error("UCCL register_memory failed");
+    }
+  }
+
   return info;
 }
 
 bool Communicator::dereg_mr(void* local_buf) {
-  std::lock_guard<std::mutex> lk(local_mr_mu_);
-  auto it = ptr_to_local_ibv_mr_.find(local_buf);
-  if (it == ptr_to_local_ibv_mr_.end()) {
-    return true;
+  uint16_t local_mr_id = 0;
+  bool has_local_mr_id = false;
+  ibv_mr* mr = nullptr;
+  {
+    std::lock_guard<std::mutex> lk(local_mr_mu_);
+    auto it = ptr_to_local_ibv_mr_.find(local_buf);
+    if (it == ptr_to_local_ibv_mr_.end()) {
+      return true;
+    }
+
+    mr = it->second;
+    ptr_to_local_ibv_mr_.erase(it);
+
+    auto info_it = std::find_if(
+        mr_id_to_local_mr_.begin(), mr_id_to_local_mr_.end(),
+        [local_buf](auto const& kv) {
+          return kv.second.address == reinterpret_cast<uint64_t>(local_buf);
+        });
+    if (info_it != mr_id_to_local_mr_.end()) {
+      local_mr_id = info_it->first;
+      has_local_mr_id = true;
+      mr_id_to_local_mr_.erase(info_it);
+    }
   }
 
-  ibv_mr* mr = it->second;
-  ptr_to_local_ibv_mr_.erase(it);
+  if (config_->backend == TransportBackend::UCCL && uccl_adapter_ &&
+      has_local_mr_id) {
+    uccl_adapter_->deregister_memory(local_mr_id);
+  }
 
   if (mr) {
     if (ibv_dereg_mr(mr) != 0) {
@@ -653,25 +929,41 @@ bool Communicator::dereg_mr(void* local_buf) {
 bool Communicator::notify_mr(int remote_rank, MR& mr) {
   if (!exchanger_client_ || !exchanger_client_->valid()) return false;
 
-  // we assume that user will connect to remote before notify MR.
-  auto [ep, ok] = get_endpoint_by_rank(remote_rank);
-  if (!ok || !ep) {
-    throw std::runtime_error("Endpoint is not valid");
-    return false;
+  if (config_->backend != TransportBackend::UCCL) {
+    // we assume that user will connect to remote before notify MR.
+    auto [ep, ok] = get_endpoint_by_rank(remote_rank);
+    if (!ok || !ep) {
+      throw std::runtime_error("Endpoint is not valid");
+      return false;
+    }
+    if (ep->type != EndpointType::RDMA) {
+      std::cout << "MR only support for EndpointRDMA, skip notify mr"
+                << std::endl;
+      return true;
+    }
+  } else if (!uccl_adapter_ || !uccl_adapter_->has_peer(remote_rank)) {
+    throw std::runtime_error("UCCL peer is not connected");
   }
-  if (ep->type != EndpointType::RDMA) {
-    std::cout << "MR only support for EndpointRDMA, skip notify mr"
-              << std::endl;
-    return true;
-  }
-
-  MRInfos wrapper;
-  wrapper.mrs.push_back(mr);
-  std::cout << "[notify MR to rank " << remote_rank << "] addr=" << mr.address
-            << " length=" << mr.length << " key=" << mr.key << std::endl;
 
   std::string key =
       "mr:" + std::to_string(global_rank_) + "->" + std::to_string(remote_rank);
+
+  MRInfos wrapper;
+  exchanger_client_->fetch(key, wrapper);
+  bool replaced = false;
+  for (auto& existing : wrapper.mrs) {
+    if (existing.id == mr.id) {
+      existing = mr;
+      replaced = true;
+      break;
+    }
+  }
+  if (!replaced) {
+    wrapper.mrs.push_back(mr);
+  }
+
+  std::cout << "[notify MR to rank " << remote_rank << "] addr=" << mr.address
+            << " length=" << mr.length << " key=" << mr.key << std::endl;
 
   return exchanger_client_->publish(key, wrapper);
 }
@@ -681,37 +973,59 @@ bool Communicator::wait_mr_notify(int remote_rank, MR& mr) {
     throw std::runtime_error("Exchanger client is not valid");
   }
 
-  auto [ep, ok] = get_endpoint_by_rank(remote_rank);
-  if (!ok || !ep) {
-    throw std::runtime_error("Endpoint is not valid");
-  }
-  if (ep->type != EndpointType::RDMA) {
-    std::cout << "MR only support for EndpointRDMA, skip wait_mr_notify"
-              << std::endl;
-    return true;
+  if (config_->backend != TransportBackend::UCCL) {
+    auto [ep, ok] = get_endpoint_by_rank(remote_rank);
+    if (!ok || !ep) {
+      throw std::runtime_error("Endpoint is not valid");
+    }
+    if (ep->type != EndpointType::RDMA) {
+      std::cout << "MR only support for EndpointRDMA, skip wait_mr_notify"
+                << std::endl;
+      return true;
+    }
+  } else if (!uccl_adapter_ || !uccl_adapter_->has_peer(remote_rank)) {
+    throw std::runtime_error("UCCL peer is not connected");
   }
 
   std::string key =
       "mr:" + std::to_string(remote_rank) + "->" + std::to_string(global_rank_);
 
-  MRInfos wrapper;
-  ok = exchanger_client_->wait_and_fetch(key, wrapper);
-  if (!ok || wrapper.mrs.empty()) {
-    throw std::runtime_error("Failed to fetch MR from remote rank=" +
-                             std::to_string(remote_rank));
-  }
-
-  mr = wrapper.mrs[0];  // only support one mr now
-
   {
     std::lock_guard<std::mutex> lk(remote_mr_mu_);
-    rank_mr_id_to_remote_mr_[remote_rank][mr.id] = mr;
+    auto& pending = rank_to_pending_remote_mrs_[remote_rank];
+    if (!pending.empty()) {
+      mr = pending.front();
+      pending.pop_front();
+      return true;
+    }
   }
 
-  std::cout << "[recv MR from rank " << remote_rank << "] addr=" << mr.address
-            << " length=" << mr.length << " key=" << mr.key << std::endl;
+  while (true) {
+    MRInfos wrapper;
+    bool fetched = exchanger_client_->fetch(key, wrapper);
+    if (fetched && !wrapper.mrs.empty()) {
+      std::lock_guard<std::mutex> lk(remote_mr_mu_);
+      auto& cached = rank_mr_id_to_remote_mr_[remote_rank];
+      auto& pending = rank_to_pending_remote_mrs_[remote_rank];
 
-  return true;
+      for (auto const& fetched_mr : wrapper.mrs) {
+        if (cached.find(fetched_mr.id) != cached.end()) continue;
+        cached[fetched_mr.id] = fetched_mr;
+        pending.push_back(fetched_mr);
+      }
+
+      if (!pending.empty()) {
+        mr = pending.front();
+        pending.pop_front();
+        std::cout << "[recv MR from rank " << remote_rank
+                  << "] addr=" << mr.address << " length=" << mr.length
+                  << " key=" << mr.key << std::endl;
+        return true;
+      }
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
 }
 
 MR Communicator::get_local_mr(void* local_buf) {

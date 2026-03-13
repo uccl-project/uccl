@@ -108,8 +108,7 @@ static void* recv_thread(void* arg);
 int client_init(struct client_t* client, char const* interface_name) {
   // we can only run xdp programs as root
   if (geteuid() != 0) {
-    UCCL_LOG(ERROR, UCCL_AFXDP)
-        << "\nerror: this program must be run as root\n";
+    UCCL_LOG(ERROR) << "\nerror: this program must be run as root\n";
     return 1;
   }
 
@@ -119,7 +118,7 @@ int client_init(struct client_t* client, char const* interface_name) {
 
     struct ifaddrs* addrs;
     if (getifaddrs(&addrs) != 0) {
-      UCCL_LOG(ERROR, UCCL_AFXDP) << "\nerror: getifaddrs failed";
+      UCCL_LOG(ERROR) << "\nerror: getifaddrs failed";
       return 1;
     }
 
@@ -132,7 +131,7 @@ int client_init(struct client_t* client, char const* interface_name) {
               << "found network interface: '" << iap->ifa_name << "'\n";
           client->interface_index = if_nametoindex(iap->ifa_name);
           if (!client->interface_index) {
-            UCCL_LOG(ERROR, UCCL_AFXDP) << "error: if_nametoindex failed\n";
+            UCCL_LOG(ERROR) << "error: if_nametoindex failed\n";
             return 1;
           }
           found = true;
@@ -144,7 +143,7 @@ int client_init(struct client_t* client, char const* interface_name) {
     freeifaddrs(addrs);
 
     if (!found) {
-      UCCL_LOG(ERROR, UCCL_AFXDP)
+      UCCL_LOG(ERROR)
           << "\nerror: could not find any network interface matching "
              "'%s'\n"
           << interface_name;
@@ -158,7 +157,7 @@ int client_init(struct client_t* client, char const* interface_name) {
   client->program =
       xdp_program__open_file("ebpf_client.o", "ebpf_client", NULL);
   if (libxdp_get_error(client->program)) {
-    UCCL_LOG(ERROR, UCCL_AFXDP) << "could not load ebpf_client program";
+    UCCL_LOG(ERROR) << "could not load ebpf_client program";
     return 1;
   }
 
@@ -171,14 +170,13 @@ int client_init(struct client_t* client, char const* interface_name) {
   if (ret == 0) {
     client->attached_native = true;
   } else {
-    UCCL_LOG(WARN, UCCL_AFXDP) << "falling back to skb mode...";
+    UCCL_LOG(WARN) << "falling back to skb mode...";
     ret = xdp_program__attach(client->program, client->interface_index,
                               XDP_MODE_SKB, 0);
     if (ret == 0) {
       client->attached_skb = true;
     } else {
-      UCCL_LOG(ERROR, UCCL_AFXDP)
-          << "failed to attach ebpf_client program to interface";
+      UCCL_LOG(ERROR) << "failed to attach ebpf_client program to interface";
       return 1;
     }
   }
@@ -188,7 +186,7 @@ int client_init(struct client_t* client, char const* interface_name) {
   struct rlimit rlim = {RLIM_INFINITY, RLIM_INFINITY};
 
   if (setrlimit(RLIMIT_MEMLOCK, &rlim)) {
-    UCCL_LOG(ERROR, UCCL_AFXDP) << "could not setrlimit";
+    UCCL_LOG(ERROR) << "could not setrlimit";
     return 1;
   }
 
@@ -199,7 +197,7 @@ int client_init(struct client_t* client, char const* interface_name) {
 
     if (posix_memalign(&client->socket[i].umem_buffer, getpagesize(),
                        buffer_size)) {
-      UCCL_LOG(ERROR, UCCL_AFXDP) << "could not allocate umem_buffer";
+      UCCL_LOG(ERROR) << "could not allocate umem_buffer";
       return 1;
     }
 
@@ -208,7 +206,7 @@ int client_init(struct client_t* client, char const* interface_name) {
         &client->socket[i].umem, client->socket[i].umem_buffer, buffer_size,
         &client->socket[i].fill_queue, &client->socket[i].complete_queue, NULL);
     if (ret) {
-      UCCL_LOG(ERROR, UCCL_AFXDP) << "could not create umem";
+      UCCL_LOG(ERROR) << "could not create umem";
       return 1;
     }
 
@@ -232,8 +230,7 @@ int client_init(struct client_t* client, char const* interface_name) {
                              &client->socket[i].recv_queue,
                              &client->socket[i].send_queue, &xsk_config);
     if (ret) {
-      UCCL_LOG(ERROR, UCCL_AFXDP)
-          << "could not create xsk socket [" << queue_id << "]";
+      UCCL_LOG(ERROR) << "could not create xsk socket [" << queue_id << "]";
       return 1;
     }
 
@@ -255,16 +252,14 @@ int client_init(struct client_t* client, char const* interface_name) {
     ret = pthread_create(&client->recv_thread[i], NULL, recv_thread,
                          &client->socket[i]);
     if (ret) {
-      UCCL_LOG(ERROR, UCCL_AFXDP)
-          << "could not create socket recv thread #" << i;
+      UCCL_LOG(ERROR) << "could not create socket recv thread #" << i;
       return 1;
     }
 
     ret = pthread_create(&client->send_thread[i], NULL, send_thread,
                          &client->socket[i]);
     if (ret) {
-      UCCL_LOG(ERROR, UCCL_AFXDP)
-          << "could not create socket send thread #" << i;
+      UCCL_LOG(ERROR) << "could not create socket send thread #" << i;
       return 1;
     }
   }
@@ -272,7 +267,7 @@ int client_init(struct client_t* client, char const* interface_name) {
   // create stats thread
   ret = pthread_create(&client->stats_thread, NULL, stats_thread, client);
   if (ret) {
-    UCCL_LOG(ERROR, UCCL_AFXDP) << "could not create stats thread";
+    UCCL_LOG(ERROR) << "could not create stats thread";
     return 1;
   }
 
@@ -387,8 +382,8 @@ void socket_send(struct socket_t* socket, int queue_id) {
       socket->last_stall_time = now_us;
     } else if (now_us - socket->last_stall_time > RTO_US) {
       // These inflight packets get lost, we just ignore them
-      UCCL_LOG(WARN, UCCL_AFXDP)
-          << "queue " << queue_id << " tx stall detected, forcing tx...";
+      UCCL_LOG(WARN) << "queue " << queue_id
+                     << " tx stall detected, forcing tx...";
       inflight_pkts = 0;
     }
     return;
@@ -542,14 +537,12 @@ static void* recv_thread(void* arg) {
       xdp_program__bpf_obj(client.program), "xsks_map");
   int xsk_map_fd = bpf_map__fd(map);
   if (xsk_map_fd < 0) {
-    UCCL_LOG(ERROR, UCCL_AFXDP)
-        << "no xsks map found: " << strerror(xsk_map_fd);
+    UCCL_LOG(ERROR) << "no xsks map found: " << strerror(xsk_map_fd);
     exit(0);
   }
   int ret = xsk_socket__update_xskmap(socket->xsk, xsk_map_fd);
   if (ret) {
-    UCCL_LOG(ERROR, UCCL_AFXDP)
-        << "xsks map update fails: " << strerror(xsk_map_fd);
+    UCCL_LOG(ERROR) << "xsks map update fails: " << strerror(xsk_map_fd);
     exit(0);
   }
 
