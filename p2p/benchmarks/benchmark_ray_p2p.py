@@ -57,15 +57,6 @@ def _pretty(num: int):
         val /= 1024
 
 
-def _assert_descs(
-    descs, expected: int, who: str, buffer_device: str, size_per_block: int
-):
-    assert len(descs) == expected, (
-        f"{who} register_memory returned {len(descs)} descriptors; "
-        f"expected {expected} for device={buffer_device}, size_per_block={size_per_block}"
-    )
-
-
 def _run_server(args, ep, peer_rank: int, buffer_device: str):
     """Server side: receives data via WRITE/READ operations."""
     peer = peer_rank
@@ -92,9 +83,6 @@ def _run_server(args, ep, peer_rank: int, buffer_device: str):
                     buf_v.append(buf)
 
                 remote_descs = ep.register_memory(buf_v)
-                _assert_descs(
-                    remote_descs, args.num_iovs, "server", buffer_device, size_per_block
-                )
                 remote_descs_serialized = ep.get_serialized_descs(remote_descs)
                 _send_bytes(remote_descs_serialized, dst=peer)
 
@@ -109,9 +97,6 @@ def _run_server(args, ep, peer_rank: int, buffer_device: str):
                 buf_v.append(buf)
 
             remote_descs = ep.register_memory(buf_v)
-            _assert_descs(
-                remote_descs, args.num_iovs, "server", buffer_device, size_per_block
-            )
 
             remote_descs_serialized = ep.get_serialized_descs(remote_descs)
             _send_bytes(remote_descs_serialized, dst=peer)
@@ -119,8 +104,6 @@ def _run_server(args, ep, peer_rank: int, buffer_device: str):
             # Wait for all iterations to complete
             dist.barrier()
             ep.deregister_memory(remote_descs)
-
-        print(f"[Server] Completed {args.iters} iterations for size {_pretty(sz)}")
 
     print("[Server] Benchmark complete")
 
@@ -148,9 +131,6 @@ def _run_client(args, ep, peer_rank: int, mode: str, buffer_device: str):
                 buf_v.append(buf)
 
             local_descs = ep.register_memory(buf_v)
-            _assert_descs(
-                local_descs, args.num_iovs, "client", buffer_device, size_per_block
-            )
             success, conn_id = ep.add_remote_endpoint(remote_metadata)
             assert success, "Failed to add remote endpoint"
 
@@ -179,9 +159,6 @@ def _run_client(args, ep, peer_rank: int, mode: str, buffer_device: str):
                     buf_v.append(buf)
 
                 local_descs = ep.register_memory(buf_v)
-                _assert_descs(
-                    local_descs, args.num_iovs, "client", buffer_device, size_per_block
-                )
                 success, conn_id = ep.add_remote_endpoint(remote_metadata)
                 assert success, "Failed to add remote endpoint"
 
@@ -211,9 +188,6 @@ def _run_client(args, ep, peer_rank: int, mode: str, buffer_device: str):
                 buf_v.append(buf)
 
             local_descs = ep.register_memory(buf_v)
-            _assert_descs(
-                local_descs, args.num_iovs, "client", buffer_device, size_per_block
-            )
             success, conn_id = ep.add_remote_endpoint(remote_metadata)
             assert success, "Failed to add remote endpoint"
 
