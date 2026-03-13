@@ -332,7 +332,7 @@ def main():
         ],
         help="Comma-separated list of message sizes in bytes",
     )
-    p.add_argument("--iters", type=int, default=10, help="Number of iterations")
+    p.add_argument("--iters", type=int, default=50, help="Number of iterations")
     p.add_argument(
         "--num-iovs",
         type=int,
