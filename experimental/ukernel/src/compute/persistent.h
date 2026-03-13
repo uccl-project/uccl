@@ -7,6 +7,7 @@
 #include "sm_fifo.h"
 #include <atomic>
 #include <iostream>
+#include <type_traits>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -110,6 +111,8 @@ class PersistentKernel {
 
   bool launch() {
     if (launched_) return false;
+    static_assert(std::is_same_v<T, Task>,
+                  "PersistentKernel currently supports Task only");
 
     auto* d_coll = UKernel::Compute::TaskManager::instance().d_coll();
     auto* d_moe = UKernel::Compute::TaskManager::instance().d_moe();
@@ -158,7 +161,7 @@ class PersistentKernel {
     dim3 grid(cfg_.numBlocks);
     dim3 block(cfg_.threadsPerBlock);
 
-    GPU_RT_CHECK(gpuLaunchKernel(basePersistentKernel<T>, grid, block, args,
+    GPU_RT_CHECK(gpuLaunchKernel(basePersistentKernel, grid, block, args,
                                  cfg_.smemSize, stream_));
 
     launched_ = true;

@@ -22,13 +22,11 @@ __device__ __forceinline__ T apply_red(ReduceType op, T a, T b);
 template <typename T>
 __device__ void run_reduce_inplace(CollArgs const& a);
 
-template <typename T>
-__global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* fifos,
-                                     mscclpp::SmDeviceHandle<T>* sm_fifos,
-                                     mscclpp::FifoDeviceHandle* d2c_fifo,
-                                     CollArgs* d_coll, MoeArgs* d_moe,
-                                     GemmArgs* d_gemm,
-                                     bool* should_stop = nullptr);
+__global__ void basePersistentKernel(
+    mscclpp::C2DDeviceHandle<Task>* fifos,
+    mscclpp::SmDeviceHandle<Task>* sm_fifos,
+    mscclpp::FifoDeviceHandle* d2c_fifo, CollArgs* d_coll, MoeArgs* d_moe,
+    GemmArgs* d_gemm, bool* should_stop = nullptr);
 
 }  // namespace Compute
 }  // namespace UKernel

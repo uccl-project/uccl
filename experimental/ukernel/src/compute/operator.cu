@@ -95,9 +95,8 @@ template __device__ void run_reduce_inplace<__half>(CollArgs const&);
 // template __device__ void run_reduce_t<half>(const CollArgs&);
 
 // TODO: using sm id to assign task
-template <typename T>
-__global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* c2d_fifos,
-                                     mscclpp::SmDeviceHandle<T>* sm_fifos,
+__global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
+                                     mscclpp::SmDeviceHandle<Task>* sm_fifos,
                                      mscclpp::FifoDeviceHandle* d2c_fifo,
                                      CollArgs* d_coll, MoeArgs* d_moe,
                                      GemmArgs* d_gemm, bool* should_stop) {
@@ -110,7 +109,7 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* c2d_fifos,
   while (true) {
     if (should_stop && *should_stop) break;
 
-    T* task = fifo.poll();
+    Task* task = fifo.poll();
     if (task == nullptr) continue;
 
     /*
@@ -176,12 +175,6 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* c2d_fifos,
     __syncthreads();
   }
 }
-
-template __global__ void basePersistentKernel<Task>(
-    mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
-    mscclpp::SmDeviceHandle<Task>* sm_fifos,
-    mscclpp::FifoDeviceHandle* d2c_fifo, CollArgs* d_coll, MoeArgs* d_moe,
-    GemmArgs* d_gemm, bool* should_stop);
 
 }  // namespace Compute
 }  // namespace UKernel
