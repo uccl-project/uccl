@@ -19,7 +19,6 @@ import torch.distributed as dist
 
 from uccl import collective
 
-
 _DTYPE_ITEM_SIZE = {
     torch.float16: 2,
     torch.bfloat16: 2,
@@ -44,7 +43,11 @@ def _make_buffer(size_bytes: int, dtype: torch.dtype = torch.float32):
     n_elems = size_bytes // item_size
     if dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
         # fp8 types don't support uniform_ directly; create in float32 then convert
-        tensor = torch.empty(n_elems, device="cuda", dtype=torch.float32).uniform_(-1, 1).to(dtype)
+        tensor = (
+            torch.empty(n_elems, device="cuda", dtype=torch.float32)
+            .uniform_(-1, 1)
+            .to(dtype)
+        )
     else:
         tensor = torch.empty(n_elems, device="cuda", dtype=dtype).uniform_(-1, 1)
     assert tensor.is_contiguous()
@@ -254,7 +257,9 @@ def _run_dual_benchmark(args) -> List[Tuple]:
         print(
             f"[{role_name} Dual Send Recv] {_pretty_size(size):>9} : {avg_gbps:6.2f} Gbps | {avg_gb_sec:5.2f} GB/s"
         )
-        results.append((f"{role_name} Dual", size, _pretty_size(size), avg_gbps, avg_gb_sec))
+        results.append(
+            (f"{role_name} Dual", size, _pretty_size(size), avg_gbps, avg_gb_sec)
+        )
 
     role_name = "Client" if rank == 0 else "Server"
     print(f"[{role_name} Dual] Benchmark complete")
@@ -378,22 +383,22 @@ def main():
         "--sizes",
         type=parse_size_list,
         default=[
-            256,            # 256 B
-            1024,           # 1 KB
-            4096,           # 4 KB
-            16384,          # 16 KB
-            65536,          # 64 KB
-            262144,         # 256 KB
-            1048576,        # 1 MB
-            1048576*4,       # 4 MB
-            1048576*8,       # 8 MB
-            16777216,       # 16 MB
-            33554432,       # 32 MB
-            67108864,       # 64 MB
-            134217728,      # 128 MB
-            268435456,      # 256 MB
-            536870912,      # 512 MB
-            1073741824,     # 1 GB
+            256,  # 256 B
+            1024,  # 1 KB
+            4096,  # 4 KB
+            16384,  # 16 KB
+            65536,  # 64 KB
+            262144,  # 256 KB
+            1048576,  # 1 MB
+            1048576 * 4,  # 4 MB
+            1048576 * 8,  # 8 MB
+            16777216,  # 16 MB
+            33554432,  # 32 MB
+            67108864,  # 64 MB
+            134217728,  # 128 MB
+            268435456,  # 256 MB
+            536870912,  # 512 MB
+            1073741824,  # 1 GB
             # 1073741824*2,     # 2 GB
         ],
     )
@@ -424,7 +429,7 @@ def main():
         metavar="FILE",
         default=None,
         help="Path to CSV file to save benchmark results; when world_size > 1, "
-             "_rank{N} is inserted before the extension for each rank",
+        "_rank{N} is inserted before the extension for each rank",
     )
     args = p.parse_args()
 
