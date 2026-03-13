@@ -7,6 +7,10 @@ int main(int argc, char** argv) {
     test_ccl_plan();
     return 0;
   }
+  if (argc > 1 && std::string(argv[1]) == "ccl-exec") {
+    test_ccl_executor();
+    return 0;
+  }
 
   // test_find_best_rdma_for_gpu(0);
   // test_find_best_rdma_for_gpu(2);
