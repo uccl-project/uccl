@@ -130,6 +130,24 @@ void listener_thread_func(uccl_conn_t* conn) {
   }
 }
 
+// Look up the pre-computed IpcTransferInfo for any address within a registered
+// GPU buffer region.  Adjusts offset and size to match the requested range.
+// Returns false if the address is not registered or has no IPC handle (e.g.
+// host memory).
+static bool get_ipc_info_for_addr(uintptr_t addr, size_t size,
+                                  IpcTransferInfo& out_info) {
+  uintptr_t base_addr;
+  uint64_t mr_id_unused;
+  if (!find_mem_reg(addr, base_addr, mr_id_unused)) return false;
+  auto const& entry = mem_reg_info.at(base_addr);
+  if (!entry.has_ipc) return false;
+  out_info = entry.ipc_info;
+  // Shift the offset within the IPC allocation to point at the sub-range.
+  out_info.offset += (addr - base_addr);
+  out_info.size = size;
+  return true;
+}
+
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
@@ -232,8 +250,9 @@ int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size,
   int dev_idx = uccl::get_dev_idx((void*)data);
   if (dev_idx >= 0) {
     gpuSetDevice(dev_idx);
+    static constexpr size_t kIpcAlignment = 1ul << 20;
     uintptr_t aligned =
-        data & ~(static_cast<uintptr_t>(Endpoint::kIpcAlignment - 1));
+        data & ~(static_cast<uintptr_t>(kIpcAlignment - 1));
     gpuError_t err =
         gpuIpcGetMemHandle(&entry.ipc_info.handle, reinterpret_cast<void*>(aligned));
     if (err == gpuSuccess) {
@@ -255,7 +274,10 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
     // Intra-node path: fifo_item.addr is the remote source buffer's virtual
     // address.  Look up its IpcTransferInfo and dispatch via read_ipc_async.
     IpcTransferInfo info;
-    if (!get_ipc_info_for_addr(fifo_item.addr, size, info)) return -1;
+    if (!get_ipc_info_for_addr(fifo_item.addr, size, info)) {
+      UCCL_LOG(ERROR) << "Failed to get IPC info";
+      return -1;
+    }
     return conn->engine->endpoint->read_ipc_async(
                conn->conn_id, const_cast<void*>(data), size, info, transfer_id)
                ? 0
@@ -279,8 +301,10 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
   if (conn->is_local) {
     std::vector<IpcTransferInfo> info_v(num_iovs);
     for (int i = 0; i < num_iovs; i++) {
-      if (!get_ipc_info_for_addr(fifo_items[i].addr, size_v[i], info_v[i]))
+      if (!get_ipc_info_for_addr(fifo_items[i].addr, size_v[i], info_v[i])) {
+        UCCL_LOG(ERROR) << "Failed to get IPC info";
         return -1;
+      }
     }
     return conn->engine->endpoint->readv_ipc_async(
                conn->conn_id, dst_v, size_v, info_v, num_iovs, transfer_id)
@@ -312,24 +336,6 @@ int uccl_engine_recv(uccl_conn_t* conn, uccl_mr_t mr, void* data,
                                                                           : -1;
 }
 
-// Look up the pre-computed IpcTransferInfo for any address within a registered
-// GPU buffer region.  Adjusts offset and size to match the requested range.
-// Returns false if the address is not registered or has no IPC handle (e.g.
-// host memory).
-static bool get_ipc_info_for_addr(uintptr_t addr, size_t size,
-                                  IpcTransferInfo& out_info) {
-  uintptr_t base_addr;
-  uint64_t mr_id_unused;
-  if (!find_mem_reg(addr, base_addr, mr_id_unused)) return false;
-  auto const& entry = mem_reg_info.at(base_addr);
-  if (!entry.has_ipc) return false;
-  out_info = entry.ipc_info;
-  // Shift the offset within the IPC allocation to point at the sub-range.
-  out_info.offset += (addr - base_addr);
-  out_info.size = size;
-  return true;
-}
-
 int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                       size_t size, FifoItem fifo_item, uint64_t* transfer_id) {
   if (!conn || !data) return -1;
@@ -343,7 +349,10 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
     // address (set by the NIXL plugin at prepXfer time).  Look up its
     // pre-computed IpcTransferInfo and dispatch via write_ipc_async.
     IpcTransferInfo info;
-    if (!get_ipc_info_for_addr(fifo_item.addr, size, info)) return -1;
+    if (!get_ipc_info_for_addr(fifo_item.addr, size, info)) {
+      UCCL_LOG(ERROR) << "Failed to get IPC info";
+      return -1;
+    }
     return conn->engine->endpoint->write_ipc_async(conn->conn_id, data, size,
                                                    info, transfer_id)
                ? 0
@@ -372,8 +381,10 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
     std::vector<void const*> src_v(dst_v.begin(), dst_v.end());
     std::vector<IpcTransferInfo> info_v(num_iovs);
     for (int i = 0; i < num_iovs; i++) {
-      if (!get_ipc_info_for_addr(fifo_items[i].addr, size_v[i], info_v[i]))
+      if (!get_ipc_info_for_addr(fifo_items[i].addr, size_v[i], info_v[i])) {
+        UCCL_LOG(ERROR) << "Failed to get IPC info";
         return -1;
+      }
     }
     return conn->engine->endpoint->writev_ipc_async(
                conn->conn_id, src_v, size_v, info_v, num_iovs, transfer_id)
