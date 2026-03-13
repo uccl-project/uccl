@@ -533,6 +533,88 @@ def start_transfer_dual(size, num_kvblocks, args):
         cleanup_agent(agent)
 
 
+def start_transfer_local(size, num_kvblocks, args):
+    """
+    Single-process local transfer test: one NIXL agent writes from src buffer
+    to dst buffer on the same node via the IPC (NVLink/PCIe) path.
+    This exercises the supportsLocal() code path in the UCCL backend.
+    """
+    op = "WRITE" if args.op_type == "write" else "READ"
+
+    try:
+        # src buffers filled with 1s, dst buffers filled with 0s
+        src_dataset = create_dataset("client", size, num_kvblocks, args.device, args.local_gpu_idx)
+        dst_gpu = args.dst_gpu_idx if args.dst_gpu_idx >= 0 else args.local_gpu_idx
+        dst_dataset = create_dataset("server", size, num_kvblocks, args.device, dst_gpu)
+
+        backend_name = "UCCL" if args.backend == "uccl" else args.backend.upper()
+        config = nixl_agent_config(backends=[backend_name])
+        agent = nixl_agent("local_agent", config)
+
+        src_descs = agent.get_reg_descs(src_dataset)
+        dst_descs = agent.get_reg_descs(dst_dataset)
+        src_reg = agent.register_memory(src_descs)
+        dst_reg = agent.register_memory(dst_descs)
+
+        src_xfer = src_reg.trim()
+        dst_xfer = dst_reg.trim()
+
+        # initialize_xfer with own agent name triggers the local (IPC) path
+        transfer_handle = agent.initialize_xfer(op, src_xfer, dst_xfer, "local_agent")
+
+        total_size = 0
+        total_transfer_time = 0.0
+        warmup = 1 if args.iters > 1 else 0
+
+        for iter_idx in range(args.iters):
+            state = agent.transfer(transfer_handle)
+            assert state != "ERR", "Transfer initiation failed"
+
+            t0 = time.perf_counter()
+            while True:
+                state = agent.check_xfer_state(transfer_handle)
+                assert state != "ERR", "Transfer failed"
+                if state == "DONE":
+                    break
+            t1 = time.perf_counter()
+
+            transfer_time = t1 - t0
+            if iter_idx >= warmup:
+                total_transfer_time += transfer_time
+                total_size += size
+
+            iter_bw = size / transfer_time / 1e9
+            print(
+                f"[PERF] Iteration {iter_idx}: {transfer_time*1000:.2f} ms, {iter_bw:.2f} GB/s",
+                flush=True,
+            )
+
+        # Verify dst buffers contain the src value (1.0)
+        for i, block in enumerate(dst_dataset):
+            assert abs(torch.mean(block.float()).item() - 1.0) < 1e-6, \
+                f"Block {i}: expected 1.0 got {torch.mean(block.float()).item()}"
+
+        effective_iters = max(args.iters - warmup, 1)
+        avg_lat = total_transfer_time / effective_iters
+        gb_sec = total_size / total_transfer_time / 1e9
+        gbps = gb_sec * 8
+
+        src_dev = f"cuda:{args.local_gpu_idx}" if args.device == "gpu" else "cpu"
+        dst_dev = f"cuda:{dst_gpu}" if args.device == "gpu" else "cpu"
+        print(
+            f"[local {src_dev}→{dst_dev}] {_pretty_size(size):>8} : "
+            f"{gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {avg_lat:.6f} s  ✓ verified"
+        )
+
+        agent.release_xfer_handle(transfer_handle)
+        agent.deregister_memory(src_reg)
+        agent.deregister_memory(dst_reg)
+
+    except Exception as e:
+        import traceback
+        print(f"Error in local transfer: {traceback.format_exc()}")
+
+
 def _pretty_size(num_bytes: int) -> str:
     units = ["B", "KB", "MB", "GB"]
     val = float(num_bytes)
@@ -621,6 +703,17 @@ def main():
         action="store_true",
         help="Run the benchmark on two directions",
     )
+    p.add_argument(
+        "--local",
+        action="store_true",
+        help="Single-process local transfer test (IPC path via supportsLocal)",
+    )
+    p.add_argument(
+        "--dst-gpu-idx",
+        type=int,
+        default=-1,
+        help="Destination GPU index for local transfers (-1 = same as --local-gpu-idx)",
+    )
     args = p.parse_args()
 
     assert not (
@@ -636,7 +729,15 @@ def main():
     print(
         f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
     )
-    if args.dual:
+    if args.local:
+        assert args.backend == "uccl", "Local mode only supported with --backend uccl"
+        dst = args.dst_gpu_idx if args.dst_gpu_idx >= 0 else args.local_gpu_idx
+        src_dev = f"cuda:{args.local_gpu_idx}" if args.device == "gpu" else "cpu"
+        dst_dev = f"cuda:{dst}" if args.device == "gpu" else "cpu"
+        print(f"Local IPC transfer: {src_dev} → {dst_dev}")
+        for size in args.sizes:
+            start_transfer_local(size, args.num_kvblocks, args)
+    elif args.dual:
         for size in args.sizes:
             start_transfer_dual(size, args.num_kvblocks, args)
     else:
