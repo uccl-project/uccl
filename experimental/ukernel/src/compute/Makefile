@@ -10,7 +10,7 @@ GDRCOPY_INCLUDEDIR = $(GDRCOPY_ROOT)/include
 GDRCOPY_LIBDIR = $(GDRCOPY_ROOT)/src
 GDRCOPY_HEADER = $(GDRCOPY_INCLUDEDIR)/gdrapi.h
 
-INCLUDES := -I./ -I./fifo -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR)
+INCLUDES := -I./ -I./fifo -I../ccl -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR)
 LIBS := -L$(CUDA_HOME)/lib -lcudart -lcuda -lnuma \
         -L$(GDRCOPY_LIBDIR) -lgdrapi
 
@@ -18,30 +18,36 @@ RPATH = -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR)
 
 COMMON_CPP := fifo/c2d_fifo.cc fifo/d2c_fifo.cpp fifo/sm_fifo.cc selector.cc
 COMMON_CU  := operator.cu
+CCL_CPP := ../ccl/topology.cc ../ccl/plan.cc ../ccl/backend.cc ../ccl/executor.cc
+CCL_OBJ := ccl_topology.o ccl_plan.o ccl_backend_common.o ccl_executor.o
+COMPUTE_CCL_OBJ := ccl_backend.o
 
 TEST_SRC   := test_persistent.cc
+TEST_CCL_SRC := test_ccl_persistent.cc
 BENCH_SRC  := benchmarks/bench_fifo.cu
 BENCH_FULL_SRC  := benchmarks/bench_full_fifo.cu
 BENCH_SM_SRC  := benchmarks/bench_sm_fifo.cu
 
 COMMON_OBJ := $(COMMON_CPP:.cc=.o) $(COMMON_CU:.cu=.o)
 TEST_OBJ   := $(TEST_SRC:.cc=.o)
+TEST_CCL_OBJ := $(TEST_CCL_SRC:.cc=.o)
 BENCH_OBJ  := $(BENCH_SRC:.cu=.o)
 BENCH_FULL_OBJ  := $(BENCH_FULL_SRC:.cu=.o)
 BENCH_SM_OBJ := $(BENCH_SM_SRC:.cu=.o)
 
 TEST_BIN  := test_persistent
+TEST_CCL_BIN := test_ccl_persistent
 BENCH_BIN := benchmarks/bench_fifo
 BENCH_FULL_BIN := benchmarks/bench_full_fifo
 BENCH_SM_BIN := benchmarks/bench_sm_fifo
 
-ALL_BIN   := $(TEST_BIN) $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN}
+ALL_BIN   := $(TEST_BIN) $(TEST_CCL_BIN) $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN}
 
 .PHONY: all test bench clean ensure-gdrcopy
 
 all: $(ALL_BIN)
 
-test: $(TEST_BIN)
+test: $(TEST_BIN) $(TEST_CCL_BIN)
 
 bench: $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN}
 
@@ -66,11 +72,30 @@ ensure-gdrcopy:
 	$(NVCC) -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(COMMON_OBJ) $(TEST_OBJ) $(BENCH_OBJ) $(BENCH_FULL_OBJ) $(BENCH_SM_OBJ): | ensure-gdrcopy
+$(CCL_OBJ) $(COMPUTE_CCL_OBJ) $(TEST_CCL_OBJ): | ensure-gdrcopy
+
+ccl_topology.o: ../ccl/topology.cc
+	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+ccl_plan.o: ../ccl/plan.cc
+	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+ccl_backend_common.o: ../ccl/backend.cc
+	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+ccl_executor.o: ../ccl/executor.cc
+	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
 $(TEST_OBJ): $(TEST_SRC)
 	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(TEST_BIN): $(COMMON_OBJ) $(TEST_OBJ)
+	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+
+$(TEST_CCL_OBJ): $(TEST_CCL_SRC)
+	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
+
+$(TEST_CCL_BIN): $(COMMON_OBJ) $(CCL_OBJ) $(COMPUTE_CCL_OBJ) $(TEST_CCL_OBJ)
 	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
 
 $(BENCH_BIN): $(COMMON_OBJ) $(BENCH_OBJ)
