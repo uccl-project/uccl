@@ -178,7 +178,7 @@ static constexpr size_t kRingCapacity = 16384;  // Must be power of 2
 static constexpr size_t kInFlightMaxSizeKB =
     10240000;  // Max in-flight packets per channel
 
-constexpr size_t kMinCompressBytes = 2 * 1024 * 1024;      // 1MB
+constexpr size_t kMinCompressBytes = 2 * 1024 * 1024;       // 1MB
 constexpr size_t kCompressBufferSize = 1024 * 1024 * 1024;  // 1 GB
 
 static constexpr uint32_t INVALID_RANK_ID =

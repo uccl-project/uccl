@@ -87,14 +87,6 @@ def _run_server(args) -> List[Tuple]:
 
         elapsed = time.perf_counter() - start
 
-        # check if tensor is filled with size
-        # if not tensor.allclose(torch.tensor(size, dtype=args.torch_dtype).cuda()):
-        #     print(f"[Server] WARNING: Tensor is not filled with {size}")
-        #     print(f"[Server] Tensor: {tensor}")
-        #     print(f"[Server] Tensor size: {tensor.size()}")
-        #     print(f"[Server] Tensor dtype: {tensor.dtype}")
-        #     print(f"[Server] Tensor device: {tensor.device}")
-
         gbps = (total * 8) / elapsed / 1e9
         gb_sec = total / elapsed / 1e9
         collective.deregister_tensor(tensor)
