@@ -31,7 +31,7 @@ LDFLAGS    := -L$(CONDA_LIB_HOME) \
 GDRCOPY_ROOT := $(abspath ../../thirdparty/gdrcopy)
 
 # Local includes must come first to avoid conflicts with UCCL headers
-LOCAL_INCLUDES := -Iinclude -Isrc/transport -Isrc/compute -Isrc/compute/fifo
+LOCAL_INCLUDES := -Iinclude -Isrc/transport -Isrc/compute -Isrc/compute/fifo -Isrc/ccl
 
 # System and external library includes
 INCLUDES := -I$(CUDA_PATH)/include -I/usr/include -I../../include -I$(GDRCOPY_ROOT)/include
