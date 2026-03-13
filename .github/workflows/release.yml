@@ -64,14 +64,14 @@ jobs:
             image_name: uccl-builder-cuda
             package_name: uccl-cu12
             for_pypi: true
-            gpu_arch: "8.0+PTX;9.0+PTX"
+            gpu_arch: "9.0+PTX"
           # CUDA 13
           - name: cu13
             target: cuda13
             image_name: uccl-builder-cuda13
             package_name: uccl-cu13
             for_pypi: true
-            gpu_arch: "8.0+PTX;9.0+PTX"
+            gpu_arch: "9.0+PTX"
           # CUDA 12 + EFA
           - name: cu12-efa
             target: cuda
@@ -79,7 +79,7 @@ jobs:
             package_name: uccl-cu12-efa
             is_efa: "1"
             for_pypi: true
-            gpu_arch: "8.0+PTX;9.0+PTX"
+            gpu_arch: "9.0+PTX"
           # CUDA 13 + EFA
           - name: cu13-efa
             target: cuda13
@@ -87,21 +87,21 @@ jobs:
             package_name: uccl-cu13-efa
             is_efa: "1"
             for_pypi: true
-            gpu_arch: "8.0+PTX;9.0+PTX"
+            gpu_arch: "9.0+PTX"
           # ROCm
           - name: rocm
             target: rocm
             image_name: uccl-builder-rocm
             package_name: uccl-rocm
             for_pypi: false
-            gpu_arch: "gfx942;gfx950"
+            gpu_arch: "gfx942,gfx950"
           # TheRock (python-packaged ROCm)
           - name: therock
             target: therock
             image_name: uccl-builder-therock
             package_name: uccl-rocm
             for_pypi: false
-            gpu_arch: "gfx942;gfx950"
+            gpu_arch: "gfx942,gfx950"
 
     steps:
       - name: Checkout with submodules
