@@ -269,12 +269,14 @@ def test_remove_then_transfer_fails():
 
     dist.barrier()
 
-    # Now try to transfer using the removed conn_id — should fail
-    success, _transfer_id = ep.transfer(conn_id, "write", local_descs, remote_descs)
-    assert success is False, (
-        f"Expected transfer to fail after removing remote endpoint, "
-        f"but got success={success}"
-    )
+    # Now try to transfer using the removed conn_id — should raise invalid conn_id
+    try:
+        ep.transfer(conn_id, "write", local_descs, remote_descs)
+        raise AssertionError(
+            "Expected transfer to raise RuntimeError after removing remote endpoint"
+        )
+    except RuntimeError as e:
+        assert "Invalid conn_id" in str(e), f"Expected Invalid conn_id error, got: {e}"
 
     ep.deregister_memory(local_descs)
 
