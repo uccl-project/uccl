@@ -44,5 +44,41 @@ class ComputePersistentKernelBackend final : public UKernel::CCL::Backend {
   std::unordered_map<uint64_t, SubmittedTask> submitted_;
 };
 
+class ComputeCopyEngineBackend final : public UKernel::CCL::Backend {
+ public:
+  ComputeCopyEngineBackend(void* dst_base, void const* src_base, int dst_device = -1,
+                           int src_device = -1, void* staging_base = nullptr,
+                           gpuStream_t stream = nullptr);
+  ~ComputeCopyEngineBackend() override;
+
+  char const* name() const override;
+  bool supports(UKernel::CCL::ExecutionOpKind kind) const override;
+  UKernel::CCL::BackendToken submit(UKernel::CCL::ExecutionOp const& op) override;
+  bool poll(UKernel::CCL::BackendToken token) override;
+  void release(UKernel::CCL::BackendToken token) override;
+
+  uint64_t submissions() const { return submissions_; }
+
+ private:
+  struct SubmittedCopy {
+    gpuEvent_t event = nullptr;
+  };
+
+  void* byte_offset(void* base, size_t offset) const;
+  void const* byte_offset(void const* base, size_t offset) const;
+  void set_device(int device) const;
+
+  void* dst_base_ = nullptr;
+  void const* src_base_ = nullptr;
+  void* staging_base_ = nullptr;
+  int dst_device_ = 0;
+  int src_device_ = 0;
+  gpuStream_t stream_ = nullptr;
+  bool owns_stream_ = false;
+  uint64_t next_token_ = 1;
+  uint64_t submissions_ = 0;
+  std::unordered_map<uint64_t, SubmittedCopy> submitted_;
+};
+
 }  // namespace Compute
 }  // namespace UKernel

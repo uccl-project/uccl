@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../compute/task.h"
 #include "backend.h"
 #include "plan.h"
 #include <cstddef>
@@ -22,6 +23,10 @@ struct CollectiveConfig {
   size_t bytes_per_rank = 0;
   size_t chunk_bytes = 0;
   AlgorithmKind algorithm = AlgorithmKind::Ring;
+  UKernel::Compute::CpuBackendKind requested_cpu_backend =
+      UKernel::Compute::CpuBackendKind::Auto;
+  UKernel::Compute::CpuBackendSelectorConfig cpu_selector{};
+  UKernel::Compute::DeviceCapabilities device_caps{};
 };
 
 struct CollectiveOpHandle {

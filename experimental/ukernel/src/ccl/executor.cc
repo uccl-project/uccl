@@ -22,6 +22,28 @@ PlanRequest make_plan_request(CollectiveKind kind, CollectiveConfig const& confi
   return request;
 }
 
+void assign_copy_backends(CollectivePlan& plan, CollectiveConfig const& config,
+                          ExecutorBackends const& backends) {
+  for (auto& step : plan.steps) {
+    for (auto& op : step.ops) {
+      if (op.kind != ExecutionOpKind::PkCopy) continue;
+
+      auto selected = UKernel::Compute::resolve_cpu_backend_kind(
+          config.requested_cpu_backend, true, op.chunk.size_bytes,
+          config.device_caps, config.cpu_selector);
+      if (selected == UKernel::Compute::CpuBackendKind::Ce) {
+        if (backends.ce != nullptr &&
+            backends.ce->supports(ExecutionOpKind::CeCopy)) {
+          op.kind = ExecutionOpKind::CeCopy;
+        } else if (config.requested_cpu_backend ==
+                   UKernel::Compute::CpuBackendKind::Ce) {
+          throw std::invalid_argument("CE backend requested but unavailable");
+        }
+      }
+    }
+  }
+}
+
 enum class StepState : uint32_t { Pending, Running, Completed };
 
 struct InflightOp {
@@ -247,13 +269,17 @@ CollectiveOpHandle Executor::submit(CollectivePlan plan) {
 }
 
 CollectiveOpHandle Executor::submit_allgather(CollectiveConfig const& config) {
-  return submit(build_plan(
-      make_plan_request(CollectiveKind::AllGather, config)));
+  CollectivePlan plan =
+      build_plan(make_plan_request(CollectiveKind::AllGather, config));
+  assign_copy_backends(plan, config, impl_->backends);
+  return submit(std::move(plan));
 }
 
 CollectiveOpHandle Executor::submit_allreduce(CollectiveConfig const& config) {
-  return submit(build_plan(
-      make_plan_request(CollectiveKind::AllReduce, config)));
+  CollectivePlan plan =
+      build_plan(make_plan_request(CollectiveKind::AllReduce, config));
+  assign_copy_backends(plan, config, impl_->backends);
+  return submit(std::move(plan));
 }
 
 bool Executor::poll(CollectiveOpHandle handle) { return impl_->poll(handle); }

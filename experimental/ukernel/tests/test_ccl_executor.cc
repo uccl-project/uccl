@@ -118,7 +118,35 @@ void test_ccl_executor() {
   assert(persistent_backend2.submissions() == 1);
   routed_executor.release(routed_handle);
 
+  MockBackend ce_selector_backend(1);
+  PersistentKernelBackend pk_selector_backend(1);
+  ExecutorBackends ce_selected_backends{};
+  ce_selected_backends.ce = &ce_selector_backend;
+  ce_selected_backends.persistent = &pk_selector_backend;
+  Executor ce_selected_executor(ce_selected_backends);
+
+  CollectiveConfig ce_gather{};
+  ce_gather.algorithm = AlgorithmKind::Ring;
+  ce_gather.nranks = 4;
+  ce_gather.rank = 1;
+  ce_gather.channels = 2;
+  ce_gather.bytes_per_rank = 1024;
+  ce_gather.chunk_bytes = 256;
+  ce_gather.requested_cpu_backend = UKernel::Compute::CpuBackendKind::Auto;
+  ce_gather.device_caps.has_copy_engine_path = true;
+  ce_gather.cpu_selector.copy_engine_threshold_bytes = 1;
+
+  CollectiveOpHandle ce_gather_handle =
+      ce_selected_executor.submit_allgather(ce_gather);
+  ce_selected_executor.wait(ce_gather_handle);
+  assert(ce_selected_executor.status(ce_gather_handle) ==
+         CollectiveOpStatus::Completed);
+  assert(ce_selector_backend.submissions() == 12);
+  assert(pk_selector_backend.submissions() == 0);
+  ce_selected_executor.release(ce_gather_handle);
+
   std::cout << "[test_ccl_executor] PK-only executor PASSED\n";
   std::cout << "[test_ccl_executor] collective submit API PASSED\n";
   std::cout << "[test_ccl_executor] mixed backend routing PASSED\n";
+  std::cout << "[test_ccl_executor] CE selector routing PASSED\n";
 }

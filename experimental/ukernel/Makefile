@@ -99,8 +99,10 @@ TORCH_LDFLAGS := \
 
 LDFLAGS += -Wl,-rpath,$(PYTORCH_RPATH)
 
-# Source files - exclude benchmarks and compute directory
-SRC_CPP := $(shell find src -name '*.cc' | grep -v 'src/compute' | grep -v 'benchmarks')
+# Source files - exclude benchmarks and most compute directory pieces.
+# Keep compute/selector.cc because ccl/executor uses the shared selector logic.
+SRC_CPP := $(shell find src -name '*.cc' | grep -v 'benchmarks' | grep -v 'src/compute/' | sort)
+SRC_CPP += src/compute/selector.cc
 SRC_CU  := $(shell find src -name '*.cu' | grep -v 'benchmarks')
 TEST_DIR := tests
 SRC_TEST := $(shell find $(TEST_DIR) -name 'test_*.cc')
