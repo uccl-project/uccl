@@ -199,10 +199,10 @@ void IPCEndpoint::proxy_thread_func() {
 
     bool ok = false;
     if (t.type == IpcTaskType::SEND) {
-      std::cout << "consume a IPC send creq from task_ring_" << std::endl;
+      // std::cout << "consume a IPC send creq from task_ring_" << std::endl;
       ok = send_(t.peer_rank, t.req);
     } else {
-      std::cout << "consume a IPC recv creq from task_ring_" << std::endl;
+      // std::cout << "consume a IPC recv creq from task_ring_" << std::endl;
       ok = recv_(t.peer_rank, t.req);
     }
 

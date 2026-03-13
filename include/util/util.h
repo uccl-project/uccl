@@ -47,7 +47,7 @@ namespace uccl {
 #define UCCL_LOG_EP UCCL_VLOG(2) << "[Endpoint] "
 #define UCCL_LOG_ENGINE UCCL_VLOG(3) << "[Engine] "
 #define UCCL_LOG_IO UCCL_VLOG(4) << "[IO] "
-#define UCCL_LOG_ERROR UCCL_LOG(ERROR, UCCL_UTIL) << "[Error] "
+#define UCCL_LOG_ERROR UCCL_LOG(ERROR) << "[Error] "
 
 #define POISON_64 UINT64_MAX
 #define POISON_32 UINT32_MAX
@@ -571,7 +571,7 @@ static inline jring_t* create_ring(size_t element_size, size_t element_count) {
   jring_t* ring = UCCL_CHECK_NOTNULL(reinterpret_cast<jring_t*>(
       aligned_alloc(hardware_constructive_interference_size, ring_sz)));
   if (jring_init(ring, element_count, element_size, 1, 1) < 0) {
-    UCCL_LOG(ERROR, UCCL_UTIL) << "Failed to initialize ring buffer";
+    UCCL_LOG(ERROR) << "Failed to initialize ring buffer";
     free(ring);
     exit(EXIT_FAILURE);
   }
@@ -936,7 +936,7 @@ static inline int open_ephemeral_port(uint16_t& assigned_port) {
 // Function to convert MAC string to hex char array
 static inline bool str_to_mac(std::string const& macStr, char mac[6]) {
   if (macStr.length() != 17) {
-    UCCL_LOG(ERROR, UCCL_UTIL) << "Invalid MAC address format.";
+    UCCL_LOG(ERROR) << "Invalid MAC address format.";
     return false;
   }
 
@@ -949,7 +949,7 @@ static inline bool str_to_mac(std::string const& macStr, char mac[6]) {
     }
     return true;
   } else {
-    UCCL_LOG(ERROR, UCCL_UTIL) << "Invalid MAC address format.";
+    UCCL_LOG(ERROR) << "Invalid MAC address format.";
     return false;
   }
 }
@@ -971,13 +971,13 @@ static inline std::string get_dev_mac(char const* dev_name) {
   std::string path = Format("/sys/class/net/%s/address", dev_name);
   std::ifstream file(path);
   if (!file.is_open()) {
-    UCCL_LOG(ERROR, UCCL_UTIL) << "Failed to open " << path;
+    UCCL_LOG(ERROR) << "Failed to open " << path;
     return "";
   }
 
   std::string mac;
   if (!std::getline(file, mac)) {
-    UCCL_LOG(ERROR, UCCL_UTIL) << "Failed to read " << path;
+    UCCL_LOG(ERROR) << "Failed to read " << path;
     return "";
   }
 
@@ -1198,20 +1198,20 @@ inline int get_dev_numa_node(char const* dev_name) {
       Format("/sys/class/infiniband/%s/device/numa_node", dev_name);
   std::ifstream file(path);
   if (!file.is_open()) {
-    UCCL_LOG(ERROR, UCCL_UTIL) << "Failed to open " << path;
+    UCCL_LOG(ERROR) << "Failed to open " << path;
     return -1;
   }
 
   std::string line;
   if (!std::getline(file, line)) {
-    UCCL_LOG(ERROR, UCCL_UTIL) << "Failed to read " << path;
+    UCCL_LOG(ERROR) << "Failed to read " << path;
     return -1;
   }
 
   auto numa_node = std::stoi(line);
   if (numa_node == -1) {
-    UCCL_LOG(WARN, UCCL_UTIL)
-        << "NUMA node is -1 for " << dev_name << ", defaulting to node 0";
+    UCCL_LOG(WARN) << "NUMA node is -1 for " << dev_name
+                   << ", defaulting to node 0";
     numa_node = 0;
   }
   return numa_node;
@@ -1227,8 +1227,7 @@ static inline void pin_thread_to_cpu(int cpu) {
   CPU_SET(cpu, &cpuset);
 
   if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset)) {
-    UCCL_LOG(ERROR, UCCL_UTIL)
-        << "Failed to set thread affinity to CPU " << cpu;
+    UCCL_LOG(ERROR) << "Failed to set thread affinity to CPU " << cpu;
   }
 }
 
@@ -1237,7 +1236,7 @@ inline void pin_thread_to_numa(int numa_node) {
       Format("/sys/devices/system/node/node%d/cpulist", numa_node);
   std::ifstream cpumap_file(cpumap_path);
   if (!cpumap_file.is_open()) {
-    UCCL_LOG(ERROR, UCCL_UTIL) << "Failed to open " << cpumap_path;
+    UCCL_LOG(ERROR) << "Failed to open " << cpumap_path;
     return;
   }
 
@@ -1267,8 +1266,8 @@ inline void pin_thread_to_numa(int numa_node) {
   }
 
   if (sched_setaffinity(0, sizeof(cpu_set_t), &cpuset)) {
-    UCCL_LOG(ERROR, UCCL_UTIL)
-        << "Failed to set thread affinity to NUMA node " << numa_node;
+    UCCL_LOG(ERROR) << "Failed to set thread affinity to NUMA node "
+                    << numa_node;
   }
 }
 

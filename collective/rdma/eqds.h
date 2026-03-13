@@ -13,6 +13,7 @@
 #include "util_buffpool.h"
 #include "util_timer.h"
 #include <infiniband/verbs.h>
+#include <atomic>
 #include <iomanip>
 #include <list>
 #include <optional>
@@ -297,7 +298,7 @@ class EQDS {
 
   // Shutdown the EQDS pacer thread.
   inline void shutdown(void) {
-    shutdown_ = true;
+    shutdown_.store(true, std::memory_order_release);
     pacer_th_.join();
   }
 
@@ -313,7 +314,7 @@ class EQDS {
 
   uint64_t pacing_interval_tsc_;
 
-  bool shutdown_ = false;
+  std::atomic<bool> shutdown_{false};
 };
 
 }  // namespace eqds
