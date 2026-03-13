@@ -61,8 +61,8 @@ dietgpu::FloatType getFloatTypeFromString(std::string const& type_str) {
   } else if (type_str == "fp32" || type_str == "float32") {
     return dietgpu::FloatType::kFloat32;
   } else {
-    UCCL_LOG(WARN, UCCL_RDMA)
-        << "Unknown float type '" << type_str << "', defaulting to fp32";
+    UCCL_LOG(WARN) << "Unknown float type '" << type_str
+                   << "', defaulting to fp32";
     return dietgpu::FloatType::kFloat32;
   }
 }
@@ -134,8 +134,8 @@ bool compareBuffers(void const* buf1, void const* buf2, size_t num_elements,
     for (size_t i = 0; i < num_elements; ++i) {
       if (std::fabs(data1[i] - data2[i]) > tolerance) {
         if (mismatches < max_print) {
-          UCCL_LOG(WARN, UCCL_RDMA) << "Mismatch at index " << i << ": "
-                                    << data1[i] << " vs " << data2[i];
+          UCCL_LOG(WARN) << "Mismatch at index " << i << ": " << data1[i]
+                         << " vs " << data2[i];
         }
         mismatches++;
       }
@@ -147,9 +147,8 @@ bool compareBuffers(void const* buf1, void const* buf2, size_t num_elements,
     for (size_t i = 0; i < num_elements; ++i) {
       if (data1[i] != data2[i]) {
         if (mismatches < max_print) {
-          UCCL_LOG(WARN, UCCL_RDMA)
-              << "Mismatch at index " << i << ": 0x" << std::hex << data1[i]
-              << " vs 0x" << data2[i] << std::dec;
+          UCCL_LOG(WARN) << "Mismatch at index " << i << ": 0x" << std::hex
+                         << data1[i] << " vs 0x" << data2[i] << std::dec;
         }
         mismatches++;
       }
@@ -157,8 +156,8 @@ bool compareBuffers(void const* buf1, void const* buf2, size_t num_elements,
   }
 
   if (mismatches > 0) {
-    UCCL_LOG(ERROR, UCCL_RDMA) << "Total mismatches: " << mismatches
-                               << " out of " << num_elements << " elements";
+    UCCL_LOG(ERROR) << "Total mismatches: " << mismatches << " out of "
+                    << num_elements << " elements";
     return false;
   }
   return true;
@@ -204,7 +203,7 @@ bool testCompressionRoundtrip(Compressor& compressor,
   auto end_compress = std::chrono::high_resolution_clock::now();
 
   if (!compress_ok) {
-    UCCL_LOG(ERROR, UCCL_RDMA) << "Compression failed!";
+    UCCL_LOG(ERROR) << "Compression failed!";
     return false;
   }
 
@@ -234,7 +233,7 @@ bool testCompressionRoundtrip(Compressor& compressor,
   auto end_decompress = std::chrono::high_resolution_clock::now();
 
   if (!decompress_ok) {
-    UCCL_LOG(ERROR, UCCL_RDMA) << "Decompression failed!";
+    UCCL_LOG(ERROR) << "Decompression failed!";
     return false;
   }
 
@@ -255,7 +254,7 @@ bool testCompressionRoundtrip(Compressor& compressor,
   if (match) {
     UCCL_LOG(INFO, UCCL_RDMA) << "Roundtrip test PASSED!";
   } else {
-    UCCL_LOG(ERROR, UCCL_RDMA) << "Roundtrip test FAILED!";
+    UCCL_LOG(ERROR) << "Roundtrip test FAILED!";
   }
 
   return match;
@@ -296,7 +295,7 @@ bool testRequestWorkflow(Compressor& compressor, MemoryAllocator& allocator,
   // Compress on sender
   bool compress_ok = compressor.compress(send_req);
   if (!compress_ok) {
-    UCCL_LOG(ERROR, UCCL_RDMA) << "Sender compression failed!";
+    UCCL_LOG(ERROR) << "Sender compression failed!";
     return false;
   }
 
@@ -325,7 +324,7 @@ bool testRequestWorkflow(Compressor& compressor, MemoryAllocator& allocator,
   // Decompress
   bool decompress_ok = compressor.decompress(recv_req);
   if (!decompress_ok) {
-    UCCL_LOG(ERROR, UCCL_RDMA) << "Receiver decompression failed!";
+    UCCL_LOG(ERROR) << "Receiver decompression failed!";
     return false;
   }
 
@@ -342,7 +341,7 @@ bool testRequestWorkflow(Compressor& compressor, MemoryAllocator& allocator,
   if (match) {
     UCCL_LOG(INFO, UCCL_RDMA) << "Request workflow test PASSED!";
   } else {
-    UCCL_LOG(ERROR, UCCL_RDMA) << "Request workflow test FAILED!";
+    UCCL_LOG(ERROR) << "Request workflow test FAILED!";
   }
 
   return match;
@@ -479,7 +478,7 @@ int main(int argc, char* argv[]) {
   if (all_passed) {
     UCCL_LOG(INFO, UCCL_RDMA) << "   ALL TESTS PASSED";
   } else {
-    UCCL_LOG(ERROR, UCCL_RDMA) << "   SOME TESTS FAILED";
+    UCCL_LOG(ERROR) << "   SOME TESTS FAILED";
   }
   UCCL_LOG(INFO, UCCL_RDMA) << "========================================";
 

@@ -46,7 +46,7 @@ void EQDS::handle_pull_request(void) {
         std::atomic_thread_fence(std::memory_order_acquire);
         break;
       default:
-        UCCL_LOG(ERROR, UCCL_EFA) << "Unknown opcode: " << msg.opcode;
+        UCCL_LOG(ERROR) << "Unknown opcode: " << msg.opcode;
         break;
     }
     if (++budget >= 16) break;

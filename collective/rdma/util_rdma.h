@@ -434,23 +434,26 @@ static void* envIbAddrRange(sa_family_t af, int* mask) {
   *(maskStrPtr++) = '\0';
 
   if (inet_pton(af, addrStrPtr, ret) == 0) {
-    UCCL_LOG(WARN, UCCL_RDMA)
-        << "NET/IB: Ip address '" << addrStrPtr << "' is invalid for family "
-        << ((af == AF_INET) ? "AF_INET" : "AF_INET6") << ", ignoring address";
+    UCCL_LOG(WARN) << "NET/IB: Ip address '" << addrStrPtr
+                   << "' is invalid for family "
+                   << ((af == AF_INET) ? "AF_INET" : "AF_INET6")
+                   << ", ignoring address";
     return NULL;
   }
 
   *mask = (int)strtol(maskStrPtr, NULL, 10);
   if (af == AF_INET && *mask > 32) {
-    UCCL_LOG(WARN, UCCL_RDMA)
-        << "NET/IB: Ip address mask '" << *mask << "' is invalid for family "
-        << ((af == AF_INET) ? "AF_INET" : "AF_INET6") << ", ignoring mask";
+    UCCL_LOG(WARN) << "NET/IB: Ip address mask '" << *mask
+                   << "' is invalid for family "
+                   << ((af == AF_INET) ? "AF_INET" : "AF_INET6")
+                   << ", ignoring mask";
     *mask = 0;
     ret = NULL;
   } else if (af == AF_INET6 && *mask > 128) {
-    UCCL_LOG(WARN, UCCL_RDMA)
-        << "NET/IB: Ip address mask '" << *mask << "' is invalid for family "
-        << ((af == AF_INET) ? "AF_INET" : "AF_INET6") << ", ignoring mask";
+    UCCL_LOG(WARN) << "NET/IB: Ip address mask '" << *mask
+                   << "' is invalid for family "
+                   << ((af == AF_INET) ? "AF_INET" : "AF_INET6")
+                   << ", ignoring mask";
     *mask = 0;
     ret = NULL;
   }
@@ -543,18 +546,16 @@ static bool ncclIbRoceGetVersionNum(char const* deviceName, int portNum,
 
   int fd = open(roceTypePath, O_RDONLY);
   if (fd == -1) {
-    UCCL_LOG(WARN, UCCL_RDMA)
-        << "NET/IB: open failed in ncclIbRoceGetVersionNum: "
-        << strerror(errno);
+    UCCL_LOG(WARN) << "NET/IB: open failed in ncclIbRoceGetVersionNum: "
+                   << strerror(errno);
     return false;
   }
   int ret = read(fd, gidRoceVerStr, 15);
   close(fd);
 
   if (ret == -1) {
-    UCCL_LOG(WARN, UCCL_RDMA)
-        << "NET/IB: read failed in ncclIbRoceGetVersionNum: "
-        << strerror(errno);
+    UCCL_LOG(WARN) << "NET/IB: read failed in ncclIbRoceGetVersionNum: "
+                   << strerror(errno);
     return false;
   }
 
@@ -669,7 +670,7 @@ static int has_ibv_reg_mr_iova2() {
   if (!ibvhandle) {
     ibvhandle = dlopen("libibverbs.so.1", RTLD_NOW);
     if (!ibvhandle) {
-      UCCL_LOG(WARN, UCCL_RDMA) << "Failed to open libibverbs.so[.1]";
+      UCCL_LOG(WARN) << "Failed to open libibverbs.so[.1]";
       return 0;
     }
   }

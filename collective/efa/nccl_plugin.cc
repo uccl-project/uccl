@@ -116,7 +116,7 @@ ncclResult_t pluginPciPath(char const* ib_name, char** path) {
   snprintf(devicePath, 256, "/sys/class/infiniband/%s/device", ib_name);
   char* p = realpath(devicePath, NULL);
   if (p == NULL) {
-    UCCL_LOG(ERROR, UCCL_EFA) << "Could not find device path for " << ib_name;
+    UCCL_LOG(ERROR) << "Could not find device path for " << ib_name;
     return ncclInternalError;
   }
   *path = p;

@@ -26,7 +26,7 @@ class TxRing : public PmdRing {
     int ret = rte_eth_tx_queue_setup(this->GetPortId(), this->GetRingId(),
                                      this->GetDescNum(), SOCKET_ID_ANY, &conf_);
     if (ret != 0) {
-      UCCL_LOG(FATAL, UCCL_DPDK)
+      UCCL_LOG(FATAL)
           << "rte_eth_tx_queue_setup() faled. Cannot setup TX queue.";
     }
   }
