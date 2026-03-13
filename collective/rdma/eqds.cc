@@ -5,6 +5,7 @@
 #include "util/list.h"
 #include "util_rdma.h"
 #include <infiniband/verbs.h>
+#include <pthread.h>
 
 namespace uccl {
 
@@ -63,7 +64,7 @@ void EQDS::run_pacer(void) {
 void EQDS::handle_grant_credit() {
   struct list_head *pos, *n;
   uint32_t budget = 0;
-  uint16_t total_consumed;
+  uint16_t total_consumed = 0;
   PullQuanta consumed;
 
   if (!list_empty(&active_senders_)) {
@@ -86,14 +87,9 @@ void EQDS::handle_grant_credit() {
 
         total_consumed += consumed;
 
-        if (total_consumed >= kCreditPerPull * kSendersPerPull)
+        if (total_consumed >= kCreditPerPull * kSendersPerPull ||
+            ++budget >= kSendersPerPull)
           break;
-        else
-          continue;
-
-        if (++budget >= kSendersPerPull) {
-          break;
-        }
       }
     }
   } else {
@@ -138,8 +134,7 @@ bool EQDS::poll_cq(struct PacerCreditQPWrapper* pc_qpw) {
       auto chunk_addr = cq_ex->wr_id;
       pc_qpw->pacer_credit_chunk_pool_->free_buff(chunk_addr);
     } else {
-      UCCL_LOG(ERROR, UCCL_RDMA)
-          << "pacer credit CQ state error: " << cq_ex->status;
+      UCCL_LOG(ERROR) << "pacer credit CQ state error: " << cq_ex->status;
     }
 
     pc_qpw->poll_cq_cnt_--;
@@ -174,7 +169,7 @@ void EQDS::handle_pull_request(void) {
         std::atomic_thread_fence(std::memory_order_acquire);
         break;
       default:
-        UCCL_LOG(ERROR, UCCL_RDMA) << "Unknown opcode: " << msg.opcode;
+        UCCL_LOG(ERROR) << "Unknown opcode: " << msg.opcode;
         break;
     }
     if (++budget >= 16) break;
@@ -242,6 +237,38 @@ bool EQDS::grant_credit(EQDSCC* eqds_cc, bool idle, PullQuanta* ret_increment) {
 // For original EQDS, it stalls the pacer when ECN ratio reaches a threshold
 // (i.e., 10%). Here we use resort to RTT-based stall.
 void EQDS::update_cc_state(void) {}
+
+EQDS::EQDS(int dev, double link_bandwidth) : dev_(dev), shutdown_(false) {
+  last_pacing_tsc_ = rdtsc();
+
+  // Compute pacing interval: time to transmit (kCreditPerPull *
+  // kSendersPerPull) pull quanta worth of data at link rate. pacing_interval =
+  // (kCreditPerPull * kSendersPerPull * PULL_QUANTUM) /
+  //                   link_bandwidth  [in seconds]
+  double pacing_interval_sec =
+      static_cast<double>(kCreditPerPull * kSendersPerPull * PULL_QUANTUM) /
+      link_bandwidth;
+  double pacing_interval_us = pacing_interval_sec * 1e6;
+  pacing_interval_tsc_ = us_to_cycles(pacing_interval_us, freq_ghz);
+
+  INIT_LIST_HEAD(&active_senders_);
+  INIT_LIST_HEAD(&idle_senders_);
+  INIT_LIST_HEAD(&poll_cq_list_);
+
+  // Start the pacer thread.
+  pacer_th_ = std::thread([this]() {
+    // Pin to a dedicated CPU for the pacer.
+    auto cpu = PACER_CPU_START + dev_;
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(cpu, &cpuset);
+    pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+
+    while (!shutdown_.load(std::memory_order_acquire)) {
+      run_pacer();
+    }
+  });
+}
 
 }  // namespace eqds
 

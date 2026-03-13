@@ -94,14 +94,14 @@ jobs:
             image_name: uccl-builder-rocm
             package_name: uccl-rocm
             for_pypi: false
-            gpu_arch: "gfx942"
+            gpu_arch: "gfx942;gfx950"
           # TheRock (python-packaged ROCm)
           - name: therock
             target: therock
             image_name: uccl-builder-therock
             package_name: uccl-rocm
             for_pypi: false
-            gpu_arch: "gfx942"
+            gpu_arch: "gfx942;gfx950"
 
     steps:
       - name: Checkout with submodules

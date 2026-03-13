@@ -316,6 +316,12 @@ inline void RDMAEndpoint::initialize_resources(int total_num_engines) {
 }
 
 void RDMAEndpoint::cleanup_resources() {
+  for (auto* eqds_ptr : eqds_) {
+    if (eqds_ptr) {
+      eqds_ptr->shutdown();
+    }
+  }
+
   for (auto& flows : active_flows_vec_) {
     for (auto* flow : flows) {
       if (flow) {
@@ -662,7 +668,7 @@ void UcclRDMAEngine::handle_install_ctx_on_engine(Channel::CtrlMsg& ctrl_work) {
       auto credit_qp = rdma_ctx->credit_qp_;
       ret = modify_qp_rtr(credit_qp, dev, &rdma_ctx->remote_ctx_, credit_rqpn);
       UCCL_DCHECK(ret == 0) << "Failed to modify Ctrl QP to RTR";
-      ret = modify_qp_rts(credit_qp, false);
+      ret = modify_qp_rts(credit_qp, true);
       UCCL_DCHECK(ret == 0) << "Failed to modify Ctrl QP to RTS";
     }
 
@@ -1962,7 +1968,7 @@ RDMAContext::RDMAContext(TimerManager* rto, uint32_t* engine_unacked_bytes,
   if constexpr (kReceiverCCA == RECEIVER_CCA_EQDS) {
     // Create Credit QP, SCQ/RCQ and MR for engine or pacer.
     util_rdma_create_qp_seperate_cq(
-        context_, &credit_qp_, IBV_QPT_UC, true, false,
+        context_, &credit_qp_, IBV_QPT_RC, true, false,
         (struct ibv_cq**)&pacer_credit_cq_ex_,
         (struct ibv_cq**)&engine_credit_cq_ex_, false, kCQSize, pd_,
         factory_dev->ib_port_num, eqds::CreditChunkBuffPool::kNumChunk,
@@ -2882,16 +2888,21 @@ int RDMAContext::poll_credit_cq(void) {
 
     while (1) {
       if (cq_ex->status == IBV_WC_SUCCESS) {
-        // Completion for receiving ACKs.
+        // Completion for receiving credit pull packets.
         chunk_addr = cq_ex->wr_id;
+#ifdef INTEL_RDMA_NIC
+        // For irdma CQ_EX, WC opcode mapping relies only on op_type.
+        // Pacer posts credits using IBV_WR_SEND.
+        if (ibv_wc_read_opcode(cq_ex) == IBV_WC_SEND) {
+#else
         if (ibv_wc_read_opcode(cq_ex) == IBV_WC_RECV) {
+#endif
           rx_credit(chunk_addr);
           credit_recv_wrs_.post_rq_cnt++;
         }
         engine_credit_chunk_pool_->free_buff(chunk_addr);
       } else {
-        UCCL_LOG(ERROR, UCCL_RDMA)
-            << "Credit CQ state error: " << cq_ex->status;
+        UCCL_LOG(ERROR) << "Credit CQ state error: " << cq_ex->status;
       }
 
       if (++cq_budget == kMaxBatchCQ || ibv_next_poll(cq_ex)) break;
@@ -3142,10 +3153,9 @@ void RDMAContext::rc_rx_chunk(T* wc_or_cq_ex) {
   UCCL_DCHECK(req->ureq);
 
   if (req->type != RecvRequest::RECV || req->ureq->context != flow) {
-    UCCL_LOG(ERROR, UCCL_RDMA)
-        << "Can't find corresponding request or this request is "
-           "invalid for this chunk. Dropping. "
-        << req->type;
+    UCCL_LOG(ERROR) << "Can't find corresponding request or this request is "
+                       "invalid for this chunk. Dropping. "
+                    << req->type;
     // This should never happen.
     UCCL_CHECK(0);
     return;

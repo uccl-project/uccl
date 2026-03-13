@@ -29,10 +29,17 @@ inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
 
   struct ibv_qp_init_attr_ex qp_attr = {};
   memset(&qp_attr, 0, sizeof(qp_attr));
-  qp_attr.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
-  qp_attr.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE |
-                           IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM |
-                           IBV_QP_EX_WITH_RDMA_READ;
+
+  uint32_t vendor_id = ctx->getVendorID();
+  if (vendor_id == 0x8086) {  // Intel irdma
+    // Does not support IBV_QP_INIT_ATTR_SEND_OPS_FLAGS.
+    qp_attr.comp_mask = IBV_QP_INIT_ATTR_PD;
+  } else {
+    qp_attr.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
+    qp_attr.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE |
+                             IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM |
+                             IBV_QP_EX_WITH_RDMA_READ;
+  }
 
   qp_attr.cap.max_send_wr = kMaxSendWr;
   qp_attr.cap.max_recv_wr = kMaxRecvWr;
@@ -109,7 +116,7 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
     attr.ah_attr.static_rate = 0;
     memset(&attr.ah_attr.grh, 0, sizeof(attr.ah_attr.grh));
   } else {
-    UCCL_LOG(ERROR, UCCL_P2P) << "Unknown link layer: " << port_attr.link_layer;
+    UCCL_LOG(ERROR) << "Unknown link layer: " << port_attr.link_layer;
     throw std::runtime_error("Unknown link layer");
   }
 
@@ -156,10 +163,9 @@ inline bool IBChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
     uint64_t wr_id = wc->wr_id;
     auto status = wc->status;
     if (unlikely(status != IBV_WC_SUCCESS)) {
-      UCCL_LOG(WARN, UCCL_P2P)
-          << "poll_once - channel_id: " << channel_id
-          << ", CQE error, wr_id=" << wr_id << ", status=" << status << " ("
-          << ibv_wc_status_str(status) << ")";
+      UCCL_LOG(WARN) << "poll_once - channel_id: " << channel_id
+                     << ", CQE error, wr_id=" << wr_id << ", status=" << status
+                     << " (" << ibv_wc_status_str(status) << ")";
     } else {
       CQMeta cq_data{};
       cq_data.wr_id = wr_id;

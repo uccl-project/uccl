@@ -1,4 +1,5 @@
 #include "scheduler.h"
+#include "operator.h"
 #include <stdexcept>
 
 namespace UKernel {
