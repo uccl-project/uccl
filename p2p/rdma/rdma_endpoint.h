@@ -147,7 +147,7 @@ class NICEndpoint {
   bool checkSendComplete_once(uint64_t rank_id, int64_t wr_id) {
     // UCCL_LOG(INFO, UCCL_RDMA) << "checkSendComplete - rank_id: " << rank_id
     //           << ", wr_id: " << wr_id;
-
+    std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
     auto it = send_channel_groups_.find(rank_id);
     if (unlikely(it == send_channel_groups_.end())) {
       throw std::runtime_error("Send channel group not found for rank_id: " +
