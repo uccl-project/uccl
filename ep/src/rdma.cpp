@@ -1,7 +1,5 @@
 #include "rdma.hpp"
 #include "common.hpp"
-#include "peer_copy.cuh"
-#include "peer_copy_worker.hpp"
 #include "proxy_ctx.hpp"
 #include "rdma_util.hpp"
 #include "util/gpu_rt.h"
