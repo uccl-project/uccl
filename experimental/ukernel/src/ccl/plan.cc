@@ -70,7 +70,9 @@ CollectivePlan build_allgather_ring_plan(PlanRequest const& request) {
           ring.wrap(request.rank - ring_step - 1));
       chunk.chunk_index = static_cast<uint32_t>(chunk_index);
       chunk.channel_id = static_cast<uint32_t>(chunk_index % request.channels);
-      chunk.offset_bytes = chunk_offset(chunk_index, request.chunk_bytes);
+      chunk.offset_bytes =
+          static_cast<size_t>(chunk.owner_rank) * request.bytes_per_rank +
+          chunk_offset(chunk_index, request.chunk_bytes);
       chunk.size_bytes =
           chunk_size(request.bytes_per_rank, request.chunk_bytes, chunk_index);
 
@@ -147,7 +149,7 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
   }
 
   for (int ring_step = 0; ring_step < request.nranks - 1; ++ring_step) {
-    int gathered_owner = ring.wrap(request.rank - ring_step - 1);
+    int gathered_owner = ring.wrap(request.rank - ring_step);
     for (size_t chunk_index = 0; chunk_index < chunks_per_shard; ++chunk_index) {
       ChunkRange chunk;
       chunk.owner_rank = static_cast<uint32_t>(gathered_owner);

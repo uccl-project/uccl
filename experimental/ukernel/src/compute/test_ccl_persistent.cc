@@ -10,6 +10,7 @@
 namespace {
 
 constexpr int kNumElems = 1024;
+constexpr int kGatherElemsPerRank = kNumElems / 2;
 
 static void ck(gpuError_t e, char const* msg) {
   if (e != gpuSuccess) {
@@ -27,42 +28,6 @@ static void fill(std::vector<float>& v, float base, float step) {
   for (size_t i = 0; i < v.size(); ++i) v[i] = base + step * static_cast<float>(i);
 }
 
-UKernel::CCL::CollectivePlan make_plan(size_t bytes) {
-  using namespace UKernel::CCL;
-
-  CollectivePlan plan;
-  plan.collective = CollectiveKind::AllReduce;
-  plan.algorithm = AlgorithmKind::Ring;
-  plan.nranks = 1;
-  plan.rank = 0;
-  plan.channels = 2;
-  plan.bytes_per_rank = bytes;
-  plan.chunk_bytes = bytes / 2;
-
-  CollectiveStep copy_step;
-  copy_step.step_id = 0;
-  copy_step.phase = StepPhase::DirectCopy;
-  copy_step.src_rank = 0;
-  copy_step.dst_rank = 0;
-  copy_step.chunk = ChunkRange{0, 0, 0, 0, bytes / 2};
-  copy_step.ops.push_back(
-      ExecutionOp{0, ExecutionOpKind::PkCopy, 0, 0, copy_step.chunk, {}});
-  plan.steps.push_back(copy_step);
-
-  CollectiveStep reduce_step;
-  reduce_step.step_id = 1;
-  reduce_step.phase = StepPhase::ReduceScatter;
-  reduce_step.src_rank = 0;
-  reduce_step.dst_rank = 0;
-  reduce_step.predecessors = {0};
-  reduce_step.chunk = ChunkRange{0, 1, 1, bytes / 2, bytes / 2};
-  reduce_step.ops.push_back(
-      ExecutionOp{1, ExecutionOpKind::PkReduce, 0, 0, reduce_step.chunk, {}});
-  plan.steps.push_back(reduce_step);
-
-  return plan;
-}
-
 }  // namespace
 
 int main() {
@@ -76,78 +41,165 @@ int main() {
   config.fifoCapacity = 16;
   config.smemSize = 0;
 
-  std::vector<float> h_src(kNumElems);
-  std::vector<float> h_dst(kNumElems);
-  std::vector<float> h_out(kNumElems, 0.0f);
-  fill(h_src, 1.0f, 0.25f);
-  fill(h_dst, 10.0f, 0.5f);
+  std::vector<float> h_gather_src(kNumElems, 0.0f);
+  std::vector<float> h_gather_dst(kNumElems, 0.0f);
+  std::vector<float> h_gather_out(kNumElems, 0.0f);
+  for (int i = 0; i < kGatherElemsPerRank; ++i) {
+    h_gather_dst[i] = 100.0f + static_cast<float>(i);
+    h_gather_src[kGatherElemsPerRank + i] = 200.0f + static_cast<float>(i);
+  }
 
-  float* d_src = nullptr;
-  float* d_dst = nullptr;
-  ck(gpuMalloc(&d_src, sizeof(float) * kNumElems), "gpuMalloc d_src");
-  ck(gpuMalloc(&d_dst, sizeof(float) * kNumElems), "gpuMalloc d_dst");
-  ck(gpuMemcpy(d_src, h_src.data(), sizeof(float) * kNumElems,
+  std::vector<float> h_reduce_src(kNumElems, 0.0f);
+  std::vector<float> h_reduce_dst(kNumElems, 0.0f);
+  std::vector<float> h_reduce_out(kNumElems, 0.0f);
+  fill(h_reduce_dst, 10.0f, 0.5f);
+  for (int i = 0; i < kGatherElemsPerRank; ++i) {
+    h_reduce_src[i] = h_reduce_dst[i] + (1.0f + 0.25f * static_cast<float>(i));
+  }
+  for (int i = kGatherElemsPerRank; i < kNumElems; ++i) {
+    h_reduce_src[i] = 1.0f + 0.25f * static_cast<float>(i);
+  }
+
+  float* d_gather_src = nullptr;
+  float* d_gather_dst = nullptr;
+  float* d_reduce_src = nullptr;
+  float* d_reduce_dst = nullptr;
+  ck(gpuMalloc(&d_gather_src, sizeof(float) * kNumElems), "gpuMalloc d_gather_src");
+  ck(gpuMalloc(&d_gather_dst, sizeof(float) * kNumElems), "gpuMalloc d_gather_dst");
+  ck(gpuMalloc(&d_reduce_src, sizeof(float) * kNumElems), "gpuMalloc d_reduce_src");
+  ck(gpuMalloc(&d_reduce_dst, sizeof(float) * kNumElems), "gpuMalloc d_reduce_dst");
+  ck(gpuMemcpy(d_gather_src, h_gather_src.data(), sizeof(float) * kNumElems,
                gpuMemcpyHostToDevice),
-     "copy src");
-  ck(gpuMemcpy(d_dst, h_dst.data(), sizeof(float) * kNumElems,
+     "copy gather src");
+  ck(gpuMemcpy(d_gather_dst, h_gather_dst.data(), sizeof(float) * kNumElems,
                gpuMemcpyHostToDevice),
-     "copy dst");
+     "copy gather dst");
+  ck(gpuMemcpy(d_reduce_src, h_reduce_src.data(), sizeof(float) * kNumElems,
+               gpuMemcpyHostToDevice),
+     "copy reduce src");
+  ck(gpuMemcpy(d_reduce_dst, h_reduce_dst.data(), sizeof(float) * kNumElems,
+               gpuMemcpyHostToDevice),
+     "copy reduce dst");
 
   Compute::PersistentKernel<Compute::Task> kernel(config);
   kernel.launch();
 
-  Compute::ComputePersistentKernelBackend pk_backend(
-      kernel, d_dst, d_src, Compute::DataType::Fp32, Compute::ReduceType::Sum,
-      Compute::TransferPath::RegisterOp, config.numBlocks);
+  Compute::ComputePersistentKernelBackend gather_backend(
+      kernel, d_gather_dst, d_gather_src, Compute::DataType::Fp32,
+      Compute::ReduceType::Sum, Compute::TransferPath::RegisterOp,
+      config.numBlocks);
+  Compute::ComputePersistentKernelBackend reduce_backend(
+      kernel, d_reduce_dst, d_reduce_src, Compute::DataType::Fp32,
+      Compute::ReduceType::Sum, Compute::TransferPath::RegisterOp,
+      config.numBlocks);
 
-  CCL::ExecutorBackends backends{};
-  backends.persistent = &pk_backend;
+  CCL::PlanRequest gather_request{};
+  gather_request.collective = CCL::CollectiveKind::AllGather;
+  gather_request.algorithm = CCL::AlgorithmKind::Ring;
+  gather_request.nranks = 2;
+  gather_request.rank = 0;
+  gather_request.channels = 2;
+  gather_request.bytes_per_rank =
+      sizeof(float) * static_cast<size_t>(kGatherElemsPerRank);
+  gather_request.chunk_bytes = gather_request.bytes_per_rank / 2;
 
-  CCL::Executor executor(backends);
-  CCL::CollectiveOpHandle handle =
-      executor.submit(make_plan(sizeof(float) * kNumElems));
-  executor.wait(handle);
-  if (executor.status(handle) != CCL::CollectiveOpStatus::Completed) {
-    std::cerr << "executor failed\n";
+  CCL::PlanRequest reduce_request{};
+  reduce_request.collective = CCL::CollectiveKind::AllReduce;
+  reduce_request.algorithm = CCL::AlgorithmKind::Ring;
+  reduce_request.nranks = 2;
+  reduce_request.rank = 0;
+  reduce_request.channels = 2;
+  reduce_request.bytes_per_rank = sizeof(float) * static_cast<size_t>(kNumElems);
+  reduce_request.chunk_bytes = reduce_request.bytes_per_rank / 4;
+
+  CCL::ExecutorBackends gather_backends{};
+  gather_backends.persistent = &gather_backend;
+  CCL::Executor gather_executor(gather_backends);
+
+  CCL::CollectiveOpHandle gather_handle =
+      gather_executor.submit(CCL::build_plan(gather_request));
+  gather_executor.wait(gather_handle);
+  if (gather_executor.status(gather_handle) !=
+      CCL::CollectiveOpStatus::Completed) {
+    std::cerr << "allgather executor failed\n";
     return 2;
   }
-  executor.release(handle);
+  gather_executor.release(gather_handle);
+
+  CCL::ExecutorBackends reduce_backends{};
+  reduce_backends.persistent = &reduce_backend;
+  CCL::Executor reduce_executor(reduce_backends);
+
+  CCL::CollectiveOpHandle reduce_handle =
+      reduce_executor.submit(CCL::build_plan(reduce_request));
+  reduce_executor.wait(reduce_handle);
+  if (reduce_executor.status(reduce_handle) !=
+      CCL::CollectiveOpStatus::Completed) {
+    std::cerr << "allreduce executor failed\n";
+    return 3;
+  }
+  reduce_executor.release(reduce_handle);
 
   kernel.stop();
 
-  ck(gpuMemcpy(h_out.data(), d_dst, sizeof(float) * kNumElems,
+  ck(gpuMemcpy(h_gather_out.data(), d_gather_dst, sizeof(float) * kNumElems,
                gpuMemcpyDeviceToHost),
-     "copy out");
+     "copy gather out");
+  ck(gpuMemcpy(h_reduce_out.data(), d_reduce_dst, sizeof(float) * kNumElems,
+               gpuMemcpyDeviceToHost),
+     "copy reduce out");
 
-  size_t bad = 0;
-  size_t half = static_cast<size_t>(kNumElems / 2);
-  for (size_t i = 0; i < half; ++i) {
-    if (!feq(h_out[i], h_src[i])) {
-      if (bad < 8) {
-        std::cerr << "[COPY MISMATCH] i=" << i << " got=" << h_out[i]
-                  << " exp=" << h_src[i] << "\n";
+  size_t gather_bad = 0;
+  for (int i = 0; i < kGatherElemsPerRank; ++i) {
+    float local_expected = 100.0f + static_cast<float>(i);
+    float remote_expected = 200.0f + static_cast<float>(i);
+    if (!feq(h_gather_out[i], local_expected)) {
+      if (gather_bad < 8) {
+        std::cerr << "[ALLGATHER LOCAL MISMATCH] i=" << i
+                  << " got=" << h_gather_out[i]
+                  << " exp=" << local_expected << "\n";
       }
-      ++bad;
+      ++gather_bad;
+    }
+    if (!feq(h_gather_out[kGatherElemsPerRank + i], remote_expected)) {
+      if (gather_bad < 8) {
+        std::cerr << "[ALLGATHER REMOTE MISMATCH] i=" << i
+                  << " got=" << h_gather_out[kGatherElemsPerRank + i]
+                  << " exp=" << remote_expected << "\n";
+      }
+      ++gather_bad;
     }
   }
-  for (size_t i = half; i < static_cast<size_t>(kNumElems); ++i) {
-    float expected = h_dst[i] + h_src[i];
-    if (!feq(h_out[i], expected)) {
-      if (bad < 8) {
-        std::cerr << "[REDUCE MISMATCH] i=" << i << " got=" << h_out[i]
-                  << " exp=" << expected << "\n";
+  if (gather_bad) {
+    std::cerr << "CCL persistent allgather FAILED mismatches=" << gather_bad
+              << "\n";
+    return 4;
+  }
+
+  size_t reduce_bad = 0;
+  for (int i = 0; i < kNumElems; ++i) {
+    float expected = 10.0f + 0.5f * static_cast<float>(i) +
+                     (1.0f + 0.25f * static_cast<float>(i));
+    if (!feq(h_reduce_out[i], expected)) {
+      if (reduce_bad < 8) {
+        std::cerr << "[ALLREDUCE MISMATCH] i=" << i << " got="
+                  << h_reduce_out[i] << " exp=" << expected << "\n";
       }
-      ++bad;
+      ++reduce_bad;
     }
   }
-  if (bad) {
-    std::cerr << "CCL persistent backend FAILED mismatches=" << bad << "\n";
-    return 3;
+  if (reduce_bad) {
+    std::cerr << "CCL persistent allreduce FAILED mismatches=" << reduce_bad
+              << "\n";
+    return 5;
   }
 
-  std::cout << "CCL persistent backend PASSED\n";
+  std::cout << "CCL persistent allgather PASSED\n";
+  std::cout << "CCL persistent allreduce PASSED\n";
 
-  ck(gpuFree(d_src), "free src");
-  ck(gpuFree(d_dst), "free dst");
+  ck(gpuFree(d_gather_src), "free gather src");
+  ck(gpuFree(d_gather_dst), "free gather dst");
+  ck(gpuFree(d_reduce_src), "free reduce src");
+  ck(gpuFree(d_reduce_dst), "free reduce dst");
   return 0;
 }
