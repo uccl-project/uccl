@@ -282,8 +282,9 @@ class RDMAChannel {
   }
 
   inline int postRequest(std::shared_ptr<RDMASendRequest> req) {
-    if (ctx_->getVendorID() == 0x1dd8) {
-      // Devices that don't support ibv_wr_xxx API
+    if (ctx_->getVendorID() == 0x1dd8 ||  // Broadcom
+        ctx_->getVendorID() == 0x8086) {  // Intel irdma
+      // These NICs don't support ibv_wr_* extended posting API.
       return __postRequest(req);
     }
 

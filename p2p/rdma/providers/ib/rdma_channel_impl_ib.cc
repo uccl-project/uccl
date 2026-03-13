@@ -29,10 +29,17 @@ inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
 
   struct ibv_qp_init_attr_ex qp_attr = {};
   memset(&qp_attr, 0, sizeof(qp_attr));
-  qp_attr.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
-  qp_attr.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE |
-                           IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM |
-                           IBV_QP_EX_WITH_RDMA_READ;
+
+  uint32_t vendor_id = ctx->getVendorID();
+  if (vendor_id == 0x8086) {  // Intel irdma
+    // Does not support IBV_QP_INIT_ATTR_SEND_OPS_FLAGS.
+    qp_attr.comp_mask = IBV_QP_INIT_ATTR_PD;
+  } else {
+    qp_attr.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
+    qp_attr.send_ops_flags = IBV_QP_EX_WITH_RDMA_WRITE |
+                             IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM |
+                             IBV_QP_EX_WITH_RDMA_READ;
+  }
 
   qp_attr.cap.max_send_wr = kMaxSendWr;
   qp_attr.cap.max_recv_wr = kMaxRecvWr;
