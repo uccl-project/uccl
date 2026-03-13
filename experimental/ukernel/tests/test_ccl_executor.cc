@@ -68,8 +68,7 @@ void test_ccl_executor() {
 
   Executor pk_executor(pk_backends);
 
-  PlanRequest gather{};
-  gather.collective = CollectiveKind::AllGather;
+  CollectiveConfig gather{};
   gather.algorithm = AlgorithmKind::Ring;
   gather.nranks = 4;
   gather.rank = 1;
@@ -77,15 +76,14 @@ void test_ccl_executor() {
   gather.bytes_per_rank = 1024;
   gather.chunk_bytes = 256;
 
-  CollectiveOpHandle gather_handle = pk_executor.submit(build_plan(gather));
+  CollectiveOpHandle gather_handle = pk_executor.submit_allgather(gather);
   assert(pk_executor.status(gather_handle) == CollectiveOpStatus::Running);
   pk_executor.wait(gather_handle);
   assert(pk_executor.status(gather_handle) == CollectiveOpStatus::Completed);
   assert(persistent_backend.submissions() == 12);
   pk_executor.release(gather_handle);
 
-  PlanRequest reduce{};
-  reduce.collective = CollectiveKind::AllReduce;
+  CollectiveConfig reduce{};
   reduce.algorithm = AlgorithmKind::Ring;
   reduce.nranks = 4;
   reduce.rank = 1;
@@ -93,7 +91,7 @@ void test_ccl_executor() {
   reduce.bytes_per_rank = 4096;
   reduce.chunk_bytes = 512;
 
-  CollectiveOpHandle reduce_handle = pk_executor.submit(build_plan(reduce));
+  CollectiveOpHandle reduce_handle = pk_executor.submit_allreduce(reduce);
   pk_executor.wait(reduce_handle);
   assert(pk_executor.status(reduce_handle) == CollectiveOpStatus::Completed);
   assert(persistent_backend.submissions() == 30);
@@ -121,5 +119,6 @@ void test_ccl_executor() {
   routed_executor.release(routed_handle);
 
   std::cout << "[test_ccl_executor] PK-only executor PASSED\n";
+  std::cout << "[test_ccl_executor] collective submit API PASSED\n";
   std::cout << "[test_ccl_executor] mixed backend routing PASSED\n";
 }

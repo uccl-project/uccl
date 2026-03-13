@@ -98,8 +98,7 @@ int main() {
       Compute::ReduceType::Sum, Compute::TransferPath::RegisterOp,
       config.numBlocks, d_reduce_staging);
 
-  CCL::PlanRequest gather_request{};
-  gather_request.collective = CCL::CollectiveKind::AllGather;
+  CCL::CollectiveConfig gather_request{};
   gather_request.algorithm = CCL::AlgorithmKind::Ring;
   gather_request.nranks = 2;
   gather_request.rank = 0;
@@ -108,13 +107,13 @@ int main() {
       sizeof(float) * static_cast<size_t>(kGatherElemsPerRank);
   gather_request.chunk_bytes = gather_request.bytes_per_rank / 2;
 
-  CCL::PlanRequest reduce_request{};
-  reduce_request.collective = CCL::CollectiveKind::AllReduce;
+  CCL::CollectiveConfig reduce_request{};
   reduce_request.algorithm = CCL::AlgorithmKind::Ring;
   reduce_request.nranks = 2;
   reduce_request.rank = 0;
   reduce_request.channels = 2;
-  reduce_request.bytes_per_rank = sizeof(float) * static_cast<size_t>(kNumElems);
+  reduce_request.bytes_per_rank =
+      sizeof(float) * static_cast<size_t>(kNumElems);
   reduce_request.chunk_bytes = reduce_request.bytes_per_rank / 4;
 
   CCL::ExecutorBackends gather_backends{};
@@ -122,7 +121,7 @@ int main() {
   CCL::Executor gather_executor(gather_backends);
 
   CCL::CollectiveOpHandle gather_handle =
-      gather_executor.submit(CCL::build_plan(gather_request));
+      gather_executor.submit_allgather(gather_request);
   gather_executor.wait(gather_handle);
   if (gather_executor.status(gather_handle) !=
       CCL::CollectiveOpStatus::Completed) {
@@ -136,7 +135,7 @@ int main() {
   CCL::Executor reduce_executor(reduce_backends);
 
   CCL::CollectiveOpHandle reduce_handle =
-      reduce_executor.submit(CCL::build_plan(reduce_request));
+      reduce_executor.submit_allreduce(reduce_request);
   reduce_executor.wait(reduce_handle);
   if (reduce_executor.status(reduce_handle) !=
       CCL::CollectiveOpStatus::Completed) {

@@ -15,6 +15,15 @@ enum class CollectiveOpStatus : uint32_t {
   Failed,
 };
 
+struct CollectiveConfig {
+  int nranks = 1;
+  int rank = 0;
+  uint32_t channels = 1;
+  size_t bytes_per_rank = 0;
+  size_t chunk_bytes = 0;
+  AlgorithmKind algorithm = AlgorithmKind::Ring;
+};
+
 struct CollectiveOpHandle {
   uint64_t value = 0;
 };
@@ -28,6 +37,8 @@ class Executor {
   Executor& operator=(Executor const&) = delete;
 
   CollectiveOpHandle submit(CollectivePlan plan);
+  CollectiveOpHandle submit_allgather(CollectiveConfig const& config);
+  CollectiveOpHandle submit_allreduce(CollectiveConfig const& config);
   bool poll(CollectiveOpHandle handle);
   void wait(CollectiveOpHandle handle);
   void release(CollectiveOpHandle handle);

@@ -10,6 +10,18 @@ namespace CCL {
 
 namespace {
 
+PlanRequest make_plan_request(CollectiveKind kind, CollectiveConfig const& config) {
+  PlanRequest request;
+  request.collective = kind;
+  request.algorithm = config.algorithm;
+  request.nranks = config.nranks;
+  request.rank = config.rank;
+  request.channels = config.channels;
+  request.bytes_per_rank = config.bytes_per_rank;
+  request.chunk_bytes = config.chunk_bytes;
+  return request;
+}
+
 enum class StepState : uint32_t { Pending, Running, Completed };
 
 struct InflightOp {
@@ -232,6 +244,16 @@ Executor::~Executor() { delete impl_; }
 
 CollectiveOpHandle Executor::submit(CollectivePlan plan) {
   return impl_->submit(std::move(plan));
+}
+
+CollectiveOpHandle Executor::submit_allgather(CollectiveConfig const& config) {
+  return submit(build_plan(
+      make_plan_request(CollectiveKind::AllGather, config)));
+}
+
+CollectiveOpHandle Executor::submit_allreduce(CollectiveConfig const& config) {
+  return submit(build_plan(
+      make_plan_request(CollectiveKind::AllReduce, config)));
 }
 
 bool Executor::poll(CollectiveOpHandle handle) { return impl_->poll(handle); }
