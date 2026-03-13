@@ -11,6 +11,9 @@ int main(int argc, char** argv) {
     test_ccl_executor();
     return 0;
   }
+  if (argc > 1 && std::string(argv[1]) == "ccl-rdma-ag") {
+    return test_ccl_rdma_allgather(argc - 1, argv + 1);
+  }
 
   // test_find_best_rdma_for_gpu(0);
   // test_find_best_rdma_for_gpu(2);

@@ -14,9 +14,7 @@ struct CollectiveHostApi::Impl {
 
   static std::unique_ptr<ComputePersistentKernelBackend> build_pk_backend(
       CollectiveHostApiConfig const& config) {
-    if (config.kernel == nullptr) {
-      throw std::invalid_argument("CollectiveHostApi requires a persistent kernel");
-    }
+    if (config.kernel == nullptr) return nullptr;
     return std::make_unique<ComputePersistentKernelBackend>(
         *config.kernel, config.buffers, config.dtype, config.reduce_type,
         config.pk_transfer_path, config.num_blocks);

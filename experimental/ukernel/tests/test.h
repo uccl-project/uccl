@@ -5,6 +5,7 @@
 void test_communicator(int argc, char** argv);
 void test_ccl_executor();
 void test_ccl_plan();
+int test_ccl_rdma_allgather(int argc, char** argv);
 void test_cq_poller();
 void test_find_best_rdma_for_gpu(int gpu_id);
 void test_redis_oob();

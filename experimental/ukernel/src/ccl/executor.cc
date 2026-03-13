@@ -41,7 +41,7 @@ void assign_copy_backends(CollectivePlan& plan, CollectiveConfig const& config,
     send_op.chunk = step.forward_chunk;
     send_op.flags = step.ops.front().flags;
     send_op.src_role = step.forward_src_role;
-    send_op.dst_role = BufferRole::None;
+    send_op.dst_role = BufferRole::FinalOutput;
 
     ExecutionOp recv_op = step.ops.front();
     recv_op.kind = ExecutionOpKind::RdmaRecv;
