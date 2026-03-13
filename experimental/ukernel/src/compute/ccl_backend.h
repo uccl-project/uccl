@@ -14,7 +14,8 @@ class ComputePersistentKernelBackend final : public UKernel::CCL::Backend {
   ComputePersistentKernelBackend(
       PersistentKernel<Task>& kernel, void* dst_base, void const* src_base,
       DataType dtype, ReduceType reduce_type = ReduceType::Sum,
-      TransferPath transfer_path = TransferPath::Auto, uint32_t num_blocks = 1);
+      TransferPath transfer_path = TransferPath::Auto, uint32_t num_blocks = 1,
+      void* staging_base = nullptr);
 
   char const* name() const override;
   bool supports(UKernel::CCL::ExecutionOpKind kind) const override;
@@ -34,6 +35,7 @@ class ComputePersistentKernelBackend final : public UKernel::CCL::Backend {
   PersistentKernel<Task>& kernel_;
   void* dst_base_ = nullptr;
   void const* src_base_ = nullptr;
+  void* staging_base_ = nullptr;
   DataType dtype_ = DataType::Fp32;
   ReduceType reduce_type_ = ReduceType::Sum;
   TransferPath transfer_path_ = TransferPath::Auto;

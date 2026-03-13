@@ -7,10 +7,11 @@ namespace Compute {
 ComputePersistentKernelBackend::ComputePersistentKernelBackend(
     PersistentKernel<Task>& kernel, void* dst_base, void const* src_base,
     DataType dtype, ReduceType reduce_type, TransferPath transfer_path,
-    uint32_t num_blocks)
+    uint32_t num_blocks, void* staging_base)
     : kernel_(kernel),
       dst_base_(dst_base),
       src_base_(src_base),
+      staging_base_(staging_base),
       dtype_(dtype),
       reduce_type_(reduce_type),
       transfer_path_(transfer_path),
@@ -43,9 +44,23 @@ UKernel::CCL::BackendToken ComputePersistentKernelBackend::submit(
   }
 
   CollArgs args{};
+  bool stage_for_reduce =
+      (op.flags & static_cast<uint32_t>(UKernel::CCL::ExecutionOpFlags::StageForReduce)) !=
+      0;
+  void* copy_dst =
+      stage_for_reduce && staging_base_ != nullptr
+          ? byte_offset(staging_base_, op.chunk.offset_bytes)
+          : byte_offset(dst_base_, op.chunk.offset_bytes);
+  void const* reduce_src =
+      staging_base_ != nullptr
+          ? byte_offset(staging_base_, op.chunk.offset_bytes)
+          : byte_offset(src_base_, op.chunk.offset_bytes);
+
   args.src = const_cast<void*>(byte_offset(src_base_, op.chunk.offset_bytes));
   args.src2 = nullptr;
-  args.dst = byte_offset(dst_base_, op.chunk.offset_bytes);
+  args.dst = op.kind == UKernel::CCL::ExecutionOpKind::PkCopy
+                 ? copy_dst
+                 : byte_offset(dst_base_, op.chunk.offset_bytes);
   args.bytes = op.chunk.size_bytes;
   args.op_id = op.op_id;
   args.step_id = static_cast<uint32_t>(op.op_id);
@@ -56,9 +71,12 @@ UKernel::CCL::BackendToken ComputePersistentKernelBackend::submit(
   args.src_device = 0;
   args.dst_device = 0;
   args.flags = 0;
-  args.redType =
-      op.kind == UKernel::CCL::ExecutionOpKind::PkReduce ? reduce_type_
-                                                         : ReduceType::None;
+  if (op.kind == UKernel::CCL::ExecutionOpKind::PkReduce) {
+    args.src = const_cast<void*>(reduce_src);
+    args.redType = reduce_type_;
+  } else {
+    args.redType = ReduceType::None;
+  }
   args.requested_path = transfer_path_;
   args.resolved_path = TransferPath::Auto;
 

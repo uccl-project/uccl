@@ -39,6 +39,8 @@ void test_ccl_plan() {
   assert(reduce_plan.steps.front().ops.size() == 2);
   assert(reduce_plan.steps.front().ops[0].kind == ExecutionOpKind::PkCopy);
   assert(reduce_plan.steps.front().ops[1].kind == ExecutionOpKind::PkReduce);
+  assert(reduce_plan.steps.front().ops[0].flags ==
+         static_cast<uint32_t>(ExecutionOpFlags::StageForReduce));
   assert(reduce_plan.steps.front().chunk.owner_rank == 0);
   assert(reduce_plan.steps.back().chunk.owner_rank == 3);
 
@@ -69,6 +71,8 @@ void test_ccl_plan() {
   assert(reduce2_plan.steps.front().phase == StepPhase::ReduceScatter);
   assert(reduce2_plan.steps.front().chunk.owner_rank == 1);
   assert(reduce2_plan.steps.front().chunk.offset_bytes == 512);
+  assert(reduce2_plan.steps.front().ops[0].flags ==
+         static_cast<uint32_t>(ExecutionOpFlags::StageForReduce));
   assert(reduce2_plan.steps.back().phase == StepPhase::AllGather);
   assert(reduce2_plan.steps.back().chunk.owner_rank == 0);
   assert(reduce2_plan.steps.back().chunk.offset_bytes == 0);

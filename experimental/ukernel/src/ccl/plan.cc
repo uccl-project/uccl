@@ -23,7 +23,9 @@ size_t chunk_size(size_t bytes, size_t chunk_bytes, size_t chunk_index) {
 
 ExecutionOp make_copy_op(uint32_t op_id, int src_rank, int dst_rank,
                          ChunkRange const& chunk,
-                         std::vector<uint32_t> deps = {}) {
+                         std::vector<uint32_t> deps = {},
+                         uint32_t flags =
+                             static_cast<uint32_t>(ExecutionOpFlags::None)) {
   ExecutionOp op;
   op.op_id = op_id;
   op.kind = ExecutionOpKind::PkCopy;
@@ -31,6 +33,7 @@ ExecutionOp make_copy_op(uint32_t op_id, int src_rank, int dst_rank,
   op.dst_rank = dst_rank;
   op.chunk = chunk;
   op.deps = std::move(deps);
+  op.flags = flags;
   return op;
 }
 
@@ -139,7 +142,9 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
 
       uint32_t copy_op_id = next_op_id++;
       step.ops.push_back(
-          make_copy_op(copy_op_id, ring.prev(request.rank), request.rank, chunk));
+          make_copy_op(copy_op_id, ring.prev(request.rank), request.rank, chunk,
+                       {},
+                       static_cast<uint32_t>(ExecutionOpFlags::StageForReduce)));
       step.ops.push_back(make_reduce_op(next_op_id++, request.rank, request.rank,
                                         chunk, {copy_op_id}));
 

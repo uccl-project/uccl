@@ -64,10 +64,13 @@ int main() {
   float* d_gather_dst = nullptr;
   float* d_reduce_src = nullptr;
   float* d_reduce_dst = nullptr;
+  float* d_reduce_staging = nullptr;
   ck(gpuMalloc(&d_gather_src, sizeof(float) * kNumElems), "gpuMalloc d_gather_src");
   ck(gpuMalloc(&d_gather_dst, sizeof(float) * kNumElems), "gpuMalloc d_gather_dst");
   ck(gpuMalloc(&d_reduce_src, sizeof(float) * kNumElems), "gpuMalloc d_reduce_src");
   ck(gpuMalloc(&d_reduce_dst, sizeof(float) * kNumElems), "gpuMalloc d_reduce_dst");
+  ck(gpuMalloc(&d_reduce_staging, sizeof(float) * kNumElems),
+     "gpuMalloc d_reduce_staging");
   ck(gpuMemcpy(d_gather_src, h_gather_src.data(), sizeof(float) * kNumElems,
                gpuMemcpyHostToDevice),
      "copy gather src");
@@ -80,6 +83,8 @@ int main() {
   ck(gpuMemcpy(d_reduce_dst, h_reduce_dst.data(), sizeof(float) * kNumElems,
                gpuMemcpyHostToDevice),
      "copy reduce dst");
+  ck(gpuMemset(d_reduce_staging, 0, sizeof(float) * kNumElems),
+     "memset reduce staging");
 
   Compute::PersistentKernel<Compute::Task> kernel(config);
   kernel.launch();
@@ -91,7 +96,7 @@ int main() {
   Compute::ComputePersistentKernelBackend reduce_backend(
       kernel, d_reduce_dst, d_reduce_src, Compute::DataType::Fp32,
       Compute::ReduceType::Sum, Compute::TransferPath::RegisterOp,
-      config.numBlocks);
+      config.numBlocks, d_reduce_staging);
 
   CCL::PlanRequest gather_request{};
   gather_request.collective = CCL::CollectiveKind::AllGather;
@@ -201,5 +206,6 @@ int main() {
   ck(gpuFree(d_gather_dst), "free gather dst");
   ck(gpuFree(d_reduce_src), "free reduce src");
   ck(gpuFree(d_reduce_dst), "free reduce dst");
+  ck(gpuFree(d_reduce_staging), "free reduce staging");
   return 0;
 }
