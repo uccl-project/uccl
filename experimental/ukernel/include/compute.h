@@ -1,5 +1,3 @@
 #pragma once
 
-namespace UKernel {
-namespace Compute {}
-}  // namespace UKernel
+#include "../src/compute/ccl_api.h"

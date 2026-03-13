@@ -21,10 +21,12 @@ COMMON_CU  := operator.cu
 CCL_CPP := ../ccl/topology.cc ../ccl/plan.cc ../ccl/backend.cc ../ccl/executor.cc
 CCL_OBJ := ccl_topology.o ccl_plan.o ccl_backend_common.o ccl_executor.o
 COMPUTE_CCL_OBJ := ccl_backend.o
+COMPUTE_API_OBJ := ccl_api.o
 
 TEST_SRC   := test_persistent.cc
 TEST_CCL_SRC := test_ccl_persistent.cc
 TEST_CE_SRC := test_ccl_ce.cc
+TEST_HOST_API_SRC := test_ccl_host_api.cc
 BENCH_SRC  := benchmarks/bench_fifo.cu
 BENCH_FULL_SRC  := benchmarks/bench_full_fifo.cu
 BENCH_SM_SRC  := benchmarks/bench_sm_fifo.cu
@@ -33,6 +35,7 @@ COMMON_OBJ := $(COMMON_CPP:.cc=.o) $(COMMON_CU:.cu=.o)
 TEST_OBJ   := $(TEST_SRC:.cc=.o)
 TEST_CCL_OBJ := $(TEST_CCL_SRC:.cc=.o)
 TEST_CE_OBJ := $(TEST_CE_SRC:.cc=.o)
+TEST_HOST_API_OBJ := $(TEST_HOST_API_SRC:.cc=.o)
 BENCH_OBJ  := $(BENCH_SRC:.cu=.o)
 BENCH_FULL_OBJ  := $(BENCH_FULL_SRC:.cu=.o)
 BENCH_SM_OBJ := $(BENCH_SM_SRC:.cu=.o)
@@ -40,17 +43,18 @@ BENCH_SM_OBJ := $(BENCH_SM_SRC:.cu=.o)
 TEST_BIN  := test_persistent
 TEST_CCL_BIN := test_ccl_persistent
 TEST_CE_BIN := test_ccl_ce
+TEST_HOST_API_BIN := test_ccl_host_api
 BENCH_BIN := benchmarks/bench_fifo
 BENCH_FULL_BIN := benchmarks/bench_full_fifo
 BENCH_SM_BIN := benchmarks/bench_sm_fifo
 
-ALL_BIN   := $(TEST_BIN) $(TEST_CCL_BIN) $(TEST_CE_BIN) $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN}
+ALL_BIN   := $(TEST_BIN) $(TEST_CCL_BIN) $(TEST_CE_BIN) $(TEST_HOST_API_BIN) $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN}
 
 .PHONY: all test bench clean ensure-gdrcopy
 
 all: $(ALL_BIN)
 
-test: $(TEST_BIN) $(TEST_CCL_BIN) $(TEST_CE_BIN)
+test: $(TEST_BIN) $(TEST_CCL_BIN) $(TEST_CE_BIN) $(TEST_HOST_API_BIN)
 
 bench: $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN}
 
@@ -75,7 +79,7 @@ ensure-gdrcopy:
 	$(NVCC) -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(COMMON_OBJ) $(TEST_OBJ) $(BENCH_OBJ) $(BENCH_FULL_OBJ) $(BENCH_SM_OBJ): | ensure-gdrcopy
-$(CCL_OBJ) $(COMPUTE_CCL_OBJ) $(TEST_CCL_OBJ) $(TEST_CE_OBJ): | ensure-gdrcopy
+$(CCL_OBJ) $(COMPUTE_CCL_OBJ) $(COMPUTE_API_OBJ) $(TEST_CCL_OBJ) $(TEST_CE_OBJ) $(TEST_HOST_API_OBJ): | ensure-gdrcopy
 
 ccl_topology.o: ../ccl/topology.cc
 	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
@@ -105,6 +109,15 @@ $(TEST_CE_OBJ): $(TEST_CE_SRC)
 	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(TEST_CE_BIN): $(COMMON_OBJ) $(CCL_OBJ) $(COMPUTE_CCL_OBJ) $(TEST_CE_OBJ)
+	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+
+ccl_api.o: ccl_api.cc
+	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+$(TEST_HOST_API_OBJ): $(TEST_HOST_API_SRC)
+	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
+
+$(TEST_HOST_API_BIN): $(COMMON_OBJ) $(CCL_OBJ) $(COMPUTE_CCL_OBJ) $(COMPUTE_API_OBJ) $(TEST_HOST_API_OBJ)
 	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
 
 $(BENCH_BIN): $(COMMON_OBJ) $(BENCH_OBJ)
