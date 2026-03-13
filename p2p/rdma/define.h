@@ -43,6 +43,8 @@ enum class FloatType : uint32_t {
   kFloat16 = 1,
   kBFloat16 = 2,
   kFloat32 = 3,
+  kFloat8E4M3FN = 4,
+  kFloat8E5M2 = 5,
 };
 }
 
@@ -68,6 +70,10 @@ inline dietgpu::FloatType to_dietgpu(uccl::FloatType t) {
       return dietgpu::FloatType::kBFloat16;
     case uccl::FloatType::kFloat32:
       return dietgpu::FloatType::kFloat32;
+    case uccl::FloatType::kFloat8E4M3FN:
+      return dietgpu::FloatType::kFloat8E4M3FN;
+    case uccl::FloatType::kFloat8E5M2:
+      return dietgpu::FloatType::kFloat8E5M2;
     case uccl::FloatType::kUndefined:
     default:
       return dietgpu::FloatType::kUndefined;
@@ -82,6 +88,10 @@ inline uccl::FloatType from_dietgpu(dietgpu::FloatType t) {
       return uccl::FloatType::kBFloat16;
     case dietgpu::FloatType::kFloat32:
       return uccl::FloatType::kFloat32;
+    case dietgpu::FloatType::kFloat8E4M3FN:
+      return uccl::FloatType::kFloat8E4M3FN;
+    case dietgpu::FloatType::kFloat8E5M2:
+      return uccl::FloatType::kFloat8E5M2;
     default:
       return uccl::FloatType::kUndefined;
   }
@@ -169,7 +179,7 @@ static constexpr size_t kInFlightMaxSizeKB =
     10240000;  // Max in-flight packets per channel
 
 constexpr size_t kMinCompressBytes = 2 * 1024 * 1024;      // 1MB
-constexpr size_t kCompressBufferSize = 400 * 1024 * 1024;  // 400MB
+constexpr size_t kCompressBufferSize = 1024 * 1024 * 1024;  // 1 GB
 
 static constexpr uint32_t INVALID_RANK_ID =
     std::numeric_limits<uint32_t>::max();
