@@ -93,6 +93,21 @@ uint64_t submit_reduce_task(
 int main() {
   UKernel::Compute::TaskManager::instance().init(1024, 256);
 
+  UKernel::Compute::DeviceCapabilities caps{};
+  UKernel::Compute::PkSelectorConfig selector_cfg{};
+  auto auto_path = UKernel::Compute::resolve_pk_transfer_path(
+      UKernel::Compute::TransferPath::Auto, N * sizeof(float), caps,
+      selector_cfg);
+  auto reg_path = UKernel::Compute::resolve_pk_transfer_path(
+      UKernel::Compute::TransferPath::RegisterOp, N * sizeof(float), caps,
+      selector_cfg);
+  if (auto_path != UKernel::Compute::TransferPath::RegisterOp ||
+      reg_path != UKernel::Compute::TransferPath::RegisterOp) {
+    std::cerr << "Selector bootstrap FAILED\n";
+    return 4;
+  }
+  std::cout << "Selector bootstrap PASSED\n";
+
   UKernel::Compute::PersistentKernelConfig config;
   config.numBlocks = 3;
   config.threadsPerBlock = 64;

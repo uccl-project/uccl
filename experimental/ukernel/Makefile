@@ -49,8 +49,10 @@ endif
 
 # UCCL collective support
 UCCL_ROOT := $(abspath ../../)
+UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
+UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma.a
 UCCL_CFLAGS := -I$(UCCL_ROOT) -I$(UCCL_ROOT)/collective/rdma -I$(UCCL_ROOT)/include
-UCCL_LDFLAGS := $(UCCL_ROOT)/collective/rdma/librdma.a -libverbs -lrdmacm
+UCCL_LDFLAGS := $(UCCL_RDMA_STATIC) -libverbs -lrdmacm
 
 CXXFLAGS += $(UCCL_CFLAGS)
 NVCCFLAGS += --compiler-options "$(UCCL_CFLAGS)"
@@ -131,21 +133,27 @@ all: $(STATIC_LIB) $(SHARED_LIB) $(TARGET_TEST) $(PYBIND_SO)
 %.o: %.cu
 	$(NVCC) $(LOCAL_INCLUDES) $(NVCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
+ensure-uccl-rdma:
+	@if [ ! -f "$(UCCL_RDMA_STATIC)" ]; then \
+		echo "[ukernel] building collective/rdma..."; \
+		$(MAKE) -C "$(UCCL_RDMA_ROOT)" build; \
+	fi
+
 # Static library
 $(STATIC_LIB): $(OBJ_CC)
 	ar rcs $@ $^
 
 # Shared library
-$(SHARED_LIB): $(OBJ_CC) $(OBJ_CU)
+$(SHARED_LIB): $(OBJ_CC) $(OBJ_CU) | ensure-uccl-rdma
 	$(CXX) -shared $(CXXFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
 
-$(PYBIND_SO): $(PYBIND_OBJ) $(STATIC_LIB)
+$(PYBIND_SO): $(PYBIND_OBJ) $(STATIC_LIB) | ensure-uccl-rdma
 	$(CXX) -shared $(CXXFLAGS) $^ \
 	       $(LDFLAGS) $(TORCH_LDFLAGS) \
 	       -o $@
 
 # Test executable
-$(TARGET_TEST): $(OBJ_TEST) $(STATIC_LIB)
+$(TARGET_TEST): $(OBJ_TEST) $(STATIC_LIB) | ensure-uccl-rdma
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(OBJ_TEST) $(STATIC_LIB) $(LDFLAGS) -o $@
 
 # Run tests
@@ -156,7 +164,7 @@ run_test: $(TARGET_TEST)
 $(BENCH_OBJ): $(BENCH_SRC)
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-$(BENCH_BIN): $(BENCH_OBJ) $(STATIC_LIB)
+$(BENCH_BIN): $(BENCH_OBJ) $(STATIC_LIB) | ensure-uccl-rdma
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) $< $(STATIC_LIB) $(LDFLAGS) -o $@
 
 bench: $(BENCH_BIN)
@@ -177,4 +185,4 @@ clean:
 # src/compute/operator.o: src/compute/operator.cu
 # 	$(NVCC) $(NVCCFLAGS) -Iinclude -Isrc/transport -Isrc/compute -Isrc/compute/fifo -MMD -MP -c $< -o $@
 
-.PHONY: all clean run_test
+.PHONY: all clean run_test ensure-uccl-rdma

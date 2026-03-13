@@ -115,6 +115,25 @@ struct DeviceCapabilities {
   bool supports_rdma = false;
 };
 
+struct CpuBackendSelectorConfig {
+  bool prefer_ce_for_large_copy = true;
+  uint64_t copy_engine_threshold_bytes = 256 * 1024;
+};
+
+struct PkSelectorConfig {
+  bool enable_auto_transport = true;
+  uint64_t tma_threshold_bytes = 16 * 1024;
+};
+
+CpuBackendKind resolve_cpu_backend_kind(CpuBackendKind requested, bool is_copy,
+                                        uint64_t bytes,
+                                        DeviceCapabilities const& caps,
+                                        CpuBackendSelectorConfig const& cfg);
+
+TransferPath resolve_pk_transfer_path(TransferPath requested, uint64_t bytes,
+                                      DeviceCapabilities const& caps,
+                                      PkSelectorConfig const& cfg);
+
 inline __host__ __device__ bool is_pk_transfer_path(TransferPath path) {
   return path == TransferPath::Auto || path == TransferPath::RegisterOp ||
          path == TransferPath::TmaOp;
@@ -239,7 +258,8 @@ class TaskManager {
     }
 
     CollArgs normalized = h;
-    normalized.resolved_path = normalize_pk_transfer_path(h.requested_path);
+    normalized.resolved_path = resolve_pk_transfer_path(
+        h.requested_path, h.bytes, DeviceCapabilities{}, PkSelectorConfig{});
 
     GPU_RT_CHECK(gpuMemcpy(d_coll_ + idx, &normalized, sizeof(CollArgs),
                            gpuMemcpyHostToDevice));
