@@ -26,6 +26,15 @@ enum class ExecutionOpFlags : uint32_t {
   StageForReduce = 1u << 0,
 };
 
+enum class BufferRole : uint32_t {
+  None = 0,
+  LocalInput,
+  RemoteInput,
+  RemoteReduced,
+  FinalOutput,
+  RecvStaging,
+};
+
 struct ChunkRange {
   uint32_t owner_rank = 0;
   uint32_t chunk_index = 0;
@@ -42,6 +51,8 @@ struct ExecutionOp {
   ChunkRange chunk;
   std::vector<uint32_t> deps;
   uint32_t flags = static_cast<uint32_t>(ExecutionOpFlags::None);
+  BufferRole src_role = BufferRole::None;
+  BufferRole dst_role = BufferRole::None;
 };
 
 struct CollectiveStep {

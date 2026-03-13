@@ -5,13 +5,10 @@ namespace UKernel {
 namespace Compute {
 
 ComputePersistentKernelBackend::ComputePersistentKernelBackend(
-    PersistentKernel<Task>& kernel, void* dst_base, void const* src_base,
-    DataType dtype, ReduceType reduce_type, TransferPath transfer_path,
-    uint32_t num_blocks, void* staging_base)
+    PersistentKernel<Task>& kernel, CollectiveBuffers buffers, DataType dtype,
+    ReduceType reduce_type, TransferPath transfer_path, uint32_t num_blocks)
     : kernel_(kernel),
-      dst_base_(dst_base),
-      src_base_(src_base),
-      staging_base_(staging_base),
+      buffers_(buffers),
       dtype_(dtype),
       reduce_type_(reduce_type),
       transfer_path_(transfer_path),
@@ -44,23 +41,9 @@ UKernel::CCL::BackendToken ComputePersistentKernelBackend::submit(
   }
 
   CollArgs args{};
-  bool stage_for_reduce =
-      (op.flags & static_cast<uint32_t>(UKernel::CCL::ExecutionOpFlags::StageForReduce)) !=
-      0;
-  void* copy_dst =
-      stage_for_reduce && staging_base_ != nullptr
-          ? byte_offset(staging_base_, op.chunk.offset_bytes)
-          : byte_offset(dst_base_, op.chunk.offset_bytes);
-  void const* reduce_src =
-      staging_base_ != nullptr
-          ? byte_offset(staging_base_, op.chunk.offset_bytes)
-          : byte_offset(src_base_, op.chunk.offset_bytes);
-
-  args.src = const_cast<void*>(byte_offset(src_base_, op.chunk.offset_bytes));
+  args.src = const_cast<void*>(resolve_src(op.src_role, op.chunk.offset_bytes));
   args.src2 = nullptr;
-  args.dst = op.kind == UKernel::CCL::ExecutionOpKind::PkCopy
-                 ? copy_dst
-                 : byte_offset(dst_base_, op.chunk.offset_bytes);
+  args.dst = resolve_dst(op.dst_role, op.chunk.offset_bytes);
   args.bytes = op.chunk.size_bytes;
   args.op_id = op.op_id;
   args.step_id = static_cast<uint32_t>(op.op_id);
@@ -71,12 +54,9 @@ UKernel::CCL::BackendToken ComputePersistentKernelBackend::submit(
   args.src_device = 0;
   args.dst_device = 0;
   args.flags = 0;
-  if (op.kind == UKernel::CCL::ExecutionOpKind::PkReduce) {
-    args.src = const_cast<void*>(reduce_src);
-    args.redType = reduce_type_;
-  } else {
-    args.redType = ReduceType::None;
-  }
+  args.redType = op.kind == UKernel::CCL::ExecutionOpKind::PkReduce
+                     ? reduce_type_
+                     : ReduceType::None;
   args.requested_path = transfer_path_;
   args.resolved_path = TransferPath::Auto;
 
@@ -112,15 +92,46 @@ void const* ComputePersistentKernelBackend::byte_offset(void const* base,
   return static_cast<void const*>(static_cast<char const*>(base) + offset);
 }
 
-ComputeCopyEngineBackend::ComputeCopyEngineBackend(void* dst_base,
-                                                   void const* src_base,
+void* ComputePersistentKernelBackend::resolve_dst(
+    UKernel::CCL::BufferRole role, size_t offset) const {
+  switch (role) {
+    case UKernel::CCL::BufferRole::FinalOutput:
+      return byte_offset(buffers_.final_output, offset);
+    case UKernel::CCL::BufferRole::RecvStaging:
+      return byte_offset(buffers_.recv_staging, offset);
+    case UKernel::CCL::BufferRole::None:
+    case UKernel::CCL::BufferRole::LocalInput:
+    case UKernel::CCL::BufferRole::RemoteInput:
+    case UKernel::CCL::BufferRole::RemoteReduced:
+      throw std::invalid_argument("invalid dst buffer role for persistent backend");
+  }
+  throw std::invalid_argument("unknown dst buffer role");
+}
+
+void const* ComputePersistentKernelBackend::resolve_src(
+    UKernel::CCL::BufferRole role, size_t offset) const {
+  switch (role) {
+    case UKernel::CCL::BufferRole::LocalInput:
+      return byte_offset(buffers_.local_input, offset);
+    case UKernel::CCL::BufferRole::RemoteInput:
+      return byte_offset(buffers_.remote_input, offset);
+    case UKernel::CCL::BufferRole::RemoteReduced:
+      return byte_offset(buffers_.remote_reduced, offset);
+    case UKernel::CCL::BufferRole::RecvStaging:
+      return byte_offset(buffers_.recv_staging, offset);
+    case UKernel::CCL::BufferRole::FinalOutput:
+      return byte_offset(buffers_.final_output, offset);
+    case UKernel::CCL::BufferRole::None:
+      throw std::invalid_argument("invalid src buffer role for persistent backend");
+  }
+  throw std::invalid_argument("unknown src buffer role");
+}
+
+ComputeCopyEngineBackend::ComputeCopyEngineBackend(CollectiveBuffers buffers,
                                                    int dst_device,
                                                    int src_device,
-                                                   void* staging_base,
                                                    gpuStream_t stream)
-    : dst_base_(dst_base),
-      src_base_(src_base),
-      staging_base_(staging_base) {
+    : buffers_(buffers) {
   int current_device = 0;
   GPU_RT_CHECK(gpuGetDevice(&current_device));
   dst_device_ = dst_device >= 0 ? dst_device : current_device;
@@ -160,14 +171,8 @@ UKernel::CCL::BackendToken ComputeCopyEngineBackend::submit(
     throw std::invalid_argument("unsupported op kind for copy engine backend");
   }
 
-  bool stage_for_reduce =
-      (op.flags & static_cast<uint32_t>(UKernel::CCL::ExecutionOpFlags::StageForReduce)) !=
-      0;
-  void* dst =
-      stage_for_reduce && staging_base_ != nullptr
-          ? byte_offset(staging_base_, op.chunk.offset_bytes)
-          : byte_offset(dst_base_, op.chunk.offset_bytes);
-  void const* src = byte_offset(src_base_, op.chunk.offset_bytes);
+  void* dst = resolve_dst(op.dst_role, op.chunk.offset_bytes);
+  void const* src = resolve_src(op.src_role, op.chunk.offset_bytes);
 
   int current_device = 0;
   GPU_RT_CHECK(gpuGetDevice(&current_device));
@@ -225,6 +230,41 @@ void* ComputeCopyEngineBackend::byte_offset(void* base, size_t offset) const {
 void const* ComputeCopyEngineBackend::byte_offset(void const* base,
                                                   size_t offset) const {
   return static_cast<void const*>(static_cast<char const*>(base) + offset);
+}
+
+void* ComputeCopyEngineBackend::resolve_dst(UKernel::CCL::BufferRole role,
+                                            size_t offset) const {
+  switch (role) {
+    case UKernel::CCL::BufferRole::FinalOutput:
+      return byte_offset(buffers_.final_output, offset);
+    case UKernel::CCL::BufferRole::RecvStaging:
+      return byte_offset(buffers_.recv_staging, offset);
+    case UKernel::CCL::BufferRole::None:
+    case UKernel::CCL::BufferRole::LocalInput:
+    case UKernel::CCL::BufferRole::RemoteInput:
+    case UKernel::CCL::BufferRole::RemoteReduced:
+      throw std::invalid_argument("invalid dst buffer role for copy engine backend");
+  }
+  throw std::invalid_argument("unknown dst buffer role");
+}
+
+void const* ComputeCopyEngineBackend::resolve_src(
+    UKernel::CCL::BufferRole role, size_t offset) const {
+  switch (role) {
+    case UKernel::CCL::BufferRole::LocalInput:
+      return byte_offset(buffers_.local_input, offset);
+    case UKernel::CCL::BufferRole::RemoteInput:
+      return byte_offset(buffers_.remote_input, offset);
+    case UKernel::CCL::BufferRole::RemoteReduced:
+      return byte_offset(buffers_.remote_reduced, offset);
+    case UKernel::CCL::BufferRole::RecvStaging:
+      return byte_offset(buffers_.recv_staging, offset);
+    case UKernel::CCL::BufferRole::FinalOutput:
+      return byte_offset(buffers_.final_output, offset);
+    case UKernel::CCL::BufferRole::None:
+      throw std::invalid_argument("invalid src buffer role for copy engine backend");
+  }
+  throw std::invalid_argument("unknown src buffer role");
 }
 
 void ComputeCopyEngineBackend::set_device(int device) const {

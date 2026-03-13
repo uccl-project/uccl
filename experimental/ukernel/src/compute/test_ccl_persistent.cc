@@ -41,62 +41,93 @@ int main() {
   config.fifoCapacity = 16;
   config.smemSize = 0;
 
-  std::vector<float> h_gather_src(kNumElems, 0.0f);
-  std::vector<float> h_gather_dst(kNumElems, 0.0f);
+  std::vector<float> h_gather_remote_input(kNumElems, 0.0f);
+  std::vector<float> h_gather_output(kNumElems, 0.0f);
   std::vector<float> h_gather_out(kNumElems, 0.0f);
   for (int i = 0; i < kGatherElemsPerRank; ++i) {
-    h_gather_dst[i] = 100.0f + static_cast<float>(i);
-    h_gather_src[kGatherElemsPerRank + i] = 200.0f + static_cast<float>(i);
+    h_gather_output[i] = 100.0f + static_cast<float>(i);
+    h_gather_remote_input[kGatherElemsPerRank + i] =
+        200.0f + static_cast<float>(i);
   }
 
-  std::vector<float> h_reduce_src(kNumElems, 0.0f);
-  std::vector<float> h_reduce_dst(kNumElems, 0.0f);
+  std::vector<float> h_reduce_local_input(kNumElems, 0.0f);
+  std::vector<float> h_reduce_remote_input(kNumElems, 0.0f);
+  std::vector<float> h_reduce_remote_reduced(kNumElems, 0.0f);
+  std::vector<float> h_reduce_output(kNumElems, 0.0f);
   std::vector<float> h_reduce_out(kNumElems, 0.0f);
-  fill(h_reduce_dst, 10.0f, 0.5f);
+  fill(h_reduce_local_input, 10.0f, 0.5f);
+  h_reduce_output = h_reduce_local_input;
   for (int i = 0; i < kGatherElemsPerRank; ++i) {
-    h_reduce_src[i] = h_reduce_dst[i] + (1.0f + 0.25f * static_cast<float>(i));
+    h_reduce_remote_reduced[i] =
+        h_reduce_local_input[i] + (1.0f + 0.25f * static_cast<float>(i));
   }
   for (int i = kGatherElemsPerRank; i < kNumElems; ++i) {
-    h_reduce_src[i] = 1.0f + 0.25f * static_cast<float>(i);
+    h_reduce_remote_input[i] = 1.0f + 0.25f * static_cast<float>(i);
   }
 
-  float* d_gather_src = nullptr;
-  float* d_gather_dst = nullptr;
-  float* d_reduce_src = nullptr;
-  float* d_reduce_dst = nullptr;
+  float* d_gather_remote_input = nullptr;
+  float* d_gather_output = nullptr;
+  float* d_reduce_local_input = nullptr;
+  float* d_reduce_remote_input = nullptr;
+  float* d_reduce_remote_reduced = nullptr;
+  float* d_reduce_output = nullptr;
   float* d_reduce_staging = nullptr;
-  ck(gpuMalloc(&d_gather_src, sizeof(float) * kNumElems), "gpuMalloc d_gather_src");
-  ck(gpuMalloc(&d_gather_dst, sizeof(float) * kNumElems), "gpuMalloc d_gather_dst");
-  ck(gpuMalloc(&d_reduce_src, sizeof(float) * kNumElems), "gpuMalloc d_reduce_src");
-  ck(gpuMalloc(&d_reduce_dst, sizeof(float) * kNumElems), "gpuMalloc d_reduce_dst");
+  ck(gpuMalloc(&d_gather_remote_input, sizeof(float) * kNumElems),
+     "gpuMalloc d_gather_remote_input");
+  ck(gpuMalloc(&d_gather_output, sizeof(float) * kNumElems),
+     "gpuMalloc d_gather_output");
+  ck(gpuMalloc(&d_reduce_local_input, sizeof(float) * kNumElems),
+     "gpuMalloc d_reduce_local_input");
+  ck(gpuMalloc(&d_reduce_remote_input, sizeof(float) * kNumElems),
+     "gpuMalloc d_reduce_remote_input");
+  ck(gpuMalloc(&d_reduce_remote_reduced, sizeof(float) * kNumElems),
+     "gpuMalloc d_reduce_remote_reduced");
+  ck(gpuMalloc(&d_reduce_output, sizeof(float) * kNumElems),
+     "gpuMalloc d_reduce_output");
   ck(gpuMalloc(&d_reduce_staging, sizeof(float) * kNumElems),
      "gpuMalloc d_reduce_staging");
-  ck(gpuMemcpy(d_gather_src, h_gather_src.data(), sizeof(float) * kNumElems,
+  ck(gpuMemcpy(d_gather_remote_input, h_gather_remote_input.data(),
+               sizeof(float) * kNumElems,
                gpuMemcpyHostToDevice),
-     "copy gather src");
-  ck(gpuMemcpy(d_gather_dst, h_gather_dst.data(), sizeof(float) * kNumElems,
+     "copy gather remote input");
+  ck(gpuMemcpy(d_gather_output, h_gather_output.data(), sizeof(float) * kNumElems,
                gpuMemcpyHostToDevice),
-     "copy gather dst");
-  ck(gpuMemcpy(d_reduce_src, h_reduce_src.data(), sizeof(float) * kNumElems,
+     "copy gather output");
+  ck(gpuMemcpy(d_reduce_local_input, h_reduce_local_input.data(),
+               sizeof(float) * kNumElems, gpuMemcpyHostToDevice),
+     "copy reduce local input");
+  ck(gpuMemcpy(d_reduce_remote_input, h_reduce_remote_input.data(),
+               sizeof(float) * kNumElems, gpuMemcpyHostToDevice),
+     "copy reduce remote input");
+  ck(gpuMemcpy(d_reduce_remote_reduced, h_reduce_remote_reduced.data(),
+               sizeof(float) * kNumElems, gpuMemcpyHostToDevice),
+     "copy reduce remote reduced");
+  ck(gpuMemcpy(d_reduce_output, h_reduce_output.data(), sizeof(float) * kNumElems,
                gpuMemcpyHostToDevice),
-     "copy reduce src");
-  ck(gpuMemcpy(d_reduce_dst, h_reduce_dst.data(), sizeof(float) * kNumElems,
-               gpuMemcpyHostToDevice),
-     "copy reduce dst");
+     "copy reduce output");
   ck(gpuMemset(d_reduce_staging, 0, sizeof(float) * kNumElems),
      "memset reduce staging");
 
   Compute::PersistentKernel<Compute::Task> kernel(config);
   kernel.launch();
 
+  Compute::CollectiveBuffers gather_buffers{};
+  gather_buffers.remote_input = d_gather_remote_input;
+  gather_buffers.final_output = d_gather_output;
   Compute::ComputePersistentKernelBackend gather_backend(
-      kernel, d_gather_dst, d_gather_src, Compute::DataType::Fp32,
+      kernel, gather_buffers, Compute::DataType::Fp32,
       Compute::ReduceType::Sum, Compute::TransferPath::RegisterOp,
       config.numBlocks);
+  Compute::CollectiveBuffers reduce_buffers{};
+  reduce_buffers.local_input = d_reduce_local_input;
+  reduce_buffers.remote_input = d_reduce_remote_input;
+  reduce_buffers.remote_reduced = d_reduce_remote_reduced;
+  reduce_buffers.final_output = d_reduce_output;
+  reduce_buffers.recv_staging = d_reduce_staging;
   Compute::ComputePersistentKernelBackend reduce_backend(
-      kernel, d_reduce_dst, d_reduce_src, Compute::DataType::Fp32,
+      kernel, reduce_buffers, Compute::DataType::Fp32,
       Compute::ReduceType::Sum, Compute::TransferPath::RegisterOp,
-      config.numBlocks, d_reduce_staging);
+      config.numBlocks);
 
   CCL::CollectiveConfig gather_request{};
   gather_request.algorithm = CCL::AlgorithmKind::Ring;
@@ -146,10 +177,10 @@ int main() {
 
   kernel.stop();
 
-  ck(gpuMemcpy(h_gather_out.data(), d_gather_dst, sizeof(float) * kNumElems,
+  ck(gpuMemcpy(h_gather_out.data(), d_gather_output, sizeof(float) * kNumElems,
                gpuMemcpyDeviceToHost),
      "copy gather out");
-  ck(gpuMemcpy(h_reduce_out.data(), d_reduce_dst, sizeof(float) * kNumElems,
+  ck(gpuMemcpy(h_reduce_out.data(), d_reduce_output, sizeof(float) * kNumElems,
                gpuMemcpyDeviceToHost),
      "copy reduce out");
 
@@ -182,7 +213,7 @@ int main() {
 
   size_t reduce_bad = 0;
   for (int i = 0; i < kNumElems; ++i) {
-    float expected = 10.0f + 0.5f * static_cast<float>(i) +
+    float expected = h_reduce_local_input[i] +
                      (1.0f + 0.25f * static_cast<float>(i));
     if (!feq(h_reduce_out[i], expected)) {
       if (reduce_bad < 8) {
@@ -201,10 +232,12 @@ int main() {
   std::cout << "CCL persistent allgather PASSED\n";
   std::cout << "CCL persistent allreduce PASSED\n";
 
-  ck(gpuFree(d_gather_src), "free gather src");
-  ck(gpuFree(d_gather_dst), "free gather dst");
-  ck(gpuFree(d_reduce_src), "free reduce src");
-  ck(gpuFree(d_reduce_dst), "free reduce dst");
+  ck(gpuFree(d_gather_remote_input), "free gather remote input");
+  ck(gpuFree(d_gather_output), "free gather output");
+  ck(gpuFree(d_reduce_local_input), "free reduce local input");
+  ck(gpuFree(d_reduce_remote_input), "free reduce remote input");
+  ck(gpuFree(d_reduce_remote_reduced), "free reduce remote reduced");
+  ck(gpuFree(d_reduce_output), "free reduce output");
   ck(gpuFree(d_reduce_staging), "free reduce staging");
   return 0;
 }

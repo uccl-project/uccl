@@ -19,6 +19,8 @@ void test_ccl_plan() {
   assert(gather_plan.steps.size() == 12);
   assert(gather_plan.steps.front().ops.size() == 1);
   assert(gather_plan.steps.front().ops.front().kind == ExecutionOpKind::PkCopy);
+  assert(gather_plan.steps.front().ops.front().src_role == BufferRole::RemoteInput);
+  assert(gather_plan.steps.front().ops.front().dst_role == BufferRole::FinalOutput);
   assert(gather_plan.steps.front().chunk.owner_rank == 0);
   assert(gather_plan.steps[4].chunk.owner_rank == 3);
   assert(gather_plan.steps[8].chunk.owner_rank == 2);
@@ -41,8 +43,14 @@ void test_ccl_plan() {
   assert(reduce_plan.steps.front().ops[1].kind == ExecutionOpKind::PkReduce);
   assert(reduce_plan.steps.front().ops[0].flags ==
          static_cast<uint32_t>(ExecutionOpFlags::StageForReduce));
+  assert(reduce_plan.steps.front().ops[0].src_role == BufferRole::RemoteInput);
+  assert(reduce_plan.steps.front().ops[0].dst_role == BufferRole::RecvStaging);
+  assert(reduce_plan.steps.front().ops[1].src_role == BufferRole::RecvStaging);
+  assert(reduce_plan.steps.front().ops[1].dst_role == BufferRole::FinalOutput);
   assert(reduce_plan.steps.front().chunk.owner_rank == 0);
   assert(reduce_plan.steps.back().chunk.owner_rank == 3);
+  assert(reduce_plan.steps.back().ops.front().src_role == BufferRole::RemoteReduced);
+  assert(reduce_plan.steps.back().ops.front().dst_role == BufferRole::FinalOutput);
 
   PlanRequest gather2{};
   gather2.collective = CollectiveKind::AllGather;
@@ -57,6 +65,7 @@ void test_ccl_plan() {
   assert(gather2_plan.steps.front().chunk.owner_rank == 1);
   assert(gather2_plan.steps.front().chunk.offset_bytes == 512);
   assert(gather2_plan.steps.back().chunk.offset_bytes == 768);
+  assert(gather2_plan.steps.front().ops.front().src_role == BufferRole::RemoteInput);
 
   PlanRequest reduce2{};
   reduce2.collective = CollectiveKind::AllReduce;
@@ -76,6 +85,7 @@ void test_ccl_plan() {
   assert(reduce2_plan.steps.back().phase == StepPhase::AllGather);
   assert(reduce2_plan.steps.back().chunk.owner_rank == 0);
   assert(reduce2_plan.steps.back().chunk.offset_bytes == 0);
+  assert(reduce2_plan.steps.back().ops.front().src_role == BufferRole::RemoteReduced);
 
   std::cout << "[test_ccl_plan] AllGather steps=" << gather_plan.steps.size()
             << "\n";

@@ -25,7 +25,9 @@ ExecutionOp make_copy_op(uint32_t op_id, int src_rank, int dst_rank,
                          ChunkRange const& chunk,
                          std::vector<uint32_t> deps = {},
                          uint32_t flags =
-                             static_cast<uint32_t>(ExecutionOpFlags::None)) {
+                             static_cast<uint32_t>(ExecutionOpFlags::None),
+                         BufferRole src_role = BufferRole::RemoteInput,
+                         BufferRole dst_role = BufferRole::FinalOutput) {
   ExecutionOp op;
   op.op_id = op_id;
   op.kind = ExecutionOpKind::PkCopy;
@@ -34,12 +36,16 @@ ExecutionOp make_copy_op(uint32_t op_id, int src_rank, int dst_rank,
   op.chunk = chunk;
   op.deps = std::move(deps);
   op.flags = flags;
+  op.src_role = src_role;
+  op.dst_role = dst_role;
   return op;
 }
 
 ExecutionOp make_reduce_op(uint32_t op_id, int src_rank, int dst_rank,
                            ChunkRange const& chunk,
-                           std::vector<uint32_t> deps = {}) {
+                           std::vector<uint32_t> deps = {},
+                           BufferRole src_role = BufferRole::RecvStaging,
+                           BufferRole dst_role = BufferRole::FinalOutput) {
   ExecutionOp op;
   op.op_id = op_id;
   op.kind = ExecutionOpKind::PkReduce;
@@ -47,6 +53,8 @@ ExecutionOp make_reduce_op(uint32_t op_id, int src_rank, int dst_rank,
   op.dst_rank = dst_rank;
   op.chunk = chunk;
   op.deps = std::move(deps);
+  op.src_role = src_role;
+  op.dst_role = dst_role;
   return op;
 }
 
@@ -90,7 +98,9 @@ CollectivePlan build_allgather_ring_plan(PlanRequest const& request) {
       if (pred >= 0) step.predecessors.push_back(static_cast<uint32_t>(pred));
 
       step.ops.push_back(
-          make_copy_op(next_op_id++, ring.prev(request.rank), request.rank, chunk));
+          make_copy_op(next_op_id++, ring.prev(request.rank), request.rank, chunk,
+                       {}, static_cast<uint32_t>(ExecutionOpFlags::None),
+                       BufferRole::RemoteInput, BufferRole::FinalOutput));
 
       last_step_for_channel[chunk.channel_id] = static_cast<int32_t>(step.step_id);
       plan.steps.push_back(std::move(step));
@@ -145,8 +155,12 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
           make_copy_op(copy_op_id, ring.prev(request.rank), request.rank, chunk,
                        {},
                        static_cast<uint32_t>(ExecutionOpFlags::StageForReduce)));
+      step.ops.back().src_role = BufferRole::RemoteInput;
+      step.ops.back().dst_role = BufferRole::RecvStaging;
       step.ops.push_back(make_reduce_op(next_op_id++, request.rank, request.rank,
-                                        chunk, {copy_op_id}));
+                                        chunk, {copy_op_id},
+                                        BufferRole::RecvStaging,
+                                        BufferRole::FinalOutput));
 
       last_step_for_channel[chunk.channel_id] = static_cast<int32_t>(step.step_id);
       plan.steps.push_back(std::move(step));
@@ -177,7 +191,9 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
       if (pred >= 0) step.predecessors.push_back(static_cast<uint32_t>(pred));
 
       step.ops.push_back(
-          make_copy_op(next_op_id++, ring.prev(request.rank), request.rank, chunk));
+          make_copy_op(next_op_id++, ring.prev(request.rank), request.rank, chunk,
+                       {}, static_cast<uint32_t>(ExecutionOpFlags::None),
+                       BufferRole::RemoteReduced, BufferRole::FinalOutput));
 
       last_step_for_channel[chunk.channel_id] = static_cast<int32_t>(step.step_id);
       plan.steps.push_back(std::move(step));
