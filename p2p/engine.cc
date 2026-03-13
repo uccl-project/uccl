@@ -362,7 +362,8 @@ bool Endpoint::connect(std::string ip_addr, int remote_gpu_idx, int remote_port,
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
     conn_id_to_conn_[conn_id] =
-        new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+        new Conn{conn_id, uccl_conn_id, ip_addr,
+                 static_cast<uint16_t>(remote_port), remote_gpu_idx};
   }
   return true;
 }
@@ -513,7 +514,7 @@ bool Endpoint::accept(std::string& ip_addr, int& remote_gpu_idx,
   {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
     conn_id_to_conn_[conn_id] =
-        new Conn{conn_id, uccl_conn_id, ip_addr, remote_gpu_idx};
+        new Conn{conn_id, uccl_conn_id, ip_addr, 0, remote_gpu_idx};
   }
 
   return true;
@@ -2177,10 +2178,63 @@ bool Endpoint::add_remote_endpoint(std::vector<uint8_t> const& metadata,
   }
   if (success) {
     std::unique_lock<std::shared_mutex> lock(conn_mu_);
+    auto conn_it = conn_id_to_conn_.find(conn_id);
+    if (conn_it != conn_id_to_conn_.end()) {
+      conn_it->second->ip_addr_ = remote_ip;
+      conn_it->second->remote_port_ = remote_port;
+      conn_it->second->remote_gpu_idx_ = remote_gpu_idx;
+    }
     remote_endpoint_to_conn_id_[metadata] = conn_id;
     return true;
   }
   return false;
+}
+
+bool Endpoint::remove_remote_endpoint(uint64_t conn_id) {
+  std::unique_lock<std::shared_mutex> lock(conn_mu_);
+
+  auto it = conn_id_to_conn_.find(conn_id);
+  if (it == conn_id_to_conn_.end()) {
+    std::cerr << "[remove_remote_endpoint] Error: Invalid conn_id " << conn_id
+              << std::endl;
+    return false;
+  }
+
+  Conn* conn = it->second;
+  uint64_t loopback_conn_id = conn->rdma_loopback_conn_id_;
+
+  // Detach shared memory if this was a local connection
+  if (conn->shm_attached_) {
+    auto& shm = conn->remote_inbox_;
+    uccl::detach_shared_ring(shm.ring, shm.shm_fd, shm.shm_size);
+  }
+
+  // Remove from the metadata memoization map
+  for (auto mit = remote_endpoint_to_conn_id_.begin();
+       mit != remote_endpoint_to_conn_id_.end(); ++mit) {
+    if (mit->second == conn_id) {
+      remote_endpoint_to_conn_id_.erase(mit);
+      break;
+    }
+  }
+
+  delete conn;
+  conn_id_to_conn_.erase(it);
+
+  if (loopback_conn_id != UINT64_MAX) {
+    auto loopback_it = conn_id_to_conn_.find(loopback_conn_id);
+    if (loopback_it != conn_id_to_conn_.end()) {
+      Conn* loopback_conn = loopback_it->second;
+      if (loopback_conn->shm_attached_) {
+        auto& shm = loopback_conn->remote_inbox_;
+        uccl::detach_shared_ring(shm.ring, shm.shm_fd, shm.shm_size);
+      }
+      delete loopback_conn;
+      conn_id_to_conn_.erase(loopback_it);
+    }
+  }
+
+  return true;
 }
 
 bool Endpoint::start_passive_accept() {
