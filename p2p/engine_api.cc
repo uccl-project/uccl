@@ -473,7 +473,7 @@ NB_MODULE(p2p, m) {
                     nb::cast<XferDesc const&>(local_desc_list[i]);
                 auto const& rdesc =
                     nb::cast<XferDesc const&>(remote_desc_list[i]);
-                CHECK(!rdesc.ipc_info.empty())
+                UCCL_CHECK(!rdesc.ipc_info.empty())
                     << "Remote descriptor has no IPC info for local transfer";
                 IpcTransferInfo info;
                 std::memcpy(&info, rdesc.ipc_info.data(), sizeof(info));
@@ -521,7 +521,7 @@ NB_MODULE(p2p, m) {
                     nb::cast<XferDesc const&>(local_desc_list[0]);
                 auto const& rdesc =
                     nb::cast<XferDesc const&>(remote_desc_list[0]);
-                CHECK(!rdesc.ipc_info.empty())
+                UCCL_CHECK(!rdesc.ipc_info.empty())
                     << "Remote descriptor has no IPC info for local transfer";
                 IpcTransferInfo info;
                 std::memcpy(&info, rdesc.ipc_info.data(), sizeof(info));
@@ -556,7 +556,7 @@ NB_MODULE(p2p, m) {
                       nb::cast<XferDesc const&>(local_desc_list[i]);
                   auto const& rdesc =
                       nb::cast<XferDesc const&>(remote_desc_list[i]);
-                  CHECK(!rdesc.ipc_info.empty())
+                  UCCL_CHECK(!rdesc.ipc_info.empty())
                       << "Remote descriptor has no IPC info for local transfer";
                   IpcTransferInfo info;
                   std::memcpy(&info, rdesc.ipc_info.data(), sizeof(info));
