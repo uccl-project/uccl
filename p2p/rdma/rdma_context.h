@@ -158,7 +158,7 @@ class RdmaContext {
     gpuPointerAttribute_t attrs = {};
     gpuError_t err = gpuPointerGetAttributes(&attrs, ptr);
     if (err != gpuSuccess) {
-      gpuGetLastError();  // clear sticky error
+      (void)gpuGetLastError();  // clear sticky error
       return false;
     }
     return (attrs.type == gpuMemoryTypeDevice);

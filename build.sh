@@ -289,7 +289,7 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
       build_ccl_rdma "$TARGET" "$ARCH" "$IS_EFA"
       build_ccl_efa "$TARGET" "$ARCH" "$IS_EFA"
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
-      # build_ep "$TARGET" "$ARCH" "$IS_EFA"
+      build_ep "$TARGET" "$ARCH" "$IS_EFA"
       # build_ukernel "$TARGET" "$ARCH" "$IS_EFA"
     fi
 
