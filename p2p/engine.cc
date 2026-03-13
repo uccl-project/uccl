@@ -923,6 +923,33 @@ bool Endpoint::read(uint64_t conn_id, uint64_t mr_id, void* dst, size_t size,
 bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
                           size_t size, FifoItem const& slot_item,
                           uint64_t* transfer_id) {
+  if (size <= kDirectAsyncNetThreshold) {
+    auto* conn = get_conn(conn_id);
+    if (unlikely(conn == nullptr)) {
+      std::cerr << "[read_async] Error: Invalid conn_id " << conn_id
+                << std::endl;
+      return false;
+    }
+    P2PMhandle* mhandle = get_mhandle(mr_id);
+    if (unlikely(mhandle == nullptr)) {
+      std::cerr << "[read_async] Error: Invalid mr_id " << mr_id << std::endl;
+      return false;
+    }
+
+    ucclRequest ureq = {};
+    FifoItem curr_slot_item = slot_item;
+    curr_slot_item.size = size;
+    while (uccl_read_async(ep_, conn, mhandle, dst, size, curr_slot_item,
+                           &ureq) == -1) {
+    }
+
+    auto* status = new TransferStatus();
+    status->poll_net_ureq = true;
+    status->ureq = ureq;
+    *transfer_id = reinterpret_cast<uint64_t>(status);
+    return true;
+  }
+
   auto task_ptr =
       create_net_task(conn_id, mr_id, TaskType::READ_NET, dst, size, slot_item);
   if (unlikely(task_ptr == nullptr)) {
@@ -1054,6 +1081,33 @@ bool Endpoint::write(uint64_t conn_id, uint64_t mr_id, void* src, size_t size,
 bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
                            size_t size, FifoItem const& slot_item,
                            uint64_t* transfer_id) {
+  if (size <= kDirectAsyncNetThreshold) {
+    auto* conn = get_conn(conn_id);
+    if (unlikely(conn == nullptr)) {
+      std::cerr << "[write_async] Error: Invalid conn_id " << conn_id
+                << std::endl;
+      return false;
+    }
+    P2PMhandle* mhandle = get_mhandle(mr_id);
+    if (unlikely(mhandle == nullptr)) {
+      std::cerr << "[write_async] Error: Invalid mr_id " << mr_id << std::endl;
+      return false;
+    }
+
+    ucclRequest ureq = {};
+    FifoItem curr_slot_item = slot_item;
+    curr_slot_item.size = size;
+    while (uccl_write_async(ep_, conn, mhandle, src, size, curr_slot_item,
+                            &ureq) == -1) {
+    }
+
+    auto* status = new TransferStatus();
+    status->poll_net_ureq = true;
+    status->ureq = ureq;
+    *transfer_id = reinterpret_cast<uint64_t>(status);
+    return true;
+  }
+
   auto task_ptr = create_net_task(conn_id, mr_id, TaskType::WRITE_NET, src,
                                   size, slot_item);
   if (unlikely(task_ptr == nullptr)) {
@@ -2251,6 +2305,11 @@ bool Endpoint::start_passive_accept() {
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   auto* status = reinterpret_cast<TransferStatus*>(transfer_id);
+  if (status->poll_net_ureq && !status->done.load(std::memory_order_acquire)) {
+    if (uccl_poll_ureq_once(ep_, &status->ureq)) {
+      status->done.store(true, std::memory_order_release);
+    }
+  }
   *is_done = status->done.load(std::memory_order_acquire);
   if (*is_done) {
     delete status;
