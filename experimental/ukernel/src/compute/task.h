@@ -10,6 +10,14 @@
 namespace UKernel {
 namespace Compute {
 
+#ifndef UKERNEL_ENABLE_REGISTER_OP
+#define UKERNEL_ENABLE_REGISTER_OP 1
+#endif
+
+#ifndef UKERNEL_ENABLE_TMA
+#define UKERNEL_ENABLE_TMA 0
+#endif
+
 enum class TaskType : uint64_t {
   // CollTaskType
   CollCopy,
@@ -25,6 +33,9 @@ enum class TaskType : uint64_t {
 };
 
 enum class DataType : uint64_t { Fp8, Fp16, Fp32 };
+enum class TransferPath : uint32_t { Auto, RegisterOp, TmaOp, CopyEngine };
+enum class CpuBackendKind : uint32_t { Auto, Rdma, Ce, Pk };
+enum class PkBackendKind : uint32_t { Auto, RegisterOp, TmaOp };
 
 constexpr unsigned int TaskTypeSize = 8;  // 256
 constexpr unsigned int DataTypeSize = 8;
@@ -95,13 +106,48 @@ static_assert(sizeof(Task) == 16);
 // Coll
 enum class ReduceType : uint64_t { Sum, Max, None };
 
+struct DeviceCapabilities {
+  bool is_same_node = true;
+  bool has_peer_access = false;
+  bool has_nvlink = false;
+  bool has_copy_engine_path = false;
+  bool has_tma = UKERNEL_ENABLE_TMA != 0;
+  bool supports_rdma = false;
+};
+
+inline __host__ __device__ bool is_pk_transfer_path(TransferPath path) {
+  return path == TransferPath::Auto || path == TransferPath::RegisterOp ||
+         path == TransferPath::TmaOp;
+}
+
+inline __host__ __device__ TransferPath normalize_pk_transfer_path(
+    TransferPath requested) {
+  if (requested == TransferPath::Auto) return TransferPath::RegisterOp;
+#if UKERNEL_ENABLE_TMA
+  return requested;
+#else
+  return requested == TransferPath::TmaOp ? TransferPath::RegisterOp
+                                          : requested;
+#endif
+}
+
 struct alignas(16) CollArgs {
   void* src;
   void* src2;
   void* dst;
-  uint32_t bytes;
+  uint64_t bytes;
+  uint64_t op_id;
+  uint32_t step_id;
+  uint32_t chunk_id;
+  uint32_t completion_cookie;
+  int32_t src_rank;
+  int32_t dst_rank;
+  int32_t src_device;
+  int32_t dst_device;
+  uint32_t flags;
   ReduceType redType;
-  uint8_t _pad0[3];
+  TransferPath requested_path;
+  TransferPath resolved_path;
 };
 static_assert(sizeof(CollArgs) % 16 == 0,
               "CollArgs should be 16B aligned size");
@@ -180,6 +226,8 @@ class TaskManager {
   Task create_coll_task(CollArgs const& h, TaskType tt, DataType dt,
                         uint32_t blockId) {
     assert(tt == TaskType::CollCopy || tt == TaskType::CollReduce);
+    assert(is_pk_transfer_path(h.requested_path) &&
+           "coll task must use a persistent-kernel transfer path");
 
     uint32_t idx;
     {
@@ -190,8 +238,11 @@ class TaskManager {
       free_coll_.pop_back();
     }
 
-    GPU_RT_CHECK(
-        gpuMemcpy(d_coll_ + idx, &h, sizeof(CollArgs), gpuMemcpyHostToDevice));
+    CollArgs normalized = h;
+    normalized.resolved_path = normalize_pk_transfer_path(h.requested_path);
+
+    GPU_RT_CHECK(gpuMemcpy(d_coll_ + idx, &normalized, sizeof(CollArgs),
+                           gpuMemcpyHostToDevice));
 
     return Task(tt, dt, blockId, idx);
   }

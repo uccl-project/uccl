@@ -21,6 +21,10 @@ struct PersistentKernelConfig {
   uint32_t threadsPerBlock = 64;  // assume that warpsize is 32
   uint32_t fifoCapacity = 16;
   uint32_t smemSize = 0;
+  TransferPath defaultTransferPath = TransferPath::Auto;
+  bool enableAutoTransport = true;
+  uint64_t copyEngineThresholdBytes = 256 * 1024;
+  uint64_t tmaThresholdBytes = 16 * 1024;
 
   gpuStream_t stream = nullptr;  // if user manage the stream
 };

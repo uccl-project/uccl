@@ -27,7 +27,7 @@ __device__ __forceinline__ __half apply_red<__half>(ReduceType op, __half a,
   return __float2half(rf);
 }
 
-__device__ void run_copy(CollArgs const& a) {
+__device__ void run_copy_register(CollArgs const& a) {
   auto* dst = reinterpret_cast<char*>(a.dst);
   auto* src = reinterpret_cast<char const*>(a.src);
 
@@ -43,6 +43,25 @@ __device__ void run_copy(CollArgs const& a) {
 
   for (uint64_t i = start; i < end; ++i) {
     dst[i] = src[i];
+  }
+}
+
+__device__ void run_copy_tma(CollArgs const& a) {
+  // Phase 1 keeps TMA as a stub so task metadata can flow end-to-end before
+  // we wire in Hopper-specific async copy machinery.
+  run_copy_register(a);
+}
+
+__device__ void run_copy(CollArgs const& a) {
+  switch (a.resolved_path) {
+    case TransferPath::TmaOp:
+      run_copy_tma(a);
+      return;
+    case TransferPath::Auto:
+    case TransferPath::RegisterOp:
+    default:
+      run_copy_register(a);
+      return;
   }
 }
 
@@ -110,8 +129,10 @@ __global__ void basePersistentKernel(mscclpp::C2DDeviceHandle<T>* c2d_fifos,
 
     // if (threadIdx.x == 0) {
     //   printf("cur block=%u : task block_id=%u args_id=%u type=%d dtype=%d
-    //   red=%d bytes=%u\n", bid, block_id, idx, int(ttype),
-    //          int(dtype), int(a.redType), a.bytes);
+    //   red=%d bytes=%llu path=%u step=%u chunk=%u\n", bid, block_id, idx,
+    //          int(ttype), int(dtype), int(a.redType),
+    //          static_cast<unsigned long long>(a.bytes),
+    //          static_cast<unsigned>(a.resolved_path), a.step_id, a.chunk_id);
     // }
 
     switch (ttype) {

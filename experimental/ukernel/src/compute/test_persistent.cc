@@ -28,13 +28,27 @@ static void fill(std::vector<float>& v, float base, float step) {
 uint64_t submit_copy_task(
     UKernel::Compute::PersistentKernel<UKernel::Compute::Task>& kernel,
     void* dst, void const* src, uint64_t bytes,
-    UKernel::Compute::DataType dtype, uint32_t block_id) {
+    UKernel::Compute::DataType dtype, uint32_t block_id,
+    UKernel::Compute::TransferPath path =
+        UKernel::Compute::TransferPath::Auto,
+    uint64_t op_id = 0, uint32_t step_id = 0, uint32_t chunk_id = 0) {
   UKernel::Compute::CollArgs h{};
   h.src = const_cast<void*>(src);
   h.src2 = nullptr;
   h.dst = dst;
-  h.bytes = static_cast<uint32_t>(bytes);
+  h.bytes = bytes;
+  h.op_id = op_id;
+  h.step_id = step_id;
+  h.chunk_id = chunk_id;
+  h.completion_cookie = chunk_id;
+  h.src_rank = 0;
+  h.dst_rank = 0;
+  h.src_device = 0;
+  h.dst_device = 0;
+  h.flags = 0;
   h.redType = UKernel::Compute::ReduceType::None;
+  h.requested_path = path;
+  h.resolved_path = UKernel::Compute::TransferPath::Auto;
 
   UKernel::Compute::Task t =
       UKernel::Compute::TaskManager::instance().create_coll_task(
@@ -47,13 +61,27 @@ uint64_t submit_reduce_task(
     UKernel::Compute::PersistentKernel<UKernel::Compute::Task>& kernel,
     void* dst, void const* src, uint64_t bytes,
     UKernel::Compute::DataType dtype, UKernel::Compute::ReduceType redop,
-    uint32_t block_id) {
+    uint32_t block_id,
+    UKernel::Compute::TransferPath path =
+        UKernel::Compute::TransferPath::Auto,
+    uint64_t op_id = 0, uint32_t step_id = 0, uint32_t chunk_id = 0) {
   UKernel::Compute::CollArgs h{};
   h.src = const_cast<void*>(src);
   h.src2 = nullptr;
   h.dst = dst;
-  h.bytes = static_cast<uint32_t>(bytes);
+  h.bytes = bytes;
+  h.op_id = op_id;
+  h.step_id = step_id;
+  h.chunk_id = chunk_id;
+  h.completion_cookie = chunk_id;
+  h.src_rank = 0;
+  h.dst_rank = 0;
+  h.src_device = 0;
+  h.dst_device = 0;
+  h.flags = 0;
   h.redType = redop;
+  h.requested_path = path;
+  h.resolved_path = UKernel::Compute::TransferPath::Auto;
 
   UKernel::Compute::Task t =
       UKernel::Compute::TaskManager::instance().create_coll_task(
@@ -107,26 +135,29 @@ int main() {
 
   uint64_t id =
       submit_copy_task(kernel, dst_copy, src_copy, N * sizeof(float),
-                       UKernel::Compute::DataType::Fp32, test_block_id);
+                       UKernel::Compute::DataType::Fp32, test_block_id,
+                       UKernel::Compute::TransferPath::Auto, 1, 0, 0);
 
   while (!kernel.is_done(test_block_id, id)) {
   }
-  std::cout << "COPY DONE\n";
+  std::cout << "COPY AUTO DONE\n";
 
   id = submit_reduce_task(kernel, dst_reduce, src_reduce, N * sizeof(float),
                           UKernel::Compute::DataType::Fp32,
-                          UKernel::Compute::ReduceType::Sum, test_block_id_2);
+                          UKernel::Compute::ReduceType::Sum, test_block_id_2,
+                          UKernel::Compute::TransferPath::Auto, 2, 1, 0);
 
   while (!kernel.is_done(test_block_id_2, id)) {
   }
   std::cout << "REDUCE DONE\n";
 
   id = submit_copy_task(kernel, dst_copy, src_copy, N * sizeof(float),
-                        UKernel::Compute::DataType::Fp32, test_block_id);
+                        UKernel::Compute::DataType::Fp32, test_block_id,
+                        UKernel::Compute::TransferPath::RegisterOp, 3, 2, 0);
 
   while (!kernel.is_done(test_block_id, id)) {
   }
-  std::cout << "COPY2 DONE\n";
+  std::cout << "COPY REGISTER DONE\n";
 
   kernel.stop();
   std::cout << "Stop signal sent.\n";

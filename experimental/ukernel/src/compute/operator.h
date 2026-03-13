@@ -13,6 +13,8 @@ namespace Compute {
 inline __device__ int min(int a, ssize_t b) { return (a < b) ? a : b; }
 
 __device__ void run_copy(CollArgs const& a);
+__device__ void run_copy_register(CollArgs const& a);
+__device__ void run_copy_tma(CollArgs const& a);
 
 template <typename T>
 __device__ __forceinline__ T apply_red(ReduceType op, T a, T b);
