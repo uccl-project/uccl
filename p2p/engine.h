@@ -182,6 +182,8 @@ struct UnifiedTask;
 struct TransferStatus {
   std::atomic<bool> done{false};
   std::shared_ptr<UnifiedTask> task_ptr;
+  bool poll_net_ureq{false};
+  ucclRequest ureq{};
 };
 
 struct alignas(64) UnifiedTask {
@@ -253,6 +255,7 @@ class Endpoint {
   static constexpr int kMaxInflightOps = 8;  // Max 8 concurrent Ops
   static constexpr size_t ShmRingDefaultElemCnt = 16;
   static constexpr size_t kTaskRingSize = 1024;
+  static constexpr size_t kDirectAsyncNetThreshold = 256 * 1024;
 
   static uccl::UCCLLogLevel parse_log_level_from_env();
 
