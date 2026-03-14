@@ -23,17 +23,17 @@ env:
   IMAGE_PREFIX: ghcr.io/${{ github.repository }}
 
 # ---------------------------------------------------------------------------
-# Single wheel containing ccl_rdma + ccl_efa + p2p + ep, per variant.
+# Single package "uccl" with local version identifiers (vLLM-style).
 #
-#   Variant       target   image               package name     distribution
-#   ──────────    ──────   ─────               ────────────     ────────────
-#   cu12          cu12     uccl-builder-cuda    uccl-cu12        PyPI
-#   cu13          cu13     uccl-builder-cu13    uccl-cu13        PyPI
-#   cu12+efa      cu12     uccl-builder-efa     uccl-cu12-efa    PyPI
-#   cu13+efa      cu13     uccl-builder-efa13   uccl-cu13-efa    PyPI
-#   rocm          rocm     uccl-builder-rocm    uccl-rocm        extra-index-url
+#   Variant       target   image               local version    distribution
+#   ──────────    ──────   ─────               ─────────────    ────────────
+#   cu12          cu12     uccl-builder-cuda    (none)           PyPI + GH Release
+#   cu13          cu13     uccl-builder-cu13    +cu13            GH Release
+#   cu12+efa      cu12     uccl-builder-efa     +cu12.efa        GH Release
+#   cu13+efa      cu13     uccl-builder-efa13   +cu13.efa        GH Release
+#   rocm          rocm     uccl-builder-rocm    +rocm            GH Release
 #
-# × Python 3.12 (abi3 — compatible with 3.12+) = 6 wheel jobs + 1 source tarball
+# × Python 3.12 (abi3 — compatible with 3.12+) = 5 wheel jobs + 1 source tarball
 # ---------------------------------------------------------------------------
 
 jobs:
@@ -76,41 +76,41 @@ jobs:
       matrix:
         py_version: ["3.12"]
         variant:
-          # CUDA 12
+          # CUDA 12 (default — no local version, published to PyPI)
           - name: cu12
             target: cu12
             image_name: uccl-builder-cuda
-            package_name: uccl-cu12
+            local_version: ""
             for_pypi: true
             gpu_arch: "9.0+PTX"
           # CUDA 13
           - name: cu13
             target: cu13
             image_name: uccl-builder-cu13
-            package_name: uccl-cu13
-            for_pypi: true
+            local_version: "cu13"
+            for_pypi: false
             gpu_arch: "9.0+PTX"
           # CUDA 12 + EFA
           - name: cu12-efa
             target: cu12
             image_name: uccl-builder-efa
-            package_name: uccl-cu12-efa
+            local_version: "cu12.efa"
             is_efa: "1"
-            for_pypi: true
+            for_pypi: false
             gpu_arch: "9.0+PTX"
           # CUDA 13 + EFA
           - name: cu13-efa
             target: cu13
             image_name: uccl-builder-efa13
-            package_name: uccl-cu13-efa
+            local_version: "cu13.efa"
             is_efa: "1"
-            for_pypi: true
+            for_pypi: false
             gpu_arch: "9.0+PTX"
           # ROCm
           - name: rocm
             target: rocm
             image_name: uccl-builder-rocm
-            package_name: uccl-rocm
+            local_version: "rocm"
             for_pypi: false
             gpu_arch: "gfx942,gfx950"
 
@@ -147,8 +147,7 @@ jobs:
           IMAGE_NAME: ${{ matrix.variant.image_name }}
           IS_EFA: ${{ matrix.variant.is_efa || '' }}
           TORCH_CUDA_ARCH_LIST: ${{ matrix.variant.gpu_arch }}
-          UCCL_PACKAGE_NAME: ${{ matrix.variant.package_name }}
-          UCCL_SKIP_LOCAL_VERSION: ${{ matrix.variant.for_pypi && '1' || '0' }}
+          UCCL_LOCAL_VERSION: ${{ matrix.variant.local_version }}
         run: |
           ./build.sh "${{ matrix.variant.target }}" all "${{ matrix.py_version }}"
 
@@ -200,34 +199,10 @@ jobs:
           if-no-files-found: error
 
   # ==========================================================================
-  # Job 5: Build uccl meta-package (pure Python, extras → backends)
-  # ==========================================================================
-  build-meta-package:
-    needs: [check-permissions]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Build meta-package wheel
-        run: |
-          pip install build
-          python -m build
-          echo "Meta-package wheel:"
-          ls -lh dist/
-
-      - name: Upload meta-package artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: wheel-meta
-          path: dist/*.whl
-          if-no-files-found: error
-
-  # ==========================================================================
-  # Job 6: Upload all artifacts to GitHub Release
+  # Job 5: Upload all artifacts to GitHub Release
   # ==========================================================================
   upload-release-assets:
-    needs: [build-wheels, build-meta-package, create-source-tarball]
+    needs: [build-wheels, create-source-tarball]
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
@@ -265,14 +240,13 @@ jobs:
           echo "Done. All assets uploaded."
 
   # ==========================================================================
-  # Job 7: Publish to PyPI
-  #   - uccl meta-package (extras → backends)
-  #   - uccl-cu12, uccl-cu13, uccl-cu12-efa, uccl-cu13-efa backend wheels
-  #   - ROCm wheels stay on GitHub Releases — users install via:
-  #       pip install uccl[rocm] --extra-index-url <url>
+  # Job 6: Publish default wheel to PyPI
+  #   - Only the cu12 wheel (no local version) goes to PyPI.
+  #   - All other variants (cu13, efa, rocm) are on GitHub Releases.
+  #   - Users install: pip install uccl
   # ==========================================================================
   publish-pypi:
-    needs: [build-wheels, build-meta-package]
+    needs: [build-wheels]
     if: >
       github.event_name == 'release' ||
       (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
@@ -282,17 +256,11 @@ jobs:
     environment:
       name: pypi
     steps:
-      - name: Download CUDA wheel artifacts
+      - name: Download default (cu12) wheel artifact
         uses: actions/download-artifact@v4
         with:
           path: all-artifacts/
-          pattern: wheel-cu*
-
-      - name: Download meta-package wheel
-        uses: actions/download-artifact@v4
-        with:
-          name: wheel-meta
-          path: all-artifacts/meta/
+          pattern: wheel-cu12-py*
 
       - name: Collect PyPI wheels
         run: |
