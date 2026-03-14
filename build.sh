@@ -69,6 +69,23 @@ if [[ "$CONTAINER_ENGINE" != "docker" && "$CONTAINER_ENGINE" != "podman" ]]; the
 fi
 IS_EFA="${IS_EFA:-$([ -d "/sys/class/infiniband/" ] && ls /sys/class/infiniband/ 2>/dev/null | grep -q rdmap && echo "EFA support: true")}" || echo "EFA support: false"
 
+# Auto-derive UCCL_LOCAL_VERSION from target when not explicitly set.
+# Default cu12 (no EFA) gets no local version (published to PyPI).
+# TheRock computes its local version inside the container from rocm-sdk.
+if [[ -z "${UCCL_LOCAL_VERSION+x}" ]]; then
+  if [[ "$TARGET" == "cu12" && -z "$IS_EFA" ]]; then
+    UCCL_LOCAL_VERSION=""
+  elif [[ "$TARGET" == cu* ]]; then
+    if [[ -n "$IS_EFA" ]]; then
+      UCCL_LOCAL_VERSION="${TARGET}.efa"
+    else
+      UCCL_LOCAL_VERSION="${TARGET}"
+    fi
+  elif [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
+    UCCL_LOCAL_VERSION="rocm"
+  fi
+fi
+
 # Auto-detect CUDA architecture for ep build, auto-detect ROCm architecture for ep build
 DETECTED_GPU_ARCH=""
 if [[ "$BUILD_TYPE" =~ (ep|all|p2p) ]]; then
@@ -258,8 +275,7 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
   -e HOST_GLIBC_VER="${HOST_GLIBC_VER}" \
   -e UCCL_WHEEL_ENABLE_FORCE_RETAG="${UCCL_WHEEL_ENABLE_FORCE_RETAG:-0}" \
   -e UCCL_WHEEL_PLAT="${UCCL_WHEEL_PLAT:-}" \
-  -e UCCL_PACKAGE_NAME="${UCCL_PACKAGE_NAME:-uccl-${TARGET}}" \
-  -e UCCL_SKIP_LOCAL_VERSION="${UCCL_SKIP_LOCAL_VERSION:-0}" \
+  -e UCCL_LOCAL_VERSION="${UCCL_LOCAL_VERSION:-}" \
   -e FUNCTION_DEF="$(declare -f rename_to_abi3 build_rccl_nccl_header build_ccl_rdma build_ccl_efa build_p2p build_ep build_ukernel)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
@@ -398,26 +414,23 @@ def initialize():
     done
     cd /io
 
-    # Add backend tag to wheel filename using local version identifier
-    # Set UCCL_SKIP_LOCAL_VERSION=1 to skip this (e.g. for PyPI where local versions are rejected)
-    if [[ "${UCCL_SKIP_LOCAL_VERSION:-0}" != "1" ]] && [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
-      # Adjust TARGET to the preferred wheel name suffix for python-packaged ROCm, e.g. "rocm7.9.0rc1"
-      if [[ "$TARGET" == "therock" ]]; then
-        TARGET="rocm$(rocm-sdk version)"
-      fi
+    # Add local version identifier to wheel filename (PEP 440, vLLM-style).
+    # UCCL_LOCAL_VERSION is set by the caller (e.g. "cu13", "cu12.efa", "rocm").
+    # TheRock auto-computes it from rocm-sdk version.
+    # If empty, the wheel keeps its base version (default cu12 for PyPI).
+    if [[ "$TARGET" == "therock" ]]; then
+      UCCL_LOCAL_VERSION="rocm$(rocm-sdk version)"
+    fi
+    if [[ -n "${UCCL_LOCAL_VERSION:-}" ]]; then
       cd /io/${WHEEL_DIR}
       for wheel in uccl*.whl; do
         if [[ -f "$wheel" ]]; then
-          # Extract wheel name components: uccl-version-python-abi-platform.whl
           if [[ "$wheel" =~ ^(uccl[^-]*-)([^-]+)-([^-]+-[^-]+-.+)(\.whl)$ ]]; then
             name="${BASH_REMATCH[1]}"
             version="${BASH_REMATCH[2]}"
             python_abi_platform="${BASH_REMATCH[3]}"
             suffix="${BASH_REMATCH[4]}"
-            
-            # Add backend to version using local identifier: uccl-version+backend-python-abi-platform.whl
-            new_wheel="${name}${version}+${TARGET}-${python_abi_platform}${suffix}"
-            
+            new_wheel="${name}${version}+${UCCL_LOCAL_VERSION}-${python_abi_platform}${suffix}"
             echo "Renaming wheel: $wheel -> $new_wheel"
             mv "$wheel" "$new_wheel"
           else
@@ -454,12 +467,8 @@ if [[ "$DO_INSTALL" == "1" ]]; then
 
   echo "Installing uccl wheel for ${PYTHON_CMD} (using ${PIP_CMD})..."
   ${PIP_CMD} install -r requirements.txt
-  # Uninstall the meta-package and any backend packages so pip doesn't
-  # skip the install with "already installed" after we clean stale files.
+  # Uninstall any previous uccl so pip doesn't skip with "already installed".
   ${PIP_CMD} uninstall uccl -y 2>/dev/null || true
-  for _pkg in $(${PIP_CMD} list 2>/dev/null | awk '/^uccl-/ { print $1 }'); do
-    ${PIP_CMD} uninstall "$_pkg" -y 2>/dev/null || true
-  done
   UCCL_CLEANUP_DIR="$(${PYTHON_CMD} -c "import site; print(site.getsitepackages()[0])")/uccl"
   if [[ -d "$UCCL_CLEANUP_DIR" ]]; then
     echo "Cleaning up stale files in $UCCL_CLEANUP_DIR"
@@ -471,13 +480,7 @@ if [[ "$DO_INSTALL" == "1" ]]; then
     ${PIP_CMD} install --extra-index-url "${ROCM_IDX_URL}" "$(ls "${WHEEL_DIR}"/uccl*.whl)[rocm]"
   fi
 
-  # Detect installed UCCL package (e.g. uccl-cu13, uccl-cu12, uccl-rocm), not the meta "uccl".
-  # Pipelines use "|| true" to avoid tripping set -eo pipefail on SIGPIPE / empty output.
-  UCCL_PIP_PKG=$(${PIP_CMD} list 2>/dev/null | awk '/^uccl-/ { print $1 }' | head -n1 || true)
-  if [[ -z "$UCCL_PIP_PKG" ]]; then
-    UCCL_PIP_PKG="uccl"
-  fi
-  UCCL_INSTALL_PATH=$(${PIP_CMD} show "$UCCL_PIP_PKG" 2>/dev/null | grep "^Location:" | cut -d' ' -f2 || true)
+  UCCL_INSTALL_PATH=$(${PIP_CMD} show uccl 2>/dev/null | grep "^Location:" | cut -d' ' -f2 || true)
   if [[ -n "$UCCL_INSTALL_PATH" && -d "$UCCL_INSTALL_PATH" ]]; then
     UCCL_PACKAGE_PATH="$UCCL_INSTALL_PATH/uccl"
     if [[ -d "$UCCL_PACKAGE_PATH" ]]; then
