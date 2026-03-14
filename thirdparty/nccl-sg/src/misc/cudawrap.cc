@@ -73,7 +73,7 @@ DECLARE_CUDA_PFN(cuLaunchKernel, 4000);
 DECLARE_CUDA_PFN(cuLaunchKernelEx, 11060);
 #endif
 /* proxy.cc */
-DECLARE_CUDA_PFN(cuCtxCreate, 4000);
+DECLARE_CUDA_PFN(cuCtxCreate, 11040);
 DECLARE_CUDA_PFN(cuCtxDestroy, 4000);
 DECLARE_CUDA_PFN(cuCtxGetCurrent, 4000);
 DECLARE_CUDA_PFN(cuCtxSetCurrent, 4000);
