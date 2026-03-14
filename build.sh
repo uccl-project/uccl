@@ -69,6 +69,23 @@ if [[ "$CONTAINER_ENGINE" != "docker" && "$CONTAINER_ENGINE" != "podman" ]]; the
 fi
 IS_EFA="${IS_EFA:-$([ -d "/sys/class/infiniband/" ] && ls /sys/class/infiniband/ 2>/dev/null | grep -q rdmap && echo "EFA support: true")}" || echo "EFA support: false"
 
+# Auto-derive UCCL_LOCAL_VERSION from target when not explicitly set.
+# Default cu12 (no EFA) gets no local version (published to PyPI).
+# TheRock computes its local version inside the container from rocm-sdk.
+if [[ -z "${UCCL_LOCAL_VERSION+x}" ]]; then
+  if [[ "$TARGET" == "cu12" && -z "$IS_EFA" ]]; then
+    UCCL_LOCAL_VERSION=""
+  elif [[ "$TARGET" == cu* ]]; then
+    if [[ -n "$IS_EFA" ]]; then
+      UCCL_LOCAL_VERSION="${TARGET}.efa"
+    else
+      UCCL_LOCAL_VERSION="${TARGET}"
+    fi
+  elif [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
+    UCCL_LOCAL_VERSION="rocm"
+  fi
+fi
+
 # Auto-detect CUDA architecture for ep build, auto-detect ROCm architecture for ep build
 DETECTED_GPU_ARCH=""
 if [[ "$BUILD_TYPE" =~ (ep|all|p2p) ]]; then
@@ -475,5 +492,4 @@ if [[ "$DO_INSTALL" == "1" ]]; then
   else
     echo "Warning: Could not detect UCCL installation path"
   fi
-  echo "Verify: ${PYTHON_CMD} -c \"from uccl import ep\""
 fi
