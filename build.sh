@@ -152,13 +152,13 @@ elif [[ $TARGET == "cuda13" ]]; then
   : "${BASE_IMAGE:=nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04}"
   if [[ "$ARCH" == "aarch64" ]]; then
     : "${DOCKERFILE:=docker/Dockerfile.gh}"
-    : "${IMAGE_NAME:=uccl-builder-gh}"
+    : "${IMAGE_NAME:=uccl-builder-gh13}"
   elif [[ -n "$IS_EFA" ]]; then
     : "${DOCKERFILE:=docker/Dockerfile.efa}"
-    : "${IMAGE_NAME:=uccl-builder-efa}"
+    : "${IMAGE_NAME:=uccl-builder-efa13}"
   else
     : "${DOCKERFILE:=docker/Dockerfile.cuda}"
-    : "${IMAGE_NAME:=uccl-builder-cuda}"
+    : "${IMAGE_NAME:=uccl-builder-cuda13}"
   fi
 elif [[ $TARGET == "rocm" ]]; then
   # default is latest rocm 7 version from `rocm/dev-ubuntu-22.04`
@@ -167,7 +167,7 @@ elif [[ $TARGET == "rocm" ]]; then
 elif [[ $TARGET == "rocm6" ]]; then
   : "${DOCKERFILE:=docker/Dockerfile.rocm}"
   : "${BASE_IMAGE:=rocm/dev-ubuntu-22.04:6.4.3-complete}"
-  : "${IMAGE_NAME:=uccl-builder-rocm}"
+  : "${IMAGE_NAME:=uccl-builder-rocm6}"
 elif [[ $TARGET == "therock" ]]; then
   : "${DOCKERFILE:=docker/Dockerfile.therock}"
   : "${BASE_IMAGE:=${THEROCK_BASE_IMAGE}}"

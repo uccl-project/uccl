@@ -105,3 +105,4 @@ ep/deep_ep_wrapper/deep_ep.egg-info/
 .worktrees/
 worktrees/
 *.csv
+*.egg-info/
