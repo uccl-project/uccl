@@ -552,6 +552,12 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   uint64_t flow_id = conn->conn_id;
   return tcp_endpoint->send_notification(flow_id, oob_msg);
 #else
+  if (conn->is_local) {
+    // Local connection: push notification directly to the local list.
+    std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
+    notify_msg_list.push_back(*notify_msg);
+    return 0;
+  }
   if (conn->oob_conn_key.empty()) {
     std::cerr << "No OOB connection key available for notification"
               << std::endl;
