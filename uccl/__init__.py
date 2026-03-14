@@ -26,7 +26,7 @@ if not is_efa:
     except ImportError:
         pass
 
-__version__ = "0.1.0"
+__version__ = "0.0.1.post5"
 
 
 def nccl_plugin_path():
