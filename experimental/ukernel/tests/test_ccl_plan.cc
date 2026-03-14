@@ -43,16 +43,21 @@ void test_ccl_plan() {
 
   CollectivePlan reduce_plan = build_plan(reduce);
   assert(!reduce_plan.steps.empty());
-  assert(reduce_plan.steps.front().ops.size() == 2);
+  assert(reduce_plan.steps.front().phase == StepPhase::DirectCopy);
+  assert(reduce_plan.steps.front().ops.size() == 1);
   assert(reduce_plan.steps.front().ops[0].kind == ExecutionOpKind::PkCopy);
-  assert(reduce_plan.steps.front().ops[1].kind == ExecutionOpKind::PkReduce);
-  assert(reduce_plan.steps.front().ops[0].flags ==
+  assert(reduce_plan.steps.front().ops[0].src_role == BufferRole::LocalInput);
+  assert(reduce_plan.steps.front().ops[0].dst_role == BufferRole::FinalOutput);
+  assert(reduce_plan.steps[8].ops.size() == 2);
+  assert(reduce_plan.steps[8].ops[0].kind == ExecutionOpKind::PkCopy);
+  assert(reduce_plan.steps[8].ops[1].kind == ExecutionOpKind::PkReduce);
+  assert(reduce_plan.steps[8].ops[0].flags ==
          static_cast<uint32_t>(ExecutionOpFlags::StageForReduce));
-  assert(reduce_plan.steps.front().ops[0].src_role == BufferRole::RemoteInput);
-  assert(reduce_plan.steps.front().ops[0].dst_role == BufferRole::RecvStaging);
-  assert(reduce_plan.steps.front().ops[1].src_role == BufferRole::RecvStaging);
-  assert(reduce_plan.steps.front().ops[1].dst_role == BufferRole::FinalOutput);
-  assert(reduce_plan.steps.front().chunk.owner_rank == 0);
+  assert(reduce_plan.steps[8].ops[0].src_role == BufferRole::RemoteInput);
+  assert(reduce_plan.steps[8].ops[0].dst_role == BufferRole::RecvStaging);
+  assert(reduce_plan.steps[8].ops[1].src_role == BufferRole::RecvStaging);
+  assert(reduce_plan.steps[8].ops[1].dst_role == BufferRole::FinalOutput);
+  assert(reduce_plan.steps[8].chunk.owner_rank == 0);
   assert(reduce_plan.steps.back().chunk.owner_rank == 3);
   assert(reduce_plan.steps.back().ops.front().src_role == BufferRole::RemoteReduced);
   assert(reduce_plan.steps.back().ops.front().dst_role == BufferRole::FinalOutput);
@@ -83,16 +88,32 @@ void test_ccl_plan() {
   reduce2.bytes_per_rank = 1024;
   reduce2.chunk_bytes = 512;
   CollectivePlan reduce2_plan = build_plan(reduce2);
-  assert(reduce2_plan.steps.size() == 2);
-  assert(reduce2_plan.steps.front().phase == StepPhase::ReduceScatter);
-  assert(reduce2_plan.steps.front().chunk.owner_rank == 1);
-  assert(reduce2_plan.steps.front().chunk.offset_bytes == 512);
-  assert(reduce2_plan.steps.front().ops[0].flags ==
+  assert(reduce2_plan.steps.size() == 4);
+  assert(reduce2_plan.steps.front().phase == StepPhase::DirectCopy);
+  assert(reduce2_plan.steps.front().ops.front().src_role == BufferRole::LocalInput);
+  assert(reduce2_plan.steps[2].phase == StepPhase::ReduceScatter);
+  assert(reduce2_plan.steps[2].chunk.owner_rank == 1);
+  assert(reduce2_plan.steps[2].chunk.offset_bytes == 512);
+  assert(reduce2_plan.steps[2].ops[0].flags ==
          static_cast<uint32_t>(ExecutionOpFlags::StageForReduce));
   assert(reduce2_plan.steps.back().phase == StepPhase::AllGather);
   assert(reduce2_plan.steps.back().chunk.owner_rank == 0);
   assert(reduce2_plan.steps.back().chunk.offset_bytes == 0);
   assert(reduce2_plan.steps.back().ops.front().src_role == BufferRole::RemoteReduced);
+
+  PlanRequest ragged{};
+  ragged.collective = CollectiveKind::AllReduce;
+  ragged.algorithm = AlgorithmKind::Ring;
+  ragged.nranks = 3;
+  ragged.rank = 1;
+  ragged.channels = 2;
+  ragged.bytes_per_rank = 10;
+  ragged.chunk_bytes = 4;
+  CollectivePlan ragged_plan = build_plan(ragged);
+  for (auto const& step : ragged_plan.steps) {
+    assert(step.chunk.size_bytes > 0);
+    assert(step.chunk.offset_bytes + step.chunk.size_bytes <= ragged.bytes_per_rank);
+  }
 
   std::cout << "[test_ccl_plan] AllGather steps=" << gather_plan.steps.size()
             << "\n";

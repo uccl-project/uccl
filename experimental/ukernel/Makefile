@@ -31,7 +31,7 @@ LDFLAGS    := -L$(CONDA_LIB_HOME) \
 GDRCOPY_ROOT := $(abspath ../../thirdparty/gdrcopy)
 
 # Local includes must come first to avoid conflicts with UCCL headers
-LOCAL_INCLUDES := -Iinclude -Isrc/transport -Isrc/compute -Isrc/compute/fifo -Isrc/ccl
+LOCAL_INCLUDES := -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -Isrc/ccl
 
 # System and external library includes
 INCLUDES := -I$(CUDA_PATH)/include -I/usr/include -I../../include -I$(GDRCOPY_ROOT)/include
@@ -58,51 +58,10 @@ CXXFLAGS += $(UCCL_CFLAGS)
 NVCCFLAGS += --compiler-options "$(UCCL_CFLAGS)"
 LDFLAGS += $(UCCL_LDFLAGS)
 
-# pytorch // pybind
-PYTHON ?= python3
-
-PYTHON_VERSION := $(shell $(PYTHON) -c "import sysconfig; print(sysconfig.get_config_var('LDVERSION'))")
-PYTHON_INCLUDES := $(shell $(PYTHON) -c "import sysconfig; print('-I' + sysconfig.get_path('include'))")
-PYTHON_LIBDIR := $(shell $(PYTHON) -c "import sysconfig; print('-L' + sysconfig.get_config_var('LIBDIR'))")
-
-PYBIND_INCLUDES := $(shell $(PYTHON) -m pybind11 --includes)
-
-PYTORCH_INCLUDES := $(shell $(PYTHON) -c \
-"from torch.utils.cpp_extension import include_paths; \
-print(' '.join(['-I'+p for p in include_paths()]))")
-
-PYTORCH_LIBDIR := $(shell $(PYTHON) -c \
-"from torch.utils.cpp_extension import library_paths; \
-print(' '.join(['-L'+p for p in library_paths()]))")
-
-PYTORCH_RPATH := $(shell $(PYTHON) -c \
-"from torch.utils.cpp_extension import library_paths; \
-print(':'.join(library_paths()))")
-
-CXXFLAGS += \
-    $(PYTHON_INCLUDES) \
-    $(PYBIND_INCLUDES) \
-    $(PYTORCH_INCLUDES) \
-    -DTORCH_API_INCLUDE_EXTENSION_H \
-    -Wno-attributes -Wno-ignored-attributes
-
-NVCCFLAGS += \
-    $(PYTHON_INCLUDES) \
-    $(PYBIND_INCLUDES) \
-    $(PYTORCH_INCLUDES) \
-    -DTORCH_API_INCLUDE_EXTENSION_H
-
-TORCH_LDFLAGS := \
-    $(PYTORCH_LIBDIR) \
-    -ltorch_python -ltorch_cuda -ltorch_cpu -ltorch -lc10_cuda -lc10 \
-    -lpython$(PYTHON_VERSION)
-
-LDFLAGS += -Wl,-rpath,$(PYTORCH_RPATH)
-
-# Source files - exclude benchmarks and most compute directory pieces.
-# Keep compute/selector.cc because ccl/executor uses the shared selector logic.
-SRC_CPP := $(shell find src -name '*.cc' | grep -v 'benchmarks' | grep -v 'src/compute/' | sort)
-SRC_CPP += src/compute/selector.cc
+# Source files - exclude benchmarks and most device directory pieces.
+# Keep CCL selector and device PK selector because they are shared helpers.
+SRC_CPP := $(shell find src -name '*.cc' | grep -v 'benchmarks' | grep -v 'src/device/' | sort)
+SRC_CPP += src/device/pk_selector.cc
 SRC_CU  := $(shell find src -name '*.cu' | grep -v 'benchmarks')
 TEST_DIR := tests
 SRC_TEST := $(shell find $(TEST_DIR) -name 'test_*.cc')
@@ -116,17 +75,13 @@ BENCH_SRC := benchmarks/bench_transport.cc
 BENCH_OBJ := $(BENCH_SRC:.cc=.o)
 BENCH_BIN := bench_transport
 
-PYBIND_SRC := src/python_bindings.cc
-PYBIND_OBJ := $(PYBIND_SRC:.cc=.o)
-PYBIND_SO  := py/ukernel.so
-
 # Targets
 STATIC_LIB  := libukernel.a
 SHARED_LIB  := libukernel.so
 TARGET_TEST := test_main
 
 # Build both static, shared, and test by default
-all: $(STATIC_LIB) $(SHARED_LIB) $(TARGET_TEST) $(PYBIND_SO)
+all: $(STATIC_LIB) $(SHARED_LIB) $(TARGET_TEST)
 
 # Compilation rules - local includes must come before system/UCCL includes to avoid header conflicts
 %.o: %.cc
@@ -149,11 +104,6 @@ $(STATIC_LIB): $(OBJ_CC)
 $(SHARED_LIB): $(OBJ_CC) $(OBJ_CU) | ensure-uccl-rdma
 	$(CXX) -shared $(CXXFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
 
-$(PYBIND_SO): $(PYBIND_OBJ) $(STATIC_LIB) | ensure-uccl-rdma
-	$(CXX) -shared $(CXXFLAGS) $^ \
-	       $(LDFLAGS) $(TORCH_LDFLAGS) \
-	       -o $@
-
 # Test executable
 $(TARGET_TEST): $(OBJ_TEST) $(STATIC_LIB) | ensure-uccl-rdma
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $(OBJ_TEST) $(STATIC_LIB) $(LDFLAGS) -o $@
@@ -171,20 +121,26 @@ $(BENCH_BIN): $(BENCH_OBJ) $(STATIC_LIB) | ensure-uccl-rdma
 
 bench: $(BENCH_BIN)
 
+device_test:
+	$(MAKE) -C src/device test
+
+device_bench:
+	$(MAKE) -C src/device bench
+
 # Clean
 clean:
 	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) $(BENCH_OBJ) \
-	      $(TARGET_TEST) $(STATIC_LIB) $(SHARED_LIB) $(PYBIND_SO) $(BENCH_BIN) \
+	      $(TARGET_TEST) $(STATIC_LIB) $(SHARED_LIB) $(BENCH_BIN) \
 	      *.d src/*.d src/transport/*.d tests/*.d benchmarks/*.d
 
 # Include dependencies
 -include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_TEST:.o=.d)
 
-# [TODO: Yihan]Build only TK GEMM operator , need python binding later
-# tk_gemm: src/compute/operator.o
-# 	@echo "TK GEMM operator compiled: src/compute/operator.o"
+# [TODO: Yihan] Build only TK GEMM operator if a dedicated binding returns later.
+# tk_gemm: src/device/persistent_kernel_ops.o
+# 	@echo "TK GEMM operator compiled: src/device/persistent_kernel_ops.o"
 
-# src/compute/operator.o: src/compute/operator.cu
-# 	$(NVCC) $(NVCCFLAGS) -Iinclude -Isrc/transport -Isrc/compute -Isrc/compute/fifo -MMD -MP -c $< -o $@
+# src/device/persistent_kernel_ops.o: src/device/persistent_kernel_ops.cu
+# 	$(NVCC) $(NVCCFLAGS) -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -MMD -MP -c $< -o $@
 
-.PHONY: all clean run_test ensure-uccl-rdma
+.PHONY: all clean run_test bench device_test device_bench ensure-uccl-rdma

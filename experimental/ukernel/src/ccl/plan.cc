@@ -21,6 +21,20 @@ size_t chunk_size(size_t bytes, size_t chunk_bytes, size_t chunk_index) {
   return std::min(chunk_bytes, bytes - offset);
 }
 
+size_t nominal_shard_bytes(size_t bytes, int nranks) {
+  return ceil_div(bytes, static_cast<size_t>(nranks));
+}
+
+size_t shard_offset(size_t bytes, int nranks, int owner_rank) {
+  return static_cast<size_t>(owner_rank) * nominal_shard_bytes(bytes, nranks);
+}
+
+size_t shard_size(size_t bytes, int nranks, int owner_rank) {
+  size_t offset = shard_offset(bytes, nranks, owner_rank);
+  if (offset >= bytes) return 0;
+  return std::min(nominal_shard_bytes(bytes, nranks), bytes - offset);
+}
+
 ExecutionOp make_copy_op(uint32_t op_id, int src_rank, int dst_rank,
                          ChunkRange const& chunk,
                          std::vector<uint32_t> deps = {},
@@ -136,24 +150,57 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
   plan.bytes_per_rank = request.bytes_per_rank;
   plan.chunk_bytes = request.chunk_bytes;
 
-  size_t shard_bytes = ceil_div(request.bytes_per_rank, static_cast<size_t>(request.nranks));
+  size_t shard_bytes = nominal_shard_bytes(request.bytes_per_rank, request.nranks);
   size_t chunks_per_shard = ceil_div(shard_bytes, request.chunk_bytes);
+  size_t chunks_per_rank = ceil_div(request.bytes_per_rank, request.chunk_bytes);
   uint32_t next_step_id = 0;
   uint32_t next_op_id = 0;
   std::vector<int32_t> last_step_for_channel(request.channels, -1);
 
+  for (size_t chunk_index = 0; chunk_index < chunks_per_rank; ++chunk_index) {
+    ChunkRange chunk;
+    chunk.owner_rank = static_cast<uint32_t>(request.rank);
+    chunk.chunk_index = static_cast<uint32_t>(chunk_index);
+    chunk.channel_id = static_cast<uint32_t>(chunk_index % request.channels);
+    chunk.offset_bytes = chunk_offset(chunk_index, request.chunk_bytes);
+    chunk.size_bytes =
+        chunk_size(request.bytes_per_rank, request.chunk_bytes, chunk_index);
+    if (chunk.size_bytes == 0) continue;
+
+    CollectiveStep step;
+    step.step_id = next_step_id++;
+    step.phase = StepPhase::DirectCopy;
+    step.src_rank = request.rank;
+    step.dst_rank = request.rank;
+    step.chunk = chunk;
+
+    int32_t pred = last_step_for_channel[chunk.channel_id];
+    if (pred >= 0) step.predecessors.push_back(static_cast<uint32_t>(pred));
+
+    step.ops.push_back(
+        make_copy_op(next_op_id++, request.rank, request.rank, chunk, {},
+                     static_cast<uint32_t>(ExecutionOpFlags::None),
+                     BufferRole::LocalInput, BufferRole::FinalOutput));
+
+    last_step_for_channel[chunk.channel_id] = static_cast<int32_t>(step.step_id);
+    plan.steps.push_back(std::move(step));
+  }
+
   for (int ring_step = 0; ring_step < request.nranks - 1; ++ring_step) {
     int reduced_owner = ring.wrap(request.rank - ring_step - 1);
+    size_t reduced_shard_bytes =
+        shard_size(request.bytes_per_rank, request.nranks, reduced_owner);
     for (size_t chunk_index = 0; chunk_index < chunks_per_shard; ++chunk_index) {
       ChunkRange chunk;
       chunk.owner_rank = static_cast<uint32_t>(reduced_owner);
       chunk.chunk_index = static_cast<uint32_t>(chunk_index);
       chunk.channel_id = static_cast<uint32_t>(chunk_index % request.channels);
       chunk.offset_bytes =
-          static_cast<size_t>(reduced_owner) * shard_bytes +
+          shard_offset(request.bytes_per_rank, request.nranks, reduced_owner) +
           chunk_offset(chunk_index, request.chunk_bytes);
       chunk.size_bytes =
-          chunk_size(shard_bytes, request.chunk_bytes, chunk_index);
+          chunk_size(reduced_shard_bytes, request.chunk_bytes, chunk_index);
+      if (chunk.size_bytes == 0) continue;
 
       CollectiveStep step;
       step.step_id = next_step_id++;
@@ -184,16 +231,19 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
 
   for (int ring_step = 0; ring_step < request.nranks - 1; ++ring_step) {
     int gathered_owner = ring.wrap(request.rank - ring_step);
+    size_t gathered_shard_bytes =
+        shard_size(request.bytes_per_rank, request.nranks, gathered_owner);
     for (size_t chunk_index = 0; chunk_index < chunks_per_shard; ++chunk_index) {
       ChunkRange chunk;
       chunk.owner_rank = static_cast<uint32_t>(gathered_owner);
       chunk.chunk_index = static_cast<uint32_t>(chunk_index);
       chunk.channel_id = static_cast<uint32_t>(chunk_index % request.channels);
       chunk.offset_bytes =
-          static_cast<size_t>(gathered_owner) * shard_bytes +
+          shard_offset(request.bytes_per_rank, request.nranks, gathered_owner) +
           chunk_offset(chunk_index, request.chunk_bytes);
       chunk.size_bytes =
-          chunk_size(shard_bytes, request.chunk_bytes, chunk_index);
+          chunk_size(gathered_shard_bytes, request.chunk_bytes, chunk_index);
+      if (chunk.size_bytes == 0) continue;
 
       CollectiveStep step;
       step.step_id = next_step_id++;

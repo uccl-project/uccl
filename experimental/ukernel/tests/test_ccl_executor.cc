@@ -1,4 +1,4 @@
-#include "backend.h"
+#include "backend_test_utils.h"
 #include "executor.h"
 #include "plan.h"
 #include "test.h"
@@ -6,6 +6,57 @@
 #include <iostream>
 
 namespace {
+
+struct DagProbeState {
+  bool copy_completed = false;
+  bool reduce_submitted_before_copy_complete = false;
+};
+
+class DagCeBackend final : public UKernel::CCL::Backend {
+ public:
+  explicit DagCeBackend(DagProbeState& state) : state_(state) {}
+
+  char const* name() const override { return "dag-ce"; }
+  bool supports(UKernel::CCL::ExecutionOpKind kind) const override {
+    return kind == UKernel::CCL::ExecutionOpKind::CeCopy;
+  }
+  UKernel::CCL::BackendToken submit(UKernel::CCL::ExecutionOp const&) override {
+    pending_ = true;
+    return UKernel::CCL::BackendToken{1};
+  }
+  bool poll(UKernel::CCL::BackendToken) override {
+    if (!pending_) return true;
+    pending_ = false;
+    state_.copy_completed = true;
+    return true;
+  }
+  void release(UKernel::CCL::BackendToken) override {}
+
+ private:
+  DagProbeState& state_;
+  bool pending_ = false;
+};
+
+class DagPkBackend final : public UKernel::CCL::Backend {
+ public:
+  explicit DagPkBackend(DagProbeState& state) : state_(state) {}
+
+  char const* name() const override { return "dag-pk"; }
+  bool supports(UKernel::CCL::ExecutionOpKind kind) const override {
+    return kind == UKernel::CCL::ExecutionOpKind::PkReduce;
+  }
+  UKernel::CCL::BackendToken submit(UKernel::CCL::ExecutionOp const&) override {
+    if (!state_.copy_completed) {
+      state_.reduce_submitted_before_copy_complete = true;
+    }
+    return UKernel::CCL::BackendToken{1};
+  }
+  bool poll(UKernel::CCL::BackendToken) override { return true; }
+  void release(UKernel::CCL::BackendToken) override {}
+
+ private:
+  DagProbeState& state_;
+};
 
 UKernel::CCL::CollectivePlan make_backend_routing_plan() {
   using namespace UKernel::CCL;
@@ -54,16 +105,43 @@ UKernel::CCL::CollectivePlan make_backend_routing_plan() {
   return plan;
 }
 
+UKernel::CCL::CollectivePlan make_op_dag_plan() {
+  using namespace UKernel::CCL;
+
+  CollectivePlan plan;
+  plan.collective = CollectiveKind::AllReduce;
+  plan.algorithm = AlgorithmKind::Ring;
+  plan.nranks = 2;
+  plan.rank = 0;
+  plan.channels = 1;
+  plan.bytes_per_rank = 128;
+  plan.chunk_bytes = 128;
+
+  CollectiveStep step;
+  step.step_id = 0;
+  step.phase = StepPhase::ReduceScatter;
+  step.src_rank = 1;
+  step.dst_rank = 0;
+  step.chunk = ChunkRange{0, 0, 0, 0, 128};
+  step.ops.push_back(ExecutionOp{7, ExecutionOpKind::CeCopy, 1, 0, step.chunk, {}});
+  step.ops.push_back(
+      ExecutionOp{8, ExecutionOpKind::PkReduce, 0, 0, step.chunk, {7}});
+  plan.steps.push_back(step);
+
+  return plan;
+}
+
 }  // namespace
 
 void test_ccl_executor() {
   using namespace UKernel::CCL;
+  using namespace UKernel::CCL::Testing;
 
   MockBackend fallback_backend(1);
   PersistentKernelBackend persistent_backend(2);
 
   ExecutorBackends pk_backends{};
-  pk_backends.persistent = &persistent_backend;
+  pk_backends.persistent_kernel = &persistent_backend;
   pk_backends.fallback = &fallback_backend;
 
   Executor pk_executor(pk_backends);
@@ -94,7 +172,7 @@ void test_ccl_executor() {
   CollectiveOpHandle reduce_handle = pk_executor.submit_allreduce(reduce);
   pk_executor.wait(reduce_handle);
   assert(pk_executor.status(reduce_handle) == CollectiveOpStatus::Completed);
-  assert(persistent_backend.submissions() == 30);
+  assert(persistent_backend.submissions() == 38);
   pk_executor.release(reduce_handle);
 
   MockBackend rdma_backend(1);
@@ -103,9 +181,9 @@ void test_ccl_executor() {
   PersistentKernelBackend persistent_backend2(1);
 
   ExecutorBackends routed_backends{};
-  routed_backends.rdma = &rdma_backend;
-  routed_backends.ce = &ce_backend;
-  routed_backends.persistent = &persistent_backend2;
+  routed_backends.transport = &rdma_backend;
+  routed_backends.copy_engine = &ce_backend;
+  routed_backends.persistent_kernel = &persistent_backend2;
   routed_backends.fallback = &fallback_backend2;
 
   Executor routed_executor(routed_backends);
@@ -121,8 +199,8 @@ void test_ccl_executor() {
   MockBackend ce_selector_backend(1);
   PersistentKernelBackend pk_selector_backend(1);
   ExecutorBackends ce_selected_backends{};
-  ce_selected_backends.ce = &ce_selector_backend;
-  ce_selected_backends.persistent = &pk_selector_backend;
+  ce_selected_backends.copy_engine = &ce_selector_backend;
+  ce_selected_backends.persistent_kernel = &pk_selector_backend;
   Executor ce_selected_executor(ce_selected_backends);
 
   CollectiveConfig ce_gather{};
@@ -132,9 +210,9 @@ void test_ccl_executor() {
   ce_gather.channels = 2;
   ce_gather.bytes_per_rank = 1024;
   ce_gather.chunk_bytes = 256;
-  ce_gather.requested_cpu_backend = UKernel::Compute::CpuBackendKind::Auto;
-  ce_gather.device_caps.has_copy_engine_path = true;
-  ce_gather.cpu_selector.copy_engine_threshold_bytes = 1;
+  ce_gather.requested_backend = BackendKind::Auto;
+  ce_gather.runtime_caps.has_copy_engine_path = true;
+  ce_gather.backend_selector.copy_engine_threshold_bytes = 1;
 
   CollectiveOpHandle ce_gather_handle =
       ce_selected_executor.submit_allgather(ce_gather);
@@ -147,7 +225,7 @@ void test_ccl_executor() {
 
   MockBackend rdma_selector_backend(1);
   ExecutorBackends rdma_selected_backends{};
-  rdma_selected_backends.rdma = &rdma_selector_backend;
+  rdma_selected_backends.transport = &rdma_selector_backend;
   Executor rdma_selected_executor(rdma_selected_backends);
 
   CollectiveConfig rdma_gather{};
@@ -157,9 +235,9 @@ void test_ccl_executor() {
   rdma_gather.channels = 2;
   rdma_gather.bytes_per_rank = 1024;
   rdma_gather.chunk_bytes = 256;
-  rdma_gather.requested_cpu_backend = UKernel::Compute::CpuBackendKind::Auto;
-  rdma_gather.device_caps.is_same_node = false;
-  rdma_gather.device_caps.supports_rdma = true;
+  rdma_gather.requested_backend = BackendKind::Auto;
+  rdma_gather.runtime_caps.is_same_node = false;
+  rdma_gather.runtime_caps.supports_rdma = true;
 
   CollectiveOpHandle rdma_gather_handle =
       rdma_selected_executor.submit_allgather(rdma_gather);
@@ -169,9 +247,23 @@ void test_ccl_executor() {
   assert(rdma_selector_backend.submissions() == 24);
   rdma_selected_executor.release(rdma_gather_handle);
 
+  DagProbeState dag_state{};
+  DagCeBackend dag_ce_backend(dag_state);
+  DagPkBackend dag_pk_backend(dag_state);
+  ExecutorBackends dag_backends{};
+  dag_backends.copy_engine = &dag_ce_backend;
+  dag_backends.persistent_kernel = &dag_pk_backend;
+  Executor dag_executor(dag_backends);
+  auto dag_handle = dag_executor.submit(make_op_dag_plan());
+  dag_executor.wait(dag_handle);
+  assert(dag_executor.status(dag_handle) == CollectiveOpStatus::Completed);
+  assert(!dag_state.reduce_submitted_before_copy_complete);
+  dag_executor.release(dag_handle);
+
   std::cout << "[test_ccl_executor] PK-only executor PASSED\n";
   std::cout << "[test_ccl_executor] collective submit API PASSED\n";
   std::cout << "[test_ccl_executor] mixed backend routing PASSED\n";
   std::cout << "[test_ccl_executor] CE selector routing PASSED\n";
   std::cout << "[test_ccl_executor] RDMA rewrite routing PASSED\n";
+  std::cout << "[test_ccl_executor] op DAG scheduling PASSED\n";
 }

@@ -1,0 +1,122 @@
+CXX      := g++
+NVCC     := nvcc
+CXXFLAGS := -std=c++17 -O3 -g -Wall
+NVCCFLAGS:= -O3 -g -G -Xcompiler -Wall -arch=sm_80
+
+UCCL_ROOT := $(abspath ../../../../)
+CUDA_HOME ?= /usr/local/cuda
+GDRCOPY_ROOT := $(UCCL_ROOT)/thirdparty/gdrcopy
+GDRCOPY_INCLUDEDIR = $(GDRCOPY_ROOT)/include
+GDRCOPY_LIBDIR = $(GDRCOPY_ROOT)/src
+GDRCOPY_HEADER = $(GDRCOPY_INCLUDEDIR)/gdrapi.h
+
+INCLUDES := -I./ -I./fifo -I../ccl -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR)
+LIBS := -L$(CUDA_HOME)/lib -lcudart -lcuda -lnuma \
+        -L$(GDRCOPY_LIBDIR) -lgdrapi
+
+RPATH = -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR)
+
+COMMON_CPP := fifo/c2d_fifo.cc fifo/d2c_fifo.cpp fifo/sm_fifo.cc pk_selector.cc
+COMMON_CU  := persistent_kernel_ops.cu
+CCL_OBJ := ccl_topology.o ccl_plan.o ccl_selector.o ccl_executor.o
+CCL_BACKEND_OBJ := ccl_device_backend.o
+
+TEST_SRC   := test/test_device_runtime.cc
+TEST_CCL_SRC := test/test_device_ccl_persistent.cc
+TEST_CE_SRC := test/test_device_ccl_copy_engine.cc
+BENCH_SRC  := benchmarks/bench_device_fifo.cu
+BENCH_FULL_SRC  := benchmarks/bench_device_full_fifo.cu
+BENCH_SM_SRC  := benchmarks/bench_device_sm_fifo.cu
+
+COMMON_OBJ := $(COMMON_CPP:.cc=.o) $(COMMON_CU:.cu=.o)
+TEST_OBJ   := $(TEST_SRC:.cc=.o)
+TEST_CCL_OBJ := $(TEST_CCL_SRC:.cc=.o)
+TEST_CE_OBJ := $(TEST_CE_SRC:.cc=.o)
+BENCH_OBJ  := $(BENCH_SRC:.cu=.o)
+BENCH_FULL_OBJ  := $(BENCH_FULL_SRC:.cu=.o)
+BENCH_SM_OBJ := $(BENCH_SM_SRC:.cu=.o)
+
+TEST_BIN  := test_device_runtime
+TEST_CCL_BIN := test_device_ccl_persistent
+TEST_CE_BIN := test_device_ccl_copy_engine
+BENCH_BIN := benchmarks/bench_device_fifo
+BENCH_FULL_BIN := benchmarks/bench_device_full_fifo
+BENCH_SM_BIN := benchmarks/bench_device_sm_fifo
+
+ALL_BIN   := $(TEST_BIN) $(TEST_CCL_BIN) $(TEST_CE_BIN) $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN}
+
+.PHONY: all test bench clean ensure-gdrcopy
+
+all: $(ALL_BIN)
+
+test: $(TEST_BIN) $(TEST_CCL_BIN) $(TEST_CE_BIN)
+
+bench: $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN}
+
+ensure-gdrcopy:
+	@if [ ! -f "$(GDRCOPY_HEADER)" ] || [ ! -f "$(GDRCOPY_ROOT)/Makefile" ]; then \
+		echo "[ukernel/device] initializing submodules for gdrcopy..."; \
+		git -C "$(UCCL_ROOT)" submodule update --init --recursive; \
+	fi
+	@if [ ! -f "$(GDRCOPY_HEADER)" ]; then \
+		echo "[ukernel/device] missing $(GDRCOPY_HEADER) after submodule init"; \
+		exit 1; \
+	fi
+	@if ! ls "$(GDRCOPY_LIBDIR)"/libgdrapi.so* >/dev/null 2>&1; then \
+		echo "[ukernel/device] building gdrcopy..."; \
+		$(MAKE) -C "$(GDRCOPY_ROOT)" all; \
+	fi
+
+%.o: %.cc
+	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+%.o: %.cu
+	$(NVCC) -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
+
+$(COMMON_OBJ) $(TEST_OBJ) $(BENCH_OBJ) $(BENCH_FULL_OBJ) $(BENCH_SM_OBJ): | ensure-gdrcopy
+$(CCL_OBJ) $(CCL_BACKEND_OBJ) $(TEST_CCL_OBJ) $(TEST_CE_OBJ): | ensure-gdrcopy
+
+ccl_topology.o: ../ccl/topology.cc
+	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+ccl_plan.o: ../ccl/plan.cc
+	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+ccl_selector.o: ../ccl/selector.cc
+	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+ccl_executor.o: ../ccl/executor.cc
+	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+ccl_device_backend.o: ../ccl/device_backend.cc
+	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+$(TEST_OBJ): $(TEST_SRC)
+	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
+
+$(TEST_BIN): $(COMMON_OBJ) $(TEST_OBJ)
+	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+
+$(TEST_CCL_OBJ): $(TEST_CCL_SRC)
+	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
+
+$(TEST_CCL_BIN): $(COMMON_OBJ) $(CCL_OBJ) $(CCL_BACKEND_OBJ) $(TEST_CCL_OBJ)
+	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+
+$(TEST_CE_OBJ): $(TEST_CE_SRC)
+	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
+
+$(TEST_CE_BIN): $(COMMON_OBJ) $(CCL_OBJ) $(CCL_BACKEND_OBJ) $(TEST_CE_OBJ)
+	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+
+$(BENCH_BIN): $(COMMON_OBJ) $(BENCH_OBJ)
+	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+
+$(BENCH_FULL_BIN): $(COMMON_OBJ) $(BENCH_FULL_OBJ)
+	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+
+${BENCH_SM_BIN}: $(COMMON_OBJ) $(BENCH_SM_OBJ)
+	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+
+clean:
+	rm -f *.o ./benchmarks/*.o ./fifo/*.o ./test/*.o *.d $(ALL_BIN)

@@ -1,0 +1,307 @@
+#pragma once
+
+#include "gpu_rt.h"
+#include <cassert>
+#include <cstdint>
+#include <cstdio>
+#include <mutex>
+#include <vector>
+
+namespace UKernel {
+namespace Device {
+
+#ifndef UKERNEL_ENABLE_REGISTER_OP
+#define UKERNEL_ENABLE_REGISTER_OP 1
+#endif
+
+#ifndef UKERNEL_ENABLE_TMA
+#define UKERNEL_ENABLE_TMA 0
+#endif
+
+enum class TaskType : uint64_t {
+  // CollTaskType
+  CollCopy,
+  CollReduce,
+  // TK GEMM
+  TkGemm,
+  // more Type
+  BenchNop,  // for benchmark
+};
+
+enum class DataType : uint64_t { Fp8, Fp16, Fp32 };
+enum class TransferPath : uint32_t { Auto, RegisterOp, TmaOp };
+
+constexpr unsigned int TaskTypeSize = 8;  // 256
+constexpr unsigned int DataTypeSize = 8;
+constexpr unsigned int BlockIdSize = 8;
+constexpr unsigned int TaskArgsIndexSize = 32;  // Id to Task Args sturct
+
+/// Pair of 64-bit unsigned integers used as a Task.
+/// Used as a work element in the concurrent FIFO.
+union alignas(16) Task {
+  struct {
+    uint64_t fst;
+    uint64_t snd;
+  };
+
+  Task() = default;
+
+  struct {
+    uint64_t type : TaskTypeSize;
+    uint64_t dataType : DataTypeSize;
+    uint64_t blockId : BlockIdSize;
+    uint64_t : (64 - TaskTypeSize - DataTypeSize - BlockIdSize);
+    uint64_t argsId : TaskArgsIndexSize;
+    uint64_t : (64 - TaskArgsIndexSize);
+  } fields;
+
+  /// Constructor.
+  /// @param type The type of the Task.
+  /// @param dType The type of Data.
+  /// @param blockIndex Which block the task will be dispatched to.
+  /// @param argsIndex The Args Id of Task (in TaskManager).
+  __host__ __device__ Task(TaskType type, DataType dType, uint32_t blockIndex,
+                           uint32_t argsIndex) {
+    const uint64_t t = static_cast<uint64_t>(type);
+    const uint64_t dt = static_cast<uint64_t>(dType);
+    const uint64_t bi = static_cast<uint64_t>(blockIndex);
+    const uint64_t ai = static_cast<uint64_t>(argsIndex);
+
+    assert(t < (1ULL << TaskTypeSize));
+    assert(dt < (1ULL << DataTypeSize));
+    assert(bi < (1ULL << BlockIdSize));
+    assert(ai < (1ULL << TaskArgsIndexSize));
+
+    constexpr uint64_t maskType = (1ULL << TaskTypeSize) - 1;
+    constexpr uint64_t maskDType = (1ULL << DataTypeSize) - 1;
+    constexpr uint64_t maskBlockId = (1ULL << BlockIdSize) - 1;
+    constexpr uint64_t maskArgs = (1ULL << TaskArgsIndexSize) - 1;
+
+    fst = (t & maskType) | ((dt & maskDType) << TaskTypeSize) |
+          ((bi & maskBlockId) << (TaskTypeSize + DataTypeSize));
+
+    snd = (ai & maskArgs);
+  }
+
+  __host__ __device__ uint8_t type_u8() const { return uint8_t(fst & 0xFFull); }
+  __host__ __device__ uint8_t dtype_u8() const {
+    return uint8_t((fst >> 8) & 0xFFull);
+  }
+  __host__ __device__ uint32_t block_index() const {
+    return uint32_t((fst >> (TaskTypeSize + DataTypeSize)) &
+                    ((1ULL << BlockIdSize) - 1));
+  }
+  __host__ __device__ uint32_t args_index() const {
+    return uint32_t(snd & 0xFFFFFFFFull);
+  }
+};
+static_assert(sizeof(Task) == 16);
+
+// Coll
+enum class ReduceType : uint64_t { Sum, Max, None };
+
+struct TransferCapabilities {
+  bool has_tma = UKERNEL_ENABLE_TMA != 0;
+};
+
+struct PkSelectorConfig {
+  bool enable_auto_transport = true;
+  uint64_t tma_threshold_bytes = 16 * 1024;
+};
+
+TransferPath resolve_pk_transfer_path(TransferPath requested, uint64_t bytes,
+                                      TransferCapabilities const& caps,
+                                      PkSelectorConfig const& cfg);
+
+inline __host__ __device__ bool is_pk_transfer_path(TransferPath path) {
+  return path == TransferPath::Auto || path == TransferPath::RegisterOp ||
+         path == TransferPath::TmaOp;
+}
+
+inline __host__ __device__ TransferPath normalize_pk_transfer_path(
+    TransferPath requested) {
+  if (requested == TransferPath::Auto) return TransferPath::RegisterOp;
+#if UKERNEL_ENABLE_TMA
+  return requested;
+#else
+  return requested == TransferPath::TmaOp ? TransferPath::RegisterOp
+                                          : requested;
+#endif
+}
+
+struct alignas(16) CollArgs {
+  void* src;
+  void* src2;
+  void* dst;
+  uint64_t bytes;
+  uint64_t op_id;
+  uint32_t step_id;
+  uint32_t chunk_id;
+  uint32_t completion_cookie;
+  int32_t src_rank;
+  int32_t dst_rank;
+  int32_t src_device;
+  int32_t dst_device;
+  uint32_t flags;
+  ReduceType redType;
+  TransferPath requested_path;
+  TransferPath resolved_path;
+};
+static_assert(sizeof(CollArgs) % 16 == 0,
+              "CollArgs should be 16B aligned size");
+
+// TK GEMM args: pointer to pre-constructed TkMatmulGlobals (with TMA
+// descriptors).
+// [TODO: Yihan] perf tuning for GEMM later, change the args if more info needed
+struct alignas(16) GemmArgs {
+  void* globals;                          // TkMatmulGlobals* on device
+  uint32_t num_tile_rows, num_tile_cols;  // total tiles for multi-block
+  uint32_t _pad;
+};
+
+class TaskManager {
+ public:
+  // -------- Singleton entry --------
+  static TaskManager& instance() {
+    static TaskManager inst;
+    return inst;
+  }
+  // forbid copy/move
+  TaskManager(TaskManager const&) = delete;
+  TaskManager& operator=(TaskManager const&) = delete;
+  TaskManager(TaskManager&&) = delete;
+  TaskManager& operator=(TaskManager&&) = delete;
+
+  ~TaskManager() { release(); }
+
+  void init(uint32_t collCap, uint32_t gemmCap = 64) {
+    std::lock_guard<std::mutex> gc(coll_mu_);
+    std::lock_guard<std::mutex> gg(gemm_mu_);
+    release_nolock_();
+
+    cap_coll_ = collCap;
+    cap_gemm_ = gemmCap;
+
+    GPU_RT_CHECK(gpuMalloc(&d_coll_, sizeof(CollArgs) * cap_coll_));
+    GPU_RT_CHECK(gpuMalloc(&d_gemm_, sizeof(GemmArgs) * cap_gemm_));
+
+    free_coll_.clear();
+    free_gemm_.clear();
+    free_coll_.reserve(cap_coll_);
+    for (uint32_t i = 0; i < cap_coll_; ++i)
+      free_coll_.push_back(cap_coll_ - 1 - i);
+    free_gemm_.reserve(cap_gemm_);
+    for (uint32_t i = 0; i < cap_gemm_; ++i)
+      free_gemm_.push_back(cap_gemm_ - 1 - i);
+
+    inited_ = true;
+  }
+
+  void release() {
+    std::lock_guard<std::mutex> gc(coll_mu_);
+    std::lock_guard<std::mutex> gg(gemm_mu_);
+    release_nolock_();
+    inited_ = false;
+  }
+
+  bool inited() const { return inited_; }
+
+  // CPU: fill coll args (host -> device copy), return idx
+  Task create_coll_task(CollArgs const& h, TaskType tt, DataType dt,
+                        uint32_t blockId) {
+    assert(tt == TaskType::CollCopy || tt == TaskType::CollReduce);
+    assert(is_pk_transfer_path(h.requested_path) &&
+           "coll task must use a persistent-kernel transfer path");
+
+    uint32_t idx;
+    {
+      std::lock_guard<std::mutex> g(coll_mu_);
+      assert(inited_ && "TaskManager not initialized");
+      assert(!free_coll_.empty() && "coll args pool exhausted");
+      idx = free_coll_.back();
+      free_coll_.pop_back();
+    }
+
+    CollArgs normalized = h;
+    normalized.resolved_path = resolve_pk_transfer_path(
+        h.requested_path, h.bytes, TransferCapabilities{}, PkSelectorConfig{});
+
+    GPU_RT_CHECK(gpuMemcpy(d_coll_ + idx, &normalized, sizeof(CollArgs),
+                           gpuMemcpyHostToDevice));
+
+    return Task(tt, dt, blockId, idx);
+  }
+
+  // CPU: free slot back
+  void free_coll_args(uint32_t idx) {
+    std::lock_guard<std::mutex> g(coll_mu_);
+    assert(inited_ && "TaskManager not initialized");
+    assert(idx < cap_coll_ && "free_coll idx out of range");
+    free_coll_.push_back(idx);
+  }
+
+  // tk level-8 gemm task creation
+  Task create_gemm_task(GemmArgs const& h, DataType dt, uint32_t blockId) {
+    uint32_t idx;
+    {
+      std::lock_guard<std::mutex> g(gemm_mu_);
+      assert(inited_ && "TaskManager not initialized");
+      assert(!free_gemm_.empty() && "gemm args pool exhausted");
+      idx = free_gemm_.back();
+      free_gemm_.pop_back();
+    }
+    GPU_RT_CHECK(
+        gpuMemcpy(d_gemm_ + idx, &h, sizeof(GemmArgs), gpuMemcpyHostToDevice));
+    return Task(TaskType::TkGemm, dt, blockId, idx);
+  }
+
+  void free_gemm_args(uint32_t idx) {
+    std::lock_guard<std::mutex> g(gemm_mu_);
+    assert(inited_ && "TaskManager not initialized");
+    assert(idx < cap_gemm_ && "free_gemm idx out of range");
+    free_gemm_.push_back(idx);
+  }
+
+  // GPU: get args pointer by index
+  __device__ __forceinline__ CollArgs* coll_args(uint32_t idx) const {
+    return d_coll_ + idx;
+  }
+
+  __device__ __forceinline__ GemmArgs* gemm_args(uint32_t idx) const {
+    return d_gemm_ + idx;
+  }
+
+  CollArgs* d_coll() const { return d_coll_; }
+  GemmArgs* d_gemm() const { return d_gemm_; }
+
+ private:
+  TaskManager() = default;
+
+  void release_nolock_() {
+    if (d_coll_) gpuFree(d_coll_);
+    if (d_gemm_) gpuFree(d_gemm_);
+
+    d_coll_ = nullptr;
+    d_gemm_ = nullptr;
+
+    free_coll_.clear();
+    free_gemm_.clear();
+
+    cap_coll_ = 0;
+    cap_gemm_ = 0;
+  }
+
+ private:
+  CollArgs* d_coll_{nullptr};
+  GemmArgs* d_gemm_{nullptr};
+
+  uint32_t cap_coll_{0};
+  uint32_t cap_gemm_{0};
+
+  std::vector<uint32_t> free_coll_, free_gemm_;
+  mutable std::mutex coll_mu_;
+  mutable std::mutex gemm_mu_;
+  bool inited_{false};
+};
+}  // namespace Device
+}  // namespace UKernel

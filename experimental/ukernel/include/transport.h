@@ -139,6 +139,8 @@ class Communicator {
   bool wait_finish(unsigned const req);
   bool wait_finish(
       std::vector<unsigned> const& reqs);  // wait before works finished
+  int rank() const { return global_rank_; }
+  int world_size() const { return world_size_; }
 
   // Req Completion notifier register a notifier
   std::shared_ptr<void> register_completion_notifier(

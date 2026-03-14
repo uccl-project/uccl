@@ -1,17 +1,29 @@
 #pragma once
 
 #include "plan.h"
+#include <cstddef>
 #include <cstdint>
-#include <string>
-#include <unordered_map>
 
 namespace UKernel {
 namespace CCL {
+
+// Shared buffer bindings for collective execution backends. Backends may use
+// only the fields relevant to their transport/execution path.
+struct CollectiveBuffers {
+  void const* local_input = nullptr;
+  void const* remote_input = nullptr;
+  void const* remote_reduced = nullptr;
+  void* final_output = nullptr;
+  void* recv_staging = nullptr;
+  size_t registration_bytes = 0;
+};
 
 struct BackendToken {
   uint64_t value = 0;
 };
 
+// Backend is the execution-side interface used by Executor after plan lowering
+// has decided each op's concrete kind.
 class Backend {
  public:
   virtual ~Backend() = default;
@@ -23,48 +35,10 @@ class Backend {
   virtual void release(BackendToken token) = 0;
 };
 
-class MockBackend final : public Backend {
- public:
-  explicit MockBackend(uint32_t polls_before_ready = 1);
-
-  char const* name() const override;
-  bool supports(ExecutionOpKind kind) const override;
-  BackendToken submit(ExecutionOp const& op) override;
-  bool poll(BackendToken token) override;
-  void release(BackendToken token) override;
-
-  uint64_t submissions() const { return submissions_; }
-
- private:
-  uint32_t polls_before_ready_ = 1;
-  uint64_t next_token_ = 1;
-  uint64_t submissions_ = 0;
-  std::unordered_map<uint64_t, uint32_t> pending_polls_;
-};
-
-class PersistentKernelBackend final : public Backend {
- public:
-  explicit PersistentKernelBackend(uint32_t polls_before_ready = 1);
-
-  char const* name() const override;
-  bool supports(ExecutionOpKind kind) const override;
-  BackendToken submit(ExecutionOp const& op) override;
-  bool poll(BackendToken token) override;
-  void release(BackendToken token) override;
-
-  uint64_t submissions() const { return submissions_; }
-
- private:
-  uint32_t polls_before_ready_ = 1;
-  uint64_t next_token_ = 1;
-  uint64_t submissions_ = 0;
-  std::unordered_map<uint64_t, uint32_t> pending_polls_;
-};
-
 struct ExecutorBackends {
-  Backend* rdma = nullptr;
-  Backend* ce = nullptr;
-  Backend* persistent = nullptr;
+  Backend* transport = nullptr;
+  Backend* copy_engine = nullptr;
+  Backend* persistent_kernel = nullptr;
   Backend* fallback = nullptr;
 };
 

@@ -99,5 +99,5 @@ struct CommunicatorConfig {
 
 }  // namespace Transport
 
-namespace Compute {}
+namespace Device {}
 }  // namespace UKernel

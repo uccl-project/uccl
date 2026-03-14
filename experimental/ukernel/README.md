@@ -35,27 +35,28 @@ CUDA_VISIBLE_DEVICES=5 python py/test_p2p.py
 ```
 
 
-## compute develpment
-on AMD
-```
-cd experimental/ukernel/src/compute
-make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm
-```
-
+## device develpment
 on Nvidia
 ```
-cd experimental/ukernel/src/compute
+cd experimental/ukernel/src/device
 make clean -f Makefile && make -j$(nproc) -f Makefile
+
+# or from the ukernel root
+cd experimental/ukernel
+make device_test
+make device_bench
 ```
 
-## test compute
+## test device
 ```
-CUDA_VISIBLE_DEVICES=5 ./test_persistent
+CUDA_VISIBLE_DEVICES=5 ./test_device_runtime
+CUDA_VISIBLE_DEVICES=5 ./test_device_ccl_persistent
+CUDA_VISIBLE_DEVICES=5 ./test_device_ccl_copy_engine
 
 # bench
-CUDA_VISIBLE_DEVICES=5 ./benchmarks/bench_fifo
-CUDA_VISIBLE_DEVICES=5 ./benchmarks/bench_full_fifo
-CUDA_VISIBLE_DEVICES=5 ./benchmarks/bench_sm_fifo 83
+CUDA_VISIBLE_DEVICES=5 ./benchmarks/bench_device_fifo
+CUDA_VISIBLE_DEVICES=5 ./benchmarks/bench_device_full_fifo
+CUDA_VISIBLE_DEVICES=5 ./benchmarks/bench_device_sm_fifo 83
 ```
 
 ## Transport Benchmark

@@ -1,9 +1,9 @@
 #include "executor.h"
-#include "rdma_backend.h"
 #include "test.h"
 #include "transport.h"
-#include "../src/compute/task.h"
-#include "../src/compute/gpu_rt.h"
+#include "../src/ccl/transport_backend.h"
+#include "../src/device/task.h"
+#include "../src/device/gpu_rt.h"
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -67,13 +67,14 @@ int run_role(int rank, int peer_rank) {
   GPU_RT_CHECK(gpuMemcpy(d_output, h_output.data(), sizeof(float) * kTotalElems,
                          gpuMemcpyHostToDevice));
 
-  UKernel::CCL::BufferBindings bindings{};
+  UKernel::CCL::CollectiveBuffers bindings{};
   bindings.final_output = d_output;
   bindings.registration_bytes = sizeof(float) * kTotalElems;
 
-  UKernel::CCL::CommunicatorRdmaBackend rdma_backend(*comm, peer_rank, bindings);
+  UKernel::CCL::CommunicatorTransportBackend transport_backend(
+      *comm, peer_rank, bindings);
   UKernel::CCL::ExecutorBackends backends{};
-  backends.rdma = &rdma_backend;
+  backends.transport = &transport_backend;
   UKernel::CCL::Executor executor(backends);
 
   UKernel::CCL::CollectiveConfig gather_cfg{};
@@ -82,9 +83,9 @@ int run_role(int rank, int peer_rank) {
   gather_cfg.channels = 1;
   gather_cfg.bytes_per_rank = sizeof(float) * kElemsPerRank;
   gather_cfg.chunk_bytes = sizeof(float) * kElemsPerRank;
-  gather_cfg.requested_cpu_backend = UKernel::Compute::CpuBackendKind::Rdma;
-  gather_cfg.device_caps.is_same_node = false;
-  gather_cfg.device_caps.supports_rdma = true;
+  gather_cfg.requested_backend = UKernel::CCL::BackendKind::Rdma;
+  gather_cfg.runtime_caps.is_same_node = false;
+  gather_cfg.runtime_caps.supports_rdma = true;
 
   auto handle = executor.submit_allgather(gather_cfg);
   executor.wait(handle);

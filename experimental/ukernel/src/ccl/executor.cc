@@ -1,4 +1,5 @@
 #include "executor.h"
+#include <cstddef>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -56,28 +57,29 @@ void assign_copy_backends(CollectivePlan& plan, CollectiveConfig const& config,
     for (auto& op : step.ops) {
       if (op.kind != ExecutionOpKind::PkCopy) continue;
 
-      auto selected = UKernel::Compute::resolve_cpu_backend_kind(
-          config.requested_cpu_backend, true, op.chunk.size_bytes,
-          config.device_caps, config.cpu_selector);
-      if (selected == UKernel::Compute::CpuBackendKind::Rdma) {
+      auto selected = resolve_backend_kind(config.requested_backend, true,
+                                           op.chunk.size_bytes,
+                                           config.runtime_caps,
+                                           config.backend_selector);
+      if (selected == BackendKind::Rdma) {
         if (plan.collective != CollectiveKind::AllGather) {
           throw std::invalid_argument(
               "RDMA path is only wired for AllGather in this phase");
         }
-        if (backends.rdma == nullptr ||
-            (!backends.rdma->supports(ExecutionOpKind::RdmaSend) &&
-             !backends.rdma->supports(ExecutionOpKind::RdmaRecv))) {
-          throw std::invalid_argument("RDMA backend requested but unavailable");
+        if (backends.transport == nullptr ||
+            !backends.transport->supports(ExecutionOpKind::RdmaSend) ||
+            !backends.transport->supports(ExecutionOpKind::RdmaRecv)) {
+          throw std::invalid_argument(
+              "transport backend requested but unavailable");
         }
         rewrite_allgather_rdma_step(step);
         break;
       }
-      if (selected == UKernel::Compute::CpuBackendKind::Ce) {
-        if (backends.ce != nullptr &&
-            backends.ce->supports(ExecutionOpKind::CeCopy)) {
+      if (selected == BackendKind::Ce) {
+        if (backends.copy_engine != nullptr &&
+            backends.copy_engine->supports(ExecutionOpKind::CeCopy)) {
           op.kind = ExecutionOpKind::CeCopy;
-        } else if (config.requested_cpu_backend ==
-                   UKernel::Compute::CpuBackendKind::Ce) {
+        } else if (config.requested_backend == BackendKind::Ce) {
           throw std::invalid_argument("CE backend requested but unavailable");
         }
       }
@@ -86,20 +88,31 @@ void assign_copy_backends(CollectivePlan& plan, CollectiveConfig const& config,
 }
 
 enum class StepState : uint32_t { Pending, Running, Completed };
+enum class OpRunState : uint32_t { Pending, Running, Completed };
 
 struct InflightOp {
   size_t step_index = 0;
+  size_t op_index = 0;
   Backend* backend = nullptr;
   BackendToken token{};
+};
+
+struct OpLocation {
+  size_t step_index = 0;
+  size_t op_offset = 0;
 };
 
 struct OpState {
   CollectivePlan plan;
   CollectiveOpStatus status = CollectiveOpStatus::Pending;
-  std::vector<uint32_t> remaining_predecessors;
-  std::vector<std::vector<size_t>> successors;
   std::vector<StepState> step_states;
-  std::vector<size_t> step_completed_ops;
+  std::vector<uint32_t> step_remaining_predecessors;
+  std::vector<std::vector<size_t>> step_successors;
+  std::vector<size_t> step_remaining_ops;
+  std::vector<OpLocation> op_locations;
+  std::vector<OpRunState> op_states;
+  std::vector<uint32_t> op_remaining_predecessors;
+  std::vector<std::vector<size_t>> op_successors;
   std::vector<InflightOp> inflight;
   size_t completed_steps = 0;
   std::string error;
@@ -110,14 +123,14 @@ Backend* select_backend(ExecutorBackends const& backends, ExecutionOpKind kind) 
   switch (kind) {
     case ExecutionOpKind::RdmaSend:
     case ExecutionOpKind::RdmaRecv:
-      preferred = backends.rdma;
+      preferred = backends.transport;
       break;
     case ExecutionOpKind::CeCopy:
-      preferred = backends.ce;
+      preferred = backends.copy_engine;
       break;
     case ExecutionOpKind::PkCopy:
     case ExecutionOpKind::PkReduce:
-      preferred = backends.persistent;
+      preferred = backends.persistent_kernel;
       break;
     case ExecutionOpKind::EventWait:
     case ExecutionOpKind::Barrier:
@@ -146,20 +159,49 @@ struct Executor::Impl {
     OpState state;
     state.plan = std::move(plan);
     state.status = CollectiveOpStatus::Running;
-    state.remaining_predecessors.resize(state.plan.steps.size(), 0);
-    state.successors.resize(state.plan.steps.size());
     state.step_states.resize(state.plan.steps.size(), StepState::Pending);
-    state.step_completed_ops.resize(state.plan.steps.size(), 0);
+    state.step_remaining_predecessors.resize(state.plan.steps.size(), 0);
+    state.step_successors.resize(state.plan.steps.size());
+    state.step_remaining_ops.resize(state.plan.steps.size(), 0);
+
+    std::unordered_map<uint32_t, size_t> op_id_to_index;
 
     for (size_t step_index = 0; step_index < state.plan.steps.size(); ++step_index) {
       auto const& step = state.plan.steps[step_index];
-      state.remaining_predecessors[step_index] =
+      state.step_remaining_predecessors[step_index] =
           static_cast<uint32_t>(step.predecessors.size());
+      state.step_remaining_ops[step_index] = step.ops.size();
       for (uint32_t pred : step.predecessors) {
         if (pred >= state.plan.steps.size()) {
           throw std::invalid_argument("step predecessor out of range");
         }
-        state.successors[pred].push_back(step_index);
+        state.step_successors[pred].push_back(step_index);
+      }
+      for (size_t op_offset = 0; op_offset < step.ops.size(); ++op_offset) {
+        auto const& op = step.ops[op_offset];
+        size_t op_index = state.op_locations.size();
+        auto [_, inserted] = op_id_to_index.emplace(op.op_id, op_index);
+        if (!inserted) {
+          throw std::invalid_argument("duplicate op id in collective plan");
+        }
+        state.op_locations.push_back(OpLocation{step_index, op_offset});
+        state.op_states.push_back(OpRunState::Pending);
+        state.op_remaining_predecessors.push_back(0);
+        state.op_successors.emplace_back();
+      }
+    }
+
+    for (size_t op_index = 0; op_index < state.op_locations.size(); ++op_index) {
+      auto const& location = state.op_locations[op_index];
+      auto const& op =
+          state.plan.steps[location.step_index].ops[location.op_offset];
+      for (uint32_t dep : op.deps) {
+        auto dep_it = op_id_to_index.find(dep);
+        if (dep_it == op_id_to_index.end()) {
+          throw std::invalid_argument("op dependency out of range");
+        }
+        ++state.op_remaining_predecessors[op_index];
+        state.op_successors[dep_it->second].push_back(op_index);
       }
     }
 
@@ -167,7 +209,7 @@ struct Executor::Impl {
     if (!inserted) {
       throw std::runtime_error("duplicate collective handle");
     }
-    submit_ready_steps(it->second);
+    submit_ready_work(it->second);
     return handle;
   }
 
@@ -221,37 +263,49 @@ struct Executor::Impl {
     return get_const(handle).inflight.size();
   }
 
-  void submit_ready_steps(OpState& state) {
+  void submit_ready_work(OpState& state) {
     bool progress = true;
     while (progress && state.status == CollectiveOpStatus::Running) {
       progress = false;
+
       for (size_t step_index = 0; step_index < state.plan.steps.size(); ++step_index) {
         if (state.step_states[step_index] != StepState::Pending) continue;
-        if (state.remaining_predecessors[step_index] != 0) continue;
-        submit_step(state, step_index);
+        if (state.step_remaining_predecessors[step_index] != 0) continue;
+        if (state.step_remaining_ops[step_index] != 0) continue;
+        complete_step(state, step_index);
+        progress = true;
+      }
+
+      for (size_t op_index = 0; op_index < state.op_locations.size(); ++op_index) {
+        if (state.op_states[op_index] != OpRunState::Pending) continue;
+        size_t step_index = state.op_locations[op_index].step_index;
+        if (state.step_remaining_predecessors[step_index] != 0) continue;
+        if (state.op_remaining_predecessors[op_index] != 0) continue;
+        submit_op(state, op_index);
+        if (state.status != CollectiveOpStatus::Running) return;
         progress = true;
       }
     }
   }
 
-  void submit_step(OpState& state, size_t step_index) {
-    auto const& step = state.plan.steps[step_index];
-    state.step_states[step_index] = StepState::Running;
-
-    for (auto const& op : step.ops) {
-      Backend* backend = select_backend(backends, op.kind);
-      if (backend == nullptr) {
-        state.status = CollectiveOpStatus::Failed;
-        state.error = "no backend available for op";
-        return;
-      }
-      BackendToken token = backend->submit(op);
-      state.inflight.push_back(InflightOp{step_index, backend, token});
+  void submit_op(OpState& state, size_t op_index) {
+    auto const& location = state.op_locations[op_index];
+    auto const& op =
+        state.plan.steps[location.step_index].ops[location.op_offset];
+    state.op_states[op_index] = OpRunState::Running;
+    if (state.step_states[location.step_index] == StepState::Pending) {
+      state.step_states[location.step_index] = StepState::Running;
     }
 
-    if (step.ops.empty()) {
-      complete_step(state, step_index);
+    Backend* backend = select_backend(backends, op.kind);
+    if (backend == nullptr) {
+      state.status = CollectiveOpStatus::Failed;
+      state.error = "no backend available for op";
+      return;
     }
+    BackendToken token = backend->submit(op);
+    state.inflight.push_back(
+        InflightOp{location.step_index, op_index, backend, token});
   }
 
   void complete_inflight(OpState& state, size_t inflight_index) {
@@ -259,11 +313,21 @@ struct Executor::Impl {
     inflight.backend->release(inflight.token);
     state.inflight.erase(state.inflight.begin() + static_cast<long>(inflight_index));
 
+    state.op_states[inflight.op_index] = OpRunState::Completed;
+    for (size_t succ : state.op_successors[inflight.op_index]) {
+      if (state.op_remaining_predecessors[succ] > 0) {
+        --state.op_remaining_predecessors[succ];
+      }
+    }
+
     size_t step_index = inflight.step_index;
-    ++state.step_completed_ops[step_index];
-    if (state.step_completed_ops[step_index] ==
-        state.plan.steps[step_index].ops.size()) {
+    if (state.step_remaining_ops[step_index] > 0) {
+      --state.step_remaining_ops[step_index];
+    }
+    if (state.step_remaining_ops[step_index] == 0) {
       complete_step(state, step_index);
+    } else {
+      submit_ready_work(state);
     }
   }
 
@@ -272,12 +336,12 @@ struct Executor::Impl {
     state.step_states[step_index] = StepState::Completed;
     ++state.completed_steps;
 
-    for (size_t succ : state.successors[step_index]) {
-      if (state.remaining_predecessors[succ] > 0) {
-        --state.remaining_predecessors[succ];
+    for (size_t succ : state.step_successors[step_index]) {
+      if (state.step_remaining_predecessors[succ] > 0) {
+        --state.step_remaining_predecessors[succ];
       }
     }
-    submit_ready_steps(state);
+    submit_ready_work(state);
   }
 
   OpState& get(CollectiveOpHandle handle) {

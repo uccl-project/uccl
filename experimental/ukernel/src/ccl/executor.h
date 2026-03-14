@@ -1,8 +1,8 @@
 #pragma once
 
-#include "../compute/task.h"
 #include "backend.h"
 #include "plan.h"
+#include "selector.h"
 #include <cstddef>
 #include <cstdint>
 
@@ -23,10 +23,9 @@ struct CollectiveConfig {
   size_t bytes_per_rank = 0;
   size_t chunk_bytes = 0;
   AlgorithmKind algorithm = AlgorithmKind::Ring;
-  UKernel::Compute::CpuBackendKind requested_cpu_backend =
-      UKernel::Compute::CpuBackendKind::Auto;
-  UKernel::Compute::CpuBackendSelectorConfig cpu_selector{};
-  UKernel::Compute::DeviceCapabilities device_caps{};
+  BackendKind requested_backend = BackendKind::Auto;
+  BackendSelectorConfig backend_selector{};
+  RuntimeCapabilities runtime_caps{};
 };
 
 struct CollectiveOpHandle {
@@ -35,6 +34,8 @@ struct CollectiveOpHandle {
 
 class Executor {
  public:
+  // Executor owns runtime scheduling: it lowers copy ops onto concrete
+  // backends, tracks step/op DAG dependencies, and drives backend polling.
   explicit Executor(ExecutorBackends backends);
   ~Executor();
 
