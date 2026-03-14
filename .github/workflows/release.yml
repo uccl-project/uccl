@@ -27,10 +27,10 @@ env:
 #
 #   Variant       target   image               package name     distribution
 #   ──────────    ──────   ─────               ────────────     ────────────
-#   cuda12        cuda     uccl-builder-cuda    uccl-cu12        PyPI
-#   cuda13        cuda13   uccl-builder-cuda13  uccl-cu13        PyPI
-#   cuda12+efa    cuda     uccl-builder-efa     uccl-cu12-efa    PyPI
-#   cuda13+efa    cuda13   uccl-builder-efa13   uccl-cu13-efa    PyPI
+#   cu12          cu12     uccl-builder-cuda    uccl-cu12        PyPI
+#   cu13          cu13     uccl-builder-cu13    uccl-cu13        PyPI
+#   cu12+efa      cu12     uccl-builder-efa     uccl-cu12-efa    PyPI
+#   cu13+efa      cu13     uccl-builder-efa13   uccl-cu13-efa    PyPI
 #   rocm          rocm     uccl-builder-rocm    uccl-rocm        extra-index-url
 #
 # × Python 3.12 (abi3 — compatible with 3.12+) = 6 wheel jobs + 1 source tarball
@@ -38,16 +38,35 @@ env:
 
 jobs:
   # ==========================================================================
-  # Job 0: Build Docker images (reuses build-docker-images.yml)
+  # Job 0: Gate — only repository admins/owners may proceed.
+  # ==========================================================================
+  check-permissions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify actor is admin or owner
+        run: |
+          ROLE=$(gh api "repos/${{ github.repository }}/collaborators/${{ github.actor }}/permission" \
+            --jq '.permission' 2>/dev/null || echo "none")
+          echo "Actor '${{ github.actor }}' permission level: ${ROLE}"
+          if [[ "${ROLE}" != "admin" ]]; then
+            echo "ERROR: Only repository admins and owners can trigger this workflow."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ==========================================================================
+  # Job 2: Build Docker images (reuses build-docker-images.yml)
   # ==========================================================================
   build-docker-images:
+    needs: [check-permissions]
     uses: ./.github/workflows/build-docker-images.yml
     permissions:
       contents: read
       packages: write
 
   # ==========================================================================
-  # Job 1: Build wheel variants
+  # Job 3: Build wheel variants
   # ==========================================================================
   build-wheels:
     needs: [build-docker-images]
@@ -59,21 +78,21 @@ jobs:
         variant:
           # CUDA 12
           - name: cu12
-            target: cuda
+            target: cu12
             image_name: uccl-builder-cuda
             package_name: uccl-cu12
             for_pypi: true
             gpu_arch: "9.0+PTX"
           # CUDA 13
           - name: cu13
-            target: cuda13
-            image_name: uccl-builder-cuda13
+            target: cu13
+            image_name: uccl-builder-cu13
             package_name: uccl-cu13
             for_pypi: true
             gpu_arch: "9.0+PTX"
           # CUDA 12 + EFA
           - name: cu12-efa
-            target: cuda
+            target: cu12
             image_name: uccl-builder-efa
             package_name: uccl-cu12-efa
             is_efa: "1"
@@ -81,7 +100,7 @@ jobs:
             gpu_arch: "9.0+PTX"
           # CUDA 13 + EFA
           - name: cu13-efa
-            target: cuda13
+            target: cu13
             image_name: uccl-builder-efa13
             package_name: uccl-cu13-efa
             is_efa: "1"
@@ -146,9 +165,10 @@ jobs:
           if-no-files-found: error
 
   # ==========================================================================
-  # Job 2: Create source tarball (includes submodules)
+  # Job 4: Create source tarball (includes submodules)
   # ==========================================================================
   create-source-tarball:
+    needs: [check-permissions]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout with submodules
@@ -180,9 +200,10 @@ jobs:
           if-no-files-found: error
 
   # ==========================================================================
-  # Job 3: Build uccl meta-package (pure Python, extras → backends)
+  # Job 5: Build uccl meta-package (pure Python, extras → backends)
   # ==========================================================================
   build-meta-package:
+    needs: [check-permissions]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -203,7 +224,7 @@ jobs:
           if-no-files-found: error
 
   # ==========================================================================
-  # Job 4: Upload all artifacts to GitHub Release
+  # Job 6: Upload all artifacts to GitHub Release
   # ==========================================================================
   upload-release-assets:
     needs: [build-wheels, build-meta-package, create-source-tarball]
@@ -244,7 +265,7 @@ jobs:
           echo "Done. All assets uploaded."
 
   # ==========================================================================
-  # Job 5: Publish to PyPI
+  # Job 7: Publish to PyPI
   #   - uccl meta-package (extras → backends)
   #   - uccl-cu12, uccl-cu13, uccl-cu12-efa, uccl-cu13-efa backend wheels
   #   - ROCm wheels stay on GitHub Releases — users install via:
