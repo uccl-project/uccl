@@ -211,16 +211,7 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   // Start accept_local loop in a background thread (once per engine) so that
   // local (IPC) peers can connect concurrently with the blocking RDMA accept.
   bool expected = false;
-  if (engine->local_accept_started.compare_exchange_strong(expected, true)) {
-    engine->local_accept_thread = std::thread([engine] {
-      while (true) {
-        int remote_gpu_idx;
-        uint64_t conn_id;
-        engine->endpoint->accept_local(remote_gpu_idx, conn_id);
-      }
-    });
-    engine->local_accept_thread.detach();
-  }
+  engine->endpoint->start_passive_accept();
   uccl_conn_t* conn = new uccl_conn;
   std::string ip_addr;
   uint64_t conn_id;
@@ -281,13 +272,12 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
   if (!conn || !data) return -1;
 
   if (conn->is_local) {
-    // Intra-node path: fifo_item.addr is the remote source buffer's virtual
-    // address.  Look up its IpcTransferInfo and dispatch via read_ipc_async.
     IpcTransferInfo info;
     if (!get_ipc_info_for_addr(fifo_item.addr, size, info)) {
       UCCL_LOG(ERROR) << "Failed to get IPC info";
       return -1;
     }
+    info.direct_addr = fifo_item.addr;
     return conn->engine->endpoint->read_ipc_async(
                conn->conn_id, const_cast<void*>(data), size, info, transfer_id)
                ? 0
@@ -315,6 +305,7 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
         UCCL_LOG(ERROR) << "Failed to get IPC info";
         return -1;
       }
+      info_v[i].direct_addr = fifo_items[i].addr;
     }
     return conn->engine->endpoint->readv_ipc_async(
                conn->conn_id, dst_v, size_v, info_v, num_iovs, transfer_id)
@@ -355,14 +346,16 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
 #else
 
   if (conn->is_local) {
-    // Intra-node path: fifo_item.addr carries the remote buffer's virtual
-    // address (set by the NIXL plugin at prepXfer time).  Look up its
-    // pre-computed IpcTransferInfo and dispatch via write_ipc_async.
+    // Same-process local path: both buffers are in our address space.
+    // Set direct_addr so write_ipc_async skips gpuIpcOpenMemHandle and
+    // uses the virtual address directly, while keeping its stream/event
+    // optimizations.
     IpcTransferInfo info;
     if (!get_ipc_info_for_addr(fifo_item.addr, size, info)) {
       UCCL_LOG(ERROR) << "Failed to get IPC info";
       return -1;
     }
+    info.direct_addr = fifo_item.addr;
     return conn->engine->endpoint->write_ipc_async(conn->conn_id, data, size,
                                                    info, transfer_id)
                ? 0
@@ -395,6 +388,7 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
         UCCL_LOG(ERROR) << "Failed to get IPC info";
         return -1;
       }
+      info_v[i].direct_addr = fifo_items[i].addr;
     }
     return conn->engine->endpoint->writev_ipc_async(
                conn->conn_id, src_v, size_v, info_v, num_iovs, transfer_id)
