@@ -31,9 +31,9 @@ VERSION = get_version()
 PACKAGE_NAME = os.environ.get("UCCL_PACKAGE_NAME", "uccl")
 _is_backend = PACKAGE_NAME != "uccl"
 
-# When UCCL_PACKAGE_NAME is set (e.g. "uccl-cu12"), build the backend package
-# with compiled .so files. Otherwise build the meta-package that pulls in a
-# backend via extras.
+# When UCCL_PACKAGE_NAME is set (e.g. "uccl-cu12", "uccl-cu13"), build the backend
+# package with compiled .so files. Users still "import uccl" — the backend provides
+# the uccl namespace.
 if _is_backend:
     abi3_ext = Extension(
         "uccl._platform_tag_stub",
@@ -73,14 +73,13 @@ if _is_backend:
         },
     )
 else:
-    # Meta-package: no code, extras pull in the right backend.
-    # Default: uccl-cu12 (from install_requires).
-    # Extras are additive — pip always installs the default too, but the
-    # extra's .so files overwrite it, so the result is correct.
-    #   pip install uccl            → CUDA 12 (default)
-    #   pip install uccl[cu12-efa]  → CUDA 12 + EFA (EFA .so overwrites)
-    #   pip install uccl[cu13]      → CUDA 13
-    #   pip install uccl[rocm]      → ROCm (needs --extra-index-url)
+    # Meta-package: no code, extras pull in the right backend (cu12/cu13 with CUDA).
+    # Whichever extra you install, you always use "import uccl" in Python.
+    #   pip install uccl             → CUDA 12 (default)
+    #   pip install uccl[cu13]       → CUDA 13
+    #   pip install uccl[cu12-efa]   → CUDA 12 + EFA
+    #   pip install uccl[cu13-efa]   → CUDA 13 + EFA
+    #   pip install uccl[rocm]       → ROCm (use --extra-index-url for index)
     setup(
         name="uccl",
         version=VERSION,

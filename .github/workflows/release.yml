@@ -27,10 +27,10 @@ env:
 #
 #   Variant       target   image               package name     distribution
 #   ──────────    ──────   ─────               ────────────     ────────────
-#   cuda12        cuda     uccl-builder-cuda    uccl-cu12        PyPI
-#   cuda13        cuda13   uccl-builder-cuda13  uccl-cu13        PyPI
-#   cuda12+efa    cuda     uccl-builder-efa     uccl-cu12-efa    PyPI
-#   cuda13+efa    cuda13   uccl-builder-efa13   uccl-cu13-efa    PyPI
+#   cu12          cu12     uccl-builder-cuda    uccl-cu12        PyPI
+#   cu13          cu13     uccl-builder-cu13    uccl-cu13        PyPI
+#   cu12+efa      cu12     uccl-builder-efa     uccl-cu12-efa    PyPI
+#   cu13+efa      cu13     uccl-builder-efa13   uccl-cu13-efa    PyPI
 #   rocm          rocm     uccl-builder-rocm    uccl-rocm        extra-index-url
 #
 # × Python 3.12 (abi3 — compatible with 3.12+) = 6 wheel jobs + 1 source tarball
@@ -78,21 +78,21 @@ jobs:
         variant:
           # CUDA 12
           - name: cu12
-            target: cuda
+            target: cu12
             image_name: uccl-builder-cuda
             package_name: uccl-cu12
             for_pypi: true
             gpu_arch: "9.0+PTX"
           # CUDA 13
           - name: cu13
-            target: cuda13
-            image_name: uccl-builder-cuda13
+            target: cu13
+            image_name: uccl-builder-cu13
             package_name: uccl-cu13
             for_pypi: true
             gpu_arch: "9.0+PTX"
           # CUDA 12 + EFA
           - name: cu12-efa
-            target: cuda
+            target: cu12
             image_name: uccl-builder-efa
             package_name: uccl-cu12-efa
             is_efa: "1"
@@ -100,7 +100,7 @@ jobs:
             gpu_arch: "9.0+PTX"
           # CUDA 13 + EFA
           - name: cu13-efa
-            target: cuda13
+            target: cu13
             image_name: uccl-builder-efa13
             package_name: uccl-cu13-efa
             is_efa: "1"

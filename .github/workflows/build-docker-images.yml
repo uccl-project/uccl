@@ -29,7 +29,7 @@ jobs:
             image_name: uccl-builder-cuda
           # CUDA 13
           - dockerfile: docker/Dockerfile.cuda
-            image_name: uccl-builder-cuda13
+            image_name: uccl-builder-cu13
             base_image: "nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04"
           # EFA + CUDA 12
           - dockerfile: docker/Dockerfile.efa
