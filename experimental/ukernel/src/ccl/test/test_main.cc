@@ -3,6 +3,11 @@
 #include <string>
 
 int main(int argc, char** argv) {
+  if (argc == 1) {
+    test_ccl_plan();
+    test_ccl_executor();
+    return 0;
+  }
   if (argc > 1 && std::string(argv[1]) == "ccl-plan") {
     test_ccl_plan();
     return 0;
@@ -14,22 +19,6 @@ int main(int argc, char** argv) {
   if (argc > 1 && std::string(argv[1]) == "ccl-rdma-ag") {
     return test_ccl_rdma_allgather(argc - 1, argv + 1);
   }
-
-  // test_find_best_rdma_for_gpu(0);
-  // test_find_best_rdma_for_gpu(2);
-  // test_find_best_rdma_for_gpu(3);
-  // test_find_best_rdma_for_gpu(5);
-
-  test_communicator(argc, argv);
-
-  // test_redis_oob();
-  // test_uds_oob();
-
-  // test_generate_host_id();
-
-  // test_socket_meta_exchange_multi_threads(4);
-
-  // test_cq_poller();
-
-  return 0;
+  std::cerr << "Usage: test_main [ccl-plan|ccl-exec|ccl-rdma-ag ...]\n";
+  return 1;
 }

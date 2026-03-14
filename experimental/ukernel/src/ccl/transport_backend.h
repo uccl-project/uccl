@@ -32,8 +32,8 @@ class CommunicatorTransportBackend final : public Backend {
   };
 
   struct RegisteredMr {
-    uint16_t local_mr_id = 0;
-    uint16_t remote_mr_id = 0;
+    uint32_t local_mr_id = 0;
+    uint32_t remote_mr_id = 0;
   };
 
   struct PendingRequest {

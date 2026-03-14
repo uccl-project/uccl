@@ -31,8 +31,11 @@ SRC_CPP := $(shell find src -name '*.cc' | grep -v 'src/device') # skip device n
 SRC_CU  := $(shell find src -name '*.cu' | grep -v 'src/device')
 
 # Test sources
-TEST_DIR := tests
-SRC_TEST := $(shell find $(TEST_DIR) -name 'test_*.cc')
+TEST_DIR := src/ccl/test
+SRC_TEST := $(TEST_DIR)/test_main.cc \
+            $(TEST_DIR)/test_ccl_plan.cc \
+            $(TEST_DIR)/test_ccl_executor.cc \
+            $(TEST_DIR)/test_ccl_rdma_allgather.cc
 
 # Object files
 OBJ_CC   := $(SRC_CPP:.cc=.o)
@@ -70,7 +73,7 @@ run_test: $(TARGET_TEST)
 
 # Clean rule
 clean:
-	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) $(TARGET_TEST) $(STATIC_LIB) $(SHARED_LIB) *.d src/*.d src/transport/*.d tests/*.d
+	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) $(TARGET_TEST) $(STATIC_LIB) $(SHARED_LIB) *.d src/*.d src/ccl/test/*.d src/transport/*.d
 
 # Include dependencies
 -include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_TEST:.o=.d)

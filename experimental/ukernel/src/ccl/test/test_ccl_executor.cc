@@ -138,7 +138,7 @@ void test_ccl_executor() {
   using namespace UKernel::CCL::Testing;
 
   MockBackend fallback_backend(1);
-  PersistentKernelBackend persistent_backend(2);
+  MockPersistentKernelBackend persistent_backend(2);
 
   ExecutorBackends pk_backends{};
   pk_backends.persistent_kernel = &persistent_backend;
@@ -178,7 +178,7 @@ void test_ccl_executor() {
   MockBackend rdma_backend(1);
   MockBackend ce_backend(1);
   MockBackend fallback_backend2(1);
-  PersistentKernelBackend persistent_backend2(1);
+  MockPersistentKernelBackend persistent_backend2(1);
 
   ExecutorBackends routed_backends{};
   routed_backends.transport = &rdma_backend;
@@ -197,7 +197,7 @@ void test_ccl_executor() {
   routed_executor.release(routed_handle);
 
   MockBackend ce_selector_backend(1);
-  PersistentKernelBackend pk_selector_backend(1);
+  MockPersistentKernelBackend pk_selector_backend(1);
   ExecutorBackends ce_selected_backends{};
   ce_selected_backends.copy_engine = &ce_selector_backend;
   ce_selected_backends.persistent_kernel = &pk_selector_backend;

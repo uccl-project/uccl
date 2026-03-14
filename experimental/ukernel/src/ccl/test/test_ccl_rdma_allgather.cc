@@ -1,9 +1,9 @@
 #include "executor.h"
+#include "gpu_rt.h"
+#include "task.h"
 #include "test.h"
 #include "transport.h"
-#include "../src/ccl/transport_backend.h"
-#include "../src/device/task.h"
-#include "../src/device/gpu_rt.h"
+#include "transport_backend.h"
 #include <cstring>
 #include <iostream>
 #include <string>
@@ -49,7 +49,6 @@ bool check_allgather(std::vector<float> const& out) {
 
 int run_role(int rank, int peer_rank) {
   auto cfg = std::make_shared<CommunicatorConfig>();
-  cfg->backend = UKernel::Transport::TransportBackend::UCCL;
   auto comm = std::make_shared<Communicator>(kGpu, rank, kWorldSize, cfg);
 
   if (rank == kServerRank) {

@@ -1,7 +1,8 @@
 #pragma once
 
-#include "../../include/transport.h"
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -50,11 +51,9 @@ class UcclTransportAdapter {
   // Get best RDMA device index for given GPU
   int get_best_dev_idx(int gpu_idx) const;
 
-  bool has_peer(int peer_rank) const;
   bool has_send_peer(int peer_rank) const;
   bool has_recv_peer(int peer_rank) const;
 
-  uint64_t register_memory(void* ptr, size_t len);
   bool register_memory(uint64_t mr_id, void* ptr, size_t len);
   void deregister_memory(uint64_t mr_id);
 
@@ -64,15 +63,13 @@ class UcclTransportAdapter {
   int recv_async(int peer_rank, void* local_ptr, size_t len,
                  uint64_t local_mr_id, uint64_t request_id);
 
-  bool poll_completion(int* out_peer_rank, uint64_t* out_mr_id);
+  bool poll_completion(uint64_t request_id);
   bool wait_completion(uint64_t request_id);
 
  private:
   struct PeerContext {
     ::uccl::UcclFlow* send_flow = nullptr;
     ::uccl::UcclFlow* recv_flow = nullptr;
-    uint64_t remote_mr_addr = 0;
-    uint64_t remote_mr_rkey = 0;
     int peer_rank = -1;
   };
 
@@ -86,7 +83,6 @@ class UcclTransportAdapter {
   std::unordered_map<uint64_t, std::unique_ptr<::uccl::ucclRequest>>
       pending_requests_;
   mutable std::mutex mu_;
-  std::atomic<uint64_t> next_mr_id_{1};
 };
 
 }  // namespace Transport

@@ -1,0 +1,378 @@
+#include "transport.h"
+#include "util/util.h"
+#include <algorithm>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <cstring>
+#include <deque>
+#include <iostream>
+#include <mutex>
+#include <stdexcept>
+#include <string>
+#include <thread>
+#include <unistd.h>
+#include <vector>
+
+using CommunicatorConfig = UKernel::Transport::CommunicatorConfig;
+using Communicator = UKernel::Transport::Communicator;
+using MR = UKernel::Transport::MR;
+
+static constexpr int kWorldSize = 2;
+static constexpr int kClientGpu = 0;
+static constexpr int kServerGpu = 0;
+static constexpr int kClientRank = 1;
+static constexpr int kServerRank = 0;
+
+namespace {
+
+constexpr size_t kMessageBytes = 4 * 1024;
+constexpr size_t kPadding = 256;
+constexpr size_t kSlotStride = kMessageBytes + 2 * kPadding;
+constexpr std::chrono::seconds kNotifierTimeout(5);
+constexpr std::chrono::seconds kPollTimeout(10);
+
+enum class CompletionMode { WaitEach, WaitAll, PollRelease };
+
+struct Scenario {
+  std::string name;
+  int message_count = 1;
+  CompletionMode completion_mode = CompletionMode::WaitEach;
+  bool expect_notifier = false;
+};
+
+struct NotifierQueue {
+  std::mutex mu;
+  std::condition_variable cv;
+  std::deque<unsigned> ids;
+};
+
+void require(bool cond, char const* message) {
+  if (!cond) {
+    throw std::runtime_error(message);
+  }
+}
+
+std::string get_arg(int argc, char** argv, char const* key, char const* def) {
+  for (int i = 1; i < argc; ++i) {
+    if (std::strncmp(argv[i], key, std::strlen(key)) == 0) {
+      char const* p = argv[i] + std::strlen(key);
+      if (*p == '=') return std::string(p + 1);
+      if (*p == '\0' && i + 1 < argc) return std::string(argv[i + 1]);
+    }
+  }
+  return std::string(def);
+}
+
+int get_int_arg(int argc, char** argv, char const* key, int def) {
+  std::string def_str = std::to_string(def);
+  return std::stoi(get_arg(argc, argv, key, def_str.c_str()));
+}
+
+size_t slot_offset(int index) {
+  return kPadding + static_cast<size_t>(index) * kSlotStride;
+}
+
+size_t buffer_bytes_for(int message_count) {
+  return slot_offset(message_count - 1) + kMessageBytes + kPadding;
+}
+
+Scenario get_scenario(std::string const& name) {
+  if (name == "basic") {
+    return Scenario{"basic", 1, CompletionMode::WaitEach, false};
+  }
+  if (name == "batch") {
+    return Scenario{"batch", 4, CompletionMode::WaitAll, false};
+  }
+  if (name == "poll-release") {
+    return Scenario{"poll-release", 4, CompletionMode::PollRelease, false};
+  }
+  if (name == "notifier") {
+    return Scenario{"notifier", 4, CompletionMode::WaitAll, true};
+  }
+  throw std::invalid_argument("unknown transport communicator test case: " +
+                              name);
+}
+
+void fill_pattern(std::vector<uint8_t>& buf, uint8_t seed) {
+  for (size_t i = 0; i < buf.size(); ++i) {
+    buf[i] = static_cast<uint8_t>((seed + i) & 0xFF);
+  }
+}
+
+bool check_pattern(std::vector<uint8_t> const& buf, uint8_t seed) {
+  for (size_t i = 0; i < buf.size(); ++i) {
+    if (buf[i] != static_cast<uint8_t>((seed + i) & 0xFF)) {
+      std::cerr << "[transport communicator] mismatch at " << i
+                << " expect=" << static_cast<int>((seed + i) & 0xFF)
+                << " got=" << static_cast<int>(buf[i]) << std::endl;
+      return false;
+    }
+  }
+  return true;
+}
+
+std::vector<unsigned> collect_notification_ids(NotifierQueue& queue,
+                                               size_t expected) {
+  std::unique_lock<std::mutex> lk(queue.mu);
+  bool ready = queue.cv.wait_for(lk, kNotifierTimeout,
+                                 [&] { return queue.ids.size() >= expected; });
+  require(ready, "timed out waiting for transport completion notifications");
+
+  std::vector<unsigned> ids;
+  ids.reserve(queue.ids.size());
+  while (!queue.ids.empty()) {
+    ids.push_back(queue.ids.front());
+    queue.ids.pop_front();
+  }
+  return ids;
+}
+
+void verify_notification_set(NotifierQueue& queue,
+                             std::vector<unsigned> const& requests) {
+  auto notified = collect_notification_ids(queue, requests.size());
+  require(notified.size() == requests.size(),
+          "notification count does not match request count");
+
+  std::vector<unsigned> expected;
+  expected.reserve(requests.size());
+  for (unsigned req : requests) {
+    expected.push_back(req);
+  }
+  std::sort(expected.begin(), expected.end());
+  std::sort(notified.begin(), notified.end());
+  require(expected == notified,
+          "notified request ids do not match submitted requests");
+}
+
+void wait_until_completed_without_release(
+    std::shared_ptr<Communicator> const& comm,
+    std::vector<unsigned> const& requests) {
+  std::vector<unsigned> remaining = requests;
+  auto deadline = std::chrono::steady_clock::now() + kPollTimeout;
+  while (!remaining.empty()) {
+    for (auto it = remaining.begin(); it != remaining.end();) {
+      if (comm->poll(*it)) {
+        it = remaining.erase(it);
+      } else {
+        ++it;
+      }
+    }
+    if (remaining.empty()) break;
+    require(std::chrono::steady_clock::now() < deadline,
+            "timed out polling transport requests");
+    std::this_thread::yield();
+  }
+}
+
+void complete_requests(std::shared_ptr<Communicator> const& comm,
+                       std::vector<unsigned> const& requests,
+                       CompletionMode mode) {
+  if (mode == CompletionMode::WaitEach) {
+    for (unsigned req : requests) {
+      require(comm->wait_finish(req), "wait_finish(req) failed");
+    }
+    return;
+  }
+
+  if (mode == CompletionMode::WaitAll) {
+    require(comm->wait_finish(std::vector<unsigned>{}),
+            "wait_finish({}) failed");
+    return;
+  }
+
+  wait_until_completed_without_release(comm, requests);
+  for (unsigned req : requests) {
+    comm->release(req);
+  }
+}
+
+std::shared_ptr<Communicator> make_communicator(int gpu, int rank, int world_size,
+                                                std::string const& exchanger_ip,
+                                                int exchanger_port) {
+  auto cfg = std::make_shared<CommunicatorConfig>();
+  cfg->exchanger_ip = exchanger_ip;
+  cfg->exchanger_port = exchanger_port;
+  return std::make_shared<Communicator>(gpu, rank, world_size, cfg);
+}
+
+int run_sender(Scenario const& scenario, std::string const& exchanger_ip,
+               int exchanger_port) {
+  auto comm = make_communicator(kClientGpu, kClientRank, kWorldSize,
+                                exchanger_ip, exchanger_port);
+  require(comm->connect_to(kServerRank), "client connect_to failed");
+
+  NotifierQueue queue;
+  std::shared_ptr<void> notifier_guard;
+  if (scenario.expect_notifier) {
+    notifier_guard = comm->register_completion_notifier(
+        [&](unsigned id, std::chrono::steady_clock::time_point) {
+          std::lock_guard<std::mutex> lk(queue.mu);
+          queue.ids.push_back(id);
+          queue.cv.notify_all();
+        });
+  }
+
+  GPU_RT_CHECK(gpuSetDevice(kClientGpu));
+  void* sendbuf_d = nullptr;
+  GPU_RT_CHECK(gpuMalloc(&sendbuf_d, buffer_bytes_for(scenario.message_count)));
+  auto free_buf = uccl::finally([&] { gpuFree(sendbuf_d); });
+  GPU_RT_CHECK(gpuMemset(sendbuf_d, 0, buffer_bytes_for(scenario.message_count)));
+
+  MR local_mr = comm->reg_mr(sendbuf_d, buffer_bytes_for(scenario.message_count));
+  require(comm->notify_mr(kServerRank, local_mr), "client notify_mr failed");
+
+  MR remote_mr{};
+  require(comm->wait_mr_notify(kServerRank, remote_mr),
+          "client wait_mr_notify failed");
+
+  std::vector<unsigned> requests;
+  requests.reserve(scenario.message_count);
+  for (int i = 0; i < scenario.message_count; ++i) {
+    std::vector<uint8_t> host(kMessageBytes);
+    fill_pattern(host, static_cast<uint8_t>(0x10 + i));
+    GPU_RT_CHECK(gpuMemcpy(static_cast<char*>(sendbuf_d) + slot_offset(i),
+                           host.data(), host.size(), gpuMemcpyHostToDevice));
+    unsigned req = comm->isend(kServerRank, sendbuf_d, slot_offset(i),
+                               kMessageBytes, local_mr.id, remote_mr.id, true);
+    require(req != 0, "client isend failed");
+    requests.push_back(req);
+  }
+
+  if (scenario.expect_notifier) {
+    wait_until_completed_without_release(comm, requests);
+    verify_notification_set(queue, requests);
+    for (unsigned req : requests) comm->release(req);
+  } else {
+    complete_requests(comm, requests, scenario.completion_mode);
+  }
+
+  std::cout << "[CLIENT][" << scenario.name << "] OK" << std::endl;
+  return 0;
+}
+
+int run_receiver(Scenario const& scenario, std::string const& exchanger_ip,
+                 int exchanger_port) {
+  auto comm = make_communicator(kServerGpu, kServerRank, kWorldSize,
+                                exchanger_ip, exchanger_port);
+  require(comm->accept_from(kClientRank), "server accept_from failed");
+
+  NotifierQueue queue;
+  std::shared_ptr<void> notifier_guard;
+  if (scenario.expect_notifier) {
+    notifier_guard = comm->register_completion_notifier(
+        [&](unsigned id, std::chrono::steady_clock::time_point) {
+          std::lock_guard<std::mutex> lk(queue.mu);
+          queue.ids.push_back(id);
+          queue.cv.notify_all();
+        });
+  }
+
+  GPU_RT_CHECK(gpuSetDevice(kServerGpu));
+  void* recvbuf_d = nullptr;
+  GPU_RT_CHECK(gpuMalloc(&recvbuf_d, buffer_bytes_for(scenario.message_count)));
+  auto free_buf = uccl::finally([&] { gpuFree(recvbuf_d); });
+  GPU_RT_CHECK(gpuMemset(recvbuf_d, 0, buffer_bytes_for(scenario.message_count)));
+
+  MR local_mr = comm->reg_mr(recvbuf_d, buffer_bytes_for(scenario.message_count));
+  require(comm->notify_mr(kClientRank, local_mr), "server notify_mr failed");
+
+  MR remote_mr{};
+  require(comm->wait_mr_notify(kClientRank, remote_mr),
+          "server wait_mr_notify failed");
+
+  std::vector<unsigned> requests;
+  requests.reserve(scenario.message_count);
+  for (int i = 0; i < scenario.message_count; ++i) {
+    unsigned req = comm->irecv(kClientRank, recvbuf_d, slot_offset(i),
+                               kMessageBytes, true);
+    require(req != 0, "server irecv failed");
+    requests.push_back(req);
+  }
+
+  if (scenario.expect_notifier) {
+    wait_until_completed_without_release(comm, requests);
+    verify_notification_set(queue, requests);
+    for (unsigned req : requests) comm->release(req);
+  } else {
+    complete_requests(comm, requests, scenario.completion_mode);
+  }
+
+  for (int i = 0; i < scenario.message_count; ++i) {
+    std::vector<uint8_t> host(kMessageBytes);
+    GPU_RT_CHECK(gpuMemcpy(host.data(),
+                           static_cast<char*>(recvbuf_d) + slot_offset(i),
+                           host.size(), gpuMemcpyDeviceToHost));
+    require(check_pattern(host, static_cast<uint8_t>(0x10 + i)),
+            "received payload pattern mismatch");
+  }
+
+  std::cout << "[SERVER][" << scenario.name << "] OK" << std::endl;
+  return 0;
+}
+
+int unique_local_port() {
+  return 19000 + static_cast<int>(::getpid() % 1000);
+}
+
+}  // namespace
+
+void test_transport_communicator_local() {
+  auto comm = make_communicator(/*gpu=*/0, /*rank=*/0, /*world_size=*/1,
+                                /*exchanger_ip=*/"0.0.0.0",
+                                /*exchanger_port=*/unique_local_port());
+
+  GPU_RT_CHECK(gpuSetDevice(0));
+  void* buf = nullptr;
+  GPU_RT_CHECK(gpuMalloc(&buf, 4096));
+  auto free_buf = uccl::finally([&] { gpuFree(buf); });
+
+  MR mr0 = comm->reg_mr(buf, 4096);
+  MR mr1 = comm->reg_mr(buf, 4096);
+  require(mr0.id == mr1.id, "reg_mr should be idempotent for the same buffer");
+  require(comm->get_local_mr(static_cast<char*>(buf) + 128).id == mr0.id,
+          "communicator local MR range lookup failed");
+  require(comm->get_local_mr(mr0.id).address == reinterpret_cast<uint64_t>(buf),
+          "communicator local MR lookup by id failed");
+
+  require(comm->dereg_mr(buf), "dereg_mr failed");
+  MR mr2 = comm->reg_mr(buf, 4096);
+  require(mr2.id != mr0.id,
+          "re-registering after dereg_mr should allocate a new MR id");
+}
+
+int test_transport_communicator(int argc, char** argv) {
+  std::string role = get_arg(argc, argv, "--role", "");
+  std::string test_case = get_arg(argc, argv, "--case", "basic");
+  std::string exchanger_ip = get_arg(argc, argv, "--exchanger-ip", "");
+  int exchanger_port = get_int_arg(argc, argv, "--exchanger-port", 6979);
+
+  if (role.empty()) role = get_arg(argc, argv, "-r", "");
+  if (role.empty()) {
+    std::cerr << "transport communicator test requires --role=server|client\n";
+    return 1;
+  }
+
+  Scenario scenario = get_scenario(test_case);
+  if (exchanger_ip.empty()) {
+    exchanger_ip = (role == "server") ? "0.0.0.0" : "127.0.0.1";
+  }
+
+  try {
+    if (role == "server") {
+      return run_receiver(scenario, exchanger_ip, exchanger_port);
+    }
+    if (role == "client") {
+      return run_sender(scenario, exchanger_ip, exchanger_port);
+    }
+  } catch (std::exception const& e) {
+    std::cerr << "[transport communicator][" << role << "][" << scenario.name
+              << "] failed: " << e.what() << std::endl;
+    return 2;
+  }
+
+  std::cerr << "Usage:\n"
+            << "  --role=server|client --case=basic|batch|poll-release|notifier"
+            << " [--exchanger-ip IP] [--exchanger-port PORT]\n";
+  return 1;
+}

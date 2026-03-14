@@ -9,12 +9,12 @@
 namespace UKernel {
 namespace CCL {
 
-// Adapts device-side persistent kernel execution into the CCL backend
-// interface. It lives in ccl/ because it is specific to collective execution,
-// not a pure device primitive.
-class PersistentDeviceBackend final : public Backend {
+// Adapts persistent-kernel execution into the CCL backend interface. It stays
+// in ccl/ because it is specific to collective execution, not a pure device
+// primitive.
+class PersistentKernelBackend final : public Backend {
  public:
-  PersistentDeviceBackend(
+  PersistentKernelBackend(
       UKernel::Device::PersistentKernel<UKernel::Device::Task>& kernel,
       CollectiveBuffers buffers, UKernel::Device::DataType dtype,
       UKernel::Device::ReduceType reduce_type =
@@ -52,12 +52,12 @@ class PersistentDeviceBackend final : public Backend {
   std::unordered_map<uint64_t, SubmittedTask> submitted_;
 };
 
-// Adapts device copy-engine copies into the CCL backend interface.
-class CopyEngineDeviceBackend final : public Backend {
+// Adapts copy-engine copies into the CCL backend interface.
+class CopyEngineBackend final : public Backend {
  public:
-  CopyEngineDeviceBackend(CollectiveBuffers buffers, int dst_device = -1,
-                          int src_device = -1, gpuStream_t stream = nullptr);
-  ~CopyEngineDeviceBackend() override;
+  CopyEngineBackend(CollectiveBuffers buffers, int dst_device = -1,
+                    int src_device = -1, gpuStream_t stream = nullptr);
+  ~CopyEngineBackend() override;
 
   char const* name() const override;
   bool supports(ExecutionOpKind kind) const override;

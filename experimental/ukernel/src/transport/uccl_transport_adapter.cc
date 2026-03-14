@@ -43,13 +43,6 @@ int UcclTransportAdapter::get_best_dev_idx(int gpu_idx) const {
   return endpoint_->get_best_dev_idx(gpu_idx);
 }
 
-bool UcclTransportAdapter::has_peer(int peer_rank) const {
-  std::lock_guard<std::mutex> lk(mu_);
-  auto it = peer_contexts_.find(peer_rank);
-  return it != peer_contexts_.end() &&
-         (it->second.send_flow != nullptr || it->second.recv_flow != nullptr);
-}
-
 bool UcclTransportAdapter::has_send_peer(int peer_rank) const {
   std::lock_guard<std::mutex> lk(mu_);
   auto it = peer_contexts_.find(peer_rank);
@@ -98,14 +91,15 @@ bool UcclTransportAdapter::accept_from_peer(int peer_rank) {
   return true;
 }
 
-uint64_t UcclTransportAdapter::register_memory(void* ptr, size_t len) {
-  uint64_t mr_id = next_mr_id_.fetch_add(1);
-  register_memory(mr_id, ptr, len);
-  return mr_id;
-}
-
 bool UcclTransportAdapter::register_memory(uint64_t mr_id, void* ptr,
                                            size_t len) {
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (mr_id_to_mhandle_.find(mr_id) != mr_id_to_mhandle_.end()) {
+      return true;
+    }
+  }
+
   ::uccl::Mhandle* mhandle = nullptr;
   int dev_idx = endpoint_->get_best_dev_idx(local_gpu_idx_);
   if (endpoint_->uccl_regmr(dev_idx, ptr, len, 0, &mhandle) != 0 || !mhandle) {
@@ -133,6 +127,7 @@ int UcclTransportAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
                                      uint64_t local_mr_id,
                                      uint64_t remote_mr_id,
                                      uint64_t request_id) {
+  (void)remote_mr_id;
   ::uccl::UcclFlow* flow = nullptr;
   ::uccl::Mhandle* local_mh = nullptr;
   {
@@ -210,27 +205,21 @@ int UcclTransportAdapter::recv_async(int peer_rank, void* local_ptr, size_t len,
   return 0;
 }
 
-bool UcclTransportAdapter::poll_completion(int* out_peer_rank,
-                                           uint64_t* out_mr_id) {
-  return false;
+bool UcclTransportAdapter::poll_completion(uint64_t request_id) {
+  std::lock_guard<std::mutex> lk(mu_);
+  auto it = pending_requests_.find(request_id);
+  if (it == pending_requests_.end()) return true;
+  if (!endpoint_->uccl_poll_ureq_once(it->second.get())) return false;
+  pending_requests_.erase(it);
+  return true;
 }
 
 bool UcclTransportAdapter::wait_completion(uint64_t request_id) {
-  ::uccl::ucclRequest* req = nullptr;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = pending_requests_.find(request_id);
-    if (it == pending_requests_.end()) return false;
-    req = it->second.get();
-  }
-
-  endpoint_->uccl_poll_ureq(req);
-
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    pending_requests_.erase(request_id);
-  }
-
+  std::lock_guard<std::mutex> lk(mu_);
+  auto it = pending_requests_.find(request_id);
+  if (it == pending_requests_.end()) return false;
+  endpoint_->uccl_poll_ureq(it->second.get());
+  pending_requests_.erase(it);
   return true;
 }
 

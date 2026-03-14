@@ -8,80 +8,75 @@
 #include <random>
 #include <string>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 using SockExchanger = UKernel::Transport::SockExchanger;
-using RDMAInfo = UKernel::Transport::RDMAInfo;
-using QpInfo = UKernel::Transport::QpInfo;
 using CommunicatorMeta = UKernel::Transport::CommunicatorMeta;
+using MR = UKernel::Transport::MR;
+using MRInfos = UKernel::Transport::MRInfos;
 
-void publisher_socket() {
-  SockExchanger ex(false, "127.0.0.1", 6379);
+namespace {
+
+int socket_test_port() { return 20379 + static_cast<int>(::getpid() % 1000); }
+
+}  // namespace
+
+void publisher_socket(int port) {
+  SockExchanger ex(false, "127.0.0.1", port);
   if (!ex.valid()) {
     std::cerr << "[ERROR] Publisher failed to connect to server\n";
     return;
   }
 
-  RDMAInfo remote{};
-  QpInfo qp{};
-  qp.qp_num = 4321;
-  qp.psn = 0x123456;
-  qp.lid = 8765;
-  for (int i = 0; i < 16; ++i) qp.gid[i] = 15 - i;
-  remote.qps.push_back(qp);
+  MRInfos remote{};
+  remote.mrs.push_back(MR{1, 0x12345000ULL, 4096, 0, 123});
+  remote.mrs.push_back(MR{2, 0x12346000ULL, 8192, 0, 456});
 
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
-  if (!ex.publish("rdma:peer:1:0", remote)) {
-    std::cerr << "[ERROR] Publisher failed to publish RDMA info\n";
+  if (!ex.publish("mr:peer:1:0", remote)) {
+    std::cerr << "[ERROR] Publisher failed to publish MR info\n";
     return;
   }
-  std::cout << "[INFO] Publisher published RDMA info\n";
+  std::cout << "[INFO] Publisher published MR info\n";
 }
 
 void test_socket_oob() {
-  SockExchanger ex(true, "127.0.0.1", 6379);
+  int port = socket_test_port();
+  SockExchanger ex(true, "127.0.0.1", port);
   if (!ex.valid()) {
     std::cerr << "[ERROR] Failed to start SockExchanger server\n";
     return;
   }
   std::cout << "[INFO] SockExchanger server started\n";
 
-  RDMAInfo local{};
-  QpInfo qp{};
-  qp.qp_num = 1234;
-  qp.psn = 0x654321;
-  qp.lid = 5678;
-  for (int i = 0; i < 16; ++i) qp.gid[i] = i;
-  local.qps.push_back(qp);
+  MRInfos local{};
+  local.mrs.push_back(MR{7, 0xABCDEF00ULL, 16384, 0, 789});
 
-  if (!ex.publish("rdma:peer:0:0", local)) {
-    std::cerr << "[ERROR] Failed to publish local RDMA info\n";
+  if (!ex.publish("mr:peer:0:0", local)) {
+    std::cerr << "[ERROR] Failed to publish local MR info\n";
     return;
   }
-  std::cout << "[INFO] Published local RDMA info\n";
+  std::cout << "[INFO] Published local MR info\n";
 
-  std::thread pub_thread(publisher_socket);
+  std::thread pub_thread(publisher_socket, port);
 
-  RDMAInfo remote{};
-  if (ex.wait_and_fetch("rdma:peer:1:0", remote, 50, 100)) {
-    std::cout << "[INFO] Received remote RDMA info:\n";
-    for (size_t i = 0; i < remote.qps.size(); ++i) {
-      auto const& q = remote.qps[i];
-      std::cout << "  QP[" << i << "]: qp_num=" << q.qp_num << " psn=" << q.psn
-                << " lid=" << q.lid << " gid=";
-      for (int j = 0; j < 16; ++j) {
-        std::cout << std::hex << std::setw(2) << std::setfill('0')
-                  << static_cast<int>(q.gid[j]) << " ";
-      }
-      std::cout << std::dec << "\n";
+  MRInfos remote{};
+  if (ex.wait_and_fetch("mr:peer:1:0", remote, 50, 100)) {
+    std::cout << "[INFO] Received remote MR info:\n";
+    for (size_t i = 0; i < remote.mrs.size(); ++i) {
+      auto const& mr = remote.mrs[i];
+      std::cout << "  MR[" << i << "]: id=" << mr.id << " addr=0x" << std::hex
+                << mr.address << std::dec << " len=" << mr.length
+                << " key=" << mr.key << "\n";
     }
   } else {
-    std::cerr << "[WARN] Timeout waiting for remote RDMA info\n";
+    std::cerr << "[WARN] Timeout waiting for remote MR info\n";
   }
 
   pub_thread.join();
-  std::cout << "[INFO] RDMA socket OOB test complete\n";
+  std::cout << "[INFO] socket OOB test complete\n";
 }
 
 void rank_thread_socket(int rank, int world_size, std::string const& ip,
@@ -125,10 +120,10 @@ void rank_thread_socket(int rank, int world_size, std::string const& ip,
 }
 
 void test_socket_meta_exchange_multi_threads(int world_size) {
+  int port = socket_test_port() + 1;
   std::vector<std::thread> threads;
   for (int rank = 0; rank < world_size; ++rank) {
-    threads.emplace_back(rank_thread_socket, rank, world_size, "127.0.0.1",
-                         12345);
+    threads.emplace_back(rank_thread_socket, rank, world_size, "127.0.0.1", port);
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
 

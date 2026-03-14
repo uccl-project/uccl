@@ -60,11 +60,14 @@ LDFLAGS += $(UCCL_LDFLAGS)
 
 # Source files - exclude benchmarks and most device directory pieces.
 # Keep CCL selector and device PK selector because they are shared helpers.
-SRC_CPP := $(shell find src -name '*.cc' | grep -v 'benchmarks' | grep -v 'src/device/' | sort)
+SRC_CPP := $(shell find src -name '*.cc' | grep -v 'benchmarks' | grep -v 'src/device/' | grep -v 'src/transport/test/' | sort)
 SRC_CPP += src/device/pk_selector.cc
 SRC_CU  := $(shell find src -name '*.cu' | grep -v 'benchmarks')
-TEST_DIR := tests
-SRC_TEST := $(shell find $(TEST_DIR) -name 'test_*.cc')
+TEST_DIR := src/ccl/test
+SRC_TEST := $(TEST_DIR)/test_main.cc \
+            $(TEST_DIR)/test_ccl_plan.cc \
+            $(TEST_DIR)/test_ccl_executor.cc \
+            $(TEST_DIR)/test_ccl_rdma_allgather.cc
 
 OBJ_CC   := $(SRC_CPP:.cc=.o)
 OBJ_CU   := $(SRC_CU:.cu=.o)
@@ -124,6 +127,15 @@ bench: $(BENCH_BIN)
 device_test:
 	$(MAKE) -C src/device test
 
+ccl_test:
+	$(MAKE) -C src/ccl/test test
+
+transport_test:
+	$(MAKE) -C src/transport test
+
+transport_suite:
+	$(MAKE) -C src/transport suite
+
 device_bench:
 	$(MAKE) -C src/device bench
 
@@ -131,7 +143,7 @@ device_bench:
 clean:
 	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) $(BENCH_OBJ) \
 	      $(TARGET_TEST) $(STATIC_LIB) $(SHARED_LIB) $(BENCH_BIN) \
-	      *.d src/*.d src/transport/*.d tests/*.d benchmarks/*.d
+	      *.d src/*.d src/ccl/test/*.d src/transport/*.d src/transport/test/*.d benchmarks/*.d
 
 # Include dependencies
 -include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_TEST:.o=.d)
@@ -143,4 +155,4 @@ clean:
 # src/device/persistent_kernel_ops.o: src/device/persistent_kernel_ops.cu
 # 	$(NVCC) $(NVCCFLAGS) -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -MMD -MP -c $< -o $@
 
-.PHONY: all clean run_test bench device_test device_bench ensure-uccl-rdma
+.PHONY: all clean run_test bench device_test ccl_test transport_test transport_suite device_bench ensure-uccl-rdma

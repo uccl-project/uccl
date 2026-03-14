@@ -4,7 +4,7 @@
 namespace UKernel {
 namespace CCL {
 
-PersistentDeviceBackend::PersistentDeviceBackend(
+PersistentKernelBackend::PersistentKernelBackend(
     UKernel::Device::PersistentKernel<UKernel::Device::Task>& kernel,
     CollectiveBuffers buffers, UKernel::Device::DataType dtype,
     UKernel::Device::ReduceType reduce_type,
@@ -16,11 +16,11 @@ PersistentDeviceBackend::PersistentDeviceBackend(
       transfer_path_(transfer_path),
       num_blocks_(num_blocks == 0 ? 1 : num_blocks) {}
 
-char const* PersistentDeviceBackend::name() const {
-  return "device-persistent";
+char const* PersistentKernelBackend::name() const {
+  return "persistent-kernel";
 }
 
-bool PersistentDeviceBackend::supports(ExecutionOpKind kind) const {
+bool PersistentKernelBackend::supports(ExecutionOpKind kind) const {
   switch (kind) {
     case ExecutionOpKind::PkCopy:
     case ExecutionOpKind::PkReduce:
@@ -35,9 +35,9 @@ bool PersistentDeviceBackend::supports(ExecutionOpKind kind) const {
   return false;
 }
 
-BackendToken PersistentDeviceBackend::submit(ExecutionOp const& op) {
+BackendToken PersistentKernelBackend::submit(ExecutionOp const& op) {
   if (!supports(op.kind)) {
-    throw std::invalid_argument("unsupported op kind for device backend");
+    throw std::invalid_argument("unsupported op kind for persistent-kernel backend");
   }
 
   UKernel::Device::CollArgs args{};
@@ -75,26 +75,26 @@ BackendToken PersistentDeviceBackend::submit(ExecutionOp const& op) {
   return token;
 }
 
-bool PersistentDeviceBackend::poll(BackendToken token) {
+bool PersistentKernelBackend::poll(BackendToken token) {
   auto it = submitted_.find(token.value);
   if (it == submitted_.end()) return true;
   return kernel_.is_done(it->second.block_id, it->second.task_id);
 }
 
-void PersistentDeviceBackend::release(BackendToken token) {
+void PersistentKernelBackend::release(BackendToken token) {
   submitted_.erase(token.value);
 }
 
-void* PersistentDeviceBackend::byte_offset(void* base, size_t offset) const {
+void* PersistentKernelBackend::byte_offset(void* base, size_t offset) const {
   return static_cast<void*>(static_cast<char*>(base) + offset);
 }
 
-void const* PersistentDeviceBackend::byte_offset(void const* base,
+void const* PersistentKernelBackend::byte_offset(void const* base,
                                                  size_t offset) const {
   return static_cast<void const*>(static_cast<char const*>(base) + offset);
 }
 
-void* PersistentDeviceBackend::resolve_dst(BufferRole role, size_t offset) const {
+void* PersistentKernelBackend::resolve_dst(BufferRole role, size_t offset) const {
   switch (role) {
     case BufferRole::FinalOutput:
       return byte_offset(buffers_.final_output, offset);
@@ -104,12 +104,12 @@ void* PersistentDeviceBackend::resolve_dst(BufferRole role, size_t offset) const
     case BufferRole::LocalInput:
     case BufferRole::RemoteInput:
     case BufferRole::RemoteReduced:
-      throw std::invalid_argument("invalid dst buffer role for persistent backend");
+      throw std::invalid_argument("invalid dst buffer role for persistent-kernel backend");
   }
   throw std::invalid_argument("unknown dst buffer role");
 }
 
-void const* PersistentDeviceBackend::resolve_src(BufferRole role,
+void const* PersistentKernelBackend::resolve_src(BufferRole role,
                                                  size_t offset) const {
   switch (role) {
     case BufferRole::LocalInput:
@@ -123,12 +123,12 @@ void const* PersistentDeviceBackend::resolve_src(BufferRole role,
     case BufferRole::FinalOutput:
       return byte_offset(buffers_.final_output, offset);
     case BufferRole::None:
-      throw std::invalid_argument("invalid src buffer role for persistent backend");
+      throw std::invalid_argument("invalid src buffer role for persistent-kernel backend");
   }
   throw std::invalid_argument("unknown src buffer role");
 }
 
-CopyEngineDeviceBackend::CopyEngineDeviceBackend(
+CopyEngineBackend::CopyEngineBackend(
     CollectiveBuffers buffers, int dst_device, int src_device,
     gpuStream_t stream)
     : buffers_(buffers) {
@@ -147,7 +147,7 @@ CopyEngineDeviceBackend::CopyEngineDeviceBackend(
   }
 }
 
-CopyEngineDeviceBackend::~CopyEngineDeviceBackend() {
+CopyEngineBackend::~CopyEngineBackend() {
   for (auto& kv : submitted_) {
     set_device(dst_device_);
     gpuEventDestroy(kv.second.event);
@@ -158,15 +158,15 @@ CopyEngineDeviceBackend::~CopyEngineDeviceBackend() {
   }
 }
 
-char const* CopyEngineDeviceBackend::name() const { return "device-ce"; }
+char const* CopyEngineBackend::name() const { return "copy-engine"; }
 
-bool CopyEngineDeviceBackend::supports(ExecutionOpKind kind) const {
+bool CopyEngineBackend::supports(ExecutionOpKind kind) const {
   return kind == ExecutionOpKind::CeCopy;
 }
 
-BackendToken CopyEngineDeviceBackend::submit(ExecutionOp const& op) {
+BackendToken CopyEngineBackend::submit(ExecutionOp const& op) {
   if (!supports(op.kind)) {
-    throw std::invalid_argument("unsupported op kind for device copy engine backend");
+    throw std::invalid_argument("unsupported op kind for copy-engine backend");
   }
 
   void* dst = resolve_dst(op.dst_role, op.chunk.offset_bytes);
@@ -195,7 +195,7 @@ BackendToken CopyEngineDeviceBackend::submit(ExecutionOp const& op) {
   return token;
 }
 
-bool CopyEngineDeviceBackend::poll(BackendToken token) {
+bool CopyEngineBackend::poll(BackendToken token) {
   auto it = submitted_.find(token.value);
   if (it == submitted_.end()) return true;
 
@@ -210,7 +210,7 @@ bool CopyEngineDeviceBackend::poll(BackendToken token) {
   return false;
 }
 
-void CopyEngineDeviceBackend::release(BackendToken token) {
+void CopyEngineBackend::release(BackendToken token) {
   auto it = submitted_.find(token.value);
   if (it == submitted_.end()) return;
 
@@ -222,16 +222,16 @@ void CopyEngineDeviceBackend::release(BackendToken token) {
   submitted_.erase(it);
 }
 
-void* CopyEngineDeviceBackend::byte_offset(void* base, size_t offset) const {
+void* CopyEngineBackend::byte_offset(void* base, size_t offset) const {
   return static_cast<void*>(static_cast<char*>(base) + offset);
 }
 
-void const* CopyEngineDeviceBackend::byte_offset(void const* base,
-                                                 size_t offset) const {
+void const* CopyEngineBackend::byte_offset(void const* base,
+                                           size_t offset) const {
   return static_cast<void const*>(static_cast<char const*>(base) + offset);
 }
 
-void* CopyEngineDeviceBackend::resolve_dst(BufferRole role, size_t offset) const {
+void* CopyEngineBackend::resolve_dst(BufferRole role, size_t offset) const {
   switch (role) {
     case BufferRole::FinalOutput:
       return byte_offset(buffers_.final_output, offset);
@@ -241,13 +241,13 @@ void* CopyEngineDeviceBackend::resolve_dst(BufferRole role, size_t offset) const
     case BufferRole::LocalInput:
     case BufferRole::RemoteInput:
     case BufferRole::RemoteReduced:
-      throw std::invalid_argument("invalid dst buffer role for copy engine backend");
+      throw std::invalid_argument("invalid dst buffer role for copy-engine backend");
   }
   throw std::invalid_argument("unknown dst buffer role");
 }
 
-void const* CopyEngineDeviceBackend::resolve_src(BufferRole role,
-                                                 size_t offset) const {
+void const* CopyEngineBackend::resolve_src(BufferRole role,
+                                           size_t offset) const {
   switch (role) {
     case BufferRole::LocalInput:
       return byte_offset(buffers_.local_input, offset);
@@ -260,12 +260,12 @@ void const* CopyEngineDeviceBackend::resolve_src(BufferRole role,
     case BufferRole::FinalOutput:
       return byte_offset(buffers_.final_output, offset);
     case BufferRole::None:
-      throw std::invalid_argument("invalid src buffer role for copy engine backend");
+      throw std::invalid_argument("invalid src buffer role for copy-engine backend");
   }
   throw std::invalid_argument("unknown src buffer role");
 }
 
-void CopyEngineDeviceBackend::set_device(int device) const {
+void CopyEngineBackend::set_device(int device) const {
   GPU_RT_CHECK(gpuSetDevice(device));
 }
 

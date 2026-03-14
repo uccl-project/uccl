@@ -12,9 +12,9 @@
 #include <vector>
 
 using RedisExchanger = UKernel::Transport::RedisExchanger;
-using RDMAInfo = UKernel::Transport::RDMAInfo;
-using QpInfo = UKernel::Transport::QpInfo;
 using CommunicatorMeta = UKernel::Transport::CommunicatorMeta;
+using MR = UKernel::Transport::MR;
+using MRInfos = UKernel::Transport::MRInfos;
 
 void publisher() {
   RedisExchanger ex("127.0.0.1", 6379);
@@ -23,22 +23,18 @@ void publisher() {
     return;
   }
 
-  RDMAInfo remote{};
-  QpInfo qp{};
-  qp.qp_num = 4321;
-  qp.psn = 0x123456;
-  qp.lid = 8765;
-  for (int i = 0; i < 16; i++) qp.gid[i] = 15 - i;
-  remote.qps.push_back(qp);
+  MRInfos remote{};
+  remote.mrs.push_back(MR{1, 0x12345000ULL, 4096, 0, 123});
+  remote.mrs.push_back(MR{2, 0x12346000ULL, 8192, 0, 456});
 
   std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-  if (!ex.publish("rdma:peer:1:0", remote)) {
-    std::cerr << "[ERROR] Publisher failed to publish remote RDMA info"
+  if (!ex.publish("mr:peer:1:0", remote)) {
+    std::cerr << "[ERROR] Publisher failed to publish remote MR info"
               << std::endl;
     return;
   }
-  std::cout << "[INFO] Publisher thread published remote RDMA info"
+  std::cout << "[INFO] Publisher thread published remote MR info"
             << std::endl;
 }
 
@@ -50,37 +46,28 @@ void test_redis_oob() {
   }
   std::cout << "[INFO] Connected to Redis" << std::endl;
 
-  RDMAInfo local{};
-  QpInfo qp{};
-  qp.qp_num = 1234;
-  qp.psn = 0x654321;
-  qp.lid = 5678;
-  for (int i = 0; i < 16; i++) qp.gid[i] = i;
-  local.qps.push_back(qp);
+  MRInfos local{};
+  local.mrs.push_back(MR{7, 0xABCDEF00ULL, 16384, 0, 789});
 
-  if (!ex.publish("rdma:peer:0:0", local)) {
-    std::cerr << "[ERROR] Failed to publish local RDMA info" << std::endl;
+  if (!ex.publish("mr:peer:0:0", local)) {
+    std::cerr << "[ERROR] Failed to publish local MR info" << std::endl;
     return;
   }
-  std::cout << "[INFO] Published local RDMA info" << std::endl;
+  std::cout << "[INFO] Published local MR info" << std::endl;
 
   std::thread pub_thread(publisher);
 
-  RDMAInfo remote{};
-  if (ex.wait_and_fetch("rdma:peer:1:0", remote)) {
-    std::cout << "[INFO] Got remote RDMA info:" << std::endl;
-    for (size_t i = 0; i < remote.qps.size(); ++i) {
-      auto const& qp = remote.qps[i];
-      std::cout << "  QP[" << i << "]: qp_num=" << qp.qp_num
-                << " psn=" << qp.psn << " lid=" << qp.lid << " gid=";
-      for (int j = 0; j < 16; j++) {
-        std::cout << std::hex << std::setw(2) << std::setfill('0')
-                  << static_cast<int>(qp.gid[j]) << " ";
-      }
-      std::cout << std::dec << std::endl;
+  MRInfos remote{};
+  if (ex.wait_and_fetch("mr:peer:1:0", remote)) {
+    std::cout << "[INFO] Got remote MR info:" << std::endl;
+    for (size_t i = 0; i < remote.mrs.size(); ++i) {
+      auto const& mr = remote.mrs[i];
+      std::cout << "  MR[" << i << "]: id=" << mr.id << " addr=0x"
+                << std::hex << mr.address << std::dec << " len=" << mr.length
+                << " key=" << mr.key << std::endl;
     }
   } else {
-    std::cerr << "[WARN] Timeout waiting for remote RDMA info" << std::endl;
+    std::cerr << "[WARN] Timeout waiting for remote MR info" << std::endl;
   }
 
   pub_thread.join();

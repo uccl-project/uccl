@@ -77,14 +77,16 @@ bool CommunicatorTransportBackend::poll(BackendToken token) {
   if (it == pending_.end()) return true;
   if (it->second.completed) return true;
 
-  if (!comm_.wait_finish(it->second.request_id)) {
-    throw std::runtime_error("communicator transport wait_finish failed");
-  }
+  if (!comm_.poll(it->second.request_id)) return false;
   it->second.completed = true;
   return true;
 }
 
 void CommunicatorTransportBackend::release(BackendToken token) {
+  auto it = pending_.find(token.value);
+  if (it != pending_.end() && it->second.completed) {
+    comm_.release(it->second.request_id);
+  }
   pending_.erase(token.value);
 }
 
@@ -123,7 +125,7 @@ void CommunicatorTransportBackend::exchange_mrs() {
     if (it == registered_mrs_.end()) continue;
 
     UKernel::Transport::MR local =
-        comm_.get_local_mr(static_cast<uint16_t>(it->second.local_mr_id));
+        comm_.get_local_mr(it->second.local_mr_id);
     if (!comm_.notify_mr(peer_rank_, local)) {
       throw std::runtime_error("communicator transport notify_mr failed");
     }
@@ -137,7 +139,7 @@ void CommunicatorTransportBackend::exchange_mrs() {
     if (!comm_.wait_mr_notify(peer_rank_, remote)) {
       throw std::runtime_error("communicator transport wait_mr_notify failed");
     }
-    it->second.remote_mr_id = static_cast<uint16_t>(remote.id);
+    it->second.remote_mr_id = remote.id;
   }
 }
 
@@ -145,7 +147,7 @@ void CommunicatorTransportBackend::register_buffer(RegisteredBuffer id, void* pt
   if (ptr == nullptr) return;
   UKernel::Transport::MR mr = comm_.reg_mr(ptr, buffers_.registration_bytes);
   registered_mrs_[static_cast<uint64_t>(id)] =
-      RegisteredMr{static_cast<uint16_t>(mr.id), 0};
+      RegisteredMr{mr.id, 0};
 }
 
 void CommunicatorTransportBackend::deregister_registered() {

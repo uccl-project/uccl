@@ -60,9 +60,9 @@ class MockBackend final : public Backend {
   std::unordered_map<uint64_t, uint32_t> pending_polls_;
 };
 
-class PersistentKernelBackend final : public Backend {
+class MockPersistentKernelBackend final : public Backend {
  public:
-  explicit PersistentKernelBackend(uint32_t polls_before_ready = 1)
+  explicit MockPersistentKernelBackend(uint32_t polls_before_ready = 1)
       : polls_before_ready_(polls_before_ready == 0 ? 1 : polls_before_ready) {}
 
   char const* name() const override { return "persistent"; }
