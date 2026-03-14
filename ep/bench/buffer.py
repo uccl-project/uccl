@@ -23,6 +23,7 @@ try:
         check_nvlink_connections,
         initialize_uccl,
         destroy_uccl,
+        _fp8_e4m3_dtype,
     )
 except ImportError:
     from utils import (
@@ -30,6 +31,7 @@ except ImportError:
         check_nvlink_connections,
         initialize_uccl,
         destroy_uccl,
+        _fp8_e4m3_dtype,
     )
 
 
@@ -317,7 +319,7 @@ class Buffer:
         packed_recv_x = torch.empty(
             (num_local_experts, num_recv_tokens, x.size(1)),
             device=x.device,
-            dtype=torch.float8_e4m3fn if use_fp8 else torch.bfloat16,
+            dtype=_fp8_e4m3_dtype() if use_fp8 else torch.bfloat16,
         )
         packed_recv_count = torch.empty(
             (num_local_experts,), device=x.device, dtype=torch.int32
@@ -652,6 +654,7 @@ class Buffer:
             torch.float64: 8,
             torch.bool: 9,
             torch.float8_e4m3fn: 10,
+            torch.float8_e4m3fnuz: 10,
         }
         if dtype not in table:
             raise ValueError(f"Unsupported dtype for uccl combine: {dtype}")
