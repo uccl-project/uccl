@@ -90,6 +90,7 @@ struct IpcTransferInfo {
   size_t size;
   uint32_t operation;  // 0 = send_ipc request, 1 = recv_ipc response
   bool is_host;        // true if this side's buffer is CPU memory
+  int gpu_idx = -1;    // target GPU index; -1 = use conn->remote_gpu_idx_
 };
 
 // For ShmChannel

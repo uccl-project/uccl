@@ -1846,20 +1846,21 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+  int target_gpu = (info.gpu_idx >= 0) ? info.gpu_idx : conn->remote_gpu_idx_;
+  GPU_RT_CHECK(gpuSetDevice(target_gpu));
   void* raw_dst_ptr = nullptr;
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, info.handle,
                                    gpuIpcMemLazyEnablePeerAccess));
   void* dst_ptr = reinterpret_cast<void*>(
       reinterpret_cast<uintptr_t>(raw_dst_ptr) + info.offset);
 
-  std::vector<gpuStream_t>& streams = ipc_streams_[conn->remote_gpu_idx_];
+  std::vector<gpuStream_t>& streams = ipc_streams_[target_gpu];
   int num_streams =
       std::min(streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
   size_t chunk_size = size / num_streams;
 
-  auto* op = new IpcInflightOp{{}, raw_dst_ptr, nullptr, conn->remote_gpu_idx_};
+  auto* op = new IpcInflightOp{{}, raw_dst_ptr, nullptr, target_gpu};
   op->events.resize(num_streams);
   for (int i = 0; i < num_streams; ++i) {
     void* chunk_data = reinterpret_cast<void*>(
@@ -1902,20 +1903,21 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+  int target_gpu = (info.gpu_idx >= 0) ? info.gpu_idx : conn->remote_gpu_idx_;
+  GPU_RT_CHECK(gpuSetDevice(target_gpu));
   void* raw_src_ptr = nullptr;
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_src_ptr, info.handle,
                                    gpuIpcMemLazyEnablePeerAccess));
   void* src_ptr = reinterpret_cast<void*>(
       reinterpret_cast<uintptr_t>(raw_src_ptr) + info.offset);
 
-  std::vector<gpuStream_t>& streams = ipc_streams_[conn->remote_gpu_idx_];
+  std::vector<gpuStream_t>& streams = ipc_streams_[target_gpu];
   int num_streams =
       std::min(streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
   size_t chunk_size = size / num_streams;
 
-  auto* op = new IpcInflightOp{{}, raw_src_ptr, nullptr, conn->remote_gpu_idx_};
+  auto* op = new IpcInflightOp{{}, raw_src_ptr, nullptr, target_gpu};
   op->events.resize(num_streams);
   for (int i = 0; i < num_streams; ++i) {
     void* chunk_src = reinterpret_cast<void*>(
@@ -1964,13 +1966,16 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
-  std::vector<gpuStream_t>& streams = ipc_streams_[conn->remote_gpu_idx_];
+  int target_gpu = (num_iovs > 0 && info_v[0].gpu_idx >= 0)
+                       ? info_v[0].gpu_idx
+                       : conn->remote_gpu_idx_;
+  GPU_RT_CHECK(gpuSetDevice(target_gpu));
+  std::vector<gpuStream_t>& streams = ipc_streams_[target_gpu];
 
   // Use raw_ptr=nullptr to signal vectorized op to the poller thread.
   auto* op = new IpcInflightOp{{}, nullptr, nullptr, -1};
   op->raw_ptrs_v.resize(num_iovs);
-  op->gpu_idxs_v.assign(num_iovs, conn->remote_gpu_idx_);
+  op->gpu_idxs_v.assign(num_iovs, target_gpu);
 
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
@@ -2035,13 +2040,16 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
-  std::vector<gpuStream_t>& streams = ipc_streams_[conn->remote_gpu_idx_];
+  int target_gpu = (num_iovs > 0 && info_v[0].gpu_idx >= 0)
+                       ? info_v[0].gpu_idx
+                       : conn->remote_gpu_idx_;
+  GPU_RT_CHECK(gpuSetDevice(target_gpu));
+  std::vector<gpuStream_t>& streams = ipc_streams_[target_gpu];
 
   // Use raw_ptr=nullptr to signal vectorized op to the poller thread.
   auto* op = new IpcInflightOp{{}, nullptr, nullptr, -1};
   op->raw_ptrs_v.resize(num_iovs);
-  op->gpu_idxs_v.assign(num_iovs, conn->remote_gpu_idx_);
+  op->gpu_idxs_v.assign(num_iovs, target_gpu);
 
   for (size_t iov = 0; iov < num_iovs; ++iov) {
     GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,

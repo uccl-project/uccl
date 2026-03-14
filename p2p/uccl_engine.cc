@@ -267,6 +267,7 @@ int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size,
     if (err == gpuSuccess) {
       entry.ipc_info.offset = data - aligned;
       entry.ipc_info.size = size;
+      entry.ipc_info.gpu_idx = dev_idx;
       entry.has_ipc = true;
     }
   }
