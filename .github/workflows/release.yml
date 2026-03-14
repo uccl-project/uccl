@@ -39,16 +39,35 @@ env:
 
 jobs:
   # ==========================================================================
-  # Job 0: Build Docker images (reuses build-docker-images.yml)
+  # Job 0: Gate — only repository admins/owners may proceed.
+  # ==========================================================================
+  check-permissions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify actor is admin or owner
+        run: |
+          ROLE=$(gh api "repos/${{ github.repository }}/collaborators/${{ github.actor }}/permission" \
+            --jq '.permission' 2>/dev/null || echo "none")
+          echo "Actor '${{ github.actor }}' permission level: ${ROLE}"
+          if [[ "${ROLE}" != "admin" ]]; then
+            echo "ERROR: Only repository admins and owners can trigger this workflow."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ==========================================================================
+  # Job 2: Build Docker images (reuses build-docker-images.yml)
   # ==========================================================================
   build-docker-images:
+    needs: [check-permissions]
     uses: ./.github/workflows/build-docker-images.yml
     permissions:
       contents: read
       packages: write
 
   # ==========================================================================
-  # Job 1: Build wheel variants
+  # Job 3: Build wheel variants
   # ==========================================================================
   build-wheels:
     needs: [build-docker-images]
@@ -154,9 +173,10 @@ jobs:
           if-no-files-found: error
 
   # ==========================================================================
-  # Job 2: Create source tarball (includes submodules)
+  # Job 4: Create source tarball (includes submodules)
   # ==========================================================================
   create-source-tarball:
+    needs: [check-permissions]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout with submodules
@@ -188,9 +208,10 @@ jobs:
           if-no-files-found: error
 
   # ==========================================================================
-  # Job 3: Build uccl meta-package (pure Python, extras → backends)
+  # Job 5: Build uccl meta-package (pure Python, extras → backends)
   # ==========================================================================
   build-meta-package:
+    needs: [check-permissions]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -211,7 +232,7 @@ jobs:
           if-no-files-found: error
 
   # ==========================================================================
-  # Job 4: Upload all artifacts to GitHub Release
+  # Job 6: Upload all artifacts to GitHub Release
   # ==========================================================================
   upload-release-assets:
     needs: [build-wheels, build-meta-package, create-source-tarball]
@@ -252,7 +273,7 @@ jobs:
           echo "Done. All assets uploaded."
 
   # ==========================================================================
-  # Job 5: Publish to PyPI
+  # Job 7: Publish to PyPI
   #   - uccl meta-package (extras → backends)
   #   - uccl-cu12, uccl-cu13, uccl-cu12-efa, uccl-cu13-efa backend wheels
   #   - ROCm wheels stay on GitHub Releases — users install via:
