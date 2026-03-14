@@ -26,10 +26,15 @@ FloatType getFloatTypeFromDtype(at::ScalarType t) {
       return FloatType::kBFloat16;
     case at::ScalarType::Float:
       return FloatType::kFloat32;
+    case at::ScalarType::Float8_e4m3fn:
+      return FloatType::kFloat8E4M3FN;
+    case at::ScalarType::Float8_e5m2:
+      return FloatType::kFloat8E5M2;
     default:
       TORCH_CHECK(
-          t == at::ScalarType::Half || t == at::ScalarType::BFloat16 ||
-          t == at::ScalarType::Float);
+          false,
+          "Unsupported dtype for float compression: ",
+          toString(t));
       return FloatType::kUndefined;
   }
 }
@@ -42,10 +47,15 @@ at::ScalarType getDtypeFromFloatType(FloatType ft) {
       return at::ScalarType::BFloat16;
     case FloatType::kFloat32:
       return at::ScalarType::Float;
+    case FloatType::kFloat8E4M3FN:
+      return at::ScalarType::Float8_e4m3fn;
+    case FloatType::kFloat8E5M2:
+      return at::ScalarType::Float8_e5m2;
     default:
       TORCH_CHECK(
-          ft == FloatType::kFloat16 || ft == FloatType::kBFloat16 ||
-          ft == FloatType::kFloat32);
+          false,
+          "Unsupported FloatType: ",
+          static_cast<uint32_t>(ft));
       return at::ScalarType::Half;
   }
 }
@@ -562,7 +572,9 @@ int64_t decompress_data_res(
     if (compressAsFloat) {
       TORCH_CHECK(
           tOut.dtype() == torch::kFloat16 || tOut.dtype() == torch::kBFloat16 ||
-          tOut.dtype() == torch::kFloat32);
+          tOut.dtype() == torch::kFloat32 ||
+          tOut.dtype().toScalarType() == at::ScalarType::Float8_e4m3fn ||
+          tOut.dtype().toScalarType() == at::ScalarType::Float8_e5m2);
     }
 
     inPtrs[i] = tIn.data_ptr();
@@ -735,7 +747,9 @@ int64_t decompress_data_split_size(
   if (compressAsFloat) {
     TORCH_CHECK(
         tOut.dtype() == torch::kFloat16 || tOut.dtype() == torch::kBFloat16 ||
-        tOut.dtype() == torch::kFloat32);
+        tOut.dtype() == torch::kFloat32 ||
+        tOut.dtype().toScalarType() == at::ScalarType::Float8_e4m3fn ||
+        tOut.dtype().toScalarType() == at::ScalarType::Float8_e5m2);
   }
 
   auto outSize =
@@ -889,8 +903,14 @@ std::vector<torch::Tensor> decompress_data_simple(
     if (compressAsFloat) {
       TORCH_CHECK(type == types[0]); // must be consistent dtype
 
+      // FP8: header stores numPairs, output needs 2x fp8 elements
+      auto numElements = size;
+      if (isFloat8Type((FloatType)type)) {
+        numElements = size * 2;
+      }
+
       tOut = torch::empty(
-          {static_cast<int>(size)},
+          {static_cast<int>(numElements)},
           at::TensorOptions()
               .device(tIns[0].device())
               .dtype(getDtypeFromFloatType((FloatType)type)));

@@ -9,7 +9,12 @@
 
 import torch
 
-torch.ops.load_library("/dietgpu/build/lib/libdietgpu.so")
+import glob as _glob, os as _os
+_so_dir = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "build")
+_so_files = _glob.glob(_os.path.join(_so_dir, "lib.*", "p2p_dietgpu*.so"))
+if not _so_files:
+    raise RuntimeError(f"Could not find p2p_dietgpu*.so under {_so_dir}")
+torch.ops.load_library(_so_files[0])
 dev = torch.device("cuda:0")
 
 
@@ -148,10 +153,14 @@ def get_any_comp_timings(ts, num_runs=3):
     return comp_time, decomp_time, total_size, comp_size
 
 
-for dt in [torch.bfloat16, torch.float16, torch.float32]:
+for dt in [torch.bfloat16, torch.float16, torch.float32, torch.float8_e4m3fn, torch.float8_e5m2]:
+    def make_tensor(shape, dtype):
+        t = torch.normal(0, 1.0, shape, dtype=torch.float32, device=dev)
+        return t.to(dtype)
+
     # Non-batched
     ts = []
-    ts.append(torch.normal(0, 1.0, [128 * 512 * 1024], dtype=dt, device=dev))
+    ts.append(make_tensor([128 * 512 * 1024], dt))
 
     c, dc, total_size, comp_size = get_float_comp_timings(ts)
     ratio = comp_size / total_size
@@ -169,7 +178,7 @@ for dt in [torch.bfloat16, torch.float16, torch.float32]:
     # Batched
     ts = []
     for i in range(128):
-        ts.append(torch.normal(0, 1.0, [512 * 1024], dtype=dt, device=dev))
+        ts.append(make_tensor([512 * 1024], dt))
 
     c, dc, total_size, comp_size = get_float_comp_timings(ts)
     ratio = comp_size / total_size
@@ -186,10 +195,10 @@ for dt in [torch.bfloat16, torch.float16, torch.float32]:
 
 print("\n")
 
-for dt in [torch.bfloat16, torch.float16, torch.float32]:
+for dt in [torch.bfloat16, torch.float16, torch.float32, torch.float8_e4m3fn, torch.float8_e5m2]:
     # Non-batched
     ts = []
-    ts.append(torch.normal(0, 1.0, [128 * 512 * 1024], dtype=dt, device=dev))
+    ts.append(make_tensor([128 * 512 * 1024], dt))
 
     c, dc, total_size, comp_size = get_any_comp_timings(ts)
     ratio = comp_size / total_size
@@ -207,7 +216,7 @@ for dt in [torch.bfloat16, torch.float16, torch.float32]:
     # Batched
     ts = []
     for i in range(128):
-        ts.append(torch.normal(0, 1.0, [512 * 1024], dtype=dt, device=dev))
+        ts.append(make_tensor([512 * 1024], dt))
 
     c, dc, total_size, comp_size = get_any_comp_timings(ts)
     ratio = comp_size / total_size

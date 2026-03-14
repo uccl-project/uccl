@@ -173,6 +173,8 @@ NB_MODULE(p2p, m) {
       .value("kFloat16", uccl::FloatType::kFloat16)
       .value("kBFloat16", uccl::FloatType::kBFloat16)
       .value("kFloat32", uccl::FloatType::kFloat32)
+      .value("kFloat8E4M3FN", uccl::FloatType::kFloat8E4M3FN)
+      .value("kFloat8E5M2", uccl::FloatType::kFloat8E5M2)
       .export_values();
 
   // Endpoint class binding

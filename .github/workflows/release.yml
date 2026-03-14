@@ -32,7 +32,6 @@ env:
 #   cuda12+efa    cuda     uccl-builder-efa     uccl-cu12-efa    PyPI
 #   cuda13+efa    cuda13   uccl-builder-efa13   uccl-cu13-efa    PyPI
 #   rocm          rocm     uccl-builder-rocm    uccl-rocm        extra-index-url
-#   therock       therock  uccl-builder-therock uccl-rocm        extra-index-url
 #
 # × Python 3.12 (abi3 — compatible with 3.12+) = 6 wheel jobs + 1 source tarball
 # ---------------------------------------------------------------------------
@@ -111,13 +110,6 @@ jobs:
           - name: rocm
             target: rocm
             image_name: uccl-builder-rocm
-            package_name: uccl-rocm
-            for_pypi: false
-            gpu_arch: "gfx942,gfx950"
-          # TheRock (python-packaged ROCm)
-          - name: therock
-            target: therock
-            image_name: uccl-builder-therock
             package_name: uccl-rocm
             for_pypi: false
             gpu_arch: "gfx942,gfx950"
