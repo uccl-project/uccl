@@ -328,6 +328,10 @@ class CollectiveContext:
             return p2p.FloatType.kBFloat16
         elif t.dtype == torch.float32:
             return p2p.FloatType.kFloat32
+        elif t.dtype == torch.float8_e4m3fn:
+            return p2p.FloatType.kFloat8E4M3FN
+        elif t.dtype == torch.float8_e5m2:
+            return p2p.FloatType.kFloat8E5M2
         else:
             return p2p.FloatType.kUndefined
 

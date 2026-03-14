@@ -370,6 +370,12 @@ class DietGPUCompressorBackend : public ICompressorBackend {
     dietgpu::FloatType float_type = to_dietgpu(ctx->getFloatType());
     uint32_t numFloats = static_cast<uint32_t>(
         dietgpu::getElementCountFromBytes(float_type, size));
+    // FP8 types pack two values into one uint16 pair, so the split kernel
+    // expects the pair count (half the element count).
+    if (dietgpu::isFloat8Type(float_type)) {
+      assert(numFloats % 2 == 0);
+      numFloats /= 2;
+    }
 
     // Build params_dev on device: layout is [in_ptr, inSize, out_ptr]
     uintptr_t hostParams[3];

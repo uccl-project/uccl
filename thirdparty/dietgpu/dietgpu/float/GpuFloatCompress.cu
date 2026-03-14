@@ -14,13 +14,21 @@
 #include "dietgpu/utils/StaticUtils.h"
 
 #include "util/debug.h"
+#include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <vector>
 
 namespace dietgpu {
 
 uint32_t getMaxFloatCompressedSize(FloatType floatType, uint32_t size) {
+  // FP8: two fp8 values pack into one bf16-sized word; size is in pairs
+  if (isFloat8Type(floatType)) {
+    assert(size % 2 == 0);
+    size = size / 2;
+  }
+
   // kNotCompressed bytes per float are simply stored uncompressed
   // rounded up to 16 bytes to ensure alignment of the following ANS data
   // portion
@@ -35,6 +43,12 @@ uint32_t getMaxFloatCompressedSize(FloatType floatType, uint32_t size) {
       break;
     case FloatType::kFloat32:
       baseSize += FloatTypeInfo<FloatType::kFloat32>::getUncompDataSize(size);
+      break;
+    case FloatType::kFloat8E4M3FN:
+      baseSize += FloatTypeInfo<FloatType::kFloat8E4M3FN>::getUncompDataSize(size);
+      break;
+    case FloatType::kFloat8E5M2:
+      baseSize += FloatTypeInfo<FloatType::kFloat8E5M2>::getUncompDataSize(size);
       break;
     default:
       UCCL_CHECK(false);
@@ -53,11 +67,24 @@ void floatCompress(
     void** out,
     uint32_t* outSize_dev,
     cudaStream_t stream) {
+  // FP8: sizes are in fp8 elements; the fused pipeline works in pairs (uint16),
+  // so halve all sizes before sending to the device function.
+  std::vector<uint32_t> halvedSizes;
+  const uint32_t* effectiveInSize = inSize;
+  if (isFloat8Type(config.floatType)) {
+    halvedSizes.resize(numInBatch);
+    for (uint32_t i = 0; i < numInBatch; ++i) {
+      assert(inSize[i] % 2 == 0);
+      halvedSizes[i] = inSize[i] / 2;
+    }
+    effectiveInSize = halvedSizes.data();
+  }
+
   // Get the total and maximum input size
   uint32_t maxSize = 0;
 
   for (uint32_t i = 0; i < numInBatch; ++i) {
-    maxSize = std::max(maxSize, inSize[i]);
+    maxSize = std::max(maxSize, effectiveInSize[i]);
   }
 
   // Copy data to device
@@ -72,7 +99,7 @@ void floatCompress(
       std::unique_ptr<uintptr_t[]>(new uintptr_t[3 * numInBatch]);
 
   std::memcpy(&params_host[0], in, numInBatch * sizeof(void*));
-  std::memcpy(&params_host[numInBatch], inSize, numInBatch * sizeof(uint32_t));
+  std::memcpy(&params_host[numInBatch], effectiveInSize, numInBatch * sizeof(uint32_t));
   std::memcpy(&params_host[2 * numInBatch], out, numInBatch * sizeof(void*));
 
   CUDA_VERIFY(cudaMemcpyAsync(
@@ -110,7 +137,22 @@ void floatCompressSplitSize(
     uint32_t outStride,
     uint32_t* outSize_dev,
     cudaStream_t stream) {
-  auto floatWordSize = getWordSizeFromFloatType(config.floatType);
+  // FP8: the fused pipeline reads fp8 pairs as uint16, so use sizeof(uint16_t)
+  // as word size and halve the split sizes.
+  std::vector<uint32_t> halvedSplitSizes;
+  const uint32_t* effectiveSplitSizes = inSplitSizes;
+  size_t floatWordSize;
+  if (isFloat8Type(config.floatType)) {
+    floatWordSize = sizeof(uint16_t); // WordT for fp8 pairs
+    halvedSplitSizes.resize(numInBatch);
+    for (uint32_t i = 0; i < numInBatch; ++i) {
+      assert(inSplitSizes[i] % 2 == 0);
+      halvedSplitSizes[i] = inSplitSizes[i] / 2;
+    }
+    effectiveSplitSizes = halvedSplitSizes.data();
+  } else {
+    floatWordSize = getWordSizeFromFloatType(config.floatType);
+  }
 
   auto splitSizeHost = std::vector<uint32_t>(numInBatch * 2);
   auto splitSize = splitSizeHost.data();
@@ -118,7 +160,7 @@ void floatCompressSplitSize(
   uint32_t maxSplitSize = 0;
 
   for (uint32_t i = 0; i < numInBatch; ++i) {
-    auto size = inSplitSizes[i];
+    auto size = effectiveSplitSizes[i];
 
     splitSize[i] = size;
     if (i > 0) {
@@ -176,7 +218,14 @@ void floatCompressSplitOneBatch(dietgpu::StackDeviceMemory& res,
   auto outProvider = BatchProviderPointer(out_dev);
 
   // ---- allocate split temporaries (stored as RAII in ctx) ----
-  ctx.compRowStride = roundUp(ctx.maxSize, sizeof(uint4));
+  // FP8 types pack two values into one uint16, so the effective element
+  // count (and therefore the compressed-row width) is half the raw byte size.
+  uint32_t effectiveMaxSize = ctx.maxSize;
+  if (isFloat8Type(config.floatType)) {
+    assert(effectiveMaxSize % 2 == 0);
+    effectiveMaxSize /= 2;
+  }
+  ctx.compRowStride = roundUp(effectiveMaxSize, sizeof(uint4));
 
   ctx.toComp_dev = res.alloc<uint8_t>(stream, ctx.compRowStride);
 
@@ -257,6 +306,30 @@ void floatCompressEncodeOneBatch(dietgpu::StackDeviceMemory& res,
       break;
     }
 
+    case FloatType::kFloat8E4M3FN: {
+      auto outProviderANS =
+          FloatANSOutProvider<FloatType::kFloat8E4M3FN, BatchProviderPointer,
+                              BatchProviderPointer>(outProvider, inProvider);
+
+      runANSEncodeForType<FloatType::kFloat8E4M3FN>(
+          res, config.ansConfig, 1, inProvider, inProviderANS,
+          ctx.histogram_dev.data(), ctx.maxSize, outProviderANS, outSize_dev,
+          stream);
+      break;
+    }
+
+    case FloatType::kFloat8E5M2: {
+      auto outProviderANS =
+          FloatANSOutProvider<FloatType::kFloat8E5M2, BatchProviderPointer,
+                              BatchProviderPointer>(outProvider, inProvider);
+
+      runANSEncodeForType<FloatType::kFloat8E5M2>(
+          res, config.ansConfig, 1, inProvider, inProviderANS,
+          ctx.histogram_dev.data(), ctx.maxSize, outProviderANS, outSize_dev,
+          stream);
+      break;
+    }
+
     default:
       assert(false);
   }
@@ -274,20 +347,27 @@ inline size_t getElementCountFromBytes(FloatType ft, size_t bytes) {
 }
 
 uint32_t getUncompDataSizeFromByteSize(FloatType floatType, uint32_t datasize) {
+  if (floatType == FloatType::kFloat8E4M3FN) {
+    assert(datasize % 2 == 0);
+    uint32_t numPairs = datasize / 2;
+    return FloatTypeInfo<FloatType::kFloat8E4M3FN>::getUncompDataSize(numPairs);
+  }
+  if (floatType == FloatType::kFloat8E5M2) {
+    assert(datasize % 2 == 0);
+    uint32_t numPairs = datasize / 2;
+    return FloatTypeInfo<FloatType::kFloat8E5M2>::getUncompDataSize(numPairs);
+  }
   uint32_t numFloats =
       static_cast<uint32_t>(getElementCountFromBytes(floatType, datasize));
   switch (floatType) {
     case FloatType::kFloat16: {
       return FloatTypeInfo<FloatType::kFloat16>::getUncompDataSize(numFloats);
-      break;
     }
     case FloatType::kBFloat16: {
       return FloatTypeInfo<FloatType::kBFloat16>::getUncompDataSize(numFloats);
-      break;
     }
     case FloatType::kFloat32: {
       return FloatTypeInfo<FloatType::kFloat32>::getUncompDataSize(numFloats);
-      break;
     }
   }
   return 0;
