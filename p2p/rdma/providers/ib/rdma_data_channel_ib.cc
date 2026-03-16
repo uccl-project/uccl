@@ -1,7 +1,7 @@
-#ifndef RDMA_CHANNEL_IMPL_IB_CC_INCLUDED
-#define RDMA_CHANNEL_IMPL_IB_CC_INCLUDED
+#ifndef RDMA_DATA_CHANNEL_IB_CC_INCLUDED
+#define RDMA_DATA_CHANNEL_IB_CC_INCLUDED
 
-#include "rdma_channel_impl_ib.h"
+#include "rdma_data_channel_ib.h"
 #include "util/debug.h"
 #include <cstdint>
 #include <cstdlib>
@@ -20,7 +20,7 @@
 #define MAX_DEST_RD_ATOMIC 1
 #define MAX_CQE 1024
 
-inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
+inline void IBChannel::initQP(std::shared_ptr<RdmaContext> ctx,
                                   struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
                                   ChannelMetaData* local_meta) {
   *cq_ex = (struct ibv_cq_ex*)ibv_create_cq(ctx->getCtx(), MAX_CQE, nullptr,
@@ -74,13 +74,13 @@ inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   local_meta->lid = ctx->queryLid(kPortNum);
 }
 
-inline void IBChannelImpl::connectQP(struct ibv_qp* qp,
+inline void IBChannel::connectQP(struct ibv_qp* qp,
                                      std::shared_ptr<RdmaContext> ctx,
                                      ChannelMetaData const& remote_meta) {
   ibrcQP_rtr_rts(qp, ctx, remote_meta);
 }
 
-inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
+inline void IBChannel::ibrcQP_rtr_rts(struct ibv_qp* qp,
                                           std::shared_ptr<RdmaContext> ctx,
                                           ChannelMetaData const& remote_meta) {
   int flags = 0;
@@ -139,7 +139,7 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
   assert(ibv_modify_qp(qp, &attr, flags) == 0);
 }
 
-inline bool IBChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
+inline bool IBChannel::pollOnce(struct ibv_cq_ex* cq_ex,
                                     std::vector<CQMeta>& cq_datas,
                                     uint32_t channel_id,
                                     uint32_t& nb_post_recv) {
@@ -186,7 +186,7 @@ inline bool IBChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
   return !cq_datas.empty();
 }
 
-inline void IBChannelImpl::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
+inline void IBChannel::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
                                             bool force) {
   pending_post_recv_ += n;
   while (pending_post_recv_ >= kBatchPostRecvWr) {
@@ -212,7 +212,7 @@ inline void IBChannelImpl::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
   }
 }
 
-inline void IBChannelImpl::setDstAddress(struct ibv_qp_ex* qpx,
+inline void IBChannel::setDstAddress(struct ibv_qp_ex* qpx,
                                          struct ibv_ah* ah,
                                          uint32_t remote_qpn) {
   // IB RC doesn't need UD address setup
@@ -221,7 +221,7 @@ inline void IBChannelImpl::setDstAddress(struct ibv_qp_ex* qpx,
   (void)remote_qpn;
 }
 
-inline void IBChannelImpl::initPreAllocResources() {
+inline void IBChannel::initPreAllocResources() {
   pre_alloc_recv_wrs_ = new struct ibv_recv_wr[kMaxRecvWr];
   pending_post_recv_ = 0;
   for (int i = 0; i < kMaxRecvWr; i++) {
@@ -231,8 +231,8 @@ inline void IBChannelImpl::initPreAllocResources() {
   }
 }
 
-inline uint32_t IBChannelImpl::getMaxInlineData() const {
+inline uint32_t IBChannel::getMaxInlineData() const {
   return MAX_INLINE_DATA;
 }
 
-#endif  // RDMA_CHANNEL_IMPL_IB_CC_INCLUDED
+#endif  // RDMA_DATA_CHANNEL_IB_CC_INCLUDED

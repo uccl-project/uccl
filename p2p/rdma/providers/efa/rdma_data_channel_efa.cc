@@ -1,7 +1,7 @@
-#ifndef RDMA_CHANNEL_IMPL_EFA_CC_INCLUDED
-#define RDMA_CHANNEL_IMPL_EFA_CC_INCLUDED
+#ifndef RDMA_DATA_CHANNEL_EFA_CC_INCLUDED
+#define RDMA_DATA_CHANNEL_EFA_CC_INCLUDED
 
-#include "rdma_channel_impl_efa.h"
+#include "rdma_data_channel_efa.h"
 #include "util/debug.h"
 #include <cstring>
 #include <errno.h>
@@ -16,7 +16,7 @@
 
 #define MAX_CQE 1024
 
-inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
+inline void EFAChannel::initQP(std::shared_ptr<RdmaContext> ctx,
                                    struct ibv_cq_ex** cq_ex, struct ibv_qp** qp,
                                    ChannelMetaData* local_meta) {
   struct ibv_cq_init_attr_ex cq_attr = {0};
@@ -85,7 +85,7 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   local_meta->lid = LID_EFA;
 }
 
-inline void EFAChannelImpl::connectQP(struct ibv_qp* qp,
+inline void EFAChannel::connectQP(struct ibv_qp* qp,
                                       std::shared_ptr<RdmaContext> ctx,
                                       ChannelMetaData const& remote_meta) {
   (void)qp;
@@ -93,7 +93,7 @@ inline void EFAChannelImpl::connectQP(struct ibv_qp* qp,
   (void)remote_meta;
 }
 
-inline bool EFAChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
+inline bool EFAChannel::pollOnce(struct ibv_cq_ex* cq_ex,
                                      std::vector<CQMeta>& cq_datas,
                                      uint32_t channel_id,
                                      uint32_t& nb_post_recv) {
@@ -153,23 +153,23 @@ inline bool EFAChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
   return !cq_datas.empty();
 }
 
-inline void EFAChannelImpl::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
+inline void EFAChannel::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
                                              bool force) {
   (void)qp;
   (void)n;
   (void)force;
 }
 
-inline void EFAChannelImpl::setDstAddress(struct ibv_qp_ex* qpx,
+inline void EFAChannel::setDstAddress(struct ibv_qp_ex* qpx,
                                           struct ibv_ah* ah,
                                           uint32_t remote_qpn) {
   ibv_wr_set_ud_addr(qpx, ah, remote_qpn, QKEY);
 }
 
-inline void EFAChannelImpl::initPreAllocResources() {}
+inline void EFAChannel::initPreAllocResources() {}
 
-inline uint32_t EFAChannelImpl::getMaxInlineData() const {
+inline uint32_t EFAChannel::getMaxInlineData() const {
   return MAX_INLINE_DATA;
 }
 
-#endif  // RDMA_CHANNEL_IMPL_EFA_CC_INCLUDED
+#endif  // RDMA_DATA_CHANNEL_EFA_CC_INCLUDED

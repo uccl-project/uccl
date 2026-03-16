@@ -1,12 +1,12 @@
 #pragma once
 #include "rdma/define.h"
-#include "rdma/rdma_channel_impl.h"
+#include "rdma/rdma_channel.h"
 #include "util/debug.h"
 
-class EFAChannelImpl : public RDMAChannelImpl {
+class IBChannel : public RDMAChannel {
  public:
-  EFAChannelImpl() = default;
-  ~EFAChannelImpl() override = default;
+  IBChannel() = default;
+  ~IBChannel() override = default;
 
   void initQP(std::shared_ptr<RdmaContext> ctx, struct ibv_cq_ex** cq_ex,
               struct ibv_qp** qp, ChannelMetaData* local_meta) override;
@@ -25,7 +25,11 @@ class EFAChannelImpl : public RDMAChannelImpl {
   uint32_t getMaxInlineData() const override;
 
   void initPreAllocResources() override;
+
+ private:
+  void ibrcQP_rtr_rts(struct ibv_qp* qp, std::shared_ptr<RdmaContext> ctx,
+                      ChannelMetaData const& remote_meta);
 };
 
 // Implementation (inline to avoid separate .cc file)
-#include "rdma_channel_impl_efa.cc"
+#include "rdma_data_channel_ib.cc"
