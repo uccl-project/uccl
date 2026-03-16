@@ -74,8 +74,8 @@ ROCM_IDX_URL=${POSITIONAL_ARGS[3]:-https://rocm.prereleases.amd.com/whl/gfx94X-d
 # The default for THEROCK_BASE_IMAGE is current, but may change. Make sure to track TheRock's dockerfile.
 THEROCK_BASE_IMAGE=${POSITIONAL_ARGS[4]:-quay.io/pypa/manylinux_2_28_x86_64@sha256:d632b5e68ab39e59e128dcf0e59e438b26f122d7f2d45f3eea69ffd2877ab017}
 
-if [[ $TARGET != cuda* && $TARGET != rocm* && $TARGET != "therock" ]]; then
-  msg_error "Usage: $0 [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image] [--install]" >&2
+if [[ $TARGET != cu* && $TARGET != rocm* && $TARGET != "therock" ]]; then
+  msg_error "Usage: $0 [cu12|cu13|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image] [--install]" >&2
 fi
 
 ########################################################
@@ -249,7 +249,6 @@ elif [[ $TARGET == "therock" ]]; then
     IMAGE_NAME="uccl-builder-therock"
 fi
 
-# qui
 # IMAGE_NAME, IMAGE_VERSION
 if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
     # Add extension: IMAGE_NAME-IMAGE_VERSION.sif if IMAGE_VERSION is set, otherwise just IMAGE_NAME.sif
