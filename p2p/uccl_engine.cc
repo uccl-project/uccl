@@ -317,27 +317,14 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<char*> ipc_bufs) {
   if (!conn || num_iovs <= 0) return -1;
 
-  // Cross-process local: use externally-provided IPC info
+  // Local IPC path (both same-process and cross-process)
   if (conn->is_local && !ipc_bufs.empty()) {
     std::vector<IpcTransferInfo> info_v(num_iovs);
     for (int i = 0; i < num_iovs; i++) {
       deserialize_ipc_info(ipc_bufs[i], info_v[i]);
-    }
-    return conn->engine->endpoint->readv_ipc_async(
-               conn->conn_id, dst_v, size_v, info_v, num_iovs, transfer_id)
-               ? 0
-               : -1;
-  }
-
-  // Same-process local: look up IPC info from local mem_reg_info
-  if (conn->same_process) {
-    std::vector<IpcTransferInfo> info_v(num_iovs);
-    for (int i = 0; i < num_iovs; i++) {
-      if (!get_ipc_info_for_addr(fifo_items[i].addr, size_v[i], info_v[i])) {
-        UCCL_LOG(ERROR) << "Failed to get IPC info";
-        return -1;
+      if (conn->same_process) {
+        info_v[i].direct_addr = fifo_items[i].addr;
       }
-      info_v[i].direct_addr = fifo_items[i].addr;
     }
     return conn->engine->endpoint->readv_ipc_async(
                conn->conn_id, dst_v, size_v, info_v, num_iovs, transfer_id)
@@ -411,32 +398,15 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                              std::vector<char*> ipc_bufs) {
   if (!conn || num_iovs <= 0) return -1;
 
-#ifdef UCCL_P2P_USE_TCPX
-  return -1;  // TODO: support write_rc for TCPX
-#else
-  // Cross-process local: use externally-provided IPC info
+  // Local IPC path (both same-process and cross-process)
   if (conn->is_local && !ipc_bufs.empty()) {
     std::vector<void const*> src_v(dst_v.begin(), dst_v.end());
     std::vector<IpcTransferInfo> info_v(num_iovs);
     for (int i = 0; i < num_iovs; i++) {
       deserialize_ipc_info(ipc_bufs[i], info_v[i]);
-    }
-    return conn->engine->endpoint->writev_ipc_async(
-               conn->conn_id, src_v, size_v, info_v, num_iovs, transfer_id)
-               ? 0
-               : -1;
-  }
-
-  // Same-process local: look up IPC info from local mem_reg_info
-  if (conn->same_process) {
-    std::vector<void const*> src_v(dst_v.begin(), dst_v.end());
-    std::vector<IpcTransferInfo> info_v(num_iovs);
-    for (int i = 0; i < num_iovs; i++) {
-      if (!get_ipc_info_for_addr(fifo_items[i].addr, size_v[i], info_v[i])) {
-        UCCL_LOG(ERROR) << "Failed to get IPC info";
-        return -1;
+      if (conn->same_process) {
+        info_v[i].direct_addr = fifo_items[i].addr;
       }
-      info_v[i].direct_addr = fifo_items[i].addr;
     }
     return conn->engine->endpoint->writev_ipc_async(
                conn->conn_id, src_v, size_v, info_v, num_iovs, transfer_id)
@@ -445,6 +415,9 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
   }
 
   // Remote RDMA
+  #ifdef UCCL_P2P_USE_TCPX
+  return -1;  // TODO: support write_rc for TCPX
+  #else
   return conn->engine->endpoint->writev_async(conn->conn_id, mr_ids, dst_v,
                                               size_v, fifo_items, num_iovs,
                                               transfer_id)

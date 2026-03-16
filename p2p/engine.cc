@@ -1995,13 +1995,6 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
   op->gpu_idxs_v.assign(num_iovs, target_gpu);
 
   for (size_t iov = 0; iov < num_iovs; ++iov) {
-    std::cout << "[writev_ipc_async] iov=" << iov
-              << " target_gpu=" << target_gpu
-              << " info.gpu_idx=" << info_v[iov].gpu_idx
-              << " info.offset=" << info_v[iov].offset
-              << " info.size=" << info_v[iov].size
-              << " direct_addr=0x" << std::hex << info_v[iov].direct_addr
-              << std::dec << std::endl;
     void* dst_ptr = nullptr;
     if (info_v[iov].direct_addr != 0) {
       dst_ptr = reinterpret_cast<void*>(info_v[iov].direct_addr);
