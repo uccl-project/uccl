@@ -12,7 +12,7 @@
 #   CONTAINER_ENGINE=podman         Use podman instead of docker.
 #   CONTAINER_ENGINE=apptainer      Use apptainer instead of docker/podman. 
 #                                       It will create and remove 2 temp files in /tmp
-#                          Example: CONTAINER_ENGINE=podman ./build.sh cuda all
+#                          Example: CONTAINER_ENGINE=podman ./build.sh cu12 all
 #   USE_INTEL_RDMA_NIC=1   Enable Intel RDMA NIC support (irdma driver, vendor 0x8086)
 #                          Example: USE_INTEL_RDMA_NIC=1 ./build.sh cu12 ccl_efa
 #   UCCL_WHEEL_ENABLE_FORCE_RETAG=1  Allow retagging the wheel to the host's
@@ -654,10 +654,14 @@ if [[ "$DO_INSTALL" == "1" ]]; then
     PIP_CMD="${PYTHON_CMD} -m pip"
   fi
   
-  msg_info "Installing uccl wheel (using ${PIP_CMD})..."
+  msg_info "Installing uccl wheel for ${PYTHON_CMD} (using ${PIP_CMD})..."
   ${PIP_CMD} install -r requirements.txt
-  # Uninstall any previous uccl so pip doesn't skip with "already installed".
+  # Uninstall the meta-package and any backend packages so pip doesn't
+  # skip the install with "already installed" after we clean stale files.
   ${PIP_CMD} uninstall uccl -y 2>/dev/null || true
+  for _pkg in $(${PIP_CMD} list 2>/dev/null | awk '/^uccl-/ { print $1 }'); do
+    ${PIP_CMD} uninstall "$_pkg" -y 2>/dev/null || true
+  done
   UCCL_CLEANUP_DIR="$(${PYTHON_CMD} -c "import site; print(site.getsitepackages()[0])")/uccl"
   if [[ -d "$UCCL_CLEANUP_DIR" ]]; then
     msg_info "Cleaning up stale files in $UCCL_CLEANUP_DIR"
@@ -669,7 +673,13 @@ if [[ "$DO_INSTALL" == "1" ]]; then
     ${PIP_CMD} install --extra-index-url "${ROCM_IDX_URL}" "$(ls "${WHEEL_DIR}"/uccl*.whl)[rocm]"
   fi
 
-  UCCL_INSTALL_PATH=$(${PIP_CMD} show uccl 2>/dev/null | grep "^Location:" | cut -d' ' -f2 || true)
+  # Detect installed UCCL package (e.g. uccl-cu13, uccl-cu12, uccl-rocm), not the meta "uccl".
+  # Pipelines use "|| true" to avoid tripping set -eo pipefail on SIGPIPE / empty output.
+  UCCL_PIP_PKG=$(${PIP_CMD} list 2>/dev/null | awk '/^uccl-/ { print $1 }' | head -n1 || true)
+  if [[ -z "$UCCL_PIP_PKG" ]]; then
+    UCCL_PIP_PKG="uccl"
+  fi
+  UCCL_INSTALL_PATH=$(${PIP_CMD} show "$UCCL_PIP_PKG" 2>/dev/null | grep "^Location:" | cut -d' ' -f2 || true)
   if [[ -n "$UCCL_INSTALL_PATH" && -d "$UCCL_INSTALL_PATH" ]]; then
     UCCL_PACKAGE_PATH="$UCCL_INSTALL_PATH/uccl"
     if [[ -d "$UCCL_PACKAGE_PATH" ]]; then
