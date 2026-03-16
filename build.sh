@@ -169,7 +169,7 @@ if [[ $TARGET == "cu12" ]]; then
   # default is CUDA 12.8 from `nvidia/cuda:12.8.0-devel-ubuntu22.04`
   if [[ "$ARCH" == "aarch64" ]]; then
     if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
-        IMAGE_VERSION=12
+        # IMAGE_VERSION=12
         : "${DOCKERFILE:=containers/apptainer/gh.def}"
         : "${BASE_IMAGE:=nvidia/cuda:12.8.0-devel-ubuntu22.04}"
     else
@@ -178,7 +178,7 @@ if [[ $TARGET == "cu12" ]]; then
     : "${IMAGE_NAME:=uccl-builder-gh}"
   elif [[ -n "$IS_EFA" ]]; then
     if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
-        IMAGE_VERSION=12
+        # IMAGE_VERSION=12
         : "${DOCKERFILE:=containers/apptainer/efa.def}"
         : "${BASE_IMAGE:=nvidia/cuda:12.8.0-devel-ubuntu22.04}"
     else
@@ -187,7 +187,7 @@ if [[ $TARGET == "cu12" ]]; then
     : "${IMAGE_NAME:=uccl-builder-efa}"
   else
     if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
-        IMAGE_VERSION=12
+        # IMAGE_VERSION=12
         : "${DOCKERFILE:=containers/apptainer/cuda.def}"
         : "${BASE_IMAGE:=nvidia/cuda:12.8.0-devel-ubuntu22.04}"
     else
@@ -199,33 +199,33 @@ elif [[ $TARGET == "cu13" ]]; then
   : "${BASE_IMAGE:=nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04}"
   if [[ "$ARCH" == "aarch64" ]]; then
     if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
-        IMAGE_VERSION=13
+        # IMAGE_VERSION=13
         : "${DOCKERFILE:=containers/apptainer/gh.def}"
     else
         : "${DOCKERFILE:=containers/docker/Dockerfile.gh}"
     fi
-    : "${IMAGE_NAME:=uccl-builder-gh}"
+    : "${IMAGE_NAME:=uccl-builder-gh13}"
   elif [[ -n "$IS_EFA" ]]; then
     if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
-        IMAGE_VERSION=13
+        # IMAGE_VERSION=13
         : "${DOCKERFILE:=containers/apptainer/efa.def}"
     else
         : "${DOCKERFILE:=containers/docker/Dockerfile.efa}"
     fi
-    : "${IMAGE_NAME:=uccl-builder-efa}"
+    : "${IMAGE_NAME:=uccl-builder-efa13}"
   else
     if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
-        IMAGE_VERSION=13
+        # IMAGE_VERSION=13
         : "${DOCKERFILE:=containers/apptainer/cuda.def}"
     else
         : "${DOCKERFILE:=containers/docker/Dockerfile.cuda}"
     fi
-    : "${IMAGE_NAME:=uccl-builder-cuda}"
+    : "${IMAGE_NAME:=uccl-builder-cuda13}"
   fi
 elif [[ $TARGET == "rocm" ]]; then
   # default is latest rocm 7 version from `rocm/dev-ubuntu-22.04`
     if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
-        IMAGE_VERSION=""
+        # IMAGE_VERSION=""
         : "${DOCKERFILE:=containers/apptainer/rocm.def}"
         : "${BASE_IMAGE:=rocm/dev-ubuntu-22.04}"
     else
@@ -235,16 +235,16 @@ elif [[ $TARGET == "rocm" ]]; then
 elif [[ $TARGET == "rocm6" ]]; then
     : "${BASE_IMAGE:=rocm/dev-ubuntu-22.04:6.4.3-complete}"
     if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
-        IMAGE_VERSION=6
+        # IMAGE_VERSION=6
         : "${DOCKERFILE:=containers/apptainer/rocm.def}"
     else
         : "${DOCKERFILE:=containers/docker/Dockerfile.rocm}"
     fi
-    : "${IMAGE_NAME:=uccl-builder-rocm}"
+    : "${IMAGE_NAME:=uccl-builder-rocm6}"
 elif [[ $TARGET == "therock" ]]; then
     BASE_IMAGE="${THEROCK_BASE_IMAGE}"
     if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
-        IMAGE_VERSION=""
+        # IMAGE_VERSION=""
         : "${DOCKERFILE:=containers/apptainer/therock.def}"
     else
         : "${DOCKERFILE:=containers/docker/Dockerfile.therock}"
@@ -255,7 +255,8 @@ fi
 # IMAGE_NAME, IMAGE_VERSION
 if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
     # Add extension: IMAGE_NAME-IMAGE_VERSION.sif if IMAGE_VERSION is set, otherwise just IMAGE_NAME.sif
-    IMAGE_NAME="${IMAGE_NAME}${IMAGE_VERSION:+-${IMAGE_VERSION}}.sif"
+    # IMAGE_NAME="${IMAGE_NAME}${IMAGE_VERSION:+-${IMAGE_VERSION}}.sif"
+    IMAGE_NAME="${IMAGE_NAME}.sif"
 fi
 
 ########################################################
