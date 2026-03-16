@@ -199,7 +199,7 @@ elif [[ $TARGET == "cu13" ]]; then
         IMAGE_VERSION=13
         DOCKERFILE="containers/apptainer/gh.def"
     else
-        DOCKERFILE="docker/Dockerfile.gh"
+        DOCKERFILE="containers/docker/Dockerfile.gh"
     fi
     IMAGE_NAME="uccl-builder-gh"
   elif [[ -n "$IS_EFA" ]]; then
@@ -207,7 +207,7 @@ elif [[ $TARGET == "cu13" ]]; then
         IMAGE_VERSION=13
         DOCKERFILE="containers/apptainer/efa.def"
     else
-        DOCKERFILE="docker/Dockerfile.efa"
+        DOCKERFILE="containers/docker/Dockerfile.efa"
     fi
     IMAGE_NAME="uccl-builder-efa"
   else
@@ -215,7 +215,7 @@ elif [[ $TARGET == "cu13" ]]; then
         IMAGE_VERSION=13
         DOCKERFILE="containers/apptainer/cuda.def"
     else
-        DOCKERFILE="docker/Dockerfile.cuda"
+        DOCKERFILE="containers/docker/Dockerfile.cuda"
     fi
     IMAGE_NAME="uccl-builder-cuda"
   fi
