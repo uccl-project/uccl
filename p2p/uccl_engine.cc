@@ -318,7 +318,7 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
   if (!conn || num_iovs <= 0) return -1;
 
   // Local IPC path (both same-process and cross-process)
-  if (conn->is_local && !ipc_bufs.empty()) {
+  if ((conn->is_local || conn->same_process) && !ipc_bufs.empty()) {
     std::vector<IpcTransferInfo> info_v(num_iovs);
     for (int i = 0; i < num_iovs; i++) {
       deserialize_ipc_info(ipc_bufs[i], info_v[i]);
@@ -399,7 +399,7 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
   if (!conn || num_iovs <= 0) return -1;
 
   // Local IPC path (both same-process and cross-process)
-  if (conn->is_local && !ipc_bufs.empty()) {
+  if ((conn->is_local || conn->same_process) && !ipc_bufs.empty()) {
     std::vector<void const*> src_v(dst_v.begin(), dst_v.end());
     std::vector<IpcTransferInfo> info_v(num_iovs);
     for (int i = 0; i < num_iovs; i++) {
