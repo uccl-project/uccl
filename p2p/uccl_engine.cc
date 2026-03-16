@@ -574,11 +574,17 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   uint64_t flow_id = conn->conn_id;
   return tcp_endpoint->send_notification(flow_id, oob_msg);
 #else
+  NotifyMsg oob_msg;
+  oob_msg.magic = NOTIFY_MSG_MAGIC;
+  strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
+  oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
+  memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
+
   if (conn->same_process) {
     // Same-process local connection: push notification directly to the local
     // list.
-    std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
-    notify_msg_list.push_back(*notify_msg);
+    std::lock_guard<std::mutex> lock(notify_mutex);
+    notify_list.push_back(oob_msg);
     return 0;
   }
   if (conn->oob_conn_key.empty()) {
@@ -592,12 +598,6 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
     std::cerr << "No OOB client available for notification" << std::endl;
     return -1;
   }
-
-  NotifyMsg oob_msg;
-  oob_msg.magic = NOTIFY_MSG_MAGIC;
-  strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
-  oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
-  memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
 
   std::string payload(reinterpret_cast<char*>(&oob_msg), sizeof(NotifyMsg));
   bool ok = oob_client->send_meta(conn->oob_conn_key, payload);
