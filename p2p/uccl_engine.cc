@@ -172,19 +172,20 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   uccl_conn_t* conn = new uccl_conn;
   uint64_t conn_id;
 
-  // Detect intra-node connection: if the target IP matches our own IP,
-  // use the IPC (shared-memory) path via connect_local / accept_local.
+  // Detect intra-node connection: if the target IP matches our own IP.
   std::string local_ip = uccl::get_oob_ip();
   bool is_local = (std::string(ip_addr) == local_ip);
 
   bool ok;
-  if (is_local) {
-    // same_process=true: skip shm attach/handshake, transfers use direct_addr.
-    // same_process=false: real IPC via shm rings + gpuIpcOpenMemHandle.
-    ok = engine->endpoint->connect_local(remote_gpu_idx, conn_id,
-                                         caller_same_process);
+  if (is_local && caller_same_process) {
+    // Same process: use shm rings directly, skip TCP.
+    // Transfers use direct_addr (no gpuIpcOpenMemHandle).
+    ok = engine->endpoint->connect_local(remote_gpu_idx, conn_id, true);
     conn->sock_fd = -1;
   } else {
+    // Remote or cross-process local: use TCP connection.
+    // Cross-process local gets OOB for notifications; data goes through IPC
+    // via the external IPC info path in the NIXL backend.
     ok = engine->endpoint->connect(std::string(ip_addr), remote_gpu_idx,
                                    remote_port, conn_id);
     if (ok) {
