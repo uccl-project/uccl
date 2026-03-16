@@ -151,6 +151,20 @@ static bool get_ipc_info_for_addr(uintptr_t addr, size_t size,
   return true;
 }
 
+// Deserialize IpcTransferInfo from an opaque buffer.
+static void deserialize_ipc_info(char const* buf, IpcTransferInfo& info) {
+  memset(&info, 0, sizeof(info));
+  size_t off = 0;
+  memcpy(&info.handle, buf + off, sizeof(info.handle));
+  off += sizeof(info.handle);
+  memcpy(&info.offset, buf + off, sizeof(info.offset));
+  off += sizeof(info.offset);
+  memcpy(&info.size, buf + off, sizeof(info.size));
+  off += sizeof(info.size);
+  memcpy(&info.gpu_idx, buf + off, sizeof(info.gpu_idx));
+  off += sizeof(info.gpu_idx);
+}
+
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
@@ -632,20 +646,6 @@ static void serialize_ipc_info(IpcTransferInfo const& info, char* buf) {
   off += sizeof(info.size);  // 8
   memcpy(buf + off, &info.gpu_idx, sizeof(info.gpu_idx));
   off += sizeof(info.gpu_idx);  // 4
-}
-
-// Deserialize IpcTransferInfo from an opaque buffer.
-static void deserialize_ipc_info(char const* buf, IpcTransferInfo& info) {
-  memset(&info, 0, sizeof(info));
-  size_t off = 0;
-  memcpy(&info.handle, buf + off, sizeof(info.handle));
-  off += sizeof(info.handle);
-  memcpy(&info.offset, buf + off, sizeof(info.offset));
-  off += sizeof(info.offset);
-  memcpy(&info.size, buf + off, sizeof(info.size));
-  off += sizeof(info.size);
-  memcpy(&info.gpu_idx, buf + off, sizeof(info.gpu_idx));
-  off += sizeof(info.gpu_idx);
 }
 
 int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
