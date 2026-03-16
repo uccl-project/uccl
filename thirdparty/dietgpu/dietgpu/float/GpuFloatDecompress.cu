@@ -12,6 +12,7 @@
 #include "dietgpu/utils/StackDeviceMemory.h"
 
 #include "util/debug.h"
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -29,6 +30,19 @@ FloatDecompressStatus floatDecompress(
     uint8_t* outSuccess_dev,
     uint32_t* outSize_dev,
     cudaStream_t stream) {
+  // FP8: capacities are in fp8 elements; the fused pipeline works in pairs
+  // (uint16), so halve all capacities before sending to the device function.
+  std::vector<uint32_t> halvedCapacity;
+  const uint32_t* effectiveCapacity = outCapacity;
+  if (isFloat8Type(config.floatType)) {
+    halvedCapacity.resize(numInBatch);
+    for (uint32_t i = 0; i < numInBatch; ++i) {
+      assert(outCapacity[i] % 2 == 0);
+      halvedCapacity[i] = outCapacity[i] / 2;
+    }
+    effectiveCapacity = halvedCapacity.data();
+  }
+
   // If the batch size is <= kBSLimit, we avoid cudaMemcpy and send all data at
   // kernel launch
   constexpr int kLimit = 128;
@@ -50,17 +64,63 @@ FloatDecompressStatus floatDecompress(
   // allocations
   uint32_t maxCapacity = 0;
   for (uint32_t i = 0; i < numInBatch; ++i) {
-    maxCapacity = std::max(maxCapacity, outCapacity[i]);
+    maxCapacity = std::max(maxCapacity, effectiveCapacity[i]);
   }
+
+  FloatDecompressStatus status;
 
   if (numInBatch <= kLimit) {
     // We can do everything in a single pass without a h2d memcpy
     auto inProvider =
         BatchProviderInlinePointer<kLimit>(numInBatch, (void**)in);
     auto outProvider = BatchProviderInlinePointerCapacity<kLimit>(
-        numInBatch, out, outCapacity);
+        numInBatch, out, effectiveCapacity);
 
-    return floatDecompressDevice(
+    status = floatDecompressDevice(
+        res,
+        updatedConfig,
+        numInBatch,
+        inProvider,
+        outProvider,
+        maxCapacity,
+        outSuccess_dev,
+        outSize_dev,
+        stream);
+  } else {
+    // Copy data to device
+    // To reduce latency, we prefer to coalesce all data together and copy as
+    // one contiguous chunk
+    static_assert(sizeof(void*) == sizeof(uintptr_t));
+    static_assert(sizeof(uint32_t) <= sizeof(uintptr_t));
+
+    // in, out, outCapacity
+    auto params_dev = res.alloc<uintptr_t>(stream, numInBatch * 3);
+    auto params_host =
+        std::unique_ptr<uintptr_t[]>(new uintptr_t[3 * numInBatch]);
+
+    std::memcpy(&params_host[0], in, numInBatch * sizeof(void*));
+    std::memcpy(&params_host[numInBatch], out, numInBatch * sizeof(void*));
+    std::memcpy(
+        &params_host[2 * numInBatch],
+        effectiveCapacity,
+        numInBatch * sizeof(uint32_t));
+
+    CUDA_VERIFY(cudaMemcpyAsync(
+        params_dev.data(),
+        params_host.get(),
+        3 * numInBatch * sizeof(uintptr_t),
+        cudaMemcpyHostToDevice,
+        stream));
+
+    auto in_dev = params_dev.data();
+    auto out_dev = params_dev.data() + numInBatch;
+    auto outCapacity_dev =
+        (const uint32_t*)(params_dev.data() + 2 * numInBatch);
+
+    auto inProvider = BatchProviderPointer((void**)in_dev);
+    auto outProvider = BatchProviderPointer((void**)out_dev, outCapacity_dev);
+
+    status = floatDecompressDevice(
         res,
         updatedConfig,
         numInBatch,
@@ -72,46 +132,13 @@ FloatDecompressStatus floatDecompress(
         stream);
   }
 
-  // Copy data to device
-  // To reduce latency, we prefer to coalesce all data together and copy as one
-  // contiguous chunk
-  static_assert(sizeof(void*) == sizeof(uintptr_t));
-  static_assert(sizeof(uint32_t) <= sizeof(uintptr_t));
+  // FP8: adjust outSize_dev from pairs back to fp8 elements
+  if (isFloat8Type(config.floatType) && outSize_dev) {
+    doubleUint32Values<<<divUp(numInBatch, 128), 128, 0, stream>>>(
+        outSize_dev, numInBatch);
+  }
 
-  // in, out, outCapacity
-  auto params_dev = res.alloc<uintptr_t>(stream, numInBatch * 3);
-  auto params_host =
-      std::unique_ptr<uintptr_t[]>(new uintptr_t[3 * numInBatch]);
-
-  std::memcpy(&params_host[0], in, numInBatch * sizeof(void*));
-  std::memcpy(&params_host[numInBatch], out, numInBatch * sizeof(void*));
-  std::memcpy(
-      &params_host[2 * numInBatch], outCapacity, numInBatch * sizeof(uint32_t));
-
-  CUDA_VERIFY(cudaMemcpyAsync(
-      params_dev.data(),
-      params_host.get(),
-      3 * numInBatch * sizeof(uintptr_t),
-      cudaMemcpyHostToDevice,
-      stream));
-
-  auto in_dev = params_dev.data();
-  auto out_dev = params_dev.data() + numInBatch;
-  auto outCapacity_dev = (const uint32_t*)(params_dev.data() + 2 * numInBatch);
-
-  auto inProvider = BatchProviderPointer((void**)in_dev);
-  auto outProvider = BatchProviderPointer((void**)out_dev, outCapacity_dev);
-
-  return floatDecompressDevice(
-      res,
-      updatedConfig,
-      numInBatch,
-      inProvider,
-      outProvider,
-      maxCapacity,
-      outSuccess_dev,
-      outSize_dev,
-      stream);
+  return status;
 }
 
 FloatDecompressStatus floatDecompressSplitSize(
@@ -124,7 +151,21 @@ FloatDecompressStatus floatDecompressSplitSize(
     uint8_t* outSuccess_dev,
     uint32_t* outSize_dev,
     cudaStream_t stream) {
-  auto floatWordSize = getWordSizeFromFloatType(config.floatType);
+  // FP8: halve split sizes; the fused pipeline works in uint16 pairs
+  std::vector<uint32_t> halvedSplitSizes;
+  const uint32_t* effectiveSplitSizes = outSplitSizes;
+  size_t floatWordSize;
+  if (isFloat8Type(config.floatType)) {
+    floatWordSize = sizeof(uint16_t); // WordT for fp8 pairs
+    halvedSplitSizes.resize(numInBatch);
+    for (uint32_t i = 0; i < numInBatch; ++i) {
+      assert(outSplitSizes[i] % 2 == 0);
+      halvedSplitSizes[i] = outSplitSizes[i] / 2;
+    }
+    effectiveSplitSizes = halvedSplitSizes.data();
+  } else {
+    floatWordSize = getWordSizeFromFloatType(config.floatType);
+  }
 
   // Concatenate splitSize and splitSizePrefix together for a single h2d copy
   auto splitSizeHost = std::vector<uint32_t>(numInBatch * 2);
@@ -135,7 +176,7 @@ FloatDecompressStatus floatDecompressSplitSize(
   bool is16ByteAligned = isPointerAligned(out, 16);
 
   for (uint32_t i = 0; i < numInBatch; ++i) {
-    auto size = outSplitSizes[i];
+    auto size = effectiveSplitSizes[i];
 
     // If we only have one tensor in the batch, we only care if the start
     // pointer is 16 byte aligned.
@@ -166,7 +207,7 @@ FloatDecompressStatus floatDecompressSplitSize(
   auto outProvider = BatchProviderSplitSize(
       out, sizes_dev.data(), sizes_dev.data() + numInBatch, floatWordSize);
 
-  return floatDecompressDevice(
+  auto status = floatDecompressDevice(
       res,
       updatedConfig,
       numInBatch,
@@ -176,6 +217,14 @@ FloatDecompressStatus floatDecompressSplitSize(
       outSuccess_dev,
       outSize_dev,
       stream);
+
+  // FP8: adjust outSize_dev from pairs back to fp8 elements
+  if (isFloat8Type(config.floatType) && outSize_dev) {
+    doubleUint32Values<<<divUp(numInBatch, 128), 128, 0, stream>>>(
+        outSize_dev, numInBatch);
+  }
+
+  return status;
 }
 
 } // namespace dietgpu

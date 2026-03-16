@@ -57,7 +57,13 @@ ncclResult_t ncclCudaGetCapturingGraph(
       #if CUDART_VERSION >= 11030
         cudaStreamCaptureStatus status;
         unsigned long long gid;
-        CUDACHECK(cudaStreamGetCaptureInfo_v2(stream, &status, &gid, &graph->graph, nullptr, nullptr));
+        #if CUDART_VERSION >= 13000
+          // CUDA 13 merged _v2 into the base function; edgeData_out is a new
+          // 6th parameter inserted before numDependencies_out.
+          CUDACHECK(cudaStreamGetCaptureInfo(stream, &status, &gid, &graph->graph, nullptr, nullptr));
+        #else
+          CUDACHECK(cudaStreamGetCaptureInfo_v2(stream, &status, &gid, &graph->graph, nullptr, nullptr));
+        #endif
         if (status != cudaStreamCaptureStatusActive) {
           graph->graph = nullptr;
           gid = ULLONG_MAX;
@@ -347,7 +353,13 @@ ncclResult_t ncclStrongStreamWaitStream(
       unsigned long long bGraphId;
       cudaGraphNode_t const* bNodes;
       size_t bCount = 0;
-      CUDACHECK(cudaStreamGetCaptureInfo_v2(b, &status, &bGraphId, nullptr, &bNodes, &bCount));
+      #if CUDART_VERSION >= 13000
+        // CUDA 13 merged _v2 into the base function; pass nullptr for the new
+        // edgeData_out (arg 6) so numDependencies_out lands in the right slot.
+        CUDACHECK(cudaStreamGetCaptureInfo(b, &status, &bGraphId, nullptr, &bNodes, nullptr, &bCount));
+      #else
+        CUDACHECK(cudaStreamGetCaptureInfo_v2(b, &status, &bGraphId, nullptr, &bNodes, &bCount));
+      #endif
       if (status != cudaStreamCaptureStatusActive || graph.graphId != bGraphId) {
         WARN("Stream is not being captured by the expected graph.");
         return ncclInvalidUsage;
@@ -379,9 +391,17 @@ ncclResult_t ncclStrongStreamWaitStream(
     } else {
       struct ncclStrongStreamGraph* bg = b->graphHead;
       NCCLCHECK(checkGraphId(bg, graph.graphId));
-      CUDACHECK(cudaStreamUpdateCaptureDependencies(a, bg->tipNodes, bg->tipCount,
-        b_subsumes_a ? cudaStreamSetCaptureDependencies : cudaStreamAddCaptureDependencies
-      ));
+      #if CUDART_VERSION >= 13000
+        // CUDA 13 inserted dependencyData (const cudaGraphEdgeData*) as arg 3.
+        CUDACHECK(cudaStreamUpdateCaptureDependencies(a, bg->tipNodes, nullptr,
+          bg->tipCount,
+          b_subsumes_a ? cudaStreamSetCaptureDependencies : cudaStreamAddCaptureDependencies
+        ));
+      #else
+        CUDACHECK(cudaStreamUpdateCaptureDependencies(a, bg->tipNodes, bg->tipCount,
+          b_subsumes_a ? cudaStreamSetCaptureDependencies : cudaStreamAddCaptureDependencies
+        ));
+      #endif
     }
   #else
     CUDACHECK(cudaEventRecord(b->scratchEvent, b->cudaStream));

@@ -71,8 +71,10 @@ struct Conn {
   uint64_t conn_id_;
   ConnID uccl_conn_id_;
   std::string ip_addr_;
+  uint16_t remote_port_ = 0;
   int remote_gpu_idx_;
   bool is_local_ = false;
+  uint64_t rdma_loopback_conn_id_ = UINT64_MAX;
 
   ShmRingHandle remote_inbox_;
   bool shm_attached_ = false;
@@ -182,6 +184,8 @@ struct UnifiedTask;
 struct TransferStatus {
   std::atomic<bool> done{false};
   std::shared_ptr<UnifiedTask> task_ptr;
+  bool poll_net_ureq{false};
+  ucclRequest ureq{};
 };
 
 struct alignas(64) UnifiedTask {
@@ -253,6 +257,7 @@ class Endpoint {
   static constexpr int kMaxInflightOps = 8;  // Max 8 concurrent Ops
   static constexpr size_t ShmRingDefaultElemCnt = 16;
   static constexpr size_t kTaskRingSize = 1024;
+  static constexpr size_t kDirectAsyncNetThreshold = 256 * 1024;
 
   static uccl::UCCLLogLevel parse_log_level_from_env();
 
@@ -438,6 +443,9 @@ class Endpoint {
    * endpoint. */
   bool add_remote_endpoint(std::vector<uint8_t> const& metadata,
                            uint64_t& conn_id);
+
+  /* Remove a remote endpoint previously added via add_remote_endpoint. */
+  bool remove_remote_endpoint(uint64_t conn_id);
 
   /* Start a background thread for accepting. */
   bool start_passive_accept();

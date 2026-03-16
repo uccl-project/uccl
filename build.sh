@@ -6,22 +6,22 @@
 # a purpose-built Docker/Podman image derived from Ubuntu 22.04.
 #
 # Usage:
-#   ./build.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image] [--install]
+#   ./build.sh [cu12|cu13|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image] [--install]
 #
 # Environment Variables:
 #   CONTAINER_ENGINE=podman Use podman instead of docker.
-#                          Example: CONTAINER_ENGINE=podman ./build.sh cuda all
+#                          Example: CONTAINER_ENGINE=podman ./build.sh cu12 all
 #   USE_INTEL_RDMA_NIC=1   Enable Intel RDMA NIC support (irdma driver, vendor 0x8086)
-#                          Example: USE_INTEL_RDMA_NIC=1 ./build.sh cuda ccl_efa
+#                          Example: USE_INTEL_RDMA_NIC=1 ./build.sh cu12 ccl_efa
 #   UCCL_WHEEL_ENABLE_FORCE_RETAG=1  Allow retagging the wheel to the host's
 #                          glibc version when it differs from the container's.
 #                          By default the wheel keeps the container's glibc tag.
 #                          WARNING: the wheel is still built against the
 #                          container's glibc and may use symbols not present in
 #                          an older host glibc.
-#                          Example: UCCL_WHEEL_ENABLE_FORCE_RETAG=1 ./build.sh cuda all
+#                          Example: UCCL_WHEEL_ENABLE_FORCE_RETAG=1 ./build.sh cu12 all
 #
-# The wheels are written to wheelhouse-[cuda|rocm|therock]
+# The wheels are written to wheelhouse-[cu12|cu13|rocm|therock]
 # -----------------------
 
 set -euo pipefail
@@ -39,7 +39,7 @@ for arg in "$@"; do
   esac
 done
 
-TARGET=${POSITIONAL_ARGS[0]:-cuda}
+TARGET=${POSITIONAL_ARGS[0]:-cu12}
 BUILD_TYPE=${POSITIONAL_ARGS[1]:-all}
 PY_VER=${POSITIONAL_ARGS[2]:-$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")}
 # The default for ROCM_IDX_URL depends on the gfx architecture of your GPU and the index URLs may change.
@@ -47,8 +47,8 @@ ROCM_IDX_URL=${POSITIONAL_ARGS[3]:-https://rocm.prereleases.amd.com/whl/gfx94X-d
 # The default for THEROCK_BASE_IMAGE is current, but may change. Make sure to track TheRock's dockerfile.
 THEROCK_BASE_IMAGE=${POSITIONAL_ARGS[4]:-quay.io/pypa/manylinux_2_28_x86_64@sha256:d632b5e68ab39e59e128dcf0e59e438b26f122d7f2d45f3eea69ffd2877ab017}
 
-if [[ $TARGET != cuda* && $TARGET != rocm* && $TARGET != "therock" ]]; then
-  echo "Usage: $0 [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image] [--install]" >&2
+if [[ $TARGET != cu* && $TARGET != rocm* && $TARGET != "therock" ]]; then
+  echo "Usage: $0 [cu12|cu13|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image] [--install]" >&2
   exit 1
 fi
 
@@ -67,12 +67,29 @@ if [[ "$CONTAINER_ENGINE" != "docker" && "$CONTAINER_ENGINE" != "podman" ]]; the
   echo "Error: CONTAINER_ENGINE must be 'docker' or 'podman', got '${CONTAINER_ENGINE}'" >&2
   exit 1
 fi
-IS_EFA=$([ -d "/sys/class/infiniband/" ] && ls /sys/class/infiniband/ 2>/dev/null | grep -q rdmap && echo "EFA support: true") || echo "EFA support: false"
+IS_EFA="${IS_EFA:-$([ -d "/sys/class/infiniband/" ] && ls /sys/class/infiniband/ 2>/dev/null | grep -q rdmap && echo "EFA support: true")}" || echo "EFA support: false"
+
+# Auto-derive UCCL_LOCAL_VERSION from target when not explicitly set.
+# Default cu12 (no EFA) gets no local version (published to PyPI).
+# TheRock computes its local version inside the container from rocm-sdk.
+if [[ -z "${UCCL_LOCAL_VERSION+x}" ]]; then
+  if [[ "$TARGET" == "cu12" && -z "$IS_EFA" ]]; then
+    UCCL_LOCAL_VERSION=""
+  elif [[ "$TARGET" == cu* ]]; then
+    if [[ -n "$IS_EFA" ]]; then
+      UCCL_LOCAL_VERSION="${TARGET}.efa"
+    else
+      UCCL_LOCAL_VERSION="${TARGET}"
+    fi
+  elif [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
+    UCCL_LOCAL_VERSION="rocm"
+  fi
+fi
 
 # Auto-detect CUDA architecture for ep build, auto-detect ROCm architecture for ep build
 DETECTED_GPU_ARCH=""
 if [[ "$BUILD_TYPE" =~ (ep|all|p2p) ]]; then
-  if [[ "$TARGET" == cuda* ]] && command -v nvidia-smi &>/dev/null; then
+  if [[ "$TARGET" == cu* ]] && command -v nvidia-smi &>/dev/null; then
     DETECTED_GPU_ARCH="$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -n1 | tr -d ' ' || true)"
 
     if [[ -n "$DETECTED_GPU_ARCH" ]]; then
@@ -133,43 +150,45 @@ mkdir -p "${WHEEL_DIR}"
 
 ########################################################
 # 4. Determine the Docker image to use based on the target and architecture
+#    Override IMAGE_NAME and/or DOCKERFILE via env vars to force a specific
+#    image (e.g. EFA on a non-EFA host, or pre-pulled images in CI).
 ########################################################
-if [[ $TARGET == "cuda" ]]; then
-  # default is cuda 12.8 from `nvidia/cuda:12.8.0-devel-ubuntu22.04`
+if [[ $TARGET == "cu12" ]]; then
+  # default is CUDA 12.8 from `nvidia/cuda:12.8.0-devel-ubuntu22.04`
   if [[ "$ARCH" == "aarch64" ]]; then
-    DOCKERFILE="docker/Dockerfile.gh"
-    IMAGE_NAME="uccl-builder-gh"
+    : "${DOCKERFILE:=docker/Dockerfile.gh}"
+    : "${IMAGE_NAME:=uccl-builder-gh}"
   elif [[ -n "$IS_EFA" ]]; then
-    DOCKERFILE="docker/Dockerfile.efa"
-    IMAGE_NAME="uccl-builder-efa"
+    : "${DOCKERFILE:=docker/Dockerfile.efa}"
+    : "${IMAGE_NAME:=uccl-builder-efa}"
   else
-    DOCKERFILE="docker/Dockerfile.cuda"
-    IMAGE_NAME="uccl-builder-cuda"
+    : "${DOCKERFILE:=docker/Dockerfile.cuda}"
+    : "${IMAGE_NAME:=uccl-builder-cuda}"
   fi
-elif [[ $TARGET == "cuda13" ]]; then
-  BASE_IMAGE="nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04"
+elif [[ $TARGET == "cu13" ]]; then
+  : "${BASE_IMAGE:=nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04}"
   if [[ "$ARCH" == "aarch64" ]]; then
-    DOCKERFILE="docker/Dockerfile.gh"
-    IMAGE_NAME="uccl-builder-gh"
+    : "${DOCKERFILE:=docker/Dockerfile.gh}"
+    : "${IMAGE_NAME:=uccl-builder-gh13}"
   elif [[ -n "$IS_EFA" ]]; then
-    DOCKERFILE="docker/Dockerfile.efa"
-    IMAGE_NAME="uccl-builder-efa"
+    : "${DOCKERFILE:=docker/Dockerfile.efa}"
+    : "${IMAGE_NAME:=uccl-builder-efa13}"
   else
-    DOCKERFILE="docker/Dockerfile.cuda"
-    IMAGE_NAME="uccl-builder-cuda"
+    : "${DOCKERFILE:=docker/Dockerfile.cuda}"
+    : "${IMAGE_NAME:=uccl-builder-cu13}"
   fi
 elif [[ $TARGET == "rocm" ]]; then
   # default is latest rocm 7 version from `rocm/dev-ubuntu-22.04`
-  DOCKERFILE="docker/Dockerfile.rocm"
-  IMAGE_NAME="uccl-builder-rocm"
+  : "${DOCKERFILE:=docker/Dockerfile.rocm}"
+  : "${IMAGE_NAME:=uccl-builder-rocm}"
 elif [[ $TARGET == "rocm6" ]]; then
-  DOCKERFILE="docker/Dockerfile.rocm"
-  BASE_IMAGE="rocm/dev-ubuntu-22.04:6.4.3-complete"
-  IMAGE_NAME="uccl-builder-rocm"
+  : "${DOCKERFILE:=docker/Dockerfile.rocm}"
+  : "${BASE_IMAGE:=rocm/dev-ubuntu-22.04:6.4.3-complete}"
+  : "${IMAGE_NAME:=uccl-builder-rocm6}"
 elif [[ $TARGET == "therock" ]]; then
-  DOCKERFILE="docker/Dockerfile.therock"
-  BASE_IMAGE="${THEROCK_BASE_IMAGE}"
-  IMAGE_NAME="uccl-builder-therock"
+  : "${DOCKERFILE:=docker/Dockerfile.therock}"
+  : "${BASE_IMAGE:=${THEROCK_BASE_IMAGE}}"
+  : "${IMAGE_NAME:=uccl-builder-therock}"
 fi
 
 ########################################################
@@ -195,22 +214,25 @@ if [[ "${hash_image}" != "" ]]; then
   fi
 fi
 
-########################################################
-# 6. Build the builder image (contains toolchain + CUDA/ROCm)
-########################################################
-echo "Building container image ${IMAGE_NAME} using ${DOCKERFILE} (engine: ${CONTAINER_ENGINE})..."
-echo "Python version: ${PY_VER}"
-if [[ "$TARGET" == "therock" ]]; then
-  echo "ROCm index URL: ${ROCM_IDX_URL}"
-fi
-BUILD_ARGS="--build-arg PY_VER=${PY_VER}"
-if [[ -n "${BASE_IMAGE:-}" ]]; then
-  BUILD_ARGS+=" --build-arg BASE_IMAGE=${BASE_IMAGE}"
-fi
-if [[ "$ARCH" == "aarch64" ]]; then
-  ${CONTAINER_ENGINE} build --platform=linux/arm64 $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+# Build the builder image (contains toolchain + CUDA/ROCm)
+# Set SKIP_DOCKER_BUILD=1 to use a pre-pulled/tagged image (e.g. from GHCR in CI)
+if [[ "${SKIP_DOCKER_BUILD:-0}" != "1" ]]; then
+  echo "[1/3] Building Docker image ${IMAGE_NAME} using ${DOCKERFILE} (engine: ${CONTAINER_ENGINE})..."
+  echo "Python version: ${PY_VER}"
+  if [[ "$TARGET" == "therock" ]]; then
+    echo "ROCm index URL: ${ROCM_IDX_URL}"
+  fi
+  BUILD_ARGS="--build-arg PY_VER=${PY_VER}"
+  if [[ -n "${BASE_IMAGE:-}" ]]; then
+    BUILD_ARGS+=" --build-arg BASE_IMAGE=${BASE_IMAGE}"
+  fi
+  if [[ "$ARCH" == "aarch64" ]]; then
+    ${CONTAINER_ENGINE} build --platform=linux/arm64 $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+  else
+    ${CONTAINER_ENGINE} build $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+  fi
 else
-  ${CONTAINER_ENGINE} build $BUILD_ARGS -t "$IMAGE_NAME" -f "$DOCKERFILE" .
+  echo "[1/3] Skipping Docker build (SKIP_DOCKER_BUILD=1), using existing image: ${IMAGE_NAME}"
 fi
 
 ########################################################
@@ -252,6 +274,8 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
   -e DISABLE_AGGRESSIVE_ATOMIC="${DISABLE_AGGRESSIVE_ATOMIC:-0}" \
   -e HOST_GLIBC_VER="${HOST_GLIBC_VER}" \
   -e UCCL_WHEEL_ENABLE_FORCE_RETAG="${UCCL_WHEEL_ENABLE_FORCE_RETAG:-0}" \
+  -e UCCL_WHEEL_PLAT="${UCCL_WHEEL_PLAT:-}" \
+  -e UCCL_LOCAL_VERSION="${UCCL_LOCAL_VERSION:-}" \
   -e FUNCTION_DEF="$(declare -f rename_to_abi3 build_rccl_nccl_header build_ccl_rdma build_ccl_efa build_p2p build_ep build_ukernel)" \
   -w /io \
   "$IMAGE_NAME" /bin/bash -c '
@@ -283,14 +307,19 @@ ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "ep" ]]; then
       build_ep "$TARGET" "$ARCH" "$IS_EFA"
+    elif [[ "$BUILD_TYPE" == "p2p_ep" ]]; then
+      build_p2p "$TARGET" "$ARCH" "$IS_EFA"
+      build_ep "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "ukernel" ]]; then
       build_ukernel "$TARGET" "$ARCH" "$IS_EFA"
     elif [[ "$BUILD_TYPE" == "all" ]]; then
-      build_ccl_rdma "$TARGET" "$ARCH" "$IS_EFA"
-      build_ccl_efa "$TARGET" "$ARCH" "$IS_EFA"
+      if [[ -n "$IS_EFA" ]]; then
+        build_ccl_efa "$TARGET" "$ARCH" "$IS_EFA"
+      else
+        build_ccl_rdma "$TARGET" "$ARCH" "$IS_EFA"
+      fi
       build_p2p "$TARGET" "$ARCH" "$IS_EFA"
-      # build_ep "$TARGET" "$ARCH" "$IS_EFA"
-      # build_ukernel "$TARGET" "$ARCH" "$IS_EFA"
+      build_ep "$TARGET" "$ARCH" "$IS_EFA"
     fi
 
     # Emit TheRock init code
@@ -360,7 +389,7 @@ def initialize():
       fi
     fi
 
-    auditwheel repair dist/uccl-*.whl \
+    auditwheel repair dist/uccl*.whl \
       --plat "${AUDIT_PLAT}" \
       --exclude "libtorch*.so" \
       --exclude "libc10*.so" \
@@ -375,7 +404,7 @@ def initialize():
     # auditwheel may emit compressed dual tags (e.g. manylinux_2_34.manylinux_2_35).
     # Collapse to the single requested platform tag via simple rename.
     cd /io/${WHEEL_DIR}
-    for whl in uccl-*.whl; do
+    for whl in uccl*.whl; do
       if [[ "$whl" == *-abi3-* ]]; then
         new="${whl%%abi3-*}abi3-${UCCL_WHEEL_PLAT}.whl"
       else
@@ -385,25 +414,23 @@ def initialize():
     done
     cd /io
 
-    # Add backend tag to wheel filename using local version identifier
-    if [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
-      # Adjust TARGET to the preferred wheel name suffix for python-packaged ROCm, e.g. "rocm7.9.0rc1"
-      if [[ "$TARGET" == "therock" ]]; then
-        TARGET="rocm$(rocm-sdk version)"
-      fi
+    # Add local version identifier to wheel filename (PEP 440, vLLM-style).
+    # UCCL_LOCAL_VERSION is set by the caller (e.g. "cu13", "cu12.efa", "rocm").
+    # TheRock auto-computes it from rocm-sdk version.
+    # If empty, the wheel keeps its base version (default cu12 for PyPI).
+    if [[ "$TARGET" == "therock" ]]; then
+      UCCL_LOCAL_VERSION="rocm$(rocm-sdk version)"
+    fi
+    if [[ -n "${UCCL_LOCAL_VERSION:-}" ]]; then
       cd /io/${WHEEL_DIR}
-      for wheel in uccl-*.whl; do
+      for wheel in uccl*.whl; do
         if [[ -f "$wheel" ]]; then
-          # Extract wheel name components: uccl-version-python-abi-platform.whl
-          if [[ "$wheel" =~ ^(uccl-)([^-]+)-([^-]+-[^-]+-.+)(\.whl)$ ]]; then
+          if [[ "$wheel" =~ ^(uccl[^-]*-)([^-]+)-([^-]+-[^-]+-.+)(\.whl)$ ]]; then
             name="${BASH_REMATCH[1]}"
             version="${BASH_REMATCH[2]}"
             python_abi_platform="${BASH_REMATCH[3]}"
             suffix="${BASH_REMATCH[4]}"
-            
-            # Add backend to version using local identifier: uccl-version+backend-python-abi-platform.whl
-            new_wheel="${name}${version}+${TARGET}-${python_abi_platform}${suffix}"
-            
+            new_wheel="${name}${version}+${UCCL_LOCAL_VERSION}-${python_abi_platform}${suffix}"
             echo "Renaming wheel: $wheel -> $new_wheel"
             mv "$wheel" "$new_wheel"
           else
@@ -421,34 +448,39 @@ def initialize():
 # 8. Print the built wheel
 ########################################################
 echo "Wheel built successfully (stored in ${WHEEL_DIR}):"
-ls -lh "${WHEEL_DIR}"/uccl-*.whl || true
+ls -lh "${WHEEL_DIR}"/uccl*.whl || true
 
 ########################################################
 # 9. Optionally install the built wheel
 ########################################################
 if [[ "$DO_INSTALL" == "1" ]]; then
-  # Auto-detect uv vs pip
+  # Install for the default "python" so "python -c 'from uccl import ep'" works.
+  PYTHON_CMD="python"
+  if ! command -v python &>/dev/null; then
+    PYTHON_CMD="python3"
+  fi
   if command -v uv &>/dev/null && [[ -n "${VIRTUAL_ENV:-}" ]]; then
     PIP_CMD="uv pip"
   else
-    PIP_CMD="pip"
+    PIP_CMD="${PYTHON_CMD} -m pip"
   fi
-  
-  echo "Installing uccl wheel (using ${PIP_CMD})..."
+
+  echo "Installing uccl wheel for ${PYTHON_CMD} (using ${PIP_CMD})..."
   ${PIP_CMD} install -r requirements.txt
+  # Uninstall any previous uccl so pip doesn't skip with "already installed".
   ${PIP_CMD} uninstall uccl -y 2>/dev/null || true
-  UCCL_CLEANUP_DIR="$(python3 -c "import site; print(site.getsitepackages()[0])")/uccl"
+  UCCL_CLEANUP_DIR="$(${PYTHON_CMD} -c "import site; print(site.getsitepackages()[0])")/uccl"
   if [[ -d "$UCCL_CLEANUP_DIR" ]]; then
     echo "Cleaning up stale files in $UCCL_CLEANUP_DIR"
     rm -r "$UCCL_CLEANUP_DIR"
   fi
   if [[ "$TARGET" != "therock" ]]; then
-    ${PIP_CMD} install "${WHEEL_DIR}"/uccl-*.whl --no-deps
+    ${PIP_CMD} install "${WHEEL_DIR}"/uccl*.whl --no-deps
   else
-    ${PIP_CMD} install --extra-index-url "${ROCM_IDX_URL}" "$(ls "${WHEEL_DIR}"/uccl-*.whl)[rocm]"
+    ${PIP_CMD} install --extra-index-url "${ROCM_IDX_URL}" "$(ls "${WHEEL_DIR}"/uccl*.whl)[rocm]"
   fi
 
-  UCCL_INSTALL_PATH=$(${PIP_CMD} show uccl 2>/dev/null | grep "^Location:" | cut -d' ' -f2 || echo "")
+  UCCL_INSTALL_PATH=$(${PIP_CMD} show uccl 2>/dev/null | grep "^Location:" | cut -d' ' -f2 || true)
   if [[ -n "$UCCL_INSTALL_PATH" && -d "$UCCL_INSTALL_PATH" ]]; then
     UCCL_PACKAGE_PATH="$UCCL_INSTALL_PATH/uccl"
     if [[ -d "$UCCL_PACKAGE_PATH" ]]; then

@@ -1,0 +1,69 @@
+name: Build Docker Images
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches: [main]
+    paths:
+      - 'docker/Dockerfile.*'
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+jobs:
+  build-images:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        py_version: ["3.12"]
+        include_entry:
+          # CUDA 12
+          - dockerfile: docker/Dockerfile.cuda
+            image_name: uccl-builder-cuda
+          # CUDA 13
+          - dockerfile: docker/Dockerfile.cuda
+            image_name: uccl-builder-cu13
+            base_image: "nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04"
+          # EFA + CUDA 12
+          - dockerfile: docker/Dockerfile.efa
+            image_name: uccl-builder-efa
+          # EFA + CUDA 13
+          - dockerfile: docker/Dockerfile.efa
+            image_name: uccl-builder-efa13
+            base_image: "nvidia/cuda:13.0.1-cudnn-devel-ubuntu22.04"
+          # ROCm
+          - dockerfile: docker/Dockerfile.rocm
+            image_name: uccl-builder-rocm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.include_entry.dockerfile }}
+          build-args: |
+            PY_VER=${{ matrix.py_version }}
+            ${{ matrix.include_entry.base_image && format('BASE_IMAGE={0}', matrix.include_entry.base_image) || '' }}
+          push: true
+          tags: ${{ env.IMAGE_PREFIX }}/${{ matrix.include_entry.image_name }}:py${{ matrix.py_version }}
+          cache-from: type=gha,scope=${{ matrix.include_entry.image_name }}-py${{ matrix.py_version }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.include_entry.image_name }}-py${{ matrix.py_version }}

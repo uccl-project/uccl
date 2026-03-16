@@ -12,7 +12,6 @@
 #include "internode_ll.cuh"
 #include "intranode.cuh"
 #include "layout.hpp"
-#include "peer_copy_manager.hpp"
 #include "rdma.hpp"
 #include "ring_buffer.cuh"
 #include "uccl_bench.hpp"
@@ -2160,16 +2159,6 @@ NB_MODULE(ep, m) {
       .def("print_summary", &Bench::print_summary)
       .def("print_summary_last", &Bench::print_summary_last)
       .def("last_elapsed_ms", &Bench::last_elapsed_ms);
-  nb::class_<PeerCopyManager>(m, "PeerCopyManager")
-      .def(nb::init<int>(), nb::arg("src_device") = 0)
-      .def("start_for_proxies",
-           [](PeerCopyManager& mgr, nb::iterable proxy_list) {
-             std::vector<UcclProxy*> vec;
-             for (nb::handle h : proxy_list)
-               vec.push_back(nb::cast<UcclProxy*>(h));
-             mgr.start_for_proxies(vec);
-           })
-      .def("stop", &PeerCopyManager::stop);
 
   // MSCCLPP Fifo class - must be registered before BenchFifo which uses it
   // Bind init<int> to avoid narrowing conversion warning (Python int -> C++
