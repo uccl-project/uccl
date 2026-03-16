@@ -606,15 +606,6 @@ def initialize_uccl(
             proxy.start_dual()
 
     workers = None
-    # if hasattr(ep, "PeerCopyManager"):
-    #     try:
-    #         workers = ep.PeerCopyManager(src_device=local_rank)
-    #         workers.start_for_proxies(proxies)
-    #         if rank == 0:
-    #             print("✓ PeerCopyManager started", flush=True)
-    #     except Exception as e:
-    #         if rank == 0:
-    #             print(f"PeerCopyManager unavailable: {e}", flush=True)
 
     time.sleep(3)
     return proxies, workers

@@ -123,7 +123,7 @@ struct Pcb {
     const size_t sack_bitmap_bucket_idx = index / kSackBitmapBucketSize;
     const size_t sack_bitmap_idx_in_bucket = index % kSackBitmapBucketSize;
 
-    UCCL_LOG_IF(FATAL, UCCL_EFA, index >= kSackBitmapSize)
+    UCCL_LOG_IF(FATAL, index >= kSackBitmapSize)
         << "Index out of bounds: " << index;
 
     sack_bitmap[sack_bitmap_bucket_idx] |= (1ULL << sack_bitmap_idx_in_bucket);

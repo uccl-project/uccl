@@ -58,7 +58,7 @@ scattered_memcpy_test: scattered_memcpy_test.cc $(lib_obj)
 	g++ scattered_memcpy_test.cc -o scattered_memcpy_test $(lib_obj) $(INC) $(LIBS) $(CXXFLAGS)
 
 scattered_memcpy.o: scattered_memcpy.cu scattered_memcpy.cuh
-	nvcc -c scattered_memcpy.cu -o scattered_memcpy.o -arch=sm_70 -Xcompiler -fPIC
+	nvcc -c scattered_memcpy.cu -o scattered_memcpy.o -arch=sm_80 -Xcompiler -fPIC
 
 %.o: %.cc
 	g++ -c $< -o $@ $(INC) $(CXXFLAGS)

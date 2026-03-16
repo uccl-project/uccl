@@ -1,5 +1,4 @@
 import re
-import os
 import sys
 import sysconfig
 from setuptools import setup, find_packages, Extension
@@ -27,16 +26,26 @@ def get_version():
 # the limited-API flag, producing a cpXY-cpXY version-specific wheel.
 _use_limited_api = not _is_freethreaded() and sys.version_info >= (3, 12)
 
+VERSION = get_version()
+
+# Single package "uccl" for all backends (vLLM-style).
+# Variants are distinguished by PEP 440 local version identifiers in the
+# wheel filename (e.g. uccl-0.1.0+cu13, uccl-0.1.0+cu12.efa).
+# The default cu12 build has no local version and is published to PyPI;
+# all other variants are distributed via GitHub Releases.
+#
+# Install from PyPI:   pip install uccl                (CUDA 12 default)
+# Install from GitHub: pip install uccl-0.1.0+cu13-... (download .whl)
+
 abi3_ext = Extension(
     "uccl._platform_tag_stub",
     sources=["uccl/_platform_tag_stub.c"],
     py_limited_api=_use_limited_api,
     define_macros=[("Py_LIMITED_API", "0x030C0000")] if _use_limited_api else [],
 )
-
 setup(
     name="uccl",
-    version=get_version(),
+    version=VERSION,
     author="UCCL Team",
     description="UCCL: Ultra and Unified CCL",
     long_description=open("README.md").read(),
@@ -59,10 +68,9 @@ setup(
     classifiers=[
         "Programming Language :: Python :: 3",
     ],
-    python_requires=">=3.8",
+    python_requires=">=3.12",
     options={"bdist_wheel": {"py_limited_api": "cp312"}} if _use_limited_api else {},
     extras_require={
-        "cuda": [],
         "rocm": [],
     },
 )

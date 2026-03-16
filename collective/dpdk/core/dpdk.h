@@ -18,7 +18,7 @@ class Dpdk {
 
   void InitDpdk(int argc, char** argv) {
     if (initialized_) {
-      UCCL_LOG(WARN, UCCL_DPDK) << "DPDK is already initialized.";
+      UCCL_LOG(WARN) << "DPDK is already initialized.";
       return;
     }
 
@@ -26,9 +26,9 @@ class Dpdk {
 
     int ret = rte_eal_init(argc, argv);
     if (ret < 0) {
-      UCCL_LOG(FATAL, UCCL_DPDK) << "rte_eal_init() failed: ret = " << ret
-                                 << " rte_errno = " << rte_errno << " ("
-                                 << rte_strerror(rte_errno) << ")";
+      UCCL_LOG(FATAL) << "rte_eal_init() failed: ret = " << ret
+                      << " rte_errno = " << rte_errno << " ("
+                      << rte_strerror(rte_errno) << ")";
     }
 
     // Check if DPDK runs in PA or VA mode.
@@ -46,9 +46,9 @@ class Dpdk {
     if (initialized_) {
       int ret = rte_eal_cleanup();
       if (ret != 0) {
-        UCCL_LOG(FATAL, UCCL_DPDK) << "rte_eal_cleanup() failed: ret = " << ret
-                                   << " rte_errno = " << rte_errno << " ("
-                                   << rte_strerror(rte_errno) << ")";
+        UCCL_LOG(FATAL) << "rte_eal_cleanup() failed: ret = " << ret
+                        << " rte_errno = " << rte_errno << " ("
+                        << rte_strerror(rte_errno) << ")";
       }
 
       initialized_ = false;

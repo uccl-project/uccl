@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdlib>
 #include <string>
 
@@ -19,6 +20,8 @@
 namespace UKernel {
 namespace Transport {
 
+enum class TransportBackend { BasicRDMA, UCCL };
+
 struct CommunicatorConfig {
   int rdma_chunk_size;
   int qp_count_per_ep;
@@ -32,6 +35,7 @@ struct CommunicatorConfig {
   int qp_max_sge;
   std::string exchanger_ip;
   int exchanger_port;
+  TransportBackend backend;
 
   CommunicatorConfig()
       : rdma_chunk_size(getEnvOrDefault("UKERNEL_RDMA_CHUNK_SIZE",
@@ -53,7 +57,8 @@ struct CommunicatorConfig {
         exchanger_ip(getEnvOrDefault("UHM_EXCHANGER_SERVER_IP",
                                      DEFAULT_EXCHANGER_SERVER_IP)),
         exchanger_port(getEnvOrDefault("UHM_EXCHANGER_SERVER_PORT",
-                                       DEFAULT_EXCHANGER_SERVER_PORT)) {}
+                                       DEFAULT_EXCHANGER_SERVER_PORT)),
+        backend(getBackendFromEnv()) {}
 
  private:
   static int getEnvOrDefault(char const* env_name, int default_val) {
@@ -73,6 +78,22 @@ struct CommunicatorConfig {
     char const* val = std::getenv(env_name);
     if (val) return std::string(val);
     return default_val;
+  }
+
+  static TransportBackend getBackendFromEnv() {
+    char const* val = std::getenv("UKERNEL_TRANSPORT_BACKEND");
+    if (val) {
+      std::string backend_str(val);
+      // Convert to lowercase for case-insensitive comparison
+      std::transform(backend_str.begin(), backend_str.end(),
+                     backend_str.begin(), ::tolower);
+      if (backend_str == "basic" || backend_str == "basicrdma" ||
+          backend_str == "basic_rdma") {
+        return TransportBackend::BasicRDMA;
+      }
+      // Default to UCCL for any other value
+    }
+    return TransportBackend::UCCL;
   }
 };
 

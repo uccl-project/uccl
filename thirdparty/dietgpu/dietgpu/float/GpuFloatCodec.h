@@ -18,6 +18,8 @@ enum class FloatType : uint32_t {
   kFloat16 = 1,
   kBFloat16 = 2,
   kFloat32 = 3,
+  kFloat8E4M3FN = 4,
+  kFloat8E5M2 = 5,
 };
 
 // Returns the maximum possible compressed size in bytes of an array of `size`
@@ -315,6 +317,10 @@ void floatCompressEncodeOneBatch(dietgpu::StackDeviceMemory& res,
                                  uint32_t* outSize_dev, cudaStream_t stream);
 uint32_t getUncompDataSizeFromByteSize(FloatType floatType, uint32_t datasize);
 
-inline size_t getElementCountFromBytes(FloatType ft, size_t bytes); 
+inline size_t getElementCountFromBytes(FloatType ft, size_t bytes);
+
+inline bool isFloat8Type(FloatType ft) {
+  return ft == FloatType::kFloat8E4M3FN || ft == FloatType::kFloat8E5M2;
+}
 
 }  // namespace dietgpu

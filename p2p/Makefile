@@ -36,7 +36,7 @@ else ifeq ($(USE_EFA),1)
 	INC += -I${EFA_HOME}/include
 	LIBS += -L ${EFA_HOME}/lib -lefa
 else
-	LIBS2 +=  -lz -lelf -lpthread -libverbs
+	LIBS2 +=  -lz -lelf -lpthread -libverbs -ldl
 endif
 
 # Add NCCL-over-TCP endpoint flag
