@@ -1,24 +1,24 @@
 #pragma once
 #include "define.h"
-#include "rdma_channel.h"
+#include "rdma_data_channel_impl.h"
 #include "rdma_context.h"
 #include "seq_num.h"
 #include "util/debug.h"
 #include "util/util.h"
 
 #ifdef UCCL_P2P_USE_EFA
-#include "providers/efa/rdma_data_channel_efa.h"
+#include "providers/efa/rdma_data_channel_impl_efa.h"
 #else
-#include "providers/ib/rdma_data_channel_ib.h"
+#include "providers/ib/rdma_data_channel_impl_ib.h"
 #endif
 
 // Factory function implementation (inline, defined after including provider
 // headers)
-inline std::unique_ptr<RDMAChannel> createRDMAChannel() {
+inline std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl() {
 #ifdef UCCL_P2P_USE_EFA
-  return std::make_unique<EFAChannel>();
+  return std::make_unique<EFAChannelImpl>();
 #else
-  return std::make_unique<IBChannel>();
+  return std::make_unique<IBChannelImpl>();
 #endif
 }
 
@@ -33,7 +33,7 @@ class RDMADataChannel {
         channel_id_(channel_id),
         local_meta_(std::make_shared<ChannelMetaData>()),
         remote_meta_(std::make_shared<ChannelMetaData>()),
-        impl_(createRDMAChannel()) {
+        impl_(createRDMADataChannelImpl()) {
     initQP();
   }
 
@@ -47,7 +47,7 @@ class RDMADataChannel {
         channel_id_(channel_id),
         local_meta_(std::make_shared<ChannelMetaData>()),
         remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)),
-        impl_(createRDMAChannel()) {
+        impl_(createRDMADataChannelImpl()) {
     initQP();
     establishChannel(remote_meta);
   }
@@ -144,7 +144,7 @@ class RDMADataChannel {
   std::shared_ptr<ChannelMetaData> remote_meta_;
 
   std::shared_ptr<AtomicBitmapPacketTracker> tracker_;
-  std::unique_ptr<RDMAChannel> impl_;
+  std::unique_ptr<RDMADataChannelImpl> impl_;
 
   struct ibv_cq_ex* getCQ() const {
     return cq_ex_;

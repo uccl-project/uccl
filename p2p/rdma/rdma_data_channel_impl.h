@@ -56,9 +56,9 @@ static inline int get_tc_from_env(int default_value) {
 }
 
 // Base class for RDMA channel implementations
-class RDMAChannel {
+class RDMADataChannelImpl {
  public:
-  virtual ~RDMAChannel() = default;
+  virtual ~RDMADataChannelImpl() = default;
 
   // Initialize QP and CQ
   virtual void initQP(std::shared_ptr<RdmaContext> ctx,
@@ -93,11 +93,11 @@ class RDMAChannel {
 
 // Forward declarations for implementations
 #ifdef UCCL_P2P_USE_EFA
-class EFAChannel;
+class EFAChannelImpl;
 #else
-class IBChannel;
+class IBChannelImpl;
 #endif
 
 // Factory function declaration (defined in rdma_data_channel.h after
 // including provider headers)
-std::unique_ptr<RDMAChannel> createRDMAChannel();
+std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl();

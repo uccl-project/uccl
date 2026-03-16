@@ -1,12 +1,12 @@
 #pragma once
 #include "rdma/define.h"
-#include "rdma/rdma_channel.h"
+#include "rdma/rdma_data_channel_impl.h"
 #include "util/debug.h"
 
-class IBChannel : public RDMAChannel {
+class IBChannelImpl : public RDMADataChannelImpl {
  public:
-  IBChannel() = default;
-  ~IBChannel() override = default;
+  IBChannelImpl() = default;
+  ~IBChannelImpl() override = default;
 
   void initQP(std::shared_ptr<RdmaContext> ctx, struct ibv_cq_ex** cq_ex,
               struct ibv_qp** qp, ChannelMetaData* local_meta) override;
@@ -32,4 +32,4 @@ class IBChannel : public RDMAChannel {
 };
 
 // Implementation (inline to avoid separate .cc file)
-#include "rdma_data_channel_ib.cc"
+#include "rdma_data_channel_impl_ib.cc"
