@@ -1861,8 +1861,8 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
   } else {
     GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, info.handle,
                                      gpuIpcMemLazyEnablePeerAccess));
-    dst_ptr = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(raw_dst_ptr) + info.offset);
+    dst_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(raw_dst_ptr) +
+                                      info.offset);
   }
 
   std::vector<gpuStream_t>& streams = ipc_streams_[target_gpu];
@@ -1924,8 +1924,8 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
   } else {
     GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_src_ptr, info.handle,
                                      gpuIpcMemLazyEnablePeerAccess));
-    src_ptr = reinterpret_cast<void*>(
-        reinterpret_cast<uintptr_t>(raw_src_ptr) + info.offset);
+    src_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(raw_src_ptr) +
+                                      info.offset);
   }
 
   std::vector<gpuStream_t>& streams = ipc_streams_[target_gpu];
@@ -2002,7 +2002,8 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
       GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
                                        gpuIpcMemLazyEnablePeerAccess));
       dst_ptr = reinterpret_cast<void*>(
-          reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) + info_v[iov].offset);
+          reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) +
+          info_v[iov].offset);
     }
 
     bool is_host = (uccl::get_dev_idx(const_cast<void*>(data_v[iov])) == -1);
@@ -2081,7 +2082,8 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
       GPU_RT_CHECK(gpuIpcOpenMemHandle(&op->raw_ptrs_v[iov], info_v[iov].handle,
                                        gpuIpcMemLazyEnablePeerAccess));
       src_ptr = reinterpret_cast<void*>(
-          reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) + info_v[iov].offset);
+          reinterpret_cast<uintptr_t>(op->raw_ptrs_v[iov]) +
+          info_v[iov].offset);
     }
 
     bool is_host = (uccl::get_dev_idx(data_v[iov]) == -1);

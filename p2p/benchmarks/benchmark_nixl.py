@@ -545,7 +545,9 @@ def start_transfer_local(size, num_kvblocks, args):
         # src buffers filled with 1s, dst buffers filled with 0s
         src_device = args.device
         dst_device = args.dst_device if args.dst_device else args.device
-        src_dataset = create_dataset("client", size, num_kvblocks, src_device, args.local_gpu_idx)
+        src_dataset = create_dataset(
+            "client", size, num_kvblocks, src_device, args.local_gpu_idx
+        )
         dst_gpu = args.dst_gpu_idx if args.dst_gpu_idx >= 0 else args.local_gpu_idx
         dst_dataset = create_dataset("server", size, num_kvblocks, dst_device, dst_gpu)
 
@@ -589,8 +591,9 @@ def start_transfer_local(size, num_kvblocks, args):
 
         # Verify dst buffers contain the src value (1.0)
         for i, block in enumerate(dst_dataset):
-            assert abs(torch.mean(block.float()).item() - 1.0) < 1e-6, \
-                f"Block {i}: expected 1.0 got {torch.mean(block.float()).item()}"
+            assert (
+                abs(torch.mean(block.float()).item() - 1.0) < 1e-6
+            ), f"Block {i}: expected 1.0 got {torch.mean(block.float()).item()}"
 
         effective_iters = max(args.iters - warmup, 1)
         avg_lat = total_transfer_time / effective_iters
@@ -600,7 +603,7 @@ def start_transfer_local(size, num_kvblocks, args):
         src_dev = f"cuda:{args.local_gpu_idx}" if src_device == "gpu" else "cpu"
         dst_dev = f"cuda:{dst_gpu}" if dst_device == "gpu" else "cpu"
         print(
-            f"[local {src_dev}\u2192{dst_dev}] {_pretty_size(size):>8} : "
+            f"[local {src_dev}->{dst_dev}] {_pretty_size(size):>8} : "
             f"{gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {avg_lat:.6f} s"
         )
 
@@ -610,6 +613,7 @@ def start_transfer_local(size, num_kvblocks, args):
 
     except Exception as e:
         import traceback
+
         print(f"Error in local transfer: {traceback.format_exc()}")
 
 

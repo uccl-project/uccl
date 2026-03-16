@@ -52,8 +52,8 @@ struct uccl_conn {
   std::thread* listener_thread;
   bool listener_running;
   std::mutex listener_mutex;
-  bool is_local = false;       // True for intra-node (IPC) connections
-  bool same_process = false;   // True for same-process local transfers
+  bool is_local = false;      // True for intra-node (IPC) connections
+  bool same_process = false;  // True for same-process local transfers
 };
 
 typedef struct {
@@ -181,7 +181,7 @@ void uccl_engine_destroy(uccl_engine_t* engine) {
 
 uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
                                  int remote_gpu_idx, int remote_port,
-                                 bool caller_same_process) {
+                                 bool same_process) {
   if (!engine || !ip_addr) return nullptr;
   uccl_conn_t* conn = new uccl_conn;
   uint64_t conn_id;
@@ -191,7 +191,7 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   bool is_local = (std::string(ip_addr) == local_ip);
 
   bool ok;
-  if (is_local && caller_same_process) {
+  if (is_local && same_process) {
     // Same process: use shm rings directly, skip TCP.
     // Transfers use direct_addr (no gpuIpcOpenMemHandle).
     ok = engine->endpoint->connect_local(remote_gpu_idx, conn_id, true);
@@ -217,7 +217,7 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   conn->conn_id = conn_id;
   conn->engine = engine;
   conn->is_local = is_local;
-  conn->same_process = caller_same_process;
+  conn->same_process = same_process;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
   return conn;
@@ -269,10 +269,9 @@ int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size,
   if (dev_idx >= 0) {
     gpuSetDevice(dev_idx);
     static constexpr size_t kIpcAlignment = 1ul << 20;
-    uintptr_t aligned =
-        data & ~(static_cast<uintptr_t>(kIpcAlignment - 1));
-    gpuError_t err =
-        gpuIpcGetMemHandle(&entry.ipc_info.handle, reinterpret_cast<void*>(aligned));
+    uintptr_t aligned = data & ~(static_cast<uintptr_t>(kIpcAlignment - 1));
+    gpuError_t err = gpuIpcGetMemHandle(&entry.ipc_info.handle,
+                                        reinterpret_cast<void*>(aligned));
     if (err == gpuSuccess) {
       entry.ipc_info.offset = data - aligned;
       entry.ipc_info.size = size;
@@ -414,10 +413,10 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                : -1;
   }
 
-  // Remote RDMA
-  #ifdef UCCL_P2P_USE_TCPX
+// Remote RDMA
+#ifdef UCCL_P2P_USE_TCPX
   return -1;  // TODO: support write_rc for TCPX
-  #else
+#else
   return conn->engine->endpoint->writev_async(conn->conn_id, mr_ids, dst_v,
                                               size_v, fifo_items, num_iovs,
                                               transfer_id)
@@ -576,7 +575,8 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   return tcp_endpoint->send_notification(flow_id, oob_msg);
 #else
   if (conn->same_process) {
-    // Same-process local connection: push notification directly to the local list.
+    // Same-process local connection: push notification directly to the local
+    // list.
     std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
     notify_msg_list.push_back(*notify_msg);
     return 0;
@@ -622,7 +622,7 @@ static void serialize_ipc_info(IpcTransferInfo const& info, char* buf) {
 }
 
 int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
-                              char* ipc_buf, bool* has_ipc) {
+                             char* ipc_buf, bool* has_ipc) {
   if (!engine || !ipc_buf || !has_ipc) return -1;
   *has_ipc = false;
   auto it = mem_reg_info.find(addr);
@@ -634,7 +634,7 @@ int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
 }
 
 int uccl_engine_update_ipc_info(char* ipc_buf, uintptr_t addr,
-                                 uintptr_t base_addr, size_t size) {
+                                uintptr_t base_addr, size_t size) {
   if (!ipc_buf) return -1;
   IpcTransferInfo info;
   deserialize_ipc_info(ipc_buf, info);
@@ -642,11 +642,6 @@ int uccl_engine_update_ipc_info(char* ipc_buf, uintptr_t addr,
   info.size = size;
   serialize_ipc_info(info, ipc_buf);
   return 0;
-}
-
-bool uccl_engine_conn_is_cross_process_local(uccl_conn_t* conn) {
-  if (!conn) return false;
-  return conn->is_local && !conn->same_process;
 }
 
 int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {

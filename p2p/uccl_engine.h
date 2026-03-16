@@ -262,7 +262,7 @@ void uccl_engine_stop_accept(uccl_engine_t* engine);
  * @return              0 on success, -1 on failure.
  */
 int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
-                              char* ipc_buf, bool* has_ipc);
+                             char* ipc_buf, bool* has_ipc);
 
 /**
  * Update the offset and size in a serialized IPC info buffer to point at a
@@ -274,7 +274,7 @@ int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
  * @return              0 on success, -1 on failure.
  */
 int uccl_engine_update_ipc_info(char* ipc_buf, uintptr_t addr,
-                                 uintptr_t base_addr, size_t size);
+                                uintptr_t base_addr, size_t size);
 
 /**
  * Query whether a connection is cross-process local (IPC, not same process).
@@ -282,4 +282,3 @@ int uccl_engine_update_ipc_info(char* ipc_buf, uintptr_t addr,
  * @return              True if conn is local but not same-process.
  */
 bool uccl_engine_conn_is_cross_process_local(uccl_conn_t* conn);
-
