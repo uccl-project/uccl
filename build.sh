@@ -281,7 +281,7 @@ fi
 ########################################################
 if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
     if [[ -f "${IMAGE_NAME}" ]]; then
-        msg_warning "Apptainer image ${IMAGE_NAME}.sif already exists. Please consider removing it if you want to rebuild the image from ${DOCKERFILE}."
+        msg_warning "Apptainer image ${IMAGE_NAME}.sif already exists."
         sleep 5
     fi
 else
@@ -330,20 +330,20 @@ if [[ "${SKIP_DOCKER_BUILD:-0}" != "1" ]]; then
     # If the image already exists, skip the build
     if [[ -f "$IMAGE_NAME" ]]; then
       msg_warning "Apptainer image ${IMAGE_NAME} already exists. Recreating..."
-      # TODO: rm -f "$IMAGE_NAME"
+      rm -f "$IMAGE_NAME"
     fi
 
-    # msg_info "Building Apptainer image ${IMAGE_NAME}"
+    msg_info "Building Apptainer image ${IMAGE_NAME}"
   
-    # # Ensure definition file
-    # if [[ "$DOCKERFILE" != *.def && "$DOCKERFILE" != *.def.template ]]; then
-    #   msg_error "Apptainer requires a .def or .def.template file"
-    # fi
+    # Ensure definition file
+    if [[ "$DOCKERFILE" != *.def && "$DOCKERFILE" != *.def.template ]]; then
+      msg_error "Apptainer requires a .def or .def.template file"
+    fi
 
-    # BASE_IMAGE="${BASE_IMAGE:-ubuntu:22.04}"
-    # PY_VER="${PY_VER:-3.10}"
+    BASE_IMAGE="${BASE_IMAGE:-ubuntu:22.04}"
+    PY_VER="${PY_VER:-3.10}"
 
-    # apptainer build --build-arg BASE_IMAGE=$BASE_IMAGE --build-arg PY_VER=$PY_VER $IMAGE_NAME $DOCKERFILE
+    apptainer build --build-arg BASE_IMAGE=$BASE_IMAGE --build-arg PY_VER=$PY_VER $IMAGE_NAME $DOCKERFILE
     
   else
 
