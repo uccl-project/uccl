@@ -94,6 +94,8 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
 
 /**
  * Read a vector of data chunks (Non blocking).
+ * Unified API: dispatches to RDMA, same-process IPC, or cross-process IPC
+ * based on connection type and whether ipc_bufs is provided.
  * @param conn          Connection handle.
  * @param mr_ids        Vector of memory region handles.
  * @param dst_v         Vector of pointers to the data to receive.
@@ -101,13 +103,15 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
  * @param fifo_items    Vector of FifoItem structs for RDMA operations.
  * @param num_iovs      Number of IO vectors.
  * @param transfer_id   Pointer to store the transfer ID.
+ * @param ipc_bufs      Optional: serialized IPC info for cross-process local.
  * @return              0 on success, non-zero on failure.
  */
 int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<void*> dst_v,
                             std::vector<size_t> size_v,
                             std::vector<FifoItem> fifo_items, int num_iovs,
-                            uint64_t* transfer_id);
+                            uint64_t* transfer_id,
+                            std::vector<char*> ipc_bufs = {});
 /**
  * Send data (Non blocking).
  * @param conn          Connection handle.
@@ -148,6 +152,8 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                       size_t size, FifoItem fifo_item, uint64_t* transfer_id);
 /**
  * Send a vector of data chunks with RC mode (Non blocking).
+ * Unified API: dispatches to RDMA, same-process IPC, or cross-process IPC
+ * based on connection type and whether ipc_bufs is provided.
  * @param conn          Connection handle.
  * @param mr_ids        Vector of memory region handles.
  * @param dst_v         Vector of pointers to the data to write.
@@ -155,13 +161,15 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
  * @param fifo_items    Vector of FifoItem structs for RDMA operations.
  * @param num_iovs      Number of IO vectors.
  * @param transfer_id   Pointer to store the transfer ID.
+ * @param ipc_bufs      Optional: serialized IPC info for cross-process local.
  * @return              0 on success, non-zero on failure.
  */
 int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                              std::vector<void*> dst_v,
                              std::vector<size_t> size_v,
                              std::vector<FifoItem> fifo_items, int num_iovs,
-                             uint64_t* transfer_id);
+                             uint64_t* transfer_id,
+                             std::vector<char*> ipc_bufs = {});
 /**
  * Receive data (blocking).
  * @param conn          Connection handle.
@@ -275,33 +283,3 @@ int uccl_engine_update_ipc_info(char* ipc_buf, uintptr_t addr,
  */
 bool uccl_engine_conn_is_cross_process_local(uccl_conn_t* conn);
 
-/**
- * Write vector using externally-provided IPC info (cross-process local).
- * @param conn          Connection handle.
- * @param src_v         Vector of source pointers.
- * @param size_v        Vector of sizes.
- * @param ipc_bufs      Vector of serialized IPC info buffers (IPC_INFO_SIZE each).
- * @param num_iovs      Number of IO vectors.
- * @param transfer_id   Pointer to store the transfer ID.
- * @return              0 on success, non-zero on failure.
- */
-int uccl_engine_write_ipc_vector(uccl_conn_t* conn,
-                                  std::vector<void const*> src_v,
-                                  std::vector<size_t> size_v,
-                                  std::vector<char*> ipc_bufs, int num_iovs,
-                                  uint64_t* transfer_id);
-
-/**
- * Read vector using externally-provided IPC info (cross-process local).
- * @param conn          Connection handle.
- * @param dst_v         Vector of destination pointers.
- * @param size_v        Vector of sizes.
- * @param ipc_bufs      Vector of serialized IPC info buffers (IPC_INFO_SIZE each).
- * @param num_iovs      Number of IO vectors.
- * @param transfer_id   Pointer to store the transfer ID.
- * @return              0 on success, non-zero on failure.
- */
-int uccl_engine_read_ipc_vector(uccl_conn_t* conn, std::vector<void*> dst_v,
-                                 std::vector<size_t> size_v,
-                                 std::vector<char*> ipc_bufs, int num_iovs,
-                                 uint64_t* transfer_id);
