@@ -93,14 +93,14 @@ inline void EFAChannelImpl::connectQP(struct ibv_qp* qp,
   (void)remote_meta;
 }
 
-inline bool EFAChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
-                                      std::vector<CQMeta>& cq_datas,
-                                      uint32_t channel_id,
-                                      uint32_t& nb_post_recv) {
+inline bool EFAChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
+                                     std::vector<CQMeta>& cq_datas,
+                                     uint32_t channel_id,
+                                     uint32_t& nb_post_recv) {
   nb_post_recv = 0;
   if (!cq_ex) {
     UCCL_LOG(INFO, UCCL_P2P)
-        << "poll_once - channel_id: " << channel_id << ", cq_ex_ is null";
+        << "pollOnce - channel_id: " << channel_id << ", cq_ex_ is null";
     return false;
   }
 
@@ -111,7 +111,7 @@ inline bool EFAChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
     return false;
   }
   if (ret) {
-    UCCL_LOG(ERROR) << "poll_once - channel_id: " << channel_id
+    UCCL_LOG(ERROR) << "pollOnce - channel_id: " << channel_id
                     << ", ibv_start_poll error: " << ret << " ("
                     << strerror(ret) << ")";
     return false;
@@ -121,7 +121,7 @@ inline bool EFAChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
     uint64_t wr_id = cq_ex->wr_id;
     auto status = cq_ex->status;
     if (unlikely(status != IBV_WC_SUCCESS)) {
-      UCCL_LOG(WARN) << "poll_once - channel_id: " << channel_id
+      UCCL_LOG(WARN) << "pollOnce - channel_id: " << channel_id
                      << ", CQE error, wr_id=" << wr_id << ", status=" << status
                      << " (" << ibv_wc_status_str(status) << ")";
     } else {
@@ -145,7 +145,7 @@ inline bool EFAChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
   ibv_end_poll(cq_ex);
 
   if (ret != ENOENT) {
-    UCCL_LOG(ERROR) << "poll_once - channel_id: " << channel_id
+    UCCL_LOG(ERROR) << "pollOnce - channel_id: " << channel_id
                     << ", ibv_next_poll error: " << ret << " (" << strerror(ret)
                     << ")";
   }
@@ -153,8 +153,8 @@ inline bool EFAChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
   return !cq_datas.empty();
 }
 
-inline void EFAChannelImpl::lazy_post_recv_wrs_n(struct ibv_qp* qp, uint32_t n,
-                                                 bool force) {
+inline void EFAChannelImpl::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
+                                             bool force) {
   (void)qp;
   (void)n;
   (void)force;

@@ -17,6 +17,10 @@ class IBDeviceSelectionStrategy : public RDMADeviceSelectionStrategy {
       int gpu_idx) override {
     (void)gpu_idx;
 
+    for (auto const& p : dist) {
+      UCCL_LOG(WARN) << "NIC: " << p.first << ", distance: " << p.second;
+    }
+
     // Find the minimum distance
     auto min_it = std::min_element(
         dist.begin(), dist.end(),
@@ -29,10 +33,6 @@ class IBDeviceSelectionStrategy : public RDMADeviceSelectionStrategy {
       if (p.second == min_d) candidates.push_back(p.first);
     }
 
-    std::vector<std::string> selected;
-    if (!candidates.empty()) {
-      selected.push_back(candidates.front());
-    }
-    return selected;
+    return candidates;
   }
 };

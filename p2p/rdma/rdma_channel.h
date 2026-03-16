@@ -108,10 +108,10 @@ class RDMAChannel {
     return wr_id;
   }
 
-  bool poll_once(std::vector<CQMeta>& cq_datas) {
+  bool pollOnce(std::vector<CQMeta>& cq_datas) {
     uint32_t nb_post_recv = 0;
-    bool result = impl_->poll_once(cq_ex_, cq_datas, channel_id_, nb_post_recv);
-    impl_->lazy_post_recv_wrs_n(qp_, nb_post_recv, false);
+    bool result = impl_->pollOnce(cq_ex_, cq_datas, channel_id_, nb_post_recv);
+    impl_->lazyPostRecvWrsN(qp_, nb_post_recv, false);
     return result;
   }
 

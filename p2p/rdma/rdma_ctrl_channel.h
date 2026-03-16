@@ -67,7 +67,7 @@ class SendControlChannel : public RDMAChannel {
 
   bool noblockingPoll() {
     std::vector<CQMeta> cq_datas;
-    if (RDMAChannel::poll_once(cq_datas)) {
+    if (RDMAChannel::pollOnce(cq_datas)) {
       for (auto const& cq_data : cq_datas) {
         UCCL_LOG(INFO, UCCL_RDMA)
             << "SendControlChannel::noblockingPoll - Polled completion: "
@@ -173,7 +173,7 @@ class RecvControlChannel : public RDMAChannel {
 
   bool noblockingPoll() {
     std::vector<CQMeta> cq_datas;
-    if (RDMAChannel::poll_once(cq_datas)) {
+    if (RDMAChannel::pollOnce(cq_datas)) {
       for (auto const& cq_data : cq_datas) {
         UCCL_LOG(INFO, UCCL_RDMA)
             << "RecvControlChannel::noblockingPoll - Polled completion: "

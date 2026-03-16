@@ -462,7 +462,7 @@ class SendChannelGroup : public ChannelGroup {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     for (auto& [channel_id, channel] : channels_) {
       std::vector<CQMeta> cq_datas;
-      if (channel && channel->poll_once(cq_datas)) {
+      if (channel && channel->pollOnce(cq_datas)) {
         for (auto const& cq_data : cq_datas) {
           // UCCL_LOG(INFO, UCCL_RDMA) << "SendChannelGroup::pollingLoop -
           // Channel "
@@ -581,7 +581,7 @@ class RecvChannelGroup : public ChannelGroup {
       if (!channel) continue;
       bool polled = false;
       std::vector<CQMeta> cq_datas;
-      polled = channel->poll_once(cq_datas);
+      polled = channel->pollOnce(cq_datas);
       if (polled) {
         for (auto const& cq_data : cq_datas) {
           if (cq_data.hasIMM()) {
