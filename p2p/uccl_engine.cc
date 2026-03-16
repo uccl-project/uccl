@@ -555,8 +555,8 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   uint64_t flow_id = conn->conn_id;
   return tcp_endpoint->send_notification(flow_id, oob_msg);
 #else
-  if (conn->is_local) {
-    // Local connection: push notification directly to the local list.
+  if (conn->same_process) {
+    // Same-process local connection: push notification directly to the local list.
     std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
     notify_msg_list.push_back(*notify_msg);
     return 0;
@@ -584,6 +584,96 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
 
   return ok ? sizeof(NotifyMsg) : -1;
 #endif
+}
+
+// Serialize IpcTransferInfo to an opaque buffer (IPC_INFO_SIZE bytes).
+// Layout: handle(64) + offset(8) + size(8) + gpu_idx(4) = 84 bytes.
+static void serialize_ipc_info(IpcTransferInfo const& info, char* buf) {
+  memset(buf, 0, IPC_INFO_SIZE);
+  size_t off = 0;
+  memcpy(buf + off, &info.handle, sizeof(info.handle));
+  off += sizeof(info.handle);  // 64
+  memcpy(buf + off, &info.offset, sizeof(info.offset));
+  off += sizeof(info.offset);  // 8
+  memcpy(buf + off, &info.size, sizeof(info.size));
+  off += sizeof(info.size);  // 8
+  memcpy(buf + off, &info.gpu_idx, sizeof(info.gpu_idx));
+  off += sizeof(info.gpu_idx);  // 4
+}
+
+// Deserialize IpcTransferInfo from an opaque buffer.
+static void deserialize_ipc_info(char const* buf, IpcTransferInfo& info) {
+  memset(&info, 0, sizeof(info));
+  size_t off = 0;
+  memcpy(&info.handle, buf + off, sizeof(info.handle));
+  off += sizeof(info.handle);
+  memcpy(&info.offset, buf + off, sizeof(info.offset));
+  off += sizeof(info.offset);
+  memcpy(&info.size, buf + off, sizeof(info.size));
+  off += sizeof(info.size);
+  memcpy(&info.gpu_idx, buf + off, sizeof(info.gpu_idx));
+  off += sizeof(info.gpu_idx);
+}
+
+int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
+                              char* ipc_buf, bool* has_ipc) {
+  if (!engine || !ipc_buf || !has_ipc) return -1;
+  *has_ipc = false;
+  auto it = mem_reg_info.find(addr);
+  if (it == mem_reg_info.end()) return -1;
+  if (!it->second.has_ipc) return 0;
+  serialize_ipc_info(it->second.ipc_info, ipc_buf);
+  *has_ipc = true;
+  return 0;
+}
+
+int uccl_engine_update_ipc_info(char* ipc_buf, uintptr_t addr,
+                                 uintptr_t base_addr, size_t size) {
+  if (!ipc_buf) return -1;
+  IpcTransferInfo info;
+  deserialize_ipc_info(ipc_buf, info);
+  info.offset += (addr - base_addr);
+  info.size = size;
+  serialize_ipc_info(info, ipc_buf);
+  return 0;
+}
+
+bool uccl_engine_conn_is_cross_process_local(uccl_conn_t* conn) {
+  if (!conn) return false;
+  return conn->is_local && !conn->same_process;
+}
+
+int uccl_engine_write_ipc_vector(uccl_conn_t* conn,
+                                  std::vector<void const*> src_v,
+                                  std::vector<size_t> size_v,
+                                  std::vector<char*> ipc_bufs, int num_iovs,
+                                  uint64_t* transfer_id) {
+  if (!conn || num_iovs <= 0) return -1;
+  std::vector<IpcTransferInfo> info_v(num_iovs);
+  for (int i = 0; i < num_iovs; i++) {
+    deserialize_ipc_info(ipc_bufs[i], info_v[i]);
+  }
+  return conn->engine->endpoint->writev_ipc_async(conn->conn_id, src_v, size_v,
+                                                   info_v, num_iovs,
+                                                   transfer_id)
+             ? 0
+             : -1;
+}
+
+int uccl_engine_read_ipc_vector(uccl_conn_t* conn, std::vector<void*> dst_v,
+                                 std::vector<size_t> size_v,
+                                 std::vector<char*> ipc_bufs, int num_iovs,
+                                 uint64_t* transfer_id) {
+  if (!conn || num_iovs <= 0) return -1;
+  std::vector<IpcTransferInfo> info_v(num_iovs);
+  for (int i = 0; i < num_iovs; i++) {
+    deserialize_ipc_info(ipc_bufs[i], info_v[i]);
+  }
+  return conn->engine->endpoint->readv_ipc_async(conn->conn_id, dst_v, size_v,
+                                                  info_v, num_iovs,
+                                                  transfer_id)
+             ? 0
+             : -1;
 }
 
 int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {

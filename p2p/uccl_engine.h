@@ -7,6 +7,7 @@
 
 #define MSG_SIZE 256
 #define FIFO_SIZE 64
+#define IPC_INFO_SIZE 128
 // Handle for the UCCL engine instance
 typedef struct uccl_engine uccl_engine_t;
 
@@ -243,3 +244,64 @@ int uccl_engine_update_fifo(FifoItem& fifo_item, uint64_t remote_addr,
  * @param engine        The engine instance.
  */
 void uccl_engine_stop_accept(uccl_engine_t* engine);
+
+/**
+ * Get serialized IPC info for a registered buffer address.
+ * @param engine        The engine instance.
+ * @param addr          Base address of the registered buffer.
+ * @param ipc_buf       Output buffer (IPC_INFO_SIZE bytes).
+ * @param has_ipc       Set to true if the buffer has valid IPC info (GPU mem).
+ * @return              0 on success, -1 on failure.
+ */
+int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
+                              char* ipc_buf, bool* has_ipc);
+
+/**
+ * Update the offset and size in a serialized IPC info buffer to point at a
+ * sub-range of the registered buffer.
+ * @param ipc_buf       IPC info buffer (IPC_INFO_SIZE bytes).
+ * @param addr          Target address within the registered region.
+ * @param base_addr     Base address of the registered region.
+ * @param size          Size of the sub-range.
+ * @return              0 on success, -1 on failure.
+ */
+int uccl_engine_update_ipc_info(char* ipc_buf, uintptr_t addr,
+                                 uintptr_t base_addr, size_t size);
+
+/**
+ * Query whether a connection is cross-process local (IPC, not same process).
+ * @param conn          Connection handle.
+ * @return              True if conn is local but not same-process.
+ */
+bool uccl_engine_conn_is_cross_process_local(uccl_conn_t* conn);
+
+/**
+ * Write vector using externally-provided IPC info (cross-process local).
+ * @param conn          Connection handle.
+ * @param src_v         Vector of source pointers.
+ * @param size_v        Vector of sizes.
+ * @param ipc_bufs      Vector of serialized IPC info buffers (IPC_INFO_SIZE each).
+ * @param num_iovs      Number of IO vectors.
+ * @param transfer_id   Pointer to store the transfer ID.
+ * @return              0 on success, non-zero on failure.
+ */
+int uccl_engine_write_ipc_vector(uccl_conn_t* conn,
+                                  std::vector<void const*> src_v,
+                                  std::vector<size_t> size_v,
+                                  std::vector<char*> ipc_bufs, int num_iovs,
+                                  uint64_t* transfer_id);
+
+/**
+ * Read vector using externally-provided IPC info (cross-process local).
+ * @param conn          Connection handle.
+ * @param dst_v         Vector of destination pointers.
+ * @param size_v        Vector of sizes.
+ * @param ipc_bufs      Vector of serialized IPC info buffers (IPC_INFO_SIZE each).
+ * @param num_iovs      Number of IO vectors.
+ * @param transfer_id   Pointer to store the transfer ID.
+ * @return              0 on success, non-zero on failure.
+ */
+int uccl_engine_read_ipc_vector(uccl_conn_t* conn, std::vector<void*> dst_v,
+                                 std::vector<size_t> size_v,
+                                 std::vector<char*> ipc_bufs, int num_iovs,
+                                 uint64_t* transfer_id);
