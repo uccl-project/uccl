@@ -387,7 +387,8 @@ class Endpoint {
                   std::vector<char*> out_buf_v, size_t num_iovs);
 
   /*Connect to a local process via Unix Domain Socket.*/
-  bool connect_local(int remote_gpu_idx, uint64_t& conn_id);
+  bool connect_local(int remote_gpu_idx, uint64_t& conn_id,
+                     bool same_process = false);
 
   /*Accept an incoming local connection via Unix Domain Socket. */
   bool accept_local(int& remote_gpu_idx, uint64_t& conn_id);

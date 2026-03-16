@@ -1206,7 +1206,8 @@ bool Endpoint::advertisev(uint64_t conn_id, std::vector<uint64_t> mr_id_v,
   return true;
 }
 
-bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
+bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id,
+                             bool same_process) {
   constexpr int kMaxRetry = 20;
   constexpr int kRetrySleepMs = 10;
 
@@ -1215,12 +1216,12 @@ bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
   Conn* conn = new Conn;
   conn->remote_gpu_idx_ = remote_gpu_idx;
 
-  if (conn->remote_gpu_idx_ == local_gpu_idx_) {
-    // same GPU: no attach, bind inbox_rings_[remote_gpu_idx] directly
+  if (same_process || conn->remote_gpu_idx_ == local_gpu_idx_) {
+    // Same process or same GPU: use inbox_rings_ directly, no shm attach.
     conn->remote_inbox_ = inbox_rings_[remote_gpu_idx];
     conn->shm_attached_ = false;
   } else {
-    // cross GPU: attach remote inbox
+    // cross GPU, cross process: attach remote inbox via shared memory
     conn->remote_inbox_.shm_name =
         shm_ring_name(local_gpu_idx_, remote_gpu_idx);
     conn->remote_inbox_.shm_size = inbox_rings_[remote_gpu_idx].shm_size;
@@ -1253,11 +1254,14 @@ bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id) {
   conn_id = next_conn_id_.fetch_add(1);
   conn->conn_id_ = conn_id;
 
-  ShmMsg msg;
-  msg.src_gpu = local_gpu_idx_;
-  msg.type = ShmMsgType::CONNECT;
-  msg.completion = 0;
-  shm_ring_send(conn->remote_inbox_.ring, msg);
+  if (!same_process) {
+    // Cross-process: send CONNECT handshake via shm ring.
+    ShmMsg msg;
+    msg.src_gpu = local_gpu_idx_;
+    msg.type = ShmMsgType::CONNECT;
+    msg.completion = 0;
+    shm_ring_send(conn->remote_inbox_.ring, msg);
+  }
 
   {
     std::unique_lock lock(conn_mu_);

@@ -177,11 +177,11 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
 
   bool ok;
   if (is_local) {
-    // The remote Endpoint's passive_accept_local_thread (started in
-    // uccl_engine_create via start_passive_accept) will accept the CONNECT
-    // message.  Just call connect_local directly — no background thread needed.
-    ok = engine->endpoint->connect_local(remote_gpu_idx, conn_id);
-    conn->sock_fd = -1;  // No TCP socket for local connections
+    // Same-process local: use connect_local with same_process=true to skip
+    // shm attach and CONNECT handshake — transfers use direct_addr.
+    ok = engine->endpoint->connect_local(remote_gpu_idx, conn_id,
+                                         /*same_process=*/true);
+    conn->sock_fd = -1;
   } else {
     ok = engine->endpoint->connect(std::string(ip_addr), remote_gpu_idx,
                                    remote_port, conn_id);
