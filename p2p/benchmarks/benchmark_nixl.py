@@ -740,7 +740,9 @@ def main():
     if args.local:
         if args.dst_device is None:
             args.dst_device = args.device
-        assert args.backend == "uccl", "Local mode only supported with --backend uccl"
+        assert (
+            args.backend == "uccl" or args.backend == "ucx"
+        ), "Local mode only supported with --backend uccl/ucx"
         dst = args.dst_gpu_idx if args.dst_gpu_idx >= 0 else args.local_gpu_idx
         src_dev = f"cuda:{args.local_gpu_idx}" if args.device == "gpu" else "cpu"
         dst_dev = f"cuda:{dst}" if args.dst_device == "gpu" else "cpu"
