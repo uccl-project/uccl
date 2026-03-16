@@ -275,10 +275,3 @@ int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
  */
 int uccl_engine_update_ipc_info(char* ipc_buf, uintptr_t addr,
                                 uintptr_t base_addr, size_t size);
-
-/**
- * Query whether a connection is cross-process local (IPC, not same process).
- * @param conn          Connection handle.
- * @return              True if conn is local but not same-process.
- */
-bool uccl_engine_conn_is_cross_process_local(uccl_conn_t* conn);
