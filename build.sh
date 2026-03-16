@@ -488,7 +488,7 @@ else
 fi
 
 auditwheel repair dist/uccl-*.whl \
-  --plat "${UCCL_WHEEL_PLAT}" \
+  --plat "${AUDIT_PLAT}" \
   --exclude "libtorch*.so" \
   --exclude "libc10*.so" \
   --exclude "libibverbs.so.1" \
