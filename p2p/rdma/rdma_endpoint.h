@@ -614,8 +614,9 @@ class NICEndpoint {
         }
       }
 
-      std::shared_ptr<RDMADataChannel> new_channel = std::make_shared<RDMADataChannel>(
-          ctx_ptr, meta.channel_meta, meta.channel_id);
+      std::shared_ptr<RDMADataChannel> new_channel =
+          std::make_shared<RDMADataChannel>(ctx_ptr, meta.channel_meta,
+                                            meta.channel_id);
       // Create response (echo back the same data)
       MetaInfoToExchange response(rank_id_, meta.channel_id,
                                   new_channel->get_local_meta(), nullptr,

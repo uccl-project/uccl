@@ -1,7 +1,7 @@
 #pragma once
 #include "define.h"
-#include "rdma_data_channel_impl.h"
 #include "rdma_context.h"
+#include "rdma_data_channel_impl.h"
 #include "seq_num.h"
 #include "util/debug.h"
 #include "util/util.h"
@@ -66,7 +66,8 @@ class RDMADataChannel {
     ah_ = ctx_->createAH(remote_meta_->gid);
 #endif
     impl_->connectQP(qp_, ctx_, *remote_meta_);
-    UCCL_LOG_EP << "RDMADataChannel connected to remote qpn=" << remote_meta.qpn;
+    UCCL_LOG_EP << "RDMADataChannel connected to remote qpn="
+                << remote_meta.qpn;
   }
 
   int64_t submitRequest(std::shared_ptr<RDMASendRequest> req) {

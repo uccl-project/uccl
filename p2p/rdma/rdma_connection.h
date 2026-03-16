@@ -1,8 +1,8 @@
 #pragma once
 #include "compression.h"
 #include "define.h"
-#include "rdma_data_channel.h"
 #include "rdma_ctrl_channel.h"
+#include "rdma_data_channel.h"
 #include <random>
 
 class RDMAConnection {
@@ -20,7 +20,8 @@ class RDMAConnection {
     channels_[channel_id] = std::move(channel);
   }
 
-  virtual std::shared_ptr<RDMADataChannel> getChannel(uint32_t channel_id) const {
+  virtual std::shared_ptr<RDMADataChannel> getChannel(
+      uint32_t channel_id) const {
     std::shared_lock<std::shared_mutex> lock(mutex_);
     auto it = channels_.find(channel_id);
     if (it == channels_.end()) return nullptr;
@@ -120,7 +121,8 @@ class SendConnection : public RDMAConnection {
     RDMAConnection::addChannel(channel_id, channel);
   }
 
-  std::shared_ptr<RDMADataChannel> getChannel(uint32_t channel_id) const override {
+  std::shared_ptr<RDMADataChannel> getChannel(
+      uint32_t channel_id) const override {
     auto result = RDMAConnection::getChannel(channel_id);
     return result;
   }
@@ -136,8 +138,8 @@ class SendConnection : public RDMAConnection {
 
   size_t normalChannelCount() const { return RDMAConnection::channelCount(); }
 
-  std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> const& channels()
-      const override {
+  std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> const&
+  channels() const override {
     return RDMAConnection::channels();
   }
 
@@ -169,9 +171,8 @@ class SendConnection : public RDMAConnection {
   int64_t postWriteOrRead(std::shared_ptr<RDMASendRequest> req) {
     if (unlikely(req->send_type != SendType::Write &&
                  req->send_type != SendType::Read)) {
-      UCCL_LOG(ERROR)
-          << "SendConnection::write - Invalid send_type, expected "
-             "SendType::Write";
+      UCCL_LOG(ERROR) << "SendConnection::write - Invalid send_type, expected "
+                         "SendType::Write";
       return -1;
     }
     std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
@@ -504,7 +505,8 @@ class RecvConnection : public RDMAConnection {
     RDMAConnection::addChannel(channel_id, channel);
   }
 
-  std::shared_ptr<RDMADataChannel> getChannel(uint32_t channel_id) const override {
+  std::shared_ptr<RDMADataChannel> getChannel(
+      uint32_t channel_id) const override {
     auto result = RDMAConnection::getChannel(channel_id);
     return result;
   }
@@ -519,8 +521,8 @@ class RecvConnection : public RDMAConnection {
 
   size_t normalChannelCount() const { return RDMAConnection::channelCount(); }
 
-  std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> const& channels()
-      const override {
+  std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> const&
+  channels() const override {
     return RDMAConnection::channels();
   }
 
