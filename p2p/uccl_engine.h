@@ -48,7 +48,8 @@ void uccl_engine_destroy(uccl_engine_t* engine);
  * @return              Connection handle, or NULL on failure.
  */
 uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
-                                 int remote_gpu_idx, int remote_port);
+                                 int remote_gpu_idx, int remote_port,
+                                 bool same_process = false);
 /**
  * Start the listener thread for the connection.
  * @param conn          Connection handle.

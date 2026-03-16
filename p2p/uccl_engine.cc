@@ -52,7 +52,8 @@ struct uccl_conn {
   std::thread* listener_thread;
   bool listener_running;
   std::mutex listener_mutex;
-  bool is_local = false;     // True for intra-node (IPC) connections
+  bool is_local = false;       // True for intra-node (IPC) connections
+  bool same_process = false;   // True for same-process local transfers
 };
 
 typedef struct {
@@ -165,7 +166,8 @@ void uccl_engine_destroy(uccl_engine_t* engine) {
 }
 
 uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
-                                 int remote_gpu_idx, int remote_port) {
+                                 int remote_gpu_idx, int remote_port,
+                                 bool caller_same_process) {
   if (!engine || !ip_addr) return nullptr;
   uccl_conn_t* conn = new uccl_conn;
   uint64_t conn_id;
@@ -177,10 +179,10 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
 
   bool ok;
   if (is_local) {
-    // Same-process local: use connect_local with same_process=true to skip
-    // shm attach and CONNECT handshake — transfers use direct_addr.
+    // same_process=true: skip shm attach/handshake, transfers use direct_addr.
+    // same_process=false: real IPC via shm rings + gpuIpcOpenMemHandle.
     ok = engine->endpoint->connect_local(remote_gpu_idx, conn_id,
-                                         /*same_process=*/true);
+                                         caller_same_process);
     conn->sock_fd = -1;
   } else {
     ok = engine->endpoint->connect(std::string(ip_addr), remote_gpu_idx,
@@ -200,6 +202,7 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   conn->conn_id = conn_id;
   conn->engine = engine;
   conn->is_local = is_local;
+  conn->same_process = caller_same_process;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
   return conn;
@@ -277,7 +280,7 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
       UCCL_LOG(ERROR) << "Failed to get IPC info";
       return -1;
     }
-    info.direct_addr = fifo_item.addr;
+    if (conn->same_process) info.direct_addr = fifo_item.addr;
     return conn->engine->endpoint->read_ipc_async(
                conn->conn_id, const_cast<void*>(data), size, info, transfer_id)
                ? 0
@@ -305,7 +308,7 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
         UCCL_LOG(ERROR) << "Failed to get IPC info";
         return -1;
       }
-      info_v[i].direct_addr = fifo_items[i].addr;
+      if (conn->same_process) info_v[i].direct_addr = fifo_items[i].addr;
     }
     return conn->engine->endpoint->readv_ipc_async(
                conn->conn_id, dst_v, size_v, info_v, num_iovs, transfer_id)
@@ -355,7 +358,7 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
       UCCL_LOG(ERROR) << "Failed to get IPC info";
       return -1;
     }
-    info.direct_addr = fifo_item.addr;
+    if (conn->same_process) info.direct_addr = fifo_item.addr;
     return conn->engine->endpoint->write_ipc_async(conn->conn_id, data, size,
                                                    info, transfer_id)
                ? 0
@@ -388,7 +391,7 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
         UCCL_LOG(ERROR) << "Failed to get IPC info";
         return -1;
       }
-      info_v[i].direct_addr = fifo_items[i].addr;
+      if (conn->same_process) info_v[i].direct_addr = fifo_items[i].addr;
     }
     return conn->engine->endpoint->writev_ipc_async(
                conn->conn_id, src_v, size_v, info_v, num_iovs, transfer_id)
