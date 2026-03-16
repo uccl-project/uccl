@@ -543,9 +543,11 @@ def start_transfer_local(size, num_kvblocks, args):
 
     try:
         # src buffers filled with 1s, dst buffers filled with 0s
-        src_dataset = create_dataset("client", size, num_kvblocks, args.device, args.local_gpu_idx)
+        src_device = args.device
+        dst_device = args.dst_device if args.dst_device else args.device
+        src_dataset = create_dataset("client", size, num_kvblocks, src_device, args.local_gpu_idx)
         dst_gpu = args.dst_gpu_idx if args.dst_gpu_idx >= 0 else args.local_gpu_idx
-        dst_dataset = create_dataset("server", size, num_kvblocks, args.device, dst_gpu)
+        dst_dataset = create_dataset("server", size, num_kvblocks, dst_device, dst_gpu)
 
         backend_name = "UCCL" if args.backend == "uccl" else args.backend.upper()
         config = nixl_agent_config(backends=[backend_name])
@@ -584,10 +586,6 @@ def start_transfer_local(size, num_kvblocks, args):
                 total_size += size
 
             iter_bw = size / transfer_time / 1e9
-            print(
-                f"[PERF] Iteration {iter_idx}: {transfer_time*1000:.2f} ms, {iter_bw:.2f} GB/s",
-                flush=True,
-            )
 
         # Verify dst buffers contain the src value (1.0)
         for i, block in enumerate(dst_dataset):
@@ -599,11 +597,11 @@ def start_transfer_local(size, num_kvblocks, args):
         gb_sec = total_size / total_transfer_time / 1e9
         gbps = gb_sec * 8
 
-        src_dev = f"cuda:{args.local_gpu_idx}" if args.device == "gpu" else "cpu"
-        dst_dev = f"cuda:{dst_gpu}" if args.device == "gpu" else "cpu"
+        src_dev = f"cuda:{args.local_gpu_idx}" if src_device == "gpu" else "cpu"
+        dst_dev = f"cuda:{dst_gpu}" if dst_device == "gpu" else "cpu"
         print(
-            f"[local {src_dev}→{dst_dev}] {_pretty_size(size):>8} : "
-            f"{gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {avg_lat:.6f} s  ✓ verified"
+            f"[local {src_dev}\u2192{dst_dev}] {_pretty_size(size):>8} : "
+            f"{gbps:6.2f} Gbps | {gb_sec:6.2f} GB/s | {avg_lat:.6f} s"
         )
 
         agent.release_xfer_handle(transfer_handle)
@@ -714,6 +712,12 @@ def main():
         default=-1,
         help="Destination GPU index for local transfers (-1 = same as --local-gpu-idx)",
     )
+    p.add_argument(
+        "--dst-device",
+        choices=["cpu", "gpu"],
+        default=None,
+        help="Destination buffer location for local transfers (default: same as --device)",
+    )
     args = p.parse_args()
 
     assert not (
@@ -730,11 +734,13 @@ def main():
         f"Device: {args.device} | Local GPU idx: {args.local_gpu_idx} | Iterations: {args.iters}"
     )
     if args.local:
+        if args.dst_device is None:
+            args.dst_device = args.device
         assert args.backend == "uccl", "Local mode only supported with --backend uccl"
         dst = args.dst_gpu_idx if args.dst_gpu_idx >= 0 else args.local_gpu_idx
         src_dev = f"cuda:{args.local_gpu_idx}" if args.device == "gpu" else "cpu"
-        dst_dev = f"cuda:{dst}" if args.device == "gpu" else "cpu"
-        print(f"Local IPC transfer: {src_dev} → {dst_dev}")
+        dst_dev = f"cuda:{dst}" if args.dst_device == "gpu" else "cpu"
+        print(f"Local IPC transfer: {src_dev} \u2192 {dst_dev}")
         for size in args.sizes:
             start_transfer_local(size, args.num_kvblocks, args)
     elif args.dual:
