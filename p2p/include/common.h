@@ -7,7 +7,18 @@
 #include <string>
 #include <vector>
 
-#include "util/gpu_rt.h"
+// Minimal GPU runtime includes for gpuIpcMemHandle_t (used by IpcTransferInfo)
+#ifndef __HIP_PLATFORM_AMD__
+#include <cuda_runtime.h>
+#ifndef gpuIpcMemHandle_t
+#define gpuIpcMemHandle_t cudaIpcMemHandle_t
+#endif
+#else
+#include <hip/hip_runtime.h>
+#ifndef gpuIpcMemHandle_t
+#define gpuIpcMemHandle_t hipIpcMemHandle_t
+#endif
+#endif
 
 typedef uint64_t FlowID;
 struct ConnID {
