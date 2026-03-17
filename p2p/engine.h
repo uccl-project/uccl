@@ -409,13 +409,13 @@ class Endpoint {
                        IpcTransferInfo const& info, uint64_t* transfer_id);
   bool read_ipc_async(uint64_t conn_id, void* data, size_t size,
                       IpcTransferInfo const& info, uint64_t* transfer_id);
-  bool writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
+  bool writev_ipc(uint64_t conn_id, std::vector<void *> data_v,
                   std::vector<size_t> size_v,
                   std::vector<IpcTransferInfo> info_v, size_t num_iovs);
   bool readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
                  std::vector<size_t> size_v,
                  std::vector<IpcTransferInfo> info_v, size_t num_iovs);
-  bool writev_ipc_async(uint64_t conn_id, std::vector<void const*> data_v,
+  bool writev_ipc_async(uint64_t conn_id, std::vector<void *> data_v,
                         std::vector<size_t> size_v,
                         std::vector<IpcTransferInfo> info_v, size_t num_iovs,
                         uint64_t* transfer_id);
