@@ -150,7 +150,7 @@ class NullCompressorBackend : public ICompressorBackend {
 };
 
 #ifdef USE_DIETGPU
-
+#include "dietgpu/utils/GreenContext.h"
 /**
  * @brief DietGPU-based compressor backend.
  *
@@ -168,6 +168,10 @@ class DietGPUCompressorBackend : public ICompressorBackend {
     if (compress_strategy_ == CompressStrategy::kNone) {
       return;
     }
+    // Initialize green context BEFORE creating any CUDA resources (streams,
+    // memory) so that they all belong to the green context.
+    dietgpu::initGreenContextIfNeeded(dietgpu::getCurrentDevice());
+
     GPU_RT_CHECK(gpuMalloc(&devCompressedSize_, sizeof(uint32_t)));
     // Initialize compression buffer
     auto allocator = std::make_shared<MemoryAllocator>();
@@ -242,12 +246,12 @@ class DietGPUCompressorBackend : public ICompressorBackend {
                            1,  // numInBatch
                            inPtrs, inSizes, outPtrs, devCompressedSize_,
                            stream_);
-
+    GPU_RT_CHECK(gpuStreamSynchronize(stream_));
     // Get compressed size
     uint32_t compressedSize = 0;
     GPU_RT_CHECK(gpuMemcpy(&compressedSize, devCompressedSize_,
                            sizeof(compressedSize), gpuMemcpyDeviceToHost));
-
+    
     UCCL_LOG(INFO, UCCL_RDMA)
         << "DietGPUCompressorBackend: Compressed " << req->local_mem->size
         << " bytes to " << compressedSize << " bytes, ratio: "
@@ -412,6 +416,7 @@ class DietGPUCompressorBackend : public ICompressorBackend {
         getUncompDataSizeFromByteSize(compressConfig.floatType,
                                       req->compress_ctx->maxSize),
         ChunkSplitStrategy::kMessageChunkSizeKB);
+    GPU_RT_CHECK(gpuStreamSynchronize(stream_));
     req->local_mem = std::make_shared<RegMemBlock>(
         buffer_->addr, data_size, buffer_->mr_array, buffer_->type);
     return true;
@@ -432,7 +437,7 @@ class DietGPUCompressorBackend : public ICompressorBackend {
 
     dietgpu::floatCompressEncodeOneBatch(
         *res_, compressConfig, *req->compress_ctx, devCompressedSize_, stream_);
-
+    GPU_RT_CHECK(gpuStreamSynchronize(stream_));
     // Get compressed size
     uint32_t compressedSize = 0;
     GPU_RT_CHECK(gpuMemcpy(&compressedSize, devCompressedSize_,
