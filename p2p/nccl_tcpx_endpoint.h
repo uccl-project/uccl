@@ -15,7 +15,7 @@ namespace nccl_tcpx {
 
 class Endpoint {
  public:
-  explicit Endpoint(int num_cpus);
+  Endpoint();
   ~Endpoint();
 
   bool connect(std::string ip_addr, int remote_gpu_idx, int remote_port,

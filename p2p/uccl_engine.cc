@@ -128,9 +128,10 @@ void listener_thread_func(uccl_conn_t* conn) {
 }
 
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
+  (void)num_cpus;
   inside_python = in_python;
   uccl_engine_t* eng = new uccl_engine;
-  eng->endpoint = std::unique_ptr<Endpoint>(new Endpoint(num_cpus));
+  eng->endpoint = std::unique_ptr<Endpoint>(new Endpoint());
   return eng;
 }
 

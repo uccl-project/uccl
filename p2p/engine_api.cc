@@ -181,20 +181,18 @@ NB_MODULE(p2p, m) {
   nb::class_<Endpoint>(m, "Endpoint")
       .def(
           "__init__",
-          [](Endpoint* self, uint32_t local_gpu_idx, uint32_t num_cpus) {
+          [](Endpoint* self, uint32_t local_gpu_idx) {
             nb::gil_scoped_release release;
             InsidePythonGuard guard;
-            new (self) Endpoint(local_gpu_idx, num_cpus);
+            new (self) Endpoint(local_gpu_idx);
           },
-          nb::arg("local_gpu_idx"), nb::arg("num_cpus"))
-      .def(
-          "__init__",
-          [](Endpoint* self, uint32_t num_cpus) {
-            nb::gil_scoped_release release;
-            InsidePythonGuard guard;
-            new (self) Endpoint(num_cpus);
-          },
-          nb::arg("num_cpus"))
+          nb::arg("local_gpu_idx"))
+      .def("__init__",
+           [](Endpoint* self) {
+             nb::gil_scoped_release release;
+             InsidePythonGuard guard;
+             new (self) Endpoint();
+           })
       .def(
           "start_passive_accept",
           [](Endpoint& self) { return self.start_passive_accept(); },

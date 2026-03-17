@@ -48,7 +48,6 @@ class CollectiveContext:
 
     def __init__(
         self,
-        num_cpus: int = 4,
         local_gpu_idx: Optional[int] = None,
         use_copy_engine_for_intra: Optional[bool] = False,
     ):
@@ -56,7 +55,6 @@ class CollectiveContext:
         Initialize collective context. Requires torch.distributed to be initialized.
 
         Args:
-            num_cpus: Number of CPU threads for RDMA operations
             local_gpu_idx: Optional override for local GPU index. If None, will be derived from torch.distributed
             use_copy_engine_for_intra: Whether to use the copy engine for intra-node communication
         """
@@ -68,7 +66,6 @@ class CollectiveContext:
         self.world_size = dist.get_world_size()
         self.rank = dist.get_rank()
         self.dist_backend = "gloo" if use_copy_engine_for_intra else "nccl"
-        self.num_cpus = num_cpus
         self.use_copy_engine_for_intra = use_copy_engine_for_intra
 
         # Derive local GPU index from distributed context
@@ -139,7 +136,7 @@ class CollectiveContext:
             return
 
         # Create endpoint
-        self.ep = p2p.Endpoint(self.local_gpu_idx, self.num_cpus)
+        self.ep = p2p.Endpoint(self.local_gpu_idx)
         print(f"[Rank {self.rank}] Created p2p.Endpoint on GPU {self.local_gpu_idx}")
         local_metadata = self.ep.get_metadata()
 
@@ -764,15 +761,12 @@ _default_context: Optional[CollectiveContext] = None
 
 
 def init_collective(
-    num_cpus: int = 4,
     local_gpu_idx: Optional[int] = None,
     use_copy_engine_for_intra: Optional[bool] = False,
 ):
     """Initialize the default collective context."""
     global _default_context
-    _default_context = CollectiveContext(
-        num_cpus, local_gpu_idx, use_copy_engine_for_intra
-    )
+    _default_context = CollectiveContext(local_gpu_idx, use_copy_engine_for_intra)
     _default_context.init()
 
 

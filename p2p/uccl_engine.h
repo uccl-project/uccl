@@ -27,7 +27,7 @@ typedef struct md {
 
 /**
  * Create and initialize an engine instance.
- * @param num_cpus      The number of CPUs to use for the engine.
+ * @param num_cpus      Reserved for API compatibility. Currently unused.
  * @param in_python     Whether the engine is being created in Python.
  * @return              Pointer to the engine instance, or NULL on failure.
  */
