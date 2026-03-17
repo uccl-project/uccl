@@ -381,7 +381,7 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
   if ((conn->is_local || conn->same_process) && !ipc_infos.empty()) {
     std::vector<void const*> src_v(dst_v.begin(), dst_v.end());
     return conn->engine->endpoint->writev_ipc_async(
-               conn->conn_id, dst_v, size_v, ipc_infos, num_iovs, transfer_id)
+               conn->conn_id, src_v, size_v, ipc_infos, num_iovs, transfer_id)
                ? 0
                : -1;
   }
