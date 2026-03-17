@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../../include/config.h"
-#include "../device/gpu_rt.h"
+#include "config.h"
+#include "gpu_rt.h"
 #include "oob.h"
 #include "request.h"
 #include "util/jring.h"

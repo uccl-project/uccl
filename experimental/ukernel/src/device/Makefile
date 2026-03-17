@@ -10,7 +10,7 @@ GDRCOPY_INCLUDEDIR = $(GDRCOPY_ROOT)/include
 GDRCOPY_LIBDIR = $(GDRCOPY_ROOT)/src
 GDRCOPY_HEADER = $(GDRCOPY_INCLUDEDIR)/gdrapi.h
 
-INCLUDES := -I./ -I./fifo -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR)
+INCLUDES := -I./ -I./fifo -I../../include -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR)
 LIBS := -L$(CUDA_HOME)/lib -lcudart -lcuda -lnuma \
         -L$(GDRCOPY_LIBDIR) -lgdrapi
 

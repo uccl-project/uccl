@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../device/gpu_rt.h"
+#include "gpu_rt.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../gpu_rt.h"
+#include "gpu_rt.h"
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
