@@ -5,16 +5,16 @@
 #include <iostream>
 #include <thread>
 
-using UdsExchanger = UKernel::Transport::UdsExchanger;
+using ShmRingExchanger = UKernel::Transport::ShmRingExchanger;
 using IpcCacheWire = UKernel::Transport::IpcCacheWire;
 
-void test_uds_oob() {
-  std::cout << "[TEST] UDS OOB test start\n";
+void test_shm_oob() {
+  std::cout << "[TEST] SHM OOB test start\n";
 
   std::thread rank0([&]() {
-    UdsExchanger uds0(/*self_rank=*/0);
+    ShmRingExchanger shm0(/*self_rank=*/0, /*world_size=*/2, "oob-shm-test");
 
-    if (!uds0.accept_from(/*peer_rank=*/1, /*timeout_ms=*/5000)) {
+    if (!shm0.accept_from(/*peer_rank=*/1, /*timeout_ms=*/5000)) {
       std::cerr << "[ERROR] rank0 accept_from(1) failed\n";
       return;
     }
@@ -22,7 +22,7 @@ void test_uds_oob() {
 
     IpcCacheWire got{};
     uint64_t seq = 0;
-    if (!uds0.recv_ipc_cache(/*peer_rank=*/1, got, &seq, /*timeout_ms=*/5000)) {
+    if (!shm0.recv_ipc_cache(/*peer_rank=*/1, got, &seq, /*timeout_ms=*/5000)) {
       std::cerr << "[ERROR] rank0 recv_ipc_cache(1) failed\n";
       return;
     }
@@ -52,12 +52,11 @@ void test_uds_oob() {
   });
 
   std::thread rank1([&]() {
-    // small delay so rank0 can start listening; connect_to has retry anyway
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-    UdsExchanger uds1(/*self_rank=*/1);
+    ShmRingExchanger shm1(/*self_rank=*/1, /*world_size=*/2, "oob-shm-test");
 
-    if (!uds1.connect_to(/*peer_rank=*/0, /*timeout_ms=*/5000)) {
+    if (!shm1.connect_to(/*peer_rank=*/0, /*timeout_ms=*/5000)) {
       std::cerr << "[ERROR] rank1 connect_to(0) failed\n";
       return;
     }
@@ -77,7 +76,7 @@ void test_uds_oob() {
     w.size = 4096ULL;
 
     const uint64_t seq = 42;
-    if (!uds1.send_ipc_cache(/*peer_rank=*/0, seq, w)) {
+    if (!shm1.send_ipc_cache(/*peer_rank=*/0, seq, w)) {
       std::cerr << "[ERROR] rank1 send_ipc_cache failed\n";
       return;
     }
@@ -88,5 +87,5 @@ void test_uds_oob() {
   rank0.join();
   rank1.join();
 
-  std::cout << "[TEST] UDS OOB test completed\n";
+  std::cout << "[TEST] SHM OOB test completed\n";
 }

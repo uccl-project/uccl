@@ -12,6 +12,7 @@ run_one() {
 run_pair() {
   case_name="$1"
   port="$2"
+  transport="${3:-auto}"
   server_log="$(mktemp)"
   client_log="$(mktemp)"
   server_pid=""
@@ -25,14 +26,15 @@ run_pair() {
   }
   trap cleanup EXIT INT TERM
 
-  echo "== communicator case: ${case_name} (port ${port})"
+  echo "== communicator case: ${case_name} (port ${port}, transport ${transport})"
   "$BIN" communicator --role=server --case="$case_name" --exchanger-port "$port" \
+    --transport "$transport" \
     >"$server_log" 2>&1 &
   server_pid="$!"
   sleep 1
 
   if ! "$BIN" communicator --role=client --case="$case_name" \
-    --exchanger-ip 127.0.0.1 --exchanger-port "$port" \
+    --exchanger-ip 127.0.0.1 --exchanger-port "$port" --transport "$transport" \
     >"$client_log" 2>&1; then
     cat "$server_log"
     cat "$client_log"
@@ -101,17 +103,21 @@ run_one "$BIN" core
 run_one "$BIN" communicator-local
 run_one "$BIN" oob-socket
 run_one "$BIN" oob-socket-meta --world-size 4
-run_one "$BIN" oob-uds
+run_one "$BIN" oob-shm
 run_one "$BIN" utils-host-id
 
 run_pair basic "$PORT_BASE"
 run_pair batch "$((PORT_BASE + 1))"
 run_pair poll-release "$((PORT_BASE + 2))"
 run_pair notifier "$((PORT_BASE + 3))"
+run_pair basic "$((PORT_BASE + 4))" ipc
+run_pair batch "$((PORT_BASE + 5))" ipc
+run_pair poll-release "$((PORT_BASE + 6))" ipc
 
 if [ "${TRANSPORT_RUN_UCCL:-0}" = "1" ]; then
   run_uccl_pair basic "$((PORT_BASE + 10))"
   run_uccl_pair poll-release "$((PORT_BASE + 11))"
+  run_pair basic "$((PORT_BASE + 12))" uccl
 fi
 
 if [ "${TRANSPORT_RUN_REDIS:-0}" = "1" ]; then

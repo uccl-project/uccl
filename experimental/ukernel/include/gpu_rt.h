@@ -46,6 +46,7 @@
 #define gpuMemcpyFromSymbol cudaMemcpyFromSymbol
 #define gpuMemset cudaMemset
 #define gpuMemsetAsync cudaMemsetAsync
+#define gpuMemGetAddressRange cudaMemGetAddressRange
 #define gpuGetLastError cudaGetLastError
 #define gpuErrorPeerAccessAlreadyEnabled cudaErrorPeerAccessAlreadyEnabled
 #define gpuErrorNotReady cudaErrorNotReady

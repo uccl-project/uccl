@@ -120,6 +120,13 @@ void CommunicatorTransportBackend::ensure_registered() {
 }
 
 void CommunicatorTransportBackend::exchange_mrs() {
+  if (comm_.peer_transport_kind(peer_rank_) !=
+      UKernel::Transport::PeerTransportKind::Uccl) {
+    // IPC resolves peer buffers through per-request cudaIpcMemHandle exchange,
+    // so there is no persistent remote MR table to populate here.
+    return;
+  }
+
   for (auto id : kRegisteredOrder<RegisteredBuffer>) {
     auto it = registered_mrs_.find(static_cast<uint64_t>(id));
     if (it == registered_mrs_.end()) continue;

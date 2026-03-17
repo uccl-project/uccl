@@ -48,14 +48,18 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       peers_(world_size),
       config_(config),
       uccl_engine_(std::make_unique<UcclTransportEngine>(gpu_id, world_size)) {
-  uds_ = std::make_shared<UdsExchanger>(global_rank_);
-
   // Initialize communicator meta
   CommunicatorMeta local{};
   local.host_id = generate_host_id();
+  local.local_id = config_->local_id >= 0 ? config_->local_id : global_rank_;
   local.is_ready = true;
   local.ip = get_local_ip();
   set_peer_meta(global_rank_, local);
+
+  shm_control_ = std::make_shared<ShmRingExchanger>(global_rank_, world_size_,
+                                                    local.host_id,
+                                                    local.local_id);
+  ipc_channel_ = std::make_shared<IpcChannel>(this);
 
   // Initialize Redis client
 #ifdef USE_REDIS_OOB
@@ -65,7 +69,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
   bool is_server = (global_rank_ == 0);
   if (!is_server && config_->exchanger_ip == "0.0.0.0")
     config_->exchanger_ip = "127.0.0.1";
-  std::cout << "[INFO] Using socket-based exchanger as "
+  std::cout << "[INFO] Using socket-based bootstrap exchanger as "
             << (is_server ? "server" : "client") << " " << config_->exchanger_ip
             << std::endl;
   exchanger_client_ = std::make_shared<SockExchanger>(
@@ -89,6 +93,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
     std::string key = "meta:" + std::to_string(i);
     if (exchanger_client_->wait_and_fetch(key, remote, -1)) {
       set_peer_meta(i, remote);
+      shm_control_->set_peer_local_id(i, remote.local_id);
     } else {
       fprintf(stderr, "[WARN] Timeout waiting for remote CommunicatorMeta \n");
     }
@@ -98,11 +103,24 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
 }
 
 Communicator::~Communicator() {
-  // Release endpoints
+  std::shared_ptr<ShmRingExchanger> shm_control = shm_control_;
+  std::vector<int> ipc_peers;
+
   {
     std::lock_guard<std::mutex> lk(peer_mu_);
-    for (auto& peer : peers_) {
-      peer.ipc_channel.reset();
+    ipc_channel_.reset();
+    for (int rank = 0; rank < world_size_; ++rank) {
+      if (rank == global_rank_) continue;
+      if (peers_[rank].kind == PeerTransportKind::Ipc &&
+          (peers_[rank].send_ready || peers_[rank].recv_ready)) {
+        ipc_peers.push_back(rank);
+      }
+    }
+  }
+
+  if (shm_control) {
+    for (int rank : ipc_peers) {
+      shm_control->close_peer(rank);
     }
   }
 
@@ -152,7 +170,15 @@ bool Communicator::connect_to(int rank) {
     return false;
   }
 
-  auto peer_kind = resolve_peer_transport_kind(*config_, local_meta, meta);
+  PeerTransportKind peer_kind;
+  try {
+    peer_kind = resolve_peer_transport_kind(*config_, local_meta, meta);
+  } catch (std::exception const& ex) {
+    std::cerr << "[ERROR] Communicator " << global_rank_
+              << " failed to resolve transport for rank " << rank << ": "
+              << ex.what() << std::endl;
+    return false;
+  }
   if (peer_kind == PeerTransportKind::Uccl && has_peer_send_path(rank)) {
     return true;
   }
@@ -165,7 +191,7 @@ bool Communicator::connect_to(int rank) {
                                              exchanger_client_, local_meta,
                                              meta);
     if (ret) {
-      cache_peer_session(rank, PeerTransportKind::Uccl, nullptr, true, false);
+      cache_peer_session(rank, PeerTransportKind::Uccl, true, false);
       register_existing_local_mrs_with_uccl();
       std::cout << "[INFO] Communicator " << global_rank_
                 << " UCCL connect_to succeeded to rank " << rank << std::endl;
@@ -177,17 +203,17 @@ bool Communicator::connect_to(int rank) {
   }
 
   if (peer_kind == PeerTransportKind::Ipc) {
-    auto ipc_channel = std::make_shared<IpcChannel>(this);
-    bool ret = ipc_channel->connect_to(rank);
+    bool ret = ipc_channel_->connect_to(rank);
     if (ret) {
       std::cout << "[INFO] Communicator " << global_rank_
                 << " IPC connect_to succeeded to rank " << rank << std::endl;
     } else {
       std::cerr << "[ERROR] Communicator " << global_rank_
                 << " IPC connect_to failed to rank " << rank << std::endl;
+      shm_control_->close_peer(rank);
       return false;
     }
-    cache_peer_session(rank, PeerTransportKind::Ipc, ipc_channel, true, true);
+    cache_peer_session(rank, PeerTransportKind::Ipc, true, true);
     return true;
   }
   return false;
@@ -203,7 +229,15 @@ bool Communicator::accept_from(int rank) {
     return false;
   }
 
-  auto peer_kind = resolve_peer_transport_kind(*config_, local_meta, meta);
+  PeerTransportKind peer_kind;
+  try {
+    peer_kind = resolve_peer_transport_kind(*config_, local_meta, meta);
+  } catch (std::exception const& ex) {
+    std::cerr << "[ERROR] Communicator " << global_rank_
+              << " failed to resolve transport for rank " << rank << ": "
+              << ex.what() << std::endl;
+    return false;
+  }
   if (peer_kind == PeerTransportKind::Uccl && has_peer_recv_path(rank)) {
     return true;
   }
@@ -216,7 +250,7 @@ bool Communicator::accept_from(int rank) {
                                               exchanger_client_, local_meta,
                                               meta);
     if (ret) {
-      cache_peer_session(rank, PeerTransportKind::Uccl, nullptr, false, true);
+      cache_peer_session(rank, PeerTransportKind::Uccl, false, true);
       register_existing_local_mrs_with_uccl();
       std::cout << "[INFO] Communicator " << global_rank_
                 << " UCCL accept_from succeeded from rank " << rank
@@ -229,17 +263,17 @@ bool Communicator::accept_from(int rank) {
   }
 
   if (peer_kind == PeerTransportKind::Ipc) {
-    auto ipc_channel = std::make_shared<IpcChannel>(this);
-    bool ret = ipc_channel->accept_from(rank);
+    bool ret = ipc_channel_->accept_from(rank);
     if (ret) {
       std::cout << "[INFO] Communicator " << global_rank_
                 << " IPC accept_from succeeded from rank " << rank << std::endl;
     } else {
       std::cerr << "[ERROR] Communicator " << global_rank_
                 << " IPC accept_from failed from rank " << rank << std::endl;
+      shm_control_->close_peer(rank);
     }
     if (!ret) return false;
-    cache_peer_session(rank, PeerTransportKind::Ipc, ipc_channel, true, true);
+    cache_peer_session(rank, PeerTransportKind::Ipc, true, true);
     return true;
   }
   return false;
@@ -248,17 +282,16 @@ bool Communicator::accept_from(int rank) {
 std::shared_ptr<IpcChannel> Communicator::get_ipc_channel_by_rank(int rank) {
   std::lock_guard<std::mutex> lock(peer_mu_);
   if (rank < 0 || rank >= world_size_) return nullptr;
-  return peers_[rank].ipc_channel;
+  if (peers_[rank].kind != PeerTransportKind::Ipc) return nullptr;
+  return ipc_channel_;
 }
 
 void Communicator::cache_peer_session(int rank, PeerTransportKind kind,
-                                      std::shared_ptr<IpcChannel> ipc_channel,
                                       bool mark_send_ready,
                                       bool mark_recv_ready) {
   std::lock_guard<std::mutex> lk(peer_mu_);
   auto& session = peers_[rank];
   session.kind = kind;
-  if (ipc_channel) session.ipc_channel = std::move(ipc_channel);
   session.send_ready = session.send_ready || mark_send_ready;
   session.recv_ready = session.recv_ready || mark_recv_ready;
 }
@@ -279,6 +312,10 @@ PeerTransportKind Communicator::get_peer_transport_kind(int rank) const {
     throw std::runtime_error("transport peer session is not established");
   }
   return peers_[rank].kind;
+}
+
+PeerTransportKind Communicator::peer_transport_kind(int rank) const {
+  return get_peer_transport_kind(rank);
 }
 
 void Communicator::register_existing_local_mrs_with_uccl() {

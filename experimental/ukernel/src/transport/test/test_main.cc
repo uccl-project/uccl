@@ -48,8 +48,8 @@ int main(int argc, char** argv) {
           get_int_arg(argc, argv, "--world-size", 4));
       return 0;
     }
-    if (argc > 1 && std::string(argv[1]) == "oob-uds") {
-      test_uds_oob();
+    if (argc > 1 && std::string(argv[1]) == "oob-shm") {
+      test_shm_oob();
       return 0;
     }
     if (argc > 1 && std::string(argv[1]) == "utils-host-id") {
@@ -63,13 +63,13 @@ int main(int argc, char** argv) {
 
   std::cerr << "Usage:\n"
             << "  test_transport_main core\n"
-            << "  test_transport_main communicator --role=server|client --case=basic|batch|poll-release|notifier [--exchanger-ip IP] [--exchanger-port PORT]\n"
+            << "  test_transport_main communicator --role=server|client --case=basic|batch|poll-release|notifier [--exchanger-ip IP] [--exchanger-port PORT] [--transport auto|ipc|uccl]\n"
             << "  test_transport_main communicator-local\n"
             << "  test_transport_main oob-socket\n"
             << "  test_transport_main oob-socket-meta [--world-size N]\n"
             << "  test_transport_main oob-redis\n"
             << "  test_transport_main oob-redis-meta [--world-size N]\n"
-            << "  test_transport_main oob-uds\n"
+            << "  test_transport_main oob-shm\n"
             << "  test_transport_main utils-host-id\n";
   return 1;
 }

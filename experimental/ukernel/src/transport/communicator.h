@@ -38,6 +38,7 @@ class Communicator {
   bool wait_finish(std::vector<unsigned> const& reqs);
   int rank() const { return global_rank_; }
   int world_size() const { return world_size_; }
+  PeerTransportKind peer_transport_kind(int rank) const;
 
   std::shared_ptr<void> register_completion_notifier(
       std::function<void(unsigned, std::chrono::steady_clock::time_point)> cb);
@@ -60,7 +61,6 @@ class Communicator {
     bool has_meta = false;
     CommunicatorMeta meta{};
     PeerTransportKind kind = PeerTransportKind::Ipc;
-    std::shared_ptr<IpcChannel> ipc_channel;
     bool send_ready = false;
     bool recv_ready = false;
   };
@@ -78,9 +78,8 @@ class Communicator {
   bool try_get_peer_meta(int rank, CommunicatorMeta& out) const;
   bool check_ready() const;
   std::shared_ptr<IpcChannel> get_ipc_channel_by_rank(int rank);
-  void cache_peer_session(int rank, PeerTransportKind kind,
-                          std::shared_ptr<IpcChannel> ipc_channel,
-                          bool mark_send_ready, bool mark_recv_ready);
+  void cache_peer_session(int rank, PeerTransportKind kind, bool mark_send_ready,
+                          bool mark_recv_ready);
   bool has_peer_send_path(int rank) const;
   bool has_peer_recv_path(int rank) const;
   PeerTransportKind get_peer_transport_kind(int rank) const;
@@ -95,8 +94,9 @@ class Communicator {
   int world_size_;
   MemoryRegistry memory_registry_;
   std::unique_ptr<UcclTransportEngine> uccl_engine_;
+  std::shared_ptr<IpcChannel> ipc_channel_;
 
-  std::shared_ptr<UdsExchanger> uds_;
+  std::shared_ptr<ShmRingExchanger> shm_control_;
 
   std::shared_ptr<CommunicatorConfig> config_;
   std::shared_ptr<Exchanger> exchanger_client_;

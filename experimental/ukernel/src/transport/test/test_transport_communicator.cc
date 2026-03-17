@@ -189,18 +189,24 @@ void complete_requests(std::shared_ptr<Communicator> const& comm,
 
 std::shared_ptr<Communicator> make_communicator(int gpu, int rank, int world_size,
                                                 std::string const& exchanger_ip,
-                                                int exchanger_port) {
+                                                int exchanger_port,
+                                                UKernel::Transport::PreferredTransport preferred_transport) {
   auto cfg = std::make_shared<CommunicatorConfig>();
   cfg->exchanger_ip = exchanger_ip;
   cfg->exchanger_port = exchanger_port;
+  cfg->local_id = rank;
+  cfg->preferred_transport = preferred_transport;
   return std::make_shared<Communicator>(gpu, rank, world_size, cfg);
 }
 
 int run_sender(Scenario const& scenario, std::string const& exchanger_ip,
-               int exchanger_port) {
+               int exchanger_port,
+               UKernel::Transport::PreferredTransport preferred_transport) {
   auto comm = make_communicator(kClientGpu, kClientRank, kWorldSize,
-                                exchanger_ip, exchanger_port);
+                                exchanger_ip, exchanger_port,
+                                preferred_transport);
   require(comm->connect_to(kServerRank), "client connect_to failed");
+  auto transport_kind = comm->peer_transport_kind(kServerRank);
 
   NotifierQueue queue;
   std::shared_ptr<void> notifier_guard;
@@ -220,11 +226,13 @@ int run_sender(Scenario const& scenario, std::string const& exchanger_ip,
   GPU_RT_CHECK(gpuMemset(sendbuf_d, 0, buffer_bytes_for(scenario.message_count)));
 
   MR local_mr = comm->reg_mr(sendbuf_d, buffer_bytes_for(scenario.message_count));
-  require(comm->notify_mr(kServerRank, local_mr), "client notify_mr failed");
 
   MR remote_mr{};
-  require(comm->wait_mr_notify(kServerRank, remote_mr),
-          "client wait_mr_notify failed");
+  if (transport_kind == UKernel::Transport::PeerTransportKind::Uccl) {
+    require(comm->notify_mr(kServerRank, local_mr), "client notify_mr failed");
+    require(comm->wait_mr_notify(kServerRank, remote_mr),
+            "client wait_mr_notify failed");
+  }
 
   std::vector<unsigned> requests;
   requests.reserve(scenario.message_count);
@@ -252,10 +260,13 @@ int run_sender(Scenario const& scenario, std::string const& exchanger_ip,
 }
 
 int run_receiver(Scenario const& scenario, std::string const& exchanger_ip,
-                 int exchanger_port) {
+                 int exchanger_port,
+                 UKernel::Transport::PreferredTransport preferred_transport) {
   auto comm = make_communicator(kServerGpu, kServerRank, kWorldSize,
-                                exchanger_ip, exchanger_port);
+                                exchanger_ip, exchanger_port,
+                                preferred_transport);
   require(comm->accept_from(kClientRank), "server accept_from failed");
+  auto transport_kind = comm->peer_transport_kind(kClientRank);
 
   NotifierQueue queue;
   std::shared_ptr<void> notifier_guard;
@@ -275,11 +286,13 @@ int run_receiver(Scenario const& scenario, std::string const& exchanger_ip,
   GPU_RT_CHECK(gpuMemset(recvbuf_d, 0, buffer_bytes_for(scenario.message_count)));
 
   MR local_mr = comm->reg_mr(recvbuf_d, buffer_bytes_for(scenario.message_count));
-  require(comm->notify_mr(kClientRank, local_mr), "server notify_mr failed");
 
   MR remote_mr{};
-  require(comm->wait_mr_notify(kClientRank, remote_mr),
-          "server wait_mr_notify failed");
+  if (transport_kind == UKernel::Transport::PeerTransportKind::Uccl) {
+    require(comm->notify_mr(kClientRank, local_mr), "server notify_mr failed");
+    require(comm->wait_mr_notify(kClientRank, remote_mr),
+            "server wait_mr_notify failed");
+  }
 
   std::vector<unsigned> requests;
   requests.reserve(scenario.message_count);
@@ -320,7 +333,8 @@ int unique_local_port() {
 void test_transport_communicator_local() {
   auto comm = make_communicator(/*gpu=*/0, /*rank=*/0, /*world_size=*/1,
                                 /*exchanger_ip=*/"0.0.0.0",
-                                /*exchanger_port=*/unique_local_port());
+                                /*exchanger_port=*/unique_local_port(),
+                                UKernel::Transport::PreferredTransport::Auto);
 
   GPU_RT_CHECK(gpuSetDevice(0));
   void* buf = nullptr;
@@ -346,6 +360,7 @@ int test_transport_communicator(int argc, char** argv) {
   std::string test_case = get_arg(argc, argv, "--case", "basic");
   std::string exchanger_ip = get_arg(argc, argv, "--exchanger-ip", "");
   int exchanger_port = get_int_arg(argc, argv, "--exchanger-port", 6979);
+  std::string transport = get_arg(argc, argv, "--transport", "auto");
 
   if (role.empty()) role = get_arg(argc, argv, "-r", "");
   if (role.empty()) {
@@ -359,11 +374,22 @@ int test_transport_communicator(int argc, char** argv) {
   }
 
   try {
+    UKernel::Transport::PreferredTransport preferred_transport =
+        UKernel::Transport::PreferredTransport::Auto;
+    if (transport == "ipc") {
+      preferred_transport = UKernel::Transport::PreferredTransport::Ipc;
+    } else if (transport == "uccl") {
+      preferred_transport = UKernel::Transport::PreferredTransport::Uccl;
+    } else if (transport != "auto") {
+      throw std::invalid_argument("unknown transport override: " + transport);
+    }
     if (role == "server") {
-      return run_receiver(scenario, exchanger_ip, exchanger_port);
+      return run_receiver(scenario, exchanger_ip, exchanger_port,
+                          preferred_transport);
     }
     if (role == "client") {
-      return run_sender(scenario, exchanger_ip, exchanger_port);
+      return run_sender(scenario, exchanger_ip, exchanger_port,
+                        preferred_transport);
     }
   } catch (std::exception const& e) {
     std::cerr << "[transport communicator][" << role << "][" << scenario.name
@@ -373,6 +399,7 @@ int test_transport_communicator(int argc, char** argv) {
 
   std::cerr << "Usage:\n"
             << "  --role=server|client --case=basic|batch|poll-release|notifier"
-            << " [--exchanger-ip IP] [--exchanger-port PORT]\n";
+            << " [--exchanger-ip IP] [--exchanger-port PORT]"
+            << " [--transport auto|ipc|uccl]\n";
   return 1;
 }

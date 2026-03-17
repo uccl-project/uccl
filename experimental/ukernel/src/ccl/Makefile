@@ -27,7 +27,7 @@ LIBS := -L$(CUDA_HOME)/lib -lcudart -lcuda -lnuma \
 RPATH = -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR)
 
 CCL_SRC := topology.cc plan.cc selector.cc executor.cc device_backend.cc transport_backend.cc
-TRANSPORT_SRC := communicator.cc ipc_channel.cc memory_registry.cc oob_redis.cc oob_socket.cc oob_uds.cc request.cc transport_engine.cc uccl_transport_adapter.cc utils.cc
+TRANSPORT_SRC := communicator.cc ipc_channel.cc memory_registry.cc oob_redis.cc oob_shm.cc oob_socket.cc request.cc transport_engine.cc uccl_transport_adapter.cc utils.cc
 DEVICE_CPP_SRC := c2d_fifo.cc d2c_fifo.cpp sm_fifo.cc pk_selector.cc
 DEVICE_CU_SRC := persistent_kernel_ops.cu
 

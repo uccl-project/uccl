@@ -6,7 +6,7 @@ sudo apt-get update
 sudo apt-get install -y libelf-dev
 ```
 
-## transport/runtime develpment:
+## transport/runtime development
 on AMD
 ```
 cd experimental/ukernel
@@ -56,7 +56,7 @@ CUDA_VISIBLE_DEVICES=5 ./test_transport_main communicator --role=client --case=n
 
 ./test_transport_main oob-socket
 ./test_transport_main oob-socket-meta --world-size 4
-./test_transport_main oob-uds
+./test_transport_main oob-shm
 
 # when built with USE_REDIS_OOB=1
 ./test_transport_main oob-redis
@@ -73,7 +73,7 @@ CUDA_VISIBLE_DEVICES=5 python py/test_p2p.py
 `UHM_HOST_ID_OVERRIDE` can be used to give a process a synthetic host identity during transport testing. The optional same-node UCCL suite uses it automatically.
 
 
-## device develpment
+## device development
 on Nvidia
 ```
 cd experimental/ukernel/src/device
@@ -123,7 +123,7 @@ cd experimental/ukernel/src/ccl
 UHM_EXCHANGER_SERVER_IP=127.0.0.1 ./test_ccl_main ccl-rdma-ag --role=client
 ```
 
-## Transport Benchmark
+## Transport benchmark
 
 Build the transport benchmark:
 ```bash
@@ -140,19 +140,46 @@ make bench
 
 ### Usage
 
-The benchmark requires two processes (sender and receiver) running simultaneously. Lower rank acts as sender, higher rank acts as receiver.
+The benchmark requires two processes running at the same time. Lower rank acts
+as sender, higher rank acts as receiver.
 
-The transport runtime now has two runtime paths:
-- cross-host traffic uses UCCL
-- same-host cross-rank traffic uses IPC automatically
+Transport selection is per peer link:
+- `auto`: same-host cross-rank traffic uses IPC, cross-host traffic uses UCCL
+- `ipc`: force the peer link onto the IPC path
+- `uccl`: force the peer link onto the UCCL path
 
-**Using the default transport runtime:**
+The bootstrap metadata exchange still uses the configured socket/redis
+exchanger. Same-host IPC data transfer itself uses the transport module's
+shared-memory ring control path plus CUDA IPC handles.
+
+IPC control rings are keyed by local peer ids, not by the bootstrap port.
+`CommunicatorConfig.local_id` is the explicit knob for this. If it is not set,
+the runtime tries launcher-local-rank environment variables first
+(`UHM_LOCAL_ID`, `OMPI_COMM_WORLD_LOCAL_RANK`, `MPI_LOCALRANKID`,
+`SLURM_LOCALID`, `LOCAL_RANK`) and finally falls back to global rank.
+
+**Using the default transport runtime (`auto`):**
 ```bash
 # Terminal 1 (Receiver - 先启动)
 ./bench_transport --rank 1 --peer-rank 0 --gpu-id 0 --msg-size 1048576 --iterations 1000 --ip 192.168.2.243 --port 6979
 # Terminal 2 (Sender - 后启动)
 ./bench_transport --rank 0 --peer-rank 1 --gpu-id 0 --msg-size 1048576 --iterations 1000 --ip 192.168.2.243 --port 6979
 ```
+
+**Force IPC on the peer link:**
+```bash
+./bench_transport --rank 1 --peer-rank 0 --gpu-id 0 --msg-size 1048576 --iterations 1000 --ip 192.168.2.243 --port 6979 --transport ipc
+./bench_transport --rank 0 --peer-rank 1 --gpu-id 0 --msg-size 1048576 --iterations 1000 --ip 192.168.2.243 --port 6979 --transport ipc
+```
+
+**Force UCCL on the peer link:**
+```bash
+./bench_transport --rank 1 --peer-rank 0 --gpu-id 0 --msg-size 1048576 --iterations 1000 --ip 192.168.2.243 --port 6979 --transport uccl
+./bench_transport --rank 0 --peer-rank 1 --gpu-id 0 --msg-size 1048576 --iterations 1000 --ip 192.168.2.243 --port 6979 --transport uccl
+```
+
+When running multiple benchmark pairs on the same host at the same time, use a
+different `--port` for each pair so the bootstrap exchanger does not collide.
 
 ### Parameters
 
@@ -166,6 +193,10 @@ The transport runtime now has two runtime paths:
 | `--warmup` | Number of warmup iterations | 100 |
 | `--ip` | Local IP address | 127.0.0.1 |
 | `--port` | Listen port | 6979 |
+| `--transport` | Peer-link transport override: `auto`, `ipc`, `uccl` | `auto` |
+
+`--transport ipc` is only valid for same-host peers. If the peer resolves to a
+different host, the runtime will fail fast instead of silently forcing IPC.
 
 ### Output Metrics
 
@@ -182,6 +213,14 @@ The benchmark reports three test results:
 3. **Bidirectional Throughput Test**
    - Measures simultaneous send/receive bandwidth
    - Reports: Total data (GB), Time (sec), Throughput (GB/s, Gbps)
+
+The benchmark also validates payload contents after each phase. It is not only
+checking that requests complete; it verifies that received slot buffers contain
+the expected byte pattern.
+
+The in-flight throughput window is transport-specific. IPC uses a larger
+window, while the benchmark keeps the UCCL path more conservative to stay below
+the backend queue limit in bidirectional runs.
 
 ### Examples
 

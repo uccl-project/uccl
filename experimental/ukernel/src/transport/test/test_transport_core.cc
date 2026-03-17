@@ -143,23 +143,36 @@ void test_peer_transport_kind() {
   require(UKernel::Transport::resolve_peer_transport_kind(cfg, local, remote) ==
               PeerTransportKind::Uccl,
           "different host_id should resolve to UCCL");
+
+  cfg.preferred_transport = UKernel::Transport::PreferredTransport::Ipc;
+  require(throws([&] {
+            (void)UKernel::Transport::resolve_peer_transport_kind(cfg, local,
+                                                                  remote);
+          }),
+          "preferred IPC transport should reject cross-host peers");
+
+  cfg.preferred_transport = UKernel::Transport::PreferredTransport::Uccl;
+  require(UKernel::Transport::resolve_peer_transport_kind(cfg, local, same) ==
+              PeerTransportKind::Uccl,
+          "preferred UCCL transport should override topology");
 }
 
-void test_uds_ack_filtering() {
-  using UdsExchanger = UKernel::Transport::UdsExchanger;
+void test_shm_ack_filtering() {
+  using ShmRingExchanger = UKernel::Transport::ShmRingExchanger;
 
   std::exception_ptr rank0_error;
   std::exception_ptr rank1_error;
 
   std::thread rank0([&] {
     try {
-      UdsExchanger uds0(/*self_rank=*/0);
-      require(uds0.accept_from(/*peer_rank=*/1, /*timeout_ms=*/5000),
+      ShmRingExchanger shm0(/*self_rank=*/0, /*world_size=*/2,
+                            "core-shm-ack-filter");
+      require(shm0.accept_from(/*peer_rank=*/1, /*timeout_ms=*/5000),
               "rank0 accept_from failed");
 
       uint32_t status = 0;
       uint64_t seq = 0;
-      require(uds0.recv_ack(/*peer_rank=*/1, &status, &seq, /*timeout_ms=*/5000,
+      require(shm0.recv_ack(/*peer_rank=*/1, &status, &seq, /*timeout_ms=*/5000,
                             /*expected_seq=*/99),
               "recv_ack with expected sequence failed");
       require(seq == 99 && status == 1,
@@ -172,13 +185,86 @@ void test_uds_ack_filtering() {
   std::thread rank1([&] {
     try {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      UdsExchanger uds1(/*self_rank=*/1);
-      require(uds1.connect_to(/*peer_rank=*/0, /*timeout_ms=*/5000),
+      ShmRingExchanger shm1(/*self_rank=*/1, /*world_size=*/2,
+                            "core-shm-ack-filter");
+      require(shm1.connect_to(/*peer_rank=*/0, /*timeout_ms=*/5000),
               "rank1 connect_to failed");
-      require(uds1.send_ack(/*peer_rank=*/0, /*seq=*/7, /*status=*/5),
+      require(shm1.send_ack(/*peer_rank=*/0, /*seq=*/7, /*status=*/5),
               "failed to send first ack");
-      require(uds1.send_ack(/*peer_rank=*/0, /*seq=*/99, /*status=*/1),
+      require(shm1.send_ack(/*peer_rank=*/0, /*seq=*/99, /*status=*/1),
               "failed to send second ack");
+    } catch (...) {
+      rank1_error = std::current_exception();
+    }
+  });
+
+  rank0.join();
+  rank1.join();
+  if (rank0_error) std::rethrow_exception(rank0_error);
+  if (rank1_error) std::rethrow_exception(rank1_error);
+}
+
+void test_shm_dual_waiters() {
+  using ShmRingExchanger = UKernel::Transport::ShmRingExchanger;
+  using IpcCacheWire = UKernel::Transport::IpcCacheWire;
+
+  std::exception_ptr rank0_error;
+  std::exception_ptr rank1_error;
+
+  std::thread rank0([&] {
+    try {
+      ShmRingExchanger shm0(/*self_rank=*/0, /*world_size=*/2,
+                            "core-shm-dual");
+      require(shm0.accept_from(/*peer_rank=*/1, /*timeout_ms=*/5000),
+              "rank0 accept_from failed");
+
+      IpcCacheWire got{};
+      uint64_t got_seq = 0;
+      uint32_t ack_status = 0;
+      uint64_t ack_seq = 0;
+
+      std::thread wait_ipc([&] {
+        require(shm0.recv_ipc_cache(/*peer_rank=*/1, got, &got_seq,
+                                    /*timeout_ms=*/5000, /*expected_seq=*/11),
+                "recv_ipc_cache failed");
+      });
+      std::thread wait_ack([&] {
+        require(shm0.recv_ack(/*peer_rank=*/1, &ack_status, &ack_seq,
+                              /*timeout_ms=*/5000, /*expected_seq=*/22),
+                "recv_ack failed");
+      });
+
+      wait_ipc.join();
+      wait_ack.join();
+
+      require(got_seq == 11, "ipc cache sequence mismatch");
+      require(got.size == 2048 && got.offset == 64,
+              "ipc cache payload mismatch");
+      require(ack_seq == 22 && ack_status == 3, "ack payload mismatch");
+    } catch (...) {
+      rank0_error = std::current_exception();
+    }
+  });
+
+  std::thread rank1([&] {
+    try {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      ShmRingExchanger shm1(/*self_rank=*/1, /*world_size=*/2,
+                            "core-shm-dual");
+      require(shm1.connect_to(/*peer_rank=*/0, /*timeout_ms=*/5000),
+              "rank1 connect_to failed");
+
+      IpcCacheWire wire{};
+      std::memset(&wire.handle, 0, sizeof(wire.handle));
+      wire.is_send = 0;
+      wire.offset = 64;
+      wire.size = 2048;
+      wire.remote_gpu_idx_ = 0;
+
+      require(shm1.send_ipc_cache(/*peer_rank=*/0, /*seq=*/11, wire),
+              "send_ipc_cache failed");
+      require(shm1.send_ack(/*peer_rank=*/0, /*seq=*/22, /*status=*/3),
+              "send_ack failed");
     } catch (...) {
       rank1_error = std::current_exception();
     }
@@ -196,5 +282,6 @@ void test_transport_core() {
   test_memory_registry();
   test_request_completion();
   test_peer_transport_kind();
-  test_uds_ack_filtering();
+  test_shm_ack_filtering();
+  test_shm_dual_waiters();
 }

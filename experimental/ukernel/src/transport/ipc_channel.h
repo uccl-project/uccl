@@ -21,6 +21,7 @@ class Communicator;
 
 static constexpr size_t kTaskRingSize = 1024;
 static constexpr size_t kIpcSizePerEngine = 1ul << 20;
+static constexpr int kIpcControlTimeoutMs = 50000;
 
 class IpcChannel {
  public:
@@ -38,19 +39,24 @@ class IpcChannel {
   struct IpcTask {
     IpcTaskType type;
     int peer_rank;
-    std::shared_ptr<Request> req;
+    Request* req = nullptr;
   };
 
-  bool send_(int to_rank, std::shared_ptr<Request> creq);
-  bool recv_(int from_rank, std::shared_ptr<Request> creq);
-  void proxy_thread_func();
+  bool send_one(int to_rank, Request* creq);
+  bool recv_one(int from_rank, Request* creq);
+  void send_thread_func();
+  void recv_thread_func();
+  void complete_task(Request* req, bool ok);
 
-  jring_t* task_ring_;
+  jring_t* send_task_ring_;
+  jring_t* recv_task_ring_;
   std::atomic<bool> stop_{false};
-  std::thread proxy_thread_;
+  std::thread send_thread_;
+  std::thread recv_thread_;
   std::mutex cv_mu_;
   std::condition_variable cv_;
-  std::atomic<int> pending_{0};
+  std::atomic<int> pending_send_{0};
+  std::atomic<int> pending_recv_{0};
   std::vector<gpuStream_t> ipc_streams_;
 
   Communicator* comm_;

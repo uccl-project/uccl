@@ -11,6 +11,8 @@ namespace Transport {
 
 enum class PeerTransportKind { Uccl, Ipc };
 
+char const* peer_transport_kind_name(PeerTransportKind kind);
+
 PeerTransportKind resolve_peer_transport_kind(
     CommunicatorConfig const& config, CommunicatorMeta const& local_meta,
     CommunicatorMeta const& peer_meta);

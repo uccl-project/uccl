@@ -25,8 +25,8 @@ endif
 
 LOCAL_INCLUDES := -I$(UCCL_ROOT)/experimental/ukernel/include -I$(UCCL_ROOT)/include -I. -Itest -I../../include -I$(CUDA_HOME)/include
 
-SRC_CPP := communicator.cc ipc_channel.cc memory_registry.cc oob_redis.cc oob_socket.cc oob_uds.cc request.cc transport_engine.cc uccl_transport_adapter.cc utils.cc
-TEST_CPP := test/test_main.cc test/test_transport_core.cc test/test_transport_communicator.cc test/test_transport_oob_socket.cc test/test_transport_oob_redis.cc test/test_transport_oob_uds.cc test/test_transport_utils.cc
+SRC_CPP := communicator.cc ipc_channel.cc memory_registry.cc oob_redis.cc oob_shm.cc oob_socket.cc request.cc transport_engine.cc uccl_transport_adapter.cc utils.cc
+TEST_CPP := test/test_main.cc test/test_transport_core.cc test/test_transport_communicator.cc test/test_transport_oob_socket.cc test/test_transport_oob_redis.cc test/test_transport_oob_shm.cc test/test_transport_utils.cc
 
 OBJ_CPP := $(SRC_CPP:.cc=.o)
 OBJ_TEST := $(TEST_CPP:.cc=.o)
