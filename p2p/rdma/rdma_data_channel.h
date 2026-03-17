@@ -1,20 +1,20 @@
 #pragma once
 #include "define.h"
-#include "rdma_channel_impl.h"
 #include "rdma_context.h"
+#include "rdma_data_channel_impl.h"
 #include "seq_num.h"
 #include "util/debug.h"
 #include "util/util.h"
 
 #ifdef UCCL_P2P_USE_EFA
-#include "providers/efa/rdma_channel_impl_efa.h"
+#include "providers/efa/rdma_data_channel_impl_efa.h"
 #else
-#include "providers/ib/rdma_channel_impl_ib.h"
+#include "providers/ib/rdma_data_channel_impl_ib.h"
 #endif
 
-// Factory function implementation (inline, defined after including impl
+// Factory function implementation (inline, defined after including provider
 // headers)
-inline std::unique_ptr<RDMAChannelImpl> createRDMAChannelImpl() {
+inline std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl() {
 #ifdef UCCL_P2P_USE_EFA
   return std::make_unique<EFAChannelImpl>();
 #else
@@ -22,10 +22,10 @@ inline std::unique_ptr<RDMAChannelImpl> createRDMAChannelImpl() {
 #endif
 }
 
-class RDMAChannel {
+class RDMADataChannel {
  public:
-  explicit RDMAChannel(std::shared_ptr<RdmaContext> ctx,
-                       uint32_t channel_id = 0)
+  explicit RDMADataChannel(std::shared_ptr<RdmaContext> ctx,
+                           uint32_t channel_id = 0)
       : ctx_(ctx),
         qp_(nullptr),
         cq_ex_(nullptr),
@@ -33,13 +33,13 @@ class RDMAChannel {
         channel_id_(channel_id),
         local_meta_(std::make_shared<ChannelMetaData>()),
         remote_meta_(std::make_shared<ChannelMetaData>()),
-        impl_(createRDMAChannelImpl()) {
+        impl_(createRDMADataChannelImpl()) {
     initQP();
   }
 
-  explicit RDMAChannel(std::shared_ptr<RdmaContext> ctx,
-                       ChannelMetaData const& remote_meta,
-                       uint32_t channel_id = 0)
+  explicit RDMADataChannel(std::shared_ptr<RdmaContext> ctx,
+                           ChannelMetaData const& remote_meta,
+                           uint32_t channel_id = 0)
       : ctx_(ctx),
         qp_(nullptr),
         cq_ex_(nullptr),
@@ -47,15 +47,15 @@ class RDMAChannel {
         channel_id_(channel_id),
         local_meta_(std::make_shared<ChannelMetaData>()),
         remote_meta_(std::make_shared<ChannelMetaData>(remote_meta)),
-        impl_(createRDMAChannelImpl()) {
+        impl_(createRDMADataChannelImpl()) {
     initQP();
     establishChannel(remote_meta);
   }
 
-  RDMAChannel(RDMAChannel const&) = delete;
-  RDMAChannel& operator=(RDMAChannel const&) = delete;
+  RDMADataChannel(RDMADataChannel const&) = delete;
+  RDMADataChannel& operator=(RDMADataChannel const&) = delete;
 
-  ~RDMAChannel() {
+  ~RDMADataChannel() {
     if (qp_) ibv_destroy_qp(qp_);
     if (cq_ex_) ibv_destroy_cq(ibv_cq_ex_to_cq(cq_ex_));
   }
@@ -66,7 +66,8 @@ class RDMAChannel {
     ah_ = ctx_->createAH(remote_meta_->gid);
 #endif
     impl_->connectQP(qp_, ctx_, *remote_meta_);
-    UCCL_LOG_EP << "RDMAChannel connected to remote qpn=" << remote_meta.qpn;
+    UCCL_LOG_EP << "RDMADataChannel connected to remote qpn="
+                << remote_meta.qpn;
   }
 
   int64_t submitRequest(std::shared_ptr<RDMASendRequest> req) {
@@ -108,10 +109,10 @@ class RDMAChannel {
     return wr_id;
   }
 
-  bool poll_once(std::vector<CQMeta>& cq_datas) {
+  bool pollOnce(std::vector<CQMeta>& cq_datas) {
     uint32_t nb_post_recv = 0;
-    bool result = impl_->poll_once(cq_ex_, cq_datas, channel_id_, nb_post_recv);
-    impl_->lazy_post_recv_wrs_n(qp_, nb_post_recv, false);
+    bool result = impl_->pollOnce(cq_ex_, cq_datas, channel_id_, nb_post_recv);
+    impl_->lazyPostRecvWrsN(qp_, nb_post_recv, false);
     return result;
   }
 
@@ -144,7 +145,7 @@ class RDMAChannel {
   std::shared_ptr<ChannelMetaData> remote_meta_;
 
   std::shared_ptr<AtomicBitmapPacketTracker> tracker_;
-  std::unique_ptr<RDMAChannelImpl> impl_;
+  std::unique_ptr<RDMADataChannelImpl> impl_;
 
   struct ibv_cq_ex* getCQ() const {
     return cq_ex_;
@@ -172,7 +173,7 @@ class RDMAChannel {
     } else if (req->send_type == SendType::Read) {
       ibv_wr_rdma_read(qpx, req->getRemoteKey(), req->getRemoteAddress());
     } else {
-      UCCL_LOG(ERROR) << "Unknown SendType in RDMAChannel::postRequest";
+      UCCL_LOG(ERROR) << "Unknown SendType in RDMADataChannel::postRequest";
       return -1;
     }
 
@@ -246,7 +247,7 @@ class RDMAChannel {
       wr.wr.rdma.remote_addr = req->getRemoteAddress();
       wr.wr.rdma.rkey = req->getRemoteKey();
     } else {
-      UCCL_LOG(ERROR) << "Unknown SendType in RDMAChannel::postRequest";
+      UCCL_LOG(ERROR) << "Unknown SendType in RDMADataChannel::postRequest";
       return -1;
     }
 
