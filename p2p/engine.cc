@@ -1762,7 +1762,7 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
   return true;
 }
 
-bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void *> data_v,
+bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
                           std::vector<size_t> size_v,
                           std::vector<IpcTransferInfo> info_v,
                           size_t num_iovs) {
@@ -2015,7 +2015,7 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
 }
 
 bool Endpoint::writev_ipc_async(uint64_t conn_id,
-                                std::vector<void *> data_v,
+                                std::vector<void const*> data_v,
                                 std::vector<size_t> size_v,
                                 std::vector<IpcTransferInfo> info_v,
                                 size_t num_iovs, uint64_t* transfer_id) {
