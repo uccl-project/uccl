@@ -13,9 +13,12 @@ inline __device__ int min(int a, ssize_t b) { return (a < b) ? a : b; }
 
 // Device-side helpers and the base kernel used by the persistent collective
 // runtime. This stays in compute/ because it is an execution backend detail.
-__device__ void run_copy(CollArgs const& a);
+__device__ void run_copy(CollArgs const& a, DataType dtype,
+                         void* tma_scratch = nullptr,
+                         uint64_t* tma_barrier = nullptr);
 __device__ void run_copy_register(CollArgs const& a);
-__device__ void run_copy_tma(CollArgs const& a);
+__device__ void run_copy_tma(CollArgs const& a, DataType dtype,
+                             void* tma_scratch, uint64_t* tma_barrier);
 
 template <typename T>
 __device__ __forceinline__ T apply_red(ReduceType op, T a, T b);

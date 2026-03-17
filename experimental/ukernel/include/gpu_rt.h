@@ -75,6 +75,8 @@
 #define gpuDrvDevice_t CUdevice
 #define gpuDrvCtx_t CUcontext
 #define gpuDrvDeviceGet(pdev, ordinal) cuDeviceGet(pdev, ordinal)
+#define gpuDrvDeviceGetAttribute(pi, attrib, dev) \
+  cuDeviceGetAttribute(pi, attrib, dev)
 #define gpuDrvDevicePrimaryCtxRetain(pctx, dev) \
   cuDevicePrimaryCtxRetain(pctx, dev)
 #define gpuDrvCtxSetCurrent(ctx) cuCtxSetCurrent(ctx)
@@ -163,6 +165,11 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuDrvDevice_t hipDevice_t
 #define gpuDrvCtx_t hipCtx_t
 #define gpuDrvDeviceGet(pdev, ordinal) hipDeviceGet(pdev, ordinal)
+inline gpuDrvResult_t gpuDrvDeviceGetAttribute(int* value, int attrib,
+                                               gpuDrvDevice_t dev) {
+  return hipDeviceGetAttribute(value, static_cast<hipDeviceAttribute_t>(attrib),
+                               dev);
+}
 #define gpuDrvDevicePrimaryCtxRetain(pctx, dev) \
   hipDevicePrimaryCtxRetain(pctx, dev)
 #define gpuDrvCtxSetCurrent(ctx) hipCtxSetCurrent(ctx)

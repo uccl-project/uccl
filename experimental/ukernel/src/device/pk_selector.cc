@@ -28,7 +28,7 @@ TransferPath resolve_pk_transfer_path(TransferPath requested, uint64_t bytes,
         override_value == "registerop") {
       return TransferPath::RegisterOp;
     }
-    if (override_value == "tma" && caps.has_tma &&
+    if (override_value == "tma" && caps.can_use_tma &&
         bytes >= cfg.tma_threshold_bytes) {
       return TransferPath::TmaOp;
     }
@@ -36,11 +36,11 @@ TransferPath resolve_pk_transfer_path(TransferPath requested, uint64_t bytes,
 
   if (requested == TransferPath::RegisterOp) return TransferPath::RegisterOp;
   if (requested == TransferPath::TmaOp) {
-    return caps.has_tma ? TransferPath::TmaOp : TransferPath::RegisterOp;
+    return caps.can_use_tma ? TransferPath::TmaOp : TransferPath::RegisterOp;
   }
 
   if (!cfg.enable_auto_transport) return TransferPath::RegisterOp;
-  if (caps.has_tma && bytes >= cfg.tma_threshold_bytes) {
+  if (caps.can_use_tma && bytes >= cfg.tma_threshold_bytes) {
     return TransferPath::TmaOp;
   }
   return TransferPath::RegisterOp;

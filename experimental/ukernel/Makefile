@@ -9,16 +9,20 @@ CONDA_LIB_HOME ?= /usr/lib
 
 # GPU architecture - use sm_90a for TMA/wgmma support
 SM ?= 90a
+SM_NUM := $(shell printf '%s\n' "$(SM)" | sed 's/[^0-9].*//')
+ENABLE_TMA := $(shell if [ -n "$(SM_NUM)" ] && [ "$(SM_NUM)" -ge 90 ]; then echo 1; else echo 0; fi)
 
 # Base compilation flags
 CXXFLAGS   := -O0 -std=c++17 -Wall -Wno-unused-function -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -Wno-unused-but-set-variable -Wno-stringop-overread -Wno-narrowing -pthread -fPIC \
-              -I$(CONDA_LIB_HOME)/../include
+              -I$(CONDA_LIB_HOME)/../include \
+              -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 
 NVCCFLAGS  := -g -O0 -std=c++20 \
               --compiler-options "-fPIC -Wall -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -pthread -I$(CONDA_LIB_HOME)/../include" \
               --expt-extended-lambda \
               --expt-relaxed-constexpr \
               -DKITTENS_HOPPER \
+              -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA) \
               -arch=sm_$(SM) \
               -ccbin $(CXX)
 #             -I$(TK_ROOT)/include \
@@ -125,10 +129,10 @@ $(BENCH_BIN): $(BENCH_OBJ) $(STATIC_LIB) | ensure-uccl-rdma
 bench: $(BENCH_BIN)
 
 device_test:
-	$(MAKE) -C src/device test
+	$(MAKE) -C src/device test SM=$(SM)
 
 ccl_test:
-	$(MAKE) -C src/ccl/test test
+	$(MAKE) -C src/ccl/test test SM=$(SM)
 
 transport_test:
 	$(MAKE) -C src/transport test
@@ -137,7 +141,7 @@ transport_suite:
 	$(MAKE) -C src/transport suite
 
 device_bench:
-	$(MAKE) -C src/device bench
+	$(MAKE) -C src/device bench SM=$(SM)
 
 # Clean
 clean:

@@ -2,9 +2,11 @@
 
 #include "gpu_rt.h"
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
+#include <stdexcept>
 #include <vector>
 
 namespace UKernel {
@@ -101,13 +103,61 @@ static_assert(sizeof(Task) == 16);
 enum class ReduceType : uint64_t { Sum, Max, None };
 
 struct TransferCapabilities {
-  bool has_tma = UKERNEL_ENABLE_TMA != 0;
+  bool compiled_with_tma = false;
+  bool runtime_has_tma = false;
+  bool can_use_tma = false;
 };
 
 struct PkSelectorConfig {
   bool enable_auto_transport = true;
   uint64_t tma_threshold_bytes = 16 * 1024;
 };
+
+inline constexpr bool compiled_with_tma_support() {
+#if defined(__HIP_PLATFORM_AMD__)
+  return false;
+#else
+  return UKERNEL_ENABLE_TMA != 0;
+#endif
+}
+
+inline bool device_supports_tma(int device = -1) {
+  if (!compiled_with_tma_support()) return false;
+#if defined(__HIP_PLATFORM_AMD__)
+  (void)device;
+  return false;
+#else
+  int current_device = 0;
+  if (device < 0) {
+    if (gpuGetDevice(&current_device) != gpuSuccess) return false;
+    device = current_device;
+  }
+
+#ifdef CU_DEVICE_ATTRIBUTE_TENSOR_MAP_ACCESS_SUPPORTED
+  gpuDrvDevice_t drv_device{};
+  if (gpuDrvDeviceGet(&drv_device, device) == gpuDrvSuccess) {
+    int supported = 0;
+    if (gpuDrvDeviceGetAttribute(
+            &supported, CU_DEVICE_ATTRIBUTE_TENSOR_MAP_ACCESS_SUPPORTED,
+            drv_device) == gpuDrvSuccess) {
+      return supported != 0;
+    }
+  }
+#endif
+
+  gpuDeviceProp prop{};
+  if (gpuGetDeviceProperties(&prop, device) != gpuSuccess) return false;
+  return prop.major >= 9;
+#endif
+}
+
+inline TransferCapabilities query_transfer_capabilities(int device = -1) {
+  TransferCapabilities caps{};
+  caps.compiled_with_tma = compiled_with_tma_support();
+  caps.runtime_has_tma = device_supports_tma(device);
+  caps.can_use_tma = caps.compiled_with_tma && caps.runtime_has_tma;
+  return caps;
+}
 
 TransferPath resolve_pk_transfer_path(TransferPath requested, uint64_t bytes,
                                       TransferCapabilities const& caps,
@@ -129,15 +179,58 @@ inline __host__ __device__ TransferPath normalize_pk_transfer_path(
 #endif
 }
 
+inline size_t data_type_size(DataType dtype) {
+  switch (dtype) {
+    case DataType::Fp16:
+      return 2;
+    case DataType::Fp32:
+      return 4;
+    case DataType::Fp8:
+    default:
+      return 1;
+  }
+}
+
+inline bool supports_native_tma_copy(DataType dtype, uint64_t bytes,
+                                     void const* src = nullptr,
+                                     void const* dst = nullptr) {
+  if (!query_transfer_capabilities().can_use_tma) return false;
+  if (dtype != DataType::Fp16 && dtype != DataType::Fp32) return false;
+  size_t elem_bytes = data_type_size(dtype);
+  if (bytes == 0 || bytes % elem_bytes != 0) return false;
+  uint64_t elems = bytes / elem_bytes;
+  if (elems < 16 || (elems % 16) != 0) return false;
+  if (src != nullptr && (reinterpret_cast<uintptr_t>(src) & 0xF) != 0) {
+    return false;
+  }
+  if (dst != nullptr && (reinterpret_cast<uintptr_t>(dst) & 0xF) != 0) {
+    return false;
+  }
+  return true;
+}
+
+inline uint32_t select_tma_chunk_elements(DataType dtype, uint64_t bytes) {
+  if (!supports_native_tma_copy(dtype, bytes)) return 0;
+  uint64_t elems = bytes / data_type_size(dtype);
+  for (uint32_t candidate = static_cast<uint32_t>(elems > 256 ? 256 : elems);
+       candidate >= 16; candidate -= 16) {
+    if ((elems % candidate) == 0) return candidate;
+  }
+  return 16;
+}
+
 struct alignas(16) CollArgs {
   void* src;
   void* src2;
   void* dst;
+  void* src_tma_desc;
+  void* dst_tma_desc;
   uint64_t bytes;
   uint64_t op_id;
   uint32_t step_id;
   uint32_t chunk_id;
   uint32_t completion_cookie;
+  uint32_t tma_chunk_elements;
   int32_t src_rank;
   int32_t dst_rank;
   int32_t src_device;
@@ -184,6 +277,13 @@ class TaskManager {
 
     GPU_RT_CHECK(gpuMalloc(&d_coll_, sizeof(CollArgs) * cap_coll_));
     GPU_RT_CHECK(gpuMalloc(&d_gemm_, sizeof(GemmArgs) * cap_gemm_));
+#if !defined(__HIP_PLATFORM_AMD__)
+    if (compiled_with_tma_support()) {
+      tma_desc_stride_ = sizeof(CUtensorMap);
+      GPU_RT_CHECK(gpuMalloc(&d_tma_src_descs_, tma_desc_stride_ * cap_coll_));
+      GPU_RT_CHECK(gpuMalloc(&d_tma_dst_descs_, tma_desc_stride_ * cap_coll_));
+    }
+#endif
 
     free_coll_.clear();
     free_gemm_.clear();
@@ -223,8 +323,28 @@ class TaskManager {
     }
 
     CollArgs normalized = h;
+    normalized.src_tma_desc = nullptr;
+    normalized.dst_tma_desc = nullptr;
+    normalized.tma_chunk_elements = 0;
     normalized.resolved_path = resolve_pk_transfer_path(
-        h.requested_path, h.bytes, TransferCapabilities{}, PkSelectorConfig{});
+        h.requested_path, h.bytes, query_transfer_capabilities(),
+        PkSelectorConfig{});
+
+    if (normalized.resolved_path == TransferPath::TmaOp &&
+        tt != TaskType::CollCopy) {
+      normalized.resolved_path = TransferPath::RegisterOp;
+    } else if (normalized.resolved_path == TransferPath::TmaOp &&
+               tt == TaskType::CollCopy) {
+      if (!populate_coll_tma_descriptors_(idx, normalized, dt)) {
+        normalized.resolved_path = TransferPath::RegisterOp;
+        normalized.src_tma_desc = nullptr;
+        normalized.dst_tma_desc = nullptr;
+        normalized.tma_chunk_elements = 0;
+      }
+    } else {
+      normalized.resolved_path =
+          normalize_pk_transfer_path(normalized.resolved_path);
+    }
 
     GPU_RT_CHECK(gpuMemcpy(d_coll_ + idx, &normalized, sizeof(CollArgs),
                            gpuMemcpyHostToDevice));
@@ -277,12 +397,108 @@ class TaskManager {
  private:
   TaskManager() = default;
 
+  static CUtensorMapDataType to_cu_tma_dtype_(DataType dt) {
+#if defined(__HIP_PLATFORM_AMD__)
+    (void)dt;
+    throw std::runtime_error("TMA descriptors are unavailable on HIP");
+#else
+    switch (dt) {
+      case DataType::Fp16:
+        return CU_TENSOR_MAP_DATA_TYPE_FLOAT16;
+      case DataType::Fp32:
+        return CU_TENSOR_MAP_DATA_TYPE_FLOAT32;
+      case DataType::Fp8:
+      default:
+        throw std::runtime_error("unsupported dtype for TMA copy");
+    }
+#endif
+  }
+
+  static bool encode_vector_tma_descriptor_(void* device_slot, void const* ptr,
+                                            DataType dt, uint64_t bytes,
+                                            uint32_t chunk_elements) {
+#if defined(__HIP_PLATFORM_AMD__)
+    (void)device_slot;
+    (void)ptr;
+    (void)dt;
+    (void)bytes;
+    (void)chunk_elements;
+    return false;
+#else
+    if (device_slot == nullptr || ptr == nullptr || chunk_elements == 0) {
+      return false;
+    }
+
+    size_t elem_bytes = data_type_size(dt);
+    uint64_t elements = bytes / elem_bytes;
+    if (elements == 0) return false;
+
+    CUtensorMap desc{};
+    uint64_t gmem_shape[4] = {elements, 1, 1, 1};
+    uint64_t gmem_stride[3] = {elements * elem_bytes, elements * elem_bytes,
+                               elements * elem_bytes};
+    uint32_t smem_shape[4] = {chunk_elements, 1, 1, 1};
+    uint32_t smem_stride[4] = {1, 1, 1, 1};
+
+    CUresult result = cuTensorMapEncodeTiled(
+        &desc, to_cu_tma_dtype_(dt), 4, const_cast<void*>(ptr), gmem_shape,
+        gmem_stride, smem_shape, smem_stride, CU_TENSOR_MAP_INTERLEAVE_NONE,
+        CU_TENSOR_MAP_SWIZZLE_NONE, CU_TENSOR_MAP_L2_PROMOTION_NONE,
+        CU_TENSOR_MAP_FLOAT_OOB_FILL_NONE);
+    if (result != CUDA_SUCCESS) return false;
+
+    return gpuMemcpy(device_slot, &desc, sizeof(desc), gpuMemcpyHostToDevice) ==
+           gpuSuccess;
+#endif
+  }
+
+  bool populate_coll_tma_descriptors_(uint32_t idx, CollArgs& args, DataType dt) {
+#if defined(__HIP_PLATFORM_AMD__)
+    (void)idx;
+    (void)args;
+    (void)dt;
+    return false;
+#else
+    if (d_tma_src_descs_ == nullptr || d_tma_dst_descs_ == nullptr) return false;
+    if (!supports_native_tma_copy(dt, args.bytes, args.src, args.dst)) {
+      return false;
+    }
+    uint32_t chunk_elements = select_tma_chunk_elements(dt, args.bytes);
+    if (chunk_elements == 0) return false;
+
+    auto* src_slot = static_cast<char*>(d_tma_src_descs_) + idx * tma_desc_stride_;
+    auto* dst_slot = static_cast<char*>(d_tma_dst_descs_) + idx * tma_desc_stride_;
+    if (!encode_vector_tma_descriptor_(src_slot, args.src, dt, args.bytes,
+                                       chunk_elements)) {
+      return false;
+    }
+    if (!encode_vector_tma_descriptor_(dst_slot, args.dst, dt, args.bytes,
+                                       chunk_elements)) {
+      return false;
+    }
+
+    args.src_tma_desc = src_slot;
+    args.dst_tma_desc = dst_slot;
+    args.tma_chunk_elements = chunk_elements;
+    return true;
+#endif
+  }
+
   void release_nolock_() {
     if (d_coll_) gpuFree(d_coll_);
     if (d_gemm_) gpuFree(d_gemm_);
+#if !defined(__HIP_PLATFORM_AMD__)
+    if (d_tma_src_descs_) gpuFree(d_tma_src_descs_);
+    if (d_tma_dst_descs_) gpuFree(d_tma_dst_descs_);
+#endif
 
     d_coll_ = nullptr;
     d_gemm_ = nullptr;
+#if !defined(__HIP_PLATFORM_AMD__)
+    d_tma_src_descs_ = nullptr;
+    d_tma_dst_descs_ = nullptr;
+    tma_desc_stride_ = 0;
+#endif
 
     free_coll_.clear();
     free_gemm_.clear();
@@ -294,6 +510,11 @@ class TaskManager {
  private:
   CollArgs* d_coll_{nullptr};
   GemmArgs* d_gemm_{nullptr};
+#if !defined(__HIP_PLATFORM_AMD__)
+  void* d_tma_src_descs_{nullptr};
+  void* d_tma_dst_descs_{nullptr};
+  size_t tma_desc_stride_{0};
+#endif
 
   uint32_t cap_coll_{0};
   uint32_t cap_gemm_{0};

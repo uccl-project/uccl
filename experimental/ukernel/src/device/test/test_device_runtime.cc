@@ -77,10 +77,11 @@ int main() {
 
   UKernel::Device::TaskManager::instance().init(1024);
 
-  UKernel::Device::TransferCapabilities caps{};
+  auto caps = UKernel::Device::query_transfer_capabilities();
   UKernel::Device::PkSelectorConfig selector_cfg{};
+  uint64_t auto_select_bytes = 32768;
   auto auto_path = UKernel::Device::resolve_pk_transfer_path(
-      UKernel::Device::TransferPath::Auto, N * sizeof(float), caps,
+      UKernel::Device::TransferPath::Auto, auto_select_bytes, caps,
       selector_cfg);
   auto reg_path = UKernel::Device::resolve_pk_transfer_path(
       UKernel::Device::TransferPath::RegisterOp, N * sizeof(float), caps,
@@ -88,13 +89,18 @@ int main() {
   auto tma_path = UKernel::Device::resolve_pk_transfer_path(
       UKernel::Device::TransferPath::TmaOp, N * sizeof(float), caps,
       selector_cfg);
-  auto expected_auto_path = caps.has_tma ? UKernel::Device::TransferPath::TmaOp
-                                         : UKernel::Device::TransferPath::RegisterOp;
-  auto expected_tma_path = caps.has_tma ? UKernel::Device::TransferPath::TmaOp
-                                        : UKernel::Device::TransferPath::RegisterOp;
+  auto expected_auto_path =
+      caps.can_use_tma ? UKernel::Device::TransferPath::TmaOp
+                       : UKernel::Device::TransferPath::RegisterOp;
+  auto expected_tma_path =
+      caps.can_use_tma ? UKernel::Device::TransferPath::TmaOp
+                       : UKernel::Device::TransferPath::RegisterOp;
   if (auto_path != expected_auto_path ||
       reg_path != UKernel::Device::TransferPath::RegisterOp ||
-      tma_path != expected_tma_path) {
+      tma_path != expected_tma_path ||
+      (caps.can_use_tma &&
+       !UKernel::Device::supports_native_tma_copy(
+           UKernel::Device::DataType::Fp32, N * sizeof(float)))) {
     std::cerr << "Selector bootstrap FAILED\n";
     return 4;
   }

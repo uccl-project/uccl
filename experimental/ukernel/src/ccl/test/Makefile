@@ -1,7 +1,12 @@
 CXX      := g++
 NVCC     := nvcc
+SM       ?= 80
+SM_NUM   := $(shell printf '%s\n' "$(SM)" | sed 's/[^0-9].*//')
+ENABLE_TMA := $(shell if [ -n "$(SM_NUM)" ] && [ "$(SM_NUM)" -ge 90 ]; then echo 1; else echo 0; fi)
 CXXFLAGS := -std=c++17 -O3 -g -Wall
-NVCCFLAGS:= -O3 -g -G -Xcompiler -Wall -arch=sm_80
+NVCCFLAGS:= -O3 -g -G -Xcompiler -Wall -arch=sm_$(SM)
+CXXFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
+NVCCFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 
 UCCL_ROOT := $(abspath ../../../../../)
 CUDA_HOME ?= /usr/local/cuda
@@ -10,7 +15,7 @@ GDRCOPY_INCLUDEDIR = $(GDRCOPY_ROOT)/include
 GDRCOPY_LIBDIR = $(GDRCOPY_ROOT)/src
 GDRCOPY_HEADER = $(GDRCOPY_INCLUDEDIR)/gdrapi.h
 
-INCLUDES := -I./ -I../ -I../../device -I../../device/fifo -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR)
+INCLUDES := -I./ -I../ -I../../include -I../../device -I../../device/fifo -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR)
 LIBS := -L$(CUDA_HOME)/lib -lcudart -lcuda -lnuma \
         -L$(GDRCOPY_LIBDIR) -lgdrapi
 
