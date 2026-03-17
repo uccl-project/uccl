@@ -56,9 +56,9 @@ static inline int get_tc_from_env(int default_value) {
 }
 
 // Base class for RDMA channel implementations
-class RDMAChannelImpl {
+class RDMADataChannelImpl {
  public:
-  virtual ~RDMAChannelImpl() = default;
+  virtual ~RDMADataChannelImpl() = default;
 
   // Initialize QP and CQ
   virtual void initQP(std::shared_ptr<RdmaContext> ctx,
@@ -70,12 +70,11 @@ class RDMAChannelImpl {
                          ChannelMetaData const& remote_meta) = 0;
 
   // Poll completion queue
-  virtual bool poll_once(struct ibv_cq_ex* cq_ex, std::vector<CQMeta>& cq_datas,
-                         uint32_t channel_id, uint32_t& nb_post_recv) = 0;
+  virtual bool pollOnce(struct ibv_cq_ex* cq_ex, std::vector<CQMeta>& cq_datas,
+                        uint32_t channel_id, uint32_t& nb_post_recv) = 0;
 
   // Post receive work request
-  virtual void lazy_post_recv_wrs_n(struct ibv_qp* qp, uint32_t n,
-                                    bool force) = 0;
+  virtual void lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n, bool force) = 0;
 
   // Setup Destination address
   virtual void setDstAddress(struct ibv_qp_ex* qpx, struct ibv_ah* ah,
@@ -99,6 +98,6 @@ class EFAChannelImpl;
 class IBChannelImpl;
 #endif
 
-// Factory function declaration (implementation in rdma_channel.h after
-// including impl headers)
-std::unique_ptr<RDMAChannelImpl> createRDMAChannelImpl();
+// Factory function declaration (defined in rdma_data_channel.h after
+// including provider headers)
+std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl();
