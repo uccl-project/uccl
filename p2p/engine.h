@@ -262,14 +262,14 @@ class Endpoint {
  public:
   /* Create engine threads running in background for a single interface. It also
    * opens a TCP listening thread waiting for incoming connections. */
-  Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus);
+  explicit Endpoint(uint32_t const local_gpu_idx);
 
   /* Create endpoint without intializing the engine. Lazy creation of engine is
    * done during  memory registration. Additionally, open a unified P2P socket
    * for metadata exchanges. If passive_accept is true, the endpoint will not
    * call accept() but delegate it to a background thread.
    */
-  Endpoint(uint32_t const num_cpus);
+  Endpoint();
 
   ~Endpoint();
 
@@ -473,7 +473,6 @@ class Endpoint {
 
  private:
   int local_gpu_idx_;
-  uint32_t num_cpus_;
   int numa_node_;
   RDMAEndPoint ep_;
   bool engine_initialized_ = false;
