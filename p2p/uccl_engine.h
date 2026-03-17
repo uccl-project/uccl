@@ -248,6 +248,13 @@ int uccl_engine_update_fifo(FifoItem& fifo_item, uint64_t remote_addr,
                             uint32_t size);
 
 /**
+ * Check if a connection is to a peer on the same node (IPC-eligible).
+ * @param conn          Connection handle.
+ * @return              True if the connection is intra-node.
+ */
+bool uccl_engine_conn_is_local(uccl_conn_t* conn);
+
+/**
  * Stop the accept thread for the engine.
  * @param engine        The engine instance.
  */

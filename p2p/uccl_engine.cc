@@ -484,6 +484,10 @@ int uccl_engine_stop_listener(uccl_conn_t* conn) {
   return 0;
 }
 
+bool uccl_engine_conn_is_local(uccl_conn_t* conn) {
+  return conn && conn->is_local;
+}
+
 void uccl_engine_stop_accept(uccl_engine_t* engine) {
   if (engine && engine->endpoint) {
     engine->endpoint->stop_accepting();
