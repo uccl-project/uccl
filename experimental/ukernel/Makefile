@@ -33,6 +33,7 @@ LDFLAGS    := -L$(CONDA_LIB_HOME) \
               -lgflags -lz -libverbs -lnl-3 -lnl-route-3 -lpthread 
 
 GDRCOPY_ROOT := $(abspath ../../thirdparty/gdrcopy)
+GDRCOPY_LIBDIR := $(GDRCOPY_ROOT)/src
 
 # Local includes must come first to avoid conflicts with UCCL headers
 LOCAL_INCLUDES := -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -Isrc/ccl
@@ -62,33 +63,35 @@ CXXFLAGS += $(UCCL_CFLAGS)
 NVCCFLAGS += --compiler-options "$(UCCL_CFLAGS)"
 LDFLAGS += $(UCCL_LDFLAGS)
 
-# Source files - exclude benchmarks and most device directory pieces.
-# Keep CCL selector and device PK selector because they are shared helpers.
-SRC_CPP := $(shell find src -name '*.cc' | grep -v 'benchmarks' | grep -v 'src/device/' | grep -v 'src/transport/test/' | sort)
+# Source files - exclude module-local tests and device-only helper trees that
+# are built by their module Makefiles.
+SRC_CPP := $(shell find src -name '*.cc' | grep -v 'benchmarks' | grep -v 'src/device/' | grep -v 'src/transport/test/' | grep -v 'src/ccl/test/' | sort)
 SRC_CPP += src/device/pk_selector.cc
 SRC_CU  := $(shell find src -name '*.cu' | grep -v 'benchmarks')
-TEST_DIR := src/ccl/test
-SRC_TEST := $(TEST_DIR)/test_main.cc \
-            $(TEST_DIR)/test_ccl_plan.cc \
-            $(TEST_DIR)/test_ccl_executor.cc \
-            $(TEST_DIR)/test_ccl_rdma_allgather.cc
 
 OBJ_CC   := $(SRC_CPP:.cc=.o)
 OBJ_CU   := $(SRC_CU:.cu=.o)
-OBJ_TEST := $(SRC_TEST:.cc=.o)
 
 # Benchmark files
-BENCH_SRC := benchmarks/bench_transport.cc
-BENCH_OBJ := $(BENCH_SRC:.cc=.o)
-BENCH_BIN := bench_transport
+BENCH_TRANSPORT_SRC := benchmarks/bench_transport.cc
+BENCH_TRANSPORT_OBJ := $(BENCH_TRANSPORT_SRC:.cc=.o)
+BENCH_TRANSPORT_BIN := bench_transport
+BENCH_GDRCOPY_SRC := benchmarks/bench_gdrcopy.cc
+BENCH_GDRCOPY_OBJ := $(BENCH_GDRCOPY_SRC:.cc=.o)
+BENCH_GDRCOPY_BIN := benchmarks/bench_gdrcopy
+BENCH_GDRCOPY_CXXFLAGS := $(CXXFLAGS) -DENABLE_CUDA
+BENCH_GDRCOPY_INCLUDES := -I$(CUDA_PATH)/include -I/usr/include -I../../include -I$(GDRCOPY_ROOT)/include
+BENCH_GDRCOPY_LIBS := -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
+                      -L$(GDRCOPY_LIBDIR) -Wl,-rpath,$(GDRCOPY_LIBDIR) \
+                      -lcudart -lcuda -lgdrapi
+BENCH_BINS := $(BENCH_TRANSPORT_BIN) $(BENCH_GDRCOPY_BIN)
 
 # Targets
 STATIC_LIB  := libukernel.a
 SHARED_LIB  := libukernel.so
-TARGET_TEST := test_main
 
-# Build both static, shared, and test by default
-all: $(STATIC_LIB) $(SHARED_LIB) $(TARGET_TEST)
+# Build the core ukernel artifacts plus top-level benchmarks.
+all: $(STATIC_LIB) $(SHARED_LIB) bench
 
 # Compilation rules - local includes must come before system/UCCL includes to avoid header conflicts
 %.o: %.cc
@@ -103,36 +106,48 @@ ensure-uccl-rdma:
 		$(MAKE) -C "$(UCCL_RDMA_ROOT)" build; \
 	fi
 
+ensure-gdrcopy:
+	@if [ ! -f "$(GDRCOPY_ROOT)/include/gdrapi.h" ] || [ ! -f "$(GDRCOPY_ROOT)/Makefile" ]; then \
+		echo "[ukernel] initializing submodules for gdrcopy..."; \
+		git -C "$(UCCL_ROOT)" submodule update --init --recursive; \
+	fi
+	@if [ ! -f "$(GDRCOPY_ROOT)/include/gdrapi.h" ]; then \
+		echo "[ukernel] missing $(GDRCOPY_ROOT)/include/gdrapi.h after submodule init"; \
+		exit 1; \
+	fi
+	@if ! ls "$(GDRCOPY_LIBDIR)"/libgdrapi.so* >/dev/null 2>&1; then \
+		echo "[ukernel] building gdrcopy..."; \
+		$(MAKE) -C "$(GDRCOPY_ROOT)" all; \
+	fi
+
 # Static library
-$(STATIC_LIB): $(OBJ_CC)
+$(STATIC_LIB): $(OBJ_CC) $(OBJ_CU)
 	ar rcs $@ $^
 
 # Shared library
 $(SHARED_LIB): $(OBJ_CC) $(OBJ_CU) | ensure-uccl-rdma
 	$(CXX) -shared $(CXXFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
 
-# Test executable
-$(TARGET_TEST): $(OBJ_TEST) $(STATIC_LIB) | ensure-uccl-rdma
-	$(CXX) $(CXXFLAGS) $(INCLUDES) $(OBJ_TEST) $(STATIC_LIB) $(LDFLAGS) -o $@
-
-# Run tests
-run_test: $(TARGET_TEST)
-	./$(TARGET_TEST)
-
 # Benchmark build rules
-$(BENCH_OBJ): $(BENCH_SRC)
+$(BENCH_TRANSPORT_OBJ): $(BENCH_TRANSPORT_SRC)
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-$(BENCH_BIN): $(BENCH_OBJ) $(STATIC_LIB) | ensure-uccl-rdma
+$(BENCH_TRANSPORT_BIN): $(BENCH_TRANSPORT_OBJ) $(STATIC_LIB) | ensure-uccl-rdma
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) $< $(STATIC_LIB) $(LDFLAGS) -o $@
 
-bench: $(BENCH_BIN)
+$(BENCH_GDRCOPY_OBJ): $(BENCH_GDRCOPY_SRC)
+	$(CXX) $(BENCH_GDRCOPY_CXXFLAGS) $(BENCH_GDRCOPY_INCLUDES) -MMD -MP -c $< -o $@
+
+$(BENCH_GDRCOPY_BIN): $(BENCH_GDRCOPY_OBJ) | ensure-gdrcopy ensure-uccl-rdma
+	$(CXX) $< -o $@ $(BENCH_GDRCOPY_LIBS)
+
+bench: $(BENCH_BINS)
 
 device_test:
 	$(MAKE) -C src/device test SM=$(SM)
 
 ccl_test:
-	$(MAKE) -C src/ccl/test test SM=$(SM)
+	$(MAKE) -C src/ccl test SM=$(SM)
 
 transport_test:
 	$(MAKE) -C src/transport test
@@ -145,12 +160,15 @@ device_bench:
 
 # Clean
 clean:
-	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) $(BENCH_OBJ) \
-	      $(TARGET_TEST) $(STATIC_LIB) $(SHARED_LIB) $(BENCH_BIN) \
-	      *.d src/*.d src/ccl/test/*.d src/transport/*.d src/transport/test/*.d benchmarks/*.d
+	rm -f $(OBJ_CC) $(OBJ_CU) $(BENCH_TRANSPORT_OBJ) $(BENCH_GDRCOPY_OBJ) \
+	      $(STATIC_LIB) $(SHARED_LIB) $(BENCH_BINS) \
+	      *.d src/*.d src/ccl/*.d src/transport/*.d src/transport/test/*.d benchmarks/*.d
+	$(MAKE) -C src/ccl clean
+	$(MAKE) -C src/device clean
+	$(MAKE) -C src/transport clean
 
 # Include dependencies
--include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_TEST:.o=.d)
+-include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(BENCH_TRANSPORT_OBJ:.o=.d) $(BENCH_GDRCOPY_OBJ:.o=.d)
 
 # [TODO: Yihan] Build only TK GEMM operator if a dedicated binding returns later.
 # tk_gemm: src/device/persistent_kernel_ops.o
@@ -159,4 +177,4 @@ clean:
 # src/device/persistent_kernel_ops.o: src/device/persistent_kernel_ops.cu
 # 	$(NVCC) $(NVCCFLAGS) -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -MMD -MP -c $< -o $@
 
-.PHONY: all clean run_test bench device_test ccl_test transport_test transport_suite device_bench ensure-uccl-rdma
+.PHONY: all clean bench device_test ccl_test transport_test transport_suite device_bench ensure-uccl-rdma ensure-gdrcopy

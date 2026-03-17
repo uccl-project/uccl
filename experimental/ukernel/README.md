@@ -95,24 +95,32 @@ CUDA_VISIBLE_DEVICES=5 ./benchmarks/bench_device_full_fifo
 CUDA_VISIBLE_DEVICES=5 ./benchmarks/bench_device_sm_fifo 83
 ```
 
+## ccl development
+```
+cd experimental/ukernel/src/ccl
+make clean -f Makefile && make -j$(nproc) -f Makefile
+
+# or from the ukernel root
+cd experimental/ukernel
+make ccl_test
+```
+
 ## test ccl backends
 ```
-cd experimental/ukernel/src/ccl/test
-make clean -f Makefile && make -j$(nproc) -f Makefile
+cd experimental/ukernel/src/ccl
 CUDA_VISIBLE_DEVICES=5 ./test_ccl_persistent_backend
 CUDA_VISIBLE_DEVICES=5 ./test_ccl_copy_engine_backend
 ```
 
 ## test ccl planner and executor
 ```
-cd experimental/ukernel
-make clean -f Makefile && make -j$(nproc) -f Makefile
-./test_main ccl-plan
-./test_main ccl-exec
+cd experimental/ukernel/src/ccl
+./test_ccl_main ccl-plan
+./test_ccl_main ccl-exec
 
 # rdma allgather smoke test
-./test_main ccl-rdma-ag --role=server
-UHM_EXCHANGER_SERVER_IP=127.0.0.1 ./test_main ccl-rdma-ag --role=client
+./test_ccl_main ccl-rdma-ag --role=server
+UHM_EXCHANGER_SERVER_IP=127.0.0.1 ./test_ccl_main ccl-rdma-ag --role=client
 ```
 
 ## Transport Benchmark
@@ -120,7 +128,7 @@ UHM_EXCHANGER_SERVER_IP=127.0.0.1 ./test_main ccl-rdma-ag --role=client
 Build the transport benchmark:
 ```bash
 cd experimental/ukernel
-make -f Makefile bench
+make bench
 ```
 
 ### Environment Variables

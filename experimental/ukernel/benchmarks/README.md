@@ -2,12 +2,11 @@
 
 on AMD
 ```
-cd experimental/ukernel/benchmarks
-make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm
+The current benchmark set is CUDA/gdrcopy-oriented and does not have a ROCm build path yet.
 ```
 
 on Nvidia
 ```
-cd experimental/ukernel/benchmarks
-make clean -f Makefile && make -j$(nproc) -f Makefile
+cd experimental/ukernel
+make bench
 ```
