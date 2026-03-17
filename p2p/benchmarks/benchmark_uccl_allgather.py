@@ -283,9 +283,6 @@ def main():
         description="Benchmark UCCL Collective AllGather API"
     )
     parser.add_argument(
-        "--num-cpus", type=int, default=4, help="Number of CPU threads for RDMA ops"
-    )
-    parser.add_argument(
         "--sizes",
         type=parse_size_list,
         default=[
@@ -352,7 +349,7 @@ def main():
 
     try:
         # Initialize UCCL collective
-        collective.init_collective(args.num_cpus)
+        collective.init_collective()
 
         if rank == 0:
             print("=" * 60)

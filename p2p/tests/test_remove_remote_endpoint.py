@@ -66,7 +66,7 @@ def test_remove_invalid_conn_id():
     print("Test: remove_remote_endpoint with invalid conn_id")
     print("=" * 60)
 
-    ep = p2p.Endpoint(0, 4)
+    ep = p2p.Endpoint(0)
     ep.start_passive_accept()
 
     result = ep.remove_remote_endpoint(999999)
@@ -89,7 +89,7 @@ def test_remove_double_remove():
     rank = dist.get_rank()
     peer = 1 - rank
 
-    ep = p2p.Endpoint(0, 4)
+    ep = p2p.Endpoint(0)
     ep.start_passive_accept()
 
     local_meta = ep.get_metadata()
@@ -136,7 +136,7 @@ def test_remove_after_add():
     rank = dist.get_rank()
     peer = 1 - rank
 
-    ep = p2p.Endpoint(0, 4)
+    ep = p2p.Endpoint(0)
     ep.start_passive_accept()
 
     local_meta = ep.get_metadata()
@@ -175,7 +175,7 @@ def test_remove_and_readd():
     rank = dist.get_rank()
     peer = 1 - rank
 
-    ep = p2p.Endpoint(0, 4)
+    ep = p2p.Endpoint(0)
     ep.start_passive_accept()
 
     local_meta = ep.get_metadata()
@@ -230,7 +230,7 @@ def test_remove_then_transfer_fails():
     rank = dist.get_rank()
     peer = 1 - rank
 
-    ep = p2p.Endpoint(0, 4)
+    ep = p2p.Endpoint(0)
     ep.start_passive_accept()
 
     local_meta = ep.get_metadata()

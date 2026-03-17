@@ -339,7 +339,6 @@ def main():
     p = argparse.ArgumentParser(
         description="Benchmark UCCL Collective API bandwidth (GPU only)"
     )
-    p.add_argument("--num-cpus", type=int, default=4, help="#CPU threads for RDMA ops")
     p.add_argument(
         "--sizes",
         type=parse_size_list,
@@ -403,7 +402,7 @@ def main():
 
     try:
         # Initialize UCCL collective context (local_gpu_idx auto-detected from torch.distributed)
-        collective.init_collective(args.num_cpus)
+        collective.init_collective()
 
         # Get the actual GPU index used by the collective
         ctx = collective.get_collective()

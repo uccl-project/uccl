@@ -338,8 +338,8 @@ done
 from uccl import p2p
 import torch
 
-# Create endpoint with local GPU index and number of CPUs
-endpoint = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
+# Create endpoint with local GPU index
+endpoint = p2p.Endpoint(local_gpu_idx=0)
 ```
 
 ### Client-Server Communication
@@ -473,13 +473,12 @@ assert success
 
 #### Constructor
 ```python
-Endpoint(local_gpu_idx, num_cpus)
+Endpoint(local_gpu_idx)
 ```
 Create a new RDMA endpoint instance.
 
 **Parameters:**
 - `local_gpu_idx` (int): GPU index for this endpoint
-- `num_cpus` (int): Number of CPU threads to use for RDMA operations
 
 #### Connection Management
 

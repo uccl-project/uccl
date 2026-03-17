@@ -9,6 +9,7 @@
 #include "dietgpu/float/GpuFloatCodec.h"
 #include "dietgpu/float/GpuFloatDecompress.cuh"
 #include "dietgpu/utils/DeviceUtils.h"
+#include "dietgpu/utils/GreenContext.h"
 #include "dietgpu/utils/StackDeviceMemory.h"
 
 #include "util/debug.h"
@@ -30,6 +31,7 @@ FloatDecompressStatus floatDecompress(
     uint8_t* outSuccess_dev,
     uint32_t* outSize_dev,
     cudaStream_t stream) {
+  initGreenContextIfNeeded(getCurrentDevice());
   // FP8: capacities are in fp8 elements; the fused pipeline works in pairs
   // (uint16), so halve all capacities before sending to the device function.
   std::vector<uint32_t> halvedCapacity;

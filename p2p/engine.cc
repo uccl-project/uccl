@@ -175,12 +175,9 @@ uccl::UCCLLogLevel Endpoint::parse_log_level_from_env() {
 // The main P2P Endpoint class implementation
 // -----------------------------------------------------------------------------
 
-Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
-    : local_gpu_idx_(local_gpu_idx),
-      num_cpus_(num_cpus),
-      passive_accept_(false) {
-  std::cout << "Creating Engine with GPU index: " << local_gpu_idx
-            << ", CPUs: " << num_cpus << std::endl;
+Endpoint::Endpoint(uint32_t const local_gpu_idx)
+    : local_gpu_idx_(local_gpu_idx), passive_accept_(false) {
+  std::cout << "Creating Engine with GPU index: " << local_gpu_idx << std::endl;
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
 
   int ngpus = 0;
@@ -238,9 +235,8 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus)
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
-Endpoint::Endpoint(uint32_t const num_cpus)
-    : local_gpu_idx_(INVALID_GPU), num_cpus_(num_cpus), passive_accept_(false) {
-  std::cout << "Creating Engine with CPUs: " << num_cpus << std::endl;
+Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
+  std::cout << "Creating Engine" << std::endl;
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
 
   int ngpus = 0;

@@ -63,7 +63,7 @@ def test_local_ipc():
     # each rank binds its own visible GPU
     torch.cuda.set_device(0)
 
-    ep = p2p.Endpoint(local_gpu_idx=rank, num_cpus=4)
+    ep = p2p.Endpoint(local_gpu_idx=rank)
 
     # Rank 0: server
     if rank == 0:

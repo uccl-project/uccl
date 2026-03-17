@@ -99,7 +99,7 @@ bool fence_default_stream(int device, cudaStream_t stream) {
 }
 }  // namespace
 
-Endpoint::Endpoint(int /*num_cpus*/) {
+Endpoint::Endpoint() {
   ctrl_port_ = get_env_int("UCCL_TCPX_OOB_PORT", 28900);
   setup_listener_();
 }

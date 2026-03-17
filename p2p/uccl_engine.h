@@ -28,7 +28,7 @@ typedef struct md {
 
 /**
  * Create and initialize an engine instance.
- * @param num_cpus      The number of CPUs to use for the engine.
+ * @param num_cpus      Reserved for API compatibility. Currently unused.
  * @param in_python     Whether the engine is being created in Python.
  * @return              Pointer to the engine instance, or NULL on failure.
  */
@@ -255,12 +255,6 @@ int uccl_engine_update_fifo(FifoItem& fifo_item, uint64_t remote_addr,
 bool uccl_engine_conn_is_local(uccl_conn_t* conn);
 
 /**
- * Stop the accept thread for the engine.
- * @param engine        The engine instance.
- */
-void uccl_engine_stop_accept(uccl_engine_t* engine);
-
-/**
  * Get serialized IPC info for a registered buffer address.
  * @param engine        The engine instance.
  * @param addr          Base address of the registered buffer.
@@ -282,3 +276,9 @@ int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
  */
 int uccl_engine_update_ipc_info(char* ipc_buf, uintptr_t addr,
                                 uintptr_t base_addr, size_t size);
+
+/**
+ * Stop the accept thread for the engine.
+ * @param engine        The engine instance.
+ */
+void uccl_engine_stop_accept(uccl_engine_t* engine);

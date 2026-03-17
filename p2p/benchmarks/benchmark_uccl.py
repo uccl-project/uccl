@@ -781,7 +781,6 @@ def main():
         default=0,
         help="Local GPU index to bind buffers",
     )
-    p.add_argument("--num-cpus", type=int, default=4, help="#CPU threads for RDMA ops")
     p.add_argument(
         "--device",
         choices=["cpu", "gpu"],
@@ -920,7 +919,7 @@ def main():
         )
     torch.cuda.set_device(f"cuda:{args.local_gpu_idx}")
 
-    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+    ep = p2p.Endpoint(args.local_gpu_idx)
     local_metadata = ep.get_metadata()
 
     # This also serves as a barrier to guarantee both processes have created the endpoint
