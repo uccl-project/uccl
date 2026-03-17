@@ -92,6 +92,8 @@ struct IpcTransferInfo {
   size_t size;
   uint32_t operation;  // 0 = send_ipc request, 1 = recv_ipc response
   bool is_host;        // true if this side's buffer is CPU memory
+  int gpu_idx = -1;    // target GPU index; -1 = use conn->remote_gpu_idx_
+  uintptr_t direct_addr = 0;  // same-process: skip IPC, use this virtual addr
 };
 
 // For ShmChannel
@@ -390,7 +392,8 @@ class Endpoint {
                   std::vector<char*> out_buf_v, size_t num_iovs);
 
   /*Connect to a local process via Unix Domain Socket.*/
-  bool connect_local(int remote_gpu_idx, uint64_t& conn_id);
+  bool connect_local(int remote_gpu_idx, uint64_t& conn_id,
+                     bool same_process = false);
 
   /*Accept an incoming local connection via Unix Domain Socket. */
   bool accept_local(int& remote_gpu_idx, uint64_t& conn_id);

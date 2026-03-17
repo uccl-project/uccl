@@ -7,6 +7,7 @@
 
 #define MSG_SIZE 256
 #define FIFO_SIZE 64
+#define IPC_INFO_SIZE 128
 // Handle for the UCCL engine instance
 typedef struct uccl_engine uccl_engine_t;
 
@@ -48,7 +49,8 @@ void uccl_engine_destroy(uccl_engine_t* engine);
  * @return              Connection handle, or NULL on failure.
  */
 uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
-                                 int remote_gpu_idx, int remote_port);
+                                 int remote_gpu_idx, int remote_port,
+                                 bool same_process = false);
 /**
  * Start the listener thread for the connection.
  * @param conn          Connection handle.
@@ -92,6 +94,8 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
 
 /**
  * Read a vector of data chunks (Non blocking).
+ * Unified API: dispatches to RDMA, same-process IPC, or cross-process IPC
+ * based on connection type and whether ipc_bufs is provided.
  * @param conn          Connection handle.
  * @param mr_ids        Vector of memory region handles.
  * @param dst_v         Vector of pointers to the data to receive.
@@ -99,13 +103,15 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
  * @param fifo_items    Vector of FifoItem structs for RDMA operations.
  * @param num_iovs      Number of IO vectors.
  * @param transfer_id   Pointer to store the transfer ID.
+ * @param ipc_bufs      Optional: serialized IPC info for cross-process local.
  * @return              0 on success, non-zero on failure.
  */
 int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<void*> dst_v,
                             std::vector<size_t> size_v,
                             std::vector<FifoItem> fifo_items, int num_iovs,
-                            uint64_t* transfer_id);
+                            uint64_t* transfer_id,
+                            std::vector<char*> ipc_bufs = {});
 /**
  * Send data (Non blocking).
  * @param conn          Connection handle.
@@ -146,6 +152,8 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                       size_t size, FifoItem fifo_item, uint64_t* transfer_id);
 /**
  * Send a vector of data chunks with RC mode (Non blocking).
+ * Unified API: dispatches to RDMA, same-process IPC, or cross-process IPC
+ * based on connection type and whether ipc_bufs is provided.
  * @param conn          Connection handle.
  * @param mr_ids        Vector of memory region handles.
  * @param dst_v         Vector of pointers to the data to write.
@@ -153,13 +161,15 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
  * @param fifo_items    Vector of FifoItem structs for RDMA operations.
  * @param num_iovs      Number of IO vectors.
  * @param transfer_id   Pointer to store the transfer ID.
+ * @param ipc_bufs      Optional: serialized IPC info for cross-process local.
  * @return              0 on success, non-zero on failure.
  */
 int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                              std::vector<void*> dst_v,
                              std::vector<size_t> size_v,
                              std::vector<FifoItem> fifo_items, int num_iovs,
-                             uint64_t* transfer_id);
+                             uint64_t* transfer_id,
+                             std::vector<char*> ipc_bufs = {});
 /**
  * Receive data (blocking).
  * @param conn          Connection handle.
@@ -236,6 +246,36 @@ int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t mr,
  */
 int uccl_engine_update_fifo(FifoItem& fifo_item, uint64_t remote_addr,
                             uint32_t size);
+
+/**
+ * Check if a connection is to a peer on the same node (IPC-eligible).
+ * @param conn          Connection handle.
+ * @return              True if the connection is intra-node.
+ */
+bool uccl_engine_conn_is_local(uccl_conn_t* conn);
+
+/**
+ * Get serialized IPC info for a registered buffer address.
+ * @param engine        The engine instance.
+ * @param addr          Base address of the registered buffer.
+ * @param ipc_buf       Output buffer (IPC_INFO_SIZE bytes).
+ * @param has_ipc       Set to true if the buffer has valid IPC info (GPU mem).
+ * @return              0 on success, -1 on failure.
+ */
+int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
+                             char* ipc_buf, bool* has_ipc);
+
+/**
+ * Update the offset and size in a serialized IPC info buffer to point at a
+ * sub-range of the registered buffer.
+ * @param ipc_buf       IPC info buffer (IPC_INFO_SIZE bytes).
+ * @param addr          Target address within the registered region.
+ * @param base_addr     Base address of the registered region.
+ * @param size          Size of the sub-range.
+ * @return              0 on success, -1 on failure.
+ */
+int uccl_engine_update_ipc_info(char* ipc_buf, uintptr_t addr,
+                                uintptr_t base_addr, size_t size);
 
 /**
  * Stop the accept thread for the engine.

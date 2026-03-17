@@ -40,6 +40,8 @@ using Endpoint = ::Endpoint;
 
 struct uccl_engine {
   std::unique_ptr<Endpoint> endpoint;
+  std::thread local_accept_thread;
+  std::atomic<bool> local_accept_started{false};
 };
 
 struct uccl_conn {
@@ -50,6 +52,8 @@ struct uccl_conn {
   std::thread* listener_thread;
   bool listener_running;
   std::mutex listener_mutex;
+  bool is_local = false;      // True for intra-node (IPC) connections
+  bool same_process = false;  // True for same-process local transfers
 };
 
 typedef struct {
@@ -60,6 +64,8 @@ typedef struct {
 typedef struct {
   uint64_t mr_id;
   size_t size;
+  IpcTransferInfo ipc_info = {};  // Pre-computed IPC handle for GPU buffers
+  bool has_ipc = false;           // True if IPC handle is valid (GPU memory)
 } mem_reg_entry_t;
 
 std::unordered_map<uintptr_t, mem_reg_entry_t> mem_reg_info;
@@ -127,6 +133,38 @@ void listener_thread_func(uccl_conn_t* conn) {
   }
 }
 
+// Look up the pre-computed IpcTransferInfo for any address within a registered
+// GPU buffer region.  Adjusts offset and size to match the requested range.
+// Returns false if the address is not registered or has no IPC handle (e.g.
+// host memory).
+static bool get_ipc_info_for_addr(uintptr_t addr, size_t size,
+                                  IpcTransferInfo& out_info) {
+  uintptr_t base_addr;
+  uint64_t mr_id_unused;
+  if (!find_mem_reg(addr, base_addr, mr_id_unused)) return false;
+  auto const& entry = mem_reg_info.at(base_addr);
+  if (!entry.has_ipc) return false;
+  out_info = entry.ipc_info;
+  // Shift the offset within the IPC allocation to point at the sub-range.
+  out_info.offset += (addr - base_addr);
+  out_info.size = size;
+  return true;
+}
+
+// Deserialize IpcTransferInfo from an opaque buffer.
+static void deserialize_ipc_info(char const* buf, IpcTransferInfo& info) {
+  memset(&info, 0, sizeof(info));
+  size_t off = 0;
+  memcpy(&info.handle, buf + off, sizeof(info.handle));
+  off += sizeof(info.handle);
+  memcpy(&info.offset, buf + off, sizeof(info.offset));
+  off += sizeof(info.offset);
+  memcpy(&info.size, buf + off, sizeof(info.size));
+  off += sizeof(info.size);
+  memcpy(&info.gpu_idx, buf + off, sizeof(info.gpu_idx));
+  off += sizeof(info.gpu_idx);
+}
+
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   (void)num_cpus;
   inside_python = in_python;
@@ -143,22 +181,44 @@ void uccl_engine_destroy(uccl_engine_t* engine) {
 }
 
 uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
-                                 int remote_gpu_idx, int remote_port) {
+                                 int remote_gpu_idx, int remote_port,
+                                 bool same_process) {
   if (!engine || !ip_addr) return nullptr;
   uccl_conn_t* conn = new uccl_conn;
   uint64_t conn_id;
-  bool ok = engine->endpoint->connect(std::string(ip_addr), remote_gpu_idx,
-                                      remote_port, conn_id);
+
+  // Detect intra-node connection: if the target IP matches our own IP.
+  std::string local_ip = uccl::get_oob_ip();
+  bool is_local = (std::string(ip_addr) == local_ip);
+
+  bool ok;
+  if (is_local && same_process) {
+    // Same process: use shm rings directly, skip TCP.
+    // Transfers use direct_addr (no gpuIpcOpenMemHandle).
+    ok = engine->endpoint->connect_local(remote_gpu_idx, conn_id, true);
+    conn->sock_fd = -1;
+  } else {
+    // Remote or cross-process local: use TCP connection.
+    // Cross-process local gets OOB for notifications; data goes through IPC
+    // via the external IPC info path in the NIXL backend.
+    ok = engine->endpoint->connect(std::string(ip_addr), remote_gpu_idx,
+                                   remote_port, conn_id);
+    if (ok) {
+      conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
+#if !defined(UCCL_P2P_USE_TCPX) && !defined(UCCL_P2P_USE_NCCL)
+      conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
+#endif
+    }
+  }
+
   if (!ok) {
     delete conn;
     return nullptr;
   }
   conn->conn_id = conn_id;
-  conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
-#if !defined(UCCL_P2P_USE_TCPX) && !defined(UCCL_P2P_USE_NCCL)
-  conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
-#endif
   conn->engine = engine;
+  conn->is_local = is_local;
+  conn->same_process = same_process;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
   return conn;
@@ -167,6 +227,10 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
 uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
                                 size_t ip_addr_buf_len, int* remote_gpu_idx) {
   if (!engine || !ip_addr_buf || !remote_gpu_idx) return nullptr;
+  // Start accept_local loop in a background thread (once per engine) so that
+  // local (IPC) peers can connect concurrently with the blocking RDMA accept.
+  bool expected = false;
+  engine->endpoint->start_passive_accept();
   uccl_conn_t* conn = new uccl_conn;
   std::string ip_addr;
   uint64_t conn_id;
@@ -199,6 +263,24 @@ int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size,
   mem_reg_entry_t entry;
   entry.mr_id = mr_id;
   entry.size = size;
+
+  // Pre-compute IPC handle for GPU buffers so the local (IPC) transfer path
+  // can look it up without a per-transfer gpuIpcGetMemHandle call.
+  int dev_idx = uccl::get_dev_idx((void*)data);
+  if (dev_idx >= 0) {
+    gpuSetDevice(dev_idx);
+    static constexpr size_t kIpcAlignment = 1ul << 20;
+    uintptr_t aligned = data & ~(static_cast<uintptr_t>(kIpcAlignment - 1));
+    gpuError_t err = gpuIpcGetMemHandle(&entry.ipc_info.handle,
+                                        reinterpret_cast<void*>(aligned));
+    if (err == gpuSuccess) {
+      entry.ipc_info.offset = data - aligned;
+      entry.ipc_info.size = size;
+      entry.ipc_info.gpu_idx = dev_idx;
+      entry.has_ipc = true;
+    }
+  }
+
   mem_reg_info[data] = entry;
   return 0;
 }
@@ -206,6 +288,19 @@ int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size,
 int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                      size_t size, FifoItem fifo_item, uint64_t* transfer_id) {
   if (!conn || !data) return -1;
+
+  if (conn->is_local) {
+    IpcTransferInfo info;
+    if (!get_ipc_info_for_addr(fifo_item.addr, size, info)) {
+      UCCL_LOG(ERROR) << "Failed to get IPC info";
+      return -1;
+    }
+    if (conn->same_process) info.direct_addr = fifo_item.addr;
+    return conn->engine->endpoint->read_ipc_async(
+               conn->conn_id, const_cast<void*>(data), size, info, transfer_id)
+               ? 0
+               : -1;
+  }
 
   return conn->engine->endpoint->read_async(conn->conn_id, mr,
                                             const_cast<void*>(data), size,
@@ -218,9 +313,26 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<void*> dst_v,
                             std::vector<size_t> size_v,
                             std::vector<FifoItem> fifo_items, int num_iovs,
-                            uint64_t* transfer_id) {
+                            uint64_t* transfer_id,
+                            std::vector<char*> ipc_bufs) {
   if (!conn || num_iovs <= 0) return -1;
 
+  // Local IPC path (both same-process and cross-process)
+  if ((conn->is_local || conn->same_process) && !ipc_bufs.empty()) {
+    std::vector<IpcTransferInfo> info_v(num_iovs);
+    for (int i = 0; i < num_iovs; i++) {
+      deserialize_ipc_info(ipc_bufs[i], info_v[i]);
+      if (conn->same_process) {
+        info_v[i].direct_addr = fifo_items[i].addr;
+      }
+    }
+    return conn->engine->endpoint->readv_ipc_async(
+               conn->conn_id, dst_v, size_v, info_v, num_iovs, transfer_id)
+               ? 0
+               : -1;
+  }
+
+  // Remote RDMA
   return conn->engine->endpoint->readv_async(conn->conn_id, mr_ids, dst_v,
                                              size_v, fifo_items, num_iovs,
                                              transfer_id)
@@ -253,6 +365,23 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
   return -1;  // TODO: support write_rc for TCPX
 #else
 
+  if (conn->is_local) {
+    // Same-process local path: both buffers are in our address space.
+    // Set direct_addr so write_ipc_async skips gpuIpcOpenMemHandle and
+    // uses the virtual address directly, while keeping its stream/event
+    // optimizations.
+    IpcTransferInfo info;
+    if (!get_ipc_info_for_addr(fifo_item.addr, size, info)) {
+      UCCL_LOG(ERROR) << "Failed to get IPC info";
+      return -1;
+    }
+    if (conn->same_process) info.direct_addr = fifo_item.addr;
+    return conn->engine->endpoint->write_ipc_async(conn->conn_id, data, size,
+                                                   info, transfer_id)
+               ? 0
+               : -1;
+  }
+
   return conn->engine->endpoint->write_async(conn->conn_id, mr,
                                              const_cast<void*>(data), size,
                                              fifo_item, transfer_id)
@@ -265,9 +394,27 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                              std::vector<void*> dst_v,
                              std::vector<size_t> size_v,
                              std::vector<FifoItem> fifo_items, int num_iovs,
-                             uint64_t* transfer_id) {
+                             uint64_t* transfer_id,
+                             std::vector<char*> ipc_bufs) {
   if (!conn || num_iovs <= 0) return -1;
 
+  // Local IPC path (both same-process and cross-process)
+  if ((conn->is_local || conn->same_process) && !ipc_bufs.empty()) {
+    std::vector<void const*> src_v(dst_v.begin(), dst_v.end());
+    std::vector<IpcTransferInfo> info_v(num_iovs);
+    for (int i = 0; i < num_iovs; i++) {
+      deserialize_ipc_info(ipc_bufs[i], info_v[i]);
+      if (conn->same_process) {
+        info_v[i].direct_addr = fifo_items[i].addr;
+      }
+    }
+    return conn->engine->endpoint->writev_ipc_async(
+               conn->conn_id, src_v, size_v, info_v, num_iovs, transfer_id)
+               ? 0
+               : -1;
+  }
+
+// Remote RDMA
 #ifdef UCCL_P2P_USE_TCPX
   return -1;  // TODO: support write_rc for TCPX
 #else
@@ -336,6 +483,10 @@ int uccl_engine_stop_listener(uccl_conn_t* conn) {
   conn->listener_thread = nullptr;
 
   return 0;
+}
+
+bool uccl_engine_conn_is_local(uccl_conn_t* conn) {
+  return conn && conn->is_local;
 }
 
 void uccl_engine_stop_accept(uccl_engine_t* engine) {
@@ -428,6 +579,19 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   uint64_t flow_id = conn->conn_id;
   return tcp_endpoint->send_notification(flow_id, oob_msg);
 #else
+  NotifyMsg oob_msg;
+  oob_msg.magic = NOTIFY_MSG_MAGIC;
+  strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
+  oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
+  memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
+
+  if (conn->same_process) {
+    // Same-process local connection: push notification directly to the local
+    // list.
+    std::lock_guard<std::mutex> lock(notify_mutex);
+    notify_list.push_back(oob_msg);
+    return 0;
+  }
   if (conn->oob_conn_key.empty()) {
     std::cerr << "No OOB connection key available for notification"
               << std::endl;
@@ -440,17 +604,49 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
     return -1;
   }
 
-  NotifyMsg oob_msg;
-  oob_msg.magic = NOTIFY_MSG_MAGIC;
-  strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
-  oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
-  memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
-
   std::string payload(reinterpret_cast<char*>(&oob_msg), sizeof(NotifyMsg));
   bool ok = oob_client->send_meta(conn->oob_conn_key, payload);
 
   return ok ? sizeof(NotifyMsg) : -1;
 #endif
+}
+
+// Serialize IpcTransferInfo to an opaque buffer (IPC_INFO_SIZE bytes).
+// Layout: handle(64) + offset(8) + size(8) + gpu_idx(4) = 84 bytes.
+static void serialize_ipc_info(IpcTransferInfo const& info, char* buf) {
+  memset(buf, 0, IPC_INFO_SIZE);
+  size_t off = 0;
+  memcpy(buf + off, &info.handle, sizeof(info.handle));
+  off += sizeof(info.handle);  // 64
+  memcpy(buf + off, &info.offset, sizeof(info.offset));
+  off += sizeof(info.offset);  // 8
+  memcpy(buf + off, &info.size, sizeof(info.size));
+  off += sizeof(info.size);  // 8
+  memcpy(buf + off, &info.gpu_idx, sizeof(info.gpu_idx));
+  off += sizeof(info.gpu_idx);  // 4
+}
+
+int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
+                             char* ipc_buf, bool* has_ipc) {
+  if (!engine || !ipc_buf || !has_ipc) return -1;
+  *has_ipc = false;
+  auto it = mem_reg_info.find(addr);
+  if (it == mem_reg_info.end()) return -1;
+  if (!it->second.has_ipc) return 0;
+  serialize_ipc_info(it->second.ipc_info, ipc_buf);
+  *has_ipc = true;
+  return 0;
+}
+
+int uccl_engine_update_ipc_info(char* ipc_buf, uintptr_t addr,
+                                uintptr_t base_addr, size_t size) {
+  if (!ipc_buf) return -1;
+  IpcTransferInfo info;
+  deserialize_ipc_info(ipc_buf, info);
+  info.offset += (addr - base_addr);
+  info.size = size;
+  serialize_ipc_info(info, ipc_buf);
+  return 0;
 }
 
 int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
