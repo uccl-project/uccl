@@ -151,19 +151,6 @@ static bool get_ipc_info_for_addr(uintptr_t addr, size_t size,
   return true;
 }
 
-// Deserialize IpcTransferInfo from an opaque buffer.
-static void deserialize_ipc_info(char const* buf, IpcTransferInfo& info) {
-  memset(&info, 0, sizeof(info));
-  size_t off = 0;
-  memcpy(&info.handle, buf + off, sizeof(info.handle));
-  off += sizeof(info.handle);
-  memcpy(&info.offset, buf + off, sizeof(info.offset));
-  off += sizeof(info.offset);
-  memcpy(&info.size, buf + off, sizeof(info.size));
-  off += sizeof(info.size);
-  memcpy(&info.gpu_idx, buf + off, sizeof(info.gpu_idx));
-  off += sizeof(info.gpu_idx);
-}
 
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   inside_python = in_python;
@@ -313,20 +300,13 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<size_t> size_v,
                             std::vector<FifoItem> fifo_items, int num_iovs,
                             uint64_t* transfer_id,
-                            std::vector<char*> ipc_bufs) {
+                            std::vector<IpcTransferInfo> ipc_infos) {
   if (!conn || num_iovs <= 0) return -1;
 
   // Local IPC path (both same-process and cross-process)
-  if ((conn->is_local || conn->same_process) && !ipc_bufs.empty()) {
-    std::vector<IpcTransferInfo> info_v(num_iovs);
-    for (int i = 0; i < num_iovs; i++) {
-      deserialize_ipc_info(ipc_bufs[i], info_v[i]);
-      if (conn->same_process) {
-        info_v[i].direct_addr = fifo_items[i].addr;
-      }
-    }
+  if ((conn->is_local || conn->same_process) && !ipc_infos.empty()) {
     return conn->engine->endpoint->readv_ipc_async(
-               conn->conn_id, dst_v, size_v, info_v, num_iovs, transfer_id)
+               conn->conn_id, dst_v, size_v, ipc_infos, num_iovs, transfer_id)
                ? 0
                : -1;
   }
@@ -394,21 +374,13 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                              std::vector<size_t> size_v,
                              std::vector<FifoItem> fifo_items, int num_iovs,
                              uint64_t* transfer_id,
-                             std::vector<char*> ipc_bufs) {
+                             std::vector<IpcTransferInfo> ipc_infos) {
   if (!conn || num_iovs <= 0) return -1;
 
   // Local IPC path (both same-process and cross-process)
-  if ((conn->is_local || conn->same_process) && !ipc_bufs.empty()) {
-    std::vector<void const*> src_v(dst_v.begin(), dst_v.end());
-    std::vector<IpcTransferInfo> info_v(num_iovs);
-    for (int i = 0; i < num_iovs; i++) {
-      deserialize_ipc_info(ipc_bufs[i], info_v[i]);
-      if (conn->same_process) {
-        info_v[i].direct_addr = fifo_items[i].addr;
-      }
-    }
+  if ((conn->is_local || conn->same_process) && !ipc_infos.empty()) {
     return conn->engine->endpoint->writev_ipc_async(
-               conn->conn_id, src_v, size_v, info_v, num_iovs, transfer_id)
+               conn->conn_id, dst_v, size_v, ipc_infos, num_iovs, transfer_id)
                ? 0
                : -1;
   }
@@ -606,41 +578,22 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
 #endif
 }
 
-// Serialize IpcTransferInfo to an opaque buffer (IPC_INFO_SIZE bytes).
-// Layout: handle(64) + offset(8) + size(8) + gpu_idx(4) = 84 bytes.
-static void serialize_ipc_info(IpcTransferInfo const& info, char* buf) {
-  memset(buf, 0, IPC_INFO_SIZE);
-  size_t off = 0;
-  memcpy(buf + off, &info.handle, sizeof(info.handle));
-  off += sizeof(info.handle);  // 64
-  memcpy(buf + off, &info.offset, sizeof(info.offset));
-  off += sizeof(info.offset);  // 8
-  memcpy(buf + off, &info.size, sizeof(info.size));
-  off += sizeof(info.size);  // 8
-  memcpy(buf + off, &info.gpu_idx, sizeof(info.gpu_idx));
-  off += sizeof(info.gpu_idx);  // 4
-}
-
 int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
-                             char* ipc_buf, bool* has_ipc) {
-  if (!engine || !ipc_buf || !has_ipc) return -1;
+                             IpcTransferInfo* ipc_info, bool* has_ipc) {
+  if (!engine || !ipc_info || !has_ipc) return -1;
   *has_ipc = false;
   auto it = mem_reg_info.find(addr);
   if (it == mem_reg_info.end()) return -1;
   if (!it->second.has_ipc) return 0;
-  serialize_ipc_info(it->second.ipc_info, ipc_buf);
+  *ipc_info = it->second.ipc_info;
   *has_ipc = true;
   return 0;
 }
 
-int uccl_engine_update_ipc_info(char* ipc_buf, uintptr_t addr,
+int uccl_engine_update_ipc_info(IpcTransferInfo& ipc_info, uintptr_t addr,
                                 uintptr_t base_addr, size_t size) {
-  if (!ipc_buf) return -1;
-  IpcTransferInfo info;
-  deserialize_ipc_info(ipc_buf, info);
-  info.offset += (addr - base_addr);
-  info.size = size;
-  serialize_ipc_info(info, ipc_buf);
+  ipc_info.offset += (addr - base_addr);
+  ipc_info.size = size;
   return 0;
 }
 

@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "util/gpu_rt.h"
+
 typedef uint64_t FlowID;
 struct ConnID {
   void* context;
@@ -68,5 +70,16 @@ inline void deserialize_fifo_item(char const* buf, FifoItem* item) {
   std::memcpy(item->padding, buf + 32, sizeof(item->padding));
 }
 enum class MemoryType { HOST, GPU };
+
+// IPC transfer info for cross-process and same-process GPU transfers
+struct IpcTransferInfo {
+  gpuIpcMemHandle_t handle;
+  uintptr_t offset;
+  size_t size;
+  uint32_t operation;  // 0 = send_ipc request, 1 = recv_ipc response
+  bool is_host;        // true if this side's buffer is CPU memory
+  int gpu_idx = -1;    // target GPU index; -1 = use conn->remote_gpu_idx_
+  uintptr_t direct_addr = 0;  // same-process: skip IPC, use this virtual addr
+};
 
 #endif
