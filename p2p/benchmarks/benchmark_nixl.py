@@ -564,7 +564,10 @@ def start_transfer_local(size, num_kvblocks, args):
         dst_xfer = dst_reg.trim()
 
         # initialize_xfer with own agent name triggers the local (IPC) path
-        transfer_handle = agent.initialize_xfer(op, src_xfer, dst_xfer, "local_agent")
+        if op == "READ":
+            transfer_handle = agent.initialize_xfer(op, dst_xfer, src_xfer, "local_agent")
+        else:
+            transfer_handle = agent.initialize_xfer(op, src_xfer, dst_xfer, "local_agent")
 
         total_size = 0
         total_transfer_time = 0.0
