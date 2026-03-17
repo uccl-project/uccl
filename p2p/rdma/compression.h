@@ -251,7 +251,7 @@ class DietGPUCompressorBackend : public ICompressorBackend {
     uint32_t compressedSize = 0;
     GPU_RT_CHECK(gpuMemcpy(&compressedSize, devCompressedSize_,
                            sizeof(compressedSize), gpuMemcpyDeviceToHost));
-    
+
     UCCL_LOG(INFO, UCCL_RDMA)
         << "DietGPUCompressorBackend: Compressed " << req->local_mem->size
         << " bytes to " << compressedSize << " bytes, ratio: "
