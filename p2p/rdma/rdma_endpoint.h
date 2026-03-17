@@ -9,6 +9,8 @@
 #include "rdma_device.h"
 #include "util/debug.h"
 #include "util/net.h"
+#include <unordered_map>
+#include <unordered_set>
 
 class NICEndpoint {
  public:
@@ -73,12 +75,25 @@ class NICEndpoint {
       return false;
     }
 
+    // Register once per unique RdmaContext (contexts sharing the same NIC
+    // device are the same shared_ptr — see initializeContexts).  This avoids
+    // redundant MR registrations that waste resources: with DMA-BUF, each
+    // duplicate consumes a GPU DMA mapping VA slot; with nvidia_peermem,
+    // each duplicate pins the same pages again under a separate PD.
+    std::unordered_map<RdmaContext*, struct ibv_mr*> registered;
     for (size_t context_id = 0; context_id < contexts_.size(); ++context_id) {
       auto context = contexts_[context_id];
       if (unlikely(!context)) {
         UCCL_LOG(ERROR) << "Error: context at context_id " << context_id
                         << " is null";
         return false;
+      }
+
+      auto it = registered.find(context.get());
+      if (it != registered.end()) {
+        // Same NIC device — reuse the already-registered MR.
+        reg_block->setMRByContextID(context_id, it->second);
+        continue;
       }
 
       struct ibv_mr* mr = context->regMem(reg_block->addr, reg_block->size);
@@ -90,6 +105,7 @@ class NICEndpoint {
         return false;
       }
       reg_block->setMRByContextID(context_id, mr);
+      registered[context.get()] = mr;
     }
 
     return true;
@@ -100,9 +116,12 @@ class NICEndpoint {
       UCCL_LOG(ERROR) << "Error: deregMem called with null reg_block";
       return false;
     }
+    // Deduplicate MR pointers — shared contexts have the same MR in
+    // multiple slots, so we must not double-free.
+    std::unordered_set<ibv_mr*> freed;
     for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
       ibv_mr* mr = reg_block->getMRByContextID(ctx);
-      if (mr) {
+      if (mr && freed.insert(mr).second) {
         RdmaContext::deregMem(mr);
       }
     }
@@ -364,12 +383,25 @@ class NICEndpoint {
       return -1;
     }
     Compressor::getInstance().prepareSplitContext(data, len, compress_ctx);
+    // Register once per unique RdmaContext to avoid redundant MR
+    // registrations: with DMA-BUF each duplicate consumes a GPU DMA mapping
+    // VA slot; with nvidia_peermem each duplicate re-pins pages under a
+    // separate PD.  On single-NIC systems all 4 context slots share one
+    // RdmaContext, reducing registrations from 4 to 1.
+    std::unordered_map<RdmaContext*, struct ibv_mr*> registered;
     for (size_t context_id = 0; context_id < contexts_.size(); ++context_id) {
       auto context = contexts_[context_id];
       if (unlikely(!context)) {
         UCCL_LOG(ERROR) << "Error: context at context_id " << context_id
                         << " is null";
         return -1;
+      }
+
+      auto it = registered.find(context.get());
+      if (it != registered.end()) {
+        // Same NIC device — reuse the already-registered MR.
+        mr_array.setKeyByContextID(context_id, it->second);
+        continue;
       }
 
       // Register memory region for this context
@@ -384,15 +416,18 @@ class NICEndpoint {
 
       // Store the MR in the mr_map using context_id as key
       mr_array.setKeyByContextID(context_id, mr);
+      registered[context.get()] = mr;
     }
 
     return 0;
   }
 
   inline void uccl_deregmr(MRArray const& mr_array) {
+    // Deduplicate — shared contexts store the same MR in multiple slots.
+    std::unordered_set<ibv_mr*> freed;
     for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
       ibv_mr* mr = mr_array.getKeyByContextID(ctx);
-      if (likely(mr != nullptr)) {
+      if (likely(mr != nullptr) && freed.insert(mr).second) {
         RdmaContext::deregMem(mr);
       }
     }
@@ -497,8 +532,29 @@ class NICEndpoint {
     auto& device_manager = RdmaDeviceManager::instance();
     assert(!device_ids.empty() && device_ids.size() <= kNICContextNumber);
 
+    // Share RdmaContext objects across context slots that map to the same
+    // physical NIC device.  Each unique ibv_context + ibv_pd triggers a
+    // separate memory registration (ibv_reg_mr or ibv_reg_dmabuf_mr).
+    // With DMA-BUF, each registration creates a GPU DMA mapping VA entry;
+    // with nvidia_peermem, each registration pins GPU pages under a separate
+    // PD.  Sharing avoids exhausting these resources when multiple
+    // subsystems (DeepEP, NCCL, NIXL) co-exist on the same GPU+NIC.
+    std::unordered_map<size_t, std::shared_ptr<RdmaContext>> device_ctx_map;
+    int unique_count = 0;
+
     for (int i = 0; i < kNICContextNumber; ++i) {
       size_t device_id = device_ids[i % device_ids.size()];
+
+      auto it = device_ctx_map.find(device_id);
+      if (it != device_ctx_map.end()) {
+        // Same device as an earlier context — share it.
+        contexts_.push_back(it->second);
+        UCCL_LOG(INFO, UCCL_RDMA)
+            << "NICEndpoint: Context " << i << " shares device " << device_id
+            << " (" << device_manager.getDevice(device_id)->name() << ")";
+        continue;
+      }
+
       auto device = device_manager.getDevice(device_id);
       if (!device) {
         UCCL_LOG(ERROR) << "Error: Device " << device_id << " not found";
@@ -507,12 +563,17 @@ class NICEndpoint {
       }
       auto context = std::make_shared<RdmaContext>(device, contexts_.size());
       contexts_.push_back(context);
+      device_ctx_map[device_id] = context;
+      unique_count++;
       UCCL_LOG(INFO, UCCL_RDMA)
           << "NICEndpoint: Created context " << i << " for device " << device_id
           << " (" << device->name() << ")";
     }
 
     assert(contexts_.size() == kNICContextNumber);
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "NICEndpoint: " << kNICContextNumber << " context slots, "
+        << unique_count << " unique device(s)";
   }
 
   void process_meta(std::string const& input, std::string& output,
