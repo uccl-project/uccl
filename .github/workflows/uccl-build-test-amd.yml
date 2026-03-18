@@ -1,4 +1,4 @@
-name: AMD UCCL Build & Test
+name: UCCL Build & Test (AMD)
 
 on:
   push:
@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 20
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
@@ -87,6 +87,8 @@ jobs:
             [ -d ~/uccl-ci-sandbox/.venv ] || uv venv ~/uccl-ci-sandbox/.venv --python 3.12
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox
+            uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
+            uv pip install nanobind pybind11
             ./build.sh rocm all --install 2>&1 | tee build.log
           EOF
           PID0=$!
@@ -99,6 +101,8 @@ jobs:
             [ -d ~/uccl-ci-sandbox/.venv ] || uv venv ~/uccl-ci-sandbox/.venv --python 3.12
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox
+            uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
+            uv pip install nanobind pybind11
             ./build.sh rocm all --install 2>&1 | tee build.log
           EOF
           PID1=$!

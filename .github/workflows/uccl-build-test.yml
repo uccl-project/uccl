@@ -1,4 +1,4 @@
-name: NVIDIA UCCL Build & Test
+name: UCCL Build & Test (NVIDIA)
 
 on:
   push:
