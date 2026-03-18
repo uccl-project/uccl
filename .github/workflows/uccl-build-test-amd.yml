@@ -1,0 +1,241 @@
+name: AMD UCCL Build & Test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types: [labeled, synchronize, reopened]
+
+concurrency:
+  group: amd-uccl-build-test
+  cancel-in-progress: false
+
+jobs:
+  build-and-test-on-amd:
+    if: >
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+      !github.event.pull_request.head.repo.fork &&
+      github.event.pull_request.draft == false &&
+      contains(github.event.pull_request.labels.*.name, 'run-benchmark'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH for AMD hosts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          echo "${{secrets.UCCL_DEV_SSH_KEY}}" > ~/.ssh/uccl-dev
+          chmod 600 ~/.ssh/uccl-dev
+
+          cat >> ~/.ssh/config << 'EOF'
+          Host amd0
+              HostName "${{secrets.UCCL_DEV_AMD_HOST0}}"
+              User "${{secrets.UCCL_DEV_AMD_USER}}"
+              IdentityFile ~/.ssh/uccl-dev
+              IdentitiesOnly yes
+
+          Host amd1
+              HostName "${{secrets.UCCL_DEV_AMD_HOST1}}"
+              User "${{secrets.UCCL_DEV_AMD_USER}}"
+              IdentityFile ~/.ssh/uccl-dev
+              IdentitiesOnly yes
+          EOF
+
+          ssh-keyscan -H "${{secrets.UCCL_DEV_AMD_HOST0}}" >> ~/.ssh/known_hosts
+          ssh-keyscan -H "${{secrets.UCCL_DEV_AMD_HOST1}}" >> ~/.ssh/known_hosts
+
+      - name: Sync code to AMD hosts
+        shell: bash
+        run: |
+          set -euo pipefail
+          rsync -az --delete \
+            --rsync-path="mkdir -p ~/uccl-ci-sandbox && rsync" \
+            -e "ssh -o BatchMode=yes" \
+            ./ amd0:~/uccl-ci-sandbox/ &
+          PID0=$!
+
+          rsync -az --delete \
+            --rsync-path="mkdir -p ~/uccl-ci-sandbox && rsync" \
+            -e "ssh -o BatchMode=yes" \
+            ./ amd1:~/uccl-ci-sandbox/ &
+          PID1=$!
+
+          wait $PID0
+          wait $PID1
+
+      - name: Build and install on both hosts
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          ssh -o BatchMode=yes amd0 << 'EOF' &
+            set -euo pipefail
+            source $HOME/miniconda3/etc/profile.d/conda.sh
+            conda info --envs | awk '{print $1}' | grep -qx uccl-amd-ci || conda create -y -n uccl-amd-ci python=3.12
+            conda activate uccl-amd-ci
+            cd ~/uccl-ci-sandbox
+            ./build.sh rocm all --install 2>&1 | tee build.log
+          EOF
+          PID0=$!
+
+          ssh -o BatchMode=yes amd1 << 'EOF' &
+            set -euo pipefail
+            source $HOME/miniconda3/etc/profile.d/conda.sh
+            conda info --envs | awk '{print $1}' | grep -qx uccl-amd-ci || conda create -y -n uccl-amd-ci python=3.12
+            conda activate uccl-amd-ci
+            cd ~/uccl-ci-sandbox
+            ./build.sh rocm all --install 2>&1 | tee build.log
+          EOF
+          PID1=$!
+
+          wait $PID0
+          STATUS0=$?
+          wait $PID1
+          STATUS1=$?
+
+          if [ $STATUS0 -ne 0 ] || [ $STATUS1 -ne 0 ]; then
+            echo "Build failed! amd0=$STATUS0 amd1=$STATUS1"
+            exit 1
+          fi
+
+      - name: Run P2P benchmark
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          ssh -o BatchMode=yes amd0 << 'EOF' &
+            set -euo pipefail
+            source $HOME/miniconda3/etc/profile.d/conda.sh
+            conda activate uccl-amd-ci
+            cd ~/uccl-ci-sandbox/p2p
+            torchrun --nnodes=2 --nproc_per_node=1 \
+              --node-rank=0 \
+              --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
+              benchmarks/benchmark_uccl.py 2>&1 | tee ~/uccl-ci-sandbox/p2p-host0.log
+          EOF
+          PID0=$!
+
+          sleep 2
+
+          ssh -o BatchMode=yes amd1 << 'EOF' &
+            set -euo pipefail
+            source $HOME/miniconda3/etc/profile.d/conda.sh
+            conda activate uccl-amd-ci
+            cd ~/uccl-ci-sandbox/p2p
+            torchrun --nnodes=2 --nproc_per_node=1 \
+              --node-rank=1 \
+              --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
+              benchmarks/benchmark_uccl.py 2>&1 | tee ~/uccl-ci-sandbox/p2p-host1.log
+          EOF
+          PID1=$!
+
+          wait $PID0
+          STATUS0=$?
+          wait $PID1
+          STATUS1=$?
+
+          if [ $STATUS0 -ne 0 ] || [ $STATUS1 -ne 0 ]; then
+            echo "P2P benchmark failed! amd0=$STATUS0 amd1=$STATUS1"
+            exit 1
+          fi
+
+      - name: Run EP high-throughput test
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          ssh -o BatchMode=yes amd0 << 'EOF' &
+            set -euo pipefail
+            source $HOME/miniconda3/etc/profile.d/conda.sh
+            conda activate uccl-amd-ci
+            cd ~/uccl-ci-sandbox/ep/bench
+            ./run_ep.sh 2 0 ht ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | tee ~/uccl-ci-sandbox/ep-ht-host0.log
+          EOF
+          PID0=$!
+
+          sleep 2
+
+          ssh -o BatchMode=yes amd1 << 'EOF' &
+            set -euo pipefail
+            source $HOME/miniconda3/etc/profile.d/conda.sh
+            conda activate uccl-amd-ci
+            cd ~/uccl-ci-sandbox/ep/bench
+            ./run_ep.sh 2 1 ht ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | tee ~/uccl-ci-sandbox/ep-ht-host1.log
+          EOF
+          PID1=$!
+
+          wait $PID0
+          STATUS0=$?
+          wait $PID1
+          STATUS1=$?
+
+          if [ $STATUS0 -ne 0 ] || [ $STATUS1 -ne 0 ]; then
+            echo "EP high-throughput test failed! amd0=$STATUS0 amd1=$STATUS1"
+            exit 1
+          fi
+
+      - name: Run EP low-latency test
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          ssh -o BatchMode=yes amd0 << 'EOF' &
+            set -euo pipefail
+            source $HOME/miniconda3/etc/profile.d/conda.sh
+            conda activate uccl-amd-ci
+            cd ~/uccl-ci-sandbox/ep/bench
+            ./run_ep.sh 2 0 ll ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | tee ~/uccl-ci-sandbox/ep-ll-host0.log
+          EOF
+          PID0=$!
+
+          sleep 2
+
+          ssh -o BatchMode=yes amd1 << 'EOF' &
+            set -euo pipefail
+            source $HOME/miniconda3/etc/profile.d/conda.sh
+            conda activate uccl-amd-ci
+            cd ~/uccl-ci-sandbox/ep/bench
+            ./run_ep.sh 2 1 ll ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | tee ~/uccl-ci-sandbox/ep-ll-host1.log
+          EOF
+          PID1=$!
+
+          wait $PID0
+          STATUS0=$?
+          wait $PID1
+          STATUS1=$?
+
+          if [ $STATUS0 -ne 0 ] || [ $STATUS1 -ne 0 ]; then
+            echo "EP low-latency test failed! amd0=$STATUS0 amd1=$STATUS1"
+            exit 1
+          fi
+
+      - name: Fetch remote logs
+        if: always()
+        shell: bash
+        run: |
+          set -eu
+          for log in build ep-ll-host0 ep-ll-host1 ep-ht-host0 ep-ht-host1 p2p-host0 p2p-host1; do
+            scp -o BatchMode=yes amd0:~/uccl-ci-sandbox/${log}.log ./amd0-${log}.log 2>/dev/null || true
+            scp -o BatchMode=yes amd1:~/uccl-ci-sandbox/${log}.log ./amd1-${log}.log 2>/dev/null || true
+          done
+
+      - name: Upload log artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: amd-build-and-test-logs
+          path: |
+            amd0-*.log
+            amd1-*.log
+          if-no-files-found: warn
