@@ -512,7 +512,7 @@ class Buffer {
     // is_token_in_rank may be 0 when num_tokens == 0 (empty tensor), use workspace as safe dummy
     bool* is_token_in_rank = is_token_in_rank_ptr != 0
         ? reinterpret_cast<bool*>(is_token_in_rank_ptr)
-        : reinterpret_cast<bool*>(nullptr);
+        : nullptr;
     int* num_tokens_per_expert =
         reinterpret_cast<int*>(num_tokens_per_expert_ptr);
     int* rank_prefix_matrix = reinterpret_cast<int*>(rank_prefix_matrix_ptr);
@@ -619,17 +619,17 @@ class Buffer {
         recv_x_ptr == 0 ? nullptr : reinterpret_cast<void*>(recv_x_ptr),
         recv_x_scales_ptr == 0 ? nullptr
                                : reinterpret_cast<float*>(recv_x_scales_ptr),
-        recv_src_idx_ptr == 0 ? reinterpret_cast<int*>(nullptr) : reinterpret_cast<int*>(recv_src_idx_ptr),
+        recv_src_idx_ptr == 0 ? nullptr : reinterpret_cast<int*>(recv_src_idx_ptr),
         recv_topk_idx_ptr == 0 ? nullptr
                                : reinterpret_cast<int64_t*>(recv_topk_idx_ptr),
         recv_topk_weights_ptr == 0
             ? nullptr
             : reinterpret_cast<float*>(recv_topk_weights_ptr),
         recv_channel_prefix_matrix_ptr == 0 ? reinterpret_cast<int*>(workspace) : reinterpret_cast<int*>(recv_channel_prefix_matrix_ptr),
-        send_head_ptr == 0 ? reinterpret_cast<int*>(nullptr) : reinterpret_cast<int*>(send_head_ptr),
+        send_head_ptr == 0 ? nullptr : reinterpret_cast<int*>(send_head_ptr),
         x, x_scales, topk_idx,
         topk_weights,
-        is_token_in_rank_ptr == 0 ? reinterpret_cast<bool*>(nullptr) : reinterpret_cast<bool*>(is_token_in_rank_ptr),
+        is_token_in_rank_ptr == 0 ? nullptr : reinterpret_cast<bool*>(is_token_in_rank_ptr),
         channel_prefix_matrix_ptr == 0 ? reinterpret_cast<int*>(workspace) : reinterpret_cast<int*>(channel_prefix_matrix_ptr),
         num_tokens,
         num_worst_tokens,
