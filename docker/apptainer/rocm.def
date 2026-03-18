@@ -1,0 +1,67 @@
+Bootstrap: docker
+From: {{ BASE_IMAGE }}
+
+%arguments
+    BASE_IMAGE=rocm/dev-ubuntu-22.04
+    PY_VER=3.13
+
+%environment
+    export DEBIAN_FRONTEND=noninteractive
+    export PATH=/usr/local/bin:$PATH
+
+%post
+    set -e
+    export PY_VER={{ PY_VER }}
+    export DEBIAN_FRONTEND=noninteractive
+
+    # ─────────────────────────────────────────────────────────
+    # Basic build & runtime dependencies (minus ROCm which is already in base)
+    # ─────────────────────────────────────────────────────────
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        build-essential cmake git ninja-build g++ make patchelf \
+        rdma-core libibverbs-dev libnuma-dev \
+        libgflags-dev libgtest-dev libelf-dev \
+        pkg-config zlib1g-dev curl unzip \
+        software-properties-common \
+        hipcub
+
+    # ───── Add Python ${PY_VER} PPA & install Python ${PY_VER} + setuptools ─────
+    add-apt-repository ppa:deadsnakes/ppa
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        python${PY_VER} \
+        python${PY_VER}-dev \
+        python${PY_VER}-venv \
+        python3-setuptools \
+        python3-distutils
+
+    # ───── Bootstrap pip for Python ${PY_VER} ─────
+    curl -sS https://bootstrap.pypa.io/get-pip.py | python${PY_VER}
+    ln -sf /usr/bin/pip${PY_VER} /usr/local/bin/pip
+    ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python${PY_VER}
+
+    # ───── ukernel use hiredis as oob backend ─────
+    apt-get install -y libhiredis-dev 
+    apt-get install -y hipsolver hipblas hipsparse rocthrust hipblaslt 
+
+    # ───── Clean up apt cache ─────
+    rm -rf /var/lib/apt/lists/*
+
+    # ───── Install PyTorch with ROCm support ─────
+    python${PY_VER} -m pip install --no-cache-dir --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.1
+
+    # ─────────────────────────────────────────────────────────
+    # Install Python build back-end (for Python ${PY_VER})
+    # ─────────────────────────────────────────────────────────
+    python${PY_VER} -m pip install --no-cache-dir build auditwheel pybind11 nanobind
+    python${PY_VER} -m pip install --no-cache-dir --upgrade setuptools
+
+    # ───── Set Python ${PY_VER} as default python3 and python3-config ─────
+    ln -sf /usr/bin/python${PY_VER} /usr/local/bin/python3
+    ln -sf /usr/bin/python${PY_VER}-config /usr/local/bin/python3-config
+
+    mkdir -p /io
+
+%runscript
+    exec bash "$@"

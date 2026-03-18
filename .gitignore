@@ -1,3 +1,6 @@
+# Apptainer Images
+*.sif
+
 # Prerequisites
 *.d
 
