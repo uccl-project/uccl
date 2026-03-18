@@ -1,4 +1,4 @@
-name: Remote UCCL Build & Verify
+name: NVIDIA UCCL Build & Test
 
 on:
   push:
