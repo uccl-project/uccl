@@ -67,7 +67,7 @@ if __name__ == "__main__":
                 if torch.version.cuda and f.endswith("_hip.cpp"):
                     continue
                 sources.append(f)
-    libraries = ["ibverbs", "nl-3", "nl-route-3", "numa"]
+    libraries = ["ibverbs", "nl-3", "nl-route-3", "numa", "cuda"]
     include_dirs = [PROJECT_ROOT, PROJECT_ROOT / ".." / ".." / "include"]
     library_dirs = []
     nvcc_dlink = []

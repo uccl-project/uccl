@@ -10,6 +10,7 @@
 #include "dietgpu/float/GpuFloatCompress.cuh"
 #include "dietgpu/float/GpuFloatUtils.cuh"
 #include "dietgpu/utils/DeviceUtils.h"
+#include "dietgpu/utils/GreenContext.h"
 #include "dietgpu/utils/StackDeviceMemory.h"
 #include "dietgpu/utils/StaticUtils.h"
 
@@ -67,6 +68,7 @@ void floatCompress(
     void** out,
     uint32_t* outSize_dev,
     cudaStream_t stream) {
+  initGreenContextIfNeeded(getCurrentDevice());
   // FP8: sizes are in fp8 elements; the fused pipeline works in pairs (uint16),
   // so halve all sizes before sending to the device function.
   std::vector<uint32_t> halvedSizes;
@@ -205,6 +207,7 @@ void floatCompressSplitOneBatch(dietgpu::StackDeviceMemory& res,
                                 dietgpu::FloatCompressConfig const& config,
                                 cudaStream_t stream,
                                 FloatCompressSplitContext& ctx) {
+  initGreenContextIfNeeded(getCurrentDevice());
   assert(ctx.params_dev.data() != nullptr);
   assert(ctx.maxSize > 0);
 
@@ -251,6 +254,7 @@ void floatCompressEncodeOneBatch(dietgpu::StackDeviceMemory& res,
                                  dietgpu::FloatCompressConfig const& config,
                                  FloatCompressSplitContext& ctx,
                                  uint32_t* outSize_dev, cudaStream_t stream) {
+  initGreenContextIfNeeded(getCurrentDevice());
   assert(ctx.params_dev.data() != nullptr);
   assert(ctx.toComp_dev.data() != nullptr);
   assert(ctx.histogram_dev.data() != nullptr);

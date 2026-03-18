@@ -288,7 +288,6 @@ def main():
     )
     p.add_argument("--lazy", action="store_true")
     p.add_argument("--local-gpu-idx", type=int, default=0)
-    p.add_argument("--num-cpus", type=int, default=4)
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
     p.add_argument(
         "--sizes",
@@ -327,9 +326,9 @@ def main():
     assert world_size == 2, "This benchmark only supports 2 processes"
 
     if args.lazy:
-        ep = p2p.Endpoint(args.num_cpus)
+        ep = p2p.Endpoint()
     else:
-        ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+        ep = p2p.Endpoint(args.local_gpu_idx)
     local_metadata = ep.get_metadata()
 
     if rank == 0:

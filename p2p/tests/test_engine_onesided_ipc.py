@@ -383,7 +383,7 @@ def main():
     assert dist.get_world_size() == 2, "This test requires exactly 2 processes"
 
     torch.cuda.set_device(0)
-    ep = p2p.Endpoint(local_gpu_idx=rank, num_cpus=4)
+    ep = p2p.Endpoint(local_gpu_idx=rank)
 
     print(f"=== UCCL One-Sided IPC Tests (rank {rank}) ===")
 

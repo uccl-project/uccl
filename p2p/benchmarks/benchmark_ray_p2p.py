@@ -283,7 +283,6 @@ def _run_phase(args, ep, mode: str):
 def main():
     p = argparse.ArgumentParser("UCCL Ray P2P benchmark using transfer API")
     p.add_argument("--local-gpu-idx", type=int, default=0)
-    p.add_argument("--num-cpus", type=int, default=4)
     p.add_argument("--device", choices=["cpu", "gpu"], default="gpu")
     p.add_argument(
         "--sender-device",
@@ -372,7 +371,7 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.set_device(f"cuda:{args.local_gpu_idx}")
 
-    ep = p2p.Endpoint(args.local_gpu_idx, args.num_cpus)
+    ep = p2p.Endpoint(args.local_gpu_idx)
     ep.start_passive_accept()
 
     _run_phase(args, ep, mode="write")

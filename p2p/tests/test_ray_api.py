@@ -33,8 +33,8 @@ def test_register_memory_basic():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, True)
-    print(f"Created Endpoint with 4 CPUs")
+    ep = p2p.Endpoint(4)
+    print("Created Endpoint on GPU 4")
 
     # Create a single tensor
     tensor = torch.ones(1024, dtype=torch.float32, device="cuda:0")
@@ -98,8 +98,8 @@ def test_register_memory_multiple():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, True)
-    print(f"Created Endpoint with 4 CPUs")
+    ep = p2p.Endpoint(4)
+    print("Created Endpoint on GPU 4")
 
     # Create multiple tensors with different sizes
     tensors = [
@@ -159,8 +159,8 @@ def test_register_memory_empty_list():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, True)
-    print(f"Created Endpoint with 4 CPUs")
+    ep = p2p.Endpoint(4)
+    print("Created Endpoint on GPU 4")
 
     # Register empty list
     descriptors = ep.register_memory([])
@@ -186,8 +186,8 @@ def test_register_memory_invalid_input():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, True)
-    print(f"Created Endpoint with 4 CPUs")
+    ep = p2p.Endpoint(4)
+    print("Created Endpoint on GPU 4")
 
     # Try to register a non-tensor object
     try:
@@ -215,8 +215,8 @@ def test_register_memory_mixed_valid_invalid():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, True)
-    print(f"Created Endpoint with 4 CPUs")
+    ep = p2p.Endpoint(4)
+    print("Created Endpoint on GPU 4")
 
     # Create valid tensor
     tensor = torch.ones(1024, dtype=torch.float32, device="cuda:0")
@@ -245,8 +245,8 @@ def test_register_memory_different_dtypes():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, True)
-    print(f"Created Endpoint with 4 CPUs")
+    ep = p2p.Endpoint(4)
+    print("Created Endpoint on GPU 4")
 
     # Create tensors with different dtypes
     tensors = [
@@ -293,8 +293,8 @@ def test_get_serialized_descs():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, True)
-    print(f"Created Endpoint with 4 CPUs")
+    ep = p2p.Endpoint(4)
+    print("Created Endpoint on GPU 4")
 
     # Create tensors
     tensors = [
@@ -329,8 +329,8 @@ def test_deserialize_descs():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, True)
-    print(f"Created Endpoint with 4 CPUs")
+    ep = p2p.Endpoint(4)
+    print("Created Endpoint on GPU 4")
 
     # Create tensors
     tensors = [
@@ -392,8 +392,8 @@ def test_serialize_deserialize_roundtrip():
         return True
 
     # Create endpoint
-    ep = p2p.Endpoint(4, True)
-    print(f"Created Endpoint with 4 CPUs")
+    ep = p2p.Endpoint(4)
+    print("Created Endpoint on GPU 4")
 
     # Create tensors with different sizes and dtypes
     # Note: Use ones/zeros instead of randn for integer types (randn doesn't support int types)
@@ -484,7 +484,7 @@ def test_transfer():
     if rank == 0:
         # Client side
         print("[Client] Creating endpoint...")
-        ep = p2p.Endpoint(4, True)
+        ep = p2p.Endpoint(4)
 
         # Get local metadata
         local_metadata = ep.get_metadata()
@@ -554,7 +554,8 @@ def test_transfer():
     elif rank == 1:
         # Server side
         print("[Server] Creating endpoint...")
-        ep = p2p.Endpoint(4, True)  # passive_accept=True
+        ep = p2p.Endpoint(4)
+        ep.start_passive_accept()
 
         # Get local metadata
         local_metadata = ep.get_metadata()
@@ -565,7 +566,7 @@ def test_transfer():
         _send_bytes(local_metadata, dst=0)
         print(f"[Server] Exchanged metadata with client")
 
-        # Server doesn't need to call accept (passive_accept=True handles it)
+        # Server doesn't need to call accept after start_passive_accept().
         # Wait a bit for connection to establish
         import time
 

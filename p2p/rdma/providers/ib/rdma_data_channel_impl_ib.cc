@@ -1,7 +1,7 @@
-#ifndef RDMA_CHANNEL_IMPL_IB_CC_INCLUDED
-#define RDMA_CHANNEL_IMPL_IB_CC_INCLUDED
+#ifndef RDMA_DATA_CHANNEL_IMPL_IB_CC_INCLUDED
+#define RDMA_DATA_CHANNEL_IMPL_IB_CC_INCLUDED
 
-#include "rdma_channel_impl_ib.h"
+#include "rdma_data_channel_impl_ib.h"
 #include "util/debug.h"
 #include <cstdint>
 #include <cstdlib>
@@ -124,7 +124,7 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
           IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER | IBV_QP_AV;
   assert(ibv_modify_qp(qp, &attr, flags) == 0);
 
-  lazy_post_recv_wrs_n(qp, kMaxRecvWr, true);
+  lazyPostRecvWrsN(qp, kMaxRecvWr, true);
 
   // RTS
   memset(&attr, 0, sizeof(attr));
@@ -139,14 +139,14 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
   assert(ibv_modify_qp(qp, &attr, flags) == 0);
 }
 
-inline bool IBChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
-                                     std::vector<CQMeta>& cq_datas,
-                                     uint32_t channel_id,
-                                     uint32_t& nb_post_recv) {
+inline bool IBChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
+                                    std::vector<CQMeta>& cq_datas,
+                                    uint32_t channel_id,
+                                    uint32_t& nb_post_recv) {
   nb_post_recv = 0;
   if (!cq_ex) {
     UCCL_LOG(INFO, UCCL_P2P)
-        << "poll_once - channel_id: " << channel_id << ", cq_ex_ is null";
+        << "pollOnce - channel_id: " << channel_id << ", cq_ex_ is null";
     return false;
   }
 
@@ -163,7 +163,7 @@ inline bool IBChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
     uint64_t wr_id = wc->wr_id;
     auto status = wc->status;
     if (unlikely(status != IBV_WC_SUCCESS)) {
-      UCCL_LOG(WARN) << "poll_once - channel_id: " << channel_id
+      UCCL_LOG(WARN) << "pollOnce - channel_id: " << channel_id
                      << ", CQE error, wr_id=" << wr_id << ", status=" << status
                      << " (" << ibv_wc_status_str(status) << ")";
     } else {
@@ -186,8 +186,8 @@ inline bool IBChannelImpl::poll_once(struct ibv_cq_ex* cq_ex,
   return !cq_datas.empty();
 }
 
-inline void IBChannelImpl::lazy_post_recv_wrs_n(struct ibv_qp* qp, uint32_t n,
-                                                bool force) {
+inline void IBChannelImpl::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
+                                            bool force) {
   pending_post_recv_ += n;
   while (pending_post_recv_ >= kBatchPostRecvWr) {
     struct ibv_recv_wr* bad_wr = nullptr;
@@ -235,4 +235,4 @@ inline uint32_t IBChannelImpl::getMaxInlineData() const {
   return MAX_INLINE_DATA;
 }
 
-#endif  // RDMA_CHANNEL_IMPL_IB_CC_INCLUDED
+#endif  // RDMA_DATA_CHANNEL_IMPL_IB_CC_INCLUDED
