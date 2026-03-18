@@ -1,10 +1,12 @@
 #pragma once
 
 #include "../../include/config.h"
+#include "ipc_cache.h"
 #include "memory_registry.h"
 #include "oob.h"
+#include "peer_session.h"
 #include "request.h"
-#include "transport_engine.h"
+#include "uccl_transport_adapter.h"
 #include <cstddef>
 #include <condition_variable>
 #include <functional>
@@ -18,7 +20,6 @@ namespace UKernel {
 namespace Transport {
 
 class IpcChannel;
-class UcclTransportEngine;
 
 class Communicator {
  public:
@@ -53,18 +54,10 @@ class Communicator {
   MR get_remote_mr(int remote_rank, uint32_t mr_id);
 
   bool register_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle,
-                                 IpcCache const& cache);
-  IpcCache get_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle);
+                                  IpcCacheManager::IpcCache const& cache);
+  IpcCacheManager::IpcCache get_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle);
 
  private:
-  struct PeerState {
-    bool has_meta = false;
-    CommunicatorMeta meta{};
-    PeerTransportKind kind = PeerTransportKind::Ipc;
-    bool send_ready = false;
-    bool recv_ready = false;
-  };
-
   struct TrackedRequest {
     int peer_rank = -1;
     PeerTransportKind kind = PeerTransportKind::Ipc;
@@ -74,35 +67,32 @@ class Communicator {
     bool notified = false;
   };
 
-  void set_peer_meta(int rank, CommunicatorMeta const& meta);
-  bool try_get_peer_meta(int rank, CommunicatorMeta& out) const;
   bool check_ready() const;
   std::shared_ptr<IpcChannel> get_ipc_channel_by_rank(int rank);
-  void cache_peer_session(int rank, PeerTransportKind kind, bool mark_send_ready,
-                          bool mark_recv_ready);
   bool has_peer_send_path(int rank) const;
   bool has_peer_recv_path(int rank) const;
   PeerTransportKind get_peer_transport_kind(int rank) const;
   bool poll_request_completion(unsigned id, bool blocking);
   void register_existing_local_mrs_with_uccl();
-
-  std::vector<PeerState> peers_;
-  mutable std::mutex peer_mu_;
+  void exchange_peer_metas();
+  void cache_peer_session(int rank, PeerTransportKind kind, bool mark_send_ready,
+                          bool mark_recv_ready);
 
   int local_gpu_idx_;
   int global_rank_;
   int world_size_;
   MemoryRegistry memory_registry_;
-  std::unique_ptr<UcclTransportEngine> uccl_engine_;
+  std::unique_ptr<UcclTransportAdapter> uccl_adapter_;
   std::shared_ptr<IpcChannel> ipc_channel_;
 
   std::shared_ptr<ShmRingExchanger> shm_control_;
+  std::shared_ptr<PeerSessionManager> peer_manager_;
 
   std::shared_ptr<CommunicatorConfig> config_;
   std::shared_ptr<Exchanger> exchanger_client_;
 
   std::unordered_map<unsigned, TrackedRequest> requests_map_;
-  std::mutex req_mu_;
+  mutable std::mutex req_mu_;
   std::atomic<unsigned> next_request_id_{1};
 
   std::atomic<bool> notifier_running_{false};

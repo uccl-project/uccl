@@ -1,6 +1,7 @@
 #pragma once
 
-#include "gpu_rt.h"
+#include "../../include/config.h"
+#include "../../include/gpu_rt.h"
 #include "util/jring.h"
 #include <atomic>
 #include <chrono>
@@ -19,12 +20,18 @@
 #include <unordered_map>
 #include <vector>
 
-#ifdef USE_REDIS_OOB
-#include <hiredis/hiredis.h>
-#endif
-
 namespace UKernel {
 namespace Transport {
+
+enum class PeerTransportKind { Uccl, Ipc };
+
+struct CommunicatorMeta;
+
+char const* peer_transport_kind_name(PeerTransportKind kind);
+
+PeerTransportKind resolve_peer_transport_kind(
+    CommunicatorConfig const& config, CommunicatorMeta const& local_meta,
+    CommunicatorMeta const& peer_meta);
 
 struct Exchangeable {
   virtual std::map<std::string, std::string> to_map() const = 0;
@@ -139,24 +146,6 @@ class Exchanger {
                               int max_retries = 50, int delay_ms = 100) = 0;
 };
 
-class RedisExchanger : public Exchanger {
- public:
-  RedisExchanger(std::string const& host = "127.0.0.1", int port = 6379,
-                 int timeout_ms = 2000);
-  ~RedisExchanger();
-
-  bool valid() const override;
-  bool publish(std::string const& key, Exchangeable const& obj) override;
-  bool fetch(std::string const& key, Exchangeable& obj) override;
-  bool wait_and_fetch(std::string const& key, Exchangeable& obj,
-                      int max_retries = 50, int delay_ms = 100) override;
-
- private:
-#ifdef USE_REDIS_OOB
-  redisContext* ctx_;
-#endif
-};
-
 class SockExchanger : public Exchanger {
  public:
   SockExchanger(bool is_server, std::string const& host, int port,
@@ -194,15 +183,6 @@ class SockExchanger : public Exchanger {
       int, std::unordered_map<std::string, std::map<std::string, std::string>>&,
       std::mutex&, std::atomic<bool>&, size_t,
       std::function<void(std::thread&&)>);
-};
-
-struct IpcCache {
-  gpuIpcMemHandle_t handle;
-  bool is_send;
-  void* direct_ptr;
-  uintptr_t offset;
-  size_t size;
-  int device_idx = -1;
 };
 
 static constexpr uint16_t kTypeIpcCache = 1;

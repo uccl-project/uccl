@@ -1,8 +1,8 @@
+#include "ipc_cache.h"
 #include "memory_registry.h"
 #include "oob.h"
 #include "request.h"
 #include "test.h"
-#include "transport_engine.h"
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -33,7 +33,7 @@ bool throws(Fn&& fn) {
 void test_memory_registry() {
   using MemoryRegistry = UKernel::Transport::MemoryRegistry;
   using MR = UKernel::Transport::MR;
-  using IpcCache = UKernel::Transport::IpcCache;
+  using IpcCache = UKernel::Transport::IpcCacheManager::IpcCache;
 
   MemoryRegistry registry;
   std::vector<uint8_t> buf_a(512, 0x11);

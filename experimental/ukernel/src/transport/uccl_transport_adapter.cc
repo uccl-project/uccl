@@ -124,9 +124,9 @@ void UcclTransportAdapter::deregister_memory(uint64_t mr_id) {
 }
 
 int UcclTransportAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
-                                     uint64_t local_mr_id,
-                                     uint64_t remote_mr_id,
-                                     uint64_t request_id) {
+                                      uint64_t local_mr_id,
+                                      uint64_t remote_mr_id,
+                                      uint64_t request_id) {
   (void)remote_mr_id;
   ::uccl::UcclFlow* flow = nullptr;
   ::uccl::Mhandle* local_mh = nullptr;
@@ -164,8 +164,8 @@ int UcclTransportAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
 }
 
 int UcclTransportAdapter::recv_async(int peer_rank, void* local_ptr, size_t len,
-                                     uint64_t local_mr_id,
-                                     uint64_t request_id) {
+                                      uint64_t local_mr_id,
+                                      uint64_t request_id) {
   ::uccl::UcclFlow* flow = nullptr;
   ::uccl::Mhandle* local_mh = nullptr;
   {

@@ -1,4 +1,5 @@
 #include "communicator.h"
+#include "ipc_cache.h"
 #include "ipc_channel.h"
 #include "util/util.h"
 #include <algorithm>
@@ -95,13 +96,13 @@ bool IpcChannel::send_one(int to_rank, Request* creq) {
 
   GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx_));
 
-  IpcCache cache = comm_->get_remote_ipc_cache(to_rank, got.handle);
+  IpcCacheManager::IpcCache cache = comm_->get_remote_ipc_cache(to_rank, got.handle);
   void* base = cache.direct_ptr;
   if (base == nullptr) {
     GPU_RT_CHECK(
         gpuIpcOpenMemHandle(&base, got.handle, gpuIpcMemLazyEnablePeerAccess));
 
-    IpcCache new_cache{};
+    IpcCacheManager::IpcCache new_cache{};
     new_cache.handle = got.handle;
     new_cache.is_send = got.is_send;
     new_cache.direct_ptr = base;

@@ -66,6 +66,11 @@ class UcclTransportAdapter {
   bool poll_completion(uint64_t request_id);
   bool wait_completion(uint64_t request_id);
 
+  bool is_initialized() const { return endpoint_ != nullptr; }
+  bool is_configured() const { return is_configured_; }
+
+  void set_configured() { is_configured_ = true; }
+
  private:
   struct PeerContext {
     ::uccl::UcclFlow* send_flow = nullptr;
@@ -83,6 +88,7 @@ class UcclTransportAdapter {
   std::unordered_map<uint64_t, std::unique_ptr<::uccl::ucclRequest>>
       pending_requests_;
   mutable std::mutex mu_;
+  bool is_configured_ = false;
 };
 
 }  // namespace Transport

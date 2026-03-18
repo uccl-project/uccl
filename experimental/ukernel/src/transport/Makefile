@@ -15,18 +15,10 @@ UCCL_LDFLAGS := $(UCCL_RDMA_STATIC) -libverbs -lrdmacm
 CXXFLAGS += $(UCCL_CFLAGS)
 LDFLAGS += $(UCCL_LDFLAGS)
 
-ifeq ($(USE_REDIS_OOB),1)
-PKG_CONFIG := pkg-config
-REDIS_CFLAGS := $(shell $(PKG_CONFIG) --cflags hiredis)
-REDIS_LIBS   := $(shell $(PKG_CONFIG) --libs hiredis)
-CXXFLAGS += $(REDIS_CFLAGS) -DUSE_REDIS_OOB
-LDFLAGS += $(REDIS_LIBS)
-endif
-
 LOCAL_INCLUDES := -I$(UCCL_ROOT)/experimental/ukernel/include -I$(UCCL_ROOT)/include -I. -Itest -I../../include -I$(CUDA_HOME)/include
 
-SRC_CPP := communicator.cc ipc_channel.cc memory_registry.cc oob_redis.cc oob_shm.cc oob_socket.cc request.cc transport_engine.cc uccl_transport_adapter.cc utils.cc
-TEST_CPP := test/test_main.cc test/test_transport_core.cc test/test_transport_communicator.cc test/test_transport_oob_socket.cc test/test_transport_oob_redis.cc test/test_transport_oob_shm.cc test/test_transport_utils.cc
+SRC_CPP := communicator.cc ipc_cache.cc ipc_channel.cc memory_registry.cc oob.cc oob_shm.cc oob_socket.cc peer_session.cc request.cc uccl_transport_adapter.cc utils.cc
+TEST_CPP := test/test_main.cc test/test_transport_core.cc test/test_transport_communicator.cc test/test_transport_oob_socket.cc test/test_transport_oob_shm.cc test/test_transport_utils.cc
 
 OBJ_CPP := $(SRC_CPP:.cc=.o)
 OBJ_TEST := $(TEST_CPP:.cc=.o)

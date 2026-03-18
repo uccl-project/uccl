@@ -4,6 +4,9 @@
 namespace UKernel {
 namespace Transport {
 
+MemoryRegistry::MemoryRegistry() = default;
+MemoryRegistry::~MemoryRegistry() = default;
+
 MR MemoryRegistry::track_local_buffer(void* local_buf, size_t len) {
   std::lock_guard<std::mutex> lk(local_mu_);
 
@@ -59,23 +62,7 @@ std::vector<void*> MemoryRegistry::local_buffers() const {
 }
 
 void MemoryRegistry::clear_remote_ipc_cache() {
-  std::lock_guard<std::mutex> lk(ipc_cache_mu_);
-  int original_device = -1;
-  bool have_original_device = (gpuGetDevice(&original_device) == gpuSuccess);
-  for (auto& [rank, caches] : rank_handle_to_ipc_cache_) {
-    (void)rank;
-    for (auto& [handle, cache] : caches) {
-      (void)handle;
-      if (cache.direct_ptr == nullptr || cache.device_idx < 0) continue;
-      GPU_RT_CHECK(gpuSetDevice(cache.device_idx));
-      GPU_RT_CHECK(gpuIpcCloseMemHandle(cache.direct_ptr));
-      cache.direct_ptr = nullptr;
-    }
-  }
-  if (have_original_device) {
-    GPU_RT_CHECK(gpuSetDevice(original_device));
-  }
-  rank_handle_to_ipc_cache_.clear();
+  ipc_cache_.clear_all();
 }
 
 MR MemoryRegistry::get_local_mr(void* local_buf) const {
@@ -138,21 +125,13 @@ MR MemoryRegistry::get_remote_mr(int remote_rank, uint32_t mr_id) const {
 
 bool MemoryRegistry::register_remote_ipc_cache(int remote_rank,
                                                gpuIpcMemHandle_t handle,
-                                               IpcCache const& cache) {
-  std::lock_guard<std::mutex> lk(ipc_cache_mu_);
-  rank_handle_to_ipc_cache_[remote_rank][make_handle_key(handle)] = cache;
-  return true;
+                                               IpcCacheManager::IpcCache const& cache) {
+  return ipc_cache_.register_cache(remote_rank, handle, cache);
 }
 
-IpcCache MemoryRegistry::get_remote_ipc_cache(int remote_rank,
-                                              gpuIpcMemHandle_t handle) const {
-  std::lock_guard<std::mutex> lk(ipc_cache_mu_);
-  auto it_rank = rank_handle_to_ipc_cache_.find(remote_rank);
-  if (it_rank == rank_handle_to_ipc_cache_.end()) return IpcCache{};
-
-  auto it = it_rank->second.find(make_handle_key(handle));
-  if (it == it_rank->second.end()) return IpcCache{};
-  return it->second;
+IpcCacheManager::IpcCache MemoryRegistry::get_remote_ipc_cache(
+    int remote_rank, gpuIpcMemHandle_t handle) const {
+  return ipc_cache_.get_cache(remote_rank, handle);
 }
 
 }  // namespace Transport

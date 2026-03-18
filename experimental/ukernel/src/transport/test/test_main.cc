@@ -39,15 +39,6 @@ int main(int argc, char** argv) {
           get_int_arg(argc, argv, "--world-size", 4));
       return 0;
     }
-    if (argc > 1 && std::string(argv[1]) == "oob-redis") {
-      test_redis_oob();
-      return 0;
-    }
-    if (argc > 1 && std::string(argv[1]) == "oob-redis-meta") {
-      test_redis_meta_exchange_multi_threads(
-          get_int_arg(argc, argv, "--world-size", 4));
-      return 0;
-    }
     if (argc > 1 && std::string(argv[1]) == "oob-shm") {
       test_shm_oob();
       return 0;
@@ -67,8 +58,6 @@ int main(int argc, char** argv) {
             << "  test_transport_main communicator-local\n"
             << "  test_transport_main oob-socket\n"
             << "  test_transport_main oob-socket-meta [--world-size N]\n"
-            << "  test_transport_main oob-redis\n"
-            << "  test_transport_main oob-redis-meta [--world-size N]\n"
             << "  test_transport_main oob-shm\n"
             << "  test_transport_main utils-host-id\n";
   return 1;
