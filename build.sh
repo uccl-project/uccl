@@ -461,7 +461,7 @@ if [[ "$DO_INSTALL" == "1" ]]; then
   UCCL_CLEANUP_DIR="$(${PYTHON_CMD} -c "import site; print(site.getsitepackages()[0])")/uccl"
   if [[ -d "$UCCL_CLEANUP_DIR" ]]; then
     msg_info "Cleaning up stale files in $UCCL_CLEANUP_DIR"
-    rm -r "$UCCL_CLEANUP_DIR"
+    rm -r "$UCCL_CLEANUP_DIR" 2>/dev/null || true
   fi
   if [[ "$TARGET" != "therock" ]]; then
     ${PIP_CMD} install "${WHEEL_DIR}"/uccl*.whl --no-deps
