@@ -18,7 +18,7 @@
 #
 #   Optional (with defaults):
 #     ROCM_IDX_URL                  ROCm package index URL (used by therock target)
-#     UCCL_WHEEL_RETAG_HOST_GLIBC   Retag wheel to host glibc version (default "0")
+#     UCCL_RETAG_TO_HOST_GLIBC   Retag wheel to host glibc version (default "0")
 #     UCCL_LOCAL_VERSION            Local version suffix appended to wheel filename (PEP 440)
 #
 #   Build feature flags:
@@ -323,10 +323,10 @@ fi
 CONTAINER_GLIBC_VER=$(python3 -c "import platform; print(platform.libc_ver()[1])")
 AUDIT_PLAT="manylinux_${CONTAINER_GLIBC_VER//./_}_$(uname -m)"
 
-if [[ "${UCCL_WHEEL_RETAG_HOST_GLIBC}" == "1" ]]; then
+if [[ "${UCCL_RETAG_TO_HOST_GLIBC}" == "1" ]]; then
   UCCL_WHEEL_PLAT="manylinux_${HOST_GLIBC_VER//./_}_$(uname -m)"
   if [[ "${UCCL_WHEEL_PLAT}" != "${AUDIT_PLAT}" ]]; then
-    echo "WARNING: UCCL_WHEEL_RETAG_HOST_GLIBC is set." >&2
+    echo "WARNING: UCCL_RETAG_TO_HOST_GLIBC is set." >&2
     echo "  The wheel will be retagged from ${AUDIT_PLAT} to ${UCCL_WHEEL_PLAT}." >&2
     echo "  The binaries are built against the container glibc (${CONTAINER_GLIBC_VER})." >&2
     echo "  If the host glibc is older, the wheel may fail at runtime" >&2
@@ -338,7 +338,7 @@ else
   echo "Container glibc ${CONTAINER_GLIBC_VER} -> wheel tagged ${UCCL_WHEEL_PLAT}"
   if [[ "${HOST_GLIBC_VER}" != "${CONTAINER_GLIBC_VER}" ]]; then
     echo "  Note: host glibc (${HOST_GLIBC_VER}) differs from container glibc (${CONTAINER_GLIBC_VER})."
-    echo "  Tip: set UCCL_WHEEL_RETAG_HOST_GLIBC=1 to retag to host glibc ${HOST_GLIBC_VER}."
+    echo "  Tip: set UCCL_RETAG_TO_HOST_GLIBC=1 to retag to host glibc ${HOST_GLIBC_VER}."
   fi
 fi
 

@@ -14,13 +14,13 @@
 #                                    Example: CONTAINER_ENGINE=apptainer ./build.sh cu12 all
 #   USE_INTEL_RDMA_NIC=1             Enable Intel RDMA NIC support (irdma driver, vendor 0x8086)
 #                                    Example: USE_INTEL_RDMA_NIC=1 ./build.sh cu12 ccl_efa
-#   UCCL_WHEEL_RETAG_HOST_GLIBC=1    Allow retagging the wheel to the host's
+#   UCCL_RETAG_TO_HOST_GLIBC=1    Allow retagging the wheel to the host's
 #                                    glibc version when it differs from the container's.
 #                                    By default the wheel keeps the container's glibc tag.
 #                                    WARNING: the wheel is still built against the
 #                                    container's glibc and may use symbols not present in
 #                                    an older host glibc.
-#                                    Example: UCCL_WHEEL_RETAG_HOST_GLIBC=1 ./build.sh cu12 all
+#                                    Example: UCCL_RETAG_TO_HOST_GLIBC=1 ./build.sh cu12 all
 #
 # The wheels are written to wheelhouse-[cu12|cu13|rocm|therock]
 # -----------------------
@@ -152,7 +152,7 @@ fi
 # The build container produces wheels tagged with the container's glibc
 # version by default.  If the host has an older glibc (e.g. Rocky Linux 9.x
 # ships glibc 2.34), the wheel won't install there.  Set
-# UCCL_WHEEL_RETAG_HOST_GLIBC=1 to retag the wheel to the host glibc.
+# UCCL_RETAG_TO_HOST_GLIBC=1 to retag the wheel to the host glibc.
 # Note: this does not verify glibc symbol compatibility -- the binaries are
 # built against the container's glibc and may use newer symbols.  UCCL
 # collectives and ep has been tested and working on Rocky Linux 9.4 with
@@ -386,7 +386,7 @@ if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
   for env_var in TARGET PY_VER ARCH ROCM_IDX_URL IS_EFA WHEEL_DIR BUILD_TYPE \
     USE_TCPX USE_EFA USE_IB USE_TCP USE_DIETGPU USE_INTEL_RDMA_NIC \
     PER_EXPERT_BATCHING MAKE_NORMAL_MODE TORCH_CUDA_ARCH_LIST \
-    DISABLE_AGGRESSIVE_ATOMIC HOST_GLIBC_VER UCCL_WHEEL_RETAG_HOST_GLIBC \
+    DISABLE_AGGRESSIVE_ATOMIC HOST_GLIBC_VER UCCL_RETAG_TO_HOST_GLIBC \
     UCCL_LOCAL_VERSION; do
     value="${!env_var-}"
     CONTAINER_RUN_ARGS+=(--env "$env_var=$value")
@@ -426,7 +426,7 @@ else
     -e TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-}" \
     -e DISABLE_AGGRESSIVE_ATOMIC="${DISABLE_AGGRESSIVE_ATOMIC:-0}" \
     -e HOST_GLIBC_VER="${HOST_GLIBC_VER}" \
-    -e UCCL_WHEEL_RETAG_HOST_GLIBC="${UCCL_WHEEL_RETAG_HOST_GLIBC:-0}" \
+    -e UCCL_RETAG_TO_HOST_GLIBC="${UCCL_RETAG_TO_HOST_GLIBC:-0}" \
     -e UCCL_LOCAL_VERSION="${UCCL_LOCAL_VERSION:-}" \
     -w /io \
     "$IMAGE_NAME" \
