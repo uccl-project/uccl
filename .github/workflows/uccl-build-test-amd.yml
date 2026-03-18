@@ -65,13 +65,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rsync -az --delete --exclude .venv \
+          rsync -az --delete --exclude .venv --exclude .git \
             --rsync-path="mkdir -p ~/uccl-ci-sandbox && rsync" \
             -e "ssh -o BatchMode=yes" \
             ./ amd0:~/uccl-ci-sandbox/ &
           PID0=$!
 
-          rsync -az --delete --exclude .venv \
+          rsync -az --delete --exclude .venv --exclude .git \
             --rsync-path="mkdir -p ~/uccl-ci-sandbox && rsync" \
             -e "ssh -o BatchMode=yes" \
             ./ amd1:~/uccl-ci-sandbox/ &
