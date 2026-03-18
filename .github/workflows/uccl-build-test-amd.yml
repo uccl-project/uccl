@@ -34,7 +34,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git submodule update --init --recursive thirdparty/rccl
+          git submodule update --init thirdparty/rccl
 
       - name: Setup SSH for AMD hosts
         shell: bash
