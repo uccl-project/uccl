@@ -30,6 +30,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Initialize submodules for ROCm
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule update --init --recursive thirdparty/rccl
+
       - name: Setup SSH for AMD hosts
         shell: bash
         run: |
