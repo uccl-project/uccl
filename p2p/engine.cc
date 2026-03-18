@@ -327,6 +327,7 @@ Endpoint::~Endpoint() {
   {
     std::shared_lock<std::shared_mutex> lock(mr_mu_);
     for (auto& [mr_id, mr] : mr_id_to_mr_) {
+      delete mr->mhandle_;
       delete mr;
     }
   }
@@ -605,6 +606,7 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
 }
 
 bool Endpoint::dereg(uint64_t mr_id) {
+  MR* mr = nullptr;
   {
     std::unique_lock<std::shared_mutex> lock(mr_mu_);
     auto it = mr_id_to_mr_.find(mr_id);
@@ -612,12 +614,13 @@ bool Endpoint::dereg(uint64_t mr_id) {
       std::cerr << "[dereg] Error: Invalid mr_id " << mr_id << std::endl;
       return false;
     }
-    auto mr = it->second;
-    mr->mhandle_->compress_ctx.reset();
-    uccl_deregmr(ep_, mr->mhandle_);
-    delete mr;
+    mr = it->second;
     mr_id_to_mr_.erase(mr_id);
   }
+  mr->mhandle_->compress_ctx.reset();
+  uccl_deregmr(ep_, mr->mhandle_);
+  delete mr->mhandle_;
+  delete mr;
   return true;
 }
 

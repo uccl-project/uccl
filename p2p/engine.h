@@ -53,6 +53,7 @@ struct Mhandle {
 struct P2PMhandle {
   MRArray mr_array;
   CompressCtx compress_ctx;
+  std::vector<MrCacheHandleRef> cache_refs;
 };
 
 struct MR {

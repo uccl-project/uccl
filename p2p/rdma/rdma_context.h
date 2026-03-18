@@ -2,7 +2,48 @@
 #pragma once
 #include "define.h"
 #include "rdma_device.h"
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 #include <dlfcn.h>
+
+class RdmaContext;
+
+struct MrCacheKey {
+  uintptr_t addr;
+  size_t size;
+  bool is_gpu;
+  bool use_dmabuf;
+
+  bool operator==(MrCacheKey const& other) const {
+    return addr == other.addr && size == other.size && is_gpu == other.is_gpu &&
+           use_dmabuf == other.use_dmabuf;
+  }
+};
+
+struct MrCacheKeyHash {
+  size_t operator()(MrCacheKey const& key) const {
+    size_t hash = std::hash<uintptr_t>{}(key.addr);
+    hash ^=
+        std::hash<size_t>{}(key.size) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    hash ^=
+        std::hash<bool>{}(key.is_gpu) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    hash ^= std::hash<bool>{}(key.use_dmabuf) + 0x9e3779b9 + (hash << 6) +
+            (hash >> 2);
+    return hash;
+  }
+};
+
+struct MrCacheEntry {
+  MrCacheKey key;
+  struct ibv_mr* mr = nullptr;
+  uint64_t refs = 0;
+};
+
+struct MrCacheHandleRef {
+  std::shared_ptr<RdmaContext> context;
+  MrCacheEntry* entry = nullptr;
+};
 
 class RdmaContext {
  public:
@@ -256,18 +297,58 @@ class RdmaContext {
   }
 
   struct ibv_mr* regMem(void* addr, size_t size) const {
-    // Intel irdma (0x8086) uses DMA-BUF for GPUDirect RDMA
-    // instead of nvidia_peermem.
-    if (vendor_id_ == 0x8086 && isGpuPointer(addr)) {
-      UCCL_LOG(INFO, UCCL_RDMA)
-          << "GPU memory detected on irdma NIC (vendor=0x" << std::hex
-          << vendor_id_ << std::dec << "), using DMA-BUF registration";
-      return regMemGpuDmabuf(addr, size);
+    return regMemImpl(addr, size, getRegistrationMode(addr).use_dmabuf);
+  }
+
+  MrCacheEntry* acquireCachedMr(void* addr, size_t size) {
+    RegistrationMode mode = getRegistrationMode(addr);
+    MrCacheKey key{reinterpret_cast<uintptr_t>(addr), size, mode.is_gpu,
+                   mode.use_dmabuf};
+
+    std::lock_guard<std::mutex> lock(mr_cache_mu_);
+    auto it = mr_cache_.find(key);
+    if (it != mr_cache_.end()) {
+      it->second->refs++;
+      return it->second.get();
     }
 
-    int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
-                       IBV_ACCESS_REMOTE_READ;
-    return ibv_reg_mr(pd_.get(), addr, size, access_flags);
+    struct ibv_mr* mr = regMemImpl(addr, size, mode.use_dmabuf);
+    if (!mr) {
+      return nullptr;
+    }
+
+    auto entry = std::make_unique<MrCacheEntry>();
+    entry->key = key;
+    entry->mr = mr;
+    entry->refs = 1;
+
+    MrCacheEntry* entry_ptr = entry.get();
+    mr_cache_[key] = std::move(entry);
+    return entry_ptr;
+  }
+
+  void releaseCachedMr(MrCacheEntry* entry) {
+    if (!entry) {
+      return;
+    }
+
+    struct ibv_mr* mr_to_dereg = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(mr_cache_mu_);
+      auto it = mr_cache_.find(entry->key);
+      if (it == mr_cache_.end() || it->second.get() != entry) {
+        return;
+      }
+
+      if (--it->second->refs == 0) {
+        mr_to_dereg = it->second->mr;
+        mr_cache_.erase(it);
+      }
+    }
+
+    if (mr_to_dereg) {
+      deregMem(mr_to_dereg);
+    }
   }
 
   static void deregMem(struct ibv_mr* mr) {
@@ -276,8 +357,37 @@ class RdmaContext {
   inline const uint64_t getContextID() const { return context_id_; }
 
  private:
+  struct RegistrationMode {
+    bool is_gpu;
+    bool use_dmabuf;
+  };
+
+  RegistrationMode getRegistrationMode(void* addr) const {
+    bool is_gpu = isGpuPointer(addr);
+    bool use_dmabuf = (vendor_id_ == 0x8086 && is_gpu);
+    if (use_dmabuf) {
+      UCCL_LOG(INFO, UCCL_RDMA)
+          << "GPU memory detected on irdma NIC (vendor=0x" << std::hex
+          << vendor_id_ << std::dec << "), using DMA-BUF registration";
+    }
+    return {is_gpu, use_dmabuf};
+  }
+
+  struct ibv_mr* regMemImpl(void* addr, size_t size, bool use_dmabuf) const {
+    if (use_dmabuf) {
+      return regMemGpuDmabuf(addr, size);
+    }
+
+    int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                       IBV_ACCESS_REMOTE_READ;
+    return ibv_reg_mr(pd_.get(), addr, size, access_flags);
+  }
+
   std::shared_ptr<struct ibv_context> ctx_;
   std::shared_ptr<struct ibv_pd> pd_;
+  std::mutex mr_cache_mu_;
+  std::unordered_map<MrCacheKey, std::unique_ptr<MrCacheEntry>, MrCacheKeyHash>
+      mr_cache_;
   uint64_t context_id_;
   uint32_t vendor_id_;
   mutable int gid_index_;
