@@ -10,11 +10,7 @@
 #include <thread>
 #include <vector>
 
-class PeerCopyManager;
-
 class UcclProxy {
-  friend class PeerCopyManager;
-
  public:
   UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr, size_t total_size,
             int rank, int node_idx, int local_rank, int num_experts = 0,

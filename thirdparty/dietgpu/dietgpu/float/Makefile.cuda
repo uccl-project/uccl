@@ -83,7 +83,7 @@ $(OBJ_DIR)/float_%.o: $(FLOAT_DIR)/%.cu | $(OBJ_DIR)
 
 # Link shared library
 $(LIB_TARGET): $(ALL_OBJS)
-	$(NVCC) $(LDFLAGS) -o $@ $^ -arch=$(GPU_ARCH)
+	$(NVCC) $(LDFLAGS) -o $@ $^ -arch=$(GPU_ARCH) -lcuda
 
 clean:
 	rm -rf $(OBJ_DIR) $(LIB_TARGET)

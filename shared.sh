@@ -42,7 +42,7 @@ build_ccl_rdma() {
     echo "[container] Building with Intel RDMA NIC support (USE_INTEL_RDMA_NIC=1)"
   fi
 
-  if [[ "$TARGET" == cuda* ]]; then
+  if [[ "$TARGET" == cu* ]]; then
     cd collective/rdma && make clean && make -j$(nproc) USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} && cd ../../
     TARGET_SO=collective/rdma/libnccl-net-uccl.so
   elif [[ "$TARGET" == rocm* ]]; then
@@ -113,7 +113,7 @@ build_p2p() {
 
   if [[ "${USE_DIETGPU:-0}" == "1" ]]; then
     cd thirdparty/dietgpu
-    if [[ "$TARGET" == cuda* ]]; then
+    if [[ "$TARGET" == cu* ]]; then
       cd dietgpu/float
       CUDA_GPU_ARCH="sm_$(echo "${TORCH_CUDA_ARCH_LIST:-9.0}" | awk '{print $1}' | sed 's/+PTX//; s/\.//')"
       echo "Building dietgpu float for CUDA: $CUDA_GPU_ARCH"
@@ -130,7 +130,7 @@ build_p2p() {
   fi
 
   cd p2p
-  if [[ "$TARGET" == cuda* ]]; then
+  if [[ "$TARGET" == cu* ]]; then
     make clean && make -j$(nproc)
   elif [[ "$TARGET" == rocm* ]]; then
     make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm
@@ -167,7 +167,7 @@ build_ep() {
 
   if [[ "$TARGET" == "therock" ]]; then
     echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
-  elif [[ "$TARGET" == rocm* || "$TARGET" == cuda* ]]; then
+  elif [[ "$TARGET" == rocm* || "$TARGET" == cu* ]]; then
     cd ep
     # This may be needed if you traverse through different git commits
     # make clean && rm -r build || true
@@ -189,7 +189,7 @@ build_ukernel() {
   echo "[container] build_ukernel Target: $TARGET"
 
   cd experimental/ukernel
-  if [[ "$TARGET" == cuda* ]]; then
+  if [[ "$TARGET" == cu* ]]; then
     make clean -f Makefile && make -j$(nproc) -f Makefile
   elif [[ "$TARGET" == rocm* ]]; then
     make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm

@@ -518,6 +518,12 @@ void floatCompressDevice(
     case FloatType::kFloat32:
       RUN_SPLIT(FloatType::kFloat32);
       break;
+    case FloatType::kFloat8E4M3FN:
+      RUN_SPLIT(FloatType::kFloat8E4M3FN);
+      break;
+    case FloatType::kFloat8E5M2:
+      RUN_SPLIT(FloatType::kFloat8E5M2);
+      break;
     default:
       assert(false);
       break;
@@ -567,6 +573,12 @@ void floatCompressDevice(
       break;
     case FloatType::kFloat32:
       RUN_ANS(FloatType::kFloat32);
+      break;
+    case FloatType::kFloat8E4M3FN:
+      RUN_ANS(FloatType::kFloat8E4M3FN);
+      break;
+    case FloatType::kFloat8E5M2:
+      RUN_ANS(FloatType::kFloat8E5M2);
       break;
     default:
       assert(false);
@@ -637,6 +649,16 @@ inline void runSplitFloat(
       break;
     case FloatType::kFloat32:
       runSplitFloatForType<FloatType::kFloat32>(
+          numInBatch, inProvider, useChecksum, checksum_data,
+          toComp_data, compRowStride, outProvider, histogram_data, stream);
+      break;
+    case FloatType::kFloat8E4M3FN:
+      runSplitFloatForType<FloatType::kFloat8E4M3FN>(
+          numInBatch, inProvider, useChecksum, checksum_data,
+          toComp_data, compRowStride, outProvider, histogram_data, stream);
+      break;
+    case FloatType::kFloat8E5M2:
+      runSplitFloatForType<FloatType::kFloat8E5M2>(
           numInBatch, inProvider, useChecksum, checksum_data,
           toComp_data, compRowStride, outProvider, histogram_data, stream);
       break;

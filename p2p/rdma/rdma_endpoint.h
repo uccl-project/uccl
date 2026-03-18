@@ -4,9 +4,8 @@
 #include "epoll_client.h"
 #include "epoll_server.h"
 #include "memory_allocator.h"
-#include "rdma_channel_group.h"
+#include "rdma_connection.h"
 #include "rdma_context.h"
-#include "rdma_ctrl_channel.h"
 #include "rdma_device.h"
 #include "util/debug.h"
 #include "util/net.h"
@@ -147,7 +146,7 @@ class NICEndpoint {
   bool checkSendComplete_once(uint64_t rank_id, int64_t wr_id) {
     // UCCL_LOG(INFO, UCCL_RDMA) << "checkSendComplete - rank_id: " << rank_id
     //           << ", wr_id: " << wr_id;
-
+    std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
     auto it = send_channel_groups_.find(rank_id);
     if (unlikely(it == send_channel_groups_.end())) {
       throw std::runtime_error("Send channel group not found for rank_id: " +
@@ -219,7 +218,7 @@ class NICEndpoint {
     return wr_id;
   }
 
-  // Blocking send: wraps SendChannelGroup::send with rank_id parameter
+  // Blocking send: wraps SendConnection::send with rank_id parameter
   // Returns wr_id for checking completion later
   int64_t send(uint64_t rank_id, std::shared_ptr<RDMASendRequest> req) {
     auto it = send_channel_groups_.find(rank_id);
@@ -246,7 +245,7 @@ class NICEndpoint {
     return wr_id;
   }
 
-  // Blocking recv: wraps RecvChannelGroup::recv with rank_id parameter
+  // Blocking recv: wraps RecvConnection::recv with rank_id parameter
   // Returns index for checking completion later
   int64_t recv(uint64_t rank_id, std::shared_ptr<RDMARecvRequest> req) {
     auto it = recv_channel_groups_.find(rank_id);
@@ -615,8 +614,9 @@ class NICEndpoint {
         }
       }
 
-      std::shared_ptr<RDMAChannel> new_channel = std::make_shared<RDMAChannel>(
-          ctx_ptr, meta.channel_meta, meta.channel_id);
+      std::shared_ptr<RDMADataChannel> new_channel =
+          std::make_shared<RDMADataChannel>(ctx_ptr, meta.channel_meta,
+                                            meta.channel_id);
       // Create response (echo back the same data)
       MetaInfoToExchange response(rank_id_, meta.channel_id,
                                   new_channel->get_local_meta(), nullptr,
@@ -628,7 +628,7 @@ class NICEndpoint {
   }
 
   // Handle response from send_meta operation
-  uint64_t handle_send_meta_response(std::shared_ptr<RDMAChannel> channel,
+  uint64_t handle_send_meta_response(std::shared_ptr<RDMADataChannel> channel,
                                      std::string const& response) {
     // Deserialize response as MetaInfoToExchange
     MetaInfoToExchange response_meta =
@@ -638,7 +638,7 @@ class NICEndpoint {
     return response_meta.rank_id;
   }
 
-  std::shared_ptr<RecvChannelGroup> getOrCreateRecvGroup(uint64_t rank_id) {
+  std::shared_ptr<RecvConnection> getOrCreateRecvGroup(uint64_t rank_id) {
     {
       std::shared_lock read_lock(recv_channel_mutex_);
       auto it = recv_channel_groups_.find(rank_id);
@@ -651,7 +651,7 @@ class NICEndpoint {
       std::unique_lock write_lock(recv_channel_mutex_);
       auto [it, inserted] = recv_channel_groups_.try_emplace(
           rank_id,
-          std::make_shared<RecvChannelGroup>(
+          std::make_shared<RecvConnection>(
               numa_node, auto_start_polling_));  // try_emplace constructs only
                                                  // if inserting
       return it->second;
@@ -659,8 +659,8 @@ class NICEndpoint {
   }
 
   void addOneRecvChannel(uint64_t rank_id, uint32_t channel_id,
-                         std::shared_ptr<RDMAChannel> new_channel) {
-    std::shared_ptr<RecvChannelGroup> group_ptr = getOrCreateRecvGroup(rank_id);
+                         std::shared_ptr<RDMADataChannel> new_channel) {
+    std::shared_ptr<RecvConnection> group_ptr = getOrCreateRecvGroup(rank_id);
     group_ptr->addChannel(channel_id, new_channel);
   }
 
@@ -671,7 +671,7 @@ class NICEndpoint {
         std::forward<std::shared_ptr<RecvControlChannel>>(ctrl_channel));
   }
 
-  std::shared_ptr<SendChannelGroup> getOrCreateSendGroup(uint64_t rank_id) {
+  std::shared_ptr<SendConnection> getOrCreateSendGroup(uint64_t rank_id) {
     {
       std::shared_lock read_lock(send_channel_mutex_);
       auto it = send_channel_groups_.find(rank_id);
@@ -682,13 +682,13 @@ class NICEndpoint {
       std::unique_lock write_lock(send_channel_mutex_);
       auto [it, inserted] = send_channel_groups_.try_emplace(
           rank_id,
-          std::make_shared<SendChannelGroup>(numa_node, auto_start_polling_));
+          std::make_shared<SendConnection>(numa_node, auto_start_polling_));
       return it->second;
     }
   }
 
   void addOneSendChannel(uint64_t rank_id, uint32_t channel_id,
-                         std::shared_ptr<RDMAChannel> new_channel) {
+                         std::shared_ptr<RDMADataChannel> new_channel) {
     auto group_ptr = getOrCreateSendGroup(rank_id);
     group_ptr->addChannel(channel_id, new_channel);
   }
@@ -783,7 +783,7 @@ class NICEndpoint {
     for (int i = 0; i < kQpNumPerChannel; i++) {
       uint32_t channel_id = i + 1;
 
-      auto channel = std::make_shared<RDMAChannel>(
+      auto channel = std::make_shared<RDMADataChannel>(
           getContextByChannelId(channel_id), channel_id);
 
       MetaInfoToExchange meta(rank_id_, channel_id, channel->get_local_meta(),
@@ -845,10 +845,10 @@ class NICEndpoint {
   int gpu_index_;
   std::vector<std::shared_ptr<RdmaContext>> contexts_;
   mutable std::shared_mutex recv_channel_mutex_;
-  std::unordered_map<uint64_t, std::shared_ptr<RecvChannelGroup>>
+  std::unordered_map<uint64_t, std::shared_ptr<RecvConnection>>
       recv_channel_groups_;
   mutable std::shared_mutex send_channel_mutex_;
-  std::unordered_map<uint64_t, std::shared_ptr<SendChannelGroup>>
+  std::unordered_map<uint64_t, std::shared_ptr<SendConnection>>
       send_channel_groups_;
 
   std::unordered_map<uint64_t, std::shared_ptr<OOBMetaData>> rank_oob_meta_;

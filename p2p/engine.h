@@ -71,8 +71,10 @@ struct Conn {
   uint64_t conn_id_;
   ConnID uccl_conn_id_;
   std::string ip_addr_;
+  uint16_t remote_port_ = 0;
   int remote_gpu_idx_;
   bool is_local_ = false;
+  uint64_t rdma_loopback_conn_id_ = UINT64_MAX;
 
   ShmRingHandle remote_inbox_;
   bool shm_attached_ = false;
@@ -90,6 +92,8 @@ struct IpcTransferInfo {
   size_t size;
   uint32_t operation;  // 0 = send_ipc request, 1 = recv_ipc response
   bool is_host;        // true if this side's buffer is CPU memory
+  int gpu_idx = -1;    // target GPU index; -1 = use conn->remote_gpu_idx_
+  uintptr_t direct_addr = 0;  // same-process: skip IPC, use this virtual addr
 };
 
 // For ShmChannel
@@ -180,6 +184,8 @@ struct UnifiedTask;
 struct TransferStatus {
   std::atomic<bool> done{false};
   std::shared_ptr<UnifiedTask> task_ptr;
+  bool poll_net_ureq{false};
+  ucclRequest ureq{};
 };
 
 struct alignas(64) UnifiedTask {
@@ -251,20 +257,21 @@ class Endpoint {
   static constexpr int kMaxInflightOps = 8;  // Max 8 concurrent Ops
   static constexpr size_t ShmRingDefaultElemCnt = 16;
   static constexpr size_t kTaskRingSize = 1024;
+  static constexpr size_t kDirectAsyncNetThreshold = 256 * 1024;
 
   static uccl::UCCLLogLevel parse_log_level_from_env();
 
  public:
   /* Create engine threads running in background for a single interface. It also
    * opens a TCP listening thread waiting for incoming connections. */
-  Endpoint(uint32_t const local_gpu_idx, uint32_t const num_cpus);
+  explicit Endpoint(uint32_t const local_gpu_idx);
 
   /* Create endpoint without intializing the engine. Lazy creation of engine is
    * done during  memory registration. Additionally, open a unified P2P socket
    * for metadata exchanges. If passive_accept is true, the endpoint will not
    * call accept() but delegate it to a background thread.
    */
-  Endpoint(uint32_t const num_cpus);
+  Endpoint();
 
   ~Endpoint();
 
@@ -385,7 +392,8 @@ class Endpoint {
                   std::vector<char*> out_buf_v, size_t num_iovs);
 
   /*Connect to a local process via Unix Domain Socket.*/
-  bool connect_local(int remote_gpu_idx, uint64_t& conn_id);
+  bool connect_local(int remote_gpu_idx, uint64_t& conn_id,
+                     bool same_process = false);
 
   /*Accept an incoming local connection via Unix Domain Socket. */
   bool accept_local(int& remote_gpu_idx, uint64_t& conn_id);
@@ -436,6 +444,9 @@ class Endpoint {
   bool add_remote_endpoint(std::vector<uint8_t> const& metadata,
                            uint64_t& conn_id);
 
+  /* Remove a remote endpoint previously added via add_remote_endpoint. */
+  bool remove_remote_endpoint(uint64_t conn_id);
+
   /* Start a background thread for accepting. */
   bool start_passive_accept();
 
@@ -465,7 +476,6 @@ class Endpoint {
 
  private:
   int local_gpu_idx_;
-  uint32_t num_cpus_;
   int numa_node_;
   RDMAEndPoint ep_;
   bool engine_initialized_ = false;

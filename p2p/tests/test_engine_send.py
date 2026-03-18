@@ -44,7 +44,7 @@ def test_local():
     meta_parent, meta_child = multiprocessing.Pipe()
 
     def server_process(meta_q):
-        engine = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
+        engine = p2p.Endpoint(local_gpu_idx=0)
         meta_q.send(bytes(engine.get_metadata()))
 
         success, remote_ip_addr, remote_gpu_idx, conn_id = engine.accept()
@@ -68,7 +68,7 @@ def test_local():
         return True
 
     def client_process(meta_q):
-        engine = p2p.Endpoint(local_gpu_idx=1, num_cpus=4)
+        engine = p2p.Endpoint(local_gpu_idx=1)
         ep_meta = meta_q.recv()
 
         ip, r_port, r_gpu = parse_endpoint_meta(ep_meta)
