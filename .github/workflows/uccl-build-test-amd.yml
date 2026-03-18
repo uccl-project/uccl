@@ -157,13 +157,19 @@ jobs:
           EOF
           PID1=$!
 
-          wait $PID0
-          STATUS0=$?
-          wait $PID1
-          STATUS1=$?
-
-          if [ $STATUS0 -ne 0 ] || [ $STATUS1 -ne 0 ]; then
-            echo "P2P benchmark failed! amd0=$STATUS0 amd1=$STATUS1"
+          wait -n $PID0 $PID1
+          FIRST=$?
+          if kill -0 $PID0 2>/dev/null; then DEAD=amd1 ALIVE=$PID0; else DEAD=amd0 ALIVE=$PID1; fi
+          if [ $FIRST -ne 0 ]; then
+            echo "$DEAD crashed (exit $FIRST), killing the other host..."
+            kill $ALIVE 2>/dev/null; wait $ALIVE 2>/dev/null || true
+            echo "P2P benchmark failed!"
+            exit 1
+          fi
+          wait $ALIVE
+          SECOND=$?
+          if [ $SECOND -ne 0 ]; then
+            echo "P2P benchmark failed on remaining host (exit $SECOND)"
             exit 1
           fi
 
@@ -192,13 +198,19 @@ jobs:
           EOF
           PID1=$!
 
-          wait $PID0
-          STATUS0=$?
-          wait $PID1
-          STATUS1=$?
-
-          if [ $STATUS0 -ne 0 ] || [ $STATUS1 -ne 0 ]; then
-            echo "EP high-throughput test failed! amd0=$STATUS0 amd1=$STATUS1"
+          wait -n $PID0 $PID1
+          FIRST=$?
+          if kill -0 $PID0 2>/dev/null; then DEAD=amd1 ALIVE=$PID0; else DEAD=amd0 ALIVE=$PID1; fi
+          if [ $FIRST -ne 0 ]; then
+            echo "$DEAD crashed (exit $FIRST), killing the other host..."
+            kill $ALIVE 2>/dev/null; wait $ALIVE 2>/dev/null || true
+            echo "EP high-throughput test failed!"
+            exit 1
+          fi
+          wait $ALIVE
+          SECOND=$?
+          if [ $SECOND -ne 0 ]; then
+            echo "EP high-throughput test failed on remaining host (exit $SECOND)"
             exit 1
           fi
 
@@ -227,13 +239,19 @@ jobs:
           EOF
           PID1=$!
 
-          wait $PID0
-          STATUS0=$?
-          wait $PID1
-          STATUS1=$?
-
-          if [ $STATUS0 -ne 0 ] || [ $STATUS1 -ne 0 ]; then
-            echo "EP low-latency test failed! amd0=$STATUS0 amd1=$STATUS1"
+          wait -n $PID0 $PID1
+          FIRST=$?
+          if kill -0 $PID0 2>/dev/null; then DEAD=amd1 ALIVE=$PID0; else DEAD=amd0 ALIVE=$PID1; fi
+          if [ $FIRST -ne 0 ]; then
+            echo "$DEAD crashed (exit $FIRST), killing the other host..."
+            kill $ALIVE 2>/dev/null; wait $ALIVE 2>/dev/null || true
+            echo "EP low-latency test failed!"
+            exit 1
+          fi
+          wait $ALIVE
+          SECOND=$?
+          if [ $SECOND -ne 0 ]; then
+            echo "EP low-latency test failed on remaining host (exit $SECOND)"
             exit 1
           fi
 
