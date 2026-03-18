@@ -606,7 +606,7 @@ class Buffer {
       }
     }
 
-    auto* x = x_ptr == 0 ? reinterpret_cast<void*>(nullptr) : reinterpret_cast<void*>(x_ptr);
+    auto* x = x_ptr == 0 ? nullptr : reinterpret_cast<void*>(x_ptr);
     auto* x_scales =
         x_scales_ptr == 0 ? nullptr : reinterpret_cast<float*>(x_scales_ptr);
     auto* topk_idx =
@@ -616,7 +616,7 @@ class Buffer {
                              : reinterpret_cast<float*>(topk_weights_ptr);
 
     uccl::intranode::dispatch(
-        recv_x_ptr == 0 ? reinterpret_cast<void*>(nullptr) : reinterpret_cast<void*>(recv_x_ptr),
+        recv_x_ptr == 0 ? nullptr : reinterpret_cast<void*>(recv_x_ptr),
         recv_x_scales_ptr == 0 ? nullptr
                                : reinterpret_cast<float*>(recv_x_scales_ptr),
         recv_src_idx_ptr == 0 ? reinterpret_cast<int*>(nullptr) : reinterpret_cast<int*>(recv_src_idx_ptr),
