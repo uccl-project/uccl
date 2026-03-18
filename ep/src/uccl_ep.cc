@@ -777,7 +777,7 @@ class Buffer {
         // is_token_in_rank may be null for 0-token case, use workspace as safe dummy
         is_token_in_rank_ptr != 0
             ? reinterpret_cast<bool const*>(is_token_in_rank_ptr)
-            : reinterpret_cast<bool const*>(nullptr),
+            : nullptr,
         num_tokens,
         num_worst_tokens, num_channels, hidden_int4, num_scales, num_topk,
         expert_alignment,
@@ -894,7 +894,7 @@ class Buffer {
             ? nullptr
             : reinterpret_cast<float*>(recv_topk_weights_ptr),
         recv_src_meta_ptr == 0 ? nullptr : reinterpret_cast<void*>(recv_src_meta_ptr),
-        x_ptr == 0 ? reinterpret_cast<void const*>(nullptr) : reinterpret_cast<void const*>(x_ptr),
+        x_ptr == 0 ? nullptr : reinterpret_cast<void const*>(x_ptr),
         x_scales_ptr == 0 ? nullptr
                           : reinterpret_cast<float const*>(x_scales_ptr),
         topk_idx_ptr == 0 ? nullptr
@@ -915,7 +915,7 @@ class Buffer {
         reinterpret_cast<int const*>(gbl_channel_prefix_matrix_ptr),
         reinterpret_cast<int const*>(recv_gbl_rank_prefix_sum_ptr),
         is_token_in_rank_ptr == 0
-            ? reinterpret_cast<bool const*>(nullptr)
+            ? nullptr
             : reinterpret_cast<bool const*>(is_token_in_rank_ptr),
         num_tokens,
         num_worst_tokens, hidden_int4, num_scales, num_topk, num_experts,
