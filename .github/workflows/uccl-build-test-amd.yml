@@ -133,13 +133,13 @@ jobs:
 
           ssh -o BatchMode=yes amd0 << 'EOF' &
             set -euo pipefail
-            export PATH="$HOME/.local/bin:$PATH"
+            export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/p2p
             torchrun --nnodes=2 --nproc_per_node=1 \
               --node-rank=0 \
               --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
-              benchmarks/benchmark_uccl.py 2>&1 | tee ~/uccl-ci-sandbox/p2p-host0.log
+              benchmarks/benchmark_uccl.py 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/p2p-host0.log
           EOF
           PID0=$!
 
@@ -147,13 +147,13 @@ jobs:
 
           ssh -o BatchMode=yes amd1 << 'EOF' &
             set -euo pipefail
-            export PATH="$HOME/.local/bin:$PATH"
+            export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/p2p
             torchrun --nnodes=2 --nproc_per_node=1 \
               --node-rank=1 \
               --master_addr=${{secrets.UCCL_DEV_AMD_HOST0}} --master_port=29502 \
-              benchmarks/benchmark_uccl.py 2>&1 | tee ~/uccl-ci-sandbox/p2p-host1.log
+              benchmarks/benchmark_uccl.py 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/p2p-host1.log
           EOF
           PID1=$!
 
@@ -174,10 +174,10 @@ jobs:
 
           ssh -o BatchMode=yes amd0 << 'EOF' &
             set -euo pipefail
-            export PATH="$HOME/.local/bin:$PATH"
+            export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
-            ./run_ep.sh 2 0 ht ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | tee ~/uccl-ci-sandbox/ep-ht-host0.log
+            ./run_ep.sh 2 0 ht ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/ep-ht-host0.log
           EOF
           PID0=$!
 
@@ -185,10 +185,10 @@ jobs:
 
           ssh -o BatchMode=yes amd1 << 'EOF' &
             set -euo pipefail
-            export PATH="$HOME/.local/bin:$PATH"
+            export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
-            ./run_ep.sh 2 1 ht ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | tee ~/uccl-ci-sandbox/ep-ht-host1.log
+            ./run_ep.sh 2 1 ht ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/ep-ht-host1.log
           EOF
           PID1=$!
 
@@ -209,10 +209,10 @@ jobs:
 
           ssh -o BatchMode=yes amd0 << 'EOF' &
             set -euo pipefail
-            export PATH="$HOME/.local/bin:$PATH"
+            export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
-            ./run_ep.sh 2 0 ll ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | tee ~/uccl-ci-sandbox/ep-ll-host0.log
+            ./run_ep.sh 2 0 ll ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/ep-ll-host0.log
           EOF
           PID0=$!
 
@@ -220,10 +220,10 @@ jobs:
 
           ssh -o BatchMode=yes amd1 << 'EOF' &
             set -euo pipefail
-            export PATH="$HOME/.local/bin:$PATH"
+            export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
-            ./run_ep.sh 2 1 ll ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | tee ~/uccl-ci-sandbox/ep-ll-host1.log
+            ./run_ep.sh 2 1 ll ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/ep-ll-host1.log
           EOF
           PID1=$!
 
