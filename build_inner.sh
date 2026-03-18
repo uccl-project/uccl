@@ -18,7 +18,7 @@
 #
 #   Optional (with defaults):
 #     ROCM_IDX_URL                  ROCm package index URL (used by therock target)
-#     UCCL_RETAG_TO_HOST_GLIBC   Retag wheel to host glibc version (default "0")
+#     UCCL_RETAG_TO_HOST_GLIBC      Retag wheel to host glibc version (default "0")
 #     UCCL_LOCAL_VERSION            Local version suffix appended to wheel filename (PEP 440)
 #
 #   Build feature flags:

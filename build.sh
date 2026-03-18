@@ -9,18 +9,18 @@
 #   ./build.sh [cu12|cu13|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image] [--install]
 #
 # Environment Variables:
-#   CONTAINER_ENGINE=podman          Use podman instead of docker.
-#   CONTAINER_ENGINE=apptainer       Use apptainer instead of docker/podman.
-#                                    Example: CONTAINER_ENGINE=apptainer ./build.sh cu12 all
-#   USE_INTEL_RDMA_NIC=1             Enable Intel RDMA NIC support (irdma driver, vendor 0x8086)
-#                                    Example: USE_INTEL_RDMA_NIC=1 ./build.sh cu12 ccl_efa
-#   UCCL_RETAG_TO_HOST_GLIBC=1    Allow retagging the wheel to the host's
-#                                    glibc version when it differs from the container's.
-#                                    By default the wheel keeps the container's glibc tag.
-#                                    WARNING: the wheel is still built against the
-#                                    container's glibc and may use symbols not present in
-#                                    an older host glibc.
-#                                    Example: UCCL_RETAG_TO_HOST_GLIBC=1 ./build.sh cu12 all
+#   CONTAINER_ENGINE=podman         Use podman instead of docker.
+#   CONTAINER_ENGINE=apptainer      Use apptainer instead of docker/podman.
+#                                     Example: CONTAINER_ENGINE=apptainer ./build.sh cu12 all
+#   USE_INTEL_RDMA_NIC=1            Enable Intel RDMA NIC support (irdma driver, vendor 0x8086)
+#                                     Example: USE_INTEL_RDMA_NIC=1 ./build.sh cu12 ccl_efa
+#   UCCL_RETAG_TO_HOST_GLIBC=1      Allow retagging the wheel to the host's
+#                                   glibc version when it differs from the container's.
+#                                   By default the wheel keeps the container's glibc tag.
+#                                   WARNING: the wheel is still built against the
+#                                   container's glibc and may use symbols not present in
+#                                   an older host glibc.
+#                                     Example: UCCL_RETAG_TO_HOST_GLIBC=1 ./build.sh cu12 all
 #
 # The wheels are written to wheelhouse-[cu12|cu13|rocm|therock]
 # -----------------------
