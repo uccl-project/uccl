@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    timeout-minutes: 120
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -59,13 +59,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rsync -az --delete \
+          rsync -az --delete --exclude .venv \
             --rsync-path="mkdir -p ~/uccl-ci-sandbox && rsync" \
             -e "ssh -o BatchMode=yes" \
             ./ amd0:~/uccl-ci-sandbox/ &
           PID0=$!
 
-          rsync -az --delete \
+          rsync -az --delete --exclude .venv \
             --rsync-path="mkdir -p ~/uccl-ci-sandbox && rsync" \
             -e "ssh -o BatchMode=yes" \
             ./ amd1:~/uccl-ci-sandbox/ &
@@ -81,9 +81,11 @@ jobs:
 
           ssh -o BatchMode=yes amd0 << 'EOF' &
             set -euo pipefail
-            source $HOME/miniconda3/etc/profile.d/conda.sh
-            conda info --envs | awk '{print $1}' | grep -qx uccl-amd-ci || conda create -y -n uccl-amd-ci python=3.12
-            conda activate uccl-amd-ci
+            export PATH="$HOME/.local/bin:$PATH"
+            command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
+            mkdir -p ~/uccl-ci-sandbox
+            [ -d ~/uccl-ci-sandbox/.venv ] || uv venv ~/uccl-ci-sandbox/.venv --python 3.12
+            source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox
             ./build.sh rocm all --install 2>&1 | tee build.log
           EOF
@@ -91,9 +93,11 @@ jobs:
 
           ssh -o BatchMode=yes amd1 << 'EOF' &
             set -euo pipefail
-            source $HOME/miniconda3/etc/profile.d/conda.sh
-            conda info --envs | awk '{print $1}' | grep -qx uccl-amd-ci || conda create -y -n uccl-amd-ci python=3.12
-            conda activate uccl-amd-ci
+            export PATH="$HOME/.local/bin:$PATH"
+            command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
+            mkdir -p ~/uccl-ci-sandbox
+            [ -d ~/uccl-ci-sandbox/.venv ] || uv venv ~/uccl-ci-sandbox/.venv --python 3.12
+            source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox
             ./build.sh rocm all --install 2>&1 | tee build.log
           EOF
@@ -116,8 +120,8 @@ jobs:
 
           ssh -o BatchMode=yes amd0 << 'EOF' &
             set -euo pipefail
-            source $HOME/miniconda3/etc/profile.d/conda.sh
-            conda activate uccl-amd-ci
+            export PATH="$HOME/.local/bin:$PATH"
+            source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/p2p
             torchrun --nnodes=2 --nproc_per_node=1 \
               --node-rank=0 \
@@ -130,8 +134,8 @@ jobs:
 
           ssh -o BatchMode=yes amd1 << 'EOF' &
             set -euo pipefail
-            source $HOME/miniconda3/etc/profile.d/conda.sh
-            conda activate uccl-amd-ci
+            export PATH="$HOME/.local/bin:$PATH"
+            source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/p2p
             torchrun --nnodes=2 --nproc_per_node=1 \
               --node-rank=1 \
@@ -157,8 +161,8 @@ jobs:
 
           ssh -o BatchMode=yes amd0 << 'EOF' &
             set -euo pipefail
-            source $HOME/miniconda3/etc/profile.d/conda.sh
-            conda activate uccl-amd-ci
+            export PATH="$HOME/.local/bin:$PATH"
+            source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
             ./run_ep.sh 2 0 ht ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | tee ~/uccl-ci-sandbox/ep-ht-host0.log
           EOF
@@ -168,8 +172,8 @@ jobs:
 
           ssh -o BatchMode=yes amd1 << 'EOF' &
             set -euo pipefail
-            source $HOME/miniconda3/etc/profile.d/conda.sh
-            conda activate uccl-amd-ci
+            export PATH="$HOME/.local/bin:$PATH"
+            source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
             ./run_ep.sh 2 1 ht ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | tee ~/uccl-ci-sandbox/ep-ht-host1.log
           EOF
@@ -192,8 +196,8 @@ jobs:
 
           ssh -o BatchMode=yes amd0 << 'EOF' &
             set -euo pipefail
-            source $HOME/miniconda3/etc/profile.d/conda.sh
-            conda activate uccl-amd-ci
+            export PATH="$HOME/.local/bin:$PATH"
+            source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
             ./run_ep.sh 2 0 ll ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | tee ~/uccl-ci-sandbox/ep-ll-host0.log
           EOF
@@ -203,8 +207,8 @@ jobs:
 
           ssh -o BatchMode=yes amd1 << 'EOF' &
             set -euo pipefail
-            source $HOME/miniconda3/etc/profile.d/conda.sh
-            conda activate uccl-amd-ci
+            export PATH="$HOME/.local/bin:$PATH"
+            source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
             ./run_ep.sh 2 1 ll ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | tee ~/uccl-ci-sandbox/ep-ll-host1.log
           EOF
