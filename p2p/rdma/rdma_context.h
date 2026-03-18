@@ -306,10 +306,24 @@ class RdmaContext {
                    mode.use_dmabuf};
 
     std::lock_guard<std::mutex> lock(mr_cache_mu_);
-    auto it = mr_cache_.find(key);
-    if (it != mr_cache_.end()) {
-      it->second->refs++;
-      return it->second.get();
+    MrCacheEntry* best_match = nullptr;
+    for (auto const& [cached_key, cached_entry] : mr_cache_) {
+      if (cached_key.is_gpu != key.is_gpu ||
+          cached_key.use_dmabuf != key.use_dmabuf) {
+        continue;
+      }
+      if (!containsRange(cached_key.addr, cached_key.size, key.addr,
+                         key.size)) {
+        continue;
+      }
+
+      if (best_match == nullptr || cached_key.size < best_match->key.size) {
+        best_match = cached_entry.get();
+      }
+    }
+    if (best_match != nullptr) {
+      best_match->refs++;
+      return best_match;
     }
 
     struct ibv_mr* mr = regMemImpl(addr, size, mode.use_dmabuf);
@@ -361,6 +375,20 @@ class RdmaContext {
     bool is_gpu;
     bool use_dmabuf;
   };
+
+  static bool containsRange(uintptr_t outer_addr, size_t outer_size,
+                            uintptr_t inner_addr, size_t inner_size) {
+    if (inner_addr < outer_addr) {
+      return false;
+    }
+    if (inner_size > outer_size) {
+      return false;
+    }
+    uintptr_t outer_end = outer_addr + outer_size;
+    uintptr_t inner_end = inner_addr + inner_size;
+    return outer_end >= outer_addr && inner_end >= inner_addr &&
+           inner_end <= outer_end;
+  }
 
   RegistrationMode getRegistrationMode(void* addr) const {
     bool is_gpu = isGpuPointer(addr);

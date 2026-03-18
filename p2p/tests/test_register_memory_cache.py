@@ -92,9 +92,58 @@ def test_register_memory_cache() -> bool:
     return True
 
 
+def test_register_memory_subregion_cache() -> bool:
+    device_idx = torch.cuda.current_device() if torch.cuda.is_available() else 0
+    tensor = _make_test_tensor()
+    sub_tensor = tensor[256:1280]
+    ep = p2p.Endpoint(device_idx)
+
+    base_desc = ep.register_memory([tensor])[0]
+    sub_desc = ep.register_memory([sub_tensor])[0]
+
+    _print_desc("base", base_desc)
+    _print_desc("sub", sub_desc)
+
+    assert _field(base_desc, "addr") == tensor.data_ptr()
+    assert _field(sub_desc, "addr") == sub_tensor.data_ptr()
+    assert _field(base_desc, "size") == tensor.numel() * tensor.element_size()
+    assert _field(sub_desc, "size") == sub_tensor.numel() * sub_tensor.element_size()
+
+    if _field(base_desc, "mr_id") == (2**64 - 1) or not _field(base_desc, "lkeys"):
+        print("Skipping subregion test: register_memory fell back to IPC-only metadata")
+        return True
+
+    assert _field(base_desc, "mr_id") != _field(
+        sub_desc, "mr_id"
+    ), "subregion registration should still return a distinct API handle"
+    assert _field(base_desc, "lkeys") == _field(
+        sub_desc, "lkeys"
+    ), "expected subregion registration to reuse cached lkeys from the base region"
+    assert _field(base_desc, "rkeys") == _field(
+        sub_desc, "rkeys"
+    ), "expected subregion registration to reuse cached rkeys from the base region"
+
+    ep.deregister_memory([base_desc])
+    sub_desc_2 = ep.register_memory([sub_tensor])[0]
+    _print_desc("sub_again", sub_desc_2)
+
+    assert _field(sub_desc, "lkeys") == _field(
+        sub_desc_2, "lkeys"
+    ), "expected subregion cache entry to stay alive while references remain"
+    assert _field(sub_desc, "rkeys") == _field(
+        sub_desc_2, "rkeys"
+    ), "expected subregion cache entry to stay alive while references remain"
+
+    ep.deregister_memory([sub_desc, sub_desc_2])
+    print("✓ register_memory subregion cache verification passed")
+    return True
+
+
 def main() -> int:
     try:
-        return 0 if test_register_memory_cache() else 1
+        ok = test_register_memory_cache()
+        ok = test_register_memory_subregion_cache() and ok
+        return 0 if ok else 1
     except Exception as exc:
         print(
             f"✗ register_memory cache verification failed: {type(exc).__name__}: {exc}"
