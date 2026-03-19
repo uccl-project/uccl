@@ -2,4 +2,4 @@
 
 #include "gpu_rt.h"
 #include "../src/device/task.h"
-#include "../src/device/persistent.h"
+#include "../src/device/worker.h"

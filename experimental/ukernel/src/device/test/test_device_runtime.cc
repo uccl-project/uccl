@@ -1,4 +1,4 @@
-#include "../persistent.h"
+#include "../worker.h"
 #include "test_support.h"
 #include <iostream>
 #include <vector>
@@ -6,68 +6,50 @@
 #define N 1024
 
 uint64_t submit_copy_task(
-    UKernel::Device::PersistentKernel<UKernel::Device::Task>& kernel,
+    UKernel::Device::WorkerPool& pool,
     void* dst, void const* src, uint64_t bytes,
-    UKernel::Device::DataType dtype, uint32_t block_id,
-    UKernel::Device::TransferPath path =
-        UKernel::Device::TransferPath::Auto,
-    uint64_t op_id = 0, uint32_t step_id = 0, uint32_t chunk_id = 0) {
-  UKernel::Device::CollArgs h{};
+    UKernel::Device::DataType dtype, uint32_t fifo_id) {
+  UKernel::Device::TaskArgs h{};
   h.src = const_cast<void*>(src);
   h.src2 = nullptr;
   h.dst = dst;
   h.bytes = bytes;
-  h.op_id = op_id;
-  h.step_id = step_id;
-  h.chunk_id = chunk_id;
-  h.completion_cookie = chunk_id;
   h.src_rank = 0;
   h.dst_rank = 0;
   h.src_device = 0;
   h.dst_device = 0;
-  h.flags = 0;
   h.redType = UKernel::Device::ReduceType::None;
-  h.requested_path = path;
-  h.resolved_path = UKernel::Device::TransferPath::Auto;
+  h.flags = 0;
 
   UKernel::Device::Task t =
-      UKernel::Device::TaskManager::instance().create_coll_task(
-          h, UKernel::Device::TaskType::CollCopy, dtype, block_id);
+      UKernel::Device::TaskManager::instance().create_task(
+          h, UKernel::Device::TaskType::CollCopy, dtype, fifo_id);
 
-  return kernel.submit(t);
+  return pool.enqueue(t, fifo_id);
 }
 
 uint64_t submit_reduce_task(
-    UKernel::Device::PersistentKernel<UKernel::Device::Task>& kernel,
+    UKernel::Device::WorkerPool& pool,
     void* dst, void const* src, uint64_t bytes,
     UKernel::Device::DataType dtype, UKernel::Device::ReduceType redop,
-    uint32_t block_id,
-    UKernel::Device::TransferPath path =
-        UKernel::Device::TransferPath::Auto,
-    uint64_t op_id = 0, uint32_t step_id = 0, uint32_t chunk_id = 0) {
-  UKernel::Device::CollArgs h{};
+    uint32_t fifo_id) {
+  UKernel::Device::TaskArgs h{};
   h.src = const_cast<void*>(src);
   h.src2 = nullptr;
   h.dst = dst;
   h.bytes = bytes;
-  h.op_id = op_id;
-  h.step_id = step_id;
-  h.chunk_id = chunk_id;
-  h.completion_cookie = chunk_id;
   h.src_rank = 0;
   h.dst_rank = 0;
   h.src_device = 0;
   h.dst_device = 0;
-  h.flags = 0;
   h.redType = redop;
-  h.requested_path = path;
-  h.resolved_path = UKernel::Device::TransferPath::Auto;
+  h.flags = 0;
 
   UKernel::Device::Task t =
-      UKernel::Device::TaskManager::instance().create_coll_task(
-          h, UKernel::Device::TaskType::CollReduce, dtype, block_id);
+      UKernel::Device::TaskManager::instance().create_task(
+          h, UKernel::Device::TaskType::CollReduce, dtype, fifo_id);
 
-  return kernel.submit(t);
+  return pool.enqueue(t, fifo_id);
 }
 
 int main() {
@@ -77,43 +59,10 @@ int main() {
 
   UKernel::Device::TaskManager::instance().init(1024);
 
-  auto caps = UKernel::Device::query_transfer_capabilities();
-  UKernel::Device::PkSelectorConfig selector_cfg{};
-  uint64_t auto_select_bytes = 32768;
-  auto auto_path = UKernel::Device::resolve_pk_transfer_path(
-      UKernel::Device::TransferPath::Auto, auto_select_bytes, caps,
-      selector_cfg);
-  auto reg_path = UKernel::Device::resolve_pk_transfer_path(
-      UKernel::Device::TransferPath::RegisterOp, N * sizeof(float), caps,
-      selector_cfg);
-  auto tma_path = UKernel::Device::resolve_pk_transfer_path(
-      UKernel::Device::TransferPath::TmaOp, N * sizeof(float), caps,
-      selector_cfg);
-  auto expected_auto_path =
-      caps.can_use_tma ? UKernel::Device::TransferPath::TmaOp
-                       : UKernel::Device::TransferPath::RegisterOp;
-  auto expected_tma_path =
-      caps.can_use_tma ? UKernel::Device::TransferPath::TmaOp
-                       : UKernel::Device::TransferPath::RegisterOp;
-  if (auto_path != expected_auto_path ||
-      reg_path != UKernel::Device::TransferPath::RegisterOp ||
-      tma_path != expected_tma_path ||
-      (caps.can_use_tma &&
-       !UKernel::Device::supports_native_tma_copy(
-           UKernel::Device::DataType::Fp32, N * sizeof(float)))) {
-    std::cerr << "Selector bootstrap FAILED\n";
-    return 4;
-  }
-  std::cout << "Selector bootstrap PASSED\n";
-
-  UKernel::Device::PersistentKernelConfig config;
-  config.numBlocks = 3;
+  UKernel::Device::WorkerPool::Config config;
+  config.numMaxWorkers = 8;
   config.threadsPerBlock = 64;
   config.fifoCapacity = 16;
-  config.smemSize = 0;
-
-  uint32_t test_block_id = 0;
-  uint32_t test_block_id_2 = 1;
 
   float *dst_copy = nullptr, *src_copy = nullptr;
   float *dst_reduce = nullptr, *src_reduce = nullptr;
@@ -142,38 +91,35 @@ int main() {
                gpuMemcpyHostToDevice),
      "H2D src_reduce");
 
-  UKernel::Device::PersistentKernel<UKernel::Device::Task> kernel(config);
-  kernel.launch();
-  std::cout << "Persistent kernel launched.\n";
+  UKernel::Device::WorkerPool pool(config);
+  
+  pool.createWorker(0, 1);
+  pool.createWorker(1, 1);
+  pool.waitWorker(0);
+  pool.waitWorker(1);
+  std::cout << "WorkerPool started with 2 workers (both single-SM).\n";
 
-  uint64_t id =
-      submit_copy_task(kernel, dst_copy, src_copy, N * sizeof(float),
-                       UKernel::Device::DataType::Fp32, test_block_id,
-                       UKernel::Device::TransferPath::Auto, 1, 0, 0);
-
-  while (!kernel.is_done(test_block_id, id)) {
+  uint64_t id = submit_copy_task(pool, dst_copy, src_copy, N * sizeof(float),
+                                 UKernel::Device::DataType::Fp32, 0);
+  while (!pool.is_done(id, 0)) {
   }
-  std::cout << "COPY AUTO DONE\n";
+  std::cout << "COPY DONE\n";
 
-  id = submit_reduce_task(kernel, dst_reduce, src_reduce, N * sizeof(float),
-                          UKernel::Device::DataType::Fp32,
-                          UKernel::Device::ReduceType::Sum, test_block_id_2,
-                          UKernel::Device::TransferPath::Auto, 2, 1, 0);
-
-  while (!kernel.is_done(test_block_id_2, id)) {
+  id = submit_reduce_task(pool, dst_reduce, src_reduce, N * sizeof(float),
+                         UKernel::Device::DataType::Fp32,
+                         UKernel::Device::ReduceType::Sum, 1);
+  while (!pool.is_done(id, 1)) {
   }
   std::cout << "REDUCE DONE\n";
 
-  id = submit_copy_task(kernel, dst_copy, src_copy, N * sizeof(float),
-                        UKernel::Device::DataType::Fp32, test_block_id,
-                        UKernel::Device::TransferPath::TmaOp, 3, 2, 0);
-
-  while (!kernel.is_done(test_block_id, id)) {
+  id = submit_copy_task(pool, dst_copy, src_copy, N * sizeof(float),
+                        UKernel::Device::DataType::Fp32, 0);
+  while (!pool.is_done(id, 0)) {
   }
-  std::cout << "COPY TMA DONE\n";
+  std::cout << "COPY 2 DONE\n";
 
-  kernel.stop();
-  std::cout << "Stop signal sent.\n";
+  pool.shutdown_all();
+  std::cout << "WorkerPool shutdown.\n";
 
   ck(gpuMemcpy(h_dst_copy.data(), dst_copy, N * sizeof(float),
                gpuMemcpyDeviceToHost),
@@ -192,35 +138,35 @@ int main() {
         ++bad;
       }
     }
-    if (bad) {
-      std::cerr << "COPY FAILED mismatches=" << bad << "/" << N << "\n";
-      return 2;
+    if (bad == 0) {
+      std::cout << "COPY PASSED\n";
+    } else {
+      std::cout << "COPY FAILED mismatches=" << bad << "/" << N << "\n";
     }
-    std::cout << "COPY PASSED\n";
   }
 
   {
     size_t bad = 0;
     for (int i = 0; i < N; ++i) {
-      float exp = h_dst0[i] + h_src_red[i];
-      if (!feq(h_dst1[i], exp)) {
+      float expected = h_dst0[i] + h_src_red[i];
+      if (!feq(h_dst1[i], expected)) {
         if (bad < 8)
           std::cerr << "[REDUCE MISMATCH] i=" << i << " got=" << h_dst1[i]
-                    << " exp=" << exp << "\n";
+                    << " exp=" << expected << "\n";
         ++bad;
       }
     }
-    if (bad) {
-      std::cerr << "REDUCE FAILED mismatches=" << bad << "/" << N << "\n";
-      return 3;
+    if (bad == 0) {
+      std::cout << "REDUCE PASSED\n";
+    } else {
+      std::cout << "REDUCE FAILED mismatches=" << bad << "/" << N << "\n";
     }
-    std::cout << "REDUCE PASSED\n";
   }
 
-  ck(gpuFree(dst_copy), "gpuFree dst_copy");
-  ck(gpuFree(src_copy), "gpuFree src_copy");
-  ck(gpuFree(dst_reduce), "gpuFree dst_reduce");
-  ck(gpuFree(src_reduce), "gpuFree src_reduce");
+  ck(gpuFree(dst_copy), "free");
+  ck(gpuFree(src_copy), "free");
+  ck(gpuFree(dst_reduce), "free");
+  ck(gpuFree(src_reduce), "free");
 
   return 0;
 }

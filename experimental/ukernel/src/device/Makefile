@@ -21,32 +21,53 @@ LIBS := -L$(CUDA_HOME)/lib -lcudart -lcuda -lnuma \
 
 RPATH = -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR)
 
-COMMON_CPP := fifo/c2d_fifo.cc fifo/d2c_fifo.cpp fifo/sm_fifo.cc pk_selector.cc
+COMMON_CPP := fifo/c2d_fifo.cc fifo/d2c_fifo.cpp fifo/sm_fifo.cc
 COMMON_CU  := persistent_kernel_ops.cu
+WORKER_CPP := worker.cc
 
 TEST_SRC   := test/test_device_runtime.cc
+# TEST_MATCHING_SRC := test/test_fifo_matching.cc
+TEST_PREWARM_SRC := test/test_prewarm.cc
+TEST_MULTI_BLOCK_SRC := test/test_multi_block.cc
+TEST_WORKER_POOL_SRC := test/test_worker_pool.cc
 BENCH_SRC  := benchmarks/bench_device_fifo.cu
 BENCH_FULL_SRC  := benchmarks/bench_device_full_fifo.cu
 BENCH_SM_SRC  := benchmarks/bench_device_sm_fifo.cu
 
-COMMON_OBJ := $(patsubst %.cc,%.o,$(patsubst %.cpp,%.o,$(COMMON_CPP))) $(COMMON_CU:.cu=.o)
+COMMON_OBJ := $(patsubst %.cc,%.o,$(patsubst %.cpp,%.o,$(COMMON_CPP))) $(COMMON_CU:.cu=.o) $(WORKER_CPP:.cc=.o)
 TEST_OBJ   := $(TEST_SRC:.cc=.o)
+# TEST_MATCHING_OBJ := $(TEST_MATCHING_SRC:.cc=.o)
+TEST_PREWARM_OBJ := $(TEST_PREWARM_SRC:.cc=.o)
+TEST_MULTI_BLOCK_OBJ := $(TEST_MULTI_BLOCK_SRC:.cc=.o)
+TEST_WORKER_POOL_OBJ := $(TEST_WORKER_POOL_SRC:.cc=.o)
 BENCH_OBJ  := $(BENCH_SRC:.cu=.o)
 BENCH_FULL_OBJ  := $(BENCH_FULL_SRC:.cu=.o)
 BENCH_SM_OBJ := $(BENCH_SM_SRC:.cu=.o)
 
 TEST_BIN  := test_device_runtime
+# TEST_MATCHING_BIN := test_fifo_matching
+TEST_PREWARM_BIN := test_prewarm
+TEST_MULTI_BLOCK_BIN := test_multi_block
+TEST_WORKER_POOL_BIN := test_worker_pool
 BENCH_BIN := benchmarks/bench_device_fifo
 BENCH_FULL_BIN := benchmarks/bench_device_full_fifo
 BENCH_SM_BIN := benchmarks/bench_device_sm_fifo
 
-ALL_BIN   := $(TEST_BIN) $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN}
+ALL_BIN   := $(TEST_BIN) $(TEST_PREWARM_BIN) $(TEST_MULTI_BLOCK_BIN) $(TEST_WORKER_POOL_BIN) $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN}
 
-.PHONY: all test bench clean ensure-gdrcopy
+.PHONY: all test test_matching test_prewarm test_multi_block test_worker_pool bench clean ensure-gdrcopy
 
 all: $(ALL_BIN)
 
 test: $(TEST_BIN)
+
+test_matching: $(TEST_MATCHING_BIN)
+
+test_prewarm: $(TEST_PREWARM_BIN)
+
+test_multi_block: $(TEST_MULTI_BLOCK_BIN)
+
+test_worker_pool: $(TEST_WORKER_POOL_BIN)
 
 bench: $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN}
 
@@ -73,20 +94,47 @@ ensure-gdrcopy:
 %.o: %.cu
 	$(NVCC) -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
-$(COMMON_OBJ) $(TEST_OBJ) $(BENCH_OBJ) $(BENCH_FULL_OBJ) $(BENCH_SM_OBJ): | ensure-gdrcopy
+$(COMMON_OBJ) $(TEST_OBJ) $(TEST_PREWARM_OBJ) $(TEST_MULTI_BLOCK_OBJ) $(TEST_WORKER_POOL_OBJ): | ensure-gdrcopy
 $(TEST_OBJ): $(TEST_SRC)
+	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
+
+$(TEST_PREWARM_OBJ): $(TEST_PREWARM_SRC)
+	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
+
+$(TEST_MULTI_BLOCK_OBJ): $(TEST_MULTI_BLOCK_SRC)
+	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
+
+$(TEST_WORKER_POOL_OBJ): $(TEST_WORKER_POOL_SRC)
 	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(TEST_BIN): $(COMMON_OBJ) $(TEST_OBJ)
 	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
 
+$(TEST_PREWARM_BIN): $(COMMON_OBJ) $(TEST_PREWARM_OBJ)
+	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+
+$(TEST_MULTI_BLOCK_BIN): $(COMMON_OBJ) $(TEST_MULTI_BLOCK_OBJ)
+	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+
+$(TEST_WORKER_POOL_BIN): $(COMMON_OBJ) $(TEST_WORKER_POOL_OBJ)
+	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+
+$(BENCH_OBJ): $(BENCH_SRC)
+	$(NVCC) -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
+
 $(BENCH_BIN): $(COMMON_OBJ) $(BENCH_OBJ)
 	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+
+$(BENCH_FULL_OBJ): $(BENCH_FULL_SRC)
+	$(NVCC) -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(BENCH_FULL_BIN): $(COMMON_OBJ) $(BENCH_FULL_OBJ)
 	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
 
-${BENCH_SM_BIN}: $(COMMON_OBJ) $(BENCH_SM_OBJ)
+$(BENCH_SM_OBJ): $(BENCH_SM_SRC)
+	$(NVCC) -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
+
+$(BENCH_SM_BIN): $(COMMON_OBJ) $(BENCH_SM_OBJ)
 	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
 
 clean:

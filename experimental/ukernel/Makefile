@@ -66,7 +66,6 @@ LDFLAGS += $(UCCL_LDFLAGS)
 # Source files - exclude module-local tests and device-only helper trees that
 # are built by their module Makefiles.
 SRC_CPP := $(shell find src -name '*.cc' | grep -v 'benchmarks' | grep -v 'src/device/' | grep -v 'src/transport/test/' | grep -v 'src/ccl/test/' | sort)
-SRC_CPP += src/device/pk_selector.cc
 SRC_CU  := $(shell find src -name '*.cu' | grep -v 'benchmarks')
 
 OBJ_CC   := $(SRC_CPP:.cc=.o)

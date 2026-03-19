@@ -1,7 +1,7 @@
 #pragma once
 
 #include "backend.h"
-#include "../device/persistent.h"
+#include "../device/worker.h"
 #include <cstddef>
 #include <cstdint>
 #include <unordered_map>
@@ -15,12 +15,10 @@ namespace CCL {
 class PersistentKernelBackend final : public Backend {
  public:
   PersistentKernelBackend(
-      UKernel::Device::PersistentKernel<UKernel::Device::Task>& kernel,
+      UKernel::Device::WorkerPool& workerPool,
       CollectiveBuffers buffers, UKernel::Device::DataType dtype,
       UKernel::Device::ReduceType reduce_type =
           UKernel::Device::ReduceType::Sum,
-      UKernel::Device::TransferPath transfer_path =
-          UKernel::Device::TransferPath::Auto,
       uint32_t num_blocks = 1);
 
   char const* name() const override;
@@ -40,13 +38,11 @@ class PersistentKernelBackend final : public Backend {
   void* resolve_dst(BufferRole role, size_t offset) const;
   void const* resolve_src(BufferRole role, size_t offset) const;
 
-  UKernel::Device::PersistentKernel<UKernel::Device::Task>& kernel_;
+  UKernel::Device::WorkerPool& workerPool_;
   CollectiveBuffers buffers_{};
   UKernel::Device::DataType dtype_ = UKernel::Device::DataType::Fp32;
   UKernel::Device::ReduceType reduce_type_ =
       UKernel::Device::ReduceType::Sum;
-  UKernel::Device::TransferPath transfer_path_ =
-      UKernel::Device::TransferPath::Auto;
   uint32_t num_blocks_ = 1;
   uint64_t next_token_ = 1;
   std::unordered_map<uint64_t, SubmittedTask> submitted_;

@@ -5,15 +5,13 @@ namespace UKernel {
 namespace CCL {
 
 PersistentKernelBackend::PersistentKernelBackend(
-    UKernel::Device::PersistentKernel<UKernel::Device::Task>& kernel,
+    UKernel::Device::WorkerPool& workerPool,
     CollectiveBuffers buffers, UKernel::Device::DataType dtype,
-    UKernel::Device::ReduceType reduce_type,
-    UKernel::Device::TransferPath transfer_path, uint32_t num_blocks)
-    : kernel_(kernel),
+    UKernel::Device::ReduceType reduce_type, uint32_t num_blocks)
+    : workerPool_(workerPool),
       buffers_(buffers),
       dtype_(dtype),
       reduce_type_(reduce_type),
-      transfer_path_(transfer_path),
       num_blocks_(num_blocks == 0 ? 1 : num_blocks) {}
 
 char const* PersistentKernelBackend::name() const {
@@ -45,10 +43,6 @@ BackendToken PersistentKernelBackend::submit(ExecutionOp const& op) {
   args.src2 = nullptr;
   args.dst = resolve_dst(op.dst_role, op.chunk.offset_bytes);
   args.bytes = op.chunk.size_bytes;
-  args.op_id = op.op_id;
-  args.step_id = static_cast<uint32_t>(op.op_id);
-  args.chunk_id = op.chunk.chunk_index;
-  args.completion_cookie = static_cast<uint32_t>(op.op_id);
   args.src_rank = op.src_rank;
   args.dst_rank = op.dst_rank;
   args.src_device = 0;
@@ -57,8 +51,6 @@ BackendToken PersistentKernelBackend::submit(ExecutionOp const& op) {
   args.redType = op.kind == ExecutionOpKind::PkReduce
                      ? reduce_type_
                      : UKernel::Device::ReduceType::None;
-  args.requested_path = transfer_path_;
-  args.resolved_path = UKernel::Device::TransferPath::Auto;
 
   uint32_t block_id = op.chunk.channel_id % num_blocks_;
   UKernel::Device::TaskType task_type =
@@ -68,7 +60,7 @@ BackendToken PersistentKernelBackend::submit(ExecutionOp const& op) {
   UKernel::Device::Task task = UKernel::Device::TaskManager::instance()
                                     .create_coll_task(args, task_type, dtype_,
                                                       block_id);
-  uint64_t task_id = kernel_.submit(task);
+  uint64_t task_id = workerPool_.enqueue(task, block_id);
 
   BackendToken token{next_token_++};
   submitted_[token.value] = SubmittedTask{block_id, task_id};
@@ -78,7 +70,7 @@ BackendToken PersistentKernelBackend::submit(ExecutionOp const& op) {
 bool PersistentKernelBackend::poll(BackendToken token) {
   auto it = submitted_.find(token.value);
   if (it == submitted_.end()) return true;
-  return kernel_.is_done(it->second.block_id, it->second.task_id);
+  return workerPool_.is_done(it->second.task_id, it->second.block_id);
 }
 
 void PersistentKernelBackend::release(BackendToken token) {

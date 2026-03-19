@@ -1,5 +1,4 @@
-#include "persistent.h"
-#include "task.h"
+#include "worker.h"
 #include "gpu_rt.h"
 #include "benchmarks/bench_support.h"
 #include <cstdio>
@@ -7,7 +6,6 @@
 #include <vector>
 
 using namespace UKernel::Device;
-
 
 int main() {
   int device;
@@ -22,29 +20,35 @@ int main() {
   int latency_iters = 10000 * sm_count;
   constexpr int throughput_iters = 100'000;
 
-  printf("FIFO benchmark via PersistentKernel\n");
+  printf("FIFO benchmark via WorkerPool\n");
 
   TaskManager::instance().init(1);
 
-  PersistentKernelConfig cfg;
-  cfg.numBlocks = sm_count;
+  WorkerPool::Config cfg;
+  cfg.numMaxWorkers = sm_count;
   cfg.threadsPerBlock = 64;
   cfg.fifoCapacity = fifo_cap;
 
-  PersistentKernel<Task> kernel(cfg);
-  kernel.launch();
+  WorkerPool pool(cfg);
 
-  // warmup
-  for (uint32_t b = 0; b < cfg.numBlocks; b++) {
+  for (int i = 0; i < sm_count; ++i) {
+    pool.createWorker(i, 1);
+  }
+  for (int i = 0; i < sm_count; ++i) {
+    pool.waitWorker(i);
+  }
+
+  for (uint32_t b = 0; b < static_cast<uint32_t>(sm_count); b++) {
     for (int i = 0; i < warmup; ++i) {
-      kernel.submit(Task(TaskType::BenchNop, DataType::Fp32, b, 0));
+      Task t(TaskType::BenchNop, DataType::Fp32, b, 0);
+      pool.enqueue(t, b);
     }
   }
 
   while (true) {
     bool all_done = true;
-    for (int block_id = 0; block_id < sm_count; ++block_id) {
-      if (!kernel.is_done(block_id, warmup - 1)) {
+    for (int fifo_id = 0; fifo_id < sm_count; ++fifo_id) {
+      if (!pool.is_done(warmup - 1, fifo_id)) {
         all_done = false;
         break;
       }
@@ -54,7 +58,6 @@ int main() {
 
   printf("Warmup done.\n");
 
-  // latency
   std::vector<uint64_t> lat;
   lat.reserve(latency_iters);
 
@@ -64,30 +67,29 @@ int main() {
 
   for (int i = 0; i < latency_iters; ++i) {
     uint64_t t0 = now_ns();
-    uint32_t test_block_id = dis(gen);
-    uint64_t id = kernel.submit(
-        Task(TaskType::BenchNop, DataType::Fp32, test_block_id, 0));
-    kernel.is_done(test_block_id, id);
+    uint32_t test_fifo_id = dis(gen);
+    uint32_t test_block_id = 0;
+    Task t(TaskType::BenchNop, DataType::Fp32, test_block_id, 0);
+    uint64_t id = pool.enqueue(t, test_fifo_id);
+    pool.is_done(id, test_fifo_id);
     uint64_t t1 = now_ns();
     lat.push_back(t1 - t0);
   }
 
   print_latency(lat);
 
-  // throughput
   uint64_t t0 = now_ns();
 
-  std::vector<uint64_t> ids(sm_count, 0);
+  std::vector<uint64_t> last_ids(sm_count, 0);
   for (int i = 0; i < throughput_iters; ++i) {
-    uint32_t test_block_id = i % sm_count;
-    uint64_t id = kernel.submit(
-        Task(TaskType::BenchNop, DataType::Fp32, test_block_id, 0));
-
-    ids[test_block_id] = id;
+    uint32_t fifo_id = i % sm_count;
+    Task t(TaskType::BenchNop, DataType::Fp32, 0, 0);
+    uint64_t id = pool.enqueue(t, fifo_id);
+    last_ids[fifo_id] = id;
   }
 
-  for (int block_id = 0; block_id < sm_count; ++block_id) {
-    kernel.is_done(block_id, ids[block_id]);
+  for (int fifo_id = 0; fifo_id < sm_count; ++fifo_id) {
+    pool.is_done(last_ids[fifo_id], fifo_id);
   }
 
   uint64_t t1 = now_ns();
@@ -95,7 +97,7 @@ int main() {
 
   printf("Throughput: %.2f K tasks/s\n", throughput_iters / sec / 1e3);
 
-  kernel.stop();
+  pool.shutdown_all();
   printf("Done.\n");
   return 0;
 }
