@@ -127,13 +127,18 @@ jobs:
           fi
 
       - name: Run P2P benchmark
-        timeout-minutes: 10
+        timeout-minutes: 3
         shell: bash
         run: |
           set -uo pipefail
 
           ssh -o BatchMode=yes amd0 << 'EOF' &
             set -euo pipefail
+            active_jobs=$(rocm-smi --showpids 2>/dev/null | tail -n +2 | awk '{print $1}' | tr '\n' ' ' | xargs || true)
+            if [ -n "$active_jobs" ]; then
+                echo "amd0 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
             export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/p2p
@@ -148,6 +153,11 @@ jobs:
 
           ssh -o BatchMode=yes amd1 << 'EOF' &
             set -euo pipefail
+            active_jobs=$(rocm-smi --showpids 2>/dev/null | tail -n +2 | awk '{print $1}' | tr '\n' ' ' | xargs || true)
+            if [ -n "$active_jobs" ]; then
+                echo "amd1 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
             export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/p2p
@@ -158,16 +168,31 @@ jobs:
           EOF
           PID1=$!
 
+          wait -n $PID0 $PID1
+          exitcode=$?
+          if [ $exitcode -ne 0 ]; then
+            kill $PID0 $PID1 2>/dev/null || true
+            sleep 1
+            kill -9 $PID0 $PID1 2>/dev/null || true
+            wait $PID0 $PID1 2>/dev/null || true
+            exit $exitcode
+          fi
           wait $PID0 $PID1
+          exit $?
 
       - name: Run EP high-throughput test
-        timeout-minutes: 10
+        timeout-minutes: 3
         shell: bash
         run: |
           set -uo pipefail
 
           ssh -o BatchMode=yes amd0 << 'EOF' &
             set -euo pipefail
+            active_jobs=$(rocm-smi --showpids 2>/dev/null | tail -n +2 | awk '{print $1}' | tr '\n' ' ' | xargs || true)
+            if [ -n "$active_jobs" ]; then
+                echo "amd0 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
             export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
@@ -179,6 +204,11 @@ jobs:
 
           ssh -o BatchMode=yes amd1 << 'EOF' &
             set -euo pipefail
+            active_jobs=$(rocm-smi --showpids 2>/dev/null | tail -n +2 | awk '{print $1}' | tr '\n' ' ' | xargs || true)
+            if [ -n "$active_jobs" ]; then
+                echo "amd1 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
             export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
@@ -186,16 +216,31 @@ jobs:
           EOF
           PID1=$!
 
+          wait -n $PID0 $PID1
+          exitcode=$?
+          if [ $exitcode -ne 0 ]; then
+            kill $PID0 $PID1 2>/dev/null || true
+            sleep 1
+            kill -9 $PID0 $PID1 2>/dev/null || true
+            wait $PID0 $PID1 2>/dev/null || true
+            exit $exitcode
+          fi
           wait $PID0 $PID1
+          exit $?
 
       - name: Run EP low-latency test
-        timeout-minutes: 10
+        timeout-minutes: 3
         shell: bash
         run: |
           set -uo pipefail
 
           ssh -o BatchMode=yes amd0 << 'EOF' &
             set -euo pipefail
+            active_jobs=$(rocm-smi --showpids 2>/dev/null | tail -n +2 | awk '{print $1}' | tr '\n' ' ' | xargs || true)
+            if [ -n "$active_jobs" ]; then
+                echo "amd0 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
             export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
@@ -207,6 +252,11 @@ jobs:
 
           ssh -o BatchMode=yes amd1 << 'EOF' &
             set -euo pipefail
+            active_jobs=$(rocm-smi --showpids 2>/dev/null | tail -n +2 | awk '{print $1}' | tr '\n' ' ' | xargs || true)
+            if [ -n "$active_jobs" ]; then
+                echo "amd1 node is currently used by processes with PID: $active_jobs"
+                exit 1
+            fi
             export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
@@ -214,7 +264,17 @@ jobs:
           EOF
           PID1=$!
 
+          wait -n $PID0 $PID1
+          exitcode=$?
+          if [ $exitcode -ne 0 ]; then
+            kill $PID0 $PID1 2>/dev/null || true
+            sleep 1
+            kill -9 $PID0 $PID1 2>/dev/null || true
+            wait $PID0 $PID1 2>/dev/null || true
+            exit $exitcode
+          fi
           wait $PID0 $PID1
+          exit $?
 
       - name: Fetch remote logs
         if: always()
