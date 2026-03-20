@@ -6,7 +6,6 @@
 
 #include "algorithm.hpp"
 #include "gpu_data_types.hpp"
-#include "logger.hpp"
 #include "nccl.h"
 #include <cstddef>
 
@@ -78,10 +77,9 @@ static inline ncclDataType_t mscclppToNcclDataType(mscclpp::DataType dtype) {
       return ncclFloat8e5m2;
 #endif
     default:
-      THROW(mscclpp::LogSubsys::NCCL, mscclpp::Error,
-            mscclpp::ErrorCode::InvalidUsage,
-            "Unsupported mscclpp::DataType: " +
-                std::to_string(static_cast<int>(dtype)));
+      throw mscclpp::Error("Unsupported mscclpp::DataType: " +
+                               std::to_string(static_cast<int>(dtype)),
+                           mscclpp::ErrorCode::InvalidUsage);
   }
 }
 
