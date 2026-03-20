@@ -18,8 +18,8 @@ enum class TaskType : uint64_t {
   Stop,
 };
 
-enum class DataType : uint64_t { Fp8, Fp16, Fp32 };
-enum class ReduceType : uint64_t { Sum, Max, Min, BitwiseAnd, None };
+enum class DataType : uint64_t { Int8, Int32, Int64, Fp8, Fp16, Fp32, Fp64, Bf16 };
+enum class ReduceType : uint64_t { Sum, Prod, Max, Min, BitwiseAnd, None };
 
 constexpr unsigned int TaskTypeSize = 8;  // 256
 constexpr unsigned int DataTypeSize = 8;
@@ -161,7 +161,15 @@ class TaskManager {
     return Task(tt, dt, blockId, idx);
   }
 
-  // CPU: free slot back
+  uint32_t alloc_task_args() {
+    std::lock_guard<std::mutex> g(task_mu_);
+    assert(inited_ && "TaskManager not initialized");
+    assert(!free_task_.empty() && "args pool exhausted");
+    uint32_t idx = free_task_.back();
+    free_task_.pop_back();
+    return idx;
+  }
+
   void free_task_args(uint32_t idx) {
     std::lock_guard<std::mutex> g(task_mu_);
     assert(inited_ && "TaskManager not initialized");

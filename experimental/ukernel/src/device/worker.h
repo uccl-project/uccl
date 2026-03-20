@@ -50,6 +50,15 @@ class WorkerPool {
 
   Config const& cfg() const { return cfg_; }
 
+  gpuStream_t getWorkerStream(uint32_t fifoId) const {
+    for (size_t i = 0; i < workers_.size(); ++i) {
+      if (workers_[i]->fifoId == fifoId && workers_[i]->launched) {
+        return workers_[i]->stream;
+      }
+    }
+    return nullptr;
+  }
+
  private:
   struct PendingTask {
     uint32_t argsId;
@@ -72,9 +81,10 @@ class WorkerPool {
     bool ready;
     gpuStream_t stream = nullptr;
     void* d_fifo_handle = nullptr;
+    void* d_readyFlag = nullptr;
   };
 
-  void launchWorkerForFifo(uint32_t fifoId, int workerIdHint = -1);
+  void launchWorkerForFifo(uint32_t fifoId);
 
   Config cfg_;
   std::vector<std::unique_ptr<FifoContext>> fifos_;

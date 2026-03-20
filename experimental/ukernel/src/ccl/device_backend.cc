@@ -38,7 +38,7 @@ BackendToken PersistentKernelBackend::submit(ExecutionOp const& op) {
     throw std::invalid_argument("unsupported op kind for persistent-kernel backend");
   }
 
-  UKernel::Device::CollArgs args{};
+  UKernel::Device::TaskArgs args{};
   args.src = const_cast<void*>(resolve_src(op.src_role, op.chunk.offset_bytes));
   args.src2 = nullptr;
   args.dst = resolve_dst(op.dst_role, op.chunk.offset_bytes);
@@ -47,10 +47,10 @@ BackendToken PersistentKernelBackend::submit(ExecutionOp const& op) {
   args.dst_rank = op.dst_rank;
   args.src_device = 0;
   args.dst_device = 0;
-  args.flags = 0;
   args.redType = op.kind == ExecutionOpKind::PkReduce
                      ? reduce_type_
                      : UKernel::Device::ReduceType::None;
+  args.flags = 0;
 
   uint32_t block_id = op.chunk.channel_id % num_blocks_;
   UKernel::Device::TaskType task_type =
@@ -58,7 +58,7 @@ BackendToken PersistentKernelBackend::submit(ExecutionOp const& op) {
           ? UKernel::Device::TaskType::CollReduce
           : UKernel::Device::TaskType::CollCopy;
   UKernel::Device::Task task = UKernel::Device::TaskManager::instance()
-                                    .create_coll_task(args, task_type, dtype_,
+                                    .create_task(args, task_type, dtype_,
                                                       block_id);
   uint64_t task_id = workerPool_.enqueue(task, block_id);
 

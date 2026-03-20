@@ -13,17 +13,14 @@ WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
 
   workers_.reserve(cfg_.numMaxWorkers);
   for (uint32_t i = 0; i < cfg_.numMaxWorkers; ++i) {
+    // create all workercontexts first
     auto* wc = new WorkerContext();
     wc->fifoId = UINT32_MAX;
     wc->numBlocks = 1;
     wc->launched = false;
     wc->ready = false;
+    wc->d_readyFlag = nullptr;
     GPU_RT_CHECK(gpuStreamCreateWithFlags(&wc->stream, gpuStreamNonBlocking));
-
-    void* d_fifo_handle;
-    GPU_RT_CHECK(gpuMalloc(&d_fifo_handle, sizeof(mscclpp::C2DDeviceHandle<Task>)));
-    wc->d_fifo_handle = d_fifo_handle;
-
     workers_.emplace_back(wc);
 
     bool* d_stop;
@@ -56,6 +53,9 @@ WorkerPool::~WorkerPool() {
     }
     if (wc->d_fifo_handle) {
       GPU_RT_CHECK(gpuFree(wc->d_fifo_handle));
+    }
+    if (wc->d_readyFlag) {
+      GPU_RT_CHECK(gpuFree(wc->d_readyFlag));
     }
   }
   workers_.clear();
@@ -95,7 +95,14 @@ bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
       workers_[i]->fifoId = fifoId;
       workers_[i]->numBlocks = numBlocks;
       workers_[i]->ready = false;
-      launchWorkerForFifo(fifoId, i);
+      if (numBlocks > 1) { // only use by multi-sm persistent kernel
+        GPU_RT_CHECK(gpuMalloc(&workers_[i]->d_readyFlag, sizeof(uint32_t) * workers_[i]->numBlocks));
+        GPU_RT_CHECK(gpuMemset(workers_[i]->d_readyFlag, 0, sizeof(uint32_t) * workers_[i]->numBlocks));
+      } 
+      void* d_fifo_handle;
+      GPU_RT_CHECK(gpuMalloc(&d_fifo_handle, sizeof(mscclpp::C2DDeviceHandle<Task>)));
+      workers_[i]->d_fifo_handle = d_fifo_handle;
+      launchWorkerForFifo(fifoId);
       workers_[i]->launched = true;
       return true;
     }
@@ -135,6 +142,9 @@ void WorkerPool::destroyWorker(uint32_t fifoId) {
       GPU_RT_CHECK(gpuMemcpyAsync(d_stop_flags_[i], h_stop_flags_[i],
                                     sizeof(bool), gpuMemcpyHostToDevice,
                                     copy_stream_));
+      Task stopTask(TaskType::Stop, DataType::Int8, 0, 0);
+      fifos_[fifoId]->fifo.push(stopTask);
+
       GPU_RT_CHECK(gpuStreamSynchronize(workers_[i]->stream));
       workers_[i]->launched = false;
       workers_[i]->ready = false;
@@ -152,13 +162,12 @@ uint64_t WorkerPool::enqueue(Task const& task, uint32_t fifoId) {
 
   auto& ctx = *fifos_[fifoId];
 
-  for (;;) {
-    uint64_t tail = ctx.fifo.currentId();
-    uint64_t head = ctx.fifo.head();
-    if ((int64_t)(head + 1 - tail) <= cfg_.fifoCapacity) {
-      break;
-    }
-    std::this_thread::yield();
+  // Check if there's space in FIFO without blocking initially
+  uint64_t tail = ctx.fifo.currentId();
+  uint64_t head = ctx.fifo.head();
+  if ((int64_t)(head + 1 - tail) > cfg_.fifoCapacity) {
+    // FIFO is full, return 0 to indicate failure - caller can retry
+    return 0;
   }
 
   uint64_t taskId = ctx.fifo.push(task);
@@ -187,13 +196,15 @@ uint64_t WorkerPool::enqueue(Task const& task, uint32_t fifoId) {
 void WorkerPool::shutdown_all() {
   for (size_t i = 0; i < workers_.size(); ++i) {
     if (workers_[i]->launched) {
-      *h_stop_flags_[i] = true;
-      GPU_RT_CHECK(gpuMemcpyAsync(d_stop_flags_[i], h_stop_flags_[i],
-                                    sizeof(bool), gpuMemcpyHostToDevice,
-                                    copy_stream_));
+      destroyWorker(workers_[i]->fifoId);
     }
   }
-  GPU_RT_CHECK(gpuStreamSynchronize(copy_stream_));
+
+  for (size_t i = 0; i < workers_.size(); ++i) {
+    if (workers_[i]->launched) {
+      GPU_RT_CHECK(gpuStreamSynchronize(workers_[i]->stream));
+    }
+  }
 
   for (auto& wc : workers_) {
     wc->launched = false;
@@ -229,51 +240,61 @@ bool WorkerPool::is_done(uint64_t taskId, uint32_t fifoId) {
   return false;
 }
 
-void WorkerPool::launchWorkerForFifo(uint32_t fifoId, int workerIdHint) {
-  auto& fifo = fifos_[fifoId]->fifo;
-  mscclpp::C2DDeviceHandle<Device::Task> handle = fifo.deviceHandle();
+void WorkerPool::launchWorkerForFifo(uint32_t fifoId) {
+    auto& fifo = fifos_[fifoId]->fifo;
+    mscclpp::C2DDeviceHandle<Device::Task> handle = fifo.deviceHandle();
+    int workerId = -1;
 
-  int workerId = -1;
-  if (workerIdHint >= 0 && workers_[workerIdHint]->fifoId == fifoId &&
-      !workers_[workerIdHint]->launched) {
-    workerId = workerIdHint;
-  } else {
     for (size_t i = 0; i < workers_.size(); ++i) {
-      if (workers_[i]->fifoId == fifoId && workers_[i]->launched) {
+      if (!workers_[i]->launched) { // find first worker for fifo
         workerId = static_cast<int>(i);
         break;
       }
     }
-    if (workerId < 0) {
-      for (size_t i = 0; i < workers_.size(); ++i) {
-        if (!workers_[i]->launched) {
-          workerId = static_cast<int>(i);
-          break;
-        }
-      }
+    if (workerId < 0) return;
+
+    // FIFO handle to device
+    GPU_RT_CHECK(gpuMemcpyAsync(workers_[workerId]->d_fifo_handle, &handle,
+                                sizeof(mscclpp::C2DDeviceHandle<Device::Task>),
+                                gpuMemcpyHostToDevice,
+                                workers_[workerId]->stream));
+    GPU_RT_CHECK(gpuStreamSynchronize(workers_[workerId]->stream));
+
+    auto* d_task_args = TaskManager::instance().d_task_args();
+
+    dim3 grid(workers_[workerId]->numBlocks);
+    dim3 block(cfg_.threadsPerBlock);
+
+    size_t smem_size = cfg_.smemSize > 0 ? cfg_.smemSize : 16 * 1024;  // Default 16KB
+
+    // kernel args
+    void* args_single[] = {
+        &workers_[workerId]->d_fifo_handle,
+        &d_task_args,
+        &d_stop_flags_[workerId]
+    };
+
+    void* args_multi[] = {
+        &workers_[workerId]->d_fifo_handle,
+        &d_task_args,
+        &d_stop_flags_[workerId],
+        &workers_[workerId]->d_readyFlag
+    };
+
+    // launch kernel
+    if (workers_[workerId]->numBlocks == 1) {
+        GPU_RT_CHECK(gpuLaunchKernel(
+            UKernel::Device::singlePersistentKernel,
+            grid, block, args_single, smem_size, workers_[workerId]->stream
+        ));
+    } else {
+        GPU_RT_CHECK(gpuLaunchKernel(
+            UKernel::Device::multiPersistentKernel,
+            grid, block, args_multi, smem_size, workers_[workerId]->stream
+        ));
     }
-  }
-  if (workerId < 0) return;
 
-  GPU_RT_CHECK(gpuMemcpyAsync(workers_[workerId]->d_fifo_handle, &handle,
-                         sizeof(mscclpp::C2DDeviceHandle<Device::Task>),
-                         gpuMemcpyHostToDevice, workers_[workerId]->stream));
-
-  auto* d_task_args = TaskManager::instance().d_task_args();
-
-  void* args[] = {
-    &workers_[workerId]->d_fifo_handle,
-    &d_task_args,
-    &d_stop_flags_[workerId]
-  };
-
-  dim3 grid(workers_[workerId]->numBlocks);
-  dim3 block(cfg_.threadsPerBlock);
-
-  GPU_RT_CHECK(gpuLaunchKernel(basePersistentKernel, grid, block, args,
-                               0, workers_[workerId]->stream));
-  
-  workers_[workerId]->ready = true;
+    workers_[workerId]->ready = true;
 }
 
 }  // namespace Device
