@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../src/ccl/backend.h"
+#include "../backend.h"
 #include <cstdint>
 #include <stdexcept>
 #include <unordered_map>
@@ -60,12 +60,12 @@ class MockBackend final : public Backend {
   std::unordered_map<uint64_t, uint32_t> pending_polls_;
 };
 
-class MockPersistentKernelBackend final : public Backend {
+class MockDeviceBackend final : public Backend {
  public:
-  explicit MockPersistentKernelBackend(uint32_t polls_before_ready = 1)
+  explicit MockDeviceBackend(uint32_t polls_before_ready = 1)
       : polls_before_ready_(polls_before_ready == 0 ? 1 : polls_before_ready) {}
 
-  char const* name() const override { return "persistent"; }
+  char const* name() const override { return "device"; }
   bool supports(ExecutionOpKind kind) const override {
     switch (kind) {
       case ExecutionOpKind::PkCopy:
@@ -75,14 +75,13 @@ class MockPersistentKernelBackend final : public Backend {
         return true;
       case ExecutionOpKind::RdmaSend:
       case ExecutionOpKind::RdmaRecv:
-      case ExecutionOpKind::CeCopy:
         return false;
     }
     return false;
   }
   BackendToken submit(ExecutionOp const& op) override {
     if (!supports(op.kind)) {
-      throw std::invalid_argument("persistent backend does not support this op");
+      throw std::invalid_argument("device backend does not support this op");
     }
     return submit_token(next_token_, submissions_, polls_before_ready_,
                         pending_polls_);

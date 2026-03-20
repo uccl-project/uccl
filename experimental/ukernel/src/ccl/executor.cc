@@ -75,14 +75,7 @@ void assign_copy_backends(CollectivePlan& plan, CollectiveConfig const& config,
         rewrite_allgather_rdma_step(step);
         break;
       }
-      if (selected == BackendKind::Ce) {
-        if (backends.copy_engine != nullptr &&
-            backends.copy_engine->supports(ExecutionOpKind::CeCopy)) {
-          op.kind = ExecutionOpKind::CeCopy;
-        } else if (config.requested_backend == BackendKind::Ce) {
-          throw std::invalid_argument("CE backend requested but unavailable");
-        }
-      }
+
     }
   }
 }
@@ -125,12 +118,9 @@ Backend* select_backend(ExecutorBackends const& backends, ExecutionOpKind kind) 
     case ExecutionOpKind::RdmaRecv:
       preferred = backends.transport;
       break;
-    case ExecutionOpKind::CeCopy:
-      preferred = backends.copy_engine;
-      break;
     case ExecutionOpKind::PkCopy:
     case ExecutionOpKind::PkReduce:
-      preferred = backends.persistent_kernel;
+      preferred = backends.device;
       break;
     case ExecutionOpKind::EventWait:
     case ExecutionOpKind::Barrier:
@@ -402,4 +392,21 @@ size_t Executor::inflight_steps(CollectiveOpHandle handle) const {
 }
 
 }  // namespace CCL
+
+namespace CCL {
+
+PlanRequest make_plan_request(CollectiveKind kind, CollectiveConfig const& config) {
+  PlanRequest request;
+  request.collective = kind;
+  request.algorithm = config.algorithm;
+  request.nranks = config.nranks;
+  request.rank = config.rank;
+  request.channels = config.channels;
+  request.bytes_per_rank = config.bytes_per_rank;
+  request.chunk_bytes = config.chunk_bytes;
+  return request;
+}
+
+}  // namespace CCL
+
 }  // namespace UKernel

@@ -5,7 +5,7 @@
 namespace UKernel {
 namespace CCL {
 
-enum class BackendKind : uint32_t { Auto, Rdma, Ce, Pk };
+enum class BackendKind : uint32_t { Auto, Rdma, Cpu };
 
 struct RuntimeCapabilities {
   bool is_same_node = true;

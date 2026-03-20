@@ -23,20 +23,19 @@ BackendKind resolve_backend_kind(BackendKind requested, bool is_copy,
                                  uint64_t bytes,
                                  RuntimeCapabilities const& caps,
                                  BackendSelectorConfig const& cfg) {
-  if (char const* env = std::getenv("UKERNEL_CCL_CPU_BACKEND")) {
+  if (char const* env = std::getenv("UKERNEL_CCL_BACKEND")) {
     std::string override_value = to_lower(env);
     if (override_value == "rdma") return BackendKind::Rdma;
-    if (override_value == "ce") return BackendKind::Ce;
-    if (override_value == "pk") return BackendKind::Pk;
+    if (override_value == "cpu") return BackendKind::Cpu;
   }
 
   if (requested != BackendKind::Auto) return requested;
   if (caps.supports_rdma && !caps.is_same_node) return BackendKind::Rdma;
-  if (is_copy && cfg.prefer_ce_for_large_copy && caps.has_copy_engine_path &&
+  if (is_copy && caps.has_copy_engine_path &&
       bytes >= cfg.copy_engine_threshold_bytes) {
-    return BackendKind::Ce;
+    return BackendKind::Cpu;
   }
-  return BackendKind::Pk;
+  return BackendKind::Cpu;
 }
 
 }  // namespace CCL

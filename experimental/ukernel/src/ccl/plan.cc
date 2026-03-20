@@ -268,12 +268,73 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
   return plan;
 }
 
+CollectivePlan build_alltoall_ring_plan(PlanRequest const& request) {
+  RingTopology ring{request.nranks};
+  CollectivePlan plan;
+  plan.collective = request.collective;
+  plan.algorithm = request.algorithm;
+  plan.nranks = request.nranks;
+  plan.rank = request.rank;
+  plan.channels = request.channels;
+  plan.bytes_per_rank = request.bytes_per_rank;
+  plan.chunk_bytes = request.chunk_bytes;
+
+  size_t chunks_per_rank = ceil_div(request.bytes_per_rank, request.chunk_bytes);
+  uint32_t next_step_id = 0;
+  uint32_t next_op_id = 0;
+  std::vector<int32_t> last_step_for_channel(request.channels, -1);
+
+  for (int ring_step = 0; ring_step < request.nranks - 1; ++ring_step) {
+    for (int src = 0; src < request.nranks; ++src) {
+      int dst = ring.wrap(src + ring_step + 1);
+      for (size_t chunk_index = 0; chunk_index < chunks_per_rank; ++chunk_index) {
+        ChunkRange chunk;
+        chunk.owner_rank = static_cast<uint32_t>(src);
+        chunk.chunk_index = static_cast<uint32_t>(chunk_index);
+        chunk.channel_id = static_cast<uint32_t>(chunk_index % request.channels);
+        chunk.offset_bytes =
+            static_cast<size_t>(src) * request.bytes_per_rank +
+            chunk_offset(chunk_index, request.chunk_bytes);
+        chunk.size_bytes =
+            chunk_size(request.bytes_per_rank, request.chunk_bytes, chunk_index);
+        if (chunk.size_bytes == 0) continue;
+
+        CollectiveStep step;
+        step.step_id = next_step_id++;
+        step.phase = StepPhase::DirectCopy;
+        step.src_rank = src;
+        step.dst_rank = dst;
+        step.chunk = chunk;
+
+        int32_t pred = last_step_for_channel[chunk.channel_id];
+        if (pred >= 0) step.predecessors.push_back(static_cast<uint32_t>(pred));
+
+        step.ops.push_back(
+            make_copy_op(next_op_id++, src, dst, chunk, {},
+                        static_cast<uint32_t>(ExecutionOpFlags::None),
+                        BufferRole::RemoteInput, BufferRole::FinalOutput));
+
+        last_step_for_channel[chunk.channel_id] = static_cast<int32_t>(step.step_id);
+        plan.steps.push_back(std::move(step));
+      }
+    }
+  }
+
+  return plan;
+}
+
 char const* collective_name(CollectiveKind kind) {
   switch (kind) {
     case CollectiveKind::AllGather:
       return "AllGather";
     case CollectiveKind::AllReduce:
       return "AllReduce";
+    case CollectiveKind::ReduceScatter:
+      return "ReduceScatter";
+    case CollectiveKind::Broadcast:
+      return "Broadcast";
+    case CollectiveKind::AllToAll:
+      return "AllToAll";
   }
   return "Unknown";
 }
@@ -322,6 +383,14 @@ CollectivePlan build_plan(PlanRequest const& request) {
       return build_allgather_ring_plan(request);
     case CollectiveKind::AllReduce:
       return build_allreduce_ring_plan(request);
+    case CollectiveKind::ReduceScatter:
+      // For now, throw unsupported exception - could implement later
+      throw std::invalid_argument("ReduceScatter not implemented yet");
+    case CollectiveKind::Broadcast:
+      // For now, throw unsupported exception - could implement later
+      throw std::invalid_argument("Broadcast not implemented yet");
+    case CollectiveKind::AllToAll:
+      return build_alltoall_ring_plan(request);
   }
   throw std::invalid_argument("Unsupported collective kind");
 }

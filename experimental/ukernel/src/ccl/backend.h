@@ -37,8 +37,7 @@ class Backend {
 
 struct ExecutorBackends {
   Backend* transport = nullptr;
-  Backend* copy_engine = nullptr;
-  Backend* persistent_kernel = nullptr;
+  Backend* device = nullptr;
   Backend* fallback = nullptr;
 };
 

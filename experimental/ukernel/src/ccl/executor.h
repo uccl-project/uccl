@@ -45,6 +45,10 @@ class Executor {
   CollectiveOpHandle submit(CollectivePlan plan);
   CollectiveOpHandle submit_allgather(CollectiveConfig const& config);
   CollectiveOpHandle submit_allreduce(CollectiveConfig const& config);
+  CollectiveOpHandle submit_reducescatter(CollectiveConfig const& config);
+  CollectiveOpHandle submit_broadcast(CollectiveConfig const& config);
+  CollectiveOpHandle submit_alltoall(CollectiveConfig const& config);
+  CollectiveOpHandle submit_planned(CollectivePlan const& plan);
   bool poll(CollectiveOpHandle handle);
   void wait(CollectiveOpHandle handle);
   void release(CollectiveOpHandle handle);

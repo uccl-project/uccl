@@ -8,7 +8,7 @@
 namespace UKernel {
 namespace CCL {
 
-enum class CollectiveKind : uint32_t { AllGather, AllReduce };
+enum class CollectiveKind : uint32_t { AllGather, AllReduce, ReduceScatter, Broadcast, AllToAll };
 enum class AlgorithmKind : uint32_t { Ring };
 enum class StepPhase : uint32_t { DirectCopy, ReduceScatter, AllGather };
 enum class ExecutionOpKind : uint32_t {
