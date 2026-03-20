@@ -189,7 +189,8 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
           // block 0 thread0 pop
           if (bid == 0) fifo.pop();
 
-          // reset readyFlag
+          // reset readyFlag - All blocks participate in reset to avoid race condition
+          __syncthreads(); // sync within block before reset
           if (bid == 0) {
             for (uint32_t i = 0; i < gridDim.x; i++) {
                 d_readyFlag[i] = 0;
@@ -198,7 +199,7 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
           }
       }
 
-      __syncthreads(); // block
+      __syncthreads(); // sync across all blocks before continuing
   }
 }
 

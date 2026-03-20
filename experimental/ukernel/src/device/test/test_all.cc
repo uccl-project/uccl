@@ -99,8 +99,10 @@ void test_single_sm_copy() {
     uint64_t taskId = wp.enqueue(task, 0);
     std::cout << "Enqueued task " << taskId << std::endl;
     
-    gpuStream_t workerStream = wp.getWorkerStream(0);
-    GPU_RT_CHECK(gpuStreamSynchronize(workerStream));
+    // Wait for task completion using WorkerPool's is_done method
+    while (!wp.is_done(taskId, 0)) {
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
+    }
     
     // Check dst buffer before full copy
     std::vector<char> h_dst_check(bytes, 0);
@@ -173,8 +175,10 @@ void test_multi_block_copy() {
     uint64_t taskId = wp.enqueue(task, 0);
     std::cout << "Enqueued task " << taskId << " with 4 blocks" << std::endl;
     
-    gpuStream_t workerStream = wp.getWorkerStream(0);
-    GPU_RT_CHECK(gpuStreamSynchronize(workerStream));
+    // Wait for task completion using WorkerPool's is_done method
+    while (!wp.is_done(taskId, 0)) {
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
+    }
     
     GPU_RT_CHECK(gpuMemcpy(h_dst.data(), d_dst, bytes, gpuMemcpyDeviceToHost));
     
@@ -246,10 +250,12 @@ void test_data_types() {
         wp.waitWorker(0);
         
         Task task(TaskType::CollCopy, dtype, 0, argsIdx);
-        wp.enqueue(task, 0);
+        uint64_t taskId = wp.enqueue(task, 0);
         
-        gpuStream_t workerStream = wp.getWorkerStream(0);
-        GPU_RT_CHECK(gpuStreamSynchronize(workerStream));
+        // Wait for task completion using WorkerPool's is_done method
+        while (!wp.is_done(taskId, 0)) {
+            std::this_thread::sleep_for(std::chrono::microseconds(10));
+        }
         
         std::vector<char> h_dst(bytes);
         GPU_RT_CHECK(gpuMemcpy(h_dst.data(), d_dst, bytes, gpuMemcpyDeviceToHost));
@@ -330,10 +336,12 @@ void test_repeated_launch() {
         wp.waitWorker(0);
         
         Task task(TaskType::CollCopy, DataType::Int8, 0, argsIdx);
-        wp.enqueue(task, 0);
+        uint64_t taskId = wp.enqueue(task, 0);
         
-        gpuStream_t workerStream = wp.getWorkerStream(0);
-        GPU_RT_CHECK(gpuStreamSynchronize(workerStream));
+        // Wait for task completion using WorkerPool's is_done method
+        while (!wp.is_done(taskId, 0)) {
+            std::this_thread::sleep_for(std::chrono::microseconds(10));
+        }
         
         GPU_RT_CHECK(gpuMemcpy(h_dst.data(), d_dst, bytes, gpuMemcpyDeviceToHost));
         
@@ -384,6 +392,8 @@ void test_repeated_enqueue() {
     wp.createWorker(0, 1);
     wp.waitWorker(0);
     
+    // Track all task IDs for later synchronization
+    std::vector<uint64_t> taskIds;
     for (int iter = 0; iter < 10; iter++) {
         TaskArgs args;
         memset(&args, 0, sizeof(args));
@@ -395,12 +405,15 @@ void test_repeated_enqueue() {
         GPU_RT_CHECK(gpuMemcpy(TaskManager::instance().d_task_args() + argsIdx, &args, sizeof(TaskArgs), gpuMemcpyHostToDevice));
         
         Task task(TaskType::CollCopy, DataType::Int8, 0, argsIdx);
-        wp.enqueue(task, 0);
+        uint64_t taskId = wp.enqueue(task, 0);
+        taskIds.push_back(taskId);
     }
     
-    for (int iter = 0; iter < 10; iter++) {
-        gpuStream_t workerStream = wp.getWorkerStream(0);
-        GPU_RT_CHECK(gpuStreamSynchronize(workerStream));
+    // Wait for all tasks to complete
+    for (uint64_t taskId : taskIds) {
+        while (!wp.is_done(taskId, 0)) {
+            std::this_thread::sleep_for(std::chrono::microseconds(10));
+        }
     }
     
     GPU_RT_CHECK(gpuMemcpy(h_dst.data(), d_dst, bytes, gpuMemcpyDeviceToHost));
@@ -456,6 +469,8 @@ void test_multiple_fifos() {
         wp.waitWorker(fifo);
     }
     
+    // Track task IDs for each FIFO
+    std::vector<uint64_t> taskIds(3);
     for (int fifo = 0; fifo < 3; fifo++) {
         TaskArgs args;
         memset(&args, 0, sizeof(args));
@@ -467,12 +482,14 @@ void test_multiple_fifos() {
         GPU_RT_CHECK(gpuMemcpy(TaskManager::instance().d_task_args() + argsIdx, &args, sizeof(TaskArgs), gpuMemcpyHostToDevice));
         
         Task task(TaskType::CollCopy, DataType::Int8, 0, argsIdx);
-        wp.enqueue(task, fifo);
+        taskIds[fifo] = wp.enqueue(task, fifo);
     }
     
     for (int fifo = 0; fifo < 3; fifo++) {
-        gpuStream_t workerStream = wp.getWorkerStream(fifo);
-        GPU_RT_CHECK(gpuStreamSynchronize(workerStream));
+        // Wait for each task to complete
+        while (!wp.is_done(taskIds[fifo], fifo)) {
+            std::this_thread::sleep_for(std::chrono::microseconds(10));
+        }
     }
     
     bool all_match = true;
@@ -539,10 +556,12 @@ void test_boundary() {
         wp.waitWorker(0);
         
         Task task(TaskType::CollCopy, DataType::Int8, 0, argsIdx);
-        wp.enqueue(task, 0);
+        uint64_t taskId = wp.enqueue(task, 0);
         
-        gpuStream_t workerStream = wp.getWorkerStream(0);
-        GPU_RT_CHECK(gpuStreamSynchronize(workerStream));
+        // Wait for task completion using WorkerPool's is_done method
+        while (!wp.is_done(taskId, 0)) {
+            std::this_thread::sleep_for(std::chrono::microseconds(10));
+        }
         
         GPU_RT_CHECK(gpuMemcpy(h_dst.data(), d_dst, bytes, gpuMemcpyDeviceToHost));
         

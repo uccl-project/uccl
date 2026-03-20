@@ -8,10 +8,10 @@ namespace Device {
 
 template <typename T>
 __device__ __forceinline__ void reg_copy(T* dst, const T* src, size_t count, int tid, int nthread) {
-    size_t chunk = (count + nthread - 1) / nthread;
-    size_t start = tid * chunk;
-    size_t end = start + chunk < count ? start + chunk : count;
-    for (size_t i = start; i < end; ++i) dst[i] = src[i];
+    // Use stride-based approach: each thread handles elements at positions tid, tid+nthread, tid+2*nthread, etc.
+    for (size_t i = tid; i < count; i += nthread) {
+        dst[i] = src[i];
+    }
 }
 
 template <typename T>

@@ -12,7 +12,7 @@ template <typename T>
 __device__ __forceinline__ void copy(
     void* dst, const void* src, size_t count,
     int tid, int nthread, void* smem_buf) {
-    if (is_tma_supported() && smem_buf != nullptr) {
+    if (is_tma_supported() && smem_buf != nullptr && count * sizeof(T) <= 4096) { // Limit TMA to small sizes for now
         TmaSemaphore sem;
         tma_init_semaphore(sem, 0);
         tma_load<T>(smem_buf, src, count * sizeof(T), sem);
