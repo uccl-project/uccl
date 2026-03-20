@@ -18,7 +18,7 @@ CXXFLAGS  := $(CXX_STD) -Wall -Wextra -fPIC -O2
 CUFLAGS   := $(CXX_STD) -Xcompiler -Wall,-Wextra,-fPIC -O2
 NVCC_GENCODE := $(foreach arch,$(CUDA_ARCH),-gencode arch=compute_$(arch),code=sm_$(arch))
 
-INCLUDES  := -I. -I$(MINT_DIR)/core -I$(MINT_DIR)/kernel -I$(MINT_DIR)/thirdparty \
+INCLUDES  := -I. -I$(MINT_DIR)/core -I$(MINT_DIR)/collective -I$(MINT_DIR)/thirdparty \
              -I$(CUDA_HOME)/include -I$(CUDA_HOME)/include/cccl
 DEFINES   := -DUSE_IBVERBS -DMSCCLPP_USE_CUDA
 
@@ -27,7 +27,7 @@ CU_SRCS   := $(wildcard *.cu)
 CU_OBJS   := $(patsubst %.cu,$(OUT_DIR)/%.cu.o,$(CU_SRCS))
 
 LIB_MINT      := $(BUILD_DIR)/libmint.so
-LIB_MINT_KERN := $(BUILD_DIR)/libmint_kernel.so
+LIB_MINT_COLL := $(BUILD_DIR)/libmint_collective.so
 
 LIB_NCCL_SO  := $(OUT_DIR)/libmscclpp_nccl.so
 LIB_NCCL_A   := $(OUT_DIR)/libmscclpp_nccl.a
@@ -35,7 +35,7 @@ LIB_AUDIT_SO := $(OUT_DIR)/libmscclpp_audit_nccl.so
 AUDIT_OBJ    := $(OUT_DIR)/audit_nccl.o
 
 LDFLAGS := -L$(BUILD_DIR) -L$(CUDA_HOME)/lib64
-LDLIBS  := -Wl,--no-as-needed -lmint_kernel -lmint -lcudart -lcuda -libverbs -lnuma \
+LDLIBS  := -Wl,--no-as-needed -lmint_collective -lmint -lcudart -lcuda -libverbs -lnuma \
            -lpthread -ldl -lstdc++fs
 
 .PHONY: all clean mint-deps
@@ -43,7 +43,7 @@ LDLIBS  := -Wl,--no-as-needed -lmint_kernel -lmint -lcudart -lcuda -libverbs -ln
 all: mint-deps $(LIB_NCCL_SO) $(LIB_NCCL_A) $(LIB_AUDIT_SO)
 
 mint-deps:
-	$(MAKE) -C $(MINT_DIR) core kernel
+	$(MAKE) -C $(MINT_DIR) core collective
 
 $(OUT_DIR):
 	mkdir -p $@
@@ -51,7 +51,7 @@ $(OUT_DIR):
 $(OUT_DIR)/%.cu.o: %.cu | $(OUT_DIR)
 	$(NVCC) $(CUFLAGS) $(NVCC_GENCODE) $(INCLUDES) $(DEFINES) -c $< -o $@
 
-$(LIB_NCCL_SO): $(CU_OBJS) $(LIB_MINT_KERN) $(LIB_MINT)
+$(LIB_NCCL_SO): $(CU_OBJS) $(LIB_MINT_COLL) $(LIB_MINT)
 	$(CXX) -shared -o $@ $(CU_OBJS) $(LDFLAGS) -Wl,-rpath,'$$ORIGIN:$(abspath $(BUILD_DIR))' $(LDLIBS)
 
 $(LIB_NCCL_A): $(CU_OBJS)

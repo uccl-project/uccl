@@ -5,7 +5,6 @@
 #define MSCCLPP_DATATYPE_CONVERSION_HPP_
 
 #include "algorithm.hpp"
-#include "errors.hpp"
 #include "gpu_data_types.hpp"
 #include "nccl.h"
 #include <cstddef>
@@ -54,6 +53,33 @@ inline size_t getDataTypeSize(mscclpp::DataType dtype) {
       return 4;
     default:
       return 0;
+  }
+}
+
+static inline ncclDataType_t mscclppToNcclDataType(mscclpp::DataType dtype) {
+  switch (dtype) {
+    case mscclpp::DataType::INT32:
+      return ncclInt32;
+    case mscclpp::DataType::UINT32:
+      return ncclUint32;
+    case mscclpp::DataType::UINT8:
+      return ncclUint8;
+    case mscclpp::DataType::FLOAT16:
+      return ncclFloat16;
+    case mscclpp::DataType::FLOAT32:
+      return ncclFloat32;
+    case mscclpp::DataType::BFLOAT16:
+      return ncclBfloat16;
+#ifdef __FP8_TYPES_EXIST__
+    case mscclpp::DataType::FLOAT8_E4M3:
+      return ncclFloat8e4m3;
+    case mscclpp::DataType::FLOAT8_E5M2:
+      return ncclFloat8e5m2;
+#endif
+    default:
+      throw mscclpp::Error("Unsupported mscclpp::DataType: " +
+                               std::to_string(static_cast<int>(dtype)),
+                           mscclpp::ErrorCode::InvalidUsage);
   }
 }
 
