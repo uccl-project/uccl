@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import socket
 import sys
@@ -68,6 +69,7 @@ def _recv(tensor, src, async_op=False):
 
 def _run_server(args):
     peer = 0  # client rank
+    rows = []
     for size in args.sizes:
         tensor = _make_buffer(size, args.device, args.local_gpu_idx)
         # Warm-up receive
@@ -86,11 +88,22 @@ def _run_server(args):
         print(
             f"[Server] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
+        rows.append(
+            {
+                "role": "server",
+                "size_bytes": size,
+                "size_pretty": _pretty_size(size),
+                "gbps": gbps,
+                "gb_s": gb_sec,
+            }
+        )
     print("[Server] Benchmark complete")
+    return rows
 
 
 def _run_client(args):
     peer = 1  # server rank
+    rows = []
     for size in args.sizes:
         tensor = _make_buffer(size, args.device, args.local_gpu_idx)
         # Warm-up send
@@ -109,11 +122,22 @@ def _run_client(args):
         print(
             f"[Client] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
+        rows.append(
+            {
+                "role": "client",
+                "size_bytes": size,
+                "size_pretty": _pretty_size(size),
+                "gbps": gbps,
+                "gb_s": gb_sec,
+            }
+        )
     print("[Client] Benchmark complete")
+    return rows
 
 
 def _run_server_dual(args):
     peer = 0  # client rank
+    rows = []
     for size in args.sizes:
         tensor = _make_buffer(size, args.device, args.local_gpu_idx)
         tensor2 = _make_buffer(size, args.device, args.local_gpu_idx)
@@ -137,12 +161,23 @@ def _run_server_dual(args):
         print(
             f"[Server] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
+        rows.append(
+            {
+                "role": "server",
+                "size_bytes": size,
+                "size_pretty": _pretty_size(size),
+                "gbps": gbps,
+                "gb_s": gb_sec,
+            }
+        )
     print("[Server] Benchmark complete")
+    return rows
 
 
 def _run_client_dual(args):
 
     peer = 1  # server rank
+    rows = []
     for size in args.sizes:
         tensor = _make_buffer(size, args.device, args.local_gpu_idx)
         tensor2 = _make_buffer(size, args.device, args.local_gpu_idx)
@@ -166,7 +201,17 @@ def _run_client_dual(args):
         print(
             f"[Client] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
+        rows.append(
+            {
+                "role": "client",
+                "size_bytes": size,
+                "size_pretty": _pretty_size(size),
+                "gbps": gbps,
+                "gb_s": gb_sec,
+            }
+        )
     print("[Client] Benchmark complete")
+    return rows
 
 
 def parse_size_list(val: str) -> List[int]:
@@ -186,16 +231,24 @@ def main():
         "--sizes",
         type=parse_size_list,
         default=[
-            256,
-            1024,
-            4096,
-            16384,
-            65536,
-            262144,
-            1048576,
-            10485760,
-            16777216,
-            104857600,
+            256,  # 256 B
+            1024,  # 1 KB
+            4096,  # 4 KB
+            16384,  # 16 KB
+            65536,  # 64 KB
+            262144,  # 256 KB
+            1048576,  # 1 MB
+            1048576 * 4,  # 4 MB
+            1048576 * 8,  # 8 MB
+            1048576 * 10,  # 10 MB
+            16777216,  # 16 MB
+            33554432,  # 32 MB
+            67108864,  # 64 MB
+            1048576 * 100,  # 100 MB
+            134217728,  # 128 MB
+            268435456,  # 256 MB
+            536870912,  # 512 MB
+            1073741824,  # 1 GB
         ],
     )
     p.add_argument("--iters", type=int, default=10)
@@ -204,6 +257,7 @@ def main():
         action="store_true",
         help="Run dual benchmark",
     )
+    p.add_argument("--csv", type=str, default=None, help="Path to output CSV file")
     args = p.parse_args()
 
     backend = "nccl" if args.device == "gpu" else "gloo"
@@ -222,16 +276,26 @@ def main():
     try:
         if args.dual:
             if rank == 0:
-                _run_client_dual(args)
+                rows = _run_client_dual(args)
             else:
-                _run_server_dual(args)
+                rows = _run_server_dual(args)
         else:
             if rank == 0:
-                _run_client(args)
+                rows = _run_client(args)
             else:
-                _run_server(args)
+                rows = _run_server(args)
     finally:
         dist.destroy_process_group()
+
+    if args.csv and rows:
+        fieldnames = ["role", "size_bytes", "size_pretty", "gbps", "gb_s"]
+        write_header = not os.path.exists(args.csv)
+        with open(args.csv, "a", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            if write_header:
+                writer.writeheader()
+            writer.writerows(rows)
+        print(f"Results saved to {args.csv}")
 
 
 if __name__ == "__main__":

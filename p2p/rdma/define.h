@@ -178,7 +178,7 @@ static constexpr size_t kRingCapacity = 16384;  // Must be power of 2
 static constexpr size_t kInFlightMaxSizeKB =
     10240000;  // Max in-flight packets per channel
 
-constexpr size_t kMinCompressBytes = 2 * 1024 * 1024;       // 1MB
+constexpr size_t kMinCompressBytes = 4 * 1024 * 1024;       // 
 constexpr size_t kCompressBufferSize = 1024 * 1024 * 1024;  // 1 GB
 
 static constexpr uint32_t INVALID_RANK_ID =
@@ -245,8 +245,8 @@ struct ContextArrayT {
 using RKeyArray = ContextArrayT<uint32_t>;
 using MRArray = ContextArrayT<struct ibv_mr*>;
 
-// ImmData class: encapsulates immediate data with chunk_count (high 16 bits)
-// and index (low 16 bits)
+// ImmData class: encapsulates immediate data with chunk_start (bits 31-24),
+// chunk_end (bits 23-16), and index (bits 15-0)
 class ImmData {
  public:
   // Default constructor
@@ -255,13 +255,25 @@ class ImmData {
   // Constructor from raw uint32_t value
   constexpr ImmData(uint32_t raw) : data_(raw) {}
   constexpr ImmData(int raw) : data_(raw) {}
-  // Constructor from chunk_count and index
-  constexpr ImmData(uint16_t chunk_count, uint16_t index)
-      : data_((static_cast<uint32_t>(chunk_count) << 16) | index) {}
 
-  // Get chunk_count (high 16 bits)
+  // Constructor from chunk_start, chunk_end, and index
+  constexpr ImmData(uint8_t chunk_start, uint8_t chunk_end, uint16_t index)
+      : data_((static_cast<uint32_t>(chunk_start) << 24) |
+              (static_cast<uint32_t>(chunk_end) << 16) | index) {}
+
+  // Get chunk_start (bits 31-24)
+  constexpr uint8_t chunk_start() const {
+    return static_cast<uint8_t>(data_ >> 24);
+  }
+
+  // Get chunk_end (bits 23-16)
+  constexpr uint8_t chunk_end() const {
+    return static_cast<uint8_t>((data_ >> 16) & 0xFF);
+  }
+
+  // Get chunk_count (derived: end - start + 1)
   constexpr uint16_t chunk_count() const {
-    return static_cast<uint16_t>(data_ >> 16);
+    return static_cast<uint16_t>(chunk_end() - chunk_start() + 1);
   }
 
   // Get index (low 16 bits)
@@ -269,12 +281,13 @@ class ImmData {
     return static_cast<uint16_t>(data_ & 0xFFFF);
   }
 
-  // Set chunk_count (preserves index)
-  void set_chunk_count(uint16_t chunk_count) {
-    data_ = (static_cast<uint32_t>(chunk_count) << 16) | (data_ & 0xFFFF);
+  // Set chunk range (start and end, preserves index)
+  void set_chunk_range(uint8_t start, uint8_t end) {
+    data_ = (static_cast<uint32_t>(start) << 24) |
+            (static_cast<uint32_t>(end) << 16) | (data_ & 0xFFFF);
   }
 
-  // Set index (preserves chunk_count)
+  // Set index (preserves chunk_start and chunk_end)
   void set_index(uint16_t index) { data_ = (data_ & 0xFFFF0000) | index; }
 
   // Implicit conversion to uint32_t for compatibility
@@ -300,7 +313,9 @@ class ImmData {
   constexpr bool operator!=(uint32_t other) const { return data_ != other; }
 
   friend std::ostream& operator<<(std::ostream& os, ImmData const& imm) {
-    os << "ImmData{raw: " << imm.data_ << ", chunk_count: " << imm.chunk_count()
+    os << "ImmData{raw: " << imm.data_ << ", chunk_start: "
+       << static_cast<int>(imm.chunk_start())
+       << ", chunk_end: " << static_cast<int>(imm.chunk_end())
        << ", index: " << imm.index() << "}";
     return os;
   }
@@ -324,7 +339,7 @@ struct MessageChunk {
 
 struct ChunkSplitStrategy {
   static constexpr uint64_t kMessageChunkSizeKB = 512;
-  static constexpr uint64_t kMaxSplitNum = 16;
+  static constexpr uint64_t kMaxSplitNum = 64;
 
   static size_t getMessageChunkCount(size_t message_size) {
     constexpr size_t chunk_size_bytes = kMessageChunkSizeKB * 1024;
@@ -354,6 +369,51 @@ struct ChunkSplitStrategy {
     return (message_size + chunk_count - 1) / chunk_count;
   }
 };
+
+
+struct CompressChunkSplitStrategy {
+  static constexpr size_t kCompressionBlockSize = 128 * 1024 * 1024;  // 32 MB
+
+  // Get the number of chunks for a given message size.
+  // <= kCompressionBlockSize: use ChunkSplitStrategy
+  // >  kCompressionBlockSize: divide into kCompressionBlockSize blocks
+  static size_t getMessageChunkCount(size_t message_size) {
+    if (message_size == 0) return 0;
+    if (message_size < kCompressionBlockSize) {
+      return ChunkSplitStrategy::getMessageChunkCount(message_size);
+    }
+    return (message_size + kCompressionBlockSize - 1) / kCompressionBlockSize;
+  }
+
+  static std::vector<MessageChunk> splitMessageToChunks(size_t message_size) {
+    if (message_size == 0) return {};
+    if (message_size <= kCompressionBlockSize) {
+      return ChunkSplitStrategy::splitMessageToChunks(message_size);
+    }
+    size_t chunk_count = getMessageChunkCount(message_size);
+    std::vector<MessageChunk> chunks;
+    chunks.reserve(chunk_count);
+    for (size_t i = 0; i < chunk_count; ++i) {
+      uint64_t offset = i * kCompressionBlockSize;
+      size_t size = std::min(kCompressionBlockSize, message_size - offset);
+      chunks.emplace_back(offset, size);
+    }
+    return chunks;
+  }
+
+  static size_t getRegularChunkSize(size_t message_size, size_t chunk_count) {
+    if (chunk_count == 0 || message_size == 0) return 0;
+    if (message_size < kCompressionBlockSize) {
+      return ChunkSplitStrategy::getRegularChunkSize(message_size, chunk_count);
+    }
+    return kCompressionBlockSize;
+  }
+};
+
+static_assert(
+    ChunkSplitStrategy::kMaxSplitNum <= std::numeric_limits<uint8_t>::max(),
+    "kMaxSplitNum must not exceed 255 (8-bit max) since ImmData uses 8 bits "
+    "for chunk_start/chunk_end");
 
 static_assert(
     kMinCompressBytes > 4 * ChunkSplitStrategy::kMessageChunkSizeKB,
@@ -598,6 +658,9 @@ struct alignas(64) SendReqMeta {
   uccl::FloatType float_type = uccl::FloatType::kUndefined;
   uint32_t expected_chunk_count;  // Expected number of chunks to receive
   uint32_t received_chunk_count;  // Number of chunks already received
+  
+  uint32_t compression_group_size = 0;  // Number of chunks in the same compression group
+  uint64_t compression_received_chunk_bitmap = 0;  // Bitmap to track received chunks (up to 64 chunks)
 
   SendReqMeta()
       : rank_id(0),
@@ -614,7 +677,8 @@ struct alignas(64) SendReqMeta {
         expected_chunk_count(expected),
         received_chunk_count(received) {}
 
-  SendReqMeta(std::shared_ptr<RDMARecvRequest> rev_req) {
+  SendReqMeta(std::shared_ptr<RDMARecvRequest> rev_req,
+              bool pipeline_encode = false) {
     rank_id = rev_req->from_rank_id;
     channel_id = rev_req->channel_id;
     remote_mem = rev_req->local_mem;
@@ -622,9 +686,39 @@ struct alignas(64) SendReqMeta {
         *(rev_req->local_compression_mem ? rev_req->local_compression_mem
                                          : rev_req->local_mem);
     float_type = rev_req->compress_ctx->getFloatType();
-    expected_chunk_count =
-        ChunkSplitStrategy::getMessageChunkCount(local_mem.size);
+    if (pipeline_encode) {
+      expected_chunk_count =
+          CompressChunkSplitStrategy::getMessageChunkCount(local_mem.size);
+      compression_group_size = expected_chunk_count;
+    } else {
+      expected_chunk_count =
+          ChunkSplitStrategy::getMessageChunkCount(local_mem.size);
+    }
     received_chunk_count = 0;
+  }
+
+  void setCompressionGroupSize(uint32_t size) {
+    compression_group_size = size;
+  }
+
+  uint32_t getCompressionGroupSize() const {
+    return compression_group_size;
+  }
+
+  void setCompressionReceivedChunk(uint32_t chunk_id) {
+    compression_received_chunk_bitmap |= (1ULL << chunk_id);
+  }
+
+  bool isCompressionChunkReceived(uint32_t chunk_id) const {
+    return (compression_received_chunk_bitmap >> chunk_id) & 1ULL;
+  }
+
+  bool isAllCompressionChunksReceived() const {
+    if (compression_group_size == 0) return true;
+    uint64_t full_mask = (compression_group_size >= 64)
+                             ? ~0ULL
+                             : ((1ULL << compression_group_size) - 1);
+    return (compression_received_chunk_bitmap & full_mask) == full_mask;
   }
 
   friend std::ostream& operator<<(std::ostream& os, SendReqMeta const& meta) {
@@ -719,8 +813,8 @@ struct RDMASendRequest {
   uint32_t from_rank_id;
   uint32_t to_rank_id;
   uint32_t channel_id;
-  ImmData imm_data = 0;  // immediate data with chunk_count (high 16 bits) and
-                         // index (low 16 bits)
+  ImmData imm_data = 0;  // immediate data with chunk_start (bits 31-24),
+                         // chunk_end (bits 23-16), and index (bits 15-0)
   int64_t wr_id;
   bool need_signaled;  // Whether to use IBV_SEND_SIGNALED flag
   SendType send_type = SendType::Send;
@@ -917,9 +1011,10 @@ struct hash<RegMemBlock> {
 }  // namespace std
 
 enum class CompressStrategy {
-  kNone,         // no compression
-  kSplitOnly,    // only split, no encode
-  kSplitEncode,  // split + encode (default)
+  kNone,            // no compression
+  kSplitOnly,       // only split, no encode
+  kSplitEncode,     // split + encode (default)
+  kPipelineEncode,  // pipeline encode
 };
 
 inline CompressStrategy getCompressStrategyFromEnv() {
@@ -944,6 +1039,10 @@ inline CompressStrategy getCompressStrategyFromEnv() {
 
   if (s == "encode" || s == "split_encode" || s == "full" || s == "1") {
     return CompressStrategy::kSplitEncode;
+  }
+
+  if (s == "pipeline" || s == "pipeline_encode") {
+    return CompressStrategy::kPipelineEncode;
   }
 
   // ---- fallback ----

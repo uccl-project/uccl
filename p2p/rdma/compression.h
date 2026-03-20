@@ -30,7 +30,8 @@ class ICompressorBackend {
    * @param req The send request to compress.
    * @return true on success, false on failure.
    */
-  virtual bool compress(std::shared_ptr<RDMASendRequest> req) = 0;
+  virtual bool compress(std::shared_ptr<RDMASendRequest> req,
+                        size_t offset = 0) = 0;
 
   /**
    * @brief Prepare a receive request for decompression.
@@ -62,6 +63,13 @@ class ICompressorBackend {
    * @return true if should compress and split first.
    */
   virtual bool shouldCompressAndSplitFirst(size_t size) = 0;
+
+  /**
+   * @brief Check if data should be compressed with pipeline encode.
+   * @param size The size in bytes to check.
+   * @return true if should compress with pipeline encode.
+   */
+  virtual bool shouldCompressAndPipelineEncode(size_t size) = 0;
 
   /**
    * @brief Prepare a context for split+encode two-phase compression.
@@ -113,7 +121,8 @@ class NullCompressorBackend : public ICompressorBackend {
     return nullptr;
   }
 
-  bool compress(std::shared_ptr<RDMASendRequest> /*req*/) override {
+  bool compress(std::shared_ptr<RDMASendRequest> /*req*/,
+                size_t /*offset*/ = 0) override {
     return false;
   }
 
@@ -129,6 +138,10 @@ class NullCompressorBackend : public ICompressorBackend {
   bool shouldCompress(size_t /*size*/) override { return false; }
 
   bool shouldCompressAndSplitFirst(size_t /*size*/) override { return false; }
+
+  bool shouldCompressAndPipelineEncode(size_t /*size*/) override {
+    return false;
+  }
 
   void prepareSplitContext(void* /*addr*/, size_t /*size*/,
                            CompressCtx /*ctx*/) override {}
@@ -220,7 +233,8 @@ class DietGPUCompressorBackend : public ICompressorBackend {
     return decompressBuffer_;
   }
 
-  bool compress(std::shared_ptr<RDMASendRequest> req) override {
+  bool compress(std::shared_ptr<RDMASendRequest> req,
+                size_t offset = 0) override {
     if (unlikely(!req || !req->local_mem || !stream_ || !res_ || !buffer_)) {
       UCCL_LOG(WARN)
           << "DietGPUCompressorBackend::compress - Invalid parameters";
@@ -237,9 +251,10 @@ class DietGPUCompressorBackend : public ICompressorBackend {
         to_dietgpu(req->compress_ctx->getFloatType()), req->local_mem->size);
 
     // Setup batch (single element batch)
+    void* outAddr = static_cast<char*>(buffer_->addr) + offset;
     void const* inPtrs[1] = {req->local_mem->addr};
     uint32_t inSizes[1] = {numFloats};
-    void* outPtrs[1] = {buffer_->addr};
+    void* outPtrs[1] = {outAddr};
 
     // Compress
     dietgpu::floatCompress(*res_, compressConfig,
@@ -252,7 +267,7 @@ class DietGPUCompressorBackend : public ICompressorBackend {
     GPU_RT_CHECK(gpuMemcpy(&compressedSize, devCompressedSize_,
                            sizeof(compressedSize), gpuMemcpyDeviceToHost));
 
-    UCCL_LOG(INFO, UCCL_RDMA)
+    UCCL_LOG(ERROR)
         << "DietGPUCompressorBackend: Compressed " << req->local_mem->size
         << " bytes to " << compressedSize << " bytes, ratio: "
         << static_cast<float>(compressedSize) /
@@ -261,7 +276,7 @@ class DietGPUCompressorBackend : public ICompressorBackend {
 
     // Update request to use compressed buffer
     req->local_mem = std::make_shared<RegMemBlock>(
-        buffer_->addr, compressedSize, buffer_->mr_array, buffer_->type);
+        outAddr, compressedSize, buffer_->mr_array, buffer_->type);
     return true;
   }
 
@@ -360,6 +375,11 @@ class DietGPUCompressorBackend : public ICompressorBackend {
 
   bool shouldCompressAndSplitFirst(size_t size) override {
     return compress_strategy_ == CompressStrategy::kSplitOnly &&
+           shouldCompress(size);
+  }
+
+  bool shouldCompressAndPipelineEncode(size_t size) override {
+    return compress_strategy_ == CompressStrategy::kPipelineEncode &&
            shouldCompress(size);
   }
 
@@ -516,8 +536,8 @@ class Compressor {
    * @param req The send request to compress.
    * @return true on success, false on failure.
    */
-  bool compress(std::shared_ptr<RDMASendRequest> req) {
-    return backend_->compress(req);
+  bool compress(std::shared_ptr<RDMASendRequest> req, size_t offset = 0) {
+    return backend_->compress(req, offset);
   }
 
   /**
@@ -555,6 +575,18 @@ class Compressor {
    */
   bool shouldCompressAndSplitFirst(size_t size) {
     return backend_->shouldCompressAndSplitFirst(size);
+  }
+
+  /**
+   * @brief Check if data should be compressed with pipeline encode.
+   * @param size The size in bytes to check.
+   * @return true if should compress with pipeline encode.
+   */
+  bool shouldCompressAndPipelineEncode(size_t size) {
+    if (size < CompressChunkSplitStrategy::kCompressionBlockSize) {
+      return false;
+    }
+    return backend_->shouldCompressAndPipelineEncode(size);
   }
 
   /**

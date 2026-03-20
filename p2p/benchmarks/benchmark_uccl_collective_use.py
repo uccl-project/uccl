@@ -8,48 +8,22 @@ It provides an interface similar to NCCL but uses UCCL P2P underneath.
 from __future__ import annotations
 
 import argparse
-import csv
-import os
 import sys
 import time
-from typing import List, Tuple
+from typing import List
 
 import torch
 import torch.distributed as dist
 
+import os
+
 from uccl import collective
 
-_DTYPE_ITEM_SIZE = {
-    torch.float16: 2,
-    torch.bfloat16: 2,
-    torch.float32: 4,
-    torch.float8_e4m3fn: 1,
-    torch.float8_e5m2: 1,
-}
 
-_DTYPE_MAP = {
-    "float16": torch.float16,
-    "bfloat16": torch.bfloat16,
-    "float32": torch.float32,
-    "float8_e4m3fn": torch.float8_e4m3fn,
-    "float8_e5m2": torch.float8_e5m2,
-}
-
-
-def _make_buffer(size_bytes: int, dtype: torch.dtype = torch.float32):
-    """Allocate a contiguous GPU tensor of *size_bytes* filled with values
-    sampled from a standard normal distribution clipped to [0, 1]."""
-    item_size = _DTYPE_ITEM_SIZE[dtype]
-    n_elems = size_bytes // item_size
-    if dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
-        # fp8 types don't support uniform_ directly; create in float32 then convert
-        tensor = (
-            torch.empty(n_elems, device="cuda", dtype=torch.float32)
-            .uniform_(-1, 1)
-            .to(dtype)
-        )
-    else:
-        tensor = torch.empty(n_elems, device="cuda", dtype=dtype).uniform_(-1, 1)
+def _make_buffer(size_bytes: int):
+    """Allocate a contiguous GPU tensor of *size_bytes* and return it."""
+    n_elems = size_bytes // 2  # float32
+    tensor = torch.ones(n_elems, dtype=torch.bfloat16).cuda()
     assert tensor.is_contiguous()
     assert tensor.device.type == "cuda"
     return tensor
@@ -70,32 +44,38 @@ def _pretty_size(num_bytes: int) -> str:
 ################################################################################
 
 
-def _run_server(args) -> List[Tuple]:
+def _run_server(args):
     peer = 0  # client rank
-    results = []
     for size in args.sizes:
-        tensor = _make_buffer(size, args.torch_dtype)
+        tensor = _make_buffer(size)
 
         # Register tensor for efficient memory access
         collective.register_tensor(tensor)
 
         # Warm-up receive
-        for _ in range(1):
-            collective.recv(tensor, src=peer)
+        collective.recv(tensor, src=peer)
 
         # Dump warm-up received data for 1GB size
-        if size == 1073741824:
-            dump_path = f"warmup_recv_server_{size}.pt"
-            torch.save(tensor.cpu(), dump_path)
-            print(f"[Server] Dumped warm-up received data to {dump_path}")
+        # if size == 1073741824:
+        #     dump_path = f"warmup_recv_server_{size}.pt"
+        #     torch.save(tensor.cpu(), dump_path)
+        #     print(f"[Server] Dumped warm-up received data to {dump_path}")
 
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
-            collective.recv(tensor, src=peer)    
+            collective.recv(tensor, src=peer)
             total += size
 
         elapsed = time.perf_counter() - start
+
+        # check if tensor is filled with size
+        if not tensor.allclose(torch.tensor(size, dtype=torch.bfloat16).cuda()):
+            print(f"[Server] WARNING: Tensor is not filled with {size}")
+            print(f"[Server] Tensor: {tensor}")
+            print(f"[Server] Tensor size: {tensor.size()}")
+            print(f"[Server] Tensor dtype: {tensor.dtype}")
+            print(f"[Server] Tensor device: {tensor.device}")
 
         gbps = (total * 8) / elapsed / 1e9
         gb_sec = total / elapsed / 1e9
@@ -103,30 +83,26 @@ def _run_server(args) -> List[Tuple]:
         print(
             f"[Server] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
-        results.append(("Server", size, _pretty_size(size), gbps, gb_sec))
     print("[Server] Benchmark complete")
-    return results
 
 
-def _run_client(args) -> List[Tuple]:
+def _run_client(args):
     peer = 1  # server rank
-    results = []
     for size in args.sizes:
-        tensor = _make_buffer(size, args.torch_dtype)
-        # tensor.fill_(size)
+        tensor = _make_buffer(size)
+        tensor.fill_(size)
 
         # Register tensor for efficient memory access
         collective.register_tensor(tensor)
 
         # Warm-up send
-        for _ in range(1):
-            collective.send(tensor, dst=peer)
+        collective.send(tensor, dst=peer)
 
         # Dump warm-up sent data for 1GB size
-        if size == 1073741824:
-            dump_path = f"warmup_send_client_{size}.pt"
-            torch.save(tensor.cpu(), dump_path)
-            print(f"[Client] Dumped warm-up sent data to {dump_path}")
+        # if size == 1073741824:
+        #     dump_path = f"warmup_send_client_{size}.pt"
+        #     torch.save(tensor.cpu(), dump_path)
+        #     print(f"[Client] Dumped warm-up sent data to {dump_path}")
 
         start = time.perf_counter()
         total = 0
@@ -142,17 +118,14 @@ def _run_client(args) -> List[Tuple]:
         print(
             f"[Client] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
-        results.append(("Client", size, _pretty_size(size), gbps, gb_sec))
     print("[Client] Benchmark complete")
-    return results
 
 
-def _run_async_server(args) -> List[Tuple]:
+def _run_async_server(args):
     """Demonstrate async API usage."""
     peer = 0  # client rank
-    results = []
     for size in args.sizes:
-        tensor = _make_buffer(size, args.torch_dtype)
+        tensor = _make_buffer(size)
 
         # Register tensor for efficient memory access
         collective.register_tensor(tensor)
@@ -175,17 +148,14 @@ def _run_async_server(args) -> List[Tuple]:
         print(
             f"[Server Async] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
-        results.append(("Server Async", size, _pretty_size(size), gbps, gb_sec))
     print("[Server Async] Benchmark complete")
-    return results
 
 
-def _run_async_client(args) -> List[Tuple]:
+def _run_async_client(args):
     """Demonstrate async API usage."""
     peer = 1  # server rank
-    results = []
     for size in args.sizes:
-        tensor = _make_buffer(size, args.torch_dtype)
+        tensor = _make_buffer(size)
 
         # Register tensor for efficient memory access
         collective.register_tensor(tensor)
@@ -208,12 +178,10 @@ def _run_async_client(args) -> List[Tuple]:
         print(
             f"[Client Async] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
-        results.append(("Client Async", size, _pretty_size(size), gbps, gb_sec))
     print("[Client Async] Benchmark complete")
-    return results
 
 
-def _run_dual_benchmark(args) -> List[Tuple]:
+def _run_dual_benchmark(args):
     """Demonstrate dual-direction async communication (both isend and irecv simultaneously)."""
     rank = dist.get_rank()
     world_size = dist.get_world_size()
@@ -222,11 +190,10 @@ def _run_dual_benchmark(args) -> List[Tuple]:
         raise RuntimeError("Dual benchmark only supports exactly 2 processes")
 
     peer = 1 - rank  # peer rank (0 <-> 1)
-    results = []
 
     for size in args.sizes:
-        send_tensor = _make_buffer(size, args.torch_dtype)
-        recv_tensor = _make_buffer(size, args.torch_dtype)
+        send_tensor = _make_buffer(size)
+        recv_tensor = _make_buffer(size)
 
         # Register tensors for efficient memory access
         collective.register_tensor(send_tensor)
@@ -261,26 +228,21 @@ def _run_dual_benchmark(args) -> List[Tuple]:
         elapsed = time.perf_counter() - start
 
         role_name = "Client" if rank == 0 else "Server"
+        # Calculate individual send/recv throughput
         send_gbps = (total_sent * 8) / elapsed / 1e9
         send_gb_sec = total_sent / elapsed / 1e9
         recv_gbps = (total_recv * 8) / elapsed / 1e9
         recv_gb_sec = total_recv / elapsed / 1e9
 
-        avg_gbps = (send_gbps + recv_gbps) / 2
-        avg_gb_sec = (send_gb_sec + recv_gb_sec) / 2
         print(
-            f"[{role_name} Dual Send Recv] {_pretty_size(size):>9} : {avg_gbps:6.2f} Gbps | {avg_gb_sec:5.2f} GB/s"
-        )
-        results.append(
-            (f"{role_name} Dual", size, _pretty_size(size), avg_gbps, avg_gb_sec)
+            f"[{role_name} Dual Send Recv] {_pretty_size(size):>9} : {(send_gbps + recv_gbps) / 2:6.2f} Gbps | {(send_gb_sec + recv_gb_sec) / 2:5.2f} GB/s"
         )
 
     role_name = "Client" if rank == 0 else "Server"
     print(f"[{role_name} Dual] Benchmark complete")
-    return results
 
 
-def _run_ring_benchmark(args) -> List[Tuple]:
+def _run_ring_benchmark(args):
     """Ring communication: each rank sends to next rank in a ring pattern."""
     rank = dist.get_rank()
     world_size = dist.get_world_size()
@@ -293,10 +255,9 @@ def _run_ring_benchmark(args) -> List[Tuple]:
         f"[Rank {rank}] Ring pattern: receiving from rank {src_rank}, sending to rank {dst_rank}"
     )
 
-    results = []
     for size in args.sizes:
-        send_tensor = _make_buffer(size, args.torch_dtype)
-        recv_tensor = _make_buffer(size, args.torch_dtype)
+        send_tensor = _make_buffer(size)
+        recv_tensor = _make_buffer(size)
 
         # Fill send tensor with rank-specific data for verification
         send_tensor.fill_(size)
@@ -375,10 +336,8 @@ def _run_ring_benchmark(args) -> List[Tuple]:
         print(
             f"[Rank {rank}] Ring Async {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
-        results.append((f"Rank{rank} Ring", size, _pretty_size(size), gbps, gb_sec))
 
     print(f"[Rank {rank}] Ring async benchmark complete")
-    return results
 
 
 def parse_size_list(val: str) -> List[int]:
@@ -402,6 +361,7 @@ def main():
             16384,  # 16 KB
             65536,  # 64 KB
             262144,  # 256 KB
+            262144*2,  # 512 KB
             1048576,  # 1 MB
             1048576 * 4,  # 4 MB
             1048576 * 8,  # 8 MB
@@ -412,10 +372,9 @@ def main():
             268435456,  # 256 MB
             536870912,  # 512 MB
             1073741824,  # 1 GB
-            # 1073741824*2,     # 2 GB
         ],
     )
-    p.add_argument("--iters", type=int, default=1)
+    p.add_argument("--iters", type=int, default=10)
     p.add_argument(
         "--async-api",
         action="store_true",
@@ -431,23 +390,7 @@ def main():
         action="store_true",
         help="Test ring communication pattern (rank i sends to rank (i+1) % world_size).",
     )
-    p.add_argument(
-        "--dtype",
-        choices=["float16", "bfloat16", "float32", "float8_e4m3fn", "float8_e5m2"],
-        default="float32",
-        help="Float dtype for tensors (default: float32)",
-    )
-    p.add_argument(
-        "--csv",
-        metavar="FILE",
-        default=None,
-        help="Path to CSV file to save benchmark results; when world_size > 1, "
-        "_rank{N} is inserted before the extension for each rank",
-    )
     args = p.parse_args()
-
-    # Convert dtype string to torch dtype
-    args.torch_dtype = _DTYPE_MAP[args.dtype]
 
     # Initialize torch.distributed with gloo backend for coordination
     dist.init_process_group(backend="gloo")
@@ -493,9 +436,7 @@ def main():
                 "client" if rank == 0 else "server",
             )
         print("Message sizes:", ", ".join(_pretty_size(s) for s in args.sizes))
-        print(
-            f"Device: GPU | Local GPU idx: {local_gpu_idx} | Iters: {args.iters} | Dtype: {args.dtype}"
-        )
+        print(f"Device: GPU | Local GPU idx: {local_gpu_idx} | Iters: {args.iters}")
         if args.ring:
             print(f"[Rank {rank}] Using async ring communication pattern (isend/irecv)")
         elif args.dual:
@@ -509,32 +450,19 @@ def main():
         dist.barrier()
 
         if args.ring:
-            results = _run_ring_benchmark(args)
+            _run_ring_benchmark(args)
         elif args.dual:
-            results = _run_dual_benchmark(args)
+            _run_dual_benchmark(args)
         elif args.async_api:
             if rank == 0:
-                results = _run_async_client(args)
+                _run_async_client(args)
             else:
-                results = _run_async_server(args)
+                _run_async_server(args)
         else:
             if rank == 0:
-                results = _run_client(args)
+                _run_client(args)
             else:
-                results = _run_server(args)
-
-        # Write results to CSV if requested
-        if args.csv:
-            if world_size > 1:
-                base, ext = os.path.splitext(args.csv)
-                csv_path = f"{base}_rank{rank}{ext}"
-            else:
-                csv_path = args.csv
-            with open(csv_path, "w", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow(["role", "size_bytes", "size_pretty", "gbps", "gb_sec"])
-                writer.writerows(results)
-            print(f"Results saved to {csv_path}")
+                _run_server(args)
 
         # Synchronize all ranks before finishing
         dist.barrier()

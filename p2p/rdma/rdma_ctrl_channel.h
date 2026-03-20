@@ -112,7 +112,10 @@ class RecvControlChannel : public RDMADataChannel {
   }
 
   int postSendReq(std::shared_ptr<RDMARecvRequest> rev_req) {
-    SendReqMeta req_meta(rev_req);
+    bool pipeline_encode =
+        Compressor::getInstance().shouldCompressAndPipelineEncode(
+            rev_req->local_mem->size);
+    SendReqMeta req_meta(rev_req, pipeline_encode);
     UCCL_LOG(INFO, UCCL_RDMA)
         << "postSendReq - Created SendReqMeta: " << req_meta;
 

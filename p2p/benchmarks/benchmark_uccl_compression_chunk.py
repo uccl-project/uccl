@@ -72,34 +72,58 @@ def _pretty_size(num_bytes: int) -> str:
 
 def _run_server(args) -> List[Tuple]:
     peer = 0  # client rank
+    chunk_size = 128 * 1024 * 1024  # 128 MB
     results = []
     for size in args.sizes:
-        tensor = _make_buffer(size, args.torch_dtype)
+        if size > chunk_size:
+            # Split into 128MB chunks
+            item_size = _DTYPE_ITEM_SIZE[args.torch_dtype]
+            chunk_elems = chunk_size // item_size
+            n_chunks = (size + chunk_size - 1) // chunk_size
+            tensors = []
+            for i in range(n_chunks):
+                remaining = size - i * chunk_size
+                this_chunk = min(chunk_size, remaining)
+                t = _make_buffer(this_chunk, args.torch_dtype)
+                collective.register_tensor(t)
+                tensors.append(t)
 
-        # Register tensor for efficient memory access
-        collective.register_tensor(tensor)
+            # Warm-up receive
+            for t in tensors:
+                collective.recv(t, src=peer)
 
-        # Warm-up receive
-        for _ in range(1):
+            start = time.perf_counter()
+            total = 0
+            for _ in range(args.iters):
+                for t in tensors:
+                    collective.recv(t, src=peer)
+                total += size
+
+            elapsed = time.perf_counter() - start
+
+            gbps = (total * 8) / elapsed / 1e9
+            gb_sec = total / elapsed / 1e9
+            for t in reversed(tensors):
+                collective.deregister_tensor(t)
+        else:
+            tensor = _make_buffer(size, args.torch_dtype)
+            collective.register_tensor(tensor)
+
+            # Warm-up receive
             collective.recv(tensor, src=peer)
 
-        # Dump warm-up received data for 1GB size
-        if size == 1073741824:
-            dump_path = f"warmup_recv_server_{size}.pt"
-            torch.save(tensor.cpu(), dump_path)
-            print(f"[Server] Dumped warm-up received data to {dump_path}")
+            start = time.perf_counter()
+            total = 0
+            for _ in range(args.iters):
+                collective.recv(tensor, src=peer)
+                total += size
 
-        start = time.perf_counter()
-        total = 0
-        for _ in range(args.iters):
-            collective.recv(tensor, src=peer)    
-            total += size
+            elapsed = time.perf_counter() - start
 
-        elapsed = time.perf_counter() - start
+            gbps = (total * 8) / elapsed / 1e9
+            gb_sec = total / elapsed / 1e9
+            collective.deregister_tensor(tensor)
 
-        gbps = (total * 8) / elapsed / 1e9
-        gb_sec = total / elapsed / 1e9
-        collective.deregister_tensor(tensor)
         print(
             f"[Server] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
@@ -110,35 +134,57 @@ def _run_server(args) -> List[Tuple]:
 
 def _run_client(args) -> List[Tuple]:
     peer = 1  # server rank
+    chunk_size = 128 * 1024 * 1024  # 128 MB
     results = []
     for size in args.sizes:
-        tensor = _make_buffer(size, args.torch_dtype)
-        # tensor.fill_(size)
+        if size > chunk_size:
+            # Split into 128MB chunks
+            item_size = _DTYPE_ITEM_SIZE[args.torch_dtype]
+            n_chunks = (size + chunk_size - 1) // chunk_size
+            tensors = []
+            for i in range(n_chunks):
+                remaining = size - i * chunk_size
+                this_chunk = min(chunk_size, remaining)
+                t = _make_buffer(this_chunk, args.torch_dtype)
+                collective.register_tensor(t)
+                tensors.append(t)
 
-        # Register tensor for efficient memory access
-        collective.register_tensor(tensor)
+            # Warm-up send
+            for t in tensors:
+                collective.send(t, dst=peer)
 
-        # Warm-up send
-        for _ in range(1):
+            start = time.perf_counter()
+            total = 0
+            for _ in range(args.iters):
+                for t in tensors:
+                    collective.send(t, dst=peer)
+                total += size
+
+            elapsed = time.perf_counter() - start
+
+            gbps = (total * 8) / elapsed / 1e9
+            gb_sec = total / elapsed / 1e9
+            for t in reversed(tensors):
+                collective.deregister_tensor(t)
+        else:
+            tensor = _make_buffer(size, args.torch_dtype)
+            collective.register_tensor(tensor)
+
+            # Warm-up send
             collective.send(tensor, dst=peer)
 
-        # Dump warm-up sent data for 1GB size
-        if size == 1073741824:
-            dump_path = f"warmup_send_client_{size}.pt"
-            torch.save(tensor.cpu(), dump_path)
-            print(f"[Client] Dumped warm-up sent data to {dump_path}")
+            start = time.perf_counter()
+            total = 0
+            for _ in range(args.iters):
+                collective.send(tensor, dst=peer)
+                total += size
 
-        start = time.perf_counter()
-        total = 0
-        for _ in range(args.iters):
-            collective.send(tensor, dst=peer)
-            total += size
+            elapsed = time.perf_counter() - start
 
-        elapsed = time.perf_counter() - start
+            gbps = (total * 8) / elapsed / 1e9
+            gb_sec = total / elapsed / 1e9
+            collective.deregister_tensor(tensor)
 
-        gbps = (total * 8) / elapsed / 1e9
-        gb_sec = total / elapsed / 1e9
-        collective.deregister_tensor(tensor)
         print(
             f"[Client] {_pretty_size(size):>9} : {gbps:7.2f} Gbps | {gb_sec:7.2f} GB/s"
         )
@@ -415,7 +461,7 @@ def main():
             # 1073741824*2,     # 2 GB
         ],
     )
-    p.add_argument("--iters", type=int, default=1)
+    p.add_argument("--iters", type=int, default=10)
     p.add_argument(
         "--async-api",
         action="store_true",

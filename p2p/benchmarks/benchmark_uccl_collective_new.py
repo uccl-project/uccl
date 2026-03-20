@@ -22,7 +22,7 @@ from uccl import collective
 _DTYPE_ITEM_SIZE = {
     torch.float16: 2,
     torch.bfloat16: 2,
-    torch.float32: 4,
+    torch.bfloat16: 4,
     torch.float8_e4m3fn: 1,
     torch.float8_e5m2: 1,
 }
@@ -30,13 +30,13 @@ _DTYPE_ITEM_SIZE = {
 _DTYPE_MAP = {
     "float16": torch.float16,
     "bfloat16": torch.bfloat16,
-    "float32": torch.float32,
+    "float32": torch.bfloat16,
     "float8_e4m3fn": torch.float8_e4m3fn,
     "float8_e5m2": torch.float8_e5m2,
 }
 
 
-def _make_buffer(size_bytes: int, dtype: torch.dtype = torch.float32):
+def _make_buffer(size_bytes: int, dtype: torch.dtype = torch.bfloat16):
     """Allocate a contiguous GPU tensor of *size_bytes* filled with values
     sampled from a standard normal distribution clipped to [0, 1]."""
     item_size = _DTYPE_ITEM_SIZE[dtype]
@@ -44,7 +44,7 @@ def _make_buffer(size_bytes: int, dtype: torch.dtype = torch.float32):
     if dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
         # fp8 types don't support uniform_ directly; create in float32 then convert
         tensor = (
-            torch.empty(n_elems, device="cuda", dtype=torch.float32)
+            torch.empty(n_elems, device="cuda", dtype=torch.bfloat16)
             .uniform_(-1, 1)
             .to(dtype)
         )
@@ -80,22 +80,23 @@ def _run_server(args) -> List[Tuple]:
         collective.register_tensor(tensor)
 
         # Warm-up receive
-        for _ in range(1):
-            collective.recv(tensor, src=peer)
-
-        # Dump warm-up received data for 1GB size
-        if size == 1073741824:
-            dump_path = f"warmup_recv_server_{size}.pt"
-            torch.save(tensor.cpu(), dump_path)
-            print(f"[Server] Dumped warm-up received data to {dump_path}")
+        collective.recv(tensor, src=peer)
 
         start = time.perf_counter()
         total = 0
         for _ in range(args.iters):
-            collective.recv(tensor, src=peer)    
+            collective.recv(tensor, src=peer)
             total += size
 
         elapsed = time.perf_counter() - start
+
+        # check if tensor is filled with size
+        # if not tensor.allclose(torch.tensor(size, dtype=args.torch_dtype).cuda()):
+        #     print(f"[Server] WARNING: Tensor is not filled with {size}")
+        #     print(f"[Server] Tensor: {tensor}")
+        #     print(f"[Server] Tensor size: {tensor.size()}")
+        #     print(f"[Server] Tensor dtype: {tensor.dtype}")
+        #     print(f"[Server] Tensor device: {tensor.device}")
 
         gbps = (total * 8) / elapsed / 1e9
         gb_sec = total / elapsed / 1e9
@@ -119,14 +120,7 @@ def _run_client(args) -> List[Tuple]:
         collective.register_tensor(tensor)
 
         # Warm-up send
-        for _ in range(1):
-            collective.send(tensor, dst=peer)
-
-        # Dump warm-up sent data for 1GB size
-        if size == 1073741824:
-            dump_path = f"warmup_send_client_{size}.pt"
-            torch.save(tensor.cpu(), dump_path)
-            print(f"[Client] Dumped warm-up sent data to {dump_path}")
+        collective.send(tensor, dst=peer)
 
         start = time.perf_counter()
         total = 0
@@ -402,6 +396,7 @@ def main():
             16384,  # 16 KB
             65536,  # 64 KB
             262144,  # 256 KB
+            262144*2,  # 512 KB
             1048576,  # 1 MB
             1048576 * 4,  # 4 MB
             1048576 * 8,  # 8 MB
@@ -415,7 +410,7 @@ def main():
             # 1073741824*2,     # 2 GB
         ],
     )
-    p.add_argument("--iters", type=int, default=1)
+    p.add_argument("--iters", type=int, default=10)
     p.add_argument(
         "--async-api",
         action="store_true",

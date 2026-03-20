@@ -3,6 +3,7 @@
 #include "define.h"
 #include "rdma_ctrl_channel.h"
 #include "rdma_data_channel.h"
+#include <chrono>
 #include <random>
 
 class RDMAConnection {
@@ -304,31 +305,27 @@ class SendConnection : public RDMAConnection {
     }
   }
 
-  void postChunkedRequest(std::shared_ptr<RDMASendRequest> req,
-                          int expected_chunk_count = 0) {
-    if (expected_chunk_count == 1) {
-      req->imm_data.set_chunk_count(1);
-      if (!postRequestOnChannel(req)) {
-        UCCL_LOG(WARN)
-            << "SendConnection: Failed to send request on channel_id "
-            << req->channel_id;
-      }
-      return;
+  std::vector<std::shared_ptr<RDMASendRequest>> divideRequest(
+      int expected_chunk_count,
+      std::shared_ptr<RDMASendRequest> const& req,
+      int chunk_offset = 0) {
+    std::vector<std::shared_ptr<RDMASendRequest>> result;
+    if (expected_chunk_count <= 0) {
+      UCCL_LOG(ERROR) << "SendConnection::divideRequest - "
+                         "expected_chunk_count <= 0: "
+                      << expected_chunk_count;
+      return result;
     }
-    // Split message into chunks
-    size_t message_size = req->local_mem->size;
-    auto chunks = ChunkSplitStrategy::splitMessageToChunks(message_size);
-    if (expected_chunk_count == 0) {
-      expected_chunk_count = chunks.size();
-      tracker_->updateExpectedAckCount(req->wr_id, expected_chunk_count);
-    }
-    UCCL_LOG(INFO, UCCL_RDMA)
-        << "SendConnection: Splitting message into " << chunks.size()
-        << " chunks (message_size: " << message_size << ")";
+    result.reserve(expected_chunk_count);
     size_t num_channels = normalChannelCount();
+    size_t message_size = req->local_mem->size;
+    size_t chunk_size =
+        ChunkSplitStrategy::getRegularChunkSize(message_size,
+                                                expected_chunk_count);
 
-    for (size_t i = 0; i < chunks.size(); ++i) {
-      auto const& chunk = chunks[i];
+    for (int i = 0; i < expected_chunk_count; ++i) {
+      uint64_t offset = static_cast<uint64_t>(i) * chunk_size;
+      size_t size = std::min(chunk_size, message_size - offset);
 
       // Use different channel for each chunk: round-robin
       uint32_t chunk_channel_id =
@@ -336,51 +333,49 @@ class SendConnection : public RDMAConnection {
 
       // Create RegMemBlock for this chunk
       auto chunk_local_mem = std::make_shared<RegMemBlock>(
-          static_cast<char*>(req->local_mem->addr) + chunk.offset, chunk.size,
+          static_cast<char*>(req->local_mem->addr) + offset, size,
           req->local_mem->mr_array, req->local_mem->type);
 
       // Create RemoteMemInfo for this chunk
       auto chunk_remote_mem = std::make_shared<RemoteMemInfo>(
-          req->remote_mem->addr + chunk.offset, chunk.size,
+          req->remote_mem->addr + offset, size,
           req->remote_mem->rkey_array, req->remote_mem->type);
 
-      // Create send request for this chunk
       // Only the last chunk needs signaled for completion notification
-      bool is_last_chunk = (i == chunks.size() - 1);
+      bool is_last_chunk = (i == expected_chunk_count - 1);
       auto chunk_req = std::make_shared<RDMASendRequest>(
           chunk_local_mem, chunk_remote_mem, req->imm_data, is_last_chunk);
 
-      // due to the compression, the chunk count may be different from the
-      // original split, so we need to set the expected chunk count for each
-      // chunk request
-      if (expected_chunk_count > 0) {
-        if (is_last_chunk && expected_chunk_count > 1) {
-          chunk_req->imm_data.set_chunk_count(expected_chunk_count);
-        } else {
-          chunk_req->imm_data.set_chunk_count(1);
-        }
-        expected_chunk_count -= 1;
-      }
-
+      chunk_req->imm_data.set_chunk_range(chunk_offset + i, chunk_offset + i);
       chunk_req->channel_id = chunk_channel_id;
       chunk_req->from_rank_id = req->from_rank_id;
       chunk_req->to_rank_id = req->to_rank_id;
       chunk_req->wr_id = req->wr_id;
-      // Inherit the send type from the original request.
       chunk_req->send_type = req->send_type;
-      // Send the chunk
-      if (postRequestOnChannel(chunk_req)) {
-        // UCCL_LOG(INFO, UCCL_RDMA) << "SendConnection: Sent chunk " << i <<
-        // "/"
-        //           << chunks.size() << " (offset: " << chunk.offset
-        //           << ", size: " << chunk.size
-        //           << ", channel_id: " << chunk_channel_id << ")" <<
-        //           std::endl;
-      } else {
-        UCCL_LOG(WARN) << "SendConnection: Failed to send chunk " << i
-                       << " (offset: " << chunk.offset
-                       << ", size: " << chunk.size
-                       << ", channel_id: " << chunk_channel_id << ")";
+      result.push_back(std::move(chunk_req));
+    }
+    return result;
+  }
+  
+  void postChunkedRequest(std::shared_ptr<RDMASendRequest> req,
+                          int expected_chunk_count = 0,
+                          int chunk_offset = 0) {
+    size_t message_size = req->local_mem->size;
+    if (expected_chunk_count == 0) {
+      expected_chunk_count =
+          ChunkSplitStrategy::getMessageChunkCount(message_size);
+      tracker_->updateExpectedAckCount(req->wr_id, expected_chunk_count);
+    }
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "SendConnection: Splitting message into " << expected_chunk_count
+        << " chunks (message_size: " << message_size << ")";
+
+    auto divided_reqs =
+        divideRequest(expected_chunk_count, req, chunk_offset);
+    for (auto const& divided_req : divided_reqs) {
+      if (!postRequestOnChannel(divided_req)) {
+        UCCL_LOG(WARN) << "SendConnection: Failed to send chunk"
+                       << " (channel_id: " << divided_req->channel_id << ")";
       }
     }
   }
@@ -422,7 +417,9 @@ class SendConnection : public RDMAConnection {
 
   inline void compressSendRequestSplitFirst(
       std::shared_ptr<RDMASendRequest> req, size_t expected_chunk_count) {
+    auto t0 = std::chrono::high_resolution_clock::now();
     Compressor::getInstance().compressSplitOneBatch(req);
+    auto t1 = std::chrono::high_resolution_clock::now();
 
     // compressed data / chunk size = chunk count
     uint32_t send_chunks_first =
@@ -430,14 +427,49 @@ class SendConnection : public RDMAConnection {
         ChunkSplitStrategy::getRegularChunkSize(req->compress_ctx->maxSize,
                                                 expected_chunk_count);
     if (send_chunks_first > 0) {
-      postChunkedRequest(req, send_chunks_first);
+      postChunkedRequest(req, send_chunks_first, 0);
     }
+    // std::cout<< "compressSendRequestSplitFirst: send_chunks_first=" << send_chunks_first
+    //           << std::endl;
+    auto t2 = std::chrono::high_resolution_clock::now();
     uint32_t uncompressed_size =
         Compressor::getInstance().compressEncodeOneBatch(req);
-    postChunkedRequest(req, expected_chunk_count - send_chunks_first);
+    auto t3 = std::chrono::high_resolution_clock::now();
+
+    auto split_us =
+        std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+    auto encode_us =
+        std::chrono::duration_cast<std::chrono::microseconds>(t3 - t2).count();
+    UCCL_LOG(INFO) << "compressSendRequestSplitFirst: split=" << split_us
+                    << "us, encode=" << encode_us << "us";
+
+    postChunkedRequest(req, expected_chunk_count - send_chunks_first,
+                       send_chunks_first);
     tracker_->updateExpectedAckCount(
         req->wr_id,
         ChunkSplitStrategy::getMessageChunkCount(uncompressed_size));
+  }
+
+  inline void compressSendRequestPipelineEncode(
+      std::shared_ptr<RDMASendRequest> req, size_t expected_chunk_count) {
+    auto divided_reqs = divideRequest(expected_chunk_count, req);
+    tracker_->updateExpectedAckCount(req->wr_id, expected_chunk_count);
+
+    size_t offset = 0;
+    for (auto& chunk_req : divided_reqs) {
+      chunk_req->compress_ctx = req->compress_ctx;
+      auto chunk_size = chunk_req->local_mem->size;
+      // std::cout << "compressSendRequestPipelineEncode: chunk_size=" << chunk_size
+      //           << std::endl;
+      Compressor::getInstance().compress(chunk_req, offset);
+      offset += chunk_size;
+      if (!postRequestOnChannel(chunk_req)) {
+        UCCL_LOG(WARN)
+            << "SendConnection::compressSendRequestPipelineEncode - "
+               "Failed to send chunk (channel_id: "
+            << chunk_req->channel_id << ")";
+      }
+    }
   }
 
   inline void processOnceSendRequests(std::shared_ptr<RDMASendRequest> req,
@@ -445,6 +477,13 @@ class SendConnection : public RDMAConnection {
     req->imm_data.set_index(index);
     req->channel_id = meta.channel_id;
     req->remote_mem = std::make_shared<RemoteMemInfo>(meta.remote_mem);
+    if (Compressor::getInstance().shouldCompressAndPipelineEncode(
+            req->local_mem->size)) {
+      // std::cout << "processOnceSendRequests: pipeline encode, expected_chunk_count="
+      //           << meta.expected_chunk_count << std::endl;
+      compressSendRequestPipelineEncode(req, meta.expected_chunk_count);
+      return;
+    }
     if (Compressor::getInstance().shouldCompressAndSplitFirst(
             req->local_mem->size)) {
       compressSendRequestSplitFirst(req, meta.expected_chunk_count);
@@ -601,9 +640,39 @@ class RecvConnection : public RDMAConnection {
               }
               if (req_meta && Compressor::getInstance().shouldCompress(
                                   req_meta->local_mem.size)) {
-                Compressor::getInstance().decompress(req_meta->remote_mem,
-                                                     req_meta->local_mem,
-                                                     req_meta->float_type);
+                if (Compressor::getInstance().shouldCompressAndPipelineEncode(
+                        req_meta->local_mem.size)) {
+                  // Pipeline encode: decompress all blocks sequentially
+                  size_t total_size = req_meta->local_mem.size;
+                  size_t block_size =
+                      CompressChunkSplitStrategy::kCompressionBlockSize;
+                  size_t block_count =
+                      CompressChunkSplitStrategy::getMessageChunkCount(
+                          total_size);
+                  size_t src_offset = 0;
+                  for (size_t b = 0; b < block_count; ++b) {
+                    size_t dst_offset = b * block_size;
+                    size_t cur_block_size =
+                        std::min(block_size, total_size - dst_offset);
+                    RegMemBlock chunk_output(
+                        static_cast<char*>(req_meta->local_mem.addr) +
+                            dst_offset,
+                        cur_block_size, req_meta->local_mem.mr_array,
+                        req_meta->local_mem.type);
+                    RemoteMemInfo chunk_input(
+                        req_meta->remote_mem.addr + src_offset,
+                        cur_block_size, req_meta->remote_mem.rkey_array,
+                        req_meta->remote_mem.type);
+                    Compressor::getInstance().decompress(
+                        chunk_input, chunk_output, req_meta->float_type);
+                    src_offset += cur_block_size;
+                    dst_offset += cur_block_size;
+                  }
+                } else {
+                  Compressor::getInstance().decompress(req_meta->remote_mem,
+                                                       req_meta->local_mem,
+                                                       req_meta->float_type);
+                }
               }
 
             } else {
