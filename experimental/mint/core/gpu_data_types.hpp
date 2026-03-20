@@ -5,6 +5,7 @@
 #define MSCCLPP_GPU_DATA_TYPES_HPP_
 
 #include "device.hpp"
+#include <cstdint>
 
 #if defined(MSCCLPP_DEVICE_HIP)
 

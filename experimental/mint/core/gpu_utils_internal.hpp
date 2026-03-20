@@ -31,8 +31,9 @@ inline bool isCuTeardownError(CUresult r) {
 
 }  // namespace mscclpp
 
-/// Execute a CUDA runtime call and ignore teardown errors (useful in
-/// destructors). Non-teardown errors will throw.
+/// Execute a CUDA runtime call and ignore teardown errors. Non-teardown errors
+/// throw (safe outside destructors; do not use in noexcept destructors — use
+/// MSCCLPP_CUDA_WARN_IF_NOT_TEARDOWN instead).
 #define MSCCLPP_CUDATHROW_IGNORE_TEARDOWN(cmd) \
   do {                                         \
     cudaError_t __e = cmd;                     \
@@ -41,6 +42,22 @@ inline bool isCuTeardownError(CUresult r) {
     } else {                                   \
       MSCCLPP_CUDATHROW(__e);                  \
     }                                          \
+  } while (false)
+
+/// Like MSCCLPP_CUDATHROW_IGNORE_TEARDOWN but never throws (for noexcept
+/// destructors). Logs non-teardown CUDA errors at WARN level.
+#define MSCCLPP_CUDA_WARN_IF_NOT_TEARDOWN(cmd)                                 \
+  do {                                                                         \
+    cudaError_t __cuda_e__ = (cmd);                                            \
+    if (mscclpp::isCudaTeardownError(__cuda_e__)) {                            \
+      (void)cudaGetLastError();                                                \
+    } else if (__cuda_e__ != cudaSuccess) {                                    \
+      WARN(::mscclpp::LogSubsys::GPU,                                          \
+           "CUDA teardown: " #cmd " failed: ", cudaGetErrorString(__cuda_e__), \
+           " (", static_cast<int>(__cuda_e__), ") at ", __FILE__, ":",         \
+           __LINE__);                                                          \
+      (void)cudaGetLastError();                                                \
+    }                                                                          \
   } while (false)
 
 /// Execute a CUDA driver call and ignore teardown errors (useful in

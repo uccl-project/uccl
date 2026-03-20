@@ -16,11 +16,38 @@
 #endif
 #include "algorithm.hpp"
 #include "algorithm_selector.hpp"
+#include "allgather.hpp"
+#include "allreduce.hpp"
+#include "broadcast.hpp"
 #include "datatype_conversion.hpp"
+#include "logger.hpp"
 #include "nccl.h"
 #include <dlfcn.h>
 
 static constexpr auto MSCCLPP_NCCL = mscclpp::LogSubsys::NCCL;
+
+namespace {
+
+void registerMigratedAppNcclAlgorithms(uintptr_t scratchBuffer,
+                                       size_t scratchBufferSize) {
+  auto b = mscclpp::collective::AlgorithmCollectionBuilder::getInstance();
+  b->addAlgorithmBuilder(
+      std::make_shared<BroadcastAlgo6>(scratchBuffer, scratchBufferSize));
+  b->addAlgorithmBuilder(std::make_shared<AllgatherAlgo6>());
+  b->addAlgorithmBuilder(
+      std::make_shared<AllgatherAlgo8>(scratchBuffer, scratchBufferSize));
+  b->addAlgorithmBuilder(
+      std::make_shared<AllreducePacket>(scratchBuffer, scratchBufferSize));
+  b->addAlgorithmBuilder(std::make_shared<AllreduceNvls>());
+  b->addAlgorithmBuilder(std::make_shared<AllreduceNvlsWithCopy>(
+      scratchBuffer, scratchBufferSize));
+  b->addAlgorithmBuilder(
+      std::make_shared<Allreduce8>(scratchBuffer, scratchBufferSize));
+  b->addAlgorithmBuilder(
+      std::make_shared<AllreduceNvlsPacket>(scratchBuffer, scratchBufferSize));
+}
+
+}  // namespace
 
 #define NCCL_API extern "C" __attribute__((visibility("default")))
 
@@ -359,7 +386,12 @@ NCCL_API ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks,
       commPtr->scratchBufferSize_,
       reinterpret_cast<uintptr_t>(commPtr->flagBuffer_.get()),
       commPtr->flagBufferSize_, rank);
-  // Extend with user-defined algorithms
+  // Algorithms from this directory (same registration pattern as
+  // mscclpp/apps/nccl).
+  registerMigratedAppNcclAlgorithms(
+      reinterpret_cast<uintptr_t>(commPtr->scratchBuffer_.get()),
+      commPtr->scratchBufferSize_);
+  // Extend with user-defined algorithms (singleton builders)
   commPtr->algorithmCollection.extend(algoBuilder->build());
 
   *comm = commPtr;
