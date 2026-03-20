@@ -131,6 +131,11 @@ class Env {
   /// the NVLS support in MSCCL++. Default is false.
   bool const forceDisableNvls;
 
+  /// Env name: `MSCCLPP_DISABLE_CHANNEL_CACHE`. If set to true, NCCL-app style
+  /// algorithms disable channel caching (legacy apps/nccl behavior). Default
+  /// is false.
+  bool const disableChannelCache;
+
  private:
   Env();
 

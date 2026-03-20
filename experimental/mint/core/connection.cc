@@ -370,10 +370,9 @@ IBConnection::~IBConnection() {
     }
     if (signalStream_ != nullptr) {
       // Synchronize stream to ensure all async copies are complete before
-      // destruction Ignore errors during teardown (CUDA context may already be
-      // destroyed)
-      MSCCLPP_CUDATHROW_IGNORE_TEARDOWN(cudaStreamSynchronize(signalStream_));
-      MSCCLPP_CUDATHROW_IGNORE_TEARDOWN(cudaStreamDestroy(signalStream_));
+      // destruction. Do not throw: destructor is noexcept (-Wterminate).
+      MSCCLPP_CUDA_WARN_IF_NOT_TEARDOWN(cudaStreamSynchronize(signalStream_));
+      MSCCLPP_CUDA_WARN_IF_NOT_TEARDOWN(cudaStreamDestroy(signalStream_));
     }
   }
 }
