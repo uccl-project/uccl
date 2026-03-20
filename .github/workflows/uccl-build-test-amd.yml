@@ -18,8 +18,6 @@ jobs:
     if: >
       github.event_name == 'push' ||
       (github.event_name == 'pull_request' &&
-      !github.event.pull_request.head.repo.fork &&
-      github.event.pull_request.draft == false &&
       contains(github.event.pull_request.labels.*.name, 'run-benchmark'))
     runs-on: ubuntu-latest
     permissions:
