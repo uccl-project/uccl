@@ -165,10 +165,21 @@ We test normal kernels on **8x B200 + 8x 400Gb/s EFA** with each GPU connected t
 
 |   Type    | FP8 Dispatch #EP | Bottleneck bandwidth| BF16 Dispatch #EP |Bottleneck bandwidth | Combine #EP | Bottleneck bandwidth |
 |:---------:|:------------:|:--------------------:|:-----------:|:--------------------:|:--------------------:|:--------------------:|
-| Intranode |       8      |    260 GB/s (xGMI)   |     8       |   295 GB/s (xGMI)    |  8       |  304GB/s (xGMI)     |
+| Intranode |       8      |    260 GB/s (xGMI)   |     8       |   295 GB/s (xGMI)    |  8       |  304 GB/s (xGMI)     |
 | Internode |      16      |    74 GB/s (RDMA)    |     16      |    82 GB/s (RDMA)    |  16      |   78 GB/s (RDMA)    |
 | Internode |      32      |    60 GB/s (RDMA)    |     32      |    61 GB/s (RDMA)    |  32      |   60 GB/s (RDMA)    |
 | Internode |      64      |    52 GB/s (RDMA)    |     32      |    53 GB/s (RDMA)    |  64      |   51 GB/s (RDMA)    |
+
+
+#### On AMD MI355X with Pollara AI NIC InfiniBand
+
+|   Type    | FP8 Dispatch #EP | Bottleneck bandwidth| BF16 Dispatch #EP |Bottleneck bandwidth | Combine #EP | Bottleneck bandwidth |
+|:---------:|:------------:|:--------------------:|:-----------:|:--------------------:|:--------------------:|:--------------------:|
+| Intranode |       8      |    299 GB/s (xGMI)   |     8       |   336 GB/s (xGMI)    |  8       |  333 GB/s (xGMI)     |
+| Internode |      16      |    82 GB/s (RDMA)    |     16      |    82 GB/s (RDMA)    |  16      |   82 GB/s (RDMA)    |
+| Internode |      32      |    59 GB/s (RDMA)    |     32      |    58 GB/s (RDMA)    |  32      |   59 GB/s (RDMA)    |
+| Internode |      64      |    50 GB/s (RDMA)    |     32      |    49 GB/s (RDMA)    |  64      |   49 GB/s (RDMA)    |
+
 
 #### On AMD MI300X with Broadcom Thor2
 
