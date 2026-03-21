@@ -19,8 +19,9 @@ WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
     wc->numBlocks = 1;
     wc->launched = false;
     wc->ready = false;
-    wc->d_readyFlag = nullptr;
     GPU_RT_CHECK(gpuStreamCreateWithFlags(&wc->stream, gpuStreamNonBlocking));
+    GPU_RT_CHECK(gpuMalloc(&wc->d_fifo_handle,
+                           sizeof(mscclpp::C2DDeviceHandle<Task>)));
     workers_.emplace_back(wc);
 
     bool* d_stop;
@@ -40,8 +41,6 @@ WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
     GPU_RT_CHECK(gpuStreamCreateWithFlags(&stream_, gpuStreamNonBlocking));
     owns_stream_ = true;
   }
-
-  GPU_RT_CHECK(gpuStreamCreateWithFlags(&copy_stream_, gpuStreamNonBlocking));
 }
 
 WorkerPool::~WorkerPool() {
@@ -54,8 +53,8 @@ WorkerPool::~WorkerPool() {
     if (wc->d_fifo_handle) {
       GPU_RT_CHECK(gpuFree(wc->d_fifo_handle));
     }
-    if (wc->d_readyFlag) {
-      GPU_RT_CHECK(gpuFree(wc->d_readyFlag));
+    if (wc->d_multi_sync) {
+      GPU_RT_CHECK(gpuFree(wc->d_multi_sync));
     }
   }
   workers_.clear();
@@ -69,16 +68,13 @@ WorkerPool::~WorkerPool() {
   d_stop_flags_.clear();
   h_stop_flags_.clear();
 
-  if (copy_stream_) {
-    GPU_RT_CHECK(gpuStreamDestroy(copy_stream_));
-  }
   if (owns_stream_ && stream_) {
     GPU_RT_CHECK(gpuStreamDestroy(stream_));
   }
 }
 
 bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
-  if (fifoId >= fifos_.size()) {
+  if (fifoId >= fifos_.size() || numBlocks == 0) {
     return false;
   }
 
@@ -95,14 +91,19 @@ bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
       workers_[i]->fifoId = fifoId;
       workers_[i]->numBlocks = numBlocks;
       workers_[i]->ready = false;
-      if (numBlocks > 1) { // only use by multi-sm persistent kernel
-        GPU_RT_CHECK(gpuMalloc(&workers_[i]->d_readyFlag, sizeof(uint32_t) * workers_[i]->numBlocks));
-        GPU_RT_CHECK(gpuMemset(workers_[i]->d_readyFlag, 0, sizeof(uint32_t) * workers_[i]->numBlocks));
-      } 
-      void* d_fifo_handle;
-      GPU_RT_CHECK(gpuMalloc(&d_fifo_handle, sizeof(mscclpp::C2DDeviceHandle<Task>)));
-      workers_[i]->d_fifo_handle = d_fifo_handle;
-      launchWorkerForFifo(fifoId);
+      *h_stop_flags_[i] = false;
+      GPU_RT_CHECK(gpuMemcpy(d_stop_flags_[i], h_stop_flags_[i], sizeof(bool),
+                             gpuMemcpyHostToDevice));
+      if (workers_[i]->d_multi_sync) {
+        GPU_RT_CHECK(gpuFree(workers_[i]->d_multi_sync));
+        workers_[i]->d_multi_sync = nullptr;
+      }
+      if (numBlocks > 1) {
+        GPU_RT_CHECK(gpuMalloc(&workers_[i]->d_multi_sync, sizeof(MultiBlockSync)));
+        GPU_RT_CHECK(
+            gpuMemset(workers_[i]->d_multi_sync, 0, sizeof(MultiBlockSync)));
+      }
+      launchWorkerForFifo(i);
       workers_[i]->launched = true;
       return true;
     }
@@ -139,13 +140,15 @@ void WorkerPool::destroyWorker(uint32_t fifoId) {
   for (size_t i = 0; i < workers_.size(); ++i) {
     if (workers_[i]->fifoId == fifoId && workers_[i]->launched) {
       *h_stop_flags_[i] = true;
-      GPU_RT_CHECK(gpuMemcpyAsync(d_stop_flags_[i], h_stop_flags_[i],
-                                    sizeof(bool), gpuMemcpyHostToDevice,
-                                    copy_stream_));
-      Task stopTask(TaskType::Stop, DataType::Int8, 0, 0);
-      fifos_[fifoId]->fifo.push(stopTask);
+      GPU_RT_CHECK(gpuMemcpy(d_stop_flags_[i], h_stop_flags_[i], sizeof(bool),
+                             gpuMemcpyHostToDevice));
 
       GPU_RT_CHECK(gpuStreamSynchronize(workers_[i]->stream));
+      reclaimFinishedTasks(ctx, ctx.fifo.currentId());
+      if (workers_[i]->d_multi_sync) {
+        GPU_RT_CHECK(gpuFree(workers_[i]->d_multi_sync));
+        workers_[i]->d_multi_sync = nullptr;
+      }
       workers_[i]->launched = false;
       workers_[i]->ready = false;
       workers_[i]->fifoId = UINT32_MAX;
@@ -161,6 +164,18 @@ uint64_t WorkerPool::enqueue(Task const& task, uint32_t fifoId) {
   }
 
   auto& ctx = *fifos_[fifoId];
+  int workerId = -1;
+  for (size_t i = 0; i < workers_.size(); ++i) {
+    if (workers_[i]->fifoId == fifoId && workers_[i]->launched) {
+      workerId = static_cast<int>(i);
+      break;
+    }
+  }
+  if (workerId < 0) {
+    printf("[ERROR] enqueue to fifo %u failed: no worker bound, call createWorker first\n",
+           fifoId);
+    return 0;
+  }
 
   // Check if there's space in FIFO without blocking initially
   uint64_t tail = ctx.fifo.currentId();
@@ -176,20 +191,6 @@ uint64_t WorkerPool::enqueue(Task const& task, uint32_t fifoId) {
     ctx.pending[taskId] = {task.args_index(), (TaskType)task.type_u8()};
   }
 
-  int workerId = -1;
-
-  for (size_t i = 0; i < workers_.size(); ++i) {
-    if (workers_[i]->fifoId == fifoId && workers_[i]->launched) {
-      workerId = static_cast<int>(i);
-      break;
-    }
-  }
-
-  if (workerId < 0) {
-    printf("[ERROR] enqueue to fifo %u failed: no worker bound, call createWorker first\n", fifoId);
-    return 0;
-  }
-
   return taskId;
 }
 
@@ -200,17 +201,12 @@ void WorkerPool::shutdown_all() {
     }
   }
 
-  for (size_t i = 0; i < workers_.size(); ++i) {
-    if (workers_[i]->launched) {
-      GPU_RT_CHECK(gpuStreamSynchronize(workers_[i]->stream));
-    }
-  }
-
   for (auto& wc : workers_) {
     wc->launched = false;
   }
   for (auto& ctx : fifos_) {
     ctx->bound_workers.store(0, std::memory_order_relaxed);
+    reclaimAllPendingTasks(*ctx);
   }
 }
 
@@ -221,80 +217,75 @@ bool WorkerPool::is_done(uint64_t taskId, uint32_t fifoId) {
   uint64_t current = ctx.fifo.currentId();
 
   if ((int64_t)(current - taskId) > 0) {
-    std::lock_guard<std::mutex> g(ctx.pending_mu);
-    auto it = ctx.pending.begin();
-    while (it != ctx.pending.end()) {
-      uint64_t tid = it->first;
-      if ((int64_t)(current - tid) > 0) {
-        PendingTask const& p = it->second;
-        if (p.type == TaskType::CollCopy || p.type == TaskType::CollReduce) {
-          TaskManager::instance().free_task_args(p.argsId);
-        }
-        it = ctx.pending.erase(it);
-      } else {
-        ++it;
-      }
-    }
+    reclaimFinishedTasks(ctx, current);
     return true;
   }
   return false;
 }
 
-void WorkerPool::launchWorkerForFifo(uint32_t fifoId) {
-    auto& fifo = fifos_[fifoId]->fifo;
-    mscclpp::C2DDeviceHandle<Device::Task> handle = fifo.deviceHandle();
-    int workerId = -1;
+void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
+  auto& worker = *workers_[workerIndex];
+  auto& fifo = fifos_[worker.fifoId]->fifo;
+  mscclpp::C2DDeviceHandle<Device::Task> handle = fifo.deviceHandle();
 
-    for (size_t i = 0; i < workers_.size(); ++i) {
-      if (!workers_[i]->launched) { // find first worker for fifo
-        workerId = static_cast<int>(i);
-        break;
+  GPU_RT_CHECK(gpuMemcpyAsync(worker.d_fifo_handle, &handle,
+                              sizeof(mscclpp::C2DDeviceHandle<Device::Task>),
+                              gpuMemcpyHostToDevice, worker.stream));
+  GPU_RT_CHECK(gpuStreamSynchronize(worker.stream));
+
+  auto* d_task_args = TaskManager::instance().d_task_args();
+
+  dim3 grid(worker.numBlocks);
+  dim3 block(cfg_.threadsPerBlock);
+  size_t smem_size = cfg_.smemSize > 0 ? cfg_.smemSize : 16 * 1024;
+
+  void* args_single[] = {&worker.d_fifo_handle, &d_task_args,
+                         &d_stop_flags_[workerIndex]};
+
+  void* args_multi[] = {&worker.d_fifo_handle, &d_task_args,
+                        &d_stop_flags_[workerIndex], &worker.d_multi_sync};
+
+  if (worker.numBlocks == 1) {
+    GPU_RT_CHECK(gpuLaunchKernel(UKernel::Device::singlePersistentKernel, grid,
+                                 block, args_single, smem_size, worker.stream));
+  } else {
+    GPU_RT_CHECK(gpuLaunchKernel(UKernel::Device::multiPersistentKernel, grid,
+                                 block, args_multi, smem_size, worker.stream));
+  }
+
+  worker.ready = true;
+}
+
+void WorkerPool::reclaimFinishedTasks(FifoContext& ctx, uint64_t currentTaskId) {
+  std::lock_guard<std::mutex> g(ctx.pending_mu);
+  bool const task_manager_ready = TaskManager::instance().inited();
+  auto it = ctx.pending.begin();
+  while (it != ctx.pending.end()) {
+    uint64_t tid = it->first;
+    if ((int64_t)(currentTaskId - tid) > 0) {
+      PendingTask const& p = it->second;
+      if (task_manager_ready &&
+          (p.type == TaskType::CollCopy || p.type == TaskType::CollReduce)) {
+        TaskManager::instance().free_task_args(p.argsId);
       }
-    }
-    if (workerId < 0) return;
-
-    // FIFO handle to device
-    GPU_RT_CHECK(gpuMemcpyAsync(workers_[workerId]->d_fifo_handle, &handle,
-                                sizeof(mscclpp::C2DDeviceHandle<Device::Task>),
-                                gpuMemcpyHostToDevice,
-                                workers_[workerId]->stream));
-    GPU_RT_CHECK(gpuStreamSynchronize(workers_[workerId]->stream));
-
-    auto* d_task_args = TaskManager::instance().d_task_args();
-
-    dim3 grid(workers_[workerId]->numBlocks);
-    dim3 block(cfg_.threadsPerBlock);
-
-    size_t smem_size = cfg_.smemSize > 0 ? cfg_.smemSize : 16 * 1024;  // Default 16KB
-
-    // kernel args
-    void* args_single[] = {
-        &workers_[workerId]->d_fifo_handle,
-        &d_task_args,
-        &d_stop_flags_[workerId]
-    };
-
-    void* args_multi[] = {
-        &workers_[workerId]->d_fifo_handle,
-        &d_task_args,
-        &d_stop_flags_[workerId],
-        &workers_[workerId]->d_readyFlag
-    };
-
-    // launch kernel
-    if (workers_[workerId]->numBlocks == 1) {
-        GPU_RT_CHECK(gpuLaunchKernel(
-            UKernel::Device::singlePersistentKernel,
-            grid, block, args_single, smem_size, workers_[workerId]->stream
-        ));
+      it = ctx.pending.erase(it);
     } else {
-        GPU_RT_CHECK(gpuLaunchKernel(
-            UKernel::Device::multiPersistentKernel,
-            grid, block, args_multi, smem_size, workers_[workerId]->stream
-        ));
+      ++it;
     }
+  }
+}
 
-    workers_[workerId]->ready = true;
+void WorkerPool::reclaimAllPendingTasks(FifoContext& ctx) {
+  std::lock_guard<std::mutex> g(ctx.pending_mu);
+  bool const task_manager_ready = TaskManager::instance().inited();
+  for (auto const& [_, pending] : ctx.pending) {
+    if (task_manager_ready &&
+        (pending.type == TaskType::CollCopy ||
+         pending.type == TaskType::CollReduce)) {
+      TaskManager::instance().free_task_args(pending.argsId);
+    }
+  }
+  ctx.pending.clear();
 }
 
 }  // namespace Device

@@ -110,8 +110,6 @@ int main(int argc, char** argv) {
     // std::this_thread::sleep_for(std::chrono::seconds(5));
     
     wp.shutdown_all();
-    TaskManager::instance().free_task_args(copy_task.args_index());
-    TaskManager::instance().free_task_args(reduce_task.args_index());
     
     gpuFree(d_src_copy);
     gpuFree(d_dst_copy);

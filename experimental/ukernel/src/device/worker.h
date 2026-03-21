@@ -4,6 +4,7 @@
 #include "gpu_rt.h"
 #include "task.h"
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -13,6 +14,8 @@
 
 namespace UKernel {
 namespace Device {
+
+struct MultiBlockSync;
 
 class WorkerPool {
  public:
@@ -80,11 +83,13 @@ class WorkerPool {
     bool launched;
     bool ready;
     gpuStream_t stream = nullptr;
-    void* d_fifo_handle = nullptr;
-    void* d_readyFlag = nullptr;
+    mscclpp::C2DDeviceHandle<Task>* d_fifo_handle = nullptr;
+    MultiBlockSync* d_multi_sync = nullptr;
   };
 
-  void launchWorkerForFifo(uint32_t fifoId);
+  void launchWorkerForFifo(size_t workerIndex);
+  void reclaimFinishedTasks(FifoContext& ctx, uint64_t currentTaskId);
+  void reclaimAllPendingTasks(FifoContext& ctx);
 
   Config cfg_;
   std::vector<std::unique_ptr<FifoContext>> fifos_;
@@ -92,7 +97,6 @@ class WorkerPool {
 
   gpuStream_t stream_ = nullptr;
   bool owns_stream_ = false;
-  gpuStream_t copy_stream_ = nullptr;
 
   std::vector<bool*> d_stop_flags_;
   std::vector<bool*> h_stop_flags_;

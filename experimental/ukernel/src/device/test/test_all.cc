@@ -124,7 +124,6 @@ void test_single_sm_copy() {
     TEST_ASSERT(match, "Copy content matches");
     
     wp.shutdown_all();
-    TaskManager::instance().free_task_args(task.args_index());
     gpuFree(d_src);
     gpuFree(d_dst);
     TaskManager::instance().release();
@@ -187,7 +186,6 @@ void test_multi_block_copy() {
     TEST_ASSERT(match, "Multi-block copy content matches");
     
     wp.shutdown_all();
-    TaskManager::instance().free_task_args(task.args_index());
     gpuFree(d_src);
     gpuFree(d_dst);
     TaskManager::instance().release();
@@ -272,8 +270,6 @@ void test_data_types() {
             }
         }
         TEST_ASSERT(match, std::string("Copy ") + name + " matches");
-        
-        TaskManager::instance().free_task_args(task.args_index());
     };
     
     GPU_RT_CHECK(gpuMemset(d_dst_f32, 0, bytes_f32));
@@ -349,8 +345,6 @@ void test_repeated_launch() {
             }
         }
         TEST_ASSERT(match, std::string("Iteration ") + std::to_string(iter) + " matches");
-        
-        TaskManager::instance().free_task_args(task.args_index());
     }
     
     wp.shutdown_all();
@@ -429,7 +423,6 @@ void test_repeated_enqueue() {
     
     gpuFree(d_src);
     gpuFree(d_dst);
-    TaskManager::instance().release();
     
     GPU_RT_CHECK(gpuDeviceSynchronize());
     std::cout << "[PASS] Repeated Enqueue test" << std::endl;
@@ -497,9 +490,7 @@ void test_multiple_fifos() {
     }
     TEST_ASSERT(all_match, "All FIFOs data correct");
     
-    for (int fifo = 0; fifo < 3; fifo++) {
-        wp.shutdown_all();
-    }
+    wp.shutdown_all();
     
     TaskManager::instance().release();
     
@@ -507,7 +498,6 @@ void test_multiple_fifos() {
         gpuFree(d_src[fifo]);
         gpuFree(d_dst[fifo]);
     }
-    TaskManager::instance().release();
     
     GPU_RT_CHECK(gpuDeviceSynchronize());
     std::cout << "[PASS] Multiple FIFOs test" << std::endl;
@@ -565,7 +555,6 @@ void test_boundary() {
         TEST_ASSERT(match, std::string(name) + " boundary test");
         
         wp.shutdown_all();
-        TaskManager::instance().free_task_args(task.args_index());
         gpuFree(d_src);
         gpuFree(d_dst);
     };

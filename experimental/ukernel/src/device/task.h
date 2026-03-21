@@ -128,6 +128,7 @@ class TaskManager {
 
     free_task_.clear();
     free_task_.reserve(cap_task_);
+    task_in_use_.assign(cap_task_, 0);
     for (uint32_t i = 0; i < cap_task_; ++i)
       free_task_.push_back(cap_task_ - 1 - i);
 
@@ -153,6 +154,8 @@ class TaskManager {
       assert(!free_task_.empty() && "args pool exhausted");
       idx = free_task_.back();
       free_task_.pop_back();
+      assert(task_in_use_[idx] == 0 && "Task args slot already in use");
+      task_in_use_[idx] = 1;
     }
 
     GPU_RT_CHECK(gpuMemcpy(d_task_ + idx, &h, sizeof(TaskArgs),
@@ -165,6 +168,8 @@ class TaskManager {
     std::lock_guard<std::mutex> g(task_mu_);
     assert(inited_ && "TaskManager not initialized");
     assert(idx < cap_task_ && "free_task_args idx out of range");
+    assert(task_in_use_[idx] == 1 && "double free on task args slot");
+    task_in_use_[idx] = 0;
     free_task_.push_back(idx);
   }
 
@@ -183,6 +188,7 @@ class TaskManager {
     d_task_ = nullptr;
 
     free_task_.clear();
+    task_in_use_.clear();
 
     cap_task_ = 0;
     inited_ = false;
@@ -193,6 +199,7 @@ class TaskManager {
   uint32_t cap_task_{0};
 
   std::vector<uint32_t> free_task_;
+  std::vector<uint8_t> task_in_use_;
   mutable std::mutex task_mu_;
   bool inited_{false};
 };

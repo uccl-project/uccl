@@ -19,11 +19,13 @@ CpuToGpuFifo<T>::CpuToGpuFifo(int size) {
   std::cout << "Init CpuToGpuFifo at device " << deviceProp.name << " !"
             << std::endl;
   int numaNode = getDeviceNumaNode(device);
-  unsigned long nodemask = 1UL << numaNode;
-  if (set_mempolicy(MPOL_PREFERRED, &nodemask, 8 * sizeof(nodemask)) != 0) {
-    throw std::runtime_error(
-        "Failed to set mempolicy device: " + std::to_string(device) +
-        " numaNode: " + std::to_string(numaNode));
+  if (numaNode >= 0) {
+    unsigned long nodemask = 1UL << numaNode;
+    if (set_mempolicy(MPOL_PREFERRED, &nodemask, 8 * sizeof(nodemask)) != 0) {
+      throw std::runtime_error(
+          "Failed to set mempolicy device: " + std::to_string(device) +
+          " numaNode: " + std::to_string(numaNode));
+    }
   }
   pimpl_ = std::make_unique<Impl>(size);
 
@@ -43,7 +45,7 @@ CpuToGpuFifo<T>::CpuToGpuFifo(int size) {
 
 template <typename T>
 uint64_t CpuToGpuFifo<T>::push(const T& task) {
-  uint64_t curHead = *(pimpl_->head);
+  uint64_t curHead = atomicLoad(pimpl_->head.get(), memoryOrderRelaxed);
   T* devBuffer = pimpl_->buffer.get();
 
   // Copy single task to device
