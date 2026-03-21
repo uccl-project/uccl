@@ -16,6 +16,7 @@ __device__ __forceinline__ void copy(
     int nthread = blockDim.x;
     size_t bytes = count * sizeof(T);
 
+    // debug
     if (tid == 0 || tid == 1) {
         printf("[%d] copy called: count=%lu, sizeof(T)=%lu\n",
             tid, count, sizeof(T));
@@ -33,9 +34,6 @@ __device__ __forceinline__ void copy(
         }
         __syncthreads();
     } else {
-        if (tid == 0 || tid == 1) {
-            printf("reg ");
-        }
         size_t chunk = (count + nthread - 1) / nthread;
         size_t start = tid * chunk;
         size_t end = (tid + 1 == nthread) ? count : start + chunk;
@@ -52,6 +50,15 @@ __device__ __forceinline__ void read_reduce_store(
     int tid = threadIdx.x;
     int nthread = blockDim.x;
     size_t bytes = count * sizeof(T);
+
+    // debug
+    if (tid == 0 || tid == 1) {
+        printf("[%d] read_reduce_store called: count=%lu, sizeof(T)=%lu\n",
+            tid, count, sizeof(T));
+        printf("[%d] read_reduce_store called: bytes=%lu, smem=%p\n",
+            tid, count*sizeof(T), smem_buf);
+    }
+
     if (is_tma_supported() && smem_buf != nullptr) {
         T* dst_ptr = static_cast<T*>(dst);
         const T* src_ptr = static_cast<const T*>(src);

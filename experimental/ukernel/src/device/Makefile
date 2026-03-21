@@ -26,28 +26,33 @@ COMMON_CU  := persistent_kernel_ops.cu
 WORKER_CPP := worker.cc
 
 TEST_ALL_SRC := test/test_all.cc
+SIMPLE_COPY_TEST_SRC := test/simple_copy_test.cc
 BENCH_SRC  := benchmarks/bench_device_fifo.cu
 BENCH_FULL_SRC  := benchmarks/bench_device_full_fifo.cu
 BENCH_SM_SRC  := benchmarks/bench_device_sm_fifo.cu
 
 COMMON_OBJ := $(patsubst %.cc,%.o,$(patsubst %.cpp,%.o,$(COMMON_CPP))) $(COMMON_CU:.cu=.o) $(WORKER_CPP:.cc=.o)
 TEST_ALL_OBJ := $(TEST_ALL_SRC:.cc=.o)
+SIMPLE_COPY_TEST_OBJ := $(SIMPLE_COPY_TEST_SRC:.cc=.o)
 BENCH_OBJ  := $(BENCH_SRC:.cu=.o)
 BENCH_FULL_OBJ  := $(BENCH_FULL_SRC:.cu=.o)
 BENCH_SM_OBJ := $(BENCH_SM_SRC:.cu=.o)
 
 TEST_ALL_BIN := test_all
+SIMPLE_COPY_TEST_BIN := simple_copy_test
 BENCH_BIN := benchmarks/bench_device_fifo
 BENCH_FULL_BIN := benchmarks/bench_device_full_fifo
 BENCH_SM_BIN := benchmarks/bench_device_sm_fifo
 
-ALL_BIN   := $(TEST_ALL_BIN) $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN}
+ALL_BIN   := $(TEST_ALL_BIN) $(SIMPLE_COPY_TEST_BIN) $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN}
 
 .PHONY: all test bench clean ensure-gdrcopy
 
 all: $(ALL_BIN)
 
 test: $(TEST_ALL_BIN)
+
+simple: $(SIMPLE_COPY_TEST_BIN)
 
 bench: $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN}
 
@@ -74,11 +79,17 @@ ensure-gdrcopy:
 %.o: %.cu
 	$(NVCC) -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
-$(COMMON_OBJ) $(TEST_ALL_OBJ): | ensure-gdrcopy
+$(COMMON_OBJ) $(TEST_ALL_OBJ) $(SIMPLE_COPY_TEST_OBJ): | ensure-gdrcopy
 $(TEST_ALL_OBJ): $(TEST_ALL_SRC)
 	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 $(TEST_ALL_BIN): $(COMMON_OBJ) $(TEST_ALL_OBJ)
+	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
+
+$(SIMPLE_COPY_TEST_OBJ): $(SIMPLE_COPY_TEST_SRC)
+	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
+
+$(SIMPLE_COPY_TEST_BIN): $(COMMON_OBJ) $(SIMPLE_COPY_TEST_OBJ)
 	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
 
 $(BENCH_OBJ): $(BENCH_SRC)
