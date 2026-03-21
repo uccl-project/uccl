@@ -1,6 +1,7 @@
 #pragma once
 
 #include "oob.h"
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <memory>

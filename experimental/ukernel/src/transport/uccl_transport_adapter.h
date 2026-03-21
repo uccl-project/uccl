@@ -32,6 +32,12 @@ struct UcclTransportConfig {
 
 class UcclTransportAdapter {
  public:
+  struct AcceptedPeer {
+    std::string remote_ip;
+    int remote_dev_idx = -1;
+    int remote_gpu_idx = -1;
+  };
+
   UcclTransportAdapter(int local_gpu_idx, int world_size,
                        UcclTransportConfig config);
   ~UcclTransportAdapter();
@@ -40,7 +46,10 @@ class UcclTransportAdapter {
                        uint16_t remote_port, int local_dev_idx,
                        int local_gpu_idx, int remote_dev_idx,
                        int remote_gpu_idx);
-  bool accept_from_peer(int peer_rank);
+  bool accept_from_peer(int peer_rank, std::string const& expected_remote_ip,
+                        int expected_remote_dev_idx,
+                        int expected_remote_gpu_idx,
+                        AcceptedPeer* accepted_peer = nullptr);
 
   // Get P2P listen port for the given device
   uint16_t get_p2p_listen_port(int dev_idx) const;
@@ -67,15 +76,15 @@ class UcclTransportAdapter {
   bool wait_completion(uint64_t request_id);
 
   bool is_initialized() const { return endpoint_ != nullptr; }
-  bool is_configured() const { return is_configured_; }
-
-  void set_configured() { is_configured_ = true; }
 
  private:
   struct PeerContext {
     ::uccl::UcclFlow* send_flow = nullptr;
     ::uccl::UcclFlow* recv_flow = nullptr;
     int peer_rank = -1;
+    std::string remote_ip;
+    int remote_dev_idx = -1;
+    int remote_gpu_idx = -1;
   };
 
   int local_gpu_idx_;
@@ -88,7 +97,6 @@ class UcclTransportAdapter {
   std::unordered_map<uint64_t, std::unique_ptr<::uccl::ucclRequest>>
       pending_requests_;
   mutable std::mutex mu_;
-  bool is_configured_ = false;
 };
 
 }  // namespace Transport

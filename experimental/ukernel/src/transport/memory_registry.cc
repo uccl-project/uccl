@@ -20,7 +20,7 @@ MR MemoryRegistry::track_local_buffer(void* local_buf, size_t len) {
   MR info{};
   info.id = id;
   info.address = reinterpret_cast<uint64_t>(local_buf);
-  info.length = static_cast<uint32_t>(len);
+  info.length = static_cast<uint64_t>(len);
   info.lkey = 0;
   info.key = 0;
 

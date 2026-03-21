@@ -18,7 +18,7 @@ class PeerSession {
   int peer_rank() const { return peer_rank_; }
 
   bool has_meta() const;
-  CommunicatorMeta const& meta() const;
+  CommunicatorMeta meta() const;
   void set_meta(CommunicatorMeta const& meta);
 
   PeerTransportKind transport_kind() const;

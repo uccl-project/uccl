@@ -1,6 +1,7 @@
 #include "uccl_transport_adapter.h"
 #include "collective/rdma/transport.h"
 #include <chrono>
+#include <iostream>
 #include <thread>
 
 namespace UKernel {
@@ -70,10 +71,16 @@ bool UcclTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip,
   auto& ctx = peer_contexts_[peer_rank];
   ctx.peer_rank = peer_rank;
   ctx.send_flow = static_cast<::uccl::UcclFlow*>(conn_id.context);
+  ctx.remote_ip = std::move(remote_ip);
+  ctx.remote_dev_idx = remote_dev_idx;
+  ctx.remote_gpu_idx = remote_gpu_idx;
   return true;
 }
 
-bool UcclTransportAdapter::accept_from_peer(int peer_rank) {
+bool UcclTransportAdapter::accept_from_peer(
+    int peer_rank, std::string const& expected_remote_ip,
+    int expected_remote_dev_idx, int expected_remote_gpu_idx,
+    AcceptedPeer* accepted_peer) {
   if (has_recv_peer(peer_rank)) return true;
 
   int dev_idx = endpoint_->get_best_dev_idx(local_gpu_idx_);
@@ -84,10 +91,32 @@ bool UcclTransportAdapter::accept_from_peer(int peer_rank) {
       dev_idx, endpoint_->get_p2p_listen_fd(dev_idx), local_gpu_idx_, remote_ip,
       &remote_dev, &remote_gpuidx);
 
+  if ((!expected_remote_ip.empty() && remote_ip != expected_remote_ip) ||
+      (expected_remote_dev_idx >= 0 && remote_dev != expected_remote_dev_idx) ||
+      (expected_remote_gpu_idx >= 0 &&
+       remote_gpuidx != expected_remote_gpu_idx)) {
+    std::cerr << "[ERROR] UCCL accept peer mismatch for rank " << peer_rank
+              << ": expected ip/dev/gpu=" << expected_remote_ip << "/"
+              << expected_remote_dev_idx << "/" << expected_remote_gpu_idx
+              << ", got " << remote_ip << "/" << remote_dev << "/"
+              << remote_gpuidx << std::endl;
+    endpoint_->discard_conn(conn_id);
+    return false;
+  }
+
+  if (accepted_peer != nullptr) {
+    accepted_peer->remote_ip = remote_ip;
+    accepted_peer->remote_dev_idx = remote_dev;
+    accepted_peer->remote_gpu_idx = remote_gpuidx;
+  }
+
   std::lock_guard<std::mutex> lk(mu_);
   auto& ctx = peer_contexts_[peer_rank];
   ctx.peer_rank = peer_rank;
   ctx.recv_flow = static_cast<::uccl::UcclFlow*>(conn_id.context);
+  ctx.remote_ip = std::move(remote_ip);
+  ctx.remote_dev_idx = remote_dev;
+  ctx.remote_gpu_idx = remote_gpuidx;
   return true;
 }
 

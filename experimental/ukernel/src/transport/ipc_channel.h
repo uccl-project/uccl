@@ -27,6 +27,7 @@ class IpcChannel {
  public:
   explicit IpcChannel(Communicator* comm);
   ~IpcChannel();
+  void shutdown();
 
   bool connect_to(int rank);
   bool accept_from(int rank);
@@ -39,18 +40,19 @@ class IpcChannel {
   struct IpcTask {
     IpcTaskType type;
     int peer_rank;
-    Request* req = nullptr;
+    std::shared_ptr<Request> req;
   };
 
   bool send_one(int to_rank, Request* creq);
   bool recv_one(int from_rank, Request* creq);
   void send_thread_func();
   void recv_thread_func();
-  void complete_task(Request* req, bool ok);
+  void complete_task(std::shared_ptr<Request> const& req, bool ok);
 
   jring_t* send_task_ring_;
   jring_t* recv_task_ring_;
   std::atomic<bool> stop_{false};
+  std::atomic<bool> shutdown_started_{false};
   std::thread send_thread_;
   std::thread recv_thread_;
   std::mutex cv_mu_;

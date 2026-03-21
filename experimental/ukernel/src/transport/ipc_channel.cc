@@ -7,9 +7,23 @@
 namespace UKernel {
 namespace Transport {
 
+namespace {
+
+constexpr int kIpcControlPollTimeoutMs = 50;
+
+int remaining_timeout_ms(std::chrono::steady_clock::time_point deadline) {
+  auto now = std::chrono::steady_clock::now();
+  if (now >= deadline) return 0;
+  return static_cast<int>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now)
+          .count());
+}
+
+}  // namespace
+
 IpcChannel::IpcChannel(Communicator* comm) : comm_(comm) {
-  send_task_ring_ = uccl::create_ring(sizeof(IpcTask), kTaskRingSize);
-  recv_task_ring_ = uccl::create_ring(sizeof(IpcTask), kTaskRingSize);
+  send_task_ring_ = uccl::create_ring(sizeof(IpcTask*), kTaskRingSize);
+  recv_task_ring_ = uccl::create_ring(sizeof(IpcTask*), kTaskRingSize);
   stop_.store(false);
   send_thread_ = std::thread([this] { send_thread_func(); });
   recv_thread_ = std::thread([this] { recv_thread_func(); });
@@ -23,8 +37,13 @@ IpcChannel::IpcChannel(Communicator* comm) : comm_(comm) {
   }
 }
 
-IpcChannel::~IpcChannel() {
-  stop_.store(true);
+IpcChannel::~IpcChannel() { shutdown(); }
+
+void IpcChannel::shutdown() {
+  bool expected = false;
+  if (!shutdown_started_.compare_exchange_strong(expected, true)) return;
+
+  stop_.store(true, std::memory_order_release);
   cv_.notify_all();
   if (send_thread_.joinable()) send_thread_.join();
   if (recv_thread_.joinable()) recv_thread_.join();
@@ -35,10 +54,17 @@ IpcChannel::~IpcChannel() {
   for (auto& stream : ipc_streams_) {
     if (stream != nullptr) GPU_RT_CHECK(gpuStreamDestroy(stream));
   }
+  ipc_streams_.clear();
   GPU_RT_CHECK(gpuSetDevice(orig_device));
 
-  if (send_task_ring_) free(send_task_ring_);
-  if (recv_task_ring_) free(recv_task_ring_);
+  if (send_task_ring_) {
+    free(send_task_ring_);
+    send_task_ring_ = nullptr;
+  }
+  if (recv_task_ring_) {
+    free(recv_task_ring_);
+    recv_task_ring_ = nullptr;
+  }
 }
 
 bool IpcChannel::connect_to(int rank) {
@@ -50,13 +76,21 @@ bool IpcChannel::accept_from(int rank) {
 }
 
 bool IpcChannel::send_async(int to_rank, std::shared_ptr<Request> creq) {
-  if (!creq || creq->len == 0) return false;
+  if (!creq || creq->len == 0 || stop_.load(std::memory_order_acquire) ||
+      send_task_ring_ == nullptr) {
+    return false;
+  }
   creq->pending_signaled.store(1, std::memory_order_relaxed);
   creq->running.store(true, std::memory_order_release);
 
-  IpcTask task{IpcTaskType::SEND, to_rank, creq.get()};
-  while (jring_mp_enqueue_bulk(send_task_ring_, &task, 1, nullptr) != 1) {
+  auto* task = new IpcTask{IpcTaskType::SEND, to_rank, std::move(creq)};
+  while (!stop_.load(std::memory_order_acquire) &&
+         jring_mp_enqueue_bulk(send_task_ring_, &task, 1, nullptr) != 1) {
     std::this_thread::yield();
+  }
+  if (stop_.load(std::memory_order_acquire)) {
+    delete task;
+    return false;
   }
   pending_send_.fetch_add(1, std::memory_order_relaxed);
   cv_.notify_all();
@@ -64,13 +98,21 @@ bool IpcChannel::send_async(int to_rank, std::shared_ptr<Request> creq) {
 }
 
 bool IpcChannel::recv_async(int from_rank, std::shared_ptr<Request> creq) {
-  if (!creq || creq->len == 0) return false;
+  if (!creq || creq->len == 0 || stop_.load(std::memory_order_acquire) ||
+      recv_task_ring_ == nullptr) {
+    return false;
+  }
   creq->pending_signaled.store(1, std::memory_order_relaxed);
   creq->running.store(true, std::memory_order_release);
 
-  IpcTask task{IpcTaskType::RECV, from_rank, creq.get()};
-  while (jring_mp_enqueue_bulk(recv_task_ring_, &task, 1, nullptr) != 1) {
+  auto* task = new IpcTask{IpcTaskType::RECV, from_rank, std::move(creq)};
+  while (!stop_.load(std::memory_order_acquire) &&
+         jring_mp_enqueue_bulk(recv_task_ring_, &task, 1, nullptr) != 1) {
     std::this_thread::yield();
+  }
+  if (stop_.load(std::memory_order_acquire)) {
+    delete task;
+    return false;
   }
   pending_recv_.fetch_add(1, std::memory_order_relaxed);
   cv_.notify_all();
@@ -87,8 +129,20 @@ bool IpcChannel::send_one(int to_rank, Request* creq) {
 
   IpcCacheWire got{};
   uint64_t seq = 0;
-  if (!comm_->shm_control_->recv_ipc_cache(to_rank, got, &seq,
-                                           kIpcControlTimeoutMs, creq->id)) {
+  auto deadline = std::chrono::steady_clock::now() +
+                  std::chrono::milliseconds(kIpcControlTimeoutMs);
+  bool got_cache = false;
+  while (!stop_.load(std::memory_order_acquire)) {
+    int timeout_ms =
+        std::min(kIpcControlPollTimeoutMs, remaining_timeout_ms(deadline));
+    if (timeout_ms <= 0) break;
+    if (comm_->shm_control_->recv_ipc_cache(to_rank, got, &seq, timeout_ms,
+                                            creq->id)) {
+      got_cache = true;
+      break;
+    }
+  }
+  if (!got_cache) {
     std::cerr << "[ERROR] recv_ipc_cache(" << to_rank
               << ") failed for req " << creq->id << std::endl;
     return false;
@@ -182,8 +236,20 @@ bool IpcChannel::recv_one(int from_rank, Request* creq) {
 
   uint32_t status = 0;
   uint64_t out_seq = 0;
-  if (!comm_->shm_control_->recv_ack(from_rank, &status, &out_seq,
-                                     kIpcControlTimeoutMs, creq->id)) {
+  auto deadline = std::chrono::steady_clock::now() +
+                  std::chrono::milliseconds(kIpcControlTimeoutMs);
+  bool got_ack = false;
+  while (!stop_.load(std::memory_order_acquire)) {
+    int timeout_ms =
+        std::min(kIpcControlPollTimeoutMs, remaining_timeout_ms(deadline));
+    if (timeout_ms <= 0) break;
+    if (comm_->shm_control_->recv_ack(from_rank, &status, &out_seq, timeout_ms,
+                                      creq->id)) {
+      got_ack = true;
+      break;
+    }
+  }
+  if (!got_ack) {
     std::cerr << "[ERROR] recv_ack(" << from_rank << ") failed for req "
               << creq->id << std::endl;
     return false;
@@ -196,7 +262,7 @@ bool IpcChannel::recv_one(int from_rank, Request* creq) {
   return true;
 }
 
-void IpcChannel::complete_task(Request* req, bool ok) {
+void IpcChannel::complete_task(std::shared_ptr<Request> const& req, bool ok) {
   if (!req) return;
   if (!ok) req->failed.store(true, std::memory_order_release);
   req->running.store(false, std::memory_order_release);
@@ -214,18 +280,21 @@ void IpcChannel::send_thread_func() {
     }
     if (stop_.load(std::memory_order_relaxed)) break;
 
-    IpcTask task{};
+    IpcTask* task = nullptr;
     if (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) != 1) {
       continue;
     }
     pending_send_.fetch_sub(1, std::memory_order_relaxed);
-    complete_task(task.req, send_one(task.peer_rank, task.req));
+    std::unique_ptr<IpcTask> task_guard(task);
+    complete_task(task_guard->req,
+                  send_one(task_guard->peer_rank, task_guard->req.get()));
   }
 
   while (true) {
-    IpcTask task{};
+    IpcTask* task = nullptr;
     if (jring_mc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) != 1) break;
-    complete_task(task.req, false);
+    std::unique_ptr<IpcTask> task_guard(task);
+    complete_task(task_guard->req, false);
   }
 }
 
@@ -240,18 +309,21 @@ void IpcChannel::recv_thread_func() {
     }
     if (stop_.load(std::memory_order_relaxed)) break;
 
-    IpcTask task{};
+    IpcTask* task = nullptr;
     if (jring_sc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) != 1) {
       continue;
     }
     pending_recv_.fetch_sub(1, std::memory_order_relaxed);
-    complete_task(task.req, recv_one(task.peer_rank, task.req));
+    std::unique_ptr<IpcTask> task_guard(task);
+    complete_task(task_guard->req,
+                  recv_one(task_guard->peer_rank, task_guard->req.get()));
   }
 
   while (true) {
-    IpcTask task{};
+    IpcTask* task = nullptr;
     if (jring_mc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) != 1) break;
-    complete_task(task.req, false);
+    std::unique_ptr<IpcTask> task_guard(task);
+    complete_task(task_guard->req, false);
   }
 }
 

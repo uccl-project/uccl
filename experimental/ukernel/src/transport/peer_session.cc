@@ -10,7 +10,7 @@ bool PeerSession::has_meta() const {
   return has_meta_;
 }
 
-CommunicatorMeta const& PeerSession::meta() const {
+CommunicatorMeta PeerSession::meta() const {
   std::lock_guard<std::mutex> lk(mu_);
   return meta_;
 }

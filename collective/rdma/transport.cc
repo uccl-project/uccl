@@ -1318,6 +1318,19 @@ ConnID RDMAEndpoint::uccl_accept(int dev, int listen_fd, int local_gpuidx,
                 .dev = dev};
 }
 
+void RDMAEndpoint::discard_conn(ConnID conn_id) {
+  if (conn_id.sock_fd >= 0) {
+    close(conn_id.sock_fd);
+    std::lock_guard<std::mutex> lock(fd_vec_mu_);
+    for (auto it = fd_vec_.begin(); it != fd_vec_.end(); ++it) {
+      if (*it == conn_id.sock_fd) {
+        fd_vec_.erase(it);
+        break;
+      }
+    }
+  }
+}
+
 bool UcclFlow::check_fifo_ready(int* ret_slot, int* ret_nmsgs) {
   int slot = send_comm_.fifo_head % kMaxReq;
   auto rem_fifo = send_comm_.base.fifo;

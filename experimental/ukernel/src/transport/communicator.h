@@ -68,6 +68,8 @@ class Communicator {
   };
 
   bool check_ready() const;
+  UcclTransportAdapter& ensure_uccl_adapter(
+      CommunicatorMeta const& local_meta, CommunicatorMeta const& peer_meta);
   std::shared_ptr<IpcChannel> get_ipc_channel_by_rank(int rank);
   bool has_peer_send_path(int rank) const;
   bool has_peer_recv_path(int rank) const;
@@ -77,6 +79,7 @@ class Communicator {
   void exchange_peer_metas();
   void cache_peer_session(int rank, PeerTransportKind kind, bool mark_send_ready,
                           bool mark_recv_ready);
+  void shutdown_ipc_channel();
 
   int local_gpu_idx_;
   int global_rank_;
@@ -104,7 +107,7 @@ class Communicator {
   struct NotifyTarget {
     std::function<void(unsigned, std::chrono::steady_clock::time_point)> emit;
   };
-  std::vector<std::shared_ptr<NotifyTarget>> notify_targets_;
+  std::vector<std::weak_ptr<NotifyTarget>> notify_targets_;
 
   friend class IpcChannel;
 };

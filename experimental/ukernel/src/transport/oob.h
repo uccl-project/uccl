@@ -67,7 +67,7 @@ struct CommunicatorMeta : public Exchangeable {
 struct MR {
   uint32_t id;
   uint64_t address;
-  uint32_t length;
+  uint64_t length;
   uint32_t lkey;
   uint32_t key;
 };
@@ -102,7 +102,7 @@ struct MRInfos : public Exchangeable {
       mr.id = std::stoul(kv.at("mr_" + std::to_string(i) + "_id"));
       mr.address =
           std::stoull(kv.at("mr_" + std::to_string(i) + "_addr"), nullptr, 16);
-      mr.length = std::stoul(kv.at("mr_" + std::to_string(i) + "_len"));
+      mr.length = std::stoull(kv.at("mr_" + std::to_string(i) + "_len"));
       mr.key = std::stoul(kv.at("mr_" + std::to_string(i) + "_key"));
     }
   }
