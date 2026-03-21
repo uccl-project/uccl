@@ -28,7 +28,7 @@ struct SmDeviceHandle {
   /// Consume the task at tail (advance tail by 1).
   /// Only call after poll() returns non-null.
   MSCCLPP_DEVICE_INLINE void pop() {
-    atomicFetchAdd<uint64_t, scopeDevice>(tail, 1, memoryOrderRelease);
+    atomicFetchAdd<uint64_t, scopeSystem>(tail, 1, memoryOrderRelease);
   }
 
   /// Push a Task to the FIFO.
