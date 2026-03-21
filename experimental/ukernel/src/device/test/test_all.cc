@@ -89,13 +89,10 @@ void test_single_sm_copy() {
     args.dst = d_dst;
     args.bytes = bytes;
     
-    uint32_t argsIdx = TaskManager::instance().alloc_task_args();
-    GPU_RT_CHECK(gpuMemcpy(TaskManager::instance().d_task_args() + argsIdx, &args, sizeof(TaskArgs), gpuMemcpyHostToDevice));
-    
     wp.createWorker(0, 1);
     wp.waitWorker(0);
     
-    Task task(TaskType::CollCopy, DataType::Int8, 0, argsIdx);
+    Task task = TaskManager::instance().create_task(args, TaskType::CollCopy, DataType::Int8, 0);
     uint64_t taskId = wp.enqueue(task, 0);
     std::cout << "Enqueued task " << taskId << std::endl;
     
@@ -127,7 +124,7 @@ void test_single_sm_copy() {
     TEST_ASSERT(match, "Copy content matches");
     
     wp.shutdown_all();
-    TaskManager::instance().free_task_args(argsIdx);
+    TaskManager::instance().free_task_args(task.args_index());
     gpuFree(d_src);
     gpuFree(d_dst);
     TaskManager::instance().release();
@@ -165,13 +162,10 @@ void test_multi_block_copy() {
     args.dst = d_dst;
     args.bytes = bytes;
     
-    uint32_t argsIdx = TaskManager::instance().alloc_task_args();
-    GPU_RT_CHECK(gpuMemcpy(TaskManager::instance().d_task_args() + argsIdx, &args, sizeof(TaskArgs), gpuMemcpyHostToDevice));
-    
     wp.createWorker(0, 4);
     wp.waitWorker(0);
     
-    Task task(TaskType::CollCopy, DataType::Int8, 0, argsIdx);
+    Task task = TaskManager::instance().create_task(args, TaskType::CollCopy, DataType::Int8, 0);
     uint64_t taskId = wp.enqueue(task, 0);
     std::cout << "Enqueued task " << taskId << " with 4 blocks" << std::endl;
     
@@ -193,7 +187,7 @@ void test_multi_block_copy() {
     TEST_ASSERT(match, "Multi-block copy content matches");
     
     wp.shutdown_all();
-    TaskManager::instance().free_task_args(argsIdx);
+    TaskManager::instance().free_task_args(task.args_index());
     gpuFree(d_src);
     gpuFree(d_dst);
     TaskManager::instance().release();
@@ -243,13 +237,7 @@ void test_data_types() {
         args.dst = d_dst;
         args.bytes = bytes;
         
-        uint32_t argsIdx = TaskManager::instance().alloc_task_args();
-        GPU_RT_CHECK(gpuMemcpy(TaskManager::instance().d_task_args() + argsIdx, &args, sizeof(TaskArgs), gpuMemcpyHostToDevice));
-        
-        wp.createWorker(0, 1);
-        wp.waitWorker(0);
-        
-        Task task(TaskType::CollCopy, dtype, 0, argsIdx);
+        Task task = TaskManager::instance().create_task(args, TaskType::CollCopy, dtype, 0);
         uint64_t taskId = wp.enqueue(task, 0);
         
         // Wait for task completion using WorkerPool's is_done method
@@ -257,14 +245,16 @@ void test_data_types() {
             std::this_thread::sleep_for(std::chrono::microseconds(10));
         }
         
-        std::vector<char> h_dst(bytes);
+        std::vector<char> h_dst(bytes, 0);
         GPU_RT_CHECK(gpuMemcpy(h_dst.data(), d_dst, bytes, gpuMemcpyDeviceToHost));
         
         bool match = true;
         if (dtype == DataType::Fp32) {
             for (int i = 0; i < 256; i++) {
                 float val = *reinterpret_cast<float*>(&h_dst[i * sizeof(float)]);
-                if (abs(val - h_src_f32[i]) > 0.01f) {
+                float expected = h_src_f32[i];
+                if (abs(val - expected) > 0.01f) {
+                    std::cerr << name << " mismatch at " << i << ": got " << val << ", expected " << expected << std::endl;
                     match = false;
                     break;
                 }
@@ -272,7 +262,10 @@ void test_data_types() {
         } else if (dtype == DataType::Fp16) {
             for (int i = 0; i < 256; i++) {
                 __half val = *reinterpret_cast<__half*>(&h_dst[i * sizeof(__half)]);
-                if (abs(__half2float(val) - __half2float(h_src_f16[i])) > 0.01f) {
+                float fval = __half2float(val);
+                float expected = __half2float(h_src_f16[i]);
+                if (abs(fval - expected) > 0.01f) {
+                    std::cerr << name << " mismatch at " << i << ": got " << fval << ", expected " << expected << std::endl;
                     match = false;
                     break;
                 }
@@ -280,13 +273,19 @@ void test_data_types() {
         }
         TEST_ASSERT(match, std::string("Copy ") + name + " matches");
         
-        wp.shutdown_all();
-        TaskManager::instance().free_task_args(argsIdx);
+        TaskManager::instance().free_task_args(task.args_index());
     };
+    
+    GPU_RT_CHECK(gpuMemset(d_dst_f32, 0, bytes_f32));
+    GPU_RT_CHECK(gpuMemset(d_dst_f16, 0, bytes_f16));
+    
+    wp.createWorker(0, 1);
+    wp.waitWorker(0);
     
     testDataType(d_src_f32, d_dst_f32, bytes_f32, DataType::Fp32, "Fp32");
     testDataType(d_src_f16, d_dst_f16, bytes_f16, DataType::Fp16, "Fp16");
     
+    wp.shutdown_all();
     gpuFree(d_src_f32);
     gpuFree(d_dst_f32);
     gpuFree(d_src_f16);
@@ -329,13 +328,10 @@ void test_repeated_launch() {
         args.dst = d_dst;
         args.bytes = bytes;
         
-        uint32_t argsIdx = TaskManager::instance().alloc_task_args();
-        GPU_RT_CHECK(gpuMemcpy(TaskManager::instance().d_task_args() + argsIdx, &args, sizeof(TaskArgs), gpuMemcpyHostToDevice));
-        
         wp.createWorker(0, 1);
         wp.waitWorker(0);
         
-        Task task(TaskType::CollCopy, DataType::Int8, 0, argsIdx);
+        Task task = TaskManager::instance().create_task(args, TaskType::CollCopy, DataType::Int8, 0);
         uint64_t taskId = wp.enqueue(task, 0);
         
         // Wait for task completion using WorkerPool's is_done method
@@ -354,10 +350,10 @@ void test_repeated_launch() {
         }
         TEST_ASSERT(match, std::string("Iteration ") + std::to_string(iter) + " matches");
         
-        wp.shutdown_all();
-        TaskManager::instance().free_task_args(argsIdx);
+        TaskManager::instance().free_task_args(task.args_index());
     }
     
+    wp.shutdown_all();
     gpuFree(d_src);
     gpuFree(d_dst);
     TaskManager::instance().release();
@@ -401,10 +397,10 @@ void test_repeated_enqueue() {
         args.dst = d_dst;
         args.bytes = bytes;
         
-        uint32_t argsIdx = TaskManager::instance().alloc_task_args();
-        GPU_RT_CHECK(gpuMemcpy(TaskManager::instance().d_task_args() + argsIdx, &args, sizeof(TaskArgs), gpuMemcpyHostToDevice));
+        wp.createWorker(0, 1);
+        wp.waitWorker(0);
         
-        Task task(TaskType::CollCopy, DataType::Int8, 0, argsIdx);
+        Task task = TaskManager::instance().create_task(args, TaskType::CollCopy, DataType::Int8, 0);
         uint64_t taskId = wp.enqueue(task, 0);
         taskIds.push_back(taskId);
     }
@@ -478,10 +474,7 @@ void test_multiple_fifos() {
         args.dst = d_dst[fifo];
         args.bytes = bytes;
         
-        uint32_t argsIdx = TaskManager::instance().alloc_task_args();
-        GPU_RT_CHECK(gpuMemcpy(TaskManager::instance().d_task_args() + argsIdx, &args, sizeof(TaskArgs), gpuMemcpyHostToDevice));
-        
-        Task task(TaskType::CollCopy, DataType::Int8, 0, argsIdx);
+        Task task = TaskManager::instance().create_task(args, TaskType::CollCopy, DataType::Int8, 0);
         taskIds[fifo] = wp.enqueue(task, fifo);
     }
     
@@ -549,13 +542,10 @@ void test_boundary() {
         args.dst = d_dst;
         args.bytes = bytes;
         
-        uint32_t argsIdx = TaskManager::instance().alloc_task_args();
-        GPU_RT_CHECK(gpuMemcpy(TaskManager::instance().d_task_args() + argsIdx, &args, sizeof(TaskArgs), gpuMemcpyHostToDevice));
-        
         wp.createWorker(0, 1);
         wp.waitWorker(0);
         
-        Task task(TaskType::CollCopy, DataType::Int8, 0, argsIdx);
+        Task task = TaskManager::instance().create_task(args, TaskType::CollCopy, DataType::Int8, 0);
         uint64_t taskId = wp.enqueue(task, 0);
         
         // Wait for task completion using WorkerPool's is_done method
@@ -575,7 +565,7 @@ void test_boundary() {
         TEST_ASSERT(match, std::string(name) + " boundary test");
         
         wp.shutdown_all();
-        TaskManager::instance().free_task_args(argsIdx);
+        TaskManager::instance().free_task_args(task.args_index());
         gpuFree(d_src);
         gpuFree(d_dst);
     };

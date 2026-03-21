@@ -6,42 +6,45 @@ namespace Device {
 
 __device__ void run_copy(TaskArgs const& a, uint32_t block_id,
                          uint32_t num_blocks, void* smem_buf) {
-  auto* dst = reinterpret_cast<char*>(a.dst);
-  auto* src = reinterpret_cast<char const*>(a.src);
-  const uint64_t total = static_cast<uint64_t>(a.bytes);
+  char* dst = reinterpret_cast<char*>(a.dst);
+  char const* src = reinterpret_cast<char const*>(a.src);
+  // sizeof(char) = 1 => count = bytes
+  const uint64_t total_count = static_cast<uint64_t>(a.bytes);
 
-  const uint64_t max_threads_per_block = 1024; // CUDA max threads per block
+  const uint64_t max_threads_per_block = 1024;
   if (blockDim.x > max_threads_per_block) return;
   
-  const uint64_t tid =
-      static_cast<uint64_t>(block_id) * blockDim.x + threadIdx.x;
-  const uint64_t nthread =
-      static_cast<uint64_t>(num_blocks) * blockDim.x;
-
-  if (tid > INT_MAX || nthread > INT_MAX) return;
-
-  copy<char>(dst, src, total, static_cast<int>(tid), static_cast<int>(nthread), smem_buf);
+  const uint64_t count_per_block = total_count / num_blocks;
+  const uint64_t block_offset = block_id * count_per_block;
+  
+  char* my_dst = dst + block_offset;
+  char const* my_src = src + block_offset;
+  uint64_t my_count = (block_id + 1 == num_blocks) 
+      ? (total_count - block_offset)  // last block
+      : count_per_block;
+  
+  copy<char>(my_dst, my_src, static_cast<size_t>(my_count), smem_buf);
 }
 
 template <typename T, ReduceType op>
 __device__ void run_reduce(TaskArgs const& a, uint32_t block_id,
                            uint32_t num_blocks, void* smem_buf) {
-  auto* dst = reinterpret_cast<T*>(a.dst);
-  auto* src = reinterpret_cast<T const*>(a.src);
-  const uint64_t count = static_cast<uint64_t>(a.bytes) / sizeof(T);
+  T* dst = reinterpret_cast<T*>(a.dst);
+  T const* src = reinterpret_cast<T const*>(a.src);
+  const uint64_t total_count = static_cast<uint64_t>(a.bytes) / sizeof(T);
 
-  const uint64_t max_threads_per_block = 1024; // CUDA max threads per block
+  const uint64_t max_threads_per_block = 1024;
   if (blockDim.x > max_threads_per_block) return;
   
-  const uint64_t tid =
-      static_cast<uint64_t>(block_id) * blockDim.x + threadIdx.x;
-  const uint64_t nthread =
-      static_cast<uint64_t>(num_blocks) * blockDim.x;
-
-  if (tid > INT_MAX || nthread > INT_MAX) return;
-
-  read_reduce_store<T, op>(dst, src, count, smem_buf, 
-                           static_cast<int>(tid), static_cast<int>(nthread));
+  const uint64_t count_per_block = total_count / num_blocks;
+  const uint64_t block_offset = block_id * count_per_block;
+  const uint64_t my_count = (block_id + 1 == num_blocks) 
+      ? (total_count - block_offset) 
+      : count_per_block;
+  
+  read_reduce_store<T, op>(dst + block_offset, src + block_offset, 
+                           static_cast<size_t>(my_count), 
+                           smem_buf);
 }
 
 __device__ __forceinline__ void process_task(Task* task, TaskArgs* d_task_args,

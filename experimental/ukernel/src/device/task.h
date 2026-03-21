@@ -161,15 +161,6 @@ class TaskManager {
     return Task(tt, dt, blockId, idx);
   }
 
-  uint32_t alloc_task_args() {
-    std::lock_guard<std::mutex> g(task_mu_);
-    assert(inited_ && "TaskManager not initialized");
-    assert(!free_task_.empty() && "args pool exhausted");
-    uint32_t idx = free_task_.back();
-    free_task_.pop_back();
-    return idx;
-  }
-
   void free_task_args(uint32_t idx) {
     std::lock_guard<std::mutex> g(task_mu_);
     assert(inited_ && "TaskManager not initialized");
