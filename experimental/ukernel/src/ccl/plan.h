@@ -10,29 +10,24 @@ namespace CCL {
 
 enum class CollectiveKind : uint32_t { AllGather, AllReduce, ReduceScatter, Broadcast, AllToAll };
 enum class AlgorithmKind : uint32_t { Ring };
-enum class StepPhase : uint32_t { DirectCopy, ReduceScatter, AllGather };
+enum class StepPhase : uint32_t { Init, Exchange, ReduceScatter, AllGather, AllToAll };
 enum class ExecutionOpKind : uint32_t {
-  RdmaSend,
-  RdmaRecv,
-  CeCopy,
-  PkCopy,
-  PkReduce,
+  Send,
+  Recv,
+  Copy,
+  Reduce,
   EventWait,
   Barrier,
 };
 
-enum class ExecutionOpFlags : uint32_t {
-  None = 0,
-  StageForReduce = 1u << 0,
+enum class MemorySlot : uint32_t {
+  SymmetricTensor,
+  RecvStaging,
 };
 
-enum class BufferRole : uint32_t {
+enum class ExecutionOpFlags : uint32_t {
   None = 0,
-  LocalInput,
-  RemoteInput,
-  RemoteReduced,
-  FinalOutput,
-  RecvStaging,
+  InPlace = 1u << 0,
 };
 
 struct ChunkRange {
@@ -43,29 +38,28 @@ struct ChunkRange {
   size_t size_bytes = 0;
 };
 
+struct MemoryRef {
+  MemorySlot slot = MemorySlot::SymmetricTensor;
+  // -1 means the local endpoint's symmetric tensor.
+  int rank = -1;
+  size_t offset_bytes = 0;
+};
+
 struct ExecutionOp {
   uint32_t op_id = 0;
-  ExecutionOpKind kind = ExecutionOpKind::PkCopy;
-  int src_rank = -1;
-  int dst_rank = -1;
+  ExecutionOpKind kind = ExecutionOpKind::Copy;
+  int peer_rank = -1;
   ChunkRange chunk;
   std::vector<uint32_t> deps;
   uint32_t flags = static_cast<uint32_t>(ExecutionOpFlags::None);
-  BufferRole src_role = BufferRole::None;
-  BufferRole dst_role = BufferRole::None;
+  MemoryRef src;
+  MemoryRef dst;
 };
 
 struct CollectiveStep {
   uint32_t step_id = 0;
-  StepPhase phase = StepPhase::DirectCopy;
-  int src_rank = -1;
-  int dst_rank = -1;
+  StepPhase phase = StepPhase::Exchange;
   ChunkRange chunk;
-  bool has_forward_chunk = false;
-  int forward_src_rank = -1;
-  int forward_dst_rank = -1;
-  ChunkRange forward_chunk;
-  BufferRole forward_src_role = BufferRole::None;
   std::vector<uint32_t> predecessors;
   std::vector<ExecutionOp> ops;
 };

@@ -17,25 +17,62 @@ std::string to_lower(char const* value) {
   return out;
 }
 
+PeerRuntimeCapabilities peer_caps_for(RuntimeCapabilities const& caps,
+                                      int peer_rank) {
+  if (peer_rank < 0 ||
+      static_cast<size_t>(peer_rank) >= caps.peers.size()) {
+    return PeerRuntimeCapabilities{};
+  }
+  return caps.peers[static_cast<size_t>(peer_rank)];
+}
+
 }  // namespace
 
-BackendKind resolve_backend_kind(BackendKind requested, bool is_copy,
-                                 uint64_t bytes,
+BackendKind resolve_backend_kind(BackendKind requested,
+                                 ExecutionOp const& op,
                                  RuntimeCapabilities const& caps,
                                  BackendSelectorConfig const& cfg) {
   if (char const* env = std::getenv("UKERNEL_CCL_BACKEND")) {
     std::string override_value = to_lower(env);
-    if (override_value == "rdma") return BackendKind::Rdma;
-    if (override_value == "cpu") return BackendKind::Cpu;
+    if (override_value == "transport") return BackendKind::Transport;
+    if (override_value == "device") return BackendKind::Device;
   }
 
   if (requested != BackendKind::Auto) return requested;
-  if (caps.supports_rdma && !caps.is_same_node) return BackendKind::Rdma;
-  if (is_copy && caps.has_copy_engine_path &&
-      bytes >= cfg.copy_engine_threshold_bytes) {
-    return BackendKind::Cpu;
+
+  switch (op.kind) {
+    case ExecutionOpKind::Send:
+    case ExecutionOpKind::Recv:
+      return BackendKind::Transport;
+    case ExecutionOpKind::Reduce:
+      return BackendKind::Device;
+    case ExecutionOpKind::Copy: {
+      if (op.src.slot == MemorySlot::RecvStaging ||
+          op.dst.slot == MemorySlot::RecvStaging) {
+        return BackendKind::Device;
+      }
+
+      int remote_rank = -1;
+      if (op.src.slot == MemorySlot::SymmetricTensor && op.src.rank >= 0) {
+        remote_rank = op.src.rank;
+      } else if (op.dst.slot == MemorySlot::SymmetricTensor && op.dst.rank >= 0) {
+        remote_rank = op.dst.rank;
+      }
+
+      PeerRuntimeCapabilities peer = peer_caps_for(caps, remote_rank);
+      if (peer.peer_accessible) {
+        if (!cfg.prefer_transport_for_large_same_node_copy ||
+            op.chunk.size_bytes < cfg.transport_copy_threshold_bytes) {
+          return BackendKind::Device;
+        }
+      }
+      return remote_rank >= 0 ? BackendKind::Transport : BackendKind::Device;
+    }
+    case ExecutionOpKind::EventWait:
+    case ExecutionOpKind::Barrier:
+      return BackendKind::Device;
   }
-  return BackendKind::Cpu;
+  return BackendKind::Device;
 }
 
 }  // namespace CCL

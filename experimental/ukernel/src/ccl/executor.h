@@ -28,6 +28,8 @@ struct CollectiveConfig {
   RuntimeCapabilities runtime_caps{};
 };
 
+PlanRequest make_plan_request(CollectiveKind kind, CollectiveConfig const& config);
+
 struct CollectiveOpHandle {
   uint64_t value = 0;
 };
@@ -36,6 +38,7 @@ class Executor {
  public:
   // Executor owns runtime scheduling: it lowers copy ops onto concrete
   // backends, tracks step/op DAG dependencies, and drives backend polling.
+  // CCL v1 keeps one collective active per executor instance.
   explicit Executor(ExecutorBackends backends);
   ~Executor();
 
@@ -43,12 +46,8 @@ class Executor {
   Executor& operator=(Executor const&) = delete;
 
   CollectiveOpHandle submit(CollectivePlan plan);
-  CollectiveOpHandle submit_allgather(CollectiveConfig const& config);
   CollectiveOpHandle submit_allreduce(CollectiveConfig const& config);
-  CollectiveOpHandle submit_reducescatter(CollectiveConfig const& config);
-  CollectiveOpHandle submit_broadcast(CollectiveConfig const& config);
   CollectiveOpHandle submit_alltoall(CollectiveConfig const& config);
-  CollectiveOpHandle submit_planned(CollectivePlan const& plan);
   bool poll(CollectiveOpHandle handle);
   void wait(CollectiveOpHandle handle);
   void release(CollectiveOpHandle handle);

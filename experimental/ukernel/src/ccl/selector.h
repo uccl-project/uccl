@@ -1,27 +1,33 @@
 #pragma once
 
+#include "plan.h"
 #include <cstdint>
+#include <vector>
 
 namespace UKernel {
 namespace CCL {
 
-enum class BackendKind : uint32_t { Auto, Rdma, Cpu };
+enum class BackendKind : uint32_t { Auto, Device, Transport };
 
-struct RuntimeCapabilities {
-  bool is_same_node = true;
-  bool has_peer_access = false;
+struct PeerRuntimeCapabilities {
+  bool same_node = false;
+  bool peer_accessible = false;
   bool has_nvlink = false;
   bool has_copy_engine_path = false;
   bool supports_rdma = false;
 };
 
-struct BackendSelectorConfig {
-  bool prefer_ce_for_large_copy = true;
-  uint64_t copy_engine_threshold_bytes = 256 * 1024;
+struct RuntimeCapabilities {
+  std::vector<PeerRuntimeCapabilities> peers;
 };
 
-BackendKind resolve_backend_kind(BackendKind requested, bool is_copy,
-                                 uint64_t bytes,
+struct BackendSelectorConfig {
+  bool prefer_transport_for_large_same_node_copy = true;
+  uint64_t transport_copy_threshold_bytes = 256 * 1024;
+};
+
+BackendKind resolve_backend_kind(BackendKind requested,
+                                 ExecutionOp const& op,
                                  RuntimeCapabilities const& caps,
                                  BackendSelectorConfig const& cfg);
 

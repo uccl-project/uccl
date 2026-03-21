@@ -3,6 +3,8 @@
 #include "../backend.h"
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <utility>
 #include <unordered_map>
 
 namespace UKernel {
@@ -25,20 +27,20 @@ struct MockCommunicator {
 // Simplified transport backend for testing that doesn't require full transport layer
 class MockTransportBackend final : public Backend {
  public:
-  explicit MockTransportBackend(MockCommunicator& comm, int peer_rank,
-                               CollectiveBuffers buffers)
-      : comm_(comm), peer_rank_(peer_rank), buffers_(buffers) {}
+  explicit MockTransportBackend(MockCommunicator& comm, CollectiveMemory memory)
+      : comm_(comm), memory_(std::move(memory)) {}
 
   char const* name() const override { return "mock-transport"; }
 
   bool supports(ExecutionOpKind kind) const override {
-    return kind == ExecutionOpKind::RdmaSend ||
-           kind == ExecutionOpKind::RdmaRecv;
+    return kind == ExecutionOpKind::Send ||
+           kind == ExecutionOpKind::Recv;
   }
 
   BackendToken submit(ExecutionOp const& op) override {
     BackendToken token{next_token_++};
     completed_tokens_[token.value] = true;
+    completed_queue_.push_back(token.value);
     return token;
   }
 
@@ -47,16 +49,23 @@ class MockTransportBackend final : public Backend {
     return it != completed_tokens_.end() && it->second;
   }
 
+  bool try_pop_completed(BackendToken& token) override {
+    if (completed_queue_.empty()) return false;
+    token.value = completed_queue_.front();
+    completed_queue_.pop_front();
+    return true;
+  }
+
   void release(BackendToken token) override {
     completed_tokens_.erase(token.value);
   }
 
  private:
   MockCommunicator& comm_;
-  int peer_rank_ = -1;
-  CollectiveBuffers buffers_{};
+  CollectiveMemory memory_{};
   uint64_t next_token_ = 1;
   std::unordered_map<uint64_t, bool> completed_tokens_;
+  std::deque<uint64_t> completed_queue_;
 };
 
 }  // namespace CCL

@@ -3,19 +3,32 @@
 #include "plan.h"
 #include <cstddef>
 #include <cstdint>
+#include <deque>
+#include <vector>
 
 namespace UKernel {
 namespace CCL {
 
-// Shared buffer bindings for collective execution backends. Backends may use
-// only the fields relevant to their transport/execution path.
-struct CollectiveBuffers {
-  void const* local_input = nullptr;
-  void const* remote_input = nullptr;
-  void const* remote_reduced = nullptr;
-  void* final_output = nullptr;
+struct PeerTensorView {
+  int rank = -1;
+  void* ptr = nullptr;
+  uint32_t mr_id = 0;
+  bool same_node = false;
+  bool peer_accessible = false;
+};
+
+struct SymmetricTensor {
+  int local_rank = 0;
+  void* local_ptr = nullptr;
+  uint32_t local_mr_id = 0;
+  size_t bytes = 0;
+  std::vector<PeerTensorView> peers;
+};
+
+struct CollectiveMemory {
+  SymmetricTensor tensor;
   void* recv_staging = nullptr;
-  size_t registration_bytes = 0;
+  size_t recv_staging_bytes = 0;
 };
 
 struct BackendToken {
@@ -32,6 +45,7 @@ class Backend {
   virtual bool supports(ExecutionOpKind kind) const = 0;
   virtual BackendToken submit(ExecutionOp const& op) = 0;
   virtual bool poll(BackendToken token) = 0;
+  virtual bool try_pop_completed(BackendToken& token) = 0;
   virtual void release(BackendToken token) = 0;
 };
 

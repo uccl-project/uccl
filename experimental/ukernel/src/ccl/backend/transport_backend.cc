@@ -1,45 +1,37 @@
 #include "transport_backend.h"
+#include <chrono>
 #include <stdexcept>
+#include <string>
+#include <utility>
 
 namespace UKernel {
 namespace CCL {
 
 namespace {
 
-template <typename RegisteredBuffer>
-constexpr RegisteredBuffer kRegisteredOrder[] = {
-    RegisteredBuffer::LocalInput,
-    RegisteredBuffer::RemoteInput,
-    RegisteredBuffer::RemoteReduced,
-    RegisteredBuffer::FinalOutput,
-    RegisteredBuffer::RecvStaging,
-};
+void validate_span(char const* what, size_t offset, size_t bytes, size_t capacity) {
+  if (offset > capacity || bytes > capacity - offset) {
+    throw std::invalid_argument(std::string(what) + " out of range");
+  }
+}
 
 }  // namespace
 
 CommunicatorTransportBackend::CommunicatorTransportBackend(
-    UKernel::Transport::Communicator& comm, int peer_rank,
-    CollectiveBuffers buffers)
-    : comm_(comm), peer_rank_(peer_rank), buffers_(buffers) {
-  if (comm_.world_size() != 2) {
-    throw std::invalid_argument(
-        "communicator transport backend currently supports world_size == 2 only");
-  }
-  ensure_registered();
-}
-
-CommunicatorTransportBackend::~CommunicatorTransportBackend() {
-  deregister_registered();
+    UKernel::Transport::Communicator& comm, CollectiveMemory memory)
+    : comm_(comm), memory_(std::move(memory)) {
+  completion_notifier_ = comm_.register_completion_notifier(
+      [this](unsigned request_id, std::chrono::steady_clock::time_point) {
+        on_transport_completion(request_id);
+      });
 }
 
 char const* CommunicatorTransportBackend::name() const {
   return "communicator-transport";
 }
 
-bool CommunicatorTransportBackend::supports(
-    ExecutionOpKind kind) const {
-  return kind == ExecutionOpKind::RdmaSend ||
-         kind == ExecutionOpKind::RdmaRecv;
+bool CommunicatorTransportBackend::supports(ExecutionOpKind kind) const {
+  return kind == ExecutionOpKind::Send || kind == ExecutionOpKind::Recv;
 }
 
 BackendToken CommunicatorTransportBackend::submit(ExecutionOp const& op) {
@@ -47,192 +39,196 @@ BackendToken CommunicatorTransportBackend::submit(ExecutionOp const& op) {
     throw std::invalid_argument(
         "unsupported op kind for communicator transport backend");
   }
-  validate_topology(op);
+  if (op.peer_rank < 0) {
+    throw std::invalid_argument("transport op requires a valid peer rank");
+  }
+  if (op.kind == ExecutionOpKind::Send &&
+      op.src.slot == MemorySlot::SymmetricTensor &&
+      op.src.rank >= 0 &&
+      op.src.rank != memory_.tensor.local_rank) {
+    throw std::invalid_argument("transport send must source from the local tensor view");
+  }
+  if (op.kind == ExecutionOpKind::Recv &&
+      op.dst.slot == MemorySlot::SymmetricTensor &&
+      op.dst.rank >= 0 &&
+      op.dst.rank != memory_.tensor.local_rank) {
+    throw std::invalid_argument("transport recv must target the local tensor view");
+  }
 
   BackendToken token{next_token_++};
-  RegisteredMr mr = resolve_mr(op.kind == ExecutionOpKind::RdmaSend
-                                   ? op.src_role
-                                   : op.dst_role);
   unsigned request_id = 0;
-  if (op.kind == ExecutionOpKind::RdmaSend) {
-    void const* src = resolve_src(op.src_role, op.chunk.offset_bytes);
-    request_id = comm_.isend(peer_rank_, const_cast<void*>(src), 0,
-                             op.chunk.size_bytes, mr.local_mr_id,
-                             mr.remote_mr_id, true);
+  if (op.kind == ExecutionOpKind::Send) {
+    void const* src = resolve_const(op.src, op.chunk.size_bytes);
+    request_id = comm_.isend(op.peer_rank, const_cast<void*>(src), 0,
+                             op.chunk.size_bytes,
+                             resolve_local_mr_id(op.src, op.chunk.size_bytes),
+                             resolve_remote_mr_id(op.peer_rank), true);
   } else {
-    void* dst = resolve_dst(op.dst_role, op.chunk.offset_bytes);
-    request_id = comm_.irecv(peer_rank_, dst, 0, op.chunk.size_bytes, true);
+    void* dst = resolve_mutable(op.dst, op.chunk.size_bytes);
+    request_id = comm_.irecv(op.peer_rank, dst, 0, op.chunk.size_bytes, true);
   }
 
   if (request_id == 0) {
     throw std::runtime_error("communicator transport request submission failed");
   }
 
-  pending_[token.value] = PendingRequest{request_id, false};
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    pending_[token.value] = PendingRequest{request_id, false};
+    request_to_token_[request_id] = token.value;
+  }
   return token;
 }
 
 bool CommunicatorTransportBackend::poll(BackendToken token) {
-  auto it = pending_.find(token.value);
-  if (it == pending_.end()) return true;
-  if (it->second.completed) return true;
+  unsigned request_id = 0;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = pending_.find(token.value);
+    if (it == pending_.end()) return true;
+    if (it->second.completed) return true;
+    request_id = it->second.request_id;
+  }
 
-  if (!comm_.poll(it->second.request_id)) return false;
-  it->second.completed = true;
+  if (!comm_.poll(request_id)) return false;
+  on_transport_completion(request_id);
+  return true;
+}
+
+bool CommunicatorTransportBackend::try_pop_completed(BackendToken& token) {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (completed_tokens_.empty()) return false;
+  token.value = completed_tokens_.front();
+  completed_tokens_.pop_front();
   return true;
 }
 
 void CommunicatorTransportBackend::release(BackendToken token) {
-  auto it = pending_.find(token.value);
-  if (it != pending_.end() && it->second.completed) {
-    comm_.release(it->second.request_id);
-  }
-  pending_.erase(token.value);
-}
-
-void CommunicatorTransportBackend::validate_topology(
-    ExecutionOp const& op) const {
-  int expected_remote_rank =
-      op.kind == ExecutionOpKind::RdmaSend ? op.dst_rank : op.src_rank;
-  if (expected_remote_rank != peer_rank_) {
-    throw std::invalid_argument(
-        "communicator transport backend only supports a single fixed remote peer");
-  }
-}
-
-void CommunicatorTransportBackend::ensure_registered() {
-  if (registered_) return;
-  if (buffers_.registration_bytes == 0) {
-    throw std::invalid_argument(
-        "communicator transport backend requires registration_bytes > 0");
-  }
-
-  register_buffer(RegisteredBuffer::LocalInput,
-                  const_cast<void*>(buffers_.local_input));
-  register_buffer(RegisteredBuffer::RemoteInput,
-                  const_cast<void*>(buffers_.remote_input));
-  register_buffer(RegisteredBuffer::RemoteReduced,
-                  const_cast<void*>(buffers_.remote_reduced));
-  register_buffer(RegisteredBuffer::FinalOutput, buffers_.final_output);
-  register_buffer(RegisteredBuffer::RecvStaging, buffers_.recv_staging);
-  exchange_mrs();
-  registered_ = true;
-}
-
-void CommunicatorTransportBackend::exchange_mrs() {
-  if (comm_.peer_transport_kind(peer_rank_) !=
-      UKernel::Transport::PeerTransportKind::Uccl) {
-    // IPC resolves peer buffers through per-request cudaIpcMemHandle exchange,
-    // so there is no persistent remote MR table to populate here.
-    return;
-  }
-
-  for (auto id : kRegisteredOrder<RegisteredBuffer>) {
-    auto it = registered_mrs_.find(static_cast<uint64_t>(id));
-    if (it == registered_mrs_.end()) continue;
-
-    UKernel::Transport::MR local =
-        comm_.get_local_mr(it->second.local_mr_id);
-    if (!comm_.notify_mr(peer_rank_, local)) {
-      throw std::runtime_error("communicator transport notify_mr failed");
+  unsigned request_id = 0;
+  bool should_release = false;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = pending_.find(token.value);
+    if (it == pending_.end()) return;
+    request_id = it->second.request_id;
+    it->second.released = true;
+    if (it->second.completed) {
+      should_release = true;
+      pending_.erase(it);
+      request_to_token_.erase(request_id);
     }
   }
+  if (should_release) {
+    comm_.release(request_id);
+  }
+}
 
-  for (auto id : kRegisteredOrder<RegisteredBuffer>) {
-    auto it = registered_mrs_.find(static_cast<uint64_t>(id));
-    if (it == registered_mrs_.end()) continue;
+void* CommunicatorTransportBackend::resolve_mutable(MemoryRef const& ref,
+                                                    size_t bytes) const {
+  switch (ref.slot) {
+    case MemorySlot::RecvStaging:
+      if (memory_.recv_staging == nullptr) {
+        throw std::invalid_argument("transport recv staging is missing");
+      }
+      validate_span("transport recv staging", ref.offset_bytes, bytes,
+                    memory_.recv_staging_bytes);
+      return byte_offset(memory_.recv_staging, ref.offset_bytes);
+    case MemorySlot::SymmetricTensor:
+      if (ref.rank == -1 || ref.rank == memory_.tensor.local_rank) {
+        if (memory_.tensor.local_ptr == nullptr) {
+          throw std::invalid_argument("transport local tensor is missing");
+        }
+        validate_span("transport local tensor", ref.offset_bytes, bytes,
+                      memory_.tensor.bytes);
+        return byte_offset(memory_.tensor.local_ptr, ref.offset_bytes);
+      }
+      break;
+  }
+  throw std::invalid_argument("transport backend cannot write remote tensor");
+}
 
-    UKernel::Transport::MR remote{};
-    if (!comm_.wait_mr_notify(peer_rank_, remote)) {
-      throw std::runtime_error("communicator transport wait_mr_notify failed");
+void const* CommunicatorTransportBackend::resolve_const(MemoryRef const& ref,
+                                                        size_t bytes) const {
+  switch (ref.slot) {
+    case MemorySlot::RecvStaging:
+      if (memory_.recv_staging == nullptr) {
+        throw std::invalid_argument("transport recv staging is missing");
+      }
+      validate_span("transport recv staging", ref.offset_bytes, bytes,
+                    memory_.recv_staging_bytes);
+      return byte_offset(memory_.recv_staging, ref.offset_bytes);
+    case MemorySlot::SymmetricTensor:
+      if (ref.rank == -1 || ref.rank == memory_.tensor.local_rank) {
+        if (memory_.tensor.local_ptr == nullptr) {
+          throw std::invalid_argument("transport local tensor is missing");
+        }
+        validate_span("transport local tensor", ref.offset_bytes, bytes,
+                      memory_.tensor.bytes);
+        return byte_offset(memory_.tensor.local_ptr, ref.offset_bytes);
+      }
+      if (ref.rank >= 0 &&
+          static_cast<size_t>(ref.rank) < memory_.tensor.peers.size()) {
+        auto const& peer = memory_.tensor.peers[static_cast<size_t>(ref.rank)];
+        if (peer.ptr == nullptr) {
+          throw std::invalid_argument("transport peer tensor pointer unavailable");
+        }
+        validate_span("transport peer tensor", ref.offset_bytes, bytes,
+                      memory_.tensor.bytes);
+        return byte_offset(peer.ptr, ref.offset_bytes);
+      }
+      break;
+  }
+  throw std::invalid_argument("transport invalid source reference");
+}
+
+uint32_t CommunicatorTransportBackend::resolve_local_mr_id(
+    MemoryRef const& ref, size_t bytes) const {
+  if (ref.slot == MemorySlot::SymmetricTensor &&
+      (ref.rank == -1 || ref.rank == memory_.tensor.local_rank)) {
+    if (memory_.tensor.local_mr_id == 0) {
+      throw std::invalid_argument("transport local tensor MR id is missing");
     }
-    it->second.remote_mr_id = remote.id;
+    return memory_.tensor.local_mr_id;
   }
+
+  void* ptr = resolve_mutable(ref, bytes);
+  return comm_.get_local_mr(ptr).id;
 }
 
-void CommunicatorTransportBackend::register_buffer(RegisteredBuffer id, void* ptr) {
-  if (ptr == nullptr) return;
-  UKernel::Transport::MR mr = comm_.reg_mr(ptr, buffers_.registration_bytes);
-  registered_mrs_[static_cast<uint64_t>(id)] =
-      RegisteredMr{mr.id, 0};
+uint32_t CommunicatorTransportBackend::resolve_remote_mr_id(int peer_rank) const {
+  if (peer_rank < 0 ||
+      static_cast<size_t>(peer_rank) >= memory_.tensor.peers.size()) {
+    throw std::invalid_argument("transport peer rank out of range");
+  }
+  uint32_t mr_id = memory_.tensor.peers[static_cast<size_t>(peer_rank)].mr_id;
+  if (mr_id == 0) {
+    throw std::invalid_argument("transport remote MR id is missing");
+  }
+  return mr_id;
 }
 
-void CommunicatorTransportBackend::deregister_registered() {
-  if (!registered_) return;
-  if (buffers_.local_input != nullptr)
-    comm_.dereg_mr(const_cast<void*>(buffers_.local_input));
-  if (buffers_.remote_input != nullptr)
-    comm_.dereg_mr(const_cast<void*>(buffers_.remote_input));
-  if (buffers_.remote_reduced != nullptr)
-    comm_.dereg_mr(const_cast<void*>(buffers_.remote_reduced));
-  if (buffers_.final_output != nullptr) comm_.dereg_mr(buffers_.final_output);
-  if (buffers_.recv_staging != nullptr) comm_.dereg_mr(buffers_.recv_staging);
-  registered_ = false;
-}
+void CommunicatorTransportBackend::on_transport_completion(unsigned request_id) {
+  bool should_release = false;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = request_to_token_.find(request_id);
+    if (it == request_to_token_.end()) return;
 
-void* CommunicatorTransportBackend::resolve_dst(BufferRole role,
-                                                size_t offset) const {
-  switch (role) {
-    case BufferRole::FinalOutput:
-      return byte_offset(buffers_.final_output, offset);
-    case BufferRole::RecvStaging:
-      return byte_offset(buffers_.recv_staging, offset);
-    case BufferRole::None:
-    case BufferRole::LocalInput:
-    case BufferRole::RemoteInput:
-    case BufferRole::RemoteReduced:
-      break;
-  }
-  throw std::invalid_argument("invalid communicator transport dst role");
-}
+    auto pending_it = pending_.find(it->second);
+    if (pending_it == pending_.end() || pending_it->second.completed) return;
 
-void const* CommunicatorTransportBackend::resolve_src(
-    BufferRole role, size_t offset) const {
-  switch (role) {
-    case BufferRole::LocalInput:
-      return byte_offset(buffers_.local_input, offset);
-    case BufferRole::RemoteInput:
-      return byte_offset(buffers_.remote_input, offset);
-    case BufferRole::RemoteReduced:
-      return byte_offset(buffers_.remote_reduced, offset);
-    case BufferRole::FinalOutput:
-      return byte_offset(buffers_.final_output, offset);
-    case BufferRole::RecvStaging:
-      return byte_offset(buffers_.recv_staging, offset);
-    case BufferRole::None:
-      break;
+    pending_it->second.completed = true;
+    if (pending_it->second.released) {
+      should_release = true;
+      pending_.erase(pending_it);
+      request_to_token_.erase(it);
+    } else {
+      completed_tokens_.push_back(it->second);
+    }
   }
-  throw std::invalid_argument("invalid communicator transport src role");
-}
-
-CommunicatorTransportBackend::RegisteredMr
-CommunicatorTransportBackend::resolve_mr(BufferRole role) const {
-  RegisteredBuffer id;
-  switch (role) {
-    case BufferRole::LocalInput:
-      id = RegisteredBuffer::LocalInput;
-      break;
-    case BufferRole::RemoteInput:
-      id = RegisteredBuffer::RemoteInput;
-      break;
-    case BufferRole::RemoteReduced:
-      id = RegisteredBuffer::RemoteReduced;
-      break;
-    case BufferRole::FinalOutput:
-      id = RegisteredBuffer::FinalOutput;
-      break;
-    case BufferRole::RecvStaging:
-      id = RegisteredBuffer::RecvStaging;
-      break;
-    case BufferRole::None:
-      throw std::invalid_argument("invalid communicator transport mr role");
+  if (should_release) {
+    comm_.release(request_id);
   }
-  auto it = registered_mrs_.find(static_cast<uint64_t>(id));
-  if (it == registered_mrs_.end()) {
-    throw std::invalid_argument(
-        "communicator transport mr not registered for role");
-  }
-  return it->second;
 }
 
 void* CommunicatorTransportBackend::byte_offset(void* base, size_t offset) {

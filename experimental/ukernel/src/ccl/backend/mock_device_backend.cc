@@ -6,12 +6,12 @@ namespace CCL {
 
 MockDeviceBackend::MockDeviceBackend(
     void* workerPool,
-    CollectiveBuffers buffers, 
+    CollectiveMemory memory,
     int dtype,
     int reduce_type,
     uint32_t num_blocks)
     : workerPool_(workerPool),
-      buffers_(buffers),
+      memory_(std::move(memory)),
       dtype_(dtype),
       reduce_type_(reduce_type),
       num_blocks_(num_blocks == 0 ? 1 : num_blocks) {}
@@ -22,11 +22,11 @@ char const* MockDeviceBackend::name() const {
 
 bool MockDeviceBackend::supports(ExecutionOpKind kind) const {
   switch (kind) {
-    case ExecutionOpKind::PkCopy:
-    case ExecutionOpKind::PkReduce:
+    case ExecutionOpKind::Copy:
+    case ExecutionOpKind::Reduce:
       return true;
-    case ExecutionOpKind::RdmaSend:
-    case ExecutionOpKind::RdmaRecv:
+    case ExecutionOpKind::Send:
+    case ExecutionOpKind::Recv:
     case ExecutionOpKind::EventWait:
     case ExecutionOpKind::Barrier:
       return false;
@@ -42,11 +42,19 @@ BackendToken MockDeviceBackend::submit(ExecutionOp const& op) {
   // Simulate task submission by just marking it as completed immediately
   BackendToken token{next_token_++};
   submitted_[token.value] = {0, 0}; // Mock values
+  completed_tokens_.push_back(token.value);
   return token;
 }
 
 bool MockDeviceBackend::poll(BackendToken token) {
   // Simulate that all tasks are completed immediately
+  return true;
+}
+
+bool MockDeviceBackend::try_pop_completed(BackendToken& token) {
+  if (completed_tokens_.empty()) return false;
+  token.value = completed_tokens_.front();
+  completed_tokens_.pop_front();
   return true;
 }
 
@@ -63,38 +71,35 @@ void const* MockDeviceBackend::byte_offset(void const* base,
   return static_cast<void const*>(static_cast<char const*>(base) + offset);
 }
 
-void* MockDeviceBackend::resolve_dst(BufferRole role, size_t offset) const {
-  switch (role) {
-    case BufferRole::FinalOutput:
-      return byte_offset(buffers_.final_output, offset);
-    case BufferRole::RecvStaging:
-      return byte_offset(buffers_.recv_staging, offset);
-    case BufferRole::None:
-    case BufferRole::LocalInput:
-    case BufferRole::RemoteInput:
-    case BufferRole::RemoteReduced:
-      throw std::invalid_argument("invalid dst buffer role for mock-device backend");
+void* MockDeviceBackend::resolve_mutable(MemoryRef const& ref) const {
+  switch (ref.slot) {
+    case MemorySlot::RecvStaging:
+      return byte_offset(memory_.recv_staging, ref.offset_bytes);
+    case MemorySlot::SymmetricTensor:
+      if (ref.rank == -1 || ref.rank == memory_.tensor.local_rank) {
+        return byte_offset(memory_.tensor.local_ptr, ref.offset_bytes);
+      }
+      break;
   }
-  throw std::invalid_argument("unknown dst buffer role");
+  throw std::invalid_argument("invalid dst ref for mock-device backend");
 }
 
-void const* MockDeviceBackend::resolve_src(BufferRole role,
-                                         size_t offset) const {
-  switch (role) {
-    case BufferRole::LocalInput:
-      return byte_offset(buffers_.local_input, offset);
-    case BufferRole::RemoteInput:
-      return byte_offset(buffers_.remote_input, offset);
-    case BufferRole::RemoteReduced:
-      return byte_offset(buffers_.remote_reduced, offset);
-    case BufferRole::RecvStaging:
-      return byte_offset(buffers_.recv_staging, offset);
-    case BufferRole::FinalOutput:
-      return byte_offset(buffers_.final_output, offset);
-    case BufferRole::None:
-      throw std::invalid_argument("invalid src buffer role for mock-device backend");
+void const* MockDeviceBackend::resolve_const(MemoryRef const& ref) const {
+  switch (ref.slot) {
+    case MemorySlot::RecvStaging:
+      return byte_offset(memory_.recv_staging, ref.offset_bytes);
+    case MemorySlot::SymmetricTensor:
+      if (ref.rank == -1 || ref.rank == memory_.tensor.local_rank) {
+        return byte_offset(memory_.tensor.local_ptr, ref.offset_bytes);
+      }
+      if (ref.rank >= 0 &&
+          static_cast<size_t>(ref.rank) < memory_.tensor.peers.size()) {
+        return byte_offset(memory_.tensor.peers[static_cast<size_t>(ref.rank)].ptr,
+                           ref.offset_bytes);
+      }
+      break;
   }
-  throw std::invalid_argument("unknown src buffer role");
+  throw std::invalid_argument("invalid src ref for mock-device backend");
 }
 
 }  // namespace CCL
