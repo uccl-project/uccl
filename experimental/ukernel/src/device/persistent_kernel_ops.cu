@@ -191,13 +191,13 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
         d_sync->currentTask = next_task;
       }
       __threadfence();
-      atomicStore<uint32_t, scopeDevice>(&d_sync->publishedPhase,
-                                         local_phase + 1,
-                                         memoryOrderRelease);
+      mscclpp::atomicStore<uint32_t, mscclpp::scopeDevice>(
+          &d_sync->publishedPhase, local_phase + 1,
+          mscclpp::memoryOrderRelease);
     }
 
-    while (atomicLoad<uint32_t, scopeDevice>(&d_sync->publishedPhase,
-                                             memoryOrderAcquire) !=
+    while (mscclpp::atomicLoad<uint32_t, mscclpp::scopeDevice>(
+               &d_sync->publishedPhase, mscclpp::memoryOrderAcquire) !=
            local_phase + 1) {
     }
     __syncthreads();
@@ -215,23 +215,23 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
     __syncthreads();
 
     if (threadIdx.x == 0) {
-      atomicFetchAdd<uint32_t, scopeDevice>(&d_sync->completedBlocks, 1,
-                                            memoryOrderAcqRel);
+      mscclpp::atomicFetchAdd<uint32_t, mscclpp::scopeDevice>(
+          &d_sync->completedBlocks, 1, mscclpp::memoryOrderAcqRel);
       if (bid == 0) {
-        while (atomicLoad<uint32_t, scopeDevice>(&d_sync->completedBlocks,
-                                                 memoryOrderAcquire) <
+        while (mscclpp::atomicLoad<uint32_t, mscclpp::scopeDevice>(
+                   &d_sync->completedBlocks, mscclpp::memoryOrderAcquire) <
                gridDim.x) {
         }
         fifo.pop();
         __threadfence();
-        atomicStore<uint32_t, scopeDevice>(&d_sync->publishedPhase,
-                                           local_phase + 2,
-                                           memoryOrderRelease);
+        mscclpp::atomicStore<uint32_t, mscclpp::scopeDevice>(
+            &d_sync->publishedPhase, local_phase + 2,
+            mscclpp::memoryOrderRelease);
       }
     }
 
-    while (atomicLoad<uint32_t, scopeDevice>(&d_sync->publishedPhase,
-                                             memoryOrderAcquire) !=
+    while (mscclpp::atomicLoad<uint32_t, mscclpp::scopeDevice>(
+               &d_sync->publishedPhase, mscclpp::memoryOrderAcquire) !=
            local_phase + 2) {
     }
     local_phase += 2;

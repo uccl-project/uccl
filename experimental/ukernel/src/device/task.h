@@ -21,6 +21,13 @@ enum class TaskType : uint64_t {
 enum class DataType : uint64_t { Int8, Int32, Int64, Fp8, Fp16, Fp32, Fp64, Bf16 };
 enum class ReduceType : uint64_t { Sum, Prod, Max, Min, BitwiseAnd, None };
 
+inline bool is_supported_reduce_dtype(DataType dt) {
+  return dt == DataType::Int8 || dt == DataType::Int32 ||
+         dt == DataType::Int64 || dt == DataType::Fp16 ||
+         dt == DataType::Fp32 || dt == DataType::Fp64 ||
+         dt == DataType::Bf16;
+}
+
 constexpr unsigned int TaskTypeSize = 8;  // 256
 constexpr unsigned int DataTypeSize = 8;
 constexpr unsigned int BlockIdSize = 8;
@@ -146,6 +153,8 @@ class TaskManager {
   Task create_task(TaskArgs const& h, TaskType tt, DataType dt,
                         uint32_t blockId) {
     assert(tt == TaskType::CollCopy || tt == TaskType::CollReduce);
+    assert(tt != TaskType::CollReduce || is_supported_reduce_dtype(dt));
+    assert(tt != TaskType::CollReduce || h.redType != ReduceType::None);
 
     uint32_t idx;
     {

@@ -77,6 +77,16 @@ bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
   if (fifoId >= fifos_.size() || numBlocks == 0) {
     return false;
   }
+  if (numBlocks > 1) {
+    int device = 0;
+    int sm_count = 0;
+    GPU_RT_CHECK(gpuGetDevice(&device));
+    GPU_RT_CHECK(
+        gpuDeviceGetAttribute(&sm_count, gpuDevAttrMultiProcessorCount, device));
+    if (numBlocks > static_cast<uint32_t>(sm_count)) {
+      return false;
+    }
+  }
 
   auto& ctx = *fifos_[fifoId];
   int expected = 0;
