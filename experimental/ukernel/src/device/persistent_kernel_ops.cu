@@ -137,9 +137,10 @@ __global__ void singlePersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos
 
     process_task(current_task, d_task_args, 0, 1, smem_buf);
     __syncthreads();
+    __threadfence_system();
+    __syncthreads();
 
     if (threadIdx.x == 0) {
-      __threadfence_system();
       fifo.pop();
     }
     __syncthreads();
@@ -214,6 +215,8 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
 
     process_task(current_task, d_task_args, bid, gridDim.x, smem_buf);
     __syncthreads();
+    __threadfence_system();
+    __syncthreads();
 
     if (threadIdx.x == 0) {
       mscclpp::atomicFetchAdd<uint32_t, mscclpp::scopeDevice>(
@@ -223,7 +226,6 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
                    &d_sync->completedBlocks, mscclpp::memoryOrderAcquire) <
                gridDim.x) {
         }
-        __threadfence_system();
         fifo.pop();
         mscclpp::atomicStore<uint32_t, mscclpp::scopeDevice>(
             &d_sync->publishedPhase, local_phase + 2,
