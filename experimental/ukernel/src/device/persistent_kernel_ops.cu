@@ -34,6 +34,31 @@ __device__ void run_copy(TaskArgs const& a, uint32_t block_id,
 }
 
 template <typename T>
+__device__ void run_typed_copy(TaskArgs const& a, uint32_t block_id,
+                               uint32_t num_blocks, void* smem_buf) {
+  if ((a.bytes % sizeof(T)) != 0) {
+    run_copy(a, block_id, num_blocks, smem_buf);
+    return;
+  }
+
+  T* dst = reinterpret_cast<T*>(a.dst);
+  T const* src = reinterpret_cast<T const*>(a.src);
+  const uint64_t total_count = static_cast<uint64_t>(a.bytes) / sizeof(T);
+
+  const uint64_t max_threads_per_block = 1024;
+  if (blockDim.x > max_threads_per_block) return;
+
+  const uint64_t count_per_block = total_count / num_blocks;
+  const uint64_t block_offset = block_id * count_per_block;
+  const uint64_t my_count =
+      (block_id + 1 == num_blocks) ? (total_count - block_offset)
+                                   : count_per_block;
+
+  copy<T>(dst + block_offset, src + block_offset, static_cast<size_t>(my_count),
+          smem_buf);
+}
+
+template <typename T>
 __device__ void run_reduce(TaskArgs const& a, uint32_t block_id,
                            uint32_t num_blocks, void* smem_buf) {
   T* dst = reinterpret_cast<T*>(a.dst);
@@ -70,7 +95,23 @@ __device__ __forceinline__ void process_task(Task const& task,
 
   switch (ttype) {
     case TaskType::CollCopy:
-      run_copy(args, block_id, num_blocks, smem_buf);
+      if (dtype == DataType::Int8) {
+        run_typed_copy<int8_t>(args, block_id, num_blocks, smem_buf);
+      } else if (dtype == DataType::Int32) {
+        run_typed_copy<int32_t>(args, block_id, num_blocks, smem_buf);
+      } else if (dtype == DataType::Int64) {
+        run_typed_copy<int64_t>(args, block_id, num_blocks, smem_buf);
+      } else if (dtype == DataType::Fp16) {
+        run_typed_copy<__half>(args, block_id, num_blocks, smem_buf);
+      } else if (dtype == DataType::Fp32) {
+        run_typed_copy<float>(args, block_id, num_blocks, smem_buf);
+      } else if (dtype == DataType::Fp64) {
+        run_typed_copy<double>(args, block_id, num_blocks, smem_buf);
+      } else if (dtype == DataType::Bf16) {
+        run_typed_copy<nv_bfloat16>(args, block_id, num_blocks, smem_buf);
+      } else {
+        run_copy(args, block_id, num_blocks, smem_buf);
+      }
       break;
     case TaskType::CollReduce:
       if (dtype == DataType::Fp32) {
@@ -136,8 +177,6 @@ __global__ void singlePersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos
     }
 
     process_task(current_task, d_task_args, 0, 1, smem_buf);
-    __syncthreads();
-    __threadfence_system();
     __syncthreads();
 
     if (threadIdx.x == 0) {
@@ -214,8 +253,6 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
     __syncthreads();
 
     process_task(current_task, d_task_args, bid, gridDim.x, smem_buf);
-    __syncthreads();
-    __threadfence_system();
     __syncthreads();
 
     if (threadIdx.x == 0) {

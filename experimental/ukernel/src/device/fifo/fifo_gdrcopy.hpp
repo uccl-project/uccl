@@ -253,6 +253,10 @@ class GdrU64Pool {
     out_dptr = pg.dptr + static_cast<CUdeviceptr>(byte_off);
     out_hptr = reinterpret_cast<uint64_t*>(static_cast<uint8_t*>(pg.host_ptr) +
                                            byte_off);
+
+    // Slots are recycled across FIFO instances, so reset the counter every time
+    // we hand one out.
+    *out_hptr = 0;
   }
 
   void free(U64Slot const& s) noexcept {
