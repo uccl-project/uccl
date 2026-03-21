@@ -23,24 +23,23 @@ TEST_CPP := test/test_main.cc test/test_transport_core.cc test/test_transport_co
 OBJ_CPP := $(SRC_CPP:.cc=.o)
 OBJ_TEST := $(TEST_CPP:.cc=.o)
 TEST_BIN := test_transport_main
+UCCL_RDMA_DEPS := $(wildcard $(UCCL_RDMA_ROOT)/*.cc $(UCCL_RDMA_ROOT)/*.h)
 
-.PHONY: all test suite clean ensure-uccl-rdma
+.PHONY: all test suite clean
 
 all: $(TEST_BIN)
 test: $(TEST_BIN)
 suite: $(TEST_BIN)
 	./test/run_transport_suite.sh ./$(TEST_BIN)
 
-ensure-uccl-rdma:
-	@if [ ! -f "$(UCCL_RDMA_STATIC)" ]; then \
-		echo "[ukernel/transport] building collective/rdma..."; \
-		$(MAKE) -C "$(UCCL_RDMA_ROOT)" build; \
-	fi
+$(UCCL_RDMA_STATIC): $(UCCL_RDMA_DEPS)
+	@echo "[ukernel/transport] rebuilding collective/rdma static library..."
+	$(MAKE) -C "$(UCCL_RDMA_ROOT)" librdma.a
 
 %.o: %.cc
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
-$(TEST_BIN): $(OBJ_CPP) $(OBJ_TEST) | ensure-uccl-rdma
+$(TEST_BIN): $(OBJ_CPP) $(OBJ_TEST) $(UCCL_RDMA_STATIC)
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $^ $(LDFLAGS) -o $@
 
 clean:
