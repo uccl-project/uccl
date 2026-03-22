@@ -37,7 +37,8 @@ size_t shard_size(size_t bytes, int nranks, int owner_rank) {
 }
 
 ExecutionOp make_send_op(uint32_t op_id, int peer_rank, ChunkRange const& chunk,
-                         MemoryRef src, std::vector<uint32_t> deps = {}) {
+                         MemoryRef src,
+                         std::vector<uint32_t> deps = {}) {
   ExecutionOp op;
   op.op_id = op_id;
   op.kind = ExecutionOpKind::Send;
@@ -49,7 +50,8 @@ ExecutionOp make_send_op(uint32_t op_id, int peer_rank, ChunkRange const& chunk,
 }
 
 ExecutionOp make_recv_op(uint32_t op_id, int peer_rank, ChunkRange const& chunk,
-                         MemoryRef dst, std::vector<uint32_t> deps = {}) {
+                         MemoryRef dst,
+                         std::vector<uint32_t> deps = {}) {
   ExecutionOp op;
   op.op_id = op_id;
   op.kind = ExecutionOpKind::Recv;

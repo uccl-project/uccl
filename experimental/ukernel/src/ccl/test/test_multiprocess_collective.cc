@@ -468,8 +468,11 @@ int run_rank(Options const& opts) {
   cfg->local_id = opts.rank;
   cfg->preferred_transport = parse_transport(opts.transport);
 
+  std::fprintf(stderr, "[rank %d] communicator init\n", opts.rank);
   Transport::Communicator comm(opts.gpu, opts.rank, opts.world_size, cfg);
+  std::fprintf(stderr, "[rank %d] establish full mesh\n", opts.rank);
   establish_full_mesh(comm, opts.rank, opts.world_size);
+  std::fprintf(stderr, "[rank %d] full mesh ready\n", opts.rank);
 
   DeviceBuffer tensor(opts.bytes_per_rank);
   DeviceBuffer recv_staging(opts.bytes_per_rank);
@@ -484,9 +487,11 @@ int run_rank(Options const& opts) {
   }
   upload_tensor(tensor.ptr, input);
 
+  std::fprintf(stderr, "[rank %d] exchange MRs\n", opts.rank);
   CollectiveMemory memory = build_collective_memory(
       comm, opts.rank, opts.world_size, tensor.ptr, opts.bytes_per_rank,
       recv_staging.ptr, opts.bytes_per_rank);
+  std::fprintf(stderr, "[rank %d] MR exchange ready\n", opts.rank);
 
   CommunicatorTransportBackend transport_backend(comm, memory);
   EmulatedDeviceBackend device_backend(memory);
@@ -499,6 +504,8 @@ int run_rank(Options const& opts) {
   CollectiveConfig config = Testing::make_ring_config(
       opts.world_size, opts.rank, opts.bytes_per_rank, opts.chunk_bytes,
       opts.channels);
+  std::fprintf(stderr, "[rank %d] submit %s\n", opts.rank,
+               collective_name(opts.collective));
   CollectiveOpHandle handle =
       (opts.collective == CollectiveKind::AllReduce)
           ? executor.submit_allreduce(config)

@@ -137,14 +137,15 @@ bool IpcChannel::send_one(int to_rank, Request* creq) {
         std::min(kIpcControlPollTimeoutMs, remaining_timeout_ms(deadline));
     if (timeout_ms <= 0) break;
     if (comm_->shm_control_->recv_ipc_cache(to_rank, got, &seq, timeout_ms,
-                                            creq->id)) {
+                                            creq->match_seq)) {
       got_cache = true;
       break;
     }
   }
   if (!got_cache) {
     std::cerr << "[ERROR] recv_ipc_cache(" << to_rank
-              << ") failed for req " << creq->id << std::endl;
+              << ") failed for req " << creq->id << " match_seq "
+              << creq->match_seq << std::endl;
     return false;
   }
 
@@ -199,7 +200,7 @@ bool IpcChannel::send_one(int to_rank, Request* creq) {
 
   if (!comm_->shm_control_->send_ack(to_rank, seq, 1)) {
     std::cerr << "[ERROR] send_ack(" << to_rank << ") failed for req "
-              << creq->id << std::endl;
+              << creq->id << " match_seq " << creq->match_seq << std::endl;
     return false;
   }
   return true;
@@ -228,9 +229,11 @@ bool IpcChannel::recv_one(int from_rank, Request* creq) {
   transfer_info.offset = reinterpret_cast<uintptr_t>(actual_dst) -
                          reinterpret_cast<uintptr_t>(base);
 
-  if (!comm_->shm_control_->send_ipc_cache(from_rank, creq->id, transfer_info)) {
+  if (!comm_->shm_control_->send_ipc_cache(from_rank, creq->match_seq,
+                                           transfer_info)) {
     std::cerr << "[ERROR] send_ipc_cache(" << from_rank
-              << ") failed for req " << creq->id << std::endl;
+              << ") failed for req " << creq->id << " match_seq "
+              << creq->match_seq << std::endl;
     return false;
   }
 
@@ -244,19 +247,20 @@ bool IpcChannel::recv_one(int from_rank, Request* creq) {
         std::min(kIpcControlPollTimeoutMs, remaining_timeout_ms(deadline));
     if (timeout_ms <= 0) break;
     if (comm_->shm_control_->recv_ack(from_rank, &status, &out_seq, timeout_ms,
-                                      creq->id)) {
+                                      creq->match_seq)) {
       got_ack = true;
       break;
     }
   }
   if (!got_ack) {
     std::cerr << "[ERROR] recv_ack(" << from_rank << ") failed for req "
-              << creq->id << std::endl;
+              << creq->id << " match_seq " << creq->match_seq << std::endl;
     return false;
   }
-  if (out_seq != creq->id || status != 1) {
+  if (out_seq != creq->match_seq || status != 1) {
     std::cerr << "[ERROR] sender completion ack invalid: seq=" << out_seq
-              << " status=" << status << " req=" << creq->id << std::endl;
+              << " status=" << status << " req=" << creq->id
+              << " match_seq=" << creq->match_seq << std::endl;
     return false;
   }
   return true;

@@ -77,6 +77,7 @@ class Communicator {
   bool poll_request_completion(unsigned id, bool blocking);
   void register_existing_local_mrs_with_uccl();
   void exchange_peer_metas();
+  uint64_t next_ipc_match_seq(int rank, RequestType type);
   void cache_peer_session(int rank, PeerTransportKind kind, bool mark_send_ready,
                           bool mark_recv_ready);
   void shutdown_ipc_channel();
@@ -97,6 +98,9 @@ class Communicator {
   std::unordered_map<unsigned, TrackedRequest> requests_map_;
   mutable std::mutex req_mu_;
   std::atomic<unsigned> next_request_id_{1};
+  std::mutex ipc_match_seq_mu_;
+  std::vector<uint64_t> next_send_match_seq_;
+  std::vector<uint64_t> next_recv_match_seq_;
 
   std::atomic<bool> notifier_running_{false};
   std::atomic<bool> notifier_started_{false};

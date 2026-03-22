@@ -144,6 +144,8 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
     : local_gpu_idx_(gpu_id),
       global_rank_(rank),
       world_size_(world_size),
+      next_send_match_seq_(world_size, 1),
+      next_recv_match_seq_(world_size, 1),
       peer_manager_(std::make_shared<PeerSessionManager>(world_size)),
       config_(config) {
   maybe_configure_uccl_socket_ifname({}, get_local_ip());
@@ -359,7 +361,7 @@ bool Communicator::connect_to(int rank) {
       shm_control_->close_peer(rank);
       return false;
     }
-    cache_peer_session(rank, PeerTransportKind::Ipc, true, true);
+    cache_peer_session(rank, PeerTransportKind::Ipc, true, false);
     return true;
   }
   return false;
@@ -453,7 +455,7 @@ bool Communicator::accept_from(int rank) {
       shm_control_->close_peer(rank);
     }
     if (!ret) return false;
-    cache_peer_session(rank, PeerTransportKind::Ipc, true, true);
+    cache_peer_session(rank, PeerTransportKind::Ipc, false, true);
     return true;
   }
   return false;
@@ -541,8 +543,10 @@ unsigned Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
   auto ipc_channel = get_ipc_channel_by_rank(rank);
   if (!ipc_channel) return 0;
 
-  auto req = std::make_shared<Request>(rid, ptr, offset, len, local_mr_id,
-                                        remote_mr_id, on_gpu, RequestType::SEND);
+  uint64_t match_seq = next_ipc_match_seq(rank, RequestType::SEND);
+  auto req = std::make_shared<Request>(rid, match_seq, ptr, offset, len,
+                                       local_mr_id, remote_mr_id, on_gpu,
+                                       RequestType::SEND);
 
   {
     std::lock_guard<std::mutex> lk(req_mu_);
@@ -589,8 +593,9 @@ unsigned Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
   auto ipc_channel = get_ipc_channel_by_rank(rank);
   if (!ipc_channel) return 0;
 
-  auto req = std::make_shared<Request>(rid, ptr, offset, len, -1, -1, on_gpu,
-                                        RequestType::RECV);
+  uint64_t match_seq = next_ipc_match_seq(rank, RequestType::RECV);
+  auto req = std::make_shared<Request>(rid, match_seq, ptr, offset, len, -1,
+                                       -1, on_gpu, RequestType::RECV);
 
   {
     std::lock_guard<std::mutex> lk(req_mu_);
@@ -606,6 +611,17 @@ unsigned Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
   notifier_cv_.notify_all();
 
   return rid;
+}
+
+uint64_t Communicator::next_ipc_match_seq(int rank, RequestType type) {
+  if (rank < 0 || rank >= world_size_) {
+    throw std::out_of_range("invalid rank for IPC match sequence");
+  }
+
+  std::lock_guard<std::mutex> lk(ipc_match_seq_mu_);
+  auto& next_seq = type == RequestType::SEND ? next_send_match_seq_[rank]
+                                             : next_recv_match_seq_[rank];
+  return next_seq++;
 }
 
 bool Communicator::poll_request_completion(unsigned id, bool blocking) {

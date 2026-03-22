@@ -14,7 +14,9 @@ struct MockCommunicator {
   int world_size() const { return 2; }
   bool poll(unsigned) { return true; }
   void release(unsigned) {}
-  unsigned isend(int, void*, int, size_t, uint32_t, uint32_t, bool) { return 1; }
+  unsigned isend(int, void*, int, size_t, uint32_t, uint32_t, bool) {
+    return 1;
+  }
   unsigned irecv(int, void*, int, size_t, bool) { return 1; }
   int peer_transport_kind(int) const { return 0; }
   void* get_local_mr(uint32_t) { return nullptr; }

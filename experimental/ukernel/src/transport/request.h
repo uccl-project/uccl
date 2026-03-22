@@ -12,6 +12,7 @@ enum class RequestType { NONE, SEND, RECV };
 
 struct Request {
   unsigned id;
+  uint64_t match_seq;
   void* buf;
   size_t offset;  // default 0
   size_t len;
@@ -27,10 +28,11 @@ struct Request {
 
   void on_comm_done();
 
-  Request(unsigned id, void* buf, size_t offset, size_t len,
+  Request(unsigned id, uint64_t match_seq, void* buf, size_t offset, size_t len,
           uint32_t local_mr_id, uint32_t remote_mr_id, bool gpu,
           RequestType reqtype = RequestType::SEND)
       : id(id),
+        match_seq(match_seq),
         buf(buf),
         offset(offset),
         len(len),

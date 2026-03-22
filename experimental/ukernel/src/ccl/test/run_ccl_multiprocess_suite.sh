@@ -12,6 +12,7 @@ TORCHRUN_MASTER_PORT=29500
 EXCHANGER_PORT_BASE=29600
 GPU_IDS=0,1,2,3
 
+# Use auto by default so same-node runs exercise the IPC path directly.
 TRANSPORT=auto
 BYTES_PER_RANK=$((1 * 1024 * 1024))
 CHUNK_BYTES=$((64 * 1024))
