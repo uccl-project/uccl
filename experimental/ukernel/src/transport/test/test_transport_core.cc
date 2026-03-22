@@ -99,24 +99,43 @@ void test_memory_registry() {
 
 void test_request_completion() {
   using Request = UKernel::Transport::Request;
+  using RequestState = UKernel::Transport::RequestState;
   using RequestType = UKernel::Transport::RequestType;
 
-  Request req_single(/*id=*/11, /*buf=*/reinterpret_cast<void*>(0x1000), 32, 64,
-                     1, 2, true, RequestType::SEND);
-  req_single.pending_signaled.store(1, std::memory_order_release);
-  req_single.on_comm_done();
-  require(req_single.finished.load(std::memory_order_acquire),
+  Request req_single(/*id=*/11, /*match_seq=*/101,
+                     /*buffer=*/reinterpret_cast<void*>(0x1000),
+                     /*offset_bytes=*/32, /*size_bytes=*/64, 1, 2,
+                     RequestType::Send);
+  req_single.mark_queued(1);
+  req_single.mark_running();
+  req_single.complete_one();
+  require(req_single.load_state(std::memory_order_acquire) ==
+              RequestState::Completed,
           "single-signal request should complete immediately");
 
-  Request req_multi(/*id=*/12, /*buf=*/reinterpret_cast<void*>(0x2000), 0, 128,
-                    3, 4, true, RequestType::RECV);
-  req_multi.pending_signaled.store(2, std::memory_order_release);
-  req_multi.on_comm_done();
-  require(!req_multi.finished.load(std::memory_order_acquire),
+  Request req_multi(/*id=*/12, /*match_seq=*/202,
+                    /*buffer=*/reinterpret_cast<void*>(0x2000),
+                    /*offset_bytes=*/0, /*size_bytes=*/128, 3, 4,
+                    RequestType::Recv);
+  req_multi.mark_queued(2);
+  req_multi.mark_running();
+  req_multi.complete_one();
+  require(!req_multi.is_finished(std::memory_order_acquire),
           "request should not complete before final signal");
-  req_multi.on_comm_done();
-  require(req_multi.finished.load(std::memory_order_acquire),
+  req_multi.complete_one();
+  require(req_multi.load_state(std::memory_order_acquire) ==
+              RequestState::Completed,
           "request should complete on final signal");
+
+  Request req_failed(/*id=*/13, /*match_seq=*/303,
+                     /*buffer=*/reinterpret_cast<void*>(0x3000),
+                     /*offset_bytes=*/0, /*size_bytes=*/64, 0, 0,
+                     RequestType::Recv);
+  req_failed.mark_queued(1);
+  req_failed.mark_running();
+  req_failed.mark_failed();
+  require(req_failed.has_failed(std::memory_order_acquire),
+          "failed request should report terminal failure");
 }
 
 void test_peer_transport_kind() {

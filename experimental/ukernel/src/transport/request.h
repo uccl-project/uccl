@@ -3,43 +3,58 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 
 namespace UKernel {
 namespace Transport {
 
-enum class RequestType { NONE, SEND, RECV };
+enum class RequestType : uint8_t { Send, Recv };
+enum class RequestState : uint8_t { Created, Queued, Running, Completed, Failed };
 
 struct Request {
-  unsigned id;
-  uint64_t match_seq;
-  void* buf;
-  size_t offset;  // default 0
-  size_t len;
-  uint32_t local_mr_id;
-  uint32_t remote_mr_id;
-  bool on_gpu;
-  RequestType request_type;
+  unsigned id = 0;
+  uint64_t match_seq = 0;
+  void* buffer = nullptr;
+  size_t offset_bytes = 0;
+  size_t size_bytes = 0;
+  uint32_t local_mr_id = 0;
+  uint32_t remote_mr_id = 0;
+  RequestType type = RequestType::Send;
+  std::atomic<RequestState> state{RequestState::Created};
+  std::atomic<uint32_t> remaining_completions{0};
 
-  std::atomic<bool> running{false};
-  std::atomic<bool> finished{false};
-  std::atomic<bool> failed{false};
-  std::atomic<int> pending_signaled{0};  // How many qps we used
-
-  void on_comm_done();
-
-  Request(unsigned id, uint64_t match_seq, void* buf, size_t offset, size_t len,
-          uint32_t local_mr_id, uint32_t remote_mr_id, bool gpu,
-          RequestType reqtype = RequestType::SEND)
+  Request(unsigned id, uint64_t match_seq, void* buffer, size_t offset_bytes,
+          size_t size_bytes, uint32_t local_mr_id, uint32_t remote_mr_id,
+          RequestType type)
       : id(id),
         match_seq(match_seq),
-        buf(buf),
-        offset(offset),
-        len(len),
+        buffer(buffer),
+        offset_bytes(offset_bytes),
+        size_bytes(size_bytes),
         local_mr_id(local_mr_id),
         remote_mr_id(remote_mr_id),
-        on_gpu(gpu),
-        request_type(reqtype) {}
+        type(type) {}
+
+  void mark_queued(uint32_t completion_count = 1);
+  void mark_running();
+  void mark_failed();
+  void complete_one();
+
+  RequestState load_state(std::memory_order order = std::memory_order_acquire) const {
+    return state.load(order);
+  }
+
+  bool is_finished(std::memory_order order = std::memory_order_acquire) const {
+    RequestState current = load_state(order);
+    return current == RequestState::Completed || current == RequestState::Failed;
+  }
+
+  bool has_failed(std::memory_order order = std::memory_order_acquire) const {
+    return load_state(order) == RequestState::Failed;
+  }
+
+  void* data() const {
+    return static_cast<void*>(static_cast<char*>(buffer) + offset_bytes);
+  }
 };
 
 }  // namespace Transport

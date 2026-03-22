@@ -543,10 +543,10 @@ unsigned Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
   auto ipc_channel = get_ipc_channel_by_rank(rank);
   if (!ipc_channel) return 0;
 
-  uint64_t match_seq = next_ipc_match_seq(rank, RequestType::SEND);
+  uint64_t match_seq = next_ipc_match_seq(rank, RequestType::Send);
   auto req = std::make_shared<Request>(rid, match_seq, ptr, offset, len,
-                                       local_mr_id, remote_mr_id, on_gpu,
-                                       RequestType::SEND);
+                                       local_mr_id, remote_mr_id,
+                                       RequestType::Send);
 
   {
     std::lock_guard<std::mutex> lk(req_mu_);
@@ -593,9 +593,9 @@ unsigned Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
   auto ipc_channel = get_ipc_channel_by_rank(rank);
   if (!ipc_channel) return 0;
 
-  uint64_t match_seq = next_ipc_match_seq(rank, RequestType::RECV);
+  uint64_t match_seq = next_ipc_match_seq(rank, RequestType::Recv);
   auto req = std::make_shared<Request>(rid, match_seq, ptr, offset, len, -1,
-                                       -1, on_gpu, RequestType::RECV);
+                                       -1, RequestType::Recv);
 
   {
     std::lock_guard<std::mutex> lk(req_mu_);
@@ -619,7 +619,7 @@ uint64_t Communicator::next_ipc_match_seq(int rank, RequestType type) {
   }
 
   std::lock_guard<std::mutex> lk(ipc_match_seq_mu_);
-  auto& next_seq = type == RequestType::SEND ? next_send_match_seq_[rank]
+  auto& next_seq = type == RequestType::Send ? next_send_match_seq_[rank]
                                              : next_recv_match_seq_[rank];
   return next_seq++;
 }
@@ -642,12 +642,11 @@ bool Communicator::poll_request_completion(unsigned id, bool blocking) {
     if (blocking && !done) failed = true;
   } else if (snapshot.ipc_request) {
     while (true) {
-      done = snapshot.ipc_request->finished.load(std::memory_order_acquire);
+      done = snapshot.ipc_request->is_finished(std::memory_order_acquire);
       if (done || !blocking) break;
       std::this_thread::yield();
     }
-    failed = done &&
-             snapshot.ipc_request->failed.load(std::memory_order_acquire);
+    failed = done && snapshot.ipc_request->has_failed(std::memory_order_acquire);
   }
 
   if (!done) return false;

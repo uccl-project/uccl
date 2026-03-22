@@ -76,12 +76,11 @@ bool IpcChannel::accept_from(int rank) {
 }
 
 bool IpcChannel::send_async(int to_rank, std::shared_ptr<Request> creq) {
-  if (!creq || creq->len == 0 || stop_.load(std::memory_order_acquire) ||
+  if (!creq || creq->size_bytes == 0 || stop_.load(std::memory_order_acquire) ||
       send_task_ring_ == nullptr) {
     return false;
   }
-  creq->pending_signaled.store(1, std::memory_order_relaxed);
-  creq->running.store(true, std::memory_order_release);
+  creq->mark_queued(1);
 
   auto* task = new IpcTask{IpcTaskType::SEND, to_rank, std::move(creq)};
   while (!stop_.load(std::memory_order_acquire) &&
@@ -98,12 +97,11 @@ bool IpcChannel::send_async(int to_rank, std::shared_ptr<Request> creq) {
 }
 
 bool IpcChannel::recv_async(int from_rank, std::shared_ptr<Request> creq) {
-  if (!creq || creq->len == 0 || stop_.load(std::memory_order_acquire) ||
+  if (!creq || creq->size_bytes == 0 || stop_.load(std::memory_order_acquire) ||
       recv_task_ring_ == nullptr) {
     return false;
   }
-  creq->pending_signaled.store(1, std::memory_order_relaxed);
-  creq->running.store(true, std::memory_order_release);
+  creq->mark_queued(1);
 
   auto* task = new IpcTask{IpcTaskType::RECV, from_rank, std::move(creq)};
   while (!stop_.load(std::memory_order_acquire) &&
@@ -120,7 +118,8 @@ bool IpcChannel::recv_async(int from_rank, std::shared_ptr<Request> creq) {
 }
 
 bool IpcChannel::send_one(int to_rank, Request* creq) {
-  UCCL_CHECK(creq && creq->buf != nullptr) << "send_ipc: data pointer is null!";
+  UCCL_CHECK(creq && creq->buffer != nullptr) << "send_ipc: data pointer is null!";
+  creq->mark_running();
 
   int orig_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
@@ -169,22 +168,21 @@ bool IpcChannel::send_one(int to_rank, Request* creq) {
 
   void* dst_ptr =
       reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) + got.offset);
-  void* src_ptr = reinterpret_cast<void*>(
-      reinterpret_cast<uintptr_t>(creq->buf) + creq->offset);
+  void* src_ptr = creq->data();
 
   size_t n_streams = std::min(
       ipc_streams_.size(),
-      creq->len < kIpcSizePerEngine ? size_t{1}
+      creq->size_bytes < kIpcSizePerEngine ? size_t{1}
                                     : std::max<size_t>(size_t{1},
-                                                       creq->len / kIpcSizePerEngine));
-  size_t chunk_size = creq->len / n_streams;
+                                                       creq->size_bytes / kIpcSizePerEngine));
+  size_t chunk_size = creq->size_bytes / n_streams;
   for (size_t i = 0; i < n_streams; ++i) {
     void* chunk_src = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(src_ptr) + i * chunk_size);
     void* chunk_dst = reinterpret_cast<void*>(
         reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
     size_t copy_size =
-        i == n_streams - 1 ? creq->len - i * chunk_size : chunk_size;
+        i == n_streams - 1 ? creq->size_bytes - i * chunk_size : chunk_size;
     if (got.remote_gpu_idx_ == static_cast<uint32_t>(comm_->local_gpu_idx_)) {
       GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size,
                                   gpuMemcpyDeviceToDevice, ipc_streams_[i]));
@@ -207,7 +205,8 @@ bool IpcChannel::send_one(int to_rank, Request* creq) {
 }
 
 bool IpcChannel::recv_one(int from_rank, Request* creq) {
-  UCCL_CHECK(creq && creq->buf != nullptr) << "recv_ipc: data pointer is null!";
+  UCCL_CHECK(creq && creq->buffer != nullptr) << "recv_ipc: data pointer is null!";
+  creq->mark_running();
 
   int orig_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
@@ -216,11 +215,10 @@ bool IpcChannel::recv_one(int from_rank, Request* creq) {
 
   GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx_));
   IpcCacheWire transfer_info{};
-  transfer_info.size = creq->len;
+  transfer_info.size = creq->size_bytes;
   transfer_info.is_send = 0;
   transfer_info.remote_gpu_idx_ = comm_->local_gpu_idx_;
-  void* actual_dst = reinterpret_cast<void*>(
-      reinterpret_cast<uintptr_t>(creq->buf) + creq->offset);
+  void* actual_dst = creq->data();
 
   void* base = nullptr;
   size_t base_size = 0;
@@ -268,9 +266,11 @@ bool IpcChannel::recv_one(int from_rank, Request* creq) {
 
 void IpcChannel::complete_task(std::shared_ptr<Request> const& req, bool ok) {
   if (!req) return;
-  if (!ok) req->failed.store(true, std::memory_order_release);
-  req->running.store(false, std::memory_order_release);
-  req->on_comm_done();
+  if (!ok) {
+    req->mark_failed();
+  } else {
+    req->complete_one();
+  }
 }
 
 void IpcChannel::send_thread_func() {
