@@ -15,14 +15,14 @@ GPU_IDS=0,1,2,3
 # Use auto by default so same-node runs exercise the IPC path directly.
 TRANSPORT=auto
 BYTES_PER_RANK=$((1 * 1024 * 1024))
-CHUNK_BYTES=$((64 * 1024))
-CHANNELS=2
+TILE_BYTES=$((64 * 1024))
+NUM_FLOWS=2
 
 run_case() {
   local collective="$1"
   local exchanger_port="$2"
 
-  echo "[ccl suite] torchrun collective=${collective} nproc_per_node=${NPROC_PER_NODE} bytes_per_rank=${BYTES_PER_RANK} chunk_bytes=${CHUNK_BYTES} channels=${CHANNELS} transport=${TRANSPORT} torchrun_port=${TORCHRUN_MASTER_PORT} exchanger_port=${exchanger_port}"
+  echo "[ccl suite] torchrun collective=${collective} nproc_per_node=${NPROC_PER_NODE} bytes_per_rank=${BYTES_PER_RANK} tile_bytes=${TILE_BYTES} num_flows=${NUM_FLOWS} transport=${TRANSPORT} torchrun_port=${TORCHRUN_MASTER_PORT} exchanger_port=${exchanger_port}"
 
   CUDA_VISIBLE_DEVICES="${GPU_IDS}" \
     torchrun \
@@ -36,8 +36,8 @@ run_case() {
       --collective "${collective}" \
       --transport "${TRANSPORT}" \
       --bytes-per-rank "${BYTES_PER_RANK}" \
-      --chunk-bytes "${CHUNK_BYTES}" \
-      --channels "${CHANNELS}" \
+      --tile-bytes "${TILE_BYTES}" \
+      --num-flows "${NUM_FLOWS}" \
       --exchanger-ip "${MASTER_ADDR}" \
       --exchanger-port "${exchanger_port}"
 }

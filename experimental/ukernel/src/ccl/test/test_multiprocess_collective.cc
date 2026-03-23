@@ -30,12 +30,6 @@ char const* collective_name(CollectiveKind kind) {
       return "allreduce";
     case CollectiveKind::AllToAll:
       return "alltoall";
-    case CollectiveKind::AllGather:
-      return "allgather";
-    case CollectiveKind::ReduceScatter:
-      return "reducescatter";
-    case CollectiveKind::Broadcast:
-      return "broadcast";
   }
   return "unknown";
 }
@@ -169,15 +163,24 @@ class EmulatedDeviceBackend final : public Backend {
 
   char const* name() const override { return "emulated-device"; }
 
-  bool supports(ExecutionOpKind kind) const override {
-    return kind == ExecutionOpKind::Copy || kind == ExecutionOpKind::Reduce;
+  void validate(ExecutionPlan const& plan) const override {
+    if (plan.staging_bytes_required != 0 && memory_.staging.local_ptr == nullptr) {
+      throw std::invalid_argument("emulated device staging buffer is missing");
+    }
+    if (plan.staging_bytes_required > memory_.staging.bytes) {
+      throw std::invalid_argument("emulated device staging capacity is insufficient");
+    }
   }
 
-  BackendToken submit(ExecutionOp const& op) override {
+  bool supports(ExecOpKind kind) const override {
+    return kind == ExecOpKind::DeviceCopy || kind == ExecOpKind::DeviceReduce;
+  }
+
+  BackendToken submit(ExecOp const& op) override {
     if (!supports(op.kind)) {
       throw std::invalid_argument("emulated device backend does not support this op");
     }
-    if (op.kind == ExecutionOpKind::Copy) {
+    if (op.kind == ExecOpKind::DeviceCopy) {
       apply_copy(op);
     } else {
       apply_sum_reduce(op);
@@ -214,36 +217,33 @@ class EmulatedDeviceBackend final : public Backend {
     }
   }
 
-  void* resolve_mutable(MemoryRef const& ref, size_t bytes) const {
-    switch (ref.slot) {
-      case MemorySlot::RecvStaging:
-        require(memory_.recv_staging != nullptr, "missing recv staging");
-        validate_span("recv staging", ref.offset_bytes, bytes,
-                      memory_.recv_staging_bytes);
-        return static_cast<char*>(memory_.recv_staging) + ref.offset_bytes;
-      case MemorySlot::SymmetricTensor:
-        require(ref.rank == -1 || ref.rank == memory_.tensor.local_rank,
-                "emulated device backend cannot write remote tensor");
+  void* resolve_mutable(BufferRef const& ref, size_t bytes) const {
+    switch (ref.kind) {
+      case BufferKind::Staging:
+        require(memory_.staging.local_ptr != nullptr, "missing staging");
+        validate_span("staging", ref.offset_bytes, bytes, memory_.staging.bytes);
+        return static_cast<char*>(memory_.staging.local_ptr) + ref.offset_bytes;
+      case BufferKind::Tensor:
         require(memory_.tensor.local_ptr != nullptr, "missing local tensor");
         validate_span("local tensor", ref.offset_bytes, bytes, memory_.tensor.bytes);
         return static_cast<char*>(memory_.tensor.local_ptr) + ref.offset_bytes;
+      case BufferKind::PeerTensor:
+        break;
     }
     throw std::invalid_argument("unknown mutable ref");
   }
 
-  void const* resolve_const(MemoryRef const& ref, size_t bytes) const {
-    switch (ref.slot) {
-      case MemorySlot::RecvStaging:
-        require(memory_.recv_staging != nullptr, "missing recv staging");
-        validate_span("recv staging", ref.offset_bytes, bytes,
-                      memory_.recv_staging_bytes);
-        return static_cast<char const*>(memory_.recv_staging) + ref.offset_bytes;
-      case MemorySlot::SymmetricTensor:
-        if (ref.rank == -1 || ref.rank == memory_.tensor.local_rank) {
-          require(memory_.tensor.local_ptr != nullptr, "missing local tensor");
-          validate_span("local tensor", ref.offset_bytes, bytes, memory_.tensor.bytes);
-          return static_cast<char const*>(memory_.tensor.local_ptr) + ref.offset_bytes;
-        }
+  void const* resolve_const(BufferRef const& ref, size_t bytes) const {
+    switch (ref.kind) {
+      case BufferKind::Staging:
+        require(memory_.staging.local_ptr != nullptr, "missing staging");
+        validate_span("staging", ref.offset_bytes, bytes, memory_.staging.bytes);
+        return static_cast<char const*>(memory_.staging.local_ptr) + ref.offset_bytes;
+      case BufferKind::Tensor:
+        require(memory_.tensor.local_ptr != nullptr, "missing local tensor");
+        validate_span("local tensor", ref.offset_bytes, bytes, memory_.tensor.bytes);
+        return static_cast<char const*>(memory_.tensor.local_ptr) + ref.offset_bytes;
+      case BufferKind::PeerTensor:
         break;
     }
     throw std::invalid_argument("unknown const ref");
@@ -259,30 +259,30 @@ class EmulatedDeviceBackend final : public Backend {
     return false;
   }
 
-  void apply_copy(ExecutionOp const& op) const {
-    void const* src = resolve_const(op.src, op.chunk.size_bytes);
-    void* dst = resolve_mutable(op.dst, op.chunk.size_bytes);
-    GPU_RT_CHECK(gpuMemcpy(dst, src, op.chunk.size_bytes, gpuMemcpyDeviceToDevice));
+  void apply_copy(ExecOp const& op) const {
+    void const* src = resolve_const(op.src, op.tile.size_bytes);
+    void* dst = resolve_mutable(op.dst, op.tile.size_bytes);
+    GPU_RT_CHECK(gpuMemcpy(dst, src, op.tile.size_bytes, gpuMemcpyDeviceToDevice));
     GPU_RT_CHECK(gpuDeviceSynchronize());
   }
 
-  void apply_sum_reduce(ExecutionOp const& op) const {
-    require(op.chunk.size_bytes % sizeof(float) == 0,
+  void apply_sum_reduce(ExecOp const& op) const {
+    require(op.tile.size_bytes % sizeof(float) == 0,
             "allreduce test expects float-sized reductions");
-    void const* src_dev = resolve_const(op.src, op.chunk.size_bytes);
-    void* dst_dev = resolve_mutable(op.dst, op.chunk.size_bytes);
+    void const* src_dev = resolve_const(op.src, op.tile.size_bytes);
+    void* dst_dev = resolve_mutable(op.dst, op.tile.size_bytes);
 
-    size_t elems = op.chunk.size_bytes / sizeof(float);
+    size_t elems = op.tile.size_bytes / sizeof(float);
     std::vector<float> src(elems, 0.0f);
     std::vector<float> dst(elems, 0.0f);
-    GPU_RT_CHECK(gpuMemcpy(src.data(), src_dev, op.chunk.size_bytes,
+    GPU_RT_CHECK(gpuMemcpy(src.data(), src_dev, op.tile.size_bytes,
                            gpuMemcpyDeviceToHost));
-    GPU_RT_CHECK(gpuMemcpy(dst.data(), dst_dev, op.chunk.size_bytes,
+    GPU_RT_CHECK(gpuMemcpy(dst.data(), dst_dev, op.tile.size_bytes,
                            gpuMemcpyDeviceToHost));
     for (size_t i = 0; i < elems; ++i) {
       dst[i] += src[i];
     }
-    GPU_RT_CHECK(gpuMemcpy(dst_dev, dst.data(), op.chunk.size_bytes,
+    GPU_RT_CHECK(gpuMemcpy(dst_dev, dst.data(), op.tile.size_bytes,
                            gpuMemcpyHostToDevice));
     GPU_RT_CHECK(gpuDeviceSynchronize());
   }
@@ -316,16 +316,19 @@ CollectiveMemory build_collective_memory(Transport::Communicator& comm, int rank
   memory.tensor.local_rank = rank;
   memory.tensor.local_ptr = tensor_ptr;
   memory.tensor.bytes = tensor_bytes;
-  memory.tensor.peers.resize(static_cast<size_t>(world_size));
-  memory.recv_staging = staging_ptr;
-  memory.recv_staging_bytes = staging_bytes;
+  memory.tensor.layout.sizes = {static_cast<int64_t>(tensor_bytes)};
+  memory.tensor.layout.strides = {1};
+  memory.tensor.peer_views.resize(static_cast<size_t>(world_size));
+  memory.staging.local_ptr = staging_ptr;
+  memory.staging.bytes = staging_bytes;
+  memory.staging.layout.sizes = {static_cast<int64_t>(staging_bytes)};
+  memory.staging.layout.strides = {1};
 
   Transport::MR local_mr = comm.reg_mr(tensor_ptr, tensor_bytes);
   memory.tensor.local_mr_id = local_mr.id;
 
   for (int peer = 0; peer < world_size; ++peer) {
-    auto& view = memory.tensor.peers[static_cast<size_t>(peer)];
-    view.rank = peer;
+    auto& view = memory.tensor.peer_views[static_cast<size_t>(peer)];
     view.same_node = true;
     view.peer_accessible = false;
   }
@@ -341,7 +344,7 @@ CollectiveMemory build_collective_memory(Transport::Communicator& comm, int rank
     Transport::MR remote_mr{};
     require(comm.wait_mr_notify(peer, remote_mr),
             "wait_mr_notify failed for peer " + std::to_string(peer));
-    memory.tensor.peers[static_cast<size_t>(peer)].mr_id = remote_mr.id;
+    memory.tensor.peer_views[static_cast<size_t>(peer)].mr_id = remote_mr.id;
   }
 
   return memory;
@@ -411,9 +414,9 @@ struct Options {
   int world_size = 2;
   int gpu = 0;
   int exchanger_port = 6979;
-  uint32_t channels = 2;
+  uint32_t num_flows = 2;
   size_t bytes_per_rank = 1 << 20;
-  size_t chunk_bytes = 64 << 10;
+  size_t tile_bytes = 64 << 10;
   std::string exchanger_ip = "127.0.0.1";
   std::string transport = "auto";
   CollectiveKind collective = CollectiveKind::AllReduce;
@@ -431,14 +434,14 @@ Options parse_options(int argc, char** argv) {
   opts.exchanger_port = get_int_arg(
       argc, argv, "--exchanger-port",
       get_env_int({"MASTER_PORT", "UHM_EXCHANGER_SERVER_PORT"}, 29500));
-  opts.channels = static_cast<uint32_t>(
-      get_int_arg(argc, argv, "--channels", get_env_int({"CCL_CHANNELS"}, 2)));
+  opts.num_flows = static_cast<uint32_t>(
+      get_int_arg(argc, argv, "--num-flows", get_env_int({"CCL_NUM_FLOWS"}, 2)));
   opts.bytes_per_rank = get_size_arg(
       argc, argv, "--bytes-per-rank",
       get_env_size({"BYTES_PER_RANK", "CCL_BYTES_PER_RANK"}, 1 << 20));
-  opts.chunk_bytes = get_size_arg(
-      argc, argv, "--chunk-bytes",
-      get_env_size({"CHUNK_BYTES", "CCL_CHUNK_BYTES"}, 64 << 10));
+  opts.tile_bytes = get_size_arg(
+      argc, argv, "--tile-bytes",
+      get_env_size({"TILE_BYTES", "CCL_TILE_BYTES"}, 64 << 10));
 
   std::string default_ip = get_env_str(
       {"MASTER_ADDR", "UHM_EXCHANGER_SERVER_IP"},
@@ -456,7 +459,7 @@ int run_rank(Options const& opts) {
   require(opts.world_size >= 2, "world_size must be >= 2");
   require(opts.rank >= 0 && opts.rank < opts.world_size, "rank out of range");
   require(opts.bytes_per_rank > 0, "bytes_per_rank must be > 0");
-  require(opts.chunk_bytes > 0, "chunk_bytes must be > 0");
+  require(opts.tile_bytes > 0, "tile_bytes must be > 0");
   require(opts.bytes_per_rank % sizeof(float) == 0,
           "bytes_per_rank must be a multiple of sizeof(float)");
 
@@ -475,9 +478,9 @@ int run_rank(Options const& opts) {
   std::fprintf(stderr, "[rank %d] full mesh ready\n", opts.rank);
 
   DeviceBuffer tensor(opts.bytes_per_rank);
-  DeviceBuffer recv_staging(opts.bytes_per_rank);
+  DeviceBuffer staging(opts.bytes_per_rank);
   GPU_RT_CHECK(gpuMemset(tensor.ptr, 0, opts.bytes_per_rank));
-  GPU_RT_CHECK(gpuMemset(recv_staging.ptr, 0, opts.bytes_per_rank));
+  GPU_RT_CHECK(gpuMemset(staging.ptr, 0, opts.bytes_per_rank));
 
   std::vector<float> input(opts.bytes_per_rank / sizeof(float), 0.0f);
   if (opts.collective == CollectiveKind::AllReduce) {
@@ -490,7 +493,7 @@ int run_rank(Options const& opts) {
   std::fprintf(stderr, "[rank %d] exchange MRs\n", opts.rank);
   CollectiveMemory memory = build_collective_memory(
       comm, opts.rank, opts.world_size, tensor.ptr, opts.bytes_per_rank,
-      recv_staging.ptr, opts.bytes_per_rank);
+      staging.ptr, opts.bytes_per_rank);
   std::fprintf(stderr, "[rank %d] MR exchange ready\n", opts.rank);
 
   CommunicatorTransportBackend transport_backend(comm, memory);
@@ -501,9 +504,12 @@ int run_rank(Options const& opts) {
   backends.device = &device_backend;
   Executor executor(backends);
 
-  CollectiveConfig config = Testing::make_ring_config(
-      opts.world_size, opts.rank, opts.bytes_per_rank, opts.chunk_bytes,
-      opts.channels);
+  CollectiveConfig config = Testing::make_test_config(
+      opts.world_size, opts.rank, opts.bytes_per_rank, opts.tile_bytes,
+      opts.num_flows);
+  if (opts.collective == CollectiveKind::AllToAll) {
+    config.algorithm = AlgorithmKind::Pairwise;
+  }
   std::fprintf(stderr, "[rank %d] submit %s\n", opts.rank,
                collective_name(opts.collective));
   CollectiveOpHandle handle =
@@ -529,9 +535,9 @@ int run_rank(Options const& opts) {
     verify_alltoall_output(output, opts.rank, opts.world_size);
   }
 
-  std::printf("[rank %d] %s verified, bytes_per_rank=%zu, chunk_bytes=%zu, channels=%u\n",
+  std::printf("[rank %d] %s verified, bytes_per_rank=%zu, tile_bytes=%zu, num_flows=%u\n",
               opts.rank, collective_name(opts.collective), opts.bytes_per_rank,
-              opts.chunk_bytes, opts.channels);
+              opts.tile_bytes, opts.num_flows);
   return 0;
 }
 
