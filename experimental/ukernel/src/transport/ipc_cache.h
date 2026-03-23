@@ -27,7 +27,7 @@ class IpcCacheManager {
   };
 
   bool register_cache(int remote_rank, gpuIpcMemHandle_t handle,
-                     IpcCache const& cache);
+                      IpcCache const& cache);
   IpcCache get_cache(int remote_rank, gpuIpcMemHandle_t handle) const;
   void clear_all();
 

@@ -1,6 +1,6 @@
+#include "ipc_channel.h"
 #include "communicator.h"
 #include "ipc_cache.h"
-#include "ipc_channel.h"
 #include "util/util.h"
 #include <algorithm>
 
@@ -118,7 +118,8 @@ bool IpcChannel::recv_async(int from_rank, std::shared_ptr<Request> creq) {
 }
 
 bool IpcChannel::send_one(int to_rank, Request* creq) {
-  UCCL_CHECK(creq && creq->buffer != nullptr) << "send_ipc: data pointer is null!";
+  UCCL_CHECK(creq && creq->buffer != nullptr)
+      << "send_ipc: data pointer is null!";
   creq->mark_running();
 
   int orig_device = -1;
@@ -142,15 +143,15 @@ bool IpcChannel::send_one(int to_rank, Request* creq) {
     }
   }
   if (!got_cache) {
-    std::cerr << "[ERROR] recv_ipc_cache(" << to_rank
-              << ") failed for req " << creq->id << " match_seq "
-              << creq->match_seq << std::endl;
+    std::cerr << "[ERROR] recv_ipc_cache(" << to_rank << ") failed for req "
+              << creq->id << " match_seq " << creq->match_seq << std::endl;
     return false;
   }
 
   GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx_));
 
-  IpcCacheManager::IpcCache cache = comm_->get_remote_ipc_cache(to_rank, got.handle);
+  IpcCacheManager::IpcCache cache =
+      comm_->get_remote_ipc_cache(to_rank, got.handle);
   void* base = cache.direct_ptr;
   if (base == nullptr) {
     GPU_RT_CHECK(
@@ -172,9 +173,9 @@ bool IpcChannel::send_one(int to_rank, Request* creq) {
 
   size_t n_streams = std::min(
       ipc_streams_.size(),
-      creq->size_bytes < kIpcSizePerEngine ? size_t{1}
-                                    : std::max<size_t>(size_t{1},
-                                                       creq->size_bytes / kIpcSizePerEngine));
+      creq->size_bytes < kIpcSizePerEngine
+          ? size_t{1}
+          : std::max<size_t>(size_t{1}, creq->size_bytes / kIpcSizePerEngine));
   size_t chunk_size = creq->size_bytes / n_streams;
   for (size_t i = 0; i < n_streams; ++i) {
     void* chunk_src = reinterpret_cast<void*>(
@@ -205,7 +206,8 @@ bool IpcChannel::send_one(int to_rank, Request* creq) {
 }
 
 bool IpcChannel::recv_one(int from_rank, Request* creq) {
-  UCCL_CHECK(creq && creq->buffer != nullptr) << "recv_ipc: data pointer is null!";
+  UCCL_CHECK(creq && creq->buffer != nullptr)
+      << "recv_ipc: data pointer is null!";
   creq->mark_running();
 
   int orig_device = -1;
@@ -229,9 +231,8 @@ bool IpcChannel::recv_one(int from_rank, Request* creq) {
 
   if (!comm_->shm_control_->send_ipc_cache(from_rank, creq->match_seq,
                                            transfer_info)) {
-    std::cerr << "[ERROR] send_ipc_cache(" << from_rank
-              << ") failed for req " << creq->id << " match_seq "
-              << creq->match_seq << std::endl;
+    std::cerr << "[ERROR] send_ipc_cache(" << from_rank << ") failed for req "
+              << creq->id << " match_seq " << creq->match_seq << std::endl;
     return false;
   }
 

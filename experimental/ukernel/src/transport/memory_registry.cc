@@ -61,9 +61,7 @@ std::vector<void*> MemoryRegistry::local_buffers() const {
   return bufs;
 }
 
-void MemoryRegistry::clear_remote_ipc_cache() {
-  ipc_cache_.clear_all();
-}
+void MemoryRegistry::clear_remote_ipc_cache() { ipc_cache_.clear_all(); }
 
 MR MemoryRegistry::get_local_mr(void* local_buf) const {
   uint64_t buf_addr = reinterpret_cast<uint64_t>(local_buf);
@@ -123,9 +121,9 @@ MR MemoryRegistry::get_remote_mr(int remote_rank, uint32_t mr_id) const {
   return it_mr->second;
 }
 
-bool MemoryRegistry::register_remote_ipc_cache(int remote_rank,
-                                               gpuIpcMemHandle_t handle,
-                                               IpcCacheManager::IpcCache const& cache) {
+bool MemoryRegistry::register_remote_ipc_cache(
+    int remote_rank, gpuIpcMemHandle_t handle,
+    IpcCacheManager::IpcCache const& cache) {
   return ipc_cache_.register_cache(remote_rank, handle, cache);
 }
 

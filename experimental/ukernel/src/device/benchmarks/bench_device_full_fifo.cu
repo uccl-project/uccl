@@ -1,6 +1,6 @@
-#include "worker.h"
-#include "gpu_rt.h"
 #include "benchmarks/bench_support.h"
+#include "gpu_rt.h"
+#include "worker.h"
 #include <cstdio>
 #include <random>
 #include <vector>

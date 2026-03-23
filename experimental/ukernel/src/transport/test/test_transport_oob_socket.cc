@@ -8,8 +8,8 @@
 #include <random>
 #include <string>
 #include <thread>
-#include <unistd.h>
 #include <vector>
+#include <unistd.h>
 
 using SockExchanger = UKernel::Transport::SockExchanger;
 using CommunicatorMeta = UKernel::Transport::CommunicatorMeta;
@@ -123,7 +123,8 @@ void test_socket_meta_exchange_multi_threads(int world_size) {
   int port = socket_test_port() + 1;
   std::vector<std::thread> threads;
   for (int rank = 0; rank < world_size; ++rank) {
-    threads.emplace_back(rank_thread_socket, rank, world_size, "127.0.0.1", port);
+    threads.emplace_back(rank_thread_socket, rank, world_size, "127.0.0.1",
+                         port);
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
 

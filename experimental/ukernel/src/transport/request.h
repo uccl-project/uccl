@@ -8,7 +8,13 @@ namespace UKernel {
 namespace Transport {
 
 enum class RequestType : uint8_t { Send, Recv };
-enum class RequestState : uint8_t { Created, Queued, Running, Completed, Failed };
+enum class RequestState : uint8_t {
+  Created,
+  Queued,
+  Running,
+  Completed,
+  Failed
+};
 
 struct Request {
   unsigned id = 0;
@@ -39,13 +45,15 @@ struct Request {
   void mark_failed();
   void complete_one();
 
-  RequestState load_state(std::memory_order order = std::memory_order_acquire) const {
+  RequestState load_state(
+      std::memory_order order = std::memory_order_acquire) const {
     return state.load(order);
   }
 
   bool is_finished(std::memory_order order = std::memory_order_acquire) const {
     RequestState current = load_state(order);
-    return current == RequestState::Completed || current == RequestState::Failed;
+    return current == RequestState::Completed ||
+           current == RequestState::Failed;
   }
 
   bool has_failed(std::memory_order order = std::memory_order_acquire) const {

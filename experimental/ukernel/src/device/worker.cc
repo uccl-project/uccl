@@ -20,8 +20,8 @@ WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
     wc->launched = false;
     wc->ready = false;
     GPU_RT_CHECK(gpuStreamCreateWithFlags(&wc->stream, gpuStreamNonBlocking));
-    GPU_RT_CHECK(gpuMalloc(&wc->d_fifo_handle,
-                           sizeof(mscclpp::C2DDeviceHandle<Task>)));
+    GPU_RT_CHECK(
+        gpuMalloc(&wc->d_fifo_handle, sizeof(mscclpp::C2DDeviceHandle<Task>)));
     workers_.emplace_back(wc);
 
     bool* d_stop;
@@ -29,7 +29,8 @@ WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
     GPU_RT_CHECK(gpuMalloc(&d_stop, sizeof(bool)));
     GPU_RT_CHECK(gpuHostAlloc(&h_stop, sizeof(bool), gpuHostAllocMapped));
     *h_stop = false;
-    GPU_RT_CHECK(gpuMemcpy(d_stop, h_stop, sizeof(bool), gpuMemcpyHostToDevice));
+    GPU_RT_CHECK(
+        gpuMemcpy(d_stop, h_stop, sizeof(bool), gpuMemcpyHostToDevice));
     d_stop_flags_.push_back(d_stop);
     h_stop_flags_.push_back(h_stop);
   }
@@ -81,8 +82,8 @@ bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
     int device = 0;
     int sm_count = 0;
     GPU_RT_CHECK(gpuGetDevice(&device));
-    GPU_RT_CHECK(
-        gpuDeviceGetAttribute(&sm_count, gpuDevAttrMultiProcessorCount, device));
+    GPU_RT_CHECK(gpuDeviceGetAttribute(&sm_count, gpuDevAttrMultiProcessorCount,
+                                       device));
     if (numBlocks > static_cast<uint32_t>(sm_count)) {
       return false;
     }
@@ -90,9 +91,8 @@ bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
 
   auto& ctx = *fifos_[fifoId];
   int expected = 0;
-  if (!ctx.bound_workers.compare_exchange_strong(expected, 1,
-                                                  std::memory_order_acq_rel,
-                                                  std::memory_order_relaxed)) {
+  if (!ctx.bound_workers.compare_exchange_strong(
+          expected, 1, std::memory_order_acq_rel, std::memory_order_relaxed)) {
     return false;
   }
 
@@ -109,7 +109,8 @@ bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
         workers_[i]->d_multi_sync = nullptr;
       }
       if (numBlocks > 1) {
-        GPU_RT_CHECK(gpuMalloc(&workers_[i]->d_multi_sync, sizeof(MultiBlockSync)));
+        GPU_RT_CHECK(
+            gpuMalloc(&workers_[i]->d_multi_sync, sizeof(MultiBlockSync)));
         GPU_RT_CHECK(
             gpuMemset(workers_[i]->d_multi_sync, 0, sizeof(MultiBlockSync)));
       }
@@ -182,8 +183,10 @@ uint64_t WorkerPool::enqueue(Task const& task, uint32_t fifoId) {
     }
   }
   if (workerId < 0) {
-    printf("[ERROR] enqueue to fifo %u failed: no worker bound, call createWorker first\n",
-           fifoId);
+    printf(
+        "[ERROR] enqueue to fifo %u failed: no worker bound, call createWorker "
+        "first\n",
+        fifoId);
     return 0;
   }
 
@@ -266,7 +269,8 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
   worker.ready = true;
 }
 
-void WorkerPool::reclaimFinishedTasks(FifoContext& ctx, uint64_t currentTaskId) {
+void WorkerPool::reclaimFinishedTasks(FifoContext& ctx,
+                                      uint64_t currentTaskId) {
   std::lock_guard<std::mutex> g(ctx.pending_mu);
   bool const task_manager_ready = TaskManager::instance().inited();
   auto it = ctx.pending.begin();
@@ -289,9 +293,8 @@ void WorkerPool::reclaimAllPendingTasks(FifoContext& ctx) {
   std::lock_guard<std::mutex> g(ctx.pending_mu);
   bool const task_manager_ready = TaskManager::instance().inited();
   for (auto const& [_, pending] : ctx.pending) {
-    if (task_manager_ready &&
-        (pending.type == TaskType::CollCopy ||
-         pending.type == TaskType::CollReduce)) {
+    if (task_manager_ready && (pending.type == TaskType::CollCopy ||
+                               pending.type == TaskType::CollReduce)) {
       TaskManager::instance().free_task_args(pending.argsId);
     }
   }

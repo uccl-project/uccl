@@ -47,8 +47,9 @@ struct CommunicatorConfig {
 
   static int getLocalIdOrDefault() {
     constexpr char const* kEnvNames[] = {
-        "UHM_LOCAL_ID", "OMPI_COMM_WORLD_LOCAL_RANK", "MPI_LOCALRANKID",
-        "SLURM_LOCALID", "LOCAL_RANK",
+        "UHM_LOCAL_ID",    "OMPI_COMM_WORLD_LOCAL_RANK",
+        "MPI_LOCALRANKID", "SLURM_LOCALID",
+        "LOCAL_RANK",
     };
     for (char const* env_name : kEnvNames) {
       char const* val = std::getenv(env_name);
@@ -60,7 +61,6 @@ struct CommunicatorConfig {
     }
     return -1;
   }
-
 };
 
 }  // namespace Transport

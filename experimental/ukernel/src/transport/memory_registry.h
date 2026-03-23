@@ -35,9 +35,9 @@ class MemoryRegistry {
   MR get_remote_mr(int remote_rank, uint32_t mr_id) const;
 
   bool register_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle,
-                                  IpcCacheManager::IpcCache const& cache);
-  IpcCacheManager::IpcCache get_remote_ipc_cache(int remote_rank,
-                                  gpuIpcMemHandle_t handle) const;
+                                 IpcCacheManager::IpcCache const& cache);
+  IpcCacheManager::IpcCache get_remote_ipc_cache(
+      int remote_rank, gpuIpcMemHandle_t handle) const;
 
  private:
   mutable std::mutex local_mu_;

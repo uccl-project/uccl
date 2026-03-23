@@ -2,16 +2,16 @@
 #include "ipc_channel.h"
 #include "utils.h"
 #include <arpa/inet.h>
+#include <netinet/in.h>
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
-#include <ifaddrs.h>
 #include <iostream>
-#include <netinet/in.h>
 #include <stdexcept>
-#include <sys/socket.h>
 #include <unordered_set>
+#include <ifaddrs.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 namespace UKernel {
@@ -92,7 +92,8 @@ void maybe_configure_uccl_socket_ifname(std::string const& remote_hint_ip,
   if (ifname.empty()) return;
 
   ::setenv("UCCL_SOCKET_IFNAME", ifname.c_str(), 0);
-  std::cout << "[INFO] Auto-selected UCCL_SOCKET_IFNAME=" << ifname << std::endl;
+  std::cout << "[INFO] Auto-selected UCCL_SOCKET_IFNAME=" << ifname
+            << std::endl;
 }
 
 std::string get_uccl_remote_hint_ip(
@@ -124,8 +125,7 @@ int timeout_to_retries(int timeout_ms, int delay_ms) {
 }
 
 int bootstrap_timeout_ms() {
-  return get_timeout_ms("UHM_BOOTSTRAP_TIMEOUT_MS",
-                        kDefaultBootstrapTimeoutMs);
+  return get_timeout_ms("UHM_BOOTSTRAP_TIMEOUT_MS", kDefaultBootstrapTimeoutMs);
 }
 
 int mr_timeout_ms() {
@@ -150,9 +150,9 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       config_(config) {
   maybe_configure_uccl_socket_ifname({}, get_local_ip());
 
-  shm_control_ = std::make_shared<ShmRingExchanger>(global_rank_, world_size_,
-                                                      generate_host_id(),
-                                                      config_->local_id >= 0 ? config_->local_id : global_rank_);
+  shm_control_ = std::make_shared<ShmRingExchanger>(
+      global_rank_, world_size_, generate_host_id(),
+      config_->local_id >= 0 ? config_->local_id : global_rank_);
   ipc_channel_ = std::make_shared<IpcChannel>(this);
 
   bool is_server = (global_rank_ == 0);
@@ -313,7 +313,7 @@ bool Communicator::connect_to(int rank) {
     std::string local_ip_addr = uccl_adapter.get_p2p_listen_ip(dev_idx);
 
     UCCLP2PInfo local_p2p_info(local_ip_addr, local_port, dev_idx,
-                                local_gpu_idx_);
+                               local_gpu_idx_);
     std::string p2p_key = uccl_p2p_key(global_rank_, rank);
     std::string peer_p2p_key = uccl_p2p_key(rank, global_rank_);
 
@@ -336,8 +336,8 @@ bool Communicator::connect_to(int rank) {
               << remote_p2p_info.dev_idx << ")" << std::endl;
 
     bool ret = uccl_adapter.connect_to_peer(
-        rank, remote_p2p_info.ip, remote_p2p_info.port, dev_idx,
-        local_gpu_idx_, remote_p2p_info.dev_idx, remote_p2p_info.gpu_idx);
+        rank, remote_p2p_info.ip, remote_p2p_info.port, dev_idx, local_gpu_idx_,
+        remote_p2p_info.dev_idx, remote_p2p_info.gpu_idx);
     if (ret) {
       cache_peer_session(rank, PeerTransportKind::Uccl, true, false);
       register_existing_local_mrs_with_uccl();
@@ -409,7 +409,7 @@ bool Communicator::accept_from(int rank) {
     std::string local_ip_addr = uccl_adapter.get_p2p_listen_ip(dev_idx);
 
     UCCLP2PInfo local_p2p_info(local_ip_addr, local_port, dev_idx,
-                                local_gpu_idx_);
+                               local_gpu_idx_);
     std::string p2p_key = uccl_p2p_key(global_rank_, rank);
     std::string peer_p2p_key = uccl_p2p_key(rank, global_rank_);
 
@@ -428,9 +428,9 @@ bool Communicator::accept_from(int rank) {
               << " (GPU " << remote_p2p_info.gpu_idx << ", dev "
               << remote_p2p_info.dev_idx << ")" << std::endl;
 
-    bool ret = uccl_adapter.accept_from_peer(
-        rank, remote_p2p_info.ip, remote_p2p_info.dev_idx,
-        remote_p2p_info.gpu_idx);
+    bool ret = uccl_adapter.accept_from_peer(rank, remote_p2p_info.ip,
+                                             remote_p2p_info.dev_idx,
+                                             remote_p2p_info.gpu_idx);
     if (ret) {
       cache_peer_session(rank, PeerTransportKind::Uccl, false, true);
       register_existing_local_mrs_with_uccl();
@@ -533,8 +533,8 @@ unsigned Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
     if (ret != 0) return 0;
     {
       std::lock_guard<std::mutex> lk(req_mu_);
-      requests_map_[rid] = TrackedRequest{rank, PeerTransportKind::Uccl,
-                                          nullptr, false, false, false};
+      requests_map_[rid] = TrackedRequest{
+          rank, PeerTransportKind::Uccl, nullptr, false, false, false};
     }
     notifier_cv_.notify_all();
     return rid;
@@ -544,14 +544,14 @@ unsigned Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
   if (!ipc_channel) return 0;
 
   uint64_t match_seq = next_ipc_match_seq(rank, RequestType::Send);
-  auto req = std::make_shared<Request>(rid, match_seq, ptr, offset, len,
-                                       local_mr_id, remote_mr_id,
-                                       RequestType::Send);
+  auto req =
+      std::make_shared<Request>(rid, match_seq, ptr, offset, len, local_mr_id,
+                                remote_mr_id, RequestType::Send);
 
   {
     std::lock_guard<std::mutex> lk(req_mu_);
-    requests_map_[rid] = TrackedRequest{rank, PeerTransportKind::Ipc, req,
-                                        false, false, false};
+    requests_map_[rid] =
+        TrackedRequest{rank, PeerTransportKind::Ipc, req, false, false, false};
   }
 
   if (!ipc_channel->send_async(rank, req)) {
@@ -579,12 +579,13 @@ unsigned Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
   if (peer_kind == PeerTransportKind::Uccl) {
     void* actual_ptr = static_cast<char*>(ptr) + offset;
     auto local_mr = get_local_mr(actual_ptr);
-    int ret = uccl_adapter_->recv_async(rank, actual_ptr, len, local_mr.id, rid);
+    int ret =
+        uccl_adapter_->recv_async(rank, actual_ptr, len, local_mr.id, rid);
     if (ret != 0) return 0;
     {
       std::lock_guard<std::mutex> lk(req_mu_);
-      requests_map_[rid] = TrackedRequest{rank, PeerTransportKind::Uccl,
-                                          nullptr, false, false, false};
+      requests_map_[rid] = TrackedRequest{
+          rank, PeerTransportKind::Uccl, nullptr, false, false, false};
     }
     notifier_cv_.notify_all();
     return rid;
@@ -594,13 +595,13 @@ unsigned Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
   if (!ipc_channel) return 0;
 
   uint64_t match_seq = next_ipc_match_seq(rank, RequestType::Recv);
-  auto req = std::make_shared<Request>(rid, match_seq, ptr, offset, len, -1,
-                                       -1, RequestType::Recv);
+  auto req = std::make_shared<Request>(rid, match_seq, ptr, offset, len, -1, -1,
+                                       RequestType::Recv);
 
   {
     std::lock_guard<std::mutex> lk(req_mu_);
-    requests_map_[rid] = TrackedRequest{rank, PeerTransportKind::Ipc, req,
-                                        false, false, false};
+    requests_map_[rid] =
+        TrackedRequest{rank, PeerTransportKind::Ipc, req, false, false, false};
   }
 
   if (!ipc_channel->recv_async(rank, req)) {
@@ -646,7 +647,8 @@ bool Communicator::poll_request_completion(unsigned id, bool blocking) {
       if (done || !blocking) break;
       std::this_thread::yield();
     }
-    failed = done && snapshot.ipc_request->has_failed(std::memory_order_acquire);
+    failed =
+        done && snapshot.ipc_request->has_failed(std::memory_order_acquire);
   }
 
   if (!done) return false;
@@ -806,8 +808,9 @@ bool Communicator::wait_mr_notify(int remote_rank, MR& mr) {
     if (fetched && !wrapper.mrs.empty()) {
       memory_registry_.cache_remote_mrs(remote_rank, wrapper.mrs);
       if (memory_registry_.take_pending_remote_mr(remote_rank, mr)) {
-        std::cout << "[recv MR from rank " << remote_rank << "] addr=" << mr.address
-                  << " length=" << mr.length << " key=" << mr.key << std::endl;
+        std::cout << "[recv MR from rank " << remote_rank
+                  << "] addr=" << mr.address << " length=" << mr.length
+                  << " key=" << mr.key << std::endl;
         return true;
       }
     }
@@ -833,14 +836,14 @@ MR Communicator::get_remote_mr(int remote_rank, uint32_t mr_id) {
   return memory_registry_.get_remote_mr(remote_rank, mr_id);
 }
 
-bool Communicator::register_remote_ipc_cache(int remote_rank,
-                                            gpuIpcMemHandle_t handle,
-                                            IpcCacheManager::IpcCache const& cache) {
+bool Communicator::register_remote_ipc_cache(
+    int remote_rank, gpuIpcMemHandle_t handle,
+    IpcCacheManager::IpcCache const& cache) {
   return memory_registry_.register_remote_ipc_cache(remote_rank, handle, cache);
 }
 
-IpcCacheManager::IpcCache Communicator::get_remote_ipc_cache(int remote_rank,
-                                            gpuIpcMemHandle_t handle) {
+IpcCacheManager::IpcCache Communicator::get_remote_ipc_cache(
+    int remote_rank, gpuIpcMemHandle_t handle) {
   return memory_registry_.get_remote_ipc_cache(remote_rank, handle);
 }
 

@@ -1,5 +1,5 @@
-#include "persistent_kernel_ops.h"
 #include "ops/ops.h"
+#include "persistent_kernel_ops.h"
 
 namespace UKernel {
 namespace Device {
@@ -26,9 +26,9 @@ __device__ void run_copy(TaskArgs const& a, uint32_t block_id,
 
   char* my_dst = dst + block_offset;
   char const* my_src = src + block_offset;
-  uint64_t my_count =
-      (block_id + 1 == num_blocks) ? (total_count - block_offset)
-                                   : count_per_block;
+  uint64_t my_count = (block_id + 1 == num_blocks)
+                          ? (total_count - block_offset)
+                          : count_per_block;
 
   copy<char>(my_dst, my_src, static_cast<size_t>(my_count), smem_buf);
 }
@@ -50,9 +50,9 @@ __device__ void run_typed_copy(TaskArgs const& a, uint32_t block_id,
 
   const uint64_t count_per_block = total_count / num_blocks;
   const uint64_t block_offset = block_id * count_per_block;
-  const uint64_t my_count =
-      (block_id + 1 == num_blocks) ? (total_count - block_offset)
-                                   : count_per_block;
+  const uint64_t my_count = (block_id + 1 == num_blocks)
+                                ? (total_count - block_offset)
+                                : count_per_block;
 
   copy<T>(dst + block_offset, src + block_offset, static_cast<size_t>(my_count),
           smem_buf);
@@ -70,9 +70,9 @@ __device__ void run_reduce(TaskArgs const& a, uint32_t block_id,
 
   const uint64_t count_per_block = total_count / num_blocks;
   const uint64_t block_offset = block_id * count_per_block;
-  const uint64_t my_count =
-      (block_id + 1 == num_blocks) ? (total_count - block_offset)
-                                   : count_per_block;
+  const uint64_t my_count = (block_id + 1 == num_blocks)
+                                ? (total_count - block_offset)
+                                : count_per_block;
 
   read_reduce_store<T>(dst + block_offset, src + block_offset,
                        static_cast<size_t>(my_count), a.redType, smem_buf);
@@ -135,9 +135,9 @@ __device__ __forceinline__ void process_task(Task const& task,
   }
 }
 
-__global__ void singlePersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
-                                       TaskArgs* d_task_args,
-                                       bool* should_stop) {
+__global__ void singlePersistentKernel(
+    mscclpp::C2DDeviceHandle<Task>* c2d_fifos, TaskArgs* d_task_args,
+    bool* should_stop) {
   extern __shared__ char smem[];
   auto& fifo = c2d_fifos[0];
   void* smem_buf = smem;
@@ -157,10 +157,10 @@ __global__ void singlePersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos
         Task* task = fifo.poll();
         if (task != nullptr) {
           current_task = *task;
-          command = (current_task.type_u8() ==
-                     static_cast<uint8_t>(TaskType::Stop))
-                        ? kCommandExit
-                        : kCommandRun;
+          command =
+              (current_task.type_u8() == static_cast<uint8_t>(TaskType::Stop))
+                  ? kCommandExit
+                  : kCommandRun;
           if (command == kCommandExit) {
             fifo.pop();
           }
@@ -187,8 +187,7 @@ __global__ void singlePersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos
 }
 
 __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
-                                      TaskArgs* d_task_args,
-                                      bool* should_stop,
+                                      TaskArgs* d_task_args, bool* should_stop,
                                       MultiBlockSync* d_sync) {
   extern __shared__ char smem[];
   auto& fifo = c2d_fifos[0];

@@ -54,7 +54,9 @@ int main(int argc, char** argv) {
 
   std::cerr << "Usage:\n"
             << "  test_transport_main core\n"
-            << "  test_transport_main communicator --role=server|client --case=basic|batch|poll-release|notifier [--exchanger-ip IP] [--exchanger-port PORT] [--transport auto|ipc|uccl]\n"
+            << "  test_transport_main communicator --role=server|client "
+               "--case=basic|batch|poll-release|notifier [--exchanger-ip IP] "
+               "[--exchanger-port PORT] [--transport auto|ipc|uccl]\n"
             << "  test_transport_main communicator-local\n"
             << "  test_transport_main oob-socket\n"
             << "  test_transport_main oob-socket-meta [--world-size N]\n"

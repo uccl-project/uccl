@@ -23,7 +23,7 @@ class RequestManager {
   unsigned allocate_request_id();
 
   void add_request(unsigned id, int peer_rank, PeerTransportKind kind,
-                  std::shared_ptr<Request> req);
+                   std::shared_ptr<Request> req);
 
   bool poll_completion(unsigned id);
   bool wait_completion(unsigned id, bool blocking);

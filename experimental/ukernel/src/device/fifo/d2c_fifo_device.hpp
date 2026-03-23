@@ -57,14 +57,12 @@ union alignas(16) ProxyTrigger {
 
     constexpr uint64_t maskType = (1ULL << UKernel::Device::TaskTypeSize) - 1;
     constexpr uint64_t maskDType = (1ULL << UKernel::Device::DataTypeSize) - 1;
-    constexpr uint64_t maskBlockId =
-        (1ULL << UKernel::Device::BlockIdSize) - 1;
+    constexpr uint64_t maskBlockId = (1ULL << UKernel::Device::BlockIdSize) - 1;
     constexpr uint64_t maskArgs =
         (1ULL << UKernel::Device::TaskArgsIndexSize) - 1;
-    fst =
-        (t & maskType) | ((dt & maskDType) << UKernel::Device::TaskTypeSize) |
-        ((bi & maskBlockId)
-         << (UKernel::Device::TaskTypeSize + UKernel::Device::DataTypeSize));
+    fst = (t & maskType) | ((dt & maskDType) << UKernel::Device::TaskTypeSize) |
+          ((bi & maskBlockId)
+           << (UKernel::Device::TaskTypeSize + UKernel::Device::DataTypeSize));
     snd = (ai & maskArgs);
   }
 #endif  // defined(MSCCLPP_DEVICE_COMPILE)

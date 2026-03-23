@@ -19,8 +19,7 @@ void Request::mark_failed() {
 }
 
 void Request::complete_one() {
-  uint32_t remaining =
-      remaining_completions.load(std::memory_order_acquire);
+  uint32_t remaining = remaining_completions.load(std::memory_order_acquire);
   while (remaining > 0) {
     if (remaining_completions.compare_exchange_weak(
             remaining, remaining - 1, std::memory_order_acq_rel,

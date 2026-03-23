@@ -26,7 +26,8 @@ struct CollectiveConfig {
   AlgorithmKind algorithm = AlgorithmKind::Ring;
 };
 
-PlanRequest make_plan_request(CollectiveKind kind, CollectiveConfig const& config);
+PlanRequest make_plan_request(CollectiveKind kind,
+                              CollectiveConfig const& config);
 
 struct CollectiveOpHandle {
   uint64_t value = 0;

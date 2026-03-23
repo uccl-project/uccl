@@ -1,5 +1,5 @@
-#include "backend_test_utils.h"
 #include "../selector.h"
+#include "backend_test_utils.h"
 #include <cassert>
 #include <cstdio>
 #include <stdexcept>
@@ -46,8 +46,7 @@ void test_plan_builders() {
   assert(Testing::count_ops(allreduce_plan, PrimitiveOpKind::Recv) > 0);
   assert(Testing::count_ops(allreduce_plan, PrimitiveOpKind::Reduce) > 0);
 
-  CollectiveConfig alltoall_cfg =
-      Testing::make_test_config(4, 1, 1024, 256, 2);
+  CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 1, 1024, 256, 2);
   alltoall_cfg.algorithm = AlgorithmKind::Pairwise;
   CollectivePlan alltoall_plan =
       build_plan(make_plan_request(CollectiveKind::AllToAll, alltoall_cfg));
@@ -108,8 +107,7 @@ void test_executor_with_mock_backends() {
   assert(executor.status(ar_handle) == CollectiveOpStatus::Completed);
   executor.release(ar_handle);
 
-  CollectiveConfig alltoall_cfg =
-      Testing::make_test_config(4, 1, 1024, 256, 2);
+  CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 1, 1024, 256, 2);
   alltoall_cfg.algorithm = AlgorithmKind::Pairwise;
   CollectiveOpHandle at_handle = executor.submit_alltoall(alltoall_cfg);
   executor.wait(at_handle);

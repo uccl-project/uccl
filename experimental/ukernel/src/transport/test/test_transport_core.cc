@@ -232,8 +232,7 @@ void test_shm_dual_waiters() {
 
   std::thread rank0([&] {
     try {
-      ShmRingExchanger shm0(/*self_rank=*/0, /*world_size=*/2,
-                            "core-shm-dual");
+      ShmRingExchanger shm0(/*self_rank=*/0, /*world_size=*/2, "core-shm-dual");
       require(shm0.accept_from(/*peer_rank=*/1, /*timeout_ms=*/5000),
               "rank0 accept_from failed");
 
@@ -268,8 +267,7 @@ void test_shm_dual_waiters() {
   std::thread rank1([&] {
     try {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      ShmRingExchanger shm1(/*self_rank=*/1, /*world_size=*/2,
-                            "core-shm-dual");
+      ShmRingExchanger shm1(/*self_rank=*/1, /*world_size=*/2, "core-shm-dual");
       require(shm1.connect_to(/*peer_rank=*/0, /*timeout_ms=*/5000),
               "rank1 connect_to failed");
 

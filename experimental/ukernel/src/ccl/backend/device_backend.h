@@ -15,11 +15,8 @@ namespace CCL {
 
 class DeviceBackend final : public Backend {
  public:
-  DeviceBackend(
-      UKernel::Device::WorkerPool* worker_pool,
-      CollectiveMemory memory,
-      int dtype,
-      int reduce_type);
+  DeviceBackend(UKernel::Device::WorkerPool* worker_pool,
+                CollectiveMemory memory, int dtype, int reduce_type);
 
   char const* name() const override;
   void validate(ExecutionPlan const& plan) const override;

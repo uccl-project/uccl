@@ -1,5 +1,5 @@
 #pragma once
 
-#include "gpu_rt.h"
 #include "../src/device/task.h"
 #include "../src/device/worker.h"
+#include "gpu_rt.h"

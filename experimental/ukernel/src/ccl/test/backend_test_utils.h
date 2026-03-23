@@ -1,7 +1,7 @@
 #pragma once
 
-#include "../executor.h"
 #include "../backend/backend.h"
+#include "../executor.h"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -38,8 +38,9 @@ inline CollectiveMemory make_test_memory(int rank, int nranks, size_t bytes) {
   return memory;
 }
 
-inline CollectiveConfig make_test_config(int nranks, int rank, size_t tensor_bytes,
-                                         size_t tile_bytes, uint32_t num_flows = 1) {
+inline CollectiveConfig make_test_config(int nranks, int rank,
+                                         size_t tensor_bytes, size_t tile_bytes,
+                                         uint32_t num_flows = 1) {
   CollectiveConfig config{};
   config.nranks = nranks;
   config.rank = rank;
@@ -99,9 +100,9 @@ inline size_t count_ops(CollectivePlan const& plan, PrimitiveOpKind kind) {
   return total;
 }
 
-inline BackendToken submit_token(uint64_t& next_token, uint64_t& submissions,
-                                 uint32_t polls_before_ready,
-                                 std::unordered_map<uint64_t, uint32_t>& pending_polls) {
+inline BackendToken submit_token(
+    uint64_t& next_token, uint64_t& submissions, uint32_t polls_before_ready,
+    std::unordered_map<uint64_t, uint32_t>& pending_polls) {
   BackendToken token{next_token++};
   ++submissions;
   pending_polls.emplace(token.value, polls_before_ready);
@@ -117,8 +118,8 @@ inline bool poll_token(BackendToken token,
   return it->second == 0;
 }
 
-inline void release_token(BackendToken token,
-                          std::unordered_map<uint64_t, uint32_t>& pending_polls) {
+inline void release_token(
+    BackendToken token, std::unordered_map<uint64_t, uint32_t>& pending_polls) {
   pending_polls.erase(token.value);
 }
 
@@ -131,11 +132,16 @@ class MockBackend final : public Backend {
   void validate(ExecutionPlan const&) const override {}
   bool supports(ExecOpKind) const override { return true; }
   BackendToken submit(ExecOp const&) override {
-    return submit_token(next_token_, submissions_, polls_before_ready_, pending_polls_);
+    return submit_token(next_token_, submissions_, polls_before_ready_,
+                        pending_polls_);
   }
-  bool poll(BackendToken token) override { return poll_token(token, pending_polls_); }
+  bool poll(BackendToken token) override {
+    return poll_token(token, pending_polls_);
+  }
   bool try_pop_completed(BackendToken&) override { return false; }
-  void release(BackendToken token) override { release_token(token, pending_polls_); }
+  void release(BackendToken token) override {
+    release_token(token, pending_polls_);
+  }
 
   uint64_t submissions() const { return submissions_; }
 
@@ -160,11 +166,16 @@ class MockDeviceBackend final : public Backend {
     if (!supports(op.kind)) {
       throw std::invalid_argument("device backend does not support this op");
     }
-    return submit_token(next_token_, submissions_, polls_before_ready_, pending_polls_);
+    return submit_token(next_token_, submissions_, polls_before_ready_,
+                        pending_polls_);
   }
-  bool poll(BackendToken token) override { return poll_token(token, pending_polls_); }
+  bool poll(BackendToken token) override {
+    return poll_token(token, pending_polls_);
+  }
   bool try_pop_completed(BackendToken&) override { return false; }
-  void release(BackendToken token) override { release_token(token, pending_polls_); }
+  void release(BackendToken token) override {
+    release_token(token, pending_polls_);
+  }
 
   uint64_t submissions() const { return submissions_; }
 

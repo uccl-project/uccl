@@ -1,9 +1,9 @@
 #include "oob.h"
 #include "util/util.h"
 #include <chrono>
+#include <thread>
 #include <fcntl.h>
 #include <sys/mman.h>
-#include <thread>
 #include <unistd.h>
 
 namespace UKernel {
@@ -25,8 +25,8 @@ static inline bool shm_ring_try_recv(jring_t* ring, ShmCtrlMsg& msg) {
   return true;
 }
 
-static inline jring_t* attach_shared_ring_quiet(char const* shm_name, int& shm_fd,
-                                                size_t shm_size) {
+static inline jring_t* attach_shared_ring_quiet(char const* shm_name,
+                                                int& shm_fd, size_t shm_size) {
   shm_fd = shm_open(shm_name, O_RDWR, 0666);
   if (shm_fd < 0) return nullptr;
 
@@ -76,16 +76,18 @@ ShmRingExchanger::~ShmRingExchanger() {
     if (!peer) continue;
 
     if (peer->remote_inbox.ring != nullptr && peer->remote_inbox.attached) {
-      uccl::detach_shared_ring(peer->remote_inbox.ring, peer->remote_inbox.shm_fd,
+      uccl::detach_shared_ring(peer->remote_inbox.ring,
+                               peer->remote_inbox.shm_fd,
                                peer->remote_inbox.shm_size);
     }
     if (peer->local_inbox.ring != nullptr) {
       if (peer->local_inbox.creator) {
-        uccl::destroy_shared_ring(peer->local_inbox.shm_name.c_str(),
-                                  peer->local_inbox.ring, peer->local_inbox.shm_fd,
-                                  peer->local_inbox.shm_size);
+        uccl::destroy_shared_ring(
+            peer->local_inbox.shm_name.c_str(), peer->local_inbox.ring,
+            peer->local_inbox.shm_fd, peer->local_inbox.shm_size);
       } else {
-        uccl::detach_shared_ring(peer->local_inbox.ring, peer->local_inbox.shm_fd,
+        uccl::detach_shared_ring(peer->local_inbox.ring,
+                                 peer->local_inbox.shm_fd,
                                  peer->local_inbox.shm_size);
       }
     }
@@ -231,7 +233,8 @@ bool ShmRingExchanger::send_ack(int peer_rank, uint64_t seq, uint32_t status) {
   AckWire ack{};
   ack.status = status;
   ack.reserved = 0;
-  return send(peer_rank, kTypeAck, seq, &ack, static_cast<uint32_t>(sizeof(ack)));
+  return send(peer_rank, kTypeAck, seq, &ack,
+              static_cast<uint32_t>(sizeof(ack)));
 }
 
 bool ShmRingExchanger::recv_ack(int peer_rank, uint32_t* out_status,
@@ -282,16 +285,18 @@ void ShmRingExchanger::close_peer(int peer_rank) {
 
   if (peer) {
     if (peer->remote_inbox.ring != nullptr && peer->remote_inbox.attached) {
-      uccl::detach_shared_ring(peer->remote_inbox.ring, peer->remote_inbox.shm_fd,
+      uccl::detach_shared_ring(peer->remote_inbox.ring,
+                               peer->remote_inbox.shm_fd,
                                peer->remote_inbox.shm_size);
     }
     if (peer->local_inbox.ring != nullptr) {
       if (peer->local_inbox.creator) {
-        uccl::destroy_shared_ring(peer->local_inbox.shm_name.c_str(),
-                                  peer->local_inbox.ring, peer->local_inbox.shm_fd,
-                                  peer->local_inbox.shm_size);
+        uccl::destroy_shared_ring(
+            peer->local_inbox.shm_name.c_str(), peer->local_inbox.ring,
+            peer->local_inbox.shm_fd, peer->local_inbox.shm_size);
       } else {
-        uccl::detach_shared_ring(peer->local_inbox.ring, peer->local_inbox.shm_fd,
+        uccl::detach_shared_ring(peer->local_inbox.ring,
+                                 peer->local_inbox.shm_fd,
                                  peer->local_inbox.shm_size);
       }
     }
@@ -329,7 +334,8 @@ bool ShmRingExchanger::ensure_local_ring(int peer_rank) {
   return true;
 }
 
-bool ShmRingExchanger::ensure_remote_ring_attached(int peer_rank, int timeout_ms) {
+bool ShmRingExchanger::ensure_remote_ring_attached(int peer_rank,
+                                                   int timeout_ms) {
   std::shared_ptr<PeerState> peer;
   {
     std::lock_guard<std::mutex> lk(mu_);
@@ -348,9 +354,9 @@ bool ShmRingExchanger::ensure_remote_ring_attached(int peer_rank, int timeout_ms
   auto deadline = std::chrono::steady_clock::now() +
                   std::chrono::milliseconds(timeout_ms < 0 ? 0 : timeout_ms);
   while (true) {
-    jring_t* ring = attach_shared_ring_quiet(peer->remote_inbox.shm_name.c_str(),
-                                             peer->remote_inbox.shm_fd,
-                                             peer->remote_inbox.shm_size);
+    jring_t* ring = attach_shared_ring_quiet(
+        peer->remote_inbox.shm_name.c_str(), peer->remote_inbox.shm_fd,
+        peer->remote_inbox.shm_size);
     if (ring != nullptr) {
       std::lock_guard<std::mutex> lk(mu_);
       peer->remote_inbox.ring = ring;
@@ -395,9 +401,10 @@ bool ShmRingExchanger::try_take_connect_locked(int peer_rank) {
   return true;
 }
 
-bool ShmRingExchanger::try_take_cached_ipc_cache_locked(
-    int peer_rank, uint64_t expected_seq, IpcCacheWire& out_cache,
-    uint64_t* out_seq) {
+bool ShmRingExchanger::try_take_cached_ipc_cache_locked(int peer_rank,
+                                                        uint64_t expected_seq,
+                                                        IpcCacheWire& out_cache,
+                                                        uint64_t* out_seq) {
   auto it = rank_to_pending_ipc_cache_.find(peer_rank);
   if (it == rank_to_pending_ipc_cache_.end()) return false;
   auto& q = it->second;
@@ -431,7 +438,8 @@ bool ShmRingExchanger::try_take_cached_ack_locked(int peer_rank,
 void ShmRingExchanger::cache_ipc_cache_message(int peer_rank, uint64_t seq,
                                                IpcCacheWire const& cache) {
   std::lock_guard<std::mutex> lk(pending_mu_);
-  rank_to_pending_ipc_cache_[peer_rank].push_back(PendingIpcCacheMsg{seq, cache});
+  rank_to_pending_ipc_cache_[peer_rank].push_back(
+      PendingIpcCacheMsg{seq, cache});
 }
 
 void ShmRingExchanger::cache_ack_message(int peer_rank, uint64_t seq,

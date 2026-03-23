@@ -11,8 +11,8 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
-#include <unistd.h>
 #include <vector>
+#include <unistd.h>
 
 using CommunicatorConfig = UKernel::Transport::CommunicatorConfig;
 using Communicator = UKernel::Transport::Communicator;
@@ -187,10 +187,10 @@ void complete_requests(std::shared_ptr<Communicator> const& comm,
   }
 }
 
-std::shared_ptr<Communicator> make_communicator(int gpu, int rank, int world_size,
-                                                std::string const& exchanger_ip,
-                                                int exchanger_port,
-                                                UKernel::Transport::PreferredTransport preferred_transport) {
+std::shared_ptr<Communicator> make_communicator(
+    int gpu, int rank, int world_size, std::string const& exchanger_ip,
+    int exchanger_port,
+    UKernel::Transport::PreferredTransport preferred_transport) {
   auto cfg = std::make_shared<CommunicatorConfig>();
   cfg->exchanger_ip = exchanger_ip;
   cfg->exchanger_port = exchanger_port;
@@ -202,9 +202,9 @@ std::shared_ptr<Communicator> make_communicator(int gpu, int rank, int world_siz
 int run_sender(Scenario const& scenario, std::string const& exchanger_ip,
                int exchanger_port,
                UKernel::Transport::PreferredTransport preferred_transport) {
-  auto comm = make_communicator(kClientGpu, kClientRank, kWorldSize,
-                                exchanger_ip, exchanger_port,
-                                preferred_transport);
+  auto comm =
+      make_communicator(kClientGpu, kClientRank, kWorldSize, exchanger_ip,
+                        exchanger_port, preferred_transport);
   require(comm->connect_to(kServerRank), "client connect_to failed");
   auto transport_kind = comm->peer_transport_kind(kServerRank);
 
@@ -223,9 +223,11 @@ int run_sender(Scenario const& scenario, std::string const& exchanger_ip,
   void* sendbuf_d = nullptr;
   GPU_RT_CHECK(gpuMalloc(&sendbuf_d, buffer_bytes_for(scenario.message_count)));
   auto free_buf = uccl::finally([&] { gpuFree(sendbuf_d); });
-  GPU_RT_CHECK(gpuMemset(sendbuf_d, 0, buffer_bytes_for(scenario.message_count)));
+  GPU_RT_CHECK(
+      gpuMemset(sendbuf_d, 0, buffer_bytes_for(scenario.message_count)));
 
-  MR local_mr = comm->reg_mr(sendbuf_d, buffer_bytes_for(scenario.message_count));
+  MR local_mr =
+      comm->reg_mr(sendbuf_d, buffer_bytes_for(scenario.message_count));
 
   MR remote_mr{};
   if (transport_kind == UKernel::Transport::PeerTransportKind::Uccl) {
@@ -262,9 +264,9 @@ int run_sender(Scenario const& scenario, std::string const& exchanger_ip,
 int run_receiver(Scenario const& scenario, std::string const& exchanger_ip,
                  int exchanger_port,
                  UKernel::Transport::PreferredTransport preferred_transport) {
-  auto comm = make_communicator(kServerGpu, kServerRank, kWorldSize,
-                                exchanger_ip, exchanger_port,
-                                preferred_transport);
+  auto comm =
+      make_communicator(kServerGpu, kServerRank, kWorldSize, exchanger_ip,
+                        exchanger_port, preferred_transport);
   require(comm->accept_from(kClientRank), "server accept_from failed");
   auto transport_kind = comm->peer_transport_kind(kClientRank);
 
@@ -283,9 +285,11 @@ int run_receiver(Scenario const& scenario, std::string const& exchanger_ip,
   void* recvbuf_d = nullptr;
   GPU_RT_CHECK(gpuMalloc(&recvbuf_d, buffer_bytes_for(scenario.message_count)));
   auto free_buf = uccl::finally([&] { gpuFree(recvbuf_d); });
-  GPU_RT_CHECK(gpuMemset(recvbuf_d, 0, buffer_bytes_for(scenario.message_count)));
+  GPU_RT_CHECK(
+      gpuMemset(recvbuf_d, 0, buffer_bytes_for(scenario.message_count)));
 
-  MR local_mr = comm->reg_mr(recvbuf_d, buffer_bytes_for(scenario.message_count));
+  MR local_mr =
+      comm->reg_mr(recvbuf_d, buffer_bytes_for(scenario.message_count));
 
   MR remote_mr{};
   if (transport_kind == UKernel::Transport::PeerTransportKind::Uccl) {
@@ -324,9 +328,7 @@ int run_receiver(Scenario const& scenario, std::string const& exchanger_ip,
   return 0;
 }
 
-int unique_local_port() {
-  return 19000 + static_cast<int>(::getpid() % 1000);
-}
+int unique_local_port() { return 19000 + static_cast<int>(::getpid() % 1000); }
 
 }  // namespace
 

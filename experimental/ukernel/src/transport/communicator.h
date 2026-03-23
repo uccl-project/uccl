@@ -7,8 +7,8 @@
 #include "peer_session.h"
 #include "request.h"
 #include "uccl_transport_adapter.h"
-#include <cstddef>
 #include <condition_variable>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -54,8 +54,9 @@ class Communicator {
   MR get_remote_mr(int remote_rank, uint32_t mr_id);
 
   bool register_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle,
-                                  IpcCacheManager::IpcCache const& cache);
-  IpcCacheManager::IpcCache get_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle);
+                                 IpcCacheManager::IpcCache const& cache);
+  IpcCacheManager::IpcCache get_remote_ipc_cache(int remote_rank,
+                                                 gpuIpcMemHandle_t handle);
 
  private:
   struct TrackedRequest {
@@ -68,8 +69,8 @@ class Communicator {
   };
 
   bool check_ready() const;
-  UcclTransportAdapter& ensure_uccl_adapter(
-      CommunicatorMeta const& local_meta, CommunicatorMeta const& peer_meta);
+  UcclTransportAdapter& ensure_uccl_adapter(CommunicatorMeta const& local_meta,
+                                            CommunicatorMeta const& peer_meta);
   std::shared_ptr<IpcChannel> get_ipc_channel_by_rank(int rank);
   bool has_peer_send_path(int rank) const;
   bool has_peer_recv_path(int rank) const;
@@ -78,8 +79,8 @@ class Communicator {
   void register_existing_local_mrs_with_uccl();
   void exchange_peer_metas();
   uint64_t next_ipc_match_seq(int rank, RequestType type);
-  void cache_peer_session(int rank, PeerTransportKind kind, bool mark_send_ready,
-                          bool mark_recv_ready);
+  void cache_peer_session(int rank, PeerTransportKind kind,
+                          bool mark_send_ready, bool mark_recv_ready);
   void shutdown_ipc_channel();
 
   int local_gpu_idx_;

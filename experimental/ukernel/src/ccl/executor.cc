@@ -12,7 +12,8 @@
 namespace UKernel {
 namespace CCL {
 
-PlanRequest make_plan_request(CollectiveKind kind, CollectiveConfig const& config) {
+PlanRequest make_plan_request(CollectiveKind kind,
+                              CollectiveConfig const& config) {
   PlanRequest request;
   request.collective = kind;
   request.algorithm = config.algorithm;
@@ -63,8 +64,7 @@ std::vector<Backend*> backend_sources(ExecutorBackends const& backends) {
   if (backends.device != nullptr && backends.device != backends.transport) {
     out.push_back(backends.device);
   }
-  if (backends.fallback != nullptr &&
-      backends.fallback != backends.transport &&
+  if (backends.fallback != nullptr && backends.fallback != backends.transport &&
       backends.fallback != backends.device) {
     out.push_back(backends.fallback);
   }
@@ -86,7 +86,8 @@ bool is_transport_op(ExecOpKind kind) {
 
 Backend* pick_backend(ExecutorBackends const& backends, ExecOpKind kind) {
   if (is_transport_op(kind)) {
-    return backends.transport != nullptr ? backends.transport : backends.fallback;
+    return backends.transport != nullptr ? backends.transport
+                                         : backends.fallback;
   }
   return backends.device != nullptr ? backends.device : backends.fallback;
 }
@@ -105,12 +106,14 @@ struct Executor::Impl {
           "previous handle before submitting another");
     }
     if (plan.ops.empty()) {
-      throw std::invalid_argument("collective plan must contain at least one op");
+      throw std::invalid_argument(
+          "collective plan must contain at least one op");
     }
 
     ExecutionPlan exec_plan = lower_plan(plan);
     if (exec_plan.ops.empty()) {
-      throw std::invalid_argument("lowered execution plan must contain at least one op");
+      throw std::invalid_argument(
+          "lowered execution plan must contain at least one op");
     }
     validate_backends(completion_sources, exec_plan);
 
@@ -122,7 +125,8 @@ struct Executor::Impl {
     for (size_t index = 0; index < state.exec_plan.ops.size(); ++index) {
       ExecOp const& op = state.exec_plan.ops[index];
       if (op.op_id != index) {
-        throw std::invalid_argument("execution plan op ids must be dense and ordered");
+        throw std::invalid_argument(
+            "execution plan op ids must be dense and ordered");
       }
 
       Backend* backend = pick_backend(backends, op.kind);
@@ -235,7 +239,8 @@ struct Executor::Impl {
     }
 
     OpState& op_state = state.op_states[op_id];
-    if (op_state.completed || op_state.submitted || op_state.remaining_deps != 0) {
+    if (op_state.completed || op_state.submitted ||
+        op_state.remaining_deps != 0) {
       return;
     }
 

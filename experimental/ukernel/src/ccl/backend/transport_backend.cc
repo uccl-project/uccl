@@ -9,7 +9,8 @@ namespace CCL {
 
 namespace {
 
-void validate_span(char const* what, size_t offset, size_t bytes, size_t capacity) {
+void validate_span(char const* what, size_t offset, size_t bytes,
+                   size_t capacity) {
   if (offset > capacity || bytes > capacity - offset) {
     throw std::invalid_argument(std::string(what) + " out of range");
   }
@@ -31,11 +32,13 @@ char const* CommunicatorTransportBackend::name() const {
 }
 
 void CommunicatorTransportBackend::validate(ExecutionPlan const& plan) const {
-  if (plan.staging_bytes_required != 0 && memory_.staging.local_ptr == nullptr) {
+  if (plan.staging_bytes_required != 0 &&
+      memory_.staging.local_ptr == nullptr) {
     throw std::invalid_argument("transport backend staging buffer is missing");
   }
   if (plan.staging_bytes_required > memory_.staging.bytes) {
-    throw std::invalid_argument("transport backend staging capacity is insufficient");
+    throw std::invalid_argument(
+        "transport backend staging capacity is insufficient");
   }
 }
 
@@ -55,17 +58,18 @@ BackendToken CommunicatorTransportBackend::submit(ExecOp const& op) {
   unsigned request_id = 0;
   if (op.kind == ExecOpKind::TransportSend) {
     void const* src = resolve_const(op.src, op.tile.size_bytes);
-    request_id = comm_.isend(op.peer_rank, const_cast<void*>(src), 0,
-                             op.tile.size_bytes,
-                             resolve_local_mr_id(op.src, op.tile.size_bytes),
-                             resolve_remote_mr_id(op.peer_rank), true);
+    request_id =
+        comm_.isend(op.peer_rank, const_cast<void*>(src), 0, op.tile.size_bytes,
+                    resolve_local_mr_id(op.src, op.tile.size_bytes),
+                    resolve_remote_mr_id(op.peer_rank), true);
   } else {
     void* dst = resolve_mutable(op.dst, op.tile.size_bytes);
     request_id = comm_.irecv(op.peer_rank, dst, 0, op.tile.size_bytes, true);
   }
 
   if (request_id == 0) {
-    throw std::runtime_error("communicator transport request submission failed");
+    throw std::runtime_error(
+        "communicator transport request submission failed");
   }
 
   std::lock_guard<std::mutex> lk(mu_);
@@ -158,12 +162,13 @@ void const* CommunicatorTransportBackend::resolve_const(BufferRef const& ref,
                     memory_.tensor.bytes);
       return byte_offset(memory_.tensor.local_ptr, ref.offset_bytes);
     case BufferKind::PeerTensor:
-      if (ref.peer_rank >= 0 &&
-          static_cast<size_t>(ref.peer_rank) < memory_.tensor.peer_views.size()) {
+      if (ref.peer_rank >= 0 && static_cast<size_t>(ref.peer_rank) <
+                                    memory_.tensor.peer_views.size()) {
         auto const& peer =
             memory_.tensor.peer_views[static_cast<size_t>(ref.peer_rank)];
         if (peer.ptr == nullptr) {
-          throw std::invalid_argument("transport peer tensor pointer unavailable");
+          throw std::invalid_argument(
+              "transport peer tensor pointer unavailable");
         }
         validate_span("transport peer tensor", ref.offset_bytes, bytes,
                       memory_.tensor.bytes);
@@ -174,8 +179,8 @@ void const* CommunicatorTransportBackend::resolve_const(BufferRef const& ref,
   throw std::invalid_argument("transport invalid source reference");
 }
 
-uint32_t CommunicatorTransportBackend::resolve_local_mr_id(
-    BufferRef const& ref, size_t bytes) const {
+uint32_t CommunicatorTransportBackend::resolve_local_mr_id(BufferRef const& ref,
+                                                           size_t bytes) const {
   if (ref.kind == BufferKind::Tensor) {
     if (memory_.tensor.local_mr_id == 0) {
       throw std::invalid_argument("transport local tensor MR id is missing");
@@ -187,7 +192,8 @@ uint32_t CommunicatorTransportBackend::resolve_local_mr_id(
   return comm_.get_local_mr(ptr).id;
 }
 
-uint32_t CommunicatorTransportBackend::resolve_remote_mr_id(int peer_rank) const {
+uint32_t CommunicatorTransportBackend::resolve_remote_mr_id(
+    int peer_rank) const {
   if (peer_rank < 0 ||
       static_cast<size_t>(peer_rank) >= memory_.tensor.peer_views.size()) {
     throw std::invalid_argument("transport peer rank out of range");
@@ -200,7 +206,8 @@ uint32_t CommunicatorTransportBackend::resolve_remote_mr_id(int peer_rank) const
   return mr_id;
 }
 
-void CommunicatorTransportBackend::on_transport_completion(unsigned request_id) {
+void CommunicatorTransportBackend::on_transport_completion(
+    unsigned request_id) {
   bool should_release = false;
   {
     std::lock_guard<std::mutex> lk(mu_);

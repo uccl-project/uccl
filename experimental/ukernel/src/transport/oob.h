@@ -5,8 +5,8 @@
 #include "util/jring.h"
 #include <atomic>
 #include <chrono>
-#include <cstring>
 #include <cstdint>
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <iomanip>
@@ -149,8 +149,7 @@ class Exchanger {
 class SockExchanger : public Exchanger {
  public:
   SockExchanger(bool is_server, std::string const& host, int port,
-                int timeout_ms = 3000,
-                size_t max_line_bytes = 1 * 1024 * 1024);
+                int timeout_ms = 3000, size_t max_line_bytes = 1 * 1024 * 1024);
   ~SockExchanger();
 
   bool valid() const override;

@@ -18,7 +18,8 @@ Device::ReduceType to_device_reduce_type(int reduce_type) {
   return static_cast<Device::ReduceType>(reduce_type);
 }
 
-void validate_span(char const* what, size_t offset, size_t bytes, size_t capacity) {
+void validate_span(char const* what, size_t offset, size_t bytes,
+                   size_t capacity) {
   if (offset > capacity || bytes > capacity - offset) {
     throw std::invalid_argument(std::string(what) + " out of range");
   }
@@ -27,8 +28,7 @@ void validate_span(char const* what, size_t offset, size_t bytes, size_t capacit
 }  // namespace
 
 DeviceBackend::DeviceBackend(UKernel::Device::WorkerPool* worker_pool,
-                             CollectiveMemory memory,
-                             int dtype,
+                             CollectiveMemory memory, int dtype,
                              int reduce_type)
     : worker_pool_(worker_pool),
       memory_(std::move(memory)),
@@ -46,11 +46,13 @@ DeviceBackend::DeviceBackend(UKernel::Device::WorkerPool* worker_pool,
 char const* DeviceBackend::name() const { return "device"; }
 
 void DeviceBackend::validate(ExecutionPlan const& plan) const {
-  if (plan.staging_bytes_required != 0 && memory_.staging.local_ptr == nullptr) {
+  if (plan.staging_bytes_required != 0 &&
+      memory_.staging.local_ptr == nullptr) {
     throw std::invalid_argument("device backend staging buffer is missing");
   }
   if (plan.staging_bytes_required > memory_.staging.bytes) {
-    throw std::invalid_argument("device backend staging capacity is insufficient");
+    throw std::invalid_argument(
+        "device backend staging capacity is insufficient");
   }
 }
 
@@ -82,10 +84,9 @@ BackendToken DeviceBackend::submit(ExecOp const& op) {
   args.dst_device = -1;
   args.redType = to_device_reduce_type(reduce_type_);
 
-  Device::TaskType task_type =
-      (op.kind == ExecOpKind::DeviceReduce)
-          ? Device::TaskType::CollReduce
-          : Device::TaskType::CollCopy;
+  Device::TaskType task_type = (op.kind == ExecOpKind::DeviceReduce)
+                                   ? Device::TaskType::CollReduce
+                                   : Device::TaskType::CollCopy;
 
   uint32_t fifo_id = fifo_id_for(op);
   Device::Task task = Device::TaskManager::instance().create_task(
@@ -117,7 +118,8 @@ bool DeviceBackend::try_pop_completed(BackendToken& token) {
   if (completed_tokens_.empty()) {
     for (auto& [token_value, submitted] : submitted_) {
       if (submitted.completion_queued) continue;
-      if (!worker_pool_->is_done(submitted.task_id, submitted.fifo_id)) continue;
+      if (!worker_pool_->is_done(submitted.task_id, submitted.fifo_id))
+        continue;
       submitted.completion_queued = true;
       completed_tokens_.push_back(token_value);
     }
@@ -129,7 +131,9 @@ bool DeviceBackend::try_pop_completed(BackendToken& token) {
   return true;
 }
 
-void DeviceBackend::release(BackendToken token) { submitted_.erase(token.value); }
+void DeviceBackend::release(BackendToken token) {
+  submitted_.erase(token.value);
+}
 
 void* DeviceBackend::byte_offset(void* base, size_t offset) const {
   return static_cast<void*>(static_cast<char*>(base) + offset);
@@ -161,7 +165,8 @@ void* DeviceBackend::resolve_mutable(BufferRef const& ref, size_t bytes) const {
   throw std::invalid_argument("device backend cannot write remote tensor");
 }
 
-void const* DeviceBackend::resolve_const(BufferRef const& ref, size_t bytes) const {
+void const* DeviceBackend::resolve_const(BufferRef const& ref,
+                                         size_t bytes) const {
   switch (ref.kind) {
     case BufferKind::Staging:
       if (memory_.staging.local_ptr == nullptr) {
@@ -178,18 +183,22 @@ void const* DeviceBackend::resolve_const(BufferRef const& ref, size_t bytes) con
                     memory_.tensor.bytes);
       return byte_offset(memory_.tensor.local_ptr, ref.offset_bytes);
     case BufferKind::PeerTensor:
-      if (ref.peer_rank < 0 ||
-          static_cast<size_t>(ref.peer_rank) >= memory_.tensor.peer_views.size()) {
+      if (ref.peer_rank < 0 || static_cast<size_t>(ref.peer_rank) >=
+                                   memory_.tensor.peer_views.size()) {
         break;
       }
-      if (!memory_.tensor.peer_views[static_cast<size_t>(ref.peer_rank)].peer_accessible ||
-          memory_.tensor.peer_views[static_cast<size_t>(ref.peer_rank)].ptr == nullptr) {
-        throw std::invalid_argument("device backend peer tensor is not directly accessible");
+      if (!memory_.tensor.peer_views[static_cast<size_t>(ref.peer_rank)]
+               .peer_accessible ||
+          memory_.tensor.peer_views[static_cast<size_t>(ref.peer_rank)].ptr ==
+              nullptr) {
+        throw std::invalid_argument(
+            "device backend peer tensor is not directly accessible");
       }
       validate_span("device backend peer tensor", ref.offset_bytes, bytes,
                     memory_.tensor.bytes);
-      return byte_offset(memory_.tensor.peer_views[static_cast<size_t>(ref.peer_rank)].ptr,
-                         ref.offset_bytes);
+      return byte_offset(
+          memory_.tensor.peer_views[static_cast<size_t>(ref.peer_rank)].ptr,
+          ref.offset_bytes);
   }
   throw std::invalid_argument("device backend invalid source reference");
 }

@@ -23,14 +23,13 @@ template <typename T>
 __device__ void run_reduce(TaskArgs const& a, uint32_t block_id,
                            uint32_t num_blocks, void* smem_buf = nullptr);
 
-__global__ void singlePersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
-                                       TaskArgs* d_task_args,
-                                       bool* should_stop);
+__global__ void singlePersistentKernel(
+    mscclpp::C2DDeviceHandle<Task>* c2d_fifos, TaskArgs* d_task_args,
+    bool* should_stop);
 
 __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
-                                     TaskArgs* d_task_args,
-                                     bool* should_stop,
-                                     MultiBlockSync* d_sync);
+                                      TaskArgs* d_task_args, bool* should_stop,
+                                      MultiBlockSync* d_sync);
 
 }  // namespace Device
 }  // namespace UKernel
