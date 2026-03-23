@@ -104,8 +104,7 @@ struct alignas(16) TaskArgs {
   int32_t src_device;
   int32_t dst_device;
   ReduceType redType;
-  uint32_t flags;
-  uint32_t pad;
+  uint64_t reserved0 = 0;
 };
 static_assert(sizeof(TaskArgs) % 16 == 0,
               "TaskArgs should be 16B aligned size");

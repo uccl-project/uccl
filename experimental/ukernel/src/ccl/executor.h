@@ -1,6 +1,6 @@
 #pragma once
 
-#include "backend.h"
+#include "backend/backend.h"
 #include "plan.h"
 #include "selector.h"
 #include <cstddef>
@@ -19,13 +19,11 @@ enum class CollectiveOpStatus : uint32_t {
 struct CollectiveConfig {
   int nranks = 1;
   int rank = 0;
-  uint32_t channels = 1;
-  size_t bytes_per_rank = 0;
-  size_t chunk_bytes = 0;
+  uint32_t num_flows = 1;
+  size_t tensor_bytes = 0;
+  size_t tile_bytes = 0;
+  size_t staging_bytes = 0;
   AlgorithmKind algorithm = AlgorithmKind::Ring;
-  BackendKind requested_backend = BackendKind::Auto;
-  BackendSelectorConfig backend_selector{};
-  RuntimeCapabilities runtime_caps{};
 };
 
 PlanRequest make_plan_request(CollectiveKind kind, CollectiveConfig const& config);
@@ -36,8 +34,9 @@ struct CollectiveOpHandle {
 
 class Executor {
  public:
-  // Executor owns runtime scheduling: it lowers copy ops onto concrete
-  // backends, tracks step/op DAG dependencies, and drives backend polling.
+  // Executor owns runtime scheduling for the primitive DAG emitted by the
+  // planner. Ops become ready when all dependency counts reach zero, and
+  // backend completions unlock successor ops.
   // CCL v1 keeps one collective active per executor instance.
   explicit Executor(ExecutorBackends backends);
   ~Executor();

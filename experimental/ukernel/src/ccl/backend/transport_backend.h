@@ -20,22 +20,23 @@ class CommunicatorTransportBackend final : public Backend {
   ~CommunicatorTransportBackend() override = default;
 
   char const* name() const override;
-  bool supports(ExecutionOpKind kind) const override;
-  BackendToken submit(ExecutionOp const& op) override;
+  void validate(ExecutionPlan const& plan) const override;
+  bool supports(ExecOpKind kind) const override;
+  BackendToken submit(ExecOp const& op) override;
   bool poll(BackendToken token) override;
   bool try_pop_completed(BackendToken& token) override;
   void release(BackendToken token) override;
 
-  private:
+ private:
   struct PendingRequest {
     unsigned request_id = 0;
     bool completed = false;
     bool released = false;
   };
 
-  void* resolve_mutable(MemoryRef const& ref, size_t bytes) const;
-  void const* resolve_const(MemoryRef const& ref, size_t bytes) const;
-  uint32_t resolve_local_mr_id(MemoryRef const& ref, size_t bytes) const;
+  void* resolve_mutable(BufferRef const& ref, size_t bytes) const;
+  void const* resolve_const(BufferRef const& ref, size_t bytes) const;
+  uint32_t resolve_local_mr_id(BufferRef const& ref, size_t bytes) const;
   uint32_t resolve_remote_mr_id(int peer_rank) const;
   void on_transport_completion(unsigned request_id);
   static void* byte_offset(void* base, size_t offset);

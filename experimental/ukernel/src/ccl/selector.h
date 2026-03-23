@@ -1,35 +1,44 @@
 #pragma once
 
+#include "memory.h"
 #include "plan.h"
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
 namespace UKernel {
 namespace CCL {
 
-enum class BackendKind : uint32_t { Auto, Device, Transport };
-
-struct PeerRuntimeCapabilities {
-  bool same_node = false;
-  bool peer_accessible = false;
-  bool has_nvlink = false;
-  bool has_copy_engine_path = false;
-  bool supports_rdma = false;
+enum class ExecOpKind : uint32_t {
+  TransportSend,
+  TransportRecv,
+  DeviceCopy,
+  DeviceReduce,
 };
 
-struct RuntimeCapabilities {
-  std::vector<PeerRuntimeCapabilities> peers;
+struct ExecOp {
+  uint32_t op_id = 0;
+  ExecOpKind kind = ExecOpKind::DeviceCopy;
+  int peer_rank = -1;
+  TileRef tile;
+  BufferRef src;
+  BufferRef dst;
+  std::vector<uint32_t> deps;
 };
 
-struct BackendSelectorConfig {
-  bool prefer_transport_for_large_same_node_copy = true;
-  uint64_t transport_copy_threshold_bytes = 256 * 1024;
+struct ExecutionPlan {
+  CollectiveKind collective = CollectiveKind::AllReduce;
+  AlgorithmKind algorithm = AlgorithmKind::Ring;
+  int nranks = 1;
+  int rank = 0;
+  uint32_t num_flows = 1;
+  size_t tensor_bytes = 0;
+  size_t tile_bytes = 0;
+  size_t staging_bytes_required = 0;
+  std::vector<ExecOp> ops;
 };
 
-BackendKind resolve_backend_kind(BackendKind requested,
-                                 ExecutionOp const& op,
-                                 RuntimeCapabilities const& caps,
-                                 BackendSelectorConfig const& cfg);
+ExecutionPlan lower_plan(CollectivePlan const& plan);
 
 }  // namespace CCL
 }  // namespace UKernel

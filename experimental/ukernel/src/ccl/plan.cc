@@ -1,25 +1,30 @@
 #include "plan.h"
 #include "topology.h"
 #include <algorithm>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <utility>
+#include <vector>
 
 namespace UKernel {
 namespace CCL {
 
 namespace {
 
+constexpr uint32_t kNoOp = std::numeric_limits<uint32_t>::max();
+
 size_t ceil_div(size_t a, size_t b) { return b == 0 ? 0 : (a + b - 1) / b; }
 
-size_t chunk_offset(size_t chunk_index, size_t chunk_bytes) {
-  return chunk_index * chunk_bytes;
+size_t tile_offset(size_t tile_index, size_t tile_bytes) {
+  return tile_index * tile_bytes;
 }
 
-size_t chunk_size(size_t bytes, size_t chunk_bytes, size_t chunk_index) {
-  size_t offset = chunk_offset(chunk_index, chunk_bytes);
+size_t tile_size(size_t bytes, size_t tile_bytes, size_t tile_index) {
+  size_t offset = tile_offset(tile_index, tile_bytes);
   if (offset >= bytes) return 0;
-  return std::min(chunk_bytes, bytes - offset);
+  return std::min(tile_bytes, bytes - offset);
 }
 
 size_t nominal_shard_bytes(size_t bytes, int nranks) {
@@ -36,345 +41,310 @@ size_t shard_size(size_t bytes, int nranks, int owner_rank) {
   return std::min(nominal_shard_bytes(bytes, nranks), bytes - offset);
 }
 
-ExecutionOp make_send_op(uint32_t op_id, int peer_rank, ChunkRange const& chunk,
-                         MemoryRef src,
-                         std::vector<uint32_t> deps = {}) {
-  ExecutionOp op;
-  op.op_id = op_id;
-  op.kind = ExecutionOpKind::Send;
-  op.peer_rank = peer_rank;
-  op.chunk = chunk;
-  op.src = src;
-  op.deps = std::move(deps);
-  return op;
+BufferRef make_buffer_ref(BufferKind kind, size_t offset_bytes) {
+  BufferRef ref;
+  ref.kind = kind;
+  ref.offset_bytes = offset_bytes;
+  return ref;
 }
 
-ExecutionOp make_recv_op(uint32_t op_id, int peer_rank, ChunkRange const& chunk,
-                         MemoryRef dst,
-                         std::vector<uint32_t> deps = {}) {
-  ExecutionOp op;
-  op.op_id = op_id;
-  op.kind = ExecutionOpKind::Recv;
-  op.peer_rank = peer_rank;
-  op.chunk = chunk;
-  op.dst = dst;
-  op.deps = std::move(deps);
-  return op;
+BufferRef tensor_ref(size_t offset_bytes) {
+  return make_buffer_ref(BufferKind::Tensor, offset_bytes);
 }
 
-ExecutionOp make_copy_op(uint32_t op_id, ChunkRange const& chunk, MemoryRef src,
-                         MemoryRef dst, std::vector<uint32_t> deps = {}) {
-  ExecutionOp op;
-  op.op_id = op_id;
-  op.kind = ExecutionOpKind::Copy;
-  op.chunk = chunk;
-  op.src = src;
-  op.dst = dst;
-  op.deps = std::move(deps);
-  return op;
+BufferRef staging_ref(size_t offset_bytes) {
+  return make_buffer_ref(BufferKind::Staging, offset_bytes);
 }
 
-ExecutionOp make_reduce_op(uint32_t op_id, ChunkRange const& chunk, MemoryRef src,
-                           MemoryRef dst, std::vector<uint32_t> deps = {}) {
-  ExecutionOp op;
-  op.op_id = op_id;
-  op.kind = ExecutionOpKind::Reduce;
-  op.chunk = chunk;
-  op.src = src;
-  op.dst = dst;
-  op.deps = std::move(deps);
-  return op;
+void add_dep(std::vector<uint32_t>& deps, uint32_t dep) {
+  if (dep == kNoOp) return;
+  if (std::find(deps.begin(), deps.end(), dep) == deps.end()) {
+    deps.push_back(dep);
+  }
+}
+
+void require_plan_request(PlanRequest const& request) {
+  if (request.nranks < 2) {
+    throw std::invalid_argument("collective plan requires at least two ranks");
+  }
+  if (request.rank < 0 || request.rank >= request.nranks) {
+    throw std::invalid_argument("collective rank out of range");
+  }
+  if (request.num_flows == 0) {
+    throw std::invalid_argument("collective plan requires at least one flow");
+  }
+  if (request.tensor_bytes == 0) {
+    throw std::invalid_argument("collective plan tensor_bytes must be positive");
+  }
+  if (request.tile_bytes == 0) {
+    throw std::invalid_argument("collective plan tile_bytes must be positive");
+  }
+}
+
+CollectivePlan make_empty_plan(PlanRequest const& request) {
+  CollectivePlan plan;
+  plan.collective = request.collective;
+  plan.algorithm = request.algorithm;
+  plan.nranks = request.nranks;
+  plan.rank = request.rank;
+  plan.num_flows = request.num_flows;
+  plan.tensor_bytes = request.tensor_bytes;
+  plan.tile_bytes = request.tile_bytes;
+  return plan;
+}
+
+struct PlanBuilder {
+  explicit PlanBuilder(CollectivePlan plan_in) : plan(std::move(plan_in)) {}
+
+  uint32_t add_op(PrimitiveOpKind kind, TileRef tile, BufferRef src, BufferRef dst,
+                  int peer_rank, std::vector<uint32_t> deps) {
+    PrimitiveOp op;
+    op.op_id = next_op_id++;
+    op.kind = kind;
+    op.peer_rank = peer_rank;
+    op.tile = tile;
+    op.src = std::move(src);
+    op.dst = std::move(dst);
+    op.deps = std::move(deps);
+    plan.ops.push_back(std::move(op));
+    return plan.ops.back().op_id;
+  }
+
+  CollectivePlan plan;
+  uint32_t next_op_id = 0;
+};
+
+TileRef make_tile(PlanRequest const& request, int owner_rank, uint32_t flow_index,
+                  size_t tile_index, size_t offset_bytes, size_t size_bytes) {
+  TileRef tile;
+  tile.owner_rank = static_cast<uint32_t>(owner_rank);
+  tile.tile_index = static_cast<uint32_t>(tile_index);
+  tile.flow_index = flow_index;
+  tile.offset_bytes = offset_bytes;
+  tile.size_bytes = size_bytes;
+  return tile;
 }
 
 CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
   RingTopology ring{request.nranks};
-  CollectivePlan plan;
-  plan.collective = request.collective;
-  plan.algorithm = request.algorithm;
-  plan.nranks = request.nranks;
-  plan.rank = request.rank;
-  plan.channels = request.channels;
-  plan.bytes_per_rank = request.bytes_per_rank;
-  plan.chunk_bytes = request.chunk_bytes;
+  CollectivePlan plan = make_empty_plan(request);
+  plan.algorithm = AlgorithmKind::Ring;
+  plan.staging_bytes_required =
+      static_cast<size_t>(request.num_flows) * request.tile_bytes;
+  if (request.staging_bytes < plan.staging_bytes_required) {
+    throw std::invalid_argument(
+        "allreduce ring requires staging_bytes >= num_flows * tile_bytes");
+  }
 
-  size_t shard_bytes = nominal_shard_bytes(request.bytes_per_rank, request.nranks);
-  size_t chunks_per_shard = ceil_div(shard_bytes, request.chunk_bytes);
-  uint32_t next_step_id = 0;
-  uint32_t next_op_id = 0;
-  std::vector<int32_t> last_step_for_channel(request.channels, -1);
+  PlanBuilder builder(std::move(plan));
+  size_t shard_bytes = nominal_shard_bytes(request.tensor_bytes, request.nranks);
+  size_t tiles_per_shard = ceil_div(shard_bytes, request.tile_bytes);
 
-  for (int ring_step = 0; ring_step < request.nranks - 1; ++ring_step) {
-    int send_owner = ring.wrap(request.rank - ring_step);
-    int recv_owner = ring.wrap(request.rank - ring_step - 1);
-    size_t send_bytes = shard_size(request.bytes_per_rank, request.nranks, send_owner);
-    size_t recv_bytes = shard_size(request.bytes_per_rank, request.nranks, recv_owner);
+  std::vector<std::vector<uint32_t>> ready_ops(
+      static_cast<size_t>(request.nranks),
+      std::vector<uint32_t>(tiles_per_shard, kNoOp));
+  std::vector<uint32_t> last_send_to_peer(static_cast<size_t>(request.nranks), kNoOp);
+  std::vector<uint32_t> last_recv_from_peer(static_cast<size_t>(request.nranks), kNoOp);
+  std::vector<uint32_t> last_staging_consumer(request.num_flows, kNoOp);
 
-    for (size_t chunk_index = 0; chunk_index < chunks_per_shard; ++chunk_index) {
-      size_t send_chunk_bytes = chunk_size(send_bytes, request.chunk_bytes, chunk_index);
-      size_t recv_chunk_bytes = chunk_size(recv_bytes, request.chunk_bytes, chunk_index);
-      if (send_chunk_bytes == 0 && recv_chunk_bytes == 0) continue;
+  for (uint32_t flow_slot = 0; flow_slot < request.num_flows; ++flow_slot) {
+    size_t staging_offset = static_cast<size_t>(flow_slot) * request.tile_bytes;
 
-      ChunkRange chunk;
-      chunk.owner_rank = static_cast<uint32_t>(recv_owner);
-      chunk.chunk_index = static_cast<uint32_t>(chunk_index);
-      chunk.channel_id = static_cast<uint32_t>(chunk_index % request.channels);
-      chunk.offset_bytes =
-          shard_offset(request.bytes_per_rank, request.nranks, recv_owner) +
-          chunk_offset(chunk_index, request.chunk_bytes);
-      chunk.size_bytes = recv_chunk_bytes;
+    for (int ring_step = 0; ring_step < request.nranks - 1; ++ring_step) {
+      int send_owner = ring.wrap(request.rank - ring_step);
+      int recv_owner = ring.wrap(request.rank - ring_step - 1);
+      int send_peer = ring.next(request.rank);
+      int recv_peer = ring.prev(request.rank);
+      size_t send_bytes = shard_size(request.tensor_bytes, request.nranks, send_owner);
+      size_t recv_bytes = shard_size(request.tensor_bytes, request.nranks, recv_owner);
 
-      CollectiveStep step;
-      step.step_id = next_step_id++;
-      step.phase = StepPhase::ReduceScatter;
-      step.chunk = chunk;
+      for (size_t tile_index = flow_slot; tile_index < tiles_per_shard;
+           tile_index += request.num_flows) {
+        size_t send_tile_bytes = tile_size(send_bytes, request.tile_bytes, tile_index);
+        size_t recv_tile_bytes = tile_size(recv_bytes, request.tile_bytes, tile_index);
 
-      int32_t pred = last_step_for_channel[chunk.channel_id];
-      if (pred >= 0) step.predecessors.push_back(static_cast<uint32_t>(pred));
+        if (send_tile_bytes > 0) {
+          size_t offset =
+              shard_offset(request.tensor_bytes, request.nranks, send_owner) +
+              tile_offset(tile_index, request.tile_bytes);
+          TileRef send_tile =
+              make_tile(request, send_owner, flow_slot, tile_index, offset, send_tile_bytes);
 
-      if (send_chunk_bytes > 0) {
-        ChunkRange send_chunk = chunk;
-        send_chunk.owner_rank = static_cast<uint32_t>(send_owner);
-        send_chunk.offset_bytes =
-            shard_offset(request.bytes_per_rank, request.nranks, send_owner) +
-            chunk_offset(chunk_index, request.chunk_bytes);
-        send_chunk.size_bytes = send_chunk_bytes;
-        step.ops.push_back(make_send_op(
-            next_op_id++, ring.next(request.rank), send_chunk,
-            MemoryRef{MemorySlot::SymmetricTensor, -1, send_chunk.offset_bytes}));
+          std::vector<uint32_t> deps;
+          add_dep(deps, ready_ops[static_cast<size_t>(send_owner)][tile_index]);
+          add_dep(deps, last_send_to_peer[static_cast<size_t>(send_peer)]);
+          uint32_t send_op = builder.add_op(
+              PrimitiveOpKind::Send, send_tile, tensor_ref(send_tile.offset_bytes),
+              BufferRef{}, send_peer, std::move(deps));
+          last_send_to_peer[static_cast<size_t>(send_peer)] = send_op;
+        }
+
+        if (recv_tile_bytes > 0) {
+          size_t offset =
+              shard_offset(request.tensor_bytes, request.nranks, recv_owner) +
+              tile_offset(tile_index, request.tile_bytes);
+          TileRef recv_tile =
+              make_tile(request, recv_owner, flow_slot, tile_index, offset, recv_tile_bytes);
+
+          std::vector<uint32_t> recv_deps;
+          add_dep(recv_deps, last_recv_from_peer[static_cast<size_t>(recv_peer)]);
+          add_dep(recv_deps, last_staging_consumer[flow_slot]);
+          uint32_t recv_op = builder.add_op(
+              PrimitiveOpKind::Recv, recv_tile, BufferRef{},
+              staging_ref(staging_offset), recv_peer, std::move(recv_deps));
+          last_recv_from_peer[static_cast<size_t>(recv_peer)] = recv_op;
+
+          std::vector<uint32_t> reduce_deps;
+          add_dep(reduce_deps, recv_op);
+          uint32_t reduce_op = builder.add_op(
+              PrimitiveOpKind::Reduce, recv_tile, staging_ref(staging_offset),
+              tensor_ref(recv_tile.offset_bytes), -1, std::move(reduce_deps));
+          ready_ops[static_cast<size_t>(recv_owner)][tile_index] = reduce_op;
+          last_staging_consumer[flow_slot] = reduce_op;
+        }
       }
-
-      if (recv_chunk_bytes > 0) {
-        uint32_t recv_op_id = next_op_id++;
-        step.ops.push_back(make_recv_op(
-            recv_op_id, ring.prev(request.rank), chunk,
-            MemoryRef{MemorySlot::RecvStaging, -1,
-                      chunk_offset(chunk_index, request.chunk_bytes)}));
-        step.ops.push_back(make_reduce_op(
-            next_op_id++, chunk,
-            MemoryRef{MemorySlot::RecvStaging, -1,
-                      chunk_offset(chunk_index, request.chunk_bytes)},
-            MemoryRef{MemorySlot::SymmetricTensor, -1, chunk.offset_bytes},
-            {recv_op_id}));
-      }
-
-      last_step_for_channel[chunk.channel_id] = static_cast<int32_t>(step.step_id);
-      plan.steps.push_back(std::move(step));
     }
   }
 
-  for (int ring_step = 0; ring_step < request.nranks - 1; ++ring_step) {
-    int send_owner = ring.wrap(request.rank - ring_step);
-    int recv_owner = ring.wrap(request.rank - ring_step - 1);
-    size_t send_bytes = shard_size(request.bytes_per_rank, request.nranks, send_owner);
-    size_t recv_bytes = shard_size(request.bytes_per_rank, request.nranks, recv_owner);
+  for (uint32_t flow_slot = 0; flow_slot < request.num_flows; ++flow_slot) {
+    for (int ring_step = 0; ring_step < request.nranks - 1; ++ring_step) {
+      int send_owner = ring.wrap(request.rank - ring_step);
+      int recv_owner = ring.wrap(request.rank - ring_step - 1);
+      int send_peer = ring.next(request.rank);
+      int recv_peer = ring.prev(request.rank);
+      size_t send_bytes = shard_size(request.tensor_bytes, request.nranks, send_owner);
+      size_t recv_bytes = shard_size(request.tensor_bytes, request.nranks, recv_owner);
 
-    for (size_t chunk_index = 0; chunk_index < chunks_per_shard; ++chunk_index) {
-      size_t send_chunk_bytes = chunk_size(send_bytes, request.chunk_bytes, chunk_index);
-      size_t recv_chunk_bytes = chunk_size(recv_bytes, request.chunk_bytes, chunk_index);
-      if (send_chunk_bytes == 0 && recv_chunk_bytes == 0) continue;
+      for (size_t tile_index = flow_slot; tile_index < tiles_per_shard;
+           tile_index += request.num_flows) {
+        size_t send_tile_bytes = tile_size(send_bytes, request.tile_bytes, tile_index);
+        size_t recv_tile_bytes = tile_size(recv_bytes, request.tile_bytes, tile_index);
 
-      ChunkRange chunk;
-      chunk.owner_rank = static_cast<uint32_t>(recv_owner);
-      chunk.chunk_index = static_cast<uint32_t>(chunk_index);
-      chunk.channel_id = static_cast<uint32_t>(chunk_index % request.channels);
-      chunk.offset_bytes =
-          shard_offset(request.bytes_per_rank, request.nranks, recv_owner) +
-          chunk_offset(chunk_index, request.chunk_bytes);
-      chunk.size_bytes = recv_chunk_bytes;
+        if (send_tile_bytes > 0) {
+          size_t offset =
+              shard_offset(request.tensor_bytes, request.nranks, send_owner) +
+              tile_offset(tile_index, request.tile_bytes);
+          TileRef send_tile =
+              make_tile(request, send_owner, flow_slot, tile_index, offset, send_tile_bytes);
 
-      CollectiveStep step;
-      step.step_id = next_step_id++;
-      step.phase = StepPhase::AllGather;
-      step.chunk = chunk;
+          std::vector<uint32_t> deps;
+          add_dep(deps, ready_ops[static_cast<size_t>(send_owner)][tile_index]);
+          add_dep(deps, last_send_to_peer[static_cast<size_t>(send_peer)]);
+          uint32_t send_op = builder.add_op(
+              PrimitiveOpKind::Send, send_tile, tensor_ref(send_tile.offset_bytes),
+              BufferRef{}, send_peer, std::move(deps));
+          last_send_to_peer[static_cast<size_t>(send_peer)] = send_op;
+        }
 
-      int32_t pred = last_step_for_channel[chunk.channel_id];
-      if (pred >= 0) step.predecessors.push_back(static_cast<uint32_t>(pred));
+        if (recv_tile_bytes > 0) {
+          size_t offset =
+              shard_offset(request.tensor_bytes, request.nranks, recv_owner) +
+              tile_offset(tile_index, request.tile_bytes);
+          TileRef recv_tile =
+              make_tile(request, recv_owner, flow_slot, tile_index, offset, recv_tile_bytes);
 
-      if (send_chunk_bytes > 0) {
-        ChunkRange send_chunk = chunk;
-        send_chunk.owner_rank = static_cast<uint32_t>(send_owner);
-        send_chunk.offset_bytes =
-            shard_offset(request.bytes_per_rank, request.nranks, send_owner) +
-            chunk_offset(chunk_index, request.chunk_bytes);
-        send_chunk.size_bytes = send_chunk_bytes;
-        step.ops.push_back(make_send_op(
-            next_op_id++, ring.next(request.rank), send_chunk,
-            MemoryRef{MemorySlot::SymmetricTensor, -1, send_chunk.offset_bytes}));
+          std::vector<uint32_t> recv_deps;
+          add_dep(recv_deps, last_recv_from_peer[static_cast<size_t>(recv_peer)]);
+          uint32_t recv_op = builder.add_op(
+              PrimitiveOpKind::Recv, recv_tile, BufferRef{},
+              tensor_ref(recv_tile.offset_bytes), recv_peer, std::move(recv_deps));
+          last_recv_from_peer[static_cast<size_t>(recv_peer)] = recv_op;
+          ready_ops[static_cast<size_t>(recv_owner)][tile_index] = recv_op;
+        }
       }
-
-      if (recv_chunk_bytes > 0) {
-        step.ops.push_back(make_recv_op(
-            next_op_id++, ring.prev(request.rank), chunk,
-            MemoryRef{MemorySlot::SymmetricTensor, -1, chunk.offset_bytes}));
-      }
-
-      last_step_for_channel[chunk.channel_id] = static_cast<int32_t>(step.step_id);
-      plan.steps.push_back(std::move(step));
     }
   }
 
-  return plan;
+  return std::move(builder.plan);
 }
 
-CollectivePlan build_alltoall_ring_plan(PlanRequest const& request) {
-  RingTopology ring{request.nranks};
-  CollectivePlan plan;
-  plan.collective = request.collective;
-  plan.algorithm = request.algorithm;
-  plan.nranks = request.nranks;
-  plan.rank = request.rank;
-  plan.channels = request.channels;
-  plan.bytes_per_rank = request.bytes_per_rank;
-  plan.chunk_bytes = request.chunk_bytes;
-
-  size_t slice_bytes = nominal_shard_bytes(request.bytes_per_rank, request.nranks);
-  size_t chunks_per_slice = ceil_div(slice_bytes, request.chunk_bytes);
-  uint32_t next_step_id = 0;
-  uint32_t next_op_id = 0;
-  std::vector<int32_t> last_step_for_channel(request.channels, -1);
-  std::vector<std::vector<uint32_t>> send_op_ids(
-      static_cast<size_t>(request.nranks),
-      std::vector<uint32_t>(chunks_per_slice, 0));
-  std::vector<std::vector<uint32_t>> recv_op_ids(
-      static_cast<size_t>(request.nranks),
-      std::vector<uint32_t>(chunks_per_slice, 0));
-
-  for (int ring_step = 0; ring_step < request.nranks - 1; ++ring_step) {
-    int send_peer = ring.wrap(request.rank + ring_step + 1);
-    int recv_peer = ring.wrap(request.rank - ring_step - 1);
-    size_t send_bytes = shard_size(request.bytes_per_rank, request.nranks, send_peer);
-    size_t recv_bytes = shard_size(request.bytes_per_rank, request.nranks, recv_peer);
-
-    for (size_t chunk_index = 0; chunk_index < chunks_per_slice; ++chunk_index) {
-      size_t send_chunk_bytes = chunk_size(send_bytes, request.chunk_bytes, chunk_index);
-      size_t recv_chunk_bytes = chunk_size(recv_bytes, request.chunk_bytes, chunk_index);
-      if (send_chunk_bytes == 0 && recv_chunk_bytes == 0) continue;
-
-      ChunkRange chunk;
-      chunk.owner_rank = static_cast<uint32_t>(recv_peer);
-      chunk.chunk_index = static_cast<uint32_t>(chunk_index);
-      chunk.channel_id = static_cast<uint32_t>(chunk_index % request.channels);
-      chunk.offset_bytes =
-          shard_offset(request.bytes_per_rank, request.nranks, recv_peer) +
-          chunk_offset(chunk_index, request.chunk_bytes);
-      chunk.size_bytes = recv_chunk_bytes;
-
-      CollectiveStep step;
-      step.step_id = next_step_id++;
-      step.phase = StepPhase::AllToAll;
-      step.chunk = chunk;
-
-      int32_t pred = last_step_for_channel[chunk.channel_id];
-      if (pred >= 0) step.predecessors.push_back(static_cast<uint32_t>(pred));
-
-      if (send_chunk_bytes > 0) {
-        ChunkRange send_chunk = chunk;
-        send_chunk.owner_rank = static_cast<uint32_t>(request.rank);
-        send_chunk.offset_bytes =
-            shard_offset(request.bytes_per_rank, request.nranks, send_peer) +
-            chunk_offset(chunk_index, request.chunk_bytes);
-        send_chunk.size_bytes = send_chunk_bytes;
-        uint32_t send_op_id = next_op_id++;
-        step.ops.push_back(make_send_op(
-            send_op_id, send_peer, send_chunk,
-            MemoryRef{MemorySlot::SymmetricTensor, -1, send_chunk.offset_bytes}));
-        send_op_ids[static_cast<size_t>(send_peer)][chunk_index] = send_op_id;
-      }
-
-      if (recv_chunk_bytes > 0) {
-        uint32_t recv_op_id = next_op_id++;
-        step.ops.push_back(make_recv_op(
-            recv_op_id, recv_peer, chunk,
-            MemoryRef{MemorySlot::RecvStaging, -1, chunk.offset_bytes}));
-        recv_op_ids[static_cast<size_t>(recv_peer)][chunk_index] = recv_op_id;
-      }
-
-      last_step_for_channel[chunk.channel_id] = static_cast<int32_t>(step.step_id);
-      plan.steps.push_back(std::move(step));
-    }
+CollectivePlan build_alltoall_pairwise_plan(PlanRequest const& request) {
+  CollectivePlan plan = make_empty_plan(request);
+  plan.algorithm = AlgorithmKind::Pairwise;
+  plan.staging_bytes_required =
+      static_cast<size_t>(request.nranks - 1) * request.tile_bytes;
+  if (request.staging_bytes < plan.staging_bytes_required) {
+    throw std::invalid_argument(
+        "alltoall pairwise requires staging_bytes >= (nranks - 1) * tile_bytes");
   }
 
+  PlanBuilder builder(std::move(plan));
+  size_t slice_bytes = nominal_shard_bytes(request.tensor_bytes, request.nranks);
+  size_t tiles_per_slice = ceil_div(slice_bytes, request.tile_bytes);
+
+  std::vector<uint32_t> last_send_to_peer(static_cast<size_t>(request.nranks), kNoOp);
+  std::vector<uint32_t> last_recv_from_peer(static_cast<size_t>(request.nranks), kNoOp);
+  std::vector<uint32_t> last_staging_consumer(
+      static_cast<size_t>(request.nranks > 0 ? request.nranks - 1 : 0), kNoOp);
+
+  size_t peer_slot = 0;
   for (int peer = 0; peer < request.nranks; ++peer) {
     if (peer == request.rank) continue;
-    size_t peer_bytes = shard_size(request.bytes_per_rank, request.nranks, peer);
-    for (size_t chunk_index = 0; chunk_index < chunks_per_slice; ++chunk_index) {
-      size_t copy_bytes = chunk_size(peer_bytes, request.chunk_bytes, chunk_index);
-      if (copy_bytes == 0) continue;
 
-      ChunkRange chunk;
-      chunk.owner_rank = static_cast<uint32_t>(peer);
-      chunk.chunk_index = static_cast<uint32_t>(chunk_index);
-      chunk.channel_id = static_cast<uint32_t>(chunk_index % request.channels);
-      chunk.offset_bytes =
-          shard_offset(request.bytes_per_rank, request.nranks, peer) +
-          chunk_offset(chunk_index, request.chunk_bytes);
-      chunk.size_bytes = copy_bytes;
+    size_t slice_offset = shard_offset(request.tensor_bytes, request.nranks, peer);
+    size_t peer_slice_bytes = shard_size(request.tensor_bytes, request.nranks, peer);
+    size_t staging_offset = peer_slot * request.tile_bytes;
 
-      CollectiveStep step;
-      step.step_id = next_step_id++;
-      step.phase = StepPhase::AllToAll;
-      step.chunk = chunk;
-      std::vector<uint32_t> deps;
+    for (size_t tile_index = 0; tile_index < tiles_per_slice; ++tile_index) {
+      size_t bytes = tile_size(peer_slice_bytes, request.tile_bytes, tile_index);
+      if (bytes == 0) continue;
 
-      uint32_t recv_dep =
-          recv_op_ids[static_cast<size_t>(peer)][chunk_index];
-      uint32_t send_dep =
-          send_op_ids[static_cast<size_t>(peer)][chunk_index];
-      if (recv_dep != 0) deps.push_back(recv_dep);
-      if (send_dep != 0) deps.push_back(send_dep);
+      TileRef tile = make_tile(
+          request, peer, static_cast<uint32_t>(tile_index % request.num_flows),
+          tile_index, slice_offset + tile_offset(tile_index, request.tile_bytes), bytes);
 
-      step.ops.push_back(make_copy_op(
-          next_op_id++, chunk,
-          MemoryRef{MemorySlot::RecvStaging, -1, chunk.offset_bytes},
-          MemoryRef{MemorySlot::SymmetricTensor, -1, chunk.offset_bytes},
-          std::move(deps)));
-      plan.steps.push_back(std::move(step));
+      std::vector<uint32_t> send_deps;
+      add_dep(send_deps, last_send_to_peer[static_cast<size_t>(peer)]);
+      uint32_t send_op = builder.add_op(
+          PrimitiveOpKind::Send, tile, tensor_ref(tile.offset_bytes), BufferRef{}, peer,
+          std::move(send_deps));
+      last_send_to_peer[static_cast<size_t>(peer)] = send_op;
+
+      std::vector<uint32_t> recv_deps;
+      add_dep(recv_deps, last_recv_from_peer[static_cast<size_t>(peer)]);
+      add_dep(recv_deps, last_staging_consumer[peer_slot]);
+      uint32_t recv_op = builder.add_op(
+          PrimitiveOpKind::Recv, tile, BufferRef{}, staging_ref(staging_offset), peer,
+          std::move(recv_deps));
+      last_recv_from_peer[static_cast<size_t>(peer)] = recv_op;
+
+      std::vector<uint32_t> copy_deps;
+      add_dep(copy_deps, send_op);
+      add_dep(copy_deps, recv_op);
+      uint32_t copy_op = builder.add_op(
+          PrimitiveOpKind::Copy, tile, staging_ref(staging_offset),
+          tensor_ref(tile.offset_bytes), -1, std::move(copy_deps));
+      last_staging_consumer[peer_slot] = copy_op;
     }
+
+    ++peer_slot;
   }
 
-  return plan;
+  return std::move(builder.plan);
 }
 
-char const* collective_name(CollectiveKind kind) {
+char const* primitive_name(PrimitiveOpKind kind) {
   switch (kind) {
-    case CollectiveKind::AllGather:
-      return "AllGather";
-    case CollectiveKind::AllReduce:
-      return "AllReduce";
-    case CollectiveKind::ReduceScatter:
-      return "ReduceScatter";
-    case CollectiveKind::Broadcast:
-      return "Broadcast";
-    case CollectiveKind::AllToAll:
-      return "AllToAll";
+    case PrimitiveOpKind::Send:
+      return "send";
+    case PrimitiveOpKind::Recv:
+      return "recv";
+    case PrimitiveOpKind::Copy:
+      return "copy";
+    case PrimitiveOpKind::Reduce:
+      return "reduce";
   }
-  return "Unknown";
+  return "unknown";
 }
 
-char const* op_name(ExecutionOpKind kind) {
+char const* buffer_name(BufferKind kind) {
   switch (kind) {
-    case ExecutionOpKind::Send:
-      return "Send";
-    case ExecutionOpKind::Recv:
-      return "Recv";
-    case ExecutionOpKind::Copy:
-      return "Copy";
-    case ExecutionOpKind::Reduce:
-      return "Reduce";
-    case ExecutionOpKind::EventWait:
-      return "EventWait";
-    case ExecutionOpKind::Barrier:
-      return "Barrier";
-  }
-  return "Unknown";
-}
-
-char const* slot_name(MemorySlot slot) {
-  switch (slot) {
-    case MemorySlot::SymmetricTensor:
+    case BufferKind::Tensor:
       return "tensor";
-    case MemorySlot::RecvStaging:
-      return "recv_staging";
+    case BufferKind::Staging:
+      return "staging";
+    case BufferKind::PeerTensor:
+      return "peer-tensor";
   }
   return "unknown";
 }
@@ -382,66 +352,55 @@ char const* slot_name(MemorySlot slot) {
 }  // namespace
 
 CollectivePlan build_plan(PlanRequest const& request) {
-  if (request.algorithm != AlgorithmKind::Ring) {
-    throw std::invalid_argument("Only ring algorithm is supported");
-  }
-  if (request.nranks < 2) {
-    throw std::invalid_argument("nranks must be >= 2");
-  }
-  if (request.rank < 0 || request.rank >= request.nranks) {
-    throw std::invalid_argument("rank out of range");
-  }
-  if (request.channels == 0) {
-    throw std::invalid_argument("channels must be >= 1");
-  }
-  if (request.chunk_bytes == 0) {
-    throw std::invalid_argument("chunk_bytes must be >= 1");
-  }
-
+  require_plan_request(request);
   switch (request.collective) {
     case CollectiveKind::AllReduce:
+      if (request.algorithm != AlgorithmKind::Ring) {
+        throw std::invalid_argument("allreduce currently supports only ring algorithm");
+      }
       return build_allreduce_ring_plan(request);
     case CollectiveKind::AllToAll:
-      return build_alltoall_ring_plan(request);
-    case CollectiveKind::AllGather:
-    case CollectiveKind::ReduceScatter:
-    case CollectiveKind::Broadcast:
-      throw std::invalid_argument("Collective kind not implemented in CCL v1");
+      if (request.algorithm != AlgorithmKind::Pairwise) {
+        throw std::invalid_argument("alltoall currently supports only pairwise algorithm");
+      }
+      return build_alltoall_pairwise_plan(request);
   }
-  throw std::invalid_argument("Unsupported collective kind");
+  throw std::invalid_argument("unsupported collective kind");
 }
 
 std::string to_string(CollectivePlan const& plan) {
   std::ostringstream oss;
-  oss << collective_name(plan.collective) << " plan"
-      << " rank=" << plan.rank << "/" << plan.nranks
-      << " channels=" << plan.channels
-      << " bytes_per_rank=" << plan.bytes_per_rank
-      << " chunk_bytes=" << plan.chunk_bytes
-      << " steps=" << plan.steps.size() << "\n";
-
-  for (auto const& step : plan.steps) {
-    oss << "step " << step.step_id
-        << " owner=" << step.chunk.owner_rank
-        << " chunk=" << step.chunk.chunk_index
-        << " channel=" << step.chunk.channel_id
-        << " off=" << step.chunk.offset_bytes
-        << " size=" << step.chunk.size_bytes
-        << " ops=" << step.ops.size() << " [";
-    for (size_t i = 0; i < step.ops.size(); ++i) {
-      if (i) oss << ", ";
-      auto const& op = step.ops[i];
-      oss << op_name(op.kind);
-      if (op.peer_rank >= 0) oss << "@peer=" << op.peer_rank;
-      if (op.kind == ExecutionOpKind::Copy || op.kind == ExecutionOpKind::Reduce ||
-          op.kind == ExecutionOpKind::Send || op.kind == ExecutionOpKind::Recv) {
-        oss << "(" << slot_name(op.src.slot) << ":" << op.src.rank
-            << "->" << slot_name(op.dst.slot) << ":" << op.dst.rank << ")";
-      }
+  oss << "CollectivePlan(rank=" << plan.rank << "/" << plan.nranks
+      << ", tensor_bytes=" << plan.tensor_bytes
+      << ", tile_bytes=" << plan.tile_bytes
+      << ", staging_bytes_required=" << plan.staging_bytes_required
+      << ", ops=" << plan.ops.size() << ")\n";
+  for (auto const& op : plan.ops) {
+    oss << "  op " << op.op_id << " " << primitive_name(op.kind)
+        << " lane=" << op.tile.flow_index;
+    if (op.peer_rank >= 0) {
+      oss << " peer=" << op.peer_rank;
     }
-    oss << "]\n";
+    if (!op.deps.empty()) {
+      oss << " deps=[";
+      for (size_t i = 0; i < op.deps.size(); ++i) {
+        if (i != 0) oss << ",";
+        oss << op.deps[i];
+      }
+      oss << "]";
+    }
+    if (op.kind == PrimitiveOpKind::Send || op.kind == PrimitiveOpKind::Copy ||
+        op.kind == PrimitiveOpKind::Reduce) {
+      oss << " src=" << buffer_name(op.src.kind)
+          << "@" << op.src.offset_bytes << "+" << op.tile.size_bytes;
+    }
+    if (op.kind == PrimitiveOpKind::Recv || op.kind == PrimitiveOpKind::Copy ||
+        op.kind == PrimitiveOpKind::Reduce) {
+      oss << " dst=" << buffer_name(op.dst.kind)
+          << "@" << op.dst.offset_bytes << "+" << op.tile.size_bytes;
+    }
+    oss << "\n";
   }
-
   return oss.str();
 }
 
