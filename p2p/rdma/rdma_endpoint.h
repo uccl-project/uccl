@@ -9,6 +9,7 @@
 #include "rdma_device.h"
 #include "util/debug.h"
 #include "util/net.h"
+#include <cc/link_bandwidth.h>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -755,11 +756,15 @@ class NICEndpoint {
     }
     auto numa_node = RdmaDeviceManager::instance().get_numa_node(
         RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_)[0]);
+    auto* ctx =
+        (!contexts_.empty() && contexts_[0]) ? contexts_[0]->getCtx() : nullptr;
+    double link_bw =
+        uccl::cc::get_link_bandwidth_bps(ctx, "UCCL_P2P_RDMA_LINK_GBPS");
     {
       std::unique_lock write_lock(send_channel_mutex_);
       auto [it, inserted] = send_channel_groups_.try_emplace(
-          rank_id,
-          std::make_shared<SendConnection>(numa_node, auto_start_polling_));
+          rank_id, std::make_shared<SendConnection>(
+                       numa_node, auto_start_polling_, link_bw));
       return it->second;
     }
   }

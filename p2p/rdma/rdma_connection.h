@@ -3,6 +3,8 @@
 #include "define.h"
 #include "rdma_ctrl_channel.h"
 #include "rdma_data_channel.h"
+#include <cc/cc_state.h>
+#include <cc/link_bandwidth.h>
 #include <random>
 
 class RDMAConnection {
@@ -104,11 +106,14 @@ class RDMAConnection {
 
 class SendConnection : public RDMAConnection {
  public:
-  SendConnection(int numa_node, bool auto_start_polling = true)
+  SendConnection(int numa_node, bool auto_start_polling = true,
+                 double link_bandwidth_bps = 400.0 * 1e9 / 8.0)
       : numa_node_(numa_node),
         running_(false),
         poll_thread_(nullptr),
-        auto_start_polling_(auto_start_polling) {
+        auto_start_polling_(auto_start_polling),
+        cc_(uccl::cc::CongestionControlState::parseMode("UCCL_P2P_RDMA_CC"),
+            uccl::freq_ghz, link_bandwidth_bps) {
     tracker_ = std::make_shared<AtomicBitmapPacketTrackerMultiAck>();
     request_queue_ = std::make_unique<
         RingBuffer<std::shared_ptr<RDMASendRequest>, kRingCapacity>>();
@@ -160,6 +165,7 @@ class SendConnection : public RDMAConnection {
   int64_t send(std::shared_ptr<RDMASendRequest> req) {
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
+    cc_.recordSendTsc(req->wr_id);
     if (unlikely(request_queue_->push(req) < 0)) {
       UCCL_LOG(WARN) << "SendConnection: isend request queue is full, wr_id="
                      << wr_id;
@@ -178,6 +184,7 @@ class SendConnection : public RDMAConnection {
     std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
+    cc_.recordSendTsc(req->wr_id);
 
     auto [channel_id, context_id] = selectNextChannelRoundRobin();
     if (unlikely(channel_id == 0)) {
@@ -200,6 +207,7 @@ class SendConnection : public RDMAConnection {
     std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
+    cc_.recordSendTsc(req->wr_id);
 
     auto [channel_id, context_id] = selectNextChannelRoundRobin();
     if (unlikely(channel_id == 0)) {
@@ -256,6 +264,7 @@ class SendConnection : public RDMAConnection {
     }
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
+    cc_.recordSendTsc(req->wr_id);
     UCCL_LOG(INFO, UCCL_RDMA)
         << "SendConnection: Processing send request meta: " << meta;
     processOnceSendRequests(req, meta, index);
@@ -272,6 +281,12 @@ class SendConnection : public RDMAConnection {
   std::shared_ptr<AtomicBitmapPacketTrackerMultiAck> tracker_;
   bool auto_start_polling_;
   int numa_node_ = 0;
+
+  uccl::cc::CongestionControlState cc_;
+
+  inline size_t currentInflightLimitBytes() {
+    return cc_.enabled() ? cc_.getWindowBytes() : kInFlightMaxSizeKB * 1024;
+  }
 
   // Send a request through the appropriate channel
   // Returns true on success, false on failure
@@ -398,9 +413,10 @@ class SendConnection : public RDMAConnection {
     // }
     while (has_meta) {
       std::shared_ptr<RDMASendRequest> req;
-      if (tracker_->getTotalInflightBytes() > kInFlightMaxSizeKB * 1024 ||
+      size_t inflight_limit_bytes = currentInflightLimitBytes();
+      if (tracker_->getTotalInflightBytes() > inflight_limit_bytes ||
           !request_queue_->pop(req)) {
-        if (tracker_->getTotalInflightBytes() > kInFlightMaxSizeKB * 1024) {
+        if (tracker_->getTotalInflightBytes() > inflight_limit_bytes) {
           UCCL_LOG(WARN) << "SendConnection: In-flight bytes exceed "
                             "limit,pausing sending."
                          << tracker_->getTotalInflightBytes()
@@ -470,6 +486,7 @@ class SendConnection : public RDMAConnection {
           // << channel_id
           //           << " polled completion: " << cq_data;
           tracker_->acknowledge(cq_data.wr_id);
+          cc_.onAck(cq_data.wr_id, cq_data.len);
         }
       }
     }
