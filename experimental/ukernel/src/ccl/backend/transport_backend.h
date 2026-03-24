@@ -1,6 +1,5 @@
 #pragma once
 
-#include "../../include/transport.h"
 #include "backend.h"
 #include <cstddef>
 #include <cstdint>
@@ -10,6 +9,9 @@
 #include <unordered_map>
 
 namespace UKernel {
+namespace Transport {
+class Communicator;
+}
 namespace CCL {
 
 // Adapts transport::Communicator onto the CCL backend interface.

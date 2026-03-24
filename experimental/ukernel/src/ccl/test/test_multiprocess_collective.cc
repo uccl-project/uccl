@@ -1,5 +1,4 @@
 #include "../../include/gpu_rt.h"
-#include "../../include/transport.h"
 #include "../backend/transport_backend.h"
 #include "backend_test_utils.h"
 #include <algorithm>
@@ -16,6 +15,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "../../include/transport.h"
 
 namespace UKernel {
 namespace CCL {

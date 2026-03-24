@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../memory.h"
+#include "../collective_memory.h"
 #include "../selector.h"
 #include <cstdint>
 
