@@ -115,30 +115,36 @@ void test_executor_with_mock_backends() {
   executor.release(at_handle);
 }
 
-void test_single_active_collective_constraint() {
-  printf("[test] single active collective constraint...\n");
+void test_collective_queueing() {
+  printf("[test] collective queueing...\n");
 
-  Testing::MockDeviceBackend device_backend(2);
-  Testing::MockBackend transport_backend(2);
+  Testing::MockDeviceBackend device_backend(1000);
+  Testing::MockBackend transport_backend(1000);
 
   ExecutorBackends backends{};
   backends.transport = &transport_backend;
   backends.device = &device_backend;
   Executor executor(backends);
 
-  CollectiveConfig config = Testing::make_test_config(4, 1, 2048, 256, 2);
-  CollectiveOpHandle handle = executor.submit_allreduce(config);
+  CollectiveConfig allreduce_cfg =
+      Testing::make_test_config(4, 1, 2048, 256, 2);
+  CollectiveConfig alltoall_cfg =
+      Testing::make_test_config(4, 1, 2048, 256, 2);
+  alltoall_cfg.algorithm = AlgorithmKind::Pairwise;
 
-  bool threw = false;
-  try {
-    static_cast<void>(executor.submit_alltoall(config));
-  } catch (std::runtime_error const&) {
-    threw = true;
-  }
-  assert(threw);
+  CollectiveOpHandle first = executor.submit_allreduce(allreduce_cfg);
+  CollectiveOpHandle second = executor.submit_alltoall(alltoall_cfg);
 
-  executor.wait(handle);
-  executor.release(handle);
+  assert(executor.status(second) == CollectiveOpStatus::Queued);
+
+  executor.wait(first);
+  assert(executor.status(first) == CollectiveOpStatus::Completed);
+
+  executor.wait(second);
+  assert(executor.status(second) == CollectiveOpStatus::Completed);
+
+  executor.release(first);
+  executor.release(second);
 }
 
 }  // namespace
@@ -154,7 +160,7 @@ int main() {
   test_plan_builders();
   test_lowering();
   test_executor_with_mock_backends();
-  test_single_active_collective_constraint();
+  test_collective_queueing();
   printf("\n=== Component tests PASSED ===\n");
   return 0;
 }

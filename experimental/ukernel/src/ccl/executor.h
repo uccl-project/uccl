@@ -10,7 +10,7 @@ namespace UKernel {
 namespace CCL {
 
 enum class CollectiveOpStatus : uint32_t {
-  Pending,
+  Queued,
   Running,
   Completed,
   Failed,
@@ -36,9 +36,10 @@ struct CollectiveOpHandle {
 class Executor {
  public:
   // Executor owns runtime scheduling for the primitive DAG emitted by the
-  // planner. Ops become ready when all dependency counts reach zero, and
-  // backend completions unlock successor ops.
-  // CCL v1 keeps one collective active per executor instance.
+  // planner. submit() enqueues a collective, and a dedicated progress thread
+  // drives one queued collective at a time until completion. Ops become ready
+  // when all dependency counts reach zero, and backend completions unlock
+  // successor ops.
   explicit Executor(ExecutorBackends backends);
   ~Executor();
 
@@ -48,6 +49,8 @@ class Executor {
   CollectiveOpHandle submit(CollectivePlan plan);
   CollectiveOpHandle submit_allreduce(CollectiveConfig const& config);
   CollectiveOpHandle submit_alltoall(CollectiveConfig const& config);
+  // poll() is now a non-blocking terminal-state query. Execution progresses on
+  // the internal progress thread rather than on the caller thread.
   bool poll(CollectiveOpHandle handle);
   void wait(CollectiveOpHandle handle);
   void release(CollectiveOpHandle handle);
