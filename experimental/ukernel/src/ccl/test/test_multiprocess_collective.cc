@@ -423,6 +423,18 @@ std::vector<float> download_tensor(void const* src, size_t bytes) {
   return host;
 }
 
+void wait_for_collective(Executor& executor, CollectiveOpHandle handle,
+                         std::chrono::milliseconds timeout) {
+  auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (executor.poll(handle)) {
+      return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  require(executor.poll(handle), "collective timed out");
+}
+
 struct Options {
   int rank = 0;
   int world_size = 2;
@@ -529,13 +541,7 @@ int run_rank(Options const& opts) {
   CollectiveOpHandle handle = (opts.collective == CollectiveKind::AllReduce)
                                   ? executor.submit_allreduce(config)
                                   : executor.submit_alltoall(config);
-
-  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
-  while (!executor.poll(handle)) {
-    require(std::chrono::steady_clock::now() < deadline,
-            "collective timed out");
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
+  wait_for_collective(executor, handle, std::chrono::seconds(60));
 
   require(executor.status(handle) == CollectiveOpStatus::Completed,
           "collective did not complete successfully");

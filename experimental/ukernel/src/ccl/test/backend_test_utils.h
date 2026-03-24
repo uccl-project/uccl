@@ -100,6 +100,41 @@ inline size_t count_ops(CollectivePlan const& plan, PrimitiveOpKind kind) {
   return total;
 }
 
+inline void validate_basic_exec_plan(ExecutionPlan const& plan) {
+  assert(plan.nranks >= 2);
+  assert(plan.rank >= 0 && plan.rank < plan.nranks);
+  assert(plan.num_flows >= 1);
+  assert(plan.tensor_bytes > 0);
+  assert(plan.tile_bytes > 0);
+  assert(!plan.ops.empty());
+
+  std::unordered_set<uint32_t> op_ids;
+  for (size_t index = 0; index < plan.ops.size(); ++index) {
+    auto const& op = plan.ops[index];
+    assert(op_ids.insert(op.op_id).second);
+    assert(op.op_id == index);
+    assert(op.tile.size_bytes > 0);
+    assert(op.tile.flow_index < plan.num_flows);
+    assert(op.tile.offset_bytes + op.tile.size_bytes <= plan.tensor_bytes);
+    if (op.peer_rank >= 0) {
+      assert(op.peer_rank < plan.nranks);
+      assert(op.peer_rank != plan.rank);
+    }
+    for (uint32_t dep : op.deps) {
+      assert(dep < plan.ops.size());
+      assert(dep < op.op_id);
+    }
+  }
+}
+
+inline size_t count_exec_ops(ExecutionPlan const& plan, ExecOpKind kind) {
+  size_t total = 0;
+  for (auto const& op : plan.ops) {
+    if (op.kind == kind) ++total;
+  }
+  return total;
+}
+
 inline BackendToken submit_token(
     uint64_t& next_token, uint64_t& submissions, uint32_t polls_before_ready,
     std::unordered_map<uint64_t, uint32_t>& pending_polls) {
