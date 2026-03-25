@@ -278,8 +278,7 @@ __global__ void notify_dispatch(
       // know why. num_worst_tokens = 0, but somehow wrapping it with the
       // conditional will cause deadlock. Removing the ``if" is logically
       // redundant but harmless. if (num_worst_tokens == 0) {
-      while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1)
-        ;
+      while (ld_volatile_global(moe_recv_rdma_counter_mapped) != -1);
       *moe_recv_rdma_counter_mapped = sum;
       // }
     }
@@ -310,8 +309,7 @@ __global__ void notify_dispatch(
         recv_gbl_rank_prefix_sum[i] = sum;
       }
       // if (num_worst_tokens == 0) {
-      while (ld_volatile_global(moe_recv_counter_mapped) != -1)
-        ;
+      while (ld_volatile_global(moe_recv_counter_mapped) != -1);
       *moe_recv_counter_mapped = sum;
       // }
     }
@@ -323,8 +321,7 @@ __global__ void notify_dispatch(
       sum = (sum + expert_alignment - 1) / expert_alignment * expert_alignment;
       // if (num_worst_tokens == 0) {
       while (ld_volatile_global(moe_recv_expert_counter_mapped + thread_id) !=
-             -1)
-        ;
+             -1);
       // }
       moe_recv_expert_counter_mapped[thread_id] = sum;
     }
@@ -475,6 +472,7 @@ constexpr int get_num_topk_rdma_ranks(int num_rdma_ranks) {
 
 template <bool kLowLatencyMode, int kNumRDMARanks, bool kCachedMode,
           int kNumTMABytesPerWarp, int kNumDispatchRDMASenderWarps,
+          bool kUseAggressiveAtomic,
           int kNumTopkRDMARanks = get_num_topk_rdma_ranks(kNumRDMARanks)>
 __global__ void __launch_bounds__(
     ((kNumDispatchRDMASenderWarps + 1 + NUM_MAX_NVL_PEERS) * WARP_SIZE), 1)
@@ -740,8 +738,7 @@ __global__ void __launch_bounds__(
       }
 
       // Acquire sequential lock
-      while (lane_id == 0 and rdma_send_next_token_idx != token_idx)
-        ;
+      while (lane_id == 0 and rdma_send_next_token_idx != token_idx);
       __syncwarp();
 
       // Acquire next tail
@@ -752,8 +749,9 @@ __global__ void __launch_bounds__(
         // Wait the remote buffer to be released
         while (rdma_tail_idx - cached_rdma_channel_head >=
                num_max_rdma_chunked_recv_tokens) {
-          cached_rdma_channel_head = static_cast<int>(
-              ld_acquire_sys_global(rdma_channel_head.buffer(lane_id)));
+          cached_rdma_channel_head =
+              static_cast<int>(ld_acquire_sys_global<kUseAggressiveAtomic>(
+                  rdma_channel_head.buffer(lane_id)));
 
           // Timeout check
           if (clock64() - start_time >= NUM_TIMEOUT_CYCLES) {
@@ -802,8 +800,9 @@ __global__ void __launch_bounds__(
       while (is_token_in_rank_uint64 != 0 and
              rdma_tail_idx - cached_rdma_channel_head >=
                  num_max_rdma_chunked_recv_tokens) {
-        cached_rdma_channel_head = static_cast<int>(
-            ld_acquire_sys_global(rdma_channel_head.buffer(lane_id)));
+        cached_rdma_channel_head =
+            static_cast<int>(ld_acquire_sys_global<kUseAggressiveAtomic>(
+                rdma_channel_head.buffer(lane_id)));
 
         // Timeout check
         if (clock64() - start_time >= NUM_TIMEOUT_CYCLES) {
@@ -935,8 +934,7 @@ __global__ void __launch_bounds__(
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
     // Epilogue
     // Acquire sequential lock
-    while (lane_id == 0 and rdma_send_next_token_idx != token_idx)
-      ;
+    while (lane_id == 0 and rdma_send_next_token_idx != token_idx);
     __syncwarp();
 
     // Update last token tail
@@ -1270,8 +1268,8 @@ __global__ void __launch_bounds__(
       // Move tail index
       __syncwarp();
       if (lane_id == 0)
-        st_release_sys_global(nvl_channel_tail.buffer(),
-                              cached_nvl_channel_tail);
+        st_release_sys_global<kUseAggressiveAtomic>(nvl_channel_tail.buffer(),
+                                                    cached_nvl_channel_tail);
     }
     // Retired
     __syncwarp();
@@ -1540,23 +1538,24 @@ void dispatch(
   EP_HOST_ASSERT(static_cast<int>(num_scales) * scale_hidden_stride <
                  std::numeric_limits<int>::max());
 #endif
-
+  static const bool aggressive_atomic_enabled = get_aggressive_atomic_enabled();
+  // NOTE(zhenhuang12): always use low latency mode in uccl-ep
 #define DISPATCH_LAUNCH_CASE(num_rdma_ranks)                                   \
   {                                                                            \
     auto dispatch_func =                                                       \
-        low_latency_mode                                                       \
+        aggressive_atomic_enabled                                              \
             ? (is_cached_dispatch                                              \
                    ? dispatch<true, num_rdma_ranks, true, kNumTMABytesPerWarp, \
-                              kNumDispatchRDMASenderWarps>                     \
+                              kNumDispatchRDMASenderWarps, true>               \
                    : dispatch<true, num_rdma_ranks, false,                     \
                               kNumTMABytesPerWarp,                             \
-                              kNumDispatchRDMASenderWarps>)                    \
-            : (is_cached_dispatch ? dispatch<false, num_rdma_ranks, true,      \
-                                             kNumTMABytesPerWarp,              \
-                                             kNumDispatchRDMASenderWarps>      \
-                                  : dispatch<false, num_rdma_ranks, false,     \
-                                             kNumTMABytesPerWarp,              \
-                                             kNumDispatchRDMASenderWarps>);    \
+                              kNumDispatchRDMASenderWarps, true>)              \
+            : (is_cached_dispatch                                              \
+                   ? dispatch<true, num_rdma_ranks, true, kNumTMABytesPerWarp, \
+                              kNumDispatchRDMASenderWarps, false>              \
+                   : dispatch<true, num_rdma_ranks, false,                     \
+                              kNumTMABytesPerWarp,                             \
+                              kNumDispatchRDMASenderWarps, false>);            \
     SET_SHARED_MEMORY_FOR_TMA(dispatch_func);                                  \
     LAUNCH_KERNEL(                                                             \
         &cfg, dispatch_func, reinterpret_cast<int4*>(recv_x), recv_x_scales,   \
@@ -2067,12 +2066,12 @@ __forceinline__ __device__ int combine_token(
 template <
     bool kLowLatencyMode, int kNumRDMARanks, typename dtype_t,
     int kNumCombineForwarderWarps, int kNumTMABytesPerSenderWarp,
-    int kNumTMABytesPerForwarderWarp,
+    int kNumTMABytesPerForwarderWarp, bool kUseAggressiveAtomic = false,
     int kNumTopkRDMARanks = get_num_topk_rdma_ranks(kNumRDMARanks),
     int kNumWarpsPerForwarder = (kNumCombineForwarderWarps / kNumRDMARanks > 0)
                                     ? kNumCombineForwarderWarps / kNumRDMARanks
                                     : 1,
-    int kNumForwarders = kNumRDMARanks* kNumWarpsPerForwarder,
+    int kNumForwarders = kNumRDMARanks * kNumWarpsPerForwarder,
     int kNumRDMAReceivers = kNumForwarders - NUM_MAX_NVL_PEERS>
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
 __global__ void __launch_bounds__(kNumForwarders* WARP_SIZE, 1)
@@ -2350,8 +2349,8 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
 #endif
       __syncwarp();
       if (lane_id < kNumRDMARanks and is_lane_ready)
-        st_release_sys_global(nvl_channel_tail.buffer() + lane_id,
-                              cached_channel_tail_idx);
+        st_release_sys_global<kUseAggressiveAtomic>(
+            nvl_channel_tail.buffer() + lane_id, cached_channel_tail_idx);
     }
   } else {
     // Combiners and coordinators
@@ -2524,8 +2523,8 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
           // Inequality: `num_max_rdma_chunked_recv_tokens - (tail - head) >=
           // num_chunked_tokens` Here, `token_start_idx` is the actual tail
           int num_used_slots =
-              token_start_idx -
-              ld_acquire_sys_global(rdma_channel_head.buffer(dst_rdma_rank));
+              token_start_idx - ld_acquire_sys_global<kUseAggressiveAtomic>(
+                                    rdma_channel_head.buffer(dst_rdma_rank));
           if (num_max_rdma_chunked_recv_tokens - num_used_slots >=
               num_chunked_tokens)
             break;
@@ -2537,7 +2536,8 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
                 "RDMA: %d, nvl: %d, dst RDMA: %d, head: %ld, tail: %d, "
                 "chunked: %d\n",
                 channel_id, rdma_rank, nvl_rank, dst_rdma_rank,
-                ld_acquire_sys_global(rdma_channel_head.buffer(dst_rdma_rank)),
+                ld_acquire_sys_global<kUseAggressiveAtomic>(
+                    rdma_channel_head.buffer(dst_rdma_rank)),
                 token_start_idx, num_chunked_tokens);
             trap();
           }
@@ -2569,7 +2569,8 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
           start_time = clock64();
           while (cached_nvl_channel_tail_idx <= expected_head) {
             cached_nvl_channel_tail_idx =
-                ld_acquire_sys_global(nvl_channel_tail.buffer(lane_id));
+                ld_acquire_sys_global<kUseAggressiveAtomic>(
+                    nvl_channel_tail.buffer(lane_id));
 
             // Timeout check
             if (clock64() - start_time > NUM_TIMEOUT_CYCLES and
@@ -2762,8 +2763,9 @@ __global__ void __launch_bounds__((kNumForwarders + 1) * WARP_SIZE, 1)
         // Wait lanes to be ready
         auto start_time = clock64();
         while (cached_channel_tail_idx <= expected_head) {
-          cached_channel_tail_idx = static_cast<int>(
-              ld_acquire_sys_global(rdma_channel_tail.buffer(lane_id)));
+          cached_channel_tail_idx =
+              static_cast<int>(ld_acquire_sys_global<kUseAggressiveAtomic>(
+                  rdma_channel_tail.buffer(lane_id)));
 
           // Timeout check
           if (clock64() - start_time > NUM_TIMEOUT_CYCLES) {
@@ -2909,16 +2911,18 @@ void combine(cudaDataType_t type, void* combined_x,
                kNumTMABytesPerForwarderWarp * kNumCombineForwarderWarps);
 #endif
 
+  static const bool aggressive_atomic_enabled = get_aggressive_atomic_enabled();
+
 #define COMBINE_LAUNCH_CASE(num_rdma_ranks)                                 \
   {                                                                         \
     auto combine_func =                                                     \
-        low_latency_mode                                                    \
+        aggressive_atomic_enabled                                           \
             ? combine<true, num_rdma_ranks, nv_bfloat16,                    \
                       kNumCombineForwarderWarps, kNumTMABytesPerSenderWarp, \
-                      kNumTMABytesPerForwarderWarp>                         \
-            : combine<false, num_rdma_ranks, nv_bfloat16,                   \
+                      kNumTMABytesPerForwarderWarp, true>                   \
+            : combine<true, num_rdma_ranks, nv_bfloat16,                    \
                       kNumCombineForwarderWarps, kNumTMABytesPerSenderWarp, \
-                      kNumTMABytesPerForwarderWarp>;                        \
+                      kNumTMABytesPerForwarderWarp, false>;                 \
     SET_SHARED_MEMORY_FOR_TMA(combine_func);                                \
     LAUNCH_KERNEL(                                                          \
         &cfg, combine_func, reinterpret_cast<int4*>(combined_x),            \

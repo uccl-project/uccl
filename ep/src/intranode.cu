@@ -1,9 +1,9 @@
 #include "buffer.cuh"
+#include "common.hpp"
 #include "ep_configs.cuh"
 #include "ep_launch.cuh"
 #include "ep_utils.cuh"
 #include "exception.cuh"
-
 namespace uccl {
 
 namespace intranode {
@@ -181,7 +181,8 @@ void cached_notify_dispatch(int const* rank_prefix_matrix, int num_memset_int,
 #undef CACHED_NOTIFY_DISPATCH_LAUNCH_CASE
 }
 
-template <int kNumRanks, int kNumThreads, int kNumTMABytesPerWarp>
+template <int kNumRanks, int kNumThreads, int kNumTMABytesPerWarp,
+          bool kUseAggressiveAtomic>
 __global__ void __launch_bounds__(kNumThreads, 1)
     dispatch(int4* recv_x, float* recv_x_scales, int* recv_src_idx,
              int64_t* recv_topk_idx, float* recv_topk_weights,
@@ -411,8 +412,8 @@ __global__ void __launch_bounds__(kNumThreads, 1)
       // NOTES: here all warps should share the same new tail
       sync_barrier<true>(responsible_rank, num_threads_per_rank);
       if (send_warp_id_in_rank == 0 and lane_id == 0)
-        st_release_sys_global(channel_tail_idx.buffer(),
-                              cached_channel_tail_idx);
+        st_release_sys_global<kUseAggressiveAtomic>(channel_tail_idx.buffer(),
+                                                    cached_channel_tail_idx);
     }
   } else {
     // Workers for receiving and copying into buffer
@@ -434,11 +435,9 @@ __global__ void __launch_bounds__(kNumThreads, 1)
     // Receive channel offset
     int total_offset, num_tokens_to_recv;
     while (lane_id == 0 and (total_offset = ld_volatile_global(
-                                 channel_start_offset.buffer())) == 0)
-      ;
+                                 channel_start_offset.buffer())) == 0);
     while (lane_id == 0 and (num_tokens_to_recv = ld_volatile_global(
-                                 channel_end_offset.buffer())) == 0)
-      ;
+                                 channel_end_offset.buffer())) == 0);
     if (lane_id == 0) {
       total_offset = -total_offset - 1,
       num_tokens_to_recv = -num_tokens_to_recv - 1;
@@ -460,8 +459,8 @@ __global__ void __launch_bounds__(kNumThreads, 1)
       // NOTES: unlike the sender, the receiver must ensure that the tail
       // indices hold by different warps are the same
       while (recv_thread_id_in_rank == 0) {
-        cached_channel_tail_idx =
-            ld_acquire_sys_global(channel_tail_idx.buffer());
+        cached_channel_tail_idx = ld_acquire_sys_global<kUseAggressiveAtomic>(
+            channel_tail_idx.buffer());
 
         // Ready to copy
         if (cached_channel_head_idx != cached_channel_tail_idx) {
@@ -617,10 +616,12 @@ void dispatch(void* recv_x, float* recv_x_scales, int* recv_src_idx,
   // Make sure never OOB
   EP_HOST_ASSERT(static_cast<int64_t>(num_scales) * scale_hidden_stride <
                  std::numeric_limits<int>::max());
-
 #define DISPATCH_LAUNCH_CASE(ranks)                                          \
   {                                                                          \
-    auto kernel = dispatch<ranks, kNumThreads, kNumTMABytesPerWarp>;         \
+    auto kernel =                                                            \
+        get_aggressive_atomic_enabled()                                      \
+            ? dispatch<ranks, kNumThreads, kNumTMABytesPerWarp, true>        \
+            : dispatch<ranks, kNumThreads, kNumTMABytesPerWarp, false>;      \
     SET_SHARED_MEMORY_FOR_TMA(kernel);                                       \
     LAUNCH_KERNEL(                                                           \
         &cfg, kernel, reinterpret_cast<int4*>(recv_x), recv_x_scales,        \
@@ -715,7 +716,7 @@ void cached_notify_combine(void** buffer_ptrs, int* send_head, int num_channels,
 }
 
 template <typename dtype_t, int kNumRanks, int kNumThreads,
-          int kNumTMABytesPerWarp>
+          int kNumTMABytesPerWarp, bool kUseAggressiveAtomic>
 __global__ void __launch_bounds__(kNumThreads, 1)
     combine(dtype_t* recv_x, float* recv_topk_weights, dtype_t const* x,
             float const* topk_weights, dtype_t const* bias_0,
@@ -862,8 +863,8 @@ __global__ void __launch_bounds__(kNumThreads, 1)
       // Move tail index
       sync_barrier<true>(send_rank_id, num_threads_per_rank);
       if (lane_id == 0 and send_warp_id_in_rank == 0)
-        st_release_sys_global(channel_tail_idx.buffer(),
-                              current_channel_tail_idx);
+        st_release_sys_global<kUseAggressiveAtomic>(channel_tail_idx.buffer(),
+                                                    current_channel_tail_idx);
     }
   } else {
     // Workers for receiving
@@ -899,7 +900,8 @@ __global__ void __launch_bounds__(kNumThreads, 1)
         if (retired) break;
 
         // Update queue tail
-        channel_tail_idx[lane_id] = ld_acquire_sys_global(channel_tail_idx_ptr);
+        channel_tail_idx[lane_id] =
+            ld_acquire_sys_global<kUseAggressiveAtomic>(channel_tail_idx_ptr);
 
         // Update minimum head
         int min_head = std::numeric_limits<int>::max();
@@ -1096,7 +1098,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
       __syncwarp();
       if (lane_id == 0) warp_retired[recv_warp_id] = true;
 
-        // Make TMA store visible to the next kernel
+      // Make TMA store visible to the next kernel
 #ifndef DISABLE_SM90_FEATURES
       if (lane_id == 0) tma_store_wait();
 #endif
@@ -1124,7 +1126,10 @@ void combine(cudaDataType_t type, void* recv_x, float* recv_topk_weights,
 
 #define COMBINE_LAUNCH_CASE(dtype, ranks)                                     \
   {                                                                           \
-    auto kernel = combine<dtype, ranks, kNumThreads, kNumTMABytesPerWarp>;    \
+    auto kernel =                                                             \
+        get_aggressive_atomic_enabled()                                       \
+            ? combine<dtype, ranks, kNumThreads, kNumTMABytesPerWarp, true>   \
+            : combine<dtype, ranks, kNumThreads, kNumTMABytesPerWarp, false>; \
     SET_SHARED_MEMORY_FOR_TMA(kernel);                                        \
     LAUNCH_KERNEL(&cfg, kernel, reinterpret_cast<dtype*>(recv_x),             \
                   recv_topk_weights, reinterpret_cast<dtype const*>(x),       \
