@@ -1,8 +1,14 @@
 #include "ipc_channel.h"
 #include "communicator.h"
 #include "ipc_cache.h"
+#include "utils.h"
 #include "util/util.h"
 #include <algorithm>
+#include <chrono>
+#include <fcntl.h>
+#include <string>
+#include <sys/mman.h>
+#include <unistd.h>
 
 namespace UKernel {
 namespace Transport {
@@ -17,6 +23,90 @@ int remaining_timeout_ms(std::chrono::steady_clock::time_point deadline) {
   return static_cast<int>(
       std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now)
           .count());
+}
+
+constexpr uint32_t kAckStatusOkDirect = 1;
+constexpr uint32_t kAckStatusOkCpuRelay = 2;
+
+std::string relay_shm_name(int sender_rank, int receiver_rank,
+                           uint64_t match_seq) {
+  return uccl::Format("/uk_t_ipc_relay_%s_%d_%d_%llu",
+                      generate_host_id(false).c_str(), sender_rank,
+                      receiver_rank,
+                      static_cast<unsigned long long>(match_seq));
+}
+
+struct RelayBufferMapping {
+  std::string name;
+  int fd = -1;
+  void* ptr = nullptr;
+  size_t bytes = 0;
+  bool owner = false;
+};
+
+bool create_relay_mapping(std::string const& name, size_t bytes,
+                          RelayBufferMapping& out) {
+  shm_unlink(name.c_str());
+  int fd = shm_open(name.c_str(), O_CREAT | O_EXCL | O_RDWR, 0666);
+  if (fd < 0) return false;
+  if (ftruncate(fd, static_cast<off_t>(bytes)) != 0) {
+    close(fd);
+    shm_unlink(name.c_str());
+    return false;
+  }
+  void* ptr =
+      mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if (ptr == MAP_FAILED) {
+    close(fd);
+    shm_unlink(name.c_str());
+    return false;
+  }
+  out.name = name;
+  out.fd = fd;
+  out.ptr = ptr;
+  out.bytes = bytes;
+  out.owner = true;
+  return true;
+}
+
+bool open_relay_mapping(std::string const& name, size_t bytes,
+                        std::chrono::steady_clock::time_point deadline,
+                        RelayBufferMapping& out) {
+  while (true) {
+    int fd = shm_open(name.c_str(), O_RDWR, 0666);
+    if (fd >= 0) {
+      void* ptr =
+          mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+      if (ptr != MAP_FAILED) {
+        out.name = name;
+        out.fd = fd;
+        out.ptr = ptr;
+        out.bytes = bytes;
+        out.owner = false;
+        return true;
+      }
+      close(fd);
+    }
+    if (std::chrono::steady_clock::now() >= deadline) return false;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+}
+
+void close_relay_mapping(RelayBufferMapping& mapping) {
+  if (mapping.ptr != nullptr) {
+    munmap(mapping.ptr, mapping.bytes);
+    mapping.ptr = nullptr;
+  }
+  if (mapping.fd >= 0) {
+    close(mapping.fd);
+    mapping.fd = -1;
+  }
+  if (mapping.owner && !mapping.name.empty()) {
+    shm_unlink(mapping.name.c_str());
+  }
+  mapping.name.clear();
+  mapping.bytes = 0;
+  mapping.owner = false;
 }
 
 }  // namespace
@@ -150,6 +240,39 @@ bool IpcChannel::send_one(int to_rank, Request* creq) {
 
   GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx_));
 
+  bool can_use_direct_peer = (got.remote_gpu_idx_ ==
+                              static_cast<uint32_t>(comm_->local_gpu_idx_));
+  if (!can_use_direct_peer) {
+    int can_access_peer = 0;
+    GPU_RT_CHECK(gpuDeviceCanAccessPeer(
+        &can_access_peer, comm_->local_gpu_idx_,
+        static_cast<int>(got.remote_gpu_idx_)));
+    can_use_direct_peer = (can_access_peer != 0);
+  }
+
+  if (!can_use_direct_peer) {
+    RelayBufferMapping relay{};
+    std::string relay_name =
+        relay_shm_name(comm_->rank(), to_rank, creq->match_seq);
+    if (!open_relay_mapping(relay_name, creq->size_bytes, deadline, relay)) {
+      std::cerr << "[ERROR] open relay shm failed for req " << creq->id
+                << " match_seq " << creq->match_seq << std::endl;
+      return false;
+    }
+    auto relay_cleanup = uccl::finally([&]() { close_relay_mapping(relay); });
+
+    void* src_ptr = creq->data();
+    GPU_RT_CHECK(gpuMemcpy(relay.ptr, src_ptr, creq->size_bytes,
+                           gpuMemcpyDeviceToHost));
+
+    if (!comm_->shm_control_->send_ack(to_rank, seq, kAckStatusOkCpuRelay)) {
+      std::cerr << "[ERROR] send relay ack(" << to_rank << ") failed for req "
+                << creq->id << " match_seq " << creq->match_seq << std::endl;
+      return false;
+    }
+    return true;
+  }
+
   IpcCacheManager::IpcCache cache =
       comm_->get_remote_ipc_cache(to_rank, got.handle);
   void* base = cache.direct_ptr;
@@ -197,7 +320,7 @@ bool IpcChannel::send_one(int to_rank, Request* creq) {
     GPU_RT_CHECK(gpuStreamSynchronize(ipc_streams_[i]));
   }
 
-  if (!comm_->shm_control_->send_ack(to_rank, seq, 1)) {
+  if (!comm_->shm_control_->send_ack(to_rank, seq, kAckStatusOkDirect)) {
     std::cerr << "[ERROR] send_ack(" << to_rank << ") failed for req "
               << creq->id << " match_seq " << creq->match_seq << std::endl;
     return false;
@@ -221,6 +344,16 @@ bool IpcChannel::recv_one(int from_rank, Request* creq) {
   transfer_info.is_send = 0;
   transfer_info.remote_gpu_idx_ = comm_->local_gpu_idx_;
   void* actual_dst = creq->data();
+
+  RelayBufferMapping relay{};
+  std::string relay_name =
+      relay_shm_name(from_rank, comm_->rank(), creq->match_seq);
+  if (!create_relay_mapping(relay_name, creq->size_bytes, relay)) {
+    std::cerr << "[ERROR] create relay shm failed for req " << creq->id
+              << " match_seq " << creq->match_seq << std::endl;
+    return false;
+  }
+  auto relay_cleanup = uccl::finally([&]() { close_relay_mapping(relay); });
 
   void* base = nullptr;
   size_t base_size = 0;
@@ -256,11 +389,17 @@ bool IpcChannel::recv_one(int from_rank, Request* creq) {
               << creq->id << " match_seq " << creq->match_seq << std::endl;
     return false;
   }
-  if (out_seq != creq->match_seq || status != 1) {
+  if (out_seq != creq->match_seq ||
+      (status != kAckStatusOkDirect && status != kAckStatusOkCpuRelay)) {
     std::cerr << "[ERROR] sender completion ack invalid: seq=" << out_seq
               << " status=" << status << " req=" << creq->id
               << " match_seq=" << creq->match_seq << std::endl;
     return false;
+  }
+
+  if (status == kAckStatusOkCpuRelay) {
+    GPU_RT_CHECK(gpuMemcpy(actual_dst, relay.ptr, creq->size_bytes,
+                           gpuMemcpyHostToDevice));
   }
   return true;
 }
