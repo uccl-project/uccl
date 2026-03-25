@@ -17,14 +17,24 @@ TRANSPORT=auto
 BYTES_PER_RANK=$((1 * 1024 * 1024))
 TILE_BYTES=$((64 * 1024))
 NUM_FLOWS=2
+UHM_HOST_ID_OVERRIDE=${UHM_HOST_ID_OVERRIDE:-ccl-$(date +%s)-$$}
+
+cleanup_ipc_shm() {
+  local host_id_override="$1"
+  rm -f /dev/shm/uk_t_oob_"${host_id_override}"_l*
+}
 
 run_case() {
   local collective="$1"
   local exchanger_port="$2"
+  local host_id_override="${UHM_HOST_ID_OVERRIDE}-${collective}"
 
   echo "[ccl suite] torchrun collective=${collective} nproc_per_node=${NPROC_PER_NODE} bytes_per_rank=${BYTES_PER_RANK} tile_bytes=${TILE_BYTES} num_flows=${NUM_FLOWS} transport=${TRANSPORT} torchrun_port=${TORCHRUN_MASTER_PORT} exchanger_port=${exchanger_port}"
 
+  cleanup_ipc_shm "${host_id_override}"
+
   CUDA_VISIBLE_DEVICES="${GPU_IDS}" \
+    UHM_HOST_ID_OVERRIDE="${host_id_override}" \
     torchrun \
       --no-python \
       --nproc-per-node "${NPROC_PER_NODE}" \
@@ -40,6 +50,8 @@ run_case() {
       --num-flows "${NUM_FLOWS}" \
       --exchanger-ip "${MASTER_ADDR}" \
       --exchanger-port "${exchanger_port}"
+
+  cleanup_ipc_shm "${host_id_override}"
 }
 
 run_case allreduce "${EXCHANGER_PORT_BASE}"

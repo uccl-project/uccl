@@ -15,6 +15,10 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 #include "../../include/transport.h"
 
@@ -41,6 +45,90 @@ char const* collective_name(CollectiveKind kind) {
 
 void require(bool cond, std::string const& msg) {
   if (!cond) fail(msg);
+}
+
+int create_tcp_server(int port) {
+  int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+  require(fd >= 0, "failed to create barrier server socket");
+  int opt = 1;
+  require(::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) == 0,
+          "failed to set SO_REUSEADDR on barrier socket");
+
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  addr.sin_port = htons(static_cast<uint16_t>(port));
+  require(::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0,
+          "failed to bind barrier socket on port " + std::to_string(port));
+  require(::listen(fd, 16) == 0, "failed to listen on barrier socket");
+  return fd;
+}
+
+int connect_tcp_client(std::string const& ip, int port,
+                       std::chrono::milliseconds timeout) {
+  auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (true) {
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    require(fd >= 0, "failed to create barrier client socket");
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(static_cast<uint16_t>(port));
+    require(::inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) == 1,
+            "invalid barrier server ip: " + ip);
+
+    if (::connect(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) == 0) {
+      return fd;
+    }
+    ::close(fd);
+    if (std::chrono::steady_clock::now() >= deadline) {
+      fail("timed out connecting to barrier server " + ip + ":" +
+           std::to_string(port));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+}
+
+void write_barrier_byte(int fd) {
+  char byte = 1;
+  ssize_t rc = ::send(fd, &byte, sizeof(byte), 0);
+  require(rc == static_cast<ssize_t>(sizeof(byte)),
+          "failed to send barrier byte");
+}
+
+void read_barrier_byte(int fd) {
+  char byte = 0;
+  ssize_t rc = ::recv(fd, &byte, sizeof(byte), MSG_WAITALL);
+  require(rc == static_cast<ssize_t>(sizeof(byte)),
+          "failed to receive barrier byte");
+}
+
+void socket_barrier(std::string const& server_ip, int port, int rank,
+                    int world_size, char const* label) {
+  if (rank == 0) {
+    int server_fd = create_tcp_server(port);
+    std::vector<int> client_fds;
+    client_fds.reserve(static_cast<size_t>(world_size - 1));
+    for (int i = 1; i < world_size; ++i) {
+      int client_fd = ::accept(server_fd, nullptr, nullptr);
+      require(client_fd >= 0,
+              std::string("barrier accept failed for ") + label);
+      read_barrier_byte(client_fd);
+      client_fds.push_back(client_fd);
+    }
+    for (int client_fd : client_fds) {
+      write_barrier_byte(client_fd);
+      ::close(client_fd);
+    }
+    ::close(server_fd);
+    return;
+  }
+
+  int client_fd =
+      connect_tcp_client(server_ip, port, std::chrono::seconds(30));
+  write_barrier_byte(client_fd);
+  read_barrier_byte(client_fd);
+  ::close(client_fd);
 }
 
 int get_int_arg(int argc, char** argv, char const* key, int def) {
@@ -303,22 +391,6 @@ class EmulatedDeviceBackend final : public Backend {
   std::vector<uint64_t> completed_;
 };
 
-void establish_full_mesh(Transport::Communicator& comm, int rank,
-                         int world_size) {
-  for (int peer = 0; peer < world_size; ++peer) {
-    if (peer == rank) continue;
-    bool ok = (rank < peer) ? comm.connect_to(peer) : comm.accept_from(peer);
-    require(ok, "failed to establish first transport phase with peer " +
-                    std::to_string(peer));
-  }
-  for (int peer = 0; peer < world_size; ++peer) {
-    if (peer == rank) continue;
-    bool ok = (rank < peer) ? comm.accept_from(peer) : comm.connect_to(peer);
-    require(ok, "failed to establish second transport phase with peer " +
-                    std::to_string(peer));
-  }
-}
-
 CollectiveMemory build_collective_memory(Transport::Communicator& comm,
                                          int rank, int world_size,
                                          void* tensor_ptr, size_t tensor_bytes,
@@ -499,9 +571,6 @@ int run_rank(Options const& opts) {
 
   std::fprintf(stderr, "[rank %d] communicator init\n", opts.rank);
   Transport::Communicator comm(opts.gpu, opts.rank, opts.world_size, cfg);
-  std::fprintf(stderr, "[rank %d] establish full mesh\n", opts.rank);
-  establish_full_mesh(comm, opts.rank, opts.world_size);
-  std::fprintf(stderr, "[rank %d] full mesh ready\n", opts.rank);
 
   DeviceBuffer tensor(opts.bytes_per_rank);
   DeviceBuffer staging(opts.bytes_per_rank);
@@ -536,6 +605,13 @@ int run_rank(Options const& opts) {
   if (opts.collective == CollectiveKind::AllToAll) {
     config.algorithm = AlgorithmKind::Pairwise;
   }
+  std::string barrier_ip =
+      get_env_str({"MASTER_ADDR"},
+                  opts.rank == 0 && opts.exchanger_ip == "0.0.0.0"
+                      ? "127.0.0.1"
+                      : opts.exchanger_ip);
+  socket_barrier(barrier_ip, opts.exchanger_port + 1, opts.rank,
+                 opts.world_size, "pre-submit");
   std::fprintf(stderr, "[rank %d] submit %s\n", opts.rank,
                collective_name(opts.collective));
   CollectiveOpHandle handle = (opts.collective == CollectiveKind::AllReduce)

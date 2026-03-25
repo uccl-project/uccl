@@ -21,7 +21,9 @@ void validate_span(char const* what, size_t offset, size_t bytes,
 
 CommunicatorTransportBackend::CommunicatorTransportBackend(
     UKernel::Transport::Communicator& comm, CollectiveMemory memory)
-    : comm_(comm), memory_(std::move(memory)) {
+    : comm_(comm),
+      memory_(std::move(memory)),
+      peer_paths_(static_cast<size_t>(comm.world_size())) {
   completion_notifier_ = comm_.register_completion_notifier(
       [this](unsigned request_id, std::chrono::steady_clock::time_point) {
         on_transport_completion(request_id);
@@ -33,6 +35,7 @@ char const* CommunicatorTransportBackend::name() const {
 }
 
 void CommunicatorTransportBackend::validate(ExecutionPlan const& plan) const {
+  ensure_plan_paths(plan);
   if (plan.staging_bytes_required != 0 &&
       memory_.staging.local_ptr == nullptr) {
     throw std::invalid_argument("transport backend staging buffer is missing");
@@ -40,6 +43,81 @@ void CommunicatorTransportBackend::validate(ExecutionPlan const& plan) const {
   if (plan.staging_bytes_required > memory_.staging.bytes) {
     throw std::invalid_argument(
         "transport backend staging capacity is insufficient");
+  }
+}
+
+void CommunicatorTransportBackend::ensure_plan_paths(
+    ExecutionPlan const& plan) const {
+  if (plan.rank != comm_.rank()) {
+    throw std::invalid_argument(
+        "execution plan rank does not match transport communicator");
+  }
+  if (plan.nranks != comm_.world_size()) {
+    throw std::invalid_argument(
+        "execution plan world size does not match transport communicator");
+  }
+
+  std::vector<bool> need_send(static_cast<size_t>(plan.nranks), false);
+  std::vector<bool> need_recv(static_cast<size_t>(plan.nranks), false);
+  for (ExecOp const& op : plan.ops) {
+    if (op.peer_rank < 0 || op.peer_rank >= plan.nranks) continue;
+    if (op.kind == ExecOpKind::TransportSend) {
+      need_send[static_cast<size_t>(op.peer_rank)] = true;
+    } else if (op.kind == ExecOpKind::TransportRecv) {
+      need_recv[static_cast<size_t>(op.peer_rank)] = true;
+    }
+  }
+
+  // Phase 1 establishes lower-rank -> higher-rank paths only.
+  for (int peer = 0; peer < plan.nranks; ++peer) {
+    if (peer == plan.rank) continue;
+    bool need_send_to_peer = need_send[static_cast<size_t>(peer)];
+    bool need_recv_from_peer = need_recv[static_cast<size_t>(peer)];
+    if (plan.rank < peer) {
+      ensure_peer_paths(peer, need_send_to_peer, false);
+    } else {
+      ensure_peer_paths(peer, false, need_recv_from_peer);
+    }
+  }
+
+  // Phase 2 establishes higher-rank -> lower-rank paths only.
+  for (int peer = 0; peer < plan.nranks; ++peer) {
+    if (peer == plan.rank) continue;
+    bool need_send_to_peer = need_send[static_cast<size_t>(peer)];
+    bool need_recv_from_peer = need_recv[static_cast<size_t>(peer)];
+    if (plan.rank < peer) {
+      ensure_peer_paths(peer, false, need_recv_from_peer);
+    } else {
+      ensure_peer_paths(peer, need_send_to_peer, false);
+    }
+  }
+}
+
+void CommunicatorTransportBackend::ensure_peer_paths(int peer_rank,
+                                                     bool need_send,
+                                                     bool need_recv) const {
+  if (!need_send && !need_recv) return;
+
+  std::lock_guard<std::mutex> lock(path_mu_);
+  PeerPathState& state = peer_paths_.at(static_cast<size_t>(peer_rank));
+  bool ok = true;
+  if (need_send) {
+    if (!state.send_ready) {
+      ok = comm_.connect_to(peer_rank);
+      state.send_ready = ok;
+    }
+  }
+  if (ok && need_recv) {
+    if (!state.recv_ready) {
+      ok = comm_.accept_from(peer_rank);
+      state.recv_ready = ok;
+    }
+  }
+
+  if (!ok) {
+    throw std::runtime_error("failed to lazily establish transport path with "
+                             "peer " +
+                             std::to_string(peer_rank));
   }
 }
 

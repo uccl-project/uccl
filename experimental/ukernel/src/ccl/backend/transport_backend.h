@@ -7,6 +7,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 namespace UKernel {
 namespace Transport {
@@ -36,10 +37,17 @@ class CommunicatorTransportBackend final : public Backend {
     bool released = false;
   };
 
+  struct PeerPathState {
+    bool send_ready = false;
+    bool recv_ready = false;
+  };
+
   void* resolve_mutable(BufferRef const& ref, size_t bytes) const;
   void const* resolve_const(BufferRef const& ref, size_t bytes) const;
   uint32_t resolve_local_mr_id(BufferRef const& ref, size_t bytes) const;
   uint32_t resolve_remote_mr_id(int peer_rank) const;
+  void ensure_plan_paths(ExecutionPlan const& plan) const;
+  void ensure_peer_paths(int peer_rank, bool need_send, bool need_recv) const;
   void on_transport_completion(unsigned request_id);
   static void* byte_offset(void* base, size_t offset);
   static void const* byte_offset(void const* base, size_t offset);
@@ -52,6 +60,8 @@ class CommunicatorTransportBackend final : public Backend {
   std::unordered_map<unsigned, uint64_t> request_to_token_;
   std::deque<uint64_t> completed_tokens_;
   std::shared_ptr<void> completion_notifier_;
+  mutable std::mutex path_mu_;
+  mutable std::vector<PeerPathState> peer_paths_;
 };
 
 }  // namespace CCL
