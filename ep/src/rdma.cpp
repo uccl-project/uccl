@@ -463,9 +463,21 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       fprintf(stderr, "[WARN] no candidate NIC found, defaulting to first\n");
       selected_nic_name = dist.front().first;
     } else {
-      // Spread GPUs across equal-distance NICs: use local GPU index modulo
-      // For example, pass in `local_rank` or derive gpu_index from device path
-      selected_nic_name = candidates[thread_idx % candidates.size()];
+      // NUMA-aware tie-breaker: prefer NICs on same NUMA node as GPU
+      int gpu_numa_node = mscclpp::getDeviceNumaNode(local_rank);
+      std::vector<std::string> numa_candidates;
+      for (auto const& nic_name : candidates) {
+        int nic_numa = uccl::get_dev_numa_node(nic_name.c_str());
+        if (nic_numa == gpu_numa_node && nic_numa >= 0) {
+          numa_candidates.push_back(nic_name);
+        }
+      }
+      if (!numa_candidates.empty()) {
+        selected_nic_name =
+            numa_candidates[thread_idx % numa_candidates.size()];
+      } else {
+        selected_nic_name = candidates[thread_idx % candidates.size()];
+      }
 #ifdef EFA
       if (num_efas == 32) {
         assert(candidates.size() == 4);
