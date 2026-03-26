@@ -3,6 +3,7 @@
 #include "define.h"
 #include "rdma_device.h"
 #include <dlfcn.h>
+#include <endian.h>
 
 class RdmaContext {
  public:
@@ -84,6 +85,11 @@ class RdmaContext {
     }
 
     if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
+      // First pass: collect all valid RoCE v2 GID indices.
+      // Second: prefer a routable (IPv4-mapped) GID over link-local fe80::.
+      int first_rocev2 = -1;
+      union ibv_gid first_rocev2_gid {};
+
       for (int i = 0; i < port_attr.gid_tbl_len; i++) {
         union ibv_gid gid;
         if (ibv_query_gid(ctx_.get(), port, i, &gid) == 0) {
@@ -104,16 +110,43 @@ class RdmaContext {
               if (fgets(gid_type, sizeof(gid_type), fp)) {
                 if (strstr(gid_type, "RoCE v2") != nullptr) {
                   fclose(fp);
-                  UCCL_LOG(INFO, UCCL_RDMA) << "RoCE v2 device " << device_name
-                                            << ": using GID index " << i;
-                  gid_index_ = i;
-                  return gid;
+
+                  // Check if this is an IPv4-mapped GID (::ffff:x.x.x.x).
+                  // Bytes [0..9] are zero, bytes [10..11] are 0xffff.
+                  bool is_ipv4_mapped = (gid.global.subnet_prefix == 0 &&
+                                         (gid.global.interface_id &
+                                          htobe64(0xFFFFFFFF00000000ULL)) ==
+                                             htobe64(0x0000FFFF00000000ULL));
+
+                  if (is_ipv4_mapped) {
+                    UCCL_LOG(INFO, UCCL_RDMA)
+                        << "RoCE v2 device " << device_name
+                        << ": using IPv4-mapped GID index " << i;
+                    gid_index_ = i;
+                    return gid;
+                  }
+
+                  // Remember the first RoCE v2 entry as fallback.
+                  if (first_rocev2 < 0) {
+                    first_rocev2 = i;
+                    first_rocev2_gid = gid;
+                  }
+                  continue;
                 }
               }
               fclose(fp);
             }
           }
         }
+      }
+
+      // No IPv4-mapped entry found; fall back to the first RoCE v2 entry.
+      if (first_rocev2 >= 0) {
+        UCCL_LOG(INFO, UCCL_RDMA)
+            << "RoCE v2 device " << device_name << ": using GID index "
+            << first_rocev2 << " (no IPv4-mapped GID found)";
+        gid_index_ = first_rocev2;
+        return first_rocev2_gid;
       }
     }
 
