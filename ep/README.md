@@ -24,7 +24,7 @@ make -j install
 Alternatively, you can build `uccl.ep` wheel using docker then install:
 ```bash
 # Under uccl
-bash build.sh cuda ep --install
+bash build.sh cu12 ep --install
 ```
 > Note: docker-built `uccl.ep` wheel currently does not work on p6-b200, see https://github.com/uccl-project/uccl/issues/554. 
 
