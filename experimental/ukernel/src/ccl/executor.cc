@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <condition_variable>
 #include <deque>
+#include <cstdio>
+#include <cinttypes>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -213,6 +215,11 @@ struct Executor::Impl {
     return get_locked_const(handle).status;
   }
 
+  std::string error_message(CollectiveOpHandle handle) const {
+    std::lock_guard<std::mutex> lock(mu);
+    return get_locked_const(handle).error;
+  }
+
   size_t inflight_steps(CollectiveOpHandle handle) const {
     std::lock_guard<std::mutex> lock(mu);
     size_t inflight = 0;
@@ -252,6 +259,13 @@ struct Executor::Impl {
       if (active_handle != 0) {
         HandleState& state = handles.at(active_handle);
         if (is_terminal(state.status)) {
+          if (state.status == CollectiveOpStatus::Failed &&
+              !state.error.empty()) {
+            std::fprintf(stderr,
+                         "[ccl executor] collective %" PRIu64
+                         " failed: %s\n",
+                         active_handle, state.error.c_str());
+          }
           active_handle = 0;
           cv.notify_all();
           continue;
@@ -516,6 +530,10 @@ void Executor::release(CollectiveOpHandle handle) { impl_->release(handle); }
 
 CollectiveOpStatus Executor::status(CollectiveOpHandle handle) const {
   return impl_->status(handle);
+}
+
+std::string Executor::error_message(CollectiveOpHandle handle) const {
+  return impl_->error_message(handle);
 }
 
 size_t Executor::inflight_steps(CollectiveOpHandle handle) const {

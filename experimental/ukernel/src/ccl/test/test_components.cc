@@ -66,6 +66,37 @@ void test_planner_emits_valid_collective_dags() {
          static_cast<size_t>(alltoall_cfg.nranks - 1) * alltoall_cfg.tile_bytes);
 }
 
+void test_two_rank_ring_allreduce_rotates_reduced_shard_in_allgather() {
+  printf("[test] two-rank ring allreduce rotates reduced shard...\n");
+
+  CollectiveConfig cfg = Testing::make_test_config(2, 0, 512, 512, 1);
+  CollectivePlan plan =
+      build_plan(make_plan_request(CollectiveKind::AllReduce, cfg));
+  Testing::validate_basic_plan(plan);
+
+  assert(plan.ops.size() == 5);
+
+  PrimitiveOp const& rs_send = plan.ops[0];
+  PrimitiveOp const& rs_recv = plan.ops[1];
+  PrimitiveOp const& rs_reduce = plan.ops[2];
+  PrimitiveOp const& ag_send = plan.ops[3];
+  PrimitiveOp const& ag_recv = plan.ops[4];
+
+  assert(rs_send.kind == PrimitiveOpKind::Send);
+  assert(rs_send.tile.owner_rank == 0);
+  assert(rs_recv.kind == PrimitiveOpKind::Recv);
+  assert(rs_recv.tile.owner_rank == 1);
+  assert(rs_reduce.kind == PrimitiveOpKind::Reduce);
+  assert(rs_reduce.tile.owner_rank == 1);
+
+  // The first allgather send must forward the fully reduced shard produced by
+  // the reduce-scatter phase, which for rank 0 in a two-rank ring is shard 1.
+  assert(ag_send.kind == PrimitiveOpKind::Send);
+  assert(ag_send.tile.owner_rank == 1);
+  assert(ag_recv.kind == PrimitiveOpKind::Recv);
+  assert(ag_recv.tile.owner_rank == 0);
+}
+
 void test_lowering_preserves_dependency_dag() {
   printf("[test] lowering preserves dependency DAG...\n");
 
@@ -161,6 +192,7 @@ int main() {
   printf("=== CCL Component Tests ===\n\n");
   test_lowering_routes_ops_to_execution_kinds();
   test_planner_emits_valid_collective_dags();
+  test_two_rank_ring_allreduce_rotates_reduced_shard_in_allgather();
   test_lowering_preserves_dependency_dag();
   test_executor_completes_collectives_with_background_progress();
   test_executor_queues_collectives_serially();

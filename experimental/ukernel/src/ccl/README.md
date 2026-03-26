@@ -90,6 +90,8 @@ Edit the variables at the top of
 - `GPU_IDS`
 - `TRANSPORT`
 - `BYTES_PER_RANK`
+  The current multiprocess test harness emulates float tensors, so this value
+  should be a multiple of `world_size * sizeof(float)`.
 - `TILE_BYTES`
 - `NUM_FLOWS`
 
@@ -106,7 +108,7 @@ torchrun --no-python \
   ./test_multiprocess_collective \
   --collective allreduce \
   --transport auto \
-  --bytes-per-rank 1048576 \
+  --bytes-per-rank 1048572 \
   --tile-bytes 65536 \
   --num-flows 2 \
   --exchanger-ip 127.0.0.1 \

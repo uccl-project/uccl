@@ -14,7 +14,7 @@ GPU_IDS=0,1,2,3
 
 # Use auto by default so same-node runs exercise the IPC path directly.
 TRANSPORT=auto
-BYTES_PER_RANK=$((1 * 1024 * 1024))
+BYTES_PER_RANK=$(((1 * 1024 * 1024) - 4))
 TILE_BYTES=$((64 * 1024))
 NUM_FLOWS=2
 UHM_HOST_ID_OVERRIDE=${UHM_HOST_ID_OVERRIDE:-ccl-$(date +%s)-$$}

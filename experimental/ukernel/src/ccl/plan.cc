@@ -219,8 +219,11 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
 
   for (uint32_t flow_slot = 0; flow_slot < request.num_flows; ++flow_slot) {
     for (int ring_step = 0; ring_step < request.nranks - 1; ++ring_step) {
-      int send_owner = ring.wrap(request.rank - ring_step);
-      int recv_owner = ring.wrap(request.rank - ring_step - 1);
+      // After reduce-scatter, rank r owns the fully reduced shard
+      // (r + 1) mod nranks. Allgather then circulates those completed shards
+      // around the ring in that order.
+      int send_owner = ring.wrap(request.rank + 1 - ring_step);
+      int recv_owner = ring.wrap(request.rank - ring_step);
       int send_peer = ring.next(request.rank);
       int recv_peer = ring.prev(request.rank);
       size_t send_bytes =

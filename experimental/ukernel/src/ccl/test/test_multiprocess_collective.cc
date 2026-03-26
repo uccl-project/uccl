@@ -29,6 +29,8 @@ namespace {
 
 size_t ceil_div(size_t a, size_t b) { return b == 0 ? 0 : (a + b - 1) / b; }
 
+size_t default_test_bytes_per_rank() { return (1u << 20) - sizeof(float); }
+
 char const* collective_name(CollectiveKind kind) {
   switch (kind) {
     case CollectiveKind::AllReduce:
@@ -513,7 +515,7 @@ struct Options {
   int gpu = 0;
   int exchanger_port = 6979;
   uint32_t num_flows = 2;
-  size_t bytes_per_rank = 1 << 20;
+  size_t bytes_per_rank = default_test_bytes_per_rank();
   size_t tile_bytes = 64 << 10;
   std::string exchanger_ip = "127.0.0.1";
   std::string transport = "auto";
@@ -536,7 +538,8 @@ Options parse_options(int argc, char** argv) {
       argc, argv, "--num-flows", get_env_int({"CCL_NUM_FLOWS"}, 2)));
   opts.bytes_per_rank = get_size_arg(
       argc, argv, "--bytes-per-rank",
-      get_env_size({"BYTES_PER_RANK", "CCL_BYTES_PER_RANK"}, 1 << 20));
+      get_env_size({"BYTES_PER_RANK", "CCL_BYTES_PER_RANK"},
+                   default_test_bytes_per_rank()));
   opts.tile_bytes =
       get_size_arg(argc, argv, "--tile-bytes",
                    get_env_size({"TILE_BYTES", "CCL_TILE_BYTES"}, 64 << 10));
@@ -560,6 +563,11 @@ int run_rank(Options const& opts) {
   require(opts.tile_bytes > 0, "tile_bytes must be > 0");
   require(opts.bytes_per_rank % sizeof(float) == 0,
           "bytes_per_rank must be a multiple of sizeof(float)");
+  require(opts.bytes_per_rank %
+                  (static_cast<size_t>(opts.world_size) * sizeof(float)) ==
+              0,
+          "bytes_per_rank must be a multiple of world_size * sizeof(float) "
+          "for the float-based collective tests");
 
   GPU_RT_CHECK(gpuSetDevice(opts.gpu));
 
@@ -618,9 +626,13 @@ int run_rank(Options const& opts) {
                                   ? executor.submit_allreduce(config)
                                   : executor.submit_alltoall(config);
   wait_for_collective(executor, handle, std::chrono::seconds(60));
-
-  require(executor.status(handle) == CollectiveOpStatus::Completed,
-          "collective did not complete successfully");
+  if (executor.status(handle) != CollectiveOpStatus::Completed) {
+    std::string error = executor.error_message(handle);
+    if (error.empty()) {
+      error = "unknown executor failure";
+    }
+    fail("collective did not complete successfully: " + error);
+  }
   executor.release(handle);
 
   std::vector<float> output = download_tensor(tensor.ptr, opts.bytes_per_rank);

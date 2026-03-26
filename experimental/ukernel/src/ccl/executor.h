@@ -5,6 +5,7 @@
 #include "selector.h"
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace UKernel {
 namespace CCL {
@@ -56,6 +57,7 @@ class Executor {
   void release(CollectiveOpHandle handle);
 
   CollectiveOpStatus status(CollectiveOpHandle handle) const;
+  std::string error_message(CollectiveOpHandle handle) const;
   size_t inflight_steps(CollectiveOpHandle handle) const;
 
  private:
