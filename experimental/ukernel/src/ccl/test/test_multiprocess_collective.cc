@@ -28,7 +28,11 @@ namespace {
 
 size_t ceil_div(size_t a, size_t b) { return b == 0 ? 0 : (a + b - 1) / b; }
 
-size_t default_test_bytes_per_rank() { return (1u << 20) - sizeof(float); }
+size_t default_test_bytes_per_rank(int world_size) {
+  size_t base = 1u << 20;
+  size_t alignment = static_cast<size_t>(std::max(1, world_size)) * sizeof(float);
+  return base - (base % alignment);
+}
 
 char const* collective_name(CollectiveKind kind) {
   switch (kind) {
@@ -353,7 +357,7 @@ struct Options {
   int gpu = 0;
   int exchanger_port = 6979;
   uint32_t num_flows = 2;
-  size_t bytes_per_rank = default_test_bytes_per_rank();
+  size_t bytes_per_rank = default_test_bytes_per_rank(2);
   size_t tile_bytes = 64 << 10;
   std::string exchanger_ip = "127.0.0.1";
   std::string transport = "auto";
@@ -377,7 +381,7 @@ Options parse_options(int argc, char** argv) {
   opts.bytes_per_rank = get_size_arg(
       argc, argv, "--bytes-per-rank",
       get_env_size({"BYTES_PER_RANK", "CCL_BYTES_PER_RANK"},
-                   default_test_bytes_per_rank()));
+                   default_test_bytes_per_rank(opts.world_size)));
   opts.tile_bytes =
       get_size_arg(argc, argv, "--tile-bytes",
                    get_env_size({"TILE_BYTES", "CCL_TILE_BYTES"}, 64 << 10));

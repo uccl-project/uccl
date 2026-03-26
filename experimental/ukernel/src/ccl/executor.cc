@@ -377,30 +377,20 @@ void Executor::Impl::maybe_quiesce_backends_locked(
                                                          : backends.fallback;
     if (device_backend == nullptr) return;
     for (uint32_t flow_id = 0; flow_id < state.exec_plan.num_flows; ++flow_id) {
-      bool has_pending_device_work = false;
-      for (uint32_t op_id : state.ready_ops) {
-        if (op_id >= state.exec_plan.ops.size()) continue;
-        ExecOp const& op = state.exec_plan.ops[op_id];
-        if ((op.kind == ExecOpKind::DeviceCopy ||
-             op.kind == ExecOpKind::DeviceReduce) &&
-            op.tile.flow_index == flow_id) {
-          has_pending_device_work = true;
-          break;
-        }
-      }
-      if (has_pending_device_work) continue;
+      bool flow_has_unfinished_device_work = false;
       for (size_t op_id = 0; op_id < state.op_states.size(); ++op_id) {
-        detail::OpState const& op_state = state.op_states[op_id];
-        if (op_state.inflight.backend == nullptr) continue;
         ExecOp const& op = state.exec_plan.ops[op_id];
-        if ((op.kind == ExecOpKind::DeviceCopy ||
-             op.kind == ExecOpKind::DeviceReduce) &&
-            op.tile.flow_index == flow_id) {
-          has_pending_device_work = true;
+        if (op.kind != ExecOpKind::DeviceCopy &&
+            op.kind != ExecOpKind::DeviceReduce) {
+          continue;
+        }
+        if (op.tile.flow_index != flow_id) continue;
+        if (!state.op_states[op_id].completed) {
+          flow_has_unfinished_device_work = true;
           break;
         }
       }
-      if (!has_pending_device_work) {
+      if (!flow_has_unfinished_device_work) {
         device_backend->stop(flow_id);
       }
     }
