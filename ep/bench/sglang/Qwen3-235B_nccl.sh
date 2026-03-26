@@ -12,7 +12,7 @@ source "$SCRIPT_DIR/common_launch.sh"
 
 # Optional installation commands:
 # python setup.py install
-# pip install ../../wheelhouse-cuda/uccl-0.0.1.post4-py3-none-any.whl
+# pip install ../../wheelhouse-cu12/uccl-0.0.1.post4-py3-none-any.whl
 
 # Model and cluster configuration
 MODEL_PATH="Qwen/Qwen3-235B-A22B-FP8"
