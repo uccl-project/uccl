@@ -707,7 +707,9 @@ class NICEndpoint {
         return it->second;
       }
     }
-    auto numa_node = RdmaDeviceManager::instance().get_numa_node(gpu_index_);
+    auto numa_node = RdmaDeviceManager::instance().get_numa_node(
+      RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_)[0]
+    );
     {
       std::unique_lock write_lock(recv_channel_mutex_);
       auto [it, inserted] = recv_channel_groups_.try_emplace(
@@ -738,7 +740,9 @@ class NICEndpoint {
       auto it = send_channel_groups_.find(rank_id);
       if (it != send_channel_groups_.end()) return it->second;
     }
-    auto numa_node = RdmaDeviceManager::instance().get_numa_node(gpu_index_);
+    auto numa_node = RdmaDeviceManager::instance().get_numa_node(
+      RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_)[0]
+    );
     {
       std::unique_lock write_lock(send_channel_mutex_);
       auto [it, inserted] = send_channel_groups_.try_emplace(
