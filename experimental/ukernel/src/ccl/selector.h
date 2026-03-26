@@ -20,7 +20,6 @@ enum class ExecOpKind : uint32_t {
 struct ExecOp {
   uint32_t op_id = 0;
   ExecOpKind kind = ExecOpKind::DeviceCopy;
-  int peer_rank = -1;
   TileRef tile;
   BufferRef src;
   BufferRef dst;

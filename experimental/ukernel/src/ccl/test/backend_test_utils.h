@@ -77,19 +77,39 @@ inline void validate_basic_plan(CollectivePlan const& plan) {
     assert(op.tile.size_bytes > 0);
     assert(op.tile.flow_index < plan.num_flows);
     assert(op.tile.offset_bytes + op.tile.size_bytes <= plan.tensor_bytes);
-    if (op.peer_rank >= 0) {
-      assert(op.peer_rank < plan.nranks);
-      assert(op.peer_rank != plan.rank);
-    }
-    if (op.kind == PrimitiveOpKind::Send || op.kind == PrimitiveOpKind::Copy ||
-        op.kind == PrimitiveOpKind::Reduce) {
+    auto validate_ref = [&](BufferRef const& ref) {
+      if (ref.kind == BufferKind::PeerTensor ||
+          ref.kind == BufferKind::PeerStaging) {
+        assert(ref.rank >= 0);
+        assert(ref.rank < plan.nranks);
+        assert(ref.rank != plan.rank);
+      } else {
+        assert(ref.rank < 0);
+      }
+    };
+    validate_ref(op.src);
+    validate_ref(op.dst);
+    if (op.kind == PrimitiveOpKind::Send) {
       assert(op.src.kind == BufferKind::Tensor ||
              op.src.kind == BufferKind::Staging);
+      assert(op.dst.kind == BufferKind::PeerTensor ||
+             op.dst.kind == BufferKind::PeerStaging);
     }
-    if (op.kind == PrimitiveOpKind::Recv || op.kind == PrimitiveOpKind::Copy ||
-        op.kind == PrimitiveOpKind::Reduce) {
+    if (op.kind == PrimitiveOpKind::Recv) {
+      assert(op.src.kind == BufferKind::PeerTensor ||
+             op.src.kind == BufferKind::PeerStaging);
       assert(op.dst.kind == BufferKind::Tensor ||
              op.dst.kind == BufferKind::Staging);
+    }
+    if (op.kind == PrimitiveOpKind::Copy || op.kind == PrimitiveOpKind::Reduce) {
+      assert(op.src.kind == BufferKind::Tensor ||
+             op.src.kind == BufferKind::Staging ||
+             op.src.kind == BufferKind::PeerTensor ||
+             op.src.kind == BufferKind::PeerStaging);
+      assert(op.dst.kind == BufferKind::Tensor ||
+             op.dst.kind == BufferKind::Staging ||
+             op.dst.kind == BufferKind::PeerTensor ||
+             op.dst.kind == BufferKind::PeerStaging);
     }
     for (uint32_t dep : op.deps) {
       assert(dep < plan.ops.size());
@@ -122,10 +142,18 @@ inline void validate_basic_exec_plan(ExecutionPlan const& plan) {
     assert(op.tile.size_bytes > 0);
     assert(op.tile.flow_index < plan.num_flows);
     assert(op.tile.offset_bytes + op.tile.size_bytes <= plan.tensor_bytes);
-    if (op.peer_rank >= 0) {
-      assert(op.peer_rank < plan.nranks);
-      assert(op.peer_rank != plan.rank);
-    }
+    auto validate_ref = [&](BufferRef const& ref) {
+      if (ref.kind == BufferKind::PeerTensor ||
+          ref.kind == BufferKind::PeerStaging) {
+        assert(ref.rank >= 0);
+        assert(ref.rank < plan.nranks);
+        assert(ref.rank != plan.rank);
+      } else {
+        assert(ref.rank < 0);
+      }
+    };
+    validate_ref(op.src);
+    validate_ref(op.dst);
     for (uint32_t dep : op.deps) {
       assert(dep < plan.ops.size());
       assert(dep < op.op_id);

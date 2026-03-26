@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../task.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>

@@ -17,6 +17,21 @@ void validate_span(char const* what, size_t offset, size_t bytes,
   }
 }
 
+bool is_peer_ref(BufferRef const& ref) {
+  return ref.kind == BufferKind::PeerTensor ||
+         ref.kind == BufferKind::PeerStaging;
+}
+
+int transport_peer_rank(ExecOp const& op) {
+  if (op.kind == ExecOpKind::TransportSend) {
+    return is_peer_ref(op.dst) ? op.dst.rank : -1;
+  }
+  if (op.kind == ExecOpKind::TransportRecv) {
+    return is_peer_ref(op.src) ? op.src.rank : -1;
+  }
+  return -1;
+}
+
 }  // namespace
 
 CommunicatorTransportBackend::CommunicatorTransportBackend(
@@ -38,6 +53,8 @@ CommunicatorTransportBackend::CommunicatorTransportBackend(
         on_transport_completion(request_id);
       });
 }
+
+CommunicatorTransportBackend::~CommunicatorTransportBackend() = default;
 
 char const* CommunicatorTransportBackend::name() const {
   return "communicator-transport";
@@ -85,11 +102,12 @@ void CommunicatorTransportBackend::ensure_plan_paths(
   std::vector<bool> need_send(static_cast<size_t>(plan.nranks), false);
   std::vector<bool> need_recv(static_cast<size_t>(plan.nranks), false);
   for (ExecOp const& op : plan.ops) {
-    if (op.peer_rank < 0 || op.peer_rank >= plan.nranks) continue;
+    int peer_rank = transport_peer_rank(op);
+    if (peer_rank < 0 || peer_rank >= plan.nranks) continue;
     if (op.kind == ExecOpKind::TransportSend) {
-      need_send[static_cast<size_t>(op.peer_rank)] = true;
+      need_send[static_cast<size_t>(peer_rank)] = true;
     } else if (op.kind == ExecOpKind::TransportRecv) {
-      need_recv[static_cast<size_t>(op.peer_rank)] = true;
+      need_recv[static_cast<size_t>(peer_rank)] = true;
     }
   }
 
@@ -259,23 +277,21 @@ BackendToken CommunicatorTransportBackend::submit(ExecOp const& op) {
   if (!supports(op.kind)) {
     throw std::invalid_argument("unsupported op kind for transport backend");
   }
-  if (op.peer_rank < 0) {
-    throw std::invalid_argument("transport op requires a valid peer rank");
-  }
   ensure_memory_bindings_initialized();
 
+  int peer_rank = resolve_peer_rank(op);
   BackendToken token{next_token_++};
   unsigned request_id = 0;
   if (op.kind == ExecOpKind::TransportSend) {
     void const* src = resolve_const(op.src, op.tile.size_bytes);
     request_id =
-        communicator_->isend(op.peer_rank, const_cast<void*>(src), 0,
+        communicator_->isend(peer_rank, const_cast<void*>(src), 0,
                              op.tile.size_bytes,
                              resolve_local_mr_id(op.src, op.tile.size_bytes),
-                             resolve_remote_mr_id(op.peer_rank), true);
+                             resolve_remote_mr_id(op.dst), true);
   } else {
     void* dst = resolve_mutable(op.dst, op.tile.size_bytes);
-    request_id = communicator_->irecv(op.peer_rank, dst, 0, op.tile.size_bytes,
+    request_id = communicator_->irecv(peer_rank, dst, 0, op.tile.size_bytes,
                                       true);
   }
 
@@ -397,14 +413,47 @@ uint32_t CommunicatorTransportBackend::resolve_local_mr_id(BufferRef const& ref,
   return communicator_->get_local_mr(ptr).id;
 }
 
+int CommunicatorTransportBackend::resolve_peer_rank(ExecOp const& op) const {
+  if (op.kind == ExecOpKind::TransportSend) {
+    if (!is_peer_ref(op.dst) || op.dst.rank < 0) {
+      throw std::invalid_argument(
+          "transport send requires a peer destination buffer");
+    }
+    return op.dst.rank;
+  }
+  if (op.kind == ExecOpKind::TransportRecv) {
+    if (!is_peer_ref(op.src) || op.src.rank < 0) {
+      throw std::invalid_argument(
+          "transport recv requires a peer source buffer");
+    }
+    return op.src.rank;
+  }
+  throw std::invalid_argument("transport peer rank requested for non-transport op");
+}
+
 uint32_t CommunicatorTransportBackend::resolve_remote_mr_id(
-    int peer_rank) const {
+    BufferRef const& ref) const {
+  if (!is_peer_ref(ref) || ref.rank < 0) {
+    throw std::invalid_argument("transport remote MR requires peer buffer ref");
+  }
+  int peer_rank = ref.rank;
   if (peer_rank < 0 ||
       static_cast<size_t>(peer_rank) >= memory_->tensor.peer_views.size()) {
     throw std::invalid_argument("transport peer rank out of range");
   }
-  uint32_t mr_id =
-      memory_->tensor.peer_views[static_cast<size_t>(peer_rank)].mr_id;
+  uint32_t mr_id = 0;
+  switch (ref.kind) {
+    case BufferKind::PeerTensor:
+      mr_id = memory_->tensor.peer_views[static_cast<size_t>(peer_rank)].mr_id;
+      break;
+    case BufferKind::PeerStaging:
+      mr_id =
+          memory_->staging.peer_views[static_cast<size_t>(peer_rank)].mr_id;
+      break;
+    case BufferKind::Tensor:
+    case BufferKind::Staging:
+      break;
+  }
   if (mr_id == 0) {
     throw std::invalid_argument("transport remote MR id is missing");
   }

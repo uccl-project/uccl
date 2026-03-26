@@ -114,8 +114,9 @@ void test_lowering_preserves_dependency_dag() {
     assert(op.tile.owner_rank == plan.ops[i].tile.owner_rank);
     assert(op.tile.tile_index == plan.ops[i].tile.tile_index);
     assert(op.src.kind == plan.ops[i].src.kind);
+    assert(op.src.rank == plan.ops[i].src.rank);
     assert(op.dst.kind == plan.ops[i].dst.kind);
-    assert(op.peer_rank == plan.ops[i].peer_rank);
+    assert(op.dst.rank == plan.ops[i].dst.rank);
     assert(op.deps == plan.ops[i].deps);
     for (uint32_t dep : op.deps) {
       assert(dep < op.op_id);

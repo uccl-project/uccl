@@ -30,7 +30,7 @@ enum class BufferKind : uint32_t {
 struct BufferRef {
   BufferKind kind = BufferKind::Tensor;
   size_t offset_bytes = 0;
-  int peer_rank = -1;
+  int rank = -1;
 };
 
 struct PeerBufferView {

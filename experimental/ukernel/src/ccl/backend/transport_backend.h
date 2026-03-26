@@ -28,7 +28,7 @@ class CommunicatorTransportBackend final : public Backend {
  public:
   CommunicatorTransportBackend(TransportBackendConfig const& config,
                                std::shared_ptr<CollectiveMemory> memory);
-  ~CommunicatorTransportBackend() override = default;
+  ~CommunicatorTransportBackend() override;
 
   char const* name() const override;
   void validate(ExecutionPlan const& plan) const override;
@@ -60,7 +60,8 @@ class CommunicatorTransportBackend final : public Backend {
   void* resolve_mutable(BufferRef const& ref, size_t bytes) const;
   void const* resolve_const(BufferRef const& ref, size_t bytes) const;
   uint32_t resolve_local_mr_id(BufferRef const& ref, size_t bytes) const;
-  uint32_t resolve_remote_mr_id(int peer_rank) const;
+  int resolve_peer_rank(ExecOp const& op) const;
+  uint32_t resolve_remote_mr_id(BufferRef const& ref) const;
   void ensure_plan_paths(ExecutionPlan const& plan) const;
   void ensure_peer_paths(int peer_rank, bool need_send, bool need_recv) const;
   void on_transport_completion(unsigned request_id);

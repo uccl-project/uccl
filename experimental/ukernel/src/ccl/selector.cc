@@ -39,7 +39,6 @@ ExecutionPlan lower_plan(CollectivePlan const& plan) {
     ExecOp exec_op;
     exec_op.op_id = op.op_id;
     exec_op.kind = lower_kind(op.kind);
-    exec_op.peer_rank = op.peer_rank;
     exec_op.tile = op.tile;
     exec_op.src = op.src;
     exec_op.dst = op.dst;

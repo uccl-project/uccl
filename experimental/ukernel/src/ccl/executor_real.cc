@@ -2,6 +2,7 @@
 #include "executor_impl.h"
 #include "backend/device_backend.h"
 #include "backend/transport_backend.h"
+#include "../transport/communicator.h"
 #include <memory>
 #include <utility>
 

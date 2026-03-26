@@ -152,11 +152,11 @@ BackendToken DeviceBackend::submit(ExecOp const& op) {
   args.bytes = op.tile.size_bytes;
   args.src_rank = (op.src.kind == BufferKind::PeerTensor ||
                    op.src.kind == BufferKind::PeerStaging)
-                      ? op.src.peer_rank
+                      ? op.src.rank
                       : memory_->tensor.local_rank;
   args.dst_rank = (op.dst.kind == BufferKind::PeerTensor ||
                    op.dst.kind == BufferKind::PeerStaging)
-                      ? op.dst.peer_rank
+                      ? op.dst.rank
                       : memory_->tensor.local_rank;
   args.src_device =
       op.src_device >= 0 ? op.src_device : local_device_idx_;
@@ -182,6 +182,7 @@ BackendToken DeviceBackend::submit(ExecOp const& op) {
   }
   if (task_id == 0) {
     active_flows_[flow_id].inflight--;
+    stop_flow(flow_id);
     Device::TaskManager::instance().free_task_args(task.args_index());
     throw std::runtime_error("device backend failed to enqueue task");
   }

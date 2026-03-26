@@ -22,12 +22,15 @@ VPATH := .:test:../transport:../device:../device/fifo
 INCLUDES := -I. -I./test -I../transport -I../device -I../device/fifo \
             -I../../include -I$(UCCL_ROOT) -I$(UCCL_ROOT)/include \
             -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR)
-TRANSPORT_LDFLAGS := -L$(CONDA_LIB_HOME) -L$(CUDA_HOME)/lib64 \
-                     -Wl,-rpath,$(CUDA_HOME)/lib64 -lcudart -lcuda \
-                     -lgflags -lz -libverbs -lnl-3 -lnl-route-3 -lrdmacm \
-                     -lpthread $(UCCL_RDMA_STATIC)
-DEVICE_LDFLAGS := -L$(GDRCOPY_LIBDIR) -Wl,-rpath,$(GDRCOPY_LIBDIR) \
-                  -lgdrapi -lnuma
+CXX_RPATH_FLAGS := -Wl,-rpath,$(CUDA_HOME)/lib64 \
+                   -Wl,-rpath,$(GDRCOPY_LIBDIR)
+NVCC_RPATH_FLAGS := -Xlinker -rpath -Xlinker $(CUDA_HOME)/lib64 \
+                    -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR)
+TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(CUDA_HOME)/lib64 \
+                  -lcudart -lcuda -lgflags -lz -libverbs \
+                  -lnl-3 -lnl-route-3 -lrdmacm -lpthread \
+                  $(UCCL_RDMA_STATIC)
+DEVICE_LIBS := -L$(GDRCOPY_LIBDIR) -lgdrapi -lnuma
 
 CCL_CORE_SRC := topology.cc plan.cc selector.cc executor.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
@@ -70,7 +73,8 @@ $(UCCL_RDMA_STATIC):
 test_multiprocess_collective: $(CCL_CORE_OBJ) backend/transport_backend.o \
 		backend/device_backend.o $(REAL_EXECUTOR_OBJ) $(TRANSPORT_OBJ) $(DEVICE_OBJ) \
 		test/test_multiprocess_collective.o $(UCCL_RDMA_STATIC)
-	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(TRANSPORT_LDFLAGS) $(DEVICE_LDFLAGS)
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
+		$(TRANSPORT_LIBS) $(DEVICE_LIBS)
 
 %.o: %.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)

@@ -42,7 +42,6 @@ struct TileRef {
 struct PrimitiveOp {
   uint32_t op_id = 0;
   PrimitiveOpKind kind = PrimitiveOpKind::Copy;
-  int peer_rank = -1;
   TileRef tile;
   BufferRef src;
   BufferRef dst;

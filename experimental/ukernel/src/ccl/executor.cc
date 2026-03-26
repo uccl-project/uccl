@@ -54,10 +54,10 @@ void const* local_const_ptr(CollectiveMemory const& memory, BufferRef const& ref
 uint32_t remote_mr_id(CollectiveMemory const& memory, BufferRef const& ref,
                       int local_rank) {
   (void)local_rank;
-  if (!is_peer_ref(ref) || ref.peer_rank < 0) {
+  if (!is_peer_ref(ref) || ref.rank < 0) {
     throw std::invalid_argument("remote MR lookup requires a remote buffer ref");
   }
-  size_t peer = static_cast<size_t>(ref.peer_rank);
+  size_t peer = static_cast<size_t>(ref.rank);
   switch (ref.kind) {
     case BufferKind::PeerTensor:
       if (peer >= memory.tensor.peer_views.size()) {
@@ -87,7 +87,7 @@ ExecOp bind_device_exec_op(ExecOp const& op, CollectiveMemory const& memory,
     void* ptr = nullptr;
     int device_idx = -1;
     if (!resolve_remote_ptr ||
-        !resolve_remote_ptr(op.src.peer_rank, mr_id, op.src.offset_bytes,
+        !resolve_remote_ptr(op.src.rank, mr_id, op.src.offset_bytes,
                             op.tile.size_bytes, &ptr, &device_idx)) {
       throw std::runtime_error("failed to resolve remote source pointer");
     }
@@ -102,7 +102,7 @@ ExecOp bind_device_exec_op(ExecOp const& op, CollectiveMemory const& memory,
     void* ptr = nullptr;
     int device_idx = -1;
     if (!resolve_remote_ptr ||
-        !resolve_remote_ptr(op.dst.peer_rank, mr_id, op.dst.offset_bytes,
+        !resolve_remote_ptr(op.dst.rank, mr_id, op.dst.offset_bytes,
                             op.tile.size_bytes, &ptr, &device_idx)) {
       throw std::runtime_error("failed to resolve remote destination pointer");
     }
