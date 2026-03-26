@@ -11,8 +11,6 @@ from typing import Tuple
 # You must first import torch before importing uccl for AMD GPUs
 import torch
 
-os.environ["UCCL_RCMODE"] = "1"
-
 try:
     from uccl import p2p
 except ImportError as e:
