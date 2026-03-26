@@ -110,6 +110,7 @@ Notes:
 | UCCL_P2P_RDMA_GID_INDEX | GID index in RDMA network | 0/3 (EFA/IB) |
 | UCCL_P2P_RDMA_SL | Service level in RDMA network | 8/3 (EFA/IB) |
 | UCCL_P2P_RDMA_TC | Traffic class in RDMA network | 104 (IB) |
+| UCCL_P2P_RDMA_DEV | IB devices forced to use (instead of auto-selecting based on PCIe affinity) | none |
 | P2P_COMPRESS_STRATEGY | DietGPU compression strategy (requires `USE_DIETGPU=1` build) | none |
 
 `P2P_COMPRESS_STRATEGY` accepted values:
