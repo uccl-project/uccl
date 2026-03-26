@@ -9,6 +9,8 @@ char const* peer_transport_kind_name(PeerTransportKind kind) {
       return "uccl";
     case PeerTransportKind::Ipc:
       return "ipc";
+    case PeerTransportKind::Tcp:
+      return "tcp";
   }
   return "unknown";
 }
@@ -24,10 +26,21 @@ PeerTransportKind resolve_peer_transport_kind(
     return PeerTransportKind::Ipc;
   }
   if (config.preferred_transport == PreferredTransport::Uccl) {
+    if (!local_meta.rdma_capable || !peer_meta.rdma_capable) {
+      throw std::invalid_argument(
+          "preferred UCCL transport requires RDMA-capable peers");
+    }
     return PeerTransportKind::Uccl;
   }
-  return local_meta.host_id == peer_meta.host_id ? PeerTransportKind::Ipc
-                                                 : PeerTransportKind::Uccl;
+  if (config.preferred_transport == PreferredTransport::Tcp) {
+    return PeerTransportKind::Tcp;
+  }
+  if (local_meta.host_id == peer_meta.host_id) {
+    return PeerTransportKind::Ipc;
+  }
+  return (local_meta.rdma_capable && peer_meta.rdma_capable)
+             ? PeerTransportKind::Uccl
+             : PeerTransportKind::Tcp;
 }
 
 }  // namespace Transport

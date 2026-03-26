@@ -56,6 +56,11 @@ bool UcclTransportAdapter::has_recv_peer(int peer_rank) const {
   return it != peer_contexts_.end() && it->second.recv_flow != nullptr;
 }
 
+bool UcclTransportAdapter::is_memory_registered(uint64_t mr_id) const {
+  std::lock_guard<std::mutex> lk(mu_);
+  return mr_id_to_mhandle_.find(mr_id) != mr_id_to_mhandle_.end();
+}
+
 bool UcclTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip,
                                            uint16_t remote_port,
                                            int local_dev_idx, int local_gpu_idx,

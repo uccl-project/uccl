@@ -63,6 +63,7 @@ class UcclTransportAdapter {
   bool has_send_peer(int peer_rank) const;
   bool has_recv_peer(int peer_rank) const;
 
+  bool is_memory_registered(uint64_t mr_id) const;
   bool register_memory(uint64_t mr_id, void* ptr, size_t len);
   void deregister_memory(uint64_t mr_id);
 

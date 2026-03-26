@@ -17,7 +17,7 @@ LDFLAGS += $(UCCL_LDFLAGS)
 
 LOCAL_INCLUDES := -I$(UCCL_ROOT)/experimental/ukernel/include -I$(UCCL_ROOT)/include -I. -Itest -I../../include -I$(CUDA_HOME)/include
 
-SRC_CPP := communicator.cc ipc_cache.cc ipc_channel.cc memory_registry.cc oob.cc oob_shm.cc oob_socket.cc peer_session.cc request.cc uccl_transport_adapter.cc utils.cc
+SRC_CPP := communicator.cc host_bounce_pool.cc ipc_cache.cc ipc_channel.cc memory_registry.cc oob.cc oob_shm.cc oob_socket.cc peer_session.cc request.cc tcp_transport_adapter.cc uccl_transport_adapter.cc utils.cc
 TEST_CPP := test/test_main.cc test/test_transport_core.cc test/test_transport_communicator.cc test/test_transport_oob_socket.cc test/test_transport_oob_shm.cc test/test_transport_utils.cc
 
 OBJ_CPP := $(SRC_CPP:.cc=.o)

@@ -1,11 +1,13 @@
 #pragma once
 
 #include "../../include/config.h"
+#include "host_bounce_pool.h"
 #include "ipc_cache.h"
 #include "memory_registry.h"
 #include "oob.h"
 #include "peer_session.h"
 #include "request.h"
+#include "tcp_transport_adapter.h"
 #include "uccl_transport_adapter.h"
 #include <condition_variable>
 #include <cstddef>
@@ -66,35 +68,53 @@ class Communicator {
     bool completed = false;
     bool failed = false;
     bool notified = false;
+    bool needs_host_to_device_copy = false;
+    bool host_copy_submitted = false;
+    void* completion_buffer = nullptr;
+    size_t completion_offset = 0;
+    size_t completion_bytes = 0;
+    gpuEvent_t host_copy_event = nullptr;
+    HostBouncePool::Lease bounce;
   };
 
   bool check_ready() const;
   UcclTransportAdapter& ensure_uccl_adapter(CommunicatorMeta const& local_meta,
                                             CommunicatorMeta const& peer_meta);
+  TcpTransportAdapter& ensure_tcp_adapter(CommunicatorMeta const& local_meta);
   std::shared_ptr<IpcChannel> get_ipc_channel_by_rank(int rank);
   bool has_peer_send_path(int rank) const;
   bool has_peer_recv_path(int rank) const;
   PeerTransportKind get_peer_transport_kind(int rank) const;
   bool poll_request_completion(unsigned id, bool blocking);
   void register_existing_local_mrs_with_uccl();
+  bool ensure_uccl_memory_registered(uint64_t mr_id, void* ptr, size_t len);
+  void cleanup_tracked_request(unsigned id, TrackedRequest& tracked);
+  bool complete_host_bounce_recv(TrackedRequest& tracked);
   void exchange_peer_metas();
   uint64_t next_ipc_match_seq(int rank, RequestType type);
   void cache_peer_session(int rank, PeerTransportKind kind,
                           bool mark_send_ready, bool mark_recv_ready);
   void shutdown_ipc_channel();
+  bool try_fallback_tcp_connect(int rank, CommunicatorMeta const& local_meta,
+                                CommunicatorMeta const& remote_meta);
+  bool try_fallback_tcp_accept(int rank, CommunicatorMeta const& local_meta,
+                               CommunicatorMeta const& remote_meta);
 
   int local_gpu_idx_;
   int global_rank_;
   int world_size_;
   MemoryRegistry memory_registry_;
   std::unique_ptr<UcclTransportAdapter> uccl_adapter_;
+  std::unique_ptr<TcpTransportAdapter> tcp_adapter_;
   std::shared_ptr<IpcChannel> ipc_channel_;
+  gpuStream_t host_copy_stream_ = nullptr;
 
   std::shared_ptr<ShmRingExchanger> shm_control_;
   std::shared_ptr<PeerSessionManager> peer_manager_;
 
   std::shared_ptr<CommunicatorConfig> config_;
   std::shared_ptr<Exchanger> exchanger_client_;
+  std::unique_ptr<HostBouncePool> host_bounce_pool_;
 
   std::unordered_map<unsigned, TrackedRequest> requests_map_;
   mutable std::mutex req_mu_;

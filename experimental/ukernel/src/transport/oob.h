@@ -23,7 +23,7 @@
 namespace UKernel {
 namespace Transport {
 
-enum class PeerTransportKind { Uccl, Ipc };
+enum class PeerTransportKind { Uccl, Ipc, Tcp };
 
 struct CommunicatorMeta;
 
@@ -43,6 +43,7 @@ struct CommunicatorMeta : public Exchangeable {
   std::string host_id;
   std::string ip;
   int local_id = -1;
+  bool rdma_capable = false;
   bool is_ready;
 
   CommunicatorMeta() = default;
@@ -52,6 +53,7 @@ struct CommunicatorMeta : public Exchangeable {
     kv["host_id"] = host_id;
     kv["ip"] = ip;
     kv["local_id"] = std::to_string(local_id);
+    kv["rdma_capable"] = rdma_capable ? "1" : "0";
     kv["is_ready"] = is_ready ? "1" : "0";
     return kv;
   }
@@ -60,6 +62,8 @@ struct CommunicatorMeta : public Exchangeable {
     host_id = kv.at("host_id");
     ip = kv.at("ip");
     local_id = std::stoi(kv.at("local_id"));
+    auto it = kv.find("rdma_capable");
+    rdma_capable = (it != kv.end() && it->second == "1");
     is_ready = (kv.at("is_ready") == "1");
   }
 };
@@ -132,6 +136,27 @@ struct UCCLP2PInfo : public Exchangeable {
     port = static_cast<uint16_t>(std::stoul(kv.at("port")));
     dev_idx = std::stoi(kv.at("dev_idx"));
     gpu_idx = std::stoi(kv.at("gpu_idx"));
+  }
+};
+
+struct TcpP2PInfo : public Exchangeable {
+  std::string ip;
+  uint16_t port = 0;
+
+  TcpP2PInfo() = default;
+  TcpP2PInfo(std::string ip_, uint16_t port_)
+      : ip(std::move(ip_)), port(port_) {}
+
+  std::map<std::string, std::string> to_map() const override {
+    std::map<std::string, std::string> kv;
+    kv["ip"] = ip;
+    kv["port"] = std::to_string(port);
+    return kv;
+  }
+
+  void from_map(std::map<std::string, std::string> const& kv) override {
+    ip = kv.at("ip");
+    port = static_cast<uint16_t>(std::stoul(kv.at("port")));
   }
 };
 

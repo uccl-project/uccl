@@ -27,11 +27,13 @@ CCL_CORE_SRC := topology.cc plan.cc selector.cc executor.cc
 CCL_CORE_OBJ := $(CCL_CORE_SRC:.cc=.o)
 REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
-TRANSPORT_SRC := ../transport/communicator.cc ../transport/ipc_cache.cc \
+TRANSPORT_SRC := ../transport/communicator.cc ../transport/host_bounce_pool.cc \
+                 ../transport/ipc_cache.cc \
                  ../transport/ipc_channel.cc ../transport/memory_registry.cc \
                  ../transport/oob.cc ../transport/oob_shm.cc \
                  ../transport/oob_socket.cc ../transport/peer_session.cc \
-                 ../transport/request.cc ../transport/uccl_transport_adapter.cc \
+                 ../transport/request.cc ../transport/tcp_transport_adapter.cc \
+                 ../transport/uccl_transport_adapter.cc \
                  ../transport/utils.cc
 TRANSPORT_OBJ := $(patsubst ../transport/%.cc,transport_%.o,$(TRANSPORT_SRC))
 
