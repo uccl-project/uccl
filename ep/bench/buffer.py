@@ -4,15 +4,8 @@ import torch
 import torch.distributed as dist
 from typing import Callable, Tuple, Optional, Union, List
 
-try:
-    from uccl import ep
-except ImportError as exc:
-    import sys
-
-    sys.stderr.write("Failed to import uccl.ep\n")
-    raise
-
-from uccl.ep import EventHandle, Config
+import uccl_ep.ep as uccl_ep_cpp
+from uccl_ep.ep import EventHandle, Config
 
 # Support both execution modes:
 # 1) As part of the packaged deep_ep_wrapper (symlinked buffer inside a package): uses relative import `.utils`.
@@ -93,13 +86,13 @@ class Buffer:
 
         rdma_buffer_is_host_allocated = False
         if num_rdma_bytes > 0:
-            if hasattr(ep, "can_register_rdma_gpu_buffer"):
+            if hasattr(uccl_ep_cpp, "can_register_rdma_gpu_buffer"):
                 rdma_buffer_is_host_allocated = not bool(
-                    ep.can_register_rdma_gpu_buffer(device_index, num_rdma_bytes)
+                    uccl_ep_cpp.can_register_rdma_gpu_buffer(device_index, num_rdma_bytes)
                 )
-            elif hasattr(ep, "rdma_buffer_should_use_host_alloc"):
+            elif hasattr(uccl_ep_cpp, "rdma_buffer_should_use_host_alloc"):
                 rdma_buffer_is_host_allocated = bool(
-                    ep.rdma_buffer_should_use_host_alloc(device_index, num_rdma_bytes)
+                    uccl_ep_cpp.rdma_buffer_should_use_host_alloc(device_index, num_rdma_bytes)
                 )
 
         if num_rdma_bytes > 0 and rdma_buffer_is_host_allocated:
@@ -138,7 +131,7 @@ class Buffer:
         self.low_latency_mode = low_latency_mode
         self.explicitly_destroy = explicitly_destroy
         self._next_low_latency_combine_buffer = None
-        self.runtime = ep.Buffer(
+        self.runtime = uccl_ep_cpp.Buffer(
             self.rank,
             self.group_size,
             num_nvl_bytes,
@@ -201,8 +194,8 @@ class Buffer:
         """
         self.runtime.reset_rdma_buffer()
 
-    def connect_atomic_buffer(self, proxy: "ep.UcclProxy"):
-        ep.connect_atomic_buffer(proxy, self.runtime)
+    def connect_atomic_buffer(self, proxy: "uccl_ep_cpp.UcclProxy"):
+        uccl_ep_cpp.connect_atomic_buffer(proxy, self.runtime)
 
     def destroy(self):
         """
@@ -218,7 +211,7 @@ class Buffer:
 
     @staticmethod
     def is_sm90_compiled():
-        return ep.is_sm90_compiled()
+        return uccl_ep_cpp.is_sm90_compiled()
 
     @staticmethod
     def set_num_sms(new_num_sms: int) -> None:

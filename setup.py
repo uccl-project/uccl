@@ -1,7 +1,28 @@
 import re
 import sys
 import sysconfig
+from pathlib import Path
+
 from setuptools import setup, find_packages, Extension
+
+
+def _subpkg_requirement(dist_name: str, subdir: str) -> str:
+    """Optional dependency string for uccl-ep / uccl-p2p.
+
+    When this repository layout includes the sibling subproject (typical git
+    checkout or ``pip install .`` from the repo root), use a direct file URL
+    so ``pip install .[ep]`` works without ``uccl-ep`` being on PyPI.
+
+    When building an sdist that does not ship ``ep/`` or ``p2p/`` (see
+    MANIFEST.in), metadata falls back to the plain PyPI distribution name;
+    publish ``uccl-ep`` / ``uccl-p2p`` to the same index for ``uccl[ep]``
+    from PyPI to resolve.
+    """
+    root = Path(__file__).resolve().parent
+    project = (root / subdir).resolve()
+    if (project / "setup.py").is_file():
+        return f"{dist_name} @ {project.as_uri()}"
+    return dist_name
 
 
 def _is_freethreaded():
@@ -29,12 +50,20 @@ _use_limited_api = not _is_freethreaded() and sys.version_info >= (3, 12)
 VERSION = get_version()
 
 # Single package "uccl" for all backends (vLLM-style).
+# Namespace package layout:
+#   uccl          – core package (this distribution, published to PyPI)
+#   uccl-ep       – expert-parallel module (optional, provides uccl.ep)
+#   uccl-p2p      – point-to-point module  (optional, provides uccl.p2p)
+#
 # Variants are distinguished by PEP 440 local version identifiers in the
 # wheel filename (e.g. uccl-0.1.0+cu13, uccl-0.1.0+cu12.efa).
 # The default cu12 build has no local version and is published to PyPI;
 # all other variants are distributed via GitHub Releases.
 #
 # Install from PyPI:   pip install uccl                (CUDA 12 default)
+# Install extras:      pip install uccl[ep]            (core + EP)
+#                      pip install uccl[p2p]           (core + P2P)
+#                      pip install uccl[all]           (core + EP + P2P)
 # Install from GitHub: pip install uccl-0.1.0+cu13-... (download .whl)
 
 abi3_ext = Extension(
@@ -64,13 +93,22 @@ setup(
         ],
     },
     license="Apache-2.0",
-    install_requires=["intervaltree"],
+    install_requires=["intervaltree", _subpkg_requirement("uccl-ep", "ep")],
     classifiers=[
         "Programming Language :: Python :: 3",
     ],
-    python_requires=">=3.12",
+    python_requires=">=3.10",
     options={"bdist_wheel": {"py_limited_api": "cp312"}} if _use_limited_api else {},
-    extras_require={
-        "rocm": [],
-    },
+    # extras_require={
+    #     "ep": [_subpkg_requirement("uccl-ep", "ep")],
+    #     "p2p": [_subpkg_requirement("uccl-p2p", "p2p")],
+    #     "all": list(
+    #         dict.fromkeys(
+    #             [
+    #                 _subpkg_requirement("uccl-ep", "ep"),
+    #                 _subpkg_requirement("uccl-p2p", "p2p"),
+    #             ]
+    #         )
+    #     ),
+    # },
 )

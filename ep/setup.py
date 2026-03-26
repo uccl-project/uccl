@@ -11,7 +11,7 @@ from pathlib import Path
 import torch
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 from setuptools.command.install import install
-from setuptools import Command
+from setuptools import Command, find_packages
 
 try:
     import nanobind
@@ -384,11 +384,12 @@ if __name__ == "__main__":
         revision = ""
 
     setuptools.setup(
-        name="ep",
+        name="uccl-ep",
         version="0.0.1" + revision,
+        packages=find_packages(include=["uccl_ep"]),
         ext_modules=[
             CUDAExtension(
-                name="ep",
+                name="uccl_ep.ep",
                 include_dirs=include_dirs,
                 library_dirs=library_dirs,
                 sources=sources,
@@ -398,9 +399,12 @@ if __name__ == "__main__":
                 depends=header_files,
             )
         ],
+        entry_points={
+            "uccl_plugins": ["ep = uccl_ep"],
+        },
         cmdclass={
             "build_ext": ABI3BuildExtension,
-            "install": CustomInstall,
+            # "install": CustomInstall,
             "clean": CustomClean,
-        },
+        },  
     )

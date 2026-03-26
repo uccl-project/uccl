@@ -6,6 +6,7 @@ setup(
     packages=find_packages(),
     install_requires=[
         "uccl",
+        "uccl-ep",
     ],
     author="uccl",
     description="A wrapper package for uccl.ep with additional functionality",

@@ -1,15 +1,13 @@
-from uccl.ep import Config, EventHandle
+from uccl_ep import *
 
-from .utils import EventOverlap, check_nvlink_connections, initialize_uccl, destroy_uccl
-from .buffer import Buffer
-import torch.distributed as dist
+from uccl_ep import utils, buffer, test_internode, test_intranode
 
 __all__ = [
+    "Buffer",
     "Config",
     "EventHandle",
-    "Buffer",
-    "EventOverlap",
-    "check_nvlink_connections",
-    "initialize_uccl",
-    "destroy_uccl",
+    "utils",
+    "buffer",
+    "test_internode",
+    "test_intranode",
 ]

@@ -6,30 +6,14 @@ import torch.distributed as dist
 from typing import Optional
 import glob
 import sys
-from uccl.ep import EventHandle
+import uccl_ep.ep as uccl_ep_cpp    
+from uccl_ep.ep import EventHandle
 import tempfile
 import json
 from pathlib import Path
 import time
 import numpy as np
 
-# import deep_ep as ep
-try:
-    from uccl import ep
-except ImportError as exc:
-    import sys
-
-    sys.stderr.write("Failed to import uccl.ep\n")
-    raise
-
-# import deep_ep as ep
-try:
-    from uccl import ep
-except ImportError as exc:
-    import sys
-
-    sys.stderr.write("Failed to import uccl.ep\n")
-    raise
 
 
 def calc_diff(x: torch.Tensor, y: torch.Tensor):
@@ -92,7 +76,7 @@ def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
 def _gather_peer_ips(group):
     # Gather local IP strings across ranks
     world = dist.get_world_size(group)
-    my_ip = ep.get_oob_ip()
+    my_ip = uccl_ep_cpp.get_oob_ip()
     ips = [None] * world
     dist.all_gather_object(ips, my_ip, group=group)
     return ips
@@ -111,7 +95,7 @@ def get_peer_ip(rank: int, num_ranks: int, group: dist.ProcessGroup):
 
 
 def get_cpu_proxies_meta(proxies, rank, scratch_ptr, scratch_bytes, num_ranks, group):
-    my_ip = ep.get_oob_ip()
+    my_ip = uccl_ep_cpp.get_oob_ip()
     meta = {
         "rank": rank,
         "ptr": int(scratch_ptr),
@@ -560,8 +544,8 @@ def initialize_uccl(
     else:
         num_nodes = num_ranks  # Fallback: assume each rank is on a different node
 
-    for i in range(ep.get_num_proxy_threads()):
-        proxy = ep.Proxy(
+    for i in range(uccl_ep_cpp.get_num_proxy_threads()):
+        proxy = uccl_ep_cpp.Proxy(
             thread_idx=i,
             gpu_buffer_addr=scratch_ptr,
             total_size=scratch_nbytes,
@@ -586,7 +570,7 @@ def initialize_uccl(
         for proxy in proxies:
             proxy.set_peers_meta(peers_meta_list)
 
-    ep.register_proxies(local_rank, proxies)
+    uccl_ep_cpp.register_proxies(local_rank, proxies)
 
     # Set atomic buffer pointer for all proxies BEFORE starting them
     # This ensures the atomic buffer info is included in connection info exchange
@@ -630,7 +614,7 @@ def destroy_uccl(proxies, workers):
     except Exception:
         pass
     try:
-        ep.unregister_proxy(device_index)
+        uccl_ep_cpp.unregister_proxy(device_index)
     except Exception:
         pass
     try:
