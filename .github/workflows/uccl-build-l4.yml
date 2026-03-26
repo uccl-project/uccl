@@ -35,15 +35,15 @@ jobs:
           echo "${{ secrets.L4_SSH_KEY }}" > ~/.ssh/l4_key
           chmod 600 ~/.ssh/l4_key
 
-          cat >> ~/.ssh/config <<'EOF'
+          cat >> ~/.ssh/config <<EOF
           Host l4-sky-test-01
-            HostName 4.14.153.89
+            HostName "${{ secrets.UCCL_DEV_L4_HOST0 }}"
             User skytestuser
             IdentityFile ~/.ssh/l4_key
             IdentitiesOnly yes
           EOF
 
-          ssh-keyscan -H 4.14.153.89 >> ~/.ssh/known_hosts
+          ssh-keyscan -H "${{ secrets.UCCL_DEV_L4_HOST0 }}" >> ~/.ssh/known_hosts
 
       - name: Sync PR code to remote
         shell: bash
