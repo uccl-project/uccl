@@ -214,8 +214,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx)
 
 #ifndef UCCL_P2P_USE_NCCL
   numa_node_ = RdmaDeviceManager::instance().get_numa_node(
-    RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]
-  );
+      RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
 #endif
 
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
@@ -2415,8 +2414,7 @@ void Endpoint::initialize_engine() {
   numa_node_ = tcp::get_tcp_numa_node_from_iface();
 #else
   numa_node_ = RdmaDeviceManager::instance().get_numa_node(
-    RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]
-  );
+      RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
 #endif
 
   // Initialize rdma contexts for devices used by the GPU
