@@ -1,5 +1,6 @@
 #pragma once
 
+#include "collective_types.h"
 #include "collective_memory.h"
 #include <cstddef>
 #include <cstdint>
@@ -45,6 +46,8 @@ struct PrimitiveOp {
   TileRef tile;
   BufferRef src;
   BufferRef dst;
+  ScalarType dtype = ScalarType::UInt8;
+  ReductionKind reduction = ReductionKind::None;
   std::vector<uint32_t> deps;
 };
 
@@ -60,6 +63,8 @@ struct CollectivePlan {
   // staging_bytes_required is the minimum temporary tensor storage required
   // by the planned algorithm on this rank.
   size_t staging_bytes_required = 0;
+  ScalarType dtype = ScalarType::UInt8;
+  ReductionKind reduction = ReductionKind::None;
   std::vector<PrimitiveOp> ops;
 };
 
@@ -72,6 +77,8 @@ struct PlanRequest {
   size_t tensor_bytes = 0;
   size_t tile_bytes = 0;
   size_t staging_bytes = 0;
+  ScalarType dtype = ScalarType::Float32;
+  ReductionKind reduction = ReductionKind::Sum;
 };
 
 CollectivePlan build_plan(PlanRequest const& request);

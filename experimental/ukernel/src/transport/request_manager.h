@@ -42,7 +42,7 @@ class RequestManager {
  private:
   struct TrackedRequest {
     int peer_rank = -1;
-    PeerTransportKind kind = PeerTransportKind::Ipc;
+    PeerTransportKind kind = PeerTransportKind::Unknown;
     std::shared_ptr<Request> ipc_request;
     bool completed = false;
     bool failed = false;

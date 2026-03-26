@@ -29,12 +29,18 @@ inline CollectiveMemory make_test_memory(int rank, int nranks, size_t bytes) {
     auto& peer_view = memory.tensor.peer_views[static_cast<size_t>(peer)];
     peer_view.mr_id = static_cast<uint32_t>(peer + 1);
     peer_view.same_node = true;
-    peer_view.peer_accessible = true;
   }
   memory.staging.local_ptr = nullptr;
+  memory.staging.local_mr_id = 1;
   memory.staging.bytes = bytes;
   memory.staging.layout.sizes = {static_cast<int64_t>(bytes)};
   memory.staging.layout.strides = {1};
+  memory.staging.peer_views.resize(static_cast<size_t>(nranks));
+  for (int peer = 0; peer < nranks; ++peer) {
+    auto& peer_view = memory.staging.peer_views[static_cast<size_t>(peer)];
+    peer_view.mr_id = static_cast<uint32_t>(peer + 1);
+    peer_view.same_node = true;
+  }
   return memory;
 }
 

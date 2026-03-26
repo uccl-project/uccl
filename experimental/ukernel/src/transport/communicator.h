@@ -27,7 +27,8 @@ class Communicator {
  public:
   Communicator(int gpu_id, int rank, int world_size,
                std::shared_ptr<CommunicatorConfig> config =
-                   std::make_shared<CommunicatorConfig>());
+                   std::make_shared<CommunicatorConfig>(
+                       CommunicatorConfig::from_env()));
   ~Communicator();
 
   bool connect_to(int rank);
@@ -42,10 +43,10 @@ class Communicator {
   int rank() const { return global_rank_; }
   int world_size() const { return world_size_; }
   PeerTransportKind peer_transport_kind(int rank) const;
+  bool same_host(int rank) const;
 
   std::shared_ptr<void> register_completion_notifier(
       std::function<void(unsigned, std::chrono::steady_clock::time_point)> cb);
-  void completion_notifier_loop();
 
   MR reg_mr(void* local_buf, size_t len);
   bool dereg_mr(void* local_buf);
@@ -54,6 +55,12 @@ class Communicator {
   MR get_local_mr(void* local_buf);
   MR get_local_mr(uint32_t mr_id);
   MR get_remote_mr(int remote_rank, uint32_t mr_id);
+  bool notify_ipc_buffer(int remote_rank, uint32_t mr_id, void* local_buf,
+                         size_t len);
+  bool wait_ipc_buffer(int remote_rank, uint32_t mr_id);
+  bool resolve_remote_buffer_pointer(int remote_rank, uint32_t mr_id,
+                                     size_t offset, size_t bytes,
+                                     void** out_ptr, int* out_device_idx);
 
   bool register_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle,
                                  IpcCacheManager::IpcCache const& cache);
@@ -61,9 +68,15 @@ class Communicator {
                                                  gpuIpcMemHandle_t handle);
 
  private:
+  struct ResolvedPeer {
+    CommunicatorMeta local_meta;
+    CommunicatorMeta remote_meta;
+    PeerTransportKind kind = PeerTransportKind::Unknown;
+  };
+
   struct TrackedRequest {
     int peer_rank = -1;
-    PeerTransportKind kind = PeerTransportKind::Ipc;
+    PeerTransportKind kind = PeerTransportKind::Unknown;
     std::shared_ptr<Request> ipc_request;
     bool completed = false;
     bool failed = false;
@@ -77,13 +90,19 @@ class Communicator {
     HostBouncePool::Lease bounce;
   };
 
-  bool check_ready() const;
+  struct RemoteIpcBufferState {
+    gpuIpcMemHandle_t handle{};
+    uintptr_t base_offset = 0;
+    size_t bytes = 0;
+    int device_idx = -1;
+    bool valid = false;
+    void* direct_ptr = nullptr;
+  };
+
   UcclTransportAdapter& ensure_uccl_adapter(CommunicatorMeta const& local_meta,
                                             CommunicatorMeta const& peer_meta);
   TcpTransportAdapter& ensure_tcp_adapter(CommunicatorMeta const& local_meta);
   std::shared_ptr<IpcChannel> get_ipc_channel_by_rank(int rank);
-  bool has_peer_send_path(int rank) const;
-  bool has_peer_recv_path(int rank) const;
   PeerTransportKind get_peer_transport_kind(int rank) const;
   bool poll_request_completion(unsigned id, bool blocking);
   void register_existing_local_mrs_with_uccl();
@@ -91,14 +110,14 @@ class Communicator {
   void cleanup_tracked_request(unsigned id, TrackedRequest& tracked);
   bool complete_host_bounce_recv(TrackedRequest& tracked);
   void exchange_peer_metas();
+  ResolvedPeer resolve_peer(int rank) const;
   uint64_t next_ipc_match_seq(int rank, RequestType type);
   void cache_peer_session(int rank, PeerTransportKind kind,
                           bool mark_send_ready, bool mark_recv_ready);
-  void shutdown_ipc_channel();
-  bool try_fallback_tcp_connect(int rank, CommunicatorMeta const& local_meta,
-                                CommunicatorMeta const& remote_meta);
+  bool try_fallback_tcp_connect(int rank, CommunicatorMeta const& local_meta);
   bool try_fallback_tcp_accept(int rank, CommunicatorMeta const& local_meta,
                                CommunicatorMeta const& remote_meta);
+  void completion_notifier_loop();
 
   int local_gpu_idx_;
   int global_rank_;
@@ -133,6 +152,9 @@ class Communicator {
     std::function<void(unsigned, std::chrono::steady_clock::time_point)> emit;
   };
   std::vector<std::weak_ptr<NotifyTarget>> notify_targets_;
+  mutable std::mutex remote_ipc_mu_;
+  std::unordered_map<int, std::unordered_map<uint32_t, RemoteIpcBufferState>>
+      remote_ipc_buffers_;
 
   friend class IpcChannel;
 };

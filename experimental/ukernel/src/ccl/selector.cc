@@ -31,6 +31,8 @@ ExecutionPlan lower_plan(CollectivePlan const& plan) {
   exec.tensor_bytes = plan.tensor_bytes;
   exec.tile_bytes = plan.tile_bytes;
   exec.staging_bytes_required = plan.staging_bytes_required;
+  exec.dtype = plan.dtype;
+  exec.reduction = plan.reduction;
   exec.ops.reserve(plan.ops.size());
 
   for (auto const& op : plan.ops) {
@@ -41,6 +43,8 @@ ExecutionPlan lower_plan(CollectivePlan const& plan) {
     exec_op.tile = op.tile;
     exec_op.src = op.src;
     exec_op.dst = op.dst;
+    exec_op.dtype = op.dtype;
+    exec_op.reduction = op.reduction;
     exec_op.deps = op.deps;
     exec.ops.push_back(std::move(exec_op));
   }

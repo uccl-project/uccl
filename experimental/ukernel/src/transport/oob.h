@@ -23,7 +23,7 @@
 namespace UKernel {
 namespace Transport {
 
-enum class PeerTransportKind { Uccl, Ipc, Tcp };
+enum class PeerTransportKind { Unknown, Uccl, Ipc, Tcp };
 
 struct CommunicatorMeta;
 
@@ -44,7 +44,6 @@ struct CommunicatorMeta : public Exchangeable {
   std::string ip;
   int local_id = -1;
   bool rdma_capable = false;
-  bool is_ready;
 
   CommunicatorMeta() = default;
 
@@ -54,7 +53,6 @@ struct CommunicatorMeta : public Exchangeable {
     kv["ip"] = ip;
     kv["local_id"] = std::to_string(local_id);
     kv["rdma_capable"] = rdma_capable ? "1" : "0";
-    kv["is_ready"] = is_ready ? "1" : "0";
     return kv;
   }
 
@@ -64,7 +62,6 @@ struct CommunicatorMeta : public Exchangeable {
     local_id = std::stoi(kv.at("local_id"));
     auto it = kv.find("rdma_capable");
     rdma_capable = (it != kv.end() && it->second == "1");
-    is_ready = (kv.at("is_ready") == "1");
   }
 };
 
@@ -157,6 +154,50 @@ struct TcpP2PInfo : public Exchangeable {
   void from_map(std::map<std::string, std::string> const& kv) override {
     ip = kv.at("ip");
     port = static_cast<uint16_t>(std::stoul(kv.at("port")));
+  }
+};
+
+struct IpcBufferInfo : public Exchangeable {
+  uint32_t mr_id = 0;
+  gpuIpcMemHandle_t handle{};
+  uint64_t base_offset = 0;
+  uint64_t bytes = 0;
+  int32_t device_idx = -1;
+  bool valid = false;
+
+  std::map<std::string, std::string> to_map() const override {
+    std::map<std::string, std::string> kv;
+    kv["mr_id"] = std::to_string(mr_id);
+    kv["base_offset"] = std::to_string(base_offset);
+    kv["bytes"] = std::to_string(bytes);
+    kv["device_idx"] = std::to_string(device_idx);
+    kv["valid"] = valid ? "1" : "0";
+
+    std::ostringstream oss;
+    oss << std::hex << std::setfill('0');
+    auto const* data =
+        reinterpret_cast<uint8_t const*>(&handle);
+    for (size_t i = 0; i < sizeof(gpuIpcMemHandle_t); ++i) {
+      oss << std::setw(2) << static_cast<unsigned>(data[i]);
+    }
+    kv["handle_hex"] = oss.str();
+    return kv;
+  }
+
+  void from_map(std::map<std::string, std::string> const& kv) override {
+    mr_id = static_cast<uint32_t>(std::stoul(kv.at("mr_id")));
+    base_offset = std::stoull(kv.at("base_offset"));
+    bytes = std::stoull(kv.at("bytes"));
+    device_idx = std::stoi(kv.at("device_idx"));
+    valid = (kv.at("valid") == "1");
+    std::memset(&handle, 0, sizeof(handle));
+    auto const& hex = kv.at("handle_hex");
+    auto* data = reinterpret_cast<uint8_t*>(&handle);
+    size_t nbytes = std::min(sizeof(gpuIpcMemHandle_t), hex.size() / 2);
+    for (size_t i = 0; i < nbytes; ++i) {
+      data[i] = static_cast<uint8_t>(
+          std::stoul(hex.substr(i * 2, 2), nullptr, 16));
+    }
   }
 };
 

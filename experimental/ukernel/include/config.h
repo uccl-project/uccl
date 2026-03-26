@@ -12,18 +12,20 @@ namespace Transport {
 enum class PreferredTransport { Auto, Ipc, Uccl, Tcp };
 
 struct CommunicatorConfig {
-  std::string exchanger_ip;
-  int exchanger_port;
-  int local_id;
-  PreferredTransport preferred_transport;
+  std::string exchanger_ip = DEFAULT_EXCHANGER_SERVER_IP;
+  int exchanger_port = DEFAULT_EXCHANGER_SERVER_PORT;
+  int local_id = -1;
+  PreferredTransport preferred_transport = PreferredTransport::Auto;
 
-  CommunicatorConfig()
-      : exchanger_ip(getEnvOrDefault("UHM_EXCHANGER_SERVER_IP",
-                                     DEFAULT_EXCHANGER_SERVER_IP)),
-        exchanger_port(getEnvOrDefault("UHM_EXCHANGER_SERVER_PORT",
-                                       DEFAULT_EXCHANGER_SERVER_PORT)),
-        local_id(getLocalIdOrDefault()),
-        preferred_transport(PreferredTransport::Auto) {}
+  static CommunicatorConfig from_env() {
+    CommunicatorConfig config;
+    config.exchanger_ip = getEnvOrDefault("UHM_EXCHANGER_SERVER_IP",
+                                          DEFAULT_EXCHANGER_SERVER_IP);
+    config.exchanger_port = getEnvOrDefault("UHM_EXCHANGER_SERVER_PORT",
+                                            DEFAULT_EXCHANGER_SERVER_PORT);
+    config.local_id = getLocalIdOrDefault();
+    return config;
+  }
 
  private:
   static int getEnvOrDefault(char const* env_name, int default_val) {

@@ -1,5 +1,4 @@
 #include "../../include/gpu_rt.h"
-#include "../backend/transport_backend.h"
 #include "backend_test_utils.h"
 #include <algorithm>
 #include <cassert>
@@ -247,154 +246,7 @@ struct DeviceBuffer {
   DeviceBuffer& operator=(DeviceBuffer const&) = delete;
 };
 
-class EmulatedDeviceBackend final : public Backend {
- public:
-  explicit EmulatedDeviceBackend(CollectiveMemory memory)
-      : memory_(std::move(memory)) {}
-
-  char const* name() const override { return "emulated-device"; }
-
-  void validate(ExecutionPlan const& plan) const override {
-    if (plan.staging_bytes_required != 0 &&
-        memory_.staging.local_ptr == nullptr) {
-      throw std::invalid_argument("emulated device staging buffer is missing");
-    }
-    if (plan.staging_bytes_required > memory_.staging.bytes) {
-      throw std::invalid_argument(
-          "emulated device staging capacity is insufficient");
-    }
-  }
-
-  bool supports(ExecOpKind kind) const override {
-    return kind == ExecOpKind::DeviceCopy || kind == ExecOpKind::DeviceReduce;
-  }
-
-  BackendToken submit(ExecOp const& op) override {
-    if (!supports(op.kind)) {
-      throw std::invalid_argument(
-          "emulated device backend does not support this op");
-    }
-    if (op.kind == ExecOpKind::DeviceCopy) {
-      apply_copy(op);
-    } else {
-      apply_sum_reduce(op);
-    }
-    BackendToken token{next_token_++};
-    pending_.push_back(token.value);
-    return token;
-  }
-
-  bool poll(BackendToken token) override { return is_completed(token.value); }
-
-  bool try_pop_completed(BackendToken& token) override {
-    if (pending_.empty()) return false;
-    token.value = pending_.front();
-    pending_.erase(pending_.begin());
-    completed_.push_back(token.value);
-    return true;
-  }
-
-  void release(BackendToken token) override {
-    pending_.erase(std::remove(pending_.begin(), pending_.end(), token.value),
-                   pending_.end());
-    completed_.erase(
-        std::remove(completed_.begin(), completed_.end(), token.value),
-        completed_.end());
-  }
-
- private:
-  static void validate_span(char const* what, size_t offset, size_t bytes,
-                            size_t capacity) {
-    if (offset > capacity || bytes > capacity - offset) {
-      throw std::invalid_argument(std::string(what) + " out of range");
-    }
-  }
-
-  void* resolve_mutable(BufferRef const& ref, size_t bytes) const {
-    switch (ref.kind) {
-      case BufferKind::Staging:
-        require(memory_.staging.local_ptr != nullptr, "missing staging");
-        validate_span("staging", ref.offset_bytes, bytes,
-                      memory_.staging.bytes);
-        return static_cast<char*>(memory_.staging.local_ptr) + ref.offset_bytes;
-      case BufferKind::Tensor:
-        require(memory_.tensor.local_ptr != nullptr, "missing local tensor");
-        validate_span("local tensor", ref.offset_bytes, bytes,
-                      memory_.tensor.bytes);
-        return static_cast<char*>(memory_.tensor.local_ptr) + ref.offset_bytes;
-      case BufferKind::PeerTensor:
-        break;
-    }
-    throw std::invalid_argument("unknown mutable ref");
-  }
-
-  void const* resolve_const(BufferRef const& ref, size_t bytes) const {
-    switch (ref.kind) {
-      case BufferKind::Staging:
-        require(memory_.staging.local_ptr != nullptr, "missing staging");
-        validate_span("staging", ref.offset_bytes, bytes,
-                      memory_.staging.bytes);
-        return static_cast<char const*>(memory_.staging.local_ptr) +
-               ref.offset_bytes;
-      case BufferKind::Tensor:
-        require(memory_.tensor.local_ptr != nullptr, "missing local tensor");
-        validate_span("local tensor", ref.offset_bytes, bytes,
-                      memory_.tensor.bytes);
-        return static_cast<char const*>(memory_.tensor.local_ptr) +
-               ref.offset_bytes;
-      case BufferKind::PeerTensor:
-        break;
-    }
-    throw std::invalid_argument("unknown const ref");
-  }
-
-  bool is_completed(uint64_t token) const {
-    for (uint64_t value : completed_) {
-      if (value == token) return true;
-    }
-    for (uint64_t value : pending_) {
-      if (value == token) return true;
-    }
-    return false;
-  }
-
-  void apply_copy(ExecOp const& op) const {
-    void const* src = resolve_const(op.src, op.tile.size_bytes);
-    void* dst = resolve_mutable(op.dst, op.tile.size_bytes);
-    GPU_RT_CHECK(
-        gpuMemcpy(dst, src, op.tile.size_bytes, gpuMemcpyDeviceToDevice));
-    GPU_RT_CHECK(gpuDeviceSynchronize());
-  }
-
-  void apply_sum_reduce(ExecOp const& op) const {
-    require(op.tile.size_bytes % sizeof(float) == 0,
-            "allreduce test expects float-sized reductions");
-    void const* src_dev = resolve_const(op.src, op.tile.size_bytes);
-    void* dst_dev = resolve_mutable(op.dst, op.tile.size_bytes);
-
-    size_t elems = op.tile.size_bytes / sizeof(float);
-    std::vector<float> src(elems, 0.0f);
-    std::vector<float> dst(elems, 0.0f);
-    GPU_RT_CHECK(gpuMemcpy(src.data(), src_dev, op.tile.size_bytes,
-                           gpuMemcpyDeviceToHost));
-    GPU_RT_CHECK(gpuMemcpy(dst.data(), dst_dev, op.tile.size_bytes,
-                           gpuMemcpyDeviceToHost));
-    for (size_t i = 0; i < elems; ++i) {
-      dst[i] += src[i];
-    }
-    GPU_RT_CHECK(gpuMemcpy(dst_dev, dst.data(), op.tile.size_bytes,
-                           gpuMemcpyHostToDevice));
-    GPU_RT_CHECK(gpuDeviceSynchronize());
-  }
-
-  CollectiveMemory memory_{};
-  uint64_t next_token_ = 1;
-  std::vector<uint64_t> pending_;
-  std::vector<uint64_t> completed_;
-};
-
-CollectiveMemory build_collective_memory(Transport::Communicator& comm,
-                                         int rank, int world_size,
+CollectiveMemory build_collective_memory(int rank, int world_size,
                                          void* tensor_ptr, size_t tensor_bytes,
                                          void* staging_ptr,
                                          size_t staging_bytes) {
@@ -404,33 +256,19 @@ CollectiveMemory build_collective_memory(Transport::Communicator& comm,
   memory.tensor.bytes = tensor_bytes;
   memory.tensor.layout.sizes = {static_cast<int64_t>(tensor_bytes)};
   memory.tensor.layout.strides = {1};
+  memory.tensor.layout.dtype = ScalarType::Float32;
   memory.tensor.peer_views.resize(static_cast<size_t>(world_size));
   memory.staging.local_ptr = staging_ptr;
+  memory.staging.local_mr_id = 0;
   memory.staging.bytes = staging_bytes;
   memory.staging.layout.sizes = {static_cast<int64_t>(staging_bytes)};
   memory.staging.layout.strides = {1};
-
-  Transport::MR local_mr = comm.reg_mr(tensor_ptr, tensor_bytes);
-  memory.tensor.local_mr_id = local_mr.id;
-
-  for (int peer = 0; peer < world_size; ++peer) {
-    auto& view = memory.tensor.peer_views[static_cast<size_t>(peer)];
-    view.same_node = true;
-    view.peer_accessible = false;
-  }
+  memory.staging.layout.dtype = ScalarType::Float32;
+  memory.staging.peer_views.resize(static_cast<size_t>(world_size));
 
   for (int peer = 0; peer < world_size; ++peer) {
-    if (peer == rank) continue;
-    require(comm.notify_mr(peer, local_mr),
-            "notify_mr failed for peer " + std::to_string(peer));
-  }
-
-  for (int peer = 0; peer < world_size; ++peer) {
-    if (peer == rank) continue;
-    Transport::MR remote_mr{};
-    require(comm.wait_mr_notify(peer, remote_mr),
-            "wait_mr_notify failed for peer " + std::to_string(peer));
-    memory.tensor.peer_views[static_cast<size_t>(peer)].mr_id = remote_mr.id;
+    memory.tensor.peer_views[static_cast<size_t>(peer)].same_node = true;
+    memory.staging.peer_views[static_cast<size_t>(peer)].same_node = true;
   }
 
   return memory;
@@ -571,15 +409,6 @@ int run_rank(Options const& opts) {
 
   GPU_RT_CHECK(gpuSetDevice(opts.gpu));
 
-  auto cfg = std::make_shared<Transport::CommunicatorConfig>();
-  cfg->exchanger_ip = opts.exchanger_ip;
-  cfg->exchanger_port = opts.exchanger_port;
-  cfg->local_id = opts.rank;
-  cfg->preferred_transport = parse_transport(opts.transport);
-
-  std::fprintf(stderr, "[rank %d] communicator init\n", opts.rank);
-  Transport::Communicator comm(opts.gpu, opts.rank, opts.world_size, cfg);
-
   DeviceBuffer tensor(opts.bytes_per_rank);
   DeviceBuffer staging(opts.bytes_per_rank);
   GPU_RT_CHECK(gpuMemset(tensor.ptr, 0, opts.bytes_per_rank));
@@ -593,23 +422,33 @@ int run_rank(Options const& opts) {
   }
   upload_tensor(tensor.ptr, input);
 
-  std::fprintf(stderr, "[rank %d] exchange MRs\n", opts.rank);
   CollectiveMemory memory = build_collective_memory(
-      comm, opts.rank, opts.world_size, tensor.ptr, opts.bytes_per_rank,
+      opts.rank, opts.world_size, tensor.ptr, opts.bytes_per_rank,
       staging.ptr, opts.bytes_per_rank);
-  std::fprintf(stderr, "[rank %d] MR exchange ready\n", opts.rank);
 
-  CommunicatorTransportBackend transport_backend(comm, memory);
-  EmulatedDeviceBackend device_backend(memory);
-
-  ExecutorBackends backends{};
-  backends.transport = &transport_backend;
-  backends.device = &device_backend;
-  Executor executor(backends);
+  ExecutorConfig executor_cfg{};
+  executor_cfg.gpu_id = opts.gpu;
+  executor_cfg.rank = opts.rank;
+  executor_cfg.world_size = opts.world_size;
+  executor_cfg.communicator_config =
+      std::make_shared<Transport::CommunicatorConfig>();
+  executor_cfg.communicator_config->exchanger_ip = opts.exchanger_ip;
+  executor_cfg.communicator_config->exchanger_port = opts.exchanger_port;
+  executor_cfg.communicator_config->local_id = opts.rank;
+  executor_cfg.communicator_config->preferred_transport =
+      parse_transport(opts.transport);
+  executor_cfg.max_device_fifos = std::max<uint32_t>(opts.num_flows, 1);
+  executor_cfg.device_task_capacity = 4096;
+  executor_cfg.threads_per_block = 256;
+  executor_cfg.fifo_capacity = 64;
+  std::fprintf(stderr, "[rank %d] executor init\n", opts.rank);
+  Executor executor(memory, executor_cfg);
 
   CollectiveConfig config =
       Testing::make_test_config(opts.world_size, opts.rank, opts.bytes_per_rank,
                                 opts.tile_bytes, opts.num_flows);
+  config.dtype = ScalarType::Float32;
+  config.reduction = ReductionKind::Sum;
   if (opts.collective == CollectiveKind::AllToAll) {
     config.algorithm = AlgorithmKind::Pairwise;
   }

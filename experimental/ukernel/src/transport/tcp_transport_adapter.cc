@@ -26,11 +26,8 @@ bool is_retryable_errno(int err) {
 
 }  // namespace
 
-TcpTransportAdapter::TcpTransportAdapter(std::string local_ip, int local_rank,
-                                         int world_size)
-    : local_ip_(std::move(local_ip)),
-      local_rank_(local_rank),
-      world_size_(world_size) {
+TcpTransportAdapter::TcpTransportAdapter(std::string local_ip, int local_rank)
+    : local_ip_(std::move(local_ip)), local_rank_(local_rank) {
   listen_fd_ = create_listen_socket(listen_port_);
   if (listen_fd_ < 0) {
     throw std::runtime_error("failed to create tcp transport listen socket");

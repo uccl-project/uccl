@@ -92,7 +92,6 @@ void rank_thread_socket(int rank, int world_size, std::string const& ip,
   local.host_id =
       UKernel::Transport::generate_host_id() + "_" + std::to_string(rank);
   local.ip = "127.0.0.1";
-  local.is_ready = true;
 
   std::string key = "meta:" + std::to_string(rank);
   if (!ex->publish(key, local)) {
@@ -109,7 +108,7 @@ void rank_thread_socket(int rank, int world_size, std::string const& ip,
     if (ex->wait_and_fetch(remote_key, remote, 50, 100)) {
       std::cout << "[INFO] Rank " << rank << " fetched meta for rank " << r
                 << " host_id=" << remote.host_id << " ip=" << remote.ip
-                << " ready=" << remote.is_ready << "\n";
+                << "\n";
     } else {
       std::cerr << "[WARN] Rank " << rank
                 << " timeout waiting for meta of rank " << r << "\n";

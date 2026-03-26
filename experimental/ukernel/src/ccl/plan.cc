@@ -41,10 +41,12 @@ size_t shard_size(size_t bytes, int nranks, int owner_rank) {
   return std::min(nominal_shard_bytes(bytes, nranks), bytes - offset);
 }
 
-BufferRef make_buffer_ref(BufferKind kind, size_t offset_bytes) {
+BufferRef make_buffer_ref(BufferKind kind, size_t offset_bytes,
+                         int peer_rank = -1) {
   BufferRef ref;
   ref.kind = kind;
   ref.offset_bytes = offset_bytes;
+  ref.peer_rank = peer_rank;
   return ref;
 }
 
@@ -80,6 +82,25 @@ void require_plan_request(PlanRequest const& request) {
   if (request.tile_bytes == 0) {
     throw std::invalid_argument("collective plan tile_bytes must be positive");
   }
+
+  size_t elem_bytes = scalar_type_size(request.dtype);
+  if (elem_bytes == 0) {
+    throw std::invalid_argument("collective plan dtype has invalid element size");
+  }
+  if (request.tensor_bytes % elem_bytes != 0) {
+    throw std::invalid_argument(
+        "collective plan tensor_bytes must be aligned to dtype size");
+  }
+  if (request.tile_bytes % elem_bytes != 0) {
+    throw std::invalid_argument(
+        "collective plan tile_bytes must be aligned to dtype size");
+  }
+  if (request.tensor_bytes %
+          (static_cast<size_t>(request.nranks) * elem_bytes) !=
+      0) {
+    throw std::invalid_argument(
+        "collective plan tensor_bytes must be divisible by nranks * dtype size");
+  }
 }
 
 CollectivePlan make_empty_plan(PlanRequest const& request) {
@@ -91,6 +112,8 @@ CollectivePlan make_empty_plan(PlanRequest const& request) {
   plan.num_flows = request.num_flows;
   plan.tensor_bytes = request.tensor_bytes;
   plan.tile_bytes = request.tile_bytes;
+  plan.dtype = request.dtype;
+  plan.reduction = request.reduction;
   return plan;
 }
 
@@ -98,7 +121,8 @@ struct PlanBuilder {
   explicit PlanBuilder(CollectivePlan plan_in) : plan(std::move(plan_in)) {}
 
   uint32_t add_op(PrimitiveOpKind kind, TileRef tile, BufferRef src,
-                  BufferRef dst, int peer_rank, std::vector<uint32_t> deps) {
+                  BufferRef dst, int peer_rank, ScalarType dtype,
+                  ReductionKind reduction, std::vector<uint32_t> deps) {
     PrimitiveOp op;
     op.op_id = next_op_id++;
     op.kind = kind;
@@ -106,6 +130,8 @@ struct PlanBuilder {
     op.tile = tile;
     op.src = std::move(src);
     op.dst = std::move(dst);
+    op.dtype = dtype;
+    op.reduction = reduction;
     op.deps = std::move(deps);
     plan.ops.push_back(std::move(op));
     return plan.ops.back().op_id;
@@ -125,6 +151,15 @@ TileRef make_tile(PlanRequest const& request, int owner_rank,
   tile.offset_bytes = offset_bytes;
   tile.size_bytes = size_bytes;
   return tile;
+}
+
+ScalarType op_dtype(PlanRequest const& request, PrimitiveOpKind kind) {
+  return kind == PrimitiveOpKind::Reduce ? request.dtype : ScalarType::UInt8;
+}
+
+ReductionKind op_reduction(PlanRequest const& request, PrimitiveOpKind kind) {
+  return kind == PrimitiveOpKind::Reduce ? request.reduction
+                                         : ReductionKind::None;
 }
 
 CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
@@ -185,7 +220,10 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
           uint32_t send_op =
               builder.add_op(PrimitiveOpKind::Send, send_tile,
                              tensor_ref(send_tile.offset_bytes), BufferRef{},
-                             send_peer, std::move(deps));
+                             send_peer,
+                             op_dtype(request, PrimitiveOpKind::Send),
+                             op_reduction(request, PrimitiveOpKind::Send),
+                             std::move(deps));
           last_send_to_peer[static_cast<size_t>(send_peer)] = send_op;
         }
 
@@ -202,14 +240,20 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
           add_dep(recv_deps, last_staging_consumer[flow_slot]);
           uint32_t recv_op = builder.add_op(
               PrimitiveOpKind::Recv, recv_tile, BufferRef{},
-              staging_ref(staging_offset), recv_peer, std::move(recv_deps));
+              staging_ref(staging_offset), recv_peer,
+              op_dtype(request, PrimitiveOpKind::Recv),
+              op_reduction(request, PrimitiveOpKind::Recv),
+              std::move(recv_deps));
           last_recv_from_peer[static_cast<size_t>(recv_peer)] = recv_op;
 
           std::vector<uint32_t> reduce_deps;
           add_dep(reduce_deps, recv_op);
           uint32_t reduce_op = builder.add_op(
               PrimitiveOpKind::Reduce, recv_tile, staging_ref(staging_offset),
-              tensor_ref(recv_tile.offset_bytes), -1, std::move(reduce_deps));
+              tensor_ref(recv_tile.offset_bytes), -1,
+              op_dtype(request, PrimitiveOpKind::Reduce),
+              op_reduction(request, PrimitiveOpKind::Reduce),
+              std::move(reduce_deps));
           ready_ops[static_cast<size_t>(recv_owner)][tile_index] = reduce_op;
           last_staging_consumer[flow_slot] = reduce_op;
         }
@@ -251,7 +295,10 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
           uint32_t send_op =
               builder.add_op(PrimitiveOpKind::Send, send_tile,
                              tensor_ref(send_tile.offset_bytes), BufferRef{},
-                             send_peer, std::move(deps));
+                             send_peer,
+                             op_dtype(request, PrimitiveOpKind::Send),
+                             op_reduction(request, PrimitiveOpKind::Send),
+                             std::move(deps));
           last_send_to_peer[static_cast<size_t>(send_peer)] = send_op;
         }
 
@@ -268,6 +315,8 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
           uint32_t recv_op =
               builder.add_op(PrimitiveOpKind::Recv, recv_tile, BufferRef{},
                              tensor_ref(recv_tile.offset_bytes), recv_peer,
+                             op_dtype(request, PrimitiveOpKind::Recv),
+                             op_reduction(request, PrimitiveOpKind::Recv),
                              std::move(recv_deps));
           last_recv_from_peer[static_cast<size_t>(recv_peer)] = recv_op;
           ready_ops[static_cast<size_t>(recv_owner)][tile_index] = recv_op;
@@ -326,7 +375,9 @@ CollectivePlan build_alltoall_pairwise_plan(PlanRequest const& request) {
       add_dep(send_deps, last_send_to_peer[static_cast<size_t>(peer)]);
       uint32_t send_op = builder.add_op(
           PrimitiveOpKind::Send, tile, tensor_ref(tile.offset_bytes),
-          BufferRef{}, peer, std::move(send_deps));
+          BufferRef{}, peer, op_dtype(request, PrimitiveOpKind::Send),
+          op_reduction(request, PrimitiveOpKind::Send),
+          std::move(send_deps));
       last_send_to_peer[static_cast<size_t>(peer)] = send_op;
 
       std::vector<uint32_t> recv_deps;
@@ -334,7 +385,9 @@ CollectivePlan build_alltoall_pairwise_plan(PlanRequest const& request) {
       add_dep(recv_deps, last_staging_consumer[peer_slot]);
       uint32_t recv_op = builder.add_op(
           PrimitiveOpKind::Recv, tile, BufferRef{}, staging_ref(staging_offset),
-          peer, std::move(recv_deps));
+          peer, op_dtype(request, PrimitiveOpKind::Recv),
+          op_reduction(request, PrimitiveOpKind::Recv),
+          std::move(recv_deps));
       last_recv_from_peer[static_cast<size_t>(peer)] = recv_op;
 
       std::vector<uint32_t> copy_deps;
@@ -342,7 +395,10 @@ CollectivePlan build_alltoall_pairwise_plan(PlanRequest const& request) {
       add_dep(copy_deps, recv_op);
       uint32_t copy_op = builder.add_op(
           PrimitiveOpKind::Copy, tile, staging_ref(staging_offset),
-          tensor_ref(tile.offset_bytes), -1, std::move(copy_deps));
+          tensor_ref(tile.offset_bytes), -1,
+          op_dtype(request, PrimitiveOpKind::Copy),
+          op_reduction(request, PrimitiveOpKind::Copy),
+          std::move(copy_deps));
       last_staging_consumer[peer_slot] = copy_op;
     }
 
@@ -373,7 +429,9 @@ char const* buffer_name(BufferKind kind) {
     case BufferKind::Staging:
       return "staging";
     case BufferKind::PeerTensor:
-      return "peer-tensor";
+      return "peer_tensor";
+    case BufferKind::PeerStaging:
+      return "peer_staging";
   }
   return "unknown";
 }

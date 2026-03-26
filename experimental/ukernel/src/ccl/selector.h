@@ -1,5 +1,6 @@
 #pragma once
 
+#include "collective_types.h"
 #include "collective_memory.h"
 #include "plan.h"
 #include <cstddef>
@@ -23,7 +24,15 @@ struct ExecOp {
   TileRef tile;
   BufferRef src;
   BufferRef dst;
+  ScalarType dtype = ScalarType::UInt8;
+  ReductionKind reduction = ReductionKind::None;
   std::vector<uint32_t> deps;
+  // Resolved runtime bindings for execution backends. Planner/lowering keep
+  // these unset; executor fills them before submitting the op.
+  void const* resolved_src = nullptr;
+  void* resolved_dst = nullptr;
+  int src_device = -1;
+  int dst_device = -1;
 };
 
 struct ExecutionPlan {
@@ -35,6 +44,8 @@ struct ExecutionPlan {
   size_t tensor_bytes = 0;
   size_t tile_bytes = 0;
   size_t staging_bytes_required = 0;
+  ScalarType dtype = ScalarType::UInt8;
+  ReductionKind reduction = ReductionKind::None;
   std::vector<ExecOp> ops;
 };
 

@@ -12,14 +12,22 @@
 namespace UKernel {
 namespace Transport {
 class Communicator;
+struct CommunicatorConfig;
 }
 namespace CCL {
+
+struct TransportBackendConfig {
+  int gpu_id = 0;
+  int rank = 0;
+  int world_size = 1;
+  std::shared_ptr<UKernel::Transport::CommunicatorConfig> communicator_config;
+};
 
 // Adapts transport::Communicator onto the CCL backend interface.
 class CommunicatorTransportBackend final : public Backend {
  public:
-  CommunicatorTransportBackend(UKernel::Transport::Communicator& comm,
-                               CollectiveMemory memory);
+  CommunicatorTransportBackend(TransportBackendConfig const& config,
+                               std::shared_ptr<CollectiveMemory> memory);
   ~CommunicatorTransportBackend() override = default;
 
   char const* name() const override;
@@ -29,6 +37,11 @@ class CommunicatorTransportBackend final : public Backend {
   bool poll(BackendToken token) override;
   bool try_pop_completed(BackendToken& token) override;
   void release(BackendToken token) override;
+
+  UKernel::Transport::Communicator& communicator();
+  UKernel::Transport::Communicator const& communicator() const;
+  CollectiveMemory& memory();
+  CollectiveMemory const& memory() const;
 
  private:
   struct PendingRequest {
@@ -42,6 +55,8 @@ class CommunicatorTransportBackend final : public Backend {
     bool recv_ready = false;
   };
 
+  void ensure_memory_bindings_initialized() const;
+  void initialize_memory_bindings() const;
   void* resolve_mutable(BufferRef const& ref, size_t bytes) const;
   void const* resolve_const(BufferRef const& ref, size_t bytes) const;
   uint32_t resolve_local_mr_id(BufferRef const& ref, size_t bytes) const;
@@ -52,14 +67,16 @@ class CommunicatorTransportBackend final : public Backend {
   static void* byte_offset(void* base, size_t offset);
   static void const* byte_offset(void const* base, size_t offset);
 
-  UKernel::Transport::Communicator& comm_;
-  CollectiveMemory memory_{};
+  std::unique_ptr<UKernel::Transport::Communicator> communicator_;
+  std::shared_ptr<CollectiveMemory> memory_;
   uint64_t next_token_ = 1;
   mutable std::mutex mu_;
   std::unordered_map<uint64_t, PendingRequest> pending_;
   std::unordered_map<unsigned, uint64_t> request_to_token_;
   std::deque<uint64_t> completed_tokens_;
   std::shared_ptr<void> completion_notifier_;
+  mutable std::mutex init_mu_;
+  mutable bool bindings_initialized_ = false;
   mutable std::mutex path_mu_;
   mutable std::vector<PeerPathState> peer_paths_;
 };

@@ -22,6 +22,7 @@ class Backend {
   virtual bool poll(BackendToken token) = 0;
   virtual bool try_pop_completed(BackendToken& token) = 0;
   virtual void release(BackendToken token) = 0;
+  virtual void stop(uint32_t flow_id) { (void)flow_id; }
 };
 
 struct ExecutorBackends {

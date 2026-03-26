@@ -147,7 +147,6 @@ void test_peer_transport_kind() {
   CommunicatorMeta local{};
   local.host_id = "host-a";
   local.ip = "10.0.0.1";
-  local.is_ready = true;
 
   CommunicatorMeta same = local;
   same.ip = "10.0.0.2";
@@ -158,7 +157,8 @@ void test_peer_transport_kind() {
   CommunicatorMeta remote{};
   remote.host_id = "host-b";
   remote.ip = "10.0.0.3";
-  remote.is_ready = true;
+  local.rdma_capable = true;
+  remote.rdma_capable = true;
   require(UKernel::Transport::resolve_peer_transport_kind(cfg, local, remote) ==
               PeerTransportKind::Uccl,
           "different host_id should resolve to UCCL");

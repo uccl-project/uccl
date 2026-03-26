@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <unordered_map>
 #include <vector>
 
 namespace UKernel {
@@ -56,6 +57,7 @@ class HostBouncePool {
   std::atomic<uint64_t> next_mr_id_{1ull << 62};
   std::mutex mu_;
   std::vector<Entry> entries_;
+  std::unordered_map<size_t, size_t> idle_per_bucket_;
 };
 
 }  // namespace Transport

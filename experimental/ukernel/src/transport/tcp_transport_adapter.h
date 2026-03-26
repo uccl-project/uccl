@@ -20,7 +20,7 @@ class TcpTransportAdapter {
     std::string remote_ip;
   };
 
-  TcpTransportAdapter(std::string local_ip, int local_rank, int world_size);
+  TcpTransportAdapter(std::string local_ip, int local_rank);
   ~TcpTransportAdapter();
 
   uint16_t get_listen_port() const;
@@ -81,7 +81,6 @@ class TcpTransportAdapter {
 
   std::string local_ip_;
   int local_rank_ = -1;
-  int world_size_ = 0;
   int listen_fd_ = -1;
   uint16_t listen_port_ = 0;
 

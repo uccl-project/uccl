@@ -5,9 +5,14 @@
 #include "selector.h"
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace UKernel {
+namespace Transport {
+struct CommunicatorConfig;
+class Communicator;
+}
 namespace CCL {
 
 enum class CollectiveOpStatus : uint32_t {
@@ -25,6 +30,20 @@ struct CollectiveConfig {
   size_t tile_bytes = 0;
   size_t staging_bytes = 0;
   AlgorithmKind algorithm = AlgorithmKind::Ring;
+  ScalarType dtype = ScalarType::Float32;
+  ReductionKind reduction = ReductionKind::Sum;
+};
+
+struct ExecutorConfig {
+  int gpu_id = 0;
+  int rank = 0;
+  int world_size = 1;
+  std::shared_ptr<UKernel::Transport::CommunicatorConfig> communicator_config;
+  uint32_t device_task_capacity = 4096;
+  uint32_t max_device_fifos = 8;
+  uint32_t threads_per_block = 256;
+  uint32_t fifo_capacity = 64;
+  uint32_t smem_size = 0;
 };
 
 PlanRequest make_plan_request(CollectiveKind kind,
@@ -42,6 +61,7 @@ class Executor {
   // when all dependency counts reach zero, and backend completions unlock
   // successor ops.
   explicit Executor(ExecutorBackends backends);
+  Executor(CollectiveMemory memory, ExecutorConfig const& config = {});
   ~Executor();
 
   Executor(Executor const&) = delete;
@@ -59,10 +79,14 @@ class Executor {
   CollectiveOpStatus status(CollectiveOpHandle handle) const;
   std::string error_message(CollectiveOpHandle handle) const;
   size_t inflight_steps(CollectiveOpHandle handle) const;
+  UKernel::Transport::Communicator* communicator();
+  UKernel::Transport::Communicator const* communicator() const;
+  CollectiveMemory* memory();
+  CollectiveMemory const* memory() const;
 
  private:
   struct Impl;
-  Impl* impl_;
+  std::unique_ptr<Impl> impl_;
 };
 
 }  // namespace CCL

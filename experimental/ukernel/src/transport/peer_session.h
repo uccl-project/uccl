@@ -35,7 +35,7 @@ class PeerSession {
   int const peer_rank_;
   bool has_meta_ = false;
   CommunicatorMeta meta_;
-  PeerTransportKind kind_ = PeerTransportKind::Ipc;
+  PeerTransportKind kind_ = PeerTransportKind::Unknown;
   bool send_ready_ = false;
   bool recv_ready_ = false;
   mutable std::mutex mu_;
@@ -49,15 +49,12 @@ class PeerSessionManager {
   PeerSession const* get(int rank) const;
   int world_size() const { return world_size_; }
 
-  bool all_have_meta() const;
-  bool all_ready() const;
   bool has_peer_send_path(int rank) const;
   bool has_peer_recv_path(int rank) const;
 
  private:
   int world_size_;
   std::vector<std::unique_ptr<PeerSession>> peers_;
-  mutable std::mutex mu_;
 };
 
 }  // namespace Transport

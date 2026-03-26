@@ -74,12 +74,27 @@ HostBouncePool::Lease HostBouncePool::acquire(size_t bytes,
       candidate = i;
       if (!require_uccl_registration || entry.uccl_registered) {
         entry.in_use = true;
+        auto idle_it = idle_per_bucket_.find(entry.bucket_bytes);
+        if (idle_it != idle_per_bucket_.end() && idle_it->second > 0) {
+          --idle_it->second;
+          if (idle_it->second == 0) {
+            idle_per_bucket_.erase(idle_it);
+          }
+        }
         return Lease{entry.ptr, entry.bytes, entry.mr_id, entry.uccl_registered,
                      i};
       }
     }
 
     if (candidate != Lease::kInvalidSlot) {
+      auto& entry = entries_[candidate];
+      auto idle_it = idle_per_bucket_.find(entry.bucket_bytes);
+      if (idle_it != idle_per_bucket_.end() && idle_it->second > 0) {
+        --idle_it->second;
+        if (idle_it->second == 0) {
+          idle_per_bucket_.erase(idle_it);
+        }
+      }
       entries_[candidate].in_use = true;
     }
   }
@@ -96,6 +111,7 @@ HostBouncePool::Lease HostBouncePool::acquire(size_t bytes,
       if (!ensure_uccl_registered(updated)) {
         std::lock_guard<std::mutex> lk(mu_);
         entries_[candidate].in_use = false;
+        ++idle_per_bucket_[entries_[candidate].bucket_bytes];
         throw std::runtime_error("failed to register pooled host bounce buffer with UCCL");
       }
       std::lock_guard<std::mutex> lk(mu_);
@@ -140,19 +156,20 @@ void HostBouncePool::release(Lease& lease) {
     if (lease.slot < entries_.size()) {
       Entry& released = entries_[lease.slot];
       released.in_use = false;
-
-      size_t idle_in_bucket = 0;
-      for (size_t i = 0; i < entries_.size(); ++i) {
-        Entry const& entry = entries_[i];
-        if (entry.ptr != nullptr && !entry.in_use &&
-            entry.bucket_bytes == released.bucket_bytes) {
-          ++idle_in_bucket;
-        }
-      }
+      size_t idle_in_bucket = ++idle_per_bucket_[released.bucket_bytes];
       if (idle_in_bucket > kMaxIdlePerBucket) {
         evicted = released;
         released = Entry{};
         should_evict = true;
+        auto idle_it = idle_per_bucket_.find(evicted.bucket_bytes);
+        if (idle_it != idle_per_bucket_.end()) {
+          if (idle_it->second > 0) {
+            --idle_it->second;
+          }
+          if (idle_it->second == 0) {
+            idle_per_bucket_.erase(idle_it);
+          }
+        }
       }
     }
   }

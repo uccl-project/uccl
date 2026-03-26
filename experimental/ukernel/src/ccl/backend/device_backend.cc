@@ -1,22 +1,18 @@
 #include "device_backend.h"
 #include "../../device/task.h"
 #include "../../device/worker.h"
+#include "../../include/gpu_rt.h"
+#include <algorithm>
+#include <chrono>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace UKernel {
 namespace CCL {
 
 namespace {
-
-Device::DataType to_device_dtype(int dtype) {
-  return static_cast<Device::DataType>(dtype);
-}
-
-Device::ReduceType to_device_reduce_type(int reduce_type) {
-  return static_cast<Device::ReduceType>(reduce_type);
-}
 
 void validate_span(char const* what, size_t offset, size_t bytes,
                    size_t capacity) {
@@ -25,21 +21,86 @@ void validate_span(char const* what, size_t offset, size_t bytes,
   }
 }
 
+Device::DataType to_device_dtype(ScalarType dtype) {
+  switch (dtype) {
+    case ScalarType::Int8:
+      return Device::DataType::Int8;
+    case ScalarType::Int32:
+      return Device::DataType::Int32;
+    case ScalarType::Int64:
+      return Device::DataType::Int64;
+    case ScalarType::Float16:
+      return Device::DataType::Fp16;
+    case ScalarType::Float32:
+      return Device::DataType::Fp32;
+    case ScalarType::Float64:
+      return Device::DataType::Fp64;
+    case ScalarType::BFloat16:
+      return Device::DataType::Bf16;
+    case ScalarType::UInt8:
+    case ScalarType::Int16:
+    case ScalarType::Bool:
+      break;
+  }
+  throw std::invalid_argument("device backend does not support this dtype");
+}
+
+Device::ReduceType to_device_reduce_type(ReductionKind reduction) {
+  switch (reduction) {
+    case ReductionKind::None:
+      return Device::ReduceType::None;
+    case ReductionKind::Sum:
+      return Device::ReduceType::Sum;
+    case ReductionKind::Prod:
+      return Device::ReduceType::Prod;
+    case ReductionKind::Max:
+      return Device::ReduceType::Max;
+    case ReductionKind::Min:
+      return Device::ReduceType::Min;
+    case ReductionKind::BitwiseAnd:
+      return Device::ReduceType::BitwiseAnd;
+  }
+  return Device::ReduceType::None;
+}
+
 }  // namespace
 
-DeviceBackend::DeviceBackend(UKernel::Device::WorkerPool* worker_pool,
-                             CollectiveMemory memory, int dtype,
-                             int reduce_type)
-    : worker_pool_(worker_pool),
-      memory_(std::move(memory)),
-      dtype_(dtype),
-      reduce_type_(reduce_type) {
-  if (worker_pool_ == nullptr) {
-    throw std::invalid_argument("device backend requires a worker pool");
+DeviceBackend::DeviceBackend(std::shared_ptr<CollectiveMemory> memory,
+                             DeviceBackendConfig const& config)
+    : memory_(std::move(memory)), config_(config) {
+  if (memory_ == nullptr) {
+    throw std::invalid_argument("device backend requires collective memory");
   }
-  if (!Device::TaskManager::instance().inited()) {
+  if (config_.task_capacity == 0) {
+    throw std::invalid_argument("device backend task_capacity must be positive");
+  }
+  if (config_.max_fifos == 0) {
+    throw std::invalid_argument("device backend max_fifos must be positive");
+  }
+  if (config_.threads_per_block == 0) {
     throw std::invalid_argument(
-        "device backend requires TaskManager to be initialized externally");
+        "device backend threads_per_block must be positive");
+  }
+  if (config_.fifo_capacity == 0) {
+    throw std::invalid_argument(
+        "device backend fifo_capacity must be positive");
+  }
+
+  int device = 0;
+  GPU_RT_CHECK(gpuGetDevice(&device));
+  local_device_idx_ = device;
+  GPU_RT_CHECK(
+      gpuDeviceGetAttribute(&sm_count_, gpuDevAttrMultiProcessorCount, device));
+}
+
+DeviceBackend::~DeviceBackend() {
+  completed_tokens_.clear();
+  submitted_.clear();
+  active_flows_.clear();
+  worker_pool_.reset();
+  if (owns_task_manager_) {
+    Device::TaskManager::instance().release();
+    owns_task_manager_ = false;
   }
 }
 
@@ -47,12 +108,16 @@ char const* DeviceBackend::name() const { return "device"; }
 
 void DeviceBackend::validate(ExecutionPlan const& plan) const {
   if (plan.staging_bytes_required != 0 &&
-      memory_.staging.local_ptr == nullptr) {
+      memory_->staging.local_ptr == nullptr) {
     throw std::invalid_argument("device backend staging buffer is missing");
   }
-  if (plan.staging_bytes_required > memory_.staging.bytes) {
+  if (plan.staging_bytes_required > memory_->staging.bytes) {
     throw std::invalid_argument(
         "device backend staging capacity is insufficient");
+  }
+  for (ExecOp const& op : plan.ops) {
+    if (!supports(op.kind)) continue;
+    (void)to_device_dtype(op.dtype);
   }
 }
 
@@ -72,34 +137,57 @@ BackendToken DeviceBackend::submit(ExecOp const& op) {
   if (!supports(op.kind)) {
     throw std::invalid_argument("unsupported op kind for device backend");
   }
+  void const* src =
+      op.resolved_src != nullptr ? op.resolved_src
+                                 : resolve_const(op.src, op.tile.size_bytes);
+  void* dst =
+      op.resolved_dst != nullptr ? op.resolved_dst
+                                 : resolve_mutable(op.dst, op.tile.size_bytes);
+  ensure_runtime();
 
   Device::TaskArgs args{};
-  args.src = const_cast<void*>(resolve_const(op.src, op.tile.size_bytes));
+  args.src = const_cast<void*>(src);
   args.src2 = nullptr;
-  args.dst = resolve_mutable(op.dst, op.tile.size_bytes);
+  args.dst = dst;
   args.bytes = op.tile.size_bytes;
-  args.src_rank = op.src.peer_rank;
-  args.dst_rank = op.dst.peer_rank;
-  args.src_device = -1;
-  args.dst_device = -1;
-  args.redType = to_device_reduce_type(reduce_type_);
+  args.src_rank = (op.src.kind == BufferKind::PeerTensor ||
+                   op.src.kind == BufferKind::PeerStaging)
+                      ? op.src.peer_rank
+                      : memory_->tensor.local_rank;
+  args.dst_rank = (op.dst.kind == BufferKind::PeerTensor ||
+                   op.dst.kind == BufferKind::PeerStaging)
+                      ? op.dst.peer_rank
+                      : memory_->tensor.local_rank;
+  args.src_device =
+      op.src_device >= 0 ? op.src_device : local_device_idx_;
+  args.dst_device =
+      op.dst_device >= 0 ? op.dst_device : local_device_idx_;
+  args.redType = ::UKernel::CCL::to_device_reduce_type(op.reduction);
 
   Device::TaskType task_type = (op.kind == ExecOpKind::DeviceReduce)
                                    ? Device::TaskType::CollReduce
                                    : Device::TaskType::CollCopy;
 
-  uint32_t fifo_id = fifo_id_for(op);
+  uint32_t flow_id = op.tile.flow_index;
+  uint32_t fifo_id = acquire_fifo(flow_id, suggested_num_blocks(op));
   Device::Task task = Device::TaskManager::instance().create_task(
-      args, task_type, to_device_dtype(dtype_), 0);
+      args, task_type, ::UKernel::CCL::to_device_dtype(op.dtype), 0);
 
-  uint64_t task_id = worker_pool_->enqueue(task, fifo_id);
+  uint64_t task_id = 0;
+  for (int retry = 0; retry < 1000 && task_id == 0; ++retry) {
+    task_id = worker_pool_->enqueue(task, fifo_id);
+    if (task_id == 0) {
+      std::this_thread::sleep_for(std::chrono::microseconds(5));
+    }
+  }
   if (task_id == 0) {
+    active_flows_[flow_id].inflight--;
     Device::TaskManager::instance().free_task_args(task.args_index());
     throw std::runtime_error("device backend failed to enqueue task");
   }
 
   BackendToken token{next_token_++};
-  submitted_[token.value] = SubmittedTask{fifo_id, task_id, false};
+  submitted_[token.value] = SubmittedTask{fifo_id, task_id, flow_id, false};
   return token;
 }
 
@@ -132,8 +220,18 @@ bool DeviceBackend::try_pop_completed(BackendToken& token) {
 }
 
 void DeviceBackend::release(BackendToken token) {
-  submitted_.erase(token.value);
+  auto it = submitted_.find(token.value);
+  if (it == submitted_.end()) return;
+  uint32_t flow_id = it->second.flow_id;
+  submitted_.erase(it);
+  auto flow_it = active_flows_.find(flow_id);
+  if (flow_it == active_flows_.end()) return;
+  if (flow_it->second.inflight > 0) {
+    --flow_it->second.inflight;
+  }
 }
+
+void DeviceBackend::stop(uint32_t flow_id) { stop_flow(flow_id); }
 
 void* DeviceBackend::byte_offset(void* base, size_t offset) const {
   return static_cast<void*>(static_cast<char*>(base) + offset);
@@ -146,76 +244,116 @@ void const* DeviceBackend::byte_offset(void const* base, size_t offset) const {
 void* DeviceBackend::resolve_mutable(BufferRef const& ref, size_t bytes) const {
   switch (ref.kind) {
     case BufferKind::Staging:
-      if (memory_.staging.local_ptr == nullptr) {
+      if (memory_->staging.local_ptr == nullptr) {
         throw std::invalid_argument("device backend staging buffer is missing");
       }
       validate_span("device backend staging", ref.offset_bytes, bytes,
-                    memory_.staging.bytes);
-      return byte_offset(memory_.staging.local_ptr, ref.offset_bytes);
+                    memory_->staging.bytes);
+      return byte_offset(memory_->staging.local_ptr, ref.offset_bytes);
     case BufferKind::Tensor:
-      if (memory_.tensor.local_ptr == nullptr) {
+      if (memory_->tensor.local_ptr == nullptr) {
         throw std::invalid_argument("device backend local tensor is missing");
       }
       validate_span("device backend local tensor", ref.offset_bytes, bytes,
-                    memory_.tensor.bytes);
-      return byte_offset(memory_.tensor.local_ptr, ref.offset_bytes);
+                    memory_->tensor.bytes);
+      return byte_offset(memory_->tensor.local_ptr, ref.offset_bytes);
     case BufferKind::PeerTensor:
-      break;
+    case BufferKind::PeerStaging:
+      throw std::invalid_argument(
+          "device backend requires resolved runtime pointer for remote dst");
   }
-  throw std::invalid_argument("device backend cannot write remote tensor");
+  throw std::invalid_argument("device backend invalid destination reference");
 }
 
 void const* DeviceBackend::resolve_const(BufferRef const& ref,
                                          size_t bytes) const {
   switch (ref.kind) {
     case BufferKind::Staging:
-      if (memory_.staging.local_ptr == nullptr) {
+      if (memory_->staging.local_ptr == nullptr) {
         throw std::invalid_argument("device backend staging buffer is missing");
       }
       validate_span("device backend staging", ref.offset_bytes, bytes,
-                    memory_.staging.bytes);
-      return byte_offset(memory_.staging.local_ptr, ref.offset_bytes);
+                    memory_->staging.bytes);
+      return byte_offset(memory_->staging.local_ptr, ref.offset_bytes);
     case BufferKind::Tensor:
-      if (memory_.tensor.local_ptr == nullptr) {
+      if (memory_->tensor.local_ptr == nullptr) {
         throw std::invalid_argument("device backend local tensor is missing");
       }
       validate_span("device backend local tensor", ref.offset_bytes, bytes,
-                    memory_.tensor.bytes);
-      return byte_offset(memory_.tensor.local_ptr, ref.offset_bytes);
+                    memory_->tensor.bytes);
+      return byte_offset(memory_->tensor.local_ptr, ref.offset_bytes);
     case BufferKind::PeerTensor:
-      if (ref.peer_rank < 0 || static_cast<size_t>(ref.peer_rank) >=
-                                   memory_.tensor.peer_views.size()) {
-        break;
-      }
-      if (!memory_.tensor.peer_views[static_cast<size_t>(ref.peer_rank)]
-               .peer_accessible ||
-          memory_.tensor.peer_views[static_cast<size_t>(ref.peer_rank)].ptr ==
-              nullptr) {
-        throw std::invalid_argument(
-            "device backend peer tensor is not directly accessible");
-      }
-      validate_span("device backend peer tensor", ref.offset_bytes, bytes,
-                    memory_.tensor.bytes);
-      return byte_offset(
-          memory_.tensor.peer_views[static_cast<size_t>(ref.peer_rank)].ptr,
-          ref.offset_bytes);
+    case BufferKind::PeerStaging:
+      throw std::invalid_argument(
+          "device backend requires resolved runtime pointer for remote src");
   }
   throw std::invalid_argument("device backend invalid source reference");
 }
 
-uint32_t DeviceBackend::fifo_id_for(ExecOp const& op) {
-  if (worker_pool_->num_fifos() == 0) {
-    throw std::runtime_error("device backend worker pool has no FIFOs");
+void DeviceBackend::ensure_runtime() {
+  if (!Device::TaskManager::instance().inited()) {
+    Device::TaskManager::instance().init(config_.task_capacity);
+    owns_task_manager_ = true;
   }
-  uint32_t lane_id = op.tile.flow_index;
-  auto it = lane_fifo_assignments_.find(lane_id);
-  if (it != lane_fifo_assignments_.end()) {
-    return it->second;
+  if (worker_pool_ != nullptr) {
+    return;
   }
-  uint32_t fifo_id = next_fifo_cursor_ % worker_pool_->num_fifos();
-  next_fifo_cursor_ = (next_fifo_cursor_ + 1) % worker_pool_->num_fifos();
-  lane_fifo_assignments_.emplace(lane_id, fifo_id);
+  Device::WorkerPool::Config cfg;
+  cfg.numMaxWorkers = config_.max_fifos;
+  cfg.threadsPerBlock = config_.threads_per_block;
+  cfg.fifoCapacity = config_.fifo_capacity;
+  cfg.smemSize = config_.smem_size;
+  worker_pool_ = std::make_unique<Device::WorkerPool>(cfg);
+  free_fifos_.clear();
+  for (uint32_t fifo_id = 0; fifo_id < cfg.numMaxWorkers; ++fifo_id) {
+    free_fifos_.push_back(fifo_id);
+  }
+}
+
+uint32_t DeviceBackend::acquire_fifo(uint32_t flow_id, uint32_t num_blocks) {
+  auto it = active_flows_.find(flow_id);
+  if (it != active_flows_.end()) {
+    ++it->second.inflight;
+    return it->second.fifo_id;
+  }
+  if (worker_pool_ == nullptr) {
+    throw std::runtime_error("device backend worker runtime is not initialized");
+  }
+  if (free_fifos_.empty()) {
+    throw std::runtime_error("device backend has no available FIFO slots");
+  }
+
+  uint32_t fifo_id = free_fifos_.front();
+  free_fifos_.pop_front();
+  if (!worker_pool_->createWorker(fifo_id, num_blocks)) {
+    free_fifos_.push_front(fifo_id);
+    throw std::runtime_error("device backend failed to create worker");
+  }
+  worker_pool_->waitWorker(fifo_id);
+  active_flows_.emplace(flow_id, ActiveFlow{fifo_id, 1});
   return fifo_id;
+}
+
+void DeviceBackend::stop_flow(uint32_t flow_id) {
+  if (worker_pool_ == nullptr) return;
+  auto it = active_flows_.find(flow_id);
+  if (it == active_flows_.end() || it->second.inflight != 0) {
+    return;
+  }
+  uint32_t fifo_id = it->second.fifo_id;
+  worker_pool_->destroyWorker(fifo_id);
+  free_fifos_.push_back(fifo_id);
+  active_flows_.erase(it);
+}
+
+uint32_t DeviceBackend::suggested_num_blocks(ExecOp const& op) const {
+  size_t bytes_per_block = (op.kind == ExecOpKind::DeviceReduce) ? (1u << 20)
+                                                                 : (4u << 20);
+  uint32_t blocks = static_cast<uint32_t>(
+      std::max<size_t>(1, (op.tile.size_bytes + bytes_per_block - 1) /
+                              bytes_per_block));
+  return std::min<uint32_t>(std::max<uint32_t>(1, blocks),
+                            static_cast<uint32_t>(std::max(1, sm_count_)));
 }
 
 }  // namespace CCL

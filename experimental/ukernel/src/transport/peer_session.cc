@@ -54,7 +54,7 @@ void PeerSession::set_recv_ready(bool ready) {
 void PeerSession::reset() {
   std::lock_guard<std::mutex> lk(mu_);
   has_meta_ = false;
-  kind_ = PeerTransportKind::Ipc;
+  kind_ = PeerTransportKind::Unknown;
   send_ready_ = false;
   recv_ready_ = false;
 }
@@ -75,22 +75,6 @@ PeerSession* PeerSessionManager::get(int rank) {
 PeerSession const* PeerSessionManager::get(int rank) const {
   if (rank < 0 || rank >= world_size_) return nullptr;
   return peers_[rank].get();
-}
-
-bool PeerSessionManager::all_have_meta() const {
-  std::lock_guard<std::mutex> lk(mu_);
-  for (auto const& p : peers_) {
-    if (!p->has_meta()) return false;
-  }
-  return true;
-}
-
-bool PeerSessionManager::all_ready() const {
-  std::lock_guard<std::mutex> lk(mu_);
-  for (auto const& p : peers_) {
-    if (!p->send_ready() || !p->recv_ready()) return false;
-  }
-  return true;
 }
 
 bool PeerSessionManager::has_peer_send_path(int rank) const {

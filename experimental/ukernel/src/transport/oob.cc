@@ -5,6 +5,8 @@ namespace Transport {
 
 char const* peer_transport_kind_name(PeerTransportKind kind) {
   switch (kind) {
+    case PeerTransportKind::Unknown:
+      return "unknown";
     case PeerTransportKind::Uccl:
       return "uccl";
     case PeerTransportKind::Ipc:
