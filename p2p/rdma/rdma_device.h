@@ -92,7 +92,8 @@ class RdmaDeviceManager {
       std::string env_str(env_dev);
 
       auto add_unique_idx = [&](size_t idx, std::vector<size_t>& out) {
-        if (std::find(out.begin(), out.end(), idx) == out.end()) out.push_back(idx);
+        if (std::find(out.begin(), out.end(), idx) == out.end())
+          out.push_back(idx);
       };
 
       std::vector<size_t> selected_dev_indices;
@@ -127,7 +128,8 @@ class RdmaDeviceManager {
         } catch (...) {
         }
 
-        // If numeric parse didn't match / was out of range, try matching by name.
+        // If numeric parse didn't match / was out of range, try matching by
+        // name.
         if (!found) {
           for (size_t i = 0; i < devices_.size(); i++) {
             if (devices_[i]->name() == token) {
