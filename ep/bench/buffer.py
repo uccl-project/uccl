@@ -91,30 +91,43 @@ class Buffer:
         else:
             device_index = torch.cuda.current_device()
 
-        rdma_buffer_is_host_allocated = False
-        if num_rdma_bytes > 0:
-            if hasattr(ep, "can_register_rdma_gpu_buffer"):
-                rdma_buffer_is_host_allocated = not bool(
-                    ep.can_register_rdma_gpu_buffer(device_index, num_rdma_bytes)
-                )
-            elif hasattr(ep, "rdma_buffer_should_use_host_alloc"):
-                rdma_buffer_is_host_allocated = bool(
-                    ep.rdma_buffer_should_use_host_alloc(device_index, num_rdma_bytes)
-                )
-
-        if num_rdma_bytes > 0 and rdma_buffer_is_host_allocated:
-            # Host-pinned fallback for platforms/NICs that cannot register GPU memory.
-            self.scratch = torch.zeros(
-                (num_rdma_bytes,),
-                dtype=torch.uint8,
-                device="cpu",
-                pin_memory=True,
+        if hasattr(ep, "get_rdma_buffer"):
+            # Allocate outside PyTorch's CUDA allocator so RDMA/IPC sees a raw
+            # cudaMalloc/cudaMallocHost-style allocation instead of a possibly
+            # segmented caching-allocator mapping.
+            scratch_dlpack, rdma_buffer_is_host_allocated = ep.get_rdma_buffer(
+                num_rdma_bytes, device_index
             )
+            self.scratch = torch.utils.dlpack.from_dlpack(scratch_dlpack)
         else:
-            # Device buffer for normal RDMA path. Keep a valid pointer even when RDMA is disabled.
-            self.scratch = torch.zeros(
-                max(num_rdma_bytes, 1), dtype=torch.uint8, device=f"cuda:{device_index}"
-            )
+            rdma_buffer_is_host_allocated = False
+            if num_rdma_bytes > 0:
+                if hasattr(ep, "can_register_rdma_gpu_buffer"):
+                    rdma_buffer_is_host_allocated = not bool(
+                        ep.can_register_rdma_gpu_buffer(device_index, num_rdma_bytes)
+                    )
+                elif hasattr(ep, "rdma_buffer_should_use_host_alloc"):
+                    rdma_buffer_is_host_allocated = bool(
+                        ep.rdma_buffer_should_use_host_alloc(
+                            device_index, num_rdma_bytes
+                        )
+                    )
+
+            if num_rdma_bytes > 0 and rdma_buffer_is_host_allocated:
+                # Host-pinned fallback for platforms/NICs that cannot register GPU memory.
+                self.scratch = torch.zeros(
+                    (num_rdma_bytes,),
+                    dtype=torch.uint8,
+                    device="cpu",
+                    pin_memory=True,
+                )
+            else:
+                # Device buffer for normal RDMA path. Keep a valid pointer even when RDMA is disabled.
+                self.scratch = torch.zeros(
+                    max(num_rdma_bytes, 1),
+                    dtype=torch.uint8,
+                    device=f"cuda:{device_index}",
+                )
 
         rdma_buffer_ptr = self.scratch.data_ptr()
         self.proxies, self.workers = initialize_uccl(
