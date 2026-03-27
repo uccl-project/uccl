@@ -28,7 +28,14 @@ enum class DataType : uint64_t {
   Fp64,
   Bf16
 };
-enum class ReduceType : uint64_t { Sum, Prod, Max, Min, BitwiseAnd, None };
+enum class ReduceType : uint64_t {
+  None,
+  Sum,
+  Prod,
+  Max,
+  Min,
+  BitwiseAnd,
+};
 
 inline bool is_supported_reduce_dtype(DataType dt) {
   return dt == DataType::Int8 || dt == DataType::Int32 ||
@@ -111,8 +118,16 @@ struct alignas(16) TaskArgs {
   int32_t dst_rank;
   int32_t src_device;
   int32_t dst_device;
-  ReduceType redType;
+  uint64_t redTypeRaw = static_cast<uint64_t>(ReduceType::None);
   uint64_t reserved0 = 0;
+
+  __host__ __device__ ReduceType red_type() const {
+    return static_cast<ReduceType>(redTypeRaw);
+  }
+
+  __host__ __device__ void set_red_type(ReduceType type) {
+    redTypeRaw = static_cast<uint64_t>(type);
+  }
 };
 static_assert(sizeof(TaskArgs) % 16 == 0,
               "TaskArgs should be 16B aligned size");
@@ -161,7 +176,7 @@ class TaskManager {
                    uint32_t blockId) {
     assert(tt == TaskType::CollCopy || tt == TaskType::CollReduce);
     assert(tt != TaskType::CollReduce || is_supported_reduce_dtype(dt));
-    assert(tt != TaskType::CollReduce || h.redType != ReduceType::None);
+    assert(tt != TaskType::CollReduce || h.red_type() != ReduceType::None);
 
     uint32_t idx;
     {

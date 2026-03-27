@@ -75,7 +75,7 @@ __device__ void run_reduce(TaskArgs const& a, uint32_t block_id,
                                 : count_per_block;
 
   read_reduce_store<T>(dst + block_offset, src + block_offset,
-                       static_cast<size_t>(my_count), a.redType, smem_buf);
+                       static_cast<size_t>(my_count), a.red_type(), smem_buf);
 }
 
 __device__ __forceinline__ void process_task(Task const& task,
@@ -263,7 +263,7 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
                    &d_sync->completedBlocks, mscclpp::memoryOrderAcquire) <
                gridDim.x) {
         }
-        __threadfence();
+        // __threadfence();
         fifo.pop();
         mscclpp::atomicStore<uint32_t, mscclpp::scopeDevice>(
             &d_sync->publishedPhase, local_phase + 2,

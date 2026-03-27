@@ -164,7 +164,7 @@ BackendToken DeviceBackend::submit(ExecOp const& op) {
       op.src_device >= 0 ? op.src_device : local_device_idx_;
   args.dst_device =
       op.dst_device >= 0 ? op.dst_device : local_device_idx_;
-  args.redType = ::UKernel::CCL::to_device_reduce_type(op.reduction);
+  args.set_red_type(::UKernel::CCL::to_device_reduce_type(op.reduction));
 
   Device::TaskType task_type = (op.kind == ExecOpKind::DeviceReduce)
                                    ? Device::TaskType::CollReduce

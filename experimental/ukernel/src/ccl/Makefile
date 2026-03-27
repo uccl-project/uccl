@@ -52,7 +52,7 @@ DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \
 DEVICE_CU_OBJ := device_persistent_kernel_ops.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
-TEST_BINS := test_components test_multiprocess_collective
+TEST_BINS := test_components test_device_backend test_transport_backend test_multiprocess_collective
 
 .PHONY: all test real_backends clean
 
@@ -60,6 +60,8 @@ all: $(TEST_BINS) real_backends
 
 test: all
 	./test_components
+	./test_device_backend
+	bash ./test/run_transport_backend_suite.sh ./test_transport_backend
 	bash ./test/run_ccl_multiprocess_suite.sh ./test_multiprocess_collective
 
 real_backends: $(REAL_BACKEND_OBJ)
@@ -75,6 +77,16 @@ test_multiprocess_collective: $(CCL_CORE_OBJ) backend/transport_backend.o \
 		test/test_multiprocess_collective.o $(UCCL_RDMA_STATIC)
 	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
 		$(TRANSPORT_LIBS) $(DEVICE_LIBS)
+
+test_device_backend: backend/device_backend.o $(DEVICE_OBJ) \
+		test/test_device_backend.o
+	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
+		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(DEVICE_LIBS) -lpthread
+
+test_transport_backend: backend/transport_backend.o $(TRANSPORT_OBJ) \
+		test/test_transport_backend.o $(UCCL_RDMA_STATIC)
+	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
+		$(TRANSPORT_LIBS)
 
 %.o: %.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
@@ -104,4 +116,5 @@ clean:
 -include $(CCL_CORE_OBJ:.o=.d) $(REAL_BACKEND_OBJ:.o=.d) \
 	$(REAL_EXECUTOR_OBJ:.o=.d) \
 	$(TRANSPORT_OBJ:.o=.d) $(DEVICE_OBJ:.o=.d) \
-	test/test_components.d test/test_multiprocess_collective.d
+	test/test_components.d test/test_device_backend.d \
+	test/test_transport_backend.d test/test_multiprocess_collective.d

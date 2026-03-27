@@ -67,7 +67,7 @@ int main(int argc, char** argv) {
   args_reduce.src = d_src_reduce;
   args_reduce.dst = d_dst_reduce;
   args_reduce.bytes = bytes;
-  args_reduce.redType = ReduceType::Sum;
+  args_reduce.set_red_type(ReduceType::Sum);
 
   Task copy_task = TaskManager::instance().create_task(
       args_copy, TaskType::CollCopy, DataType::Int8, 0);
