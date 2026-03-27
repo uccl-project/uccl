@@ -87,7 +87,7 @@ More UCCL features are under development in this repo, currently including:
   - ☐ Device kernels in vendor-agnostic Triton language
 - 🚧 Efficient consumer GPU communication
   - 🚧 Faster collectives on 4090/5090/GB10
-  - 🚧 Efficient expert-parallel communication on 4090/5090/GB10
+  - 🚧 Expert-parallel communication on 4090/5090/GB10
 
 ## Quick Start
 
