@@ -75,15 +75,15 @@ UCCL has been adopted as part of the AMD [TheRock](https://github.com/ROCm/TheRo
 More UCCL features are under development in this repo, currently including: 
 - ✅ More efficient KV cache transfer engine (e.g., better Mooncake)
   - ✅ Supporting AMD GPUs
-  - 🚧 Supporting RDMA (NVIDIA, Broadcom), AWS EFA, GCP TCPX, TCP
+  - ✅ Supporting RDMA (NVIDIA, Broadcom), AWS EFA, GCP TCPX, TCP
 - ✅ Efficient and portable expert-parallel communication
   - ✅ Supporting all NIC vendors, including Nvidia, AWS EFA, and Broadcom
   - ✅ Supporting AMD GPUs
-  - 🚧 Better flow control to avoid congestion
+  - ✅ Better flow control to avoid congestion
   - ☐ Supporting other AI accelerators, such as TPUs and Trainium.
 - 🚧 Re-architecting NCCL to unleash network hardware performance
   - 🚧 Scalable and efficient CPU proxy
-  - ☐ Fast async collectives with compute-communication ordering guarantee
+  - 🚧 Fast async collectives with compute-communication ordering guarantee
   - ☐ Device kernels in vendor-agnostic Triton language
 - ☐ Dynamic membership with GPU servers joining and exiting
 
