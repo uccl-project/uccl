@@ -27,7 +27,10 @@ __device__ __forceinline__ void copy(void* dst, void const* src, size_t count,
   } else {
     size_t chunk = (count + nthread - 1) / nthread;
     size_t start = tid * chunk;
-    size_t end = (tid + 1 == nthread) ? count : start + chunk;
+    if (start >= count) {
+      return;
+    }
+    size_t end = (start + chunk < count) ? (start + chunk) : count;
     for (size_t i = start; i < end; ++i) {
       static_cast<T*>(dst)[i] = static_cast<const T*>(src)[i];
     }
@@ -72,7 +75,10 @@ __device__ __forceinline__ void read_reduce_store(void* dst, void const* src,
     const T* src_ptr = static_cast<const T*>(src);
     size_t chunk = (count + nthread - 1) / nthread;
     size_t start = tid * chunk;
-    size_t end = (tid + 1 == nthread) ? count : start + chunk;
+    if (start >= count) {
+      return;
+    }
+    size_t end = (start + chunk < count) ? (start + chunk) : count;
     for (size_t i = start; i < end; ++i) {
       dst_ptr[i] = apply_reduce(dst_ptr[i], src_ptr[i], op);
     }

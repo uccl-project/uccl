@@ -161,7 +161,16 @@ TileRef make_tile(PlanRequest const& request, int owner_rank,
 }
 
 ScalarType op_dtype(PlanRequest const& request, PrimitiveOpKind kind) {
-  return kind == PrimitiveOpKind::Reduce ? request.dtype : ScalarType::UInt8;
+  switch (kind) {
+    case PrimitiveOpKind::Reduce:
+      return request.dtype;
+    case PrimitiveOpKind::Copy:
+      return ScalarType::Int8;
+    case PrimitiveOpKind::Send:
+    case PrimitiveOpKind::Recv:
+      return ScalarType::UInt8;
+  }
+  return ScalarType::UInt8;
 }
 
 ReductionKind op_reduction(PlanRequest const& request, PrimitiveOpKind kind) {

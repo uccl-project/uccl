@@ -180,6 +180,7 @@ __global__ void singlePersistentKernel(
     __syncthreads();
 
     if (threadIdx.x == 0) {
+      __threadfence();
       fifo.pop();
     }
     __syncthreads();
@@ -262,6 +263,7 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
                    &d_sync->completedBlocks, mscclpp::memoryOrderAcquire) <
                gridDim.x) {
         }
+        __threadfence();
         fifo.pop();
         mscclpp::atomicStore<uint32_t, mscclpp::scopeDevice>(
             &d_sync->publishedPhase, local_phase + 2,
