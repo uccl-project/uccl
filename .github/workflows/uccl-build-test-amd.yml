@@ -132,11 +132,7 @@ jobs:
 
           ssh -o BatchMode=yes amd0 << 'EOF' &
             set -euo pipefail
-            active_jobs=$(rocm-smi --showpids 2>/dev/null | grep -oE '\b[0-9]{3,}\b' | tr '\n' ' ' | xargs || true)
-            if [ -n "$active_jobs" ]; then
-                echo "amd0 node is currently used by processes with PID: $active_jobs"
-                exit 1
-            fi
+            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
             export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/p2p
@@ -151,11 +147,7 @@ jobs:
 
           ssh -o BatchMode=yes amd1 << 'EOF' &
             set -euo pipefail
-            active_jobs=$(rocm-smi --showpids 2>/dev/null | grep -oE '\b[0-9]{3,}\b' | tr '\n' ' ' | xargs || true)
-            if [ -n "$active_jobs" ]; then
-                echo "amd1 node is currently used by processes with PID: $active_jobs"
-                exit 1
-            fi
+            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
             export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/p2p
@@ -186,11 +178,7 @@ jobs:
 
           ssh -o BatchMode=yes amd0 << 'EOF' &
             set -euo pipefail
-            active_jobs=$(rocm-smi --showpids 2>/dev/null | grep -oE '\b[0-9]{3,}\b' | tr '\n' ' ' | xargs || true)
-            if [ -n "$active_jobs" ]; then
-                echo "amd0 node is currently used by processes with PID: $active_jobs"
-                exit 1
-            fi
+            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
             export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
@@ -202,11 +190,7 @@ jobs:
 
           ssh -o BatchMode=yes amd1 << 'EOF' &
             set -euo pipefail
-            active_jobs=$(rocm-smi --showpids 2>/dev/null | grep -oE '\b[0-9]{3,}\b' | tr '\n' ' ' | xargs || true)
-            if [ -n "$active_jobs" ]; then
-                echo "amd1 node is currently used by processes with PID: $active_jobs"
-                exit 1
-            fi
+            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
             export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
@@ -234,11 +218,7 @@ jobs:
 
           ssh -o BatchMode=yes amd0 << 'EOF' &
             set -euo pipefail
-            active_jobs=$(rocm-smi --showpids 2>/dev/null | grep -oE '\b[0-9]{3,}\b' | tr '\n' ' ' | xargs || true)
-            if [ -n "$active_jobs" ]; then
-                echo "amd0 node is currently used by processes with PID: $active_jobs"
-                exit 1
-            fi
+            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
             export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
@@ -250,11 +230,7 @@ jobs:
 
           ssh -o BatchMode=yes amd1 << 'EOF' &
             set -euo pipefail
-            active_jobs=$(rocm-smi --showpids 2>/dev/null | grep -oE '\b[0-9]{3,}\b' | tr '\n' ' ' | xargs || true)
-            if [ -n "$active_jobs" ]; then
-                echo "amd1 node is currently used by processes with PID: $active_jobs"
-                exit 1
-            fi
+            bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
             export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench

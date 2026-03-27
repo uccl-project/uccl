@@ -172,8 +172,8 @@ inline void stop_accept(RDMAEndPoint const& s) { s->stop_accept(); }
 
 inline bool uccl_regmr(RDMAEndPoint const& s, void* data, size_t len,
                        struct P2PMhandle* mhandle) {
-  return s->uccl_regmr(data, len, mhandle->mr_array, mhandle->compress_ctx) >=
-         0;
+  return s->uccl_regmr(data, len, mhandle->mr_array, mhandle->cache_refs,
+                       mhandle->compress_ctx) >= 0;
 }
 
 inline int uccl_send_async(RDMAEndPoint const& s, Conn* conn,
@@ -255,7 +255,7 @@ inline int prepare_fifo_metadata(RDMAEndPoint const& s, Conn* conn,
 }
 
 inline void uccl_deregmr(RDMAEndPoint const& s, P2PMhandle* mhandle) {
-  s->uccl_deregmr(mhandle->mr_array);
+  s->uccl_deregmr(mhandle->cache_refs);
 }
 
 inline bool initialize_rdma_ctx_for_gpu(RDMAEndPoint const& s, int dev) {
