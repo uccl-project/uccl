@@ -94,6 +94,7 @@ DeviceBackend::DeviceBackend(std::shared_ptr<CollectiveMemory> memory,
 }
 
 DeviceBackend::~DeviceBackend() {
+  ensure_device_context();
   completed_tokens_.clear();
   submitted_.clear();
   active_flows_.clear();
@@ -134,6 +135,7 @@ bool DeviceBackend::supports(ExecOpKind kind) const {
 }
 
 BackendToken DeviceBackend::submit(ExecOp const& op) {
+  ensure_device_context();
   if (!supports(op.kind)) {
     throw std::invalid_argument("unsupported op kind for device backend");
   }
@@ -188,15 +190,18 @@ BackendToken DeviceBackend::submit(ExecOp const& op) {
   }
 
   BackendToken token{next_token_++};
-  submitted_[token.value] = SubmittedTask{fifo_id, task_id, flow_id, false};
+  submitted_[token.value] =
+      SubmittedTask{fifo_id, task_id, flow_id, task.args_index(), false, false};
   return token;
 }
 
 bool DeviceBackend::poll(BackendToken token) {
+  ensure_device_context();
   auto it = submitted_.find(token.value);
   if (it == submitted_.end()) return true;
   bool done = worker_pool_->is_done(it->second.task_id, it->second.fifo_id);
   if (done && !it->second.completion_queued) {
+    release_task_args(it->second);
     it->second.completion_queued = true;
     completed_tokens_.push_back(token.value);
   }
@@ -204,11 +209,13 @@ bool DeviceBackend::poll(BackendToken token) {
 }
 
 bool DeviceBackend::try_pop_completed(BackendToken& token) {
+  ensure_device_context();
   if (completed_tokens_.empty()) {
     for (auto& [token_value, submitted] : submitted_) {
       if (submitted.completion_queued) continue;
       if (!worker_pool_->is_done(submitted.task_id, submitted.fifo_id))
         continue;
+      release_task_args(submitted);
       submitted.completion_queued = true;
       completed_tokens_.push_back(token_value);
     }
@@ -221,18 +228,26 @@ bool DeviceBackend::try_pop_completed(BackendToken& token) {
 }
 
 void DeviceBackend::release(BackendToken token) {
+  ensure_device_context();
   auto it = submitted_.find(token.value);
   if (it == submitted_.end()) return;
   uint32_t flow_id = it->second.flow_id;
+  bool const completed = it->second.args_released;
   submitted_.erase(it);
   auto flow_it = active_flows_.find(flow_id);
   if (flow_it == active_flows_.end()) return;
   if (flow_it->second.inflight > 0) {
     --flow_it->second.inflight;
   }
+  if (!completed && flow_it->second.inflight == 0) {
+    stop_flow(flow_id);
+  }
 }
 
-void DeviceBackend::stop(uint32_t flow_id) { stop_flow(flow_id); }
+void DeviceBackend::stop(uint32_t flow_id) {
+  ensure_device_context();
+  stop_flow(flow_id);
+}
 
 void* DeviceBackend::byte_offset(void* base, size_t offset) const {
   return static_cast<void*>(static_cast<char*>(base) + offset);
@@ -292,6 +307,7 @@ void const* DeviceBackend::resolve_const(BufferRef const& ref,
 }
 
 void DeviceBackend::ensure_runtime() {
+  ensure_device_context();
   if (!Device::TaskManager::instance().inited()) {
     Device::TaskManager::instance().init(config_.task_capacity);
     owns_task_manager_ = true;
@@ -309,6 +325,25 @@ void DeviceBackend::ensure_runtime() {
   for (uint32_t fifo_id = 0; fifo_id < cfg.numMaxWorkers; ++fifo_id) {
     free_fifos_.push_back(fifo_id);
   }
+}
+
+void DeviceBackend::ensure_device_context() const {
+  int current_device = -1;
+  GPU_RT_CHECK(gpuGetDevice(&current_device));
+  if (current_device != local_device_idx_) {
+    GPU_RT_CHECK(gpuSetDevice(local_device_idx_));
+  }
+}
+
+void DeviceBackend::release_task_args(SubmittedTask& task) {
+  if (task.args_released) {
+    return;
+  }
+  if (worker_pool_ != nullptr) {
+    worker_pool_->retireTask(task.fifo_id, task.task_id);
+  }
+  Device::TaskManager::instance().free_task_args(task.args_id);
+  task.args_released = true;
 }
 
 uint32_t DeviceBackend::acquire_fifo(uint32_t flow_id, uint32_t num_blocks) {
@@ -343,6 +378,12 @@ void DeviceBackend::stop_flow(uint32_t flow_id) {
   }
   uint32_t fifo_id = it->second.fifo_id;
   worker_pool_->destroyWorker(fifo_id);
+  for (auto& [_, submitted] : submitted_) {
+    if (submitted.flow_id != flow_id || submitted.args_released) {
+      continue;
+    }
+    release_task_args(submitted);
+  }
   free_fifos_.push_back(fifo_id);
   active_flows_.erase(it);
 }

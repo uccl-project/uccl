@@ -42,6 +42,8 @@ class DeviceBackend final : public Backend {
     uint32_t fifo_id;
     uint64_t task_id;
     uint32_t flow_id;
+    uint32_t args_id;
+    bool args_released = false;
     bool completion_queued = false;
   };
 
@@ -54,8 +56,10 @@ class DeviceBackend final : public Backend {
   void const* byte_offset(void const* base, size_t offset) const;
   void* resolve_mutable(BufferRef const& ref, size_t bytes) const;
   void const* resolve_const(BufferRef const& ref, size_t bytes) const;
+  void ensure_device_context() const;
   void ensure_runtime();
   uint32_t acquire_fifo(uint32_t flow_id, uint32_t num_blocks);
+  void release_task_args(SubmittedTask& task);
   void stop_flow(uint32_t flow_id);
   uint32_t suggested_num_blocks(ExecOp const& op) const;
 

@@ -42,6 +42,7 @@ class WorkerPool {
   void destroyWorker(uint32_t fifoId);
 
   uint64_t enqueue(Task const& task, uint32_t fifoId);
+  void retireTask(uint32_t fifoId, uint64_t taskId);
 
   void shutdown_all();
 
@@ -88,7 +89,6 @@ class WorkerPool {
   };
 
   void launchWorkerForFifo(size_t workerIndex);
-  void reclaimFinishedTasks(FifoContext& ctx, uint64_t currentTaskId);
   void reclaimAllPendingTasks(FifoContext& ctx);
 
   Config cfg_;

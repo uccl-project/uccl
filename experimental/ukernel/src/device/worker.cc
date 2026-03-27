@@ -155,7 +155,7 @@ void WorkerPool::destroyWorker(uint32_t fifoId) {
                              gpuMemcpyHostToDevice));
 
       GPU_RT_CHECK(gpuStreamSynchronize(workers_[i]->stream));
-      reclaimFinishedTasks(ctx, ctx.fifo.currentId());
+      reclaimAllPendingTasks(ctx);
       if (workers_[i]->d_multi_sync) {
         GPU_RT_CHECK(gpuFree(workers_[i]->d_multi_sync));
         workers_[i]->d_multi_sync = nullptr;
@@ -207,6 +207,15 @@ uint64_t WorkerPool::enqueue(Task const& task, uint32_t fifoId) {
   return taskId;
 }
 
+void WorkerPool::retireTask(uint32_t fifoId, uint64_t taskId) {
+  if (fifoId >= fifos_.size()) {
+    return;
+  }
+  auto& ctx = *fifos_[fifoId];
+  std::lock_guard<std::mutex> g(ctx.pending_mu);
+  ctx.pending.erase(taskId);
+}
+
 void WorkerPool::shutdown_all() {
   for (size_t i = 0; i < workers_.size(); ++i) {
     if (workers_[i]->launched) {
@@ -229,11 +238,7 @@ bool WorkerPool::is_done(uint64_t taskId, uint32_t fifoId) {
   auto& ctx = *fifos_[fifoId];
   uint64_t current = ctx.fifo.currentId();
 
-  if ((int64_t)(current - taskId) > 0) {
-    reclaimFinishedTasks(ctx, current);
-    return true;
-  }
-  return false;
+  return (int64_t)(current - taskId) > 0;
 }
 
 void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
@@ -269,35 +274,8 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
   worker.ready = true;
 }
 
-void WorkerPool::reclaimFinishedTasks(FifoContext& ctx,
-                                      uint64_t currentTaskId) {
-  std::lock_guard<std::mutex> g(ctx.pending_mu);
-  bool const task_manager_ready = TaskManager::instance().inited();
-  auto it = ctx.pending.begin();
-  while (it != ctx.pending.end()) {
-    uint64_t tid = it->first;
-    if ((int64_t)(currentTaskId - tid) > 0) {
-      PendingTask const& p = it->second;
-      if (task_manager_ready &&
-          (p.type == TaskType::CollCopy || p.type == TaskType::CollReduce)) {
-        TaskManager::instance().free_task_args(p.argsId);
-      }
-      it = ctx.pending.erase(it);
-    } else {
-      ++it;
-    }
-  }
-}
-
 void WorkerPool::reclaimAllPendingTasks(FifoContext& ctx) {
   std::lock_guard<std::mutex> g(ctx.pending_mu);
-  bool const task_manager_ready = TaskManager::instance().inited();
-  for (auto const& [_, pending] : ctx.pending) {
-    if (task_manager_ready && (pending.type == TaskType::CollCopy ||
-                               pending.type == TaskType::CollReduce)) {
-      TaskManager::instance().free_task_args(pending.argsId);
-    }
-  }
   ctx.pending.clear();
 }
 
