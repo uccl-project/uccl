@@ -6,6 +6,15 @@ namespace UKernel {
 namespace Device {
 
 WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
+  if (cfg_.controlStream) {
+    control_stream_ = cfg_.controlStream;
+    owns_control_stream_ = false;
+  } else {
+    GPU_RT_CHECK(
+        gpuStreamCreateWithFlags(&control_stream_, gpuStreamNonBlocking));
+    owns_control_stream_ = true;
+  }
+
   fifos_.reserve(cfg_.numMaxWorkers);
   for (uint32_t i = 0; i < cfg_.numMaxWorkers; ++i) {
     fifos_.emplace_back(std::make_unique<FifoContext>(cfg_.fifoCapacity));
@@ -29,19 +38,12 @@ WorkerPool::WorkerPool(Config const& config) : cfg_(config) {
     GPU_RT_CHECK(gpuMalloc(&d_stop, sizeof(bool)));
     GPU_RT_CHECK(gpuHostAlloc(&h_stop, sizeof(bool), gpuHostAllocMapped));
     *h_stop = false;
-    GPU_RT_CHECK(
-        gpuMemcpy(d_stop, h_stop, sizeof(bool), gpuMemcpyHostToDevice));
+    GPU_RT_CHECK(gpuMemcpyAsync(d_stop, h_stop, sizeof(bool),
+                                gpuMemcpyHostToDevice, control_stream_));
     d_stop_flags_.push_back(d_stop);
     h_stop_flags_.push_back(h_stop);
   }
-
-  if (cfg_.stream) {
-    stream_ = cfg_.stream;
-    owns_stream_ = false;
-  } else {
-    GPU_RT_CHECK(gpuStreamCreateWithFlags(&stream_, gpuStreamNonBlocking));
-    owns_stream_ = true;
-  }
+  GPU_RT_CHECK(gpuStreamSynchronize(control_stream_));
 }
 
 WorkerPool::~WorkerPool() {
@@ -69,8 +71,8 @@ WorkerPool::~WorkerPool() {
   d_stop_flags_.clear();
   h_stop_flags_.clear();
 
-  if (owns_stream_ && stream_) {
-    GPU_RT_CHECK(gpuStreamDestroy(stream_));
+  if (owns_control_stream_ && control_stream_) {
+    GPU_RT_CHECK(gpuStreamDestroy(control_stream_));
   }
 }
 
@@ -102,8 +104,10 @@ bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
       workers_[i]->numBlocks = numBlocks;
       workers_[i]->ready = false;
       *h_stop_flags_[i] = false;
-      GPU_RT_CHECK(gpuMemcpy(d_stop_flags_[i], h_stop_flags_[i], sizeof(bool),
-                             gpuMemcpyHostToDevice));
+      GPU_RT_CHECK(gpuMemcpyAsync(d_stop_flags_[i], h_stop_flags_[i],
+                                  sizeof(bool), gpuMemcpyHostToDevice,
+                                  control_stream_));
+      GPU_RT_CHECK(gpuStreamSynchronize(control_stream_));
       if (workers_[i]->d_multi_sync) {
         GPU_RT_CHECK(gpuFree(workers_[i]->d_multi_sync));
         workers_[i]->d_multi_sync = nullptr;
@@ -111,8 +115,9 @@ bool WorkerPool::createWorker(uint32_t fifoId, uint32_t numBlocks) {
       if (numBlocks > 1) {
         GPU_RT_CHECK(
             gpuMalloc(&workers_[i]->d_multi_sync, sizeof(MultiBlockSync)));
-        GPU_RT_CHECK(
-            gpuMemset(workers_[i]->d_multi_sync, 0, sizeof(MultiBlockSync)));
+        GPU_RT_CHECK(gpuMemsetAsync(workers_[i]->d_multi_sync, 0,
+                                    sizeof(MultiBlockSync),
+                                    workers_[i]->stream));
       }
       launchWorkerForFifo(i);
       workers_[i]->launched = true;
@@ -151,8 +156,10 @@ void WorkerPool::destroyWorker(uint32_t fifoId) {
   for (size_t i = 0; i < workers_.size(); ++i) {
     if (workers_[i]->fifoId == fifoId && workers_[i]->launched) {
       *h_stop_flags_[i] = true;
-      GPU_RT_CHECK(gpuMemcpy(d_stop_flags_[i], h_stop_flags_[i], sizeof(bool),
-                             gpuMemcpyHostToDevice));
+      GPU_RT_CHECK(gpuMemcpyAsync(d_stop_flags_[i], h_stop_flags_[i],
+                                  sizeof(bool), gpuMemcpyHostToDevice,
+                                  control_stream_));
+      GPU_RT_CHECK(gpuStreamSynchronize(control_stream_));
 
       GPU_RT_CHECK(gpuStreamSynchronize(workers_[i]->stream));
       reclaimAllPendingTasks(ctx);
@@ -171,7 +178,7 @@ void WorkerPool::destroyWorker(uint32_t fifoId) {
 
 uint64_t WorkerPool::enqueue(Task const& task, uint32_t fifoId) {
   if (fifoId >= fifos_.size()) {
-    return 0;
+    return kInvalidTaskId;
   }
 
   auto& ctx = *fifos_[fifoId];
@@ -187,15 +194,16 @@ uint64_t WorkerPool::enqueue(Task const& task, uint32_t fifoId) {
         "[ERROR] enqueue to fifo %u failed: no worker bound, call createWorker "
         "first\n",
         fifoId);
-    return 0;
+    return kInvalidTaskId;
   }
 
   // Check if there's space in FIFO without blocking initially
   uint64_t tail = ctx.fifo.currentId();
   uint64_t head = ctx.fifo.head();
   if ((int64_t)(head + 1 - tail) > cfg_.fifoCapacity) {
-    // FIFO is full, return 0 to indicate failure - caller can retry
-    return 0;
+    // FIFO is full, return an invalid task id to indicate failure so the
+    // caller can retry without confusing a valid task id of 0 with failure.
+    return kInvalidTaskId;
   }
 
   uint64_t taskId = ctx.fifo.push(task);

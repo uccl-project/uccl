@@ -19,12 +19,16 @@ struct MultiBlockSync;
 
 class WorkerPool {
  public:
+  static constexpr uint64_t kInvalidTaskId = ~uint64_t{0};
+
   struct Config {
     uint32_t numMaxWorkers = 16;
     uint32_t threadsPerBlock = 64;
     uint32_t fifoCapacity = 16;
     uint32_t smemSize = 0;
-    gpuStream_t stream = nullptr;
+    // Control stream used for host-driven bookkeeping copies such as stop
+    // flags. Persistent worker kernels still run on per-worker streams.
+    gpuStream_t controlStream = nullptr;
   };
 
   struct WorkerSpec {
@@ -48,7 +52,7 @@ class WorkerPool {
 
   bool is_done(uint64_t taskId, uint32_t fifoId);
 
-  gpuStream_t stream() const { return stream_; }
+  gpuStream_t control_stream() const { return control_stream_; }
 
   uint32_t num_fifos() const { return static_cast<uint32_t>(fifos_.size()); }
 
@@ -83,6 +87,7 @@ class WorkerPool {
     uint32_t numBlocks;
     bool launched;
     bool ready;
+    // Dedicated execution stream for the worker's persistent kernel.
     gpuStream_t stream = nullptr;
     mscclpp::C2DDeviceHandle<Task>* d_fifo_handle = nullptr;
     MultiBlockSync* d_multi_sync = nullptr;
@@ -95,8 +100,10 @@ class WorkerPool {
   std::vector<std::unique_ptr<FifoContext>> fifos_;
   std::vector<std::unique_ptr<WorkerContext>> workers_;
 
-  gpuStream_t stream_ = nullptr;
-  bool owns_stream_ = false;
+  // Control stream for host-driven runtime coordination. This is distinct from
+  // the per-worker execution streams stored in WorkerContext.
+  gpuStream_t control_stream_ = nullptr;
+  bool owns_control_stream_ = false;
 
   std::vector<bool*> d_stop_flags_;
   std::vector<bool*> h_stop_flags_;

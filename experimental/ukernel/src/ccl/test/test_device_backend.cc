@@ -1,10 +1,12 @@
 #include "../backend/device_backend.h"
 #include "../../include/gpu_rt.h"
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -64,6 +66,18 @@ std::vector<float> download_floats(void const* src, size_t bytes) {
   std::vector<float> out(bytes / sizeof(float), 0.0f);
   GPU_RT_CHECK(gpuMemcpy(out.data(), src, bytes, gpuMemcpyDeviceToHost));
   GPU_RT_CHECK(gpuDeviceSynchronize());
+  return out;
+}
+
+std::string preview(std::vector<float> const& values, size_t count = 4) {
+  std::string out = "[";
+  size_t const limit = std::min(count, values.size());
+  for (size_t i = 0; i < limit; ++i) {
+    if (i != 0) out += ", ";
+    out += std::to_string(values[i]);
+  }
+  if (values.size() > limit) out += ", ...";
+  out += "]";
   return out;
 }
 
@@ -173,12 +187,70 @@ void test_device_reduce_sum() {
   wait_for_token(backend, token, std::chrono::seconds(5));
   backend.release(token);
   backend.stop(0);
+  std::vector<float> out = download_floats(tensor.ptr, kBytes);
+  std::vector<float> staging_after = download_floats(staging.ptr, kBytes);
+  for (size_t i = 0; i < kElems; ++i) {
+    float expected = dst_init[i] + src[i];
+    require(std::fabs(out[i] - expected) < 1e-5f,
+            "device reduce mismatch at index " + std::to_string(i) +
+                ", got=" + std::to_string(out[i]) +
+                ", expected=" + std::to_string(expected) +
+                ", dst_init=" + preview(dst_init) + ", src=" + preview(src) +
+                ", staging_after=" + preview(staging_after) +
+                ", out=" + preview(out));
+  }
+}
+
+void test_device_reduce_pipeline_same_flow() {
+  std::printf("[test] device backend reduce pipeline on one flow...\n");
+  constexpr size_t kTileElems = (64 << 10) / sizeof(float);
+  constexpr size_t kTiles = 4;
+  constexpr size_t kElems = kTileElems * kTiles;
+  constexpr size_t kBytes = kElems * sizeof(float);
+
+  DeviceBuffer tensor(kBytes);
+  DeviceBuffer staging(kBytes);
+  std::vector<float> dst_init(kElems, 0.0f);
+  std::vector<float> src(kElems, 0.0f);
+  for (size_t i = 0; i < kElems; ++i) {
+    dst_init[i] = static_cast<float>(2000 + i);
+    src[i] = static_cast<float>(1000 + 2 * i);
+  }
+  upload_floats(tensor.ptr, dst_init);
+  upload_floats(staging.ptr, src);
+
+  auto memory = make_memory(0, tensor.ptr, kBytes, staging.ptr, kBytes);
+  DeviceBackend backend(memory);
+
+  std::vector<BackendToken> tokens;
+  tokens.reserve(kTiles);
+  for (size_t tile = 0; tile < kTiles; ++tile) {
+    ExecOp op;
+    op.op_id = static_cast<uint32_t>(tile);
+    op.kind = ExecOpKind::DeviceReduce;
+    op.tile.flow_index = 0;
+    op.tile.offset_bytes = tile * kTileElems * sizeof(float);
+    op.tile.size_bytes = kTileElems * sizeof(float);
+    op.src.kind = BufferKind::Staging;
+    op.src.offset_bytes = op.tile.offset_bytes;
+    op.dst.kind = BufferKind::Tensor;
+    op.dst.offset_bytes = op.tile.offset_bytes;
+    op.dtype = ScalarType::Float32;
+    op.reduction = ReductionKind::Sum;
+    tokens.push_back(backend.submit(op));
+  }
+
+  for (BackendToken token : tokens) {
+    wait_for_token(backend, token, std::chrono::seconds(5));
+    backend.release(token);
+  }
+  backend.stop(0);
 
   std::vector<float> out = download_floats(tensor.ptr, kBytes);
   for (size_t i = 0; i < kElems; ++i) {
     float expected = dst_init[i] + src[i];
     require(std::fabs(out[i] - expected) < 1e-5f,
-            "device reduce mismatch at index " + std::to_string(i) +
+            "device reduce pipeline mismatch at index " + std::to_string(i) +
                 ", got=" + std::to_string(out[i]) +
                 ", expected=" + std::to_string(expected));
   }
@@ -195,6 +267,7 @@ int main() {
     std::printf("=== Device Backend Tests ===\n\n");
     UKernel::CCL::test_device_copy();
     UKernel::CCL::test_device_reduce_sum();
+    UKernel::CCL::test_device_reduce_pipeline_same_flow();
     std::printf("\n=== Device backend tests PASSED ===\n");
     return 0;
   } catch (std::exception const& ex) {

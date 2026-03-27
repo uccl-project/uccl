@@ -52,6 +52,21 @@ void require(bool cond, std::string const& msg) {
   if (!cond) fail(msg);
 }
 
+std::string preview_window(std::vector<float> const& host, size_t index,
+                           size_t radius = 2) {
+  if (host.empty()) return "[]";
+  size_t begin = index > radius ? index - radius : 0;
+  size_t end = std::min(host.size(), index + radius + 1);
+  std::string out = "[";
+  for (size_t i = begin; i < end; ++i) {
+    if (i != begin) out += ", ";
+    out += std::to_string(host[i]);
+    if (i == index) out += "*";
+  }
+  out += "]";
+  return out;
+}
+
 int create_tcp_server(int port) {
   int fd = ::socket(AF_INET, SOCK_STREAM, 0);
   require(fd >= 0, "failed to create barrier server socket");
@@ -291,7 +306,10 @@ void verify_allreduce_output(std::vector<float> const& host, int nranks) {
       expected += static_cast<float>(rank * 1000) + static_cast<float>(i);
     }
     require(std::fabs(host[i] - expected) < 1e-3f,
-            "allreduce output mismatch at index " + std::to_string(i));
+            "allreduce output mismatch at index " + std::to_string(i) +
+                ", got=" + std::to_string(host[i]) +
+                ", expected=" + std::to_string(expected) +
+                ", window=" + preview_window(host, i));
   }
 }
 

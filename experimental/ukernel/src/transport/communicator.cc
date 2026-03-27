@@ -762,8 +762,36 @@ void Communicator::register_existing_local_mrs_with_uccl() {
 bool Communicator::ensure_uccl_memory_registered(uint64_t mr_id, void* ptr,
                                                  size_t len) {
   if (!uccl_adapter_ || !uccl_adapter_->is_initialized()) return false;
-  return uccl_adapter_->is_memory_registered(mr_id) ||
-         uccl_adapter_->register_memory(mr_id, ptr, len);
+  if (uccl_adapter_->is_memory_registered(mr_id)) return true;
+
+  void* base_ptr = ptr;
+  size_t mr_len = len;
+
+  // Normal device tensor/staging MRs are tracked in MemoryRegistry by id.
+  // Host bounce buffers use synthetic ids that are not, so fall back to the
+  // explicit ptr/len provided by the caller in that case.
+  try {
+    MR mr = get_local_mr(static_cast<uint32_t>(mr_id));
+    base_ptr = reinterpret_cast<void*>(static_cast<uintptr_t>(mr.address));
+    mr_len = static_cast<size_t>(mr.length);
+  } catch (std::exception const&) {
+  }
+
+  if (base_ptr == nullptr || mr_len == 0) {
+    std::cerr << "[ERROR] Communicator " << global_rank_
+              << " has invalid base pointer or length for UCCL registration, "
+              << "mr_id=" << mr_id << std::endl;
+    return false;
+  }
+
+  bool ok = uccl_adapter_->register_memory(mr_id, base_ptr, mr_len);
+  if (!ok) {
+    std::cerr << "[ERROR] Communicator " << global_rank_
+              << " failed to register local MR " << mr_id
+              << " with UCCL, base=" << base_ptr
+              << " len=" << mr_len << std::endl;
+  }
+  return ok;
 }
 
 bool Communicator::complete_host_bounce_recv(TrackedRequest& tracked) {

@@ -172,17 +172,20 @@ BackendToken DeviceBackend::submit(ExecOp const& op) {
 
   uint32_t flow_id = op.tile.flow_index;
   uint32_t fifo_id = acquire_fifo(flow_id, suggested_num_blocks(op));
-  Device::Task task = Device::TaskManager::instance().create_task(
-      args, task_type, ::UKernel::CCL::to_device_dtype(op.dtype), 0);
+  Device::DataType dtype = ::UKernel::CCL::to_device_dtype(op.dtype);
+  Device::Task task =
+      Device::TaskManager::instance().create_task(args, task_type, dtype, 0);
 
-  uint64_t task_id = 0;
-  for (int retry = 0; retry < 1000 && task_id == 0; ++retry) {
+  uint64_t task_id = Device::WorkerPool::kInvalidTaskId;
+  for (int retry = 0; retry < 1000 &&
+                      task_id == Device::WorkerPool::kInvalidTaskId;
+       ++retry) {
     task_id = worker_pool_->enqueue(task, fifo_id);
-    if (task_id == 0) {
+    if (task_id == Device::WorkerPool::kInvalidTaskId) {
       std::this_thread::sleep_for(std::chrono::microseconds(5));
     }
   }
-  if (task_id == 0) {
+  if (task_id == Device::WorkerPool::kInvalidTaskId) {
     active_flows_[flow_id].inflight--;
     stop_flow(flow_id);
     Device::TaskManager::instance().free_task_args(task.args_index());

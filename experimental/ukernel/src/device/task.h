@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <type_traits>
 #include <mutex>
 #include <vector>
 
@@ -131,6 +132,26 @@ struct alignas(16) TaskArgs {
 };
 static_assert(sizeof(TaskArgs) % 16 == 0,
               "TaskArgs should be 16B aligned size");
+static_assert(std::is_standard_layout<TaskArgs>::value,
+              "TaskArgs must remain a standard-layout ABI struct");
+static_assert(sizeof(TaskArgs) == 64, "TaskArgs ABI size changed");
+static_assert(alignof(TaskArgs) == 16, "TaskArgs ABI alignment changed");
+static_assert(offsetof(TaskArgs, src) == 0, "TaskArgs.src offset changed");
+static_assert(offsetof(TaskArgs, src2) == 8, "TaskArgs.src2 offset changed");
+static_assert(offsetof(TaskArgs, dst) == 16, "TaskArgs.dst offset changed");
+static_assert(offsetof(TaskArgs, bytes) == 24, "TaskArgs.bytes offset changed");
+static_assert(offsetof(TaskArgs, src_rank) == 32,
+              "TaskArgs.src_rank offset changed");
+static_assert(offsetof(TaskArgs, dst_rank) == 36,
+              "TaskArgs.dst_rank offset changed");
+static_assert(offsetof(TaskArgs, src_device) == 40,
+              "TaskArgs.src_device offset changed");
+static_assert(offsetof(TaskArgs, dst_device) == 44,
+              "TaskArgs.dst_device offset changed");
+static_assert(offsetof(TaskArgs, redTypeRaw) == 48,
+              "TaskArgs.redTypeRaw offset changed");
+static_assert(offsetof(TaskArgs, reserved0) == 56,
+              "TaskArgs.reserved0 offset changed");
 
 class TaskManager {
  public:

@@ -40,7 +40,8 @@ int main(int argc, char** argv) {
   std::vector<float> h_src_reduce(count);
   std::vector<float> h_dst_reduce_init(count, 0.0f);
   for (size_t i = 0; i < count; i++) {
-    h_src_reduce[i] = static_cast<float>(i);
+    h_src_reduce[i] = static_cast<float>(i + 1);
+    h_dst_reduce_init[i] = static_cast<float>(1000 + i);
   }
 
   GPU_RT_CHECK(
@@ -109,9 +110,10 @@ int main(int argc, char** argv) {
   bool reduce_match = true;
   float* dst_reduce_float = reinterpret_cast<float*>(h_dst_reduce.data());
   for (size_t i = 0; i < count; i++) {
-    if (abs(dst_reduce_float[i] - h_src_reduce[i]) > 0.01f) {
+    float expected = h_dst_reduce_init[i] + h_src_reduce[i];
+    if (abs(dst_reduce_float[i] - expected) > 0.01f) {
       std::cerr << "Reduce mismatch at " << i << ": got " << dst_reduce_float[i]
-                << ", expected " << h_src_reduce[i] << std::endl;
+                << ", expected " << expected << std::endl;
       reduce_match = false;
       break;
     }

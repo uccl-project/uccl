@@ -180,7 +180,7 @@ __global__ void singlePersistentKernel(
     __syncthreads();
 
     if (threadIdx.x == 0) {
-      __threadfence();
+      // __threadfence();
       fifo.pop();
     }
     __syncthreads();

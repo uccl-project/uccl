@@ -167,7 +167,11 @@ int UcclTransportAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
   {
     std::lock_guard<std::mutex> lk(mu_);
     auto peer_it = peer_contexts_.find(peer_rank);
-    if (peer_it == peer_contexts_.end()) return -1;
+    if (peer_it == peer_contexts_.end()) {
+      std::cerr << "[ERROR] UCCL send_async missing peer context for rank "
+                << peer_rank << " request " << request_id << std::endl;
+      return -1;
+    }
     flow = peer_it->second.send_flow;
 
     auto mh_it = mr_id_to_mhandle_.find(local_mr_id);
@@ -176,7 +180,14 @@ int UcclTransportAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
     }
   }
 
-  if (!flow || !local_mh) return -1;
+  if (!flow || !local_mh) {
+    std::cerr << "[ERROR] UCCL send_async missing "
+              << (!flow ? "send flow" : "memory handle")
+              << " for peer " << peer_rank << ", request " << request_id
+              << ", mr_id " << local_mr_id << ", len " << len
+              << ", ptr " << local_ptr << std::endl;
+    return -1;
+  }
 
   auto ureq = std::make_unique<::uccl::ucclRequest>();
   auto deadline = std::chrono::steady_clock::now() + kUcclAsyncRetryTimeout;
@@ -187,7 +198,12 @@ int UcclTransportAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
     if (ret == 0) break;
     std::this_thread::sleep_for(kUcclRetrySleep);
   }
-  if (ret != 0) return -1;
+  if (ret != 0) {
+    std::cerr << "[ERROR] UCCL send_async submit failed for peer " << peer_rank
+              << ", request " << request_id << ", mr_id " << local_mr_id
+              << ", len " << len << ", ptr " << local_ptr << std::endl;
+    return -1;
+  }
 
   {
     std::lock_guard<std::mutex> lk(mu_);
@@ -205,7 +221,11 @@ int UcclTransportAdapter::recv_async(int peer_rank, void* local_ptr, size_t len,
   {
     std::lock_guard<std::mutex> lk(mu_);
     auto peer_it = peer_contexts_.find(peer_rank);
-    if (peer_it == peer_contexts_.end()) return -1;
+    if (peer_it == peer_contexts_.end()) {
+      std::cerr << "[ERROR] UCCL recv_async missing peer context for rank "
+                << peer_rank << " request " << request_id << std::endl;
+      return -1;
+    }
     flow = peer_it->second.recv_flow;
 
     auto mh_it = mr_id_to_mhandle_.find(local_mr_id);
@@ -214,7 +234,14 @@ int UcclTransportAdapter::recv_async(int peer_rank, void* local_ptr, size_t len,
     }
   }
 
-  if (!flow || !local_mh) return -1;
+  if (!flow || !local_mh) {
+    std::cerr << "[ERROR] UCCL recv_async missing "
+              << (!flow ? "recv flow" : "memory handle")
+              << " for peer " << peer_rank << ", request " << request_id
+              << ", mr_id " << local_mr_id << ", len " << len
+              << ", ptr " << local_ptr << std::endl;
+    return -1;
+  }
 
   auto ureq = std::make_unique<::uccl::ucclRequest>();
   ::uccl::Mhandle* mh_array[1] = {local_mh};
@@ -229,7 +256,12 @@ int UcclTransportAdapter::recv_async(int peer_rank, void* local_ptr, size_t len,
     if (ret == 0) break;
     std::this_thread::sleep_for(kUcclRetrySleep);
   }
-  if (ret != 0) return -1;
+  if (ret != 0) {
+    std::cerr << "[ERROR] UCCL recv_async submit failed for peer " << peer_rank
+              << ", request " << request_id << ", mr_id " << local_mr_id
+              << ", len " << len << ", ptr " << local_ptr << std::endl;
+    return -1;
+  }
 
   {
     std::lock_guard<std::mutex> lk(mu_);

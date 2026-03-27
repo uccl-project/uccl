@@ -2,9 +2,14 @@
 #include "backend_test_utils.h"
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <deque>
+#include <string>
 #include <stdexcept>
 #include <thread>
+#include <unordered_map>
+#include <vector>
 
 namespace UKernel {
 namespace CCL {
@@ -21,6 +26,218 @@ bool wait_until_terminal(Executor& executor, CollectiveOpHandle handle,
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   return executor.poll(handle);
+}
+
+struct SimRankState {
+  CollectivePlan plan;
+  std::vector<float> tensor;
+  std::vector<float> staging;
+  std::vector<uint32_t> remaining_deps;
+  std::vector<std::vector<uint32_t>> successors;
+  std::vector<bool> completed;
+  std::vector<bool> recv_posted;
+  std::unordered_map<uint32_t, uint64_t> send_seq;
+  std::unordered_map<uint32_t, uint64_t> recv_seq;
+};
+
+uint64_t make_match_key(int src_rank, int dst_rank, uint64_t seq) {
+  return (static_cast<uint64_t>(static_cast<uint32_t>(src_rank)) << 48) ^
+         (static_cast<uint64_t>(static_cast<uint32_t>(dst_rank)) << 32) ^ seq;
+}
+
+float* local_buffer_ptr(SimRankState& state, BufferRef const& ref) {
+  switch (ref.kind) {
+    case BufferKind::Tensor:
+      return state.tensor.data() + ref.offset_bytes / sizeof(float);
+    case BufferKind::Staging:
+      return state.staging.data() + ref.offset_bytes / sizeof(float);
+    case BufferKind::PeerTensor:
+    case BufferKind::PeerStaging:
+      break;
+  }
+  throw std::invalid_argument("peer ref is not addressable as a local buffer");
+}
+
+float const* local_buffer_ptr(SimRankState const& state, BufferRef const& ref) {
+  switch (ref.kind) {
+    case BufferKind::Tensor:
+      return state.tensor.data() + ref.offset_bytes / sizeof(float);
+    case BufferKind::Staging:
+      return state.staging.data() + ref.offset_bytes / sizeof(float);
+    case BufferKind::PeerTensor:
+    case BufferKind::PeerStaging:
+      break;
+  }
+  throw std::invalid_argument("peer ref is not addressable as a local buffer");
+}
+
+void complete_sim_op(SimRankState& state, uint32_t op_id) {
+  if (state.completed[op_id]) return;
+  state.completed[op_id] = true;
+  for (uint32_t succ : state.successors[op_id]) {
+    assert(state.remaining_deps[succ] > 0);
+    --state.remaining_deps[succ];
+  }
+}
+
+void build_sim_state_dependencies(SimRankState& state) {
+  size_t nops = state.plan.ops.size();
+  state.remaining_deps.assign(nops, 0);
+  state.successors.assign(nops, {});
+  state.completed.assign(nops, false);
+  state.recv_posted.assign(nops, false);
+  for (size_t i = 0; i < nops; ++i) {
+    state.remaining_deps[i] =
+        static_cast<uint32_t>(state.plan.ops[i].deps.size());
+    for (uint32_t dep : state.plan.ops[i].deps) {
+      state.successors[dep].push_back(static_cast<uint32_t>(i));
+    }
+  }
+
+  std::vector<uint64_t> next_send_seq(static_cast<size_t>(state.plan.nranks), 1);
+  std::vector<uint64_t> next_recv_seq(static_cast<size_t>(state.plan.nranks), 1);
+  for (auto const& op : state.plan.ops) {
+    if (op.kind == PrimitiveOpKind::Send) {
+      int peer = op.dst.rank;
+      assert(peer >= 0 && peer < state.plan.nranks);
+      state.send_seq.emplace(op.op_id, next_send_seq[static_cast<size_t>(peer)]++);
+    } else if (op.kind == PrimitiveOpKind::Recv) {
+      int peer = op.src.rank;
+      assert(peer >= 0 && peer < state.plan.nranks);
+      state.recv_seq.emplace(op.op_id, next_recv_seq[static_cast<size_t>(peer)]++);
+    }
+  }
+}
+
+std::string simulate_three_rank_allreduce_and_find_error() {
+  constexpr int kNranks = 3;
+  constexpr size_t kTensorBytes = 1048572;
+  constexpr size_t kTileBytes = 64 << 10;
+
+  std::vector<SimRankState> ranks;
+  ranks.reserve(kNranks);
+  for (int rank = 0; rank < kNranks; ++rank) {
+    CollectiveConfig cfg =
+        Testing::make_test_config(kNranks, rank, kTensorBytes, kTileBytes, 1);
+    cfg.dtype = ScalarType::Float32;
+    cfg.reduction = ReductionKind::Sum;
+
+    SimRankState state;
+    state.plan =
+        build_plan(make_plan_request(CollectiveKind::AllReduce, cfg));
+    size_t nelems = kTensorBytes / sizeof(float);
+    state.tensor.resize(nelems, 0.0f);
+    state.staging.resize(kTileBytes / sizeof(float), 0.0f);
+    for (size_t i = 0; i < nelems; ++i) {
+      state.tensor[i] = static_cast<float>(rank * 1000) + static_cast<float>(i);
+    }
+    build_sim_state_dependencies(state);
+    ranks.push_back(std::move(state));
+  }
+
+  struct PostedRecv {
+    int dst_rank = -1;
+    uint32_t recv_op_id = 0;
+  };
+  std::unordered_map<uint64_t, PostedRecv> posted_recvs;
+
+  bool progress = true;
+  while (progress) {
+    progress = false;
+    for (int rank = 0; rank < kNranks; ++rank) {
+      SimRankState& state = ranks[rank];
+      for (size_t op_id = 0; op_id < state.plan.ops.size(); ++op_id) {
+        if (state.completed[op_id] || state.remaining_deps[op_id] != 0) {
+          continue;
+        }
+        PrimitiveOp const& op = state.plan.ops[op_id];
+        switch (op.kind) {
+          case PrimitiveOpKind::Recv: {
+            if (state.recv_posted[op_id]) continue;
+            auto seq_it = state.recv_seq.find(static_cast<uint32_t>(op_id));
+            assert(seq_it != state.recv_seq.end());
+            uint64_t key =
+                make_match_key(op.src.rank, rank, seq_it->second);
+            auto [_, inserted] = posted_recvs.emplace(
+                key, PostedRecv{rank, static_cast<uint32_t>(op_id)});
+            assert(inserted && "duplicate posted recv in simulator");
+            state.recv_posted[op_id] = true;
+            progress = true;
+            break;
+          }
+          case PrimitiveOpKind::Send: {
+            auto seq_it = state.send_seq.find(static_cast<uint32_t>(op_id));
+            assert(seq_it != state.send_seq.end());
+            uint64_t key =
+                make_match_key(rank, op.dst.rank, seq_it->second);
+            auto posted_it = posted_recvs.find(key);
+            if (posted_it == posted_recvs.end()) continue;
+
+            PostedRecv posted = posted_it->second;
+            SimRankState& dst_state = ranks[posted.dst_rank];
+            PrimitiveOp const& recv_op = dst_state.plan.ops[posted.recv_op_id];
+            assert(recv_op.kind == PrimitiveOpKind::Recv);
+            assert(recv_op.src.rank == rank);
+            assert(recv_op.tile.size_bytes == op.tile.size_bytes);
+
+            size_t count = op.tile.size_bytes / sizeof(float);
+            float const* src_ptr = local_buffer_ptr(state, op.src);
+            float* dst_ptr = local_buffer_ptr(dst_state, recv_op.dst);
+            std::copy(src_ptr, src_ptr + count, dst_ptr);
+
+            posted_recvs.erase(posted_it);
+            complete_sim_op(state, static_cast<uint32_t>(op_id));
+            complete_sim_op(dst_state, posted.recv_op_id);
+            progress = true;
+            break;
+          }
+          case PrimitiveOpKind::Copy: {
+            size_t count = op.tile.size_bytes / sizeof(float);
+            float const* src_ptr = local_buffer_ptr(state, op.src);
+            float* dst_ptr = local_buffer_ptr(state, op.dst);
+            std::copy(src_ptr, src_ptr + count, dst_ptr);
+            complete_sim_op(state, static_cast<uint32_t>(op_id));
+            progress = true;
+            break;
+          }
+          case PrimitiveOpKind::Reduce: {
+            size_t count = op.tile.size_bytes / sizeof(float);
+            float const* src_ptr = local_buffer_ptr(state, op.src);
+            float* dst_ptr = local_buffer_ptr(state, op.dst);
+            for (size_t i = 0; i < count; ++i) {
+              dst_ptr[i] += src_ptr[i];
+            }
+            complete_sim_op(state, static_cast<uint32_t>(op_id));
+            progress = true;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  for (int rank = 0; rank < kNranks; ++rank) {
+    SimRankState const& state = ranks[rank];
+    for (size_t op_id = 0; op_id < state.plan.ops.size(); ++op_id) {
+      if (!state.completed[op_id]) {
+        return "simulator stalled before completing all ops";
+      }
+    }
+    for (size_t i = 0; i < state.tensor.size(); ++i) {
+      float expected = 0.0f;
+      for (int src_rank = 0; src_rank < kNranks; ++src_rank) {
+        expected += static_cast<float>(src_rank * 1000) + static_cast<float>(i);
+      }
+      if (std::fabs(state.tensor[i] - expected) >= 1e-3f) {
+        return "rank " + std::to_string(rank) + " mismatch at index " +
+               std::to_string(i) + ", got=" +
+               std::to_string(state.tensor[i]) + ", expected=" +
+               std::to_string(expected);
+      }
+    }
+  }
+
+  return {};
 }
 
 void test_lowering_routes_ops_to_execution_kinds() {
@@ -95,6 +312,12 @@ void test_two_rank_ring_allreduce_rotates_reduced_shard_in_allgather() {
   assert(ag_send.tile.owner_rank == 1);
   assert(ag_recv.kind == PrimitiveOpKind::Recv);
   assert(ag_recv.tile.owner_rank == 0);
+}
+
+void test_three_rank_ring_allreduce_simulator_handles_multi_tile_case() {
+  printf("[test] three-rank ring allreduce simulator handles multi-tile case...\n");
+  std::string error = simulate_three_rank_allreduce_and_find_error();
+  assert(error.empty() && "three-rank multi-tile allreduce simulation failed");
 }
 
 void test_lowering_preserves_dependency_dag() {
@@ -194,6 +417,7 @@ int main() {
   test_lowering_routes_ops_to_execution_kinds();
   test_planner_emits_valid_collective_dags();
   test_two_rank_ring_allreduce_rotates_reduced_shard_in_allgather();
+  test_three_rank_ring_allreduce_simulator_handles_multi_tile_case();
   test_lowering_preserves_dependency_dag();
   test_executor_completes_collectives_with_background_progress();
   test_executor_queues_collectives_serially();

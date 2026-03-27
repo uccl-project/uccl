@@ -106,6 +106,9 @@ device_sm_fifo.o: ../device/fifo/sm_fifo.cc
 device_worker.o: ../device/worker.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
+backend/device_backend.o: backend/device_backend.cc
+	$(NVCC) -MMD -MP -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
+
 device_persistent_kernel_ops.o: ../device/persistent_kernel_ops.cu
 	$(NVCC) -MMD -MP -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
