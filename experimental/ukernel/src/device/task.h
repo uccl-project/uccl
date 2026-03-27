@@ -111,6 +111,8 @@ union alignas(16) Task {
 static_assert(sizeof(Task) == 16);
 
 struct alignas(16) TaskArgs {
+  static constexpr uint64_t kPublishedMagic = 0x554b544152475331ull;
+
   void* src;
   void* src2;
   void* dst;
@@ -128,6 +130,10 @@ struct alignas(16) TaskArgs {
 
   __host__ __device__ void set_red_type(ReduceType type) {
     redTypeRaw = static_cast<uint64_t>(type);
+  }
+
+  __host__ __device__ bool is_published() const {
+    return reserved0 == kPublishedMagic;
   }
 };
 static_assert(sizeof(TaskArgs) % 16 == 0,
@@ -210,8 +216,19 @@ class TaskManager {
       task_in_use_[idx] = 1;
     }
 
+    TaskArgs staged = h;
+    staged.reserved0 = 0;
+    uint64_t const unpublished = 0;
+    uint64_t const published = TaskArgs::kPublishedMagic;
+
+    // Publish task args in two phases so worker kernels never observe a newly
+    // enqueued task before its metadata is fully initialized on device memory.
+    GPU_RT_CHECK(gpuMemcpy(&(d_task_ + idx)->reserved0, &unpublished,
+                           sizeof(unpublished), gpuMemcpyHostToDevice));
     GPU_RT_CHECK(
-        gpuMemcpy(d_task_ + idx, &h, sizeof(TaskArgs), gpuMemcpyHostToDevice));
+        gpuMemcpy(d_task_ + idx, &staged, sizeof(TaskArgs), gpuMemcpyHostToDevice));
+    GPU_RT_CHECK(gpuMemcpy(&(d_task_ + idx)->reserved0, &published,
+                           sizeof(published), gpuMemcpyHostToDevice));
 
     return Task(tt, dt, blockId, idx);
   }
@@ -221,6 +238,9 @@ class TaskManager {
     assert(inited_ && "TaskManager not initialized");
     assert(idx < cap_task_ && "free_task_args idx out of range");
     assert(task_in_use_[idx] == 1 && "double free on task args slot");
+    uint64_t const unpublished = 0;
+    GPU_RT_CHECK(gpuMemcpy(&(d_task_ + idx)->reserved0, &unpublished,
+                           sizeof(unpublished), gpuMemcpyHostToDevice));
     task_in_use_[idx] = 0;
     free_task_.push_back(idx);
   }

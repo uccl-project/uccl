@@ -92,6 +92,14 @@ __device__ __forceinline__ void process_task(Task const& task,
   }
 
   TaskArgs& args = d_task_args[idx];
+  if (threadIdx.x == 0) {
+    volatile TaskArgs* volatile_args =
+        reinterpret_cast<volatile TaskArgs*>(&args);
+    while (volatile_args->reserved0 != TaskArgs::kPublishedMagic) {
+    }
+    __threadfence();
+  }
+  __syncthreads();
 
   switch (ttype) {
     case TaskType::CollCopy:
@@ -180,7 +188,10 @@ __global__ void singlePersistentKernel(
     __syncthreads();
 
     if (threadIdx.x == 0) {
-      // __threadfence();
+      // Publish task writes before advancing the FIFO tail. Host-side polling
+      // treats fifo.pop() as completion, so tensor/staging updates must be
+      // globally visible first.
+      __threadfence();
       fifo.pop();
     }
     __syncthreads();
@@ -263,7 +274,9 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
                    &d_sync->completedBlocks, mscclpp::memoryOrderAcquire) <
                gridDim.x) {
         }
-        // __threadfence();
+        // Same ordering requirement as the single-block path: all blocks'
+        // writes must be visible before host observes task completion.
+        __threadfence();
         fifo.pop();
         mscclpp::atomicStore<uint32_t, mscclpp::scopeDevice>(
             &d_sync->publishedPhase, local_phase + 2,

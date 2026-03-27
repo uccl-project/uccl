@@ -1,6 +1,8 @@
 #include "transport_backend.h"
 #include "../../include/transport.h"
 #include <chrono>
+#include <cstdlib>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -30,6 +32,28 @@ int transport_peer_rank(ExecOp const& op) {
     return is_peer_ref(op.src) ? op.src.rank : -1;
   }
   return -1;
+}
+
+bool transport_trace_enabled() {
+  static bool enabled = [] {
+    char const* value = std::getenv("UKERNEL_TRACE_TRANSPORT");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+  }();
+  return enabled;
+}
+
+char const* exec_kind_name(ExecOpKind kind) {
+  switch (kind) {
+    case ExecOpKind::TransportSend:
+      return "send";
+    case ExecOpKind::TransportRecv:
+      return "recv";
+    case ExecOpKind::DeviceCopy:
+      return "copy";
+    case ExecOpKind::DeviceReduce:
+      return "reduce";
+  }
+  return "unknown";
 }
 
 }  // namespace
@@ -301,8 +325,25 @@ BackendToken CommunicatorTransportBackend::submit(ExecOp const& op) {
   }
 
   std::lock_guard<std::mutex> lk(mu_);
-  pending_[token.value] = PendingRequest{request_id, false, false};
+  pending_[token.value] =
+      PendingRequest{request_id,
+                     false,
+                     false,
+                     op.op_id,
+                     op.kind,
+                     peer_rank,
+                     op.tile.offset_bytes,
+                     op.tile.size_bytes,
+                     op.tile.flow_index};
   request_to_token_[request_id] = token.value;
+  if (transport_trace_enabled()) {
+    std::cerr << "[TRACE][transport][rank " << communicator_->rank()
+              << "] submit " << exec_kind_name(op.kind) << " op=" << op.op_id
+              << " peer=" << peer_rank << " flow=" << op.tile.flow_index
+              << " off=" << op.tile.offset_bytes
+              << " bytes=" << op.tile.size_bytes << " token=" << token.value
+              << " req=" << request_id << std::endl;
+  }
   return token;
 }
 
@@ -462,6 +503,9 @@ uint32_t CommunicatorTransportBackend::resolve_remote_mr_id(
 
 void CommunicatorTransportBackend::on_transport_completion(
     unsigned request_id) {
+  PendingRequest snapshot{};
+  uint64_t token_value = 0;
+  bool should_trace = false;
   bool should_release = false;
   {
     std::lock_guard<std::mutex> lk(mu_);
@@ -471,6 +515,9 @@ void CommunicatorTransportBackend::on_transport_completion(
     auto pending_it = pending_.find(it->second);
     if (pending_it == pending_.end() || pending_it->second.completed) return;
 
+    snapshot = pending_it->second;
+    token_value = it->second;
+    should_trace = transport_trace_enabled();
     pending_it->second.completed = true;
     if (pending_it->second.released) {
       should_release = true;
@@ -479,6 +526,15 @@ void CommunicatorTransportBackend::on_transport_completion(
     } else {
       completed_tokens_.push_back(it->second);
     }
+  }
+  if (should_trace) {
+    std::cerr << "[TRACE][transport][rank " << communicator_->rank()
+              << "] complete " << exec_kind_name(snapshot.kind)
+              << " op=" << snapshot.op_id << " peer=" << snapshot.peer_rank
+              << " flow=" << snapshot.flow_index
+              << " off=" << snapshot.offset_bytes
+              << " bytes=" << snapshot.size_bytes << " token=" << token_value
+              << " req=" << request_id << std::endl;
   }
   if (should_release) {
     communicator_->release(request_id);

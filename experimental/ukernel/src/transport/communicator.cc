@@ -24,6 +24,14 @@ constexpr int kBootstrapPollDelayMs = 100;
 constexpr int kDefaultBootstrapTimeoutMs = 30000;
 constexpr int kDefaultMrTimeoutMs = 30000;
 
+bool transport_trace_enabled() {
+  static bool enabled = [] {
+    char const* value = std::getenv("UKERNEL_TRACE_TRANSPORT");
+    return value != nullptr && value[0] != '\0' && value[0] != '0';
+  }();
+  return enabled;
+}
+
 std::string get_local_ip() {
   if (char const* env_ip = std::getenv("UHM_LOCAL_IP")) {
     if (std::strlen(env_ip) > 0) return env_ip;
@@ -928,6 +936,13 @@ unsigned Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
     requests_map_.erase(rid);
     return 0;
   }
+  if (transport_trace_enabled()) {
+    std::cerr << "[TRACE][comm][rank " << global_rank_ << "] ipc isend peer="
+              << rank << " req=" << rid << " seq=" << match_seq
+              << " off=" << offset << " bytes=" << len
+              << " local_mr=" << local_mr_id << " remote_mr=" << remote_mr_id
+              << std::endl;
+  }
   notifier_cv_.notify_all();
 
   return rid;
@@ -1025,6 +1040,11 @@ unsigned Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
     std::lock_guard<std::mutex> lk(req_mu_);
     requests_map_.erase(rid);
     return 0;
+  }
+  if (transport_trace_enabled()) {
+    std::cerr << "[TRACE][comm][rank " << global_rank_ << "] ipc irecv peer="
+              << rank << " req=" << rid << " seq=" << match_seq
+              << " off=" << offset << " bytes=" << len << std::endl;
   }
   notifier_cv_.notify_all();
 
