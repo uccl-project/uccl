@@ -1,6 +1,6 @@
 CXX := g++
 NVCC := nvcc
-SM ?= 80
+DEFAULT_SMS := 80 86 89
 CUDA_HOME ?= /usr/local/cuda
 CONDA_LIB_HOME ?= /usr/lib
 UCCL_ROOT := $(abspath ../../../..)
@@ -10,16 +10,23 @@ GDRCOPY_LIBDIR := $(GDRCOPY_ROOT)/src
 UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
 UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma.a
 
+ifeq ($(origin SM), undefined)
+NVCC_ARCH_FLAGS := $(foreach sm,$(DEFAULT_SMS),-gencode arch=compute_$(sm),code=sm_$(sm))
+ENABLE_TMA := 0
+else
 SM_NUM := $(shell printf '%s\n' "$(SM)" | sed 's/[^0-9].*//')
+NVCC_ARCH_FLAGS := -arch=sm_$(SM)
 ENABLE_TMA := $(shell if [ -n "$(SM_NUM)" ] && [ "$(SM_NUM)" -ge 90 ]; then echo 1; else echo 0; fi)
+endif
 
 CXXFLAGS := -std=c++17 -O3 -g -Wall
 CXXFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
-NVCCFLAGS := -std=c++17 -O3 -g -Xcompiler -Wall -arch=sm_$(SM)
+NVCCFLAGS := -std=c++17 -O3 -g -Xcompiler -Wall $(NVCC_ARCH_FLAGS)
 NVCCFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 
-VPATH := .:test:../transport:../device:../device/fifo
-INCLUDES := -I. -I./test -I../transport -I../device -I../device/fifo \
+VPATH := .:test/common:test/unit:test/integration:../transport:../device:../device/fifo
+INCLUDES := -I. -I./test -I./test/common -I./test/unit -I./test/integration \
+            -I../transport -I../device -I../device/fifo \
             -I../../include -I$(UCCL_ROOT) -I$(UCCL_ROOT)/include \
             -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR)
 CXX_RPATH_FLAGS := -Wl,-rpath,$(CUDA_HOME)/lib64 \
@@ -52,21 +59,32 @@ DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \
 DEVICE_CU_OBJ := device_persistent_kernel_ops.o
 DEVICE_OBJ := $(DEVICE_CPP_OBJ) $(DEVICE_CU_OBJ)
 
-TEST_BINS := test_components test_device_backend test_transport_backend test_multiprocess_collective
+UNIT_TEST_BINS := test_components
+INTEGRATION_TEST_BINS := test_device_backend test_transport_backend test_multiprocess_collective
+TEST_BINS := $(UNIT_TEST_BINS) $(INTEGRATION_TEST_BINS)
 
-.PHONY: all test real_backends clean
+.PHONY: all test test-unit test-integration unit integration real_backends clean
 
 all: $(TEST_BINS) real_backends
 
-test: all
+test: test-unit test-integration
+	@true
+
+test-unit: $(UNIT_TEST_BINS)
 	./test_components
+
+test-integration: $(INTEGRATION_TEST_BINS)
 	./test_device_backend
-	bash ./test/run_transport_backend_suite.sh ./test_transport_backend
-	bash ./test/run_ccl_multiprocess_suite.sh ./test_multiprocess_collective
+	bash ./test/integration/run_transport_backend_suite.sh ./test_transport_backend
+	bash ./test/integration/run_ccl_multiprocess_suite.sh ./test_multiprocess_collective
+
+unit: test-unit
+
+integration: test-integration
 
 real_backends: $(REAL_BACKEND_OBJ)
 
-test_components: $(CCL_CORE_OBJ) test/test_components.o
+test_components: $(CCL_CORE_OBJ) test/unit/test_components.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
 
 $(UCCL_RDMA_STATIC):
@@ -74,17 +92,17 @@ $(UCCL_RDMA_STATIC):
 
 test_multiprocess_collective: $(CCL_CORE_OBJ) backend/transport_backend.o \
 		backend/device_backend.o $(REAL_EXECUTOR_OBJ) $(TRANSPORT_OBJ) $(DEVICE_OBJ) \
-		test/test_multiprocess_collective.o $(UCCL_RDMA_STATIC)
+		test/integration/test_multiprocess_collective.o $(UCCL_RDMA_STATIC)
 	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
 		$(TRANSPORT_LIBS) $(DEVICE_LIBS)
 
 test_device_backend: backend/device_backend.o $(DEVICE_OBJ) \
-		test/test_device_backend.o
+		test/integration/test_device_backend.o
 	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(DEVICE_LIBS) -lpthread
 
 test_transport_backend: backend/transport_backend.o $(TRANSPORT_OBJ) \
-		test/test_transport_backend.o $(UCCL_RDMA_STATIC)
+		test/integration/test_transport_backend.o $(UCCL_RDMA_STATIC)
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
 		$(TRANSPORT_LIBS)
 
@@ -113,11 +131,17 @@ device_persistent_kernel_ops.o: ../device/persistent_kernel_ops.cu
 	$(NVCC) -MMD -MP -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
 clean:
-	rm -f *.o *.d backend/*.o backend/*.d test/*.o test/*.d \
+	rm -f *.o *.d backend/*.o backend/*.d \
+		test/*.o test/*.d \
+		test/common/*.o test/common/*.d \
+		test/unit/*.o test/unit/*.d \
+		test/integration/*.o test/integration/*.d \
 		transport_*.o transport_*.d device_*.o device_*.d $(TEST_BINS)
 
 -include $(CCL_CORE_OBJ:.o=.d) $(REAL_BACKEND_OBJ:.o=.d) \
 	$(REAL_EXECUTOR_OBJ:.o=.d) \
 	$(TRANSPORT_OBJ:.o=.d) $(DEVICE_OBJ:.o=.d) \
-	test/test_components.d test/test_device_backend.d \
-	test/test_transport_backend.d test/test_multiprocess_collective.d
+	test/unit/test_components.d \
+	test/integration/test_device_backend.d \
+	test/integration/test_transport_backend.d \
+	test/integration/test_multiprocess_collective.d

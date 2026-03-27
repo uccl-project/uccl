@@ -1,5 +1,6 @@
-#include "../selector.h"
+#include "selector.h"
 #include "backend_test_utils.h"
+#include "test_utils.h"
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -16,17 +17,8 @@ namespace CCL {
 
 namespace {
 
-bool wait_until_terminal(Executor& executor, CollectiveOpHandle handle,
-                         std::chrono::milliseconds timeout) {
-  auto deadline = std::chrono::steady_clock::now() + timeout;
-  while (std::chrono::steady_clock::now() < deadline) {
-    if (executor.poll(handle)) {
-      return true;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  }
-  return executor.poll(handle);
-}
+using TestUtil::throws;
+using TestUtil::wait_until_terminal;
 
 struct SimRankState {
   CollectivePlan plan;
@@ -405,6 +397,67 @@ void test_executor_queues_collectives_serially() {
   executor.release(second);
 }
 
+void test_executor_rejects_releasing_queued_or_running_collectives() {
+  printf("[test] executor rejects releasing queued or running collectives...\n");
+
+  Testing::MockDeviceBackend device_backend(1000);
+  Testing::MockBackend transport_backend(1000);
+  ExecutorBackends backends{};
+  backends.transport = &transport_backend;
+  backends.device = &device_backend;
+  Executor executor(backends);
+
+  CollectiveConfig first_cfg = Testing::make_test_config(4, 1, 2048, 256, 2);
+  CollectiveConfig second_cfg = Testing::make_test_config(4, 1, 2048, 256, 2);
+  second_cfg.algorithm = AlgorithmKind::Pairwise;
+
+  CollectiveOpHandle first = executor.submit_allreduce(first_cfg);
+  CollectiveOpHandle second = executor.submit_alltoall(second_cfg);
+
+  assert(throws([&] { executor.release(first); }));
+  assert(throws([&] { executor.release(second); }));
+
+  assert(wait_until_terminal(executor, first, std::chrono::seconds(2)));
+  assert(wait_until_terminal(executor, second, std::chrono::seconds(2)));
+
+  executor.release(first);
+  executor.release(second);
+}
+
+void test_executor_uses_fallback_backend_when_specialized_backends_are_missing() {
+  printf("[test] executor uses fallback backend when specialized backends are missing...\n");
+
+  Testing::MockBackend fallback_backend;
+  ExecutorBackends backends{};
+  backends.fallback = &fallback_backend;
+  Executor executor(backends);
+
+  CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512, 2);
+  CollectiveOpHandle handle = executor.submit_allreduce(cfg);
+  assert(wait_until_terminal(executor, handle, std::chrono::seconds(2)));
+  assert(executor.status(handle) == CollectiveOpStatus::Completed);
+  assert(fallback_backend.submissions() > 0);
+  executor.release(handle);
+}
+
+void test_executor_reports_submit_failure() {
+  printf("[test] executor reports backend submit failures...\n");
+
+  Testing::ThrowingBackend throwing_backend("mock backend submit failure");
+  ExecutorBackends backends{};
+  backends.fallback = &throwing_backend;
+  Executor executor(backends);
+
+  CollectiveConfig cfg = Testing::make_test_config(4, 1, 2048, 256, 1);
+  CollectiveOpHandle handle = executor.submit_allreduce(cfg);
+
+  assert(wait_until_terminal(executor, handle, std::chrono::seconds(2)));
+  assert(executor.status(handle) == CollectiveOpStatus::Failed);
+  assert(executor.error_message(handle).find("mock backend submit failure") !=
+         std::string::npos);
+  executor.release(handle);
+}
+
 }  // namespace
 
 }  // namespace CCL
@@ -421,6 +474,9 @@ int main() {
   test_lowering_preserves_dependency_dag();
   test_executor_completes_collectives_with_background_progress();
   test_executor_queues_collectives_serially();
+  test_executor_rejects_releasing_queued_or_running_collectives();
+  test_executor_uses_fallback_backend_when_specialized_backends_are_missing();
+  test_executor_reports_submit_failure();
   printf("\n=== Component tests PASSED ===\n");
   return 0;
 }

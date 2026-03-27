@@ -48,12 +48,6 @@ class CommunicatorTransportBackend final : public Backend {
     unsigned request_id = 0;
     bool completed = false;
     bool released = false;
-    uint32_t op_id = 0;
-    ExecOpKind kind = ExecOpKind::TransportSend;
-    int peer_rank = -1;
-    size_t offset_bytes = 0;
-    size_t size_bytes = 0;
-    uint32_t flow_index = 0;
   };
 
   struct PeerPathState {

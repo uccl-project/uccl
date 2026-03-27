@@ -1,4 +1,5 @@
 #include "transport.h"
+#include "test_utils.h"
 #include "util/util.h"
 #include <algorithm>
 #include <chrono>
@@ -26,11 +27,19 @@ static constexpr int kServerRank = 0;
 
 namespace {
 
+using UKernel::Transport::TestUtil::get_arg;
+using UKernel::Transport::TestUtil::get_int_arg;
+using UKernel::Transport::TestUtil::require;
+using UKernel::Transport::TestUtil::run_case;
+
 constexpr size_t kMessageBytes = 4 * 1024;
 constexpr size_t kPadding = 256;
 constexpr size_t kSlotStride = kMessageBytes + 2 * kPadding;
 constexpr std::chrono::seconds kNotifierTimeout(5);
 constexpr std::chrono::seconds kPollTimeout(10);
+constexpr std::chrono::seconds kAcceptTimeout(10);
+constexpr char kScenarioUsage[] =
+    "basic|batch|poll-release|notifier|ipc-buffer-meta";
 
 enum class CompletionMode { WaitEach, WaitAll, PollRelease };
 
@@ -46,28 +55,6 @@ struct NotifierQueue {
   std::condition_variable cv;
   std::deque<unsigned> ids;
 };
-
-void require(bool cond, char const* message) {
-  if (!cond) {
-    throw std::runtime_error(message);
-  }
-}
-
-std::string get_arg(int argc, char** argv, char const* key, char const* def) {
-  for (int i = 1; i < argc; ++i) {
-    if (std::strncmp(argv[i], key, std::strlen(key)) == 0) {
-      char const* p = argv[i] + std::strlen(key);
-      if (*p == '=') return std::string(p + 1);
-      if (*p == '\0' && i + 1 < argc) return std::string(argv[i + 1]);
-    }
-  }
-  return std::string(def);
-}
-
-int get_int_arg(int argc, char** argv, char const* key, int def) {
-  std::string def_str = std::to_string(def);
-  return std::stoi(get_arg(argc, argv, key, def_str.c_str()));
-}
 
 size_t slot_offset(int index) {
   return kPadding + static_cast<size_t>(index) * kSlotStride;
@@ -89,6 +76,9 @@ Scenario get_scenario(std::string const& name) {
   }
   if (name == "notifier") {
     return Scenario{"notifier", 4, CompletionMode::WaitAll, true};
+  }
+  if (name == "ipc-buffer-meta") {
+    return Scenario{"ipc-buffer-meta", 1, CompletionMode::WaitEach, false};
   }
   throw std::invalid_argument("unknown transport communicator test case: " +
                               name);
@@ -163,6 +153,16 @@ void wait_until_completed_without_release(
             "timed out polling transport requests");
     std::this_thread::yield();
   }
+}
+
+void accept_with_retry(std::shared_ptr<Communicator> const& comm, int peer_rank,
+                       char const* what) {
+  auto deadline = std::chrono::steady_clock::now() + kAcceptTimeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (comm->accept_from(peer_rank)) return;
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  require(false, what);
 }
 
 void complete_requests(std::shared_ptr<Communicator> const& comm,
@@ -267,7 +267,7 @@ int run_receiver(Scenario const& scenario, std::string const& exchanger_ip,
   auto comm =
       make_communicator(kServerGpu, kServerRank, kWorldSize, exchanger_ip,
                         exchanger_port, preferred_transport);
-  require(comm->accept_from(kClientRank), "server accept_from failed");
+  accept_with_retry(comm, kClientRank, "server accept_from failed");
   auto transport_kind = comm->peer_transport_kind(kClientRank);
 
   NotifierQueue queue;
@@ -328,33 +328,124 @@ int run_receiver(Scenario const& scenario, std::string const& exchanger_ip,
   return 0;
 }
 
+int run_ipc_buffer_metadata_client(
+    std::string const& exchanger_ip, int exchanger_port,
+    UKernel::Transport::PreferredTransport preferred_transport) {
+  auto comm =
+      make_communicator(kClientGpu, kClientRank, kWorldSize, exchanger_ip,
+                        exchanger_port, preferred_transport);
+  require(comm->connect_to(kServerRank), "client connect_to failed");
+  require(comm->peer_transport_kind(kServerRank) ==
+              UKernel::Transport::PeerTransportKind::Ipc,
+          "ipc-buffer-meta requires IPC transport");
+
+  GPU_RT_CHECK(gpuSetDevice(kClientGpu));
+  void* buf = nullptr;
+  GPU_RT_CHECK(gpuMalloc(&buf, 4096));
+  auto free_buf = uccl::finally([&] { gpuFree(buf); });
+  void* ack_buf = nullptr;
+  GPU_RT_CHECK(gpuMalloc(&ack_buf, 1));
+  auto free_ack = uccl::finally([&] { gpuFree(ack_buf); });
+
+  constexpr uint32_t kValidInfoMr = 4242;
+  require(comm->notify_ipc_buffer(kServerRank, kValidInfoMr, buf, 4096),
+          "notify_ipc_buffer should succeed");
+
+  constexpr uint32_t kInvalidInfoMr = 9999;
+  require(comm->notify_ipc_buffer(kServerRank, kInvalidInfoMr, nullptr, 0),
+          "invalid ipc metadata publish should still succeed");
+
+  unsigned ack_req = comm->irecv(kServerRank, ack_buf, 0, 1, true);
+  require(ack_req != 0, "client ack irecv failed");
+  require(comm->wait_finish(ack_req), "client ack wait_finish failed");
+
+  std::cout << "[CLIENT][ipc-buffer-meta] OK" << std::endl;
+  return 0;
+}
+
+int run_ipc_buffer_metadata_server(
+    std::string const& exchanger_ip, int exchanger_port,
+    UKernel::Transport::PreferredTransport preferred_transport) {
+  auto comm =
+      make_communicator(kServerGpu, kServerRank, kWorldSize, exchanger_ip,
+                        exchanger_port, preferred_transport);
+  accept_with_retry(comm, kClientRank, "server accept_from failed");
+  require(comm->same_host(kClientRank),
+          "ipc-buffer-meta requires same-host peers");
+  require(comm->peer_transport_kind(kClientRank) ==
+              UKernel::Transport::PeerTransportKind::Ipc,
+          "ipc-buffer-meta requires IPC transport");
+
+  GPU_RT_CHECK(gpuSetDevice(kServerGpu));
+  void* ack_buf = nullptr;
+  GPU_RT_CHECK(gpuMalloc(&ack_buf, 1));
+  auto free_ack = uccl::finally([&] { gpuFree(ack_buf); });
+  static_cast<void>(free_ack);
+
+  void* resolved = nullptr;
+  int device_idx = -1;
+
+  constexpr uint32_t kValidInfoMr = 4242;
+  require(comm->wait_ipc_buffer(kClientRank, kValidInfoMr),
+          "wait_ipc_buffer should succeed");
+  require(comm->resolve_remote_buffer_pointer(kClientRank, kValidInfoMr,
+                                              /*offset=*/128, /*bytes=*/256,
+                                              &resolved, &device_idx),
+          "resolve_remote_buffer_pointer should succeed");
+  require(resolved != nullptr, "resolved remote pointer should not be null");
+  require(device_idx == kClientGpu,
+          "resolved remote pointer should preserve device index");
+  require(!comm->resolve_remote_buffer_pointer(kClientRank, kValidInfoMr,
+                                               /*offset=*/4096, /*bytes=*/1,
+                                               &resolved, &device_idx),
+          "out-of-range remote pointer resolution should fail");
+
+  constexpr uint32_t kInvalidInfoMr = 9999;
+  require(comm->wait_ipc_buffer(kClientRank, kInvalidInfoMr),
+          "invalid ipc metadata fetch should succeed");
+  require(!comm->resolve_remote_buffer_pointer(kClientRank, kInvalidInfoMr, 0,
+                                               1, &resolved, &device_idx),
+          "invalid ipc metadata should not resolve to a pointer");
+
+  unsigned ack_req = comm->isend(kClientRank, ack_buf, 0, 1, 0, 0, true);
+  require(ack_req != 0, "server ack isend failed");
+  require(comm->wait_finish(ack_req), "server ack wait_finish failed");
+
+  std::cout << "[SERVER][ipc-buffer-meta] OK" << std::endl;
+  return 0;
+}
+
 int unique_local_port() { return 19000 + static_cast<int>(::getpid() % 1000); }
 
 }  // namespace
 
 void test_transport_communicator_local() {
-  auto comm = make_communicator(/*gpu=*/0, /*rank=*/0, /*world_size=*/1,
-                                /*exchanger_ip=*/"0.0.0.0",
-                                /*exchanger_port=*/unique_local_port(),
-                                UKernel::Transport::PreferredTransport::Auto);
+  run_case("transport integration", "communicator local mr lifecycle", [] {
+    auto comm = make_communicator(/*gpu=*/0, /*rank=*/0, /*world_size=*/1,
+                                  /*exchanger_ip=*/"0.0.0.0",
+                                  /*exchanger_port=*/unique_local_port(),
+                                  UKernel::Transport::PreferredTransport::Auto);
 
-  GPU_RT_CHECK(gpuSetDevice(0));
-  void* buf = nullptr;
-  GPU_RT_CHECK(gpuMalloc(&buf, 4096));
-  auto free_buf = uccl::finally([&] { gpuFree(buf); });
+    GPU_RT_CHECK(gpuSetDevice(0));
+    void* buf = nullptr;
+    GPU_RT_CHECK(gpuMalloc(&buf, 4096));
+    auto free_buf = uccl::finally([&] { gpuFree(buf); });
 
-  MR mr0 = comm->reg_mr(buf, 4096);
-  MR mr1 = comm->reg_mr(buf, 4096);
-  require(mr0.id == mr1.id, "reg_mr should be idempotent for the same buffer");
-  require(comm->get_local_mr(static_cast<char*>(buf) + 128).id == mr0.id,
-          "communicator local MR range lookup failed");
-  require(comm->get_local_mr(mr0.id).address == reinterpret_cast<uint64_t>(buf),
-          "communicator local MR lookup by id failed");
+    MR mr0 = comm->reg_mr(buf, 4096);
+    MR mr1 = comm->reg_mr(buf, 4096);
+    require(mr0.id == mr1.id,
+            "reg_mr should be idempotent for the same buffer");
+    require(comm->get_local_mr(static_cast<char*>(buf) + 128).id == mr0.id,
+            "communicator local MR range lookup failed");
+    require(
+        comm->get_local_mr(mr0.id).address == reinterpret_cast<uint64_t>(buf),
+        "communicator local MR lookup by id failed");
 
-  require(comm->dereg_mr(buf), "dereg_mr failed");
-  MR mr2 = comm->reg_mr(buf, 4096);
-  require(mr2.id != mr0.id,
-          "re-registering after dereg_mr should allocate a new MR id");
+    require(comm->dereg_mr(buf), "dereg_mr failed");
+    MR mr2 = comm->reg_mr(buf, 4096);
+    require(mr2.id != mr0.id,
+            "re-registering after dereg_mr should allocate a new MR id");
+  });
 }
 
 int test_transport_communicator(int argc, char** argv) {
@@ -385,6 +476,16 @@ int test_transport_communicator(int argc, char** argv) {
     } else if (transport != "auto") {
       throw std::invalid_argument("unknown transport override: " + transport);
     }
+    if (scenario.name == "ipc-buffer-meta") {
+      if (role == "server") {
+        return run_ipc_buffer_metadata_server(exchanger_ip, exchanger_port,
+                                              preferred_transport);
+      }
+      if (role == "client") {
+        return run_ipc_buffer_metadata_client(exchanger_ip, exchanger_port,
+                                              preferred_transport);
+      }
+    }
     if (role == "server") {
       return run_receiver(scenario, exchanger_ip, exchanger_port,
                           preferred_transport);
@@ -400,7 +501,7 @@ int test_transport_communicator(int argc, char** argv) {
   }
 
   std::cerr << "Usage:\n"
-            << "  --role=server|client --case=basic|batch|poll-release|notifier"
+            << "  --role=server|client --case=" << kScenarioUsage
             << " [--exchanger-ip IP] [--exchanger-port PORT]"
             << " [--transport auto|ipc|uccl]\n";
   return 1;

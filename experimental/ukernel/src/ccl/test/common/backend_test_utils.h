@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <deque>
 #include <stdexcept>
+#include <string>
+#include <utility>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -253,6 +255,25 @@ class MockDeviceBackend final : public Backend {
   uint64_t next_token_ = 1;
   uint64_t submissions_ = 0;
   std::unordered_map<uint64_t, uint32_t> pending_polls_;
+};
+
+class ThrowingBackend final : public Backend {
+ public:
+  explicit ThrowingBackend(std::string message)
+      : message_(std::move(message)) {}
+
+  char const* name() const override { return "throwing"; }
+  void validate(ExecutionPlan const&) const override {}
+  bool supports(ExecOpKind) const override { return true; }
+  BackendToken submit(ExecOp const&) override {
+    throw std::runtime_error(message_);
+  }
+  bool poll(BackendToken) override { return false; }
+  bool try_pop_completed(BackendToken&) override { return false; }
+  void release(BackendToken) override {}
+
+ private:
+  std::string message_;
 };
 
 }  // namespace Testing

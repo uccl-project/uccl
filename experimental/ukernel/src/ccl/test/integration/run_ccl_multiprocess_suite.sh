@@ -5,12 +5,14 @@ BIN="${1:-./test_multiprocess_collective}"
 
 # Edit these values locally when you want to change the test shape.
 NPROC_PER_NODE=4
+NPROC_PER_NODE=3
 NNODES=1
 NODE_RANK=0
 MASTER_ADDR=127.0.0.1
 TORCHRUN_MASTER_PORT=29500
 EXCHANGER_PORT_BASE=29600
 GPU_IDS=0,1,2,3
+GPU_IDS=0,6,7
 
 # Use auto by default so same-node runs exercise the IPC path directly.
 TRANSPORT=auto

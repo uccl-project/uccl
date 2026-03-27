@@ -7,10 +7,19 @@ CONDA_LIB_HOME ?= /usr/lib
 # skip ThunderKittens now
 # TK_ROOT := $(abspath ../../thirdparty/ThunderKittens)
 
-# GPU architecture - use sm_90a for TMA/wgmma support
-SM ?= 90a
+# GPU architecture
+# Default test builds target common datacenter GPUs used in this repo.
+DEFAULT_SMS := 80 86 89
+ifeq ($(origin SM), undefined)
+NVCC_ARCH_FLAGS := $(foreach sm,$(DEFAULT_SMS),-gencode arch=compute_$(sm),code=sm_$(sm))
+ENABLE_TMA := 0
+SUBMAKE_SM :=
+else
 SM_NUM := $(shell printf '%s\n' "$(SM)" | sed 's/[^0-9].*//')
+NVCC_ARCH_FLAGS := -arch=sm_$(SM)
 ENABLE_TMA := $(shell if [ -n "$(SM_NUM)" ] && [ "$(SM_NUM)" -ge 90 ]; then echo 1; else echo 0; fi)
+SUBMAKE_SM := SM=$(SM)
+endif
 
 # Base compilation flags
 CXXFLAGS   := -O0 -std=c++17 -Wall -Wno-unused-function -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -Wno-unused-but-set-variable -Wno-stringop-overread -Wno-narrowing -pthread -fPIC \
@@ -23,7 +32,7 @@ NVCCFLAGS  := -g -O0 -std=c++20 \
               --expt-relaxed-constexpr \
               -DKITTENS_HOPPER \
               -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA) \
-              -arch=sm_$(SM) \
+              $(NVCC_ARCH_FLAGS) \
               -ccbin $(CXX)
 #             -I$(TK_ROOT)/include \
 
@@ -143,10 +152,10 @@ $(BENCH_GDRCOPY_BIN): $(BENCH_GDRCOPY_OBJ) | ensure-gdrcopy ensure-uccl-rdma
 bench: $(BENCH_BINS)
 
 device_test:
-	$(MAKE) -C src/device test SM=$(SM)
+	$(MAKE) -C src/device test $(SUBMAKE_SM)
 
 ccl_test:
-	$(MAKE) -C src/ccl test SM=$(SM)
+	$(MAKE) -C src/ccl test $(SUBMAKE_SM)
 
 transport_test:
 	$(MAKE) -C src/transport test
@@ -155,7 +164,7 @@ transport_suite:
 	$(MAKE) -C src/transport suite
 
 device_bench:
-	$(MAKE) -C src/device bench SM=$(SM)
+	$(MAKE) -C src/device bench $(SUBMAKE_SM)
 
 # Clean
 clean:

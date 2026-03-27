@@ -3,31 +3,28 @@
 #include "oob.h"
 #include "request.h"
 #include "test.h"
+#include "test_utils.h"
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <deque>
 #include <exception>
-#include <stdexcept>
+#include <sstream>
 #include <thread>
 #include <vector>
+#include <unistd.h>
 
 namespace {
 
-void require(bool cond, char const* message) {
-  if (!cond) {
-    throw std::runtime_error(message);
-  }
-}
+using UKernel::Transport::TestUtil::require;
+using UKernel::Transport::TestUtil::run_case;
+using UKernel::Transport::TestUtil::throws;
 
-template <typename Fn>
-bool throws(Fn&& fn) {
-  try {
-    fn();
-  } catch (...) {
-    return true;
-  }
-  return false;
+std::string unique_shm_namespace(char const* prefix) {
+  std::ostringstream oss;
+  oss << prefix << "-" << static_cast<long long>(::getpid()) << "-"
+      << std::chrono::steady_clock::now().time_since_epoch().count();
+  return oss.str();
 }
 
 void test_memory_registry() {
@@ -171,13 +168,21 @@ void test_peer_transport_kind() {
           "preferred IPC transport should reject cross-host peers");
 
   cfg.preferred_transport = UKernel::Transport::PreferredTransport::Uccl;
+  require(throws([&] {
+            (void)UKernel::Transport::resolve_peer_transport_kind(cfg, local,
+                                                                  same);
+          }),
+          "preferred UCCL transport should require RDMA-capable peers");
+
+  same.rdma_capable = true;
   require(UKernel::Transport::resolve_peer_transport_kind(cfg, local, same) ==
               PeerTransportKind::Uccl,
-          "preferred UCCL transport should override topology");
+          "preferred UCCL transport should use UCCL when peers are RDMA-capable");
 }
 
 void test_shm_ack_filtering() {
   using ShmRingExchanger = UKernel::Transport::ShmRingExchanger;
+  std::string const ring_namespace = unique_shm_namespace("core-shm-ack-filter");
 
   std::exception_ptr rank0_error;
   std::exception_ptr rank1_error;
@@ -185,7 +190,7 @@ void test_shm_ack_filtering() {
   std::thread rank0([&] {
     try {
       ShmRingExchanger shm0(/*self_rank=*/0, /*world_size=*/2,
-                            "core-shm-ack-filter");
+                            ring_namespace);
       require(shm0.accept_from(/*peer_rank=*/1, /*timeout_ms=*/5000),
               "rank0 accept_from failed");
 
@@ -205,7 +210,7 @@ void test_shm_ack_filtering() {
     try {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
       ShmRingExchanger shm1(/*self_rank=*/1, /*world_size=*/2,
-                            "core-shm-ack-filter");
+                            ring_namespace);
       require(shm1.connect_to(/*peer_rank=*/0, /*timeout_ms=*/5000),
               "rank1 connect_to failed");
       require(shm1.send_ack(/*peer_rank=*/0, /*seq=*/7, /*status=*/5),
@@ -226,13 +231,15 @@ void test_shm_ack_filtering() {
 void test_shm_dual_waiters() {
   using ShmRingExchanger = UKernel::Transport::ShmRingExchanger;
   using IpcCacheWire = UKernel::Transport::IpcCacheWire;
+  std::string const ring_namespace = unique_shm_namespace("core-shm-dual");
 
   std::exception_ptr rank0_error;
   std::exception_ptr rank1_error;
 
   std::thread rank0([&] {
     try {
-      ShmRingExchanger shm0(/*self_rank=*/0, /*world_size=*/2, "core-shm-dual");
+      ShmRingExchanger shm0(/*self_rank=*/0, /*world_size=*/2,
+                            ring_namespace);
       require(shm0.accept_from(/*peer_rank=*/1, /*timeout_ms=*/5000),
               "rank0 accept_from failed");
 
@@ -267,7 +274,8 @@ void test_shm_dual_waiters() {
   std::thread rank1([&] {
     try {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      ShmRingExchanger shm1(/*self_rank=*/1, /*world_size=*/2, "core-shm-dual");
+      ShmRingExchanger shm1(/*self_rank=*/1, /*world_size=*/2,
+                            ring_namespace);
       require(shm1.connect_to(/*peer_rank=*/0, /*timeout_ms=*/5000),
               "rank1 connect_to failed");
 
@@ -296,9 +304,7 @@ void test_shm_dual_waiters() {
 }  // namespace
 
 void test_transport_core() {
-  test_memory_registry();
-  test_request_completion();
-  test_peer_transport_kind();
-  test_shm_ack_filtering();
-  test_shm_dual_waiters();
+  run_case("transport unit", "memory registry", test_memory_registry);
+  run_case("transport unit", "request completion", test_request_completion);
+  run_case("transport unit", "peer transport kind", test_peer_transport_kind);
 }

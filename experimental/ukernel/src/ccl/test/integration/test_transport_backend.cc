@@ -1,7 +1,7 @@
-#include "../backend/transport_backend.h"
-#include "../../include/gpu_rt.h"
-#include "../../include/config.h"
-#include "../../include/transport.h"
+#include "backend/transport_backend.h"
+#include "gpu_rt.h"
+#include "config.h"
+#include "transport.h"
 #include <arpa/inet.h>
 #include <chrono>
 #include <cmath>

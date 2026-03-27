@@ -1,5 +1,5 @@
-#include "../backend/device_backend.h"
-#include "../../include/gpu_rt.h"
+#include "backend/device_backend.h"
+#include "gpu_rt.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -69,6 +69,10 @@ std::vector<float> download_floats(void const* src, size_t bytes) {
   return out;
 }
 
+void zero_buffer(void* dst, size_t bytes) {
+  GPU_RT_CHECK(gpuMemset(dst, 0, bytes));
+}
+
 std::string preview(std::vector<float> const& values, size_t count = 4) {
   std::string out = "[";
   size_t const limit = std::min(count, values.size());
@@ -91,6 +95,60 @@ void wait_for_token(DeviceBackend& backend, BackendToken token,
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
   require(backend.poll(token), "device backend token timed out");
+}
+
+BackendToken submit_and_wait(DeviceBackend& backend, ExecOp const& op,
+                             std::chrono::milliseconds timeout) {
+  BackendToken token = backend.submit(op);
+  wait_for_token(backend, token, timeout);
+  return token;
+}
+
+ExecOp make_device_op(uint32_t op_id, ExecOpKind kind, uint32_t flow_index,
+                      size_t offset_bytes, size_t size_bytes, BufferKind src,
+                      BufferKind dst,
+                      ReductionKind reduction = ReductionKind::None) {
+  ExecOp op;
+  op.op_id = op_id;
+  op.kind = kind;
+  op.tile.flow_index = flow_index;
+  op.tile.offset_bytes = offset_bytes;
+  op.tile.size_bytes = size_bytes;
+  op.src.kind = src;
+  op.src.offset_bytes = offset_bytes;
+  op.dst.kind = dst;
+  op.dst.offset_bytes = offset_bytes;
+  op.dtype = ScalarType::Float32;
+  op.reduction = reduction;
+  return op;
+}
+
+void verify_copy(std::vector<float> const& actual,
+                 std::vector<float> const& expected, char const* label) {
+  for (size_t i = 0; i < expected.size(); ++i) {
+    require(std::fabs(actual[i] - expected[i]) < 1e-6f,
+            std::string(label) + " mismatch at index " + std::to_string(i) +
+                ", got=" + std::to_string(actual[i]) +
+                ", expected=" + std::to_string(expected[i]));
+  }
+}
+
+void verify_sum_reduce(std::vector<float> const& out,
+                       std::vector<float> const& dst_init,
+                       std::vector<float> const& src, char const* label,
+                       std::vector<float> const* staging_after = nullptr) {
+  for (size_t i = 0; i < dst_init.size(); ++i) {
+    float expected = dst_init[i] + src[i];
+    std::string msg = std::string(label) + " mismatch at index " +
+                      std::to_string(i) + ", got=" + std::to_string(out[i]) +
+                      ", expected=" + std::to_string(expected);
+    if (staging_after != nullptr) {
+      msg += ", dst_init=" + preview(dst_init) + ", src=" + preview(src) +
+             ", staging_after=" + preview(*staging_after) +
+             ", out=" + preview(out);
+    }
+    require(std::fabs(out[i] - expected) < 1e-5f, msg);
+  }
 }
 
 std::shared_ptr<CollectiveMemory> make_memory(int rank, void* tensor_ptr,
@@ -124,33 +182,18 @@ void test_device_copy() {
     src[i] = static_cast<float>(i * 3 + 1);
   }
   upload_floats(tensor.ptr, src);
-  GPU_RT_CHECK(gpuMemset(staging.ptr, 0, kBytes));
+  zero_buffer(staging.ptr, kBytes);
 
   auto memory = make_memory(0, tensor.ptr, kBytes, staging.ptr, kBytes);
   DeviceBackend backend(memory);
 
-  ExecOp op;
-  op.op_id = 0;
-  op.kind = ExecOpKind::DeviceCopy;
-  op.tile.flow_index = 0;
-  op.tile.offset_bytes = 0;
-  op.tile.size_bytes = kBytes;
-  op.src.kind = BufferKind::Tensor;
-  op.dst.kind = BufferKind::Staging;
-  op.dtype = ScalarType::Float32;
-
-  BackendToken token = backend.submit(op);
-  wait_for_token(backend, token, std::chrono::seconds(5));
+  ExecOp op = make_device_op(0, ExecOpKind::DeviceCopy, 0, 0, kBytes,
+                             BufferKind::Tensor, BufferKind::Staging);
+  BackendToken token = submit_and_wait(backend, op, std::chrono::seconds(5));
   backend.release(token);
   backend.stop(0);
 
-  std::vector<float> dst = download_floats(staging.ptr, kBytes);
-  for (size_t i = 0; i < src.size(); ++i) {
-    require(std::fabs(dst[i] - src[i]) < 1e-6f,
-            "device copy mismatch at index " + std::to_string(i) +
-                ", got=" + std::to_string(dst[i]) +
-                ", expected=" + std::to_string(src[i]));
-  }
+  verify_copy(download_floats(staging.ptr, kBytes), src, "device copy");
 }
 
 void test_device_reduce_sum() {
@@ -172,33 +215,15 @@ void test_device_reduce_sum() {
   auto memory = make_memory(0, tensor.ptr, kBytes, staging.ptr, kBytes);
   DeviceBackend backend(memory);
 
-  ExecOp op;
-  op.op_id = 0;
-  op.kind = ExecOpKind::DeviceReduce;
-  op.tile.flow_index = 0;
-  op.tile.offset_bytes = 0;
-  op.tile.size_bytes = kBytes;
-  op.src.kind = BufferKind::Staging;
-  op.dst.kind = BufferKind::Tensor;
-  op.dtype = ScalarType::Float32;
-  op.reduction = ReductionKind::Sum;
-
-  BackendToken token = backend.submit(op);
-  wait_for_token(backend, token, std::chrono::seconds(5));
+  ExecOp op = make_device_op(0, ExecOpKind::DeviceReduce, 0, 0, kBytes,
+                             BufferKind::Staging, BufferKind::Tensor,
+                             ReductionKind::Sum);
+  BackendToken token = submit_and_wait(backend, op, std::chrono::seconds(5));
   backend.release(token);
   backend.stop(0);
   std::vector<float> out = download_floats(tensor.ptr, kBytes);
   std::vector<float> staging_after = download_floats(staging.ptr, kBytes);
-  for (size_t i = 0; i < kElems; ++i) {
-    float expected = dst_init[i] + src[i];
-    require(std::fabs(out[i] - expected) < 1e-5f,
-            "device reduce mismatch at index " + std::to_string(i) +
-                ", got=" + std::to_string(out[i]) +
-                ", expected=" + std::to_string(expected) +
-                ", dst_init=" + preview(dst_init) + ", src=" + preview(src) +
-                ", staging_after=" + preview(staging_after) +
-                ", out=" + preview(out));
-  }
+  verify_sum_reduce(out, dst_init, src, "device reduce", &staging_after);
 }
 
 void test_device_reduce_pipeline_same_flow() {
@@ -225,18 +250,12 @@ void test_device_reduce_pipeline_same_flow() {
   std::vector<BackendToken> tokens;
   tokens.reserve(kTiles);
   for (size_t tile = 0; tile < kTiles; ++tile) {
-    ExecOp op;
-    op.op_id = static_cast<uint32_t>(tile);
-    op.kind = ExecOpKind::DeviceReduce;
-    op.tile.flow_index = 0;
-    op.tile.offset_bytes = tile * kTileElems * sizeof(float);
-    op.tile.size_bytes = kTileElems * sizeof(float);
-    op.src.kind = BufferKind::Staging;
-    op.src.offset_bytes = op.tile.offset_bytes;
-    op.dst.kind = BufferKind::Tensor;
-    op.dst.offset_bytes = op.tile.offset_bytes;
-    op.dtype = ScalarType::Float32;
-    op.reduction = ReductionKind::Sum;
+    size_t offset = tile * kTileElems * sizeof(float);
+    ExecOp op = make_device_op(static_cast<uint32_t>(tile),
+                               ExecOpKind::DeviceReduce, 0, offset,
+                               kTileElems * sizeof(float),
+                               BufferKind::Staging, BufferKind::Tensor,
+                               ReductionKind::Sum);
     tokens.push_back(backend.submit(op));
   }
 
@@ -246,14 +265,8 @@ void test_device_reduce_pipeline_same_flow() {
   }
   backend.stop(0);
 
-  std::vector<float> out = download_floats(tensor.ptr, kBytes);
-  for (size_t i = 0; i < kElems; ++i) {
-    float expected = dst_init[i] + src[i];
-    require(std::fabs(out[i] - expected) < 1e-5f,
-            "device reduce pipeline mismatch at index " + std::to_string(i) +
-                ", got=" + std::to_string(out[i]) +
-                ", expected=" + std::to_string(expected));
-  }
+  verify_sum_reduce(download_floats(tensor.ptr, kBytes), dst_init, src,
+                    "device reduce pipeline");
 }
 
 }  // namespace

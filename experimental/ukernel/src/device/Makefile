@@ -1,10 +1,16 @@
 CXX      := g++
 NVCC     := nvcc
-SM       ?= 80
-SM_NUM   := $(shell printf '%s\n' "$(SM)" | sed 's/[^0-9].*//')
+DEFAULT_SMS := 80 86 89
+ifeq ($(origin SM), undefined)
+NVCC_ARCH_FLAGS := $(foreach sm,$(DEFAULT_SMS),-gencode arch=compute_$(sm),code=sm_$(sm))
+ENABLE_TMA := 0
+else
+SM_NUM := $(shell printf '%s\n' "$(SM)" | sed 's/[^0-9].*//')
+NVCC_ARCH_FLAGS := -arch=sm_$(SM)
 ENABLE_TMA := $(shell if [ -n "$(SM_NUM)" ] && [ "$(SM_NUM)" -ge 90 ]; then echo 1; else echo 0; fi)
+endif
 CXXFLAGS := -std=c++17 -O3 -g -Wall
-NVCCFLAGS:= -O3 -g -G -Xcompiler -Wall -arch=sm_$(SM)
+NVCCFLAGS:= -O3 -g -G -Xcompiler -Wall $(NVCC_ARCH_FLAGS)
 CXXFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 NVCCFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 
@@ -15,7 +21,8 @@ GDRCOPY_INCLUDEDIR = $(GDRCOPY_ROOT)/include
 GDRCOPY_LIBDIR = $(GDRCOPY_ROOT)/src
 GDRCOPY_HEADER = $(GDRCOPY_INCLUDEDIR)/gdrapi.h
 
-INCLUDES := -I./ -I./fifo -I./ops -I../../include -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR)
+INCLUDES := -I./ -I./fifo -I./ops -I./test -I./test/common -I./test/unit -I./test/integration \
+	-I../../include -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR)
 LIBS := -L$(CUDA_HOME)/lib -lcudart -lcuda -lnuma \
         -L$(GDRCOPY_LIBDIR) -lgdrapi
 
@@ -25,8 +32,8 @@ COMMON_CPP := fifo/c2d_fifo.cc fifo/d2c_fifo.cpp fifo/sm_fifo.cc
 COMMON_CU  := persistent_kernel_ops.cu
 WORKER_CPP := worker.cc
 
-TEST_ALL_SRC := test/test_all.cc
-SIMPLE_COPY_TEST_SRC := test/simple_copy_test.cc
+TEST_ALL_SRC := test/unit/test_all.cc
+SIMPLE_COPY_TEST_SRC := test/integration/simple_copy_test.cc
 BENCH_SRC  := benchmarks/bench_device_fifo.cu
 BENCH_FULL_SRC  := benchmarks/bench_device_full_fifo.cu
 BENCH_SM_SRC  := benchmarks/bench_device_sm_fifo.cu
@@ -46,13 +53,23 @@ BENCH_SM_BIN := benchmarks/bench_device_sm_fifo
 
 ALL_BIN   := $(TEST_ALL_BIN) $(SIMPLE_COPY_TEST_BIN) $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN}
 
-.PHONY: all test bench clean ensure-gdrcopy
+.PHONY: all test test-unit test-integration unit integration bench clean ensure-gdrcopy
 
 all: $(ALL_BIN)
 
-test: $(TEST_ALL_BIN)
+test: test-unit test-integration
 
-simple: $(SIMPLE_COPY_TEST_BIN)
+test-unit: $(TEST_ALL_BIN)
+	./$(TEST_ALL_BIN)
+
+test-integration: $(SIMPLE_COPY_TEST_BIN)
+	./$(SIMPLE_COPY_TEST_BIN)
+
+unit: test-unit
+
+integration: test-integration
+
+simple: test-integration
 
 bench: $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN}
 
@@ -67,7 +84,7 @@ ensure-gdrcopy:
 	fi
 	@if ! ls "$(GDRCOPY_LIBDIR)"/libgdrapi.so* >/dev/null 2>&1; then \
 		echo "[ukernel/device] building gdrcopy..."; \
-		$(MAKE) -C "$(GDRCOPY_ROOT)" all; \
+		$(MAKE) -C "$(GDRCOPY_ROOT)"; \
 	fi
 
 %.o: %.cc
@@ -111,4 +128,8 @@ $(BENCH_SM_BIN): $(COMMON_OBJ) $(BENCH_SM_OBJ)
 	$(NVCC) $^ -o $@ $(LIBS) $(RPATH) $(NVCCFLAGS)
 
 clean:
-	rm -f *.o ./benchmarks/*.o ./fifo/*.o ./test/*.o ./ops/*.o *.d $(ALL_BIN)
+	rm -f *.o ./benchmarks/*.o ./fifo/*.o ./ops/*.o \
+		./test/*.o ./test/*.d \
+		./test/unit/*.o ./test/unit/*.d \
+		./test/integration/*.o ./test/integration/*.d \
+		*.d $(ALL_BIN)

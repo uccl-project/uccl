@@ -1,4 +1,4 @@
-#include "../../include/gpu_rt.h"
+#include "gpu_rt.h"
 #include "backend_test_utils.h"
 #include <algorithm>
 #include <cassert>
@@ -19,7 +19,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "../../include/transport.h"
+#include "transport.h"
 
 namespace UKernel {
 namespace CCL {
