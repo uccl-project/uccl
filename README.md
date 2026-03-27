@@ -80,12 +80,14 @@ More UCCL features are under development in this repo, currently including:
   - ✅ Supporting all NIC vendors, including Nvidia, AWS EFA, and Broadcom
   - ✅ Supporting AMD GPUs
   - ✅ Better flow control to avoid congestion
-  - ☐ Supporting other AI accelerators, such as TPUs and Trainium.
+  - ☐ Supporting other AI accelerators, such as TPUs and Trainium
 - 🚧 Re-architecting NCCL to unleash network hardware performance
-  - 🚧 Scalable and efficient CPU proxy
-  - 🚧 Fast async collectives with compute-communication ordering guarantee
+  - 🚧 SM-efficient communication kernels
+  - 🚧 Fine-grained compute-communication overlapping
   - ☐ Device kernels in vendor-agnostic Triton language
-- ☐ Dynamic membership with GPU servers joining and exiting
+- 🚧 Efficient consumer GPU communication
+  - 🚧 Faster collectives on 4090/5090/GB10
+  - 🚧 Efficient expert-parallel communication on 4090/5090/GB10
 
 ## Quick Start
 
