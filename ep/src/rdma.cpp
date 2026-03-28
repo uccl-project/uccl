@@ -1,6 +1,5 @@
 #include "rdma.hpp"
 #include "common.hpp"
-#include "fifo_util.hpp"
 #include "proxy_ctx.hpp"
 #include "rdma_util.hpp"
 #include "util/gpu_rt.h"
@@ -465,7 +464,7 @@ void per_thread_rdma_init(ProxyCtx& S, void* gpu_buf, size_t bytes, int rank,
       selected_nic_name = dist.front().first;
     } else {
       // NUMA-aware tie-breaker: prefer NICs on same NUMA node as GPU
-      int gpu_numa_node = ::mscclpp::getDeviceNumaNode(local_rank);
+      int gpu_numa_node = uccl::get_gpu_numa_node(local_rank);
       std::vector<std::string> numa_candidates;
       for (auto const& nic_name : candidates) {
         int nic_numa = uccl::get_dev_numa_node(nic_name.c_str());
