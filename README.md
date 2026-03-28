@@ -14,8 +14,6 @@
 
 </div>
 
-<!-- Temporary test change for fork PR push verification. -->
-
 ## About 
 
 UCCL is an efficient communication library for GPUs, covering collectives, P2P (e.g., KV cache transfer, RL weight transfer), and EP (e.g., IBGDA), with two key focuses: 
