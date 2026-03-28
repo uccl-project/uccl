@@ -377,6 +377,7 @@ class NICEndpoint {
   }
 
   inline int uccl_regmr(void* const data, size_t const len, MRArray& mr_array,
+                        std::vector<MrCacheHandleRef>& cache_refs,
                         CompressCtx compress_ctx = nullptr) {
     if (unlikely(!data)) {
       UCCL_LOG(ERROR) << "Error: uccl_regmr called with null data";
@@ -388,12 +389,17 @@ class NICEndpoint {
     // VA slot; with nvidia_peermem each duplicate re-pins pages under a
     // separate PD.  On single-NIC systems all 4 context slots share one
     // RdmaContext, reducing registrations from 4 to 1.
+    cache_refs.clear();
     std::unordered_map<RdmaContext*, struct ibv_mr*> registered;
     for (size_t context_id = 0; context_id < contexts_.size(); ++context_id) {
       auto context = contexts_[context_id];
       if (unlikely(!context)) {
         UCCL_LOG(ERROR) << "Error: context at context_id " << context_id
                         << " is null";
+        for (auto const& ref : cache_refs) {
+          ref.context->releaseCachedMr(ref.entry);
+        }
+        cache_refs.clear();
         return -1;
       }
 
@@ -404,31 +410,33 @@ class NICEndpoint {
         continue;
       }
 
-      // Register memory region for this context
-      struct ibv_mr* mr = context->regMem(data, len);
+      MrCacheEntry* entry = context->acquireCachedMr(data, len);
+      struct ibv_mr* mr = entry ? entry->mr : nullptr;
 
       if (unlikely(!mr)) {
         UCCL_LOG(ERROR) << "Error " << errno << " " << strerror(errno)
                         << ": ibv_reg_mr_iova2 failed for data at " << data
                         << " size " << len << " context_id " << context_id;
+        for (auto const& ref : cache_refs) {
+          ref.context->releaseCachedMr(ref.entry);
+        }
+        cache_refs.clear();
         return -1;
       }
 
       // Store the MR in the mr_map using context_id as key
       mr_array.setKeyByContextID(context_id, mr);
       registered[context.get()] = mr;
+      cache_refs.push_back({context, entry});
     }
 
     return 0;
   }
 
-  inline void uccl_deregmr(MRArray const& mr_array) {
-    // Deduplicate — shared contexts store the same MR in multiple slots.
-    std::unordered_set<ibv_mr*> freed;
-    for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
-      ibv_mr* mr = mr_array.getKeyByContextID(ctx);
-      if (likely(mr != nullptr) && freed.insert(mr).second) {
-        RdmaContext::deregMem(mr);
+  inline void uccl_deregmr(std::vector<MrCacheHandleRef> const& cache_refs) {
+    for (auto const& ref : cache_refs) {
+      if (likely(ref.context != nullptr)) {
+        ref.context->releaseCachedMr(ref.entry);
       }
     }
   }
@@ -707,7 +715,8 @@ class NICEndpoint {
         return it->second;
       }
     }
-    auto numa_node = RdmaDeviceManager::instance().get_numa_node(gpu_index_);
+    auto numa_node = RdmaDeviceManager::instance().get_numa_node(
+        RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_)[0]);
     {
       std::unique_lock write_lock(recv_channel_mutex_);
       auto [it, inserted] = recv_channel_groups_.try_emplace(
@@ -738,7 +747,8 @@ class NICEndpoint {
       auto it = send_channel_groups_.find(rank_id);
       if (it != send_channel_groups_.end()) return it->second;
     }
-    auto numa_node = RdmaDeviceManager::instance().get_numa_node(gpu_index_);
+    auto numa_node = RdmaDeviceManager::instance().get_numa_node(
+        RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_)[0]);
     {
       std::unique_lock write_lock(send_channel_mutex_);
       auto [it, inserted] = send_channel_groups_.try_emplace(

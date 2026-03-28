@@ -213,7 +213,8 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx)
       uccl::create_ring(sizeof(UnifiedTask*), kTaskRingSize);
 
 #ifndef UCCL_P2P_USE_NCCL
-  numa_node_ = RdmaDeviceManager::instance().get_numa_node(local_gpu_idx_);
+  numa_node_ = RdmaDeviceManager::instance().get_numa_node(
+      RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
 #endif
 
   send_proxy_thread_ = std::thread(&Endpoint::send_proxy_thread_func, this);
@@ -323,6 +324,7 @@ Endpoint::~Endpoint() {
   {
     std::shared_lock<std::shared_mutex> lock(mr_mu_);
     for (auto& [mr_id, mr] : mr_id_to_mr_) {
+      delete mr->mhandle_;
       delete mr;
     }
   }
@@ -601,6 +603,7 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
 }
 
 bool Endpoint::dereg(uint64_t mr_id) {
+  MR* mr = nullptr;
   {
     std::unique_lock<std::shared_mutex> lock(mr_mu_);
     auto it = mr_id_to_mr_.find(mr_id);
@@ -608,12 +611,13 @@ bool Endpoint::dereg(uint64_t mr_id) {
       std::cerr << "[dereg] Error: Invalid mr_id " << mr_id << std::endl;
       return false;
     }
-    auto mr = it->second;
-    mr->mhandle_->compress_ctx.reset();
-    uccl_deregmr(ep_, mr->mhandle_);
-    delete mr;
+    mr = it->second;
     mr_id_to_mr_.erase(mr_id);
   }
+  mr->mhandle_->compress_ctx.reset();
+  uccl_deregmr(ep_, mr->mhandle_);
+  delete mr->mhandle_;
+  delete mr;
   return true;
 }
 
@@ -2412,7 +2416,8 @@ void Endpoint::initialize_engine() {
 #ifdef UCCL_P2P_USE_NCCL
   numa_node_ = tcp::get_tcp_numa_node_from_iface();
 #else
-  numa_node_ = RdmaDeviceManager::instance().get_numa_node(local_gpu_idx_);
+  numa_node_ = RdmaDeviceManager::instance().get_numa_node(
+      RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_)[0]);
 #endif
 
   // Initialize rdma contexts for devices used by the GPU

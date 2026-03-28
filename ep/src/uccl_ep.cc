@@ -22,7 +22,10 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
+#include <algorithm>
 #include <atomic>
+#include <cstdint>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -118,6 +121,167 @@ static int64_t dtype_size_bytes(int dtype) {
       throw std::invalid_argument("Unsupported dtype code size");
   }
 }
+
+namespace {
+
+enum DLDeviceType : int32_t {
+  kDLCPU = 1,
+  kDLCUDA = 2,
+  kDLROCM = 10,
+};
+
+enum DLDataTypeCode : uint8_t {
+  kDLUInt = 1,
+};
+
+struct DLDevice {
+  DLDeviceType device_type;
+  int32_t device_id;
+};
+
+struct DLDataType {
+  uint8_t code;
+  uint8_t bits;
+  uint16_t lanes;
+};
+
+struct DLTensor {
+  void* data;
+  DLDevice device;
+  int32_t ndim;
+  DLDataType dtype;
+  int64_t* shape;
+  int64_t* strides;
+  uint64_t byte_offset;
+};
+
+struct DLManagedTensor {
+  DLTensor dl_tensor;
+  void* manager_ctx;
+  void (*deleter)(DLManagedTensor* self);
+};
+
+struct RdmaBufferDlpack {
+  DLManagedTensor managed{};
+  int64_t shape[1]{};
+  void* ptr{nullptr};
+  std::size_t bytes{0};
+  int device_index{0};
+  bool is_host_allocated{false};
+};
+
+void free_rdma_raw_buffer(void* ptr, int device_index, bool is_host_allocated) {
+  if (!ptr) return;
+  if (is_host_allocated) {
+    CUDA_CHECK(cudaFreeHost(ptr));
+    return;
+  }
+  CUDA_CHECK(cudaSetDevice(device_index));
+  CUDA_CHECK(cudaFree(ptr));
+}
+
+void free_rdma_raw_buffer_nothrow(void* ptr, int device_index,
+                                  bool is_host_allocated) {
+  if (!ptr) return;
+  if (is_host_allocated) {
+    (void)cudaFreeHost(ptr);
+    return;
+  }
+  (void)cudaSetDevice(device_index);
+  (void)cudaFree(ptr);
+}
+
+void rdma_buffer_dlpack_deleter(DLManagedTensor* managed) {
+  if (!managed) return;
+  auto* ctx = static_cast<RdmaBufferDlpack*>(managed->manager_ctx);
+  if (!ctx) return;
+  free_rdma_raw_buffer_nothrow(ctx->ptr, ctx->device_index,
+                               ctx->is_host_allocated);
+  delete ctx;
+}
+
+void rdma_buffer_capsule_destructor(PyObject* capsule) {
+  if (!PyCapsule_IsValid(capsule, "dltensor")) return;
+  auto* managed =
+      static_cast<DLManagedTensor*>(PyCapsule_GetPointer(capsule, "dltensor"));
+  if (managed && managed->deleter) managed->deleter(managed);
+}
+
+nb::object make_rdma_buffer_dlpack_capsule(void* ptr, std::size_t bytes,
+                                           int device_index,
+                                           bool is_host_allocated) {
+  auto* ctx = new RdmaBufferDlpack();
+  ctx->ptr = ptr;
+  ctx->bytes = bytes;
+  ctx->device_index = device_index;
+  ctx->is_host_allocated = is_host_allocated;
+  ctx->shape[0] = static_cast<int64_t>(bytes);
+  ctx->managed.manager_ctx = ctx;
+  ctx->managed.deleter = rdma_buffer_dlpack_deleter;
+  ctx->managed.dl_tensor.data = ptr;
+  ctx->managed.dl_tensor.device = {
+    is_host_allocated ? kDLCPU
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+                      : kDLROCM,
+#else
+                      : kDLCUDA,
+#endif
+    is_host_allocated ? 0 : device_index,
+  };
+  ctx->managed.dl_tensor.ndim = 1;
+  ctx->managed.dl_tensor.dtype = {kDLUInt, 8, 1};
+  ctx->managed.dl_tensor.shape = ctx->shape;
+  ctx->managed.dl_tensor.strides = nullptr;
+  ctx->managed.dl_tensor.byte_offset = 0;
+
+  PyObject* capsule =
+      PyCapsule_New(&ctx->managed, "dltensor", rdma_buffer_capsule_destructor);
+  if (!capsule) {
+    rdma_buffer_dlpack_deleter(&ctx->managed);
+    throw nb::python_error();
+  }
+  return nb::steal<nb::object>(capsule);
+}
+
+std::tuple<nb::object, bool> allocate_rdma_buffer_dlpack(
+    std::size_t num_rdma_bytes, int device_index) {
+  std::size_t const alloc_bytes = std::max<std::size_t>(num_rdma_bytes, 1);
+  bool is_host_allocated = false;
+  void* ptr = nullptr;
+
+  CUDA_CHECK(cudaSetDevice(device_index));
+
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  CUDA_CHECK(hipExtMallocWithFlags(&ptr, alloc_bytes, hipDeviceMallocUncached));
+  CUDA_CHECK(cudaMemset(ptr, 0, alloc_bytes));
+#elif defined(EFA) || defined(USE_DMABUF)
+  CUDA_CHECK(cudaMalloc(&ptr, alloc_bytes));
+  CUDA_CHECK(cudaMemset(ptr, 0, alloc_bytes));
+#else
+  bool const use_host_alloc =
+      num_rdma_bytes > 0 &&
+      !can_register_gpu_memory_for_rdma(device_index, num_rdma_bytes);
+  if (!use_host_alloc) {
+    CUDA_CHECK(cudaMalloc(&ptr, alloc_bytes));
+    CUDA_CHECK(cudaMemset(ptr, 0, alloc_bytes));
+  } else {
+    CUDA_CHECK(cudaMallocHost(&ptr, alloc_bytes));
+    std::memset(ptr, 0, alloc_bytes);
+    is_host_allocated = true;
+  }
+#endif
+
+  try {
+    return {make_rdma_buffer_dlpack_capsule(ptr, alloc_bytes, device_index,
+                                            is_host_allocated),
+            is_host_allocated};
+  } catch (...) {
+    free_rdma_raw_buffer(ptr, device_index, is_host_allocated);
+    throw;
+  }
+}
+
+}  // namespace
 
 static std::vector<uint64_t> collect_d2h_channel_addrs_for_device(
     int device_index) {
@@ -1555,6 +1719,17 @@ NB_MODULE(ep, m) {
   });
 
   m.def("get_oob_ip", &uccl::get_oob_ip, "Get the OOB IP address");
+
+  m.def(
+      "get_rdma_buffer",
+      [](std::size_t num_rdma_bytes, int device_index) {
+        return allocate_rdma_buffer_dlpack(num_rdma_bytes, device_index);
+      },
+      nb::arg("num_rdma_bytes"), nb::arg("device_index"),
+      R"doc(
+        Allocate the RDMA scratch buffer outside PyTorch's CUDA allocator and
+        return it as a DLPack capsule plus an `is_host_allocated` flag.
+      )doc");
 
   m.def(
       "can_register_rdma_gpu_buffer",
