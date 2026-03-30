@@ -58,7 +58,7 @@ class Communicator {
   bool notify_ipc_buffer(int remote_rank, uint32_t mr_id, void* local_buf,
                          size_t len);
   bool wait_ipc_buffer(int remote_rank, uint32_t mr_id);
-  bool resolve_remote_buffer_pointer(int remote_rank, uint32_t mr_id,
+  bool resolve_ipc_buffer_pointer(int remote_rank, uint32_t mr_id,
                                      size_t offset, size_t bytes,
                                      void** out_ptr, int* out_device_idx);
 

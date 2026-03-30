@@ -1289,7 +1289,7 @@ bool Communicator::wait_ipc_buffer(int remote_rank, uint32_t mr_id) {
   return true;
 }
 
-bool Communicator::resolve_remote_buffer_pointer(int remote_rank, uint32_t mr_id,
+bool Communicator::resolve_ipc_buffer_pointer(int remote_rank, uint32_t mr_id,
                                                  size_t offset, size_t bytes,
                                                  void** out_ptr,
                                                  int* out_device_idx) {

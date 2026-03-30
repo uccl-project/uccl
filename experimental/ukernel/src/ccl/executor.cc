@@ -424,7 +424,7 @@ void Executor::Impl::submit_ready_op_locked(detail::HandleState& state,
     if ((op.kind == ExecOpKind::DeviceCopy || op.kind == ExecOpKind::DeviceReduce) &&
         runtime_memory != nullptr) {
       ExecOp bound =
-          bind_device_exec_op(op, *runtime_memory, resolve_remote_buffer_ptr);
+          bind_device_exec_op(op, *runtime_memory, resolve_ipc_buffer_pointer);
       token = backend->submit(bound);
     } else {
       token = backend->submit(op);

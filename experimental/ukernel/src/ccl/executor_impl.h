@@ -143,7 +143,7 @@ struct Executor::Impl {
   std::unique_ptr<Backend> owned_device_backend;
   std::shared_ptr<CollectiveMemory> runtime_memory;
   std::function<bool(int, uint32_t, size_t, size_t, void**, int*)>
-      resolve_remote_buffer_ptr;
+      resolve_ipc_buffer_pointer;
   ExecutorBackends backends{};
   std::vector<Backend*> completion_sources;
   uint64_t next_handle = 1;

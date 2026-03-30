@@ -388,14 +388,14 @@ int run_ipc_buffer_metadata_server(
   constexpr uint32_t kValidInfoMr = 4242;
   require(comm->wait_ipc_buffer(kClientRank, kValidInfoMr),
           "wait_ipc_buffer should succeed");
-  require(comm->resolve_remote_buffer_pointer(kClientRank, kValidInfoMr,
+  require(comm->resolve_ipc_buffer_pointer(kClientRank, kValidInfoMr,
                                               /*offset=*/128, /*bytes=*/256,
                                               &resolved, &device_idx),
-          "resolve_remote_buffer_pointer should succeed");
+          "resolve_ipc_buffer_pointer should succeed");
   require(resolved != nullptr, "resolved remote pointer should not be null");
   require(device_idx == kClientGpu,
           "resolved remote pointer should preserve device index");
-  require(!comm->resolve_remote_buffer_pointer(kClientRank, kValidInfoMr,
+  require(!comm->resolve_ipc_buffer_pointer(kClientRank, kValidInfoMr,
                                                /*offset=*/4096, /*bytes=*/1,
                                                &resolved, &device_idx),
           "out-of-range remote pointer resolution should fail");
@@ -403,7 +403,7 @@ int run_ipc_buffer_metadata_server(
   constexpr uint32_t kInvalidInfoMr = 9999;
   require(comm->wait_ipc_buffer(kClientRank, kInvalidInfoMr),
           "invalid ipc metadata fetch should succeed");
-  require(!comm->resolve_remote_buffer_pointer(kClientRank, kInvalidInfoMr, 0,
+  require(!comm->resolve_ipc_buffer_pointer(kClientRank, kInvalidInfoMr, 0,
                                                1, &resolved, &device_idx),
           "invalid ipc metadata should not resolve to a pointer");
 

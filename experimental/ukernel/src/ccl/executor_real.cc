@@ -27,10 +27,10 @@ Executor::Executor(CollectiveMemory memory, ExecutorConfig const& config)
                               config.threads_per_block, config.fifo_capacity,
                               config.smem_size}));
   impl_->runtime_memory = std::move(shared_memory);
-  impl_->resolve_remote_buffer_ptr =
+  impl_->resolve_ipc_buffer_pointer =
       [communicator](int remote_rank, uint32_t mr_id, size_t offset,
                      size_t bytes, void** out_ptr, int* out_device_idx) {
-        return communicator->resolve_remote_buffer_pointer(
+        return communicator->resolve_ipc_buffer_pointer(
             remote_rank, mr_id, offset, bytes, out_ptr, out_device_idx);
       };
 }
