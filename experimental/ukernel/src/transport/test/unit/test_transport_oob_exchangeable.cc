@@ -55,7 +55,7 @@ void test_exchangeable_round_trip() {
           "TcpP2PInfo round-trip mismatch");
 
   IpcBufferInfo ipc{};
-  ipc.mr_id = 9;
+  ipc.ipc_id = 9;
   ipc.base_offset = 128;
   ipc.bytes = 4096;
   ipc.device_idx = 3;
@@ -67,7 +67,7 @@ void test_exchangeable_round_trip() {
 
   IpcBufferInfo ipc_rt;
   ipc_rt.from_map(ipc.to_map());
-  require(ipc_rt.mr_id == ipc.mr_id, "IpcBufferInfo mr_id mismatch");
+  require(ipc_rt.ipc_id == ipc.ipc_id, "IpcBufferInfo ipc_id mismatch");
   require(ipc_rt.base_offset == ipc.base_offset,
           "IpcBufferInfo base_offset mismatch");
   require(ipc_rt.bytes == ipc.bytes, "IpcBufferInfo bytes mismatch");

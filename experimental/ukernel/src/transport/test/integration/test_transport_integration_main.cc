@@ -20,7 +20,7 @@ int main(int argc, char** argv) {
 
   std::cerr << "Usage:\n"
             << "  test_transport_integration communicator --role=server|client "
-               "--case=basic|batch|poll-release|notifier|ipc-buffer-meta [--exchanger-ip IP] "
+               "--case=exchange|ipc-buffer-meta [--exchanger-ip IP] "
                "[--exchanger-port PORT] [--transport auto|ipc|uccl]\n"
             << "  test_transport_integration communicator-local\n";
   return 1;

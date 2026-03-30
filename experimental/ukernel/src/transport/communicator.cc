@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <unordered_set>
 #include <ifaddrs.h>
@@ -143,9 +144,9 @@ std::string tcp_p2p_key(int src_rank, int dst_rank) {
          std::to_string(dst_rank);
 }
 
-std::string ipc_buffer_key(int src_rank, int dst_rank, uint32_t mr_id) {
+std::string ipc_buffer_key(int src_rank, int dst_rank, uint32_t ipc_id) {
   return "ipcbuf:" + std::to_string(src_rank) + "->" + std::to_string(dst_rank) +
-         ":mr:" + std::to_string(mr_id);
+         ":ipc:" + std::to_string(ipc_id);
 }
 
 template <typename Info>
@@ -229,6 +230,13 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       [this](uint64_t mr_id) {
         if (uccl_adapter_) uccl_adapter_->deregister_memory(mr_id);
       });
+
+  // Start background progress immediately so post-transport work, such as
+  // host-bounce host->device copies, is not delayed until an external
+  // poll()/wait_finish() call.
+  notifier_running_.store(true);
+  notifier_started_.store(true);
+  notifier_thread_ = std::thread(&Communicator::completion_notifier_loop, this);
 
   exchange_peer_metas();
   std::cout << "[INFO] Communicator " << global_rank_
@@ -764,15 +772,27 @@ bool Communicator::ensure_uccl_memory_registered(uint64_t mr_id, void* ptr,
 
   void* base_ptr = ptr;
   size_t mr_len = len;
+  bool is_direct_local_mr = false;
 
   // Normal device tensor/staging MRs are tracked in MemoryRegistry by id.
   // Host bounce buffers use synthetic ids that are not, so fall back to the
   // explicit ptr/len provided by the caller in that case.
-  try {
-    MR mr = get_local_mr(static_cast<uint32_t>(mr_id));
-    base_ptr = reinterpret_cast<void*>(static_cast<uintptr_t>(mr.address));
-    mr_len = static_cast<size_t>(mr.length);
-  } catch (std::exception const&) {
+  if (mr_id <= std::numeric_limits<uint32_t>::max()) {
+    try {
+      MR mr = get_local_mr(static_cast<uint32_t>(mr_id));
+      base_ptr = reinterpret_cast<void*>(static_cast<uintptr_t>(mr.address));
+      mr_len = static_cast<size_t>(mr.length);
+      is_direct_local_mr = true;
+    } catch (std::exception const&) {
+    }
+  }
+
+  if (is_direct_local_mr) {
+    std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+    if (uccl_direct_reg_failed_mrs_.find(mr_id) !=
+        uccl_direct_reg_failed_mrs_.end()) {
+      return false;
+    }
   }
 
   if (base_ptr == nullptr || mr_len == 0) {
@@ -784,15 +804,26 @@ bool Communicator::ensure_uccl_memory_registered(uint64_t mr_id, void* ptr,
 
   bool ok = uccl_adapter_->register_memory(mr_id, base_ptr, mr_len);
   if (!ok) {
-    std::cerr << "[ERROR] Communicator " << global_rank_
-              << " failed to register local MR " << mr_id
-              << " with UCCL, base=" << base_ptr
-              << " len=" << mr_len << std::endl;
+    if (is_direct_local_mr) {
+      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+      uccl_direct_reg_failed_mrs_.insert(mr_id);
+      std::cerr << "[WARN] Communicator " << global_rank_
+                << " failed to register local GPU MR " << mr_id
+                << " with UCCL, base=" << base_ptr << " len=" << mr_len
+                << "; future requests will fallback to host bounce"
+                << std::endl;
+    } else {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " failed to register host bounce MR " << mr_id
+                << " with UCCL, base=" << base_ptr << " len=" << mr_len
+                << std::endl;
+    }
   }
   return ok;
 }
 
-bool Communicator::complete_host_bounce_recv(TrackedRequest& tracked) {
+bool Communicator::complete_host_bounce_recv(TrackedRequest& tracked,
+                                             bool blocking) {
   if (!tracked.needs_host_to_device_copy) return true;
   if (!tracked.bounce.ptr || !tracked.completion_buffer) return false;
 
@@ -814,13 +845,17 @@ bool Communicator::complete_host_bounce_recv(TrackedRequest& tracked) {
         host_copy_stream_));
     GPU_RT_CHECK(gpuEventRecord(tracked.host_copy_event, host_copy_stream_));
     tracked.host_copy_submitted = true;
-    return false;
+    if (!blocking) return false;
   }
 
-  gpuError_t query = gpuEventQuery(tracked.host_copy_event);
-  if (query == gpuErrorNotReady) return false;
-  if (query != gpuSuccess) {
-    GPU_RT_CHECK(query);
+  if (blocking) {
+    GPU_RT_CHECK(gpuEventSynchronize(tracked.host_copy_event));
+  } else {
+    gpuError_t query = gpuEventQuery(tracked.host_copy_event);
+    if (query == gpuErrorNotReady) return false;
+    if (query != gpuSuccess) {
+      GPU_RT_CHECK(query);
+    }
   }
   GPU_RT_CHECK(gpuEventDestroy(tracked.host_copy_event));
   tracked.host_copy_event = nullptr;
@@ -830,6 +865,9 @@ bool Communicator::complete_host_bounce_recv(TrackedRequest& tracked) {
 }
 
 void Communicator::cleanup_tracked_request(unsigned id, TrackedRequest& tracked) {
+  if (tracked.kind == PeerTransportKind::Uccl && uccl_adapter_) {
+    uccl_adapter_->release_request(id);
+  }
   if (tracked.kind == PeerTransportKind::Tcp && tcp_adapter_) {
     tcp_adapter_->release_request(id);
   }
@@ -862,6 +900,9 @@ unsigned Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
     void* send_ptr = actual_ptr;
     uint64_t send_mr_id = local_mr_id;
     if (!can_use_direct) {
+      std::cout << "[INFO] Communicator " << global_rank_
+                << " UCCL send uses host bounce for MR " << local_mr_id
+                << " len " << len << std::endl;
       tracked.bounce = host_bounce_pool_->acquire(len, true);
       GPU_RT_CHECK(gpuMemcpy(tracked.bounce.ptr, actual_ptr, len,
                              gpuMemcpyDeviceToHost));
@@ -957,6 +998,9 @@ unsigned Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
       if (ensure_uccl_memory_registered(local_mr.id, actual_ptr, len)) {
         recv_mr_id = local_mr.id;
       } else {
+        std::cout << "[INFO] Communicator " << global_rank_
+                  << " UCCL recv uses host bounce for MR " << local_mr.id
+                  << " len " << len << std::endl;
         tracked.bounce = host_bounce_pool_->acquire(len, true);
         tracked.needs_host_to_device_copy = true;
         tracked.completion_buffer = ptr;
@@ -1076,7 +1120,7 @@ bool Communicator::poll_request_completion(unsigned id, bool blocking) {
   auto it = requests_map_.find(id);
   if (it == requests_map_.end()) return true;
   if (!failed) {
-    bool copy_done = complete_host_bounce_recv(it->second);
+    bool copy_done = complete_host_bounce_recv(it->second, blocking);
     if (!copy_done) return false;
   }
   it->second.completed = true;
@@ -1095,13 +1139,18 @@ bool Communicator::wait_finish(std::vector<unsigned> const& reqs) {
     remaining.insert(reqs.begin(), reqs.end());
   }
 
-  while (true) {
+  while (!remaining.empty()) {
+    bool made_progress = false;
     std::vector<unsigned> finished;
+
     for (auto id : remaining) {
       if (id == 0) return false;
-      if (!poll_request_completion(id, true)) {
-        return false;
+
+      if (!poll_request_completion(id, false)) {
+        continue;
       }
+
+      made_progress = true;
       std::lock_guard<std::mutex> lk(req_mu_);
       auto it = requests_map_.find(id);
       if (it != requests_map_.end() && it->second.failed) {
@@ -1109,15 +1158,25 @@ bool Communicator::wait_finish(std::vector<unsigned> const& reqs) {
         requests_map_.erase(it);
         return false;
       }
+      if (it != requests_map_.end() && !it->second.completed) {
+        continue;
+      }
       if (it != requests_map_.end()) {
         cleanup_tracked_request(id, it->second);
         requests_map_.erase(it);
       }
       finished.push_back(id);
     }
+
     for (auto id : finished) remaining.erase(id);
     if (remaining.empty()) return true;
+
+    if (!made_progress) {
+      std::this_thread::yield();
+    }
   }
+
+  return true;
 }
 
 bool Communicator::poll(unsigned const req) {
@@ -1152,7 +1211,11 @@ MR Communicator::reg_mr(void* local_buf, size_t len) {
   MR info = memory_registry_.track_local_buffer(local_buf, len);
 
   if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
-    (void)uccl_adapter_->register_memory(info.id, local_buf, len);
+    bool ok = uccl_adapter_->register_memory(info.id, local_buf, len);
+    if (!ok) {
+      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+      uccl_direct_reg_failed_mrs_.insert(info.id);
+    }
   }
 
   return info;
@@ -1163,6 +1226,10 @@ bool Communicator::dereg_mr(void* local_buf) {
   if (uccl_adapter_ && uccl_adapter_->is_initialized() &&
       released.has_local_mr_id) {
     uccl_adapter_->deregister_memory(released.local_mr_id);
+  }
+  if (released.has_local_mr_id) {
+    std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+    uccl_direct_reg_failed_mrs_.erase(released.local_mr_id);
   }
   return true;
 }
@@ -1240,12 +1307,12 @@ MR Communicator::get_remote_mr(int remote_rank, uint32_t mr_id) {
   return memory_registry_.get_remote_mr(remote_rank, mr_id);
 }
 
-bool Communicator::notify_ipc_buffer(int remote_rank, uint32_t mr_id,
+bool Communicator::notify_ipc_buffer(int remote_rank, uint32_t ipc_id,
                                      void* local_buf, size_t len) {
   if (!exchanger_client_ || !exchanger_client_->valid()) return false;
 
   IpcBufferInfo info{};
-  info.mr_id = mr_id;
+  info.ipc_id = ipc_id;
   info.valid = false;
   if (local_buf != nullptr && len != 0) {
     int original_device = -1;
@@ -1266,21 +1333,21 @@ bool Communicator::notify_ipc_buffer(int remote_rank, uint32_t mr_id,
   }
 
   return exchanger_client_->publish(
-      ipc_buffer_key(global_rank_, remote_rank, mr_id), info);
+      ipc_buffer_key(global_rank_, remote_rank, ipc_id), info);
 }
 
-bool Communicator::wait_ipc_buffer(int remote_rank, uint32_t mr_id) {
+bool Communicator::wait_ipc_buffer(int remote_rank, uint32_t ipc_id) {
   if (!exchanger_client_ || !exchanger_client_->valid()) return false;
   IpcBufferInfo info{};
   if (!exchanger_client_->wait_and_fetch(
-          ipc_buffer_key(remote_rank, global_rank_, mr_id), info,
+          ipc_buffer_key(remote_rank, global_rank_, ipc_id), info,
           timeout_to_retries(bootstrap_timeout_ms(), kBootstrapPollDelayMs),
           kBootstrapPollDelayMs)) {
     return false;
   }
 
   std::lock_guard<std::mutex> lk(remote_ipc_mu_);
-  auto& state = remote_ipc_buffers_[remote_rank][mr_id];
+  auto& state = remote_ipc_buffers_[remote_rank][ipc_id];
   state.handle = info.handle;
   state.base_offset = static_cast<uintptr_t>(info.base_offset);
   state.bytes = static_cast<size_t>(info.bytes);
@@ -1289,16 +1356,16 @@ bool Communicator::wait_ipc_buffer(int remote_rank, uint32_t mr_id) {
   return true;
 }
 
-bool Communicator::resolve_ipc_buffer_pointer(int remote_rank, uint32_t mr_id,
-                                                 size_t offset, size_t bytes,
-                                                 void** out_ptr,
-                                                 int* out_device_idx) {
+bool Communicator::resolve_ipc_buffer_pointer(int remote_rank, uint32_t ipc_id,
+                                              size_t offset, size_t bytes,
+                                              void** out_ptr,
+                                              int* out_device_idx) {
   if (out_ptr == nullptr) return false;
 
   std::lock_guard<std::mutex> lk(remote_ipc_mu_);
   auto rank_it = remote_ipc_buffers_.find(remote_rank);
   if (rank_it == remote_ipc_buffers_.end()) return false;
-  auto buffer_it = rank_it->second.find(mr_id);
+  auto buffer_it = rank_it->second.find(ipc_id);
   if (buffer_it == rank_it->second.end()) return false;
   RemoteIpcBufferState& state = buffer_it->second;
   if (!state.valid) return false;
@@ -1345,13 +1412,8 @@ std::shared_ptr<void> Communicator::register_completion_notifier(
     notify_targets_.push_back(target);
   }
 
-  bool expected = false;
-  if (notifier_started_.compare_exchange_strong(expected, true)) {
-    notifier_running_.store(true);
-    notifier_thread_ =
-        std::thread(&Communicator::completion_notifier_loop, this);
-  }
-
+  // The progress loop is already running; registering a notifier only changes
+  // which callbacks should observe completed requests.
   notifier_cv_.notify_all();
 
   return std::static_pointer_cast<void>(target);

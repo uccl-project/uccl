@@ -158,7 +158,7 @@ struct TcpP2PInfo : public Exchangeable {
 };
 
 struct IpcBufferInfo : public Exchangeable {
-  uint32_t mr_id = 0;
+  uint32_t ipc_id = 0;
   gpuIpcMemHandle_t handle{};
   uint64_t base_offset = 0;
   uint64_t bytes = 0;
@@ -167,7 +167,7 @@ struct IpcBufferInfo : public Exchangeable {
 
   std::map<std::string, std::string> to_map() const override {
     std::map<std::string, std::string> kv;
-    kv["mr_id"] = std::to_string(mr_id);
+    kv["ipc_id"] = std::to_string(ipc_id);
     kv["base_offset"] = std::to_string(base_offset);
     kv["bytes"] = std::to_string(bytes);
     kv["device_idx"] = std::to_string(device_idx);
@@ -185,7 +185,7 @@ struct IpcBufferInfo : public Exchangeable {
   }
 
   void from_map(std::map<std::string, std::string> const& kv) override {
-    mr_id = static_cast<uint32_t>(std::stoul(kv.at("mr_id")));
+    ipc_id = static_cast<uint32_t>(std::stoul(kv.at("ipc_id")));
     base_offset = std::stoull(kv.at("base_offset"));
     bytes = std::stoull(kv.at("bytes"));
     device_idx = std::stoi(kv.at("device_idx"));

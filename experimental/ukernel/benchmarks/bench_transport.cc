@@ -21,20 +21,33 @@ static inline uint64_t now_ns() {
 // backend queue limit.
 static constexpr int kIpcThroughputWindow = 8;
 static constexpr int kUcclThroughputWindow = 4;
+static constexpr int kTcpThroughputWindow = 1;
 
 static PreferredTransport parse_transport(char const* value) {
   if (strcmp(value, "auto") == 0) return PreferredTransport::Auto;
   if (strcmp(value, "ipc") == 0) return PreferredTransport::Ipc;
   if (strcmp(value, "uccl") == 0) return PreferredTransport::Uccl;
+  if (strcmp(value, "tcp") == 0) return PreferredTransport::Tcp;
   fprintf(stderr,
-          "Error: unsupported transport '%s' (expected auto|ipc|uccl)\n",
+          "Error: unsupported transport '%s' (expected auto|ipc|uccl|tcp)\n",
           value);
   std::exit(1);
 }
 
+enum class IpcPathMode { Auto, Relay };
+
+static IpcPathMode parse_ipc_path(char const* value) {
+  if (strcmp(value, "auto") == 0) return IpcPathMode::Auto;
+  if (strcmp(value, "relay") == 0) return IpcPathMode::Relay;
+  fprintf(stderr,
+          "Error: unsupported ipc path '%s' (expected auto|relay)\n", value);
+  std::exit(1);
+}
+
 static int throughput_window_for(PeerTransportKind kind) {
-  return kind == PeerTransportKind::Uccl ? kUcclThroughputWindow
-                                         : kIpcThroughputWindow;
+  if (kind == PeerTransportKind::Uccl) return kUcclThroughputWindow;
+  if (kind == PeerTransportKind::Tcp) return kTcpThroughputWindow;
+  return kIpcThroughputWindow;
 }
 
 static void print_latency(std::vector<uint64_t> const& v) {
@@ -176,6 +189,35 @@ static uint32_t remote_recv_slot_id(PeerTransportKind kind,
                                     int slot) {
   if (kind != PeerTransportKind::Uccl) return 0;
   return remote_recv_mrs.at(static_cast<size_t>(slot)).id;
+}
+
+static bool sync_before_bidirectional(Communicator& comm, int rank,
+                                      int peer_rank, PeerTransportKind kind,
+                                      void* send_buf, void* recv_buf,
+                                      uint32_t local_send_mr_id,
+                                      std::vector<MR> const& remote_recv_mrs,
+                                      size_t msg_size) {
+  if (rank < peer_rank) {
+    unsigned recv_req = comm.irecv(peer_rank, recv_buf, 0, msg_size, true);
+    if (recv_req == 0) return false;
+    if (!comm.wait_finish(recv_req)) return false;
+
+    unsigned send_req =
+        comm.isend(peer_rank, send_buf, 0, msg_size, local_send_mr_id,
+                   remote_recv_slot_id(kind, remote_recv_mrs, 0), true);
+    if (send_req == 0) return false;
+    return comm.wait_finish(send_req);
+  }
+
+  unsigned send_req =
+      comm.isend(peer_rank, send_buf, 0, msg_size, local_send_mr_id,
+                 remote_recv_slot_id(kind, remote_recv_mrs, 0), true);
+  if (send_req == 0) return false;
+  if (!comm.wait_finish(send_req)) return false;
+
+  unsigned recv_req = comm.irecv(peer_rank, recv_buf, 0, msg_size, true);
+  if (recv_req == 0) return false;
+  return comm.wait_finish(recv_req);
 }
 
 void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
@@ -368,6 +410,16 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   printf("  Throughput: %.2f GB/s (%.2f Gbps)\n", total_gb / elapsed_sec,
          throughput_gbps);
   printf("  Messages/sec: %.2f M\n", num_iterations / elapsed_sec / 1e6);
+
+  if (!sync_before_bidirectional(comm, rank, peer_rank, transport_kind, send_buf,
+                                 recv_slots[0], local_send_mr.id, remote_recv_mrs,
+                                 msg_size)) {
+    fprintf(stderr,
+            "[Sender %d] phase sync failed before bidirectional throughput\n",
+            rank);
+    cleanup();
+    return;
+  }
 
   // Bidirectional throughput test
   printf("[Sender %d] Bidirectional throughput test (%d iterations)...\n", rank,
@@ -617,6 +669,16 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   }
   printf("[Receiver %d] Throughput test complete\n", rank);
 
+  if (!sync_before_bidirectional(comm, rank, peer_rank, transport_kind, send_buf,
+                                 recv_slots[0], local_send_mr.id, remote_recv_mrs,
+                                 msg_size)) {
+    fprintf(stderr,
+            "[Receiver %d] phase sync failed before bidirectional throughput\n",
+            rank);
+    cleanup();
+    return;
+  }
+
   // Bidirectional throughput test
   printf("[Receiver %d] Bidirectional throughput test (%d iterations)...\n",
          rank, num_iterations);
@@ -688,8 +750,10 @@ void print_usage(char const* prog) {
   printf("  --ip <addr>         Local IP address (default: 127.0.0.1)\n");
   printf("  --port <n>          Listen port (default: 6979)\n");
   printf(
-      "  --transport <kind>  Transport override: auto|ipc|uccl (default: "
+      "  --transport <kind>  Transport override: auto|ipc|uccl|tcp (default: "
       "auto)\n");
+  printf(
+      "  --ipc-path <mode>   IPC path mode: auto|relay (default: auto)\n");
   printf("  --help              Show this help\n");
 }
 
@@ -703,6 +767,7 @@ int main(int argc, char** argv) {
   std::string local_ip = "127.0.0.1";
   uint16_t listen_port = 6979;
   PreferredTransport preferred_transport = PreferredTransport::Auto;
+  IpcPathMode ipc_path = IpcPathMode::Auto;
 
   // Parse arguments
   for (int i = 1; i < argc; ++i) {
@@ -724,10 +789,18 @@ int main(int argc, char** argv) {
       listen_port = static_cast<uint16_t>(atoi(argv[++i]));
     } else if (strcmp(argv[i], "--transport") == 0 && i + 1 < argc) {
       preferred_transport = parse_transport(argv[++i]);
+    } else if (strcmp(argv[i], "--ipc-path") == 0 && i + 1 < argc) {
+      ipc_path = parse_ipc_path(argv[++i]);
     } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
       print_usage(argv[0]);
       return 0;
     }
+  }
+
+  if (ipc_path == IpcPathMode::Relay) {
+    setenv("UHM_IPC_FORCE_RELAY", "1", 1);
+  } else {
+    unsetenv("UHM_IPC_FORCE_RELAY");
   }
 
   // Validate arguments
@@ -755,7 +828,12 @@ int main(int argc, char** argv) {
       "Transport override: %s\n",
       preferred_transport == PreferredTransport::Auto
           ? "auto"
-          : (preferred_transport == PreferredTransport::Ipc ? "ipc" : "uccl"));
+          : (preferred_transport == PreferredTransport::Ipc
+                 ? "ipc"
+                 : (preferred_transport == PreferredTransport::Uccl ? "uccl"
+                                                                   : "tcp")));
+  printf("IPC path mode: %s\n",
+         ipc_path == IpcPathMode::Relay ? "relay" : "auto");
   printf("============================================================\n\n");
 
   // Run as sender or receiver

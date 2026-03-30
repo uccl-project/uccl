@@ -49,31 +49,30 @@ Local integration smoke:
 Manual server/client cases:
 
 ```bash
-./test_transport_integration communicator --role=server --case=basic --exchanger-port 16979
-./test_transport_integration communicator --role=client --case=basic --exchanger-ip 127.0.0.1 --exchanger-port 16979
+./test_transport_integration communicator --role=server --case=exchange --exchanger-port 16979
+./test_transport_integration communicator --role=client --case=exchange --exchanger-ip 127.0.0.1 --exchanger-port 16979
 ```
+
+`exchange` is the normal data-path case: connect, accept, send/recv, and verify
+payload.
 
 Available communicator cases:
 
 ```bash
-basic
-batch
-poll-release
-notifier
+exchange
 ipc-buffer-meta
 ```
 
 Common manual runs:
 
 ```bash
-./test_transport_integration communicator --role=server --case=batch --exchanger-port 16981
-./test_transport_integration communicator --role=client --case=batch --exchanger-ip 127.0.0.1 --exchanger-port 16981
-```
-
-```bash
 ./test_transport_integration communicator --role=server --case=ipc-buffer-meta --transport ipc --exchanger-port 16982
 ./test_transport_integration communicator --role=client --case=ipc-buffer-meta --transport ipc --exchanger-ip 127.0.0.1 --exchanger-port 16982
 ```
+
+`ipc-buffer-meta` is a metadata-only IPC case. It does not establish a transport
+send/recv path; it only checks `notify_ipc_buffer -> wait_ipc_buffer ->
+resolve_ipc_buffer_pointer`.
 
 Optional full multi-process suite:
 
@@ -87,6 +86,6 @@ TRANSPORT_RUN_UCCL=1 make suite
 - `test-unit` covers memory registry, socket OOB, peer session, host bounce pool, and TCP adapter.
 - `test-integration` is a lightweight smoke target.
 - Multi-process communicator checks are manual by default.
-- Use `test_transport_integration communicator --role=server|client ...` for manual two-process transport bring-up.
+- Use `test_transport_integration communicator --role=server|client --case=exchange ...` for normal two-process transport bring-up.
 - `oob-shm` is kept as a manual diagnostic case and is not part of the default unit suite.
 - For `PreferredTransport::Uccl`, both peers must be RDMA-capable.

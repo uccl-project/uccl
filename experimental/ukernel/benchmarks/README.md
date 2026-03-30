@@ -1,40 +1,81 @@
 ## Build
 
-on AMD
-```
-The current benchmark set is CUDA/gdrcopy-oriented and does not have a ROCm build path yet.
-```
+NVIDIA:
 
-on Nvidia
-```
+```bash
 cd experimental/ukernel
-make bench
+make transport_bench
 ```
 
 ## Transport benchmark
 
-`bench_transport` uses the transport runtime exactly the way the module is
-expected to be used by upper layers:
-- peer-link selection is controlled by `--transport auto|ipc|uccl`
-- `auto` resolves per peer: same host goes IPC, cross host goes UCCL
-- `ipc` is only valid for same-host peers and fails fast otherwise
-- socket/redis exchanger is only the bootstrap metadata path
-- same-host IPC data movement uses shared-memory ring control plus CUDA IPC
-- standalone benchmark runs use `rank` as the local IPC id; library users can
-  set `CommunicatorConfig.local_id` explicitly or rely on launcher-local-rank
-  environment variables
+`bench_transport` is the transport performance benchmark.
 
-The benchmark runs three phases:
-- latency ping-pong
+Available transport modes:
+
+```bash
+auto
+ipc
+uccl
+tcp
+```
+
+Available IPC path modes:
+
+```bash
+auto
+relay
+```
+
+`--ipc-path relay` forces the same-host IPC benchmark onto the host relay path.
+
+## Run
+
+Server:
+
+```bash
+./bench_transport --rank 0 --peer-rank 1 --gpu-id 0 --msg-size 1048576 --iterations 1000 --warmup 100 --ip 127.0.0.1 --port 6979 --transport ipc
+```
+
+Client:
+
+```bash
+./bench_transport --rank 1 --peer-rank 0 --gpu-id 1 --msg-size 1048576 --iterations 1000 --warmup 100 --ip 127.0.0.1 --port 6979 --transport ipc
+```
+
+IPC direct:
+
+```bash
+CUDA_VISIBLE_DEVICES=6 ./bench_transport --rank 0 --peer-rank 1 --gpu-id 0 --msg-size 1048576 --iterations 1000 --warmup 100 --transport ipc --ipc-path auto --port 6979
+CUDA_VISIBLE_DEVICES=7 ./bench_transport --rank 1 --peer-rank 0 --gpu-id 0 --msg-size 1048576 --iterations 1000 --warmup 100 --transport ipc --ipc-path auto --port 6979
+```
+
+IPC host relay:
+
+```bash
+./bench_transport --rank 0 --peer-rank 1 --gpu-id 0 --msg-size 1048576 --iterations 1000 --warmup 100 --transport ipc --ipc-path relay --port 6980
+./bench_transport --rank 1 --peer-rank 0 --gpu-id 1 --msg-size 1048576 --iterations 1000 --warmup 100 --transport ipc --ipc-path relay --port 6980
+```
+
+UCCL:
+
+```bash
+CUDA_VISIBLE_DEVICES=6 ./bench_transport --rank 0 --peer-rank 1 --gpu-id 0 --msg-size 1048576 --iterations 1000 --warmup 100 --transport uccl --port 6981
+CUDA_VISIBLE_DEVICES=6 ./bench_transport --rank 1 --peer-rank 0 --gpu-id 0 --msg-size 1048576 --iterations 1000 --warmup 100 --transport uccl --port 6981
+```
+
+TCP:
+
+```bash
+./bench_transport --rank 0 --peer-rank 1 --gpu-id 0 --msg-size 1048576 --iterations 1000 --warmup 100 --transport tcp --port 6982
+./bench_transport --rank 1 --peer-rank 0 --gpu-id 1 --msg-size 1048576 --iterations 1000 --warmup 100 --transport tcp --port 6982
+```
+
+The benchmark reports:
+- latency
 - one-way throughput
 - bidirectional throughput
-
-Each phase also validates payload contents after completion, so it checks data
-correctness in addition to completion/progress.
-
-The benchmark uses a transport-specific in-flight window. IPC runs with a
-larger window, while UCCL uses a smaller one to avoid hitting the backend
-queue limit during bidirectional stress.
+- payload correctness after each phase
 
 If you launch multiple benchmark pairs on one host, give each pair a unique
 `--port` so the bootstrap exchanger does not collide.

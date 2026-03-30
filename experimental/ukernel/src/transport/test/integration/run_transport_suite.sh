@@ -75,21 +75,13 @@ run_pair() {
 
 run_one "$BIN" communicator-local
 run_pair ipc-buffer-meta "$((PORT_BASE + 20))" ipc
-
-run_pair basic "$PORT_BASE"
-run_pair batch "$((PORT_BASE + 1))"
-run_pair poll-release "$((PORT_BASE + 2))"
-run_pair notifier "$((PORT_BASE + 3))"
-run_pair basic "$((PORT_BASE + 4))" ipc
-run_pair batch "$((PORT_BASE + 5))" ipc
-run_pair poll-release "$((PORT_BASE + 6))" ipc
+run_pair exchange "$PORT_BASE"
+run_pair exchange "$((PORT_BASE + 1))" ipc
 
 if [ "${TRANSPORT_RUN_UCCL:-0}" = "1" ]; then
-  run_pair basic "$((PORT_BASE + 10))" auto \
+  run_pair exchange "$((PORT_BASE + 10))" auto \
     transport-suite-server transport-suite-client
-  run_pair poll-release "$((PORT_BASE + 11))" auto \
-    transport-suite-server transport-suite-client
-  run_pair basic "$((PORT_BASE + 12))" uccl
+  run_pair exchange "$((PORT_BASE + 12))" uccl
 fi
 
 echo "transport suite completed"

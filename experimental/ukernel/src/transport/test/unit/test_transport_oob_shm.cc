@@ -2,8 +2,10 @@
 #include "test.h"
 #include "test_utils.h"
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <exception>
+#include <mutex>
 #include <sstream>
 #include <thread>
 #include <unistd.h>
@@ -27,6 +29,15 @@ void test_shm_ipc_cache_exchange() {
   std::string const ring_namespace = unique_shm_namespace("oob-shm-test");
   std::exception_ptr rank0_error;
   std::exception_ptr rank1_error;
+  std::mutex done_mu;
+  std::condition_variable done_cv;
+  bool rank0_finished = false;
+
+  auto mark_rank0_finished = [&] {
+    std::lock_guard<std::mutex> lk(done_mu);
+    rank0_finished = true;
+    done_cv.notify_all();
+  };
 
   std::thread rank0([&]() {
     try {
@@ -50,8 +61,10 @@ void test_shm_ipc_cache_exchange() {
       auto const* hb = reinterpret_cast<uint8_t const*>(&got.handle);
       require(hb[0] == 0xA0, "rank0 recv handle prefix[0] mismatch");
       require(hb[1] == 0xA1, "rank0 recv handle prefix[1] mismatch");
+      mark_rank0_finished();
     } catch (...) {
       rank0_error = std::current_exception();
+      mark_rank0_finished();
     }
   });
 
@@ -78,6 +91,11 @@ void test_shm_ipc_cache_exchange() {
 
       require(shm1.send_ipc_cache(/*peer_rank=*/0, /*seq=*/42, w),
               "rank1 send_ipc_cache failed");
+
+      std::unique_lock<std::mutex> lk(done_mu);
+      bool done = done_cv.wait_for(
+          lk, std::chrono::seconds(5), [&] { return rank0_finished; });
+      require(done, "rank1 timed out waiting for rank0 to finish");
     } catch (...) {
       rank1_error = std::current_exception();
     }

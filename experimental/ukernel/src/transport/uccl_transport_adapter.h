@@ -75,10 +75,16 @@ class UcclTransportAdapter {
 
   bool poll_completion(uint64_t request_id);
   bool wait_completion(uint64_t request_id);
+  void release_request(uint64_t request_id);
 
   bool is_initialized() const { return endpoint_ != nullptr; }
 
  private:
+  struct PendingRequest {
+    std::unique_ptr<::uccl::ucclRequest> request;
+    bool completed = false;
+  };
+
   struct PeerContext {
     ::uccl::UcclFlow* send_flow = nullptr;
     ::uccl::UcclFlow* recv_flow = nullptr;
@@ -95,8 +101,7 @@ class UcclTransportAdapter {
   std::unique_ptr<::uccl::RDMAEndpoint> endpoint_;
   std::unordered_map<int, PeerContext> peer_contexts_;
   std::unordered_map<uint64_t, ::uccl::Mhandle*> mr_id_to_mhandle_;
-  std::unordered_map<uint64_t, std::unique_ptr<::uccl::ucclRequest>>
-      pending_requests_;
+  std::unordered_map<uint64_t, PendingRequest> pending_requests_;
   mutable std::mutex mu_;
 };
 

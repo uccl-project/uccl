@@ -207,7 +207,9 @@ int UcclTransportAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
 
   {
     std::lock_guard<std::mutex> lk(mu_);
-    pending_requests_[request_id] = std::move(ureq);
+    auto& pending = pending_requests_[request_id];
+    pending.request = std::move(ureq);
+    pending.completed = false;
   }
 
   return 0;
@@ -265,7 +267,9 @@ int UcclTransportAdapter::recv_async(int peer_rank, void* local_ptr, size_t len,
 
   {
     std::lock_guard<std::mutex> lk(mu_);
-    pending_requests_[request_id] = std::move(ureq);
+    auto& pending = pending_requests_[request_id];
+    pending.request = std::move(ureq);
+    pending.completed = false;
   }
 
   return 0;
@@ -275,8 +279,9 @@ bool UcclTransportAdapter::poll_completion(uint64_t request_id) {
   std::lock_guard<std::mutex> lk(mu_);
   auto it = pending_requests_.find(request_id);
   if (it == pending_requests_.end()) return true;
-  if (!endpoint_->uccl_poll_ureq_once(it->second.get())) return false;
-  pending_requests_.erase(it);
+  if (it->second.completed) return true;
+  if (!endpoint_->uccl_poll_ureq_once(it->second.request.get())) return false;
+  it->second.completed = true;
   return true;
 }
 
@@ -284,9 +289,16 @@ bool UcclTransportAdapter::wait_completion(uint64_t request_id) {
   std::lock_guard<std::mutex> lk(mu_);
   auto it = pending_requests_.find(request_id);
   if (it == pending_requests_.end()) return false;
-  endpoint_->uccl_poll_ureq(it->second.get());
-  pending_requests_.erase(it);
+  if (!it->second.completed) {
+    endpoint_->uccl_poll_ureq(it->second.request.get());
+    it->second.completed = true;
+  }
   return true;
+}
+
+void UcclTransportAdapter::release_request(uint64_t request_id) {
+  std::lock_guard<std::mutex> lk(mu_);
+  pending_requests_.erase(request_id);
 }
 
 }  // namespace Transport

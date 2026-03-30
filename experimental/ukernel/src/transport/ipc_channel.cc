@@ -17,6 +17,11 @@ namespace {
 
 constexpr int kIpcControlPollTimeoutMs = 50;
 
+bool ipc_force_relay_enabled() {
+  char const* env = std::getenv("UHM_IPC_FORCE_RELAY");
+  return env != nullptr && env[0] != '\0' && std::strcmp(env, "0") != 0;
+}
+
 int remaining_timeout_ms(std::chrono::steady_clock::time_point deadline) {
   auto now = std::chrono::steady_clock::now();
   if (now >= deadline) return 0;
@@ -240,14 +245,17 @@ bool IpcChannel::send_one(int to_rank, Request* creq) {
 
   GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx_));
 
-  bool can_use_direct_peer = (got.remote_gpu_idx_ ==
-                              static_cast<uint32_t>(comm_->local_gpu_idx_));
+  bool can_use_direct_peer =
+      !ipc_force_relay_enabled() &&
+      (got.remote_gpu_idx_ == static_cast<uint32_t>(comm_->local_gpu_idx_));
   if (!can_use_direct_peer) {
     int can_access_peer = 0;
-    GPU_RT_CHECK(gpuDeviceCanAccessPeer(
-        &can_access_peer, comm_->local_gpu_idx_,
-        static_cast<int>(got.remote_gpu_idx_)));
-    can_use_direct_peer = (can_access_peer != 0);
+    if (!ipc_force_relay_enabled()) {
+      GPU_RT_CHECK(gpuDeviceCanAccessPeer(
+          &can_access_peer, comm_->local_gpu_idx_,
+          static_cast<int>(got.remote_gpu_idx_)));
+      can_use_direct_peer = (can_access_peer != 0);
+    }
   }
 
   if (!can_use_direct_peer) {

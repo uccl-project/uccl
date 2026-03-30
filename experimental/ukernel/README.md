@@ -48,13 +48,20 @@ cd experimental/ukernel
 make transport_test
 ```
 
+Build transport benchmark:
+
+```bash
+cd experimental/ukernel
+make transport_bench
+```
+
 Manual two-process transport check:
 
 ```bash
 cd experimental/ukernel/src/transport
 make test-integration
-./test_transport_integration communicator --role=server --case=basic --exchanger-port 16979
-./test_transport_integration communicator --role=client --case=basic --exchanger-ip 127.0.0.1 --exchanger-port 16979
+./test_transport_integration communicator --role=server --case=exchange --exchanger-port 16979
+./test_transport_integration communicator --role=client --case=exchange --exchanger-ip 127.0.0.1 --exchanger-port 16979
 ```
 
 Run all device tests:
@@ -76,3 +83,4 @@ make ccl_test SM=80
 - [`src/transport/README.md`](/Users/jacelau/code/opencode/uccl/experimental/ukernel/src/transport/README.md)
 - [`src/device/README.md`](/Users/jacelau/code/opencode/uccl/experimental/ukernel/src/device/README.md)
 - [`src/ccl/README.md`](/Users/jacelau/code/opencode/uccl/experimental/ukernel/src/ccl/README.md)
+- [`benchmarks/README.md`](/Users/jacelau/code/opencode/uccl/experimental/ukernel/benchmarks/README.md)

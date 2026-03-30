@@ -16,6 +16,7 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace UKernel {
@@ -55,12 +56,12 @@ class Communicator {
   MR get_local_mr(void* local_buf);
   MR get_local_mr(uint32_t mr_id);
   MR get_remote_mr(int remote_rank, uint32_t mr_id);
-  bool notify_ipc_buffer(int remote_rank, uint32_t mr_id, void* local_buf,
+  bool notify_ipc_buffer(int remote_rank, uint32_t ipc_id, void* local_buf,
                          size_t len);
-  bool wait_ipc_buffer(int remote_rank, uint32_t mr_id);
-  bool resolve_ipc_buffer_pointer(int remote_rank, uint32_t mr_id,
-                                     size_t offset, size_t bytes,
-                                     void** out_ptr, int* out_device_idx);
+  bool wait_ipc_buffer(int remote_rank, uint32_t ipc_id);
+  bool resolve_ipc_buffer_pointer(int remote_rank, uint32_t ipc_id,
+                                  size_t offset, size_t bytes,
+                                  void** out_ptr, int* out_device_idx);
 
   bool register_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle,
                                  IpcCacheManager::IpcCache const& cache);
@@ -108,7 +109,7 @@ class Communicator {
   void register_existing_local_mrs_with_uccl();
   bool ensure_uccl_memory_registered(uint64_t mr_id, void* ptr, size_t len);
   void cleanup_tracked_request(unsigned id, TrackedRequest& tracked);
-  bool complete_host_bounce_recv(TrackedRequest& tracked);
+  bool complete_host_bounce_recv(TrackedRequest& tracked, bool blocking);
   void exchange_peer_metas();
   ResolvedPeer resolve_peer(int rank) const;
   uint64_t next_ipc_match_seq(int rank, RequestType type);
@@ -117,6 +118,9 @@ class Communicator {
   bool try_fallback_tcp_connect(int rank, CommunicatorMeta const& local_meta);
   bool try_fallback_tcp_accept(int rank, CommunicatorMeta const& local_meta,
                                CommunicatorMeta const& remote_meta);
+  // Background progress loop for transport requests. It advances completion
+  // state for all in-flight requests and emits user completion callbacks for
+  // requests that become fully completed.
   void completion_notifier_loop();
 
   int local_gpu_idx_;
@@ -142,6 +146,9 @@ class Communicator {
   std::vector<uint64_t> next_send_match_seq_;
   std::vector<uint64_t> next_recv_match_seq_;
 
+  // Despite the historical name, this thread now serves as the communicator's
+  // background progress engine. register_completion_notifier() only attaches
+  // user callbacks to this always-on loop.
   std::atomic<bool> notifier_running_{false};
   std::atomic<bool> notifier_started_{false};
   std::thread notifier_thread_;
@@ -155,6 +162,8 @@ class Communicator {
   mutable std::mutex remote_ipc_mu_;
   std::unordered_map<int, std::unordered_map<uint32_t, RemoteIpcBufferState>>
       remote_ipc_buffers_;
+  mutable std::mutex uccl_reg_mu_;
+  std::unordered_set<uint64_t> uccl_direct_reg_failed_mrs_;
 
   friend class IpcChannel;
 };

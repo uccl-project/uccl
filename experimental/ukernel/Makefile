@@ -185,4 +185,6 @@ clean:
 # src/device/persistent_kernel_ops.o: src/device/persistent_kernel_ops.cu
 # 	$(NVCC) $(NVCCFLAGS) -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -MMD -MP -c $< -o $@
 
-.PHONY: all clean bench device_test ccl_test transport_test transport_suite device_bench ensure-uccl-rdma ensure-gdrcopy
+.PHONY: all clean bench transport_bench device_test ccl_test transport_test transport_suite device_bench ensure-uccl-rdma ensure-gdrcopy
+
+transport_bench: $(BENCH_TRANSPORT_BIN)
