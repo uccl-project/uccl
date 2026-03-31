@@ -141,6 +141,7 @@ class Communicator {
 
   std::unordered_map<unsigned, TrackedRequest> requests_map_;
   mutable std::mutex req_mu_;
+  mutable std::mutex mr_exchange_mu_;
   std::atomic<unsigned> next_request_id_{1};
   std::mutex ipc_match_seq_mu_;
   std::vector<uint64_t> next_send_match_seq_;

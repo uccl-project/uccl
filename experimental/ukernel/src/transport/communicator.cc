@@ -10,6 +10,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <unordered_set>
 #include <ifaddrs.h>
@@ -257,6 +258,7 @@ void Communicator::exchange_peer_metas() {
   }
 
   CommunicatorMeta remote;
+  std::vector<int> missing_ranks;
   for (int i = 0; i < world_size_; i++) {
     if (i == global_rank_) continue;
     std::string key = "meta:" + std::to_string(i);
@@ -267,8 +269,18 @@ void Communicator::exchange_peer_metas() {
       peer_manager_->get(i)->set_meta(remote);
       shm_control_->set_peer_local_id(i, remote.local_id);
     } else {
-      fprintf(stderr, "[WARN] Timeout waiting for remote CommunicatorMeta \n");
+      missing_ranks.push_back(i);
     }
+  }
+
+  if (!missing_ranks.empty()) {
+    std::ostringstream oss;
+    oss << "timeout waiting for remote CommunicatorMeta from ranks ";
+    for (size_t i = 0; i < missing_ranks.size(); ++i) {
+      if (i != 0) oss << ",";
+      oss << missing_ranks[i];
+    }
+    throw std::runtime_error(oss.str());
   }
 }
 
@@ -900,9 +912,9 @@ unsigned Communicator::isend(int rank, void* ptr, size_t offset, size_t len,
     void* send_ptr = actual_ptr;
     uint64_t send_mr_id = local_mr_id;
     if (!can_use_direct) {
-      std::cout << "[INFO] Communicator " << global_rank_
-                << " UCCL send uses host bounce for MR " << local_mr_id
-                << " len " << len << std::endl;
+      // std::cout << "[INFO] Communicator " << global_rank_
+      //           << " UCCL send uses host bounce for MR " << local_mr_id
+      //           << " len " << len << std::endl;
       tracked.bounce = host_bounce_pool_->acquire(len, true);
       GPU_RT_CHECK(gpuMemcpy(tracked.bounce.ptr, actual_ptr, len,
                              gpuMemcpyDeviceToHost));
@@ -998,9 +1010,9 @@ unsigned Communicator::irecv(int rank, void* ptr, size_t offset, size_t len,
       if (ensure_uccl_memory_registered(local_mr.id, actual_ptr, len)) {
         recv_mr_id = local_mr.id;
       } else {
-        std::cout << "[INFO] Communicator " << global_rank_
-                  << " UCCL recv uses host bounce for MR " << local_mr.id
-                  << " len " << len << std::endl;
+        // std::cout << "[INFO] Communicator " << global_rank_
+        //           << " UCCL recv uses host bounce for MR " << local_mr.id
+        //           << " len " << len << std::endl;
         tracked.bounce = host_bounce_pool_->acquire(len, true);
         tracked.needs_host_to_device_copy = true;
         tracked.completion_buffer = ptr;
@@ -1130,6 +1142,7 @@ bool Communicator::poll_request_completion(unsigned id, bool blocking) {
 
 bool Communicator::wait_finish(std::vector<unsigned> const& reqs) {
   std::unordered_set<unsigned> remaining;
+  bool any_failed = false;
   if (reqs.empty()) {
     std::lock_guard<std::mutex> lk(req_mu_);
     for (auto const& [id, _] : requests_map_) {
@@ -1154,9 +1167,11 @@ bool Communicator::wait_finish(std::vector<unsigned> const& reqs) {
       std::lock_guard<std::mutex> lk(req_mu_);
       auto it = requests_map_.find(id);
       if (it != requests_map_.end() && it->second.failed) {
+        any_failed = true;
         cleanup_tracked_request(id, it->second);
         requests_map_.erase(it);
-        return false;
+        finished.push_back(id);
+        continue;
       }
       if (it != requests_map_.end() && !it->second.completed) {
         continue;
@@ -1169,14 +1184,14 @@ bool Communicator::wait_finish(std::vector<unsigned> const& reqs) {
     }
 
     for (auto id : finished) remaining.erase(id);
-    if (remaining.empty()) return true;
+    if (remaining.empty()) return !any_failed;
 
     if (!made_progress) {
       std::this_thread::yield();
     }
   }
 
-  return true;
+  return !any_failed;
 }
 
 bool Communicator::poll(unsigned const req) {
@@ -1240,6 +1255,7 @@ bool Communicator::notify_mr(int remote_rank, MR& mr) {
   std::string key =
       "mr:" + std::to_string(global_rank_) + "->" + std::to_string(remote_rank);
 
+  std::lock_guard<std::mutex> lk(mr_exchange_mu_);
   MRInfos wrapper;
   exchanger_client_->fetch(key, wrapper);
   bool replaced = false;
