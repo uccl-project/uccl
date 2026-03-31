@@ -1,16 +1,32 @@
 #pragma once
 
+#include "fifo_gdrcopy.hpp"
 #include "gpu_rt.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <type_traits>
 #include <mutex>
+#include <type_traits>
 #include <vector>
+#if defined(__x86_64__) || defined(__i386__)
+#include <immintrin.h>
+#endif
 
 namespace UKernel {
 namespace Device {
+
+namespace detail {
+
+inline void host_wc_flush() {
+#if defined(__x86_64__) || defined(__i386__)
+  _mm_sfence();
+#else
+  __sync_synchronize();
+#endif
+}
+
+}  // namespace detail
 
 enum class TaskType : uint64_t {
   CollCopy,
@@ -179,8 +195,9 @@ class TaskManager {
     release_nolock_();
 
     cap_task_ = Cap;
-
-    GPU_RT_CHECK(gpuMalloc(&d_task_, sizeof(TaskArgs) * cap_task_));
+    d_task_storage_ = mscclpp::detail::gpuCallocGdrUnique<TaskArgs>(cap_task_);
+    d_task_ = d_task_storage_.get();
+    h_task_ = mscclpp::detail::getGdrHostPtr(d_task_storage_);
 
     free_task_.clear();
     free_task_.reserve(cap_task_);
@@ -218,17 +235,14 @@ class TaskManager {
 
     TaskArgs staged = h;
     staged.reserved0 = 0;
-    uint64_t const unpublished = 0;
     uint64_t const published = TaskArgs::kPublishedMagic;
 
-    // Publish task args in two phases so worker kernels never observe a newly
-    // enqueued task before its metadata is fully initialized on device memory.
-    GPU_RT_CHECK(gpuMemcpy(&(d_task_ + idx)->reserved0, &unpublished,
-                           sizeof(unpublished), gpuMemcpyHostToDevice));
-    GPU_RT_CHECK(
-        gpuMemcpy(d_task_ + idx, &staged, sizeof(TaskArgs), gpuMemcpyHostToDevice));
-    GPU_RT_CHECK(gpuMemcpy(&(d_task_ + idx)->reserved0, &published,
-                           sizeof(published), gpuMemcpyHostToDevice));
+    // Directly write the GDR-mapped TaskArgs slot, then publish it by flipping
+    // the ready marker in the final step.
+    h_task_[idx] = staged;
+    detail::host_wc_flush();
+    h_task_[idx].reserved0 = published;
+    detail::host_wc_flush();
 
     return Task(tt, dt, blockId, idx);
   }
@@ -238,9 +252,8 @@ class TaskManager {
     assert(inited_ && "TaskManager not initialized");
     assert(idx < cap_task_ && "free_task_args idx out of range");
     assert(task_in_use_[idx] == 1 && "double free on task args slot");
-    uint64_t const unpublished = 0;
-    GPU_RT_CHECK(gpuMemcpy(&(d_task_ + idx)->reserved0, &unpublished,
-                           sizeof(unpublished), gpuMemcpyHostToDevice));
+    h_task_[idx].reserved0 = 0;
+    detail::host_wc_flush();
     task_in_use_[idx] = 0;
     free_task_.push_back(idx);
   }
@@ -256,8 +269,9 @@ class TaskManager {
   TaskManager() = default;
 
   void release_nolock_() {
-    if (d_task_) gpuFree(d_task_);
+    d_task_storage_.reset();
     d_task_ = nullptr;
+    h_task_ = nullptr;
 
     free_task_.clear();
     task_in_use_.clear();
@@ -267,6 +281,8 @@ class TaskManager {
   }
 
   TaskArgs* d_task_{nullptr};
+  TaskArgs* h_task_{nullptr};
+  mscclpp::detail::UniqueGdrGpuPtr<TaskArgs> d_task_storage_{};
 
   uint32_t cap_task_{0};
 
