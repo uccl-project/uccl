@@ -10,6 +10,17 @@ constexpr uint32_t kCommandIdle = 0;
 constexpr uint32_t kCommandRun = 1;
 constexpr uint32_t kCommandExit = 2;
 
+__device__ __forceinline__ bool task_uses_args(TaskType ttype) {
+  return ttype == TaskType::CollCopy || ttype == TaskType::CollReduce;
+}
+
+__device__ __forceinline__ void wait_task_args_ready(TaskArgs const* args) {
+  while (mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
+             const_cast<uint64_t*>(&args->reserved0),
+             mscclpp::memoryOrderAcquire) != TaskArgs::kPublishedMagic) {
+  }
+}
+
 }  // namespace
 
 __device__ void run_copy(TaskArgs const& a, uint32_t block_id,
@@ -78,50 +89,40 @@ __device__ void run_reduce(TaskArgs const& a, uint32_t block_id,
                        static_cast<size_t>(my_count), a.red_type(), smem_buf);
 }
 
-__device__ __forceinline__ void process_task(Task const& task,
-                                             TaskArgs* d_task_args,
-                                             uint32_t block_id,
-                                             uint32_t num_blocks,
-                                             void* smem_buf) {
+__device__ __forceinline__ void dispatch_task(Task const& task,
+                                              TaskArgs const* ready_args,
+                                              uint32_t block_id,
+                                              uint32_t num_blocks,
+                                              void* smem_buf) {
   const TaskType ttype = static_cast<TaskType>(task.type_u8());
   const DataType dtype = static_cast<DataType>(task.dtype_u8());
 
   switch (ttype) {
     case TaskType::CollCopy:
     case TaskType::CollReduce: {
-      const uint32_t idx = task.args_index();
-      if (idx >= (1UL << TaskArgsIndexSize)) {
+      if (ready_args == nullptr) {
         return;
       }
-
-      TaskArgs& args = d_task_args[idx];
-      if (threadIdx.x == 0) {
-        volatile TaskArgs* volatile_args =
-            reinterpret_cast<volatile TaskArgs*>(&args);
-        while (volatile_args->reserved0 != TaskArgs::kPublishedMagic) {
-        }
-        __threadfence();
-      }
-      __syncthreads();
+      TaskArgs const& args = *ready_args;
 
       if (ttype == TaskType::CollCopy) {
-      if (dtype == DataType::Int8) {
-        run_typed_copy<int8_t>(args, block_id, num_blocks, smem_buf);
-      } else if (dtype == DataType::Int32) {
-        run_typed_copy<int32_t>(args, block_id, num_blocks, smem_buf);
-      } else if (dtype == DataType::Int64) {
-        run_typed_copy<int64_t>(args, block_id, num_blocks, smem_buf);
-      } else if (dtype == DataType::Fp16) {
-        run_typed_copy<__half>(args, block_id, num_blocks, smem_buf);
-      } else if (dtype == DataType::Fp32) {
-        run_typed_copy<float>(args, block_id, num_blocks, smem_buf);
-      } else if (dtype == DataType::Fp64) {
-        run_typed_copy<double>(args, block_id, num_blocks, smem_buf);
-      } else if (dtype == DataType::Bf16) {
-        run_typed_copy<nv_bfloat16>(args, block_id, num_blocks, smem_buf);
-      } else {
-        run_copy(args, block_id, num_blocks, smem_buf);
-      }
+        if (dtype == DataType::Int8) {
+          run_typed_copy<int8_t>(args, block_id, num_blocks, smem_buf);
+        } else if (dtype == DataType::Int32) {
+          run_typed_copy<int32_t>(args, block_id, num_blocks, smem_buf);
+        } else if (dtype == DataType::Int64) {
+          run_typed_copy<int64_t>(args, block_id, num_blocks, smem_buf);
+        } else if (dtype == DataType::Fp16) {
+          run_typed_copy<__half>(args, block_id, num_blocks, smem_buf);
+        } else if (dtype == DataType::Fp32) {
+          run_typed_copy<float>(args, block_id, num_blocks, smem_buf);
+        } else if (dtype == DataType::Fp64) {
+          run_typed_copy<double>(args, block_id, num_blocks, smem_buf);
+        } else if (dtype == DataType::Bf16) {
+          run_typed_copy<nv_bfloat16>(args, block_id, num_blocks, smem_buf);
+        } else {
+          run_copy(args, block_id, num_blocks, smem_buf);
+        }
       } else if (dtype == DataType::Fp32) {
         run_reduce<float>(args, block_id, num_blocks, smem_buf);
       } else if (dtype == DataType::Fp16) {
@@ -147,6 +148,27 @@ __device__ __forceinline__ void process_task(Task const& task,
   }
 }
 
+__device__ __forceinline__ void process_task(Task const& task,
+                                             TaskArgs* d_task_args,
+                                             uint32_t block_id,
+                                             uint32_t num_blocks,
+                                             void* smem_buf) {
+  TaskArgs* ready_args = nullptr;
+  const TaskType ttype = static_cast<TaskType>(task.type_u8());
+  if (task_uses_args(ttype)) {
+    const uint32_t idx = task.args_index();
+    if (idx >= (1UL << TaskArgsIndexSize)) {
+      return;
+    }
+    ready_args = d_task_args + idx;
+    if (threadIdx.x == 0) {
+      wait_task_args_ready(ready_args);
+    }
+    __syncthreads();
+  }
+  dispatch_task(task, ready_args, block_id, num_blocks, smem_buf);
+}
+
 __global__ void singlePersistentKernel(
     mscclpp::C2DDeviceHandle<Task>* c2d_fifos, TaskArgs* d_task_args,
     bool* should_stop) {
@@ -154,6 +176,8 @@ __global__ void singlePersistentKernel(
   auto& fifo = c2d_fifos[0];
   void* smem_buf = smem;
   __shared__ Task current_task;
+  __shared__ TaskArgs current_args;
+  __shared__ bool has_current_args;
   __shared__ uint32_t command;
   uint64_t cached_tail = 0;
   uint64_t cached_head = 0;
@@ -184,10 +208,21 @@ __global__ void singlePersistentKernel(
         }
         if (cached_tail < cached_head) {
           current_task = fifo.buffer[cached_tail % fifo.size];
+          has_current_args = false;
           command =
               (current_task.type_u8() == static_cast<uint8_t>(TaskType::Stop))
                   ? kCommandExit
                   : kCommandRun;
+          if (command == kCommandRun &&
+              task_uses_args(static_cast<TaskType>(current_task.type_u8()))) {
+            const uint32_t idx = current_task.args_index();
+            if (idx < (1UL << TaskArgsIndexSize)) {
+              TaskArgs* args = d_task_args + idx;
+              wait_task_args_ready(args);
+              current_args = *args;
+              has_current_args = true;
+            }
+          }
           if (command == kCommandExit) {
             ++cached_tail;
             mscclpp::atomicStore<uint64_t, mscclpp::scopeSystem>(
@@ -205,7 +240,8 @@ __global__ void singlePersistentKernel(
       return;
     }
 
-    process_task(current_task, d_task_args, 0, 1, smem_buf);
+    dispatch_task(current_task, has_current_args ? &current_args : nullptr, 0,
+                  1, smem_buf);
     __syncthreads();
 
     if (threadIdx.x == 0) {
