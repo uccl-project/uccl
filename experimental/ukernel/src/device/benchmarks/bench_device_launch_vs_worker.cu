@@ -76,25 +76,6 @@ struct DeviceBuffers {
     other.bytes = 0;
   }
 
-  DeviceBuffers& operator=(DeviceBuffers&& other) noexcept {
-    if (this == &other) {
-      return *this;
-    }
-    if (dst != nullptr) {
-      gpuFree(dst);
-    }
-    if (src != nullptr) {
-      gpuFree(src);
-    }
-    src = other.src;
-    dst = other.dst;
-    bytes = other.bytes;
-    other.src = nullptr;
-    other.dst = nullptr;
-    other.bytes = 0;
-    return *this;
-  }
-
   ~DeviceBuffers() {
     if (dst != nullptr) {
       gpuFree(dst);

@@ -22,8 +22,8 @@ __device__ __forceinline__ void publish_tail_progress(uint64_t* tail,
 
 }  // namespace
 
-__device__ void run_copy(TaskArgs const& a, uint32_t block_id,
-                         uint32_t num_blocks, void* smem_buf) {
+__device__ __forceinline__ void run_copy(TaskArgs const& a, uint32_t block_id,
+                                         uint32_t num_blocks, void* smem_buf) {
   char* dst = reinterpret_cast<char*>(a.dst);
   char const* src = reinterpret_cast<char const*>(a.src);
   const uint64_t total_count = static_cast<uint64_t>(a.bytes);
@@ -44,8 +44,10 @@ __device__ void run_copy(TaskArgs const& a, uint32_t block_id,
 }
 
 template <typename T>
-__device__ void run_typed_copy(TaskArgs const& a, uint32_t block_id,
-                               uint32_t num_blocks, void* smem_buf) {
+__device__ __forceinline__ void run_typed_copy(TaskArgs const& a,
+                                               uint32_t block_id,
+                                               uint32_t num_blocks,
+                                               void* smem_buf) {
   if ((a.bytes % sizeof(T)) != 0) {
     run_copy(a, block_id, num_blocks, smem_buf);
     return;
@@ -69,8 +71,10 @@ __device__ void run_typed_copy(TaskArgs const& a, uint32_t block_id,
 }
 
 template <typename T>
-__device__ void run_reduce(TaskArgs const& a, uint32_t block_id,
-                           uint32_t num_blocks, void* smem_buf) {
+__device__ __forceinline__ void run_reduce(TaskArgs const& a,
+                                           uint32_t block_id,
+                                           uint32_t num_blocks,
+                                           void* smem_buf) {
   T* dst = reinterpret_cast<T*>(a.dst);
   T const* src = reinterpret_cast<T const*>(a.src);
   const uint64_t total_count = static_cast<uint64_t>(a.bytes) / sizeof(T);
@@ -174,7 +178,7 @@ __device__ __forceinline__ void process_task(Task const& task,
   dispatch_task(task, ready_args, block_id, num_blocks, smem_buf);
 }
 
-__global__ void singlePersistentKernel(
+__launch_bounds__(1024, 1) __global__ void singlePersistentKernel(
     mscclpp::C2DDeviceHandle<Task>* c2d_fifos, TaskArgs* d_task_args,
     bool* should_stop) {
   extern __shared__ char smem[];
