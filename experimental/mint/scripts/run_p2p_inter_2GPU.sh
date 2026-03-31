@@ -338,6 +338,14 @@ MPI_ENV_ARGS=(
   -x "LD_LIBRARY_PATH=${LD_LIBRARY_PATH_VALUE}"
 )
 
+if [[ -z "${MSCCLPP_SOCKET_IFNAME:-}" && -n "${NCCL_SOCKET_IFNAME:-}" ]]; then
+  MSCCLPP_SOCKET_IFNAME="${NCCL_SOCKET_IFNAME}"
+fi
+
+if [[ -z "${MSCCLPP_HCA_DEVICES:-}" && -n "${NCCL_IB_HCA:-}" ]]; then
+  MSCCLPP_HCA_DEVICES="${NCCL_IB_HCA}"
+fi
+
 for env_name in \
   NCCL_SOCKET_IFNAME \
   NCCL_IB_HCA \
@@ -348,6 +356,10 @@ for env_name in \
   NCCL_NET_GDR_LEVEL \
   NCCL_IB_DISABLE \
   NCCL_P2P_DISABLE \
+  MSCCLPP_DEBUG \
+  MSCCLPP_DEBUG_SUBSYS \
+  MSCCLPP_SOCKET_IFNAME \
+  MSCCLPP_HCA_DEVICES \
   MSCCLPP_LOG_LEVEL \
   MSCCLPP_LOG_SUBSYS; do
   if [[ -n "${!env_name:-}" ]]; then

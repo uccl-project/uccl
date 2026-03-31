@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 #if defined(ENABLE_NPKIT)
@@ -20,13 +21,168 @@
 #include "allreduce.hpp"
 #include "broadcast.hpp"
 #include "datatype_conversion.hpp"
+#include "gpu_utils.hpp"
 #include "logger.hpp"
 #include "nccl.h"
+#include "semaphore.hpp"
+#include <atomic>
+#include <cuda.h>
 #include <dlfcn.h>
+#include <mutex>
+#include <thread>
 
 static constexpr auto MSCCLPP_NCCL = mscclpp::LogSubsys::NCCL;
 
 namespace {
+
+static constexpr int kNcclSendRecvInitTagBase = 0x530000;
+static constexpr int kNcclSendRecvInitTagStride = 8;
+
+static const mscclpp::Transport kIBTransports[] = {
+    mscclpp::Transport::IB0, mscclpp::Transport::IB1, mscclpp::Transport::IB2,
+    mscclpp::Transport::IB3, mscclpp::Transport::IB4, mscclpp::Transport::IB5,
+    mscclpp::Transport::IB6, mscclpp::Transport::IB7};
+
+// Async worker state for CPU-driven IB send/recv.  Lives on the heap via
+// unique_ptr so that NcclSendRecvPeerContext stays movable (std::thread and
+// std::atomic are not).
+struct SendRecvWorkerState {
+  struct WorkItem {
+    enum Type : uint8_t { SEND = 0 } type;
+    size_t bytes;
+  };
+
+  // Lock-free SPSC ring buffer (one producer = caller, one consumer = worker).
+  static constexpr uint32_t kCapacity = 64;
+  WorkItem ring[kCapacity];
+  alignas(64) std::atomic<uint32_t> head{0};
+  alignas(64) std::atomic<uint32_t> tail{0};
+
+  std::atomic<bool> stopFlag{false};
+  std::thread thread;
+
+  // Send: CUDA event tracks D2H completion on the user stream.
+  cudaEvent_t d2hDoneEvent = nullptr;
+
+  void push(WorkItem const& item) {
+    uint32_t h = head.load(std::memory_order_relaxed);
+    while (h - tail.load(std::memory_order_acquire) >= kCapacity) {
+      // Queue full — spin (should not happen in practice).
+    }
+    ring[h % kCapacity] = item;
+    head.store(h + 1, std::memory_order_release);
+  }
+
+  bool pop(WorkItem& item) {
+    uint32_t t = tail.load(std::memory_order_relaxed);
+    if (t >= head.load(std::memory_order_acquire)) return false;
+    item = ring[t % kCapacity];
+    tail.store(t + 1, std::memory_order_release);
+    return true;
+  }
+
+  ~SendRecvWorkerState() {
+    stopFlag.store(true, std::memory_order_release);
+    if (thread.joinable()) thread.join();
+    if (d2hDoneEvent) cudaEventDestroy(d2hDoneEvent);
+  }
+};
+
+struct NcclSendRecvPeerContext {
+  int localDevice = -1;
+  size_t stagingBytes = 0;
+  mscclpp::Transport transport = mscclpp::Transport::Unknown;
+  std::shared_ptr<char> sendStagingBuffer;
+  std::shared_ptr<char> recvStagingBuffer;
+  mscclpp::RegisteredMemory sendStagingMemory;
+  mscclpp::RegisteredMemory recvStagingMemory;
+  mscclpp::RegisteredMemory remoteRecvStagingMemory;
+  mscclpp::Connection connection;
+  std::shared_ptr<mscclpp::Host2HostSemaphore> h2hSemaphore;
+
+  // Async worker — destroyed first (declared last) so the thread is joined
+  // before the connection / semaphore members are destroyed.
+  std::unique_ptr<SendRecvWorkerState> worker;
+};
+
+inline bool hasIBDevices() { return mscclpp::getIBDeviceCount() > 0; }
+
+inline int sendRecvInitTag(int rank, int worldSize, int peer, int slot) {
+  int lo = std::min(rank, peer);
+  int hi = std::max(rank, peer);
+  int pairIndex = lo * worldSize + hi;
+  return kNcclSendRecvInitTagBase + pairIndex * kNcclSendRecvInitTagStride +
+         slot;
+}
+
+inline size_t sendRecvStagingBytes() {
+  int bytes = mscclpp::env()->ncclSendRecvStagingBytes;
+  if (bytes <= 0) {
+    throw mscclpp::Error(
+        "MSCCLPP_NCCL_SENDRECV_STAGING_BYTES must be positive",
+        mscclpp::ErrorCode::InvalidUsage);
+  }
+  return static_cast<size_t>(bytes);
+}
+
+inline ncclResult_t mapMscclppException(std::exception const& ex) {
+  if (auto const* err = dynamic_cast<mscclpp::Error const*>(&ex)) {
+    switch (err->getErrorCode()) {
+      case mscclpp::ErrorCode::InvalidUsage:
+        return ncclInvalidUsage;
+      case mscclpp::ErrorCode::Timeout:
+      case mscclpp::ErrorCode::SystemError:
+        return ncclSystemError;
+      default:
+        return ncclInternalError;
+    }
+  }
+  if (dynamic_cast<mscclpp::CudaError const*>(&ex) != nullptr ||
+      dynamic_cast<mscclpp::CuError const*>(&ex) != nullptr) {
+    return ncclUnhandledCudaError;
+  }
+  return ncclInternalError;
+}
+
+template <typename Fn>
+ncclResult_t runNcclGuarded(char const* opName, Fn&& fn) {
+  try {
+    fn();
+    return ncclSuccess;
+  } catch (std::exception const& ex) {
+    WARN(MSCCLPP_NCCL, std::string(opName), " failed: ",
+         std::string(ex.what()));
+    return mapMscclppException(ex);
+  } catch (...) {
+    WARN(MSCCLPP_NCCL, std::string(opName),
+         " failed with an unknown exception");
+    return ncclInternalError;
+  }
+}
+
+// Worker thread: spins on the SPSC queue, issues IB operations on the CPU.
+static void sendRecvWorkerLoop(NcclSendRecvPeerContext* ctx) {
+  auto* ws = ctx->worker.get();
+  if (ctx->localDevice >= 0) {
+    cudaSetDevice(ctx->localDevice);
+  }
+
+  SendRecvWorkerState::WorkItem item;
+  while (!ws->stopFlag.load(std::memory_order_acquire)) {
+    if (!ws->pop(item)) continue;  // spin
+
+    try {
+      while (cudaEventQuery(ws->d2hDoneEvent) == cudaErrorNotReady) {
+      }
+      ctx->connection.write(ctx->remoteRecvStagingMemory, 0,
+                            ctx->sendStagingMemory, 0, item.bytes);
+      ctx->h2hSemaphore->signal();
+      ctx->connection.flush();
+    } catch (std::exception const& ex) {
+      WARN(MSCCLPP_NCCL, "sendRecvWorker failed: ", ex.what());
+    }
+  }
+}
 
 void registerMigratedAppNcclAlgorithms(uintptr_t scratchBuffer,
                                        size_t scratchBufferSize) {
@@ -226,6 +382,22 @@ struct splitCommInfo {
   int originalRank;
 };
 
+enum class GroupedP2POpKind { Send, Recv };
+
+struct GroupedP2POp {
+  GroupedP2POpKind kind;
+  void const* sendbuff = nullptr;
+  void* recvbuff = nullptr;
+  size_t count = 0;
+  ncclDataType_t datatype = ncclFloat32;
+  int peer = -1;
+  ncclComm_t comm = nullptr;
+  cudaStream_t stream = nullptr;
+};
+
+thread_local int gNcclGroupDepth = 0;
+thread_local std::vector<GroupedP2POp> gNcclGroupedP2POps;
+
 struct ncclComm {
   std::shared_ptr<mscclpp::Communicator> comm;
   std::shared_ptr<mscclpp::Executor> executor;
@@ -236,9 +408,222 @@ struct ncclComm {
   const size_t scratchBufferSize_ = (1 << 27);  // 128MB
   int nRanksPerNode;
   int worldSize;
+  int cudaDevice = -1;  // cached from ncclCommInitRank
 
   void* mscclppNcclComm;
+  std::mutex sendRecvMutex;
+  std::unordered_map<int, NcclSendRecvPeerContext> sendRecvPeerContexts;
+
+  // Cached at init time to avoid per-call overhead.
+  bool hasIB = false;
+  size_t sendRecvStagingBytesCached = 0;
 };
+
+static bool peersShareNode(ncclComm_t comm, int peer) {
+  return comm->nRanksPerNode > 0 &&
+         (comm->comm->bootstrap()->getRank() / comm->nRanksPerNode ==
+          peer / comm->nRanksPerNode);
+}
+
+static mscclpp::Transport selectSendRecvTransport(ncclComm_t comm, int peer) {
+  if (!hasIBDevices() || peersShareNode(comm, peer)) {
+    return mscclpp::Transport::Unknown;
+  }
+  int localIndex = comm->comm->bootstrap()->getRank() % comm->nRanksPerNode;
+  if (localIndex < 0 ||
+      localIndex >= static_cast<int>(sizeof(kIBTransports) /
+                                     sizeof(kIBTransports[0]))) {
+    throw mscclpp::Error("Local rank index is out of supported IB range",
+                         mscclpp::ErrorCode::InvalidUsage);
+  }
+  return kIBTransports[localIndex];
+}
+
+static int deviceForBuffer(void const* ptr) {
+  int device = mscclpp::detail::gpuIdFromAddress(const_cast<void*>(ptr));
+  if (device < 0) {
+    throw mscclpp::Error("Failed to infer GPU device from buffer pointer",
+                         mscclpp::ErrorCode::InvalidUsage);
+  }
+  return device;
+}
+
+static void initializeSendRecvPeerContext(ncclComm_t comm, int peer,
+                                          int localDevice,
+                                          NcclSendRecvPeerContext& ctx) {
+  mscclpp::CudaDeviceGuard deviceGuard(localDevice);
+  int rank = comm->comm->bootstrap()->getRank();
+
+  ctx.localDevice = localDevice;
+  ctx.stagingBytes = sendRecvStagingBytes();
+  ctx.transport = selectSendRecvTransport(comm, peer);
+  if (ctx.transport == mscclpp::Transport::Unknown) {
+    throw mscclpp::Error(
+        "CPU-driven ncclSend/ncclRecv currently requires inter-node IB "
+        "transport",
+        mscclpp::ErrorCode::InvalidUsage);
+  }
+
+  // The staging buffers only participate in D2H/H2D copies and IB host MR
+  // registration; they do not need a device alias. Using plain pinned host
+  // memory avoids routing them into the GPU DMABUF registration path.
+  ctx.sendStagingBuffer =
+      mscclpp::detail::gpuCallocHostShared<char>(ctx.stagingBytes, 0);
+  ctx.recvStagingBuffer =
+      mscclpp::detail::gpuCallocHostShared<char>(ctx.stagingBytes, 0);
+
+  mscclpp::TransportFlags transportFlags(ctx.transport);
+  ctx.sendStagingMemory = comm->comm->registerMemory(
+      ctx.sendStagingBuffer.get(), ctx.stagingBytes, transportFlags);
+  ctx.recvStagingMemory = comm->comm->registerMemory(
+      ctx.recvStagingBuffer.get(), ctx.stagingBytes, transportFlags);
+
+  // Use a CPU-device endpoint so that Host2HostSemaphore tokens live in
+  // CPU-pinned memory and RDMA atomics target host memory (always supported).
+  mscclpp::EndpointConfig endpointConfig(
+      ctx.transport, mscclpp::Device(mscclpp::DeviceType::CPU));
+  auto connectionFuture =
+      comm->comm->connect(endpointConfig, peer,
+                          sendRecvInitTag(rank, comm->worldSize, peer, 0));
+  comm->comm->sendMemory(ctx.recvStagingMemory, peer,
+                         sendRecvInitTag(rank, comm->worldSize, peer, 1));
+  auto remoteRecvStagingFuture =
+      comm->comm->recvMemory(peer,
+                             sendRecvInitTag(rank, comm->worldSize, peer, 1));
+
+  ctx.connection = connectionFuture.get();
+  auto semaphore =
+      comm->comm
+          ->buildSemaphore(ctx.connection, peer,
+                           sendRecvInitTag(rank, comm->worldSize, peer, 2))
+          .get();
+  ctx.remoteRecvStagingMemory = remoteRecvStagingFuture.get();
+  ctx.h2hSemaphore =
+      std::make_shared<mscclpp::Host2HostSemaphore>(semaphore);
+
+  // Start async worker thread for IB operations.
+  ctx.worker = std::make_unique<SendRecvWorkerState>();
+  MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(&ctx.worker->d2hDoneEvent,
+                                              cudaEventDisableTiming));
+  ctx.worker->thread = std::thread(sendRecvWorkerLoop, &ctx);
+}
+
+static NcclSendRecvPeerContext& getSendRecvPeerContext(ncclComm_t comm,
+                                                       int peer,
+                                                       int localDevice) {
+  std::lock_guard<std::mutex> lock(comm->sendRecvMutex);
+  auto [it, inserted] = comm->sendRecvPeerContexts.try_emplace(peer);
+  if (!it->second.worker) {
+    try {
+      initializeSendRecvPeerContext(comm, peer, localDevice, it->second);
+    } catch (...) {
+      if (inserted) {
+        comm->sendRecvPeerContexts.erase(it);
+      }
+      throw;
+    }
+  } else if (it->second.localDevice != localDevice) {
+    throw mscclpp::Error(
+        "ncclSend/ncclRecv staging context was initialized on a different GPU",
+        mscclpp::ErrorCode::InvalidUsage);
+  }
+  return it->second;
+}
+
+static ncclResult_t executeNcclSendImpl(void const* sendbuff, size_t count,
+                                        ncclDataType_t datatype, int peer,
+                                        ncclComm_t comm, cudaStream_t stream) {
+  if (comm == nullptr || sendbuff == nullptr || peer < 0 ||
+      peer >= comm->worldSize) {
+    WARN(MSCCLPP_NCCL,
+         "ncclSend received invalid arguments: sendbuff=%p peer=%d comm=%p",
+         sendbuff, peer, comm);
+    return ncclInvalidArgument;
+  }
+  if (peer == comm->comm->bootstrap()->getRank()) {
+    WARN(MSCCLPP_NCCL, "ncclSend does not support self-send");
+    return ncclInvalidUsage;
+  }
+
+  size_t typeSize = ncclTypeSize(datatype);
+  if (typeSize == 0) {
+    WARN(MSCCLPP_NCCL, "ncclSend got an invalid datatype %d", datatype);
+    return ncclInvalidArgument;
+  }
+  size_t bytes = count * typeSize;
+  if (bytes == 0) return ncclSuccess;
+  int localDevice = comm->cudaDevice;
+  size_t stagingBytes = comm->sendRecvStagingBytesCached;
+
+  if (!comm->hasIB || peersShareNode(comm, peer) || bytes > stagingBytes) {
+    if (mscclppNcclDlopenSharedLib == true) {
+      return mscclppNcclOps.Send(
+          sendbuff, count, datatype, peer,
+          *reinterpret_cast<ncclComm_t*>(comm->mscclppNcclComm), stream);
+    }
+    WARN(MSCCLPP_NCCL,
+         "CPU-driven ncclSend requires inter-node IB and message size "
+         "<= ", stagingBytes, " bytes");
+    return ncclInvalidUsage;
+  }
+
+  return runNcclGuarded("ncclSend", [&]() {
+    mscclpp::CudaDeviceGuard deviceGuard(localDevice);
+    auto& peerCtx = getSendRecvPeerContext(comm, peer, localDevice);
+    auto* ws = peerCtx.worker.get();
+    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+        peerCtx.sendStagingBuffer.get(), sendbuff, bytes,
+        cudaMemcpyDeviceToHost, stream));
+    MSCCLPP_CUDATHROW(cudaEventRecord(ws->d2hDoneEvent, stream));
+    ws->push({SendRecvWorkerState::WorkItem::SEND, bytes});
+  });
+}
+
+static ncclResult_t executeNcclRecvImpl(void* recvbuff, size_t count,
+                                        ncclDataType_t datatype, int peer,
+                                        ncclComm_t comm, cudaStream_t stream) {
+  if (comm == nullptr || recvbuff == nullptr || peer < 0 ||
+      peer >= comm->worldSize) {
+    WARN(MSCCLPP_NCCL,
+         "ncclRecv received invalid arguments: recvbuff=%p peer=%d comm=%p",
+         recvbuff, peer, comm);
+    return ncclInvalidArgument;
+  }
+  if (peer == comm->comm->bootstrap()->getRank()) {
+    WARN(MSCCLPP_NCCL, "ncclRecv does not support self-recv");
+    return ncclInvalidUsage;
+  }
+
+  size_t typeSize = ncclTypeSize(datatype);
+  if (typeSize == 0) {
+    WARN(MSCCLPP_NCCL, "ncclRecv got an invalid datatype %d", datatype);
+    return ncclInvalidArgument;
+  }
+  size_t bytes = count * typeSize;
+  if (bytes == 0) return ncclSuccess;
+  int localDevice = comm->cudaDevice;
+  size_t stagingBytes = comm->sendRecvStagingBytesCached;
+
+  if (!comm->hasIB || peersShareNode(comm, peer) || bytes > stagingBytes) {
+    if (mscclppNcclDlopenSharedLib == true) {
+      return mscclppNcclOps.Recv(
+          recvbuff, count, datatype, peer,
+          *reinterpret_cast<ncclComm_t*>(comm->mscclppNcclComm), stream);
+    }
+    WARN(MSCCLPP_NCCL,
+         "CPU-driven ncclRecv requires inter-node IB and message size "
+         "<= ", stagingBytes, " bytes");
+    return ncclInvalidUsage;
+  }
+
+  return runNcclGuarded("ncclRecv", [&]() {
+    mscclpp::CudaDeviceGuard deviceGuard(localDevice);
+    auto& peerCtx = getSendRecvPeerContext(comm, peer, localDevice);
+    peerCtx.h2hSemaphore->wait(/*maxSpinCount=*/-1);
+    MSCCLPP_CUDATHROW(cudaMemcpyAsync(recvbuff, peerCtx.recvStagingBuffer.get(),
+                                      bytes, cudaMemcpyHostToDevice, stream));
+  });
+}
 
 NCCL_API ncclResult_t ncclGetVersion(int* version) {
   if (version == nullptr) {
@@ -378,6 +763,13 @@ NCCL_API ncclResult_t ncclCommInitRank(ncclComm_t* comm, int nranks,
 
   commPtr->nRanksPerNode = mscclppComm->bootstrap()->getNranksPerNode();
   commPtr->worldSize = mscclppComm->bootstrap()->getNranks();
+  commPtr->hasIB = hasIBDevices();
+  MSCCLPP_CUDATHROW(cudaGetDevice(&commPtr->cudaDevice));
+  try {
+    commPtr->sendRecvStagingBytesCached = sendRecvStagingBytes();
+  } catch (...) {
+    commPtr->sendRecvStagingBytesCached = 0;
+  }
   auto algoBuilder =
       mscclpp::collective::AlgorithmCollectionBuilder::getInstance();
   algoBuilder->setFallbackAlgorithmSelector(algoSelector);
@@ -918,25 +1310,35 @@ NCCL_API ncclResult_t ncclAllGather(void const* sendbuff, void* recvbuff,
 NCCL_API ncclResult_t ncclSend(void const* sendbuff, size_t count,
                                ncclDataType_t datatype, int peer,
                                ncclComm_t comm, cudaStream_t stream) {
-  if (mscclppNcclDlopenSharedLib == true) {
-    return mscclppNcclOps.Send(
-        sendbuff, count, datatype, peer,
-        *reinterpret_cast<ncclComm_t*>(comm->mscclppNcclComm), stream);
+  if (!mscclppNcclDlopenSharedLib && gNcclGroupDepth > 0) {
+    gNcclGroupedP2POps.push_back({.kind = GroupedP2POpKind::Send,
+                                  .sendbuff = sendbuff,
+                                  .recvbuff = nullptr,
+                                  .count = count,
+                                  .datatype = datatype,
+                                  .peer = peer,
+                                  .comm = comm,
+                                  .stream = stream});
+    return ncclSuccess;
   }
-  WARN(MSCCLPP_NCCL, "ncclSend is currently unavailable");
-  return ncclInternalError;
+  return executeNcclSendImpl(sendbuff, count, datatype, peer, comm, stream);
 }
 
 NCCL_API ncclResult_t ncclRecv(void* recvbuff, size_t count,
                                ncclDataType_t datatype, int peer,
                                ncclComm_t comm, cudaStream_t stream) {
-  if (mscclppNcclDlopenSharedLib == true) {
-    return mscclppNcclOps.Recv(
-        recvbuff, count, datatype, peer,
-        *reinterpret_cast<ncclComm_t*>(comm->mscclppNcclComm), stream);
+  if (!mscclppNcclDlopenSharedLib && gNcclGroupDepth > 0) {
+    gNcclGroupedP2POps.push_back({.kind = GroupedP2POpKind::Recv,
+                                  .sendbuff = nullptr,
+                                  .recvbuff = recvbuff,
+                                  .count = count,
+                                  .datatype = datatype,
+                                  .peer = peer,
+                                  .comm = comm,
+                                  .stream = stream});
+    return ncclSuccess;
   }
-  WARN(MSCCLPP_NCCL, "ncclRecv is currently unavailable");
-  return ncclInternalError;
+  return executeNcclRecvImpl(recvbuff, count, datatype, peer, comm, stream);
 }
 
 NCCL_API ncclResult_t ncclAllToAll(void const* sendbuff, void* recvbuff,
@@ -979,7 +1381,7 @@ NCCL_API ncclResult_t ncclGroupStart() {
   if (mscclppNcclDlopenSharedLib == true) {
     return mscclppNcclOps.GroupStart();
   }
-  WARN(MSCCLPP_NCCL, "ncclGroupStart is currently unavailable, return success");
+  gNcclGroupDepth++;
   return ncclSuccess;
 }
 
@@ -987,7 +1389,33 @@ NCCL_API ncclResult_t ncclGroupEnd() {
   if (mscclppNcclDlopenSharedLib == true) {
     return mscclppNcclOps.GroupEnd();
   }
-  WARN(MSCCLPP_NCCL, "ncclGroupEnd is currently unavailable, return success");
+  if (gNcclGroupDepth <= 0) {
+    WARN(MSCCLPP_NCCL, "ncclGroupEnd called without a matching ncclGroupStart");
+    return ncclInvalidUsage;
+  }
+  gNcclGroupDepth--;
+  if (gNcclGroupDepth > 0) {
+    return ncclSuccess;
+  }
+
+  auto ops = std::move(gNcclGroupedP2POps);
+  gNcclGroupedP2POps.clear();
+  for (auto const& op : ops) {
+    ncclResult_t result =
+        (op.kind == GroupedP2POpKind::Send)
+            ? executeNcclSendImpl(op.sendbuff, op.count, op.datatype, op.peer,
+                                  op.comm, op.stream)
+            : executeNcclRecvImpl(op.recvbuff, op.count, op.datatype, op.peer,
+                                  op.comm, op.stream);
+    if (result != ncclSuccess) {
+      WARN(MSCCLPP_NCCL, "ncclGroupEnd queued ",
+           (op.kind == GroupedP2POpKind::Send ? "send" : "recv"),
+           " failed for peer ", op.peer, " count ", op.count, " dtype ",
+           static_cast<int>(op.datatype), " with result ",
+           static_cast<int>(result));
+      return result;
+    }
+  }
   return ncclSuccess;
 }
 

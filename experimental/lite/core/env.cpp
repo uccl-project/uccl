@@ -70,6 +70,9 @@ Env::Env()
           readEnv<std::string>("MSCCLPP_FORCE_NCCL_FALLBACK_OPERATION", "")),
       ncclSymmetricMemory(
           readEnv<bool>("MSCCLPP_NCCL_SYMMETRIC_MEMORY", false)),
+      ncclSendRecvStagingBytes(
+          readEnv<int>("MSCCLPP_NCCL_SENDRECV_STAGING_BYTES",
+                       256 * 1024 * 1024)),
       forceDisableNvls(readEnv<bool>("MSCCLPP_FORCE_DISABLE_NVLS", false)),
       disableChannelCache(
           readEnv<bool>("MSCCLPP_DISABLE_CHANNEL_CACHE", false)) {}
@@ -101,6 +104,8 @@ std::shared_ptr<Env> env() {
     logEnv("MSCCLPP_FORCE_NCCL_FALLBACK_OPERATION",
            globalEnv->forceNcclFallbackOperation);
     logEnv("MSCCLPP_NCCL_SYMMETRIC_MEMORY", globalEnv->ncclSymmetricMemory);
+    logEnv("MSCCLPP_NCCL_SENDRECV_STAGING_BYTES",
+           globalEnv->ncclSendRecvStagingBytes);
     logEnv("MSCCLPP_FORCE_DISABLE_NVLS", globalEnv->forceDisableNvls);
     logEnv("MSCCLPP_DISABLE_CHANNEL_CACHE", globalEnv->disableChannelCache);
   }

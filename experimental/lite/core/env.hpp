@@ -127,6 +127,12 @@ class Env {
   /// false.
   bool const ncclSymmetricMemory;
 
+  /// Env name: `MSCCLPP_NCCL_SENDRECV_STAGING_BYTES`. The size in bytes of the
+  /// pinned host staging buffers used by the NCCL compatibility layer for
+  /// `ncclSend`/`ncclRecv` over PortChannel RDMA. Default is 268435456
+  /// (256 MiB).
+  int const ncclSendRecvStagingBytes;
+
   /// Env name: `MSCCLPP_FORCE_DISABLE_NVLS`. If set to true, it will disable
   /// the NVLS support in MSCCL++. Default is false.
   bool const forceDisableNvls;
