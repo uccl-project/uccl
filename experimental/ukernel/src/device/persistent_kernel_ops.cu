@@ -85,24 +85,26 @@ __device__ __forceinline__ void process_task(Task const& task,
                                              void* smem_buf) {
   const TaskType ttype = static_cast<TaskType>(task.type_u8());
   const DataType dtype = static_cast<DataType>(task.dtype_u8());
-  const uint32_t idx = task.args_index();
-
-  if (idx >= (1UL << TaskArgsIndexSize)) {
-    return;
-  }
-
-  TaskArgs& args = d_task_args[idx];
-  if (threadIdx.x == 0) {
-    volatile TaskArgs* volatile_args =
-        reinterpret_cast<volatile TaskArgs*>(&args);
-    while (volatile_args->reserved0 != TaskArgs::kPublishedMagic) {
-    }
-    __threadfence();
-  }
-  __syncthreads();
 
   switch (ttype) {
     case TaskType::CollCopy:
+    case TaskType::CollReduce: {
+      const uint32_t idx = task.args_index();
+      if (idx >= (1UL << TaskArgsIndexSize)) {
+        return;
+      }
+
+      TaskArgs& args = d_task_args[idx];
+      if (threadIdx.x == 0) {
+        volatile TaskArgs* volatile_args =
+            reinterpret_cast<volatile TaskArgs*>(&args);
+        while (volatile_args->reserved0 != TaskArgs::kPublishedMagic) {
+        }
+        __threadfence();
+      }
+      __syncthreads();
+
+      if (ttype == TaskType::CollCopy) {
       if (dtype == DataType::Int8) {
         run_typed_copy<int8_t>(args, block_id, num_blocks, smem_buf);
       } else if (dtype == DataType::Int32) {
@@ -120,9 +122,7 @@ __device__ __forceinline__ void process_task(Task const& task,
       } else {
         run_copy(args, block_id, num_blocks, smem_buf);
       }
-      break;
-    case TaskType::CollReduce:
-      if (dtype == DataType::Fp32) {
+      } else if (dtype == DataType::Fp32) {
         run_reduce<float>(args, block_id, num_blocks, smem_buf);
       } else if (dtype == DataType::Fp16) {
         run_reduce<__half>(args, block_id, num_blocks, smem_buf);
@@ -137,6 +137,10 @@ __device__ __forceinline__ void process_task(Task const& task,
       } else if (dtype == DataType::Bf16) {
         run_reduce<nv_bfloat16>(args, block_id, num_blocks, smem_buf);
       }
+      break;
+    }
+    case TaskType::BenchNop:
+    case TaskType::Stop:
       break;
     default:
       break;
