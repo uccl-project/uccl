@@ -121,25 +121,27 @@ void reset_buffers(BenchOp op, DeviceBuffers const& bufs) {
   GPU_RT_CHECK(gpuMemset(bufs.dst, 0, bufs.bytes));
 }
 
-void launch_one_kernel(BenchOp op, TaskArgs const& args,
+void launch_one_kernel(BenchOp op, TaskArgs const& args, uint32_t num_blocks,
                        uint32_t threads_per_block) {
   switch (op) {
     case BenchOp::Nop:
-      UKernel::Device::benchDispatchNopKernel<<<1, threads_per_block>>>();
+      UKernel::Device::benchDispatchNopKernel<<<num_blocks,
+                                                threads_per_block>>>();
       break;
     case BenchOp::Copy:
-      UKernel::Device::benchDispatchCopyFp32Kernel<<<1, threads_per_block>>>(
-          args);
+      UKernel::Device::benchDispatchCopyFp32Kernel<<<num_blocks,
+                                                     threads_per_block>>>(args);
       break;
     case BenchOp::Reduce:
-      UKernel::Device::benchDispatchReduceFp32Kernel<<<1, threads_per_block>>>(
-          args);
+      UKernel::Device::benchDispatchReduceFp32Kernel<<<num_blocks,
+                                                       threads_per_block>>>(args);
       break;
   }
 }
 
 double run_kernel_launch_path(BenchOp op, int tasks_per_batch, int rounds,
                               int warmup, size_t bytes,
+                              uint32_t num_blocks,
                               uint32_t threads_per_block) {
   DeviceBuffers bufs = make_buffers(bytes);
   TaskArgs args = make_launch_args(op, bufs);
@@ -147,7 +149,7 @@ double run_kernel_launch_path(BenchOp op, int tasks_per_batch, int rounds,
 
   for (int i = 0; i < warmup; ++i) {
     for (int j = 0; j < tasks_per_batch; ++j) {
-      launch_one_kernel(op, args, threads_per_block);
+      launch_one_kernel(op, args, num_blocks, threads_per_block);
     }
     GPU_RT_CHECK(gpuDeviceSynchronize());
   }
@@ -156,7 +158,7 @@ double run_kernel_launch_path(BenchOp op, int tasks_per_batch, int rounds,
   uint64_t t0 = now_ns();
   for (int i = 0; i < rounds; ++i) {
     for (int j = 0; j < tasks_per_batch; ++j) {
-      launch_one_kernel(op, args, threads_per_block);
+      launch_one_kernel(op, args, num_blocks, threads_per_block);
     }
     GPU_RT_CHECK(gpuDeviceSynchronize());
   }
@@ -191,6 +193,7 @@ Task make_worker_task(BenchOp op, DeviceBuffers const& bufs) {
 
 double run_persistent_worker_path(BenchOp op, int tasks_per_batch, int rounds,
                                   int warmup, size_t bytes,
+                                  uint32_t num_blocks,
                                   uint32_t threads_per_block,
                                   uint32_t smem_size) {
   TaskManager::instance().init(1);
@@ -203,7 +206,7 @@ double run_persistent_worker_path(BenchOp op, int tasks_per_batch, int rounds,
   cfg.smemSize = smem_size;
 
   WorkerPool pool(cfg);
-  if (!pool.createWorker(0, 1)) {
+  if (!pool.createWorker(0, num_blocks)) {
     throw std::runtime_error("failed to create persistent worker");
   }
   pool.waitWorker(0);
@@ -244,6 +247,7 @@ double run_persistent_worker_path(BenchOp op, int tasks_per_batch, int rounds,
 
 double run_persistent_worker_batch_path(BenchOp op, int tasks_per_batch,
                                         int rounds, int warmup, size_t bytes,
+                                        uint32_t num_blocks,
                                         uint32_t threads_per_block,
                                         uint32_t smem_size) {
   TaskManager::instance().init(1);
@@ -261,7 +265,7 @@ double run_persistent_worker_batch_path(BenchOp op, int tasks_per_batch,
   }
 
   WorkerPool pool(cfg);
-  if (!pool.createWorker(0, 1)) {
+  if (!pool.createWorker(0, num_blocks)) {
     throw std::runtime_error("failed to create persistent worker");
   }
   pool.waitWorker(0);
@@ -316,6 +320,7 @@ int main(int argc, char** argv) {
   int rounds = 1000;
   int warmup = 100;
   size_t bytes = 4096;
+  uint32_t num_blocks = 1;
   uint32_t threads_per_block = 64;
   uint32_t smem_size = 0;
 
@@ -324,9 +329,11 @@ int main(int argc, char** argv) {
   if (argc >= 4) warmup = std::max(0, std::atoi(argv[3]));
   if (argc >= 5) bytes = std::max<size_t>(sizeof(float), std::atoi(argv[4]));
   if (argc >= 6)
-    threads_per_block = static_cast<uint32_t>(std::max(1, std::atoi(argv[5])));
+    num_blocks = static_cast<uint32_t>(std::max(1, std::atoi(argv[5])));
   if (argc >= 7)
-    smem_size = static_cast<uint32_t>(std::max(0, std::atoi(argv[6])));
+    threads_per_block = static_cast<uint32_t>(std::max(1, std::atoi(argv[6])));
+  if (argc >= 8)
+    smem_size = static_cast<uint32_t>(std::max(0, std::atoi(argv[7])));
   bytes = (bytes / sizeof(float)) * sizeof(float);
 
   std::printf("Kernel Launch vs Persistent Worker\n");
@@ -334,6 +341,7 @@ int main(int argc, char** argv) {
   std::printf("Rounds         : %d\n", rounds);
   std::printf("Warmup rounds  : %d\n", warmup);
   std::printf("Payload bytes  : %zu\n", bytes);
+  std::printf("Blocks/grid    : %u\n", num_blocks);
   std::printf("Threads/block  : %u\n", threads_per_block);
   std::printf("Shared memory  : %u\n", smem_size);
 
@@ -344,7 +352,8 @@ int main(int argc, char** argv) {
     std::printf("\n=== %s ===\n", op_name(op));
     std::printf("Running persistent worker (single enqueue)...\n");
     double worker_single_seconds = run_persistent_worker_path(
-        op, tasks_per_batch, rounds, warmup, bytes, threads_per_block,
+        op, tasks_per_batch, rounds, warmup, bytes, num_blocks,
+        threads_per_block,
         smem_size);
     print_result("Persistent worker (single enqueue)", tasks_per_batch, rounds,
                  worker_single_seconds);
@@ -352,7 +361,8 @@ int main(int argc, char** argv) {
 
     std::printf("Running persistent worker (batch enqueue)...\n");
     double worker_batch_seconds = run_persistent_worker_batch_path(
-        op, tasks_per_batch, rounds, warmup, bytes, threads_per_block,
+        op, tasks_per_batch, rounds, warmup, bytes, num_blocks,
+        threads_per_block,
         smem_size);
     print_result("Persistent worker (batch enqueue)", tasks_per_batch, rounds,
                  worker_batch_seconds);
@@ -361,7 +371,7 @@ int main(int argc, char** argv) {
     std::printf("Running launch path (single stream)...\n");
     double launch_seconds =
         run_kernel_launch_path(op, tasks_per_batch, rounds, warmup, bytes,
-                               threads_per_block);
+                               num_blocks, threads_per_block);
     print_result("Launch kernels (single stream)", tasks_per_batch, rounds,
                  launch_seconds);
     quiesce_device();

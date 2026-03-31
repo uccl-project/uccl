@@ -12,8 +12,9 @@ struct alignas(16) MultiBlockSync {
   uint32_t publishedPhase;
   uint32_t completedBlocks;
   uint32_t command;
-  uint32_t reserved;
+  uint32_t hasCurrentArgs;
   Task currentTask;
+  TaskArgs currentArgs;
 };
 
 __device__ __forceinline__ void run_copy(TaskArgs const& a, uint32_t block_id,

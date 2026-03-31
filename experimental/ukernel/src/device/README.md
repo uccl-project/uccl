@@ -71,9 +71,10 @@ To compare `100` direct kernel launches vs `1` persistent worker processing
 You can also sweep persistent-worker launch parameters:
 
 ```bash
-./benchmarks/bench_device_launch_vs_worker 100 1000 100 4096 64 0
-./benchmarks/bench_device_launch_vs_worker 100 1000 100 4096 128 0
-./benchmarks/bench_device_launch_vs_worker 100 1000 100 4096 64 16384
+./benchmarks/bench_device_launch_vs_worker 100 1000 100 4096 1 64 0
+./benchmarks/bench_device_launch_vs_worker 100 1000 100 4096 1 128 0
+./benchmarks/bench_device_launch_vs_worker 100 1000 100 4096 1 64 16384
+./benchmarks/bench_device_launch_vs_worker 100 1000 100 4096 4 256 0
 ```
 
 The benchmark reports three paths:
@@ -85,7 +86,7 @@ The benchmark reports three paths:
 Arguments are:
 
 ```bash
-./benchmarks/bench_device_launch_vs_worker [tasks_per_batch] [rounds] [warmup] [bytes] [threads_per_block] [smem_size]
+./benchmarks/bench_device_launch_vs_worker [tasks_per_batch] [rounds] [warmup] [bytes] [num_blocks] [threads_per_block] [smem_size]
 ```
 
 ## Notes

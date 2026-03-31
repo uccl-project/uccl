@@ -95,11 +95,11 @@ __device__ __forceinline__ void run_reduce(TaskArgs const& a,
 __global__ void benchDispatchNopKernel() {}
 
 __global__ void benchDispatchCopyFp32Kernel(TaskArgs args) {
-  run_typed_copy<float>(args, 0, 1, nullptr);
+  run_typed_copy<float>(args, blockIdx.x, gridDim.x, nullptr);
 }
 
 __global__ void benchDispatchReduceFp32Kernel(TaskArgs args) {
-  run_reduce<float>(args, 0, 1, nullptr);
+  run_reduce<float>(args, blockIdx.x, gridDim.x, nullptr);
 }
 
 __device__ __forceinline__ void dispatch_task(Task const& task,
@@ -178,7 +178,7 @@ __device__ __forceinline__ void process_task(Task const& task,
   dispatch_task(task, ready_args, block_id, num_blocks, smem_buf);
 }
 
-__launch_bounds__(1024, 1) __global__ void singlePersistentKernel(
+__global__ void singlePersistentKernel(
     mscclpp::C2DDeviceHandle<Task>* c2d_fifos, TaskArgs* d_task_args,
     bool* should_stop) {
   extern __shared__ char smem[];
@@ -270,38 +270,66 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
   const uint32_t bid = blockIdx.x;
 
   __shared__ Task current_task;
+  __shared__ alignas(TaskArgs) unsigned char current_args_storage[sizeof(TaskArgs)];
+  __shared__ bool has_current_args;
+  TaskArgs* current_args =
+      reinterpret_cast<TaskArgs*>(current_args_storage);
   uint32_t local_phase = 0;
+  uint64_t cached_tail = 0;
+  uint64_t cached_head = 0;
+
+  if (bid == 0 && threadIdx.x == 0) {
+    cached_tail = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
+        fifo.tail, mscclpp::memoryOrderRelaxed);
+    cached_head = cached_tail;
+  }
 
   while (true) {
     if (bid == 0 && threadIdx.x == 0) {
       uint32_t command = kCommandRun;
       Task next_task{};
+      bool next_has_args = false;
 
       while (true) {
         if (should_stop && *should_stop) {
-          while (Task* pending = fifo.poll()) {
-            fifo.pop();
+          cached_head = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
+              fifo.head, mscclpp::memoryOrderAcquire);
+          if (cached_tail != cached_head) {
+            cached_tail = cached_head;
+            publish_tail_progress(fifo.tail, cached_tail);
           }
-          __threadfence();
           command = kCommandExit;
           break;
         }
 
-        Task* task = fifo.poll();
-        if (task == nullptr) {
+        if (cached_tail >= cached_head) {
+          cached_head = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
+              fifo.head, mscclpp::memoryOrderAcquire);
+        }
+        if (cached_tail >= cached_head) {
           continue;
         }
 
-        next_task = *task;
+        next_task = fifo.buffer[cached_tail % fifo.size];
         if (next_task.type_u8() == static_cast<uint8_t>(TaskType::Stop)) {
-          fifo.pop();
+          ++cached_tail;
+          publish_tail_progress(fifo.tail, cached_tail);
           command = kCommandExit;
+        } else if (task_uses_args(
+                       static_cast<TaskType>(next_task.type_u8()))) {
+          const uint32_t idx = next_task.args_index();
+          if (idx < (1UL << TaskArgsIndexSize)) {
+            TaskArgs* args = d_task_args + idx;
+            d_sync->currentArgs = *args;
+            next_has_args = true;
+          }
         }
         break;
       }
 
       d_sync->completedBlocks = 0;
       d_sync->command = command;
+      d_sync->hasCurrentArgs = next_has_args ? 1u : 0u;
       if (command == kCommandRun) {
         d_sync->currentTask = next_task;
       }
@@ -323,10 +351,15 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
 
     if (threadIdx.x == 0) {
       current_task = d_sync->currentTask;
+      has_current_args = d_sync->hasCurrentArgs != 0;
+      if (has_current_args) {
+        *current_args = d_sync->currentArgs;
+      }
     }
     __syncthreads();
 
-    process_task(current_task, d_task_args, bid, gridDim.x, smem_buf);
+    dispatch_task(current_task, has_current_args ? current_args : nullptr, bid,
+                  gridDim.x, smem_buf);
     __syncthreads();
 
     if (threadIdx.x == 0) {
@@ -339,8 +372,8 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
         }
         // Same ordering requirement as the single-block path: all blocks'
         // writes must be visible before host observes task completion.
-        __threadfence();
-        fifo.pop();
+        ++cached_tail;
+        publish_tail_progress(fifo.tail, cached_tail);
         mscclpp::atomicStore<uint32_t, mscclpp::scopeDevice>(
             &d_sync->publishedPhase, local_phase + 2,
             mscclpp::memoryOrderRelease);
