@@ -6,12 +6,16 @@
 #include <cstddef>
 #include <iterator>
 #include <memory>
+#include <type_traits>
 
 namespace mscclpp {
 
 template <typename T>
 class CpuToGpuFifo {
  public:
+  static_assert(std::is_trivially_copyable_v<T>,
+                "CpuToGpuFifo requires trivially copyable element types");
+
   explicit CpuToGpuFifo(int size = 512);
   ~CpuToGpuFifo() = default;
 
@@ -37,13 +41,13 @@ class CpuToGpuFifo {
 
  private:
   struct Impl {
-    detail::UniqueGpuPtr<T> buffer;           // device
+    detail::UniqueGdrGpuPtr<T> buffer;        // device, host-writable via GDR mapping
     detail::UniqueGpuHostPtr<uint64_t> head;  // host-pinned
     detail::UniqueGdrU64Ptr tail;             // device gdr mapped
     int const size;
 
     Impl(int size)
-        : buffer(detail::gpuCallocUnique<T>(size)),
+        : buffer(detail::gpuCallocGdrUnique<T>(size)),
           head(detail::gpuCallocHostUnique<uint64_t>()),
           tail(detail::gpuCallocGdrU64Unique()),
           size(size) {}

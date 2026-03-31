@@ -198,7 +198,6 @@ __global__ void singlePersistentKernel(
       __threadfence();
       fifo.pop();
     }
-    __syncthreads();
   }
 }
 

@@ -162,7 +162,6 @@ void WorkerPool::destroyWorker(uint32_t fifoId) {
       GPU_RT_CHECK(gpuStreamSynchronize(control_stream_));
 
       GPU_RT_CHECK(gpuStreamSynchronize(workers_[i]->stream));
-      reclaimAllPendingTasks(ctx);
       if (workers_[i]->d_multi_sync) {
         GPU_RT_CHECK(gpuFree(workers_[i]->d_multi_sync));
         workers_[i]->d_multi_sync = nullptr;
@@ -207,11 +206,6 @@ uint64_t WorkerPool::enqueue(Task const& task, uint32_t fifoId) {
   }
 
   uint64_t taskId = ctx.fifo.push(task);
-  {
-    std::lock_guard<std::mutex> g(ctx.pending_mu);
-    ctx.pending[taskId] = {task.args_index(), (TaskType)task.type_u8()};
-  }
-
   return taskId;
 }
 
@@ -244,25 +238,7 @@ uint64_t WorkerPool::enqueue_batch(std::vector<Task> const& tasks,
   }
 
   uint64_t firstTaskId = ctx.fifo.push(tasks.data(), tasks.data() + tasks.size());
-  {
-    std::lock_guard<std::mutex> g(ctx.pending_mu);
-    for (size_t i = 0; i < tasks.size(); ++i) {
-      uint64_t taskId = firstTaskId + i;
-      ctx.pending[taskId] = {tasks[i].args_index(),
-                             (TaskType)tasks[i].type_u8()};
-    }
-  }
-
   return firstTaskId;
-}
-
-void WorkerPool::retireTask(uint32_t fifoId, uint64_t taskId) {
-  if (fifoId >= fifos_.size()) {
-    return;
-  }
-  auto& ctx = *fifos_[fifoId];
-  std::lock_guard<std::mutex> g(ctx.pending_mu);
-  ctx.pending.erase(taskId);
 }
 
 void WorkerPool::shutdown_all() {
@@ -277,7 +253,6 @@ void WorkerPool::shutdown_all() {
   }
   for (auto& ctx : fifos_) {
     ctx->bound_workers.store(0, std::memory_order_relaxed);
-    reclaimAllPendingTasks(*ctx);
   }
 }
 
@@ -288,6 +263,11 @@ bool WorkerPool::is_done(uint64_t taskId, uint32_t fifoId) {
   uint64_t current = ctx.fifo.currentId();
 
   return (int64_t)(current - taskId) > 0;
+}
+
+void WorkerPool::sync(uint64_t taskId, uint32_t fifoId) {
+  if (fifoId >= fifos_.size()) return;
+  fifos_[fifoId]->fifo.sync(taskId);
 }
 
 void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
@@ -323,11 +303,5 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
 
   worker.ready = true;
 }
-
-void WorkerPool::reclaimAllPendingTasks(FifoContext& ctx) {
-  std::lock_guard<std::mutex> g(ctx.pending_mu);
-  ctx.pending.clear();
-}
-
 }  // namespace Device
 }  // namespace UKernel

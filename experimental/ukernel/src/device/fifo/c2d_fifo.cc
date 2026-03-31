@@ -1,11 +1,29 @@
 #include "c2d_fifo.h"
 #include "fifo_util.hpp"
 #include "gpu_rt.h"
+#include <atomic>
+#include <cstring>
 #include <iostream>
-#include <thread>
 #include <numaif.h>
+#include <thread>
+
+#if defined(__x86_64__) || defined(__i386__)
+#include <emmintrin.h>
+#endif
 
 namespace mscclpp {
+
+namespace {
+
+inline void host_wc_flush() {
+#if defined(__x86_64__) || defined(__i386__)
+  _mm_sfence();
+#else
+  std::atomic_thread_fence(std::memory_order_seq_cst);
+#endif
+}
+
+}  // namespace
 
 template class CpuToGpuFifo<UKernel::Device::Task>;
 template uint64_t
@@ -49,16 +67,17 @@ CpuToGpuFifo<T>::CpuToGpuFifo(int size) {
 template <typename T>
 uint64_t CpuToGpuFifo<T>::push(const T& task) {
   uint64_t curHead = atomicLoad(pimpl_->head.get(), memoryOrderRelaxed);
-  T* devBuffer = pimpl_->buffer.get();
+  T* hostBuffer = detail::getGdrHostPtr(pimpl_->buffer);
+  size_t slot = curHead % pimpl_->size;
 
-  // Copy single task to device
-  MSCCLPP_CUDATHROW(gpuMemcpy(&devBuffer[curHead % pimpl_->size], &task,
-                              sizeof(T), gpuMemcpyHostToDevice));
+  // Write directly into the GDR-mapped GPU FIFO slot from the host.
+  hostBuffer[slot] = task;
 
-  // Ensure data is visible before publishing head
+  // Flush CPU write-combining buffers before publishing head.
+  host_wc_flush();
   std::atomic_thread_fence(std::memory_order_release);
 
-  // Publish the task
+  // Publish the task after payload becomes visible to the device.
   atomicStore(pimpl_->head.get(), curHead + 1, memoryOrderRelease);
 
   return curHead;
@@ -78,23 +97,23 @@ uint64_t CpuToGpuFifo<T>::push(InputIt first, InputIt last) {
   }
 
   uint64_t curHead = atomicLoad(pimpl_->head.get(), memoryOrderRelaxed);
-  T* devBuf = pimpl_->buffer.get();
+  T* hostBuf = detail::getGdrHostPtr(pimpl_->buffer);
   int size = pimpl_->size;
+  auto* hostSrc = &*first;
 
   size_t start = curHead % size;
   size_t firstPart = std::min(count, size - start);
   size_t secondPart = count - firstPart;
 
   if (firstPart > 0) {
-    MSCCLPP_CUDATHROW(gpuMemcpy(devBuf + start, &*first, sizeof(T) * firstPart,
-                                gpuMemcpyHostToDevice));
+    std::memcpy(hostBuf + start, hostSrc, sizeof(T) * firstPart);
   }
   if (secondPart > 0) {
-    MSCCLPP_CUDATHROW(gpuMemcpy(devBuf, &*(first + firstPart),
-                                sizeof(T) * secondPart, gpuMemcpyHostToDevice));
+    std::memcpy(hostBuf, hostSrc + firstPart, sizeof(T) * secondPart);
   }
 
-  //   __sync_synchronize();
+  // Flush CPU write-combining buffers before publishing the new head.
+  host_wc_flush();
   std::atomic_thread_fence(std::memory_order_release);
   atomicStore(pimpl_->head.get(), curHead + count, memoryOrderRelease);
 

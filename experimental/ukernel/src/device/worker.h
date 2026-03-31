@@ -7,9 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 namespace UKernel {
@@ -47,11 +45,10 @@ class WorkerPool {
 
   uint64_t enqueue(Task const& task, uint32_t fifoId);
   uint64_t enqueue_batch(std::vector<Task> const& tasks, uint32_t fifoId);
-  void retireTask(uint32_t fifoId, uint64_t taskId);
-
   void shutdown_all();
 
   bool is_done(uint64_t taskId, uint32_t fifoId);
+  void sync(uint64_t taskId, uint32_t fifoId);
 
   gpuStream_t control_stream() const { return control_stream_; }
 
@@ -69,15 +66,8 @@ class WorkerPool {
   }
 
  private:
-  struct PendingTask {
-    uint32_t argsId;
-    TaskType type;
-  };
-
   struct FifoContext {
     mscclpp::CpuToGpuFifo<Task> fifo;
-    std::mutex pending_mu;
-    std::unordered_map<uint64_t, PendingTask> pending;
     std::atomic<int> bound_workers{0};
 
     explicit FifoContext(int capacity) : fifo(capacity) {}
@@ -95,7 +85,6 @@ class WorkerPool {
   };
 
   void launchWorkerForFifo(size_t workerIndex);
-  void reclaimAllPendingTasks(FifoContext& ctx);
 
   Config cfg_;
   std::vector<std::unique_ptr<FifoContext>> fifos_;
