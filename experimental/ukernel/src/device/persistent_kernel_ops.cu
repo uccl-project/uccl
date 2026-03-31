@@ -155,26 +155,43 @@ __global__ void singlePersistentKernel(
   void* smem_buf = smem;
   __shared__ Task current_task;
   __shared__ uint32_t command;
+  uint64_t cached_tail = 0;
+  uint64_t cached_head = 0;
+
+  if (threadIdx.x == 0) {
+    cached_tail = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
+        fifo.tail, mscclpp::memoryOrderRelaxed);
+    cached_head = cached_tail;
+  }
 
   while (true) {
     if (threadIdx.x == 0) {
       command = kCommandIdle;
       if (should_stop && *should_stop) {
-        while (Task* task = fifo.poll()) {
-          fifo.pop();
+        cached_head = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
+            fifo.head, mscclpp::memoryOrderAcquire);
+        if (cached_tail != cached_head) {
+          cached_tail = cached_head;
+          mscclpp::atomicStore<uint64_t, mscclpp::scopeSystem>(
+              fifo.tail, cached_tail, mscclpp::memoryOrderRelease);
         }
         __threadfence();
         command = kCommandExit;
       } else {
-        Task* task = fifo.poll();
-        if (task != nullptr) {
-          current_task = *task;
+        if (cached_tail >= cached_head) {
+          cached_head = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
+              fifo.head, mscclpp::memoryOrderAcquire);
+        }
+        if (cached_tail < cached_head) {
+          current_task = fifo.buffer[cached_tail % fifo.size];
           command =
               (current_task.type_u8() == static_cast<uint8_t>(TaskType::Stop))
                   ? kCommandExit
                   : kCommandRun;
           if (command == kCommandExit) {
-            fifo.pop();
+            ++cached_tail;
+            mscclpp::atomicStore<uint64_t, mscclpp::scopeSystem>(
+                fifo.tail, cached_tail, mscclpp::memoryOrderRelease);
           }
         }
       }
@@ -196,7 +213,9 @@ __global__ void singlePersistentKernel(
       // treats fifo.pop() as completion, so tensor/staging updates must be
       // globally visible first.
       __threadfence();
-      fifo.pop();
+      ++cached_tail;
+      mscclpp::atomicStore<uint64_t, mscclpp::scopeSystem>(
+          fifo.tail, cached_tail, mscclpp::memoryOrderRelease);
     }
   }
 }

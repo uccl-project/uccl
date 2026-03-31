@@ -284,7 +284,7 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
 
   dim3 grid(worker.numBlocks);
   dim3 block(cfg_.threadsPerBlock);
-  size_t smem_size = cfg_.smemSize > 0 ? cfg_.smemSize : 16 * 1024;
+  size_t smem_size = cfg_.smemSize;
 
   void* args_single[] = {&worker.d_fifo_handle, &d_task_args,
                          &d_stop_flags_[workerIndex]};
