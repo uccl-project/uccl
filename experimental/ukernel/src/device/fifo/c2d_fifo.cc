@@ -8,6 +8,9 @@
 namespace mscclpp {
 
 template class CpuToGpuFifo<UKernel::Device::Task>;
+template uint64_t
+CpuToGpuFifo<UKernel::Device::Task>::push<UKernel::Device::Task const*>(
+    UKernel::Device::Task const*, UKernel::Device::Task const*);
 
 template <typename T>
 CpuToGpuFifo<T>::CpuToGpuFifo(int size) {

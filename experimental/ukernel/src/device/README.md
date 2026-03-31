@@ -14,6 +14,13 @@ Common override:
 make -j$(nproc) SM=80
 ```
 
+Default builds are release-style. To enable device debug compilation, add
+`DEBUG=1`:
+
+```bash
+make -j$(nproc) DEBUG=1
+```
+
 ## Test
 
 Run unit tests:
@@ -60,6 +67,12 @@ To compare `100` direct kernel launches vs `1` persistent worker processing
 ```bash
 ./benchmarks/bench_device_launch_vs_worker 100 1000 100 4096
 ```
+
+The benchmark reports three paths:
+
+- `Launch kernels`
+- `Persistent worker (single enqueue)`
+- `Persistent worker (batch enqueue)`
 
 Arguments are:
 

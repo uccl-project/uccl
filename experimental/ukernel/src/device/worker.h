@@ -46,6 +46,7 @@ class WorkerPool {
   void destroyWorker(uint32_t fifoId);
 
   uint64_t enqueue(Task const& task, uint32_t fifoId);
+  uint64_t enqueue_batch(std::vector<Task> const& tasks, uint32_t fifoId);
   void retireTask(uint32_t fifoId, uint64_t taskId);
 
   void shutdown_all();

@@ -22,6 +22,7 @@
 #define gpuDevAttrMultiProcessorCount cudaDevAttrMultiProcessorCount
 #define gpuDeviceGetAttribute cudaDeviceGetAttribute
 #define gpuDeviceGetPCIBusId cudaDeviceGetPCIBusId
+#define gpuDeviceReset cudaDeviceReset
 #define gpuDeviceCanAccessPeer cudaDeviceCanAccessPeer
 #define gpuDeviceEnablePeerAccess cudaDeviceEnablePeerAccess
 #define gpuIpcMemHandle_t cudaIpcMemHandle_t
@@ -110,6 +111,7 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuDeviceGetAttribute hipDeviceGetAttribute
 #define gpuDevAttrMultiProcessorCount hipDevAttrMultiProcessorCount
 #define gpuDeviceProp hipDeviceProp_t
+#define gpuDeviceReset hipDeviceReset
 #define gpuDeviceGetPCIBusId hipDeviceGetPCIBusId
 #define gpuDeviceCanAccessPeer hipDeviceCanAccessPeer
 #define gpuDeviceEnablePeerAccess hipDeviceEnablePeerAccess

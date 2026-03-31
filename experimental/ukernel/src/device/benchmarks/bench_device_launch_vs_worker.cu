@@ -2,8 +2,10 @@
 #include "worker.h"
 #include "gpu_rt.h"
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -66,10 +68,49 @@ uint64_t enqueue_until_accepted(WorkerPool& pool, Task const& task,
   }
 }
 
-void wait_until_done(WorkerPool& pool, uint64_t task_id, uint32_t fifo_id) {
-  while (!pool.is_done(task_id, fifo_id)) {
+uint64_t enqueue_batch_until_accepted(WorkerPool& pool,
+                                      std::vector<Task> const& tasks,
+                                      uint32_t fifo_id) {
+  while (true) {
+    uint64_t task_id = pool.enqueue_batch(tasks, fifo_id);
+    if (task_id != WorkerPool::kInvalidTaskId) {
+      return task_id;
+    }
     std::this_thread::yield();
   }
+}
+
+uint64_t enqueue_chunked_batch_until_accepted(WorkerPool& pool,
+                                              std::vector<Task> const& tasks,
+                                              uint32_t fifo_id,
+                                              size_t max_chunk_tasks) {
+  if (tasks.empty()) {
+    return WorkerPool::kInvalidTaskId;
+  }
+
+  uint64_t last_task_id = WorkerPool::kInvalidTaskId;
+  for (size_t offset = 0; offset < tasks.size(); offset += max_chunk_tasks) {
+    size_t chunk = std::min(max_chunk_tasks, tasks.size() - offset);
+    std::vector<Task> batch(tasks.begin() + offset, tasks.begin() + offset + chunk);
+    uint64_t first_id = enqueue_batch_until_accepted(pool, batch, fifo_id);
+    last_task_id = first_id + chunk - 1;
+  }
+  return last_task_id;
+}
+
+void wait_until_done(WorkerPool& pool, uint64_t task_id, uint32_t fifo_id,
+                     char const* phase,
+                     std::chrono::milliseconds timeout =
+                         std::chrono::seconds(10)) {
+  auto deadline = std::chrono::steady_clock::now() + timeout;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (pool.is_done(task_id, fifo_id)) {
+      return;
+    }
+    std::this_thread::yield();
+  }
+  throw std::runtime_error(std::string("timeout waiting for worker completion in phase: ") +
+                           phase);
 }
 
 struct DeviceBuffers {
@@ -86,6 +127,13 @@ struct DeviceBuffers {
     }
   }
 };
+
+void reset_device_state(int device) {
+  GPU_RT_CHECK(gpuDeviceSynchronize());
+  GPU_RT_CHECK(gpuDeviceReset());
+  GPU_RT_CHECK(gpuSetDevice(device));
+  GPU_RT_CHECK(gpuFree(0));
+}
 
 DeviceBuffers make_buffers(size_t bytes) {
   DeviceBuffers bufs;
@@ -178,12 +226,15 @@ Task make_worker_task(BenchOp op, DeviceBuffers const& bufs) {
 double run_persistent_worker_path(BenchOp op, int tasks_per_batch, int rounds,
                                   int warmup, size_t bytes) {
   TaskManager::instance().init(1);
-  DeviceBuffers bufs = make_buffers(bytes);
+  DeviceBuffers bufs;
+  if (op != BenchOp::Nop) {
+    bufs = make_buffers(bytes);
+  }
 
   WorkerPool::Config cfg;
   cfg.numMaxWorkers = 1;
   cfg.threadsPerBlock = 64;
-  cfg.fifoCapacity = std::max(16, tasks_per_batch * 2);
+  cfg.fifoCapacity = 1024;
 
   WorkerPool pool(cfg);
   if (!pool.createWorker(0, 1)) {
@@ -192,24 +243,79 @@ double run_persistent_worker_path(BenchOp op, int tasks_per_batch, int rounds,
   pool.waitWorker(0);
 
   Task task = make_worker_task(op, bufs);
-  reset_buffers(op, bufs);
+  if (op != BenchOp::Nop) {
+    reset_buffers(op, bufs);
+  }
 
   for (int i = 0; i < warmup; ++i) {
     uint64_t last_id = 0;
     for (int j = 0; j < tasks_per_batch; ++j) {
       last_id = enqueue_until_accepted(pool, task, 0);
     }
-    wait_until_done(pool, last_id, 0);
+    wait_until_done(pool, last_id, 0, "worker-single warmup");
   }
 
-  reset_buffers(op, bufs);
+  if (op != BenchOp::Nop) {
+    reset_buffers(op, bufs);
+  }
   uint64_t t0 = now_ns();
   for (int i = 0; i < rounds; ++i) {
     uint64_t last_id = 0;
     for (int j = 0; j < tasks_per_batch; ++j) {
       last_id = enqueue_until_accepted(pool, task, 0);
     }
-    wait_until_done(pool, last_id, 0);
+    wait_until_done(pool, last_id, 0, "worker-single run");
+  }
+  uint64_t t1 = now_ns();
+
+  pool.shutdown_all();
+  if (op != BenchOp::Nop) {
+    TaskManager::instance().free_task_args(task.args_index());
+  }
+  TaskManager::instance().release();
+  return (t1 - t0) * 1e-9;
+}
+
+double run_persistent_worker_batch_path(BenchOp op, int tasks_per_batch,
+                                        int rounds, int warmup, size_t bytes) {
+  TaskManager::instance().init(1);
+  DeviceBuffers bufs;
+  if (op != BenchOp::Nop) {
+    bufs = make_buffers(bytes);
+  }
+
+  WorkerPool::Config cfg;
+  cfg.numMaxWorkers = 1;
+  cfg.threadsPerBlock = 64;
+  cfg.fifoCapacity = 1024;
+
+  WorkerPool pool(cfg);
+  if (!pool.createWorker(0, 1)) {
+    throw std::runtime_error("failed to create persistent worker");
+  }
+  pool.waitWorker(0);
+
+  Task task = make_worker_task(op, bufs);
+  std::vector<Task> batch(static_cast<size_t>(tasks_per_batch), task);
+  size_t max_chunk_tasks = std::max<size_t>(1, cfg.fifoCapacity / 2);
+  if (op != BenchOp::Nop) {
+    reset_buffers(op, bufs);
+  }
+
+  for (int i = 0; i < warmup; ++i) {
+    uint64_t last_id =
+        enqueue_chunked_batch_until_accepted(pool, batch, 0, max_chunk_tasks);
+    wait_until_done(pool, last_id, 0, "worker-batch warmup");
+  }
+
+  if (op != BenchOp::Nop) {
+    reset_buffers(op, bufs);
+  }
+  uint64_t t0 = now_ns();
+  for (int i = 0; i < rounds; ++i) {
+    uint64_t last_id =
+        enqueue_chunked_batch_until_accepted(pool, batch, 0, max_chunk_tasks);
+    wait_until_done(pool, last_id, 0, "worker-batch run");
   }
   uint64_t t1 = now_ns();
 
@@ -255,20 +361,37 @@ int main(int argc, char** argv) {
   std::printf("Warmup rounds  : %d\n", warmup);
   std::printf("Payload bytes  : %zu\n", bytes);
 
+  int device = 0;
+  GPU_RT_CHECK(gpuGetDevice(&device));
   GPU_RT_CHECK(gpuFree(0));
   GPU_RT_CHECK(gpuDeviceSynchronize());
 
   for (BenchOp op : {BenchOp::Nop, BenchOp::Copy, BenchOp::Reduce}) {
+    std::printf("\n=== %s ===\n", op_name(op));
+    std::printf("Running persistent worker (single enqueue)...\n");
+    double worker_single_seconds =
+        run_persistent_worker_path(op, tasks_per_batch, rounds, warmup, bytes);
+    print_result("Persistent worker (single enqueue)", tasks_per_batch, rounds,
+                 worker_single_seconds);
+    reset_device_state(device);
+
+    std::printf("Running persistent worker (batch enqueue)...\n");
+    double worker_batch_seconds = run_persistent_worker_batch_path(
+        op, tasks_per_batch, rounds, warmup, bytes);
+    print_result("Persistent worker (batch enqueue)", tasks_per_batch, rounds,
+                 worker_batch_seconds);
+
+    reset_device_state(device);
+    std::printf("Running launch path...\n");
     double launch_seconds =
         run_kernel_launch_path(op, tasks_per_batch, rounds, warmup, bytes);
-    double worker_seconds =
-        run_persistent_worker_path(op, tasks_per_batch, rounds, warmup, bytes);
-
-    std::printf("\n=== %s ===\n", op_name(op));
     print_result("Launch kernels", tasks_per_batch, rounds, launch_seconds);
-    print_result("Persistent worker", tasks_per_batch, rounds, worker_seconds);
-    std::printf("Speedup (launch / worker): %.2fx\n",
-                launch_seconds / worker_seconds);
+    reset_device_state(device);
+
+    std::printf("Speedup (launch / worker single): %.2fx\n",
+                launch_seconds / worker_single_seconds);
+    std::printf("Speedup (launch / worker batch) : %.2fx\n",
+                launch_seconds / worker_batch_seconds);
   }
   return 0;
 }

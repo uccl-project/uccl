@@ -10,7 +10,10 @@ NVCC_ARCH_FLAGS := -arch=sm_$(SM)
 ENABLE_TMA := $(shell if [ -n "$(SM_NUM)" ] && [ "$(SM_NUM)" -ge 90 ]; then echo 1; else echo 0; fi)
 endif
 CXXFLAGS := -std=c++17 -O3 -g -Wall
-NVCCFLAGS:= -O3 -g -G -Xcompiler -Wall $(NVCC_ARCH_FLAGS)
+NVCCFLAGS:= -O3 -g -Xcompiler -Wall $(NVCC_ARCH_FLAGS)
+ifeq ($(DEBUG),1)
+NVCCFLAGS += -G
+endif
 CXXFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 NVCCFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 

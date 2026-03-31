@@ -215,6 +215,47 @@ uint64_t WorkerPool::enqueue(Task const& task, uint32_t fifoId) {
   return taskId;
 }
 
+uint64_t WorkerPool::enqueue_batch(std::vector<Task> const& tasks,
+                                   uint32_t fifoId) {
+  if (fifoId >= fifos_.size() || tasks.empty()) {
+    return kInvalidTaskId;
+  }
+
+  auto& ctx = *fifos_[fifoId];
+  int workerId = -1;
+  for (size_t i = 0; i < workers_.size(); ++i) {
+    if (workers_[i]->fifoId == fifoId && workers_[i]->launched) {
+      workerId = static_cast<int>(i);
+      break;
+    }
+  }
+  if (workerId < 0) {
+    printf(
+        "[ERROR] batch enqueue to fifo %u failed: no worker bound, call "
+        "createWorker first\n",
+        fifoId);
+    return kInvalidTaskId;
+  }
+
+  uint64_t tail = ctx.fifo.currentId();
+  uint64_t head = ctx.fifo.head();
+  if ((int64_t)(head + tasks.size() - tail) > cfg_.fifoCapacity) {
+    return kInvalidTaskId;
+  }
+
+  uint64_t firstTaskId = ctx.fifo.push(tasks.data(), tasks.data() + tasks.size());
+  {
+    std::lock_guard<std::mutex> g(ctx.pending_mu);
+    for (size_t i = 0; i < tasks.size(); ++i) {
+      uint64_t taskId = firstTaskId + i;
+      ctx.pending[taskId] = {tasks[i].args_index(),
+                             (TaskType)tasks[i].type_u8()};
+    }
+  }
+
+  return firstTaskId;
+}
+
 void WorkerPool::retireTask(uint32_t fifoId, uint64_t taskId) {
   if (fifoId >= fifos_.size()) {
     return;
@@ -278,6 +319,7 @@ void WorkerPool::launchWorkerForFifo(size_t workerIndex) {
     GPU_RT_CHECK(gpuLaunchKernel(UKernel::Device::multiPersistentKernel, grid,
                                  block, args_multi, smem_size, worker.stream));
   }
+  GPU_RT_CHECK(gpuGetLastError());
 
   worker.ready = true;
 }
