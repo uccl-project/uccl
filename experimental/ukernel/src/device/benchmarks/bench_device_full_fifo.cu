@@ -47,8 +47,8 @@ int main(int argc, char** argv) {
 
   constexpr int fifo_cap = 1024;
   int warmup = 1000;
-  int latency_iters = 10000 * num_workers;
-  constexpr int throughput_iters = 100'000;
+  int latency_iters = 1000 * num_workers;
+  constexpr int throughput_iters = 10'000;
 
   printf("FIFO benchmark via WorkerPool\n");
   printf("Launching %d persistent workers\n", num_workers);

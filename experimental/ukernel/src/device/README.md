@@ -41,6 +41,7 @@ make bench
 ./benchmarks/bench_device_fifo
 ./benchmarks/bench_device_full_fifo
 ./benchmarks/bench_device_sm_fifo
+./benchmarks/bench_device_launch_vs_worker
 ```
 
 `bench_device_full_fifo` launches one persistent worker kernel per FIFO. On
@@ -51,6 +52,19 @@ override it explicitly:
 
 ```bash
 ./benchmarks/bench_device_full_fifo 32
+```
+
+To compare `100` direct kernel launches vs `1` persistent worker processing
+`100` tasks for `nop`, `copy`, and `reduce`:
+
+```bash
+./benchmarks/bench_device_launch_vs_worker 100 1000 100 4096
+```
+
+Arguments are:
+
+```bash
+./benchmarks/bench_device_launch_vs_worker [tasks_per_batch] [rounds] [warmup] [bytes]
 ```
 
 ## Notes
