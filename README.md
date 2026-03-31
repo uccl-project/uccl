@@ -94,10 +94,10 @@ More UCCL features are under development in this repo, currently including:
 The easiest way to use UCCL is to first build based on your platform. The build script will automatically detect the `py_version` of your current environment. If you need to compile UCCL for a specific python version, please specify the `py_version`, such as `3.10`. 
 
 ```bash
-git clone https://github.com/uccl-project/uccl.git --recursive && cd uccl
+git clone https://github.com/uccl-project/uccl.git && cd uccl
 
 # Eg, bash build.sh cu12 ep --install
-bash build.sh [cu12|cu13|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] \
+bash build.sh [cu12|cu13|rocm|rocm7|therock] [all|ccl_rdma|ccl_efa|p2p|ep] \
               [py_version] [rocm_index_url] --install
 ```
 > Note: 
@@ -126,7 +126,7 @@ Now, you can just run your PyTorch applications and enjoy UCCL performance benef
 
 First clone the UCCL repo and init submodules: 
 ```bash
-git clone https://github.com/uccl-project/uccl.git --recursive
+git clone https://github.com/uccl-project/uccl.git
 export UCCL_HOME=$(pwd)/uccl
 ```
 
