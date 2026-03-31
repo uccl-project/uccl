@@ -14,6 +14,12 @@ __device__ __forceinline__ bool task_uses_args(TaskType ttype) {
   return ttype == TaskType::CollCopy || ttype == TaskType::CollReduce;
 }
 
+__device__ __forceinline__ void publish_tail_progress(uint64_t* tail,
+                                                      uint64_t next_tail) {
+  __threadfence_system();
+  *reinterpret_cast<volatile uint64_t*>(tail) = next_tail;
+}
+
 __device__ __forceinline__ void wait_task_args_ready(TaskArgs const* args) {
   while (mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
              const_cast<uint64_t*>(&args->reserved0),
@@ -196,10 +202,8 @@ __global__ void singlePersistentKernel(
             fifo.head, mscclpp::memoryOrderAcquire);
         if (cached_tail != cached_head) {
           cached_tail = cached_head;
-          mscclpp::atomicStore<uint64_t, mscclpp::scopeSystem>(
-              fifo.tail, cached_tail, mscclpp::memoryOrderRelease);
+          publish_tail_progress(fifo.tail, cached_tail);
         }
-        __threadfence();
         command = kCommandExit;
       } else {
         if (cached_tail >= cached_head) {
@@ -225,8 +229,7 @@ __global__ void singlePersistentKernel(
           }
           if (command == kCommandExit) {
             ++cached_tail;
-            mscclpp::atomicStore<uint64_t, mscclpp::scopeSystem>(
-                fifo.tail, cached_tail, mscclpp::memoryOrderRelease);
+            publish_tail_progress(fifo.tail, cached_tail);
           }
         }
       }
@@ -248,10 +251,8 @@ __global__ void singlePersistentKernel(
       // Publish task writes before advancing the FIFO tail. Host-side polling
       // treats fifo.pop() as completion, so tensor/staging updates must be
       // globally visible first.
-      __threadfence();
       ++cached_tail;
-      mscclpp::atomicStore<uint64_t, mscclpp::scopeSystem>(
-          fifo.tail, cached_tail, mscclpp::memoryOrderRelease);
+      publish_tail_progress(fifo.tail, cached_tail);
     }
   }
 }
