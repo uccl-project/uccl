@@ -101,23 +101,24 @@ void build_sim_state_dependencies(SimRankState& state) {
   }
 }
 
-std::string simulate_three_rank_allreduce_and_find_error() {
+std::string simulate_three_rank_allreduce_and_find_error(size_t tensor_bytes,
+                                                        uint32_t num_flows) {
   constexpr int kNranks = 3;
-  constexpr size_t kTensorBytes = 1048572;
   constexpr size_t kTileBytes = 64 << 10;
 
   std::vector<SimRankState> ranks;
   ranks.reserve(kNranks);
   for (int rank = 0; rank < kNranks; ++rank) {
     CollectiveConfig cfg =
-        Testing::make_test_config(kNranks, rank, kTensorBytes, kTileBytes, 1);
+        Testing::make_test_config(kNranks, rank, tensor_bytes, kTileBytes,
+                                  num_flows);
     cfg.dtype = ScalarType::Float32;
     cfg.reduction = ReductionKind::Sum;
 
     SimRankState state;
     state.plan =
         build_plan(make_plan_request(CollectiveKind::AllReduce, cfg));
-    size_t nelems = kTensorBytes / sizeof(float);
+    size_t nelems = tensor_bytes / sizeof(float);
     state.tensor.resize(nelems, 0.0f);
     state.staging.resize(kTileBytes / sizeof(float), 0.0f);
     for (size_t i = 0; i < nelems; ++i) {
@@ -308,8 +309,16 @@ void test_two_rank_ring_allreduce_rotates_reduced_shard_in_allgather() {
 
 void test_three_rank_ring_allreduce_simulator_handles_multi_tile_case() {
   printf("[test] three-rank ring allreduce simulator handles multi-tile case...\n");
-  std::string error = simulate_three_rank_allreduce_and_find_error();
+  std::string error =
+      simulate_three_rank_allreduce_and_find_error(1048572, 1);
   assert(error.empty() && "three-rank multi-tile allreduce simulation failed");
+}
+
+void test_three_rank_ring_allreduce_simulator_handles_single_tile_case() {
+  printf("[test] three-rank ring allreduce simulator handles single-tile case...\n");
+  std::string error =
+      simulate_three_rank_allreduce_and_find_error(196608, 2);
+  assert(error.empty() && "three-rank single-tile allreduce simulation failed");
 }
 
 void test_lowering_preserves_dependency_dag() {
@@ -471,6 +480,7 @@ int main() {
   test_planner_emits_valid_collective_dags();
   test_two_rank_ring_allreduce_rotates_reduced_shard_in_allgather();
   test_three_rank_ring_allreduce_simulator_handles_multi_tile_case();
+  test_three_rank_ring_allreduce_simulator_handles_single_tile_case();
   test_lowering_preserves_dependency_dag();
   test_executor_completes_collectives_with_background_progress();
   test_executor_queues_collectives_serially();
