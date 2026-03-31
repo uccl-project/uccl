@@ -21,8 +21,8 @@ p2p/
 
 The easiest way is to: 
 ```bash
-git clone https://github.com/uccl-project/uccl.git --recursive
-cd uccl && bash build.sh [cuda|rocm] p2p [py_version] --install
+git clone https://github.com/uccl-project/uccl.git && cd uccl
+bash build.sh [cu12|cu13|rocm|rocm7] p2p --install
 ```
 
 Alternatively, you can setup your local dev environment by: 
