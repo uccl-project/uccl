@@ -3,9 +3,31 @@
 #include "worker.h"
 #include <cstdio>
 #include <random>
+#include <thread>
 #include <vector>
 
 using namespace UKernel::Device;
+
+namespace {
+
+uint64_t enqueue_until_accepted(WorkerPool& pool, Task const& task,
+                                uint32_t fifo_id) {
+  while (true) {
+    uint64_t task_id = pool.enqueue(task, fifo_id);
+    if (task_id != WorkerPool::kInvalidTaskId) {
+      return task_id;
+    }
+    std::this_thread::yield();
+  }
+}
+
+void wait_until_done(WorkerPool& pool, uint64_t task_id, uint32_t fifo_id) {
+  while (!pool.is_done(task_id, fifo_id)) {
+    std::this_thread::yield();
+  }
+}
+
+}  // namespace
 
 int main() {
   int device;
@@ -38,22 +60,16 @@ int main() {
     pool.waitWorker(i);
   }
 
+  std::vector<uint64_t> warmup_last_ids(sm_count, 0);
   for (uint32_t b = 0; b < static_cast<uint32_t>(sm_count); b++) {
     for (int i = 0; i < warmup; ++i) {
       Task t(TaskType::BenchNop, DataType::Fp32, b, 0);
-      pool.enqueue(t, b);
+      warmup_last_ids[b] = enqueue_until_accepted(pool, t, b);
     }
   }
 
-  while (true) {
-    bool all_done = true;
-    for (int fifo_id = 0; fifo_id < sm_count; ++fifo_id) {
-      if (!pool.is_done(warmup - 1, fifo_id)) {
-        all_done = false;
-        break;
-      }
-    }
-    if (all_done) break;
+  for (int fifo_id = 0; fifo_id < sm_count; ++fifo_id) {
+    wait_until_done(pool, warmup_last_ids[fifo_id], fifo_id);
   }
 
   printf("Warmup done.\n");
@@ -70,8 +86,8 @@ int main() {
     uint32_t test_fifo_id = dis(gen);
     uint32_t test_block_id = 0;
     Task t(TaskType::BenchNop, DataType::Fp32, test_block_id, 0);
-    uint64_t id = pool.enqueue(t, test_fifo_id);
-    pool.is_done(id, test_fifo_id);
+    uint64_t id = enqueue_until_accepted(pool, t, test_fifo_id);
+    wait_until_done(pool, id, test_fifo_id);
     uint64_t t1 = now_ns();
     lat.push_back(t1 - t0);
   }
@@ -84,12 +100,12 @@ int main() {
   for (int i = 0; i < throughput_iters; ++i) {
     uint32_t fifo_id = i % sm_count;
     Task t(TaskType::BenchNop, DataType::Fp32, 0, 0);
-    uint64_t id = pool.enqueue(t, fifo_id);
+    uint64_t id = enqueue_until_accepted(pool, t, fifo_id);
     last_ids[fifo_id] = id;
   }
 
   for (int fifo_id = 0; fifo_id < sm_count; ++fifo_id) {
-    pool.is_done(last_ids[fifo_id], fifo_id);
+    wait_until_done(pool, last_ids[fifo_id], fifo_id);
   }
 
   uint64_t t1 = now_ns();

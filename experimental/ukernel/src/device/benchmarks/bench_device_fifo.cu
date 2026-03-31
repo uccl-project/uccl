@@ -1,7 +1,31 @@
 #include "benchmarks/bench_support.h"
 #include "worker.h"
 #include <cstdio>
+#include <thread>
 #include <vector>
+
+namespace {
+
+uint64_t enqueue_until_accepted(UKernel::Device::WorkerPool& pool,
+                                UKernel::Device::Task const& task,
+                                uint32_t fifo_id) {
+  while (true) {
+    uint64_t task_id = pool.enqueue(task, fifo_id);
+    if (task_id != UKernel::Device::WorkerPool::kInvalidTaskId) {
+      return task_id;
+    }
+    std::this_thread::yield();
+  }
+}
+
+void wait_until_done(UKernel::Device::WorkerPool& pool, uint64_t task_id,
+                     uint32_t fifo_id) {
+  while (!pool.is_done(task_id, fifo_id)) {
+    std::this_thread::yield();
+  }
+}
+
+}  // namespace
 
 int main() {
   constexpr int fifo_cap = 1024;
@@ -23,15 +47,15 @@ int main() {
   pool.waitWorker(0);
 
   uint32_t test_block_id = 0;
+  uint64_t warmup_last_id = 0;
 
   for (int i = 0; i < warmup; ++i) {
     UKernel::Device::Task t(UKernel::Device::TaskType::BenchNop,
                             UKernel::Device::DataType::Fp32, test_block_id, 0);
-    pool.enqueue(t, 0);
+    warmup_last_id = enqueue_until_accepted(pool, t, 0);
   }
 
-  while (!pool.is_done(warmup - 1, 0)) {
-  }
+  wait_until_done(pool, warmup_last_id, 0);
 
   printf("Warmup done.\n");
 
@@ -42,8 +66,8 @@ int main() {
     uint64_t t0 = now_ns();
     UKernel::Device::Task t(UKernel::Device::TaskType::BenchNop,
                             UKernel::Device::DataType::Fp32, test_block_id, 0);
-    uint64_t id = pool.enqueue(t, 0);
-    pool.is_done(id, 0);
+    uint64_t id = enqueue_until_accepted(pool, t, 0);
+    wait_until_done(pool, id, 0);
     uint64_t t1 = now_ns();
     lat.push_back(t1 - t0);
   }
@@ -51,16 +75,15 @@ int main() {
   print_latency(lat);
 
   uint64_t t0 = now_ns();
-  uint64_t first_id = 0;
+  uint64_t last_id = 0;
   for (int i = 0; i < throughput_iters; ++i) {
     UKernel::Device::Task t(UKernel::Device::TaskType::BenchNop,
                             UKernel::Device::DataType::Fp32, test_block_id, 0);
-    uint64_t id = pool.enqueue(t, 0);
-    if (i == 0) first_id = id;
+    uint64_t id = enqueue_until_accepted(pool, t, 0);
+    last_id = id;
   }
 
-  while (!pool.is_done(first_id + throughput_iters - 1, 0)) {
-  }
+  wait_until_done(pool, last_id, 0);
 
   uint64_t t1 = now_ns();
   double sec = (t1 - t0) * 1e-9;
