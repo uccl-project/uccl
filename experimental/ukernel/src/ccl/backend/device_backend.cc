@@ -342,9 +342,6 @@ void DeviceBackend::release_task_args(SubmittedTask& task) {
   if (task.args_released) {
     return;
   }
-  if (worker_pool_ != nullptr) {
-    worker_pool_->retireTask(task.fifo_id, task.task_id);
-  }
   Device::TaskManager::instance().free_task_args(task.args_id);
   task.args_released = true;
 }
