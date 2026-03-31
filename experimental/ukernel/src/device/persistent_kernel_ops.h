@@ -31,5 +31,9 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
                                       TaskArgs* d_task_args, bool* should_stop,
                                       MultiBlockSync* d_sync);
 
+__global__ void benchDispatchNopKernel();
+__global__ void benchDispatchCopyFp32Kernel(TaskArgs args);
+__global__ void benchDispatchReduceFp32Kernel(TaskArgs args);
+
 }  // namespace Device
 }  // namespace UKernel

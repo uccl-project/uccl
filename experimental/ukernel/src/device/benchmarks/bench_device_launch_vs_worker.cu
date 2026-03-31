@@ -1,6 +1,7 @@
 #include "benchmarks/bench_support.h"
-#include "worker.h"
 #include "gpu_rt.h"
+#include "persistent_kernel_ops.h"
+#include "worker.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -34,26 +35,6 @@ char const* op_name(BenchOp op) {
       return "reduce";
   }
   return "unknown";
-}
-
-__global__ void bench_empty_kernel() {}
-
-__global__ void bench_copy_kernel(float const* src, float* dst,
-                                  size_t count) {
-  size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-  size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
-  for (size_t i = tid; i < count; i += stride) {
-    dst[i] = src[i];
-  }
-}
-
-__global__ void bench_reduce_kernel(float const* src, float* dst,
-                                    size_t count) {
-  size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
-  size_t stride = static_cast<size_t>(gridDim.x) * blockDim.x;
-  for (size_t i = tid; i < count; i += stride) {
-    dst[i] += src[i];
-  }
 }
 
 uint64_t enqueue_until_accepted(WorkerPool& pool, Task const& task,
@@ -124,6 +105,17 @@ struct DeviceBuffers {
   }
 };
 
+TaskArgs make_launch_args(BenchOp op, DeviceBuffers const& bufs) {
+  TaskArgs args{};
+  args.src = bufs.src;
+  args.dst = bufs.dst;
+  args.bytes = bufs.bytes;
+  if (op == BenchOp::Reduce) {
+    args.set_red_type(ReduceType::Sum);
+  }
+  return args;
+}
+
 void quiesce_device() {
   GPU_RT_CHECK(gpuDeviceSynchronize());
 }
@@ -148,21 +140,19 @@ void reset_buffers(BenchOp op, DeviceBuffers const& bufs) {
   GPU_RT_CHECK(gpuMemset(bufs.dst, 0, bufs.bytes));
 }
 
-void launch_one_kernel(BenchOp op, DeviceBuffers const& bufs, size_t count,
+void launch_one_kernel(BenchOp op, TaskArgs const& args,
                        uint32_t threads_per_block) {
   switch (op) {
     case BenchOp::Nop:
-      bench_empty_kernel<<<1, threads_per_block>>>();
+      UKernel::Device::benchDispatchNopKernel<<<1, threads_per_block>>>();
       break;
     case BenchOp::Copy:
-      bench_copy_kernel<<<1, threads_per_block>>>(
-          reinterpret_cast<float const*>(bufs.src),
-          reinterpret_cast<float*>(bufs.dst), count);
+      UKernel::Device::benchDispatchCopyFp32Kernel<<<1, threads_per_block>>>(
+          args);
       break;
     case BenchOp::Reduce:
-      bench_reduce_kernel<<<1, threads_per_block>>>(
-          reinterpret_cast<float const*>(bufs.src),
-          reinterpret_cast<float*>(bufs.dst), count);
+      UKernel::Device::benchDispatchReduceFp32Kernel<<<1, threads_per_block>>>(
+          args);
       break;
   }
 }
@@ -171,12 +161,12 @@ double run_kernel_launch_path(BenchOp op, int tasks_per_batch, int rounds,
                               int warmup, size_t bytes,
                               uint32_t threads_per_block) {
   DeviceBuffers bufs = make_buffers(bytes);
-  size_t count = bytes / sizeof(float);
+  TaskArgs args = make_launch_args(op, bufs);
   reset_buffers(op, bufs);
 
   for (int i = 0; i < warmup; ++i) {
     for (int j = 0; j < tasks_per_batch; ++j) {
-      launch_one_kernel(op, bufs, count, threads_per_block);
+      launch_one_kernel(op, args, threads_per_block);
     }
     GPU_RT_CHECK(gpuDeviceSynchronize());
   }
@@ -185,7 +175,7 @@ double run_kernel_launch_path(BenchOp op, int tasks_per_batch, int rounds,
   uint64_t t0 = now_ns();
   for (int i = 0; i < rounds; ++i) {
     for (int j = 0; j < tasks_per_batch; ++j) {
-      launch_one_kernel(op, bufs, count, threads_per_block);
+      launch_one_kernel(op, args, threads_per_block);
     }
     GPU_RT_CHECK(gpuDeviceSynchronize());
   }

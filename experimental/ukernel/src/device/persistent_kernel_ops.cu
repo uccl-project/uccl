@@ -20,13 +20,6 @@ __device__ __forceinline__ void publish_tail_progress(uint64_t* tail,
   *reinterpret_cast<volatile uint64_t*>(tail) = next_tail;
 }
 
-__device__ __forceinline__ void wait_task_args_ready(TaskArgs const* args) {
-  while (mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
-             const_cast<uint64_t*>(&args->reserved0),
-             mscclpp::memoryOrderAcquire) != TaskArgs::kPublishedMagic) {
-  }
-}
-
 }  // namespace
 
 __device__ void run_copy(TaskArgs const& a, uint32_t block_id,
@@ -93,6 +86,16 @@ __device__ void run_reduce(TaskArgs const& a, uint32_t block_id,
 
   read_reduce_store<T>(dst + block_offset, src + block_offset,
                        static_cast<size_t>(my_count), a.red_type(), smem_buf);
+}
+
+__global__ void benchDispatchNopKernel() {}
+
+__global__ void benchDispatchCopyFp32Kernel(TaskArgs args) {
+  run_typed_copy<float>(args, 0, 1, nullptr);
+}
+
+__global__ void benchDispatchReduceFp32Kernel(TaskArgs args) {
+  run_reduce<float>(args, 0, 1, nullptr);
 }
 
 __device__ __forceinline__ void dispatch_task(Task const& task,
@@ -167,10 +170,6 @@ __device__ __forceinline__ void process_task(Task const& task,
       return;
     }
     ready_args = d_task_args + idx;
-    if (threadIdx.x == 0) {
-      wait_task_args_ready(ready_args);
-    }
-    __syncthreads();
   }
   dispatch_task(task, ready_args, block_id, num_blocks, smem_buf);
 }
@@ -182,11 +181,13 @@ __global__ void singlePersistentKernel(
   auto& fifo = c2d_fifos[0];
   void* smem_buf = smem;
   __shared__ Task current_task;
-  __shared__ TaskArgs current_args;
+  __shared__ alignas(TaskArgs) unsigned char current_args_storage[sizeof(TaskArgs)];
   __shared__ bool has_current_args;
   __shared__ uint32_t command;
   uint64_t cached_tail = 0;
   uint64_t cached_head = 0;
+  TaskArgs* current_args =
+      reinterpret_cast<TaskArgs*>(current_args_storage);
 
   if (threadIdx.x == 0) {
     cached_tail = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
@@ -222,8 +223,7 @@ __global__ void singlePersistentKernel(
             const uint32_t idx = current_task.args_index();
             if (idx < (1UL << TaskArgsIndexSize)) {
               TaskArgs* args = d_task_args + idx;
-              wait_task_args_ready(args);
-              current_args = *args;
+              *current_args = *args;
               has_current_args = true;
             }
           }
@@ -243,7 +243,7 @@ __global__ void singlePersistentKernel(
       return;
     }
 
-    dispatch_task(current_task, has_current_args ? &current_args : nullptr, 0,
+    dispatch_task(current_task, has_current_args ? current_args : nullptr, 0,
                   1, smem_buf);
     __syncthreads();
 
