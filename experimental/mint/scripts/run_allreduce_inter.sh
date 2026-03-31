@@ -290,8 +290,6 @@ HOST_COUNT="$(count_csv_items "${HOSTS}")"
 GPU_COUNT="$(count_csv_items "${GPU_LIST}")"
 [[ "${HOST_COUNT}" -eq 2 ]] || \
   die "this helper expects exactly 2 hosts; got ${HOST_COUNT} from --hosts ${HOSTS}"
-[[ "${GPU_COUNT}" -eq 2 ]] || \
-  die "this helper expects exactly 2 GPUs per host; got ${GPU_COUNT} from --gpus ${GPU_LIST}"
 
 [[ -x "${MPI_HOME}/bin/mpirun" || -x "$(command -v mpirun 2>/dev/null || true)" ]] || \
   die "mpirun not found"
@@ -353,6 +351,7 @@ done
 exec mpirun -np "${TOTAL_RANKS}" \
   --host "${HOST_SPEC}" \
   --bind-to none \
+  -x NCCL_P2P_LEVEL=SYS \
   "${MPI_ENV_ARGS[@]}" \
   "${BIN_PATH}" \
   -g 1 \
