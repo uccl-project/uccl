@@ -21,7 +21,7 @@ else
   echo "warning: ${IP_FILE} not found, set --hosts or create ip.txt with one IP per line" >&2
   HOSTS=""
 fi
-GPU_LIST="0"
+GPU_LIST="0,1"
 MIN_BYTES="8"
 MAX_BYTES="256M"
 STEP_FACTOR="2"
@@ -34,7 +34,7 @@ EXTRA_ARGS=()
 NCCL_SOCKET_IFNAME="eno8303"
 
 NCCL_NET_GDR_LEVEL=
-
+NCCL_P2P_LEVEL=SYS
 
 usage() {
   cat <<EOF
@@ -313,6 +313,12 @@ mkdir -p "${RUNTIME_DIR}"
 if [[ "${BACKEND}" == "mscclpp" ]]; then
   ACTIVE_LIB="$(ensure_mscclpp_nccl_lib)"
   EXTRA_LD_PATH="${ROOT_DIR}/build:${ROOT_DIR}/nccl/build"
+  # When multiple GPUs per node, intra-node peers delegate to real NCCL via
+  # dlopen fallback.  Auto-set MSCCLPP_NCCL_LIB_PATH if not already set.
+  if [[ -z "${MSCCLPP_NCCL_LIB_PATH:-}" && "${GPU_COUNT}" -gt 1 ]]; then
+    MSCCLPP_NCCL_LIB_PATH="$(pick_real_nccl_lib)"
+    info "auto-set MSCCLPP_NCCL_LIB_PATH=${MSCCLPP_NCCL_LIB_PATH} (intra-node fallback)"
+  fi
 else
   ACTIVE_LIB="$(pick_real_nccl_lib)"
   EXTRA_LD_PATH=""
@@ -359,6 +365,7 @@ for env_name in \
   NCCL_NET_GDR_LEVEL \
   NCCL_IB_DISABLE \
   NCCL_P2P_DISABLE \
+  NCCL_P2P_LEVEL \
   MSCCLPP_DEBUG \
   MSCCLPP_DEBUG_SUBSYS \
   MSCCLPP_SOCKET_IFNAME \
