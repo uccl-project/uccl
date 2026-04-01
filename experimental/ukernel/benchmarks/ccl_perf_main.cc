@@ -140,8 +140,6 @@ size_t align_up(size_t value, size_t alignment) {
   return remainder == 0 ? value : value + (alignment - remainder);
 }
 
-size_t ceil_div(size_t a, size_t b) { return b == 0 ? 0 : (a + b - 1) / b; }
-
 size_t bytes_alignment(CollectiveKind collective, int world_size,
                        ScalarType dtype) {
   size_t elem_bytes = scalar_type_size(dtype);
@@ -151,44 +149,6 @@ size_t bytes_alignment(CollectiveKind collective, int world_size,
       return static_cast<size_t>(std::max(1, world_size)) * elem_bytes;
   }
   return elem_bytes;
-}
-
-size_t stable_min_bytes(CollectiveKind collective, int world_size,
-                        size_t tile_bytes, ScalarType dtype) {
-  size_t alignment = bytes_alignment(collective, world_size, dtype);
-  switch (collective) {
-    case CollectiveKind::AllReduce:
-      // Integration coverage exercises multi-tile shards. In benchmark mode the
-      // current allreduce device-reduce path is still unstable when each rank
-      // owns exactly one tile, so start from two tiles per shard.
-      return align_up(2 * static_cast<size_t>(std::max(1, world_size)) *
-                          tile_bytes,
-                      alignment);
-    case CollectiveKind::AllToAll:
-      return align_up(tile_bytes, alignment);
-  }
-  return alignment;
-}
-
-size_t tiles_per_participant(CollectiveKind collective, int world_size,
-                             size_t tensor_bytes, size_t tile_bytes) {
-  size_t part_bytes = ceil_div(tensor_bytes, static_cast<size_t>(world_size));
-  switch (collective) {
-    case CollectiveKind::AllReduce:
-    case CollectiveKind::AllToAll:
-      return ceil_div(part_bytes, tile_bytes);
-  }
-  return 1;
-}
-
-uint32_t effective_num_flows(CollectiveKind collective, int world_size,
-                             size_t tensor_bytes, size_t tile_bytes,
-                             uint32_t requested_flows) {
-  size_t tiles = tiles_per_participant(collective, world_size, tensor_bytes,
-                                       tile_bytes);
-  size_t clamped =
-      std::min<size_t>(std::max<size_t>(1, requested_flows), std::max<size_t>(1, tiles));
-  return static_cast<uint32_t>(clamped);
 }
 
 double busbw_factor(CollectiveKind collective, int world_size) {
@@ -567,7 +527,7 @@ Options parse_options(int argc, char** argv, CollectiveKind collective) {
   opts.iters =
       get_int_arg(argc, argv, "-n", get_int_arg(argc, argv, "--iters", 20));
   size_t default_min_bytes =
-      stable_min_bytes(collective, env_world, 64ull << 10, ScalarType::Float32);
+      bytes_alignment(collective, env_world, ScalarType::Float32);
   opts.min_bytes =
       get_size_arg(argc, argv, "-b",
                    get_size_arg(argc, argv, "--min-bytes",
@@ -601,29 +561,120 @@ CollectiveOpHandle submit_collective(Executor& executor, CollectiveKind collecti
              : executor.submit_alltoall(config);
 }
 
-void run_validation(Executor& executor, CollectiveKind collective,
-                    CollectiveConfig const& config, void* tensor_ptr,
-                    void* staging_ptr, int rank, int world_size) {
-  std::vector<float> host(config.tensor_bytes / sizeof(float), 0.0f);
-  init_validation_pattern(collective, host, rank, world_size);
-  upload_floats(tensor_ptr, host);
-  zero_buffer(staging_ptr, config.staging_bytes);
+struct SizeRun {
+  size_t bytes = 0;
+  uint32_t flows = 1;
+  CollectiveConfig config{};
+};
 
-  CollectiveOpHandle handle = submit_collective(executor, collective, config);
-  wait_for_collective(executor, handle, std::chrono::seconds(60));
-  require(executor.status(handle) == CollectiveOpStatus::Completed,
-          "validation collective did not complete");
-  executor.release(handle);
-
-  std::vector<float> out = download_floats(tensor_ptr, config.tensor_bytes);
-  verify_output(collective, out, rank, world_size);
+ExecutorConfig make_executor_config(Options const& opts) {
+  ExecutorConfig executor_cfg{};
+  executor_cfg.gpu_id = opts.gpu;
+  executor_cfg.rank = opts.rank;
+  executor_cfg.world_size = opts.world_size;
+  executor_cfg.communicator_config =
+      std::make_shared<Transport::CommunicatorConfig>();
+  executor_cfg.communicator_config->exchanger_ip = opts.exchanger_ip;
+  executor_cfg.communicator_config->exchanger_port = opts.exchanger_port;
+  executor_cfg.communicator_config->local_id = opts.rank;
+  executor_cfg.communicator_config->preferred_transport =
+      parse_transport(opts.transport);
+  executor_cfg.max_device_fifos = std::max<uint32_t>(opts.num_flows, 1);
+  executor_cfg.device_task_capacity = opts.device_task_capacity;
+  executor_cfg.threads_per_block = opts.threads_per_block;
+  executor_cfg.fifo_capacity = opts.fifo_capacity;
+  executor_cfg.smem_size = opts.smem_size;
+  return executor_cfg;
 }
 
-void prepare_timed_input(void* tensor_ptr, void* staging_ptr,
-                         CollectiveConfig const& config) {
-  zero_buffer(tensor_ptr, config.tensor_bytes);
-  zero_buffer(staging_ptr, config.staging_bytes);
+std::string coordination_ip_for(Options const& opts) {
+  return get_env_str({"MASTER_ADDR"},
+                     opts.rank == 0 && opts.exchanger_ip == "0.0.0.0"
+                         ? "127.0.0.1"
+                         : opts.exchanger_ip);
 }
+
+std::vector<size_t> build_sweep(CollectiveKind collective, Options& opts) {
+  size_t alignment = bytes_alignment(collective, opts.world_size, opts.dtype);
+  opts.min_bytes = std::max(opts.min_bytes, alignment);
+  opts.max_bytes = std::max(opts.max_bytes, opts.min_bytes);
+  return build_sizes(opts.min_bytes, opts.max_bytes, opts.factor, alignment);
+}
+
+SizeRun make_size_run(CollectiveKind collective, Options const& opts,
+                      size_t bytes) {
+  SizeRun run;
+  run.bytes = bytes;
+  run.flows = normalized_num_flows(collective, opts.world_size, bytes,
+                                   opts.tile_bytes, opts.num_flows);
+  run.config = make_collective_config(collective, opts.world_size, opts.rank,
+                                      bytes, opts.tile_bytes, run.flows);
+  return run;
+}
+
+struct PerfRuntime {
+  CollectiveKind collective;
+  Options opts;
+  std::vector<size_t> sizes;
+  DeviceBuffer tensor;
+  DeviceBuffer staging;
+  Executor executor;
+  std::string coord_ip;
+
+  PerfRuntime(CollectiveKind collective_in, Options opts_in,
+              std::vector<size_t> sizes_in)
+      : collective(collective_in),
+        opts(std::move(opts_in)),
+        sizes(std::move(sizes_in)),
+        tensor(sizes.empty() ? 0 : sizes.back()),
+        staging(make_size_run(collective, opts, sizes.empty() ? 0 : sizes.back())
+                    .config.staging_bytes),
+        executor(build_collective_memory(opts.rank, opts.world_size, tensor.ptr,
+                                         tensor.bytes, staging.ptr,
+                                         staging.bytes),
+                 make_executor_config(opts)),
+        coord_ip(coordination_ip_for(opts)) {}
+
+  void run_validation(SizeRun const& run) {
+    std::vector<float> host(run.config.tensor_bytes / sizeof(float), 0.0f);
+    init_validation_pattern(collective, host, opts.rank, opts.world_size);
+    upload_floats(tensor.ptr, host);
+    zero_buffer(staging.ptr, run.config.staging_bytes);
+
+    CollectiveOpHandle handle =
+        submit_collective(executor, collective, run.config);
+    wait_for_collective(executor, handle, std::chrono::seconds(60));
+    require(executor.status(handle) == CollectiveOpStatus::Completed,
+            "validation collective did not complete");
+    executor.release(handle);
+
+    std::vector<float> out = download_floats(tensor.ptr, run.config.tensor_bytes);
+    verify_output(collective, out, opts.rank, opts.world_size);
+  }
+
+  void prepare_timed_input(SizeRun const& run) {
+    zero_buffer(tensor.ptr, run.config.tensor_bytes);
+    zero_buffer(staging.ptr, run.config.staging_bytes);
+  }
+
+  void run_collective_iters(SizeRun const& run, int niters, char const* phase) {
+    for (int iter = 0; iter < niters; ++iter) {
+      CollectiveOpHandle handle =
+          submit_collective(executor, collective, run.config);
+      wait_for_collective(executor, handle, std::chrono::seconds(60));
+      require(executor.status(handle) == CollectiveOpStatus::Completed,
+              std::string(phase) + " collective failed");
+      executor.release(handle);
+    }
+  }
+
+  double time_collective_iters(SizeRun const& run, int niters) {
+    auto t0 = Clock::now();
+    run_collective_iters(run, niters, "timed");
+    auto t1 = Clock::now();
+    return std::chrono::duration<double>(t1 - t0).count();
+  }
+};
 
 void print_header(CollectiveKind collective, Options const& opts) {
   std::printf("# CCL %s perf\n", collective_name(collective));
@@ -634,17 +685,25 @@ void print_header(CollectiveKind collective, Options const& opts) {
       opts.num_flows, opts.tile_bytes, opts.threads_per_block,
       opts.fifo_capacity, opts.warmup_iters, opts.iters);
   std::printf(
-      "# note effective flows are clamped per size to available tiles per "
-      "rank-local shard/slice\n");
+      "# note planner clamps effective flows per size to the available tiles "
+      "in each rank-local shard/slice\n");
 }
 
-void print_sweep_info(Options const& opts, std::vector<size_t> const& sizes) {
+void print_sweep_info(CollectiveKind collective, Options const& opts,
+                      std::vector<size_t> const& sizes) {
   std::printf("# sweep min_bytes %zu max_bytes %zu factor %.3f points %zu\n",
               opts.min_bytes, opts.max_bytes, opts.factor, sizes.size());
   if (!sizes.empty() && sizes.size() <= 32) {
     std::printf("# sizes");
     for (size_t bytes : sizes) {
       std::printf(" %zu", bytes);
+    }
+    std::printf("\n");
+    std::printf("# effective_flows");
+    for (size_t bytes : sizes) {
+      std::printf(" %u", normalized_num_flows(collective, opts.world_size,
+                                              bytes, opts.tile_bytes,
+                                              opts.num_flows));
     }
     std::printf("\n");
   }
@@ -671,104 +730,44 @@ int run_perf_main(int argc, char** argv, CollectiveKind collective) {
   require(opts.iters > 0, "iters must be > 0");
   require(opts.tile_bytes > 0, "tile bytes must be > 0");
 
-  size_t alignment = bytes_alignment(collective, opts.world_size, opts.dtype);
-  opts.min_bytes = std::max(
-      opts.min_bytes,
-      stable_min_bytes(collective, opts.world_size, opts.tile_bytes, opts.dtype));
-  std::vector<size_t> sizes =
-      build_sizes(opts.min_bytes, opts.max_bytes, opts.factor, alignment);
-  size_t max_tensor_bytes = sizes.back();
-  CollectiveConfig max_config =
-      make_collective_config(collective, opts.world_size, opts.rank,
-                             max_tensor_bytes, opts.tile_bytes, opts.num_flows);
-
+  std::vector<size_t> sizes = build_sweep(collective, opts);
   GPU_RT_CHECK(gpuSetDevice(opts.gpu));
+  PerfRuntime runtime(collective, opts, sizes);
 
-  DeviceBuffer tensor(max_tensor_bytes);
-  DeviceBuffer staging(max_config.staging_bytes);
-
-  CollectiveMemory memory = build_collective_memory(
-      opts.rank, opts.world_size, tensor.ptr, max_tensor_bytes, staging.ptr,
-      max_config.staging_bytes);
-
-  ExecutorConfig executor_cfg{};
-  executor_cfg.gpu_id = opts.gpu;
-  executor_cfg.rank = opts.rank;
-  executor_cfg.world_size = opts.world_size;
-  executor_cfg.communicator_config =
-      std::make_shared<Transport::CommunicatorConfig>();
-  executor_cfg.communicator_config->exchanger_ip = opts.exchanger_ip;
-  executor_cfg.communicator_config->exchanger_port = opts.exchanger_port;
-  executor_cfg.communicator_config->local_id = opts.rank;
-  executor_cfg.communicator_config->preferred_transport =
-      parse_transport(opts.transport);
-  executor_cfg.max_device_fifos = std::max<uint32_t>(opts.num_flows, 1);
-  executor_cfg.device_task_capacity = opts.device_task_capacity;
-  executor_cfg.threads_per_block = opts.threads_per_block;
-  executor_cfg.fifo_capacity = opts.fifo_capacity;
-  executor_cfg.smem_size = opts.smem_size;
-
-  Executor executor(memory, executor_cfg);
-
-  std::string coord_ip =
-      get_env_str({"MASTER_ADDR"},
-                  opts.rank == 0 && opts.exchanger_ip == "0.0.0.0"
-                      ? "127.0.0.1"
-                      : opts.exchanger_ip);
-
-  if (opts.rank == 0) {
-    print_header(collective, opts);
-    print_sweep_info(opts, sizes);
+  if (runtime.opts.rank == 0) {
+    print_header(collective, runtime.opts);
+    print_sweep_info(collective, runtime.opts, runtime.sizes);
   }
 
-  for (size_t bytes : sizes) {
-    uint32_t flows = effective_num_flows(collective, opts.world_size, bytes,
-                                         opts.tile_bytes, opts.num_flows);
-    CollectiveConfig config = make_collective_config(
-        collective, opts.world_size, opts.rank, bytes, opts.tile_bytes,
-        flows);
+  for (size_t bytes : runtime.sizes) {
+    SizeRun run = make_size_run(collective, runtime.opts, bytes);
 
-    if (opts.check) {
-      socket_barrier(coord_ip, opts.exchanger_port + 1, opts.rank,
-                     opts.world_size);
-      run_validation(executor, collective, config, tensor.ptr, staging.ptr,
-                     opts.rank, opts.world_size);
+    if (runtime.opts.check) {
+      socket_barrier(runtime.coord_ip, runtime.opts.exchanger_port + 1,
+                     runtime.opts.rank, runtime.opts.world_size);
+      runtime.run_validation(run);
     }
 
-    prepare_timed_input(tensor.ptr, staging.ptr, config);
-    socket_barrier(coord_ip, opts.exchanger_port + 1, opts.rank,
-                   opts.world_size);
+    runtime.prepare_timed_input(run);
+    socket_barrier(runtime.coord_ip, runtime.opts.exchanger_port + 1,
+                   runtime.opts.rank, runtime.opts.world_size);
 
-    for (int iter = 0; iter < opts.warmup_iters; ++iter) {
-      CollectiveOpHandle handle = submit_collective(executor, collective, config);
-      wait_for_collective(executor, handle, std::chrono::seconds(60));
-      require(executor.status(handle) == CollectiveOpStatus::Completed,
-              "warmup collective failed");
-      executor.release(handle);
-    }
+    runtime.run_collective_iters(run, runtime.opts.warmup_iters, "warmup");
 
-    socket_barrier(coord_ip, opts.exchanger_port + 1, opts.rank,
-                   opts.world_size);
-    auto t0 = Clock::now();
-    for (int iter = 0; iter < opts.iters; ++iter) {
-      CollectiveOpHandle handle = submit_collective(executor, collective, config);
-      wait_for_collective(executor, handle, std::chrono::seconds(60));
-      require(executor.status(handle) == CollectiveOpStatus::Completed,
-              "timed collective failed");
-      executor.release(handle);
-    }
-    auto t1 = Clock::now();
-
-    double local_total_sec = std::chrono::duration<double>(t1 - t0).count();
+    socket_barrier(runtime.coord_ip, runtime.opts.exchanger_port + 1,
+                   runtime.opts.rank, runtime.opts.world_size);
+    double local_total_sec =
+        runtime.time_collective_iters(run, runtime.opts.iters);
     double max_total_sec = all_rank_max_double(
-        coord_ip, opts.exchanger_port + 2, opts.rank, opts.world_size,
+        runtime.coord_ip, runtime.opts.exchanger_port + 2, runtime.opts.rank,
+        runtime.opts.world_size,
         local_total_sec);
-    double avg_sec = max_total_sec / static_cast<double>(opts.iters);
+    double avg_sec = max_total_sec / static_cast<double>(runtime.opts.iters);
     double algbw = static_cast<double>(bytes) / avg_sec / 1e9;
-    double busbw = algbw * busbw_factor(collective, opts.world_size);
+    double busbw = algbw * busbw_factor(collective, runtime.opts.world_size);
 
-    if (opts.rank == 0) {
-      print_row(bytes, opts.dtype, avg_sec * 1e6, algbw, busbw);
+    if (runtime.opts.rank == 0) {
+      print_row(bytes, runtime.opts.dtype, avg_sec * 1e6, algbw, busbw);
     }
   }
 

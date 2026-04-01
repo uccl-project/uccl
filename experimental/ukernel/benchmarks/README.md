@@ -98,7 +98,7 @@ torchrun --no-python \
   --master-addr 127.0.0.1 \
   --master-port 29500 \
   ./benchmarks/all_reduce_perf \
-  -b 393216 \
+  -b 196608 \
   -e 1048576 \
   -f 2 \
   -w 5 \
@@ -148,6 +148,7 @@ Useful options:
 
 Current implementation note:
 
-- The planner accepts very small messages, but the current `ccl` runtime is
-  much more stable in benchmark mode once `allreduce` starts from at least
-  `2 * nranks * tile_bytes` and `alltoall` starts from at least `tile_bytes`.
+- The benchmark now honors the requested size range directly.
+- The planner clamps the effective `num_flows` to the number of tiles actually
+  available in each rank-local shard or slice, so degenerate empty-flow plans
+  are avoided automatically.

@@ -276,6 +276,35 @@ void test_planner_emits_valid_collective_dags() {
          static_cast<size_t>(alltoall_cfg.nranks - 1) * alltoall_cfg.tile_bytes);
 }
 
+void test_planner_clamps_flow_count_to_available_tiles() {
+  printf("[test] planner clamps flow count to available tiles...\n");
+
+  CollectiveConfig allreduce_cfg =
+      Testing::make_test_config(3, 0, 196608, 65536, 2);
+  allreduce_cfg.dtype = ScalarType::Float32;
+  allreduce_cfg.reduction = ReductionKind::Sum;
+  CollectivePlan allreduce_plan =
+      build_plan(make_plan_request(CollectiveKind::AllReduce, allreduce_cfg));
+  Testing::validate_basic_plan(allreduce_plan);
+  assert(allreduce_plan.num_flows == 1);
+  assert(allreduce_plan.staging_bytes_required == allreduce_cfg.tile_bytes);
+  for (auto const& op : allreduce_plan.ops) {
+    assert(op.tile.flow_index < allreduce_plan.num_flows);
+  }
+
+  CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 0, 1024, 256, 2);
+  alltoall_cfg.algorithm = AlgorithmKind::Pairwise;
+  CollectivePlan alltoall_plan =
+      build_plan(make_plan_request(CollectiveKind::AllToAll, alltoall_cfg));
+  Testing::validate_basic_plan(alltoall_plan);
+  assert(alltoall_plan.num_flows == 1);
+  assert(alltoall_plan.staging_bytes_required ==
+         static_cast<size_t>(alltoall_cfg.nranks - 1) * alltoall_cfg.tile_bytes);
+  for (auto const& op : alltoall_plan.ops) {
+    assert(op.tile.flow_index < alltoall_plan.num_flows);
+  }
+}
+
 void test_two_rank_ring_allreduce_rotates_reduced_shard_in_allgather() {
   printf("[test] two-rank ring allreduce rotates reduced shard...\n");
 
@@ -478,6 +507,7 @@ int main() {
   printf("=== CCL Component Tests ===\n\n");
   test_lowering_routes_ops_to_execution_kinds();
   test_planner_emits_valid_collective_dags();
+  test_planner_clamps_flow_count_to_available_tiles();
   test_two_rank_ring_allreduce_rotates_reduced_shard_in_allgather();
   test_three_rank_ring_allreduce_simulator_handles_multi_tile_case();
   test_three_rank_ring_allreduce_simulator_handles_single_tile_case();

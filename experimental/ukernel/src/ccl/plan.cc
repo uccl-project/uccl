@@ -41,6 +41,13 @@ size_t shard_size(size_t bytes, int nranks, int owner_rank) {
   return std::min(nominal_shard_bytes(bytes, nranks), bytes - offset);
 }
 
+uint32_t clamp_num_flows(uint32_t requested_flows, size_t tiles_per_unit) {
+  size_t bounded =
+      std::min<size_t>(std::max<size_t>(1, requested_flows),
+                       std::max<size_t>(1, tiles_per_unit));
+  return static_cast<uint32_t>(bounded);
+}
+
 BufferRef make_buffer_ref(BufferKind kind, size_t offset_bytes,
                          int rank = -1) {
   BufferRef ref;
@@ -178,21 +185,42 @@ ReductionKind op_reduction(PlanRequest const& request, PrimitiveOpKind kind) {
                                          : ReductionKind::None;
 }
 
+}  // namespace
+
+uint32_t normalized_num_flows(CollectiveKind collective, int nranks,
+                              size_t tensor_bytes, size_t tile_bytes,
+                              uint32_t requested_flows) {
+  size_t unit_bytes = nominal_shard_bytes(tensor_bytes, nranks);
+  switch (collective) {
+    case CollectiveKind::AllReduce:
+    case CollectiveKind::AllToAll: {
+      size_t tiles_per_unit = ceil_div(unit_bytes, tile_bytes);
+      return clamp_num_flows(requested_flows, tiles_per_unit);
+    }
+  }
+  return std::max<uint32_t>(1, requested_flows);
+}
+
+namespace {
+
 CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
   RingTopology ring{request.nranks};
   CollectivePlan plan = make_empty_plan(request);
   plan.algorithm = AlgorithmKind::Ring;
-  plan.staging_bytes_required =
-      static_cast<size_t>(request.num_flows) * request.tile_bytes;
+  size_t shard_bytes =
+      nominal_shard_bytes(request.tensor_bytes, request.nranks);
+  size_t tiles_per_shard = ceil_div(shard_bytes, request.tile_bytes);
+  uint32_t num_flows = normalized_num_flows(
+      request.collective, request.nranks, request.tensor_bytes,
+      request.tile_bytes, request.num_flows);
+  plan.num_flows = num_flows;
+  plan.staging_bytes_required = static_cast<size_t>(num_flows) * request.tile_bytes;
   if (request.staging_bytes < plan.staging_bytes_required) {
     throw std::invalid_argument(
         "allreduce ring requires staging_bytes >= num_flows * tile_bytes");
   }
 
   PlanBuilder builder(std::move(plan));
-  size_t shard_bytes =
-      nominal_shard_bytes(request.tensor_bytes, request.nranks);
-  size_t tiles_per_shard = ceil_div(shard_bytes, request.tile_bytes);
 
   std::vector<std::vector<uint32_t>> ready_ops(
       static_cast<size_t>(request.nranks),
@@ -201,9 +229,9 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
                                           kNoOp);
   std::vector<uint32_t> last_recv_from_peer(static_cast<size_t>(request.nranks),
                                             kNoOp);
-  std::vector<uint32_t> last_staging_consumer(request.num_flows, kNoOp);
+  std::vector<uint32_t> last_staging_consumer(num_flows, kNoOp);
 
-  for (uint32_t flow_slot = 0; flow_slot < request.num_flows; ++flow_slot) {
+  for (uint32_t flow_slot = 0; flow_slot < num_flows; ++flow_slot) {
     size_t staging_offset = static_cast<size_t>(flow_slot) * request.tile_bytes;
 
     for (int ring_step = 0; ring_step < request.nranks - 1; ++ring_step) {
@@ -217,7 +245,7 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
           shard_size(request.tensor_bytes, request.nranks, recv_owner);
 
       for (size_t tile_index = flow_slot; tile_index < tiles_per_shard;
-           tile_index += request.num_flows) {
+           tile_index += num_flows) {
         size_t send_tile_bytes =
             tile_size(send_bytes, request.tile_bytes, tile_index);
         size_t recv_tile_bytes =
@@ -278,7 +306,7 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
     }
   }
 
-  for (uint32_t flow_slot = 0; flow_slot < request.num_flows; ++flow_slot) {
+  for (uint32_t flow_slot = 0; flow_slot < num_flows; ++flow_slot) {
     for (int ring_step = 0; ring_step < request.nranks - 1; ++ring_step) {
       // After reduce-scatter, rank r owns the fully reduced shard
       // (r + 1) mod nranks. Allgather then circulates those completed shards
@@ -293,7 +321,7 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
           shard_size(request.tensor_bytes, request.nranks, recv_owner);
 
       for (size_t tile_index = flow_slot; tile_index < tiles_per_shard;
-           tile_index += request.num_flows) {
+           tile_index += num_flows) {
         size_t send_tile_bytes =
             tile_size(send_bytes, request.tile_bytes, tile_index);
         size_t recv_tile_bytes =
@@ -349,6 +377,13 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
 CollectivePlan build_alltoall_pairwise_plan(PlanRequest const& request) {
   CollectivePlan plan = make_empty_plan(request);
   plan.algorithm = AlgorithmKind::Pairwise;
+  size_t slice_bytes =
+      nominal_shard_bytes(request.tensor_bytes, request.nranks);
+  size_t tiles_per_slice = ceil_div(slice_bytes, request.tile_bytes);
+  uint32_t num_flows = normalized_num_flows(
+      request.collective, request.nranks, request.tensor_bytes,
+      request.tile_bytes, request.num_flows);
+  plan.num_flows = num_flows;
   plan.staging_bytes_required =
       static_cast<size_t>(request.nranks - 1) * request.tile_bytes;
   if (request.staging_bytes < plan.staging_bytes_required) {
@@ -358,9 +393,6 @@ CollectivePlan build_alltoall_pairwise_plan(PlanRequest const& request) {
   }
 
   PlanBuilder builder(std::move(plan));
-  size_t slice_bytes =
-      nominal_shard_bytes(request.tensor_bytes, request.nranks);
-  size_t tiles_per_slice = ceil_div(slice_bytes, request.tile_bytes);
 
   std::vector<uint32_t> last_send_to_peer(static_cast<size_t>(request.nranks),
                                           kNoOp);
@@ -388,7 +420,7 @@ CollectivePlan build_alltoall_pairwise_plan(PlanRequest const& request) {
       if (bytes == 0) continue;
 
       TileRef tile = make_tile(
-          request, peer, static_cast<uint32_t>(tile_index % request.num_flows),
+          request, peer, static_cast<uint32_t>(tile_index % num_flows),
           tile_index,
           slice_offset + tile_offset(tile_index, request.tile_bytes), bytes);
 

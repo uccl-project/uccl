@@ -55,7 +55,8 @@ struct CollectivePlan {
   AlgorithmKind algorithm = AlgorithmKind::Ring;
   int nranks = 1;
   int rank = 0;
-  // num_flows controls how many rank-local pipeline lanes the planner builds.
+  // num_flows is the effective number of rank-local pipeline lanes the planner
+  // builds after clamping the request to the available tile parallelism.
   uint32_t num_flows = 1;
   size_t tensor_bytes = 0;
   size_t tile_bytes = 0;
@@ -79,6 +80,10 @@ struct PlanRequest {
   ScalarType dtype = ScalarType::Float32;
   ReductionKind reduction = ReductionKind::Sum;
 };
+
+uint32_t normalized_num_flows(CollectiveKind collective, int nranks,
+                              size_t tensor_bytes, size_t tile_bytes,
+                              uint32_t requested_flows);
 
 CollectivePlan build_plan(PlanRequest const& request);
 std::string to_string(CollectivePlan const& plan);
