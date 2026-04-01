@@ -498,6 +498,9 @@ class BaseConnection;
 class RegisteredMemory;
 class SemaphoreStub;
 class Semaphore;
+struct IbMrInfo;
+class IbMr;
+class IbQp;
 
 /// One end of a connection.
 class Endpoint {
@@ -662,6 +665,15 @@ class RegisteredMemory {
   /// @return A deserialized RegisteredMemory object.
   static RegisteredMemory deserialize(std::vector<char> const& data);
 
+  /// Get IB memory region info for a given transport.
+  /// Returns the local IbMr pointer and remote IbMrInfo.  Useful for fast-path
+  /// RDMA writes that bypass Connection::write() overhead.
+  /// @param transport The IB transport to query.
+  /// @param outMr If non-null, receives the local IbMr pointer (nullptr for remote memory).
+  /// @param outMrInfo Receives the IbMrInfo (rkey + remote addr).
+  void getIbMrInfo(Transport transport, IbMr const** outMr,
+                   IbMrInfo* outMrInfo) const;
+
  private:
   struct Impl;
   RegisteredMemory(std::shared_ptr<Impl> pimpl);
@@ -726,6 +738,10 @@ class Connection {
   /// Get the maximum write queue size.
   /// @return The maximum number of write requests that can be queued.
   int getMaxWriteQueueSize() const;
+
+  /// Get the underlying IB QP for fast-path RDMA operations.
+  /// Returns nullptr if the connection is not IB-based.
+  std::shared_ptr<IbQp> getIbQp() const;
 
  private:
   Connection(std::shared_ptr<BaseConnection> impl);

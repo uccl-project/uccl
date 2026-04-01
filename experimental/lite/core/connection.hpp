@@ -144,6 +144,10 @@ class IBConnection : public BaseConnection {
                      uint64_t newValue) override;
 
   void flush(int64_t timeoutUsec) override;
+
+  /// Get the underlying IB QP (shared_ptr).  Used for fast-path RDMA writes
+  /// that bypass Connection::write() overhead.
+  std::shared_ptr<IbQp> getIbQp() const { return qp_.lock(); }
 };
 
 class EthernetConnection : public BaseConnection {
