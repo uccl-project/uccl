@@ -13,7 +13,14 @@ BUILD_DIR="${BUILD_DIR:-.tmp/mint-nccl-tests-mpi-build}"
 RUNTIME_ROOT="${RUNTIME_ROOT:-.tmp/mint-nccl-tests-runtime}"
 
 BACKEND="mscclpp"
-HOSTS="4.14.153.89,4.14.153.90"
+# Read default hosts from ip.txt (one IP per line)
+IP_FILE="${ROOT_DIR}/ip.txt"
+if [[ -f "$IP_FILE" ]]; then
+  HOSTS="$(paste -sd',' "$IP_FILE")"
+else
+  echo "warning: ${IP_FILE} not found, set --hosts or create ip.txt with one IP per line" >&2
+  HOSTS=""
+fi
 GPU_LIST="0"
 MIN_BYTES="8"
 MAX_BYTES="256M"
@@ -35,9 +42,7 @@ Usage:
   $(basename "$0") [options] [-- extra nccl-tests args]
 
 Build and run MPI-mode nccl-tests send_recv_perf across 2 nodes with 2 GPUs total.
-Default hosts:
-  - 4.14.153.89
-  - 4.14.153.90
+Default hosts are read from ip.txt (one IP per line).
 
 The binary is compiled against standard external NCCL headers, then run with:
   - backend=nccl: real libnccl.so
@@ -45,7 +50,7 @@ The binary is compiled against standard external NCCL headers, then run with:
 
 Options:
   --backend <nccl|mscclpp>   Backend to use. Default: mscclpp
-  --hosts <csv>              Two hosts for MPI launch. Default: 4.14.153.89,4.14.153.90
+  --hosts <csv>              Two hosts for MPI launch. Default: from ip.txt
   --gpus <csv>               Visible GPU list on each host. Default: 0,1
   --min-bytes <size>         nccl-tests -b value. Default: 8
   --max-bytes <size>         nccl-tests -e value. Default: 256M
@@ -60,7 +65,7 @@ Options:
 Examples:
   bash scripts/run_p2p_inter_2GPU.sh --backend nccl
   bash scripts/run_p2p_inter_2GPU.sh --backend mscclpp
-  bash scripts/run_p2p_inter_2GPU.sh --hosts 4.14.153.89,4.14.153.90 --gpus 0,1
+  bash scripts/run_p2p_inter_2GPU.sh --hosts HOST1,HOST2 --gpus 0,1
 EOF
 }
 
