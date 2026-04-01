@@ -46,14 +46,19 @@ static const mscclpp::Transport kIBTransports[] = {
 // Async worker state for CPU-driven IB send/recv.  Lives on the heap via
 // unique_ptr so that NcclSendRecvPeerContext stays movable (std::thread and
 // std::atomic are not).
+static constexpr size_t kSendChunkBytes = 1024 * 1024;  // 1MB pipeline chunk
+
 struct SendRecvWorkerState {
   struct WorkItem {
-    enum Type : uint8_t { SEND = 0 } type;
+    enum Type : uint8_t { SEND = 0, SEND_CHUNK = 1 } type;
     size_t bytes;
+    size_t offset;      // SEND_CHUNK: offset into staging buffer
+    int eventIndex;     // SEND_CHUNK: index into chunkEvents[]
+    bool lastChunk;     // SEND_CHUNK: signal + flush after this chunk
   };
 
   // Lock-free SPSC ring buffer (one producer = caller, one consumer = worker).
-  static constexpr uint32_t kCapacity = 64;
+  static constexpr uint32_t kCapacity = 256;
   WorkItem ring[kCapacity];
   alignas(64) std::atomic<uint32_t> head{0};
   alignas(64) std::atomic<uint32_t> tail{0};
@@ -63,6 +68,18 @@ struct SendRecvWorkerState {
 
   // Send: CUDA event tracks D2H completion on the user stream.
   cudaEvent_t d2hDoneEvent = nullptr;
+
+  // Chunk events pool for pipelined sends (grown on demand).
+  std::vector<cudaEvent_t> chunkEvents;
+
+  void ensureChunkEvents(int count) {
+    while (static_cast<int>(chunkEvents.size()) < count) {
+      cudaEvent_t e;
+      MSCCLPP_CUDATHROW(
+          cudaEventCreateWithFlags(&e, cudaEventDisableTiming));
+      chunkEvents.push_back(e);
+    }
+  }
 
   void push(WorkItem const& item) {
     uint32_t h = head.load(std::memory_order_relaxed);
@@ -85,6 +102,7 @@ struct SendRecvWorkerState {
     stopFlag.store(true, std::memory_order_release);
     if (thread.joinable()) thread.join();
     if (d2hDoneEvent) cudaEventDestroy(d2hDoneEvent);
+    for (auto e : chunkEvents) cudaEventDestroy(e);
   }
 };
 
@@ -172,12 +190,29 @@ static void sendRecvWorkerLoop(NcclSendRecvPeerContext* ctx) {
     if (!ws->pop(item)) continue;  // spin
 
     try {
-      while (cudaEventQuery(ws->d2hDoneEvent) == cudaErrorNotReady) {
+      if (item.type == SendRecvWorkerState::WorkItem::SEND) {
+        // Small message: single write, same as before.
+        while (cudaEventQuery(ws->d2hDoneEvent) == cudaErrorNotReady) {
+        }
+        ctx->connection.write(ctx->remoteRecvStagingMemory, 0,
+                              ctx->sendStagingMemory, 0, item.bytes);
+        ctx->h2hSemaphore->signal();
+        ctx->connection.flush();
+      } else {
+        // SEND_CHUNK: pipelined — wait for this chunk's D2H, then post
+        // the IB write.  write() posts to the NIC immediately, so the
+        // transfer overlaps with subsequent D2H copies on the stream.
+        while (cudaEventQuery(ws->chunkEvents[item.eventIndex]) ==
+               cudaErrorNotReady) {
+        }
+        ctx->connection.write(ctx->remoteRecvStagingMemory, item.offset,
+                              ctx->sendStagingMemory, item.offset,
+                              item.bytes);
+        if (item.lastChunk) {
+          ctx->h2hSemaphore->signal();
+          ctx->connection.flush();
+        }
       }
-      ctx->connection.write(ctx->remoteRecvStagingMemory, 0,
-                            ctx->sendStagingMemory, 0, item.bytes);
-      ctx->h2hSemaphore->signal();
-      ctx->connection.flush();
     } catch (std::exception const& ex) {
       WARN(MSCCLPP_NCCL, "sendRecvWorker failed: ", ex.what());
     }
@@ -571,11 +606,32 @@ static ncclResult_t executeNcclSendImpl(void const* sendbuff, size_t count,
     mscclpp::CudaDeviceGuard deviceGuard(localDevice);
     auto& peerCtx = getSendRecvPeerContext(comm, peer, localDevice);
     auto* ws = peerCtx.worker.get();
-    MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-        peerCtx.sendStagingBuffer.get(), sendbuff, bytes,
-        cudaMemcpyDeviceToHost, stream));
-    MSCCLPP_CUDATHROW(cudaEventRecord(ws->d2hDoneEvent, stream));
-    ws->push({SendRecvWorkerState::WorkItem::SEND, bytes});
+
+    if (bytes <= kSendChunkBytes) {
+      // Small message: single D2H + single IB write (no pipeline overhead).
+      MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+          peerCtx.sendStagingBuffer.get(), sendbuff, bytes,
+          cudaMemcpyDeviceToHost, stream));
+      MSCCLPP_CUDATHROW(cudaEventRecord(ws->d2hDoneEvent, stream));
+      ws->push({SendRecvWorkerState::WorkItem::SEND, bytes});
+    } else {
+      // Large message: pipeline D2H copies with IB writes chunk by chunk.
+      int numChunks = static_cast<int>((bytes + kSendChunkBytes - 1) /
+                                       kSendChunkBytes);
+      ws->ensureChunkEvents(numChunks);
+      char const* src = static_cast<char const*>(sendbuff);
+      char* staging = peerCtx.sendStagingBuffer.get();
+      for (int i = 0; i < numChunks; ++i) {
+        size_t off = static_cast<size_t>(i) * kSendChunkBytes;
+        size_t chunkBytes = std::min(kSendChunkBytes, bytes - off);
+        MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+            staging + off, src + off, chunkBytes,
+            cudaMemcpyDeviceToHost, stream));
+        MSCCLPP_CUDATHROW(cudaEventRecord(ws->chunkEvents[i], stream));
+        ws->push({SendRecvWorkerState::WorkItem::SEND_CHUNK, chunkBytes,
+                  off, i, i == numChunks - 1});
+      }
+    }
   });
 }
 
