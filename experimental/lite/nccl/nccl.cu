@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <unordered_map>
@@ -255,6 +256,14 @@ struct SendRecvWorkerState {
     item = ring[t % kCapacity];
     tail.store(t + 1, std::memory_order_release);
     return true;
+  }
+
+  // Block until all enqueued items have been consumed by the worker.
+  void drain() {
+    uint32_t h = head.load(std::memory_order_relaxed);
+    while (tail.load(std::memory_order_acquire) < h) {
+      std::this_thread::yield();
+    }
   }
 
   ~SendRecvWorkerState() {
@@ -934,6 +943,56 @@ static NcclSendRecvPeerContext& getSendRecvPeerContext(ncclComm_t comm,
   return it->second;
 }
 
+// Dispatch one round of the IB batched D2H→RDMA pipeline.
+// Enqueues D2H copies on d2hStream and pushes SEND_BATCH items to the worker
+// SPSC queue.  This function is non-blocking — the worker processes RDMA
+// asynchronously.
+//   src       — device pointer to the source region for this round
+//   staging   — host staging buffer base (always offset 0 for each round)
+//   roundBytes — bytes to transfer in this round (≤ stagingBytes)
+//   isLastRound — controls whether the worker issues a CQ flush
+static void dispatchIBSendRound(NcclSendRecvPeerContext& peerCtx,
+                                char const* src, size_t roundBytes,
+                                bool isLastRound) {
+  auto* ws = peerCtx.worker.get();
+  cudaStream_t d2h = peerCtx.d2hStream;
+  char* staging = peerCtx.sendStagingBuffer.get();
+
+  if (roundBytes <= kSendChunkBytes) {
+    int eIdx = ws->allocEvent();
+    MSCCLPP_CUDATHROW(
+        cudaMemcpyAsync(staging, src, roundBytes, cudaMemcpyDeviceToHost, d2h));
+    MSCCLPP_CUDATHROW(cudaEventRecord(ws->completionEvents[eIdx], d2h));
+    cudaStreamQuery(d2h);
+    ws->push({SendRecvWorkerState::WorkItem::SEND, roundBytes, 0, 0, 0, eIdx,
+              false, 0});
+  } else {
+    int totalChunks = static_cast<int>(
+        (roundBytes + kSendChunkBytes - 1) / kSendChunkBytes);
+    int adaptiveBatchChunks =
+        std::min(kD2HBatchChunks, std::max(1, totalChunks / 4));
+    size_t batchSize =
+        static_cast<size_t>(adaptiveBatchChunks) * kSendChunkBytes;
+    int numBatches =
+        static_cast<int>((roundBytes + batchSize - 1) / batchSize);
+    for (int b = 0; b < numBatches; ++b) {
+      size_t off = static_cast<size_t>(b) * batchSize;
+      size_t batchBytes = std::min(batchSize, roundBytes - off);
+      int rdmaChunks = static_cast<int>(
+          (batchBytes + kSendChunkBytes - 1) / kSendChunkBytes);
+      int eIdx = ws->allocEvent();
+      MSCCLPP_CUDATHROW(cudaMemcpyAsync(staging + off, src + off, batchBytes,
+                                        cudaMemcpyDeviceToHost, d2h));
+      MSCCLPP_CUDATHROW(cudaEventRecord(ws->completionEvents[eIdx], d2h));
+      cudaStreamQuery(d2h);
+      bool isLast = (b == numBatches - 1);
+      uint64_t pv = ++peerCtx.sendProgress;
+      ws->push({SendRecvWorkerState::WorkItem::SEND_BATCH, 0, off, batchBytes,
+                rdmaChunks, eIdx, isLast, pv});
+    }
+  }
+}
+
 static ncclResult_t executeNcclSendImpl(void const* sendbuff, size_t count,
                                         ncclDataType_t datatype, int peer,
                                         ncclComm_t comm, cudaStream_t stream) {
@@ -960,7 +1019,7 @@ static ncclResult_t executeNcclSendImpl(void const* sendbuff, size_t count,
   size_t stagingBytes = comm->sendRecvStagingBytesCached;
 
   // Check if the custom path can handle this request.
-  bool canHandle = comm->hasIB && bytes <= stagingBytes;
+  bool canHandle = comm->hasIB;
   if (!canHandle) {
     if (mscclppNcclDlopenSharedLib == true) {
       return mscclppNcclOps.Send(
@@ -1006,47 +1065,22 @@ static ncclResult_t executeNcclSendImpl(void const* sendbuff, size_t count,
       cudaEvent_t syncEvt = peerCtx.nextSyncEvent();
       MSCCLPP_CUDATHROW(cudaEventRecord(syncEvt, stream));
       MSCCLPP_CUDATHROW(cudaStreamWaitEvent(d2h, syncEvt, 0));
-      auto* ws = peerCtx.worker.get();
-      if (bytes <= kSendChunkBytes) {
-        int eIdx = ws->allocEvent();
-        MSCCLPP_CUDATHROW(cudaMemcpyAsync(peerCtx.sendStagingBuffer.get(),
-                                          sendbuff, bytes,
-                                          cudaMemcpyDeviceToHost, d2h));
-        MSCCLPP_CUDATHROW(cudaEventRecord(ws->completionEvents[eIdx], d2h));
-        // Flush the CUDA command buffer so the D2H + event are submitted to GPU
-        // before the worker starts waiting. Without this, cudaEventSynchronize
-        // in the worker holds the driver mutex waiting for an unsubmitted
-        // event, while the main thread can't flush (needs same mutex) →
-        // deadlock.
-        cudaStreamQuery(d2h);
-        ws->push({SendRecvWorkerState::WorkItem::SEND, bytes, 0, 0, 0, eIdx,
-                  false, 0});
-      } else {
-        int totalChunks =
-            static_cast<int>((bytes + kSendChunkBytes - 1) / kSendChunkBytes);
-        int adaptiveBatchChunks =
-            std::min(kD2HBatchChunks, std::max(1, totalChunks / 4));
-        size_t batchSize =
-            static_cast<size_t>(adaptiveBatchChunks) * kSendChunkBytes;
-        int numBatches = static_cast<int>((bytes + batchSize - 1) / batchSize);
-        char const* src = static_cast<char const*>(sendbuff);
-        char* staging = peerCtx.sendStagingBuffer.get();
-        for (int b = 0; b < numBatches; ++b) {
-          size_t off = static_cast<size_t>(b) * batchSize;
-          size_t batchBytes = std::min(batchSize, bytes - off);
-          int rdmaChunks = static_cast<int>((batchBytes + kSendChunkBytes - 1) /
-                                            kSendChunkBytes);
-          int eIdx = ws->allocEvent();
-          MSCCLPP_CUDATHROW(cudaMemcpyAsync(staging + off, src + off,
-                                            batchBytes, cudaMemcpyDeviceToHost,
-                                            d2h));
-          MSCCLPP_CUDATHROW(cudaEventRecord(ws->completionEvents[eIdx], d2h));
-          cudaStreamQuery(d2h);  // flush command buffer (same reason)
-          bool isLast = (b == numBatches - 1);
-          uint64_t pv = ++peerCtx.sendProgress;
-          ws->push({SendRecvWorkerState::WorkItem::SEND_BATCH, 0, off,
-                    batchBytes, rdmaChunks, eIdx, isLast, pv});
+      size_t stagingCap = peerCtx.stagingBytes;
+      int numRounds =
+          static_cast<int>((bytes + stagingCap - 1) / stagingCap);
+      char const* src = static_cast<char const*>(sendbuff);
+      for (int r = 0; r < numRounds; ++r) {
+        if (r > 0) {
+          // Wait for the worker to finish all RDMA of the previous round,
+          // then wait for the receiver to signal that it has consumed the
+          // staging buffer (H2D complete).
+          peerCtx.worker->drain();
+          peerCtx.h2hSemaphore->wait(/*maxSpinCount=*/-1);
         }
+        size_t roundOff = static_cast<size_t>(r) * stagingCap;
+        size_t roundBytes = std::min(stagingCap, bytes - roundOff);
+        bool isLastRound = (r == numRounds - 1);
+        dispatchIBSendRound(peerCtx, src + roundOff, roundBytes, isLastRound);
       }
     }
   });
@@ -1084,7 +1118,7 @@ static ncclResult_t executeNcclRecvImpl(void* recvbuff, size_t count,
   int localDevice = comm->cudaDevice;
   size_t stagingBytes = comm->sendRecvStagingBytesCached;
 
-  bool canHandle = comm->hasIB && bytes <= stagingBytes;
+  bool canHandle = comm->hasIB;
   if (!canHandle) {
     if (mscclppNcclDlopenSharedLib == true) {
       return mscclppNcclOps.Recv(
@@ -1118,27 +1152,46 @@ static ncclResult_t executeNcclRecvImpl(void* recvbuff, size_t count,
             cudaMemcpyAsync(recvbuff, peerCtx.recvStagingBuffer.get(), bytes,
                             cudaMemcpyHostToDevice, stream));
       } else {
-        int totalChunks =
-            static_cast<int>((bytes + kSendChunkBytes - 1) / kSendChunkBytes);
-        int adaptiveBatchChunks =
-            std::min(kD2HBatchChunks, std::max(1, totalChunks / 4));
-        size_t batchSize =
-            static_cast<size_t>(adaptiveBatchChunks) * kSendChunkBytes;
-        int numBatches = static_cast<int>((bytes + batchSize - 1) / batchSize);
+        size_t stagingCap = peerCtx.stagingBytes;
+        int numRounds =
+            static_cast<int>((bytes + stagingCap - 1) / stagingCap);
         char* dst = static_cast<char*>(recvbuff);
         char* staging = peerCtx.recvStagingBuffer.get();
         volatile uint64_t* counterPtr = reinterpret_cast<volatile uint64_t*>(
-            staging + peerCtx.stagingBytes);
+            staging + stagingCap);
 
-        for (int b = 0; b < numBatches; ++b) {
-          uint64_t expected = ++peerCtx.recvExpectedProgress;
-          while (*counterPtr < expected) {
+        for (int r = 0; r < numRounds; ++r) {
+          size_t roundOff = static_cast<size_t>(r) * stagingCap;
+          size_t roundBytes = std::min(stagingCap, bytes - roundOff);
+
+          // Compute batching parameters for this round.
+          int totalChunks = static_cast<int>(
+              (roundBytes + kSendChunkBytes - 1) / kSendChunkBytes);
+          int adaptiveBatchChunks =
+              std::min(kD2HBatchChunks, std::max(1, totalChunks / 4));
+          size_t batchSize =
+              static_cast<size_t>(adaptiveBatchChunks) * kSendChunkBytes;
+          int numBatches =
+              static_cast<int>((roundBytes + batchSize - 1) / batchSize);
+
+          for (int b = 0; b < numBatches; ++b) {
+            uint64_t expected = ++peerCtx.recvExpectedProgress;
+            while (*counterPtr < expected) {
+            }
+            // Staging offset is relative to buffer start (reused each round).
+            size_t stagingOff = static_cast<size_t>(b) * batchSize;
+            size_t batchBytes = std::min(batchSize, roundBytes - stagingOff);
+            MSCCLPP_CUDATHROW(cudaMemcpyAsync(
+                dst + roundOff + stagingOff, staging + stagingOff, batchBytes,
+                cudaMemcpyHostToDevice, peerCtx.h2dStream));
           }
-          size_t off = static_cast<size_t>(b) * batchSize;
-          size_t batchBytes = std::min(batchSize, bytes - off);
-          MSCCLPP_CUDATHROW(cudaMemcpyAsync(dst + off, staging + off,
-                                            batchBytes, cudaMemcpyHostToDevice,
-                                            peerCtx.h2dStream));
+
+          if (r < numRounds - 1) {
+            // Ensure all H2D copies for this round complete before telling the
+            // sender it may reuse the staging buffer.
+            MSCCLPP_CUDATHROW(cudaStreamSynchronize(peerCtx.h2dStream));
+            peerCtx.h2hSemaphore->signal();
+          }
         }
         MSCCLPP_CUDATHROW(
             cudaEventRecord(peerCtx.h2dDoneEvent, peerCtx.h2dStream));
@@ -1953,8 +2006,7 @@ NCCL_API ncclResult_t ncclGroupEnd() {
   std::vector<GroupedP2POp> customOps;
   for (auto const& op : ops) {
     size_t bytes = op.count * ncclTypeSize(op.datatype);
-    bool canHandle = op.comm->hasIB &&
-                     bytes <= op.comm->sendRecvStagingBytesCached && bytes > 0;
+    bool canHandle = op.comm->hasIB && bytes > 0;
     if (canHandle) {
       // Check if the peer context was actually initialized (transport !=
       // Unknown)
@@ -2060,20 +2112,70 @@ NCCL_API ncclResult_t ncclGroupEnd() {
     }
   }
 
-  // Phase 3: Execute custom operations directly.
-  for (size_t idx = 0; idx < customOps.size(); ++idx) {
-    auto const& op = customOps[idx];
-    ncclResult_t result =
-        (op.kind == GroupedP2POpKind::Send)
-            ? executeNcclSendImpl(op.sendbuff, op.count, op.datatype, op.peer,
-                                  op.comm, op.stream)
-            : executeNcclRecvImpl(op.recvbuff, op.count, op.datatype, op.peer,
-                                  op.comm, op.stream);
-    if (result != ncclSuccess) {
-      WARN(MSCCLPP_NCCL, "ncclGroupEnd custom ",
-           (op.kind == GroupedP2POpKind::Send ? "send" : "recv"),
-           " failed for peer ", op.peer);
-      return result;
+  // Phase 3: Execute custom operations.
+  //
+  // Multi-round sends (bytes > stagingBytes) block between rounds waiting for
+  // receiver acks.  If dispatched sequentially on the main thread, a send
+  // blocking on an ack could prevent the local recv dispatch from starting,
+  // while the remote recv (which produces the ack) hasn't started either →
+  // deadlock.  To avoid this, multi-round sends are dispatched on dedicated
+  // threads so the main thread can proceed to recv dispatch concurrently.
+  {
+    std::vector<std::thread> sendThreads;
+    std::vector<ncclResult_t> sendResults;
+    std::mutex sendResultsMu;
+    std::vector<GroupedP2POp> recvOps;
+
+    for (auto const& op : customOps) {
+      if (op.kind == GroupedP2POpKind::Send) {
+        size_t opBytes = op.count * ncclTypeSize(op.datatype);
+        size_t stagingCap = op.comm->sendRecvStagingBytesCached;
+        if (opBytes > stagingCap) {
+          // Large send — run on a separate thread to avoid deadlock.
+          sendResults.push_back(ncclSuccess);
+          size_t rIdx = sendResults.size() - 1;
+          sendThreads.emplace_back(
+              [&sendResults, &sendResultsMu, rIdx](
+                  void const* buf, size_t cnt, ncclDataType_t dt, int p,
+                  ncclComm_t c, cudaStream_t s) {
+                ncclResult_t r = executeNcclSendImpl(buf, cnt, dt, p, c, s);
+                if (r != ncclSuccess) {
+                  std::lock_guard<std::mutex> lk(sendResultsMu);
+                  sendResults[rIdx] = r;
+                }
+              },
+              op.sendbuff, op.count, op.datatype, op.peer, op.comm, op.stream);
+        } else {
+          // Small send — non-blocking, dispatch inline.
+          ncclResult_t result = executeNcclSendImpl(
+              op.sendbuff, op.count, op.datatype, op.peer, op.comm, op.stream);
+          if (result != ncclSuccess) {
+            WARN(MSCCLPP_NCCL,
+                 "ncclGroupEnd custom send failed for peer ", op.peer);
+            return result;
+          }
+        }
+      } else {
+        recvOps.push_back(op);
+      }
+    }
+
+    // Dispatch all recvs on the main thread (blocking polls are normal).
+    for (auto const& op : recvOps) {
+      ncclResult_t result = executeNcclRecvImpl(
+          op.recvbuff, op.count, op.datatype, op.peer, op.comm, op.stream);
+      if (result != ncclSuccess) {
+        WARN(MSCCLPP_NCCL,
+             "ncclGroupEnd custom recv failed for peer ", op.peer);
+        for (auto& t : sendThreads) t.join();
+        return result;
+      }
+    }
+
+    // Wait for all large-send threads to complete.
+    for (auto& t : sendThreads) t.join();
+    for (auto r : sendResults) {
+      if (r != ncclSuccess) return r;
     }
   }
 
