@@ -666,7 +666,7 @@ __device__ __forceinline__ int atomic_add_release_global(int const* ptr,
                                  __HIP_MEMORY_SCOPE_AGENT);
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
   } else {
-    ret = __hip_atomic_fetch_add(const_cast<int*>(ptr), value, __ATOMIC_ACQUIRE,
+    ret = __hip_atomic_fetch_add(const_cast<int*>(ptr), value, __ATOMIC_RELEASE,
                                  __HIP_MEMORY_SCOPE_AGENT);
   }
 #else

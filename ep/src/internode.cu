@@ -1180,7 +1180,8 @@ __global__ void __launch_bounds__(
                         src_rdma_rank) > 0) {
           if (lane_id == src_rdma_rank)
             cached_rdma_channel_tail = static_cast<int>(
-                ld_acquire_sys_global(rdma_channel_tail.buffer(src_rdma_rank)));
+                ld_acquire_sys_global<kUseAggressiveAtomic>(
+                    rdma_channel_tail.buffer(src_rdma_rank)));
           if (__shfl_sync(WARP_MASK,
                           cached_rdma_channel_tail > cached_rdma_channel_head,
                           src_rdma_rank))
@@ -1378,7 +1379,10 @@ __global__ void __launch_bounds__(
         if (cached_channel_head_idx != cached_channel_tail_idx) break;
 
         cached_channel_tail_idx = __shfl_sync(
-            WARP_MASK, ld_acquire_sys_global(nvl_channel_tail.buffer()), 0);
+            WARP_MASK,
+            ld_acquire_sys_global<kUseAggressiveAtomic>(
+                nvl_channel_tail.buffer()),
+            0);
         // Timeout check
         if (lane_id == 0 and clock64() - start_time > NUM_TIMEOUT_CYCLES) {
           printf(
