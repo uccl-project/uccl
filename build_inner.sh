@@ -31,7 +31,7 @@
 #     PER_EXPERT_BATCHING           Enable per-expert batching (default "0")
 #     MAKE_NORMAL_MODE              Make normal mode flag
 #     TORCH_CUDA_ARCH_LIST          CUDA compute capabilities to compile for
-#     DISABLE_AGGRESSIVE_ATOMIC     Disable aggressive atomic operations (default "0")
+#     DISABLE_AGGRESSIVE_ATOMIC     Disable aggressive atomic operations (default "1")
 # -----------------------
 
 set -euo pipefail
