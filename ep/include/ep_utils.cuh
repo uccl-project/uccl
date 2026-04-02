@@ -14,6 +14,11 @@ using i32_gptr = __attribute__((address_space(1))) int*;
 using u8_gptr = __attribute__((address_space(1))) uint8_t*;
 using f32_gptr = __attribute__((address_space(1))) float*;
 
+// Aggressive relaxed atomics are only for non-synchronization traffic. Never
+// route cross-device handshake loads/stores (e.g. IBGDA completion counters)
+// through these macros: relaxed LD/ST does not order prior RDMA writes before
+// observing the counter, which intermittently surfaces as stale payloads on
+// ROCm when DISABLE_AGGRESSIVE_ATOMIC=0 (container build default).
 #ifndef DISABLE_AGGRESSIVE_ATOMIC
 #define HIP_ATOMIC_LOAD(ptr, order, scope) \
   __hip_atomic_load((ptr), __ATOMIC_RELAXED, (scope))
@@ -547,7 +552,8 @@ __device__ __forceinline__ void st_na_global(int4 const* ptr,
 __device__ __forceinline__ int ld_acquire_sys_global(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = HIP_ATOMIC_LOAD(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
+  ret = __hip_atomic_load(const_cast<int*>(ptr), __ATOMIC_ACQUIRE,
+                          __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.acquire.sys.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif
@@ -581,7 +587,8 @@ __device__ __forceinline__ uint32_t
 ld_acquire_sys_global(uint32_t const volatile* p) {
   uint32_t v;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  v = HIP_ATOMIC_LOAD(p, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
+  v = __hip_atomic_load(const_cast<uint32_t*>(p), __ATOMIC_ACQUIRE,
+                        __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.acquire.sys.global.u32 %0, [%1];" : "=r"(v) : "l"(p));
 #endif
@@ -592,7 +599,8 @@ __device__ __forceinline__ uint64_t
 ld_acquire_sys_global(uint64_t const volatile* p) {
   uint64_t v;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  v = HIP_ATOMIC_LOAD(p, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
+  v = __hip_atomic_load(const_cast<uint64_t*>(p), __ATOMIC_ACQUIRE,
+                        __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(v) : "l"(p));
 #endif
@@ -602,7 +610,8 @@ ld_acquire_sys_global(uint64_t const volatile* p) {
 __device__ __forceinline__ uint64_t ld_acquire_sys_global(uint64_t const* ptr) {
   uint64_t ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = HIP_ATOMIC_LOAD(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
+  ret = __hip_atomic_load(const_cast<uint64_t*>(ptr), __ATOMIC_ACQUIRE,
+                          __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));
 #endif
@@ -638,8 +647,10 @@ __device__ __forceinline__ int atomic_add_release_global(int const* ptr,
                                                          int value) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = HIP_ATOMIC_ADD(const_cast<int*>(ptr), value, __ATOMIC_RELEASE,
-                       __HIP_MEMORY_SCOPE_AGENT);
+  // ACQ_REL: Hip uses RMW here; release alone is not always available for
+  // fetch_add, but acq_rel orders prior writes before the atomic is visible.
+  ret = __hip_atomic_fetch_add(const_cast<int*>(ptr), value, __ATOMIC_ACQ_REL,
+                               __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("atom.add.release.gpu.global.s32 %0, [%1], %2;"
                : "=r"(ret)
@@ -671,7 +682,8 @@ __device__ __forceinline__ uint32_t elect_one_sync(int lane_id) {
 __device__ __forceinline__ int ld_acquire_global(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = HIP_ATOMIC_LOAD(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_AGENT);
+  ret = __hip_atomic_load(const_cast<int*>(ptr), __ATOMIC_ACQUIRE,
+                          __HIP_MEMORY_SCOPE_AGENT);
 #else
   asm volatile("ld.acquire.gpu.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif
@@ -680,8 +692,8 @@ __device__ __forceinline__ int ld_acquire_global(int const* ptr) {
 
 __device__ __forceinline__ void st_release_sys_global(int const* ptr, int val) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  HIP_ATOMIC_STORE(val, const_cast<int*>(ptr), __ATOMIC_RELEASE,
-                   __HIP_MEMORY_SCOPE_SYSTEM);
+  __hip_atomic_store(const_cast<int*>(ptr), val, __ATOMIC_RELEASE,
+                     __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("st.release.sys.global.s32 [%0], %1;" ::"l"(ptr), "r"(val)
                : "memory");
