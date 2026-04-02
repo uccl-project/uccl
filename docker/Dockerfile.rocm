@@ -36,7 +36,8 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # ───── Install PyTorch with ROCm support ─────
-RUN python${PY_VER} -m pip install --no-cache-dir --pre torch torchvision --index-url https://download.pytorch.org/whl/rocm7.2
+RUN python${PY_VER} -m pip install --no-cache-dir --pre torch torchvision \
+--index-url https://download.pytorch.org/whl/nightly/rocm7.1
 
 # ─────────────────────────────────────────────────────────
 # Install Python build back-end (for Python ${PY_VER})

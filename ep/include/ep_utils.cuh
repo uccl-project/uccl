@@ -96,7 +96,7 @@ __device__ __forceinline__ void grid_sync(T* bar_ptr, int num_participants) {
 }
 
 template <bool kUseAggressiveAtomic, int kMemoryScope, typename dtype_t>
-__device__ __forceinline__ dtype_t ld_acquire(dtype_t const* ptr) {
+__device__ __forceinline__ dtype_t scoped_ld_acquire(dtype_t const* ptr) {
   dtype_t ret;
   if constexpr (kUseAggressiveAtomic) {
     __atomic_signal_fence(__ATOMIC_SEQ_CST);
@@ -564,7 +564,8 @@ template <bool kUseAggressiveAtomic = false>
 __device__ __forceinline__ int ld_acquire_sys_global(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = amd::ld_acquire<kUseAggressiveAtomic, __HIP_MEMORY_SCOPE_SYSTEM>(ptr);
+  ret = amd::scoped_ld_acquire<kUseAggressiveAtomic, __HIP_MEMORY_SCOPE_SYSTEM>(
+      ptr);
 #else
   asm volatile("ld.acquire.sys.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif
@@ -599,7 +600,8 @@ __device__ __forceinline__ uint32_t
 ld_acquire_sys_global(uint32_t const volatile* p) {
   uint32_t v;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  v = amd::ld_acquire<kUseAggressiveAtomic, __HIP_MEMORY_SCOPE_SYSTEM>(p);
+  v = amd::scoped_ld_acquire<kUseAggressiveAtomic, __HIP_MEMORY_SCOPE_SYSTEM>(
+      p);
 #else
   asm volatile("ld.acquire.sys.global.u32 %0, [%1];" : "=r"(v) : "l"(p));
 #endif
@@ -611,7 +613,8 @@ __device__ __forceinline__ uint64_t
 ld_acquire_sys_global(uint64_t const volatile* p) {
   uint64_t v;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  v = amd::ld_acquire<kUseAggressiveAtomic, __HIP_MEMORY_SCOPE_SYSTEM>(p);
+  v = amd::scoped_ld_acquire<kUseAggressiveAtomic, __HIP_MEMORY_SCOPE_SYSTEM>(
+      p);
 #else
   asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(v) : "l"(p));
 #endif
@@ -622,7 +625,8 @@ template <bool kUseAggressiveAtomic = false>
 __device__ __forceinline__ uint64_t ld_acquire_sys_global(uint64_t const* ptr) {
   uint64_t ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = amd::ld_acquire<kUseAggressiveAtomic, __HIP_MEMORY_SCOPE_SYSTEM>(ptr);
+  ret = amd::scoped_ld_acquire<kUseAggressiveAtomic, __HIP_MEMORY_SCOPE_SYSTEM>(
+      ptr);
 #else
   asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));
 #endif
@@ -701,7 +705,8 @@ template <bool kUseAggressiveAtomic = false>
 __device__ __forceinline__ int ld_acquire_global(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = amd::ld_acquire<kUseAggressiveAtomic, __HIP_MEMORY_SCOPE_AGENT>(ptr);
+  ret = amd::scoped_ld_acquire<kUseAggressiveAtomic, __HIP_MEMORY_SCOPE_AGENT>(
+      ptr);
 #else
   asm volatile("ld.acquire.gpu.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif
@@ -959,7 +964,8 @@ __device__ __forceinline__ int ld_acquire_cta(int const* ptr) {
 __forceinline__ __device__ void acquire_lock(int* mutex) {
   // To make later memory operations valid, we must use `acquire` for memory
   // semantics
-  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0);
+  while (atomic_cas_cta_acquire(mutex, 0, 1) != 0)
+    ;
 }
 
 __forceinline__ __device__ void release_lock(int* mutex) {

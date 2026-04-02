@@ -302,7 +302,8 @@ static std::vector<uint64_t> collect_d2h_channel_addrs_for_device(
 
 bool is_sm90_compiled() {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-// disable sm90 features for HIP to avoid tma stuffs, but AMD supports fp8 features
+  // disable sm90 features for HIP to avoid tma stuffs, but AMD supports fp8
+  // features
   return true;
 #elif !defined(DISABLE_SM90_FEATURES)
   return true;
