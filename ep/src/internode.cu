@@ -1001,11 +1001,8 @@ __global__ void __launch_bounds__(
 
         // Read the latest progress
         // NOTES: `rdma_send_channel_tail` does not need to be protected by lock
-        auto processed_tail = __shfl_sync(
-            WARP_MASK,
-            ld_acquire_cta(
-                const_cast<int const*>(rdma_send_channel_tail + dst_rdma_rank)),
-            0);
+        auto processed_tail = ld_acquire_cta(
+            const_cast<int const*>(rdma_send_channel_tail + dst_rdma_rank));
         auto synced_last_issued_tail =
             __shfl_sync(WARP_MASK, last_issued_tail, dst_rdma_rank);
         auto num_tokens_processed = processed_tail - synced_last_issued_tail;
@@ -1158,8 +1155,7 @@ __global__ void __launch_bounds__(
             num_max_nvl_chunked_send_tokens)
           break;
 
-        cached_nvl_channel_head = __shfl_sync(
-            WARP_MASK, ld_volatile_global(nvl_channel_head.buffer()), 0);
+        cached_nvl_channel_head = ld_volatile_global(nvl_channel_head.buffer());
         // Timeout check
         if (lane_id == 0 and clock64() - start_time > NUM_TIMEOUT_CYCLES) {
           printf(
@@ -1378,11 +1374,9 @@ __global__ void __launch_bounds__(
         // Ready to copy
         if (cached_channel_head_idx != cached_channel_tail_idx) break;
 
-        cached_channel_tail_idx = __shfl_sync(
-            WARP_MASK,
+        cached_channel_tail_idx =
             ld_acquire_sys_global<kUseAggressiveAtomic>(
-                nvl_channel_tail.buffer()),
-            0);
+                nvl_channel_tail.buffer());
         // Timeout check
         if (lane_id == 0 and clock64() - start_time > NUM_TIMEOUT_CYCLES) {
           printf(

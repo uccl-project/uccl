@@ -867,8 +867,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
       auto const rdma_send_x_vec_row =
           reinterpret_cast<uint8_t*>(rdma_send_type_row);
 
-      auto const src_idx =
-          __shfl_sync(WARP_MASK, __ldg(local_src_info + token_idx), 0);
+      auto const src_idx = __ldg(local_src_info + token_idx);
       auto const buf_ptr = reinterpret_cast<int64_t>(rdma_send_x_vec_row);
       auto const dst_ptr =
           reinterpret_cast<uint64_t>(rdma_recv_x) +
