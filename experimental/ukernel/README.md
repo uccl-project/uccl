@@ -4,6 +4,7 @@ Ultra Unified and Fine-grained Kernel
 ```
 sudo apt-get update
 sudo apt-get install -y libelf-dev
+cd thirdparty && git clone https://github.com/NVIDIA/gdrcopy.git
 ```
 
 ## transport/runtime develpment:

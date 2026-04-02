@@ -1,5 +1,15 @@
 # UCCL-EFA
 
+## Git submodules
+
+From the repo root:
+
+```bash
+git submodule update --init thirdparty/nccl thirdparty/nccl-tests
+```
+
+(`thirdparty/nccl-sg` is not a submodule.)
+
 AWS EFA support for UCCL. We are using Deep Learning OSS Nvidia Driver AMI GPU PyTorch 2.5 (Ubuntu 22.04) AMI on 4x`p4d.24xlarge` AWS VMs; latest AMI and `p4de.24xlarge` should also work. 
 Note that you need to enable all four EFA NICs in `p4d.24xlarge` instances. 
 

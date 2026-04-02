@@ -5,7 +5,7 @@
 Run the following to build Python wheels: 
 ```bash
 cd $UCCL_HOME
-./build.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url]
+./build.sh [cu12|cu13|rocm|rocm7|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url]
 ```
 
 Run the following to install the wheels locally: 

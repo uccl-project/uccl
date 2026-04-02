@@ -61,10 +61,8 @@ static void print_usage(char const* path) {
 1. sudo apt update
    sudo apt install build-essential devscripts debhelper fakeroot pkg-config
 dkms
-2. git submodule update --init --recursive
-   cd thirdparty/gdrcopy
-   make CUDA=/usr/local/cuda all
-   sudo make install
+2. cd thirdparty && git clone https://github.com/NVIDIA/gdrcopy.git && cd
+gdrcopy make CUDA=/usr/local/cuda all sudo make install
 3. sudo ./insmod.sh
 4. check:
    lsmod | grep -E '^gdrdrv\b' || true

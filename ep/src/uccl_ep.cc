@@ -518,8 +518,6 @@ class Buffer {
     EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);
     EP_HOST_ASSERT(num_tokens_per_expert_ptr != 0);
     EP_HOST_ASSERT(is_token_in_rank_ptr != 0);
-    EP_HOST_ASSERT(num_tokens > 0);
-    EP_HOST_ASSERT(num_topk > 0);
     EP_HOST_ASSERT(num_experts > 0);
 
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);

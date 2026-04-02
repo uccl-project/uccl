@@ -23,26 +23,21 @@ get_cuda_version() {
     fi
 }
 
-# Run system-level commands with sudo when available, otherwise directly.
-if [[ "$(id -u)" -eq 0 ]]; then
-    SUDO_CMD=()
-    CAN_INSTALL_APT=1
-elif command -v sudo &> /dev/null && sudo -n true &> /dev/null; then
-    SUDO_CMD=(sudo)
-    CAN_INSTALL_APT=1
-else
-    SUDO_CMD=()
-    CAN_INSTALL_APT=0
-fi
+# Use `uv pip install` in uv-created virtualenvs (pyvenv.cfg marks them); otherwise plain pip.
+pip_install() {
+    if command -v uv &> /dev/null && [[ -n "${VIRTUAL_ENV:-}" ]] &&
+        [[ -f "${VIRTUAL_ENV}/pyvenv.cfg" ]] &&
+        grep -qE '^uv[[:space:]]*=' "${VIRTUAL_ENV}/pyvenv.cfg" 2> /dev/null; then
+        uv pip install "$@"
+    else
+        pip install "$@"
+    fi
+}
 
-# Install common dependencies
-if [[ "$CAN_INSTALL_APT" -eq 1 ]]; then
-    "${SUDO_CMD[@]}" apt install -y clang-format-14
-else
-    echo "No root/passwordless sudo. Skipping apt dependencies: clang-format-14"
-fi
-pip install nanobind --upgrade
-pip install black
+# LLVM 14 formatter (PyPI distribution: clang-format)
+pip_install "clang-format==14.0.6"
+pip_install nanobind --upgrade
+pip_install black
 
 # Check if we're in a conda environment
 if [[ ! -z "${CONDA_PREFIX}" ]]; then
@@ -60,24 +55,27 @@ if check_cuda; then
     CUDA_MAJOR=$(echo "$CUDA_VERSION" | cut -d. -f1)
     CUDA_MINOR=$(echo "$CUDA_VERSION" | cut -d. -f2)
     PYTORCH_SUFFIX="cu$((10#$CUDA_MAJOR * 10 + 10#$CUDA_MINOR))"
-    
+
+    # PyTorch pip indices above cu130 are often absent (e.g. CUDA 13.2 -> cu132); cap at cu130.
+    pt_num="${PYTORCH_SUFFIX#cu}"
+    if [[ "$pt_num" =~ ^[0-9]+$ ]] && [[ "$pt_num" -gt 130 ]]; then
+        echo "Detected index $PYTORCH_SUFFIX; using cu130 (highest reliably published stable index)"
+        PYTORCH_SUFFIX="cu130"
+    fi
+
     # Verify PyTorch wheel exists for this version, fallback to latest if not
     if curl --fail --output /dev/null --silent --head "https://download.pytorch.org/whl/$PYTORCH_SUFFIX/torch/" &> /dev/null; then
         echo "Using PyTorch suffix: $PYTORCH_SUFFIX"
-    # temporary fallback since cu131 is not available now
-    elif [[ "$PYTORCH_SUFFIX" == "cu131" ]]; then
-        echo "Detected PyTorch suffix cu131, which is currently not available, temporarily falling back to cu130 for now"
-        PYTORCH_SUFFIX="cu130"
     else
         echo "No exact match for $PYTORCH_SUFFIX, using latest compatible version"
         PYTORCH_SUFFIX="cu${CUDA_MAJOR}1"  # Fallback to major version + .1
     fi
     
-    pip install torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/$PYTORCH_SUFFIX"
+    pip_install torch torchvision torchaudio --index-url "https://download.pytorch.org/whl/$PYTORCH_SUFFIX"
 elif check_rocm; then
     echo "Detected ROCM"
     # Install Pytorch using nightly
-    pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
+    pip_install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.0
 else
     echo "No CUDA or ROCM detected"
     exit 1

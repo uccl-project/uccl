@@ -1,5 +1,14 @@
 # UCCL-AFXDP
 
+## Git submodules
+
+From the repo root:
+
+```bash
+git submodule update --init thirdparty/nccl thirdparty/nccl-tests \
+  collective/afxdp/lib/libbpf collective/afxdp/lib/xdp-tools
+```
+
 ## Getting Started
 
 UCCL-AFXDP currently supports AWS ENA NICs and IBM VirtIO NICs; support for Azure and GCP non-RDMA NICs is on the way. It is implemented as an NCCL plugin library with a drop-in replacement for NCCL applications. Here, we show how to run the standard `nccl-tests` that leverages UCCL atop two AWS `g4dn.8xlarge` instances with T4 GPUs. 
