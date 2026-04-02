@@ -260,6 +260,8 @@ void UnixSocketServer::mainLoop(int listenUnixSockFd) {
 UnixSocketServer::UnixSocketServer()
     : abortFlagStorage_(new uint32_t(0)), abortFlag_(abortFlagStorage_.get()) {}
 
+UnixSocketServer::~UnixSocketServer() { stop(); }
+
 std::string UnixSocketServer::getSocketPath() const {
   return listenUnixSockPath_;
 }

@@ -109,6 +109,11 @@ MSCCLPP_API_CPP int Connection::getMaxWriteQueueSize() const {
   return impl_->getMaxWriteQueueSize();
 }
 
+MSCCLPP_API_CPP std::shared_ptr<IbQp> Connection::getIbQp() const {
+  auto* ibConn = dynamic_cast<IBConnection*>(impl_.get());
+  return ibConn ? ibConn->getIbQp() : nullptr;
+}
+
 // CudaIpcConnection
 
 CudaIpcConnection::CudaIpcConnection(std::shared_ptr<Context> context,
