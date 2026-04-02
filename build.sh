@@ -406,6 +406,7 @@ else
   fi
 
   ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
+    --network=host \
     -v $HOME:$HOME \
     -v "$(pwd)":/io \
     -e TARGET="${TARGET}" \

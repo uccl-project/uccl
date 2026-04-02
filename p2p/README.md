@@ -62,7 +62,7 @@ sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
 
 To build AWS EFA support, you can: 
 ```bash
-USE_EFA=1 bash build.sh cuda p2p --install
+USE_EFA=1 bash build.sh cu12 p2p --install
 # or
 make -j USE_EFA=1 install
 ```
@@ -73,7 +73,7 @@ To build with DietGPU float compression support, you can:
 ```bash
 USE_DIETGPU=1 make -j install
 # or
-USE_DIETGPU=1 bash build.sh cuda p2p --install
+USE_DIETGPU=1 bash build.sh cu12 p2p --install
 ```
 
 DietGPU provides lossless GPU-side compression for float16/bfloat16/float32 tensors. It only activates for transfers larger than 2 MB. At runtime, control compression behavior via the `P2P_COMPRESS_STRATEGY` environment variable (see the environment variable table below).
@@ -110,6 +110,7 @@ Notes:
 | UCCL_P2P_RDMA_GID_INDEX | GID index in RDMA network | 0/3 (EFA/IB) |
 | UCCL_P2P_RDMA_SL | Service level in RDMA network | 8/3 (EFA/IB) |
 | UCCL_P2P_RDMA_TC | Traffic class in RDMA network | 104 (IB) |
+| UCCL_P2P_RDMA_DEV | RDMA devices forced to use (instead of auto-selecting based on PCIe affinity) | none (eg, `irdma-mkp0,irdma-mkp1`) |
 | P2P_COMPRESS_STRATEGY | DietGPU compression strategy (requires `USE_DIETGPU=1` build) | none |
 
 `P2P_COMPRESS_STRATEGY` accepted values:
