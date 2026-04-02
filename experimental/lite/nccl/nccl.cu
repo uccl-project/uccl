@@ -8,10 +8,12 @@
 #include "utils.hpp"
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <mutex>
 #include <optional>
 #include <set>
+#include <sstream>
 #include <unordered_map>
 #include <vector>
 #if defined(ENABLE_NPKIT)
@@ -28,6 +30,7 @@
 #include "logger.hpp"
 #include "memory_channel.hpp"
 #include "nccl.h"
+#include "numa.hpp"
 #include "registered_memory.hpp"
 #include "semaphore.hpp"
 #include <atomic>
@@ -54,6 +57,108 @@ static const mscclpp::Transport kIBTransports[] = {
     mscclpp::Transport::IB0, mscclpp::Transport::IB1, mscclpp::Transport::IB2,
     mscclpp::Transport::IB3, mscclpp::Transport::IB4, mscclpp::Transport::IB5,
     mscclpp::Transport::IB6, mscclpp::Transport::IB7};
+
+// ---------------------------------------------------------------------------
+// Topology-aware IB transport selection.
+//
+// Matches each GPU to an IB HCA on the same NUMA node for optimal PCIe
+// locality.  When MSCCLPP_HCA_DEVICES is set, only those devices are
+// considered.  Falls back to round-robin when NUMA information is unavailable
+// or no same-NUMA device exists.
+// ---------------------------------------------------------------------------
+
+static int getIBDeviceNumaNode(std::string const& ibDevName) {
+  std::string path = "/sys/class/infiniband/" + ibDevName + "/device/numa_node";
+  std::ifstream f(path);
+  int node = -1;
+  if (f.is_open()) f >> node;
+  return node;
+}
+
+// Returns the list of IB transports we are allowed to use.
+// If MSCCLPP_HCA_DEVICES is set, the list is limited to those devices (in
+// order).  Otherwise all hardware IB devices are included.
+static std::vector<mscclpp::Transport> getAvailableIBTransports() {
+  std::string hcaEnv = mscclpp::env()->hcaDevices;
+  int count;
+  if (!hcaEnv.empty()) {
+    count = 0;
+    std::stringstream ss(hcaEnv);
+    std::string tok;
+    while (std::getline(ss, tok, ',')) ++count;
+  } else {
+    count = mscclpp::getIBDeviceCount();
+  }
+  count = std::min(count, static_cast<int>(sizeof(kIBTransports) /
+                                           sizeof(kIBTransports[0])));
+  std::vector<mscclpp::Transport> result;
+  result.reserve(count);
+  for (int i = 0; i < count; ++i) result.push_back(kIBTransports[i]);
+  return result;
+}
+
+// Select the best IB transport for a given CUDA device, preferring HCAs on
+// the same NUMA node.  The result is deterministic and symmetric across nodes
+// with identical hardware, so the peer's transport can be computed locally.
+static mscclpp::Transport selectIBTransportForGpu(int cudaDeviceId) {
+  static std::mutex cacheMu;
+  static std::unordered_map<int, mscclpp::Transport> cache;
+  {
+    std::lock_guard<std::mutex> lk(cacheMu);
+    auto it = cache.find(cudaDeviceId);
+    if (it != cache.end()) return it->second;
+  }
+
+  auto available = getAvailableIBTransports();
+  if (available.empty()) {
+    return mscclpp::Transport::Unknown;
+  }
+
+  int gpuNuma = -1;
+  try {
+    gpuNuma = mscclpp::getDeviceNumaNode(cudaDeviceId);
+  } catch (...) {
+    // NUMA info unavailable — fall through to round-robin.
+  }
+
+  // Collect NUMA nodes for each available IB device.
+  std::vector<mscclpp::Transport> sameNuma;
+  for (auto t : available) {
+    try {
+      std::string name = mscclpp::getIBDeviceName(t);
+      int ibNuma = getIBDeviceNumaNode(name);
+      if (gpuNuma >= 0 && ibNuma == gpuNuma) {
+        sameNuma.push_back(t);
+      }
+    } catch (...) {
+      // Skip devices whose names can't be resolved.
+    }
+  }
+
+  mscclpp::Transport chosen;
+  std::string chosenName;
+  if (!sameNuma.empty()) {
+    // Among same-NUMA HCAs, round-robin by device ID.
+    chosen = sameNuma[cudaDeviceId % sameNuma.size()];
+  } else {
+    // No NUMA match — round-robin across all available.
+    chosen = available[cudaDeviceId % available.size()];
+  }
+  try {
+    chosenName = mscclpp::getIBDeviceName(chosen);
+  } catch (...) {
+    chosenName = "?";
+  }
+  std::string reason = sameNuma.empty() ? " (round-robin)" : " (NUMA-local)";
+  INFO(MSCCLPP_NCCL, "GPU ", cudaDeviceId, " (NUMA ", gpuNuma, ") -> IB ",
+       chosenName, reason);
+
+  {
+    std::lock_guard<std::mutex> lk(cacheMu);
+    cache[cudaDeviceId] = chosen;
+  }
+  return chosen;
+}
 
 // ---------------------------------------------------------------------------
 // POSIX-shm based control block for intra-node CudaIpc signaling.
@@ -778,14 +883,14 @@ static mscclpp::Transport selectSendRecvTransport(ncclComm_t comm, int peer) {
   if (!hasIBDevices()) {
     return mscclpp::Transport::Unknown;
   }
-  int localIndex = comm->comm->bootstrap()->getRank() % comm->nRanksPerNode;
-  if (localIndex < 0 ||
-      localIndex >=
-          static_cast<int>(sizeof(kIBTransports) / sizeof(kIBTransports[0]))) {
-    throw mscclpp::Error("Local rank index is out of supported IB range",
-                         mscclpp::ErrorCode::InvalidUsage);
+  // Topology-aware: pick the IB HCA on the same NUMA node as this GPU.
+  mscclpp::Transport t = selectIBTransportForGpu(comm->cudaDevice);
+  if (t == mscclpp::Transport::Unknown) {
+    throw mscclpp::Error(
+        "No usable IB transport for GPU " + std::to_string(comm->cudaDevice),
+        mscclpp::ErrorCode::InvalidUsage);
   }
-  return kIBTransports[localIndex];
+  return t;
 }
 
 static void initializeSendRecvPeerContext(ncclComm_t comm, int peer,
@@ -891,8 +996,10 @@ static void initializeSendRecvPeerContext(ncclComm_t comm, int peer,
                                       nullptr);
     // Remote memory is registered with the PEER's IB transport, which may
     // differ from ours (e.g., local=IB1, peer=IB0). Query with their transport.
-    int peerLocalIndex = peer % comm->nRanksPerNode;
-    mscclpp::Transport peerIbTransport = kIBTransports[peerLocalIndex];
+    // Assumes symmetric NUMA topology across nodes.
+    int peerCudaDevice = peer % comm->nRanksPerNode;
+    mscclpp::Transport peerIbTransport =
+        selectIBTransportForGpu(peerCudaDevice);
     ctx.remoteRecvStagingMemory.getIbMrInfo(peerIbTransport, nullptr,
                                             &ctx.remoteRecvMrInfo);
 
