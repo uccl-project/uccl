@@ -99,6 +99,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
   // Expert counts
   __shared__ int shared_num_tokens_sent_per_expert[kNumMaxWarpGroups];
+  // Per-warp scratchpad for broadcasting atomicAdd results (replaces __shfl_sync)
+  __shared__ int smem_ll_bcast[kNumMaxWarpGroups];
 
 #ifdef PER_EXPERT_BATCHING
   // Global counter slots used for batching sends to each top-k destination.
@@ -227,11 +229,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 
       // Issue IBGDA sends
       if (dst_expert_idx >= 0) {
-        int slot_idx =
-            lane_id == 0
-                ? atomicAdd(atomic_counter_per_expert + dst_expert_idx, 1)
-                : 0;
-        slot_idx = __shfl_sync(WARP_MASK, slot_idx, 0);
+        int slot_idx;
+        if (lane_id == 0) {
+          smem_ll_bcast[warp_id] =
+              atomicAdd(atomic_counter_per_expert + dst_expert_idx, 1);
+        }
+        __syncwarp();
+        slot_idx = smem_ll_bcast[warp_id];
         auto const dst_rank = dst_expert_idx / num_local_experts;
         auto const dst_expert_local_idx = dst_expert_idx % num_local_experts;
         auto const src_ptr = reinterpret_cast<uint64_t>(rdma_x_src_idx);

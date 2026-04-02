@@ -667,6 +667,8 @@ __global__ void cached_notify_combine(void** buffer_ptrs, int* send_head,
     get_channel_task_range(num_recv_tokens, num_channels, channel_id,
                            token_start_idx, token_end_idx);
 
+    __shared__ int smem_current_head[kNumRanks * WARP_SIZE];
+
     // NOTES: `1 << 25` is a heuristic large number
     int last_head = 1 << 25;
 #pragma unroll
@@ -677,9 +679,11 @@ __global__ void cached_notify_combine(void** buffer_ptrs, int* send_head,
           (token_idx >= token_start_idx)
               ? __ldg(send_head + token_idx * kNumRanks + rank_id)
               : -1;
+      smem_current_head[rank_id * WARP_SIZE + lane_id] = current_head;
+      __syncwarp();
       for (int i = 0; i < min(WARP_SIZE, token_idx_tail - token_start_idx + 1);
            ++i) {
-        int const head = __shfl_sync(WARP_MASK, current_head, i);
+        int const head = smem_current_head[rank_id * WARP_SIZE + i];
         if (head < 0) {
           if (lane_id == i) expected_head = -last_head - 1;
         } else {
@@ -872,6 +876,7 @@ __global__ void __launch_bounds__(kNumThreads, 1)
 
     // Shared head, tail and retired flags for receiver warps
     __shared__ int volatile warp_channel_head_idx[num_recv_warps][kNumRanks];
+    __shared__ int smem_expected_head[num_recv_warps][kNumRanks];
     __shared__ int volatile channel_tail_idx[kNumRanks];
     __shared__ bool volatile warp_retired[num_recv_warps];
     if (thread_id < num_recv_warps) warp_retired[thread_id] = false;
@@ -976,10 +981,13 @@ __global__ void __launch_bounds__(kNumThreads, 1)
         __syncwarp();
 
         // Broadcast current heads
+        if (lane_id < kNumRanks)
+          smem_expected_head[recv_warp_id][lane_id] = expected_head;
+        __syncwarp();
         int num_topk_ranks = 0, topk_ranks[kNumRanks], slot_indices[kNumRanks];
 #pragma unroll
         for (int i = 0; i < kNumRanks; ++i) {
-          auto expected_head_i = __shfl_sync(WARP_MASK, expected_head, i);
+          auto expected_head_i = smem_expected_head[recv_warp_id][i];
           if (expected_head_i >= 0) {
             slot_indices[num_topk_ranks] =
                 expected_head_i % num_recv_buffer_tokens;
