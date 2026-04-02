@@ -215,7 +215,7 @@ struct SendRecvWorkerState {
     size_t batchOffset;  // SEND_BATCH: byte offset of first chunk in batch
     size_t batchBytes;   // SEND_BATCH: total bytes in this D2H batch
     int numRdmaChunks;  // SEND_BATCH: how many kSendChunkBytes RDMA WRs to post
-    int eventIndex;     // SEND_BATCH: index into chunkEvents[]
+    int eventIndex;     // index into completionEvents[] (both SEND and SEND_BATCH)
     bool lastBatch;     // SEND_BATCH: flush after this batch
     uint64_t progressVal;  // SEND_BATCH: counter value to write after batch (0
                            // = skip)
@@ -230,18 +230,16 @@ struct SendRecvWorkerState {
   std::atomic<bool> stopFlag{false};
   std::thread thread;
 
-  // Send: CUDA event tracks D2H completion on the user stream.
-  cudaEvent_t d2hDoneEvent = nullptr;
+  // Per-WorkItem completion events.  Pool size = queue capacity so no event is
+  // reused while still being polled by the worker (pipelined iterations in
+  // nccl-tests re-record events before the worker processes them — a shared
+  // event would deadlock).
+  static constexpr uint32_t kEventPoolSize = kCapacity;
+  cudaEvent_t completionEvents[kEventPoolSize] = {};
+  uint32_t nextEventIdx = 0;
 
-  // Chunk events pool for pipelined sends (grown on demand).
-  std::vector<cudaEvent_t> chunkEvents;
-
-  void ensureChunkEvents(int count) {
-    while (static_cast<int>(chunkEvents.size()) < count) {
-      cudaEvent_t e;
-      MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(&e, cudaEventDisableTiming));
-      chunkEvents.push_back(e);
-    }
+  int allocEvent() {
+    return static_cast<int>(nextEventIdx++ % kEventPoolSize);
   }
 
   void push(WorkItem const& item) {
@@ -264,8 +262,9 @@ struct SendRecvWorkerState {
   ~SendRecvWorkerState() {
     stopFlag.store(true, std::memory_order_release);
     if (thread.joinable()) thread.join();
-    if (d2hDoneEvent) cudaEventDestroy(d2hDoneEvent);
-    for (auto e : chunkEvents) cudaEventDestroy(e);
+    for (uint32_t i = 0; i < kEventPoolSize; ++i) {
+      if (completionEvents[i]) cudaEventDestroy(completionEvents[i]);
+    }
   }
 };
 
@@ -304,6 +303,21 @@ struct NcclSendRecvPeerContext {
   // Dedicated CUDA stream for IB send D2H copies.
   cudaStream_t d2hStream = nullptr;
 
+  // Event for cross-stream dependency: record on user stream before send copy
+  // so the dedicated stream (d2hStream / ipcStream) waits for prior user work.
+  // A pool is used because nccl-tests pipelines iterations without sync —
+  // re-recording a single event before the GPU processes the previous WaitEvent
+  // would corrupt the dependency.  Pool size = SPSC queue capacity so no event
+  // is reused while still being consumed by the dedicated stream.
+  static constexpr int kSyncEventPoolSize = SendRecvWorkerState::kCapacity;
+  cudaEvent_t syncEventPool[kSyncEventPoolSize] = {};
+  int syncEventIdx = 0;
+  bool syncEventsCreated = false;
+
+  cudaEvent_t nextSyncEvent() {
+    return syncEventPool[syncEventIdx++ % kSyncEventPoolSize];
+  }
+
   // Async worker — destroyed first (declared last) so the thread is joined
   // before the connection / semaphore members are destroyed.
   std::unique_ptr<SendRecvWorkerState> worker;
@@ -337,6 +351,11 @@ struct NcclSendRecvPeerContext {
   ~NcclSendRecvPeerContext() {
     worker.reset();
     if (h2dDoneEvent) cudaEventDestroy(h2dDoneEvent);
+    if (syncEventsCreated) {
+      for (int i = 0; i < kSyncEventPoolSize; ++i) {
+        if (syncEventPool[i]) cudaEventDestroy(syncEventPool[i]);
+      }
+    }
     if (h2dStream) cudaStreamDestroy(h2dStream);
     if (d2hStream) cudaStreamDestroy(d2hStream);
     if (ipcStream) cudaStreamDestroy(ipcStream);
@@ -452,7 +471,8 @@ static void sendRecvWorkerLoop(NcclSendRecvPeerContext* ctx) {
 
     try {
       if (item.type == SendRecvWorkerState::WorkItem::SEND) {
-        while (cudaEventQuery(ws->d2hDoneEvent) == cudaErrorNotReady) {
+        while (cudaEventQuery(ws->completionEvents[item.eventIndex]) ==
+               cudaErrorNotReady) {
           std::this_thread::yield();
         }
         ctx->ibWrCount = kSignalEveryN - 1;
@@ -463,7 +483,7 @@ static void sendRecvWorkerLoop(NcclSendRecvPeerContext* ctx) {
       } else {
         // SEND_BATCH: wait for the batch D2H event, then post multiple RDMA
         // writes (one per kSendChunkBytes sub-chunk) for better NIC pipelining.
-        while (cudaEventQuery(ws->chunkEvents[item.eventIndex]) ==
+        while (cudaEventQuery(ws->completionEvents[item.eventIndex]) ==
                cudaErrorNotReady) {
           std::this_thread::yield();
         }
@@ -793,11 +813,18 @@ static void initializeSendRecvPeerContext(ncclComm_t comm, int peer,
     // Reuse d2hStream for event-based worker sync (same pattern as IB path).
     MSCCLPP_CUDATHROW(
         cudaStreamCreateWithFlags(&ctx.d2hStream, cudaStreamNonBlocking));
+    for (int i = 0; i < NcclSendRecvPeerContext::kSyncEventPoolSize; ++i) {
+      MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(
+          &ctx.syncEventPool[i], cudaEventDisableTiming));
+    }
+    ctx.syncEventsCreated = true;
 
     // Worker thread: polls cudaEventQuery after D2D copy, then signals shm sem.
     ctx.worker = std::make_unique<SendRecvWorkerState>();
-    MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(&ctx.worker->d2hDoneEvent,
-                                               cudaEventDisableTiming));
+    for (uint32_t i = 0; i < SendRecvWorkerState::kEventPoolSize; ++i) {
+      MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(
+          &ctx.worker->completionEvents[i], cudaEventDisableTiming));
+    }
     ctx.worker->thread = std::thread([&ctx]() {
       if (ctx.localDevice >= 0) cudaSetDevice(ctx.localDevice);
       SendRecvWorkerState::WorkItem item;
@@ -805,7 +832,8 @@ static void initializeSendRecvPeerContext(ncclComm_t comm, int peer,
       while (!ws->stopFlag.load(std::memory_order_acquire)) {
         if (!ws->pop(item)) continue;
         // Wait for the D2D copy event to complete.
-        while (cudaEventQuery(ws->d2hDoneEvent) == cudaErrorNotReady) {
+        while (cudaEventQuery(ws->completionEvents[item.eventIndex]) ==
+               cudaErrorNotReady) {
           std::this_thread::yield();
         }
         // Signal the peer's shm semaphore — data is in peer's recvbuff.
@@ -869,10 +897,17 @@ static void initializeSendRecvPeerContext(ncclComm_t comm, int peer,
     // Separate D2H stream for IB sends.
     MSCCLPP_CUDATHROW(
         cudaStreamCreateWithFlags(&ctx.d2hStream, cudaStreamNonBlocking));
+    for (int i = 0; i < NcclSendRecvPeerContext::kSyncEventPoolSize; ++i) {
+      MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(
+          &ctx.syncEventPool[i], cudaEventDisableTiming));
+    }
+    ctx.syncEventsCreated = true;
 
     ctx.worker = std::make_unique<SendRecvWorkerState>();
-    MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(&ctx.worker->d2hDoneEvent,
-                                               cudaEventDisableTiming));
+    for (uint32_t i = 0; i < SendRecvWorkerState::kEventPoolSize; ++i) {
+      MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(
+          &ctx.worker->completionEvents[i], cudaEventDisableTiming));
+    }
     ctx.worker->thread = std::thread(sendRecvWorkerLoop, &ctx);
   }
 
@@ -947,36 +982,46 @@ static ncclResult_t executeNcclSendImpl(void const* sendbuff, size_t count,
 
     if (peerCtx.isCudaIpc) {
       // --- CudaIpc intra-node send (SM-free, zero-copy) ---
+      // Ensure prior work on user stream completes before reading sendbuff.
+      cudaEvent_t syncEvt = peerCtx.nextSyncEvent();
+      MSCCLPP_CUDATHROW(cudaEventRecord(syncEvt, stream));
+      MSCCLPP_CUDATHROW(cudaStreamWaitEvent(peerCtx.ipcStream, syncEvt, 0));
       // The destination is computed from the peer's recvbuff address (published
       // to shm in GroupEnd Phase 2.5) and our cached allocation mapping.
       uintptr_t peerAddr = peerCtx.ipcShmSemaphore->remote->recvbuffAddr.load(
           std::memory_order_relaxed);
       void* remoteDst = peerCtx.mapPeerPtr(peerAddr);
       auto* ws = peerCtx.worker.get();
+      int eIdx = ws->allocEvent();
       MSCCLPP_CUDATHROW(cudaMemcpyAsync(remoteDst, sendbuff, bytes,
                                         cudaMemcpyDeviceToDevice,
                                         peerCtx.ipcStream));
-      MSCCLPP_CUDATHROW(cudaEventRecord(ws->d2hDoneEvent, peerCtx.ipcStream));
+      MSCCLPP_CUDATHROW(
+          cudaEventRecord(ws->completionEvents[eIdx], peerCtx.ipcStream));
       cudaStreamQuery(peerCtx.ipcStream);  // flush command buffer
-      ws->push({SendRecvWorkerState::WorkItem::SEND, bytes});
+      ws->push({SendRecvWorkerState::WorkItem::SEND, bytes, 0, 0, 0, eIdx, false, 0});
     } else {
       // --- IB inter-node send ---
-      // Use a dedicated D2H stream. sendbuff is ready before ncclSend is
-      // called, so no cross-stream sync with user stream is needed.
+      // Ensure prior work on user stream completes before reading sendbuff.
       cudaStream_t d2h = peerCtx.d2hStream;
+      cudaEvent_t syncEvt = peerCtx.nextSyncEvent();
+      MSCCLPP_CUDATHROW(cudaEventRecord(syncEvt, stream));
+      MSCCLPP_CUDATHROW(cudaStreamWaitEvent(d2h, syncEvt, 0));
       auto* ws = peerCtx.worker.get();
       if (bytes <= kSendChunkBytes) {
+        int eIdx = ws->allocEvent();
         MSCCLPP_CUDATHROW(cudaMemcpyAsync(peerCtx.sendStagingBuffer.get(),
                                           sendbuff, bytes,
                                           cudaMemcpyDeviceToHost, d2h));
-        MSCCLPP_CUDATHROW(cudaEventRecord(ws->d2hDoneEvent, d2h));
+        MSCCLPP_CUDATHROW(
+            cudaEventRecord(ws->completionEvents[eIdx], d2h));
         // Flush the CUDA command buffer so the D2H + event are submitted to GPU
         // before the worker starts waiting. Without this, cudaEventSynchronize
         // in the worker holds the driver mutex waiting for an unsubmitted
         // event, while the main thread can't flush (needs same mutex) →
         // deadlock.
         cudaStreamQuery(d2h);
-        ws->push({SendRecvWorkerState::WorkItem::SEND, bytes});
+        ws->push({SendRecvWorkerState::WorkItem::SEND, bytes, 0, 0, 0, eIdx, false, 0});
       } else {
         int totalChunks =
             static_cast<int>((bytes + kSendChunkBytes - 1) / kSendChunkBytes);
@@ -985,7 +1030,6 @@ static ncclResult_t executeNcclSendImpl(void const* sendbuff, size_t count,
         size_t batchSize =
             static_cast<size_t>(adaptiveBatchChunks) * kSendChunkBytes;
         int numBatches = static_cast<int>((bytes + batchSize - 1) / batchSize);
-        ws->ensureChunkEvents(numBatches);
         char const* src = static_cast<char const*>(sendbuff);
         char* staging = peerCtx.sendStagingBuffer.get();
         for (int b = 0; b < numBatches; ++b) {
@@ -993,15 +1037,17 @@ static ncclResult_t executeNcclSendImpl(void const* sendbuff, size_t count,
           size_t batchBytes = std::min(batchSize, bytes - off);
           int rdmaChunks = static_cast<int>((batchBytes + kSendChunkBytes - 1) /
                                             kSendChunkBytes);
+          int eIdx = ws->allocEvent();
           MSCCLPP_CUDATHROW(cudaMemcpyAsync(staging + off, src + off,
                                             batchBytes, cudaMemcpyDeviceToHost,
                                             d2h));
-          MSCCLPP_CUDATHROW(cudaEventRecord(ws->chunkEvents[b], d2h));
+          MSCCLPP_CUDATHROW(
+              cudaEventRecord(ws->completionEvents[eIdx], d2h));
           cudaStreamQuery(d2h);  // flush command buffer (same reason)
           bool isLast = (b == numBatches - 1);
           uint64_t pv = ++peerCtx.sendProgress;
           ws->push({SendRecvWorkerState::WorkItem::SEND_BATCH, 0, off,
-                    batchBytes, rdmaChunks, b, isLast, pv});
+                    batchBytes, rdmaChunks, eIdx, isLast, pv});
         }
       }
     }
