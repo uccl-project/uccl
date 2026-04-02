@@ -32,6 +32,7 @@ REBUILD_MSCCLPP=0
 REAL_NCCL_LIB=""
 EXTRA_ARGS=()
 NCCL_SOCKET_IFNAME="eno8303"
+NCCL_BUFFSIZE=1073741824
 
 NCCL_NET_GDR_LEVEL=
 
@@ -316,6 +317,11 @@ if [[ "${BACKEND}" == "mscclpp" ]]; then
 else
   ACTIVE_LIB="$(pick_real_nccl_lib)"
   EXTRA_LD_PATH=""
+  # Tune NCCL P2P for best host-staged RDMA throughput on this hardware.
+  # NCCL_P2P_NET_CHUNKSIZE=2M improves 256MB throughput by ~23% (13.8→17.0 GB/s)
+  # without regressing small-message latency. Only set if user hasn't overridden.
+  : "${NCCL_P2P_NET_CHUNKSIZE:=2097152}"
+  export NCCL_P2P_NET_CHUNKSIZE
 fi
 
 ln -sfn "${ACTIVE_LIB}" "${RUNTIME_DIR}/libnccl.so"
@@ -359,6 +365,7 @@ for env_name in \
   NCCL_NET_GDR_LEVEL \
   NCCL_IB_DISABLE \
   NCCL_P2P_DISABLE \
+  NCCL_BUFFSIZE \
   MSCCLPP_DEBUG \
   MSCCLPP_DEBUG_SUBSYS \
   MSCCLPP_SOCKET_IFNAME \

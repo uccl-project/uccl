@@ -322,6 +322,9 @@ if [[ "${BACKEND}" == "mscclpp" ]]; then
 else
   ACTIVE_LIB="$(pick_real_nccl_lib)"
   EXTRA_LD_PATH=""
+  # Tune NCCL P2P for best host-staged RDMA throughput on this hardware.
+  : "${NCCL_P2P_NET_CHUNKSIZE:=2097152}"
+  export NCCL_P2P_NET_CHUNKSIZE
 fi
 
 ln -sfn "${ACTIVE_LIB}" "${RUNTIME_DIR}/libnccl.so"
