@@ -230,11 +230,11 @@ struct SendRecvWorkerState {
   std::atomic<bool> stopFlag{false};
   std::thread thread;
 
-  // Per-WorkItem completion events.  Pool size = queue capacity so no event is
-  // reused while still being polled by the worker (pipelined iterations in
-  // nccl-tests re-record events before the worker processes them — a shared
-  // event would deadlock).
-  static constexpr uint32_t kEventPoolSize = kCapacity;
+  // Per-WorkItem completion events.  Pool must be strictly larger than
+  // kCapacity: allocEvent() is called BEFORE push(), so the producer can
+  // re-record an event whose old item was just popped but is still being
+  // queried by the worker.  2× capacity guarantees no collision.
+  static constexpr uint32_t kEventPoolSize = kCapacity * 2;
   cudaEvent_t completionEvents[kEventPoolSize] = {};
   uint32_t nextEventIdx = 0;
 
