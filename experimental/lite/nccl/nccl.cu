@@ -55,39 +55,84 @@ static const mscclpp::Transport kIBTransports[] = {
     mscclpp::Transport::IB6, mscclpp::Transport::IB7};
 
 // ---------------------------------------------------------------------------
-// POSIX-shm based CPU-CPU semaphore for intra-node signaling.
-// Each side allocates a shm segment containing a single uint64_t counter.
-// The peer maps it at init time via bootstrap name exchange.  signal()
-// increments the peer's counter; wait() spins on our own counter.
+// POSIX-shm based control block for intra-node CudaIpc signaling.
+//
+// Each side allocates a shm segment containing a ShmBlock.  The peer maps it
+// at init time via bootstrap name exchange.  The block carries:
+//   - counter: data-ready semaphore (signal/wait)
+//   - recvbuffAddr + addrGeneration: per-iteration recvbuff pointer exchange
+//     (avoids bootstrap TCP per iteration — only ~10ns shm r/w)
+//   - allocBase + allocGeneration: allocation base for IPC offset computation
+//     (triggers IPC handle re-exchange only on new cudaMalloc, not on offset
+//      changes within the same allocation)
 // ---------------------------------------------------------------------------
+struct ShmBlock {
+  alignas(64) std::atomic<uint64_t> counter{0};
+  alignas(64) std::atomic<uint64_t> recvbuffAddr{0};
+  alignas(64) std::atomic<uint64_t> addrGeneration{0};
+  alignas(64) std::atomic<uint64_t> allocBase{0};
+  alignas(64) std::atomic<uint64_t> allocGeneration{0};
+};
+
 struct ShmSemaphore {
-  // Local counter (in our shm, mapped by peer for writing).
-  std::atomic<uint64_t>* localCounter = nullptr;
-  // Peer's counter (mapped from peer's shm, we write to it in signal()).
-  std::atomic<uint64_t>* remoteCounter = nullptr;
+  ShmBlock* local = nullptr;   // our shm segment (peer maps it)
+  ShmBlock* remote = nullptr;  // peer's shm segment (we mapped it)
 
   std::string localShmName;
   void* localMapping = nullptr;
   void* remoteMapping = nullptr;
   uint64_t outbound = 0;
   uint64_t expectedInbound = 0;
+  uint64_t localAddrGen = 0;
+  uint64_t expectedAddrGen = 0;
 
   void signal() {
     ++outbound;
-    remoteCounter->store(outbound, std::memory_order_release);
+    remote->counter.store(outbound, std::memory_order_release);
   }
 
   void wait() {
     ++expectedInbound;
-    while (localCounter->load(std::memory_order_acquire) < expectedInbound) {
+    while (local->counter.load(std::memory_order_acquire) < expectedInbound) {
       // Pure host memory spin — no CUDA API, no SM.
     }
   }
 
+  // Called by receiver in GroupEnd: publish current recvbuff address.
+  // The addrGeneration release-store ensures all prior relaxed writes
+  // (recvbuffAddr, allocBase, allocGeneration) are visible to the sender.
+  void publishRecvbuff(uintptr_t addr) {
+    local->recvbuffAddr.store(addr, std::memory_order_relaxed);
+    local->addrGeneration.store(++localAddrGen, std::memory_order_release);
+  }
+
+  // Called by receiver when allocation base changes (new cudaMalloc).
+  void publishAllocBase(uintptr_t base) {
+    local->allocBase.store(base, std::memory_order_relaxed);
+    local->allocGeneration.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  // Called by sender in GroupEnd: wait for receiver to publish, then read.
+  uintptr_t readPeerRecvbuff() {
+    ++expectedAddrGen;
+    while (remote->addrGeneration.load(std::memory_order_acquire) <
+           expectedAddrGen) {
+      // Spin — typically < 1μs (both sides enter GroupEnd ~simultaneously).
+    }
+    return remote->recvbuffAddr.load(std::memory_order_relaxed);
+  }
+
+  uint64_t readPeerAllocGeneration() const {
+    return remote->allocGeneration.load(std::memory_order_acquire);
+  }
+  uintptr_t readPeerAllocBase() const {
+    return remote->allocBase.load(std::memory_order_relaxed);
+  }
+
   ~ShmSemaphore() {
-    if (remoteMapping) munmap(remoteMapping, sizeof(uint64_t));
+    if (remoteMapping) munmap(remoteMapping, sizeof(ShmBlock));
     if (localMapping) {
-      munmap(localMapping, sizeof(uint64_t));
+      munmap(localMapping, sizeof(ShmBlock));
       if (!localShmName.empty()) shm_unlink(localShmName.c_str());
     }
   }
@@ -108,26 +153,24 @@ static std::unique_ptr<ShmSemaphore> createShmSemaphore(
     throw mscclpp::Error("shm_open failed for " + sem->localShmName,
                          mscclpp::ErrorCode::SystemError);
   }
-  if (ftruncate(fd, sizeof(uint64_t)) < 0) {
+  if (ftruncate(fd, sizeof(ShmBlock)) < 0) {
     close(fd);
     throw mscclpp::Error("ftruncate failed", mscclpp::ErrorCode::SystemError);
   }
-  sem->localMapping = mmap(nullptr, sizeof(uint64_t), PROT_READ | PROT_WRITE,
+  sem->localMapping = mmap(nullptr, sizeof(ShmBlock), PROT_READ | PROT_WRITE,
                            MAP_SHARED, fd, 0);
   close(fd);
   if (sem->localMapping == MAP_FAILED) {
     sem->localMapping = nullptr;
     throw mscclpp::Error("mmap failed", mscclpp::ErrorCode::SystemError);
   }
-  sem->localCounter = new (sem->localMapping) std::atomic<uint64_t>(0);
+  sem->local = new (sem->localMapping) ShmBlock{};
 
   // Exchange shm names with peer.
-  // Send our name length + name.
   std::vector<char> nameData(sem->localShmName.begin(),
                              sem->localShmName.end());
   bootstrap->send(nameData, peer, tag);
 
-  // Receive peer's name.
   std::vector<char> peerNameData;
   bootstrap->recv(peerNameData, peer, tag);
   std::string peerShmName(peerNameData.begin(), peerNameData.end());
@@ -138,15 +181,14 @@ static std::unique_ptr<ShmSemaphore> createShmSemaphore(
     throw mscclpp::Error("shm_open failed for peer " + peerShmName,
                          mscclpp::ErrorCode::SystemError);
   }
-  sem->remoteMapping = mmap(nullptr, sizeof(uint64_t), PROT_READ | PROT_WRITE,
+  sem->remoteMapping = mmap(nullptr, sizeof(ShmBlock), PROT_READ | PROT_WRITE,
                             MAP_SHARED, peerFd, 0);
   close(peerFd);
   if (sem->remoteMapping == MAP_FAILED) {
     sem->remoteMapping = nullptr;
     throw mscclpp::Error("mmap peer failed", mscclpp::ErrorCode::SystemError);
   }
-  sem->remoteCounter =
-      reinterpret_cast<std::atomic<uint64_t>*>(sem->remoteMapping);
+  sem->remote = reinterpret_cast<ShmBlock*>(sem->remoteMapping);
 
   return sem;
 }
@@ -273,14 +315,22 @@ struct NcclSendRecvPeerContext {
   cudaStream_t ipcStream = nullptr;
 
   // Zero-copy IPC: the peer's recvbuff is directly mapped via CudaIpc so the
-  // sender can write to it without staging. The mapping is exchanged once
-  // (first GroupEnd call) via bootstrap and cached. Subsequent calls with the
-  // same recvbuff skip the exchange entirely (zero overhead on hot path).
+  // sender can write to it without staging. The IPC handle covers the entire
+  // cudaMalloc allocation. It is exchanged once via bootstrap TCP and cached;
+  // per-iteration recvbuff address changes (offset within the same allocation)
+  // are communicated through the shm control block (~10ns, no TCP).
   mscclpp::RegisteredMemory remoteRecvbuffRM;
-  void* remoteRecvbuffPtr = nullptr;
-  // Track addresses for cache invalidation.
-  uintptr_t cachedPeerRecvbuffAddr = 0;
-  uintptr_t cachedLocalRecvbuffAddr = 0;
+  uintptr_t peerAllocBase = 0;      // peer's allocation base (original addr)
+  uintptr_t mappedAllocBase = 0;    // our IPC-mapped base for that allocation
+  uint64_t  peerAllocGeneration = 0; // tracks when to re-exchange IPC handle
+  // Local recv allocation tracking (to detect when we need to re-register).
+  uintptr_t localAllocBase = 0;
+  size_t    localAllocSize = 0;
+
+  // Compute the IPC-mapped pointer for any address within the peer's allocation.
+  void* mapPeerPtr(uintptr_t peerAddr) const {
+    return reinterpret_cast<void*>(mappedAllocBase + (peerAddr - peerAllocBase));
+  }
 
   ~NcclSendRecvPeerContext() {
     worker.reset();
@@ -897,8 +947,12 @@ static ncclResult_t executeNcclSendImpl(void const* sendbuff, size_t count,
 
     if (peerCtx.isCudaIpc) {
       // --- CudaIpc intra-node send (SM-free, zero-copy) ---
-      // DMA copy directly to peer's recvbuff, then CPU worker signals.
-      char* remoteDst = static_cast<char*>(peerCtx.remoteRecvbuffPtr);
+      // The destination is computed from the peer's recvbuff address (published
+      // to shm in GroupEnd Phase 2.5) and our cached allocation mapping.
+      uintptr_t peerAddr =
+          peerCtx.ipcShmSemaphore->remote->recvbuffAddr.load(
+              std::memory_order_relaxed);
+      void* remoteDst = peerCtx.mapPeerPtr(peerAddr);
       auto* ws = peerCtx.worker.get();
       MSCCLPP_CUDATHROW(cudaMemcpyAsync(
           remoteDst, sendbuff, bytes,
@@ -1877,59 +1931,90 @@ NCCL_API ncclResult_t ncclGroupEnd() {
     }
   }
 
-  // Phase 2.5: Exchange recvbuff IPC handles for CudaIpc zero-copy.
-  // On the first GroupEnd for a CudaIpc peer, both sides exchange their
-  // recvbuff via RegisteredMemory (bootstrap TCP). On subsequent calls with
-  // the same recvbuff address, the cached IPC mapping is reused (zero cost).
-  // If the recvbuff address changes, a new exchange is triggered.
+  // Phase 2.5: CudaIpc recvbuff address exchange (zero-copy send support).
+  //
+  // The IPC handle covers the entire cudaMalloc allocation and is exchanged
+  // only ONCE per allocation via bootstrap TCP (~35μs). Per-iteration
+  // recvbuff address changes (offsets within the same allocation, e.g. from
+  // nccl-tests) are communicated through the shm control block (~10ns).
+  //
+  // Protocol:
+  //   Recv side → publishes recvbuff addr to shm; registers allocation on
+  //               first call or when the underlying cudaMalloc changes.
+  //   Send side → reads peer's shm; receives IPC handle only when the peer's
+  //               allocation generation has advanced; computes mapped ptr.
   {
+    // (a) Recv ops: publish recvbuff address and (if needed) IPC handle.
     for (auto const& op : customOps) {
       auto& ctx = getSendRecvPeerContext(op.comm, op.peer, op.comm->cudaDevice);
       if (!ctx.isCudaIpc) continue;
       if (op.kind != GroupedP2POpKind::Recv) continue;
 
       uintptr_t addr = reinterpret_cast<uintptr_t>(op.recvbuff);
-      if (addr == ctx.cachedLocalRecvbuffAddr) continue;
 
-      // recvbuff changed (or first call) — need to exchange.
-      ctx.cachedLocalRecvbuffAddr = addr;
+      // Check if the allocation changed (or if this is the first call).
+      bool needExchange = false;
+      if (ctx.localAllocBase == 0 ||
+          addr < ctx.localAllocBase ||
+          addr >= ctx.localAllocBase + ctx.localAllocSize) {
+        // New allocation — get base + size via CUDA driver API.
+        CUdeviceptr base = 0;
+        size_t allocSize = 0;
+        CUresult res = cuMemGetAddressRange(&base, &allocSize,
+                                            static_cast<CUdeviceptr>(addr));
+        if (res != CUDA_SUCCESS) {
+          throw mscclpp::Error("cuMemGetAddressRange failed",
+                               mscclpp::ErrorCode::SystemError);
+        }
+        ctx.localAllocBase = static_cast<uintptr_t>(base);
+        ctx.localAllocSize = allocSize;
+        needExchange = true;
+      }
 
-      int rank = op.comm->comm->bootstrap()->getRank();
-      int tag = recvbuffExchangeTag(rank, op.peer, op.comm->worldSize);
-      size_t bytes = op.count * ncclTypeSize(op.datatype);
+      if (needExchange) {
+        // Register the FULL allocation (not just the recvbuff slice) so the
+        // peer can map any offset within it.
+        int rank = op.comm->comm->bootstrap()->getRank();
+        int tag = recvbuffExchangeTag(rank, op.peer, op.comm->worldSize);
+        mscclpp::TransportFlags ipcFlags(mscclpp::Transport::CudaIpc);
+        auto rm = op.comm->comm->registerMemory(
+            reinterpret_cast<void*>(ctx.localAllocBase),
+            ctx.localAllocSize, ipcFlags);
+        op.comm->comm->sendMemory(rm, op.peer, tag);
 
-      mscclpp::TransportFlags ipcFlags(mscclpp::Transport::CudaIpc);
-      auto rm = op.comm->comm->registerMemory(op.recvbuff, bytes, ipcFlags);
-      op.comm->comm->sendMemory(rm, op.peer, tag);
+        // Publish alloc base to shm (sender reads it for offset computation).
+        ctx.ipcShmSemaphore->publishAllocBase(ctx.localAllocBase);
+      }
+
+      // Always publish the current recvbuff address to shm.
+      ctx.ipcShmSemaphore->publishRecvbuff(addr);
     }
 
-    // Sender side: receive peer's recvbuff mapping if an exchange is pending.
+    // (b) Send ops: read peer's recvbuff address from shm; receive IPC handle
+    //     if the peer's allocation generation advanced.
     for (auto const& op : customOps) {
       auto& ctx = getSendRecvPeerContext(op.comm, op.peer, op.comm->cudaDevice);
       if (!ctx.isCudaIpc) continue;
       if (op.kind != GroupedP2POpKind::Send) continue;
 
-      // The peer context is shared: look at the PEER's recv-side epoch
-      // (stored on the peer's rank). We detect a pending exchange by checking
-      // if our cached mapping is null (first time) or if the peer bumped its
-      // epoch. But we can't read the peer's epoch without communication...
-      //
-      // Simpler: we rely on matching send/recv. If our peer has a recv op
-      // for us (which means they sent a RegisteredMemory), we must receive it.
-      // In a typical paired sendrecv, both sides have both send+recv ops.
-      // We match by checking if remoteRecvbuffPtr is null (first exchange) or
-      // if the peer signaled a re-exchange.
-      //
-      // For the first call: remoteRecvbuffPtr is null → must receive.
-      // For subsequent calls: the peer only sends if recvbuff changed.
-      // We detect this by tracking exchange epochs.
-      if (ctx.remoteRecvbuffPtr == nullptr) {
-        // First exchange — peer will send.
+      auto* sem = ctx.ipcShmSemaphore.get();
+
+      // Wait for the peer to publish its recvbuff address (spin is typically
+      // < 1μs since both sides enter GroupEnd ~simultaneously).
+      uintptr_t peerAddr = sem->readPeerRecvbuff();
+
+      // Check if the peer's allocation changed.
+      uint64_t peerAllocGen = sem->readPeerAllocGeneration();
+      if (peerAllocGen != ctx.peerAllocGeneration) {
+        ctx.peerAllocGeneration = peerAllocGen;
+        // Peer registered a new allocation — receive IPC handle.
         int rank = op.comm->comm->bootstrap()->getRank();
         int tag = recvbuffExchangeTag(op.peer, rank, op.comm->worldSize);
         auto rmFuture = op.comm->comm->recvMemory(op.peer, tag);
         ctx.remoteRecvbuffRM = rmFuture.get();
-        ctx.remoteRecvbuffPtr = ctx.remoteRecvbuffRM.data();
+        ctx.mappedAllocBase =
+            reinterpret_cast<uintptr_t>(ctx.remoteRecvbuffRM.data());
+        ctx.peerAllocBase = sem->readPeerAllocBase();
       }
     }
   }
