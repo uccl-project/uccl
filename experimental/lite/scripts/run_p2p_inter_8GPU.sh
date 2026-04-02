@@ -21,7 +21,7 @@ else
   echo "warning: ${IP_FILE} not found, set --hosts or create ip.txt with one IP per line" >&2
   HOSTS=""
 fi
-GPU_LIST="0,1"
+GPU_LIST="0,1,2,3"
 MIN_BYTES="8"
 MAX_BYTES="256M"
 STEP_FACTOR="2"
