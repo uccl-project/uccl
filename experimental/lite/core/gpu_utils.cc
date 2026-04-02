@@ -99,6 +99,18 @@ std::shared_ptr<GpuStreamPool> gpuStreamPool() {
 namespace detail {
 
 int gpuIdFromAddress(void* ptr) {
+  unsigned int memoryType = 0;
+  auto typeRes =
+      cuPointerGetAttribute(&memoryType, CU_POINTER_ATTRIBUTE_MEMORY_TYPE,
+                            reinterpret_cast<CUdeviceptr>(ptr));
+  if (typeRes == CUDA_ERROR_INVALID_VALUE) {
+    return -1;
+  }
+  MSCCLPP_CUTHROW(typeRes);
+  if (memoryType != CU_MEMORYTYPE_DEVICE) {
+    return -1;
+  }
+
   int deviceId;
   auto res =
       cuPointerGetAttribute(&deviceId, CU_POINTER_ATTRIBUTE_DEVICE_ORDINAL,

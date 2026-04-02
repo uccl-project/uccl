@@ -24,6 +24,7 @@ class UnixSocketServer {
   int registerFd(int fd);
   void unregisterFd(int fd);
   std::string getSocketPath() const;
+  ~UnixSocketServer();
 
  private:
   int listenUnixSockFd_ = -1;
