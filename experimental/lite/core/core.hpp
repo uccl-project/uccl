@@ -669,7 +669,8 @@ class RegisteredMemory {
   /// Returns the local IbMr pointer and remote IbMrInfo.  Useful for fast-path
   /// RDMA writes that bypass Connection::write() overhead.
   /// @param transport The IB transport to query.
-  /// @param outMr If non-null, receives the local IbMr pointer (nullptr for remote memory).
+  /// @param outMr If non-null, receives the local IbMr pointer (nullptr for
+  /// remote memory).
   /// @param outMrInfo Receives the IbMrInfo (rkey + remote addr).
   void getIbMrInfo(Transport transport, IbMr const** outMr,
                    IbMrInfo* outMrInfo) const;

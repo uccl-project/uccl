@@ -194,8 +194,9 @@ TransportInfo const& RegisteredMemory::Impl::getTransportInfo(
   throw Error("Transport data not found", ErrorCode::InternalError);
 }
 
-MSCCLPP_API_CPP void RegisteredMemory::getIbMrInfo(
-    Transport transport, IbMr const** outMr, IbMrInfo* outMrInfo) const {
+MSCCLPP_API_CPP void RegisteredMemory::getIbMrInfo(Transport transport,
+                                                   IbMr const** outMr,
+                                                   IbMrInfo* outMrInfo) const {
   auto const& info = pimpl_->getTransportInfo(transport);
   if (outMr) {
     *outMr = info.ibLocal ? info.ibMr : nullptr;

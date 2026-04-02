@@ -23,20 +23,20 @@
 #include "broadcast.hpp"
 #include "datatype_conversion.hpp"
 #include "gpu_utils.hpp"
+#include "ib.hpp"
 #include "logger.hpp"
 #include "memory_channel.hpp"
 #include "nccl.h"
-#include "semaphore.hpp"
-#include "ib.hpp"
 #include "registered_memory.hpp"
+#include "semaphore.hpp"
 #include <atomic>
-#include <cuda.h>
-#include <dlfcn.h>
 #include <mutex>
 #include <thread>
+#include <cuda.h>
+#include <dlfcn.h>
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <fcntl.h>
 #include <unistd.h>
 
 static constexpr auto MSCCLPP_NCCL = mscclpp::LogSubsys::NCCL;
@@ -211,13 +211,14 @@ static constexpr int kSignalEveryN = 64;
 struct SendRecvWorkerState {
   struct WorkItem {
     enum Type : uint8_t { SEND = 0, SEND_BATCH = 1 } type;
-    size_t bytes;         // SEND: total bytes; SEND_BATCH: unused
-    size_t batchOffset;   // SEND_BATCH: byte offset of first chunk in batch
-    size_t batchBytes;    // SEND_BATCH: total bytes in this D2H batch
-    int numRdmaChunks;    // SEND_BATCH: how many kSendChunkBytes RDMA WRs to post
-    int eventIndex;       // SEND_BATCH: index into chunkEvents[]
-    bool lastBatch;       // SEND_BATCH: flush after this batch
-    uint64_t progressVal; // SEND_BATCH: counter value to write after batch (0 = skip)
+    size_t bytes;        // SEND: total bytes; SEND_BATCH: unused
+    size_t batchOffset;  // SEND_BATCH: byte offset of first chunk in batch
+    size_t batchBytes;   // SEND_BATCH: total bytes in this D2H batch
+    int numRdmaChunks;  // SEND_BATCH: how many kSendChunkBytes RDMA WRs to post
+    int eventIndex;     // SEND_BATCH: index into chunkEvents[]
+    bool lastBatch;     // SEND_BATCH: flush after this batch
+    uint64_t progressVal;  // SEND_BATCH: counter value to write after batch (0
+                           // = skip)
   };
 
   // Lock-free SPSC ring buffer (one producer = caller, one consumer = worker).
@@ -238,8 +239,7 @@ struct SendRecvWorkerState {
   void ensureChunkEvents(int count) {
     while (static_cast<int>(chunkEvents.size()) < count) {
       cudaEvent_t e;
-      MSCCLPP_CUDATHROW(
-          cudaEventCreateWithFlags(&e, cudaEventDisableTiming));
+      MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(&e, cudaEventDisableTiming));
       chunkEvents.push_back(e);
     }
   }
@@ -280,8 +280,8 @@ struct NcclSendRecvPeerContext {
   std::shared_ptr<mscclpp::Host2HostSemaphore> h2hSemaphore;
 
   // ---------- IB path fields (inter-node) ----------
-  std::shared_ptr<char> sendStagingBuffer;   // host pinned
-  std::shared_ptr<char> recvStagingBuffer;   // host pinned
+  std::shared_ptr<char> sendStagingBuffer;  // host pinned
+  std::shared_ptr<char> recvStagingBuffer;  // host pinned
   mscclpp::RegisteredMemory sendStagingMemory;
   mscclpp::RegisteredMemory recvStagingMemory;
   mscclpp::RegisteredMemory remoteRecvStagingMemory;
@@ -320,16 +320,18 @@ struct NcclSendRecvPeerContext {
   // per-iteration recvbuff address changes (offset within the same allocation)
   // are communicated through the shm control block (~10ns, no TCP).
   mscclpp::RegisteredMemory remoteRecvbuffRM;
-  uintptr_t peerAllocBase = 0;      // peer's allocation base (original addr)
-  uintptr_t mappedAllocBase = 0;    // our IPC-mapped base for that allocation
-  uint64_t  peerAllocGeneration = 0; // tracks when to re-exchange IPC handle
+  uintptr_t peerAllocBase = 0;       // peer's allocation base (original addr)
+  uintptr_t mappedAllocBase = 0;     // our IPC-mapped base for that allocation
+  uint64_t peerAllocGeneration = 0;  // tracks when to re-exchange IPC handle
   // Local recv allocation tracking (to detect when we need to re-register).
   uintptr_t localAllocBase = 0;
-  size_t    localAllocSize = 0;
+  size_t localAllocSize = 0;
 
-  // Compute the IPC-mapped pointer for any address within the peer's allocation.
+  // Compute the IPC-mapped pointer for any address within the peer's
+  // allocation.
   void* mapPeerPtr(uintptr_t peerAddr) const {
-    return reinterpret_cast<void*>(mappedAllocBase + (peerAddr - peerAllocBase));
+    return reinterpret_cast<void*>(mappedAllocBase +
+                                   (peerAddr - peerAllocBase));
   }
 
   ~NcclSendRecvPeerContext() {
@@ -362,9 +364,8 @@ inline int recvbuffExchangeTag(int senderRank, int receiverRank,
 inline size_t sendRecvStagingBytes() {
   int bytes = mscclpp::env()->ncclSendRecvStagingBytes;
   if (bytes <= 0) {
-    throw mscclpp::Error(
-        "MSCCLPP_NCCL_SENDRECV_STAGING_BYTES must be positive",
-        mscclpp::ErrorCode::InvalidUsage);
+    throw mscclpp::Error("MSCCLPP_NCCL_SENDRECV_STAGING_BYTES must be positive",
+                         mscclpp::ErrorCode::InvalidUsage);
   }
   return static_cast<size_t>(bytes);
 }
@@ -394,8 +395,8 @@ ncclResult_t runNcclGuarded(char const* opName, Fn&& fn) {
     fn();
     return ncclSuccess;
   } catch (std::exception const& ex) {
-    WARN(MSCCLPP_NCCL, std::string(opName), " failed: ",
-         std::string(ex.what()));
+    WARN(MSCCLPP_NCCL, std::string(opName),
+         " failed: ", std::string(ex.what()));
     return mapMscclppException(ex);
   } catch (...) {
     WARN(MSCCLPP_NCCL, std::string(opName),
@@ -418,11 +419,12 @@ static void sendRecvWorkerLoop(NcclSendRecvPeerContext* ctx) {
   auto& dstMrInfo = ctx->remoteRecvMrInfo;
 
   // Helper: stage a write WR, controlling signaled flag.
-  auto stageWrite = [&](uint64_t srcOff, uint64_t dstOff, uint32_t size) -> bool {
+  auto stageWrite = [&](uint64_t srcOff, uint64_t dstOff,
+                        uint32_t size) -> bool {
     ctx->ibWrCount++;
     bool signaled = (ctx->ibWrCount % kSignalEveryN == 0);
-    qp->stageSendWrite(srcMr, dstMrInfo, size, /*wrId=*/0,
-                       srcOff, dstOff, signaled);
+    qp->stageSendWrite(srcMr, dstMrInfo, size, /*wrId=*/0, srcOff, dstOff,
+                       signaled);
     return signaled;
   };
 
@@ -437,8 +439,8 @@ static void sendRecvWorkerLoop(NcclSendRecvPeerContext* ctx) {
       for (int i = 0; i < wcNum; ++i) {
         int status = qp->getSendWcStatus(i);
         if (status != 0) {
-          WARN(MSCCLPP_NCCL, "sendRecvWorker: IB WR failed: ",
-               qp->getSendWcStatusString(i));
+          WARN(MSCCLPP_NCCL,
+               "sendRecvWorker: IB WR failed: ", qp->getSendWcStatusString(i));
         }
       }
     }
@@ -469,24 +471,24 @@ static void sendRecvWorkerLoop(NcclSendRecvPeerContext* ctx) {
         size_t off = item.batchOffset;
         size_t remaining = item.batchBytes;
         for (int c = 0; c < item.numRdmaChunks; ++c) {
-          uint32_t chunkSz = static_cast<uint32_t>(
-              std::min(remaining, kSendChunkBytes));
+          uint32_t chunkSz =
+              static_cast<uint32_t>(std::min(remaining, kSendChunkBytes));
           signaled = stageWrite(off, off, chunkSz) || signaled;
           off += chunkSz;
           remaining -= chunkSz;
         }
         if (item.progressVal > 0) {
           size_t cOff = ctx->stagingBytes;
-          *reinterpret_cast<volatile uint64_t*>(
-              ctx->sendStagingBuffer.get() + cOff) = item.progressVal;
+          *reinterpret_cast<uint64_t volatile*>(ctx->sendStagingBuffer.get() +
+                                                cOff) = item.progressVal;
           signaled = stageWrite(cOff, cOff, sizeof(uint64_t)) || signaled;
         }
         qp->postSend();
 
         if (item.lastBatch) {
           if (!signaled) {
-            qp->stageSendWrite(srcMr, dstMrInfo, 0, /*wrId=*/0,
-                               0, 0, /*signaled=*/true);
+            qp->stageSendWrite(srcMr, dstMrInfo, 0, /*wrId=*/0, 0, 0,
+                               /*signaled=*/true);
             qp->postSend();
           }
           flushCq();
@@ -751,8 +753,8 @@ static mscclpp::Transport selectSendRecvTransport(ncclComm_t comm, int peer) {
   }
   int localIndex = comm->comm->bootstrap()->getRank() % comm->nRanksPerNode;
   if (localIndex < 0 ||
-      localIndex >= static_cast<int>(sizeof(kIBTransports) /
-                                     sizeof(kIBTransports[0]))) {
+      localIndex >=
+          static_cast<int>(sizeof(kIBTransports) / sizeof(kIBTransports[0]))) {
     throw mscclpp::Error("Local rank index is out of supported IB range",
                          mscclpp::ErrorCode::InvalidUsage);
   }
@@ -782,20 +784,20 @@ static void initializeSendRecvPeerContext(ncclComm_t comm, int peer,
     // Data: cudaMemcpyAsync D2D (DMA engine, no SM).
     // Signaling: POSIX shm semaphore (CPU-CPU, no SM).
     // recvbuff IPC handles are exchanged in GroupEnd on first call.
-    ctx.ipcShmSemaphore = createShmSemaphore(
-        comm->comm->bootstrap().get(), rank, peer,
-        sendRecvInitTag(rank, comm->worldSize, peer, 3));
+    ctx.ipcShmSemaphore =
+        createShmSemaphore(comm->comm->bootstrap().get(), rank, peer,
+                           sendRecvInitTag(rank, comm->worldSize, peer, 3));
 
-    MSCCLPP_CUDATHROW(cudaStreamCreateWithFlags(&ctx.ipcStream,
-                                                 cudaStreamNonBlocking));
+    MSCCLPP_CUDATHROW(
+        cudaStreamCreateWithFlags(&ctx.ipcStream, cudaStreamNonBlocking));
     // Reuse d2hStream for event-based worker sync (same pattern as IB path).
-    MSCCLPP_CUDATHROW(cudaStreamCreateWithFlags(&ctx.d2hStream,
-                                                 cudaStreamNonBlocking));
+    MSCCLPP_CUDATHROW(
+        cudaStreamCreateWithFlags(&ctx.d2hStream, cudaStreamNonBlocking));
 
     // Worker thread: polls cudaEventQuery after D2D copy, then signals shm sem.
     ctx.worker = std::make_unique<SendRecvWorkerState>();
     MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(&ctx.worker->d2hDoneEvent,
-                                                cudaEventDisableTiming));
+                                               cudaEventDisableTiming));
     ctx.worker->thread = std::thread([&ctx]() {
       if (ctx.localDevice >= 0) cudaSetDevice(ctx.localDevice);
       SendRecvWorkerState::WorkItem item;
@@ -829,14 +831,12 @@ static void initializeSendRecvPeerContext(ncclComm_t comm, int peer,
     mscclpp::EndpointConfig endpointConfig(
         ctx.transport, mscclpp::Device(mscclpp::DeviceType::CPU),
         /*maxWriteQueueSize=*/-1, ibCfg);
-    auto connectionFuture =
-        comm->comm->connect(endpointConfig, peer,
-                            sendRecvInitTag(rank, comm->worldSize, peer, 0));
+    auto connectionFuture = comm->comm->connect(
+        endpointConfig, peer, sendRecvInitTag(rank, comm->worldSize, peer, 0));
     comm->comm->sendMemory(ctx.recvStagingMemory, peer,
                            sendRecvInitTag(rank, comm->worldSize, peer, 1));
-    auto remoteRecvStagingFuture =
-        comm->comm->recvMemory(peer,
-                               sendRecvInitTag(rank, comm->worldSize, peer, 1));
+    auto remoteRecvStagingFuture = comm->comm->recvMemory(
+        peer, sendRecvInitTag(rank, comm->worldSize, peer, 1));
 
     ctx.connection = connectionFuture.get();
     auto semaphore =
@@ -845,8 +845,7 @@ static void initializeSendRecvPeerContext(ncclComm_t comm, int peer,
                              sendRecvInitTag(rank, comm->worldSize, peer, 2))
             .get();
     ctx.remoteRecvStagingMemory = remoteRecvStagingFuture.get();
-    ctx.h2hSemaphore =
-        std::make_shared<mscclpp::Host2HostSemaphore>(semaphore);
+    ctx.h2hSemaphore = std::make_shared<mscclpp::Host2HostSemaphore>(semaphore);
 
     ctx.ibQp = ctx.connection.getIbQp();
     if (!ctx.ibQp) {
@@ -862,18 +861,18 @@ static void initializeSendRecvPeerContext(ncclComm_t comm, int peer,
     ctx.remoteRecvStagingMemory.getIbMrInfo(peerIbTransport, nullptr,
                                             &ctx.remoteRecvMrInfo);
 
-    MSCCLPP_CUDATHROW(cudaStreamCreateWithFlags(&ctx.h2dStream,
-                                                 cudaStreamNonBlocking));
-    MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(&ctx.h2dDoneEvent,
-                                                cudaEventDisableTiming));
+    MSCCLPP_CUDATHROW(
+        cudaStreamCreateWithFlags(&ctx.h2dStream, cudaStreamNonBlocking));
+    MSCCLPP_CUDATHROW(
+        cudaEventCreateWithFlags(&ctx.h2dDoneEvent, cudaEventDisableTiming));
 
     // Separate D2H stream for IB sends.
-    MSCCLPP_CUDATHROW(cudaStreamCreateWithFlags(&ctx.d2hStream,
-                                                 cudaStreamNonBlocking));
+    MSCCLPP_CUDATHROW(
+        cudaStreamCreateWithFlags(&ctx.d2hStream, cudaStreamNonBlocking));
 
     ctx.worker = std::make_unique<SendRecvWorkerState>();
     MSCCLPP_CUDATHROW(cudaEventCreateWithFlags(&ctx.worker->d2hDoneEvent,
-                                                cudaEventDisableTiming));
+                                               cudaEventDisableTiming));
     ctx.worker->thread = std::thread(sendRecvWorkerLoop, &ctx);
   }
 
@@ -937,7 +936,8 @@ static ncclResult_t executeNcclSendImpl(void const* sendbuff, size_t count,
     }
     WARN(MSCCLPP_NCCL,
          "CPU-driven ncclSend requires IB and message size "
-         "<= ", stagingBytes, " bytes");
+         "<= ",
+         stagingBytes, " bytes");
     return ncclInvalidUsage;
   }
 
@@ -949,14 +949,13 @@ static ncclResult_t executeNcclSendImpl(void const* sendbuff, size_t count,
       // --- CudaIpc intra-node send (SM-free, zero-copy) ---
       // The destination is computed from the peer's recvbuff address (published
       // to shm in GroupEnd Phase 2.5) and our cached allocation mapping.
-      uintptr_t peerAddr =
-          peerCtx.ipcShmSemaphore->remote->recvbuffAddr.load(
-              std::memory_order_relaxed);
+      uintptr_t peerAddr = peerCtx.ipcShmSemaphore->remote->recvbuffAddr.load(
+          std::memory_order_relaxed);
       void* remoteDst = peerCtx.mapPeerPtr(peerAddr);
       auto* ws = peerCtx.worker.get();
-      MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-          remoteDst, sendbuff, bytes,
-          cudaMemcpyDeviceToDevice, peerCtx.ipcStream));
+      MSCCLPP_CUDATHROW(cudaMemcpyAsync(remoteDst, sendbuff, bytes,
+                                        cudaMemcpyDeviceToDevice,
+                                        peerCtx.ipcStream));
       MSCCLPP_CUDATHROW(cudaEventRecord(ws->d2hDoneEvent, peerCtx.ipcStream));
       cudaStreamQuery(peerCtx.ipcStream);  // flush command buffer
       ws->push({SendRecvWorkerState::WorkItem::SEND, bytes});
@@ -967,42 +966,42 @@ static ncclResult_t executeNcclSendImpl(void const* sendbuff, size_t count,
       cudaStream_t d2h = peerCtx.d2hStream;
       auto* ws = peerCtx.worker.get();
       if (bytes <= kSendChunkBytes) {
-        MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-            peerCtx.sendStagingBuffer.get(), sendbuff, bytes,
-            cudaMemcpyDeviceToHost, d2h));
+        MSCCLPP_CUDATHROW(cudaMemcpyAsync(peerCtx.sendStagingBuffer.get(),
+                                          sendbuff, bytes,
+                                          cudaMemcpyDeviceToHost, d2h));
         MSCCLPP_CUDATHROW(cudaEventRecord(ws->d2hDoneEvent, d2h));
         // Flush the CUDA command buffer so the D2H + event are submitted to GPU
         // before the worker starts waiting. Without this, cudaEventSynchronize
-        // in the worker holds the driver mutex waiting for an unsubmitted event,
-        // while the main thread can't flush (needs same mutex) → deadlock.
+        // in the worker holds the driver mutex waiting for an unsubmitted
+        // event, while the main thread can't flush (needs same mutex) →
+        // deadlock.
         cudaStreamQuery(d2h);
         ws->push({SendRecvWorkerState::WorkItem::SEND, bytes});
       } else {
-        int totalChunks = static_cast<int>(
-            (bytes + kSendChunkBytes - 1) / kSendChunkBytes);
-        int adaptiveBatchChunks = std::min(kD2HBatchChunks,
-                                           std::max(1, totalChunks / 4));
+        int totalChunks =
+            static_cast<int>((bytes + kSendChunkBytes - 1) / kSendChunkBytes);
+        int adaptiveBatchChunks =
+            std::min(kD2HBatchChunks, std::max(1, totalChunks / 4));
         size_t batchSize =
             static_cast<size_t>(adaptiveBatchChunks) * kSendChunkBytes;
-        int numBatches =
-            static_cast<int>((bytes + batchSize - 1) / batchSize);
+        int numBatches = static_cast<int>((bytes + batchSize - 1) / batchSize);
         ws->ensureChunkEvents(numBatches);
         char const* src = static_cast<char const*>(sendbuff);
         char* staging = peerCtx.sendStagingBuffer.get();
         for (int b = 0; b < numBatches; ++b) {
           size_t off = static_cast<size_t>(b) * batchSize;
           size_t batchBytes = std::min(batchSize, bytes - off);
-          int rdmaChunks = static_cast<int>(
-              (batchBytes + kSendChunkBytes - 1) / kSendChunkBytes);
-          MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-              staging + off, src + off, batchBytes,
-              cudaMemcpyDeviceToHost, d2h));
+          int rdmaChunks = static_cast<int>((batchBytes + kSendChunkBytes - 1) /
+                                            kSendChunkBytes);
+          MSCCLPP_CUDATHROW(cudaMemcpyAsync(staging + off, src + off,
+                                            batchBytes, cudaMemcpyDeviceToHost,
+                                            d2h));
           MSCCLPP_CUDATHROW(cudaEventRecord(ws->chunkEvents[b], d2h));
           cudaStreamQuery(d2h);  // flush command buffer (same reason)
           bool isLast = (b == numBatches - 1);
           uint64_t pv = ++peerCtx.sendProgress;
-          ws->push({SendRecvWorkerState::WorkItem::SEND_BATCH, 0,
-                    off, batchBytes, rdmaChunks, b, isLast, pv});
+          ws->push({SendRecvWorkerState::WorkItem::SEND_BATCH, 0, off,
+                    batchBytes, rdmaChunks, b, isLast, pv});
         }
       }
     }
@@ -1050,7 +1049,8 @@ static ncclResult_t executeNcclRecvImpl(void* recvbuff, size_t count,
     }
     WARN(MSCCLPP_NCCL,
          "CPU-driven ncclRecv requires IB and message size "
-         "<= ", stagingBytes, " bytes");
+         "<= ",
+         stagingBytes, " bytes");
     return ncclInvalidUsage;
   }
 
@@ -1064,30 +1064,27 @@ static ncclResult_t executeNcclRecvImpl(void* recvbuff, size_t count,
       // callback on the user stream that spin-waits for the shm semaphore.
       // cudaStreamSynchronize(stream) will block until the callback returns,
       // i.e., until the sender has finished writing.
-      MSCCLPP_CUDATHROW(cudaLaunchHostFunc(
-          stream, shmSemaphoreWaitCallback,
-          peerCtx.ipcShmSemaphore.get()));
+      MSCCLPP_CUDATHROW(cudaLaunchHostFunc(stream, shmSemaphoreWaitCallback,
+                                           peerCtx.ipcShmSemaphore.get()));
     } else {
       // --- IB inter-node recv ---
       if (bytes <= kSendChunkBytes) {
         peerCtx.h2hSemaphore->wait(/*maxSpinCount=*/-1);
-        MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-            recvbuff, peerCtx.recvStagingBuffer.get(),
-            bytes, cudaMemcpyHostToDevice, stream));
+        MSCCLPP_CUDATHROW(
+            cudaMemcpyAsync(recvbuff, peerCtx.recvStagingBuffer.get(), bytes,
+                            cudaMemcpyHostToDevice, stream));
       } else {
-        int totalChunks = static_cast<int>(
-            (bytes + kSendChunkBytes - 1) / kSendChunkBytes);
-        int adaptiveBatchChunks = std::min(kD2HBatchChunks,
-                                           std::max(1, totalChunks / 4));
+        int totalChunks =
+            static_cast<int>((bytes + kSendChunkBytes - 1) / kSendChunkBytes);
+        int adaptiveBatchChunks =
+            std::min(kD2HBatchChunks, std::max(1, totalChunks / 4));
         size_t batchSize =
             static_cast<size_t>(adaptiveBatchChunks) * kSendChunkBytes;
-        int numBatches =
-            static_cast<int>((bytes + batchSize - 1) / batchSize);
+        int numBatches = static_cast<int>((bytes + batchSize - 1) / batchSize);
         char* dst = static_cast<char*>(recvbuff);
         char* staging = peerCtx.recvStagingBuffer.get();
-        volatile uint64_t* counterPtr =
-            reinterpret_cast<volatile uint64_t*>(
-                staging + peerCtx.stagingBytes);
+        volatile uint64_t* counterPtr = reinterpret_cast<volatile uint64_t*>(
+            staging + peerCtx.stagingBytes);
 
         for (int b = 0; b < numBatches; ++b) {
           uint64_t expected = ++peerCtx.recvExpectedProgress;
@@ -1095,14 +1092,13 @@ static ncclResult_t executeNcclRecvImpl(void* recvbuff, size_t count,
           }
           size_t off = static_cast<size_t>(b) * batchSize;
           size_t batchBytes = std::min(batchSize, bytes - off);
-          MSCCLPP_CUDATHROW(cudaMemcpyAsync(
-              dst + off, staging + off, batchBytes,
-              cudaMemcpyHostToDevice, peerCtx.h2dStream));
+          MSCCLPP_CUDATHROW(cudaMemcpyAsync(dst + off, staging + off,
+                                            batchBytes, cudaMemcpyHostToDevice,
+                                            peerCtx.h2dStream));
         }
-        MSCCLPP_CUDATHROW(cudaEventRecord(peerCtx.h2dDoneEvent,
-                                          peerCtx.h2dStream));
-        MSCCLPP_CUDATHROW(cudaStreamWaitEvent(stream,
-                                              peerCtx.h2dDoneEvent, 0));
+        MSCCLPP_CUDATHROW(
+            cudaEventRecord(peerCtx.h2dDoneEvent, peerCtx.h2dStream));
+        MSCCLPP_CUDATHROW(cudaStreamWaitEvent(stream, peerCtx.h2dDoneEvent, 0));
       }
     }
   });
@@ -1913,12 +1909,14 @@ NCCL_API ncclResult_t ncclGroupEnd() {
   std::vector<GroupedP2POp> customOps;
   for (auto const& op : ops) {
     size_t bytes = op.count * ncclTypeSize(op.datatype);
-    bool canHandle = op.comm->hasIB && bytes <= op.comm->sendRecvStagingBytesCached
-                     && bytes > 0;
+    bool canHandle = op.comm->hasIB &&
+                     bytes <= op.comm->sendRecvStagingBytesCached && bytes > 0;
     if (canHandle) {
-      // Check if the peer context was actually initialized (transport != Unknown)
+      // Check if the peer context was actually initialized (transport !=
+      // Unknown)
       try {
-        auto& ctx = getSendRecvPeerContext(op.comm, op.peer, op.comm->cudaDevice);
+        auto& ctx =
+            getSendRecvPeerContext(op.comm, op.peer, op.comm->cudaDevice);
         (void)ctx;
         customOps.push_back(op);
       } catch (...) {
@@ -1954,8 +1952,7 @@ NCCL_API ncclResult_t ncclGroupEnd() {
 
       // Check if the allocation changed (or if this is the first call).
       bool needExchange = false;
-      if (ctx.localAllocBase == 0 ||
-          addr < ctx.localAllocBase ||
+      if (ctx.localAllocBase == 0 || addr < ctx.localAllocBase ||
           addr >= ctx.localAllocBase + ctx.localAllocSize) {
         // New allocation — get base + size via CUDA driver API.
         CUdeviceptr base = 0;
@@ -1978,8 +1975,8 @@ NCCL_API ncclResult_t ncclGroupEnd() {
         int tag = recvbuffExchangeTag(rank, op.peer, op.comm->worldSize);
         mscclpp::TransportFlags ipcFlags(mscclpp::Transport::CudaIpc);
         auto rm = op.comm->comm->registerMemory(
-            reinterpret_cast<void*>(ctx.localAllocBase),
-            ctx.localAllocSize, ipcFlags);
+            reinterpret_cast<void*>(ctx.localAllocBase), ctx.localAllocSize,
+            ipcFlags);
         op.comm->comm->sendMemory(rm, op.peer, tag);
 
         // Publish alloc base to shm (sender reads it for offset computation).
