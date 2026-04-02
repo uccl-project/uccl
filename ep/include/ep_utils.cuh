@@ -115,8 +115,11 @@ template <bool kUseAggressiveAtomic, typename dtype_t>
 __device__ __forceinline__ void st_release_sys_global(dtype_t const* ptr,
                                                       dtype_t val) {
   if constexpr (kUseAggressiveAtomic) {
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    asm volatile("s_waitcnt lgkmcnt(0) vmcnt(0)");
     __hip_atomic_store(const_cast<dtype_t*>(ptr), val, __ATOMIC_RELAXED,
                        __HIP_MEMORY_SCOPE_SYSTEM);
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
   } else {
     __hip_atomic_store(const_cast<dtype_t*>(ptr), val, __ATOMIC_RELEASE,
                        __HIP_MEMORY_SCOPE_SYSTEM);
