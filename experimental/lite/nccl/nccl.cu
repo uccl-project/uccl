@@ -967,19 +967,18 @@ static void dispatchIBSendRound(NcclSendRecvPeerContext& peerCtx,
     ws->push({SendRecvWorkerState::WorkItem::SEND, roundBytes, 0, 0, 0, eIdx,
               false, 0});
   } else {
-    int totalChunks = static_cast<int>(
-        (roundBytes + kSendChunkBytes - 1) / kSendChunkBytes);
+    int totalChunks =
+        static_cast<int>((roundBytes + kSendChunkBytes - 1) / kSendChunkBytes);
     int adaptiveBatchChunks =
         std::min(kD2HBatchChunks, std::max(1, totalChunks / 4));
     size_t batchSize =
         static_cast<size_t>(adaptiveBatchChunks) * kSendChunkBytes;
-    int numBatches =
-        static_cast<int>((roundBytes + batchSize - 1) / batchSize);
+    int numBatches = static_cast<int>((roundBytes + batchSize - 1) / batchSize);
     for (int b = 0; b < numBatches; ++b) {
       size_t off = static_cast<size_t>(b) * batchSize;
       size_t batchBytes = std::min(batchSize, roundBytes - off);
-      int rdmaChunks = static_cast<int>(
-          (batchBytes + kSendChunkBytes - 1) / kSendChunkBytes);
+      int rdmaChunks = static_cast<int>((batchBytes + kSendChunkBytes - 1) /
+                                        kSendChunkBytes);
       int eIdx = ws->allocEvent();
       MSCCLPP_CUDATHROW(cudaMemcpyAsync(staging + off, src + off, batchBytes,
                                         cudaMemcpyDeviceToHost, d2h));
@@ -1066,8 +1065,7 @@ static ncclResult_t executeNcclSendImpl(void const* sendbuff, size_t count,
       MSCCLPP_CUDATHROW(cudaEventRecord(syncEvt, stream));
       MSCCLPP_CUDATHROW(cudaStreamWaitEvent(d2h, syncEvt, 0));
       size_t stagingCap = peerCtx.stagingBytes;
-      int numRounds =
-          static_cast<int>((bytes + stagingCap - 1) / stagingCap);
+      int numRounds = static_cast<int>((bytes + stagingCap - 1) / stagingCap);
       char const* src = static_cast<char const*>(sendbuff);
       for (int r = 0; r < numRounds; ++r) {
         if (r > 0) {
@@ -1153,12 +1151,11 @@ static ncclResult_t executeNcclRecvImpl(void* recvbuff, size_t count,
                             cudaMemcpyHostToDevice, stream));
       } else {
         size_t stagingCap = peerCtx.stagingBytes;
-        int numRounds =
-            static_cast<int>((bytes + stagingCap - 1) / stagingCap);
+        int numRounds = static_cast<int>((bytes + stagingCap - 1) / stagingCap);
         char* dst = static_cast<char*>(recvbuff);
         char* staging = peerCtx.recvStagingBuffer.get();
-        volatile uint64_t* counterPtr = reinterpret_cast<volatile uint64_t*>(
-            staging + stagingCap);
+        volatile uint64_t* counterPtr =
+            reinterpret_cast<volatile uint64_t*>(staging + stagingCap);
 
         for (int r = 0; r < numRounds; ++r) {
           size_t roundOff = static_cast<size_t>(r) * stagingCap;
@@ -2150,8 +2147,8 @@ NCCL_API ncclResult_t ncclGroupEnd() {
           ncclResult_t result = executeNcclSendImpl(
               op.sendbuff, op.count, op.datatype, op.peer, op.comm, op.stream);
           if (result != ncclSuccess) {
-            WARN(MSCCLPP_NCCL,
-                 "ncclGroupEnd custom send failed for peer ", op.peer);
+            WARN(MSCCLPP_NCCL, "ncclGroupEnd custom send failed for peer ",
+                 op.peer);
             return result;
           }
         }
@@ -2165,8 +2162,8 @@ NCCL_API ncclResult_t ncclGroupEnd() {
       ncclResult_t result = executeNcclRecvImpl(
           op.recvbuff, op.count, op.datatype, op.peer, op.comm, op.stream);
       if (result != ncclSuccess) {
-        WARN(MSCCLPP_NCCL,
-             "ncclGroupEnd custom recv failed for peer ", op.peer);
+        WARN(MSCCLPP_NCCL, "ncclGroupEnd custom recv failed for peer ",
+             op.peer);
         for (auto& t : sendThreads) t.join();
         return result;
       }
