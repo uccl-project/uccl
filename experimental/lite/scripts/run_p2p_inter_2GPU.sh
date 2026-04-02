@@ -372,7 +372,8 @@ for env_name in \
   MSCCLPP_HCA_DEVICES \
   MSCCLPP_LOG_LEVEL \
   MSCCLPP_LOG_SUBSYS \
-  MSCCLPP_NCCL_LIB_PATH; do
+  MSCCLPP_NCCL_LIB_PATH \
+  MSCCLPP_NCCL_SENDRECV_STAGING_BYTES; do
   if [[ -n "${!env_name:-}" ]]; then
     MPI_ENV_ARGS+=(-x "${env_name}=${!env_name}")
   fi

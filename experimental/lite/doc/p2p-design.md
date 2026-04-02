@@ -148,7 +148,91 @@ The receiver first waits for data to arrive, then copies it to the GPU:
 
 ---
 
-## Stream Dependency Correctness
+## Multi-Round Staging Buffer Reuse
+
+The default staging buffer is 256 MB per peer per direction (configurable via
+`MSCCLPP_NCCL_SENDRECV_STAGING_BYTES`).  Messages larger than the staging
+buffer are split into multiple rounds, each reusing the same staging memory.
+
+### Round protocol
+
+For a message of `N` bytes with staging capacity `S`:
+
+```
+numRounds = ceil(N / S)
+
+for round r = 0 .. numRounds-1:
+  roundBytes = min(S, N - r*S)
+
+  Sender:
+    if r > 0: drain(SPSC) + wait(h2hSemaphore ack from receiver)
+    dispatchIBSendRound(roundBytes)  // batched D2H → RDMA pipeline
+
+  Receiver:
+    poll progress counter per batch, cudaMemcpyAsync H2D per batch
+    if r < numRounds-1: cudaStreamSynchronize(h2dStream) + signal(h2hSemaphore)
+```
+
+Between rounds, the sender **drains** the SPSC queue (ensuring all RDMA WRs
+from the previous round are posted) and waits for the receiver to **ack** via
+`h2hSemaphore`.  The receiver only signals the ack after all H2D copies for
+the round complete (`cudaStreamSynchronize`), guaranteeing the staging buffer
+is safe to overwrite.
+
+### Deadlock prevention
+
+`ncclGroupEnd` dispatches all pending send/recv operations sequentially.
+A multi-round send **blocks** between rounds (waiting for receiver ack).
+If the receiver's recv operation hasn't started yet (because the dispatch
+loop hasn't reached it), the ack never arrives → deadlock.
+
+Solution: multi-round sends are dispatched on **dedicated `std::thread`s**,
+while the main thread proceeds to dispatch recv operations.  Small sends
+(≤ staging capacity, single-round) remain inline since they never block.
+
+```
+ncclGroupEnd Phase 3:
+  for each send op:
+    if bytes > stagingCap:
+      spawn std::thread → executeNcclSendImpl(...)  // won't block main thread
+    else:
+      executeNcclSendImpl(...)                       // single-round, non-blocking
+
+  for each recv op:
+    executeNcclRecvImpl(...)                         // runs on main thread
+
+  join all send threads
+```
+
+### h2hSemaphore bidirectionality
+
+Each `Host2HostSemaphore` maintains independent A→B and B→A counters.
+The **A→B** direction is used by the worker thread for small-message completion
+signaling.  The **B→A** direction (receiver → sender) is used for multi-round
+staging ack.  These do not conflict because they operate on separate counter
+fields.
+
+### CQ flush per round
+
+Each round's last batch is marked as `isLast`, which triggers a CQ flush
+(`ibv_poll_cq`) in the worker thread.  This ensures all RDMA writes for the
+round complete before the staging buffer is reused, and prevents send-CQ
+overflow across rounds.
+
+### Performance
+
+Multi-round transfers achieve the same throughput as single-round transfers
+because the pipeline runs at full speed within each round, and inter-round
+synchronization is negligible (~1 μs for semaphore signal + poll):
+
+| Message | Staging | Rounds | Throughput |
+|---------|---------|--------|------------|
+| 256 MB | 256 MB | 1 | 21.8 GB/s |
+| 512 MB | 256 MB | 2 | 21.7 GB/s |
+| 1 GB | 256 MB | 4 | 21.7 GB/s |
+| 2 GB | 256 MB | 8 | 21.7 GB/s |
+
+---
 
 The NCCL API contract requires that `ncclSend` reads `sendbuff` with respect
 to the ordering of the caller's `stream` parameter.  Since UCCL-Lite uses
@@ -192,15 +276,18 @@ NCCL tuned with `NCCL_P2P_NET_CHUNKSIZE=2097152` (2 MB).
 |------|---------------:|----------------:|-------------:|--------:|--------:|
 | 8 B | 13.2 | 20.4 | — | — | **1.55×** |
 | 1 KB | 13.4 | 20.5 | 0.08 GB/s | 0.05 GB/s | **1.53×** |
-| 32 KB | 15.9 | 24.3 | 2.1 GB/s | 1.3 GB/s | **1.53×** |
-| 64 KB | 20.9 | 27.8 | 3.1 GB/s | 2.4 GB/s | **1.33×** |
-| 256 KB | 43.1 | 50.2 | 6.1 GB/s | 5.2 GB/s | **1.17×** |
-| 512 KB | 54.7 | 75.2 | 9.6 GB/s | 7.0 GB/s | **1.37×** |
-| 1 MB | 81.1 | 103.5 | 12.9 GB/s | 10.1 GB/s | **1.28×** |
-| 4 MB | 265.7 | 340.5 | 15.8 GB/s | 12.3 GB/s | **1.28×** |
-| 16 MB | 1,019 | 1,148 | 16.5 GB/s | 14.6 GB/s | **1.13×** |
-| 64 MB | 3,283 | 4,115 | 20.4 GB/s | 16.3 GB/s | **1.25×** |
-| 256 MB | 12,327 | 15,860 | **21.8 GB/s** | **16.9 GB/s** | **1.29×** |
+| 32 KB | 17.1 | 24.9 | 1.9 GB/s | 1.3 GB/s | **1.46×** |
+| 64 KB | 19.1 | 27.5 | 3.4 GB/s | 2.4 GB/s | **1.44×** |
+| 256 KB | 44.2 | 49.8 | 5.9 GB/s | 5.3 GB/s | **1.13×** |
+| 512 KB | 55.1 | 74.9 | 9.5 GB/s | 7.0 GB/s | **1.36×** |
+| 1 MB | 80.0 | 103.4 | 13.1 GB/s | 10.1 GB/s | **1.29×** |
+| 4 MB | 265.4 | 340.8 | 15.8 GB/s | 12.3 GB/s | **1.28×** |
+| 16 MB | 1,021 | 1,154 | 16.4 GB/s | 14.5 GB/s | **1.13×** |
+| 64 MB | 3,285 | 4,107 | 20.4 GB/s | 16.3 GB/s | **1.25×** |
+| 256 MB | 12,337 | 15,839 | 21.8 GB/s | 16.9 GB/s | **1.29×** |
+| 512 MB | 24,716 | 31,223 | 21.7 GB/s | 17.2 GB/s | **1.26×** |
+| 1 GB | 49,569 | 61,935 | 21.7 GB/s | 17.3 GB/s | **1.25×** |
+| 2 GB | 98,794 | 123,118 | **21.7 GB/s** | **17.4 GB/s** | **1.25×** |
 
 ### NCCL Tuning Notes
 
@@ -225,7 +312,8 @@ Other variables tested with negligible impact: `NCCL_BUFFSIZE` (4–64 MB),
 | Metric | Intra-Node | Inter-Node |
 |--------|-----------|-----------|
 | Small-message latency | 9 μs vs 7 μs (NCCL wins) | **13 μs vs 20 μs** (1.55× better) |
-| Peak throughput | **20.6 vs 18.8 GB/s** (+10%) | **21.8 vs 16.9 GB/s** (+29%) |
+| Peak throughput | **20.6 vs 18.8 GB/s** (+10%) | **21.7 vs 17.4 GB/s** (+25%) |
+| Max tested size | 256 MB | 2 GB (multi-round staging) |
 
 ---
 
