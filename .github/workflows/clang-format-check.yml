@@ -31,7 +31,7 @@ jobs:
 
         DIRECTORIES=("collective" "ep" "experimental" "p2p" "include")
         EXTENSIONS=("cpp" "cxx" "cc" "h" "hpp" "cu" "cuh")
-        EXCLUDE=("collective/afxdp/lib" "experimental/mint/thirdparty")
+        EXCLUDE=("collective/afxdp/lib" "experimental/lite/thirdparty")
 
         EXCLUDE_ARGS=()
         for EXC in "${EXCLUDE[@]}"; do
