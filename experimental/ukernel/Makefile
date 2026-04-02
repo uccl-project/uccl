@@ -92,30 +92,7 @@ BENCH_GDRCOPY_INCLUDES := -I$(CUDA_PATH)/include -I/usr/include -I../../include 
 BENCH_GDRCOPY_LIBS := -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
                       -L$(GDRCOPY_LIBDIR) -Wl,-rpath,$(GDRCOPY_LIBDIR) \
                       -lcudart -lcuda -lgdrapi
-BENCH_CCL_COMMON_SRC := benchmarks/ccl_perf_main.cc
-BENCH_CCL_COMMON_OBJ := $(BENCH_CCL_COMMON_SRC:.cc=.o)
-BENCH_CCL_ALLREDUCE_SRC := benchmarks/all_reduce_perf.cc
-BENCH_CCL_ALLREDUCE_OBJ := $(BENCH_CCL_ALLREDUCE_SRC:.cc=.o)
-BENCH_CCL_ALLREDUCE_BIN := benchmarks/all_reduce_perf
-BENCH_CCL_ALLTOALL_SRC := benchmarks/alltoall_perf.cc
-BENCH_CCL_ALLTOALL_OBJ := $(BENCH_CCL_ALLTOALL_SRC:.cc=.o)
-BENCH_CCL_ALLTOALL_BIN := benchmarks/alltoall_perf
-BENCH_CCL_DEVICE_CPP_SRC := src/device/fifo/c2d_fifo.cc src/device/fifo/d2c_fifo.cpp src/device/fifo/sm_fifo.cc src/device/worker.cc
-BENCH_CCL_DEVICE_CPP_OBJ := $(BENCH_CCL_DEVICE_CPP_SRC:.cc=.o)
-BENCH_CCL_DEVICE_CPP_OBJ := $(BENCH_CCL_DEVICE_CPP_OBJ:.cpp=.o)
-BENCH_CCL_DEVICE_CU_OBJ := src/device/persistent_kernel_ops.o
-BENCH_CCL_DEVICE_OBJ := $(BENCH_CCL_DEVICE_CPP_OBJ) $(BENCH_CCL_DEVICE_CU_OBJ)
-BENCH_CCL_BINS := $(BENCH_CCL_ALLREDUCE_BIN) $(BENCH_CCL_ALLTOALL_BIN)
-BENCH_CCL_NVCC_LIBS := -L$(CONDA_LIB_HOME) \
-                       -L$(CUDA_PATH)/lib64 \
-                       -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64 \
-                       -lcudart -lcuda \
-                       -lgflags -lz -libverbs -lnl-3 -lnl-route-3 -lpthread \
-                       $(UCCL_RDMA_STATIC) -libverbs -lrdmacm \
-                       -L$(GDRCOPY_LIBDIR) \
-                       -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR) \
-                       -lgdrapi -lnuma
-BENCH_BINS := $(BENCH_TRANSPORT_BIN) $(BENCH_GDRCOPY_BIN) $(BENCH_CCL_BINS)
+BENCH_BINS := $(BENCH_TRANSPORT_BIN) $(BENCH_GDRCOPY_BIN)
 
 # Targets
 STATIC_LIB  := libukernel.a
@@ -175,21 +152,6 @@ $(BENCH_GDRCOPY_OBJ): $(BENCH_GDRCOPY_SRC)
 $(BENCH_GDRCOPY_BIN): $(BENCH_GDRCOPY_OBJ) | ensure-gdrcopy ensure-uccl-rdma
 	$(CXX) $< -o $@ $(BENCH_GDRCOPY_LIBS)
 
-$(BENCH_CCL_COMMON_OBJ): $(BENCH_CCL_COMMON_SRC)
-	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
-
-$(BENCH_CCL_ALLREDUCE_OBJ): $(BENCH_CCL_ALLREDUCE_SRC)
-	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
-
-$(BENCH_CCL_ALLTOALL_OBJ): $(BENCH_CCL_ALLTOALL_SRC)
-	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
-
-$(BENCH_CCL_ALLREDUCE_BIN): $(BENCH_CCL_COMMON_OBJ) $(BENCH_CCL_ALLREDUCE_OBJ) $(BENCH_CCL_DEVICE_OBJ) $(STATIC_LIB) | ensure-gdrcopy ensure-uccl-rdma
-	$(NVCC) $(LOCAL_INCLUDES) $(NVCCFLAGS) $(INCLUDES) $^ $(BENCH_CCL_NVCC_LIBS) -o $@
-
-$(BENCH_CCL_ALLTOALL_BIN): $(BENCH_CCL_COMMON_OBJ) $(BENCH_CCL_ALLTOALL_OBJ) $(BENCH_CCL_DEVICE_OBJ) $(STATIC_LIB) | ensure-gdrcopy ensure-uccl-rdma
-	$(NVCC) $(LOCAL_INCLUDES) $(NVCCFLAGS) $(INCLUDES) $^ $(BENCH_CCL_NVCC_LIBS) -o $@
-
 bench: $(BENCH_BINS)
 
 device_test:
@@ -210,7 +172,6 @@ device_bench:
 # Clean
 clean:
 	rm -f $(OBJ_CC) $(OBJ_CU) $(BENCH_TRANSPORT_OBJ) $(BENCH_GDRCOPY_OBJ) \
-	      $(BENCH_CCL_COMMON_OBJ) $(BENCH_CCL_ALLREDUCE_OBJ) $(BENCH_CCL_ALLTOALL_OBJ) $(BENCH_CCL_DEVICE_OBJ) \
 	      $(STATIC_LIB) $(SHARED_LIB) $(BENCH_BINS) \
 	      *.d src/*.d src/ccl/*.d src/transport/*.d src/transport/test/*.d benchmarks/*.d
 	$(MAKE) -C src/ccl clean
@@ -218,9 +179,7 @@ clean:
 	$(MAKE) -C src/transport clean
 
 # Include dependencies
--include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(BENCH_TRANSPORT_OBJ:.o=.d) $(BENCH_GDRCOPY_OBJ:.o=.d) \
-	$(BENCH_CCL_COMMON_OBJ:.o=.d) $(BENCH_CCL_ALLREDUCE_OBJ:.o=.d) $(BENCH_CCL_ALLTOALL_OBJ:.o=.d) \
-	$(BENCH_CCL_DEVICE_CPP_OBJ:.o=.d)
+-include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(BENCH_TRANSPORT_OBJ:.o=.d) $(BENCH_GDRCOPY_OBJ:.o=.d)
 
 # [TODO: Yihan] Build only TK GEMM operator if a dedicated binding returns later.
 # tk_gemm: src/device/persistent_kernel_ops.o
