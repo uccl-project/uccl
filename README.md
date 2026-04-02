@@ -75,27 +75,29 @@ UCCL has been adopted as part of the AMD [TheRock](https://github.com/ROCm/TheRo
 More UCCL features are under development in this repo, currently including: 
 - ✅ More efficient KV cache transfer engine (e.g., better Mooncake)
   - ✅ Supporting AMD GPUs
-  - 🚧 Supporting RDMA (NVIDIA, Broadcom), AWS EFA, GCP TCPX, TCP
+  - ✅ Supporting RDMA (NVIDIA, Broadcom), AWS EFA, GCP TCPX, TCP
 - ✅ Efficient and portable expert-parallel communication
   - ✅ Supporting all NIC vendors, including Nvidia, AWS EFA, and Broadcom
   - ✅ Supporting AMD GPUs
-  - 🚧 Better flow control to avoid congestion
-  - ☐ Supporting other AI accelerators, such as TPUs and Trainium.
+  - ✅ Better flow control to avoid congestion
+  - ☐ Supporting other AI accelerators, such as TPUs and Trainium
 - 🚧 Re-architecting NCCL to unleash network hardware performance
-  - 🚧 Scalable and efficient CPU proxy
-  - ☐ Fast async collectives with compute-communication ordering guarantee
+  - 🚧 SM-efficient communication kernels
+  - 🚧 Fine-grained compute-communication overlapping
   - ☐ Device kernels in vendor-agnostic Triton language
-- ☐ Dynamic membership with GPU servers joining and exiting
+- 🚧 Efficient consumer GPU communication
+  - 🚧 Faster collectives on 4090/5090/GB10
+  - 🚧 Expert-parallel communication on 4090/5090/GB10
 
 ## Quick Start
 
 The easiest way to use UCCL is to first build based on your platform. The build script will automatically detect the `py_version` of your current environment. If you need to compile UCCL for a specific python version, please specify the `py_version`, such as `3.10`. 
 
 ```bash
-git clone https://github.com/uccl-project/uccl.git --recursive && cd uccl
+git clone https://github.com/uccl-project/uccl.git && cd uccl
 
 # Eg, bash build.sh cu12 ep --install
-bash build.sh [cu12|cu13|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] \
+bash build.sh [cu12|cu13|rocm|rocm7|therock] [all|ccl_rdma|ccl_efa|p2p|ep] \
               [py_version] [rocm_index_url] --install
 ```
 > Note: 
@@ -124,7 +126,7 @@ Now, you can just run your PyTorch applications and enjoy UCCL performance benef
 
 First clone the UCCL repo and init submodules: 
 ```bash
-git clone https://github.com/uccl-project/uccl.git --recursive
+git clone https://github.com/uccl-project/uccl.git
 export UCCL_HOME=$(pwd)/uccl
 ```
 

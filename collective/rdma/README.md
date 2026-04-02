@@ -2,6 +2,14 @@
 
 UCCL RDMA plugin for NCCL/RCCL.
 
+## Git submodules
+
+From the repo root:
+
+```bash
+git submodule update --init thirdparty/nccl thirdparty/nccl-tests thirdparty/rccl thirdparty/rccl-tests
+```
+
 1. UCCL supports two network fabrics: RoCE, Infiniband.
 2. UCCL supports two modes: Unreliable Connection (UC) and Reliable Connection (RC).
 3. UCCL supports both Nvidia and AMD GPUs.

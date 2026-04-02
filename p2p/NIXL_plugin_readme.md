@@ -2,7 +2,13 @@
 
 Quick setup and run guide for the TCPX backend.
 
----
+## Git submodules
+
+From the repo root:
+
+```bash
+git submodule update --init thirdparty/nccl thirdparty/nccl-tests
+```
 
 ## Prerequisites
 
