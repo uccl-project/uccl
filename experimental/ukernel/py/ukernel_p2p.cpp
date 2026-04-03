@@ -61,6 +61,7 @@ class Communicator {
 
   bool connect_to(int peer_rank) { return comm_->connect_to(peer_rank); }
   bool accept_from(int peer_rank) { return comm_->accept_from(peer_rank); }
+  bool connect_bidir(int peer_rank) { return comm_->connect_bidir(peer_rank); }
 
   uint64_t isend(int peer_rank, nb::handle tensor,
                  size_t offset = 0, size_t len = 0) {
@@ -156,6 +157,7 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_prop_ro("world_size", &Communicator::world_size)
       .def("connect_to", &Communicator::connect_to, nb::arg("peer_rank"))
       .def("accept_from", &Communicator::accept_from, nb::arg("peer_rank"))
+      .def("connect_bidir", &Communicator::connect_bidir, nb::arg("peer_rank"))
       .def("isend", &Communicator::isend,
            nb::arg("peer_rank"), nb::arg("tensor"),
            nb::arg("offset") = 0, nb::arg("len") = 0)

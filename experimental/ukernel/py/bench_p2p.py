@@ -110,6 +110,8 @@ def main() -> None:
         print(f"{'Size':>12s} | {'ukernel (ms)':>13s} | {'ukernel (GB/s)':>15s} | {'NCCL (ms)':>11s} | {'NCCL (GB/s)':>13s}")
         print("-" * 80)
 
+    peer = 1 if rank == 0 else 0
+
     # --- Init ukernel_p2p once ---
     comm = p2p.Communicator(
         gpu_id=local_rank,
@@ -119,6 +121,7 @@ def main() -> None:
         exchanger_port=exchanger_port,
         transport="auto",
     )
+    comm.connect_bidir(peer)
 
     # --- Init NCCL once ---
     nccl_dist.init_process_group(

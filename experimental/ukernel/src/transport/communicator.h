@@ -34,6 +34,7 @@ class Communicator {
 
   bool connect_to(int rank);
   bool accept_from(int rank);
+  bool connect_bidir(int rank);
   unsigned isend(int rank, void* ptr, size_t offset, size_t len,
                  uint32_t local_mr_id, uint32_t remote_mr_id, bool on_gpu);
   unsigned irecv(int rank, void* ptr, size_t offset, size_t len, bool on_gpu);

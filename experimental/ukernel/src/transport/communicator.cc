@@ -600,6 +600,16 @@ bool Communicator::connect_to(int rank) {
   return false;
 }
 
+bool Communicator::connect_bidir(int rank) {
+  if (global_rank_ < rank) {
+    if (!connect_to(rank)) return false;
+    return accept_from(rank);
+  } else {
+    if (!accept_from(rank)) return false;
+    return connect_to(rank);
+  }
+}
+
 bool Communicator::accept_from(int rank) {
   if (rank == global_rank_) return true;
 
