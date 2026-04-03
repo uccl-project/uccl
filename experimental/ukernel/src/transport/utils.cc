@@ -2,7 +2,6 @@
 #include <arpa/inet.h>
 #include <cstdlib>
 #include <cstring>
-#include <dirent.h>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -65,15 +64,6 @@ std::string generate_host_id(bool include_ip) {
     id += "-" + get_primary_ip();
   }
   return id;
-}
-
-void cleanup_ipc_shm() {
-  std::string host_id = generate_host_id(false);
-  if (host_id.empty()) return;
-
-  std::string pattern = "/dev/shm/uk_t_oob_" + host_id + "_l";
-  std::string rm_cmd = "rm -f " + pattern + "*";
-  (void)system(rm_cmd.c_str());
 }
 
 }  // namespace Transport

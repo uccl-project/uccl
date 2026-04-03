@@ -361,6 +361,7 @@ class ShmRingExchanger {
   };
 
   std::string ring_name(int from_rank, int to_rank) const;
+  void cleanup_stale_ring(int peer_rank);
   bool ensure_local_ring(int peer_rank);
   bool ensure_remote_ring_attached(int peer_rank, int timeout_ms);
   bool try_recv_one_locked(int peer_rank, ShmCtrlMsg& msg);

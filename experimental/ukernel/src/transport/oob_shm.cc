@@ -364,10 +364,18 @@ std::string ShmRingExchanger::ring_name(int from_rank, int to_rank) const {
                       resolve_local_id(from_rank), resolve_local_id(to_rank));
 }
 
+void ShmRingExchanger::cleanup_stale_ring(int peer_rank) {
+  if (peer_rank == self_rank_) return;
+  std::string local_ring = ring_name(peer_rank, self_rank_);
+  shm_unlink(local_ring.c_str());
+}
+
 bool ShmRingExchanger::ensure_local_ring(int peer_rank) {
   auto& peer = peers_[static_cast<size_t>(peer_rank)];
   if (!peer) peer = std::make_shared<PeerState>();
   if (peer->local_inbox.ring != nullptr) return true;
+
+  cleanup_stale_ring(peer_rank);
 
   peer->local_inbox.shm_name = ring_name(peer_rank, self_rank_);
   shm_unlink(peer->local_inbox.shm_name.c_str());
