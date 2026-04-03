@@ -3,7 +3,11 @@
 #include "../src/ccl/backend/device_backend.h"
 #include "../src/ccl/backend/transport_backend.h"
 #include "../src/ccl/executor.h"
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 #include <torch/extension.h>
+#include <torch/csrc/autograd/python_variable.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -16,13 +20,21 @@
 #include <utility>
 #include <vector>
 
-namespace py = pybind11;
+namespace nb = nanobind;
 
 namespace UKernel {
 namespace CCL {
 namespace Python {
 
 namespace {
+
+torch::Tensor tensor_from_python(nb::handle obj, char const* arg_name) {
+  PyObject* py_obj = obj.ptr();
+  if (!THPVariable_Check(py_obj)) {
+    throw std::invalid_argument(std::string(arg_name) + " must be a torch.Tensor");
+  }
+  return THPVariable_Unpack(py_obj);
+}
 
 Transport::PreferredTransport parse_transport(std::string const& value) {
   if (value == "auto") return Transport::PreferredTransport::Auto;
@@ -489,7 +501,7 @@ class ProcessGroup {
       handle = it->second.handle;
     }
 
-    py::gil_scoped_release release;
+    nb::gil_scoped_release release;
     executor_.wait(handle);
 
     std::lock_guard<std::mutex> lock(mu_);
@@ -684,52 +696,116 @@ class ProcessGroup {
 }  // namespace CCL
 }  // namespace UKernel
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+NB_MODULE(TORCH_EXTENSION_NAME, m) {
   using UKernel::CCL::Python::ProcessGroup;
 
-  py::class_<ProcessGroup>(m, "ProcessGroup")
-      .def(py::init<int, int, int, std::string, int, std::string, uint32_t,
+  nb::class_<ProcessGroup>(m, "ProcessGroup")
+      .def(nb::init<int, int, int, std::string, int, std::string, uint32_t,
                     uint32_t, uint32_t, uint32_t, uint32_t>(),
-           py::arg("rank"), py::arg("world_size"), py::arg("gpu_id"),
-           py::arg("exchanger_ip") = "127.0.0.1",
-           py::arg("exchanger_port") = 6979,
-           py::arg("transport") = "auto",
-           py::arg("device_task_capacity") = 4096,
-           py::arg("max_device_fifos") = 8,
-           py::arg("threads_per_block") = 256,
-           py::arg("fifo_capacity") = 64, py::arg("smem_size") = 0)
-      .def_property_readonly("rank", &ProcessGroup::rank)
-      .def_property_readonly("world_size", &ProcessGroup::world_size)
-      .def_property_readonly("gpu_id", &ProcessGroup::gpu_id)
-      .def("submit_allreduce", &ProcessGroup::submit_allreduce,
-           py::arg("tensor"),
-           py::arg("reduction") = static_cast<uint32_t>(ReductionKind::Sum),
-           py::arg("tile_bytes") = 64ull << 10, py::arg("num_flows") = 2)
-      .def("submit_alltoall", &ProcessGroup::submit_alltoall, py::arg("tensor"),
-           py::arg("tile_bytes") = 64ull << 10, py::arg("num_flows") = 2)
-      .def("submit_alltoall_out", &ProcessGroup::submit_alltoall_out,
-           py::arg("output"), py::arg("input"),
-           py::arg("tile_bytes") = 64ull << 10, py::arg("num_flows") = 2)
-      .def("submit_alltoallv_out", &ProcessGroup::submit_alltoallv_out,
-           py::arg("output"), py::arg("input"),
-           py::arg("output_split_sizes"), py::arg("input_split_sizes"),
-           py::arg("tile_bytes") = 64ull << 10, py::arg("num_flows") = 2)
+           nb::arg("rank"), nb::arg("world_size"), nb::arg("gpu_id"),
+           nb::arg("exchanger_ip") = "127.0.0.1",
+           nb::arg("exchanger_port") = 6979,
+           nb::arg("transport") = "auto",
+           nb::arg("device_task_capacity") = 4096,
+           nb::arg("max_device_fifos") = 8,
+           nb::arg("threads_per_block") = 256,
+           nb::arg("fifo_capacity") = 64, nb::arg("smem_size") = 0)
+      .def_prop_ro("rank", &ProcessGroup::rank)
+      .def_prop_ro("world_size", &ProcessGroup::world_size)
+      .def_prop_ro("gpu_id", &ProcessGroup::gpu_id)
+      .def(
+          "submit_allreduce",
+          [](ProcessGroup& self, nb::handle tensor, uint32_t reduction,
+             size_t tile_bytes, uint32_t num_flows) {
+            return self.submit_allreduce(
+                tensor_from_python(tensor, "tensor"), reduction, tile_bytes,
+                num_flows);
+          },
+          nb::arg("tensor"),
+          nb::arg("reduction") = static_cast<uint32_t>(ReductionKind::Sum),
+          nb::arg("tile_bytes") = 64ull << 10, nb::arg("num_flows") = 2)
+      .def(
+          "submit_alltoall",
+          [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,
+             uint32_t num_flows) {
+            return self.submit_alltoall(tensor_from_python(tensor, "tensor"),
+                                        tile_bytes, num_flows);
+          },
+          nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
+          nb::arg("num_flows") = 2)
+      .def(
+          "submit_alltoall_out",
+          [](ProcessGroup& self, nb::handle output, nb::handle input,
+             size_t tile_bytes, uint32_t num_flows) {
+            return self.submit_alltoall_out(
+                tensor_from_python(output, "output"),
+                tensor_from_python(input, "input"), tile_bytes, num_flows);
+          },
+          nb::arg("output"), nb::arg("input"),
+          nb::arg("tile_bytes") = 64ull << 10, nb::arg("num_flows") = 2)
+      .def(
+          "submit_alltoallv_out",
+          [](ProcessGroup& self, nb::handle output, nb::handle input,
+             std::vector<int64_t> output_split_sizes,
+             std::vector<int64_t> input_split_sizes, size_t tile_bytes,
+             uint32_t num_flows) {
+            return self.submit_alltoallv_out(
+                tensor_from_python(output, "output"),
+                tensor_from_python(input, "input"),
+                std::move(output_split_sizes), std::move(input_split_sizes),
+                tile_bytes, num_flows);
+          },
+          nb::arg("output"), nb::arg("input"),
+          nb::arg("output_split_sizes"), nb::arg("input_split_sizes"),
+          nb::arg("tile_bytes") = 64ull << 10, nb::arg("num_flows") = 2)
       .def("submit_barrier", &ProcessGroup::submit_barrier)
-      .def("poll_handle", &ProcessGroup::poll_handle, py::arg("handle"))
-      .def("wait_handle", &ProcessGroup::wait_handle, py::arg("handle"))
-      .def("status_handle", &ProcessGroup::status_handle, py::arg("handle"))
-      .def("allreduce", &ProcessGroup::allreduce, py::arg("tensor"),
-           py::arg("tile_bytes") = 64ull << 10, py::arg("num_flows") = 2)
-      .def("alltoall", &ProcessGroup::alltoall, py::arg("tensor"),
-           py::arg("tile_bytes") = 64ull << 10, py::arg("num_flows") = 2)
-      .def("alltoall_out", &ProcessGroup::alltoall_out, py::arg("output"),
-           py::arg("input"), py::arg("tile_bytes") = 64ull << 10,
-           py::arg("num_flows") = 2)
-      .def("alltoallv_out", &ProcessGroup::alltoallv_out, py::arg("output"),
-           py::arg("input"), py::arg("output_split_sizes"),
-           py::arg("input_split_sizes"), py::arg("tile_bytes") = 64ull << 10,
-           py::arg("num_flows") = 2)
-      .def("same_host", &ProcessGroup::same_host, py::arg("peer_rank"))
+      .def("poll_handle", &ProcessGroup::poll_handle, nb::arg("handle"))
+      .def("wait_handle", &ProcessGroup::wait_handle, nb::arg("handle"))
+      .def("status_handle", &ProcessGroup::status_handle, nb::arg("handle"))
+      .def(
+          "allreduce",
+          [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,
+             uint32_t num_flows) {
+            self.allreduce(tensor_from_python(tensor, "tensor"), tile_bytes,
+                           num_flows);
+          },
+          nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
+          nb::arg("num_flows") = 2)
+      .def(
+          "alltoall",
+          [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,
+             uint32_t num_flows) {
+            self.alltoall(tensor_from_python(tensor, "tensor"), tile_bytes,
+                          num_flows);
+          },
+          nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
+          nb::arg("num_flows") = 2)
+      .def(
+          "alltoall_out",
+          [](ProcessGroup& self, nb::handle output, nb::handle input,
+             size_t tile_bytes, uint32_t num_flows) {
+            self.alltoall_out(tensor_from_python(output, "output"),
+                              tensor_from_python(input, "input"), tile_bytes,
+                              num_flows);
+          },
+          nb::arg("output"), nb::arg("input"),
+          nb::arg("tile_bytes") = 64ull << 10, nb::arg("num_flows") = 2)
+      .def(
+          "alltoallv_out",
+          [](ProcessGroup& self, nb::handle output, nb::handle input,
+             std::vector<int64_t> output_split_sizes,
+             std::vector<int64_t> input_split_sizes, size_t tile_bytes,
+             uint32_t num_flows) {
+            self.alltoallv_out(
+                tensor_from_python(output, "output"),
+                tensor_from_python(input, "input"),
+                std::move(output_split_sizes), std::move(input_split_sizes),
+                tile_bytes, num_flows);
+          },
+          nb::arg("output"), nb::arg("input"),
+          nb::arg("output_split_sizes"), nb::arg("input_split_sizes"),
+          nb::arg("tile_bytes") = 64ull << 10, nb::arg("num_flows") = 2)
+      .def("same_host", &ProcessGroup::same_host, nb::arg("peer_rank"))
       .def("peer_transport", &ProcessGroup::peer_transport,
-           py::arg("peer_rank"));
+           nb::arg("peer_rank"));
 }

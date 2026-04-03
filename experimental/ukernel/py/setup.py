@@ -3,12 +3,21 @@ from pathlib import Path
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
+try:
+    import nanobind
+except ImportError as exc:
+    raise RuntimeError(
+        "nanobind is required for ukernel_ccl Python bindings. "
+        "Install it with: pip install nanobind"
+    ) from exc
+
 
 ROOT = Path(__file__).resolve().parent.parent
 UCCL_ROOT = ROOT.parent.parent
 CUDA_HOME = Path("/usr/local/cuda")
 GDRCOPY_ROOT = UCCL_ROOT / "thirdparty" / "gdrcopy"
 RDMA_STATIC = UCCL_ROOT / "collective" / "rdma" / "librdma.a"
+NANOBIND_ROOT = Path(nanobind.__file__).resolve().parent
 
 
 def rel(path: Path) -> str:
@@ -17,6 +26,7 @@ def rel(path: Path) -> str:
 
 sources = [
     rel(ROOT / "py" / "ukernel_ccl.cpp"),
+    rel(NANOBIND_ROOT / "src" / "nb_combined.cpp"),
     rel(ROOT / "src" / "ccl" / "backend" / "device_backend.cc"),
     rel(ROOT / "src" / "ccl" / "backend" / "transport_backend.cc"),
     rel(ROOT / "src" / "ccl" / "executor.cc"),
@@ -50,6 +60,8 @@ include_dirs = [
     rel(ROOT / "src" / "device"),
     rel(ROOT / "src" / "device" / "fifo"),
     rel(ROOT / "src" / "ccl"),
+    rel(NANOBIND_ROOT / "include"),
+    rel(NANOBIND_ROOT / "ext" / "robin_map" / "include"),
     rel(UCCL_ROOT),
     rel(UCCL_ROOT / "collective" / "rdma"),
     rel(UCCL_ROOT / "include"),
