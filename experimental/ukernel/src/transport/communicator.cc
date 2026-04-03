@@ -203,6 +203,8 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       config_(config) {
   maybe_configure_uccl_socket_ifname({}, get_local_ip());
 
+  cleanup_ipc_shm();
+
   shm_control_ = std::make_shared<ShmRingExchanger>(
       global_rank_, world_size_, generate_host_id(),
       config_->local_id >= 0 ? config_->local_id : global_rank_);
