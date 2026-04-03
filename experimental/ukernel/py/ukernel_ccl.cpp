@@ -2,6 +2,7 @@
 #include "../include/transport.h"
 #include "../src/ccl/backend/device_backend.h"
 #include "../src/ccl/backend/transport_backend.h"
+#include "../src/ccl/collective_types.h"
 #include "../src/ccl/executor.h"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
@@ -615,6 +616,7 @@ class ProcessGroup {
     config.num_flows = num_flows;
     config.tensor_bytes = tensor_bytes;
     config.tile_bytes = tile_bytes;
+    config.staging_bytes = tile_bytes * num_flows;
     config.algorithm = (collective == CollectiveKind::AllReduce)
                            ? AlgorithmKind::Ring
                            : AlgorithmKind::Pairwise;
@@ -718,17 +720,17 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
           [](ProcessGroup& self, nb::handle tensor, uint32_t reduction,
              size_t tile_bytes, uint32_t num_flows) {
             return self.submit_allreduce(
-                tensor_from_python(tensor, "tensor"), reduction, tile_bytes,
+                UKernel::CCL::Python::tensor_from_python(tensor, "tensor"), reduction, tile_bytes,
                 num_flows);
           },
           nb::arg("tensor"),
-          nb::arg("reduction") = static_cast<uint32_t>(ReductionKind::Sum),
+          nb::arg("reduction") = static_cast<uint32_t>(UKernel::CCL::ReductionKind::Sum),
           nb::arg("tile_bytes") = 64ull << 10, nb::arg("num_flows") = 2)
       .def(
           "submit_alltoall",
           [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,
              uint32_t num_flows) {
-            return self.submit_alltoall(tensor_from_python(tensor, "tensor"),
+            return self.submit_alltoall(UKernel::CCL::Python::tensor_from_python(tensor, "tensor"),
                                         tile_bytes, num_flows);
           },
           nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
@@ -738,8 +740,8 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
           [](ProcessGroup& self, nb::handle output, nb::handle input,
              size_t tile_bytes, uint32_t num_flows) {
             return self.submit_alltoall_out(
-                tensor_from_python(output, "output"),
-                tensor_from_python(input, "input"), tile_bytes, num_flows);
+                UKernel::CCL::Python::tensor_from_python(output, "output"),
+                UKernel::CCL::Python::tensor_from_python(input, "input"), tile_bytes, num_flows);
           },
           nb::arg("output"), nb::arg("input"),
           nb::arg("tile_bytes") = 64ull << 10, nb::arg("num_flows") = 2)
@@ -750,8 +752,8 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
              std::vector<int64_t> input_split_sizes, size_t tile_bytes,
              uint32_t num_flows) {
             return self.submit_alltoallv_out(
-                tensor_from_python(output, "output"),
-                tensor_from_python(input, "input"),
+                UKernel::CCL::Python::tensor_from_python(output, "output"),
+                UKernel::CCL::Python::tensor_from_python(input, "input"),
                 std::move(output_split_sizes), std::move(input_split_sizes),
                 tile_bytes, num_flows);
           },
@@ -766,7 +768,7 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
           "allreduce",
           [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,
              uint32_t num_flows) {
-            self.allreduce(tensor_from_python(tensor, "tensor"), tile_bytes,
+            self.allreduce(UKernel::CCL::Python::tensor_from_python(tensor, "tensor"), tile_bytes,
                            num_flows);
           },
           nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
@@ -775,7 +777,7 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
           "alltoall",
           [](ProcessGroup& self, nb::handle tensor, size_t tile_bytes,
              uint32_t num_flows) {
-            self.alltoall(tensor_from_python(tensor, "tensor"), tile_bytes,
+            self.alltoall(UKernel::CCL::Python::tensor_from_python(tensor, "tensor"), tile_bytes,
                           num_flows);
           },
           nb::arg("tensor"), nb::arg("tile_bytes") = 64ull << 10,
@@ -784,8 +786,8 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
           "alltoall_out",
           [](ProcessGroup& self, nb::handle output, nb::handle input,
              size_t tile_bytes, uint32_t num_flows) {
-            self.alltoall_out(tensor_from_python(output, "output"),
-                              tensor_from_python(input, "input"), tile_bytes,
+            self.alltoall_out(UKernel::CCL::Python::tensor_from_python(output, "output"),
+                              UKernel::CCL::Python::tensor_from_python(input, "input"), tile_bytes,
                               num_flows);
           },
           nb::arg("output"), nb::arg("input"),
@@ -797,8 +799,8 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
              std::vector<int64_t> input_split_sizes, size_t tile_bytes,
              uint32_t num_flows) {
             self.alltoallv_out(
-                tensor_from_python(output, "output"),
-                tensor_from_python(input, "input"),
+                UKernel::CCL::Python::tensor_from_python(output, "output"),
+                UKernel::CCL::Python::tensor_from_python(input, "input"),
                 std::move(output_split_sizes), std::move(input_split_sizes),
                 tile_bytes, num_flows);
           },

@@ -22,7 +22,7 @@ def main() -> None:
         world_size=world,
         gpu_id=local_rank,
         exchanger_ip=os.getenv("MASTER_ADDR", "127.0.0.1"),
-        exchanger_port=env_int("MASTER_PORT", 29500),
+        exchanger_port=env_int("EXCHANGER_PORT", 29600),
         transport="auto",
     )
 

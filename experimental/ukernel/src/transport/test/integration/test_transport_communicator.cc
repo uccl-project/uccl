@@ -31,7 +31,6 @@ using UKernel::Transport::TestUtil::require;
 using UKernel::Transport::TestUtil::run_case;
 
 constexpr size_t kMessageBytes = 4 * 1024;
-constexpr std::chrono::seconds kAcceptTimeout(30);
 constexpr uint64_t kNamedMrGeneration = 1;
 
 void fill_pattern(std::vector<uint8_t>& buf, uint8_t seed) {
@@ -52,14 +51,16 @@ bool check_pattern(std::vector<uint8_t> const& buf, uint8_t seed) {
   return true;
 }
 
-void accept_with_retry(std::shared_ptr<Communicator> const& comm, int peer_rank,
-                       char const* what) {
-  auto deadline = std::chrono::steady_clock::now() + kAcceptTimeout;
-  while (std::chrono::steady_clock::now() < deadline) {
-    if (comm->accept_from(peer_rank)) return;
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+bool setup_bidirectional_peer(std::shared_ptr<Communicator> const& comm,
+                              int rank, int peer_rank) {
+  if (rank < peer_rank) {
+    if (!comm->connect_to(peer_rank)) return false;
+    if (!comm->accept_from(peer_rank)) return false;
+    return true;
   }
-  require(false, what);
+  if (!comm->accept_from(peer_rank)) return false;
+  if (!comm->connect_to(peer_rank)) return false;
+  return true;
 }
 
 std::shared_ptr<Communicator> make_communicator(
@@ -79,7 +80,8 @@ int run_exchange_client(std::string const& exchanger_ip, int exchanger_port,
   auto comm =
       make_communicator(kClientGpu, kClientRank, kWorldSize, exchanger_ip,
                         exchanger_port, preferred);
-  require(comm->connect_to(kServerRank), "client connect_to failed");
+  require(setup_bidirectional_peer(comm, kClientRank, kServerRank),
+          "client bidirectional connect/accept failed");
 
   GPU_RT_CHECK(gpuSetDevice(kClientGpu));
   void* sendbuf_d = nullptr;
@@ -116,7 +118,8 @@ int run_exchange_server(std::string const& exchanger_ip, int exchanger_port,
   auto comm =
       make_communicator(kServerGpu, kServerRank, kWorldSize, exchanger_ip,
                         exchanger_port, preferred);
-  accept_with_retry(comm, kClientRank, "server accept_from failed");
+  require(setup_bidirectional_peer(comm, kServerRank, kClientRank),
+          "server bidirectional connect/accept failed");
 
   GPU_RT_CHECK(gpuSetDevice(kServerGpu));
   void* recvbuf_d = nullptr;

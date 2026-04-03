@@ -53,22 +53,6 @@ float* local_buffer_ptr(SimRankState& state, BufferRef const& ref) {
   throw std::invalid_argument("buffer id is not addressable in simulator");
 }
 
-float const* local_buffer_ptr(SimRankState const& state, BufferRef const& ref) {
-  if (ref.kind != BufferKind::Local) {
-    throw std::invalid_argument(
-        "remote ref is not addressable as a local buffer");
-  }
-  switch (ref.buffer_id) {
-    case kDefaultInputBufferId:
-      return state.tensor.data() + ref.offset_bytes / sizeof(float);
-    case kDefaultScratchBufferId:
-      return state.staging.data() + ref.offset_bytes / sizeof(float);
-    default:
-      break;
-  }
-  throw std::invalid_argument("buffer id is not addressable in simulator");
-}
-
 void complete_sim_op(SimRankState& state, uint32_t op_id) {
   if (state.completed[op_id]) return;
   state.completed[op_id] = true;
