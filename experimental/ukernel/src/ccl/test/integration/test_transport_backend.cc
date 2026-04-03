@@ -269,16 +269,24 @@ int run_rank(Options const& opts) {
   GPU_RT_CHECK(gpuMemset(tensor.ptr, 0, opts.bytes));
   GPU_RT_CHECK(gpuMemset(staging.ptr, 0, opts.bytes));
 
-  auto memory = std::make_shared<CollectiveMemory>();
-  memory->tensor.local_rank = opts.rank;
-  memory->tensor.local_ptr = tensor.ptr;
-  memory->tensor.bytes = opts.bytes;
-  memory->tensor.layout.dtype = ScalarType::Float32;
-  memory->tensor.peer_views.resize(static_cast<size_t>(opts.world_size));
-  memory->staging.local_ptr = staging.ptr;
-  memory->staging.bytes = opts.bytes;
-  memory->staging.layout.dtype = ScalarType::Float32;
-  memory->staging.peer_views.resize(static_cast<size_t>(opts.world_size));
+  auto memory = std::make_shared<CollectiveBinding>();
+  memory->registry = std::make_shared<BufferRegistry>();
+  memory->registry->local_rank = opts.rank;
+  memory->roles.input_buffer_id = 7;
+  memory->roles.scratch_buffer_id = 11;
+  memory->roles.validate();
+  BufferId input_id = memory->buffer_id(CollectiveBufferRole::Input);
+  BufferId scratch_id = memory->buffer_id(CollectiveBufferRole::Scratch);
+  RegisteredBuffer& tensor_buf = memory->ensure_buffer(input_id);
+  tensor_buf.local_ptr = tensor.ptr;
+  tensor_buf.bytes = opts.bytes;
+  tensor_buf.layout.dtype = ScalarType::Float32;
+  tensor_buf.peer_views.resize(static_cast<size_t>(opts.world_size));
+  RegisteredBuffer& staging_buf = memory->ensure_buffer(scratch_id);
+  staging_buf.local_ptr = staging.ptr;
+  staging_buf.bytes = opts.bytes;
+  staging_buf.layout.dtype = ScalarType::Float32;
+  staging_buf.peer_views.resize(static_cast<size_t>(opts.world_size));
 
   TransportBackendConfig cfg{};
   cfg.gpu_id = opts.gpu;
@@ -290,7 +298,7 @@ int run_rank(Options const& opts) {
   cfg.communicator_config->local_id = opts.rank;
   cfg.communicator_config->preferred_transport = parse_transport(opts.transport);
 
-  CommunicatorTransportBackend backend(cfg, memory);
+  CommunicatorTransportBackend backend(cfg);
 
   std::vector<float> tensor_values(opts.bytes / sizeof(float), 0.0f);
   std::vector<float> staging_values(opts.bytes / sizeof(float), 0.0f);
@@ -317,12 +325,12 @@ int run_rank(Options const& opts) {
                               : ExecOpKind::TransportRecv;
   op1.tile.flow_index = 0;
   op1.tile.size_bytes = opts.bytes;
-  op1.src = (opts.rank == 0) ? BufferRef{BufferKind::Tensor, 0, -1}
-                             : BufferRef{BufferKind::PeerStaging, 0, 0};
-  op1.dst = (opts.rank == 0) ? BufferRef{BufferKind::PeerStaging, 0, 1}
-                             : BufferRef{BufferKind::Staging, 0, -1};
-  backend.validate(make_single_op_plan(opts.rank, opts.world_size, op1));
-  BackendToken token1 = backend.submit(op1);
+  op1.src = (opts.rank == 0) ? local_buffer_ref(input_id, 0)
+                             : remote_buffer_ref(scratch_id, 0, 0);
+  op1.dst = (opts.rank == 0) ? remote_buffer_ref(scratch_id, 1, 0)
+                             : local_buffer_ref(scratch_id, 0);
+  backend.validate(make_single_op_plan(opts.rank, opts.world_size, op1), *memory);
+  BackendToken token1 = backend.submit(op1, *memory);
   wait_for_token(backend, token1, std::chrono::seconds(10));
   backend.release(token1);
   socket_barrier(opts.exchanger_ip, opts.exchanger_port + 2, opts.rank,
@@ -355,12 +363,12 @@ int run_rank(Options const& opts) {
                               : ExecOpKind::TransportRecv;
   op2.tile.flow_index = 0;
   op2.tile.size_bytes = opts.bytes;
-  op2.src = (opts.rank == 1) ? BufferRef{BufferKind::Staging, 0, -1}
-                             : BufferRef{BufferKind::PeerTensor, 0, 1};
-  op2.dst = (opts.rank == 1) ? BufferRef{BufferKind::PeerTensor, 0, 0}
-                             : BufferRef{BufferKind::Tensor, 0, -1};
-  backend.validate(make_single_op_plan(opts.rank, opts.world_size, op2));
-  BackendToken token2 = backend.submit(op2);
+  op2.src = (opts.rank == 1) ? local_buffer_ref(scratch_id, 0)
+                             : remote_buffer_ref(input_id, 1, 0);
+  op2.dst = (opts.rank == 1) ? remote_buffer_ref(input_id, 0, 0)
+                             : local_buffer_ref(input_id, 0);
+  backend.validate(make_single_op_plan(opts.rank, opts.world_size, op2), *memory);
+  BackendToken token2 = backend.submit(op2, *memory);
   wait_for_token(backend, token2, std::chrono::seconds(10));
   backend.release(token2);
   socket_barrier(opts.exchanger_ip, opts.exchanger_port + 4, opts.rank,

@@ -26,6 +26,12 @@ namespace CCL {
 
 namespace {
 
+constexpr BufferId kTestInputBufferId = 7;
+constexpr BufferId kTestScratchBufferId = 11;
+constexpr CollectiveBufferRoles kTestRoles{kTestInputBufferId,
+                                           kTestInputBufferId,
+                                           kTestScratchBufferId};
+
 size_t ceil_div(size_t a, size_t b) { return b == 0 ? 0 : (a + b - 1) / b; }
 
 size_t default_test_bytes_per_rank(int world_size) {
@@ -265,32 +271,39 @@ struct DeviceBuffer {
   DeviceBuffer& operator=(DeviceBuffer const&) = delete;
 };
 
-CollectiveMemory build_collective_memory(int rank, int world_size,
-                                         void* tensor_ptr, size_t tensor_bytes,
-                                         void* staging_ptr,
-                                         size_t staging_bytes) {
-  CollectiveMemory memory;
-  memory.tensor.local_rank = rank;
-  memory.tensor.local_ptr = tensor_ptr;
-  memory.tensor.bytes = tensor_bytes;
-  memory.tensor.layout.sizes = {static_cast<int64_t>(tensor_bytes)};
-  memory.tensor.layout.strides = {1};
-  memory.tensor.layout.dtype = ScalarType::Float32;
-  memory.tensor.peer_views.resize(static_cast<size_t>(world_size));
-  memory.staging.local_ptr = staging_ptr;
-  memory.staging.local_mr_id = 0;
-  memory.staging.bytes = staging_bytes;
-  memory.staging.layout.sizes = {static_cast<int64_t>(staging_bytes)};
-  memory.staging.layout.strides = {1};
-  memory.staging.layout.dtype = ScalarType::Float32;
-  memory.staging.peer_views.resize(static_cast<size_t>(world_size));
+CollectiveBinding build_collective_memory(int rank, int world_size,
+                                          void* tensor_ptr,
+                                          size_t tensor_bytes,
+                                          void* staging_ptr,
+                                          size_t staging_bytes) {
+  CollectiveBinding binding;
+  binding.registry = std::make_shared<BufferRegistry>();
+  binding.registry->local_rank = rank;
+  binding.roles = kTestRoles;
+  RegisteredBuffer& tensor =
+      binding.ensure_buffer(binding.buffer_id(CollectiveBufferRole::Input));
+  tensor.local_ptr = tensor_ptr;
+  tensor.bytes = tensor_bytes;
+  tensor.layout.sizes = {static_cast<int64_t>(tensor_bytes)};
+  tensor.layout.strides = {1};
+  tensor.layout.dtype = ScalarType::Float32;
+  tensor.peer_views.resize(static_cast<size_t>(world_size));
+  RegisteredBuffer& staging =
+      binding.ensure_buffer(binding.buffer_id(CollectiveBufferRole::Scratch));
+  staging.local_ptr = staging_ptr;
+  staging.local_mr_id = 0;
+  staging.bytes = staging_bytes;
+  staging.layout.sizes = {static_cast<int64_t>(staging_bytes)};
+  staging.layout.strides = {1};
+  staging.layout.dtype = ScalarType::Float32;
+  staging.peer_views.resize(static_cast<size_t>(world_size));
 
   for (int peer = 0; peer < world_size; ++peer) {
-    memory.tensor.peer_views[static_cast<size_t>(peer)].same_node = true;
-    memory.staging.peer_views[static_cast<size_t>(peer)].same_node = true;
+    tensor.peer_views[static_cast<size_t>(peer)].same_node = true;
+    staging.peer_views[static_cast<size_t>(peer)].same_node = true;
   }
 
-  return memory;
+  return binding;
 }
 
 void init_allreduce_input(std::vector<float>& host, int rank) {
@@ -423,11 +436,13 @@ int run_rank(Options const& opts) {
   require(opts.tile_bytes > 0, "tile_bytes must be > 0");
   require(opts.bytes_per_rank % sizeof(float) == 0,
           "bytes_per_rank must be a multiple of sizeof(float)");
-  require(opts.bytes_per_rank %
-                  (static_cast<size_t>(opts.world_size) * sizeof(float)) ==
-              0,
-          "bytes_per_rank must be a multiple of world_size * sizeof(float) "
-          "for the float-based collective tests");
+  if (opts.collective == CollectiveKind::AllToAll) {
+    require(opts.bytes_per_rank %
+                    (static_cast<size_t>(opts.world_size) * sizeof(float)) ==
+                0,
+            "alltoall test requires bytes_per_rank to be a multiple of "
+            "world_size * sizeof(float)");
+  }
 
   GPU_RT_CHECK(gpuSetDevice(opts.gpu));
 
@@ -444,9 +459,9 @@ int run_rank(Options const& opts) {
   }
   upload_tensor(tensor.ptr, input);
 
-  CollectiveMemory memory = build_collective_memory(
+  auto memory = std::make_shared<CollectiveBinding>(build_collective_memory(
       opts.rank, opts.world_size, tensor.ptr, opts.bytes_per_rank,
-      staging.ptr, opts.bytes_per_rank);
+      staging.ptr, opts.bytes_per_rank));
 
   ExecutorConfig executor_cfg{};
   executor_cfg.gpu_id = opts.gpu;
@@ -464,7 +479,7 @@ int run_rank(Options const& opts) {
   executor_cfg.threads_per_block = 256;
   executor_cfg.fifo_capacity = 64;
   std::fprintf(stderr, "[rank %d] executor init\n", opts.rank);
-  Executor executor(memory, executor_cfg);
+  Executor executor(executor_cfg);
 
   CollectiveConfig config =
       Testing::make_test_config(opts.world_size, opts.rank, opts.bytes_per_rank,
@@ -484,8 +499,8 @@ int run_rank(Options const& opts) {
   std::fprintf(stderr, "[rank %d] submit %s\n", opts.rank,
                collective_name(opts.collective));
   CollectiveOpHandle handle = (opts.collective == CollectiveKind::AllReduce)
-                                  ? executor.submit_allreduce(config)
-                                  : executor.submit_alltoall(config);
+                                  ? executor.submit_allreduce(config, memory)
+                                  : executor.submit_alltoall(config, memory);
   wait_for_collective(executor, handle, std::chrono::seconds(60));
   if (executor.status(handle) != CollectiveOpStatus::Completed) {
     std::string error = executor.error_message(handle);

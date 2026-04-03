@@ -15,6 +15,12 @@ namespace CCL {
 
 namespace {
 
+constexpr BufferId kTestInputBufferId = 7;
+constexpr BufferId kTestScratchBufferId = 11;
+constexpr CollectiveBufferRoles kTestRoles{kTestInputBufferId,
+                                           kTestInputBufferId,
+                                           kTestScratchBufferId};
+
 [[noreturn]] void fail(std::string const& msg) { throw std::runtime_error(msg); }
 
 void require(bool cond, std::string const& msg) {
@@ -98,15 +104,16 @@ void wait_for_token(DeviceBackend& backend, BackendToken token,
 }
 
 BackendToken submit_and_wait(DeviceBackend& backend, ExecOp const& op,
+                             CollectiveBinding& binding,
                              std::chrono::milliseconds timeout) {
-  BackendToken token = backend.submit(op);
+  BackendToken token = backend.submit(op, binding);
   wait_for_token(backend, token, timeout);
   return token;
 }
 
 ExecOp make_device_op(uint32_t op_id, ExecOpKind kind, uint32_t flow_index,
-                      size_t offset_bytes, size_t size_bytes, BufferKind src,
-                      BufferKind dst,
+                      size_t offset_bytes, size_t size_bytes, BufferId src,
+                      BufferId dst,
                       ReductionKind reduction = ReductionKind::None) {
   ExecOp op;
   op.op_id = op_id;
@@ -114,9 +121,11 @@ ExecOp make_device_op(uint32_t op_id, ExecOpKind kind, uint32_t flow_index,
   op.tile.flow_index = flow_index;
   op.tile.offset_bytes = offset_bytes;
   op.tile.size_bytes = size_bytes;
-  op.src.kind = src;
+  op.src.kind = BufferKind::Local;
+  op.src.buffer_id = src;
   op.src.offset_bytes = offset_bytes;
-  op.dst.kind = dst;
+  op.dst.kind = BufferKind::Local;
+  op.dst.buffer_id = dst;
   op.dst.offset_bytes = offset_bytes;
   op.dtype = ScalarType::Float32;
   op.reduction = reduction;
@@ -151,23 +160,29 @@ void verify_sum_reduce(std::vector<float> const& out,
   }
 }
 
-std::shared_ptr<CollectiveMemory> make_memory(int rank, void* tensor_ptr,
-                                              size_t tensor_bytes,
-                                              void* staging_ptr,
-                                              size_t staging_bytes) {
-  auto memory = std::make_shared<CollectiveMemory>();
-  memory->tensor.local_rank = rank;
-  memory->tensor.local_ptr = tensor_ptr;
-  memory->tensor.bytes = tensor_bytes;
-  memory->tensor.layout.sizes = {static_cast<int64_t>(tensor_bytes)};
-  memory->tensor.layout.strides = {1};
-  memory->tensor.layout.dtype = ScalarType::Float32;
-  memory->staging.local_ptr = staging_ptr;
-  memory->staging.bytes = staging_bytes;
-  memory->staging.layout.sizes = {static_cast<int64_t>(staging_bytes)};
-  memory->staging.layout.strides = {1};
-  memory->staging.layout.dtype = ScalarType::Float32;
-  return memory;
+std::shared_ptr<CollectiveBinding> make_memory(int rank, void* tensor_ptr,
+                                               size_t tensor_bytes,
+                                               void* staging_ptr,
+                                               size_t staging_bytes) {
+  auto binding = std::make_shared<CollectiveBinding>();
+  binding->registry = std::make_shared<BufferRegistry>();
+  binding->registry->local_rank = rank;
+  binding->roles = kTestRoles;
+  RegisteredBuffer& tensor =
+      binding->ensure_buffer(binding->buffer_id(CollectiveBufferRole::Input));
+  tensor.local_ptr = tensor_ptr;
+  tensor.bytes = tensor_bytes;
+  tensor.layout.sizes = {static_cast<int64_t>(tensor_bytes)};
+  tensor.layout.strides = {1};
+  tensor.layout.dtype = ScalarType::Float32;
+  RegisteredBuffer& staging =
+      binding->ensure_buffer(binding->buffer_id(CollectiveBufferRole::Scratch));
+  staging.local_ptr = staging_ptr;
+  staging.bytes = staging_bytes;
+  staging.layout.sizes = {static_cast<int64_t>(staging_bytes)};
+  staging.layout.strides = {1};
+  staging.layout.dtype = ScalarType::Float32;
+  return binding;
 }
 
 void test_device_copy() {
@@ -185,11 +200,11 @@ void test_device_copy() {
   zero_buffer(staging.ptr, kBytes);
 
   auto memory = make_memory(0, tensor.ptr, kBytes, staging.ptr, kBytes);
-  DeviceBackend backend(memory);
+  DeviceBackend backend;
 
   ExecOp op = make_device_op(0, ExecOpKind::DeviceCopy, 0, 0, kBytes,
-                             BufferKind::Tensor, BufferKind::Staging);
-  BackendToken token = submit_and_wait(backend, op, std::chrono::seconds(5));
+                             kTestInputBufferId, kTestScratchBufferId);
+  BackendToken token = submit_and_wait(backend, op, *memory, std::chrono::seconds(5));
   backend.release(token);
   backend.stop(0);
 
@@ -213,12 +228,12 @@ void test_device_reduce_sum() {
   upload_floats(staging.ptr, src);
 
   auto memory = make_memory(0, tensor.ptr, kBytes, staging.ptr, kBytes);
-  DeviceBackend backend(memory);
+  DeviceBackend backend;
 
   ExecOp op = make_device_op(0, ExecOpKind::DeviceReduce, 0, 0, kBytes,
-                             BufferKind::Staging, BufferKind::Tensor,
+                             kTestScratchBufferId, kTestInputBufferId,
                              ReductionKind::Sum);
-  BackendToken token = submit_and_wait(backend, op, std::chrono::seconds(5));
+  BackendToken token = submit_and_wait(backend, op, *memory, std::chrono::seconds(5));
   backend.release(token);
   backend.stop(0);
   std::vector<float> out = download_floats(tensor.ptr, kBytes);
@@ -245,7 +260,7 @@ void test_device_reduce_pipeline_same_flow() {
   upload_floats(staging.ptr, src);
 
   auto memory = make_memory(0, tensor.ptr, kBytes, staging.ptr, kBytes);
-  DeviceBackend backend(memory);
+  DeviceBackend backend;
 
   std::vector<BackendToken> tokens;
   tokens.reserve(kTiles);
@@ -254,9 +269,9 @@ void test_device_reduce_pipeline_same_flow() {
     ExecOp op = make_device_op(static_cast<uint32_t>(tile),
                                ExecOpKind::DeviceReduce, 0, offset,
                                kTileElems * sizeof(float),
-                               BufferKind::Staging, BufferKind::Tensor,
+                               kTestScratchBufferId, kTestInputBufferId,
                                ReductionKind::Sum);
-    tokens.push_back(backend.submit(op));
+    tokens.push_back(backend.submit(op, *memory));
   }
 
   for (BackendToken token : tokens) {

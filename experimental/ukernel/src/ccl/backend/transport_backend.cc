@@ -1,14 +1,18 @@
 #include "transport_backend.h"
 #include "../../include/transport.h"
+#include <atomic>
 #include <chrono>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 namespace UKernel {
 namespace CCL {
 
 namespace {
+
+std::atomic<uint64_t> g_next_transport_backend_cache_key{1};
 
 void validate_span(char const* what, size_t offset, size_t bytes,
                    size_t capacity) {
@@ -18,8 +22,7 @@ void validate_span(char const* what, size_t offset, size_t bytes,
 }
 
 bool is_peer_ref(BufferRef const& ref) {
-  return ref.kind == BufferKind::PeerTensor ||
-         ref.kind == BufferKind::PeerStaging;
+  return ref.kind == BufferKind::Remote;
 }
 
 int transport_peer_rank(ExecOp const& op) {
@@ -35,19 +38,15 @@ int transport_peer_rank(ExecOp const& op) {
 }  // namespace
 
 CommunicatorTransportBackend::CommunicatorTransportBackend(
-    TransportBackendConfig const& config,
-    std::shared_ptr<CollectiveMemory> memory)
+    TransportBackendConfig const& config)
     : communicator_(std::make_unique<UKernel::Transport::Communicator>(
           config.gpu_id, config.rank, config.world_size,
           config.communicator_config != nullptr
               ? config.communicator_config
               : std::make_shared<UKernel::Transport::CommunicatorConfig>())),
-      memory_(std::move(memory)),
+      backend_cache_key_(g_next_transport_backend_cache_key.fetch_add(
+          1, std::memory_order_relaxed)),
       peer_paths_(static_cast<size_t>(communicator_->world_size())) {
-  if (memory_ == nullptr) {
-    throw std::invalid_argument(
-        "transport backend requires collective memory");
-  }
   completion_notifier_ = communicator_->register_completion_notifier(
       [this](unsigned request_id, std::chrono::steady_clock::time_point) {
         on_transport_completion(request_id);
@@ -69,20 +68,16 @@ CommunicatorTransportBackend::communicator() const {
   return *communicator_;
 }
 
-CollectiveMemory& CommunicatorTransportBackend::memory() { return *memory_; }
-
-CollectiveMemory const& CommunicatorTransportBackend::memory() const {
-  return *memory_;
-}
-
-void CommunicatorTransportBackend::validate(ExecutionPlan const& plan) const {
-  ensure_memory_bindings_initialized();
+void CommunicatorTransportBackend::validate(ExecutionPlan const& plan,
+                                            CollectiveBinding& binding) const {
+  ensure_memory_bindings_initialized(binding);
   ensure_plan_paths(plan);
   if (plan.staging_bytes_required != 0 &&
-      memory_->staging.local_ptr == nullptr) {
+      binding.role_buffer(CollectiveBufferRole::Scratch).local_ptr == nullptr) {
     throw std::invalid_argument("transport backend staging buffer is missing");
   }
-  if (plan.staging_bytes_required > memory_->staging.bytes) {
+  if (plan.staging_bytes_required >
+      binding.role_buffer(CollectiveBufferRole::Scratch).bytes) {
     throw std::invalid_argument(
         "transport backend staging capacity is insufficient");
   }
@@ -164,70 +159,99 @@ void CommunicatorTransportBackend::ensure_peer_paths(int peer_rank,
   }
 }
 
-void CommunicatorTransportBackend::ensure_memory_bindings_initialized() const {
-  if (bindings_initialized_) return;
+void CommunicatorTransportBackend::ensure_memory_bindings_initialized(
+    CollectiveBinding& binding) const {
+  auto fully_bound = [&]() {
+    if (binding.registry == nullptr) return false;
+    if (binding.transport_initialized_backend_key != backend_cache_key_) {
+      return false;
+    }
+    if (binding.transport_initialized_signature !=
+        binding.transport_signature()) {
+      return false;
+    }
+    for (BufferId id : binding.registry->registered_buffer_ids()) {
+      RegisteredBuffer const& buffer = binding.buffer(id);
+      if (buffer.peer_views.size() !=
+          static_cast<size_t>(communicator_->world_size())) {
+        return false;
+      }
+      if (buffer.local_ptr == nullptr || buffer.bytes == 0 ||
+          !buffer.remotely_accessible) {
+        continue;
+      }
+      if (buffer.local_mr_id == 0) {
+        return false;
+      }
+      for (int peer = 0; peer < communicator_->world_size(); ++peer) {
+        if (peer == communicator_->rank()) continue;
+        if (buffer.peer_views[static_cast<size_t>(peer)].mr_id == 0) {
+          return false;
+        }
+      }
+    }
+    return true;
+  };
+  if (fully_bound()) return;
   std::lock_guard<std::mutex> lock(init_mu_);
-  if (bindings_initialized_) return;
-  initialize_memory_bindings();
-  bindings_initialized_ = true;
+  if (fully_bound()) return;
+  if (binding.transport_initialized_backend_key != backend_cache_key_ ||
+      binding.transport_initialized_signature !=
+          binding.transport_signature()) {
+    binding.invalidate_transport_cache();
+    binding.transport_binding_generation = next_binding_generation_++;
+  } else if (binding.transport_binding_generation == 0) {
+    binding.transport_binding_generation = next_binding_generation_++;
+  }
+  initialize_memory_bindings(binding);
 }
 
-void CommunicatorTransportBackend::initialize_memory_bindings() const {
-  if (memory_->tensor.local_ptr == nullptr || memory_->tensor.bytes == 0) {
+void CommunicatorTransportBackend::initialize_memory_bindings(
+    CollectiveBinding& binding) const {
+  if (!binding.has_buffer(binding.buffer_id(CollectiveBufferRole::Input))) {
     throw std::invalid_argument(
-        "transport backend requires a valid local tensor buffer");
+        "transport backend requires a registered input buffer");
   }
 
-  memory_->tensor.local_rank = communicator_->rank();
-  memory_->tensor.peer_views.resize(
-      static_cast<size_t>(communicator_->world_size()));
-  memory_->staging.peer_views.resize(
-      static_cast<size_t>(communicator_->world_size()));
-
-  Transport::MR tensor_mr =
-      communicator_->reg_mr(memory_->tensor.local_ptr, memory_->tensor.bytes);
-  memory_->tensor.local_mr_id = tensor_mr.id;
-  Transport::MR staging_mr{};
-  bool has_staging = memory_->staging.local_ptr != nullptr &&
-                     memory_->staging.bytes != 0;
-
-  if (has_staging) {
-    staging_mr =
-        communicator_->reg_mr(memory_->staging.local_ptr, memory_->staging.bytes);
-    memory_->staging.local_mr_id = staging_mr.id;
+  std::vector<BufferId> buffer_ids = binding.registry->registered_buffer_ids();
+  Transport::NamedMRInfos local_infos;
+  local_infos.generation = binding.transport_binding_generation;
+  local_infos.entries.reserve(buffer_ids.size());
+  for (BufferId id : buffer_ids) {
+    RegisteredBuffer& buffer = binding.buffer(id);
+    buffer.peer_views.resize(static_cast<size_t>(communicator_->world_size()));
+    Transport::MR local_mr{};
+    if (buffer.local_ptr != nullptr && buffer.bytes != 0 &&
+        buffer.remotely_accessible) {
+      local_mr = communicator_->reg_mr(buffer.local_ptr, buffer.bytes);
+      buffer.local_mr_id = local_mr.id;
+    } else {
+      buffer.local_mr_id = 0;
+    }
+    local_infos.entries.push_back(Transport::NamedMR{id, local_mr});
   }
 
   for (int peer = 0; peer < communicator_->world_size(); ++peer) {
     bool same_node =
         (peer != communicator_->rank()) && communicator_->same_host(peer);
-    auto& tensor_view = memory_->tensor.peer_views[static_cast<size_t>(peer)];
-    auto& staging_view = memory_->staging.peer_views[static_cast<size_t>(peer)];
-    tensor_view.same_node = same_node;
-    staging_view.same_node = same_node;
-    if (peer == communicator_->rank()) continue;
-    if (!communicator_->notify_mr(peer, tensor_mr)) {
-      throw std::runtime_error("transport backend notify_mr failed for peer " +
-                               std::to_string(peer));
+    for (BufferId id : buffer_ids) {
+      RegisteredBuffer& buffer = binding.buffer(id);
+      buffer.peer_views[static_cast<size_t>(peer)].same_node = same_node;
     }
-    if (!communicator_->notify_mr(peer, staging_mr)) {
+    if (peer == communicator_->rank()) continue;
+    if (!communicator_->notify_named_mrs(peer, binding.transport_binding_generation,
+                                         local_infos)) {
       throw std::runtime_error(
-          "transport backend notify staging_mr failed for peer " +
+          "transport backend notify_named_mrs failed for peer " +
           std::to_string(peer));
     }
-    if (same_node) {
-      if (!communicator_->notify_ipc_buffer(peer, tensor_mr.id,
-                                            memory_->tensor.local_ptr,
-                                            memory_->tensor.bytes)) {
+    for (auto const& entry : local_infos.entries) {
+      RegisteredBuffer const& buffer = binding.buffer(entry.buffer_id);
+      if (same_node && entry.mr.id != 0 &&
+          !communicator_->notify_ipc_buffer(peer, entry.mr.id, buffer.local_ptr,
+                                            buffer.bytes)) {
         throw std::runtime_error(
-            "transport backend notify tensor ipc buffer failed for peer " +
-            std::to_string(peer));
-      }
-      if (has_staging &&
-          !communicator_->notify_ipc_buffer(peer, staging_mr.id,
-                                            memory_->staging.local_ptr,
-                                            memory_->staging.bytes)) {
-        throw std::runtime_error(
-            "transport backend notify staging ipc buffer failed for peer " +
+            "transport backend notify ipc buffer failed for peer " +
             std::to_string(peer));
       }
     }
@@ -235,62 +259,79 @@ void CommunicatorTransportBackend::initialize_memory_bindings() const {
 
   for (int peer = 0; peer < communicator_->world_size(); ++peer) {
     if (peer == communicator_->rank()) continue;
-    Transport::MR remote_tensor_mr{};
-    if (!communicator_->wait_mr_notify(peer, remote_tensor_mr)) {
+    Transport::NamedMRInfos remote_infos;
+    if (!communicator_->wait_named_mrs(peer, binding.transport_binding_generation,
+                                       remote_infos)) {
       throw std::runtime_error(
-          "transport backend wait tensor_mr_notify failed for peer " +
-          std::to_string(peer));
-    }
-    memory_->tensor.peer_views[static_cast<size_t>(peer)].mr_id =
-        remote_tensor_mr.id;
-    if (memory_->tensor.peer_views[static_cast<size_t>(peer)].same_node &&
-        remote_tensor_mr.id != 0 &&
-        !communicator_->wait_ipc_buffer(peer, remote_tensor_mr.id)) {
-      throw std::runtime_error(
-          "transport backend wait tensor ipc buffer failed for peer " +
+          "transport backend wait_named_mrs failed for peer " +
           std::to_string(peer));
     }
 
-    Transport::MR remote_staging_mr{};
-    if (!communicator_->wait_mr_notify(peer, remote_staging_mr)) {
-      throw std::runtime_error(
-          "transport backend wait staging_mr_notify failed for peer " +
-          std::to_string(peer));
+    std::unordered_map<BufferId, Transport::MR> remote_mr_by_id;
+    remote_mr_by_id.reserve(remote_infos.entries.size());
+    for (BufferId id : buffer_ids) {
+      binding.buffer(id).peer_views[static_cast<size_t>(peer)].mr_id = 0;
     }
-    memory_->staging.peer_views[static_cast<size_t>(peer)].mr_id =
-        remote_staging_mr.id;
-    if (memory_->staging.peer_views[static_cast<size_t>(peer)].same_node &&
-        remote_staging_mr.id != 0 &&
-        !communicator_->wait_ipc_buffer(peer, remote_staging_mr.id)) {
-      throw std::runtime_error(
-          "transport backend wait staging ipc buffer failed for peer " +
-          std::to_string(peer));
+    for (auto const& entry : remote_infos.entries) {
+      if (!binding.has_buffer(entry.buffer_id)) {
+        throw std::runtime_error(
+            "transport backend received unexpected remote buffer id " +
+            std::to_string(entry.buffer_id) + " from peer " +
+            std::to_string(peer));
+      }
+      auto [it, inserted] = remote_mr_by_id.emplace(entry.buffer_id, entry.mr);
+      if (!inserted) {
+        throw std::runtime_error(
+            "transport backend received duplicate remote buffer id " +
+            std::to_string(entry.buffer_id) + " from peer " +
+            std::to_string(peer));
+      }
+    }
+    for (BufferId id : buffer_ids) {
+      auto it = remote_mr_by_id.find(id);
+      if (it == remote_mr_by_id.end()) {
+        throw std::runtime_error(
+            "transport backend missing remote buffer id " + std::to_string(id) +
+            " from peer " + std::to_string(peer));
+      }
+      RegisteredBuffer& buffer = binding.buffer(id);
+      buffer.peer_views[static_cast<size_t>(peer)].mr_id = it->second.id;
+      if (buffer.peer_views[static_cast<size_t>(peer)].same_node &&
+          it->second.id != 0 &&
+          !communicator_->wait_ipc_buffer(peer, it->second.id)) {
+        throw std::runtime_error(
+            "transport backend wait ipc buffer failed for peer " +
+            std::to_string(peer));
+      }
     }
   }
+  binding.transport_initialized_backend_key = backend_cache_key_;
+  binding.transport_initialized_signature = binding.transport_signature();
 }
 
 bool CommunicatorTransportBackend::supports(ExecOpKind kind) const {
   return kind == ExecOpKind::TransportSend || kind == ExecOpKind::TransportRecv;
 }
 
-BackendToken CommunicatorTransportBackend::submit(ExecOp const& op) {
+BackendToken CommunicatorTransportBackend::submit(ExecOp const& op,
+                                                  CollectiveBinding& binding) {
   if (!supports(op.kind)) {
     throw std::invalid_argument("unsupported op kind for transport backend");
   }
-  ensure_memory_bindings_initialized();
+  ensure_memory_bindings_initialized(binding);
 
   int peer_rank = resolve_peer_rank(op);
   BackendToken token{next_token_++};
   unsigned request_id = 0;
   if (op.kind == ExecOpKind::TransportSend) {
-    void const* src = resolve_const(op.src, op.tile.size_bytes);
+    void const* src = resolve_const(binding, op.src, op.tile.size_bytes);
     request_id =
         communicator_->isend(peer_rank, const_cast<void*>(src), 0,
                              op.tile.size_bytes,
-                             resolve_local_mr_id(op.src, op.tile.size_bytes),
-                             resolve_remote_mr_id(op.dst), true);
+                             resolve_local_mr_id(binding, op.src, op.tile.size_bytes),
+                             resolve_remote_mr_id(binding, op.dst), true);
   } else {
-    void* dst = resolve_mutable(op.dst, op.tile.size_bytes);
+    void* dst = resolve_mutable(binding, op.dst, op.tile.size_bytes);
     request_id = communicator_->irecv(peer_rank, dst, 0, op.tile.size_bytes,
                                       true);
   }
@@ -349,67 +390,49 @@ void CommunicatorTransportBackend::release(BackendToken token) {
   }
 }
 
-void* CommunicatorTransportBackend::resolve_mutable(BufferRef const& ref,
+void* CommunicatorTransportBackend::resolve_mutable(
+    CollectiveBinding const& binding, BufferRef const& ref,
                                                     size_t bytes) const {
-  switch (ref.kind) {
-    case BufferKind::Staging:
-      if (memory_->staging.local_ptr == nullptr) {
-        throw std::invalid_argument("transport staging buffer is missing");
-      }
-      validate_span("transport staging", ref.offset_bytes, bytes,
-                    memory_->staging.bytes);
-      return byte_offset(memory_->staging.local_ptr, ref.offset_bytes);
-    case BufferKind::Tensor:
-      if (memory_->tensor.local_ptr == nullptr) {
-        throw std::invalid_argument("transport local tensor is missing");
-      }
-      validate_span("transport local tensor", ref.offset_bytes, bytes,
-                    memory_->tensor.bytes);
-      return byte_offset(memory_->tensor.local_ptr, ref.offset_bytes);
-    case BufferKind::PeerTensor:
-    case BufferKind::PeerStaging:
-      break;
+  if (ref.kind != BufferKind::Local) {
+    throw std::invalid_argument(
+        "transport backend cannot bind remote destination buffer");
   }
-  throw std::invalid_argument("transport backend cannot bind remote destination buffer");
+  RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
+  if (buffer.local_ptr == nullptr) {
+    throw std::invalid_argument("transport local buffer is missing");
+  }
+  validate_span("transport local buffer", ref.offset_bytes, bytes,
+                buffer.bytes);
+  return byte_offset(buffer.local_ptr, ref.offset_bytes);
 }
 
-void const* CommunicatorTransportBackend::resolve_const(BufferRef const& ref,
+void const* CommunicatorTransportBackend::resolve_const(
+    CollectiveBinding const& binding, BufferRef const& ref,
                                                         size_t bytes) const {
-  switch (ref.kind) {
-    case BufferKind::Staging:
-      if (memory_->staging.local_ptr == nullptr) {
-        throw std::invalid_argument("transport staging buffer is missing");
-      }
-      validate_span("transport staging", ref.offset_bytes, bytes,
-                    memory_->staging.bytes);
-      return byte_offset(memory_->staging.local_ptr, ref.offset_bytes);
-    case BufferKind::Tensor:
-      if (memory_->tensor.local_ptr == nullptr) {
-        throw std::invalid_argument("transport local tensor is missing");
-      }
-      validate_span("transport local tensor", ref.offset_bytes, bytes,
-                    memory_->tensor.bytes);
-      return byte_offset(memory_->tensor.local_ptr, ref.offset_bytes);
-    case BufferKind::PeerTensor:
-    case BufferKind::PeerStaging:
-      break;
+  if (ref.kind != BufferKind::Local) {
+    throw std::invalid_argument(
+        "transport backend cannot bind remote source buffer");
   }
-  throw std::invalid_argument("transport backend cannot bind remote source buffer");
+  RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
+  if (buffer.local_ptr == nullptr) {
+    throw std::invalid_argument("transport local buffer is missing");
+  }
+  validate_span("transport local buffer", ref.offset_bytes, bytes,
+                buffer.bytes);
+  return byte_offset(buffer.local_ptr, ref.offset_bytes);
 }
 
-uint32_t CommunicatorTransportBackend::resolve_local_mr_id(BufferRef const& ref,
+uint32_t CommunicatorTransportBackend::resolve_local_mr_id(
+    CollectiveBinding const& binding, BufferRef const& ref,
                                                            size_t bytes) const {
-  if (ref.kind == BufferKind::Tensor) {
-    if (memory_->tensor.local_mr_id == 0) {
-      throw std::invalid_argument("transport local tensor MR id is missing");
-    }
-    return memory_->tensor.local_mr_id;
-  }
-  if (ref.kind == BufferKind::PeerTensor || ref.kind == BufferKind::PeerStaging) {
+  if (ref.kind == BufferKind::Remote) {
     throw std::invalid_argument("transport backend local MR requires local buffer ref");
   }
-
-  void* ptr = resolve_mutable(ref, bytes);
+  RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
+  if (buffer.local_mr_id != 0) {
+    return buffer.local_mr_id;
+  }
+  void* ptr = resolve_mutable(binding, ref, bytes);
   return communicator_->get_local_mr(ptr).id;
 }
 
@@ -432,28 +455,17 @@ int CommunicatorTransportBackend::resolve_peer_rank(ExecOp const& op) const {
 }
 
 uint32_t CommunicatorTransportBackend::resolve_remote_mr_id(
-    BufferRef const& ref) const {
+    CollectiveBinding const& binding, BufferRef const& ref) const {
   if (!is_peer_ref(ref) || ref.rank < 0) {
     throw std::invalid_argument("transport remote MR requires peer buffer ref");
   }
   int peer_rank = ref.rank;
+  RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
   if (peer_rank < 0 ||
-      static_cast<size_t>(peer_rank) >= memory_->tensor.peer_views.size()) {
+      static_cast<size_t>(peer_rank) >= buffer.peer_views.size()) {
     throw std::invalid_argument("transport peer rank out of range");
   }
-  uint32_t mr_id = 0;
-  switch (ref.kind) {
-    case BufferKind::PeerTensor:
-      mr_id = memory_->tensor.peer_views[static_cast<size_t>(peer_rank)].mr_id;
-      break;
-    case BufferKind::PeerStaging:
-      mr_id =
-          memory_->staging.peer_views[static_cast<size_t>(peer_rank)].mr_id;
-      break;
-    case BufferKind::Tensor:
-    case BufferKind::Staging:
-      break;
-  }
+  uint32_t mr_id = buffer.peer_views[static_cast<size_t>(peer_rank)].mr_id;
   if (mr_id == 0) {
     throw std::invalid_argument("transport remote MR id is missing");
   }

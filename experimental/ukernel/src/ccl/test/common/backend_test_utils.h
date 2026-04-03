@@ -18,32 +18,40 @@ namespace CCL {
 
 namespace Testing {
 
-inline CollectiveMemory make_test_memory(int rank, int nranks, size_t bytes) {
-  CollectiveMemory memory;
-  memory.tensor.local_rank = rank;
-  memory.tensor.bytes = bytes;
-  memory.tensor.layout.sizes = {static_cast<int64_t>(bytes)};
-  memory.tensor.layout.strides = {1};
-  memory.tensor.local_ptr = nullptr;
-  memory.tensor.local_mr_id = 1;
-  memory.tensor.peer_views.resize(static_cast<size_t>(nranks));
+inline CollectiveBinding make_test_memory(int rank, int nranks, size_t bytes,
+                                          CollectiveBufferRoles roles = {}) {
+  CollectiveBinding binding;
+  binding.registry = std::make_shared<BufferRegistry>();
+  binding.registry->local_rank = rank;
+  binding.roles = roles;
+  binding.roles.validate();
+  RegisteredBuffer& tensor =
+      binding.ensure_buffer(binding.buffer_id(CollectiveBufferRole::Input));
+  tensor.bytes = bytes;
+  tensor.layout.sizes = {static_cast<int64_t>(bytes)};
+  tensor.layout.strides = {1};
+  tensor.local_ptr = nullptr;
+  tensor.local_mr_id = 1;
+  tensor.peer_views.resize(static_cast<size_t>(nranks));
   for (int peer = 0; peer < nranks; ++peer) {
-    auto& peer_view = memory.tensor.peer_views[static_cast<size_t>(peer)];
+    auto& peer_view = tensor.peer_views[static_cast<size_t>(peer)];
     peer_view.mr_id = static_cast<uint32_t>(peer + 1);
     peer_view.same_node = true;
   }
-  memory.staging.local_ptr = nullptr;
-  memory.staging.local_mr_id = 1;
-  memory.staging.bytes = bytes;
-  memory.staging.layout.sizes = {static_cast<int64_t>(bytes)};
-  memory.staging.layout.strides = {1};
-  memory.staging.peer_views.resize(static_cast<size_t>(nranks));
+  RegisteredBuffer& staging =
+      binding.ensure_buffer(binding.buffer_id(CollectiveBufferRole::Scratch));
+  staging.local_ptr = nullptr;
+  staging.local_mr_id = 1;
+  staging.bytes = bytes;
+  staging.layout.sizes = {static_cast<int64_t>(bytes)};
+  staging.layout.strides = {1};
+  staging.peer_views.resize(static_cast<size_t>(nranks));
   for (int peer = 0; peer < nranks; ++peer) {
-    auto& peer_view = memory.staging.peer_views[static_cast<size_t>(peer)];
+    auto& peer_view = staging.peer_views[static_cast<size_t>(peer)];
     peer_view.mr_id = static_cast<uint32_t>(peer + 1);
     peer_view.same_node = true;
   }
-  return memory;
+  return binding;
 }
 
 inline CollectiveConfig make_test_config(int nranks, int rank,
@@ -80,8 +88,8 @@ inline void validate_basic_plan(CollectivePlan const& plan) {
     assert(op.tile.flow_index < plan.num_flows);
     assert(op.tile.offset_bytes + op.tile.size_bytes <= plan.tensor_bytes);
     auto validate_ref = [&](BufferRef const& ref) {
-      if (ref.kind == BufferKind::PeerTensor ||
-          ref.kind == BufferKind::PeerStaging) {
+      assert(ref.buffer_id != kInvalidBufferId);
+      if (ref.kind == BufferKind::Remote) {
         assert(ref.rank >= 0);
         assert(ref.rank < plan.nranks);
         assert(ref.rank != plan.rank);
@@ -92,26 +100,18 @@ inline void validate_basic_plan(CollectivePlan const& plan) {
     validate_ref(op.src);
     validate_ref(op.dst);
     if (op.kind == PrimitiveOpKind::Send) {
-      assert(op.src.kind == BufferKind::Tensor ||
-             op.src.kind == BufferKind::Staging);
-      assert(op.dst.kind == BufferKind::PeerTensor ||
-             op.dst.kind == BufferKind::PeerStaging);
+      assert(op.src.kind == BufferKind::Local);
+      assert(op.dst.kind == BufferKind::Remote);
     }
     if (op.kind == PrimitiveOpKind::Recv) {
-      assert(op.src.kind == BufferKind::PeerTensor ||
-             op.src.kind == BufferKind::PeerStaging);
-      assert(op.dst.kind == BufferKind::Tensor ||
-             op.dst.kind == BufferKind::Staging);
+      assert(op.src.kind == BufferKind::Remote);
+      assert(op.dst.kind == BufferKind::Local);
     }
     if (op.kind == PrimitiveOpKind::Copy || op.kind == PrimitiveOpKind::Reduce) {
-      assert(op.src.kind == BufferKind::Tensor ||
-             op.src.kind == BufferKind::Staging ||
-             op.src.kind == BufferKind::PeerTensor ||
-             op.src.kind == BufferKind::PeerStaging);
-      assert(op.dst.kind == BufferKind::Tensor ||
-             op.dst.kind == BufferKind::Staging ||
-             op.dst.kind == BufferKind::PeerTensor ||
-             op.dst.kind == BufferKind::PeerStaging);
+      assert(op.src.kind == BufferKind::Local ||
+             op.src.kind == BufferKind::Remote);
+      assert(op.dst.kind == BufferKind::Local ||
+             op.dst.kind == BufferKind::Remote);
     }
     for (uint32_t dep : op.deps) {
       assert(dep < plan.ops.size());
@@ -145,8 +145,8 @@ inline void validate_basic_exec_plan(ExecutionPlan const& plan) {
     assert(op.tile.flow_index < plan.num_flows);
     assert(op.tile.offset_bytes + op.tile.size_bytes <= plan.tensor_bytes);
     auto validate_ref = [&](BufferRef const& ref) {
-      if (ref.kind == BufferKind::PeerTensor ||
-          ref.kind == BufferKind::PeerStaging) {
+      assert(ref.buffer_id != kInvalidBufferId);
+      if (ref.kind == BufferKind::Remote) {
         assert(ref.rank >= 0);
         assert(ref.rank < plan.nranks);
         assert(ref.rank != plan.rank);
@@ -200,9 +200,9 @@ class MockBackend final : public Backend {
       : polls_before_ready_(polls_before_ready == 0 ? 1 : polls_before_ready) {}
 
   char const* name() const override { return "mock"; }
-  void validate(ExecutionPlan const&) const override {}
+  void validate(ExecutionPlan const&, CollectiveBinding&) const override {}
   bool supports(ExecOpKind) const override { return true; }
-  BackendToken submit(ExecOp const&) override {
+  BackendToken submit(ExecOp const&, CollectiveBinding&) override {
     return submit_token(next_token_, submissions_, polls_before_ready_,
                         pending_polls_);
   }
@@ -229,11 +229,11 @@ class MockDeviceBackend final : public Backend {
       : polls_before_ready_(polls_before_ready == 0 ? 1 : polls_before_ready) {}
 
   char const* name() const override { return "device"; }
-  void validate(ExecutionPlan const&) const override {}
+  void validate(ExecutionPlan const&, CollectiveBinding&) const override {}
   bool supports(ExecOpKind kind) const override {
     return kind == ExecOpKind::DeviceCopy || kind == ExecOpKind::DeviceReduce;
   }
-  BackendToken submit(ExecOp const& op) override {
+  BackendToken submit(ExecOp const& op, CollectiveBinding&) override {
     if (!supports(op.kind)) {
       throw std::invalid_argument("device backend does not support this op");
     }
@@ -263,9 +263,9 @@ class ThrowingBackend final : public Backend {
       : message_(std::move(message)) {}
 
   char const* name() const override { return "throwing"; }
-  void validate(ExecutionPlan const&) const override {}
+  void validate(ExecutionPlan const&, CollectiveBinding&) const override {}
   bool supports(ExecOpKind) const override { return true; }
-  BackendToken submit(ExecOp const&) override {
+  BackendToken submit(ExecOp const&, CollectiveBinding&) override {
     throw std::runtime_error(message_);
   }
   bool poll(BackendToken) override { return false; }
