@@ -78,6 +78,68 @@ cd experimental/ukernel
 make ccl_test SM=80
 ```
 
+## Python Binding
+
+`experimental/ukernel/py` contains a `torch`-based Python extension that wraps
+the `ccl` executor behind a persistent `ProcessGroup` object. The binding takes
+CUDA `torch.Tensor` inputs directly and runs `allreduce` / `alltoall` through
+the existing `transport + ccl + device` stack.
+
+Build the extension in place:
+
+```bash
+cd experimental/ukernel/py
+python setup.py build_ext --inplace
+```
+
+Minimal usage under `torchrun`:
+
+```python
+import os
+import torch
+from ukernel_ccl import ProcessGroup
+
+rank = int(os.environ["RANK"])
+world = int(os.environ["WORLD_SIZE"])
+local_rank = int(os.environ.get("LOCAL_RANK", rank))
+
+torch.cuda.set_device(local_rank)
+pg = ProcessGroup(
+    rank=rank,
+    world_size=world,
+    gpu_id=local_rank,
+    exchanger_ip=os.environ.get("MASTER_ADDR", "127.0.0.1"),
+    exchanger_port=int(os.environ.get("MASTER_PORT", "29500")),
+    transport="auto",
+)
+
+x = torch.randn(1024 * world + 1, device="cuda", dtype=torch.float32)
+pg.allreduce(x, tile_bytes=65536, num_flows=2)
+
+y = torch.randn(1024 * world, device="cuda", dtype=torch.float32)
+pg.alltoall(y, tile_bytes=65536, num_flows=2)
+
+send = torch.randn(13, device="cuda", dtype=torch.float32)
+recv = torch.empty(13, device="cuda", dtype=torch.float32)
+dist.all_to_all_single(
+    recv,
+    send,
+    output_split_sizes=[4, 5, 4],
+    input_split_sizes=[4, 5, 4],
+    group=pg,
+    tile_bytes=65536,
+    num_flows=2,
+)
+```
+
+Current Python binding constraints:
+
+- collective payload tensors must be CUDA and contiguous
+- `allreduce` supports non-divisible element counts
+- equal-split and variable-split `all_to_all_single` are both supported
+- variable-split `all_to_all_single` requires explicit
+  `input_split_sizes/output_split_sizes` whose sums match local tensor numel
+
 ## Modules
 
 - [`src/transport/README.md`](/Users/jacelau/code/opencode/uccl/experimental/ukernel/src/transport/README.md)

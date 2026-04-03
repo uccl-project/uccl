@@ -10,9 +10,8 @@ namespace CCL {
 
 namespace {
 
-bool is_peer_ref(BufferRef const& ref) {
-  return ref.kind == BufferKind::PeerTensor ||
-         ref.kind == BufferKind::PeerStaging;
+bool is_remote_ref(BufferRef const& ref) {
+  return ref.kind == BufferKind::Remote;
 }
 
 void validate_local_span(char const* what, size_t offset, size_t bytes,
@@ -22,68 +21,46 @@ void validate_local_span(char const* what, size_t offset, size_t bytes,
   }
 }
 
-void* local_mutable_ptr(CollectiveMemory const& memory, BufferRef const& ref,
+void* local_mutable_ptr(CollectiveBinding const& binding, BufferRef const& ref,
                         size_t bytes) {
-  switch (ref.kind) {
-    case BufferKind::Tensor:
-      if (memory.tensor.local_ptr == nullptr) {
-        throw std::invalid_argument("local tensor buffer is missing");
-      }
-      validate_local_span("local tensor", ref.offset_bytes, bytes,
-                          memory.tensor.bytes);
-      return static_cast<char*>(memory.tensor.local_ptr) + ref.offset_bytes;
-    case BufferKind::Staging:
-      if (memory.staging.local_ptr == nullptr) {
-        throw std::invalid_argument("local staging buffer is missing");
-      }
-      validate_local_span("local staging", ref.offset_bytes, bytes,
-                          memory.staging.bytes);
-      return static_cast<char*>(memory.staging.local_ptr) + ref.offset_bytes;
-    case BufferKind::PeerTensor:
-    case BufferKind::PeerStaging:
-      break;
+  if (ref.kind != BufferKind::Local) {
+    throw std::invalid_argument("local binding cannot target remote buffer");
   }
-  throw std::invalid_argument("local binding cannot target peer buffer");
+  RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
+  if (buffer.local_ptr == nullptr) {
+    throw std::invalid_argument("local registered buffer is missing");
+  }
+  validate_local_span("local registered buffer", ref.offset_bytes, bytes,
+                      buffer.bytes);
+  return static_cast<char*>(buffer.local_ptr) + ref.offset_bytes;
 }
 
-void const* local_const_ptr(CollectiveMemory const& memory, BufferRef const& ref,
+void const* local_const_ptr(CollectiveBinding const& binding,
+                            BufferRef const& ref,
                             size_t bytes) {
-  return local_mutable_ptr(memory, ref, bytes);
+  return local_mutable_ptr(binding, ref, bytes);
 }
 
-uint32_t remote_mr_id(CollectiveMemory const& memory, BufferRef const& ref,
-                      int local_rank) {
-  (void)local_rank;
-  if (!is_peer_ref(ref) || ref.rank < 0) {
+uint32_t remote_mr_id(CollectiveBinding const& binding, BufferRef const& ref) {
+  if (!is_remote_ref(ref) || ref.rank < 0) {
     throw std::invalid_argument("remote MR lookup requires a remote buffer ref");
   }
   size_t peer = static_cast<size_t>(ref.rank);
-  switch (ref.kind) {
-    case BufferKind::PeerTensor:
-      if (peer >= memory.tensor.peer_views.size()) {
-        throw std::invalid_argument("remote tensor peer rank out of range");
-      }
-      return memory.tensor.peer_views[peer].mr_id;
-    case BufferKind::PeerStaging:
-      if (peer >= memory.staging.peer_views.size()) {
-        throw std::invalid_argument("remote staging peer rank out of range");
-      }
-      return memory.staging.peer_views[peer].mr_id;
-    case BufferKind::Tensor:
-    case BufferKind::Staging:
-      break;
+  RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
+  if (peer >= buffer.peer_views.size()) {
+    throw std::invalid_argument("remote buffer peer rank out of range");
   }
-  throw std::invalid_argument("unknown remote buffer kind");
+  return buffer.peer_views[peer].mr_id;
 }
 
-ExecOp bind_device_exec_op(ExecOp const& op, CollectiveMemory const& memory,
+ExecOp bind_device_exec_op(ExecOp const& op, CollectiveBinding const& binding,
                            std::function<bool(int, uint32_t, size_t, size_t,
                                               void**, int*)> const&
                                resolve_remote_ptr) {
   ExecOp bound = op;
 
-  if (is_peer_ref(op.src)) {
-    uint32_t mr_id = remote_mr_id(memory, op.src, memory.tensor.local_rank);
+  if (is_remote_ref(op.src)) {
+    uint32_t mr_id = remote_mr_id(binding, op.src);
     void* ptr = nullptr;
     int device_idx = -1;
     if (!resolve_remote_ptr ||
@@ -94,11 +71,11 @@ ExecOp bind_device_exec_op(ExecOp const& op, CollectiveMemory const& memory,
     bound.resolved_src = ptr;
     bound.src_device = device_idx;
   } else {
-    bound.resolved_src = local_const_ptr(memory, op.src, op.tile.size_bytes);
+    bound.resolved_src = local_const_ptr(binding, op.src, op.tile.size_bytes);
   }
 
-  if (is_peer_ref(op.dst)) {
-    uint32_t mr_id = remote_mr_id(memory, op.dst, memory.tensor.local_rank);
+  if (is_remote_ref(op.dst)) {
+    uint32_t mr_id = remote_mr_id(binding, op.dst);
     void* ptr = nullptr;
     int device_idx = -1;
     if (!resolve_remote_ptr ||
@@ -109,7 +86,7 @@ ExecOp bind_device_exec_op(ExecOp const& op, CollectiveMemory const& memory,
     bound.resolved_dst = ptr;
     bound.dst_device = device_idx;
   } else {
-    bound.resolved_dst = local_mutable_ptr(memory, op.dst, op.tile.size_bytes);
+    bound.resolved_dst = local_mutable_ptr(binding, op.dst, op.tile.size_bytes);
   }
 
   return bound;
@@ -118,7 +95,8 @@ ExecOp bind_device_exec_op(ExecOp const& op, CollectiveMemory const& memory,
 }  // namespace
 
 PlanRequest make_plan_request(CollectiveKind kind,
-                              CollectiveConfig const& config) {
+                              CollectiveConfig const& config,
+                              CollectiveBufferRoles const& roles) {
   PlanRequest request;
   request.collective = kind;
   request.algorithm = config.algorithm;
@@ -126,8 +104,13 @@ PlanRequest make_plan_request(CollectiveKind kind,
   request.rank = config.rank;
   request.num_flows = config.num_flows;
   request.tensor_bytes = config.tensor_bytes;
+  request.input_bytes = config.input_bytes;
+  request.output_bytes = config.output_bytes;
   request.tile_bytes = config.tile_bytes;
   request.staging_bytes = config.staging_bytes;
+  request.input_split_bytes = config.input_split_bytes;
+  request.output_split_bytes = config.output_split_bytes;
+  request.roles = roles;
   request.dtype = config.dtype;
   request.reduction = config.reduction;
   return request;
@@ -149,7 +132,8 @@ Executor::Impl::~Impl() {
   }
 }
 
-CollectiveOpHandle Executor::Impl::submit(CollectivePlan plan) {
+CollectiveOpHandle Executor::Impl::submit(
+    CollectivePlan plan, std::shared_ptr<CollectiveBinding> runtime_binding) {
     if (plan.ops.empty()) {
       throw std::invalid_argument(
           "collective plan must contain at least one op");
@@ -160,10 +144,15 @@ CollectiveOpHandle Executor::Impl::submit(CollectivePlan plan) {
       throw std::invalid_argument(
           "lowered execution plan must contain at least one op");
     }
-    detail::validate_backends(completion_sources, exec_plan);
+    if (runtime_binding == nullptr) {
+      throw std::invalid_argument(
+          "executor submit requires collective runtime binding");
+    }
+    detail::validate_backends(completion_sources, exec_plan, *runtime_binding);
 
     detail::HandleState state;
     state.exec_plan = std::move(exec_plan);
+    state.runtime_binding = std::move(runtime_binding);
     state.status = CollectiveOpStatus::Queued;
     state.op_states.resize(state.exec_plan.ops.size());
 
@@ -422,12 +411,13 @@ void Executor::Impl::submit_ready_op_locked(detail::HandleState& state,
 
     BackendToken token{};
     if ((op.kind == ExecOpKind::DeviceCopy || op.kind == ExecOpKind::DeviceReduce) &&
-        runtime_memory != nullptr) {
+        state.runtime_binding != nullptr) {
       ExecOp bound =
-          bind_device_exec_op(op, *runtime_memory, resolve_ipc_buffer_pointer);
-      token = backend->submit(bound);
+          bind_device_exec_op(op, *state.runtime_binding,
+                              resolve_ipc_buffer_pointer);
+      token = backend->submit(bound, *state.runtime_binding);
     } else {
-      token = backend->submit(op);
+      token = backend->submit(op, *state.runtime_binding);
     }
     op_state.submitted = true;
     op_state.inflight.backend = backend;
@@ -552,25 +542,45 @@ detail::HandleState const& Executor::Impl::get_locked_const(
     return it->second;
 }
 
-Executor::Executor(ExecutorBackends backends)
-    : impl_(std::make_unique<Impl>(backends)) {}
+Executor::Executor(
+    ExecutorBackends backends,
+    std::function<bool(int, uint32_t, size_t, size_t, void**, int*)>
+        resolve_ipc_buffer_pointer)
+    : impl_(std::make_unique<Impl>(backends)) {
+  impl_->resolve_ipc_buffer_pointer = std::move(resolve_ipc_buffer_pointer);
+}
 
 Executor::~Executor() = default;
 
-CollectiveOpHandle Executor::submit(CollectivePlan plan) {
-  return impl_->submit(std::move(plan));
+CollectiveOpHandle Executor::submit(
+    CollectivePlan plan, std::shared_ptr<CollectiveBinding> runtime_binding) {
+  return impl_->submit(std::move(plan), std::move(runtime_binding));
 }
 
-CollectiveOpHandle Executor::submit_allreduce(CollectiveConfig const& config) {
+CollectiveOpHandle Executor::submit_allreduce(
+    CollectiveConfig const& config,
+    std::shared_ptr<CollectiveBinding> runtime_binding) {
+  if (runtime_binding == nullptr) {
+    throw std::invalid_argument(
+        "executor submit_allreduce requires collective runtime binding");
+  }
   CollectivePlan plan =
-      build_plan(make_plan_request(CollectiveKind::AllReduce, config));
-  return impl_->submit(std::move(plan));
+      build_plan(make_plan_request(CollectiveKind::AllReduce, config,
+                                   runtime_binding->roles));
+  return impl_->submit(std::move(plan), std::move(runtime_binding));
 }
 
-CollectiveOpHandle Executor::submit_alltoall(CollectiveConfig const& config) {
+CollectiveOpHandle Executor::submit_alltoall(
+    CollectiveConfig const& config,
+    std::shared_ptr<CollectiveBinding> runtime_binding) {
+  if (runtime_binding == nullptr) {
+    throw std::invalid_argument(
+        "executor submit_alltoall requires collective runtime binding");
+  }
   CollectivePlan plan =
-      build_plan(make_plan_request(CollectiveKind::AllToAll, config));
-  return impl_->submit(std::move(plan));
+      build_plan(make_plan_request(CollectiveKind::AllToAll, config,
+                                   runtime_binding->roles));
+  return impl_->submit(std::move(plan), std::move(runtime_binding));
 }
 
 bool Executor::poll(CollectiveOpHandle handle) { return impl_->poll(handle); }

@@ -38,29 +38,35 @@ uint64_t make_match_key(int src_rank, int dst_rank, uint64_t seq) {
 }
 
 float* local_buffer_ptr(SimRankState& state, BufferRef const& ref) {
-  switch (ref.kind) {
-    case BufferKind::Tensor:
+  if (ref.kind != BufferKind::Local) {
+    throw std::invalid_argument(
+        "remote ref is not addressable as a local buffer");
+  }
+  switch (ref.buffer_id) {
+    case kDefaultInputBufferId:
       return state.tensor.data() + ref.offset_bytes / sizeof(float);
-    case BufferKind::Staging:
+    case kDefaultScratchBufferId:
       return state.staging.data() + ref.offset_bytes / sizeof(float);
-    case BufferKind::PeerTensor:
-    case BufferKind::PeerStaging:
+    default:
       break;
   }
-  throw std::invalid_argument("peer ref is not addressable as a local buffer");
+  throw std::invalid_argument("buffer id is not addressable in simulator");
 }
 
 float const* local_buffer_ptr(SimRankState const& state, BufferRef const& ref) {
-  switch (ref.kind) {
-    case BufferKind::Tensor:
+  if (ref.kind != BufferKind::Local) {
+    throw std::invalid_argument(
+        "remote ref is not addressable as a local buffer");
+  }
+  switch (ref.buffer_id) {
+    case kDefaultInputBufferId:
       return state.tensor.data() + ref.offset_bytes / sizeof(float);
-    case BufferKind::Staging:
+    case kDefaultScratchBufferId:
       return state.staging.data() + ref.offset_bytes / sizeof(float);
-    case BufferKind::PeerTensor:
-    case BufferKind::PeerStaging:
+    default:
       break;
   }
-  throw std::invalid_argument("peer ref is not addressable as a local buffer");
+  throw std::invalid_argument("buffer id is not addressable in simulator");
 }
 
 void complete_sim_op(SimRankState& state, uint32_t op_id) {
@@ -101,6 +107,22 @@ void build_sim_state_dependencies(SimRankState& state) {
   }
 }
 
+CollectivePlan build_test_plan(CollectiveKind kind,
+                               CollectiveConfig const& config) {
+  CollectiveBinding binding =
+      Testing::make_test_memory(config.rank, config.nranks,
+                                std::max(config.tensor_bytes,
+                                         config.staging_bytes));
+  return build_plan(make_plan_request(kind, config, binding.roles));
+}
+
+void assert_ref_uses_only_roles(BufferRef const& ref,
+                                CollectiveBufferRoles const& roles) {
+  assert(ref.buffer_id == roles.input_buffer_id ||
+         ref.buffer_id == roles.output_buffer_id ||
+         ref.buffer_id == roles.scratch_buffer_id);
+}
+
 std::string simulate_three_rank_allreduce_and_find_error(size_t tensor_bytes,
                                                         uint32_t num_flows) {
   constexpr int kNranks = 3;
@@ -116,8 +138,7 @@ std::string simulate_three_rank_allreduce_and_find_error(size_t tensor_bytes,
     cfg.reduction = ReductionKind::Sum;
 
     SimRankState state;
-    state.plan =
-        build_plan(make_plan_request(CollectiveKind::AllReduce, cfg));
+    state.plan = build_test_plan(CollectiveKind::AllReduce, cfg);
     size_t nelems = tensor_bytes / sizeof(float);
     state.tensor.resize(nelems, 0.0f);
     state.staging.resize(kTileBytes / sizeof(float), 0.0f);
@@ -236,8 +257,7 @@ std::string simulate_three_rank_allreduce_and_find_error(size_t tensor_bytes,
 void test_lowering_routes_ops_to_execution_kinds() {
   printf("[test] lowering routes ops...\n");
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512, 2);
-  CollectivePlan plan =
-      build_plan(make_plan_request(CollectiveKind::AllReduce, cfg));
+  CollectivePlan plan = build_test_plan(CollectiveKind::AllReduce, cfg);
   ExecutionPlan exec = lower_plan(plan);
 
   Testing::validate_basic_exec_plan(exec);
@@ -252,7 +272,7 @@ void test_planner_emits_valid_collective_dags() {
   CollectiveConfig allreduce_cfg =
       Testing::make_test_config(4, 2, 4096, 512, 2);
   CollectivePlan allreduce_plan =
-      build_plan(make_plan_request(CollectiveKind::AllReduce, allreduce_cfg));
+      build_test_plan(CollectiveKind::AllReduce, allreduce_cfg);
   Testing::validate_basic_plan(allreduce_plan);
   assert(allreduce_plan.collective == CollectiveKind::AllReduce);
   assert(allreduce_plan.algorithm == AlgorithmKind::Ring);
@@ -265,7 +285,7 @@ void test_planner_emits_valid_collective_dags() {
   CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 1, 1024, 256, 2);
   alltoall_cfg.algorithm = AlgorithmKind::Pairwise;
   CollectivePlan alltoall_plan =
-      build_plan(make_plan_request(CollectiveKind::AllToAll, alltoall_cfg));
+      build_test_plan(CollectiveKind::AllToAll, alltoall_cfg);
   Testing::validate_basic_plan(alltoall_plan);
   assert(alltoall_plan.collective == CollectiveKind::AllToAll);
   assert(alltoall_plan.algorithm == AlgorithmKind::Pairwise);
@@ -284,7 +304,7 @@ void test_planner_clamps_flow_count_to_available_tiles() {
   allreduce_cfg.dtype = ScalarType::Float32;
   allreduce_cfg.reduction = ReductionKind::Sum;
   CollectivePlan allreduce_plan =
-      build_plan(make_plan_request(CollectiveKind::AllReduce, allreduce_cfg));
+      build_test_plan(CollectiveKind::AllReduce, allreduce_cfg);
   Testing::validate_basic_plan(allreduce_plan);
   assert(allreduce_plan.num_flows == 1);
   assert(allreduce_plan.staging_bytes_required == allreduce_cfg.tile_bytes);
@@ -295,7 +315,7 @@ void test_planner_clamps_flow_count_to_available_tiles() {
   CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 0, 1024, 256, 2);
   alltoall_cfg.algorithm = AlgorithmKind::Pairwise;
   CollectivePlan alltoall_plan =
-      build_plan(make_plan_request(CollectiveKind::AllToAll, alltoall_cfg));
+      build_test_plan(CollectiveKind::AllToAll, alltoall_cfg);
   Testing::validate_basic_plan(alltoall_plan);
   assert(alltoall_plan.num_flows == 1);
   assert(alltoall_plan.staging_bytes_required ==
@@ -305,12 +325,94 @@ void test_planner_clamps_flow_count_to_available_tiles() {
   }
 }
 
+void test_planner_builds_variable_split_alltoall_out_of_place() {
+  printf("[test] planner builds variable-split alltoall out-of-place...\n");
+
+  CollectiveConfig cfg = Testing::make_test_config(3, 1, 96, 16, 4);
+  cfg.algorithm = AlgorithmKind::Pairwise;
+  cfg.input_bytes = 96;
+  cfg.output_bytes = 96;
+  cfg.input_split_bytes = {16, 32, 48};
+  cfg.output_split_bytes = {24, 32, 40};
+
+  CollectiveBufferRoles roles{};
+  roles.input_buffer_id = 7;
+  roles.output_buffer_id = 9;
+  roles.scratch_buffer_id = 11;
+  roles.validate();
+
+  CollectivePlan plan =
+      build_plan(make_plan_request(CollectiveKind::AllToAll, cfg, roles));
+  Testing::validate_basic_plan(plan);
+  assert(plan.input_split_bytes == cfg.input_split_bytes);
+  assert(plan.output_split_bytes == cfg.output_split_bytes);
+
+  std::vector<size_t> sent_bytes(3, 0);
+  std::vector<size_t> recv_bytes(3, 0);
+  size_t self_copy_bytes = 0;
+  for (auto const& op : plan.ops) {
+    if (op.kind == PrimitiveOpKind::Send) {
+      assert(op.dst.rank >= 0 && op.dst.rank < 3);
+      sent_bytes[static_cast<size_t>(op.dst.rank)] += op.tile.size_bytes;
+    } else if (op.kind == PrimitiveOpKind::Recv) {
+      assert(op.src.rank >= 0 && op.src.rank < 3);
+      recv_bytes[static_cast<size_t>(op.src.rank)] += op.tile.size_bytes;
+    } else if (op.kind == PrimitiveOpKind::Copy &&
+               op.src.kind == BufferKind::Local &&
+               op.dst.kind == BufferKind::Local &&
+               op.src.buffer_id == roles.input_buffer_id &&
+               op.dst.buffer_id == roles.output_buffer_id) {
+      self_copy_bytes += op.tile.size_bytes;
+    }
+  }
+
+  // rank=1 sends to peers 0/2, receives from peers 0/2, and self-copies split[1].
+  assert(sent_bytes[0] == 16);
+  assert(sent_bytes[1] == 0);
+  assert(sent_bytes[2] == 48);
+  assert(recv_bytes[0] == 24);
+  assert(recv_bytes[1] == 0);
+  assert(recv_bytes[2] == 40);
+  assert(self_copy_bytes == 32);
+}
+
+void test_planner_honors_custom_role_buffer_ids() {
+  printf("[test] planner honors custom role buffer ids...\n");
+
+  CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512, 2);
+  CollectiveBufferRoles roles{};
+  roles.input_buffer_id = 7;
+  roles.scratch_buffer_id = 11;
+  roles.validate();
+
+  CollectivePlan plan =
+      build_plan(make_plan_request(CollectiveKind::AllReduce, cfg, roles));
+  Testing::validate_basic_plan(plan);
+  bool saw_input = false;
+  bool saw_scratch = false;
+  for (auto const& op : plan.ops) {
+    for (BufferRef const* ref : {&op.src, &op.dst}) {
+      assert_ref_uses_only_roles(*ref, roles);
+      saw_input = saw_input || ref->buffer_id == roles.input_buffer_id;
+      saw_scratch = saw_scratch || ref->buffer_id == roles.scratch_buffer_id;
+    }
+  }
+  assert(saw_input);
+  assert(saw_scratch);
+
+  ExecutionPlan exec = lower_plan(plan);
+  Testing::validate_basic_exec_plan(exec);
+  for (auto const& op : exec.ops) {
+    assert_ref_uses_only_roles(op.src, roles);
+    assert_ref_uses_only_roles(op.dst, roles);
+  }
+}
+
 void test_two_rank_ring_allreduce_rotates_reduced_shard_in_allgather() {
   printf("[test] two-rank ring allreduce rotates reduced shard...\n");
 
   CollectiveConfig cfg = Testing::make_test_config(2, 0, 512, 512, 1);
-  CollectivePlan plan =
-      build_plan(make_plan_request(CollectiveKind::AllReduce, cfg));
+  CollectivePlan plan = build_test_plan(CollectiveKind::AllReduce, cfg);
   Testing::validate_basic_plan(plan);
 
   assert(plan.ops.size() == 5);
@@ -350,12 +452,38 @@ void test_three_rank_ring_allreduce_simulator_handles_single_tile_case() {
   assert(error.empty() && "three-rank single-tile allreduce simulation failed");
 }
 
+void test_three_rank_ring_allreduce_plans_tail_elements() {
+  printf("[test] three-rank ring allreduce plans tail elements...\n");
+  CollectiveConfig cfg = Testing::make_test_config(3, 1, 4100, 512, 2);
+  cfg.dtype = ScalarType::Float32;
+  cfg.reduction = ReductionKind::Sum;
+  CollectivePlan plan = build_test_plan(CollectiveKind::AllReduce, cfg);
+  Testing::validate_basic_plan(plan);
+  bool saw_short_tail = false;
+  for (auto const& op : plan.ops) {
+    if (op.tile.size_bytes % sizeof(float) != 0) {
+      assert(false && "allreduce tail tile must remain dtype aligned");
+    }
+    if (op.tile.size_bytes != cfg.tile_bytes) {
+      saw_short_tail = true;
+    }
+  }
+  assert(saw_short_tail &&
+         "non-divisible allreduce should produce a shorter tail tile");
+}
+
+void test_three_rank_ring_allreduce_simulator_handles_tail_elements_case() {
+  printf("[test] three-rank ring allreduce simulator handles tail elements case...\n");
+  std::string error =
+      simulate_three_rank_allreduce_and_find_error(4100, 2);
+  assert(error.empty() && "three-rank tail-element allreduce simulation failed");
+}
+
 void test_lowering_preserves_dependency_dag() {
   printf("[test] lowering preserves dependency DAG...\n");
 
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512, 2);
-  CollectivePlan plan =
-      build_plan(make_plan_request(CollectiveKind::AllReduce, cfg));
+  CollectivePlan plan = build_test_plan(CollectiveKind::AllReduce, cfg);
   ExecutionPlan exec = lower_plan(plan);
 
   assert(exec.ops.size() == plan.ops.size());
@@ -387,17 +515,19 @@ void test_executor_completes_collectives_with_background_progress() {
   backends.transport = &transport_backend;
   backends.device = &device_backend;
   Executor executor(backends);
+  auto memory = std::make_shared<CollectiveBinding>(
+      Testing::make_test_memory(1, 4, 4096));
 
   CollectiveConfig allreduce_cfg =
       Testing::make_test_config(4, 1, 4096, 512, 2);
-  CollectiveOpHandle ar_handle = executor.submit_allreduce(allreduce_cfg);
+  CollectiveOpHandle ar_handle = executor.submit_allreduce(allreduce_cfg, memory);
   assert(wait_until_terminal(executor, ar_handle, std::chrono::seconds(2)));
   assert(executor.status(ar_handle) == CollectiveOpStatus::Completed);
   executor.release(ar_handle);
 
   CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 1, 1024, 256, 2);
   alltoall_cfg.algorithm = AlgorithmKind::Pairwise;
-  CollectiveOpHandle at_handle = executor.submit_alltoall(alltoall_cfg);
+  CollectiveOpHandle at_handle = executor.submit_alltoall(alltoall_cfg, memory);
   assert(wait_until_terminal(executor, at_handle, std::chrono::seconds(2)));
   assert(executor.status(at_handle) == CollectiveOpStatus::Completed);
   executor.release(at_handle);
@@ -413,6 +543,8 @@ void test_executor_queues_collectives_serially() {
   backends.transport = &transport_backend;
   backends.device = &device_backend;
   Executor executor(backends);
+  auto memory = std::make_shared<CollectiveBinding>(
+      Testing::make_test_memory(1, 4, 2048));
 
   CollectiveConfig allreduce_cfg =
       Testing::make_test_config(4, 1, 2048, 256, 2);
@@ -420,8 +552,8 @@ void test_executor_queues_collectives_serially() {
       Testing::make_test_config(4, 1, 2048, 256, 2);
   alltoall_cfg.algorithm = AlgorithmKind::Pairwise;
 
-  CollectiveOpHandle first = executor.submit_allreduce(allreduce_cfg);
-  CollectiveOpHandle second = executor.submit_alltoall(alltoall_cfg);
+  CollectiveOpHandle first = executor.submit_allreduce(allreduce_cfg, memory);
+  CollectiveOpHandle second = executor.submit_alltoall(alltoall_cfg, memory);
 
   assert(executor.status(second) == CollectiveOpStatus::Queued);
 
@@ -444,13 +576,15 @@ void test_executor_rejects_releasing_queued_or_running_collectives() {
   backends.transport = &transport_backend;
   backends.device = &device_backend;
   Executor executor(backends);
+  auto memory = std::make_shared<CollectiveBinding>(
+      Testing::make_test_memory(1, 4, 2048));
 
   CollectiveConfig first_cfg = Testing::make_test_config(4, 1, 2048, 256, 2);
   CollectiveConfig second_cfg = Testing::make_test_config(4, 1, 2048, 256, 2);
   second_cfg.algorithm = AlgorithmKind::Pairwise;
 
-  CollectiveOpHandle first = executor.submit_allreduce(first_cfg);
-  CollectiveOpHandle second = executor.submit_alltoall(second_cfg);
+  CollectiveOpHandle first = executor.submit_allreduce(first_cfg, memory);
+  CollectiveOpHandle second = executor.submit_alltoall(second_cfg, memory);
 
   assert(throws([&] { executor.release(first); }));
   assert(throws([&] { executor.release(second); }));
@@ -469,9 +603,11 @@ void test_executor_uses_fallback_backend_when_specialized_backends_are_missing()
   ExecutorBackends backends{};
   backends.fallback = &fallback_backend;
   Executor executor(backends);
+  auto memory = std::make_shared<CollectiveBinding>(
+      Testing::make_test_memory(1, 4, 4096));
 
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 4096, 512, 2);
-  CollectiveOpHandle handle = executor.submit_allreduce(cfg);
+  CollectiveOpHandle handle = executor.submit_allreduce(cfg, memory);
   assert(wait_until_terminal(executor, handle, std::chrono::seconds(2)));
   assert(executor.status(handle) == CollectiveOpStatus::Completed);
   assert(fallback_backend.submissions() > 0);
@@ -485,9 +621,11 @@ void test_executor_reports_submit_failure() {
   ExecutorBackends backends{};
   backends.fallback = &throwing_backend;
   Executor executor(backends);
+  auto memory = std::make_shared<CollectiveBinding>(
+      Testing::make_test_memory(1, 4, 2048));
 
   CollectiveConfig cfg = Testing::make_test_config(4, 1, 2048, 256, 1);
-  CollectiveOpHandle handle = executor.submit_allreduce(cfg);
+  CollectiveOpHandle handle = executor.submit_allreduce(cfg, memory);
 
   assert(wait_until_terminal(executor, handle, std::chrono::seconds(2)));
   assert(executor.status(handle) == CollectiveOpStatus::Failed);
@@ -508,9 +646,13 @@ int main() {
   test_lowering_routes_ops_to_execution_kinds();
   test_planner_emits_valid_collective_dags();
   test_planner_clamps_flow_count_to_available_tiles();
+  test_planner_builds_variable_split_alltoall_out_of_place();
+  test_planner_honors_custom_role_buffer_ids();
   test_two_rank_ring_allreduce_rotates_reduced_shard_in_allgather();
   test_three_rank_ring_allreduce_simulator_handles_multi_tile_case();
   test_three_rank_ring_allreduce_simulator_handles_single_tile_case();
+  test_three_rank_ring_allreduce_plans_tail_elements();
+  test_three_rank_ring_allreduce_simulator_handles_tail_elements_case();
   test_lowering_preserves_dependency_dag();
   test_executor_completes_collectives_with_background_progress();
   test_executor_queues_collectives_serially();
