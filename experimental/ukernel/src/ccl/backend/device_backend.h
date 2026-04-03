@@ -24,14 +24,14 @@ struct DeviceBackendConfig {
 
 class DeviceBackend final : public Backend {
  public:
-  explicit DeviceBackend(std::shared_ptr<CollectiveMemory> memory,
-                         DeviceBackendConfig const& config = {});
+  explicit DeviceBackend(DeviceBackendConfig const& config = {});
   ~DeviceBackend() override;
 
   char const* name() const override;
-  void validate(ExecutionPlan const& plan) const override;
+  void validate(ExecutionPlan const& plan,
+                CollectiveBinding& binding) const override;
   bool supports(ExecOpKind kind) const override;
-  BackendToken submit(ExecOp const& op) override;
+  BackendToken submit(ExecOp const& op, CollectiveBinding& binding) override;
   bool poll(BackendToken token) override;
   bool try_pop_completed(BackendToken& token) override;
   void release(BackendToken token) override;
@@ -54,8 +54,11 @@ class DeviceBackend final : public Backend {
 
   void* byte_offset(void* base, size_t offset) const;
   void const* byte_offset(void const* base, size_t offset) const;
-  void* resolve_mutable(BufferRef const& ref, size_t bytes) const;
-  void const* resolve_const(BufferRef const& ref, size_t bytes) const;
+  void* resolve_mutable(CollectiveBinding const& binding, BufferRef const& ref,
+                        size_t bytes) const;
+  void const* resolve_const(CollectiveBinding const& binding,
+                            BufferRef const& ref,
+                            size_t bytes) const;
   void ensure_device_context() const;
   void ensure_runtime();
   uint32_t acquire_fifo(uint32_t flow_id, uint32_t num_blocks);
@@ -63,7 +66,6 @@ class DeviceBackend final : public Backend {
   void stop_flow(uint32_t flow_id);
   uint32_t suggested_num_blocks(ExecOp const& op) const;
 
-  std::shared_ptr<CollectiveMemory> memory_;
   DeviceBackendConfig config_{};
   bool owns_task_manager_ = false;
   int local_device_idx_ = 0;

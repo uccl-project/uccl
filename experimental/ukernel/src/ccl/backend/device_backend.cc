@@ -65,12 +65,8 @@ Device::ReduceType to_device_reduce_type(ReductionKind reduction) {
 
 }  // namespace
 
-DeviceBackend::DeviceBackend(std::shared_ptr<CollectiveMemory> memory,
-                             DeviceBackendConfig const& config)
-    : memory_(std::move(memory)), config_(config) {
-  if (memory_ == nullptr) {
-    throw std::invalid_argument("device backend requires collective memory");
-  }
+DeviceBackend::DeviceBackend(DeviceBackendConfig const& config)
+    : config_(config) {
   if (config_.task_capacity == 0) {
     throw std::invalid_argument("device backend task_capacity must be positive");
   }
@@ -107,12 +103,14 @@ DeviceBackend::~DeviceBackend() {
 
 char const* DeviceBackend::name() const { return "device"; }
 
-void DeviceBackend::validate(ExecutionPlan const& plan) const {
+void DeviceBackend::validate(ExecutionPlan const& plan,
+                             CollectiveBinding& binding) const {
   if (plan.staging_bytes_required != 0 &&
-      memory_->staging.local_ptr == nullptr) {
+      binding.role_buffer(CollectiveBufferRole::Scratch).local_ptr == nullptr) {
     throw std::invalid_argument("device backend staging buffer is missing");
   }
-  if (plan.staging_bytes_required > memory_->staging.bytes) {
+  if (plan.staging_bytes_required >
+      binding.role_buffer(CollectiveBufferRole::Scratch).bytes) {
     throw std::invalid_argument(
         "device backend staging capacity is insufficient");
   }
@@ -134,17 +132,18 @@ bool DeviceBackend::supports(ExecOpKind kind) const {
   return false;
 }
 
-BackendToken DeviceBackend::submit(ExecOp const& op) {
+BackendToken DeviceBackend::submit(ExecOp const& op,
+                                   CollectiveBinding& binding) {
   ensure_device_context();
   if (!supports(op.kind)) {
     throw std::invalid_argument("unsupported op kind for device backend");
   }
   void const* src =
       op.resolved_src != nullptr ? op.resolved_src
-                                 : resolve_const(op.src, op.tile.size_bytes);
+                                 : resolve_const(binding, op.src, op.tile.size_bytes);
   void* dst =
       op.resolved_dst != nullptr ? op.resolved_dst
-                                 : resolve_mutable(op.dst, op.tile.size_bytes);
+                                 : resolve_mutable(binding, op.dst, op.tile.size_bytes);
   ensure_runtime();
 
   Device::TaskArgs args{};
@@ -152,14 +151,12 @@ BackendToken DeviceBackend::submit(ExecOp const& op) {
   args.src2 = nullptr;
   args.dst = dst;
   args.bytes = op.tile.size_bytes;
-  args.src_rank = (op.src.kind == BufferKind::PeerTensor ||
-                   op.src.kind == BufferKind::PeerStaging)
+  args.src_rank = (op.src.kind == BufferKind::Remote)
                       ? op.src.rank
-                      : memory_->tensor.local_rank;
-  args.dst_rank = (op.dst.kind == BufferKind::PeerTensor ||
-                   op.dst.kind == BufferKind::PeerStaging)
+                      : binding.local_rank();
+  args.dst_rank = (op.dst.kind == BufferKind::Remote)
                       ? op.dst.rank
-                      : memory_->tensor.local_rank;
+                      : binding.local_rank();
   args.src_device =
       op.src_device >= 0 ? op.src_device : local_device_idx_;
   args.dst_device =
@@ -260,53 +257,36 @@ void const* DeviceBackend::byte_offset(void const* base, size_t offset) const {
   return static_cast<void const*>(static_cast<char const*>(base) + offset);
 }
 
-void* DeviceBackend::resolve_mutable(BufferRef const& ref, size_t bytes) const {
-  switch (ref.kind) {
-    case BufferKind::Staging:
-      if (memory_->staging.local_ptr == nullptr) {
-        throw std::invalid_argument("device backend staging buffer is missing");
-      }
-      validate_span("device backend staging", ref.offset_bytes, bytes,
-                    memory_->staging.bytes);
-      return byte_offset(memory_->staging.local_ptr, ref.offset_bytes);
-    case BufferKind::Tensor:
-      if (memory_->tensor.local_ptr == nullptr) {
-        throw std::invalid_argument("device backend local tensor is missing");
-      }
-      validate_span("device backend local tensor", ref.offset_bytes, bytes,
-                    memory_->tensor.bytes);
-      return byte_offset(memory_->tensor.local_ptr, ref.offset_bytes);
-    case BufferKind::PeerTensor:
-    case BufferKind::PeerStaging:
-      throw std::invalid_argument(
-          "device backend requires resolved runtime pointer for remote dst");
+void* DeviceBackend::resolve_mutable(CollectiveBinding const& binding,
+                                     BufferRef const& ref,
+                                     size_t bytes) const {
+  if (ref.kind == BufferKind::Remote) {
+    throw std::invalid_argument(
+        "device backend requires resolved runtime pointer for remote dst");
   }
-  throw std::invalid_argument("device backend invalid destination reference");
+  RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
+  if (buffer.local_ptr == nullptr) {
+    throw std::invalid_argument("device backend local buffer is missing");
+  }
+  validate_span("device backend local buffer", ref.offset_bytes, bytes,
+                buffer.bytes);
+  return byte_offset(buffer.local_ptr, ref.offset_bytes);
 }
 
-void const* DeviceBackend::resolve_const(BufferRef const& ref,
+void const* DeviceBackend::resolve_const(CollectiveBinding const& binding,
+                                         BufferRef const& ref,
                                          size_t bytes) const {
-  switch (ref.kind) {
-    case BufferKind::Staging:
-      if (memory_->staging.local_ptr == nullptr) {
-        throw std::invalid_argument("device backend staging buffer is missing");
-      }
-      validate_span("device backend staging", ref.offset_bytes, bytes,
-                    memory_->staging.bytes);
-      return byte_offset(memory_->staging.local_ptr, ref.offset_bytes);
-    case BufferKind::Tensor:
-      if (memory_->tensor.local_ptr == nullptr) {
-        throw std::invalid_argument("device backend local tensor is missing");
-      }
-      validate_span("device backend local tensor", ref.offset_bytes, bytes,
-                    memory_->tensor.bytes);
-      return byte_offset(memory_->tensor.local_ptr, ref.offset_bytes);
-    case BufferKind::PeerTensor:
-    case BufferKind::PeerStaging:
-      throw std::invalid_argument(
-          "device backend requires resolved runtime pointer for remote src");
+  if (ref.kind == BufferKind::Remote) {
+    throw std::invalid_argument(
+        "device backend requires resolved runtime pointer for remote src");
   }
-  throw std::invalid_argument("device backend invalid source reference");
+  RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
+  if (buffer.local_ptr == nullptr) {
+    throw std::invalid_argument("device backend local buffer is missing");
+  }
+  validate_span("device backend local buffer", ref.offset_bytes, bytes,
+                buffer.bytes);
+  return byte_offset(buffer.local_ptr, ref.offset_bytes);
 }
 
 void DeviceBackend::ensure_runtime() {

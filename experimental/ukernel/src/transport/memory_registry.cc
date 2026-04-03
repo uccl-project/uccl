@@ -7,13 +7,29 @@ namespace Transport {
 MemoryRegistry::MemoryRegistry() = default;
 MemoryRegistry::~MemoryRegistry() = default;
 
-MR MemoryRegistry::track_local_buffer(void* local_buf, size_t len) {
+MemoryRegistry::TrackLocalBufferResult MemoryRegistry::track_local_buffer(
+    void* local_buf, size_t len) {
   std::lock_guard<std::mutex> lk(local_mu_);
 
-  auto existing = ptr_to_local_mr_id_.find(local_buf);
-  if (existing != ptr_to_local_mr_id_.end()) {
-    auto info = mr_id_to_local_mr_.find(existing->second);
-    if (info != mr_id_to_local_mr_.end()) return info->second;
+  TrackLocalBufferResult tracked{};
+
+  auto existing = ptr_to_local_mr_.find(local_buf);
+  if (existing != ptr_to_local_mr_.end()) {
+    if (existing->second.len == len) {
+      auto info = mr_id_to_local_mr_.find(existing->second.mr_id);
+      if (info != mr_id_to_local_mr_.end()) {
+        tracked.mr = info->second;
+        tracked.reused_existing = true;
+        return tracked;
+      }
+    } else {
+      tracked.replaced.local_buf = local_buf;
+      tracked.replaced.local_mr_id = existing->second.mr_id;
+      tracked.replaced.len = existing->second.len;
+      tracked.replaced.has_local_mr_id = true;
+      mr_id_to_local_mr_.erase(existing->second.mr_id);
+      ptr_to_local_mr_.erase(existing);
+    }
   }
 
   uint32_t id = next_mr_id_++;
@@ -24,9 +40,10 @@ MR MemoryRegistry::track_local_buffer(void* local_buf, size_t len) {
   info.lkey = 0;
   info.key = 0;
 
-  ptr_to_local_mr_id_[local_buf] = id;
+  ptr_to_local_mr_[local_buf] = LocalRegistration{id, len};
   mr_id_to_local_mr_[id] = info;
-  return info;
+  tracked.mr = info;
+  return tracked;
 }
 
 MemoryRegistry::ReleasedLocalMr MemoryRegistry::release_local_buffer(
@@ -34,14 +51,16 @@ MemoryRegistry::ReleasedLocalMr MemoryRegistry::release_local_buffer(
   std::lock_guard<std::mutex> lk(local_mu_);
 
   ReleasedLocalMr released{};
-  auto it = ptr_to_local_mr_id_.find(local_buf);
-  if (it == ptr_to_local_mr_id_.end()) {
+  auto it = ptr_to_local_mr_.find(local_buf);
+  if (it == ptr_to_local_mr_.end()) {
     return released;
   }
 
-  released.local_mr_id = it->second;
+  released.local_buf = local_buf;
+  released.local_mr_id = it->second.mr_id;
+  released.len = it->second.len;
   released.has_local_mr_id = true;
-  ptr_to_local_mr_id_.erase(it);
+  ptr_to_local_mr_.erase(it);
 
   auto info_it = mr_id_to_local_mr_.find(released.local_mr_id);
   if (info_it != mr_id_to_local_mr_.end()) {
@@ -51,14 +70,17 @@ MemoryRegistry::ReleasedLocalMr MemoryRegistry::release_local_buffer(
   return released;
 }
 
-std::vector<void*> MemoryRegistry::local_buffers() const {
+std::vector<MemoryRegistry::LocalRegistrationInfo>
+MemoryRegistry::local_registrations() const {
   std::lock_guard<std::mutex> lk(local_mu_);
-  std::vector<void*> bufs;
-  bufs.reserve(ptr_to_local_mr_id_.size());
-  for (auto const& kv : ptr_to_local_mr_id_) {
-    bufs.push_back(kv.first);
+  std::vector<LocalRegistrationInfo> regs;
+  regs.reserve(ptr_to_local_mr_.size());
+  for (auto const& kv : ptr_to_local_mr_) {
+    auto info = mr_id_to_local_mr_.find(kv.second.mr_id);
+    if (info == mr_id_to_local_mr_.end()) continue;
+    regs.push_back(LocalRegistrationInfo{kv.first, info->second});
   }
-  return bufs;
+  return regs;
 }
 
 void MemoryRegistry::clear_remote_ipc_cache() { ipc_cache_.clear_all(); }
@@ -90,21 +112,10 @@ void MemoryRegistry::cache_remote_mrs(int remote_rank,
                                       std::vector<MR> const& mrs) {
   std::lock_guard<std::mutex> lk(remote_mu_);
   auto& cached = rank_mr_id_to_remote_mr_[remote_rank];
-  auto& pending = rank_to_pending_remote_mrs_[remote_rank];
   for (auto const& mr : mrs) {
     if (cached.find(mr.id) != cached.end()) continue;
     cached[mr.id] = mr;
-    pending.push_back(mr);
   }
-}
-
-bool MemoryRegistry::take_pending_remote_mr(int remote_rank, MR& out) {
-  std::lock_guard<std::mutex> lk(remote_mu_);
-  auto& pending = rank_to_pending_remote_mrs_[remote_rank];
-  if (pending.empty()) return false;
-  out = pending.front();
-  pending.pop_front();
-  return true;
 }
 
 MR MemoryRegistry::get_remote_mr(int remote_rank, uint32_t mr_id) const {

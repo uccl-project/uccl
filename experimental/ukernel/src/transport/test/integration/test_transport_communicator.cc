@@ -14,6 +14,8 @@
 using CommunicatorConfig = UKernel::Transport::CommunicatorConfig;
 using Communicator = UKernel::Transport::Communicator;
 using MR = UKernel::Transport::MR;
+using NamedMR = UKernel::Transport::NamedMR;
+using NamedMRInfos = UKernel::Transport::NamedMRInfos;
 
 static constexpr int kWorldSize = 2;
 static constexpr int kClientGpu = 0;
@@ -30,6 +32,7 @@ using UKernel::Transport::TestUtil::run_case;
 
 constexpr size_t kMessageBytes = 4 * 1024;
 constexpr std::chrono::seconds kAcceptTimeout(30);
+constexpr uint64_t kNamedMrGeneration = 1;
 
 void fill_pattern(std::vector<uint8_t>& buf, uint8_t seed) {
   for (size_t i = 0; i < buf.size(); ++i) {
@@ -89,16 +92,18 @@ int run_exchange_client(std::string const& exchanger_ip, int exchanger_port,
       gpuMemcpy(sendbuf_d, send_host.data(), send_host.size(), gpuMemcpyHostToDevice));
 
   MR send_mr = comm->reg_mr(sendbuf_d, kMessageBytes);
-  MR remote_recv_mr{};
+  NamedMRInfos remote_recv_infos{};
   if (comm->peer_transport_kind(kServerRank) ==
       UKernel::Transport::PeerTransportKind::Uccl) {
-    require(comm->wait_mr_notify(kServerRank, remote_recv_mr),
-            "client wait_mr_notify failed");
+    require(comm->wait_named_mrs(kServerRank, kNamedMrGeneration, remote_recv_infos),
+            "client wait_named_mrs failed");
   }
+  uint32_t remote_recv_mr_id =
+      remote_recv_infos.entries.empty() ? 0 : remote_recv_infos.entries.front().mr.id;
 
   unsigned send_req =
       comm->isend(kServerRank, sendbuf_d, 0, kMessageBytes, send_mr.id,
-                  remote_recv_mr.id, true);
+                  remote_recv_mr_id, true);
   require(send_req != 0, "client isend failed");
   require(comm->wait_finish(send_req), "client wait_finish(send) failed");
 
@@ -122,7 +127,11 @@ int run_exchange_server(std::string const& exchanger_ip, int exchanger_port,
   MR recv_mr = comm->reg_mr(recvbuf_d, kMessageBytes);
   if (comm->peer_transport_kind(kClientRank) ==
       UKernel::Transport::PeerTransportKind::Uccl) {
-    require(comm->notify_mr(kClientRank, recv_mr), "server notify_mr failed");
+    NamedMRInfos infos{};
+    infos.generation = kNamedMrGeneration;
+    infos.entries.push_back(NamedMR{0, recv_mr});
+    require(comm->notify_named_mrs(kClientRank, kNamedMrGeneration, infos),
+            "server notify_named_mrs failed");
   }
 
   unsigned recv_req = comm->irecv(kClientRank, recvbuf_d, 0, kMessageBytes, true);

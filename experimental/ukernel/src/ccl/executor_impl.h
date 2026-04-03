@@ -34,6 +34,7 @@ struct OpState {
 
 struct HandleState {
   ExecutionPlan exec_plan;
+  std::shared_ptr<CollectiveBinding> runtime_binding;
   CollectiveOpStatus status = CollectiveOpStatus::Queued;
   std::vector<OpState> op_states;
   std::unordered_map<uint64_t, uint32_t> inflight_lookup;
@@ -68,10 +69,11 @@ inline std::vector<Backend*> backend_sources(ExecutorBackends const& backends) {
 }
 
 inline void validate_backends(std::vector<Backend*> const& backends,
-                              ExecutionPlan const& exec_plan) {
+                              ExecutionPlan const& exec_plan,
+                              CollectiveBinding& binding) {
   for (Backend* backend : backends) {
     if (backend != nullptr) {
-      backend->validate(exec_plan);
+      backend->validate(exec_plan, binding);
     }
   }
 }
@@ -115,7 +117,8 @@ struct Executor::Impl {
 
   ~Impl();
 
-  CollectiveOpHandle submit(CollectivePlan plan);
+  CollectiveOpHandle submit(CollectivePlan plan,
+                            std::shared_ptr<CollectiveBinding> runtime_binding);
   bool poll(CollectiveOpHandle handle);
   void wait(CollectiveOpHandle handle);
   void release(CollectiveOpHandle handle);
@@ -141,7 +144,6 @@ struct Executor::Impl {
 
   std::unique_ptr<Backend> owned_transport_backend;
   std::unique_ptr<Backend> owned_device_backend;
-  std::shared_ptr<CollectiveMemory> runtime_memory;
   std::function<bool(int, uint32_t, size_t, size_t, void**, int*)>
       resolve_ipc_buffer_pointer;
   ExecutorBackends backends{};

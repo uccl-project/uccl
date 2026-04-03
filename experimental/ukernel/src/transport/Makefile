@@ -1,8 +1,15 @@
 CXX            := /usr/bin/g++
 CUDA_PATH      ?= /usr/local/cuda
 CONDA_LIB_HOME ?= /usr/lib
+DEBUG          ?= 0
 
-CXXFLAGS := -O0 -std=c++17 -Wall -Wno-unused-function -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -Wno-unused-but-set-variable -Wno-stringop-overread -Wno-narrowing -pthread -fPIC -I$(CONDA_LIB_HOME)/../include
+ifeq ($(DEBUG),1)
+CXX_OPT_FLAGS := -O0 -g
+else
+CXX_OPT_FLAGS := -O3
+endif
+
+CXXFLAGS := $(CXX_OPT_FLAGS) -std=c++17 -Wall -Wno-unused-function -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -Wno-unused-but-set-variable -Wno-stringop-overread -Wno-narrowing -pthread -fPIC -I$(CONDA_LIB_HOME)/../include
 LDFLAGS  := -L$(CONDA_LIB_HOME) -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 -lcudart -lcuda -lgflags -lz -libverbs -lnl-3 -lnl-route-3 -lpthread
 
 UCCL_ROOT := $(abspath ../../../..)
@@ -84,5 +91,6 @@ clean:
 		test/*.o test/*.d \
 		test/common/*.d test/unit/*.o test/unit/*.d \
 		test/integration/*.o test/integration/*.d
+	find . -type f \( -name '*.o' -o -name '*.d' -o -name '.DS_Store' \) -delete
 
 -include $(OBJ_CPP:.o=.d) $(OBJ_TEST_UNIT:.o=.d) $(OBJ_TEST_INTEGRATION:.o=.d)

@@ -73,38 +73,57 @@ struct MR {
   uint32_t key;
 };
 
-struct MRInfos : public Exchangeable {
-  std::vector<MR> mrs;
+struct NamedMR {
+  uint32_t buffer_id = 0;
+  MR mr{};
+};
 
-  MRInfos() = default;
+struct NamedMRInfos : public Exchangeable {
+  uint64_t generation = 0;
+  std::vector<NamedMR> entries;
 
   std::map<std::string, std::string> to_map() const override {
     std::map<std::string, std::string> kv;
-    kv["count"] = std::to_string(mrs.size());
-    for (size_t i = 0; i < mrs.size(); ++i) {
-      auto const& mr = mrs[i];
-      kv["mr_" + std::to_string(i) + "_id"] = std::to_string(mr.id);
+    kv["generation"] = std::to_string(generation);
+    kv["count"] = std::to_string(entries.size());
+    for (size_t i = 0; i < entries.size(); ++i) {
+      auto const& entry = entries[i];
+      kv["entry_" + std::to_string(i) + "_buffer_id"] =
+          std::to_string(entry.buffer_id);
+      kv["entry_" + std::to_string(i) + "_mr_id"] =
+          std::to_string(entry.mr.id);
 
       std::ostringstream oss;
-      oss << std::hex << std::setw(16) << std::setfill('0') << mr.address;
-      kv["mr_" + std::to_string(i) + "_addr"] = oss.str();
+      oss << std::hex << std::setw(16) << std::setfill('0')
+          << entry.mr.address;
+      kv["entry_" + std::to_string(i) + "_mr_addr"] = oss.str();
 
-      kv["mr_" + std::to_string(i) + "_len"] = std::to_string(mr.length);
-      kv["mr_" + std::to_string(i) + "_key"] = std::to_string(mr.key);
+      kv["entry_" + std::to_string(i) + "_mr_len"] =
+          std::to_string(entry.mr.length);
+      kv["entry_" + std::to_string(i) + "_mr_key"] =
+          std::to_string(entry.mr.key);
     }
     return kv;
   }
 
   void from_map(std::map<std::string, std::string> const& kv) override {
+    auto generation_it = kv.find("generation");
+    generation = generation_it == kv.end() ? 0 : std::stoull(generation_it->second);
     size_t count = std::stoul(kv.at("count"));
-    mrs.resize(count);
+    entries.resize(count);
     for (size_t i = 0; i < count; ++i) {
-      auto& mr = mrs[i];
-      mr.id = std::stoul(kv.at("mr_" + std::to_string(i) + "_id"));
-      mr.address =
-          std::stoull(kv.at("mr_" + std::to_string(i) + "_addr"), nullptr, 16);
-      mr.length = std::stoull(kv.at("mr_" + std::to_string(i) + "_len"));
-      mr.key = std::stoul(kv.at("mr_" + std::to_string(i) + "_key"));
+      auto& entry = entries[i];
+      entry.buffer_id = static_cast<uint32_t>(std::stoul(
+          kv.at("entry_" + std::to_string(i) + "_buffer_id")));
+      entry.mr.id = static_cast<uint32_t>(std::stoul(
+          kv.at("entry_" + std::to_string(i) + "_mr_id")));
+      entry.mr.address = std::stoull(
+          kv.at("entry_" + std::to_string(i) + "_mr_addr"), nullptr, 16);
+      entry.mr.length = std::stoull(
+          kv.at("entry_" + std::to_string(i) + "_mr_len"));
+      entry.mr.key =
+          static_cast<uint32_t>(std::stoul(kv.at("entry_" + std::to_string(i) +
+                                                 "_mr_key")));
     }
   }
 };

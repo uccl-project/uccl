@@ -13,7 +13,8 @@
 using SockExchanger = UKernel::Transport::SockExchanger;
 using CommunicatorMeta = UKernel::Transport::CommunicatorMeta;
 using MR = UKernel::Transport::MR;
-using MRInfos = UKernel::Transport::MRInfos;
+using NamedMR = UKernel::Transport::NamedMR;
+using NamedMRInfos = UKernel::Transport::NamedMRInfos;
 
 namespace {
 
@@ -26,12 +27,12 @@ void publisher_socket(int port) {
   SockExchanger ex(false, "127.0.0.1", port);
   require(ex.valid(), "publisher failed to connect to socket exchanger");
 
-  MRInfos remote{};
-  remote.mrs.push_back(MR{1, 0x12345000ULL, 4096, 0, 123});
-  remote.mrs.push_back(MR{2, 0x12346000ULL, 8192, 0, 456});
+  NamedMRInfos remote{};
+  remote.entries.push_back(NamedMR{5, MR{1, 0x12345000ULL, 4096, 0, 123}});
+  remote.entries.push_back(NamedMR{8, MR{2, 0x12346000ULL, 8192, 0, 456}});
 
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
-  require(ex.publish("mr:peer:1:0", remote),
+  require(ex.publish("named-mr:peer:1:0", remote),
           "publisher failed to publish MR info");
 }
 
@@ -40,9 +41,10 @@ void test_socket_publish_fetch() {
   SockExchanger ex(true, "127.0.0.1", port);
   require(ex.valid(), "failed to start socket exchanger server");
 
-  MRInfos local{};
-  local.mrs.push_back(MR{7, 0xABCDEF00ULL, 16384, 0, 789});
-  require(ex.publish("mr:peer:0:0", local), "failed to publish local MR info");
+  NamedMRInfos local{};
+  local.entries.push_back(NamedMR{9, MR{7, 0xABCDEF00ULL, 16384, 0, 789}});
+  require(ex.publish("named-mr:peer:0:0", local),
+          "failed to publish local MR info");
 
   std::exception_ptr pub_error;
   std::thread pub_thread([&] {
@@ -53,11 +55,11 @@ void test_socket_publish_fetch() {
     }
   });
 
-  MRInfos remote{};
-  require(ex.wait_and_fetch("mr:peer:1:0", remote, 50, 100),
+  NamedMRInfos remote{};
+  require(ex.wait_and_fetch("named-mr:peer:1:0", remote, 50, 100),
           "timeout waiting for remote MR info");
-  require(remote.mrs.size() == 2, "remote MR count mismatch");
-  require(remote.mrs[0].id == 1 && remote.mrs[1].id == 2,
+  require(remote.entries.size() == 2, "remote MR count mismatch");
+  require(remote.entries[0].mr.id == 1 && remote.entries[1].mr.id == 2,
           "remote MR ids mismatch");
 
   pub_thread.join();

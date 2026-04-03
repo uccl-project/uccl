@@ -325,8 +325,8 @@ Communicator::~Communicator() {
     }
   }
 
-  for (auto* p : memory_registry_.local_buffers()) {
-    dereg_mr(p);
+  for (auto const& registration : memory_registry_.local_registrations()) {
+    dereg_mr(registration.local_buf);
   }
 
   memory_registry_.clear_remote_ipc_cache();
@@ -771,10 +771,26 @@ bool Communicator::same_host(int rank) const {
 
 void Communicator::register_existing_local_mrs_with_uccl() {
   if (!uccl_adapter_ || !uccl_adapter_->is_initialized()) return;
-  for (auto* p : memory_registry_.local_buffers()) {
-    MR mr = memory_registry_.get_local_mr(p);
-    (void)uccl_adapter_->register_memory(mr.id, p, mr.length);
+  for (auto const& registration : memory_registry_.local_registrations()) {
+    bool ok = uccl_adapter_->register_memory(registration.mr.id,
+                                             registration.local_buf,
+                                             registration.mr.length);
+    std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+    if (ok) {
+      uccl_direct_reg_failed_mrs_.erase(registration.mr.id);
+    } else {
+      uccl_direct_reg_failed_mrs_.insert(registration.mr.id);
+    }
   }
+}
+
+void Communicator::discard_uccl_registration(uint64_t mr_id) {
+  if (mr_id == 0) return;
+  if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
+    uccl_adapter_->deregister_memory(mr_id);
+  }
+  std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+  uccl_direct_reg_failed_mrs_.erase(mr_id);
 }
 
 bool Communicator::ensure_uccl_memory_registered(uint64_t mr_id, void* ptr,
@@ -1223,13 +1239,24 @@ bool Communicator::wait_finish(unsigned const req) {
 }
 
 MR Communicator::reg_mr(void* local_buf, size_t len) {
-  MR info = memory_registry_.track_local_buffer(local_buf, len);
+  auto tracked = memory_registry_.track_local_buffer(local_buf, len);
+  MR info = tracked.mr;
+
+  if (tracked.replaced.has_local_mr_id) {
+    discard_uccl_registration(tracked.replaced.local_mr_id);
+  }
 
   if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
-    bool ok = uccl_adapter_->register_memory(info.id, local_buf, len);
-    if (!ok) {
+    bool should_register =
+        !tracked.reused_existing || !uccl_adapter_->is_memory_registered(info.id);
+    if (should_register) {
+      bool ok = uccl_adapter_->register_memory(info.id, local_buf, len);
       std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-      uccl_direct_reg_failed_mrs_.insert(info.id);
+      if (ok) {
+        uccl_direct_reg_failed_mrs_.erase(info.id);
+      } else {
+        uccl_direct_reg_failed_mrs_.insert(info.id);
+      }
     }
   }
 
@@ -1238,77 +1265,71 @@ MR Communicator::reg_mr(void* local_buf, size_t len) {
 
 bool Communicator::dereg_mr(void* local_buf) {
   auto released = memory_registry_.release_local_buffer(local_buf);
-  if (uccl_adapter_ && uccl_adapter_->is_initialized() &&
-      released.has_local_mr_id) {
-    uccl_adapter_->deregister_memory(released.local_mr_id);
-  }
   if (released.has_local_mr_id) {
-    std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-    uccl_direct_reg_failed_mrs_.erase(released.local_mr_id);
+    discard_uccl_registration(released.local_mr_id);
   }
   return true;
 }
 
-bool Communicator::notify_mr(int remote_rank, MR& mr) {
+bool Communicator::notify_named_mrs(int remote_rank, uint64_t generation,
+                                    NamedMRInfos const& infos) {
   if (!exchanger_client_ || !exchanger_client_->valid()) return false;
 
-  std::string key =
-      "mr:" + std::to_string(global_rank_) + "->" + std::to_string(remote_rank);
-
+  std::string key = "named-mr:" + std::to_string(global_rank_) + "->" +
+                    std::to_string(remote_rank) + ":" +
+                    std::to_string(generation);
   std::lock_guard<std::mutex> lk(mr_exchange_mu_);
-  MRInfos wrapper;
-  exchanger_client_->fetch(key, wrapper);
-  bool replaced = false;
-  for (auto& existing : wrapper.mrs) {
-    if (existing.id == mr.id) {
-      existing = mr;
-      replaced = true;
-      break;
-    }
-  }
-  if (!replaced) {
-    wrapper.mrs.push_back(mr);
+  NamedMRInfos payload = infos;
+  payload.generation = generation;
+
+  for (auto const& entry : payload.entries) {
+    std::cout << "[notify named MR to rank " << remote_rank
+              << "] generation=" << generation
+              << " buffer_id=" << entry.buffer_id
+              << " addr=" << entry.mr.address
+              << " length=" << entry.mr.length
+              << " key=" << entry.mr.key << std::endl;
   }
 
-  std::cout << "[notify MR to rank " << remote_rank << "] addr=" << mr.address
-            << " length=" << mr.length << " key=" << mr.key << std::endl;
-
-  return exchanger_client_->publish(key, wrapper);
+  return exchanger_client_->publish(key, payload);
 }
 
-bool Communicator::wait_mr_notify(int remote_rank, MR& mr) {
+bool Communicator::wait_named_mrs(int remote_rank, uint64_t generation,
+                                  NamedMRInfos& infos) {
   if (!exchanger_client_ || !exchanger_client_->valid()) {
     throw std::runtime_error("Exchanger client is not valid");
   }
 
-  std::string key =
-      "mr:" + std::to_string(remote_rank) + "->" + std::to_string(global_rank_);
-
-  if (memory_registry_.take_pending_remote_mr(remote_rank, mr)) return true;
-
+  std::string key = "named-mr:" + std::to_string(remote_rank) + "->" +
+                    std::to_string(global_rank_) + ":" +
+                    std::to_string(generation);
   int timeout_ms = mr_timeout_ms();
-  auto deadline = std::chrono::steady_clock::now() +
-                  std::chrono::milliseconds(timeout_ms < 0 ? 0 : timeout_ms);
-  while (true) {
-    MRInfos wrapper;
-    bool fetched = exchanger_client_->fetch(key, wrapper);
-    if (fetched && !wrapper.mrs.empty()) {
-      memory_registry_.cache_remote_mrs(remote_rank, wrapper.mrs);
-      if (memory_registry_.take_pending_remote_mr(remote_rank, mr)) {
-        std::cout << "[recv MR from rank " << remote_rank
-                  << "] addr=" << mr.address << " length=" << mr.length
-                  << " key=" << mr.key << std::endl;
-        return true;
-      }
-    }
-
-    if (timeout_ms >= 0 && std::chrono::steady_clock::now() >= deadline) {
-      std::cerr << "[WARN] Timeout waiting for MR from rank " << remote_rank
-                << std::endl;
-      return false;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  if (!exchanger_client_->wait_and_fetch(
+          key, infos, timeout_to_retries(timeout_ms, 1), 1)) {
+    std::cerr << "[WARN] Timeout waiting for named MR table from rank "
+              << remote_rank << std::endl;
+    return false;
   }
+  if (infos.generation != generation) {
+    std::cerr << "[WARN] Named MR generation mismatch from rank " << remote_rank
+              << ": expected=" << generation
+              << " got=" << infos.generation << std::endl;
+    return false;
+  }
+
+  std::vector<MR> remote_mrs;
+  remote_mrs.reserve(infos.entries.size());
+  for (auto const& entry : infos.entries) {
+    remote_mrs.push_back(entry.mr);
+    std::cout << "[recv named MR from rank " << remote_rank
+              << "] generation=" << generation
+              << " buffer_id=" << entry.buffer_id
+              << " addr=" << entry.mr.address
+              << " length=" << entry.mr.length
+              << " key=" << entry.mr.key << std::endl;
+  }
+  memory_registry_.cache_remote_mrs(remote_rank, remote_mrs);
+  return true;
 }
 
 MR Communicator::get_local_mr(void* local_buf) {

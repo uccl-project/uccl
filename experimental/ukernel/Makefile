@@ -3,6 +3,7 @@ CUDA_PATH      ?= /usr/local/cuda
 override CXX   := /usr/bin/g++
 NVCC           := $(CUDA_PATH)/bin/nvcc
 CONDA_LIB_HOME ?= /usr/lib
+DEBUG          ?= 0
 
 # skip ThunderKittens now
 # TK_ROOT := $(abspath ../../thirdparty/ThunderKittens)
@@ -22,11 +23,19 @@ SUBMAKE_SM := SM=$(SM)
 endif
 
 # Base compilation flags
-CXXFLAGS   := -O0 -std=c++17 -Wall -Wno-unused-function -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -Wno-unused-but-set-variable -Wno-stringop-overread -Wno-narrowing -pthread -fPIC \
+ifeq ($(DEBUG),1)
+CXX_OPT_FLAGS  := -O0 -g
+NVCC_OPT_FLAGS := -O0 -g
+else
+CXX_OPT_FLAGS  := -O3
+NVCC_OPT_FLAGS := -O3
+endif
+
+CXXFLAGS   := $(CXX_OPT_FLAGS) -std=c++17 -Wall -Wno-unused-function -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -Wno-unused-but-set-variable -Wno-stringop-overread -Wno-narrowing -pthread -fPIC \
               -I$(CONDA_LIB_HOME)/../include \
               -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 
-NVCCFLAGS  := -g -O0 -std=c++20 \
+NVCCFLAGS  := $(NVCC_OPT_FLAGS) -std=c++20 \
               --compiler-options "-fPIC -Wall -Wno-sign-compare -Wno-reorder -Wno-unused-variable -Wno-unused-label -pthread -I$(CONDA_LIB_HOME)/../include" \
               --expt-extended-lambda \
               --expt-relaxed-constexpr \
@@ -174,6 +183,8 @@ clean:
 	rm -f $(OBJ_CC) $(OBJ_CU) $(BENCH_TRANSPORT_OBJ) $(BENCH_GDRCOPY_OBJ) \
 	      $(STATIC_LIB) $(SHARED_LIB) $(BENCH_BINS) \
 	      *.d src/*.d src/ccl/*.d src/transport/*.d src/transport/test/*.d benchmarks/*.d
+	find src -type f \( -name '*.o' -o -name '*.d' -o -name '.DS_Store' \) -delete
+	rm -f src/ccl/test_components
 	$(MAKE) -C src/ccl clean
 	$(MAKE) -C src/device clean
 	$(MAKE) -C src/transport clean

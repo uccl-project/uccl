@@ -8,7 +8,8 @@ namespace {
 using UKernel::Transport::CommunicatorMeta;
 using UKernel::Transport::IpcBufferInfo;
 using UKernel::Transport::MR;
-using UKernel::Transport::MRInfos;
+using UKernel::Transport::NamedMR;
+using UKernel::Transport::NamedMRInfos;
 using UKernel::Transport::TcpP2PInfo;
 using UKernel::Transport::TestUtil::require;
 using UKernel::Transport::TestUtil::run_case;
@@ -29,16 +30,21 @@ void test_exchangeable_round_trip() {
   require(meta_rt.rdma_capable == meta.rdma_capable,
           "CommunicatorMeta rdma_capable mismatch");
 
-  MRInfos infos{};
-  infos.mrs.push_back(MR{1, 0x1000ULL, 256, 0, 11});
-  infos.mrs.push_back(MR{2, 0x2000ULL, 512, 0, 22});
-  MRInfos infos_rt;
+  NamedMRInfos infos{};
+  infos.generation = 42;
+  infos.entries.push_back(NamedMR{3, MR{1, 0x1000ULL, 256, 0, 11}});
+  infos.entries.push_back(NamedMR{7, MR{2, 0x2000ULL, 512, 0, 22}});
+  NamedMRInfos infos_rt;
   infos_rt.from_map(infos.to_map());
-  require(infos_rt.mrs.size() == 2, "MRInfos size mismatch");
-  require(infos_rt.mrs[0].address == infos.mrs[0].address,
-          "MRInfos first address mismatch");
-  require(infos_rt.mrs[1].key == infos.mrs[1].key,
-          "MRInfos second key mismatch");
+  require(infos_rt.generation == infos.generation,
+          "NamedMRInfos generation mismatch");
+  require(infos_rt.entries.size() == 2, "NamedMRInfos size mismatch");
+  require(infos_rt.entries[0].buffer_id == infos.entries[0].buffer_id,
+          "NamedMRInfos first buffer_id mismatch");
+  require(infos_rt.entries[0].mr.address == infos.entries[0].mr.address,
+          "NamedMRInfos first address mismatch");
+  require(infos_rt.entries[1].mr.key == infos.entries[1].mr.key,
+          "NamedMRInfos second key mismatch");
 
   UCCLP2PInfo uccl{"127.0.0.1", 12345, 6, 2};
   UCCLP2PInfo uccl_rt;

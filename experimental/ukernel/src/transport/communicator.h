@@ -51,8 +51,10 @@ class Communicator {
 
   MR reg_mr(void* local_buf, size_t len);
   bool dereg_mr(void* local_buf);
-  bool notify_mr(int remote_rank, MR& mr);
-  bool wait_mr_notify(int remote_rank, MR& mr);
+  bool notify_named_mrs(int remote_rank, uint64_t generation,
+                        NamedMRInfos const& infos);
+  bool wait_named_mrs(int remote_rank, uint64_t generation,
+                      NamedMRInfos& infos);
   MR get_local_mr(void* local_buf);
   MR get_local_mr(uint32_t mr_id);
   MR get_remote_mr(int remote_rank, uint32_t mr_id);
@@ -107,6 +109,7 @@ class Communicator {
   PeerTransportKind get_peer_transport_kind(int rank) const;
   bool poll_request_completion(unsigned id, bool blocking);
   void register_existing_local_mrs_with_uccl();
+  void discard_uccl_registration(uint64_t mr_id);
   bool ensure_uccl_memory_registered(uint64_t mr_id, void* ptr, size_t len);
   void cleanup_tracked_request(unsigned id, TrackedRequest& tracked);
   bool complete_host_bounce_recv(TrackedRequest& tracked, bool blocking);

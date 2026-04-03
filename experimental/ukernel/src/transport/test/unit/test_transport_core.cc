@@ -36,12 +36,17 @@ void test_memory_registry() {
   std::vector<uint8_t> buf_a(512, 0x11);
   std::vector<uint8_t> buf_b(1024, 0x22);
 
-  MR mr_a = registry.track_local_buffer(buf_a.data(), buf_a.size());
-  MR mr_a_again = registry.track_local_buffer(buf_a.data(), buf_a.size());
-  MR mr_b = registry.track_local_buffer(buf_b.data(), buf_b.size());
+  auto tracked_a = registry.track_local_buffer(buf_a.data(), buf_a.size());
+  auto tracked_a_again = registry.track_local_buffer(buf_a.data(), buf_a.size());
+  auto tracked_b = registry.track_local_buffer(buf_b.data(), buf_b.size());
+  MR mr_a = tracked_a.mr;
+  MR mr_a_again = tracked_a_again.mr;
+  MR mr_b = tracked_b.mr;
 
   require(mr_a.id == mr_a_again.id, "local MR id should be stable");
   require(mr_a.id != mr_b.id, "different buffers should produce different ids");
+  require(tracked_a_again.reused_existing,
+          "same ptr/len registration should reuse existing MR");
   require(registry.get_local_mr(buf_a.data()).id == mr_a.id,
           "exact local MR lookup failed");
   require(registry.get_local_mr(buf_a.data() + 128).id == mr_a.id,
@@ -54,16 +59,11 @@ void test_memory_registry() {
   MR remote1{8, 0x2000ULL, 256, 0, 88};
   MR remote2{9, 0x3000ULL, 512, 0, 99};
   registry.cache_remote_mrs(/*remote_rank=*/3, {remote0, remote1});
-  MR out{};
-  require(registry.take_pending_remote_mr(3, out) && out.id == remote0.id,
-          "first pending remote MR mismatch");
   registry.cache_remote_mrs(/*remote_rank=*/3, {remote0, remote1, remote2});
-  require(registry.take_pending_remote_mr(3, out) && out.id == remote1.id,
-          "duplicate remote MR should not be re-enqueued");
-  require(registry.take_pending_remote_mr(3, out) && out.id == remote2.id,
-          "new remote MR should be enqueued");
-  require(!registry.take_pending_remote_mr(3, out),
-          "pending remote MR queue should be empty");
+  require(registry.get_remote_mr(3, remote0.id).address == remote0.address,
+          "cached remote MR lookup for first entry failed");
+  require(registry.get_remote_mr(3, remote1.id).address == remote1.address,
+          "cached remote MR lookup for second entry failed");
   require(registry.get_remote_mr(3, remote2.id).address == remote2.address,
           "cached remote MR lookup failed");
 
@@ -87,8 +87,21 @@ void test_memory_registry() {
               cached.device_idx == cache.device_idx,
           "remote IPC cache round-trip mismatch");
 
+  auto resized = registry.track_local_buffer(buf_a.data(), buf_a.size() / 2);
+  require(resized.replaced.has_local_mr_id &&
+              resized.replaced.local_mr_id == mr_a.id,
+          "resized registration should report replaced MR");
+  require(resized.mr.id != mr_a.id,
+          "resized registration should allocate a new MR id");
+  require(registry.get_local_mr(buf_a.data()).id == resized.mr.id,
+          "resized exact lookup should resolve to new MR");
+  require(throws([&] {
+            (void)registry.get_local_mr(buf_a.data() + buf_a.size() / 2 + 1);
+          }),
+          "lookup beyond resized range should fail");
+
   auto released = registry.release_local_buffer(buf_a.data());
-  require(released.has_local_mr_id && released.local_mr_id == mr_a.id,
+  require(released.has_local_mr_id && released.local_mr_id == resized.mr.id,
           "release_local_buffer should return released MR id");
   require(throws([&] { registry.get_local_mr(buf_a.data()); }),
           "released local buffer should not be queryable");
