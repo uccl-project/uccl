@@ -332,6 +332,7 @@ bool Executor::Impl::progress_active_collective_locked() {
     maybe_quiesce_backends_locked(state);
 
     if (state.completed_ops == state.exec_plan.ops.size()) {
+      stop_device_flows_locked(state);
       state.status = CollectiveOpStatus::Completed;
       cv.notify_all();
       return true;
@@ -358,6 +359,15 @@ bool Executor::Impl::drive_ready_ops_locked(detail::HandleState& state) {
       progress = true;
     }
     return progress;
+}
+
+void Executor::Impl::stop_device_flows_locked(detail::HandleState& state) {
+    Backend* device_backend = backends.device != nullptr ? backends.device
+                                                         : backends.fallback;
+    if (device_backend == nullptr) return;
+    for (uint32_t flow_id = 0; flow_id < state.exec_plan.num_flows; ++flow_id) {
+      device_backend->stop(flow_id);
+    }
 }
 
 void Executor::Impl::maybe_quiesce_backends_locked(

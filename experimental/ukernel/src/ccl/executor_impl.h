@@ -131,6 +131,7 @@ struct Executor::Impl {
   bool progress_active_collective_locked();
   bool drive_ready_ops_locked(detail::HandleState& state);
   void maybe_quiesce_backends_locked(detail::HandleState const& state);
+  void stop_device_flows_locked(detail::HandleState& state);
   void submit_ready_op_locked(detail::HandleState& state, uint32_t op_id);
   bool drain_backend_completions_locked(detail::HandleState& state);
   bool poll_inflight_locked(detail::HandleState& state);
