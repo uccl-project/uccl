@@ -22,6 +22,7 @@ static inline uint64_t now_ns() {
 static constexpr int kIpcThroughputWindow = 8;
 static constexpr int kUcclThroughputWindow = 4;
 static constexpr int kTcpThroughputWindow = 1;
+static constexpr uint64_t kBenchNamedMrGeneration = 1;
 
 static PreferredTransport parse_transport(char const* value) {
   if (strcmp(value, "auto") == 0) return PreferredTransport::Auto;
@@ -162,26 +163,45 @@ static bool exchange_remote_recv_mrs(Communicator& comm, int peer_rank,
                                      std::vector<MR> const& local_recv_mrs,
                                      std::vector<MR>& remote_recv_mrs,
                                      bool notify_first) {
-  remote_recv_mrs.resize(local_recv_mrs.size());
-  if (notify_first) {
-    for (auto const& mr : local_recv_mrs) {
-      MR copy = mr;
-      comm.notify_mr(peer_rank, copy);
-    }
-    for (size_t i = 0; i < remote_recv_mrs.size(); ++i) {
-      if (!comm.wait_mr_notify(peer_rank, remote_recv_mrs[i])) return false;
-    }
-    return true;
+  NamedMRInfos local_infos{};
+  local_infos.generation = kBenchNamedMrGeneration;
+  local_infos.entries.reserve(local_recv_mrs.size());
+  for (size_t i = 0; i < local_recv_mrs.size(); ++i) {
+    NamedMR named{};
+    named.buffer_id = static_cast<uint32_t>(i);
+    named.mr = local_recv_mrs[i];
+    local_infos.entries.push_back(named);
   }
 
-  for (size_t i = 0; i < remote_recv_mrs.size(); ++i) {
-    if (!comm.wait_mr_notify(peer_rank, remote_recv_mrs[i])) return false;
+  auto decode_remote_infos = [&](NamedMRInfos const& remote_infos) -> bool {
+    remote_recv_mrs.assign(local_recv_mrs.size(), MR{});
+    std::vector<char> seen(local_recv_mrs.size(), 0);
+    for (auto const& entry : remote_infos.entries) {
+      size_t idx = static_cast<size_t>(entry.buffer_id);
+      if (idx >= remote_recv_mrs.size()) return false;
+      remote_recv_mrs[idx] = entry.mr;
+      seen[idx] = 1;
+    }
+    for (char v : seen) {
+      if (!v) return false;
+    }
+    return true;
+  };
+
+  NamedMRInfos remote_infos{};
+  if (notify_first) {
+    if (!comm.notify_named_mrs(peer_rank, kBenchNamedMrGeneration, local_infos))
+      return false;
+    if (!comm.wait_named_mrs(peer_rank, kBenchNamedMrGeneration, remote_infos))
+      return false;
+    return decode_remote_infos(remote_infos);
   }
-  for (auto const& mr : local_recv_mrs) {
-    MR copy = mr;
-    comm.notify_mr(peer_rank, copy);
-  }
-  return true;
+
+  if (!comm.wait_named_mrs(peer_rank, kBenchNamedMrGeneration, remote_infos))
+    return false;
+  if (!comm.notify_named_mrs(peer_rank, kBenchNamedMrGeneration, local_infos))
+    return false;
+  return decode_remote_infos(remote_infos);
 }
 
 static uint32_t remote_recv_slot_id(PeerTransportKind kind,

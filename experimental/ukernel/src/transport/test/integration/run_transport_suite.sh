@@ -3,6 +3,24 @@ set -eu
 
 BIN="${1:-./test_transport_integration}"
 PORT_BASE="${TRANSPORT_TEST_PORT_BASE:-16979}"
+HOST_ID_OVERRIDE="${UHM_HOST_ID_OVERRIDE:-}"
+
+host_id() {
+  if [ -n "$HOST_ID_OVERRIDE" ]; then
+    echo "$HOST_ID_OVERRIDE"
+    return
+  fi
+  if [ -r /etc/machine-id ]; then
+    cat /etc/machine-id
+    return
+  fi
+  hostname
+}
+
+cleanup_ipc_shm() {
+  hid="$(host_id)"
+  rm -f /dev/shm/uk_t_oob_"${hid}"_l* 2>/dev/null || true
+}
 
 run_one() {
   echo "== $*"
@@ -28,6 +46,7 @@ run_pair() {
   }
   trap cleanup EXIT INT TERM
 
+  cleanup_ipc_shm
   echo "== communicator case: ${case_name} (port ${port}, transport ${transport})"
   if [ -n "$server_host_id" ]; then
     UHM_HOST_ID_OVERRIDE="$server_host_id" \
@@ -69,6 +88,7 @@ run_pair() {
 
   cat "$server_log"
   cat "$client_log"
+  cleanup_ipc_shm
   cleanup
   trap - EXIT INT TERM
 }

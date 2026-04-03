@@ -289,8 +289,9 @@ struct AckWire {
 
 enum class ShmCtrlMsgType : uint32_t {
   Connect = 0,
-  IpcCache = 1,
-  Ack = 2,
+  ConnectAck = 1,
+  IpcCache = 2,
+  Ack = 3,
 };
 
 struct ShmCtrlMsg {
@@ -363,12 +364,16 @@ class ShmRingExchanger {
   bool ensure_local_ring(int peer_rank);
   bool ensure_remote_ring_attached(int peer_rank, int timeout_ms);
   bool try_recv_one_locked(int peer_rank, ShmCtrlMsg& msg);
-  bool try_take_connect_locked(int peer_rank);
+  bool try_take_connect_locked(int peer_rank, uint64_t* out_seq = nullptr);
+  bool try_take_cached_connect_ack_locked(int peer_rank, uint64_t expected_seq,
+                                          uint64_t* out_seq);
   bool try_take_cached_ipc_cache_locked(int peer_rank, uint64_t expected_seq,
                                         IpcCacheWire& out_cache,
                                         uint64_t* out_seq);
   bool try_take_cached_ack_locked(int peer_rank, uint64_t expected_seq,
                                   AckWire& out_ack, uint64_t* out_seq);
+  void cache_connect_message(int peer_rank, uint64_t seq);
+  void cache_connect_ack_message(int peer_rank, uint64_t seq);
   void cache_ipc_cache_message(int peer_rank, uint64_t seq,
                                IpcCacheWire const& cache);
   void cache_ack_message(int peer_rank, uint64_t seq, AckWire const& ack);
@@ -384,10 +389,12 @@ class ShmRingExchanger {
   std::vector<std::shared_ptr<PeerState>> peers_;
   std::vector<int> peer_local_ids_;
   mutable std::mutex pending_mu_;
-  std::unordered_map<int, bool> pending_connect_;
+  std::unordered_map<int, std::deque<uint64_t>> pending_connect_;
+  std::unordered_map<int, std::deque<uint64_t>> pending_connect_acks_;
   std::unordered_map<int, std::deque<PendingIpcCacheMsg>>
       rank_to_pending_ipc_cache_;
   std::unordered_map<int, std::deque<PendingAckMsg>> rank_to_pending_acks_;
+  std::vector<uint64_t> next_connect_seq_;
 };
 
 }  // namespace Transport

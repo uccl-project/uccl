@@ -56,7 +56,8 @@ ShmRingExchanger::ShmRingExchanger(int self_rank, int world_size,
       self_local_id_(self_local_id >= 0 ? self_local_id : self_rank),
       ring_namespace_(std::move(ring_namespace)),
       peers_(static_cast<size_t>(world_size)),
-      peer_local_ids_(static_cast<size_t>(world_size), -1) {}
+      peer_local_ids_(static_cast<size_t>(world_size), -1),
+      next_connect_seq_(static_cast<size_t>(world_size), 1) {}
 
 void ShmRingExchanger::set_peer_local_id(int peer_rank, int local_id) {
   if (peer_rank < 0 || peer_rank >= world_size_ || peer_rank == self_rank_) {
@@ -112,12 +113,48 @@ bool ShmRingExchanger::connect_to(int peer_rank, int timeout_ms) {
   if (!ensure_server_started()) return false;
   if (!ensure_remote_ring_attached(peer_rank, timeout_ms)) return false;
 
+  uint64_t connect_seq = 0;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    connect_seq = next_connect_seq_[static_cast<size_t>(peer_rank)]++;
+  }
+
   ShmCtrlMsg msg;
   msg.from_rank = static_cast<uint32_t>(self_rank_);
   msg.to_rank = static_cast<uint32_t>(peer_rank);
   msg.type = ShmCtrlMsgType::Connect;
-  msg.seq = 0;
+  msg.seq = connect_seq;
   if (!send_msg(peer_rank, msg)) return false;
+
+  auto deadline = std::chrono::steady_clock::now() +
+                  std::chrono::milliseconds(timeout_ms < 0 ? 0 : timeout_ms);
+  while (true) {
+    {
+      std::lock_guard<std::mutex> lk(pending_mu_);
+      if (try_take_cached_connect_ack_locked(peer_rank, connect_seq, nullptr)) {
+        break;
+      }
+    }
+
+    ShmCtrlMsg in_msg;
+    bool got = false;
+    {
+      std::shared_ptr<PeerState> peer;
+      {
+        std::lock_guard<std::mutex> lk(mu_);
+        peer = peers_[static_cast<size_t>(peer_rank)];
+      }
+      if (!peer || peer->local_inbox.ring == nullptr) return false;
+      std::lock_guard<std::mutex> recv_lk(peer->recv_mu);
+      got = try_recv_one_locked(peer_rank, in_msg);
+    }
+    if (got) continue;
+
+    if (timeout_expired(deadline, timeout_ms)) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
 
   std::lock_guard<std::mutex> lk(mu_);
   auto& peer = peers_[static_cast<size_t>(peer_rank)];
@@ -131,10 +168,11 @@ bool ShmRingExchanger::accept_from(int peer_rank, int timeout_ms) {
 
   auto deadline = std::chrono::steady_clock::now() +
                   std::chrono::milliseconds(timeout_ms < 0 ? 0 : timeout_ms);
+  uint64_t connect_seq = 0;
   while (true) {
     {
       std::lock_guard<std::mutex> lk(pending_mu_);
-      if (try_take_connect_locked(peer_rank)) {
+      if (try_take_connect_locked(peer_rank, &connect_seq)) {
         break;
       }
     }
@@ -160,6 +198,13 @@ bool ShmRingExchanger::accept_from(int peer_rank, int timeout_ms) {
   }
 
   if (!ensure_remote_ring_attached(peer_rank, timeout_ms)) return false;
+  ShmCtrlMsg ack{};
+  ack.from_rank = static_cast<uint32_t>(self_rank_);
+  ack.to_rank = static_cast<uint32_t>(peer_rank);
+  ack.type = ShmCtrlMsgType::ConnectAck;
+  ack.seq = connect_seq;
+  if (!send_msg(peer_rank, ack)) return false;
+
   std::lock_guard<std::mutex> lk(mu_);
   auto& peer = peers_[static_cast<size_t>(peer_rank)];
   if (peer) peer->connected = true;
@@ -304,6 +349,7 @@ void ShmRingExchanger::close_peer(int peer_rank) {
 
   std::lock_guard<std::mutex> pending_lk(pending_mu_);
   pending_connect_.erase(peer_rank);
+  pending_connect_acks_.erase(peer_rank);
   rank_to_pending_ipc_cache_.erase(peer_rank);
   rank_to_pending_acks_.erase(peer_rank);
 }
@@ -379,8 +425,11 @@ bool ShmRingExchanger::try_recv_one_locked(int peer_rank, ShmCtrlMsg& msg) {
   }
 
   if (msg.type == ShmCtrlMsgType::Connect) {
-    std::lock_guard<std::mutex> lk(pending_mu_);
-    pending_connect_[peer_rank] = true;
+    cache_connect_message(peer_rank, msg.seq);
+    return true;
+  }
+  if (msg.type == ShmCtrlMsgType::ConnectAck) {
+    cache_connect_ack_message(peer_rank, msg.seq);
     return true;
   }
   if (msg.type == ShmCtrlMsgType::IpcCache) {
@@ -394,11 +443,42 @@ bool ShmRingExchanger::try_recv_one_locked(int peer_rank, ShmCtrlMsg& msg) {
   return true;
 }
 
-bool ShmRingExchanger::try_take_connect_locked(int peer_rank) {
+bool ShmRingExchanger::try_take_connect_locked(int peer_rank, uint64_t* out_seq) {
   auto it = pending_connect_.find(peer_rank);
   if (it == pending_connect_.end()) return false;
-  pending_connect_.erase(it);
+  auto& q = it->second;
+  if (q.empty()) return false;
+  uint64_t seq = q.front();
+  q.pop_front();
+  if (q.empty()) pending_connect_.erase(it);
+  if (out_seq) *out_seq = seq;
   return true;
+}
+
+bool ShmRingExchanger::try_take_cached_connect_ack_locked(
+    int peer_rank, uint64_t expected_seq, uint64_t* out_seq) {
+  auto it = pending_connect_acks_.find(peer_rank);
+  if (it == pending_connect_acks_.end()) return false;
+  auto& q = it->second;
+  for (auto msg_it = q.begin(); msg_it != q.end(); ++msg_it) {
+    if (expected_seq != UINT64_MAX && *msg_it != expected_seq) continue;
+    uint64_t seq = *msg_it;
+    q.erase(msg_it);
+    if (q.empty()) pending_connect_acks_.erase(it);
+    if (out_seq) *out_seq = seq;
+    return true;
+  }
+  return false;
+}
+
+void ShmRingExchanger::cache_connect_message(int peer_rank, uint64_t seq) {
+  std::lock_guard<std::mutex> lk(pending_mu_);
+  pending_connect_[peer_rank].push_back(seq);
+}
+
+void ShmRingExchanger::cache_connect_ack_message(int peer_rank, uint64_t seq) {
+  std::lock_guard<std::mutex> lk(pending_mu_);
+  pending_connect_acks_[peer_rank].push_back(seq);
 }
 
 bool ShmRingExchanger::try_take_cached_ipc_cache_locked(int peer_rank,

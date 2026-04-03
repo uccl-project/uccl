@@ -174,6 +174,11 @@ int run_ipc_buffer_metadata_client(
   constexpr uint32_t kAckIpcId = 7777;
   require(comm->wait_ipc_buffer(kServerRank, kAckIpcId),
           "client wait_ipc_buffer(ack) should succeed");
+  // Publish a completion marker so the server keeps the exchanger process
+  // alive until the client has observed the ack.
+  constexpr uint32_t kClientDoneIpcId = 8888;
+  require(comm->notify_ipc_buffer(kServerRank, kClientDoneIpcId, nullptr, 0),
+          "client notify_ipc_buffer(done) should succeed");
 
   std::cout << "[CLIENT][ipc-buffer-meta] OK" << std::endl;
   return 0;
@@ -216,6 +221,11 @@ int run_ipc_buffer_metadata_server(
   constexpr uint32_t kAckIpcId = 7777;
   require(comm->notify_ipc_buffer(kClientRank, kAckIpcId, nullptr, 0),
           "server notify_ipc_buffer(ack) should succeed");
+  // Wait for client completion marker to avoid tearing down the in-process
+  // exchanger before the client has consumed the ack.
+  constexpr uint32_t kClientDoneIpcId = 8888;
+  require(comm->wait_ipc_buffer(kClientRank, kClientDoneIpcId),
+          "server wait_ipc_buffer(done) should succeed");
 
   std::cout << "[SERVER][ipc-buffer-meta] OK" << std::endl;
   return 0;
