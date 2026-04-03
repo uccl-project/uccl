@@ -61,6 +61,7 @@ def main() -> None:
     print(f"[rank {rank}] alltoallv ok: {recv_v[:8]}")
 
     dist.barrier(group=pg)
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":

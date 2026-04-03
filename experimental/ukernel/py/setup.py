@@ -54,6 +54,24 @@ sources = [
     rel(ROOT / "src" / "device" / "persistent_kernel_ops.cu"),
 ]
 
+p2p_sources = [
+    rel(ROOT / "py" / "ukernel_p2p.cpp"),
+    rel(NANOBIND_ROOT / "src" / "nb_combined.cpp"),
+    rel(ROOT / "src" / "transport" / "communicator.cc"),
+    rel(ROOT / "src" / "transport" / "host_bounce_pool.cc"),
+    rel(ROOT / "src" / "transport" / "ipc_cache.cc"),
+    rel(ROOT / "src" / "transport" / "ipc_channel.cc"),
+    rel(ROOT / "src" / "transport" / "memory_registry.cc"),
+    rel(ROOT / "src" / "transport" / "oob.cc"),
+    rel(ROOT / "src" / "transport" / "oob_shm.cc"),
+    rel(ROOT / "src" / "transport" / "oob_socket.cc"),
+    rel(ROOT / "src" / "transport" / "peer_session.cc"),
+    rel(ROOT / "src" / "transport" / "request.cc"),
+    rel(ROOT / "src" / "transport" / "tcp_transport_adapter.cc"),
+    rel(ROOT / "src" / "transport" / "uccl_transport_adapter.cc"),
+    rel(ROOT / "src" / "transport" / "utils.cc"),
+]
+
 include_dirs = [
     rel(ROOT / "include"),
     rel(ROOT / "src" / "transport"),
@@ -129,12 +147,72 @@ ext = CUDAExtension(
     ],
 )
 
+p2p_ext = CUDAExtension(
+    name="ukernel_p2p._C",
+    sources=p2p_sources,
+    include_dirs=include_dirs,
+    extra_compile_args={
+        "cxx": [
+            "-O3",
+            "-std=c++17",
+            "-Wall",
+            "-Wno-unused-function",
+            "-Wno-sign-compare",
+            "-Wno-reorder",
+            "-Wno-unused-variable",
+            "-Wno-unused-label",
+            "-Wno-unused-but-set-variable",
+            "-Wno-stringop-overread",
+            "-Wno-narrowing",
+            "-pthread",
+            "-fPIC",
+            "-DUKERNEL_ENABLE_TMA=0",
+        ],
+        "nvcc": [
+            "-O3",
+            "-std=c++20",
+            "--expt-extended-lambda",
+            "--expt-relaxed-constexpr",
+            "-DKITTENS_HOPPER",
+            "-DUKERNEL_ENABLE_TMA=0",
+            "-gencode",
+            "arch=compute_80,code=sm_80",
+            "-gencode",
+            "arch=compute_86,code=sm_86",
+            "-gencode",
+            "arch=compute_89,code=sm_89",
+        ],
+    },
+    library_dirs=[
+        str(CUDA_HOME / "lib64"),
+        str(GDRCOPY_ROOT / "src"),
+    ],
+    libraries=[
+        "cudart",
+        "cuda",
+        "gflags",
+        "z",
+        "ibverbs",
+        "nl-3",
+        "nl-route-3",
+        "pthread",
+        "rdmacm",
+        "gdrapi",
+        "numa",
+    ],
+    extra_objects=[str(RDMA_STATIC.resolve())],
+    runtime_library_dirs=[
+        str(CUDA_HOME / "lib64"),
+        str((GDRCOPY_ROOT / "src").resolve()),
+    ],
+)
+
 
 setup(
     name="ukernel-ccl",
     version="0.1.0",
-    packages=["ukernel_ccl"],
-    package_dir={"ukernel_ccl": "ukernel_ccl"},
-    ext_modules=[ext],
+    packages=["ukernel_ccl", "ukernel_p2p"],
+    package_dir={"ukernel_ccl": "ukernel_ccl", "ukernel_p2p": "ukernel_p2p"},
+    ext_modules=[ext, p2p_ext],
     cmdclass={"build_ext": BuildExtension},
 )
