@@ -418,6 +418,7 @@ class ProcessGroup {
     config.input_split_bytes = std::move(input_split_bytes);
     config.output_split_bytes = std::move(output_split_bytes);
     config.tile_bytes = tile_bytes;
+    config.staging_bytes = tile_bytes * (world_size_ - 1);
     config.algorithm = AlgorithmKind::Pairwise;
     config.dtype = input_dtype;
     config.reduction = ReductionKind::Sum;
