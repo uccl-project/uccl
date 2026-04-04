@@ -23,7 +23,8 @@ def run_server() -> None:
         transport="auto",
     )
 
-    comm.accept_from(1)
+    if not comm.accept_peer(1):
+        raise RuntimeError("accept_peer(1) failed")
     print(f"[rank {rank}] accepted client")
 
     recv = torch.empty(16, device="cuda", dtype=torch.float32)
@@ -50,7 +51,8 @@ def run_client() -> None:
         transport="auto",
     )
 
-    comm.connect_to(0)
+    if not comm.connect_peer(0):
+        raise RuntimeError("connect_peer(0) failed")
     print(f"[rank {rank}] connected to server")
 
     send = torch.arange(0, 16, device="cuda", dtype=torch.float32)

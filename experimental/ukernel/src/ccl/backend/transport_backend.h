@@ -48,11 +48,6 @@ class CommunicatorTransportBackend final : public Backend {
     bool released = false;
   };
 
-  struct PeerPathState {
-    bool send_ready = false;
-    bool recv_ready = false;
-  };
-
   void ensure_memory_bindings_initialized(CollectiveBinding& binding) const;
   void initialize_memory_bindings(CollectiveBinding& binding) const;
   void* resolve_mutable(CollectiveBinding const& binding, BufferRef const& ref,
@@ -60,13 +55,13 @@ class CommunicatorTransportBackend final : public Backend {
   void const* resolve_const(CollectiveBinding const& binding,
                             BufferRef const& ref,
                             size_t bytes) const;
-  uint32_t resolve_local_mr_id(CollectiveBinding const& binding,
-                               BufferRef const& ref, size_t bytes) const;
+  uint32_t resolve_local_mem_id(CollectiveBinding const& binding,
+                                BufferRef const& ref, size_t bytes) const;
   int resolve_peer_rank(ExecOp const& op) const;
-  uint32_t resolve_remote_mr_id(CollectiveBinding const& binding,
-                                BufferRef const& ref) const;
+  uint32_t resolve_remote_mem_id(CollectiveBinding const& binding,
+                                 BufferRef const& ref) const;
   void ensure_plan_paths(ExecutionPlan const& plan) const;
-  void ensure_peer_paths(int peer_rank, bool need_send, bool need_recv) const;
+  void ensure_peer_paths(int peer_rank) const;
   void on_transport_completion(unsigned request_id);
   static void* byte_offset(void* base, size_t offset);
   static void const* byte_offset(void const* base, size_t offset);
@@ -81,8 +76,8 @@ class CommunicatorTransportBackend final : public Backend {
   mutable std::mutex init_mu_;
   mutable std::mutex path_mu_;
   uint64_t backend_cache_key_ = 0;
-  mutable std::vector<PeerPathState> peer_paths_;
-  mutable uint64_t next_binding_generation_ = 1;
+  mutable std::vector<bool> peer_paths_ready_;
+  mutable uint64_t next_binding_version_ = 1;
 };
 
 }  // namespace CCL

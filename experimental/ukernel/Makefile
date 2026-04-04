@@ -83,7 +83,15 @@ LDFLAGS += $(UCCL_LDFLAGS)
 
 # Source files - exclude module-local tests and device-only helper trees that
 # are built by their module Makefiles.
-SRC_CPP := $(shell find src -name '*.cc' | grep -v 'benchmarks' | grep -v 'src/device/' | grep -v 'src/transport/test/' | grep -v 'src/ccl/test/' | sort)
+#
+# NOTE: keep a hard deny-list for legacy transport implementations so they
+# never get linked alongside the new adapter-based transport sources.
+RAW_SRC_CPP := $(shell find src -name '*.cc' | grep -v 'benchmarks' | grep -v 'src/device/' | grep -v 'src/transport/test/' | grep -v 'src/ccl/test/' | sort)
+LEGACY_TRANSPORT_CPP := \
+	src/transport/ipc_channel.cc \
+	src/transport/tcp_transport_adapter.cc \
+	src/transport/uccl_transport_adapter.cc
+SRC_CPP := $(filter-out $(LEGACY_TRANSPORT_CPP),$(RAW_SRC_CPP))
 SRC_CU  := $(shell find src -name '*.cu' | grep -v 'benchmarks')
 
 OBJ_CC   := $(SRC_CPP:.cc=.o)

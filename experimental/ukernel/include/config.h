@@ -24,12 +24,6 @@ struct CommunicatorConfig {
     config.exchanger_port = getEnvOrDefault("UHM_EXCHANGER_SERVER_PORT",
                                             DEFAULT_EXCHANGER_SERVER_PORT);
     config.local_id = getLocalIdOrDefault();
-    if (char const* t = std::getenv("UHM_PREFERRED_TRANSPORT")) {
-      std::string val(t);
-      if (val == "uccl") config.preferred_transport = PreferredTransport::Uccl;
-      else if (val == "ipc") config.preferred_transport = PreferredTransport::Ipc;
-      else if (val == "tcp") config.preferred_transport = PreferredTransport::Tcp;
-    }
     return config;
   }
 

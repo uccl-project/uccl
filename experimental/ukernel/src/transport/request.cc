@@ -19,18 +19,17 @@ void Request::mark_failed() {
 }
 
 void Request::complete_one() {
-  uint32_t remaining = remaining_completions.load(std::memory_order_acquire);
-  while (remaining > 0) {
-    if (remaining_completions.compare_exchange_weak(
-            remaining, remaining - 1, std::memory_order_acq_rel,
-            std::memory_order_acquire)) {
-      if (remaining == 1) {
-        state.store(RequestState::Completed, std::memory_order_release);
-      }
-      return;
-    }
+  uint32_t prev =
+      remaining_completions.fetch_sub(1, std::memory_order_acq_rel);
+  if (prev == 0) {
+    // Underflow means completion signaling protocol is broken.
+    remaining_completions.store(0, std::memory_order_release);
+    state.store(RequestState::Failed, std::memory_order_release);
+    return;
   }
-  state.store(RequestState::Failed, std::memory_order_release);
+  if (prev == 1) {
+    state.store(RequestState::Completed, std::memory_order_release);
+  }
 }
 
 }  // namespace Transport

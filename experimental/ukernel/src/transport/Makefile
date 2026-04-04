@@ -26,13 +26,12 @@ LOCAL_INCLUDES := -I$(UCCL_ROOT)/experimental/ukernel/include -I$(UCCL_ROOT)/inc
 	-I. -Itest -Itest/common -Itest/unit -Itest/integration \
 	-I../../include -I$(CUDA_HOME)/include
 
-SRC_CPP := communicator.cc host_bounce_pool.cc ipc_cache.cc ipc_channel.cc memory_registry.cc oob.cc oob_shm.cc oob_socket.cc peer_session.cc request.cc tcp_transport_adapter.cc uccl_transport_adapter.cc utils.cc
+SRC_CPP := communicator.cc adapter/ipc_adapter.cc adapter/tcp_adapter.cc adapter/uccl_adapter.cc memory/memory_manager.cc oob/oob.cc oob/oob_shm.cc oob/oob_socket.cc request.cc utils.cc
 TEST_UNIT_CPP := test/unit/test_transport_unit_main.cc \
 	test/unit/test_transport_core.cc \
 	test/unit/test_transport_oob_socket.cc \
 	test/unit/test_transport_oob_shm.cc \
 	test/unit/test_transport_oob_exchangeable.cc \
-	test/unit/test_transport_peer_session.cc \
 	test/unit/test_transport_host_bounce_pool.cc \
 	test/unit/test_transport_tcp_adapter.cc \
 	test/unit/test_transport_utils.cc
@@ -57,7 +56,6 @@ test-unit: $(TEST_UNIT_BIN)
 	./$(TEST_UNIT_BIN) oob-socket
 	./$(TEST_UNIT_BIN) oob-socket-meta --world-size 4
 	./$(TEST_UNIT_BIN) oob-serde
-	./$(TEST_UNIT_BIN) peer-session
 	./$(TEST_UNIT_BIN) host-bounce
 	./$(TEST_UNIT_BIN) tcp-adapter
 	./$(TEST_UNIT_BIN) utils-host-id

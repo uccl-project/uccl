@@ -4,7 +4,6 @@
 void test_transport_core();
 void test_generate_host_id();
 void test_transport_host_bounce_pool();
-void test_transport_peer_session();
 void test_transport_tcp_adapter();
 void test_transport_oob_exchangeables();
 void test_socket_oob();

@@ -178,6 +178,7 @@ struct TcpP2PInfo : public Exchangeable {
 
 struct IpcBufferInfo : public Exchangeable {
   uint32_t ipc_id = 0;
+  uint64_t binding_version = 0;
   gpuIpcMemHandle_t handle{};
   uint64_t base_offset = 0;
   uint64_t bytes = 0;
@@ -187,6 +188,7 @@ struct IpcBufferInfo : public Exchangeable {
   std::map<std::string, std::string> to_map() const override {
     std::map<std::string, std::string> kv;
     kv["ipc_id"] = std::to_string(ipc_id);
+    kv["binding_version"] = std::to_string(binding_version);
     kv["base_offset"] = std::to_string(base_offset);
     kv["bytes"] = std::to_string(bytes);
     kv["device_idx"] = std::to_string(device_idx);
@@ -205,6 +207,15 @@ struct IpcBufferInfo : public Exchangeable {
 
   void from_map(std::map<std::string, std::string> const& kv) override {
     ipc_id = static_cast<uint32_t>(std::stoul(kv.at("ipc_id")));
+    auto it_binding_version = kv.find("binding_version");
+    if (it_binding_version == kv.end()) {
+      // Backward-compatible fallback for older peers/tests.
+      auto it_generation = kv.find("generation");
+      binding_version =
+          (it_generation == kv.end()) ? 0 : std::stoull(it_generation->second);
+    } else {
+      binding_version = std::stoull(it_binding_version->second);
+    }
     base_offset = std::stoull(kv.at("base_offset"));
     bytes = std::stoull(kv.at("bytes"));
     device_idx = std::stoi(kv.at("device_idx"));
@@ -279,6 +290,8 @@ struct IpcCacheWire {
   uint64_t offset;
   uint64_t size;
   uint32_t remote_gpu_idx_;
+  uint8_t use_bounce_buffer = 0;
+  char bounce_shm_name[128] = {};
 };
 #pragma pack(pop)
 
@@ -292,6 +305,7 @@ enum class ShmCtrlMsgType : uint32_t {
   ConnectAck = 1,
   IpcCache = 2,
   Ack = 3,
+  IpcCacheReq = 4,
 };
 
 struct ShmCtrlMsg {
@@ -305,7 +319,7 @@ struct ShmCtrlMsg {
     AckWire ack;
   };
 
-  ShmCtrlMsg() { std::memset(&cache, 0, sizeof(cache)); }
+  ShmCtrlMsg() : cache{} {}
 };
 
 class ShmRingExchanger {
@@ -322,15 +336,20 @@ class ShmRingExchanger {
   bool send(int peer_rank, uint16_t type, uint64_t seq, void const* payload,
             uint32_t bytes);
   bool send_ipc_cache(int peer_rank, uint64_t seq, IpcCacheWire const& cache);
+  bool send_ipc_cache_req(int peer_rank, uint64_t seq);
   bool recv_ipc_cache(int peer_rank, IpcCacheWire& out_cache,
                       uint64_t* out_seq = nullptr, int timeout_ms = 30000,
                       uint64_t expected_seq = UINT64_MAX);
+  bool recv_ipc_cache_req(int peer_rank, uint64_t* out_seq = nullptr,
+                          int timeout_ms = 30000,
+                          uint64_t expected_seq = UINT64_MAX);
   bool send_ack(int peer_rank, uint64_t seq, uint32_t status = 1);
   bool recv_ack(int peer_rank, uint32_t* out_status = nullptr,
                 uint64_t* out_seq = nullptr, int timeout_ms = 30000,
                 uint64_t expected_seq = UINT64_MAX);
 
   void close_peer(int peer_rank);
+  bool is_peer_connected(int peer_rank) const;
 
  private:
   struct ShmRingHandle {
@@ -361,7 +380,6 @@ class ShmRingExchanger {
   };
 
   std::string ring_name(int from_rank, int to_rank) const;
-  void cleanup_stale_ring(int peer_rank);
   bool ensure_local_ring(int peer_rank);
   bool ensure_remote_ring_attached(int peer_rank, int timeout_ms);
   bool try_recv_one_locked(int peer_rank, ShmCtrlMsg& msg);
@@ -371,12 +389,16 @@ class ShmRingExchanger {
   bool try_take_cached_ipc_cache_locked(int peer_rank, uint64_t expected_seq,
                                         IpcCacheWire& out_cache,
                                         uint64_t* out_seq);
+  bool try_take_cached_ipc_cache_req_locked(int peer_rank,
+                                            uint64_t expected_seq,
+                                            uint64_t* out_seq);
   bool try_take_cached_ack_locked(int peer_rank, uint64_t expected_seq,
                                   AckWire& out_ack, uint64_t* out_seq);
   void cache_connect_message(int peer_rank, uint64_t seq);
   void cache_connect_ack_message(int peer_rank, uint64_t seq);
   void cache_ipc_cache_message(int peer_rank, uint64_t seq,
                                IpcCacheWire const& cache);
+  void cache_ipc_cache_req_message(int peer_rank, uint64_t seq);
   void cache_ack_message(int peer_rank, uint64_t seq, AckWire const& ack);
   bool send_msg(int peer_rank, ShmCtrlMsg const& msg);
 
@@ -394,6 +416,7 @@ class ShmRingExchanger {
   std::unordered_map<int, std::deque<uint64_t>> pending_connect_acks_;
   std::unordered_map<int, std::deque<PendingIpcCacheMsg>>
       rank_to_pending_ipc_cache_;
+  std::unordered_map<int, std::deque<uint64_t>> rank_to_pending_ipc_cache_req_;
   std::unordered_map<int, std::deque<PendingAckMsg>> rank_to_pending_acks_;
   std::vector<uint64_t> next_connect_seq_;
 };

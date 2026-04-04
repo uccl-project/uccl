@@ -1,10 +1,11 @@
-#include "tcp_transport_adapter.h"
+#include "adapter/tcp_adapter.h"
 #include "test.h"
 #include "test_utils.h"
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -51,21 +52,24 @@ void test_tcp_connect_and_transfer() {
   std::vector<uint8_t> recvbuf(sendbuf.size(), 0);
   fill_pattern(sendbuf, 0x33);
 
-  require(server.recv_async(/*peer_rank=*/1, recvbuf.data(), recvbuf.size(),
-                            /*request_id=*/41) == 0,
-          "server recv_async should succeed");
-  require(client.send_async(/*peer_rank=*/0, sendbuf.data(), sendbuf.size(),
-                            /*request_id=*/42) == 0,
-          "client send_async should succeed");
+  unsigned recv_req = server.recv_async(/*peer_rank=*/1, recvbuf.data(),
+                                        recvbuf.size(), /*local_mr_id=*/0,
+                                        /*bounce_provider=*/nullptr);
+  require(recv_req != 0, "server recv_async should succeed");
+  unsigned send_req = client.send_async(/*peer_rank=*/0, sendbuf.data(),
+                                        sendbuf.size(), /*local_mr_id=*/0,
+                                        std::nullopt,
+                                        /*bounce_provider=*/nullptr);
+  require(send_req != 0, "client send_async should succeed");
 
-  require(client.wait_completion(42), "client wait_completion failed");
-  require(server.wait_completion(41), "server wait_completion failed");
-  require(!client.request_failed(42), "client request should not fail");
-  require(!server.request_failed(41), "server request should not fail");
+  require(client.wait_completion(send_req), "client wait_completion failed");
+  require(server.wait_completion(recv_req), "server wait_completion failed");
+  require(!client.request_failed(send_req), "client request should not fail");
+  require(!server.request_failed(recv_req), "server request should not fail");
   require(sendbuf == recvbuf, "tcp adapter payload mismatch");
 
-  client.release_request(42);
-  server.release_request(41);
+  client.release_request(send_req);
+  server.release_request(recv_req);
 }
 
 void test_tcp_invalid_peer_paths() {
@@ -73,10 +77,12 @@ void test_tcp_invalid_peer_paths() {
   std::vector<uint8_t> buf(64, 0);
 
   require(adapter.send_async(/*peer_rank=*/1, buf.data(), buf.size(),
-                             /*request_id=*/1) == -1,
+                             /*local_mr_id=*/0, std::nullopt,
+                             /*bounce_provider=*/nullptr) == 0,
           "send_async without peer should fail");
   require(adapter.recv_async(/*peer_rank=*/1, buf.data(), buf.size(),
-                             /*request_id=*/2) == -1,
+                             /*local_mr_id=*/0,
+                             /*bounce_provider=*/nullptr) == 0,
           "recv_async without peer should fail");
   require(adapter.poll_completion(/*request_id=*/999),
           "poll_completion on unknown request should be treated as done");

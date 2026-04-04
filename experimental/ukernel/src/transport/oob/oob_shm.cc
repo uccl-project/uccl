@@ -111,6 +111,7 @@ bool ShmRingExchanger::ensure_server_started() {
 bool ShmRingExchanger::connect_to(int peer_rank, int timeout_ms) {
   if (peer_rank == self_rank_) return true;
   if (!ensure_server_started()) return false;
+  if (!ensure_local_ring(peer_rank)) return false;
   if (!ensure_remote_ring_attached(peer_rank, timeout_ms)) return false;
 
   uint64_t connect_seq = 0;
@@ -165,6 +166,7 @@ bool ShmRingExchanger::connect_to(int peer_rank, int timeout_ms) {
 bool ShmRingExchanger::accept_from(int peer_rank, int timeout_ms) {
   if (peer_rank == self_rank_) return true;
   if (!ensure_server_started()) return false;
+  if (!ensure_local_ring(peer_rank)) return false;
 
   auto deadline = std::chrono::steady_clock::now() +
                   std::chrono::milliseconds(timeout_ms < 0 ? 0 : timeout_ms);
@@ -238,6 +240,15 @@ bool ShmRingExchanger::send_ipc_cache(int peer_rank, uint64_t seq,
               static_cast<uint32_t>(sizeof(IpcCacheWire)));
 }
 
+bool ShmRingExchanger::send_ipc_cache_req(int peer_rank, uint64_t seq) {
+  ShmCtrlMsg msg;
+  msg.from_rank = static_cast<uint32_t>(self_rank_);
+  msg.to_rank = static_cast<uint32_t>(peer_rank);
+  msg.type = ShmCtrlMsgType::IpcCacheReq;
+  msg.seq = seq;
+  return send_msg(peer_rank, msg);
+}
+
 bool ShmRingExchanger::recv_ipc_cache(int peer_rank, IpcCacheWire& out_cache,
                                       uint64_t* out_seq, int timeout_ms,
                                       uint64_t expected_seq) {
@@ -248,6 +259,42 @@ bool ShmRingExchanger::recv_ipc_cache(int peer_rank, IpcCacheWire& out_cache,
       std::lock_guard<std::mutex> lk(pending_mu_);
       if (try_take_cached_ipc_cache_locked(peer_rank, expected_seq, out_cache,
                                            out_seq)) {
+        return true;
+      }
+    }
+
+    ShmCtrlMsg msg;
+    bool got = false;
+    {
+      std::shared_ptr<PeerState> peer;
+      {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (peer_rank < 0 || peer_rank >= world_size_) return false;
+        peer = peers_[static_cast<size_t>(peer_rank)];
+      }
+      if (!peer || peer->local_inbox.ring == nullptr) return false;
+      std::lock_guard<std::mutex> recv_lk(peer->recv_mu);
+      got = try_recv_one_locked(peer_rank, msg);
+    }
+    if (got) continue;
+
+    if (timeout_expired(deadline, timeout_ms)) {
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+}
+
+bool ShmRingExchanger::recv_ipc_cache_req(int peer_rank, uint64_t* out_seq,
+                                          int timeout_ms,
+                                          uint64_t expected_seq) {
+  auto deadline = std::chrono::steady_clock::now() +
+                  std::chrono::milliseconds(timeout_ms < 0 ? 0 : timeout_ms);
+  while (true) {
+    {
+      std::lock_guard<std::mutex> lk(pending_mu_);
+      if (try_take_cached_ipc_cache_req_locked(peer_rank, expected_seq,
+                                               out_seq)) {
         return true;
       }
     }
@@ -351,7 +398,15 @@ void ShmRingExchanger::close_peer(int peer_rank) {
   pending_connect_.erase(peer_rank);
   pending_connect_acks_.erase(peer_rank);
   rank_to_pending_ipc_cache_.erase(peer_rank);
+  rank_to_pending_ipc_cache_req_.erase(peer_rank);
   rank_to_pending_acks_.erase(peer_rank);
+}
+
+bool ShmRingExchanger::is_peer_connected(int peer_rank) const {
+  std::lock_guard<std::mutex> lk(mu_);
+  if (peer_rank < 0 || peer_rank >= static_cast<int>(peers_.size())) return false;
+  auto& peer = peers_[static_cast<size_t>(peer_rank)];
+  return peer && peer->connected;
 }
 
 std::string ShmRingExchanger::ring_name(int from_rank, int to_rank) const {
@@ -362,12 +417,6 @@ std::string ShmRingExchanger::ring_name(int from_rank, int to_rank) const {
   };
   return uccl::Format("/uk_t_oob_%s_l%d_l%d", ring_namespace_.c_str(),
                       resolve_local_id(from_rank), resolve_local_id(to_rank));
-}
-
-void ShmRingExchanger::cleanup_stale_ring(int peer_rank) {
-  if (peer_rank == self_rank_) return;
-  std::string local_ring = ring_name(peer_rank, self_rank_);
-  shm_unlink(local_ring.c_str());
 }
 
 static std::vector<std::string>* g_created_rings = nullptr;
@@ -463,6 +512,10 @@ bool ShmRingExchanger::try_recv_one_locked(int peer_rank, ShmCtrlMsg& msg) {
     cache_ipc_cache_message(peer_rank, msg.seq, msg.cache);
     return true;
   }
+  if (msg.type == ShmCtrlMsgType::IpcCacheReq) {
+    cache_ipc_cache_req_message(peer_rank, msg.seq);
+    return true;
+  }
   if (msg.type == ShmCtrlMsgType::Ack) {
     cache_ack_message(peer_rank, msg.seq, msg.ack);
     return true;
@@ -525,6 +578,22 @@ bool ShmRingExchanger::try_take_cached_ipc_cache_locked(int peer_rank,
   return false;
 }
 
+bool ShmRingExchanger::try_take_cached_ipc_cache_req_locked(
+    int peer_rank, uint64_t expected_seq, uint64_t* out_seq) {
+  auto it = rank_to_pending_ipc_cache_req_.find(peer_rank);
+  if (it == rank_to_pending_ipc_cache_req_.end()) return false;
+  auto& q = it->second;
+  for (auto msg_it = q.begin(); msg_it != q.end(); ++msg_it) {
+    if (expected_seq != UINT64_MAX && *msg_it != expected_seq) continue;
+    uint64_t seq = *msg_it;
+    q.erase(msg_it);
+    if (q.empty()) rank_to_pending_ipc_cache_req_.erase(it);
+    if (out_seq) *out_seq = seq;
+    return true;
+  }
+  return false;
+}
+
 bool ShmRingExchanger::try_take_cached_ack_locked(int peer_rank,
                                                   uint64_t expected_seq,
                                                   AckWire& out_ack,
@@ -547,6 +616,11 @@ void ShmRingExchanger::cache_ipc_cache_message(int peer_rank, uint64_t seq,
   std::lock_guard<std::mutex> lk(pending_mu_);
   rank_to_pending_ipc_cache_[peer_rank].push_back(
       PendingIpcCacheMsg{seq, cache});
+}
+
+void ShmRingExchanger::cache_ipc_cache_req_message(int peer_rank, uint64_t seq) {
+  std::lock_guard<std::mutex> lk(pending_mu_);
+  rank_to_pending_ipc_cache_req_[peer_rank].push_back(seq);
 }
 
 void ShmRingExchanger::cache_ack_message(int peer_rank, uint64_t seq,

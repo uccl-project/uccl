@@ -1,4 +1,4 @@
-#include "host_bounce_pool.h"
+#include "memory/memory_manager.h"
 #include "test.h"
 #include "test_utils.h"
 #include <algorithm>
@@ -8,7 +8,7 @@
 
 namespace {
 
-using UKernel::Transport::HostBouncePool;
+using UKernel::Transport::BounceCpuBufferPool;
 using UKernel::Transport::TestUtil::require;
 using UKernel::Transport::TestUtil::run_case;
 using UKernel::Transport::TestUtil::throws;
@@ -18,7 +18,7 @@ void test_pool_reuse_and_registration() {
   std::vector<uint64_t> deregistered;
 
   {
-    HostBouncePool pool(
+    BounceCpuBufferPool pool(
         [&](uint64_t, void*, size_t) {
           ++register_calls;
           return true;
@@ -64,7 +64,7 @@ void test_pool_eviction_and_registration_failures() {
   std::vector<uint64_t> deregistered;
 
   {
-    HostBouncePool pool(
+    BounceCpuBufferPool pool(
         [](uint64_t, void*, size_t) { return true; },
         [&](uint64_t mr_id) { deregistered.push_back(mr_id); });
 
@@ -88,7 +88,7 @@ void test_pool_eviction_and_registration_failures() {
   require(deregistered.size() == 3,
           "destructor should deregister the remaining retained entries");
 
-  HostBouncePool failing_pool(
+  BounceCpuBufferPool failing_pool(
       [](uint64_t, void*, size_t) { return false; }, [](uint64_t) {});
   require(throws([&] { (void)failing_pool.acquire(1024, true); }),
           "failed registration should throw");

@@ -28,10 +28,6 @@ int main(int argc, char** argv) {
       test_transport_oob_exchangeables();
       return 0;
     }
-    if (argc > 1 && std::string(argv[1]) == "peer-session") {
-      test_transport_peer_session();
-      return 0;
-    }
     if (argc > 1 && std::string(argv[1]) == "host-bounce") {
       test_transport_host_bounce_pool();
       return 0;
@@ -55,7 +51,6 @@ int main(int argc, char** argv) {
             << "  test_transport_unit oob-socket-meta [--world-size N]\n"
             << "  test_transport_unit oob-shm\n"
             << "  test_transport_unit oob-serde\n"
-            << "  test_transport_unit peer-session\n"
             << "  test_transport_unit host-bounce\n"
             << "  test_transport_unit tcp-adapter\n"
             << "  test_transport_unit utils-host-id\n";

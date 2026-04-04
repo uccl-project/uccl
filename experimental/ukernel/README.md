@@ -96,9 +96,9 @@ Run Python tests (requires 2+ GPUs):
 
 ```bash
 cd experimental/ukernel/py
-torchrun --nproc_per_node=2 test_collective.py
-torchrun --nproc_per_node=3 test_collective.py  # for 3-rank tests
-torchrun --nproc_per_node=2 test_p2p.py
+CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 test_collective.py
+CUDA_VISIBLE_DEVICES=0,6,7 torchrun --nproc_per_node=3 test_collective.py  # for 3-rank tests
+CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 test_p2p.py
 ```
 
 Minimal usage under `torchrun`:

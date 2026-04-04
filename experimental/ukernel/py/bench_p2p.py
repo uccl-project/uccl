@@ -18,6 +18,8 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
     n = size_bytes // 4  # float32
     send_buf = torch.empty(n, device="cuda", dtype=torch.float32)
     recv_buf = torch.empty(n, device="cuda", dtype=torch.float32)
+    comm.pin_tensor(send_buf)
+    comm.pin_tensor(recv_buf)
 
     rank = comm.rank
     # Server (rank 0) recv first, client (rank 1) send first
@@ -41,7 +43,10 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
             comm.send(peer, send_buf)
             comm.recv(peer, recv_buf)
         torch.cuda.synchronize()
-    return time.perf_counter() - t0
+    elapsed = time.perf_counter() - t0
+    comm.unpin_tensor(send_buf)
+    comm.unpin_tensor(recv_buf)
+    return elapsed
 
 
 def bench_p2p_nccl(warmup, iters, size_bytes):
@@ -102,6 +107,7 @@ def main() -> None:
         1 << 22,       # 16 MB
         1 << 24,       # 64 MB
         1 << 26,       # 256 MB
+        1 << 28,       # 1 GB
     ]
 
     exchanger_port = env_int("EXCHANGER_PORT", 29610)
@@ -119,9 +125,17 @@ def main() -> None:
         world_size=world,
         exchanger_ip=os.getenv("MASTER_ADDR", "127.0.0.1"),
         exchanger_port=exchanger_port,
-        transport="auto",
+        transport=os.getenv("UK_P2P_TRANSPORT", "auto"),
     )
-    comm.connect_bidir(peer)
+    if peer == 1:
+        if not comm.connect_peer(peer):
+            raise RuntimeError(f"connect_peer({peer}) failed")
+    else:
+        if not comm.accept_peer(peer):
+            raise RuntimeError(f"accept_peer({peer}) failed")
+
+    if rank == 0:
+        print(f"[ukernel] selected transport to peer {peer}: {comm.peer_transport(peer)}")
 
     # --- Init NCCL once ---
     nccl_dist.init_process_group(
@@ -130,8 +144,6 @@ def main() -> None:
         world_size=world,
         device_id=torch.device(f"cuda:{local_rank}"),
     )
-
-    peer = 1 if rank == 0 else 0
 
     for size in sizes:
         if size % 4 != 0:

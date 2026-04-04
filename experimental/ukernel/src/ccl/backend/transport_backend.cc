@@ -46,7 +46,8 @@ CommunicatorTransportBackend::CommunicatorTransportBackend(
               : std::make_shared<UKernel::Transport::CommunicatorConfig>())),
       backend_cache_key_(g_next_transport_backend_cache_key.fetch_add(
           1, std::memory_order_relaxed)),
-      peer_paths_(static_cast<size_t>(communicator_->world_size())) {
+      peer_paths_ready_(static_cast<size_t>(communicator_->world_size()),
+                        false) {
   completion_notifier_ = communicator_->register_completion_notifier(
       [this](unsigned request_id, std::chrono::steady_clock::time_point) {
         on_transport_completion(request_id);
@@ -94,64 +95,34 @@ void CommunicatorTransportBackend::ensure_plan_paths(
         "execution plan world size does not match transport communicator");
   }
 
-  std::vector<bool> need_send(static_cast<size_t>(plan.nranks), false);
-  std::vector<bool> need_recv(static_cast<size_t>(plan.nranks), false);
+  std::vector<bool> need_peer(static_cast<size_t>(plan.nranks), false);
   for (ExecOp const& op : plan.ops) {
     int peer_rank = transport_peer_rank(op);
     if (peer_rank < 0 || peer_rank >= plan.nranks) continue;
-    if (op.kind == ExecOpKind::TransportSend) {
-      need_send[static_cast<size_t>(peer_rank)] = true;
-    } else if (op.kind == ExecOpKind::TransportRecv) {
-      need_recv[static_cast<size_t>(peer_rank)] = true;
+    if (op.kind == ExecOpKind::TransportSend ||
+        op.kind == ExecOpKind::TransportRecv) {
+      need_peer[static_cast<size_t>(peer_rank)] = true;
     }
   }
 
-  // Phase 1 establishes lower-rank -> higher-rank paths only.
   for (int peer = 0; peer < plan.nranks; ++peer) {
     if (peer == plan.rank) continue;
-    bool need_send_to_peer = need_send[static_cast<size_t>(peer)];
-    bool need_recv_from_peer = need_recv[static_cast<size_t>(peer)];
-    if (plan.rank < peer) {
-      ensure_peer_paths(peer, need_send_to_peer, false);
-    } else {
-      ensure_peer_paths(peer, false, need_recv_from_peer);
-    }
-  }
-
-  // Phase 2 establishes higher-rank -> lower-rank paths only.
-  for (int peer = 0; peer < plan.nranks; ++peer) {
-    if (peer == plan.rank) continue;
-    bool need_send_to_peer = need_send[static_cast<size_t>(peer)];
-    bool need_recv_from_peer = need_recv[static_cast<size_t>(peer)];
-    if (plan.rank < peer) {
-      ensure_peer_paths(peer, false, need_recv_from_peer);
-    } else {
-      ensure_peer_paths(peer, need_send_to_peer, false);
-    }
+    if (!need_peer[static_cast<size_t>(peer)]) continue;
+    ensure_peer_paths(peer);
   }
 }
 
-void CommunicatorTransportBackend::ensure_peer_paths(int peer_rank,
-                                                     bool need_send,
-                                                     bool need_recv) const {
-  if (!need_send && !need_recv) return;
-
+void CommunicatorTransportBackend::ensure_peer_paths(int peer_rank) const {
   std::lock_guard<std::mutex> lock(path_mu_);
-  PeerPathState& state = peer_paths_.at(static_cast<size_t>(peer_rank));
-  bool ok = true;
-  if (need_send) {
-    if (!state.send_ready) {
-      ok = communicator_->connect_to(peer_rank);
-      state.send_ready = ok;
-    }
-  }
-  if (ok && need_recv) {
-    if (!state.recv_ready) {
-      ok = communicator_->accept_from(peer_rank);
-      state.recv_ready = ok;
-    }
-  }
+  size_t idx = static_cast<size_t>(peer_rank);
+  if (peer_paths_ready_.at(idx)) return;
 
+  // Communicator exposes a duplex-ready semantic at peer granularity.
+  // Keep connect/accept API surface unchanged; choose one side deterministically.
+  bool ok = (communicator_->rank() < peer_rank)
+                ? communicator_->connect(peer_rank)
+                : communicator_->accept(peer_rank);
+  peer_paths_ready_.at(idx) = ok;
   if (!ok) {
     throw std::runtime_error("failed to lazily establish transport path with "
                              "peer " +
@@ -199,9 +170,9 @@ void CommunicatorTransportBackend::ensure_memory_bindings_initialized(
       binding.transport_initialized_signature !=
           binding.transport_signature()) {
     binding.invalidate_transport_cache();
-    binding.transport_binding_generation = next_binding_generation_++;
-  } else if (binding.transport_binding_generation == 0) {
-    binding.transport_binding_generation = next_binding_generation_++;
+    binding.transport_binding_version = next_binding_version_++;
+  } else if (binding.transport_binding_version == 0) {
+    binding.transport_binding_version = next_binding_version_++;
   }
   initialize_memory_bindings(binding);
 }
@@ -215,7 +186,7 @@ void CommunicatorTransportBackend::initialize_memory_bindings(
 
   std::vector<BufferId> buffer_ids = binding.registry->registered_buffer_ids();
   Transport::NamedMRInfos local_infos;
-  local_infos.generation = binding.transport_binding_generation;
+  local_infos.generation = binding.transport_binding_version;
   local_infos.entries.reserve(buffer_ids.size());
   for (BufferId id : buffer_ids) {
     RegisteredBuffer& buffer = binding.buffer(id);
@@ -239,7 +210,7 @@ void CommunicatorTransportBackend::initialize_memory_bindings(
       buffer.peer_views[static_cast<size_t>(peer)].same_node = same_node;
     }
     if (peer == communicator_->rank()) continue;
-    if (!communicator_->notify_named_mrs(peer, binding.transport_binding_generation,
+    if (!communicator_->notify_named_mrs(peer, binding.transport_binding_version,
                                          local_infos)) {
       throw std::runtime_error(
           "transport backend notify_named_mrs failed for peer " +
@@ -249,7 +220,8 @@ void CommunicatorTransportBackend::initialize_memory_bindings(
       RegisteredBuffer const& buffer = binding.buffer(entry.buffer_id);
       if (same_node && entry.mr.id != 0 &&
           !communicator_->notify_ipc_buffer(peer, entry.mr.id, buffer.local_ptr,
-                                            buffer.bytes)) {
+                                            buffer.bytes,
+                                            binding.transport_binding_version)) {
         throw std::runtime_error(
             "transport backend notify ipc buffer failed for peer " +
             std::to_string(peer));
@@ -260,7 +232,7 @@ void CommunicatorTransportBackend::initialize_memory_bindings(
   for (int peer = 0; peer < communicator_->world_size(); ++peer) {
     if (peer == communicator_->rank()) continue;
     Transport::NamedMRInfos remote_infos;
-    if (!communicator_->wait_named_mrs(peer, binding.transport_binding_generation,
+    if (!communicator_->wait_named_mrs(peer, binding.transport_binding_version,
                                        remote_infos)) {
       throw std::runtime_error(
           "transport backend wait_named_mrs failed for peer " +
@@ -298,7 +270,8 @@ void CommunicatorTransportBackend::initialize_memory_bindings(
       buffer.peer_views[static_cast<size_t>(peer)].mr_id = it->second.id;
       if (buffer.peer_views[static_cast<size_t>(peer)].same_node &&
           it->second.id != 0 &&
-          !communicator_->wait_ipc_buffer(peer, it->second.id)) {
+          !communicator_->wait_ipc_buffer(peer, it->second.id,
+                                          binding.transport_binding_version)) {
         throw std::runtime_error(
             "transport backend wait ipc buffer failed for peer " +
             std::to_string(peer));
@@ -324,16 +297,27 @@ BackendToken CommunicatorTransportBackend::submit(ExecOp const& op,
   BackendToken token{next_token_++};
   unsigned request_id = 0;
   if (op.kind == ExecOpKind::TransportSend) {
-    void const* src = resolve_const(binding, op.src, op.tile.size_bytes);
-    request_id =
-        communicator_->isend(peer_rank, const_cast<void*>(src), 0,
-                             op.tile.size_bytes,
-                             resolve_local_mr_id(binding, op.src, op.tile.size_bytes),
-                             resolve_remote_mr_id(binding, op.dst), true);
+    (void)resolve_const(binding, op.src, op.tile.size_bytes);
+    Transport::LocalSlice src_slice{
+        resolve_local_mem_id(binding, op.src, op.tile.size_bytes),
+        op.src.offset_bytes,
+        op.tile.size_bytes,
+    };
+    std::optional<Transport::RemoteSlice> dst_hint = std::nullopt;
+    if (op.dst.kind == BufferKind::Remote) {
+      dst_hint = Transport::RemoteSlice{resolve_remote_mem_id(binding, op.dst),
+                                        op.dst.offset_bytes, {},
+                                        binding.transport_binding_version};
+    }
+    request_id = communicator_->isend(peer_rank, src_slice, dst_hint);
   } else {
-    void* dst = resolve_mutable(binding, op.dst, op.tile.size_bytes);
-    request_id = communicator_->irecv(peer_rank, dst, 0, op.tile.size_bytes,
-                                      true);
+    (void)resolve_mutable(binding, op.dst, op.tile.size_bytes);
+    Transport::LocalSlice dst_slice{
+        resolve_local_mem_id(binding, op.dst, op.tile.size_bytes),
+        op.dst.offset_bytes,
+        op.tile.size_bytes,
+    };
+    request_id = communicator_->irecv(peer_rank, dst_slice);
   }
 
   if (request_id == 0) {
@@ -422,7 +406,7 @@ void const* CommunicatorTransportBackend::resolve_const(
   return byte_offset(buffer.local_ptr, ref.offset_bytes);
 }
 
-uint32_t CommunicatorTransportBackend::resolve_local_mr_id(
+uint32_t CommunicatorTransportBackend::resolve_local_mem_id(
     CollectiveBinding const& binding, BufferRef const& ref,
                                                            size_t bytes) const {
   if (ref.kind == BufferKind::Remote) {
@@ -454,7 +438,7 @@ int CommunicatorTransportBackend::resolve_peer_rank(ExecOp const& op) const {
   throw std::invalid_argument("transport peer rank requested for non-transport op");
 }
 
-uint32_t CommunicatorTransportBackend::resolve_remote_mr_id(
+uint32_t CommunicatorTransportBackend::resolve_remote_mem_id(
     CollectiveBinding const& binding, BufferRef const& ref) const {
   if (!is_peer_ref(ref) || ref.rank < 0) {
     throw std::invalid_argument("transport remote MR requires peer buffer ref");

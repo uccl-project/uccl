@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -13,9 +14,11 @@
 
 using CommunicatorConfig = UKernel::Transport::CommunicatorConfig;
 using Communicator = UKernel::Transport::Communicator;
+using LocalSlice = UKernel::Transport::LocalSlice;
 using MR = UKernel::Transport::MR;
 using NamedMR = UKernel::Transport::NamedMR;
 using NamedMRInfos = UKernel::Transport::NamedMRInfos;
+using RemoteSlice = UKernel::Transport::RemoteSlice;
 
 static constexpr int kWorldSize = 2;
 static constexpr int kClientGpu = 0;
@@ -54,13 +57,9 @@ bool check_pattern(std::vector<uint8_t> const& buf, uint8_t seed) {
 bool setup_bidirectional_peer(std::shared_ptr<Communicator> const& comm,
                               int rank, int peer_rank) {
   if (rank < peer_rank) {
-    if (!comm->connect_to(peer_rank)) return false;
-    if (!comm->accept_from(peer_rank)) return false;
-    return true;
+    return comm->connect(peer_rank) && comm->accept(peer_rank);
   }
-  if (!comm->accept_from(peer_rank)) return false;
-  if (!comm->connect_to(peer_rank)) return false;
-  return true;
+  return comm->accept(peer_rank) && comm->connect(peer_rank);
 }
 
 std::shared_ptr<Communicator> make_communicator(
@@ -102,10 +101,12 @@ int run_exchange_client(std::string const& exchanger_ip, int exchanger_port,
   }
   uint32_t remote_recv_mr_id =
       remote_recv_infos.entries.empty() ? 0 : remote_recv_infos.entries.front().mr.id;
-
-  unsigned send_req =
-      comm->isend(kServerRank, sendbuf_d, 0, kMessageBytes, send_mr.id,
-                  remote_recv_mr_id, true);
+  std::optional<RemoteSlice> dst_hint = std::nullopt;
+  if (remote_recv_mr_id != 0) {
+    dst_hint = RemoteSlice{remote_recv_mr_id, 0};
+  }
+  unsigned send_req = comm->isend(
+      kServerRank, LocalSlice{send_mr.id, 0, kMessageBytes}, dst_hint);
   require(send_req != 0, "client isend failed");
   require(comm->wait_finish(send_req), "client wait_finish(send) failed");
 
@@ -137,7 +138,8 @@ int run_exchange_server(std::string const& exchanger_ip, int exchanger_port,
             "server notify_named_mrs failed");
   }
 
-  unsigned recv_req = comm->irecv(kClientRank, recvbuf_d, 0, kMessageBytes, true);
+  unsigned recv_req =
+      comm->irecv(kClientRank, LocalSlice{recv_mr.id, 0, kMessageBytes});
   require(recv_req != 0, "server irecv failed");
   require(comm->wait_finish(recv_req), "server wait_finish(recv) failed");
 
@@ -288,6 +290,8 @@ int test_transport_communicator(int argc, char** argv) {
       preferred = UKernel::Transport::PreferredTransport::Ipc;
     } else if (transport == "uccl") {
       preferred = UKernel::Transport::PreferredTransport::Uccl;
+    } else if (transport == "tcp") {
+      preferred = UKernel::Transport::PreferredTransport::Tcp;
     } else if (transport != "auto") {
       throw std::invalid_argument("unknown transport override: " + transport);
     }

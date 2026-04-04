@@ -1,19 +1,24 @@
 #pragma once
 
+#include "transport_adapter.h"
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <queue>
+#include <vector>
+#include <functional>
 #include <unordered_map>
 
 namespace UKernel {
 namespace Transport {
 
-class TcpTransportAdapter {
+class TcpTransportAdapter final : public TransportAdapter {
  public:
   struct AcceptedPeer {
     int remote_rank = -1;
@@ -21,7 +26,7 @@ class TcpTransportAdapter {
   };
 
   TcpTransportAdapter(std::string local_ip, int local_rank);
-  ~TcpTransportAdapter();
+  ~TcpTransportAdapter() override;
 
   uint16_t get_listen_port() const;
   std::string const& get_listen_ip() const { return local_ip_; }
@@ -30,18 +35,33 @@ class TcpTransportAdapter {
                        uint16_t remote_port);
   bool accept_from_peer(int peer_rank, std::string const& expected_remote_ip,
                         AcceptedPeer* accepted_peer = nullptr);
+  bool connect(int peer_rank) override { return has_send_peer(peer_rank); }
+  bool accept(int peer_rank) override { return has_recv_peer(peer_rank); }
 
   bool has_send_peer(int peer_rank) const;
   bool has_recv_peer(int peer_rank) const;
+  bool has_send_path(int peer_rank) const override;
+  bool has_recv_path(int peer_rank) const override;
 
-  int send_async(int peer_rank, void const* host_ptr, size_t len,
-                 uint64_t request_id);
-  int recv_async(int peer_rank, void* host_ptr, size_t len, uint64_t request_id);
+  unsigned send_async(int peer_rank, void* local_ptr, size_t len,
+                       uint64_t local_mr_id,
+                       std::optional<RemoteSlice> remote_hint,
+                       BounceBufferProvider bounce_provider = nullptr) override;
+  unsigned recv_async(int peer_rank, void* local_ptr, size_t len,
+                      uint64_t local_mr_id,
+                      BounceBufferProvider bounce_provider = nullptr) override;
 
-  bool poll_completion(uint64_t request_id);
-  bool wait_completion(uint64_t request_id);
-  bool request_failed(uint64_t request_id) const;
-  void release_request(uint64_t request_id);
+  bool poll_completion(unsigned id) override;
+  bool wait_completion(unsigned id) override;
+  bool request_failed(unsigned id) override;
+  void release_request(unsigned id) override;
+
+  int peer_count() const override { return static_cast<int>(peer_contexts_.size()); }
+
+  int send_async_tcp(int peer_rank, void const* host_ptr, size_t len,
+                     unsigned request_id);
+  int recv_async_tcp(int peer_rank, void* host_ptr, size_t len,
+                     unsigned request_id);
 
  private:
   struct Handshake {
@@ -77,7 +97,7 @@ class TcpTransportAdapter {
   static bool send_all(int fd, void const* buf, size_t len);
   static bool recv_all(int fd, void* buf, size_t len);
 
-  void join_and_erase_request(uint64_t request_id);
+  void join_and_erase_request(unsigned request_id);
 
   std::string local_ip_;
   int local_rank_ = -1;
@@ -86,7 +106,8 @@ class TcpTransportAdapter {
 
   mutable std::mutex mu_;
   std::unordered_map<int, std::shared_ptr<PeerContext>> peer_contexts_;
-  std::unordered_map<uint64_t, std::shared_ptr<PendingRequest>> pending_;
+  std::unordered_map<unsigned, std::shared_ptr<PendingRequest>> pending_;
+  std::atomic<unsigned> next_request_id_{1};
 };
 
 }  // namespace Transport
