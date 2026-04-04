@@ -370,15 +370,34 @@ void ShmRingExchanger::cleanup_stale_ring(int peer_rank) {
   shm_unlink(local_ring.c_str());
 }
 
+static std::vector<std::string>* g_created_rings = nullptr;
+static std::mutex g_created_rings_mu;
+
+static void cleanup_all_created_rings() {
+  std::lock_guard<std::mutex> lk(g_created_rings_mu);
+  if (!g_created_rings) return;
+  for (auto& name : *g_created_rings) {
+    shm_unlink(name.c_str());
+  }
+}
+
+static void register_created_ring(std::string const& name) {
+  std::lock_guard<std::mutex> lk(g_created_rings_mu);
+  if (!g_created_rings) {
+    g_created_rings = new std::vector<std::string>();
+    std::atexit(cleanup_all_created_rings);
+  }
+  g_created_rings->push_back(name);
+}
+
 bool ShmRingExchanger::ensure_local_ring(int peer_rank) {
   auto& peer = peers_[static_cast<size_t>(peer_rank)];
   if (!peer) peer = std::make_shared<PeerState>();
   if (peer->local_inbox.ring != nullptr) return true;
 
-  cleanup_stale_ring(peer_rank);
-
   peer->local_inbox.shm_name = ring_name(peer_rank, self_rank_);
   shm_unlink(peer->local_inbox.shm_name.c_str());
+  register_created_ring(peer->local_inbox.shm_name);
   peer->local_inbox.ring = uccl::create_shared_ring(
       peer->local_inbox.shm_name.c_str(), sizeof(ShmCtrlMsg), 1024,
       peer->local_inbox.shm_fd, peer->local_inbox.shm_size,
