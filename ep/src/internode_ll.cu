@@ -1,3 +1,4 @@
+#include "common.hpp"
 #include "ep_configs.cuh"
 #include "ep_launch.cuh"
 #include "ep_runtime.cuh"
@@ -45,7 +46,7 @@ void clean_low_latency_buffer(int* clean_0, int num_clean_int_0, int* clean_1,
                 num_clean_int_0, clean_1, num_clean_int_1);
 }
 
-template <bool kUseFP8, bool kUseUE8M0, int kHidden>
+template <bool kUseFP8, bool kUseUE8M0, int kHidden, bool kUseAggressiveAtomic>
 __global__ __launch_bounds__(1024, 1) void dispatch(
     void* packed_recv_x, void* packed_recv_x_scales, int* packed_recv_src_info,
     int64_t* packed_recv_layout_range, int* packed_recv_count,
@@ -283,7 +284,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         }
         // Increase counter after finishing
         __syncwarp();
-        lane_id == 0 ? atomic_add_release_global(
+        lane_id == 0 ? atomic_add_release_global<kUseAggressiveAtomic>(
                            atomic_finish_counter_per_expert + dst_expert_idx, 1)
                      : 0;
       }
@@ -302,8 +303,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       __syncwarp();
 #pragma unroll
       for (int i = lane_id; i < num_experts; i += WARP_SIZE)
-        atomic_add_release_global(atomic_finish_counter_per_expert + i,
-                                  FINISHED_SUM_TAG);
+        atomic_add_release_global<kUseAggressiveAtomic>(
+            atomic_finish_counter_per_expert + i, FINISHED_SUM_TAG);
     }
     // This SM should be responsible for some destination experts, read
     // `topk_idx` for them
@@ -326,8 +327,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
       auto sum = warp_reduce_sum(expert_count[i - expert_begin_idx]);
       if (lane_id == 0) {
         shared_num_tokens_sent_per_expert[i - expert_begin_idx] = sum;
-        atomic_add_release_global(atomic_finish_counter_per_expert + i,
-                                  FINISHED_SUM_TAG - sum);
+        atomic_add_release_global<kUseAggressiveAtomic>(
+            atomic_finish_counter_per_expert + i, FINISHED_SUM_TAG - sum);
       }
     }
   }
@@ -407,8 +408,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
         shared_num_tokens_sent_per_expert[responsible_expert_idx -
                                           sm_id * num_warp_groups];
     // Wait local sends issued and send expert counts
-    while (ld_acquire_global(atomic_finish_counter_per_expert +
-                             responsible_expert_idx) != FINISHED_SUM_TAG * 2)
+    while (ld_acquire_global<kUseAggressiveAtomic>(
+               atomic_finish_counter_per_expert + responsible_expert_idx) !=
+           FINISHED_SUM_TAG * 2)
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
       __builtin_amdgcn_s_sleep(1);
 #else
@@ -435,8 +437,8 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
           low_latency_buffer_idx);
     } else {
       // Intra-node: use direct atomic operation
-      st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr),
-                            -num_tokens_sent - 1);
+      st_release_sys_global<kUseAggressiveAtomic>(
+          reinterpret_cast<int*>(dst_p2p_ptr), -num_tokens_sent - 1);
     }
     // Clean workspace for next use
     atomic_counter_per_expert[responsible_expert_idx] = 0;
@@ -504,7 +506,7 @@ LOW_LATENCY_DISPATCH_RECV:
     if (sub_warp_id == 1 and lane_id == 0) {
       auto start_time = clock64();
       while ((src_rank / max_nvl_peers == rank / max_nvl_peers) &&
-             (num_recv_tokens_ipc = ld_acquire_sys_global(
+             (num_recv_tokens_ipc = ld_acquire_sys_global<kUseAggressiveAtomic>(
                   rdma_recv_count + local_expert_idx * num_ranks + src_rank)) ==
                  0)
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
@@ -514,10 +516,11 @@ LOW_LATENCY_DISPATCH_RECV:
 #endif
 
       while ((src_rank / max_nvl_peers != rank / max_nvl_peers) &&
-             (num_recv_tokens_internode = static_cast<int>(
-                  ld_acquire_sys_global(reinterpret_cast<uint64_t const*>(
-                      rdma_recv_count_internode + local_expert_idx * num_ranks +
-                      src_rank)))) == 0)
+             (num_recv_tokens_internode =
+                  static_cast<int>(ld_acquire_sys_global<kUseAggressiveAtomic>(
+                      reinterpret_cast<uint64_t const*>(
+                          rdma_recv_count_internode +
+                          local_expert_idx * num_ranks + src_rank)))) == 0)
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         __builtin_amdgcn_s_sleep(1);
 #else
@@ -525,9 +528,10 @@ LOW_LATENCY_DISPATCH_RECV:
 #endif
 
       if (src_rank / max_nvl_peers == rank / max_nvl_peers) {
-        if (ld_acquire_sys_global(reinterpret_cast<uint64_t const*>(
-                rdma_recv_count_internode + local_expert_idx * num_ranks +
-                src_rank)) != 0) {
+        if (ld_acquire_sys_global<kUseAggressiveAtomic>(
+                reinterpret_cast<uint64_t const*>(rdma_recv_count_internode +
+                                                  local_expert_idx * num_ranks +
+                                                  src_rank)) != 0) {
           printf(
               "Same node but rdma_recv_count_internode is not zero! src_rank: "
               "%d, rank: %d, max_nvl_peers: %d\n",
@@ -536,8 +540,8 @@ LOW_LATENCY_DISPATCH_RECV:
         }
       }
       if (src_rank / max_nvl_peers != rank / max_nvl_peers) {
-        if (ld_acquire_sys_global(rdma_recv_count +
-                                  local_expert_idx * num_ranks + src_rank) !=
+        if (ld_acquire_sys_global<kUseAggressiveAtomic>(
+                rdma_recv_count + local_expert_idx * num_ranks + src_rank) !=
             0) {
           printf(
               "Different node but rdma_recv_count is not zero! src_rank: %d, "
@@ -683,26 +687,35 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   if (use_ue8m0)
     EP_HOST_ASSERT(round_scale and "UE8M0 SF requires `round_scale=True`");
 
-#define DISPATCH_LAUNCH_CASE(hidden)                                         \
-  {                                                                          \
-    auto dispatch_func = dispatch<false, false, hidden>;                     \
-    if (use_fp8 and not use_ue8m0)                                           \
-      dispatch_func = dispatch<true, false, hidden>;                         \
-    if (use_fp8 and use_ue8m0) dispatch_func = dispatch<true, true, hidden>; \
-    LAUNCH_KERNEL(                                                           \
-        &cfg, dispatch_func, packed_recv_x, packed_recv_x_scales,            \
-        packed_recv_src_info, packed_recv_layout_range, packed_recv_count,   \
-        cumulative_local_expert_recv_stats, dispatch_wait_recv_cost_stats,   \
-        rdma_recv_x, rdma_recv_count, rdma_x, x, topk_idx,                   \
-        atomic_counter_per_expert, atomic_finish_counter_per_expert,         \
-        atomic_send_counter_per_expert, next_clean, next_clean_second,       \
-        num_next_clean_int, num_tokens, num_max_dispatch_tokens_per_rank,    \
-        num_topk, num_experts, rank, num_ranks, num_warp_groups,             \
-        num_warps_per_group, round_scale, phases, d2h_channel_addrs,         \
-        num_d2h_channel_addrs, max_nvl_peers, low_latency_buffer_idx,        \
-        ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,              \
-        rdma_recv_count_internode, grid_sync_barrier_ptr);                   \
-  }                                                                          \
+  static bool const aggressive_atomic_enabled = get_aggressive_atomic_enabled();
+
+#define DISPATCH_LAUNCH_CASE(hidden)                                       \
+  {                                                                        \
+    auto dispatch_func = aggressive_atomic_enabled                         \
+                             ? dispatch<false, false, hidden, true>        \
+                             : dispatch<false, false, hidden, false>;      \
+    if (use_fp8 and not use_ue8m0)                                         \
+      dispatch_func = aggressive_atomic_enabled                            \
+                          ? dispatch<true, false, hidden, true>            \
+                          : dispatch<true, false, hidden, false>;          \
+    if (use_fp8 and use_ue8m0)                                             \
+      dispatch_func = aggressive_atomic_enabled                            \
+                          ? dispatch<true, true, hidden, true>             \
+                          : dispatch<true, true, hidden, false>;           \
+    LAUNCH_KERNEL(                                                         \
+        &cfg, dispatch_func, packed_recv_x, packed_recv_x_scales,          \
+        packed_recv_src_info, packed_recv_layout_range, packed_recv_count, \
+        cumulative_local_expert_recv_stats, dispatch_wait_recv_cost_stats, \
+        rdma_recv_x, rdma_recv_count, rdma_x, x, topk_idx,                 \
+        atomic_counter_per_expert, atomic_finish_counter_per_expert,       \
+        atomic_send_counter_per_expert, next_clean, next_clean_second,     \
+        num_next_clean_int, num_tokens, num_max_dispatch_tokens_per_rank,  \
+        num_topk, num_experts, rank, num_ranks, num_warp_groups,           \
+        num_warps_per_group, round_scale, phases, d2h_channel_addrs,       \
+        num_d2h_channel_addrs, max_nvl_peers, low_latency_buffer_idx,      \
+        ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,            \
+        rdma_recv_count_internode, grid_sync_barrier_ptr);                 \
+  }                                                                        \
   break
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
   EP_HOST_ASSERT(num_warps * WARP_SIZE <= MAX_NTHREADS);
@@ -719,7 +732,8 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
 #undef DISPATCH_LAUNCH_CASE
 }
 
-template <bool kUseLogFMT, int kHidden, int kNumMaxTopk>
+template <bool kUseLogFMT, int kHidden, int kNumMaxTopk,
+          bool kUseAggressiveAtomic>
 __global__ __launch_bounds__(1024, 1) void combine(
     void* combined_x, void* rdma_recv_x, int* rdma_recv_flag, void* rdma_send_x,
     void const* x, int64_t const* topk_idx, float const* topk_weights,
@@ -772,7 +786,9 @@ __global__ __launch_bounds__(1024, 1) void combine(
 
     // Notify before executing `int_p`
     __syncwarp();
-    if (lane_id == 0) atomic_add_release_global(atomic_clean_flag, num_experts);
+    if (lane_id == 0)
+      atomic_add_release_global<kUseAggressiveAtomic>(atomic_clean_flag,
+                                                      num_experts);
   }
 
   // Issue IBGDA sends
@@ -1023,7 +1039,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
     EP_DEVICE_ASSERT(num_warps_per_group > 1 and num_warp_groups < 16);
     sync_barrier<true>(warp_group_id + 1, num_warps_per_group * WARP_SIZE);
     if (sub_warp_id == 1 and lane_id == 0) {
-      while (ld_acquire_global(atomic_clean_flag) == 0)
+      while (ld_acquire_global<kUseAggressiveAtomic>(atomic_clean_flag) == 0)
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         __builtin_amdgcn_s_sleep(1);
 #else
@@ -1045,7 +1061,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
               : 0;
       if (dst_p2p_ptr != 0) {
         // Intra-node: use direct atomic operation
-        st_release_sys_global(reinterpret_cast<int*>(dst_p2p_ptr), 1);
+        st_release_sys_global<kUseAggressiveAtomic>(
+            reinterpret_cast<int*>(dst_p2p_ptr), 1);
       } else {
         // Inter-node or no IPC: use IBGDA atomic
         // NOTE(MaoZiming): Without ibgda, we can only use atomic add
@@ -1059,7 +1076,7 @@ __global__ __launch_bounds__(1024, 1) void combine(
             false, d2h_channel_addrs, num_d2h_channel_addrs, true,
             low_latency_buffer_idx);
       }
-      atomic_add_release_global(atomic_clean_flag, -1);
+      atomic_add_release_global<kUseAggressiveAtomic>(atomic_clean_flag, -1);
     }
     __syncwarp();
   }
@@ -1078,8 +1095,8 @@ LOW_LATENCY_COMBINE_RECV:
       auto const src_rank = responsible_expert_idx / num_local_experts;
       auto start_time = clock64();
       while ((src_rank / max_nvl_peers == rank / max_nvl_peers) &&
-             ld_acquire_sys_global(rdma_recv_flag + responsible_expert_idx) ==
-                 0)
+             ld_acquire_sys_global<kUseAggressiveAtomic>(
+                 rdma_recv_flag + responsible_expert_idx) == 0)
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         __builtin_amdgcn_s_sleep(1);
 #else
@@ -1087,8 +1104,9 @@ LOW_LATENCY_COMBINE_RECV:
 #endif
 
       while ((src_rank / max_nvl_peers != rank / max_nvl_peers) &&
-             ld_acquire_sys_global(reinterpret_cast<uint64_t const*>(
-                 rdma_recv_flag_internode + responsible_expert_idx)) == 0)
+             ld_acquire_sys_global<kUseAggressiveAtomic>(
+                 reinterpret_cast<uint64_t const*>(
+                     rdma_recv_flag_internode + responsible_expert_idx)) == 0)
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
         __builtin_amdgcn_s_sleep(1);
 #else
@@ -1096,8 +1114,9 @@ LOW_LATENCY_COMBINE_RECV:
 #endif
 
       if (src_rank / max_nvl_peers == rank / max_nvl_peers) {
-        if (ld_acquire_sys_global(reinterpret_cast<uint64_t const*>(
-                rdma_recv_flag_internode + responsible_expert_idx)) != 0) {
+        if (ld_acquire_sys_global<kUseAggressiveAtomic>(
+                reinterpret_cast<uint64_t const*>(
+                    rdma_recv_flag_internode + responsible_expert_idx)) != 0) {
           printf(
               "Same node but rdma_recv_flag_internode is not zero! src_rank: "
               "%d, rank: %d, max_nvl_peers: %d\n",
@@ -1106,8 +1125,8 @@ LOW_LATENCY_COMBINE_RECV:
         }
       }
       if (src_rank / max_nvl_peers != rank / max_nvl_peers) {
-        if (ld_acquire_sys_global(rdma_recv_flag + responsible_expert_idx) !=
-            0) {
+        if (ld_acquire_sys_global<kUseAggressiveAtomic>(
+                rdma_recv_flag + responsible_expert_idx) != 0) {
           printf(
               "Different node but rdma_recv_flag is not zero! src_rank: %d, "
               "rank: %d, max_nvl_peers: %d\n",
@@ -1253,10 +1272,16 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
   int const smem_size = kNumTMABytesPerWarp * num_warps_launch;
   // printf("Combine launched\n");
 
+  static bool const aggressive_atomic_enabled = get_aggressive_atomic_enabled();
+
 #define COMBINE_LAUNCH_CASE(hidden)                                          \
   {                                                                          \
-    auto combine_func = use_logfmt ? combine<true, hidden, kNumMaxTopk>      \
-                                   : combine<false, hidden, kNumMaxTopk>;    \
+    auto combine_func =                                                      \
+        aggressive_atomic_enabled                                            \
+            ? (use_logfmt ? combine<true, hidden, kNumMaxTopk, true>         \
+                          : combine<false, hidden, kNumMaxTopk, true>)       \
+            : (use_logfmt ? combine<true, hidden, kNumMaxTopk, false>        \
+                          : combine<false, hidden, kNumMaxTopk, false>);     \
     SET_SHARED_MEMORY_FOR_TMA(combine_func);                                 \
     LAUNCH_KERNEL(                                                           \
         &cfg, combine_func, combined_x, rdma_recv_x, rdma_recv_flag,         \

@@ -140,4 +140,12 @@ static inline uint32_t get_max_inflight_normal() {
   return val;
 }
 
+static inline bool get_aggressive_atomic_enabled() {
+  static uint32_t val = []() -> uint32_t {
+    char const* env = getenv("UCCL_EP_ENABLE_AGGRESSIVE_ATOMIC");
+    return env ? static_cast<uint32_t>(atoi(env)) : 0;
+  }();
+  return val != 0;
+}
+
 #endif  // COMMON_HPP

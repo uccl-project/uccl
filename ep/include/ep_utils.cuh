@@ -14,22 +14,6 @@ using i32_gptr = __attribute__((address_space(1))) int*;
 using u8_gptr = __attribute__((address_space(1))) uint8_t*;
 using f32_gptr = __attribute__((address_space(1))) float*;
 
-#ifndef DISABLE_AGGRESSIVE_ATOMIC
-#define HIP_ATOMIC_LOAD(ptr, order, scope) \
-  __hip_atomic_load((ptr), __ATOMIC_RELAXED, (scope))
-#define HIP_ATOMIC_STORE(val, ptr, order, scope) \
-  __hip_atomic_store((ptr), (val), __ATOMIC_RELAXED, (scope))
-#define HIP_ATOMIC_ADD(ptr, val, order, scope) \
-  __hip_atomic_fetch_add((ptr), (val), __ATOMIC_RELAXED, (scope))
-#else
-#define HIP_ATOMIC_LOAD(ptr, order, scope) \
-  __hip_atomic_load((ptr), (order), (scope))
-#define HIP_ATOMIC_STORE(val, ptr, order, scope) \
-  __hip_atomic_store((ptr), (val), (order), (scope))
-#define HIP_ATOMIC_ADD(ptr, val, order, scope) \
-  __hip_atomic_fetch_add((ptr), (val), (order), (scope))
-#endif
-
 #ifdef DISABLE_BUILTIN_SHLF_SYNC
 // use __shlf instead of __shlf_sync will speed up combine performance
 #define __shfl_xor_sync(mask, var, srcLane) __shfl_xor((var), (srcLane))
@@ -110,6 +94,38 @@ __device__ __forceinline__ void grid_sync(T* bar_ptr, int num_participants) {
 
   __syncthreads();
 }
+
+template <bool kUseAggressiveAtomic, int kMemoryScope, typename dtype_t>
+__device__ __forceinline__ dtype_t scoped_ld_acquire(dtype_t const* ptr) {
+  dtype_t ret;
+  if constexpr (kUseAggressiveAtomic) {
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    asm volatile("s_waitcnt lgkmcnt(0) vmcnt(0)");
+    ret = __hip_atomic_load(const_cast<dtype_t*>(ptr), __ATOMIC_RELAXED,
+                            kMemoryScope);
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+  } else {
+    ret = __hip_atomic_load(const_cast<dtype_t*>(ptr), __ATOMIC_ACQUIRE,
+                            kMemoryScope);
+  }
+  return ret;
+}
+
+template <bool kUseAggressiveAtomic, typename dtype_t>
+__device__ __forceinline__ void st_release_sys_global(dtype_t const* ptr,
+                                                      dtype_t val) {
+  if constexpr (kUseAggressiveAtomic) {
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    asm volatile("s_waitcnt lgkmcnt(0) vmcnt(0)");
+    __hip_atomic_store(const_cast<dtype_t*>(ptr), val, __ATOMIC_RELAXED,
+                       __HIP_MEMORY_SCOPE_SYSTEM);
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+  } else {
+    __hip_atomic_store(const_cast<dtype_t*>(ptr), val, __ATOMIC_RELEASE,
+                       __HIP_MEMORY_SCOPE_SYSTEM);
+  }
+}
+
 }  // namespace amd
 #endif
 
@@ -544,10 +560,12 @@ __device__ __forceinline__ void st_na_global(int4 const* ptr,
 #endif
 }
 
+template <bool kUseAggressiveAtomic = false>
 __device__ __forceinline__ int ld_acquire_sys_global(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = HIP_ATOMIC_LOAD(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
+  ret = amd::scoped_ld_acquire<kUseAggressiveAtomic, __HIP_MEMORY_SCOPE_SYSTEM>(
+      ptr);
 #else
   asm volatile("ld.acquire.sys.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif
@@ -577,32 +595,38 @@ extract_required_scale_format(float value) {
 }
 
 // 32-bit system-consistent load with acquire semantics (GH200-safe)
+template <bool kUseAggressiveAtomic = false>
 __device__ __forceinline__ uint32_t
 ld_acquire_sys_global(uint32_t const volatile* p) {
   uint32_t v;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  v = HIP_ATOMIC_LOAD(p, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
+  v = amd::scoped_ld_acquire<kUseAggressiveAtomic, __HIP_MEMORY_SCOPE_SYSTEM>(
+      p);
 #else
   asm volatile("ld.acquire.sys.global.u32 %0, [%1];" : "=r"(v) : "l"(p));
 #endif
   return v;
 }
 
+template <bool kUseAggressiveAtomic = false>
 __device__ __forceinline__ uint64_t
 ld_acquire_sys_global(uint64_t const volatile* p) {
   uint64_t v;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  v = HIP_ATOMIC_LOAD(p, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
+  v = amd::scoped_ld_acquire<kUseAggressiveAtomic, __HIP_MEMORY_SCOPE_SYSTEM>(
+      p);
 #else
   asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(v) : "l"(p));
 #endif
   return v;
 }
 
+template <bool kUseAggressiveAtomic = false>
 __device__ __forceinline__ uint64_t ld_acquire_sys_global(uint64_t const* ptr) {
   uint64_t ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = HIP_ATOMIC_LOAD(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_SYSTEM);
+  ret = amd::scoped_ld_acquire<kUseAggressiveAtomic, __HIP_MEMORY_SCOPE_SYSTEM>(
+      ptr);
 #else
   asm volatile("ld.acquire.sys.global.u64 %0, [%1];" : "=l"(ret) : "l"(ptr));
 #endif
@@ -634,12 +658,21 @@ __host__ __device__ constexpr dtype_t align(dtype_t a, dtype_t b) {
       ST_FUNC(__dst + __i, LD_FUNC(__src + __i));                            \
   }
 
+template <bool kUseAggressiveAtomic = false>
 __device__ __forceinline__ int atomic_add_release_global(int const* ptr,
                                                          int value) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = HIP_ATOMIC_ADD(const_cast<int*>(ptr), value, __ATOMIC_RELEASE,
-                       __HIP_MEMORY_SCOPE_AGENT);
+  if constexpr (kUseAggressiveAtomic) {
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+    asm volatile("s_waitcnt lgkmcnt(0) vmcnt(0)");
+    ret = __hip_atomic_fetch_add(const_cast<int*>(ptr), value, __ATOMIC_RELAXED,
+                                 __HIP_MEMORY_SCOPE_AGENT);
+    __atomic_signal_fence(__ATOMIC_SEQ_CST);
+  } else {
+    ret = __hip_atomic_fetch_add(const_cast<int*>(ptr), value, __ATOMIC_RELEASE,
+                                 __HIP_MEMORY_SCOPE_AGENT);
+  }
 #else
   asm volatile("atom.add.release.gpu.global.s32 %0, [%1], %2;"
                : "=r"(ret)
@@ -668,20 +701,22 @@ __device__ __forceinline__ uint32_t elect_one_sync(int lane_id) {
   return pred;
 }
 
+template <bool kUseAggressiveAtomic = false>
 __device__ __forceinline__ int ld_acquire_global(int const* ptr) {
   int ret;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  ret = HIP_ATOMIC_LOAD(ptr, __ATOMIC_ACQUIRE, __HIP_MEMORY_SCOPE_AGENT);
+  ret = amd::scoped_ld_acquire<kUseAggressiveAtomic, __HIP_MEMORY_SCOPE_AGENT>(
+      ptr);
 #else
   asm volatile("ld.acquire.gpu.global.s32 %0, [%1];" : "=r"(ret) : "l"(ptr));
 #endif
   return ret;
 }
 
+template <bool kUseAggressiveAtomic = false>
 __device__ __forceinline__ void st_release_sys_global(int const* ptr, int val) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  HIP_ATOMIC_STORE(val, const_cast<int*>(ptr), __ATOMIC_RELEASE,
-                   __HIP_MEMORY_SCOPE_SYSTEM);
+  amd::st_release_sys_global<kUseAggressiveAtomic>(ptr, val);
 #else
   asm volatile("st.release.sys.global.s32 [%0], %1;" ::"l"(ptr), "r"(val)
                : "memory");
@@ -908,8 +943,8 @@ __device__ __forceinline__ void memory_fence_cta() {
 
 __device__ __forceinline__ void st_relaxed_sys_global(int const* ptr, int val) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  HIP_ATOMIC_STORE(val, const_cast<int*>(ptr), __ATOMIC_RELAXED,
-                   __HIP_MEMORY_SCOPE_SYSTEM);
+  __hip_atomic_store(const_cast<int*>(ptr), val, __ATOMIC_RELAXED,
+                     __HIP_MEMORY_SCOPE_SYSTEM);
 #else
   asm volatile("st.relaxed.sys.global.s32 [%0], %1;" ::"l"(ptr), "r"(val)
                : "memory");
