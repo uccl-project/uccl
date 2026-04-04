@@ -39,6 +39,8 @@
 #include <cuda.h>
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <numa.h>
+#include <numaif.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -57,6 +59,41 @@ static const mscclpp::Transport kIBTransports[] = {
     mscclpp::Transport::IB0, mscclpp::Transport::IB1, mscclpp::Transport::IB2,
     mscclpp::Transport::IB3, mscclpp::Transport::IB4, mscclpp::Transport::IB5,
     mscclpp::Transport::IB6, mscclpp::Transport::IB7};
+
+// ---------------------------------------------------------------------------
+// NUMA helpers
+// ---------------------------------------------------------------------------
+
+// RAII guard: sets the calling thread's NUMA memory-allocation policy to
+// "prefer node N" on construction, restores the default (local) policy on
+// destruction.  All allocations (including cudaHostAlloc) made while the
+// guard is alive will prefer the specified NUMA node.
+struct NumaPreferredGuard {
+  NumaPreferredGuard(int node) {
+    if (node >= 0 && numa_available() >= 0) {
+      unsigned long mask = 1UL << node;
+      set_mempolicy(MPOL_PREFERRED, &mask, sizeof(mask) * 8);
+      active_ = true;
+    }
+  }
+  ~NumaPreferredGuard() {
+    if (active_) set_mempolicy(MPOL_DEFAULT, nullptr, 0);
+  }
+  NumaPreferredGuard(NumaPreferredGuard const&) = delete;
+  NumaPreferredGuard& operator=(NumaPreferredGuard const&) = delete;
+
+ private:
+  bool active_ = false;
+};
+
+// Get the NUMA node for a CUDA device, returning -1 on failure.
+static int gpuNumaNode(int cudaDeviceId) {
+  try {
+    return mscclpp::getDeviceNumaNode(cudaDeviceId);
+  } catch (...) {
+    return -1;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Topology-aware IB transport selection.
@@ -114,12 +151,7 @@ static mscclpp::Transport selectIBTransportForGpu(int cudaDeviceId) {
     return mscclpp::Transport::Unknown;
   }
 
-  int gpuNuma = -1;
-  try {
-    gpuNuma = mscclpp::getDeviceNumaNode(cudaDeviceId);
-  } catch (...) {
-    // NUMA info unavailable — fall through to round-robin.
-  }
+  int gpuNuma = gpuNumaNode(cudaDeviceId);
 
   // Collect NUMA nodes for each available IB device.
   std::vector<mscclpp::Transport> sameNuma;
@@ -544,6 +576,12 @@ static void sendRecvWorkerLoop(NcclSendRecvPeerContext* ctx) {
   if (ctx->localDevice >= 0) {
     cudaSetDevice(ctx->localDevice);
   }
+  // Pin this worker thread to the NUMA node of its GPU so that ibv_post_send
+  // and CQ polling access NUMA-local memory.
+  int numaNode = gpuNumaNode(ctx->localDevice);
+  if (numaNode >= 0 && numa_available() >= 0) {
+    mscclpp::numaBind(numaNode);
+  }
 
   auto* qp = ctx->ibQp.get();
   auto* srcMr = ctx->sendStagingMr;
@@ -954,6 +992,11 @@ static void initializeSendRecvPeerContext(ncclComm_t comm, int peer,
     });
   } else {
     // --- IB inter-node path (existing) ---
+    // Allocate staging buffers on the NUMA node local to this GPU for optimal
+    // PCIe DMA bandwidth (both cudaMemcpy D2H/H2D and NIC RDMA).
+    int numaNode = gpuNumaNode(localDevice);
+    NumaPreferredGuard numaGuard(numaNode);
+
     size_t allocBytes = ctx.stagingBytes + kProgressCounterPad;
     ctx.sendStagingBuffer =
         mscclpp::detail::gpuCallocHostShared<char>(allocBytes, 0);
