@@ -204,7 +204,10 @@ build_ep() {
     echo "[container] Building EP with Intel RDMA NIC support (USE_INTEL_RDMA_NIC=1)"
   fi
 
-  if [[ "$TARGET" == "therock" ]]; then
+  if [[ "$TARGET" == "roc6" ]]; then
+    echo "ERROR: EP requires roc7 (ROCm 7) for HIP code transformation; roc6 is not supported." >&2
+    exit 1
+  elif [[ "$TARGET" == "therock" ]]; then
     echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
   elif [[ "$TARGET" == roc[67] || "$TARGET" == cu* ]]; then
     cd ep
