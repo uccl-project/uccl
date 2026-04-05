@@ -38,7 +38,7 @@ python setup.py install
 Alternatively, you can build `uccl.ep` wheel for ROCm7 using docker then install:
 ```bash
 # Under uccl
-bash build.sh rocm ep --install
+bash build.sh roc7 ep --install
 ```
 
 ## Test import `uccl.ep`

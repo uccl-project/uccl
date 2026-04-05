@@ -8,7 +8,7 @@
 # Environment variables consumed (set by build.sh before container launch):
 #
 #   Required:
-#     TARGET                        Build target: cu12, cu13, rocm, rocm6, therock
+#     TARGET                        Build target: cu12, cu13, roc7, roc6, therock
 #     PY_VER                        Python version, e.g. "3.10"
 #     ARCH                          Host architecture: x86_64 or aarch64
 #     BUILD_TYPE                    What to build: all, ccl_rdma, ccl_efa, p2p, ep, p2p_ep, ukernel
@@ -84,7 +84,7 @@ build_ccl_rdma() {
   if [[ "$TARGET" == cu* ]]; then
     cd collective/rdma && make clean && make -j$(nproc) USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} && cd ../../
     TARGET_SO=collective/rdma/libnccl-net-uccl.so
-  elif [[ "$TARGET" == rocm* ]]; then
+  elif [[ "$TARGET" == roc[67] ]]; then
     if [[ "$ARCH" == "aarch64" ]]; then
       echo "Skipping ROCm build on Arm64 (no ROCm toolchain)."
       return
@@ -120,7 +120,7 @@ build_ccl_efa() {
   set -euo pipefail
   echo "[container] build_ccl_efa Target: $TARGET"
 
-  if [[ "$ARCH" == "aarch64" || "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
+  if [[ "$ARCH" == "aarch64" || "$TARGET" == roc[67] || "$TARGET" == "therock" ]]; then
     echo "Skipping EFA build on Arm64 (no EFA installer) or ROCm (no CUDA)."
     return
   fi
@@ -171,7 +171,7 @@ build_p2p() {
   cd p2p
   if [[ "$TARGET" == cu* ]]; then
     make clean && make -j$(nproc)
-  elif [[ "$TARGET" == rocm* ]]; then
+  elif [[ "$TARGET" == roc[67] ]]; then
     make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm
   elif [[ "$TARGET" == "therock" ]]; then
     make clean -f Makefile.therock && make -j$(nproc) -f Makefile.therock HIP_HOME=$(rocm-sdk path --root) CONDA_LIB_HOME=$VIRTUAL_ENV/lib
@@ -206,7 +206,7 @@ build_ep() {
 
   if [[ "$TARGET" == "therock" ]]; then
     echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
-  elif [[ "$TARGET" == rocm* || "$TARGET" == cu* ]]; then
+  elif [[ "$TARGET" == roc[67] || "$TARGET" == cu* ]]; then
     cd ep
     # This may be needed if you traverse through different git commits
     # make clean && rm -r build || true
@@ -230,7 +230,7 @@ build_ukernel() {
   cd experimental/ukernel
   if [[ "$TARGET" == cu* ]]; then
     make clean -f Makefile && make -j$(nproc) -f Makefile
-  elif [[ "$TARGET" == rocm* ]]; then
+  elif [[ "$TARGET" == roc[67] ]]; then
     make clean -f Makefile.rocm && make -j$(nproc) -f Makefile.rocm
   fi
   cd ../..
@@ -254,7 +254,7 @@ if [[ "$TARGET" == "therock" ]]; then
   pip3 install --no-cache-dir rocm[libraries,devel] --index-url ${ROCM_IDX_URL}
 fi
 
-if [[ "$TARGET" == rocm* ]]; then
+if [[ "$TARGET" == roc[67] ]]; then
   build_rccl_nccl_header
 fi
 
