@@ -95,6 +95,30 @@ __device__ __forceinline__ void grid_sync(T* bar_ptr, int num_participants) {
   __syncthreads();
 }
 
+// Like grid_sync, then leaves *bar_ptr == 0 so the next kernel can reuse it.
+// Last arriver clears the counter; others spin until zero (safe for split
+// launches that return before a second sync, e.g. return_recv_hook send-only).
+template <typename T, int MemoryScope = __HIP_MEMORY_SCOPE_AGENT>
+__device__ __forceinline__ void grid_sync_then_zero(T* bar_ptr,
+                                                    int num_participants) {
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    __threadfence();
+    T const v = __hip_atomic_fetch_add(bar_ptr, static_cast<T>(1),
+                                       __ATOMIC_RELAXED, MemoryScope);
+    if (static_cast<int>(v) == num_participants - 1) {
+      __hip_atomic_store(bar_ptr, static_cast<T>(0), __ATOMIC_RELEASE,
+                         MemoryScope);
+    } else {
+      while (__hip_atomic_load(bar_ptr, __ATOMIC_ACQUIRE, MemoryScope) !=
+             static_cast<T>(0))
+        __builtin_amdgcn_s_sleep(1);
+    }
+    asm volatile("s_wakeup");
+  }
+  __syncthreads();
+}
+
 template <bool kUseAggressiveAtomic, int kMemoryScope, typename dtype_t>
 __device__ __forceinline__ dtype_t scoped_ld_acquire(dtype_t const* ptr) {
   dtype_t ret;

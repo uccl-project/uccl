@@ -337,7 +337,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 #ifdef PER_EXPERT_BATCHING
   // Grid-wide sync before batch-send.
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  amd::grid_sync(grid_sync_barrier_ptr, num_sms);
+  // Reset counter after sync so send-only launches (return_recv_hook) do not
+  // leave a stale value that deadlocks the next dispatch.
+  amd::grid_sync_then_zero(grid_sync_barrier_ptr, num_sms);
 #else
   cg::this_grid().sync();
 #endif
@@ -359,7 +361,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             : 0;
 
     if (dst_p2p_ptr == 0) {
-      // Inter-node: batch send ALL tokens for this expert in ONE call
+      // Inter-node: batch send tokens for this expert (chunked: low-latency imm
+      // encodes token count in 8 bits; proxy accumulates via
+      // dispatch_token_counter).
       auto const num_tokens_to_send =
           atomic_send_counter_per_expert[responsible_expert_idx];
 
@@ -371,25 +375,44 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             static_cast<uint8_t*>(rdma_x) + batch_buf_offset +
             responsible_expert_idx * num_max_dispatch_tokens_per_rank *
                 num_bytes_per_msg;
-        auto const src_ptr = reinterpret_cast<uint64_t>(batch_buf_ptr);
+        auto const src_base = reinterpret_cast<uint64_t>(batch_buf_ptr);
         // Destination: start of this expert's recv buffer on remote rank
-        auto const dst_ptr =
+        auto const dst_base =
             reinterpret_cast<uint64_t>(rdma_recv_x) +
             dst_expert_local_idx * num_ranks *
                 num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
             rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
-        // Total bytes: all tokens for this expert
-        auto const total_bytes = num_tokens_to_send * num_bytes_per_msg;
 
-        __threadfence_system();
-
-        uccl::nvshmemi_ibgda_put_nbi_warp(
-            dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
-            src_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), total_bytes,
-            dst_rank,
-            /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting rb.
-            lane_id, /*slot=*/0, d2h_channel_addrs, num_d2h_channel_addrs,
-            false, low_latency_buffer_idx, 0, 0, num_tokens_to_send);
+        // Low-latency IBGDA encodes token count in one byte (see
+        // uccl_ibgda.cuh). Chunk so each write has num_tokens <= 255 and
+        // stays under the packed bytes limit in the proxy.
+        constexpr int kMaxTokensPerLowLatencyPut = 255;
+        int tokens_remaining = num_tokens_to_send;
+        int token_progress = 0;
+        while (tokens_remaining > 0) {
+          int const chunk_tokens = tokens_remaining < kMaxTokensPerLowLatencyPut
+                                       ? tokens_remaining
+                                       : kMaxTokensPerLowLatencyPut;
+          auto const chunk_bytes =
+              static_cast<size_t>(chunk_tokens) * num_bytes_per_msg;
+          auto const src_chunk =
+              src_base +
+              static_cast<uint64_t>(token_progress) * num_bytes_per_msg;
+          auto const dst_chunk =
+              dst_base +
+              static_cast<uint64_t>(token_progress) * num_bytes_per_msg;
+          __threadfence_system();
+          uccl::nvshmemi_ibgda_put_nbi_warp(
+              dst_chunk - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+              src_chunk - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+              chunk_bytes, dst_rank,
+              /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting
+                                                 // rb.
+              lane_id, /*slot=*/0, d2h_channel_addrs, num_d2h_channel_addrs,
+              false, low_latency_buffer_idx, 0, 0, chunk_tokens);
+          tokens_remaining -= chunk_tokens;
+          token_progress += chunk_tokens;
+        }
       }
     }
     // IPC: already sent in the token loop, nothing to do here
@@ -461,7 +484,11 @@ LOW_LATENCY_DISPATCH_RECV:
   // `packed_recv_count` visible
   if (phases & LOW_LATENCY_SEND_PHASE)
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-    amd::grid_sync(grid_sync_barrier_ptr, num_sms);
+#ifdef PER_EXPERT_BATCHING
+    amd::grid_sync_then_zero(grid_sync_barrier_ptr + 1, num_sms);
+#else
+    amd::grid_sync_then_zero(grid_sync_barrier_ptr, num_sms);
+#endif
 #else
     cg::this_grid().sync();
 #endif
@@ -580,10 +607,6 @@ LOW_LATENCY_DISPATCH_RECV:
     }
     sync_barrier<true>(warp_group_id + 2, num_warps_per_group * WARP_SIZE);
 
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-    // reset grid sync barrier for next use
-    if (sm_id == 0 and thread_id == 0) *grid_sync_barrier_ptr = 0;
-#endif
     num_recv_tokens = shared_num_recv_tokens[warp_group_id];
     recv_token_begin_idx = shared_recv_token_begin_idx[warp_group_id];
 
@@ -666,6 +689,7 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   auto const num_warps = num_warp_groups * num_warps_per_group;
   auto const num_sms = ceil_div(num_experts, num_warp_groups);
   EP_HOST_ASSERT(num_topk <= kNumMaxTopK);
+  EP_HOST_ASSERT(num_device_sms > 0);
 
   // Workspace checks
   auto atomic_counter_per_expert = static_cast<int*>(workspace);
@@ -674,8 +698,10 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
 #ifdef PER_EXPERT_BATCHING
   auto atomic_send_counter_per_expert =
       atomic_finish_counter_per_expert + num_experts;
+  // Two global barrier words on AMD: batch-phase sync + recv-phase sync
+  // (CUDA cg::this_grid().sync() does not reuse the counter).
   auto grid_sync_barrier_ptr = atomic_send_counter_per_expert + num_experts;
-  EP_HOST_ASSERT((num_experts * 3 + 1) * sizeof(int) <= NUM_WORKSPACE_BYTES);
+  EP_HOST_ASSERT((num_experts * 3 + 2) * sizeof(int) <= NUM_WORKSPACE_BYTES);
 #else
   auto atomic_send_counter_per_expert =
       atomic_finish_counter_per_expert + num_experts;  // Unused in legacy path.
@@ -1145,7 +1171,7 @@ LOW_LATENCY_COMBINE_RECV:
     }
   }
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  amd::grid_sync(grid_sync_barrier_ptr, num_sms);
+  amd::grid_sync_then_zero(grid_sync_barrier_ptr, num_sms);
 #else
   cg::this_grid().sync();
 #endif
@@ -1203,11 +1229,6 @@ LOW_LATENCY_COMBINE_RECV:
     // if (blockIdx.x == 0 && threadIdx.x == 0)
     //   printf("[combine] RECV finished\n");
   }
-
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  // reset grid sync barrier for next use
-  if (sm_id == 0 and thread_id == 0) *grid_sync_barrier_ptr = 0;
-#endif
 }
 
 void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
