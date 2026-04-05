@@ -361,9 +361,7 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             : 0;
 
     if (dst_p2p_ptr == 0) {
-      // Inter-node: batch send tokens for this expert (chunked: low-latency imm
-      // encodes token count in 8 bits; proxy accumulates via
-      // dispatch_token_counter).
+      // Inter-node: batch send ALL tokens for this expert in ONE call
       auto const num_tokens_to_send =
           atomic_send_counter_per_expert[responsible_expert_idx];
 
@@ -375,44 +373,25 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             static_cast<uint8_t*>(rdma_x) + batch_buf_offset +
             responsible_expert_idx * num_max_dispatch_tokens_per_rank *
                 num_bytes_per_msg;
-        auto const src_base = reinterpret_cast<uint64_t>(batch_buf_ptr);
+        auto const src_ptr = reinterpret_cast<uint64_t>(batch_buf_ptr);
         // Destination: start of this expert's recv buffer on remote rank
-        auto const dst_base =
+        auto const dst_ptr =
             reinterpret_cast<uint64_t>(rdma_recv_x) +
             dst_expert_local_idx * num_ranks *
                 num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
             rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
+        // Total bytes: all tokens for this expert
+        auto const total_bytes = num_tokens_to_send * num_bytes_per_msg;
 
-        // Low-latency IBGDA encodes token count in one byte (see
-        // uccl_ibgda.cuh). Chunk so each write has num_tokens <= 255 and
-        // stays under the packed bytes limit in the proxy.
-        constexpr int kMaxTokensPerLowLatencyPut = 255;
-        int tokens_remaining = num_tokens_to_send;
-        int token_progress = 0;
-        while (tokens_remaining > 0) {
-          int const chunk_tokens = tokens_remaining < kMaxTokensPerLowLatencyPut
-                                       ? tokens_remaining
-                                       : kMaxTokensPerLowLatencyPut;
-          auto const chunk_bytes =
-              static_cast<size_t>(chunk_tokens) * num_bytes_per_msg;
-          auto const src_chunk =
-              src_base +
-              static_cast<uint64_t>(token_progress) * num_bytes_per_msg;
-          auto const dst_chunk =
-              dst_base +
-              static_cast<uint64_t>(token_progress) * num_bytes_per_msg;
-          __threadfence_system();
-          uccl::nvshmemi_ibgda_put_nbi_warp(
-              dst_chunk - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
-              src_chunk - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
-              chunk_bytes, dst_rank,
-              /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting
-                                                 // rb.
-              lane_id, /*slot=*/0, d2h_channel_addrs, num_d2h_channel_addrs,
-              false, low_latency_buffer_idx, 0, 0, chunk_tokens);
-          tokens_remaining -= chunk_tokens;
-          token_progress += chunk_tokens;
-        }
+        __threadfence_system();
+
+        uccl::nvshmemi_ibgda_put_nbi_warp(
+            dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
+            src_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr), total_bytes,
+            dst_rank,
+            /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting rb.
+            lane_id, /*slot=*/0, d2h_channel_addrs, num_d2h_channel_addrs,
+            false, low_latency_buffer_idx, 0, 0, num_tokens_to_send);
       }
     }
     // IPC: already sent in the token loop, nothing to do here
@@ -689,7 +668,6 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
   auto const num_warps = num_warp_groups * num_warps_per_group;
   auto const num_sms = ceil_div(num_experts, num_warp_groups);
   EP_HOST_ASSERT(num_topk <= kNumMaxTopK);
-  EP_HOST_ASSERT(num_device_sms > 0);
 
   // Workspace checks
   auto atomic_counter_per_expert = static_cast<int*>(workspace);
