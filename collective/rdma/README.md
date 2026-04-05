@@ -115,7 +115,7 @@ make MPI=1 MPI_HOME=/opt/ohpc/pub/mpi/openmpi4-gnu12/4.1.5 HIP_HOME=/opt/rocm-6.
 
 The easiest way is to use docker: 
 ```bash
-cd $UCCL_HOME && bash build.sh rocm rdma --install
+cd $UCCL_HOME && bash build.sh roc7 rdma --install
 ```
 
 The following alternative is best for development where you have installed all needed external libraries:

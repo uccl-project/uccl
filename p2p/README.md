@@ -22,7 +22,7 @@ p2p/
 The easiest way is to: 
 ```bash
 git clone https://github.com/uccl-project/uccl.git && cd uccl
-bash build.sh [cu12|cu13|rocm|rocm7] p2p --install
+bash build.sh [cu12|cu13|roc7|roc6] p2p --install
 ```
 
 Alternatively, you can setup your local dev environment by: 
