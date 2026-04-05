@@ -463,11 +463,7 @@ LOW_LATENCY_DISPATCH_RECV:
   // `packed_recv_count` visible
   if (phases & LOW_LATENCY_SEND_PHASE)
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-#ifdef PER_EXPERT_BATCHING
-    amd::grid_sync_then_zero(grid_sync_barrier_ptr + 1, num_sms);
-#else
     amd::grid_sync_then_zero(grid_sync_barrier_ptr, num_sms);
-#endif
 #else
     cg::this_grid().sync();
 #endif
@@ -676,10 +672,8 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
 #ifdef PER_EXPERT_BATCHING
   auto atomic_send_counter_per_expert =
       atomic_finish_counter_per_expert + num_experts;
-  // Two global barrier words on AMD: batch-phase sync + recv-phase sync
-  // (CUDA cg::this_grid().sync() does not reuse the counter).
   auto grid_sync_barrier_ptr = atomic_send_counter_per_expert + num_experts;
-  EP_HOST_ASSERT((num_experts * 3 + 2) * sizeof(int) <= NUM_WORKSPACE_BYTES);
+  EP_HOST_ASSERT((num_experts * 3 + 1) * sizeof(int) <= NUM_WORKSPACE_BYTES);
 #else
   auto atomic_send_counter_per_expert =
       atomic_finish_counter_per_expert + num_experts;  // Unused in legacy path.
