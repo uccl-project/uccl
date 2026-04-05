@@ -77,6 +77,10 @@ if [[ $TARGET != cu* && $TARGET != roc[67] && $TARGET != "therock" ]]; then
   msg_error "Usage: $0 [cu12|cu13|roc7|roc6|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image] [--install]" >&2
 fi
 
+if [[ "$TARGET" == "roc6" && "$BUILD_TYPE" =~ (ep|all|p2p_ep) ]]; then
+  msg_error "EP requires roc7 (ROCm 7) for HIP code transformation; roc6 is not supported for EP builds."
+fi
+
 ###########################################################################
 # 2. Detect host architecture, container engine, EFA support, etc.
 ###########################################################################
