@@ -31,7 +31,7 @@ env:
 #   cu13          cu13     uccl-builder-cu13    +cu13            GH Release
 #   cu12+efa      cu12     uccl-builder-efa     +cu12.efa        GH Release
 #   cu13+efa      cu13     uccl-builder-efa13   +cu13.efa        GH Release
-#   rocm          rocm     uccl-builder-rocm    +rocm            GH Release
+#   roc7          roc7     uccl-builder-roc7    +rocm            GH Release
 #
 # × Python 3.12 (abi3 — compatible with 3.12+) = 5 wheel jobs + 1 source tarball
 # ---------------------------------------------------------------------------
@@ -107,9 +107,9 @@ jobs:
             for_pypi: false
             gpu_arch: "9.0+PTX"
           # ROCm
-          - name: rocm
-            target: rocm
-            image_name: uccl-builder-rocm
+          - name: roc7
+            target: roc7
+            image_name: uccl-builder-roc7
             local_version: "rocm"
             for_pypi: false
             gpu_arch: "gfx942,gfx950"
@@ -242,7 +242,7 @@ jobs:
   # ==========================================================================
   # Job 6: Publish default wheel to PyPI
   #   - Only the cu12 wheel (no local version) goes to PyPI.
-  #   - All other variants (cu13, efa, rocm) are on GitHub Releases.
+  #   - All other variants (cu13, efa, roc7) are on GitHub Releases.
   #   - Users install: pip install uccl
   # ==========================================================================
   publish-pypi:

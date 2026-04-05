@@ -6,7 +6,7 @@
 # a purpose-built Docker/Podman image derived from Ubuntu 22.04.
 #
 # Usage:
-#   ./build.sh [cu12|cu13|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image] [--install]
+#   ./build.sh [cu12|cu13|roc7|roc6|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image] [--install]
 #
 # Environment Variables:
 #   CONTAINER_ENGINE=podman         Use podman instead of docker.
@@ -22,7 +22,7 @@
 #                                   an older host glibc.
 #                                     Example: UCCL_RETAG_TO_HOST_GLIBC=1 ./build.sh cu12 all
 #
-# The wheels are written to wheelhouse-[cu12|cu13|rocm|therock]
+# The wheels are written to wheelhouse-[cu12|cu13|roc7|roc6|therock]
 # -----------------------
 
 set -euo pipefail
@@ -73,15 +73,15 @@ ROCM_IDX_URL=${POSITIONAL_ARGS[3]:-https://rocm.prereleases.amd.com/whl/gfx94X-d
 # The default for THEROCK_BASE_IMAGE is current, but may change. Make sure to track TheRock's dockerfile.
 THEROCK_BASE_IMAGE=${POSITIONAL_ARGS[4]:-quay.io/pypa/manylinux_2_28_x86_64@sha256:d632b5e68ab39e59e128dcf0e59e438b26f122d7f2d45f3eea69ffd2877ab017}
 
-if [[ $TARGET != cu* && $TARGET != rocm* && $TARGET != "therock" ]]; then
-  msg_error "Usage: $0 [cu12|cu13|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image] [--install]" >&2
+if [[ $TARGET != cu* && $TARGET != roc[67] && $TARGET != "therock" ]]; then
+  msg_error "Usage: $0 [cu12|cu13|roc7|roc6|therock] [all|ccl_rdma|ccl_efa|p2p|ep] [py_version] [rocm_index_url] [therock_base_image] [--install]" >&2
 fi
 
 ###########################################################################
 # 2. Detect host architecture, container engine, EFA support, etc.
 ###########################################################################
 ARCH="$(uname -m)"
-if [[ $ARCH == "aarch64" && ($TARGET == rocm* || $TARGET == "therock") ]]; then
+if [[ $ARCH == "aarch64" && ($TARGET == roc[67] || $TARGET == "therock") ]]; then
   msg_error "Skipping ROCm build on Arm64 (no ROCm toolchain)."
 fi
 
@@ -102,7 +102,7 @@ if [[ "$BUILD_TYPE" =~ (ep|all|p2p) ]]; then
     if [[ -n "$DETECTED_GPU_ARCH" ]]; then
       msg_info "Auto-detected CUDA compute capability: ${DETECTED_GPU_ARCH}"
     fi
-  elif [[ "$TARGET" == rocm* ]] && command -v amd-smi &>/dev/null; then
+  elif [[ "$TARGET" == roc[67] ]] && command -v amd-smi &>/dev/null; then
     # Check if jq is installed, install via pip if not
     if ! command -v jq &>/dev/null; then
       msg_info "jq not found, installing via pip..."
@@ -144,7 +144,7 @@ if [[ -z "${UCCL_LOCAL_VERSION+x}" ]]; then
     else
       UCCL_LOCAL_VERSION="${TARGET}"
     fi
-  elif [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
+  elif [[ "$TARGET" == roc[67] || "$TARGET" == "therock" ]]; then
     UCCL_LOCAL_VERSION="rocm"
   fi
 fi
@@ -206,14 +206,14 @@ if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
       : "${DOCKERFILE:=docker/apptainer/cuda.def}"
       : "${IMAGE_NAME:=uccl-builder-cuda13}"
     fi
-  elif [[ $TARGET == "rocm" ]]; then
+  elif [[ $TARGET == "roc7" ]]; then
     : "${BASE_IMAGE:=rocm/dev-ubuntu-22.04}"
     : "${DOCKERFILE:=docker/apptainer/rocm.def}"
-    : "${IMAGE_NAME:=uccl-builder-rocm}"
-  elif [[ $TARGET == "rocm6" ]]; then
+    : "${IMAGE_NAME:=uccl-builder-roc7}"
+  elif [[ $TARGET == "roc6" ]]; then
     : "${BASE_IMAGE:=rocm/dev-ubuntu-22.04:6.4.3-complete}"
     : "${DOCKERFILE:=docker/apptainer/rocm.def}"
-    : "${IMAGE_NAME:=uccl-builder-rocm6}"
+    : "${IMAGE_NAME:=uccl-builder-roc6}"
   elif [[ $TARGET == "therock" ]]; then
     BASE_IMAGE="${THEROCK_BASE_IMAGE}"
     : "${DOCKERFILE:=docker/apptainer/therock.def}"
@@ -244,13 +244,13 @@ else
       : "${DOCKERFILE:=docker/Dockerfile.cuda}"
       : "${IMAGE_NAME:=uccl-builder-cuda13}"
     fi
-  elif [[ $TARGET == "rocm" ]]; then
+  elif [[ $TARGET == "roc7" ]]; then
     : "${DOCKERFILE:=docker/Dockerfile.rocm}"
-    : "${IMAGE_NAME:=uccl-builder-rocm}"
-  elif [[ $TARGET == "rocm6" ]]; then
+    : "${IMAGE_NAME:=uccl-builder-roc7}"
+  elif [[ $TARGET == "roc6" ]]; then
     : "${BASE_IMAGE:=rocm/dev-ubuntu-22.04:6.4.3-complete}"
     : "${DOCKERFILE:=docker/Dockerfile.rocm}"
-    : "${IMAGE_NAME:=uccl-builder-rocm6}"
+    : "${IMAGE_NAME:=uccl-builder-roc6}"
   elif [[ $TARGET == "therock" ]]; then
     BASE_IMAGE="${THEROCK_BASE_IMAGE}"
     : "${DOCKERFILE:=docker/Dockerfile.therock}"
@@ -374,7 +374,7 @@ if [[ "$CONTAINER_ENGINE" == "apptainer" ]]; then
     else
       msg_warning "Warning: --nv flag not supported, GPU may not be available"
     fi
-  elif [[ "$TARGET" == rocm* || "$TARGET" == "therock" ]]; then
+  elif [[ "$TARGET" == roc[67] || "$TARGET" == "therock" ]]; then
     if $CONTAINER_ENGINE exec --help | grep -q -- --rocm; then
       CONTAINER_RUN_ARGS+=(--rocm)
       msg_info "Enabling ROCm GPU support with --rocm flag"
