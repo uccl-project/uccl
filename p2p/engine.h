@@ -265,7 +265,8 @@ class Endpoint {
  public:
   /* Create engine threads running in background for a single interface. It also
    * opens a TCP listening thread waiting for incoming connections. */
-  explicit Endpoint(uint32_t const local_gpu_idx);
+  explicit Endpoint(uint32_t const local_gpu_idx,
+                    int physical_gpu_idx = -1);
 
   /* Create endpoint without intializing the engine. Lazy creation of engine is
    * done during  memory registration. Additionally, open a unified P2P socket
@@ -476,7 +477,8 @@ class Endpoint {
   RDMAEndPoint get_endpoint() const;
 
  private:
-  int local_gpu_idx_;
+  int local_gpu_idx_;     // CUDA-visible device index (for gpuSetDevice, streams)
+  int physical_gpu_idx_;  // Physical GPU index (for shm naming, metadata, identity)
   int numa_node_;
   RDMAEndPoint ep_;
   bool engine_initialized_ = false;

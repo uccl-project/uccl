@@ -181,12 +181,12 @@ NB_MODULE(p2p, m) {
   nb::class_<Endpoint>(m, "Endpoint")
       .def(
           "__init__",
-          [](Endpoint* self, uint32_t local_gpu_idx) {
+          [](Endpoint* self, uint32_t local_gpu_idx, int physical_gpu_idx) {
             nb::gil_scoped_release release;
             InsidePythonGuard guard;
-            new (self) Endpoint(local_gpu_idx);
+            new (self) Endpoint(local_gpu_idx, physical_gpu_idx);
           },
-          nb::arg("local_gpu_idx"))
+          nb::arg("local_gpu_idx"), nb::arg("physical_gpu_idx") = -1)
       .def("__init__",
            [](Endpoint* self) {
              nb::gil_scoped_release release;
