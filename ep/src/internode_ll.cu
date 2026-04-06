@@ -337,7 +337,9 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
 #ifdef PER_EXPERT_BATCHING
   // Grid-wide sync before batch-send.
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  amd::grid_sync(grid_sync_barrier_ptr, num_sms);
+  // Reset counter after sync so send-only launches (return_recv_hook) do not
+  // leave a stale value that deadlocks the next dispatch.
+  amd::grid_sync_then_zero(grid_sync_barrier_ptr, num_sms);
 #else
   cg::this_grid().sync();
 #endif
@@ -461,7 +463,7 @@ LOW_LATENCY_DISPATCH_RECV:
   // `packed_recv_count` visible
   if (phases & LOW_LATENCY_SEND_PHASE)
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-    amd::grid_sync(grid_sync_barrier_ptr, num_sms);
+    amd::grid_sync_then_zero(grid_sync_barrier_ptr, num_sms);
 #else
     cg::this_grid().sync();
 #endif
@@ -580,10 +582,6 @@ LOW_LATENCY_DISPATCH_RECV:
     }
     sync_barrier<true>(warp_group_id + 2, num_warps_per_group * WARP_SIZE);
 
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-    // reset grid sync barrier for next use
-    if (sm_id == 0 and thread_id == 0) *grid_sync_barrier_ptr = 0;
-#endif
     num_recv_tokens = shared_num_recv_tokens[warp_group_id];
     recv_token_begin_idx = shared_recv_token_begin_idx[warp_group_id];
 
@@ -1145,7 +1143,7 @@ LOW_LATENCY_COMBINE_RECV:
     }
   }
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  amd::grid_sync(grid_sync_barrier_ptr, num_sms);
+  amd::grid_sync_then_zero(grid_sync_barrier_ptr, num_sms);
 #else
   cg::this_grid().sync();
 #endif
@@ -1203,11 +1201,6 @@ LOW_LATENCY_COMBINE_RECV:
     // if (blockIdx.x == 0 && threadIdx.x == 0)
     //   printf("[combine] RECV finished\n");
   }
-
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-  // reset grid sync barrier for next use
-  if (sm_id == 0 and thread_id == 0) *grid_sync_barrier_ptr = 0;
-#endif
 }
 
 void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
