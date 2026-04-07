@@ -6,13 +6,30 @@ Minimal build and test entry points for `experimental/ukernel`.
 
 - CUDA toolchain for NVIDIA builds
 - RDMA / verbs dependencies used by `transport` and `ccl`
-- `thirdparty/gdrcopy` initialized and built for `device` and `ccl`
+- system-installed GDRCopy (`gdrapi.h` + `libgdrapi`) for `device` and `ccl`
 - `torchrun` available for CCL multiprocess integration tests
 
-If submodules are missing:
+## Quick Install GDRCopy (System)
+
+`experimental/ukernel` no longer builds `thirdparty/gdrcopy`.  
+Please install GDRCopy from NVIDIA upstream on your machine first.
+
+Ubuntu quick path (source build):
 
 ```bash
-git submodule update --init --recursive
+sudo apt-get update
+sudo apt-get install -y build-essential dkms linux-headers-$(uname -r)
+git clone https://github.com/NVIDIA/gdrcopy.git
+cd gdrcopy
+make CUDA=/usr/local/cuda
+sudo make CUDA=/usr/local/cuda prefix=/usr/local install
+```
+
+Optional: if `libgdrapi.so` is not in the default linker path, pass `GDRCOPY_LIBDIR` when building:
+
+```bash
+cd experimental/ukernel
+make GDRCOPY_LIBDIR=/usr/local/lib
 ```
 
 ## Build

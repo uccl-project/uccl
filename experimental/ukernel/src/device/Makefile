@@ -19,17 +19,17 @@ NVCCFLAGS += -DUKERNEL_ENABLE_TMA=$(ENABLE_TMA)
 
 UCCL_ROOT := $(abspath ../../../../)
 CUDA_HOME ?= /usr/local/cuda
-GDRCOPY_ROOT := $(UCCL_ROOT)/thirdparty/gdrcopy
-GDRCOPY_INCLUDEDIR = $(GDRCOPY_ROOT)/include
-GDRCOPY_LIBDIR = $(GDRCOPY_ROOT)/src
-GDRCOPY_HEADER = $(GDRCOPY_INCLUDEDIR)/gdrapi.h
+GDRCOPY_INCLUDEDIR ?= /usr/include
+GDRCOPY_LIBDIR ?=
+GDRCOPY_LIBDIR_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-L$(GDRCOPY_LIBDIR),)
+GDRCOPY_RPATH_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR),)
 
 INCLUDES := -I./ -I./fifo -I./ops -I./test -I./test/common -I./test/unit -I./test/integration \
-	-I../../include -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR)
+	-I../../include -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR) -I/usr/local/include
 LIBS := -L$(CUDA_HOME)/lib -lcudart -lcuda -lnuma \
-        -L$(GDRCOPY_LIBDIR) -lgdrapi
+        $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi
 
-RPATH = -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR)
+RPATH = $(GDRCOPY_RPATH_FLAGS)
 
 COMMON_CPP := fifo/c2d_fifo.cc fifo/d2c_fifo.cpp fifo/sm_fifo.cc
 COMMON_CU  := persistent_kernel_ops.cu
@@ -59,7 +59,7 @@ BENCH_VS_BIN := benchmarks/bench_device_launch_vs_worker
 
 ALL_BIN   := $(TEST_ALL_BIN) $(SIMPLE_COPY_TEST_BIN) $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN} $(BENCH_VS_BIN)
 
-.PHONY: all test test-unit test-integration unit integration bench clean ensure-gdrcopy
+.PHONY: all test test-unit test-integration unit integration bench clean
 
 all: $(ALL_BIN)
 
@@ -79,20 +79,6 @@ simple: test-integration
 
 bench: $(BENCH_BIN) $(BENCH_FULL_BIN) ${BENCH_SM_BIN} $(BENCH_VS_BIN)
 
-ensure-gdrcopy:
-	@if [ ! -f "$(GDRCOPY_HEADER)" ] || [ ! -f "$(GDRCOPY_ROOT)/Makefile" ]; then \
-		echo "[ukernel/device] initializing submodules for gdrcopy..."; \
-		git -C "$(UCCL_ROOT)" submodule update --init --recursive; \
-	fi
-	@if [ ! -f "$(GDRCOPY_HEADER)" ]; then \
-		echo "[ukernel/device] missing $(GDRCOPY_HEADER) after submodule init"; \
-		exit 1; \
-	fi
-	@if ! ls "$(GDRCOPY_LIBDIR)"/libgdrapi.so* >/dev/null 2>&1; then \
-		echo "[ukernel/device] building gdrcopy..."; \
-		$(MAKE) -C "$(GDRCOPY_ROOT)"; \
-	fi
-
 %.o: %.cc
 	$(CXX) -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
@@ -102,7 +88,6 @@ ensure-gdrcopy:
 %.o: %.cu
 	$(NVCC) -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 
-$(COMMON_OBJ) $(TEST_ALL_OBJ) $(SIMPLE_COPY_TEST_OBJ): | ensure-gdrcopy
 $(TEST_ALL_OBJ): $(TEST_ALL_SRC)
 	$(NVCC) -x cu -c $< -o $@ $(NVCCFLAGS) $(INCLUDES)
 

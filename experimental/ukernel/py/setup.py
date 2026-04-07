@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from setuptools import setup
@@ -15,7 +16,10 @@ except ImportError as exc:
 ROOT = Path(__file__).resolve().parent.parent
 UCCL_ROOT = ROOT.parent.parent
 CUDA_HOME = Path("/usr/local/cuda")
-GDRCOPY_ROOT = UCCL_ROOT / "thirdparty" / "gdrcopy"
+GDRCOPY_INCLUDE_DIR = Path(
+    os.environ.get("GDRCOPY_INCLUDE_DIR", "/usr/local/include")
+)
+GDRCOPY_LIBDIR = os.environ.get("GDRCOPY_LIBDIR", "").strip()
 RDMA_STATIC = UCCL_ROOT / "collective" / "rdma" / "librdma.a"
 NANOBIND_ROOT = Path(nanobind.__file__).resolve().parent
 
@@ -77,9 +81,20 @@ include_dirs = [
     rel(UCCL_ROOT),
     rel(UCCL_ROOT / "collective" / "rdma"),
     rel(UCCL_ROOT / "include"),
-    rel(GDRCOPY_ROOT / "include"),
+    str(GDRCOPY_INCLUDE_DIR),
     str(CUDA_HOME / "include"),
 ]
+
+library_dirs = [
+    str(CUDA_HOME / "lib64"),
+    "/usr/local/lib",
+    "/usr/lib",
+    "/usr/lib64",
+]
+runtime_library_dirs = [str(CUDA_HOME / "lib64")]
+if GDRCOPY_LIBDIR:
+    library_dirs.append(GDRCOPY_LIBDIR)
+    runtime_library_dirs.append(str(Path(GDRCOPY_LIBDIR).resolve()))
 
 ext = CUDAExtension(
     name="ukernel_ccl._C",
@@ -117,10 +132,7 @@ ext = CUDAExtension(
             "arch=compute_89,code=sm_89",
         ],
     },
-    library_dirs=[
-        str(CUDA_HOME / "lib64"),
-        str(GDRCOPY_ROOT / "src"),
-    ],
+    library_dirs=library_dirs,
     libraries=[
         "cudart",
         "cuda",
@@ -135,10 +147,7 @@ ext = CUDAExtension(
         "numa",
     ],
     extra_objects=[str(RDMA_STATIC.resolve())],
-    runtime_library_dirs=[
-        str(CUDA_HOME / "lib64"),
-        str((GDRCOPY_ROOT / "src").resolve()),
-    ],
+    runtime_library_dirs=runtime_library_dirs,
 )
 
 p2p_ext = CUDAExtension(
@@ -177,10 +186,7 @@ p2p_ext = CUDAExtension(
             "arch=compute_89,code=sm_89",
         ],
     },
-    library_dirs=[
-        str(CUDA_HOME / "lib64"),
-        str(GDRCOPY_ROOT / "src"),
-    ],
+    library_dirs=library_dirs,
     libraries=[
         "cudart",
         "cuda",
@@ -195,10 +201,7 @@ p2p_ext = CUDAExtension(
         "numa",
     ],
     extra_objects=[str(RDMA_STATIC.resolve())],
-    runtime_library_dirs=[
-        str(CUDA_HOME / "lib64"),
-        str((GDRCOPY_ROOT / "src").resolve()),
-    ],
+    runtime_library_dirs=runtime_library_dirs,
 )
 
 

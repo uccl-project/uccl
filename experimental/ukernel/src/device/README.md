@@ -93,8 +93,9 @@ Arguments are:
 
 - `test-unit` covers task encoding, task manager behavior, worker lifecycle, enqueue semantics, dtype copy, and multi-fifo behavior.
 - `test-integration` covers copy/reduce execution, same-flow reduce pipeline, and multi-block reduce.
-- If `gdrcopy` is missing, initialize submodules first:
+- This module requires system-installed GDRCopy (`gdrapi.h` + `libgdrapi`).
+- If `libgdrapi.so` is outside default linker paths, pass `GDRCOPY_LIBDIR`:
 
 ```bash
-git submodule update --init --recursive
+make GDRCOPY_LIBDIR=/usr/local/lib
 ```

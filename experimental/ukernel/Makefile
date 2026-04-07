@@ -50,14 +50,13 @@ LDFLAGS    := -L$(CONDA_LIB_HOME) \
               -lcudart -lcuda \
               -lgflags -lz -libverbs -lnl-3 -lnl-route-3 -lpthread 
 
-GDRCOPY_ROOT := $(abspath ../../thirdparty/gdrcopy)
-GDRCOPY_LIBDIR := $(GDRCOPY_ROOT)/src
-
 # Local includes must come first to avoid conflicts with UCCL headers
 LOCAL_INCLUDES := -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -Isrc/ccl
 
 # System and external library includes
-INCLUDES := -I$(CUDA_PATH)/include -I/usr/include -I../../include -I$(GDRCOPY_ROOT)/include
+INCLUDES := -I$(CUDA_PATH)/include -I/usr/include -I/usr/local/include -I../../include
+GDRCOPY_LIBDIR ?=
+GDRCOPY_LIBDIR_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-L$(GDRCOPY_LIBDIR) -Wl,-rpath,$(GDRCOPY_LIBDIR),)
 
 # Redis support: when USE_REDIS_OOB=1
 ifeq ($(USE_REDIS_OOB),1)
@@ -105,9 +104,9 @@ BENCH_GDRCOPY_SRC := benchmarks/bench_gdrcopy.cc
 BENCH_GDRCOPY_OBJ := $(BENCH_GDRCOPY_SRC:.cc=.o)
 BENCH_GDRCOPY_BIN := benchmarks/bench_gdrcopy
 BENCH_GDRCOPY_CXXFLAGS := $(CXXFLAGS) -DENABLE_CUDA
-BENCH_GDRCOPY_INCLUDES := -I$(CUDA_PATH)/include -I/usr/include -I../../include -I$(GDRCOPY_ROOT)/include
+BENCH_GDRCOPY_INCLUDES := -I$(CUDA_PATH)/include -I/usr/include -I/usr/local/include -I../../include
 BENCH_GDRCOPY_LIBS := -L$(CUDA_PATH)/lib64 -Wl,-rpath,$(CUDA_PATH)/lib64 \
-                      -L$(GDRCOPY_LIBDIR) -Wl,-rpath,$(GDRCOPY_LIBDIR) \
+                      $(GDRCOPY_LIBDIR_FLAGS) \
                       -lcudart -lcuda -lgdrapi
 BENCH_BINS := $(BENCH_TRANSPORT_BIN) $(BENCH_GDRCOPY_BIN)
 
@@ -134,20 +133,6 @@ ensure-uccl-rdma:
 		$(MAKE) -C "$(UCCL_RDMA_ROOT)" build; \
 	fi
 
-ensure-gdrcopy:
-	@if [ ! -f "$(GDRCOPY_ROOT)/include/gdrapi.h" ] || [ ! -f "$(GDRCOPY_ROOT)/Makefile" ]; then \
-		echo "[ukernel] initializing submodules for gdrcopy..."; \
-		git -C "$(UCCL_ROOT)" submodule update --init --recursive; \
-	fi
-	@if [ ! -f "$(GDRCOPY_ROOT)/include/gdrapi.h" ]; then \
-		echo "[ukernel] missing $(GDRCOPY_ROOT)/include/gdrapi.h after submodule init"; \
-		exit 1; \
-	fi
-	@if ! ls "$(GDRCOPY_LIBDIR)"/libgdrapi.so* >/dev/null 2>&1; then \
-		echo "[ukernel] building gdrcopy..."; \
-		$(MAKE) -C "$(GDRCOPY_ROOT)" all; \
-	fi
-
 # Static library
 $(STATIC_LIB): $(OBJ_CC) $(OBJ_CU)
 	ar rcs $@ $^
@@ -166,7 +151,7 @@ $(BENCH_TRANSPORT_BIN): $(BENCH_TRANSPORT_OBJ) $(STATIC_LIB) | ensure-uccl-rdma
 $(BENCH_GDRCOPY_OBJ): $(BENCH_GDRCOPY_SRC)
 	$(CXX) $(BENCH_GDRCOPY_CXXFLAGS) $(BENCH_GDRCOPY_INCLUDES) -MMD -MP -c $< -o $@
 
-$(BENCH_GDRCOPY_BIN): $(BENCH_GDRCOPY_OBJ) | ensure-gdrcopy ensure-uccl-rdma
+$(BENCH_GDRCOPY_BIN): $(BENCH_GDRCOPY_OBJ) | ensure-uccl-rdma
 	$(CXX) $< -o $@ $(BENCH_GDRCOPY_LIBS)
 
 bench: $(BENCH_BINS)
@@ -207,6 +192,6 @@ clean:
 # src/device/persistent_kernel_ops.o: src/device/persistent_kernel_ops.cu
 # 	$(NVCC) $(NVCCFLAGS) -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -MMD -MP -c $< -o $@
 
-.PHONY: all clean bench transport_bench device_test ccl_test transport_test transport_suite device_bench ensure-uccl-rdma ensure-gdrcopy
+.PHONY: all clean bench transport_bench device_test ccl_test transport_test transport_suite device_bench ensure-uccl-rdma
 
 transport_bench: $(BENCH_TRANSPORT_BIN)
