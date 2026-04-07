@@ -1,0 +1,134 @@
+#pragma once
+
+#include "transport_adapter.h"
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+// Forward declare uccl classes
+namespace uccl {
+class RDMAEndpoint;
+class Mhandle;
+class UcclFlow;
+struct ucclRequest;
+class UcclRDMAEngine;
+// Note: ConnID is defined in collective/rdma/transport.h as a struct
+}  // namespace uccl
+
+namespace UKernel {
+namespace Transport {
+
+struct UcclTransportConfig {
+  // Must stay aligned with ucclParamNUM_ENGINES() inside collective/rdma.
+  int num_engines = 0;
+  int num_paths = 16;
+  std::string local_ip;
+  uint16_t listen_port = 0;
+};
+
+class UcclTransportAdapter final : public TransportAdapter {
+ public:
+  struct AcceptedPeer {
+    std::string remote_ip;
+    int remote_dev_idx = -1;
+    int remote_gpu_idx = -1;
+  };
+
+  UcclTransportAdapter(int local_gpu_idx, int world_size,
+                       UcclTransportConfig config);
+  ~UcclTransportAdapter();
+
+  bool connect_to_peer(int peer_rank, std::string remote_ip,
+                       uint16_t remote_port, int local_dev_idx,
+                       int local_gpu_idx, int remote_dev_idx,
+                       int remote_gpu_idx);
+  bool accept_from_peer(int peer_rank, std::string const& expected_remote_ip,
+                        int expected_remote_dev_idx,
+                        int expected_remote_gpu_idx,
+                        uint16_t expected_remote_port = 0,
+                        AcceptedPeer* accepted_peer = nullptr);
+
+  // Get P2P listen port for the given device
+  uint16_t get_p2p_listen_port(int dev_idx) const;
+
+  // Get P2P listen IP for the given device
+  std::string get_p2p_listen_ip(int dev_idx) const;
+
+  // Get best RDMA device index for given GPU
+  int get_best_dev_idx(int gpu_idx) const;
+
+  bool has_send_peer(int peer_rank) const;
+  bool has_recv_peer(int peer_rank) const;
+  bool has_send_path(int peer_rank) const override {
+    return has_send_peer(peer_rank);
+  }
+  bool has_recv_path(int peer_rank) const override {
+    return has_recv_peer(peer_rank);
+  }
+
+  bool poll_completion(unsigned id) override;
+  bool wait_completion(unsigned id) override;
+  bool request_failed(unsigned id) override;
+  void release_request(unsigned id) override;
+
+  int peer_count() const override { return world_size_; }
+
+  bool connect(int peer_rank) override { return has_send_peer(peer_rank); }
+  bool accept(int peer_rank) override { return has_recv_peer(peer_rank); }
+
+  bool is_memory_registered(uint64_t mr_id) const;
+  bool register_memory(uint64_t mr_id, void* ptr, size_t len);
+  void deregister_memory(uint64_t mr_id);
+  bool is_initialized() const { return endpoint_ != nullptr; }
+
+  unsigned send_async(int peer_rank, void* local_ptr, size_t len,
+                      uint64_t local_mr_id,
+                      std::optional<RemoteSlice> remote_hint,
+                      BounceBufferProvider bounce_provider = nullptr) override;
+  unsigned recv_async(int peer_rank, void* local_ptr, size_t len,
+                      uint64_t local_mr_id,
+                      BounceBufferProvider bounce_provider = nullptr) override;
+
+  int send_async_uccl(int peer_rank, void* local_ptr, size_t len,
+                      uint64_t local_mr_id, uint64_t remote_mr_id,
+                      uint64_t request_id,
+                      RemoteSlice const* remote_slice = nullptr);
+  int recv_async_uccl(int peer_rank, void* local_ptr, size_t len,
+                      uint64_t local_mr_id, uint64_t request_id);
+
+ private:
+  struct PendingRequest {
+    std::unique_ptr<::uccl::ucclRequest> request;
+    bool completed = false;
+    bool failed = false;
+  };
+
+  struct PeerContext {
+    ::uccl::UcclFlow* send_flow = nullptr;
+    ::uccl::UcclFlow* recv_flow = nullptr;
+    int peer_rank = -1;
+    std::string remote_ip;
+    int remote_dev_idx = -1;
+    int remote_gpu_idx = -1;
+  };
+
+  int local_gpu_idx_;
+  int world_size_;
+  UcclTransportConfig config_;
+
+  std::unique_ptr<::uccl::RDMAEndpoint> endpoint_;
+  std::unordered_map<int, PeerContext> peer_contexts_;
+  std::unordered_map<uint64_t, ::uccl::Mhandle*> mr_id_to_mhandle_;
+  std::unordered_map<uint64_t, PendingRequest> pending_requests_;
+  std::atomic<unsigned> next_request_id_{1};
+  mutable std::mutex mu_;
+};
+
+}  // namespace Transport
+}  // namespace UKernel

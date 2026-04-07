@@ -1083,6 +1083,7 @@ class RDMAEndpoint {
   ConnID uccl_accept(int dev, int listen_fd, int local_gpuidx,
                      std::string& remote_ip, int* remote_dev,
                      int* remote_gpuidx);
+  void discard_conn(ConnID conn_id);
 
   bool is_local_leader(int ldev, int lgpu, std::string lip, uint16_t lport,
                        int rdev, int rgpu, std::string rip, uint16_t rport) {
