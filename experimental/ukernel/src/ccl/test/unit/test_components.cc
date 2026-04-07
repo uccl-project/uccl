@@ -1,13 +1,13 @@
-#include "selector.h"
 #include "backend_test_utils.h"
+#include "selector.h"
 #include "test_utils.h"
 #include <cassert>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <deque>
-#include <string>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -76,27 +76,30 @@ void build_sim_state_dependencies(SimRankState& state) {
     }
   }
 
-  std::vector<uint64_t> next_send_seq(static_cast<size_t>(state.plan.nranks), 1);
-  std::vector<uint64_t> next_recv_seq(static_cast<size_t>(state.plan.nranks), 1);
+  std::vector<uint64_t> next_send_seq(static_cast<size_t>(state.plan.nranks),
+                                      1);
+  std::vector<uint64_t> next_recv_seq(static_cast<size_t>(state.plan.nranks),
+                                      1);
   for (auto const& op : state.plan.ops) {
     if (op.kind == PrimitiveOpKind::Send) {
       int peer = op.dst.rank;
       assert(peer >= 0 && peer < state.plan.nranks);
-      state.send_seq.emplace(op.op_id, next_send_seq[static_cast<size_t>(peer)]++);
+      state.send_seq.emplace(op.op_id,
+                             next_send_seq[static_cast<size_t>(peer)]++);
     } else if (op.kind == PrimitiveOpKind::Recv) {
       int peer = op.src.rank;
       assert(peer >= 0 && peer < state.plan.nranks);
-      state.recv_seq.emplace(op.op_id, next_recv_seq[static_cast<size_t>(peer)]++);
+      state.recv_seq.emplace(op.op_id,
+                             next_recv_seq[static_cast<size_t>(peer)]++);
     }
   }
 }
 
 CollectivePlan build_test_plan(CollectiveKind kind,
                                CollectiveConfig const& config) {
-  CollectiveBinding binding =
-      Testing::make_test_memory(config.rank, config.nranks,
-                                std::max(config.tensor_bytes,
-                                         config.staging_bytes));
+  CollectiveBinding binding = Testing::make_test_memory(
+      config.rank, config.nranks,
+      std::max(config.tensor_bytes, config.staging_bytes));
   return build_plan(make_plan_request(kind, config, binding.roles));
 }
 
@@ -108,16 +111,15 @@ void assert_ref_uses_only_roles(BufferRef const& ref,
 }
 
 std::string simulate_three_rank_allreduce_and_find_error(size_t tensor_bytes,
-                                                        uint32_t num_flows) {
+                                                         uint32_t num_flows) {
   constexpr int kNranks = 3;
   constexpr size_t kTileBytes = 64 << 10;
 
   std::vector<SimRankState> ranks;
   ranks.reserve(kNranks);
   for (int rank = 0; rank < kNranks; ++rank) {
-    CollectiveConfig cfg =
-        Testing::make_test_config(kNranks, rank, tensor_bytes, kTileBytes,
-                                  num_flows);
+    CollectiveConfig cfg = Testing::make_test_config(
+        kNranks, rank, tensor_bytes, kTileBytes, num_flows);
     cfg.dtype = ScalarType::Float32;
     cfg.reduction = ReductionKind::Sum;
 
@@ -154,8 +156,7 @@ std::string simulate_three_rank_allreduce_and_find_error(size_t tensor_bytes,
             if (state.recv_posted[op_id]) continue;
             auto seq_it = state.recv_seq.find(static_cast<uint32_t>(op_id));
             assert(seq_it != state.recv_seq.end());
-            uint64_t key =
-                make_match_key(op.src.rank, rank, seq_it->second);
+            uint64_t key = make_match_key(op.src.rank, rank, seq_it->second);
             auto [_, inserted] = posted_recvs.emplace(
                 key, PostedRecv{rank, static_cast<uint32_t>(op_id)});
             assert(inserted && "duplicate posted recv in simulator");
@@ -166,8 +167,7 @@ std::string simulate_three_rank_allreduce_and_find_error(size_t tensor_bytes,
           case PrimitiveOpKind::Send: {
             auto seq_it = state.send_seq.find(static_cast<uint32_t>(op_id));
             assert(seq_it != state.send_seq.end());
-            uint64_t key =
-                make_match_key(rank, op.dst.rank, seq_it->second);
+            uint64_t key = make_match_key(rank, op.dst.rank, seq_it->second);
             auto posted_it = posted_recvs.find(key);
             if (posted_it == posted_recvs.end()) continue;
 
@@ -228,9 +228,8 @@ std::string simulate_three_rank_allreduce_and_find_error(size_t tensor_bytes,
       }
       if (std::fabs(state.tensor[i] - expected) >= 1e-3f) {
         return "rank " + std::to_string(rank) + " mismatch at index " +
-               std::to_string(i) + ", got=" +
-               std::to_string(state.tensor[i]) + ", expected=" +
-               std::to_string(expected);
+               std::to_string(i) + ", got=" + std::to_string(state.tensor[i]) +
+               ", expected=" + std::to_string(expected);
       }
     }
   }
@@ -277,7 +276,8 @@ void test_planner_emits_valid_collective_dags() {
   assert(Testing::count_ops(alltoall_plan, PrimitiveOpKind::Recv) > 0);
   assert(Testing::count_ops(alltoall_plan, PrimitiveOpKind::Copy) > 0);
   assert(alltoall_plan.staging_bytes_required ==
-         static_cast<size_t>(alltoall_cfg.nranks - 1) * alltoall_cfg.tile_bytes);
+         static_cast<size_t>(alltoall_cfg.nranks - 1) *
+             alltoall_cfg.tile_bytes);
 }
 
 void test_planner_clamps_flow_count_to_available_tiles() {
@@ -303,7 +303,8 @@ void test_planner_clamps_flow_count_to_available_tiles() {
   Testing::validate_basic_plan(alltoall_plan);
   assert(alltoall_plan.num_flows == 1);
   assert(alltoall_plan.staging_bytes_required ==
-         static_cast<size_t>(alltoall_cfg.nranks - 1) * alltoall_cfg.tile_bytes);
+         static_cast<size_t>(alltoall_cfg.nranks - 1) *
+             alltoall_cfg.tile_bytes);
   for (auto const& op : alltoall_plan.ops) {
     assert(op.tile.flow_index < alltoall_plan.num_flows);
   }
@@ -350,7 +351,8 @@ void test_planner_builds_variable_split_alltoall_out_of_place() {
     }
   }
 
-  // rank=1 sends to peers 0/2, receives from peers 0/2, and self-copies split[1].
+  // rank=1 sends to peers 0/2, receives from peers 0/2, and self-copies
+  // split[1].
   assert(sent_bytes[0] == 16);
   assert(sent_bytes[1] == 0);
   assert(sent_bytes[2] == 48);
@@ -423,16 +425,18 @@ void test_two_rank_ring_allreduce_rotates_reduced_shard_in_allgather() {
 }
 
 void test_three_rank_ring_allreduce_simulator_handles_multi_tile_case() {
-  printf("[test] three-rank ring allreduce simulator handles multi-tile case...\n");
-  std::string error =
-      simulate_three_rank_allreduce_and_find_error(1048572, 1);
+  printf(
+      "[test] three-rank ring allreduce simulator handles multi-tile "
+      "case...\n");
+  std::string error = simulate_three_rank_allreduce_and_find_error(1048572, 1);
   assert(error.empty() && "three-rank multi-tile allreduce simulation failed");
 }
 
 void test_three_rank_ring_allreduce_simulator_handles_single_tile_case() {
-  printf("[test] three-rank ring allreduce simulator handles single-tile case...\n");
-  std::string error =
-      simulate_three_rank_allreduce_and_find_error(196608, 2);
+  printf(
+      "[test] three-rank ring allreduce simulator handles single-tile "
+      "case...\n");
+  std::string error = simulate_three_rank_allreduce_and_find_error(196608, 2);
   assert(error.empty() && "three-rank single-tile allreduce simulation failed");
 }
 
@@ -457,10 +461,12 @@ void test_three_rank_ring_allreduce_plans_tail_elements() {
 }
 
 void test_three_rank_ring_allreduce_simulator_handles_tail_elements_case() {
-  printf("[test] three-rank ring allreduce simulator handles tail elements case...\n");
-  std::string error =
-      simulate_three_rank_allreduce_and_find_error(4100, 2);
-  assert(error.empty() && "three-rank tail-element allreduce simulation failed");
+  printf(
+      "[test] three-rank ring allreduce simulator handles tail elements "
+      "case...\n");
+  std::string error = simulate_three_rank_allreduce_and_find_error(4100, 2);
+  assert(error.empty() &&
+         "three-rank tail-element allreduce simulation failed");
 }
 
 void test_lowering_preserves_dependency_dag() {
@@ -504,7 +510,8 @@ void test_executor_completes_collectives_with_background_progress() {
 
   CollectiveConfig allreduce_cfg =
       Testing::make_test_config(4, 1, 4096, 512, 2);
-  CollectiveOpHandle ar_handle = executor.submit_allreduce(allreduce_cfg, memory);
+  CollectiveOpHandle ar_handle =
+      executor.submit_allreduce(allreduce_cfg, memory);
   assert(wait_until_terminal(executor, ar_handle, std::chrono::seconds(2)));
   assert(executor.status(ar_handle) == CollectiveOpStatus::Completed);
   executor.release(ar_handle);
@@ -532,8 +539,7 @@ void test_executor_queues_collectives_serially() {
 
   CollectiveConfig allreduce_cfg =
       Testing::make_test_config(4, 1, 2048, 256, 2);
-  CollectiveConfig alltoall_cfg =
-      Testing::make_test_config(4, 1, 2048, 256, 2);
+  CollectiveConfig alltoall_cfg = Testing::make_test_config(4, 1, 2048, 256, 2);
   alltoall_cfg.algorithm = AlgorithmKind::Pairwise;
 
   CollectiveOpHandle first = executor.submit_allreduce(allreduce_cfg, memory);
@@ -552,7 +558,8 @@ void test_executor_queues_collectives_serially() {
 }
 
 void test_executor_rejects_releasing_queued_or_running_collectives() {
-  printf("[test] executor rejects releasing queued or running collectives...\n");
+  printf(
+      "[test] executor rejects releasing queued or running collectives...\n");
 
   Testing::MockDeviceBackend device_backend(1000);
   Testing::MockBackend transport_backend(1000);
@@ -581,7 +588,9 @@ void test_executor_rejects_releasing_queued_or_running_collectives() {
 }
 
 void test_executor_uses_fallback_backend_when_specialized_backends_are_missing() {
-  printf("[test] executor uses fallback backend when specialized backends are missing...\n");
+  printf(
+      "[test] executor uses fallback backend when specialized backends are "
+      "missing...\n");
 
   Testing::MockBackend fallback_backend;
   ExecutorBackends backends{};

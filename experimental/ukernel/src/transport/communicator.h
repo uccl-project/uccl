@@ -1,9 +1,9 @@
 #pragma once
 
 #include "../../include/config.h"
+#include "adapter/tcp_adapter.h"
 #include "adapter/transport_adapter.h"
 #include "adapter/uccl_adapter.h"
-#include "adapter/tcp_adapter.h"
 #include "memory/memory_manager.h"
 #include "oob/oob.h"
 #include "request.h"
@@ -25,10 +25,10 @@ class IpcChannel;
 
 class Communicator {
  public:
-  Communicator(int gpu_id, int rank, int world_size,
-               std::shared_ptr<CommunicatorConfig> config =
-                   std::make_shared<CommunicatorConfig>(
-                       CommunicatorConfig::from_env()));
+  Communicator(
+      int gpu_id, int rank, int world_size,
+      std::shared_ptr<CommunicatorConfig> config =
+          std::make_shared<CommunicatorConfig>(CommunicatorConfig::from_env()));
   ~Communicator();
 
   bool connect(int rank);
@@ -62,14 +62,14 @@ class Communicator {
   bool wait_ipc_buffer(int remote_rank, uint32_t ipc_id,
                        uint64_t expected_binding_version = 0);
   bool resolve_ipc_buffer_pointer(int remote_rank, uint32_t ipc_id,
-                                  size_t offset, size_t bytes,
-                                  void** out_ptr, int* out_device_idx);
+                                  size_t offset, size_t bytes, void** out_ptr,
+                                  int* out_device_idx);
 
   bool register_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle,
-                                   RemoteIpc const& ipc);
+                                 RemoteIpc const& ipc);
   RemoteIpc get_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle);
 
-  void* get_or_open_bounce_shm(const std::string& shm_name, size_t size);
+  void* get_or_open_bounce_shm(std::string const& shm_name, size_t size);
   void clear_bounce_shm_cache();
 
  private:

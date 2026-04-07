@@ -29,13 +29,13 @@ class TransportAdapter {
   virtual bool has_send_path(int peer_rank) const = 0;
   virtual bool has_recv_path(int peer_rank) const = 0;
 
-  virtual unsigned send_async(int peer_rank, void* local_ptr, size_t len,
-                               uint64_t local_mr_id,
-                               std::optional<RemoteSlice> remote_hint,
-                               BounceBufferProvider bounce_provider = nullptr) = 0;
-  virtual unsigned recv_async(int peer_rank, void* local_ptr, size_t len,
-                               uint64_t local_mr_id,
-                               BounceBufferProvider bounce_provider = nullptr) = 0;
+  virtual unsigned send_async(
+      int peer_rank, void* local_ptr, size_t len, uint64_t local_mr_id,
+      std::optional<RemoteSlice> remote_hint,
+      BounceBufferProvider bounce_provider = nullptr) = 0;
+  virtual unsigned recv_async(
+      int peer_rank, void* local_ptr, size_t len, uint64_t local_mr_id,
+      BounceBufferProvider bounce_provider = nullptr) = 0;
 
   virtual bool poll_completion(unsigned id) = 0;
   virtual bool wait_completion(unsigned id) = 0;

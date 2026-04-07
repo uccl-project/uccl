@@ -6,12 +6,12 @@ namespace Device {
 
 namespace {
 
-using TestUtil::DeviceBuffer;
-using TestUtil::TaskManagerScope;
 using TestUtil::default_config;
+using TestUtil::DeviceBuffer;
 using TestUtil::download_vector;
 using TestUtil::require;
 using TestUtil::run_case;
+using TestUtil::TaskManagerScope;
 using TestUtil::upload_vector;
 using TestUtil::verify_bytes;
 using TestUtil::verify_floats;
@@ -123,11 +123,10 @@ void test_same_flow_reduce_pipeline() {
     TaskArgs args = make_reduce_args(static_cast<char*>(src.ptr) + offset,
                                      static_cast<char*>(dst.ptr) + offset,
                                      kTileElems * sizeof(float));
-    Task task = TaskManager::instance().create_task(
-        args, TaskType::CollReduce, DataType::Fp32, 0);
+    Task task = TaskManager::instance().create_task(args, TaskType::CollReduce,
+                                                    DataType::Fp32, 0);
     uint64_t task_id = pool.enqueue(task, 0);
-    require(task_id != WorkerPool::kInvalidTaskId,
-            "pipeline enqueue failed");
+    require(task_id != WorkerPool::kInvalidTaskId, "pipeline enqueue failed");
     task_ids.push_back(task_id);
   }
 
@@ -198,8 +197,7 @@ int main() {
               << "=== Device integration tests PASSED ===" << std::endl;
     return 0;
   } catch (std::exception const& ex) {
-    std::cerr << "[device integration test] fatal: " << ex.what()
-              << std::endl;
+    std::cerr << "[device integration test] fatal: " << ex.what() << std::endl;
     return 2;
   }
 }

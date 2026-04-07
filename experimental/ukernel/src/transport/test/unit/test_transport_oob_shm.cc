@@ -41,8 +41,7 @@ void test_shm_ipc_cache_exchange() {
 
   std::thread rank0([&]() {
     try {
-      ShmRingExchanger shm0(/*self_rank=*/0, /*world_size=*/2,
-                            ring_namespace);
+      ShmRingExchanger shm0(/*self_rank=*/0, /*world_size=*/2, ring_namespace);
 
       require(shm0.accept_from(/*peer_rank=*/1, /*timeout_ms=*/5000),
               "rank0 accept_from(1) failed");
@@ -72,8 +71,7 @@ void test_shm_ipc_cache_exchange() {
     try {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-      ShmRingExchanger shm1(/*self_rank=*/1, /*world_size=*/2,
-                            ring_namespace);
+      ShmRingExchanger shm1(/*self_rank=*/1, /*world_size=*/2, ring_namespace);
 
       require(shm1.connect_to(/*peer_rank=*/0, /*timeout_ms=*/5000),
               "rank1 connect_to(0) failed");
@@ -93,8 +91,8 @@ void test_shm_ipc_cache_exchange() {
               "rank1 send_ipc_cache failed");
 
       std::unique_lock<std::mutex> lk(done_mu);
-      bool done = done_cv.wait_for(
-          lk, std::chrono::seconds(5), [&] { return rank0_finished; });
+      bool done = done_cv.wait_for(lk, std::chrono::seconds(5),
+                                   [&] { return rank0_finished; });
       require(done, "rank1 timed out waiting for rank0 to finish");
     } catch (...) {
       rank1_error = std::current_exception();

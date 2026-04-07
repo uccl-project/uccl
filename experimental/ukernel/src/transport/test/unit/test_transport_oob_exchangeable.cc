@@ -11,9 +11,9 @@ using UKernel::Transport::MR;
 using UKernel::Transport::NamedMR;
 using UKernel::Transport::NamedMRInfos;
 using UKernel::Transport::TcpP2PInfo;
+using UKernel::Transport::UCCLP2PInfo;
 using UKernel::Transport::TestUtil::require;
 using UKernel::Transport::TestUtil::run_case;
-using UKernel::Transport::UCCLP2PInfo;
 
 void test_exchangeable_round_trip() {
   CommunicatorMeta meta{};
@@ -80,9 +80,9 @@ void test_exchangeable_round_trip() {
   require(ipc_rt.device_idx == ipc.device_idx,
           "IpcBufferInfo device_idx mismatch");
   require(ipc_rt.valid == ipc.valid, "IpcBufferInfo valid mismatch");
-  require(std::memcmp(&ipc_rt.handle, &ipc.handle, sizeof(gpuIpcMemHandle_t)) ==
-              0,
-          "IpcBufferInfo handle mismatch");
+  require(
+      std::memcmp(&ipc_rt.handle, &ipc.handle, sizeof(gpuIpcMemHandle_t)) == 0,
+      "IpcBufferInfo handle mismatch");
 }
 
 }  // namespace

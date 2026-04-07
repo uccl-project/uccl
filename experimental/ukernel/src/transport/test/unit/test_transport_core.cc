@@ -79,12 +79,14 @@ void test_memory_manager() {
   require(mm.register_remote_ipc(4, handle, cache),
           "failed to register remote IPC cache");
   RemoteIpc cached = mm.get_remote_ipc(4, handle);
-  require(cached.direct_ptr == cache.direct_ptr && cached.offset == cache.offset &&
-              cached.size == cache.size && cached.device_idx == cache.device_idx,
+  require(cached.direct_ptr == cache.direct_ptr &&
+              cached.offset == cache.offset && cached.size == cache.size &&
+              cached.device_idx == cache.device_idx,
           "remote IPC cache round-trip mismatch");
 
   auto released_shared_ref = mm.deregister_local(buf_a.data());
-  require(released_shared_ref.mr_id == mr_a.id && !released_shared_ref.fully_released,
+  require(released_shared_ref.mr_id == mr_a.id &&
+              !released_shared_ref.fully_released,
           "releasing one retained reference should not fully release the MR");
 
   auto resized = mm.register_local(buf_a.data(), buf_a.size() / 2);
@@ -195,22 +197,23 @@ void test_peer_transport_kind() {
           "preferred UCCL transport should require RDMA-capable peers");
 
   same.rdma_capable = true;
-  require(UKernel::Transport::resolve_peer_transport_kind(cfg, local, same) ==
-              PeerTransportKind::Uccl,
-          "preferred UCCL transport should use UCCL when peers are RDMA-capable");
+  require(
+      UKernel::Transport::resolve_peer_transport_kind(cfg, local, same) ==
+          PeerTransportKind::Uccl,
+      "preferred UCCL transport should use UCCL when peers are RDMA-capable");
 }
 
 void test_shm_ack_filtering() {
   using ShmRingExchanger = UKernel::Transport::ShmRingExchanger;
-  std::string const ring_namespace = unique_shm_namespace("core-shm-ack-filter");
+  std::string const ring_namespace =
+      unique_shm_namespace("core-shm-ack-filter");
 
   std::exception_ptr rank0_error;
   std::exception_ptr rank1_error;
 
   std::thread rank0([&] {
     try {
-      ShmRingExchanger shm0(/*self_rank=*/0, /*world_size=*/2,
-                            ring_namespace);
+      ShmRingExchanger shm0(/*self_rank=*/0, /*world_size=*/2, ring_namespace);
       require(shm0.accept_from(/*peer_rank=*/1, /*timeout_ms=*/5000),
               "rank0 accept_from failed");
 
@@ -229,8 +232,7 @@ void test_shm_ack_filtering() {
   std::thread rank1([&] {
     try {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      ShmRingExchanger shm1(/*self_rank=*/1, /*world_size=*/2,
-                            ring_namespace);
+      ShmRingExchanger shm1(/*self_rank=*/1, /*world_size=*/2, ring_namespace);
       require(shm1.connect_to(/*peer_rank=*/0, /*timeout_ms=*/5000),
               "rank1 connect_to failed");
       require(shm1.send_ack(/*peer_rank=*/0, /*seq=*/7, /*status=*/5),
@@ -258,8 +260,7 @@ void test_shm_dual_waiters() {
 
   std::thread rank0([&] {
     try {
-      ShmRingExchanger shm0(/*self_rank=*/0, /*world_size=*/2,
-                            ring_namespace);
+      ShmRingExchanger shm0(/*self_rank=*/0, /*world_size=*/2, ring_namespace);
       require(shm0.accept_from(/*peer_rank=*/1, /*timeout_ms=*/5000),
               "rank0 accept_from failed");
 
@@ -294,8 +295,7 @@ void test_shm_dual_waiters() {
   std::thread rank1([&] {
     try {
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      ShmRingExchanger shm1(/*self_rank=*/1, /*world_size=*/2,
-                            ring_namespace);
+      ShmRingExchanger shm1(/*self_rank=*/1, /*world_size=*/2, ring_namespace);
       require(shm1.connect_to(/*peer_rank=*/0, /*timeout_ms=*/5000),
               "rank1 connect_to failed");
 

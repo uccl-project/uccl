@@ -1,8 +1,9 @@
 #include "backend/transport_backend.h"
-#include "gpu_rt.h"
 #include "config.h"
+#include "gpu_rt.h"
 #include "transport.h"
 #include <arpa/inet.h>
+#include <netinet/in.h>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -14,7 +15,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-#include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -23,7 +23,9 @@ namespace CCL {
 
 namespace {
 
-[[noreturn]] void fail(std::string const& msg) { throw std::runtime_error(msg); }
+[[noreturn]] void fail(std::string const& msg) {
+  throw std::runtime_error(msg);
+}
 
 void require(bool cond, std::string const& msg) {
   if (!cond) fail(msg);
@@ -237,13 +239,12 @@ Options parse_options(int argc, char** argv) {
   opts.rank = get_int_arg(argc, argv, "--rank", env_rank);
   opts.world_size = get_int_arg(argc, argv, "--world-size", env_world);
   opts.gpu = get_int_arg(argc, argv, "--gpu", env_local_rank);
-  opts.exchanger_port =
-      get_int_arg(argc, argv, "--exchanger-port", get_env_int({"MASTER_PORT"}, 29700));
+  opts.exchanger_port = get_int_arg(argc, argv, "--exchanger-port",
+                                    get_env_int({"MASTER_PORT"}, 29700));
   opts.bytes = static_cast<size_t>(
       get_int_arg(argc, argv, "--bytes", static_cast<int>(opts.bytes)));
-  opts.exchanger_ip =
-      get_str_arg(argc, argv, "--exchanger-ip",
-                  get_env_str({"MASTER_ADDR"}, "127.0.0.1"));
+  opts.exchanger_ip = get_str_arg(argc, argv, "--exchanger-ip",
+                                  get_env_str({"MASTER_ADDR"}, "127.0.0.1"));
   opts.transport = get_str_arg(argc, argv, "--transport", "auto");
   return opts;
 }
@@ -259,8 +260,10 @@ Transport::PreferredTransport parse_transport(std::string const& value) {
 
 int run_rank(Options const& opts) {
   require(opts.world_size == 2, "transport backend test requires world_size=2");
-  require(opts.rank == 0 || opts.rank == 1, "transport backend test requires ranks 0/1");
-  require(opts.bytes % sizeof(float) == 0, "transport backend bytes must align to float");
+  require(opts.rank == 0 || opts.rank == 1,
+          "transport backend test requires ranks 0/1");
+  require(opts.bytes % sizeof(float) == 0,
+          "transport backend bytes must align to float");
 
   GPU_RT_CHECK(gpuSetDevice(opts.gpu));
 
@@ -296,7 +299,8 @@ int run_rank(Options const& opts) {
   cfg.communicator_config->exchanger_ip = opts.exchanger_ip;
   cfg.communicator_config->exchanger_port = opts.exchanger_port;
   cfg.communicator_config->local_id = opts.rank;
-  cfg.communicator_config->preferred_transport = parse_transport(opts.transport);
+  cfg.communicator_config->preferred_transport =
+      parse_transport(opts.transport);
 
   CommunicatorTransportBackend backend(cfg);
 
@@ -304,8 +308,10 @@ int run_rank(Options const& opts) {
   std::vector<float> staging_values(opts.bytes / sizeof(float), 0.0f);
 
   for (size_t i = 0; i < tensor_values.size(); ++i) {
-    tensor_values[i] = static_cast<float>(1000 * opts.rank + static_cast<int>(i));
-    staging_values[i] = static_cast<float>(2000 * opts.rank + static_cast<int>(i) * 2);
+    tensor_values[i] =
+        static_cast<float>(1000 * opts.rank + static_cast<int>(i));
+    staging_values[i] =
+        static_cast<float>(2000 * opts.rank + static_cast<int>(i) * 2);
   }
 
   // Case 1: tensor -> peer staging
@@ -321,15 +327,16 @@ int run_rank(Options const& opts) {
 
   ExecOp op1;
   op1.op_id = 0;
-  op1.kind = (opts.rank == 0) ? ExecOpKind::TransportSend
-                              : ExecOpKind::TransportRecv;
+  op1.kind =
+      (opts.rank == 0) ? ExecOpKind::TransportSend : ExecOpKind::TransportRecv;
   op1.tile.flow_index = 0;
   op1.tile.size_bytes = opts.bytes;
   op1.src = (opts.rank == 0) ? local_buffer_ref(input_id, 0)
                              : remote_buffer_ref(scratch_id, 0, 0);
   op1.dst = (opts.rank == 0) ? remote_buffer_ref(scratch_id, 1, 0)
                              : local_buffer_ref(scratch_id, 0);
-  backend.validate(make_single_op_plan(opts.rank, opts.world_size, op1), *memory);
+  backend.validate(make_single_op_plan(opts.rank, opts.world_size, op1),
+                   *memory);
   BackendToken token1 = backend.submit(op1, *memory);
   wait_for_token(backend, token1, std::chrono::seconds(10));
   backend.release(token1);
@@ -359,15 +366,16 @@ int run_rank(Options const& opts) {
 
   ExecOp op2;
   op2.op_id = 0;
-  op2.kind = (opts.rank == 1) ? ExecOpKind::TransportSend
-                              : ExecOpKind::TransportRecv;
+  op2.kind =
+      (opts.rank == 1) ? ExecOpKind::TransportSend : ExecOpKind::TransportRecv;
   op2.tile.flow_index = 0;
   op2.tile.size_bytes = opts.bytes;
   op2.src = (opts.rank == 1) ? local_buffer_ref(scratch_id, 0)
                              : remote_buffer_ref(input_id, 1, 0);
   op2.dst = (opts.rank == 1) ? remote_buffer_ref(input_id, 0, 0)
                              : local_buffer_ref(input_id, 0);
-  backend.validate(make_single_op_plan(opts.rank, opts.world_size, op2), *memory);
+  backend.validate(make_single_op_plan(opts.rank, opts.world_size, op2),
+                   *memory);
   BackendToken token2 = backend.submit(op2, *memory);
   wait_for_token(backend, token2, std::chrono::seconds(10));
   backend.release(token2);

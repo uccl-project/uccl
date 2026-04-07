@@ -1,19 +1,19 @@
 #pragma once
 
+#include "../oob/oob.h"
 #include "config.h"
 #include "gpu_rt.h"
-#include "../oob/oob.h"
 #include "request.h"
 #include "transport_adapter.h"
 #include "util/jring.h"
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -42,9 +42,9 @@ class IpcChannel final : public TransportAdapter {
   bool has_recv_path(int peer_rank) const override;
 
   unsigned send_async(int peer_rank, void* local_ptr, size_t len,
-                       uint64_t local_mr_id,
-                       std::optional<RemoteSlice> remote_hint,
-                       BounceBufferProvider bounce_provider = nullptr) override;
+                      uint64_t local_mr_id,
+                      std::optional<RemoteSlice> remote_hint,
+                      BounceBufferProvider bounce_provider = nullptr) override;
   unsigned recv_async(int peer_rank, void* local_ptr, size_t len,
                       uint64_t local_mr_id,
                       BounceBufferProvider bounce_provider = nullptr) override;
@@ -79,10 +79,10 @@ class IpcChannel final : public TransportAdapter {
   };
 
   bool send_one(int to_rank, Request* creq, void* bounce_ptr, size_t bounce_len,
-                const std::string& bounce_shm_name,
+                std::string const& bounce_shm_name,
                 BounceBufferProvider bounce_provider);
-  bool recv_one(int from_rank, Request* creq, void* bounce_ptr, size_t bounce_len,
-                const std::string& bounce_shm_name);
+  bool recv_one(int from_rank, Request* creq, void* bounce_ptr,
+                size_t bounce_len, std::string const& bounce_shm_name);
   void send_thread_func();
   void recv_thread_func();
   void complete_task(std::shared_ptr<Request> const& req, bool ok);

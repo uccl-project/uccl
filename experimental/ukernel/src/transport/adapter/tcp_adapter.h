@@ -5,15 +5,15 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
+#include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <queue>
 #include <string>
 #include <thread>
-#include <queue>
-#include <vector>
-#include <functional>
 #include <unordered_map>
+#include <vector>
 
 namespace UKernel {
 namespace Transport {
@@ -44,9 +44,9 @@ class TcpTransportAdapter final : public TransportAdapter {
   bool has_recv_path(int peer_rank) const override;
 
   unsigned send_async(int peer_rank, void* local_ptr, size_t len,
-                       uint64_t local_mr_id,
-                       std::optional<RemoteSlice> remote_hint,
-                       BounceBufferProvider bounce_provider = nullptr) override;
+                      uint64_t local_mr_id,
+                      std::optional<RemoteSlice> remote_hint,
+                      BounceBufferProvider bounce_provider = nullptr) override;
   unsigned recv_async(int peer_rank, void* local_ptr, size_t len,
                       uint64_t local_mr_id,
                       BounceBufferProvider bounce_provider = nullptr) override;
@@ -56,7 +56,9 @@ class TcpTransportAdapter final : public TransportAdapter {
   bool request_failed(unsigned id) override;
   void release_request(unsigned id) override;
 
-  int peer_count() const override { return static_cast<int>(peer_contexts_.size()); }
+  int peer_count() const override {
+    return static_cast<int>(peer_contexts_.size());
+  }
 
   int send_async_tcp(int peer_rank, void const* host_ptr, size_t len,
                      unsigned request_id);

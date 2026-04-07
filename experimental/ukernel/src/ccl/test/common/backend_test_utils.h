@@ -9,9 +9,9 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <utility>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace UKernel {
@@ -120,7 +120,8 @@ inline void validate_basic_plan(CollectivePlan const& plan) {
       assert(op.src.kind == BufferKind::Remote);
       assert(op.dst.kind == BufferKind::Local);
     }
-    if (op.kind == PrimitiveOpKind::Copy || op.kind == PrimitiveOpKind::Reduce) {
+    if (op.kind == PrimitiveOpKind::Copy ||
+        op.kind == PrimitiveOpKind::Reduce) {
       assert(op.src.kind == BufferKind::Local ||
              op.src.kind == BufferKind::Remote);
       assert(op.dst.kind == BufferKind::Local ||

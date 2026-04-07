@@ -1,5 +1,8 @@
-#include "gpu_rt.h"
 #include "backend_test_utils.h"
+#include "gpu_rt.h"
+#include "transport.h"
+#include <arpa/inet.h>
+#include <netinet/in.h>
 #include <algorithm>
 #include <cassert>
 #include <chrono>
@@ -14,12 +17,8 @@
 #include <string>
 #include <thread>
 #include <vector>
-#include <arpa/inet.h>
-#include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
-
-#include "transport.h"
 
 namespace UKernel {
 namespace CCL {
@@ -28,15 +27,15 @@ namespace {
 
 constexpr BufferId kTestInputBufferId = 7;
 constexpr BufferId kTestScratchBufferId = 11;
-constexpr CollectiveBufferRoles kTestRoles{kTestInputBufferId,
-                                           kTestInputBufferId,
-                                           kTestScratchBufferId};
+constexpr CollectiveBufferRoles kTestRoles{
+    kTestInputBufferId, kTestInputBufferId, kTestScratchBufferId};
 
 size_t ceil_div(size_t a, size_t b) { return b == 0 ? 0 : (a + b - 1) / b; }
 
 size_t default_test_bytes_per_rank(int world_size) {
   size_t base = 1u << 20;
-  size_t alignment = static_cast<size_t>(std::max(1, world_size)) * sizeof(float);
+  size_t alignment =
+      static_cast<size_t>(std::max(1, world_size)) * sizeof(float);
   return base - (base % alignment);
 }
 
@@ -150,8 +149,7 @@ void socket_barrier(std::string const& server_ip, int port, int rank,
     return;
   }
 
-  int client_fd =
-      connect_tcp_client(server_ip, port, std::chrono::seconds(30));
+  int client_fd = connect_tcp_client(server_ip, port, std::chrono::seconds(30));
   write_barrier_byte(client_fd);
   read_barrier_byte(client_fd);
   ::close(client_fd);
@@ -273,8 +271,7 @@ struct DeviceBuffer {
 };
 
 CollectiveBinding build_collective_memory(int rank, int world_size,
-                                          void* tensor_ptr,
-                                          size_t tensor_bytes,
+                                          void* tensor_ptr, size_t tensor_bytes,
                                           void* staging_ptr,
                                           size_t staging_bytes) {
   CollectiveBinding binding;
@@ -410,10 +407,10 @@ Options parse_options(int argc, char** argv) {
       get_env_int({"MASTER_PORT", "UHM_EXCHANGER_SERVER_PORT"}, 29500));
   opts.num_flows = static_cast<uint32_t>(get_int_arg(
       argc, argv, "--num-flows", get_env_int({"CCL_NUM_FLOWS"}, 2)));
-  opts.bytes_per_rank = get_size_arg(
-      argc, argv, "--bytes-per-rank",
-      get_env_size({"BYTES_PER_RANK", "CCL_BYTES_PER_RANK"},
-                   default_test_bytes_per_rank(opts.world_size)));
+  opts.bytes_per_rank =
+      get_size_arg(argc, argv, "--bytes-per-rank",
+                   get_env_size({"BYTES_PER_RANK", "CCL_BYTES_PER_RANK"},
+                                default_test_bytes_per_rank(opts.world_size)));
   opts.tile_bytes =
       get_size_arg(argc, argv, "--tile-bytes",
                    get_env_size({"TILE_BYTES", "CCL_TILE_BYTES"}, 64 << 10));
@@ -461,8 +458,8 @@ int run_rank(Options const& opts) {
   upload_tensor(tensor.ptr, input);
 
   auto memory = std::make_shared<CollectiveBinding>(build_collective_memory(
-      opts.rank, opts.world_size, tensor.ptr, opts.bytes_per_rank,
-      staging.ptr, opts.bytes_per_rank));
+      opts.rank, opts.world_size, tensor.ptr, opts.bytes_per_rank, staging.ptr,
+      opts.bytes_per_rank));
 
   ExecutorConfig executor_cfg{};
   executor_cfg.gpu_id = opts.gpu;
@@ -490,11 +487,10 @@ int run_rank(Options const& opts) {
   if (opts.collective == CollectiveKind::AllToAll) {
     config.algorithm = AlgorithmKind::Pairwise;
   }
-  std::string barrier_ip =
-      get_env_str({"MASTER_ADDR"},
-                  opts.rank == 0 && opts.exchanger_ip == "0.0.0.0"
-                      ? "127.0.0.1"
-                      : opts.exchanger_ip);
+  std::string barrier_ip = get_env_str(
+      {"MASTER_ADDR"}, opts.rank == 0 && opts.exchanger_ip == "0.0.0.0"
+                           ? "127.0.0.1"
+                           : opts.exchanger_ip);
   socket_barrier(barrier_ip, opts.exchanger_port + 1, opts.rank,
                  opts.world_size, "pre-submit");
   std::fprintf(stderr, "[rank %d] submit %s\n", opts.rank,

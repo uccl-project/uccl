@@ -63,8 +63,7 @@ struct Request {
   std::atomic<uint32_t> remaining_completions{0};
 
   Request(unsigned id, uint64_t match_seq, void* buffer, size_t size_bytes,
-          RemoteSlice remote_slice,
-          RequestType type)
+          RemoteSlice remote_slice, RequestType type)
       : id(id),
         match_seq(match_seq),
         buffer(buffer),

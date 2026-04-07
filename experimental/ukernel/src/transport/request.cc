@@ -19,8 +19,7 @@ void Request::mark_failed() {
 }
 
 void Request::complete_one() {
-  uint32_t prev =
-      remaining_completions.fetch_sub(1, std::memory_order_acq_rel);
+  uint32_t prev = remaining_completions.fetch_sub(1, std::memory_order_acq_rel);
   if (prev == 0) {
     // Underflow means completion signaling protocol is broken.
     remaining_completions.store(0, std::memory_order_release);

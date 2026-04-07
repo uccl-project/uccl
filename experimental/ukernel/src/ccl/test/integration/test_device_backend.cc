@@ -17,11 +17,12 @@ namespace {
 
 constexpr BufferId kTestInputBufferId = 7;
 constexpr BufferId kTestScratchBufferId = 11;
-constexpr CollectiveBufferRoles kTestRoles{kTestInputBufferId,
-                                           kTestInputBufferId,
-                                           kTestScratchBufferId};
+constexpr CollectiveBufferRoles kTestRoles{
+    kTestInputBufferId, kTestInputBufferId, kTestScratchBufferId};
 
-[[noreturn]] void fail(std::string const& msg) { throw std::runtime_error(msg); }
+[[noreturn]] void fail(std::string const& msg) {
+  throw std::runtime_error(msg);
+}
 
 void require(bool cond, std::string const& msg) {
   if (!cond) fail(msg);
@@ -204,7 +205,8 @@ void test_device_copy() {
 
   ExecOp op = make_device_op(0, ExecOpKind::DeviceCopy, 0, 0, kBytes,
                              kTestInputBufferId, kTestScratchBufferId);
-  BackendToken token = submit_and_wait(backend, op, *memory, std::chrono::seconds(5));
+  BackendToken token =
+      submit_and_wait(backend, op, *memory, std::chrono::seconds(5));
   backend.release(token);
   backend.stop(0);
 
@@ -233,7 +235,8 @@ void test_device_reduce_sum() {
   ExecOp op = make_device_op(0, ExecOpKind::DeviceReduce, 0, 0, kBytes,
                              kTestScratchBufferId, kTestInputBufferId,
                              ReductionKind::Sum);
-  BackendToken token = submit_and_wait(backend, op, *memory, std::chrono::seconds(5));
+  BackendToken token =
+      submit_and_wait(backend, op, *memory, std::chrono::seconds(5));
   backend.release(token);
   backend.stop(0);
   std::vector<float> out = download_floats(tensor.ptr, kBytes);
@@ -266,11 +269,10 @@ void test_device_reduce_pipeline_same_flow() {
   tokens.reserve(kTiles);
   for (size_t tile = 0; tile < kTiles; ++tile) {
     size_t offset = tile * kTileElems * sizeof(float);
-    ExecOp op = make_device_op(static_cast<uint32_t>(tile),
-                               ExecOpKind::DeviceReduce, 0, offset,
-                               kTileElems * sizeof(float),
-                               kTestScratchBufferId, kTestInputBufferId,
-                               ReductionKind::Sum);
+    ExecOp op =
+        make_device_op(static_cast<uint32_t>(tile), ExecOpKind::DeviceReduce, 0,
+                       offset, kTileElems * sizeof(float), kTestScratchBufferId,
+                       kTestInputBufferId, ReductionKind::Sum);
     tokens.push_back(backend.submit(op, *memory));
   }
 

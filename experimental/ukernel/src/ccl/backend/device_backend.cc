@@ -68,7 +68,8 @@ Device::ReduceType to_device_reduce_type(ReductionKind reduction) {
 DeviceBackend::DeviceBackend(DeviceBackendConfig const& config)
     : config_(config) {
   if (config_.task_capacity == 0) {
-    throw std::invalid_argument("device backend task_capacity must be positive");
+    throw std::invalid_argument(
+        "device backend task_capacity must be positive");
   }
   if (config_.max_fifos == 0) {
     throw std::invalid_argument("device backend max_fifos must be positive");
@@ -138,12 +139,12 @@ BackendToken DeviceBackend::submit(ExecOp const& op,
   if (!supports(op.kind)) {
     throw std::invalid_argument("unsupported op kind for device backend");
   }
-  void const* src =
-      op.resolved_src != nullptr ? op.resolved_src
-                                 : resolve_const(binding, op.src, op.tile.size_bytes);
-  void* dst =
-      op.resolved_dst != nullptr ? op.resolved_dst
-                                 : resolve_mutable(binding, op.dst, op.tile.size_bytes);
+  void const* src = op.resolved_src != nullptr
+                        ? op.resolved_src
+                        : resolve_const(binding, op.src, op.tile.size_bytes);
+  void* dst = op.resolved_dst != nullptr
+                  ? op.resolved_dst
+                  : resolve_mutable(binding, op.dst, op.tile.size_bytes);
   ensure_runtime();
 
   Device::TaskArgs args{};
@@ -151,16 +152,12 @@ BackendToken DeviceBackend::submit(ExecOp const& op,
   args.src2 = nullptr;
   args.dst = dst;
   args.bytes = op.tile.size_bytes;
-  args.src_rank = (op.src.kind == BufferKind::Remote)
-                      ? op.src.rank
-                      : binding.local_rank();
-  args.dst_rank = (op.dst.kind == BufferKind::Remote)
-                      ? op.dst.rank
-                      : binding.local_rank();
-  args.src_device =
-      op.src_device >= 0 ? op.src_device : local_device_idx_;
-  args.dst_device =
-      op.dst_device >= 0 ? op.dst_device : local_device_idx_;
+  args.src_rank =
+      (op.src.kind == BufferKind::Remote) ? op.src.rank : binding.local_rank();
+  args.dst_rank =
+      (op.dst.kind == BufferKind::Remote) ? op.dst.rank : binding.local_rank();
+  args.src_device = op.src_device >= 0 ? op.src_device : local_device_idx_;
+  args.dst_device = op.dst_device >= 0 ? op.dst_device : local_device_idx_;
   args.set_red_type(::UKernel::CCL::to_device_reduce_type(op.reduction));
 
   Device::TaskType task_type = (op.kind == ExecOpKind::DeviceReduce)
@@ -174,9 +171,8 @@ BackendToken DeviceBackend::submit(ExecOp const& op,
       Device::TaskManager::instance().create_task(args, task_type, dtype, 0);
 
   uint64_t task_id = Device::WorkerPool::kInvalidTaskId;
-  for (int retry = 0; retry < 1000 &&
-                      task_id == Device::WorkerPool::kInvalidTaskId;
-       ++retry) {
+  for (int retry = 0;
+       retry < 1000 && task_id == Device::WorkerPool::kInvalidTaskId; ++retry) {
     task_id = worker_pool_->enqueue(task, fifo_id);
     if (task_id == Device::WorkerPool::kInvalidTaskId) {
       std::this_thread::sleep_for(std::chrono::microseconds(5));
@@ -258,8 +254,7 @@ void const* DeviceBackend::byte_offset(void const* base, size_t offset) const {
 }
 
 void* DeviceBackend::resolve_mutable(CollectiveBinding const& binding,
-                                     BufferRef const& ref,
-                                     size_t bytes) const {
+                                     BufferRef const& ref, size_t bytes) const {
   if (ref.kind == BufferKind::Remote) {
     throw std::invalid_argument(
         "device backend requires resolved runtime pointer for remote dst");
@@ -333,7 +328,8 @@ uint32_t DeviceBackend::acquire_fifo(uint32_t flow_id, uint32_t num_blocks) {
     return it->second.fifo_id;
   }
   if (worker_pool_ == nullptr) {
-    throw std::runtime_error("device backend worker runtime is not initialized");
+    throw std::runtime_error(
+        "device backend worker runtime is not initialized");
   }
   if (free_fifos_.empty()) {
     throw std::runtime_error("device backend has no available FIFO slots");
@@ -369,11 +365,10 @@ void DeviceBackend::stop_flow(uint32_t flow_id) {
 }
 
 uint32_t DeviceBackend::suggested_num_blocks(ExecOp const& op) const {
-  size_t bytes_per_block = (op.kind == ExecOpKind::DeviceReduce) ? (1u << 20)
-                                                                 : (4u << 20);
-  uint32_t blocks = static_cast<uint32_t>(
-      std::max<size_t>(1, (op.tile.size_bytes + bytes_per_block - 1) /
-                              bytes_per_block));
+  size_t bytes_per_block =
+      (op.kind == ExecOpKind::DeviceReduce) ? (1u << 20) : (4u << 20);
+  uint32_t blocks = static_cast<uint32_t>(std::max<size_t>(
+      1, (op.tile.size_bytes + bytes_per_block - 1) / bytes_per_block));
   return std::min<uint32_t>(std::max<uint32_t>(1, blocks),
                             static_cast<uint32_t>(std::max(1, sm_count_)));
 }

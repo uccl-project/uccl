@@ -32,7 +32,9 @@ inline void run_case(char const* suite, char const* name, Fn&& fn) {
 }
 
 struct TaskManagerScope {
-  explicit TaskManagerScope(uint32_t capacity) { TaskManager::instance().init(capacity); }
+  explicit TaskManagerScope(uint32_t capacity) {
+    TaskManager::instance().init(capacity);
+  }
   ~TaskManagerScope() { TaskManager::instance().release(); }
 
   TaskManagerScope(TaskManagerScope const&) = delete;
@@ -101,9 +103,9 @@ inline std::vector<T> download_vector(void const* src, size_t bytes) {
   return out;
 }
 
-inline void wait_until_done(WorkerPool& pool, uint64_t task_id, uint32_t fifo_id,
-                            std::chrono::milliseconds timeout =
-                                std::chrono::seconds(5)) {
+inline void wait_until_done(
+    WorkerPool& pool, uint64_t task_id, uint32_t fifo_id,
+    std::chrono::milliseconds timeout = std::chrono::seconds(5)) {
   auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
     if (pool.is_done(task_id, fifo_id)) {

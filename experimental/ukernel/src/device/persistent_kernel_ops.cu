@@ -17,7 +17,7 @@ __device__ __forceinline__ bool task_uses_args(TaskType ttype) {
 __device__ __forceinline__ void publish_tail_progress(uint64_t* tail,
                                                       uint64_t next_tail) {
   __threadfence_system();
-  *reinterpret_cast<volatile uint64_t*>(tail) = next_tail;
+  *reinterpret_cast<uint64_t volatile*>(tail) = next_tail;
 }
 
 }  // namespace
@@ -71,8 +71,7 @@ __device__ __forceinline__ void run_typed_copy(TaskArgs const& a,
 }
 
 template <typename T>
-__device__ __forceinline__ void run_reduce(TaskArgs const& a,
-                                           uint32_t block_id,
+__device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
                                            uint32_t num_blocks,
                                            void* smem_buf) {
   T* dst = reinterpret_cast<T*>(a.dst);
@@ -185,13 +184,13 @@ __global__ void singlePersistentKernel(
   auto& fifo = c2d_fifos[0];
   void* smem_buf = smem;
   __shared__ Task current_task;
-  __shared__ alignas(TaskArgs) unsigned char current_args_storage[sizeof(TaskArgs)];
+  __shared__ alignas(
+      TaskArgs) unsigned char current_args_storage[sizeof(TaskArgs)];
   __shared__ bool has_current_args;
   __shared__ uint32_t command;
   uint64_t cached_tail = 0;
   uint64_t cached_head = 0;
-  TaskArgs* current_args =
-      reinterpret_cast<TaskArgs*>(current_args_storage);
+  TaskArgs* current_args = reinterpret_cast<TaskArgs*>(current_args_storage);
 
   if (threadIdx.x == 0) {
     cached_tail = mscclpp::atomicLoad<uint64_t, mscclpp::scopeSystem>(
@@ -247,8 +246,8 @@ __global__ void singlePersistentKernel(
       return;
     }
 
-    dispatch_task(current_task, has_current_args ? current_args : nullptr, 0,
-                  1, smem_buf);
+    dispatch_task(current_task, has_current_args ? current_args : nullptr, 0, 1,
+                  smem_buf);
     __syncthreads();
 
     if (threadIdx.x == 0) {
@@ -270,10 +269,10 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
   const uint32_t bid = blockIdx.x;
 
   __shared__ Task current_task;
-  __shared__ alignas(TaskArgs) unsigned char current_args_storage[sizeof(TaskArgs)];
+  __shared__ alignas(
+      TaskArgs) unsigned char current_args_storage[sizeof(TaskArgs)];
   __shared__ bool has_current_args;
-  TaskArgs* current_args =
-      reinterpret_cast<TaskArgs*>(current_args_storage);
+  TaskArgs* current_args = reinterpret_cast<TaskArgs*>(current_args_storage);
   uint32_t local_phase = 0;
   uint64_t cached_tail = 0;
   uint64_t cached_head = 0;
@@ -315,8 +314,7 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
           ++cached_tail;
           publish_tail_progress(fifo.tail, cached_tail);
           command = kCommandExit;
-        } else if (task_uses_args(
-                       static_cast<TaskType>(next_task.type_u8()))) {
+        } else if (task_uses_args(static_cast<TaskType>(next_task.type_u8()))) {
           const uint32_t idx = next_task.args_index();
           if (idx < (1UL << TaskArgsIndexSize)) {
             TaskArgs* args = d_task_args + idx;

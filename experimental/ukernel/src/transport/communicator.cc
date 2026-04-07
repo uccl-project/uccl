@@ -147,19 +147,20 @@ std::string tcp_p2p_key(int src_rank, int dst_rank) {
 }
 
 std::string ipc_buffer_key(int src_rank, int dst_rank, uint32_t ipc_id) {
-  return "ipcbuf:" + std::to_string(src_rank) + "->" + std::to_string(dst_rank) +
-         ":ipc:" + std::to_string(ipc_id);
+  return "ipcbuf:" + std::to_string(src_rank) + "->" +
+         std::to_string(dst_rank) + ":ipc:" + std::to_string(ipc_id);
 }
 
-std::string ipc_buffer_versioned_key(int src_rank, int dst_rank, uint32_t ipc_id,
+std::string ipc_buffer_versioned_key(int src_rank, int dst_rank,
+                                     uint32_t ipc_id,
                                      uint64_t binding_version) {
-  return ipc_buffer_key(src_rank, dst_rank, ipc_id) +
-         ":v" + std::to_string(binding_version);
+  return ipc_buffer_key(src_rank, dst_rank, ipc_id) + ":v" +
+         std::to_string(binding_version);
 }
 
-void validate_dst_hint_for_transport(
-    PeerTransportKind kind, std::optional<RemoteSlice> const& dst_hint,
-    size_t src_bytes) {
+void validate_dst_hint_for_transport(PeerTransportKind kind,
+                                     std::optional<RemoteSlice> const& dst_hint,
+                                     size_t src_bytes) {
   if (!dst_hint.has_value()) return;
   auto const& hint = *dst_hint;
   if (hint.mem_id == 0) {
@@ -399,9 +400,8 @@ UcclTransportAdapter& Communicator::ensure_uccl_adapter(
         get_uccl_remote_hint_ip(config_, peer_meta), local_meta.ip);
     UcclTransportConfig uccl_cfg;
     uccl_cfg.local_ip = local_meta.ip;
-    uccl_adapter_ =
-        std::make_unique<UcclTransportAdapter>(local_gpu_idx_, world_size_,
-                                               std::move(uccl_cfg));
+    uccl_adapter_ = std::make_unique<UcclTransportAdapter>(
+        local_gpu_idx_, world_size_, std::move(uccl_cfg));
   }
   return *uccl_adapter_;
 }
@@ -474,9 +474,9 @@ bool Communicator::try_fallback_tcp_connect(
   return true;
 }
 
-bool Communicator::try_fallback_tcp_accept(int rank,
-                                           CommunicatorMeta const& local_meta,
-                                           CommunicatorMeta const& remote_meta) {
+bool Communicator::try_fallback_tcp_accept(
+    int rank, CommunicatorMeta const& local_meta,
+    CommunicatorMeta const& remote_meta) {
   (void)remote_meta;
   if (config_->preferred_transport != PreferredTransport::Auto) return false;
   auto& tcp_adapter = ensure_tcp_adapter(local_meta);
@@ -512,13 +512,9 @@ bool Communicator::try_fallback_tcp_accept(int rank,
   return true;
 }
 
-bool Communicator::connect(int rank) {
-  return do_connect(rank);
-}
+bool Communicator::connect(int rank) { return do_connect(rank); }
 
-bool Communicator::accept(int rank) {
-  return do_accept(rank);
-}
+bool Communicator::accept(int rank) { return do_accept(rank); }
 
 bool Communicator::do_connect(int rank) {
   if (rank == global_rank_) return true;
@@ -542,7 +538,8 @@ bool Communicator::do_connect(int rank) {
   if (resolved.kind == PeerTransportKind::Uccl) {
     auto& uccl_adapter =
         ensure_uccl_adapter(resolved.local_meta, resolved.remote_meta);
-    if (!uccl_adapter.has_send_peer(rank) || !uccl_adapter.has_recv_peer(rank)) {
+    if (!uccl_adapter.has_send_peer(rank) ||
+        !uccl_adapter.has_recv_peer(rank)) {
       int dev_idx = uccl_adapter.get_best_dev_idx(local_gpu_idx_);
       if (dev_idx < 0) {
         std::cerr << "[ERROR] Communicator " << global_rank_
@@ -564,18 +561,19 @@ bool Communicator::do_connect(int rank) {
                   << std::endl;
         return try_fallback_tcp_connect(rank, resolved.local_meta);
       }
-      UCCLP2PInfo local_p2p_info(local_ip_addr, local_port, dev_idx, local_gpu_idx_);
+      UCCLP2PInfo local_p2p_info(local_ip_addr, local_port, dev_idx,
+                                 local_gpu_idx_);
       std::string p2p_key = uccl_p2p_key(global_rank_, rank);
       std::string peer_p2p_key = uccl_p2p_key(rank, global_rank_);
       UCCLP2PInfo remote_p2p_info;
-      if (!publish_local_then_fetch_remote(*exchanger_client_, p2p_key,
-                                           local_p2p_info, peer_p2p_key,
-                                           remote_p2p_info,
-                                           bootstrap_timeout_ms())) {
+      if (!publish_local_then_fetch_remote(
+              *exchanger_client_, p2p_key, local_p2p_info, peer_p2p_key,
+              remote_p2p_info, bootstrap_timeout_ms())) {
         return false;
       }
       // connect() path: connect first, then establish reverse flow.
-      if ((!uccl_adapter.has_send_peer(rank) || !uccl_adapter.has_recv_peer(rank)) &&
+      if ((!uccl_adapter.has_send_peer(rank) ||
+           !uccl_adapter.has_recv_peer(rank)) &&
           !uccl_adapter.connect_to_peer(rank, remote_p2p_info.ip,
                                         remote_p2p_info.port, dev_idx,
                                         local_gpu_idx_, remote_p2p_info.dev_idx,
@@ -609,10 +607,9 @@ bool Communicator::do_connect(int rank) {
       std::string p2p_key = tcp_p2p_key(global_rank_, rank);
       std::string peer_p2p_key = tcp_p2p_key(rank, global_rank_);
       TcpP2PInfo remote_p2p_info;
-      if (!publish_local_then_fetch_remote(*exchanger_client_, p2p_key,
-                                           local_p2p_info, peer_p2p_key,
-                                           remote_p2p_info,
-                                           bootstrap_timeout_ms())) {
+      if (!publish_local_then_fetch_remote(
+              *exchanger_client_, p2p_key, local_p2p_info, peer_p2p_key,
+              remote_p2p_info, bootstrap_timeout_ms())) {
         return false;
       }
       if (!tcp_adapter.connect_to_peer(rank, remote_p2p_info.ip,
@@ -650,7 +647,8 @@ bool Communicator::do_accept(int rank) {
   if (resolved.kind == PeerTransportKind::Uccl) {
     auto& uccl_adapter =
         ensure_uccl_adapter(resolved.local_meta, resolved.remote_meta);
-    if (!uccl_adapter.has_recv_peer(rank) || !uccl_adapter.has_send_peer(rank)) {
+    if (!uccl_adapter.has_recv_peer(rank) ||
+        !uccl_adapter.has_send_peer(rank)) {
       int dev_idx = uccl_adapter.get_best_dev_idx(local_gpu_idx_);
       if (dev_idx < 0) {
         std::cerr << "[ERROR] Communicator " << global_rank_
@@ -675,22 +673,22 @@ bool Communicator::do_accept(int rank) {
         return try_fallback_tcp_accept(rank, resolved.local_meta,
                                        resolved.remote_meta);
       }
-      UCCLP2PInfo local_p2p_info(local_ip_addr, local_port, dev_idx, local_gpu_idx_);
+      UCCLP2PInfo local_p2p_info(local_ip_addr, local_port, dev_idx,
+                                 local_gpu_idx_);
       std::string p2p_key = uccl_p2p_key(global_rank_, rank);
       std::string peer_p2p_key = uccl_p2p_key(rank, global_rank_);
       UCCLP2PInfo remote_p2p_info;
-      if (!fetch_remote_then_publish_local(*exchanger_client_, peer_p2p_key,
-                                           remote_p2p_info, p2p_key,
-                                           local_p2p_info,
-                                           bootstrap_timeout_ms())) {
+      if (!fetch_remote_then_publish_local(
+              *exchanger_client_, peer_p2p_key, remote_p2p_info, p2p_key,
+              local_p2p_info, bootstrap_timeout_ms())) {
         return false;
       }
       // accept() path: accept first, then establish reverse flow.
-      if ((!uccl_adapter.has_recv_peer(rank) || !uccl_adapter.has_send_peer(rank)) &&
-          !uccl_adapter.accept_from_peer(rank, remote_p2p_info.ip,
-                                         remote_p2p_info.dev_idx,
-                                         remote_p2p_info.gpu_idx,
-                                         remote_p2p_info.port)) {
+      if ((!uccl_adapter.has_recv_peer(rank) ||
+           !uccl_adapter.has_send_peer(rank)) &&
+          !uccl_adapter.accept_from_peer(
+              rank, remote_p2p_info.ip, remote_p2p_info.dev_idx,
+              remote_p2p_info.gpu_idx, remote_p2p_info.port)) {
         std::cerr << "[ERROR] Communicator " << global_rank_
                   << " UCCL accept_from failed from rank " << rank << std::endl;
         return try_fallback_tcp_accept(rank, resolved.local_meta,
@@ -720,10 +718,9 @@ bool Communicator::do_accept(int rank) {
       TcpP2PInfo remote_p2p_info;
       TcpP2PInfo local_p2p_info(tcp_adapter.get_listen_ip(),
                                 tcp_adapter.get_listen_port());
-      if (!fetch_remote_then_publish_local(*exchanger_client_, peer_p2p_key,
-                                           remote_p2p_info, p2p_key,
-                                           local_p2p_info,
-                                           bootstrap_timeout_ms())) {
+      if (!fetch_remote_then_publish_local(
+              *exchanger_client_, peer_p2p_key, remote_p2p_info, p2p_key,
+              local_p2p_info, bootstrap_timeout_ms())) {
         return false;
       }
       if (!tcp_adapter.accept_from_peer(rank, remote_p2p_info.ip)) {
@@ -914,11 +911,10 @@ bool Communicator::complete_host_bounce_recv(TrackedRequest& tracked,
       GPU_RT_CHECK(gpuEventCreateWithFlags(&tracked.host_copy_event,
                                            gpuEventDisableTiming));
     }
-    GPU_RT_CHECK(gpuMemcpyAsync(
-        static_cast<char*>(tracked.completion_buffer) +
-            tracked.completion_offset,
-        tracked.bounce.ptr, tracked.completion_bytes, gpuMemcpyHostToDevice,
-        host_copy_stream_));
+    GPU_RT_CHECK(gpuMemcpyAsync(static_cast<char*>(tracked.completion_buffer) +
+                                    tracked.completion_offset,
+                                tracked.bounce.ptr, tracked.completion_bytes,
+                                gpuMemcpyHostToDevice, host_copy_stream_));
     GPU_RT_CHECK(gpuEventRecord(tracked.host_copy_event, host_copy_stream_));
     tracked.host_copy_submitted = true;
     if (!blocking) return false;
@@ -1001,8 +997,7 @@ unsigned Communicator::isend(int rank, LocalSlice src,
   std::shared_ptr<BounceCpuBuffer> bounce_owner;
   if (needs_bounce) {
     bounce_owner = std::shared_ptr<BounceCpuBuffer>(
-        new BounceCpuBuffer{},
-        [this](BounceCpuBuffer* lease) {
+        new BounceCpuBuffer{}, [this](BounceCpuBuffer* lease) {
           if (lease != nullptr) {
             if (bounce_pool_ != nullptr && lease->valid()) {
               bounce_pool_->release(*lease);
@@ -1013,8 +1008,8 @@ unsigned Communicator::isend(int rank, LocalSlice src,
     tracked.bounce_owner = bounce_owner;
   }
   auto bounce_provider = [this, needs_bounce, needs_uccl_registration,
-                          use_shareable, bounce_owner](
-                             size_t bytes) -> BounceBufferInfo {
+                          use_shareable,
+                          bounce_owner](size_t bytes) -> BounceBufferInfo {
     if (!needs_bounce || !bounce_owner) return {};
     if (!bounce_owner->valid()) {
       *bounce_owner =
@@ -1029,8 +1024,8 @@ unsigned Communicator::isend(int rank, LocalSlice src,
     return info;
   };
 
-  unsigned result = adapter->send_async(rank, local_ptr, src.bytes,
-                                         src.mem_id, dst_hint, bounce_provider);
+  unsigned result = adapter->send_async(rank, local_ptr, src.bytes, src.mem_id,
+                                        dst_hint, bounce_provider);
   if (result == 0) {
     cleanup_tracked_request(tracked);
     return 0;
@@ -1074,9 +1069,10 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
   tracked.peer_rank = rank;
   tracked.kind = peer_kind;
 
-  auto needs_bounce = (peer_kind == PeerTransportKind::Tcp) ||
-                      (peer_kind == PeerTransportKind::Uccl &&
-                       !ensure_uccl_memory_registered(dst.mem_id, local_ptr, dst.bytes));
+  auto needs_bounce =
+      (peer_kind == PeerTransportKind::Tcp) ||
+      (peer_kind == PeerTransportKind::Uccl &&
+       !ensure_uccl_memory_registered(dst.mem_id, local_ptr, dst.bytes));
 
   // IPC fast path metadata: let sender resolve remote pointer by dst.mem_id
   // and skip per-request ipc_cache handshake when possible.
@@ -1095,13 +1091,15 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
   }
 
   if (needs_bounce) {
-    tracked.bounce = bounce_pool_->acquire(dst.bytes, needs_uccl_registration, use_shareable);
+    tracked.bounce = bounce_pool_->acquire(dst.bytes, needs_uccl_registration,
+                                           use_shareable);
     tracked.needs_host_to_device_copy = true;
     tracked.completion_buffer = local_ptr;
     tracked.completion_bytes = dst.bytes;
   }
 
-  auto bounce_provider = [this, &tracked, needs_bounce, needs_uccl_registration, use_shareable](size_t bytes) -> BounceBufferInfo {
+  auto bounce_provider = [this, &tracked, needs_bounce, needs_uccl_registration,
+                          use_shareable](size_t bytes) -> BounceBufferInfo {
     if (!needs_bounce) return {};
     if (!tracked.bounce.valid()) {
       tracked.bounce =
@@ -1116,8 +1114,8 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
     return info;
   };
 
-  unsigned result = adapter->recv_async(rank, local_ptr, dst.bytes,
-                                         dst.mem_id, bounce_provider);
+  unsigned result = adapter->recv_async(rank, local_ptr, dst.bytes, dst.mem_id,
+                                        bounce_provider);
   if (result == 0) {
     cleanup_tracked_request(tracked);
     return 0;
@@ -1354,8 +1352,8 @@ bool Communicator::wait_named_mrs(int remote_rank, uint64_t generation,
   }
   if (infos.generation != generation) {
     std::cerr << "[WARN] Named MR generation mismatch from rank " << remote_rank
-              << ": expected=" << generation
-              << " got=" << infos.generation << std::endl;
+              << ": expected=" << generation << " got=" << infos.generation
+              << std::endl;
     return false;
   }
 
@@ -1420,8 +1418,8 @@ bool Communicator::notify_ipc_buffer(int remote_rank, uint32_t ipc_id,
   auto const latest_key = ipc_buffer_key(global_rank_, remote_rank, ipc_id);
   if (!exchanger_client_->publish(latest_key, info)) return false;
   if (binding_version == 0) return true;
-  auto const versioned_key = ipc_buffer_versioned_key(
-      global_rank_, remote_rank, ipc_id, binding_version);
+  auto const versioned_key = ipc_buffer_versioned_key(global_rank_, remote_rank,
+                                                      ipc_id, binding_version);
   return exchanger_client_->publish(versioned_key, info);
 }
 
@@ -1500,8 +1498,8 @@ bool Communicator::fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
       return memory_mgr_.register_remote_ipc_buffer(remote_rank, ipc_id, state);
     }
   }
-  if (!exchanger_client_->fetch(ipc_buffer_key(remote_rank, global_rank_, ipc_id),
-                                info)) {
+  if (!exchanger_client_->fetch(
+          ipc_buffer_key(remote_rank, global_rank_, ipc_id), info)) {
     return false;
   }
   MemoryManager::RemoteIpcBuffer state{};
@@ -1520,8 +1518,7 @@ bool Communicator::fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
 }
 
 bool Communicator::has_fresh_remote_ipc_buffer(
-    int remote_rank, uint32_t ipc_id,
-    uint64_t expected_binding_version) const {
+    int remote_rank, uint32_t ipc_id, uint64_t expected_binding_version) const {
   auto state = memory_mgr_.get_remote_ipc_buffer(remote_rank, ipc_id);
   if (!state.valid) return false;
   if (expected_binding_version != 0 &&
@@ -1565,27 +1562,28 @@ bool Communicator::resolve_ipc_buffer_pointer(int remote_rank, uint32_t ipc_id,
     memory_mgr_.register_remote_ipc_buffer(remote_rank, ipc_id, state);
   }
 
-  *out_ptr = reinterpret_cast<void*>(
-      reinterpret_cast<uintptr_t>(state.direct_ptr) + state.base_offset +
-      offset);
+  *out_ptr =
+      reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(state.direct_ptr) +
+                              state.base_offset + offset);
   if (out_device_idx != nullptr) {
     *out_device_idx = state.device_idx;
   }
   return true;
 }
 
-bool Communicator::register_remote_ipc_cache(
-    int remote_rank, gpuIpcMemHandle_t handle,
-    RemoteIpc const& ipc) {
+bool Communicator::register_remote_ipc_cache(int remote_rank,
+                                             gpuIpcMemHandle_t handle,
+                                             RemoteIpc const& ipc) {
   return memory_mgr_.register_remote_ipc(remote_rank, handle, ipc);
 }
 
-RemoteIpc Communicator::get_remote_ipc_cache(
-    int remote_rank, gpuIpcMemHandle_t handle) {
+RemoteIpc Communicator::get_remote_ipc_cache(int remote_rank,
+                                             gpuIpcMemHandle_t handle) {
   return memory_mgr_.get_remote_ipc(remote_rank, handle);
 }
 
-void* Communicator::get_or_open_bounce_shm(const std::string& shm_name, size_t size) {
+void* Communicator::get_or_open_bounce_shm(std::string const& shm_name,
+                                           size_t size) {
   return bounce_pool_->get_or_open_shm(shm_name, size);
 }
 

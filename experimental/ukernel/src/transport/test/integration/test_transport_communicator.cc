@@ -1,5 +1,5 @@
-#include "transport.h"
 #include "test_utils.h"
+#include "transport.h"
 #include "util/util.h"
 #include <chrono>
 #include <cstdint>
@@ -76,9 +76,8 @@ std::shared_ptr<Communicator> make_communicator(
 
 int run_exchange_client(std::string const& exchanger_ip, int exchanger_port,
                         UKernel::Transport::PreferredTransport preferred) {
-  auto comm =
-      make_communicator(kClientGpu, kClientRank, kWorldSize, exchanger_ip,
-                        exchanger_port, preferred);
+  auto comm = make_communicator(kClientGpu, kClientRank, kWorldSize,
+                                exchanger_ip, exchanger_port, preferred);
   require(setup_bidirectional_peer(comm, kClientRank, kServerRank),
           "client bidirectional connect/accept failed");
 
@@ -89,18 +88,20 @@ int run_exchange_client(std::string const& exchanger_ip, int exchanger_port,
 
   std::vector<uint8_t> send_host(kMessageBytes);
   fill_pattern(send_host, 0x10);
-  GPU_RT_CHECK(
-      gpuMemcpy(sendbuf_d, send_host.data(), send_host.size(), gpuMemcpyHostToDevice));
+  GPU_RT_CHECK(gpuMemcpy(sendbuf_d, send_host.data(), send_host.size(),
+                         gpuMemcpyHostToDevice));
 
   MR send_mr = comm->reg_mr(sendbuf_d, kMessageBytes);
   NamedMRInfos remote_recv_infos{};
   if (comm->peer_transport_kind(kServerRank) ==
       UKernel::Transport::PeerTransportKind::Uccl) {
-    require(comm->wait_named_mrs(kServerRank, kNamedMrGeneration, remote_recv_infos),
+    require(comm->wait_named_mrs(kServerRank, kNamedMrGeneration,
+                                 remote_recv_infos),
             "client wait_named_mrs failed");
   }
-  uint32_t remote_recv_mr_id =
-      remote_recv_infos.entries.empty() ? 0 : remote_recv_infos.entries.front().mr.id;
+  uint32_t remote_recv_mr_id = remote_recv_infos.entries.empty()
+                                   ? 0
+                                   : remote_recv_infos.entries.front().mr.id;
   std::optional<RemoteSlice> dst_hint = std::nullopt;
   if (remote_recv_mr_id != 0) {
     dst_hint = RemoteSlice{remote_recv_mr_id, 0};
@@ -116,9 +117,8 @@ int run_exchange_client(std::string const& exchanger_ip, int exchanger_port,
 
 int run_exchange_server(std::string const& exchanger_ip, int exchanger_port,
                         UKernel::Transport::PreferredTransport preferred) {
-  auto comm =
-      make_communicator(kServerGpu, kServerRank, kWorldSize, exchanger_ip,
-                        exchanger_port, preferred);
+  auto comm = make_communicator(kServerGpu, kServerRank, kWorldSize,
+                                exchanger_ip, exchanger_port, preferred);
   require(setup_bidirectional_peer(comm, kServerRank, kClientRank),
           "server bidirectional connect/accept failed");
 
@@ -157,9 +157,8 @@ int run_ipc_buffer_metadata_client(
     UKernel::Transport::PreferredTransport preferred) {
   (void)preferred;
   (void)exchanger_port;
-  auto comm =
-      make_communicator(kClientGpu, kClientRank, kWorldSize, exchanger_ip,
-                        exchanger_port, preferred);
+  auto comm = make_communicator(kClientGpu, kClientRank, kWorldSize,
+                                exchanger_ip, exchanger_port, preferred);
   require(comm->same_host(kServerRank),
           "ipc-buffer-meta requires same-host peers");
 
@@ -194,9 +193,8 @@ int run_ipc_buffer_metadata_server(
     UKernel::Transport::PreferredTransport preferred) {
   (void)preferred;
   (void)exchanger_port;
-  auto comm =
-      make_communicator(kServerGpu, kServerRank, kWorldSize, exchanger_ip,
-                        exchanger_port, preferred);
+  auto comm = make_communicator(kServerGpu, kServerRank, kWorldSize,
+                                exchanger_ip, exchanger_port, preferred);
   require(comm->same_host(kClientRank),
           "ipc-buffer-meta requires same-host peers");
 
@@ -256,9 +254,9 @@ void test_transport_communicator_local() {
             "reg_mr should be idempotent for the same buffer");
     require(comm->get_local_mr(static_cast<char*>(buf) + 128).id == mr0.id,
             "communicator local MR range lookup failed");
-    require(comm->get_local_mr(mr0.id).address ==
-                reinterpret_cast<uint64_t>(buf),
-            "communicator local MR lookup by id failed");
+    require(
+        comm->get_local_mr(mr0.id).address == reinterpret_cast<uint64_t>(buf),
+        "communicator local MR lookup by id failed");
 
     require(comm->dereg_mr(buf), "dereg_mr failed");
     MR mr2 = comm->reg_mr(buf, 4096);

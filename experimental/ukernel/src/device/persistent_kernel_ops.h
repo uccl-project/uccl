@@ -22,8 +22,7 @@ __device__ __forceinline__ void run_copy(TaskArgs const& a, uint32_t block_id,
                                          void* smem_buf = nullptr);
 
 template <typename T>
-__device__ __forceinline__ void run_reduce(TaskArgs const& a,
-                                           uint32_t block_id,
+__device__ __forceinline__ void run_reduce(TaskArgs const& a, uint32_t block_id,
                                            uint32_t num_blocks,
                                            void* smem_buf = nullptr);
 

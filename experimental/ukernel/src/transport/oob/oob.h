@@ -90,12 +90,10 @@ struct NamedMRInfos : public Exchangeable {
       auto const& entry = entries[i];
       kv["entry_" + std::to_string(i) + "_buffer_id"] =
           std::to_string(entry.buffer_id);
-      kv["entry_" + std::to_string(i) + "_mr_id"] =
-          std::to_string(entry.mr.id);
+      kv["entry_" + std::to_string(i) + "_mr_id"] = std::to_string(entry.mr.id);
 
       std::ostringstream oss;
-      oss << std::hex << std::setw(16) << std::setfill('0')
-          << entry.mr.address;
+      oss << std::hex << std::setw(16) << std::setfill('0') << entry.mr.address;
       kv["entry_" + std::to_string(i) + "_mr_addr"] = oss.str();
 
       kv["entry_" + std::to_string(i) + "_mr_len"] =
@@ -108,22 +106,22 @@ struct NamedMRInfos : public Exchangeable {
 
   void from_map(std::map<std::string, std::string> const& kv) override {
     auto generation_it = kv.find("generation");
-    generation = generation_it == kv.end() ? 0 : std::stoull(generation_it->second);
+    generation =
+        generation_it == kv.end() ? 0 : std::stoull(generation_it->second);
     size_t count = std::stoul(kv.at("count"));
     entries.resize(count);
     for (size_t i = 0; i < count; ++i) {
       auto& entry = entries[i];
-      entry.buffer_id = static_cast<uint32_t>(std::stoul(
-          kv.at("entry_" + std::to_string(i) + "_buffer_id")));
-      entry.mr.id = static_cast<uint32_t>(std::stoul(
-          kv.at("entry_" + std::to_string(i) + "_mr_id")));
+      entry.buffer_id = static_cast<uint32_t>(
+          std::stoul(kv.at("entry_" + std::to_string(i) + "_buffer_id")));
+      entry.mr.id = static_cast<uint32_t>(
+          std::stoul(kv.at("entry_" + std::to_string(i) + "_mr_id")));
       entry.mr.address = std::stoull(
           kv.at("entry_" + std::to_string(i) + "_mr_addr"), nullptr, 16);
-      entry.mr.length = std::stoull(
-          kv.at("entry_" + std::to_string(i) + "_mr_len"));
-      entry.mr.key =
-          static_cast<uint32_t>(std::stoul(kv.at("entry_" + std::to_string(i) +
-                                                 "_mr_key")));
+      entry.mr.length =
+          std::stoull(kv.at("entry_" + std::to_string(i) + "_mr_len"));
+      entry.mr.key = static_cast<uint32_t>(
+          std::stoul(kv.at("entry_" + std::to_string(i) + "_mr_key")));
     }
   }
 };
@@ -196,8 +194,7 @@ struct IpcBufferInfo : public Exchangeable {
 
     std::ostringstream oss;
     oss << std::hex << std::setfill('0');
-    auto const* data =
-        reinterpret_cast<uint8_t const*>(&handle);
+    auto const* data = reinterpret_cast<uint8_t const*>(&handle);
     for (size_t i = 0; i < sizeof(gpuIpcMemHandle_t); ++i) {
       oss << std::setw(2) << static_cast<unsigned>(data[i]);
     }
@@ -225,8 +222,8 @@ struct IpcBufferInfo : public Exchangeable {
     auto* data = reinterpret_cast<uint8_t*>(&handle);
     size_t nbytes = std::min(sizeof(gpuIpcMemHandle_t), hex.size() / 2);
     for (size_t i = 0; i < nbytes; ++i) {
-      data[i] = static_cast<uint8_t>(
-          std::stoul(hex.substr(i * 2, 2), nullptr, 16));
+      data[i] =
+          static_cast<uint8_t>(std::stoul(hex.substr(i * 2, 2), nullptr, 16));
     }
   }
 };

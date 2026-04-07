@@ -1,6 +1,6 @@
 #include "uccl_adapter.h"
-#include "collective/rdma/transport.h"
 #include "../memory/memory_manager.h"
+#include "collective/rdma/transport.h"
 #include <chrono>
 #include <iostream>
 #include <thread>
@@ -116,8 +116,7 @@ bool UcclTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip,
 bool UcclTransportAdapter::accept_from_peer(
     int peer_rank, std::string const& expected_remote_ip,
     int expected_remote_dev_idx, int expected_remote_gpu_idx,
-    uint16_t expected_remote_port,
-    AcceptedPeer* accepted_peer) {
+    uint16_t expected_remote_port, AcceptedPeer* accepted_peer) {
   if (has_send_peer(peer_rank) && has_recv_peer(peer_rank)) return true;
   if (!endpoint_) return false;
 
@@ -137,9 +136,9 @@ bool UcclTransportAdapter::accept_from_peer(
     std::string remote_ip;
     int remote_dev = 0;
     int remote_gpuidx = 0;
-    ::uccl::ConnID conn_id = endpoint_->uccl_accept(
-        dev_idx, listen_fd, local_gpu_idx_, remote_ip, &remote_dev,
-        &remote_gpuidx);
+    ::uccl::ConnID conn_id =
+        endpoint_->uccl_accept(dev_idx, listen_fd, local_gpu_idx_, remote_ip,
+                               &remote_dev, &remote_gpuidx);
     if (conn_id.context == nullptr) {
       std::cerr << "[ERROR] UCCL accept returned null context for peer "
                 << peer_rank << std::endl;
@@ -147,7 +146,8 @@ bool UcclTransportAdapter::accept_from_peer(
     }
 
     if ((!expected_remote_ip.empty() && remote_ip != expected_remote_ip) ||
-        (expected_remote_dev_idx >= 0 && remote_dev != expected_remote_dev_idx) ||
+        (expected_remote_dev_idx >= 0 &&
+         remote_dev != expected_remote_dev_idx) ||
         (expected_remote_gpu_idx >= 0 &&
          remote_gpuidx != expected_remote_gpu_idx)) {
       std::cerr << "[ERROR] UCCL accept peer mismatch for rank " << peer_rank
@@ -230,7 +230,8 @@ void UcclTransportAdapter::deregister_memory(uint64_t mr_id) {
 
 unsigned UcclTransportAdapter::send_async(
     int peer_rank, void* local_ptr, size_t len, uint64_t local_mr_id,
-    std::optional<RemoteSlice> remote_hint, BounceBufferProvider bounce_provider) {
+    std::optional<RemoteSlice> remote_hint,
+    BounceBufferProvider bounce_provider) {
   void* send_ptr = local_ptr;
   uint64_t send_mr_id = local_mr_id;
   BounceCpuBuffer bounce;
@@ -250,15 +251,16 @@ unsigned UcclTransportAdapter::send_async(
     remote_mr_id = remote_hint->mem_id;
     remote_slice_ptr = &(*remote_hint);
   }
-  unsigned request_id = next_request_id_.fetch_add(1, std::memory_order_relaxed);
+  unsigned request_id =
+      next_request_id_.fetch_add(1, std::memory_order_relaxed);
   int ret = send_async_uccl(peer_rank, send_ptr, len, send_mr_id, remote_mr_id,
                             request_id, remote_slice_ptr);
   return ret == 0 ? request_id : 0;
 }
 
-unsigned UcclTransportAdapter::recv_async(int peer_rank, void* local_ptr, size_t len,
-                                           uint64_t local_mr_id,
-                                           BounceBufferProvider bounce_provider) {
+unsigned UcclTransportAdapter::recv_async(
+    int peer_rank, void* local_ptr, size_t len, uint64_t local_mr_id,
+    BounceBufferProvider bounce_provider) {
   void* recv_ptr = local_ptr;
   uint64_t recv_mr_id = local_mr_id;
   if (bounce_provider) {
@@ -268,7 +270,8 @@ unsigned UcclTransportAdapter::recv_async(int peer_rank, void* local_ptr, size_t
       recv_mr_id = info.mr_id;
     }
   }
-  unsigned request_id = next_request_id_.fetch_add(1, std::memory_order_relaxed);
+  unsigned request_id =
+      next_request_id_.fetch_add(1, std::memory_order_relaxed);
   int ret = recv_async_uccl(peer_rank, recv_ptr, len, recv_mr_id, request_id);
   return ret == 0 ? request_id : 0;
 }
@@ -280,11 +283,11 @@ bool UcclTransportAdapter::request_failed(unsigned id) {
   return it->second.failed;
 }
 
-int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr, size_t len,
-                                     uint64_t local_mr_id,
-                                     uint64_t remote_mr_id,
-                                     uint64_t request_id,
-                                     RemoteSlice const* remote_slice) {
+int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
+                                          size_t len, uint64_t local_mr_id,
+                                          uint64_t remote_mr_id,
+                                          uint64_t request_id,
+                                          RemoteSlice const* remote_slice) {
   ::uccl::UcclFlow* flow = nullptr;
   ::uccl::Mhandle* local_mh = nullptr;
   {
@@ -305,10 +308,10 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr, size_t
 
   if (!flow || !local_mh) {
     std::cerr << "[ERROR] UCCL send_async missing "
-              << (!flow ? "send flow" : "memory handle")
-              << " for peer " << peer_rank << ", request " << request_id
-              << ", mr_id " << local_mr_id << ", len " << len
-              << ", ptr " << local_ptr << std::endl;
+              << (!flow ? "send flow" : "memory handle") << " for peer "
+              << peer_rank << ", request " << request_id << ", mr_id "
+              << local_mr_id << ", len " << len << ", ptr " << local_ptr
+              << std::endl;
     return -1;
   }
 
@@ -336,9 +339,8 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr, size_t
                                       ureq.get());
     if (ret != 0) {
       std::cerr << "[WARN] UCCL one-sided write submit failed for peer "
-                << peer_rank << ", request " << request_id
-                << ", remote_mr_id " << remote_mr_id
-                << "; fallback to send/recv path" << std::endl;
+                << peer_rank << ", request " << request_id << ", remote_mr_id "
+                << remote_mr_id << "; fallback to send/recv path" << std::endl;
     }
   }
 
@@ -354,10 +356,10 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr, size_t
   if (ret != 0) {
     std::cerr << "[ERROR] UCCL "
               << (one_sided_attempted ? "write/send fallback" : "send")
-              << " submit failed for peer " << peer_rank
-              << ", request " << request_id << ", mr_id " << local_mr_id
-              << ", remote_mr_id " << remote_mr_id << ", len " << len
-              << ", ptr " << local_ptr << std::endl;
+              << " submit failed for peer " << peer_rank << ", request "
+              << request_id << ", mr_id " << local_mr_id << ", remote_mr_id "
+              << remote_mr_id << ", len " << len << ", ptr " << local_ptr
+              << std::endl;
     return -1;
   }
 
@@ -394,10 +396,10 @@ int UcclTransportAdapter::recv_async_uccl(int peer_rank, void* local_ptr,
 
   if (!flow || !local_mh) {
     std::cerr << "[ERROR] UCCL recv_async missing "
-              << (!flow ? "recv flow" : "memory handle")
-              << " for peer " << peer_rank << ", request " << request_id
-              << ", mr_id " << local_mr_id << ", len " << len
-              << ", ptr " << local_ptr << std::endl;
+              << (!flow ? "recv flow" : "memory handle") << " for peer "
+              << peer_rank << ", request " << request_id << ", mr_id "
+              << local_mr_id << ", len " << len << ", ptr " << local_ptr
+              << std::endl;
     return -1;
   }
 

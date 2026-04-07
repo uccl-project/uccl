@@ -19,8 +19,8 @@ struct CommunicatorConfig {
 
   static CommunicatorConfig from_env() {
     CommunicatorConfig config;
-    config.exchanger_ip = getEnvOrDefault("UHM_EXCHANGER_SERVER_IP",
-                                          DEFAULT_EXCHANGER_SERVER_IP);
+    config.exchanger_ip =
+        getEnvOrDefault("UHM_EXCHANGER_SERVER_IP", DEFAULT_EXCHANGER_SERVER_IP);
     config.exchanger_port = getEnvOrDefault("UHM_EXCHANGER_SERVER_PORT",
                                             DEFAULT_EXCHANGER_SERVER_PORT);
     config.local_id = getLocalIdOrDefault();

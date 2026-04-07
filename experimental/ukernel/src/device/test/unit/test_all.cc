@@ -9,12 +9,12 @@ namespace Device {
 
 namespace {
 
-using TestUtil::DeviceBuffer;
-using TestUtil::TaskManagerScope;
 using TestUtil::default_config;
+using TestUtil::DeviceBuffer;
 using TestUtil::download_vector;
 using TestUtil::require;
 using TestUtil::run_case;
+using TestUtil::TaskManagerScope;
 using TestUtil::upload_vector;
 using TestUtil::verify_bytes;
 using TestUtil::verify_floats;
@@ -50,20 +50,18 @@ void test_task_encoding() {
 void test_task_manager_publish_and_reuse() {
   TaskManagerScope scope(4);
 
-  TaskArgs args = make_reduce_args(reinterpret_cast<void*>(0x1000),
-                                   reinterpret_cast<void*>(0x2000), 1024,
-                                   ReduceType::Sum);
+  TaskArgs args =
+      make_reduce_args(reinterpret_cast<void*>(0x1000),
+                       reinterpret_cast<void*>(0x2000), 1024, ReduceType::Sum);
   args.src_rank = 1;
   args.dst_rank = 2;
 
-  Task first =
-      TaskManager::instance().create_task(args, TaskType::CollReduce,
-                                          DataType::Fp32, /*blockId=*/3);
+  Task first = TaskManager::instance().create_task(
+      args, TaskType::CollReduce, DataType::Fp32, /*blockId=*/3);
   TaskArgs staged{};
-  GPU_RT_CHECK(gpuMemcpy(&staged,
-                         TaskManager::instance().d_task_args() +
-                             first.args_index(),
-                         sizeof(staged), gpuMemcpyDeviceToHost));
+  GPU_RT_CHECK(gpuMemcpy(
+      &staged, TaskManager::instance().d_task_args() + first.args_index(),
+      sizeof(staged), gpuMemcpyDeviceToHost));
 
   require(staged.src == args.src, "task manager staged src mismatch");
   require(staged.dst == args.dst, "task manager staged dst mismatch");
@@ -73,16 +71,14 @@ void test_task_manager_publish_and_reuse() {
   require(staged.is_published(), "task manager should publish task args");
 
   TaskManager::instance().free_task_args(first.args_index());
-  GPU_RT_CHECK(gpuMemcpy(&staged,
-                         TaskManager::instance().d_task_args() +
-                             first.args_index(),
-                         sizeof(staged), gpuMemcpyDeviceToHost));
+  GPU_RT_CHECK(gpuMemcpy(
+      &staged, TaskManager::instance().d_task_args() + first.args_index(),
+      sizeof(staged), gpuMemcpyDeviceToHost));
   require(!staged.is_published(),
           "freed task args should clear publish marker");
 
-  Task second =
-      TaskManager::instance().create_task(args, TaskType::CollReduce,
-                                          DataType::Fp32, /*blockId=*/3);
+  Task second = TaskManager::instance().create_task(
+      args, TaskType::CollReduce, DataType::Fp32, /*blockId=*/3);
   require(second.args_index() == first.args_index(),
           "task args slot should be reusable after free");
 }
@@ -116,14 +112,13 @@ void test_worker_lifecycle_and_streams() {
             "worker execution stream should be created");
     require(pool.getWorkerStream(0) != pool.control_stream(),
             "worker execution stream should differ from control stream");
-    require(!pool.createWorker(0, 1),
-            "same fifo should not bind two workers");
+    require(!pool.createWorker(0, 1), "same fifo should not bind two workers");
 
     int device = 0;
     int sm_count = 0;
     GPU_RT_CHECK(gpuGetDevice(&device));
-    GPU_RT_CHECK(gpuDeviceGetAttribute(&sm_count,
-                                       gpuDevAttrMultiProcessorCount, device));
+    GPU_RT_CHECK(gpuDeviceGetAttribute(&sm_count, gpuDevAttrMultiProcessorCount,
+                                       device));
     require(!pool.createWorker(1, static_cast<uint32_t>(sm_count + 1)),
             "creating more blocks than SMs should fail");
 
@@ -276,9 +271,9 @@ void test_multiple_fifos_copy() {
   std::array<DeviceBuffer, 3> dst = {DeviceBuffer(kBytes), DeviceBuffer(kBytes),
                                      DeviceBuffer(kBytes)};
 
-  std::array<std::vector<char>, 3> host_src = {
-      std::vector<char>(kBytes), std::vector<char>(kBytes),
-      std::vector<char>(kBytes)};
+  std::array<std::vector<char>, 3> host_src = {std::vector<char>(kBytes),
+                                               std::vector<char>(kBytes),
+                                               std::vector<char>(kBytes)};
   for (size_t fifo = 0; fifo < host_src.size(); ++fifo) {
     for (size_t i = 0; i < kBytes; ++i) {
       host_src[fifo][i] = static_cast<char>(fifo * 37 + i);

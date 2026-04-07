@@ -11,12 +11,12 @@
 
 namespace {
 
+using UKernel::Device::DataType;
+using UKernel::Device::ReduceType;
 using UKernel::Device::Task;
 using UKernel::Device::TaskArgs;
 using UKernel::Device::TaskManager;
 using UKernel::Device::TaskType;
-using UKernel::Device::DataType;
-using UKernel::Device::ReduceType;
 using UKernel::Device::WorkerPool;
 
 enum class BenchOp {
@@ -97,9 +97,7 @@ TaskArgs make_launch_args(BenchOp op, DeviceBuffers const& bufs) {
   return args;
 }
 
-void quiesce_device() {
-  GPU_RT_CHECK(gpuDeviceSynchronize());
-}
+void quiesce_device() { GPU_RT_CHECK(gpuDeviceSynchronize()); }
 
 DeviceBuffers make_buffers(size_t bytes) {
   DeviceBuffers bufs;
@@ -108,8 +106,7 @@ DeviceBuffers make_buffers(size_t bytes) {
   GPU_RT_CHECK(gpuMalloc(&bufs.dst, bytes));
 
   std::vector<float> host(bytes / sizeof(float), 1.0f);
-  GPU_RT_CHECK(
-      gpuMemcpy(bufs.src, host.data(), bytes, gpuMemcpyHostToDevice));
+  GPU_RT_CHECK(gpuMemcpy(bufs.src, host.data(), bytes, gpuMemcpyHostToDevice));
   GPU_RT_CHECK(gpuMemset(bufs.dst, 0, bytes));
   return bufs;
 }
@@ -125,23 +122,23 @@ void launch_one_kernel(BenchOp op, TaskArgs const& args, uint32_t num_blocks,
                        uint32_t threads_per_block) {
   switch (op) {
     case BenchOp::Nop:
-      UKernel::Device::benchDispatchNopKernel<<<num_blocks,
-                                                threads_per_block>>>();
+      UKernel::Device::
+          benchDispatchNopKernel<<<num_blocks, threads_per_block>>>();
       break;
     case BenchOp::Copy:
-      UKernel::Device::benchDispatchCopyFp32Kernel<<<num_blocks,
-                                                     threads_per_block>>>(args);
+      UKernel::Device::
+          benchDispatchCopyFp32Kernel<<<num_blocks, threads_per_block>>>(args);
       break;
     case BenchOp::Reduce:
-      UKernel::Device::benchDispatchReduceFp32Kernel<<<num_blocks,
-                                                       threads_per_block>>>(args);
+      UKernel::Device::
+          benchDispatchReduceFp32Kernel<<<num_blocks, threads_per_block>>>(
+              args);
       break;
   }
 }
 
 double run_kernel_launch_path(BenchOp op, int tasks_per_batch, int rounds,
-                              int warmup, size_t bytes,
-                              uint32_t num_blocks,
+                              int warmup, size_t bytes, uint32_t num_blocks,
                               uint32_t threads_per_block) {
   DeviceBuffers bufs = make_buffers(bytes);
   TaskArgs args = make_launch_args(op, bufs);
@@ -192,12 +189,12 @@ Task make_worker_task(BenchOp op, DeviceBuffers const& bufs) {
 }
 
 double run_persistent_worker_path(BenchOp op, int tasks_per_batch, int rounds,
-                                  int warmup, size_t bytes,
-                                  uint32_t num_blocks,
+                                  int warmup, size_t bytes, uint32_t num_blocks,
                                   uint32_t threads_per_block,
                                   uint32_t smem_size) {
   TaskManager::instance().init(1);
-  DeviceBuffers bufs = (op != BenchOp::Nop) ? make_buffers(bytes) : DeviceBuffers{};
+  DeviceBuffers bufs =
+      (op != BenchOp::Nop) ? make_buffers(bytes) : DeviceBuffers{};
 
   WorkerPool::Config cfg;
   cfg.numMaxWorkers = 1;
@@ -251,7 +248,8 @@ double run_persistent_worker_batch_path(BenchOp op, int tasks_per_batch,
                                         uint32_t threads_per_block,
                                         uint32_t smem_size) {
   TaskManager::instance().init(1);
-  DeviceBuffers bufs = (op != BenchOp::Nop) ? make_buffers(bytes) : DeviceBuffers{};
+  DeviceBuffers bufs =
+      (op != BenchOp::Nop) ? make_buffers(bytes) : DeviceBuffers{};
 
   WorkerPool::Config cfg;
   cfg.numMaxWorkers = 1;
@@ -351,10 +349,9 @@ int main(int argc, char** argv) {
   for (BenchOp op : {BenchOp::Nop, BenchOp::Copy, BenchOp::Reduce}) {
     std::printf("\n=== %s ===\n", op_name(op));
     std::printf("Running persistent worker (single enqueue)...\n");
-    double worker_single_seconds = run_persistent_worker_path(
-        op, tasks_per_batch, rounds, warmup, bytes, num_blocks,
-        threads_per_block,
-        smem_size);
+    double worker_single_seconds =
+        run_persistent_worker_path(op, tasks_per_batch, rounds, warmup, bytes,
+                                   num_blocks, threads_per_block, smem_size);
     print_result("Persistent worker (single enqueue)", tasks_per_batch, rounds,
                  worker_single_seconds);
     quiesce_device();
@@ -362,8 +359,7 @@ int main(int argc, char** argv) {
     std::printf("Running persistent worker (batch enqueue)...\n");
     double worker_batch_seconds = run_persistent_worker_batch_path(
         op, tasks_per_batch, rounds, warmup, bytes, num_blocks,
-        threads_per_block,
-        smem_size);
+        threads_per_block, smem_size);
     print_result("Persistent worker (batch enqueue)", tasks_per_batch, rounds,
                  worker_batch_seconds);
 

@@ -41,8 +41,8 @@ enum class IpcPathMode { Auto, Relay };
 static IpcPathMode parse_ipc_path(char const* value) {
   if (strcmp(value, "auto") == 0) return IpcPathMode::Auto;
   if (strcmp(value, "relay") == 0) return IpcPathMode::Relay;
-  fprintf(stderr,
-          "Error: unsupported ipc path '%s' (expected auto|relay)\n", value);
+  fprintf(stderr, "Error: unsupported ipc path '%s' (expected auto|relay)\n",
+          value);
   std::exit(1);
 }
 
@@ -250,8 +250,7 @@ static bool sync_before_bidirectional(Communicator& comm, int rank,
   if (send_req == 0) return false;
   if (!comm.wait_finish(send_req)) return false;
 
-  unsigned recv_req =
-      submit_recv(comm, peer_rank, local_recv_mr_id, msg_size);
+  unsigned recv_req = submit_recv(comm, peer_rank, local_recv_mr_id, msg_size);
   if (recv_req == 0) return false;
   return comm.wait_finish(recv_req);
 }
@@ -350,9 +349,9 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
                                     transport_kind, remote_recv_mrs, slot);
     comm.wait_finish(send_req);
 
-    unsigned recv_req = submit_recv(comm, peer_rank,
-                                    local_recv_mrs[static_cast<size_t>(slot)].id,
-                                    msg_size);
+    unsigned recv_req =
+        submit_recv(comm, peer_rank,
+                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
     comm.wait_finish(recv_req);
   }
   if (!validate_recv_slots("Sender", rank, recv_slots, warmup_touched,
@@ -377,9 +376,9 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
                                     transport_kind, remote_recv_mrs, slot);
     comm.wait_finish(send_req);
 
-    unsigned recv_req = submit_recv(comm, peer_rank,
-                                    local_recv_mrs[static_cast<size_t>(slot)].id,
-                                    msg_size);
+    unsigned recv_req =
+        submit_recv(comm, peer_rank,
+                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
     comm.wait_finish(recv_req);
 
     uint64_t t1 = now_ns();
@@ -471,9 +470,9 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
     bidi_touched[static_cast<size_t>(slot)] = 1;
     unsigned send_req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
                                     transport_kind, remote_recv_mrs, slot);
-    unsigned recv_req = submit_recv(comm, peer_rank,
-                                    local_recv_mrs[static_cast<size_t>(slot)].id,
-                                    msg_size);
+    unsigned recv_req =
+        submit_recv(comm, peer_rank,
+                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
     if (send_req == 0 || recv_req == 0) {
       fprintf(stderr,
               "[Sender %d] request submission failed during bidirectional "
@@ -618,9 +617,9 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   for (int i = 0; i < num_warmup; ++i) {
     int slot = i % throughput_window;
     warmup_touched[static_cast<size_t>(slot)] = 1;
-    unsigned recv_req = submit_recv(comm, peer_rank,
-                                    local_recv_mrs[static_cast<size_t>(slot)].id,
-                                    msg_size);
+    unsigned recv_req =
+        submit_recv(comm, peer_rank,
+                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
     comm.wait_finish(recv_req);
 
     unsigned send_req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
@@ -641,9 +640,9 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   for (int i = 0; i < num_iterations; ++i) {
     int slot = i % throughput_window;
     latency_touched[static_cast<size_t>(slot)] = 1;
-    unsigned recv_req = submit_recv(comm, peer_rank,
-                                    local_recv_mrs[static_cast<size_t>(slot)].id,
-                                    msg_size);
+    unsigned recv_req =
+        submit_recv(comm, peer_rank,
+                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
     comm.wait_finish(recv_req);
 
     unsigned send_req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
@@ -668,9 +667,9 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   for (int i = 0; i < num_iterations; ++i) {
     int slot = i % throughput_window;
     throughput_touched[static_cast<size_t>(slot)] = 1;
-    unsigned req = submit_recv(comm, peer_rank,
-                               local_recv_mrs[static_cast<size_t>(slot)].id,
-                               msg_size);
+    unsigned req =
+        submit_recv(comm, peer_rank,
+                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
     if (req == 0) {
       fprintf(stderr,
               "[Receiver %d] irecv failed during throughput test at iter %d\n",
@@ -725,9 +724,9 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   for (int i = 0; i < num_iterations; ++i) {
     int slot = i % throughput_window;
     bidi_touched[static_cast<size_t>(slot)] = 1;
-    unsigned recv_req = submit_recv(comm, peer_rank,
-                                    local_recv_mrs[static_cast<size_t>(slot)].id,
-                                    msg_size);
+    unsigned recv_req =
+        submit_recv(comm, peer_rank,
+                    local_recv_mrs[static_cast<size_t>(slot)].id, msg_size);
     unsigned send_req = submit_send(comm, peer_rank, local_send_mr.id, msg_size,
                                     transport_kind, remote_recv_mrs, slot);
     if (send_req == 0 || recv_req == 0) {
@@ -786,8 +785,7 @@ void print_usage(char const* prog) {
   printf(
       "  --transport <kind>  Transport override: auto|ipc|uccl|tcp (default: "
       "auto)\n");
-  printf(
-      "  --ipc-path <mode>   IPC path mode: auto|relay (default: auto)\n");
+  printf("  --ipc-path <mode>   IPC path mode: auto|relay (default: auto)\n");
   printf("  --help              Show this help\n");
 }
 
@@ -865,7 +863,7 @@ int main(int argc, char** argv) {
           : (preferred_transport == PreferredTransport::Ipc
                  ? "ipc"
                  : (preferred_transport == PreferredTransport::Uccl ? "uccl"
-                                                                   : "tcp")));
+                                                                    : "tcp")));
   printf("IPC path mode: %s\n",
          ipc_path == IpcPathMode::Relay ? "relay" : "auto");
   printf("============================================================\n\n");

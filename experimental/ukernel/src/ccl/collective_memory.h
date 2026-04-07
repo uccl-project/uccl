@@ -83,8 +83,7 @@ struct BufferRegistry {
   }
 
   bool has_buffer(BufferId id) const {
-    return id != kInvalidBufferId &&
-           static_cast<size_t>(id) < buffers.size() &&
+    return id != kInvalidBufferId && static_cast<size_t>(id) < buffers.size() &&
            buffers[static_cast<size_t>(id)].registered;
   }
 
@@ -156,7 +155,8 @@ struct CollectiveBufferRoles {
     if (input_buffer_id == scratch_buffer_id ||
         output_buffer_id == scratch_buffer_id) {
       throw std::invalid_argument(
-          "collective binding scratch buffer must be distinct from input/output");
+          "collective binding scratch buffer must be distinct from "
+          "input/output");
     }
   }
 };
@@ -224,19 +224,20 @@ struct CollectiveBinding {
     };
 
     uint64_t signature = 0;
-    signature = hash_combine(signature,
-                             static_cast<uint64_t>(roles.input_buffer_id));
-    signature = hash_combine(signature,
-                             static_cast<uint64_t>(roles.output_buffer_id));
-    signature = hash_combine(signature,
-                             static_cast<uint64_t>(roles.scratch_buffer_id));
+    signature =
+        hash_combine(signature, static_cast<uint64_t>(roles.input_buffer_id));
+    signature =
+        hash_combine(signature, static_cast<uint64_t>(roles.output_buffer_id));
+    signature =
+        hash_combine(signature, static_cast<uint64_t>(roles.scratch_buffer_id));
     if (registry == nullptr) return signature;
     for (BufferId id : registry->registered_buffer_ids()) {
       RegisteredBuffer const& entry = registry->buffer(id);
       signature = hash_combine(signature, static_cast<uint64_t>(id));
       signature = hash_combine(signature, entry.registered ? 1ULL : 0ULL);
       signature = hash_combine(
-          signature, static_cast<uint64_t>(reinterpret_cast<uintptr_t>(entry.local_ptr)));
+          signature,
+          static_cast<uint64_t>(reinterpret_cast<uintptr_t>(entry.local_ptr)));
       signature = hash_combine(signature, static_cast<uint64_t>(entry.bytes));
       signature =
           hash_combine(signature, entry.remotely_accessible ? 1ULL : 0ULL);

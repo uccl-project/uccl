@@ -36,9 +36,8 @@ size_t balanced_shard_offset_bytes(size_t bytes, size_t elem_bytes, int nranks,
   size_t total_elems = bytes / elem_bytes;
   size_t base_elems = total_elems / static_cast<size_t>(nranks);
   size_t extra_elems = total_elems % static_cast<size_t>(nranks);
-  size_t offset_elems =
-      static_cast<size_t>(owner_rank) * base_elems +
-      std::min(static_cast<size_t>(owner_rank), extra_elems);
+  size_t offset_elems = static_cast<size_t>(owner_rank) * base_elems +
+                        std::min(static_cast<size_t>(owner_rank), extra_elems);
   return offset_elems * elem_bytes;
 }
 
@@ -69,20 +68,19 @@ size_t shard_size(size_t bytes, int nranks, int owner_rank) {
 }
 
 uint32_t clamp_num_flows(uint32_t requested_flows, size_t tiles_per_unit) {
-  size_t bounded =
-      std::min<size_t>(std::max<size_t>(1, requested_flows),
-                       std::max<size_t>(1, tiles_per_unit));
+  size_t bounded = std::min<size_t>(std::max<size_t>(1, requested_flows),
+                                    std::max<size_t>(1, tiles_per_unit));
   return static_cast<uint32_t>(bounded);
 }
 
 BufferRef input_ref(PlanRequest const& request, size_t offset_bytes) {
-  return local_buffer_ref(
-      request.roles.buffer_id(CollectiveBufferRole::Input), offset_bytes);
+  return local_buffer_ref(request.roles.buffer_id(CollectiveBufferRole::Input),
+                          offset_bytes);
 }
 
 BufferRef output_ref(PlanRequest const& request, size_t offset_bytes) {
-  return local_buffer_ref(
-      request.roles.buffer_id(CollectiveBufferRole::Output), offset_bytes);
+  return local_buffer_ref(request.roles.buffer_id(CollectiveBufferRole::Output),
+                          offset_bytes);
 }
 
 BufferRef staging_ref(PlanRequest const& request, size_t offset_bytes) {
@@ -91,10 +89,9 @@ BufferRef staging_ref(PlanRequest const& request, size_t offset_bytes) {
 }
 
 BufferRef peer_input_ref(PlanRequest const& request, int rank,
-                          size_t offset_bytes) {
-  return remote_buffer_ref(
-      request.roles.buffer_id(CollectiveBufferRole::Input), rank,
-      offset_bytes);
+                         size_t offset_bytes) {
+  return remote_buffer_ref(request.roles.buffer_id(CollectiveBufferRole::Input),
+                           rank, offset_bytes);
 }
 
 BufferRef peer_staging_ref(PlanRequest const& request, int rank,
@@ -116,7 +113,8 @@ size_t alltoall_input_bytes(PlanRequest const& request) {
 }
 
 size_t alltoall_output_bytes(PlanRequest const& request) {
-  return request.output_bytes != 0 ? request.output_bytes : request.tensor_bytes;
+  return request.output_bytes != 0 ? request.output_bytes
+                                   : request.tensor_bytes;
 }
 
 std::vector<size_t> equal_alltoall_splits(size_t total_bytes, int nranks) {
@@ -136,10 +134,8 @@ std::vector<size_t> prefix_bytes(std::vector<size_t> const& splits) {
   return prefix;
 }
 
-void validate_alltoall_splits(std::vector<size_t> const& splits,
-                              int nranks,
-                              size_t elem_bytes,
-                              size_t total_bytes,
+void validate_alltoall_splits(std::vector<size_t> const& splits, int nranks,
+                              size_t elem_bytes, size_t total_bytes,
                               char const* which) {
   if (splits.size() != static_cast<size_t>(nranks)) {
     throw std::invalid_argument(std::string("alltoall ") + which +
@@ -176,7 +172,8 @@ void require_plan_request(PlanRequest const& request) {
 
   size_t elem_bytes = scalar_type_size(request.dtype);
   if (elem_bytes == 0) {
-    throw std::invalid_argument("collective plan dtype has invalid element size");
+    throw std::invalid_argument(
+        "collective plan dtype has invalid element size");
   }
   if (request.tile_bytes % elem_bytes != 0) {
     throw std::invalid_argument(
@@ -209,21 +206,23 @@ void require_plan_request(PlanRequest const& request) {
   bool has_output_splits = !request.output_split_bytes.empty();
   if (has_input_splits != has_output_splits) {
     throw std::invalid_argument(
-        "alltoall split configuration must provide both input and output splits");
+        "alltoall split configuration must provide both input and output "
+        "splits");
   }
   if (!has_input_splits) {
     size_t denom = static_cast<size_t>(request.nranks) * elem_bytes;
     if (input_bytes % denom != 0 || output_bytes % denom != 0) {
       throw std::invalid_argument(
-          "equal-split alltoall requires input/output tensor bytes divisible by nranks * dtype size");
+          "equal-split alltoall requires input/output tensor bytes divisible "
+          "by nranks * dtype size");
     }
     return;
   }
 
-  validate_alltoall_splits(request.input_split_bytes, request.nranks, elem_bytes,
-                           input_bytes, "input");
-  validate_alltoall_splits(request.output_split_bytes, request.nranks, elem_bytes,
-                           output_bytes, "output");
+  validate_alltoall_splits(request.input_split_bytes, request.nranks,
+                           elem_bytes, input_bytes, "input");
+  validate_alltoall_splits(request.output_split_bytes, request.nranks,
+                           elem_bytes, output_bytes, "output");
 }
 
 CollectivePlan make_empty_plan(PlanRequest const& request) {
@@ -337,7 +336,8 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
       request.collective, request.nranks, request.tensor_bytes,
       request.tile_bytes, request.dtype, request.num_flows);
   plan.num_flows = num_flows;
-  plan.staging_bytes_required = static_cast<size_t>(num_flows) * request.tile_bytes;
+  plan.staging_bytes_required =
+      static_cast<size_t>(num_flows) * request.tile_bytes;
   if (request.staging_bytes < plan.staging_bytes_required) {
     throw std::invalid_argument(
         "allreduce ring requires staging_bytes >= num_flows * tile_bytes");
@@ -375,31 +375,30 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
             tile_size(recv_bytes, request.tile_bytes, tile_index);
 
         if (send_tile_bytes > 0) {
-          size_t offset = balanced_shard_offset_bytes(
-                              request.tensor_bytes, elem_bytes, request.nranks,
-                              send_owner) +
-                          tile_offset(tile_index, request.tile_bytes);
+          size_t offset =
+              balanced_shard_offset_bytes(request.tensor_bytes, elem_bytes,
+                                          request.nranks, send_owner) +
+              tile_offset(tile_index, request.tile_bytes);
           TileRef send_tile = make_tile(request, send_owner, flow_slot,
                                         tile_index, offset, send_tile_bytes);
 
           std::vector<uint32_t> deps;
           add_dep(deps, ready_ops[static_cast<size_t>(send_owner)][tile_index]);
           add_dep(deps, last_send_to_peer[static_cast<size_t>(send_peer)]);
-          uint32_t send_op =
-              builder.add_op(PrimitiveOpKind::Send, send_tile,
-                             input_ref(request, send_tile.offset_bytes),
-                             peer_staging_ref(request, send_peer, staging_offset),
-                             op_dtype(request, PrimitiveOpKind::Send),
-                             op_reduction(request, PrimitiveOpKind::Send),
-                             std::move(deps));
+          uint32_t send_op = builder.add_op(
+              PrimitiveOpKind::Send, send_tile,
+              input_ref(request, send_tile.offset_bytes),
+              peer_staging_ref(request, send_peer, staging_offset),
+              op_dtype(request, PrimitiveOpKind::Send),
+              op_reduction(request, PrimitiveOpKind::Send), std::move(deps));
           last_send_to_peer[static_cast<size_t>(send_peer)] = send_op;
         }
 
         if (recv_tile_bytes > 0) {
-          size_t offset = balanced_shard_offset_bytes(
-                              request.tensor_bytes, elem_bytes, request.nranks,
-                              recv_owner) +
-                          tile_offset(tile_index, request.tile_bytes);
+          size_t offset =
+              balanced_shard_offset_bytes(request.tensor_bytes, elem_bytes,
+                                          request.nranks, recv_owner) +
+              tile_offset(tile_index, request.tile_bytes);
           TileRef recv_tile = make_tile(request, recv_owner, flow_slot,
                                         tile_index, offset, recv_tile_bytes);
 
@@ -418,13 +417,13 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
 
           std::vector<uint32_t> reduce_deps;
           add_dep(reduce_deps, recv_op);
-          uint32_t reduce_op = builder.add_op(
-              PrimitiveOpKind::Reduce, recv_tile,
-              staging_ref(request, staging_offset),
-              input_ref(request, recv_tile.offset_bytes),
-              op_dtype(request, PrimitiveOpKind::Reduce),
-              op_reduction(request, PrimitiveOpKind::Reduce),
-              std::move(reduce_deps));
+          uint32_t reduce_op =
+              builder.add_op(PrimitiveOpKind::Reduce, recv_tile,
+                             staging_ref(request, staging_offset),
+                             input_ref(request, recv_tile.offset_bytes),
+                             op_dtype(request, PrimitiveOpKind::Reduce),
+                             op_reduction(request, PrimitiveOpKind::Reduce),
+                             std::move(reduce_deps));
           ready_ops[static_cast<size_t>(recv_owner)][tile_index] = reduce_op;
           last_staging_consumer[flow_slot] = reduce_op;
         }
@@ -454,46 +453,43 @@ CollectivePlan build_allreduce_ring_plan(PlanRequest const& request) {
             tile_size(recv_bytes, request.tile_bytes, tile_index);
 
         if (send_tile_bytes > 0) {
-          size_t offset = balanced_shard_offset_bytes(
-                              request.tensor_bytes, elem_bytes, request.nranks,
-                              send_owner) +
-                          tile_offset(tile_index, request.tile_bytes);
+          size_t offset =
+              balanced_shard_offset_bytes(request.tensor_bytes, elem_bytes,
+                                          request.nranks, send_owner) +
+              tile_offset(tile_index, request.tile_bytes);
           TileRef send_tile = make_tile(request, send_owner, flow_slot,
                                         tile_index, offset, send_tile_bytes);
 
           std::vector<uint32_t> deps;
           add_dep(deps, ready_ops[static_cast<size_t>(send_owner)][tile_index]);
           add_dep(deps, last_send_to_peer[static_cast<size_t>(send_peer)]);
-          uint32_t send_op =
-              builder.add_op(PrimitiveOpKind::Send, send_tile,
-                             input_ref(request, send_tile.offset_bytes),
-                             peer_input_ref(request, send_peer,
-                                             send_tile.offset_bytes),
-                             op_dtype(request, PrimitiveOpKind::Send),
-                             op_reduction(request, PrimitiveOpKind::Send),
-                             std::move(deps));
+          uint32_t send_op = builder.add_op(
+              PrimitiveOpKind::Send, send_tile,
+              input_ref(request, send_tile.offset_bytes),
+              peer_input_ref(request, send_peer, send_tile.offset_bytes),
+              op_dtype(request, PrimitiveOpKind::Send),
+              op_reduction(request, PrimitiveOpKind::Send), std::move(deps));
           last_send_to_peer[static_cast<size_t>(send_peer)] = send_op;
         }
 
         if (recv_tile_bytes > 0) {
-          size_t offset = balanced_shard_offset_bytes(
-                              request.tensor_bytes, elem_bytes, request.nranks,
-                              recv_owner) +
-                          tile_offset(tile_index, request.tile_bytes);
+          size_t offset =
+              balanced_shard_offset_bytes(request.tensor_bytes, elem_bytes,
+                                          request.nranks, recv_owner) +
+              tile_offset(tile_index, request.tile_bytes);
           TileRef recv_tile = make_tile(request, recv_owner, flow_slot,
                                         tile_index, offset, recv_tile_bytes);
 
           std::vector<uint32_t> recv_deps;
           add_dep(recv_deps,
                   last_recv_from_peer[static_cast<size_t>(recv_peer)]);
-          uint32_t recv_op =
-              builder.add_op(PrimitiveOpKind::Recv, recv_tile,
-                             peer_input_ref(request, recv_peer,
-                                             recv_tile.offset_bytes),
-                             input_ref(request, recv_tile.offset_bytes),
-                             op_dtype(request, PrimitiveOpKind::Recv),
-                             op_reduction(request, PrimitiveOpKind::Recv),
-                             std::move(recv_deps));
+          uint32_t recv_op = builder.add_op(
+              PrimitiveOpKind::Recv, recv_tile,
+              peer_input_ref(request, recv_peer, recv_tile.offset_bytes),
+              input_ref(request, recv_tile.offset_bytes),
+              op_dtype(request, PrimitiveOpKind::Recv),
+              op_reduction(request, PrimitiveOpKind::Recv),
+              std::move(recv_deps));
           last_recv_from_peer[static_cast<size_t>(recv_peer)] = recv_op;
           ready_ops[static_cast<size_t>(recv_owner)][tile_index] = recv_op;
         }
@@ -529,8 +525,7 @@ CollectivePlan build_alltoall_pairwise_plan(PlanRequest const& request) {
     max_slice_bytes = std::max(max_slice_bytes, bytes);
   }
   size_t tiles_per_slice = ceil_div(max_slice_bytes, request.tile_bytes);
-  uint32_t num_flows =
-      clamp_num_flows(request.num_flows, tiles_per_slice);
+  uint32_t num_flows = clamp_num_flows(request.num_flows, tiles_per_slice);
   plan.num_flows = num_flows;
   plan.input_split_bytes = input_splits;
   plan.output_split_bytes = output_splits;
@@ -562,15 +557,16 @@ CollectivePlan build_alltoall_pairwise_plan(PlanRequest const& request) {
       request.roles.input_buffer_id != request.roles.output_buffer_id) {
     size_t self_tiles = ceil_div(self_slice_bytes, request.tile_bytes);
     for (size_t tile_index = 0; tile_index < self_tiles; ++tile_index) {
-      size_t bytes = tile_size(self_slice_bytes, request.tile_bytes, tile_index);
+      size_t bytes =
+          tile_size(self_slice_bytes, request.tile_bytes, tile_index);
       if (bytes == 0) continue;
       size_t input_offset =
           self_input_offset + tile_offset(tile_index, request.tile_bytes);
       size_t output_offset =
           self_output_offset + tile_offset(tile_index, request.tile_bytes);
-      TileRef tile = make_tile(
-          request, request.rank, static_cast<uint32_t>(tile_index % num_flows),
-          tile_index, output_offset, bytes);
+      TileRef tile = make_tile(request, request.rank,
+                               static_cast<uint32_t>(tile_index % num_flows),
+                               tile_index, output_offset, bytes);
       builder.add_op(PrimitiveOpKind::Copy, tile,
                      input_ref(request, input_offset),
                      output_ref(request, output_offset),
@@ -582,9 +578,8 @@ CollectivePlan build_alltoall_pairwise_plan(PlanRequest const& request) {
   size_t peer_slot = 0;
   for (int peer = 0; peer < request.nranks; ++peer) {
     if (peer == request.rank) continue;
-    size_t remote_peer_slot =
-        static_cast<size_t>(request.rank < peer ? request.rank
-                                                : request.rank - 1);
+    size_t remote_peer_slot = static_cast<size_t>(
+        request.rank < peer ? request.rank : request.rank - 1);
 
     size_t send_offset = input_prefix[static_cast<size_t>(peer)];
     size_t send_bytes = input_splits[static_cast<size_t>(peer)];
@@ -599,7 +594,8 @@ CollectivePlan build_alltoall_pairwise_plan(PlanRequest const& request) {
       uint32_t send_op = kNoOp;
       if (tile_index < send_tiles) {
         size_t bytes = tile_size(send_bytes, request.tile_bytes, tile_index);
-        size_t offset = send_offset + tile_offset(tile_index, request.tile_bytes);
+        size_t offset =
+            send_offset + tile_offset(tile_index, request.tile_bytes);
         TileRef send_tile =
             make_tile(request, request.rank,
                       static_cast<uint32_t>(tile_index % num_flows), tile_index,
@@ -608,20 +604,20 @@ CollectivePlan build_alltoall_pairwise_plan(PlanRequest const& request) {
         add_dep(send_deps, last_send_to_peer[static_cast<size_t>(peer)]);
         send_op = builder.add_op(
             PrimitiveOpKind::Send, send_tile, input_ref(request, offset),
-            peer_staging_ref(request, peer, remote_peer_slot * request.tile_bytes),
+            peer_staging_ref(request, peer,
+                             remote_peer_slot * request.tile_bytes),
             op_dtype(request, PrimitiveOpKind::Send),
-            op_reduction(request, PrimitiveOpKind::Send),
-            std::move(send_deps));
+            op_reduction(request, PrimitiveOpKind::Send), std::move(send_deps));
         last_send_to_peer[static_cast<size_t>(peer)] = send_op;
       }
 
       if (tile_index < recv_tiles) {
         size_t bytes = tile_size(recv_bytes, request.tile_bytes, tile_index);
-        size_t offset = recv_offset + tile_offset(tile_index, request.tile_bytes);
-        TileRef recv_tile =
-            make_tile(request, peer,
-                      static_cast<uint32_t>(tile_index % num_flows), tile_index,
-                      offset, bytes);
+        size_t offset =
+            recv_offset + tile_offset(tile_index, request.tile_bytes);
+        TileRef recv_tile = make_tile(
+            request, peer, static_cast<uint32_t>(tile_index % num_flows),
+            tile_index, offset, bytes);
         std::vector<uint32_t> recv_deps;
         add_dep(recv_deps, last_recv_from_peer[static_cast<size_t>(peer)]);
         add_dep(recv_deps, last_staging_consumer[peer_slot]);
@@ -630,8 +626,7 @@ CollectivePlan build_alltoall_pairwise_plan(PlanRequest const& request) {
             peer_input_ref(request, peer, offset),
             staging_ref(request, staging_offset),
             op_dtype(request, PrimitiveOpKind::Recv),
-            op_reduction(request, PrimitiveOpKind::Recv),
-            std::move(recv_deps));
+            op_reduction(request, PrimitiveOpKind::Recv), std::move(recv_deps));
         last_recv_from_peer[static_cast<size_t>(peer)] = recv_op;
 
         std::vector<uint32_t> copy_deps;
@@ -639,11 +634,9 @@ CollectivePlan build_alltoall_pairwise_plan(PlanRequest const& request) {
         add_dep(copy_deps, recv_op);
         uint32_t copy_op = builder.add_op(
             PrimitiveOpKind::Copy, recv_tile,
-            staging_ref(request, staging_offset),
-            output_ref(request, offset),
+            staging_ref(request, staging_offset), output_ref(request, offset),
             op_dtype(request, PrimitiveOpKind::Copy),
-            op_reduction(request, PrimitiveOpKind::Copy),
-            std::move(copy_deps));
+            op_reduction(request, PrimitiveOpKind::Copy), std::move(copy_deps));
         last_staging_consumer[peer_slot] = copy_op;
       }
     }

@@ -5,8 +5,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <type_traits>
 #include <mutex>
+#include <type_traits>
 #include <vector>
 
 namespace UKernel {
@@ -225,8 +225,8 @@ class TaskManager {
     // enqueued task before its metadata is fully initialized on device memory.
     GPU_RT_CHECK(gpuMemcpy(&(d_task_ + idx)->reserved0, &unpublished,
                            sizeof(unpublished), gpuMemcpyHostToDevice));
-    GPU_RT_CHECK(
-        gpuMemcpy(d_task_ + idx, &staged, sizeof(TaskArgs), gpuMemcpyHostToDevice));
+    GPU_RT_CHECK(gpuMemcpy(d_task_ + idx, &staged, sizeof(TaskArgs),
+                           gpuMemcpyHostToDevice));
     GPU_RT_CHECK(gpuMemcpy(&(d_task_ + idx)->reserved0, &published,
                            sizeof(published), gpuMemcpyHostToDevice));
 

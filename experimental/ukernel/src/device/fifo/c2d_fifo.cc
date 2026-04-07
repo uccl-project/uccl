@@ -4,8 +4,8 @@
 #include <atomic>
 #include <cstring>
 #include <iostream>
-#include <numaif.h>
 #include <thread>
+#include <numaif.h>
 
 #if defined(__x86_64__) || defined(__i386__)
 #include <emmintrin.h>

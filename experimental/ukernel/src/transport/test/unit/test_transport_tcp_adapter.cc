@@ -56,10 +56,10 @@ void test_tcp_connect_and_transfer() {
                                         recvbuf.size(), /*local_mr_id=*/0,
                                         /*bounce_provider=*/nullptr);
   require(recv_req != 0, "server recv_async should succeed");
-  unsigned send_req = client.send_async(/*peer_rank=*/0, sendbuf.data(),
-                                        sendbuf.size(), /*local_mr_id=*/0,
-                                        std::nullopt,
-                                        /*bounce_provider=*/nullptr);
+  unsigned send_req =
+      client.send_async(/*peer_rank=*/0, sendbuf.data(), sendbuf.size(),
+                        /*local_mr_id=*/0, std::nullopt,
+                        /*bounce_provider=*/nullptr);
   require(send_req != 0, "client send_async should succeed");
 
   require(client.wait_completion(send_req), "client wait_completion failed");

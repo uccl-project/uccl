@@ -65,8 +65,12 @@ class UcclTransportAdapter final : public TransportAdapter {
 
   bool has_send_peer(int peer_rank) const;
   bool has_recv_peer(int peer_rank) const;
-  bool has_send_path(int peer_rank) const override { return has_send_peer(peer_rank); }
-  bool has_recv_path(int peer_rank) const override { return has_recv_peer(peer_rank); }
+  bool has_send_path(int peer_rank) const override {
+    return has_send_peer(peer_rank);
+  }
+  bool has_recv_path(int peer_rank) const override {
+    return has_recv_peer(peer_rank);
+  }
 
   bool poll_completion(unsigned id) override;
   bool wait_completion(unsigned id) override;
@@ -84,9 +88,9 @@ class UcclTransportAdapter final : public TransportAdapter {
   bool is_initialized() const { return endpoint_ != nullptr; }
 
   unsigned send_async(int peer_rank, void* local_ptr, size_t len,
-                       uint64_t local_mr_id,
-                       std::optional<RemoteSlice> remote_hint,
-                       BounceBufferProvider bounce_provider = nullptr) override;
+                      uint64_t local_mr_id,
+                      std::optional<RemoteSlice> remote_hint,
+                      BounceBufferProvider bounce_provider = nullptr) override;
   unsigned recv_async(int peer_rank, void* local_ptr, size_t len,
                       uint64_t local_mr_id,
                       BounceBufferProvider bounce_provider = nullptr) override;

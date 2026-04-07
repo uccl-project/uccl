@@ -1,15 +1,15 @@
 #include "tcp_adapter.h"
 #include "../memory/memory_manager.h"
 #include <arpa/inet.h>
+#include <netinet/in.h>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
-#include <netinet/in.h>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <sys/socket.h>
 #include <sys/types.h>
-#include <thread>
 #include <unistd.h>
 
 namespace UKernel {
@@ -115,16 +115,17 @@ bool TcpTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip,
   return true;
 }
 
-bool TcpTransportAdapter::accept_from_peer(int peer_rank,
-                                           std::string const& expected_remote_ip,
-                                           AcceptedPeer* accepted_peer) {
+bool TcpTransportAdapter::accept_from_peer(
+    int peer_rank, std::string const& expected_remote_ip,
+    AcceptedPeer* accepted_peer) {
   if (has_send_peer(peer_rank) && has_recv_peer(peer_rank)) return true;
 
   auto deadline = std::chrono::steady_clock::now() + kDefaultConnectTimeout;
   while (std::chrono::steady_clock::now() < deadline) {
     sockaddr_in addr{};
     socklen_t addr_len = sizeof(addr);
-    int fd = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&addr), &addr_len);
+    int fd =
+        ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&addr), &addr_len);
     if (fd < 0) {
       if (is_retryable_errno(errno)) {
         std::this_thread::sleep_for(kAcceptPollSleep);
@@ -147,8 +148,7 @@ bool TcpTransportAdapter::accept_from_peer(int peer_rank,
     }
 
     Handshake hs{};
-    if (!recv_handshake(fd, hs) ||
-        static_cast<int>(hs.src_rank) != peer_rank) {
+    if (!recv_handshake(fd, hs) || static_cast<int>(hs.src_rank) != peer_rank) {
       ::shutdown(fd, SHUT_RDWR);
       ::close(fd);
       continue;
@@ -184,15 +184,13 @@ bool TcpTransportAdapter::accept_from_peer(int peer_rank,
 bool TcpTransportAdapter::has_send_peer(int peer_rank) const {
   std::lock_guard<std::mutex> lk(mu_);
   auto it = peer_contexts_.find(peer_rank);
-  return it != peer_contexts_.end() && it->second &&
-         it->second->send_fd >= 0;
+  return it != peer_contexts_.end() && it->second && it->second->send_fd >= 0;
 }
 
 bool TcpTransportAdapter::has_recv_peer(int peer_rank) const {
   std::lock_guard<std::mutex> lk(mu_);
   auto it = peer_contexts_.find(peer_rank);
-  return it != peer_contexts_.end() && it->second &&
-         it->second->recv_fd >= 0;
+  return it != peer_contexts_.end() && it->second && it->second->recv_fd >= 0;
 }
 
 bool TcpTransportAdapter::has_send_path(int peer_rank) const {
@@ -203,10 +201,10 @@ bool TcpTransportAdapter::has_recv_path(int peer_rank) const {
   return has_recv_peer(peer_rank);
 }
 
-unsigned TcpTransportAdapter::send_async(
-    int peer_rank, void* local_ptr, size_t len, uint64_t local_mr_id,
-    std::optional<RemoteSlice> remote_hint,
-    BounceBufferProvider bounce_provider) {
+unsigned TcpTransportAdapter::send_async(int peer_rank, void* local_ptr,
+                                         size_t len, uint64_t local_mr_id,
+                                         std::optional<RemoteSlice> remote_hint,
+                                         BounceBufferProvider bounce_provider) {
   (void)local_mr_id;
   (void)remote_hint;
 
@@ -219,13 +217,14 @@ unsigned TcpTransportAdapter::send_async(
     }
   }
 
-  unsigned request_id = next_request_id_.fetch_add(1, std::memory_order_relaxed);
+  unsigned request_id =
+      next_request_id_.fetch_add(1, std::memory_order_relaxed);
   return send_async_tcp(peer_rank, send_ptr, len, request_id) == 0 ? request_id
-                                                                    : 0;
+                                                                   : 0;
 }
 
-unsigned TcpTransportAdapter::recv_async(int peer_rank, void* local_ptr, size_t len,
-                                         uint64_t local_mr_id,
+unsigned TcpTransportAdapter::recv_async(int peer_rank, void* local_ptr,
+                                         size_t len, uint64_t local_mr_id,
                                          BounceBufferProvider bounce_provider) {
   (void)local_mr_id;
   void* recv_ptr = local_ptr;
@@ -235,9 +234,10 @@ unsigned TcpTransportAdapter::recv_async(int peer_rank, void* local_ptr, size_t 
       recv_ptr = info.ptr;
     }
   }
-  unsigned request_id = next_request_id_.fetch_add(1, std::memory_order_relaxed);
+  unsigned request_id =
+      next_request_id_.fetch_add(1, std::memory_order_relaxed);
   return recv_async_tcp(peer_rank, recv_ptr, len, request_id) == 0 ? request_id
-                                                                    : 0;
+                                                                   : 0;
 }
 
 bool TcpTransportAdapter::request_failed(unsigned id) {
@@ -361,8 +361,8 @@ int TcpTransportAdapter::create_listen_socket(uint16_t& out_port) {
 
   sockaddr_in bound_addr{};
   socklen_t bound_len = sizeof(bound_addr);
-  if (::getsockname(fd, reinterpret_cast<sockaddr*>(&bound_addr),
-                    &bound_len) != 0) {
+  if (::getsockname(fd, reinterpret_cast<sockaddr*>(&bound_addr), &bound_len) !=
+      0) {
     ::close(fd);
     return -1;
   }
@@ -370,9 +370,10 @@ int TcpTransportAdapter::create_listen_socket(uint16_t& out_port) {
   return fd;
 }
 
-bool TcpTransportAdapter::connect_socket(
-    int& out_fd, std::string const& remote_ip, uint16_t remote_port,
-    std::chrono::milliseconds timeout) {
+bool TcpTransportAdapter::connect_socket(int& out_fd,
+                                         std::string const& remote_ip,
+                                         uint16_t remote_port,
+                                         std::chrono::milliseconds timeout) {
   auto deadline = std::chrono::steady_clock::now() + timeout;
   while (std::chrono::steady_clock::now() < deadline) {
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);

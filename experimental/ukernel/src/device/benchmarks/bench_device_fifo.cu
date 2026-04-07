@@ -51,8 +51,8 @@ int main() {
 
   for (int i = 0; i < warmup; ++i) {
     UKernel::Device::Task task(UKernel::Device::TaskType::BenchNop,
-                               UKernel::Device::DataType::Fp32,
-                               test_block_id, 0);
+                               UKernel::Device::DataType::Fp32, test_block_id,
+                               0);
     warmup_last_id = enqueue_until_accepted(pool, task, 0);
   }
 
@@ -65,8 +65,8 @@ int main() {
   for (int i = 0; i < latency_iters; ++i) {
     uint64_t t0 = now_ns();
     UKernel::Device::Task task(UKernel::Device::TaskType::BenchNop,
-                               UKernel::Device::DataType::Fp32,
-                               test_block_id, 0);
+                               UKernel::Device::DataType::Fp32, test_block_id,
+                               0);
     uint64_t id = enqueue_until_accepted(pool, task, 0);
     wait_until_done(pool, id, 0);
     uint64_t t1 = now_ns();
@@ -79,8 +79,8 @@ int main() {
   uint64_t last_id = 0;
   for (int i = 0; i < throughput_iters; ++i) {
     UKernel::Device::Task task(UKernel::Device::TaskType::BenchNop,
-                               UKernel::Device::DataType::Fp32,
-                               test_block_id, 0);
+                               UKernel::Device::DataType::Fp32, test_block_id,
+                               0);
     uint64_t id = enqueue_until_accepted(pool, task, 0);
     last_id = id;
   }

@@ -14,7 +14,7 @@ namespace UKernel {
 namespace Transport {
 struct CommunicatorConfig;
 class Communicator;
-}
+}  // namespace Transport
 namespace CCL {
 
 enum class CollectiveOpStatus : uint32_t {

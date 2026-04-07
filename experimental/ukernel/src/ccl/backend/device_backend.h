@@ -57,8 +57,7 @@ class DeviceBackend final : public Backend {
   void* resolve_mutable(CollectiveBinding const& binding, BufferRef const& ref,
                         size_t bytes) const;
   void const* resolve_const(CollectiveBinding const& binding,
-                            BufferRef const& ref,
-                            size_t bytes) const;
+                            BufferRef const& ref, size_t bytes) const;
   void ensure_device_context() const;
   void ensure_runtime();
   uint32_t acquire_fifo(uint32_t flow_id, uint32_t num_blocks);

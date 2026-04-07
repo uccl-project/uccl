@@ -404,7 +404,8 @@ void ShmRingExchanger::close_peer(int peer_rank) {
 
 bool ShmRingExchanger::is_peer_connected(int peer_rank) const {
   std::lock_guard<std::mutex> lk(mu_);
-  if (peer_rank < 0 || peer_rank >= static_cast<int>(peers_.size())) return false;
+  if (peer_rank < 0 || peer_rank >= static_cast<int>(peers_.size()))
+    return false;
   auto& peer = peers_[static_cast<size_t>(peer_rank)];
   return peer && peer->connected;
 }
@@ -523,7 +524,8 @@ bool ShmRingExchanger::try_recv_one_locked(int peer_rank, ShmCtrlMsg& msg) {
   return true;
 }
 
-bool ShmRingExchanger::try_take_connect_locked(int peer_rank, uint64_t* out_seq) {
+bool ShmRingExchanger::try_take_connect_locked(int peer_rank,
+                                               uint64_t* out_seq) {
   auto it = pending_connect_.find(peer_rank);
   if (it == pending_connect_.end()) return false;
   auto& q = it->second;
@@ -535,8 +537,9 @@ bool ShmRingExchanger::try_take_connect_locked(int peer_rank, uint64_t* out_seq)
   return true;
 }
 
-bool ShmRingExchanger::try_take_cached_connect_ack_locked(
-    int peer_rank, uint64_t expected_seq, uint64_t* out_seq) {
+bool ShmRingExchanger::try_take_cached_connect_ack_locked(int peer_rank,
+                                                          uint64_t expected_seq,
+                                                          uint64_t* out_seq) {
   auto it = pending_connect_acks_.find(peer_rank);
   if (it == pending_connect_acks_.end()) return false;
   auto& q = it->second;
@@ -618,7 +621,8 @@ void ShmRingExchanger::cache_ipc_cache_message(int peer_rank, uint64_t seq,
       PendingIpcCacheMsg{seq, cache});
 }
 
-void ShmRingExchanger::cache_ipc_cache_req_message(int peer_rank, uint64_t seq) {
+void ShmRingExchanger::cache_ipc_cache_req_message(int peer_rank,
+                                                   uint64_t seq) {
   std::lock_guard<std::mutex> lk(pending_mu_);
   rank_to_pending_ipc_cache_req_[peer_rank].push_back(seq);
 }

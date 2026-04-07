@@ -1,7 +1,7 @@
 #pragma once
 
-#include "collective_types.h"
 #include "collective_memory.h"
+#include "collective_types.h"
 #include <cstddef>
 #include <cstdint>
 #include <string>

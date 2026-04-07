@@ -2,8 +2,8 @@
 #include "gpu_rt.h"
 #include "worker.h"
 #include <algorithm>
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 #include <random>
 #include <thread>
 #include <vector>

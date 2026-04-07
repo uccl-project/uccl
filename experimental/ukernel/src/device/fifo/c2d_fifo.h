@@ -41,7 +41,7 @@ class CpuToGpuFifo {
 
  private:
   struct Impl {
-    detail::UniqueGdrGpuPtr<T> buffer;        // device, host-writable via GDR mapping
+    detail::UniqueGdrGpuPtr<T> buffer;  // device, host-writable via GDR mapping
     detail::UniqueGpuHostPtr<uint64_t> head;  // host-pinned
     detail::UniqueGdrU64Ptr tail;             // device gdr mapped
     int const size;

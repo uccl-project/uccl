@@ -1,9 +1,9 @@
 #include "memory_manager.h"
-#include <fcntl.h>
 #include <stdexcept>
+#include <utility>
+#include <fcntl.h>
 #include <sys/mman.h>
 #include <unistd.h>
-#include <utility>
 
 namespace UKernel {
 namespace Transport {
@@ -19,7 +19,7 @@ MemoryManager::MemoryManager() = default;
 MemoryManager::~MemoryManager() = default;
 
 MemoryManager::TrackResult MemoryManager::register_local(void* ptr,
-                                                          size_t len) {
+                                                         size_t len) {
   std::lock_guard<std::mutex> lk(local_mu_);
 
   TrackResult result;
@@ -124,7 +124,7 @@ std::vector<std::pair<void*, LocalMR>> MemoryManager::all_local_mrs() const {
 }
 
 void MemoryManager::cache_remote_mrs(int rank,
-                                      std::vector<RemoteMR> const& mrs) {
+                                     std::vector<RemoteMR> const& mrs) {
   std::lock_guard<std::mutex> lk(remote_mu_);
   auto& cached = rank_mr_cache_[rank];
   for (auto const& mr : mrs) {
@@ -159,14 +159,14 @@ void MemoryManager::clear_remote_mrs(int rank) {
 }
 
 bool MemoryManager::register_remote_ipc(int rank, gpuIpcMemHandle_t handle,
-                                         RemoteIpc const& ipc) {
+                                        RemoteIpc const& ipc) {
   std::lock_guard<std::mutex> lk(ipc_mu_);
   rank_ipc_cache_[rank][make_ipc_handle_key(handle)] = ipc;
   return true;
 }
 
 RemoteIpc MemoryManager::get_remote_ipc(int rank,
-                                         gpuIpcMemHandle_t handle) const {
+                                        gpuIpcMemHandle_t handle) const {
   std::lock_guard<std::mutex> lk(ipc_mu_);
   auto it_rank = rank_ipc_cache_.find(rank);
   if (it_rank == rank_ipc_cache_.end()) return RemoteIpc{};
@@ -197,13 +197,15 @@ void MemoryManager::clear_remote_ipc_cache() {
   rank_ipc_cache_.clear();
 }
 
-bool MemoryManager::register_remote_ipc_buffer(int rank, uint32_t ipc_id, RemoteIpcBuffer const& buf) {
+bool MemoryManager::register_remote_ipc_buffer(int rank, uint32_t ipc_id,
+                                               RemoteIpcBuffer const& buf) {
   std::lock_guard<std::mutex> lk(ipc_buf_mu_);
   rank_ipc_buffer_cache_[rank][ipc_id] = buf;
   return true;
 }
 
-MemoryManager::RemoteIpcBuffer MemoryManager::get_remote_ipc_buffer(int rank, uint32_t ipc_id) const {
+MemoryManager::RemoteIpcBuffer MemoryManager::get_remote_ipc_buffer(
+    int rank, uint32_t ipc_id) const {
   std::lock_guard<std::mutex> lk(ipc_buf_mu_);
   auto rank_it = rank_ipc_buffer_cache_.find(rank);
   if (rank_it == rank_ipc_buffer_cache_.end()) return {};
@@ -217,7 +219,8 @@ void MemoryManager::clear_remote_ipc_buffers(int rank) {
   rank_ipc_buffer_cache_.erase(rank);
 }
 
-std::vector<std::pair<uint32_t, MemoryManager::RemoteIpcBuffer>> MemoryManager::list_remote_ipc_buffers(int rank) const {
+std::vector<std::pair<uint32_t, MemoryManager::RemoteIpcBuffer>>
+MemoryManager::list_remote_ipc_buffers(int rank) const {
   std::lock_guard<std::mutex> lk(ipc_buf_mu_);
   auto rank_it = rank_ipc_buffer_cache_.find(rank);
   if (rank_it == rank_ipc_buffer_cache_.end()) return {};
@@ -228,7 +231,8 @@ std::vector<std::pair<uint32_t, MemoryManager::RemoteIpcBuffer>> MemoryManager::
   return result;
 }
 
-BounceCpuBufferPool::BounceCpuBufferPool(RegisterFn register_fn, DeregisterFn deregister_fn)
+BounceCpuBufferPool::BounceCpuBufferPool(RegisterFn register_fn,
+                                         DeregisterFn deregister_fn)
     : register_fn_(std::move(register_fn)),
       deregister_fn_(std::move(deregister_fn)) {}
 
@@ -273,8 +277,9 @@ size_t BounceCpuBufferPool::bucket_capacity(size_t bytes) {
   return bucket + 1;
 }
 
-BounceCpuBuffer BounceCpuBufferPool::acquire(size_t bytes, bool require_uccl_registration,
-                                              bool require_shared) {
+BounceCpuBuffer BounceCpuBufferPool::acquire(size_t bytes,
+                                             bool require_uccl_registration,
+                                             bool require_shared) {
   size_t requested_bucket = bucket_capacity(bytes);
   size_t candidate = BounceCpuBuffer::kInvalidSlot;
   size_t empty_slot = BounceCpuBuffer::kInvalidSlot;
@@ -298,8 +303,12 @@ BounceCpuBuffer BounceCpuBufferPool::acquire(size_t bytes, bool require_uccl_reg
             idle_per_bucket_.erase(idle_it);
           }
         }
-        return BounceCpuBuffer{entry.ptr, entry.bytes, entry.mr_id,
-                          entry.uccl_registered, !entry.shm_name.empty(), i};
+        return BounceCpuBuffer{entry.ptr,
+                               entry.bytes,
+                               entry.mr_id,
+                               entry.uccl_registered,
+                               !entry.shm_name.empty(),
+                               i};
       }
     }
 
@@ -335,8 +344,12 @@ BounceCpuBuffer BounceCpuBufferPool::acquire(size_t bytes, bool require_uccl_reg
       std::lock_guard<std::mutex> lk(mu_);
       entries_[candidate].uccl_registered = true;
       entries_[candidate].in_use = true;
-      return BounceCpuBuffer{entries_[candidate].ptr, entries_[candidate].bytes,
-                        entries_[candidate].mr_id, true, false, candidate};
+      return BounceCpuBuffer{entries_[candidate].ptr,
+                             entries_[candidate].bytes,
+                             entries_[candidate].mr_id,
+                             true,
+                             false,
+                             candidate};
     }
   }
 
@@ -346,23 +359,27 @@ BounceCpuBuffer BounceCpuBufferPool::acquire(size_t bytes, bool require_uccl_reg
   entry.mr_id = next_mr_id_.fetch_add(1, std::memory_order_relaxed);
 
   if (require_shared) {
-    std::string name = "/uccl_bounce_" + std::to_string(static_cast<long long>(::getpid())) +
+    std::string name = "/uccl_bounce_" +
+                       std::to_string(static_cast<long long>(::getpid())) +
                        "_" + std::to_string(entry.mr_id);
     int fd = shm_open(name.c_str(), O_CREAT | O_RDWR, 0666);
     if (fd < 0) {
-      throw std::runtime_error("failed to create shared memory for bounce buffer");
+      throw std::runtime_error(
+          "failed to create shared memory for bounce buffer");
     }
     if (ftruncate(fd, entry.bytes) < 0) {
       close(fd);
       shm_unlink(name.c_str());
-      throw std::runtime_error("failed to size shared memory for bounce buffer");
+      throw std::runtime_error(
+          "failed to size shared memory for bounce buffer");
     }
-    entry.ptr = mmap(nullptr, entry.bytes, PROT_READ | PROT_WRITE,
-                     MAP_SHARED, fd, 0);
+    entry.ptr =
+        mmap(nullptr, entry.bytes, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (entry.ptr == MAP_FAILED) {
       close(fd);
       shm_unlink(name.c_str());
-      throw std::runtime_error("failed to mmap shared memory for bounce buffer");
+      throw std::runtime_error(
+          "failed to mmap shared memory for bounce buffer");
     }
     close(fd);
     entry.shm_name = name;
@@ -391,8 +408,12 @@ BounceCpuBuffer BounceCpuBufferPool::acquire(size_t bytes, bool require_uccl_reg
     slot = entries_.size();
     entries_.push_back(entry);
   }
-  return BounceCpuBuffer{entry.ptr, entry.bytes, entry.mr_id,
-                    entry.uccl_registered, !entry.shm_name.empty(), slot};
+  return BounceCpuBuffer{entry.ptr,
+                         entry.bytes,
+                         entry.mr_id,
+                         entry.uccl_registered,
+                         !entry.shm_name.empty(),
+                         slot};
 }
 
 void BounceCpuBufferPool::release(BounceCpuBuffer& lease) {
@@ -438,7 +459,7 @@ void BounceCpuBufferPool::release(BounceCpuBuffer& lease) {
 }
 
 bool BounceCpuBufferPool::share_buffer(BounceCpuBuffer& buf, void** out_shm_ptr,
-                               int* out_fd) {
+                                       int* out_fd) {
   if (!buf.valid() || buf.slot >= entries_.size()) {
     return false;
   }
@@ -468,7 +489,8 @@ std::string BounceCpuBufferPool::get_shm_name(size_t slot) const {
   return {};
 }
 
-void* BounceCpuBufferPool::get_or_open_shm(const std::string& shm_name, size_t size) {
+void* BounceCpuBufferPool::get_or_open_shm(std::string const& shm_name,
+                                           size_t size) {
   std::lock_guard<std::mutex> lk(mu_);
   auto it = shm_cache_.find(shm_name);
   if (it != shm_cache_.end()) {

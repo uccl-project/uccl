@@ -100,8 +100,8 @@ void test_socket_meta_exchange(int world_size) {
   std::vector<std::thread> threads;
   std::vector<std::exception_ptr> errors(world_size);
   for (int rank = 0; rank < world_size; ++rank) {
-    threads.emplace_back(rank_thread_socket, rank, world_size, "127.0.0.1", port,
-                         std::ref(errors[rank]));
+    threads.emplace_back(rank_thread_socket, rank, world_size, "127.0.0.1",
+                         port, std::ref(errors[rank]));
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
 

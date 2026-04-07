@@ -1,8 +1,8 @@
 #pragma once
 
 #include "../oob/oob.h"
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -52,7 +52,7 @@ class BounceCpuBufferPool {
 
   bool share_buffer(BounceCpuBuffer& buf, void** out_shm_ptr, int* out_fd);
   std::string get_shm_name(size_t slot) const;
-  void* get_or_open_shm(const std::string& shm_name, size_t size);
+  void* get_or_open_shm(std::string const& shm_name, size_t size);
   void clear_shm_cache();
 
  private:
@@ -127,9 +127,11 @@ class MemoryManager {
     bool valid = false;
     void* direct_ptr = nullptr;
   };
-  bool register_remote_ipc_buffer(int rank, uint32_t ipc_id, RemoteIpcBuffer const& buf);
+  bool register_remote_ipc_buffer(int rank, uint32_t ipc_id,
+                                  RemoteIpcBuffer const& buf);
   RemoteIpcBuffer get_remote_ipc_buffer(int rank, uint32_t ipc_id) const;
-  std::vector<std::pair<uint32_t, RemoteIpcBuffer>> list_remote_ipc_buffers(int rank) const;
+  std::vector<std::pair<uint32_t, RemoteIpcBuffer>> list_remote_ipc_buffers(
+      int rank) const;
   void clear_remote_ipc_buffers(int rank);
 
  private:
@@ -164,13 +166,17 @@ class MemoryManager {
   uint32_t next_mr_id_ = 1;
 
   mutable std::mutex remote_mu_;
-  std::unordered_map<int, std::unordered_map<uint32_t, RemoteMR>> rank_mr_cache_;
+  std::unordered_map<int, std::unordered_map<uint32_t, RemoteMR>>
+      rank_mr_cache_;
 
   mutable std::mutex ipc_mu_;
-  std::unordered_map<int, std::unordered_map<IpcHandleKey, RemoteIpc, IpcHandleHash>> rank_ipc_cache_;
+  std::unordered_map<int,
+                     std::unordered_map<IpcHandleKey, RemoteIpc, IpcHandleHash>>
+      rank_ipc_cache_;
 
   mutable std::mutex ipc_buf_mu_;
-  std::unordered_map<int, std::unordered_map<uint32_t, RemoteIpcBuffer>> rank_ipc_buffer_cache_;
+  std::unordered_map<int, std::unordered_map<uint32_t, RemoteIpcBuffer>>
+      rank_ipc_buffer_cache_;
 };
 
 }  // namespace Transport

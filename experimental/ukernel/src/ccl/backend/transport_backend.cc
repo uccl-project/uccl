@@ -118,15 +118,17 @@ void CommunicatorTransportBackend::ensure_peer_paths(int peer_rank) const {
   if (peer_paths_ready_.at(idx)) return;
 
   // Communicator exposes a duplex-ready semantic at peer granularity.
-  // Keep connect/accept API surface unchanged; choose one side deterministically.
+  // Keep connect/accept API surface unchanged; choose one side
+  // deterministically.
   bool ok = (communicator_->rank() < peer_rank)
                 ? communicator_->connect(peer_rank)
                 : communicator_->accept(peer_rank);
   peer_paths_ready_.at(idx) = ok;
   if (!ok) {
-    throw std::runtime_error("failed to lazily establish transport path with "
-                             "peer " +
-                             std::to_string(peer_rank));
+    throw std::runtime_error(
+        "failed to lazily establish transport path with "
+        "peer " +
+        std::to_string(peer_rank));
   }
 }
 
@@ -210,8 +212,8 @@ void CommunicatorTransportBackend::initialize_memory_bindings(
       buffer.peer_views[static_cast<size_t>(peer)].same_node = same_node;
     }
     if (peer == communicator_->rank()) continue;
-    if (!communicator_->notify_named_mrs(peer, binding.transport_binding_version,
-                                         local_infos)) {
+    if (!communicator_->notify_named_mrs(
+            peer, binding.transport_binding_version, local_infos)) {
       throw std::runtime_error(
           "transport backend notify_named_mrs failed for peer " +
           std::to_string(peer));
@@ -219,9 +221,9 @@ void CommunicatorTransportBackend::initialize_memory_bindings(
     for (auto const& entry : local_infos.entries) {
       RegisteredBuffer const& buffer = binding.buffer(entry.buffer_id);
       if (same_node && entry.mr.id != 0 &&
-          !communicator_->notify_ipc_buffer(peer, entry.mr.id, buffer.local_ptr,
-                                            buffer.bytes,
-                                            binding.transport_binding_version)) {
+          !communicator_->notify_ipc_buffer(
+              peer, entry.mr.id, buffer.local_ptr, buffer.bytes,
+              binding.transport_binding_version)) {
         throw std::runtime_error(
             "transport backend notify ipc buffer failed for peer " +
             std::to_string(peer));
@@ -262,9 +264,9 @@ void CommunicatorTransportBackend::initialize_memory_bindings(
     for (BufferId id : buffer_ids) {
       auto it = remote_mr_by_id.find(id);
       if (it == remote_mr_by_id.end()) {
-        throw std::runtime_error(
-            "transport backend missing remote buffer id " + std::to_string(id) +
-            " from peer " + std::to_string(peer));
+        throw std::runtime_error("transport backend missing remote buffer id " +
+                                 std::to_string(id) + " from peer " +
+                                 std::to_string(peer));
       }
       RegisteredBuffer& buffer = binding.buffer(id);
       buffer.peer_views[static_cast<size_t>(peer)].mr_id = it->second.id;
@@ -306,7 +308,8 @@ BackendToken CommunicatorTransportBackend::submit(ExecOp const& op,
     std::optional<Transport::RemoteSlice> dst_hint = std::nullopt;
     if (op.dst.kind == BufferKind::Remote) {
       dst_hint = Transport::RemoteSlice{resolve_remote_mem_id(binding, op.dst),
-                                        op.dst.offset_bytes, {},
+                                        op.dst.offset_bytes,
+                                        {},
                                         binding.transport_binding_version};
     }
     request_id = communicator_->isend(peer_rank, src_slice, dst_hint);
@@ -376,7 +379,7 @@ void CommunicatorTransportBackend::release(BackendToken token) {
 
 void* CommunicatorTransportBackend::resolve_mutable(
     CollectiveBinding const& binding, BufferRef const& ref,
-                                                    size_t bytes) const {
+    size_t bytes) const {
   if (ref.kind != BufferKind::Local) {
     throw std::invalid_argument(
         "transport backend cannot bind remote destination buffer");
@@ -392,7 +395,7 @@ void* CommunicatorTransportBackend::resolve_mutable(
 
 void const* CommunicatorTransportBackend::resolve_const(
     CollectiveBinding const& binding, BufferRef const& ref,
-                                                        size_t bytes) const {
+    size_t bytes) const {
   if (ref.kind != BufferKind::Local) {
     throw std::invalid_argument(
         "transport backend cannot bind remote source buffer");
@@ -408,9 +411,10 @@ void const* CommunicatorTransportBackend::resolve_const(
 
 uint32_t CommunicatorTransportBackend::resolve_local_mem_id(
     CollectiveBinding const& binding, BufferRef const& ref,
-                                                           size_t bytes) const {
+    size_t bytes) const {
   if (ref.kind == BufferKind::Remote) {
-    throw std::invalid_argument("transport backend local MR requires local buffer ref");
+    throw std::invalid_argument(
+        "transport backend local MR requires local buffer ref");
   }
   RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
   if (buffer.local_mr_id != 0) {
@@ -435,7 +439,8 @@ int CommunicatorTransportBackend::resolve_peer_rank(ExecOp const& op) const {
     }
     return op.src.rank;
   }
-  throw std::invalid_argument("transport peer rank requested for non-transport op");
+  throw std::invalid_argument(
+      "transport peer rank requested for non-transport op");
 }
 
 uint32_t CommunicatorTransportBackend::resolve_remote_mem_id(

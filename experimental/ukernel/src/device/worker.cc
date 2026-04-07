@@ -237,7 +237,8 @@ uint64_t WorkerPool::enqueue_batch(std::vector<Task> const& tasks,
     return kInvalidTaskId;
   }
 
-  uint64_t firstTaskId = ctx.fifo.push(tasks.data(), tasks.data() + tasks.size());
+  uint64_t firstTaskId =
+      ctx.fifo.push(tasks.data(), tasks.data() + tasks.size());
   return firstTaskId;
 }
 

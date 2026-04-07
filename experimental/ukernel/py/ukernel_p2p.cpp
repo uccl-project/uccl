@@ -1,12 +1,11 @@
-#include "../include/gpu_rt.h"
 #include "../include/config.h"
+#include "../include/gpu_rt.h"
 #include "../src/transport/communicator.h"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
-#include <torch/extension.h>
 #include <torch/csrc/autograd/python_variable.h>
-
+#include <torch/extension.h>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -27,7 +26,8 @@ namespace {
 torch::Tensor tensor_from_python(nb::handle obj, char const* arg_name) {
   PyObject* py_obj = obj.ptr();
   if (!THPVariable_Check(py_obj)) {
-    throw std::invalid_argument(std::string(arg_name) + " must be a torch.Tensor");
+    throw std::invalid_argument(std::string(arg_name) +
+                                " must be a torch.Tensor");
   }
   return THPVariable_Unpack(py_obj);
 }
@@ -44,14 +44,16 @@ PreferredTransport parse_transport(std::string const& value) {
 
 class Communicator {
  public:
-  Communicator(int gpu_id, int rank, int world_size,
-               std::string exchanger_ip, int exchanger_port,
-               std::string transport = "auto", int local_id = -1)
+  Communicator(int gpu_id, int rank, int world_size, std::string exchanger_ip,
+               int exchanger_port, std::string transport = "auto",
+               int local_id = -1)
       : comm_(std::make_shared<UKernel::Transport::Communicator>(
             gpu_id, rank, world_size,
             std::make_shared<UKernel::Transport::CommunicatorConfig>(
                 UKernel::Transport::CommunicatorConfig{
-                    exchanger_ip, exchanger_port, local_id,
+                    exchanger_ip,
+                    exchanger_port,
+                    local_id,
                     parse_transport(transport),
                 }))) {
     GPU_RT_CHECK(gpuSetDevice(gpu_id));
@@ -132,8 +134,8 @@ class Communicator {
     return comm_->dereg_mr(ptr);
   }
 
-  uint64_t isend(int peer_rank, nb::handle tensor,
-                 size_t offset = 0, size_t len = 0) {
+  uint64_t isend(int peer_rank, nb::handle tensor, size_t offset = 0,
+                 size_t len = 0) {
     torch::Tensor t = tensor_from_python(tensor, "tensor");
     if (!t.is_cuda()) {
       throw std::invalid_argument("isend requires a CUDA tensor");
@@ -160,12 +162,13 @@ class Communicator {
       }
       return 0;
     }
-    track_request(req, std::move(t), pinned_mr.has_value() ? nullptr : t.data_ptr());
+    track_request(req, std::move(t),
+                  pinned_mr.has_value() ? nullptr : t.data_ptr());
     return req;
   }
 
-  uint64_t irecv(int peer_rank, nb::handle tensor,
-                 size_t offset = 0, size_t len = 0) {
+  uint64_t irecv(int peer_rank, nb::handle tensor, size_t offset = 0,
+                 size_t len = 0) {
     torch::Tensor t = tensor_from_python(tensor, "tensor");
     if (!t.is_cuda()) {
       throw std::invalid_argument("irecv requires a CUDA tensor");
@@ -191,7 +194,8 @@ class Communicator {
       }
       return 0;
     }
-    track_request(req, std::move(t), pinned_mr.has_value() ? nullptr : t.data_ptr());
+    track_request(req, std::move(t),
+                  pinned_mr.has_value() ? nullptr : t.data_ptr());
     return req;
   }
 
@@ -237,10 +241,14 @@ class Communicator {
 
   std::string peer_transport(int peer_rank) const {
     switch (comm_->peer_transport_kind(peer_rank)) {
-      case PeerTransportKind::Ipc: return "ipc";
-      case PeerTransportKind::Uccl: return "uccl";
-      case PeerTransportKind::Tcp: return "tcp";
-      default: return "unknown";
+      case PeerTransportKind::Ipc:
+        return "ipc";
+      case PeerTransportKind::Uccl:
+        return "uccl";
+      case PeerTransportKind::Tcp:
+        return "tcp";
+      default:
+        return "unknown";
     }
   }
 
@@ -280,8 +288,7 @@ class Communicator {
 
   void track_request(uint64_t req, torch::Tensor tensor, void* local_buf) {
     std::lock_guard<std::mutex> lk(mu_);
-    pending_requests_[req] =
-        PendingTensorRequest{std::move(tensor), local_buf};
+    pending_requests_[req] = PendingTensorRequest{std::move(tensor), local_buf};
   }
 
   void cleanup_request(uint64_t req) {
@@ -315,8 +322,7 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
       .def(nb::init<int, int, int, std::string, int, std::string, int>(),
            nb::arg("gpu_id"), nb::arg("rank"), nb::arg("world_size"),
            nb::arg("exchanger_ip") = "127.0.0.1",
-           nb::arg("exchanger_port") = 6979,
-           nb::arg("transport") = "auto",
+           nb::arg("exchanger_port") = 6979, nb::arg("transport") = "auto",
            nb::arg("local_id") = -1)
       .def_prop_ro("rank", &Communicator::rank)
       .def_prop_ro("world_size", &Communicator::world_size)
@@ -324,20 +330,19 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("accept_peer", &Communicator::accept_peer, nb::arg("peer_rank"))
       .def("pin_tensor", &Communicator::pin_tensor, nb::arg("tensor"))
       .def("unpin_tensor", &Communicator::unpin_tensor, nb::arg("tensor"))
-      .def("isend", &Communicator::isend,
-           nb::arg("peer_rank"), nb::arg("tensor"),
-           nb::arg("offset") = 0, nb::arg("len") = 0)
-      .def("irecv", &Communicator::irecv,
-           nb::arg("peer_rank"), nb::arg("tensor"),
-           nb::arg("offset") = 0, nb::arg("len") = 0)
+      .def("isend", &Communicator::isend, nb::arg("peer_rank"),
+           nb::arg("tensor"), nb::arg("offset") = 0, nb::arg("len") = 0)
+      .def("irecv", &Communicator::irecv, nb::arg("peer_rank"),
+           nb::arg("tensor"), nb::arg("offset") = 0, nb::arg("len") = 0)
       .def("poll", &Communicator::poll, nb::arg("req"))
       .def("release", &Communicator::release, nb::arg("req"))
       .def("wait_finish", &Communicator::wait_finish, nb::arg("req"))
-      .def("wait_finish_multi", &Communicator::wait_finish_multi, nb::arg("reqs"))
-      .def("peer_transport", &Communicator::peer_transport, nb::arg("peer_rank"))
+      .def("wait_finish_multi", &Communicator::wait_finish_multi,
+           nb::arg("reqs"))
+      .def("peer_transport", &Communicator::peer_transport,
+           nb::arg("peer_rank"))
       .def("same_host", &Communicator::same_host, nb::arg("peer_rank"))
-      .def("send", &Communicator::send,
-           nb::arg("peer_rank"), nb::arg("tensor"))
-      .def("recv", &Communicator::recv,
-           nb::arg("peer_rank"), nb::arg("tensor"));
+      .def("send", &Communicator::send, nb::arg("peer_rank"), nb::arg("tensor"))
+      .def("recv", &Communicator::recv, nb::arg("peer_rank"),
+           nb::arg("tensor"));
 }

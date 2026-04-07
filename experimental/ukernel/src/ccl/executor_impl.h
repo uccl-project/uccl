@@ -2,9 +2,9 @@
 
 #include "executor.h"
 #include <chrono>
+#include <cinttypes>
 #include <condition_variable>
 #include <cstdio>
-#include <cinttypes>
 #include <deque>
 #include <functional>
 #include <mutex>
@@ -82,7 +82,8 @@ inline bool is_transport_op(ExecOpKind kind) {
   return kind == ExecOpKind::TransportSend || kind == ExecOpKind::TransportRecv;
 }
 
-inline Backend* pick_backend(ExecutorBackends const& backends, ExecOpKind kind) {
+inline Backend* pick_backend(ExecutorBackends const& backends,
+                             ExecOpKind kind) {
   if (is_transport_op(kind)) {
     return backends.transport != nullptr ? backends.transport
                                          : backends.fallback;
