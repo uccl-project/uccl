@@ -80,6 +80,7 @@ def main() -> None:
 
     if rank == 0:
         print(f"{'Size':>12s} | {'ukernel AR (ms)':>16s} | {'NCCL AR (ms)':>14s} | {'ukernel A2A (ms)':>17s} | {'NCCL A2A (ms)':>14s}")
+        # print(f"{'Size':>12s} | {'NCCL AR (ms)':>14s} | {'NCCL A2A (ms)':>14s}")
         print("-" * 90)
 
     # --- Init ukernel_ccl once ---
@@ -126,6 +127,7 @@ def main() -> None:
             nc_a2a_ms = nc_a2a_time / iters * 1000
             label = f"{size * 4} B"
             print(f"{label:>12s} | {ar_ms:>16.3f} | {nc_ar_ms:>14.3f} | {a2a_ms:>17.3f} | {nc_a2a_ms:>14.3f}")
+            # print(f"{label:>12s} | {nc_ar_ms:>14.3f} | {nc_a2a_ms:>14.3f}")
 
     dist.destroy_process_group()
     nccl_dist.destroy_process_group()

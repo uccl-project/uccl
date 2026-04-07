@@ -99,6 +99,34 @@ cd experimental/ukernel/py
 CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 test_collective.py
 CUDA_VISIBLE_DEVICES=0,6,7 torchrun --nproc_per_node=3 test_collective.py  # for 3-rank tests
 CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 test_p2p.py
+
+# rdma battle
+UK_P2P_TRANSPORT=uccl NCCL_P2P_DISABLE=1 NCCL_SHM_DISABLE=1 NCCL_IB_DISABLE=0 NCCL_IB_HCA=mlx5_0 NCCL_DEBUG=INFO CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 bench_p2p.py
+        Size |  ukernel (ms) |  ukernel (GB/s) |   NCCL (ms) |   NCCL (GB/s)
+      1024 B |         0.225 |            0.01 |       0.121 |          0.02
+      4096 B |         0.265 |            0.03 |       0.123 |          0.07
+     16384 B |         0.345 |            0.10 |       0.200 |          0.16
+     65536 B |         0.407 |            0.32 |       0.201 |          0.65
+    262144 B |         0.576 |            0.91 |       0.383 |          1.37
+   1048576 B |         1.380 |            1.52 |       1.231 |          1.70
+   4194304 B |         5.127 |            1.64 |       4.428 |          1.89
+  16777216 B |        19.979 |            1.68 |      17.213 |          1.95
+  67108864 B |        79.735 |            1.68 |      68.675 |          1.95
+ 268435456 B |       319.598 |            1.68 |     273.423 |          1.96
+
+# ipc battle
+CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 bench_p2p.py
+        Size |  ukernel (ms) |  ukernel (GB/s) |   NCCL (ms) |   NCCL (GB/s)
+      1024 B |         3.295 |            0.00 |       0.072 |          0.03
+      4096 B |         3.398 |            0.00 |       0.069 |          0.12
+     16384 B |         3.317 |            0.01 |       0.087 |          0.38
+     65536 B |         3.448 |            0.04 |       0.090 |          1.45
+    262144 B |         3.425 |            0.15 |       0.087 |          6.06
+   1048576 B |         3.615 |            0.58 |       0.114 |         18.40
+   4194304 B |         3.514 |            2.39 |       0.250 |         33.50
+  16777216 B |         3.794 |            8.84 |       0.794 |         42.26
+  67108864 B |         6.243 |           21.50 |       2.758 |         48.66
+ 268435456 B |        13.531 |           39.68 |      10.814 |         49.65
 ```
 
 Minimal usage under `torchrun`:
