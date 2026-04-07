@@ -1,3 +1,6 @@
+# Apptainer Images
+*.sif
+
 # Prerequisites
 *.d
 
@@ -102,6 +105,10 @@ ep/deep_ep_wrapper/deep_ep.egg-info/
 *.json
 *result.jsonl
 
+# Optional local GDRCopy tree (not a submodule)
+thirdparty/gdrcopy/
+
 .worktrees/
 worktrees/
 *.csv
+*.egg-info/

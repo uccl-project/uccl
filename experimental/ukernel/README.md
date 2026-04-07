@@ -18,7 +18,7 @@ Ubuntu quick path (source build):
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential dkms linux-headers-$(uname -r)
+sudo apt-get install -y build-essential dkms linux-headers-$(uname -r) libelf-dev
 git clone https://github.com/NVIDIA/gdrcopy.git
 cd gdrcopy
 make CUDA=/usr/local/cuda

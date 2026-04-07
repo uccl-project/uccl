@@ -1,0 +1,275 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag (e.g. v0.0.2) — used for artifact naming in dry-run'
+        required: false
+        default: 'dry-run'
+      dry_run:
+        description: 'Dry run — build wheels but skip PyPI publish'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  packages: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository }}
+
+# ---------------------------------------------------------------------------
+# Single package "uccl" with local version identifiers (vLLM-style).
+#
+#   Variant       target   image               local version    distribution
+#   ──────────    ──────   ─────               ─────────────    ────────────
+#   cu12          cu12     uccl-builder-cuda    (none)           PyPI + GH Release
+#   cu13          cu13     uccl-builder-cu13    +cu13            GH Release
+#   cu12+efa      cu12     uccl-builder-efa     +cu12.efa        GH Release
+#   cu13+efa      cu13     uccl-builder-efa13   +cu13.efa        GH Release
+#   roc7          roc7     uccl-builder-roc7    +rocm            GH Release
+#
+# × Python 3.12 (abi3 — compatible with 3.12+) = 5 wheel jobs + 1 source tarball
+# ---------------------------------------------------------------------------
+
+jobs:
+  # ==========================================================================
+  # Job 0: Gate — only repository admins/owners may proceed.
+  # ==========================================================================
+  check-permissions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify actor is admin or owner
+        run: |
+          ROLE=$(gh api "repos/${{ github.repository }}/collaborators/${{ github.actor }}/permission" \
+            --jq '.permission' 2>/dev/null || echo "none")
+          echo "Actor '${{ github.actor }}' permission level: ${ROLE}"
+          if [[ "${ROLE}" != "admin" ]]; then
+            echo "ERROR: Only repository admins and owners can trigger this workflow."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ==========================================================================
+  # Job 2: Build Docker images (reuses build-docker-images.yml)
+  # ==========================================================================
+  build-docker-images:
+    needs: [check-permissions]
+    uses: ./.github/workflows/build-docker-images.yml
+    permissions:
+      contents: read
+      packages: write
+
+  # ==========================================================================
+  # Job 3: Build wheel variants
+  # ==========================================================================
+  build-wheels:
+    needs: [build-docker-images]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        py_version: ["3.12"]
+        variant:
+          # CUDA 12 (default — no local version, published to PyPI)
+          - name: cu12
+            target: cu12
+            image_name: uccl-builder-cuda
+            local_version: ""
+            for_pypi: true
+            gpu_arch: "9.0+PTX"
+          # CUDA 13
+          - name: cu13
+            target: cu13
+            image_name: uccl-builder-cu13
+            local_version: "cu13"
+            for_pypi: false
+            gpu_arch: "9.0+PTX"
+          # CUDA 12 + EFA
+          - name: cu12-efa
+            target: cu12
+            image_name: uccl-builder-efa
+            local_version: "cu12.efa"
+            is_efa: "1"
+            for_pypi: false
+            gpu_arch: "9.0+PTX"
+          # CUDA 13 + EFA
+          - name: cu13-efa
+            target: cu13
+            image_name: uccl-builder-efa13
+            local_version: "cu13.efa"
+            is_efa: "1"
+            for_pypi: false
+            gpu_arch: "9.0+PTX"
+          # ROCm
+          - name: roc7
+            target: roc7
+            image_name: uccl-builder-roc7
+            local_version: "rocm"
+            for_pypi: false
+            gpu_arch: "gfx942,gfx950"
+
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h /
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull pre-built Docker image
+        run: |
+          FULL_IMAGE="${IMAGE_PREFIX}/${{ matrix.variant.image_name }}:py${{ matrix.py_version }}"
+          echo "Pulling ${FULL_IMAGE}..."
+          docker pull "${FULL_IMAGE}"
+          # Tag with the local name that build.sh expects
+          docker tag "${FULL_IMAGE}" "${{ matrix.variant.image_name }}"
+
+      - name: Build wheel
+        env:
+          SKIP_DOCKER_BUILD: "1"
+          IMAGE_NAME: ${{ matrix.variant.image_name }}
+          IS_EFA: ${{ matrix.variant.is_efa || '' }}
+          TORCH_CUDA_ARCH_LIST: ${{ matrix.variant.gpu_arch }}
+          UCCL_LOCAL_VERSION: ${{ matrix.variant.local_version }}
+        run: |
+          ./build.sh "${{ matrix.variant.target }}" all "${{ matrix.py_version }}"
+
+      - name: Show built wheels
+        run: |
+          echo "Built wheels:"
+          ls -lh "wheelhouse-${{ matrix.variant.target }}"/*.whl
+
+      - name: Upload wheel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.variant.name }}-py${{ matrix.py_version }}
+          path: wheelhouse-${{ matrix.variant.target }}/*.whl
+          if-no-files-found: error
+
+  # ==========================================================================
+  # Job 4: Create source tarball (includes submodules)
+  # ==========================================================================
+  create-source-tarball:
+    needs: [check-permissions]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Create source tarball
+        run: |
+          VERSION=$(grep '__version__' uccl/__init__.py | sed 's/.*"\(.*\)".*/\1/')
+          echo "Version: ${VERSION}"
+
+          git archive --format=tar "--prefix=uccl-${VERSION}/" HEAD > "uccl-${VERSION}.tar"
+
+          TARBALL="$(pwd)/uccl-${VERSION}.tar"
+          git submodule foreach --recursive \
+            "git archive --format=tar --prefix=uccl-${VERSION}/\$sm_path/ HEAD | \
+             tar --concatenate --file=\"${TARBALL}\""
+
+          gzip "uccl-${VERSION}.tar"
+          ls -lh "uccl-${VERSION}.tar.gz"
+
+      - name: Upload source tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-tarball
+          path: uccl-*.tar.gz
+          if-no-files-found: error
+
+  # ==========================================================================
+  # Job 5: Upload all artifacts to GitHub Release
+  # ==========================================================================
+  upload-release-assets:
+    needs: [build-wheels, create-source-tarball]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all wheel artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+          pattern: wheel-*
+
+      - name: Download source tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: source-tarball
+          path: artifacts/source/
+
+      - name: Upload to GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          echo "Uploading assets to release ${TAG}..."
+
+          find artifacts/ -name '*.whl' -print0 | while IFS= read -r -d '' whl; do
+            echo "  Uploading $(basename "$whl")"
+            gh release upload "${TAG}" "$whl" --repo "${{ github.repository }}" --clobber
+          done
+
+          find artifacts/source/ -name '*.tar.gz' -print0 | while IFS= read -r -d '' tarball; do
+            echo "  Uploading $(basename "$tarball")"
+            gh release upload "${TAG}" "$tarball" --repo "${{ github.repository }}" --clobber
+          done
+
+          echo "Done. All assets uploaded."
+
+  # ==========================================================================
+  # Job 6: Publish default wheel to PyPI
+  #   - Only the cu12 wheel (no local version) goes to PyPI.
+  #   - All other variants (cu13, efa, roc7) are on GitHub Releases.
+  #   - Users install: pip install uccl
+  # ==========================================================================
+  publish-pypi:
+    needs: [build-wheels]
+    if: >
+      github.event_name == 'release' ||
+      (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # OIDC for trusted publishing
+    environment:
+      name: pypi
+    steps:
+      - name: Download default (cu12) wheel artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts/
+          pattern: wheel-cu12-py*
+
+      - name: Collect PyPI wheels
+        run: |
+          mkdir -p dist/
+          find all-artifacts/ -name '*.whl' -exec cp {} dist/ \;
+          echo "Wheels to publish:"
+          ls -lh dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/

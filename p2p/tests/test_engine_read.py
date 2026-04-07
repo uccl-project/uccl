@@ -11,8 +11,6 @@ from typing import Tuple
 # You must first import torch before importing uccl for AMD GPUs
 import torch
 
-os.environ["UCCL_RCMODE"] = "1"
-
 try:
     from uccl import p2p
 except ImportError as e:
@@ -44,7 +42,7 @@ def test_local():
         ep_meta = ep_meta_q.recv()
         ip, port, r_gpu = parse_endpoint_meta(ep_meta)
 
-        ep = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
+        ep = p2p.Endpoint(local_gpu_idx=0)
         ok, conn_id = ep.connect(ip, r_gpu, remote_port=port)
         assert ok, "connect failed"
         print(f"[Server] connected (conn_id={conn_id})")
@@ -65,7 +63,7 @@ def test_local():
         print("✓ Server read data correctly")
 
     def client_proc(ep_meta_q, fifo_meta_q):
-        ep = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
+        ep = p2p.Endpoint(local_gpu_idx=0)
         ep_meta_q.send(bytes(ep.get_metadata()))
 
         ok, r_ip, r_gpu, conn_id = ep.accept()

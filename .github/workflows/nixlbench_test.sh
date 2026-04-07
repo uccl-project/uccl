@@ -16,7 +16,9 @@ MINICONDA_DIR="${HOME}/nfs/miniconda3"
 CONDA_ENV="uccl-ci-sandbox"
 
 NIXL_SRC_DIR="/tmp/nixl_ci_$$"
+ABSEIL_DIR="/tmp/abseil_ci_$$"
 NIXL_REPO="https://github.com/ai-dynamo/nixl.git"
+ABSEIL_TAG="20240116.2"
 
 ARCH=$(uname -m)
 [ "${ARCH}" = "arm64" ] && ARCH="aarch64"
@@ -32,7 +34,7 @@ cleanup() {
         kill "${ETCD_PID}" 2>/dev/null || true
         wait "${ETCD_PID}" 2>/dev/null || true
     fi
-    rm -rf "${NIXL_SRC_DIR}"
+    rm -rf "${NIXL_SRC_DIR}" "${ABSEIL_DIR}"
 }
 trap cleanup EXIT
 
@@ -49,6 +51,23 @@ make -j"$(nproc)" PYTHON=python3
 make install PYTHON=python3 LIBDIR="${NIXL_INSTALL_DIR}/lib" PREFIX="${NIXL_INSTALL_DIR}"
 
 export LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${LIBRARY_PATH:-}"
+
+# ── Build and install Abseil (NIXL needs absl_log; Ubuntu 24.04's Abseil is too old) ─
+echo "=== Building Abseil (required by NIXL) ==="
+git clone --depth 1 --branch "${ABSEIL_TAG}" https://github.com/abseil/abseil-cpp.git "${ABSEIL_DIR}"
+cd "${ABSEIL_DIR}"
+mkdir build && cd build
+cmake .. \
+    -DCMAKE_INSTALL_PREFIX="${NIXL_INSTALL_DIR}" \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DABSL_BUILD_TESTING=OFF \
+    -DABSL_ENABLE_INSTALL=ON
+cmake --build . -j"$(nproc)"
+cmake --install .
+cd "${UCCL_ROOT}"
+
+# Prefer our Abseil over system (Ubuntu's lacks absl_log)
+export PKG_CONFIG_PATH="${NIXL_INSTALL_DIR}/lib/pkgconfig:${NIXL_INSTALL_DIR}/lib/${ARCH}-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}"
 
 # ── Clone NIXL ────────────────────────────────────────────────────────────────
 echo "=== Cloning latest NIXL ==="

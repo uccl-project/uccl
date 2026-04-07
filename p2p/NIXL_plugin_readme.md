@@ -2,7 +2,13 @@
 
 Quick setup and run guide for the TCPX backend.
 
----
+## Git submodules
+
+From the repo root:
+
+```bash
+git submodule update --init thirdparty/nccl thirdparty/nccl-tests
+```
 
 ## Prerequisites
 
@@ -97,10 +103,10 @@ python -m pip install --no-cache-dir "nixl[cu12]"
 cd $UCCL_HOME/p2p
 
 # Server (node A)
-UCCL_RCMODE=1 python benchmarks/benchmark_nixl.py --backend uccl --role server --sizes 67108864 --iters 10 --op-type read
+python benchmarks/benchmark_nixl.py --backend uccl --role server --sizes 67108864 --iters 10 --op-type read
 
 # Client (node B, set server IP)
-UCCL_RCMODE=1 python benchmarks/benchmark_nixl.py --backend uccl --role client --sizes 67108864 --iters 10 --remote-ip=10.65.27.236 --op-type read
+python benchmarks/benchmark_nixl.py --backend uccl --role client --sizes 67108864 --iters 10 --remote-ip=10.65.27.236 --op-type read
 
 > note: 2026.1.14: need add UCCL_RCMODE=1 now, check later
 

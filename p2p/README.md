@@ -21,8 +21,8 @@ p2p/
 
 The easiest way is to: 
 ```bash
-git clone https://github.com/uccl-project/uccl.git --recursive
-cd uccl && bash build.sh [cuda|rocm] p2p [py_version] --install
+git clone https://github.com/uccl-project/uccl.git && cd uccl
+bash build.sh [cu12|cu13|roc7|roc6] p2p --install
 ```
 
 Alternatively, you can setup your local dev environment by: 
@@ -62,7 +62,7 @@ sudo apt install build-essential net-tools libelf-dev libibverbs-dev \
 
 To build AWS EFA support, you can: 
 ```bash
-USE_EFA=1 bash build.sh cuda p2p --install
+USE_EFA=1 bash build.sh cu12 p2p --install
 # or
 make -j USE_EFA=1 install
 ```
@@ -73,7 +73,7 @@ To build with DietGPU float compression support, you can:
 ```bash
 USE_DIETGPU=1 make -j install
 # or
-USE_DIETGPU=1 bash build.sh cuda p2p --install
+USE_DIETGPU=1 bash build.sh cu12 p2p --install
 ```
 
 DietGPU provides lossless GPU-side compression for float16/bfloat16/float32 tensors. It only activates for transfers larger than 2 MB. At runtime, control compression behavior via the `P2P_COMPRESS_STRATEGY` environment variable (see the environment variable table below).
@@ -110,6 +110,7 @@ Notes:
 | UCCL_P2P_RDMA_GID_INDEX | GID index in RDMA network | 0/3 (EFA/IB) |
 | UCCL_P2P_RDMA_SL | Service level in RDMA network | 8/3 (EFA/IB) |
 | UCCL_P2P_RDMA_TC | Traffic class in RDMA network | 104 (IB) |
+| UCCL_P2P_RDMA_DEV | RDMA devices forced to use (instead of auto-selecting based on PCIe affinity) | none (eg, `irdma-mkp0,irdma-mkp1`) |
 | P2P_COMPRESS_STRATEGY | DietGPU compression strategy (requires `USE_DIETGPU=1` build) | none |
 
 `P2P_COMPRESS_STRATEGY` accepted values:
@@ -338,8 +339,8 @@ done
 from uccl import p2p
 import torch
 
-# Create endpoint with local GPU index and number of CPUs
-endpoint = p2p.Endpoint(local_gpu_idx=0, num_cpus=4)
+# Create endpoint with local GPU index
+endpoint = p2p.Endpoint(local_gpu_idx=0)
 ```
 
 ### Client-Server Communication
@@ -473,13 +474,12 @@ assert success
 
 #### Constructor
 ```python
-Endpoint(local_gpu_idx, num_cpus)
+Endpoint(local_gpu_idx)
 ```
 Create a new RDMA endpoint instance.
 
 **Parameters:**
 - `local_gpu_idx` (int): GPU index for this endpoint
-- `num_cpus` (int): Number of CPU threads to use for RDMA operations
 
 #### Connection Management
 

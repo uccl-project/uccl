@@ -75,31 +75,33 @@ UCCL has been adopted as part of the AMD [TheRock](https://github.com/ROCm/TheRo
 More UCCL features are under development in this repo, currently including: 
 - ✅ More efficient KV cache transfer engine (e.g., better Mooncake)
   - ✅ Supporting AMD GPUs
-  - 🚧 Supporting RDMA (NVIDIA, Broadcom), AWS EFA, GCP TCPX, TCP
+  - ✅ Supporting RDMA (NVIDIA, Broadcom), AWS EFA, GCP TCPX, TCP
 - ✅ Efficient and portable expert-parallel communication
   - ✅ Supporting all NIC vendors, including Nvidia, AWS EFA, and Broadcom
   - ✅ Supporting AMD GPUs
-  - 🚧 Better flow control to avoid congestion
-  - ☐ Supporting other AI accelerators, such as TPUs and Trainium.
+  - ✅ Better flow control to avoid congestion
+  - ☐ Supporting other AI accelerators, such as TPUs and Trainium
 - 🚧 Re-architecting NCCL to unleash network hardware performance
-  - 🚧 Scalable and efficient CPU proxy
-  - ☐ Fast async collectives with compute-communication ordering guarantee
+  - 🚧 SM-efficient communication kernels
+  - 🚧 Fine-grained compute-communication overlapping
   - ☐ Device kernels in vendor-agnostic Triton language
-- ☐ Dynamic membership with GPU servers joining and exiting
+- 🚧 Efficient consumer GPU communication
+  - 🚧 Faster collectives on 4090/5090/GB10
+  - 🚧 Expert-parallel communication on 4090/5090/GB10
 
 ## Quick Start
 
 The easiest way to use UCCL is to first build based on your platform. The build script will automatically detect the `py_version` of your current environment. If you need to compile UCCL for a specific python version, please specify the `py_version`, such as `3.10`. 
 
 ```bash
-git clone https://github.com/uccl-project/uccl.git --recursive && cd uccl
+git clone https://github.com/uccl-project/uccl.git && cd uccl
 
-# Eg, bash build.sh cuda ep --install
-bash build.sh [cuda|rocm|therock] [all|ccl_rdma|ccl_efa|p2p|ep] \
+# Eg, bash build.sh cu12 ep --install
+bash build.sh [cu12|cu13|roc7|roc6|therock] [all|ccl_rdma|ccl_efa|p2p|ep] \
               [py_version] [rocm_index_url] --install
 ```
 > Note: 
-> - By default, `build.sh cuda|rocm` targets CUDA 12.8 or ROCm 7.1, but you can also specify `cuda13|rocm6` to target CUDA 13.0 or ROCm 6.4.
+> - By default, `build.sh cu12` targets CUDA 12.8 and `build.sh roc7` targets ROCm 7.1, but you can also specify `cu13|roc6` to target CUDA 13.0 or ROCm 6.4.
 > - UCCL uses [nanobind](https://github.com/wjakob/nanobind) for C++/Python bindings. On Python 3.12+, wheels are tagged `cp312-abi3` (stable ABI, one wheel for all 3.12+ interpreters); on older Pythons, wheels are CPython-version-specific.
 > - When building for ROCm with python packaging through TheRock, please specify your ROCm index url; the default is `https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu` and it may not be what you want. When installing UCCL wheels for TheRock, please provide pip with the index url and add the optional extra `[rocm]` to the wheel, e.g., `pip install --extra-index-url https://rocm.prereleases.amd.com/whl/gfx94X-dcgpu wheelhouse-therock/uccl-0.0.1.post4-py3-none-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl[rocm]`.
 
@@ -124,7 +126,7 @@ Now, you can just run your PyTorch applications and enjoy UCCL performance benef
 
 First clone the UCCL repo and init submodules: 
 ```bash
-git clone https://github.com/uccl-project/uccl.git --recursive
+git clone https://github.com/uccl-project/uccl.git
 export UCCL_HOME=$(pwd)/uccl
 ```
 

@@ -27,6 +27,10 @@ struct XferHandle {
   uint64_t transfer_id;
 };
 
+bool IsHostPtr(void const* ptr) {
+  return uccl::get_dev_idx(const_cast<void*>(ptr)) == -1;
+}
+
 std::vector<uint8_t> serialize_xfer_descs(
     std::vector<XferDesc> const& xfer_desc_v) {
   size_t total_size = sizeof(size_t);
@@ -169,26 +173,26 @@ NB_MODULE(p2p, m) {
       .value("kFloat16", uccl::FloatType::kFloat16)
       .value("kBFloat16", uccl::FloatType::kBFloat16)
       .value("kFloat32", uccl::FloatType::kFloat32)
+      .value("kFloat8E4M3FN", uccl::FloatType::kFloat8E4M3FN)
+      .value("kFloat8E5M2", uccl::FloatType::kFloat8E5M2)
       .export_values();
 
   // Endpoint class binding
   nb::class_<Endpoint>(m, "Endpoint")
       .def(
           "__init__",
-          [](Endpoint* self, uint32_t local_gpu_idx, uint32_t num_cpus) {
+          [](Endpoint* self, uint32_t local_gpu_idx) {
             nb::gil_scoped_release release;
             InsidePythonGuard guard;
-            new (self) Endpoint(local_gpu_idx, num_cpus);
+            new (self) Endpoint(local_gpu_idx);
           },
-          nb::arg("local_gpu_idx"), nb::arg("num_cpus"))
-      .def(
-          "__init__",
-          [](Endpoint* self, uint32_t num_cpus) {
-            nb::gil_scoped_release release;
-            InsidePythonGuard guard;
-            new (self) Endpoint(num_cpus);
-          },
-          nb::arg("num_cpus"))
+          nb::arg("local_gpu_idx"))
+      .def("__init__",
+           [](Endpoint* self) {
+             nb::gil_scoped_release release;
+             InsidePythonGuard guard;
+             new (self) Endpoint();
+           })
       .def(
           "start_passive_accept",
           [](Endpoint& self) { return self.start_passive_accept(); },
@@ -225,6 +229,19 @@ NB_MODULE(p2p, m) {
           },
           "Add remote endpoint - connect only once per remote endpoint.",
           nb::arg("metadata_bytes"))
+      .def(
+          "remove_remote_endpoint",
+          [](Endpoint& self, uint64_t conn_id) {
+            bool success;
+            {
+              nb::gil_scoped_release release;
+              InsidePythonGuard guard;
+              success = self.remove_remote_endpoint(conn_id);
+            }
+            return success;
+          },
+          "Remove a remote endpoint previously added via add_remote_endpoint.",
+          nb::arg("conn_id"))
       .def(
           "get_metadata",
           [](Endpoint& self) {
@@ -324,24 +341,29 @@ NB_MODULE(p2p, m) {
               nb::gil_scoped_release release;
               InsidePythonGuard guard;
 
-              std::vector<uint64_t> mr_id_v;
-              if (!self.regv(ptrs, sizes, mr_id_v)) {
-                return std::vector<XferDesc>{};
-              }
-
               xfer_desc_v.reserve(list_len);
               for (size_t i = 0; i < list_len; i++) {
-                auto mhandle = self.get_mhandle(mr_id_v[i]);
-                assert(mhandle != nullptr);
                 XferDesc xfer_desc;
                 xfer_desc.addr = ptrs[i];
                 xfer_desc.size = sizes[i];
-                xfer_desc.mr_id = mr_id_v[i];
-                for (size_t j = 0; j < kNICContextNumber; j++) {
-                  auto mr = mhandle->mr_array.getKeyByContextID(j);
-                  assert(mr != nullptr);
-                  xfer_desc.lkeys.push_back(mr->lkey);
-                  xfer_desc.rkeys.push_back(mr->rkey);
+                xfer_desc.mr_id = UINT64_MAX;
+
+                uint64_t mr_id = UINT64_MAX;
+                if (self.reg(ptrs[i], sizes[i], mr_id)) {
+                  auto mhandle = self.get_mhandle(mr_id);
+                  assert(mhandle != nullptr);
+                  xfer_desc.mr_id = mr_id;
+                  for (size_t j = 0; j < kNICContextNumber; j++) {
+                    auto mr = mhandle->mr_array.getKeyByContextID(j);
+                    assert(mr != nullptr);
+                    xfer_desc.lkeys.push_back(mr->lkey);
+                    xfer_desc.rkeys.push_back(mr->rkey);
+                  }
+                } else {
+                  std::cerr << "[register_memory] RDMA registration "
+                               "unavailable for ptr "
+                            << ptrs[i] << " size " << sizes[i]
+                            << "; keeping IPC metadata only" << std::endl;
                 }
                 // Also generate IPC handle for intra-node transfers
                 {
@@ -352,10 +374,16 @@ NB_MODULE(p2p, m) {
                   auto addr_val = reinterpret_cast<uintptr_t>(ptrs[i]);
                   auto addr_aligned = addr_val & ~(kIpcAlign - 1);
                   ipc_info.offset = addr_val - addr_aligned;
-                  auto err = gpuIpcGetMemHandle(
-                      &ipc_info.handle, reinterpret_cast<void*>(addr_aligned));
-                  if (err != gpuSuccess) {
-                    throw std::runtime_error(gpuGetErrorString(err));
+                  bool is_host =
+                      (uccl::get_dev_idx(const_cast<void*>(ptrs[i])) == -1);
+                  ipc_info.is_host = is_host;
+                  if (!is_host) {
+                    auto err = gpuIpcGetMemHandle(
+                        &ipc_info.handle,
+                        reinterpret_cast<void*>(addr_aligned));
+                    if (err != gpuSuccess) {
+                      throw std::runtime_error(gpuGetErrorString(err));
+                    }
                   }
                   xfer_desc.ipc_info.assign(
                       reinterpret_cast<char const*>(&ipc_info),
@@ -369,6 +397,28 @@ NB_MODULE(p2p, m) {
           "Register memory for a list of PyTorch tensors and return transfer "
           "descriptors",
           nb::arg("tensor_list"))
+      .def(
+          "deregister_memory",
+          [](Endpoint& self, nb::list desc_list) {
+            std::vector<uint64_t> mr_ids;
+            size_t list_len = nb::len(desc_list);
+            mr_ids.reserve(list_len);
+            for (size_t i = 0; i < list_len; ++i) {
+              auto const& desc = nb::cast<XferDesc const&>(desc_list[i]);
+              if (desc.mr_id != UINT64_MAX) {
+                mr_ids.push_back(desc.mr_id);
+              }
+            }
+            {
+              nb::gil_scoped_release release;
+              InsidePythonGuard guard;
+              for (auto mr_id : mr_ids) {
+                self.dereg(mr_id);
+              }
+            }
+          },
+          "Deregister memory for a list of transfer descriptors",
+          nb::arg("desc_list"))
       .def(
           "get_serialized_descs",
           [](Endpoint& /*self*/, nb::list desc_list) {
@@ -413,9 +463,56 @@ NB_MODULE(p2p, m) {
               throw std::runtime_error("Invalid conn_id");
             }
             bool is_local = conn->is_local_;
-
             uint64_t transfer_id;
             bool success;
+            bool use_loopback_rdma = false;
+
+            if (is_local) {
+              for (size_t i = 0; i < n; ++i) {
+                auto const& ldesc =
+                    nb::cast<XferDesc const&>(local_desc_list[i]);
+                auto const& rdesc =
+                    nb::cast<XferDesc const&>(remote_desc_list[i]);
+                UCCL_CHECK(!rdesc.ipc_info.empty())
+                    << "Remote descriptor has no IPC info for local transfer";
+                IpcTransferInfo info;
+                std::memcpy(&info, rdesc.ipc_info.data(), sizeof(info));
+                if (IsHostPtr(ldesc.addr) && info.is_host) {
+                  use_loopback_rdma = true;
+                  break;
+                }
+              }
+
+              if (use_loopback_rdma) {
+                if (conn->rdma_loopback_conn_id_ == UINT64_MAX) {
+                  uint64_t loopback_conn_id;
+                  {
+                    nb::gil_scoped_release release;
+                    InsidePythonGuard guard;
+                    success =
+                        self.connect(conn->ip_addr_, conn->remote_gpu_idx_,
+                                     conn->remote_port_, loopback_conn_id);
+                  }
+                  if (!success) {
+                    return nb::make_tuple(false, uint64_t{0});
+                  }
+                  conn = self.get_conn(conn_id);
+                  if (conn == nullptr) {
+                    throw std::runtime_error(
+                        "Invalid conn_id after loopback connect");
+                  }
+                  conn->rdma_loopback_conn_id_ = loopback_conn_id;
+                }
+
+                conn_id = conn->rdma_loopback_conn_id_;
+                conn = self.get_conn(conn_id);
+                if (conn == nullptr) {
+                  throw std::runtime_error(
+                      "Loopback RDMA connection disappeared");
+                }
+                is_local = false;
+              }
+            }
 
             if (is_local) {
               // IPC path for intra-node
@@ -489,6 +586,11 @@ NB_MODULE(p2p, m) {
                     nb::cast<XferDesc const&>(local_desc_list[0]);
                 auto const& rdesc =
                     nb::cast<XferDesc const&>(remote_desc_list[0]);
+                if (ldesc.mr_id == UINT64_MAX || rdesc.rkeys.empty()) {
+                  throw std::runtime_error(
+                      "RDMA transfer requires RDMA-registered local and remote "
+                      "descriptors");
+                }
 
                 FifoItem fifo_item;
                 fifo_item.addr = reinterpret_cast<uint64_t>(rdesc.addr);
@@ -524,6 +626,11 @@ NB_MODULE(p2p, m) {
                       nb::cast<XferDesc const&>(local_desc_list[i]);
                   auto const& rdesc =
                       nb::cast<XferDesc const&>(remote_desc_list[i]);
+                  if (ldesc.mr_id == UINT64_MAX || rdesc.rkeys.empty()) {
+                    throw std::runtime_error(
+                        "RDMA transfer requires RDMA-registered local and "
+                        "remote descriptors");
+                  }
 
                   FifoItem fifo_item;
                   fifo_item.addr = reinterpret_cast<uint64_t>(rdesc.addr);

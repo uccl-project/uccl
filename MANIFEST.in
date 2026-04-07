@@ -1,2 +1,3 @@
+include uccl/__init__.py
 include uccl/lib/*.so
 include uccl/*.so

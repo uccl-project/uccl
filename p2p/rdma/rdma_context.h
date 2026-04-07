@@ -2,6 +2,49 @@
 #pragma once
 #include "define.h"
 #include "rdma_device.h"
+#include <memory>
+#include <mutex>
+#include <unordered_map>
+#include <dlfcn.h>
+#include <endian.h>
+
+class RdmaContext;
+
+struct MrCacheKey {
+  uintptr_t addr;
+  size_t size;
+  bool is_gpu;
+  bool use_dmabuf;
+
+  bool operator==(MrCacheKey const& other) const {
+    return addr == other.addr && size == other.size && is_gpu == other.is_gpu &&
+           use_dmabuf == other.use_dmabuf;
+  }
+};
+
+struct MrCacheKeyHash {
+  size_t operator()(MrCacheKey const& key) const {
+    size_t hash = std::hash<uintptr_t>{}(key.addr);
+    hash ^=
+        std::hash<size_t>{}(key.size) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    hash ^=
+        std::hash<bool>{}(key.is_gpu) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    hash ^= std::hash<bool>{}(key.use_dmabuf) + 0x9e3779b9 + (hash << 6) +
+            (hash >> 2);
+    return hash;
+  }
+};
+
+struct MrCacheEntry {
+  MrCacheKey key;
+  struct ibv_mr* mr = nullptr;
+  uint64_t refs = 0;
+};
+
+struct MrCacheHandleRef {
+  std::shared_ptr<RdmaContext> context;
+  MrCacheEntry* entry = nullptr;
+};
 
 class RdmaContext {
  public:
@@ -83,6 +126,11 @@ class RdmaContext {
     }
 
     if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
+      // First pass: collect all valid RoCE v2 GID indices.
+      // Second: prefer a routable (IPv4-mapped) GID over link-local fe80::.
+      int first_rocev2 = -1;
+      union ibv_gid first_rocev2_gid {};
+
       for (int i = 0; i < port_attr.gid_tbl_len; i++) {
         union ibv_gid gid;
         if (ibv_query_gid(ctx_.get(), port, i, &gid) == 0) {
@@ -103,16 +151,43 @@ class RdmaContext {
               if (fgets(gid_type, sizeof(gid_type), fp)) {
                 if (strstr(gid_type, "RoCE v2") != nullptr) {
                   fclose(fp);
-                  UCCL_LOG(INFO, UCCL_RDMA) << "RoCE v2 device " << device_name
-                                            << ": using GID index " << i;
-                  gid_index_ = i;
-                  return gid;
+
+                  // Check if this is an IPv4-mapped GID (::ffff:x.x.x.x).
+                  // Bytes [0..9] are zero, bytes [10..11] are 0xffff.
+                  bool is_ipv4_mapped = (gid.global.subnet_prefix == 0 &&
+                                         (gid.global.interface_id &
+                                          htobe64(0xFFFFFFFF00000000ULL)) ==
+                                             htobe64(0x0000FFFF00000000ULL));
+
+                  if (is_ipv4_mapped) {
+                    UCCL_LOG(INFO, UCCL_RDMA)
+                        << "RoCE v2 device " << device_name
+                        << ": using IPv4-mapped GID index " << i;
+                    gid_index_ = i;
+                    return gid;
+                  }
+
+                  // Remember the first RoCE v2 entry as fallback.
+                  if (first_rocev2 < 0) {
+                    first_rocev2 = i;
+                    first_rocev2_gid = gid;
+                  }
+                  continue;
                 }
               }
               fclose(fp);
             }
           }
         }
+      }
+
+      // No IPv4-mapped entry found; fall back to the first RoCE v2 entry.
+      if (first_rocev2 >= 0) {
+        UCCL_LOG(INFO, UCCL_RDMA)
+            << "RoCE v2 device " << device_name << ": using GID index "
+            << first_rocev2 << " (no IPv4-mapped GID found)";
+        gid_index_ = first_rocev2;
+        return first_rocev2_gid;
       }
     }
 
@@ -152,10 +227,175 @@ class RdmaContext {
     return ah;
   }
 
-  struct ibv_mr* regMem(void* addr, size_t size) const {
+  // Check if a pointer refers to GPU device memory.
+  static bool isGpuPointer(void* ptr) {
+    gpuPointerAttribute_t attrs = {};
+    gpuError_t err = gpuPointerGetAttributes(&attrs, ptr);
+    if (err != gpuSuccess) {
+      (void)gpuGetLastError();  // clear sticky error
+      return false;
+    }
+    return (attrs.type == gpuMemoryTypeDevice);
+  }
+
+  // Register GPU memory via DMA-BUF for GPUDirect RDMA.
+  // Uses kernel DMA-BUF subsystem instead of nvidia_peermem.
+  // Returns nullptr on failure so the caller can report the error.
+  struct ibv_mr* regMemGpuDmabuf(void* addr, size_t size) const {
+    // GPU page granularity for DMA-BUF export (2 MiB on modern GPUs).
+    static constexpr size_t kDmabufGranularity = 2ULL << 20;  // 2 MiB
+
+    static gpuMemGetHandleForAddressRange_fn gpuGetHandleForRange_func =
+        nullptr;
+    static std::once_flag init_flag;
+
+    std::call_once(init_flag, []() {
+      void* handle = dlopen(GPU_DRIVER_LIB_NAME, RTLD_LAZY);
+      if (!handle) handle = dlopen(GPU_DRIVER_LIB_NAME_FALLBACK, RTLD_LAZY);
+      if (handle) {
+        gpuGetHandleForRange_func = (gpuMemGetHandleForAddressRange_fn)dlsym(
+            handle, GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME);
+      }
+    });
+
+    if (!gpuGetHandleForRange_func) {
+      UCCL_LOG(ERROR) << "GPU Driver API not available for DMA-BUF";
+      return nullptr;
+    }
+
     int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
                        IBV_ACCESS_REMOTE_READ;
-    return ibv_reg_mr(pd_.get(), addr, size, access_flags);
+
+    // The DMA-BUF export API requires the address to be at the start of a
+    // GPU allocation and the size aligned to GPU page granularity. The caller
+    // may pass a sub-region, so we find the allocation base and compute offset.
+    void* alloc_base_ptr = nullptr;
+    size_t alloc_size = 0;
+    gpuError_t gpu_err =
+        gpuMemGetAddressRange(&alloc_base_ptr, &alloc_size, addr);
+    if (gpu_err != gpuSuccess) {
+      UCCL_LOG(ERROR) << "gpuMemGetAddressRange failed ("
+                      << gpuGetErrorString(gpu_err) << ")";
+      return nullptr;
+    }
+
+    gpuDevicePtr_t alloc_base = (gpuDevicePtr_t)(uintptr_t)alloc_base_ptr;
+    size_t offset_in_alloc = (uintptr_t)addr - (uintptr_t)alloc_base;
+
+    // Export the entire allocation as a DMA-BUF fd (aligned to granularity).
+    size_t export_size =
+        ((alloc_size + kDmabufGranularity - 1) / kDmabufGranularity) *
+        kDmabufGranularity;
+
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "DMA-BUF: gpu_buf=" << addr << " bytes=" << size << " alloc_base=0x"
+        << std::hex << (uintptr_t)alloc_base << std::dec
+        << " alloc_size=" << alloc_size << " offset=" << offset_in_alloc
+        << " export_size=" << export_size;
+
+    // Export DMA-BUF fd from the allocation base.
+    int dmabuf_fd = -1;
+    gpuDriverResult_t drv_err =
+        gpuGetHandleForRange_func(&dmabuf_fd, alloc_base, export_size,
+                                  GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, 0);
+
+    if (drv_err != gpuDriverSuccess) {
+      UCCL_LOG(ERROR) << "gpuMemGetHandleForAddressRange failed (error="
+                      << (int)drv_err << "), DMA-BUF unavailable";
+      return nullptr;
+    }
+
+    // Register only the sub-region we need using fd_offset.
+    uint64_t iova = (uint64_t)addr;
+    ibv_mr* mr = ibv_reg_dmabuf_mr(pd_.get(), offset_in_alloc, size, iova,
+                                   dmabuf_fd, access_flags);
+    int saved_errno = errno;
+    close(dmabuf_fd);  // fd can be closed after registration
+
+    if (!mr) {
+      UCCL_LOG(ERROR) << "ibv_reg_dmabuf_mr failed (errno=" << saved_errno
+                      << ": " << strerror(saved_errno) << ")";
+      return nullptr;
+    }
+
+    // ibv_reg_dmabuf_mr sets mr->addr to the offset, not the GPU VA.
+    // Override to match ibv_reg_mr_iova2 behavior.
+    mr->addr = reinterpret_cast<void*>(iova);
+
+    UCCL_LOG(INFO, UCCL_RDMA)
+        << "Registered GPU memory via DMA-BUF (addr=" << addr
+        << ", len=" << size << ", rkey=0x" << std::hex << mr->rkey << std::dec
+        << ") via DMA-BUF GPUDirect RDMA";
+    return mr;
+  }
+
+  struct ibv_mr* regMem(void* addr, size_t size) const {
+    return regMemImpl(addr, size, getRegistrationMode(addr).use_dmabuf);
+  }
+
+  MrCacheEntry* acquireCachedMr(void* addr, size_t size) {
+    RegistrationMode mode = getRegistrationMode(addr);
+    MrCacheKey key{reinterpret_cast<uintptr_t>(addr), size, mode.is_gpu,
+                   mode.use_dmabuf};
+
+    std::lock_guard<std::mutex> lock(mr_cache_mu_);
+    MrCacheEntry* best_match = nullptr;
+    for (auto const& [cached_key, cached_entry] : mr_cache_) {
+      if (cached_key.is_gpu != key.is_gpu ||
+          cached_key.use_dmabuf != key.use_dmabuf) {
+        continue;
+      }
+      if (!containsRange(cached_key.addr, cached_key.size, key.addr,
+                         key.size)) {
+        continue;
+      }
+
+      if (best_match == nullptr || cached_key.size < best_match->key.size) {
+        best_match = cached_entry.get();
+      }
+    }
+    if (best_match != nullptr) {
+      best_match->refs++;
+      return best_match;
+    }
+
+    struct ibv_mr* mr = regMemImpl(addr, size, mode.use_dmabuf);
+    if (!mr) {
+      return nullptr;
+    }
+
+    auto entry = std::make_unique<MrCacheEntry>();
+    entry->key = key;
+    entry->mr = mr;
+    entry->refs = 1;
+
+    MrCacheEntry* entry_ptr = entry.get();
+    mr_cache_[key] = std::move(entry);
+    return entry_ptr;
+  }
+
+  void releaseCachedMr(MrCacheEntry* entry) {
+    if (!entry) {
+      return;
+    }
+
+    struct ibv_mr* mr_to_dereg = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(mr_cache_mu_);
+      auto it = mr_cache_.find(entry->key);
+      if (it == mr_cache_.end() || it->second.get() != entry) {
+        return;
+      }
+
+      if (--it->second->refs == 0) {
+        mr_to_dereg = it->second->mr;
+        mr_cache_.erase(it);
+      }
+    }
+
+    if (mr_to_dereg) {
+      deregMem(mr_to_dereg);
+    }
   }
 
   static void deregMem(struct ibv_mr* mr) {
@@ -164,8 +404,51 @@ class RdmaContext {
   inline const uint64_t getContextID() const { return context_id_; }
 
  private:
+  struct RegistrationMode {
+    bool is_gpu;
+    bool use_dmabuf;
+  };
+
+  static bool containsRange(uintptr_t outer_addr, size_t outer_size,
+                            uintptr_t inner_addr, size_t inner_size) {
+    if (inner_addr < outer_addr) {
+      return false;
+    }
+    if (inner_size > outer_size) {
+      return false;
+    }
+    uintptr_t outer_end = outer_addr + outer_size;
+    uintptr_t inner_end = inner_addr + inner_size;
+    return outer_end >= outer_addr && inner_end >= inner_addr &&
+           inner_end <= outer_end;
+  }
+
+  RegistrationMode getRegistrationMode(void* addr) const {
+    bool is_gpu = isGpuPointer(addr);
+    bool use_dmabuf = (vendor_id_ == 0x8086 && is_gpu);
+    if (use_dmabuf) {
+      UCCL_LOG(INFO, UCCL_RDMA)
+          << "GPU memory detected on irdma NIC (vendor=0x" << std::hex
+          << vendor_id_ << std::dec << "), using DMA-BUF registration";
+    }
+    return {is_gpu, use_dmabuf};
+  }
+
+  struct ibv_mr* regMemImpl(void* addr, size_t size, bool use_dmabuf) const {
+    if (use_dmabuf) {
+      return regMemGpuDmabuf(addr, size);
+    }
+
+    int access_flags = IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE |
+                       IBV_ACCESS_REMOTE_READ;
+    return ibv_reg_mr(pd_.get(), addr, size, access_flags);
+  }
+
   std::shared_ptr<struct ibv_context> ctx_;
   std::shared_ptr<struct ibv_pd> pd_;
+  std::mutex mr_cache_mu_;
+  std::unordered_map<MrCacheKey, std::unique_ptr<MrCacheEntry>, MrCacheKeyHash>
+      mr_cache_;
   uint64_t context_id_;
   uint32_t vendor_id_;
   mutable int gid_index_;

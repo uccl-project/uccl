@@ -23,6 +23,7 @@ try:
         check_nvlink_connections,
         initialize_uccl,
         destroy_uccl,
+        _fp8_e4m3_dtype,
     )
 except ImportError:
     from utils import (
@@ -30,6 +31,7 @@ except ImportError:
         check_nvlink_connections,
         initialize_uccl,
         destroy_uccl,
+        _fp8_e4m3_dtype,
     )
 
 
@@ -89,30 +91,43 @@ class Buffer:
         else:
             device_index = torch.cuda.current_device()
 
-        rdma_buffer_is_host_allocated = False
-        if num_rdma_bytes > 0:
-            if hasattr(ep, "can_register_rdma_gpu_buffer"):
-                rdma_buffer_is_host_allocated = not bool(
-                    ep.can_register_rdma_gpu_buffer(device_index, num_rdma_bytes)
-                )
-            elif hasattr(ep, "rdma_buffer_should_use_host_alloc"):
-                rdma_buffer_is_host_allocated = bool(
-                    ep.rdma_buffer_should_use_host_alloc(device_index, num_rdma_bytes)
-                )
-
-        if num_rdma_bytes > 0 and rdma_buffer_is_host_allocated:
-            # Host-pinned fallback for platforms/NICs that cannot register GPU memory.
-            self.scratch = torch.zeros(
-                (num_rdma_bytes,),
-                dtype=torch.uint8,
-                device="cpu",
-                pin_memory=True,
+        if hasattr(ep, "get_rdma_buffer"):
+            # Allocate outside PyTorch's CUDA allocator so RDMA/IPC sees a raw
+            # cudaMalloc/cudaMallocHost-style allocation instead of a possibly
+            # segmented caching-allocator mapping.
+            scratch_dlpack, rdma_buffer_is_host_allocated = ep.get_rdma_buffer(
+                num_rdma_bytes, device_index
             )
+            self.scratch = torch.utils.dlpack.from_dlpack(scratch_dlpack)
         else:
-            # Device buffer for normal RDMA path. Keep a valid pointer even when RDMA is disabled.
-            self.scratch = torch.zeros(
-                max(num_rdma_bytes, 1), dtype=torch.uint8, device=f"cuda:{device_index}"
-            )
+            rdma_buffer_is_host_allocated = False
+            if num_rdma_bytes > 0:
+                if hasattr(ep, "can_register_rdma_gpu_buffer"):
+                    rdma_buffer_is_host_allocated = not bool(
+                        ep.can_register_rdma_gpu_buffer(device_index, num_rdma_bytes)
+                    )
+                elif hasattr(ep, "rdma_buffer_should_use_host_alloc"):
+                    rdma_buffer_is_host_allocated = bool(
+                        ep.rdma_buffer_should_use_host_alloc(
+                            device_index, num_rdma_bytes
+                        )
+                    )
+
+            if num_rdma_bytes > 0 and rdma_buffer_is_host_allocated:
+                # Host-pinned fallback for platforms/NICs that cannot register GPU memory.
+                self.scratch = torch.zeros(
+                    (num_rdma_bytes,),
+                    dtype=torch.uint8,
+                    device="cpu",
+                    pin_memory=True,
+                )
+            else:
+                # Device buffer for normal RDMA path. Keep a valid pointer even when RDMA is disabled.
+                self.scratch = torch.zeros(
+                    max(num_rdma_bytes, 1),
+                    dtype=torch.uint8,
+                    device=f"cuda:{device_index}",
+                )
 
         rdma_buffer_ptr = self.scratch.data_ptr()
         self.proxies, self.workers = initialize_uccl(
@@ -317,7 +332,7 @@ class Buffer:
         packed_recv_x = torch.empty(
             (num_local_experts, num_recv_tokens, x.size(1)),
             device=x.device,
-            dtype=torch.float8_e4m3fn if use_fp8 else torch.bfloat16,
+            dtype=_fp8_e4m3_dtype() if use_fp8 else torch.bfloat16,
         )
         packed_recv_count = torch.empty(
             (num_local_experts,), device=x.device, dtype=torch.int32
@@ -652,6 +667,7 @@ class Buffer:
             torch.float64: 8,
             torch.bool: 9,
             torch.float8_e4m3fn: 10,
+            torch.float8_e4m3fnuz: 10,
         }
         if dtype not in table:
             raise ValueError(f"Unsupported dtype for uccl combine: {dtype}")

@@ -606,15 +606,6 @@ def initialize_uccl(
             proxy.start_dual()
 
     workers = None
-    # if hasattr(ep, "PeerCopyManager"):
-    #     try:
-    #         workers = ep.PeerCopyManager(src_device=local_rank)
-    #         workers.start_for_proxies(proxies)
-    #         if rank == 0:
-    #             print("✓ PeerCopyManager started", flush=True)
-    #     except Exception as e:
-    #         if rank == 0:
-    #             print(f"PeerCopyManager unavailable: {e}", flush=True)
 
     time.sleep(3)
     return proxies, workers
@@ -649,14 +640,26 @@ def destroy_uccl(proxies, workers):
         pass
 
 
+def _fp8_e4m3_dtype() -> torch.dtype:
+    """Return the correct FP8 E4M3 dtype for the current GPU."""
+    if hasattr(torch.version, "hip") and torch.version.hip is not None:
+        props = torch.cuda.get_device_properties(torch.cuda.current_device())
+        arch = getattr(props, "gcnArchName", "")
+        if arch.startswith("gfx942"):
+            return torch.float8_e4m3fnuz
+    return torch.float8_e4m3fn
+
+
 def per_token_cast_to_fp8(x: torch.Tensor):
     assert x.dim() == 2 and x.size(1) % 128 == 0
     m, n = x.shape
+    fp8_dtype = _fp8_e4m3_dtype()
+    fp8_max = 240.0 if fp8_dtype == torch.float8_e4m3fnuz else 448.0
     x_view = x.view(m, -1, 128)
     x_amax = x_view.abs().float().amax(dim=2).view(m, -1).clamp(1e-4)
-    return (x_view * (448.0 / x_amax.unsqueeze(2))).to(torch.float8_e4m3fn).view(
-        m, n
-    ), (x_amax / 448.0).view(m, -1)
+    return (x_view * (fp8_max / x_amax.unsqueeze(2))).to(fp8_dtype).view(m, n), (
+        x_amax / fp8_max
+    ).view(m, -1)
 
 
 def create_grouped_scores(

@@ -62,6 +62,19 @@
 #define gpuIpcGetEventHandle cudaIpcGetEventHandle
 #define gpuIpcOpenEventHandle cudaIpcOpenEventHandle
 #define gpuIpcCloseEventHandle cudaIpcCloseEventHandle
+// DMA-BUF / GPU driver types for GPUDirect RDMA
+#define gpuDriverResult_t CUresult
+#define gpuDevicePtr_t CUdeviceptr
+#define gpuDriverSuccess CUDA_SUCCESS
+#define gpuMemRangeHandleType CUmemRangeHandleType
+#define GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD
+#define gpuPointerAttribute_t cudaPointerAttributes
+#define gpuPointerGetAttributes cudaPointerGetAttributes
+#define gpuMemoryTypeDevice cudaMemoryTypeDevice
+#define GPU_DRIVER_LIB_NAME "libcuda.so.1"
+#define GPU_DRIVER_LIB_NAME_FALLBACK "libcuda.so"
+#define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \
+  "cuMemGetHandleForAddressRange"
 inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
                                         void* ptr) {
   CUdeviceptr base;
@@ -135,8 +148,25 @@ inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
 #define gpuIpcGetEventHandle hipIpcGetEventHandle
 #define gpuIpcOpenEventHandle hipIpcOpenEventHandle
 #define gpuIpcCloseEventHandle(handle) (gpuSuccess)
+// DMA-BUF / GPU driver types for GPUDirect RDMA
+#define gpuDriverResult_t hipError_t
+#define gpuDevicePtr_t hipDeviceptr_t
+#define gpuDriverSuccess hipSuccess
+#define gpuMemRangeHandleType hipMemRangeHandleType
+#define GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD hipMemRangeHandleTypeDmaBufFd
+#define gpuPointerAttribute_t hipPointerAttribute_t
+#define gpuPointerGetAttributes hipPointerGetAttributes
+#define gpuMemoryTypeDevice hipMemoryTypeDevice
+#define GPU_DRIVER_LIB_NAME "libamdhip64.so"
+#define GPU_DRIVER_LIB_NAME_FALLBACK "libamdhip64.so"
+#define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \
+  "hipMemGetHandleForAddressRange"
 #define gpuMemGetAddressRange hipMemGetAddressRange
 #endif
+
+// Function pointer type for DMA-BUF handle export (loaded via dlsym)
+typedef gpuDriverResult_t (*gpuMemGetHandleForAddressRange_fn)(
+    void*, gpuDevicePtr_t, size_t, gpuMemRangeHandleType, unsigned long long);
 
 #define GPU_RT_CHECK(call)                                         \
   do {                                                             \

@@ -1,0 +1,98 @@
+Bootstrap: docker
+From: {{ BASE_IMAGE }}
+
+%arguments
+    BASE_IMAGE=nvidia/cuda:12.8.0-devel-ubuntu22.04
+    PY_VER=3.13
+
+%environment
+    export DEBIAN_FRONTEND=noninteractive
+    export PATH=/usr/local/bin:$PATH
+
+%post
+    set -e
+    export PY_VER={{ PY_VER }}
+    export DEBIAN_FRONTEND=noninteractive
+
+    rm -f /etc/apt/sources.list.d/cuda*.list /etc/apt/sources.list.d/nvidia-ml.list || true
+
+    # ─────────────────────────────────────────────────────────
+    # Basic build & runtime dependencies
+    # ─────────────────────────────────────────────────────────
+    apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common \
+        build-essential cmake git ninja-build g++ make patchelf \
+        rdma-core libibverbs-dev libnuma-dev \
+        libgflags-dev libgtest-dev libelf-dev \
+        pkg-config zlib1g-dev curl unzip
+
+    # ───── Add Python ${PY_VER} PPA & install Python ${PY_VER} + setuptools ─────
+    add-apt-repository ppa:deadsnakes/ppa
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        python{{ PY_VER }} \
+        python{{ PY_VER }}-dev \
+        python{{ PY_VER }}-venv
+
+    # ───── Bootstrap pip for Python {{ PY_VER }} ─────
+    curl -sS https://bootstrap.pypa.io/get-pip.py | python{{ PY_VER }}
+    ln -sf /usr/bin/pip{{ PY_VER }} /usr/local/bin/pip
+    ln -sf /usr/bin/python{{ PY_VER }} /usr/local/bin/python{{ PY_VER }}
+
+    # ───── Clean up apt cache ─────
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+    # ───── Install Dependencies ─────
+    apt-get update && apt-get install -y \
+        environment-modules pciutils tcl tcl-dev libtcl8.6 \
+        curl gnupg2 software-properties-common \
+        build-essential libevent-dev libhwloc-dev \
+        libevent-2.1-7 libhwloc15
+
+    # ───── Symlink to expected names ─────
+    ln -s /usr/lib/x86_64-linux-gnu/libevent_core-2.1.so.7 /usr/lib/x86_64-linux-gnu/libevent-core-2.1-7.so && \
+    ln -s /usr/lib/x86_64-linux-gnu/libevent_pthreads-2.1.so.7 /usr/lib/x86_64-linux-gnu/libevent-pthreads-2.1-7.so && \
+    ln -s /usr/lib/x86_64-linux-gnu/libhwloc.so.15 /usr/lib/x86_64-linux-gnu/libhwloc15.so
+
+    # ───── Install EFA installer (without kernel driver) ─────
+    EFA_VER=1.42.0
+    curl -O https://efa-installer.amazonaws.com/aws-efa-installer-${EFA_VER}.tar.gz && \
+        tar -xf aws-efa-installer-${EFA_VER}.tar.gz && \
+        cd aws-efa-installer && \
+        ./efa_installer.sh -y --skip-kmod -g --no-verify && \
+        cd .. && rm -rf aws-efa-installer*
+
+    # ───── Verify libfabric installation ─────
+    ls /opt/amazon/efa
+
+    # ───── Set path to EFA libraries ─────
+    LD_LIBRARY_PATH=/opt/amazon/efa/lib64:$LD_LIBRARY_PATH
+
+    # ───── Install PyTorch with CUDA support ─────
+    CUDA_MAJOR=$(nvcc --version | grep -oP 'release \K[0-9]+')
+
+    if [ "$CUDA_MAJOR" -ge 13 ]; then
+        TORCH_INDEX="https://download.pytorch.org/whl/cu130"
+    else
+        TORCH_INDEX="https://download.pytorch.org/whl/cu128"
+    fi
+
+    echo "Detected CUDA major version: ${CUDA_MAJOR}, using index: ${TORCH_INDEX}"
+
+    python{{ PY_VER }} -m pip install --no-cache-dir torch torchvision torchaudio --index-url "${TORCH_INDEX}"
+
+    # ─────────────────────────────────────────────────────────
+    # Install Python build back-end (for Python ${PY_VER})
+    # ─────────────────────────────────────────────────────────
+    python{{ PY_VER }} -m pip install --no-cache-dir build auditwheel pybind11 nanobind
+    python{{ PY_VER }} -m pip install --no-cache-dir --upgrade setuptools
+
+
+    # ───── Set Python ${PY_VER} as default python3 and python3-config ─────
+    ln -sf /usr/bin/python{{ PY_VER }} /usr/local/bin/python3
+    ln -sf /usr/bin/python{{ PY_VER }}-config /usr/local/bin/python3-config
+
+    mkdir -p /io
+
+%runscript
+    exec bash "$@"

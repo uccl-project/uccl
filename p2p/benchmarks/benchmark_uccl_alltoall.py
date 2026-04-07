@@ -257,7 +257,6 @@ def run_ring_p2p(
 
 def main():
     p = argparse.ArgumentParser(description="Benchmark UCCL Collective for Alltoall")
-    p.add_argument("--num-cpus", type=int, default=4, help="#CPU threads for RDMA ops")
 
     # 修改为支持多个 block-size
     p.add_argument(
@@ -297,7 +296,7 @@ def main():
     results = []
 
     try:
-        collective.init_collective(args.num_cpus)
+        collective.init_collective()
         print(f"[Rank {rank}] UCCL Collective initialized successfully")
         dist.barrier()
         global_rank = dist.get_rank()

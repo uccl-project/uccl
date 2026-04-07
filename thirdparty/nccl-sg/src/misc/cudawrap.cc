@@ -57,53 +57,54 @@ int ncclCuMemHostEnable() {
 #endif
 }
 
-#define DECLARE_CUDA_PFN(symbol) PFN_##symbol pfn_##symbol = nullptr
+/* Must match cudawrap.h versioned PFN types (CUDA 13+ only has versioned types). */
+#define DECLARE_CUDA_PFN(symbol, version) PFN_##symbol##_v##version pfn_##symbol = nullptr
 
 #if CUDART_VERSION >= 11030
 /* CUDA Driver functions loaded with cuGetProcAddress for versioning */
-DECLARE_CUDA_PFN(cuDeviceGet);
-DECLARE_CUDA_PFN(cuDeviceGetAttribute);
-DECLARE_CUDA_PFN(cuGetErrorString);
-DECLARE_CUDA_PFN(cuGetErrorName);
+DECLARE_CUDA_PFN(cuDeviceGet, 2000);
+DECLARE_CUDA_PFN(cuDeviceGetAttribute, 2000);
+DECLARE_CUDA_PFN(cuGetErrorString, 6000);
+DECLARE_CUDA_PFN(cuGetErrorName, 6000);
 /* enqueue.cc */
-DECLARE_CUDA_PFN(cuMemGetAddressRange);
-DECLARE_CUDA_PFN(cuLaunchKernel);
+DECLARE_CUDA_PFN(cuMemGetAddressRange, 3020);
+DECLARE_CUDA_PFN(cuLaunchKernel, 4000);
 #if CUDA_VERSION >= 11080
-DECLARE_CUDA_PFN(cuLaunchKernelEx);
+DECLARE_CUDA_PFN(cuLaunchKernelEx, 11060);
 #endif
 /* proxy.cc */
-DECLARE_CUDA_PFN(cuCtxCreate);
-DECLARE_CUDA_PFN(cuCtxDestroy);
-DECLARE_CUDA_PFN(cuCtxGetCurrent);
-DECLARE_CUDA_PFN(cuCtxSetCurrent);
-DECLARE_CUDA_PFN(cuCtxGetDevice);
+DECLARE_CUDA_PFN(cuCtxCreate, 11040);
+DECLARE_CUDA_PFN(cuCtxDestroy, 4000);
+DECLARE_CUDA_PFN(cuCtxGetCurrent, 4000);
+DECLARE_CUDA_PFN(cuCtxSetCurrent, 4000);
+DECLARE_CUDA_PFN(cuCtxGetDevice, 2000);
 /* cuMem API support */
-DECLARE_CUDA_PFN(cuMemAddressReserve);
-DECLARE_CUDA_PFN(cuMemAddressFree);
-DECLARE_CUDA_PFN(cuMemCreate);
-DECLARE_CUDA_PFN(cuMemGetAllocationGranularity);
-DECLARE_CUDA_PFN(cuMemExportToShareableHandle);
-DECLARE_CUDA_PFN(cuMemImportFromShareableHandle);
-DECLARE_CUDA_PFN(cuMemMap);
-DECLARE_CUDA_PFN(cuMemRelease);
-DECLARE_CUDA_PFN(cuMemRetainAllocationHandle);
-DECLARE_CUDA_PFN(cuMemSetAccess);
-DECLARE_CUDA_PFN(cuMemUnmap);
-DECLARE_CUDA_PFN(cuMemGetAllocationPropertiesFromHandle);
+DECLARE_CUDA_PFN(cuMemAddressReserve, 10020);
+DECLARE_CUDA_PFN(cuMemAddressFree, 10020);
+DECLARE_CUDA_PFN(cuMemCreate, 10020);
+DECLARE_CUDA_PFN(cuMemGetAllocationGranularity, 10020);
+DECLARE_CUDA_PFN(cuMemExportToShareableHandle, 10020);
+DECLARE_CUDA_PFN(cuMemImportFromShareableHandle, 10020);
+DECLARE_CUDA_PFN(cuMemMap, 10020);
+DECLARE_CUDA_PFN(cuMemRelease, 10020);
+DECLARE_CUDA_PFN(cuMemRetainAllocationHandle, 11000);
+DECLARE_CUDA_PFN(cuMemSetAccess, 10020);
+DECLARE_CUDA_PFN(cuMemUnmap, 10020);
+DECLARE_CUDA_PFN(cuMemGetAllocationPropertiesFromHandle, 10020);
 /* ncclMemAlloc/Free */
-DECLARE_CUDA_PFN(cuPointerGetAttribute);
+DECLARE_CUDA_PFN(cuPointerGetAttribute, 4000);
 #if CUDA_VERSION >= 11070
 /* transport/collNet.cc/net.cc*/
-DECLARE_CUDA_PFN(cuMemGetHandleForAddressRange); // DMA-BUF support
+DECLARE_CUDA_PFN(cuMemGetHandleForAddressRange, 11070); // DMA-BUF support
 #endif
 #if CUDA_VERSION >= 12010
 /* NVSwitch Multicast support */
-DECLARE_CUDA_PFN(cuMulticastAddDevice);
-DECLARE_CUDA_PFN(cuMulticastBindMem);
-DECLARE_CUDA_PFN(cuMulticastBindAddr);
-DECLARE_CUDA_PFN(cuMulticastCreate);
-DECLARE_CUDA_PFN(cuMulticastGetGranularity);
-DECLARE_CUDA_PFN(cuMulticastUnbind);
+DECLARE_CUDA_PFN(cuMulticastAddDevice, 12010);
+DECLARE_CUDA_PFN(cuMulticastBindMem, 12010);
+DECLARE_CUDA_PFN(cuMulticastBindAddr, 12010);
+DECLARE_CUDA_PFN(cuMulticastCreate, 12010);
+DECLARE_CUDA_PFN(cuMulticastGetGranularity, 12010);
+DECLARE_CUDA_PFN(cuMulticastUnbind, 12010);
 #endif
 #endif
 
