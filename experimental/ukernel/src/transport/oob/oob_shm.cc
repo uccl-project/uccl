@@ -1,5 +1,5 @@
-#include "oob.h"
 #include "../util/utils.h"
+#include "oob.h"
 #include <chrono>
 #include <thread>
 #include <fcntl.h>
@@ -78,8 +78,8 @@ ShmRingExchanger::~ShmRingExchanger() {
 
     if (peer->remote_inbox.ring != nullptr && peer->remote_inbox.attached) {
       UKernel::Transport::detach_shared_ring(peer->remote_inbox.ring,
-                               peer->remote_inbox.shm_fd,
-                               peer->remote_inbox.shm_size);
+                                             peer->remote_inbox.shm_fd,
+                                             peer->remote_inbox.shm_size);
     }
     if (peer->local_inbox.ring != nullptr) {
       if (peer->local_inbox.creator) {
@@ -88,8 +88,8 @@ ShmRingExchanger::~ShmRingExchanger() {
             peer->local_inbox.shm_fd, peer->local_inbox.shm_size);
       } else {
         UKernel::Transport::detach_shared_ring(peer->local_inbox.ring,
-                                 peer->local_inbox.shm_fd,
-                                 peer->local_inbox.shm_size);
+                                               peer->local_inbox.shm_fd,
+                                               peer->local_inbox.shm_size);
       }
     }
   }
@@ -378,8 +378,8 @@ void ShmRingExchanger::close_peer(int peer_rank) {
   if (peer) {
     if (peer->remote_inbox.ring != nullptr && peer->remote_inbox.attached) {
       UKernel::Transport::detach_shared_ring(peer->remote_inbox.ring,
-                               peer->remote_inbox.shm_fd,
-                               peer->remote_inbox.shm_size);
+                                             peer->remote_inbox.shm_fd,
+                                             peer->remote_inbox.shm_size);
     }
     if (peer->local_inbox.ring != nullptr) {
       if (peer->local_inbox.creator) {
@@ -388,8 +388,8 @@ void ShmRingExchanger::close_peer(int peer_rank) {
             peer->local_inbox.shm_fd, peer->local_inbox.shm_size);
       } else {
         UKernel::Transport::detach_shared_ring(peer->local_inbox.ring,
-                                 peer->local_inbox.shm_fd,
-                                 peer->local_inbox.shm_size);
+                                               peer->local_inbox.shm_fd,
+                                               peer->local_inbox.shm_size);
       }
     }
   }
@@ -416,8 +416,9 @@ std::string ShmRingExchanger::ring_name(int from_rank, int to_rank) const {
     int local_id = peer_local_ids_[static_cast<size_t>(rank)];
     return local_id >= 0 ? local_id : rank;
   };
-  return UKernel::Transport::Format("/uk_t_oob_%s_l%d_l%d", ring_namespace_.c_str(),
-                      resolve_local_id(from_rank), resolve_local_id(to_rank));
+  return UKernel::Transport::Format(
+      "/uk_t_oob_%s_l%d_l%d", ring_namespace_.c_str(),
+      resolve_local_id(from_rank), resolve_local_id(to_rank));
 }
 
 static std::vector<std::string>* g_created_rings = nullptr;

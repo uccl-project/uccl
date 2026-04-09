@@ -61,11 +61,12 @@ inline std::string Format(char const* fmt, ...) {
 constexpr std::size_t kRingAlignment = 64;
 
 inline jring_t* create_ring(size_t element_size, size_t element_count) {
-  size_t ring_sz = jring_get_buf_ring_size(
-      static_cast<uint32_t>(element_size), static_cast<uint32_t>(element_count));
+  size_t ring_sz =
+      jring_get_buf_ring_size(static_cast<uint32_t>(element_size),
+                              static_cast<uint32_t>(element_count));
   if (ring_sz == static_cast<size_t>(-1)) return nullptr;
-  jring_t* ring = reinterpret_cast<jring_t*>(
-      aligned_alloc(kRingAlignment, ring_sz));
+  jring_t* ring =
+      reinterpret_cast<jring_t*>(aligned_alloc(kRingAlignment, ring_sz));
   if (ring == nullptr) return nullptr;
   if (jring_init(ring, static_cast<uint32_t>(element_count),
                  static_cast<uint32_t>(element_size), 1, 1) < 0) {
@@ -93,8 +94,8 @@ inline jring_t* attach_shared_ring(char const* shm_name, int& shm_fd,
 inline jring_t* create_shared_ring(char const* shm_name, size_t element_size,
                                    size_t element_count, int& shm_fd,
                                    size_t& shm_size, bool* is_creator) {
-  shm_size = jring_get_buf_ring_size(
-      static_cast<uint32_t>(element_size), static_cast<uint32_t>(element_count));
+  shm_size = jring_get_buf_ring_size(static_cast<uint32_t>(element_size),
+                                     static_cast<uint32_t>(element_count));
   if (shm_size == static_cast<size_t>(-1)) return nullptr;
 
   shm_fd = shm_open(shm_name, O_CREAT | O_EXCL | O_RDWR, 0666);

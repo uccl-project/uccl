@@ -51,8 +51,7 @@ class MRManager {
   DeregisterFn deregister_fn_;
 
   mutable std::mutex remote_mu_;
-  std::unordered_map<int, std::unordered_map<uint32_t, MRItem>>
-      remote_by_rank_;
+  std::unordered_map<int, std::unordered_map<uint32_t, MRItem>> remote_by_rank_;
 };
 
 }  // namespace Transport

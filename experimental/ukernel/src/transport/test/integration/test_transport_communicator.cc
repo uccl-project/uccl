@@ -1,6 +1,6 @@
+#include "../../util/utils.h"
 #include "test_utils.h"
 #include "transport.h"
-#include "../../util/utils.h"
 #include <chrono>
 #include <cstdint>
 #include <cstring>

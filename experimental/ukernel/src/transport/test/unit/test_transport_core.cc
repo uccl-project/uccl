@@ -122,7 +122,8 @@ void test_memory_manager() {
   require(!mrm.get_mr(buf_a.data() + buf_a.size() / 2 + 1).valid,
           "lookup beyond resized range should fail");
 
-  require(mrm.delete_mr(buf_a.data()), "resized local MR delete should succeed");
+  require(mrm.delete_mr(buf_a.data()),
+          "resized local MR delete should succeed");
   require(dereg_ids.size() == 2 && dereg_ids.back() == resized.mr.id,
           "resized local MR delete should trigger backend deregister");
   require(!mrm.get_mr(buf_a.data()).valid,
@@ -131,8 +132,7 @@ void test_memory_manager() {
   require(!mrm.delete_mr(buf_a.data()),
           "released resized buffer should no longer be tracked");
 
-  require(mrm.delete_mr(buf_b.data()),
-          "single-use MR should be deletable");
+  require(mrm.delete_mr(buf_b.data()), "single-use MR should be deletable");
   require(dereg_ids.size() == 3 && dereg_ids.back() == mr_b.id,
           "single-use local MR delete should trigger backend deregister");
 
@@ -159,9 +159,9 @@ void test_memory_manager() {
           "sync_local_backend should register pre-existing local MR");
   require(late_bound.delete_mr(buf_c.data()),
           "late-bound local MR delete should succeed");
-  require(late_dereg_ids.size() == 1 &&
-              late_dereg_ids.back() == tracked_c.mr.id,
-          "late-bound local MR delete should trigger backend deregister");
+  require(
+      late_dereg_ids.size() == 1 && late_dereg_ids.back() == tracked_c.mr.id,
+      "late-bound local MR delete should trigger backend deregister");
 }
 
 void test_request_completion() {

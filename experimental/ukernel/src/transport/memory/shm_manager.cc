@@ -2,8 +2,8 @@
 #include "../oob/oob.h"
 #include <stdexcept>
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace UKernel {

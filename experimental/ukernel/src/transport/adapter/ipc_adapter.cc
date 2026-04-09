@@ -46,8 +46,10 @@ IpcChannel::IpcChannel(Communicator* comm)
     : next_match_seq_per_peer_(comm->world_size(),
                                std::array<uint64_t, 2>{1, 1}),
       comm_(comm) {
-  send_task_ring_ = UKernel::Transport::create_ring(sizeof(IpcTask*), kTaskRingSize);
-  recv_task_ring_ = UKernel::Transport::create_ring(sizeof(IpcTask*), kTaskRingSize);
+  send_task_ring_ =
+      UKernel::Transport::create_ring(sizeof(IpcTask*), kTaskRingSize);
+  recv_task_ring_ =
+      UKernel::Transport::create_ring(sizeof(IpcTask*), kTaskRingSize);
   stop_.store(false);
   send_thread_ = std::thread([this] { send_thread_func(); });
   recv_thread_ = std::thread([this] { recv_thread_func(); });
@@ -280,8 +282,8 @@ bool IpcChannel::send_one(int to_rank, Request* creq, void* bounce_ptr,
 
   int orig_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
-  auto dev_reset =
-      UKernel::Transport::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+  auto dev_reset = UKernel::Transport::finally(
+      [&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx_));
   auto wait_sender_ack = [&](int timeout_ms, uint32_t* out_status) -> int {
@@ -527,8 +529,8 @@ bool IpcChannel::recv_one(int from_rank, Request* creq, void* bounce_ptr,
 
   int orig_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
-  auto dev_reset =
-      UKernel::Transport::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+  auto dev_reset = UKernel::Transport::finally(
+      [&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   auto wait_sender_ack = [&](int timeout_ms, uint32_t* out_status) -> int {
     uint64_t out_seq = 0;

@@ -3,7 +3,8 @@
 namespace UKernel {
 namespace Transport {
 
-void MRManager::bind_backend(RegisterFn register_fn, DeregisterFn deregister_fn) {
+void MRManager::bind_backend(RegisterFn register_fn,
+                             DeregisterFn deregister_fn) {
   std::lock_guard<std::mutex> lk(local_mu_);
   register_fn_ = std::move(register_fn);
   deregister_fn_ = std::move(deregister_fn);
@@ -16,7 +17,8 @@ void MRManager::sync_local_backend() {
     (void)ptr;
     if (!item.valid || item.backend_registered) continue;
     item.backend_registered = register_fn_(
-        item.mr.id, reinterpret_cast<void*>(static_cast<uintptr_t>(item.mr.address)),
+        item.mr.id,
+        reinterpret_cast<void*>(static_cast<uintptr_t>(item.mr.address)),
         static_cast<size_t>(item.mr.length));
   }
 }
@@ -68,7 +70,8 @@ bool MRManager::register_remote_mr(int rank, MRItem const& item) {
   return true;
 }
 
-void MRManager::register_remote_mrs(int rank, std::vector<MRItem> const& items) {
+void MRManager::register_remote_mrs(int rank,
+                                    std::vector<MRItem> const& items) {
   std::lock_guard<std::mutex> lk(remote_mu_);
   auto& dst = remote_by_rank_[rank];
   for (auto const& item : items) {

@@ -883,8 +883,8 @@ bool Communicator::complete_host_bounce_recv(TrackedRequest& tracked,
 
   int orig_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
-  auto dev_reset =
-      UKernel::Transport::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+  auto dev_reset = UKernel::Transport::finally(
+      [&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
   if (!tracked.host_copy_submitted) {
@@ -985,8 +985,8 @@ unsigned Communicator::isend(int rank, LocalSlice src,
     // Request-scoped lease for send bounce memory. Current design allocates
     // and frees per request; this is intentionally simple but not optimal for
     // steady-state throughput. Poolization can be added in a follow-up PR.
-    bounce_owner = std::shared_ptr<SHMItem>(
-        new SHMItem{}, [this](SHMItem* lease) {
+    bounce_owner =
+        std::shared_ptr<SHMItem>(new SHMItem{}, [this](SHMItem* lease) {
           if (lease != nullptr) {
             if (shm_manager_ != nullptr && lease->valid) {
               (void)mr_manager_.delete_mr(lease->ptr);
@@ -1013,7 +1013,8 @@ unsigned Communicator::isend(int rank, LocalSlice src,
       info.mr_id = mr.mr.id;
     }
     if (bounce_owner->shareable) {
-      info.shm_name = shm_manager_->get_local_shm(bounce_owner->shm_id).shm_name;
+      info.shm_name =
+          shm_manager_->get_local_shm(bounce_owner->shm_id).shm_name;
     }
     return info;
   };
@@ -1107,7 +1108,8 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
       info.mr_id = mr.mr.id;
     }
     if (tracked.bounce.shareable) {
-      info.shm_name = shm_manager_->get_local_shm(tracked.bounce.shm_id).shm_name;
+      info.shm_name =
+          shm_manager_->get_local_shm(tracked.bounce.shm_id).shm_name;
     }
     return info;
   };
@@ -1373,15 +1375,16 @@ bool Communicator::notify_ipc_buffer(int remote_rank, uint32_t ipc_id,
   if (local_buf != nullptr && len != 0) {
     int original_device = -1;
     GPU_RT_CHECK(gpuGetDevice(&original_device));
-    auto restore =
-        UKernel::Transport::finally([&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
+    auto restore = UKernel::Transport::finally(
+        [&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
     GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-    auto exported = ipc_manager_.create_local_ipc(local_buf, len, local_gpu_idx_);
+    auto exported =
+        ipc_manager_.create_local_ipc(local_buf, len, local_gpu_idx_);
     if (!exported.valid) return false;
 
     info.handle = exported.handle;
-    info.base_offset = reinterpret_cast<uintptr_t>(local_buf) -
-                       exported.base_addr;
+    info.base_offset =
+        reinterpret_cast<uintptr_t>(local_buf) - exported.base_addr;
     info.bytes = len;
     info.device_idx = exported.device_idx;
     info.valid = true;
@@ -1521,8 +1524,8 @@ bool Communicator::resolve_ipc_buffer_pointer(int remote_rank, uint32_t ipc_id,
 
   int original_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&original_device));
-  auto restore =
-      UKernel::Transport::finally([&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
+  auto restore = UKernel::Transport::finally(
+      [&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
   if (state.direct_ptr == nullptr) {
@@ -1555,7 +1558,7 @@ bool Communicator::register_remote_ipc_cache(int remote_rank,
 }
 
 IPCItem Communicator::get_remote_ipc_cache(int remote_rank,
-                                             gpuIpcMemHandle_t handle) {
+                                           gpuIpcMemHandle_t handle) {
   return ipc_manager_.get_ipc(remote_rank, handle);
 }
 

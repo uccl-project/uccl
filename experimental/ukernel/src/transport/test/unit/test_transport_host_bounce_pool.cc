@@ -16,15 +16,18 @@ void test_shm_create_delete_and_map() {
   require(a.valid && b.valid, "shm items should be valid");
   require(a.bytes == 1024 && b.bytes == 2048, "shm item sizes should match");
   require(a.shm_id != b.shm_id, "shm ids should be unique");
-  require(!a.shareable && b.shareable, "shareability should follow creation mode");
+  require(!a.shareable && b.shareable,
+          "shareability should follow creation mode");
 
   auto mapped = shm.open_remote_shm(b.shm_name);
   require(mapped.valid && mapped.ptr != nullptr, "mapped shm should be valid");
 
   require(shm.delete_local_shm(a.shm_id),
           "delete local anonymous shm should succeed");
-  require(shm.delete_local_shm(b.shm_id), "delete local shared shm should succeed");
-  require(shm.close_remote_shm(b.shm_name), "delete mapped shm cache should succeed");
+  require(shm.delete_local_shm(b.shm_id),
+          "delete local shared shm should succeed");
+  require(shm.close_remote_shm(b.shm_name),
+          "delete mapped shm cache should succeed");
 }
 
 }  // namespace
