@@ -42,6 +42,11 @@ OBJ_CC   := $(SRC_CPP:.cc=.o)
 OBJ_CU   := $(SRC_CU:.cu=.o)
 OBJ_TEST := $(SRC_TEST:.cc=.o)
 
+# Benchmark files
+BENCH_SRC := benchmarks/bench_transport.cc
+BENCH_OBJ := $(BENCH_SRC:.cc=.o)
+BENCH_BIN := bench_transport
+
 # Targets
 STATIC_LIB  := libukernel.a
 SHARED_LIB  := libukernel.so
@@ -67,15 +72,18 @@ $(SHARED_LIB): $(OBJ_CC) $(OBJ_CU)
 $(TARGET_TEST): $(OBJ_TEST) $(STATIC_LIB)
 	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(OBJ_TEST) $(STATIC_LIB) -lamdhip64 $(LDFLAGS) -o $@
 
+$(BENCH_BIN): $(BENCH_OBJ) $(STATIC_LIB)
+	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(BENCH_OBJ) $(STATIC_LIB) -lamdhip64 $(LDFLAGS) -o $@
+
 # Run tests
 run_test: $(TARGET_TEST)
 	./$(TARGET_TEST)
 
 # Clean rule
 clean:
-	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) $(TARGET_TEST) $(STATIC_LIB) $(SHARED_LIB) *.d src/*.d src/ccl/test/*.d src/transport/*.d
+	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) $(BENCH_OBJ) $(TARGET_TEST) $(BENCH_BIN) $(STATIC_LIB) $(SHARED_LIB) *.d src/*.d src/ccl/test/*.d src/transport/*.d benchmarks/*.d
 
 # Include dependencies
--include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_TEST:.o=.d)
+-include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_TEST:.o=.d) $(BENCH_OBJ:.o=.d)
 
 .PHONY: all clean run_test
