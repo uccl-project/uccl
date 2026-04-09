@@ -1,6 +1,6 @@
 #include "communicator.h"
 #include "adapter/ipc_adapter.h"
-#include "utils.h"
+#include "util/utils.h"
 #include <arpa/inet.h>
 #include <infiniband/verbs.h>
 #include <netinet/in.h>
@@ -884,7 +884,7 @@ bool Communicator::complete_host_bounce_recv(TrackedRequest& tracked,
   int orig_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
   auto dev_reset =
-      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+      UKernel::Transport::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
   if (!tracked.host_copy_submitted) {
@@ -1374,7 +1374,7 @@ bool Communicator::notify_ipc_buffer(int remote_rank, uint32_t ipc_id,
     int original_device = -1;
     GPU_RT_CHECK(gpuGetDevice(&original_device));
     auto restore =
-        uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
+        UKernel::Transport::finally([&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
     GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
     auto exported = ipc_manager_.create_local_ipc(local_buf, len, local_gpu_idx_);
     if (!exported.valid) return false;
@@ -1522,7 +1522,7 @@ bool Communicator::resolve_ipc_buffer_pointer(int remote_rank, uint32_t ipc_id,
   int original_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&original_device));
   auto restore =
-      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
+      UKernel::Transport::finally([&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
   if (state.direct_ptr == nullptr) {

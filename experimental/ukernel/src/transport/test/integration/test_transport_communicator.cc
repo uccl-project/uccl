@@ -1,6 +1,6 @@
 #include "test_utils.h"
 #include "transport.h"
-#include "util/util.h"
+#include "../../util/utils.h"
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -84,7 +84,7 @@ int run_exchange_client(std::string const& exchanger_ip, int exchanger_port,
   GPU_RT_CHECK(gpuSetDevice(kClientGpu));
   void* sendbuf_d = nullptr;
   GPU_RT_CHECK(gpuMalloc(&sendbuf_d, kMessageBytes));
-  auto free_buf = uccl::finally([&] { gpuFree(sendbuf_d); });
+  auto free_buf = UKernel::Transport::finally([&] { gpuFree(sendbuf_d); });
 
   std::vector<uint8_t> send_host(kMessageBytes);
   fill_pattern(send_host, 0x10);
@@ -125,7 +125,7 @@ int run_exchange_server(std::string const& exchanger_ip, int exchanger_port,
   GPU_RT_CHECK(gpuSetDevice(kServerGpu));
   void* recvbuf_d = nullptr;
   GPU_RT_CHECK(gpuMalloc(&recvbuf_d, kMessageBytes));
-  auto free_buf = uccl::finally([&] { gpuFree(recvbuf_d); });
+  auto free_buf = UKernel::Transport::finally([&] { gpuFree(recvbuf_d); });
   GPU_RT_CHECK(gpuMemset(recvbuf_d, 0, kMessageBytes));
 
   MR recv_mr = comm->reg_mr(recvbuf_d, kMessageBytes);
@@ -165,7 +165,7 @@ int run_ipc_buffer_metadata_client(
   GPU_RT_CHECK(gpuSetDevice(kClientGpu));
   void* buf = nullptr;
   GPU_RT_CHECK(gpuMalloc(&buf, 4096));
-  auto free_buf = uccl::finally([&] { gpuFree(buf); });
+  auto free_buf = UKernel::Transport::finally([&] { gpuFree(buf); });
 
   constexpr uint32_t kValidIpcId = 4242;
   require(comm->notify_ipc_buffer(kServerRank, kValidIpcId, buf, 4096),
@@ -246,7 +246,7 @@ void test_transport_communicator_local() {
     GPU_RT_CHECK(gpuSetDevice(0));
     void* buf = nullptr;
     GPU_RT_CHECK(gpuMalloc(&buf, 4096));
-    auto free_buf = uccl::finally([&] { gpuFree(buf); });
+    auto free_buf = UKernel::Transport::finally([&] { gpuFree(buf); });
 
     MR mr0 = comm->reg_mr(buf, 4096);
     MR mr1 = comm->reg_mr(buf, 4096);

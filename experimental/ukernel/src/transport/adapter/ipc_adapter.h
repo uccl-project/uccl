@@ -5,7 +5,7 @@
 #include "gpu_rt.h"
 #include "request.h"
 #include "transport_adapter.h"
-#include "util/jring.h"
+#include "../util/jring.h"
 #include <array>
 #include <atomic>
 #include <condition_variable>

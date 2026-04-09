@@ -2,7 +2,7 @@
 
 #include "../../include/config.h"
 #include "../../include/gpu_rt.h"
-#include "util/jring.h"
+#include "../util/jring.h"
 #include <atomic>
 #include <chrono>
 #include <cstdint>

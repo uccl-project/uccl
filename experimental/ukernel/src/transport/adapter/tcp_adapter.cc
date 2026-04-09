@@ -1,4 +1,5 @@
 #include "tcp_adapter.h"
+#include "gpu_rt.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <cerrno>
