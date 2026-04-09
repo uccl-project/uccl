@@ -481,18 +481,19 @@ bool IpcChannel::send_one(int to_rank, Request* creq, void* bounce_ptr,
     return relay_via_bounce(seq);
   }
 
-  RemoteIpc ipc = comm_->get_remote_ipc_cache(to_rank, got.handle);
+  IPCItem ipc = comm_->get_remote_ipc_cache(to_rank, got.handle);
   void* base = ipc.direct_ptr;
   if (base == nullptr) {
     GPU_RT_CHECK(
         gpuIpcOpenMemHandle(&base, got.handle, gpuIpcMemLazyEnablePeerAccess));
 
-    RemoteIpc new_ipc{};
+    IPCItem new_ipc{};
     new_ipc.handle = got.handle;
     new_ipc.direct_ptr = base;
-    new_ipc.offset = got.offset;
-    new_ipc.size = got.size;
+    new_ipc.base_offset = got.offset;
+    new_ipc.bytes = got.size;
     new_ipc.device_idx = static_cast<int>(got.remote_gpu_idx_);
+    new_ipc.valid = true;
     comm_->register_remote_ipc_cache(to_rank, got.handle, new_ipc);
   }
 
@@ -564,10 +565,8 @@ bool IpcChannel::recv_one(int from_rank, Request* creq, void* bounce_ptr,
       return false;
     }
 
-    void* relay_bounce_ptr = comm_->get_or_open_bounce_shm(
-        relay_cache.bounce_shm_name,
-        relay_cache.size == 0 ? creq->size_bytes
-                              : static_cast<size_t>(relay_cache.size));
+    void* relay_bounce_ptr =
+        comm_->get_or_open_bounce_shm(relay_cache.bounce_shm_name);
     if (relay_bounce_ptr == nullptr) {
       std::cerr << "[ERROR] get_or_open_bounce_shm failed for relay req "
                 << creq->id << std::endl;

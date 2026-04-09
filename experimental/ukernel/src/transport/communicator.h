@@ -4,7 +4,9 @@
 #include "adapter/tcp_adapter.h"
 #include "adapter/transport_adapter.h"
 #include "adapter/uccl_adapter.h"
-#include "memory/memory_manager.h"
+#include "memory/ipc_manager.h"
+#include "memory/mr_manager.h"
+#include "memory/shm_manager.h"
 #include "oob/oob.h"
 #include "request.h"
 #include <condition_variable>
@@ -66,10 +68,10 @@ class Communicator {
                                   int* out_device_idx);
 
   bool register_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle,
-                                 RemoteIpc const& ipc);
-  RemoteIpc get_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle);
+                                 IPCItem const& ipc);
+  IPCItem get_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle);
 
-  void* get_or_open_bounce_shm(std::string const& shm_name, size_t size);
+  void* get_or_open_bounce_shm(std::string const& shm_name);
   void clear_bounce_shm_cache();
 
  private:
@@ -99,8 +101,8 @@ class Communicator {
     size_t completion_offset = 0;
     size_t completion_bytes = 0;
     gpuEvent_t host_copy_event = nullptr;
-    BounceCpuBuffer bounce;
-    std::shared_ptr<BounceCpuBuffer> bounce_owner;
+    SHMItem bounce;
+    std::shared_ptr<SHMItem> bounce_owner;
   };
 
   UcclTransportAdapter& ensure_uccl_adapter(CommunicatorMeta const& local_meta,
@@ -112,7 +114,6 @@ class Communicator {
   void mark_peer_path_ready(int rank, PeerTransportKind kind);
   bool poll_request_completion(unsigned id, bool blocking);
   void register_existing_local_mrs_with_uccl();
-  void discard_uccl_registration(uint64_t mr_id);
   bool ensure_uccl_memory_registered(uint64_t mr_id, void* ptr, size_t len);
   bool fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
                         uint64_t expected_binding_version = 0);
@@ -135,7 +136,8 @@ class Communicator {
   int local_gpu_idx_;
   int global_rank_;
   int world_size_;
-  MemoryManager memory_mgr_;
+  MRManager mr_manager_;
+  IPCManager ipc_manager_;
   std::unique_ptr<UcclTransportAdapter> uccl_adapter_;
   std::unique_ptr<TcpTransportAdapter> tcp_adapter_;
   std::shared_ptr<IpcChannel> ipc_channel_;
@@ -147,7 +149,7 @@ class Communicator {
 
   std::shared_ptr<CommunicatorConfig> config_;
   std::shared_ptr<Exchanger> exchanger_client_;
-  std::unique_ptr<BounceCpuBufferPool> bounce_pool_;
+  std::unique_ptr<SHMManager> shm_manager_;
 
   TransportAdapter* get_adapter(int rank);
   TransportAdapter* get_adapter(PeerTransportKind kind);

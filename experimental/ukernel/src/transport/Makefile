@@ -26,7 +26,7 @@ LOCAL_INCLUDES := -I$(UCCL_ROOT)/experimental/ukernel/include -I$(UCCL_ROOT)/inc
 	-I. -Itest -Itest/common -Itest/unit -Itest/integration \
 	-I../../include -I$(CUDA_HOME)/include
 
-SRC_CPP := communicator.cc adapter/ipc_adapter.cc adapter/tcp_adapter.cc adapter/uccl_adapter.cc memory/memory_manager.cc oob/oob.cc oob/oob_shm.cc oob/oob_socket.cc request.cc utils.cc
+SRC_CPP := communicator.cc adapter/ipc_adapter.cc adapter/tcp_adapter.cc adapter/uccl_adapter.cc memory/mr_manager.cc memory/ipc_manager.cc memory/shm_manager.cc oob/oob.cc oob/oob_shm.cc oob/oob_socket.cc request.cc utils.cc
 TEST_UNIT_CPP := test/unit/test_transport_unit_main.cc \
 	test/unit/test_transport_core.cc \
 	test/unit/test_transport_oob_socket.cc \

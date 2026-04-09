@@ -1,5 +1,4 @@
 #include "tcp_adapter.h"
-#include "../memory/memory_manager.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <cerrno>

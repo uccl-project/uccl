@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../request.h"
+#include "gpu_rt.h"
 #include <cstdint>
 #include <functional>
 #include <memory>

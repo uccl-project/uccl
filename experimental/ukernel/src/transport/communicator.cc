@@ -1,6 +1,5 @@
 #include "communicator.h"
 #include "adapter/ipc_adapter.h"
-#include "memory/memory_manager.h"
 #include "utils.h"
 #include <arpa/inet.h>
 #include <infiniband/verbs.h>
@@ -245,13 +244,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
     return;
   }
 
-  bounce_pool_ = std::make_unique<BounceCpuBufferPool>(
-      [this](uint64_t mr_id, void* ptr, size_t len) {
-        return ensure_uccl_memory_registered(mr_id, ptr, len);
-      },
-      [this](uint64_t mr_id) {
-        if (uccl_adapter_) uccl_adapter_->deregister_memory(mr_id);
-      });
+  shm_manager_ = std::make_unique<SHMManager>();
 
   // Start background progress immediately so post-transport work, such as
   // host-bounce host->device copies, is not delayed until an external
@@ -356,35 +349,19 @@ Communicator::~Communicator() {
     }
   }
 
-  for (auto const& [buf, mr] : memory_mgr_.all_local_mrs()) {
+  for (auto const& [buf, item] : mr_manager_.list_local_mrs()) {
+    (void)item;
     dereg_mr(buf);
   }
 
-  memory_mgr_.clear_remote_ipc_cache();
-  {
-    int original_device = -1;
-    bool have_original_device = (gpuGetDevice(&original_device) == gpuSuccess);
-    std::unordered_set<void*> closed_ipc_ptrs;
-    for (int i = 0; i < world_size_; ++i) {
-      if (i == global_rank_) continue;
-      auto buffers = memory_mgr_.list_remote_ipc_buffers(i);
-      for (auto const& [ipc_id, buf] : buffers) {
-        (void)ipc_id;
-        if (buf.direct_ptr == nullptr) continue;
-        if (!closed_ipc_ptrs.insert(buf.direct_ptr).second) continue;
-        GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-        GPU_RT_CHECK(gpuIpcCloseMemHandle(buf.direct_ptr));
-      }
-      memory_mgr_.clear_remote_ipc_buffers(i);
-    }
-    if (have_original_device) {
-      GPU_RT_CHECK(gpuSetDevice(original_device));
-    }
+  for (int i = 0; i < world_size_; ++i) {
+    if (i == global_rank_) continue;
+    ipc_manager_.delete_ipc(i);
   }
 
   // Destroy bounce pool before uccl_adapter_ to avoid dangling references
   // in the deregister callback during pool teardown.
-  bounce_pool_.reset();
+  shm_manager_.reset();
   uccl_adapter_.reset();
   tcp_adapter_.reset();
   ipc_channel_.reset();
@@ -402,6 +379,29 @@ UcclTransportAdapter& Communicator::ensure_uccl_adapter(
     uccl_cfg.local_ip = local_meta.ip;
     uccl_adapter_ = std::make_unique<UcclTransportAdapter>(
         local_gpu_idx_, world_size_, std::move(uccl_cfg));
+
+    mr_manager_.bind_backend(
+        [this](uint32_t mr_id, void* ptr, size_t len) -> bool {
+          if (!uccl_adapter_ || !uccl_adapter_->is_initialized()) return false;
+          bool ok = uccl_adapter_->register_memory(mr_id, ptr, len);
+          std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+          if (ok) {
+            uccl_direct_reg_failed_mrs_.erase(mr_id);
+            uccl_registered_mrs_.insert(mr_id);
+          } else {
+            uccl_direct_reg_failed_mrs_.insert(mr_id);
+          }
+          return ok;
+        },
+        [this](uint32_t mr_id) {
+          if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
+            uccl_adapter_->deregister_memory(mr_id);
+          }
+          std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+          uccl_direct_reg_failed_mrs_.erase(mr_id);
+          uccl_registered_mrs_.erase(mr_id);
+        });
+    mr_manager_.sync_local_backend();
   }
   return *uccl_adapter_;
 }
@@ -810,26 +810,7 @@ bool Communicator::same_host(int rank) const {
 
 void Communicator::register_existing_local_mrs_with_uccl() {
   if (!uccl_adapter_ || !uccl_adapter_->is_initialized()) return;
-  for (auto const& [buf, mr] : memory_mgr_.all_local_mrs()) {
-    bool ok = uccl_adapter_->register_memory(mr.id, buf, mr.length);
-    std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-    if (ok) {
-      uccl_direct_reg_failed_mrs_.erase(mr.id);
-      uccl_registered_mrs_.insert(mr.id);
-    } else {
-      uccl_direct_reg_failed_mrs_.insert(mr.id);
-    }
-  }
-}
-
-void Communicator::discard_uccl_registration(uint64_t mr_id) {
-  if (mr_id == 0) return;
-  if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
-    uccl_adapter_->deregister_memory(mr_id);
-  }
-  std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-  uccl_direct_reg_failed_mrs_.erase(mr_id);
-  uccl_registered_mrs_.erase(mr_id);
+  mr_manager_.sync_local_backend();
 }
 
 bool Communicator::ensure_uccl_memory_registered(uint64_t mr_id, void* ptr,
@@ -953,9 +934,14 @@ void Communicator::cleanup_tracked_request(TrackedRequest& tracked) {
   }
   tracked.host_copy_submitted = false;
   tracked.needs_host_to_device_copy = false;
+  // NOTE: bounce memory/MR is request-scoped today. Cleanup always tears down
+  // the request-owned bounce resources. A future performance PR can replace
+  // this with a longer-lived pool and defer teardown outside request cleanup.
   tracked.bounce_owner.reset();
-  if (bounce_pool_) {
-    bounce_pool_->release(tracked.bounce);
+  if (shm_manager_ && tracked.bounce.valid) {
+    (void)mr_manager_.delete_mr(tracked.bounce.ptr);
+    shm_manager_->delete_local_shm(tracked.bounce.shm_id);
+    tracked.bounce = {};
   }
 }
 
@@ -994,13 +980,17 @@ unsigned Communicator::isend(int rank, LocalSlice src,
   TrackedRequest tracked{};
   tracked.peer_rank = rank;
   tracked.kind = peer_kind;
-  std::shared_ptr<BounceCpuBuffer> bounce_owner;
+  std::shared_ptr<SHMItem> bounce_owner;
   if (needs_bounce) {
-    bounce_owner = std::shared_ptr<BounceCpuBuffer>(
-        new BounceCpuBuffer{}, [this](BounceCpuBuffer* lease) {
+    // Request-scoped lease for send bounce memory. Current design allocates
+    // and frees per request; this is intentionally simple but not optimal for
+    // steady-state throughput. Poolization can be added in a follow-up PR.
+    bounce_owner = std::shared_ptr<SHMItem>(
+        new SHMItem{}, [this](SHMItem* lease) {
           if (lease != nullptr) {
-            if (bounce_pool_ != nullptr && lease->valid()) {
-              bounce_pool_->release(*lease);
+            if (shm_manager_ != nullptr && lease->valid) {
+              (void)mr_manager_.delete_mr(lease->ptr);
+              shm_manager_->delete_local_shm(lease->shm_id);
             }
             delete lease;
           }
@@ -1011,15 +1001,19 @@ unsigned Communicator::isend(int rank, LocalSlice src,
                           use_shareable,
                           bounce_owner](size_t bytes) -> BounceBufferInfo {
     if (!needs_bounce || !bounce_owner) return {};
-    if (!bounce_owner->valid()) {
-      *bounce_owner =
-          bounce_pool_->acquire(bytes, needs_uccl_registration, use_shareable);
+    if (!bounce_owner->valid) {
+      // Lazy allocate on first use within this request.
+      *bounce_owner = shm_manager_->create_local_shm(bytes, use_shareable);
     }
     BounceBufferInfo info;
     info.ptr = bounce_owner->ptr;
-    info.mr_id = bounce_owner->mr_id;
+    if (needs_uccl_registration) {
+      // Request-scoped bounce MR id. The MR is deleted in request cleanup.
+      auto mr = mr_manager_.create_local_mr(bounce_owner->ptr, bytes);
+      info.mr_id = mr.mr.id;
+    }
     if (bounce_owner->shareable) {
-      info.shm_name = bounce_pool_->get_shm_name(bounce_owner->slot);
+      info.shm_name = shm_manager_->get_local_shm(bounce_owner->shm_id).shm_name;
     }
     return info;
   };
@@ -1091,8 +1085,8 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
   }
 
   if (needs_bounce) {
-    tracked.bounce = bounce_pool_->acquire(dst.bytes, needs_uccl_registration,
-                                           use_shareable);
+    // Request-scoped recv bounce. It is released when this request completes.
+    tracked.bounce = shm_manager_->create_local_shm(dst.bytes, use_shareable);
     tracked.needs_host_to_device_copy = true;
     tracked.completion_buffer = local_ptr;
     tracked.completion_bytes = dst.bytes;
@@ -1101,15 +1095,19 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
   auto bounce_provider = [this, &tracked, needs_bounce, needs_uccl_registration,
                           use_shareable](size_t bytes) -> BounceBufferInfo {
     if (!needs_bounce) return {};
-    if (!tracked.bounce.valid()) {
-      tracked.bounce =
-          bounce_pool_->acquire(bytes, needs_uccl_registration, use_shareable);
+    if (!tracked.bounce.valid) {
+      // Lazy allocate on first use within this request.
+      tracked.bounce = shm_manager_->create_local_shm(bytes, use_shareable);
     }
     BounceBufferInfo info;
     info.ptr = tracked.bounce.ptr;
-    info.mr_id = tracked.bounce.mr_id;
+    if (needs_uccl_registration) {
+      // Request-scoped bounce MR id. The MR is deleted in request cleanup.
+      auto mr = mr_manager_.create_local_mr(tracked.bounce.ptr, bytes);
+      info.mr_id = mr.mr.id;
+    }
     if (tracked.bounce.shareable) {
-      info.shm_name = bounce_pool_->get_shm_name(tracked.bounce.slot);
+      info.shm_name = shm_manager_->get_local_shm(tracked.bounce.shm_id).shm_name;
     }
     return info;
   };
@@ -1267,47 +1265,11 @@ bool Communicator::wait_finish(unsigned const req) {
 }
 
 MR Communicator::reg_mr(void* local_buf, size_t len) {
-  // Communicator-level semantics are idempotent for the same buffer region:
-  // repeating reg_mr on the same base pointer and length should not require
-  // additional dereg_mr calls from users.
-  try {
-    MR existing = get_local_mr(local_buf);
-    if (existing.address == reinterpret_cast<uint64_t>(local_buf) &&
-        static_cast<size_t>(existing.length) == len) {
-      return existing;
-    }
-  } catch (std::exception const&) {
-  }
-
-  auto tracked = memory_mgr_.register_local(local_buf, len);
-  MR info = tracked.mr;
-
-  if (tracked.replaced) {
-    discard_uccl_registration(tracked.replaced_mr_id);
-  }
-
-  if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
-    bool should_register =
-        !tracked.replaced || !uccl_adapter_->is_memory_registered(info.id);
-    if (should_register) {
-      bool ok = uccl_adapter_->register_memory(info.id, local_buf, len);
-      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-      if (ok) {
-        uccl_direct_reg_failed_mrs_.erase(info.id);
-      } else {
-        uccl_direct_reg_failed_mrs_.insert(info.id);
-      }
-    }
-  }
-
-  return info;
+  return mr_manager_.create_local_mr(local_buf, len).mr;
 }
 
 bool Communicator::dereg_mr(void* local_buf) {
-  auto released = memory_mgr_.deregister_local(local_buf);
-  if (released.fully_released) {
-    discard_uccl_registration(released.mr_id);
-  }
+  (void)mr_manager_.delete_mr(local_buf);
   return true;
 }
 
@@ -1357,10 +1319,15 @@ bool Communicator::wait_named_mrs(int remote_rank, uint64_t generation,
     return false;
   }
 
-  std::vector<MR> remote_mrs;
+  std::vector<MRItem> remote_mrs;
   remote_mrs.reserve(infos.entries.size());
   for (auto const& entry : infos.entries) {
-    remote_mrs.push_back(entry.mr);
+    MRItem item{};
+    item.mr = entry.mr;
+    item.is_local = false;
+    item.rank = remote_rank;
+    item.valid = true;
+    remote_mrs.push_back(item);
     // std::cout << "[recv named MR from rank " << remote_rank
     //           << "] generation=" << generation
     //           << " buffer_id=" << entry.buffer_id
@@ -1368,20 +1335,26 @@ bool Communicator::wait_named_mrs(int remote_rank, uint64_t generation,
     //           << " length=" << entry.mr.length
     //           << " key=" << entry.mr.key << std::endl;
   }
-  memory_mgr_.cache_remote_mrs(remote_rank, remote_mrs);
+  mr_manager_.register_remote_mrs(remote_rank, remote_mrs);
   return true;
 }
 
 MR Communicator::get_local_mr(void* local_buf) {
-  return memory_mgr_.find_local_by_ptr(local_buf);
+  auto item = mr_manager_.get_mr(local_buf);
+  if (!item.valid) throw std::runtime_error("Local MR not found for buffer");
+  return item.mr;
 }
 
 MR Communicator::get_local_mr(uint32_t mr_id) {
-  return memory_mgr_.get_local_mr(mr_id);
+  auto item = mr_manager_.get_mr(mr_id);
+  if (!item.valid) throw std::runtime_error("Local MR not found for id");
+  return item.mr;
 }
 
 MR Communicator::get_remote_mr(int remote_rank, uint32_t mr_id) {
-  return memory_mgr_.get_remote_mr(remote_rank, mr_id);
+  auto item = mr_manager_.get_mr(remote_rank, mr_id);
+  if (!item.valid) throw std::runtime_error("Remote MR not found for id");
+  return item.mr;
 }
 
 bool Communicator::notify_ipc_buffer(int remote_rank, uint32_t ipc_id,
@@ -1403,15 +1376,14 @@ bool Communicator::notify_ipc_buffer(int remote_rank, uint32_t ipc_id,
     auto restore =
         uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
     GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+    auto exported = ipc_manager_.create_local_ipc(local_buf, len, local_gpu_idx_);
+    if (!exported.valid) return false;
 
-    void* base = nullptr;
-    size_t base_size = 0;
-    GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, local_buf));
-    GPU_RT_CHECK(gpuIpcGetMemHandle(&info.handle, base));
+    info.handle = exported.handle;
     info.base_offset = reinterpret_cast<uintptr_t>(local_buf) -
-                       reinterpret_cast<uintptr_t>(base);
+                       exported.base_addr;
     info.bytes = len;
-    info.device_idx = local_gpu_idx_;
+    info.device_idx = exported.device_idx;
     info.valid = true;
   }
 
@@ -1436,14 +1408,15 @@ bool Communicator::wait_ipc_buffer(int remote_rank, uint32_t ipc_id,
             versioned_key, info,
             timeout_to_retries(bootstrap_timeout_ms(), kBootstrapPollDelayMs),
             kBootstrapPollDelayMs)) {
-      MemoryManager::RemoteIpcBuffer state{};
+      IPCItem state{};
       state.handle = info.handle;
       state.binding_version = info.binding_version;
       state.base_offset = static_cast<uintptr_t>(info.base_offset);
       state.bytes = static_cast<size_t>(info.bytes);
       state.device_idx = info.device_idx;
       state.valid = info.valid;
-      return memory_mgr_.register_remote_ipc_buffer(remote_rank, ipc_id, state);
+      state.ipc_id = ipc_id;
+      return ipc_manager_.register_remote_ipc(remote_rank, state);
     }
   }
   auto const deadline = std::chrono::steady_clock::now() +
@@ -1466,14 +1439,15 @@ bool Communicator::wait_ipc_buffer(int remote_rank, uint32_t ipc_id,
         std::chrono::milliseconds(kBootstrapPollDelayMs));
   }
 
-  MemoryManager::RemoteIpcBuffer state{};
+  IPCItem state{};
   state.handle = info.handle;
   state.binding_version = info.binding_version;
   state.base_offset = static_cast<uintptr_t>(info.base_offset);
   state.bytes = static_cast<size_t>(info.bytes);
   state.device_idx = info.device_idx;
   state.valid = info.valid;
-  return memory_mgr_.register_remote_ipc_buffer(remote_rank, ipc_id, state);
+  state.ipc_id = ipc_id;
+  return ipc_manager_.register_remote_ipc(remote_rank, state);
 }
 
 bool Communicator::fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
@@ -1484,7 +1458,7 @@ bool Communicator::fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
     auto const versioned_key = ipc_buffer_versioned_key(
         remote_rank, global_rank_, ipc_id, expected_binding_version);
     if (exchanger_client_->fetch(versioned_key, info)) {
-      MemoryManager::RemoteIpcBuffer state{};
+      IPCItem state{};
       state.handle = info.handle;
       state.binding_version = info.binding_version;
       state.base_offset = static_cast<uintptr_t>(info.base_offset);
@@ -1495,14 +1469,15 @@ bool Communicator::fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
         invalidate_remote_ipc_buffer(remote_rank, ipc_id);
         return false;
       }
-      return memory_mgr_.register_remote_ipc_buffer(remote_rank, ipc_id, state);
+      state.ipc_id = ipc_id;
+      return ipc_manager_.register_remote_ipc(remote_rank, state);
     }
   }
   if (!exchanger_client_->fetch(
           ipc_buffer_key(remote_rank, global_rank_, ipc_id), info)) {
     return false;
   }
-  MemoryManager::RemoteIpcBuffer state{};
+  IPCItem state{};
   state.handle = info.handle;
   state.binding_version = info.binding_version;
   state.base_offset = static_cast<uintptr_t>(info.base_offset);
@@ -1514,12 +1489,13 @@ bool Communicator::fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
     invalidate_remote_ipc_buffer(remote_rank, ipc_id);
     return false;
   }
-  return memory_mgr_.register_remote_ipc_buffer(remote_rank, ipc_id, state);
+  state.ipc_id = ipc_id;
+  return ipc_manager_.register_remote_ipc(remote_rank, state);
 }
 
 bool Communicator::has_fresh_remote_ipc_buffer(
     int remote_rank, uint32_t ipc_id, uint64_t expected_binding_version) const {
-  auto state = memory_mgr_.get_remote_ipc_buffer(remote_rank, ipc_id);
+  auto state = ipc_manager_.get_ipc(remote_rank, ipc_id);
   if (!state.valid) return false;
   if (expected_binding_version != 0 &&
       state.binding_version != expected_binding_version) {
@@ -1530,9 +1506,7 @@ bool Communicator::has_fresh_remote_ipc_buffer(
 
 void Communicator::invalidate_remote_ipc_buffer(int remote_rank,
                                                 uint32_t ipc_id) {
-  MemoryManager::RemoteIpcBuffer invalid{};
-  invalid.valid = false;
-  memory_mgr_.register_remote_ipc_buffer(remote_rank, ipc_id, invalid);
+  ipc_manager_.delete_ipc(remote_rank, ipc_id);
 }
 
 bool Communicator::resolve_ipc_buffer_pointer(int remote_rank, uint32_t ipc_id,
@@ -1541,7 +1515,7 @@ bool Communicator::resolve_ipc_buffer_pointer(int remote_rank, uint32_t ipc_id,
                                               int* out_device_idx) {
   if (out_ptr == nullptr) return false;
 
-  auto state = memory_mgr_.get_remote_ipc_buffer(remote_rank, ipc_id);
+  auto state = ipc_manager_.get_ipc(remote_rank, ipc_id);
   if (!state.valid) return false;
   if (offset > state.bytes || bytes > state.bytes - offset) return false;
 
@@ -1559,7 +1533,8 @@ bool Communicator::resolve_ipc_buffer_pointer(int remote_rank, uint32_t ipc_id,
       // fallback to host-bounce relay instead of aborting.
       return false;
     }
-    memory_mgr_.register_remote_ipc_buffer(remote_rank, ipc_id, state);
+    state.ipc_id = ipc_id;
+    ipc_manager_.register_remote_ipc(remote_rank, state);
   }
 
   *out_ptr =
@@ -1573,23 +1548,24 @@ bool Communicator::resolve_ipc_buffer_pointer(int remote_rank, uint32_t ipc_id,
 
 bool Communicator::register_remote_ipc_cache(int remote_rank,
                                              gpuIpcMemHandle_t handle,
-                                             RemoteIpc const& ipc) {
-  return memory_mgr_.register_remote_ipc(remote_rank, handle, ipc);
+                                             IPCItem const& ipc) {
+  IPCItem item = ipc;
+  item.handle = handle;
+  return ipc_manager_.register_remote_ipc(remote_rank, item);
 }
 
-RemoteIpc Communicator::get_remote_ipc_cache(int remote_rank,
+IPCItem Communicator::get_remote_ipc_cache(int remote_rank,
                                              gpuIpcMemHandle_t handle) {
-  return memory_mgr_.get_remote_ipc(remote_rank, handle);
+  return ipc_manager_.get_ipc(remote_rank, handle);
 }
 
-void* Communicator::get_or_open_bounce_shm(std::string const& shm_name,
-                                           size_t size) {
-  return bounce_pool_->get_or_open_shm(shm_name, size);
+void* Communicator::get_or_open_bounce_shm(std::string const& shm_name) {
+  return shm_manager_->open_remote_shm(shm_name).ptr;
 }
 
 void Communicator::clear_bounce_shm_cache() {
-  if (bounce_pool_) {
-    bounce_pool_->clear_shm_cache();
+  if (shm_manager_) {
+    shm_manager_->clear_remote_shm_cache();
   }
 }
 
