@@ -1,11 +1,11 @@
 #pragma once
 
 #include "../oob/oob.h"
+#include "../util/jring.h"
 #include "config.h"
 #include "gpu_rt.h"
 #include "request.h"
 #include "transport_adapter.h"
-#include "util/jring.h"
 #include <array>
 #include <atomic>
 #include <condition_variable>

@@ -56,7 +56,11 @@ LOCAL_INCLUDES := -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -Isrc
 # System and external library includes
 INCLUDES := -I$(CUDA_PATH)/include -I/usr/include -I/usr/local/include -I../../include
 GDRCOPY_LIBDIR ?=
-GDRCOPY_LIBDIR_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-L$(GDRCOPY_LIBDIR) -Wl,-rpath,$(GDRCOPY_LIBDIR),)
+ifneq ($(strip $(GDRCOPY_LIBDIR)),)
+GDRCOPY_LIBDIR_FLAGS := -L$(GDRCOPY_LIBDIR) -Wl,-rpath,$(GDRCOPY_LIBDIR)
+else
+GDRCOPY_LIBDIR_FLAGS :=
+endif
 
 # Redis support: when USE_REDIS_OOB=1
 ifeq ($(USE_REDIS_OOB),1)

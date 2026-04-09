@@ -31,8 +31,10 @@
 #define gpuIpcGetMemHandle cudaIpcGetMemHandle
 #define gpuIpcCloseMemHandle cudaIpcCloseMemHandle
 #define gpuHostMalloc cudaMallocHost  // no cudaHostMalloc API in CUDA
+#define gpuMallocHost cudaMallocHost
 #define gpuHostAlloc cudaHostAlloc
 #define gpuHostAllocMapped cudaHostAllocMapped
+#define gpuHostFree cudaFreeHost
 #define gpuFreeHost cudaFreeHost
 #define gpuMalloc cudaMalloc
 #define gpuFree cudaFree
@@ -47,7 +49,17 @@
 #define gpuMemcpyFromSymbol cudaMemcpyFromSymbol
 #define gpuMemset cudaMemset
 #define gpuMemsetAsync cudaMemsetAsync
-#define gpuMemGetAddressRange cudaMemGetAddressRange
+inline gpuError_t gpuMemGetAddressRange(void** base_ptr, size_t* size,
+                                        void* ptr) {
+  if (ptr == nullptr) return cudaErrorInvalidValue;
+  CUdeviceptr base = 0;
+  CUresult result = cuMemGetAddressRange(&base, size, (CUdeviceptr)ptr);
+  if (result == CUDA_SUCCESS) {
+    if (base_ptr != nullptr) *base_ptr = reinterpret_cast<void*>(base);
+    return gpuSuccess;
+  }
+  return static_cast<gpuError_t>(result);
+}
 #define gpuGetLastError cudaGetLastError
 #define gpuErrorPeerAccessAlreadyEnabled cudaErrorPeerAccessAlreadyEnabled
 #define gpuErrorNotReady cudaErrorNotReady
@@ -69,6 +81,19 @@
 #define gpuIpcCloseEventHandle cudaIpcCloseEventHandle
 #define gpuLaunchKernel cudaLaunchKernel
 #define gpuDeviceSynchronize cudaDeviceSynchronize
+// DMA-BUF / GPU driver types for GPUDirect RDMA
+#define gpuDriverResult_t CUresult
+#define gpuDevicePtr_t CUdeviceptr
+#define gpuDriverSuccess CUDA_SUCCESS
+#define gpuMemRangeHandleType CUmemRangeHandleType
+#define GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD
+#define gpuPointerAttribute_t cudaPointerAttributes
+#define gpuPointerGetAttributes cudaPointerGetAttributes
+#define gpuMemoryTypeDevice cudaMemoryTypeDevice
+#define GPU_DRIVER_LIB_NAME "libcuda.so.1"
+#define GPU_DRIVER_LIB_NAME_FALLBACK "libcuda.so"
+#define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \
+  "cuMemGetHandleForAddressRange"
 // gpu dirver api : for fifo_gdrcopy later
 #define gpuDrvResult_t CUresult
 #define gpuDrvSuccess CUDA_SUCCESS
@@ -121,6 +146,7 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuIpcGetMemHandle hipIpcGetMemHandle
 #define gpuIpcCloseMemHandle hipIpcCloseMemHandle
 #define gpuHostMalloc hipHostMalloc
+#define gpuMallocHost hipHostMalloc  // cudaMallocHost deprecated in ROCm
 #define gpuHostAlloc hipHostAlloc
 #define gpuHostFree hipHostFree
 #define gpuHostAllocMapped hipHostAllocMapped
@@ -160,6 +186,19 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
 #define gpuMemGetAddressRange hipMemGetAddressRange
 #define gpuLaunchKernel hipLaunchKernel
 #define gpuDeviceSynchronize hipDeviceSynchronize
+// DMA-BUF / GPU driver types for GPUDirect RDMA
+#define gpuDriverResult_t hipError_t
+#define gpuDevicePtr_t hipDeviceptr_t
+#define gpuDriverSuccess hipSuccess
+#define gpuMemRangeHandleType hipMemRangeHandleType
+#define GPU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD hipMemRangeHandleTypeDmaBufFd
+#define gpuPointerAttribute_t hipPointerAttribute_t
+#define gpuPointerGetAttributes hipPointerGetAttributes
+#define gpuMemoryTypeDevice hipMemoryTypeDevice
+#define GPU_DRIVER_LIB_NAME "libamdhip64.so"
+#define GPU_DRIVER_LIB_NAME_FALLBACK "libamdhip64.so"
+#define GPU_DRIVER_GET_HANDLE_FOR_ADDRESS_RANGE_NAME \
+  "hipMemGetHandleForAddressRange"
 // gpu dirver api : for fifo_gdrcopy later
 #define gpuDrvResult_t hipError_t
 #define gpuDrvSuccess hipSuccess
@@ -187,6 +226,10 @@ inline char const* gpuDrvGetErrorString(gpuDrvResult_t r) {
   return hipGetErrorString(r);
 }
 #endif
+
+// Function pointer type for DMA-BUF handle export (loaded via dlsym).
+typedef gpuDriverResult_t (*gpuMemGetHandleForAddressRange_fn)(
+    void*, gpuDevicePtr_t, size_t, gpuMemRangeHandleType, unsigned long long);
 
 #define GPU_RT_CHECK(call)                                         \
   do {                                                             \

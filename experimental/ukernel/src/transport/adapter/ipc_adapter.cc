@@ -1,6 +1,6 @@
 #include "ipc_adapter.h"
 #include "../communicator.h"
-#include "util/util.h"
+#include "../util/utils.h"
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -46,8 +46,10 @@ IpcChannel::IpcChannel(Communicator* comm)
     : next_match_seq_per_peer_(comm->world_size(),
                                std::array<uint64_t, 2>{1, 1}),
       comm_(comm) {
-  send_task_ring_ = uccl::create_ring(sizeof(IpcTask*), kTaskRingSize);
-  recv_task_ring_ = uccl::create_ring(sizeof(IpcTask*), kTaskRingSize);
+  send_task_ring_ =
+      UKernel::Transport::create_ring(sizeof(IpcTask*), kTaskRingSize);
+  recv_task_ring_ =
+      UKernel::Transport::create_ring(sizeof(IpcTask*), kTaskRingSize);
   stop_.store(false);
   send_thread_ = std::thread([this] { send_thread_func(); });
   recv_thread_ = std::thread([this] { recv_thread_func(); });
@@ -272,14 +274,16 @@ bool IpcChannel::send_one(int to_rank, Request* creq, void* bounce_ptr,
                           size_t bounce_len, std::string const& bounce_shm_name,
                           BounceBufferProvider bounce_provider) {
   (void)bounce_len;
-  UCCL_CHECK(creq && creq->buffer != nullptr)
-      << "send_ipc: data pointer is null!";
+  if (!(creq && creq->buffer != nullptr)) {
+    std::cerr << "[ERROR] send_ipc: data pointer is null!" << std::endl;
+    return false;
+  }
   creq->mark_running();
 
   int orig_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
-  auto dev_reset =
-      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+  auto dev_reset = UKernel::Transport::finally(
+      [&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx_));
   auto wait_sender_ack = [&](int timeout_ms, uint32_t* out_status) -> int {
@@ -481,18 +485,19 @@ bool IpcChannel::send_one(int to_rank, Request* creq, void* bounce_ptr,
     return relay_via_bounce(seq);
   }
 
-  RemoteIpc ipc = comm_->get_remote_ipc_cache(to_rank, got.handle);
+  IPCItem ipc = comm_->get_remote_ipc_cache(to_rank, got.handle);
   void* base = ipc.direct_ptr;
   if (base == nullptr) {
     GPU_RT_CHECK(
         gpuIpcOpenMemHandle(&base, got.handle, gpuIpcMemLazyEnablePeerAccess));
 
-    RemoteIpc new_ipc{};
+    IPCItem new_ipc{};
     new_ipc.handle = got.handle;
     new_ipc.direct_ptr = base;
-    new_ipc.offset = got.offset;
-    new_ipc.size = got.size;
+    new_ipc.base_offset = got.offset;
+    new_ipc.bytes = got.size;
     new_ipc.device_idx = static_cast<int>(got.remote_gpu_idx_);
+    new_ipc.valid = true;
     comm_->register_remote_ipc_cache(to_rank, got.handle, new_ipc);
   }
 
@@ -516,14 +521,16 @@ bool IpcChannel::recv_one(int from_rank, Request* creq, void* bounce_ptr,
   (void)bounce_ptr;
   (void)bounce_len;
   (void)bounce_shm_name;
-  UCCL_CHECK(creq && creq->buffer != nullptr)
-      << "recv_ipc: data pointer is null!";
+  if (!(creq && creq->buffer != nullptr)) {
+    std::cerr << "[ERROR] recv_ipc: data pointer is null!" << std::endl;
+    return false;
+  }
   creq->mark_running();
 
   int orig_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
-  auto dev_reset =
-      uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
+  auto dev_reset = UKernel::Transport::finally(
+      [&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
   auto wait_sender_ack = [&](int timeout_ms, uint32_t* out_status) -> int {
     uint64_t out_seq = 0;
@@ -564,10 +571,8 @@ bool IpcChannel::recv_one(int from_rank, Request* creq, void* bounce_ptr,
       return false;
     }
 
-    void* relay_bounce_ptr = comm_->get_or_open_bounce_shm(
-        relay_cache.bounce_shm_name,
-        relay_cache.size == 0 ? creq->size_bytes
-                              : static_cast<size_t>(relay_cache.size));
+    void* relay_bounce_ptr =
+        comm_->get_or_open_bounce_shm(relay_cache.bounce_shm_name);
     if (relay_bounce_ptr == nullptr) {
       std::cerr << "[ERROR] get_or_open_bounce_shm failed for relay req "
                 << creq->id << std::endl;

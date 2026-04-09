@@ -1,5 +1,4 @@
 #include "uccl_adapter.h"
-#include "../memory/memory_manager.h"
 #include "collective/rdma/transport.h"
 #include <chrono>
 #include <iostream>
@@ -234,7 +233,6 @@ unsigned UcclTransportAdapter::send_async(
     BounceBufferProvider bounce_provider) {
   void* send_ptr = local_ptr;
   uint64_t send_mr_id = local_mr_id;
-  BounceCpuBuffer bounce;
 
   if (bounce_provider) {
     BounceBufferInfo info = bounce_provider(len);
