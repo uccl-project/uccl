@@ -163,9 +163,11 @@ class SendConnection : public RDMAConnection {
   }
 
   int64_t send(std::shared_ptr<RDMASendRequest> req) {
-    int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
+    // Allocate seq_num without counting bytes — actual size is registered
+    // later by the polling thread after popping from the queue, so that
+    // getTotalInflightBytes() only reflects requests actually being sent.
+    int64_t wr_id = tracker_->sendPacket(0);
     req->wr_id = wr_id;
-    cc_.recordSendTsc(req->wr_id);
     if (unlikely(request_queue_->push(req) < 0)) {
       UCCL_LOG(WARN) << "SendConnection: isend request queue is full, wr_id="
                      << wr_id;
@@ -184,7 +186,6 @@ class SendConnection : public RDMAConnection {
     std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
-    cc_.recordSendTsc(req->wr_id);
 
     auto [channel_id, context_id] = selectNextChannelRoundRobin();
     if (unlikely(channel_id == 0)) {
@@ -207,7 +208,6 @@ class SendConnection : public RDMAConnection {
     std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
-    cc_.recordSendTsc(req->wr_id);
 
     auto [channel_id, context_id] = selectNextChannelRoundRobin();
     if (unlikely(channel_id == 0)) {
@@ -256,6 +256,11 @@ class SendConnection : public RDMAConnection {
     if (unlikely(ctrl_channel_ == nullptr)) {
       return -1;
     }
+    // Enforce CC window before accepting a new request
+    size_t inflight_limit_bytes = currentInflightLimitBytes();
+    if (tracker_->getTotalInflightBytes() > inflight_limit_bytes) {
+      return -1;
+    }
     SendReqMeta meta;
     std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
     int index = ctrl_channel_->getOneSendRequestMeta(meta);
@@ -264,7 +269,6 @@ class SendConnection : public RDMAConnection {
     }
     int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
     req->wr_id = wr_id;
-    cc_.recordSendTsc(req->wr_id);
     UCCL_LOG(INFO, UCCL_RDMA)
         << "SendConnection: Processing send request meta: " << meta;
     processOnceSendRequests(req, meta, index);
@@ -283,6 +287,7 @@ class SendConnection : public RDMAConnection {
   int numa_node_ = 0;
 
   uccl::cc::CongestionControlState cc_;
+  std::atomic<uint32_t> chunk_tsc_counter_{0};
 
   inline size_t currentInflightLimitBytes() {
     return cc_.enabled() ? cc_.getWindowBytes() : kInFlightMaxSizeKB * 1024;
@@ -298,7 +303,22 @@ class SendConnection : public RDMAConnection {
       return false;
     }
 
+    // Per-chunk CC: assign a unique TSC ID and record send timestamp
+    // close to the actual ibv_post_send.  The TSC ID is encoded in the
+    // upper 32 bits of wr_id; the lower 32 bits keep the message seq
+    // used by the tracker.  We save/restore req->wr_id so that callers
+    // (e.g. updateExpectedAckCount) still see the original message seq.
+    int64_t saved_wr_id = req->wr_id;
+    if (cc_.enabled()) {
+      uint32_t tsc_id =
+          chunk_tsc_counter_.fetch_add(1, std::memory_order_relaxed);
+      req->wr_id = (static_cast<int64_t>(tsc_id) << 32) |
+                   static_cast<uint32_t>(req->wr_id);
+      cc_.recordSendTsc(tsc_id);
+    }
+
     int64_t send_ret = channel->submitRequest(req);
+    req->wr_id = saved_wr_id;
     if (send_ret < 0) {
       UCCL_LOG(WARN) << "SendConnection: Failed to send on channel_id "
                      << req->channel_id;
@@ -424,6 +444,8 @@ class SendConnection : public RDMAConnection {
         }
         break;
       }
+      // Register actual packet size now that we are about to send it.
+      tracker_->updatePacketSize(req->wr_id, req->getLocalLen());
       index = ctrl_channel_->getOneSendRequestMeta(meta);
       UCCL_LOG(INFO, UCCL_RDMA)
           << "SendConnection: Processing send request meta: " << meta;
@@ -485,8 +507,15 @@ class SendConnection : public RDMAConnection {
           // Channel "
           // << channel_id
           //           << " polled completion: " << cq_data;
-          tracker_->acknowledge(cq_data.wr_id);
-          cc_.onAck(cq_data.wr_id, cq_data.len);
+          if (cc_.enabled()) {
+            // Decode: low 32 bits = message seq (tracker), high 32 = TSC ID
+            uint32_t msg_seq = static_cast<uint32_t>(cq_data.wr_id);
+            uint32_t tsc_id = static_cast<uint32_t>(cq_data.wr_id >> 32);
+            tracker_->acknowledge(msg_seq);
+            cc_.onAck(tsc_id, cq_data.len);
+          } else {
+            tracker_->acknowledge(cq_data.wr_id);
+          }
         }
       }
     }

@@ -504,9 +504,6 @@ class NICEndpoint {
 
   // Manual polling routine for send channels when auto_start_polling_ is false
   int sendWithoutInnerQueue(std::shared_ptr<RDMASendRequest> req) {
-    if (auto_start_polling_) {
-      return -1;  // Do nothing if auto polling is enabled
-    }
     if (!req) {
       UCCL_LOG(WARN) << "NICEndpoint::sendRoutine - null request";
       return -1;
@@ -529,6 +526,13 @@ class NICEndpoint {
                         "for rank_id: "
                      << rank_id;
       return -1;
+    }
+
+    // When the polling thread is active, enqueue via send() so that
+    // only the polling thread touches QPs (avoids concurrent ibv_post_*
+    // from two threads).
+    if (auto_start_polling_) {
+      return send_group->send(req);
     }
 
     return send_group->processSendRequests(req);
