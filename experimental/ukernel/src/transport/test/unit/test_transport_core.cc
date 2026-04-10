@@ -1,7 +1,6 @@
 #include "memory/ipc_manager.h"
 #include "memory/mr_manager.h"
 #include "oob/oob.h"
-#include "request.h"
 #include "test.h"
 #include "test_utils.h"
 #include <chrono>
@@ -162,47 +161,6 @@ void test_memory_manager() {
   require(
       late_dereg_ids.size() == 1 && late_dereg_ids.back() == tracked_c.mr.id,
       "late-bound local MR delete should trigger backend deregister");
-}
-
-void test_request_completion() {
-  using Request = UKernel::Transport::Request;
-  using RequestState = UKernel::Transport::RequestState;
-  using RequestType = UKernel::Transport::RequestType;
-
-  Request req_single(/*id=*/11, /*match_seq=*/101,
-                     /*buffer=*/reinterpret_cast<void*>(0x1000),
-                     /*size_bytes=*/64, UKernel::Transport::RemoteSlice{},
-                     RequestType::Send);
-  req_single.mark_queued(1);
-  req_single.mark_running();
-  req_single.complete_one();
-  require(req_single.load_state(std::memory_order_acquire) ==
-              RequestState::Completed,
-          "single-signal request should complete immediately");
-
-  Request req_multi(/*id=*/12, /*match_seq=*/202,
-                    /*buffer=*/reinterpret_cast<void*>(0x2000),
-                    /*size_bytes=*/128, UKernel::Transport::RemoteSlice{},
-                    RequestType::Recv);
-  req_multi.mark_queued(2);
-  req_multi.mark_running();
-  req_multi.complete_one();
-  require(!req_multi.is_finished(std::memory_order_acquire),
-          "request should not complete before final signal");
-  req_multi.complete_one();
-  require(req_multi.load_state(std::memory_order_acquire) ==
-              RequestState::Completed,
-          "request should complete on final signal");
-
-  Request req_failed(/*id=*/13, /*match_seq=*/303,
-                     /*buffer=*/reinterpret_cast<void*>(0x3000),
-                     /*size_bytes=*/64, UKernel::Transport::RemoteSlice{},
-                     RequestType::Recv);
-  req_failed.mark_queued(1);
-  req_failed.mark_running();
-  req_failed.mark_failed();
-  require(req_failed.has_failed(std::memory_order_acquire),
-          "failed request should report terminal failure");
 }
 
 void test_peer_transport_kind() {
@@ -373,6 +331,5 @@ void test_shm_dual_waiters() {
 
 void test_transport_core() {
   run_case("transport unit", "memory manager", test_memory_manager);
-  run_case("transport unit", "request completion", test_request_completion);
   run_case("transport unit", "peer transport kind", test_peer_transport_kind);
 }

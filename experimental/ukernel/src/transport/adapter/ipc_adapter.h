@@ -4,7 +4,6 @@
 #include "../util/jring.h"
 #include "config.h"
 #include "gpu_rt.h"
-#include "request.h"
 #include "transport_adapter.h"
 #include <array>
 #include <atomic>
@@ -14,6 +13,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -27,12 +27,14 @@ static constexpr size_t kTaskRingSize = 1024;
 static constexpr size_t kIpcSizePerEngine = 1ul << 20;
 static constexpr int kIpcControlTimeoutMs = 50000;
 
-class IpcChannel final : public TransportAdapter {
+class IpcAdapter final : public TransportAdapter {
  public:
-  explicit IpcChannel(Communicator* comm);
-  ~IpcChannel() override;
+  IpcAdapter(Communicator* comm, std::string ring_namespace, int self_local_id);
+  ~IpcAdapter() override;
   void shutdown();
 
+  void set_peer_local_id(int peer_rank, int local_id);
+  void close_peer(int peer_rank);
   bool connect_to(int rank);
   bool accept_from(int rank);
 
@@ -56,36 +58,76 @@ class IpcChannel final : public TransportAdapter {
 
   int peer_count() const override;
 
-  bool send_async_ipc(int to_rank, std::shared_ptr<Request> creq,
-                      void* bounce_ptr = nullptr, size_t bounce_len = 0,
-                      std::string bounce_shm_name = "",
-                      BounceBufferProvider bounce_provider = nullptr);
-  bool recv_async_ipc(int from_rank, std::shared_ptr<Request> creq,
-                      void* bounce_ptr = nullptr, size_t bounce_len = 0,
-                      std::string bounce_shm_name = "");
-  uint64_t next_match_seq(int rank, RequestType type);
+  uint64_t next_send_match_seq(int rank);
+  uint64_t next_recv_match_seq(int rank);
 
  private:
+  enum class IpcReqType : uint8_t { Send = 0, Recv = 1 };
+
+  struct IpcPendingRequest {
+    unsigned id = 0;
+    uint64_t match_seq = 0;
+    void* buffer = nullptr;
+    size_t size_bytes = 0;
+    RemoteSlice remote_slice{};
+    IpcReqType type = IpcReqType::Send;
+    std::atomic<uint32_t> remaining{0};
+    std::atomic<bool> failed{false};
+    std::atomic<bool> finished{false};
+
+    void mark_queued(uint32_t completion_count = 1) {
+      remaining.store(completion_count, std::memory_order_release);
+      failed.store(false, std::memory_order_release);
+      finished.store(false, std::memory_order_release);
+    }
+    void mark_running() {}
+    void mark_failed() {
+      failed.store(true, std::memory_order_release);
+      finished.store(true, std::memory_order_release);
+      remaining.store(0, std::memory_order_release);
+    }
+    void complete_one() {
+      uint32_t prev = remaining.load(std::memory_order_acquire);
+      while (prev != 0 && !remaining.compare_exchange_weak(
+                              prev, prev - 1, std::memory_order_acq_rel,
+                              std::memory_order_acquire)) {
+      }
+      if (prev <= 1) finished.store(true, std::memory_order_release);
+    }
+    bool is_finished() const {
+      return finished.load(std::memory_order_acquire);
+    }
+    bool has_failed() const { return failed.load(std::memory_order_acquire); }
+    void* data() const { return buffer; }
+  };
+
   enum class IpcTaskType : uint8_t { SEND, RECV };
 
   struct IpcTask {
     IpcTaskType type;
     int peer_rank;
-    std::shared_ptr<Request> req;
+    std::shared_ptr<IpcPendingRequest> req;
     void* bounce_ptr = nullptr;
     size_t bounce_len = 0;
     std::string bounce_shm_name;
     BounceBufferProvider bounce_provider = nullptr;
   };
 
-  bool send_one(int to_rank, Request* creq, void* bounce_ptr, size_t bounce_len,
-                std::string const& bounce_shm_name,
+  bool send_async_ipc(int to_rank, std::shared_ptr<IpcPendingRequest> req,
+                      void* bounce_ptr = nullptr, size_t bounce_len = 0,
+                      std::string bounce_shm_name = "",
+                      BounceBufferProvider bounce_provider = nullptr);
+  bool recv_async_ipc(int from_rank, std::shared_ptr<IpcPendingRequest> req,
+                      void* bounce_ptr = nullptr, size_t bounce_len = 0,
+                      std::string bounce_shm_name = "");
+  bool send_one(int to_rank, IpcPendingRequest* creq, void* bounce_ptr,
+                size_t bounce_len, std::string const& bounce_shm_name,
                 BounceBufferProvider bounce_provider);
-  bool recv_one(int from_rank, Request* creq, void* bounce_ptr,
+  bool recv_one(int from_rank, IpcPendingRequest* creq, void* bounce_ptr,
                 size_t bounce_len, std::string const& bounce_shm_name);
   void send_thread_func();
   void recv_thread_func();
-  void complete_task(std::shared_ptr<Request> const& req, bool ok);
+  void complete_task(std::shared_ptr<IpcPendingRequest> const& req, bool ok);
 
   jring_t* send_task_ring_;
   jring_t* recv_task_ring_;
@@ -105,8 +147,10 @@ class IpcChannel final : public TransportAdapter {
   std::vector<std::array<uint64_t, 2>> next_match_seq_per_peer_;
   std::atomic<unsigned> next_request_id_{1};
   mutable std::mutex req_mu_;
-  std::unordered_map<unsigned, std::shared_ptr<Request>> pending_requests_;
+  std::unordered_map<unsigned, std::shared_ptr<IpcPendingRequest>>
+      pending_requests_;
 
+  std::shared_ptr<ShmRingExchanger> shm_control_;
   Communicator* comm_;
 };
 

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -41,57 +40,6 @@ struct RemoteSlice {
   uint64_t binding_version = 0;
 
   bool has_write_hint() const { return write.usable(); }
-};
-
-enum class RequestType : uint8_t { Send, Recv };
-enum class RequestState : uint8_t {
-  Created,
-  Queued,
-  Running,
-  Completed,
-  Failed
-};
-
-struct Request {
-  unsigned id = 0;
-  uint64_t match_seq = 0;
-  void* buffer = nullptr;
-  size_t size_bytes = 0;
-  RemoteSlice remote_slice{};
-  RequestType type = RequestType::Send;
-  std::atomic<RequestState> state{RequestState::Created};
-  std::atomic<uint32_t> remaining_completions{0};
-
-  Request(unsigned id, uint64_t match_seq, void* buffer, size_t size_bytes,
-          RemoteSlice remote_slice, RequestType type)
-      : id(id),
-        match_seq(match_seq),
-        buffer(buffer),
-        size_bytes(size_bytes),
-        remote_slice(remote_slice),
-        type(type) {}
-
-  void mark_queued(uint32_t completion_count = 1);
-  void mark_running();
-  void mark_failed();
-  void complete_one();
-
-  RequestState load_state(
-      std::memory_order order = std::memory_order_acquire) const {
-    return state.load(order);
-  }
-
-  bool is_finished(std::memory_order order = std::memory_order_acquire) const {
-    RequestState current = load_state(order);
-    return current == RequestState::Completed ||
-           current == RequestState::Failed;
-  }
-
-  bool has_failed(std::memory_order order = std::memory_order_acquire) const {
-    return load_state(order) == RequestState::Failed;
-  }
-
-  void* data() const { return buffer; }
 };
 
 }  // namespace Transport

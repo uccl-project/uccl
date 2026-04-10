@@ -42,9 +42,13 @@ bool enqueue_one_ptr(jring_t* ring, void* elem, std::atomic<bool> const& stop) {
 
 }  // namespace
 
-IpcChannel::IpcChannel(Communicator* comm)
+IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
+                       int self_local_id)
     : next_match_seq_per_peer_(comm->world_size(),
                                std::array<uint64_t, 2>{1, 1}),
+      shm_control_(std::make_shared<ShmRingExchanger>(
+          comm->rank(), comm->world_size(), std::move(ring_namespace),
+          self_local_id)),
       comm_(comm) {
   send_task_ring_ =
       UKernel::Transport::create_ring(sizeof(IpcTask*), kTaskRingSize);
@@ -55,7 +59,7 @@ IpcChannel::IpcChannel(Communicator* comm)
   recv_thread_ = std::thread([this] { recv_thread_func(); });
 
   int n_streams = 2;
-  GPU_RT_CHECK(gpuSetDevice(comm->local_gpu_idx_));
+  GPU_RT_CHECK(gpuSetDevice(comm->local_gpu_idx()));
   ipc_streams_.resize(n_streams);
   for (int i = 0; i < n_streams; ++i) {
     GPU_RT_CHECK(
@@ -63,9 +67,9 @@ IpcChannel::IpcChannel(Communicator* comm)
   }
 }
 
-IpcChannel::~IpcChannel() { shutdown(); }
+IpcAdapter::~IpcAdapter() { shutdown(); }
 
-void IpcChannel::shutdown() {
+void IpcAdapter::shutdown() {
   bool expected = false;
   if (!shutdown_started_.compare_exchange_strong(expected, true)) return;
 
@@ -74,9 +78,18 @@ void IpcChannel::shutdown() {
   if (send_thread_.joinable()) send_thread_.join();
   if (recv_thread_.joinable()) recv_thread_.join();
 
+  if (shm_control_ != nullptr) {
+    for (int peer_rank = 0; peer_rank < comm_->world_size(); ++peer_rank) {
+      if (peer_rank == comm_->rank()) continue;
+      if (shm_control_->is_peer_connected(peer_rank)) {
+        shm_control_->close_peer(peer_rank);
+      }
+    }
+  }
+
   int orig_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
-  GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx_));
+  GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx()));
   for (auto& stream : ipc_streams_) {
     if (stream != nullptr) GPU_RT_CHECK(gpuStreamDestroy(stream));
   }
@@ -93,37 +106,58 @@ void IpcChannel::shutdown() {
   }
 }
 
-bool IpcChannel::connect_to(int rank) {
-  return comm_->shm_control_->connect_to(rank, 30000);
+bool IpcAdapter::connect_to(int rank) {
+  return shm_control_ != nullptr && shm_control_->connect_to(rank, 30000);
 }
 
-bool IpcChannel::accept_from(int rank) {
-  return comm_->shm_control_->accept_from(rank, 30000);
+bool IpcAdapter::accept_from(int rank) {
+  return shm_control_ != nullptr && shm_control_->accept_from(rank, 30000);
 }
 
-uint64_t IpcChannel::next_match_seq(int rank, RequestType type) {
+void IpcAdapter::set_peer_local_id(int peer_rank, int local_id) {
+  if (shm_control_ != nullptr) {
+    shm_control_->set_peer_local_id(peer_rank, local_id);
+  }
+}
+
+void IpcAdapter::close_peer(int peer_rank) {
+  if (shm_control_ != nullptr) {
+    shm_control_->close_peer(peer_rank);
+  }
+}
+
+uint64_t IpcAdapter::next_send_match_seq(int rank) {
   std::lock_guard<std::mutex> lk(match_seq_mu_);
-  int src = (type == RequestType::Send) ? comm_->rank() : rank;
-  int dst = (type == RequestType::Send) ? rank : comm_->rank();
+  int src = comm_->rank();
+  int dst = rank;
   size_t dir = (src < dst) ? 0u : 1u;
   uint64_t counter = next_match_seq_per_peer_[rank][dir]++;
   // Encode edge direction bit in seq so opposite directions never collide.
   return (counter << 1) | static_cast<uint64_t>(dir);
 }
 
-bool IpcChannel::has_send_path(int peer_rank) const {
-  return comm_->shm_control_->is_peer_connected(peer_rank);
+uint64_t IpcAdapter::next_recv_match_seq(int rank) {
+  std::lock_guard<std::mutex> lk(match_seq_mu_);
+  int src = rank;
+  int dst = comm_->rank();
+  size_t dir = (src < dst) ? 0u : 1u;
+  uint64_t counter = next_match_seq_per_peer_[rank][dir]++;
+  return (counter << 1) | static_cast<uint64_t>(dir);
 }
 
-bool IpcChannel::has_recv_path(int peer_rank) const {
-  return comm_->shm_control_->is_peer_connected(peer_rank);
+bool IpcAdapter::has_send_path(int peer_rank) const {
+  return shm_control_ != nullptr && shm_control_->is_peer_connected(peer_rank);
 }
 
-int IpcChannel::peer_count() const {
+bool IpcAdapter::has_recv_path(int peer_rank) const {
+  return shm_control_ != nullptr && shm_control_->is_peer_connected(peer_rank);
+}
+
+int IpcAdapter::peer_count() const {
   return comm_ ? std::max(0, comm_->world_size() - 1) : 0;
 }
 
-unsigned IpcChannel::send_async(int peer_rank, void* local_ptr, size_t len,
+unsigned IpcAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
                                 uint64_t local_mr_id,
                                 std::optional<RemoteSlice> remote_hint,
                                 BounceBufferProvider bounce_provider) {
@@ -135,7 +169,7 @@ unsigned IpcChannel::send_async(int peer_rank, void* local_ptr, size_t len,
     remote_mem_id = remote_hint->mem_id;
     remote_offset = remote_hint->offset;
   }
-  uint64_t match_seq = next_match_seq(peer_rank, RequestType::Send);
+  uint64_t match_seq = next_send_match_seq(peer_rank);
   RemoteSlice remote_slice{};
   remote_slice.mem_id = remote_mem_id;
   remote_slice.offset = remote_offset;
@@ -144,8 +178,13 @@ unsigned IpcChannel::send_async(int peer_rank, void* local_ptr, size_t len,
   }
   unsigned request_id =
       next_request_id_.fetch_add(1, std::memory_order_relaxed);
-  auto req = std::make_shared<Request>(request_id, match_seq, local_ptr, len,
-                                       remote_slice, RequestType::Send);
+  auto req = std::make_shared<IpcPendingRequest>();
+  req->id = request_id;
+  req->match_seq = match_seq;
+  req->buffer = local_ptr;
+  req->size_bytes = len;
+  req->remote_slice = remote_slice;
+  req->type = IpcReqType::Send;
   if (send_async_ipc(peer_rank, req, nullptr, 0, "", bounce_provider)) {
     std::lock_guard<std::mutex> lk(req_mu_);
     pending_requests_[request_id] = req;
@@ -154,7 +193,7 @@ unsigned IpcChannel::send_async(int peer_rank, void* local_ptr, size_t len,
   return 0;
 }
 
-unsigned IpcChannel::recv_async(int peer_rank, void* local_ptr, size_t len,
+unsigned IpcAdapter::recv_async(int peer_rank, void* local_ptr, size_t len,
                                 uint64_t local_mr_id,
                                 BounceBufferProvider bounce_provider) {
   (void)local_mr_id;
@@ -169,11 +208,16 @@ unsigned IpcChannel::recv_async(int peer_rank, void* local_ptr, size_t len,
     bounce_shm_name = info.shm_name;
   }
 
-  uint64_t match_seq = next_match_seq(peer_rank, RequestType::Recv);
+  uint64_t match_seq = next_recv_match_seq(peer_rank);
   unsigned request_id =
       next_request_id_.fetch_add(1, std::memory_order_relaxed);
-  auto req = std::make_shared<Request>(request_id, match_seq, local_ptr, len,
-                                       RemoteSlice{}, RequestType::Recv);
+  auto req = std::make_shared<IpcPendingRequest>();
+  req->id = request_id;
+  req->match_seq = match_seq;
+  req->buffer = local_ptr;
+  req->size_bytes = len;
+  req->remote_slice = RemoteSlice{};
+  req->type = IpcReqType::Recv;
   if (recv_async_ipc(peer_rank, req, bounce_ptr, bounce_len, bounce_shm_name)) {
     std::lock_guard<std::mutex> lk(req_mu_);
     pending_requests_[request_id] = req;
@@ -182,48 +226,49 @@ unsigned IpcChannel::recv_async(int peer_rank, void* local_ptr, size_t len,
   return 0;
 }
 
-bool IpcChannel::poll_completion(unsigned id) {
-  std::shared_ptr<Request> req;
+bool IpcAdapter::poll_completion(unsigned id) {
+  std::shared_ptr<IpcPendingRequest> req;
   {
     std::lock_guard<std::mutex> lk(req_mu_);
     auto it = pending_requests_.find(id);
     if (it == pending_requests_.end()) return true;
     req = it->second;
   }
-  return req->is_finished(std::memory_order_acquire);
+  return req->is_finished();
 }
 
-bool IpcChannel::wait_completion(unsigned id) {
-  std::shared_ptr<Request> req;
+bool IpcAdapter::wait_completion(unsigned id) {
+  std::shared_ptr<IpcPendingRequest> req;
   {
     std::lock_guard<std::mutex> lk(req_mu_);
     auto it = pending_requests_.find(id);
     if (it == pending_requests_.end()) return true;
     req = it->second;
   }
-  while (!req->is_finished(std::memory_order_acquire)) {
+  while (!req->is_finished()) {
     std::this_thread::yield();
   }
   return true;
 }
 
-bool IpcChannel::request_failed(unsigned id) {
-  std::shared_ptr<Request> req;
+bool IpcAdapter::request_failed(unsigned id) {
+  std::shared_ptr<IpcPendingRequest> req;
   {
     std::lock_guard<std::mutex> lk(req_mu_);
     auto it = pending_requests_.find(id);
     if (it == pending_requests_.end()) return false;
     req = it->second;
   }
-  return req->has_failed(std::memory_order_acquire);
+  return req->has_failed();
 }
 
-void IpcChannel::release_request(unsigned id) {
+void IpcAdapter::release_request(unsigned id) {
   std::lock_guard<std::mutex> lk(req_mu_);
   pending_requests_.erase(id);
 }
 
-bool IpcChannel::send_async_ipc(int to_rank, std::shared_ptr<Request> creq,
+bool IpcAdapter::send_async_ipc(int to_rank,
+                                std::shared_ptr<IpcPendingRequest> creq,
                                 void* bounce_ptr, size_t bounce_len,
                                 std::string bounce_shm_name,
                                 BounceBufferProvider bounce_provider) {
@@ -249,7 +294,8 @@ bool IpcChannel::send_async_ipc(int to_rank, std::shared_ptr<Request> creq,
   return true;
 }
 
-bool IpcChannel::recv_async_ipc(int from_rank, std::shared_ptr<Request> creq,
+bool IpcAdapter::recv_async_ipc(int from_rank,
+                                std::shared_ptr<IpcPendingRequest> creq,
                                 void* bounce_ptr, size_t bounce_len,
                                 std::string bounce_shm_name) {
   if (!creq || creq->size_bytes == 0 || stop_.load(std::memory_order_acquire) ||
@@ -270,8 +316,9 @@ bool IpcChannel::recv_async_ipc(int from_rank, std::shared_ptr<Request> creq,
   return true;
 }
 
-bool IpcChannel::send_one(int to_rank, Request* creq, void* bounce_ptr,
-                          size_t bounce_len, std::string const& bounce_shm_name,
+bool IpcAdapter::send_one(int to_rank, IpcPendingRequest* creq,
+                          void* bounce_ptr, size_t bounce_len,
+                          std::string const& bounce_shm_name,
                           BounceBufferProvider bounce_provider) {
   (void)bounce_len;
   if (!(creq && creq->buffer != nullptr)) {
@@ -285,12 +332,12 @@ bool IpcChannel::send_one(int to_rank, Request* creq, void* bounce_ptr,
   auto dev_reset = UKernel::Transport::finally(
       [&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx_));
+  GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx()));
   auto wait_sender_ack = [&](int timeout_ms, uint32_t* out_status) -> int {
     uint64_t out_seq = 0;
     uint32_t status = 0;
-    if (!comm_->shm_control_->recv_ack(to_rank, &status, &out_seq, timeout_ms,
-                                       creq->match_seq)) {
+    if (!shm_control_->recv_ack(to_rank, &status, &out_seq, timeout_ms,
+                                creq->match_seq)) {
       return 0;
     }
     if (out_seq != creq->match_seq || status != kAckStatusOkDirect) {
@@ -319,12 +366,12 @@ bool IpcChannel::send_one(int to_rank, Request* creq, void* bounce_ptr,
           reinterpret_cast<uintptr_t>(dst_ptr) + i * chunk_size);
       size_t copy_size =
           i == n_streams - 1 ? creq->size_bytes - i * chunk_size : chunk_size;
-      if (remote_gpu_idx == comm_->local_gpu_idx_) {
+      if (remote_gpu_idx == comm_->local_gpu_idx()) {
         GPU_RT_CHECK(gpuMemcpyAsync(chunk_dst, chunk_src, copy_size,
                                     gpuMemcpyDeviceToDevice, ipc_streams_[i]));
       } else {
         GPU_RT_CHECK(gpuMemcpyPeerAsync(chunk_dst, remote_gpu_idx, chunk_src,
-                                        comm_->local_gpu_idx_, copy_size,
+                                        comm_->local_gpu_idx(), copy_size,
                                         ipc_streams_[i]));
       }
     }
@@ -354,13 +401,13 @@ bool IpcChannel::send_one(int to_rank, Request* creq, void* bounce_ptr,
     IpcCacheWire relay_cache{};
     relay_cache.size = creq->size_bytes;
     relay_cache.is_send = 1;
-    relay_cache.remote_gpu_idx_ = comm_->local_gpu_idx_;
+    relay_cache.remote_gpu_idx_ = comm_->local_gpu_idx();
     relay_cache.offset = 0;
     relay_cache.use_bounce_buffer = 1;
     std::strncpy(relay_cache.bounce_shm_name, relay_bounce_shm_name.c_str(),
                  sizeof(relay_cache.bounce_shm_name) - 1);
 
-    if (!comm_->shm_control_->send_ipc_cache(to_rank, seq, relay_cache)) {
+    if (!shm_control_->send_ipc_cache(to_rank, seq, relay_cache)) {
       std::cerr << "[ERROR] send_ipc_cache with bounce failed for req "
                 << creq->id << " match_seq " << creq->match_seq << std::endl;
       return false;
@@ -388,25 +435,26 @@ bool IpcChannel::send_one(int to_rank, Request* creq, void* bounce_ptr,
         return false;
       }
       bool can_use_direct_peer = !ipc_force_relay_enabled() &&
-                                 (*out_remote_gpu == comm_->local_gpu_idx_);
+                                 (*out_remote_gpu == comm_->local_gpu_idx());
       if (!can_use_direct_peer && !ipc_force_relay_enabled() &&
           *out_remote_gpu >= 0) {
         int can_access_peer = 0;
         GPU_RT_CHECK(gpuDeviceCanAccessPeer(
-            &can_access_peer, comm_->local_gpu_idx_, *out_remote_gpu));
+            &can_access_peer, comm_->local_gpu_idx(), *out_remote_gpu));
         can_use_direct_peer = (can_access_peer != 0);
       }
       return can_use_direct_peer;
     };
 
-    bool have_fresh_meta = comm_->has_fresh_remote_ipc_buffer(
+    bool have_fresh_meta = comm_->ipc_has_fresh_remote_ipc_buffer(
         to_rank, creq->remote_slice.mem_id, creq->remote_slice.binding_version);
     if (!have_fresh_meta) {
-      have_fresh_meta =
-          comm_->fetch_ipc_buffer(to_rank, creq->remote_slice.mem_id,
-                                  creq->remote_slice.binding_version);
+      have_fresh_meta = comm_->ipc_fetch_remote_ipc_buffer(
+          to_rank, creq->remote_slice.mem_id,
+          creq->remote_slice.binding_version);
       if (!have_fresh_meta) {
-        comm_->invalidate_remote_ipc_buffer(to_rank, creq->remote_slice.mem_id);
+        comm_->ipc_invalidate_remote_ipc_buffer(to_rank,
+                                                creq->remote_slice.mem_id);
       }
     }
 
@@ -417,17 +465,17 @@ bool IpcChannel::send_one(int to_rank, Request* creq, void* bounce_ptr,
         try_direct_by_remote_slice(&cached_dst, &cached_remote_gpu);
     if (can_use_direct && cached_dst != nullptr && cached_remote_gpu >= 0) {
       bool can_use_direct_peer = !ipc_force_relay_enabled() &&
-                                 (cached_remote_gpu == comm_->local_gpu_idx_);
+                                 (cached_remote_gpu == comm_->local_gpu_idx());
       if (!can_use_direct_peer && !ipc_force_relay_enabled()) {
         int can_access_peer = 0;
         GPU_RT_CHECK(gpuDeviceCanAccessPeer(
-            &can_access_peer, comm_->local_gpu_idx_, cached_remote_gpu));
+            &can_access_peer, comm_->local_gpu_idx(), cached_remote_gpu));
         can_use_direct_peer = (can_access_peer != 0);
       }
       if (can_use_direct_peer) {
         copy_to_remote(cached_dst, cached_remote_gpu);
-        if (!comm_->shm_control_->send_ack(to_rank, creq->match_seq,
-                                           kAckStatusOkDirect)) {
+        if (!shm_control_->send_ack(to_rank, creq->match_seq,
+                                    kAckStatusOkDirect)) {
           std::cerr << "[ERROR] send direct cached ack(" << to_rank
                     << ") failed for req " << creq->id << " match_seq "
                     << creq->match_seq << std::endl;
@@ -441,7 +489,7 @@ bool IpcChannel::send_one(int to_rank, Request* creq, void* bounce_ptr,
     }
   }
 
-  if (!comm_->shm_control_->send_ipc_cache_req(to_rank, creq->match_seq)) {
+  if (!shm_control_->send_ipc_cache_req(to_rank, creq->match_seq)) {
     std::cerr << "[ERROR] send_ipc_cache_req(" << to_rank << ") failed for req "
               << creq->id << " match_seq " << creq->match_seq << std::endl;
     return false;
@@ -456,8 +504,8 @@ bool IpcChannel::send_one(int to_rank, Request* creq, void* bounce_ptr,
     int timeout_ms =
         std::min(kIpcControlPollTimeoutMs, remaining_timeout_ms(deadline));
     if (timeout_ms <= 0) break;
-    if (comm_->shm_control_->recv_ipc_cache(to_rank, got, &seq, timeout_ms,
-                                            creq->match_seq)) {
+    if (shm_control_->recv_ipc_cache(to_rank, got, &seq, timeout_ms,
+                                     creq->match_seq)) {
       got_cache = true;
       break;
     }
@@ -470,12 +518,12 @@ bool IpcChannel::send_one(int to_rank, Request* creq, void* bounce_ptr,
 
   bool can_use_direct_peer =
       !ipc_force_relay_enabled() &&
-      (got.remote_gpu_idx_ == static_cast<uint32_t>(comm_->local_gpu_idx_));
+      (got.remote_gpu_idx_ == static_cast<uint32_t>(comm_->local_gpu_idx()));
   if (!can_use_direct_peer) {
     int can_access_peer = 0;
     if (!ipc_force_relay_enabled()) {
       GPU_RT_CHECK(
-          gpuDeviceCanAccessPeer(&can_access_peer, comm_->local_gpu_idx_,
+          gpuDeviceCanAccessPeer(&can_access_peer, comm_->local_gpu_idx(),
                                  static_cast<int>(got.remote_gpu_idx_)));
       can_use_direct_peer = (can_access_peer != 0);
     }
@@ -505,7 +553,7 @@ bool IpcChannel::send_one(int to_rank, Request* creq, void* bounce_ptr,
       reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) + got.offset);
   copy_to_remote(dst_ptr, static_cast<int>(got.remote_gpu_idx_));
 
-  if (!comm_->shm_control_->send_ack(to_rank, seq, kAckStatusOkDirect)) {
+  if (!shm_control_->send_ack(to_rank, seq, kAckStatusOkDirect)) {
     std::cerr << "[ERROR] send_ack(" << to_rank << ") failed for req "
               << creq->id << " match_seq " << creq->match_seq << std::endl;
     return false;
@@ -515,8 +563,8 @@ bool IpcChannel::send_one(int to_rank, Request* creq, void* bounce_ptr,
   return false;
 }
 
-bool IpcChannel::recv_one(int from_rank, Request* creq, void* bounce_ptr,
-                          size_t bounce_len,
+bool IpcAdapter::recv_one(int from_rank, IpcPendingRequest* creq,
+                          void* bounce_ptr, size_t bounce_len,
                           std::string const& bounce_shm_name) {
   (void)bounce_ptr;
   (void)bounce_len;
@@ -535,8 +583,8 @@ bool IpcChannel::recv_one(int from_rank, Request* creq, void* bounce_ptr,
   auto wait_sender_ack = [&](int timeout_ms, uint32_t* out_status) -> int {
     uint64_t out_seq = 0;
     uint32_t status = 0;
-    if (!comm_->shm_control_->recv_ack(from_rank, &status, &out_seq, timeout_ms,
-                                       creq->match_seq)) {
+    if (!shm_control_->recv_ack(from_rank, &status, &out_seq, timeout_ms,
+                                creq->match_seq)) {
       return 0;
     }
     if (out_seq != creq->match_seq || status != kAckStatusOkDirect) {
@@ -579,12 +627,12 @@ bool IpcChannel::recv_one(int from_rank, Request* creq, void* bounce_ptr,
       return false;
     }
 
-    GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx_));
+    GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx()));
     void* actual_dst = creq->data();
     GPU_RT_CHECK(gpuMemcpy(actual_dst, relay_bounce_ptr, creq->size_bytes,
                            gpuMemcpyHostToDevice));
-    if (!comm_->shm_control_->send_ack(from_rank, creq->match_seq,
-                                       kAckStatusOkDirect)) {
+    if (!shm_control_->send_ack(from_rank, creq->match_seq,
+                                kAckStatusOkDirect)) {
       std::cerr << "[ERROR] send_ack for relay cache failed, req " << creq->id
                 << " match_seq " << creq->match_seq << std::endl;
       return false;
@@ -599,17 +647,15 @@ bool IpcChannel::recv_one(int from_rank, Request* creq, void* bounce_ptr,
       return true;
     }
     uint64_t req_seq = 0;
-    if (comm_->shm_control_->recv_ipc_cache_req(from_rank, &req_seq,
-                                                /*timeout_ms=*/0,
-                                                creq->match_seq)) {
+    if (shm_control_->recv_ipc_cache_req(from_rank, &req_seq,
+                                         /*timeout_ms=*/0, creq->match_seq)) {
       got_cache_req = true;
       break;
     }
     IpcCacheWire relay_cache{};
     uint64_t relay_seq = 0;
-    if (comm_->shm_control_->recv_ipc_cache(from_rank, relay_cache, &relay_seq,
-                                            /*timeout_ms=*/0,
-                                            creq->match_seq)) {
+    if (shm_control_->recv_ipc_cache(from_rank, relay_cache, &relay_seq,
+                                     /*timeout_ms=*/0, creq->match_seq)) {
       return handle_relay_cache(relay_cache, relay_seq);
     }
     if (std::chrono::steady_clock::now() >= phase1_deadline) {
@@ -622,11 +668,11 @@ bool IpcChannel::recv_one(int from_rank, Request* creq, void* bounce_ptr,
   }
   if (stop_.load(std::memory_order_acquire) || !got_cache_req) return false;
 
-  GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx_));
+  GPU_RT_CHECK(gpuSetDevice(comm_->local_gpu_idx()));
   IpcCacheWire transfer_info{};
   transfer_info.size = creq->size_bytes;
   transfer_info.is_send = 0;
-  transfer_info.remote_gpu_idx_ = comm_->local_gpu_idx_;
+  transfer_info.remote_gpu_idx_ = comm_->local_gpu_idx();
   void* actual_dst = creq->data();
 
   void* base = nullptr;
@@ -636,8 +682,8 @@ bool IpcChannel::recv_one(int from_rank, Request* creq, void* bounce_ptr,
   transfer_info.offset = reinterpret_cast<uintptr_t>(actual_dst) -
                          reinterpret_cast<uintptr_t>(base);
 
-  if (!comm_->shm_control_->send_ipc_cache(from_rank, creq->match_seq,
-                                           transfer_info)) {
+  if (!shm_control_->send_ipc_cache(from_rank, creq->match_seq,
+                                    transfer_info)) {
     std::cerr << "[ERROR] send_ipc_cache(" << from_rank << ") failed for req "
               << creq->id << " match_seq " << creq->match_seq << std::endl;
     return false;
@@ -656,9 +702,8 @@ bool IpcChannel::recv_one(int from_rank, Request* creq, void* bounce_ptr,
 
     IpcCacheWire relay_cache{};
     uint64_t relay_seq = 0;
-    if (comm_->shm_control_->recv_ipc_cache(from_rank, relay_cache, &relay_seq,
-                                            /*timeout_ms=*/0,
-                                            creq->match_seq)) {
+    if (shm_control_->recv_ipc_cache(from_rank, relay_cache, &relay_seq,
+                                     /*timeout_ms=*/0, creq->match_seq)) {
       return handle_relay_cache(relay_cache, relay_seq);
     }
 
@@ -673,7 +718,8 @@ bool IpcChannel::recv_one(int from_rank, Request* creq, void* bounce_ptr,
   return false;
 }
 
-void IpcChannel::complete_task(std::shared_ptr<Request> const& req, bool ok) {
+void IpcAdapter::complete_task(std::shared_ptr<IpcPendingRequest> const& req,
+                               bool ok) {
   if (!req) return;
   if (!ok) {
     req->mark_failed();
@@ -682,7 +728,7 @@ void IpcChannel::complete_task(std::shared_ptr<Request> const& req, bool ok) {
   }
 }
 
-void IpcChannel::send_thread_func() {
+void IpcAdapter::send_thread_func() {
   while (!stop_.load(std::memory_order_relaxed)) {
     {
       std::unique_lock<std::mutex> lk(cv_mu_);
@@ -714,7 +760,7 @@ void IpcChannel::send_thread_func() {
   }
 }
 
-void IpcChannel::recv_thread_func() {
+void IpcAdapter::recv_thread_func() {
   while (!stop_.load(std::memory_order_relaxed)) {
     {
       std::unique_lock<std::mutex> lk(cv_mu_);
