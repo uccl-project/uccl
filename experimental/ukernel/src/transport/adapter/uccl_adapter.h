@@ -103,9 +103,18 @@ class UcclTransportAdapter final : public TransportAdapter {
                       uint64_t local_mr_id, uint64_t request_id);
 
  private:
-  struct PendingRequest {
+  enum class RequestState : uint8_t {
+    Free = 0,
+    Reserved = 1,
+    InFlight = 2,
+    Completed = 3,
+    Failed = 4,
+  };
+
+  struct PendingRequestSlot {
     std::unique_ptr<::uccl::ucclRequest> request;
-    bool completed = false;
+    RequestState state = RequestState::Free;
+    uint32_t generation = 1;
     bool failed = false;
   };
 
@@ -125,8 +134,26 @@ class UcclTransportAdapter final : public TransportAdapter {
   std::unique_ptr<::uccl::RDMAEndpoint> endpoint_;
   std::unordered_map<int, PeerContext> peer_contexts_;
   std::unordered_map<uint64_t, ::uccl::Mhandle*> mr_id_to_mhandle_;
-  std::unordered_map<uint64_t, PendingRequest> pending_requests_;
-  std::atomic<unsigned> next_request_id_{1};
+
+  static constexpr uint32_t kRequestSlotBits = 13;
+  static constexpr uint32_t kRequestSlotCount = (1u << kRequestSlotBits);
+  static constexpr uint32_t kRequestSlotMask = kRequestSlotCount - 1u;
+  std::unique_ptr<PendingRequestSlot[]> request_slots_;
+  std::atomic<uint32_t> request_alloc_cursor_{0};
+
+  static unsigned make_request_id(uint32_t slot_idx, uint32_t generation) {
+    return static_cast<unsigned>((generation << kRequestSlotBits) | slot_idx);
+  }
+  static uint32_t request_slot_index(unsigned request_id) {
+    return static_cast<uint32_t>(request_id) & kRequestSlotMask;
+  }
+  static uint32_t request_generation(unsigned request_id) {
+    return static_cast<uint32_t>(request_id) >> kRequestSlotBits;
+  }
+  PendingRequestSlot* try_acquire_request_slot(unsigned* out_request_id);
+  PendingRequestSlot* resolve_request_slot_locked(unsigned request_id);
+  void release_request_slot_locked(unsigned request_id);
+
   mutable std::mutex mu_;
 };
 
