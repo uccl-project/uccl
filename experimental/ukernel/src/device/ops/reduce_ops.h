@@ -41,8 +41,8 @@ __device__ __forceinline__ __half apply_reduce_half_amd_naive(__half a,
 // ROCm compatibility fallback only: keep this implementation simple and
 // obviously correct so fp16/bf16 reduce paths work on AMD before we add a
 // tuned native implementation.
-__device__ __forceinline__ nv_bfloat16 apply_reduce_bf16_amd_naive(
-    nv_bfloat16 a, nv_bfloat16 b, ReduceType op) {
+__device__ __forceinline__ nv_bfloat16
+apply_reduce_bf16_amd_naive(nv_bfloat16 a, nv_bfloat16 b, ReduceType op) {
   float af = static_cast<float>(a);
   float bf = static_cast<float>(b);
   if (op == ReduceType::Sum) return __float2bfloat16(af + bf);
