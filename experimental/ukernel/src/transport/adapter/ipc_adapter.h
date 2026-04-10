@@ -148,8 +148,10 @@ class IpcAdapter final : public TransportAdapter {
   std::atomic<bool> shutdown_started_{false};
   std::thread send_thread_;
   std::thread recv_thread_;
-  std::mutex cv_mu_;
-  std::condition_variable cv_;
+  std::mutex send_cv_mu_;
+  std::condition_variable send_cv_;
+  std::mutex recv_cv_mu_;
+  std::condition_variable recv_cv_;
   std::atomic<int> pending_send_{0};
   std::atomic<int> pending_recv_{0};
   std::vector<gpuStream_t> ipc_streams_;

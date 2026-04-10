@@ -15,6 +15,7 @@ constexpr int kIpcControlPollTimeoutMs = 50;
 constexpr size_t kTaskRingSize = 1024;
 constexpr size_t kIpcSizePerEngine = 1ul << 20;
 constexpr int kIpcControlTimeoutMs = 50000;
+constexpr int kWorkerIdleSpinIters = 256;
 
 bool ipc_force_relay_enabled() {
   char const* env = std::getenv("UHM_IPC_FORCE_RELAY");
@@ -39,6 +40,24 @@ bool enqueue_one_request_id(jring_t* ring, unsigned elem,
     std::this_thread::yield();
   }
   return !stop.load(std::memory_order_acquire);
+}
+
+void wait_for_worker_work(std::atomic<bool> const& stop,
+                          std::atomic<int> const& pending, std::mutex& cv_mu,
+                          std::condition_variable& cv) {
+  for (int i = 0; i < kWorkerIdleSpinIters; ++i) {
+    if (stop.load(std::memory_order_relaxed) ||
+        pending.load(std::memory_order_relaxed) > 0) {
+      return;
+    }
+    std::this_thread::yield();
+  }
+
+  std::unique_lock<std::mutex> lk(cv_mu);
+  cv.wait(lk, [&] {
+    return stop.load(std::memory_order_relaxed) ||
+           pending.load(std::memory_order_relaxed) > 0;
+  });
 }
 
 }  // namespace
@@ -76,7 +95,8 @@ void IpcAdapter::shutdown() {
   if (!shutdown_started_.compare_exchange_strong(expected, true)) return;
 
   stop_.store(true, std::memory_order_release);
-  cv_.notify_all();
+  send_cv_.notify_all();
+  recv_cv_.notify_all();
   if (send_thread_.joinable()) send_thread_.join();
   if (recv_thread_.joinable()) recv_thread_.join();
 
@@ -263,14 +283,15 @@ bool IpcAdapter::enqueue_request(unsigned request_id, IpcReqType type) {
       return false;
     }
     pending_send_.fetch_add(1, std::memory_order_relaxed);
+    send_cv_.notify_one();
   } else {
     if (recv_task_ring_ == nullptr ||
         !enqueue_one_request_id(recv_task_ring_, request_id, stop_)) {
       return false;
     }
     pending_recv_.fetch_add(1, std::memory_order_relaxed);
+    recv_cv_.notify_one();
   }
-  cv_.notify_all();
   return true;
 }
 
@@ -775,13 +796,7 @@ void IpcAdapter::complete_task(IpcRequestSlot* req, bool ok) {
 
 void IpcAdapter::send_thread_func() {
   while (!stop_.load(std::memory_order_relaxed)) {
-    {
-      std::unique_lock<std::mutex> lk(cv_mu_);
-      cv_.wait(lk, [&] {
-        return stop_.load(std::memory_order_relaxed) ||
-               pending_send_.load(std::memory_order_relaxed) > 0;
-      });
-    }
+    wait_for_worker_work(stop_, pending_send_, send_cv_mu_, send_cv_);
     if (stop_.load(std::memory_order_relaxed)) break;
 
     unsigned request_id = 0;
@@ -807,13 +822,7 @@ void IpcAdapter::send_thread_func() {
 
 void IpcAdapter::recv_thread_func() {
   while (!stop_.load(std::memory_order_relaxed)) {
-    {
-      std::unique_lock<std::mutex> lk(cv_mu_);
-      cv_.wait(lk, [&] {
-        return stop_.load(std::memory_order_relaxed) ||
-               pending_recv_.load(std::memory_order_relaxed) > 0;
-      });
-    }
+    wait_for_worker_work(stop_, pending_recv_, recv_cv_mu_, recv_cv_);
     if (stop_.load(std::memory_order_relaxed)) break;
 
     unsigned request_id = 0;

@@ -27,8 +27,10 @@ unless a newer committed result supersedes them.
 | 4 | Phase 2 | reverted | `n/a` | try a truly synchronous single-stream copy fast-path |
 | 5 | Phase 2 / NCCL-inspired | kept | `26b4bc22` | eagerly open remote IPC handles during setup and prefetch bench recv buffers |
 | 6 | Phase 2 | reverted | `n/a` | replace recv-side 1ms poll sleeps with pure `yield()` |
-| 7 | Phase 2 | kept | `pending` | shrink recv-side poll sleep from 1ms to 50us |
+| 7 | Phase 2 | kept | `3928726b` | shrink recv-side poll sleep from 1ms to 50us |
 | 8 | Phase 2 | reverted | `n/a` | widen the new recv-side poll sleep from 50us to 100us |
+| 9 | Phase 2 / Lite-inspired | reverted | `n/a` | bind worker threads to the local GPU context and remove per-request device switching |
+| 10 | Phase 2 / Lite-inspired | kept | `pending` | split send/recv worker wakeups and add a short idle spin before blocking |
 
 ## Detailed Notes
 
@@ -543,3 +545,172 @@ Decision:
 Reasoning:
 - `100us` looked attractive on the anchor subset, but failed the full-sweep stability bar
 - the better choice here is the slightly more conservative `50us`, because it already captures most of the latency win without reintroducing timeouts
+
+### Step 9: bind IPC worker threads to the local GPU context
+
+Status:
+- reverted
+
+Scope:
+- [ipc_adapter.cc](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/adapter/ipc_adapter.cc)
+- [communicator.h](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/communicator.h)
+- [communicator.cc](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/communicator.cc)
+
+What changed:
+- moved `gpuSetDevice(local_gpu_idx)` from each `send_one()` / `recv_one()`
+  call into `send_thread_func()` / `recv_thread_func()`
+- added a communicator helper so the direct IPC pointer resolve path could be
+  used when the current thread was already on the correct device
+- removed the per-request device save/restore blocks from the hot path
+
+Why it seemed promising:
+- this mirrors a real idea from
+  [experimental/lite/doc/p2p-design.md](/home/yangzhou/danyang/uccl-danyang/experimental/lite/doc/p2p-design.md):
+  long-lived worker threads own their device context instead of re-entering it
+  on every operation
+- after the earlier IPC metadata work, per-request device switching looked like
+  one of the few remaining host-side costs in the direct path
+
+Screening benchmark command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang
+bench=/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/bench_transport
+sizes=(4096 65536 1048576 16777216)
+port=9300
+for size in "${sizes[@]}"; do
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=0 --membind=0 "$bench" --rank 0 --peer-rank 1 --gpu-id 2 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port" &
+  pid0=$!
+  sleep 1
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=1 --membind=1 "$bench" --rank 1 --peer-rank 0 --gpu-id 6 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port"
+  wait "$pid0"
+  port=$((port + 1))
+done
+```
+
+Anchor screening result:
+
+| Size | p50 us | p90 us | Uni GB/s | Bidi GB/s |
+| --- | ---: | ---: | ---: | ---: |
+| 4KB | 403.00 | 514.29 | 0.17 | 0.03 |
+| 64KB | 371.21 | 477.84 | 1.93 | 0.30 |
+| 1MB | 441.55 | 544.75 | 22.91 | 4.06 |
+| 16MB | 998.95 | 1769.31 | 43.16 | 19.97 |
+
+Why it was reverted:
+- after extending the idea to remove the remaining direct-path device switch,
+  the full `19`-size sweep stalled at `8192B`
+- the failure signature was the same IPC control timeout as other unstable
+  candidates: `timed out waiting sender ack/relay/cache-req`
+- this suggests the per-request device guard was not just overhead; it was also
+  part of the current correctness boundary for the threaded IPC path
+
+Decision:
+- revert
+
+Reasoning:
+- the anchor numbers were mixed but tempting, so it was worth a full sweep
+- the full sweep did not complete, which fails the same stability bar used for
+  the earlier `yield()` and `100us` experiments
+- because the benefit was not robust enough to survive the full benchmark
+  matrix, this change was fully rolled back
+
+### Step 10: split worker wakeups and add a short idle spin
+
+Status:
+- kept
+
+Scope:
+- [ipc_adapter.h](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/adapter/ipc_adapter.h)
+- [ipc_adapter.cc](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/adapter/ipc_adapter.cc)
+
+What changed:
+- replaced the single shared `cv_` / `cv_mu_` pair with separate
+  `send_cv_` and `recv_cv_`
+- `enqueue_request()` now wakes only the relevant worker with `notify_one()`
+  instead of waking both IPC threads with `notify_all()`
+- added a small bounded idle spin (`256` `yield()` iterations) before each
+  worker thread blocks on its condition variable
+
+Why it seemed promising:
+- this is closer to the
+  [experimental/lite/doc/p2p-design.md](/home/yangzhou/danyang/uccl-danyang/experimental/lite/doc/p2p-design.md)
+  model, where each SPSC queue has a dedicated worker and the fast path avoids
+  unnecessary scheduler hand-offs
+- before this change, every send request woke the recv thread and every recv
+  request woke the send thread, which is pure overhead
+- the short idle spin gives the workers a chance to catch the next request in
+  a burst without immediately paying a condition-variable sleep/wakeup cycle
+
+Build command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang/experimental/ukernel
+make -f Makefile.rocm bench_transport -j4
+```
+
+Benchmark command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang
+bench=/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/bench_transport
+sizes=(1024 2048 4096 8192 16384 32768 65536 131072 262144 524288 1048576 2097152 4194304 8388608 16777216 33554432 67108864 134217728 268435456)
+port=9600
+for size in "${sizes[@]}"; do
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=0 --membind=0 "$bench" --rank 0 --peer-rank 1 --gpu-id 2 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port" &
+  pid0=$!
+  sleep 1
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=1 --membind=1 "$bench" --rank 1 --peer-rank 0 --gpu-id 6 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port"
+  wait "$pid0"
+  port=$((port + 1))
+done
+```
+
+Test placement:
+- `GPU 2` on `NUMA 0`
+- `GPU 6` on `NUMA 1`
+
+Key before/after points versus the current kept baseline from Step 7:
+
+| Size | Prev p50 us | New p50 us | Prev Uni GB/s | New Uni GB/s | Prev Bidi GB/s | New Bidi GB/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4KB | 351.26 | 321.74 | 0.20 | 0.22 | 0.03 | 0.03 |
+| 64KB | 486.76 | 456.63 | 2.47 | 2.64 | 0.32 | 0.30 |
+| 1MB | 527.25 | 341.94 | 22.32 | 24.31 | 3.72 | 8.30 |
+| 16MB | 1016.24 | 1000.74 | 42.99 | 43.11 | 24.50 | 28.90 |
+
+Full current sweep:
+
+| Size | p50 us | p90 us | Uni GB/s | Bidi GB/s |
+| --- | ---: | ---: | ---: | ---: |
+| 1024 | 306.96 | 390.66 | 0.05 | 0.01 |
+| 2048 | 425.43 | 635.06 | 0.11 | 0.01 |
+| 4096 | 321.74 | 438.49 | 0.22 | 0.03 |
+| 8192 | 430.99 | 564.47 | 0.40 | 0.04 |
+| 16384 | 335.93 | 383.67 | 0.79 | 0.11 |
+| 32768 | 455.63 | 554.38 | 1.74 | 0.14 |
+| 65536 | 456.63 | 503.78 | 2.64 | 0.30 |
+| 131072 | 417.79 | 524.36 | 6.89 | 0.63 |
+| 262144 | 405.92 | 452.82 | 10.63 | 1.23 |
+| 524288 | 453.66 | 606.68 | 16.75 | 3.82 |
+| 1048576 | 341.94 | 410.88 | 24.31 | 8.30 |
+| 2097152 | 493.44 | 1099.72 | 30.69 | 6.83 |
+| 4194304 | 552.89 | 967.93 | 37.36 | 13.16 |
+| 8388608 | 647.89 | 1170.22 | 40.76 | 19.61 |
+| 16777216 | 1000.74 | 2562.85 | 43.11 | 28.90 |
+| 33554432 | 1676.14 | 6652.82 | 44.14 | 17.51 |
+| 67108864 | 3106.50 | 3789.15 | 44.59 | 17.88 |
+| 134217728 | 5888.73 | 6623.59 | 45.06 | 16.42 |
+| 268435456 | 11324.93 | 12814.35 | 45.25 | 21.09 |
+
+Decision:
+- keep
+
+Reasoning:
+- the full sweep completed cleanly, so this candidate clears the stability bar
+- latency improved on most sizes, including strong gains at `1KB`, `4KB`,
+  `16KB`, `128KB`, and `1MB`
+- one-way throughput stayed flat or improved at almost every size, and
+  bidirectional throughput improved materially in the `512KB` to `16MB` region
+- the code change is small, local to the IPC worker scheduling path, and
+  conceptually aligned with the lite design's dedicated-worker control plane
