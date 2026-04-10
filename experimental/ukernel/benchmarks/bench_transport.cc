@@ -25,6 +25,7 @@ static constexpr int kIpcThroughputWindow = 8;
 static constexpr int kUcclThroughputWindow = 4;
 static constexpr int kTcpThroughputWindow = 1;
 static constexpr uint64_t kBenchNamedMrGeneration = 1;
+static constexpr uint64_t kBenchIpcBindingVersion = 1;
 
 static PreferredTransport parse_transport(char const* value) {
   if (strcmp(value, "auto") == 0) return PreferredTransport::Auto;
@@ -204,7 +205,9 @@ static bool exchange_remote_recv_mrs(Communicator& comm, int peer_rank,
 static uint32_t remote_recv_slot_id(PeerTransportKind kind,
                                     std::vector<MR> const& remote_recv_mrs,
                                     int slot) {
-  if (kind != PeerTransportKind::Uccl) return 0;
+  if (kind != PeerTransportKind::Uccl && kind != PeerTransportKind::Ipc) {
+    return 0;
+  }
   return remote_recv_mrs.at(static_cast<size_t>(slot)).id;
 }
 
@@ -212,7 +215,29 @@ static std::optional<RemoteSlice> remote_recv_slice(
     PeerTransportKind kind, std::vector<MR> const& remote_recv_mrs, int slot) {
   uint32_t remote_id = remote_recv_slot_id(kind, remote_recv_mrs, slot);
   if (remote_id == 0) return std::nullopt;
+  if (kind == PeerTransportKind::Ipc) {
+    // This benchmark keeps the recv slots stable for the communicator lifetime.
+    // Publish a fixed versioned IPC buffer view up front so sends can exercise
+    // the by-mem_id direct path instead of the request-level handshake.
+    return RemoteSlice{remote_id, 0, {}, kBenchIpcBindingVersion};
+  }
   return RemoteSlice{remote_id, 0};
+}
+
+static bool publish_ipc_recv_buffers(Communicator& comm, int peer_rank,
+                                     PeerTransportKind kind,
+                                     std::vector<MR> const& local_recv_mrs,
+                                     std::vector<void*> const& recv_slots,
+                                     size_t msg_size) {
+  if (kind != PeerTransportKind::Ipc) return true;
+  for (size_t i = 0; i < local_recv_mrs.size(); ++i) {
+    if (!comm.notify_ipc_buffer(peer_rank, local_recv_mrs[i].id,
+                                recv_slots[i], msg_size,
+                                kBenchIpcBindingVersion)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 static unsigned submit_send(Communicator& comm, int peer_rank,
@@ -329,7 +354,15 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
          local_send_mr.id, throughput_window);
 
   std::vector<MR> remote_recv_mrs;
-  if (transport_kind == PeerTransportKind::Uccl) {
+  if (transport_kind == PeerTransportKind::Ipc ||
+      transport_kind == PeerTransportKind::Uccl) {
+    if (!publish_ipc_recv_buffers(comm, peer_rank, transport_kind, local_recv_mrs,
+                                  recv_slots, msg_size)) {
+      fprintf(stderr, "[Sender %d] Failed to publish IPC receive buffers\n",
+              rank);
+      cleanup();
+      return;
+    }
     if (!exchange_remote_recv_mrs(comm, peer_rank, local_recv_mrs,
                                   remote_recv_mrs, true)) {
       fprintf(stderr, "[Sender %d] Failed to exchange remote receive MRs\n",
@@ -602,7 +635,15 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
          local_send_mr.id, throughput_window);
 
   std::vector<MR> remote_recv_mrs;
-  if (transport_kind == PeerTransportKind::Uccl) {
+  if (transport_kind == PeerTransportKind::Ipc ||
+      transport_kind == PeerTransportKind::Uccl) {
+    if (!publish_ipc_recv_buffers(comm, peer_rank, transport_kind, local_recv_mrs,
+                                  recv_slots, msg_size)) {
+      fprintf(stderr, "[Receiver %d] Failed to publish IPC receive buffers\n",
+              rank);
+      cleanup();
+      return;
+    }
     if (!exchange_remote_recv_mrs(comm, peer_rank, local_recv_mrs,
                                   remote_recv_mrs, false)) {
       fprintf(stderr, "[Receiver %d] Failed to exchange remote receive MRs\n",

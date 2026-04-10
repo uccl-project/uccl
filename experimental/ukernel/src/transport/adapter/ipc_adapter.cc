@@ -292,6 +292,7 @@ unsigned IpcAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
   remote_slice.offset = remote_offset;
   if (remote_hint.has_value()) {
     remote_slice.write = remote_hint->write;
+    remote_slice.binding_version = remote_hint->binding_version;
   }
   unsigned request_id = 0;
   IpcRequestSlot* req = try_acquire_request_slot(&request_id);

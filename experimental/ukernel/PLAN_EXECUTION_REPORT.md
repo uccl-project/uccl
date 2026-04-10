@@ -21,7 +21,8 @@ unless a newer committed result supersedes them.
 
 | Step | Phase | Status | Commit | Summary |
 | --- | --- | --- | --- | --- |
-| 1 | Phase 2 | kept | `cache local ipc exports by allocation` | add local export cache reuse for IPC local handle export |
+| 1 | Phase 2 | kept | `08cdb004` | add local export cache reuse for IPC local handle export |
+| 2 | Phase 3 bridge | kept | `pending` | propagate IPC binding_version and make bench cover versioned direct IPC path |
 
 ## Detailed Notes
 
@@ -99,3 +100,72 @@ Reasoning:
 Next candidate:
 - continue Phase 2 with the next low-risk item from the plan
 - likely options are remote open-cache lifecycle cleanup or narrowing send-side synchronization to active streams only
+
+### Step 2: propagate binding_version and make the benchmark hit the direct IPC metadata path
+
+Status:
+- kept
+
+Scope:
+- [ipc_adapter.cc](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/adapter/ipc_adapter.cc)
+- [bench_transport.cc](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/benchmarks/bench_transport.cc)
+
+What changed:
+- `IpcAdapter::send_async()` now preserves `remote_hint.binding_version` when it copies the `RemoteSlice` into the request slot
+- `bench_transport` now exchanges remote recv MR ids for IPC, not only UCCL
+- `bench_transport` pre-publishes recv buffers with a fixed IPC metadata version and sends with `RemoteSlice{mem_id, offset, ..., binding_version=1}` for IPC
+
+Why:
+- the runtime already has a versioned by-`mem_id` IPC direct path
+- the CCL transport backend already prepares `RemoteSlice.binding_version`
+- but the IPC adapter was dropping that field, which forced the request back toward the old `ipc_cache_req` fallback
+- the benchmark also was not providing IPC `RemoteSlice` metadata, so it mostly measured the fallback control path instead of the direct metadata path
+
+Build command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang/experimental/ukernel
+make -f Makefile.rocm bench_transport -j4
+```
+
+Benchmark command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang/experimental/ukernel
+sizes=(4096 65536 1048576 16777216)
+port=7600
+for size in "${sizes[@]}"; do
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=0 --membind=0 ./bench_transport --rank 0 --peer-rank 1 --gpu-id 2 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port" &
+  pid0=$!
+  sleep 1
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=1 --membind=1 ./bench_transport --rank 1 --peer-rank 0 --gpu-id 6 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port"
+  wait "$pid0"
+  port=$((port + 1))
+done
+```
+
+Test placement:
+- `GPU 2` on `NUMA 0`
+- `GPU 6` on `NUMA 1`
+
+Key before/after points:
+
+| Size | Baseline p50 us | New p50 us | Delta | Baseline Uni GB/s | New Uni GB/s | Baseline Bidi GB/s | New Bidi GB/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4KB | 3372.92 | 1220.76 | -63.8% | 0.00 | 0.19 | 0.01 | 0.02 |
+| 64KB | 3423.11 | 1245.81 | -63.6% | 0.05 | 2.43 | 0.08 | 0.27 |
+| 1MB | 3454.59 | 1200.41 | -65.3% | 0.88 | 21.20 | 1.37 | 3.44 |
+| 16MB | 4014.01 | 2630.75 | -34.5% | 10.79 | 42.75 | 12.81 | 18.76 |
+
+Decision:
+- keep
+
+Reasoning:
+- this candidate shows a large, stable improvement at every measured size
+- the benefit comes from finally exercising the versioned IPC direct path instead of spending most requests in the old request-level handshake fallback
+- this is consistent with the plan direction and with the NCCL comparison notes: handle/control work should move from hot requests toward longer-lived buffer metadata
+- the benchmark change is intentional and useful because the previous IPC benchmark under-covered the direct path we actually want to optimize
+
+Next candidate:
+- continue Phase 3-style work by reducing per-request receiver-side IPC metadata publication
+- the most promising next step is to avoid redundant `notify_ipc_buffer()` work when the same recv buffer remains bound for the whole communicator lifetime
