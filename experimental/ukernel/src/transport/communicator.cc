@@ -1267,11 +1267,29 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
     void* ipc_base_ptr =
         reinterpret_cast<void*>(static_cast<uintptr_t>(local_mr.address));
     size_t ipc_bytes = static_cast<size_t>(local_mr.length);
-    if (!notify_ipc_buffer(rank, dst.mem_id, ipc_base_ptr, ipc_bytes)) {
-      std::cerr << "[WARN] Communicator " << global_rank_
-                << " failed to publish IPC buffer metadata for rank " << rank
-                << ", ipc_id=" << dst.mem_id
-                << "; sender may fallback to ipc_cache handshake" << std::endl;
+    uintptr_t ipc_base_addr = reinterpret_cast<uintptr_t>(ipc_base_ptr);
+    bool should_publish = true;
+    {
+      std::lock_guard<std::mutex> lk(ipc_gen_mu_);
+      auto& published = local_ipc_published_buffers_[rank][dst.mem_id];
+      should_publish = !(published.valid &&
+                         published.base_addr == ipc_base_addr &&
+                         published.bytes == ipc_bytes);
+    }
+    if (should_publish) {
+      if (!notify_ipc_buffer(rank, dst.mem_id, ipc_base_ptr, ipc_bytes)) {
+        std::cerr << "[WARN] Communicator " << global_rank_
+                  << " failed to publish IPC buffer metadata for rank " << rank
+                  << ", ipc_id=" << dst.mem_id
+                  << "; sender may fallback to ipc_cache handshake"
+                  << std::endl;
+      } else {
+        std::lock_guard<std::mutex> lk(ipc_gen_mu_);
+        auto& published = local_ipc_published_buffers_[rank][dst.mem_id];
+        published.base_addr = ipc_base_addr;
+        published.bytes = ipc_bytes;
+        published.valid = true;
+      }
     }
   }
 

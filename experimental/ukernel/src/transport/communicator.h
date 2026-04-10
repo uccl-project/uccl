@@ -227,6 +227,12 @@ class Communicator {
   };
   std::vector<std::weak_ptr<NotifyTarget>> notify_targets_;
 
+  struct PublishedIpcBuffer {
+    uintptr_t base_addr = 0;
+    size_t bytes = 0;
+    bool valid = false;
+  };
+
   // UCCL registration cache.
   mutable std::mutex uccl_reg_mu_;
   std::unordered_set<uint64_t> uccl_direct_reg_failed_mrs_;
@@ -236,6 +242,8 @@ class Communicator {
   mutable std::mutex ipc_gen_mu_;
   std::unordered_map<int, std::unordered_map<uint32_t, uint64_t>>
       local_ipc_binding_versions_;
+  std::unordered_map<int, std::unordered_map<uint32_t, PublishedIpcBuffer>>
+      local_ipc_published_buffers_;
 };
 
 }  // namespace Transport

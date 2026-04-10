@@ -30,7 +30,8 @@ unless a newer committed result supersedes them.
 | 7 | Phase 2 | kept | `3928726b` | shrink recv-side poll sleep from 1ms to 50us |
 | 8 | Phase 2 | reverted | `n/a` | widen the new recv-side poll sleep from 50us to 100us |
 | 9 | Phase 2 / Lite-inspired | reverted | `n/a` | bind worker threads to the local GPU context and remove per-request device switching |
-| 10 | Phase 2 / Lite-inspired | kept | `pending` | split send/recv worker wakeups and add a short idle spin before blocking |
+| 10 | Phase 2 / Lite-inspired | kept | `f044f035` | split send/recv worker wakeups and add a short idle spin before blocking |
+| 11 | Phase 3 bridge | kept | `pending` | skip repeated IPC metadata publish in `irecv()` when the recv base mapping is unchanged |
 
 ## Detailed Notes
 
@@ -714,3 +715,136 @@ Reasoning:
   bidirectional throughput improved materially in the `512KB` to `16MB` region
 - the code change is small, local to the IPC worker scheduling path, and
   conceptually aligned with the lite design's dedicated-worker control plane
+
+### Step 11: skip repeated IPC metadata publish for unchanged recv buffers
+
+Status:
+- kept
+
+Scope:
+- [communicator.h](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/communicator.h)
+- [communicator.cc](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/communicator.cc)
+
+What changed:
+- added a small `(peer_rank, ipc_id) -> {base_addr, bytes}` cache for the last
+  recv-side IPC base mapping published by `irecv()`
+- `Communicator::irecv()` now skips `notify_ipc_buffer()` when the current
+  receive MR base and size are identical to the last published mapping for that
+  peer/id pair
+- the generic `notify_ipc_buffer()` API and the IPC wire protocol are unchanged
+
+Why it seemed promising:
+- this revisits the earlier Phase 3 bridge idea from Step 3, but with a
+  narrower implementation that only touches the actual `irecv()` fast path
+- it also matches the direction in
+  [experimental/lite/doc/p2p-design.md](/home/yangzhou/danyang/uccl-danyang/experimental/lite/doc/p2p-design.md):
+  buffer registration/address exchange should be longer-lived than the request
+  objects that consume it
+- after Step 10, the remaining per-request control work on the recv side became
+  more visible again, especially in bidirectional IPC
+
+Build command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang/experimental/ukernel
+make -f Makefile.rocm bench_transport -j4
+```
+
+Primary benchmark command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang
+bench=/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/bench_transport
+sizes=(1024 2048 4096 8192 16384 32768 65536 131072 262144 524288 1048576 2097152 4194304 8388608 16777216 33554432 67108864 134217728 268435456)
+port=10300
+for size in "${sizes[@]}"; do
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=0 --membind=0 "$bench" --rank 0 --peer-rank 1 --gpu-id 2 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port" &
+  pid0=$!
+  sleep 1
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=1 --membind=1 "$bench" --rank 1 --peer-rank 0 --gpu-id 6 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port"
+  wait "$pid0"
+  port=$((port + 1))
+done
+```
+
+Additional validation command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang
+bench=/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/bench_transport
+sizes=(4096 65536 1048576 16777216)
+port=10200
+for size in "${sizes[@]}"; do
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=0 --membind=0 "$bench" --rank 0 --peer-rank 1 --gpu-id 2 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port" &
+  pid0=$!
+  sleep 1
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=1 --membind=1 "$bench" --rank 1 --peer-rank 0 --gpu-id 6 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port"
+  wait "$pid0"
+  port=$((port + 1))
+done
+```
+
+Test placement:
+- `GPU 2` on `NUMA 0`
+- `GPU 6` on `NUMA 1`
+
+Key before/after points versus the current kept baseline from Step 10:
+
+| Size | Prev p50 us | New p50 us | Prev Uni GB/s | New Uni GB/s | Prev Bidi GB/s | New Bidi GB/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4KB | 321.74 | 327.28 | 0.22 | 0.21 | 0.03 | 0.17 |
+| 64KB | 456.63 | 432.98 | 2.64 | 3.61 | 0.30 | 2.81 |
+| 1MB | 341.94 | 466.95 | 24.31 | 25.90 | 8.30 | 12.29 |
+| 2MB | 493.44 | 440.74 | 30.69 | 30.22 | 6.83 | 19.28 |
+| 16MB | 1000.74 | 935.54 | 43.11 | 42.79 | 28.90 | 25.56 |
+
+Full current sweep:
+
+| Size | p50 us | p90 us | Uni GB/s | Bidi GB/s |
+| --- | ---: | ---: | ---: | ---: |
+| 1024 | 313.23 | 373.32 | 0.05 | 0.04 |
+| 2048 | 370.23 | 480.51 | 0.10 | 0.09 |
+| 4096 | 327.28 | 333.11 | 0.21 | 0.17 |
+| 8192 | 261.61 | 368.79 | 0.40 | 0.34 |
+| 16384 | 286.72 | 372.18 | 0.79 | 0.68 |
+| 32768 | 393.16 | 494.63 | 1.01 | 1.20 |
+| 65536 | 432.98 | 544.81 | 3.61 | 2.81 |
+| 131072 | 444.82 | 457.10 | 6.65 | 4.98 |
+| 262144 | 463.36 | 570.65 | 11.14 | 7.04 |
+| 524288 | 485.00 | 508.13 | 15.12 | 9.53 |
+| 1048576 | 466.95 | 577.29 | 25.90 | 12.29 |
+| 2097152 | 440.74 | 982.58 | 30.22 | 19.28 |
+| 4194304 | 580.57 | 1886.88 | 36.00 | 21.37 |
+| 8388608 | 642.93 | 1309.58 | 40.33 | 19.78 |
+| 16777216 | 935.54 | 1594.58 | 42.79 | 25.56 |
+| 33554432 | 1658.75 | 2325.87 | 44.48 | 17.74 |
+| 67108864 | 3212.12 | 10171.45 | 44.82 | 15.84 |
+| 134217728 | 5794.34 | 6895.01 | 45.21 | 20.31 |
+| 268435456 | 11421.10 | 12643.01 | 45.41 | 17.63 |
+
+Additional validation:
+- I replayed `4096/65536/1048576/16777216` once more after the full sweep
+- that rerun produced:
+  - `4096`: `p50 366.02 us`, `0.20 GB/s` uni, `0.14 GB/s` bidi
+  - `65536`: `p50 443.74 us`, `3.40 GB/s` uni, `2.38 GB/s` bidi
+  - `1048576`: `p50 342.95 us`, `26.91 GB/s` uni, `18.56 GB/s` bidi
+  - `16777216`: `p50 999.73 us`, `43.39 GB/s` uni, `23.72 GB/s` bidi
+- the rerun confirms the qualitative picture: medium-size bidirectional
+  throughput gains are robust, while `1MB` latency itself is somewhat noisier
+  than the throughput signal
+
+Decision:
+- keep
+
+Reasoning:
+- this candidate finally turns the “register once, reuse many requests” idea
+  into a measurable runtime win without changing the public API or the IPC
+  wire protocol
+- bidirectional throughput improves dramatically and consistently from
+  `32KB` through `8MB`, which matches the expectation that repeated recv-side
+  metadata publication was still stalling the steady-state control path
+- latency is mixed at a few sizes, but the second full sweep and the focused
+  anchor rerun both support the same broader conclusion: the repeated
+  `notify_ipc_buffer()` publication cost was still material in the timed path
+- the change is still local and easy to reason about, so it is a good Phase 3
+  bridge before considering any larger protocol change
