@@ -353,12 +353,23 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
   }
 #endif
 
+#ifdef UCCL_P2P_USE_TCPX
+  // TCPX: no readv_async, loop over read_async for each iov
+  for (int i = 0; i < num_iovs; i++) {
+    if (!conn->engine->endpoint->read_async(conn->conn_id, mr_ids[i], dst_v[i],
+                                            size_v[i], fifo_items[i],
+                                            transfer_id))
+      return -1;
+  }
+  return 0;
+#else
   // Remote RDMA
   return conn->engine->endpoint->readv_async(conn->conn_id, mr_ids, dst_v,
                                              size_v, fifo_items, num_iovs,
                                              transfer_id)
              ? 0
              : -1;
+#endif
 }
 
 int uccl_engine_send(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
