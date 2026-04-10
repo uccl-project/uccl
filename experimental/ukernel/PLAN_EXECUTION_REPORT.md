@@ -22,7 +22,9 @@ unless a newer committed result supersedes them.
 | Step | Phase | Status | Commit | Summary |
 | --- | --- | --- | --- | --- |
 | 1 | Phase 2 | kept | `08cdb004` | add local export cache reuse for IPC local handle export |
-| 2 | Phase 3 bridge | kept | `pending` | propagate IPC binding_version and make bench cover versioned direct IPC path |
+| 2 | Phase 3 bridge | kept | `8522a6d3` | propagate IPC binding_version and make bench cover versioned direct IPC path |
+| 3 | Phase 3 bridge | reverted | `n/a` | dedupe repeated local IPC metadata publish for the same recv buffer |
+| 4 | Phase 2 | reverted | `n/a` | try a truly synchronous single-stream copy fast-path |
 
 ## Detailed Notes
 
@@ -169,3 +171,101 @@ Reasoning:
 Next candidate:
 - continue Phase 3-style work by reducing per-request receiver-side IPC metadata publication
 - the most promising next step is to avoid redundant `notify_ipc_buffer()` work when the same recv buffer remains bound for the whole communicator lifetime
+
+### Step 3: dedupe repeated local IPC metadata publish for the same recv buffer
+
+Status:
+- reverted
+
+Scope:
+- [communicator.h](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/communicator.h)
+- [communicator.cc](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/communicator.cc)
+
+What changed:
+- tried caching the last locally published `IpcBufferInfo` per `(peer, ipc_id)`
+- tried returning early from `notify_ipc_buffer()` when the same valid buffer payload was being re-published
+
+Why it seemed promising:
+- after Step 2, the benchmark finally exercised the direct metadata path
+- `irecv()` still republishes IPC metadata every request, which looked like a remaining source of control overhead
+
+Benchmark command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang/experimental/ukernel
+sizes=(4096 65536 1048576 16777216)
+port=7700
+for size in "${sizes[@]}"; do
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=0 --membind=0 ./bench_transport --rank 0 --peer-rank 1 --gpu-id 2 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port" &
+  pid0=$!
+  sleep 1
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=1 --membind=1 ./bench_transport --rank 1 --peer-rank 0 --gpu-id 6 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port"
+  wait "$pid0"
+  port=$((port + 1))
+done
+```
+
+Observed result:
+
+| Size | Prev p50 us | New p50 us | Prev Uni GB/s | New Uni GB/s | Prev Bidi GB/s | New Bidi GB/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4KB | 1220.76 | 1230.28 | 0.19 | 0.19 | 0.02 | 0.02 |
+| 64KB | 1245.81 | 1204.45 | 2.43 | 3.27 | 0.27 | 0.27 |
+| 1MB | 1200.41 | 1240.95 | 21.20 | 22.89 | 3.44 | 3.55 |
+| 16MB | 2630.75 | 2529.79 | 42.75 | 41.41 | 18.76 | 18.75 |
+
+Decision:
+- revert
+
+Reasoning:
+- there were some wins, but the pattern was mixed and too close to noise
+- the improvement was not clear enough to justify the extra state and locking
+- this was a reasonable idea to test, but not strong enough to keep right now
+
+### Step 4: true synchronous single-stream copy fast-path
+
+Status:
+- reverted
+
+Scope:
+- [ipc_adapter.cc](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/adapter/ipc_adapter.cc)
+
+What changed:
+- tried replacing the `n_streams == 1` path with blocking device copy calls instead of `gpuMemcpyAsync/gpuMemcpyPeerAsync + gpuStreamSynchronize`
+
+Why it seemed promising:
+- the plan explicitly calls out a single-stream fast-path
+- after Step 2, the benchmark had a realistic direct IPC path, so copy-submission overhead became measurable
+
+Benchmark command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang/experimental/ukernel
+sizes=(4096 65536 1048576 16777216)
+port=7800
+for size in "${sizes[@]}"; do
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=0 --membind=0 ./bench_transport --rank 0 --peer-rank 1 --gpu-id 2 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port" &
+  pid0=$!
+  sleep 1
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=1 --membind=1 ./bench_transport --rank 1 --peer-rank 0 --gpu-id 6 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port"
+  wait "$pid0"
+  port=$((port + 1))
+done
+```
+
+Observed result:
+
+| Size | Prev p50 us | New p50 us | Prev Uni GB/s | New Uni GB/s | Prev Bidi GB/s | New Bidi GB/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4KB | 1220.76 | 1213.87 | 0.19 | 0.19 | 0.02 | 0.01 |
+| 64KB | 1245.81 | 1258.21 | 2.43 | 1.97 | 0.27 | 0.22 |
+| 1MB | 1200.41 | 1279.57 | 21.20 | 0.41 | 3.44 | 2.96 |
+| 16MB | 2630.75 | 1609.77 | 42.75 | 42.41 | 18.76 | 20.76 |
+
+Decision:
+- revert
+
+Reasoning:
+- `16MB` looked attractive, but `64KB` and especially `1MB` regressed too much
+- the behavior on AMD peer copy was not stable enough for a general fast-path
+- this candidate does not meet the “overall improvement” bar, so it was rolled back immediately
