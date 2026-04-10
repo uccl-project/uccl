@@ -172,6 +172,21 @@ UK_P2P_TRANSPORT=ipc UCCL_P2P_MODE=ipc CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc
   16777216 B |         4.104 |            8.18 |       4.683 |          7.17 |       0.799 |         41.99
   67108864 B |         6.058 |           22.15 |      17.865 |          7.51 |       2.758 |         48.66
  268435456 B |        13.548 |           39.63 |      70.594 |          7.61 |      10.814 |         49.64
+
+# tcp
+UK_P2P_TRANSPORT=tcp UCCL_P2P_MODE=ipc CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 bench_p2p.py
+         Size |  ukernel (ms) |  ukernel (GB/s)
+------------------------------------------------------
+      1024 B |         3.318 |            0.00
+      4096 B |         3.470 |            0.00
+     16384 B |         3.339 |            0.01
+     65536 B |         3.410 |            0.04
+    262144 B |         3.439 |            0.15
+   1048576 B |         3.602 |            0.58
+   4194304 B |         3.679 |            2.28
+  16777216 B |         4.104 |            8.18
+  67108864 B |         6.058 |           22.15
+ 268435456 B |        13.548 |           39.63
 ```
 
 Minimal usage under `torchrun`:
