@@ -1590,13 +1590,7 @@ bool Communicator::notify_ipc_buffer(int remote_rank, uint32_t ipc_id,
   info.binding_version = binding_version;
   info.valid = false;
   if (local_buf != nullptr && len != 0) {
-    int original_device = -1;
-    GPU_RT_CHECK(gpuGetDevice(&original_device));
-    auto restore = UKernel::Transport::finally(
-        [&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
-    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-    auto exported =
-        ipc_manager_.create_local_ipc(local_buf, len, local_gpu_idx_);
+    auto exported = export_local_ipc_buffer(local_buf, len);
     if (!exported.valid) return false;
 
     info.handle = exported.handle;
@@ -1613,6 +1607,17 @@ bool Communicator::notify_ipc_buffer(int remote_rank, uint32_t ipc_id,
   auto const versioned_key = ipc_buffer_versioned_key(global_rank_, remote_rank,
                                                       ipc_id, binding_version);
   return exchanger_client_->publish(versioned_key, info);
+}
+
+IPCItem Communicator::export_local_ipc_buffer(void* local_buf, size_t len) {
+  if (local_buf == nullptr || len == 0) return {};
+
+  int original_device = -1;
+  GPU_RT_CHECK(gpuGetDevice(&original_device));
+  auto restore = UKernel::Transport::finally(
+      [&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+  return ipc_manager_.create_local_ipc(local_buf, len, local_gpu_idx_);
 }
 
 bool Communicator::wait_ipc_buffer(int remote_rank, uint32_t ipc_id,

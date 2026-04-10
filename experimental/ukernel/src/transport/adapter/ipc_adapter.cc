@@ -717,13 +717,15 @@ bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
   transfer_info.is_send = 0;
   transfer_info.remote_gpu_idx_ = comm_->local_gpu_idx();
   void* actual_dst = creq->data();
-
-  void* base = nullptr;
-  size_t base_size = 0;
-  GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, actual_dst));
-  GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle, base));
-  transfer_info.offset = reinterpret_cast<uintptr_t>(actual_dst) -
-                         reinterpret_cast<uintptr_t>(base);
+  IPCItem exported = comm_->export_local_ipc_buffer(actual_dst, creq->size_bytes);
+  if (!exported.valid) {
+    std::cerr << "[ERROR] export_local_ipc_buffer failed for req " << creq->id
+              << " match_seq " << creq->match_seq << std::endl;
+    return false;
+  }
+  transfer_info.handle = exported.handle;
+  transfer_info.offset =
+      reinterpret_cast<uintptr_t>(actual_dst) - exported.base_addr;
 
   if (!shm_control_->send_ipc_cache(from_rank, creq->match_seq,
                                     transfer_info)) {

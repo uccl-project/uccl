@@ -78,6 +78,7 @@ class Communicator {
   bool resolve_ipc_buffer_pointer(int remote_rank, uint32_t ipc_id,
                                   size_t offset, size_t bytes, void** out_ptr,
                                   int* out_device_idx);
+  IPCItem export_local_ipc_buffer(void* local_buf, size_t len);
 
   bool register_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle,
                                  IPCItem const& ipc);

@@ -12,6 +12,15 @@ bool IPCManager::has_handle(gpuIpcMemHandle_t const& h) {
   return false;
 }
 
+bool IPCManager::local_cache_contains(IPCItem const& item,
+                                      uintptr_t ptr_addr) noexcept {
+  if (!item.valid || item.base_addr == 0 || item.allocation_size == 0) {
+    return false;
+  }
+  return ptr_addr >= item.base_addr &&
+         (ptr_addr - item.base_addr) < item.allocation_size;
+}
+
 void IPCManager::close_local_import_if_open(IPCItem& item) {
   if (item.is_local || item.direct_ptr == nullptr || item.device_idx < 0) {
     return;
@@ -41,33 +50,41 @@ bool IPCManager::register_remote_ipc(int rank, IPCItem const& ipc) {
 
 IPCItem IPCManager::create_local_ipc(void* ptr, size_t len, int device_idx) {
   if (ptr == nullptr || len == 0) return {};
+  uintptr_t ptr_addr = reinterpret_cast<uintptr_t>(ptr);
 
   void* base = nullptr;
   size_t base_size = 0;
-  GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, ptr));
-  uintptr_t key = reinterpret_cast<uintptr_t>(base);
-
   {
     std::lock_guard<std::mutex> lk(local_mu_);
-    auto it = local_ipc_cache_.find(key);
-    if (it != local_ipc_cache_.end()) {
-      return it->second;
+    for (auto const& kv : local_ipc_cache_) {
+      if (!local_cache_contains(kv.second, ptr_addr)) continue;
+      IPCItem hit = kv.second;
+      hit.base_offset = ptr_addr - hit.base_addr;
+      hit.bytes = len;
+      return hit;
     }
   }
+
+  GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, ptr));
+  uintptr_t key = reinterpret_cast<uintptr_t>(base);
 
   IPCItem created{};
   GPU_RT_CHECK(gpuIpcGetMemHandle(&created.handle, base));
   created.base_addr = key;
-  created.base_offset = reinterpret_cast<uintptr_t>(ptr) - key;
+  created.base_offset = ptr_addr - key;
   created.bytes = len;
+  created.allocation_size = base_size;
   created.device_idx = device_idx;
   created.is_local = true;
   created.valid = true;
 
   std::lock_guard<std::mutex> lk(local_mu_);
   auto [it, inserted] = local_ipc_cache_.emplace(key, created);
-  if (!inserted) return it->second;
-  return created;
+  IPCItem out = inserted ? created : it->second;
+  out.base_offset = ptr_addr - out.base_addr;
+  out.bytes = len;
+  if (out.allocation_size == 0) out.allocation_size = base_size;
+  return out;
 }
 
 IPCItem IPCManager::get_ipc(int rank, gpuIpcMemHandle_t handle) const {
@@ -90,16 +107,19 @@ IPCItem IPCManager::get_ipc(int rank, uint32_t ipc_id) const {
 
 IPCItem IPCManager::get_ipc(void* local_ptr) const {
   if (local_ptr == nullptr) return {};
-  void* base = nullptr;
-  size_t base_size = 0;
-  GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, local_ptr));
-  (void)base_size;
-  uintptr_t key = reinterpret_cast<uintptr_t>(base);
+  uintptr_t ptr_addr = reinterpret_cast<uintptr_t>(local_ptr);
 
   std::lock_guard<std::mutex> lk(local_mu_);
-  auto it = local_ipc_cache_.find(key);
-  if (it == local_ipc_cache_.end()) return {};
-  return it->second;
+  for (auto const& kv : local_ipc_cache_) {
+    if (!local_cache_contains(kv.second, ptr_addr)) continue;
+    IPCItem hit = kv.second;
+    hit.base_offset = ptr_addr - hit.base_addr;
+    if (hit.allocation_size >= hit.base_offset) {
+      hit.bytes = hit.allocation_size - hit.base_offset;
+    }
+    return hit;
+  }
+  return {};
 }
 
 bool IPCManager::delete_ipc(int rank, gpuIpcMemHandle_t handle) {
@@ -143,23 +163,17 @@ bool IPCManager::delete_ipc(int rank, uint32_t ipc_id) {
 
 bool IPCManager::delete_ipc(void* local_ptr) {
   if (local_ptr == nullptr) return false;
-  uintptr_t key = reinterpret_cast<uintptr_t>(local_ptr);
+  uintptr_t ptr_addr = reinterpret_cast<uintptr_t>(local_ptr);
   {
     std::lock_guard<std::mutex> lk(local_mu_);
-    auto it = local_ipc_cache_.find(key);
-    if (it != local_ipc_cache_.end()) {
+    for (auto it = local_ipc_cache_.begin(); it != local_ipc_cache_.end();
+         ++it) {
+      if (!local_cache_contains(it->second, ptr_addr)) continue;
       local_ipc_cache_.erase(it);
       return true;
     }
   }
-
-  void* base = nullptr;
-  size_t base_size = 0;
-  GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, local_ptr));
-  (void)base_size;
-  key = reinterpret_cast<uintptr_t>(base);
-  std::lock_guard<std::mutex> lk(local_mu_);
-  return local_ipc_cache_.erase(key) > 0;
+  return false;
 }
 
 void IPCManager::delete_ipc(int rank) {
