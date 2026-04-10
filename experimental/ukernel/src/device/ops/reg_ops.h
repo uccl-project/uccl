@@ -94,6 +94,13 @@ __device__ __forceinline__ void reg_to_shmem_async(void* smem, const T* reg_src,
                                                    size_t count) {
   char const* src = reinterpret_cast<char const*>(reg_src);
   char* dst = static_cast<char*>(smem);
+#if defined(__HIP_PLATFORM_AMD__)
+  // ROCm bring-up path only: this is a naive byte-copy fallback so the AMD
+  // build can run end-to-end before we add a real async/shared-memory path.
+  for (size_t i = 0; i < count * sizeof(T); ++i) {
+    dst[i] = src[i];
+  }
+#else
   constexpr size_t kAlign = 16;
   size_t aligned_count = (count * sizeof(T)) & ~(kAlign - 1);
   for (size_t i = 0; i < aligned_count; i += kAlign) {
@@ -106,6 +113,7 @@ __device__ __forceinline__ void reg_to_shmem_async(void* smem, const T* reg_src,
       dst[aligned_count + i] = src[aligned_count + i];
   }
   asm volatile("cp.async.commit_group;");
+#endif
 }
 
 template <typename T>
@@ -114,6 +122,13 @@ __device__ __forceinline__ void reg_from_shmem_async(T* reg_dst,
                                                      size_t count) {
   char const* src = static_cast<char const*>(smem);
   char* dst = reinterpret_cast<char*>(reg_dst);
+#if defined(__HIP_PLATFORM_AMD__)
+  // ROCm bring-up path only: this is a naive byte-copy fallback so the AMD
+  // build can run end-to-end before we add a real async/shared-memory path.
+  for (size_t i = 0; i < count * sizeof(T); ++i) {
+    dst[i] = src[i];
+  }
+#else
   constexpr size_t kAlign = 16;
   size_t aligned_count = (count * sizeof(T)) & ~(kAlign - 1);
   for (size_t i = 0; i < aligned_count; i += kAlign) {
@@ -126,6 +141,7 @@ __device__ __forceinline__ void reg_from_shmem_async(T* reg_dst,
       dst[aligned_count + i] = src[aligned_count + i];
   }
   asm volatile("cp.async.commit_group;");
+#endif
 }
 
 template <typename T>
@@ -134,6 +150,13 @@ __device__ __forceinline__ void reg_shmem_copy_async(void* dst_smem,
                                                      size_t bytes) {
   char const* src = static_cast<char const*>(src_smem);
   char* dst = static_cast<char*>(dst_smem);
+#if defined(__HIP_PLATFORM_AMD__)
+  // ROCm bring-up path only: this is a naive byte-copy fallback so the AMD
+  // build can run end-to-end before we add a real async/shared-memory path.
+  for (size_t i = 0; i < bytes; ++i) {
+    dst[i] = src[i];
+  }
+#else
   constexpr size_t kAlign = 16;
   size_t aligned_bytes = bytes & ~(kAlign - 1);
   for (size_t i = 0; i < aligned_bytes; i += kAlign) {
@@ -144,6 +167,7 @@ __device__ __forceinline__ void reg_shmem_copy_async(void* dst_smem,
     for (size_t i = aligned_bytes; i < bytes; ++i) dst[i] = src[i];
   }
   asm volatile("cp.async.commit_group;");
+#endif
 }
 
 template <typename T>
