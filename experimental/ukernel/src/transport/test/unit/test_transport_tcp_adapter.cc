@@ -11,10 +11,10 @@
 
 namespace {
 
-using UKernel::Transport::TcpTransportAdapter;
 using UKernel::Transport::PeerConnectSpec;
 using UKernel::Transport::PeerConnectType;
 using UKernel::Transport::TcpPeerConnectSpec;
+using UKernel::Transport::TcpTransportAdapter;
 using UKernel::Transport::TestUtil::require;
 using UKernel::Transport::TestUtil::run_case;
 
@@ -47,7 +47,8 @@ void test_tcp_connect_and_transfer() {
   connect_spec.type = PeerConnectType::Connect;
   connect_spec.detail =
       TcpPeerConnectSpec{"127.0.0.1", server.get_listen_port()};
-  require(client.ensure_peer(connect_spec), "client ensure_peer(connect) failed");
+  require(client.ensure_peer(connect_spec),
+          "client ensure_peer(connect) failed");
   accept_thread.join();
   if (accept_error) std::rethrow_exception(accept_error);
 

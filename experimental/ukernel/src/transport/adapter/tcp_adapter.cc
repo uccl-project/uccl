@@ -1,6 +1,6 @@
 #include "tcp_adapter.h"
-#include "gpu_rt.h"
 #include "../util/utils.h"
+#include "gpu_rt.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <cerrno>
@@ -44,10 +44,13 @@ TcpTransportAdapter::TcpTransportAdapter(std::string local_ip, int local_rank)
   if (listen_fd_ < 0) {
     throw std::runtime_error("failed to create tcp transport listen socket");
   }
-  send_task_ring_ = UKernel::Transport::create_ring(sizeof(unsigned), kTaskRingSize);
-  recv_task_ring_ = UKernel::Transport::create_ring(sizeof(unsigned), kTaskRingSize);
+  send_task_ring_ =
+      UKernel::Transport::create_ring(sizeof(unsigned), kTaskRingSize);
+  recv_task_ring_ =
+      UKernel::Transport::create_ring(sizeof(unsigned), kTaskRingSize);
   request_slots_ = std::make_unique<RequestSlot[]>(kRequestSlotCount);
-  if (send_task_ring_ == nullptr || recv_task_ring_ == nullptr || !request_slots_) {
+  if (send_task_ring_ == nullptr || recv_task_ring_ == nullptr ||
+      !request_slots_) {
     if (send_task_ring_ != nullptr) {
       free(send_task_ring_);
       send_task_ring_ = nullptr;
@@ -322,8 +325,7 @@ bool TcpTransportAdapter::wait_completion(unsigned request_id) {
     std::unique_lock<std::mutex> lk(cv_mu_);
     cv_.wait(lk, [&] {
       RequestSlot* cur = resolve_request_slot_const(request_id);
-      return stop_.load(std::memory_order_acquire) ||
-             cur == nullptr ||
+      return stop_.load(std::memory_order_acquire) || cur == nullptr ||
              cur->is_completed();
     });
   }
@@ -379,8 +381,8 @@ TcpTransportAdapter::RequestSlot* TcpTransportAdapter::resolve_request_slot(
   return &slot;
 }
 
-TcpTransportAdapter::RequestSlot* TcpTransportAdapter::resolve_request_slot_const(
-    unsigned request_id) const {
+TcpTransportAdapter::RequestSlot*
+TcpTransportAdapter::resolve_request_slot_const(unsigned request_id) const {
   if (request_id == 0 || !request_slots_) return nullptr;
   uint32_t generation = request_generation(request_id);
   if (generation == 0) return nullptr;
@@ -415,9 +417,9 @@ void TcpTransportAdapter::release_request_slot(unsigned request_id) {
   while (true) {
     uint32_t next_gen = old_gen + 1;
     if (next_gen == 0) next_gen = 1;
-    if (slot.generation.compare_exchange_weak(
-            old_gen, next_gen, std::memory_order_acq_rel,
-            std::memory_order_acquire)) {
+    if (slot.generation.compare_exchange_weak(old_gen, next_gen,
+                                              std::memory_order_acq_rel,
+                                              std::memory_order_acquire)) {
       break;
     }
   }
@@ -468,13 +470,15 @@ void TcpTransportAdapter::send_worker_loop() {
     {
       std::lock_guard<std::mutex> lk(mu_);
       auto it = peer_contexts_.find(slot->peer_rank);
-      if (it != peer_contexts_.end() && it->second && it->second->send_fd >= 0) {
+      if (it != peer_contexts_.end() && it->second &&
+          it->second->send_fd >= 0) {
         ctx = it->second;
       }
     }
     if (ctx) {
       std::lock_guard<std::mutex> send_lk(ctx->send_mu);
-      ok = TcpTransportAdapter::send_all(ctx->send_fd, slot->host_ptr, slot->len);
+      ok = TcpTransportAdapter::send_all(ctx->send_fd, slot->host_ptr,
+                                         slot->len);
     }
     slot->mark_completed(ok);
     cv_.notify_all();
@@ -516,13 +520,15 @@ void TcpTransportAdapter::recv_worker_loop() {
     {
       std::lock_guard<std::mutex> lk(mu_);
       auto it = peer_contexts_.find(slot->peer_rank);
-      if (it != peer_contexts_.end() && it->second && it->second->recv_fd >= 0) {
+      if (it != peer_contexts_.end() && it->second &&
+          it->second->recv_fd >= 0) {
         ctx = it->second;
       }
     }
     if (ctx) {
       std::lock_guard<std::mutex> recv_lk(ctx->recv_mu);
-      ok = TcpTransportAdapter::recv_all(ctx->recv_fd, slot->host_ptr, slot->len);
+      ok = TcpTransportAdapter::recv_all(ctx->recv_fd, slot->host_ptr,
+                                         slot->len);
     }
     slot->mark_completed(ok);
     cv_.notify_all();

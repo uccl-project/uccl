@@ -633,8 +633,7 @@ bool Communicator::try_fallback_tcp_connect(
   PeerConnectSpec spec{};
   spec.peer_rank = rank;
   spec.type = PeerConnectType::Connect;
-  spec.detail =
-      TcpPeerConnectSpec{remote_p2p_info.ip, remote_p2p_info.port};
+  spec.detail = TcpPeerConnectSpec{remote_p2p_info.ip, remote_p2p_info.port};
   if (!tcp_adapter.ensure_peer(spec)) {
     return false;
   }
@@ -747,12 +746,9 @@ bool Communicator::connect(int rank) {
       PeerConnectSpec spec{};
       spec.peer_rank = rank;
       spec.type = PeerConnectType::Connect;
-      spec.detail = UcclPeerConnectSpec{remote_p2p_info.ip,
-                                        remote_p2p_info.port,
-                                        dev_idx,
-                                        local_gpu_idx_,
-                                        remote_p2p_info.dev_idx,
-                                        remote_p2p_info.gpu_idx};
+      spec.detail = UcclPeerConnectSpec{
+          remote_p2p_info.ip, remote_p2p_info.port,    dev_idx,
+          local_gpu_idx_,     remote_p2p_info.dev_idx, remote_p2p_info.gpu_idx};
       if (!uccl_adapter.has_peer(rank) && !uccl_adapter.ensure_peer(spec)) {
         std::cerr << "[ERROR] Communicator " << global_rank_
                   << " UCCL connect_to failed to rank " << rank << std::endl;
@@ -870,12 +866,9 @@ bool Communicator::accept(int rank) {
       PeerConnectSpec spec{};
       spec.peer_rank = rank;
       spec.type = PeerConnectType::Accept;
-      spec.detail = UcclPeerConnectSpec{remote_p2p_info.ip,
-                                        remote_p2p_info.port,
-                                        dev_idx,
-                                        local_gpu_idx_,
-                                        remote_p2p_info.dev_idx,
-                                        remote_p2p_info.gpu_idx};
+      spec.detail = UcclPeerConnectSpec{
+          remote_p2p_info.ip, remote_p2p_info.port,    dev_idx,
+          local_gpu_idx_,     remote_p2p_info.dev_idx, remote_p2p_info.gpu_idx};
       if (!uccl_adapter.has_peer(rank) && !uccl_adapter.ensure_peer(spec)) {
         std::cerr << "[ERROR] Communicator " << global_rank_
                   << " UCCL accept_from failed from rank " << rank << std::endl;

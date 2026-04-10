@@ -94,7 +94,9 @@ class IpcAdapter final : public TransportAdapter {
       finished.store(true, std::memory_order_release);
       remaining.store(0, std::memory_order_release);
     }
-    void mark_running() { state.store(RequestState::Running, std::memory_order_release); }
+    void mark_running() {
+      state.store(RequestState::Running, std::memory_order_release);
+    }
     void complete_one() {
       uint32_t prev = remaining.load(std::memory_order_acquire);
       while (prev != 0 && !remaining.compare_exchange_weak(

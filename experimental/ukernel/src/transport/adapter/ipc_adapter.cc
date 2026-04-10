@@ -51,8 +51,10 @@ IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
           comm->rank(), comm->world_size(), std::move(ring_namespace),
           self_local_id)),
       comm_(comm) {
-  send_task_ring_ = UKernel::Transport::create_ring(sizeof(unsigned), kTaskRingSize);
-  recv_task_ring_ = UKernel::Transport::create_ring(sizeof(unsigned), kTaskRingSize);
+  send_task_ring_ =
+      UKernel::Transport::create_ring(sizeof(unsigned), kTaskRingSize);
+  recv_task_ring_ =
+      UKernel::Transport::create_ring(sizeof(unsigned), kTaskRingSize);
   request_slots_ = std::make_unique<IpcRequestSlot[]>(kRequestSlotCount);
   stop_.store(false);
   send_thread_ = std::thread([this] { send_thread_func(); });
@@ -245,9 +247,9 @@ void IpcAdapter::release_request_slot(unsigned request_id) {
   while (true) {
     uint32_t next_gen = old_gen + 1;
     if (next_gen == 0) next_gen = 1;
-    if (slot.generation.compare_exchange_weak(
-            old_gen, next_gen, std::memory_order_acq_rel,
-            std::memory_order_acquire)) {
+    if (slot.generation.compare_exchange_weak(old_gen, next_gen,
+                                              std::memory_order_acq_rel,
+                                              std::memory_order_acquire)) {
       break;
     }
   }
@@ -363,9 +365,7 @@ bool IpcAdapter::request_failed(unsigned id) {
   return req->has_failed();
 }
 
-void IpcAdapter::release_request(unsigned id) {
-  release_request_slot(id);
-}
+void IpcAdapter::release_request(unsigned id) { release_request_slot(id); }
 
 bool IpcAdapter::send_one(IpcRequestSlot* creq) {
   if (!creq) return false;

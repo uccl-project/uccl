@@ -66,8 +66,9 @@ UcclTransportAdapter::try_acquire_request_slot(unsigned* out_request_id) {
   if (out_request_id == nullptr || !request_slots_) return nullptr;
   std::lock_guard<std::mutex> lk(mu_);
   for (uint32_t n = 0; n < kRequestSlotCount; ++n) {
-    uint32_t idx = request_alloc_cursor_.fetch_add(1, std::memory_order_relaxed) &
-                   kRequestSlotMask;
+    uint32_t idx =
+        request_alloc_cursor_.fetch_add(1, std::memory_order_relaxed) &
+        kRequestSlotMask;
     auto& slot = request_slots_[idx];
     if (slot.state != RequestState::Free) continue;
     slot.state = RequestState::Reserved;
@@ -420,9 +421,8 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
     slot_item.nmsgs = 1;
     slot_item.idx = 1;
     std::memset(slot_item.padding, 0, sizeof(slot_item.padding));
-    ret =
-        endpoint_->uccl_write_async(flow, local_mh, local_ptr, len, slot_item,
-                                    ureq);
+    ret = endpoint_->uccl_write_async(flow, local_mh, local_ptr, len, slot_item,
+                                      ureq);
     if (ret != 0) {
       std::cerr << "[WARN] UCCL one-sided write submit failed for peer "
                 << peer_rank << ", request " << request_id << ", remote_mr_id "
@@ -514,9 +514,8 @@ int UcclTransportAdapter::recv_async_uccl(int peer_rank, void* local_ptr,
   int ret = -1;
   uint32_t retries = 0;
   while (std::chrono::steady_clock::now() < deadline) {
-    ret =
-        endpoint_->uccl_recv_async(flow, mh_array, data_array, size_array, 1,
-                                   ureq);
+    ret = endpoint_->uccl_recv_async(flow, mh_array, data_array, size_array, 1,
+                                     ureq);
     if (ret == 0) break;
     backoff_retry(retries++);
   }
