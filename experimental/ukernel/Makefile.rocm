@@ -4,14 +4,18 @@ HIP_LIB  := $(HIP_HOME)/lib
 override CXX := /usr/bin/g++
 HIPCC      := $(HIP_HOME)/bin/hipcc
 CONDA_LIB_HOME ?= /usr/lib
+UCCL_ROOT := $(abspath ../..)
+UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
+UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma_hip.a
 
 # Compilation flags
 CXXFLAGS   := -O0 -std=c++17 -Wall -Wno-unused-function -pthread -fPIC -D__HIP_PLATFORM_AMD__ -I${CONDA_LIB_HOME}/../include
 HIPCCFLAGS := -g -O0 -std=c++17 -D__HIP_PLATFORM_AMD__ --offload-arch=gfx942
-LDFLAGS    := -L${CONDA_LIB_HOME} -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread 
+LDFLAGS    := -L${CONDA_LIB_HOME} -lgflags -lgtest -lz -lelf -libverbs -lnl-3 -lnl-route-3 -lpthread -ldl
 
 # Include directories
-INCLUDES := -Iinclude -I$(HIP_HOME)/include -I/usr/include -I../../include -Isrc/transport -Isrc/ccl
+INCLUDES := -Iinclude -I$(HIP_HOME)/include -I/usr/include -I../../include -Isrc/transport -Isrc/ccl \
+            -I$(UCCL_ROOT) -I$(UCCL_RDMA_ROOT)
 
 LDFLAGS += -L$(HIP_LIB) -Wl,-rpath,$(HIP_LIB)
 
@@ -27,33 +31,41 @@ LDFLAGS    += $(REDIS_LIBS)
 endif
 
 # Source files
-SRC_CPP := $(shell find src -name '*.cc' | grep -v 'src/device') # skip device now
-SRC_CU  := $(shell find src -name '*.cu' | grep -v 'src/device')
-
-# Test sources
-TEST_DIR := src/ccl/test
-SRC_TEST := $(TEST_DIR)/test_main.cc \
-            $(TEST_DIR)/test_ccl_plan.cc \
-            $(TEST_DIR)/test_ccl_executor.cc \
-            $(TEST_DIR)/test_ccl_rdma_allgather.cc
+SRC_CPP := src/transport/communicator.cc \
+           src/transport/oob/oob.cc \
+           src/transport/oob/oob_shm.cc \
+           src/transport/oob/oob_socket.cc \
+           src/transport/util/utils.cc \
+           src/transport/memory/ipc_manager.cc \
+           src/transport/memory/shm_manager.cc \
+           src/transport/memory/mr_manager.cc \
+           src/transport/adapter/ipc_adapter.cc \
+           src/transport/adapter/tcp_adapter.cc \
+           src/transport/adapter/uccl_adapter.cc
+SRC_CU  :=
 
 # Object files
 OBJ_CC   := $(SRC_CPP:.cc=.o)
 OBJ_CU   := $(SRC_CU:.cu=.o)
-OBJ_TEST := $(SRC_TEST:.cc=.o)
-
 # Benchmark files
-BENCH_SRC := benchmarks/bench_transport.cc
-BENCH_OBJ := $(BENCH_SRC:.cc=.o)
-BENCH_BIN := bench_transport
+BENCH_TRANSPORT_SRC := benchmarks/bench_transport.cc
+BENCH_TRANSPORT_OBJ := $(BENCH_TRANSPORT_SRC:.cc=.o)
+BENCH_TRANSPORT_BIN := bench_transport
+BENCH_GDRCOPY_SRC := benchmarks/bench_gdrcopy.cc
+BENCH_GDRCOPY_OBJ := $(BENCH_GDRCOPY_SRC:.cc=.o)
+BENCH_GDRCOPY_BIN := benchmarks/bench_gdrcopy
+BENCH_GDRCOPY_HIPCCFLAGS := $(HIPCCFLAGS) -DENABLE_HIP
+BENCH_BINS := $(BENCH_TRANSPORT_BIN) $(BENCH_GDRCOPY_BIN)
 
 # Targets
 STATIC_LIB  := libukernel.a
 SHARED_LIB  := libukernel.so
-TARGET_TEST := test_main
 
 # Default target
-all: $(STATIC_LIB) $(SHARED_LIB) $(TARGET_TEST)
+all: $(STATIC_LIB) $(SHARED_LIB) $(BENCH_BINS)
+
+$(UCCL_RDMA_STATIC):
+	$(MAKE) -C $(UCCL_RDMA_ROOT) -f Makefile.rocm librdma_hip.a
 
 # Compilation rules
 %.o: %.cc
@@ -66,24 +78,32 @@ all: $(STATIC_LIB) $(SHARED_LIB) $(TARGET_TEST)
 $(STATIC_LIB): $(OBJ_CC) $(OBJ_CU)
 	ar rcs $@ $^
 
-$(SHARED_LIB): $(OBJ_CC) $(OBJ_CU)
-	$(HIPCC) -shared $(HIPCCFLAGS) $(INCLUDES) $^ -lamdhip64 $(LDFLAGS) -o $@
+$(SHARED_LIB): $(OBJ_CC) $(OBJ_CU) $(UCCL_RDMA_STATIC)
+	$(HIPCC) -shared $(HIPCCFLAGS) $(INCLUDES) $(OBJ_CC) $(OBJ_CU) $(UCCL_RDMA_STATIC) -lamdhip64 $(LDFLAGS) -o $@
 
-$(TARGET_TEST): $(OBJ_TEST) $(STATIC_LIB)
-	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(OBJ_TEST) $(STATIC_LIB) -lamdhip64 $(LDFLAGS) -o $@
+$(BENCH_TRANSPORT_OBJ): $(BENCH_TRANSPORT_SRC)
+	$(CXX) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-$(BENCH_BIN): $(BENCH_OBJ) $(STATIC_LIB)
-	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(BENCH_OBJ) $(STATIC_LIB) -lamdhip64 $(LDFLAGS) -o $@
+$(BENCH_TRANSPORT_BIN): $(BENCH_TRANSPORT_OBJ) $(STATIC_LIB) $(UCCL_RDMA_STATIC)
+	$(HIPCC) $(HIPCCFLAGS) $(INCLUDES) $(BENCH_TRANSPORT_OBJ) $(STATIC_LIB) $(UCCL_RDMA_STATIC) -lamdhip64 $(LDFLAGS) -o $@
 
-# Run tests
-run_test: $(TARGET_TEST)
-	./$(TARGET_TEST)
+$(BENCH_GDRCOPY_OBJ): $(BENCH_GDRCOPY_SRC)
+	$(HIPCC) $(BENCH_GDRCOPY_HIPCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
+
+$(BENCH_GDRCOPY_BIN): $(BENCH_GDRCOPY_OBJ)
+	$(HIPCC) $(HIPCCFLAGS) $(BENCH_GDRCOPY_OBJ) -lamdhip64 -L$(HIP_LIB) -Wl,-rpath,$(HIP_LIB) -o $@
+
+bench: $(BENCH_BINS)
+
+device_bench:
+	$(MAKE) -C src/device -f Makefile.rocm bench
 
 # Clean rule
 clean:
-	rm -f $(OBJ_CC) $(OBJ_CU) $(OBJ_TEST) $(BENCH_OBJ) $(TARGET_TEST) $(BENCH_BIN) $(STATIC_LIB) $(SHARED_LIB) *.d src/*.d src/ccl/test/*.d src/transport/*.d benchmarks/*.d
+	rm -f $(OBJ_CC) $(OBJ_CU) $(BENCH_TRANSPORT_OBJ) $(BENCH_GDRCOPY_OBJ) $(BENCH_BINS) $(STATIC_LIB) $(SHARED_LIB) *.d src/*.d src/transport/*.d benchmarks/*.d
+	$(MAKE) -C src/device -f Makefile.rocm clean
 
 # Include dependencies
--include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(OBJ_TEST:.o=.d) $(BENCH_OBJ:.o=.d)
+-include $(OBJ_CC:.o=.d) $(OBJ_CU:.o=.d) $(BENCH_TRANSPORT_OBJ:.o=.d) $(BENCH_GDRCOPY_OBJ:.o=.d)
 
-.PHONY: all clean run_test
+.PHONY: all bench device_bench clean

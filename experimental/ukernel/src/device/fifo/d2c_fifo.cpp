@@ -24,8 +24,8 @@ struct Fifo::Impl {
 
 Fifo::Fifo(int size) {
   int device;
-  MSCCLPP_CUDATHROW(cudaGetDevice(&device));
-  MSCCLPP_CUDATHROW(cudaFree(0));
+  MSCCLPP_CUDATHROW(gpuGetDevice(&device));
+  MSCCLPP_CUDATHROW(gpuFree(0));
   int numaNode = getDeviceNumaNode(device);
   if (numaNode >= 0) {
     unsigned long nodemask = 1UL << numaNode;

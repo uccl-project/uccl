@@ -1,7 +1,10 @@
 #pragma once
 
 #include "fifo_util.hpp"
+#include "gpu_rt.h"
+#if !defined(__HIP_PLATFORM_AMD__)
 #include "gdrapi.h"
+#endif
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -10,13 +13,95 @@
 #include <mutex>
 #include <stdexcept>
 #include <vector>
+#if !defined(__HIP_PLATFORM_AMD__)
 #include <cuda.h>
 #include <cuda_runtime.h>
-
-// TODO: support AMD
+#endif
 
 namespace mscclpp {
 namespace detail {
+
+#if defined(__HIP_PLATFORM_AMD__)
+
+struct GdrMapping {
+  int device = -1;
+  void* alloc_ptr = nullptr;
+  void* host_ptr = nullptr;
+  size_t bytes = 0;
+};
+
+inline GdrMapping gdrAllocAndMapBytes(size_t req_bytes) {
+  GdrMapping m{};
+  MSCCLPP_CUDATHROW(gpuGetDevice(&m.device));
+
+  m.bytes = req_bytes == 0 ? 1 : req_bytes;
+
+  hipError_t err =
+      hipExtMallocWithFlags(&m.alloc_ptr, m.bytes, hipDeviceMallocUncached);
+  if (err != hipSuccess) {
+    err = hipExtMallocWithFlags(&m.alloc_ptr, m.bytes,
+                                hipDeviceMallocFinegrained);
+  }
+  if (err != hipSuccess) {
+    MSCCLPP_CUDATHROW(gpuMalloc(&m.alloc_ptr, m.bytes));
+  }
+
+  MSCCLPP_CUDATHROW(gpuMemset(m.alloc_ptr, 0, m.bytes));
+
+  // On this AMD/ROCm setup, the raw device pointer is directly host-accessible,
+  // so the same pointer is used for host FIFO writes and host-side tail polling.
+  m.host_ptr = m.alloc_ptr;
+  return m;
+}
+
+inline void gdrUnmapUnpinFree(GdrMapping& m) noexcept {
+  if (m.device >= 0) {
+    int cur = -1;
+    if (gpuGetDevice(&cur) == gpuSuccess && cur != m.device) {
+      (void)gpuSetDevice(m.device);
+    }
+  }
+
+  if (m.alloc_ptr) {
+    (void)gpuFree(m.alloc_ptr);
+  }
+
+  m = {};
+}
+
+template <class T = void>
+struct GdrDeleter {
+  GdrMapping m{};
+  void operator()(T*) noexcept { gdrUnmapUnpinFree(m); }
+};
+
+template <class T>
+using UniqueGdrGpuPtr = std::unique_ptr<T, GdrDeleter<T>>;
+
+template <class T>
+inline UniqueGdrGpuPtr<T> gpuCallocGdrUnique(size_t nelems = 1) {
+  GdrDeleter<T> del{};
+  del.m = gdrAllocAndMapBytes(nelems * sizeof(T));
+  return UniqueGdrGpuPtr<T>(reinterpret_cast<T*>(del.m.alloc_ptr), del);
+}
+
+template <class T>
+inline T* getGdrHostPtr(UniqueGdrGpuPtr<T> const& p) {
+  return reinterpret_cast<T*>(p.get_deleter().m.host_ptr);
+}
+
+template <class T>
+inline std::uintptr_t getGdrDevicePtr(UniqueGdrGpuPtr<T> const& p) {
+  return reinterpret_cast<std::uintptr_t>(p.get());
+}
+
+using UniqueGdrU64Ptr = UniqueGdrGpuPtr<uint64_t>;
+
+inline UniqueGdrU64Ptr gpuCallocGdrU64Unique() {
+  return gpuCallocGdrUnique<uint64_t>();
+}
+
+#else
 
 static inline size_t roundUp(size_t x, size_t a) { return (x + a - 1) / a * a; }
 static constexpr size_t kGdrPageBytes = 64 * 1024;
@@ -332,6 +417,8 @@ inline uint64_t* getGdrHostPtr(UniqueGdrU64Ptr const& p) {
 inline CUdeviceptr getGdrDevicePtr(UniqueGdrU64Ptr const& p) {
   return p.get_deleter().dptr;
 }
+
+#endif
 
 }  // namespace detail
 }  // namespace mscclpp

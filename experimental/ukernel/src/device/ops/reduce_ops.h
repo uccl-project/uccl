@@ -4,7 +4,17 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#if defined(__HIP_PLATFORM_AMD__)
+
+#include <hip/hip_bfloat16.h>
+#include <hip/hip_fp16.h>
+#else
 #include <cuda_bf16.h>
+#endif
+
+#if defined(__HIP_PLATFORM_AMD__)
+using nv_bfloat16 = hip_bfloat16;
+#endif
 
 namespace UKernel {
 namespace Device {

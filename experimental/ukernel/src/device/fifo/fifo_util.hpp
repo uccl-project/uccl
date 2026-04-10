@@ -14,8 +14,7 @@
 // GPU Platform Abstraction (from gpu.hpp)
 // ============================================================================
 
-#include <cuda.h>
-#include <cuda_runtime.h>
+#include "gpu_rt.h"
 
 // ============================================================================
 // Device Compilation Macros (from device.hpp)
@@ -78,7 +77,7 @@ class CudaError : public BaseError {
  public:
   CudaError(std::string const& message, int errorCode) : BaseError(errorCode) {
     message_ = message + " (Cuda failure: " +
-               cudaGetErrorString(static_cast<cudaError_t>(errorCode)) + ")";
+               gpuGetErrorString(static_cast<gpuError_t>(errorCode)) + ")";
   }
   virtual ~CudaError() = default;
 };
@@ -87,11 +86,8 @@ class CudaError : public BaseError {
 class CuError : public BaseError {
  public:
   CuError(std::string const& message, int errorCode) : BaseError(errorCode) {
-    char const* errStr;
-    if (cuGetErrorString(static_cast<CUresult>(errorCode), &errStr) !=
-        CUDA_SUCCESS) {
-      errStr = "failed to get error string";
-    }
+    char const* errStr =
+        gpuDrvGetErrorString(static_cast<gpuDrvResult_t>(errorCode));
     message_ = message + " (Cu failure: " + errStr + ")";
   }
   virtual ~CuError() = default;
@@ -104,8 +100,8 @@ class CuError : public BaseError {
 /// Throw mscclpp::CudaError if @p cmd does not return cudaSuccess.
 #define MSCCLPP_CUDATHROW(cmd)                                              \
   do {                                                                      \
-    cudaError_t err = cmd;                                                  \
-    if (err != cudaSuccess) {                                               \
+    gpuError_t err = cmd;                                                   \
+    if (err != gpuSuccess) {                                                \
       throw ::mscclpp::CudaError(std::string("Call to " #cmd " failed. ") + \
                                      __FILE__ + ":" +                       \
                                      std::to_string(__LINE__),              \
@@ -116,8 +112,8 @@ class CuError : public BaseError {
 /// Throw mscclpp::CuError if @p cmd does not return CUDA_SUCCESS.
 #define MSCCLPP_CUTHROW(cmd)                                                  \
   do {                                                                        \
-    CUresult err = cmd;                                                       \
-    if (err != CUDA_SUCCESS) {                                                \
+    gpuDrvResult_t err = cmd;                                                 \
+    if (err != gpuDrvSuccess) {                                               \
       throw ::mscclpp::CuError(std::string("Call to " #cmd " failed. ") +     \
                                    __FILE__ + ":" + std::to_string(__LINE__), \
                                err);                                          \
@@ -132,7 +128,7 @@ class CuError : public BaseError {
 static inline std::string const getBusId(int deviceId) {
   char busIdChar[] = "00000000:00:00.0";
   MSCCLPP_CUDATHROW(
-      cudaDeviceGetPCIBusId(busIdChar, sizeof(busIdChar), deviceId));
+      gpuDeviceGetPCIBusId(busIdChar, sizeof(busIdChar), deviceId));
   // we need the hex in lower case format
   for (size_t i = 0; i < sizeof(busIdChar); i++) {
     busIdChar[i] = std::tolower(busIdChar[i]);
@@ -305,9 +301,9 @@ extern "C" __host__ __device__ void __assert_fail(
 
 namespace detail {
 
-static inline bool isCudaTeardownError(cudaError_t err) {
+static inline bool isCudaTeardownError(gpuError_t err) {
 #if defined(__HIP_PLATFORM_AMD__)
-  return err == cudaErrorContextIsDestroyed || err == cudaErrorInvalidDevice;
+  return err == hipErrorContextIsDestroyed || err == hipErrorInvalidDevice;
 #else
   return err == cudaErrorCudartUnloading ||
          err == cudaErrorContextIsDestroyed ||
@@ -318,45 +314,37 @@ static inline bool isCudaTeardownError(cudaError_t err) {
 
 inline void* gpuCalloc(size_t bytes) {
   void* ptr;
-  MSCCLPP_CUDATHROW(cudaMalloc(&ptr, bytes));
-  MSCCLPP_CUDATHROW(cudaMemset(ptr, 0, bytes));
+  MSCCLPP_CUDATHROW(gpuMalloc(&ptr, bytes));
+  MSCCLPP_CUDATHROW(gpuMemset(ptr, 0, bytes));
   return ptr;
 }
 
 inline void* gpuCallocHost(size_t bytes, unsigned int flags) {
   void* ptr;
-  MSCCLPP_CUDATHROW(cudaHostAlloc(&ptr, bytes, flags));
+  MSCCLPP_CUDATHROW(gpuHostAlloc(&ptr, bytes, flags));
   ::memset(ptr, 0, bytes);
   return ptr;
 }
 
 inline void _gpuFree(void* ptr) {
-#if defined(__HIP_PLATFORM_AMD__)
-  cudaError_t err = ::hipFree(ptr);
-#else
-  cudaError_t err = ::cudaFree(ptr);
-#endif
-  if (!isCudaTeardownError(err) && err != cudaSuccess) {
+  gpuError_t err = gpuFree(ptr);
+  if (!isCudaTeardownError(err) && err != gpuSuccess) {
     throw ::mscclpp::CudaError(std::string("Call to cudaFree failed. ") +
                                    __FILE__ + ":" + std::to_string(__LINE__),
                                err);
   } else if (isCudaTeardownError(err)) {
-    (void)cudaGetLastError();
+    (void)gpuGetLastError();
   }
 }
 
 inline void _gpuFreeHost(void* ptr) {
-#if defined(__HIP_PLATFORM_AMD__)
-  cudaError_t err = ::hipHostFree(ptr);
-#else
-  cudaError_t err = ::cudaFreeHost(ptr);
-#endif
-  if (!isCudaTeardownError(err) && err != cudaSuccess) {
+  gpuError_t err = gpuFreeHost(ptr);
+  if (!isCudaTeardownError(err) && err != gpuSuccess) {
     throw ::mscclpp::CudaError(std::string("Call to cudaFreeHost failed. ") +
                                    __FILE__ + ":" + std::to_string(__LINE__),
                                err);
   } else if (isCudaTeardownError(err)) {
-    (void)cudaGetLastError();
+    (void)gpuGetLastError();
   }
 }
 
@@ -406,7 +394,7 @@ auto gpuCallocUnique(size_t nelems = 1) {
 
 template <class T>
 auto gpuCallocHostUnique(size_t nelems = 1,
-                         unsigned int flags = cudaHostAllocMapped) {
+                         unsigned int flags = gpuHostAllocMapped) {
   return detail::safeAlloc<T, detail::GpuHostDeleter<T>, UniqueGpuHostPtr<T>>(
       detail::gpuCallocHost, nelems, flags);
 }

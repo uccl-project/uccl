@@ -184,8 +184,7 @@ __global__ void singlePersistentKernel(
   auto& fifo = c2d_fifos[0];
   void* smem_buf = smem;
   __shared__ Task current_task;
-  __shared__ alignas(
-      TaskArgs) unsigned char current_args_storage[sizeof(TaskArgs)];
+  __shared__ __align__(16) unsigned char current_args_storage[sizeof(TaskArgs)];
   __shared__ bool has_current_args;
   __shared__ uint32_t command;
   uint64_t cached_tail = 0;
@@ -269,8 +268,7 @@ __global__ void multiPersistentKernel(mscclpp::C2DDeviceHandle<Task>* c2d_fifos,
   const uint32_t bid = blockIdx.x;
 
   __shared__ Task current_task;
-  __shared__ alignas(
-      TaskArgs) unsigned char current_args_storage[sizeof(TaskArgs)];
+  __shared__ __align__(16) unsigned char current_args_storage[sizeof(TaskArgs)];
   __shared__ bool has_current_args;
   TaskArgs* current_args = reinterpret_cast<TaskArgs*>(current_args_storage);
   uint32_t local_phase = 0;
