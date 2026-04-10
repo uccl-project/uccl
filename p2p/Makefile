@@ -225,43 +225,42 @@ install-deps:
 # ---------------------------------------------------------------------------
 DISPATCH_SRC := uccl_p2p_dispatch.cc
 DISPATCH_OBJ := uccl_p2p_dispatch.o
-DISPATCH_LIB := libuccl_p2p.so
 
-all-transports: $(DISPATCH_LIB) libuccl_p2p_rdma.so libuccl_p2p_efa.so \
-                libuccl_p2p_tcp.so libuccl_p2p_tcpx.so
+all-transports: dispatch-lib transport-rdma transport-efa transport-tcp transport-tcpx
 
-# Thin dispatcher (dlopen-based, no transport code)
+# Thin dispatcher (dlopen-based, no transport code).
+# Uses a phony target name to avoid conflicting with the existing
+# $(P2P_SHARED_LIB) rule that also produces libuccl_p2p.so.
 $(DISPATCH_OBJ): $(DISPATCH_SRC) uccl_p2p_ops.h uccl_engine.h include/common.h
 	$(CXX) -O3 -std=c++17 -fPIC -I. -I./include -I../include -I$(CUDA_INC) -c $< -o $@
 
-$(DISPATCH_LIB): $(DISPATCH_OBJ)
-	$(CXX) -shared -fPIC $< -o $@ -ldl
+dispatch-lib: $(DISPATCH_OBJ)
+	$(CXX) -shared -fPIC $< -o libuccl_p2p.so -ldl
 
 # Each backend: re-invoke make with the appropriate flags and output name.
-# clean-backend removes only backend objects (not the dispatcher or other backends).
+# Phony target names (transport-*) avoid infinite recursion that would occur
+# if the target name matched the .so filename.
 clean-backend:
-	rm -f $(OBJECTS) $(CAPI_OBJECT) nccl/*.o nccl/*.d
+	@rm -f $(CAPI_OBJECT) engine.o engine_api.o nccl/*.o nccl/*.d nccl_tcpx_endpoint.o
 
-backend: $(P2P_SHARED_LIB)
+transport-rdma:
+	@$(MAKE) clean-backend
+	@$(MAKE) P2P_SHARED_LIB=libuccl_p2p_rdma.so libuccl_p2p_rdma.so
 
-libuccl_p2p_rdma.so:
-	$(MAKE) clean-backend
-	$(MAKE) backend P2P_SHARED_LIB=$@
+transport-efa:
+	@$(MAKE) clean-backend
+	@$(MAKE) P2P_SHARED_LIB=libuccl_p2p_efa.so USE_EFA=1 libuccl_p2p_efa.so
 
-libuccl_p2p_efa.so:
-	$(MAKE) clean-backend
-	$(MAKE) backend P2P_SHARED_LIB=$@ USE_EFA=1
+transport-tcp:
+	@$(MAKE) clean-backend
+	@$(MAKE) P2P_SHARED_LIB=libuccl_p2p_tcp.so USE_TCP=1 libuccl_p2p_tcp.so
 
-libuccl_p2p_tcp.so:
-	$(MAKE) clean-backend
-	$(MAKE) backend P2P_SHARED_LIB=$@ USE_TCP=1
-
-libuccl_p2p_tcpx.so:
-	$(MAKE) clean-backend
-	$(MAKE) backend P2P_SHARED_LIB=$@ USE_TCPX=1
+transport-tcpx:
+	@$(MAKE) clean-backend
+	@$(MAKE) P2P_SHARED_LIB=libuccl_p2p_tcpx.so USE_TCPX=1 libuccl_p2p_tcpx.so
 
 install-all-transports: all-transports
-	$(call safe_install,$(DISPATCH_LIB),$(LIBDIR),755)
+	$(call safe_install,libuccl_p2p.so,$(LIBDIR),755)
 	$(call safe_install,libuccl_p2p_rdma.so,$(LIBDIR),755)
 	$(call safe_install,libuccl_p2p_efa.so,$(LIBDIR),755)
 	$(call safe_install,libuccl_p2p_tcp.so,$(LIBDIR),755)
@@ -281,5 +280,6 @@ help:
 	@echo "  install-deps      - Install nanobind dependency"
 	@echo "  help              - Show this help message"
 
-.PHONY: all all-transports clean clean-backend backend test install-deps help \
-        install install-all-transports
+.PHONY: all all-transports dispatch-lib transport-rdma transport-efa \
+        transport-tcp transport-tcpx clean clean-backend test install-deps \
+        help install install-all-transports
