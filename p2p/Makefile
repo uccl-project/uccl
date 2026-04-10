@@ -220,14 +220,66 @@ endif
 install-deps:
 	pip3 install nanobind
 
+# ---------------------------------------------------------------------------
+# Runtime transport selection: build all backends + thin dispatcher
+# ---------------------------------------------------------------------------
+DISPATCH_SRC := uccl_p2p_dispatch.cc
+DISPATCH_OBJ := uccl_p2p_dispatch.o
+DISPATCH_LIB := libuccl_p2p.so
+
+all-transports: $(DISPATCH_LIB) libuccl_p2p_rdma.so libuccl_p2p_efa.so \
+                libuccl_p2p_tcp.so libuccl_p2p_tcpx.so
+
+# Thin dispatcher (dlopen-based, no transport code)
+$(DISPATCH_OBJ): $(DISPATCH_SRC) uccl_p2p_ops.h uccl_engine.h include/common.h
+	$(CXX) -O3 -std=c++17 -fPIC -I. -I./include -I../include -I$(CUDA_INC) -c $< -o $@
+
+$(DISPATCH_LIB): $(DISPATCH_OBJ)
+	$(CXX) -shared -fPIC $< -o $@ -ldl
+
+# Each backend: re-invoke make with the appropriate flags and output name.
+# clean-backend removes only backend objects (not the dispatcher or other backends).
+clean-backend:
+	rm -f $(OBJECTS) $(CAPI_OBJECT) nccl/*.o nccl/*.d
+
+backend: $(P2P_SHARED_LIB)
+
+libuccl_p2p_rdma.so:
+	$(MAKE) clean-backend
+	$(MAKE) backend P2P_SHARED_LIB=$@
+
+libuccl_p2p_efa.so:
+	$(MAKE) clean-backend
+	$(MAKE) backend P2P_SHARED_LIB=$@ USE_EFA=1
+
+libuccl_p2p_tcp.so:
+	$(MAKE) clean-backend
+	$(MAKE) backend P2P_SHARED_LIB=$@ USE_TCP=1
+
+libuccl_p2p_tcpx.so:
+	$(MAKE) clean-backend
+	$(MAKE) backend P2P_SHARED_LIB=$@ USE_TCPX=1
+
+install-all-transports: all-transports
+	$(call safe_install,$(DISPATCH_LIB),$(LIBDIR),755)
+	$(call safe_install,libuccl_p2p_rdma.so,$(LIBDIR),755)
+	$(call safe_install,libuccl_p2p_efa.so,$(LIBDIR),755)
+	$(call safe_install,libuccl_p2p_tcp.so,$(LIBDIR),755)
+	$(call safe_install,libuccl_p2p_tcpx.so,$(LIBDIR),755)
+	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
+	@echo "All transport backends installed!"
+
 # Help target
 help:
 	@echo "Available targets:"
-	@echo "  all          - Build the nanobind module (stable ABI)"
-	@echo "  install      - Install the module to Python site-packages"
-	@echo "  clean        - Remove build artifacts"
-	@echo "  test         - Run the test script"
-	@echo "  install-deps - Install nanobind dependency"
-	@echo "  help         - Show this help message"
+	@echo "  all               - Build the nanobind module (stable ABI)"
+	@echo "  all-transports    - Build all transport backends + dispatcher"
+	@echo "  install           - Install the module to Python site-packages"
+	@echo "  install-all-transports - Install dispatcher + all backends"
+	@echo "  clean             - Remove build artifacts"
+	@echo "  test              - Run the test script"
+	@echo "  install-deps      - Install nanobind dependency"
+	@echo "  help              - Show this help message"
 
-.PHONY: all clean test install-deps help install
+.PHONY: all all-transports clean clean-backend backend test install-deps help \
+        install install-all-transports
