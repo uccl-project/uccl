@@ -8,6 +8,7 @@
 #include <infiniband/verbs.h>
 #include <netinet/in.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -1800,6 +1801,9 @@ std::shared_ptr<void> Communicator::register_completion_notifier(
 }
 
 void Communicator::progress_loop() {
+  constexpr size_t kProgressBatchSize = 128;
+  std::array<unsigned, kProgressBatchSize> batch{};
+
   while (progress_running_.load(std::memory_order_acquire)) {
     {
       std::unique_lock<std::mutex> lk(progress_mu_);
@@ -1830,10 +1834,16 @@ void Communicator::progress_loop() {
       }
     }
 
-    auto now = std::chrono::steady_clock::now();
+    size_t batch_count = 0;
     unsigned id = 0;
-    while (dequeue_active_request(&id)) {
+    while (batch_count < batch.size() && dequeue_active_request(&id)) {
       dequeued_any = true;
+      batch[batch_count++] = id;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    for (size_t i = 0; i < batch_count; ++i) {
+      id = batch[i];
       TrackedRequest* slot = resolve_request_slot(id);
       if (slot == nullptr) continue;
       auto state = slot->state.load(std::memory_order_acquire);
