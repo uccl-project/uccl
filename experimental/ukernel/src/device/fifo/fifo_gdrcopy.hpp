@@ -49,7 +49,8 @@ inline GdrMapping gdrAllocAndMapBytes(size_t req_bytes) {
   MSCCLPP_CUDATHROW(gpuMemset(m.alloc_ptr, 0, m.bytes));
 
   // On this AMD/ROCm setup, the raw device pointer is directly host-accessible,
-  // so the same pointer is used for host FIFO writes and host-side tail polling.
+  // so the same pointer is used for host FIFO writes and host-side tail
+  // polling.
   m.host_ptr = m.alloc_ptr;
   return m;
 }
