@@ -64,8 +64,10 @@ typedef struct {
 typedef struct {
   uint64_t mr_id;
   size_t size;
+#ifndef UCCL_P2P_USE_TCPX
   IpcTransferInfo ipc_info = {};  // Pre-computed IPC handle for GPU buffers
   bool has_ipc = false;           // True if IPC handle is valid (GPU memory)
+#endif
 } mem_reg_entry_t;
 
 std::unordered_map<uintptr_t, mem_reg_entry_t> mem_reg_info;
@@ -133,6 +135,7 @@ void listener_thread_func(uccl_conn_t* conn) {
   }
 }
 
+#ifndef UCCL_P2P_USE_TCPX
 // Look up the pre-computed IpcTransferInfo for any address within a registered
 // GPU buffer region.  Adjusts offset and size to match the requested range.
 // Returns false if the address is not registered or has no IPC handle (e.g.
@@ -164,6 +167,7 @@ static void deserialize_ipc_info(char const* buf, IpcTransferInfo& info) {
   memcpy(&info.gpu_idx, buf + off, sizeof(info.gpu_idx));
   off += sizeof(info.gpu_idx);
 }
+#endif  // !UCCL_P2P_USE_TCPX
 
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   (void)num_cpus;
@@ -187,11 +191,19 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   uccl_conn_t* conn = new uccl_conn;
   uint64_t conn_id;
 
+  bool ok;
+#ifdef UCCL_P2P_USE_TCPX
+  bool is_local = false;
+  ok = engine->endpoint->connect(std::string(ip_addr), remote_gpu_idx,
+                                 remote_port, conn_id);
+  if (ok) {
+    conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
+  }
+#else
   // Detect intra-node connection: if the target IP matches our own IP.
   std::string local_ip = uccl::get_oob_ip();
   bool is_local = (std::string(ip_addr) == local_ip);
 
-  bool ok;
   if (is_local && same_process) {
     // Same process: use shm rings directly, skip TCP.
     // Transfers use direct_addr (no gpuIpcOpenMemHandle).
@@ -205,11 +217,12 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
                                    remote_port, conn_id);
     if (ok) {
       conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
-#if !defined(UCCL_P2P_USE_TCPX) && !defined(UCCL_P2P_USE_NCCL)
+#if !defined(UCCL_P2P_USE_NCCL)
       conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
 #endif
     }
   }
+#endif  // UCCL_P2P_USE_TCPX
 
   if (!ok) {
     delete conn;
@@ -227,10 +240,12 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
 uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
                                 size_t ip_addr_buf_len, int* remote_gpu_idx) {
   if (!engine || !ip_addr_buf || !remote_gpu_idx) return nullptr;
+#ifndef UCCL_P2P_USE_TCPX
   // Start accept_local loop in a background thread (once per engine) so that
   // local (IPC) peers can connect concurrently with the blocking RDMA accept.
   bool expected = false;
   engine->endpoint->start_passive_accept();
+#endif
   uccl_conn_t* conn = new uccl_conn;
   std::string ip_addr;
   uint64_t conn_id;
@@ -264,6 +279,7 @@ int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size,
   entry.mr_id = mr_id;
   entry.size = size;
 
+#ifndef UCCL_P2P_USE_TCPX
   // Pre-compute IPC handle for GPU buffers so the local (IPC) transfer path
   // can look it up without a per-transfer gpuIpcGetMemHandle call.
   int dev_idx = uccl::get_dev_idx((void*)data);
@@ -280,6 +296,7 @@ int uccl_engine_reg(uccl_engine_t* engine, uintptr_t data, size_t size,
       entry.has_ipc = true;
     }
   }
+#endif  // !UCCL_P2P_USE_TCPX
 
   mem_reg_info[data] = entry;
   return 0;
@@ -289,6 +306,7 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                      size_t size, FifoItem fifo_item, uint64_t* transfer_id) {
   if (!conn || !data) return -1;
 
+#ifndef UCCL_P2P_USE_TCPX
   if (conn->is_local) {
     IpcTransferInfo info;
     if (!get_ipc_info_for_addr(fifo_item.addr, size, info)) {
@@ -301,6 +319,7 @@ int uccl_engine_read(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                ? 0
                : -1;
   }
+#endif
 
   return conn->engine->endpoint->read_async(conn->conn_id, mr,
                                             const_cast<void*>(data), size,
@@ -317,6 +336,7 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<char*> ipc_bufs) {
   if (!conn || num_iovs <= 0) return -1;
 
+#ifndef UCCL_P2P_USE_TCPX
   // Local IPC path (both same-process and cross-process)
   if ((conn->is_local || conn->same_process) && !ipc_bufs.empty()) {
     std::vector<IpcTransferInfo> info_v(num_iovs);
@@ -331,6 +351,7 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                ? 0
                : -1;
   }
+#endif
 
   // Remote RDMA
   return conn->engine->endpoint->readv_async(conn->conn_id, mr_ids, dst_v,
@@ -398,6 +419,9 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                              std::vector<char*> ipc_bufs) {
   if (!conn || num_iovs <= 0) return -1;
 
+#ifdef UCCL_P2P_USE_TCPX
+  return -1;  // TODO: support write_rc for TCPX
+#else
   // Local IPC path (both same-process and cross-process)
   if ((conn->is_local || conn->same_process) && !ipc_bufs.empty()) {
     std::vector<void const*> src_v(dst_v.begin(), dst_v.end());
@@ -414,10 +438,7 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                : -1;
   }
 
-// Remote RDMA
-#ifdef UCCL_P2P_USE_TCPX
-  return -1;  // TODO: support write_rc for TCPX
-#else
+  // Remote RDMA
   return conn->engine->endpoint->writev_async(conn->conn_id, mr_ids, dst_v,
                                               size_v, fifo_items, num_iovs,
                                               transfer_id)
@@ -490,9 +511,11 @@ bool uccl_engine_conn_is_local(uccl_conn_t* conn) {
 }
 
 void uccl_engine_stop_accept(uccl_engine_t* engine) {
+#ifndef UCCL_P2P_USE_TCPX
   if (engine && engine->endpoint) {
     engine->endpoint->stop_accepting();
   }
+#endif
 }
 
 void uccl_engine_conn_destroy(uccl_conn_t* conn) {
@@ -515,12 +538,16 @@ void uccl_engine_mr_destroy(uccl_engine_t* engine, uccl_mr_t mr) {
 
 int uccl_engine_prepare_fifo(uccl_engine_t* engine, uccl_mr_t mr,
                              void const* data, size_t size, char* fifo_buf) {
+#ifdef UCCL_P2P_USE_TCPX
+  return -1;  // TCPX does not support FIFO metadata
+#else
   if (!engine || !data || !fifo_buf) return -1;
 
   return engine->endpoint->prepare_fifo(mr, const_cast<void*>(data), size,
                                         fifo_buf)
              ? 0
              : -1;
+#endif
 }
 
 int uccl_engine_update_fifo(FifoItem& fifo_item, uint64_t remote_addr,
@@ -611,6 +638,7 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
 #endif
 }
 
+#ifndef UCCL_P2P_USE_TCPX
 // Serialize IpcTransferInfo to an opaque buffer (IPC_INFO_SIZE bytes).
 // Layout: handle(64) + offset(8) + size(8) + gpu_idx(4) = 84 bytes.
 static void serialize_ipc_info(IpcTransferInfo const& info, char* buf) {
@@ -625,10 +653,15 @@ static void serialize_ipc_info(IpcTransferInfo const& info, char* buf) {
   memcpy(buf + off, &info.gpu_idx, sizeof(info.gpu_idx));
   off += sizeof(info.gpu_idx);  // 4
 }
+#endif  // !UCCL_P2P_USE_TCPX
 
 int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
                              char* ipc_buf, bool* has_ipc) {
   if (!engine || !ipc_buf || !has_ipc) return -1;
+#ifdef UCCL_P2P_USE_TCPX
+  *has_ipc = false;
+  return 0;  // TCPX does not support IPC
+#else
   *has_ipc = false;
   auto it = mem_reg_info.find(addr);
   if (it == mem_reg_info.end()) return -1;
@@ -636,17 +669,22 @@ int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
   serialize_ipc_info(it->second.ipc_info, ipc_buf);
   *has_ipc = true;
   return 0;
+#endif
 }
 
 int uccl_engine_update_ipc_info(char* ipc_buf, uintptr_t addr,
                                 uintptr_t base_addr, size_t size) {
   if (!ipc_buf) return -1;
+#ifdef UCCL_P2P_USE_TCPX
+  return 0;  // TCPX does not support IPC
+#else
   IpcTransferInfo info;
   deserialize_ipc_info(ipc_buf, info);
   info.offset += (addr - base_addr);
   info.size = size;
   serialize_ipc_info(info, ipc_buf);
   return 0;
+#endif
 }
 
 int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
