@@ -546,7 +546,6 @@ UcclTransportAdapter& Communicator::ensure_uccl_adapter(
     maybe_configure_uccl_socket_ifname(
         get_uccl_remote_hint_ip(config_, peer_meta), local_meta.ip);
     UcclTransportConfig uccl_cfg;
-    uccl_cfg.local_ip = local_meta.ip;
     uccl_adapter_ = std::make_unique<UcclTransportAdapter>(
         local_gpu_idx_, world_size_, std::move(uccl_cfg));
 
@@ -612,7 +611,7 @@ bool Communicator::try_fallback_tcp_connect(
     int rank, CommunicatorMeta const& local_meta) {
   if (config_->preferred_transport != PreferredTransport::Auto) return false;
   auto& tcp_adapter = ensure_tcp_adapter(local_meta);
-  if (tcp_adapter.has_send_peer(rank)) {
+  if (tcp_adapter.has_peer(rank)) {
     mark_peer_path_ready(rank, PeerTransportKind::Tcp);
     return true;
   }
@@ -631,8 +630,12 @@ bool Communicator::try_fallback_tcp_connect(
     return false;
   }
 
-  if (!tcp_adapter.connect_to_peer(rank, remote_p2p_info.ip,
-                                   remote_p2p_info.port)) {
+  PeerConnectSpec spec{};
+  spec.peer_rank = rank;
+  spec.type = PeerConnectType::Connect;
+  spec.detail =
+      TcpPeerConnectSpec{remote_p2p_info.ip, remote_p2p_info.port};
+  if (!tcp_adapter.ensure_peer(spec)) {
     return false;
   }
   {
@@ -650,7 +653,7 @@ bool Communicator::try_fallback_tcp_accept(
   (void)remote_meta;
   if (config_->preferred_transport != PreferredTransport::Auto) return false;
   auto& tcp_adapter = ensure_tcp_adapter(local_meta);
-  if (tcp_adapter.has_send_peer(rank) && tcp_adapter.has_recv_peer(rank)) {
+  if (tcp_adapter.has_peer(rank)) {
     mark_peer_path_ready(rank, PeerTransportKind::Tcp);
     return true;
   }
@@ -670,7 +673,11 @@ bool Communicator::try_fallback_tcp_accept(
                             tcp_adapter.get_listen_port());
   if (!exchanger_client_->publish(p2p_key, local_p2p_info)) return false;
 
-  if (!tcp_adapter.accept_from_peer(rank, remote_p2p_info.ip)) {
+  PeerConnectSpec spec{};
+  spec.peer_rank = rank;
+  spec.type = PeerConnectType::Accept;
+  spec.detail = TcpPeerConnectSpec{remote_p2p_info.ip, 0};
+  if (!tcp_adapter.ensure_peer(spec)) {
     return false;
   }
   {
@@ -704,8 +711,7 @@ bool Communicator::connect(int rank) {
   if (resolved.kind == PeerTransportKind::Uccl) {
     auto& uccl_adapter =
         ensure_uccl_adapter(resolved.local_meta, resolved.remote_meta);
-    if (!uccl_adapter.has_send_peer(rank) ||
-        !uccl_adapter.has_recv_peer(rank)) {
+    if (!uccl_adapter.has_peer(rank)) {
       int dev_idx = uccl_adapter.get_best_dev_idx(local_gpu_idx_);
       if (dev_idx < 0) {
         std::cerr << "[ERROR] Communicator " << global_rank_
@@ -738,12 +744,16 @@ bool Communicator::connect(int rank) {
         return false;
       }
       // connect() path: connect first, then establish reverse flow.
-      if ((!uccl_adapter.has_send_peer(rank) ||
-           !uccl_adapter.has_recv_peer(rank)) &&
-          !uccl_adapter.connect_to_peer(rank, remote_p2p_info.ip,
-                                        remote_p2p_info.port, dev_idx,
-                                        local_gpu_idx_, remote_p2p_info.dev_idx,
-                                        remote_p2p_info.gpu_idx)) {
+      PeerConnectSpec spec{};
+      spec.peer_rank = rank;
+      spec.type = PeerConnectType::Connect;
+      spec.detail = UcclPeerConnectSpec{remote_p2p_info.ip,
+                                        remote_p2p_info.port,
+                                        dev_idx,
+                                        local_gpu_idx_,
+                                        remote_p2p_info.dev_idx,
+                                        remote_p2p_info.gpu_idx};
+      if (!uccl_adapter.has_peer(rank) && !uccl_adapter.ensure_peer(spec)) {
         std::cerr << "[ERROR] Communicator " << global_rank_
                   << " UCCL connect_to failed to rank " << rank << std::endl;
         return try_fallback_tcp_connect(rank, resolved.local_meta);
@@ -755,7 +765,11 @@ bool Communicator::connect(int rank) {
   }
 
   if (resolved.kind == PeerTransportKind::Ipc) {
-    if (!ipc_adapter_->connect_to(rank)) {
+    PeerConnectSpec spec{};
+    spec.peer_rank = rank;
+    spec.type = PeerConnectType::Connect;
+    spec.detail = IpcPeerConnectSpec{};
+    if (!ipc_adapter_->ensure_peer(spec)) {
       std::cerr << "[ERROR] Communicator " << global_rank_
                 << " IPC connect_to failed to rank " << rank << std::endl;
       ipc_adapter_->close_peer(rank);
@@ -767,7 +781,7 @@ bool Communicator::connect(int rank) {
 
   if (resolved.kind == PeerTransportKind::Tcp) {
     auto& tcp_adapter = ensure_tcp_adapter(resolved.local_meta);
-    if (!tcp_adapter.has_send_peer(rank)) {
+    if (!tcp_adapter.has_peer(rank)) {
       TcpP2PInfo local_p2p_info(tcp_adapter.get_listen_ip(),
                                 tcp_adapter.get_listen_port());
       std::string p2p_key = tcp_p2p_key(global_rank_, rank);
@@ -778,8 +792,12 @@ bool Communicator::connect(int rank) {
               remote_p2p_info, bootstrap_timeout_ms())) {
         return false;
       }
-      if (!tcp_adapter.connect_to_peer(rank, remote_p2p_info.ip,
-                                       remote_p2p_info.port)) {
+      PeerConnectSpec spec{};
+      spec.peer_rank = rank;
+      spec.type = PeerConnectType::Connect;
+      spec.detail =
+          TcpPeerConnectSpec{remote_p2p_info.ip, remote_p2p_info.port};
+      if (!tcp_adapter.ensure_peer(spec)) {
         std::cerr << "[ERROR] Communicator " << global_rank_
                   << " TCP connect_to failed to rank " << rank << std::endl;
         return false;
@@ -813,8 +831,7 @@ bool Communicator::accept(int rank) {
   if (resolved.kind == PeerTransportKind::Uccl) {
     auto& uccl_adapter =
         ensure_uccl_adapter(resolved.local_meta, resolved.remote_meta);
-    if (!uccl_adapter.has_recv_peer(rank) ||
-        !uccl_adapter.has_send_peer(rank)) {
+    if (!uccl_adapter.has_peer(rank)) {
       int dev_idx = uccl_adapter.get_best_dev_idx(local_gpu_idx_);
       if (dev_idx < 0) {
         std::cerr << "[ERROR] Communicator " << global_rank_
@@ -850,11 +867,16 @@ bool Communicator::accept(int rank) {
         return false;
       }
       // accept() path: accept first, then establish reverse flow.
-      if ((!uccl_adapter.has_recv_peer(rank) ||
-           !uccl_adapter.has_send_peer(rank)) &&
-          !uccl_adapter.accept_from_peer(
-              rank, remote_p2p_info.ip, remote_p2p_info.dev_idx,
-              remote_p2p_info.gpu_idx, remote_p2p_info.port)) {
+      PeerConnectSpec spec{};
+      spec.peer_rank = rank;
+      spec.type = PeerConnectType::Accept;
+      spec.detail = UcclPeerConnectSpec{remote_p2p_info.ip,
+                                        remote_p2p_info.port,
+                                        dev_idx,
+                                        local_gpu_idx_,
+                                        remote_p2p_info.dev_idx,
+                                        remote_p2p_info.gpu_idx};
+      if (!uccl_adapter.has_peer(rank) && !uccl_adapter.ensure_peer(spec)) {
         std::cerr << "[ERROR] Communicator " << global_rank_
                   << " UCCL accept_from failed from rank " << rank << std::endl;
         return try_fallback_tcp_accept(rank, resolved.local_meta,
@@ -867,7 +889,11 @@ bool Communicator::accept(int rank) {
   }
 
   if (resolved.kind == PeerTransportKind::Ipc) {
-    if (!ipc_adapter_->accept_from(rank)) {
+    PeerConnectSpec spec{};
+    spec.peer_rank = rank;
+    spec.type = PeerConnectType::Accept;
+    spec.detail = IpcPeerConnectSpec{};
+    if (!ipc_adapter_->ensure_peer(spec)) {
       std::cerr << "[ERROR] Communicator " << global_rank_
                 << " IPC accept_from failed from rank " << rank << std::endl;
       return false;
@@ -878,7 +904,7 @@ bool Communicator::accept(int rank) {
 
   if (resolved.kind == PeerTransportKind::Tcp) {
     auto& tcp_adapter = ensure_tcp_adapter(resolved.local_meta);
-    if (!tcp_adapter.has_recv_peer(rank)) {
+    if (!tcp_adapter.has_peer(rank)) {
       std::string p2p_key = tcp_p2p_key(global_rank_, rank);
       std::string peer_p2p_key = tcp_p2p_key(rank, global_rank_);
       TcpP2PInfo remote_p2p_info;
@@ -889,7 +915,11 @@ bool Communicator::accept(int rank) {
               local_p2p_info, bootstrap_timeout_ms())) {
         return false;
       }
-      if (!tcp_adapter.accept_from_peer(rank, remote_p2p_info.ip)) {
+      PeerConnectSpec spec{};
+      spec.peer_rank = rank;
+      spec.type = PeerConnectType::Accept;
+      spec.detail = TcpPeerConnectSpec{remote_p2p_info.ip, 0};
+      if (!tcp_adapter.ensure_peer(spec)) {
         std::cerr << "[ERROR] Communicator " << global_rank_
                   << " TCP accept_from failed from rank " << rank << std::endl;
         return false;

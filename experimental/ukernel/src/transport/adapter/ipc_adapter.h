@@ -35,13 +35,9 @@ class IpcAdapter final : public TransportAdapter {
 
   void set_peer_local_id(int peer_rank, int local_id);
   void close_peer(int peer_rank);
-  bool connect_to(int rank);
-  bool accept_from(int rank);
 
-  bool connect(int peer_rank) override { return connect_to(peer_rank); }
-  bool accept(int peer_rank) override { return accept_from(peer_rank); }
-  bool has_send_path(int peer_rank) const override;
-  bool has_recv_path(int peer_rank) const override;
+  bool ensure_peer(PeerConnectSpec const& spec) override;
+  bool has_peer(int peer_rank) const override;
 
   unsigned send_async(int peer_rank, void* local_ptr, size_t len,
                       uint64_t local_mr_id,
@@ -56,12 +52,13 @@ class IpcAdapter final : public TransportAdapter {
   bool request_failed(unsigned id) override;
   void release_request(unsigned id) override;
 
-  int peer_count() const override;
-
   uint64_t next_send_match_seq(int rank);
   uint64_t next_recv_match_seq(int rank);
 
  private:
+  bool connect_to(int rank);
+  bool accept_from(int rank);
+
   enum class IpcReqType : uint8_t { Send = 0, Recv = 1 };
 
   struct IpcPendingRequest {

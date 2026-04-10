@@ -26,22 +26,20 @@ inline void backoff_retry(uint32_t retries) {
 
 UcclTransportAdapter::UcclTransportAdapter(int local_gpu_idx, int world_size,
                                            UcclTransportConfig config)
-    : local_gpu_idx_(local_gpu_idx), world_size_(world_size), config_(config) {
+    : local_gpu_idx_(local_gpu_idx) {
   int num_engines = static_cast<int>(::ucclParamNUM_ENGINES());
   if (num_engines <= 0) {
     std::cerr << "[ERROR] Invalid UCCL num_engines=" << num_engines
               << std::endl;
     return;
   }
-  if (config_.num_engines > 0 && config_.num_engines != num_engines) {
+  if (config.num_engines > 0 && config.num_engines != num_engines) {
     std::cout << "[WARN] UCCL engine count mismatch: requested "
-              << config_.num_engines << ", runtime " << num_engines
+              << config.num_engines << ", runtime " << num_engines
               << ". Using runtime value." << std::endl;
   }
-  config_.num_engines = num_engines;
-
-  endpoint_ = std::make_unique<::uccl::RDMAEndpoint>(config_.num_engines);
-  endpoint_->initialize_resources(config_.num_engines * world_size);
+  endpoint_ = std::make_unique<::uccl::RDMAEndpoint>(num_engines);
+  endpoint_->initialize_resources(num_engines * world_size);
 
   int dev_idx = endpoint_->get_best_dev_idx(local_gpu_idx_);
   if (dev_idx < 0) {
@@ -133,6 +131,20 @@ bool UcclTransportAdapter::has_recv_peer(int peer_rank) const {
   return it != peer_contexts_.end() && it->second.recv_flow != nullptr;
 }
 
+bool UcclTransportAdapter::ensure_peer(PeerConnectSpec const& spec) {
+  if (spec.peer_rank < 0) return false;
+  if (has_peer(spec.peer_rank)) return true;
+  if (!std::holds_alternative<UcclPeerConnectSpec>(spec.detail)) return false;
+  auto const& u = std::get<UcclPeerConnectSpec>(spec.detail);
+  if (spec.type == PeerConnectType::Connect) {
+    return connect_to_peer(spec.peer_rank, u.remote_ip, u.remote_port,
+                           u.local_dev_idx, u.local_gpu_idx, u.remote_dev_idx,
+                           u.remote_gpu_idx);
+  }
+  return accept_from_peer(spec.peer_rank, u.remote_ip, u.remote_dev_idx,
+                          u.remote_gpu_idx, u.remote_port);
+}
+
 bool UcclTransportAdapter::is_memory_registered(uint64_t mr_id) const {
   std::lock_guard<std::mutex> lk(mu_);
   return mr_id_to_mhandle_.find(mr_id) != mr_id_to_mhandle_.end();
@@ -168,7 +180,7 @@ bool UcclTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip,
 
   if (!has_recv_peer(peer_rank)) {
     if (!accept_from_peer(peer_rank, remote_ip, remote_dev_idx, remote_gpu_idx,
-                          remote_port, nullptr)) {
+                          remote_port)) {
       return false;
     }
   }
@@ -178,7 +190,7 @@ bool UcclTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip,
 bool UcclTransportAdapter::accept_from_peer(
     int peer_rank, std::string const& expected_remote_ip,
     int expected_remote_dev_idx, int expected_remote_gpu_idx,
-    uint16_t expected_remote_port, AcceptedPeer* accepted_peer) {
+    uint16_t expected_remote_port) {
   if (has_send_peer(peer_rank) && has_recv_peer(peer_rank)) return true;
   if (!endpoint_) return false;
 
@@ -219,12 +231,6 @@ bool UcclTransportAdapter::accept_from_peer(
                 << remote_gpuidx << std::endl;
       endpoint_->discard_conn(conn_id);
       return false;
-    }
-
-    if (accepted_peer != nullptr) {
-      accepted_peer->remote_ip = remote_ip;
-      accepted_peer->remote_dev_idx = remote_dev;
-      accepted_peer->remote_gpu_idx = remote_gpuidx;
     }
 
     std::lock_guard<std::mutex> lk(mu_);

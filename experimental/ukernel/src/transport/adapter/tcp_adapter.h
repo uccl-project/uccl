@@ -31,17 +31,8 @@ class TcpTransportAdapter final : public TransportAdapter {
   uint16_t get_listen_port() const;
   std::string const& get_listen_ip() const { return local_ip_; }
 
-  bool connect_to_peer(int peer_rank, std::string remote_ip,
-                       uint16_t remote_port);
-  bool accept_from_peer(int peer_rank, std::string const& expected_remote_ip,
-                        AcceptedPeer* accepted_peer = nullptr);
-  bool connect(int peer_rank) override { return has_send_peer(peer_rank); }
-  bool accept(int peer_rank) override { return has_recv_peer(peer_rank); }
-
-  bool has_send_peer(int peer_rank) const;
-  bool has_recv_peer(int peer_rank) const;
-  bool has_send_path(int peer_rank) const override;
-  bool has_recv_path(int peer_rank) const override;
+  bool ensure_peer(PeerConnectSpec const& spec) override;
+  bool has_peer(int peer_rank) const override;
 
   unsigned send_async(int peer_rank, void* local_ptr, size_t len,
                       uint64_t local_mr_id,
@@ -55,10 +46,6 @@ class TcpTransportAdapter final : public TransportAdapter {
   bool wait_completion(unsigned id) override;
   bool request_failed(unsigned id) override;
   void release_request(unsigned id) override;
-
-  int peer_count() const override {
-    return static_cast<int>(peer_contexts_.size());
-  }
 
   int send_async_tcp(int peer_rank, void const* host_ptr, size_t len,
                      unsigned request_id);
@@ -88,6 +75,11 @@ class TcpTransportAdapter final : public TransportAdapter {
     std::thread worker;
   };
 
+  bool connect_to_peer(int peer_rank, std::string remote_ip,
+                       uint16_t remote_port);
+  bool accept_from_peer(int peer_rank, std::string const& expected_remote_ip,
+                        AcceptedPeer* accepted_peer = nullptr);
+
   static int create_listen_socket(uint16_t& out_port);
   static bool connect_socket(int& out_fd, std::string const& remote_ip,
                              uint16_t remote_port,
@@ -110,6 +102,9 @@ class TcpTransportAdapter final : public TransportAdapter {
   std::unordered_map<int, std::shared_ptr<PeerContext>> peer_contexts_;
   std::unordered_map<unsigned, std::shared_ptr<PendingRequest>> pending_;
   std::atomic<unsigned> next_request_id_{1};
+
+  bool has_send_peer(int peer_rank) const;
+  bool has_recv_peer(int peer_rank) const;
 };
 
 }  // namespace Transport

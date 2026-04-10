@@ -181,6 +181,17 @@ bool TcpTransportAdapter::accept_from_peer(
   return false;
 }
 
+bool TcpTransportAdapter::ensure_peer(PeerConnectSpec const& spec) {
+  if (spec.peer_rank < 0) return false;
+  if (has_peer(spec.peer_rank)) return true;
+  if (!std::holds_alternative<TcpPeerConnectSpec>(spec.detail)) return false;
+  auto const& tcp = std::get<TcpPeerConnectSpec>(spec.detail);
+  if (spec.type == PeerConnectType::Connect) {
+    return connect_to_peer(spec.peer_rank, tcp.remote_ip, tcp.remote_port);
+  }
+  return accept_from_peer(spec.peer_rank, tcp.remote_ip, nullptr);
+}
+
 bool TcpTransportAdapter::has_send_peer(int peer_rank) const {
   std::lock_guard<std::mutex> lk(mu_);
   auto it = peer_contexts_.find(peer_rank);
@@ -193,12 +204,8 @@ bool TcpTransportAdapter::has_recv_peer(int peer_rank) const {
   return it != peer_contexts_.end() && it->second && it->second->recv_fd >= 0;
 }
 
-bool TcpTransportAdapter::has_send_path(int peer_rank) const {
-  return has_send_peer(peer_rank);
-}
-
-bool TcpTransportAdapter::has_recv_path(int peer_rank) const {
-  return has_recv_peer(peer_rank);
+bool TcpTransportAdapter::has_peer(int peer_rank) const {
+  return has_send_peer(peer_rank) && has_recv_peer(peer_rank);
 }
 
 unsigned TcpTransportAdapter::send_async(int peer_rank, void* local_ptr,

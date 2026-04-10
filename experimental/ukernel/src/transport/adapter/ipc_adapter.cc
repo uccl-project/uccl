@@ -114,6 +114,15 @@ bool IpcAdapter::accept_from(int rank) {
   return shm_control_ != nullptr && shm_control_->accept_from(rank, 30000);
 }
 
+bool IpcAdapter::ensure_peer(PeerConnectSpec const& spec) {
+  if (spec.peer_rank < 0) return false;
+  if (has_peer(spec.peer_rank)) return true;
+  if (spec.type == PeerConnectType::Connect) {
+    return connect_to(spec.peer_rank);
+  }
+  return accept_from(spec.peer_rank);
+}
+
 void IpcAdapter::set_peer_local_id(int peer_rank, int local_id) {
   if (shm_control_ != nullptr) {
     shm_control_->set_peer_local_id(peer_rank, local_id);
@@ -145,16 +154,8 @@ uint64_t IpcAdapter::next_recv_match_seq(int rank) {
   return (counter << 1) | static_cast<uint64_t>(dir);
 }
 
-bool IpcAdapter::has_send_path(int peer_rank) const {
+bool IpcAdapter::has_peer(int peer_rank) const {
   return shm_control_ != nullptr && shm_control_->is_peer_connected(peer_rank);
-}
-
-bool IpcAdapter::has_recv_path(int peer_rank) const {
-  return shm_control_ != nullptr && shm_control_->is_peer_connected(peer_rank);
-}
-
-int IpcAdapter::peer_count() const {
-  return comm_ ? std::max(0, comm_->world_size() - 1) : 0;
 }
 
 unsigned IpcAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
