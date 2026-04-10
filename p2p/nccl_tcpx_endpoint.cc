@@ -384,11 +384,9 @@ bool Endpoint::advertise(uint64_t /*conn_id*/, uint64_t mr_id, void const* addr,
   if (addr_u < base || addr_u + len > base + mr.size) return false;
 
   FifoItem item{};
-  item.mr_id = mr_id;
+  item.rid = static_cast<uint32_t>(mr_id);
   item.size = static_cast<uint32_t>(len);
-  item.offset = static_cast<uint64_t>(addr_u - base);
-  item.tag = 0;
-  item.token = 0;
+  item.addr = static_cast<uint64_t>(addr_u - base);  // offset within MR
   std::memcpy(out_buf, &item, sizeof(item));
   return true;
 }
@@ -517,12 +515,12 @@ bool Endpoint::queue_read_response(uint64_t conn_id,
   MrEntry mr{};
   {
     std::lock_guard<std::mutex> lock(mr_mu_);
-    auto it = mr_map_.find(fifo_item.mr_id);
+    auto it = mr_map_.find(fifo_item.rid);
     if (it == mr_map_.end()) return false;
     mr = it->second;
   }
-  if (fifo_item.offset + fifo_item.size > mr.size) return false;
-  char* base = static_cast<char*>(mr.base) + fifo_item.offset;
+  if (fifo_item.addr + fifo_item.size > mr.size) return false;
+  char* base = static_cast<char*>(mr.base) + fifo_item.addr;
 
   uint64_t tid = 0;
   if (!send_internal_(conn, base, fifo_item.size, tid)) return false;
