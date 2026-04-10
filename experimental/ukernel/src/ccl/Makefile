@@ -7,8 +7,6 @@ UCCL_ROOT := $(abspath ../../../..)
 GDRCOPY_INCLUDEDIR ?= /usr/include
 GDRCOPY_LIBDIR ?=
 GDRCOPY_LIBDIR_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-L$(GDRCOPY_LIBDIR),)
-GDRCOPY_CXX_RPATH_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-Wl,-rpath,$(GDRCOPY_LIBDIR),)
-GDRCOPY_NVCC_RPATH_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR),)
 UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
 UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma.a
 
@@ -31,10 +29,12 @@ INCLUDES := -I. -I./test -I./test/common -I./test/unit -I./test/integration \
             -I../transport -I../device -I../device/fifo \
             -I../../include -I$(UCCL_ROOT) -I$(UCCL_ROOT)/include \
             -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR) -I/usr/local/include
-CXX_RPATH_FLAGS := -Wl,-rpath,$(CUDA_HOME)/lib64 \
-                   $(GDRCOPY_CXX_RPATH_FLAGS)
-NVCC_RPATH_FLAGS := -Xlinker -rpath -Xlinker $(CUDA_HOME)/lib64 \
-                    $(GDRCOPY_NVCC_RPATH_FLAGS)
+CXX_RPATH_FLAGS := -Wl,-rpath,$(CUDA_HOME)/lib64
+NVCC_RPATH_FLAGS := -Xlinker -rpath -Xlinker $(CUDA_HOME)/lib64
+ifneq ($(strip $(GDRCOPY_LIBDIR)),)
+CXX_RPATH_FLAGS += -Wl,-rpath,$(GDRCOPY_LIBDIR)
+NVCC_RPATH_FLAGS += -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR)
+endif
 TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(CUDA_HOME)/lib64 \
                   -lcudart -lcuda -lgflags -lz -libverbs \
                   -lnl-3 -lnl-route-3 -lrdmacm -lpthread \

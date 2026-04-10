@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../communicator.h"
+#include "../request.h"
 #include <cstdint>
 #include <functional>
 #include <memory>
