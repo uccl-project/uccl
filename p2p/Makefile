@@ -188,6 +188,7 @@ ifeq ($(USE_TCPX),1)
 install: $(P2P_SHARED_LIB)
 	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
 	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
+	$(MAKE) install-all-transports
 	@echo "Installation complete!"
 else
 install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
@@ -198,6 +199,7 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
 	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
 	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
+	$(MAKE) install-all-transports
 	@echo "Installation complete!"
 endif
 # Clean build artifacts
@@ -259,14 +261,14 @@ transport-tcpx:
 	@$(MAKE) clean-backend
 	@$(MAKE) P2P_SHARED_LIB=libuccl_p2p_tcpx.so USE_TCPX=1 libuccl_p2p_tcpx.so
 
-install-all-transports: all-transports
+install-all-transports:
 	$(call safe_install,libuccl_p2p.so,$(LIBDIR),755)
 	$(call safe_install,libuccl_p2p_rdma.so,$(LIBDIR),755)
 	$(call safe_install,libuccl_p2p_efa.so,$(LIBDIR),755)
 	$(call safe_install,libuccl_p2p_tcp.so,$(LIBDIR),755)
 	$(call safe_install,libuccl_p2p_tcpx.so,$(LIBDIR),755)
 	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
-	@echo "All transport backends installed!"
+	@echo "Transport backends installed!"
 
 # Help target
 help:

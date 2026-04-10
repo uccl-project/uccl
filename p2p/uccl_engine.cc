@@ -29,12 +29,11 @@
 #include <utility>
 
 #ifdef UCCL_P2P_USE_TCPX
-// nccl_tcpx_endpoint does not declare inside_python; define it here for
-// uccl_engine.
+// engine.h is not included for TCPX, so define inside_python here.
 thread_local bool inside_python = false;
-
 using Endpoint = nccl_tcpx::Endpoint;
 #else
+// inside_python is defined in engine.cc (declared extern in engine.h).
 using Endpoint = ::Endpoint;
 #endif
 
