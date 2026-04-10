@@ -240,6 +240,19 @@ static bool publish_ipc_recv_buffers(Communicator& comm, int peer_rank,
   return true;
 }
 
+static bool prefetch_remote_ipc_recv_buffers(
+    Communicator& comm, int peer_rank, PeerTransportKind kind,
+    std::vector<MR> const& remote_recv_mrs) {
+  if (kind != PeerTransportKind::Ipc) return true;
+  for (auto const& remote_mr : remote_recv_mrs) {
+    if (remote_mr.id == 0) return false;
+    if (!comm.wait_ipc_buffer(peer_rank, remote_mr.id, kBenchIpcBindingVersion)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static unsigned submit_send(Communicator& comm, int peer_rank,
                             uint32_t local_send_mr_id, size_t msg_size,
                             PeerTransportKind kind,
@@ -366,6 +379,13 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
     if (!exchange_remote_recv_mrs(comm, peer_rank, local_recv_mrs,
                                   remote_recv_mrs, true)) {
       fprintf(stderr, "[Sender %d] Failed to exchange remote receive MRs\n",
+              rank);
+      cleanup();
+      return;
+    }
+    if (!prefetch_remote_ipc_recv_buffers(comm, peer_rank, transport_kind,
+                                          remote_recv_mrs)) {
+      fprintf(stderr, "[Sender %d] Failed to prefetch remote IPC buffers\n",
               rank);
       cleanup();
       return;
@@ -647,6 +667,13 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     if (!exchange_remote_recv_mrs(comm, peer_rank, local_recv_mrs,
                                   remote_recv_mrs, false)) {
       fprintf(stderr, "[Receiver %d] Failed to exchange remote receive MRs\n",
+              rank);
+      cleanup();
+      return;
+    }
+    if (!prefetch_remote_ipc_recv_buffers(comm, peer_rank, transport_kind,
+                                          remote_recv_mrs)) {
+      fprintf(stderr, "[Receiver %d] Failed to prefetch remote IPC buffers\n",
               rank);
       cleanup();
       return;

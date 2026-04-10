@@ -25,6 +25,7 @@ unless a newer committed result supersedes them.
 | 2 | Phase 3 bridge | kept | `8522a6d3` | propagate IPC binding_version and make bench cover versioned direct IPC path |
 | 3 | Phase 3 bridge | reverted | `n/a` | dedupe repeated local IPC metadata publish for the same recv buffer |
 | 4 | Phase 2 | reverted | `n/a` | try a truly synchronous single-stream copy fast-path |
+| 5 | Phase 2 / NCCL-inspired | kept | `pending` | eagerly open remote IPC handles during setup and prefetch bench recv buffers |
 
 ## Detailed Notes
 
@@ -269,3 +270,103 @@ Reasoning:
 - `16MB` looked attractive, but `64KB` and especially `1MB` regressed too much
 - the behavior on AMD peer copy was not stable enough for a general fast-path
 - this candidate does not meet the “overall improvement” bar, so it was rolled back immediately
+
+### Step 5: eagerly open remote IPC mappings during setup
+
+Status:
+- kept
+
+Scope:
+- [communicator.h](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/communicator.h)
+- [communicator.cc](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/communicator.cc)
+- [bench_transport.cc](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/benchmarks/bench_transport.cc)
+
+What changed:
+- `Communicator::wait_ipc_buffer()` and `Communicator::fetch_ipc_buffer()` now opportunistically call a new helper that tries `gpuIpcOpenMemHandle()` immediately after versioned IPC metadata is resolved
+- the eager open is best-effort only: if open fails, the old lazy path still remains available
+- `bench_transport` now prefetches every remote IPC recv MR during setup once the two ranks exchange their MR ids
+
+Why it seemed promising:
+- this follows the same broad lifecycle idea as NCCL's P2P registration/import path: do more of the shareable-buffer registration and import work once per buffer or once per connection, not on the first timed request
+- after Step 2, the benchmark finally exercised the versioned direct IPC path, so the next obvious cost to move out of-band was remote `gpuIpcOpenMemHandle`
+- unlike the reverted publish-dedupe attempt, this moves a concrete setup-only operation instead of adding more state around a request-time publish
+
+Build command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang/experimental/ukernel
+make -f Makefile.rocm bench_transport -j4
+```
+
+Benchmark command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang
+bench=/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/bench_transport
+sizes=(1024 2048 4096 8192 16384 32768 65536 131072 262144 524288 1048576 2097152 4194304 8388608 16777216 33554432 67108864 134217728 268435456)
+port=8200
+for size in "${sizes[@]}"; do
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=0 --membind=0 "$bench" --rank 0 --peer-rank 1 --gpu-id 2 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port" &
+  pid0=$!
+  sleep 1
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=1 --membind=1 "$bench" --rank 1 --peer-rank 0 --gpu-id 6 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port"
+  wait "$pid0"
+  port=$((port + 1))
+done
+```
+
+Test placement:
+- `GPU 2` on `NUMA 0`
+- `GPU 6` on `NUMA 1`
+
+Key before/after points versus the current kept baseline from Step 2:
+
+| Size | Prev p50 us | New p50 us | Prev Uni GB/s | New Uni GB/s | Prev Bidi GB/s | New Bidi GB/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4KB | 1220.76 | 1220.95 | 0.19 | 0.18 | 0.02 | 0.02 |
+| 64KB | 1245.81 | 1192.27 | 2.43 | 3.18 | 0.27 | 0.27 |
+| 1MB | 1200.41 | 1229.84 | 21.20 | 23.60 | 3.44 | 3.47 |
+| 16MB | 2630.75 | 1546.23 | 42.75 | 42.48 | 18.76 | 22.29 |
+
+Full current sweep:
+
+| Size | p50 us | p90 us | Uni GB/s | Bidi GB/s |
+| --- | ---: | ---: | ---: | ---: |
+| 1024 | 1204.10 | 1272.33 | 0.05 | 0.00 |
+| 2048 | 1206.65 | 2272.52 | 0.10 | 0.01 |
+| 4096 | 1220.95 | 1244.51 | 0.18 | 0.02 |
+| 8192 | 1195.89 | 2245.78 | 0.41 | 0.06 |
+| 16384 | 1195.05 | 1439.97 | 0.79 | 0.07 |
+| 32768 | 1240.77 | 1380.84 | 1.32 | 0.13 |
+| 65536 | 1192.27 | 1216.49 | 3.18 | 0.27 |
+| 131072 | 1252.38 | 2317.96 | 4.44 | 0.43 |
+| 262144 | 1242.89 | 2316.94 | 8.37 | 1.03 |
+| 524288 | 1232.71 | 2291.07 | 15.11 | 1.91 |
+| 1048576 | 1229.84 | 1264.63 | 23.60 | 3.47 |
+| 2097152 | 1238.20 | 2396.34 | 33.26 | 7.29 |
+| 4194304 | 1313.22 | 2372.97 | 36.89 | 9.54 |
+| 8388608 | 1381.60 | 2464.05 | 40.33 | 15.46 |
+| 16777216 | 1546.23 | 2797.19 | 42.48 | 22.29 |
+| 33554432 | 2909.20 | 3346.62 | 43.84 | 15.73 |
+| 67108864 | 4711.21 | 11034.43 | 44.53 | 15.35 |
+| 134217728 | 7151.67 | 7698.87 | 44.94 | 15.97 |
+| 268435456 | 12156.12 | 13712.91 | 45.19 | 19.10 |
+
+Additional validation:
+- I also replayed the same full-sweep command on a detached worktree at `8522a6d3` to get a same-command baseline
+- that replay failed at `131072B` during bidirectional throughput with `timed out waiting sender ack/relay/cache-req`
+- because of that instability, the formal comparison above still uses the anchored Step 2 numbers that were already committed and known-good
+- the failure itself is still a useful signal: the eager-open candidate remained stable through the same full 19-size sweep that the baseline replay did not complete
+
+Decision:
+- keep
+
+Reasoning:
+- this candidate keeps small-message latency flat while materially improving the medium and large sizes that still had visible first-use/setup costs after Step 2
+- the code change is still small and follows an established direction from NCCL: import/register shareable buffers earlier and let the timed path hit ready-to-use mappings
+- the benchmark-side prefetch makes the setup intent explicit instead of relying on a handful of warmup iterations to lazily open only a subset of slots
+- the full current sweep completed successfully, while the replayed Step 2 baseline hit a timeout at `128KB`, which increases confidence that this is not just noise
+
+Next candidate:
+- continue toward the remaining Phase 2/3 boundary work by reducing repeated remote metadata/control work after setup
+- the next low-risk place to explore is whether `ipc_cache_req` can be bypassed more aggressively once a versioned `ipc_id` is known fresh and already imported

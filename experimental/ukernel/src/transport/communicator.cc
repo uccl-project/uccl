@@ -1672,7 +1672,11 @@ bool Communicator::wait_ipc_buffer(int remote_rank, uint32_t ipc_id,
   state.device_idx = info.device_idx;
   state.valid = info.valid;
   state.ipc_id = ipc_id;
-  return ipc_manager_.register_remote_ipc(remote_rank, state);
+  bool ok = ipc_manager_.register_remote_ipc(remote_rank, state);
+  if (ok && expected_binding_version != 0) {
+    try_open_remote_ipc_buffer(remote_rank, state);
+  }
+  return ok;
 }
 
 bool Communicator::fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
@@ -1695,7 +1699,11 @@ bool Communicator::fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
         return false;
       }
       state.ipc_id = ipc_id;
-      return ipc_manager_.register_remote_ipc(remote_rank, state);
+      bool ok = ipc_manager_.register_remote_ipc(remote_rank, state);
+      if (ok && expected_binding_version != 0) {
+        try_open_remote_ipc_buffer(remote_rank, state);
+      }
+      return ok;
     }
   }
   if (!exchanger_client_->fetch(
@@ -1715,7 +1723,32 @@ bool Communicator::fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
     return false;
   }
   state.ipc_id = ipc_id;
-  return ipc_manager_.register_remote_ipc(remote_rank, state);
+  bool ok = ipc_manager_.register_remote_ipc(remote_rank, state);
+  if (ok && expected_binding_version != 0) {
+    try_open_remote_ipc_buffer(remote_rank, state);
+  }
+  return ok;
+}
+
+void Communicator::try_open_remote_ipc_buffer(int remote_rank,
+                                              IPCItem const& state) {
+  if (!state.valid || state.direct_ptr != nullptr) return;
+
+  int original_device = -1;
+  GPU_RT_CHECK(gpuGetDevice(&original_device));
+  auto restore = UKernel::Transport::finally(
+      [&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+
+  void* direct_ptr = nullptr;
+  gpuError_t open_err = gpuIpcOpenMemHandle(&direct_ptr, state.handle,
+                                            gpuIpcMemLazyEnablePeerAccess);
+  if (open_err != gpuSuccess || direct_ptr == nullptr) return;
+
+  IPCItem opened = state;
+  opened.direct_ptr = direct_ptr;
+  opened.ipc_id = state.ipc_id;
+  (void)ipc_manager_.register_remote_ipc(remote_rank, opened);
 }
 
 bool Communicator::has_fresh_remote_ipc_buffer(
