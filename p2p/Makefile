@@ -228,7 +228,20 @@ install-deps:
 DISPATCH_SRC := uccl_p2p_dispatch.cc
 DISPATCH_OBJ := uccl_p2p_dispatch.o
 
-all-transports: dispatch-lib transport-rdma transport-efa transport-tcp transport-tcpx
+# Auto-detect which optional backends can be built
+HAS_EFA  := $(shell test -f $(EFA_HOME)/include/infiniband/efadv.h && echo 1 || echo 0)
+HAS_NCCL := $(shell test -d $(NCCL_HOME)/include 2>/dev/null && echo 1 || test -f /usr/include/nccl.h && echo 1 || echo 0)
+
+TRANSPORT_TARGETS := dispatch-lib transport-rdma
+ifeq ($(HAS_EFA),1)
+TRANSPORT_TARGETS += transport-efa
+endif
+ifeq ($(HAS_NCCL),1)
+TRANSPORT_TARGETS += transport-tcp transport-tcpx
+endif
+
+all-transports: $(TRANSPORT_TARGETS)
+	@echo "Built transports: $(TRANSPORT_TARGETS)"
 
 # Thin dispatcher (dlopen-based, no transport code).
 # Uses a phony target name to avoid conflicting with the existing
