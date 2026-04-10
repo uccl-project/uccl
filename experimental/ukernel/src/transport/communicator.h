@@ -110,7 +110,14 @@ class Communicator {
   };
 
   struct TrackedRequest {
-    enum class SlotState : uint8_t { Free = 0, Reserved = 1, InFlight = 2, Completed = 3, Failed = 4, Releasing = 5 };
+    enum class SlotState : uint8_t {
+      Free = 0,
+      Reserved = 1,
+      InFlight = 2,
+      Completed = 3,
+      Failed = 4,
+      Releasing = 5
+    };
     std::atomic<SlotState> state{SlotState::Free};
     std::atomic<uint32_t> generation{0};
     unsigned request_id = 0;

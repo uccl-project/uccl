@@ -316,8 +316,9 @@ bool IpcAdapter::recv_async_ipc(int from_rank,
   return true;
 }
 
-bool IpcAdapter::send_one(int to_rank, IpcPendingRequest* creq, void* bounce_ptr,
-                          size_t bounce_len, std::string const& bounce_shm_name,
+bool IpcAdapter::send_one(int to_rank, IpcPendingRequest* creq,
+                          void* bounce_ptr, size_t bounce_len,
+                          std::string const& bounce_shm_name,
                           BounceBufferProvider bounce_provider) {
   (void)bounce_len;
   if (!(creq && creq->buffer != nullptr)) {
@@ -336,7 +337,7 @@ bool IpcAdapter::send_one(int to_rank, IpcPendingRequest* creq, void* bounce_ptr
     uint64_t out_seq = 0;
     uint32_t status = 0;
     if (!shm_control_->recv_ack(to_rank, &status, &out_seq, timeout_ms,
-                             creq->match_seq)) {
+                                creq->match_seq)) {
       return 0;
     }
     if (out_seq != creq->match_seq || status != kAckStatusOkDirect) {
@@ -448,11 +449,12 @@ bool IpcAdapter::send_one(int to_rank, IpcPendingRequest* creq, void* bounce_ptr
     bool have_fresh_meta = comm_->ipc_has_fresh_remote_ipc_buffer(
         to_rank, creq->remote_slice.mem_id, creq->remote_slice.binding_version);
     if (!have_fresh_meta) {
-      have_fresh_meta =
-          comm_->ipc_fetch_remote_ipc_buffer(to_rank, creq->remote_slice.mem_id,
-                                  creq->remote_slice.binding_version);
+      have_fresh_meta = comm_->ipc_fetch_remote_ipc_buffer(
+          to_rank, creq->remote_slice.mem_id,
+          creq->remote_slice.binding_version);
       if (!have_fresh_meta) {
-        comm_->ipc_invalidate_remote_ipc_buffer(to_rank, creq->remote_slice.mem_id);
+        comm_->ipc_invalidate_remote_ipc_buffer(to_rank,
+                                                creq->remote_slice.mem_id);
       }
     }
 
@@ -473,7 +475,7 @@ bool IpcAdapter::send_one(int to_rank, IpcPendingRequest* creq, void* bounce_ptr
       if (can_use_direct_peer) {
         copy_to_remote(cached_dst, cached_remote_gpu);
         if (!shm_control_->send_ack(to_rank, creq->match_seq,
-                                 kAckStatusOkDirect)) {
+                                    kAckStatusOkDirect)) {
           std::cerr << "[ERROR] send direct cached ack(" << to_rank
                     << ") failed for req " << creq->id << " match_seq "
                     << creq->match_seq << std::endl;
@@ -503,7 +505,7 @@ bool IpcAdapter::send_one(int to_rank, IpcPendingRequest* creq, void* bounce_ptr
         std::min(kIpcControlPollTimeoutMs, remaining_timeout_ms(deadline));
     if (timeout_ms <= 0) break;
     if (shm_control_->recv_ipc_cache(to_rank, got, &seq, timeout_ms,
-                                  creq->match_seq)) {
+                                     creq->match_seq)) {
       got_cache = true;
       break;
     }
@@ -561,8 +563,8 @@ bool IpcAdapter::send_one(int to_rank, IpcPendingRequest* creq, void* bounce_ptr
   return false;
 }
 
-bool IpcAdapter::recv_one(int from_rank, IpcPendingRequest* creq, void* bounce_ptr,
-                          size_t bounce_len,
+bool IpcAdapter::recv_one(int from_rank, IpcPendingRequest* creq,
+                          void* bounce_ptr, size_t bounce_len,
                           std::string const& bounce_shm_name) {
   (void)bounce_ptr;
   (void)bounce_len;
@@ -582,7 +584,7 @@ bool IpcAdapter::recv_one(int from_rank, IpcPendingRequest* creq, void* bounce_p
     uint64_t out_seq = 0;
     uint32_t status = 0;
     if (!shm_control_->recv_ack(from_rank, &status, &out_seq, timeout_ms,
-                             creq->match_seq)) {
+                                creq->match_seq)) {
       return 0;
     }
     if (out_seq != creq->match_seq || status != kAckStatusOkDirect) {
@@ -629,7 +631,8 @@ bool IpcAdapter::recv_one(int from_rank, IpcPendingRequest* creq, void* bounce_p
     void* actual_dst = creq->data();
     GPU_RT_CHECK(gpuMemcpy(actual_dst, relay_bounce_ptr, creq->size_bytes,
                            gpuMemcpyHostToDevice));
-    if (!shm_control_->send_ack(from_rank, creq->match_seq, kAckStatusOkDirect)) {
+    if (!shm_control_->send_ack(from_rank, creq->match_seq,
+                                kAckStatusOkDirect)) {
       std::cerr << "[ERROR] send_ack for relay cache failed, req " << creq->id
                 << " match_seq " << creq->match_seq << std::endl;
       return false;
@@ -645,14 +648,14 @@ bool IpcAdapter::recv_one(int from_rank, IpcPendingRequest* creq, void* bounce_p
     }
     uint64_t req_seq = 0;
     if (shm_control_->recv_ipc_cache_req(from_rank, &req_seq,
-                                      /*timeout_ms=*/0, creq->match_seq)) {
+                                         /*timeout_ms=*/0, creq->match_seq)) {
       got_cache_req = true;
       break;
     }
     IpcCacheWire relay_cache{};
     uint64_t relay_seq = 0;
     if (shm_control_->recv_ipc_cache(from_rank, relay_cache, &relay_seq,
-                                  /*timeout_ms=*/0, creq->match_seq)) {
+                                     /*timeout_ms=*/0, creq->match_seq)) {
       return handle_relay_cache(relay_cache, relay_seq);
     }
     if (std::chrono::steady_clock::now() >= phase1_deadline) {
@@ -679,7 +682,8 @@ bool IpcAdapter::recv_one(int from_rank, IpcPendingRequest* creq, void* bounce_p
   transfer_info.offset = reinterpret_cast<uintptr_t>(actual_dst) -
                          reinterpret_cast<uintptr_t>(base);
 
-  if (!shm_control_->send_ipc_cache(from_rank, creq->match_seq, transfer_info)) {
+  if (!shm_control_->send_ipc_cache(from_rank, creq->match_seq,
+                                    transfer_info)) {
     std::cerr << "[ERROR] send_ipc_cache(" << from_rank << ") failed for req "
               << creq->id << " match_seq " << creq->match_seq << std::endl;
     return false;
@@ -699,7 +703,7 @@ bool IpcAdapter::recv_one(int from_rank, IpcPendingRequest* creq, void* bounce_p
     IpcCacheWire relay_cache{};
     uint64_t relay_seq = 0;
     if (shm_control_->recv_ipc_cache(from_rank, relay_cache, &relay_seq,
-                                  /*timeout_ms=*/0, creq->match_seq)) {
+                                     /*timeout_ms=*/0, creq->match_seq)) {
       return handle_relay_cache(relay_cache, relay_seq);
     }
 

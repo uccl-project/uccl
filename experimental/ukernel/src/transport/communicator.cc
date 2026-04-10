@@ -18,8 +18,8 @@
 #include <unordered_set>
 #include <ifaddrs.h>
 #include <poll.h>
-#include <sys/socket.h>
 #include <sys/eventfd.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 namespace UKernel {
@@ -419,8 +419,9 @@ Communicator::TrackedRequest* Communicator::resolve_request_slot(
 Communicator::TrackedRequest* Communicator::allocate_request_slot(
     unsigned* out_req_id) {
   if (out_req_id == nullptr) return nullptr;
-  uint32_t start = request_alloc_cursor_.fetch_add(1, std::memory_order_relaxed) &
-                   (kRequestSlotCount - 1u);
+  uint32_t start =
+      request_alloc_cursor_.fetch_add(1, std::memory_order_relaxed) &
+      (kRequestSlotCount - 1u);
   for (uint32_t i = 0; i < kRequestSlotCount; ++i) {
     uint32_t idx = (start + i) & (kRequestSlotCount - 1u);
     TrackedRequest* slot = &request_slots_[idx];
@@ -466,9 +467,9 @@ bool Communicator::try_release_request_slot(unsigned req_id,
       state != TrackedRequest::SlotState::Failed) {
     return false;
   }
-  if (!slot->state.compare_exchange_strong(state, TrackedRequest::SlotState::Releasing,
-                                           std::memory_order_acq_rel,
-                                           std::memory_order_acquire)) {
+  if (!slot->state.compare_exchange_strong(
+          state, TrackedRequest::SlotState::Releasing,
+          std::memory_order_acq_rel, std::memory_order_acquire)) {
     return false;
   }
   if (out_snapshot) {
@@ -502,9 +503,9 @@ bool Communicator::enqueue_active_request(unsigned req_id) {
     if (tail - head >= kActiveRingSize) {
       return false;
     }
-    if (!active_tail_.compare_exchange_weak(
-            tail, tail + 1, std::memory_order_acq_rel,
-            std::memory_order_acquire)) {
+    if (!active_tail_.compare_exchange_weak(tail, tail + 1,
+                                            std::memory_order_acq_rel,
+                                            std::memory_order_acquire)) {
       continue;
     }
     active_ring_[tail & (kActiveRingSize - 1u)].store(
@@ -1186,11 +1187,13 @@ unsigned Communicator::isend(int rank, LocalSlice src,
     slot->state.store(TrackedRequest::SlotState::Releasing,
                       std::memory_order_release);
     cleanup_tracked_request(*slot);
-    slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+    slot->state.store(TrackedRequest::SlotState::Free,
+                      std::memory_order_release);
     return 0;
   }
   slot->adapter_request_id = result;
-  slot->state.store(TrackedRequest::SlotState::InFlight, std::memory_order_release);
+  slot->state.store(TrackedRequest::SlotState::InFlight,
+                    std::memory_order_release);
   inflight_request_count_.fetch_add(1, std::memory_order_release);
   (void)enqueue_active_request(rid);
   progress_cv_.notify_all();
@@ -1285,11 +1288,13 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
     slot->state.store(TrackedRequest::SlotState::Releasing,
                       std::memory_order_release);
     cleanup_tracked_request(*slot);
-    slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+    slot->state.store(TrackedRequest::SlotState::Free,
+                      std::memory_order_release);
     return 0;
   }
   slot->adapter_request_id = result;
-  slot->state.store(TrackedRequest::SlotState::InFlight, std::memory_order_release);
+  slot->state.store(TrackedRequest::SlotState::InFlight,
+                    std::memory_order_release);
   inflight_request_count_.fetch_add(1, std::memory_order_release);
   (void)enqueue_active_request(rid);
   progress_cv_.notify_all();
@@ -1756,8 +1761,8 @@ bool Communicator::ipc_has_fresh_remote_ipc_buffer(
                                      expected_binding_version);
 }
 
-bool Communicator::ipc_fetch_remote_ipc_buffer(int remote_rank, uint32_t ipc_id,
-                                               uint64_t expected_binding_version) {
+bool Communicator::ipc_fetch_remote_ipc_buffer(
+    int remote_rank, uint32_t ipc_id, uint64_t expected_binding_version) {
   return fetch_ipc_buffer(remote_rank, ipc_id, expected_binding_version);
 }
 

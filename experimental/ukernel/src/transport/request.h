@@ -42,5 +42,5 @@ struct RemoteSlice {
   bool has_write_hint() const { return write.usable(); }
 };
 
-}
-}
+}  // namespace Transport
+}  // namespace UKernel

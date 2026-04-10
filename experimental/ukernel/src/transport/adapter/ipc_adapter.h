@@ -88,10 +88,9 @@ class IpcAdapter final : public TransportAdapter {
     }
     void complete_one() {
       uint32_t prev = remaining.load(std::memory_order_acquire);
-      while (prev != 0 &&
-             !remaining.compare_exchange_weak(prev, prev - 1,
-                                              std::memory_order_acq_rel,
-                                              std::memory_order_acquire)) {
+      while (prev != 0 && !remaining.compare_exchange_weak(
+                              prev, prev - 1, std::memory_order_acq_rel,
+                              std::memory_order_acquire)) {
       }
       if (prev <= 1) finished.store(true, std::memory_order_release);
     }
@@ -122,8 +121,7 @@ class IpcAdapter final : public TransportAdapter {
                       void* bounce_ptr = nullptr, size_t bounce_len = 0,
                       std::string bounce_shm_name = "");
   bool send_one(int to_rank, IpcPendingRequest* creq, void* bounce_ptr,
-                size_t bounce_len,
-                std::string const& bounce_shm_name,
+                size_t bounce_len, std::string const& bounce_shm_name,
                 BounceBufferProvider bounce_provider);
   bool recv_one(int from_rank, IpcPendingRequest* creq, void* bounce_ptr,
                 size_t bounce_len, std::string const& bounce_shm_name);
