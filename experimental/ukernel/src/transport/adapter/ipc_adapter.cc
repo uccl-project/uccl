@@ -5,9 +5,6 @@
 #include <chrono>
 #include <cstring>
 #include <string>
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <unistd.h>
 
 namespace UKernel {
 namespace Transport {
@@ -15,6 +12,9 @@ namespace Transport {
 namespace {
 
 constexpr int kIpcControlPollTimeoutMs = 50;
+constexpr size_t kTaskRingSize = 1024;
+constexpr size_t kIpcSizePerEngine = 1ul << 20;
+constexpr int kIpcControlTimeoutMs = 50000;
 
 bool ipc_force_relay_enabled() {
   char const* env = std::getenv("UHM_IPC_FORCE_RELAY");
@@ -31,8 +31,9 @@ int remaining_timeout_ms(std::chrono::steady_clock::time_point deadline) {
 
 constexpr uint32_t kAckStatusOkDirect = 1;
 
-bool enqueue_one_ptr(jring_t* ring, void* elem, std::atomic<bool> const& stop) {
-  void* elem_slot = elem;
+bool enqueue_one_request_id(jring_t* ring, unsigned elem,
+                            std::atomic<bool> const& stop) {
+  unsigned elem_slot = elem;
   while (!stop.load(std::memory_order_acquire) &&
          jring_mp_enqueue_bulk(ring, &elem_slot, 1, nullptr) != 1) {
     std::this_thread::yield();
@@ -51,9 +52,10 @@ IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
           self_local_id)),
       comm_(comm) {
   send_task_ring_ =
-      UKernel::Transport::create_ring(sizeof(IpcTask*), kTaskRingSize);
+      UKernel::Transport::create_ring(sizeof(unsigned), kTaskRingSize);
   recv_task_ring_ =
-      UKernel::Transport::create_ring(sizeof(IpcTask*), kTaskRingSize);
+      UKernel::Transport::create_ring(sizeof(unsigned), kTaskRingSize);
+  request_slots_ = std::make_unique<IpcRequestSlot[]>(kRequestSlotCount);
   stop_.store(false);
   send_thread_ = std::thread([this] { send_thread_func(); });
   recv_thread_ = std::thread([this] { recv_thread_func(); });
@@ -114,6 +116,19 @@ bool IpcAdapter::accept_from(int rank) {
   return shm_control_ != nullptr && shm_control_->accept_from(rank, 30000);
 }
 
+bool IpcAdapter::ensure_peer(PeerConnectSpec const& spec) {
+  if (spec.peer_rank < 0) return false;
+  if (has_peer(spec.peer_rank)) return true;
+  if (!(std::holds_alternative<IpcPeerConnectSpec>(spec.detail) ||
+        std::holds_alternative<std::monostate>(spec.detail))) {
+    return false;
+  }
+  if (spec.type == PeerConnectType::Connect) {
+    return connect_to(spec.peer_rank);
+  }
+  return accept_from(spec.peer_rank);
+}
+
 void IpcAdapter::set_peer_local_id(int peer_rank, int local_id) {
   if (shm_control_ != nullptr) {
     shm_control_->set_peer_local_id(peer_rank, local_id);
@@ -145,16 +160,118 @@ uint64_t IpcAdapter::next_recv_match_seq(int rank) {
   return (counter << 1) | static_cast<uint64_t>(dir);
 }
 
-bool IpcAdapter::has_send_path(int peer_rank) const {
+bool IpcAdapter::has_peer(int peer_rank) const {
   return shm_control_ != nullptr && shm_control_->is_peer_connected(peer_rank);
 }
 
-bool IpcAdapter::has_recv_path(int peer_rank) const {
-  return shm_control_ != nullptr && shm_control_->is_peer_connected(peer_rank);
+IpcAdapter::IpcRequestSlot* IpcAdapter::try_acquire_request_slot(
+    unsigned* out_request_id) {
+  if (out_request_id == nullptr || !request_slots_) return nullptr;
+  for (uint32_t n = 0; n < kRequestSlotCount; ++n) {
+    uint32_t idx =
+        request_alloc_cursor_.fetch_add(1, std::memory_order_relaxed) &
+        kRequestSlotMask;
+    auto& slot = request_slots_[idx];
+    RequestState expected = RequestState::Free;
+    if (!slot.state.compare_exchange_strong(expected, RequestState::Running,
+                                            std::memory_order_acq_rel,
+                                            std::memory_order_acquire)) {
+      continue;
+    }
+    uint32_t gen = slot.generation.load(std::memory_order_acquire);
+    if (gen == 0) {
+      slot.generation.store(1, std::memory_order_release);
+      gen = 1;
+    }
+    slot.id = make_request_id(idx, gen);
+    slot.peer_rank = -1;
+    slot.match_seq = 0;
+    slot.buffer = nullptr;
+    slot.size_bytes = 0;
+    slot.remote_slice = {};
+    slot.bounce_ptr = nullptr;
+    slot.bounce_shm_name.clear();
+    slot.bounce_provider = nullptr;
+    *out_request_id = slot.id;
+    return &slot;
+  }
+  return nullptr;
 }
 
-int IpcAdapter::peer_count() const {
-  return comm_ ? std::max(0, comm_->world_size() - 1) : 0;
+IpcAdapter::IpcRequestSlot* IpcAdapter::resolve_request_slot(
+    unsigned request_id) {
+  if (request_id == 0 || !request_slots_) return nullptr;
+  uint32_t generation = request_generation(request_id);
+  if (generation == 0) return nullptr;
+  uint32_t idx = request_slot_index(request_id);
+  auto& slot = request_slots_[idx];
+  if (slot.generation.load(std::memory_order_acquire) != generation) {
+    return nullptr;
+  }
+  if (slot.state.load(std::memory_order_acquire) == RequestState::Free) {
+    return nullptr;
+  }
+  return &slot;
+}
+
+IpcAdapter::IpcRequestSlot* IpcAdapter::resolve_request_slot_const(
+    unsigned request_id) const {
+  if (request_id == 0 || !request_slots_) return nullptr;
+  uint32_t generation = request_generation(request_id);
+  if (generation == 0) return nullptr;
+  uint32_t idx = request_slot_index(request_id);
+  auto const& slot = request_slots_[idx];
+  if (slot.generation.load(std::memory_order_acquire) != generation) {
+    return nullptr;
+  }
+  if (slot.state.load(std::memory_order_acquire) == RequestState::Free) {
+    return nullptr;
+  }
+  return const_cast<IpcRequestSlot*>(&slot);
+}
+
+void IpcAdapter::release_request_slot(unsigned request_id) {
+  if (request_id == 0 || !request_slots_) return;
+  uint32_t generation = request_generation(request_id);
+  if (generation == 0) return;
+  uint32_t idx = request_slot_index(request_id);
+  auto& slot = request_slots_[idx];
+  if (slot.generation.load(std::memory_order_acquire) != generation) return;
+  auto st = slot.state.load(std::memory_order_acquire);
+  if (st == RequestState::Running || st == RequestState::Queued) return;
+  slot.state.store(RequestState::Free, std::memory_order_release);
+  slot.failed.store(false, std::memory_order_release);
+  slot.finished.store(false, std::memory_order_release);
+  slot.remaining.store(0, std::memory_order_release);
+  uint32_t old_gen = slot.generation.load(std::memory_order_acquire);
+  while (true) {
+    uint32_t next_gen = old_gen + 1;
+    if (next_gen == 0) next_gen = 1;
+    if (slot.generation.compare_exchange_weak(old_gen, next_gen,
+                                              std::memory_order_acq_rel,
+                                              std::memory_order_acquire)) {
+      break;
+    }
+  }
+}
+
+bool IpcAdapter::enqueue_request(unsigned request_id, IpcReqType type) {
+  if (stop_.load(std::memory_order_acquire)) return false;
+  if (type == IpcReqType::Send) {
+    if (send_task_ring_ == nullptr ||
+        !enqueue_one_request_id(send_task_ring_, request_id, stop_)) {
+      return false;
+    }
+    pending_send_.fetch_add(1, std::memory_order_relaxed);
+  } else {
+    if (recv_task_ring_ == nullptr ||
+        !enqueue_one_request_id(recv_task_ring_, request_id, stop_)) {
+      return false;
+    }
+    pending_recv_.fetch_add(1, std::memory_order_relaxed);
+  }
+  cv_.notify_all();
+  return true;
 }
 
 unsigned IpcAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
@@ -176,21 +293,22 @@ unsigned IpcAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
   if (remote_hint.has_value()) {
     remote_slice.write = remote_hint->write;
   }
-  unsigned request_id =
-      next_request_id_.fetch_add(1, std::memory_order_relaxed);
-  auto req = std::make_shared<IpcPendingRequest>();
-  req->id = request_id;
+  unsigned request_id = 0;
+  IpcRequestSlot* req = try_acquire_request_slot(&request_id);
+  if (!req) return 0;
+  req->peer_rank = peer_rank;
   req->match_seq = match_seq;
   req->buffer = local_ptr;
   req->size_bytes = len;
   req->remote_slice = remote_slice;
-  req->type = IpcReqType::Send;
-  if (send_async_ipc(peer_rank, req, nullptr, 0, "", bounce_provider)) {
-    std::lock_guard<std::mutex> lk(req_mu_);
-    pending_requests_[request_id] = req;
-    return request_id;
+  req->bounce_provider = std::move(bounce_provider);
+  req->mark_queued(1);
+  if (!enqueue_request(request_id, IpcReqType::Send)) {
+    req->mark_failed();
+    release_request_slot(request_id);
+    return 0;
   }
-  return 0;
+  return request_id;
 }
 
 unsigned IpcAdapter::recv_async(int peer_rank, void* local_ptr, size_t len,
@@ -199,52 +317,42 @@ unsigned IpcAdapter::recv_async(int peer_rank, void* local_ptr, size_t len,
   (void)local_mr_id;
 
   void* bounce_ptr = nullptr;
-  size_t bounce_len = 0;
   std::string bounce_shm_name;
   if (bounce_provider) {
     auto info = bounce_provider(len);
     bounce_ptr = info.ptr;
-    bounce_len = len;
     bounce_shm_name = info.shm_name;
   }
 
   uint64_t match_seq = next_recv_match_seq(peer_rank);
-  unsigned request_id =
-      next_request_id_.fetch_add(1, std::memory_order_relaxed);
-  auto req = std::make_shared<IpcPendingRequest>();
-  req->id = request_id;
+  unsigned request_id = 0;
+  IpcRequestSlot* req = try_acquire_request_slot(&request_id);
+  if (!req) return 0;
+  req->peer_rank = peer_rank;
   req->match_seq = match_seq;
   req->buffer = local_ptr;
   req->size_bytes = len;
-  req->remote_slice = RemoteSlice{};
-  req->type = IpcReqType::Recv;
-  if (recv_async_ipc(peer_rank, req, bounce_ptr, bounce_len, bounce_shm_name)) {
-    std::lock_guard<std::mutex> lk(req_mu_);
-    pending_requests_[request_id] = req;
-    return request_id;
+  req->remote_slice = {};
+  req->bounce_ptr = bounce_ptr;
+  req->bounce_shm_name = std::move(bounce_shm_name);
+  req->mark_queued(1);
+  if (!enqueue_request(request_id, IpcReqType::Recv)) {
+    req->mark_failed();
+    release_request_slot(request_id);
+    return 0;
   }
-  return 0;
+  return request_id;
 }
 
 bool IpcAdapter::poll_completion(unsigned id) {
-  std::shared_ptr<IpcPendingRequest> req;
-  {
-    std::lock_guard<std::mutex> lk(req_mu_);
-    auto it = pending_requests_.find(id);
-    if (it == pending_requests_.end()) return true;
-    req = it->second;
-  }
+  IpcRequestSlot* req = resolve_request_slot_const(id);
+  if (!req) return true;
   return req->is_finished();
 }
 
 bool IpcAdapter::wait_completion(unsigned id) {
-  std::shared_ptr<IpcPendingRequest> req;
-  {
-    std::lock_guard<std::mutex> lk(req_mu_);
-    auto it = pending_requests_.find(id);
-    if (it == pending_requests_.end()) return true;
-    req = it->second;
-  }
+  IpcRequestSlot* req = resolve_request_slot_const(id);
+  if (!req) return true;
   while (!req->is_finished()) {
     std::this_thread::yield();
   }
@@ -252,75 +360,16 @@ bool IpcAdapter::wait_completion(unsigned id) {
 }
 
 bool IpcAdapter::request_failed(unsigned id) {
-  std::shared_ptr<IpcPendingRequest> req;
-  {
-    std::lock_guard<std::mutex> lk(req_mu_);
-    auto it = pending_requests_.find(id);
-    if (it == pending_requests_.end()) return false;
-    req = it->second;
-  }
+  IpcRequestSlot* req = resolve_request_slot_const(id);
+  if (!req) return false;
   return req->has_failed();
 }
 
-void IpcAdapter::release_request(unsigned id) {
-  std::lock_guard<std::mutex> lk(req_mu_);
-  pending_requests_.erase(id);
-}
+void IpcAdapter::release_request(unsigned id) { release_request_slot(id); }
 
-bool IpcAdapter::send_async_ipc(int to_rank,
-                                std::shared_ptr<IpcPendingRequest> creq,
-                                void* bounce_ptr, size_t bounce_len,
-                                std::string bounce_shm_name,
-                                BounceBufferProvider bounce_provider) {
-  if (!creq || creq->size_bytes == 0 || stop_.load(std::memory_order_acquire) ||
-      send_task_ring_ == nullptr) {
-    return false;
-  }
-  creq->mark_queued(1);
-
-  auto* task = new IpcTask{IpcTaskType::SEND,
-                           to_rank,
-                           std::move(creq),
-                           bounce_ptr,
-                           bounce_len,
-                           std::move(bounce_shm_name),
-                           std::move(bounce_provider)};
-  if (!enqueue_one_ptr(send_task_ring_, task, stop_)) {
-    delete task;
-    return false;
-  }
-  pending_send_.fetch_add(1, std::memory_order_relaxed);
-  cv_.notify_all();
-  return true;
-}
-
-bool IpcAdapter::recv_async_ipc(int from_rank,
-                                std::shared_ptr<IpcPendingRequest> creq,
-                                void* bounce_ptr, size_t bounce_len,
-                                std::string bounce_shm_name) {
-  if (!creq || creq->size_bytes == 0 || stop_.load(std::memory_order_acquire) ||
-      recv_task_ring_ == nullptr) {
-    return false;
-  }
-  creq->mark_queued(1);
-
-  auto* task =
-      new IpcTask{IpcTaskType::RECV, from_rank,  std::move(creq),
-                  bounce_ptr,        bounce_len, std::move(bounce_shm_name)};
-  if (!enqueue_one_ptr(recv_task_ring_, task, stop_)) {
-    delete task;
-    return false;
-  }
-  pending_recv_.fetch_add(1, std::memory_order_relaxed);
-  cv_.notify_all();
-  return true;
-}
-
-bool IpcAdapter::send_one(int to_rank, IpcPendingRequest* creq,
-                          void* bounce_ptr, size_t bounce_len,
-                          std::string const& bounce_shm_name,
-                          BounceBufferProvider bounce_provider) {
-  (void)bounce_len;
+bool IpcAdapter::send_one(IpcRequestSlot* creq) {
+  if (!creq) return false;
+  int to_rank = creq->peer_rank;
   if (!(creq && creq->buffer != nullptr)) {
     std::cerr << "[ERROR] send_ipc: data pointer is null!" << std::endl;
     return false;
@@ -381,11 +430,11 @@ bool IpcAdapter::send_one(int to_rank, IpcPendingRequest* creq,
   };
 
   auto relay_via_bounce = [&](uint64_t seq) -> bool {
-    void* relay_bounce_ptr = bounce_ptr;
-    std::string relay_bounce_shm_name = bounce_shm_name;
+    void* relay_bounce_ptr = creq->bounce_ptr;
+    std::string relay_bounce_shm_name = creq->bounce_shm_name;
     if ((relay_bounce_ptr == nullptr || relay_bounce_shm_name.empty()) &&
-        bounce_provider) {
-      auto info = bounce_provider(creq->size_bytes);
+        creq->bounce_provider) {
+      auto info = creq->bounce_provider(creq->size_bytes);
       relay_bounce_ptr = info.ptr;
       relay_bounce_shm_name = info.shm_name;
     }
@@ -559,22 +608,16 @@ bool IpcAdapter::send_one(int to_rank, IpcPendingRequest* creq,
     return false;
   }
   return true;
-  // Defensive fallback for overly conservative compiler control-flow analysis.
-  return false;
 }
 
-bool IpcAdapter::recv_one(int from_rank, IpcPendingRequest* creq,
-                          void* bounce_ptr, size_t bounce_len,
-                          std::string const& bounce_shm_name) {
-  (void)bounce_ptr;
-  (void)bounce_len;
-  (void)bounce_shm_name;
+bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
+  if (!creq) return false;
+  int from_rank = creq->peer_rank;
   if (!(creq && creq->buffer != nullptr)) {
     std::cerr << "[ERROR] recv_ipc: data pointer is null!" << std::endl;
     return false;
   }
   creq->mark_running();
-
   int orig_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
   auto dev_reset = UKernel::Transport::finally(
@@ -718,8 +761,7 @@ bool IpcAdapter::recv_one(int from_rank, IpcPendingRequest* creq,
   return false;
 }
 
-void IpcAdapter::complete_task(std::shared_ptr<IpcPendingRequest> const& req,
-                               bool ok) {
+void IpcAdapter::complete_task(IpcRequestSlot* req, bool ok) {
   if (!req) return;
   if (!ok) {
     req->mark_failed();
@@ -739,24 +781,24 @@ void IpcAdapter::send_thread_func() {
     }
     if (stop_.load(std::memory_order_relaxed)) break;
 
-    IpcTask* task = nullptr;
-    if (jring_sc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) != 1) {
+    unsigned request_id = 0;
+    if (jring_sc_dequeue_bulk(send_task_ring_, &request_id, 1, nullptr) != 1) {
       continue;
     }
     pending_send_.fetch_sub(1, std::memory_order_relaxed);
-    std::unique_ptr<IpcTask> task_guard(task);
-    complete_task(
-        task_guard->req,
-        send_one(task_guard->peer_rank, task_guard->req.get(),
-                 task_guard->bounce_ptr, task_guard->bounce_len,
-                 task_guard->bounce_shm_name, task_guard->bounce_provider));
+    IpcRequestSlot* req = resolve_request_slot(request_id);
+    if (!req) continue;
+    complete_task(req, send_one(req));
   }
 
   while (true) {
-    IpcTask* task = nullptr;
-    if (jring_mc_dequeue_bulk(send_task_ring_, &task, 1, nullptr) != 1) break;
-    std::unique_ptr<IpcTask> task_guard(task);
-    complete_task(task_guard->req, false);
+    unsigned request_id = 0;
+    if (jring_mc_dequeue_bulk(send_task_ring_, &request_id, 1, nullptr) != 1) {
+      break;
+    }
+    IpcRequestSlot* req = resolve_request_slot(request_id);
+    if (!req) continue;
+    complete_task(req, false);
   }
 }
 
@@ -771,23 +813,24 @@ void IpcAdapter::recv_thread_func() {
     }
     if (stop_.load(std::memory_order_relaxed)) break;
 
-    IpcTask* task = nullptr;
-    if (jring_sc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) != 1) {
+    unsigned request_id = 0;
+    if (jring_sc_dequeue_bulk(recv_task_ring_, &request_id, 1, nullptr) != 1) {
       continue;
     }
     pending_recv_.fetch_sub(1, std::memory_order_relaxed);
-    std::unique_ptr<IpcTask> task_guard(task);
-    complete_task(task_guard->req,
-                  recv_one(task_guard->peer_rank, task_guard->req.get(),
-                           task_guard->bounce_ptr, task_guard->bounce_len,
-                           task_guard->bounce_shm_name));
+    IpcRequestSlot* req = resolve_request_slot(request_id);
+    if (!req) continue;
+    complete_task(req, recv_one(req));
   }
 
   while (true) {
-    IpcTask* task = nullptr;
-    if (jring_mc_dequeue_bulk(recv_task_ring_, &task, 1, nullptr) != 1) break;
-    std::unique_ptr<IpcTask> task_guard(task);
-    complete_task(task_guard->req, false);
+    unsigned request_id = 0;
+    if (jring_mc_dequeue_bulk(recv_task_ring_, &request_id, 1, nullptr) != 1) {
+      break;
+    }
+    IpcRequestSlot* req = resolve_request_slot(request_id);
+    if (!req) continue;
+    complete_task(req, false);
   }
 }
 
