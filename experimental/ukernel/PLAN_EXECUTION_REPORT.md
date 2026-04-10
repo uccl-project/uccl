@@ -25,7 +25,10 @@ unless a newer committed result supersedes them.
 | 2 | Phase 3 bridge | kept | `8522a6d3` | propagate IPC binding_version and make bench cover versioned direct IPC path |
 | 3 | Phase 3 bridge | reverted | `n/a` | dedupe repeated local IPC metadata publish for the same recv buffer |
 | 4 | Phase 2 | reverted | `n/a` | try a truly synchronous single-stream copy fast-path |
-| 5 | Phase 2 / NCCL-inspired | kept | `pending` | eagerly open remote IPC handles during setup and prefetch bench recv buffers |
+| 5 | Phase 2 / NCCL-inspired | kept | `26b4bc22` | eagerly open remote IPC handles during setup and prefetch bench recv buffers |
+| 6 | Phase 2 | reverted | `n/a` | replace recv-side 1ms poll sleeps with pure `yield()` |
+| 7 | Phase 2 | kept | `pending` | shrink recv-side poll sleep from 1ms to 50us |
+| 8 | Phase 2 | reverted | `n/a` | widen the new recv-side poll sleep from 50us to 100us |
 
 ## Detailed Notes
 
@@ -370,3 +373,173 @@ Reasoning:
 Next candidate:
 - continue toward the remaining Phase 2/3 boundary work by reducing repeated remote metadata/control work after setup
 - the next low-risk place to explore is whether `ipc_cache_req` can be bypassed more aggressively once a versioned `ipc_id` is known fresh and already imported
+
+### Step 6: replace recv-side 1ms sleeps with pure `yield()`
+
+Status:
+- reverted
+
+Scope:
+- [ipc_adapter.cc](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/adapter/ipc_adapter.cc)
+
+What changed:
+- replaced the two `std::this_thread::sleep_for(std::chrono::milliseconds(1))`
+  calls in `IpcAdapter::recv_one()` with `std::this_thread::yield()`
+
+Why it seemed promising:
+- after Step 5, the new latency floor was still around `1.2ms` for tiny and small messages
+- the recv-side control loop literally slept `1ms` between ACK / relay / cache-req polls, which looked like the most direct explanation for that plateau
+
+Screening benchmark command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang
+bench=/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/bench_transport
+sizes=(1024 4096 16384 65536 262144 1048576 4194304 16777216 67108864 268435456)
+port=8600
+for size in "${sizes[@]}"; do
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=0 --membind=0 "$bench" --rank 0 --peer-rank 1 --gpu-id 2 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port" &
+  pid0=$!
+  sleep 1
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=1 --membind=1 "$bench" --rank 1 --peer-rank 0 --gpu-id 6 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port"
+  wait "$pid0"
+  port=$((port + 1))
+done
+```
+
+Observed result:
+- `1024B` immediately dropped to `p50 375.04 us`, which confirmed the sleep granularity really was visible on the hot path
+- but the run hung at `4096B` bidirectional throughput and timed out with `timed out waiting sender ack/relay/cache-req`
+- this was too aggressive for the current threaded control path, so I rolled it back right away
+
+Decision:
+- revert
+
+Reasoning:
+- the latency gain was real, but stability regressed almost immediately
+- pure `yield()` left too little backoff in this control loop and caused bidirectional IPC progress to stall
+
+### Step 7: shrink recv-side poll sleep from 1ms to 50us
+
+Status:
+- kept
+
+Scope:
+- [ipc_adapter.cc](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/adapter/ipc_adapter.cc)
+
+What changed:
+- only the two recv-side control-loop sleeps inside `IpcAdapter::recv_one()` changed:
+  - from `1ms`
+  - to `50us`
+- no protocol, queueing, metadata, or copy-path logic changed
+
+Why it seemed promising:
+- Step 6 confirmed that the `1ms` sleep was directly visible in end-to-end latency
+- `50us` keeps a small backoff to avoid the instability from pure `yield()`, while still removing most of the old coarse-grain polling penalty
+
+Build command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang/experimental/ukernel
+make -f Makefile.rocm bench_transport -j4
+```
+
+Benchmark command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang
+bench=/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/bench_transport
+sizes=(1024 2048 4096 8192 16384 32768 65536 131072 262144 524288 1048576 2097152 4194304 8388608 16777216 33554432 67108864 134217728 268435456)
+port=8800
+for size in "${sizes[@]}"; do
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=0 --membind=0 "$bench" --rank 0 --peer-rank 1 --gpu-id 2 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port" &
+  pid0=$!
+  sleep 1
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=1 --membind=1 "$bench" --rank 1 --peer-rank 0 --gpu-id 6 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port"
+  wait "$pid0"
+  port=$((port + 1))
+done
+```
+
+Key before/after points versus the current kept baseline from Step 5:
+
+| Size | Prev p50 us | New p50 us | Prev Uni GB/s | New Uni GB/s | Prev Bidi GB/s | New Bidi GB/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4KB | 1220.95 | 351.26 | 0.18 | 0.20 | 0.02 | 0.03 |
+| 64KB | 1192.27 | 486.76 | 3.18 | 2.47 | 0.27 | 0.32 |
+| 1MB | 1229.84 | 527.25 | 23.60 | 22.32 | 3.47 | 3.72 |
+| 16MB | 1546.23 | 1016.24 | 42.48 | 42.99 | 22.29 | 24.50 |
+
+Full current sweep:
+
+| Size | p50 us | p90 us | Uni GB/s | Bidi GB/s |
+| --- | ---: | ---: | ---: | ---: |
+| 1024 | 467.28 | 529.27 | 0.05 | 0.01 |
+| 2048 | 414.80 | 533.74 | 0.10 | 0.01 |
+| 4096 | 351.26 | 423.83 | 0.20 | 0.03 |
+| 8192 | 423.79 | 490.75 | 0.39 | 0.04 |
+| 16384 | 569.08 | 999.27 | 0.69 | 0.07 |
+| 32768 | 461.14 | 563.89 | 1.66 | 0.15 |
+| 65536 | 486.76 | 543.26 | 2.47 | 0.32 |
+| 131072 | 426.33 | 501.18 | 4.44 | 0.58 |
+| 262144 | 465.38 | 492.94 | 10.70 | 1.13 |
+| 524288 | 427.87 | 530.68 | 14.47 | 1.95 |
+| 1048576 | 527.25 | 648.88 | 22.32 | 3.72 |
+| 2097152 | 540.75 | 927.98 | 31.07 | 7.20 |
+| 4194304 | 563.24 | 1987.46 | 36.00 | 11.64 |
+| 8388608 | 768.76 | 1272.77 | 39.47 | 21.42 |
+| 16777216 | 1016.24 | 2545.72 | 42.99 | 24.50 |
+| 33554432 | 1784.12 | 6326.26 | 43.89 | 17.05 |
+| 67108864 | 3002.27 | 8923.81 | 44.73 | 15.64 |
+| 134217728 | 5849.70 | 13322.72 | 45.07 | 16.54 |
+| 268435456 | 11457.18 | 12677.76 | 45.16 | 18.54 |
+
+Decision:
+- keep
+
+Reasoning:
+- this is the clearest latency win since Step 2: the small and medium sizes lose most of the old `~1.2ms` floor
+- bidirectional throughput improves at many sizes, especially in the `128KB` to `16MB` region
+- one-way throughput is mixed on a few anchor points, but the overall result is still clearly better because the control-path latency reduction is so large and the full sweep stayed stable
+- the code change is minimal and strictly local to the recv-side control-loop backoff
+
+Next candidate:
+- now that coarse recv-side polling is no longer dominating latency, continue looking for request-level control round trips that still survive after setup
+- the next useful place to inspect is whether the `ipc_cache_req` fallback can be avoided more often in bidirectional steady state
+
+### Step 8: widen the new recv-side poll sleep from 50us to 100us
+
+Status:
+- reverted
+
+Scope:
+- [ipc_adapter.cc](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/adapter/ipc_adapter.cc)
+
+What changed:
+- same two recv-side poll sleeps as Step 7
+- widened from `50us` to `100us`
+
+Why it seemed promising:
+- a 4-point anchor run looked even more balanced than `50us`
+- notably, `64KB` improved a lot in both latency and throughput during the first screening pass
+
+Anchor screening result:
+
+| Size | p50 us | Uni GB/s | Bidi GB/s |
+| --- | ---: | ---: | ---: |
+| 4KB | 287.67 | 0.20 | 0.03 |
+| 64KB | 269.35 | 3.44 | 0.62 |
+| 1MB | 501.56 | 22.59 | 3.99 |
+| 16MB | 1105.59 | 42.94 | 24.57 |
+
+Why it was reverted:
+- the full sweep did not stay stable
+- it timed out at `2MB` bidirectional throughput with the same `sender ack/relay/cache-req` timeout signature
+- because `50us` had already completed a full sweep cleanly, I reverted `100us` and kept the stable setting
+
+Decision:
+- revert
+
+Reasoning:
+- `100us` looked attractive on the anchor subset, but failed the full-sweep stability bar
+- the better choice here is the slightly more conservative `50us`, because it already captures most of the latency win without reintroducing timeouts

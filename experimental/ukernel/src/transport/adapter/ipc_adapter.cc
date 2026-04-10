@@ -708,7 +708,7 @@ bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
           << creq->id << " match_seq " << creq->match_seq << std::endl;
       return false;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::this_thread::sleep_for(std::chrono::microseconds(50));
   }
   if (stop_.load(std::memory_order_acquire) || !got_cache_req) return false;
 
@@ -759,7 +759,7 @@ bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
                 << std::endl;
       return false;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::this_thread::sleep_for(std::chrono::microseconds(50));
   }
   return false;
 }
