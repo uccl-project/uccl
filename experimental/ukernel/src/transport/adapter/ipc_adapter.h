@@ -15,7 +15,6 @@
 #include <optional>
 #include <string>
 #include <thread>
-#include <unordered_map>
 #include <vector>
 
 namespace UKernel {
@@ -23,26 +22,20 @@ namespace Transport {
 
 class Communicator;
 
-static constexpr size_t kTaskRingSize = 1024;
-static constexpr size_t kIpcSizePerEngine = 1ul << 20;
-static constexpr int kIpcControlTimeoutMs = 50000;
-
 class IpcAdapter final : public TransportAdapter {
  public:
+  // Lifecycle.
   IpcAdapter(Communicator* comm, std::string ring_namespace, int self_local_id);
   ~IpcAdapter() override;
   void shutdown();
 
+  // Peer state / routing metadata.
   void set_peer_local_id(int peer_rank, int local_id);
   void close_peer(int peer_rank);
-  bool connect_to(int rank);
-  bool accept_from(int rank);
+  bool ensure_peer(PeerConnectSpec const& spec) override;
+  bool has_peer(int peer_rank) const override;
 
-  bool connect(int peer_rank) override { return connect_to(peer_rank); }
-  bool accept(int peer_rank) override { return accept_from(peer_rank); }
-  bool has_send_path(int peer_rank) const override;
-  bool has_recv_path(int peer_rank) const override;
-
+  // Async data-plane requests.
   unsigned send_async(int peer_rank, void* local_ptr, size_t len,
                       uint64_t local_mr_id,
                       std::optional<RemoteSlice> remote_hint,
@@ -51,40 +44,58 @@ class IpcAdapter final : public TransportAdapter {
                       uint64_t local_mr_id,
                       BounceBufferProvider bounce_provider = nullptr) override;
 
+  // Request completion API.
   bool poll_completion(unsigned id) override;
   bool wait_completion(unsigned id) override;
   bool request_failed(unsigned id) override;
   void release_request(unsigned id) override;
 
-  int peer_count() const override;
-
+ private:
+  // Peer control-plane helpers.
+  bool connect_to(int rank);
+  bool accept_from(int rank);
   uint64_t next_send_match_seq(int rank);
   uint64_t next_recv_match_seq(int rank);
 
- private:
+  enum class RequestState : uint8_t {
+    Free = 0,
+    Queued = 1,
+    Running = 2,
+    Completed = 3,
+    Failed = 4,
+  };
   enum class IpcReqType : uint8_t { Send = 0, Recv = 1 };
 
-  struct IpcPendingRequest {
+  struct IpcRequestSlot {
+    std::atomic<RequestState> state{RequestState::Free};
+    std::atomic<uint32_t> generation{1};
     unsigned id = 0;
+    int peer_rank = -1;
     uint64_t match_seq = 0;
     void* buffer = nullptr;
     size_t size_bytes = 0;
     RemoteSlice remote_slice{};
-    IpcReqType type = IpcReqType::Send;
+    void* bounce_ptr = nullptr;
+    std::string bounce_shm_name;
+    BounceBufferProvider bounce_provider = nullptr;
     std::atomic<uint32_t> remaining{0};
     std::atomic<bool> failed{false};
     std::atomic<bool> finished{false};
 
     void mark_queued(uint32_t completion_count = 1) {
+      state.store(RequestState::Queued, std::memory_order_release);
       remaining.store(completion_count, std::memory_order_release);
       failed.store(false, std::memory_order_release);
       finished.store(false, std::memory_order_release);
     }
-    void mark_running() {}
     void mark_failed() {
+      state.store(RequestState::Failed, std::memory_order_release);
       failed.store(true, std::memory_order_release);
       finished.store(true, std::memory_order_release);
       remaining.store(0, std::memory_order_release);
+    }
+    void mark_running() {
+      state.store(RequestState::Running, std::memory_order_release);
     }
     void complete_one() {
       uint32_t prev = remaining.load(std::memory_order_acquire);
@@ -92,7 +103,10 @@ class IpcAdapter final : public TransportAdapter {
                               prev, prev - 1, std::memory_order_acq_rel,
                               std::memory_order_acquire)) {
       }
-      if (prev <= 1) finished.store(true, std::memory_order_release);
+      if (prev <= 1) {
+        state.store(RequestState::Completed, std::memory_order_release);
+        finished.store(true, std::memory_order_release);
+      }
     }
     bool is_finished() const {
       return finished.load(std::memory_order_acquire);
@@ -101,33 +115,32 @@ class IpcAdapter final : public TransportAdapter {
     void* data() const { return buffer; }
   };
 
-  enum class IpcTaskType : uint8_t { SEND, RECV };
+  static constexpr uint32_t kRequestSlotBits = 13;
+  static constexpr uint32_t kRequestSlotCount = (1u << kRequestSlotBits);
+  static constexpr uint32_t kRequestSlotMask = kRequestSlotCount - 1u;
+  static unsigned make_request_id(uint32_t slot_idx, uint32_t generation) {
+    return static_cast<unsigned>((generation << kRequestSlotBits) | slot_idx);
+  }
+  static uint32_t request_slot_index(unsigned request_id) {
+    return static_cast<uint32_t>(request_id) & kRequestSlotMask;
+  }
+  static uint32_t request_generation(unsigned request_id) {
+    return static_cast<uint32_t>(request_id) >> kRequestSlotBits;
+  }
 
-  struct IpcTask {
-    IpcTaskType type;
-    int peer_rank;
-    std::shared_ptr<IpcPendingRequest> req;
-    void* bounce_ptr = nullptr;
-    size_t bounce_len = 0;
-    std::string bounce_shm_name;
-    BounceBufferProvider bounce_provider = nullptr;
-  };
+  // Request slot lifecycle.
+  IpcRequestSlot* try_acquire_request_slot(unsigned* out_request_id);
+  IpcRequestSlot* resolve_request_slot(unsigned request_id);
+  IpcRequestSlot* resolve_request_slot_const(unsigned request_id) const;
+  void release_request_slot(unsigned request_id);
 
-  bool send_async_ipc(int to_rank, std::shared_ptr<IpcPendingRequest> req,
-                      void* bounce_ptr = nullptr, size_t bounce_len = 0,
-                      std::string bounce_shm_name = "",
-                      BounceBufferProvider bounce_provider = nullptr);
-  bool recv_async_ipc(int from_rank, std::shared_ptr<IpcPendingRequest> req,
-                      void* bounce_ptr = nullptr, size_t bounce_len = 0,
-                      std::string bounce_shm_name = "");
-  bool send_one(int to_rank, IpcPendingRequest* creq, void* bounce_ptr,
-                size_t bounce_len, std::string const& bounce_shm_name,
-                BounceBufferProvider bounce_provider);
-  bool recv_one(int from_rank, IpcPendingRequest* creq, void* bounce_ptr,
-                size_t bounce_len, std::string const& bounce_shm_name);
+  // Task queue / worker execution.
+  bool enqueue_request(unsigned request_id, IpcReqType type);
+  bool send_one(IpcRequestSlot* creq);
+  bool recv_one(IpcRequestSlot* creq);
   void send_thread_func();
   void recv_thread_func();
-  void complete_task(std::shared_ptr<IpcPendingRequest> const& req, bool ok);
+  void complete_task(IpcRequestSlot* req, bool ok);
 
   jring_t* send_task_ring_;
   jring_t* recv_task_ring_;
@@ -145,10 +158,8 @@ class IpcAdapter final : public TransportAdapter {
   // Two directed-edge counters per peer:
   // dir=0 -> low-rank to high-rank, dir=1 -> high-rank to low-rank.
   std::vector<std::array<uint64_t, 2>> next_match_seq_per_peer_;
-  std::atomic<unsigned> next_request_id_{1};
-  mutable std::mutex req_mu_;
-  std::unordered_map<unsigned, std::shared_ptr<IpcPendingRequest>>
-      pending_requests_;
+  std::unique_ptr<IpcRequestSlot[]> request_slots_;
+  std::atomic<uint32_t> request_alloc_cursor_{0};
 
   std::shared_ptr<ShmRingExchanger> shm_control_;
   Communicator* comm_;
