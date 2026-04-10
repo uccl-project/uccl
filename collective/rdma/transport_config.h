@@ -42,6 +42,13 @@ UCCL_PARAM(PORT_ENTROPY, "PORT_ENTROPY", 32);
 UCCL_PARAM(CHUNK_SIZE_KB, "CHUNK_SIZE_KB", 64);
 // Number of CUDA/HIP streams per engine.
 UCCL_PARAM(NumGpuRtStreams, "NUM_GPU_RT_STREAMS", 4);
+// QP-choice cache tunables.
+UCCL_PARAM(CACHE_QP_MAX_MSG, "CACHE_QP_MAX_MSG", 8192);
+UCCL_PARAM(CACHE_QP_MAX_BYTES, "CACHE_QP_MAX_BYTES", 16384);
+// -1: auto detect, 0: force disable, 1: force enable.
+UCCL_PARAM(IB_RELAXED_ORDERING_MODE, "IB_RELAXED_ORDERING_MODE", -1);
+// Enable inline send for payload <= threshold. 0 means disabled.
+UCCL_PARAM(TX_INLINE_THRESHOLD, "TX_INLINE_THRESHOLD", 0);
 
 static constexpr uint32_t MAX_PEER = 2048;
 // Maximum number of flows (one-way) on each engine.
@@ -131,9 +138,10 @@ static constexpr uint32_t NCCL_MIN_POST_RECV = 65536;
 // static constexpr uint32_t NCCL_MIN_POST_RECV = 4000000;
 
 // Limit the bytes of consecutive cached QP uses.
-static constexpr uint32_t kMAXConsecutiveSameChoiceBytes = 16384;
+static inline uint32_t kMAXConsecutiveSameChoiceBytes =
+    ucclParamCACHE_QP_MAX_BYTES();
 // Message size threshold for allowing using cached QP.
-static constexpr uint32_t kMAXUseCacheQPSize = 8192;
+static inline uint32_t kMAXUseCacheQPSize = ucclParamCACHE_QP_MAX_MSG();
 // Message size threshold for bypassing the timing wheel.
 static constexpr uint32_t kBypassTimingWheelThres = 9000;
 
