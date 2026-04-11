@@ -185,7 +185,7 @@ struct UnifiedTask;
 struct TransferStatus {
   std::atomic<bool> done{false};
   std::shared_ptr<UnifiedTask> task_ptr;
-  bool poll_net_ureq{false};
+  std::atomic<bool> poll_net_ureq{false};
   ucclRequest ureq{};
 };
 

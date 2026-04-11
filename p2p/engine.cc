@@ -944,7 +944,7 @@ bool Endpoint::read_async(uint64_t conn_id, uint64_t mr_id, void* dst,
     }
 
     auto* status = new TransferStatus();
-    status->poll_net_ureq = true;
+    status->poll_net_ureq.store(true, std::memory_order_release);
     status->ureq = ureq;
     *transfer_id = reinterpret_cast<uint64_t>(status);
     return true;
@@ -1102,7 +1102,7 @@ bool Endpoint::write_async(uint64_t conn_id, uint64_t mr_id, void* src,
     }
 
     auto* status = new TransferStatus();
-    status->poll_net_ureq = true;
+    status->poll_net_ureq.store(true, std::memory_order_release);
     status->ureq = ureq;
     *transfer_id = reinterpret_cast<uint64_t>(status);
     return true;
@@ -2342,7 +2342,8 @@ bool Endpoint::start_passive_accept() {
 
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   auto* status = reinterpret_cast<TransferStatus*>(transfer_id);
-  if (status->poll_net_ureq && !status->done.load(std::memory_order_acquire)) {
+  if (status->poll_net_ureq.load(std::memory_order_acquire) &&
+      !status->done.load(std::memory_order_acquire)) {
     if (uccl_poll_ureq_once(ep_, &status->ureq)) {
       status->done.store(true, std::memory_order_release);
     }
@@ -2450,125 +2451,507 @@ void Endpoint::initialize_engine() {
 
 void Endpoint::send_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
-  // Use 16-byte buffer to avoid stringop-overflow warning from jring's 16-byte
-  // bulk copy
+  constexpr int kDrainBatch = 64;
+  constexpr size_t kBatchInflightWindow = 64;
   alignas(16) char task_buffer[16];
-  UnifiedTask* task;
+  std::vector<UnifiedTask*> pending_submit;
+  std::vector<TransferStatus*> active_scalar;
+  struct SendBatchOp {
+    TaskType type{TaskType::SENDV};
+    uint64_t conn_id{UINT64_MAX};
+    TransferStatus* status{nullptr};
+    size_t num_iovs{0};
+    size_t submitted{0};
+    size_t completed{0};
+    std::vector<ucclRequest> reqs;
+    std::vector<uint8_t> done;
+    std::vector<P2PMhandle*> mhandles;
+    std::vector<void const*> const_data_v;
+    std::vector<void*> data_v;
+    std::vector<size_t> size_v;
+    std::vector<FifoItem> slot_item_v;
+  };
+  std::vector<SendBatchOp> active_batch;
+  pending_submit.reserve(kDrainBatch * 2);
+  active_scalar.reserve(kDrainBatch * 2);
+  active_batch.reserve(kDrainBatch);
 
-  while (!stop_.load(std::memory_order_acquire)) {
-    if (jring_sc_dequeue_bulk(send_unified_task_ring_, task_buffer, 1,
-                              nullptr) == 1) {
-      task = *reinterpret_cast<UnifiedTask**>(task_buffer);
+  while (!stop_.load(std::memory_order_acquire) || !pending_submit.empty() ||
+         !active_scalar.empty() || !active_batch.empty()) {
+    for (int i = 0; i < kDrainBatch; ++i) {
+      if (jring_sc_dequeue_bulk(send_unified_task_ring_, task_buffer, 1,
+                                nullptr) != 1) {
+        break;
+      }
+      pending_submit.push_back(*reinterpret_cast<UnifiedTask**>(task_buffer));
+    }
+
+    std::vector<UnifiedTask*> still_pending;
+    still_pending.reserve(pending_submit.size());
+
+    for (UnifiedTask* task : pending_submit) {
+      auto* status = task->status_ptr;
+      bool keep_pending = false;
       switch (task->type) {
+        case TaskType::WRITE_NET: {
+          Conn* conn = get_conn(task->conn_id);
+          P2PMhandle* mhandle = get_mhandle(task->mr_id);
+          if (unlikely(conn == nullptr || mhandle == nullptr)) {
+            UCCL_LOG(ERROR) << "WRITE_NET submit failed: conn/mr invalid";
+            status->task_ptr.reset();
+            status->done.store(true, std::memory_order_release);
+            break;
+          }
+          ucclRequest ureq = {};
+          FifoItem curr_slot_item = task->slot_item();
+          curr_slot_item.size = task->size;
+          int rc = uccl_write_async(ep_, conn, mhandle, task->data, task->size,
+                                    curr_slot_item, &ureq);
+          if (rc == -1) {
+            keep_pending = true;
+            break;
+          }
+          status->ureq = ureq;
+          status->poll_net_ureq.store(false, std::memory_order_release);
+          status->task_ptr.reset();
+          active_scalar.push_back(status);
+          break;
+        }
+        case TaskType::SEND_NET: {
+          Conn* conn = get_conn(task->conn_id);
+          P2PMhandle* mhandle = get_mhandle(task->mr_id);
+          if (unlikely(conn == nullptr || mhandle == nullptr)) {
+            UCCL_LOG(ERROR) << "SEND_NET submit failed: conn/mr invalid";
+            status->task_ptr.reset();
+            status->done.store(true, std::memory_order_release);
+            break;
+          }
+          ucclRequest ureq = {};
+          int rc =
+              uccl_send_async(ep_, conn, mhandle, task->data, task->size, &ureq);
+          if (rc == -1) {
+            keep_pending = true;
+            break;
+          }
+          status->ureq = ureq;
+          status->poll_net_ureq.store(false, std::memory_order_release);
+          status->task_ptr.reset();
+          active_scalar.push_back(status);
+          break;
+        }
         case TaskType::SEND_IPC:
           send_ipc(task->conn_id, task->data, task->size);
-          break;
-        case TaskType::WRITE_NET:
-          write(task->conn_id, task->mr_id, task->data, task->size,
-                task->slot_item());
-          break;
-        case TaskType::SEND_NET:
-          send(task->conn_id, task->mr_id, task->data, task->size);
+          status->task_ptr.reset();
+          status->done.store(true, std::memory_order_release);
           break;
         case TaskType::SENDV: {
           TaskBatch const& batch = task->task_batch();
-          std::vector<void const*> const_data_v(
-              batch.const_data_v(), batch.const_data_v() + batch.num_iovs);
-          std::vector<size_t> size_v(batch.size_v(),
-                                     batch.size_v() + batch.num_iovs);
-          std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
-                                        batch.mr_id_v() + batch.num_iovs);
-
-          sendv(task->conn_id, mr_id_v, const_data_v, size_v, batch.num_iovs);
+          SendBatchOp op;
+          op.type = TaskType::SENDV;
+          op.conn_id = task->conn_id;
+          op.status = status;
+          op.num_iovs = batch.num_iovs;
+          op.reqs.resize(op.num_iovs);
+          op.done.assign(op.num_iovs, 0);
+          op.mhandles.resize(op.num_iovs, nullptr);
+          op.const_data_v.assign(batch.const_data_v(),
+                                 batch.const_data_v() + batch.num_iovs);
+          op.size_v.assign(batch.size_v(), batch.size_v() + batch.num_iovs);
+          op.status->task_ptr.reset();
+          bool valid = true;
+          for (size_t iov = 0; iov < op.num_iovs; ++iov) {
+            op.mhandles[iov] = get_mhandle(batch.mr_id_v()[iov]);
+            if (unlikely(op.mhandles[iov] == nullptr)) {
+              UCCL_LOG(ERROR) << "SENDV submit failed: invalid mr at iov "
+                              << iov;
+              valid = false;
+              break;
+            }
+          }
+          if (!valid) {
+            status->done.store(true, std::memory_order_release);
+            break;
+          }
+          status->poll_net_ureq.store(false, std::memory_order_release);
+          active_batch.push_back(std::move(op));
+          status->task_ptr.reset();
           break;
         }
         case TaskType::WRITEV: {
           TaskBatch const& batch = task->task_batch();
-          std::vector<void*> data_v(batch.data_v(),
-                                    batch.data_v() + batch.num_iovs);
-          std::vector<size_t> size_v(batch.size_v(),
-                                     batch.size_v() + batch.num_iovs);
-          std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
-                                        batch.mr_id_v() + batch.num_iovs);
-          std::vector<FifoItem> slot_item_v(
-              batch.slot_item_v(), batch.slot_item_v() + batch.num_iovs);
-
-          writev(task->conn_id, mr_id_v, data_v, size_v, slot_item_v,
-                 batch.num_iovs);
+          SendBatchOp op;
+          op.type = TaskType::WRITEV;
+          op.conn_id = task->conn_id;
+          op.status = status;
+          op.num_iovs = batch.num_iovs;
+          op.reqs.resize(op.num_iovs);
+          op.done.assign(op.num_iovs, 0);
+          op.mhandles.resize(op.num_iovs, nullptr);
+          op.data_v.assign(batch.data_v(), batch.data_v() + batch.num_iovs);
+          op.size_v.assign(batch.size_v(), batch.size_v() + batch.num_iovs);
+          op.slot_item_v.assign(batch.slot_item_v(),
+                                batch.slot_item_v() + batch.num_iovs);
+          op.status->task_ptr.reset();
+          bool valid = true;
+          for (size_t iov = 0; iov < op.num_iovs; ++iov) {
+            op.mhandles[iov] = get_mhandle(batch.mr_id_v()[iov]);
+            if (unlikely(op.mhandles[iov] == nullptr)) {
+              UCCL_LOG(ERROR) << "WRITEV submit failed: invalid mr at iov "
+                              << iov;
+              valid = false;
+              break;
+            }
+          }
+          if (!valid) {
+            status->done.store(true, std::memory_order_release);
+            break;
+          }
+          status->poll_net_ureq.store(false, std::memory_order_release);
+          active_batch.push_back(std::move(op));
+          status->task_ptr.reset();
           break;
         }
         default:
           UCCL_LOG(ERROR) << "Unexpected task type in send processing: "
                           << static_cast<int>(task->type);
+          status->task_ptr.reset();
+          status->done.store(true, std::memory_order_release);
           break;
       }
-      auto* status = task->status_ptr;
-      status->task_ptr.reset();
-      status->done.store(true, std::memory_order_release);
+      if (keep_pending) {
+        still_pending.push_back(task);
+      }
+    }
+    pending_submit.swap(still_pending);
+
+    for (auto& op : active_batch) {
+      Conn* conn = get_conn(op.conn_id);
+      if (unlikely(conn == nullptr)) {
+        op.status->done.store(true, std::memory_order_release);
+        op.completed = op.num_iovs;
+        continue;
+      }
+      while (op.submitted < op.num_iovs &&
+             (op.submitted - op.completed) < kBatchInflightWindow) {
+        int rc = -1;
+        size_t iov = op.submitted;
+        if (op.type == TaskType::SENDV) {
+          rc = uccl_send_async(ep_, conn, op.mhandles[iov],
+                               const_cast<void*>(op.const_data_v[iov]),
+                               op.size_v[iov], &op.reqs[iov]);
+        } else {
+          FifoItem slot = op.slot_item_v[iov];
+          slot.size = op.size_v[iov];
+          rc = uccl_write_async(ep_, conn, op.mhandles[iov], op.data_v[iov],
+                                op.size_v[iov], slot, &op.reqs[iov]);
+        }
+        if (rc == -1) break;
+        op.submitted++;
+      }
+    }
+
+    if (!active_scalar.empty() || !active_batch.empty()) {
+      ep_->sendRoutine();
+      size_t scalar_write_pos = 0;
+      for (size_t i = 0; i < active_scalar.size(); ++i) {
+        auto* status = active_scalar[i];
+        bool done =
+            ep_->checkSendComplete_once(status->ureq.n, status->ureq.engine_idx);
+        if (done) {
+          status->done.store(true, std::memory_order_release);
+        } else {
+          active_scalar[scalar_write_pos++] = status;
+        }
+      }
+      active_scalar.resize(scalar_write_pos);
+
+      for (auto& op : active_batch) {
+        for (size_t i = op.completed; i < op.submitted; ++i) {
+          if (op.done[i]) continue;
+          if (ep_->checkSendComplete_once(op.reqs[i].n, op.reqs[i].engine_idx)) {
+            op.done[i] = 1;
+          }
+        }
+        while (op.completed < op.submitted && op.done[op.completed]) {
+          op.completed++;
+        }
+      }
+      size_t batch_write_pos = 0;
+      for (size_t i = 0; i < active_batch.size(); ++i) {
+        auto& op = active_batch[i];
+        if (op.completed == op.num_iovs) {
+          op.status->done.store(true, std::memory_order_release);
+        } else {
+          if (batch_write_pos != i) active_batch[batch_write_pos] = std::move(op);
+          batch_write_pos++;
+        }
+      }
+      active_batch.resize(batch_write_pos);
+    } else if (!pending_submit.empty()) {
+      // No active request to drive completion polling yet, but submissions are
+      // being retried; run progress once to avoid submit-side livelock.
+      ep_->sendRoutine();
     }
   }
 }
 
 void Endpoint::recv_proxy_thread_func() {
   uccl::pin_thread_to_numa(numa_node_);
-  // Use 16-byte buffer to avoid stringop-overflow warning from jring's 16-byte
-  // bulk copy
+  constexpr int kDrainBatch = 64;
+  constexpr size_t kBatchInflightWindow = 64;
   alignas(16) char task_buffer[16];
-  UnifiedTask* task;
+  std::vector<UnifiedTask*> pending_submit;
+  std::vector<TransferStatus*> active_scalar;
+  struct RecvBatchOp {
+    TaskType type{TaskType::RECVV};
+    uint64_t conn_id{UINT64_MAX};
+    TransferStatus* status{nullptr};
+    size_t num_iovs{0};
+    size_t submitted{0};
+    size_t completed{0};
+    std::vector<ucclRequest> reqs;
+    std::vector<uint8_t> done;
+    std::vector<P2PMhandle*> mhandles;
+    std::vector<void*> data_v;
+    std::vector<size_t> size_v;
+    std::vector<FifoItem> slot_item_v;
+  };
+  std::vector<RecvBatchOp> active_batch;
+  pending_submit.reserve(kDrainBatch * 2);
+  active_scalar.reserve(kDrainBatch * 2);
+  active_batch.reserve(kDrainBatch);
 
-  while (!stop_.load(std::memory_order_acquire)) {
-    if (jring_sc_dequeue_bulk(recv_unified_task_ring_, task_buffer, 1,
-                              nullptr) == 1) {
-      task = *reinterpret_cast<UnifiedTask**>(task_buffer);
+  while (!stop_.load(std::memory_order_acquire) || !pending_submit.empty() ||
+         !active_scalar.empty() || !active_batch.empty()) {
+    for (int i = 0; i < kDrainBatch; ++i) {
+      if (jring_sc_dequeue_bulk(recv_unified_task_ring_, task_buffer, 1,
+                                nullptr) != 1) {
+        break;
+      }
+      pending_submit.push_back(*reinterpret_cast<UnifiedTask**>(task_buffer));
+    }
+
+    std::vector<UnifiedTask*> still_pending;
+    still_pending.reserve(pending_submit.size());
+
+    for (UnifiedTask* task : pending_submit) {
+      auto* status = task->status_ptr;
+      bool keep_pending = false;
       switch (task->type) {
+        case TaskType::READ_NET: {
+          Conn* conn = get_conn(task->conn_id);
+          P2PMhandle* mhandle = get_mhandle(task->mr_id);
+          if (unlikely(conn == nullptr || mhandle == nullptr)) {
+            UCCL_LOG(ERROR) << "READ_NET submit failed: conn/mr invalid";
+            status->task_ptr.reset();
+            status->done.store(true, std::memory_order_release);
+            break;
+          }
+          ucclRequest ureq = {};
+          FifoItem curr_slot_item = task->slot_item();
+          curr_slot_item.size = task->size;
+          int rc = uccl_read_async(ep_, conn, mhandle, task->data, task->size,
+                                   curr_slot_item, &ureq);
+          if (rc == -1) {
+            keep_pending = true;
+            break;
+          }
+          status->ureq = ureq;
+          status->poll_net_ureq.store(false, std::memory_order_release);
+          status->task_ptr.reset();
+          active_scalar.push_back(status);
+          break;
+        }
+        case TaskType::RECV_NET: {
+          Conn* conn = get_conn(task->conn_id);
+          P2PMhandle* mhandle = get_mhandle(task->mr_id);
+          if (unlikely(conn == nullptr || mhandle == nullptr)) {
+            UCCL_LOG(ERROR) << "RECV_NET submit failed: conn/mr invalid";
+            status->task_ptr.reset();
+            status->done.store(true, std::memory_order_release);
+            break;
+          }
+          ucclRequest ureq = {};
+          int size_int = static_cast<int>(task->size);
+          void* cur_data = task->data;
+          int rc = uccl_recv_async(ep_, conn, mhandle, &cur_data, &size_int, 1,
+                                   &ureq);
+          if (rc == -1) {
+            keep_pending = true;
+            break;
+          }
+          status->ureq = ureq;
+          status->poll_net_ureq.store(false, std::memory_order_release);
+          status->task_ptr.reset();
+          active_scalar.push_back(status);
+          break;
+        }
         case TaskType::RECV_IPC:
           recv_ipc(task->conn_id, task->data, task->size);
-          break;
-        case TaskType::READ_NET:
-          read(task->conn_id, task->mr_id, task->data, task->size,
-               task->slot_item());
-          break;
-        case TaskType::RECV_NET:
-          recv(task->conn_id, task->mr_id, task->data, task->size);
+          status->task_ptr.reset();
+          status->done.store(true, std::memory_order_release);
           break;
         case TaskType::RECVV: {
           TaskBatch const& batch = task->task_batch();
-          std::vector<void*> data_v(batch.data_v(),
-                                    batch.data_v() + batch.num_iovs);
-          std::vector<size_t> size_v(batch.size_v(),
-                                     batch.size_v() + batch.num_iovs);
-          std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
-                                        batch.mr_id_v() + batch.num_iovs);
-
-          recvv(task->conn_id, mr_id_v, data_v, size_v, batch.num_iovs);
+          RecvBatchOp op;
+          op.type = TaskType::RECVV;
+          op.conn_id = task->conn_id;
+          op.status = status;
+          op.num_iovs = batch.num_iovs;
+          op.reqs.resize(op.num_iovs);
+          op.done.assign(op.num_iovs, 0);
+          op.mhandles.resize(op.num_iovs, nullptr);
+          op.data_v.assign(batch.data_v(), batch.data_v() + batch.num_iovs);
+          op.size_v.assign(batch.size_v(), batch.size_v() + batch.num_iovs);
+          op.status->task_ptr.reset();
+          bool valid = true;
+          for (size_t iov = 0; iov < op.num_iovs; ++iov) {
+            op.mhandles[iov] = get_mhandle(batch.mr_id_v()[iov]);
+            if (unlikely(op.mhandles[iov] == nullptr)) {
+              UCCL_LOG(ERROR) << "RECVV submit failed: invalid mr at iov "
+                              << iov;
+              valid = false;
+              break;
+            }
+          }
+          if (!valid) {
+            status->done.store(true, std::memory_order_release);
+            break;
+          }
+          status->poll_net_ureq.store(false, std::memory_order_release);
+          active_batch.push_back(std::move(op));
+          status->task_ptr.reset();
           break;
         }
         case TaskType::READV: {
           TaskBatch const& batch = task->task_batch();
-          std::vector<void*> data_v(batch.data_v(),
-                                    batch.data_v() + batch.num_iovs);
-          std::vector<size_t> size_v(batch.size_v(),
-                                     batch.size_v() + batch.num_iovs);
-          std::vector<uint64_t> mr_id_v(batch.mr_id_v(),
-                                        batch.mr_id_v() + batch.num_iovs);
-          std::vector<FifoItem> slot_item_v(
-              batch.slot_item_v(), batch.slot_item_v() + batch.num_iovs);
-
-          readv(task->conn_id, mr_id_v, data_v, size_v, slot_item_v,
-                batch.num_iovs);
+          RecvBatchOp op;
+          op.type = TaskType::READV;
+          op.conn_id = task->conn_id;
+          op.status = status;
+          op.num_iovs = batch.num_iovs;
+          op.reqs.resize(op.num_iovs);
+          op.done.assign(op.num_iovs, 0);
+          op.mhandles.resize(op.num_iovs, nullptr);
+          op.data_v.assign(batch.data_v(), batch.data_v() + batch.num_iovs);
+          op.size_v.assign(batch.size_v(), batch.size_v() + batch.num_iovs);
+          op.slot_item_v.assign(batch.slot_item_v(),
+                                batch.slot_item_v() + batch.num_iovs);
+          op.status->task_ptr.reset();
+          bool valid = true;
+          for (size_t iov = 0; iov < op.num_iovs; ++iov) {
+            op.mhandles[iov] = get_mhandle(batch.mr_id_v()[iov]);
+            if (unlikely(op.mhandles[iov] == nullptr)) {
+              UCCL_LOG(ERROR) << "READV submit failed: invalid mr at iov "
+                              << iov;
+              valid = false;
+              break;
+            }
+          }
+          if (!valid) {
+            status->done.store(true, std::memory_order_release);
+            break;
+          }
+          status->poll_net_ureq.store(false, std::memory_order_release);
+          active_batch.push_back(std::move(op));
+          status->task_ptr.reset();
           break;
         }
-        case TaskType::SEND_NET:
-        case TaskType::SEND_IPC:
-        case TaskType::WRITE_NET:
         default:
           UCCL_LOG(ERROR) << "Unexpected task type in receive processing: "
                           << static_cast<int>(task->type);
+          status->task_ptr.reset();
+          status->done.store(true, std::memory_order_release);
           break;
       }
-      auto* status = task->status_ptr;
-      status->task_ptr.reset();
-      status->done.store(true, std::memory_order_release);
+      if (keep_pending) {
+        still_pending.push_back(task);
+      }
+    }
+    pending_submit.swap(still_pending);
+
+    for (auto& op : active_batch) {
+      Conn* conn = get_conn(op.conn_id);
+      if (unlikely(conn == nullptr)) {
+        op.status->done.store(true, std::memory_order_release);
+        op.completed = op.num_iovs;
+        continue;
+      }
+      while (op.submitted < op.num_iovs &&
+             (op.submitted - op.completed) < kBatchInflightWindow) {
+        int rc = -1;
+        size_t iov = op.submitted;
+        if (op.type == TaskType::RECVV) {
+          int size_int = static_cast<int>(op.size_v[iov]);
+          void* cur_data = op.data_v[iov];
+          rc = uccl_recv_async(ep_, conn, op.mhandles[iov], &cur_data, &size_int,
+                               1, &op.reqs[iov]);
+        } else {
+          FifoItem slot = op.slot_item_v[iov];
+          slot.size = op.size_v[iov];
+          rc = uccl_read_async(ep_, conn, op.mhandles[iov], op.data_v[iov],
+                               op.size_v[iov], slot, &op.reqs[iov]);
+        }
+        if (rc == -1) break;
+        op.submitted++;
+      }
+    }
+
+    if (!active_scalar.empty() || !active_batch.empty()) {
+      ep_->recvRoutine();
+      ep_->sendRoutine();  // READ_NET completion comes from send path.
+      size_t scalar_write_pos = 0;
+      for (size_t i = 0; i < active_scalar.size(); ++i) {
+        auto* status = active_scalar[i];
+        bool done = false;
+        if (status->ureq.type == ReqRx) {
+          done = ep_->checkRecvComplete_once(status->ureq.n,
+                                             status->ureq.engine_idx);
+        } else {
+          done = ep_->checkSendComplete_once(status->ureq.n,
+                                             status->ureq.engine_idx);
+        }
+        if (done) {
+          status->done.store(true, std::memory_order_release);
+        } else {
+          active_scalar[scalar_write_pos++] = status;
+        }
+      }
+      active_scalar.resize(scalar_write_pos);
+
+      for (auto& op : active_batch) {
+        for (size_t i = op.completed; i < op.submitted; ++i) {
+          if (op.done[i]) continue;
+          bool done = false;
+          if (op.reqs[i].type == ReqRx) {
+            done = ep_->checkRecvComplete_once(op.reqs[i].n,
+                                               op.reqs[i].engine_idx);
+          } else {
+            done = ep_->checkSendComplete_once(op.reqs[i].n,
+                                               op.reqs[i].engine_idx);
+          }
+          if (done) op.done[i] = 1;
+        }
+        while (op.completed < op.submitted && op.done[op.completed]) {
+          op.completed++;
+        }
+      }
+      size_t batch_write_pos = 0;
+      for (size_t i = 0; i < active_batch.size(); ++i) {
+        auto& op = active_batch[i];
+        if (op.completed == op.num_iovs) {
+          op.status->done.store(true, std::memory_order_release);
+        } else {
+          if (batch_write_pos != i) active_batch[batch_write_pos] = std::move(op);
+          batch_write_pos++;
+        }
+      }
+      active_batch.resize(batch_write_pos);
+    } else if (!pending_submit.empty()) {
+      // Retry path without active requests still needs progress to free
+      // resources for later submits.
+      ep_->recvRoutine();
+      ep_->sendRoutine();
     }
   }
 }
