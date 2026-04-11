@@ -1498,6 +1498,32 @@ void Communicator::release(unsigned const req) {
 }
 
 bool Communicator::wait_finish(unsigned const req) {
+  if (req == 0) return false;
+  TrackedRequest* slot = resolve_request_slot(req);
+  if (slot == nullptr) return true;
+  if (progress_started_.load(std::memory_order_acquire) &&
+      slot->kind == PeerTransportKind::Ipc) {
+    while (true) {
+      slot = resolve_request_slot(req);
+      if (slot == nullptr) return true;
+      auto state = slot->state.load(std::memory_order_acquire);
+      if (state == TrackedRequest::SlotState::InFlight) {
+        std::this_thread::yield();
+        continue;
+      }
+      if (state == TrackedRequest::SlotState::Completed ||
+          state == TrackedRequest::SlotState::Failed) {
+        TrackedRequest snapshot{};
+        if (try_release_request_slot(req, &snapshot)) {
+          bool failed = (state == TrackedRequest::SlotState::Failed);
+          cleanup_tracked_request(snapshot);
+          return !failed;
+        }
+        continue;
+      }
+      return false;
+    }
+  }
   return wait_finish(std::vector<unsigned>{req});
 }
 

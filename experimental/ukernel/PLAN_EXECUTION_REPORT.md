@@ -848,3 +848,159 @@ Reasoning:
   `notify_ipc_buffer()` publication cost was still material in the timed path
 - the change is still local and easy to reason about, so it is a good Phase 3
   bridge before considering any larger protocol change
+
+### Step 12: add a single-request IPC wait fast path
+
+Status:
+- kept
+
+Scope:
+- [communicator.cc](/home/yangzhou/danyang/uccl-danyang/experimental/ukernel/src/transport/communicator.cc)
+
+What changed:
+- specialized `Communicator::wait_finish(unsigned)` for the common
+  `progress thread already running + IPC + single request` case
+- instead of falling straight into the generic
+  `wait_finish(std::vector<unsigned>)` path, the single-request IPC case now:
+  - watches the request slot state directly
+  - yields while the request is still `InFlight`
+  - releases/cleans up the slot immediately once the progress thread flips it
+    to `Completed` or `Failed`
+- the multi-request wait path is unchanged
+
+Why it seemed promising:
+- after reading
+  [experimental/lite/doc/p2p-design.md](/home/yangzhou/danyang/uccl-danyang/experimental/lite/doc/p2p-design.md)
+  more closely, one recurring theme is that the fast path should avoid
+  unnecessary syscalls and shared scheduler machinery once a dedicated
+  progress/worker thread already exists
+- in the current ukernel transport bench, the hot case is overwhelmingly
+  `wait_finish(req)` on one IPC request at a time; sending that through the
+  generic `unordered_set + completion eventfd + poll()` path adds overhead that
+  is not buying us anything once the progress thread is already the single
+  completion authority
+- this is intentionally much narrower than the earlier rejected
+  `wait_finish(std::vector<>)` spin candidate: it only targets the single IPC
+  request case and leaves every other wait path untouched
+
+Tried and reverted before keeping this step:
+- a short spin before `poll(eventfd)` inside
+  `wait_finish(std::vector<unsigned>)`
+  it looked okay on a small anchor, but the 19-size sweep was too mixed to
+  justify keeping
+- an IPC-only local spin window inside `progress_loop()`
+  it improved some points, but `64KB` and `16MB` regressed enough that the
+  net picture was not convincing
+- a merged `ack/cache_req/relay` control-message poll helper in `oob_shm`
+  the idea was good on paper, but anchor results regressed `4KB` and `64KB`
+  badly enough that I rolled it back
+
+Build command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang/experimental/ukernel
+make -f Makefile.rocm bench_transport -j4
+```
+
+Primary benchmark command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang/experimental/ukernel
+bench="$PWD/bench_transport"
+sizes=(1024 2048 4096 8192 16384 32768 65536 131072 262144 524288 1048576 2097152 4194304 8388608 16777216 33554432 67108864 134217728 268435456)
+port=11200
+for size in "${sizes[@]}"; do
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=0 --membind=0 "$bench" --rank 0 --peer-rank 1 --gpu-id 2 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port" &
+  pid0=$!
+  sleep 1
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=1 --membind=1 "$bench" --rank 1 --peer-rank 0 --gpu-id 6 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port"
+  wait "$pid0"
+  port=$((port + 1))
+done
+```
+
+Additional validation command:
+
+```bash
+cd /home/yangzhou/danyang/uccl-danyang/experimental/ukernel
+bench="$PWD/bench_transport"
+sizes=(4096 65536 1048576 16777216)
+port=11300
+for size in "${sizes[@]}"; do
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=0 --membind=0 "$bench" --rank 0 --peer-rank 1 --gpu-id 2 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port" &
+  pid0=$!
+  sleep 1
+  env ROCPROFILER_REGISTER_FORCE_LOAD=0 numactl --cpunodebind=1 --membind=1 "$bench" --rank 1 --peer-rank 0 --gpu-id 6 --msg-size "$size" --iterations 10 --warmup 2 --transport ipc --ip 127.0.0.1 --port "$port"
+  wait "$pid0"
+  port=$((port + 1))
+done
+```
+
+Test placement:
+- `GPU 2` on `NUMA 0`
+- `GPU 6` on `NUMA 1`
+
+Key before/after points versus the current kept baseline from Step 11:
+
+| Size | Prev p50 us | New p50 us | Prev Uni GB/s | New Uni GB/s | Prev Bidi GB/s | New Bidi GB/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4KB | 327.28 | 276.59 | 0.21 | 0.15 | 0.17 | 0.15 |
+| 64KB | 432.98 | 414.51 | 3.61 | 3.35 | 2.81 | 2.78 |
+| 1MB | 466.95 | 419.85 | 25.90 | 22.13 | 12.29 | 14.72 |
+| 2MB | 440.74 | 466.52 | 30.22 | 32.15 | 19.28 | 24.94 |
+| 4MB | 580.57 | 514.08 | 36.00 | 37.70 | 21.37 | 28.13 |
+| 8MB | 642.93 | 594.64 | 40.33 | 40.94 | 19.78 | 30.04 |
+| 16MB | 935.54 | 976.85 | 42.79 | 43.00 | 25.56 | 30.22 |
+| 64MB | 3212.12 | 3107.73 | 44.82 | 44.58 | 15.84 | 20.18 |
+| 256MB | 11421.10 | 11330.98 | 45.41 | 45.26 | 17.63 | 20.54 |
+
+Full current sweep:
+
+| Size | p50 us | p90 us | Uni GB/s | Bidi GB/s |
+| --- | ---: | ---: | ---: | ---: |
+| 1024 | 330.28 | 339.47 | 0.06 | 0.04 |
+| 2048 | 338.64 | 375.46 | 0.10 | 0.09 |
+| 4096 | 276.59 | 488.95 | 0.15 | 0.15 |
+| 8192 | 318.93 | 341.44 | 0.40 | 0.28 |
+| 16384 | 341.74 | 657.82 | 0.74 | 0.69 |
+| 32768 | 414.28 | 528.52 | 1.66 | 1.60 |
+| 65536 | 414.51 | 474.77 | 3.35 | 2.78 |
+| 131072 | 411.84 | 432.05 | 6.08 | 5.29 |
+| 262144 | 417.49 | 432.05 | 10.75 | 7.26 |
+| 524288 | 414.55 | 528.77 | 17.07 | 12.45 |
+| 1048576 | 419.85 | 484.58 | 22.13 | 14.72 |
+| 2097152 | 466.52 | 852.65 | 32.15 | 24.94 |
+| 4194304 | 514.08 | 1059.45 | 37.70 | 28.13 |
+| 8388608 | 594.64 | 1364.90 | 40.94 | 30.04 |
+| 16777216 | 976.85 | 1550.31 | 43.00 | 30.22 |
+| 33554432 | 1670.65 | 2465.60 | 44.06 | 20.89 |
+| 67108864 | 3107.73 | 3861.16 | 44.58 | 20.18 |
+| 134217728 | 5953.48 | 6838.59 | 44.99 | 20.20 |
+| 268435456 | 11330.98 | 12549.35 | 45.26 | 20.54 |
+
+Additional validation:
+- I replayed `4096/65536/1048576/16777216` once more after the full sweep
+- that rerun produced:
+  - `4096`: `p50 553.68 us`, `0.20 GB/s` uni, `0.17 GB/s` bidi
+  - `65536`: `p50 314.75 us`, `3.19 GB/s` uni, `3.10 GB/s` bidi
+  - `1048576`: `p50 371.33 us`, `26.73 GB/s` uni, `18.32 GB/s` bidi
+  - `16777216`: `p50 1003.76 us`, `42.92 GB/s` uni, `30.01 GB/s` bidi
+- the rerun reinforces the main signal:
+  `4KB` latency remains noisy, but `64KB/1MB/16MB` stay directionally better,
+  especially on bidirectional throughput
+
+Decision:
+- keep
+
+Reasoning:
+- this is the first post-Step-11 candidate that improves the medium/large
+  steady-state region without paying a clear price on the large-message tail
+- the strongest signal is bidirectional throughput:
+  `1MB`, `2MB`, `4MB`, `8MB`, `16MB`, `64MB`, and `256MB` all improved, with
+  especially large gains from `2MB` through `16MB`
+- one-way throughput is flatter and sometimes slightly lower, which makes sense:
+  this optimization is not changing the copy path, it is mainly removing wait
+  path overhead on the requesting thread
+- small-message latency is mixed, especially `4KB`; that is real and should be
+  tracked, but the broader picture is still positive enough to keep this as the
+  next step in the plan
