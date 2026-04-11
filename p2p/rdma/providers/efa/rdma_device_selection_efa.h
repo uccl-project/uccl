@@ -27,7 +27,8 @@ class EFADeviceSelectionStrategy : public RDMADeviceSelectionStrategy {
       }
       bool usable = false;
       for (int i = 0; i < dev_count; ++i) {
-        if (std::strcmp(ibv_get_device_name(dev_list[i]), nic_name.c_str()) != 0) {
+        if (std::strcmp(ibv_get_device_name(dev_list[i]), nic_name.c_str()) !=
+            0) {
           continue;
         }
         ibv_context* ctx = ibv_open_device(dev_list[i]);
