@@ -1499,29 +1499,35 @@ void Communicator::release(unsigned const req) {
 
 bool Communicator::wait_finish(unsigned const req) {
   if (req == 0) return false;
-  TrackedRequest* slot = resolve_request_slot(req);
-  if (slot == nullptr) return true;
-  if (progress_started_.load(std::memory_order_acquire) &&
-      slot->kind == PeerTransportKind::Ipc) {
-    while (true) {
-      slot = resolve_request_slot(req);
-      if (slot == nullptr) return true;
-      auto state = slot->state.load(std::memory_order_acquire);
-      if (state == TrackedRequest::SlotState::InFlight) {
-        std::this_thread::yield();
-        continue;
-      }
-      if (state == TrackedRequest::SlotState::Completed ||
-          state == TrackedRequest::SlotState::Failed) {
-        TrackedRequest snapshot{};
-        if (try_release_request_slot(req, &snapshot)) {
-          bool failed = (state == TrackedRequest::SlotState::Failed);
-          cleanup_tracked_request(snapshot);
-          return !failed;
+  if (progress_started_.load(std::memory_order_acquire)) {
+    TrackedRequest* slot = resolve_request_slot(req);
+    if (slot == nullptr) return true;
+    if (slot->kind == PeerTransportKind::Ipc) {
+      while (true) {
+        slot = resolve_request_slot(req);
+        if (slot == nullptr) return true;
+        auto state = slot->state.load(std::memory_order_acquire);
+        if (state == TrackedRequest::SlotState::InFlight) {
+          std::this_thread::yield();
+          continue;
         }
-        continue;
+        if (state == TrackedRequest::SlotState::Completed ||
+            state == TrackedRequest::SlotState::Failed) {
+          TrackedRequest snapshot{};
+          if (try_release_request_slot(req, &snapshot)) {
+            bool failed = (state == TrackedRequest::SlotState::Failed);
+            cleanup_tracked_request(snapshot);
+            return !failed;
+          }
+          // CAS lost: another releaser (e.g. destructor cleanup) claimed the
+          // slot.  The slot is transitioning to Free — retry until nullptr.
+          std::this_thread::yield();
+          continue;
+        }
+        // Releasing is a transient state between Completed/Failed and Free.
+        // Yield and retry so the slot can finish transitioning.
+        std::this_thread::yield();
       }
-      return false;
     }
   }
   return wait_finish(std::vector<unsigned>{req});
@@ -1685,7 +1691,11 @@ bool Communicator::wait_ipc_buffer(int remote_rank, uint32_t ipc_id,
       state.device_idx = info.device_idx;
       state.valid = info.valid;
       state.ipc_id = ipc_id;
-      return ipc_manager_.register_remote_ipc(remote_rank, state);
+      bool ok = ipc_manager_.register_remote_ipc(remote_rank, state);
+      if (ok) {
+        try_open_remote_ipc_buffer(remote_rank, state);
+      }
+      return ok;
     }
   }
   auto const deadline = std::chrono::steady_clock::now() +
