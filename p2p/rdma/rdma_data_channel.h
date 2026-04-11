@@ -163,7 +163,7 @@ class RDMADataChannel {
     // UCCL_LOG(INFO, UCCL_RDMA) << *req;
     qpx->wr_id = req->wr_id;
     qpx->comp_mask = 0;
-    qpx->wr_flags = IBV_SEND_SIGNALED;
+    qpx->wr_flags = req->need_signaled ? IBV_SEND_SIGNALED : 0;
 
     if (req->send_type == SendType::Send) {
       ibv_wr_rdma_write_imm(qpx, req->getRemoteKey(), req->getRemoteAddress(),
@@ -227,7 +227,7 @@ class RDMADataChannel {
     // UCCL_LOG(INFO, UCCL_RDMA) << *req;
 
     wr.wr_id = req->wr_id;
-    wr.send_flags = IBV_SEND_SIGNALED;
+    wr.send_flags = req->need_signaled ? IBV_SEND_SIGNALED : 0;
 
     int num_sge = prepareSGEList(sge, req);
     wr.sg_list = sge;

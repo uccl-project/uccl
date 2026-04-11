@@ -158,7 +158,7 @@ class SendConnection : public RDMAConnection {
   }
 
   int64_t send(std::shared_ptr<RDMASendRequest> req) {
-    int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
+    int64_t wr_id = tracker_->sendPacket(req->getLocalLen(), ackUpperBound());
     req->wr_id = wr_id;
     if (unlikely(request_queue_->push(req) < 0)) {
       UCCL_LOG(WARN) << "SendConnection: isend request queue is full, wr_id="
@@ -176,7 +176,9 @@ class SendConnection : public RDMAConnection {
       return -1;
     }
     std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
-    int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
+    int64_t wr_id = tracker_->sendPacket(
+        req->getLocalLen(),
+        estimateSignaledAcks(req->local_mem->size, /*expected_chunk_count=*/0));
     req->wr_id = wr_id;
 
     auto [channel_id, context_id] = selectNextChannelRoundRobin();
@@ -198,7 +200,9 @@ class SendConnection : public RDMAConnection {
       return -1;
     }
     std::shared_lock<std::shared_mutex> lock(ctrl_channel_mutex_);
-    int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
+    int64_t wr_id = tracker_->sendPacket(
+        req->getLocalLen(),
+        estimateSignaledAcks(req->local_mem->size, /*expected_chunk_count=*/0));
     req->wr_id = wr_id;
 
     auto [channel_id, context_id] = selectNextChannelRoundRobin();
@@ -254,7 +258,7 @@ class SendConnection : public RDMAConnection {
     if (index < 0) {
       return -1;
     }
-    int64_t wr_id = tracker_->sendPacket(req->getLocalLen());
+    int64_t wr_id = tracker_->sendPacket(req->getLocalLen(), ackUpperBound());
     req->wr_id = wr_id;
     UCCL_LOG(INFO, UCCL_RDMA)
         << "SendConnection: Processing send request meta: " << meta;
@@ -320,12 +324,17 @@ class SendConnection : public RDMAConnection {
     auto chunks = ChunkSplitStrategy::splitMessageToChunks(message_size);
     if (expected_chunk_count == 0) {
       expected_chunk_count = chunks.size();
-      tracker_->updateExpectedAckCount(req->wr_id, expected_chunk_count);
     }
     UCCL_LOG(INFO, UCCL_RDMA)
         << "SendConnection: Splitting message into " << chunks.size()
         << " chunks (message_size: " << message_size << ")";
     size_t num_channels = normalChannelCount();
+    std::vector<uint32_t> channel_chunk_counts(num_channels + 1, 0);
+    for (size_t i = 0; i < chunks.size(); ++i) {
+      uint32_t chunk_channel_id =
+          ((req->channel_id - 1 + i) % num_channels) + 1;
+      ++channel_chunk_counts[chunk_channel_id];
+    }
 
     for (size_t i = 0; i < chunks.size(); ++i) {
       auto const& chunk = chunks[i];
@@ -345,21 +354,16 @@ class SendConnection : public RDMAConnection {
           req->remote_mem->rkey_array, req->remote_mem->type);
 
       // Create send request for this chunk
-      // Only the last chunk needs signaled for completion notification
-      bool is_last_chunk = (i == chunks.size() - 1);
+      // Signal one CQE per channel (its last chunk), preserving correctness
+      // across multi-QP posting while reducing CQE pressure.
+      bool is_last_on_channel = (i + num_channels >= chunks.size());
       auto chunk_req = std::make_shared<RDMASendRequest>(
-          chunk_local_mem, chunk_remote_mem, req->imm_data, is_last_chunk);
+          chunk_local_mem, chunk_remote_mem, req->imm_data, is_last_on_channel);
 
-      // due to the compression, the chunk count may be different from the
-      // original split, so we need to set the expected chunk count for each
-      // chunk request
-      if (expected_chunk_count > 0) {
-        if (is_last_chunk && expected_chunk_count > 1) {
-          chunk_req->imm_data.set_chunk_count(expected_chunk_count);
-        } else {
-          chunk_req->imm_data.set_chunk_count(1);
-        }
-        expected_chunk_count -= 1;
+      if (is_last_on_channel) {
+        chunk_req->imm_data.set_chunk_count(channel_chunk_counts[chunk_channel_id]);
+      } else {
+        chunk_req->imm_data.set_chunk_count(1);
       }
 
       chunk_req->channel_id = chunk_channel_id;
@@ -429,15 +433,23 @@ class SendConnection : public RDMAConnection {
         req->local_mem->size /
         ChunkSplitStrategy::getRegularChunkSize(req->compress_ctx->maxSize,
                                                 expected_chunk_count);
+    uint32_t first_signal_acks = send_chunks_first > 0
+                                     ? estimateSignaledAcks(req->local_mem->size,
+                                                            send_chunks_first)
+                                     : 0;
+    tracker_->updateExpectedAckCount(req->wr_id,
+                                     first_signal_acks + ackUpperBound());
     if (send_chunks_first > 0) {
       postChunkedRequest(req, send_chunks_first);
     }
     uint32_t uncompressed_size =
         Compressor::getInstance().compressEncodeOneBatch(req);
+    uint32_t second_signal_acks = estimateSignaledAcks(
+        req->local_mem->size, expected_chunk_count - send_chunks_first);
+    tracker_->updateExpectedAckCount(req->wr_id,
+                                     first_signal_acks + second_signal_acks);
     postChunkedRequest(req, expected_chunk_count - send_chunks_first);
-    tracker_->updateExpectedAckCount(
-        req->wr_id,
-        ChunkSplitStrategy::getMessageChunkCount(uncompressed_size));
+    (void)uncompressed_size;
   }
 
   inline void processOnceSendRequests(std::shared_ptr<RDMASendRequest> req,
@@ -455,8 +467,22 @@ class SendConnection : public RDMAConnection {
     }
     tracker_->updateExpectedAckCount(
         req->wr_id,
-        ChunkSplitStrategy::getMessageChunkCount(req->local_mem->size));
+        estimateSignaledAcks(req->local_mem->size, meta.expected_chunk_count));
     postChunkedRequest(req, meta.expected_chunk_count);
+  }
+
+  uint32_t ackUpperBound() const {
+    size_t const channels = std::max<size_t>(1, normalChannelCount());
+    return static_cast<uint32_t>(channels * 2);
+  }
+
+  uint32_t estimateSignaledAcks(size_t message_size,
+                                int expected_chunk_count) const {
+    if (expected_chunk_count == 1) return 1;
+    size_t const channels = std::max<size_t>(1, normalChannelCount());
+    size_t const chunks = std::max<size_t>(
+        1, ChunkSplitStrategy::getMessageChunkCount(message_size));
+    return static_cast<uint32_t>(std::min(channels, chunks));
   }
 
   void pollDataChannels() {
