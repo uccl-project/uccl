@@ -199,6 +199,76 @@ class Communicator {
     return req;
   }
 
+  uint64_t isend_direct(int peer_rank, nb::handle tensor, uint32_t remote_mr_id,
+                        uint64_t binding_version = 1, size_t offset = 0,
+                        size_t len = 0, size_t remote_offset = 0) {
+    if (remote_mr_id == 0) {
+      throw std::invalid_argument("isend_direct requires non-zero remote_mr_id");
+    }
+    torch::Tensor t = tensor_from_python(tensor, "tensor");
+    if (!t.is_cuda()) {
+      throw std::invalid_argument("isend_direct requires a CUDA tensor");
+    }
+    if (!t.is_contiguous()) {
+      throw std::invalid_argument("isend_direct requires a contiguous tensor");
+    }
+    size_t elem_bytes = static_cast<size_t>(t.element_size());
+    size_t total_bytes = static_cast<size_t>(t.numel()) * elem_bytes;
+    if (len == 0) len = total_bytes;
+    if (offset + len > total_bytes) {
+      throw std::invalid_argument("isend_direct offset+len exceeds tensor size");
+    }
+    auto pinned_mr = find_pinned_mr_id(t.data_ptr(), total_bytes);
+    uint32_t mr_id = pinned_mr.has_value()
+                         ? *pinned_mr
+                         : comm_->reg_mr(t.data_ptr(), total_bytes).id;
+    uint64_t req = comm_->isend(
+        peer_rank, UKernel::Transport::LocalSlice{mr_id, offset, len},
+        UKernel::Transport::RemoteSlice{remote_mr_id, remote_offset, {},
+                                        binding_version});
+    if (req == 0) {
+      if (!pinned_mr.has_value()) {
+        comm_->dereg_mr(t.data_ptr());
+      }
+      return 0;
+    }
+    track_request(req, std::move(t),
+                  pinned_mr.has_value() ? nullptr : t.data_ptr());
+    return req;
+  }
+
+  bool notify_ipc_tensor(int peer_rank, uint32_t ipc_id, nb::handle tensor,
+                         size_t offset = 0, size_t len = 0,
+                         uint64_t binding_version = 0) {
+    torch::Tensor t = tensor_from_python(tensor, "tensor");
+    if (!t.is_cuda()) {
+      throw std::invalid_argument("notify_ipc_tensor requires a CUDA tensor");
+    }
+    if (!t.is_contiguous()) {
+      throw std::invalid_argument(
+          "notify_ipc_tensor requires a contiguous tensor");
+    }
+    size_t elem_bytes = static_cast<size_t>(t.element_size());
+    size_t total_bytes = static_cast<size_t>(t.numel()) * elem_bytes;
+    if (offset > total_bytes) {
+      throw std::invalid_argument("notify_ipc_tensor offset exceeds tensor size");
+    }
+    if (len == 0) len = total_bytes - offset;
+    if (offset + len > total_bytes) {
+      throw std::invalid_argument(
+          "notify_ipc_tensor offset+len exceeds tensor size");
+    }
+    void* ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(t.data_ptr()) +
+                                        static_cast<uintptr_t>(offset));
+    return comm_->notify_ipc_buffer(peer_rank, ipc_id, ptr, len,
+                                    binding_version);
+  }
+
+  bool wait_ipc_buffer(int peer_rank, uint32_t ipc_id,
+                       uint64_t binding_version = 0) {
+    return comm_->wait_ipc_buffer(peer_rank, ipc_id, binding_version);
+  }
+
   bool poll(uint64_t req) {
     try {
       bool done = comm_->poll(static_cast<unsigned>(req));
@@ -256,6 +326,14 @@ class Communicator {
 
   void send(int peer_rank, nb::handle tensor) {
     uint64_t req = isend(peer_rank, tensor);
+    wait_finish(req);
+  }
+
+  void send_direct(int peer_rank, nb::handle tensor, uint32_t remote_mr_id,
+                   uint64_t binding_version = 1, size_t offset = 0,
+                   size_t len = 0, size_t remote_offset = 0) {
+    uint64_t req = isend_direct(peer_rank, tensor, remote_mr_id, binding_version,
+                                offset, len, remote_offset);
     wait_finish(req);
   }
 
@@ -332,8 +410,19 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("unpin_tensor", &Communicator::unpin_tensor, nb::arg("tensor"))
       .def("isend", &Communicator::isend, nb::arg("peer_rank"),
            nb::arg("tensor"), nb::arg("offset") = 0, nb::arg("len") = 0)
+      .def("isend_direct", &Communicator::isend_direct, nb::arg("peer_rank"),
+           nb::arg("tensor"), nb::arg("remote_mr_id"),
+           nb::arg("binding_version") = 1, nb::arg("offset") = 0,
+           nb::arg("len") = 0, nb::arg("remote_offset") = 0)
       .def("irecv", &Communicator::irecv, nb::arg("peer_rank"),
            nb::arg("tensor"), nb::arg("offset") = 0, nb::arg("len") = 0)
+      .def("notify_ipc_tensor", &Communicator::notify_ipc_tensor,
+           nb::arg("peer_rank"), nb::arg("ipc_id"), nb::arg("tensor"),
+           nb::arg("offset") = 0, nb::arg("len") = 0,
+           nb::arg("binding_version") = 0)
+      .def("wait_ipc_buffer", &Communicator::wait_ipc_buffer,
+           nb::arg("peer_rank"), nb::arg("ipc_id"),
+           nb::arg("binding_version") = 0)
       .def("poll", &Communicator::poll, nb::arg("req"))
       .def("release", &Communicator::release, nb::arg("req"))
       .def("wait_finish", &Communicator::wait_finish, nb::arg("req"))
@@ -343,6 +432,10 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
            nb::arg("peer_rank"))
       .def("same_host", &Communicator::same_host, nb::arg("peer_rank"))
       .def("send", &Communicator::send, nb::arg("peer_rank"), nb::arg("tensor"))
+      .def("send_direct", &Communicator::send_direct, nb::arg("peer_rank"),
+           nb::arg("tensor"), nb::arg("remote_mr_id"),
+           nb::arg("binding_version") = 1, nb::arg("offset") = 0,
+           nb::arg("len") = 0, nb::arg("remote_offset") = 0)
       .def("recv", &Communicator::recv, nb::arg("peer_rank"),
            nb::arg("tensor"));
 }
