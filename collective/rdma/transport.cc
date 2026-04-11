@@ -728,14 +728,7 @@ RDMAEndpoint::RDMAEndpoint(int num_engines_per_dev)
     }
   }
 
-  int ro_mode = ucclParamIB_RELAXED_ORDERING_MODE();
-  if (ro_mode > 0) {
-    ib_relaxed_ordering_enabled_ = 1;
-  } else if (ro_mode == 0) {
-    ib_relaxed_ordering_enabled_ = 0;
-  } else {
-    ib_relaxed_ordering_enabled_ = ncclIbRelaxedOrderingCapable();
-  }
+  ib_relaxed_ordering_enabled_ = ncclIbRelaxedOrderingCapable();
   UCCL_LOG_EP << "IB relaxed ordering enabled: "
               << ib_relaxed_ordering_enabled_;
 }
@@ -2197,10 +2190,9 @@ bool RDMAContext::receiverCC_tx_message(struct ucclRequest* ureq) {
     if (qpw->signal_cnt_++ % kSignalInterval == 0) {
       wr->send_flags = IBV_SEND_SIGNALED;
     }
-    if (ucclParamTX_INLINE_THRESHOLD() > 0 &&
-        chunk_size <= static_cast<uint32_t>(ucclParamTX_INLINE_THRESHOLD())) {
-      wr->send_flags |= IBV_SEND_INLINE;
-    }
+    // if (size <= kMaxInline) {
+    //   wr->send_flags |= IBV_SEND_INLINE;
+    // }
     wr_ex->qpidx = qpidx;
 
     struct ibv_send_wr* bad_wr;
@@ -2296,10 +2288,9 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
       if (qpw->signal_cnt_++ % kSignalInterval == 0) {
         wr->send_flags = IBV_SEND_SIGNALED;
       }
-      if (ucclParamTX_INLINE_THRESHOLD() > 0 &&
-          chunk_size <= static_cast<uint32_t>(ucclParamTX_INLINE_THRESHOLD())) {
-        wr->send_flags |= IBV_SEND_INLINE;
-      }
+      // if (size <= kMaxInline) {
+      //   wr->send_flags |= IBV_SEND_INLINE;
+      // }
       wr_ex->qpidx = qpidx;
 
       struct ibv_send_wr* bad_wr;
@@ -2400,11 +2391,9 @@ bool RDMAContext::senderCC_tx_message(struct ucclRequest* ureq) {
         if (qpw->signal_cnt_++ % kSignalInterval == 0) {
           wr_ex->wr.send_flags = IBV_SEND_SIGNALED;
         }
-        if (ucclParamTX_INLINE_THRESHOLD() > 0 &&
-            chunk_size <=
-                static_cast<uint32_t>(ucclParamTX_INLINE_THRESHOLD())) {
-          wr_ex->wr.send_flags |= IBV_SEND_INLINE;
-        }
+        // if (size <= kMaxInline) {
+        //   wr_ex->wr.send_flags |= IBV_SEND_INLINE;
+        // }
         wr_ex->qpidx = qpidx;
         struct ibv_send_wr* bad_wr;
         auto ret = ibv_post_send(qpw->qp, wr, &bad_wr);
