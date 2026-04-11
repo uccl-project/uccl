@@ -65,7 +65,6 @@ class AtomicBitmapPacketTracker {
   static constexpr size_t WINDOW_SIZE = 65536;
   std::vector<std::atomic<bool>> ack_bitmap_;
   std::vector<std::atomic<size_t>> packet_sizes_;  // Store packet sizes
-  std::atomic<size_t> inflight_bytes_;
   std::atomic<uint32_t> base_seq_num_;
   std::atomic<uint32_t> next_seq_num_;
 
@@ -73,7 +72,6 @@ class AtomicBitmapPacketTracker {
   AtomicBitmapPacketTracker(uint32_t initial_seq = 0)
       : ack_bitmap_(WINDOW_SIZE),
         packet_sizes_(WINDOW_SIZE),
-        inflight_bytes_(0),
         base_seq_num_(initial_seq),
         next_seq_num_(initial_seq) {
     for (size_t i = 0; i < WINDOW_SIZE; ++i) {
@@ -91,22 +89,13 @@ class AtomicBitmapPacketTracker {
     ack_bitmap_[seq_num % WINDOW_SIZE].store(false, std::memory_order_release);
     packet_sizes_[seq_num % WINDOW_SIZE].store(packet_size,
                                                std::memory_order_release);
-    inflight_bytes_.fetch_add(packet_size, std::memory_order_relaxed);
     return seq_num;
   }
 
   void acknowledge(uint32_t seq_num) {
     uint32_t base = base_seq_num_.load(std::memory_order_acquire);
     if (seq_num >= base && seq_num - base < WINDOW_SIZE) {
-      size_t const pos = seq_num % WINDOW_SIZE;
-      bool expected = false;
-      if (ack_bitmap_[pos].compare_exchange_strong(expected, true,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_acquire)) {
-        inflight_bytes_.fetch_sub(packet_sizes_[pos].load(
-                                      std::memory_order_acquire),
-                                  std::memory_order_relaxed);
-      }
+      ack_bitmap_[seq_num % WINDOW_SIZE].store(true, std::memory_order_release);
       slideWindow();
     }
   }
@@ -159,7 +148,18 @@ class AtomicBitmapPacketTracker {
 
   // Get the total bytes of inflight (unacknowledged) packets
   size_t getTotalInflightBytes() const {
-    return inflight_bytes_.load(std::memory_order_acquire);
+    size_t total_bytes = 0;
+    uint32_t base = base_seq_num_.load(std::memory_order_acquire);
+    uint32_t next = next_seq_num_.load(std::memory_order_acquire);
+    for (uint32_t i = 0; i < WINDOW_SIZE; ++i) {
+      uint32_t seq_num = base + i;
+      if (seq_num < next &&
+          !ack_bitmap_[seq_num % WINDOW_SIZE].load(std::memory_order_acquire)) {
+        total_bytes += packet_sizes_[seq_num % WINDOW_SIZE].load(
+            std::memory_order_acquire);
+      }
+    }
+    return total_bytes;
   }
 
  private:
@@ -200,7 +200,6 @@ class AtomicBitmapPacketTrackerMultiAck {
 
   // Packet sizes (for inflight bytes calculation)
   std::vector<std::atomic<size_t>> packet_sizes_;
-  std::atomic<size_t> inflight_bytes_;
 
   std::atomic<uint32_t> base_seq_num_;
   std::atomic<uint32_t> next_seq_num_;
@@ -211,7 +210,6 @@ class AtomicBitmapPacketTrackerMultiAck {
         expected_ack_count_(WINDOW_SIZE),
         current_ack_count_(WINDOW_SIZE),
         packet_sizes_(WINDOW_SIZE),
-        inflight_bytes_(0),
         base_seq_num_(initial_seq),
         next_seq_num_(initial_seq) {
     for (size_t i = 0; i < WINDOW_SIZE; ++i) {
@@ -237,7 +235,6 @@ class AtomicBitmapPacketTrackerMultiAck {
     expected_ack_count_[pos].store(expected_ack, std::memory_order_release);
     current_ack_count_[pos].store(0, std::memory_order_release);
     packet_sizes_[pos].store(packet_size, std::memory_order_release);
-    inflight_bytes_.fetch_add(packet_size, std::memory_order_relaxed);
 
     return seq_num;
   }
@@ -255,14 +252,8 @@ class AtomicBitmapPacketTrackerMultiAck {
     uint32_t need = expected_ack_count_[pos].load(std::memory_order_acquire);
 
     if (cur >= need) {
-      bool expected = false;
-      if (ack_bitmap_[pos].compare_exchange_strong(expected, true,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_acquire)) {
-        inflight_bytes_.fetch_sub(packet_sizes_[pos].load(
-                                      std::memory_order_acquire),
-                                  std::memory_order_relaxed);
-      }
+      // Fully acknowledged
+      ack_bitmap_[pos].store(true, std::memory_order_release);
       slideWindow();
     }
   }
@@ -285,14 +276,7 @@ class AtomicBitmapPacketTrackerMultiAck {
     uint32_t cur = current_ack_count_[pos].load(std::memory_order_acquire);
 
     if (cur >= new_expected_ack) {
-      bool expected = false;
-      if (ack_bitmap_[pos].compare_exchange_strong(expected, true,
-                                                   std::memory_order_acq_rel,
-                                                   std::memory_order_acquire)) {
-        inflight_bytes_.fetch_sub(packet_sizes_[pos].load(
-                                      std::memory_order_acquire),
-                                  std::memory_order_relaxed);
-      }
+      ack_bitmap_[pos].store(true, std::memory_order_release);
       slideWindow();
     }
 
@@ -349,7 +333,19 @@ class AtomicBitmapPacketTrackerMultiAck {
   }
 
   size_t getTotalInflightBytes() const {
-    return inflight_bytes_.load(std::memory_order_acquire);
+    size_t total = 0;
+    uint32_t base = base_seq_num_.load(std::memory_order_acquire);
+    uint32_t next = next_seq_num_.load(std::memory_order_acquire);
+
+    for (uint32_t i = 0; i < WINDOW_SIZE; ++i) {
+      uint32_t seq_num = base + i;
+      if (seq_num < next &&
+          !ack_bitmap_[seq_num % WINDOW_SIZE].load(std::memory_order_acquire)) {
+        total += packet_sizes_[seq_num % WINDOW_SIZE].load(
+            std::memory_order_acquire);
+      }
+    }
+    return total;
   }
 
  private:
