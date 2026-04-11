@@ -9,6 +9,7 @@
 #include "rdma_device.h"
 #include "util/debug.h"
 #include "util/net.h"
+#include <array>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -147,13 +148,12 @@ class NICEndpoint {
     UCCL_LOG(INFO, UCCL_RDMA)
         << "checkSendComplete - rank_id: " << rank_id << ", wr_id: " << wr_id;
 
-    auto it = send_channel_groups_.find(rank_id);
-    if (it == send_channel_groups_.end()) {
+    auto send_group = getSendGroup(rank_id);
+    if (!send_group) {
       throw std::runtime_error("Send channel group not found for rank_id: " +
                                std::to_string(rank_id));
     }
 
-    auto send_group = it->second;
     while (!send_group->check(wr_id)) {
       std::this_thread::sleep_for(std::chrono::microseconds(1));
     }
@@ -165,14 +165,11 @@ class NICEndpoint {
   bool checkSendComplete_once(uint64_t rank_id, int64_t wr_id) {
     // UCCL_LOG(INFO, UCCL_RDMA) << "checkSendComplete - rank_id: " << rank_id
     //           << ", wr_id: " << wr_id;
-    std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
-    auto it = send_channel_groups_.find(rank_id);
-    if (unlikely(it == send_channel_groups_.end())) {
+    auto send_group = getSendGroup(rank_id);
+    if (unlikely(!send_group)) {
       throw std::runtime_error("Send channel group not found for rank_id: " +
                                std::to_string(rank_id));
     }
-
-    auto send_group = it->second;
     return send_group->check(wr_id);
   }
 
@@ -180,13 +177,11 @@ class NICEndpoint {
     UCCL_LOG(INFO, UCCL_RDMA)
         << "checkRecvComplete - Checking for rank_id: " << rank_id
         << ", index: " << index;
-    auto it = recv_channel_groups_.find(rank_id);
-    if (unlikely(it == recv_channel_groups_.end())) {
+    auto recv_group = getRecvGroup(rank_id);
+    if (unlikely(!recv_group)) {
       throw std::runtime_error("Recv channel group not found for rank_id: " +
                                std::to_string(rank_id));
     }
-
-    auto recv_group = it->second;
     return recv_group->check(index);
   }
 
@@ -195,13 +190,11 @@ class NICEndpoint {
     UCCL_LOG(INFO, UCCL_RDMA)
         << "checkRecvComplete - Checking for rank_id: " << rank_id
         << ", index: " << index;
-    auto it = recv_channel_groups_.find(rank_id);
-    if (it == recv_channel_groups_.end()) {
+    auto recv_group = getRecvGroup(rank_id);
+    if (!recv_group) {
       throw std::runtime_error("Recv channel group not found for rank_id: " +
                                std::to_string(rank_id));
     }
-
-    auto recv_group = it->second;
     while (!recv_group->check(index)) {
       std::this_thread::sleep_for(std::chrono::microseconds(1));
     }
@@ -212,13 +205,11 @@ class NICEndpoint {
 
   int64_t writeOrRead(std::shared_ptr<RDMASendRequest> req) {
     uint64_t rank_id = req->to_rank_id;
-    auto it = send_channel_groups_.find(rank_id);
-    if (it == send_channel_groups_.end()) {
+    auto send_group = getSendGroup(rank_id);
+    if (!send_group) {
       throw std::runtime_error("Send channel group not found for rank_id: " +
                                std::to_string(rank_id));
     }
-
-    auto send_group = it->second;
     int64_t wr_id = -1;
 
     // Blocking call until send succeeds
@@ -240,13 +231,11 @@ class NICEndpoint {
   // Blocking send: wraps SendConnection::send with rank_id parameter
   // Returns wr_id for checking completion later
   int64_t send(uint64_t rank_id, std::shared_ptr<RDMASendRequest> req) {
-    auto it = send_channel_groups_.find(rank_id);
-    if (it == send_channel_groups_.end()) {
+    auto send_group = getSendGroup(rank_id);
+    if (!send_group) {
       throw std::runtime_error("Send channel group not found for rank_id: " +
                                std::to_string(rank_id));
     }
-
-    auto send_group = it->second;
     int64_t wr_id = -1;
 
     // Blocking call until send succeeds
@@ -267,13 +256,11 @@ class NICEndpoint {
   // Blocking recv: wraps RecvConnection::recv with rank_id parameter
   // Returns index for checking completion later
   int64_t recv(uint64_t rank_id, std::shared_ptr<RDMARecvRequest> req) {
-    auto it = recv_channel_groups_.find(rank_id);
-    if (it == recv_channel_groups_.end()) {
+    auto recv_group = getRecvGroup(rank_id);
+    if (!recv_group) {
       throw std::runtime_error("Recv channel group not found for rank_id: " +
                                std::to_string(rank_id));
     }
-
-    auto recv_group = it->second;
     int64_t index = -1;
     // Blocking call until recv succeeds
     while (index < 0) {
@@ -475,11 +462,17 @@ class NICEndpoint {
     if (auto_start_polling_) {
       return;  // Do nothing if auto polling is enabled
     }
-    std::shared_lock<std::shared_mutex> lock(recv_channel_mutex_);
-    for (auto& [rank_id, recv_group] : recv_channel_groups_) {
+    for (size_t i = 0; i < kFastRankSlotCount; ++i) {
+      auto recv_group = std::atomic_load_explicit(&recv_group_slots_[i],
+                                                  std::memory_order_acquire);
       if (recv_group) {
         recv_group->pollAndProcessCompletions();
       }
+    }
+    std::shared_lock<std::shared_mutex> lock(recv_channel_mutex_);
+    for (auto& [rank_id, recv_group] : recv_channel_groups_) {
+      (void)rank_id;
+      if (recv_group) recv_group->pollAndProcessCompletions();
     }
   }
 
@@ -487,11 +480,17 @@ class NICEndpoint {
     if (auto_start_polling_) {
       return;  // Do nothing if auto polling is enabled
     }
-    std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
-    for (auto& [rank_id, send_group] : send_channel_groups_) {
+    for (size_t i = 0; i < kFastRankSlotCount; ++i) {
+      auto send_group = std::atomic_load_explicit(&send_group_slots_[i],
+                                                  std::memory_order_acquire);
       if (send_group) {
         send_group->pollingLoopForMeta();
       }
+    }
+    std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
+    for (auto& [rank_id, send_group] : send_channel_groups_) {
+      (void)rank_id;
+      if (send_group) send_group->pollingLoopForMeta();
     }
   }
 
@@ -506,17 +505,14 @@ class NICEndpoint {
     }
 
     uint64_t rank_id = req->to_rank_id;
-    std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
-    auto it = send_channel_groups_.find(rank_id);
-    if (it == send_channel_groups_.end()) {
+    auto send_group = getSendGroup(rank_id);
+    if (!send_group) {
       UCCL_LOG(WARN)
           << "NICEndpoint::sendRoutine - Send channel group not found "
              "for rank_id: "
           << rank_id;
       return -1;
     }
-
-    auto send_group = it->second;
     if (!send_group) {
       UCCL_LOG(WARN) << "NICEndpoint::sendRoutine - Send channel group is null "
                         "for rank_id: "
@@ -530,6 +526,30 @@ class NICEndpoint {
   void stop_accept() { stop_accept_.store(true, std::memory_order_release); }
 
  private:
+  static constexpr size_t kFastRankSlotCount = 1024;
+
+  inline std::shared_ptr<SendConnection> getSendGroup(uint64_t rank_id) const {
+    if (rank_id < kFastRankSlotCount) {
+      auto group = std::atomic_load_explicit(&send_group_slots_[rank_id],
+                                             std::memory_order_acquire);
+      if (group) return group;
+    }
+    std::shared_lock<std::shared_mutex> lock(send_channel_mutex_);
+    auto it = send_channel_groups_.find(rank_id);
+    return (it == send_channel_groups_.end()) ? nullptr : it->second;
+  }
+
+  inline std::shared_ptr<RecvConnection> getRecvGroup(uint64_t rank_id) const {
+    if (rank_id < kFastRankSlotCount) {
+      auto group = std::atomic_load_explicit(&recv_group_slots_[rank_id],
+                                             std::memory_order_acquire);
+      if (group) return group;
+    }
+    std::shared_lock<std::shared_mutex> lock(recv_channel_mutex_);
+    auto it = recv_channel_groups_.find(rank_id);
+    return (it == recv_channel_groups_.end()) ? nullptr : it->second;
+  }
+
   // Get context from channel_id
   inline std::shared_ptr<RdmaContext> getContextByChannelId(
       uint32_t channel_id) const {
@@ -708,6 +728,22 @@ class NICEndpoint {
   }
 
   std::shared_ptr<RecvConnection> getOrCreateRecvGroup(uint64_t rank_id) {
+    if (rank_id < kFastRankSlotCount) {
+      auto slot = std::atomic_load_explicit(&recv_group_slots_[rank_id],
+                                            std::memory_order_acquire);
+      if (slot) return slot;
+      std::unique_lock write_lock(recv_channel_mutex_);
+      auto slot_ref = std::atomic_load_explicit(&recv_group_slots_[rank_id],
+                                                std::memory_order_acquire);
+      if (slot_ref) return slot_ref;
+      auto numa_node = RdmaDeviceManager::instance().get_numa_node(
+          RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_)[0]);
+      auto new_slot =
+          std::make_shared<RecvConnection>(numa_node, auto_start_polling_);
+      std::atomic_store_explicit(&recv_group_slots_[rank_id], new_slot,
+                                 std::memory_order_release);
+      return new_slot;
+    }
     {
       std::shared_lock read_lock(recv_channel_mutex_);
       auto it = recv_channel_groups_.find(rank_id);
@@ -736,12 +772,28 @@ class NICEndpoint {
 
   void setRecvControlChannel(
       uint64_t rank_id, std::shared_ptr<RecvControlChannel>&& ctrl_channel) {
-    auto it = getOrCreateRecvGroup(rank_id);
-    recv_channel_groups_[rank_id]->setControlChannel(
+    auto group = getOrCreateRecvGroup(rank_id);
+    group->setControlChannel(
         std::forward<std::shared_ptr<RecvControlChannel>>(ctrl_channel));
   }
 
   std::shared_ptr<SendConnection> getOrCreateSendGroup(uint64_t rank_id) {
+    if (rank_id < kFastRankSlotCount) {
+      auto slot = std::atomic_load_explicit(&send_group_slots_[rank_id],
+                                            std::memory_order_acquire);
+      if (slot) return slot;
+      std::unique_lock write_lock(send_channel_mutex_);
+      auto slot_ref = std::atomic_load_explicit(&send_group_slots_[rank_id],
+                                                std::memory_order_acquire);
+      if (slot_ref) return slot_ref;
+      auto numa_node = RdmaDeviceManager::instance().get_numa_node(
+          RdmaDeviceManager::instance().get_best_dev_idx(gpu_index_)[0]);
+      auto new_slot =
+          std::make_shared<SendConnection>(numa_node, auto_start_polling_);
+      std::atomic_store_explicit(&send_group_slots_[rank_id], new_slot,
+                                 std::memory_order_release);
+      return new_slot;
+    }
     {
       std::shared_lock read_lock(send_channel_mutex_);
       auto it = send_channel_groups_.find(rank_id);
@@ -766,8 +818,8 @@ class NICEndpoint {
 
   void setSendControlChannel(
       uint64_t rank_id, std::shared_ptr<SendControlChannel>&& ctrl_channel) {
-    auto it = getOrCreateSendGroup(rank_id);
-    send_channel_groups_[rank_id]->setControlChannel(
+    auto group = getOrCreateSendGroup(rank_id);
+    group->setControlChannel(
         std::forward<std::shared_ptr<SendControlChannel>>(ctrl_channel));
   }
 
@@ -915,9 +967,13 @@ class NICEndpoint {
   uint64_t rank_id_;
   int gpu_index_;
   std::vector<std::shared_ptr<RdmaContext>> contexts_;
+  std::array<std::shared_ptr<RecvConnection>, kFastRankSlotCount>
+      recv_group_slots_{};
   mutable std::shared_mutex recv_channel_mutex_;
   std::unordered_map<uint64_t, std::shared_ptr<RecvConnection>>
       recv_channel_groups_;
+  std::array<std::shared_ptr<SendConnection>, kFastRankSlotCount>
+      send_group_slots_{};
   mutable std::shared_mutex send_channel_mutex_;
   std::unordered_map<uint64_t, std::shared_ptr<SendConnection>>
       send_channel_groups_;

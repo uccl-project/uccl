@@ -3,11 +3,12 @@
 #include "define.h"
 #include "rdma_ctrl_channel.h"
 #include "rdma_data_channel.h"
+#include <array>
 #include <random>
 
 class RDMAConnection {
  public:
-  RDMAConnection() : last_channel_id_(0) {}
+  RDMAConnection() : last_channel_id_(0), channel_count_(0) {}
   virtual ~RDMAConnection() = default;
 
   virtual void addChannel(uint32_t channel_id,
@@ -15,29 +16,23 @@ class RDMAConnection {
     if (!channel) {
       throw std::invalid_argument("addChannel called with null channel");
     }
-    std::unique_lock<std::shared_mutex> lock(mutex_);
-
-    channels_[channel_id] = std::move(channel);
+    if (channel_id == 0 || channel_id > kQpNumPerChannel) {
+      throw std::out_of_range("channel_id out of range");
+    }
+    if (!channel_slots_[channel_id]) {
+      channel_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+    channel_slots_[channel_id] = std::move(channel);
   }
 
   virtual std::shared_ptr<RDMADataChannel> getChannel(
       uint32_t channel_id) const {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
-    auto it = channels_.find(channel_id);
-    if (it == channels_.end()) return nullptr;
-    return it->second;
+    if (channel_id == 0 || channel_id > kQpNumPerChannel) return nullptr;
+    return channel_slots_[channel_id];
   }
 
   virtual size_t channelCount() const {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
-    return channels_.size();
-  }
-
-  virtual std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> const&
-  channels() const {
-    mutex_.lock_shared();
-    mutex_.unlock_shared();  // just to annotate read lock expected
-    return channels_;
+    return channel_count_.load(std::memory_order_relaxed);
   }
 
   // Select next channel using round-robin algorithm
@@ -97,9 +92,10 @@ class RDMAConnection {
   }
 
  protected:
-  mutable std::shared_mutex mutex_;
-  std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> channels_;
+  std::array<std::shared_ptr<RDMADataChannel>, kQpNumPerChannel + 1>
+      channel_slots_{};
   std::atomic<uint32_t> last_channel_id_;
+  std::atomic<size_t> channel_count_;
 };
 
 class SendConnection : public RDMAConnection {
@@ -112,9 +108,13 @@ class SendConnection : public RDMAConnection {
     tracker_ = std::make_shared<AtomicBitmapPacketTrackerMultiAck>();
     request_queue_ = std::make_unique<
         RingBuffer<std::shared_ptr<RDMASendRequest>, kRingCapacity>>();
+    initChunkRequestPool();
   }
 
-  ~SendConnection() { stopPolling(); }
+  ~SendConnection() {
+    stopPolling();
+    chunk_pool_.reset();
+  }
 
   void addChannel(uint32_t channel_id,
                   std::shared_ptr<RDMADataChannel> channel) override {
@@ -137,11 +137,6 @@ class SendConnection : public RDMAConnection {
   }
 
   size_t normalChannelCount() const { return RDMAConnection::channelCount(); }
-
-  std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> const&
-  channels() const override {
-    return RDMAConnection::channels();
-  }
 
   template <typename T>
   void setControlChannel(T&& ctrl_channel) {
@@ -263,6 +258,24 @@ class SendConnection : public RDMAConnection {
   }
 
  private:
+  struct ChunkRequestNode {
+    ChunkRequestNode* next = nullptr;
+    RegMemBlock local_mem;
+    RemoteMemInfo remote_mem;
+    RDMASendRequest req;
+  };
+  struct ChunkPoolState {
+    std::atomic<ChunkRequestNode*> head{nullptr};
+    std::mutex alloc_mu;
+    std::vector<ChunkRequestNode*> all_nodes;
+    ~ChunkPoolState() {
+      for (auto* node : all_nodes) {
+        delete node;
+      }
+      all_nodes.clear();
+    }
+  };
+
   std::shared_ptr<SendControlChannel> ctrl_channel_;
   mutable std::shared_mutex ctrl_channel_mutex_;
   std::atomic<bool> running_;
@@ -270,8 +283,64 @@ class SendConnection : public RDMAConnection {
   std::unique_ptr<RingBuffer<std::shared_ptr<RDMASendRequest>, kRingCapacity>>
       request_queue_;
   std::shared_ptr<AtomicBitmapPacketTrackerMultiAck> tracker_;
+  std::shared_ptr<ChunkPoolState> chunk_pool_;
   bool auto_start_polling_;
   int numa_node_ = 0;
+
+  static constexpr size_t kChunkPoolPrealloc = 8192;
+
+  void initChunkRequestPool() {
+    chunk_pool_ = std::make_shared<ChunkPoolState>();
+    for (size_t i = 0; i < kChunkPoolPrealloc; ++i) {
+      auto* node = new ChunkRequestNode();
+      node->next = chunk_pool_->head.load(std::memory_order_relaxed);
+      while (!chunk_pool_->head.compare_exchange_weak(
+          node->next, node, std::memory_order_release,
+          std::memory_order_relaxed)) {
+      }
+      chunk_pool_->all_nodes.push_back(node);
+    }
+  }
+
+  std::shared_ptr<ChunkRequestNode> acquireChunkRequestNode() {
+    auto pool = chunk_pool_;
+    ChunkRequestNode* head = pool->head.load(std::memory_order_acquire);
+    while (head != nullptr &&
+           !pool->head.compare_exchange_weak(
+               head, head->next, std::memory_order_acq_rel,
+               std::memory_order_acquire)) {
+    }
+
+    if (head == nullptr) {
+      head = new ChunkRequestNode();
+      std::lock_guard<std::mutex> lock(pool->alloc_mu);
+      pool->all_nodes.push_back(head);
+    }
+
+    return std::shared_ptr<ChunkRequestNode>(head, [pool](ChunkRequestNode* node) {
+      releaseChunkRequestNode(pool, node);
+    });
+  }
+
+  static void releaseChunkRequestNode(std::shared_ptr<ChunkPoolState> const& pool,
+                                      ChunkRequestNode* node) {
+    node->req.local_mem.reset();
+    node->req.remote_mem.reset();
+    node->req.channel_id = 0;
+    node->req.from_rank_id = 0;
+    node->req.to_rank_id = 0;
+    node->req.wr_id = 0;
+    node->req.need_signaled = true;
+    node->req.send_type = SendType::Send;
+    node->req.imm_data = ImmData();
+    node->req.compress_ctx = nullptr;
+
+    ChunkRequestNode* head = pool->head.load(std::memory_order_acquire);
+    do {
+      node->next = head;
+    } while (!pool->head.compare_exchange_weak(
+        head, node, std::memory_order_release, std::memory_order_relaxed));
+  }
 
   // Send a request through the appropriate channel
   // Returns true on success, false on failure
@@ -334,40 +403,45 @@ class SendConnection : public RDMAConnection {
       uint32_t chunk_channel_id =
           ((req->channel_id - 1 + i) % num_channels) + 1;
 
-      // Create RegMemBlock for this chunk
-      auto chunk_local_mem = std::make_shared<RegMemBlock>(
+      auto chunk_node = acquireChunkRequestNode();
+
+      chunk_node->local_mem = RegMemBlock(
           static_cast<char*>(req->local_mem->addr) + chunk.offset, chunk.size,
           req->local_mem->mr_array, req->local_mem->type);
-
-      // Create RemoteMemInfo for this chunk
-      auto chunk_remote_mem = std::make_shared<RemoteMemInfo>(
+      chunk_node->remote_mem = RemoteMemInfo(
           req->remote_mem->addr + chunk.offset, chunk.size,
           req->remote_mem->rkey_array, req->remote_mem->type);
 
-      // Create send request for this chunk
-      // Only the last chunk needs signaled for completion notification
       bool is_last_chunk = (i == chunks.size() - 1);
-      auto chunk_req = std::make_shared<RDMASendRequest>(
-          chunk_local_mem, chunk_remote_mem, req->imm_data, is_last_chunk);
+      chunk_node->req.local_mem =
+          std::shared_ptr<RegMemBlock>(chunk_node, &chunk_node->local_mem);
+      chunk_node->req.remote_mem = std::shared_ptr<RemoteMemInfo>(
+          chunk_node, &chunk_node->remote_mem);
+      chunk_node->req.imm_data = req->imm_data;
+      chunk_node->req.need_signaled = is_last_chunk;
 
       // due to the compression, the chunk count may be different from the
       // original split, so we need to set the expected chunk count for each
       // chunk request
       if (expected_chunk_count > 0) {
         if (is_last_chunk && expected_chunk_count > 1) {
-          chunk_req->imm_data.set_chunk_count(expected_chunk_count);
+          chunk_node->req.imm_data.set_chunk_count(expected_chunk_count);
         } else {
-          chunk_req->imm_data.set_chunk_count(1);
+          chunk_node->req.imm_data.set_chunk_count(1);
         }
         expected_chunk_count -= 1;
       }
 
-      chunk_req->channel_id = chunk_channel_id;
-      chunk_req->from_rank_id = req->from_rank_id;
-      chunk_req->to_rank_id = req->to_rank_id;
-      chunk_req->wr_id = req->wr_id;
+      chunk_node->req.channel_id = chunk_channel_id;
+      chunk_node->req.from_rank_id = req->from_rank_id;
+      chunk_node->req.to_rank_id = req->to_rank_id;
+      chunk_node->req.wr_id = req->wr_id;
       // Inherit the send type from the original request.
-      chunk_req->send_type = req->send_type;
+      chunk_node->req.send_type = req->send_type;
+      chunk_node->req.compress_ctx = req->compress_ctx;
+
+      auto chunk_req =
+          std::shared_ptr<RDMASendRequest>(chunk_node, &chunk_node->req);
       // Send the chunk
       if (postRequestOnChannel(chunk_req)) {
         // UCCL_LOG(INFO, UCCL_RDMA) << "SendConnection: Sent chunk " << i <<
@@ -460,8 +534,9 @@ class SendConnection : public RDMAConnection {
   }
 
   void pollDataChannels() {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
-    for (auto& [channel_id, channel] : channels_) {
+    for (uint32_t channel_id = 1; channel_id <= kQpNumPerChannel;
+         ++channel_id) {
+      auto channel = getChannel(channel_id);
       std::vector<CQMeta> cq_datas;
       if (channel && channel->pollOnce(cq_datas)) {
         for (auto const& cq_data : cq_datas) {
@@ -521,11 +596,6 @@ class RecvConnection : public RDMAConnection {
 
   size_t normalChannelCount() const { return RDMAConnection::channelCount(); }
 
-  std::unordered_map<uint32_t, std::shared_ptr<RDMADataChannel>> const&
-  channels() const override {
-    return RDMAConnection::channels();
-  }
-
   // Set the control channel
   template <typename T>
   void setControlChannel(T&& ctrl_channel) {
@@ -575,11 +645,12 @@ class RecvConnection : public RDMAConnection {
   bool check(uint64_t index) { return ctrl_channel_->check_done(index); }
 
   void pollAndProcessCompletions() {
-    std::shared_lock<std::shared_mutex> lock(mutex_);
     if (ctrl_channel_) {
       ctrl_channel_->noblockingPoll();
     }
-    for (auto& [channel_id, channel] : channels_) {
+    for (uint32_t channel_id = 1; channel_id <= kQpNumPerChannel;
+         ++channel_id) {
+      auto channel = getChannel(channel_id);
       if (!channel) continue;
       bool polled = false;
       std::vector<CQMeta> cq_datas;
@@ -616,7 +687,7 @@ class RecvConnection : public RDMAConnection {
     }
     LOG_EVERY_N_ENDPOINT(INFO, 100000000)
         << "RecvConnection::pollingLoop - Still running, channels: "
-        << channels_.size();
+        << normalChannelCount();
   }
 
   void pollingLoop() {
