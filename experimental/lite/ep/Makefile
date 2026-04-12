@@ -84,7 +84,9 @@ ifeq ($(PER_EXPERT_BATCHING),1)
   override NVCCFLAGS += -DPER_EXPERT_BATCHING
 endif
 
-# PCIe intranode mode (no NVLink): NUM_MAX_NVL_PEERS=1, all peers are RDMA
+# PCIe intranode mode (no NVLink): NUM_MAX_NVL_PEERS=1, all peers are RDMA.
+# On L4, GDR (nvidia_peermem) works, so the RDMA buffer is cudaMalloc (not host).
+# RDMA loopback for intra-node is faster than GPU P2P kernel writes.
 PCIE_INTRANODE ?= 1
 ifeq ($(PCIE_INTRANODE),1)
   override CXXFLAGS += -DPCIE_INTRANODE

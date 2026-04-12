@@ -1,9 +1,16 @@
 # DeepEP-Lite L4 Performance Benchmarks
 
-Low-latency mode on L4 GPUs (sm_89, PCIe Gen4 x16, no NVLink, no GDR).
+Low-latency mode on L4 GPUs (sm_89, PCIe Gen4 x16, no NVLink).
 
 **Testbed**: 2 nodes (l40/l41), 4× L4 each, 1× mlx5 400Gbps RDMA NIC per node.
-All data transfers use host-staged RDMA (`cudaMallocHost` buffers, no GPUDirect).
+
+**Key discovery**: nvidia_peermem (GDR) is available on L4. RDMA buffers are
+allocated with `cudaMalloc` on GPU VRAM, and the NIC reads/writes GPU memory
+directly via GDR. No host staging needed.
+
+Intra-node: all peers use RDMA loopback (`NUM_MAX_NVL_PEERS=1`), which is
+faster than GPU kernel P2P writes on PCIe (tested: RDMA loopback 3.7 GB/s vs
+IPC P2P 1.5 GB/s for 4-GPU).
 
 **Benchmark**: `bench/test_low_latency.py`, `num_topk=4`, `num_experts=8`, `--disable-nvlink`.
 All experiments pass correctness verification (16 configs × varying fp8/scale/hook).

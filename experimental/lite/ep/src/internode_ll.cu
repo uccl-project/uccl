@@ -276,11 +276,28 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
               false, low_latency_buffer_idx);
 #endif
         } else {
+#ifdef PER_EXPERT_BATCHING
+          // Intra-node IPC with batching: stage to local batch buffer first,
+          // then do one large P2P copy per expert after grid sync.
+          auto const slot_idx = shared_send_slots[warp_id];
+          auto const batch_buf_offset =
+              num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
+          auto const batch_buf_ptr =
+              static_cast<uint8_t*>(rdma_x) + batch_buf_offset +
+              (dst_expert_idx * num_max_dispatch_tokens_per_rank + slot_idx) *
+                  num_bytes_per_msg;
+          auto const* src_int4_ptr =
+              reinterpret_cast<int4 const*>(rdma_x_src_idx);
+          auto* batch_buf_int4_ptr = reinterpret_cast<int4*>(batch_buf_ptr);
+          UNROLLED_WARP_COPY(8, lane_id, num_int4_per_msg, batch_buf_int4_ptr,
+                             src_int4_ptr, ld_nc_global, st_na_global);
+#else
           // Intra-node: use direct memory copy via IPC
           auto const* src_int4_ptr = reinterpret_cast<int4 const*>(src_ptr);
           auto* dst_int4_ptr = reinterpret_cast<int4*>(dst_p2p_ptr);
           UNROLLED_WARP_COPY(8, lane_id, num_int4_per_msg, dst_int4_ptr,
                              src_int4_ptr, ld_nc_global, st_na_global);
+#endif
         }
         // Increase counter after finishing
         __syncwarp();
@@ -344,15 +361,13 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
   cg::this_grid().sync();
 #endif
 
-  // Batch RDMA send phase - send entire expert buffer in ONE IBGDA call
+  // Batch send phase - send entire expert buffer in ONE call
   // Each warp group handles one expert (only first sub_warp does the send)
   if (responsible_expert_idx < num_experts && sub_warp_id == 0) {
     auto const dst_rank = responsible_expert_idx / num_local_experts;
     auto const dst_expert_local_idx =
         responsible_expert_idx % num_local_experts;
 
-    // Check if this destination is inter-node (needs IBGDA batch send)
-    // IPC destinations were already sent in the token loop
     auto const test_dst_ptr = reinterpret_cast<uint64_t>(rdma_recv_x);
     auto const dst_p2p_ptr =
         ipc_rdma_base_ptrs
@@ -360,29 +375,26 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                                     dst_rank, max_nvl_peers, 0)
             : 0;
 
-    if (dst_p2p_ptr == 0) {
-      // Inter-node: batch send ALL tokens for this expert in ONE call
-      auto const num_tokens_to_send =
-          atomic_send_counter_per_expert[responsible_expert_idx];
+    auto const num_tokens_to_send =
+        atomic_send_counter_per_expert[responsible_expert_idx];
 
-      if (num_tokens_to_send > 0) {
-        auto const batch_buf_offset =
-            num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
-        // Source: start of this expert's batch buffer (contiguous)
-        auto const batch_buf_ptr =
-            static_cast<uint8_t*>(rdma_x) + batch_buf_offset +
-            responsible_expert_idx * num_max_dispatch_tokens_per_rank *
-                num_bytes_per_msg;
+    if (num_tokens_to_send > 0) {
+      auto const batch_buf_offset =
+          num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
+      auto const batch_buf_ptr =
+          static_cast<uint8_t*>(rdma_x) + batch_buf_offset +
+          responsible_expert_idx * num_max_dispatch_tokens_per_rank *
+              num_bytes_per_msg;
+      auto const dst_ptr =
+          reinterpret_cast<uint64_t>(rdma_recv_x) +
+          dst_expert_local_idx * num_ranks *
+              num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
+          rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
+      auto const total_bytes = num_tokens_to_send * num_bytes_per_msg;
+
+      if (dst_p2p_ptr == 0) {
+        // Inter-node: batch RDMA send
         auto const src_ptr = reinterpret_cast<uint64_t>(batch_buf_ptr);
-        // Destination: start of this expert's recv buffer on remote rank
-        auto const dst_ptr =
-            reinterpret_cast<uint64_t>(rdma_recv_x) +
-            dst_expert_local_idx * num_ranks *
-                num_max_dispatch_tokens_per_rank * num_bytes_per_msg +
-            rank * num_max_dispatch_tokens_per_rank * num_bytes_per_msg;
-        // Total bytes: all tokens for this expert
-        auto const total_bytes = num_tokens_to_send * num_bytes_per_msg;
-
         __threadfence_system();
 
         uccl::nvshmemi_ibgda_put_nbi_warp(
@@ -392,9 +404,18 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
             /*warp_id=*/dst_expert_local_idx,  // NOTE(Yang): for selecting rb.
             lane_id, /*slot=*/0, d2h_channel_addrs, num_d2h_channel_addrs,
             false, low_latency_buffer_idx, 0, 0, num_tokens_to_send);
+      } else {
+        // Intra-node IPC: batched P2P copy from local batch buffer to remote
+        auto const remote_dst_ptr = uccl::get_ipc_p2p_ptr(
+            dst_ptr, ipc_rdma_base_ptrs, rank, dst_rank, max_nvl_peers, 0);
+        auto const* src_int4 = reinterpret_cast<int4 const*>(batch_buf_ptr);
+        auto* dst_int4 = reinterpret_cast<int4*>(remote_dst_ptr);
+        auto const num_int4 = total_bytes / sizeof(int4);
+        for (int i = lane_id; i < num_int4; i += WARP_SIZE)
+          st_na_global(dst_int4 + i, ld_nc_global(src_int4 + i));
+        __threadfence_system();
       }
     }
-    // IPC: already sent in the token loop, nothing to do here
   }
 
   __threadfence_system();  // Ensure batch sends are visible before count sends
