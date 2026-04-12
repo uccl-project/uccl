@@ -1,0 +1,606 @@
+# ===============================================================================
+# Unified Makefile for UCCL Benchmarks and EP Runtime
+# Supports both GH200 (Grace-Hopper) and H200 with EFA environments
+#
+# Usage:
+#   make all                - Build all tests and extensions
+#   make benchmarks         - Build all benchmark tests
+#   make ep                 - Build EP runtime and Python extension
+#   make fc                 - Build flat combining test
+#   make lock               - Build lock throughput test
+#   make clean              - Remove all build artifacts
+#   make run-fc             - Run flat combining test
+#   make run-lock           - Run lock throughput test
+#   make install            - Install Python extension
+# ===============================================================================
+
+# ===============================================================================
+# Environment Detection and Configuration
+# ===============================================================================
+
+# CUDA configuration
+CUDA_PATH ?= /usr/local/cuda
+override CXX := /usr/bin/g++
+NVCC := $(CUDA_PATH)/bin/nvcc
+
+# Detect architecture
+ARCH := $(shell uname -m)
+GPU_NAME := $(shell nvidia-smi --query-gpu=name --format=csv,noheader | head -n1 2>/dev/null || echo "Unknown")
+
+# Auto-detect GPU architecture if not specified
+GPU_ARCH ?= auto
+SM ?= 90
+ifeq ($(GPU_ARCH), auto)
+    # For H200, use sm_90
+    GPU_NAME_CHECK := $(shell nvidia-smi --query-gpu=name --format=csv,noheader | head -n1 2>/dev/null)
+    ifneq (,$(findstring H200,$(GPU_NAME_CHECK)))
+        SM := 90
+    else ifneq (,$(findstring H100,$(GPU_NAME_CHECK)))
+        SM := 90
+    else ifneq (,$(findstring GH200,$(GPU_NAME_CHECK)))
+        SM := 90
+    else
+        # Fall back to detection or default to 90
+        SM := $(shell $(NVCC) --list-gpu-code 2>/dev/null | grep 'sm_' | tail -1 | sed 's/.*sm_//' || echo "90")
+    endif
+endif
+
+# Build configuration
+BUILD_TYPE ?= release
+BUILD_MODE ?= auto
+
+# ===============================================================================
+# Platform Detection
+# ===============================================================================
+
+# Detect EFA (Elastic Fabric Adapter) for H200 environment
+EFA_HOME ?= /opt/amazon/efa
+ifeq ($(wildcard $(EFA_HOME)),)
+    $(info EFA not detected, building without EFA support)
+    EFA_CFLAGS :=
+    EFA_LDFLAGS :=
+    HAS_EFA := 0
+else
+    $(info EFA detected at $(EFA_HOME), building with EFA support)
+    EFA_CFLAGS := -DEFA -I$(EFA_HOME)/include
+    EFA_LDFLAGS := -L$(EFA_HOME)/lib -lefa
+    HAS_EFA := 1
+endif
+
+# Detect GH200 (Grace-Hopper)
+CPU_IS_ARM64 := 0
+GPU_IS_HOPPER := 0
+ifeq ($(ARCH),aarch64)
+    CPU_IS_ARM64 := 1
+endif
+ifneq (,$(findstring GH200,$(GPU_NAME)))
+    GPU_IS_HOPPER := 1
+endif
+ifneq (,$(findstring H100,$(GPU_NAME)))
+    GPU_IS_HOPPER := 1
+endif
+ifneq (,$(findstring H200,$(GPU_NAME)))
+    GPU_IS_HOPPER := 1
+endif
+
+ifeq ($(and $(CPU_IS_ARM64),$(GPU_IS_HOPPER)),1)
+    GH_CFLAGS := -DUSE_GRACE_HOPPER
+    PLATFORM := gh200
+else ifeq ($(HAS_EFA),1)
+    $(info H200/EFA environment detected)
+    GH_CFLAGS :=
+    PLATFORM := h200_efa
+else
+    $(info Standard CUDA environment detected)
+    GH_CFLAGS :=
+    PLATFORM := standard
+endif
+
+# ===============================================================================
+# Python Configuration (for EP runtime)
+# ===============================================================================
+
+PYTHON ?= python3
+NANOBIND_AVAILABLE := $(shell $(PYTHON) -c "import nanobind" 2>/dev/null && echo "yes" || echo "no")
+
+ifeq ($(NANOBIND_AVAILABLE),yes)
+    NANOBIND_INCLUDES := -I$(shell $(PYTHON) -m nanobind --include_dir 2>/dev/null)
+    EXT_SUFFIX := $(shell $(PYTHON) -c "import sysconfig as s; print(s.get_config_var('EXT_SUFFIX') or '.so')")
+
+    # PyTorch configuration
+    TORCH_AVAILABLE := $(shell $(PYTHON) -c "import torch" 2>/dev/null && echo "yes" || echo "no")
+    ifeq ($(TORCH_AVAILABLE),yes)
+        TORCH_INCLUDE := $(shell $(PYTHON) -c "import torch, pathlib; p=pathlib.Path(torch.__file__).parent; print(p/'include')")
+        TORCH_INCLUDE_API := $(shell $(PYTHON) -c "import torch, pathlib; p=pathlib.Path(torch.__file__).parent; print(p/'include/torch/csrc/api/include')")
+        TORCH_LIBDIR := $(shell $(PYTHON) -c "import torch, pathlib; p=pathlib.Path(torch.__file__).parent; print(p/'lib')")
+        TORCH_ABI := $(shell $(PYTHON) -c "import torch; print(int(torch._C._GLIBCXX_USE_CXX11_ABI))")
+        TORCH_INCS := -I$(TORCH_INCLUDE) -I$(TORCH_INCLUDE_API)
+        PYTHON_SITE_PACKAGES := $(shell $(PYTHON) -c "import site; print(site.getsitepackages()[0])")
+        INSTALL_DIR := $(PYTHON_SITE_PACKAGES)/uccl
+    endif
+endif
+
+# ===============================================================================
+# Compiler Flags
+# ===============================================================================
+
+# Base C++ flags
+CXXFLAGS := -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden
+CXXFLAGS += $(EFA_CFLAGS) $(GH_CFLAGS)
+
+# Base NVCC flags
+NVCC_FLAGS := -std=c++17
+NVCC_FLAGS += -gencode arch=compute_$(SM),code=sm_$(SM)
+NVCC_FLAGS += -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden"
+NVCC_FLAGS += --expt-relaxed-constexpr
+NVCC_FLAGS += -ccbin /usr/bin/g++
+NVCC_FLAGS += $(EFA_CFLAGS) $(GH_CFLAGS)
+
+# Release vs Debug flags
+ifeq ($(BUILD_TYPE), debug)
+    CXXFLAGS += -g -O0 -DDEBUG
+    NVCC_FLAGS += -g -G -O0 -DDEBUG
+    BUILD_SUFFIX := _debug
+    $(info Building DEBUG version for $(PLATFORM))
+else
+    CXXFLAGS += -O3 -DNDEBUG
+    NVCC_FLAGS += -O3 -DNDEBUG --use_fast_math
+    BUILD_SUFFIX :=
+    $(info Building RELEASE version for $(PLATFORM) with GPU arch sm_$(SM))
+endif
+
+# Include paths
+INCLUDES := -I../include -I../src -I../../include
+INCLUDES += -Iinclude -I$(CUDA_PATH)/include -I/usr/include
+INCLUDES += -I../thirdparty/DeepEP/csrc
+INCLUDES += $(EFA_CFLAGS) $(GH_CFLAGS)
+
+# Libraries
+LIBS := -lpthread -lcuda -lcudart
+LIBS += -L$(CUDA_PATH)/lib64 -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
+
+# Add EFA libs if available
+ifeq ($(HAS_EFA),1)
+    LIBS += $(EFA_LDFLAGS) -libverbs -lnl-3 -lnl-route-3
+endif
+
+# Add glog if available
+GLOG_AVAILABLE := $(shell pkg-config --exists libglog 2>/dev/null && echo "yes" || echo "no")
+ifeq ($(GLOG_AVAILABLE),yes)
+    LIBS += 
+endif
+
+# ===============================================================================
+# Target Definitions
+# ===============================================================================
+
+# Benchmark test targets
+FC_TARGET := test_fc_throughput$(BUILD_SUFFIX)
+LOCK_TARGET := test_lock_throughput$(BUILD_SUFFIX)
+MULTI_RING_TARGET := test_multi_ring_throughput$(BUILD_SUFFIX)
+FC_LATENCY_TARGET := test_fc_latency$(BUILD_SUFFIX)
+FC_LOAD_LATENCY_TARGET := test_fc_load_latency$(BUILD_SUFFIX)
+CAS_TARGET := test_cas_throughput$(BUILD_SUFFIX)
+
+# EP runtime targets (if EFA is available)
+ifeq ($(HAS_EFA),1)
+    EP_EXT := ep$(EXT_SUFFIX)
+endif
+
+# Header dependencies
+HEADERS := $(wildcard ../include/*.h ../include/*.cuh ../include/*.hpp)
+HEADERS += $(wildcard include/*.h include/*.cuh include/*.hpp)
+
+# ===============================================================================
+# Source Files (EP Runtime)
+# ===============================================================================
+
+ifeq ($(HAS_EFA),1)
+    SRC_CPP := ../src/proxy.cpp ../src/rdma.cpp ../src/common.cpp
+    SRC_CPP += ../src/uccl_proxy.cpp
+    SRC_CPP += ../src/uccl_bench.cpp ../src/fifo.cpp
+
+    SRC_CU := ../src/bench_kernel.cu
+    SRC_CU += ../src/internode_ll.cu ../src/internode.cu ../src/layout.cu
+    SRC_CU += ../src/intranode.cu ../src/ep_runtime.cu
+
+    OBJ_CPP := $(SRC_CPP:.cpp=.o)
+    OBJ_CU := $(SRC_CU:.cu=.o)
+
+    ifeq ($(NANOBIND_AVAILABLE),yes)
+        SRC_BIND := ../src/uccl_ep.cc
+        OBJ_BIND := $(SRC_BIND:.cc=.o)
+    endif
+endif
+
+# ===============================================================================
+# Build Rules
+# ===============================================================================
+
+.DEFAULT_GOAL := all
+
+# Main targets
+ifeq ($(HAS_EFA),1)
+    ALL_TARGETS := benchmarks ep-runtime
+else
+    ALL_TARGETS := benchmarks
+endif
+
+all: $(ALL_TARGETS)
+	@echo "All targets built successfully for $(PLATFORM)"
+
+# Benchmark targets
+benchmarks: $(FC_TARGET) $(LOCK_TARGET) $(MULTI_RING_TARGET) $(CAS_TARGET)
+	@echo "Benchmark tests built successfully"
+
+# EP Runtime targets (only if EFA is available)
+ifeq ($(HAS_EFA),1)
+ep-runtime: $(EP_EXT)
+	@echo "EP runtime built successfully"
+
+ep: ep-runtime
+endif
+
+# ===============================================================================
+# Compilation Rules
+# ===============================================================================
+
+# C++ compilation rule with dependency generation
+%.o: %.cpp
+	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(NANOBIND_INCLUDES) -MMD -MP -c $< -o $@
+
+# CUDA compilation rule with dependency generation
+%.o: %.cu
+	$(NVCC) -arch=sm_$(SM) $(NVCC_FLAGS) $(TORCH_INCS) $(INCLUDES) -MMD -MP -c $< -o $@
+
+# C++ for binding
+%.o: %.cc
+	$(CXX) $(CXXFLAGS) $(TORCH_INCS) $(INCLUDES) $(NANOBIND_INCLUDES) -MMD -MP -c $< -o $@
+
+# ===============================================================================
+# Benchmark Test Build Rules
+# ===============================================================================
+
+# Flat Combining throughput test
+fc: $(FC_TARGET)
+
+$(FC_TARGET): test_fc_throughput.cu $(HEADERS)
+	@echo "Building Flat Combining throughput test..."
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $< $(LIBS)
+	@echo "Build complete: $@"
+
+# Lock throughput test
+lock: $(LOCK_TARGET)
+
+$(LOCK_TARGET): test_lock_throughput.cu $(HEADERS)
+	@echo "Building Lock throughput test..."
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $< $(LIBS)
+	@echo "Build complete: $@"
+
+# Multi Ring throughput test
+multi-ring: $(MULTI_RING_TARGET)
+
+$(MULTI_RING_TARGET): test_multi_ring_throughput.cu $(HEADERS)
+	@echo "Building Multi Ring throughput test..."
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $< $(LIBS)
+	@echo "Build complete: $@"
+
+# Flat Combining latency test
+fc-latency: $(FC_LATENCY_TARGET)
+
+$(FC_LATENCY_TARGET): test_fc_latency.cu $(HEADERS)
+	@echo "Building Flat Combining latency test..."
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $< $(LIBS)
+	@echo "Build complete: $@"
+
+# Flat Combining load-latency test
+fc-load-latency: $(FC_LOAD_LATENCY_TARGET)
+
+$(FC_LOAD_LATENCY_TARGET): test_fc_load_latency.cu $(HEADERS)
+	@echo "Building Flat Combining load-latency test..."
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $< $(LIBS)
+	@echo "Build complete: $@"
+
+# CAS throughput test
+cas: $(CAS_TARGET)
+
+$(CAS_TARGET): test_cas_throughput.cu $(HEADERS)
+	@echo "Building CAS throughput test..."
+	$(NVCC) $(NVCC_FLAGS) $(INCLUDES) -o $@ $< $(LIBS)
+	@echo "Build complete: $@"
+
+# ===============================================================================
+# EP Runtime Build Rules (only if EFA is available)
+# ===============================================================================
+
+ifeq ($(HAS_EFA),1)
+ifeq ($(NANOBIND_AVAILABLE),yes)
+ifeq ($(TORCH_AVAILABLE),yes)
+$(EP_EXT): $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND)
+	$(CXX) $(CXXFLAGS) -shared -fPIC \
+	    -D_GLIBCXX_USE_CXX11_ABI=$(TORCH_ABI) \
+	    $(INCLUDES) $(NANOBIND_INCLUDES) $^ \
+	    -L$(TORCH_LIBDIR) -Wl,-rpath,$(TORCH_LIBDIR) \
+	    -ltorch_python -ltorch -ltorch_cpu -ltorch_cuda -lc10 -lc10_cuda \
+	    $(LIBS) -o $@
+
+py: $(EP_EXT)
+	@echo "Python extension built: $(EP_EXT)"
+
+install: $(EP_EXT)
+	@mkdir -p $(INSTALL_DIR)
+	@cp $(EP_EXT) $(INSTALL_DIR)/
+	@echo "Installation complete. Module installed to: $(INSTALL_DIR)/$(EP_EXT)"
+else
+$(EP_EXT):
+	@echo "PyTorch not found. Skipping Python extension build."
+
+py:
+	@echo "PyTorch not found. Cannot build Python extension."
+
+install:
+	@echo "PyTorch not found. Cannot install Python extension."
+endif
+else
+$(EP_EXT):
+	@echo "nanobind not found. Skipping Python extension build."
+
+py:
+	@echo "nanobind not found. Cannot build Python extension."
+
+install:
+	@echo "nanobind not found. Cannot install Python extension."
+endif
+endif
+
+# ===============================================================================
+# Run Rules
+# ===============================================================================
+
+# Run flat combining test
+run-fc: $(FC_TARGET)
+	@echo "Running Flat Combining throughput test..."
+	@echo "================================="
+	./$(FC_TARGET)
+
+# Run lock throughput test
+run-lock: $(LOCK_TARGET)
+	@echo "Running Lock throughput test..."
+	@echo "================================="
+	./$(LOCK_TARGET)
+
+# Run multi ring throughput test
+run-multi-ring: $(MULTI_RING_TARGET)
+	@echo "Running Multi Ring throughput test..."
+	@echo "================================="
+	./$(MULTI_RING_TARGET)
+
+# Run flat combining latency test
+run-fc-latency: $(FC_LATENCY_TARGET)
+	@echo "Running Flat Combining latency test..."
+	@echo "====================================="
+	./$(FC_LATENCY_TARGET)
+
+# Run flat combining load-latency test
+run-fc-load-latency: $(FC_LOAD_LATENCY_TARGET)
+	@echo "Running Flat Combining load-latency test..."
+	@echo "=========================================="
+	./$(FC_LOAD_LATENCY_TARGET)
+
+# Run CAS throughput test
+run-cas: $(CAS_TARGET)
+	@echo "Running CAS throughput test..."
+	@echo "=============================="
+	./$(CAS_TARGET)
+
+# Quick test - run main benchmarks with minimal config
+quick: $(FC_TARGET) $(LOCK_TARGET)
+	@echo "Quick test - Flat Combining:"
+	./$(FC_TARGET) | head -20
+	@echo ""
+	@echo "Quick test - Lock Throughput:"
+	./$(LOCK_TARGET) | head -30
+
+# Benchmark suite
+benchmark: benchmarks
+	@echo "Running complete benchmark suite..."
+	@echo "==================================="
+	@echo "\n--- Platform: $(PLATFORM) ---"
+	@echo "\n--- Flat Combining Throughput ---"
+	./$(FC_TARGET)
+	@echo "\n--- Lock Throughput ---"
+	./$(LOCK_TARGET)
+	@echo "\n--- Multi Ring Throughput ---"
+	./$(MULTI_RING_TARGET)
+
+# ===============================================================================
+# Analysis and Profiling
+# ===============================================================================
+
+# Memory check
+memcheck-fc: $(FC_TARGET)
+	@echo "Running memory check on Flat Combining test..."
+	@if command -v compute-sanitizer >/dev/null 2>&1; then \
+		compute-sanitizer --tool memcheck ./$(FC_TARGET); \
+	elif command -v cuda-memcheck >/dev/null 2>&1; then \
+		cuda-memcheck --tool memcheck --leak-check full ./$(FC_TARGET); \
+	else \
+		echo "No CUDA memory checker found."; \
+	fi
+
+memcheck-lock: $(LOCK_TARGET)
+	@echo "Running memory check on Lock test..."
+	@if command -v compute-sanitizer >/dev/null 2>&1; then \
+		compute-sanitizer --tool memcheck ./$(LOCK_TARGET); \
+	elif command -v cuda-memcheck >/dev/null 2>&1; then \
+		cuda-memcheck --tool memcheck --leak-check full ./$(LOCK_TARGET); \
+	else \
+		echo "No CUDA memory checker found."; \
+	fi
+
+# Profile with Nsight Compute
+profile-fc: $(FC_TARGET)
+	@echo "Profiling Flat Combining test..."
+	@if command -v ncu >/dev/null 2>&1; then \
+		ncu --target-processes all --force-overwrite --export profile_fc ./$(FC_TARGET); \
+		echo "Profile saved to profile_fc.ncu-rep"; \
+	else \
+		echo "Nsight Compute (ncu) not found."; \
+	fi
+
+profile-lock: $(LOCK_TARGET)
+	@echo "Profiling Lock test..."
+	@if command -v ncu >/dev/null 2>&1; then \
+		ncu --target-processes all --force-overwrite --export profile_lock ./$(LOCK_TARGET); \
+		echo "Profile saved to profile_lock.ncu-rep"; \
+	else \
+		echo "Nsight Compute (ncu) not found."; \
+	fi
+
+# ===============================================================================
+# Utility Rules
+# ===============================================================================
+
+# Print build information
+info:
+	@echo "Build Configuration:"
+	@echo "  Platform: $(PLATFORM)"
+	@echo "  CUDA_PATH: $(CUDA_PATH)"
+	@echo "  GPU_ARCH: sm_$(SM)"
+	@echo "  BUILD_TYPE: $(BUILD_TYPE)"
+	@echo "  Features:"
+	@echo "    EFA Support: $(HAS_EFA)"
+	@echo "    Grace-Hopper: $(if $(findstring GRACE,$(GH_CFLAGS)),yes,no)"
+	@echo "    Python Support: $(NANOBIND_AVAILABLE)"
+	@echo "    PyTorch Support: $(TORCH_AVAILABLE)"
+	@echo "  Benchmark Targets:"
+	@echo "    Flat Combining: $(FC_TARGET)"
+	@echo "    Lock Throughput: $(LOCK_TARGET)"
+	@echo "    Multi Ring: $(MULTI_RING_TARGET)"
+ifeq ($(HAS_EFA),1)
+	@echo "  EP Runtime Targets:"
+	@echo "    Python Extension: $(EP_EXT)"
+endif
+	@echo "  NVCC_FLAGS: $(NVCC_FLAGS)"
+	@echo "  CXXFLAGS: $(CXXFLAGS)"
+
+# Check dependencies
+check-deps:
+	@echo "Checking dependencies..."
+	@command -v $(NVCC) >/dev/null 2>&1 || { echo "NVCC not found at $(NVCC)"; exit 1; }
+	@echo "NVCC version:"
+	@$(NVCC) --version | head -4
+	@echo ""
+	@echo "GPU information:"
+	@nvidia-smi -L 2>/dev/null || echo "nvidia-smi not available"
+	@echo ""
+	@echo "Platform detection:"
+	@echo "  Architecture: $(ARCH)"
+	@echo "  GPU Name: $(GPU_NAME)"
+	@echo "  Platform: $(PLATFORM)"
+	@echo ""
+	@echo "Optional dependencies:"
+	@echo -n "  EFA: "; if [ -d "$(EFA_HOME)" ]; then echo "Found at $(EFA_HOME)"; else echo "Not found"; fi
+	@echo -n "  glog: "; if [ "$(GLOG_AVAILABLE)" = "yes" ]; then echo "Found"; else echo "Not found"; fi
+	@echo -n "  Python: "; command -v $(PYTHON) >/dev/null 2>&1 && $(PYTHON) --version || echo "Not found"
+	@echo -n "  nanobind: "; echo "$(NANOBIND_AVAILABLE)"
+	@echo -n "  PyTorch: "; echo "$(TORCH_AVAILABLE)"
+
+# Clean build artifacts
+clean:
+	@echo "Cleaning build artifacts..."
+	# Clean benchmark test targets
+	rm -f $(FC_TARGET) $(LOCK_TARGET) $(MULTI_RING_TARGET)
+	rm -f $(FC_LATENCY_TARGET) $(FC_LOAD_LATENCY_TARGET) $(CAS_TARGET)
+	rm -f test_fc_throughput test_fc_throughput_debug
+	rm -f test_lock_throughput test_lock_throughput_debug
+	rm -f test_multi_ring_throughput test_multi_ring_throughput_debug
+	rm -f test_fc_latency test_fc_latency_debug
+	rm -f test_fc_load_latency test_fc_load_latency_debug
+	rm -f test_cas_throughput test_cas_throughput_debug
+	# Clean EP runtime targets
+ifeq ($(HAS_EFA),1)
+	rm -f $(EP_EXT)
+	rm -f $(OBJ_CPP) $(OBJ_CU) $(OBJ_BIND)
+	rm -f ../src/*.o ../src/*.d
+endif
+	# Clean profiling and debug files
+	rm -f *.ncu-rep
+	rm -f core.*
+	rm -f *.d
+	@echo "Clean complete."
+
+# Help
+help:
+	@echo "Unified UCCL Makefile - Platform: $(PLATFORM)"
+	@echo ""
+	@echo "Available targets:"
+	@echo "  all              - Build all available tests and extensions"
+	@echo "  benchmarks       - Build all benchmark tests"
+ifeq ($(HAS_EFA),1)
+	@echo "  ep-runtime       - Build EP runtime and benchmarks (EFA required)"
+	@echo "  py               - Build Python extension (requires nanobind and PyTorch)"
+endif
+	@echo ""
+	@echo "Individual benchmark targets:"
+	@echo "  fc               - Build flat combining throughput test"
+	@echo "  lock             - Build lock throughput test"
+	@echo "  multi-ring       - Build multi-ring throughput test"
+	@echo "  fc-latency       - Build flat combining latency test"
+	@echo "  fc-load-latency  - Build flat combining load-latency test"
+	@echo "  cas              - Build CAS throughput test"
+	@echo ""
+	@echo "Run targets:"
+	@echo "  run-fc           - Run flat combining test"
+	@echo "  run-lock         - Run lock throughput test"
+	@echo "  run-multi-ring   - Run multi-ring test"
+	@echo "  run-fc-latency   - Run flat combining latency test"
+	@echo "  run-fc-load-latency - Run flat combining load-latency test"
+	@echo "  run-cas          - Run CAS throughput test"
+	@echo "  quick            - Quick test of main benchmarks"
+	@echo "  benchmark        - Run complete benchmark suite"
+	@echo ""
+	@echo "Analysis targets:"
+	@echo "  memcheck-fc      - Memory check flat combining test"
+	@echo "  memcheck-lock    - Memory check lock test"
+	@echo "  profile-fc       - Profile flat combining test"
+	@echo "  profile-lock     - Profile lock test"
+	@echo ""
+	@echo "Utility targets:"
+ifeq ($(HAS_EFA),1)
+	@echo "  install          - Install Python extension"
+endif
+	@echo "  info             - Print build configuration"
+	@echo "  check-deps       - Check build dependencies"
+	@echo "  clean            - Remove build artifacts"
+	@echo "  help             - Show this help message"
+	@echo ""
+	@echo "Environment variables:"
+	@echo "  GPU_ARCH/SM      - Target GPU architecture (default: auto-detect)"
+	@echo "  BUILD_TYPE       - Build type: release or debug (default: release)"
+	@echo "  CUDA_PATH        - Path to CUDA installation (default: /usr/local/cuda)"
+	@echo "  EFA_HOME         - Path to EFA installation (default: /opt/amazon/efa)"
+	@echo "  PYTHON           - Python interpreter (default: python3)"
+
+# ===============================================================================
+# Dependency Management
+# ===============================================================================
+
+# Automatically include dependency files if they exist
+ifeq ($(HAS_EFA),1)
+    DEPS := $(OBJ_CPP:.o=.d) $(OBJ_CU:.o=.d)
+    ifneq ($(NANOBIND_AVAILABLE),no)
+        DEPS += $(OBJ_BIND:.o=.d)
+    endif
+    -include $(DEPS)
+endif
+
+# ===============================================================================
+# Phony targets
+# ===============================================================================
+.PHONY: all benchmarks ep-runtime ep py
+.PHONY: fc lock multi-ring fc-latency fc-load-latency cas
+.PHONY: run-fc run-lock run-multi-ring run-fc-latency run-fc-load-latency run-cas
+.PHONY: quick benchmark
+.PHONY: memcheck-fc memcheck-lock profile-fc profile-lock
+.PHONY: install info check-deps clean help
