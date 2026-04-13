@@ -232,16 +232,17 @@ DISPATCH_OBJ := uccl_p2p_dispatch.o
 HAS_EFA  := $(shell test -f $(EFA_HOME)/include/infiniband/efadv.h && echo 1 || echo 0)
 HAS_NCCL := $(shell echo '\#include <nccl.h>' | $(CXX) -x c++ -E - >/dev/null 2>&1 && echo 1 || echo 0)
 
-TRANSPORT_TARGETS := dispatch-lib transport-rdma
+TRANSPORT_TARGETS := dispatch-lib
 ifeq ($(HAS_EFA),1)
 TRANSPORT_TARGETS += transport-efa
 endif
 ifeq ($(HAS_NCCL),1)
 TRANSPORT_TARGETS += transport-tcp transport-tcpx
 endif
+# RDMA last so its .o files remain for the default make install
+TRANSPORT_TARGETS += transport-rdma
 
 all-transport: $(TRANSPORT_TARGETS)
-	@$(MAKE) clean-backend
 	@echo "Built transports: $(TRANSPORT_TARGETS)"
 
 # Thin dispatcher (dlopen-based, no transport code).
