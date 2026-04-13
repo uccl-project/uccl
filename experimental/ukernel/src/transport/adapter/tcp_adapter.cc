@@ -254,6 +254,7 @@ unsigned TcpTransportAdapter::send_async(int peer_rank, void* local_ptr,
                                          BounceBufferProvider bounce_provider) {
   (void)local_mr_id;
   (void)remote_hint;
+  if (!has_peer(peer_rank) || local_ptr == nullptr || len == 0) return 0;
 
   void* send_ptr = local_ptr;
   if (bounce_provider) {
@@ -283,6 +284,7 @@ unsigned TcpTransportAdapter::recv_async(int peer_rank, void* local_ptr,
                                          size_t len, uint64_t local_mr_id,
                                          BounceBufferProvider bounce_provider) {
   (void)local_mr_id;
+  if (!has_peer(peer_rank) || local_ptr == nullptr || len == 0) return 0;
   void* recv_ptr = local_ptr;
   if (bounce_provider) {
     BounceBufferInfo info = bounce_provider(len);
