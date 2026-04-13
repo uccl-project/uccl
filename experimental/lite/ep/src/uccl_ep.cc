@@ -14,6 +14,7 @@
 #include "layout.hpp"
 #include "rdma.hpp"
 #include "ring_buffer.cuh"
+#include "shared_buffer.hpp"
 #include "uccl_bench.hpp"
 #include "uccl_proxy.hpp"
 #include <nanobind/nanobind.h>
@@ -45,6 +46,11 @@ std::unordered_map<int, std::vector<nb::object>>& proxies_by_dev() {
 namespace nb = nanobind;
 
 static std::mutex g_proxies_mu;
+
+// Global registry for shared buffers (one per device, keyed by device_index).
+static std::mutex g_shared_bufs_mu;
+static std::unordered_map<int, SharedBuffer> g_shared_rdma_bufs;
+static std::unordered_map<int, SharedBuffer> g_shared_atomic_bufs;
 
 struct EventOverlap {};
 struct Ctx {
@@ -258,7 +264,9 @@ std::tuple<nb::object, bool> allocate_rdma_buffer_dlpack(
   CUDA_CHECK(cudaMalloc(&ptr, alloc_bytes));
   CUDA_CHECK(cudaMemset(ptr, 0, alloc_bytes));
 #else
-  bool const use_host_alloc = !can_register_gpu_memory_for_rdma(device_index, alloc_bytes);
+  bool const force_no_gdr = (std::getenv("UCCL_FORCE_NO_GDR") != nullptr);
+  bool const use_host_alloc = force_no_gdr ||
+                     !can_register_gpu_memory_for_rdma(device_index, alloc_bytes);
   if (!use_host_alloc) {
     CUDA_CHECK(cudaMalloc(&ptr, alloc_bytes));
     CUDA_CHECK(cudaMemset(ptr, 0, alloc_bytes));
@@ -1739,6 +1747,7 @@ NB_MODULE(ep, m) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__) || defined(EFA)
         return true;
 #else
+        if (std::getenv("UCCL_FORCE_NO_GDR")) return false;
         CUDA_CHECK(cudaSetDevice(device_index));
         return can_register_gpu_memory_for_rdma(device_index, num_bytes);
 #endif
@@ -1755,6 +1764,7 @@ NB_MODULE(ep, m) {
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__) || defined(EFA)
         return false;
 #else
+        if (std::getenv("UCCL_FORCE_NO_GDR")) return true;
         CUDA_CHECK(cudaSetDevice(device_index));
         return !can_register_gpu_memory_for_rdma(device_index, num_bytes);
 #endif
@@ -1764,6 +1774,75 @@ NB_MODULE(ep, m) {
         Return whether the main RDMA scratch buffer should be host allocated
         for this device and buffer size.
       )doc");
+
+  // ---------- Shared-memory buffer allocation for intra-node ----------------
+  m.def(
+      "allocate_shared_rdma_buffer",
+      [](std::size_t per_rank_bytes, int local_rank, int local_world_size,
+         int device_index) -> nb::tuple {
+        SharedBuffer sb = allocate_shared_buffer(
+            "rdma", per_rank_bytes, local_rank, local_world_size, device_index);
+        uintptr_t host_ptr = reinterpret_cast<uintptr_t>(sb.mmap_ptr);
+        uintptr_t dev_ptr = reinterpret_cast<uintptr_t>(sb.device_ptr);
+        uintptr_t my_dev_ptr = reinterpret_cast<uintptr_t>(sb.my_device_ptr());
+        {
+          std::lock_guard<std::mutex> lk(g_shared_bufs_mu);
+          g_shared_rdma_bufs[device_index] = sb;
+        }
+        return nb::make_tuple(host_ptr, dev_ptr, my_dev_ptr, sb.total_size,
+                              sb.per_rank_size);
+      },
+      nb::arg("per_rank_bytes"), nb::arg("local_rank"),
+      nb::arg("local_world_size"), nb::arg("device_index"),
+      R"doc(
+        Allocate a POSIX shared-memory RDMA buffer for intra-node transfers.
+        Returns (host_ptr, dev_ptr, my_dev_ptr, total_size, per_rank_size).
+      )doc");
+
+  m.def(
+      "allocate_shared_atomic_buffer",
+      [](std::size_t per_rank_bytes, int local_rank, int local_world_size,
+         int device_index) -> nb::tuple {
+        SharedBuffer sb = allocate_shared_buffer(
+            "atomic", per_rank_bytes, local_rank, local_world_size,
+            device_index);
+        uintptr_t host_ptr = reinterpret_cast<uintptr_t>(sb.mmap_ptr);
+        uintptr_t dev_ptr = reinterpret_cast<uintptr_t>(sb.device_ptr);
+        uintptr_t my_dev_ptr = reinterpret_cast<uintptr_t>(sb.my_device_ptr());
+        {
+          std::lock_guard<std::mutex> lk(g_shared_bufs_mu);
+          g_shared_atomic_bufs[device_index] = sb;
+        }
+        return nb::make_tuple(host_ptr, dev_ptr, my_dev_ptr, sb.total_size,
+                              sb.per_rank_size);
+      },
+      nb::arg("per_rank_bytes"), nb::arg("local_rank"),
+      nb::arg("local_world_size"), nb::arg("device_index"),
+      R"doc(
+        Allocate a POSIX shared-memory atomic buffer for intra-node signaling.
+        Returns (host_ptr, dev_ptr, my_dev_ptr, total_size, per_rank_size).
+      )doc");
+
+  m.def(
+      "free_shared_buffers",
+      [](int device_index) {
+        std::lock_guard<std::mutex> lk(g_shared_bufs_mu);
+        if (auto it = g_shared_rdma_bufs.find(device_index);
+            it != g_shared_rdma_bufs.end()) {
+          free_shared_buffer(it->second);
+          g_shared_rdma_bufs.erase(it);
+        }
+        if (auto it = g_shared_atomic_bufs.find(device_index);
+            it != g_shared_atomic_bufs.end()) {
+          free_shared_buffer(it->second);
+          g_shared_atomic_bufs.erase(it);
+        }
+      },
+      nb::arg("device_index"),
+      R"doc(
+        Free shared RDMA and atomic buffers for the given device.
+      )doc");
+
 
   nb::class_<EventHandle>(m, "EventHandle")
       .def(nb::init<>())
@@ -2209,13 +2288,18 @@ NB_MODULE(ep, m) {
   nb::class_<Stats>(m, "Stats");
   nb::class_<UcclProxy>(m, "Proxy")
       .def(nb::init<int, uintptr_t, size_t, int, int, int, int, int, int, bool,
-                    bool, bool>(),
+                    bool, bool, uintptr_t, size_t, uintptr_t, size_t, int>(),
            nb::arg("thread_idx"), nb::arg("gpu_buffer_addr"),
            nb::arg("total_size"), nb::arg("rank") = 0, nb::arg("node_idx") = -1,
            nb::arg("local_rank") = 0, nb::arg("num_experts") = -1,
            nb::arg("num_ranks") = -1, nb::arg("num_nodes") = 0,
            nb::arg("use_normal_mode") = false, nb::arg("is_intranode") = false,
-           nb::arg("gpu_buffer_is_host_allocated") = false)
+           nb::arg("gpu_buffer_is_host_allocated") = false,
+           nb::arg("shared_rdma_base") = 0,
+           nb::arg("shared_rdma_per_rank") = 0,
+           nb::arg("shared_atomic_base") = 0,
+           nb::arg("shared_atomic_per_rank") = 0,
+           nb::arg("local_world_size") = 0)
       .def("start_sender", &UcclProxy::start_sender)
       .def("start_remote", &UcclProxy::start_remote)
       .def("start_local", &UcclProxy::start_local)

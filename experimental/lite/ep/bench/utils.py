@@ -530,6 +530,8 @@ def initialize_uccl(
     is_intranode=False,
     use_normal_mode=False,
     rdma_buffer_is_host_allocated=False,
+    shared_rdma_host_base=0,
+    shared_rdma_per_rank=0,
 ):
     try:
         for shm_file in glob.glob("/dev/shm/uccl_barrier_*"):
@@ -574,13 +576,34 @@ def initialize_uccl(
         if world_size % effective_nproc != 0:
             raise ValueError("WORLD_SIZE must be divisible by effective nproc_per_node")
 
-    proxies = []
-
     # Calculate num_nodes from num_ranks and effective nproc
     if effective_nproc > 0:
         num_nodes = num_ranks // effective_nproc
     else:
         num_nodes = num_ranks  # Fallback: assume each rank is on a different node
+
+    # --- Shared-memory atomic buffer for intra-node signaling ---
+    shared_atomic_base = 0
+    shared_atomic_per_rank = 0
+    local_world_size = nproc_per_node
+    use_shared = (shared_rdma_host_base != 0)
+
+    # Shared atomics are needed for shared-memory intra-node signaling.
+    if use_shared and local_world_size > 1:
+        device_index = local_rank
+        atomic_buf_size = 128 * 1024  # kAtomicBufferSize = 128 KiB
+        shared_atomic_base, _, _, _, shared_atomic_per_rank = (
+            ep.allocate_shared_atomic_buffer(
+                atomic_buf_size, local_rank, local_world_size, device_index
+            )
+        )
+        print(
+            f"[rank {rank}] Shared atomic buf: base=0x{shared_atomic_base:x} "
+            f"per_rank={shared_atomic_per_rank}",
+            flush=True,
+        )
+
+    proxies = []
 
     for i in range(ep.get_num_proxy_threads()):
         # gpu_buffer_addr expects an int (pointer), not a Tensor
@@ -598,6 +621,11 @@ def initialize_uccl(
             use_normal_mode=use_normal_mode,
             is_intranode=is_intranode,
             gpu_buffer_is_host_allocated=rdma_buffer_is_host_allocated,
+            shared_rdma_base=shared_rdma_host_base,
+            shared_rdma_per_rank=shared_rdma_per_rank,
+            shared_atomic_base=shared_atomic_base,
+            shared_atomic_per_rank=shared_atomic_per_rank,
+            local_world_size=local_world_size,
         )
         proxies.append(proxy)
 
@@ -655,6 +683,10 @@ def destroy_uccl(proxies, workers):
         pass
     try:
         ep.unregister_proxy(device_index)
+    except Exception:
+        pass
+    try:
+        ep.free_shared_buffers(device_index)
     except Exception:
         pass
     try:

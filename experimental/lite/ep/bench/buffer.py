@@ -91,7 +91,28 @@ class Buffer:
         else:
             device_index = torch.cuda.current_device()
 
-        if hasattr(ep, "get_rdma_buffer"):
+        local_world_size = int(os.environ.get("LOCAL_WORLD_SIZE", "1"))
+        use_shared_buffer = (local_world_size > 1 and not is_intranode)
+
+        if use_shared_buffer and num_rdma_bytes > 0:
+            # Shared-memory RDMA buffer: all local ranks share one POSIX shm region.
+            # The proxy's gpu_buffer is this rank's slice in the shared region.
+            # The kernel's rdma_buffer_ptr is the device-mapped pointer of the same slice.
+            # This enables intra-node memcpy (no RDMA loopback) while inter-node uses RDMA.
+            (shm_host_base, shm_dev_base, shm_my_dev, shm_total,
+             shm_per_rank) = ep.allocate_shared_rdma_buffer(
+                num_rdma_bytes, device_index, local_world_size, device_index
+            )
+            rdma_buffer_ptr = shm_host_base + device_index * shm_per_rank
+            rdma_buffer_is_host_allocated = True
+            # Keep a torch Tensor alive so Python GC doesn't reclaim underlying memory.
+            # The actual memory is POSIX shm, not PyTorch-managed, but we need rdma_buffer_ptr
+            # to be passed consistently to the proxy and kernel.
+            self.scratch = torch.zeros(1, dtype=torch.uint8, device=f"cuda:{device_index}")
+            self._shared_rdma_host_base = shm_host_base
+            self._shared_rdma_dev_base = shm_dev_base
+            self._shared_rdma_my_dev = shm_my_dev
+        elif hasattr(ep, "get_rdma_buffer"):
             # Allocate outside PyTorch's CUDA allocator so RDMA/IPC sees a raw
             # cudaMalloc/cudaMallocHost-style allocation instead of a possibly
             # segmented caching-allocator mapping.
@@ -129,7 +150,11 @@ class Buffer:
                     device=f"cuda:{device_index}",
                 )
 
-        rdma_buffer_ptr = self.scratch.data_ptr()
+        rdma_buffer_ptr = self.scratch.data_ptr() if not use_shared_buffer else (
+            self._shared_rdma_host_base + device_index * shm_per_rank
+        )
+        shared_rdma_host_base = self._shared_rdma_host_base if use_shared_buffer else 0
+        shared_rdma_per_rank_val = shm_per_rank if use_shared_buffer else 0
         self.proxies, self.workers = initialize_uccl(
             rdma_buffer_ptr,
             num_rdma_bytes,
@@ -139,6 +164,8 @@ class Buffer:
             use_normal_mode=not low_latency_mode,
             is_intranode=is_intranode,
             rdma_buffer_is_host_allocated=rdma_buffer_is_host_allocated,
+            shared_rdma_host_base=shared_rdma_host_base,
+            shared_rdma_per_rank=shared_rdma_per_rank_val,
         )
         check_nvlink_connections(group)
 

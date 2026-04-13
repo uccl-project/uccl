@@ -12,6 +12,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <cuda_runtime.h>
 
 #ifndef USE_SUBSET_BARRIER
 static std::string shm_name_for_barrier(std::string const& ip, int thread_idx) {
@@ -269,11 +270,9 @@ void Proxy::init_common() {
     c.atomic_old_values_mr = ctx_.atomic_old_values_mr;
 
     if (peer == my_rank) continue;
-    // Skip rdma connection for intra-node (unless PCIE_INTRANODE where all
-    // same-node peers use loopback RDMA instead of NVLink/P2P).
-#ifndef PCIE_INTRANODE
+    // Skip RDMA connection for intra-node peers when using shared-memory
+    // intra-node path, or when NVLink/P2P is available (non-PCIE_INTRANODE).
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
-#endif
     if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
       continue;
     create_per_thread_qp(c, cfg_.gpu_buffer, cfg_.total_size,
@@ -287,11 +286,7 @@ void Proxy::init_common() {
   // Out-of-band exchange info per pair: start receiver thread first
   int num_expected_conns = 0;
   for (int peer = 0; peer < num_ranks; ++peer) {
-#ifdef PCIE_INTRANODE
-    if (peer == my_rank) continue;
-#else
     if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip) continue;
-#endif
     if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0) continue;
     ++num_expected_conns;
   }
@@ -306,11 +301,7 @@ void Proxy::init_common() {
 
   // Then send our info to all peers
   for (int peer = 0; peer < num_ranks; ++peer) {
-#ifdef PCIE_INTRANODE
-    if (peer == my_rank ||
-#else
     if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-#endif
         (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
       continue;
     char const* peer_ip = peers_[peer].ip.c_str();
@@ -324,11 +315,7 @@ void Proxy::init_common() {
 
   // Verify remote info correctness
   for (int peer = 0; peer < num_ranks; ++peer) {
-#ifdef PCIE_INTRANODE
-    if (peer == my_rank ||
-#else
     if (peer == my_rank || peers_[peer].ip == peers_[my_rank].ip ||
-#endif
         (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0))
       continue;
     if (remote_infos_[peer].addr != peers_[peer].ptr) {
@@ -344,10 +331,7 @@ void Proxy::init_common() {
   // Bring each per-peer QP to RTR/RTS
   for (int peer = 0; peer < num_ranks; ++peer) {
     if (peer == my_rank) continue;
-    // Skip rdma connection for intra-node (unless PCIE_INTRANODE).
-#ifndef PCIE_INTRANODE
     if (peers_[peer].ip == peers_[my_rank].ip) continue;
-#endif
     if (cfg_.use_normal_mode && std::abs(peer - my_rank) % MAX_NUM_GPUS != 0)
       continue;
     auto& c = *ctxs_for_all_ranks_[peer];
@@ -524,9 +508,7 @@ void Proxy::run_dual() {
   init_common();
   for (int peer = 0; peer < (int)ctxs_for_all_ranks_.size(); ++peer) {
     if (peer == cfg_.rank) continue;
-#ifndef PCIE_INTRANODE
     if (peers_[peer].ip == peers_[cfg_.rank].ip) continue;
-#endif
     if (cfg_.use_normal_mode && std::abs(peer - cfg_.rank) % MAX_NUM_GPUS != 0)
       continue;
     auto& ctx_ptr = ctxs_for_all_ranks_[peer];
@@ -740,7 +722,10 @@ void Proxy::post_gpu_command(uint64_t& my_tail, size_t& seen) {
           cudaDeviceSynchronize();
           std::abort();
         }
-        if (peers_[cmd_entry.dst_rank].ip == peers_[cfg_.rank].ip) {
+        // In shared-memory mode, intra-node commands are expected and routed
+        // in post_gpu_commands_mixed.  Only abort when no intra-node handler.
+        if (cfg_.shared_rdma_base == nullptr &&
+            peers_[cmd_entry.dst_rank].ip == peers_[cfg_.rank].ip) {
           fprintf(
               stderr,
               "[ERROR] Intra-node command!, cmd.dst_rank: %d, cfg_.rank: %d, "
@@ -890,13 +875,38 @@ void Proxy::run_local() {
 void Proxy::post_gpu_commands_mixed(
     std::vector<uint64_t> const& wrs_to_post,
     std::vector<TransferCmd> const& cmds_to_post) {
-  // Separate atomic operations from regular RDMA writes
+  // Separate atomic operations from regular RDMA writes.
+  // Also separate intra-node commands (P2P DMA or shared-memory memcpy) from
+  // inter-node (RDMA).
   std::vector<uint64_t> rdma_wrs, atomic_wrs, quiet_wrs, barrier_wrs;
   std::vector<TransferCmd> rdma_cmds, atomic_cmds, quiet_cmds, barrier_cmds;
 
+  // Intra-node commands (handled via P2P DMA or shared-memory memcpy).
+  std::vector<uint64_t> shm_write_wrs, shm_atomic_wrs;
+  std::vector<TransferCmd> shm_write_cmds, shm_atomic_cmds;
+
+  bool const use_intranode = (cfg_.shared_rdma_base != nullptr);
+
   for (size_t i = 0; i < cmds_to_post.size(); ++i) {
-    switch (get_base_cmd(cmds_to_post[i].cmd_type)) {
+    auto base_cmd = get_base_cmd(cmds_to_post[i].cmd_type);
+
+    // Check if this command targets an intra-node peer.
+    bool is_intra = false;
+    if (use_intranode && (base_cmd == CmdType::WRITE || base_cmd == CmdType::ATOMIC)) {
+      int dst = static_cast<int>(cmds_to_post[i].dst_rank);
+      if (dst != cfg_.rank && dst < (int)peers_.size() &&
+          peers_[dst].ip == peers_[cfg_.rank].ip) {
+        is_intra = true;
+      }
+    }
+
+    switch (base_cmd) {
       case (CmdType::ATOMIC): {
+        if (is_intra) {
+          shm_atomic_wrs.push_back(wrs_to_post[i]);
+          shm_atomic_cmds.push_back(cmds_to_post[i]);
+          break;
+        }
 #ifdef USE_SENDER_BARRIER
         if (!cfg_.use_normal_mode) {
           int value = cmds_to_post[i].value;
@@ -956,8 +966,13 @@ void Proxy::post_gpu_commands_mixed(
         break;
       }
       case (CmdType::WRITE): {
-        rdma_wrs.push_back(wrs_to_post[i]);
-        rdma_cmds.push_back(cmds_to_post[i]);
+        if (is_intra) {
+          shm_write_wrs.push_back(wrs_to_post[i]);
+          shm_write_cmds.push_back(cmds_to_post[i]);
+        } else {
+          rdma_wrs.push_back(wrs_to_post[i]);
+          rdma_cmds.push_back(cmds_to_post[i]);
+        }
         break;
       }
       case (CmdType::QUIET): {
@@ -978,9 +993,58 @@ void Proxy::post_gpu_commands_mixed(
     }
   }
   if (rdma_wrs.size() + atomic_wrs.size() + barrier_cmds.size() +
-          quiet_cmds.size() ==
+          quiet_cmds.size() + shm_write_wrs.size() + shm_atomic_wrs.size() ==
       0) {
     return;
+  }
+
+  // --- Intra-node: shared-memory memcpy for WRITE commands ------
+  if (!shm_write_cmds.empty()) {
+    bool const is_ll = !cfg_.use_normal_mode;
+    for (size_t i = 0; i < shm_write_cmds.size(); ++i) {
+      auto const& cmd = shm_write_cmds[i];
+      int dst_rank = static_cast<int>(cmd.dst_rank);
+      int dst_local_rank = dst_rank % cfg_.local_world_size;
+      uint64_t loff = decode_write_offset(cmd.req_lptr, is_ll);
+      uint64_t roff = decode_write_offset(cmd.req_rptr, is_ll);
+      void* src = static_cast<uint8_t*>(cfg_.shared_rdma_base) +
+                  cfg_.local_rank * cfg_.shared_rdma_per_rank + loff;
+      void* dst = static_cast<uint8_t*>(cfg_.shared_rdma_base) +
+                  dst_local_rank * cfg_.shared_rdma_per_rank + roff;
+      std::memcpy(dst, src, cmd.bytes);
+      acked_wrs_.insert(shm_write_wrs[i]);
+    }
+    shm_write_wrs.clear();
+    shm_write_cmds.clear();
+  }
+
+  // --- Intra-node: shared-memory atomic write for ATOMIC commands ---------
+  if (!shm_atomic_cmds.empty()) {
+    for (size_t i = 0; i < shm_atomic_cmds.size(); ++i) {
+      auto const& cmd = shm_atomic_cmds[i];
+      int dst_rank = static_cast<int>(cmd.dst_rank);
+      int dst_local_rank = dst_rank % cfg_.local_world_size;
+
+      int v = static_cast<int>(cmd.value);
+      bool const is_combine = get_is_combine(cmd.cmd_type);
+      if (is_combine) v = 1;
+      if (v == kLargeAtomicValue) v = kMaxSendAtomicValue;
+      int64_t v64 = static_cast<int64_t>(static_cast<int32_t>(v));
+
+      // Write directly to the destination rank's atomic buffer via shared
+      // memory.  The offset (req_rptr) is the byte offset within that rank's
+      // atomic buffer — same layout as the RDMA atomic path.
+      auto* dst_slot = reinterpret_cast<std::atomic<int64_t>*>(
+          static_cast<uint8_t*>(cfg_.shared_atomic_base) +
+          dst_local_rank * cfg_.shared_atomic_per_rank +
+          cmd.req_rptr);
+      dst_slot->fetch_add(v64, std::memory_order_release);
+
+      // Immediately mark as completed.
+      acked_wrs_.insert(shm_atomic_wrs[i]);
+    }
+    shm_atomic_wrs.clear();
+    shm_atomic_cmds.clear();
   }
 
   // Handle regular RDMA writes
@@ -1177,7 +1241,7 @@ void Proxy::destroy(bool free_gpu_buffer) {
     ctx_.atomic_old_values_buf = nullptr;
   }
 
-  if (free_gpu_buffer && cfg_.gpu_buffer) {
+  if (free_gpu_buffer && cfg_.gpu_buffer && cfg_.owns_gpu_buffer) {
     cudaError_t e;
     if (cfg_.free_buffer_with_cuda_free_host) {
       e = cudaFreeHost(cfg_.gpu_buffer);

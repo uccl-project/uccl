@@ -16,7 +16,10 @@ class UcclProxy {
             int rank, int node_idx, int local_rank, int num_experts = 0,
             int num_ranks = 0, int num_nodes = 0, bool use_normal_mode = false,
             bool is_intranode = false,
-            bool gpu_buffer_is_host_allocated = false);
+            bool gpu_buffer_is_host_allocated = false,
+            uintptr_t shared_rdma_base = 0, size_t shared_rdma_per_rank = 0,
+            uintptr_t shared_atomic_base = 0, size_t shared_atomic_per_rank = 0,
+            int local_world_size = 0);
   ~UcclProxy();
 
   void start_sender();
@@ -77,6 +80,7 @@ class UcclProxy {
     proxy_->set_bench_d2h_channel_addrs(addrs);
   }
 
+
  private:
   enum class Mode { None, Sender, Remote, Local, Dual };
   void start(Mode m);
@@ -93,6 +97,7 @@ class UcclProxy {
   void* atomic_buffer_ptr_;
   bool atomic_buffer_is_host_allocated_ =
       false;  // true => cudaFreeHost, false => cudaFree
+  bool owns_atomic_buffer_ = true;  // false when using shared atomic buffer
   int node_idx_;
   bool is_intranode_;
   std::vector<d2hq::HostD2HHandle> d2h_queues;

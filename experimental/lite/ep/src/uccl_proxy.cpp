@@ -14,7 +14,10 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
                      size_t total_size, int rank, int node_idx, int local_rank,
                      int num_experts, int num_ranks, int num_nodes,
                      bool use_normal_mode, bool is_intranode,
-                     bool gpu_buffer_is_host_allocated)
+                     bool gpu_buffer_is_host_allocated,
+                     uintptr_t shared_rdma_base, size_t shared_rdma_per_rank,
+                     uintptr_t shared_atomic_base,
+                     size_t shared_atomic_per_rank, int local_world_size)
     : thread_{},
       mode_{Mode::None},
       running_{false},
@@ -52,37 +55,49 @@ UcclProxy::UcclProxy(int thread_idx, uintptr_t gpu_buffer_addr,
   cfg.use_normal_mode = use_normal_mode;
   cfg.is_intranode = is_intranode;
   cfg.free_buffer_with_cuda_free_host = gpu_buffer_is_host_allocated;
+  cfg.shared_rdma_base = reinterpret_cast<void*>(shared_rdma_base);
+  cfg.shared_rdma_per_rank = shared_rdma_per_rank;
+  cfg.shared_atomic_base = reinterpret_cast<void*>(shared_atomic_base);
+  cfg.shared_atomic_per_rank = shared_atomic_per_rank;
+  cfg.local_world_size = local_world_size;
+  cfg.owns_gpu_buffer = (shared_rdma_base == 0);  // shared buf freed separately
   proxy_ = std::make_unique<Proxy>(cfg);
   local_rank_ = local_rank;
   node_idx_ = node_idx;
 
   if (thread_idx == 0) {
-#ifdef USE_GRACE_HOPPER
-    cudaMallocManaged(&atomic_buffer_ptr_, kAtomicBufferSize);
-    atomic_buffer_is_host_allocated_ = false;
-#elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-    hipExtMallocWithFlags(&atomic_buffer_ptr_, kAtomicBufferSize,
-                          hipDeviceMallocUncached);
-    atomic_buffer_is_host_allocated_ = false;
-#elif defined(EFA)
-    // EFA: atomic buffer is always pinned host memory (cudaHostAlloc).
-    cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
-                  cudaHostAllocMapped | cudaHostAllocWriteCombined);
-    atomic_buffer_is_host_allocated_ = true;
-#else
-    // Dynamically detect: on some nodes (e.g. GH10) ibv_reg_mr fails for
-    // cudaMalloc; use pinned host memory then. Override with
-    // UCCL_ATOMICS_USE_HOST_MEMORY=1 to force host memory.
-    if (can_register_gpu_memory_for_atomics(local_rank)) {
-      cudaMalloc(&atomic_buffer_ptr_, kAtomicBufferSize);
-      atomic_buffer_is_host_allocated_ = false;
-    } else {
-      cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
-                    cudaHostAllocMapped);
+    if (shared_atomic_base != 0 && shared_atomic_per_rank > 0) {
+      // Use the shared atomic buffer slice for this rank.
+      atomic_buffer_ptr_ = reinterpret_cast<void*>(
+          shared_atomic_base + local_rank * shared_atomic_per_rank);
       atomic_buffer_is_host_allocated_ = true;
-    }
+      owns_atomic_buffer_ = false;  // Don't free in destructor
+      // Shared buffer is already zeroed by allocate_shared_buffer().
+    } else {
+#ifdef USE_GRACE_HOPPER
+      cudaMallocManaged(&atomic_buffer_ptr_, kAtomicBufferSize);
+      atomic_buffer_is_host_allocated_ = false;
+#elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+      hipExtMallocWithFlags(&atomic_buffer_ptr_, kAtomicBufferSize,
+                            hipDeviceMallocUncached);
+      atomic_buffer_is_host_allocated_ = false;
+#elif defined(EFA)
+      cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
+                    cudaHostAllocMapped | cudaHostAllocWriteCombined);
+      atomic_buffer_is_host_allocated_ = true;
+#else
+      if (can_register_gpu_memory_for_atomics(local_rank)) {
+        cudaMalloc(&atomic_buffer_ptr_, kAtomicBufferSize);
+        atomic_buffer_is_host_allocated_ = false;
+      } else {
+        cudaHostAlloc(&atomic_buffer_ptr_, kAtomicBufferSize,
+                      cudaHostAllocMapped);
+        atomic_buffer_is_host_allocated_ = true;
+      }
 #endif
-    cudaMemset(atomic_buffer_ptr_, 0, kAtomicBufferSize);
+      cudaMemset(atomic_buffer_ptr_, 0, kAtomicBufferSize);
+      owns_atomic_buffer_ = true;
+    }
     proxy_->set_atomic_buffer_ptr(atomic_buffer_ptr_);
   }
 }
@@ -93,7 +108,7 @@ UcclProxy::~UcclProxy() {
   } catch (...) {
   }
 
-  if (thread_idx_ == 0 && atomic_buffer_ptr_) {
+  if (thread_idx_ == 0 && atomic_buffer_ptr_ && owns_atomic_buffer_) {
 #if defined(USE_GRACE_HOPPER)
     cudaFree(atomic_buffer_ptr_);
 #elif defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)

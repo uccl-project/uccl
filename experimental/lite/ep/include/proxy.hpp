@@ -52,6 +52,17 @@ class Proxy {
         false;  // Runtime flag for normal mode (batching optimization)
     bool is_intranode = false;
     bool free_buffer_with_cuda_free_host = false;
+    bool owns_gpu_buffer = true;  // false when gpu_buffer is a shared-memory slice
+
+    // Shared-memory intra-node transfer (no RDMA loopback).
+    // When shared_rdma_base != nullptr, intra-node TransferCmds use memcpy
+    // within the shared region instead of posting RDMA WRITEs.
+    void* shared_rdma_base = nullptr;    // mmap'd base of shared RDMA buffer
+    size_t shared_rdma_per_rank = 0;     // bytes per rank in shared RDMA buffer
+    void* shared_atomic_base = nullptr;  // mmap'd base of shared atomic buffer
+    size_t shared_atomic_per_rank = 0;   // bytes per rank in shared atomic buf
+    int local_world_size = 0;            // number of ranks on this node
+
   };
 
   Proxy(Config const& cfg);

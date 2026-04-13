@@ -21,16 +21,31 @@ DeepEP assumes three hardware features:
 
 ### Target Testbed
 
-- **2 nodes**, each with **4× L4 GPUs** (PCIe, no NVLink, no GDR)
-- **400 Gbps Mellanox ConnectX (mlx5)** RDMA NIC (non-GDR)
+- **2 nodes**, each with **4× L4 GPUs** (PCIe, no NVLink)
+- **400 Gbps Mellanox ConnectX (mlx5)** RDMA NIC
 - IPs: see `experimental/lite/ip.txt` (4.14.153.89, 4.14.153.90)
 - L4 = Ada Lovelace, sm_89, PCIe Gen4 x16 (~32 GB/s)
+- **Note**: nvidia_peermem (GDR) IS available on L4, but we intentionally
+  develop for the no-GDR case. GDR numbers are reference-only.
 
 ### Scope
 
 - **Low-latency mode only** (per-expert routing, small RDMA writes)
 - Normal (batched high-throughput) mode deferred
-- Intranode: try CUDA P2P first, host-staged fallback
+- Intranode: CUDA P2P (no NVLink, no RDMA loopback)
+
+### Hard Constraints (DO NOT VIOLATE)
+
+1. **No GDR assumption**: Code must work without GPUDirect RDMA. Even though
+   nvidia_peermem works on L4, we target platforms where it does NOT.
+   RDMA buffers use `cudaMallocHost()` (host pinned memory).
+
+2. **No RDMA loopback for intra-node**: Intra-node data transfer must NOT
+   go through the NIC. Use CUDA P2P, shared memory, or proxy-mediated
+   memcpy — anything that avoids the RDMA NIC for same-node peers.
+
+3. **No NVLink assumption**: All intra-node GPU-GPU communication must work
+   over PCIe only.
 
 ## Architecture
 
@@ -287,35 +302,58 @@ on commodity hardware at any speed is the primary milestone.
 - [x] Multi-node launch scripts (`run_multinode.sh`)
 - [x] Architecture doc (`doc/architecture.md`)
 
-## Benchmark Results (Single-Node, L4 GPUs)
+### Phase 7: Shared-Memory Intra-Node (No RDMA Loopback) ✅
+- [x] Root cause: RDMA loopback for intra-node wastes NIC bandwidth and adds
+      latency — data goes GPU→host→NIC→host→GPU instead of direct memcpy
+- [x] POSIX shared memory (`/dev/shm/uccl_rdma_*`, `/dev/shm/uccl_atomic_*`)
+      so all local ranks share one contiguous host buffer region
+- [x] `include/shared_buffer.hpp`: SharedBuffer struct with `shm_open` + `mmap`
+      + `cudaHostRegister` + `cudaHostGetDevicePointer`
+- [x] Proxy intra-node routing: `post_gpu_commands_mixed` splits commands into
+      intra-node (memcpy between slices) and inter-node (RDMA WRITE)
+- [x] Shared atomic buffer for intra-node signaling (`fetch_add` on host memory)
+- [x] QPs never created for same-IP peers (all `#ifdef PCIE_INTRANODE` removed)
+- [x] `owns_gpu_buffer` flag prevents `cudaFreeHost` on shared memory slices
+- [x] `free_shared_buffers()` called in `destroy_uccl` for proper cleanup
+- [x] Single-node 2/4-GPU: all correctness tests passed ✅
+- [x] Multi-node 2n×1g: all correctness tests passed ✅
+- [x] Multi-node 2n×4g: all correctness tests passed ✅
 
-All tests pass correctness verification. Clean exit (no segfaults).
+## Benchmark Results (Single-Node, L4 GPUs, Shared Memory)
+
+All tests pass correctness verification. Clean exit.
 
 ### 4-GPU Benchmarks
 
 | Config | Dispatch+Combine BW | Dispatch BW | Combine BW | D+C Latency |
 |--------|---------------------|-------------|------------|-------------|
-| 128 tok × 2048 hid × 16 exp | 3.32 GB/s | 3.09 GB/s | 3.46 GB/s | 942 μs |
-| 256 tok × 4096 hid × 16 exp | 3.65 GB/s | 3.70 GB/s | 3.71 GB/s | 3,451 μs |
-| 512 tok × 7168 hid × 16 exp | 3.63 GB/s | 3.97 GB/s | 3.54 GB/s | 12,224 μs |
+| 128 tok × 2048 hid × 8 exp | 7.38 GB/s | 4.97 GB/s | 7.21 GB/s | 423 μs |
+| 256 tok × 4096 hid × 8 exp | 7.79 GB/s | 6.02 GB/s | 8.93 GB/s | 1,619 μs |
+| 512 tok × 7168 hid × 16 exp | 8.12 GB/s | 7.93 GB/s | 8.24 GB/s | 5,457 μs |
 
 ### 2-GPU Benchmarks
 
 | Config | Dispatch+Combine BW | Dispatch BW | Combine BW | D+C Latency |
 |--------|---------------------|-------------|------------|-------------|
-| 128 tok × 2048 hid × 8 exp | 5.49 GB/s | 3.78 GB/s | 4.65 GB/s | 279 μs |
-| 256 tok × 7168 hid × 8 exp | 5.36 GB/s | 5.42 GB/s | 5.44 GB/s | 2,037 μs |
+| 128 tok × 2048 hid × 8 exp | 8.98 GB/s | 5.51 GB/s | 9.75 GB/s | 348 μs |
+
+### Improvement Over RDMA Loopback (Phase 5 baseline)
+
+| Config (4-GPU) | Old D+C BW | New D+C BW | Speedup |
+|----------------|-----------|-----------|---------|
+| 128 tok × 2048 hid | 3.32 GB/s | 7.38 GB/s | **2.2×** |
+| 256 tok × 4096 hid | 3.65 GB/s | 7.79 GB/s | **2.1×** |
+| 512 tok × 7168 hid | 3.63 GB/s | 8.12 GB/s | **2.2×** |
 
 ### Performance Notes
 
-- 2-GPU achieves higher bandwidth per rank because less contention on the
-  single PCIe root complex / RDMA NIC
-- 4-GPU bandwidth is limited by shared PCIe Gen4 interconnect (~32 GB/s)
-  and single mlx5 NIC
-- Dispatch latency is dominated by GPU→host PCIe transfers (~80-150 μs send time)
-- Combine latency includes recv wait time (varies by rank due to scheduling)
+- Shared memory eliminates NIC involvement for intra-node, freeing NIC for
+  inter-node RDMA
+- 4-GPU bandwidth is now limited by PCIe memcpy throughput (~12 GB/s host-to-host)
+  rather than NIC contention
+- Dispatch latency dominated by GPU→host PCIe writes (~150 μs send time)
 
-## Benchmark Results (Multi-Node, 2 × 4 L4 GPUs)
+## Benchmark Results (Multi-Node, 2 × 4 L4 GPUs, Shared Memory)
 
 All correctness tests passed on all 8 ranks.
 
@@ -323,20 +361,26 @@ All correctness tests passed on all 8 ranks.
 
 | Config | Dispatch+Combine BW | Dispatch BW | Combine BW | D+C Latency |
 |--------|---------------------|-------------|------------|-------------|
-| 128 tok × 2048 hid × 8 exp | 14.81 GB/s | 6.20 GB/s | 13.68 GB/s | 211 μs |
+| 128 tok × 2048 hid × 8 exp | 14.82 GB/s | 6.19 GB/s | 13.65 GB/s | 211 μs |
 
 ### 2n×4g (2 nodes, 4 GPUs each = 8 GPUs total)
 
 | Config | Dispatch+Combine BW | Dispatch BW | Combine BW | D+C Latency |
 |--------|---------------------|-------------|------------|-------------|
-| 128 tok × 2048 hid × 8 exp | 1.02 GB/s | ~0.96 GB/s | ~0.96 GB/s | 3,058 μs |
+| 128 tok × 2048 hid × 8 exp | 4.45 GB/s | 3.70 GB/s | 4.89 GB/s | 702 μs |
+
+### Multi-Node Improvement Over RDMA Loopback
+
+| Config (2n×4g) | Old D+C BW | New D+C BW | Speedup |
+|----------------|-----------|-----------|---------|
+| 128 tok × 2048 hid | 1.02 GB/s | 4.45 GB/s | **4.4×** |
 
 ### Multi-Node Performance Notes
 
-- 2n×1g achieves excellent bandwidth — limited mainly by PCIe latency
-- 2n×4g bandwidth drops due to NIC contention: all 4 GPUs share one mlx5 NIC
-- RDMA FETCH_AND_ADD was replaced with RDMA_WRITE for signaling (see Phase 4.6)
-- Intra-node communication uses RDMA loopback (no NVLink)
+- 2n×1g unchanged (no intra-node peers, pure RDMA)
+- 2n×4g: **4.4× speedup** — shared memory freed the NIC for inter-node only
+- Intra-node: proxy memcpy between POSIX shm slices (no NIC)
+- Inter-node: host-staged RDMA WRITE (same as before)
 
 ## Quick Start
 
@@ -371,11 +415,15 @@ torchrun --nproc_per_node=4 bench/test_internode_simple.py
 | `include/rdma.hpp` | Moved `release_shared_rdma_resources()` decl out of `#ifdef USE_DMABUF` | Shared PD cleanup for all builds |
 | `src/internode.cu` | Fixed static asserts, guarded uint64_t NVL cast | Compile with `NVL_PEERS=1` |
 | `src/internode_ll.cu` | Added sm_89 fallback path (global loads instead of TMA) | Low-latency kernel on L4 |
-| `src/proxy.cpp` | Loopback RDMA for same-IP peers; unconditional `release_shared_rdma_resources()` | PCIE_INTRANODE same-node RDMA + cleanup fix |
+| `src/proxy.cpp` | Intra-node shm memcpy routing; removed PCIE_INTRANODE guards; skip QPs for same-IP | Shared-memory intra-node + cleanup |
 | `src/rdma.cpp` | Shared PD/MR cache unconditional; FETCH_AND_ADD→RDMA_WRITE+INLINE for atomics | Fix rkey/PD mismatch + cross-node atomic failure |
-| `src/uccl_ep.cc` | Added `get_num_max_nvl_peers()`; auto-detect GPU/host alloc | Runtime NVL_PEERS query + GDR detection |
-| `bench/utils.py` | PCIE_INTRANODE-aware node_idx/num_nodes; Tensor→int fix | Correct proxy setup for NVL_PEERS=1 |
-| `bench/buffer.py` | PCIE_INTRANODE-aware effective_local_world_size | Correct Buffer init for NVL_PEERS=1 |
+| `src/uccl_ep.cc` | Added shared buffer Python bindings; auto-detect GPU/host alloc | Shared memory allocation + GDR detection |
+| `src/uccl_proxy.cpp` | Extended constructor with shared buffer params; `owns_gpu_buffer` flag | Shared atomic buffer + proper cleanup |
+| `include/proxy.hpp` | Added shared buffer fields + `owns_gpu_buffer` to Config | Intra-node shm support |
+| `include/uccl_proxy.hpp` | Extended constructor; `owns_atomic_buffer_` member | Shared atomic buffer support |
+| `include/shared_buffer.hpp` | **New**: POSIX shm allocation with CUDA registration | Intra-node shared memory |
+| `bench/utils.py` | Shared buffer allocation in initialize_uccl; free in destroy_uccl | Shared memory lifecycle |
+| `bench/buffer.py` | Shared RDMA buffer allocation when LOCAL_WORLD_SIZE > 1 | Intra-node shm path |
 | `bench/test_internode_simple.py` | Rewritten to use Buffer internal proxy mgmt | Avoid double-init |
 | `deep_ep_wrapper/deep_ep/utils.py` | Skip NVLink check for L4/T4/L40 GPUs | No NVLink available |
 

@@ -67,7 +67,7 @@ DETECTED_SM := $(shell nvidia-smi --query-gpu=compute_cap --format=csv,noheader 
 SM ?= $(DETECTED_SM)
 
 CXXFLAGS  := -O3 -std=c++17 -Wall -pthread -fPIC -fvisibility=hidden -Wno-interference-size -Wno-unused-function -D_GLIBCXX_USE_CXX11_ABI=$(TORCH_ABI)
-LDFLAGS := -lpthread  -libverbs -lnl-3 -lnl-route-3 -lnuma -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
+LDFLAGS := -lpthread  -libverbs -lnl-3 -lnl-route-3 -lnuma -lrt -Xlinker -rpath -Xlinker $(CUDA_PATH)/lib64
 NVCCFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -pthread -fPIC -fvisibility=hidden" -ccbin /usr/bin/g++ --expt-relaxed-constexpr -D_GLIBCXX_USE_CXX11_ABI=$(TORCH_ABI)
 INCLUDES := -Iinclude -I$(CUDA_PATH)/include -I/usr/include -I../../../include 
 
