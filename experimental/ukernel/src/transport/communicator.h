@@ -25,7 +25,7 @@ namespace Transport {
 class TransportAdapter;
 class IpcAdapter;
 class TcpTransportAdapter;
-class UcclTransportAdapter;
+class RdmaTransportAdapter;
 
 class Communicator {
  public:
@@ -135,7 +135,7 @@ class Communicator {
     std::shared_ptr<SHMItem> bounce_owner;
   };
 
-  UcclTransportAdapter& ensure_uccl_adapter(CommunicatorMeta const& local_meta,
+  RdmaTransportAdapter& ensure_rdma_adapter(CommunicatorMeta const& local_meta,
                                             CommunicatorMeta const& peer_meta);
   TcpTransportAdapter& ensure_tcp_adapter(CommunicatorMeta const& local_meta);
   PeerTransportKind get_peer_transport_kind(int rank) const;
@@ -151,8 +151,8 @@ class Communicator {
   static uint32_t request_slot_index(unsigned req_id);
   static uint32_t request_generation(unsigned req_id);
   void notify_request_completion();
-  void register_existing_local_mrs_with_uccl();
-  bool ensure_uccl_memory_registered(uint64_t mr_id, void* ptr, size_t len);
+  void register_existing_local_mrs_with_rdma();
+  bool ensure_rdma_memory_registered(uint64_t mr_id, void* ptr, size_t len);
   bool fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
                         uint64_t expected_binding_version = 0);
   bool has_fresh_remote_ipc_buffer(int remote_rank, uint32_t ipc_id,
@@ -181,7 +181,7 @@ class Communicator {
   std::optional<SHMManager> shm_manager_;
 
   // Transport adapters.
-  std::unique_ptr<UcclTransportAdapter> uccl_adapter_;
+  std::unique_ptr<RdmaTransportAdapter> rdma_adapter_;
   std::unique_ptr<TcpTransportAdapter> tcp_adapter_;
   std::shared_ptr<IpcAdapter> ipc_adapter_;
   gpuStream_t host_copy_stream_ = nullptr;
@@ -226,9 +226,9 @@ class Communicator {
   std::vector<std::weak_ptr<NotifyTarget>> notify_targets_;
 
   // UCCL registration cache.
-  mutable std::mutex uccl_reg_mu_;
-  std::unordered_set<uint64_t> uccl_direct_reg_failed_mrs_;
-  std::unordered_set<uint64_t> uccl_registered_mrs_;
+  mutable std::mutex rdma_reg_mu_;
+  std::unordered_set<uint64_t> rdma_direct_reg_failed_mrs_;
+  std::unordered_set<uint64_t> rdma_registered_mrs_;
 
   // IPC binding versions.
   mutable std::mutex ipc_gen_mu_;

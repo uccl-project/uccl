@@ -46,7 +46,7 @@ sources = [
     rel(ROOT / "src" / "transport" / "oob" / "oob_shm.cc"),
     rel(ROOT / "src" / "transport" / "oob" / "oob_socket.cc"),
     rel(ROOT / "src" / "transport" / "adapter" / "tcp_adapter.cc"),
-    rel(ROOT / "src" / "transport" / "adapter" / "uccl_adapter.cc"),
+    rel(ROOT / "src" / "transport" / "adapter" / "rdma_adapter.cc"),
     rel(ROOT / "src" / "transport" / "adapter" / "ipc_adapter.cc"),
     rel(ROOT / "src" / "transport" / "util" / "utils.cc"),
     rel(ROOT / "src" / "device" / "fifo" / "c2d_fifo.cc"),
@@ -67,7 +67,7 @@ p2p_sources = [
     rel(ROOT / "src" / "transport" / "oob" / "oob_shm.cc"),
     rel(ROOT / "src" / "transport" / "oob" / "oob_socket.cc"),
     rel(ROOT / "src" / "transport" / "adapter" / "tcp_adapter.cc"),
-    rel(ROOT / "src" / "transport" / "adapter" / "uccl_adapter.cc"),
+    rel(ROOT / "src" / "transport" / "adapter" / "rdma_adapter.cc"),
     rel(ROOT / "src" / "transport" / "adapter" / "ipc_adapter.cc"),
     rel(ROOT / "src" / "transport" / "util" / "utils.cc"),
 ]

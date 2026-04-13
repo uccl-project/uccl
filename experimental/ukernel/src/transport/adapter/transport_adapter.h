@@ -35,13 +35,22 @@ struct UcclPeerConnectSpec {
   int remote_gpu_idx = -1;
 };
 
+struct RdmaPeerConnectSpec {
+  std::string remote_ip;
+  uint16_t remote_port = 0;
+  int local_dev_idx = -1;
+  int local_gpu_idx = -1;
+  int remote_dev_idx = -1;
+  int remote_gpu_idx = -1;
+};
+
 struct IpcPeerConnectSpec {};
 
 struct PeerConnectSpec {
   int peer_rank = -1;
   PeerConnectType type = PeerConnectType::Connect;
   std::variant<std::monostate, TcpPeerConnectSpec, UcclPeerConnectSpec,
-               IpcPeerConnectSpec>
+               RdmaPeerConnectSpec, IpcPeerConnectSpec>
       detail{};
 };
 

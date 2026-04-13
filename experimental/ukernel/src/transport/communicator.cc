@@ -2,7 +2,7 @@
 #include "adapter/ipc_adapter.h"
 #include "adapter/tcp_adapter.h"
 #include "adapter/transport_adapter.h"
-#include "adapter/uccl_adapter.h"
+#include "adapter/rdma_adapter.h"
 #include "util/utils.h"
 #include <arpa/inet.h>
 #include <infiniband/verbs.h>
@@ -374,10 +374,10 @@ Communicator::~Communicator() {
     ipc_manager_.delete_ipc(i);
   }
 
-  // Destroy bounce pool before uccl_adapter_ to avoid dangling references
+  // Destroy bounce pool before rdma_adapter_ to avoid dangling references
   // in the deregister callback during pool teardown.
   shm_manager_.reset();
-  uccl_adapter_.reset();
+  rdma_adapter_.reset();
   tcp_adapter_.reset();
   ipc_adapter_.reset();
   if (completion_event_fd_ >= 0) {
@@ -540,39 +540,39 @@ void Communicator::notify_request_completion() {
   }
 }
 
-UcclTransportAdapter& Communicator::ensure_uccl_adapter(
+RdmaTransportAdapter& Communicator::ensure_rdma_adapter(
     CommunicatorMeta const& local_meta, CommunicatorMeta const& peer_meta) {
-  if (!uccl_adapter_) {
+  if (!rdma_adapter_) {
     maybe_configure_uccl_socket_ifname(
         get_uccl_remote_hint_ip(config_, peer_meta), local_meta.ip);
-    UcclTransportConfig uccl_cfg;
-    uccl_adapter_ = std::make_unique<UcclTransportAdapter>(
-        local_gpu_idx_, world_size_, std::move(uccl_cfg));
+    RdmaTransportConfig rdma_cfg;
+    rdma_adapter_ = std::make_unique<RdmaTransportAdapter>(
+        local_gpu_idx_, world_size_, std::move(rdma_cfg));
 
     mr_manager_.bind_backend(
         [this](uint32_t mr_id, void* ptr, size_t len) -> bool {
-          if (!uccl_adapter_ || !uccl_adapter_->is_initialized()) return false;
-          bool ok = uccl_adapter_->register_memory(mr_id, ptr, len);
-          std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+          if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) return false;
+          bool ok = rdma_adapter_->register_memory(mr_id, ptr, len);
+          std::lock_guard<std::mutex> lk(rdma_reg_mu_);
           if (ok) {
-            uccl_direct_reg_failed_mrs_.erase(mr_id);
-            uccl_registered_mrs_.insert(mr_id);
+            rdma_direct_reg_failed_mrs_.erase(mr_id);
+            rdma_registered_mrs_.insert(mr_id);
           } else {
-            uccl_direct_reg_failed_mrs_.insert(mr_id);
+            rdma_direct_reg_failed_mrs_.insert(mr_id);
           }
           return ok;
         },
         [this](uint32_t mr_id) {
-          if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
-            uccl_adapter_->deregister_memory(mr_id);
+          if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
+            rdma_adapter_->deregister_memory(mr_id);
           }
-          std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-          uccl_direct_reg_failed_mrs_.erase(mr_id);
-          uccl_registered_mrs_.erase(mr_id);
+          std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+          rdma_direct_reg_failed_mrs_.erase(mr_id);
+          rdma_registered_mrs_.erase(mr_id);
         });
     mr_manager_.sync_local_backend();
   }
-  return *uccl_adapter_;
+  return *rdma_adapter_;
 }
 
 TcpTransportAdapter& Communicator::ensure_tcp_adapter(
@@ -709,7 +709,7 @@ bool Communicator::connect(int rank) {
 
   if (resolved.kind == PeerTransportKind::Uccl) {
     auto& uccl_adapter =
-        ensure_uccl_adapter(resolved.local_meta, resolved.remote_meta);
+        ensure_rdma_adapter(resolved.local_meta, resolved.remote_meta);
     if (!uccl_adapter.has_peer(rank)) {
       int dev_idx = uccl_adapter.get_best_dev_idx(local_gpu_idx_);
       if (dev_idx < 0) {
@@ -746,7 +746,7 @@ bool Communicator::connect(int rank) {
       PeerConnectSpec spec{};
       spec.peer_rank = rank;
       spec.type = PeerConnectType::Connect;
-      spec.detail = UcclPeerConnectSpec{
+      spec.detail = RdmaPeerConnectSpec{
           remote_p2p_info.ip, remote_p2p_info.port,    dev_idx,
           local_gpu_idx_,     remote_p2p_info.dev_idx, remote_p2p_info.gpu_idx};
       if (!uccl_adapter.has_peer(rank) && !uccl_adapter.ensure_peer(spec)) {
@@ -756,7 +756,7 @@ bool Communicator::connect(int rank) {
       }
     }
     mark_peer_path_ready(rank, PeerTransportKind::Uccl);
-    register_existing_local_mrs_with_uccl();
+    register_existing_local_mrs_with_rdma();
     return true;
   }
 
@@ -826,7 +826,7 @@ bool Communicator::accept(int rank) {
 
   if (resolved.kind == PeerTransportKind::Uccl) {
     auto& uccl_adapter =
-        ensure_uccl_adapter(resolved.local_meta, resolved.remote_meta);
+        ensure_rdma_adapter(resolved.local_meta, resolved.remote_meta);
     if (!uccl_adapter.has_peer(rank)) {
       int dev_idx = uccl_adapter.get_best_dev_idx(local_gpu_idx_);
       if (dev_idx < 0) {
@@ -866,7 +866,7 @@ bool Communicator::accept(int rank) {
       PeerConnectSpec spec{};
       spec.peer_rank = rank;
       spec.type = PeerConnectType::Accept;
-      spec.detail = UcclPeerConnectSpec{
+      spec.detail = RdmaPeerConnectSpec{
           remote_p2p_info.ip, remote_p2p_info.port,    dev_idx,
           local_gpu_idx_,     remote_p2p_info.dev_idx, remote_p2p_info.gpu_idx};
       if (!uccl_adapter.has_peer(rank) && !uccl_adapter.ensure_peer(spec)) {
@@ -877,7 +877,7 @@ bool Communicator::accept(int rank) {
       }
     }
     mark_peer_path_ready(rank, PeerTransportKind::Uccl);
-    register_existing_local_mrs_with_uccl();
+    register_existing_local_mrs_with_rdma();
     return true;
   }
 
@@ -962,7 +962,7 @@ PeerTransportKind Communicator::peer_transport_kind(int rank) const {
 TransportAdapter* Communicator::get_adapter(PeerTransportKind kind) {
   switch (kind) {
     case PeerTransportKind::Uccl:
-      return uccl_adapter_.get();
+      return rdma_adapter_.get();
     case PeerTransportKind::Tcp:
       return tcp_adapter_.get();
     case PeerTransportKind::Ipc:
@@ -983,15 +983,15 @@ bool Communicator::same_host(int rank) const {
   return local_peer.meta.host_id == remote_peer.meta.host_id;
 }
 
-void Communicator::register_existing_local_mrs_with_uccl() {
-  if (!uccl_adapter_ || !uccl_adapter_->is_initialized()) return;
+void Communicator::register_existing_local_mrs_with_rdma() {
+  if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) return;
   mr_manager_.sync_local_backend();
 }
 
-bool Communicator::ensure_uccl_memory_registered(uint64_t mr_id, void* ptr,
+bool Communicator::ensure_rdma_memory_registered(uint64_t mr_id, void* ptr,
                                                  size_t len) {
-  if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
-    if (uccl_adapter_->is_memory_registered(mr_id)) return true;
+  if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
+    if (rdma_adapter_->is_memory_registered(mr_id)) return true;
 
     void* base_ptr = ptr;
     size_t mr_len = len;
@@ -1011,9 +1011,9 @@ bool Communicator::ensure_uccl_memory_registered(uint64_t mr_id, void* ptr,
     }
 
     if (is_direct_local_mr) {
-      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-      if (uccl_direct_reg_failed_mrs_.find(mr_id) !=
-          uccl_direct_reg_failed_mrs_.end()) {
+      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+      if (rdma_direct_reg_failed_mrs_.find(mr_id) !=
+          rdma_direct_reg_failed_mrs_.end()) {
         return false;
       }
     }
@@ -1025,11 +1025,11 @@ bool Communicator::ensure_uccl_memory_registered(uint64_t mr_id, void* ptr,
       return false;
     }
 
-    bool ok = uccl_adapter_->register_memory(mr_id, base_ptr, mr_len);
+    bool ok = rdma_adapter_->register_memory(mr_id, base_ptr, mr_len);
     if (!ok) {
       if (is_direct_local_mr) {
-        std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-        uccl_direct_reg_failed_mrs_.insert(mr_id);
+        std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+        rdma_direct_reg_failed_mrs_.insert(mr_id);
         std::cerr << "[WARN] Communicator " << global_rank_
                   << " failed to register local GPU MR " << mr_id
                   << " with UCCL, base=" << base_ptr << " len=" << mr_len
@@ -1042,8 +1042,8 @@ bool Communicator::ensure_uccl_memory_registered(uint64_t mr_id, void* ptr,
                   << std::endl;
       }
     } else {
-      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-      uccl_registered_mrs_.insert(mr_id);
+      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+      rdma_registered_mrs_.insert(mr_id);
     }
     return ok;
   }
@@ -1094,8 +1094,8 @@ bool Communicator::complete_host_bounce_recv(TrackedRequest& tracked,
 
 void Communicator::cleanup_tracked_request(TrackedRequest& tracked) {
   unsigned adapter_id = tracked.adapter_request_id;
-  if (tracked.kind == PeerTransportKind::Uccl && uccl_adapter_) {
-    uccl_adapter_->release_request(adapter_id);
+  if (tracked.kind == PeerTransportKind::Uccl && rdma_adapter_) {
+    rdma_adapter_->release_request(adapter_id);
   }
   if (tracked.kind == PeerTransportKind::Tcp && tcp_adapter_) {
     tcp_adapter_->release_request(adapter_id);
@@ -1157,7 +1157,7 @@ unsigned Communicator::isend(int rank, LocalSlice src,
       (peer_kind == PeerTransportKind::Tcp) ||
       (peer_kind == PeerTransportKind::Ipc) ||
       (peer_kind == PeerTransportKind::Uccl &&
-       !ensure_uccl_memory_registered(src.mem_id, local_ptr, src.bytes));
+       !ensure_rdma_memory_registered(src.mem_id, local_ptr, src.bytes));
   unsigned rid = 0;
   TrackedRequest* slot = allocate_request_slot(&rid);
   if (slot == nullptr) return 0;
@@ -1257,7 +1257,7 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
   auto needs_bounce =
       (peer_kind == PeerTransportKind::Tcp) ||
       (peer_kind == PeerTransportKind::Uccl &&
-       !ensure_uccl_memory_registered(dst.mem_id, local_ptr, dst.bytes));
+       !ensure_rdma_memory_registered(dst.mem_id, local_ptr, dst.bytes));
 
   // IPC fast path metadata: let sender resolve remote pointer by dst.mem_id
   // and skip per-request ipc_cache handshake when possible.
@@ -1339,9 +1339,9 @@ bool Communicator::poll_request_completion(unsigned id, bool blocking) {
   bool failed = false;
   unsigned adapter_id = slot->adapter_request_id;
   if (slot->kind == PeerTransportKind::Uccl) {
-    done = blocking ? uccl_adapter_->wait_completion(adapter_id)
-                    : uccl_adapter_->poll_completion(adapter_id);
-    failed = done && uccl_adapter_->request_failed(adapter_id);
+    done = blocking ? rdma_adapter_->wait_completion(adapter_id)
+                    : rdma_adapter_->poll_completion(adapter_id);
+    failed = done && rdma_adapter_->request_failed(adapter_id);
   } else if (slot->kind == PeerTransportKind::Tcp) {
     done = blocking ? tcp_adapter_->wait_completion(adapter_id)
                     : tcp_adapter_->poll_completion(adapter_id);
