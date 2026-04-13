@@ -188,7 +188,7 @@ ifeq ($(USE_TCPX),1)
 install: $(P2P_SHARED_LIB)
 	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
 	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
-	$(MAKE) install-all-transports
+	$(MAKE) install-all
 	@echo "Installation complete!"
 else
 install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
@@ -199,14 +199,14 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
 	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
 	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
-	$(MAKE) install-all-transports
+	$(MAKE) install-all-transport
 	@echo "Installation complete!"
 endif
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(CAPI_OBJECT) $(NB_OBJECTS) $(P2P_SHARED_LIB)
+	rm -f $(OBJECTS) $(CAPI_OBJECT) $(NB_OBJECTS)
 	rm -f $(DEPS)
-	rm -f nccl/*.o nccl/*.d
+	rm -f nccl/*.o nccl/*.d libuccl_p2p*.so
 ifneq ($(USE_TCPX),1)
 	rm -f $(P2P_PYTHON_EXT)
 endif
@@ -230,7 +230,7 @@ DISPATCH_OBJ := uccl_p2p_dispatch.o
 
 # Auto-detect which optional backends can be built
 HAS_EFA  := $(shell test -f $(EFA_HOME)/include/infiniband/efadv.h && echo 1 || echo 0)
-HAS_NCCL := $(shell test -d $(NCCL_HOME)/include 2>/dev/null && echo 1 || test -f /usr/include/nccl.h && echo 1 || echo 0)
+HAS_NCCL := $(shell echo '\#include <nccl.h>' | $(CXX) -x c++ -E - >/dev/null 2>&1 && echo 1 || echo 0)
 
 TRANSPORT_TARGETS := dispatch-lib transport-rdma
 ifeq ($(HAS_EFA),1)
@@ -240,12 +240,11 @@ ifeq ($(HAS_NCCL),1)
 TRANSPORT_TARGETS += transport-tcp transport-tcpx
 endif
 
-all-transports: $(TRANSPORT_TARGETS)
+all-transport: $(TRANSPORT_TARGETS)
+	@$(MAKE) clean-backend
 	@echo "Built transports: $(TRANSPORT_TARGETS)"
 
 # Thin dispatcher (dlopen-based, no transport code).
-# Uses a phony target name to avoid conflicting with the existing
-# $(P2P_SHARED_LIB) rule that also produces libuccl_p2p.so.
 $(DISPATCH_OBJ): $(DISPATCH_SRC) uccl_p2p_ops.h uccl_engine.h include/common.h
 	$(CXX) -O3 -std=c++17 -fPIC -I. -I./include -I../include -I$(CUDA_INC) -c $< -o $@
 
@@ -253,10 +252,8 @@ dispatch-lib: $(DISPATCH_OBJ)
 	$(CXX) -shared -fPIC $< -o libuccl_p2p.so -ldl
 
 # Each backend: re-invoke make with the appropriate flags and output name.
-# Phony target names (transport-*) avoid infinite recursion that would occur
-# if the target name matched the .so filename.
-clean-backend:
-	@rm -f $(CAPI_OBJECT) engine.o engine_api.o nccl/*.o nccl/*.d nccl_tcpx_endpoint.o
+	clean-backend:
+	@rm -f $(CAPI_OBJECT) engine.o engine_api.o nccl/*.o nccl/*.d nccl_tcpx_endpo int.o
 
 transport-rdma:
 	@$(MAKE) clean-backend
@@ -274,7 +271,7 @@ transport-tcpx:
 	@$(MAKE) clean-backend
 	@$(MAKE) P2P_SHARED_LIB=libuccl_p2p_tcpx.so USE_TCPX=1 libuccl_p2p_tcpx.so
 
-install-all-transports:
+install-all-transport:
 	$(call safe_install,libuccl_p2p.so,$(LIBDIR),755)
 	$(call safe_install,libuccl_p2p_rdma.so,$(LIBDIR),755)
 	$(call safe_install,libuccl_p2p_efa.so,$(LIBDIR),755)
