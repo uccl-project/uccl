@@ -1,5 +1,14 @@
 # Transport
 
+`transport` provides peer path establishment and async data movement APIs for ukernel.
+
+## Transport Modes
+
+- `auto`: same-host -> `ipc`, cross-host RDMA-capable -> `uccl` (RDMA adapter), otherwise `tcp`
+- `ipc`: same-host shared-memory + optional relay path
+- `uccl`: logical selector name for RDMA adapter backend
+- `tcp`: socket transport fallback path
+
 ## Build
 
 ```bash
@@ -10,82 +19,55 @@ make -j$(nproc)
 
 ## Test
 
-Run unit tests:
-
 ```bash
 make test-unit
-```
-
-Optional manual SHM OOB case:
-
-```bash
-./test_transport_unit oob-shm
-```
-
-Run integration tests:
-
-```bash
 make test-integration
-```
-
-This only builds `test_transport_integration` and runs the local single-process smoke case.
-
-Run everything:
-
-```bash
 make test
 ```
 
-## Manual Cases
+`test-integration` runs the local single-process smoke by default.
 
-Local integration smoke:
+## Manual Checks
+
+Local smoke:
 
 ```bash
 ./test_transport_integration communicator-local
-./test_transport_integration communicator --role=server --case=ipc-buffer-meta --transport ipc --exchanger-port 16980
-./test_transport_integration communicator --role=client --case=ipc-buffer-meta --transport ipc --exchanger-ip 127.0.0.1 --exchanger-port 16980
 ```
 
-Manual server/client cases:
+Two-process exchange:
 
 ```bash
+# server
 ./test_transport_integration communicator --role=server --case=exchange --exchanger-port 16979
+
+# client
 ./test_transport_integration communicator --role=client --case=exchange --exchanger-ip 127.0.0.1 --exchanger-port 16979
 ```
 
-`exchange` is the normal data-path case: connect, accept, send/recv, and verify
-payload.
-
-Available communicator cases:
+IPC metadata only:
 
 ```bash
-exchange
-ipc-buffer-meta
+# server
+./test_transport_integration communicator --role=server --case=ipc-buffer-meta --transport ipc --exchanger-port 16980
+
+# client
+./test_transport_integration communicator --role=client --case=ipc-buffer-meta --transport ipc --exchanger-ip 127.0.0.1 --exchanger-port 16980
 ```
 
-Common manual runs:
-
-```bash
-./test_transport_integration communicator --role=server --case=ipc-buffer-meta --transport ipc --exchanger-port 16982
-./test_transport_integration communicator --role=client --case=ipc-buffer-meta --transport ipc --exchanger-ip 127.0.0.1 --exchanger-port 16982
-```
-
-`ipc-buffer-meta` is a metadata-only IPC case. It does not establish a transport
-send/recv path; it only checks `notify_ipc_buffer -> wait_ipc_buffer ->
-resolve_ipc_buffer_pointer`.
-
-Optional full multi-process suite:
+## Suite
 
 ```bash
 make suite
-TRANSPORT_RUN_UCCL=1 make suite
+TRANSPORT_RUN_RDMA=1 make suite
 ```
+
+Backward-compatible env alias:
+
+- `TRANSPORT_RUN_UCCL=1` is accepted and mapped to `TRANSPORT_RUN_RDMA=1`.
 
 ## Notes
 
-- `test-unit` covers memory registry, socket OOB, peer session, host bounce pool, and TCP adapter.
-- `test-integration` is a lightweight smoke target.
-- Multi-process communicator checks are manual by default.
-- Use `test_transport_integration communicator --role=server|client --case=exchange ...` for normal two-process transport bring-up.
-- `oob-shm` is kept as a manual diagnostic case and is not part of the default unit suite.
 - For `PreferredTransport::Uccl`, both peers must be RDMA-capable.
+- `transport=uccl` is naming compatibility; implementation is RDMA adapter.
+- `oob-shm` remains a manual diagnostic case, not default unit coverage.

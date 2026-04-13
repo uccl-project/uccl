@@ -1,5 +1,7 @@
 # CCL
 
+`ccl` is the collective layer on top of ukernel transport + device backends.
+
 ## Build
 
 ```bash
@@ -16,45 +18,19 @@ make -j$(nproc) CUDA_HOME=/usr/local/cuda CONDA_LIB_HOME=/usr/lib SM=80
 
 ## Test
 
-Run unit tests:
-
 ```bash
 make test-unit
-```
-
-Run integration tests:
-
-```bash
 make test-integration
-```
-
-Run everything:
-
-```bash
 make test
 ```
 
-## Manual Commands
+## Integration Binaries
 
-Device backend integration:
+- `test_device_backend`: validates device backend execution path
+- `test_transport_backend`: validates transport backend wiring
+- `test_multiprocess_collective`: end-to-end multiprocess collectives
 
-```bash
-./test_device_backend
-```
-
-Transport backend integration:
-
-```bash
-bash ./test/integration/run_transport_backend_suite.sh ./test_transport_backend
-```
-
-Multiprocess collective integration:
-
-```bash
-bash ./test/integration/run_ccl_multiprocess_suite.sh ./test_multiprocess_collective
-```
-
-Manual `torchrun` example:
+## Manual Multiprocess Example
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2 \
@@ -76,6 +52,5 @@ torchrun --no-python \
 
 ## Notes
 
-- `test-unit` covers planner, lowering, simulator, and executor behavior.
-- `test-integration` covers device backend, transport backend, and multiprocess collectives.
-- Multiprocess tests require `torchrun` and enough local GPUs.
+- Multiprocess tests require `torchrun` and enough visible local GPUs.
+- `--transport uccl` selects the RDMA adapter path via compatibility naming.

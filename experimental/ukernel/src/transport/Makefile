@@ -22,6 +22,10 @@ UCCL_LDFLAGS := $(UCCL_RDMA_STATIC) -libverbs -lrdmacm
 CXXFLAGS += $(UCCL_CFLAGS)
 LDFLAGS += $(UCCL_LDFLAGS)
 
+# Naming alias: "RDMA core" refers to collective/rdma static backend.
+RDMA_CORE_ROOT := $(UCCL_RDMA_ROOT)
+RDMA_CORE_STATIC := $(UCCL_RDMA_STATIC)
+
 LOCAL_INCLUDES := -I$(UCCL_ROOT)/experimental/ukernel/include -I$(UCCL_ROOT)/include \
 	-I. -Itest -Itest/common -Itest/unit -Itest/integration \
 	-I../../include -I$(CUDA_HOME)/include
@@ -43,7 +47,7 @@ OBJ_TEST_UNIT := $(TEST_UNIT_CPP:.cc=.o)
 OBJ_TEST_INTEGRATION := $(TEST_INTEGRATION_CPP:.cc=.o)
 TEST_UNIT_BIN := test_transport_unit
 TEST_INTEGRATION_BIN := test_transport_integration
-UCCL_RDMA_DEPS := $(wildcard $(UCCL_RDMA_ROOT)/*.cc $(UCCL_RDMA_ROOT)/*.h)
+RDMA_CORE_DEPS := $(wildcard $(RDMA_CORE_ROOT)/*.cc $(RDMA_CORE_ROOT)/*.h)
 
 .PHONY: all test test-unit test-integration unit integration suite clean
 
@@ -70,17 +74,17 @@ integration: test-integration
 suite: $(TEST_INTEGRATION_BIN)
 	./test/integration/run_transport_suite.sh ./$(TEST_INTEGRATION_BIN)
 
-$(UCCL_RDMA_STATIC): $(UCCL_RDMA_DEPS)
+$(RDMA_CORE_STATIC): $(RDMA_CORE_DEPS)
 	@echo "[ukernel/transport] rebuilding collective/rdma static library..."
-	$(MAKE) -C "$(UCCL_RDMA_ROOT)" librdma.a
+	$(MAKE) -C "$(RDMA_CORE_ROOT)" librdma.a
 
 %.o: %.cc
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
-$(TEST_UNIT_BIN): $(OBJ_CPP) $(OBJ_TEST_UNIT) $(UCCL_RDMA_STATIC)
+$(TEST_UNIT_BIN): $(OBJ_CPP) $(OBJ_TEST_UNIT) $(RDMA_CORE_STATIC)
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $^ $(LDFLAGS) -o $@
 
-$(TEST_INTEGRATION_BIN): $(OBJ_CPP) $(OBJ_TEST_INTEGRATION) $(UCCL_RDMA_STATIC)
+$(TEST_INTEGRATION_BIN): $(OBJ_CPP) $(OBJ_TEST_INTEGRATION) $(RDMA_CORE_STATIC)
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $^ $(LDFLAGS) -o $@
 
 clean:

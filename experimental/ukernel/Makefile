@@ -73,7 +73,7 @@ NVCCFLAGS  += -DUSE_REDIS_OOB --compiler-options "$(REDIS_CFLAGS)"
 LDFLAGS    += $(REDIS_LIBS)
 endif
 
-# UCCL collective support
+# RDMA core dependency (collective/rdma static library)
 UCCL_ROOT := $(abspath ../../)
 UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
 UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma.a
@@ -118,10 +118,10 @@ BENCH_BINS := $(BENCH_TRANSPORT_BIN) $(BENCH_GDRCOPY_BIN)
 STATIC_LIB  := libukernel.a
 SHARED_LIB  := libukernel.so
 
-# Build the core ukernel artifacts plus top-level benchmarks.
-all: $(STATIC_LIB) $(SHARED_LIB) bench
+# Build the core ukernel artifacts plus benchmarks.
+all: $(STATIC_LIB) $(SHARED_LIB) bench_all
 
-# Compilation rules - local includes must come before system/UCCL includes to avoid header conflicts
+# Compilation rules - local includes must come before system/RDMA headers to avoid conflicts
 %.o: %.cc
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
@@ -131,34 +131,45 @@ all: $(STATIC_LIB) $(SHARED_LIB) bench
 %.o: %.cu
 	$(NVCC) $(LOCAL_INCLUDES) $(NVCCFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-ensure-uccl-rdma:
+ensure-rdma-core:
 	@if [ ! -f "$(UCCL_RDMA_STATIC)" ]; then \
 		echo "[ukernel] building collective/rdma..."; \
 		$(MAKE) -C "$(UCCL_RDMA_ROOT)" build; \
 	fi
+
+# Backward-compatible alias.
+ensure-uccl-rdma: ensure-rdma-core
 
 # Static library
 $(STATIC_LIB): $(OBJ_CC) $(OBJ_CU)
 	ar rcs $@ $^
 
 # Shared library
-$(SHARED_LIB): $(OBJ_CC) $(OBJ_CU) | ensure-uccl-rdma
+$(SHARED_LIB): $(OBJ_CC) $(OBJ_CU) | ensure-rdma-core
 	$(CXX) -shared $(CXXFLAGS) $(INCLUDES) $^ $(LDFLAGS) -o $@
 
 # Benchmark build rules
 $(BENCH_TRANSPORT_OBJ): $(BENCH_TRANSPORT_SRC)
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) -MMD -MP -c $< -o $@
 
-$(BENCH_TRANSPORT_BIN): $(BENCH_TRANSPORT_OBJ) $(STATIC_LIB) | ensure-uccl-rdma
+$(BENCH_TRANSPORT_BIN): $(BENCH_TRANSPORT_OBJ) $(STATIC_LIB) | ensure-rdma-core
 	$(CXX) $(LOCAL_INCLUDES) $(CXXFLAGS) $(INCLUDES) $< $(STATIC_LIB) $(LDFLAGS) -o $@
 
 $(BENCH_GDRCOPY_OBJ): $(BENCH_GDRCOPY_SRC)
 	$(CXX) $(BENCH_GDRCOPY_CXXFLAGS) $(BENCH_GDRCOPY_INCLUDES) -MMD -MP -c $< -o $@
 
-$(BENCH_GDRCOPY_BIN): $(BENCH_GDRCOPY_OBJ) | ensure-uccl-rdma
+$(BENCH_GDRCOPY_BIN): $(BENCH_GDRCOPY_OBJ) | ensure-rdma-core
 	$(CXX) $< -o $@ $(BENCH_GDRCOPY_LIBS)
 
-bench: $(BENCH_BINS)
+bench_all: $(BENCH_BINS)
+
+# Backward-compatible alias.
+bench: bench_all
+
+bench_transport: $(BENCH_TRANSPORT_BIN)
+transport_bench: bench_transport
+
+bench_gdrcopy: $(BENCH_GDRCOPY_BIN)
 
 device_test:
 	$(MAKE) -C src/device test $(SUBMAKE_SM)
@@ -196,6 +207,4 @@ clean:
 # src/device/persistent_kernel_ops.o: src/device/persistent_kernel_ops.cu
 # 	$(NVCC) $(NVCCFLAGS) -Iinclude -Isrc/transport -Isrc/device -Isrc/device/fifo -MMD -MP -c $< -o $@
 
-.PHONY: all clean bench transport_bench device_test ccl_test transport_test transport_suite device_bench ensure-uccl-rdma
-
-transport_bench: $(BENCH_TRANSPORT_BIN)
+.PHONY: all clean bench bench_all bench_transport bench_gdrcopy transport_bench device_test ccl_test transport_test transport_suite device_bench ensure-rdma-core ensure-uccl-rdma
