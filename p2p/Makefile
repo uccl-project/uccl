@@ -252,7 +252,7 @@ dispatch-lib: $(DISPATCH_OBJ)
 	$(CXX) -shared -fPIC $< -o libuccl_p2p.so -ldl
 
 # Each backend: re-invoke make with the appropriate flags and output name.
-	clean-backend:
+clean-backend:
 	@rm -f $(CAPI_OBJECT) engine.o engine_api.o nccl/*.o nccl/*.d nccl_tcpx_endpo int.o
 
 transport-rdma:
