@@ -222,8 +222,10 @@ class EventOverlap:
     def current_stream_wait(self) -> None:
         """
         The current stream `torch.cuda.current_stream()` waits for the event to be finished.
+        If event is None (e.g., operation already completed synchronously on HIP), this is a no-op.
         """
-        assert self.event is not None
+        if self.event is None:
+            return
         stream_ptr = int(torch.cuda.current_stream().cuda_stream)
         self.event.current_stream_wait(stream_ptr)
 

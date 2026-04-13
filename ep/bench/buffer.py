@@ -326,6 +326,15 @@ class Buffer:
                 hidden=x.shape[1],
                 num_experts=num_experts,
             )
+        # On HIP platform, force return_recv_hook=True for correct async behavior
+        is_hip = torch.version.hip is not None
+        orig_return_recv_hook = return_recv_hook
+        orig_async_finish = async_finish
+        if is_hip and not return_recv_hook:
+            return_recv_hook = True
+            # HIP runtime doesn't support async and return_recv_hook together,
+            # so disable async when forcing return_recv_hook
+            async_finish = False
         num_ranks = self.group.size()
         num_local_experts = num_experts // num_ranks
         num_recv_tokens = num_ranks * num_max_dispatch_tokens_per_rank
@@ -412,11 +421,17 @@ class Buffer:
             packed_recv_x_scales_storage,
             cumulative_local_expert_recv_stats,
         )
+        # On HIP platform, if original return_recv_hook was False, call hook now
+        # to ensure data arrival and return a no-op hook to the caller
+        if is_hip and not orig_return_recv_hook:
+            if hook is not None:
+                hook()
+            hook = None
         return (
             (packed_recv_x, packed_recv_x_scales) if use_fp8 else packed_recv_x,
             packed_recv_count,
             handle,
-            EventOverlap(event, tensors_to_record if async_finish else None),
+            EventOverlap(event, tensors_to_record if orig_async_finish else None),
             hook,
         )
 
@@ -474,6 +489,15 @@ class Buffer:
             hidden,
             num_experts,
         ) = handle
+        # On HIP platform, force return_recv_hook=True for correct async behavior
+        is_hip = torch.version.hip is not None
+        orig_return_recv_hook = return_recv_hook
+        orig_async_finish = async_finish
+        if is_hip and not return_recv_hook:
+            return_recv_hook = True
+            # HIP runtime doesn't support async and return_recv_hook together,
+            # so disable async when forcing return_recv_hook
+            async_finish = False
         x_for_combine = x
         if zero_copy and self._next_low_latency_combine_buffer is not None:
             staged = self._next_low_latency_combine_buffer
@@ -526,9 +550,15 @@ class Buffer:
             layout_range,
             combined_x,
         )
+        # On HIP platform, if original return_recv_hook was False, call hook now
+        # to ensure data arrival and return a no-op hook to the caller
+        if is_hip and not orig_return_recv_hook:
+            if hook is not None:
+                hook()
+            hook = None
         return (
             combined_x,
-            EventOverlap(event, tensors_to_record if async_finish else None),
+            EventOverlap(event, tensors_to_record if orig_async_finish else None),
             hook,
         )
 
