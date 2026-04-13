@@ -24,6 +24,7 @@ try:
         initialize_uccl,
         destroy_uccl,
         _fp8_e4m3_dtype,
+        detect_is_intranode,
     )
 except ImportError:
     from utils import (
@@ -32,6 +33,7 @@ except ImportError:
         initialize_uccl,
         destroy_uccl,
         _fp8_e4m3_dtype,
+        detect_is_intranode,
     )
 
 
@@ -65,7 +67,7 @@ class Buffer:
         allow_nvlink_for_low_latency_mode: bool = True,
         allow_mnnvl: bool = False,
         explicitly_destroy: bool = False,
-        is_intranode: bool = False,
+        is_intranode: Optional[bool] = None,
     ) -> None:
         """
         Initialize the communication buffer.
@@ -85,7 +87,12 @@ class Buffer:
             explicitly_destroy: If this flag is set to True, you need to explicitly call `destroy()` to release resources;
                 otherwise, the resources will be released by the destructor.
                 Note: Releasing resources in the destructor may cause Python's exception handling process to hang.
+            is_intranode: whether all ranks are on the same node. If None, auto-detect by
+                gathering hostnames from all ranks.
         """
+        # Auto-detect is_intranode if not specified
+        if is_intranode is None:
+            is_intranode = detect_is_intranode(group)
         if "LOCAL_RANK" in os.environ:
             device_index = int(os.environ["LOCAL_RANK"])
         else:

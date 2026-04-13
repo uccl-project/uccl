@@ -32,6 +32,23 @@ except ImportError as exc:
     raise
 
 
+def detect_is_intranode(group: dist.ProcessGroup) -> bool:
+    """
+    Detect if all ranks in the group are on the same node by gathering hostnames.
+
+    Arguments:
+        group: the communication group.
+
+    Returns:
+        True if all ranks are on the same node (intranode), False otherwise.
+    """
+    import socket
+    hostname = socket.gethostname()
+    all_hostnames = [None] * group.size()
+    dist.all_gather_object(all_hostnames, hostname, group)
+    return len(set(all_hostnames)) == 1
+
+
 def calc_diff(x: torch.Tensor, y: torch.Tensor):
     x, y = x.double() + 1, y.double() + 1
     denominator = (x * x + y * y).sum()
