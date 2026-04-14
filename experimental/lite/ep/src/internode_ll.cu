@@ -265,7 +265,11 @@ __global__ __launch_bounds__(1024, 1) void dispatch(
                              src_int4_ptr, ld_nc_global, st_na_global);
 #else
           // Legacy path: directly issue one RDMA send per token.
-          __threadfence_system();
+          // No explicit __threadfence_system() needed here: the ring buffer
+          // commit in nvshmemi_ibgda_put_nbi_warp → atomic_set_and_commit
+          // already includes __threadfence_system() which flushes ALL pending
+          // writes (including the data writes above) before the D2H command
+          // becomes visible to the proxy.
           uccl::nvshmemi_ibgda_put_nbi_warp(
               dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
               src_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
@@ -1130,7 +1134,8 @@ __global__ __launch_bounds__(1024, 1) void combine(
       // NOTES: for zero-copy mode, we assume the data is already in the send
       // buffer
       if (dst_p2p_ptr == 0) {
-        __threadfence_system();
+        // No explicit __threadfence_system() needed: ring buffer commit in
+        // nvshmemi_ibgda_put_nbi_warp already includes one.
         nvshmemi_ibgda_put_nbi_warp(
             dst_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
             buf_ptr - reinterpret_cast<uint64_t>(rdma_buffer_ptr),
