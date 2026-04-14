@@ -230,6 +230,7 @@ class Communicator {
   struct PublishedIpcBuffer {
     uintptr_t base_addr = 0;
     size_t bytes = 0;
+    uint64_t binding_version = 0;
     bool valid = false;
   };
 

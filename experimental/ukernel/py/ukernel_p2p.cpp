@@ -203,7 +203,8 @@ class Communicator {
                         uint64_t binding_version = 1, size_t offset = 0,
                         size_t len = 0, size_t remote_offset = 0) {
     if (remote_mr_id == 0) {
-      throw std::invalid_argument("isend_direct requires non-zero remote_mr_id");
+      throw std::invalid_argument(
+          "isend_direct requires non-zero remote_mr_id");
     }
     torch::Tensor t = tensor_from_python(tensor, "tensor");
     if (!t.is_cuda()) {
@@ -216,7 +217,8 @@ class Communicator {
     size_t total_bytes = static_cast<size_t>(t.numel()) * elem_bytes;
     if (len == 0) len = total_bytes;
     if (offset + len > total_bytes) {
-      throw std::invalid_argument("isend_direct offset+len exceeds tensor size");
+      throw std::invalid_argument(
+          "isend_direct offset+len exceeds tensor size");
     }
     auto pinned_mr = find_pinned_mr_id(t.data_ptr(), total_bytes);
     uint32_t mr_id = pinned_mr.has_value()
@@ -224,8 +226,8 @@ class Communicator {
                          : comm_->reg_mr(t.data_ptr(), total_bytes).id;
     uint64_t req = comm_->isend(
         peer_rank, UKernel::Transport::LocalSlice{mr_id, offset, len},
-        UKernel::Transport::RemoteSlice{remote_mr_id, remote_offset, {},
-                                        binding_version});
+        UKernel::Transport::RemoteSlice{
+            remote_mr_id, remote_offset, {}, binding_version});
     if (req == 0) {
       if (!pinned_mr.has_value()) {
         comm_->dereg_mr(t.data_ptr());
@@ -251,15 +253,17 @@ class Communicator {
     size_t elem_bytes = static_cast<size_t>(t.element_size());
     size_t total_bytes = static_cast<size_t>(t.numel()) * elem_bytes;
     if (offset > total_bytes) {
-      throw std::invalid_argument("notify_ipc_tensor offset exceeds tensor size");
+      throw std::invalid_argument(
+          "notify_ipc_tensor offset exceeds tensor size");
     }
     if (len == 0) len = total_bytes - offset;
     if (offset + len > total_bytes) {
       throw std::invalid_argument(
           "notify_ipc_tensor offset+len exceeds tensor size");
     }
-    void* ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(t.data_ptr()) +
-                                        static_cast<uintptr_t>(offset));
+    void* ptr =
+        reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(t.data_ptr()) +
+                                static_cast<uintptr_t>(offset));
     return comm_->notify_ipc_buffer(peer_rank, ipc_id, ptr, len,
                                     binding_version);
   }
@@ -332,8 +336,8 @@ class Communicator {
   void send_direct(int peer_rank, nb::handle tensor, uint32_t remote_mr_id,
                    uint64_t binding_version = 1, size_t offset = 0,
                    size_t len = 0, size_t remote_offset = 0) {
-    uint64_t req = isend_direct(peer_rank, tensor, remote_mr_id, binding_version,
-                                offset, len, remote_offset);
+    uint64_t req = isend_direct(peer_rank, tensor, remote_mr_id,
+                                binding_version, offset, len, remote_offset);
     wait_finish(req);
   }
 

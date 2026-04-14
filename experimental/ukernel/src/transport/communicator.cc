@@ -1269,15 +1269,22 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
     size_t ipc_bytes = static_cast<size_t>(local_mr.length);
     uintptr_t ipc_base_addr = reinterpret_cast<uintptr_t>(ipc_base_ptr);
     bool should_publish = true;
+    uint64_t publish_binding_version = 0;
     {
       std::lock_guard<std::mutex> lk(ipc_gen_mu_);
       auto& published = local_ipc_published_buffers_[rank][dst.mem_id];
-      should_publish = !(published.valid &&
-                         published.base_addr == ipc_base_addr &&
-                         published.bytes == ipc_bytes);
+      if (published.valid && published.base_addr == ipc_base_addr &&
+          published.bytes == ipc_bytes) {
+        should_publish = false;
+        publish_binding_version = published.binding_version;
+      } else {
+        publish_binding_version =
+            ++local_ipc_binding_versions_[rank][dst.mem_id];
+      }
     }
     if (should_publish) {
-      if (!notify_ipc_buffer(rank, dst.mem_id, ipc_base_ptr, ipc_bytes)) {
+      if (!notify_ipc_buffer(rank, dst.mem_id, ipc_base_ptr, ipc_bytes,
+                             publish_binding_version)) {
         std::cerr << "[WARN] Communicator " << global_rank_
                   << " failed to publish IPC buffer metadata for rank " << rank
                   << ", ipc_id=" << dst.mem_id
@@ -1288,6 +1295,7 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
         auto& published = local_ipc_published_buffers_[rank][dst.mem_id];
         published.base_addr = ipc_base_addr;
         published.bytes = ipc_bytes;
+        published.binding_version = publish_binding_version;
         published.valid = true;
       }
     }
@@ -1500,34 +1508,31 @@ void Communicator::release(unsigned const req) {
 bool Communicator::wait_finish(unsigned const req) {
   if (req == 0) return false;
   if (progress_started_.load(std::memory_order_acquire)) {
-    TrackedRequest* slot = resolve_request_slot(req);
-    if (slot == nullptr) return true;
-    if (slot->kind == PeerTransportKind::Ipc) {
-      while (true) {
-        slot = resolve_request_slot(req);
-        if (slot == nullptr) return true;
-        auto state = slot->state.load(std::memory_order_acquire);
-        if (state == TrackedRequest::SlotState::InFlight) {
-          std::this_thread::yield();
-          continue;
-        }
-        if (state == TrackedRequest::SlotState::Completed ||
-            state == TrackedRequest::SlotState::Failed) {
-          TrackedRequest snapshot{};
-          if (try_release_request_slot(req, &snapshot)) {
-            bool failed = (state == TrackedRequest::SlotState::Failed);
-            cleanup_tracked_request(snapshot);
-            return !failed;
-          }
-          // CAS lost: another releaser (e.g. destructor cleanup) claimed the
-          // slot.  The slot is transitioning to Free — retry until nullptr.
-          std::this_thread::yield();
-          continue;
-        }
-        // Releasing is a transient state between Completed/Failed and Free.
-        // Yield and retry so the slot can finish transitioning.
+    while (true) {
+      TrackedRequest* slot = resolve_request_slot(req);
+      if (slot == nullptr) return true;
+      if (slot->kind != PeerTransportKind::Ipc) break;
+      auto state = slot->state.load(std::memory_order_acquire);
+      if (state == TrackedRequest::SlotState::InFlight) {
         std::this_thread::yield();
+        continue;
       }
+      if (state == TrackedRequest::SlotState::Completed ||
+          state == TrackedRequest::SlotState::Failed) {
+        TrackedRequest snapshot{};
+        if (try_release_request_slot(req, &snapshot)) {
+          bool failed = (state == TrackedRequest::SlotState::Failed);
+          cleanup_tracked_request(snapshot);
+          return !failed;
+        }
+        // CAS lost: another releaser (e.g. destructor cleanup) claimed the
+        // slot. The slot is transitioning to Free — retry until nullptr.
+        std::this_thread::yield();
+        continue;
+      }
+      // Releasing is a transient state between Completed/Failed and Free.
+      // Yield and retry so the slot can finish transitioning.
+      std::this_thread::yield();
     }
   }
   return wait_finish(std::vector<unsigned>{req});

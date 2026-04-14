@@ -231,9 +231,8 @@ static bool publish_ipc_recv_buffers(Communicator& comm, int peer_rank,
                                      size_t msg_size) {
   if (kind != PeerTransportKind::Ipc) return true;
   for (size_t i = 0; i < local_recv_mrs.size(); ++i) {
-    if (!comm.notify_ipc_buffer(peer_rank, local_recv_mrs[i].id,
-                                recv_slots[i], msg_size,
-                                kBenchIpcBindingVersion)) {
+    if (!comm.notify_ipc_buffer(peer_rank, local_recv_mrs[i].id, recv_slots[i],
+                                msg_size, kBenchIpcBindingVersion)) {
       return false;
     }
   }
@@ -246,7 +245,8 @@ static bool prefetch_remote_ipc_recv_buffers(
   if (kind != PeerTransportKind::Ipc) return true;
   for (auto const& remote_mr : remote_recv_mrs) {
     if (remote_mr.id == 0) return false;
-    if (!comm.wait_ipc_buffer(peer_rank, remote_mr.id, kBenchIpcBindingVersion)) {
+    if (!comm.wait_ipc_buffer(peer_rank, remote_mr.id,
+                              kBenchIpcBindingVersion)) {
       return false;
     }
   }
@@ -369,8 +369,8 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   std::vector<MR> remote_recv_mrs;
   if (transport_kind == PeerTransportKind::Ipc ||
       transport_kind == PeerTransportKind::Uccl) {
-    if (!publish_ipc_recv_buffers(comm, peer_rank, transport_kind, local_recv_mrs,
-                                  recv_slots, msg_size)) {
+    if (!publish_ipc_recv_buffers(comm, peer_rank, transport_kind,
+                                  local_recv_mrs, recv_slots, msg_size)) {
       fprintf(stderr, "[Sender %d] Failed to publish IPC receive buffers\n",
               rank);
       cleanup();
@@ -657,8 +657,8 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   std::vector<MR> remote_recv_mrs;
   if (transport_kind == PeerTransportKind::Ipc ||
       transport_kind == PeerTransportKind::Uccl) {
-    if (!publish_ipc_recv_buffers(comm, peer_rank, transport_kind, local_recv_mrs,
-                                  recv_slots, msg_size)) {
+    if (!publish_ipc_recv_buffers(comm, peer_rank, transport_kind,
+                                  local_recv_mrs, recv_slots, msg_size)) {
       fprintf(stderr, "[Receiver %d] Failed to publish IPC receive buffers\n",
               rank);
       cleanup();

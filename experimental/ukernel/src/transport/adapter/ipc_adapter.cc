@@ -739,7 +739,8 @@ bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
   transfer_info.is_send = 0;
   transfer_info.remote_gpu_idx_ = comm_->local_gpu_idx();
   void* actual_dst = creq->data();
-  IPCItem exported = comm_->export_local_ipc_buffer(actual_dst, creq->size_bytes);
+  IPCItem exported =
+      comm_->export_local_ipc_buffer(actual_dst, creq->size_bytes);
   if (!exported.valid) {
     std::cerr << "[ERROR] export_local_ipc_buffer failed for req " << creq->id
               << " match_seq " << creq->match_seq << std::endl;

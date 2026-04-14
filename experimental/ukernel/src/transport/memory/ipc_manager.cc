@@ -68,6 +68,18 @@ IPCItem IPCManager::create_local_ipc(void* ptr, size_t len, int device_idx) {
   GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, ptr));
   uintptr_t key = reinterpret_cast<uintptr_t>(base);
 
+  {
+    std::lock_guard<std::mutex> lk(local_mu_);
+    auto it = local_ipc_cache_.find(key);
+    if (it != local_ipc_cache_.end()) {
+      IPCItem out = it->second;
+      out.base_offset = ptr_addr - out.base_addr;
+      out.bytes = len;
+      if (out.allocation_size == 0) out.allocation_size = base_size;
+      return out;
+    }
+  }
+
   IPCItem created{};
   GPU_RT_CHECK(gpuIpcGetMemHandle(&created.handle, base));
   created.base_addr = key;
