@@ -3,11 +3,10 @@
 // All uccl_engine_* calls are forwarded through the backend's ops table.
 
 #include "uccl_p2p_ops.h"
-
 #include <cstdio>
 #include <cstdlib>
-#include <dlfcn.h>
 #include <mutex>
+#include <dlfcn.h>
 
 static uccl_p2p_ops* g_ops = nullptr;
 static void* g_handle = nullptr;
@@ -29,8 +28,8 @@ static void init_backend() {
     std::abort();
   }
 
-  auto get_ops =
-      reinterpret_cast<uccl_p2p_ops* (*)()>(dlsym(g_handle, "uccl_p2p_get_ops"));
+  auto get_ops = reinterpret_cast<uccl_p2p_ops* (*)()>(
+      dlsym(g_handle, "uccl_p2p_get_ops"));
   if (!get_ops) {
     std::fprintf(stderr,
                  "UCCL P2P: %s is missing uccl_p2p_get_ops symbol: %s\n",
@@ -55,9 +54,7 @@ uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   return ops()->create(num_cpus, in_python);
 }
 
-void uccl_engine_destroy(uccl_engine_t* engine) {
-  ops()->destroy(engine);
-}
+void uccl_engine_destroy(uccl_engine_t* engine) { ops()->destroy(engine); }
 
 uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
                                  int remote_gpu_idx, int remote_port,
@@ -128,9 +125,7 @@ void uccl_engine_stop_accept(uccl_engine_t* engine) {
   ops()->stop_accept(engine);
 }
 
-void uccl_engine_conn_destroy(uccl_conn_t* conn) {
-  ops()->conn_destroy(conn);
-}
+void uccl_engine_conn_destroy(uccl_conn_t* conn) { ops()->conn_destroy(conn); }
 
 void uccl_engine_mr_destroy(uccl_engine_t* engine, uccl_mr_t mr) {
   ops()->mr_destroy(engine, mr);
