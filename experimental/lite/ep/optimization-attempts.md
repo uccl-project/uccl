@@ -41,6 +41,7 @@ on H100 (NVLink latency hides the ~1 μs fence cost) but measurable on L4 PCIe.
 | 17 | PER_EXPERT_BATCHING (with GDR) | Tested | −42%. Not a host-memory issue — pipelining is the problem. |
 | 18 | Fence coalescing (deferred commit) | Tested | DS 2× slower (335 vs 170 μs). Deferred D2H function generates worse machine code. Barriers themselves have zero overhead. |
 | 19 | Outer head/tail loop removal | Tested | 9.86 vs 9.84 GB/s = no effect. Outer loop reads are L2-cached. |
+| 20 | CUDA IPC P2P for intra-node (NVL_PEERS=4) | Tested, reverted | **−80%** (7.80 → 1.54 GB/s 4-GPU). GPU kernel individual PCIe stores are 5× slower than CPU proxy batch memcpy. |
 
 ## Key Insights
 
@@ -57,6 +58,11 @@ on H100 (NVLink latency hides the ~1 μs fence cost) but measurable on L4 PCIe.
    PCIe writes are coalesced, ring buffer atomics are pipelined. The 60%
    "overhead" in D+C total is fundamental to the MoE dispatch/combine protocol
    (FP8 compute, atomic signaling, command queue latency, grid sync).
+
+4. **GPU kernel PCIe P2P writes are 5× slower than CPU proxy memcpy**: Each
+   GPU `st.global` to remote GPU memory generates an individual PCIe TLP with
+   high per-access latency (~2 μs). CPU bulk memcpy coalesces into large DMA
+   bursts. NVLink hides this (450 GB/s, ~100 ns latency), PCIe does not.
 
 ## Performance Summary
 
