@@ -54,8 +54,11 @@ class RdmaContext {
     ctx_ = dev->open();
     if (!ctx_) throw std::runtime_error("Failed to open context");
 
-    struct ibv_device_attr dev_attr;
-    assert(ibv_query_device(ctx_.get(), &dev_attr) == 0);
+    // Avoid assert-only checks: assertions are compiled out under -DNDEBUG.
+    struct ibv_device_attr dev_attr {};
+    if (ibv_query_device(ctx_.get(), &dev_attr) != 0) {
+      throw std::runtime_error("ibv_query_device failed");
+    }
     vendor_id_ = dev_attr.vendor_id;
 
     struct ibv_pd* pd = ibv_alloc_pd(ctx_.get());
@@ -97,7 +100,7 @@ class RdmaContext {
   }
 
   union ibv_gid detectGid(int gid_index, int port = 1) const {
-    struct ibv_port_attr port_attr;
+    struct ibv_port_attr port_attr {};
 
     char const* env = getenv("UCCL_P2P_RDMA_GID_INDEX");
     if (env) {
@@ -211,8 +214,10 @@ class RdmaContext {
   }
 
   uint16_t queryLid(int port = 1) const {
-    struct ibv_port_attr port_attr;
-    assert(ibv_query_port(ctx_.get(), port, &port_attr) == 0);
+    struct ibv_port_attr port_attr {};
+    if (ibv_query_port(ctx_.get(), port, &port_attr) != 0) {
+      throw std::runtime_error("ibv_query_port failed");
+    }
     return port_attr.lid;
   }
 

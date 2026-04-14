@@ -85,8 +85,11 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
                                           ChannelMetaData const& remote_meta) {
   int flags = 0;
   struct ibv_qp_attr attr = {};
-  struct ibv_port_attr port_attr;
-  assert(ibv_query_port(ctx->getCtx(), kPortNum, &port_attr) == 0);
+  // Explicit runtime check so query_port is not skipped in -DNDEBUG builds.
+  struct ibv_port_attr port_attr {};
+  if (ibv_query_port(ctx->getCtx(), kPortNum, &port_attr) != 0) {
+    throw std::runtime_error("ibv_query_port failed");
+  }
 
   // RTR
   memset(&attr, 0, sizeof(attr));
@@ -96,7 +99,12 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
   attr.rq_psn = 0;
   attr.max_dest_rd_atomic = MAX_DEST_RD_ATOMIC;
   attr.min_rnr_timer = MIN_RNR_TIMER;
-  if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET) {
+  if (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET ||
+      port_attr.link_layer == IBV_LINK_LAYER_UNSPECIFIED) {
+    // Some NIC stacks report UNSPECIFIED; treat it as RoCE-compatible.
+    if (port_attr.link_layer == IBV_LINK_LAYER_UNSPECIFIED) {
+      UCCL_LOG(WARN) << "Link layer is UNSPECIFIED, falling back to RoCE path";
+    }
     // RoCE
     attr.ah_attr.is_global = 1;
     attr.ah_attr.port_num = kPortNum;
@@ -116,7 +124,9 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
     attr.ah_attr.static_rate = 0;
     memset(&attr.ah_attr.grh, 0, sizeof(attr.ah_attr.grh));
   } else {
-    UCCL_LOG(ERROR) << "Unknown link layer: " << port_attr.link_layer;
+    // Print as integer to avoid char-formatted empty output.
+    UCCL_LOG(ERROR) << "Unknown link layer: "
+                    << static_cast<int>(port_attr.link_layer);
     throw std::runtime_error("Unknown link layer");
   }
 
