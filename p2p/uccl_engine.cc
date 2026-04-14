@@ -168,6 +168,30 @@ static void deserialize_ipc_info(char const* buf, IpcTransferInfo& info) {
 }
 #endif  // !UCCL_P2P_USE_TCPX
 
+// Returns true if IPC (local GPU-to-GPU) transfers are enabled.
+// Disabled by UCCL_P2P_DISABLE_IPC=1 or when transport is tcp/tcpx.
+static bool ipc_enabled() {
+  static bool enabled = [] {
+    char const* disable = std::getenv("UCCL_P2P_DISABLE_IPC");
+    if (disable && std::string(disable) == "1") return false;
+    char const* transport = std::getenv("UCCL_P2P_TRANSPORT");
+    if (transport) {
+      std::string t(transport);
+      // TODO: Support TCP/TCP-x along with IPC
+      // Currently that path is broken
+      if (t == "tcp" || t == "tcpx") {
+        std::fprintf(stderr,
+                     "UCCL: IPC disabled for transport '%s' "
+                     "(local transfers will use %s instead)\n",
+                     transport, transport);
+        return false;
+      }
+    }
+    return true;
+  }();
+  return enabled;
+}
+
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   (void)num_cpus;
   inside_python = in_python;
@@ -201,7 +225,7 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
 #else
   // Detect intra-node connection: if the target IP matches our own IP.
   std::string local_ip = uccl::get_oob_ip();
-  bool is_local = (std::string(ip_addr) == local_ip);
+  bool is_local = ipc_enabled() && (std::string(ip_addr) == local_ip);
 
   if (is_local && same_process) {
     // Same process: use shm rings directly, skip TCP.
@@ -229,8 +253,8 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   }
   conn->conn_id = conn_id;
   conn->engine = engine;
-  conn->is_local = is_local;
-  conn->same_process = same_process;
+  conn->is_local = ipc_enabled() ? is_local : false;
+  conn->same_process = ipc_enabled() ? same_process : false;
   conn->listener_thread = nullptr;
   conn->listener_running = false;
   return conn;
@@ -613,7 +637,7 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
     return -1;
   }
 
-  uint64_t flow_id = conn->conn_id;
+   uint64_t flow_id = conn->conn_id;
   return tcp_endpoint->send_notification(flow_id, oob_msg);
 #else
   NotifyMsg oob_msg;
