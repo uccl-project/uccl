@@ -4,9 +4,9 @@
 
 ## Transport Modes
 
-- `auto`: same-host -> `ipc`, cross-host RDMA-capable -> `uccl` (RDMA adapter), otherwise `tcp`
+- `auto`: same-host -> `ipc`, cross-host RDMA-capable -> `rdma`, otherwise `tcp`
 - `ipc`: same-host shared-memory + optional relay path
-- `uccl`: logical selector name for RDMA adapter backend
+- `rdma`: lightweight RDMA adapter path
 - `tcp`: socket transport fallback path
 
 ## Build
@@ -68,6 +68,6 @@ Backward-compatible env alias:
 
 ## Notes
 
-- For `PreferredTransport::Uccl`, both peers must be RDMA-capable.
-- `transport=uccl` is naming compatibility; implementation is RDMA adapter.
+- For `PreferredTransport::Rdma` and `PreferredTransport::Uccl`, both peers must be RDMA-capable.
+- `uccl` remains available as a legacy adapter selection.
 - `oob-shm` remains a manual diagnostic case, not default unit coverage.

@@ -53,4 +53,4 @@ torchrun --no-python \
 ## Notes
 
 - Multiprocess tests require `torchrun` and enough visible local GPUs.
-- `--transport uccl` selects the RDMA adapter path via compatibility naming.
+- `--transport rdma` selects the lightweight RDMA adapter path.

@@ -93,8 +93,9 @@ int run_exchange_client(std::string const& exchanger_ip, int exchanger_port,
 
   MR send_mr = comm->reg_mr(sendbuf_d, kMessageBytes);
   NamedMRInfos remote_recv_infos{};
-  if (comm->peer_transport_kind(kServerRank) ==
-      UKernel::Transport::PeerTransportKind::Uccl) {
+  auto peer_kind = comm->peer_transport_kind(kServerRank);
+  if (peer_kind == UKernel::Transport::PeerTransportKind::Uccl ||
+      peer_kind == UKernel::Transport::PeerTransportKind::Rdma) {
     require(comm->wait_named_mrs(kServerRank, kNamedMrGeneration,
                                  remote_recv_infos),
             "client wait_named_mrs failed");
@@ -129,8 +130,9 @@ int run_exchange_server(std::string const& exchanger_ip, int exchanger_port,
   GPU_RT_CHECK(gpuMemset(recvbuf_d, 0, kMessageBytes));
 
   MR recv_mr = comm->reg_mr(recvbuf_d, kMessageBytes);
-  if (comm->peer_transport_kind(kClientRank) ==
-      UKernel::Transport::PeerTransportKind::Uccl) {
+  auto peer_kind = comm->peer_transport_kind(kClientRank);
+  if (peer_kind == UKernel::Transport::PeerTransportKind::Uccl ||
+      peer_kind == UKernel::Transport::PeerTransportKind::Rdma) {
     NamedMRInfos infos{};
     infos.generation = kNamedMrGeneration;
     infos.entries.push_back(NamedMR{0, recv_mr});
@@ -286,6 +288,8 @@ int test_transport_communicator(int argc, char** argv) {
         UKernel::Transport::PreferredTransport::Auto;
     if (transport == "ipc") {
       preferred = UKernel::Transport::PreferredTransport::Ipc;
+    } else if (transport == "rdma") {
+      preferred = UKernel::Transport::PreferredTransport::Rdma;
     } else if (transport == "uccl") {
       preferred = UKernel::Transport::PreferredTransport::Uccl;
     } else if (transport == "tcp") {

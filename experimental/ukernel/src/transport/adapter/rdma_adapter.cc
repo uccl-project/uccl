@@ -1,230 +1,427 @@
 #include "rdma_adapter.h"
-#include "collective/rdma/transport.h"
-#include "util/gpu_rt.h"
-#include <chrono>
+#include "p2p/rdma/memory_allocator.h"
+#include "p2p/rdma/rdma_connection.h"
+#include "p2p/rdma/rdma_context.h"
+#include "p2p/rdma/rdma_ctrl_channel.h"
+#include "p2p/rdma/rdma_data_channel.h"
+#include "p2p/rdma/rdma_device.h"
+#include "gpu_rt.h"
+#include <array>
+#include <condition_variable>
+#include <cstdlib>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <thread>
 
 namespace UKernel {
 namespace Transport {
 
 namespace {
-constexpr auto kRdmaAsyncRetryTimeout = std::chrono::seconds(30);
-constexpr uint32_t kRdmaRetryYieldThreshold = 64;
-constexpr uint32_t kRdmaRetrySleepThreshold = 256;
-constexpr auto kRdmaRetryBackoff = std::chrono::microseconds(2);
+constexpr uint32_t kHandshakeMagic = 0x554B5244;  // "UKRD"
+constexpr uint32_t kHandshakeVersion = 1;
+constexpr uint32_t kRdmaWaitSpinCount = 128;
 
-inline void backoff_retry(uint32_t retries) {
-  if (retries < kRdmaRetryYieldThreshold) return;
-  if (retries < kRdmaRetrySleepThreshold) {
-    std::this_thread::yield();
-    return;
-  }
-  std::this_thread::sleep_for(kRdmaRetryBackoff);
+inline size_t channel_to_context(uint32_t channel_id) {
+  return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;
 }
 }  // namespace
 
-RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx, int world_size,
+RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx, int local_rank,
+                                           int world_size,
                                            RdmaTransportConfig config)
-    : local_gpu_idx_(local_gpu_idx) {
-  int num_engines = static_cast<int>(::ucclParamNUM_ENGINES());
-  if (num_engines <= 0) {
-    std::cerr << "[ERROR] Invalid RDMA num_engines=" << num_engines
-              << std::endl;
-    return;
-  }
-  if (config.num_engines > 0 && config.num_engines != num_engines) {
-    std::cout << "[WARN] RDMA engine count mismatch: requested "
-              << config.num_engines << ", runtime " << num_engines
-              << ". Using runtime value." << std::endl;
-  }
-
-  endpoint_ = std::make_unique<::uccl::RDMAEndpoint>(num_engines);
-  endpoint_->initialize_resources(num_engines * world_size);
-
-  int dev_idx = endpoint_->get_best_dev_idx(local_gpu_idx_);
-  if (dev_idx < 0) {
-    std::cerr << "[ERROR] RDMA get_best_dev_idx failed for local gpu "
-              << local_gpu_idx_ << std::endl;
-    endpoint_.reset();
-    return;
-  }
-  endpoint_->initialize_engine_by_dev(dev_idx, true);
+    : local_gpu_idx_(local_gpu_idx), local_rank_(local_rank) {
+  (void)world_size;
+  (void)config;
 
   request_slots_ = std::make_unique<PendingRequestSlot[]>(kRequestSlotCount);
   for (uint32_t i = 0; i < kRequestSlotCount; ++i) {
-    request_slots_[i].request = std::make_unique<::uccl::ucclRequest>();
     request_slots_[i].in_use = false;
     request_slots_[i].generation = 1;
     request_slots_[i].state = RequestState::Init;
     request_slots_[i].failed = false;
   }
+
+  allocator_ = std::make_shared<MemoryAllocator>();
+  initialized_ = initialize_contexts();
 }
 
-RdmaTransportAdapter::~RdmaTransportAdapter() { endpoint_.reset(); }
-
-uint16_t RdmaTransportAdapter::get_p2p_listen_port(int dev_idx) const {
-  if (!endpoint_ || dev_idx < 0) return 0;
-  return endpoint_->get_p2p_listen_port(dev_idx);
+RdmaTransportAdapter::~RdmaTransportAdapter() {
+  std::lock_guard<std::mutex> lk(mu_);
+  for (auto& [id, mr] : mr_id_to_local_mr_) {
+    (void)id;
+    for (auto const& ref : mr.cache_refs) {
+      if (ref.context != nullptr) {
+        ref.context->releaseCachedMr(ref.entry);
+      }
+    }
+    mr.cache_refs.clear();
+  }
+  mr_id_to_local_mr_.clear();
+  send_build_states_.clear();
+  peer_contexts_.clear();
+  contexts_.clear();
 }
 
-std::string RdmaTransportAdapter::get_p2p_listen_ip(int dev_idx) const {
-  if (!endpoint_ || dev_idx < 0) return {};
-  return endpoint_->get_p2p_listen_ip(dev_idx);
+bool RdmaTransportAdapter::initialize_contexts() {
+  std::vector<size_t> device_ids =
+      RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_);
+  if (device_ids.empty()) {
+    std::cerr << "[ERROR] RDMA no usable device for gpu " << local_gpu_idx_
+              << std::endl;
+    return false;
+  }
+
+  std::unordered_map<size_t, std::shared_ptr<RdmaContext>> device_ctx_map;
+  contexts_.clear();
+  contexts_.reserve(kNICContextNumber);
+
+  for (int i = 0; i < kNICContextNumber; ++i) {
+    size_t device_id = device_ids[static_cast<size_t>(i) % device_ids.size()];
+    auto it = device_ctx_map.find(device_id);
+    if (it != device_ctx_map.end()) {
+      contexts_.push_back(it->second);
+      continue;
+    }
+
+    auto device = RdmaDeviceManager::instance().getDevice(device_id);
+    if (!device) {
+      std::cerr << "[ERROR] RDMA device id " << device_id << " not found"
+                << std::endl;
+      return false;
+    }
+
+    auto context =
+        std::make_shared<RdmaContext>(device, static_cast<uint64_t>(contexts_.size()));
+    contexts_.push_back(context);
+    device_ctx_map.emplace(device_id, context);
+  }
+
+  if (contexts_.size() != kNICContextNumber) {
+    std::cerr << "[ERROR] RDMA context slots init failed, expected "
+              << kNICContextNumber << ", got " << contexts_.size() << std::endl;
+    return false;
+  }
+
+  auto devs = RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_);
+  if (!devs.empty()) {
+    numa_node_ = RdmaDeviceManager::instance().get_numa_node(devs.front());
+  }
+  return true;
 }
 
-int RdmaTransportAdapter::get_best_dev_idx(int gpu_idx) const {
-  if (!endpoint_) return -1;
-  return endpoint_->get_best_dev_idx(gpu_idx);
+std::shared_ptr<RdmaContext> RdmaTransportAdapter::get_context_by_channel_id(
+    uint32_t channel_id) const {
+  if (contexts_.empty()) return nullptr;
+  size_t idx = channel_to_context(channel_id);
+  if (idx >= contexts_.size()) return nullptr;
+  return contexts_[idx];
+}
+
+std::string RdmaTransportAdapter::serialize_handshake(
+    HandshakePacket const& packet) {
+  auto const* p = reinterpret_cast<uint8_t const*>(&packet);
+  std::ostringstream oss;
+  oss << std::hex << std::setfill('0');
+  for (size_t i = 0; i < sizeof(HandshakePacket); ++i) {
+    oss << std::setw(2) << static_cast<unsigned>(p[i]);
+  }
+  return oss.str();
+}
+
+bool RdmaTransportAdapter::deserialize_handshake(std::string const& payload,
+                                                 HandshakePacket* out_packet) {
+  if (out_packet == nullptr) return false;
+  if (payload.size() != sizeof(HandshakePacket) * 2) return false;
+  HandshakePacket packet{};
+  auto* p = reinterpret_cast<uint8_t*>(&packet);
+  for (size_t i = 0; i < sizeof(HandshakePacket); ++i) {
+    auto byte_str = payload.substr(i * 2, 2);
+    char* end = nullptr;
+    unsigned long v = std::strtoul(byte_str.c_str(), &end, 16);
+    if (end == nullptr || *end != '\0' || v > 0xff) return false;
+    p[i] = static_cast<uint8_t>(v);
+  }
+  *out_packet = packet;
+  return true;
+}
+
+bool RdmaTransportAdapter::validate_remote_packet(HandshakePacket const& remote,
+                                                  int expected_src_rank) const {
+  if (remote.magic != kHandshakeMagic || remote.version != kHandshakeVersion) {
+    return false;
+  }
+  if (remote.src_rank != expected_src_rank) return false;
+  if (remote.dst_rank != local_rank_) return false;
+  return true;
+}
+
+MemoryType RdmaTransportAdapter::detect_memory_type(void* ptr) {
+  if (ptr == nullptr) return MemoryType::HOST;
+  gpuPointerAttribute_t attr{};
+  gpuError_t err = gpuPointerGetAttributes(&attr, ptr);
+  if (err == gpuSuccess && attr.type == gpuMemoryTypeDevice) {
+    return MemoryType::GPU;
+  }
+  return MemoryType::HOST;
 }
 
 bool RdmaTransportAdapter::has_send_peer(int peer_rank) const {
   std::lock_guard<std::mutex> lk(mu_);
   auto it = peer_contexts_.find(peer_rank);
-  return it != peer_contexts_.end() && it->second.send_flow != nullptr;
+  return it != peer_contexts_.end() && it->second.send_conn != nullptr;
 }
 
 bool RdmaTransportAdapter::has_recv_peer(int peer_rank) const {
   std::lock_guard<std::mutex> lk(mu_);
   auto it = peer_contexts_.find(peer_rank);
-  return it != peer_contexts_.end() && it->second.recv_flow != nullptr;
+  return it != peer_contexts_.end() && it->second.recv_conn != nullptr;
+}
+
+bool RdmaTransportAdapter::build_send_bootstrap(int peer_rank,
+                                                std::string* out_payload) {
+  if (!initialized_ || out_payload == nullptr || peer_rank < 0) return false;
+
+  auto send_group = std::make_shared<SendConnection>(numa_node_, true);
+  auto ctrl_ctx = get_context_by_channel_id(kControlChannelID);
+  if (!ctrl_ctx) return false;
+
+  auto ctrl_mem =
+      allocator_->allocate(kRingBufferSize, MemoryType::HOST, ctrl_ctx);
+  auto send_ctrl = std::make_shared<SendControlChannel>(
+      ctrl_ctx, ctrl_mem, kControlChannelID);
+
+  SendBuildState state{};
+  state.send_conn = send_group;
+  state.send_ctrl = send_ctrl;
+
+  HandshakePacket local{};
+  local.magic = kHandshakeMagic;
+  local.version = kHandshakeVersion;
+  local.src_rank = local_rank_;
+  local.dst_rank = peer_rank;
+  local.gpu_idx = local_gpu_idx_;
+  local.ctrl_meta = *send_ctrl->get_local_meta();
+  local.ctrl_mem = RemoteMemInfo(ctrl_mem);
+
+  for (int i = 0; i < kQpNumPerChannel; ++i) {
+    uint32_t channel_id = static_cast<uint32_t>(i + 1);
+    auto ctx = get_context_by_channel_id(channel_id);
+    if (!ctx) return false;
+    auto ch = std::make_shared<RDMADataChannel>(ctx, channel_id);
+    send_group->addChannel(channel_id, ch);
+    local.normal_meta[i] = *ch->get_local_meta();
+    state.channels[static_cast<size_t>(i)] = ch;
+  }
+
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    send_build_states_[peer_rank] = std::move(state);
+  }
+  *out_payload = serialize_handshake(local);
+  return true;
+}
+
+bool RdmaTransportAdapter::create_recv_from_remote_send(
+    int peer_rank, HandshakePacket const& remote_send,
+    HandshakePacket* out_local_recv) {
+  if (out_local_recv == nullptr) return false;
+
+  auto recv_group = std::make_shared<RecvConnection>(numa_node_, true);
+  auto ctrl_ctx = get_context_by_channel_id(kControlChannelID);
+  if (!ctrl_ctx) return false;
+
+  auto ctrl_mem =
+      allocator_->allocate(kRingBufferSize, MemoryType::HOST, ctrl_ctx);
+
+  MetaInfoToExchange remote_ctrl_meta;
+  remote_ctrl_meta.channel_meta = remote_send.ctrl_meta;
+  remote_ctrl_meta.mem_meta = remote_send.ctrl_mem;
+
+  auto recv_ctrl = std::make_shared<RecvControlChannel>(
+      ctrl_ctx, remote_ctrl_meta, ctrl_mem, kControlChannelID);
+
+  HandshakePacket local{};
+  local.magic = kHandshakeMagic;
+  local.version = kHandshakeVersion;
+  local.src_rank = local_rank_;
+  local.dst_rank = peer_rank;
+  local.gpu_idx = local_gpu_idx_;
+  local.ctrl_meta = *recv_ctrl->get_local_meta();
+  local.ctrl_mem = RemoteMemInfo(ctrl_mem);
+
+  for (int i = 0; i < kQpNumPerChannel; ++i) {
+    uint32_t channel_id = static_cast<uint32_t>(i + 1);
+    auto ctx = get_context_by_channel_id(channel_id);
+    if (!ctx) return false;
+    auto ch = std::make_shared<RDMADataChannel>(ctx, remote_send.normal_meta[i],
+                                                channel_id);
+    recv_group->addChannel(channel_id, ch);
+    local.normal_meta[i] = *ch->get_local_meta();
+  }
+
+  recv_group->setControlChannel(std::move(recv_ctrl));
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    auto& ctx = peer_contexts_[peer_rank];
+    ctx.recv_conn = recv_group;
+  }
+
+  *out_local_recv = local;
+  return true;
+}
+
+bool RdmaTransportAdapter::build_recv_bootstrap(
+    int peer_rank, std::string const& remote_send_payload,
+    std::string* out_payload) {
+  if (!initialized_ || out_payload == nullptr || peer_rank < 0) return false;
+
+  HandshakePacket remote_send{};
+  if (!deserialize_handshake(remote_send_payload, &remote_send)) return false;
+  if (!validate_remote_packet(remote_send, peer_rank)) return false;
+
+  HandshakePacket local_recv{};
+  if (!create_recv_from_remote_send(peer_rank, remote_send, &local_recv)) {
+    return false;
+  }
+  *out_payload = serialize_handshake(local_recv);
+  return true;
+}
+
+bool RdmaTransportAdapter::finalize_send_from_remote_recv(
+    int peer_rank, HandshakePacket const& remote_recv) {
+  SendBuildState state{};
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = send_build_states_.find(peer_rank);
+    if (it == send_build_states_.end()) return false;
+    state = it->second;
+    send_build_states_.erase(it);
+  }
+
+  if (!state.send_conn || !state.send_ctrl) return false;
+
+  state.send_ctrl->establishChannel(remote_recv.ctrl_meta);
+  for (int i = 0; i < kQpNumPerChannel; ++i) {
+    auto ch = state.channels[static_cast<size_t>(i)];
+    if (!ch) return false;
+    ch->establishChannel(remote_recv.normal_meta[i]);
+  }
+  state.send_conn->setControlChannel(std::move(state.send_ctrl));
+
+  std::lock_guard<std::mutex> lk(mu_);
+  auto& ctx = peer_contexts_[peer_rank];
+  ctx.send_conn = state.send_conn;
+  return true;
+}
+
+bool RdmaTransportAdapter::finalize_send_bootstrap(
+    int peer_rank, std::string const& remote_recv_payload) {
+  if (!initialized_ || peer_rank < 0) return false;
+  HandshakePacket remote_recv{};
+  if (!deserialize_handshake(remote_recv_payload, &remote_recv)) return false;
+  if (!validate_remote_packet(remote_recv, peer_rank)) return false;
+  return finalize_send_from_remote_recv(peer_rank, remote_recv);
+}
+
+void RdmaTransportAdapter::rollback_peer_bootstrap(int peer_rank) {
+  if (peer_rank < 0) return;
+  std::lock_guard<std::mutex> lk(mu_);
+  send_build_states_.erase(peer_rank);
+  auto it = peer_contexts_.find(peer_rank);
+  if (it == peer_contexts_.end()) return;
+  it->second.send_conn.reset();
+  it->second.recv_conn.reset();
+  peer_contexts_.erase(it);
 }
 
 bool RdmaTransportAdapter::ensure_peer(PeerConnectSpec const& spec) {
-  if (spec.peer_rank < 0) return false;
-  if (has_peer(spec.peer_rank)) return true;
-  if (!std::holds_alternative<RdmaPeerConnectSpec>(spec.detail)) return false;
-
-  auto const& rdma = std::get<RdmaPeerConnectSpec>(spec.detail);
-  if (spec.type == PeerConnectType::Connect) {
-    return connect_to_peer(spec.peer_rank, rdma.remote_ip, rdma.remote_port,
-                           rdma.local_dev_idx, rdma.local_gpu_idx,
-                           rdma.remote_dev_idx, rdma.remote_gpu_idx);
-  }
-  return accept_from_peer(spec.peer_rank, rdma.remote_ip, rdma.remote_dev_idx,
-                          rdma.remote_gpu_idx, rdma.remote_port);
-}
-
-bool RdmaTransportAdapter::is_memory_registered(uint64_t mr_id) const {
-  std::lock_guard<std::mutex> lk(mu_);
-  return mr_id_to_mhandle_.find(mr_id) != mr_id_to_mhandle_.end();
+  return has_peer(spec.peer_rank);
 }
 
 bool RdmaTransportAdapter::register_memory(uint64_t mr_id, void* ptr,
                                            size_t len) {
-  if (!endpoint_ || ptr == nullptr || len == 0) return false;
+  if (!initialized_ || ptr == nullptr || len == 0) return false;
   {
-    std::lock_guard<std::mutex> lk(mu_);
-    if (mr_id_to_mhandle_.find(mr_id) != mr_id_to_mhandle_.end()) return true;
+    std::unique_lock<std::mutex> lk(mu_);
+    while (true) {
+      auto it = mr_registering_.find(mr_id);
+      if (it == mr_registering_.end() || !it->second) break;
+      mr_cv_.wait(lk);
+    }
+    if (mr_id_to_local_mr_.find(mr_id) != mr_id_to_local_mr_.end()) return true;
+    mr_registering_[mr_id] = true;
   }
 
-  ::uccl::Mhandle* mhandle = nullptr;
-  int dev_idx = endpoint_->get_best_dev_idx(local_gpu_idx_);
-  if (dev_idx < 0) return false;
-  if (endpoint_->uccl_regmr(dev_idx, ptr, len, 0, &mhandle) != 0 || !mhandle) {
-    return false;
+  LocalMr local_mr;
+  local_mr.block = std::make_shared<RegMemBlock>(ptr, len, detect_memory_type(ptr));
+  bool success = false;
+
+  std::unordered_map<RdmaContext*, struct ibv_mr*> registered;
+  for (size_t context_id = 0; context_id < contexts_.size(); ++context_id) {
+    auto ctx = contexts_[context_id];
+    if (!ctx) {
+      for (auto const& ref : local_mr.cache_refs) {
+        if (ref.context) ref.context->releaseCachedMr(ref.entry);
+      }
+      local_mr.cache_refs.clear();
+      break;
+    }
+
+    auto found = registered.find(ctx.get());
+    if (found != registered.end()) {
+      local_mr.block->setMRByContextID(static_cast<uint32_t>(context_id),
+                                       found->second);
+      continue;
+    }
+
+    MrCacheEntry* entry = ctx->acquireCachedMr(ptr, len);
+    if (!entry || !entry->mr) {
+      for (auto const& ref : local_mr.cache_refs) {
+        if (ref.context) ref.context->releaseCachedMr(ref.entry);
+      }
+      local_mr.cache_refs.clear();
+      break;
+    }
+
+    local_mr.block->setMRByContextID(static_cast<uint32_t>(context_id),
+                                     entry->mr);
+    local_mr.cache_refs.push_back({ctx, entry});
+    registered.emplace(ctx.get(), entry->mr);
   }
 
-  std::lock_guard<std::mutex> lk(mu_);
-  mr_id_to_mhandle_[mr_id] = mhandle;
-  return true;
+  if (local_mr.cache_refs.size() == contexts_.size()) {
+    success = true;
+  }
+
+  std::unique_lock<std::mutex> lk(mu_);
+  if (success) {
+    mr_id_to_local_mr_.emplace(mr_id, std::move(local_mr));
+  }
+  mr_registering_.erase(mr_id);
+  lk.unlock();
+  mr_cv_.notify_all();
+  return success;
 }
 
 void RdmaTransportAdapter::deregister_memory(uint64_t mr_id) {
-  if (!endpoint_) return;
   std::lock_guard<std::mutex> lk(mu_);
-  auto it = mr_id_to_mhandle_.find(mr_id);
-  if (it == mr_id_to_mhandle_.end()) return;
-  endpoint_->uccl_deregmr(it->second);
-  mr_id_to_mhandle_.erase(it);
+  auto it = mr_id_to_local_mr_.find(mr_id);
+  if (it == mr_id_to_local_mr_.end()) return;
+
+  for (auto const& ref : it->second.cache_refs) {
+    if (ref.context != nullptr) {
+      ref.context->releaseCachedMr(ref.entry);
+    }
+  }
+  it->second.cache_refs.clear();
+  mr_id_to_local_mr_.erase(it);
 }
 
-bool RdmaTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip,
-                                           uint16_t remote_port,
-                                           int local_dev_idx, int local_gpu_idx,
-                                           int remote_dev_idx,
-                                           int remote_gpu_idx) {
-  if (has_send_peer(peer_rank) && has_recv_peer(peer_rank)) return true;
-  if (!endpoint_) return false;
-  if (local_dev_idx < 0 || remote_dev_idx < 0 || remote_port == 0) return false;
-
-  if (!has_send_peer(peer_rank)) {
-    ::uccl::ConnID conn_id =
-        endpoint_->uccl_connect(local_dev_idx, local_gpu_idx, remote_dev_idx,
-                                remote_gpu_idx, remote_ip, remote_port);
-    if (conn_id.context == nullptr) return false;
-
-    std::lock_guard<std::mutex> lk(mu_);
-    auto& ctx = peer_contexts_[peer_rank];
-    ctx.peer_rank = peer_rank;
-    ctx.send_flow = static_cast<::uccl::UcclFlow*>(conn_id.context);
-    ctx.remote_ip = remote_ip;
-    ctx.remote_dev_idx = remote_dev_idx;
-    ctx.remote_gpu_idx = remote_gpu_idx;
-  }
-
-  if (!has_recv_peer(peer_rank)) {
-    if (!accept_from_peer(peer_rank, remote_ip, remote_dev_idx, remote_gpu_idx,
-                          remote_port)) {
-      return false;
-    }
-  }
-  return has_send_peer(peer_rank) && has_recv_peer(peer_rank);
-}
-
-bool RdmaTransportAdapter::accept_from_peer(
-    int peer_rank, std::string const& expected_remote_ip,
-    int expected_remote_dev_idx, int expected_remote_gpu_idx,
-    uint16_t expected_remote_port) {
-  if (has_send_peer(peer_rank) && has_recv_peer(peer_rank)) return true;
-  if (!endpoint_) return false;
-
-  if (!has_recv_peer(peer_rank)) {
-    int dev_idx = endpoint_->get_best_dev_idx(local_gpu_idx_);
-    if (dev_idx < 0) return false;
-
-    int listen_fd = endpoint_->get_p2p_listen_fd(dev_idx);
-    if (listen_fd < 0) return false;
-
-    std::string remote_ip;
-    int remote_dev = 0;
-    int remote_gpuidx = 0;
-    ::uccl::ConnID conn_id =
-        endpoint_->uccl_accept(dev_idx, listen_fd, local_gpu_idx_, remote_ip,
-                               &remote_dev, &remote_gpuidx);
-    if (conn_id.context == nullptr) return false;
-
-    if ((!expected_remote_ip.empty() && remote_ip != expected_remote_ip) ||
-        (expected_remote_dev_idx >= 0 &&
-         remote_dev != expected_remote_dev_idx) ||
-        (expected_remote_gpu_idx >= 0 &&
-         remote_gpuidx != expected_remote_gpu_idx)) {
-      endpoint_->discard_conn(conn_id);
-      return false;
-    }
-
-    std::lock_guard<std::mutex> lk(mu_);
-    auto& ctx = peer_contexts_[peer_rank];
-    ctx.peer_rank = peer_rank;
-    ctx.recv_flow = static_cast<::uccl::UcclFlow*>(conn_id.context);
-    ctx.remote_ip = remote_ip;
-    ctx.remote_dev_idx = remote_dev;
-    ctx.remote_gpu_idx = remote_gpuidx;
-  }
-
-  if (!has_send_peer(peer_rank)) {
-    if (expected_remote_port == 0) return false;
-    int local_dev_idx = endpoint_->get_best_dev_idx(local_gpu_idx_);
-    if (local_dev_idx < 0) return false;
-    if (!connect_to_peer(peer_rank, expected_remote_ip, expected_remote_port,
-                         local_dev_idx, local_gpu_idx_, expected_remote_dev_idx,
-                         expected_remote_gpu_idx)) {
-      return false;
-    }
-  }
-
-  return has_send_peer(peer_rank) && has_recv_peer(peer_rank);
+bool RdmaTransportAdapter::is_memory_registered(uint64_t mr_id) const {
+  std::lock_guard<std::mutex> lk(mu_);
+  return mr_id_to_local_mr_.find(mr_id) != mr_id_to_local_mr_.end();
 }
 
 RdmaTransportAdapter::PendingRequestSlot*
@@ -240,10 +437,8 @@ RdmaTransportAdapter::try_acquire_request_slot(unsigned* out_request_id) {
     slot.in_use = true;
     slot.failed = false;
     slot.state = RequestState::Init;
+    slot.request = AdapterRequest{};
     if (slot.generation == 0) slot.generation = 1;
-    if (!slot.request) {
-      slot.request = std::make_unique<::uccl::ucclRequest>();
-    }
     *out_request_id = make_request_id(idx, slot.generation);
     return &slot;
   }
@@ -268,19 +463,25 @@ void RdmaTransportAdapter::release_request_slot_locked(unsigned request_id) {
   slot->in_use = false;
   slot->failed = false;
   slot->state = RequestState::Init;
+  slot->request = AdapterRequest{};
   uint32_t next_gen = slot->generation + 1;
   slot->generation = (next_gen == 0) ? 1 : next_gen;
 }
 
 unsigned RdmaTransportAdapter::send_async(
     int peer_rank, void* local_ptr, size_t len, uint64_t local_mr_id,
-    std::optional<RemoteSlice> remote_hint, BounceBufferProvider bounce_provider) {
+    std::optional<RemoteSlice> remote_hint,
+    BounceBufferProvider bounce_provider) {
   void* send_ptr = local_ptr;
   uint64_t send_mr_id = local_mr_id;
   if (bounce_provider) {
     BounceBufferInfo info = bounce_provider(len);
     if (info.ptr != nullptr) {
-      GPU_RT_CHECK(gpuMemcpy(info.ptr, local_ptr, len, gpuMemcpyDeviceToHost));
+      if (detect_memory_type(local_ptr) == MemoryType::GPU) {
+        GPU_RT_CHECK(gpuMemcpy(info.ptr, local_ptr, len, gpuMemcpyDeviceToHost));
+      } else {
+        std::memcpy(info.ptr, local_ptr, len);
+      }
       send_ptr = info.ptr;
       send_mr_id = info.mr_id;
     }
@@ -340,56 +541,54 @@ int RdmaTransportAdapter::send_async_rdma(int peer_rank, void* local_ptr,
                                           uint64_t remote_mr_id,
                                           uint64_t request_id,
                                           RemoteSlice const* remote_slice) {
-  ::uccl::UcclFlow* flow = nullptr;
-  ::uccl::Mhandle* local_mh = nullptr;
-  ::uccl::ucclRequest* ureq = nullptr;
+  (void)remote_mr_id;
+
+  std::shared_ptr<SendConnection> send_conn;
+  LocalMr local_mr;
   {
     std::lock_guard<std::mutex> lk(mu_);
     auto peer_it = peer_contexts_.find(peer_rank);
-    if (peer_it == peer_contexts_.end()) return -1;
-    flow = peer_it->second.send_flow;
+    if (peer_it == peer_contexts_.end() || !peer_it->second.send_conn) return -1;
+    send_conn = peer_it->second.send_conn;
 
-    auto mh_it = mr_id_to_mhandle_.find(local_mr_id);
-    if (mh_it != mr_id_to_mhandle_.end()) local_mh = mh_it->second;
+    auto mh_it = mr_id_to_local_mr_.find(local_mr_id);
+    if (mh_it == mr_id_to_local_mr_.end()) return -1;
+    local_mr = mh_it->second;
 
     PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
     if (slot == nullptr || slot->state != RequestState::Init) return -1;
-    if (!slot->request) slot->request = std::make_unique<::uccl::ucclRequest>();
-    std::memset(slot->request.get(), 0, sizeof(::uccl::ucclRequest));
     slot->failed = false;
-    ureq = slot->request.get();
   }
 
-  if (!flow || !local_mh || !ureq) return -1;
+  auto send_mem = std::make_shared<RegMemBlock>(
+      local_ptr, len, local_mr.block->mr_array, local_mr.block->type);
 
-  int ret = -1;
-  if (remote_slice != nullptr && remote_mr_id != 0 &&
-      remote_slice->has_write_hint()) {
-    ::uccl::FifoItem slot_item{};
-    slot_item.addr = remote_slice->write.addr;
-    slot_item.rkey = remote_slice->write.key;
-    slot_item.size = remote_slice->write.capacity == 0
-                         ? static_cast<uint32_t>(len)
-                         : remote_slice->write.capacity;
-    slot_item.rid = remote_slice->write.rid;
-    slot_item.engine_offset = remote_slice->write.engine_offset;
-    slot_item.nmsgs = 1;
-    slot_item.idx = 1;
-    std::memset(slot_item.padding, 0, sizeof(slot_item.padding));
-    ret = endpoint_->uccl_write_async(flow, local_mh, local_ptr, len, slot_item,
-                                      ureq);
-  }
+  int64_t token = -1;
+  RequestKind kind = RequestKind::Send;
 
-  if (ret != 0) {
-    auto deadline = std::chrono::steady_clock::now() + kRdmaAsyncRetryTimeout;
-    uint32_t retries = 0;
-    while (std::chrono::steady_clock::now() < deadline) {
-      ret = endpoint_->uccl_send_async(flow, local_mh, local_ptr, len, ureq);
-      if (ret == 0) break;
-      backoff_retry(retries++);
+  if (remote_slice != nullptr && remote_slice->has_write_hint()) {
+    auto remote_mem = std::make_shared<RemoteMemInfo>();
+    remote_mem->addr = remote_slice->write.addr;
+    remote_mem->length =
+        (remote_slice->write.capacity == 0) ? len : remote_slice->write.capacity;
+    remote_mem->type = MemoryType::GPU;
+    for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
+      remote_mem->rkey_array.setKeyByContextID(ctx, remote_slice->write.key);
     }
+
+    auto req = std::make_shared<RDMASendRequest>(send_mem, remote_mem);
+    req->send_type = SendType::Write;
+    token = send_conn->postWriteOrRead(req);
+    kind = RequestKind::Write;
+  } else {
+    auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
+    auto req = std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
+    req->send_type = SendType::Send;
+    token = send_conn->send(req);
+    kind = RequestKind::Send;
   }
-  if (ret != 0) {
+
+  if (token < 0) {
     std::lock_guard<std::mutex> lk(mu_);
     PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
     if (slot != nullptr) {
@@ -402,6 +601,9 @@ int RdmaTransportAdapter::send_async_rdma(int peer_rank, void* local_ptr,
   std::lock_guard<std::mutex> lk(mu_);
   PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
   if (slot == nullptr) return -1;
+  slot->request.kind = kind;
+  slot->request.peer_rank = peer_rank;
+  slot->request.token = token;
   slot->failed = false;
   slot->state = RequestState::Posted;
   return 0;
@@ -410,42 +612,29 @@ int RdmaTransportAdapter::send_async_rdma(int peer_rank, void* local_ptr,
 int RdmaTransportAdapter::recv_async_rdma(int peer_rank, void* local_ptr,
                                           size_t len, uint64_t local_mr_id,
                                           uint64_t request_id) {
-  ::uccl::UcclFlow* flow = nullptr;
-  ::uccl::Mhandle* local_mh = nullptr;
-  ::uccl::ucclRequest* ureq = nullptr;
+  std::shared_ptr<RecvConnection> recv_conn;
+  LocalMr local_mr;
   {
     std::lock_guard<std::mutex> lk(mu_);
     auto peer_it = peer_contexts_.find(peer_rank);
-    if (peer_it == peer_contexts_.end()) return -1;
-    flow = peer_it->second.recv_flow;
+    if (peer_it == peer_contexts_.end() || !peer_it->second.recv_conn) return -1;
+    recv_conn = peer_it->second.recv_conn;
 
-    auto mh_it = mr_id_to_mhandle_.find(local_mr_id);
-    if (mh_it != mr_id_to_mhandle_.end()) local_mh = mh_it->second;
+    auto mh_it = mr_id_to_local_mr_.find(local_mr_id);
+    if (mh_it == mr_id_to_local_mr_.end()) return -1;
+    local_mr = mh_it->second;
 
     PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
     if (slot == nullptr || slot->state != RequestState::Init) return -1;
-    if (!slot->request) slot->request = std::make_unique<::uccl::ucclRequest>();
-    std::memset(slot->request.get(), 0, sizeof(::uccl::ucclRequest));
     slot->failed = false;
-    ureq = slot->request.get();
   }
 
-  if (!flow || !local_mh || !ureq) return -1;
+  auto recv_mem = std::make_shared<RegMemBlock>(
+      local_ptr, len, local_mr.block->mr_array, local_mr.block->type);
+  auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
+  int64_t token = recv_conn->recv(recv_req);
 
-  ::uccl::Mhandle* mh_array[1] = {local_mh};
-  void* data_array[1] = {local_ptr};
-  int size_array[1] = {static_cast<int>(len)};
-
-  auto deadline = std::chrono::steady_clock::now() + kRdmaAsyncRetryTimeout;
-  int ret = -1;
-  uint32_t retries = 0;
-  while (std::chrono::steady_clock::now() < deadline) {
-    ret = endpoint_->uccl_recv_async(flow, mh_array, data_array, size_array, 1,
-                                     ureq);
-    if (ret == 0) break;
-    backoff_retry(retries++);
-  }
-  if (ret != 0) {
+  if (token < 0) {
     std::lock_guard<std::mutex> lk(mu_);
     PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
     if (slot != nullptr) {
@@ -458,13 +647,45 @@ int RdmaTransportAdapter::recv_async_rdma(int peer_rank, void* local_ptr,
   std::lock_guard<std::mutex> lk(mu_);
   PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
   if (slot == nullptr) return -1;
+  slot->request.kind = RequestKind::Recv;
+  slot->request.peer_rank = peer_rank;
+  slot->request.token = token;
   slot->failed = false;
   slot->state = RequestState::Posted;
   return 0;
 }
 
+bool RdmaTransportAdapter::is_backend_request_done(AdapterRequest const& request,
+                                                   bool* ok) const {
+  if (ok) *ok = false;
+
+  std::shared_ptr<SendConnection> send_conn;
+  std::shared_ptr<RecvConnection> recv_conn;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    auto peer_it = peer_contexts_.find(request.peer_rank);
+    if (peer_it == peer_contexts_.end()) return true;
+    send_conn = peer_it->second.send_conn;
+    recv_conn = peer_it->second.recv_conn;
+  }
+
+  switch (request.kind) {
+    case RequestKind::Send:
+    case RequestKind::Write:
+      if (!send_conn) return true;
+      if (ok) *ok = true;
+      return send_conn->check(request.token);
+    case RequestKind::Recv:
+      if (!recv_conn) return true;
+      if (ok) *ok = true;
+      return recv_conn->check(static_cast<uint64_t>(request.token));
+    default:
+      return true;
+  }
+}
+
 bool RdmaTransportAdapter::poll_completion(unsigned request_id) {
-  ::uccl::ucclRequest* req = nullptr;
+  AdapterRequest req;
   {
     std::lock_guard<std::mutex> lk(mu_);
     PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
@@ -474,19 +695,23 @@ bool RdmaTransportAdapter::poll_completion(unsigned request_id) {
       return true;
     }
     if (slot->state != RequestState::Posted) return false;
-    if (!endpoint_ || !slot->request || !slot->request->context) {
-      slot->failed = true;
-      slot->state = RequestState::Failed;
-      return true;
-    }
-    req = slot->request.get();
+    req = slot->request;
   }
 
-  if (!endpoint_->uccl_poll_ureq_once(req)) return false;
+  bool backend_ok = false;
+  bool done = is_backend_request_done(req, &backend_ok);
+  if (!done) return false;
 
   std::lock_guard<std::mutex> lk(mu_);
   PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
   if (slot == nullptr) return true;
+
+  if (!backend_ok) {
+    slot->failed = true;
+    slot->state = RequestState::Failed;
+    return true;
+  }
+
   if (slot->state == RequestState::Posted) {
     slot->state = RequestState::Completed;
   }
@@ -494,10 +719,14 @@ bool RdmaTransportAdapter::poll_completion(unsigned request_id) {
 }
 
 bool RdmaTransportAdapter::wait_completion(unsigned request_id) {
-  uint32_t retries = 0;
+  uint32_t spins = 0;
   while (true) {
     if (poll_completion(request_id)) return true;
-    backoff_retry(retries++);
+    if (spins < kRdmaWaitSpinCount) {
+      ++spins;
+      continue;
+    }
+    std::this_thread::yield();
   }
 }
 

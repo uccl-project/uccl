@@ -35,6 +35,7 @@ torch::Tensor tensor_from_python(nb::handle obj, char const* arg_name) {
 PreferredTransport parse_transport(std::string const& value) {
   if (value == "auto") return PreferredTransport::Auto;
   if (value == "ipc") return PreferredTransport::Ipc;
+  if (value == "rdma") return PreferredTransport::Rdma;
   if (value == "uccl") return PreferredTransport::Uccl;
   if (value == "tcp") return PreferredTransport::Tcp;
   throw std::invalid_argument("unsupported transport: " + value);
@@ -243,6 +244,8 @@ class Communicator {
     switch (comm_->peer_transport_kind(peer_rank)) {
       case PeerTransportKind::Ipc:
         return "ipc";
+      case PeerTransportKind::Rdma:
+        return "rdma";
       case PeerTransportKind::Uccl:
         return "uccl";
       case PeerTransportKind::Tcp:

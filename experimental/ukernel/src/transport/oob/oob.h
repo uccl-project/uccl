@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../../include/config.h"
-#include "../../include/gpu_rt.h"
+#include "gpu_rt.h"
 #include "../util/jring.h"
 #include <atomic>
 #include <chrono>
@@ -23,7 +23,7 @@
 namespace UKernel {
 namespace Transport {
 
-enum class PeerTransportKind { Unknown, Uccl, Ipc, Tcp };
+enum class PeerTransportKind { Unknown, Uccl, Rdma, Ipc, Tcp };
 
 struct CommunicatorMeta;
 
@@ -171,6 +171,18 @@ struct TcpP2PInfo : public Exchangeable {
   void from_map(std::map<std::string, std::string> const& kv) override {
     ip = kv.at("ip");
     port = static_cast<uint16_t>(std::stoul(kv.at("port")));
+  }
+};
+
+struct StringPayload : public Exchangeable {
+  std::string value;
+
+  std::map<std::string, std::string> to_map() const override {
+    return {{"value", value}};
+  }
+
+  void from_map(std::map<std::string, std::string> const& kv) override {
+    value = kv.at("value");
   }
 };
 

@@ -26,6 +26,7 @@ class TransportAdapter;
 class IpcAdapter;
 class TcpTransportAdapter;
 class RdmaTransportAdapter;
+class UcclTransportAdapter;
 
 class Communicator {
  public:
@@ -135,12 +136,26 @@ class Communicator {
     std::shared_ptr<SHMItem> bounce_owner;
   };
 
-  RdmaTransportAdapter& ensure_rdma_adapter(CommunicatorMeta const& local_meta,
-                                            CommunicatorMeta const& peer_meta);
+  // Adapter bootstrap / selection.
+  UcclTransportAdapter& ensure_uccl_adapter(CommunicatorMeta const& local_meta);
+  RdmaTransportAdapter& ensure_rdma_adapter(CommunicatorMeta const& local_meta);
+  void bind_rdma_backend_if_needed();
+  bool bootstrap_rdma_peer_oob(int rank, RdmaTransportAdapter& rdma_adapter);
+  bool exchange_uccl_peer_info(int rank, UcclTransportAdapter& uccl_adapter,
+                               bool as_connector,
+                               UCCLP2PInfo* out_remote_p2p_info);
   TcpTransportAdapter& ensure_tcp_adapter(CommunicatorMeta const& local_meta);
+
+  // Peer-state lifecycle.
   PeerTransportKind get_peer_transport_kind(int rank) const;
   bool has_peer_path(int rank) const;
   void mark_peer_path_ready(int rank, PeerTransportKind kind);
+  void exchange_peer_metas();
+  ResolvedPeer resolve_peer(int rank) const;
+  bool try_fallback_tcp_connect(int rank, CommunicatorMeta const& local_meta);
+  bool try_fallback_tcp_accept(int rank, CommunicatorMeta const& local_meta);
+
+  // Request tracking / progress.
   bool poll_request_completion(unsigned id, bool blocking);
   TrackedRequest* allocate_request_slot(unsigned* out_req_id);
   TrackedRequest* resolve_request_slot(unsigned req_id) const;
@@ -151,21 +166,25 @@ class Communicator {
   static uint32_t request_slot_index(unsigned req_id);
   static uint32_t request_generation(unsigned req_id);
   void notify_request_completion();
+
+  // RDMA MR lifecycle.
+  void register_existing_local_mrs_with_uccl();
+  bool ensure_uccl_memory_registered(uint64_t mr_id, void* ptr, size_t len);
   void register_existing_local_mrs_with_rdma();
   bool ensure_rdma_memory_registered(uint64_t mr_id, void* ptr, size_t len);
+
+  // IPC metadata cache lifecycle.
   bool fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
                         uint64_t expected_binding_version = 0);
   bool has_fresh_remote_ipc_buffer(int remote_rank, uint32_t ipc_id,
                                    uint64_t expected_binding_version) const;
   void invalidate_remote_ipc_buffer(int remote_rank, uint32_t ipc_id);
+
+  // Request cleanup helpers.
   void cleanup_tracked_request(TrackedRequest& tracked);
   bool complete_host_bounce_recv(TrackedRequest& tracked, bool blocking);
   SHMManager& require_shm_manager(char const* caller);
-  void exchange_peer_metas();
-  ResolvedPeer resolve_peer(int rank) const;
-  bool try_fallback_tcp_connect(int rank, CommunicatorMeta const& local_meta);
-  bool try_fallback_tcp_accept(int rank, CommunicatorMeta const& local_meta,
-                               CommunicatorMeta const& remote_meta);
+
   // Background progress loop: advances completion state for all in-flight
   // requests and emits user completion callbacks for requests that finish.
   void progress_loop();
@@ -181,6 +200,7 @@ class Communicator {
   std::optional<SHMManager> shm_manager_;
 
   // Transport adapters.
+  std::unique_ptr<UcclTransportAdapter> uccl_adapter_;
   std::unique_ptr<RdmaTransportAdapter> rdma_adapter_;
   std::unique_ptr<TcpTransportAdapter> tcp_adapter_;
   std::shared_ptr<IpcAdapter> ipc_adapter_;
@@ -225,10 +245,17 @@ class Communicator {
   };
   std::vector<std::weak_ptr<NotifyTarget>> notify_targets_;
 
-  // UCCL registration cache.
+  // RDMA-family registration caches.
+  mutable std::mutex uccl_reg_mu_;
+  std::unordered_set<uint64_t> uccl_direct_reg_failed_mrs_;
+  std::unordered_set<uint64_t> uccl_registered_mrs_;
+  
+  // RDMA registration cache.
   mutable std::mutex rdma_reg_mu_;
+  mutable std::mutex rdma_bootstrap_mu_;
   std::unordered_set<uint64_t> rdma_direct_reg_failed_mrs_;
   std::unordered_set<uint64_t> rdma_registered_mrs_;
+  bool rdma_backend_bound_ = false;
 
   // IPC binding versions.
   mutable std::mutex ipc_gen_mu_;

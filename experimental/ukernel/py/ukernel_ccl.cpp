@@ -40,6 +40,7 @@ torch::Tensor tensor_from_python(nb::handle obj, char const* arg_name) {
 Transport::PreferredTransport parse_transport(std::string const& value) {
   if (value == "auto") return Transport::PreferredTransport::Auto;
   if (value == "ipc") return Transport::PreferredTransport::Ipc;
+  if (value == "rdma") return Transport::PreferredTransport::Rdma;
   if (value == "uccl") return Transport::PreferredTransport::Uccl;
   if (value == "tcp") return Transport::PreferredTransport::Tcp;
   throw std::invalid_argument("unsupported transport: " + value);
@@ -536,6 +537,8 @@ class ProcessGroup {
         return "ipc";
       case Transport::PeerTransportKind::Uccl:
         return "uccl";
+      case Transport::PeerTransportKind::Rdma:
+        return "rdma";
       case Transport::PeerTransportKind::Tcp:
         return "tcp";
     }

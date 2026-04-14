@@ -9,7 +9,7 @@
 namespace UKernel {
 namespace Transport {
 
-enum class PreferredTransport { Auto, Ipc, Uccl, Tcp };
+enum class PreferredTransport { Auto, Ipc, Rdma, Uccl, Tcp };
 
 struct CommunicatorConfig {
   std::string exchanger_ip = DEFAULT_EXCHANGER_SERVER_IP;

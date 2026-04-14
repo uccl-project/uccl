@@ -16,7 +16,8 @@ UCCL_ROOT := $(abspath ../../../..)
 UKERNEL_ROOT := $(abspath ../..)
 UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
 UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma.a
-UCCL_CFLAGS := -I$(UCCL_ROOT) -I$(UCCL_ROOT)/collective/rdma -I$(UCCL_ROOT)/include
+UCCL_CFLAGS := -I$(UCCL_ROOT) -I$(UCCL_ROOT)/collective/rdma -I$(UCCL_ROOT)/include \
+	-I$(UCCL_ROOT)/p2p -I$(UCCL_ROOT)/p2p/include -I$(UCCL_ROOT)/p2p/rdma
 UCCL_LDFLAGS := $(UCCL_RDMA_STATIC) -libverbs -lrdmacm
 
 CXXFLAGS += $(UCCL_CFLAGS)
@@ -30,7 +31,7 @@ LOCAL_INCLUDES := -I$(UCCL_ROOT)/experimental/ukernel/include -I$(UCCL_ROOT)/inc
 	-I. -Itest -Itest/common -Itest/unit -Itest/integration \
 	-I../../include -I$(CUDA_HOME)/include
 
-SRC_CPP := communicator.cc adapter/ipc_adapter.cc adapter/tcp_adapter.cc adapter/rdma_adapter.cc memory/mr_manager.cc memory/ipc_manager.cc memory/shm_manager.cc oob/oob.cc oob/oob_shm.cc oob/oob_socket.cc util/utils.cc
+SRC_CPP := communicator.cc adapter/ipc_adapter.cc adapter/tcp_adapter.cc adapter/uccl_adapter.cc adapter/rdma_adapter.cc memory/mr_manager.cc memory/ipc_manager.cc memory/shm_manager.cc oob/oob.cc oob/oob_shm.cc oob/oob_socket.cc util/utils.cc
 TEST_UNIT_CPP := test/unit/test_transport_unit_main.cc \
 	test/unit/test_transport_core.cc \
 	test/unit/test_transport_oob_socket.cc \

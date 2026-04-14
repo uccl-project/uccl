@@ -102,7 +102,7 @@ RUN_RDMA="${TRANSPORT_RUN_RDMA:-${TRANSPORT_RUN_UCCL:-0}}"
 if [ "${RUN_RDMA}" = "1" ]; then
   run_pair exchange "$((PORT_BASE + 10))" auto \
     transport-suite-server transport-suite-client
-  run_pair exchange "$((PORT_BASE + 12))" uccl
+  run_pair exchange "$((PORT_BASE + 12))" rdma
 fi
 
 echo "transport suite completed"

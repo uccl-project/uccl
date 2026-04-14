@@ -1,5 +1,6 @@
 #include "communicator.h"
 #include "adapter/ipc_adapter.h"
+#include "adapter/uccl_adapter.h"
 #include "adapter/tcp_adapter.h"
 #include "adapter/transport_adapter.h"
 #include "adapter/rdma_adapter.h"
@@ -9,6 +10,7 @@
 #include <netinet/in.h>
 #include <algorithm>
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -90,8 +92,7 @@ std::string find_ifname_for_local_ip(std::string const& ip) {
   return ifname;
 }
 
-void maybe_configure_uccl_socket_ifname(std::string const& remote_hint_ip,
-                                        std::string const& local_hint_ip) {
+void maybe_configure_uccl_socket_ifname(std::string const& local_hint_ip) {
   if (has_env_value("UCCL_SOCKET_IFNAME") ||
       has_env_value("NCCL_SOCKET_IFNAME")) {
     return;
@@ -103,18 +104,6 @@ void maybe_configure_uccl_socket_ifname(std::string const& remote_hint_ip,
   ::setenv("UCCL_SOCKET_IFNAME", ifname.c_str(), 0);
   std::cout << "[INFO] Auto-selected UCCL_SOCKET_IFNAME=" << ifname
             << std::endl;
-}
-
-std::string get_uccl_remote_hint_ip(
-    std::shared_ptr<CommunicatorConfig> const& config,
-    CommunicatorMeta const& peer_meta) {
-  if (config && !is_unspecified_ip(config->exchanger_ip)) {
-    return config->exchanger_ip;
-  }
-  if (!is_unspecified_ip(peer_meta.ip)) {
-    return peer_meta.ip;
-  }
-  return {};
 }
 
 int get_timeout_ms(char const* env_name, int default_ms) {
@@ -146,6 +135,21 @@ std::string uccl_p2p_key(int src_rank, int dst_rank) {
          std::to_string(dst_rank);
 }
 
+std::string rdma_send_bootstrap_key(int src_rank, int dst_rank) {
+  return "rdma_send_bootstrap_" + std::to_string(src_rank) + "_to_" +
+         std::to_string(dst_rank);
+}
+
+std::string rdma_recv_bootstrap_key(int src_rank, int dst_rank) {
+  return "rdma_recv_bootstrap_" + std::to_string(src_rank) + "_to_" +
+         std::to_string(dst_rank);
+}
+
+std::string rdma_bootstrap_status_key(int src_rank, int dst_rank) {
+  return "rdma_bootstrap_status_" + std::to_string(src_rank) + "_to_" +
+         std::to_string(dst_rank);
+}
+
 std::string tcp_p2p_key(int src_rank, int dst_rank) {
   return "tcp_p2p_info_" + std::to_string(src_rank) + "_to_" +
          std::to_string(dst_rank);
@@ -172,7 +176,9 @@ void validate_dst_hint_for_transport(PeerTransportKind kind,
     throw std::invalid_argument("dst_hint.mem_id must be non-zero");
   }
   // IPC/TCP use common (`mem_id`, `offset`) hint and ignore `write`.
-  if (kind == PeerTransportKind::Uccl && hint.has_write_hint() &&
+  // UCCL/RDMA validate write-capacity hints when provided.
+  if ((kind == PeerTransportKind::Uccl || kind == PeerTransportKind::Rdma) &&
+      hint.has_write_hint() &&
       hint.write.capacity != 0 && hint.write.capacity < src_bytes) {
     throw std::invalid_argument(
         "dst_hint.write.capacity is smaller than send size");
@@ -217,6 +223,19 @@ bool detect_local_rdma_capable() {
   if (!devices) return false;
   ibv_free_device_list(devices);
   return count > 0;
+}
+
+void signal_eventfd_if_needed(int event_fd) {
+  if (event_fd < 0) return;
+  uint64_t one = 1;
+  while (true) {
+    ssize_t n = ::write(event_fd, &one, sizeof(one));
+    if (n == static_cast<ssize_t>(sizeof(one))) return;
+    if (n < 0 && errno == EINTR) continue;
+    // EAGAIN means counter is saturated; wakeup is already pending.
+    if (n < 0 && errno == EAGAIN) return;
+    return;
+  }
 }
 
 }  // namespace
@@ -324,10 +343,7 @@ Communicator::~Communicator() {
   if (progress_started_.load()) {
     progress_running_.store(false);
     progress_cv_.notify_all();
-    if (completion_event_fd_ >= 0) {
-      uint64_t one = 1;
-      (void)::write(completion_event_fd_, &one, sizeof(one));
-    }
+    signal_eventfd_if_needed(completion_event_fd_);
     if (progress_thread_.joinable()) {
       progress_thread_.join();
     }
@@ -374,9 +390,10 @@ Communicator::~Communicator() {
     ipc_manager_.delete_ipc(i);
   }
 
-  // Destroy bounce pool before rdma_adapter_ to avoid dangling references
+  // Destroy bounce pool before transport adapters to avoid dangling references
   // in the deregister callback during pool teardown.
   shm_manager_.reset();
+  uccl_adapter_.reset();
   rdma_adapter_.reset();
   tcp_adapter_.reset();
   ipc_adapter_.reset();
@@ -534,45 +551,178 @@ bool Communicator::dequeue_active_request(unsigned* out_req_id) {
 
 void Communicator::notify_request_completion() {
   completion_seq_.fetch_add(1, std::memory_order_release);
-  if (completion_event_fd_ >= 0) {
-    uint64_t one = 1;
-    (void)::write(completion_event_fd_, &one, sizeof(one));
+  signal_eventfd_if_needed(completion_event_fd_);
+}
+
+UcclTransportAdapter& Communicator::ensure_uccl_adapter(
+    CommunicatorMeta const& local_meta) {
+  if (!uccl_adapter_) {
+    maybe_configure_uccl_socket_ifname(local_meta.ip);
+    UcclTransportConfig uccl_cfg;
+    uccl_adapter_ = std::make_unique<UcclTransportAdapter>(
+        local_gpu_idx_, world_size_, std::move(uccl_cfg));
   }
+  return *uccl_adapter_;
 }
 
 RdmaTransportAdapter& Communicator::ensure_rdma_adapter(
-    CommunicatorMeta const& local_meta, CommunicatorMeta const& peer_meta) {
+    CommunicatorMeta const& local_meta) {
   if (!rdma_adapter_) {
-    maybe_configure_uccl_socket_ifname(
-        get_uccl_remote_hint_ip(config_, peer_meta), local_meta.ip);
+    maybe_configure_uccl_socket_ifname(local_meta.ip);
     RdmaTransportConfig rdma_cfg;
     rdma_adapter_ = std::make_unique<RdmaTransportAdapter>(
-        local_gpu_idx_, world_size_, std::move(rdma_cfg));
-
-    mr_manager_.bind_backend(
-        [this](uint32_t mr_id, void* ptr, size_t len) -> bool {
-          if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) return false;
-          bool ok = rdma_adapter_->register_memory(mr_id, ptr, len);
-          std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-          if (ok) {
-            rdma_direct_reg_failed_mrs_.erase(mr_id);
-            rdma_registered_mrs_.insert(mr_id);
-          } else {
-            rdma_direct_reg_failed_mrs_.insert(mr_id);
-          }
-          return ok;
-        },
-        [this](uint32_t mr_id) {
-          if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
-            rdma_adapter_->deregister_memory(mr_id);
-          }
-          std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-          rdma_direct_reg_failed_mrs_.erase(mr_id);
-          rdma_registered_mrs_.erase(mr_id);
-        });
-    mr_manager_.sync_local_backend();
+        local_gpu_idx_, global_rank_, world_size_, std::move(rdma_cfg));
   }
+  bind_rdma_backend_if_needed();
   return *rdma_adapter_;
+}
+
+void Communicator::bind_rdma_backend_if_needed() {
+  if (rdma_backend_bound_) return;
+
+  mr_manager_.bind_backend(
+      [this](uint32_t mr_id, void* ptr, size_t len) -> bool {
+        if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) return false;
+        bool ok = rdma_adapter_->register_memory(mr_id, ptr, len);
+        std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+        if (ok) {
+          rdma_direct_reg_failed_mrs_.erase(mr_id);
+          rdma_registered_mrs_.insert(mr_id);
+        } else {
+          rdma_direct_reg_failed_mrs_.insert(mr_id);
+        }
+        return ok;
+      },
+      [this](uint32_t mr_id) {
+        if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
+          rdma_adapter_->deregister_memory(mr_id);
+        }
+        std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+        rdma_direct_reg_failed_mrs_.erase(mr_id);
+        rdma_registered_mrs_.erase(mr_id);
+      });
+
+  rdma_backend_bound_ = true;
+  mr_manager_.sync_local_backend();
+}
+
+bool Communicator::bootstrap_rdma_peer_oob(int rank,
+                                           RdmaTransportAdapter& rdma_adapter) {
+  std::lock_guard<std::mutex> bootstrap_lk(rdma_bootstrap_mu_);
+  if (rdma_adapter.has_peer(rank)) return true;
+
+  bool local_bootstrap_ok = false;
+  do {
+    StringPayload local_send_payload;
+    if (!rdma_adapter.build_send_bootstrap(rank, &local_send_payload.value)) {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " failed to build RDMA send bootstrap for rank " << rank
+                << std::endl;
+      break;
+    }
+
+    StringPayload remote_send_payload;
+    if (!publish_local_then_fetch_remote(
+            *exchanger_client_, rdma_send_bootstrap_key(global_rank_, rank),
+            local_send_payload, rdma_send_bootstrap_key(rank, global_rank_),
+            remote_send_payload, bootstrap_timeout_ms())) {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " failed to exchange RDMA send bootstrap with rank " << rank
+                << std::endl;
+      break;
+    }
+
+    StringPayload local_recv_payload;
+    if (!rdma_adapter.build_recv_bootstrap(rank, remote_send_payload.value,
+                                           &local_recv_payload.value)) {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " failed to build RDMA recv bootstrap for rank " << rank
+                << std::endl;
+      break;
+    }
+
+    StringPayload remote_recv_payload;
+    if (!publish_local_then_fetch_remote(
+            *exchanger_client_, rdma_recv_bootstrap_key(global_rank_, rank),
+            local_recv_payload, rdma_recv_bootstrap_key(rank, global_rank_),
+            remote_recv_payload, bootstrap_timeout_ms())) {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " failed to exchange RDMA recv bootstrap with rank " << rank
+                << std::endl;
+      break;
+    }
+
+    if (!rdma_adapter.finalize_send_bootstrap(rank, remote_recv_payload.value)) {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " failed to finalize RDMA send bootstrap for rank " << rank
+                << std::endl;
+      break;
+    }
+    local_bootstrap_ok = rdma_adapter.has_peer(rank);
+  } while (false);
+
+  StringPayload local_status;
+  local_status.value = local_bootstrap_ok ? "1" : "0";
+  StringPayload remote_status;
+  if (!publish_local_then_fetch_remote(
+          *exchanger_client_, rdma_bootstrap_status_key(global_rank_, rank),
+          local_status, rdma_bootstrap_status_key(rank, global_rank_),
+          remote_status, bootstrap_timeout_ms())) {
+    rdma_adapter.rollback_peer_bootstrap(rank);
+    std::cerr << "[ERROR] Communicator " << global_rank_
+              << " failed to exchange RDMA bootstrap status with rank " << rank
+              << std::endl;
+    return false;
+  }
+
+  bool remote_bootstrap_ok = (remote_status.value == "1");
+  if (!local_bootstrap_ok || !remote_bootstrap_ok) {
+    rdma_adapter.rollback_peer_bootstrap(rank);
+    return false;
+  }
+  return rdma_adapter.has_peer(rank);
+}
+
+bool Communicator::exchange_uccl_peer_info(
+    int rank, UcclTransportAdapter& uccl_adapter, bool as_connector,
+    UCCLP2PInfo* out_remote_p2p_info) {
+  if (out_remote_p2p_info == nullptr) return false;
+
+  int dev_idx = uccl_adapter.get_best_dev_idx(local_gpu_idx_);
+  if (dev_idx < 0) {
+    std::cerr << "[ERROR] Communicator " << global_rank_
+              << " UCCL get_best_dev_idx failed for local gpu "
+              << local_gpu_idx_ << std::endl;
+    return false;
+  }
+  uint16_t local_port = uccl_adapter.get_p2p_listen_port(dev_idx);
+  if (local_port == 0) {
+    std::cerr << "[ERROR] Communicator " << global_rank_
+              << " UCCL local listen port is invalid for dev " << dev_idx
+              << std::endl;
+    return false;
+  }
+  std::string local_ip_addr = uccl_adapter.get_p2p_listen_ip(dev_idx);
+  if (local_ip_addr.empty()) {
+    std::cerr << "[ERROR] Communicator " << global_rank_
+              << " UCCL local listen ip is empty for dev " << dev_idx
+              << std::endl;
+    return false;
+  }
+
+  UCCLP2PInfo local_p2p_info(local_ip_addr, local_port, dev_idx, local_gpu_idx_);
+  std::string p2p_key = uccl_p2p_key(global_rank_, rank);
+  std::string peer_p2p_key = uccl_p2p_key(rank, global_rank_);
+
+  if (as_connector) {
+    return publish_local_then_fetch_remote(*exchanger_client_, p2p_key,
+                                           local_p2p_info, peer_p2p_key,
+                                           *out_remote_p2p_info,
+                                           bootstrap_timeout_ms());
+  }
+  return fetch_remote_then_publish_local(*exchanger_client_, peer_p2p_key,
+                                         *out_remote_p2p_info, p2p_key,
+                                         local_p2p_info, bootstrap_timeout_ms());
 }
 
 TcpTransportAdapter& Communicator::ensure_tcp_adapter(
@@ -647,9 +797,7 @@ bool Communicator::try_fallback_tcp_connect(
 }
 
 bool Communicator::try_fallback_tcp_accept(
-    int rank, CommunicatorMeta const& local_meta,
-    CommunicatorMeta const& remote_meta) {
-  (void)remote_meta;
+    int rank, CommunicatorMeta const& local_meta) {
   if (config_->preferred_transport != PreferredTransport::Auto) return false;
   auto& tcp_adapter = ensure_tcp_adapter(local_meta);
   if (tcp_adapter.has_peer(rank)) {
@@ -708,54 +856,46 @@ bool Communicator::connect(int rank) {
   }
 
   if (resolved.kind == PeerTransportKind::Uccl) {
-    auto& uccl_adapter =
-        ensure_rdma_adapter(resolved.local_meta, resolved.remote_meta);
+    auto& uccl_adapter = ensure_uccl_adapter(resolved.local_meta);
     if (!uccl_adapter.has_peer(rank)) {
-      int dev_idx = uccl_adapter.get_best_dev_idx(local_gpu_idx_);
-      if (dev_idx < 0) {
-        std::cerr << "[ERROR] Communicator " << global_rank_
-                  << " UCCL get_best_dev_idx failed for local gpu "
-                  << local_gpu_idx_ << std::endl;
+      int local_dev_idx = uccl_adapter.get_best_dev_idx(local_gpu_idx_);
+      if (local_dev_idx < 0) {
         return try_fallback_tcp_connect(rank, resolved.local_meta);
       }
-      uint16_t local_port = uccl_adapter.get_p2p_listen_port(dev_idx);
-      if (local_port == 0) {
-        std::cerr << "[ERROR] Communicator " << global_rank_
-                  << " UCCL local listen port is invalid for dev " << dev_idx
-                  << std::endl;
-        return try_fallback_tcp_connect(rank, resolved.local_meta);
-      }
-      std::string local_ip_addr = uccl_adapter.get_p2p_listen_ip(dev_idx);
-      if (local_ip_addr.empty()) {
-        std::cerr << "[ERROR] Communicator " << global_rank_
-                  << " UCCL local listen ip is empty for dev " << dev_idx
-                  << std::endl;
-        return try_fallback_tcp_connect(rank, resolved.local_meta);
-      }
-      UCCLP2PInfo local_p2p_info(local_ip_addr, local_port, dev_idx,
-                                 local_gpu_idx_);
-      std::string p2p_key = uccl_p2p_key(global_rank_, rank);
-      std::string peer_p2p_key = uccl_p2p_key(rank, global_rank_);
       UCCLP2PInfo remote_p2p_info;
-      if (!publish_local_then_fetch_remote(
-              *exchanger_client_, p2p_key, local_p2p_info, peer_p2p_key,
-              remote_p2p_info, bootstrap_timeout_ms())) {
-        return false;
+      if (!exchange_uccl_peer_info(rank, uccl_adapter, /*as_connector=*/true,
+                                   &remote_p2p_info)) {
+        return try_fallback_tcp_connect(rank, resolved.local_meta);
       }
-      // connect() path: connect first, then establish reverse flow.
       PeerConnectSpec spec{};
       spec.peer_rank = rank;
       spec.type = PeerConnectType::Connect;
-      spec.detail = RdmaPeerConnectSpec{
-          remote_p2p_info.ip, remote_p2p_info.port,    dev_idx,
+      spec.detail = UcclPeerConnectSpec{
+          remote_p2p_info.ip, remote_p2p_info.port,    local_dev_idx,
           local_gpu_idx_,     remote_p2p_info.dev_idx, remote_p2p_info.gpu_idx};
-      if (!uccl_adapter.has_peer(rank) && !uccl_adapter.ensure_peer(spec)) {
-        std::cerr << "[ERROR] Communicator " << global_rank_
-                  << " UCCL connect_to failed to rank " << rank << std::endl;
+      if (!uccl_adapter.ensure_peer(spec)) {
         return try_fallback_tcp_connect(rank, resolved.local_meta);
       }
     }
     mark_peer_path_ready(rank, PeerTransportKind::Uccl);
+    register_existing_local_mrs_with_uccl();
+    return true;
+  }
+
+  if (resolved.kind == PeerTransportKind::Rdma) {
+    auto& rdma_adapter = ensure_rdma_adapter(resolved.local_meta);
+    if (!rdma_adapter.has_peer(rank)) {
+      if (!bootstrap_rdma_peer_oob(rank, rdma_adapter)) {
+        return try_fallback_tcp_connect(rank, resolved.local_meta);
+      }
+      if (!rdma_adapter.has_peer(rank)) {
+        std::cerr << "[ERROR] Communicator " << global_rank_
+                  << " RDMA OOB bootstrap incomplete for rank " << rank
+                  << std::endl;
+        return try_fallback_tcp_connect(rank, resolved.local_meta);
+      }
+    }
+    mark_peer_path_ready(rank, PeerTransportKind::Rdma);
     register_existing_local_mrs_with_rdma();
     return true;
   }
@@ -825,58 +965,46 @@ bool Communicator::accept(int rank) {
   }
 
   if (resolved.kind == PeerTransportKind::Uccl) {
-    auto& uccl_adapter =
-        ensure_rdma_adapter(resolved.local_meta, resolved.remote_meta);
+    auto& uccl_adapter = ensure_uccl_adapter(resolved.local_meta);
     if (!uccl_adapter.has_peer(rank)) {
-      int dev_idx = uccl_adapter.get_best_dev_idx(local_gpu_idx_);
-      if (dev_idx < 0) {
-        std::cerr << "[ERROR] Communicator " << global_rank_
-                  << " UCCL get_best_dev_idx failed for local gpu "
-                  << local_gpu_idx_ << std::endl;
-        return try_fallback_tcp_accept(rank, resolved.local_meta,
-                                       resolved.remote_meta);
+      int local_dev_idx = uccl_adapter.get_best_dev_idx(local_gpu_idx_);
+      if (local_dev_idx < 0) {
+        return try_fallback_tcp_accept(rank, resolved.local_meta);
       }
-      uint16_t local_port = uccl_adapter.get_p2p_listen_port(dev_idx);
-      if (local_port == 0) {
-        std::cerr << "[ERROR] Communicator " << global_rank_
-                  << " UCCL local listen port is invalid for dev " << dev_idx
-                  << std::endl;
-        return try_fallback_tcp_accept(rank, resolved.local_meta,
-                                       resolved.remote_meta);
-      }
-      std::string local_ip_addr = uccl_adapter.get_p2p_listen_ip(dev_idx);
-      if (local_ip_addr.empty()) {
-        std::cerr << "[ERROR] Communicator " << global_rank_
-                  << " UCCL local listen ip is empty for dev " << dev_idx
-                  << std::endl;
-        return try_fallback_tcp_accept(rank, resolved.local_meta,
-                                       resolved.remote_meta);
-      }
-      UCCLP2PInfo local_p2p_info(local_ip_addr, local_port, dev_idx,
-                                 local_gpu_idx_);
-      std::string p2p_key = uccl_p2p_key(global_rank_, rank);
-      std::string peer_p2p_key = uccl_p2p_key(rank, global_rank_);
       UCCLP2PInfo remote_p2p_info;
-      if (!fetch_remote_then_publish_local(
-              *exchanger_client_, peer_p2p_key, remote_p2p_info, p2p_key,
-              local_p2p_info, bootstrap_timeout_ms())) {
-        return false;
+      if (!exchange_uccl_peer_info(rank, uccl_adapter, /*as_connector=*/false,
+                                   &remote_p2p_info)) {
+        return try_fallback_tcp_accept(rank, resolved.local_meta);
       }
-      // accept() path: accept first, then establish reverse flow.
       PeerConnectSpec spec{};
       spec.peer_rank = rank;
       spec.type = PeerConnectType::Accept;
-      spec.detail = RdmaPeerConnectSpec{
-          remote_p2p_info.ip, remote_p2p_info.port,    dev_idx,
+      spec.detail = UcclPeerConnectSpec{
+          remote_p2p_info.ip, remote_p2p_info.port,    local_dev_idx,
           local_gpu_idx_,     remote_p2p_info.dev_idx, remote_p2p_info.gpu_idx};
-      if (!uccl_adapter.has_peer(rank) && !uccl_adapter.ensure_peer(spec)) {
-        std::cerr << "[ERROR] Communicator " << global_rank_
-                  << " UCCL accept_from failed from rank " << rank << std::endl;
-        return try_fallback_tcp_accept(rank, resolved.local_meta,
-                                       resolved.remote_meta);
+      if (!uccl_adapter.ensure_peer(spec)) {
+        return try_fallback_tcp_accept(rank, resolved.local_meta);
       }
     }
     mark_peer_path_ready(rank, PeerTransportKind::Uccl);
+    register_existing_local_mrs_with_uccl();
+    return true;
+  }
+
+  if (resolved.kind == PeerTransportKind::Rdma) {
+    auto& rdma_adapter = ensure_rdma_adapter(resolved.local_meta);
+    if (!rdma_adapter.has_peer(rank)) {
+      if (!bootstrap_rdma_peer_oob(rank, rdma_adapter)) {
+        return try_fallback_tcp_accept(rank, resolved.local_meta);
+      }
+      if (!rdma_adapter.has_peer(rank)) {
+        std::cerr << "[ERROR] Communicator " << global_rank_
+                  << " RDMA OOB bootstrap incomplete for rank " << rank
+                  << std::endl;
+        return try_fallback_tcp_accept(rank, resolved.local_meta);
+      }
+    }
+    mark_peer_path_ready(rank, PeerTransportKind::Rdma);
     register_existing_local_mrs_with_rdma();
     return true;
   }
@@ -962,6 +1090,8 @@ PeerTransportKind Communicator::peer_transport_kind(int rank) const {
 TransportAdapter* Communicator::get_adapter(PeerTransportKind kind) {
   switch (kind) {
     case PeerTransportKind::Uccl:
+      return uccl_adapter_.get();
+    case PeerTransportKind::Rdma:
       return rdma_adapter_.get();
     case PeerTransportKind::Tcp:
       return tcp_adapter_.get();
@@ -981,6 +1111,76 @@ bool Communicator::same_host(int rank) const {
     throw std::runtime_error("transport peer metadata is not established");
   }
   return local_peer.meta.host_id == remote_peer.meta.host_id;
+}
+
+void Communicator::register_existing_local_mrs_with_uccl() {
+  if (!uccl_adapter_ || !uccl_adapter_->is_initialized()) return;
+  for (auto const& [buf, item] : mr_manager_.list_local_mrs()) {
+    (void)buf;
+    void* ptr = reinterpret_cast<void*>(item.mr.address);
+    size_t len = static_cast<size_t>(item.mr.length);
+    (void)ensure_uccl_memory_registered(item.mr.id, ptr, len);
+  }
+}
+
+bool Communicator::ensure_uccl_memory_registered(uint64_t mr_id, void* ptr,
+                                                 size_t len) {
+  if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
+    if (uccl_adapter_->is_memory_registered(mr_id)) return true;
+
+    void* base_ptr = ptr;
+    size_t mr_len = len;
+    bool is_direct_local_mr = false;
+
+    if (mr_id <= std::numeric_limits<uint32_t>::max()) {
+      try {
+        MR mr = get_local_mr(static_cast<uint32_t>(mr_id));
+        base_ptr = reinterpret_cast<void*>(static_cast<uintptr_t>(mr.address));
+        mr_len = static_cast<size_t>(mr.length);
+        is_direct_local_mr = true;
+      } catch (std::exception const&) {
+      }
+    }
+
+    if (is_direct_local_mr) {
+      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+      if (uccl_direct_reg_failed_mrs_.find(mr_id) !=
+          uccl_direct_reg_failed_mrs_.end()) {
+        return false;
+      }
+    }
+
+    if (base_ptr == nullptr || mr_len == 0) {
+      std::cerr << "[ERROR] Communicator " << global_rank_
+                << " has invalid base pointer or length for UCCL registration, "
+                << "mr_id=" << mr_id << std::endl;
+      return false;
+    }
+
+    bool ok = uccl_adapter_->register_memory(mr_id, base_ptr, mr_len);
+    if (!ok) {
+      if (is_direct_local_mr) {
+        std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+        uccl_direct_reg_failed_mrs_.insert(mr_id);
+        std::cerr << "[WARN] Communicator " << global_rank_
+                  << " failed to register local GPU MR " << mr_id
+                  << " with UCCL, base=" << base_ptr << " len=" << mr_len
+                  << "; future requests will fallback to host bounce"
+                  << std::endl;
+      } else {
+        std::cerr << "[ERROR] Communicator " << global_rank_
+                  << " failed to register host bounce MR " << mr_id
+                  << " with UCCL, base=" << base_ptr << " len=" << mr_len
+                  << std::endl;
+      }
+    } else {
+      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+      uccl_registered_mrs_.insert(mr_id);
+    }
+    return ok;
+  }
+
+  return true;
 }
 
 void Communicator::register_existing_local_mrs_with_rdma() {
@@ -1020,7 +1220,7 @@ bool Communicator::ensure_rdma_memory_registered(uint64_t mr_id, void* ptr,
 
     if (base_ptr == nullptr || mr_len == 0) {
       std::cerr << "[ERROR] Communicator " << global_rank_
-                << " has invalid base pointer or length for UCCL registration, "
+                << " has invalid base pointer or length for RDMA registration, "
                 << "mr_id=" << mr_id << std::endl;
       return false;
     }
@@ -1032,13 +1232,13 @@ bool Communicator::ensure_rdma_memory_registered(uint64_t mr_id, void* ptr,
         rdma_direct_reg_failed_mrs_.insert(mr_id);
         std::cerr << "[WARN] Communicator " << global_rank_
                   << " failed to register local GPU MR " << mr_id
-                  << " with UCCL, base=" << base_ptr << " len=" << mr_len
+                  << " with RDMA, base=" << base_ptr << " len=" << mr_len
                   << "; future requests will fallback to host bounce"
                   << std::endl;
       } else {
         std::cerr << "[ERROR] Communicator " << global_rank_
                   << " failed to register host bounce MR " << mr_id
-                  << " with UCCL, base=" << base_ptr << " len=" << mr_len
+                  << " with RDMA, base=" << base_ptr << " len=" << mr_len
                   << std::endl;
       }
     } else {
@@ -1094,7 +1294,10 @@ bool Communicator::complete_host_bounce_recv(TrackedRequest& tracked,
 
 void Communicator::cleanup_tracked_request(TrackedRequest& tracked) {
   unsigned adapter_id = tracked.adapter_request_id;
-  if (tracked.kind == PeerTransportKind::Uccl && rdma_adapter_) {
+  if (tracked.kind == PeerTransportKind::Uccl && uccl_adapter_) {
+    uccl_adapter_->release_request(adapter_id);
+  }
+  if (tracked.kind == PeerTransportKind::Rdma && rdma_adapter_) {
     rdma_adapter_->release_request(adapter_id);
   }
   if (tracked.kind == PeerTransportKind::Tcp && tcp_adapter_) {
@@ -1151,13 +1354,17 @@ unsigned Communicator::isend(int rank, LocalSlice src,
   void* local_ptr = reinterpret_cast<void*>(
       static_cast<uintptr_t>(local_mr.address) + src.offset);
 
-  bool needs_uccl_registration = (peer_kind == PeerTransportKind::Uccl);
+  bool needs_rdma_registration =
+      (peer_kind == PeerTransportKind::Uccl ||
+       peer_kind == PeerTransportKind::Rdma);
   bool use_shareable = (peer_kind == PeerTransportKind::Ipc);
   bool needs_bounce =
       (peer_kind == PeerTransportKind::Tcp) ||
       (peer_kind == PeerTransportKind::Ipc) ||
-      (peer_kind == PeerTransportKind::Uccl &&
-       !ensure_rdma_memory_registered(src.mem_id, local_ptr, src.bytes));
+      ((peer_kind == PeerTransportKind::Uccl &&
+        !ensure_uccl_memory_registered(src.mem_id, local_ptr, src.bytes)) ||
+       (peer_kind == PeerTransportKind::Rdma &&
+        !ensure_rdma_memory_registered(src.mem_id, local_ptr, src.bytes)));
   unsigned rid = 0;
   TrackedRequest* slot = allocate_request_slot(&rid);
   if (slot == nullptr) return 0;
@@ -1182,7 +1389,7 @@ unsigned Communicator::isend(int rank, LocalSlice src,
     slot->bounce_owner = bounce_owner;
     (void)shm_manager;
   }
-  auto bounce_provider = [this, needs_bounce, needs_uccl_registration,
+  auto bounce_provider = [this, needs_bounce, needs_rdma_registration,
                           use_shareable,
                           bounce_owner](size_t bytes) -> BounceBufferInfo {
     if (!needs_bounce || !bounce_owner) return {};
@@ -1194,7 +1401,7 @@ unsigned Communicator::isend(int rank, LocalSlice src,
     }
     BounceBufferInfo info;
     info.ptr = bounce_owner->ptr;
-    if (needs_uccl_registration) {
+    if (needs_rdma_registration) {
       // Request-scoped bounce MR id. The MR is deleted in request cleanup.
       auto mr = mr_manager_.create_local_mr(bounce_owner->ptr, bytes);
       info.mr_id = mr.mr.id;
@@ -1246,7 +1453,9 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
   void* local_ptr = reinterpret_cast<void*>(
       static_cast<uintptr_t>(local_mr.address) + dst.offset);
 
-  bool needs_uccl_registration = (peer_kind == PeerTransportKind::Uccl);
+  bool needs_rdma_registration =
+      (peer_kind == PeerTransportKind::Uccl ||
+       peer_kind == PeerTransportKind::Rdma);
   bool use_shareable = (peer_kind == PeerTransportKind::Ipc);
   unsigned rid = 0;
   TrackedRequest* slot = allocate_request_slot(&rid);
@@ -1256,8 +1465,10 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
 
   auto needs_bounce =
       (peer_kind == PeerTransportKind::Tcp) ||
-      (peer_kind == PeerTransportKind::Uccl &&
-       !ensure_rdma_memory_registered(dst.mem_id, local_ptr, dst.bytes));
+      ((peer_kind == PeerTransportKind::Uccl &&
+        !ensure_uccl_memory_registered(dst.mem_id, local_ptr, dst.bytes)) ||
+       (peer_kind == PeerTransportKind::Rdma &&
+        !ensure_rdma_memory_registered(dst.mem_id, local_ptr, dst.bytes)));
 
   // IPC fast path metadata: let sender resolve remote pointer by dst.mem_id
   // and skip per-request ipc_cache handshake when possible.
@@ -1284,7 +1495,7 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
     slot->completion_bytes = dst.bytes;
   }
 
-  auto bounce_provider = [this, slot, needs_bounce, needs_uccl_registration,
+  auto bounce_provider = [this, slot, needs_bounce, needs_rdma_registration,
                           use_shareable](size_t bytes) -> BounceBufferInfo {
     if (!needs_bounce) return {};
     SHMManager& shm_manager =
@@ -1295,7 +1506,7 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
     }
     BounceBufferInfo info;
     info.ptr = slot->bounce.ptr;
-    if (needs_uccl_registration) {
+    if (needs_rdma_registration) {
       // Request-scoped bounce MR id. The MR is deleted in request cleanup.
       auto mr = mr_manager_.create_local_mr(slot->bounce.ptr, bytes);
       info.mr_id = mr.mr.id;
@@ -1339,6 +1550,12 @@ bool Communicator::poll_request_completion(unsigned id, bool blocking) {
   bool failed = false;
   unsigned adapter_id = slot->adapter_request_id;
   if (slot->kind == PeerTransportKind::Uccl) {
+    if (!uccl_adapter_) return false;
+    done = blocking ? uccl_adapter_->wait_completion(adapter_id)
+                    : uccl_adapter_->poll_completion(adapter_id);
+    failed = done && uccl_adapter_->request_failed(adapter_id);
+  } else if (slot->kind == PeerTransportKind::Rdma) {
+    if (!rdma_adapter_) return false;
     done = blocking ? rdma_adapter_->wait_completion(adapter_id)
                     : rdma_adapter_->poll_completion(adapter_id);
     failed = done && rdma_adapter_->request_failed(adapter_id);
@@ -1488,6 +1705,33 @@ MR Communicator::reg_mr(void* local_buf, size_t len) {
 }
 
 bool Communicator::dereg_mr(void* local_buf) {
+  uint64_t mr_id = 0;
+  bool has_mr = false;
+  try {
+    MR mr = mr_manager_.get_mr(local_buf).mr;
+    mr_id = mr.id;
+    has_mr = true;
+  } catch (std::exception const&) {
+  }
+
+  if (has_mr && uccl_adapter_ && uccl_adapter_->is_initialized()) {
+    std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+    if (uccl_registered_mrs_.find(mr_id) != uccl_registered_mrs_.end()) {
+      uccl_adapter_->deregister_memory(mr_id);
+      uccl_registered_mrs_.erase(mr_id);
+    }
+    uccl_direct_reg_failed_mrs_.erase(mr_id);
+  }
+
+  if (has_mr && rdma_adapter_ && rdma_adapter_->is_initialized()) {
+    std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+    if (rdma_registered_mrs_.find(mr_id) != rdma_registered_mrs_.end()) {
+      rdma_adapter_->deregister_memory(mr_id);
+      rdma_registered_mrs_.erase(mr_id);
+    }
+    rdma_direct_reg_failed_mrs_.erase(mr_id);
+  }
+
   (void)mr_manager_.delete_mr(local_buf);
   return true;
 }

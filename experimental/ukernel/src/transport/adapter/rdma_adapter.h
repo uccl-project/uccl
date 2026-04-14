@@ -1,49 +1,55 @@
 #pragma once
 
 #include "transport_adapter.h"
+#include "p2p/rdma/rdma_context.h"
 #include <atomic>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <condition_variable>
 #include <unordered_map>
+#include <vector>
 
-// Forward declare uccl classes.
-namespace uccl {
-class RDMAEndpoint;
-class Mhandle;
-class UcclFlow;
-struct ucclRequest;
-}  // namespace uccl
+class SendConnection;
+class RecvConnection;
+class RdmaContext;
+class MemoryAllocator;
+class SendControlChannel;
+class RDMADataChannel;
 
 namespace UKernel {
 namespace Transport {
 
 struct RdmaTransportConfig {
-  // Must stay aligned with ucclParamNUM_ENGINES() inside collective/rdma.
+  // Reserved for optional runtime knobs in the lightweight adapter.
   int num_engines = 0;
 };
 
 class RdmaTransportAdapter final : public TransportAdapter {
  public:
-  RdmaTransportAdapter(int local_gpu_idx, int world_size,
+  RdmaTransportAdapter(int local_gpu_idx, int local_rank, int world_size,
                        RdmaTransportConfig config);
   ~RdmaTransportAdapter();
 
-  // Endpoint discovery metadata.
-  uint16_t get_p2p_listen_port(int dev_idx) const;
-  std::string get_p2p_listen_ip(int dev_idx) const;
-  int get_best_dev_idx(int gpu_idx) const;
+  // Bootstrap lifecycle (OOB-driven, no internal TCP).
+  bool build_send_bootstrap(int peer_rank, std::string* out_payload);
+  bool build_recv_bootstrap(int peer_rank, std::string const& remote_send_payload,
+                            std::string* out_payload);
+  bool finalize_send_bootstrap(int peer_rank,
+                               std::string const& remote_recv_payload);
+  void rollback_peer_bootstrap(int peer_rank);
 
-  // Lightweight memory hooks: adapter only does backend registration.
+  // Registration lifecycle.
   bool is_memory_registered(uint64_t mr_id) const;
   bool register_memory(uint64_t mr_id, void* ptr, size_t len);
   void deregister_memory(uint64_t mr_id);
-  bool is_initialized() const { return endpoint_ != nullptr; }
+  bool is_initialized() const { return initialized_; }
 
-  // Peer / path management.
+  // TransportAdapter compatibility.
   bool ensure_peer(PeerConnectSpec const& spec) override;
   bool has_peer(int peer_rank) const override {
     return has_send_peer(peer_rank) && has_recv_peer(peer_rank);
@@ -72,8 +78,16 @@ class RdmaTransportAdapter final : public TransportAdapter {
     Failed = 3,
   };
 
+  enum class RequestKind : uint8_t { Send = 0, Recv = 1, Write = 2 };
+
+  struct AdapterRequest {
+    RequestKind kind = RequestKind::Send;
+    int peer_rank = -1;
+    int64_t token = -1;
+  };
+
   struct PendingRequestSlot {
-    std::unique_ptr<::uccl::ucclRequest> request;
+    AdapterRequest request{};
     bool in_use = false;
     uint32_t generation = 1;
     RequestState state = RequestState::Init;
@@ -81,23 +95,48 @@ class RdmaTransportAdapter final : public TransportAdapter {
   };
 
   struct PeerContext {
-    ::uccl::UcclFlow* send_flow = nullptr;
-    ::uccl::UcclFlow* recv_flow = nullptr;
-    int peer_rank = -1;
-    std::string remote_ip;
-    int remote_dev_idx = -1;
-    int remote_gpu_idx = -1;
+    std::shared_ptr<SendConnection> send_conn;
+    std::shared_ptr<RecvConnection> recv_conn;
   };
 
+  struct LocalMr {
+    std::shared_ptr<RegMemBlock> block;
+    std::vector<MrCacheHandleRef> cache_refs;
+  };
+
+  struct HandshakePacket {
+    uint32_t magic = 0;
+    uint32_t version = 1;
+    int32_t src_rank = -1;
+    int32_t dst_rank = -1;
+    int32_t gpu_idx = -1;
+    ChannelMetaData ctrl_meta{};
+    RemoteMemInfo ctrl_mem{};
+    ChannelMetaData normal_meta[kQpNumPerChannel]{};
+  };
+
+  struct SendBuildState {
+    std::shared_ptr<SendConnection> send_conn;
+    std::shared_ptr<SendControlChannel> send_ctrl;
+    std::array<std::shared_ptr<RDMADataChannel>, kQpNumPerChannel> channels{};
+  };
+
+  // Initialization helpers.
+  bool initialize_contexts();
+  std::shared_ptr<RdmaContext> get_context_by_channel_id(uint32_t channel_id) const;
+  static std::string serialize_handshake(HandshakePacket const& packet);
+  static bool deserialize_handshake(std::string const& payload,
+                                    HandshakePacket* out_packet);
+  bool validate_remote_packet(HandshakePacket const& remote,
+                              int expected_src_rank) const;
+
   // Peer setup helpers.
-  bool connect_to_peer(int peer_rank, std::string remote_ip,
-                       uint16_t remote_port, int local_dev_idx,
-                       int local_gpu_idx, int remote_dev_idx,
-                       int remote_gpu_idx);
-  bool accept_from_peer(int peer_rank, std::string const& expected_remote_ip,
-                        int expected_remote_dev_idx,
-                        int expected_remote_gpu_idx,
-                        uint16_t expected_remote_port = 0);
+  bool create_recv_from_remote_send(int peer_rank,
+                                    HandshakePacket const& remote_send,
+                                    HandshakePacket* out_local_recv);
+  bool finalize_send_from_remote_recv(int peer_rank,
+                                      HandshakePacket const& remote_recv);
+  static MemoryType detect_memory_type(void* ptr);
   bool has_send_peer(int peer_rank) const;
   bool has_recv_peer(int peer_rank) const;
 
@@ -108,6 +147,10 @@ class RdmaTransportAdapter final : public TransportAdapter {
                       RemoteSlice const* remote_slice = nullptr);
   int recv_async_rdma(int peer_rank, void* local_ptr, size_t len,
                       uint64_t local_mr_id, uint64_t request_id);
+
+  // Completion helpers.
+  bool is_backend_request_done(AdapterRequest const& request,
+                               bool* ok) const;
 
   // Request slot helpers.
   static constexpr uint32_t kRequestSlotBits = 13;
@@ -127,11 +170,20 @@ class RdmaTransportAdapter final : public TransportAdapter {
   void release_request_slot_locked(unsigned request_id);
 
   int local_gpu_idx_;
-  std::unique_ptr<::uccl::RDMAEndpoint> endpoint_;
+  int local_rank_;
+  bool initialized_ = false;
+  int numa_node_ = 0;
+
+  std::vector<std::shared_ptr<RdmaContext>> contexts_;
+  std::shared_ptr<MemoryAllocator> allocator_;
   std::unordered_map<int, PeerContext> peer_contexts_;
-  std::unordered_map<uint64_t, ::uccl::Mhandle*> mr_id_to_mhandle_;
+  std::unordered_map<int, SendBuildState> send_build_states_;
+  std::unordered_map<uint64_t, LocalMr> mr_id_to_local_mr_;
+  std::unordered_map<uint64_t, bool> mr_registering_;
+
   std::unique_ptr<PendingRequestSlot[]> request_slots_;
   std::atomic<uint32_t> request_alloc_cursor_{0};
+  mutable std::condition_variable mr_cv_;
   mutable std::mutex mu_;
 };
 

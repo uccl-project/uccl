@@ -21,7 +21,7 @@ int main(int argc, char** argv) {
   std::cerr << "Usage:\n"
             << "  test_transport_integration communicator --role=server|client "
                "--case=exchange|ipc-buffer-meta [--exchanger-ip IP] "
-               "[--exchanger-port PORT] [--transport auto|ipc|uccl|tcp]\n"
+               "[--exchanger-port PORT] [--transport auto|ipc|rdma|uccl|tcp]\n"
             << "  test_transport_integration communicator-local\n";
   return 1;
 }

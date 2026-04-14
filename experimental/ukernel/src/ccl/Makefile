@@ -31,6 +31,7 @@ VPATH := .:test/common:test/unit:test/integration:../transport:../device:../devi
 INCLUDES := -I. -I./test -I./test/common -I./test/unit -I./test/integration \
             -I../transport -I../device -I../device/fifo \
             -I../../include -I$(UCCL_ROOT) -I$(UCCL_ROOT)/include \
+            -I$(UCCL_ROOT)/p2p -I$(UCCL_ROOT)/p2p/include -I$(UCCL_ROOT)/p2p/rdma \
             -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR) -I/usr/local/include
 CXX_RPATH_FLAGS := -Wl,-rpath,$(CUDA_HOME)/lib64
 NVCC_RPATH_FLAGS := -Xlinker -rpath -Xlinker $(CUDA_HOME)/lib64
@@ -57,6 +58,7 @@ TRANSPORT_SRC := ../transport/communicator.cc \
                  ../transport/oob/oob.cc ../transport/oob/oob_shm.cc \
                  ../transport/oob/oob_socket.cc \
                  ../transport/adapter/tcp_adapter.cc \
+                 ../transport/adapter/uccl_adapter.cc \
                  ../transport/adapter/rdma_adapter.cc \
                  ../transport/adapter/ipc_adapter.cc \
                  ../transport/util/utils.cc
@@ -66,6 +68,7 @@ TRANSPORT_OBJ := transport_communicator.o \
                  transport_memory_shm_manager.o \
                  transport_oob_oob.o transport_oob_oob_shm.o transport_oob_oob_socket.o \
                  transport_adapter_tcp_adapter.o \
+                 transport_adapter_uccl_adapter.o \
                  transport_adapter_rdma_adapter.o \
                  transport_adapter_ipc_adapter.o \
                  transport_util_utils.o
