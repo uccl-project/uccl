@@ -188,7 +188,6 @@ ifeq ($(USE_TCPX),1)
 install: $(P2P_SHARED_LIB)
 	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
 	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
-	$(MAKE) install-all
 	@echo "Installation complete!"
 else
 install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
