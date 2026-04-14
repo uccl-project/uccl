@@ -24,12 +24,6 @@
 #include <variant>
 #include <vector>
 
-#ifdef UCCL_P2P_USE_TCPX
-using FifoItem = nccl_tcpx::FifoItem;
-#else
-using FifoItem = FifoItem;
-#endif
-
 extern thread_local bool inside_python;
 
 #ifdef UCCL_P2P_USE_NCCL

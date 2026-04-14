@@ -1,6 +1,6 @@
 # NIXL with UCCL_P2P (TCPX)
 
-Quick setup and run guide for the TCPX backend.
+Quick setup and run guide for running the NCCL backend with TCPX runtime.
 
 ## Git submodules
 
