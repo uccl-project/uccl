@@ -1349,7 +1349,38 @@ unsigned Communicator::isend(int rank, LocalSlice src,
   if (!adapter) {
     throw std::runtime_error("failed to get adapter for peer");
   }
-  validate_dst_hint_for_transport(peer_kind, dst_hint, src.bytes);
+  std::optional<RemoteSlice> effective_dst_hint = dst_hint;
+  // Auto-enrich one-sided write hint from exchanged remote MR metadata when the
+  // caller only provides {remote mem_id, offset}. This keeps Python/CCL APIs
+  // simple while still enabling RDMA/UCCL fast paths.
+  if ((peer_kind == PeerTransportKind::Uccl ||
+       peer_kind == PeerTransportKind::Rdma) &&
+      effective_dst_hint.has_value() && !effective_dst_hint->has_write_hint() &&
+      effective_dst_hint->mem_id != 0) {
+    try {
+      MR remote_mr = get_remote_mr(rank, effective_dst_hint->mem_id);
+      if (remote_mr.address != 0 && remote_mr.key != 0) {
+        RemoteSlice enriched = *effective_dst_hint;
+        uint64_t addr = remote_mr.address;
+        if (enriched.offset <= std::numeric_limits<uint64_t>::max() - addr) {
+          addr += static_cast<uint64_t>(enriched.offset);
+        }
+        uint64_t remaining = 0;
+        if (remote_mr.length > enriched.offset) {
+          remaining = remote_mr.length - static_cast<uint64_t>(enriched.offset);
+        }
+        enriched.write.addr = addr;
+        enriched.write.key = remote_mr.key;
+        enriched.write.capacity = static_cast<uint32_t>(
+            std::min<uint64_t>(remaining, std::numeric_limits<uint32_t>::max()));
+        effective_dst_hint = enriched;
+      }
+    } catch (std::exception const&) {
+      // Remote MR may be unavailable for this mem_id; keep the original hint
+      // and let adapter fallback logic handle it.
+    }
+  }
+  validate_dst_hint_for_transport(peer_kind, effective_dst_hint, src.bytes);
 
   void* local_ptr = reinterpret_cast<void*>(
       static_cast<uintptr_t>(local_mr.address) + src.offset);
@@ -1412,8 +1443,9 @@ unsigned Communicator::isend(int rank, LocalSlice src,
     return info;
   };
 
-  unsigned result = adapter->send_async(rank, local_ptr, src.bytes, src.mem_id,
-                                        dst_hint, bounce_provider);
+  unsigned result =
+      adapter->send_async(rank, local_ptr, src.bytes, src.mem_id,
+                          effective_dst_hint, bounce_provider);
   if (result == 0) {
     slot->state.store(TrackedRequest::SlotState::Releasing,
                       std::memory_order_release);

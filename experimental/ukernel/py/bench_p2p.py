@@ -24,29 +24,48 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
     send_buf = torch.empty(n, device="cuda", dtype=torch.float32)
     recv_buf = torch.empty(n, device="cuda", dtype=torch.float32)
     comm.pin_tensor(send_buf)
-    comm.pin_tensor(recv_buf)
+    recv_mr_id = comm.pin_tensor(recv_buf)
+
+    # Stable logical id for destination receive buffer in ping-pong.
+    recv_buffer_id = 2
+    if not comm.publish_mr(peer, recv_buffer_id, recv_mr_id):
+        raise RuntimeError("publish_mr(recv) failed")
+    # Wait for peer's next published recv-buffer mapping.
+    comm.wait_mr(peer, recv_buffer_id)
+
+    def do_send():
+        # Sender writes into peer's recv buffer id.
+        comm.send_buffer(
+            peer,
+            send_buf,
+            recv_buffer_id,
+            remote_offset=0,
+        )
+
+    def do_recv():
+        comm.recv(peer, recv_buf)
 
     rank = comm.rank
     # Server (rank 0) recv first, client (rank 1) send first
     if rank == 0:
         for _ in range(warmup):
-            comm.recv(peer, recv_buf)
-            comm.send(peer, send_buf)  # echo back
+            do_recv()
+            do_send()  # echo back
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         for _ in range(iters):
-            comm.recv(peer, recv_buf)
-            comm.send(peer, send_buf)
+            do_recv()
+            do_send()
         torch.cuda.synchronize()
     else:
         for _ in range(warmup):
-            comm.send(peer, send_buf)
-            comm.recv(peer, recv_buf)
+            do_send()
+            do_recv()
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         for _ in range(iters):
-            comm.send(peer, send_buf)
-            comm.recv(peer, recv_buf)
+            do_send()
+            do_recv()
         torch.cuda.synchronize()
     elapsed = time.perf_counter() - t0
     comm.unpin_tensor(send_buf)

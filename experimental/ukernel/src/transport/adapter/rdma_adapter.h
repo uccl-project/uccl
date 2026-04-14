@@ -35,7 +35,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
                        RdmaTransportConfig config);
   ~RdmaTransportAdapter();
 
-  // Bootstrap lifecycle (OOB-driven, no internal TCP).
+  // Bootstrap lifecycle.
   bool build_send_bootstrap(int peer_rank, std::string* out_payload);
   bool build_recv_bootstrap(int peer_rank, std::string const& remote_send_payload,
                             std::string* out_payload);
