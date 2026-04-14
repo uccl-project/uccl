@@ -1778,6 +1778,17 @@ bool Communicator::notify_named_mrs(int remote_rank, uint64_t generation,
   std::lock_guard<std::mutex> lk(mr_exchange_mu_);
   NamedMRInfos payload = infos;
   payload.generation = generation;
+  // Ensure exchanged NamedMR carries usable rkey for RDMA one-sided write
+  // fast path. MRManager currently tracks id/addr/len but not backend rkey.
+  if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
+    for (auto& entry : payload.entries) {
+      if (entry.mr.id == 0 || entry.mr.key != 0) continue;
+      uint32_t rkey = 0;
+      if (rdma_adapter_->query_memory_rkey(entry.mr.id, &rkey) && rkey != 0) {
+        entry.mr.key = rkey;
+      }
+    }
+  }
 
   // for (auto const& entry : payload.entries) {
   //   std::cout << "[notify named MR to rank " << remote_rank

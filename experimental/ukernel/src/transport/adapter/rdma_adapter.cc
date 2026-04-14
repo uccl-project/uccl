@@ -23,6 +23,23 @@ constexpr uint32_t kHandshakeMagic = 0x554B5244;  // "UKRD"
 constexpr uint32_t kHandshakeVersion = 1;
 constexpr uint32_t kRdmaWaitSpinCount = 128;
 
+inline int parse_env_int(char const* name, int fallback = 0) {
+  char const* v = std::getenv(name);
+  if (v == nullptr || v[0] == '\0') return fallback;
+  char* end = nullptr;
+  long parsed = std::strtol(v, &end, 10);
+  if (end == v) return fallback;
+  return static_cast<int>(parsed);
+}
+
+inline bool rdma_hint_debug_enabled() {
+  // Project-wide debug switch for ukernel traces:
+  //   1) prefer UCCL_DEBUG_VLOG_LEVEL > 0
+  //   2) keep UHM_DEBUG as an explicit ukernel override
+  if (parse_env_int("UCCL_DEBUG_VLOG_LEVEL", 0) > 0) return true;
+  return parse_env_int("UHM_DEBUG", 0) > 0;
+}
+
 inline size_t channel_to_context(uint32_t channel_id) {
   return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;
 }
@@ -424,6 +441,27 @@ bool RdmaTransportAdapter::is_memory_registered(uint64_t mr_id) const {
   return mr_id_to_local_mr_.find(mr_id) != mr_id_to_local_mr_.end();
 }
 
+bool RdmaTransportAdapter::query_memory_rkey(uint64_t mr_id,
+                                             uint32_t* out_rkey) const {
+  if (out_rkey == nullptr) return false;
+  *out_rkey = 0;
+  std::lock_guard<std::mutex> lk(mu_);
+  auto it = mr_id_to_local_mr_.find(mr_id);
+  if (it == mr_id_to_local_mr_.end() || !it->second.block) return false;
+
+  // Any valid context rkey can be used because write hint currently carries a
+  // single rkey that is replicated to all contexts at submit time.
+  for (size_t context_id = 0; context_id < contexts_.size(); ++context_id) {
+    uint32_t rkey =
+        it->second.block->getKeyByContextID(static_cast<uint32_t>(context_id));
+    if (rkey != 0) {
+      *out_rkey = rkey;
+      return true;
+    }
+  }
+  return false;
+}
+
 RdmaTransportAdapter::PendingRequestSlot*
 RdmaTransportAdapter::try_acquire_request_slot(unsigned* out_request_id) {
   if (out_request_id == nullptr || !request_slots_) return nullptr;
@@ -567,6 +605,14 @@ int RdmaTransportAdapter::send_async_rdma(int peer_rank, void* local_ptr,
   RequestKind kind = RequestKind::Send;
 
   if (remote_slice != nullptr && remote_slice->has_write_hint()) {
+    if (rdma_hint_debug_enabled()) {
+      std::cout << "[DEBUG][RDMA_HINT] peer=" << peer_rank
+                << " req=" << request_id << " mode=WRITE mem_id="
+                << remote_slice->mem_id << " addr=0x" << std::hex
+                << remote_slice->write.addr << std::dec
+                << " rkey=" << remote_slice->write.key << " len=" << len
+                << std::endl;
+    }
     auto remote_mem = std::make_shared<RemoteMemInfo>();
     remote_mem->addr = remote_slice->write.addr;
     remote_mem->length =
@@ -581,6 +627,12 @@ int RdmaTransportAdapter::send_async_rdma(int peer_rank, void* local_ptr,
     token = send_conn->postWriteOrRead(req);
     kind = RequestKind::Write;
   } else {
+    if (rdma_hint_debug_enabled()) {
+      std::cout << "[DEBUG][RDMA_HINT] peer=" << peer_rank
+                << " req=" << request_id << " mode=SEND"
+                << (remote_slice ? " (no_write_hint)" : " (no_hint)")
+                << " len=" << len << std::endl;
+    }
     auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
     auto req = std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
     req->send_type = SendType::Send;

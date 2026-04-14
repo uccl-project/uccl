@@ -47,6 +47,8 @@ class RdmaTransportAdapter final : public TransportAdapter {
   bool is_memory_registered(uint64_t mr_id) const;
   bool register_memory(uint64_t mr_id, void* ptr, size_t len);
   void deregister_memory(uint64_t mr_id);
+  // Query one valid local rkey for a registered MR id.
+  bool query_memory_rkey(uint64_t mr_id, uint32_t* out_rkey) const;
   bool is_initialized() const { return initialized_; }
 
   // TransportAdapter compatibility.

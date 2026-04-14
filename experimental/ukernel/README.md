@@ -84,6 +84,7 @@ Run p2p benchmark flavors:
 
 ```bash
 # Collective/rdma path
+# UCCL_DEBUG_VLOG_LEVEL=1 : check fast path
 UK_P2P_TRANSPORT=uccl UCCL_P2P_MODE=rdma NCCL_P2P_DISABLE=1 NCCL_SHM_DISABLE=1 NCCL_IB_DISABLE=0 NCCL_IB_HCA=mlx5_0 NCCL_DEBUG=INFO CUDA_VISIBLE_DEVICES=6,7 torchrun --nproc_per_node=2 bench_p2p.py
 
 # p2p/rdma path
