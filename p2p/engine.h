@@ -445,6 +445,11 @@ class Endpoint {
   /* Start a background thread for accepting. */
   bool start_passive_accept();
 
+  /* Start only the local (IPC) accept thread, without the RDMA accept thread.
+   * Use this when the caller runs its own RDMA accept() loop to avoid racing
+   * for entries in accepted_meta_. */
+  bool start_passive_accept_local();
+
   /***************************************************/
   /* API for Ray */
   /***************************************************/

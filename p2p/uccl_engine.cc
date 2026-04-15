@@ -171,7 +171,9 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
 #if !defined(UCCL_P2P_USE_NCCL)
   // Start accept_local loop in a background thread (once per engine) so that
   // local (IPC) peers can connect concurrently with the blocking RDMA accept.
-  engine->endpoint->start_passive_accept();
+  // Use the local-only variant to avoid racing with the caller's accept() for
+  // RDMA connections in accepted_meta_.
+  engine->endpoint->start_passive_accept_local();
 #endif
   uccl_conn_t* conn = new uccl_conn;
   std::string ip_addr;

@@ -2340,6 +2340,16 @@ bool Endpoint::start_passive_accept() {
   return true;
 }
 
+bool Endpoint::start_passive_accept_local() {
+  if (!passive_accept_) {
+    passive_accept_stop_.store(false, std::memory_order_release);
+    passive_accept_local_thread_ =
+        std::thread(&Endpoint::passive_accept_local_thread_func, this);
+    passive_accept_ = true;
+  }
+  return true;
+}
+
 bool Endpoint::poll_async(uint64_t transfer_id, bool* is_done) {
   auto* status = reinterpret_cast<TransferStatus*>(transfer_id);
   if (status->poll_net_ureq && !status->done.load(std::memory_order_acquire)) {
