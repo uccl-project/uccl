@@ -137,6 +137,18 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
     // same_process=false → cross-process IPC (attach remote shm ring)
     ok = engine->endpoint->connect_local(remote_gpu_idx, conn_id, same_process);
     conn->sock_fd = -1;
+#if !defined(UCCL_P2P_USE_NCCL)
+    // For cross-process local: establish an OOB TCP connection to the remote's
+    // OOB server so that notifications (transfer completion) can be delivered.
+    if (ok && !same_process) {
+      auto oob_client = engine->endpoint->get_oob_client();
+      if (oob_client) {
+        std::string conn_key = oob_client->connect_to_server(
+            std::string(ip_addr), remote_port);
+        conn->oob_conn_key = conn_key;
+      }
+    }
+#endif
   } else {
     // Remote: use TCP/RDMA connection.
     ok = engine->endpoint->connect(std::string(ip_addr), remote_gpu_idx,
