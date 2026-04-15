@@ -130,6 +130,7 @@ class Buffer:
                 )
 
         rdma_buffer_ptr = self.scratch.data_ptr()
+        _local_world = int(os.environ.get("LOCAL_WORLD_SIZE", -1))
         self.proxies, self.workers = initialize_uccl(
             rdma_buffer_ptr,
             num_rdma_bytes,
@@ -158,7 +159,7 @@ class Buffer:
             num_rdma_bytes,
             low_latency_mode,
             explicitly_destroy,
-            int(os.environ.get("LOCAL_WORLD_SIZE", -1)),
+            _local_world,
         )
         if num_rdma_bytes:
             self.runtime.set_rdma_buffer(rdma_buffer_ptr, rdma_buffer_is_host_allocated)
@@ -1277,6 +1278,9 @@ class Buffer:
             ) = handle
             num_recv_tokens = recv_src_meta.size(0)
             num_rdma_recv_tokens = send_nvl_head.size(0)
+            # Allocate at least 1 row so data_ptr() is never null (zero-token ranks
+            # produce empty tensors whose data_ptr()==0, which trips C++ assertions).
+            alloc_recv_tokens = max(num_recv_tokens, 1)
             alloc_ctx = (
                 torch.cuda.stream(self.get_comm_stream())
                 if allocate_on_comm_stream
@@ -1284,16 +1288,16 @@ class Buffer:
             )
             with alloc_ctx:
                 recv_x = torch.empty(
-                    (num_recv_tokens, x.size(1)), device=x.device, dtype=x.dtype
+                    (alloc_recv_tokens, x.size(1)), device=x.device, dtype=x.dtype
                 )
                 recv_x_scales = (
                     None
                     if x_scales is None
                     else torch.empty(
                         (
-                            (num_recv_tokens,)
+                            (alloc_recv_tokens,)
                             if x_scales.dim() == 1
-                            else (num_recv_tokens, num_scales)
+                            else (alloc_recv_tokens, num_scales)
                         ),
                         device=x.device,
                         dtype=x_scales.dtype,
@@ -1335,6 +1339,10 @@ class Buffer:
                 allocate_on_comm_stream,
                 self._ll_compute_stream_ptr(x.device),
             )
+            # Slice back to the real number of received tokens.
+            recv_x = recv_x[:num_recv_tokens]
+            if recv_x_scales is not None:
+                recv_x_scales = recv_x_scales[:num_recv_tokens]
             return (
                 (recv_x, recv_x_scales) if x_scales is not None else recv_x,
                 None,
@@ -1390,6 +1398,10 @@ class Buffer:
                 False,
                 self._ll_compute_stream_ptr(x.device),
             )
+            # Allocate at least 1 row so data_ptr() is never null (zero-token ranks
+            # produce empty tensors whose data_ptr()==0, which trips C++ assertions).
+            alloc_recv_tokens = max(num_recv_tokens, 1)
+            alloc_rdma_recv_tokens = max(num_rdma_recv_tokens, 1)
             alloc_ctx = (
                 torch.cuda.stream(self.get_comm_stream())
                 if allocate_on_comm_stream
@@ -1397,16 +1409,16 @@ class Buffer:
             )
             with alloc_ctx:
                 recv_x = torch.empty(
-                    (num_recv_tokens, x.size(1)), device=x.device, dtype=x.dtype
+                    (alloc_recv_tokens, x.size(1)), device=x.device, dtype=x.dtype
                 )
                 recv_x_scales = (
                     None
                     if x_scales is None
                     else torch.empty(
                         (
-                            (num_recv_tokens,)
+                            (alloc_recv_tokens,)
                             if x_scales.dim() == 1
-                            else (num_recv_tokens, num_scales)
+                            else (alloc_recv_tokens, num_scales)
                         ),
                         device=x.device,
                         dtype=x_scales.dtype,
@@ -1416,7 +1428,7 @@ class Buffer:
                     None
                     if topk_idx is None
                     else torch.empty(
-                        (num_recv_tokens, topk_idx.size(1)),
+                        (alloc_recv_tokens, topk_idx.size(1)),
                         dtype=topk_idx.dtype,
                         device=x.device,
                     )
@@ -1425,13 +1437,13 @@ class Buffer:
                     None
                     if topk_weights is None
                     else torch.empty(
-                        (num_recv_tokens, topk_weights.size(1)),
+                        (alloc_recv_tokens, topk_weights.size(1)),
                         dtype=topk_weights.dtype,
                         device=x.device,
                     )
                 )
                 recv_src_meta = torch.empty(
-                    (num_recv_tokens, self.runtime.get_source_meta_bytes()),
+                    (alloc_recv_tokens, self.runtime.get_source_meta_bytes()),
                     dtype=torch.uint8,
                     device=x.device,
                 )
@@ -1445,7 +1457,7 @@ class Buffer:
                     (x.size(0), num_rdma_ranks), dtype=torch.int32, device=x.device
                 )
                 send_nvl_head = torch.empty(
-                    (num_rdma_recv_tokens, self.runtime.get_num_max_nvl_peers()),
+                    (alloc_rdma_recv_tokens, self.runtime.get_num_max_nvl_peers()),
                     dtype=torch.int32,
                     device=x.device,
                 )
@@ -1485,6 +1497,18 @@ class Buffer:
                 allocate_on_comm_stream,
                 self._ll_compute_stream_ptr(x.device),
             )
+            # Slice recv tensors back to the real number of received tokens.
+            recv_x = recv_x[:num_recv_tokens]
+            if recv_x_scales is not None:
+                recv_x_scales = recv_x_scales[:num_recv_tokens]
+            if recv_topk_idx is not None:
+                recv_topk_idx = recv_topk_idx[:num_recv_tokens]
+            if recv_topk_weights is not None:
+                recv_topk_weights = recv_topk_weights[:num_recv_tokens]
+            recv_src_meta = recv_src_meta[:num_recv_tokens]
+            # Keep at least 1 row so data_ptr() is never null (zero-token combine
+            # assertion guard, matching the alloc_rdma_recv_tokens pattern above).
+            send_nvl_head = send_nvl_head[:max(num_rdma_recv_tokens, 1)]
             handle = (
                 is_token_in_rank,
                 rdma_channel_prefix_matrix,
@@ -1541,6 +1565,16 @@ class Buffer:
 
         num_combined_tokens = int(is_combined_token_in_rank.size(0))
         num_topk = 0 if topk_weights is None else int(topk_weights.size(1))
+
+        # Allocate at least 1 row so data_ptr() is never null (zero-token ranks
+        # produce empty tensors whose data_ptr()==0, which trips C++ assertions).
+        alloc_combined_tokens = max(num_combined_tokens, 1)
+        num_x_rows = x.size(0)
+        if num_x_rows == 0:
+            x = x.new_empty((1, x.size(1)))
+        if src_meta.size(0) == 0:
+            src_meta = src_meta.new_empty((1,) + src_meta.shape[1:])
+
         alloc_ctx = (
             torch.cuda.stream(self.get_comm_stream())
             if allocate_on_comm_stream
@@ -1548,20 +1582,20 @@ class Buffer:
         )
         with alloc_ctx:
             combined_x = torch.empty(
-                (num_combined_tokens, x.size(1)), device=x.device, dtype=x.dtype
+                (alloc_combined_tokens, x.size(1)), device=x.device, dtype=x.dtype
             )
             combined_topk_weights = (
                 None
                 if topk_weights is None
                 else torch.empty(
-                    (num_combined_tokens, num_topk),
+                    (alloc_combined_tokens, num_topk),
                     device=x.device,
                     dtype=topk_weights.dtype,
                 )
             )
         event = self.runtime.internode_combine(
             x.data_ptr(),
-            x.size(0),
+            num_x_rows,
             x.size(1),
             Buffer._dtype_code(x.dtype),
             x.element_size(),
@@ -1585,6 +1619,10 @@ class Buffer:
             allocate_on_comm_stream,
             self._ll_compute_stream_ptr(x.device),
         )
+        # Slice back to the real number of combined tokens.
+        combined_x = combined_x[:num_combined_tokens]
+        if combined_topk_weights is not None:
+            combined_topk_weights = combined_topk_weights[:num_combined_tokens]
         return combined_x, combined_topk_weights, EventOverlap(event)
 
     def clean_low_latency_buffer(
