@@ -23,7 +23,7 @@ EP_DIR="$SCRIPT_DIR"
 
 # Defaults
 GPUS_PER_NODE=4
-TEST_SCRIPT="bench/test_internode_simple.py"
+TEST_SCRIPT="bench/test_low_latency.py"
 TEST_ARGS=""
 MASTER_ADDR="4.14.153.89"
 MASTER_PORT=12356

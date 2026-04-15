@@ -38,14 +38,26 @@ Intra-node:  GPU →(PCIe)→ POSIX shm slice →(proxy memcpy)→ peer shm slic
 
 ## Build & Test
 
+Activate the node-specific Python environment before rebuilding:
+
+```bash
+# l40
+conda activate uccl
+
+# l41
+source ~/zhongjie/zj_py/bin/activate
+```
+
 ```bash
 make -j SM=89                    # produces ep.abi3.so
-make install                     # install to site-packages
-torchrun --nproc_per_node=4 \    # single-node test
-  bench/test_low_latency.py --num-tokens=128 --hidden=2048 \
-  --num-topk=4 --num-experts=8 --disable-nvlink
-bash run_multinode.sh            # multi-node (see script for usage)
+make -j install                  # install to site-packages
 ```
+
+Benchmark workflows are packaged as project skills:
+
+- `bench-lite-ep-intra`: single-node/intra-node benchmark, default 2 GPUs.
+- `bench-lite-ep-inter`: multi-node/inter-node benchmark, default 2 total GPUs
+  across `l40` and `l41`.
 
 Constraint: `num_experts` must be divisible by total GPU count.
 

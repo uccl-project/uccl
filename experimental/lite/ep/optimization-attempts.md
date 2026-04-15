@@ -20,7 +20,7 @@ on H100 (NVLink latency hides the ~1 μs fence cost) but measurable on L4 PCIe.
 ## Failed Optimization Attempts
 
 19 ideas attempted exhaustively. Only #9 above was effective.
-Plus 4 additional attempts (#20–#23), none effective.
+Plus 6 additional attempts (#20–#25), none effective.
 
 | # | Idea | Status | Result |
 |---|------|--------|--------|
@@ -46,6 +46,8 @@ Plus 4 additional attempts (#20–#23), none effective.
 | 21 | VRAM staging (bulk D2H before RDMA) | Tested, reverted | **−35%** (9.79 → 6.41 GB/s 2n×1g). Breaks GPU-proxy pipelining (same as #15). |
 | 22 | Fence batching (amortize threadfence_system) | Tested | **−2 to −5%**. 1.07 μs fence cost hidden by 4 μs RDMA latency. |
 | 23 | Proxy multi-SGE RDMA coalescing | Tested, reverted | **0%** (10.16 vs 10.13 GB/s = noise). Merged consecutive same-expert WRITEs into fewer WRs with up to 16 sge entries. Sorting + merging overhead cancels WR reduction benefit. |
+| 24 | H2D DMA staging for recv_hook path | Tested | **0%** for fused benchmark. DMA copies arrived RDMA data from host → VRAM shadow so recv kernel reads fast VRAM. But recv kernel already fast (data arrived during send phase). Committed as `4088e1cb` for recv_hook path only. |
+| 25 | D2H DMA pre-copy for combine send | Tested, reverted | **0%**. Pre-copy combine data to host via `cudaMemcpyAsync` on copy stream, overlap with dispatch, combine uses `zero_copy=True`. DMA engine achieves same 25 GB/s as SM kernel writes (both PCIe-limited). DMA competes with dispatch for shared PCIe D2H bandwidth. Same anti-pattern as #15/#21: bulk pre-copy breaks per-token GPU-proxy pipelining. |
 
 ## Key Insights
 
@@ -72,6 +74,11 @@ Plus 4 additional attempts (#20–#23), none effective.
    256 WRs into ~16 coalesced WRs with multiple scatter-gather entries does not
    help. The NIC's WQE processing rate is not the bottleneck — the proxy's
    per-command polling + GPU-proxy signaling loop is.
+
+6. **DMA copy engine = SM kernel writes for D2H on PCIe Gen4**: Measured both
+   at ~25 GB/s for 14 MB transfers on L4. Both are limited by the same PCIe
+   PHY. Pre-copying data via DMA engine provides zero throughput benefit and
+   competes with dispatch for shared PCIe bandwidth.
 
 ## Performance Summary
 
