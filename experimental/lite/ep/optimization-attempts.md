@@ -20,6 +20,7 @@ on H100 (NVLink latency hides the ~1 μs fence cost) but measurable on L4 PCIe.
 ## Failed Optimization Attempts
 
 19 ideas attempted exhaustively. Only #9 above was effective.
+Plus 4 additional attempts (#20–#23), none effective.
 
 | # | Idea | Status | Result |
 |---|------|--------|--------|
@@ -42,6 +43,9 @@ on H100 (NVLink latency hides the ~1 μs fence cost) but measurable on L4 PCIe.
 | 18 | Fence coalescing (deferred commit) | Tested | DS 2× slower (335 vs 170 μs). Deferred D2H function generates worse machine code. Barriers themselves have zero overhead. |
 | 19 | Outer head/tail loop removal | Tested | 9.86 vs 9.84 GB/s = no effect. Outer loop reads are L2-cached. |
 | 20 | CUDA IPC P2P for intra-node (NVL_PEERS=4) | Tested, reverted | **−80%** (7.80 → 1.54 GB/s 4-GPU). GPU kernel individual PCIe stores are 5× slower than CPU proxy batch memcpy. |
+| 21 | VRAM staging (bulk D2H before RDMA) | Tested, reverted | **−35%** (9.79 → 6.41 GB/s 2n×1g). Breaks GPU-proxy pipelining (same as #15). |
+| 22 | Fence batching (amortize threadfence_system) | Tested | **−2 to −5%**. 1.07 μs fence cost hidden by 4 μs RDMA latency. |
+| 23 | Proxy multi-SGE RDMA coalescing | Tested, reverted | **0%** (10.16 vs 10.13 GB/s = noise). Merged consecutive same-expert WRITEs into fewer WRs with up to 16 sge entries. Sorting + merging overhead cancels WR reduction benefit. |
 
 ## Key Insights
 
@@ -64,10 +68,16 @@ on H100 (NVLink latency hides the ~1 μs fence cost) but measurable on L4 PCIe.
    high per-access latency (~2 μs). CPU bulk memcpy coalesces into large DMA
    bursts. NVLink hides this (450 GB/s, ~100 ns latency), PCIe does not.
 
+5. **Proxy WR count reduction (multi-SGE coalescing) has zero effect**: Merging
+   256 WRs into ~16 coalesced WRs with multiple scatter-gather entries does not
+   help. The NIC's WQE processing rate is not the bottleneck — the proxy's
+   per-command polling + GPU-proxy signaling loop is.
+
 ## Performance Summary
 
 | Setup | D+C BW (GB/s) | D BW | C BW | D+C Latency |
 |-------|:-------------:|:----:|:----:|:-----------:|
 | 1n×2g 128×2048 | 9.81 | 6.23 | 9.97 | 318 μs |
 | 1n×4g 128×2048 | 7.82 | 5.82 | 7.09 | 400 μs |
+| 2n×1g 128×2048 | 10.13 | 6.42 | 10.43 | 308 μs |
 | 2n×4g 128×2048 | 4.45 | 3.70 | 4.89 | 702 μs |
