@@ -175,9 +175,13 @@ uccl::UCCLLogLevel Endpoint::parse_log_level_from_env() {
 // The main P2P Endpoint class implementation
 // -----------------------------------------------------------------------------
 
-Endpoint::Endpoint(uint32_t const local_gpu_idx)
-    : local_gpu_idx_(local_gpu_idx), passive_accept_(false) {
-  std::cout << "Creating Engine with GPU index: " << local_gpu_idx << std::endl;
+Endpoint::Endpoint(uint32_t const local_gpu_idx, int physical_gpu_idx)
+    : local_gpu_idx_(local_gpu_idx),
+      physical_gpu_idx_(physical_gpu_idx >= 0 ? physical_gpu_idx
+                                              : (int)local_gpu_idx),
+      passive_accept_(false) {
+  std::cout << "Creating Engine with GPU index: " << local_gpu_idx
+            << " (physical: " << physical_gpu_idx_ << ")" << std::endl;
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
 
   int ngpus = 0;
@@ -227,7 +231,7 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx)
   size_t elem_sz = sizeof(ShmMsg);
   size_t elem_cnt = ShmRingDefaultElemCnt;
   for (int i = 0; i < kMaxNumGPUs; i++) {
-    inbox_rings_[i].shm_name = shm_ring_name(i, local_gpu_idx_);
+    inbox_rings_[i].shm_name = shm_ring_name(i, physical_gpu_idx_);
     inbox_rings_[i].ring = uccl::create_shared_ring(
         inbox_rings_[i].shm_name.c_str(), elem_sz, elem_cnt,
         inbox_rings_[i].shm_fd, inbox_rings_[i].shm_size, &inbox_creators_[i]);
@@ -236,7 +240,10 @@ Endpoint::Endpoint(uint32_t const local_gpu_idx)
   std::cout << "Endpoint initialized successfully" << std::endl;
 }
 
-Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
+Endpoint::Endpoint()
+    : local_gpu_idx_(INVALID_GPU),
+      physical_gpu_idx_(INVALID_GPU),
+      passive_accept_(false) {
   std::cout << "Creating Engine" << std::endl;
   int n_streams = std::max(1, (int)kNumGpuRtStreams);
 
@@ -394,8 +401,8 @@ std::vector<uint8_t> Endpoint::get_metadata() {
   uint16_t net_port = htons(port);
   std::memcpy(metadata.data() + ip_len, &net_port, 2);
 
-  // Copy local_gpu_idx_ in host byte order
-  std::memcpy(metadata.data() + ip_len + 2, &local_gpu_idx_, sizeof(int));
+  // Copy physical_gpu_idx_ in host byte order (for identity/naming)
+  std::memcpy(metadata.data() + ip_len + 2, &physical_gpu_idx_, sizeof(int));
 
   return metadata;
 }
@@ -531,6 +538,9 @@ bool Endpoint::reg(void const* data, size_t size, uint64_t& mr_id,
       // Host memory/unknown memory type - fallback to dev 0
       local_gpu_idx_ = 0;
     }
+    if (physical_gpu_idx_ == INVALID_GPU) {
+      physical_gpu_idx_ = local_gpu_idx_;
+    }
     initialize_engine();
     engine_initialized_ = true;
   }
@@ -572,6 +582,9 @@ bool Endpoint::regv(std::vector<void const*> const& data_v,
     } else {
       // Host memory/unknown memory type - fallback to dev 0
       local_gpu_idx_ = 0;
+    }
+    if (physical_gpu_idx_ == INVALID_GPU) {
+      physical_gpu_idx_ = local_gpu_idx_;
     }
     initialize_engine();
     engine_initialized_ = true;
@@ -1271,14 +1284,14 @@ bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id,
   Conn* conn = new Conn;
   conn->remote_gpu_idx_ = remote_gpu_idx;
 
-  if (same_process || conn->remote_gpu_idx_ == local_gpu_idx_) {
+  if (same_process || conn->remote_gpu_idx_ == physical_gpu_idx_) {
     // Same process or same GPU: use inbox_rings_ directly, no shm attach.
     conn->remote_inbox_ = inbox_rings_[remote_gpu_idx];
     conn->shm_attached_ = false;
   } else {
     // cross GPU, cross process: attach remote inbox via shared memory
     conn->remote_inbox_.shm_name =
-        shm_ring_name(local_gpu_idx_, remote_gpu_idx);
+        shm_ring_name(physical_gpu_idx_, remote_gpu_idx);
     conn->remote_inbox_.shm_size = inbox_rings_[remote_gpu_idx].shm_size;
 
     jring_t* ring = nullptr;
@@ -1312,7 +1325,7 @@ bool Endpoint::connect_local(int remote_gpu_idx, uint64_t& conn_id,
   if (!same_process) {
     // Cross-process: send CONNECT handshake via shm ring.
     ShmMsg msg;
-    msg.src_gpu = local_gpu_idx_;
+    msg.src_gpu = physical_gpu_idx_;
     msg.type = ShmMsgType::CONNECT;
     msg.completion = 0;
     shm_ring_send(conn->remote_inbox_.ring, msg);
@@ -1336,7 +1349,7 @@ bool Endpoint::accept_local(int& remote_gpu_idx, uint64_t& conn_id) {
   ShmMsg msg;
   while (true) {
     for (int peer = 0; peer < kMaxNumGPUs; peer++) {
-      if (peer == local_gpu_idx_) continue;
+      if (peer == physical_gpu_idx_) continue;
 
       if (!jring_empty(inbox_rings_[peer].ring)) {
         shm_ring_recv(inbox_rings_[peer].ring, msg);
@@ -1356,14 +1369,14 @@ got:
   conn->conn_id_ = conn_id;
   conn->remote_gpu_idx_ = remote_gpu_idx;
 
-  if (conn->remote_gpu_idx_ == local_gpu_idx_) {
+  if (conn->remote_gpu_idx_ == physical_gpu_idx_) {
     // same GPU: no attach, bind inbox_rings_[remote_gpu_idx] directly
     conn->remote_inbox_ = inbox_rings_[conn->remote_gpu_idx_];
     conn->shm_attached_ = false;
   } else {
     // cross GPU: attach client inbox
     conn->remote_inbox_.shm_name =
-        shm_ring_name(local_gpu_idx_, conn->remote_gpu_idx_);
+        shm_ring_name(physical_gpu_idx_, conn->remote_gpu_idx_);
     conn->remote_inbox_.shm_size = inbox_rings_[conn->remote_gpu_idx_].shm_size;
     conn->remote_inbox_.ring = uccl::attach_shared_ring(
         conn->remote_inbox_.shm_name.c_str(), conn->remote_inbox_.shm_fd,
@@ -1408,7 +1421,7 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
   if (!info.is_host) {
     // GPU receiver: open remote handle and copy into it
     void* base = nullptr;
-    GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
     GPU_RT_CHECK(
         gpuIpcOpenMemHandle(&base, info.handle, gpuIpcMemLazyEnablePeerAccess));
     void* dst_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) +
@@ -1417,7 +1430,7 @@ bool Endpoint::send_ipc(uint64_t conn_id, void* data, size_t size) {
     auto copy_kind =
         sender_is_host ? gpuMemcpyHostToDevice : gpuMemcpyDeviceToDevice;
 
-    std::vector<gpuStream_t>& dst_streams = ipc_streams_[conn->remote_gpu_idx_];
+    std::vector<gpuStream_t>& dst_streams = ipc_streams_[local_gpu_idx_];
     int num_streams = std::min(
         dst_streams.size(),
         size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
@@ -1556,14 +1569,14 @@ bool Endpoint::recv_ipc(uint64_t conn_id, void* data, size_t size) {
 
     // Open sender's GPU buffer
     void* base = nullptr;
-    GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
     GPU_RT_CHECK(gpuIpcOpenMemHandle(&base, sender_info.handle,
                                      gpuIpcMemLazyEnablePeerAccess));
     void* src_ptr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) +
                                             sender_info.offset);
 
     // Copy from sender's GPU to our CPU buffer using multiple streams
-    std::vector<gpuStream_t>& streams = ipc_streams_[conn->remote_gpu_idx_];
+    std::vector<gpuStream_t>& streams = ipc_streams_[local_gpu_idx_];
     int num_streams = std::min(
         streams.size(),
         size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
@@ -1663,9 +1676,9 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  // Open the remote IPC memory handle
+  // Open the remote IPC memory handle (use local device for IPC ops)
   void* raw_dst_ptr = nullptr;
-  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_dst_ptr, info.handle,
                                    gpuIpcMemLazyEnablePeerAccess));
 
@@ -1674,7 +1687,7 @@ bool Endpoint::write_ipc(uint64_t conn_id, void const* data, size_t size,
       reinterpret_cast<uintptr_t>(raw_dst_ptr) + info.offset);
 
   // Perform the memory copy using multiple streams for better performance
-  std::vector<gpuStream_t>& dst_streams = ipc_streams_[conn->remote_gpu_idx_];
+  std::vector<gpuStream_t>& dst_streams = ipc_streams_[local_gpu_idx_];
   int num_streams =
       std::min(dst_streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
@@ -1722,9 +1735,9 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  // Open the remote IPC memory handle
+  // Open the remote IPC memory handle (use local device for IPC ops)
   void* raw_src_ptr = nullptr;
-  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   GPU_RT_CHECK(gpuIpcOpenMemHandle(&raw_src_ptr, info.handle,
                                    gpuIpcMemLazyEnablePeerAccess));
 
@@ -1733,7 +1746,7 @@ bool Endpoint::read_ipc(uint64_t conn_id, void* data, size_t size,
       reinterpret_cast<uintptr_t>(raw_src_ptr) + info.offset);
 
   // Perform the memory copy using multiple streams for better performance
-  std::vector<gpuStream_t>& src_streams = ipc_streams_[conn->remote_gpu_idx_];
+  std::vector<gpuStream_t>& src_streams = ipc_streams_[local_gpu_idx_];
   int num_streams =
       std::min(src_streams.size(),
                size < kIpcSizePerEngine ? 1 : (size_t)size / kIpcSizePerEngine);
@@ -1781,8 +1794,8 @@ bool Endpoint::writev_ipc(uint64_t conn_id, std::vector<void const*> data_v,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
-  std::vector<gpuStream_t>& streams = ipc_streams_[conn->remote_gpu_idx_];
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+  std::vector<gpuStream_t>& streams = ipc_streams_[local_gpu_idx_];
 
   // Open all handles and issue all memcpys before syncing any stream.
   std::vector<void*> raw_ptrs(num_iovs, nullptr);
@@ -1843,8 +1856,8 @@ bool Endpoint::readv_ipc(uint64_t conn_id, std::vector<void*> data_v,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  GPU_RT_CHECK(gpuSetDevice(conn->remote_gpu_idx_));
-  std::vector<gpuStream_t>& streams = ipc_streams_[conn->remote_gpu_idx_];
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+  std::vector<gpuStream_t>& streams = ipc_streams_[local_gpu_idx_];
 
   // Open all handles and issue all memcpys before syncing any stream.
   std::vector<void*> raw_ptrs(num_iovs, nullptr);
@@ -1905,7 +1918,11 @@ bool Endpoint::write_ipc_async(uint64_t conn_id, void const* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int target_gpu = (info.gpu_idx >= 0) ? info.gpu_idx : conn->remote_gpu_idx_;
+  // Use local CUDA device for IPC ops: gpuIpcOpenMemHandle with
+  // LazyEnablePeerAccess works from any device context.  When
+  // CUDA_VISIBLE_DEVICES is remapped the remote physical GPU index is not
+  // a valid CUDA device in this process, so we fall back to the local device.
+  int target_gpu = (info.gpu_idx >= 0) ? info.gpu_idx : local_gpu_idx_;
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
 
   void* raw_dst_ptr = nullptr;
@@ -1969,7 +1986,8 @@ bool Endpoint::read_ipc_async(uint64_t conn_id, void* data, size_t size,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
-  int target_gpu = (info.gpu_idx >= 0) ? info.gpu_idx : conn->remote_gpu_idx_;
+  // Use local CUDA device for IPC ops (see write_ipc_async comment).
+  int target_gpu = (info.gpu_idx >= 0) ? info.gpu_idx : local_gpu_idx_;
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
 
   void* raw_src_ptr = nullptr;
@@ -2038,9 +2056,10 @@ bool Endpoint::writev_ipc_async(uint64_t conn_id,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
+  // Use local CUDA device for IPC ops (see write_ipc_async comment).
   int target_gpu = (num_iovs > 0 && info_v[0].gpu_idx >= 0)
                        ? info_v[0].gpu_idx
-                       : conn->remote_gpu_idx_;
+                       : local_gpu_idx_;
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
   std::vector<gpuStream_t>& streams = ipc_streams_[target_gpu];
 
@@ -2118,9 +2137,10 @@ bool Endpoint::readv_ipc_async(uint64_t conn_id, std::vector<void*> data_v,
   auto dev_reset =
       uccl::finally([&]() { GPU_RT_CHECK(gpuSetDevice(orig_device)); });
 
+  // Use local CUDA device for IPC ops (see write_ipc_async comment).
   int target_gpu = (num_iovs > 0 && info_v[0].gpu_idx >= 0)
                        ? info_v[0].gpu_idx
-                       : conn->remote_gpu_idx_;
+                       : local_gpu_idx_;
   GPU_RT_CHECK(gpuSetDevice(target_gpu));
   std::vector<gpuStream_t>& streams = ipc_streams_[target_gpu];
 
@@ -2441,7 +2461,7 @@ void Endpoint::initialize_engine() {
   size_t elem_sz = sizeof(ShmMsg);
   size_t elem_cnt = ShmRingDefaultElemCnt;
   for (int i = 0; i < kMaxNumGPUs; i++) {
-    inbox_rings_[i].shm_name = shm_ring_name(i, local_gpu_idx_);
+    inbox_rings_[i].shm_name = shm_ring_name(i, physical_gpu_idx_);
     inbox_rings_[i].ring = uccl::create_shared_ring(
         inbox_rings_[i].shm_name.c_str(), elem_sz, elem_cnt,
         inbox_rings_[i].shm_fd, inbox_rings_[i].shm_size, &inbox_creators_[i]);
@@ -2586,7 +2606,7 @@ void Endpoint::passive_accept_local_thread_func() {
   while (!passive_accept_stop_.load(std::memory_order_acquire)) {
     bool found = false;
     for (int peer = 0; peer < kMaxNumGPUs; ++peer) {
-      if (peer == local_gpu_idx_) continue;
+      if (peer == physical_gpu_idx_) continue;
       if (inbox_rings_[peer].ring == nullptr) continue;
       if (jring_empty(inbox_rings_[peer].ring)) continue;
 

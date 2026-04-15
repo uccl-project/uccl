@@ -406,7 +406,7 @@ else
   if [[ "$CONTAINER_ENGINE" == "podman" ]]; then
     CONTAINER_RUN_ARGS+=(--user root)
   else
-    CONTAINER_RUN_ARGS+=(--user "$(id -u):$(id -g)")
+    CONTAINER_RUN_ARGS+=(--user 0:0)
   fi
 
   ${CONTAINER_ENGINE} "${CONTAINER_RUN_ARGS[@]}" \
