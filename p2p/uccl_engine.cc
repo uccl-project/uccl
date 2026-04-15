@@ -166,10 +166,13 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
 uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
                                 size_t ip_addr_buf_len, int* remote_gpu_idx) {
   if (!engine || !ip_addr_buf || !remote_gpu_idx) return nullptr;
+    // The merged NCCL/TCPX path does not need the background passive-accept
+    // helper. (To fix bug in 8-GPU benchmark)
+#if !defined(UCCL_P2P_USE_NCCL)
   // Start accept_local loop in a background thread (once per engine) so that
   // local (IPC) peers can connect concurrently with the blocking RDMA accept.
-  bool expected = false;
   engine->endpoint->start_passive_accept();
+#endif
   uccl_conn_t* conn = new uccl_conn;
   std::string ip_addr;
   uint64_t conn_id;
@@ -256,6 +259,20 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<char*> ipc_bufs) {
   if (!conn || num_iovs <= 0) return -1;
 
+#if defined(UCCL_P2P_USE_NCCL)
+  // The NIXL UCCL backend always uses the vector API, even for a single iov.
+  // For the NCCL/TCPX path, bypass the generic readv proxy-thread machinery in
+  // that case and issue the scalar read directly.
+  if (num_iovs == 1 && mr_ids.size() == 1 && dst_v.size() == 1 &&
+      size_v.size() == 1 && fifo_items.size() == 1 && ipc_bufs.empty()) {
+    return conn->engine->endpoint->read_async(conn->conn_id, mr_ids[0],
+                                              dst_v[0], size_v[0],
+                                              fifo_items[0], transfer_id)
+               ? 0
+               : -1;
+  }
+#endif
+
   // Local IPC path (both same-process and cross-process)
   if ((conn->is_local || conn->same_process) && !ipc_bufs.empty()) {
     std::vector<IpcTransferInfo> info_v(num_iovs);
@@ -332,6 +349,19 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                              std::vector<char*> ipc_bufs) {
   if (!conn || num_iovs <= 0) return -1;
 
+#if defined(UCCL_P2P_USE_NCCL)
+  // Mirror the single-iov fast path for writes so the merged NCCL endpoint
+  // does not force 1-buffer transfers through the vector proxy path.
+  if (num_iovs == 1 && mr_ids.size() == 1 && dst_v.size() == 1 &&
+      size_v.size() == 1 && fifo_items.size() == 1 && ipc_bufs.empty()) {
+    return conn->engine->endpoint->write_async(conn->conn_id, mr_ids[0],
+                                               dst_v[0], size_v[0],
+                                               fifo_items[0], transfer_id)
+               ? 0
+               : -1;
+  }
+#endif
+
   // Local IPC path (both same-process and cross-process)
   if ((conn->is_local || conn->same_process) && !ipc_bufs.empty()) {
     std::vector<void const*> src_v(dst_v.begin(), dst_v.end());
@@ -348,7 +378,7 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                : -1;
   }
 
-// Remote RDMA
+  // Remote RDMA
   return conn->engine->endpoint->writev_async(conn->conn_id, mr_ids, dst_v,
                                               size_v, fifo_items, num_iovs,
                                               transfer_id)
@@ -482,15 +512,7 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
   oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
   memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
-
-  auto tcp_endpoint = conn->engine->endpoint->get_endpoint();
-  if (!tcp_endpoint) {
-    UCCL_LOG(ERROR) << "Failed to get TCP endpoint for notification";
-    return -1;
-  }
-
-  uint64_t flow_id = conn->conn_id;
-  return tcp_endpoint->send_notification(flow_id, oob_msg);
+  return conn->engine->endpoint->send_notification(conn->conn_id, oob_msg);
 #else
   NotifyMsg oob_msg;
   oob_msg.magic = NOTIFY_MSG_MAGIC;

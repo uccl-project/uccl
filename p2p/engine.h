@@ -469,6 +469,8 @@ class Endpoint {
 
   RDMAEndPoint get_endpoint() const;
 
+  int send_notification(uint64_t conn_id, NotifyMsg const& notification) const;
+
  private:
   int local_gpu_idx_;
   int numa_node_;
