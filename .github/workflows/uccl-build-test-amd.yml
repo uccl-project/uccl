@@ -104,7 +104,7 @@ jobs:
             [ -d ~/uccl-ci-sandbox/.venv ] || uv venv ~/uccl-ci-sandbox/.venv --python 3.12
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox
-            uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.2
+            uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.1
             uv pip install nanobind pybind11
             ./build.sh roc7 all --install 2>&1 | tee build.log
           EOF
@@ -118,7 +118,7 @@ jobs:
               [ -d ~/uccl-ci-sandbox/.venv ] || uv venv ~/uccl-ci-sandbox/.venv --python 3.12
               source ~/uccl-ci-sandbox/.venv/bin/activate
               cd ~/uccl-ci-sandbox
-              uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.2
+              uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.1
               uv pip install nanobind pybind11
               ./build.sh roc7 all --install 2>&1 | tee build.log
           EOF
