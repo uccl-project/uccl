@@ -1481,9 +1481,13 @@ static void post_rdma_async_batched_normal_mode(
 
           ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
         } else if (j + 1 == idxs.size()) {
+          // Normal mode: cmd.expert_idx union slot == atomic_offset (16b),
+          // so mask to the WriteImm expert field (10b). num_tokens is the
+          // count of indices in this batch.
           uint32_t imm =
               WriteImm::Pack(get_is_combine(cmd.cmd_type),
-                             get_low_latency(cmd.cmd_type), cmd.expert_idx,
+                             get_low_latency(cmd.cmd_type),
+                             cmd.expert_idx & WriteImm::kEXPERT_MASK,
                              (uint32_t)idxs.size(), my_rank)
                   .GetImmData();
           ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
@@ -1835,7 +1839,9 @@ static void post_rdma_async_batched_fast_mode(
     std::unordered_map<int, std::vector<size_t>> dst_expert_wr_ids;
     for (size_t j = 0; j < k; ++j) {
       size_t i = wr_ids[j];
-      int expert_idx = cmds_to_post[i].expert_idx;
+      auto const& c = cmds_to_post[i];
+      // post_rdma_async_batched_fast_mode is always LL; expert_idx is packed.
+      int expert_idx = static_cast<int>(unpack_ll_expert(c.expert_idx));
       dst_expert_wr_ids[expert_idx].push_back(i);
     }
 #endif
@@ -1881,22 +1887,35 @@ static void post_rdma_async_batched_fast_mode(
           std::abort();
         }
 #ifdef USE_SENDER_BARRIER
-        S.wr_id_to_write_struct[qpx->wr_id] = {
-            cmd.expert_idx, dst_rank, get_is_combine(cmd.cmd_type), true};
+        {
+          // Always LL path here; expert_idx is packed.
+          uint32_t sb_expert = unpack_ll_expert(cmd.expert_idx);
+          S.wr_id_to_write_struct[qpx->wr_id] = {
+              static_cast<uint16_t>(sb_expert), dst_rank,
+              get_is_combine(cmd.cmd_type), true};
+        }
 #endif
 #ifdef USE_RECEIVER_BARRIER
-        uint32_t num_tokens_imm =
-            cmd.atomic_val ? static_cast<uint32_t>(cmd.atomic_val) : 1u;
+        // post_rdma_async_batched_fast_mode is always the LL path, so the
+        // expert_idx slot is always packed (10b expert + 5b num_tokens high).
+        // atomic_val holds num_tokens low 8 bits. See ring_buffer.cuh.
+        // Note: get_low_latency(cmd.cmd_type) returns the low_latency buffer
+        // index (0 or 1), not an "is LL" flag, so we cannot gate on it here.
+        uint32_t ll_expert = unpack_ll_expert(cmd.expert_idx);
+        uint32_t ll_num_tokens =
+            unpack_ll_num_tokens(cmd.expert_idx, cmd.atomic_val);
+        if (ll_num_tokens == 0) ll_num_tokens = 1u;
         uint32_t imm = WriteImm::Pack(get_is_combine(cmd.cmd_type),
-                                      get_low_latency(cmd.cmd_type),
-                                      cmd.expert_idx, num_tokens_imm, my_rank)
+                                      get_low_latency(cmd.cmd_type), ll_expert,
+                                      ll_num_tokens, my_rank)
                            .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
 #else
       if (j + 1 == k) {
+        uint32_t ll_expert = unpack_ll_expert(cmd.expert_idx);
         uint32_t imm = WriteImm::Pack(get_is_combine(cmd.cmd_type),
-                                      get_low_latency(cmd.cmd_type),
-                                      cmd.expert_idx, k, my_rank)
+                                      get_low_latency(cmd.cmd_type), ll_expert,
+                                      k, my_rank)
                            .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
       } else {

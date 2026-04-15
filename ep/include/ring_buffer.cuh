@@ -79,7 +79,9 @@ struct TransferCmd {
     int value;
   };
   union {
-    // Low-latency mode
+    // Low-latency mode: packed [15] unused, [14:10] num_tokens high 5 bits,
+    // [9:0] expert index (10 bits, up to 1023). Combined with the 8-bit
+    // `atomic_val` field, num_tokens is 13 bits (1..8191) wire-wide.
     uint16_t expert_idx;
     // Normal mode
     uint16_t atomic_offset;
@@ -90,6 +92,36 @@ struct TransferCmd {
 #if defined(__x86_64__) || defined(_M_X64)
 static_assert(sizeof(TransferCmd) * 8 == 128, "TransferCmd must be 128 bits");
 #endif
+
+// Low-latency packed layout constants for expert_idx + num_tokens.
+// atomic_val (8 bits) holds num_tokens[7:0]; expert_idx union slot holds
+// [9:0]=expert (10 bits), [14:10]=num_tokens[12:8] (5 bits).
+static constexpr uint32_t kLLExpertBits = 10;
+static constexpr uint32_t kLLExpertMask = (1u << kLLExpertBits) - 1;    // 0x3FF
+static constexpr uint32_t kLLNumTokensBits = 13;
+static constexpr uint32_t kLLNumTokensMax = (1u << kLLNumTokensBits) - 1;  // 8191
+static constexpr uint32_t kLLNumTokensHighBits = kLLNumTokensBits - 8;  // 5
+static constexpr uint32_t kLLNumTokensHighMask =
+    (1u << kLLNumTokensHighBits) - 1;  // 0x1F
+
+__host__ __device__ inline uint16_t pack_ll_expert_slot(uint32_t expert_idx,
+                                                        uint32_t num_tokens) {
+  return static_cast<uint16_t>(
+      (expert_idx & kLLExpertMask) |
+      (((num_tokens >> 8) & kLLNumTokensHighMask) << kLLExpertBits));
+}
+
+__host__ __device__ inline uint32_t unpack_ll_expert(uint16_t slot) {
+  return static_cast<uint32_t>(slot) & kLLExpertMask;
+}
+
+__host__ __device__ inline uint32_t unpack_ll_num_tokens(uint16_t slot,
+                                                         uint8_t atomic_val) {
+  return static_cast<uint32_t>(atomic_val) |
+         (((static_cast<uint32_t>(slot) >> kLLExpertBits) &
+           kLLNumTokensHighMask)
+          << 8);
+}
 
 // WRITE command offsets use mode-dependent packing:
 // - normal/high-throughput mode only guarantees 4-byte alignment
