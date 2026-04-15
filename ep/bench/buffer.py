@@ -1508,7 +1508,7 @@ class Buffer:
             recv_src_meta = recv_src_meta[:num_recv_tokens]
             # Keep at least 1 row so data_ptr() is never null (zero-token combine
             # assertion guard, matching the alloc_rdma_recv_tokens pattern above).
-            send_nvl_head = send_nvl_head[:max(num_rdma_recv_tokens, 1)]
+            send_nvl_head = send_nvl_head[: max(num_rdma_recv_tokens, 1)]
             handle = (
                 is_token_in_rank,
                 rdma_channel_prefix_matrix,
