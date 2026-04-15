@@ -97,9 +97,10 @@ static_assert(sizeof(TransferCmd) * 8 == 128, "TransferCmd must be 128 bits");
 // atomic_val (8 bits) holds num_tokens[7:0]; expert_idx union slot holds
 // [9:0]=expert (10 bits), [14:10]=num_tokens[12:8] (5 bits).
 static constexpr uint32_t kLLExpertBits = 10;
-static constexpr uint32_t kLLExpertMask = (1u << kLLExpertBits) - 1;    // 0x3FF
+static constexpr uint32_t kLLExpertMask = (1u << kLLExpertBits) - 1;  // 0x3FF
 static constexpr uint32_t kLLNumTokensBits = 13;
-static constexpr uint32_t kLLNumTokensMax = (1u << kLLNumTokensBits) - 1;  // 8191
+static constexpr uint32_t kLLNumTokensMax =
+    (1u << kLLNumTokensBits) - 1;                                       // 8191
 static constexpr uint32_t kLLNumTokensHighBits = kLLNumTokensBits - 8;  // 5
 static constexpr uint32_t kLLNumTokensHighMask =
     (1u << kLLNumTokensHighBits) - 1;  // 0x1F

@@ -1484,12 +1484,11 @@ static void post_rdma_async_batched_normal_mode(
           // Normal mode: cmd.expert_idx union slot == atomic_offset (16b),
           // so mask to the WriteImm expert field (10b). num_tokens is the
           // count of indices in this batch.
-          uint32_t imm =
-              WriteImm::Pack(get_is_combine(cmd.cmd_type),
-                             get_low_latency(cmd.cmd_type),
-                             cmd.expert_idx & WriteImm::kEXPERT_MASK,
-                             (uint32_t)idxs.size(), my_rank)
-                  .GetImmData();
+          uint32_t imm = WriteImm::Pack(get_is_combine(cmd.cmd_type),
+                                        get_low_latency(cmd.cmd_type),
+                                        cmd.expert_idx & WriteImm::kEXPERT_MASK,
+                                        (uint32_t)idxs.size(), my_rank)
+                             .GetImmData();
           ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
         } else {
           ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);
@@ -1913,10 +1912,10 @@ static void post_rdma_async_batched_fast_mode(
 #else
       if (j + 1 == k) {
         uint32_t ll_expert = unpack_ll_expert(cmd.expert_idx);
-        uint32_t imm = WriteImm::Pack(get_is_combine(cmd.cmd_type),
-                                      get_low_latency(cmd.cmd_type), ll_expert,
-                                      k, my_rank)
-                           .GetImmData();
+        uint32_t imm =
+            WriteImm::Pack(get_is_combine(cmd.cmd_type),
+                           get_low_latency(cmd.cmd_type), ll_expert, k, my_rank)
+                .GetImmData();
         ibv_wr_rdma_write_imm(qpx, ctx->remote_rkey, remote_addr, htonl(imm));
       } else {
         ibv_wr_rdma_write(qpx, ctx->remote_rkey, remote_addr);

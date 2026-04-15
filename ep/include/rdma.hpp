@@ -216,9 +216,9 @@ class WriteImm {
   static constexpr int kIS_COMBINE = 29;
 
   // Masks
-  static constexpr uint32_t kRANK_MASK = 0x1Fu;     // 5 bits
-  static constexpr uint32_t kTOKENS_MASK = 0x1FFFu; // 13 bits
-  static constexpr uint32_t kEXPERT_MASK = 0x3FFu;  // 10 bits
+  static constexpr uint32_t kRANK_MASK = 0x1Fu;      // 5 bits
+  static constexpr uint32_t kTOKENS_MASK = 0x1FFFu;  // 13 bits
+  static constexpr uint32_t kEXPERT_MASK = 0x3FFu;   // 10 bits
 
   explicit WriteImm(uint32_t imm_data = 0) : imm_data_(imm_data) {}
 
@@ -250,8 +250,7 @@ class WriteImm {
     assert((num_tokens & ~kTOKENS_MASK) == 0 &&
            "num_tokens overflow (13 bits)");
     if ((my_rank & ~kRANK_MASK) != 0) {
-      fprintf(stderr,
-              "[RDMA ERROR] my_rank=%u exceeds 5-bit limit (max 31)\n",
+      fprintf(stderr, "[RDMA ERROR] my_rank=%u exceeds 5-bit limit (max 31)\n",
               my_rank);
     }
     assert((my_rank & ~kRANK_MASK) == 0 && "my_rank overflow (5 bits)");

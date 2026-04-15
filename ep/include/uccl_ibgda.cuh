@@ -87,8 +87,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
       EP_DEVICE_ASSERT(expert_idx <= kLLExpertMask);
       EP_DEVICE_ASSERT(num_tokens > 0 &&
                        num_tokens <= static_cast<int>(kLLNumTokensMax));
-      cmd.expert_idx = pack_ll_expert_slot(expert_idx,
-                                           static_cast<uint32_t>(num_tokens));
+      cmd.expert_idx =
+          pack_ll_expert_slot(expert_idx, static_cast<uint32_t>(num_tokens));
       cmd.atomic_val = static_cast<uint8_t>(num_tokens & 0xFF);
     }
     h->atomic_set_and_commit(cmd, &slot);
@@ -153,8 +153,8 @@ __device__ __forceinline__ void nvshmemi_ibgda_put_nbi_warp(
         EP_DEVICE_ASSERT(expert_idx <= kLLExpertMask);
         EP_DEVICE_ASSERT(num_tokens > 0 &&
                          num_tokens <= static_cast<int>(kLLNumTokensMax));
-        cmd.expert_idx = pack_ll_expert_slot(expert_idx,
-                                             static_cast<uint32_t>(num_tokens));
+        cmd.expert_idx =
+            pack_ll_expert_slot(expert_idx, static_cast<uint32_t>(num_tokens));
         cmd.atomic_val = static_cast<uint8_t>(num_tokens & 0xFF);
       }
       h->atomic_set_and_commit(cmd, &slot);
