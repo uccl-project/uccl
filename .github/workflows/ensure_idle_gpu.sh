@@ -81,14 +81,15 @@ for pid in "${GPU_PIDS[@]}"; do
 done
 
 if [[ ${#FOREIGN_OTHER[@]} -gt 0 ]]; then
-  echo "WARNING: GPU has processes from another user (cannot kill, ignoring):" >&2
+  echo "GPU busy with processes from another user (cannot kill):" >&2
   for pid in "${FOREIGN_OTHER[@]}"; do
     describe_pid "$pid" >&2
   done
+  exit 1
 fi
 
 if [[ ${#FOREIGN_MINE[@]} -gt 0 ]]; then
-  echo "GPU busy with our processes outside $SANDBOX_ABS — refusing to kill:" >&2
+  echo "GPU busy with our processes outside $SANDBOX_ABS (cannot kill):" >&2
   for pid in "${FOREIGN_MINE[@]}"; do
     describe_pid "$pid" >&2
   done

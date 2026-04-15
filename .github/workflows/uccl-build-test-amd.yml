@@ -250,6 +250,20 @@ jobs:
           wait $PID0 $PID1
           exit $?
 
+      - name: Kill stale CI GPU processes
+        if: always()
+        shell: bash
+        run: |
+          kill_ci_gpu_procs='
+            for pid in $(rocm-smi --showpids 2>/dev/null | grep -oE "[0-9]+" | sort -nu); do
+              [ -d "/proc/$pid" ] || continue
+              cwd="$(readlink -f /proc/$pid/cwd 2>/dev/null || true)"
+              case "$cwd" in "$HOME/uccl-ci-sandbox"*) kill -9 "$pid" 2>/dev/null || true ;; esac
+            done
+          '
+          ssh -o BatchMode=yes amd0 bash --norc --noprofile -c "$kill_ci_gpu_procs" || true
+          ssh -o BatchMode=yes amd1 bash --norc --noprofile -c "$kill_ci_gpu_procs" || true
+
       - name: Fetch remote logs
         if: always()
         shell: bash
