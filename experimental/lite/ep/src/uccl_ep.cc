@@ -29,6 +29,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 #include <cuda_runtime.h>
@@ -625,6 +626,15 @@ class Buffer {
     if (comm_stream != nullptr) {
       CUDA_CHECK(cudaStreamDestroy(comm_stream));
       comm_stream = nullptr;
+    }
+    // Free H2D staging resources
+    if (vram_shadow_ptr != nullptr) {
+      CUDA_CHECK(cudaFree(vram_shadow_ptr));
+      vram_shadow_ptr = nullptr;
+    }
+    if (staging_stream != nullptr) {
+      CUDA_CHECK(cudaStreamDestroy(staging_stream));
+      staging_stream = nullptr;
     }
     destroyed = true;
     available = false;
@@ -1262,12 +1272,13 @@ class Buffer {
             : reinterpret_cast<int64_t*>(dispatch_wait_recv_cost_stats_ptr);
 
     auto [ptr0, ptr_internode0, count0] = next_buffer.clean_meta();
-    auto launcher = [=](int phases) {
+    auto launcher = [=](int phases, void* recv_data_override = nullptr) {
       uccl::internode_ll::dispatch(
           packed_recv_x, packed_recv_x_scales, packed_recv_src_info,
           packed_recv_layout_range, packed_recv_count,
           cumulative_local_expert_recv_stats, dispatch_wait_recv_cost_stats,
-          buffer.dispatch_rdma_recv_data_buffer,
+          recv_data_override ? recv_data_override
+                            : buffer.dispatch_rdma_recv_data_buffer,
           buffer.dispatch_rdma_recv_count_buffer,
           buffer.dispatch_rdma_send_buffer, x, topk_idx, ptr0, ptr_internode0,
           count0, num_tokens, hidden, num_max_dispatch_tokens_per_rank,
@@ -1277,6 +1288,133 @@ class Buffer {
           low_latency_buffer_idx_used, d_ipc_rdma_base_ptrs, rdma_buffer_ptr,
           atomic_buffer_ptr, buffer.dispatch_rdma_recv_count_buffer_internode);
     };
+
+    // H2D staging: overlap DMA with send kernel for faster recv
+    bool const use_staging = return_recv_hook && vram_shadow_ptr != nullptr;
+
+    if (use_staging) {
+      // Compute VRAM shadow layout (same offsets, different base pointer)
+      uccl::LowLatencyLayout vram_layout(vram_shadow_ptr,
+                                         num_max_dispatch_tokens_per_rank,
+                                         hidden, num_ranks, num_experts,
+                                         atomic_buffer_ptr);
+      auto vram_buf = vram_layout.buffers[low_latency_buffer_idx_used];
+
+      // Compute message size for DMA — must match the kernel's num_bytes_per_msg
+      int const num_scales = hidden / 128;
+      size_t const num_bytes_per_msg =
+          sizeof(int4) +
+          (use_fp8 ? (static_cast<size_t>(hidden) +
+                      num_scales * sizeof(float))
+                   : (static_cast<size_t>(hidden) * sizeof(nv_bfloat16)));
+      int const num_local_experts = num_experts / num_ranks;
+
+      // Get CPU-accessible host pointer for internode signaling.
+      // The atomic buffer may be in GPU VRAM (cudaMalloc) or shared POSIX
+      // memory.  For POSIX shm, look up the host mmap pointer.  For VRAM,
+      // use cudaMemcpy to poll.
+      int64_t* sig_internode_host = nullptr;
+      {
+        std::lock_guard<std::mutex> lk(g_shared_bufs_mu);
+        auto it = g_shared_atomic_bufs.find(device_index);
+        if (it != g_shared_atomic_bufs.end()) {
+          auto& sb = it->second;
+          ptrdiff_t ab_offset =
+              reinterpret_cast<uint8_t*>(atomic_buffer_ptr) -
+              reinterpret_cast<uint8_t*>(sb.device_ptr);
+          auto* atomic_host =
+              reinterpret_cast<uint8_t*>(sb.mmap_ptr) + ab_offset;
+          ptrdiff_t sig_offset =
+              reinterpret_cast<uint8_t*>(
+                  buffer.dispatch_rdma_recv_count_buffer_internode) -
+              reinterpret_cast<uint8_t*>(atomic_buffer_ptr);
+          sig_internode_host =
+              reinterpret_cast<int64_t*>(atomic_host + sig_offset);
+        }
+      }
+
+      // Device pointer for internode signaling (used with cudaMemcpy fallback)
+      auto sig_internode_dev =
+          buffer.dispatch_rdma_recv_count_buffer_internode;
+
+      // Capture state for staging thread
+      auto host_recv = buffer.dispatch_rdma_recv_data_buffer;
+      auto vram_recv = vram_buf.dispatch_rdma_recv_data_buffer;
+      auto sig_intranode = buffer.dispatch_rdma_recv_count_buffer;
+      int const dev_idx = device_index;
+      cudaStream_t const stg_stream = staging_stream;
+      int const max_tokens = num_max_dispatch_tokens_per_rank;
+      int const n_ranks = num_ranks;
+      int const my_rank = rank;
+      int const nvl_peers = max_nvl_peers;
+
+      // Launch send kernel (non-cooperative — allows copy engine DMA overlap)
+      launcher(LOW_LATENCY_SEND_PHASE);
+
+      // Background thread: poll signaling, DMA arrived data to VRAM
+      auto staging_thread = std::make_shared<std::thread>(
+          [=]() {
+            cudaSetDevice(dev_idx);
+            for (int le = 0; le < num_local_experts; ++le) {
+              for (int src = 0; src < n_ranks; ++src) {
+                bool is_internode =
+                    (src / nvl_peers != my_rank / nvl_peers);
+                int num_recv = 0;
+
+                if (is_internode) {
+                  int idx = le * n_ranks + src;
+                  int64_t val = 0;
+                  if (sig_internode_host) {
+                    // POSIX shm: direct CPU read
+                    while ((val = __atomic_load_n(
+                                reinterpret_cast<volatile int64_t*>(
+                                    sig_internode_host + idx),
+                                __ATOMIC_ACQUIRE)) == 0)
+                      ;
+                  } else {
+                    // GPU VRAM: poll via cudaMemcpy
+                    while (val == 0)
+                      cudaMemcpy(&val, sig_internode_dev + idx,
+                                 sizeof(int64_t), cudaMemcpyDeviceToHost);
+                  }
+                  num_recv = static_cast<int>(-val - 1);
+                } else {
+                  auto* sig = sig_intranode + le * n_ranks + src;
+                  int val;
+                  while ((val = __atomic_load_n(
+                              reinterpret_cast<volatile int*>(sig),
+                              __ATOMIC_ACQUIRE)) == 0)
+                    ;
+                  num_recv = -val - 1;
+                }
+
+                if (num_recv <= 0) continue;
+
+                size_t offset =
+                    static_cast<size_t>(le * n_ranks + src) *
+                    max_tokens * num_bytes_per_msg;
+                size_t copy_bytes =
+                    static_cast<size_t>(num_recv) * num_bytes_per_msg;
+                cudaMemcpyAsync(
+                    static_cast<uint8_t*>(vram_recv) + offset,
+                    static_cast<uint8_t*>(host_recv) + offset,
+                    copy_bytes, cudaMemcpyHostToDevice, stg_stream);
+              }
+            }
+            cudaStreamSynchronize(stg_stream);
+          });
+
+      // recv_hook: wait for DMA, launch recv kernel from VRAM
+      std::optional<std::function<void()>> recv_hook =
+          [staging_thread, launcher, vram_recv = vram_recv]() {
+            staging_thread->join();
+            launcher(LOW_LATENCY_RECV_PHASE, vram_recv);
+          };
+
+      return {std::optional<EventHandle>{}, recv_hook};
+    }
+
+    // Non-staging path (original)
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
                  : (LOW_LATENCY_SEND_PHASE | LOW_LATENCY_RECV_PHASE));
@@ -1353,9 +1491,11 @@ class Buffer {
     void* out = reinterpret_cast<void*>(out_ptr);
 
     auto [ptr0, ptr_internode0, count0] = next_buffer.clean_meta();
-    auto launcher = [=](int phases) {
+    auto launcher = [=](int phases, void* recv_data_override = nullptr) {
       uccl::internode_ll::combine(
-          out, buffer.combine_rdma_recv_data_buffer,
+          out,
+          recv_data_override ? recv_data_override
+                             : buffer.combine_rdma_recv_data_buffer,
           buffer.combine_rdma_recv_flag_buffer, buffer.combine_rdma_send_buffer,
           x, topk_idx, topk_weights, src_info, layout_range,
           combine_wait_recv_cost_stats, ptr0, ptr_internode0, count0,
@@ -1366,6 +1506,110 @@ class Buffer {
           d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
           buffer.combine_rdma_recv_flag_buffer_internode);
     };
+
+    // H2D staging for combine recv
+    bool const use_staging = return_recv_hook && vram_shadow_ptr != nullptr;
+
+    if (use_staging) {
+      uccl::LowLatencyLayout vram_layout(vram_shadow_ptr,
+                                         num_max_dispatch_tokens_per_rank,
+                                         hidden, num_ranks, num_experts,
+                                         atomic_buffer_ptr);
+      auto vram_buf = vram_layout.buffers[low_latency_buffer_idx_used];
+
+      size_t const num_bytes_per_slot =
+          static_cast<size_t>(hidden) * sizeof(nv_bfloat16);
+      int const num_local_experts_val = num_experts / num_ranks;
+
+      // Get CPU-accessible host pointer for internode signaling
+      int64_t* sig_internode_host = nullptr;
+      {
+        std::lock_guard<std::mutex> lk(g_shared_bufs_mu);
+        auto it = g_shared_atomic_bufs.find(device_index);
+        if (it != g_shared_atomic_bufs.end()) {
+          auto& sb = it->second;
+          ptrdiff_t ab_offset =
+              reinterpret_cast<uint8_t*>(atomic_buffer_ptr) -
+              reinterpret_cast<uint8_t*>(sb.device_ptr);
+          auto* atomic_host =
+              reinterpret_cast<uint8_t*>(sb.mmap_ptr) + ab_offset;
+          ptrdiff_t sig_offset =
+              reinterpret_cast<uint8_t*>(
+                  buffer.combine_rdma_recv_flag_buffer_internode) -
+              reinterpret_cast<uint8_t*>(atomic_buffer_ptr);
+          sig_internode_host =
+              reinterpret_cast<int64_t*>(atomic_host + sig_offset);
+        }
+      }
+      auto sig_internode_dev =
+          buffer.combine_rdma_recv_flag_buffer_internode;
+
+      auto host_recv = buffer.combine_rdma_recv_data_buffer;
+      auto vram_recv = vram_buf.combine_rdma_recv_data_buffer;
+      auto sig_intranode = buffer.combine_rdma_recv_flag_buffer;
+      int const dev_idx = device_index;
+      cudaStream_t const stg_stream = staging_stream;
+      int const max_tokens = num_max_dispatch_tokens_per_rank;
+      int const my_rank = rank;
+      int const nvl_peers = max_nvl_peers;
+      int const n_experts = num_experts;
+
+      // Launch send kernel (non-cooperative)
+      launcher(LOW_LATENCY_SEND_PHASE);
+
+      // Background thread: poll signaling, DMA data to VRAM
+      auto staging_thread = std::make_shared<std::thread>(
+          [=]() {
+            cudaSetDevice(dev_idx);
+            for (int exp = 0; exp < n_experts; ++exp) {
+              int src = exp / num_local_experts_val;
+              bool is_internode =
+                  (src / nvl_peers != my_rank / nvl_peers);
+
+              if (is_internode) {
+                int64_t val = 0;
+                if (sig_internode_host) {
+                  while ((val = __atomic_load_n(
+                              reinterpret_cast<volatile int64_t*>(
+                                  sig_internode_host + exp),
+                              __ATOMIC_ACQUIRE)) == 0)
+                    ;
+                } else {
+                  while (val == 0)
+                    cudaMemcpy(&val, sig_internode_dev + exp,
+                               sizeof(int64_t), cudaMemcpyDeviceToHost);
+                }
+              } else {
+                auto* sig = sig_intranode + exp;
+                while (__atomic_load_n(
+                           reinterpret_cast<volatile int*>(sig),
+                           __ATOMIC_ACQUIRE) == 0)
+                  ;
+              }
+
+              // DMA this expert's data region
+              size_t offset =
+                  static_cast<size_t>(exp) * max_tokens * num_bytes_per_slot;
+              size_t copy_bytes =
+                  static_cast<size_t>(max_tokens) * num_bytes_per_slot;
+              cudaMemcpyAsync(
+                  static_cast<uint8_t*>(vram_recv) + offset,
+                  static_cast<uint8_t*>(host_recv) + offset,
+                  copy_bytes, cudaMemcpyHostToDevice, stg_stream);
+            }
+            cudaStreamSynchronize(stg_stream);
+          });
+
+      std::optional<std::function<void()>> recv_hook =
+          [staging_thread, launcher, vram_recv = vram_recv]() {
+            staging_thread->join();
+            launcher(LOW_LATENCY_RECV_PHASE, vram_recv);
+          };
+
+      return {std::optional<EventHandle>{}, recv_hook};
+    }
+
+    // Non-staging path (original)
     launcher(return_recv_hook
                  ? LOW_LATENCY_SEND_PHASE
                  : (LOW_LATENCY_SEND_PHASE | LOW_LATENCY_RECV_PHASE));
@@ -1557,6 +1801,16 @@ class Buffer {
       dev_ptr = ptr;
 #endif
       rdma_buffer_ptr = dev_ptr;
+      rdma_is_host_allocated = true;
+
+      // Allocate VRAM shadow for H2D staging: recv kernel reads from VRAM
+      // instead of host memory (~4× faster on PCIe).
+      if (num_rdma_bytes > 0 && vram_shadow_ptr == nullptr) {
+        CUDA_CHECK(cudaMalloc(&vram_shadow_ptr, num_rdma_bytes));
+        CUDA_CHECK(cudaMemset(vram_shadow_ptr, 0, num_rdma_bytes));
+        CUDA_CHECK(cudaStreamCreateWithFlags(&staging_stream,
+                                             cudaStreamNonBlocking));
+      }
     } else {
       rdma_buffer_ptr = ptr;
     }
@@ -1644,6 +1898,11 @@ class Buffer {
   // IPC base pointers for GPU access (for replacing nvshmemi_get_p2p_ptr)
   void** d_ipc_rdma_base_ptrs{
       nullptr};  // Device pointer to array of IPC base addresses
+
+  // H2D staging: VRAM shadow of host RDMA buffer for fast GPU reads
+  void* vram_shadow_ptr{nullptr};
+  cudaStream_t staging_stream{nullptr};
+  bool rdma_is_host_allocated{false};
 };
 
 NB_MODULE(ep, m) {

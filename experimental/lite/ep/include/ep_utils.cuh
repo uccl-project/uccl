@@ -153,6 +153,30 @@ __device__ __forceinline__ void st_release_sys_global(dtype_t const* ptr,
 }  // namespace amd
 #endif
 
+// Non-cooperative grid-wide barrier using an atomic counter.
+// Works without cooperative launch — only requires that num_blocks blocks
+// are resident simultaneously (guaranteed when grid_size ≤ occupancy limit).
+// Last arriver resets the counter to 0; others spin until reset.
+#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__)
+__device__ __forceinline__ void grid_sync_then_zero(int* bar_ptr,
+                                                     int num_blocks) {
+  __syncthreads();
+  if (threadIdx.x == 0) {
+    __threadfence();
+    int old = atomicAdd(bar_ptr, 1);
+    if (old == num_blocks - 1) {
+      // Last block: reset counter (release so spinners see 0).
+      atomicExch(bar_ptr, 0);
+    } else {
+      // Spin until last arriver resets.
+      while (atomicAdd(bar_ptr, 0) != 0)
+        __nanosleep(100);
+    }
+  }
+  __syncthreads();
+}
+#endif
+
 __forceinline__ __device__ int get_lane_id() {
   int lane_id;
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)

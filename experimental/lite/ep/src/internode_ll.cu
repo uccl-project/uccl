@@ -745,6 +745,11 @@ void dispatch(void* packed_recv_x, void* packed_recv_x_scales,
 #endif
 
   SETUP_LAUNCH_CONFIG(num_sms, num_warps * WARP_SIZE, stream);
+  // Send-only kernels don't use cg::this_grid().sync(), so non-cooperative
+  // launch is safe and allows the copy engine to run DMA concurrently.
+  if (phases == LOW_LATENCY_SEND_PHASE) {
+    attr[0].val.cooperative = 0;
+  }
   SWITCH_HIDDEN(DISPATCH_LAUNCH_CASE);
   auto err = cudaGetLastError();
   if (err != cudaSuccess) {
@@ -1409,6 +1414,11 @@ void combine(void* combined_x, void* rdma_recv_x, int* rdma_recv_flag,
 #endif
 
   SETUP_LAUNCH_CONFIG(num_sms, num_warps_launch * WARP_SIZE, stream);
+  // Send-only kernels don't use cg::this_grid().sync(), so non-cooperative
+  // launch is safe and allows the copy engine to run DMA concurrently.
+  if (phases == LOW_LATENCY_SEND_PHASE) {
+    attr[0].val.cooperative = 0;
+  }
   SWITCH_HIDDEN(COMBINE_LAUNCH_CASE);
   auto err = cudaGetLastError();
   if (err != cudaSuccess) {
