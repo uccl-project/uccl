@@ -211,6 +211,21 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
                                  int remote_gpu_idx, int remote_port,
                                  bool same_process) {
   if (!engine || !ip_addr) return nullptr;
+
+  // Skip same-process connections when IPC is disabled - no transport
+  // (NCCL/RDMA) can safely connect a process to itself on the same GPU.
+  if (same_process && !ipc_enabled()) {
+    uccl_conn_t* conn = new uccl_conn;
+    conn->conn_id = 0;
+    conn->engine = engine;
+    conn->is_local = true;
+    conn->same_process = true;
+    conn->sock_fd = -1;
+    conn->listener_thread = nullptr;
+    conn->listener_running = false;
+    return conn;
+  }
+
   uccl_conn_t* conn = new uccl_conn;
   uint64_t conn_id;
 

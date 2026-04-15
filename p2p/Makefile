@@ -190,15 +190,21 @@ install: $(P2P_SHARED_LIB)
 	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
 	@echo "Installation complete!"
 else
-install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
+install: $(P2P_PYTHON_EXT)
 	$(MAKE) $(P2P_PYTHON_EXT)
 	@mkdir -p $(INSTALL_DIR)
 	@rm -f $(INSTALL_DIR)/p2p.cpython-*.so $(INSTALL_DIR)/p2p.abi3.so
 	@cp $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
-	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
+	@if [ -f libuccl_p2p_rdma.so ]; then \
+		echo "Transport backends detected, installing dispatcher..."; \
+		$(MAKE) install-all-transport; \
+	else \
+		echo "No transport backends, installing monolithic libuccl_p2p.so..."; \
+		$(MAKE) $(P2P_SHARED_LIB); \
+		install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/; \
+	fi
 	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
-	$(MAKE) install-all-transport
 	@echo "Installation complete!"
 endif
 # Clean build artifacts
