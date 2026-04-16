@@ -1,5 +1,6 @@
 #include "uccl_engine.h"
 #include "engine.h"
+#include "rdma/epoll_client.h"
 #ifdef UCCL_P2P_USE_NCCL
 #include "nccl/nccl_endpoint.h"
 #else
@@ -31,6 +32,9 @@ struct uccl_engine {
   std::unique_ptr<Endpoint> endpoint;
   std::thread local_accept_thread;
   std::atomic<bool> local_accept_started{false};
+  // Standalone OOB client for cross-process local notifications when the
+  // transport endpoint does not provide one (e.g. NCCL/TCP build).
+  std::shared_ptr<EpollClient> local_oob_client;
 };
 
 struct uccl_conn {
@@ -137,18 +141,25 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
     // same_process=false → cross-process IPC (attach remote shm ring)
     ok = engine->endpoint->connect_local(remote_gpu_idx, conn_id, same_process);
     conn->sock_fd = -1;
-#if !defined(UCCL_P2P_USE_NCCL)
     // For cross-process local: establish an OOB TCP connection to the remote's
     // OOB server so that notifications (transfer completion) can be delivered.
     if (ok && !same_process) {
       auto oob_client = engine->endpoint->get_oob_client();
+      if (!oob_client) {
+        // Transport doesn't provide an OOB client (e.g. NCCL/TCP build).
+        // Create a standalone one for local notification delivery.
+        if (!engine->local_oob_client) {
+          engine->local_oob_client = std::make_shared<EpollClient>();
+          engine->local_oob_client->start();
+        }
+        oob_client = engine->local_oob_client;
+      }
       if (oob_client) {
         std::string conn_key = oob_client->connect_to_server(
             std::string(ip_addr), remote_port);
         conn->oob_conn_key = conn_key;
       }
     }
-#endif
   } else {
     // Remote: use TCP/RDMA connection.
     ok = engine->endpoint->connect(std::string(ip_addr), remote_gpu_idx,
@@ -531,6 +542,24 @@ int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
     std::lock_guard<std::mutex> lock(notify_mutex);
     notify_list.push_back(oob_msg);
     return 0;
+  }
+
+  // Cross-process local connection: send via OOB client (works for both
+  // RDMA and TCP builds).  The oob_conn_key was set up in uccl_engine_connect.
+  if (conn->is_local && !conn->oob_conn_key.empty()) {
+    auto oob_client = conn->engine->endpoint->get_oob_client();
+    if (!oob_client) {
+      oob_client = conn->engine->local_oob_client;
+    }
+    if (!oob_client) {
+      std::cerr << "No OOB client available for local notification"
+                << std::endl;
+      return -1;
+    }
+    std::string payload(reinterpret_cast<char*>(&oob_msg), sizeof(NotifyMsg));
+    return oob_client->send_meta(conn->oob_conn_key, payload)
+               ? sizeof(NotifyMsg)
+               : -1;
   }
 
 #if defined(UCCL_P2P_USE_NCCL)
