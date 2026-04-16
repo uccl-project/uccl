@@ -51,7 +51,7 @@ from utils import (
 from buffer import Buffer
 
 try:
-    from uccl.ep import Config
+    from uccl.ep._ep_native import Config
 except ImportError as exc:
     import sys
 
