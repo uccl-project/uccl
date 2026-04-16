@@ -490,6 +490,12 @@ std::tuple<std::string, uint16_t, std::string> Endpoint::parse_metadata(
       throw std::runtime_error("Metadata too short for IPv6: " +
                                std::to_string(metadata.size()));
     }
+    uint8_t bdf_len_v6 = metadata[18];
+    if (metadata.size() != static_cast<size_t>(19 + bdf_len_v6)) {
+      throw std::runtime_error("Metadata size mismatch for IPv6: got " +
+                               std::to_string(metadata.size()) + ", expected " +
+                               std::to_string(19 + bdf_len_v6));
+    }
     char buf[INET6_ADDRSTRLEN];
     if (inet_ntop(AF_INET6, metadata.data(), buf, sizeof(buf)) == nullptr) {
       throw std::runtime_error("Failed to parse IPv6 address from metadata");

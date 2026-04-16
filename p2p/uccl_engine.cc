@@ -619,8 +619,7 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
                     std::to_string(metadata_vec[3]);
         } else if (metadata_vec.size() >= 19) {
           uint8_t candidate_bdf_len6 = metadata_vec[18];
-          if (candidate_bdf_len6 >= 0 &&
-              19 + candidate_bdf_len6 == metadata_vec.size()) {
+          if (19 + candidate_bdf_len6 == metadata_vec.size()) {
             ip_len = 16;
             char ip6_str[INET6_ADDRSTRLEN];
             struct in6_addr ip6_a;
