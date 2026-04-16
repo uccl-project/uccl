@@ -133,16 +133,20 @@ py: $(PYTARGET) $(EP_EXT)
 # Repo uccl package dir (so in-repo runs use the same build)
 UCCL_UCCL := $(abspath $(CURDIR)/../uccl/uccl)
 
+EP_PYTHON_DIR := $(CURDIR)/python/uccl_ep
+
 install: $(EP_EXT)
 	@mkdir -p $(INSTALL_DIR)/ep
 	@rm -f $(INSTALL_DIR)/ep/_ep_native.cpython-*.so $(INSTALL_DIR)/ep/_ep_native.abi3.so
 	@cp $(EP_EXT) $(INSTALL_DIR)/ep/
-	@echo "Installed $(EP_EXT) -> $(INSTALL_DIR)/ep/"
+	@cp $(EP_PYTHON_DIR)/*.py $(INSTALL_DIR)/ep/
+	@echo "Installed uccl.ep (.so + .py) -> $(INSTALL_DIR)/ep/"
 	@if [ -d "$(UCCL_UCCL)" ]; then \
 		mkdir -p "$(UCCL_UCCL)/ep"; \
 		rm -f "$(UCCL_UCCL)/ep"/_ep_native.cpython-*.so "$(UCCL_UCCL)/ep"/_ep_native.abi3.so; \
 		cp $(EP_EXT) "$(UCCL_UCCL)/ep/"; \
-		echo "Installed $(EP_EXT) -> $(UCCL_UCCL)/ep/ (for in-repo runs)"; \
+		cp $(EP_PYTHON_DIR)/*.py "$(UCCL_UCCL)/ep/"; \
+		echo "Installed uccl.ep (.so + .py) -> $(UCCL_UCCL)/ep/ (for in-repo runs)"; \
 	fi
 
 # Clean all generated files
