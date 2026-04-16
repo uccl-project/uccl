@@ -3,8 +3,19 @@
 # EFA optional integration
 USE_EFA ?= $(shell echo $${USE_EFA:-0})
 
-# TCP endpoint integration
+# TCPX optional integration
+USE_TCPX ?= $(shell echo $${USE_TCPX:-0})
+
+# TCP optional integration
 USE_TCP ?= $(shell echo $${USE_TCP:-0})
+
+# NCCL optional integration
+USE_NCCL ?= $(shell echo $${USE_NCCL:-0})
+
+ENABLE_NCCL := 0
+ifneq ($(filter 1,$(USE_TCPX) $(USE_TCP) $(USE_NCCL)),)
+ENABLE_NCCL := 1
+endif
 
 # Compiler and flags
 HIP_HOME?=/opt/rocm
@@ -71,15 +82,15 @@ INCDIR ?= $(PREFIX)/include
 
 CXXFLAGS       += -D__HIP_PLATFORM_AMD__
 
-# Add TCP endpoint flag
-ifeq ($(USE_TCP),1)
+# Add NCCL endpoint flag
+ifeq ($(ENABLE_NCCL),1)
 	CXXFLAGS += -DUCCL_P2P_USE_NCCL
 	CXXFLAGS += -DUCCL_P2P_USE_RCCL
 endif
 LDFLAGS         = -L$(HIP_LIB) -lamdhip64 \
                   -Wl,-rpath,$(HIP_LIB) -L${CONDA_LIB_HOME} \
                   -lz -lelf -libverbs -lpthread
-ifeq ($(USE_TCP),1)
+ifeq ($(ENABLE_NCCL),1)
 	LDFLAGS += -lrccl
 endif
 
@@ -89,7 +100,7 @@ P2P_SHARED_LIB := libuccl_p2p.so
 SOURCES := engine.cc engine_api.cc
 OBJECTS := $(SOURCES:.cc=.o)
 CORE_OBJECT := engine.o
-ifeq ($(USE_TCP),1)
+ifeq ($(ENABLE_NCCL),1)
 SOURCES += nccl/nccl_endpoint.cc
 OBJECTS += nccl/nccl_endpoint.o
 CORE_OBJECT += nccl/nccl_endpoint.o

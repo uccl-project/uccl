@@ -1,12 +1,21 @@
 # Makefile for UCCL P2P Engine nanobind project (stable ABI)
 
-# TCPX optional integration
-USE_TCPX ?= $(shell echo $${USE_TCPX:-0})
 # EFA optional integration
 USE_EFA ?= $(shell echo $${USE_EFA:-0})
 
-# TCP endpoint integration
+# TCPX optional integration
+USE_TCPX ?= $(shell echo $${USE_TCPX:-0})
+
+# TCP optional integration
 USE_TCP ?= $(shell echo $${USE_TCP:-0})
+
+# NCCL optional integration
+USE_NCCL ?= $(shell echo $${USE_NCCL:-0})
+
+ENABLE_NCCL := 0
+ifneq ($(filter 1,$(USE_TCPX) $(USE_TCP) $(USE_NCCL)),)
+ENABLE_NCCL := 1
+endif
 
 # DietGPU optional integration
 USE_DIETGPU ?= $(shell echo $${USE_DIETGPU:-0})
@@ -28,10 +37,7 @@ CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(CUDA_I
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu
 
-ifeq ($(USE_TCPX),1)
-	CXXFLAGS += -DUCCL_P2P_USE_TCPX
-	LIBS2 +=  -lpthread -ldl
-else ifeq ($(USE_EFA),1)
+ifeq ($(USE_EFA),1)
 	CXXFLAGS += -DUCCL_P2P_USE_EFA
 	INC += -I${EFA_HOME}/include
 	LIBS += -L ${EFA_HOME}/lib -lefa
@@ -39,8 +45,8 @@ else
 	LIBS2 +=  -lz -lelf -lpthread -libverbs -ldl
 endif
 
-# Add NCCL-over-TCP endpoint flag
-ifeq ($(USE_TCP),1)
+# Add NCCL-over-TCP/NCCL-over-TCPX endpoint flag
+ifeq ($(ENABLE_NCCL),1)
 	CXXFLAGS += -DUCCL_P2P_USE_NCCL
 endif
 
@@ -93,7 +99,7 @@ INCDIR ?= $(PREFIX)/include
 
 LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LIBS2) $(DIETGPU_LIBS)
 
-ifeq ($(USE_TCP),1)
+ifeq ($(ENABLE_NCCL),1)
 NCCL_HOME ?= ../thirdparty/nccl/build
 NCCL_INC  ?= $(NCCL_HOME)/include
 NCCL_LIB  ?= $(NCCL_HOME)/lib
@@ -107,42 +113,15 @@ P2P_SHARED_LIB := libuccl_p2p.so
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h include/common.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
-ifeq ($(USE_TCPX),1)
-NCCL_HOME ?= ../thirdparty/nccl/build
-NCCL_INC  ?= $(NCCL_HOME)/include
-NCCL_LIB  ?= $(NCCL_HOME)/lib
-P2P_SHARED_LIB := libuccl_p2p.so
-SOURCES := nccl_tcpx_endpoint.cc
-CORE_OBJECTS := $(SOURCES:.cc=.o)
-CXXFLAGS += -DUCCL_P2P_USE_TCPX -I$(NCCL_INC)
-LDFLAGS  += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
-OBJECTS := $(CORE_OBJECTS)
-else ifeq ($(USE_TCP),1)
-SOURCES := engine.cc engine_api.cc nccl/nccl_endpoint.cc
-CORE_OBJECT := engine.o nccl/nccl_endpoint.o
-else
 SOURCES := engine.cc engine_api.cc
 CORE_OBJECT := engine.o
+ifeq ($(ENABLE_NCCL),1)
+SOURCES += nccl/nccl_endpoint.cc
+CORE_OBJECT += nccl/nccl_endpoint.o
 endif
-
-ifeq ($(USE_TCPX),1)
-OBJECTS := $(CORE_OBJECTS)
-else
 OBJECTS := $(SOURCES:.cc=.o)
-endif
 
 # Build the shared libraries
-ifeq ($(USE_TCPX),1)
-# Default target
-all: $(P2P_SHARED_LIB)
-
-# only build plugin for tcpx now, TODO: add tcpx to p2p	  
-$(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS)
-	$(CXX) $(CAPI_OBJECT) $(CORE_OBJECTS) $(CU_OBJECTS) \
-	      -L$(CUDA_LIB) -lcudart -lcuda \
-	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
-	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB)
-else
 # Default target
 all: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 
@@ -157,7 +136,6 @@ $(P2P_SHARED_LIB): $(CAPI_OBJECT) $(CORE_OBJECT)
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB) $(PYTHON_LIB) $(INC) $(LIBS)
-endif
 
 # Compile nanobind source files for stable ABI
 nb_%.o: $(NB_SRC_DIR)/%.cpp
@@ -184,12 +162,6 @@ define safe_install
 		  exit 0; }
 endef
 
-ifeq ($(USE_TCPX),1)
-install: $(P2P_SHARED_LIB)
-	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
-	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
-	@echo "Installation complete!"
-else
 install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	$(MAKE) $(P2P_PYTHON_EXT)
 	@mkdir -p $(INSTALL_DIR)
@@ -199,22 +171,17 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
 	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
 	@echo "Installation complete!"
-endif
 # Clean build artifacts
 clean:
 	rm -f $(OBJECTS) $(CAPI_OBJECT) $(NB_OBJECTS) $(P2P_SHARED_LIB)
 	rm -f $(DEPS)
 	rm -f nccl/*.o nccl/*.d
-ifneq ($(USE_TCPX),1)
 	rm -f $(P2P_PYTHON_EXT)
-endif
 
 # Test the module
 test:
-ifneq ($(USE_TCPX),1)
 	$(MAKE) $(P2P_PYTHON_EXT)
 	$(PYTHON) tests/test_engine_write.py
-endif
 
 # Install nanobind if not available
 install-deps:
