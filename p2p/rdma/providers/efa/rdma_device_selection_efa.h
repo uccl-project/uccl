@@ -1,4 +1,5 @@
 #pragma once
+#include "../util.h"
 #include <algorithm>
 #include <cassert>
 #include <cstring>
@@ -16,43 +17,10 @@ class EFADeviceSelectionStrategy : public RDMADeviceSelectionStrategy {
   std::vector<std::string> selectNICs(
       std::vector<std::pair<std::string, uint32_t>> const& dist,
       int gpu_idx) override {
-    auto is_nic_usable = [](std::string const& nic_name) -> bool {
-      if (strncmp(nic_name.c_str(), "rdmap", 5) != 0) {
-        return false;
-      }
-      int dev_count = 0;
-      ibv_device** dev_list = ibv_get_device_list(&dev_count);
-      if (!dev_list) {
-        return false;
-      }
-      bool usable = false;
-      for (int i = 0; i < dev_count; ++i) {
-        if (std::strcmp(ibv_get_device_name(dev_list[i]), nic_name.c_str()) !=
-            0) {
-          continue;
-        }
-        ibv_context* ctx = ibv_open_device(dev_list[i]);
-        if (!ctx) break;
-        ibv_port_attr port_attr{};
-        if (ibv_query_port(ctx, kPortNum, &port_attr) == 0) {
-          if (port_attr.state == IBV_PORT_ACTIVE &&
-              (port_attr.link_layer == IBV_LINK_LAYER_UNSPECIFIED ||
-               port_attr.link_layer == IBV_LINK_LAYER_ETHERNET ||
-               port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND)) {
-            usable = true;
-          }
-        }
-        ibv_close_device(ctx);
-        break;
-      }
-      ibv_free_device_list(dev_list);
-      return usable;
-    };
-
     std::vector<std::pair<std::string, uint32_t>> usable_dist;
     usable_dist.reserve(dist.size());
     for (auto const& p : dist) {
-      if (is_nic_usable(p.first)) {
+      if (is_nic_usable(p.first, NicMode::EFA)) {
         usable_dist.push_back(p);
       }
     }
