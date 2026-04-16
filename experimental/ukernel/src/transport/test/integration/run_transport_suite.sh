@@ -98,10 +98,11 @@ run_pair ipc-buffer-meta "$((PORT_BASE + 20))" ipc
 run_pair exchange "$PORT_BASE"
 run_pair exchange "$((PORT_BASE + 1))" ipc
 
-if [ "${TRANSPORT_RUN_UCCL:-0}" = "1" ]; then
+RUN_RDMA="${TRANSPORT_RUN_RDMA:-${TRANSPORT_RUN_UCCL:-0}}"
+if [ "${RUN_RDMA}" = "1" ]; then
   run_pair exchange "$((PORT_BASE + 10))" auto \
     transport-suite-server transport-suite-client
-  run_pair exchange "$((PORT_BASE + 12))" uccl
+  run_pair exchange "$((PORT_BASE + 12))" rdma
 fi
 
 echo "transport suite completed"

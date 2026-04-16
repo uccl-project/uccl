@@ -252,6 +252,7 @@ Options parse_options(int argc, char** argv) {
 Transport::PreferredTransport parse_transport(std::string const& value) {
   if (value == "auto") return Transport::PreferredTransport::Auto;
   if (value == "ipc") return Transport::PreferredTransport::Ipc;
+  if (value == "rdma") return Transport::PreferredTransport::Rdma;
   if (value == "uccl") return Transport::PreferredTransport::Uccl;
   if (value == "tcp") return Transport::PreferredTransport::Tcp;
   fail("unknown transport: " + value);

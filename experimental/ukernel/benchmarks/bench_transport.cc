@@ -29,10 +29,11 @@ static constexpr uint64_t kBenchNamedMrGeneration = 1;
 static PreferredTransport parse_transport(char const* value) {
   if (strcmp(value, "auto") == 0) return PreferredTransport::Auto;
   if (strcmp(value, "ipc") == 0) return PreferredTransport::Ipc;
+  if (strcmp(value, "rdma") == 0) return PreferredTransport::Rdma;
   if (strcmp(value, "uccl") == 0) return PreferredTransport::Uccl;
   if (strcmp(value, "tcp") == 0) return PreferredTransport::Tcp;
   fprintf(stderr,
-          "Error: unsupported transport '%s' (expected auto|ipc|uccl|tcp)\n",
+          "Error: unsupported transport '%s' (expected auto|ipc|rdma|uccl|tcp)\n",
           value);
   std::exit(1);
 }
@@ -48,7 +49,9 @@ static IpcPathMode parse_ipc_path(char const* value) {
 }
 
 static int throughput_window_for(PeerTransportKind kind) {
-  if (kind == PeerTransportKind::Uccl) return kUcclThroughputWindow;
+  if (kind == PeerTransportKind::Uccl || kind == PeerTransportKind::Rdma) {
+    return kUcclThroughputWindow;
+  }
   if (kind == PeerTransportKind::Tcp) return kTcpThroughputWindow;
   return kIpcThroughputWindow;
 }
@@ -204,7 +207,9 @@ static bool exchange_remote_recv_mrs(Communicator& comm, int peer_rank,
 static uint32_t remote_recv_slot_id(PeerTransportKind kind,
                                     std::vector<MR> const& remote_recv_mrs,
                                     int slot) {
-  if (kind != PeerTransportKind::Uccl) return 0;
+  if (kind != PeerTransportKind::Uccl && kind != PeerTransportKind::Rdma) {
+    return 0;
+  }
   return remote_recv_mrs.at(static_cast<size_t>(slot)).id;
 }
 
@@ -329,7 +334,8 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
          local_send_mr.id, throughput_window);
 
   std::vector<MR> remote_recv_mrs;
-  if (transport_kind == PeerTransportKind::Uccl) {
+  if (transport_kind == PeerTransportKind::Uccl ||
+      transport_kind == PeerTransportKind::Rdma) {
     if (!exchange_remote_recv_mrs(comm, peer_rank, local_recv_mrs,
                                   remote_recv_mrs, true)) {
       fprintf(stderr, "[Sender %d] Failed to exchange remote receive MRs\n",
@@ -602,7 +608,8 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
          local_send_mr.id, throughput_window);
 
   std::vector<MR> remote_recv_mrs;
-  if (transport_kind == PeerTransportKind::Uccl) {
+  if (transport_kind == PeerTransportKind::Uccl ||
+      transport_kind == PeerTransportKind::Rdma) {
     if (!exchange_remote_recv_mrs(comm, peer_rank, local_recv_mrs,
                                   remote_recv_mrs, false)) {
       fprintf(stderr, "[Receiver %d] Failed to exchange remote receive MRs\n",
@@ -786,7 +793,7 @@ void print_usage(char const* prog) {
   printf("  --ip <addr>         Local IP address (default: 127.0.0.1)\n");
   printf("  --port <n>          Listen port (default: 6979)\n");
   printf(
-      "  --transport <kind>  Transport override: auto|ipc|uccl|tcp (default: "
+      "  --transport <kind>  Transport override: auto|ipc|rdma|uccl|tcp (default: "
       "auto)\n");
   printf("  --ipc-path <mode>   IPC path mode: auto|relay (default: auto)\n");
   printf("  --help              Show this help\n");
@@ -865,8 +872,11 @@ int main(int argc, char** argv) {
           ? "auto"
           : (preferred_transport == PreferredTransport::Ipc
                  ? "ipc"
-                 : (preferred_transport == PreferredTransport::Uccl ? "uccl"
-                                                                    : "tcp")));
+                 : (preferred_transport == PreferredTransport::Rdma
+                        ? "rdma"
+                        : (preferred_transport == PreferredTransport::Uccl
+                               ? "uccl"
+                               : "tcp"))));
   printf("IPC path mode: %s\n",
          ipc_path == IpcPathMode::Relay ? "relay" : "auto");
   printf("============================================================\n\n");

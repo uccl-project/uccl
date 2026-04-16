@@ -1,5 +1,7 @@
 # Device
 
+`device` contains GPU-side worker, FIFO, and task execution infrastructure.
+
 ## Build
 
 ```bash
@@ -8,36 +10,18 @@ make clean
 make -j$(nproc)
 ```
 
-Common override:
+Common overrides:
 
 ```bash
 make -j$(nproc) SM=80
-```
-
-Default builds are release-style. To enable device debug compilation, add
-`DEBUG=1`:
-
-```bash
 make -j$(nproc) DEBUG=1
 ```
 
 ## Test
 
-Run unit tests:
-
 ```bash
 make test-unit
-```
-
-Run integration tests:
-
-```bash
 make test-integration
-```
-
-Run everything:
-
-```bash
 make test
 ```
 
@@ -51,39 +35,15 @@ make bench
 ./benchmarks/bench_device_launch_vs_worker
 ```
 
-`bench_device_full_fifo` launches one persistent worker kernel per FIFO. On
-large GPUs, using every SM as an independent persistent-kernel worker can
-exceed the hardware concurrent-kernel residency limit and leave some FIFOs
-forever undrained. The benchmark now defaults to `64` workers and lets you
-override it explicitly:
+`bench_device_full_fifo` defaults to 64 workers to avoid oversubscribing persistent-kernel residency on large GPUs.
+
+Override worker count:
 
 ```bash
 ./benchmarks/bench_device_full_fifo 32
 ```
 
-To compare `100` direct kernel launches vs `1` persistent worker processing
-`100` tasks for `nop`, `copy`, and `reduce`:
-
-```bash
-./benchmarks/bench_device_launch_vs_worker 100 1000 100 4096
-```
-
-You can also sweep persistent-worker launch parameters:
-
-```bash
-./benchmarks/bench_device_launch_vs_worker 100 1000 100 4096 1 64 0
-./benchmarks/bench_device_launch_vs_worker 100 1000 100 4096 1 128 0
-./benchmarks/bench_device_launch_vs_worker 100 1000 100 4096 1 64 16384
-./benchmarks/bench_device_launch_vs_worker 100 1000 100 4096 4 256 0
-```
-
-The benchmark reports three paths:
-
-- `Launch kernels (single stream)`
-- `Persistent worker (single enqueue)`
-- `Persistent worker (batch enqueue)`
-
-Arguments are:
+Launch-vs-worker benchmark arguments:
 
 ```bash
 ./benchmarks/bench_device_launch_vs_worker [tasks_per_batch] [rounds] [warmup] [bytes] [num_blocks] [threads_per_block] [smem_size]
@@ -91,11 +51,5 @@ Arguments are:
 
 ## Notes
 
-- `test-unit` covers task encoding, task manager behavior, worker lifecycle, enqueue semantics, dtype copy, and multi-fifo behavior.
-- `test-integration` covers copy/reduce execution, same-flow reduce pipeline, and multi-block reduce.
-- This module requires system-installed GDRCopy (`gdrapi.h` + `libgdrapi`).
-- If `libgdrapi.so` is outside default linker paths, pass `GDRCOPY_LIBDIR`:
-
-```bash
-make GDRCOPY_LIBDIR=/usr/local/lib
-```
+- Requires system-installed GDRCopy (`gdrapi.h` + `libgdrapi`).
+- If `libgdrapi.so` is outside default linker paths, pass `GDRCOPY_LIBDIR=/path/to/lib`.

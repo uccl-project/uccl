@@ -307,6 +307,8 @@ BackendToken CommunicatorTransportBackend::submit(ExecOp const& op,
     };
     std::optional<Transport::RemoteSlice> dst_hint = std::nullopt;
     if (op.dst.kind == BufferKind::Remote) {
+      // Communicator::isend auto-enriches write hints (addr/rkey/capacity)
+      // from exchanged remote MR metadata when only mem_id/offset are provided.
       dst_hint = Transport::RemoteSlice{resolve_remote_mem_id(binding, op.dst),
                                         op.dst.offset_bytes,
                                         {},

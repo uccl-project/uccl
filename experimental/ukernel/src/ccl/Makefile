@@ -9,6 +9,9 @@ GDRCOPY_LIBDIR ?=
 GDRCOPY_LIBDIR_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-L$(GDRCOPY_LIBDIR),)
 UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
 UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma.a
+# Naming alias: "RDMA core" refers to collective/rdma static backend.
+RDMA_CORE_ROOT := $(UCCL_RDMA_ROOT)
+RDMA_CORE_STATIC := $(UCCL_RDMA_STATIC)
 
 ifeq ($(origin SM), undefined)
 NVCC_ARCH_FLAGS := $(foreach sm,$(DEFAULT_SMS),-gencode arch=compute_$(sm),code=sm_$(sm))
@@ -28,6 +31,7 @@ VPATH := .:test/common:test/unit:test/integration:../transport:../device:../devi
 INCLUDES := -I. -I./test -I./test/common -I./test/unit -I./test/integration \
             -I../transport -I../device -I../device/fifo \
             -I../../include -I$(UCCL_ROOT) -I$(UCCL_ROOT)/include \
+            -I$(UCCL_ROOT)/p2p -I$(UCCL_ROOT)/p2p/include -I$(UCCL_ROOT)/p2p/rdma \
             -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR) -I/usr/local/include
 CXX_RPATH_FLAGS := -Wl,-rpath,$(CUDA_HOME)/lib64
 NVCC_RPATH_FLAGS := -Xlinker -rpath -Xlinker $(CUDA_HOME)/lib64
@@ -38,7 +42,7 @@ endif
 TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(CUDA_HOME)/lib64 \
                   -lcudart -lcuda -lgflags -lz -libverbs \
                   -lnl-3 -lnl-route-3 -lrdmacm -lpthread \
-                  $(UCCL_RDMA_STATIC)
+                  $(RDMA_CORE_STATIC)
 DEVICE_LIBS := $(GDRCOPY_LIBDIR_FLAGS) -lgdrapi -lnuma
 
 CCL_CORE_SRC := topology.cc plan.cc selector.cc executor.cc
@@ -55,6 +59,7 @@ TRANSPORT_SRC := ../transport/communicator.cc \
                  ../transport/oob/oob_socket.cc \
                  ../transport/adapter/tcp_adapter.cc \
                  ../transport/adapter/uccl_adapter.cc \
+                 ../transport/adapter/rdma_adapter.cc \
                  ../transport/adapter/ipc_adapter.cc \
                  ../transport/util/utils.cc
 TRANSPORT_OBJ := transport_communicator.o \
@@ -64,6 +69,7 @@ TRANSPORT_OBJ := transport_communicator.o \
                  transport_oob_oob.o transport_oob_oob_shm.o transport_oob_oob_socket.o \
                  transport_adapter_tcp_adapter.o \
                  transport_adapter_uccl_adapter.o \
+                 transport_adapter_rdma_adapter.o \
                  transport_adapter_ipc_adapter.o \
                  transport_util_utils.o
 DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \
@@ -99,12 +105,12 @@ real_backends: $(REAL_BACKEND_OBJ)
 test_components: $(CCL_CORE_OBJ) test/unit/test_components.o
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) -lpthread
 
-$(UCCL_RDMA_STATIC):
-	$(MAKE) -C "$(UCCL_RDMA_ROOT)" librdma.a
+$(RDMA_CORE_STATIC):
+	$(MAKE) -C "$(RDMA_CORE_ROOT)" librdma.a
 
 test_multiprocess_collective: $(CCL_CORE_OBJ) backend/transport_backend.o \
 		backend/device_backend.o $(REAL_EXECUTOR_OBJ) $(TRANSPORT_OBJ) $(DEVICE_OBJ) \
-		test/integration/test_multiprocess_collective.o $(UCCL_RDMA_STATIC)
+		test/integration/test_multiprocess_collective.o $(RDMA_CORE_STATIC)
 	$(NVCC) $^ -o $@ $(NVCCFLAGS) $(INCLUDES) $(NVCC_RPATH_FLAGS) \
 		$(TRANSPORT_LIBS) $(DEVICE_LIBS)
 
@@ -114,7 +120,7 @@ test_device_backend: backend/device_backend.o $(DEVICE_OBJ) \
 		-L$(CUDA_HOME)/lib64 -lcudart -lcuda $(DEVICE_LIBS) -lpthread
 
 test_transport_backend: backend/transport_backend.o $(TRANSPORT_OBJ) \
-		test/integration/test_transport_backend.o $(UCCL_RDMA_STATIC)
+		test/integration/test_transport_backend.o $(RDMA_CORE_STATIC)
 	$(CXX) $^ -o $@ $(CXXFLAGS) $(INCLUDES) $(CXX_RPATH_FLAGS) \
 		$(TRANSPORT_LIBS)
 
