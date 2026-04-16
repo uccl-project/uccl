@@ -1,12 +1,9 @@
 #include "uccl_engine.h"
-#ifdef UCCL_P2P_USE_TCPX
-#include "nccl_tcpx_endpoint.h"
-#elif defined(UCCL_P2P_USE_NCCL)
 #include "engine.h"
+#ifdef UCCL_P2P_USE_NCCL
 #include "nccl/nccl_endpoint.h"
 #else
 #include "endpoint_wrapper.h"
-#include "engine.h"
 #endif
 #include "util/util.h"
 #include <arpa/inet.h>
@@ -28,15 +25,7 @@
 #include <unordered_map>
 #include <utility>
 
-#ifdef UCCL_P2P_USE_TCPX
-// nccl_tcpx_endpoint does not declare inside_python; define it here for
-// uccl_engine.
-thread_local bool inside_python = false;
-
-using Endpoint = nccl_tcpx::Endpoint;
-#else
 using Endpoint = ::Endpoint;
-#endif
 
 struct uccl_engine {
   std::unique_ptr<Endpoint> endpoint;
@@ -70,9 +59,6 @@ typedef struct {
 
 std::unordered_map<uintptr_t, mem_reg_entry_t> mem_reg_info;
 
-std::vector<notify_msg_t> notify_msg_list;
-std::mutex notify_msg_list_mutex;
-
 // Helper function to find the base address and mr_id for any address within a
 // registered region
 bool find_mem_reg(uintptr_t addr, uintptr_t& base_addr, uint64_t& mr_id) {
@@ -84,53 +70,6 @@ bool find_mem_reg(uintptr_t addr, uintptr_t& base_addr, uint64_t& mr_id) {
     }
   }
   return false;
-}
-
-// Helper function for the listener thread
-void listener_thread_func(uccl_conn_t* conn) {
-  std::cout << "Listener thread: Waiting for notifs" << std::endl;
-
-  while (conn->listener_running) {
-    struct timeval timeout;
-    timeout.tv_sec = 1;
-    timeout.tv_usec = 0;
-    setsockopt(conn->sock_fd, SOL_SOCKET, SO_RCVTIMEO, &timeout,
-               sizeof(timeout));
-
-    md_t md;
-    ssize_t total_received = 0;
-    ssize_t recv_size = 0;
-    char* buffer = reinterpret_cast<char*>(&md);
-
-    while (total_received < sizeof(md_t)) {
-      recv_size = recv(conn->sock_fd, buffer + total_received,
-                       sizeof(md_t) - total_received, 0);
-
-      if (recv_size <= 0) {
-        if (!conn->listener_running) {
-          return;
-        }
-        break;
-      }
-      total_received += recv_size;
-    }
-
-    if (total_received != sizeof(md_t)) {
-      if (!conn->listener_running) {
-        return;
-      }
-      continue;
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
-      notify_msg_t notify_msg = {};
-      strncpy(notify_msg.name, md.notify_data.name,
-              sizeof(notify_msg.name) - 1);
-      memcpy(notify_msg.msg, md.notify_data.msg, sizeof(notify_msg.msg));
-      notify_msg_list.push_back(notify_msg);
-    }
-  }
 }
 
 // Look up the pre-computed IpcTransferInfo for any address within a registered
@@ -205,7 +144,7 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
                                    remote_port, conn_id);
     if (ok) {
       conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
-#if !defined(UCCL_P2P_USE_TCPX) && !defined(UCCL_P2P_USE_NCCL)
+#if !defined(UCCL_P2P_USE_NCCL)
       conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
 #endif
     }
@@ -227,10 +166,13 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
 uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
                                 size_t ip_addr_buf_len, int* remote_gpu_idx) {
   if (!engine || !ip_addr_buf || !remote_gpu_idx) return nullptr;
+    // The merged NCCL/TCPX path does not need the background passive-accept
+    // helper. (To fix bug in 8-GPU benchmark)
+#if !defined(UCCL_P2P_USE_NCCL)
   // Start accept_local loop in a background thread (once per engine) so that
   // local (IPC) peers can connect concurrently with the blocking RDMA accept.
-  bool expected = false;
   engine->endpoint->start_passive_accept();
+#endif
   uccl_conn_t* conn = new uccl_conn;
   std::string ip_addr;
   uint64_t conn_id;
@@ -244,7 +186,7 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   *remote_gpu_idx = gpu_idx;
   conn->conn_id = conn_id;
   conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
-#if !defined(UCCL_P2P_USE_TCPX) && !defined(UCCL_P2P_USE_NCCL)
+#if !defined(UCCL_P2P_USE_NCCL)
   conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
 #endif
   conn->engine = engine;
@@ -317,6 +259,20 @@ int uccl_engine_read_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                             std::vector<char*> ipc_bufs) {
   if (!conn || num_iovs <= 0) return -1;
 
+#if defined(UCCL_P2P_USE_NCCL)
+  // The NIXL UCCL backend always uses the vector API, even for a single iov.
+  // For the NCCL/TCPX path, bypass the generic readv proxy-thread machinery in
+  // that case and issue the scalar read directly.
+  if (num_iovs == 1 && mr_ids.size() == 1 && dst_v.size() == 1 &&
+      size_v.size() == 1 && fifo_items.size() == 1 && ipc_bufs.empty()) {
+    return conn->engine->endpoint->read_async(conn->conn_id, mr_ids[0],
+                                              dst_v[0], size_v[0],
+                                              fifo_items[0], transfer_id)
+               ? 0
+               : -1;
+  }
+#endif
+
   // Local IPC path (both same-process and cross-process)
   if ((conn->is_local || conn->same_process) && !ipc_bufs.empty()) {
     std::vector<IpcTransferInfo> info_v(num_iovs);
@@ -361,10 +317,6 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                       size_t size, FifoItem fifo_item, uint64_t* transfer_id) {
   if (!conn || !data) return -1;
 
-#ifdef UCCL_P2P_USE_TCPX
-  return -1;  // TODO: support write_rc for TCPX
-#else
-
   if (conn->is_local) {
     // Same-process local path: both buffers are in our address space.
     // Set direct_addr so write_ipc_async skips gpuIpcOpenMemHandle and
@@ -387,7 +339,6 @@ int uccl_engine_write(uccl_conn_t* conn, uccl_mr_t mr, void const* data,
                                              fifo_item, transfer_id)
              ? 0
              : -1;
-#endif
 }
 
 int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
@@ -397,6 +348,19 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                              uint64_t* transfer_id,
                              std::vector<char*> ipc_bufs) {
   if (!conn || num_iovs <= 0) return -1;
+
+#if defined(UCCL_P2P_USE_NCCL)
+  // Mirror the single-iov fast path for writes so the merged NCCL endpoint
+  // does not force 1-buffer transfers through the vector proxy path.
+  if (num_iovs == 1 && mr_ids.size() == 1 && dst_v.size() == 1 &&
+      size_v.size() == 1 && fifo_items.size() == 1 && ipc_bufs.empty()) {
+    return conn->engine->endpoint->write_async(conn->conn_id, mr_ids[0],
+                                               dst_v[0], size_v[0],
+                                               fifo_items[0], transfer_id)
+               ? 0
+               : -1;
+  }
+#endif
 
   // Local IPC path (both same-process and cross-process)
   if ((conn->is_local || conn->same_process) && !ipc_bufs.empty()) {
@@ -414,16 +378,12 @@ int uccl_engine_write_vector(uccl_conn_t* conn, std::vector<uccl_mr_t> mr_ids,
                : -1;
   }
 
-// Remote RDMA
-#ifdef UCCL_P2P_USE_TCPX
-  return -1;  // TODO: support write_rc for TCPX
-#else
+  // Remote RDMA
   return conn->engine->endpoint->writev_async(conn->conn_id, mr_ids, dst_v,
                                               size_v, fifo_items, num_iovs,
                                               transfer_id)
              ? 0
              : -1;
-#endif
 }
 
 bool uccl_engine_xfer_status(uccl_conn_t* conn, uint64_t transfer_id) {
@@ -440,14 +400,9 @@ int uccl_engine_start_listener(uccl_conn_t* conn) {
   }
 
   conn->listener_running = true;
-#if defined(UCCL_P2P_USE_TCPX)
-  // TCPX uses a separate listener thread
-  conn->listener_thread = new std::thread(listener_thread_func, conn);
-#elif defined(UCCL_P2P_USE_NCCL)
-  // NCCL handles notifications in the control thread, no separate listener
-  // needed
+  // Notifications are handled by backend control channels; no separate
+  // listener thread is needed.
   conn->listener_thread = nullptr;
-#endif
 
   return 0;
 }
@@ -532,12 +487,6 @@ int uccl_engine_update_fifo(FifoItem& fifo_item, uint64_t remote_addr,
 }
 
 std::vector<notify_msg_t> uccl_engine_get_notifs() {
-#if defined(UCCL_P2P_USE_TCPX)
-  std::lock_guard<std::mutex> lock(notify_msg_list_mutex);
-  std::vector<notify_msg_t> result = std::move(notify_msg_list);
-  notify_msg_list.clear();
-  return result;
-#else
   std::lock_guard<std::mutex> lock(notify_mutex);
 
   std::vector<notify_msg_t> result;
@@ -552,32 +501,18 @@ std::vector<notify_msg_t> uccl_engine_get_notifs() {
   notify_list.clear();
 
   return result;
-#endif
 }
 
 int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   if (!conn || !notify_msg) return -1;
 
-#if defined(UCCL_P2P_USE_TCPX)
-  md_t md;
-  md.notify_data = *notify_msg;
-
-  return send(conn->sock_fd, &md, sizeof(md_t), 0);
-#elif defined(UCCL_P2P_USE_NCCL)
+#if defined(UCCL_P2P_USE_NCCL)
   NotifyMsg oob_msg;
   oob_msg.magic = NOTIFY_MSG_MAGIC;
   strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
   oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
   memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
-
-  auto tcp_endpoint = conn->engine->endpoint->get_endpoint();
-  if (!tcp_endpoint) {
-    UCCL_LOG(ERROR) << "Failed to get TCP endpoint for notification";
-    return -1;
-  }
-
-  uint64_t flow_id = conn->conn_id;
-  return tcp_endpoint->send_notification(flow_id, oob_msg);
+  return conn->engine->endpoint->send_notification(conn->conn_id, oob_msg);
 #else
   NotifyMsg oob_msg;
   oob_msg.magic = NOTIFY_MSG_MAGIC;

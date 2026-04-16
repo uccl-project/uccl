@@ -2381,6 +2381,25 @@ std::string Endpoint::get_oob_conn_key(uint64_t conn_id) const {
   return ep_->get_oob_conn_key(rank_id);
 }
 
+int Endpoint::send_notification(uint64_t conn_id,
+                                NotifyMsg const& notification) const {
+#ifdef UCCL_P2P_USE_NCCL
+  Conn* conn = get_conn(conn_id);
+  if (conn == nullptr) {
+    return -1;
+  }
+  uint64_t flow_id = conn->uccl_conn_id_.flow_id;
+  if (flow_id == UINT64_MAX) {
+    return -1;
+  }
+  return ep_->send_notification(flow_id, notification);
+#else
+  (void)conn_id;
+  (void)notification;
+  return -1;
+#endif
+}
+
 MR* Endpoint::get_mr(uint64_t mr_id) const {
   std::shared_lock<std::shared_mutex> lock(mr_mu_);
   auto it = mr_id_to_mr_.find(mr_id);
