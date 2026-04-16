@@ -249,7 +249,9 @@ def _subprocess_ipc_client():
 
     ep = _p2p.Endpoint(0)
 
-    success, conn_id = ep.connect(remote_ip_addr=ip, remote_gpu_bdf=remote_bdf, remote_port=port)
+    success, conn_id = ep.connect(
+        remote_ip_addr=ip, remote_gpu_bdf=remote_bdf, remote_port=port
+    )
     assert success, f"Client connect failed to {ip}:{port}"
 
     tensor = _torch.ones(1024, dtype=_torch.float32, device="cuda:0")

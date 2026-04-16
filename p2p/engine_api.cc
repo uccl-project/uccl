@@ -206,8 +206,7 @@ NB_MODULE(p2p, m) {
             {
               nb::gil_scoped_release release;
               InsidePythonGuard guard;
-              success =
-                  self.connect(remote_ip_addr, 0, remote_port, conn_id);
+              success = self.connect(remote_ip_addr, 0, remote_port, conn_id);
             }
             return nb::make_tuple(success, conn_id);
           },

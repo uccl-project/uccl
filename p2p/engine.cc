@@ -273,6 +273,13 @@ Endpoint::Endpoint() : local_gpu_idx_(INVALID_GPU), passive_accept_(false) {
     }
   }
 
+  // Get the current GPU's BDF for metadata (needed before lazy engine init).
+  int cur_dev = 0;
+  GPU_RT_CHECK(gpuGetDevice(&cur_dev));
+  char bdf_buf[64];
+  GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), cur_dev));
+  gpu_bus_id_ = uccl::normalize_pci_bus_id(bdf_buf);
+
 #ifdef UCCL_P2P_USE_NCCL
   ep_ = std::make_shared<tcp::TCPEndpoint>(local_gpu_idx_, 0);
 #else

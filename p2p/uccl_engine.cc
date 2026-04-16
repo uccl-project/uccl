@@ -151,8 +151,8 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
     conn->sock_fd = -1;
   } else {
     // Remote or cross-process local: use TCP connection.
-    ok = engine->endpoint->connect(std::string(ip_addr), 0,
-                                   remote_port, conn_id);
+    ok = engine->endpoint->connect(std::string(ip_addr), 0, remote_port,
+                                   conn_id);
     if (ok) {
       conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
 #if !defined(UCCL_P2P_USE_NCCL)
@@ -599,8 +599,7 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
   if (!engine || !metadata) return -1;
 
   try {
-    std::vector<uint8_t> metadata_vec =
-        engine->endpoint->get_unified_metadata();
+    std::vector<uint8_t> metadata_vec = engine->endpoint->get_metadata();
 
     std::string result;
     // New metadata format: [IP (4/16)] [port (2)] [bdf_len (1)] [bdf_str (N)]
@@ -611,8 +610,7 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
       std::string ip_addr;
       if (metadata_vec.size() >= 7) {
         uint8_t candidate_bdf_len = metadata_vec[6];
-        if (candidate_bdf_len > 0 &&
-            7 + candidate_bdf_len == metadata_vec.size()) {
+        if (7 + candidate_bdf_len == metadata_vec.size()) {
           // IPv4 format
           ip_len = 4;
           ip_addr = std::to_string(metadata_vec[0]) + "." +
@@ -621,7 +619,7 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
                     std::to_string(metadata_vec[3]);
         } else if (metadata_vec.size() >= 19) {
           uint8_t candidate_bdf_len6 = metadata_vec[18];
-          if (candidate_bdf_len6 > 0 &&
+          if (candidate_bdf_len6 >= 0 &&
               19 + candidate_bdf_len6 == metadata_vec.size()) {
             ip_len = 16;
             char ip6_str[INET6_ADDRSTRLEN];
