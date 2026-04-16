@@ -101,11 +101,18 @@ jobs:
             export PATH="$HOME/.local/bin:$PATH"
             command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
             mkdir -p ~/uccl-ci-sandbox
-            [ -d ~/uccl-ci-sandbox/.venv ] || uv venv ~/uccl-ci-sandbox/.venv --python 3.12
-            source ~/uccl-ci-sandbox/.venv/bin/activate
+            if [ ! -d ~/uccl-ci-sandbox/.venv ]; then
+              uv venv ~/uccl-ci-sandbox/.venv --python 3.12
+              source ~/uccl-ci-sandbox/.venv/bin/activate
+              uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.1
+              uv pip install nanobind pybind11
+            else
+              source ~/uccl-ci-sandbox/.venv/bin/activate
+              if ! python -c "import torch" >/dev/null 2>&1; then
+                uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.1 --reinstall
+              fi
+            fi
             cd ~/uccl-ci-sandbox
-            uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.1
-            uv pip install nanobind pybind11
             ./build.sh roc7 all --install 2>&1 | tee build.log
           EOF
 
@@ -115,11 +122,18 @@ jobs:
               export PATH="$HOME/.local/bin:$PATH"
               command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
               mkdir -p ~/uccl-ci-sandbox
-              [ -d ~/uccl-ci-sandbox/.venv ] || uv venv ~/uccl-ci-sandbox/.venv --python 3.12
-              source ~/uccl-ci-sandbox/.venv/bin/activate
+              if [ ! -d ~/uccl-ci-sandbox/.venv ]; then
+                uv venv ~/uccl-ci-sandbox/.venv --python 3.12
+                source ~/uccl-ci-sandbox/.venv/bin/activate
+                uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.1
+                uv pip install nanobind pybind11
+              else
+                source ~/uccl-ci-sandbox/.venv/bin/activate
+                if ! python -c "import torch" >/dev/null 2>&1; then
+                  uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.1 --reinstall
+                fi
+              fi
               cd ~/uccl-ci-sandbox
-              uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.1
-              uv pip install nanobind pybind11
               ./build.sh roc7 all --install 2>&1 | tee build.log
           EOF
           fi
