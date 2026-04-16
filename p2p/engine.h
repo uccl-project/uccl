@@ -24,12 +24,6 @@
 #include <variant>
 #include <vector>
 
-#ifdef UCCL_P2P_USE_TCPX
-using FifoItem = nccl_tcpx::FifoItem;
-#else
-using FifoItem = FifoItem;
-#endif
-
 extern thread_local bool inside_python;
 
 #ifdef UCCL_P2P_USE_NCCL
@@ -474,6 +468,8 @@ class Endpoint {
   Conn* get_conn(uint64_t conn_id) const;
 
   RDMAEndPoint get_endpoint() const;
+
+  int send_notification(uint64_t conn_id, NotifyMsg const& notification) const;
 
  private:
   int local_gpu_idx_;
