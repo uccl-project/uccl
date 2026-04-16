@@ -44,12 +44,14 @@ void uccl_engine_destroy(uccl_engine_t* engine);
  * Connect to a remote peer.
  * @param engine        The engine instance.
  * @param ip_addr       The IP address of the remote server.
- * @param remote_gpu_idx The GPU index of the remote server.
+ * @param remote_gpu    The GPU identity of the remote server (PCI BDF string
+ *                      such as "0000:4a:00.0", or a CUDA device index string
+ *                      such as "0").
  * @param remote_port   The port of the remote server.
  * @return              Connection handle, or NULL on failure.
  */
 uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
-                                 int remote_gpu_idx, int remote_port,
+                                 char const* remote_gpu, int remote_port,
                                  bool same_process = false);
 /**
  * Start the listener thread for the connection.

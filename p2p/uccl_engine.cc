@@ -120,7 +120,7 @@ void uccl_engine_destroy(uccl_engine_t* engine) {
 }
 
 uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
-                                 int remote_gpu_idx, int remote_port,
+                                 char const* remote_gpu, int remote_port,
                                  bool same_process) {
   if (!engine || !ip_addr) return nullptr;
   uccl_conn_t* conn = new uccl_conn;
@@ -130,22 +130,28 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   std::string local_ip = uccl::get_oob_ip();
   bool is_local = (std::string(ip_addr) == local_ip);
 
+  // Resolve remote_gpu: accept either a PCI BDF string (e.g. "0000:4a:00.0")
+  // or a CUDA device index string (e.g. "0").
+  std::string remote_bdf;
+  if (remote_gpu && std::strchr(remote_gpu, ':')) {
+    // Already a BDF string.
+    remote_bdf = uccl::normalize_pci_bus_id(remote_gpu);
+  } else {
+    // Integer string — convert to BDF via CUDA runtime.
+    int gpu_idx = remote_gpu ? std::atoi(remote_gpu) : 0;
+    char bdf_buf[64];
+    GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), gpu_idx));
+    remote_bdf = uccl::normalize_pci_bus_id(bdf_buf);
+  }
+
   bool ok;
   if (is_local && same_process) {
     // Same process: use shm rings directly, skip TCP.
-    // Transfers use direct_addr (no gpuIpcOpenMemHandle).
-    // Convert local GPU index to BDF for connect_local.
-    char bdf_buf[64];
-    GPU_RT_CHECK(
-        gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), remote_gpu_idx));
-    std::string remote_bdf = uccl::normalize_pci_bus_id(bdf_buf);
     ok = engine->endpoint->connect_local(remote_bdf, conn_id, true);
     conn->sock_fd = -1;
   } else {
     // Remote or cross-process local: use TCP connection.
-    // Cross-process local gets OOB for notifications; data goes through IPC
-    // via the external IPC info path in the NIXL backend.
-    ok = engine->endpoint->connect(std::string(ip_addr), remote_gpu_idx,
+    ok = engine->endpoint->connect(std::string(ip_addr), 0,
                                    remote_port, conn_id);
     if (ok) {
       conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
