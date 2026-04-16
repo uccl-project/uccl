@@ -66,24 +66,29 @@ class CustomInstall(install):
 
         # Find the built .so file
         build_lib = self.get_finalized_command("build_ext").build_lib
-        so_files = list(Path(build_lib).glob("ep*.so"))
+        so_files = list(Path(build_lib).glob("_ep_native*.so"))
 
         if not so_files:
             raise RuntimeError(f"Could not find built .so file in {build_lib}")
 
         so_file = so_files[0]
-        dest_path = os.path.join(install_dir, so_file.name)
+
+        # Install into uccl/ep/ subdirectory so it becomes importable as
+        # uccl.ep._ep_native
+        ep_dir = os.path.join(install_dir, "ep")
+        os.makedirs(ep_dir, exist_ok=True)
+        dest_path = os.path.join(ep_dir, so_file.name)
 
         # Copy the .so file to the install directory
-        print(f"Installing {so_file.name} to {install_dir}")
+        print(f"Installing {so_file.name} to {ep_dir}")
         shutil.copy2(so_file, dest_path)
 
         if _use_abi3:
-            for old in Path(install_dir).glob("ep.cpython-*.so"):
+            for old in Path(ep_dir).glob("_ep_native.cpython-*.so"):
                 print(f"Removing stale {old.name}")
                 old.unlink()
         else:
-            for old in Path(install_dir).glob("ep.abi3.so"):
+            for old in Path(ep_dir).glob("_ep_native.abi3.so"):
                 print(f"Removing stale {old.name}")
                 old.unlink()
 
@@ -383,7 +388,7 @@ if __name__ == "__main__":
         version="0.0.1" + revision,
         ext_modules=[
             CUDAExtension(
-                name="ep",
+                name="_ep_native",
                 include_dirs=include_dirs,
                 library_dirs=library_dirs,
                 sources=sources,

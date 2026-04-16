@@ -1,3 +1,4 @@
 collective.py
 utils.py
 _rocm_init.py
+ep/_ep_native*.so

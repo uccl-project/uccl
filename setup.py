@@ -57,10 +57,12 @@ setup(
         "uccl": [
             "lib/*.so",
             "p2p*.so",
-            "ep*.so",
             "lib/*.a",
             "collective.py",
             "utils.py",
+        ],
+        "uccl.ep": [
+            "_ep_native*.so",
         ],
     },
     license="Apache-2.0",

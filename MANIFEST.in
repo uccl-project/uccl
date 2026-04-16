@@ -1,3 +1,5 @@
 include uccl/__init__.py
 include uccl/lib/*.so
 include uccl/*.so
+include uccl/ep/*.py
+include uccl/ep/_ep_native*.so

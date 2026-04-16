@@ -207,11 +207,11 @@ build_ep() {
     # make clean && rm -r build || true
     USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} python3 setup.py build
     cd ..
-    echo "[container] Copying GPU-driven .so to uccl/"
-    mkdir -p uccl/lib
-    cp ep/build/**/*.so uccl/
+    echo "[container] Copying GPU-driven .so to uccl/ep/"
+    mkdir -p uccl/ep
+    cp ep/build/**/*.so uccl/ep/
   fi
-  rename_to_abi3 uccl
+  rename_to_abi3 uccl/ep
 }
 
 build_ukernel() {
@@ -306,6 +306,7 @@ fi
 
 ls -lh uccl/
 ls -lh uccl/lib/
+ls -lh uccl/ep/ 2>/dev/null || true
 python3 -m build
 
 if [[ "$TARGET" == "therock" ]]; then
