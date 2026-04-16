@@ -51,7 +51,7 @@ PROJECT_ROOT = Path(os.path.dirname(__file__)).resolve()
 
 
 class CustomInstall(install):
-    """Custom install command that installs .so file to INSTALL_DIR"""
+    """Custom install command that installs .so + Python files to INSTALL_DIR/ep/"""
 
     def run(self):
         # Run the standard build first
@@ -62,9 +62,19 @@ class CustomInstall(install):
         install_dir = os.getenv(
             "INSTALL_DIR", os.path.join(python_site_packages, "uccl")
         )
-        os.makedirs(install_dir, exist_ok=True)
 
-        # Find the built .so file
+        ep_dir = os.path.join(install_dir, "ep")
+        os.makedirs(ep_dir, exist_ok=True)
+
+        # --- Install Python source files from ep/python/uccl_ep/ ---
+        py_src_dir = PROJECT_ROOT / "python" / "uccl_ep"
+        if py_src_dir.is_dir():
+            for py_file in py_src_dir.glob("*.py"):
+                dest = os.path.join(ep_dir, py_file.name)
+                print(f"Installing {py_file.name} to {ep_dir}")
+                shutil.copy2(py_file, dest)
+
+        # --- Install the native .so ---
         build_lib = self.get_finalized_command("build_ext").build_lib
         so_files = list(Path(build_lib).glob("_ep_native*.so"))
 
@@ -72,14 +82,8 @@ class CustomInstall(install):
             raise RuntimeError(f"Could not find built .so file in {build_lib}")
 
         so_file = so_files[0]
-
-        # Install into uccl/ep/ subdirectory so it becomes importable as
-        # uccl.ep._ep_native
-        ep_dir = os.path.join(install_dir, "ep")
-        os.makedirs(ep_dir, exist_ok=True)
         dest_path = os.path.join(ep_dir, so_file.name)
 
-        # Copy the .so file to the install directory
         print(f"Installing {so_file.name} to {ep_dir}")
         shutil.copy2(so_file, dest_path)
 
@@ -92,7 +96,7 @@ class CustomInstall(install):
                 print(f"Removing stale {old.name}")
                 old.unlink()
 
-        print(f"Installation complete. Module installed as: {dest_path}")
+        print(f"Installation complete. uccl.ep installed to: {ep_dir}")
 
 
 class CustomClean(Command):
