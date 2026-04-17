@@ -1421,7 +1421,7 @@ static fs::path sysfs_pci_path_from_bdf(std::string const& bdf_lower) {
   }
 }
 
-static inline std::vector<fs::path> get_gpu_cards() {
+static inline std::vector<fs::path> get_gpu_cards(bool visible_only = true) {
   // 1) Collect visible GPUs (ranked) and their normalized BDFs
   int num_gpus = 0;
   GPU_RT_CHECK(gpuGetDeviceCount(&num_gpus));
@@ -1463,9 +1463,12 @@ static inline std::vector<fs::path> get_gpu_cards() {
     gpu_cards.push_back(pci_path);
   }
 
-  // 3) Fallbacks (only if needed): DRM class (cardX) or
-  // /proc/driver/nvidia/gpus
-  if (gpu_cards.empty()) {
+  // 3) Fallbacks: DRM class (cardX) or /proc/driver/nvidia/gpus.
+  // Triggered when the primary path is empty (e.g. restricted sysfs) OR
+  // when the caller asked for all GPUs on the node (visible_only=false),
+  // in which case we also want to discover GPUs that are hidden by
+  // CUDA_VISIBLE_DEVICES.
+  if (gpu_cards.empty() || !visible_only) {
     fs::path const drm_class{"/sys/class/drm"};
     std::regex const card_re(R"(card(\d+))");
     if (fs::exists(drm_class)) {
@@ -1484,13 +1487,17 @@ static inline std::vector<fs::path> get_gpu_cards() {
         std::string nbdf = normalize_pci_bus_id(bdf_name);
         auto it =
             std::find(gpu_bdfs_ranked.begin(), gpu_bdfs_ranked.end(), nbdf);
-        if (it == gpu_bdfs_ranked.end()) continue;
-        rank_map[dev_path] = int(std::distance(gpu_bdfs_ranked.begin(), it));
+        if (it == gpu_bdfs_ranked.end() && visible_only) continue;
+        if (rank_map.count(dev_path)) continue;
+        rank_map[dev_path] =
+            (it == gpu_bdfs_ranked.end())
+                ? INT_MAX
+                : int(std::distance(gpu_bdfs_ranked.begin(), it));
         gpu_cards.push_back(dev_path);
       }
     }
 #ifndef __HIP_PLATFORM_AMD__
-    if (gpu_cards.empty()) {
+    if (gpu_cards.empty() || !visible_only) {
       fs::path const nvidia_gpus{"/proc/driver/nvidia/gpus"};
       if (fs::exists(nvidia_gpus)) {
         for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
@@ -1504,8 +1511,12 @@ static inline std::vector<fs::path> get_gpu_cards() {
           std::string nbdf = normalize_pci_bus_id(bdf_name);
           auto it =
               std::find(gpu_bdfs_ranked.begin(), gpu_bdfs_ranked.end(), nbdf);
-          if (it == gpu_bdfs_ranked.end()) continue;
-          rank_map[dev_path] = int(std::distance(gpu_bdfs_ranked.begin(), it));
+          if (it == gpu_bdfs_ranked.end() && visible_only) continue;
+          if (rank_map.count(dev_path)) continue;
+          rank_map[dev_path] =
+              (it == gpu_bdfs_ranked.end())
+                  ? INT_MAX
+                  : int(std::distance(gpu_bdfs_ranked.begin(), it));
           gpu_cards.push_back(dev_path);
         }
       }
@@ -1513,7 +1524,7 @@ static inline std::vector<fs::path> get_gpu_cards() {
 #endif
   }
 
-  // 4) Sort by original runtime rank
+  // 4) Sort by original runtime rank (invisible GPUs get INT_MAX, sorted last)
   std::sort(gpu_cards.begin(), gpu_cards.end(),
             [&rank_map](fs::path const& a, fs::path const& b) {
               return rank_map[a] < rank_map[b];
@@ -1649,43 +1660,17 @@ static inline std::string sanitize_bdf(std::string const& bdf) {
   return result;
 }
 
-// Enumerate all GPU PCI Bus IDs on the system (not filtered by
-// CUDA_VISIBLE_DEVICES). Returns sorted BDFs.
+// Enumerate all GPU PCI Bus IDs on the system. Unlike the default
+// get_gpu_cards(), this is NOT filtered by CUDA_VISIBLE_DEVICES — it returns
+// every GPU the driver exposes, which is required for cross-process IPC
+// naming when peer processes may have non-overlapping visibility masks.
+// Returns sorted, deduplicated lowercase BDFs.
 static inline std::vector<std::string> enumerate_all_gpu_bdfs() {
   std::vector<std::string> all_bdfs;
-
-#ifndef __HIP_PLATFORM_AMD__
-  // NVIDIA: /proc/driver/nvidia/gpus/<bdf>/  lists every GPU the driver sees.
-  fs::path const nvidia_gpus{"/proc/driver/nvidia/gpus"};
-  if (fs::exists(nvidia_gpus)) {
-    for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
-      std::string name = entry.path().filename().string();
-      all_bdfs.push_back(normalize_pci_bus_id(name));
-    }
+  for (auto const& p : get_gpu_cards(/*visible_only=*/false)) {
+    all_bdfs.push_back(normalize_pci_bus_id(p.filename().string()));
   }
-#endif
-
-  // Fallback: DRM class (works on AMD and when procfs is unavailable)
-  if (all_bdfs.empty()) {
-    fs::path const drm_class{"/sys/class/drm"};
-    static std::regex const card_re(R"(card(\d+))");
-    if (fs::exists(drm_class)) {
-      for (auto const& entry : fs::directory_iterator(drm_class)) {
-        std::string const name = entry.path().filename().string();
-        std::smatch m;
-        if (!std::regex_match(name, m, card_re)) continue;
-        try {
-          fs::path dev_path = fs::canonical(entry.path() / "device");
-          all_bdfs.push_back(
-              normalize_pci_bus_id(dev_path.filename().string()));
-        } catch (...) {
-        }
-      }
-    }
-  }
-
   std::sort(all_bdfs.begin(), all_bdfs.end());
-  // Remove duplicates (DRM may list the same GPU twice)
   all_bdfs.erase(std::unique(all_bdfs.begin(), all_bdfs.end()), all_bdfs.end());
   return all_bdfs;
 }
