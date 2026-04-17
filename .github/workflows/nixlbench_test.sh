@@ -44,10 +44,11 @@ echo "=== Activating conda env: ${CONDA_ENV} ==="
 source "${MINICONDA_DIR}/etc/profile.d/conda.sh"
 conda activate "${CONDA_ENV}"
 
-# ── Build UCCL p2p and install libuccl_p2p.so ────────────────────────────────
-echo "=== Building UCCL p2p ==="
+# ── Build UCCL p2p and install all transport backends ────────────────────────
+echo "=== Building UCCL p2p (all transports) ==="
 cd "${UCCL_ROOT}/p2p"
-make -j"$(nproc)" PYTHON=python3
+make clean PYTHON=python3 || true
+make all-transport PYTHON=python3
 make install PYTHON=python3 LIBDIR="${NIXL_INSTALL_DIR}/lib" PREFIX="${NIXL_INSTALL_DIR}"
 
 export LIBRARY_PATH="${NIXL_INSTALL_DIR}/lib:${LIBRARY_PATH:-}"
@@ -126,8 +127,13 @@ sleep 2
 
 ETCDCTL_API=3 etcdctl --endpoints="http://127.0.0.1:${ETCD_PORT}" endpoint health
 
-# ── Run nixlbench (two processes, single node) ────────────────────────────────
-echo "=== Running nixlbench UCCL benchmark (single node, 2 processes) ==="
+# ── Run nixlbench across transport configurations ────────────────────────────
+#
+# Test matrix (single node, 2 processes each):
+#   1. RDMA + IPC        (default intra-node path)
+#   2. RDMA without IPC  (forced RDMA loopback)
+#   3. NCCL + IPC        (TCP control plane + IPC data)
+#   4. NCCL without IPC  (forced NCCL data path)
 
 NIXLBENCH_ARGS=(
     --etcd_endpoints "http://127.0.0.1:${ETCD_PORT}"
@@ -142,21 +148,58 @@ NIXLBENCH_ARGS=(
     --check_consistency
 )
 
-nixlbench "${NIXLBENCH_ARGS[@]}" 2>&1 &
-PID1=$!
+TOTAL_PASSED=0
+TOTAL_FAILED=0
 
-sleep 1
+run_nixlbench_test() {
+    local test_name="$1"
+    local transport="$2"
+    local disable_ipc="$3"
 
-nixlbench "${NIXLBENCH_ARGS[@]}" 2>&1 &
-PID2=$!
+    echo ""
+    echo "=== Test: ${test_name} (transport=${transport}, disable_ipc=${disable_ipc}) ==="
 
-wait "${PID1}"; STATUS1=$?
-wait "${PID2}"; STATUS2=$?
+    local env_vars="UCCL_P2P_TRANSPORT=${transport}"
+    if [ "${disable_ipc}" = "1" ]; then
+        env_vars="${env_vars} UCCL_P2P_DISABLE_IPC=1"
+    fi
 
-echo "Process 1 exit code: ${STATUS1}"
-echo "Process 2 exit code: ${STATUS2}"
+    env ${env_vars} nixlbench "${NIXLBENCH_ARGS[@]}" 2>&1 &
+    local pid1=$!
+    sleep 1
+    env ${env_vars} nixlbench "${NIXLBENCH_ARGS[@]}" 2>&1 &
+    local pid2=$!
 
-if [ "${STATUS1}" -ne 0 ] || [ "${STATUS2}" -ne 0 ]; then
+    local s1=0 s2=0
+    wait "${pid1}" || s1=$?
+    wait "${pid2}" || s2=$?
+
+    echo "  Process 1 exit: ${s1}, Process 2 exit: ${s2}"
+
+    if [ "${s1}" -ne 0 ] || [ "${s2}" -ne 0 ]; then
+        echo "  FAILED: ${test_name}"
+        TOTAL_FAILED=$((TOTAL_FAILED + 1))
+        return 1
+    else
+        echo "  PASSED: ${test_name}"
+        TOTAL_PASSED=$((TOTAL_PASSED + 1))
+        return 0
+    fi
+}
+
+OVERALL_RC=0
+
+run_nixlbench_test "RDMA + IPC"         rdma 0 || OVERALL_RC=1
+run_nixlbench_test "RDMA without IPC"   rdma 1 || OVERALL_RC=1
+run_nixlbench_test "NCCL + IPC"         nccl 0 || OVERALL_RC=1
+run_nixlbench_test "NCCL without IPC"   nccl 1 || OVERALL_RC=1
+
+echo ""
+echo "================================================================"
+echo "  RESULTS: ${TOTAL_PASSED} passed, ${TOTAL_FAILED} failed"
+echo "================================================================"
+
+if [ "${OVERALL_RC}" -ne 0 ]; then
     echo "=== NIXLBench UCCL benchmark FAILED ==="
     exit 1
 fi
