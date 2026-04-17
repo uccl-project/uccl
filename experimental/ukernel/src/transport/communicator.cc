@@ -155,16 +155,26 @@ std::string tcp_p2p_key(int src_rank, int dst_rank) {
          std::to_string(dst_rank);
 }
 
-std::string ipc_buffer_key(int src_rank, int dst_rank, uint32_t ipc_id) {
-  return "ipcbuf:" + std::to_string(src_rank) + "->" +
-         std::to_string(dst_rank) + ":ipc:" + std::to_string(ipc_id);
+std::string ipc_global_buffer_key(int owner_rank, uint32_t buffer_id) {
+  return "ipc:rank:" + std::to_string(owner_rank) + ":buf:" +
+         std::to_string(buffer_id);
 }
 
-std::string ipc_buffer_versioned_key(int src_rank, int dst_rank,
-                                     uint32_t ipc_id,
-                                     uint64_t binding_version) {
-  return ipc_buffer_key(src_rank, dst_rank, ipc_id) + ":v" +
-         std::to_string(binding_version);
+std::string mr_global_buffer_key(int owner_rank, uint32_t buffer_id) {
+  return "mr:rank:" + std::to_string(owner_rank) + ":buf:" +
+         std::to_string(buffer_id);
+}
+
+template <typename Info>
+bool oob_put(Exchanger& ex, std::string const& ns, std::string const& key,
+             Info const& value) {
+  return ex.put(ns, key, value) != 0;
+}
+
+template <typename Info>
+bool oob_get(Exchanger& ex, std::string const& ns, std::string const& key,
+             Info& out, int timeout_ms = 0) {
+  return ex.get(ns, key, out, nullptr, timeout_ms);
 }
 
 void validate_dst_hint_for_transport(PeerTransportKind kind,
@@ -183,34 +193,6 @@ void validate_dst_hint_for_transport(PeerTransportKind kind,
     throw std::invalid_argument(
         "dst_hint.write.capacity is smaller than send size");
   }
-}
-
-template <typename Info>
-bool publish_local_then_fetch_remote(Exchanger& exchanger,
-                                     std::string const& local_key,
-                                     Info const& local_info,
-                                     std::string const& remote_key,
-                                     Info& remote_info, int timeout_ms) {
-  if (!exchanger.publish(local_key, local_info)) return false;
-  return exchanger.wait_and_fetch(
-      remote_key, remote_info,
-      timeout_to_retries(timeout_ms, kBootstrapPollDelayMs),
-      kBootstrapPollDelayMs);
-}
-
-template <typename Info>
-bool fetch_remote_then_publish_local(Exchanger& exchanger,
-                                     std::string const& remote_key,
-                                     Info& remote_info,
-                                     std::string const& local_key,
-                                     Info const& local_info, int timeout_ms) {
-  if (!exchanger.wait_and_fetch(
-          remote_key, remote_info,
-          timeout_to_retries(timeout_ms, kBootstrapPollDelayMs),
-          kBootstrapPollDelayMs)) {
-    return false;
-  }
-  return exchanger.publish(local_key, local_info);
 }
 
 bool detect_local_rdma_capable() {
@@ -247,6 +229,12 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       world_size_(world_size),
       peer_states_(static_cast<size_t>(world_size)),
       config_(config) {
+  if (!config_) {
+    config_ = std::make_shared<CommunicatorConfig>(CommunicatorConfig::from_env());
+  }
+  if (config_->oob_namespace.empty()) {
+    config_->oob_namespace = "default";
+  }
   request_slots_ = std::make_unique<TrackedRequest[]>(kRequestSlotCount);
   active_ring_ = std::make_unique<std::atomic<unsigned>[]>(kActiveRingSize);
   for (uint32_t i = 0; i < kActiveRingSize; ++i) {
@@ -290,6 +278,29 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
             << " initialized: peer meta exchange success" << std::endl;
 }
 
+void Communicator::set_oob_namespace(std::string ns) {
+  if (ns.empty()) ns = "default";
+  std::lock_guard<std::mutex> lk(config_mu_);
+  config_->oob_namespace = std::move(ns);
+}
+
+std::string Communicator::oob_namespace() const {
+  std::lock_guard<std::mutex> lk(config_mu_);
+  if (config_->oob_namespace.empty()) return "default";
+  return config_->oob_namespace;
+}
+
+bool Communicator::barrier(std::string const& barrier_namespace,
+                           int timeout_ms) {
+  if (!exchanger_client_ || !exchanger_client_->valid()) return false;
+  std::string ns = barrier_namespace.empty() ? "default" : barrier_namespace;
+  // Scope barrier id by communicator OOB namespace to avoid cross-group
+  // collision when multiple comm groups share one exchanger endpoint.
+  std::string barrier_id = oob_namespace() + "/" + ns;
+  return exchanger_client_->sync(barrier_id, global_rank_, world_size_,
+                                 timeout_ms);
+}
+
 void Communicator::exchange_peer_metas() {
   CommunicatorMeta local;
   local.host_id = generate_host_id();
@@ -305,8 +316,9 @@ void Communicator::exchange_peer_metas() {
   }
 
   std::string meta_key = "meta:" + std::to_string(global_rank_);
-  if (!exchanger_client_->publish(meta_key, local)) {
-    fprintf(stderr, "[ERROR] Failed to publish local CommunicatorMeta \n");
+  if (!oob_put(*exchanger_client_, oob_namespace(), meta_key, local)) {
+    throw std::runtime_error(
+        "failed to publish local communicator meta to exchanger");
   }
 
   CommunicatorMeta remote;
@@ -314,10 +326,8 @@ void Communicator::exchange_peer_metas() {
   for (int i = 0; i < world_size_; i++) {
     if (i == global_rank_) continue;
     std::string key = "meta:" + std::to_string(i);
-    if (exchanger_client_->wait_and_fetch(
-            key, remote,
-            timeout_to_retries(bootstrap_timeout_ms(), kBootstrapPollDelayMs),
-            kBootstrapPollDelayMs)) {
+    if (oob_get(*exchanger_client_, oob_namespace(), key, remote,
+                bootstrap_timeout_ms())) {
       std::lock_guard<std::mutex> lk(peer_mu_);
       auto& peer = peer_states_.at(static_cast<size_t>(i));
       peer.meta = remote;
@@ -622,10 +632,12 @@ bool Communicator::bootstrap_rdma_peer_oob(int rank,
     }
 
     StringPayload remote_send_payload;
-    if (!publish_local_then_fetch_remote(
-            *exchanger_client_, rdma_send_bootstrap_key(global_rank_, rank),
-            local_send_payload, rdma_send_bootstrap_key(rank, global_rank_),
-            remote_send_payload, bootstrap_timeout_ms())) {
+    if (!oob_put(*exchanger_client_, oob_namespace(),
+                 rdma_send_bootstrap_key(global_rank_, rank),
+                 local_send_payload) ||
+        !oob_get(*exchanger_client_, oob_namespace(),
+                 rdma_send_bootstrap_key(rank, global_rank_),
+                 remote_send_payload, bootstrap_timeout_ms())) {
       std::cerr << "[ERROR] Communicator " << global_rank_
                 << " failed to exchange RDMA send bootstrap with rank " << rank
                 << std::endl;
@@ -642,10 +654,12 @@ bool Communicator::bootstrap_rdma_peer_oob(int rank,
     }
 
     StringPayload remote_recv_payload;
-    if (!publish_local_then_fetch_remote(
-            *exchanger_client_, rdma_recv_bootstrap_key(global_rank_, rank),
-            local_recv_payload, rdma_recv_bootstrap_key(rank, global_rank_),
-            remote_recv_payload, bootstrap_timeout_ms())) {
+    if (!oob_put(*exchanger_client_, oob_namespace(),
+                 rdma_recv_bootstrap_key(global_rank_, rank),
+                 local_recv_payload) ||
+        !oob_get(*exchanger_client_, oob_namespace(),
+                 rdma_recv_bootstrap_key(rank, global_rank_),
+                 remote_recv_payload, bootstrap_timeout_ms())) {
       std::cerr << "[ERROR] Communicator " << global_rank_
                 << " failed to exchange RDMA recv bootstrap with rank " << rank
                 << std::endl;
@@ -664,10 +678,12 @@ bool Communicator::bootstrap_rdma_peer_oob(int rank,
   StringPayload local_status;
   local_status.value = local_bootstrap_ok ? "1" : "0";
   StringPayload remote_status;
-  if (!publish_local_then_fetch_remote(
-          *exchanger_client_, rdma_bootstrap_status_key(global_rank_, rank),
-          local_status, rdma_bootstrap_status_key(rank, global_rank_),
-          remote_status, bootstrap_timeout_ms())) {
+  if (!oob_put(*exchanger_client_, oob_namespace(),
+               rdma_bootstrap_status_key(global_rank_, rank),
+               local_status) ||
+      !oob_get(*exchanger_client_, oob_namespace(),
+               rdma_bootstrap_status_key(rank, global_rank_),
+               remote_status, bootstrap_timeout_ms())) {
     rdma_adapter.rollback_peer_bootstrap(rank);
     std::cerr << "[ERROR] Communicator " << global_rank_
               << " failed to exchange RDMA bootstrap status with rank " << rank
@@ -684,7 +700,7 @@ bool Communicator::bootstrap_rdma_peer_oob(int rank,
 }
 
 bool Communicator::exchange_uccl_peer_info(
-    int rank, UcclTransportAdapter& uccl_adapter, bool as_connector,
+    int rank, UcclTransportAdapter& uccl_adapter,
     UCCLP2PInfo* out_remote_p2p_info) {
   if (out_remote_p2p_info == nullptr) return false;
 
@@ -714,15 +730,10 @@ bool Communicator::exchange_uccl_peer_info(
   std::string p2p_key = uccl_p2p_key(global_rank_, rank);
   std::string peer_p2p_key = uccl_p2p_key(rank, global_rank_);
 
-  if (as_connector) {
-    return publish_local_then_fetch_remote(*exchanger_client_, p2p_key,
-                                           local_p2p_info, peer_p2p_key,
-                                           *out_remote_p2p_info,
-                                           bootstrap_timeout_ms());
-  }
-  return fetch_remote_then_publish_local(*exchanger_client_, peer_p2p_key,
-                                         *out_remote_p2p_info, p2p_key,
-                                         local_p2p_info, bootstrap_timeout_ms());
+  return oob_put(*exchanger_client_, oob_namespace(), p2p_key,
+                 local_p2p_info) &&
+         oob_get(*exchanger_client_, oob_namespace(), peer_p2p_key,
+                 *out_remote_p2p_info, bootstrap_timeout_ms());
 }
 
 TcpTransportAdapter& Communicator::ensure_tcp_adapter(
@@ -770,13 +781,13 @@ bool Communicator::try_fallback_tcp_connect(
                             tcp_adapter.get_listen_port());
   std::string p2p_key = tcp_p2p_key(global_rank_, rank);
   std::string peer_p2p_key = tcp_p2p_key(rank, global_rank_);
-  if (!exchanger_client_->publish(p2p_key, local_p2p_info)) return false;
+  if (!oob_put(*exchanger_client_, oob_namespace(), p2p_key,
+               local_p2p_info))
+    return false;
 
   TcpP2PInfo remote_p2p_info;
-  if (!exchanger_client_->wait_and_fetch(
-          peer_p2p_key, remote_p2p_info,
-          timeout_to_retries(bootstrap_timeout_ms(), kBootstrapPollDelayMs),
-          kBootstrapPollDelayMs)) {
+  if (!oob_get(*exchanger_client_, oob_namespace(), peer_p2p_key,
+               remote_p2p_info, bootstrap_timeout_ms())) {
     return false;
   }
 
@@ -807,18 +818,16 @@ bool Communicator::try_fallback_tcp_accept(
 
   std::string p2p_key = tcp_p2p_key(global_rank_, rank);
   std::string peer_p2p_key = tcp_p2p_key(rank, global_rank_);
-
-  TcpP2PInfo remote_p2p_info;
-  if (!exchanger_client_->wait_and_fetch(
-          peer_p2p_key, remote_p2p_info,
-          timeout_to_retries(bootstrap_timeout_ms(), kBootstrapPollDelayMs),
-          kBootstrapPollDelayMs)) {
-    return false;
-  }
-
   TcpP2PInfo local_p2p_info(tcp_adapter.get_listen_ip(),
                             tcp_adapter.get_listen_port());
-  if (!exchanger_client_->publish(p2p_key, local_p2p_info)) return false;
+  if (!oob_put(*exchanger_client_, oob_namespace(), p2p_key, local_p2p_info))
+    return false;
+
+  TcpP2PInfo remote_p2p_info;
+  if (!oob_get(*exchanger_client_, oob_namespace(), peer_p2p_key,
+               remote_p2p_info, bootstrap_timeout_ms())) {
+    return false;
+  }
 
   PeerConnectSpec spec{};
   spec.peer_rank = rank;
@@ -863,8 +872,7 @@ bool Communicator::connect(int rank) {
         return try_fallback_tcp_connect(rank, resolved.local_meta);
       }
       UCCLP2PInfo remote_p2p_info;
-      if (!exchange_uccl_peer_info(rank, uccl_adapter, /*as_connector=*/true,
-                                   &remote_p2p_info)) {
+      if (!exchange_uccl_peer_info(rank, uccl_adapter, &remote_p2p_info)) {
         return try_fallback_tcp_connect(rank, resolved.local_meta);
       }
       PeerConnectSpec spec{};
@@ -923,9 +931,10 @@ bool Communicator::connect(int rank) {
       std::string p2p_key = tcp_p2p_key(global_rank_, rank);
       std::string peer_p2p_key = tcp_p2p_key(rank, global_rank_);
       TcpP2PInfo remote_p2p_info;
-      if (!publish_local_then_fetch_remote(
-              *exchanger_client_, p2p_key, local_p2p_info, peer_p2p_key,
-              remote_p2p_info, bootstrap_timeout_ms())) {
+      if (!oob_put(*exchanger_client_, oob_namespace(), p2p_key,
+                   local_p2p_info) ||
+          !oob_get(*exchanger_client_, oob_namespace(), peer_p2p_key,
+                   remote_p2p_info, bootstrap_timeout_ms())) {
         return false;
       }
       PeerConnectSpec spec{};
@@ -972,8 +981,7 @@ bool Communicator::accept(int rank) {
         return try_fallback_tcp_accept(rank, resolved.local_meta);
       }
       UCCLP2PInfo remote_p2p_info;
-      if (!exchange_uccl_peer_info(rank, uccl_adapter, /*as_connector=*/false,
-                                   &remote_p2p_info)) {
+      if (!exchange_uccl_peer_info(rank, uccl_adapter, &remote_p2p_info)) {
         return try_fallback_tcp_accept(rank, resolved.local_meta);
       }
       PeerConnectSpec spec{};
@@ -1031,9 +1039,10 @@ bool Communicator::accept(int rank) {
       TcpP2PInfo remote_p2p_info;
       TcpP2PInfo local_p2p_info(tcp_adapter.get_listen_ip(),
                                 tcp_adapter.get_listen_port());
-      if (!fetch_remote_then_publish_local(
-              *exchanger_client_, peer_p2p_key, remote_p2p_info, p2p_key,
-              local_p2p_info, bootstrap_timeout_ms())) {
+      if (!oob_put(*exchanger_client_, oob_namespace(), p2p_key,
+                   local_p2p_info) ||
+          !oob_get(*exchanger_client_, oob_namespace(), peer_p2p_key,
+                   remote_p2p_info, bootstrap_timeout_ms())) {
         return false;
       }
       PeerConnectSpec spec{};

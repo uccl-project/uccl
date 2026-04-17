@@ -14,6 +14,7 @@ enum class PreferredTransport { Auto, Ipc, Rdma, Uccl, Tcp };
 struct CommunicatorConfig {
   std::string exchanger_ip = DEFAULT_EXCHANGER_SERVER_IP;
   int exchanger_port = DEFAULT_EXCHANGER_SERVER_PORT;
+  std::string oob_namespace = "default";
   int local_id = -1;
   PreferredTransport preferred_transport = PreferredTransport::Auto;
 
@@ -23,6 +24,7 @@ struct CommunicatorConfig {
         getEnvOrDefault("UHM_EXCHANGER_SERVER_IP", DEFAULT_EXCHANGER_SERVER_IP);
     config.exchanger_port = getEnvOrDefault("UHM_EXCHANGER_SERVER_PORT",
                                             DEFAULT_EXCHANGER_SERVER_PORT);
+    config.oob_namespace = getEnvOrDefault("UHM_OOB_NAMESPACE", "default");
     config.local_id = getLocalIdOrDefault();
     return config;
   }

@@ -55,6 +55,12 @@ class Communicator {
   // Identity.
   int rank() const { return global_rank_; }
   int world_size() const { return world_size_; }
+  // Runtime-selectable OOB namespace for communication-group isolation.
+  void set_oob_namespace(std::string ns);
+  std::string oob_namespace() const;
+  // OOB global barrier across ranks in this communicator.
+  bool barrier(std::string const& barrier_namespace = "default",
+               int timeout_ms = -1);
 
   // Completion notification hook.
   std::shared_ptr<void> register_completion_notifier(
@@ -142,7 +148,6 @@ class Communicator {
   void bind_rdma_backend_if_needed();
   bool bootstrap_rdma_peer_oob(int rank, RdmaTransportAdapter& rdma_adapter);
   bool exchange_uccl_peer_info(int rank, UcclTransportAdapter& uccl_adapter,
-                               bool as_connector,
                                UCCLP2PInfo* out_remote_p2p_info);
   TcpTransportAdapter& ensure_tcp_adapter(CommunicatorMeta const& local_meta);
 
@@ -210,6 +215,7 @@ class Communicator {
   mutable std::mutex peer_mu_;
   std::vector<PeerState> peer_states_;
   std::shared_ptr<CommunicatorConfig> config_;
+  mutable std::mutex config_mu_;
   std::shared_ptr<Exchanger> exchanger_client_;
 
   // Adapter dispatch.
