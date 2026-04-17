@@ -130,18 +130,23 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   std::string local_ip = uccl::get_oob_ip();
   bool is_local = (std::string(ip_addr) == local_ip);
 
+  // Convert the remote CUDA ordinal to a local BDF via the runtime. This is
+  // only meaningful for the same_process / intra-node IPC path; for inter-node
+  // RDMA, the actual remote BDF is exchanged via the TCP handshake inside
+  // endpoint->connect().
+  char bdf_buf[64];
+  GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), remote_gpu_idx));
+  std::string remote_bdf = uccl::normalize_pci_bus_id(bdf_buf);
+
   bool ok;
   if (is_local && same_process) {
     // Same process: use shm rings directly, skip TCP.
-    // Transfers use direct_addr (no gpuIpcOpenMemHandle).
-    ok = engine->endpoint->connect_local(remote_gpu_idx, conn_id, true);
+    ok = engine->endpoint->connect_local(remote_bdf, conn_id, true);
     conn->sock_fd = -1;
   } else {
     // Remote or cross-process local: use TCP connection.
-    // Cross-process local gets OOB for notifications; data goes through IPC
-    // via the external IPC info path in the NIXL backend.
-    ok = engine->endpoint->connect(std::string(ip_addr), remote_gpu_idx,
-                                   remote_port, conn_id);
+    ok = engine->endpoint->connect(std::string(ip_addr), 0, remote_port,
+                                   conn_id);
     if (ok) {
       conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
 #if !defined(UCCL_P2P_USE_NCCL)
@@ -588,34 +593,57 @@ int uccl_engine_get_metadata(uccl_engine_t* engine, char** metadata) {
   if (!engine || !metadata) return -1;
 
   try {
-    std::vector<uint8_t> metadata_vec =
-        engine->endpoint->get_unified_metadata();
+    std::vector<uint8_t> metadata_vec = engine->endpoint->get_metadata();
 
     std::string result;
-    if (metadata_vec.size() == 10) {  // IPv4 format
-      std::string ip_addr = std::to_string(metadata_vec[0]) + "." +
-                            std::to_string(metadata_vec[1]) + "." +
-                            std::to_string(metadata_vec[2]) + "." +
-                            std::to_string(metadata_vec[3]);
-      uint16_t port = (metadata_vec[4] << 8) | metadata_vec[5];
-      int gpu_idx;
-      std::memcpy(&gpu_idx, &metadata_vec[6], sizeof(int));
-
-      result = "" + ip_addr + ":" + std::to_string(port) + "?" +
-               std::to_string(gpu_idx);
-    } else if (metadata_vec.size() == 22) {  // IPv6 format
-      char ip6_str[INET6_ADDRSTRLEN];
-      struct in6_addr ip6_addr;
-      std::memcpy(&ip6_addr, metadata_vec.data(), 16);
-      inet_ntop(AF_INET6, &ip6_addr, ip6_str, sizeof(ip6_str));
-
-      uint16_t port = (metadata_vec[16] << 8) | metadata_vec[17];
-      int gpu_idx;
-      std::memcpy(&gpu_idx, &metadata_vec[18], sizeof(int));
-
-      result = "" + std::string(ip6_str) + "]:" + std::to_string(port) + "?" +
-               std::to_string(gpu_idx);
-    } else {  // Fallback: return hex representation
+    // New metadata format: [IP (4/16)] [port (2)] [bdf_len (1)] [bdf_str (N)]
+    if (metadata_vec.size() >= 7 && metadata_vec.size() <= 30) {
+      // Try to detect IPv4 vs IPv6 by parsing the BDF length field
+      // IPv4: offset 6 has bdf_len; IPv6: offset 18 has bdf_len
+      size_t ip_len;
+      std::string ip_addr;
+      if (metadata_vec.size() >= 7) {
+        uint8_t candidate_bdf_len = metadata_vec[6];
+        if (7 + candidate_bdf_len == metadata_vec.size()) {
+          // IPv4 format
+          ip_len = 4;
+          ip_addr = std::to_string(metadata_vec[0]) + "." +
+                    std::to_string(metadata_vec[1]) + "." +
+                    std::to_string(metadata_vec[2]) + "." +
+                    std::to_string(metadata_vec[3]);
+        } else if (metadata_vec.size() >= 19) {
+          uint8_t candidate_bdf_len6 = metadata_vec[18];
+          if (19 + candidate_bdf_len6 == metadata_vec.size()) {
+            ip_len = 16;
+            char ip6_str[INET6_ADDRSTRLEN];
+            struct in6_addr ip6_a;
+            std::memcpy(&ip6_a, metadata_vec.data(), 16);
+            inet_ntop(AF_INET6, &ip6_a, ip6_str, sizeof(ip6_str));
+            ip_addr = "[" + std::string(ip6_str) + "]";
+          } else {
+            ip_len = 0;
+          }
+        } else {
+          ip_len = 0;
+        }
+      } else {
+        ip_len = 0;
+      }
+      if (ip_len > 0) {
+        uint16_t port = (metadata_vec[ip_len] << 8) | metadata_vec[ip_len + 1];
+        uint8_t bdf_len = metadata_vec[ip_len + 2];
+        std::string bdf(metadata_vec.begin() + ip_len + 3,
+                        metadata_vec.begin() + ip_len + 3 + bdf_len);
+        result = ip_addr + ":" + std::to_string(port) + "?" + bdf;
+      } else {
+        // Fallback: hex
+        for (size_t i = 0; i < metadata_vec.size(); ++i) {
+          char hex[3];
+          snprintf(hex, sizeof(hex), "%02x", metadata_vec[i]);
+          result += hex;
+        }
+      }
+    } else {
       result = "";
       for (size_t i = 0; i < metadata_vec.size(); ++i) {
         char hex[3];
