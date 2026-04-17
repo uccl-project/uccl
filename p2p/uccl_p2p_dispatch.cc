@@ -21,7 +21,8 @@ static void init_backend() {
   if (backend == "tcp" || backend == "tcpx") backend = "nccl";
 
   char lib_name[256];
-  std::snprintf(lib_name, sizeof(lib_name), "libuccl_p2p_%s.so", backend.c_str());
+  std::snprintf(lib_name, sizeof(lib_name), "libuccl_p2p_%s.so",
+                backend.c_str());
 
   g_handle = dlopen(lib_name, RTLD_NOW | RTLD_LOCAL);
   if (!g_handle) {
@@ -63,8 +64,7 @@ void uccl_engine_destroy(uccl_engine_t* engine) { ops()->destroy(engine); }
 uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
                                  char const* remote_gpu, int remote_port,
                                  bool same_process) {
-  return ops()->connect(engine, ip_addr, remote_gpu, remote_port,
-                        same_process);
+  return ops()->connect(engine, ip_addr, remote_gpu, remote_port, same_process);
 }
 
 uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
