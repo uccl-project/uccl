@@ -9,8 +9,8 @@ from typing import Callable, List, Optional, Tuple, Union
 import torch
 import torch.distributed as dist
 
-from uccl.ep import _ep_native
-from uccl.ep._ep_native import Config, EventHandle
+from uccl.ep import ep_cpp
+from uccl.ep.ep_cpp import Config, EventHandle
 from uccl.ep.utils import (
     EventOverlap,
     check_nvlink_connections,
@@ -75,21 +75,21 @@ class Buffer:
         else:
             device_index = torch.cuda.current_device()
 
-        if hasattr(_ep_native, "get_rdma_buffer"):
-            scratch_dlpack, rdma_buffer_is_host_allocated = _ep_native.get_rdma_buffer(
+        if hasattr(ep_cpp, "get_rdma_buffer"):
+            scratch_dlpack, rdma_buffer_is_host_allocated = ep_cpp.get_rdma_buffer(
                 num_rdma_bytes, device_index
             )
             self.scratch = torch.utils.dlpack.from_dlpack(scratch_dlpack)
         else:
             rdma_buffer_is_host_allocated = False
             if num_rdma_bytes > 0:
-                if hasattr(_ep_native, "can_register_rdma_gpu_buffer"):
+                if hasattr(ep_cpp, "can_register_rdma_gpu_buffer"):
                     rdma_buffer_is_host_allocated = not bool(
-                        _ep_native.can_register_rdma_gpu_buffer(device_index, num_rdma_bytes)
+                        ep_cpp.can_register_rdma_gpu_buffer(device_index, num_rdma_bytes)
                     )
-                elif hasattr(_ep_native, "rdma_buffer_should_use_host_alloc"):
+                elif hasattr(ep_cpp, "rdma_buffer_should_use_host_alloc"):
                     rdma_buffer_is_host_allocated = bool(
-                        _ep_native.rdma_buffer_should_use_host_alloc(
+                        ep_cpp.rdma_buffer_should_use_host_alloc(
                             device_index, num_rdma_bytes
                         )
                     )
@@ -130,7 +130,7 @@ class Buffer:
         self.low_latency_mode = low_latency_mode
         self.explicitly_destroy = explicitly_destroy
         self._next_low_latency_combine_buffer = None
-        self.runtime = _ep_native.Buffer(
+        self.runtime = ep_cpp.Buffer(
             self.rank,
             self.group_size,
             num_nvl_bytes,
@@ -179,8 +179,8 @@ class Buffer:
         """Reset the RDMA buffer."""
         self.runtime.reset_rdma_buffer()
 
-    def connect_atomic_buffer(self, proxy: "_ep_native.Proxy"):
-        _ep_native.connect_atomic_buffer(proxy, self.runtime)
+    def connect_atomic_buffer(self, proxy: "ep_cpp.Proxy"):
+        ep_cpp.connect_atomic_buffer(proxy, self.runtime)
 
     def destroy(self):
         """Destroy the cpp runtime and release resources."""
@@ -191,7 +191,7 @@ class Buffer:
 
     @staticmethod
     def is_sm90_compiled():
-        return _ep_native.is_sm90_compiled()
+        return ep_cpp.is_sm90_compiled()
 
     @staticmethod
     def set_num_sms(new_num_sms: int) -> None:
@@ -494,7 +494,7 @@ class Buffer:
         Returns:
             size: the RDMA buffer size recommended.
         """
-        return _ep_native.get_low_latency_rdma_size_hint(
+        return ep_cpp.get_low_latency_rdma_size_hint(
             num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts
         )
 

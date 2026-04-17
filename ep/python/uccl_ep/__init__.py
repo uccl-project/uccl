@@ -2,7 +2,7 @@
 uccl.ep — Expert-Parallel communication for Mixture-of-Experts models.
 
 This package provides both the native C++/CUDA extension (compiled as
-``_ep_native``) and Python-level helpers (``Buffer``, ``EventOverlap``, etc.).
+``ep_cpp``) and Python-level helpers (``Buffer``, ``EventOverlap``, etc.).
 
 Public API
 ----------
@@ -18,12 +18,12 @@ works (they come from the native extension), and
 ``from uccl.ep import Buffer`` returns the **Python** wrapper class.
 """
 
-from uccl.ep._ep_native import *  # noqa: F401,F403 — re-export native symbols
+from uccl.ep.ep_cpp import *  # noqa: F401,F403 — re-export native symbols
 
-# Keep a reference so users can do ``from uccl.ep import _ep_native`` when
-# they need the raw C++ module (e.g. ``_ep_native.Buffer`` vs the Python
+# Keep a reference so users can do ``from uccl.ep import ep_cpp`` when
+# they need the raw C++ module (e.g. ``ep_cpp.Buffer`` vs the Python
 # wrapper ``Buffer``).
-from uccl.ep import _ep_native  # noqa: F401
+from uccl.ep import ep_cpp  # noqa: F401
 
 # Import the Python wrapper ``Buffer`` *after* the wildcard import so it
 # shadows the native ``Buffer`` class with the richer Python version.
