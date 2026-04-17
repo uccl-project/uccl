@@ -213,13 +213,9 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
 uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
                                 size_t ip_addr_buf_len, int* remote_gpu_idx) {
   if (!engine || !ip_addr_buf || !remote_gpu_idx) return nullptr;
-    // The merged NCCL/TCPX path does not need the background passive-accept
-    // helper. (To fix bug in 8-GPU benchmark)
-#if !defined(UCCL_P2P_USE_NCCL)
-  // Start accept_local loop in a background thread (once per engine) so that
-  // local (IPC) peers can connect concurrently with the blocking RDMA accept.
-  engine->endpoint->start_passive_accept();
-#endif
+  // Start the local (IPC/shm) accept thread so local peers can connect
+  // concurrently with the blocking network accept.
+  engine->endpoint->start_passive_accept_local();
   uccl_conn_t* conn = new uccl_conn;
   std::string ip_addr;
   uint64_t conn_id;
