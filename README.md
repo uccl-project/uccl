@@ -168,19 +168,19 @@ For quick installation with docker, you can directly dive into:
 The code in this repository is mostly described in the papers below. Please consider citing this work if you find the repository helpful. 
 
 ```bibtex
-@article{uccl_transport,
-  title={An Extensible Software Transport Layer for GPU Networking},
+@article{uccl_tran,
+  title={UCCL-Tran: An Extensible Software Transport Layer for Machine Learning Workloads},
   author={Zhou, Yang and Chen, Zhongjie and Mao, Ziming and Lao, ChonLam and Yang, Shuo and Kannan, Pravein Govindan and Gao, Jiaqi and Zhao, Yilong and Wu, Yongji and You, Kaichao and Ren, Fengyuan and Xu, Zhiying and Raiciu, Costin and Stoica, Ion},
-  journal={arXiv preprint arXiv:2504.17307},
-  year={2025}
+  journal={USENIX OSDI},
+  year={2026}
 }
 ```
 ```bibtex
 @article{uccl_ep,
   title={UCCL-EP: Portable Expert-Parallel Communication},
   author={Mao, Ziming and Zhang, Yihan and Cui, Chihan and You, Kaichao and Chen, Zhongjie and Xu, Zhiying and Shenker, Scott and Raiciu, Costin and Zhou, Yang and Stoica, Ion},
-  journal={arXiv preprint arXiv:2512.19849},
-  year={2025}
+  journal={USENIX OSDI},
+  year={2026}
 }
 ```
 ## Acknowledgement
