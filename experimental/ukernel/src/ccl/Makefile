@@ -7,8 +7,6 @@ UCCL_ROOT := $(abspath ../../../..)
 GDRCOPY_INCLUDEDIR ?= /usr/include
 GDRCOPY_LIBDIR ?=
 GDRCOPY_LIBDIR_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-L$(GDRCOPY_LIBDIR),)
-GDRCOPY_CXX_RPATH_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-Wl,-rpath,$(GDRCOPY_LIBDIR),)
-GDRCOPY_NVCC_RPATH_FLAGS := $(if $(strip $(GDRCOPY_LIBDIR)),-Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR),)
 UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
 UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma.a
 
@@ -31,10 +29,12 @@ INCLUDES := -I. -I./test -I./test/common -I./test/unit -I./test/integration \
             -I../transport -I../device -I../device/fifo \
             -I../../include -I$(UCCL_ROOT) -I$(UCCL_ROOT)/include \
             -I$(CUDA_HOME)/include -I$(GDRCOPY_INCLUDEDIR) -I/usr/local/include
-CXX_RPATH_FLAGS := -Wl,-rpath,$(CUDA_HOME)/lib64 \
-                   $(GDRCOPY_CXX_RPATH_FLAGS)
-NVCC_RPATH_FLAGS := -Xlinker -rpath -Xlinker $(CUDA_HOME)/lib64 \
-                    $(GDRCOPY_NVCC_RPATH_FLAGS)
+CXX_RPATH_FLAGS := -Wl,-rpath,$(CUDA_HOME)/lib64
+NVCC_RPATH_FLAGS := -Xlinker -rpath -Xlinker $(CUDA_HOME)/lib64
+ifneq ($(strip $(GDRCOPY_LIBDIR)),)
+CXX_RPATH_FLAGS += -Wl,-rpath,$(GDRCOPY_LIBDIR)
+NVCC_RPATH_FLAGS += -Xlinker -rpath -Xlinker $(GDRCOPY_LIBDIR)
+endif
 TRANSPORT_LIBS := -L$(CONDA_LIB_HOME) -L$(CUDA_HOME)/lib64 \
                   -lcudart -lcuda -lgflags -lz -libverbs \
                   -lnl-3 -lnl-route-3 -lrdmacm -lpthread \
@@ -48,22 +48,24 @@ REAL_EXECUTOR_OBJ := $(REAL_EXECUTOR_SRC:.cc=.o)
 REAL_BACKEND_SRC := backend/device_backend.cc backend/transport_backend.cc
 REAL_BACKEND_OBJ := $(REAL_BACKEND_SRC:.cc=.o)
 TRANSPORT_SRC := ../transport/communicator.cc \
-                 ../transport/memory/memory_manager.cc \
+                 ../transport/memory/mr_manager.cc \
+                 ../transport/memory/ipc_manager.cc \
+                 ../transport/memory/shm_manager.cc \
                  ../transport/oob/oob.cc ../transport/oob/oob_shm.cc \
                  ../transport/oob/oob_socket.cc \
-                 ../transport/request.cc \
                  ../transport/adapter/tcp_adapter.cc \
                  ../transport/adapter/uccl_adapter.cc \
                  ../transport/adapter/ipc_adapter.cc \
-                 ../transport/utils.cc
+                 ../transport/util/utils.cc
 TRANSPORT_OBJ := transport_communicator.o \
-                 transport_memory_memory_manager.o \
+                 transport_memory_mr_manager.o \
+                 transport_memory_ipc_manager.o \
+                 transport_memory_shm_manager.o \
                  transport_oob_oob.o transport_oob_oob_shm.o transport_oob_oob_socket.o \
-                 transport_request.o \
                  transport_adapter_tcp_adapter.o \
                  transport_adapter_uccl_adapter.o \
                  transport_adapter_ipc_adapter.o \
-                 transport_utils.o
+                 transport_util_utils.o
 DEVICE_CPP_OBJ := device_c2d_fifo.o device_d2c_fifo.o device_sm_fifo.o \
                   device_worker.o
 DEVICE_CU_OBJ := device_persistent_kernel_ops.o
@@ -129,6 +131,9 @@ transport_oob_%.o: ../transport/oob/%.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
 transport_adapter_%.o: ../transport/adapter/%.cc
+	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
+
+transport_util_%.o: ../transport/util/%.cc
 	$(CXX) -MMD -MP -c $< -o $@ $(CXXFLAGS) $(INCLUDES)
 
 device_c2d_fifo.o: ../device/fifo/c2d_fifo.cc

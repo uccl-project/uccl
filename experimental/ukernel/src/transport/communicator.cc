@@ -1,10 +1,14 @@
 #include "communicator.h"
 #include "adapter/ipc_adapter.h"
+#include "adapter/tcp_adapter.h"
+#include "adapter/transport_adapter.h"
+#include "adapter/uccl_adapter.h"
 #include "util/utils.h"
 #include <arpa/inet.h>
 #include <infiniband/verbs.h>
 #include <netinet/in.h>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -14,6 +18,8 @@
 #include <stdexcept>
 #include <unordered_set>
 #include <ifaddrs.h>
+#include <poll.h>
+#include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -222,11 +228,18 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
       world_size_(world_size),
       peer_states_(static_cast<size_t>(world_size)),
       config_(config) {
-  shm_control_ = std::make_shared<ShmRingExchanger>(
-      global_rank_, world_size_,
-      generate_host_id() + "_p" + std::to_string(config_->exchanger_port),
+  request_slots_ = std::make_unique<TrackedRequest[]>(kRequestSlotCount);
+  active_ring_ = std::make_unique<std::atomic<unsigned>[]>(kActiveRingSize);
+  for (uint32_t i = 0; i < kActiveRingSize; ++i) {
+    active_ring_[i].store(0, std::memory_order_relaxed);
+  }
+  completion_event_fd_ = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  if (completion_event_fd_ < 0) {
+    throw std::runtime_error("failed to create completion eventfd");
+  }
+  ipc_adapter_ = std::make_shared<IpcAdapter>(
+      this, generate_host_id() + "_p" + std::to_string(config_->exchanger_port),
       config_->local_id >= 0 ? config_->local_id : global_rank_);
-  ipc_channel_ = std::make_shared<IpcChannel>(this);
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
   GPU_RT_CHECK(
       gpuStreamCreateWithFlags(&host_copy_stream_, gpuStreamNonBlocking));
@@ -244,7 +257,7 @@ Communicator::Communicator(int gpu_id, int rank, int world_size,
     return;
   }
 
-  shm_manager_ = std::make_unique<SHMManager>();
+  shm_manager_.emplace();
 
   // Start background progress immediately so post-transport work, such as
   // host-bounce host->device copies, is not delayed until an external
@@ -290,7 +303,7 @@ void Communicator::exchange_peer_metas() {
       auto& peer = peer_states_.at(static_cast<size_t>(i));
       peer.meta = remote;
       peer.has_meta = true;
-      shm_control_->set_peer_local_id(i, remote.local_id);
+      ipc_adapter_->set_peer_local_id(i, remote.local_id);
     } else {
       missing_ranks.push_back(i);
     }
@@ -311,14 +324,37 @@ Communicator::~Communicator() {
   if (progress_started_.load()) {
     progress_running_.store(false);
     progress_cv_.notify_all();
+    if (completion_event_fd_ >= 0) {
+      uint64_t one = 1;
+      (void)::write(completion_event_fd_, &one, sizeof(one));
+    }
     if (progress_thread_.joinable()) {
       progress_thread_.join();
     }
   }
 
-  if (ipc_channel_) {
-    ipc_channel_->shutdown();
+  if (ipc_adapter_) {
+    ipc_adapter_->shutdown();
   }
+
+  for (uint32_t i = 0; i < kRequestSlotCount; ++i) {
+    auto* slot = &request_slots_[i];
+    auto state = slot->state.load(std::memory_order_acquire);
+    if (state == TrackedRequest::SlotState::Free) continue;
+    if (state == TrackedRequest::SlotState::InFlight) {
+      (void)poll_request_completion(slot->request_id, true);
+    }
+    TrackedRequest snapshot{};
+    if (try_release_request_slot(slot->request_id, &snapshot)) {
+      cleanup_tracked_request(snapshot);
+      slot->state.store(TrackedRequest::SlotState::Free,
+                        std::memory_order_release);
+    } else {
+      slot->state.store(TrackedRequest::SlotState::Free,
+                        std::memory_order_release);
+    }
+  }
+
   if (host_copy_stream_ != nullptr) {
     int orig_device = -1;
     GPU_RT_CHECK(gpuGetDevice(&orig_device));
@@ -326,27 +362,6 @@ Communicator::~Communicator() {
     GPU_RT_CHECK(gpuStreamDestroy(host_copy_stream_));
     GPU_RT_CHECK(gpuSetDevice(orig_device));
     host_copy_stream_ = nullptr;
-  }
-
-  std::shared_ptr<ShmRingExchanger> shm_control = shm_control_;
-  std::vector<int> ipc_peers;
-
-  {
-    std::lock_guard<std::mutex> lk(peer_mu_);
-    for (int rank = 0; rank < world_size_; ++rank) {
-      if (rank == global_rank_) continue;
-      auto const& peer = peer_states_.at(static_cast<size_t>(rank));
-      bool uses_ipc = (peer.kind == PeerTransportKind::Ipc);
-      if (uses_ipc && peer.connected) {
-        ipc_peers.push_back(rank);
-      }
-    }
-  }
-
-  if (shm_control) {
-    for (int rank : ipc_peers) {
-      shm_control->close_peer(rank);
-    }
   }
 
   for (auto const& [buf, item] : mr_manager_.list_local_mrs()) {
@@ -364,10 +379,165 @@ Communicator::~Communicator() {
   shm_manager_.reset();
   uccl_adapter_.reset();
   tcp_adapter_.reset();
-  ipc_channel_.reset();
+  ipc_adapter_.reset();
+  if (completion_event_fd_ >= 0) {
+    ::close(completion_event_fd_);
+    completion_event_fd_ = -1;
+  }
 
   std::cout << "[INFO] Communicator " << global_rank_ << " resources released"
             << std::endl;
+}
+
+unsigned Communicator::make_request_id(uint32_t slot_idx, uint32_t generation) {
+  uint32_t gen = generation & kRequestGenerationMask;
+  if (gen == 0) gen = 1;
+  return (gen << kRequestSlotBits) | (slot_idx & (kRequestSlotCount - 1u));
+}
+
+uint32_t Communicator::request_slot_index(unsigned req_id) {
+  return req_id & (kRequestSlotCount - 1u);
+}
+
+uint32_t Communicator::request_generation(unsigned req_id) {
+  return (req_id >> kRequestSlotBits) & kRequestGenerationMask;
+}
+
+Communicator::TrackedRequest* Communicator::resolve_request_slot(
+    unsigned req_id) const {
+  if (req_id == 0) return nullptr;
+  uint32_t idx = request_slot_index(req_id);
+  if (idx >= kRequestSlotCount) return nullptr;
+  TrackedRequest* slot = &request_slots_[idx];
+  uint32_t gen =
+      slot->generation.load(std::memory_order_acquire) & kRequestGenerationMask;
+  if (gen == 0 || gen != request_generation(req_id)) return nullptr;
+  auto state = slot->state.load(std::memory_order_acquire);
+  if (state == TrackedRequest::SlotState::Free) return nullptr;
+  return slot;
+}
+
+Communicator::TrackedRequest* Communicator::allocate_request_slot(
+    unsigned* out_req_id) {
+  if (out_req_id == nullptr) return nullptr;
+  uint32_t start =
+      request_alloc_cursor_.fetch_add(1, std::memory_order_relaxed) &
+      (kRequestSlotCount - 1u);
+  for (uint32_t i = 0; i < kRequestSlotCount; ++i) {
+    uint32_t idx = (start + i) & (kRequestSlotCount - 1u);
+    TrackedRequest* slot = &request_slots_[idx];
+    auto expected = TrackedRequest::SlotState::Free;
+    if (!slot->state.compare_exchange_strong(
+            expected, TrackedRequest::SlotState::Reserved,
+            std::memory_order_acq_rel, std::memory_order_acquire)) {
+      continue;
+    }
+    uint32_t gen =
+        (slot->generation.fetch_add(1, std::memory_order_acq_rel) + 1u) &
+        kRequestGenerationMask;
+    if (gen == 0) {
+      gen = 1;
+      slot->generation.store(gen, std::memory_order_release);
+    }
+    unsigned rid = make_request_id(idx, gen);
+    slot->request_id = rid;
+    slot->adapter_request_id = 0;
+    slot->peer_rank = -1;
+    slot->kind = PeerTransportKind::Unknown;
+    slot->notified = false;
+    slot->needs_host_to_device_copy = false;
+    slot->host_copy_submitted = false;
+    slot->completion_buffer = nullptr;
+    slot->completion_offset = 0;
+    slot->completion_bytes = 0;
+    slot->host_copy_event = nullptr;
+    slot->bounce = {};
+    slot->bounce_owner.reset();
+    *out_req_id = rid;
+    return slot;
+  }
+  return nullptr;
+}
+
+bool Communicator::try_release_request_slot(unsigned req_id,
+                                            TrackedRequest* out_snapshot) {
+  TrackedRequest* slot = resolve_request_slot(req_id);
+  if (slot == nullptr) return false;
+  auto state = slot->state.load(std::memory_order_acquire);
+  if (state != TrackedRequest::SlotState::Completed &&
+      state != TrackedRequest::SlotState::Failed) {
+    return false;
+  }
+  if (!slot->state.compare_exchange_strong(
+          state, TrackedRequest::SlotState::Releasing,
+          std::memory_order_acq_rel, std::memory_order_acquire)) {
+    return false;
+  }
+  if (out_snapshot) {
+    out_snapshot->state.store(TrackedRequest::SlotState::Releasing,
+                              std::memory_order_relaxed);
+    out_snapshot->generation.store(
+        slot->generation.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    out_snapshot->request_id = slot->request_id;
+    out_snapshot->adapter_request_id = slot->adapter_request_id;
+    out_snapshot->peer_rank = slot->peer_rank;
+    out_snapshot->kind = slot->kind;
+    out_snapshot->notified = slot->notified;
+    out_snapshot->needs_host_to_device_copy = slot->needs_host_to_device_copy;
+    out_snapshot->host_copy_submitted = slot->host_copy_submitted;
+    out_snapshot->completion_buffer = slot->completion_buffer;
+    out_snapshot->completion_offset = slot->completion_offset;
+    out_snapshot->completion_bytes = slot->completion_bytes;
+    out_snapshot->host_copy_event = slot->host_copy_event;
+    out_snapshot->bounce = slot->bounce;
+    out_snapshot->bounce_owner = std::move(slot->bounce_owner);
+  }
+  slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
+  return true;
+}
+
+bool Communicator::enqueue_active_request(unsigned req_id) {
+  while (true) {
+    uint32_t tail = active_tail_.load(std::memory_order_acquire);
+    uint32_t head = active_head_.load(std::memory_order_acquire);
+    if (tail - head >= kActiveRingSize) {
+      return false;
+    }
+    if (!active_tail_.compare_exchange_weak(tail, tail + 1,
+                                            std::memory_order_acq_rel,
+                                            std::memory_order_acquire)) {
+      continue;
+    }
+    active_ring_[tail & (kActiveRingSize - 1u)].store(
+        req_id, std::memory_order_release);
+    return true;
+  }
+}
+
+bool Communicator::dequeue_active_request(unsigned* out_req_id) {
+  if (out_req_id == nullptr) return false;
+  uint32_t head = active_head_.load(std::memory_order_acquire);
+  uint32_t tail = active_tail_.load(std::memory_order_acquire);
+  if (head == tail) return false;
+  if (!active_head_.compare_exchange_strong(head, head + 1,
+                                            std::memory_order_acq_rel,
+                                            std::memory_order_acquire)) {
+    return false;
+  }
+  unsigned req_id = active_ring_[head & (kActiveRingSize - 1u)].exchange(
+      0, std::memory_order_acq_rel);
+  if (req_id == 0) return false;
+  *out_req_id = req_id;
+  return true;
+}
+
+void Communicator::notify_request_completion() {
+  completion_seq_.fetch_add(1, std::memory_order_release);
+  if (completion_event_fd_ >= 0) {
+    uint64_t one = 1;
+    (void)::write(completion_event_fd_, &one, sizeof(one));
+  }
 }
 
 UcclTransportAdapter& Communicator::ensure_uccl_adapter(
@@ -376,7 +546,6 @@ UcclTransportAdapter& Communicator::ensure_uccl_adapter(
     maybe_configure_uccl_socket_ifname(
         get_uccl_remote_hint_ip(config_, peer_meta), local_meta.ip);
     UcclTransportConfig uccl_cfg;
-    uccl_cfg.local_ip = local_meta.ip;
     uccl_adapter_ = std::make_unique<UcclTransportAdapter>(
         local_gpu_idx_, world_size_, std::move(uccl_cfg));
 
@@ -442,7 +611,7 @@ bool Communicator::try_fallback_tcp_connect(
     int rank, CommunicatorMeta const& local_meta) {
   if (config_->preferred_transport != PreferredTransport::Auto) return false;
   auto& tcp_adapter = ensure_tcp_adapter(local_meta);
-  if (tcp_adapter.has_send_peer(rank)) {
+  if (tcp_adapter.has_peer(rank)) {
     mark_peer_path_ready(rank, PeerTransportKind::Tcp);
     return true;
   }
@@ -461,8 +630,11 @@ bool Communicator::try_fallback_tcp_connect(
     return false;
   }
 
-  if (!tcp_adapter.connect_to_peer(rank, remote_p2p_info.ip,
-                                   remote_p2p_info.port)) {
+  PeerConnectSpec spec{};
+  spec.peer_rank = rank;
+  spec.type = PeerConnectType::Connect;
+  spec.detail = TcpPeerConnectSpec{remote_p2p_info.ip, remote_p2p_info.port};
+  if (!tcp_adapter.ensure_peer(spec)) {
     return false;
   }
   {
@@ -480,7 +652,7 @@ bool Communicator::try_fallback_tcp_accept(
   (void)remote_meta;
   if (config_->preferred_transport != PreferredTransport::Auto) return false;
   auto& tcp_adapter = ensure_tcp_adapter(local_meta);
-  if (tcp_adapter.has_send_peer(rank) && tcp_adapter.has_recv_peer(rank)) {
+  if (tcp_adapter.has_peer(rank)) {
     mark_peer_path_ready(rank, PeerTransportKind::Tcp);
     return true;
   }
@@ -500,7 +672,11 @@ bool Communicator::try_fallback_tcp_accept(
                             tcp_adapter.get_listen_port());
   if (!exchanger_client_->publish(p2p_key, local_p2p_info)) return false;
 
-  if (!tcp_adapter.accept_from_peer(rank, remote_p2p_info.ip)) {
+  PeerConnectSpec spec{};
+  spec.peer_rank = rank;
+  spec.type = PeerConnectType::Accept;
+  spec.detail = TcpPeerConnectSpec{remote_p2p_info.ip, 0};
+  if (!tcp_adapter.ensure_peer(spec)) {
     return false;
   }
   {
@@ -512,11 +688,7 @@ bool Communicator::try_fallback_tcp_accept(
   return true;
 }
 
-bool Communicator::connect(int rank) { return do_connect(rank); }
-
-bool Communicator::accept(int rank) { return do_accept(rank); }
-
-bool Communicator::do_connect(int rank) {
+bool Communicator::connect(int rank) {
   if (rank == global_rank_) return true;
   if (rank < 0 || rank >= world_size_) {
     std::cerr << "[ERROR] Communicator " << global_rank_ << " invalid rank "
@@ -538,8 +710,7 @@ bool Communicator::do_connect(int rank) {
   if (resolved.kind == PeerTransportKind::Uccl) {
     auto& uccl_adapter =
         ensure_uccl_adapter(resolved.local_meta, resolved.remote_meta);
-    if (!uccl_adapter.has_send_peer(rank) ||
-        !uccl_adapter.has_recv_peer(rank)) {
+    if (!uccl_adapter.has_peer(rank)) {
       int dev_idx = uccl_adapter.get_best_dev_idx(local_gpu_idx_);
       if (dev_idx < 0) {
         std::cerr << "[ERROR] Communicator " << global_rank_
@@ -572,12 +743,13 @@ bool Communicator::do_connect(int rank) {
         return false;
       }
       // connect() path: connect first, then establish reverse flow.
-      if ((!uccl_adapter.has_send_peer(rank) ||
-           !uccl_adapter.has_recv_peer(rank)) &&
-          !uccl_adapter.connect_to_peer(rank, remote_p2p_info.ip,
-                                        remote_p2p_info.port, dev_idx,
-                                        local_gpu_idx_, remote_p2p_info.dev_idx,
-                                        remote_p2p_info.gpu_idx)) {
+      PeerConnectSpec spec{};
+      spec.peer_rank = rank;
+      spec.type = PeerConnectType::Connect;
+      spec.detail = UcclPeerConnectSpec{
+          remote_p2p_info.ip, remote_p2p_info.port,    dev_idx,
+          local_gpu_idx_,     remote_p2p_info.dev_idx, remote_p2p_info.gpu_idx};
+      if (!uccl_adapter.has_peer(rank) && !uccl_adapter.ensure_peer(spec)) {
         std::cerr << "[ERROR] Communicator " << global_rank_
                   << " UCCL connect_to failed to rank " << rank << std::endl;
         return try_fallback_tcp_connect(rank, resolved.local_meta);
@@ -589,10 +761,14 @@ bool Communicator::do_connect(int rank) {
   }
 
   if (resolved.kind == PeerTransportKind::Ipc) {
-    if (!ipc_channel_->connect_to(rank)) {
+    PeerConnectSpec spec{};
+    spec.peer_rank = rank;
+    spec.type = PeerConnectType::Connect;
+    spec.detail = IpcPeerConnectSpec{};
+    if (!ipc_adapter_->ensure_peer(spec)) {
       std::cerr << "[ERROR] Communicator " << global_rank_
                 << " IPC connect_to failed to rank " << rank << std::endl;
-      shm_control_->close_peer(rank);
+      ipc_adapter_->close_peer(rank);
       return false;
     }
     mark_peer_path_ready(rank, PeerTransportKind::Ipc);
@@ -601,7 +777,7 @@ bool Communicator::do_connect(int rank) {
 
   if (resolved.kind == PeerTransportKind::Tcp) {
     auto& tcp_adapter = ensure_tcp_adapter(resolved.local_meta);
-    if (!tcp_adapter.has_send_peer(rank)) {
+    if (!tcp_adapter.has_peer(rank)) {
       TcpP2PInfo local_p2p_info(tcp_adapter.get_listen_ip(),
                                 tcp_adapter.get_listen_port());
       std::string p2p_key = tcp_p2p_key(global_rank_, rank);
@@ -612,8 +788,12 @@ bool Communicator::do_connect(int rank) {
               remote_p2p_info, bootstrap_timeout_ms())) {
         return false;
       }
-      if (!tcp_adapter.connect_to_peer(rank, remote_p2p_info.ip,
-                                       remote_p2p_info.port)) {
+      PeerConnectSpec spec{};
+      spec.peer_rank = rank;
+      spec.type = PeerConnectType::Connect;
+      spec.detail =
+          TcpPeerConnectSpec{remote_p2p_info.ip, remote_p2p_info.port};
+      if (!tcp_adapter.ensure_peer(spec)) {
         std::cerr << "[ERROR] Communicator " << global_rank_
                   << " TCP connect_to failed to rank " << rank << std::endl;
         return false;
@@ -625,7 +805,7 @@ bool Communicator::do_connect(int rank) {
   return false;
 }
 
-bool Communicator::do_accept(int rank) {
+bool Communicator::accept(int rank) {
   if (rank == global_rank_) return true;
   if (rank < 0 || rank >= world_size_) {
     std::cerr << "[ERROR] Communicator " << global_rank_ << " invalid rank "
@@ -647,8 +827,7 @@ bool Communicator::do_accept(int rank) {
   if (resolved.kind == PeerTransportKind::Uccl) {
     auto& uccl_adapter =
         ensure_uccl_adapter(resolved.local_meta, resolved.remote_meta);
-    if (!uccl_adapter.has_recv_peer(rank) ||
-        !uccl_adapter.has_send_peer(rank)) {
+    if (!uccl_adapter.has_peer(rank)) {
       int dev_idx = uccl_adapter.get_best_dev_idx(local_gpu_idx_);
       if (dev_idx < 0) {
         std::cerr << "[ERROR] Communicator " << global_rank_
@@ -684,11 +863,13 @@ bool Communicator::do_accept(int rank) {
         return false;
       }
       // accept() path: accept first, then establish reverse flow.
-      if ((!uccl_adapter.has_recv_peer(rank) ||
-           !uccl_adapter.has_send_peer(rank)) &&
-          !uccl_adapter.accept_from_peer(
-              rank, remote_p2p_info.ip, remote_p2p_info.dev_idx,
-              remote_p2p_info.gpu_idx, remote_p2p_info.port)) {
+      PeerConnectSpec spec{};
+      spec.peer_rank = rank;
+      spec.type = PeerConnectType::Accept;
+      spec.detail = UcclPeerConnectSpec{
+          remote_p2p_info.ip, remote_p2p_info.port,    dev_idx,
+          local_gpu_idx_,     remote_p2p_info.dev_idx, remote_p2p_info.gpu_idx};
+      if (!uccl_adapter.has_peer(rank) && !uccl_adapter.ensure_peer(spec)) {
         std::cerr << "[ERROR] Communicator " << global_rank_
                   << " UCCL accept_from failed from rank " << rank << std::endl;
         return try_fallback_tcp_accept(rank, resolved.local_meta,
@@ -701,7 +882,11 @@ bool Communicator::do_accept(int rank) {
   }
 
   if (resolved.kind == PeerTransportKind::Ipc) {
-    if (!ipc_channel_->accept_from(rank)) {
+    PeerConnectSpec spec{};
+    spec.peer_rank = rank;
+    spec.type = PeerConnectType::Accept;
+    spec.detail = IpcPeerConnectSpec{};
+    if (!ipc_adapter_->ensure_peer(spec)) {
       std::cerr << "[ERROR] Communicator " << global_rank_
                 << " IPC accept_from failed from rank " << rank << std::endl;
       return false;
@@ -712,7 +897,7 @@ bool Communicator::do_accept(int rank) {
 
   if (resolved.kind == PeerTransportKind::Tcp) {
     auto& tcp_adapter = ensure_tcp_adapter(resolved.local_meta);
-    if (!tcp_adapter.has_recv_peer(rank)) {
+    if (!tcp_adapter.has_peer(rank)) {
       std::string p2p_key = tcp_p2p_key(global_rank_, rank);
       std::string peer_p2p_key = tcp_p2p_key(rank, global_rank_);
       TcpP2PInfo remote_p2p_info;
@@ -723,7 +908,11 @@ bool Communicator::do_accept(int rank) {
               local_p2p_info, bootstrap_timeout_ms())) {
         return false;
       }
-      if (!tcp_adapter.accept_from_peer(rank, remote_p2p_info.ip)) {
+      PeerConnectSpec spec{};
+      spec.peer_rank = rank;
+      spec.type = PeerConnectType::Accept;
+      spec.detail = TcpPeerConnectSpec{remote_p2p_info.ip, 0};
+      if (!tcp_adapter.ensure_peer(spec)) {
         std::cerr << "[ERROR] Communicator " << global_rank_
                   << " TCP accept_from failed from rank " << rank << std::endl;
         return false;
@@ -733,15 +922,6 @@ bool Communicator::do_accept(int rank) {
     return true;
   }
   return false;
-}
-
-std::shared_ptr<IpcChannel> Communicator::get_ipc_channel_by_rank(int rank) {
-  std::lock_guard<std::mutex> lk(peer_mu_);
-  if (rank < 0 || rank >= world_size_) return nullptr;
-  auto const& peer = peer_states_.at(static_cast<size_t>(rank));
-  bool uses_ipc = (peer.kind == PeerTransportKind::Ipc);
-  if (!peer.connected || !uses_ipc) return nullptr;
-  return ipc_channel_;
 }
 
 bool Communicator::has_peer_path(int rank) const {
@@ -779,11 +959,6 @@ PeerTransportKind Communicator::peer_transport_kind(int rank) const {
   return get_peer_transport_kind(rank);
 }
 
-TransportAdapter* Communicator::get_adapter(int rank) {
-  auto kind = get_peer_transport_kind(rank);
-  return get_adapter(kind);
-}
-
 TransportAdapter* Communicator::get_adapter(PeerTransportKind kind) {
   switch (kind) {
     case PeerTransportKind::Uccl:
@@ -791,7 +966,7 @@ TransportAdapter* Communicator::get_adapter(PeerTransportKind kind) {
     case PeerTransportKind::Tcp:
       return tcp_adapter_.get();
     case PeerTransportKind::Ipc:
-      return ipc_channel_.get();
+      return ipc_adapter_.get();
     default:
       return nullptr;
   }
@@ -925,8 +1100,8 @@ void Communicator::cleanup_tracked_request(TrackedRequest& tracked) {
   if (tracked.kind == PeerTransportKind::Tcp && tcp_adapter_) {
     tcp_adapter_->release_request(adapter_id);
   }
-  if (tracked.kind == PeerTransportKind::Ipc && ipc_channel_) {
-    ipc_channel_->release_request(adapter_id);
+  if (tracked.kind == PeerTransportKind::Ipc && ipc_adapter_) {
+    ipc_adapter_->release_request(adapter_id);
   }
   if (tracked.host_copy_event != nullptr) {
     GPU_RT_CHECK(gpuEventDestroy(tracked.host_copy_event));
@@ -943,6 +1118,13 @@ void Communicator::cleanup_tracked_request(TrackedRequest& tracked) {
     shm_manager_->delete_local_shm(tracked.bounce.shm_id);
     tracked.bounce = {};
   }
+}
+
+SHMManager& Communicator::require_shm_manager(char const* caller) {
+  if (shm_manager_.has_value()) return *shm_manager_;
+  std::ostringstream oss;
+  oss << caller << " called after SHMManager teardown";
+  throw std::runtime_error(oss.str());
 }
 
 unsigned Communicator::isend(int rank, LocalSlice src,
@@ -976,34 +1158,39 @@ unsigned Communicator::isend(int rank, LocalSlice src,
       (peer_kind == PeerTransportKind::Ipc) ||
       (peer_kind == PeerTransportKind::Uccl &&
        !ensure_uccl_memory_registered(src.mem_id, local_ptr, src.bytes));
-  unsigned rid = next_request_id_.fetch_add(1, std::memory_order_relaxed);
-  TrackedRequest tracked{};
-  tracked.peer_rank = rank;
-  tracked.kind = peer_kind;
+  unsigned rid = 0;
+  TrackedRequest* slot = allocate_request_slot(&rid);
+  if (slot == nullptr) return 0;
+  slot->peer_rank = rank;
+  slot->kind = peer_kind;
   std::shared_ptr<SHMItem> bounce_owner;
   if (needs_bounce) {
+    SHMManager& shm_manager = require_shm_manager("Communicator::isend");
     // Request-scoped lease for send bounce memory. Current design allocates
     // and frees per request; this is intentionally simple but not optimal for
     // steady-state throughput. Poolization can be added in a follow-up PR.
     bounce_owner =
         std::shared_ptr<SHMItem>(new SHMItem{}, [this](SHMItem* lease) {
           if (lease != nullptr) {
-            if (shm_manager_ != nullptr && lease->valid) {
+            if (shm_manager_.has_value() && lease->valid) {
               (void)mr_manager_.delete_mr(lease->ptr);
               shm_manager_->delete_local_shm(lease->shm_id);
             }
             delete lease;
           }
         });
-    tracked.bounce_owner = bounce_owner;
+    slot->bounce_owner = bounce_owner;
+    (void)shm_manager;
   }
   auto bounce_provider = [this, needs_bounce, needs_uccl_registration,
                           use_shareable,
                           bounce_owner](size_t bytes) -> BounceBufferInfo {
     if (!needs_bounce || !bounce_owner) return {};
+    SHMManager& shm_manager =
+        require_shm_manager("Communicator::isend::bounce_provider");
     if (!bounce_owner->valid) {
       // Lazy allocate on first use within this request.
-      *bounce_owner = shm_manager_->create_local_shm(bytes, use_shareable);
+      *bounce_owner = shm_manager.create_local_shm(bytes, use_shareable);
     }
     BounceBufferInfo info;
     info.ptr = bounce_owner->ptr;
@@ -1013,8 +1200,7 @@ unsigned Communicator::isend(int rank, LocalSlice src,
       info.mr_id = mr.mr.id;
     }
     if (bounce_owner->shareable) {
-      info.shm_name =
-          shm_manager_->get_local_shm(bounce_owner->shm_id).shm_name;
+      info.shm_name = shm_manager.get_local_shm(bounce_owner->shm_id).shm_name;
     }
     return info;
   };
@@ -1022,15 +1208,18 @@ unsigned Communicator::isend(int rank, LocalSlice src,
   unsigned result = adapter->send_async(rank, local_ptr, src.bytes, src.mem_id,
                                         dst_hint, bounce_provider);
   if (result == 0) {
-    cleanup_tracked_request(tracked);
+    slot->state.store(TrackedRequest::SlotState::Releasing,
+                      std::memory_order_release);
+    cleanup_tracked_request(*slot);
+    slot->state.store(TrackedRequest::SlotState::Free,
+                      std::memory_order_release);
     return 0;
   }
-  tracked.adapter_request_id = result;
-
-  {
-    std::lock_guard<std::mutex> lk(req_mu_);
-    requests_map_[rid] = std::move(tracked);
-  }
+  slot->adapter_request_id = result;
+  slot->state.store(TrackedRequest::SlotState::InFlight,
+                    std::memory_order_release);
+  inflight_request_count_.fetch_add(1, std::memory_order_release);
+  (void)enqueue_active_request(rid);
   progress_cv_.notify_all();
   return rid;
 }
@@ -1059,10 +1248,11 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
 
   bool needs_uccl_registration = (peer_kind == PeerTransportKind::Uccl);
   bool use_shareable = (peer_kind == PeerTransportKind::Ipc);
-  unsigned rid = next_request_id_.fetch_add(1, std::memory_order_relaxed);
-  TrackedRequest tracked{};
-  tracked.peer_rank = rank;
-  tracked.kind = peer_kind;
+  unsigned rid = 0;
+  TrackedRequest* slot = allocate_request_slot(&rid);
+  if (slot == nullptr) return 0;
+  slot->peer_rank = rank;
+  slot->kind = peer_kind;
 
   auto needs_bounce =
       (peer_kind == PeerTransportKind::Tcp) ||
@@ -1086,30 +1276,32 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
   }
 
   if (needs_bounce) {
+    SHMManager& shm_manager = require_shm_manager("Communicator::irecv");
     // Request-scoped recv bounce. It is released when this request completes.
-    tracked.bounce = shm_manager_->create_local_shm(dst.bytes, use_shareable);
-    tracked.needs_host_to_device_copy = true;
-    tracked.completion_buffer = local_ptr;
-    tracked.completion_bytes = dst.bytes;
+    slot->bounce = shm_manager.create_local_shm(dst.bytes, use_shareable);
+    slot->needs_host_to_device_copy = true;
+    slot->completion_buffer = local_ptr;
+    slot->completion_bytes = dst.bytes;
   }
 
-  auto bounce_provider = [this, &tracked, needs_bounce, needs_uccl_registration,
+  auto bounce_provider = [this, slot, needs_bounce, needs_uccl_registration,
                           use_shareable](size_t bytes) -> BounceBufferInfo {
     if (!needs_bounce) return {};
-    if (!tracked.bounce.valid) {
+    SHMManager& shm_manager =
+        require_shm_manager("Communicator::irecv::bounce_provider");
+    if (!slot->bounce.valid) {
       // Lazy allocate on first use within this request.
-      tracked.bounce = shm_manager_->create_local_shm(bytes, use_shareable);
+      slot->bounce = shm_manager.create_local_shm(bytes, use_shareable);
     }
     BounceBufferInfo info;
-    info.ptr = tracked.bounce.ptr;
+    info.ptr = slot->bounce.ptr;
     if (needs_uccl_registration) {
       // Request-scoped bounce MR id. The MR is deleted in request cleanup.
-      auto mr = mr_manager_.create_local_mr(tracked.bounce.ptr, bytes);
+      auto mr = mr_manager_.create_local_mr(slot->bounce.ptr, bytes);
       info.mr_id = mr.mr.id;
     }
-    if (tracked.bounce.shareable) {
-      info.shm_name =
-          shm_manager_->get_local_shm(tracked.bounce.shm_id).shm_name;
+    if (slot->bounce.shareable) {
+      info.shm_name = shm_manager.get_local_shm(slot->bounce.shm_id).shm_name;
     }
     return info;
   };
@@ -1117,57 +1309,60 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
   unsigned result = adapter->recv_async(rank, local_ptr, dst.bytes, dst.mem_id,
                                         bounce_provider);
   if (result == 0) {
-    cleanup_tracked_request(tracked);
+    slot->state.store(TrackedRequest::SlotState::Releasing,
+                      std::memory_order_release);
+    cleanup_tracked_request(*slot);
+    slot->state.store(TrackedRequest::SlotState::Free,
+                      std::memory_order_release);
     return 0;
   }
-  tracked.adapter_request_id = result;
-
-  {
-    std::lock_guard<std::mutex> lk(req_mu_);
-    requests_map_[rid] = std::move(tracked);
-  }
+  slot->adapter_request_id = result;
+  slot->state.store(TrackedRequest::SlotState::InFlight,
+                    std::memory_order_release);
+  inflight_request_count_.fetch_add(1, std::memory_order_release);
+  (void)enqueue_active_request(rid);
   progress_cv_.notify_all();
   return rid;
 }
 
 bool Communicator::poll_request_completion(unsigned id, bool blocking) {
-  TrackedRequest snapshot;
-  {
-    std::lock_guard<std::mutex> lk(req_mu_);
-    auto it = requests_map_.find(id);
-    if (it == requests_map_.end()) return true;
-    if (it->second.completed) return true;
-    snapshot = it->second;
+  TrackedRequest* slot = resolve_request_slot(id);
+  if (slot == nullptr) return true;
+  auto state = slot->state.load(std::memory_order_acquire);
+  if (state == TrackedRequest::SlotState::Completed ||
+      state == TrackedRequest::SlotState::Failed) {
+    return true;
   }
+  if (state != TrackedRequest::SlotState::InFlight) return false;
 
   bool done = false;
   bool failed = false;
-  unsigned adapter_id = snapshot.adapter_request_id;
-  if (snapshot.kind == PeerTransportKind::Uccl) {
+  unsigned adapter_id = slot->adapter_request_id;
+  if (slot->kind == PeerTransportKind::Uccl) {
     done = blocking ? uccl_adapter_->wait_completion(adapter_id)
                     : uccl_adapter_->poll_completion(adapter_id);
     failed = done && uccl_adapter_->request_failed(adapter_id);
-  } else if (snapshot.kind == PeerTransportKind::Tcp) {
+  } else if (slot->kind == PeerTransportKind::Tcp) {
     done = blocking ? tcp_adapter_->wait_completion(adapter_id)
                     : tcp_adapter_->poll_completion(adapter_id);
     failed = done && tcp_adapter_->request_failed(adapter_id);
-  } else if (snapshot.kind == PeerTransportKind::Ipc) {
-    done = blocking ? ipc_channel_->wait_completion(adapter_id)
-                    : ipc_channel_->poll_completion(adapter_id);
-    failed = done && ipc_channel_->request_failed(adapter_id);
+  } else if (slot->kind == PeerTransportKind::Ipc) {
+    done = blocking ? ipc_adapter_->wait_completion(adapter_id)
+                    : ipc_adapter_->poll_completion(adapter_id);
+    failed = done && ipc_adapter_->request_failed(adapter_id);
   }
 
   if (!done) return false;
 
-  std::lock_guard<std::mutex> lk(req_mu_);
-  auto it = requests_map_.find(id);
-  if (it == requests_map_.end()) return true;
   if (!failed) {
-    bool copy_done = complete_host_bounce_recv(it->second, blocking);
+    bool copy_done = complete_host_bounce_recv(*slot, blocking);
     if (!copy_done) return false;
   }
-  it->second.completed = true;
-  it->second.failed = failed;
+  slot->state.store(failed ? TrackedRequest::SlotState::Failed
+                           : TrackedRequest::SlotState::Completed,
+                    std::memory_order_release);
+  inflight_request_count_.fetch_sub(1, std::memory_order_acq_rel);
+  notify_request_completion();
   return true;
 }
 
@@ -1175,55 +1370,74 @@ bool Communicator::wait_finish(std::vector<unsigned> const& reqs) {
   std::unordered_set<unsigned> remaining;
   bool any_failed = false;
   if (reqs.empty()) {
-    std::lock_guard<std::mutex> lk(req_mu_);
-    for (auto const& [id, _] : requests_map_) {
-      remaining.insert(id);
+    for (uint32_t i = 0; i < kRequestSlotCount; ++i) {
+      auto* slot = &request_slots_[i];
+      auto state = slot->state.load(std::memory_order_acquire);
+      if (state == TrackedRequest::SlotState::InFlight ||
+          state == TrackedRequest::SlotState::Completed ||
+          state == TrackedRequest::SlotState::Failed) {
+        remaining.insert(slot->request_id);
+      }
     }
   } else {
     remaining.insert(reqs.begin(), reqs.end());
   }
 
+  uint64_t seen_seq = completion_seq_.load(std::memory_order_acquire);
+  bool should_scan = true;
+
   while (!remaining.empty()) {
-    bool made_progress = false;
-    std::vector<unsigned> finished;
-
-    for (auto id : remaining) {
-      if (id == 0) return false;
-
-      if (!poll_request_completion(id, false)) {
-        continue;
-      }
-
-      made_progress = true;
-      TrackedRequest to_cleanup{};
-      bool needs_cleanup = false;
-      bool done = false;
-      {
-        std::lock_guard<std::mutex> lk(req_mu_);
-        auto it = requests_map_.find(id);
-        if (it == requests_map_.end()) {
-          done = true;
-        } else if (it->second.failed || it->second.completed) {
-          any_failed = any_failed || it->second.failed;
-          to_cleanup = std::move(it->second);
-          requests_map_.erase(it);
-          needs_cleanup = true;
-          done = true;
+    if (should_scan) {
+      std::vector<unsigned> finished;
+      for (auto id : remaining) {
+        if (id == 0) return false;
+        if (!progress_started_.load(std::memory_order_acquire)) {
+          (void)poll_request_completion(id, false);
+        }
+        TrackedRequest* slot = resolve_request_slot(id);
+        if (slot == nullptr) {
+          finished.push_back(id);
+          continue;
+        }
+        auto state = slot->state.load(std::memory_order_acquire);
+        if (state == TrackedRequest::SlotState::Completed ||
+            state == TrackedRequest::SlotState::Failed) {
+          TrackedRequest snapshot{};
+          if (try_release_request_slot(id, &snapshot)) {
+            any_failed =
+                any_failed || (state == TrackedRequest::SlotState::Failed);
+            cleanup_tracked_request(snapshot);
+            finished.push_back(id);
+          }
         }
       }
-      if (needs_cleanup) {
-        cleanup_tracked_request(to_cleanup);
-      }
-      if (done) {
-        finished.push_back(id);
-      }
+
+      for (auto id : finished) remaining.erase(id);
+      should_scan = false;
     }
 
-    for (auto id : finished) remaining.erase(id);
     if (remaining.empty()) return !any_failed;
 
-    if (!made_progress) {
+    if (completion_event_fd_ >= 0) {
+      pollfd pfd{};
+      pfd.fd = completion_event_fd_;
+      pfd.events = POLLIN;
+      int rc = ::poll(&pfd, 1, -1);
+      if (rc > 0 && (pfd.revents & POLLIN)) {
+        uint64_t cnt = 0;
+        // Drain accumulated wakeups.
+        while (::read(completion_event_fd_, &cnt, sizeof(cnt)) ==
+               static_cast<ssize_t>(sizeof(cnt))) {
+        }
+      }
+      uint64_t now_seq = completion_seq_.load(std::memory_order_acquire);
+      if (now_seq != seen_seq) {
+        seen_seq = now_seq;
+        should_scan = true;
+      }
+    } else {
       std::this_thread::yield();
+      should_scan = true;
     }
   }
 
@@ -1232,33 +1446,36 @@ bool Communicator::wait_finish(std::vector<unsigned> const& reqs) {
 
 bool Communicator::poll(unsigned const req) {
   if (req == 0) return false;
-  if (!poll_request_completion(req, false)) return false;
-
-  std::lock_guard<std::mutex> lk(req_mu_);
-  auto it = requests_map_.find(req);
-  if (it == requests_map_.end()) return true;
-  if (it->second.failed) {
+  auto* slot = resolve_request_slot(req);
+  if (slot == nullptr) return true;
+  auto state = slot->state.load(std::memory_order_acquire);
+  if (state == TrackedRequest::SlotState::InFlight) {
+    // Progress thread is the single driver in steady state to avoid
+    // duplicate adapter polling contention on hot paths.
+    if (!progress_started_.load(std::memory_order_acquire)) {
+      if (!poll_request_completion(req, false)) return false;
+      state = slot->state.load(std::memory_order_acquire);
+    } else {
+      return false;
+    }
+  }
+  if (state == TrackedRequest::SlotState::Failed) {
     throw std::runtime_error("transport request failed");
   }
-  return it->second.completed;
+  return state == TrackedRequest::SlotState::Completed;
 }
 
 void Communicator::release(unsigned const req) {
-  TrackedRequest to_cleanup{};
-  bool needs_cleanup = false;
-  {
-    std::lock_guard<std::mutex> lk(req_mu_);
-    auto it = requests_map_.find(req);
-    if (it == requests_map_.end()) return;
-    if (!it->second.completed) {
-      throw std::runtime_error("cannot release an in-flight transport request");
-    }
-    to_cleanup = std::move(it->second);
-    requests_map_.erase(it);
-    needs_cleanup = true;
+  TrackedRequest* slot = resolve_request_slot(req);
+  if (slot == nullptr) return;
+  auto state = slot->state.load(std::memory_order_acquire);
+  if (state != TrackedRequest::SlotState::Completed &&
+      state != TrackedRequest::SlotState::Failed) {
+    throw std::runtime_error("cannot release an in-flight transport request");
   }
-  if (needs_cleanup) {
-    cleanup_tracked_request(to_cleanup);
+  TrackedRequest snapshot{};
+  if (try_release_request_slot(req, &snapshot)) {
+    cleanup_tracked_request(snapshot);
   }
 }
 
@@ -1562,14 +1779,31 @@ IPCItem Communicator::get_remote_ipc_cache(int remote_rank,
   return ipc_manager_.get_ipc(remote_rank, handle);
 }
 
+bool Communicator::ipc_has_fresh_remote_ipc_buffer(
+    int remote_rank, uint32_t ipc_id, uint64_t expected_binding_version) const {
+  return has_fresh_remote_ipc_buffer(remote_rank, ipc_id,
+                                     expected_binding_version);
+}
+
+bool Communicator::ipc_fetch_remote_ipc_buffer(
+    int remote_rank, uint32_t ipc_id, uint64_t expected_binding_version) {
+  return fetch_ipc_buffer(remote_rank, ipc_id, expected_binding_version);
+}
+
+void Communicator::ipc_invalidate_remote_ipc_buffer(int remote_rank,
+                                                    uint32_t ipc_id) {
+  invalidate_remote_ipc_buffer(remote_rank, ipc_id);
+}
+
 void* Communicator::get_or_open_bounce_shm(std::string const& shm_name) {
-  return shm_manager_->open_remote_shm(shm_name).ptr;
+  return require_shm_manager("Communicator::get_or_open_bounce_shm")
+      .open_remote_shm(shm_name)
+      .ptr;
 }
 
 void Communicator::clear_bounce_shm_cache() {
-  if (shm_manager_) {
-    shm_manager_->clear_remote_shm_cache();
-  }
+  require_shm_manager("Communicator::clear_bounce_shm_cache")
+      .clear_remote_shm_cache();
 }
 
 std::shared_ptr<void> Communicator::register_completion_notifier(
@@ -1590,67 +1824,85 @@ std::shared_ptr<void> Communicator::register_completion_notifier(
 }
 
 void Communicator::progress_loop() {
+  constexpr size_t kProgressBatchSize = 128;
+  std::array<unsigned, kProgressBatchSize> batch{};
+
   while (progress_running_.load(std::memory_order_acquire)) {
     {
       std::unique_lock<std::mutex> lk(progress_mu_);
       progress_cv_.wait(lk, [&] {
         if (!progress_running_.load()) return true;
-
-        std::lock_guard<std::mutex> rlk(req_mu_);
-        return !requests_map_.empty();
+        return inflight_request_count_.load(std::memory_order_acquire) > 0;
       });
     }
 
     if (!progress_running_.load()) break;
 
     bool progress = false;
-    std::vector<unsigned> ids;
+    bool dequeued_any = false;
+    std::vector<std::shared_ptr<NotifyTarget>> targets_snapshot;
     {
-      std::lock_guard<std::mutex> rlk(req_mu_);
-      ids.reserve(requests_map_.size());
-      for (auto const& [id, _] : requests_map_) ids.push_back(id);
+      std::lock_guard<std::mutex> nlk(progress_mu_);
+      notify_targets_.erase(
+          std::remove_if(notify_targets_.begin(), notify_targets_.end(),
+                         [](std::weak_ptr<NotifyTarget> const& target) {
+                           return target.expired();
+                         }),
+          notify_targets_.end());
+      targets_snapshot.reserve(notify_targets_.size());
+      for (auto const& weak_target : notify_targets_) {
+        if (auto target = weak_target.lock()) {
+          targets_snapshot.push_back(std::move(target));
+        }
+      }
+    }
+
+    size_t batch_count = 0;
+    unsigned id = 0;
+    while (batch_count < batch.size() && dequeue_active_request(&id)) {
+      dequeued_any = true;
+      batch[batch_count++] = id;
     }
 
     auto now = std::chrono::steady_clock::now();
-    for (auto id : ids) {
-      if (!poll_request_completion(id, false)) continue;
+    for (size_t i = 0; i < batch_count; ++i) {
+      id = batch[i];
+      TrackedRequest* slot = resolve_request_slot(id);
+      if (slot == nullptr) continue;
+      auto state = slot->state.load(std::memory_order_acquire);
+      if (state != TrackedRequest::SlotState::InFlight) continue;
+      if (!poll_request_completion(id, false)) {
+        (void)enqueue_active_request(id);
+        continue;
+      }
 
       bool should_emit = false;
-      {
-        std::lock_guard<std::mutex> rlk(req_mu_);
-        auto it = requests_map_.find(id);
-        if (it != requests_map_.end() && !it->second.notified) {
-          it->second.notified = true;
-          should_emit = true;
-        }
+      state = slot->state.load(std::memory_order_acquire);
+      if ((state == TrackedRequest::SlotState::Completed ||
+           state == TrackedRequest::SlotState::Failed) &&
+          !slot->notified) {
+        slot->notified = true;
+        should_emit = true;
       }
       if (!should_emit) continue;
-
-      std::vector<std::shared_ptr<NotifyTarget>> targets;
-      {
-        std::lock_guard<std::mutex> nlk(progress_mu_);
-        notify_targets_.erase(
-            std::remove_if(notify_targets_.begin(), notify_targets_.end(),
-                           [](std::weak_ptr<NotifyTarget> const& target) {
-                             return target.expired();
-                           }),
-            notify_targets_.end());
-        targets.reserve(notify_targets_.size());
-        for (auto const& weak_target : notify_targets_) {
-          if (auto target = weak_target.lock()) {
-            targets.push_back(std::move(target));
-          }
-        }
-      }
-      for (auto& tgt : targets) {
+      for (auto& tgt : targets_snapshot) {
         if (!tgt) continue;
         tgt->emit(id, now);
       }
       progress = true;
     }
 
-    if (!progress) {
-      std::this_thread::yield();
+    if (!progress && !dequeued_any) {
+      if (inflight_request_count_.load(std::memory_order_acquire) > 0) {
+        for (uint32_t i = 0; i < kRequestSlotCount; ++i) {
+          TrackedRequest* slot = &request_slots_[i];
+          auto state = slot->state.load(std::memory_order_acquire);
+          if (state != TrackedRequest::SlotState::InFlight) continue;
+          (void)enqueue_active_request(slot->request_id);
+        }
+      } else {
+        std::this_thread::yield();
+      }
     }
   }
 }

@@ -1,47 +1,35 @@
 #pragma once
 
+#include "../util/jring.h"
 #include "transport_adapter.h"
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <queue>
 #include <string>
 #include <thread>
 #include <unordered_map>
-#include <vector>
 
 namespace UKernel {
 namespace Transport {
 
 class TcpTransportAdapter final : public TransportAdapter {
  public:
-  struct AcceptedPeer {
-    int remote_rank = -1;
-    std::string remote_ip;
-  };
-
+  // Lifecycle.
   TcpTransportAdapter(std::string local_ip, int local_rank);
   ~TcpTransportAdapter() override;
 
+  // Endpoint discovery metadata.
   uint16_t get_listen_port() const;
   std::string const& get_listen_ip() const { return local_ip_; }
 
-  bool connect_to_peer(int peer_rank, std::string remote_ip,
-                       uint16_t remote_port);
-  bool accept_from_peer(int peer_rank, std::string const& expected_remote_ip,
-                        AcceptedPeer* accepted_peer = nullptr);
-  bool connect(int peer_rank) override { return has_send_peer(peer_rank); }
-  bool accept(int peer_rank) override { return has_recv_peer(peer_rank); }
-
-  bool has_send_peer(int peer_rank) const;
-  bool has_recv_peer(int peer_rank) const;
-  bool has_send_path(int peer_rank) const override;
-  bool has_recv_path(int peer_rank) const override;
+  // TransportAdapter common capabilities.
+  bool ensure_peer(PeerConnectSpec const& spec) override;
+  bool has_peer(int peer_rank) const override;
 
   unsigned send_async(int peer_rank, void* local_ptr, size_t len,
                       uint64_t local_mr_id,
@@ -56,16 +44,8 @@ class TcpTransportAdapter final : public TransportAdapter {
   bool request_failed(unsigned id) override;
   void release_request(unsigned id) override;
 
-  int peer_count() const override {
-    return static_cast<int>(peer_contexts_.size());
-  }
-
-  int send_async_tcp(int peer_rank, void const* host_ptr, size_t len,
-                     unsigned request_id);
-  int recv_async_tcp(int peer_rank, void* host_ptr, size_t len,
-                     unsigned request_id);
-
  private:
+  // Handshake wire structs.
   struct Handshake {
     uint32_t src_rank = 0;
   };
@@ -77,17 +57,76 @@ class TcpTransportAdapter final : public TransportAdapter {
   struct PeerContext {
     int send_fd = -1;
     int recv_fd = -1;
-    std::string remote_ip;
     std::mutex send_mu;
     std::mutex recv_mu;
   };
 
-  struct PendingRequest {
-    std::atomic<bool> completed{false};
-    std::atomic<bool> failed{false};
-    std::thread worker;
+  enum class RequestState : uint8_t {
+    Free = 0,
+    Queued = 1,
+    Running = 2,
+    Completed = 3,
+    Failed = 4,
   };
 
+  struct RequestSlot {
+    std::atomic<RequestState> state{RequestState::Free};
+    std::atomic<uint32_t> generation{1};
+    int peer_rank = -1;
+    void* host_ptr = nullptr;
+    size_t len = 0;
+    std::atomic<bool> completed{false};
+    std::atomic<bool> failed{false};
+
+    void mark_queued() {
+      state.store(RequestState::Queued, std::memory_order_release);
+      completed.store(false, std::memory_order_release);
+      failed.store(false, std::memory_order_release);
+    }
+    void mark_running() {
+      state.store(RequestState::Running, std::memory_order_release);
+    }
+    void mark_completed(bool ok) {
+      state.store(ok ? RequestState::Completed : RequestState::Failed,
+                  std::memory_order_release);
+      completed.store(true, std::memory_order_release);
+      failed.store(!ok, std::memory_order_release);
+    }
+    bool is_completed() const {
+      return completed.load(std::memory_order_acquire);
+    }
+    bool is_failed() const { return failed.load(std::memory_order_acquire); }
+  };
+
+  // Peer establishment helpers.
+  bool connect_to_peer(int peer_rank, std::string remote_ip,
+                       uint16_t remote_port);
+  bool accept_from_peer(int peer_rank, std::string const& expected_remote_ip);
+
+  // Request execution workers.
+  void send_worker_loop();
+  void recv_worker_loop();
+
+  // Request slot lifecycle.
+  static constexpr uint32_t kRequestSlotBits = 13;
+  static constexpr uint32_t kRequestSlotCount = (1u << kRequestSlotBits);
+  static constexpr uint32_t kRequestSlotMask = kRequestSlotCount - 1u;
+  static unsigned make_request_id(uint32_t slot_idx, uint32_t generation) {
+    return static_cast<unsigned>((generation << kRequestSlotBits) | slot_idx);
+  }
+  static uint32_t request_slot_index(unsigned request_id) {
+    return static_cast<uint32_t>(request_id) & kRequestSlotMask;
+  }
+  static uint32_t request_generation(unsigned request_id) {
+    return static_cast<uint32_t>(request_id) >> kRequestSlotBits;
+  }
+  RequestSlot* try_acquire_request_slot(unsigned* out_request_id);
+  RequestSlot* resolve_request_slot(unsigned request_id);
+  RequestSlot* resolve_request_slot_const(unsigned request_id) const;
+  void release_request_slot(unsigned request_id);
+  bool enqueue_request(unsigned request_id, bool is_send);
+
+  // Socket helpers.
   static int create_listen_socket(uint16_t& out_port);
   static bool connect_socket(int& out_fd, std::string const& remote_ip,
                              uint16_t remote_port,
@@ -99,8 +138,6 @@ class TcpTransportAdapter final : public TransportAdapter {
   static bool send_all(int fd, void const* buf, size_t len);
   static bool recv_all(int fd, void* buf, size_t len);
 
-  void join_and_erase_request(unsigned request_id);
-
   std::string local_ip_;
   int local_rank_ = -1;
   int listen_fd_ = -1;
@@ -108,8 +145,17 @@ class TcpTransportAdapter final : public TransportAdapter {
 
   mutable std::mutex mu_;
   std::unordered_map<int, std::shared_ptr<PeerContext>> peer_contexts_;
-  std::unordered_map<unsigned, std::shared_ptr<PendingRequest>> pending_;
-  std::atomic<unsigned> next_request_id_{1};
+  jring_t* send_task_ring_ = nullptr;
+  jring_t* recv_task_ring_ = nullptr;
+  std::atomic<bool> stop_{false};
+  std::thread send_worker_;
+  std::thread recv_worker_;
+  std::mutex cv_mu_;
+  std::condition_variable cv_;
+  std::atomic<int> pending_send_{0};
+  std::atomic<int> pending_recv_{0};
+  std::unique_ptr<RequestSlot[]> request_slots_;
+  std::atomic<uint32_t> request_alloc_cursor_{0};
 };
 
 }  // namespace Transport

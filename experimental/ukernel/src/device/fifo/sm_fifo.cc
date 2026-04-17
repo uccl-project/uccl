@@ -5,8 +5,6 @@
 
 namespace mscclpp {
 
-template class SmFifo<UKernel::Device::Task>;
-
 template <typename T>
 SmFifo<T>::SmFifo(int capacity) {
   int device;
@@ -51,5 +49,7 @@ SmDeviceHandle<T> SmFifo<T>::deviceHandle() const {
 
   return h;
 }
+
+template class SmFifo<UKernel::Device::Task>;
 
 }  // namespace mscclpp

@@ -1,10 +1,10 @@
 #include "tcp_adapter.h"
+#include "../util/utils.h"
 #include "gpu_rt.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <cerrno>
 #include <chrono>
-#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -20,9 +20,20 @@ namespace {
 constexpr auto kConnectRetrySleep = std::chrono::milliseconds(50);
 constexpr auto kDefaultConnectTimeout = std::chrono::seconds(30);
 constexpr auto kAcceptPollSleep = std::chrono::milliseconds(10);
+constexpr size_t kTaskRingSize = 1024;
 
 bool is_retryable_errno(int err) {
   return err == EINTR || err == EAGAIN || err == EWOULDBLOCK;
+}
+
+bool enqueue_one_request_id(jring_t* ring, unsigned request_id,
+                            std::atomic<bool> const& stop) {
+  unsigned elem = request_id;
+  while (!stop.load(std::memory_order_acquire) &&
+         jring_mp_enqueue_bulk(ring, &elem, 1, nullptr) != 1) {
+    std::this_thread::yield();
+  }
+  return !stop.load(std::memory_order_acquire);
 }
 
 }  // namespace
@@ -33,42 +44,87 @@ TcpTransportAdapter::TcpTransportAdapter(std::string local_ip, int local_rank)
   if (listen_fd_ < 0) {
     throw std::runtime_error("failed to create tcp transport listen socket");
   }
+  send_task_ring_ =
+      UKernel::Transport::create_ring(sizeof(unsigned), kTaskRingSize);
+  recv_task_ring_ =
+      UKernel::Transport::create_ring(sizeof(unsigned), kTaskRingSize);
+  request_slots_ = std::make_unique<RequestSlot[]>(kRequestSlotCount);
+  if (send_task_ring_ == nullptr || recv_task_ring_ == nullptr ||
+      !request_slots_) {
+    if (send_task_ring_ != nullptr) {
+      free(send_task_ring_);
+      send_task_ring_ = nullptr;
+    }
+    if (recv_task_ring_ != nullptr) {
+      free(recv_task_ring_);
+      recv_task_ring_ = nullptr;
+    }
+    if (listen_fd_ >= 0) {
+      ::shutdown(listen_fd_, SHUT_RDWR);
+      ::close(listen_fd_);
+      listen_fd_ = -1;
+    }
+    throw std::runtime_error("failed to initialize tcp request infrastructure");
+  }
+  stop_.store(false, std::memory_order_release);
+  send_worker_ = std::thread([this] { send_worker_loop(); });
+  recv_worker_ = std::thread([this] { recv_worker_loop(); });
 }
 
 TcpTransportAdapter::~TcpTransportAdapter() {
-  std::unordered_map<unsigned, std::shared_ptr<PendingRequest>> pending_copy;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    pending_copy = pending_;
-  }
-  for (auto& [request_id, pending] : pending_copy) {
-    (void)request_id;
-    if (pending && pending->worker.joinable()) {
-      pending->worker.join();
-    }
-  }
+  stop_.store(true, std::memory_order_release);
+  cv_.notify_all();
 
-  std::lock_guard<std::mutex> lk(mu_);
-  for (auto& [peer_rank, ctx] : peer_contexts_) {
-    (void)peer_rank;
-    if (!ctx) continue;
-    int send_fd = ctx->send_fd;
-    int recv_fd = ctx->recv_fd;
-    if (send_fd >= 0) {
-      ::shutdown(ctx->send_fd, SHUT_RDWR);
-      ::close(ctx->send_fd);
-    }
-    if (recv_fd >= 0 && recv_fd != send_fd) {
-      ::shutdown(ctx->recv_fd, SHUT_RDWR);
-      ::close(ctx->recv_fd);
-    }
-    ctx->send_fd = -1;
-    ctx->recv_fd = -1;
-  }
   if (listen_fd_ >= 0) {
     ::shutdown(listen_fd_, SHUT_RDWR);
     ::close(listen_fd_);
     listen_fd_ = -1;
+  }
+
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    for (auto& [peer_rank, ctx] : peer_contexts_) {
+      (void)peer_rank;
+      if (!ctx) continue;
+      int send_fd = ctx->send_fd;
+      int recv_fd = ctx->recv_fd;
+      if (send_fd >= 0) {
+        ::shutdown(send_fd, SHUT_RDWR);
+      }
+      if (recv_fd >= 0 && recv_fd != send_fd) {
+        ::shutdown(recv_fd, SHUT_RDWR);
+      }
+    }
+  }
+
+  if (send_worker_.joinable()) send_worker_.join();
+  if (recv_worker_.joinable()) recv_worker_.join();
+
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    for (auto& [peer_rank, ctx] : peer_contexts_) {
+      (void)peer_rank;
+      if (!ctx) continue;
+      int send_fd = ctx->send_fd;
+      int recv_fd = ctx->recv_fd;
+      if (send_fd >= 0) {
+        ::close(send_fd);
+      }
+      if (recv_fd >= 0 && recv_fd != send_fd) {
+        ::close(recv_fd);
+      }
+      ctx->send_fd = -1;
+      ctx->recv_fd = -1;
+    }
+  }
+
+  if (send_task_ring_ != nullptr) {
+    free(send_task_ring_);
+    send_task_ring_ = nullptr;
+  }
+  if (recv_task_ring_ != nullptr) {
+    free(recv_task_ring_);
+    recv_task_ring_ = nullptr;
   }
 }
 
@@ -76,7 +132,7 @@ uint16_t TcpTransportAdapter::get_listen_port() const { return listen_port_; }
 
 bool TcpTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip,
                                           uint16_t remote_port) {
-  if (has_send_peer(peer_rank) && has_recv_peer(peer_rank)) return true;
+  if (has_peer(peer_rank)) return true;
 
   auto deadline = std::chrono::steady_clock::now() + kDefaultConnectTimeout;
   int fd = -1;
@@ -111,14 +167,12 @@ bool TcpTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip,
   }
   if (ctx->send_fd < 0) ctx->send_fd = fd;
   if (ctx->recv_fd < 0) ctx->recv_fd = fd;
-  ctx->remote_ip = std::move(remote_ip);
   return true;
 }
 
 bool TcpTransportAdapter::accept_from_peer(
-    int peer_rank, std::string const& expected_remote_ip,
-    AcceptedPeer* accepted_peer) {
-  if (has_send_peer(peer_rank) && has_recv_peer(peer_rank)) return true;
+    int peer_rank, std::string const& expected_remote_ip) {
+  if (has_peer(peer_rank)) return true;
 
   auto deadline = std::chrono::steady_clock::now() + kDefaultConnectTimeout;
   while (std::chrono::steady_clock::now() < deadline) {
@@ -171,34 +225,27 @@ bool TcpTransportAdapter::accept_from_peer(
     }
     if (ctx->send_fd < 0) ctx->send_fd = fd;
     if (ctx->recv_fd < 0) ctx->recv_fd = fd;
-    ctx->remote_ip = remote_ip;
-    if (accepted_peer != nullptr) {
-      accepted_peer->remote_rank = static_cast<int>(hs.src_rank);
-      accepted_peer->remote_ip = remote_ip;
-    }
     return true;
   }
   return false;
 }
 
-bool TcpTransportAdapter::has_send_peer(int peer_rank) const {
+bool TcpTransportAdapter::ensure_peer(PeerConnectSpec const& spec) {
+  if (spec.peer_rank < 0) return false;
+  if (has_peer(spec.peer_rank)) return true;
+  if (!std::holds_alternative<TcpPeerConnectSpec>(spec.detail)) return false;
+  auto const& tcp = std::get<TcpPeerConnectSpec>(spec.detail);
+  if (spec.type == PeerConnectType::Connect) {
+    return connect_to_peer(spec.peer_rank, tcp.remote_ip, tcp.remote_port);
+  }
+  return accept_from_peer(spec.peer_rank, tcp.remote_ip);
+}
+
+bool TcpTransportAdapter::has_peer(int peer_rank) const {
   std::lock_guard<std::mutex> lk(mu_);
   auto it = peer_contexts_.find(peer_rank);
-  return it != peer_contexts_.end() && it->second && it->second->send_fd >= 0;
-}
-
-bool TcpTransportAdapter::has_recv_peer(int peer_rank) const {
-  std::lock_guard<std::mutex> lk(mu_);
-  auto it = peer_contexts_.find(peer_rank);
-  return it != peer_contexts_.end() && it->second && it->second->recv_fd >= 0;
-}
-
-bool TcpTransportAdapter::has_send_path(int peer_rank) const {
-  return has_send_peer(peer_rank);
-}
-
-bool TcpTransportAdapter::has_recv_path(int peer_rank) const {
-  return has_recv_peer(peer_rank);
+  return it != peer_contexts_.end() && it->second && it->second->send_fd >= 0 &&
+         it->second->recv_fd >= 0;
 }
 
 unsigned TcpTransportAdapter::send_async(int peer_rank, void* local_ptr,
@@ -217,10 +264,19 @@ unsigned TcpTransportAdapter::send_async(int peer_rank, void* local_ptr,
     }
   }
 
-  unsigned request_id =
-      next_request_id_.fetch_add(1, std::memory_order_relaxed);
-  return send_async_tcp(peer_rank, send_ptr, len, request_id) == 0 ? request_id
-                                                                   : 0;
+  unsigned request_id = 0;
+  RequestSlot* slot = try_acquire_request_slot(&request_id);
+  if (!slot) return 0;
+  slot->peer_rank = peer_rank;
+  slot->host_ptr = send_ptr;
+  slot->len = len;
+  slot->mark_queued();
+  if (!enqueue_request(request_id, /*is_send=*/true)) {
+    slot->mark_completed(false);
+    release_request_slot(request_id);
+    return 0;
+  }
+  return request_id;
 }
 
 unsigned TcpTransportAdapter::recv_async(int peer_rank, void* local_ptr,
@@ -234,106 +290,260 @@ unsigned TcpTransportAdapter::recv_async(int peer_rank, void* local_ptr,
       recv_ptr = info.ptr;
     }
   }
-  unsigned request_id =
-      next_request_id_.fetch_add(1, std::memory_order_relaxed);
-  return recv_async_tcp(peer_rank, recv_ptr, len, request_id) == 0 ? request_id
-                                                                   : 0;
+  unsigned request_id = 0;
+  RequestSlot* slot = try_acquire_request_slot(&request_id);
+  if (!slot) return 0;
+  slot->peer_rank = peer_rank;
+  slot->host_ptr = recv_ptr;
+  slot->len = len;
+  slot->mark_queued();
+  if (!enqueue_request(request_id, /*is_send=*/false)) {
+    slot->mark_completed(false);
+    release_request_slot(request_id);
+    return 0;
+  }
+  return request_id;
 }
 
 bool TcpTransportAdapter::request_failed(unsigned id) {
-  std::shared_ptr<PendingRequest> pending;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = pending_.find(id);
-    if (it == pending_.end()) return false;
-    pending = it->second;
-  }
-  return pending->failed.load(std::memory_order_acquire);
-}
-
-int TcpTransportAdapter::send_async_tcp(int peer_rank, void const* host_ptr,
-                                        size_t len, unsigned request_id) {
-  std::shared_ptr<PendingRequest> pending = std::make_shared<PendingRequest>();
-  std::shared_ptr<PeerContext> ctx;
-
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = peer_contexts_.find(peer_rank);
-    if (it == peer_contexts_.end() || !it->second || it->second->send_fd < 0) {
-      return -1;
-    }
-    ctx = it->second;
-    pending_[request_id] = pending;
-  }
-
-  pending->worker = std::thread([pending, ctx, host_ptr, len]() {
-    bool ok = false;
-    {
-      std::lock_guard<std::mutex> send_lk(ctx->send_mu);
-      ok = TcpTransportAdapter::send_all(ctx->send_fd, host_ptr, len);
-    }
-    pending->failed.store(!ok, std::memory_order_release);
-    pending->completed.store(true, std::memory_order_release);
-  });
-
-  return 0;
-}
-
-int TcpTransportAdapter::recv_async_tcp(int peer_rank, void* host_ptr,
-                                        size_t len, unsigned request_id) {
-  std::shared_ptr<PendingRequest> pending = std::make_shared<PendingRequest>();
-  std::shared_ptr<PeerContext> ctx;
-
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = peer_contexts_.find(peer_rank);
-    if (it == peer_contexts_.end() || !it->second || it->second->recv_fd < 0) {
-      return -1;
-    }
-    ctx = it->second;
-    pending_[request_id] = pending;
-  }
-
-  pending->worker = std::thread([pending, ctx, host_ptr, len]() {
-    bool ok = false;
-    {
-      std::lock_guard<std::mutex> recv_lk(ctx->recv_mu);
-      ok = TcpTransportAdapter::recv_all(ctx->recv_fd, host_ptr, len);
-    }
-    pending->failed.store(!ok, std::memory_order_release);
-    pending->completed.store(true, std::memory_order_release);
-  });
-
-  return 0;
+  RequestSlot* slot = resolve_request_slot_const(id);
+  if (!slot) return false;
+  return slot->is_failed();
 }
 
 bool TcpTransportAdapter::poll_completion(unsigned request_id) {
-  std::shared_ptr<PendingRequest> pending;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = pending_.find(request_id);
-    if (it == pending_.end()) return true;
-    pending = it->second;
-  }
-  return pending->completed.load(std::memory_order_acquire);
+  RequestSlot* slot = resolve_request_slot_const(request_id);
+  if (!slot) return true;
+  return slot->is_completed();
 }
 
 bool TcpTransportAdapter::wait_completion(unsigned request_id) {
-  std::shared_ptr<PendingRequest> pending;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = pending_.find(request_id);
-    if (it == pending_.end()) return false;
-    pending = it->second;
+  for (;;) {
+    RequestSlot* slot = resolve_request_slot_const(request_id);
+    if (!slot) return false;
+    if (slot->is_completed()) return true;
+    std::unique_lock<std::mutex> lk(cv_mu_);
+    cv_.wait(lk, [&] {
+      RequestSlot* cur = resolve_request_slot_const(request_id);
+      return stop_.load(std::memory_order_acquire) || cur == nullptr ||
+             cur->is_completed();
+    });
   }
-  while (!pending->completed.load(std::memory_order_acquire)) {
-    std::this_thread::sleep_for(std::chrono::microseconds(50));
-  }
-  return true;
 }
 
 void TcpTransportAdapter::release_request(unsigned request_id) {
-  join_and_erase_request(request_id);
+  release_request_slot(request_id);
+}
+
+TcpTransportAdapter::RequestSlot* TcpTransportAdapter::try_acquire_request_slot(
+    unsigned* out_request_id) {
+  if (out_request_id == nullptr || !request_slots_) return nullptr;
+  for (uint32_t n = 0; n < kRequestSlotCount; ++n) {
+    uint32_t idx =
+        request_alloc_cursor_.fetch_add(1, std::memory_order_relaxed) &
+        kRequestSlotMask;
+    auto& slot = request_slots_[idx];
+    RequestState expected = RequestState::Free;
+    if (!slot.state.compare_exchange_strong(expected, RequestState::Running,
+                                            std::memory_order_acq_rel,
+                                            std::memory_order_acquire)) {
+      continue;
+    }
+    uint32_t gen = slot.generation.load(std::memory_order_acquire);
+    if (gen == 0) {
+      gen = 1;
+      slot.generation.store(gen, std::memory_order_release);
+    }
+    slot.peer_rank = -1;
+    slot.host_ptr = nullptr;
+    slot.len = 0;
+    slot.completed.store(false, std::memory_order_release);
+    slot.failed.store(false, std::memory_order_release);
+    *out_request_id = make_request_id(idx, gen);
+    return &slot;
+  }
+  return nullptr;
+}
+
+TcpTransportAdapter::RequestSlot* TcpTransportAdapter::resolve_request_slot(
+    unsigned request_id) {
+  if (request_id == 0 || !request_slots_) return nullptr;
+  uint32_t generation = request_generation(request_id);
+  if (generation == 0) return nullptr;
+  uint32_t idx = request_slot_index(request_id);
+  auto& slot = request_slots_[idx];
+  if (slot.generation.load(std::memory_order_acquire) != generation) {
+    return nullptr;
+  }
+  if (slot.state.load(std::memory_order_acquire) == RequestState::Free) {
+    return nullptr;
+  }
+  return &slot;
+}
+
+TcpTransportAdapter::RequestSlot*
+TcpTransportAdapter::resolve_request_slot_const(unsigned request_id) const {
+  if (request_id == 0 || !request_slots_) return nullptr;
+  uint32_t generation = request_generation(request_id);
+  if (generation == 0) return nullptr;
+  uint32_t idx = request_slot_index(request_id);
+  auto const& slot = request_slots_[idx];
+  if (slot.generation.load(std::memory_order_acquire) != generation) {
+    return nullptr;
+  }
+  if (slot.state.load(std::memory_order_acquire) == RequestState::Free) {
+    return nullptr;
+  }
+  return const_cast<RequestSlot*>(&slot);
+}
+
+void TcpTransportAdapter::release_request_slot(unsigned request_id) {
+  if (request_id == 0 || !request_slots_) return;
+  uint32_t generation = request_generation(request_id);
+  if (generation == 0) return;
+  uint32_t idx = request_slot_index(request_id);
+  auto& slot = request_slots_[idx];
+  if (slot.generation.load(std::memory_order_acquire) != generation) return;
+  auto st = slot.state.load(std::memory_order_acquire);
+  if (st == RequestState::Queued || st == RequestState::Running) return;
+  // Hold slot in a non-Free state while rolling generation to avoid ABA reuse.
+  slot.state.store(RequestState::Running, std::memory_order_release);
+  slot.completed.store(false, std::memory_order_release);
+  slot.failed.store(false, std::memory_order_release);
+  slot.peer_rank = -1;
+  slot.host_ptr = nullptr;
+  slot.len = 0;
+  uint32_t old_gen = slot.generation.load(std::memory_order_acquire);
+  while (true) {
+    uint32_t next_gen = old_gen + 1;
+    if (next_gen == 0) next_gen = 1;
+    if (slot.generation.compare_exchange_weak(old_gen, next_gen,
+                                              std::memory_order_acq_rel,
+                                              std::memory_order_acquire)) {
+      break;
+    }
+  }
+  slot.state.store(RequestState::Free, std::memory_order_release);
+  cv_.notify_all();
+}
+
+bool TcpTransportAdapter::enqueue_request(unsigned request_id, bool is_send) {
+  if (stop_.load(std::memory_order_acquire)) return false;
+  if (is_send) {
+    if (send_task_ring_ == nullptr ||
+        !enqueue_one_request_id(send_task_ring_, request_id, stop_)) {
+      return false;
+    }
+    pending_send_.fetch_add(1, std::memory_order_relaxed);
+  } else {
+    if (recv_task_ring_ == nullptr ||
+        !enqueue_one_request_id(recv_task_ring_, request_id, stop_)) {
+      return false;
+    }
+    pending_recv_.fetch_add(1, std::memory_order_relaxed);
+  }
+  cv_.notify_all();
+  return true;
+}
+
+void TcpTransportAdapter::send_worker_loop() {
+  while (!stop_.load(std::memory_order_acquire)) {
+    {
+      std::unique_lock<std::mutex> lk(cv_mu_);
+      cv_.wait(lk, [&] {
+        return stop_.load(std::memory_order_acquire) ||
+               pending_send_.load(std::memory_order_relaxed) > 0;
+      });
+    }
+    if (stop_.load(std::memory_order_acquire)) break;
+
+    unsigned request_id = 0;
+    if (jring_sc_dequeue_bulk(send_task_ring_, &request_id, 1, nullptr) != 1) {
+      continue;
+    }
+    pending_send_.fetch_sub(1, std::memory_order_relaxed);
+    RequestSlot* slot = resolve_request_slot(request_id);
+    if (!slot) continue;
+    slot->mark_running();
+    bool ok = false;
+    std::shared_ptr<PeerContext> ctx;
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      auto it = peer_contexts_.find(slot->peer_rank);
+      if (it != peer_contexts_.end() && it->second &&
+          it->second->send_fd >= 0) {
+        ctx = it->second;
+      }
+    }
+    if (ctx) {
+      std::lock_guard<std::mutex> send_lk(ctx->send_mu);
+      ok = TcpTransportAdapter::send_all(ctx->send_fd, slot->host_ptr,
+                                         slot->len);
+    }
+    slot->mark_completed(ok);
+    cv_.notify_all();
+  }
+
+  while (true) {
+    unsigned request_id = 0;
+    if (jring_mc_dequeue_bulk(send_task_ring_, &request_id, 1, nullptr) != 1) {
+      break;
+    }
+    RequestSlot* slot = resolve_request_slot(request_id);
+    if (!slot) continue;
+    slot->mark_completed(false);
+    cv_.notify_all();
+  }
+}
+
+void TcpTransportAdapter::recv_worker_loop() {
+  while (!stop_.load(std::memory_order_acquire)) {
+    {
+      std::unique_lock<std::mutex> lk(cv_mu_);
+      cv_.wait(lk, [&] {
+        return stop_.load(std::memory_order_acquire) ||
+               pending_recv_.load(std::memory_order_relaxed) > 0;
+      });
+    }
+    if (stop_.load(std::memory_order_acquire)) break;
+
+    unsigned request_id = 0;
+    if (jring_sc_dequeue_bulk(recv_task_ring_, &request_id, 1, nullptr) != 1) {
+      continue;
+    }
+    pending_recv_.fetch_sub(1, std::memory_order_relaxed);
+    RequestSlot* slot = resolve_request_slot(request_id);
+    if (!slot) continue;
+    slot->mark_running();
+    bool ok = false;
+    std::shared_ptr<PeerContext> ctx;
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      auto it = peer_contexts_.find(slot->peer_rank);
+      if (it != peer_contexts_.end() && it->second &&
+          it->second->recv_fd >= 0) {
+        ctx = it->second;
+      }
+    }
+    if (ctx) {
+      std::lock_guard<std::mutex> recv_lk(ctx->recv_mu);
+      ok = TcpTransportAdapter::recv_all(ctx->recv_fd, slot->host_ptr,
+                                         slot->len);
+    }
+    slot->mark_completed(ok);
+    cv_.notify_all();
+  }
+
+  while (true) {
+    unsigned request_id = 0;
+    if (jring_mc_dequeue_bulk(recv_task_ring_, &request_id, 1, nullptr) != 1) {
+      break;
+    }
+    RequestSlot* slot = resolve_request_slot(request_id);
+    if (!slot) continue;
+    slot->mark_completed(false);
+    cv_.notify_all();
+  }
 }
 
 int TcpTransportAdapter::create_listen_socket(uint16_t& out_port) {
@@ -442,20 +652,6 @@ bool TcpTransportAdapter::recv_all(int fd, void* buf, size_t len) {
     return false;
   }
   return true;
-}
-
-void TcpTransportAdapter::join_and_erase_request(unsigned request_id) {
-  std::shared_ptr<PendingRequest> pending;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto it = pending_.find(request_id);
-    if (it == pending_.end()) return;
-    pending = it->second;
-    pending_.erase(it);
-  }
-  if (pending && pending->worker.joinable()) {
-    pending->worker.join();
-  }
 }
 
 }  // namespace Transport

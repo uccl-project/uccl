@@ -1,6 +1,7 @@
 #include "uccl_adapter.h"
 #include "collective/rdma/transport.h"
 #include <chrono>
+#include <cstring>
 #include <iostream>
 #include <thread>
 
@@ -8,28 +9,37 @@ namespace UKernel {
 namespace Transport {
 
 namespace {
-constexpr auto kUcclRetrySleep = std::chrono::microseconds(50);
 constexpr auto kUcclAsyncRetryTimeout = std::chrono::seconds(30);
+constexpr uint32_t kUcclRetryYieldThreshold = 64;
+constexpr uint32_t kUcclRetrySleepThreshold = 256;
+constexpr auto kUcclRetryBackoff = std::chrono::microseconds(2);
+
+inline void backoff_retry(uint32_t retries) {
+  if (retries < kUcclRetryYieldThreshold) return;
+  if (retries < kUcclRetrySleepThreshold) {
+    std::this_thread::yield();
+    return;
+  }
+  std::this_thread::sleep_for(kUcclRetryBackoff);
+}
 }  // namespace
 
 UcclTransportAdapter::UcclTransportAdapter(int local_gpu_idx, int world_size,
                                            UcclTransportConfig config)
-    : local_gpu_idx_(local_gpu_idx), world_size_(world_size), config_(config) {
+    : local_gpu_idx_(local_gpu_idx) {
   int num_engines = static_cast<int>(::ucclParamNUM_ENGINES());
   if (num_engines <= 0) {
     std::cerr << "[ERROR] Invalid UCCL num_engines=" << num_engines
               << std::endl;
     return;
   }
-  if (config_.num_engines > 0 && config_.num_engines != num_engines) {
+  if (config.num_engines > 0 && config.num_engines != num_engines) {
     std::cout << "[WARN] UCCL engine count mismatch: requested "
-              << config_.num_engines << ", runtime " << num_engines
+              << config.num_engines << ", runtime " << num_engines
               << ". Using runtime value." << std::endl;
   }
-  config_.num_engines = num_engines;
-
-  endpoint_ = std::make_unique<::uccl::RDMAEndpoint>(config_.num_engines);
-  endpoint_->initialize_resources(config_.num_engines * world_size);
+  endpoint_ = std::make_unique<::uccl::RDMAEndpoint>(num_engines);
+  endpoint_->initialize_resources(num_engines * world_size);
 
   int dev_idx = endpoint_->get_best_dev_idx(local_gpu_idx_);
   if (dev_idx < 0) {
@@ -39,9 +49,61 @@ UcclTransportAdapter::UcclTransportAdapter(int local_gpu_idx, int world_size,
     return;
   }
   endpoint_->initialize_engine_by_dev(dev_idx, true);
+
+  request_slots_ = std::make_unique<PendingRequestSlot[]>(kRequestSlotCount);
+  for (uint32_t i = 0; i < kRequestSlotCount; ++i) {
+    request_slots_[i].request = std::make_unique<::uccl::ucclRequest>();
+    request_slots_[i].state = RequestState::Free;
+    request_slots_[i].generation = 1;
+    request_slots_[i].failed = false;
+  }
 }
 
 UcclTransportAdapter::~UcclTransportAdapter() { endpoint_.reset(); }
+
+UcclTransportAdapter::PendingRequestSlot*
+UcclTransportAdapter::try_acquire_request_slot(unsigned* out_request_id) {
+  if (out_request_id == nullptr || !request_slots_) return nullptr;
+  std::lock_guard<std::mutex> lk(mu_);
+  for (uint32_t n = 0; n < kRequestSlotCount; ++n) {
+    uint32_t idx =
+        request_alloc_cursor_.fetch_add(1, std::memory_order_relaxed) &
+        kRequestSlotMask;
+    auto& slot = request_slots_[idx];
+    if (slot.state != RequestState::Free) continue;
+    slot.state = RequestState::Reserved;
+    slot.failed = false;
+    if (slot.generation == 0) slot.generation = 1;
+    if (!slot.request) {
+      slot.request = std::make_unique<::uccl::ucclRequest>();
+    }
+    *out_request_id = make_request_id(idx, slot.generation);
+    return &slot;
+  }
+  return nullptr;
+}
+
+UcclTransportAdapter::PendingRequestSlot*
+UcclTransportAdapter::resolve_request_slot_locked(unsigned request_id) {
+  if (request_id == 0 || !request_slots_) return nullptr;
+  uint32_t generation = request_generation(request_id);
+  if (generation == 0) return nullptr;
+  uint32_t idx = request_slot_index(request_id);
+  auto& slot = request_slots_[idx];
+  if (slot.generation != generation) return nullptr;
+  if (slot.state == RequestState::Free) return nullptr;
+  return &slot;
+}
+
+void UcclTransportAdapter::release_request_slot_locked(unsigned request_id) {
+  PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
+  if (slot == nullptr) return;
+  if (slot->state == RequestState::InFlight) return;
+  slot->failed = false;
+  slot->state = RequestState::Free;
+  uint32_t next_gen = slot->generation + 1;
+  slot->generation = (next_gen == 0) ? 1 : next_gen;
+}
 
 uint16_t UcclTransportAdapter::get_p2p_listen_port(int dev_idx) const {
   if (!endpoint_ || dev_idx < 0) return 0;
@@ -68,6 +130,20 @@ bool UcclTransportAdapter::has_recv_peer(int peer_rank) const {
   std::lock_guard<std::mutex> lk(mu_);
   auto it = peer_contexts_.find(peer_rank);
   return it != peer_contexts_.end() && it->second.recv_flow != nullptr;
+}
+
+bool UcclTransportAdapter::ensure_peer(PeerConnectSpec const& spec) {
+  if (spec.peer_rank < 0) return false;
+  if (has_peer(spec.peer_rank)) return true;
+  if (!std::holds_alternative<UcclPeerConnectSpec>(spec.detail)) return false;
+  auto const& u = std::get<UcclPeerConnectSpec>(spec.detail);
+  if (spec.type == PeerConnectType::Connect) {
+    return connect_to_peer(spec.peer_rank, u.remote_ip, u.remote_port,
+                           u.local_dev_idx, u.local_gpu_idx, u.remote_dev_idx,
+                           u.remote_gpu_idx);
+  }
+  return accept_from_peer(spec.peer_rank, u.remote_ip, u.remote_dev_idx,
+                          u.remote_gpu_idx, u.remote_port);
 }
 
 bool UcclTransportAdapter::is_memory_registered(uint64_t mr_id) const {
@@ -105,7 +181,7 @@ bool UcclTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip,
 
   if (!has_recv_peer(peer_rank)) {
     if (!accept_from_peer(peer_rank, remote_ip, remote_dev_idx, remote_gpu_idx,
-                          remote_port, nullptr)) {
+                          remote_port)) {
       return false;
     }
   }
@@ -115,7 +191,7 @@ bool UcclTransportAdapter::connect_to_peer(int peer_rank, std::string remote_ip,
 bool UcclTransportAdapter::accept_from_peer(
     int peer_rank, std::string const& expected_remote_ip,
     int expected_remote_dev_idx, int expected_remote_gpu_idx,
-    uint16_t expected_remote_port, AcceptedPeer* accepted_peer) {
+    uint16_t expected_remote_port) {
   if (has_send_peer(peer_rank) && has_recv_peer(peer_rank)) return true;
   if (!endpoint_) return false;
 
@@ -156,12 +232,6 @@ bool UcclTransportAdapter::accept_from_peer(
                 << remote_gpuidx << std::endl;
       endpoint_->discard_conn(conn_id);
       return false;
-    }
-
-    if (accepted_peer != nullptr) {
-      accepted_peer->remote_ip = remote_ip;
-      accepted_peer->remote_dev_idx = remote_dev;
-      accepted_peer->remote_gpu_idx = remote_gpuidx;
     }
 
     std::lock_guard<std::mutex> lk(mu_);
@@ -249,11 +319,16 @@ unsigned UcclTransportAdapter::send_async(
     remote_mr_id = remote_hint->mem_id;
     remote_slice_ptr = &(*remote_hint);
   }
-  unsigned request_id =
-      next_request_id_.fetch_add(1, std::memory_order_relaxed);
+  unsigned request_id = 0;
+  if (try_acquire_request_slot(&request_id) == nullptr) return 0;
   int ret = send_async_uccl(peer_rank, send_ptr, len, send_mr_id, remote_mr_id,
                             request_id, remote_slice_ptr);
-  return ret == 0 ? request_id : 0;
+  if (ret != 0) {
+    std::lock_guard<std::mutex> lk(mu_);
+    release_request_slot_locked(request_id);
+    return 0;
+  }
+  return request_id;
 }
 
 unsigned UcclTransportAdapter::recv_async(
@@ -268,17 +343,21 @@ unsigned UcclTransportAdapter::recv_async(
       recv_mr_id = info.mr_id;
     }
   }
-  unsigned request_id =
-      next_request_id_.fetch_add(1, std::memory_order_relaxed);
+  unsigned request_id = 0;
+  if (try_acquire_request_slot(&request_id) == nullptr) return 0;
   int ret = recv_async_uccl(peer_rank, recv_ptr, len, recv_mr_id, request_id);
-  return ret == 0 ? request_id : 0;
+  if (ret != 0) {
+    std::lock_guard<std::mutex> lk(mu_);
+    release_request_slot_locked(request_id);
+    return 0;
+  }
+  return request_id;
 }
 
 bool UcclTransportAdapter::request_failed(unsigned id) {
   std::lock_guard<std::mutex> lk(mu_);
-  auto it = pending_requests_.find(id);
-  if (it == pending_requests_.end()) return false;
-  return it->second.failed;
+  PendingRequestSlot* slot = resolve_request_slot_locked(id);
+  return slot != nullptr && slot->failed;
 }
 
 int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
@@ -288,6 +367,7 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
                                           RemoteSlice const* remote_slice) {
   ::uccl::UcclFlow* flow = nullptr;
   ::uccl::Mhandle* local_mh = nullptr;
+  ::uccl::ucclRequest* ureq = nullptr;
   {
     std::lock_guard<std::mutex> lk(mu_);
     auto peer_it = peer_contexts_.find(peer_rank);
@@ -302,9 +382,18 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
     if (mh_it != mr_id_to_mhandle_.end()) {
       local_mh = mh_it->second;
     }
+
+    PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
+    if (slot == nullptr || slot->state != RequestState::Reserved) return -1;
+    if (!slot->request) {
+      slot->request = std::make_unique<::uccl::ucclRequest>();
+    }
+    std::memset(slot->request.get(), 0, sizeof(::uccl::ucclRequest));
+    slot->failed = false;
+    ureq = slot->request.get();
   }
 
-  if (!flow || !local_mh) {
+  if (!flow || !local_mh || !ureq) {
     std::cerr << "[ERROR] UCCL send_async missing "
               << (!flow ? "send flow" : "memory handle") << " for peer "
               << peer_rank << ", request " << request_id << ", mr_id "
@@ -313,7 +402,6 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
     return -1;
   }
 
-  auto ureq = std::make_unique<::uccl::ucclRequest>();
   int ret = -1;
   bool one_sided_attempted = false;
 
@@ -334,7 +422,7 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
     slot_item.idx = 1;
     std::memset(slot_item.padding, 0, sizeof(slot_item.padding));
     ret = endpoint_->uccl_write_async(flow, local_mh, local_ptr, len, slot_item,
-                                      ureq.get());
+                                      ureq);
     if (ret != 0) {
       std::cerr << "[WARN] UCCL one-sided write submit failed for peer "
                 << peer_rank << ", request " << request_id << ", remote_mr_id "
@@ -344,11 +432,11 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
 
   if (ret != 0) {
     auto deadline = std::chrono::steady_clock::now() + kUcclAsyncRetryTimeout;
+    uint32_t retries = 0;
     while (std::chrono::steady_clock::now() < deadline) {
-      ret = endpoint_->uccl_send_async(flow, local_mh, local_ptr, len,
-                                       ureq.get());
+      ret = endpoint_->uccl_send_async(flow, local_mh, local_ptr, len, ureq);
       if (ret == 0) break;
-      std::this_thread::sleep_for(kUcclRetrySleep);
+      backoff_retry(retries++);
     }
   }
   if (ret != 0) {
@@ -358,14 +446,21 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
               << request_id << ", mr_id " << local_mr_id << ", remote_mr_id "
               << remote_mr_id << ", len " << len << ", ptr " << local_ptr
               << std::endl;
+    std::lock_guard<std::mutex> lk(mu_);
+    PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
+    if (slot != nullptr) {
+      slot->failed = true;
+      slot->state = RequestState::Failed;
+    }
     return -1;
   }
 
   {
     std::lock_guard<std::mutex> lk(mu_);
-    auto& pending = pending_requests_[request_id];
-    pending.request = std::move(ureq);
-    pending.completed = false;
+    PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
+    if (slot == nullptr) return -1;
+    slot->failed = false;
+    slot->state = RequestState::InFlight;
   }
 
   return 0;
@@ -376,6 +471,7 @@ int UcclTransportAdapter::recv_async_uccl(int peer_rank, void* local_ptr,
                                           uint64_t request_id) {
   ::uccl::UcclFlow* flow = nullptr;
   ::uccl::Mhandle* local_mh = nullptr;
+  ::uccl::ucclRequest* ureq = nullptr;
   {
     std::lock_guard<std::mutex> lk(mu_);
     auto peer_it = peer_contexts_.find(peer_rank);
@@ -390,9 +486,18 @@ int UcclTransportAdapter::recv_async_uccl(int peer_rank, void* local_ptr,
     if (mh_it != mr_id_to_mhandle_.end()) {
       local_mh = mh_it->second;
     }
+
+    PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
+    if (slot == nullptr || slot->state != RequestState::Reserved) return -1;
+    if (!slot->request) {
+      slot->request = std::make_unique<::uccl::ucclRequest>();
+    }
+    std::memset(slot->request.get(), 0, sizeof(::uccl::ucclRequest));
+    slot->failed = false;
+    ureq = slot->request.get();
   }
 
-  if (!flow || !local_mh) {
+  if (!flow || !local_mh || !ureq) {
     std::cerr << "[ERROR] UCCL recv_async missing "
               << (!flow ? "recv flow" : "memory handle") << " for peer "
               << peer_rank << ", request " << request_id << ", mr_id "
@@ -401,82 +506,86 @@ int UcclTransportAdapter::recv_async_uccl(int peer_rank, void* local_ptr,
     return -1;
   }
 
-  auto ureq = std::make_unique<::uccl::ucclRequest>();
   ::uccl::Mhandle* mh_array[1] = {local_mh};
   void* data_array[1] = {local_ptr};
   int size_array[1] = {static_cast<int>(len)};
 
   auto deadline = std::chrono::steady_clock::now() + kUcclAsyncRetryTimeout;
   int ret = -1;
+  uint32_t retries = 0;
   while (std::chrono::steady_clock::now() < deadline) {
     ret = endpoint_->uccl_recv_async(flow, mh_array, data_array, size_array, 1,
-                                     ureq.get());
+                                     ureq);
     if (ret == 0) break;
-    std::this_thread::sleep_for(kUcclRetrySleep);
+    backoff_retry(retries++);
   }
   if (ret != 0) {
     std::cerr << "[ERROR] UCCL recv_async submit failed for peer " << peer_rank
               << ", request " << request_id << ", mr_id " << local_mr_id
               << ", len " << len << ", ptr " << local_ptr << std::endl;
+    std::lock_guard<std::mutex> lk(mu_);
+    PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
+    if (slot != nullptr) {
+      slot->failed = true;
+      slot->state = RequestState::Failed;
+    }
     return -1;
   }
 
   {
     std::lock_guard<std::mutex> lk(mu_);
-    auto& pending = pending_requests_[request_id];
-    pending.request = std::move(ureq);
-    pending.completed = false;
+    PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
+    if (slot == nullptr) return -1;
+    slot->failed = false;
+    slot->state = RequestState::InFlight;
   }
 
   return 0;
 }
 
 bool UcclTransportAdapter::poll_completion(unsigned request_id) {
-  std::lock_guard<std::mutex> lk(mu_);
-  auto it = pending_requests_.find(request_id);
-  if (it == pending_requests_.end()) return true;
-  if (it->second.completed) return true;
-  if (!endpoint_) {
-    it->second.failed = true;
-    it->second.completed = true;
-    return true;
+  ::uccl::ucclRequest* req = nullptr;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
+    if (slot == nullptr) return true;
+    if (slot->state == RequestState::Completed ||
+        slot->state == RequestState::Failed) {
+      return true;
+    }
+    if (slot->state != RequestState::InFlight) return false;
+    if (!endpoint_ || !slot->request || !slot->request->context) {
+      slot->failed = true;
+      slot->state = RequestState::Failed;
+      return true;
+    }
+    req = slot->request.get();
   }
-  if (!it->second.request) {
-    it->second.failed = true;
-    it->second.completed = true;
-    return true;
+
+  if (!endpoint_->uccl_poll_ureq_once(req)) return false;
+
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
+    if (slot == nullptr) return true;
+    if (slot->state == RequestState::InFlight) {
+      slot->state = RequestState::Completed;
+    }
   }
-  if (!it->second.request->context) {
-    it->second.failed = true;
-    it->second.completed = true;
-    return true;
-  }
-  if (!endpoint_->uccl_poll_ureq_once(it->second.request.get())) return false;
-  it->second.completed = true;
   return true;
 }
 
 bool UcclTransportAdapter::wait_completion(unsigned request_id) {
+  uint32_t retries = 0;
   while (true) {
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      auto it = pending_requests_.find(request_id);
-      if (it == pending_requests_.end()) return true;
-      if (it->second.completed) return true;
-      if (!it->second.request) {
-        it->second.failed = true;
-        it->second.completed = true;
-        return true;
-      }
-    }
     if (poll_completion(request_id)) return true;
-    std::this_thread::sleep_for(kUcclRetrySleep);
+    backoff_retry(retries++);
   }
 }
 
 void UcclTransportAdapter::release_request(unsigned request_id) {
   std::lock_guard<std::mutex> lk(mu_);
-  pending_requests_.erase(request_id);
+  release_request_slot_locked(request_id);
 }
 
 }  // namespace Transport

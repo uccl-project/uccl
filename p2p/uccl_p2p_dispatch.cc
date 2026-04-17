@@ -16,14 +16,18 @@ static void init_backend() {
   char const* transport = std::getenv("UCCL_P2P_TRANSPORT");
   if (!transport || transport[0] == '\0') transport = "rdma";
 
+  // Normalize: tcp and tcpx are aliases for the unified nccl backend.
+  std::string backend = transport;
+  if (backend == "tcp" || backend == "tcpx") backend = "nccl";
+
   char lib_name[256];
-  std::snprintf(lib_name, sizeof(lib_name), "libuccl_p2p_%s.so", transport);
+  std::snprintf(lib_name, sizeof(lib_name), "libuccl_p2p_%s.so", backend.c_str());
 
   g_handle = dlopen(lib_name, RTLD_NOW | RTLD_LOCAL);
   if (!g_handle) {
     std::fprintf(stderr,
                  "UCCL P2P: failed to load backend '%s' (%s): %s\n"
-                 "  Set UCCL_P2P_TRANSPORT to one of: rdma, efa, tcp, tcpx\n",
+                 "  Set UCCL_P2P_TRANSPORT to one of: rdma, efa, nccl\n",
                  transport, lib_name, dlerror());
     std::abort();
   }

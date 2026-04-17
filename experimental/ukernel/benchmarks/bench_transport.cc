@@ -1,4 +1,5 @@
 #include "../include/config.h"
+#include "../include/gpu_rt.h"
 #include "../include/transport.h"
 #include <algorithm>
 #include <chrono>
@@ -97,9 +98,9 @@ static bool allocate_device_slots(int count, size_t msg_size,
                                   std::vector<void*>& slots) {
   slots.assign(count, nullptr);
   for (int i = 0; i < count; ++i) {
-    if (cudaMalloc(&slots[i], msg_size) != cudaSuccess || slots[i] == nullptr) {
+    if (gpuMalloc(&slots[i], msg_size) != gpuSuccess || slots[i] == nullptr) {
       for (void* ptr : slots) {
-        if (ptr != nullptr) cudaFree(ptr);
+        if (ptr != nullptr) (void)gpuFree(ptr);
       }
       slots.clear();
       return false;
@@ -110,7 +111,7 @@ static bool allocate_device_slots(int count, size_t msg_size,
 
 static void free_device_slots(std::vector<void*>& slots) {
   for (void* ptr : slots) {
-    if (ptr != nullptr) cudaFree(ptr);
+    if (ptr != nullptr) GPU_RT_CHECK(gpuFree(ptr));
   }
   slots.clear();
 }
@@ -140,8 +141,8 @@ static bool validate_recv_slots(char const* role, int rank,
   std::vector<uint8_t> host(expected.size());
   for (size_t i = 0; i < slots.size(); ++i) {
     if (!touched[i]) continue;
-    if (cudaMemcpy(host.data(), slots[i], expected.size(),
-                   cudaMemcpyDeviceToHost) != cudaSuccess) {
+    if (gpuMemcpy(host.data(), slots[i], expected.size(),
+                  gpuMemcpyDeviceToHost) != gpuSuccess) {
       fprintf(stderr, "[%s %d] Failed to copy recv slot %zu to host\n", role,
               rank, i);
       return false;
@@ -290,23 +291,23 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
          rank, peer_rank, peer_transport_kind_name(transport_kind),
          throughput_window);
 
-  cudaSetDevice(gpu_id);
+  GPU_RT_CHECK(gpuSetDevice(gpu_id));
 
   void* send_buf = nullptr;
   std::vector<void*> recv_slots;
-  if (cudaMalloc(&send_buf, msg_size) != cudaSuccess || send_buf == nullptr) {
+  if (gpuMalloc(&send_buf, msg_size) != gpuSuccess || send_buf == nullptr) {
     fprintf(stderr, "[Sender %d] Failed to allocate GPU memory\n", rank);
     return;
   }
   if (!allocate_device_slots(throughput_window, msg_size, recv_slots)) {
     fprintf(stderr, "[Sender %d] Failed to allocate GPU memory\n", rank);
-    cudaFree(send_buf);
+    (void)gpuFree(send_buf);
     return;
   }
   auto cleanup = [&]() {
     if (send_buf != nullptr) {
       comm.dereg_mr(send_buf);
-      cudaFree(send_buf);
+      GPU_RT_CHECK(gpuFree(send_buf));
     }
     deregister_slot_mrs(comm, recv_slots);
     free_device_slots(recv_slots);
@@ -314,9 +315,10 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
 
   std::vector<uint8_t> host_buf = make_pattern(msg_size, 0);
   std::vector<uint8_t> expected_recv = make_pattern(msg_size, 97);
-  cudaMemcpy(send_buf, host_buf.data(), msg_size, cudaMemcpyHostToDevice);
+  GPU_RT_CHECK(
+      gpuMemcpy(send_buf, host_buf.data(), msg_size, gpuMemcpyHostToDevice));
   for (void* recv_slot : recv_slots) {
-    cudaMemset(recv_slot, 0, msg_size);
+    GPU_RT_CHECK(gpuMemset(recv_slot, 0, msg_size));
   }
 
   MR local_send_mr = comm.reg_mr(send_buf, msg_size);
@@ -562,23 +564,23 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
       rank, peer_rank, peer_transport_kind_name(transport_kind),
       throughput_window);
 
-  cudaSetDevice(gpu_id);
+  GPU_RT_CHECK(gpuSetDevice(gpu_id));
 
   void* send_buf = nullptr;
   std::vector<void*> recv_slots;
-  if (cudaMalloc(&send_buf, msg_size) != cudaSuccess || send_buf == nullptr) {
+  if (gpuMalloc(&send_buf, msg_size) != gpuSuccess || send_buf == nullptr) {
     fprintf(stderr, "[Receiver %d] Failed to allocate GPU memory\n", rank);
     return;
   }
   if (!allocate_device_slots(throughput_window, msg_size, recv_slots)) {
     fprintf(stderr, "[Receiver %d] Failed to allocate GPU memory\n", rank);
-    cudaFree(send_buf);
+    (void)gpuFree(send_buf);
     return;
   }
   auto cleanup = [&]() {
     if (send_buf != nullptr) {
       comm.dereg_mr(send_buf);
-      cudaFree(send_buf);
+      GPU_RT_CHECK(gpuFree(send_buf));
     }
     deregister_slot_mrs(comm, recv_slots);
     free_device_slots(recv_slots);
@@ -586,9 +588,10 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
 
   std::vector<uint8_t> host_buf = make_pattern(msg_size, 97);
   std::vector<uint8_t> expected_recv = make_pattern(msg_size, 0);
-  cudaMemcpy(send_buf, host_buf.data(), msg_size, cudaMemcpyHostToDevice);
+  GPU_RT_CHECK(
+      gpuMemcpy(send_buf, host_buf.data(), msg_size, gpuMemcpyHostToDevice));
   for (void* recv_slot : recv_slots) {
-    cudaMemset(recv_slot, 0, msg_size);
+    GPU_RT_CHECK(gpuMemset(recv_slot, 0, msg_size));
   }
 
   MR local_send_mr = comm.reg_mr(send_buf, msg_size);
