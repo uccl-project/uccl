@@ -21,7 +21,8 @@ static void init_backend() {
   if (backend == "tcp" || backend == "tcpx") backend = "nccl";
 
   char lib_name[256];
-  std::snprintf(lib_name, sizeof(lib_name), "libuccl_p2p_%s.so", backend.c_str());
+  std::snprintf(lib_name, sizeof(lib_name), "libuccl_p2p_%s.so",
+                backend.c_str());
 
   g_handle = dlopen(lib_name, RTLD_NOW | RTLD_LOCAL);
   if (!g_handle) {
