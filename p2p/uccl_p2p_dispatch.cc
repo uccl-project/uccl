@@ -62,9 +62,10 @@ uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
 void uccl_engine_destroy(uccl_engine_t* engine) { ops()->destroy(engine); }
 
 uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
-                                 char const* remote_gpu, int remote_port,
+                                 int remote_gpu_idx, int remote_port,
                                  bool same_process) {
-  return ops()->connect(engine, ip_addr, remote_gpu, remote_port, same_process);
+  return ops()->connect(engine, ip_addr, remote_gpu_idx, remote_port,
+                        same_process);
 }
 
 uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
