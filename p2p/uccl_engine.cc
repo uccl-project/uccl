@@ -108,6 +108,21 @@ static void deserialize_ipc_info(char const* buf, IpcTransferInfo& info) {
   off += sizeof(info.gpu_idx);
 }
 
+// Check UCCL_P2P_DISABLE_IPC=1 to force all transfers through the network
+// transport (RDMA or TCP) even for intra-node peers.  Useful for CI testing.
+static bool ipc_disabled() {
+  static bool disabled = [] {
+    char const* val = std::getenv("UCCL_P2P_DISABLE_IPC");
+    bool dis = val && std::string(val) == "1";
+    if (dis)
+      std::cerr << "UCCL P2P: IPC disabled, all transfers will use "
+                   "network transport"
+                << std::endl;
+    return dis;
+  }();
+  return disabled;
+}
+
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   (void)num_cpus;
   inside_python = in_python;
@@ -131,8 +146,10 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   uint64_t conn_id;
 
   // Detect intra-node connection: if the target IP matches our own IP.
+  // When UCCL_P2P_DISABLE_IPC=1, treat all connections as remote so that
+  // data flows through the network transport instead of IPC.
   std::string local_ip = uccl::get_oob_ip();
-  bool is_local = (std::string(ip_addr) == local_ip);
+  bool is_local = !ipc_disabled() && (std::string(ip_addr) == local_ip);
 
   bool ok;
   if (is_local) {
@@ -155,8 +172,8 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
         oob_client = engine->local_oob_client;
       }
       if (oob_client) {
-        std::string conn_key = oob_client->connect_to_server(
-            std::string(ip_addr), remote_port);
+        std::string conn_key =
+            oob_client->connect_to_server(std::string(ip_addr), remote_port);
         conn->oob_conn_key = conn_key;
       }
     }
@@ -601,6 +618,7 @@ int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
                              char* ipc_buf, bool* has_ipc) {
   if (!engine || !ipc_buf || !has_ipc) return -1;
   *has_ipc = false;
+  if (ipc_disabled()) return 0;
   auto it = mem_reg_info.find(addr);
   if (it == mem_reg_info.end()) return -1;
   if (!it->second.has_ipc) return 0;
