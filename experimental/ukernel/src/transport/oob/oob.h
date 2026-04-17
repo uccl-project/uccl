@@ -5,6 +5,7 @@
 #include "../util/jring.h"
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <deque>
@@ -18,6 +19,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace UKernel {
@@ -79,12 +81,10 @@ struct NamedMR {
 };
 
 struct NamedMRInfos : public Exchangeable {
-  uint64_t generation = 0;
   std::vector<NamedMR> entries;
 
   std::map<std::string, std::string> to_map() const override {
     std::map<std::string, std::string> kv;
-    kv["generation"] = std::to_string(generation);
     kv["count"] = std::to_string(entries.size());
     for (size_t i = 0; i < entries.size(); ++i) {
       auto const& entry = entries[i];
@@ -105,9 +105,6 @@ struct NamedMRInfos : public Exchangeable {
   }
 
   void from_map(std::map<std::string, std::string> const& kv) override {
-    auto generation_it = kv.find("generation");
-    generation =
-        generation_it == kv.end() ? 0 : std::stoull(generation_it->second);
     size_t count = std::stoul(kv.at("count"));
     entries.resize(count);
     for (size_t i = 0; i < count; ++i) {
@@ -187,8 +184,7 @@ struct StringPayload : public Exchangeable {
 };
 
 struct IpcBufferInfo : public Exchangeable {
-  uint32_t ipc_id = 0;
-  uint64_t binding_version = 0;
+  uint32_t buffer_id = 0;
   gpuIpcMemHandle_t handle{};
   uint64_t base_offset = 0;
   uint64_t bytes = 0;
@@ -197,8 +193,7 @@ struct IpcBufferInfo : public Exchangeable {
 
   std::map<std::string, std::string> to_map() const override {
     std::map<std::string, std::string> kv;
-    kv["ipc_id"] = std::to_string(ipc_id);
-    kv["binding_version"] = std::to_string(binding_version);
+    kv["buffer_id"] = std::to_string(buffer_id);
     kv["base_offset"] = std::to_string(base_offset);
     kv["bytes"] = std::to_string(bytes);
     kv["device_idx"] = std::to_string(device_idx);
@@ -215,16 +210,7 @@ struct IpcBufferInfo : public Exchangeable {
   }
 
   void from_map(std::map<std::string, std::string> const& kv) override {
-    ipc_id = static_cast<uint32_t>(std::stoul(kv.at("ipc_id")));
-    auto it_binding_version = kv.find("binding_version");
-    if (it_binding_version == kv.end()) {
-      // Backward-compatible fallback for older peers/tests.
-      auto it_generation = kv.find("generation");
-      binding_version =
-          (it_generation == kv.end()) ? 0 : std::stoull(it_generation->second);
-    } else {
-      binding_version = std::stoull(it_binding_version->second);
-    }
+    buffer_id = static_cast<uint32_t>(std::stoul(kv.at("buffer_id")));
     base_offset = std::stoull(kv.at("base_offset"));
     bytes = std::stoull(kv.at("bytes"));
     device_idx = std::stoi(kv.at("device_idx"));
@@ -245,47 +231,135 @@ class Exchanger {
   virtual ~Exchanger() = default;
 
   virtual bool valid() const = 0;
-  virtual bool publish(std::string const& key, Exchangeable const& obj) = 0;
-  virtual bool fetch(std::string const& key, Exchangeable& obj) = 0;
-  virtual bool wait_and_fetch(std::string const& key, Exchangeable& obj,
-                              int max_retries = 50, int delay_ms = 100) = 0;
+  // Public minimal KV API.
+  virtual uint64_t put(std::string const& ns, std::string const& key,
+                       Exchangeable const& obj) = 0;
+  // timeout_ms: 0 non-blocking, >0 bounded wait, <0 wait forever.
+  virtual bool get(std::string const& ns, std::string const& key,
+                   Exchangeable& obj, uint64_t* out_tag = nullptr,
+                   int timeout_ms = -1) = 0;
+  virtual bool subscribe(
+      std::string const& ns,
+      std::function<void(std::string const& ns, std::string const& key,
+                         uint64_t tag)> cb) = 0;
+
+  // Barrier-like synchronization in one communication domain.
+  // Each rank calls sync(barrier_id, rank, world_size). The barrier is released
+  // once all ranks have published arrive markers for the same barrier_id.
+  virtual bool sync(std::string const& barrier_id, int rank, int world_size,
+                    int timeout_ms = -1) {
+    if (world_size <= 0 || rank < 0 || rank >= world_size) return false;
+    StringPayload arrived;
+    arrived.value = "1";
+    std::string const arrive_ns = "barrier/" + barrier_id + "/arrive";
+    std::string const release_ns = "barrier/" + barrier_id + "/release";
+    (void)put(arrive_ns, std::to_string(rank), arrived);
+
+    auto const deadline =
+        (timeout_ms > 0)
+            ? (std::chrono::steady_clock::now() +
+               std::chrono::milliseconds(timeout_ms))
+            : std::chrono::steady_clock::time_point::max();
+    int const poll_delay_ms = 10;
+    StringPayload tmp;
+    for (;;) {
+      // Fast path: barrier already released.
+      if (get(release_ns, "all", tmp, nullptr, 0)) return true;
+
+      // Try to release if all ranks have arrived.
+      bool all_arrived = true;
+      for (int r = 0; r < world_size; ++r) {
+        if (!get(arrive_ns, std::to_string(r), tmp, nullptr, 0)) {
+          all_arrived = false;
+          break;
+        }
+      }
+      if (all_arrived) {
+        StringPayload release_signal;
+        release_signal.value = "1";
+        (void)put(release_ns, "all", release_signal);
+        return true;
+      }
+
+      if (timeout_ms == 0) return false;
+      if (std::chrono::steady_clock::now() >= deadline) return false;
+      std::this_thread::sleep_for(std::chrono::milliseconds(poll_delay_ms));
+    }
+  }
 };
 
 class SockExchanger : public Exchanger {
  public:
+  struct KvEntry {
+    uint64_t tag = 0;
+    uint64_t updated_ns = 0;
+    std::map<std::string, std::string> fields;
+  };
+
   SockExchanger(bool is_server, std::string const& host, int port,
                 int timeout_ms = 3000, size_t max_line_bytes = 1 * 1024 * 1024);
   ~SockExchanger();
 
   bool valid() const override;
-  bool publish(std::string const& key, Exchangeable const& obj) override;
-  bool fetch(std::string const& key, Exchangeable& obj) override;
-  bool wait_and_fetch(std::string const& key, Exchangeable& obj,
-                      int max_retries = -1, int delay_ms = 100) override;
+  uint64_t put(std::string const& ns, std::string const& key,
+               Exchangeable const& obj) override;
+  bool get(std::string const& ns, std::string const& key, Exchangeable& obj,
+           uint64_t* out_tag = nullptr, int timeout_ms = -1) override;
+  bool subscribe(
+      std::string const& ns,
+      std::function<void(std::string const& ns, std::string const& key,
+                         uint64_t tag)> cb) override;
 
  private:
   bool start_server();
   bool connect_client();
   bool send_cmd_and_recv(std::string const& cmd, std::string& resp);
+  bool connect_subscriber_client();
+  void ensure_subscriber_thread();
+  bool put_with_tag(std::string const& ns, std::string const& key,
+                    Exchangeable const& obj, uint64_t* out_tag);
+  bool get_once(std::string const& ns, std::string const& key,
+                Exchangeable& obj, uint64_t* out_tag);
 
   int sock_fd_;
+  int sub_fd_;
   std::string host_;
   int port_;
   int timeout_ms_;
   bool is_server_;
   int listen_fd_;
   std::atomic<bool> running_;
+  std::atomic<bool> sub_running_;
   size_t max_line_bytes_;
 
-  std::unordered_map<std::string, std::map<std::string, std::string>> store_;
+  std::unordered_map<std::string, KvEntry> store_;
   std::mutex store_mutex_;
+  std::mutex subs_mutex_;
+  std::unordered_map<std::string, std::unordered_set<int>> subscribers_;
+  std::mutex callback_mu_;
+  std::mutex cmd_mu_;
+  std::mutex sub_mu_;
+  std::unordered_map<
+      std::string,
+      std::vector<std::function<void(std::string const&, std::string const&,
+                                     uint64_t)>>>
+      callbacks_;
+  std::unordered_set<std::string> subscribed_ns_;
+  // Subscription ACK state. Only subscriber thread reads sub_fd_, and
+  // subscribe() waits on these counters to avoid read races on sub_fd_.
+  std::mutex sub_ack_mu_;
+  std::condition_variable sub_ack_cv_;
+  uint64_t sub_ack_count_ = 0;
+  uint64_t sub_err_count_ = 0;
+  std::thread subscriber_thread_;
   std::thread server_thread_;
   std::mutex conn_threads_mutex_;
   std::vector<std::thread> conn_threads_;
 
   friend void handle_connection(
-      int, std::unordered_map<std::string, std::map<std::string, std::string>>&,
-      std::mutex&, std::atomic<bool>&, size_t,
+      int, std::unordered_map<std::string, KvEntry>&, std::mutex&,
+      std::unordered_map<std::string, std::unordered_set<int>>&, std::mutex&,
+      std::atomic<bool>&, size_t,
       std::function<void(std::thread&&)>);
 };
 

@@ -3,6 +3,7 @@
 #include "test_utils.h"
 #include "util/utils.h"
 #include <chrono>
+#include <atomic>
 #include <exception>
 #include <memory>
 #include <string>
@@ -15,6 +16,7 @@ using CommunicatorMeta = UKernel::Transport::CommunicatorMeta;
 using MR = UKernel::Transport::MR;
 using NamedMR = UKernel::Transport::NamedMR;
 using NamedMRInfos = UKernel::Transport::NamedMRInfos;
+using StringPayload = UKernel::Transport::StringPayload;
 
 namespace {
 
@@ -32,7 +34,7 @@ void publisher_socket(int port) {
   remote.entries.push_back(NamedMR{8, MR{2, 0x12346000ULL, 8192, 0, 456}});
 
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
-  require(ex.publish("named-mr:peer:1:0", remote),
+  require(ex.put("test/named_mr", "named-mr:peer:1:0", remote) != 0,
           "publisher failed to publish MR info");
 }
 
@@ -43,7 +45,7 @@ void test_socket_publish_fetch() {
 
   NamedMRInfos local{};
   local.entries.push_back(NamedMR{9, MR{7, 0xABCDEF00ULL, 16384, 0, 789}});
-  require(ex.publish("named-mr:peer:0:0", local),
+  require(ex.put("test/named_mr", "named-mr:peer:0:0", local) != 0,
           "failed to publish local MR info");
 
   std::exception_ptr pub_error;
@@ -56,7 +58,7 @@ void test_socket_publish_fetch() {
   });
 
   NamedMRInfos remote{};
-  require(ex.wait_and_fetch("named-mr:peer:1:0", remote, 50, 100),
+  require(ex.get("test/named_mr", "named-mr:peer:1:0", remote, nullptr, 5000),
           "timeout waiting for remote MR info");
   require(remote.entries.size() == 2, "remote MR count mismatch");
   require(remote.entries[0].mr.id == 1 && remote.entries[1].mr.id == 2,
@@ -79,13 +81,14 @@ void rank_thread_socket(int rank, int world_size, std::string const& ip,
     local.ip = "127.0.0.1";
 
     std::string key = "meta:" + std::to_string(rank);
-    require(ex->publish(key, local), "rank failed to publish local meta");
+    require(ex->put("test/meta", key, local) != 0,
+            "rank failed to publish local meta");
 
     for (int r = 0; r < world_size; ++r) {
       if (r == rank) continue;
       std::string remote_key = "meta:" + std::to_string(r);
       CommunicatorMeta remote;
-      require(ex->wait_and_fetch(remote_key, remote, 50, 100),
+      require(ex->get("test/meta", remote_key, remote, nullptr, 5000),
               "timeout waiting for remote communicator meta");
       require(!remote.host_id.empty(), "remote host id should not be empty");
       require(remote.ip == "127.0.0.1", "remote ip mismatch");
@@ -111,11 +114,47 @@ void test_socket_meta_exchange(int world_size) {
   }
 }
 
+void test_socket_subscribe_callback_once_on_client_put() {
+  int port = socket_test_port() + 2;
+  SockExchanger server(true, "127.0.0.1", port);
+  require(server.valid(), "failed to start socket exchanger server");
+
+  SockExchanger client(false, "127.0.0.1", port);
+  require(client.valid(), "failed to connect socket exchanger client");
+
+  std::atomic<int> callback_count{0};
+  require(client.subscribe(
+              "test/sub", [&callback_count](std::string const& ns,
+                                            std::string const& key,
+                                            uint64_t /*tag*/) {
+                if (ns == "test/sub" && key == "k") {
+                  callback_count.fetch_add(1, std::memory_order_relaxed);
+                }
+              }),
+          "client subscribe failed");
+
+  StringPayload payload;
+  payload.value = "v";
+  require(client.put("test/sub", "k", payload) != 0, "client put failed");
+
+  auto const deadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(1000);
+  while (std::chrono::steady_clock::now() < deadline &&
+         callback_count.load(std::memory_order_relaxed) == 0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  require(callback_count.load(std::memory_order_relaxed) == 1,
+          "client put should trigger exactly one subscribe callback");
+}
+
 }  // namespace
 
 void test_socket_oob() {
   run_case("transport unit", "socket oob publish/fetch",
            test_socket_publish_fetch);
+  run_case("transport unit", "socket oob subscribe callback once",
+           test_socket_subscribe_callback_once_on_client_put);
 }
 
 void test_socket_meta_exchange_multi_threads(int world_size) {
