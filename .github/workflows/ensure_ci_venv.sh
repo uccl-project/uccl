@@ -26,7 +26,9 @@ fi
 mkdir -p "$SANDBOX"
 
 if [ ! -d "$SANDBOX/.venv" ]; then
-  uv venv "$SANDBOX/.venv" --python "$PY_VER"
+  # --seed installs pip/setuptools/wheel into the venv so that tools which
+  # shell out to `python -m pip ...` (e.g. build.sh --install) work.
+  uv venv "$SANDBOX/.venv" --python "$PY_VER" --seed
   # shellcheck disable=SC1091
   source "$SANDBOX/.venv/bin/activate"
   uv pip install --pre torch torchvision --index-url "$TORCH_INDEX"
@@ -34,6 +36,7 @@ if [ ! -d "$SANDBOX/.venv" ]; then
 else
   # shellcheck disable=SC1091
   source "$SANDBOX/.venv/bin/activate"
+  python -m pip --version >/dev/null 2>&1 || uv pip install pip setuptools wheel
   if ! python -c "import torch" >/dev/null 2>&1; then
     uv pip install --pre torch torchvision --index-url "$TORCH_INDEX" --reinstall
   fi
