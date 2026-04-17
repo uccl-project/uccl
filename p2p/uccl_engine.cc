@@ -139,7 +139,7 @@ void uccl_engine_destroy(uccl_engine_t* engine) {
 }
 
 uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
-                                 char const* remote_gpu, int remote_port,
+                                 int remote_gpu_idx, int remote_port,
                                  bool same_process) {
   if (!engine || !ip_addr) return nullptr;
   uccl_conn_t* conn = new uccl_conn;
@@ -151,19 +151,13 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   std::string local_ip = uccl::get_oob_ip();
   bool is_local = !ipc_disabled() && (std::string(ip_addr) == local_ip);
 
-  // Resolve remote_gpu: accept either a PCI BDF string (e.g. "0000:4a:00.0")
-  // or a CUDA device index string (e.g. "0").
-  std::string remote_bdf;
-  if (remote_gpu && std::strchr(remote_gpu, ':')) {
-    // Already a BDF string.
-    remote_bdf = uccl::normalize_pci_bus_id(remote_gpu);
-  } else {
-    // Integer string — convert to BDF via CUDA runtime.
-    int gpu_idx = remote_gpu ? std::atoi(remote_gpu) : 0;
-    char bdf_buf[64];
-    GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), gpu_idx));
-    remote_bdf = uccl::normalize_pci_bus_id(bdf_buf);
-  }
+  // Convert the remote CUDA ordinal to a local BDF via the runtime. This is
+  // only meaningful for the same_process / intra-node IPC path; for inter-node
+  // RDMA, the actual remote BDF is exchanged via the TCP handshake inside
+  // endpoint->connect().
+  char bdf_buf[64];
+  GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), remote_gpu_idx));
+  std::string remote_bdf = uccl::normalize_pci_bus_id(bdf_buf);
 
   bool ok;
   if (is_local) {
