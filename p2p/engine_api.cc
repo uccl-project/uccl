@@ -1142,7 +1142,7 @@ NB_MODULE(p2p, m) {
           "RDMA-WRITE",
           nb::arg("conn_id"), nb::arg("mr_id_v"), nb::arg("ptr_v"),
           nb::arg("size_v"), nb::arg("num_iovs"))
-      // IPC-specific functions for local connections via Unix Domain Sockets
+      // IPC-specific functions for local (same-node) connections via CUDA IPC
       .def(
           "connect_local",
           [](Endpoint& self, std::string const& remote_gpu_bdf) {
