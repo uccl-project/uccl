@@ -21,14 +21,13 @@ static void init_backend() {
   if (backend == "tcp" || backend == "tcpx") backend = "nccl";
 
   char lib_name[256];
-  std::snprintf(lib_name, sizeof(lib_name), "libuccl_p2p_%s.so",
-                backend.c_str());
+  std::snprintf(lib_name, sizeof(lib_name), "libuccl_p2p_%s.so", backend.c_str());
 
   g_handle = dlopen(lib_name, RTLD_NOW | RTLD_LOCAL);
   if (!g_handle) {
     std::fprintf(stderr,
                  "UCCL P2P: failed to load backend '%s' (%s): %s\n"
-                 "  Set UCCL_P2P_TRANSPORT to one of: rdma, efa, nccl\n",
+                 "  Set UCCL_P2P_TRANSPORT to one of: rdma, efa, tcp/tcpx\n",
                  transport, lib_name, dlerror());
     std::abort();
   }
@@ -62,9 +61,9 @@ uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
 void uccl_engine_destroy(uccl_engine_t* engine) { ops()->destroy(engine); }
 
 uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
-                                 int remote_gpu_idx, int remote_port,
+                                 char const* remote_gpu, int remote_port,
                                  bool same_process) {
-  return ops()->connect(engine, ip_addr, remote_gpu_idx, remote_port,
+  return ops()->connect(engine, ip_addr, remote_gpu, remote_port,
                         same_process);
 }
 
