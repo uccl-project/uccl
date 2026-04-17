@@ -98,20 +98,8 @@ jobs:
 
           ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF'
             set -euo pipefail
-            export PATH="$HOME/.local/bin:$PATH"
-            command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
-            mkdir -p ~/uccl-ci-sandbox
-            if [ ! -d ~/uccl-ci-sandbox/.venv ]; then
-              uv venv ~/uccl-ci-sandbox/.venv --python 3.12
-              source ~/uccl-ci-sandbox/.venv/bin/activate
-              uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.1
-              uv pip install nanobind pybind11
-            else
-              source ~/uccl-ci-sandbox/.venv/bin/activate
-              if ! python -c "import torch" >/dev/null 2>&1; then
-                uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.1 --reinstall
-              fi
-            fi
+            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
+            source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox
             ./build.sh roc7 all --install 2>&1 | tee build.log
           EOF
@@ -119,20 +107,8 @@ jobs:
           if [ "$SHARED_NFS" != "true" ]; then
             ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF'
               set -euo pipefail
-              export PATH="$HOME/.local/bin:$PATH"
-              command -v uv >/dev/null 2>&1 || curl -LsSf https://astral.sh/uv/install.sh | sh
-              mkdir -p ~/uccl-ci-sandbox
-              if [ ! -d ~/uccl-ci-sandbox/.venv ]; then
-                uv venv ~/uccl-ci-sandbox/.venv --python 3.12
-                source ~/uccl-ci-sandbox/.venv/bin/activate
-                uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.1
-                uv pip install nanobind pybind11
-              else
-                source ~/uccl-ci-sandbox/.venv/bin/activate
-                if ! python -c "import torch" >/dev/null 2>&1; then
-                  uv pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/rocm7.1 --reinstall
-                fi
-              fi
+              bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
+              source ~/uccl-ci-sandbox/.venv/bin/activate
               cd ~/uccl-ci-sandbox
               ./build.sh roc7 all --install 2>&1 | tee build.log
           EOF
@@ -147,7 +123,8 @@ jobs:
           ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
             bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
+            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
+            export PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/p2p
             torchrun --nnodes=2 --nproc_per_node=1 \
@@ -162,7 +139,8 @@ jobs:
           ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
             bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
+            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
+            export PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/p2p
             torchrun --nnodes=2 --nproc_per_node=1 \
@@ -193,7 +171,8 @@ jobs:
           ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
             bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
+            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
+            export PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
             ./run_ep.sh 2 0 ht ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/ep-ht-host0.log
@@ -205,7 +184,8 @@ jobs:
           ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
             bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
+            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
+            export PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
             ./run_ep.sh 2 1 ht ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/ep-ht-host1.log
@@ -233,7 +213,8 @@ jobs:
           ssh -o BatchMode=yes amd0 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
             bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
+            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
+            export PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
             ./run_ep.sh 2 0 ll ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/ep-ll-host0.log
@@ -245,7 +226,8 @@ jobs:
           ssh -o BatchMode=yes amd1 bash --norc --noprofile << 'EOF' &
             set -euo pipefail
             bash ~/uccl-ci-sandbox/.github/workflows/ensure_idle_gpu.sh
-            export PATH="$HOME/.local/bin:$PATH" PYTHONUNBUFFERED=1
+            bash ~/uccl-ci-sandbox/.github/workflows/ensure_ci_venv.sh
+            export PYTHONUNBUFFERED=1
             source ~/uccl-ci-sandbox/.venv/bin/activate
             cd ~/uccl-ci-sandbox/ep/bench
             ./run_ep.sh 2 1 ll ${{secrets.UCCL_DEV_AMD_HOST0}} 2>&1 | stdbuf -oL tee ~/uccl-ci-sandbox/ep-ll-host1.log
@@ -268,15 +250,15 @@ jobs:
         if: always()
         shell: bash
         run: |
-          kill_ci_gpu_procs='
-            for pid in $(rocm-smi --showpids 2>/dev/null | grep -oE "[0-9]+" | sort -nu); do
-              [ -d "/proc/$pid" ] || continue
-              cwd="$(readlink -f /proc/$pid/cwd 2>/dev/null || true)"
-              case "$cwd" in "$HOME/uccl-ci-sandbox"*) kill -9 "$pid" 2>/dev/null || true ;; esac
-            done
-          '
-          ssh -o BatchMode=yes amd0 bash --norc --noprofile -c "$kill_ci_gpu_procs" || true
-          ssh -o BatchMode=yes amd1 bash --norc --noprofile -c "$kill_ci_gpu_procs" || true
+          for host in amd0 amd1; do
+            ssh -o BatchMode=yes "$host" bash --norc --noprofile << 'EOF' || true
+              for pid in $(rocm-smi --showpids 2>/dev/null | grep -oE "[0-9]+" | sort -nu); do
+                [ -d "/proc/$pid" ] || continue
+                cwd="$(readlink -f /proc/$pid/cwd 2>/dev/null || true)"
+                case "$cwd" in "$HOME/uccl-ci-sandbox"*) kill -9 "$pid" 2>/dev/null || true ;; esac
+              done
+          EOF
+          done
 
       - name: Fetch remote logs
         if: always()
