@@ -277,10 +277,10 @@ bool IpcAdapter::enqueue_request(unsigned request_id, IpcReqType type) {
 }
 
 unsigned IpcAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
-                                uint64_t local_mr_id,
+                                uint32_t local_buffer_id,
                                 std::optional<RemoteSlice> remote_hint,
                                 BounceBufferProvider bounce_provider) {
-  (void)local_mr_id;
+  (void)local_buffer_id;
 
   uint32_t remote_buffer_id = 0;
   size_t remote_offset = 0;
@@ -314,9 +314,9 @@ unsigned IpcAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
 }
 
 unsigned IpcAdapter::recv_async(int peer_rank, void* local_ptr, size_t len,
-                                uint64_t local_mr_id,
+                                uint32_t local_buffer_id,
                                 BounceBufferProvider bounce_provider) {
-  (void)local_mr_id;
+  (void)local_buffer_id;
 
   void* bounce_ptr = nullptr;
   std::string bounce_shm_name;

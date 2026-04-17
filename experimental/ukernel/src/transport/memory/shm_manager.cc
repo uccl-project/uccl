@@ -50,12 +50,12 @@ SHMItem SHMManager::create_local_shm(size_t bytes, bool require_shared) {
 
   Entry entry{};
   entry.bytes = bytes;
-  entry.shm_id = next_shm_id_.fetch_add(1, std::memory_order_relaxed);
+  entry.id = next_shm_id_.fetch_add(1, std::memory_order_relaxed);
 
   if (require_shared) {
     std::string name = "/uccl_shm_" +
                        std::to_string(static_cast<long long>(::getpid())) +
-                       "_" + std::to_string(entry.shm_id);
+                       "_" + std::to_string(entry.id);
     int fd = shm_open(name.c_str(), O_CREAT | O_RDWR, 0666);
     if (fd < 0) throw std::runtime_error("failed to create shm");
     if (ftruncate(fd, entry.bytes) < 0) {
@@ -84,12 +84,12 @@ SHMItem SHMManager::create_local_shm(size_t bytes, bool require_shared) {
     slot = entries_.size();
     entries_.push_back(entry);
   }
-  local_slot_by_id_[entry.shm_id] = slot;
+  local_slot_by_id_[entry.id] = slot;
 
   SHMItem out{};
   out.ptr = entry.ptr;
   out.bytes = entry.bytes;
-  out.shm_id = entry.shm_id;
+  out.id = entry.id;
   out.shareable = !entry.shm_name.empty();
   out.is_local = true;
   out.valid = true;
@@ -97,9 +97,9 @@ SHMItem SHMManager::create_local_shm(size_t bytes, bool require_shared) {
   return out;
 }
 
-SHMItem SHMManager::get_local_shm(uint32_t shm_id) const {
+SHMItem SHMManager::get_local_shm(uint32_t id) const {
   std::lock_guard<std::mutex> lk(mu_);
-  auto slot_it = local_slot_by_id_.find(shm_id);
+  auto slot_it = local_slot_by_id_.find(id);
   if (slot_it == local_slot_by_id_.end()) return {};
   size_t slot = slot_it->second;
   if (slot >= entries_.size()) return {};
@@ -109,7 +109,7 @@ SHMItem SHMManager::get_local_shm(uint32_t shm_id) const {
   SHMItem out{};
   out.ptr = entry.ptr;
   out.bytes = entry.bytes;
-  out.shm_id = entry.shm_id;
+  out.id = entry.id;
   out.shareable = !entry.shm_name.empty();
   out.is_local = true;
   out.valid = true;
@@ -123,7 +123,7 @@ SHMItem SHMManager::open_remote_shm(std::string const& shm_name) {
   if (it != shm_cache_.end()) {
     SHMItem out{};
     out.ptr = it->second.ptr;
-    out.bytes = it->second.size;
+    out.bytes = it->second.bytes;
     out.shm_name = shm_name;
     out.is_local = false;
     out.valid = true;
@@ -152,11 +152,11 @@ SHMItem SHMManager::open_remote_shm(std::string const& shm_name) {
   return out;
 }
 
-bool SHMManager::delete_local_shm(uint32_t shm_id) {
+bool SHMManager::delete_local_shm(uint32_t id) {
   Entry evicted{};
   {
     std::lock_guard<std::mutex> lk(mu_);
-    auto slot_it = local_slot_by_id_.find(shm_id);
+    auto slot_it = local_slot_by_id_.find(id);
     if (slot_it == local_slot_by_id_.end()) return false;
     size_t slot = slot_it->second;
     if (slot >= entries_.size()) return false;
@@ -184,7 +184,7 @@ bool SHMManager::close_remote_shm(std::string const& shm_name) {
   std::lock_guard<std::mutex> lk(mu_);
   auto it = shm_cache_.find(shm_name);
   if (it == shm_cache_.end()) return false;
-  munmap(it->second.ptr, it->second.size);
+  munmap(it->second.ptr, it->second.bytes);
   shm_cache_.erase(it);
   return true;
 }
@@ -192,7 +192,7 @@ bool SHMManager::close_remote_shm(std::string const& shm_name) {
 void SHMManager::clear_remote_shm_cache() {
   std::lock_guard<std::mutex> lk(mu_);
   for (auto& kv : shm_cache_) {
-    munmap(kv.second.ptr, kv.second.size);
+    munmap(kv.second.ptr, kv.second.bytes);
   }
   shm_cache_.clear();
 }

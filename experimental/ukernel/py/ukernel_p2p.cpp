@@ -57,6 +57,7 @@ class Communicator {
                 UKernel::Transport::CommunicatorConfig{
                     exchanger_ip,
                     exchanger_port,
+                    "default",
                     local_id,
                     parse_transport(transport),
                 }))) {

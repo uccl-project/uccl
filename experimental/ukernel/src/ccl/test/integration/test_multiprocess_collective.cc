@@ -290,7 +290,7 @@ CollectiveBinding build_collective_memory(int rank, int world_size,
   RegisteredBuffer& staging =
       binding.ensure_buffer(binding.buffer_id(CollectiveBufferRole::Scratch));
   staging.local_ptr = staging_ptr;
-  staging.local_mr_id = 0;
+  staging.local_buffer_id = 0;
   staging.bytes = staging_bytes;
   staging.layout.sizes = {static_cast<int64_t>(staging_bytes)};
   staging.layout.strides = {1};

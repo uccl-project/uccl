@@ -2,6 +2,7 @@
 
 #include "../oob/oob.h"
 #include "../util/jring.h"
+#include "../memory/ipc_manager.h"
 #include "config.h"
 #include "gpu_rt.h"
 #include "transport_adapter.h"
@@ -40,11 +41,11 @@ class IpcAdapter final : public TransportAdapter {
 
   // Async data-plane requests.
   unsigned send_async(int peer_rank, void* local_ptr, size_t len,
-                      uint64_t local_mr_id,
+                      uint32_t local_buffer_id,
                       std::optional<RemoteSlice> remote_hint,
                       BounceBufferProvider bounce_provider = nullptr) override;
   unsigned recv_async(int peer_rank, void* local_ptr, size_t len,
-                      uint64_t local_mr_id,
+                      uint32_t local_buffer_id,
                       BounceBufferProvider bounce_provider = nullptr) override;
 
   // Request completion API.

@@ -45,6 +45,23 @@ inline size_t channel_to_context(uint32_t channel_id) {
 }
 }  // namespace
 
+struct RdmaTransportAdapter::HandshakePacket {
+  uint32_t magic = 0;
+  uint32_t version = 1;
+  int32_t src_rank = -1;
+  int32_t dst_rank = -1;
+  int32_t gpu_idx = -1;
+  ChannelMetaData ctrl_meta{};
+  RemoteMemInfo ctrl_mem{};
+  ChannelMetaData normal_meta[kQpNumPerChannel]{};
+};
+
+struct RdmaTransportAdapter::SendBuildState {
+  std::shared_ptr<SendConnection> send_conn;
+  std::shared_ptr<SendControlChannel> send_ctrl;
+  std::array<std::shared_ptr<RDMADataChannel>, kQpNumPerChannel> channels{};
+};
+
 RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx, int local_rank,
                                            int world_size,
                                            RdmaTransportConfig config)
@@ -66,7 +83,7 @@ RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx, int local_rank,
 
 RdmaTransportAdapter::~RdmaTransportAdapter() {
   std::lock_guard<std::mutex> lk(mu_);
-  for (auto& [id, mr] : mr_id_to_local_mr_) {
+  for (auto& [id, mr] : buffer_id_to_local_mr_) {
     (void)id;
     for (auto const& ref : mr.cache_refs) {
       if (ref.context != nullptr) {
@@ -75,7 +92,7 @@ RdmaTransportAdapter::~RdmaTransportAdapter() {
     }
     mr.cache_refs.clear();
   }
-  mr_id_to_local_mr_.clear();
+  buffer_id_to_local_mr_.clear();
   send_build_states_.clear();
   peer_contexts_.clear();
   contexts_.clear();
@@ -209,9 +226,9 @@ bool RdmaTransportAdapter::build_send_bootstrap(int peer_rank,
   auto send_ctrl = std::make_shared<SendControlChannel>(
       ctrl_ctx, ctrl_mem, kControlChannelID);
 
-  SendBuildState state{};
-  state.send_conn = send_group;
-  state.send_ctrl = send_ctrl;
+  auto state = std::make_unique<SendBuildState>();
+  state->send_conn = send_group;
+  state->send_ctrl = send_ctrl;
 
   HandshakePacket local{};
   local.magic = kHandshakeMagic;
@@ -229,7 +246,7 @@ bool RdmaTransportAdapter::build_send_bootstrap(int peer_rank,
     auto ch = std::make_shared<RDMADataChannel>(ctx, channel_id);
     send_group->addChannel(channel_id, ch);
     local.normal_meta[i] = *ch->get_local_meta();
-    state.channels[static_cast<size_t>(i)] = ch;
+    state->channels[static_cast<size_t>(i)] = ch;
   }
 
   {
@@ -308,28 +325,28 @@ bool RdmaTransportAdapter::build_recv_bootstrap(
 
 bool RdmaTransportAdapter::finalize_send_from_remote_recv(
     int peer_rank, HandshakePacket const& remote_recv) {
-  SendBuildState state{};
+  std::unique_ptr<SendBuildState> state;
   {
     std::lock_guard<std::mutex> lk(mu_);
     auto it = send_build_states_.find(peer_rank);
     if (it == send_build_states_.end()) return false;
-    state = it->second;
+    state = std::move(it->second);
     send_build_states_.erase(it);
   }
 
-  if (!state.send_conn || !state.send_ctrl) return false;
+  if (!state || !state->send_conn || !state->send_ctrl) return false;
 
-  state.send_ctrl->establishChannel(remote_recv.ctrl_meta);
+  state->send_ctrl->establishChannel(remote_recv.ctrl_meta);
   for (int i = 0; i < kQpNumPerChannel; ++i) {
-    auto ch = state.channels[static_cast<size_t>(i)];
+    auto ch = state->channels[static_cast<size_t>(i)];
     if (!ch) return false;
     ch->establishChannel(remote_recv.normal_meta[i]);
   }
-  state.send_conn->setControlChannel(std::move(state.send_ctrl));
+  state->send_conn->setControlChannel(std::move(state->send_ctrl));
 
   std::lock_guard<std::mutex> lk(mu_);
   auto& ctx = peer_contexts_[peer_rank];
-  ctx.send_conn = state.send_conn;
+  ctx.send_conn = state->send_conn;
   return true;
 }
 
@@ -357,32 +374,38 @@ bool RdmaTransportAdapter::ensure_peer(PeerConnectSpec const& spec) {
   return has_peer(spec.peer_rank);
 }
 
-bool RdmaTransportAdapter::register_memory(uint64_t mr_id, void* ptr,
+bool RdmaTransportAdapter::register_memory(uint32_t buffer_id, void* ptr,
                                            size_t len) {
   if (!initialized_ || ptr == nullptr || len == 0) return false;
   {
     std::unique_lock<std::mutex> lk(mu_);
     while (true) {
-      auto it = mr_registering_.find(mr_id);
-      if (it == mr_registering_.end() || !it->second) break;
+      auto it = buffer_registering_.find(buffer_id);
+      if (it == buffer_registering_.end() || !it->second) break;
       mr_cv_.wait(lk);
     }
-    if (mr_id_to_local_mr_.find(mr_id) != mr_id_to_local_mr_.end()) return true;
-    mr_registering_[mr_id] = true;
+    if (buffer_id_to_local_mr_.find(buffer_id) != buffer_id_to_local_mr_.end())
+      return true;
+    buffer_registering_[buffer_id] = true;
   }
 
   LocalMr local_mr;
   local_mr.block = std::make_shared<RegMemBlock>(ptr, len, detect_memory_type(ptr));
-  bool success = false;
+  bool success = !contexts_.empty();
+
+  auto release_cache_refs = [&local_mr]() {
+    for (auto const& ref : local_mr.cache_refs) {
+      if (ref.context) ref.context->releaseCachedMr(ref.entry);
+    }
+    local_mr.cache_refs.clear();
+  };
 
   std::unordered_map<RdmaContext*, struct ibv_mr*> registered;
   for (size_t context_id = 0; context_id < contexts_.size(); ++context_id) {
     auto ctx = contexts_[context_id];
     if (!ctx) {
-      for (auto const& ref : local_mr.cache_refs) {
-        if (ref.context) ref.context->releaseCachedMr(ref.entry);
-      }
-      local_mr.cache_refs.clear();
+      success = false;
+      release_cache_refs();
       break;
     }
 
@@ -395,10 +418,8 @@ bool RdmaTransportAdapter::register_memory(uint64_t mr_id, void* ptr,
 
     MrCacheEntry* entry = ctx->acquireCachedMr(ptr, len);
     if (!entry || !entry->mr) {
-      for (auto const& ref : local_mr.cache_refs) {
-        if (ref.context) ref.context->releaseCachedMr(ref.entry);
-      }
-      local_mr.cache_refs.clear();
+      success = false;
+      release_cache_refs();
       break;
     }
 
@@ -408,24 +429,20 @@ bool RdmaTransportAdapter::register_memory(uint64_t mr_id, void* ptr,
     registered.emplace(ctx.get(), entry->mr);
   }
 
-  if (local_mr.cache_refs.size() == contexts_.size()) {
-    success = true;
-  }
-
   std::unique_lock<std::mutex> lk(mu_);
   if (success) {
-    mr_id_to_local_mr_.emplace(mr_id, std::move(local_mr));
+    buffer_id_to_local_mr_.emplace(buffer_id, std::move(local_mr));
   }
-  mr_registering_.erase(mr_id);
+  buffer_registering_.erase(buffer_id);
   lk.unlock();
   mr_cv_.notify_all();
   return success;
 }
 
-void RdmaTransportAdapter::deregister_memory(uint64_t mr_id) {
+void RdmaTransportAdapter::deregister_memory(uint32_t buffer_id) {
   std::lock_guard<std::mutex> lk(mu_);
-  auto it = mr_id_to_local_mr_.find(mr_id);
-  if (it == mr_id_to_local_mr_.end()) return;
+  auto it = buffer_id_to_local_mr_.find(buffer_id);
+  if (it == buffer_id_to_local_mr_.end()) return;
 
   for (auto const& ref : it->second.cache_refs) {
     if (ref.context != nullptr) {
@@ -433,21 +450,22 @@ void RdmaTransportAdapter::deregister_memory(uint64_t mr_id) {
     }
   }
   it->second.cache_refs.clear();
-  mr_id_to_local_mr_.erase(it);
+  buffer_id_to_local_mr_.erase(it);
 }
 
-bool RdmaTransportAdapter::is_memory_registered(uint64_t mr_id) const {
+bool RdmaTransportAdapter::is_memory_registered(uint32_t buffer_id) const {
   std::lock_guard<std::mutex> lk(mu_);
-  return mr_id_to_local_mr_.find(mr_id) != mr_id_to_local_mr_.end();
+  return buffer_id_to_local_mr_.find(buffer_id) !=
+         buffer_id_to_local_mr_.end();
 }
 
-bool RdmaTransportAdapter::query_memory_rkey(uint64_t mr_id,
+bool RdmaTransportAdapter::query_memory_rkey(uint32_t buffer_id,
                                              uint32_t* out_rkey) const {
   if (out_rkey == nullptr) return false;
   *out_rkey = 0;
   std::lock_guard<std::mutex> lk(mu_);
-  auto it = mr_id_to_local_mr_.find(mr_id);
-  if (it == mr_id_to_local_mr_.end() || !it->second.block) return false;
+  auto it = buffer_id_to_local_mr_.find(buffer_id);
+  if (it == buffer_id_to_local_mr_.end() || !it->second.block) return false;
 
   // Any valid context rkey can be used because write hint currently carries a
   // single rkey that is replicated to all contexts at submit time.
@@ -507,11 +525,11 @@ void RdmaTransportAdapter::release_request_slot_locked(unsigned request_id) {
 }
 
 unsigned RdmaTransportAdapter::send_async(
-    int peer_rank, void* local_ptr, size_t len, uint64_t local_mr_id,
+    int peer_rank, void* local_ptr, size_t len, uint32_t local_buffer_id,
     std::optional<RemoteSlice> remote_hint,
     BounceBufferProvider bounce_provider) {
   void* send_ptr = local_ptr;
-  uint64_t send_mr_id = local_mr_id;
+  uint32_t send_buffer_id = local_buffer_id;
   if (bounce_provider) {
     BounceBufferInfo info = bounce_provider(len);
     if (info.ptr != nullptr) {
@@ -521,11 +539,11 @@ unsigned RdmaTransportAdapter::send_async(
         std::memcpy(info.ptr, local_ptr, len);
       }
       send_ptr = info.ptr;
-      send_mr_id = info.mr_id;
+      send_buffer_id = info.buffer_id;
     }
   }
 
-  uint64_t remote_buffer_id = 0;
+  uint32_t remote_buffer_id = 0;
   RemoteSlice const* remote_slice_ptr = nullptr;
   if (remote_hint.has_value()) {
     remote_buffer_id = remote_hint->buffer_id;
@@ -535,7 +553,7 @@ unsigned RdmaTransportAdapter::send_async(
   unsigned request_id = 0;
   if (try_acquire_request_slot(&request_id) == nullptr) return 0;
   int ret =
-      send_async_rdma(peer_rank, send_ptr, len, send_mr_id, remote_buffer_id,
+      send_async_rdma(peer_rank, send_ptr, len, send_buffer_id, remote_buffer_id,
                       request_id, remote_slice_ptr);
   if (ret != 0) {
     std::lock_guard<std::mutex> lk(mu_);
@@ -546,21 +564,21 @@ unsigned RdmaTransportAdapter::send_async(
 }
 
 unsigned RdmaTransportAdapter::recv_async(int peer_rank, void* local_ptr,
-                                          size_t len, uint64_t local_mr_id,
+                                          size_t len, uint32_t local_buffer_id,
                                           BounceBufferProvider bounce_provider) {
   void* recv_ptr = local_ptr;
-  uint64_t recv_mr_id = local_mr_id;
+  uint32_t recv_buffer_id = local_buffer_id;
   if (bounce_provider) {
     BounceBufferInfo info = bounce_provider(len);
     if (info.ptr != nullptr) {
       recv_ptr = info.ptr;
-      recv_mr_id = info.mr_id;
+      recv_buffer_id = info.buffer_id;
     }
   }
 
   unsigned request_id = 0;
   if (try_acquire_request_slot(&request_id) == nullptr) return 0;
-  int ret = recv_async_rdma(peer_rank, recv_ptr, len, recv_mr_id, request_id);
+  int ret = recv_async_rdma(peer_rank, recv_ptr, len, recv_buffer_id, request_id);
   if (ret != 0) {
     std::lock_guard<std::mutex> lk(mu_);
     release_request_slot_locked(request_id);
@@ -576,8 +594,8 @@ bool RdmaTransportAdapter::request_failed(unsigned id) {
 }
 
 int RdmaTransportAdapter::send_async_rdma(int peer_rank, void* local_ptr,
-                                          size_t len, uint64_t local_mr_id,
-                                          uint64_t remote_buffer_id,
+                                          size_t len, uint32_t local_buffer_id,
+                                          uint32_t remote_buffer_id,
                                           uint64_t request_id,
                                           RemoteSlice const* remote_slice) {
   (void)remote_buffer_id;
@@ -590,8 +608,8 @@ int RdmaTransportAdapter::send_async_rdma(int peer_rank, void* local_ptr,
     if (peer_it == peer_contexts_.end() || !peer_it->second.send_conn) return -1;
     send_conn = peer_it->second.send_conn;
 
-    auto mh_it = mr_id_to_local_mr_.find(local_mr_id);
-    if (mh_it == mr_id_to_local_mr_.end()) return -1;
+    auto mh_it = buffer_id_to_local_mr_.find(local_buffer_id);
+    if (mh_it == buffer_id_to_local_mr_.end()) return -1;
     local_mr = mh_it->second;
 
     PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
@@ -663,7 +681,7 @@ int RdmaTransportAdapter::send_async_rdma(int peer_rank, void* local_ptr,
 }
 
 int RdmaTransportAdapter::recv_async_rdma(int peer_rank, void* local_ptr,
-                                          size_t len, uint64_t local_mr_id,
+                                          size_t len, uint32_t local_buffer_id,
                                           uint64_t request_id) {
   std::shared_ptr<RecvConnection> recv_conn;
   LocalMr local_mr;
@@ -673,8 +691,8 @@ int RdmaTransportAdapter::recv_async_rdma(int peer_rank, void* local_ptr,
     if (peer_it == peer_contexts_.end() || !peer_it->second.recv_conn) return -1;
     recv_conn = peer_it->second.recv_conn;
 
-    auto mh_it = mr_id_to_local_mr_.find(local_mr_id);
-    if (mh_it == mr_id_to_local_mr_.end()) return -1;
+    auto mh_it = buffer_id_to_local_mr_.find(local_buffer_id);
+    if (mh_it == buffer_id_to_local_mr_.end()) return -1;
     local_mr = mh_it->second;
 
     PendingRequestSlot* slot = resolve_request_slot_locked(request_id);

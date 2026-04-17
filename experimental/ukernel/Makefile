@@ -77,7 +77,8 @@ endif
 UCCL_ROOT := $(abspath ../../)
 UCCL_RDMA_ROOT := $(UCCL_ROOT)/collective/rdma
 UCCL_RDMA_STATIC := $(UCCL_RDMA_ROOT)/librdma.a
-UCCL_CFLAGS := -I$(UCCL_ROOT) -I$(UCCL_ROOT)/collective/rdma -I$(UCCL_ROOT)/include
+UCCL_CFLAGS := -I$(UCCL_ROOT) -I$(UCCL_ROOT)/collective/rdma -I$(UCCL_ROOT)/include \
+               -I$(UCCL_ROOT)/p2p -I$(UCCL_ROOT)/p2p/include -I$(UCCL_ROOT)/p2p/rdma
 UCCL_LDFLAGS := $(UCCL_RDMA_STATIC) -libverbs -lrdmacm
 
 CXXFLAGS += $(UCCL_CFLAGS)
@@ -166,7 +167,6 @@ bench_all: $(BENCH_BINS)
 # Backward-compatible alias.
 bench: bench_all
 
-bench_transport: $(BENCH_TRANSPORT_BIN)
 transport_bench: bench_transport
 
 bench_gdrcopy: $(BENCH_GDRCOPY_BIN)

@@ -269,6 +269,7 @@ class ProcessGroup {
                 Transport::CommunicatorConfig{
                     exchanger_ip,
                     exchanger_port,
+                    "default",
                     rank,
                     parse_transport(transport),
                 }),
@@ -442,8 +443,8 @@ class ProcessGroup {
             ? roles_
             : CollectiveBufferRoles{
                   kDefaultInputBufferId,
-                  2,
                   kDefaultScratchBufferId,
+                  static_cast<BufferId>(kDefaultScratchBufferId + 1),
               };
     CollectivePlan plan =
         build_plan(make_plan_request(CollectiveKind::AllToAll, config, roles));

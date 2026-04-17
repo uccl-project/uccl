@@ -67,6 +67,25 @@ bool is_unspecified_ip(std::string const& ip) {
          ip == "localhost";
 }
 
+bool is_device_pointer(void* ptr) {
+  if (ptr == nullptr) return false;
+  gpuPointerAttribute_t attr{};
+  gpuError_t err = gpuPointerGetAttributes(&attr, ptr);
+  if (err != gpuSuccess) {
+    gpuGetLastError();
+    return false;
+  }
+  return attr.type == gpuMemoryTypeDevice;
+}
+
+bool is_internal_buffer_id(uint32_t buffer_id) {
+  return buffer_id >= 0xF0000000u;
+}
+
+bool is_ephemeral_buffer_id(uint32_t buffer_id) {
+  return buffer_id >= 0x80000000u;
+}
+
 std::string find_ifname_for_local_ip(std::string const& ip) {
   if (is_unspecified_ip(ip)) return {};
 
@@ -380,23 +399,8 @@ Communicator::~Communicator() {
   }
 
   for (auto const& [buf, item] : mr_manager_.list_local_mrs()) {
-    uint64_t const mr_id = item.mr.id;
-    if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
-      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-      if (uccl_registered_mrs_.find(mr_id) != uccl_registered_mrs_.end()) {
-        uccl_adapter_->deregister_memory(mr_id);
-        uccl_registered_mrs_.erase(mr_id);
-      }
-      uccl_direct_reg_failed_mrs_.erase(mr_id);
-    }
-    if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
-      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-      if (rdma_registered_mrs_.find(mr_id) != rdma_registered_mrs_.end()) {
-        rdma_adapter_->deregister_memory(mr_id);
-        rdma_registered_mrs_.erase(mr_id);
-      }
-      rdma_direct_reg_failed_mrs_.erase(mr_id);
-    }
+    uint32_t const buffer_id = static_cast<uint32_t>(item.mr.id);
+    deregister_backend_memory(buffer_id);
     (void)mr_manager_.delete_mr(buf);
   }
 
@@ -445,6 +449,15 @@ uint32_t Communicator::request_slot_index(unsigned req_id) {
 
 uint32_t Communicator::request_generation(unsigned req_id) {
   return (req_id >> kRequestSlotBits) & kRequestGenerationMask;
+}
+
+uint32_t Communicator::allocate_internal_buffer_id() {
+  uint32_t id =
+      internal_buffer_id_cursor_.fetch_add(1u, std::memory_order_relaxed);
+  if (id == 0) {
+    id = internal_buffer_id_cursor_.fetch_add(1u, std::memory_order_relaxed);
+  }
+  return id;
 }
 
 Communicator::TrackedRequest* Communicator::resolve_request_slot(
@@ -496,7 +509,7 @@ Communicator::TrackedRequest* Communicator::allocate_request_slot(
     slot->completion_bytes = 0;
     slot->host_copy_event = nullptr;
     slot->bounce = {};
-    slot->bounce_owner.reset();
+    slot->bounce_mr_id = 0;
     *out_req_id = rid;
     return slot;
   }
@@ -535,7 +548,7 @@ bool Communicator::try_release_request_slot(unsigned req_id,
     out_snapshot->completion_bytes = slot->completion_bytes;
     out_snapshot->host_copy_event = slot->host_copy_event;
     out_snapshot->bounce = slot->bounce;
-    out_snapshot->bounce_owner = std::move(slot->bounce_owner);
+    out_snapshot->bounce_mr_id = slot->bounce_mr_id;
   }
   slot->state.store(TrackedRequest::SlotState::Free, std::memory_order_release);
   return true;
@@ -600,37 +613,7 @@ RdmaTransportAdapter& Communicator::ensure_rdma_adapter(
     rdma_adapter_ = std::make_unique<RdmaTransportAdapter>(
         local_gpu_idx_, global_rank_, world_size_, std::move(rdma_cfg));
   }
-  bind_rdma_backend_if_needed();
   return *rdma_adapter_;
-}
-
-void Communicator::bind_rdma_backend_if_needed() {
-  if (rdma_backend_bound_) return;
-
-  mr_manager_.bind_backend(
-      [this](uint32_t mr_id, void* ptr, size_t len) -> bool {
-        if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) return false;
-        bool ok = rdma_adapter_->register_memory(mr_id, ptr, len);
-        std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-        if (ok) {
-          rdma_direct_reg_failed_mrs_.erase(mr_id);
-          rdma_registered_mrs_.insert(mr_id);
-        } else {
-          rdma_direct_reg_failed_mrs_.insert(mr_id);
-        }
-        return ok;
-      },
-      [this](uint32_t mr_id) {
-        if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
-          rdma_adapter_->deregister_memory(mr_id);
-        }
-        std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-        rdma_direct_reg_failed_mrs_.erase(mr_id);
-        rdma_registered_mrs_.erase(mr_id);
-      });
-
-  rdma_backend_bound_ = true;
-  mr_manager_.sync_local_backend();
 }
 
 bool Communicator::bootstrap_rdma_peer_oob(int rank,
@@ -903,7 +886,6 @@ bool Communicator::connect(int rank) {
       }
     }
     mark_peer_path_ready(rank, PeerTransportKind::Uccl);
-    register_existing_local_mrs_with_uccl();
     return true;
   }
 
@@ -921,7 +903,6 @@ bool Communicator::connect(int rank) {
       }
     }
     mark_peer_path_ready(rank, PeerTransportKind::Rdma);
-    register_existing_local_mrs_with_rdma();
     return true;
   }
 
@@ -1012,7 +993,6 @@ bool Communicator::accept(int rank) {
       }
     }
     mark_peer_path_ready(rank, PeerTransportKind::Uccl);
-    register_existing_local_mrs_with_uccl();
     return true;
   }
 
@@ -1030,7 +1010,6 @@ bool Communicator::accept(int rank) {
       }
     }
     mark_peer_path_ready(rank, PeerTransportKind::Rdma);
-    register_existing_local_mrs_with_rdma();
     return true;
   }
 
@@ -1139,152 +1118,133 @@ bool Communicator::same_host(int rank) const {
   return local_peer.meta.host_id == remote_peer.meta.host_id;
 }
 
-void Communicator::register_existing_local_mrs_with_uccl() {
-  if (!uccl_adapter_ || !uccl_adapter_->is_initialized()) return;
-  for (auto const& [buf, item] : mr_manager_.list_local_mrs()) {
-    (void)buf;
-    void* ptr = reinterpret_cast<void*>(item.mr.address);
-    size_t len = static_cast<size_t>(item.mr.length);
-    (void)ensure_uccl_memory_registered(item.mr.id, ptr, len);
+bool Communicator::ensure_uccl_memory_registered(uint32_t buffer_id, void* ptr,
+                                                 size_t len) {
+  if (!uccl_adapter_ || !uccl_adapter_->is_initialized()) {
+    std::cerr << "[ERROR] Communicator " << global_rank_
+              << " UCCL backend is not initialized for MR registration, "
+              << "buffer_id=" << buffer_id << std::endl;
+    return false;
   }
+
+  if (uccl_adapter_->is_memory_registered(buffer_id)) return true;
+
+  void* base_ptr = ptr;
+  size_t mr_len = len;
+  std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+  if (uccl_direct_reg_failed_buffers_.find(buffer_id) !=
+      uccl_direct_reg_failed_buffers_.end()) {
+    return false;
+  }
+
+  if (base_ptr == nullptr || mr_len == 0) {
+    std::cerr << "[ERROR] Communicator " << global_rank_
+              << " has invalid base pointer or length for UCCL registration, "
+              << "buffer_id=" << buffer_id << std::endl;
+    return false;
+  }
+
+  bool ok = uccl_adapter_->register_memory(buffer_id, base_ptr, mr_len);
+  if (!ok) {
+    uccl_direct_reg_failed_buffers_.insert(buffer_id);
+    std::cerr << "[WARN] Communicator " << global_rank_
+              << " failed to register buffer " << buffer_id
+              << " with UCCL, base=" << base_ptr << " len=" << mr_len
+              << "; future requests will fallback to host bounce"
+              << std::endl;
+  } else {
+    uccl_registered_buffers_.insert(buffer_id);
+  }
+  return ok;
 }
 
-bool Communicator::ensure_uccl_memory_registered(uint64_t mr_id, void* ptr,
+bool Communicator::ensure_rdma_memory_registered(uint32_t buffer_id, void* ptr,
                                                  size_t len) {
+  if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) {
+    std::cerr << "[ERROR] Communicator " << global_rank_
+              << " RDMA backend is not initialized for MR registration, "
+              << "buffer_id=" << buffer_id << std::endl;
+    return false;
+  }
+
+  if (rdma_adapter_->is_memory_registered(buffer_id)) return true;
+
+  bool const is_gpu = is_device_pointer(ptr);
+  void* base_ptr = ptr;
+  size_t mr_len = len;
+  std::unique_lock<std::mutex> lk(rdma_reg_mu_);
+  if (is_gpu && rdma_gpu_direct_disabled_) {
+    rdma_direct_reg_failed_buffers_.insert(buffer_id);
+    return false;
+  }
+  if (rdma_direct_reg_failed_buffers_.find(buffer_id) !=
+      rdma_direct_reg_failed_buffers_.end()) {
+    return false;
+  }
+
+  if (base_ptr == nullptr || mr_len == 0) {
+    std::cerr << "[ERROR] Communicator " << global_rank_
+              << " has invalid base pointer or length for RDMA registration, "
+              << "buffer_id=" << buffer_id << std::endl;
+    return false;
+  }
+
+  bool ok = rdma_adapter_->register_memory(buffer_id, base_ptr, mr_len);
+  if (!ok) {
+    rdma_direct_reg_failed_buffers_.insert(buffer_id);
+    if (is_gpu && !rdma_gpu_direct_disabled_) {
+      rdma_gpu_direct_disabled_ = true;
+      if (!rdma_gpu_direct_disable_logged_) {
+        std::cerr << "[WARN] Communicator " << global_rank_
+                  << " detected GPU RDMA MR registration failure, "
+                  << "disable GPU direct registration for this communicator; "
+                  << "GPU traffic will use host bounce"
+                  << std::endl;
+        rdma_gpu_direct_disable_logged_ = true;
+      }
+    }
+    if (!is_internal_buffer_id(buffer_id)) {
+      std::cerr << "[WARN] Communicator " << global_rank_
+                << " failed to register buffer " << buffer_id
+                << " with RDMA, base=" << base_ptr << " len=" << mr_len
+                << "; future requests will fallback to host bounce"
+                << std::endl;
+    }
+  } else {
+    rdma_registered_buffers_.insert(buffer_id);
+  }
+  return ok;
+}
+
+void Communicator::deregister_backend_memory(uint32_t buffer_id) {
+  if (buffer_id == 0) return;
+
   if (uccl_adapter_ && uccl_adapter_->is_initialized()) {
-    if (uccl_adapter_->is_memory_registered(mr_id)) return true;
-
-    void* base_ptr = ptr;
-    size_t mr_len = len;
-    bool is_direct_local_mr = false;
-
-    if (mr_id <= std::numeric_limits<uint32_t>::max()) {
-      try {
-        auto item = mr_manager_.get_mr(static_cast<uint32_t>(mr_id));
-        if (!item.valid) throw std::runtime_error("local MR id not found");
-        base_ptr = reinterpret_cast<void*>(
-            static_cast<uintptr_t>(item.mr.address));
-        mr_len = static_cast<size_t>(item.mr.length);
-        is_direct_local_mr = true;
-      } catch (std::exception const&) {
-      }
+    std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+    if (uccl_registered_buffers_.erase(buffer_id) > 0) {
+      uccl_adapter_->deregister_memory(buffer_id);
     }
-
-    if (is_direct_local_mr) {
-      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-      if (uccl_direct_reg_failed_mrs_.find(mr_id) !=
-          uccl_direct_reg_failed_mrs_.end()) {
-        return false;
-      }
-    }
-
-    if (base_ptr == nullptr || mr_len == 0) {
-      std::cerr << "[ERROR] Communicator " << global_rank_
-                << " has invalid base pointer or length for UCCL registration, "
-                << "mr_id=" << mr_id << std::endl;
-      return false;
-    }
-
-    bool ok = uccl_adapter_->register_memory(mr_id, base_ptr, mr_len);
-    if (!ok) {
-      if (is_direct_local_mr) {
-        std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-        uccl_direct_reg_failed_mrs_.insert(mr_id);
-        std::cerr << "[WARN] Communicator " << global_rank_
-                  << " failed to register local GPU MR " << mr_id
-                  << " with UCCL, base=" << base_ptr << " len=" << mr_len
-                  << "; future requests will fallback to host bounce"
-                  << std::endl;
-      } else {
-        std::cerr << "[ERROR] Communicator " << global_rank_
-                  << " failed to register host bounce MR " << mr_id
-                  << " with UCCL, base=" << base_ptr << " len=" << mr_len
-                  << std::endl;
-      }
-    } else {
-      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-      uccl_registered_mrs_.insert(mr_id);
-    }
-    return ok;
   }
 
-  return true;
-}
-
-void Communicator::register_existing_local_mrs_with_rdma() {
-  if (!rdma_adapter_ || !rdma_adapter_->is_initialized()) return;
-  mr_manager_.sync_local_backend();
-}
-
-bool Communicator::ensure_rdma_memory_registered(uint64_t mr_id, void* ptr,
-                                                 size_t len) {
   if (rdma_adapter_ && rdma_adapter_->is_initialized()) {
-    if (rdma_adapter_->is_memory_registered(mr_id)) return true;
-
-    void* base_ptr = ptr;
-    size_t mr_len = len;
-    bool is_direct_local_mr = false;
-
-    // Normal device tensor/staging MRs are tracked in MemoryRegistry by id.
-    // Host bounce buffers use synthetic ids that are not, so fall back to the
-    // explicit ptr/len provided by the caller in that case.
-    if (mr_id <= std::numeric_limits<uint32_t>::max()) {
-      try {
-        auto item = mr_manager_.get_mr(static_cast<uint32_t>(mr_id));
-        if (!item.valid) throw std::runtime_error("local MR id not found");
-        base_ptr = reinterpret_cast<void*>(
-            static_cast<uintptr_t>(item.mr.address));
-        mr_len = static_cast<size_t>(item.mr.length);
-        is_direct_local_mr = true;
-      } catch (std::exception const&) {
-      }
+    std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+    if (rdma_registered_buffers_.erase(buffer_id) > 0) {
+      rdma_adapter_->deregister_memory(buffer_id);
     }
-
-    if (is_direct_local_mr) {
-      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-      if (rdma_direct_reg_failed_mrs_.find(mr_id) !=
-          rdma_direct_reg_failed_mrs_.end()) {
-        return false;
-      }
-    }
-
-    if (base_ptr == nullptr || mr_len == 0) {
-      std::cerr << "[ERROR] Communicator " << global_rank_
-                << " has invalid base pointer or length for RDMA registration, "
-                << "mr_id=" << mr_id << std::endl;
-      return false;
-    }
-
-    bool ok = rdma_adapter_->register_memory(mr_id, base_ptr, mr_len);
-    if (!ok) {
-      if (is_direct_local_mr) {
-        std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-        rdma_direct_reg_failed_mrs_.insert(mr_id);
-        std::cerr << "[WARN] Communicator " << global_rank_
-                  << " failed to register local GPU MR " << mr_id
-                  << " with RDMA, base=" << base_ptr << " len=" << mr_len
-                  << "; future requests will fallback to host bounce"
-                  << std::endl;
-      } else {
-        std::cerr << "[ERROR] Communicator " << global_rank_
-                  << " failed to register host bounce MR " << mr_id
-                  << " with RDMA, base=" << base_ptr << " len=" << mr_len
-                  << std::endl;
-      }
-    } else {
-      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-      rdma_registered_mrs_.insert(mr_id);
-    }
-    return ok;
   }
-
-  return true;
 }
 
 bool Communicator::complete_host_bounce_recv(TrackedRequest& tracked,
                                              bool blocking) {
   if (!tracked.needs_host_to_device_copy) return true;
   if (!tracked.bounce.ptr || !tracked.completion_buffer) return false;
+  if (!is_device_pointer(tracked.completion_buffer)) {
+    std::memcpy(static_cast<char*>(tracked.completion_buffer) +
+                    tracked.completion_offset,
+                tracked.bounce.ptr, tracked.completion_bytes);
+    tracked.needs_host_to_device_copy = false;
+    return true;
+  }
 
   int orig_device = -1;
   GPU_RT_CHECK(gpuGetDevice(&orig_device));
@@ -1342,13 +1302,23 @@ void Communicator::cleanup_tracked_request(TrackedRequest& tracked) {
   }
   tracked.host_copy_submitted = false;
   tracked.needs_host_to_device_copy = false;
-  // NOTE: bounce memory/MR is request-scoped today. Cleanup always tears down
-  // the request-owned bounce resources. A future performance PR can replace
-  // this with a longer-lived pool and defer teardown outside request cleanup.
-  tracked.bounce_owner.reset();
   if (shm_manager_ && tracked.bounce.valid) {
-    (void)mr_manager_.delete_mr(tracked.bounce.ptr);
-    shm_manager_->delete_local_shm(tracked.bounce.shm_id);
+    if (tracked.bounce_mr_id != 0) {
+      deregister_backend_memory(tracked.bounce_mr_id);
+      {
+        std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+        uccl_direct_reg_failed_buffers_.erase(tracked.bounce_mr_id);
+      }
+      {
+        std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+        rdma_direct_reg_failed_buffers_.erase(tracked.bounce_mr_id);
+      }
+      (void)mr_manager_.delete_mr(tracked.bounce_mr_id);
+      tracked.bounce_mr_id = 0;
+    } else {
+      (void)mr_manager_.delete_mr(tracked.bounce.ptr);
+    }
+    shm_manager_->delete_local_shm(tracked.bounce.id);
     tracked.bounce = {};
   }
 }
@@ -1387,27 +1357,33 @@ unsigned Communicator::isend(int rank, LocalSlice src,
        peer_kind == PeerTransportKind::Rdma) &&
       effective_dst_hint.has_value() && !effective_dst_hint->has_write_hint() &&
       effective_dst_hint->buffer_id != 0) {
-    try {
-      MR remote_mr = get_mr(rank, effective_dst_hint->buffer_id);
-      if (remote_mr.address != 0 && remote_mr.key != 0) {
-        RemoteSlice enriched = *effective_dst_hint;
-        uint64_t addr = remote_mr.address;
-        if (enriched.offset <= std::numeric_limits<uint64_t>::max() - addr) {
-          addr += static_cast<uint64_t>(enriched.offset);
-        }
-        uint64_t remaining = 0;
-        if (remote_mr.length > enriched.offset) {
-          remaining = remote_mr.length - static_cast<uint64_t>(enriched.offset);
-        }
-        enriched.write.addr = addr;
-        enriched.write.key = remote_mr.key;
-        enriched.write.capacity = static_cast<uint32_t>(
-            std::min<uint64_t>(remaining, std::numeric_limits<uint32_t>::max()));
-        effective_dst_hint = enriched;
+    MR remote_mr{};
+    bool has_valid_remote_mr = false;
+    for (int attempt = 0; attempt < 2 && !has_valid_remote_mr; ++attempt) {
+      try {
+        remote_mr = get_mr(rank, effective_dst_hint->buffer_id);
+        has_valid_remote_mr = (remote_mr.address != 0 && remote_mr.key != 0);
+      } catch (std::exception const&) {
       }
-    } catch (std::exception const&) {
-      // Remote MR may be unavailable for this buffer_id; keep the original hint
-      // and let adapter fallback logic handle it.
+      if (has_valid_remote_mr) break;
+      (void)wait_mr(rank, effective_dst_hint->buffer_id, 20);
+    }
+
+    if (has_valid_remote_mr) {
+      RemoteSlice enriched = *effective_dst_hint;
+      uint64_t addr = remote_mr.address;
+      if (enriched.offset <= std::numeric_limits<uint64_t>::max() - addr) {
+        addr += static_cast<uint64_t>(enriched.offset);
+      }
+      uint64_t remaining = 0;
+      if (remote_mr.length > enriched.offset) {
+        remaining = remote_mr.length - static_cast<uint64_t>(enriched.offset);
+      }
+      enriched.write.addr = addr;
+      enriched.write.key = remote_mr.key;
+      enriched.write.capacity = static_cast<uint32_t>(
+          std::min<uint64_t>(remaining, std::numeric_limits<uint32_t>::max()));
+      effective_dst_hint = enriched;
     }
   }
   validate_dst_hint_for_transport(peer_kind, effective_dst_hint, src.bytes);
@@ -1415,66 +1391,96 @@ unsigned Communicator::isend(int rank, LocalSlice src,
   void* local_ptr = reinterpret_cast<void*>(
       static_cast<uintptr_t>(local_mr.address) + src.offset);
 
-  bool needs_rdma_registration =
-      (peer_kind == PeerTransportKind::Uccl ||
-       peer_kind == PeerTransportKind::Rdma);
+  bool needs_backend_bounce = false;
+  if (peer_kind == PeerTransportKind::Uccl) {
+    {
+      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+      needs_backend_bounce =
+          uccl_direct_reg_failed_buffers_.find(
+              static_cast<uint32_t>(src.buffer_id)) !=
+          uccl_direct_reg_failed_buffers_.end();
+    }
+    if (!needs_backend_bounce &&
+        (!uccl_adapter_ || !uccl_adapter_->is_initialized() ||
+         !uccl_adapter_->is_memory_registered(
+             static_cast<uint32_t>(src.buffer_id)))) {
+      needs_backend_bounce = !ensure_uccl_memory_registered(
+          static_cast<uint32_t>(src.buffer_id),
+          reinterpret_cast<void*>(static_cast<uintptr_t>(local_mr.address)),
+          static_cast<size_t>(local_mr.length));
+    }
+  } else if (peer_kind == PeerTransportKind::Rdma) {
+    {
+      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+      needs_backend_bounce =
+          rdma_direct_reg_failed_buffers_.find(
+              static_cast<uint32_t>(src.buffer_id)) !=
+          rdma_direct_reg_failed_buffers_.end();
+    }
+    if (!needs_backend_bounce &&
+        (!rdma_adapter_ || !rdma_adapter_->is_initialized() ||
+         !rdma_adapter_->is_memory_registered(
+             static_cast<uint32_t>(src.buffer_id)))) {
+      needs_backend_bounce = !ensure_rdma_memory_registered(
+          static_cast<uint32_t>(src.buffer_id),
+          reinterpret_cast<void*>(static_cast<uintptr_t>(local_mr.address)),
+          static_cast<size_t>(local_mr.length));
+    }
+  }
+
   bool use_shareable = (peer_kind == PeerTransportKind::Ipc);
   bool needs_bounce =
       (peer_kind == PeerTransportKind::Tcp) ||
-      (peer_kind == PeerTransportKind::Ipc) ||
-      ((peer_kind == PeerTransportKind::Uccl &&
-        !ensure_uccl_memory_registered(local_mr.id, local_ptr, src.bytes)) ||
-       (peer_kind == PeerTransportKind::Rdma &&
-        !ensure_rdma_memory_registered(local_mr.id, local_ptr, src.bytes)));
+      (peer_kind == PeerTransportKind::Ipc) || needs_backend_bounce;
   unsigned rid = 0;
   TrackedRequest* slot = allocate_request_slot(&rid);
   if (slot == nullptr) return 0;
   slot->peer_rank = rank;
   slot->kind = peer_kind;
-  std::shared_ptr<SHMItem> bounce_owner;
   if (needs_bounce) {
     SHMManager& shm_manager = require_shm_manager("Communicator::isend");
-    // Request-scoped lease for send bounce memory. Current design allocates
-    // and frees per request; this is intentionally simple but not optimal for
-    // steady-state throughput. Poolization can be added in a follow-up PR.
-    bounce_owner =
-        std::shared_ptr<SHMItem>(new SHMItem{}, [this](SHMItem* lease) {
-          if (lease != nullptr) {
-            if (shm_manager_.has_value() && lease->valid) {
-              (void)mr_manager_.delete_mr(lease->ptr);
-              shm_manager_->delete_local_shm(lease->shm_id);
-            }
-            delete lease;
-          }
-        });
-    slot->bounce_owner = bounce_owner;
+    slot->bounce = shm_manager.create_local_shm(src.bytes, use_shareable);
+    if (needs_backend_bounce) {
+      slot->bounce_mr_id = allocate_internal_buffer_id();
+      (void)mr_manager_.create_local_mr(slot->bounce_mr_id, slot->bounce.ptr,
+                                        src.bytes);
+      bool ok = false;
+      if (peer_kind == PeerTransportKind::Uccl) {
+        ok = ensure_uccl_memory_registered(slot->bounce_mr_id, slot->bounce.ptr,
+                                           src.bytes);
+      } else if (peer_kind == PeerTransportKind::Rdma) {
+        ok = ensure_rdma_memory_registered(slot->bounce_mr_id, slot->bounce.ptr,
+                                           src.bytes);
+      }
+      if (!ok) {
+        slot->state.store(TrackedRequest::SlotState::Releasing,
+                          std::memory_order_release);
+        cleanup_tracked_request(*slot);
+        slot->state.store(TrackedRequest::SlotState::Free,
+                          std::memory_order_release);
+        return 0;
+      }
+    }
     (void)shm_manager;
   }
-  auto bounce_provider = [this, needs_bounce, needs_rdma_registration,
-                          use_shareable,
-                          bounce_owner](size_t bytes) -> BounceBufferInfo {
-    if (!needs_bounce || !bounce_owner) return {};
+  auto bounce_provider = [this, slot, needs_bounce](size_t bytes)
+      -> BounceBufferInfo {
+    if (!needs_bounce || !slot->bounce.valid) return {};
     SHMManager& shm_manager =
         require_shm_manager("Communicator::isend::bounce_provider");
-    if (!bounce_owner->valid) {
-      // Lazy allocate on first use within this request.
-      *bounce_owner = shm_manager.create_local_shm(bytes, use_shareable);
-    }
     BounceBufferInfo info;
-    info.ptr = bounce_owner->ptr;
-    if (needs_rdma_registration) {
-      // Request-scoped bounce MR id. The MR is deleted in request cleanup.
-      auto mr = mr_manager_.create_local_mr(bounce_owner->ptr, bytes);
-      info.mr_id = mr.mr.id;
+    info.ptr = slot->bounce.ptr;
+    info.buffer_id = slot->bounce_mr_id;
+    if (slot->bounce.shareable) {
+      info.shm_name = shm_manager.get_local_shm(slot->bounce.id).shm_name;
     }
-    if (bounce_owner->shareable) {
-      info.shm_name = shm_manager.get_local_shm(bounce_owner->shm_id).shm_name;
-    }
+    (void)bytes;
     return info;
   };
 
   unsigned result =
-      adapter->send_async(rank, local_ptr, src.bytes, local_mr.id,
+      adapter->send_async(rank, local_ptr, src.bytes,
+                          static_cast<uint32_t>(src.buffer_id),
                           effective_dst_hint, bounce_provider);
   if (result == 0) {
     slot->state.store(TrackedRequest::SlotState::Releasing,
@@ -1515,9 +1521,43 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
   void* local_ptr = reinterpret_cast<void*>(
       static_cast<uintptr_t>(local_mr.address) + dst.offset);
 
-  bool needs_rdma_registration =
-      (peer_kind == PeerTransportKind::Uccl ||
-       peer_kind == PeerTransportKind::Rdma);
+  bool needs_backend_bounce = false;
+  if (peer_kind == PeerTransportKind::Uccl) {
+    {
+      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+      needs_backend_bounce =
+          uccl_direct_reg_failed_buffers_.find(
+              static_cast<uint32_t>(dst.buffer_id)) !=
+          uccl_direct_reg_failed_buffers_.end();
+    }
+    if (!needs_backend_bounce &&
+        (!uccl_adapter_ || !uccl_adapter_->is_initialized() ||
+         !uccl_adapter_->is_memory_registered(
+             static_cast<uint32_t>(dst.buffer_id)))) {
+      needs_backend_bounce = !ensure_uccl_memory_registered(
+          static_cast<uint32_t>(dst.buffer_id),
+          reinterpret_cast<void*>(static_cast<uintptr_t>(local_mr.address)),
+          static_cast<size_t>(local_mr.length));
+    }
+  } else if (peer_kind == PeerTransportKind::Rdma) {
+    {
+      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+      needs_backend_bounce =
+          rdma_direct_reg_failed_buffers_.find(
+              static_cast<uint32_t>(dst.buffer_id)) !=
+          rdma_direct_reg_failed_buffers_.end();
+    }
+    if (!needs_backend_bounce &&
+        (!rdma_adapter_ || !rdma_adapter_->is_initialized() ||
+         !rdma_adapter_->is_memory_registered(
+             static_cast<uint32_t>(dst.buffer_id)))) {
+      needs_backend_bounce = !ensure_rdma_memory_registered(
+          static_cast<uint32_t>(dst.buffer_id),
+          reinterpret_cast<void*>(static_cast<uintptr_t>(local_mr.address)),
+          static_cast<size_t>(local_mr.length));
+    }
+  }
+
   bool use_shareable = (peer_kind == PeerTransportKind::Ipc);
   unsigned rid = 0;
   TrackedRequest* slot = allocate_request_slot(&rid);
@@ -1526,11 +1566,7 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
   slot->kind = peer_kind;
 
   auto needs_bounce =
-      (peer_kind == PeerTransportKind::Tcp) ||
-      ((peer_kind == PeerTransportKind::Uccl &&
-        !ensure_uccl_memory_registered(local_mr.id, local_ptr, dst.bytes)) ||
-       (peer_kind == PeerTransportKind::Rdma &&
-        !ensure_rdma_memory_registered(local_mr.id, local_ptr, dst.bytes)));
+      (peer_kind == PeerTransportKind::Tcp) || needs_backend_bounce;
 
   // IPC fast path metadata: let sender resolve remote pointer by dst.buffer_id
   // and skip per-request ipc_cache handshake when possible.
@@ -1555,10 +1591,30 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
     slot->needs_host_to_device_copy = true;
     slot->completion_buffer = local_ptr;
     slot->completion_bytes = dst.bytes;
+    if (needs_backend_bounce) {
+      slot->bounce_mr_id = allocate_internal_buffer_id();
+      (void)mr_manager_.create_local_mr(slot->bounce_mr_id, slot->bounce.ptr,
+                                        dst.bytes);
+      bool ok = false;
+      if (peer_kind == PeerTransportKind::Uccl) {
+        ok = ensure_uccl_memory_registered(slot->bounce_mr_id, slot->bounce.ptr,
+                                           dst.bytes);
+      } else if (peer_kind == PeerTransportKind::Rdma) {
+        ok = ensure_rdma_memory_registered(slot->bounce_mr_id, slot->bounce.ptr,
+                                           dst.bytes);
+      }
+      if (!ok) {
+        slot->state.store(TrackedRequest::SlotState::Releasing,
+                          std::memory_order_release);
+        cleanup_tracked_request(*slot);
+        slot->state.store(TrackedRequest::SlotState::Free,
+                          std::memory_order_release);
+        return 0;
+      }
+    }
   }
-
-  auto bounce_provider = [this, slot, needs_bounce, needs_rdma_registration,
-                          use_shareable](size_t bytes) -> BounceBufferInfo {
+  auto bounce_provider = [this, slot, needs_bounce, use_shareable](size_t bytes)
+      -> BounceBufferInfo {
     if (!needs_bounce) return {};
     SHMManager& shm_manager =
         require_shm_manager("Communicator::irecv::bounce_provider");
@@ -1568,19 +1624,16 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
     }
     BounceBufferInfo info;
     info.ptr = slot->bounce.ptr;
-    if (needs_rdma_registration) {
-      // Request-scoped bounce MR id. The MR is deleted in request cleanup.
-      auto mr = mr_manager_.create_local_mr(slot->bounce.ptr, bytes);
-      info.mr_id = mr.mr.id;
-    }
+    info.buffer_id = slot->bounce_mr_id;
     if (slot->bounce.shareable) {
-      info.shm_name = shm_manager.get_local_shm(slot->bounce.shm_id).shm_name;
+      info.shm_name = shm_manager.get_local_shm(slot->bounce.id).shm_name;
     }
     return info;
   };
 
   unsigned result =
-      adapter->recv_async(rank, local_ptr, dst.bytes, local_mr.id,
+      adapter->recv_async(rank, local_ptr, dst.bytes,
+                          static_cast<uint32_t>(dst.buffer_id),
                           bounce_provider);
   if (result == 0) {
     slot->state.store(TrackedRequest::SlotState::Releasing,
@@ -1766,12 +1819,112 @@ bool Communicator::wait_finish(unsigned const req) {
 bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
                           bool publish) {
   if (buffer_id == 0 || local_buf == nullptr || len == 0) return false;
-  MR mr = mr_manager_.create_local_mr(local_buf, len).mr;
+  MR mr = mr_manager_.create_local_mr(buffer_id, local_buf, len).mr;
   if (mr.id == 0) return false;
+  mr.id = buffer_id;
 
   {
     std::lock_guard<std::mutex> lk(resource_mu_);
     local_buffer_to_mr_[buffer_id] = mr;
+  }
+
+  bool needs_uccl_backend = false;
+  bool needs_rdma_backend = false;
+  CommunicatorMeta local_meta{};
+  {
+    std::lock_guard<std::mutex> lk(peer_mu_);
+    auto const& self = peer_states_.at(static_cast<size_t>(global_rank_));
+    if (self.has_meta) {
+      local_meta = self.meta;
+    } else {
+      local_meta.ip = get_local_ip();
+      local_meta.host_id = generate_host_id();
+      local_meta.local_id =
+          (config_->local_id >= 0 ? config_->local_id : global_rank_);
+      local_meta.rdma_capable = detect_local_rdma_capable();
+    }
+    if (config_->preferred_transport == PreferredTransport::Uccl) {
+      needs_uccl_backend = true;
+      needs_rdma_backend = false;
+    } else if (config_->preferred_transport == PreferredTransport::Rdma) {
+      needs_uccl_backend = false;
+      needs_rdma_backend = true;
+    } else if (config_->preferred_transport == PreferredTransport::Auto) {
+      for (int rank = 0; rank < world_size_; ++rank) {
+        if (rank == global_rank_) continue;
+        auto const& st = peer_states_.at(static_cast<size_t>(rank));
+        if (!st.connected) continue;
+        needs_uccl_backend =
+            needs_uccl_backend || (st.kind == PeerTransportKind::Uccl);
+        needs_rdma_backend =
+            needs_rdma_backend || (st.kind == PeerTransportKind::Rdma);
+      }
+    }
+  }
+
+  if (needs_uccl_backend &&
+      (!uccl_adapter_ || !uccl_adapter_->is_initialized())) {
+    (void)ensure_uccl_adapter(local_meta);
+  }
+  if (needs_rdma_backend &&
+      (!rdma_adapter_ || !rdma_adapter_->is_initialized())) {
+    (void)ensure_rdma_adapter(local_meta);
+  }
+
+  if (needs_uccl_backend) {
+    if (!ensure_uccl_memory_registered(buffer_id, local_buf, len)) {
+      bool should_log = !is_ephemeral_buffer_id(buffer_id);
+      if (should_log) {
+        std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+        should_log = uccl_fallback_logged_buffers_.insert(buffer_id).second;
+      }
+      if (should_log) {
+        std::cerr << "[WARN] Communicator " << global_rank_
+                  << " fallback to host bounce for UCCL buffer " << buffer_id
+                  << std::endl;
+      }
+    }
+  }
+
+  bool rdma_direct_registered = false;
+  if (needs_rdma_backend) {
+    rdma_direct_registered =
+        ensure_rdma_memory_registered(buffer_id, local_buf, len);
+    if (!rdma_direct_registered) {
+      bool should_log = !is_ephemeral_buffer_id(buffer_id);
+      if (should_log) {
+        std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+        should_log = rdma_fallback_logged_buffers_.insert(buffer_id).second;
+      }
+      if (should_log) {
+        std::cerr << "[WARN] Communicator " << global_rank_
+                  << " fallback to host bounce for RDMA buffer " << buffer_id
+                  << std::endl;
+      }
+    }
+  }
+
+  if (needs_rdma_backend && rdma_direct_registered) {
+    uint32_t rkey = 0;
+    if (!rdma_adapter_->query_memory_rkey(buffer_id, &rkey) || rkey == 0) {
+      deregister_backend_memory(buffer_id);
+      {
+        std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+        rdma_direct_reg_failed_buffers_.insert(buffer_id);
+      }
+      std::cerr << "[WARN] Communicator " << global_rank_
+                << " RDMA backend returned invalid rkey for buffer "
+                << buffer_id << ", fallback to host bounce" << std::endl;
+    } else {
+      mr.key = rkey;
+      {
+        std::lock_guard<std::mutex> lk(resource_mu_);
+        auto it = local_buffer_to_mr_.find(buffer_id);
+        if (it != local_buffer_to_mr_.end()) {
+          it->second = mr;
+        }
+      }
+    }
   }
 
   if (!publish || !exchanger_client_ || !exchanger_client_->valid()) {
@@ -1780,50 +1933,36 @@ bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
 
   NamedMRInfos payload{};
   payload.entries.push_back(NamedMR{buffer_id, mr});
-  if (rdma_adapter_ && rdma_adapter_->is_initialized() &&
-      payload.entries[0].mr.id != 0 && payload.entries[0].mr.key == 0) {
-    uint32_t rkey = 0;
-    if (rdma_adapter_->query_memory_rkey(payload.entries[0].mr.id, &rkey) &&
-        rkey != 0) {
-      payload.entries[0].mr.key = rkey;
-    }
-  }
   return oob_put(*exchanger_client_, oob_namespace(),
                  mr_global_buffer_key(global_rank_, buffer_id), payload);
 }
 
 bool Communicator::dereg_mr(uint32_t buffer_id) {
-  MR local_mr{};
   bool found = false;
   {
     std::lock_guard<std::mutex> lk(resource_mu_);
     auto it = local_buffer_to_mr_.find(buffer_id);
     if (it != local_buffer_to_mr_.end()) {
-      local_mr = it->second;
       local_buffer_to_mr_.erase(it);
       found = true;
     }
   }
-  uint64_t const mr_id = local_mr.id;
+  uint32_t const buffer_id_to_remove = found ? buffer_id : 0;
 
-  if (mr_id != 0 && uccl_adapter_ && uccl_adapter_->is_initialized()) {
-    std::lock_guard<std::mutex> lk(uccl_reg_mu_);
-    if (uccl_registered_mrs_.erase(mr_id) > 0) {
-      uccl_adapter_->deregister_memory(mr_id);
+  deregister_backend_memory(buffer_id_to_remove);
+  if (buffer_id_to_remove != 0) {
+    {
+      std::lock_guard<std::mutex> lk(uccl_reg_mu_);
+      uccl_direct_reg_failed_buffers_.erase(buffer_id_to_remove);
     }
-    uccl_direct_reg_failed_mrs_.erase(mr_id);
-  }
-  if (mr_id != 0 && rdma_adapter_ && rdma_adapter_->is_initialized()) {
-    std::lock_guard<std::mutex> lk(rdma_reg_mu_);
-    if (rdma_registered_mrs_.erase(mr_id) > 0) {
-      rdma_adapter_->deregister_memory(mr_id);
+    {
+      std::lock_guard<std::mutex> lk(rdma_reg_mu_);
+      rdma_direct_reg_failed_buffers_.erase(buffer_id_to_remove);
     }
-    rdma_direct_reg_failed_mrs_.erase(mr_id);
   }
 
-  if (found && local_mr.address != 0) {
-    (void)mr_manager_.delete_mr(
-        reinterpret_cast<void*>(static_cast<uintptr_t>(local_mr.address)));
+  if (found && buffer_id_to_remove != 0) {
+    (void)mr_manager_.delete_mr(buffer_id_to_remove);
   }
   return true;
 }
@@ -1849,6 +1988,7 @@ bool Communicator::wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms) {
   for (auto const& entry : payload.entries) {
     if (entry.buffer_id != buffer_id || entry.mr.id == 0) continue;
     mr = entry.mr;
+    mr.id = buffer_id;
     found = true;
     break;
   }
@@ -1912,6 +2052,18 @@ bool Communicator::reg_ipc(uint32_t buffer_id, void* local_buf, size_t len,
 
   {
     std::lock_guard<std::mutex> lk(resource_mu_);
+    // Keep local IPC binding 1:1 with exported base mapping.
+    // If the same local allocation is re-registered under another buffer_id,
+    // drop the old alias so dereg/get stay deterministic.
+    if (local.base_addr != 0) {
+      for (auto it = local_buffer_to_ipc_.begin(); it != local_buffer_to_ipc_.end();) {
+        if (it->first != buffer_id && it->second.base_addr == local.base_addr) {
+          it = local_buffer_to_ipc_.erase(it);
+        } else {
+          ++it;
+        }
+      }
+    }
     local_buffer_to_ipc_[buffer_id] = local;
   }
 

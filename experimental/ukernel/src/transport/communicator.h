@@ -122,13 +122,12 @@ class Communicator {
     size_t completion_bytes = 0;
     gpuEvent_t host_copy_event = nullptr;
     SHMItem bounce;
-    std::shared_ptr<SHMItem> bounce_owner;
+    uint32_t bounce_mr_id = 0;
   };
 
   // Adapter bootstrap / selection.
   UcclTransportAdapter& ensure_uccl_adapter(CommunicatorMeta const& local_meta);
   RdmaTransportAdapter& ensure_rdma_adapter(CommunicatorMeta const& local_meta);
-  void bind_rdma_backend_if_needed();
   bool bootstrap_rdma_peer_oob(int rank, RdmaTransportAdapter& rdma_adapter);
   bool exchange_uccl_peer_info(int rank, UcclTransportAdapter& uccl_adapter,
                                UCCLP2PInfo* out_remote_p2p_info);
@@ -153,13 +152,13 @@ class Communicator {
   static unsigned make_request_id(uint32_t slot_idx, uint32_t generation);
   static uint32_t request_slot_index(unsigned req_id);
   static uint32_t request_generation(unsigned req_id);
+  uint32_t allocate_internal_buffer_id();
   void notify_request_completion();
 
   // RDMA MR lifecycle.
-  void register_existing_local_mrs_with_uccl();
-  bool ensure_uccl_memory_registered(uint64_t mr_id, void* ptr, size_t len);
-  void register_existing_local_mrs_with_rdma();
-  bool ensure_rdma_memory_registered(uint64_t mr_id, void* ptr, size_t len);
+  bool ensure_uccl_memory_registered(uint32_t buffer_id, void* ptr, size_t len);
+  bool ensure_rdma_memory_registered(uint32_t buffer_id, void* ptr, size_t len);
+  void deregister_backend_memory(uint32_t buffer_id);
 
   // Request cleanup helpers.
   void cleanup_tracked_request(TrackedRequest& tracked);
@@ -205,6 +204,7 @@ class Communicator {
   std::unique_ptr<TrackedRequest[]> request_slots_;
   std::atomic<uint32_t> request_alloc_cursor_{0};
   std::atomic<uint32_t> inflight_request_count_{0};
+  std::atomic<uint32_t> internal_buffer_id_cursor_{0xF0000000u};
   static constexpr uint32_t kActiveRingSize = (1u << 15);
   std::unique_ptr<std::atomic<unsigned>[]> active_ring_;
   std::atomic<uint32_t> active_head_{0};
@@ -233,15 +233,18 @@ class Communicator {
 
   // RDMA-family registration caches.
   mutable std::mutex uccl_reg_mu_;
-  std::unordered_set<uint64_t> uccl_direct_reg_failed_mrs_;
-  std::unordered_set<uint64_t> uccl_registered_mrs_;
+  std::unordered_set<uint32_t> uccl_direct_reg_failed_buffers_;
+  std::unordered_set<uint32_t> uccl_registered_buffers_;
+  std::unordered_set<uint32_t> uccl_fallback_logged_buffers_;
   
   // RDMA registration cache.
   mutable std::mutex rdma_reg_mu_;
   mutable std::mutex rdma_bootstrap_mu_;
-  std::unordered_set<uint64_t> rdma_direct_reg_failed_mrs_;
-  std::unordered_set<uint64_t> rdma_registered_mrs_;
-  bool rdma_backend_bound_ = false;
+  std::unordered_set<uint32_t> rdma_direct_reg_failed_buffers_;
+  std::unordered_set<uint32_t> rdma_registered_buffers_;
+  std::unordered_set<uint32_t> rdma_fallback_logged_buffers_;
+  bool rdma_gpu_direct_disabled_ = false;
+  bool rdma_gpu_direct_disable_logged_ = false;
 
 };
 

@@ -93,6 +93,22 @@ void rank_thread_socket(int rank, int world_size, std::string const& ip,
       require(!remote.host_id.empty(), "remote host id should not be empty");
       require(remote.ip == "127.0.0.1", "remote ip mismatch");
     }
+
+    // Keep all ranks alive until everyone has completed GETs to reduce
+    // teardown races in this multi-thread socket test.
+    StringPayload done;
+    done.value = "ok";
+    std::string done_key = "done:" + std::to_string(rank);
+    require(ex->put("test/meta_done", done_key, done) != 0,
+            "rank failed to publish done marker");
+    for (int r = 0; r < world_size; ++r) {
+      std::string peer_done = "done:" + std::to_string(r);
+      StringPayload peer_done_payload;
+      require(ex->get("test/meta_done", peer_done, peer_done_payload, nullptr,
+                      5000),
+              "timeout waiting for peer done marker");
+      require(peer_done_payload.value == "ok", "peer done marker mismatch");
+    }
   } catch (...) {
     error = std::current_exception();
   }
@@ -105,7 +121,7 @@ void test_socket_meta_exchange(int world_size) {
   for (int rank = 0; rank < world_size; ++rank) {
     threads.emplace_back(rank_thread_socket, rank, world_size, "127.0.0.1",
                          port, std::ref(errors[rank]));
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    std::this_thread::sleep_for(std::chrono::milliseconds(80));
   }
 
   for (auto& t : threads) t.join();

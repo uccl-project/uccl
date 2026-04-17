@@ -13,9 +13,12 @@ namespace CCL {
 using BufferId = uint32_t;
 
 inline constexpr BufferId kInvalidBufferId = UINT32_MAX;
-inline constexpr BufferId kDefaultInputBufferId = 0;
+// Buffer id 0 is reserved as "invalid/unset" in transport resource APIs.
+// Use non-zero defaults for CCL role buffers so default collectives can
+// register MR/IPC metadata without requiring user-specified ids.
+inline constexpr BufferId kDefaultInputBufferId = 1;
 inline constexpr BufferId kDefaultOutputBufferId = kDefaultInputBufferId;
-inline constexpr BufferId kDefaultScratchBufferId = 1;
+inline constexpr BufferId kDefaultScratchBufferId = 2;
 
 struct TensorLayout {
   // Torch-style tensor metadata: sizes/strides/storage_offset are all
@@ -51,14 +54,14 @@ inline BufferRef remote_buffer_ref(BufferId buffer_id, int rank,
 }
 
 struct PeerBufferView {
-  uint32_t mr_id = 0;
+  uint32_t buffer_id = 0;
   bool same_node = false;
 };
 
 struct RegisteredBuffer {
   bool registered = false;
   void* local_ptr = nullptr;
-  uint32_t local_mr_id = 0;
+  uint32_t local_buffer_id = 0;
   size_t bytes = 0;
   TensorLayout layout{};
   bool remotely_accessible = true;

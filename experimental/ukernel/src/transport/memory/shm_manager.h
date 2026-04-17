@@ -14,7 +14,7 @@ namespace Transport {
 struct SHMItem {
   void* ptr = nullptr;
   size_t bytes = 0;
-  uint32_t shm_id = 0;
+  uint32_t id = 0;
   bool shareable = false;
   bool is_local = false;
   bool valid = false;
@@ -27,10 +27,10 @@ class SHMManager {
   ~SHMManager();
 
   SHMItem create_local_shm(size_t bytes, bool require_shared = false);
-  SHMItem get_local_shm(uint32_t shm_id) const;
+  SHMItem get_local_shm(uint32_t id) const;
   SHMItem open_remote_shm(std::string const& shm_name);
 
-  bool delete_local_shm(uint32_t shm_id);
+  bool delete_local_shm(uint32_t id);
   bool close_remote_shm(std::string const& shm_name);
   void clear_remote_shm_cache();
 
@@ -38,13 +38,13 @@ class SHMManager {
   struct Entry {
     void* ptr = nullptr;
     size_t bytes = 0;
-    uint32_t shm_id = 0;
+    uint32_t id = 0;
     std::string shm_name;
   };
 
   struct ShmCacheEntry {
     void* ptr = nullptr;
-    size_t size = 0;
+    size_t bytes = 0;
   };
 
   std::atomic<uint32_t> next_shm_id_{1};

@@ -16,6 +16,7 @@ using CommunicatorConfig = UKernel::Transport::CommunicatorConfig;
 using Communicator = UKernel::Transport::Communicator;
 using LocalSlice = UKernel::Transport::LocalSlice;
 using RemoteSlice = UKernel::Transport::RemoteSlice;
+using MR = UKernel::Transport::MR;
 
 static constexpr int kWorldSize = 2;
 static constexpr int kClientGpu = 0;
@@ -251,8 +252,8 @@ void test_transport_communicator_local() {
     require(comm->dereg_mr(kLocalBufferId), "dereg_mr failed");
     require(comm->reg_mr(kLocalBufferId, buf, 4096, false), "reg_mr#2 failed");
     MR mr2 = comm->get_mr(kLocalBufferId);
-    require(mr2.id != mr0.id,
-            "re-registering after dereg_mr should allocate a new MR id");
+    require(mr2.id == mr0.id,
+            "MR id should remain the explicit buffer_id across re-register");
   });
 }
 

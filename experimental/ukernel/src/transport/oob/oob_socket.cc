@@ -33,7 +33,12 @@ static std::string compose_store_key(std::string const& ns,
 static ssize_t send_all_robust(int fd, char const* buf, size_t len) {
   size_t total = 0;
   while (total < len) {
+    // Avoid process-killing SIGPIPE when peer closes early.
+#ifdef MSG_NOSIGNAL
+    ssize_t n = ::send(fd, buf + total, len - total, MSG_NOSIGNAL);
+#else
     ssize_t n = ::send(fd, buf + total, len - total, 0);
+#endif
     if (n > 0) {
       total += static_cast<size_t>(n);
       continue;

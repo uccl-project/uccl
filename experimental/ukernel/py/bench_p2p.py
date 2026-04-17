@@ -30,9 +30,12 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
     if not comm.reg_rdma(recv_buffer_id, recv_buf, publish=True):
         raise RuntimeError("reg_rdma(recv) failed")
 
-    # Global synchronization after publishing local mappings.
-    if not comm.barrier("rdma_mr_ready", 30000):
-        raise RuntimeError("ukernel barrier(rdma_mr_ready) failed")
+    # Explicitly wait for peer MR metadata to be materialized locally.
+    # This guarantees remote rkey/address are available before issuing sends.
+    if not comm.wait_mr(peer, send_buffer_id):
+        raise RuntimeError("wait_mr(send_buffer_id) failed")
+    if not comm.wait_mr(peer, recv_buffer_id):
+        raise RuntimeError("wait_mr(recv_buffer_id) failed")
 
     def do_send():
         # Sender writes into peer's recv buffer id.

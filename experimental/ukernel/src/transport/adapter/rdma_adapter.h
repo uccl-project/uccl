@@ -1,7 +1,6 @@
 #pragma once
 
 #include "transport_adapter.h"
-#include "p2p/rdma/rdma_context.h"
 #include <atomic>
 #include <array>
 #include <cstddef>
@@ -20,6 +19,11 @@ class RdmaContext;
 class MemoryAllocator;
 class SendControlChannel;
 class RDMADataChannel;
+struct RegMemBlock;
+struct MrCacheEntry;
+enum class MemoryType;
+struct ChannelMetaData;
+struct RemoteMemInfo;
 
 namespace UKernel {
 namespace Transport {
@@ -44,11 +48,11 @@ class RdmaTransportAdapter final : public TransportAdapter {
   void rollback_peer_bootstrap(int peer_rank);
 
   // Registration lifecycle.
-  bool is_memory_registered(uint64_t mr_id) const;
-  bool register_memory(uint64_t mr_id, void* ptr, size_t len);
-  void deregister_memory(uint64_t mr_id);
-  // Query one valid local rkey for a registered MR id.
-  bool query_memory_rkey(uint64_t mr_id, uint32_t* out_rkey) const;
+  bool is_memory_registered(uint32_t buffer_id) const;
+  bool register_memory(uint32_t buffer_id, void* ptr, size_t len);
+  void deregister_memory(uint32_t buffer_id);
+  // Query one valid local rkey for a registered buffer id.
+  bool query_memory_rkey(uint32_t buffer_id, uint32_t* out_rkey) const;
   bool is_initialized() const { return initialized_; }
 
   // TransportAdapter compatibility.
@@ -59,11 +63,11 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
   // Async request path.
   unsigned send_async(int peer_rank, void* local_ptr, size_t len,
-                      uint64_t local_mr_id,
+                      uint32_t local_buffer_id,
                       std::optional<RemoteSlice> remote_hint,
                       BounceBufferProvider bounce_provider = nullptr) override;
   unsigned recv_async(int peer_rank, void* local_ptr, size_t len,
-                      uint64_t local_mr_id,
+                      uint32_t local_buffer_id,
                       BounceBufferProvider bounce_provider = nullptr) override;
 
   // Completion / request state.
@@ -103,25 +107,15 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
   struct LocalMr {
     std::shared_ptr<RegMemBlock> block;
-    std::vector<MrCacheHandleRef> cache_refs;
+    struct CacheRef {
+      std::shared_ptr<RdmaContext> context;
+      MrCacheEntry* entry = nullptr;
+    };
+    std::vector<CacheRef> cache_refs;
   };
 
-  struct HandshakePacket {
-    uint32_t magic = 0;
-    uint32_t version = 1;
-    int32_t src_rank = -1;
-    int32_t dst_rank = -1;
-    int32_t gpu_idx = -1;
-    ChannelMetaData ctrl_meta{};
-    RemoteMemInfo ctrl_mem{};
-    ChannelMetaData normal_meta[kQpNumPerChannel]{};
-  };
-
-  struct SendBuildState {
-    std::shared_ptr<SendConnection> send_conn;
-    std::shared_ptr<SendControlChannel> send_ctrl;
-    std::array<std::shared_ptr<RDMADataChannel>, kQpNumPerChannel> channels{};
-  };
+  struct HandshakePacket;
+  struct SendBuildState;
 
   // Initialization helpers.
   bool initialize_contexts();
@@ -144,11 +138,11 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
   // Async submit helpers.
   int send_async_rdma(int peer_rank, void* local_ptr, size_t len,
-                      uint64_t local_mr_id, uint64_t remote_buffer_id,
+                      uint32_t local_buffer_id, uint32_t remote_buffer_id,
                       uint64_t request_id,
                       RemoteSlice const* remote_slice = nullptr);
   int recv_async_rdma(int peer_rank, void* local_ptr, size_t len,
-                      uint64_t local_mr_id, uint64_t request_id);
+                      uint32_t local_buffer_id, uint64_t request_id);
 
   // Completion helpers.
   bool is_backend_request_done(AdapterRequest const& request,
@@ -179,9 +173,9 @@ class RdmaTransportAdapter final : public TransportAdapter {
   std::vector<std::shared_ptr<RdmaContext>> contexts_;
   std::shared_ptr<MemoryAllocator> allocator_;
   std::unordered_map<int, PeerContext> peer_contexts_;
-  std::unordered_map<int, SendBuildState> send_build_states_;
-  std::unordered_map<uint64_t, LocalMr> mr_id_to_local_mr_;
-  std::unordered_map<uint64_t, bool> mr_registering_;
+  std::unordered_map<int, std::unique_ptr<SendBuildState>> send_build_states_;
+  std::unordered_map<uint32_t, LocalMr> buffer_id_to_local_mr_;
+  std::unordered_map<uint32_t, bool> buffer_registering_;
 
   std::unique_ptr<PendingRequestSlot[]> request_slots_;
   std::atomic<uint32_t> request_alloc_cursor_{0};

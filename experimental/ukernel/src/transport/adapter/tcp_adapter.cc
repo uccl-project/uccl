@@ -249,10 +249,10 @@ bool TcpTransportAdapter::has_peer(int peer_rank) const {
 }
 
 unsigned TcpTransportAdapter::send_async(int peer_rank, void* local_ptr,
-                                         size_t len, uint64_t local_mr_id,
+                                         size_t len, uint32_t local_buffer_id,
                                          std::optional<RemoteSlice> remote_hint,
                                          BounceBufferProvider bounce_provider) {
-  (void)local_mr_id;
+  (void)local_buffer_id;
   (void)remote_hint;
   if (!has_peer(peer_rank) || local_ptr == nullptr || len == 0) return 0;
 
@@ -281,9 +281,9 @@ unsigned TcpTransportAdapter::send_async(int peer_rank, void* local_ptr,
 }
 
 unsigned TcpTransportAdapter::recv_async(int peer_rank, void* local_ptr,
-                                         size_t len, uint64_t local_mr_id,
+                                         size_t len, uint32_t local_buffer_id,
                                          BounceBufferProvider bounce_provider) {
-  (void)local_mr_id;
+  (void)local_buffer_id;
   if (!has_peer(peer_rank) || local_ptr == nullptr || len == 0) return 0;
   void* recv_ptr = local_ptr;
   if (bounce_provider) {

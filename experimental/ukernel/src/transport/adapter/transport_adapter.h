@@ -14,7 +14,7 @@ namespace Transport {
 
 struct BounceBufferInfo {
   void* ptr = nullptr;
-  uint32_t mr_id = 0;
+  uint32_t buffer_id = 0;
   std::string shm_name;
   bool valid() const { return ptr != nullptr; }
 };
@@ -65,13 +65,13 @@ class TransportAdapter {
   virtual bool has_peer(int peer_rank) const = 0;
 
   virtual unsigned send_async(
-      // Adapter-facing id is always local registered MR id.
-      int peer_rank, void* local_ptr, size_t len, uint64_t local_mr_id,
+      // Adapter-facing id is always local registered buffer_id.
+      int peer_rank, void* local_ptr, size_t len, uint32_t local_buffer_id,
       std::optional<RemoteSlice> remote_hint,
       BounceBufferProvider bounce_provider = nullptr) = 0;
   virtual unsigned recv_async(
-      // Adapter-facing id is always local registered MR id.
-      int peer_rank, void* local_ptr, size_t len, uint64_t local_mr_id,
+      // Adapter-facing id is always local registered buffer_id.
+      int peer_rank, void* local_ptr, size_t len, uint32_t local_buffer_id,
       BounceBufferProvider bounce_provider = nullptr) = 0;
 
   virtual bool poll_completion(unsigned id) = 0;
