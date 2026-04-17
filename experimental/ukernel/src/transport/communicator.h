@@ -66,37 +66,20 @@ class Communicator {
   std::shared_ptr<void> register_completion_notifier(
       std::function<void(unsigned, std::chrono::steady_clock::time_point)> cb);
 
-  // MR metadata exchange.
-  MR reg_mr(void* local_buf, size_t len);
-  bool dereg_mr(void* local_buf);
-  bool notify_named_mrs(int remote_rank, uint64_t generation,
-                        NamedMRInfos const& infos);
-  bool wait_named_mrs(int remote_rank, uint64_t generation,
-                      NamedMRInfos& infos);
-  MR get_local_mr(void* local_buf);
-  MR get_local_mr(uint32_t mr_id);
-  MR get_remote_mr(int remote_rank, uint32_t mr_id);
+  // Async resource API (buffer_id keyed).
+  bool reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
+              bool publish = true);
+  bool dereg_mr(uint32_t buffer_id);
+  bool wait_mr(int owner_rank, uint32_t buffer_id, int timeout_ms = -1);
+  MR get_mr(uint32_t buffer_id) const;
+  MR get_mr(int owner_rank, uint32_t buffer_id) const;
 
-  // IPC metadata exchange.
-  bool notify_ipc_buffer(int remote_rank, uint32_t ipc_id, void* local_buf,
-                         size_t len, uint64_t binding_version = 0);
-  bool wait_ipc_buffer(int remote_rank, uint32_t ipc_id,
-                       uint64_t expected_binding_version = 0);
-  bool resolve_ipc_buffer_pointer(int remote_rank, uint32_t ipc_id,
-                                  size_t offset, size_t bytes, void** out_ptr,
-                                  int* out_device_idx);
-
-  bool register_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle,
-                                 IPCItem const& ipc);
-  IPCItem get_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle);
-
-  // Adapter-facing IPC metadata helpers.
-  int local_gpu_idx() const { return local_gpu_idx_; }
-  bool ipc_has_fresh_remote_ipc_buffer(int remote_rank, uint32_t ipc_id,
-                                       uint64_t expected_binding_version) const;
-  bool ipc_fetch_remote_ipc_buffer(int remote_rank, uint32_t ipc_id,
-                                   uint64_t expected_binding_version = 0);
-  void ipc_invalidate_remote_ipc_buffer(int remote_rank, uint32_t ipc_id);
+  bool reg_ipc(uint32_t buffer_id, void* local_buf, size_t len,
+               bool publish = true);
+  bool dereg_ipc(uint32_t buffer_id);
+  bool wait_ipc(int owner_rank, uint32_t buffer_id, int timeout_ms = -1);
+  IPCItem get_ipc(uint32_t buffer_id);
+  IPCItem get_ipc(int owner_rank, uint32_t buffer_id);
 
   // SHM bounce.
   void* get_or_open_bounce_shm(std::string const& shm_name);
@@ -178,13 +161,6 @@ class Communicator {
   void register_existing_local_mrs_with_rdma();
   bool ensure_rdma_memory_registered(uint64_t mr_id, void* ptr, size_t len);
 
-  // IPC metadata cache lifecycle.
-  bool fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
-                        uint64_t expected_binding_version = 0);
-  bool has_fresh_remote_ipc_buffer(int remote_rank, uint32_t ipc_id,
-                                   uint64_t expected_binding_version) const;
-  void invalidate_remote_ipc_buffer(int remote_rank, uint32_t ipc_id);
-
   // Request cleanup helpers.
   void cleanup_tracked_request(TrackedRequest& tracked);
   bool complete_host_bounce_recv(TrackedRequest& tracked, bool blocking);
@@ -235,7 +211,11 @@ class Communicator {
   std::atomic<uint32_t> active_tail_{0};
   int completion_event_fd_ = -1;
   std::atomic<uint64_t> completion_seq_{0};
-  mutable std::mutex mr_exchange_mu_;
+  mutable std::mutex resource_mu_;
+  std::unordered_map<uint32_t, MR> local_buffer_to_mr_;
+  std::unordered_map<int, std::unordered_map<uint32_t, MR>>
+      remote_buffer_to_mr_;
+  std::unordered_map<uint32_t, IPCItem> local_buffer_to_ipc_;
 
   // Despite the historical name, this thread now serves as the communicator's
   // background progress engine. register_completion_notifier() only attaches
@@ -263,10 +243,6 @@ class Communicator {
   std::unordered_set<uint64_t> rdma_registered_mrs_;
   bool rdma_backend_bound_ = false;
 
-  // IPC binding versions.
-  mutable std::mutex ipc_gen_mu_;
-  std::unordered_map<int, std::unordered_map<uint32_t, uint64_t>>
-      local_ipc_binding_versions_;
 };
 
 }  // namespace Transport

@@ -7,6 +7,7 @@
 #include <torch/csrc/autograd/python_variable.h>
 #include <torch/extension.h>
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -63,19 +64,31 @@ class Communicator {
   }
 
   ~Communicator() {
-    std::vector<void*> pinned_ptrs;
+    std::vector<uint32_t> rdma_buffer_ids;
+    std::vector<uint32_t> ipc_buffer_ids;
     {
       std::lock_guard<std::mutex> lk(mu_);
-      pinned_ptrs.reserve(pinned_tensors_.size());
-      for (auto const& it : pinned_tensors_) {
-        pinned_ptrs.push_back(it.first);
+      rdma_buffer_ids.reserve(rdma_buffer_to_ptr_.size());
+      for (auto const& it : rdma_buffer_to_ptr_) {
+        rdma_buffer_ids.push_back(it.first);
       }
-      pinned_tensors_.clear();
+      ipc_buffer_ids.reserve(ipc_buffer_to_ptr_.size());
+      for (auto const& it : ipc_buffer_to_ptr_) {
+        ipc_buffer_ids.push_back(it.first);
+      }
+      tensor_bindings_.clear();
+      rdma_buffer_to_ptr_.clear();
+      ipc_buffer_to_ptr_.clear();
       pending_requests_.clear();
     }
-    for (void* ptr : pinned_ptrs) {
-      if (ptr != nullptr) {
-        comm_->dereg_mr(ptr);
+    for (uint32_t buffer_id : rdma_buffer_ids) {
+      if (buffer_id != 0) {
+        (void)comm_->dereg_mr(buffer_id);
+      }
+    }
+    for (uint32_t buffer_id : ipc_buffer_ids) {
+      if (buffer_id != 0) {
+        (void)comm_->dereg_ipc(buffer_id);
       }
     }
   }
@@ -86,154 +99,84 @@ class Communicator {
   bool connect_peer(int peer_rank) { return comm_->connect(peer_rank); }
   bool accept_peer(int peer_rank) { return comm_->accept(peer_rank); }
 
-  uint32_t pin_tensor(nb::handle tensor) {
+  bool reg_rdma(uint32_t buffer_id, nb::handle tensor, bool publish = true) {
+    if (buffer_id == 0) throw std::invalid_argument("buffer_id must be non-zero");
     torch::Tensor t = tensor_from_python(tensor, "tensor");
-    if (!t.is_cuda()) {
-      throw std::invalid_argument("pin_tensor requires a CUDA tensor");
-    }
+    if (!t.is_cuda()) throw std::invalid_argument("reg_rdma requires CUDA tensor");
     if (!t.is_contiguous()) {
-      throw std::invalid_argument("pin_tensor requires a contiguous tensor");
+      throw std::invalid_argument("reg_rdma requires contiguous tensor");
     }
     size_t total_bytes =
         static_cast<size_t>(t.numel()) * static_cast<size_t>(t.element_size());
-    if (total_bytes == 0) {
-      throw std::invalid_argument("pin_tensor requires non-empty tensor");
-    }
-
+    if (total_bytes == 0) throw std::invalid_argument("reg_rdma requires non-empty tensor");
     void* ptr = t.data_ptr();
+    if (!comm_->reg_mr(buffer_id, ptr, total_bytes, publish)) return false;
     {
       std::lock_guard<std::mutex> lk(mu_);
-      auto it = pinned_tensors_.find(ptr);
-      if (it != pinned_tensors_.end()) {
-        if (it->second.bytes != total_bytes) {
-          throw std::runtime_error(
-              "pinned tensor size changed for the same pointer");
-        }
-        return it->second.mr_id;
-      }
-    }
-
-    auto mr = comm_->reg_mr(ptr, total_bytes);
-    if (mr.id == 0) {
-      throw std::runtime_error("pin_tensor failed to register MR");
-    }
-
-    std::lock_guard<std::mutex> lk(mu_);
-    pinned_tensors_[ptr] = PinnedTensor{std::move(t), mr.id, total_bytes};
-    return mr.id;
-  }
-
-  bool unpin_tensor(nb::handle tensor) {
-    torch::Tensor t = tensor_from_python(tensor, "tensor");
-    void* ptr = t.data_ptr();
-    PinnedTensor pinned;
-    {
-      std::lock_guard<std::mutex> lk(mu_);
-      auto it = pinned_tensors_.find(ptr);
-      if (it == pinned_tensors_.end()) return false;
-      pinned = std::move(it->second);
-      pinned_tensors_.erase(it);
-    }
-    return comm_->dereg_mr(ptr);
-  }
-
-  bool publish_mr(int peer_rank, uint32_t buffer_id, uint32_t mr_id,
-                  uint64_t generation = 0) {
-    // Serialize publishes so auto-generation stays deterministic while
-    // avoiding holding mr_mu_ during OOB/network publish.
-    std::lock_guard<std::mutex> pub_lk(publish_mu_);
-    MR local = comm_->get_local_mr(mr_id);
-    auto const key = make_peer_buffer_key(peer_rank, buffer_id);
-    // generation=0 means auto-version by (peer, buffer_id). We only advance
-    // local publish cursor after notify succeeds to avoid version gaps.
-    uint64_t effective_generation = generation;
-    {
-      std::lock_guard<std::mutex> lk(mr_mu_);
-      if (effective_generation == 0) {
-        auto it = local_published_generation_.find(key);
-        effective_generation =
-            (it == local_published_generation_.end()) ? 1 : (it->second + 1);
-      }
-    }
-    NamedMRInfos infos{};
-    infos.generation = effective_generation;
-    infos.entries.push_back(NamedMR{buffer_id, local});
-    if (!comm_->notify_named_mrs(peer_rank, effective_generation, infos)) {
-      return false;
-    }
-    {
-      std::lock_guard<std::mutex> lk(mr_mu_);
-      local_published_generation_[key] =
-          std::max(local_published_generation_[key], effective_generation);
+      tensor_bindings_[ptr] = PinnedTensor{std::move(t), buffer_id, total_bytes};
+      rdma_buffer_to_ptr_[buffer_id] = ptr;
     }
     return true;
   }
 
-  uint32_t wait_mr(int peer_rank, uint32_t buffer_id, uint64_t generation = 0) {
-    auto const key = make_peer_buffer_key(peer_rank, buffer_id);
-    uint64_t target_generation = generation;
-    if (target_generation == 0) {
-      // generation=0 means "wait for next version" of this (peer, buffer_id).
-      std::lock_guard<std::mutex> lk(mr_mu_);
-      auto it = remote_seen_generation_.find(key);
-      uint64_t const last_seen =
-          (it == remote_seen_generation_.end()) ? 0 : it->second;
-      target_generation = last_seen + 1;
-    } else {
-      // Explicit generation can be satisfied from cache.
-      std::lock_guard<std::mutex> lk(mr_mu_);
-      auto it = remote_mr_cache_.find(key);
-      if (it != remote_mr_cache_.end() && it->second.generation >= generation) {
-        return it->second.mr_id;
+  bool unreg_rdma(uint32_t buffer_id) {
+    void* ptr = nullptr;
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      auto it = rdma_buffer_to_ptr_.find(buffer_id);
+      if (it != rdma_buffer_to_ptr_.end()) {
+        ptr = it->second;
+        rdma_buffer_to_ptr_.erase(it);
       }
+      if (ptr != nullptr) tensor_bindings_.erase(ptr);
     }
-
-    for (;;) {
-      NamedMRInfos infos{};
-      if (!comm_->wait_named_mrs(peer_rank, target_generation, infos)) {
-        throw std::runtime_error(
-            "wait_mr failed to fetch remote named MR table");
-      }
-      bool found = false;
-      {
-        std::lock_guard<std::mutex> lk(mr_mu_);
-        // Cache every entry from this generation for future lookup.
-        for (auto const& entry : infos.entries) {
-          auto const entry_key =
-              make_peer_buffer_key(peer_rank, entry.buffer_id);
-          remote_mr_cache_[entry_key] =
-              RemoteMRCacheItem{entry.mr.id, infos.generation};
-          remote_seen_generation_[entry_key] =
-              std::max(remote_seen_generation_[entry_key], infos.generation);
-          if (entry.buffer_id == buffer_id) {
-            found = true;
-          }
-        }
-        if (found) {
-          return remote_mr_cache_.at(key).mr_id;
-        }
-      }
-      // If caller requires explicit generation, missing buffer is a hard error.
-      if (generation != 0) {
-        throw std::runtime_error("wait_mr missing requested buffer_id");
-      }
-      // Auto mode: continue scanning next generation until this buffer is published.
-      ++target_generation;
-    }
+    return comm_->dereg_mr(buffer_id);
   }
 
-  uint32_t remote_mr(int peer_rank, uint32_t buffer_id) const {
-    std::lock_guard<std::mutex> lk(mr_mu_);
-    auto const key = make_peer_buffer_key(peer_rank, buffer_id);
-    auto it = remote_mr_cache_.find(key);
-    if (it == remote_mr_cache_.end()) {
-      throw std::runtime_error("remote_mr not found for requested buffer_id");
+  bool reg_ipc(uint32_t buffer_id, nb::handle tensor, bool publish = true) {
+    if (buffer_id == 0) throw std::invalid_argument("buffer_id must be non-zero");
+    torch::Tensor t = tensor_from_python(tensor, "tensor");
+    if (!t.is_cuda()) throw std::invalid_argument("reg_ipc requires CUDA tensor");
+    if (!t.is_contiguous()) {
+      throw std::invalid_argument("reg_ipc requires contiguous tensor");
     }
-    return it->second.mr_id;
+    size_t total_bytes =
+        static_cast<size_t>(t.numel()) * static_cast<size_t>(t.element_size());
+    if (total_bytes == 0) throw std::invalid_argument("reg_ipc requires non-empty tensor");
+    void* ptr = t.data_ptr();
+    if (!comm_->reg_ipc(buffer_id, ptr, total_bytes, publish)) return false;
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      tensor_bindings_[ptr] = PinnedTensor{std::move(t), buffer_id, total_bytes};
+      ipc_buffer_to_ptr_[buffer_id] = ptr;
+    }
+    return true;
+  }
+
+  bool unreg_ipc(uint32_t buffer_id) {
+    void* ptr = nullptr;
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      auto it = ipc_buffer_to_ptr_.find(buffer_id);
+      if (it != ipc_buffer_to_ptr_.end()) {
+        ptr = it->second;
+        ipc_buffer_to_ptr_.erase(it);
+      }
+      if (ptr != nullptr) tensor_bindings_.erase(ptr);
+    }
+    return comm_->dereg_ipc(buffer_id);
+  }
+
+  bool wait_ipc(int peer_rank, uint32_t buffer_id) {
+    return comm_->wait_ipc(peer_rank, buffer_id);
+  }
+
+  bool wait_mr(int peer_rank, uint32_t buffer_id) {
+    return comm_->wait_mr(peer_rank, buffer_id);
   }
 
   uint64_t isend(int peer_rank, nb::handle tensor, size_t offset = 0,
-                 size_t len = 0, uint32_t remote_mr_id = 0,
+                 size_t len = 0, uint32_t remote_buffer_id = 0,
                  size_t remote_offset = 0) {
     torch::Tensor t = tensor_from_python(tensor, "tensor");
     if (!t.is_cuda()) {
@@ -248,49 +191,38 @@ class Communicator {
     if (offset + len > total_bytes) {
       throw std::invalid_argument("isend offset+len exceeds tensor size");
     }
-    auto pinned_mr = find_pinned_mr_id(t.data_ptr(), total_bytes);
-    uint32_t mr_id = pinned_mr.has_value()
-                         ? *pinned_mr
-                         : comm_->reg_mr(t.data_ptr(), total_bytes).id;
+    auto binding = find_tensor_binding(t.data_ptr(), total_bytes);
+    uint32_t buffer_id = 0;
+    if (binding.has_value()) {
+      buffer_id = binding->buffer_id;
+    } else {
+      buffer_id = next_temporary_buffer_id_.fetch_add(1, std::memory_order_relaxed);
+      if (!comm_->reg_mr(buffer_id, t.data_ptr(), total_bytes, false)) {
+        throw std::runtime_error("isend failed to register temporary MR");
+      }
+    }
     std::optional<UKernel::Transport::RemoteSlice> dst_hint = std::nullopt;
-    if (remote_mr_id != 0) {
-      // Optional explicit destination hint for one-sided fast path.
-      dst_hint =
-          UKernel::Transport::RemoteSlice{remote_mr_id, remote_offset, {}, 0};
+    uint32_t dst_buffer_id = remote_buffer_id;
+    if (dst_buffer_id == 0 && binding.has_value()) {
+      // By default, use the same logical buffer_id on peer side.
+      dst_buffer_id = binding->buffer_id;
+    }
+    if (dst_buffer_id != 0) {
+      dst_hint = UKernel::Transport::RemoteSlice{dst_buffer_id, remote_offset,
+                                                 {}};
     }
     uint64_t req =
-        comm_->isend(peer_rank, UKernel::Transport::LocalSlice{mr_id, offset, len},
+        comm_->isend(peer_rank,
+                     UKernel::Transport::LocalSlice{buffer_id, offset, len},
                      dst_hint);
     if (req == 0) {
-      if (!pinned_mr.has_value()) {
-        comm_->dereg_mr(t.data_ptr());
+      if (!binding.has_value()) {
+        comm_->dereg_mr(buffer_id);
       }
       return 0;
     }
-    track_request(req, std::move(t),
-                  pinned_mr.has_value() ? nullptr : t.data_ptr());
+    track_request(req, std::move(t), binding.has_value() ? 0 : buffer_id);
     return req;
-  }
-
-  uint64_t isend_buffer(int peer_rank, nb::handle tensor, uint32_t buffer_id,
-                        size_t offset = 0, size_t len = 0,
-                        size_t remote_offset = 0,
-                        uint64_t min_generation = 0) {
-    uint32_t remote_mr_id = 0;
-    if (min_generation == 0) {
-      // Fast path for steady-state traffic: reuse cached latest remote MR when
-      // available, and avoid waiting for a "next generation" update.
-      try {
-        remote_mr_id = remote_mr(peer_rank, buffer_id);
-      } catch (std::exception const&) {
-        // Cold start: no cache yet, wait for at least generation 1.
-        remote_mr_id = wait_mr(peer_rank, buffer_id, 1);
-      }
-    } else {
-      // Caller requires at least a specific generation.
-      remote_mr_id = wait_mr(peer_rank, buffer_id, min_generation);
-    }
-    return isend(peer_rank, tensor, offset, len, remote_mr_id, remote_offset);
   }
 
   uint64_t irecv(int peer_rank, nb::handle tensor, size_t offset = 0,
@@ -308,20 +240,25 @@ class Communicator {
     if (offset + len > total_bytes) {
       throw std::invalid_argument("irecv offset+len exceeds tensor size");
     }
-    auto pinned_mr = find_pinned_mr_id(t.data_ptr(), total_bytes);
-    uint32_t mr_id = pinned_mr.has_value()
-                         ? *pinned_mr
-                         : comm_->reg_mr(t.data_ptr(), total_bytes).id;
+    auto binding = find_tensor_binding(t.data_ptr(), total_bytes);
+    uint32_t buffer_id = 0;
+    if (binding.has_value()) {
+      buffer_id = binding->buffer_id;
+    } else {
+      buffer_id = next_temporary_buffer_id_.fetch_add(1, std::memory_order_relaxed);
+      if (!comm_->reg_mr(buffer_id, t.data_ptr(), total_bytes, false)) {
+        throw std::runtime_error("irecv failed to register temporary MR");
+      }
+    }
     uint64_t req = comm_->irecv(
-        peer_rank, UKernel::Transport::LocalSlice{mr_id, offset, len});
+        peer_rank, UKernel::Transport::LocalSlice{buffer_id, offset, len});
     if (req == 0) {
-      if (!pinned_mr.has_value()) {
-        comm_->dereg_mr(t.data_ptr());
+      if (!binding.has_value()) {
+        comm_->dereg_mr(buffer_id);
       }
       return 0;
     }
-    track_request(req, std::move(t),
-                  pinned_mr.has_value() ? nullptr : t.data_ptr());
+    track_request(req, std::move(t), binding.has_value() ? 0 : buffer_id);
     return req;
   }
 
@@ -382,17 +319,15 @@ class Communicator {
 
   bool same_host(int peer_rank) const { return comm_->same_host(peer_rank); }
 
-  void send(int peer_rank, nb::handle tensor, uint32_t remote_mr_id = 0,
-            size_t remote_offset = 0) {
-    uint64_t req = isend(peer_rank, tensor, 0, 0, remote_mr_id, remote_offset);
-    wait_finish(req);
+  bool barrier(std::string const& barrier_namespace = "default",
+               int timeout_ms = -1) {
+    return comm_->barrier(barrier_namespace, timeout_ms);
   }
 
-  void send_buffer(int peer_rank, nb::handle tensor, uint32_t buffer_id,
-                   size_t remote_offset = 0, uint64_t min_generation = 0) {
+  void send(int peer_rank, nb::handle tensor, uint32_t remote_buffer_id = 0,
+            size_t remote_offset = 0) {
     uint64_t req =
-        isend_buffer(peer_rank, tensor, buffer_id, 0, 0, remote_offset,
-                     min_generation);
+        isend(peer_rank, tensor, 0, 0, remote_buffer_id, remote_offset);
     wait_finish(req);
   }
 
@@ -404,38 +339,30 @@ class Communicator {
  private:
   struct PendingTensorRequest {
     torch::Tensor tensor;
-    void* local_buf = nullptr;
+    uint32_t temporary_buffer_id = 0;
   };
 
   struct PinnedTensor {
     torch::Tensor tensor;
-    uint32_t mr_id = 0;
+    uint32_t buffer_id = 0;
     size_t bytes = 0;
   };
 
-  struct RemoteMRCacheItem {
-    uint32_t mr_id = 0;
-    uint64_t generation = 0;
-  };
-
-  static uint64_t make_peer_buffer_key(int peer_rank, uint32_t buffer_id) {
-    return (static_cast<uint64_t>(static_cast<uint32_t>(peer_rank)) << 32) |
-           static_cast<uint64_t>(buffer_id);
-  }
-
-  std::optional<uint32_t> find_pinned_mr_id(void* ptr, size_t bytes) const {
+  std::optional<PinnedTensor> find_tensor_binding(void* ptr, size_t bytes) const {
     std::lock_guard<std::mutex> lk(mu_);
-    auto it = pinned_tensors_.find(ptr);
-    if (it == pinned_tensors_.end()) return std::nullopt;
+    auto it = tensor_bindings_.find(ptr);
+    if (it == tensor_bindings_.end()) return std::nullopt;
     if (it->second.bytes != bytes) {
-      throw std::runtime_error("pinned tensor size mismatch");
+      throw std::runtime_error("registered tensor size mismatch");
     }
-    return it->second.mr_id;
+    return it->second;
   }
 
-  void track_request(uint64_t req, torch::Tensor tensor, void* local_buf) {
+  void track_request(uint64_t req, torch::Tensor tensor,
+                     uint32_t temporary_buffer_id) {
     std::lock_guard<std::mutex> lk(mu_);
-    pending_requests_[req] = PendingTensorRequest{std::move(tensor), local_buf};
+    pending_requests_[req] =
+        PendingTensorRequest{std::move(tensor), temporary_buffer_id};
   }
 
   void cleanup_request(uint64_t req) {
@@ -447,22 +374,17 @@ class Communicator {
       pending = std::move(it->second);
       pending_requests_.erase(it);
     }
-    if (pending.local_buf != nullptr) {
-      comm_->dereg_mr(pending.local_buf);
+    if (pending.temporary_buffer_id != 0) {
+      comm_->dereg_mr(pending.temporary_buffer_id);
     }
   }
 
   std::shared_ptr<UKernel::Transport::Communicator> comm_;
-  std::unordered_map<void*, PinnedTensor> pinned_tensors_;
+  std::unordered_map<void*, PinnedTensor> tensor_bindings_;
+  std::unordered_map<uint32_t, void*> rdma_buffer_to_ptr_;
+  std::unordered_map<uint32_t, void*> ipc_buffer_to_ptr_;
   std::unordered_map<uint64_t, PendingTensorRequest> pending_requests_;
-  // Tracks local published generation for (peer, buffer_id).
-  std::unordered_map<uint64_t, uint64_t> local_published_generation_;
-  // Tracks latest seen remote generation for (peer, buffer_id).
-  std::unordered_map<uint64_t, uint64_t> remote_seen_generation_;
-  // Caches latest remote MR id for (peer, buffer_id).
-  std::unordered_map<uint64_t, RemoteMRCacheItem> remote_mr_cache_;
-  mutable std::mutex publish_mu_;
-  mutable std::mutex mr_mu_;
+  std::atomic<uint32_t> next_temporary_buffer_id_{0x80000000u};
   mutable std::mutex mu_;
 };
 
@@ -483,20 +405,19 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
       .def_prop_ro("world_size", &Communicator::world_size)
       .def("connect_peer", &Communicator::connect_peer, nb::arg("peer_rank"))
       .def("accept_peer", &Communicator::accept_peer, nb::arg("peer_rank"))
-      .def("pin_tensor", &Communicator::pin_tensor, nb::arg("tensor"))
-      .def("unpin_tensor", &Communicator::unpin_tensor, nb::arg("tensor"))
-      .def("publish_mr", &Communicator::publish_mr, nb::arg("peer_rank"),
-           nb::arg("buffer_id"), nb::arg("mr_id"),
-           nb::arg("generation") = 0)
+      .def("reg_rdma", &Communicator::reg_rdma, nb::arg("buffer_id"),
+           nb::arg("tensor"), nb::arg("publish") = true)
+      .def("unreg_rdma", &Communicator::unreg_rdma, nb::arg("buffer_id"))
+      .def("reg_ipc", &Communicator::reg_ipc, nb::arg("buffer_id"),
+           nb::arg("tensor"), nb::arg("publish") = true)
+      .def("unreg_ipc", &Communicator::unreg_ipc, nb::arg("buffer_id"))
       .def("wait_mr", &Communicator::wait_mr, nb::arg("peer_rank"),
-           nb::arg("buffer_id"), nb::arg("generation") = 0)
+           nb::arg("buffer_id"))
+      .def("wait_ipc", &Communicator::wait_ipc, nb::arg("peer_rank"),
+           nb::arg("buffer_id"))
       .def("isend", &Communicator::isend, nb::arg("peer_rank"),
            nb::arg("tensor"), nb::arg("offset") = 0, nb::arg("len") = 0,
-           nb::arg("remote_mr_id") = 0, nb::arg("remote_offset") = 0)
-      .def("isend_buffer", &Communicator::isend_buffer, nb::arg("peer_rank"),
-           nb::arg("tensor"), nb::arg("buffer_id"), nb::arg("offset") = 0,
-           nb::arg("len") = 0, nb::arg("remote_offset") = 0,
-           nb::arg("min_generation") = 0)
+           nb::arg("remote_buffer_id") = 0, nb::arg("remote_offset") = 0)
       .def("irecv", &Communicator::irecv, nb::arg("peer_rank"),
            nb::arg("tensor"), nb::arg("offset") = 0, nb::arg("len") = 0)
       .def("poll", &Communicator::poll, nb::arg("req"))
@@ -507,11 +428,11 @@ NB_MODULE(TORCH_EXTENSION_NAME, m) {
       .def("peer_transport", &Communicator::peer_transport,
            nb::arg("peer_rank"))
       .def("same_host", &Communicator::same_host, nb::arg("peer_rank"))
+      .def("barrier", &Communicator::barrier,
+           nb::arg("barrier_namespace") = "default",
+           nb::arg("timeout_ms") = -1)
       .def("send", &Communicator::send, nb::arg("peer_rank"), nb::arg("tensor"),
-           nb::arg("remote_mr_id") = 0, nb::arg("remote_offset") = 0)
-      .def("send_buffer", &Communicator::send_buffer, nb::arg("peer_rank"),
-           nb::arg("tensor"), nb::arg("buffer_id"),
-           nb::arg("remote_offset") = 0, nb::arg("min_generation") = 0)
+           nb::arg("remote_buffer_id") = 0, nb::arg("remote_offset") = 0)
       .def("recv", &Communicator::recv, nb::arg("peer_rank"),
            nb::arg("tensor"));
 }

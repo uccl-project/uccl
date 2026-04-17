@@ -29,16 +29,15 @@ def run_server() -> None:
 
     recv_buffer_id = 100
     recv = torch.empty(16, device="cuda", dtype=torch.float32)
-    recv_mr_id = comm.pin_tensor(recv)
-    if not comm.publish_mr(1, recv_buffer_id, recv_mr_id):
-        raise RuntimeError("publish_mr(recv) failed")
+    if not comm.reg_rdma(recv_buffer_id, recv, publish=True):
+        raise RuntimeError("reg_rdma(recv) failed")
 
     comm.recv(1, recv)
     print(f"[rank {rank}] received: {recv}")
 
     if recv.sum() == 0:
         raise RuntimeError("No data received!")
-    comm.unpin_tensor(recv)
+    comm.unreg_rdma(recv_buffer_id)
     print(f"[rank {rank}] P2P server test passed!")
 
 
@@ -63,11 +62,14 @@ def run_client() -> None:
 
     recv_buffer_id = 100
     send = torch.arange(0, 16, device="cuda", dtype=torch.float32)
-    comm.pin_tensor(send)
-    comm.wait_mr(0, recv_buffer_id)
+    send_buffer_id = 200
+    if not comm.reg_rdma(send_buffer_id, send, publish=True):
+        raise RuntimeError("reg_rdma(send) failed")
+    if not comm.wait_mr(0, recv_buffer_id):
+        raise RuntimeError("wait_mr(server recv buffer) failed")
 
-    comm.send_buffer(0, send, recv_buffer_id, remote_offset=0)
-    comm.unpin_tensor(send)
+    comm.send(0, send, recv_buffer_id, remote_offset=0)
+    comm.unreg_rdma(send_buffer_id)
     print(f"[rank {rank}] sent: {send}")
     print(f"[rank {rank}] P2P client test passed!")
 

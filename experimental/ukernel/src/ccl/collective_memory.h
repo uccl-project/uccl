@@ -164,7 +164,6 @@ struct CollectiveBufferRoles {
 struct CollectiveBinding {
   std::shared_ptr<BufferRegistry> registry;
   CollectiveBufferRoles roles{};
-  uint64_t transport_binding_version = 0;
   uint64_t transport_initialized_backend_key = 0;
   uint64_t transport_initialized_signature = 0;
 
@@ -210,7 +209,6 @@ struct CollectiveBinding {
   }
 
   void invalidate_transport_cache() {
-    transport_binding_version = 0;
     transport_initialized_backend_key = 0;
     transport_initialized_signature = 0;
   }

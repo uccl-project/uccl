@@ -18,8 +18,7 @@ struct IPCItem {
   uintptr_t base_offset = 0;
   size_t bytes = 0;
   int device_idx = -1;
-  uint64_t binding_version = 0;
-  uint32_t ipc_id = 0;
+  uint32_t buffer_id = 0;
   bool is_local = false;
   bool valid = false;
 };
@@ -27,7 +26,7 @@ struct IPCItem {
 class IPCManager {
  public:
   // Register remote IPC metadata/cache item (supports both handle-keyed and
-  // ipc_id-keyed records by filling `handle` and/or `ipc_id`).
+  // buffer_id-keyed records by filling `handle` and/or `buffer_id`).
   bool register_remote_ipc(int rank, IPCItem const& ipc);
 
   // Create or reuse local GPU IPC export item for a local pointer.
@@ -35,12 +34,12 @@ class IPCManager {
 
   // Unified lookup API.
   IPCItem get_ipc(int rank, gpuIpcMemHandle_t handle) const;
-  IPCItem get_ipc(int rank, uint32_t ipc_id) const;
+  IPCItem get_ipc(int rank, uint32_t buffer_id) const;
   IPCItem get_ipc(void* local_ptr) const;
 
   // Unified delete API.
   bool delete_ipc(int rank, gpuIpcMemHandle_t handle);
-  bool delete_ipc(int rank, uint32_t ipc_id);
+  bool delete_ipc(int rank, uint32_t buffer_id);
   bool delete_ipc(void* local_ptr);
   void delete_ipc(int rank);
 
@@ -74,7 +73,7 @@ class IPCManager {
                      std::unordered_map<IpcHandleKey, IPCItem, IpcHandleHash>>
       rank_handle_cache_;
   std::unordered_map<int, std::unordered_map<uint32_t, IPCItem>>
-      rank_ipc_id_cache_;
+      rank_buffer_id_cache_;
 
   mutable std::mutex local_mu_;
   std::unordered_map<uintptr_t, IPCItem> local_ipc_cache_;

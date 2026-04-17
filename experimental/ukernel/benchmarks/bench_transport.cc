@@ -23,7 +23,8 @@ static inline uint64_t now_ns() {
 static constexpr int kIpcThroughputWindow = 8;
 static constexpr int kUcclThroughputWindow = 4;
 static constexpr int kTcpThroughputWindow = 1;
-static constexpr uint64_t kBenchNamedMrGeneration = 1;
+static constexpr uint32_t kBenchRecvBufferIdBase = 1;
+static constexpr uint32_t kBenchSendBufferId = 1000000;
 
 static PreferredTransport parse_transport(char const* value) {
   if (strcmp(value, "auto") == 0) return PreferredTransport::Auto;
@@ -120,19 +121,28 @@ static void free_device_slots(std::vector<void*>& slots) {
 
 static std::vector<MR> register_slot_mrs(Communicator& comm,
                                          std::vector<void*> const& slots,
-                                         size_t msg_size) {
+                                         size_t msg_size,
+                                         std::vector<uint32_t>& buffer_ids) {
   std::vector<MR> mrs;
   mrs.reserve(slots.size());
-  for (void* ptr : slots) {
-    mrs.push_back(comm.reg_mr(ptr, msg_size));
+  buffer_ids.clear();
+  buffer_ids.reserve(slots.size());
+  for (size_t i = 0; i < slots.size(); ++i) {
+    void* ptr = slots[i];
+    uint32_t const buffer_id = kBenchRecvBufferIdBase + static_cast<uint32_t>(i);
+    if (!comm.reg_mr(buffer_id, ptr, msg_size, true)) {
+      return {};
+    }
+    buffer_ids.push_back(buffer_id);
+    mrs.push_back(comm.get_mr(buffer_id));
   }
   return mrs;
 }
 
 static void deregister_slot_mrs(Communicator& comm,
-                                std::vector<void*> const& slots) {
-  for (void* ptr : slots) {
-    if (ptr != nullptr) comm.dereg_mr(ptr);
+                                std::vector<uint32_t> const& buffer_ids) {
+  for (uint32_t buffer_id : buffer_ids) {
+    if (buffer_id != 0) (void)comm.dereg_mr(buffer_id);
   }
 }
 
@@ -159,48 +169,15 @@ static bool validate_recv_slots(char const* role, int rank,
 }
 
 static bool exchange_remote_recv_mrs(Communicator& comm, int peer_rank,
-                                     std::vector<MR> const& local_recv_mrs,
-                                     std::vector<MR>& remote_recv_mrs,
-                                     bool notify_first) {
-  NamedMRInfos local_infos{};
-  local_infos.generation = kBenchNamedMrGeneration;
-  local_infos.entries.reserve(local_recv_mrs.size());
-  for (size_t i = 0; i < local_recv_mrs.size(); ++i) {
-    NamedMR named{};
-    named.buffer_id = static_cast<uint32_t>(i);
-    named.mr = local_recv_mrs[i];
-    local_infos.entries.push_back(named);
+                                     size_t recv_slots,
+                                     std::vector<MR>& remote_recv_mrs) {
+  remote_recv_mrs.assign(recv_slots, MR{});
+  for (size_t i = 0; i < recv_slots; ++i) {
+    uint32_t const buffer_id = kBenchRecvBufferIdBase + static_cast<uint32_t>(i);
+    if (!comm.wait_mr(peer_rank, buffer_id)) return false;
+    remote_recv_mrs[i] = comm.get_mr(peer_rank, buffer_id);
   }
-
-  auto decode_remote_infos = [&](NamedMRInfos const& remote_infos) -> bool {
-    remote_recv_mrs.assign(local_recv_mrs.size(), MR{});
-    std::vector<char> seen(local_recv_mrs.size(), 0);
-    for (auto const& entry : remote_infos.entries) {
-      size_t idx = static_cast<size_t>(entry.buffer_id);
-      if (idx >= remote_recv_mrs.size()) return false;
-      remote_recv_mrs[idx] = entry.mr;
-      seen[idx] = 1;
-    }
-    for (char v : seen) {
-      if (!v) return false;
-    }
-    return true;
-  };
-
-  NamedMRInfos remote_infos{};
-  if (notify_first) {
-    if (!comm.notify_named_mrs(peer_rank, kBenchNamedMrGeneration, local_infos))
-      return false;
-    if (!comm.wait_named_mrs(peer_rank, kBenchNamedMrGeneration, remote_infos))
-      return false;
-    return decode_remote_infos(remote_infos);
-  }
-
-  if (!comm.wait_named_mrs(peer_rank, kBenchNamedMrGeneration, remote_infos))
-    return false;
-  if (!comm.notify_named_mrs(peer_rank, kBenchNamedMrGeneration, local_infos))
-    return false;
-  return decode_remote_infos(remote_infos);
+  return true;
 }
 
 static uint32_t remote_recv_slot_id(PeerTransportKind kind,
@@ -299,6 +276,7 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
 
   void* send_buf = nullptr;
   std::vector<void*> recv_slots;
+  std::vector<uint32_t> local_recv_buffer_ids;
   if (cudaMalloc(&send_buf, msg_size) != cudaSuccess || send_buf == nullptr) {
     fprintf(stderr, "[Sender %d] Failed to allocate GPU memory\n", rank);
     return;
@@ -310,10 +288,10 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   }
   auto cleanup = [&]() {
     if (send_buf != nullptr) {
-      comm.dereg_mr(send_buf);
+      (void)comm.dereg_mr(kBenchSendBufferId);
       cudaFree(send_buf);
     }
-    deregister_slot_mrs(comm, recv_slots);
+    deregister_slot_mrs(comm, local_recv_buffer_ids);
     free_device_slots(recv_slots);
   };
 
@@ -324,9 +302,19 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
     cudaMemset(recv_slot, 0, msg_size);
   }
 
-  MR local_send_mr = comm.reg_mr(send_buf, msg_size);
+  if (!comm.reg_mr(kBenchSendBufferId, send_buf, msg_size, true)) {
+    fprintf(stderr, "[Sender %d] Failed to register send buffer MR\n", rank);
+    cleanup();
+    return;
+  }
+  MR local_send_mr = comm.get_mr(kBenchSendBufferId);
   std::vector<MR> local_recv_mrs =
-      register_slot_mrs(comm, recv_slots, msg_size);
+      register_slot_mrs(comm, recv_slots, msg_size, local_recv_buffer_ids);
+  if (local_recv_mrs.size() != recv_slots.size()) {
+    fprintf(stderr, "[Sender %d] Failed to register recv slot MRs\n", rank);
+    cleanup();
+    return;
+  }
 
   printf("[Sender %d] Memory registered: send_mr=%d, recv_slots=%d\n", rank,
          local_send_mr.id, throughput_window);
@@ -334,8 +322,8 @@ void run_sender(int gpu_id, int rank, int peer_rank, int world_size,
   std::vector<MR> remote_recv_mrs;
   if (transport_kind == PeerTransportKind::Uccl ||
       transport_kind == PeerTransportKind::Rdma) {
-    if (!exchange_remote_recv_mrs(comm, peer_rank, local_recv_mrs,
-                                  remote_recv_mrs, true)) {
+    if (!exchange_remote_recv_mrs(comm, peer_rank, recv_slots.size(),
+                                  remote_recv_mrs)) {
       fprintf(stderr, "[Sender %d] Failed to exchange remote receive MRs\n",
               rank);
       cleanup();
@@ -572,6 +560,7 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
 
   void* send_buf = nullptr;
   std::vector<void*> recv_slots;
+  std::vector<uint32_t> local_recv_buffer_ids;
   if (cudaMalloc(&send_buf, msg_size) != cudaSuccess || send_buf == nullptr) {
     fprintf(stderr, "[Receiver %d] Failed to allocate GPU memory\n", rank);
     return;
@@ -583,10 +572,10 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   }
   auto cleanup = [&]() {
     if (send_buf != nullptr) {
-      comm.dereg_mr(send_buf);
+      (void)comm.dereg_mr(kBenchSendBufferId);
       cudaFree(send_buf);
     }
-    deregister_slot_mrs(comm, recv_slots);
+    deregister_slot_mrs(comm, local_recv_buffer_ids);
     free_device_slots(recv_slots);
   };
 
@@ -597,9 +586,19 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
     cudaMemset(recv_slot, 0, msg_size);
   }
 
-  MR local_send_mr = comm.reg_mr(send_buf, msg_size);
+  if (!comm.reg_mr(kBenchSendBufferId, send_buf, msg_size, true)) {
+    fprintf(stderr, "[Receiver %d] Failed to register send buffer MR\n", rank);
+    cleanup();
+    return;
+  }
+  MR local_send_mr = comm.get_mr(kBenchSendBufferId);
   std::vector<MR> local_recv_mrs =
-      register_slot_mrs(comm, recv_slots, msg_size);
+      register_slot_mrs(comm, recv_slots, msg_size, local_recv_buffer_ids);
+  if (local_recv_mrs.size() != recv_slots.size()) {
+    fprintf(stderr, "[Receiver %d] Failed to register recv slot MRs\n", rank);
+    cleanup();
+    return;
+  }
 
   printf("[Receiver %d] Memory registered: send_mr=%d, recv_slots=%d\n", rank,
          local_send_mr.id, throughput_window);
@@ -607,8 +606,8 @@ void run_receiver(int gpu_id, int rank, int peer_rank, int world_size,
   std::vector<MR> remote_recv_mrs;
   if (transport_kind == PeerTransportKind::Uccl ||
       transport_kind == PeerTransportKind::Rdma) {
-    if (!exchange_remote_recv_mrs(comm, peer_rank, local_recv_mrs,
-                                  remote_recv_mrs, false)) {
+    if (!exchange_remote_recv_mrs(comm, peer_rank, recv_slots.size(),
+                                  remote_recv_mrs)) {
       fprintf(stderr, "[Receiver %d] Failed to exchange remote receive MRs\n",
               rank);
       cleanup();

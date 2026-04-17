@@ -3,6 +3,7 @@
 #include "backend/transport_backend.h"
 #include "executor.h"
 #include "executor_impl.h"
+#include <cstdint>
 #include <memory>
 #include <utility>
 
@@ -24,10 +25,24 @@ Executor::Executor(ExecutorConfig const& config) : impl_(nullptr) {
           config.smem_size,
       }));
   impl_->resolve_ipc_buffer_pointer =
-      [communicator](int remote_rank, uint32_t mr_id, size_t offset,
+      [communicator](int remote_rank, uint32_t remote_buffer_id, size_t offset,
                      size_t bytes, void** out_ptr, int* out_device_idx) {
-        return communicator->resolve_ipc_buffer_pointer(
-            remote_rank, mr_id, offset, bytes, out_ptr, out_device_idx);
+        if (out_ptr == nullptr) return false;
+        UKernel::Transport::IPCItem ipc{};
+        try {
+          ipc = communicator->get_ipc(remote_rank, remote_buffer_id);
+        } catch (...) {
+          return false;
+        }
+        if (!ipc.valid || ipc.direct_ptr == nullptr) return false;
+        if (offset > ipc.bytes || bytes > ipc.bytes - offset) return false;
+        *out_ptr = reinterpret_cast<void*>(
+            reinterpret_cast<uintptr_t>(ipc.direct_ptr) + ipc.base_offset +
+            offset);
+        if (out_device_idx != nullptr) {
+          *out_device_idx = ipc.device_idx;
+        }
+        return true;
       };
 }
 

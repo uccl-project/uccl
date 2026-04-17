@@ -40,17 +40,18 @@ void const* local_const_ptr(CollectiveBinding const& binding,
   return local_mutable_ptr(binding, ref, bytes);
 }
 
-uint32_t remote_mr_id(CollectiveBinding const& binding, BufferRef const& ref) {
+uint32_t remote_buffer_id_for_ipc(CollectiveBinding const& binding,
+                                  BufferRef const& ref) {
   if (!is_remote_ref(ref) || ref.rank < 0) {
     throw std::invalid_argument(
-        "remote MR lookup requires a remote buffer ref");
+        "remote IPC lookup requires a remote buffer ref");
   }
   size_t peer = static_cast<size_t>(ref.rank);
   RegisteredBuffer const& buffer = binding.buffer(ref.buffer_id);
   if (peer >= buffer.peer_views.size()) {
     throw std::invalid_argument("remote buffer peer rank out of range");
   }
-  return buffer.peer_views[peer].mr_id;
+  return ref.buffer_id;
 }
 
 ExecOp bind_device_exec_op(
@@ -60,11 +61,11 @@ ExecOp bind_device_exec_op(
   ExecOp bound = op;
 
   if (is_remote_ref(op.src)) {
-    uint32_t mr_id = remote_mr_id(binding, op.src);
+    uint32_t remote_buffer_id = remote_buffer_id_for_ipc(binding, op.src);
     void* ptr = nullptr;
     int device_idx = -1;
     if (!resolve_remote_ptr ||
-        !resolve_remote_ptr(op.src.rank, mr_id, op.src.offset_bytes,
+        !resolve_remote_ptr(op.src.rank, remote_buffer_id, op.src.offset_bytes,
                             op.tile.size_bytes, &ptr, &device_idx)) {
       throw std::runtime_error("failed to resolve remote source pointer");
     }
@@ -75,11 +76,11 @@ ExecOp bind_device_exec_op(
   }
 
   if (is_remote_ref(op.dst)) {
-    uint32_t mr_id = remote_mr_id(binding, op.dst);
+    uint32_t remote_buffer_id = remote_buffer_id_for_ipc(binding, op.dst);
     void* ptr = nullptr;
     int device_idx = -1;
     if (!resolve_remote_ptr ||
-        !resolve_remote_ptr(op.dst.rank, mr_id, op.dst.offset_bytes,
+        !resolve_remote_ptr(op.dst.rank, remote_buffer_id, op.dst.offset_bytes,
                             op.tile.size_bytes, &ptr, &device_idx)) {
       throw std::runtime_error("failed to resolve remote destination pointer");
     }

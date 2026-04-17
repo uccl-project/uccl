@@ -525,17 +525,18 @@ unsigned RdmaTransportAdapter::send_async(
     }
   }
 
-  uint64_t remote_mr_id = 0;
+  uint64_t remote_buffer_id = 0;
   RemoteSlice const* remote_slice_ptr = nullptr;
   if (remote_hint.has_value()) {
-    remote_mr_id = remote_hint->mem_id;
+    remote_buffer_id = remote_hint->buffer_id;
     remote_slice_ptr = &(*remote_hint);
   }
 
   unsigned request_id = 0;
   if (try_acquire_request_slot(&request_id) == nullptr) return 0;
-  int ret = send_async_rdma(peer_rank, send_ptr, len, send_mr_id, remote_mr_id,
-                            request_id, remote_slice_ptr);
+  int ret =
+      send_async_rdma(peer_rank, send_ptr, len, send_mr_id, remote_buffer_id,
+                      request_id, remote_slice_ptr);
   if (ret != 0) {
     std::lock_guard<std::mutex> lk(mu_);
     release_request_slot_locked(request_id);
@@ -576,10 +577,10 @@ bool RdmaTransportAdapter::request_failed(unsigned id) {
 
 int RdmaTransportAdapter::send_async_rdma(int peer_rank, void* local_ptr,
                                           size_t len, uint64_t local_mr_id,
-                                          uint64_t remote_mr_id,
+                                          uint64_t remote_buffer_id,
                                           uint64_t request_id,
                                           RemoteSlice const* remote_slice) {
-  (void)remote_mr_id;
+  (void)remote_buffer_id;
 
   std::shared_ptr<SendConnection> send_conn;
   LocalMr local_mr;
@@ -607,8 +608,8 @@ int RdmaTransportAdapter::send_async_rdma(int peer_rank, void* local_ptr,
   if (remote_slice != nullptr && remote_slice->has_write_hint()) {
     if (rdma_hint_debug_enabled()) {
       std::cout << "[DEBUG][RDMA_HINT] peer=" << peer_rank
-                << " req=" << request_id << " mode=WRITE mem_id="
-                << remote_slice->mem_id << " addr=0x" << std::hex
+                << " req=" << request_id << " mode=WRITE buffer_id="
+                << remote_slice->buffer_id << " addr=0x" << std::hex
                 << remote_slice->write.addr << std::dec
                 << " rkey=" << remote_slice->write.key << " len=" << len
                 << std::endl;

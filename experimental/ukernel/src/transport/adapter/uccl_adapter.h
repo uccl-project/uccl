@@ -108,7 +108,7 @@ class UcclTransportAdapter final : public TransportAdapter {
 
   // Internal async submit helpers.
   int send_async_uccl(int peer_rank, void* local_ptr, size_t len,
-                      uint64_t local_mr_id, uint64_t remote_mr_id,
+                      uint64_t local_mr_id, uint64_t remote_buffer_id,
                       uint64_t request_id,
                       RemoteSlice const* remote_slice = nullptr);
   int recv_async_uccl(int peer_rank, void* local_ptr, size_t len,

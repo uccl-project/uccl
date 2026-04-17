@@ -23,24 +23,20 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
     n = size_bytes // 4  # float32
     send_buf = torch.empty(n, device="cuda", dtype=torch.float32)
     recv_buf = torch.empty(n, device="cuda", dtype=torch.float32)
-    comm.pin_tensor(send_buf)
-    recv_mr_id = comm.pin_tensor(recv_buf)
-
-    # Stable logical id for destination receive buffer in ping-pong.
+    send_buffer_id = 1
     recv_buffer_id = 2
-    if not comm.publish_mr(peer, recv_buffer_id, recv_mr_id):
-        raise RuntimeError("publish_mr(recv) failed")
-    # Wait for peer's next published recv-buffer mapping.
-    comm.wait_mr(peer, recv_buffer_id)
+    if not comm.reg_rdma(send_buffer_id, send_buf, publish=True):
+        raise RuntimeError("reg_rdma(send) failed")
+    if not comm.reg_rdma(recv_buffer_id, recv_buf, publish=True):
+        raise RuntimeError("reg_rdma(recv) failed")
+
+    # Global synchronization after publishing local mappings.
+    if not comm.barrier("rdma_mr_ready", 30000):
+        raise RuntimeError("ukernel barrier(rdma_mr_ready) failed")
 
     def do_send():
         # Sender writes into peer's recv buffer id.
-        comm.send_buffer(
-            peer,
-            send_buf,
-            recv_buffer_id,
-            remote_offset=0,
-        )
+        comm.send(peer, send_buf, remote_buffer_id=recv_buffer_id, remote_offset=0)
 
     def do_recv():
         comm.recv(peer, recv_buf)
@@ -68,8 +64,8 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
             do_recv()
         torch.cuda.synchronize()
     elapsed = time.perf_counter() - t0
-    comm.unpin_tensor(send_buf)
-    comm.unpin_tensor(recv_buf)
+    comm.unreg_rdma(send_buffer_id)
+    comm.unreg_rdma(recv_buffer_id)
     return elapsed
 
 
