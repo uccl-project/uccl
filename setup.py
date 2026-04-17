@@ -65,7 +65,7 @@ setup(
             "utils.py",
         ],
         "uccl.ep": [
-            "_ep_native*.so",
+            "ep_cpp*.so",
         ],
     },
     license="Apache-2.0",

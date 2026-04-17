@@ -19,9 +19,9 @@ import numpy as np
 import torch
 import torch.distributed as dist
 
-from uccl.ep import _ep_native
+from uccl.ep import ep_cpp
 
-EventHandle = _ep_native.EventHandle
+EventHandle = ep_cpp.EventHandle
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +88,7 @@ def init_dist_under_torchrun(local_rank: int, num_local_ranks: int):
 
 def _gather_peer_ips(group):
     world = dist.get_world_size(group)
-    my_ip = _ep_native.get_oob_ip()
+    my_ip = ep_cpp.get_oob_ip()
     ips = [None] * world
     dist.all_gather_object(ips, my_ip, group=group)
     return ips
@@ -104,7 +104,7 @@ def get_peer_ip(rank: int, num_ranks: int, group: dist.ProcessGroup):
 
 
 def get_cpu_proxies_meta(proxies, rank, scratch_ptr, scratch_bytes, num_ranks, group):
-    my_ip = _ep_native.get_oob_ip()
+    my_ip = ep_cpp.get_oob_ip()
     meta = {
         "rank": rank,
         "ptr": int(scratch_ptr),
@@ -526,8 +526,8 @@ def initialize_uccl(
     else:
         num_nodes = num_ranks
 
-    for i in range(_ep_native.get_num_proxy_threads()):
-        proxy = _ep_native.Proxy(
+    for i in range(ep_cpp.get_num_proxy_threads()):
+        proxy = ep_cpp.Proxy(
             thread_idx=i,
             gpu_buffer_addr=scratch_ptr,
             total_size=scratch_nbytes,
@@ -552,7 +552,7 @@ def initialize_uccl(
         for proxy in proxies:
             proxy.set_peers_meta(peers_meta_list)
 
-    _ep_native.register_proxies(local_rank, proxies)
+    ep_cpp.register_proxies(local_rank, proxies)
 
     if not is_intranode and len(proxies) > 0:
         atomic_buffer_ptr = proxies[0].get_atomic_buffer_ptr()
@@ -589,7 +589,7 @@ def destroy_uccl(proxies, workers):
     except Exception:
         pass
     try:
-        _ep_native.unregister_proxy(device_index)
+        ep_cpp.unregister_proxy(device_index)
     except Exception:
         pass
     try:

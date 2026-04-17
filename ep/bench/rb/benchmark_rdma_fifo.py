@@ -24,7 +24,7 @@ import torch
 import torch.distributed as dist
 
 try:
-    from uccl.ep import _ep_native as ep
+    from uccl.ep import ep_cpp as ep
 except ImportError as exc:
     sys.stderr.write("Failed to import ep\n")
     raise

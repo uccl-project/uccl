@@ -1635,7 +1635,7 @@ class Buffer {
       nullptr};  // Device pointer to array of IPC base addresses
 };
 
-NB_MODULE(_ep_native, m) {
+NB_MODULE(ep_cpp, m) {
   m.doc() = "Minimal DeepEP-compatible shim with UCCL";
 
   nb::class_<uccl::Config>(m, "Config")
