@@ -1,9 +1,11 @@
 #pragma once
 
 #include "../../include/config.h"
+#include "p2p/rdma/define.h"
 #include "gpu_rt.h"
 #include "../util/jring.h"
 #include <atomic>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -68,11 +70,13 @@ struct CommunicatorMeta : public Exchangeable {
 };
 
 struct MR {
-  uint32_t id;
-  uint64_t address;
-  uint64_t length;
-  uint32_t lkey;
-  uint32_t key;
+  uint32_t id = 0;
+  uint64_t address = 0;
+  uint64_t length = 0;
+  uint32_t lkey = 0;
+  uint32_t key = 0;
+  std::array<uint32_t, kNICContextNumber> rdma_keys{};
+  uint32_t memory_type = 0;
 };
 
 struct NamedMR {
@@ -100,6 +104,12 @@ struct NamedMRInfos : public Exchangeable {
           std::to_string(entry.mr.length);
       kv["entry_" + std::to_string(i) + "_mr_key"] =
           std::to_string(entry.mr.key);
+      kv["entry_" + std::to_string(i) + "_mr_memory_type"] =
+          std::to_string(entry.mr.memory_type);
+      for (size_t ctx = 0; ctx < entry.mr.rdma_keys.size(); ++ctx) {
+        kv["entry_" + std::to_string(i) + "_mr_rdma_key_" +
+           std::to_string(ctx)] = std::to_string(entry.mr.rdma_keys[ctx]);
+      }
     }
     return kv;
   }
@@ -119,6 +129,20 @@ struct NamedMRInfos : public Exchangeable {
           std::stoull(kv.at("entry_" + std::to_string(i) + "_mr_len"));
       entry.mr.key = static_cast<uint32_t>(
           std::stoul(kv.at("entry_" + std::to_string(i) + "_mr_key")));
+      auto mem_type_it =
+          kv.find("entry_" + std::to_string(i) + "_mr_memory_type");
+      entry.mr.memory_type =
+          (mem_type_it == kv.end())
+              ? 0u
+              : static_cast<uint32_t>(std::stoul(mem_type_it->second));
+      for (size_t ctx = 0; ctx < entry.mr.rdma_keys.size(); ++ctx) {
+        auto key_it = kv.find("entry_" + std::to_string(i) +
+                              "_mr_rdma_key_" + std::to_string(ctx));
+        entry.mr.rdma_keys[ctx] =
+            (key_it == kv.end())
+                ? 0u
+                : static_cast<uint32_t>(std::stoul(key_it->second));
+      }
     }
   }
 };

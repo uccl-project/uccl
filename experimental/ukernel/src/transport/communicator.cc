@@ -184,6 +184,21 @@ bool oob_get(Exchanger& ex, std::string const& ns, std::string const& key,
   return ex.get(ns, key, out, nullptr, timeout_ms);
 }
 
+inline uint32_t memory_type_from_pointer(void* ptr) {
+  if (ptr == nullptr) return 0;
+  gpuPointerAttribute_t attr{};
+  gpuError_t err = gpuPointerGetAttributes(&attr, ptr);
+  if (err == gpuSuccess && attr.type == gpuMemoryTypeDevice) return 1;
+  return 0;
+}
+
+inline bool has_any_rdma_key(MR const& mr) {
+  for (uint32_t key : mr.rdma_keys) {
+    if (key != 0) return true;
+  }
+  return false;
+}
+
 void validate_dst_hint_for_transport(PeerTransportKind kind,
                                      std::optional<RemoteSlice> const& dst_hint,
                                      size_t src_bytes) {
@@ -193,10 +208,13 @@ void validate_dst_hint_for_transport(PeerTransportKind kind,
     throw std::invalid_argument("dst_hint.buffer_id must be non-zero");
   }
   // IPC/TCP use common (`buffer_id`, `offset`) hint and ignore `write`.
-  // UCCL/RDMA validate write-capacity hints when provided.
-  if ((kind == PeerTransportKind::Uccl || kind == PeerTransportKind::Rdma) &&
-      hint.has_write_hint() &&
-      hint.write.capacity != 0 && hint.write.capacity < src_bytes) {
+  // UCCL/RDMA validate one-sided write capacity when transport-specific write
+  // hints are provided.
+  bool validate_write_capacity =
+      (kind == PeerTransportKind::Uccl && hint.has_uccl_write_hint()) ||
+      (kind == PeerTransportKind::Rdma && hint.has_rdma_write_hint());
+  if (validate_write_capacity && hint.write.capacity != 0 &&
+      hint.write.capacity < src_bytes) {
     throw std::invalid_argument(
         "dst_hint.write.capacity is smaller than send size");
   }
@@ -1351,18 +1369,27 @@ unsigned Communicator::isend(int rank, LocalSlice src,
   }
   std::optional<RemoteSlice> effective_dst_hint = dst_hint;
   // Auto-enrich one-sided write hint from exchanged remote MR metadata when the
-  // caller only provides {remote buffer_id, offset}. This keeps Python/CCL APIs
-  // simple while still enabling RDMA/UCCL fast paths.
+  // caller only provides {remote buffer_id, offset}. If the selected transport
+  // supports one-sided write, `isend()` can opportunistically use it.
+  bool needs_write_enrich =
+      effective_dst_hint.has_value() && effective_dst_hint->buffer_id != 0 &&
+      ((peer_kind == PeerTransportKind::Uccl &&
+        !effective_dst_hint->has_uccl_write_hint()) ||
+       (peer_kind == PeerTransportKind::Rdma &&
+        !effective_dst_hint->has_rdma_write_hint()));
   if ((peer_kind == PeerTransportKind::Uccl ||
        peer_kind == PeerTransportKind::Rdma) &&
-      effective_dst_hint.has_value() && !effective_dst_hint->has_write_hint() &&
-      effective_dst_hint->buffer_id != 0) {
+      needs_write_enrich) {
     MR remote_mr{};
     bool has_valid_remote_mr = false;
     for (int attempt = 0; attempt < 2 && !has_valid_remote_mr; ++attempt) {
       try {
         remote_mr = get_mr(rank, effective_dst_hint->buffer_id);
-        has_valid_remote_mr = (remote_mr.address != 0 && remote_mr.key != 0);
+        has_valid_remote_mr =
+            (remote_mr.address != 0) &&
+            ((peer_kind == PeerTransportKind::Uccl && remote_mr.key != 0) ||
+             (peer_kind == PeerTransportKind::Rdma &&
+              has_any_rdma_key(remote_mr)));
       } catch (std::exception const&) {
       }
       if (has_valid_remote_mr) break;
@@ -1380,9 +1407,14 @@ unsigned Communicator::isend(int rank, LocalSlice src,
         remaining = remote_mr.length - static_cast<uint64_t>(enriched.offset);
       }
       enriched.write.addr = addr;
-      enriched.write.key = remote_mr.key;
       enriched.write.capacity = static_cast<uint32_t>(
           std::min<uint64_t>(remaining, std::numeric_limits<uint32_t>::max()));
+      enriched.write.memory_type = remote_mr.memory_type;
+      if (peer_kind == PeerTransportKind::Uccl) {
+        enriched.write.key = remote_mr.key;
+      } else {
+        enriched.write.rdma_keys = remote_mr.rdma_keys;
+      }
       effective_dst_hint = enriched;
     }
   }
@@ -1822,6 +1854,7 @@ bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
   MR mr = mr_manager_.create_local_mr(buffer_id, local_buf, len).mr;
   if (mr.id == 0) return false;
   mr.id = buffer_id;
+  mr.memory_type = memory_type_from_pointer(local_buf);
 
   {
     std::lock_guard<std::mutex> lk(resource_mu_);
@@ -1906,7 +1939,10 @@ bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
 
   if (needs_rdma_backend && rdma_direct_registered) {
     uint32_t rkey = 0;
-    if (!rdma_adapter_->query_memory_rkey(buffer_id, &rkey) || rkey == 0) {
+    std::array<uint32_t, kNICContextNumber> rdma_rkeys{};
+    bool have_rkeys = rdma_adapter_->query_memory_rkeys(buffer_id, &rdma_rkeys);
+    if (!rdma_adapter_->query_memory_rkey(buffer_id, &rkey) || rkey == 0 ||
+        !have_rkeys) {
       deregister_backend_memory(buffer_id);
       {
         std::lock_guard<std::mutex> lk(rdma_reg_mu_);
@@ -1917,6 +1953,7 @@ bool Communicator::reg_mr(uint32_t buffer_id, void* local_buf, size_t len,
                 << buffer_id << ", fallback to host bounce" << std::endl;
     } else {
       mr.key = rkey;
+      mr.rdma_keys = rdma_rkeys;
       {
         std::lock_guard<std::mutex> lk(resource_mu_);
         auto it = local_buffer_to_mr_.find(buffer_id);

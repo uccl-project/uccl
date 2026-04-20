@@ -30,8 +30,10 @@ void publisher_socket(int port) {
   require(ex.valid(), "publisher failed to connect to socket exchanger");
 
   NamedMRInfos remote{};
-  remote.entries.push_back(NamedMR{5, MR{1, 0x12345000ULL, 4096, 0, 123}});
-  remote.entries.push_back(NamedMR{8, MR{2, 0x12346000ULL, 8192, 0, 456}});
+  remote.entries.push_back(
+      NamedMR{5, MR{1, 0x12345000ULL, 4096, 0, 123, {1, 2, 3, 4}, 1}});
+  remote.entries.push_back(
+      NamedMR{8, MR{2, 0x12346000ULL, 8192, 0, 456, {5, 6, 7, 8}, 0}});
 
   std::this_thread::sleep_for(std::chrono::milliseconds(300));
   require(ex.put("test/named_mr", "named-mr:peer:1:0", remote) != 0,
@@ -44,7 +46,8 @@ void test_socket_publish_fetch() {
   require(ex.valid(), "failed to start socket exchanger server");
 
   NamedMRInfos local{};
-  local.entries.push_back(NamedMR{9, MR{7, 0xABCDEF00ULL, 16384, 0, 789}});
+  local.entries.push_back(
+      NamedMR{9, MR{7, 0xABCDEF00ULL, 16384, 0, 789, {9, 10, 11, 12}, 1}});
   require(ex.put("test/named_mr", "named-mr:peer:0:0", local) != 0,
           "failed to publish local MR info");
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "p2p/rdma/define.h"
 #include "transport_adapter.h"
 #include <atomic>
 #include <array>
@@ -53,6 +54,9 @@ class RdmaTransportAdapter final : public TransportAdapter {
   void deregister_memory(uint32_t buffer_id);
   // Query one valid local rkey for a registered buffer id.
   bool query_memory_rkey(uint32_t buffer_id, uint32_t* out_rkey) const;
+  bool query_memory_rkeys(
+      uint32_t buffer_id,
+      std::array<uint32_t, kNICContextNumber>* out_rkeys) const;
   bool is_initialized() const { return initialized_; }
 
   // TransportAdapter compatibility.

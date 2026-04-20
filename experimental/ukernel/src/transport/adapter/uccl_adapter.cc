@@ -408,7 +408,7 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
   // Optional one-sided path: if caller provides explicit remote write hint and
   // remote memory id, submit directly via write_async.
   if (remote_slice != nullptr && remote_buffer_id != 0 &&
-      remote_slice->has_write_hint()) {
+      remote_slice->has_uccl_write_hint()) {
     one_sided_attempted = true;
     ::uccl::FifoItem slot_item{};
     slot_item.addr = remote_slice->write.addr;

@@ -43,6 +43,30 @@ inline bool rdma_hint_debug_enabled() {
 inline size_t channel_to_context(uint32_t channel_id) {
   return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;
 }
+
+inline bool gid_is_zero(union ibv_gid const& gid) {
+  for (int i = 0; i < 16; ++i) {
+    if (gid.raw[i] != 0) return false;
+  }
+  return true;
+}
+
+inline std::string short_gid(union ibv_gid const& gid) {
+  std::ostringstream oss;
+  oss << std::hex << std::setfill('0');
+  for (int i = 0; i < 4; ++i) {
+    oss << std::setw(2) << static_cast<unsigned>(gid.raw[i]);
+  }
+  oss << "...";
+  for (int i = 12; i < 16; ++i) {
+    oss << std::setw(2) << static_cast<unsigned>(gid.raw[i]);
+  }
+  return oss.str();
+}
+
+inline bool channel_meta_looks_valid(ChannelMetaData const& meta) {
+  return meta.qpn != 0 && (meta.lid != 0 || !gid_is_zero(meta.gid));
+}
 }  // namespace
 
 struct RdmaTransportAdapter::HandshakePacket {
@@ -355,11 +379,40 @@ bool RdmaTransportAdapter::finalize_send_from_remote_recv(
 
   if (!state || !state->send_conn || !state->send_ctrl) return false;
 
+  if (!channel_meta_looks_valid(remote_recv.ctrl_meta)) {
+    std::cerr << "[ERROR] RDMA finalize_send invalid remote ctrl meta: peer="
+              << peer_rank << " qpn=" << remote_recv.ctrl_meta.qpn
+              << " lid=" << remote_recv.ctrl_meta.lid
+              << " gid=" << short_gid(remote_recv.ctrl_meta.gid) << std::endl;
+    return false;
+  }
+  if (rdma_hint_debug_enabled()) {
+    std::cout << "[DEBUG][RDMA_BOOTSTRAP] peer=" << peer_rank
+              << " ctrl_qpn=" << remote_recv.ctrl_meta.qpn
+              << " ctrl_lid=" << remote_recv.ctrl_meta.lid
+              << " ctrl_gid=" << short_gid(remote_recv.ctrl_meta.gid)
+              << std::endl;
+  }
+
   state->send_ctrl->establishChannel(remote_recv.ctrl_meta);
   for (int i = 0; i < kQpNumPerChannel; ++i) {
+    auto const& meta = remote_recv.normal_meta[i];
+    if (!channel_meta_looks_valid(meta)) {
+      std::cerr << "[ERROR] RDMA finalize_send invalid remote data meta: peer="
+                << peer_rank << " channel_id=" << (i + 1)
+                << " qpn=" << meta.qpn << " lid=" << meta.lid
+                << " gid=" << short_gid(meta.gid) << std::endl;
+      return false;
+    }
+    if (rdma_hint_debug_enabled()) {
+      std::cout << "[DEBUG][RDMA_BOOTSTRAP] peer=" << peer_rank
+                << " channel_id=" << (i + 1) << " qpn=" << meta.qpn
+                << " lid=" << meta.lid
+                << " gid=" << short_gid(meta.gid) << std::endl;
+    }
     auto ch = state->channels[static_cast<size_t>(i)];
     if (!ch) return false;
-    ch->establishChannel(remote_recv.normal_meta[i]);
+    ch->establishChannel(meta);
   }
   state->send_conn->setControlChannel(std::move(state->send_ctrl));
 
@@ -499,6 +552,26 @@ bool RdmaTransportAdapter::query_memory_rkey(uint32_t buffer_id,
     }
   }
   return false;
+}
+
+bool RdmaTransportAdapter::query_memory_rkeys(
+    uint32_t buffer_id,
+    std::array<uint32_t, kNICContextNumber>* out_rkeys) const {
+  if (out_rkeys == nullptr) return false;
+  out_rkeys->fill(0);
+  std::lock_guard<std::mutex> lk(mu_);
+  auto it = buffer_id_to_local_mr_.find(buffer_id);
+  if (it == buffer_id_to_local_mr_.end() || !it->second.block) return false;
+  bool any_valid = false;
+  for (size_t context_id = 0; context_id < out_rkeys->size(); ++context_id) {
+    if (context_id >= contexts_.size() || contexts_[context_id] == nullptr) {
+      continue;
+    }
+    uint32_t rkey = it->second.block->getKeyByContextID(context_id);
+    (*out_rkeys)[context_id] = rkey;
+    any_valid = any_valid || (rkey != 0);
+  }
+  return any_valid;
 }
 
 RdmaTransportAdapter::PendingRequestSlot*
@@ -641,25 +714,55 @@ int RdmaTransportAdapter::send_async_rdma(int peer_rank, void* local_ptr,
   auto send_mem = std::make_shared<RegMemBlock>(
       local_ptr, len, local_mr.block->mr_array, local_mr.block->type);
 
+  if (rdma_hint_debug_enabled()) {
+    std::ostringstream lkeys;
+    lkeys << "[";
+    for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
+      if (ctx != 0) lkeys << ", ";
+      lkeys << "ctx" << ctx << "=0x" << std::hex
+            << send_mem->getKeyByContextID(ctx) << std::dec;
+    }
+    lkeys << "]";
+    std::cout << "[DEBUG][RDMA_SEND_PREP] peer=" << peer_rank
+              << " req=" << request_id << " buffer_id=" << local_buffer_id
+              << " local_addr=0x" << std::hex
+              << reinterpret_cast<uintptr_t>(local_ptr) << std::dec
+              << " len=" << len << " type="
+              << (send_mem->type == MemoryType::GPU ? "gpu" : "host")
+              << " local_lkeys=" << lkeys.str() << std::endl;
+  }
+
   int64_t token = -1;
   RequestKind kind = RequestKind::Send;
 
-  if (remote_slice != nullptr && remote_slice->has_write_hint()) {
+  if (remote_slice != nullptr && remote_slice->has_rdma_write_hint()) {
     if (rdma_hint_debug_enabled()) {
+      std::ostringstream rkeys;
+      rkeys << "[";
+      for (size_t ctx = 0; ctx < remote_slice->write.rdma_keys.size(); ++ctx) {
+        if (ctx != 0) rkeys << ", ";
+        rkeys << "ctx" << ctx << "=0x" << std::hex
+              << remote_slice->write.rdma_keys[ctx] << std::dec;
+      }
+      rkeys << "]";
       std::cout << "[DEBUG][RDMA_HINT] peer=" << peer_rank
                 << " req=" << request_id << " mode=WRITE buffer_id="
                 << remote_slice->buffer_id << " addr=0x" << std::hex
                 << remote_slice->write.addr << std::dec
-                << " rkey=" << remote_slice->write.key << " len=" << len
-                << std::endl;
+                << " capacity=" << remote_slice->write.capacity
+                << " mem_type=" << remote_slice->write.memory_type
+                << " rdma_rkeys=" << rkeys.str() << std::endl;
     }
     auto remote_mem = std::make_shared<RemoteMemInfo>();
     remote_mem->addr = remote_slice->write.addr;
     remote_mem->length =
         (remote_slice->write.capacity == 0) ? len : remote_slice->write.capacity;
-    remote_mem->type = MemoryType::GPU;
+    remote_mem->type = (remote_slice->write.memory_type == 1)
+                           ? MemoryType::GPU
+                           : MemoryType::HOST;
     for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
-      remote_mem->rkey_array.setKeyByContextID(ctx, remote_slice->write.key);
+      remote_mem->rkey_array.setKeyByContextID(
+          ctx, remote_slice->write.rdma_keys[ctx]);
     }
 
     auto req = std::make_shared<RDMASendRequest>(send_mem, remote_mem);
@@ -669,12 +772,19 @@ int RdmaTransportAdapter::send_async_rdma(int peer_rank, void* local_ptr,
   } else {
     if (rdma_hint_debug_enabled()) {
       std::cout << "[DEBUG][RDMA_HINT] peer=" << peer_rank
-                << " req=" << request_id << " mode=SEND"
-                << (remote_slice ? " (no_write_hint)" : " (no_hint)")
-                << " len=" << len << std::endl;
+                << " req=" << request_id << " mode=SEND";
+      if (remote_slice != nullptr) {
+        std::cout << " (buffer_id=" << remote_slice->buffer_id
+                  << ", offset=" << remote_slice->offset << ")";
+      } else {
+        std::cout << " (no_hint)";
+      }
+      std::cout << " len=" << len
+                << " remote_resolve=control_channel_async" << std::endl;
     }
     auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
-    auto req = std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
+    auto req =
+        std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
     req->send_type = SendType::Send;
     token = send_conn->send(req);
     kind = RequestKind::Send;

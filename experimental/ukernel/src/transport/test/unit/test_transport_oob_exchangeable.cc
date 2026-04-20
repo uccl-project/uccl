@@ -31,8 +31,10 @@ void test_exchangeable_round_trip() {
           "CommunicatorMeta rdma_capable mismatch");
 
   NamedMRInfos infos{};
-  infos.entries.push_back(NamedMR{3, MR{1, 0x1000ULL, 256, 0, 11}});
-  infos.entries.push_back(NamedMR{7, MR{2, 0x2000ULL, 512, 0, 22}});
+  infos.entries.push_back(
+      NamedMR{3, MR{1, 0x1000ULL, 256, 0, 11, {101, 102, 103, 104}, 1}});
+  infos.entries.push_back(
+      NamedMR{7, MR{2, 0x2000ULL, 512, 0, 22, {201, 202, 203, 204}, 0}});
   NamedMRInfos infos_rt;
   infos_rt.from_map(infos.to_map());
   require(infos_rt.entries.size() == 2, "NamedMRInfos size mismatch");
@@ -42,6 +44,10 @@ void test_exchangeable_round_trip() {
           "NamedMRInfos first address mismatch");
   require(infos_rt.entries[1].mr.key == infos.entries[1].mr.key,
           "NamedMRInfos second key mismatch");
+  require(infos_rt.entries[0].mr.rdma_keys == infos.entries[0].mr.rdma_keys,
+          "NamedMRInfos rdma key array mismatch");
+  require(infos_rt.entries[1].mr.memory_type == infos.entries[1].mr.memory_type,
+          "NamedMRInfos memory_type mismatch");
 
   UCCLP2PInfo uccl{"127.0.0.1", 12345, 6, 2};
   UCCLP2PInfo uccl_rt;
