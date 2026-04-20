@@ -96,6 +96,7 @@ RdmaTransportAdapter::~RdmaTransportAdapter() {
   send_build_states_.clear();
   peer_contexts_.clear();
   contexts_.clear();
+  active_context_slots_.clear();
 }
 
 bool RdmaTransportAdapter::initialize_contexts() {
@@ -109,7 +110,9 @@ bool RdmaTransportAdapter::initialize_contexts() {
 
   std::unordered_map<size_t, std::shared_ptr<RdmaContext>> device_ctx_map;
   contexts_.clear();
+  active_context_slots_.clear();
   contexts_.reserve(kNICContextNumber);
+  active_context_slots_.reserve(kNICContextNumber);
 
   for (int i = 0; i < kNICContextNumber; ++i) {
     size_t device_id = device_ids[static_cast<size_t>(i) % device_ids.size()];
@@ -135,6 +138,22 @@ bool RdmaTransportAdapter::initialize_contexts() {
   if (contexts_.size() != kNICContextNumber) {
     std::cerr << "[ERROR] RDMA context slots init failed, expected "
               << kNICContextNumber << ", got " << contexts_.size() << std::endl;
+    return false;
+  }
+  for (uint32_t slot = 0; slot < static_cast<uint32_t>(contexts_.size()); ++slot) {
+    if (contexts_[slot] != nullptr) {
+      active_context_slots_.push_back(slot);
+    }
+  }
+  if (active_context_slots_.empty()) {
+    std::cerr << "[ERROR] RDMA no active context slots for gpu "
+              << local_gpu_idx_ << std::endl;
+    return false;
+  }
+  if (active_context_slots_.size() != static_cast<size_t>(kNICContextNumber)) {
+    std::cerr << "[ERROR] RDMA active context slots incomplete, expected "
+              << kNICContextNumber << ", got " << active_context_slots_.size()
+              << std::endl;
     return false;
   }
 
@@ -391,7 +410,7 @@ bool RdmaTransportAdapter::register_memory(uint32_t buffer_id, void* ptr,
 
   LocalMr local_mr;
   local_mr.block = std::make_shared<RegMemBlock>(ptr, len, detect_memory_type(ptr));
-  bool success = !contexts_.empty();
+  bool success = !active_context_slots_.empty();
 
   auto release_cache_refs = [&local_mr]() {
     for (auto const& ref : local_mr.cache_refs) {
@@ -401,7 +420,12 @@ bool RdmaTransportAdapter::register_memory(uint32_t buffer_id, void* ptr,
   };
 
   std::unordered_map<RdmaContext*, struct ibv_mr*> registered;
-  for (size_t context_id = 0; context_id < contexts_.size(); ++context_id) {
+  for (uint32_t context_id : active_context_slots_) {
+    if (context_id >= contexts_.size()) {
+      success = false;
+      release_cache_refs();
+      break;
+    }
     auto ctx = contexts_[context_id];
     if (!ctx) {
       success = false;
@@ -411,8 +435,7 @@ bool RdmaTransportAdapter::register_memory(uint32_t buffer_id, void* ptr,
 
     auto found = registered.find(ctx.get());
     if (found != registered.end()) {
-      local_mr.block->setMRByContextID(static_cast<uint32_t>(context_id),
-                                       found->second);
+      local_mr.block->setMRByContextID(context_id, found->second);
       continue;
     }
 
@@ -423,8 +446,7 @@ bool RdmaTransportAdapter::register_memory(uint32_t buffer_id, void* ptr,
       break;
     }
 
-    local_mr.block->setMRByContextID(static_cast<uint32_t>(context_id),
-                                     entry->mr);
+    local_mr.block->setMRByContextID(context_id, entry->mr);
     local_mr.cache_refs.push_back({ctx, entry});
     registered.emplace(ctx.get(), entry->mr);
   }
@@ -467,11 +489,10 @@ bool RdmaTransportAdapter::query_memory_rkey(uint32_t buffer_id,
   auto it = buffer_id_to_local_mr_.find(buffer_id);
   if (it == buffer_id_to_local_mr_.end() || !it->second.block) return false;
 
-  // Any valid context rkey can be used because write hint currently carries a
-  // single rkey that is replicated to all contexts at submit time.
-  for (size_t context_id = 0; context_id < contexts_.size(); ++context_id) {
-    uint32_t rkey =
-        it->second.block->getKeyByContextID(static_cast<uint32_t>(context_id));
+  // Any valid active-context rkey can be used because write hint currently
+  // carries a single rkey that is replicated to all contexts at submit time.
+  for (uint32_t context_id : active_context_slots_) {
+    uint32_t rkey = it->second.block->getKeyByContextID(context_id);
     if (rkey != 0) {
       *out_rkey = rkey;
       return true;

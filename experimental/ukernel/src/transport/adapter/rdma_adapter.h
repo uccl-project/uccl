@@ -171,6 +171,9 @@ class RdmaTransportAdapter final : public TransportAdapter {
   int numa_node_ = 0;
 
   std::vector<std::shared_ptr<RdmaContext>> contexts_;
+  // Adapter-level active context slot set used by channel routing and MR
+  // registration. Per-MR state only keeps release handles, not topology.
+  std::vector<uint32_t> active_context_slots_;
   std::shared_ptr<MemoryAllocator> allocator_;
   std::unordered_map<int, PeerContext> peer_contexts_;
   std::unordered_map<int, std::unique_ptr<SendBuildState>> send_build_states_;
