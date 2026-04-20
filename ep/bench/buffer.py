@@ -762,6 +762,9 @@ class Buffer:
             is_token_in_rank: `[num_tokens, num_ranks]` with `torch.bool`, whether a token be sent to a rank.
             event: the event after executing the kernel (valid only if `async_finish` is set).
         """
+        if allocate_on_comm_stream:
+            assert previous_event is not None and async_finish
+
         alloc_ctx = (
             torch.cuda.stream(self.get_comm_stream())
             if allocate_on_comm_stream
@@ -1123,7 +1126,7 @@ class Buffer:
                 recv_channel_prefix_matrix.data_ptr(),
                 recv_src_idx.data_ptr(),
                 send_head.data_ptr(),
-                getattr(previous_event, "event", None),
+                None,
                 async_finish,
                 allocate_on_comm_stream,
                 self._ll_compute_stream_ptr(x.device),
@@ -1574,7 +1577,7 @@ class Buffer:
                 recv_gbl_channel_prefix_matrix.data_ptr(),
                 send_rdma_head.data_ptr(),
                 send_nvl_head.data_ptr(),
-                getattr(previous_event, "event", None),
+                None,
                 async_finish,
                 allocate_on_comm_stream,
                 self._ll_compute_stream_ptr(x.device),
