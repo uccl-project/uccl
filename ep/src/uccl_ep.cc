@@ -525,8 +525,9 @@ class Buffer {
     EP_HOST_ASSERT(num_experts > 0);
 
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    // NOTE(zhenhuang12): No runime cost. Python now owns the actual tensor allocation stream before passing raw
-    // pointers into C++, so this flag is advisory on the C++ side.
+    // NOTE(zhenhuang12): No runime cost. Python now owns the actual tensor
+    // allocation stream before passing raw pointers into C++, so this flag is
+    // advisory on the C++ side.
     static_cast<void>(allocate_on_comm_stream);
 
     if (previous_event.has_value()) {

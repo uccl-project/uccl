@@ -1287,9 +1287,13 @@ class Buffer:
             recv_x,
             recv_topk_weights,
         )
-        return recv_x, recv_topk_weights, EventOverlap(
-            event,
-            tensors_to_record if async_finish else None,
+        return (
+            recv_x,
+            recv_topk_weights,
+            EventOverlap(
+                event,
+                tensors_to_record if async_finish else None,
+            ),
         )
 
     # noinspection PyTypeChecker
@@ -1744,9 +1748,13 @@ class Buffer:
             combined_x,
             combined_topk_weights,
         )
-        return combined_x, combined_topk_weights, EventOverlap(
-            event,
-            tensors_to_record if async_finish else None,
+        return (
+            combined_x,
+            combined_topk_weights,
+            EventOverlap(
+                event,
+                tensors_to_record if async_finish else None,
+            ),
         )
 
     def clean_low_latency_buffer(
