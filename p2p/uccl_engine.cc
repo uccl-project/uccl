@@ -1,5 +1,6 @@
 #include "uccl_engine.h"
 #include "engine.h"
+#include "rdma/epoll_client.h"
 #ifdef UCCL_P2P_USE_NCCL
 #include "nccl/nccl_endpoint.h"
 #else
@@ -31,6 +32,9 @@ struct uccl_engine {
   std::unique_ptr<Endpoint> endpoint;
   std::thread local_accept_thread;
   std::atomic<bool> local_accept_started{false};
+  // Standalone OOB client for cross-process local notifications when the
+  // transport endpoint does not provide one (e.g. NCCL/TCP build).
+  std::shared_ptr<EpollClient> local_oob_client;
 };
 
 struct uccl_conn {
@@ -104,6 +108,21 @@ static void deserialize_ipc_info(char const* buf, IpcTransferInfo& info) {
   off += sizeof(info.gpu_idx);
 }
 
+// Check UCCL_P2P_DISABLE_IPC=1 to force all transfers through the network
+// transport (RDMA or TCP) even for intra-node peers.  Useful for CI testing.
+static bool ipc_disabled() {
+  static bool disabled = [] {
+    char const* val = std::getenv("UCCL_P2P_DISABLE_IPC");
+    bool dis = val && std::string(val) == "1";
+    if (dis)
+      std::cerr << "UCCL P2P: IPC disabled, all transfers will use "
+                   "network transport"
+                << std::endl;
+    return dis;
+  }();
+  return disabled;
+}
+
 uccl_engine_t* uccl_engine_create(int num_cpus, bool in_python) {
   (void)num_cpus;
   inside_python = in_python;
@@ -120,31 +139,58 @@ void uccl_engine_destroy(uccl_engine_t* engine) {
 }
 
 uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
-                                 int remote_gpu_idx, int remote_port,
+                                 char const* remote_gpu, int remote_port,
                                  bool same_process) {
   if (!engine || !ip_addr) return nullptr;
   uccl_conn_t* conn = new uccl_conn;
   uint64_t conn_id;
 
   // Detect intra-node connection: if the target IP matches our own IP.
+  // When UCCL_P2P_DISABLE_IPC=1, treat all connections as remote so that
+  // data flows through the network transport instead of IPC.
   std::string local_ip = uccl::get_oob_ip();
-  bool is_local = (std::string(ip_addr) == local_ip);
+  bool is_local = !ipc_disabled() && (std::string(ip_addr) == local_ip);
 
-  // Convert the remote CUDA ordinal to a local BDF via the runtime. This is
-  // only meaningful for the same_process / intra-node IPC path; for inter-node
-  // RDMA, the actual remote BDF is exchanged via the TCP handshake inside
-  // endpoint->connect().
-  char bdf_buf[64];
-  GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), remote_gpu_idx));
-  std::string remote_bdf = uccl::normalize_pci_bus_id(bdf_buf);
+  // Resolve remote_gpu: accept either a PCI BDF string (e.g. "0000:4a:00.0")
+  // or a CUDA device index string (e.g. "0").
+  std::string remote_bdf;
+  if (remote_gpu && std::strchr(remote_gpu, ':')) {
+    remote_bdf = uccl::normalize_pci_bus_id(remote_gpu);
+  } else {
+    int gpu_idx = remote_gpu ? std::atoi(remote_gpu) : 0;
+    char bdf_buf[64];
+    GPU_RT_CHECK(gpuDeviceGetPCIBusId(bdf_buf, sizeof(bdf_buf), gpu_idx));
+    remote_bdf = uccl::normalize_pci_bus_id(bdf_buf);
+  }
 
   bool ok;
-  if (is_local && same_process) {
-    // Same process: use shm rings directly, skip TCP.
-    ok = engine->endpoint->connect_local(remote_bdf, conn_id, true);
+  if (is_local) {
+    // Intra-node: use IPC via shared memory rings, skip RDMA/TCP.
+    // same_process=true  → direct_addr (no gpuIpcOpenMemHandle)
+    // same_process=false → cross-process IPC (attach remote shm ring)
+    ok = engine->endpoint->connect_local(remote_bdf, conn_id, same_process);
     conn->sock_fd = -1;
+    // For cross-process local: establish an OOB TCP connection to the remote's
+    // OOB server so that notifications (transfer completion) can be delivered.
+    if (ok && !same_process) {
+      auto oob_client = engine->endpoint->get_oob_client();
+      if (!oob_client) {
+        // Transport doesn't provide an OOB client (e.g. NCCL/TCP build).
+        // Create a standalone one for local notification delivery.
+        if (!engine->local_oob_client) {
+          engine->local_oob_client = std::make_shared<EpollClient>();
+          engine->local_oob_client->start();
+        }
+        oob_client = engine->local_oob_client;
+      }
+      if (oob_client) {
+        std::string conn_key =
+            oob_client->connect_to_server(std::string(ip_addr), remote_port);
+        conn->oob_conn_key = conn_key;
+      }
+    }
   } else {
-    // Remote or cross-process local: use TCP connection.
+    // Remote: use TCP/RDMA connection.
     ok = engine->endpoint->connect(std::string(ip_addr), 0, remote_port,
                                    conn_id);
     if (ok) {
@@ -171,13 +217,9 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
 uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
                                 size_t ip_addr_buf_len, int* remote_gpu_idx) {
   if (!engine || !ip_addr_buf || !remote_gpu_idx) return nullptr;
-    // The merged NCCL/TCPX path does not need the background passive-accept
-    // helper. (To fix bug in 8-GPU benchmark)
-#if !defined(UCCL_P2P_USE_NCCL)
-  // Start accept_local loop in a background thread (once per engine) so that
-  // local (IPC) peers can connect concurrently with the blocking RDMA accept.
-  engine->endpoint->start_passive_accept();
-#endif
+  // Start the local (IPC/shm) accept thread so local peers can connect
+  // concurrently with the blocking network accept.
+  engine->endpoint->start_passive_accept_local();
   uccl_conn_t* conn = new uccl_conn;
   std::string ip_addr;
   uint64_t conn_id;
@@ -511,27 +553,41 @@ std::vector<notify_msg_t> uccl_engine_get_notifs() {
 int uccl_engine_send_notif(uccl_conn_t* conn, notify_msg_t* notify_msg) {
   if (!conn || !notify_msg) return -1;
 
-#if defined(UCCL_P2P_USE_NCCL)
-  NotifyMsg oob_msg;
-  oob_msg.magic = NOTIFY_MSG_MAGIC;
-  strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
-  oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
-  memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
-  return conn->engine->endpoint->send_notification(conn->conn_id, oob_msg);
-#else
   NotifyMsg oob_msg;
   oob_msg.magic = NOTIFY_MSG_MAGIC;
   strncpy(oob_msg.name, notify_msg->name, sizeof(oob_msg.name) - 1);
   oob_msg.name[sizeof(oob_msg.name) - 1] = '\0';
   memcpy(oob_msg.msg, notify_msg->msg, sizeof(oob_msg.msg));
 
+  // Same-process local connection: push notification directly to the local
+  // list — no network path needed regardless of transport.
   if (conn->same_process) {
-    // Same-process local connection: push notification directly to the local
-    // list.
     std::lock_guard<std::mutex> lock(notify_mutex);
     notify_list.push_back(oob_msg);
     return 0;
   }
+
+  // Cross-process local connection: send via OOB client (works for both
+  // RDMA and TCP builds).  The oob_conn_key was set up in uccl_engine_connect.
+  if (conn->is_local && !conn->oob_conn_key.empty()) {
+    auto oob_client = conn->engine->endpoint->get_oob_client();
+    if (!oob_client) {
+      oob_client = conn->engine->local_oob_client;
+    }
+    if (!oob_client) {
+      std::cerr << "No OOB client available for local notification"
+                << std::endl;
+      return -1;
+    }
+    std::string payload(reinterpret_cast<char*>(&oob_msg), sizeof(NotifyMsg));
+    return oob_client->send_meta(conn->oob_conn_key, payload)
+               ? sizeof(NotifyMsg)
+               : -1;
+  }
+
+#if defined(UCCL_P2P_USE_NCCL)
+  return conn->engine->endpoint->send_notification(conn->conn_id, oob_msg);
+#else
   if (conn->oob_conn_key.empty()) {
     std::cerr << "No OOB connection key available for notification"
               << std::endl;
@@ -570,6 +626,7 @@ int uccl_engine_get_ipc_info(uccl_engine_t* engine, uintptr_t addr,
                              char* ipc_buf, bool* has_ipc) {
   if (!engine || !ipc_buf || !has_ipc) return -1;
   *has_ipc = false;
+  if (ipc_disabled()) return 0;
   auto it = mem_reg_info.find(addr);
   if (it == mem_reg_info.end()) return -1;
   if (!it->second.has_ipc) return 0;
