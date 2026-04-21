@@ -25,7 +25,9 @@ inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
                                   ChannelMetaData* local_meta) {
   *cq_ex = (struct ibv_cq_ex*)ibv_create_cq(ctx->getCtx(), MAX_CQE, nullptr,
                                             nullptr, 0);
-  assert(*cq_ex);
+  if (!*cq_ex) {
+    throw std::runtime_error("IBChannelImpl: ibv_create_cq failed");
+  }
 
   struct ibv_qp_init_attr_ex qp_attr = {};
   memset(&qp_attr, 0, sizeof(qp_attr));
@@ -56,7 +58,9 @@ inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
 
   qp_attr.qp_type = IBV_QPT_RC;
   *qp = ibv_create_qp_ex(ctx->getCtx(), &qp_attr);
-  assert(*qp);
+  if (!*qp) {
+    throw std::runtime_error("IBChannelImpl: ibv_create_qp_ex failed");
+  }
 
   struct ibv_qp_attr attr = {};
   memset(&attr, 0, sizeof(attr));
@@ -65,9 +69,11 @@ inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   attr.pkey_index = 0;
   attr.qp_access_flags =
       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
-  assert(ibv_modify_qp(*qp, &attr,
-                       IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
-                           IBV_QP_ACCESS_FLAGS) == 0);
+  if (ibv_modify_qp(*qp, &attr,
+                    IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
+                        IBV_QP_ACCESS_FLAGS) != 0) {
+    throw std::runtime_error("IBChannelImpl: failed to move QP to INIT");
+  }
 
   local_meta->gid = ctx->detectGid(GID_INDEX_DEFAULT);
   local_meta->qpn = (*qp)->qp_num;
@@ -132,7 +138,9 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
 
   flags = IBV_QP_STATE | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
           IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER | IBV_QP_AV;
-  assert(ibv_modify_qp(qp, &attr, flags) == 0);
+  if (ibv_modify_qp(qp, &attr, flags) != 0) {
+    throw std::runtime_error("IBChannelImpl: failed to move QP to RTR");
+  }
 
   lazyPostRecvWrsN(qp, kMaxRecvWr, true);
 
@@ -146,7 +154,9 @@ inline void IBChannelImpl::ibrcQP_rtr_rts(struct ibv_qp* qp,
   attr.max_rd_atomic = MAX_RD_ATOMIC;
   flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY |
           IBV_QP_SQ_PSN | IBV_QP_MAX_QP_RD_ATOMIC;
-  assert(ibv_modify_qp(qp, &attr, flags) == 0);
+  if (ibv_modify_qp(qp, &attr, flags) != 0) {
+    throw std::runtime_error("IBChannelImpl: failed to move QP to RTS");
+  }
 }
 
 inline bool IBChannelImpl::pollOnce(struct ibv_cq_ex* cq_ex,
@@ -202,7 +212,10 @@ inline void IBChannelImpl::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
   while (pending_post_recv_ >= kBatchPostRecvWr) {
     struct ibv_recv_wr* bad_wr = nullptr;
     pre_alloc_recv_wrs_[kBatchPostRecvWr - 1].next = nullptr;
-    assert(ibv_post_recv(qp, pre_alloc_recv_wrs_, &bad_wr) == 0);
+    if (ibv_post_recv(qp, pre_alloc_recv_wrs_, &bad_wr) != 0) {
+      throw std::runtime_error(
+          "IBChannelImpl: ibv_post_recv failed for batched pre-post");
+    }
     pre_alloc_recv_wrs_[kBatchPostRecvWr - 1].next =
         (kBatchPostRecvWr == kMaxRecvWr)
             ? nullptr
@@ -213,7 +226,10 @@ inline void IBChannelImpl::lazyPostRecvWrsN(struct ibv_qp* qp, uint32_t n,
   if (force && pending_post_recv_) {
     struct ibv_recv_wr* bad_wr = nullptr;
     pre_alloc_recv_wrs_[pending_post_recv_ - 1].next = nullptr;
-    assert(ibv_post_recv(qp, pre_alloc_recv_wrs_, &bad_wr) == 0);
+    if (ibv_post_recv(qp, pre_alloc_recv_wrs_, &bad_wr) != 0) {
+      throw std::runtime_error(
+          "IBChannelImpl: ibv_post_recv failed for forced pre-post");
+    }
     pre_alloc_recv_wrs_[pending_post_recv_ - 1].next =
         (pending_post_recv_ == kMaxRecvWr)
             ? nullptr

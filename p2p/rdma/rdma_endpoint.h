@@ -35,8 +35,12 @@ class NICEndpoint {
     oob_client_ = std::make_shared<EpollClient>();
 
     allocator_ = std::make_shared<MemoryAllocator>();
-    assert(oob_server_->start());
-    assert(oob_client_->start());
+    if (!oob_server_->start()) {
+      throw std::runtime_error("NICEndpoint: failed to start OOB server");
+    }
+    if (!oob_client_->start()) {
+      throw std::runtime_error("NICEndpoint: failed to start OOB client");
+    }
     initCompressor();
   }
   // Destructor
@@ -538,7 +542,10 @@ class NICEndpoint {
 
   void initializeContexts(std::vector<size_t> const& device_ids) {
     auto& device_manager = RdmaDeviceManager::instance();
-    assert(!device_ids.empty() && device_ids.size() <= kNICContextNumber);
+    if (device_ids.empty() || device_ids.size() > kNICContextNumber) {
+      throw std::runtime_error(
+          "NICEndpoint: invalid RDMA device_ids size for context init");
+    }
 
     // Share RdmaContext objects across context slots that map to the same
     // physical NIC device.  Each unique ibv_context + ibv_pd triggers a
@@ -578,7 +585,10 @@ class NICEndpoint {
           << " (" << device->name() << ")";
     }
 
-    assert(contexts_.size() == kNICContextNumber);
+    if (contexts_.size() != kNICContextNumber) {
+      throw std::runtime_error(
+          "NICEndpoint: context slot count mismatch after init");
+    }
     UCCL_LOG(INFO, UCCL_RDMA)
         << "NICEndpoint: " << kNICContextNumber << " context slots, "
         << unique_count << " unique device(s)";

@@ -25,7 +25,9 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   cq_attr.comp_mask = 0;
 
   *cq_ex = ibv_create_cq_ex(ctx->getCtx(), &cq_attr);
-  assert(*cq_ex);
+  if (!*cq_ex) {
+    throw std::runtime_error("EFAChannelImpl: ibv_create_cq_ex failed");
+  }
 
   struct ibv_qp_init_attr_ex qp_attr = {0};
   qp_attr.comp_mask = IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_SEND_OPS_FLAGS;
@@ -58,7 +60,9 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   *qp =
       efadv_create_qp_ex(ctx->getCtx(), &qp_attr, &efa_attr, sizeof(efa_attr));
 
-  assert(*qp);
+  if (!*qp) {
+    throw std::runtime_error("EFAChannelImpl: efadv_create_qp_ex failed");
+  }
 
   struct ibv_qp_attr attr = {};
   memset(&attr, 0, sizeof(attr));
@@ -66,19 +70,25 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   attr.port_num = kPortNum;
   attr.qkey = QKEY;
   attr.pkey_index = 0;
-  assert(ibv_modify_qp(*qp, &attr,
-                       IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
-                           IBV_QP_QKEY) == 0);
+  if (ibv_modify_qp(*qp, &attr,
+                    IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT |
+                        IBV_QP_QKEY) != 0) {
+    throw std::runtime_error("EFAChannelImpl: failed to move QP to INIT");
+  }
 
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTR;
-  assert(ibv_modify_qp(*qp, &attr, IBV_QP_STATE) == 0);
+  if (ibv_modify_qp(*qp, &attr, IBV_QP_STATE) != 0) {
+    throw std::runtime_error("EFAChannelImpl: failed to move QP to RTR");
+  }
 
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTS;
   attr.rnr_retry = RNR_RETRY;
-  assert(ibv_modify_qp(*qp, &attr,
-                       IBV_QP_STATE | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN) == 0);
+  if (ibv_modify_qp(*qp, &attr,
+                    IBV_QP_STATE | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN) != 0) {
+    throw std::runtime_error("EFAChannelImpl: failed to move QP to RTS");
+  }
 
   local_meta->gid = ctx->detectGid(GID_INDEX_EFA);
   local_meta->qpn = (*qp)->qp_num;

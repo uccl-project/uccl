@@ -1,5 +1,6 @@
 #pragma once
 #include "define.h"
+#include <stdexcept>
 
 template <typename T, size_t Capacity>
 class EmptyRingBuffer {
@@ -41,13 +42,22 @@ class RingBuffer {
                   "Capacity must be a power of two");
 
     // Validate RegMemBlock
-    assert(mem_block != nullptr && "RegMemBlock pointer must not be null");
-    assert(mem_block->size >= Capacity * sizeof(T) &&
-           "RegMemBlock size is too small for the requested capacity");
-    assert(mem_block->type == MemoryType::HOST &&
-           "RegMemBlock must be HOST memory type");
-    assert(mem_block->addr != nullptr &&
-           "RegMemBlock addr pointer must not be null");
+    if (mem_block == nullptr) {
+      throw std::invalid_argument(
+          "RingBuffer requires non-null RegMemBlock");
+    }
+    if (mem_block->size < Capacity * sizeof(T)) {
+      throw std::invalid_argument(
+          "RingBuffer RegMemBlock is too small for requested capacity");
+    }
+    if (mem_block->type != MemoryType::HOST) {
+      throw std::invalid_argument(
+          "RingBuffer requires HOST RegMemBlock");
+    }
+    if (mem_block->addr == nullptr) {
+      throw std::invalid_argument(
+          "RingBuffer requires non-null RegMemBlock address");
+    }
 
     buffer_ = static_cast<T*>(mem_block->addr);
   }
