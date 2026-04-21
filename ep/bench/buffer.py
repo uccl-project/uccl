@@ -35,6 +35,13 @@ except ImportError:
     )
 
 
+def _env_flag_enabled(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return value.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
 class Buffer:
     """
     The core expert-parallel (EP) communication buffers for Mixture of Experts (MoE) model, which supports:
@@ -154,6 +161,12 @@ class Buffer:
         self.low_latency_mode = low_latency_mode
         self.explicitly_destroy = explicitly_destroy
         self._next_low_latency_combine_buffer = None
+        # Force the normal dispatch/combine path to behave like a current-stream
+        # call site: ignore async/comm-stream allocation hints and hand back a
+        # current-stream event when callers still request async mode.
+        self._force_dispatch_combine_current_stream = _env_flag_enabled(
+            "UCCL_EP_FORCE_CURRENT_STREAM"
+        )
         self.runtime = ep.Buffer(
             self.rank,
             self.group_size,
@@ -209,6 +222,30 @@ class Buffer:
         """
         current = torch.cuda.current_stream(device=device)
         return int(current.cuda_stream)
+
+    def _normalize_dispatch_combine_stream_args(
+        self,
+        async_finish: bool,
+        allocate_on_comm_stream: bool,
+    ) -> Tuple[bool, bool]:
+        if self._force_dispatch_combine_current_stream:
+            return False, False
+        return async_finish, allocate_on_comm_stream
+
+    def _wrap_dispatch_combine_event(
+        self,
+        event: Optional[EventHandle],
+        requested_async_finish: bool,
+        effective_async_finish: bool,
+        tensors_to_record: Optional[Tuple],
+        device: torch.device,
+    ) -> EventOverlap:
+        if effective_async_finish:
+            return EventOverlap(event, tensors_to_record)
+        if self._force_dispatch_combine_current_stream and requested_async_finish:
+            current = torch.cuda.current_stream(device=device)
+            return EventOverlap(EventHandle(int(current.cuda_stream)))
+        return EventOverlap(event)
 
     def reset_rdma_buffer(self):
         """
@@ -762,6 +799,13 @@ class Buffer:
             is_token_in_rank: `[num_tokens, num_ranks]` with `torch.bool`, whether a token be sent to a rank.
             event: the event after executing the kernel (valid only if `async_finish` is set).
         """
+        requested_async_finish = async_finish
+        async_finish, allocate_on_comm_stream = (
+            self._normalize_dispatch_combine_stream_args(
+                async_finish,
+                allocate_on_comm_stream,
+            )
+        )
         alloc_ctx = (
             torch.cuda.stream(self.get_comm_stream())
             if allocate_on_comm_stream
@@ -824,9 +868,12 @@ class Buffer:
             num_tokens_per_rdma_rank,
             num_tokens_per_expert,
             is_token_in_rank,
-            EventOverlap(
+            self._wrap_dispatch_combine_event(
                 event,
+                requested_async_finish,
+                async_finish,
                 tensors_to_record if async_finish else None,
+                topk_idx.device,
             ),
         )
 
@@ -917,6 +964,13 @@ class Buffer:
             )
 
         # Launch the kernel with cached or non-cached mode
+        requested_async_finish = async_finish
+        async_finish, allocate_on_comm_stream = (
+            self._normalize_dispatch_combine_stream_args(
+                async_finish,
+                allocate_on_comm_stream,
+            )
+        )
         x, x_scales = x if isinstance(x, tuple) else (x, None)
         if handle is not None:
             assert topk_idx is None and topk_weights is None
@@ -1009,9 +1063,12 @@ class Buffer:
                 None,
                 None,
                 None,
-                EventOverlap(
+                self._wrap_dispatch_combine_event(
                     event,
+                    requested_async_finish,
+                    async_finish,
                     tensors_to_record if async_finish else None,
+                    x.device,
                 ),
             )
         else:
@@ -1160,9 +1217,12 @@ class Buffer:
                 recv_topk_weights,
                 num_recv_tokens_per_expert_list,
                 handle,
-                EventOverlap(
+                self._wrap_dispatch_combine_event(
                     event,
+                    requested_async_finish,
+                    async_finish,
                     tensors_to_record if async_finish else None,
+                    x.device,
                 ),
             )
 
@@ -1216,6 +1276,13 @@ class Buffer:
             )
 
         # NOTES: the second `_` is for the sending side, so we should use the third one
+        requested_async_finish = async_finish
+        async_finish, allocate_on_comm_stream = (
+            self._normalize_dispatch_combine_stream_args(
+                async_finish,
+                allocate_on_comm_stream,
+            )
+        )
         (
             rank_prefix_matrix,
             _,
@@ -1284,9 +1351,12 @@ class Buffer:
             recv_x,
             recv_topk_weights,
         )
-        return recv_x, recv_topk_weights, EventOverlap(
+        return recv_x, recv_topk_weights, self._wrap_dispatch_combine_event(
             event,
+            requested_async_finish,
+            async_finish,
             tensors_to_record if async_finish else None,
+            x.device,
         )
 
     # noinspection PyTypeChecker
@@ -1319,6 +1389,13 @@ class Buffer:
         Normally, you should not directly call this function.
         """
         assert config is not None
+        requested_async_finish = async_finish
+        async_finish, allocate_on_comm_stream = (
+            self._normalize_dispatch_combine_stream_args(
+                async_finish,
+                allocate_on_comm_stream,
+            )
+        )
 
         x, x_scales = x if isinstance(x, tuple) else (x, None)
         num_scales = (
@@ -1428,9 +1505,12 @@ class Buffer:
                 None,
                 None,
                 None,
-                EventOverlap(
+                self._wrap_dispatch_combine_event(
                     event,
+                    requested_async_finish,
+                    async_finish,
                     tensors_to_record if async_finish else None,
+                    x.device,
                 ),
             )
         else:
@@ -1628,9 +1708,12 @@ class Buffer:
                 recv_topk_weights,
                 num_recv_tokens_per_expert_list,
                 handle,
-                EventOverlap(
+                self._wrap_dispatch_combine_event(
                     event,
+                    requested_async_finish,
+                    async_finish,
                     tensors_to_record if async_finish else None,
+                    x.device,
                 ),
             )
 
@@ -1651,6 +1734,13 @@ class Buffer:
         Normally, you should not directly call this function.
         """
         assert config is not None
+        requested_async_finish = async_finish
+        async_finish, allocate_on_comm_stream = (
+            self._normalize_dispatch_combine_stream_args(
+                async_finish,
+                allocate_on_comm_stream,
+            )
+        )
 
         # Unpack handle and bias
         (
@@ -1741,9 +1831,12 @@ class Buffer:
             combined_x,
             combined_topk_weights,
         )
-        return combined_x, combined_topk_weights, EventOverlap(
+        return combined_x, combined_topk_weights, self._wrap_dispatch_combine_event(
             event,
+            requested_async_finish,
+            async_finish,
             tensors_to_record if async_finish else None,
+            x.device,
         )
 
     def clean_low_latency_buffer(

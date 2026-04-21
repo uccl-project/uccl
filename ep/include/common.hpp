@@ -148,4 +148,12 @@ static inline bool get_aggressive_atomic_enabled() {
   return val != 0;
 }
 
+static inline bool get_force_current_stream_enabled() {
+  static uint32_t val = []() -> uint32_t {
+    char const* env = getenv("UCCL_EP_FORCE_CURRENT_STREAM");
+    return env ? static_cast<uint32_t>(atoi(env)) : 0;
+  }();
+  return val != 0;
+}
+
 #endif  // COMMON_HPP

@@ -26,6 +26,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <cstdlib>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -321,7 +322,9 @@ class Buffer {
         num_nvl_bytes(num_nvl_bytes),
         num_rdma_bytes(num_rdma_bytes),
         low_latency_mode(low_latency_mode),
-        explicitly_destroy(explicitly_destroy) {
+        explicitly_destroy(explicitly_destroy),
+        force_dispatch_combine_current_stream(
+            get_force_current_stream_enabled()) {
     if (num_local_ranks == -1) num_local_ranks = get_num_max_nvl_peers();
     max_nvl_peers = num_local_ranks;
     {
@@ -510,6 +513,31 @@ class Buffer {
     }
   }
 
+  cudaStream_t maybe_fork_stream(
+      std::optional<EventHandle> const& previous_event,
+      cudaStream_t current_stream) const {
+    if (force_dispatch_combine_current_stream) {
+      if (previous_event.has_value()) {
+        stream_wait(current_stream, previous_event.value());
+      }
+      return current_stream;
+    }
+    if (previous_event.has_value()) {
+      stream_wait(comm_stream, previous_event.value());
+    } else {
+      stream_wait(comm_stream, current_stream);
+    }
+    return comm_stream;
+  }
+
+  void maybe_join_stream(cudaStream_t current_stream,
+                         cudaStream_t launch_stream) const {
+    if (launch_stream == current_stream) {
+      return;
+    }
+    stream_wait(current_stream, launch_stream);
+  }
+
   std::optional<EventHandle> get_dispatch_layout(
       std::uintptr_t topk_idx_ptr, int num_tokens, int num_topk,
       int num_experts, std::uintptr_t num_tokens_per_rank_ptr,
@@ -525,15 +553,11 @@ class Buffer {
     EP_HOST_ASSERT(num_experts > 0);
 
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    // NOTE(zhenhuang12): No runime cost. Python now owns the actual tensor allocation stream before passing raw
-    // pointers into C++, so this flag is advisory on the C++ side.
+    // NOTE(zhenhuang12): No runtime cost. Python now owns the actual tensor
+    // allocation stream before passing raw pointers into C++, so this flag is
+    // advisory on the C++ side.
     static_cast<void>(allocate_on_comm_stream);
-
-    if (previous_event.has_value()) {
-      stream_wait(comm_stream, previous_event.value());
-    } else {
-      stream_wait(comm_stream, compute_stream);
-    }
+    auto launch_stream = maybe_fork_stream(previous_event, compute_stream);
 
     auto* topk_idx = reinterpret_cast<int64_t*>(topk_idx_ptr);
     auto* num_tokens_per_rank = reinterpret_cast<int*>(num_tokens_per_rank_ptr);
@@ -548,15 +572,13 @@ class Buffer {
     uccl::layout::get_dispatch_layout(
         topk_idx, num_tokens_per_rank, num_tokens_per_rdma_rank,
         num_tokens_per_expert, is_token_in_rank, num_tokens, num_topk,
-        num_ranks, num_experts, comm_stream);
+        num_ranks, num_experts, launch_stream);
 
-    std::optional<EventHandle> event;
     if (async) {
-      event = EventHandle(comm_stream);
-    } else {
-      stream_wait(compute_stream, comm_stream);
+      return EventHandle(launch_stream);
     }
-    return event;
+    maybe_join_stream(compute_stream, launch_stream);
+    return std::nullopt;
   }
 
   ~Buffer() noexcept(false) {
@@ -651,11 +673,7 @@ class Buffer {
 
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
     static_cast<void>(allocate_on_comm_stream);
-    if (previous_event.has_value()) {
-      stream_wait(comm_stream, previous_event.value());
-    } else {
-      stream_wait(comm_stream, compute_stream);
-    }
+    auto launch_stream = maybe_fork_stream(previous_event, compute_stream);
 
     int* num_tokens_per_rank = reinterpret_cast<int*>(num_tokens_per_rank_ptr);
     bool* is_token_in_rank = reinterpret_cast<bool*>(is_token_in_rank_ptr);
@@ -675,7 +693,7 @@ class Buffer {
         num_tokens_per_expert, moe_recv_expert_counter_mapped, num_experts,
         num_tokens, is_token_in_rank, channel_prefix_matrix, rank_prefix_matrix,
         num_memset_int, expert_alignment, buffer_ptrs_gpu,
-        barrier_signal_ptrs_gpu, rank, comm_stream, num_channels);
+        barrier_signal_ptrs_gpu, rank, launch_stream, num_channels);
 
     int num_recv_tokens = -1;
     std::vector<int> num_recv_tokens_per_expert_list;
@@ -702,9 +720,9 @@ class Buffer {
 
     std::optional<EventHandle> event;
     if (async) {
-      event = EventHandle(comm_stream);
+      event = EventHandle(launch_stream);
     } else {
-      stream_wait(compute_stream, comm_stream);
+      maybe_join_stream(compute_stream, launch_stream);
     }
     return {num_recv_tokens, num_recv_tokens_per_expert_list, event};
   }
@@ -736,18 +754,14 @@ class Buffer {
     int num_channels = config.num_sms / 2;
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
     static_cast<void>(allocate_on_comm_stream);
-    if (previous_event.has_value()) {
-      stream_wait(comm_stream, previous_event.value());
-    } else {
-      stream_wait(comm_stream, compute_stream);
-    }
+    auto launch_stream = maybe_fork_stream(previous_event, compute_stream);
     if (cached_mode) {
       EP_HOST_ASSERT(rank_prefix_matrix_ptr != 0);
       int num_memset_int = num_channels * num_ranks * 4;
       uccl::intranode::cached_notify_dispatch(
           reinterpret_cast<int*>(rank_prefix_matrix_ptr), num_memset_int,
           buffer_ptrs_gpu, barrier_signal_ptrs_gpu, rank, num_ranks,
-          comm_stream);
+          launch_stream);
     }
 
     auto* x = reinterpret_cast<void*>(x_ptr);
@@ -776,17 +790,15 @@ class Buffer {
         num_worst_tokens,
         static_cast<int>(hidden * x_element_size / sizeof(int4)), num_topk,
         num_experts, num_scales, scale_token_stride, scale_hidden_stride,
-        buffer_ptrs_gpu, rank, num_ranks, comm_stream, config.num_sms,
+        buffer_ptrs_gpu, rank, num_ranks, launch_stream, config.num_sms,
         config.num_max_nvl_chunked_send_tokens,
         config.num_max_nvl_chunked_recv_tokens);
 
-    std::optional<EventHandle> event;
     if (async) {
-      event = EventHandle(comm_stream);
-    } else {
-      stream_wait(compute_stream, comm_stream);
+      return EventHandle(launch_stream);
     }
-    return event;
+    maybe_join_stream(compute_stream, launch_stream);
+    return std::nullopt;
   }
 
   std::optional<EventHandle> intranode_combine(
@@ -812,18 +824,14 @@ class Buffer {
 
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
     static_cast<void>(allocate_on_comm_stream);
-    if (previous_event.has_value()) {
-      stream_wait(comm_stream, previous_event.value());
-    } else {
-      stream_wait(comm_stream, compute_stream);
-    }
+    auto launch_stream = maybe_fork_stream(previous_event, compute_stream);
 
     EP_HOST_ASSERT(num_channels * num_ranks * sizeof(int) * 2 <=
                    static_cast<size_t>(num_nvl_bytes));
     uccl::intranode::cached_notify_combine(
         buffer_ptrs_gpu, reinterpret_cast<int*>(send_head_ptr), num_channels,
         num_recv_tokens, num_channels * num_ranks * 2, barrier_signal_ptrs_gpu,
-        rank, num_ranks, comm_stream);
+        rank, num_ranks, launch_stream);
 
     void* bias_ptrs[2] = {
         bias_0_ptr == 0 ? nullptr : reinterpret_cast<void*>(bias_0_ptr),
@@ -841,17 +849,15 @@ class Buffer {
         reinterpret_cast<int*>(rank_prefix_matrix_ptr),
         reinterpret_cast<int*>(channel_prefix_matrix_ptr),
         reinterpret_cast<int*>(send_head_ptr), num_tokens, num_recv_tokens,
-        hidden, num_topk, buffer_ptrs_gpu, rank, num_ranks, comm_stream,
+        hidden, num_topk, buffer_ptrs_gpu, rank, num_ranks, launch_stream,
         config.num_sms, config.num_max_nvl_chunked_send_tokens,
         config.num_max_nvl_chunked_recv_tokens);
 
-    std::optional<EventHandle> event;
     if (async) {
-      event = EventHandle(comm_stream);
-    } else {
-      stream_wait(compute_stream, comm_stream);
+      return EventHandle(launch_stream);
     }
-    return event;
+    maybe_join_stream(compute_stream, launch_stream);
+    return std::nullopt;
   }
 
   std::tuple<int, int, std::vector<int>, std::optional<EventHandle>>
@@ -891,11 +897,7 @@ class Buffer {
 
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
     static_cast<void>(allocate_on_comm_stream);
-    if (previous_event.has_value()) {
-      stream_wait(comm_stream, previous_event.value());
-    } else {
-      stream_wait(comm_stream, compute_stream);
-    }
+    auto launch_stream = maybe_fork_stream(previous_event, compute_stream);
 
     *moe_recv_counter = -1;
     *moe_recv_rdma_counter = -1;
@@ -917,7 +919,7 @@ class Buffer {
         reinterpret_cast<int*>(recv_gbl_rank_prefix_sum_ptr), rdma_buffer_ptr,
         config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
         config.num_max_nvl_chunked_recv_tokens, barrier_signal_ptrs_gpu, rank,
-        comm_stream,
+        launch_stream,
         config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4), num_ranks),
         num_nvl_bytes, low_latency_mode, d_handles, num_d2h_channel_addrs,
         atomic_buffer_ptr);
@@ -950,9 +952,9 @@ class Buffer {
 
     std::optional<EventHandle> event;
     if (async) {
-      event = EventHandle(comm_stream);
+      event = EventHandle(launch_stream);
     } else {
-      stream_wait(compute_stream, comm_stream);
+      maybe_join_stream(compute_stream, launch_stream);
     }
     return {num_recv_tokens, num_rdma_recv_tokens,
             num_recv_tokens_per_expert_list, event};
@@ -989,11 +991,7 @@ class Buffer {
         hidden * x_element_size / static_cast<int>(sizeof(int4));
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
     static_cast<void>(allocate_on_comm_stream);
-    if (previous_event.has_value()) {
-      stream_wait(comm_stream, previous_event.value());
-    } else {
-      stream_wait(comm_stream, compute_stream);
-    }
+    auto launch_stream = maybe_fork_stream(previous_event, compute_stream);
 
     if (cached_mode) {
       uccl::internode::cached_notify(
@@ -1003,7 +1001,7 @@ class Buffer {
           reinterpret_cast<int const*>(recv_rdma_rank_prefix_sum_ptr), nullptr,
           rdma_buffer_ptr, config.num_max_rdma_chunked_recv_tokens,
           buffer_ptrs_gpu, config.num_max_nvl_chunked_recv_tokens,
-          barrier_signal_ptrs_gpu, rank, comm_stream,
+          barrier_signal_ptrs_gpu, rank, launch_stream,
           config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4),
                                            num_ranks),
           num_nvl_bytes, true, low_latency_mode, d_handles,
@@ -1053,16 +1051,14 @@ class Buffer {
         config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
         config.num_max_nvl_chunked_send_tokens,
         config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, cached_mode,
-        comm_stream, num_channels, low_latency_mode, d_handles,
+        launch_stream, num_channels, low_latency_mode, d_handles,
         num_d2h_channel_addrs, atomic_buffer_ptr);
 
-    std::optional<EventHandle> event;
     if (async) {
-      event = EventHandle(comm_stream);
-    } else {
-      stream_wait(compute_stream, comm_stream);
+      return EventHandle(launch_stream);
     }
-    return event;
+    maybe_join_stream(compute_stream, launch_stream);
+    return std::nullopt;
   }
 
   std::optional<EventHandle> internode_combine(
@@ -1093,11 +1089,7 @@ class Buffer {
         hidden * x_element_size / static_cast<int>(sizeof(int4));
     auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
     static_cast<void>(allocate_on_comm_stream);
-    if (previous_event.has_value()) {
-      stream_wait(comm_stream, previous_event.value());
-    } else {
-      stream_wait(comm_stream, compute_stream);
-    }
+    auto launch_stream = maybe_fork_stream(previous_event, compute_stream);
 
     uccl::internode::cached_notify(
         hidden_int4, 0, 0, num_topk, num_ranks, num_channels,
@@ -1107,7 +1099,7 @@ class Buffer {
         reinterpret_cast<int*>(combined_nvl_head_ptr), rdma_buffer_ptr,
         config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
         config.num_max_nvl_chunked_recv_tokens, barrier_signal_ptrs_gpu, rank,
-        comm_stream,
+        launch_stream,
         config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4), num_ranks),
         num_nvl_bytes, false, low_latency_mode, d_handles,
         num_d2h_channel_addrs, atomic_buffer_ptr);
@@ -1138,17 +1130,15 @@ class Buffer {
         config.num_max_rdma_chunked_send_tokens,
         config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
         config.num_max_nvl_chunked_send_tokens,
-        config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, comm_stream,
+        config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, launch_stream,
         num_channels, low_latency_mode, d_handles, num_d2h_channel_addrs,
         atomic_buffer_ptr);
 
-    std::optional<EventHandle> event;
     if (async) {
-      event = EventHandle(comm_stream);
-    } else {
-      stream_wait(compute_stream, comm_stream);
+      return EventHandle(launch_stream);
     }
-    return event;
+    maybe_join_stream(compute_stream, launch_stream);
+    return std::nullopt;
   }
 
   void clean_low_latency_buffer(int num_max_dispatch_tokens_per_rank,
@@ -1586,6 +1576,7 @@ class Buffer {
   long num_rdma_bytes{0};
   bool low_latency_mode{false};
   bool explicitly_destroy{false};
+  bool const force_dispatch_combine_current_stream{false};
   int device_index{0};
   std::vector<nb::object> proxies_;
   bool available{false};
