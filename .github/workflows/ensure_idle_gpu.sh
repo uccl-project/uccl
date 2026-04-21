@@ -60,51 +60,79 @@ if [[ ${#GPU_PIDS[@]} -eq 0 ]]; then
   exit 0
 fi
 
-FOREIGN=()
+MY_UID="$(id -u)"
+
+pid_is_mine() {
+  local owner
+  owner="$(stat -c %u "/proc/$1" 2>/dev/null)" || return 1
+  [[ "$owner" == "$MY_UID" ]]
+}
+
+FOREIGN_MINE=()
+FOREIGN_OTHER=()
 for pid in "${GPU_PIDS[@]}"; do
   [[ -n "$pid" ]] || continue
-  pid_is_uccl_ci_sandbox "$pid" || FOREIGN+=("$pid")
+  pid_is_uccl_ci_sandbox "$pid" && continue
+  if pid_is_mine "$pid"; then
+    FOREIGN_MINE+=("$pid")
+  else
+    FOREIGN_OTHER+=("$pid")
+  fi
 done
 
-if [[ ${#FOREIGN[@]} -gt 0 ]]; then
-  echo "GPU busy with processes outside $SANDBOX_ABS — refusing to kill:" >&2
-  for pid in "${FOREIGN[@]}"; do
+if [[ ${#FOREIGN_OTHER[@]} -gt 0 ]]; then
+  echo "GPU busy with processes from another user (cannot kill):" >&2
+  for pid in "${FOREIGN_OTHER[@]}"; do
     describe_pid "$pid" >&2
   done
   exit 1
 fi
 
-echo "Clearing stale UCCL CI GPU PIDs: ${GPU_PIDS[*]}"
+if [[ ${#FOREIGN_MINE[@]} -gt 0 ]]; then
+  echo "GPU busy with our processes outside $SANDBOX_ABS (cannot kill):" >&2
+  for pid in "${FOREIGN_MINE[@]}"; do
+    describe_pid "$pid" >&2
+  done
+  exit 1
+fi
 
-kill -TERM "${GPU_PIDS[@]}" 2>/dev/null || true
-for _ in 1 2 3 4 5; do
-  mapfile -t GPU_PIDS < <(collect_rocm_gpu_pids | sort -nu)
-  [[ ${#GPU_PIDS[@]} -eq 0 ]] && exit 0
-  sleep 1
+CI_PIDS=()
+for pid in "${GPU_PIDS[@]}"; do
+  [[ -n "$pid" ]] || continue
+  pid_is_uccl_ci_sandbox "$pid" && CI_PIDS+=("$pid")
 done
 
-kill -KILL "${GPU_PIDS[@]}" 2>/dev/null || true
-sleep 2
-mapfile -t GPU_PIDS < <(collect_rocm_gpu_pids | sort -nu)
-if [[ ${#GPU_PIDS[@]} -eq 0 ]]; then
+if [[ ${#CI_PIDS[@]} -eq 0 ]]; then
+  echo "No stale UCCL CI processes to clear; GPU ready."
   exit 0
 fi
 
-# After SIGKILL, anything left is unexpected or foreign.
-FOREIGN=()
-for pid in "${GPU_PIDS[@]}"; do
-  pid_is_uccl_ci_sandbox "$pid" || FOREIGN+=("$pid")
-done
-if [[ ${#FOREIGN[@]} -gt 0 ]]; then
-  echo "GPU still busy with non-UCCL-CI processes:" >&2
-  for pid in "${FOREIGN[@]}"; do
-    describe_pid "$pid" >&2
+echo "Clearing stale UCCL CI GPU PIDs: ${CI_PIDS[*]}"
+
+kill -TERM "${CI_PIDS[@]}" 2>/dev/null || true
+for _ in 1 2 3 4 5; do
+  mapfile -t GPU_PIDS < <(collect_rocm_gpu_pids | sort -nu)
+  remaining=()
+  for pid in "${GPU_PIDS[@]}"; do
+    pid_is_mine "$pid" && remaining+=("$pid")
   done
-  exit 1
+  [[ ${#remaining[@]} -eq 0 ]] && exit 0
+  sleep 1
+done
+
+kill -KILL "${CI_PIDS[@]}" 2>/dev/null || true
+sleep 2
+mapfile -t GPU_PIDS < <(collect_rocm_gpu_pids | sort -nu)
+remaining=()
+for pid in "${GPU_PIDS[@]}"; do
+  pid_is_mine "$pid" && remaining+=("$pid")
+done
+if [[ ${#remaining[@]} -eq 0 ]]; then
+  exit 0
 fi
 
-echo "GPU still in use after kill; remaining PIDs: ${GPU_PIDS[*]}" >&2
-for pid in "${GPU_PIDS[@]}"; do
+echo "GPU still in use by our processes after kill; remaining PIDs: ${remaining[*]}" >&2
+for pid in "${remaining[@]}"; do
   describe_pid "$pid" >&2
 done
 exit 1

@@ -24,12 +24,6 @@
 #include <variant>
 #include <vector>
 
-#ifdef UCCL_P2P_USE_TCPX
-using FifoItem = nccl_tcpx::FifoItem;
-#else
-using FifoItem = FifoItem;
-#endif
-
 extern thread_local bool inside_python;
 
 #ifdef UCCL_P2P_USE_NCCL
@@ -73,7 +67,7 @@ struct Conn {
   ConnID uccl_conn_id_;
   std::string ip_addr_;
   uint16_t remote_port_ = 0;
-  int remote_gpu_idx_;
+  std::string remote_gpu_bdf_;  // PCI Bus ID of the remote GPU
   bool is_local_ = false;
   uint64_t rdma_loopback_conn_id_ = UINT64_MAX;
 
@@ -91,9 +85,9 @@ struct IpcTransferInfo {
   gpuIpcMemHandle_t handle;
   uintptr_t offset;
   size_t size;
-  uint32_t operation;  // 0 = send_ipc request, 1 = recv_ipc response
-  bool is_host;        // true if this side's buffer is CPU memory
-  int gpu_idx = -1;    // target GPU index; -1 = use conn->remote_gpu_idx_
+  uint32_t operation;         // 0 = send_ipc request, 1 = recv_ipc response
+  bool is_host;               // true if this side's buffer is CPU memory
+  int gpu_idx = -1;           // target GPU local index for direct_addr path
   uintptr_t direct_addr = 0;  // same-process: skip IPC, use this virtual addr
 };
 
@@ -105,7 +99,7 @@ enum class ShmMsgType : uint32_t {
 };
 
 struct ShmMsg {
-  uint32_t src_gpu;
+  char src_bdf[16];  // PCI Bus ID of the sender (e.g. "0000:4A:00.0")
   ShmMsgType type;
   union {
     IpcTransferInfo info;
@@ -290,7 +284,7 @@ class Endpoint {
 
   /* Parse endpoint metadata to extract IP address, port, and GPU index.
    * Returns a tuple of (ip_address, port, gpu_index). */
-  static std::tuple<std::string, uint16_t, int> parse_metadata(
+  static std::tuple<std::string, uint16_t, std::string> parse_metadata(
       std::vector<uint8_t> const& metadata);
 
   /* Accept an incoming connection via TCP, then build RDMA QP connections. */
@@ -392,12 +386,12 @@ class Endpoint {
                   std::vector<void*> addr_v, std::vector<size_t> len_v,
                   std::vector<char*> out_buf_v, size_t num_iovs);
 
-  /*Connect to a local process via Unix Domain Socket.*/
-  bool connect_local(int remote_gpu_idx, uint64_t& conn_id,
+  /*Connect to a local process via shared memory.*/
+  bool connect_local(std::string const& remote_gpu_bdf, uint64_t& conn_id,
                      bool same_process = false);
 
-  /*Accept an incoming local connection via Unix Domain Socket. */
-  bool accept_local(int& remote_gpu_idx, uint64_t& conn_id);
+  /*Accept an incoming local connection via shared memory. */
+  bool accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id);
 
   /* Send data to the remote server via CUDA/HIP IPC. Blocking. The
    * gpuIpcMemHandle_t will be passed via shm-jring from recv_ipc to send_ipc
@@ -475,8 +469,11 @@ class Endpoint {
 
   RDMAEndPoint get_endpoint() const;
 
+  int send_notification(uint64_t conn_id, NotifyMsg const& notification) const;
+
  private:
-  int local_gpu_idx_;
+  int local_gpu_idx_;       // CUDA device ordinal (within visible set)
+  std::string gpu_bus_id_;  // PCI Bus ID string (cross-process identity)
   int numa_node_;
   RDMAEndPoint ep_;
   bool engine_initialized_ = false;
@@ -493,9 +490,9 @@ class Endpoint {
       remote_endpoint_to_conn_id_;
   /* Single-threaded access only. */
   std::unordered_map<int, uint64_t> rank2conn_;
-  /* JRing for local */
-  std::array<ShmRingHandle, kMaxNumGPUs> inbox_rings_;
-  std::array<bool, kMaxNumGPUs> inbox_creators_;
+  /* JRing for local — keyed by sender's PCI Bus ID */
+  std::unordered_map<std::string, ShmRingHandle> inbox_rings_;
+  std::unordered_map<std::string, bool> inbox_creators_;
   std::vector<std::vector<gpuStream_t>> ipc_streams_;
   /* For both net and ipc send/recv tasks. */
   jring_t* send_unified_task_ring_ = nullptr;
