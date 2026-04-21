@@ -387,33 +387,18 @@ unsigned RdmaTransportAdapter::send_async(
     auto send_mem = std::make_shared<RegMemBlock>(
         send_ptr, len, base_block->mr_array, base_block->type);
     if (remote_hint.has_value() && remote_hint->has_rdma_write_hint()) {
-      auto remote_mem = std::make_shared<RemoteMemInfo>();
-      remote_mem->addr = remote_hint->write.addr;
-      remote_mem->length = (remote_hint->write.capacity == 0)
-                               ? len
-                               : remote_hint->write.capacity;
-      remote_mem->type = (remote_hint->write.memory_type == 1)
-                             ? MemoryType::GPU
-                             : MemoryType::HOST;
-      for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
-        remote_mem->rkey_array.setKeyByContextID(
-            ctx, remote_hint->write.rdma_keys[ctx]);
-      }
-      auto req = std::make_shared<RDMASendRequest>(send_mem, remote_mem);
-      req->from_rank_id = static_cast<uint32_t>(local_rank_);
-      req->to_rank_id = static_cast<uint32_t>(peer_rank);
-      req->send_type = SendType::Write;
-      token = endpoint_->writeOrRead(req);
-      kind = RequestKind::Write;
-    } else {
-      auto placeholder = std::make_shared<RemoteMemInfo>();
-      auto req = std::make_shared<RDMASendRequest>(send_mem, placeholder);
-      req->from_rank_id = static_cast<uint32_t>(local_rank_);
-      req->to_rank_id = static_cast<uint32_t>(peer_rank);
-      req->send_type = SendType::Send;
-      token = endpoint_->send(static_cast<uint64_t>(peer_rank), req);
-      kind = RequestKind::Send;
+      std::cout << "[INFO] RDMA adapter ignoring one-sided write hint for peer "
+                << peer_rank
+                << " and using matched send/recv path for request stability"
+                << std::endl;
     }
+    auto placeholder = std::make_shared<RemoteMemInfo>();
+    auto req = std::make_shared<RDMASendRequest>(send_mem, placeholder);
+    req->from_rank_id = static_cast<uint32_t>(local_rank_);
+    req->to_rank_id = static_cast<uint32_t>(peer_rank);
+    req->send_type = SendType::Send;
+    token = endpoint_->send(static_cast<uint64_t>(peer_rank), req);
+    kind = RequestKind::Send;
   } catch (...) {
     token = -1;
   }
