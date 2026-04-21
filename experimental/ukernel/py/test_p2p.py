@@ -8,11 +8,17 @@ def env_int(name: str, default: int) -> int:
     return int(value) if value else default
 
 
+def env_str(name: str, default: str) -> str:
+    value = os.getenv(name)
+    return value if value else default
+
+
 def run_server() -> None:
     rank = 0
     world = 2
     exchanger_port = env_int("EXCHANGER_PORT", 29610)
     gpu_id = env_int("LOCAL_RANK", 0)
+    transport = env_str("UK_P2P_TRANSPORT", "auto")
 
     comm = p2p.Communicator(
         gpu_id=gpu_id,
@@ -20,8 +26,9 @@ def run_server() -> None:
         world_size=world,
         exchanger_ip="127.0.0.1",
         exchanger_port=exchanger_port,
-        transport="auto",
+        transport=transport,
     )
+    print(f"[rank {rank}] requested transport: {transport}")
 
     if not comm.accept_peer(1):
         raise RuntimeError("accept_peer(1) failed")
@@ -46,6 +53,7 @@ def run_client() -> None:
     world = 2
     exchanger_port = env_int("EXCHANGER_PORT", 29610)
     gpu_id = env_int("LOCAL_RANK", 0)
+    transport = env_str("UK_P2P_TRANSPORT", "auto")
 
     comm = p2p.Communicator(
         gpu_id=gpu_id,
@@ -53,8 +61,9 @@ def run_client() -> None:
         world_size=world,
         exchanger_ip="127.0.0.1",
         exchanger_port=exchanger_port,
-        transport="auto",
+        transport=transport,
     )
+    print(f"[rank {rank}] requested transport: {transport}")
 
     if not comm.connect_peer(0):
         raise RuntimeError("connect_peer(0) failed")

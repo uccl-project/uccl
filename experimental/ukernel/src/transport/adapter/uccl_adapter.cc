@@ -423,6 +423,12 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
     std::memset(slot_item.padding, 0, sizeof(slot_item.padding));
     ret = endpoint_->uccl_write_async(flow, local_mh, local_ptr, len, slot_item,
                                       ureq);
+    if (ret == 0) {
+      std::cout << "[INFO] UCCL one-sided write submit succeeded for peer "
+                << peer_rank << ", request " << request_id
+                << ", remote_buffer_id " << remote_buffer_id << ", len " << len
+                << std::endl;
+    }
     if (ret != 0) {
       std::cerr << "[WARN] UCCL one-sided write submit failed for peer "
                 << peer_rank << ", request " << request_id
@@ -432,6 +438,12 @@ int UcclTransportAdapter::send_async_uccl(int peer_rank, void* local_ptr,
   }
 
   if (ret != 0) {
+    if (one_sided_attempted) {
+      std::cout << "[INFO] UCCL falling back to send/recv for peer "
+                << peer_rank << ", request " << request_id
+                << ", remote_buffer_id " << remote_buffer_id << ", len " << len
+                << std::endl;
+    }
     auto deadline = std::chrono::steady_clock::now() + kUcclAsyncRetryTimeout;
     uint32_t retries = 0;
     while (std::chrono::steady_clock::now() < deadline) {
