@@ -88,12 +88,14 @@ class RdmaTransportAdapter final : public TransportAdapter {
     Failed = 3,
   };
 
-  enum class RequestKind : uint8_t { Send = 0, Recv = 1, Write = 2 };
+  enum class RequestKind : uint8_t { Send = 0, Recv = 1, DirectSend = 2 };
 
   struct AdapterRequest {
     RequestKind kind = RequestKind::Send;
     int peer_rank = -1;
     int64_t token = -1;
+    uint32_t expected_completions = 0;
+    bool send_mode_tracked = false;
   };
 
   struct PendingRequestSlot {
@@ -105,8 +107,15 @@ class RdmaTransportAdapter final : public TransportAdapter {
   };
 
   struct PeerContext {
+    enum class SendMode : uint8_t { Idle = 0, Queued = 1, Direct = 2 };
     std::shared_ptr<SendConnection> send_conn;
     std::shared_ptr<RecvConnection> recv_conn;
+    std::shared_ptr<SendControlChannel> send_ctrl;
+    std::array<std::shared_ptr<RDMADataChannel>, kQpNumPerChannel> send_channels{};
+    SendMode send_mode = SendMode::Idle;
+    uint32_t queued_inflight = 0;
+    uint32_t direct_inflight = 0;
+    bool send_polling_paused = false;
   };
 
   struct LocalMr {
@@ -139,6 +148,22 @@ class RdmaTransportAdapter final : public TransportAdapter {
   static MemoryType detect_memory_type(void* ptr);
   bool has_send_peer(int peer_rank) const;
   bool has_recv_peer(int peer_rank) const;
+  bool wait_direct_send_meta(int peer_rank, SendReqMeta* out_meta, int* out_index);
+  bool poll_direct_send_completions(int peer_rank);
+  void maybe_pause_send_polling_locked(PeerContext& ctx);
+  void maybe_resume_send_polling_locked(PeerContext& ctx);
+  bool try_enter_send_mode_locked(int peer_rank, RequestKind kind);
+  void leave_send_mode_locked(int peer_rank, RequestKind kind);
+  void finalize_request_accounting_locked(PendingRequestSlot& slot);
+  bool prepare_send_submission(int peer_rank, uint32_t local_buffer_id,
+                               uint64_t request_id,
+                               std::shared_ptr<SendConnection>* out_send_conn,
+                               LocalMr* out_local_mr);
+  int64_t submit_queued_send(std::shared_ptr<SendConnection> const& send_conn,
+                             std::shared_ptr<RegMemBlock> const& send_mem) const;
+  int64_t submit_direct_send(
+      int peer_rank, std::shared_ptr<RegMemBlock> const& send_mem,
+      RemoteSlice const& remote_slice, uint32_t* out_expected_completions);
 
   // Async submit helpers.
   int send_async_rdma(int peer_rank, void* local_ptr, size_t len,
@@ -149,8 +174,7 @@ class RdmaTransportAdapter final : public TransportAdapter {
                       uint32_t local_buffer_id, uint64_t request_id);
 
   // Completion helpers.
-  bool is_backend_request_done(AdapterRequest const& request,
-                               bool* ok) const;
+  bool is_backend_request_done(AdapterRequest const& request, bool* ok);
 
   // Request slot helpers.
   static constexpr uint32_t kRequestSlotBits = 13;
@@ -186,6 +210,8 @@ class RdmaTransportAdapter final : public TransportAdapter {
 
   std::unique_ptr<PendingRequestSlot[]> request_slots_;
   std::atomic<uint32_t> request_alloc_cursor_{0};
+  std::atomic<uint64_t> direct_wr_id_cursor_{1ull << 32};
+  std::unordered_map<uint64_t, uint32_t> direct_completion_counts_;
   mutable std::condition_variable mr_cv_;
   mutable std::mutex mu_;
 };
