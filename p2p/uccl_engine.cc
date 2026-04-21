@@ -164,33 +164,16 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   }
 
   bool ok;
-  if (is_local) {
-    // Intra-node: use IPC via shared memory rings, skip RDMA/TCP.
-    // same_process=true  → direct_addr (no gpuIpcOpenMemHandle)
-    // same_process=false → cross-process IPC (attach remote shm ring)
-    ok = engine->endpoint->connect_local(remote_bdf, conn_id, same_process);
+  if (is_local && same_process) {
+    // Same process: use shm rings directly, skip network transport.
+    // Transfers use direct_addr (no gpuIpcOpenMemHandle).
+    ok = engine->endpoint->connect_local(remote_bdf, conn_id, true);
     conn->sock_fd = -1;
-    // For cross-process local: establish an OOB TCP connection to the remote's
-    // OOB server so that notifications (transfer completion) can be delivered.
-    if (ok && !same_process) {
-      auto oob_client = engine->endpoint->get_oob_client();
-      if (!oob_client) {
-        // Transport doesn't provide an OOB client (e.g. NCCL/TCP build).
-        // Create a standalone one for local notification delivery.
-        if (!engine->local_oob_client) {
-          engine->local_oob_client = std::make_shared<EpollClient>();
-          engine->local_oob_client->start();
-        }
-        oob_client = engine->local_oob_client;
-      }
-      if (oob_client) {
-        std::string conn_key =
-            oob_client->connect_to_server(std::string(ip_addr), remote_port);
-        conn->oob_conn_key = conn_key;
-      }
-    }
   } else {
-    // Remote: use TCP/RDMA connection.
+    // Remote or cross-process local: use network connection.
+    // Cross-process same-node still sets conn->is_local = true below so that
+    // NIXL can use the IPC data path via ipc_bufs; notifications go through
+    // the network connection (RDMA OOB or NCCL send_notification).
     ok = engine->endpoint->connect(std::string(ip_addr), 0, remote_port,
                                    conn_id);
     if (ok) {
