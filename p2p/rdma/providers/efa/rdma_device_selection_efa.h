@@ -1,4 +1,5 @@
 #pragma once
+#include "../util.h"
 #include <algorithm>
 #include <cassert>
 #include <cstring>
@@ -16,10 +17,21 @@ class EFADeviceSelectionStrategy : public RDMADeviceSelectionStrategy {
   std::vector<std::string> selectNICs(
       std::vector<std::pair<std::string, uint32_t>> const& dist,
       int gpu_idx) override {
+    std::vector<std::pair<std::string, uint32_t>> usable_dist;
+    usable_dist.reserve(dist.size());
+    for (auto const& p : dist) {
+      if (is_nic_usable(p.first, NicMode::EFA)) {
+        usable_dist.push_back(p);
+      }
+    }
+    if (usable_dist.empty()) {
+      return {};
+    }
+
     // Count total EFA NICs and find min distance among them.
     int num_efas = 0;
     uint32_t min_d = UINT32_MAX;
-    for (auto const& p : dist) {
+    for (auto const& p : usable_dist) {
       if (strncmp(p.first.c_str(), "rdmap", 5) == 0) {
         num_efas++;
         if (p.second < min_d) min_d = p.second;
@@ -28,7 +40,7 @@ class EFADeviceSelectionStrategy : public RDMADeviceSelectionStrategy {
 
     // Collect EFA NICs with equal minimum distance.
     std::vector<std::string> candidates;
-    for (auto const& p : dist) {
+    for (auto const& p : usable_dist) {
       if (strncmp(p.first.c_str(), "rdmap", 5) == 0 && p.second == min_d) {
         candidates.push_back(p.first);
       }

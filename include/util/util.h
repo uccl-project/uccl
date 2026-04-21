@@ -36,6 +36,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -580,11 +581,22 @@ static inline jring_t* create_ring(size_t element_size, size_t element_count) {
 
 // for consumer
 static inline jring_t* attach_shared_ring(char const* shm_name, int& shm_fd,
-                                          size_t shm_size) {
+                                          size_t& shm_size) {
   shm_fd = shm_open(shm_name, O_RDWR, 0666);
   if (shm_fd < 0) {
     perror("shm_open attach failed");
     return nullptr;
+  }
+
+  // Auto-detect size from the shared memory object if not provided
+  if (shm_size == 0) {
+    struct stat st;
+    if (fstat(shm_fd, &st) < 0 || st.st_size == 0) {
+      perror("fstat shm failed");
+      close(shm_fd);
+      return nullptr;
+    }
+    shm_size = static_cast<size_t>(st.st_size);
   }
 
   void* ptr =
@@ -1621,6 +1633,64 @@ static inline bool is_nvlink_peer(int local_gpu, int remote_gpu) {
 #else
   return true;
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// GPU PCI Bus ID helpers
+// ---------------------------------------------------------------------------
+
+// Sanitize a PCI Bus ID string for use in shared memory names.
+// Replaces ':' and '.' with '_', e.g. "0000:4A:00.0" -> "0000_4A_00_0"
+static inline std::string sanitize_bdf(std::string const& bdf) {
+  std::string result = bdf;
+  for (auto& c : result) {
+    if (c == ':' || c == '.') c = '_';
+  }
+  return result;
+}
+
+// Enumerate all GPU PCI Bus IDs on the system. Unlike get_gpu_cards(), this
+// is NOT filtered by CUDA_VISIBLE_DEVICES — it returns every GPU the driver
+// exposes, which is required for cross-process IPC naming when peer
+// processes may have non-overlapping visibility masks. The DRM +
+// /proc/driver/nvidia/gpus scan patterns mirror the tested fallback paths
+// in get_gpu_cards(). Returns sorted, deduplicated lowercase BDFs.
+static inline std::vector<std::string> enumerate_all_gpu_bdfs() {
+  std::vector<std::string> all_bdfs;
+
+#ifndef __HIP_PLATFORM_AMD__
+  // NVIDIA: /proc/driver/nvidia/gpus/<bdf>/  lists every GPU the driver sees.
+  fs::path const nvidia_gpus{"/proc/driver/nvidia/gpus"};
+  if (fs::exists(nvidia_gpus)) {
+    for (auto const& entry : fs::directory_iterator(nvidia_gpus)) {
+      all_bdfs.push_back(
+          normalize_pci_bus_id(entry.path().filename().string()));
+    }
+  }
+#endif
+
+  // DRM class (works on AMD and as a fallback when procfs is unavailable).
+  if (all_bdfs.empty()) {
+    fs::path const drm_class{"/sys/class/drm"};
+    static std::regex const card_re(R"(card(\d+))");
+    if (fs::exists(drm_class)) {
+      for (auto const& entry : fs::directory_iterator(drm_class)) {
+        std::smatch m;
+        std::string const name = entry.path().filename().string();
+        if (!std::regex_match(name, m, card_re)) continue;
+        try {
+          fs::path dev_path = fs::canonical(entry.path() / "device");
+          all_bdfs.push_back(
+              normalize_pci_bus_id(dev_path.filename().string()));
+        } catch (...) {
+        }
+      }
+    }
+  }
+
+  std::sort(all_bdfs.begin(), all_bdfs.end());
+  all_bdfs.erase(std::unique(all_bdfs.begin(), all_bdfs.end()), all_bdfs.end());
+  return all_bdfs;
 }
 
 }  // namespace uccl
