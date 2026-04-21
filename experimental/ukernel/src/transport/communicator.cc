@@ -628,6 +628,8 @@ RdmaTransportAdapter& Communicator::ensure_rdma_adapter(
   if (!rdma_adapter_) {
     maybe_configure_uccl_socket_ifname(local_meta.ip);
     RdmaTransportConfig rdma_cfg;
+    rdma_cfg.local_ip = local_meta.ip;
+    rdma_cfg.connect_timeout_ms = bootstrap_timeout_ms();
     rdma_adapter_ = std::make_unique<RdmaTransportAdapter>(
         local_gpu_idx_, global_rank_, world_size_, std::move(rdma_cfg));
   }

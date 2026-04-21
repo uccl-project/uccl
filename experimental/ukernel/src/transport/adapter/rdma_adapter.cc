@@ -1,17 +1,14 @@
 #include "rdma_adapter.h"
 #include "p2p/rdma/memory_allocator.h"
-#include "p2p/rdma/rdma_connection.h"
-#include "p2p/rdma/rdma_context.h"
-#include "p2p/rdma/rdma_ctrl_channel.h"
-#include "p2p/rdma/rdma_data_channel.h"
-#include "p2p/rdma/rdma_device.h"
+#include "p2p/rdma/rdma_endpoint.h"
 #include "gpu_rt.h"
+#include <algorithm>
 #include <array>
-#include <condition_variable>
+#include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
-#include <iostream>
 #include <sstream>
 #include <thread>
 
@@ -19,81 +16,37 @@ namespace UKernel {
 namespace Transport {
 
 namespace {
-constexpr uint32_t kHandshakeMagic = 0x554B5244;  // "UKRD"
-constexpr uint32_t kHandshakeVersion = 1;
-constexpr uint32_t kRdmaWaitSpinCount = 128;
-constexpr int kDirectMetaWaitMs = 1000;
+constexpr uint32_t kBootstrapMagic = 0x554B5244;  // "UKRD"
+constexpr uint32_t kBootstrapVersion = 2;
+constexpr char kDefaultBootstrapIp[] = "127.0.0.1";
+constexpr int kWaitSleepUs = 50;
 
-inline int parse_env_int(char const* name, int fallback = 0) {
-  char const* v = std::getenv(name);
-  if (v == nullptr || v[0] == '\0') return fallback;
-  char* end = nullptr;
-  long parsed = std::strtol(v, &end, 10);
-  if (end == v) return fallback;
-  return static_cast<int>(parsed);
-}
-
-inline bool rdma_hint_debug_enabled() {
-  // Project-wide debug switch for ukernel traces:
-  //   1) prefer UCCL_DEBUG_VLOG_LEVEL > 0
-  //   2) keep UHM_DEBUG as an explicit ukernel override
-  if (parse_env_int("UCCL_DEBUG_VLOG_LEVEL", 0) > 0) return true;
-  return parse_env_int("UHM_DEBUG", 0) > 0;
-}
-
-inline size_t channel_to_context(uint32_t channel_id) {
-  return (channel_id == 0) ? 0 : (channel_id - 1) % kNICContextNumber;
-}
-
-inline bool gid_is_zero(union ibv_gid const& gid) {
-  for (int i = 0; i < 16; ++i) {
-    if (gid.raw[i] != 0) return false;
+inline char const* choose_local_ip(std::string const& configured_ip) {
+  if (!configured_ip.empty()) return configured_ip.c_str();
+  if (char const* env_ip = std::getenv("UHM_LOCAL_IP")) {
+    if (env_ip[0] != '\0') return env_ip;
   }
-  return true;
+  return kDefaultBootstrapIp;
 }
 
-inline std::string short_gid(union ibv_gid const& gid) {
-  std::ostringstream oss;
-  oss << std::hex << std::setfill('0');
-  for (int i = 0; i < 4; ++i) {
-    oss << std::setw(2) << static_cast<unsigned>(gid.raw[i]);
-  }
-  oss << "...";
-  for (int i = 12; i < 16; ++i) {
-    oss << std::setw(2) << static_cast<unsigned>(gid.raw[i]);
-  }
-  return oss.str();
-}
-
-inline bool channel_meta_looks_valid(ChannelMetaData const& meta) {
-  return meta.qpn != 0 && (meta.lid != 0 || !gid_is_zero(meta.gid));
-}
 }  // namespace
 
-struct RdmaTransportAdapter::HandshakePacket {
-  uint32_t magic = 0;
-  uint32_t version = 1;
+struct RdmaTransportAdapter::BootstrapPayload {
+  uint32_t magic = kBootstrapMagic;
+  uint32_t version = kBootstrapVersion;
   int32_t src_rank = -1;
   int32_t dst_rank = -1;
-  int32_t gpu_idx = -1;
-  ChannelMetaData ctrl_meta{};
-  RemoteMemInfo ctrl_mem{};
-  ChannelMetaData normal_meta[kQpNumPerChannel]{};
-};
-
-struct RdmaTransportAdapter::SendBuildState {
-  std::shared_ptr<SendConnection> send_conn;
-  std::shared_ptr<SendControlChannel> send_ctrl;
-  std::array<std::shared_ptr<RDMADataChannel>, kQpNumPerChannel> channels{};
+  uint32_t port = 0;
+  char ip[64] = {};
 };
 
 RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx, int local_rank,
                                            int world_size,
                                            RdmaTransportConfig config)
-    : local_gpu_idx_(local_gpu_idx), local_rank_(local_rank) {
-  (void)world_size;
-  (void)config;
-
+    : local_gpu_idx_(local_gpu_idx),
+      local_rank_(local_rank),
+      world_size_(world_size),
+      config_(std::move(config)) {
   request_slots_ = std::make_unique<PendingRequestSlot[]>(kRequestSlotCount);
   for (uint32_t i = 0; i < kRequestSlotCount; ++i) {
     request_slots_[i].in_use = false;
@@ -101,138 +54,37 @@ RdmaTransportAdapter::RdmaTransportAdapter(int local_gpu_idx, int local_rank,
     request_slots_[i].state = RequestState::Init;
     request_slots_[i].failed = false;
   }
-
-  allocator_ = std::make_shared<MemoryAllocator>();
-  initialized_ = initialize_contexts();
+  initialized_ = initialize_endpoint();
 }
 
 RdmaTransportAdapter::~RdmaTransportAdapter() {
   std::lock_guard<std::mutex> lk(mu_);
-  for (auto& [id, mr] : buffer_id_to_local_mr_) {
-    (void)id;
-    for (auto const& ref : mr.cache_refs) {
-      if (ref.context != nullptr) {
-        ref.context->releaseCachedMr(ref.entry);
-      }
+  if (endpoint_) {
+    for (auto& [buffer_id, local_mr] : buffer_id_to_local_mr_) {
+      (void)buffer_id;
+      if (local_mr.block) endpoint_->deregMem(local_mr.block);
     }
-    mr.cache_refs.clear();
   }
   buffer_id_to_local_mr_.clear();
-  send_build_states_.clear();
-  peer_contexts_.clear();
-  contexts_.clear();
-  active_context_slots_.clear();
+  pending_peer_oob_.clear();
+  ready_peers_.clear();
+  endpoint_.reset();
 }
 
-bool RdmaTransportAdapter::initialize_contexts() {
+bool RdmaTransportAdapter::initialize_endpoint() {
   std::vector<size_t> device_ids =
       RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_);
   if (device_ids.empty()) {
-    std::cerr << "[ERROR] RDMA no usable device for gpu " << local_gpu_idx_
-              << std::endl;
     return false;
   }
-
-  std::unordered_map<size_t, std::shared_ptr<RdmaContext>> device_ctx_map;
-  contexts_.clear();
-  active_context_slots_.clear();
-  contexts_.reserve(kNICContextNumber);
-  active_context_slots_.reserve(kNICContextNumber);
-
-  for (int i = 0; i < kNICContextNumber; ++i) {
-    size_t device_id = device_ids[static_cast<size_t>(i) % device_ids.size()];
-    auto it = device_ctx_map.find(device_id);
-    if (it != device_ctx_map.end()) {
-      contexts_.push_back(it->second);
-      continue;
-    }
-
-    auto device = RdmaDeviceManager::instance().getDevice(device_id);
-    if (!device) {
-      std::cerr << "[ERROR] RDMA device id " << device_id << " not found"
-                << std::endl;
-      return false;
-    }
-
-    auto context =
-        std::make_shared<RdmaContext>(device, static_cast<uint64_t>(contexts_.size()));
-    contexts_.push_back(context);
-    device_ctx_map.emplace(device_id, context);
-  }
-
-  if (contexts_.size() != kNICContextNumber) {
-    std::cerr << "[ERROR] RDMA context slots init failed, expected "
-              << kNICContextNumber << ", got " << contexts_.size() << std::endl;
+  try {
+    endpoint_ = std::make_unique<NICEndpoint>(local_gpu_idx_, local_rank_, 0,
+                                              true, device_ids);
+    return endpoint_ != nullptr;
+  } catch (...) {
+    endpoint_.reset();
     return false;
   }
-  for (uint32_t slot = 0; slot < static_cast<uint32_t>(contexts_.size()); ++slot) {
-    if (contexts_[slot] != nullptr) {
-      active_context_slots_.push_back(slot);
-    }
-  }
-  if (active_context_slots_.empty()) {
-    std::cerr << "[ERROR] RDMA no active context slots for gpu "
-              << local_gpu_idx_ << std::endl;
-    return false;
-  }
-  if (active_context_slots_.size() != static_cast<size_t>(kNICContextNumber)) {
-    std::cerr << "[ERROR] RDMA active context slots incomplete, expected "
-              << kNICContextNumber << ", got " << active_context_slots_.size()
-              << std::endl;
-    return false;
-  }
-
-  auto devs = RdmaDeviceManager::instance().get_best_dev_idx(local_gpu_idx_);
-  if (!devs.empty()) {
-    numa_node_ = RdmaDeviceManager::instance().get_numa_node(devs.front());
-  }
-  return true;
-}
-
-std::shared_ptr<RdmaContext> RdmaTransportAdapter::get_context_by_channel_id(
-    uint32_t channel_id) const {
-  if (contexts_.empty()) return nullptr;
-  size_t idx = channel_to_context(channel_id);
-  if (idx >= contexts_.size()) return nullptr;
-  return contexts_[idx];
-}
-
-std::string RdmaTransportAdapter::serialize_handshake(
-    HandshakePacket const& packet) {
-  auto const* p = reinterpret_cast<uint8_t const*>(&packet);
-  std::ostringstream oss;
-  oss << std::hex << std::setfill('0');
-  for (size_t i = 0; i < sizeof(HandshakePacket); ++i) {
-    oss << std::setw(2) << static_cast<unsigned>(p[i]);
-  }
-  return oss.str();
-}
-
-bool RdmaTransportAdapter::deserialize_handshake(std::string const& payload,
-                                                 HandshakePacket* out_packet) {
-  if (out_packet == nullptr) return false;
-  if (payload.size() != sizeof(HandshakePacket) * 2) return false;
-  HandshakePacket packet{};
-  auto* p = reinterpret_cast<uint8_t*>(&packet);
-  for (size_t i = 0; i < sizeof(HandshakePacket); ++i) {
-    auto byte_str = payload.substr(i * 2, 2);
-    char* end = nullptr;
-    unsigned long v = std::strtoul(byte_str.c_str(), &end, 16);
-    if (end == nullptr || *end != '\0' || v > 0xff) return false;
-    p[i] = static_cast<uint8_t>(v);
-  }
-  *out_packet = packet;
-  return true;
-}
-
-bool RdmaTransportAdapter::validate_remote_packet(HandshakePacket const& remote,
-                                                  int expected_src_rank) const {
-  if (remote.magic != kHandshakeMagic || remote.version != kHandshakeVersion) {
-    return false;
-  }
-  if (remote.src_rank != expected_src_rank) return false;
-  if (remote.dst_rank != local_rank_) return false;
-  return true;
 }
 
 MemoryType RdmaTransportAdapter::detect_memory_type(void* ptr) {
@@ -245,214 +97,132 @@ MemoryType RdmaTransportAdapter::detect_memory_type(void* ptr) {
   return MemoryType::HOST;
 }
 
-bool RdmaTransportAdapter::has_send_peer(int peer_rank) const {
-  std::lock_guard<std::mutex> lk(mu_);
-  auto it = peer_contexts_.find(peer_rank);
-  return it != peer_contexts_.end() && it->second.send_conn != nullptr;
+std::string RdmaTransportAdapter::serialize_bootstrap(
+    BootstrapPayload const& payload) {
+  auto const* p = reinterpret_cast<uint8_t const*>(&payload);
+  std::ostringstream oss;
+  oss << std::hex << std::setfill('0');
+  for (size_t i = 0; i < sizeof(BootstrapPayload); ++i) {
+    oss << std::setw(2) << static_cast<unsigned>(p[i]);
+  }
+  return oss.str();
 }
 
-bool RdmaTransportAdapter::has_recv_peer(int peer_rank) const {
-  std::lock_guard<std::mutex> lk(mu_);
-  auto it = peer_contexts_.find(peer_rank);
-  return it != peer_contexts_.end() && it->second.recv_conn != nullptr;
+bool RdmaTransportAdapter::deserialize_bootstrap(std::string const& payload,
+                                                 BootstrapPayload* out_payload) {
+  if (out_payload == nullptr) return false;
+  if (payload.size() != sizeof(BootstrapPayload) * 2) return false;
+  BootstrapPayload decoded{};
+  auto* p = reinterpret_cast<uint8_t*>(&decoded);
+  for (size_t i = 0; i < sizeof(BootstrapPayload); ++i) {
+    auto byte_str = payload.substr(i * 2, 2);
+    char* end = nullptr;
+    unsigned long v = std::strtoul(byte_str.c_str(), &end, 16);
+    if (end == nullptr || *end != '\0' || v > 0xff) return false;
+    p[i] = static_cast<uint8_t>(v);
+  }
+  if (decoded.magic != kBootstrapMagic ||
+      decoded.version != kBootstrapVersion) {
+    return false;
+  }
+  *out_payload = decoded;
+  return true;
 }
 
 bool RdmaTransportAdapter::build_send_bootstrap(int peer_rank,
                                                 std::string* out_payload) {
-  if (!initialized_ || out_payload == nullptr || peer_rank < 0) return false;
-
-  auto send_group = std::make_shared<SendConnection>(numa_node_, true);
-  auto ctrl_ctx = get_context_by_channel_id(kControlChannelID);
-  if (!ctrl_ctx) return false;
-
-  auto ctrl_mem =
-      allocator_->allocate(kRingBufferSize, MemoryType::HOST, ctrl_ctx);
-  auto send_ctrl = std::make_shared<SendControlChannel>(
-      ctrl_ctx, ctrl_mem, kControlChannelID);
-
-  auto state = std::make_unique<SendBuildState>();
-  state->send_conn = send_group;
-  state->send_ctrl = send_ctrl;
-
-  HandshakePacket local{};
-  local.magic = kHandshakeMagic;
-  local.version = kHandshakeVersion;
-  local.src_rank = local_rank_;
-  local.dst_rank = peer_rank;
-  local.gpu_idx = local_gpu_idx_;
-  local.ctrl_meta = *send_ctrl->get_local_meta();
-  local.ctrl_mem = RemoteMemInfo(ctrl_mem);
-
-  for (int i = 0; i < kQpNumPerChannel; ++i) {
-    uint32_t channel_id = static_cast<uint32_t>(i + 1);
-    auto ctx = get_context_by_channel_id(channel_id);
-    if (!ctx) return false;
-    auto ch = std::make_shared<RDMADataChannel>(ctx, channel_id);
-    send_group->addChannel(channel_id, ch);
-    local.normal_meta[i] = *ch->get_local_meta();
-    state->channels[static_cast<size_t>(i)] = ch;
+  if (!initialized_ || !endpoint_ || out_payload == nullptr || peer_rank < 0) {
+    return false;
   }
-
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    send_build_states_[peer_rank] = std::move(state);
-  }
-  *out_payload = serialize_handshake(local);
-  return true;
-}
-
-bool RdmaTransportAdapter::create_recv_from_remote_send(
-    int peer_rank, HandshakePacket const& remote_send,
-    HandshakePacket* out_local_recv) {
-  if (out_local_recv == nullptr) return false;
-
-  auto recv_group = std::make_shared<RecvConnection>(numa_node_, true);
-  auto ctrl_ctx = get_context_by_channel_id(kControlChannelID);
-  if (!ctrl_ctx) return false;
-
-  auto ctrl_mem =
-      allocator_->allocate(kRingBufferSize, MemoryType::HOST, ctrl_ctx);
-
-  MetaInfoToExchange remote_ctrl_meta;
-  remote_ctrl_meta.channel_meta = remote_send.ctrl_meta;
-  remote_ctrl_meta.mem_meta = remote_send.ctrl_mem;
-
-  auto recv_ctrl = std::make_shared<RecvControlChannel>(
-      ctrl_ctx, remote_ctrl_meta, ctrl_mem, kControlChannelID);
-
-  HandshakePacket local{};
-  local.magic = kHandshakeMagic;
-  local.version = kHandshakeVersion;
-  local.src_rank = local_rank_;
-  local.dst_rank = peer_rank;
-  local.gpu_idx = local_gpu_idx_;
-  local.ctrl_meta = *recv_ctrl->get_local_meta();
-  local.ctrl_mem = RemoteMemInfo(ctrl_mem);
-
-  for (int i = 0; i < kQpNumPerChannel; ++i) {
-    uint32_t channel_id = static_cast<uint32_t>(i + 1);
-    auto ctx = get_context_by_channel_id(channel_id);
-    if (!ctx) return false;
-    auto ch = std::make_shared<RDMADataChannel>(ctx, remote_send.normal_meta[i],
-                                                channel_id);
-    recv_group->addChannel(channel_id, ch);
-    local.normal_meta[i] = *ch->get_local_meta();
-  }
-
-  recv_group->setControlChannel(std::move(recv_ctrl));
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto& ctx = peer_contexts_[peer_rank];
-    ctx.recv_conn = recv_group;
-  }
-
-  *out_local_recv = local;
+  BootstrapPayload payload{};
+  payload.src_rank = local_rank_;
+  payload.dst_rank = peer_rank;
+  payload.port = endpoint_->get_p2p_listen_port();
+  std::snprintf(payload.ip, sizeof(payload.ip), "%s",
+                choose_local_ip(config_.local_ip));
+  *out_payload = serialize_bootstrap(payload);
   return true;
 }
 
 bool RdmaTransportAdapter::build_recv_bootstrap(
     int peer_rank, std::string const& remote_send_payload,
     std::string* out_payload) {
-  if (!initialized_ || out_payload == nullptr || peer_rank < 0) return false;
-
-  HandshakePacket remote_send{};
-  if (!deserialize_handshake(remote_send_payload, &remote_send)) return false;
-  if (!validate_remote_packet(remote_send, peer_rank)) return false;
-
-  HandshakePacket local_recv{};
-  if (!create_recv_from_remote_send(peer_rank, remote_send, &local_recv)) {
+  if (!initialized_ || !endpoint_ || out_payload == nullptr || peer_rank < 0) {
     return false;
   }
-  *out_payload = serialize_handshake(local_recv);
-  return true;
-}
 
-bool RdmaTransportAdapter::finalize_send_from_remote_recv(
-    int peer_rank, HandshakePacket const& remote_recv) {
-  std::unique_ptr<SendBuildState> state;
+  BootstrapPayload remote{};
+  if (!deserialize_bootstrap(remote_send_payload, &remote)) return false;
+  if (remote.src_rank != peer_rank || remote.dst_rank != local_rank_) {
+    return false;
+  }
+
+  auto remote_oob =
+      std::make_shared<OOBMetaData>(std::string(remote.ip), remote.port);
   {
     std::lock_guard<std::mutex> lk(mu_);
-    auto it = send_build_states_.find(peer_rank);
-    if (it == send_build_states_.end()) return false;
-    state = std::move(it->second);
-    send_build_states_.erase(it);
+    pending_peer_oob_[peer_rank] = std::move(remote_oob);
   }
 
-  if (!state || !state->send_conn || !state->send_ctrl) return false;
-
-  if (!channel_meta_looks_valid(remote_recv.ctrl_meta)) {
-    std::cerr << "[ERROR] RDMA finalize_send invalid remote ctrl meta: peer="
-              << peer_rank << " qpn=" << remote_recv.ctrl_meta.qpn
-              << " lid=" << remote_recv.ctrl_meta.lid
-              << " gid=" << short_gid(remote_recv.ctrl_meta.gid) << std::endl;
-    return false;
-  }
-  if (rdma_hint_debug_enabled()) {
-    std::cout << "[DEBUG][RDMA_BOOTSTRAP] peer=" << peer_rank
-              << " ctrl_qpn=" << remote_recv.ctrl_meta.qpn
-              << " ctrl_lid=" << remote_recv.ctrl_meta.lid
-              << " ctrl_gid=" << short_gid(remote_recv.ctrl_meta.gid)
-              << std::endl;
-  }
-
-  state->send_ctrl->establishChannel(remote_recv.ctrl_meta);
-  for (int i = 0; i < kQpNumPerChannel; ++i) {
-    auto const& meta = remote_recv.normal_meta[i];
-    if (!channel_meta_looks_valid(meta)) {
-      std::cerr << "[ERROR] RDMA finalize_send invalid remote data meta: peer="
-                << peer_rank << " channel_id=" << (i + 1)
-                << " qpn=" << meta.qpn << " lid=" << meta.lid
-                << " gid=" << short_gid(meta.gid) << std::endl;
-      return false;
-    }
-    if (rdma_hint_debug_enabled()) {
-      std::cout << "[DEBUG][RDMA_BOOTSTRAP] peer=" << peer_rank
-                << " channel_id=" << (i + 1) << " qpn=" << meta.qpn
-                << " lid=" << meta.lid
-                << " gid=" << short_gid(meta.gid) << std::endl;
-    }
-    auto ch = state->channels[static_cast<size_t>(i)];
-    if (!ch) return false;
-    ch->establishChannel(meta);
-  }
-  auto send_ctrl = state->send_ctrl;
-  state->send_conn->setControlChannel(std::move(state->send_ctrl));
-
-  std::lock_guard<std::mutex> lk(mu_);
-  auto& ctx = peer_contexts_[peer_rank];
-  ctx.send_conn = state->send_conn;
-  ctx.send_ctrl = std::move(send_ctrl);
-  ctx.send_channels = state->channels;
+  BootstrapPayload ack{};
+  ack.src_rank = local_rank_;
+  ack.dst_rank = peer_rank;
+  ack.port = endpoint_->get_p2p_listen_port();
+  std::snprintf(ack.ip, sizeof(ack.ip), "%s", choose_local_ip(config_.local_ip));
+  *out_payload = serialize_bootstrap(ack);
   return true;
 }
 
 bool RdmaTransportAdapter::finalize_send_bootstrap(
     int peer_rank, std::string const& remote_recv_payload) {
-  if (!initialized_ || peer_rank < 0) return false;
-  HandshakePacket remote_recv{};
-  if (!deserialize_handshake(remote_recv_payload, &remote_recv)) return false;
-  if (!validate_remote_packet(remote_recv, peer_rank)) return false;
-  return finalize_send_from_remote_recv(peer_rank, remote_recv);
+  if (!initialized_ || !endpoint_ || peer_rank < 0) return false;
+
+  BootstrapPayload remote_recv{};
+  if (!deserialize_bootstrap(remote_recv_payload, &remote_recv)) return false;
+  if (remote_recv.src_rank != peer_rank || remote_recv.dst_rank != local_rank_) {
+    return false;
+  }
+
+  std::shared_ptr<OOBMetaData> remote_oob;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = pending_peer_oob_.find(peer_rank);
+    if (it == pending_peer_oob_.end()) {
+      remote_oob =
+          std::make_shared<OOBMetaData>(std::string(remote_recv.ip), remote_recv.port);
+      pending_peer_oob_[peer_rank] = remote_oob;
+    } else {
+      remote_oob = it->second;
+    }
+  }
+
+  endpoint_->add_rank_oob_meta({{static_cast<uint64_t>(peer_rank), remote_oob}});
+  int ret = endpoint_->build_connect(static_cast<uint64_t>(peer_rank), true,
+                                     config_.connect_timeout_ms);
+  if (ret < 0) {
+    return false;
+  }
+
+  std::lock_guard<std::mutex> lk(mu_);
+  ready_peers_.insert(peer_rank);
+  return true;
 }
 
 void RdmaTransportAdapter::rollback_peer_bootstrap(int peer_rank) {
   if (peer_rank < 0) return;
   std::lock_guard<std::mutex> lk(mu_);
-  send_build_states_.erase(peer_rank);
-  auto it = peer_contexts_.find(peer_rank);
-  if (it == peer_contexts_.end()) return;
-  it->second.send_conn.reset();
-  it->second.recv_conn.reset();
-  peer_contexts_.erase(it);
+  pending_peer_oob_.erase(peer_rank);
+  ready_peers_.erase(peer_rank);
 }
 
-bool RdmaTransportAdapter::ensure_peer(PeerConnectSpec const& spec) {
-  return has_peer(spec.peer_rank);
+bool RdmaTransportAdapter::is_memory_registered(uint32_t buffer_id) const {
+  std::lock_guard<std::mutex> lk(mu_);
+  return buffer_id_to_local_mr_.find(buffer_id) != buffer_id_to_local_mr_.end();
 }
 
 bool RdmaTransportAdapter::register_memory(uint32_t buffer_id, void* ptr,
                                            size_t len) {
-  if (!initialized_ || ptr == nullptr || len == 0) return false;
+  if (!initialized_ || !endpoint_ || ptr == nullptr || len == 0) return false;
   {
     std::unique_lock<std::mutex> lk(mu_);
     while (true) {
@@ -460,52 +230,19 @@ bool RdmaTransportAdapter::register_memory(uint32_t buffer_id, void* ptr,
       if (it == buffer_registering_.end() || !it->second) break;
       mr_cv_.wait(lk);
     }
-    if (buffer_id_to_local_mr_.find(buffer_id) != buffer_id_to_local_mr_.end())
+    if (buffer_id_to_local_mr_.find(buffer_id) != buffer_id_to_local_mr_.end()) {
       return true;
+    }
     buffer_registering_[buffer_id] = true;
   }
 
+  bool success = false;
   LocalMr local_mr;
   local_mr.block = std::make_shared<RegMemBlock>(ptr, len, detect_memory_type(ptr));
-  bool success = !active_context_slots_.empty();
-
-  auto release_cache_refs = [&local_mr]() {
-    for (auto const& ref : local_mr.cache_refs) {
-      if (ref.context) ref.context->releaseCachedMr(ref.entry);
-    }
-    local_mr.cache_refs.clear();
-  };
-
-  std::unordered_map<RdmaContext*, struct ibv_mr*> registered;
-  for (uint32_t context_id : active_context_slots_) {
-    if (context_id >= contexts_.size()) {
-      success = false;
-      release_cache_refs();
-      break;
-    }
-    auto ctx = contexts_[context_id];
-    if (!ctx) {
-      success = false;
-      release_cache_refs();
-      break;
-    }
-
-    auto found = registered.find(ctx.get());
-    if (found != registered.end()) {
-      local_mr.block->setMRByContextID(context_id, found->second);
-      continue;
-    }
-
-    MrCacheEntry* entry = ctx->acquireCachedMr(ptr, len);
-    if (!entry || !entry->mr) {
-      success = false;
-      release_cache_refs();
-      break;
-    }
-
-    local_mr.block->setMRByContextID(context_id, entry->mr);
-    local_mr.cache_refs.push_back({ctx, entry});
-    registered.emplace(ctx.get(), entry->mr);
+  try {
+    success = endpoint_->regMem(local_mr.block);
+  } catch (...) {
+    success = false;
   }
 
   std::unique_lock<std::mutex> lk(mu_);
@@ -519,39 +256,26 @@ bool RdmaTransportAdapter::register_memory(uint32_t buffer_id, void* ptr,
 }
 
 void RdmaTransportAdapter::deregister_memory(uint32_t buffer_id) {
-  std::lock_guard<std::mutex> lk(mu_);
-  auto it = buffer_id_to_local_mr_.find(buffer_id);
-  if (it == buffer_id_to_local_mr_.end()) return;
-
-  for (auto const& ref : it->second.cache_refs) {
-    if (ref.context != nullptr) {
-      ref.context->releaseCachedMr(ref.entry);
-    }
+  std::shared_ptr<RegMemBlock> block;
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    auto it = buffer_id_to_local_mr_.find(buffer_id);
+    if (it == buffer_id_to_local_mr_.end()) return;
+    block = it->second.block;
+    buffer_id_to_local_mr_.erase(it);
   }
-  it->second.cache_refs.clear();
-  buffer_id_to_local_mr_.erase(it);
-}
-
-bool RdmaTransportAdapter::is_memory_registered(uint32_t buffer_id) const {
-  std::lock_guard<std::mutex> lk(mu_);
-  return buffer_id_to_local_mr_.find(buffer_id) !=
-         buffer_id_to_local_mr_.end();
+  if (endpoint_ && block) {
+    endpoint_->deregMem(block);
+  }
 }
 
 bool RdmaTransportAdapter::query_memory_rkey(uint32_t buffer_id,
                                              uint32_t* out_rkey) const {
-  if (out_rkey == nullptr) return false;
-  *out_rkey = 0;
-  std::lock_guard<std::mutex> lk(mu_);
-  auto it = buffer_id_to_local_mr_.find(buffer_id);
-  if (it == buffer_id_to_local_mr_.end() || !it->second.block) return false;
-
-  // Any valid active-context rkey can be used because write hint currently
-  // carries a single rkey that is replicated to all contexts at submit time.
-  for (uint32_t context_id : active_context_slots_) {
-    uint32_t rkey = it->second.block->getKeyByContextID(context_id);
-    if (rkey != 0) {
-      *out_rkey = rkey;
+  std::array<uint32_t, kNICContextNumber> rkeys{};
+  if (!query_memory_rkeys(buffer_id, &rkeys)) return false;
+  for (uint32_t key : rkeys) {
+    if (key != 0) {
+      if (out_rkey) *out_rkey = key;
       return true;
     }
   }
@@ -562,38 +286,39 @@ bool RdmaTransportAdapter::query_memory_rkeys(
     uint32_t buffer_id,
     std::array<uint32_t, kNICContextNumber>* out_rkeys) const {
   if (out_rkeys == nullptr) return false;
-  out_rkeys->fill(0);
   std::lock_guard<std::mutex> lk(mu_);
   auto it = buffer_id_to_local_mr_.find(buffer_id);
   if (it == buffer_id_to_local_mr_.end() || !it->second.block) return false;
-  bool any_valid = false;
-  for (size_t context_id = 0; context_id < out_rkeys->size(); ++context_id) {
-    if (context_id >= contexts_.size() || contexts_[context_id] == nullptr) {
-      continue;
-    }
-    uint32_t rkey = it->second.block->getKeyByContextID(context_id);
-    (*out_rkeys)[context_id] = rkey;
-    any_valid = any_valid || (rkey != 0);
+  for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
+    (*out_rkeys)[ctx] = it->second.block->getKeyByContextID(ctx);
   }
-  return any_valid;
+  return true;
+}
+
+bool RdmaTransportAdapter::ensure_peer(PeerConnectSpec const& spec) {
+  return has_peer(spec.peer_rank);
+}
+
+bool RdmaTransportAdapter::has_peer(int peer_rank) const {
+  std::lock_guard<std::mutex> lk(mu_);
+  return ready_peers_.find(peer_rank) != ready_peers_.end();
 }
 
 RdmaTransportAdapter::PendingRequestSlot*
 RdmaTransportAdapter::try_acquire_request_slot(unsigned* out_request_id) {
-  if (out_request_id == nullptr || !request_slots_) return nullptr;
-  std::lock_guard<std::mutex> lk(mu_);
-  for (uint32_t n = 0; n < kRequestSlotCount; ++n) {
-    uint32_t idx =
+  if (out_request_id == nullptr) return nullptr;
+  for (uint32_t attempt = 0; attempt < kRequestSlotCount; ++attempt) {
+    uint32_t slot_idx =
         request_alloc_cursor_.fetch_add(1, std::memory_order_relaxed) &
         kRequestSlotMask;
-    auto& slot = request_slots_[idx];
+    std::lock_guard<std::mutex> lk(mu_);
+    PendingRequestSlot& slot = request_slots_[slot_idx];
     if (slot.in_use) continue;
     slot.in_use = true;
-    slot.failed = false;
     slot.state = RequestState::Init;
+    slot.failed = false;
     slot.request = AdapterRequest{};
-    if (slot.generation == 0) slot.generation = 1;
-    *out_request_id = make_request_id(idx, slot.generation);
+    *out_request_id = make_request_id(slot_idx, slot.generation);
     return &slot;
   }
   return nullptr;
@@ -601,20 +326,18 @@ RdmaTransportAdapter::try_acquire_request_slot(unsigned* out_request_id) {
 
 RdmaTransportAdapter::PendingRequestSlot*
 RdmaTransportAdapter::resolve_request_slot_locked(unsigned request_id) {
-  if (request_id == 0 || !request_slots_) return nullptr;
-  uint32_t generation = request_generation(request_id);
-  if (generation == 0) return nullptr;
-  uint32_t idx = request_slot_index(request_id);
-  auto& slot = request_slots_[idx];
-  if (!slot.in_use || slot.generation != generation) return nullptr;
+  uint32_t slot_idx = request_slot_index(request_id);
+  if (slot_idx >= kRequestSlotCount) return nullptr;
+  PendingRequestSlot& slot = request_slots_[slot_idx];
+  if (!slot.in_use || slot.generation != request_generation(request_id)) {
+    return nullptr;
+  }
   return &slot;
 }
 
 void RdmaTransportAdapter::release_request_slot_locked(unsigned request_id) {
   PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
-  if (!slot) return;
-  if (slot->state == RequestState::Posted) return;
-  finalize_request_accounting_locked(*slot);
+  if (slot == nullptr) return;
   slot->in_use = false;
   slot->failed = false;
   slot->state = RequestState::Init;
@@ -627,6 +350,8 @@ unsigned RdmaTransportAdapter::send_async(
     int peer_rank, void* local_ptr, size_t len, uint32_t local_buffer_id,
     std::optional<RemoteSlice> remote_hint,
     BounceBufferProvider bounce_provider) {
+  if (!initialized_ || !endpoint_ || !has_peer(peer_rank)) return 0;
+
   void* send_ptr = local_ptr;
   uint32_t send_buffer_id = local_buffer_id;
   if (bounce_provider) {
@@ -642,29 +367,78 @@ unsigned RdmaTransportAdapter::send_async(
     }
   }
 
-  uint32_t remote_buffer_id = 0;
-  RemoteSlice const* remote_slice_ptr = nullptr;
-  if (remote_hint.has_value()) {
-    remote_buffer_id = remote_hint->buffer_id;
-    remote_slice_ptr = &(*remote_hint);
-  }
-
   unsigned request_id = 0;
   if (try_acquire_request_slot(&request_id) == nullptr) return 0;
-  int ret =
-      send_async_rdma(peer_rank, send_ptr, len, send_buffer_id, remote_buffer_id,
-                      request_id, remote_slice_ptr);
-  if (ret != 0) {
+
+  std::shared_ptr<RegMemBlock> base_block;
+  {
     std::lock_guard<std::mutex> lk(mu_);
-    release_request_slot_locked(request_id);
-    return 0;
+    auto it = buffer_id_to_local_mr_.find(send_buffer_id);
+    if (it == buffer_id_to_local_mr_.end() || !it->second.block) {
+      release_request_slot_locked(request_id);
+      return 0;
+    }
+    base_block = it->second.block;
   }
+
+  int64_t token = -1;
+  RequestKind kind = RequestKind::Send;
+  try {
+    auto send_mem = std::make_shared<RegMemBlock>(
+        send_ptr, len, base_block->mr_array, base_block->type);
+    if (remote_hint.has_value() && remote_hint->has_rdma_write_hint()) {
+      auto remote_mem = std::make_shared<RemoteMemInfo>();
+      remote_mem->addr = remote_hint->write.addr;
+      remote_mem->length = (remote_hint->write.capacity == 0)
+                               ? len
+                               : remote_hint->write.capacity;
+      remote_mem->type = (remote_hint->write.memory_type == 1)
+                             ? MemoryType::GPU
+                             : MemoryType::HOST;
+      for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
+        remote_mem->rkey_array.setKeyByContextID(
+            ctx, remote_hint->write.rdma_keys[ctx]);
+      }
+      auto req = std::make_shared<RDMASendRequest>(send_mem, remote_mem);
+      req->from_rank_id = static_cast<uint32_t>(local_rank_);
+      req->to_rank_id = static_cast<uint32_t>(peer_rank);
+      req->send_type = SendType::Write;
+      token = endpoint_->writeOrRead(req);
+      kind = RequestKind::Write;
+    } else {
+      auto placeholder = std::make_shared<RemoteMemInfo>();
+      auto req = std::make_shared<RDMASendRequest>(send_mem, placeholder);
+      req->from_rank_id = static_cast<uint32_t>(local_rank_);
+      req->to_rank_id = static_cast<uint32_t>(peer_rank);
+      req->send_type = SendType::Send;
+      token = endpoint_->send(static_cast<uint64_t>(peer_rank), req);
+      kind = RequestKind::Send;
+    }
+  } catch (...) {
+    token = -1;
+  }
+
+  std::lock_guard<std::mutex> lk(mu_);
+  PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
+  if (slot == nullptr) return 0;
+  if (token < 0) {
+    slot->failed = true;
+    slot->state = RequestState::Failed;
+    return request_id;
+  }
+  slot->request.kind = kind;
+  slot->request.peer_rank = peer_rank;
+  slot->request.token = token;
+  slot->state = RequestState::Posted;
+  slot->failed = false;
   return request_id;
 }
 
 unsigned RdmaTransportAdapter::recv_async(int peer_rank, void* local_ptr,
                                           size_t len, uint32_t local_buffer_id,
                                           BounceBufferProvider bounce_provider) {
+  if (!initialized_ || !endpoint_ || !has_peer(peer_rank)) return 0;
+
   void* recv_ptr = local_ptr;
   uint32_t recv_buffer_id = local_buffer_id;
   if (bounce_provider) {
@@ -677,13 +451,88 @@ unsigned RdmaTransportAdapter::recv_async(int peer_rank, void* local_ptr,
 
   unsigned request_id = 0;
   if (try_acquire_request_slot(&request_id) == nullptr) return 0;
-  int ret = recv_async_rdma(peer_rank, recv_ptr, len, recv_buffer_id, request_id);
-  if (ret != 0) {
+
+  std::shared_ptr<RegMemBlock> base_block;
+  {
     std::lock_guard<std::mutex> lk(mu_);
-    release_request_slot_locked(request_id);
-    return 0;
+    auto it = buffer_id_to_local_mr_.find(recv_buffer_id);
+    if (it == buffer_id_to_local_mr_.end() || !it->second.block) {
+      release_request_slot_locked(request_id);
+      return 0;
+    }
+    base_block = it->second.block;
   }
+
+  int64_t token = -1;
+  try {
+    auto recv_mem = std::make_shared<RegMemBlock>(
+        recv_ptr, len, base_block->mr_array, base_block->type);
+    auto req = std::make_shared<RDMARecvRequest>(recv_mem);
+    req->from_rank_id = static_cast<uint32_t>(peer_rank);
+    req->to_rank_id = static_cast<uint32_t>(local_rank_);
+    token = endpoint_->recv(static_cast<uint64_t>(peer_rank), req);
+  } catch (...) {
+    token = -1;
+  }
+
+  std::lock_guard<std::mutex> lk(mu_);
+  PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
+  if (slot == nullptr) return 0;
+  if (token < 0) {
+    slot->failed = true;
+    slot->state = RequestState::Failed;
+    return request_id;
+  }
+  slot->request.kind = RequestKind::Recv;
+  slot->request.peer_rank = peer_rank;
+  slot->request.token = token;
+  slot->state = RequestState::Posted;
+  slot->failed = false;
   return request_id;
+}
+
+bool RdmaTransportAdapter::is_backend_request_done(AdapterRequest const& request,
+                                                   bool* ok) {
+  if (!endpoint_) return false;
+  bool done = false;
+  try {
+    if (request.kind == RequestKind::Recv) {
+      done = endpoint_->checkRecvComplete_once(
+          static_cast<uint64_t>(request.peer_rank),
+          static_cast<uint64_t>(request.token));
+    } else {
+      done = endpoint_->checkSendComplete_once(
+          static_cast<uint64_t>(request.peer_rank), request.token);
+    }
+  } catch (...) {
+    if (ok) *ok = false;
+    return true;
+  }
+  if (done && ok) *ok = true;
+  return done;
+}
+
+bool RdmaTransportAdapter::poll_completion(unsigned id) {
+  std::lock_guard<std::mutex> lk(mu_);
+  PendingRequestSlot* slot = resolve_request_slot_locked(id);
+  if (slot == nullptr) return false;
+  if (slot->state == RequestState::Completed || slot->state == RequestState::Failed) {
+    return true;
+  }
+  if (slot->state != RequestState::Posted) return false;
+
+  bool ok = false;
+  if (!is_backend_request_done(slot->request, &ok)) return false;
+  slot->state = ok ? RequestState::Completed : RequestState::Failed;
+  slot->failed = !ok;
+  return true;
+}
+
+bool RdmaTransportAdapter::wait_completion(unsigned id) {
+  while (true) {
+    if (poll_completion(id)) return true;
+    std::this_thread::sleep_for(std::chrono::microseconds(kWaitSleepUs));
+  }
 }
 
 bool RdmaTransportAdapter::request_failed(unsigned id) {
@@ -692,509 +541,9 @@ bool RdmaTransportAdapter::request_failed(unsigned id) {
   return slot != nullptr && slot->failed;
 }
 
-void RdmaTransportAdapter::maybe_pause_send_polling_locked(PeerContext& ctx) {
-  if (ctx.send_conn && !ctx.send_polling_paused) {
-    ctx.send_conn->stopPolling();
-    ctx.send_polling_paused = true;
-  }
-}
-
-void RdmaTransportAdapter::maybe_resume_send_polling_locked(PeerContext& ctx) {
-  if (ctx.send_conn && ctx.send_polling_paused && ctx.direct_inflight == 0) {
-    ctx.send_conn->startPolling();
-    ctx.send_polling_paused = false;
-  }
-}
-
-bool RdmaTransportAdapter::try_enter_send_mode_locked(int peer_rank,
-                                                      RequestKind kind) {
-  auto peer_it = peer_contexts_.find(peer_rank);
-  if (peer_it == peer_contexts_.end()) return false;
-  auto& peer = peer_it->second;
-  switch (kind) {
-    case RequestKind::Send:
-      if (peer.send_mode == PeerContext::SendMode::Direct) return false;
-      peer.send_mode = PeerContext::SendMode::Queued;
-      ++peer.queued_inflight;
-      return true;
-    case RequestKind::DirectSend:
-      if (peer.send_mode != PeerContext::SendMode::Idle ||
-          peer.queued_inflight != 0 || peer.direct_inflight != 0) {
-        return false;
-      }
-      maybe_pause_send_polling_locked(peer);
-      peer.send_mode = PeerContext::SendMode::Direct;
-      ++peer.direct_inflight;
-      return true;
-    default:
-      return true;
-  }
-}
-
-void RdmaTransportAdapter::leave_send_mode_locked(int peer_rank,
-                                                  RequestKind kind) {
-  auto peer_it = peer_contexts_.find(peer_rank);
-  if (peer_it == peer_contexts_.end()) return;
-  auto& peer = peer_it->second;
-  switch (kind) {
-    case RequestKind::Send:
-      if (peer.queued_inflight > 0) {
-        --peer.queued_inflight;
-      }
-      if (peer.queued_inflight == 0 && peer.direct_inflight == 0) {
-        peer.send_mode = PeerContext::SendMode::Idle;
-      }
-      return;
-    case RequestKind::DirectSend:
-      if (peer.direct_inflight > 0) {
-        --peer.direct_inflight;
-      }
-      maybe_resume_send_polling_locked(peer);
-      if (peer.direct_inflight == 0) {
-        peer.send_mode = (peer.queued_inflight == 0)
-                             ? PeerContext::SendMode::Idle
-                             : PeerContext::SendMode::Queued;
-      }
-      return;
-    default:
-      return;
-  }
-}
-
-void RdmaTransportAdapter::finalize_request_accounting_locked(
-    PendingRequestSlot& slot) {
-  if (!slot.request.send_mode_tracked || slot.request.peer_rank < 0) return;
-  leave_send_mode_locked(slot.request.peer_rank, slot.request.kind);
-  if (slot.request.kind == RequestKind::DirectSend && slot.request.token >= 0) {
-    direct_completion_counts_.erase(static_cast<uint64_t>(slot.request.token));
-  }
-  slot.request.send_mode_tracked = false;
-}
-
-bool RdmaTransportAdapter::prepare_send_submission(
-    int peer_rank, uint32_t local_buffer_id, uint64_t request_id,
-    std::shared_ptr<SendConnection>* out_send_conn, LocalMr* out_local_mr) {
-  if (out_send_conn == nullptr || out_local_mr == nullptr) return false;
+void RdmaTransportAdapter::release_request(unsigned id) {
   std::lock_guard<std::mutex> lk(mu_);
-  auto peer_it = peer_contexts_.find(peer_rank);
-  if (peer_it == peer_contexts_.end() || !peer_it->second.send_conn) {
-    return false;
-  }
-  auto mr_it = buffer_id_to_local_mr_.find(local_buffer_id);
-  if (mr_it == buffer_id_to_local_mr_.end()) return false;
-  PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
-  if (slot == nullptr || slot->state != RequestState::Init) return false;
-  slot->failed = false;
-  *out_send_conn = peer_it->second.send_conn;
-  *out_local_mr = mr_it->second;
-  return true;
-}
-
-int64_t RdmaTransportAdapter::submit_queued_send(
-    std::shared_ptr<SendConnection> const& send_conn,
-    std::shared_ptr<RegMemBlock> const& send_mem) const {
-  if (!send_conn || !send_mem) return -1;
-  auto remote_mem_placeholder = std::make_shared<RemoteMemInfo>();
-  auto req =
-      std::make_shared<RDMASendRequest>(send_mem, remote_mem_placeholder);
-  req->send_type = SendType::Send;
-  return send_conn->send(req);
-}
-
-int64_t RdmaTransportAdapter::submit_direct_send(
-    int peer_rank, std::shared_ptr<RegMemBlock> const& send_mem,
-    RemoteSlice const& remote_slice, uint32_t* out_expected_completions) {
-  if (!send_mem || out_expected_completions == nullptr ||
-      !remote_slice.has_rdma_write_hint()) {
-    return -1;
-  }
-
-  SendReqMeta meta{};
-  int ring_index = -1;
-  if (!wait_direct_send_meta(peer_rank, &meta, &ring_index) || ring_index < 0) {
-    return -1;
-  }
-
-  std::array<std::shared_ptr<RDMADataChannel>, kQpNumPerChannel> channels{};
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto peer_it = peer_contexts_.find(peer_rank);
-    if (peer_it == peer_contexts_.end()) return -1;
-    channels = peer_it->second.send_channels;
-  }
-
-  auto remote_mem = std::make_shared<RemoteMemInfo>();
-  remote_mem->addr = remote_slice.write.addr;
-  remote_mem->length = (remote_slice.write.capacity == 0)
-                           ? send_mem->size
-                           : remote_slice.write.capacity;
-  remote_mem->type = (remote_slice.write.memory_type == 1)
-                         ? MemoryType::GPU
-                         : MemoryType::HOST;
-  for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
-    remote_mem->rkey_array.setKeyByContextID(ctx,
-                                             remote_slice.write.rdma_keys[ctx]);
-  }
-
-  auto chunks = ChunkSplitStrategy::splitMessageToChunks(send_mem->size);
-  *out_expected_completions = static_cast<uint32_t>(chunks.size());
-  uint32_t remaining_chunks =
-      (meta.expected_chunk_count == 0) ? *out_expected_completions
-                                       : meta.expected_chunk_count;
-  uint64_t wr_id =
-      direct_wr_id_cursor_.fetch_add(1, std::memory_order_relaxed);
-  size_t num_channels = channels.size();
-
-  for (size_t i = 0; i < chunks.size(); ++i) {
-    auto const& chunk = chunks[i];
-    uint32_t channel_id =
-        ((meta.channel_id - 1 + static_cast<uint32_t>(i)) % num_channels) + 1;
-    auto channel = channels[channel_id - 1];
-    if (!channel) {
-      return -1;
-    }
-
-    auto chunk_local_mem = std::make_shared<RegMemBlock>(
-        static_cast<char*>(send_mem->addr) + chunk.offset, chunk.size,
-        send_mem->mr_array, send_mem->type);
-    auto chunk_remote_mem = std::make_shared<RemoteMemInfo>(
-        remote_mem->addr + chunk.offset, chunk.size, remote_mem->rkey_array,
-        remote_mem->type);
-
-    ImmData imm{};
-    imm.set_index(ring_index);
-    if (remaining_chunks > 0) {
-      if (i == chunks.size() - 1 && remaining_chunks > 1) {
-        imm.set_chunk_count(remaining_chunks);
-      } else {
-        imm.set_chunk_count(1);
-      }
-      --remaining_chunks;
-    }
-
-    auto chunk_req = std::make_shared<RDMASendRequest>(
-        chunk_local_mem, chunk_remote_mem, imm, true);
-    chunk_req->channel_id = channel_id;
-    chunk_req->wr_id = static_cast<int64_t>(wr_id);
-    chunk_req->send_type = SendType::Send;
-    if (channel->submitRequest(chunk_req) < 0) {
-      return -1;
-    }
-  }
-
-  std::lock_guard<std::mutex> lk(mu_);
-  direct_completion_counts_[wr_id] = 0;
-  return static_cast<int64_t>(wr_id);
-}
-
-bool RdmaTransportAdapter::wait_direct_send_meta(int peer_rank,
-                                                 SendReqMeta* out_meta,
-                                                 int* out_index) {
-  std::shared_ptr<SendControlChannel> send_ctrl;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto peer_it = peer_contexts_.find(peer_rank);
-    if (peer_it == peer_contexts_.end()) return false;
-    send_ctrl = peer_it->second.send_ctrl;
-  }
-  if (!send_ctrl || out_meta == nullptr || out_index == nullptr) return false;
-
-  auto deadline = std::chrono::steady_clock::now() +
-                  std::chrono::milliseconds(kDirectMetaWaitMs);
-  while (std::chrono::steady_clock::now() < deadline) {
-    (void)send_ctrl->noblockingPoll();
-    int index = send_ctrl->getOneSendRequestMeta(*out_meta);
-    if (index >= 0) {
-      *out_index = index;
-      return true;
-    }
-    std::this_thread::sleep_for(std::chrono::microseconds(50));
-  }
-  return false;
-}
-
-bool RdmaTransportAdapter::poll_direct_send_completions(int peer_rank) {
-  std::array<std::shared_ptr<RDMADataChannel>, kQpNumPerChannel> channels{};
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto peer_it = peer_contexts_.find(peer_rank);
-    if (peer_it == peer_contexts_.end()) return false;
-    channels = peer_it->second.send_channels;
-  }
-
-  bool any = false;
-  for (auto const& channel : channels) {
-    if (!channel) continue;
-    std::vector<CQMeta> cq_datas;
-    if (!channel->pollOnce(cq_datas)) continue;
-    any = any || !cq_datas.empty();
-    if (cq_datas.empty()) continue;
-    std::lock_guard<std::mutex> lk(mu_);
-    for (auto const& cq_data : cq_datas) {
-      auto& count = direct_completion_counts_[cq_data.wr_id];
-      ++count;
-    }
-  }
-  return any;
-}
-
-int RdmaTransportAdapter::send_async_rdma(int peer_rank, void* local_ptr,
-                                          size_t len, uint32_t local_buffer_id,
-                                          uint32_t remote_buffer_id,
-                                          uint64_t request_id,
-                                          RemoteSlice const* remote_slice) {
-  (void)remote_buffer_id;
-
-  std::shared_ptr<SendConnection> send_conn;
-  LocalMr local_mr;
-  if (!prepare_send_submission(peer_rank, local_buffer_id, request_id,
-                               &send_conn, &local_mr)) {
-    return -1;
-  }
-
-  auto send_mem = std::make_shared<RegMemBlock>(
-      local_ptr, len, local_mr.block->mr_array, local_mr.block->type);
-
-  if (rdma_hint_debug_enabled()) {
-    std::ostringstream lkeys;
-    lkeys << "[";
-    for (uint32_t ctx = 0; ctx < kNICContextNumber; ++ctx) {
-      if (ctx != 0) lkeys << ", ";
-      lkeys << "ctx" << ctx << "=0x" << std::hex
-            << send_mem->getKeyByContextID(ctx) << std::dec;
-    }
-    lkeys << "]";
-    std::cout << "[DEBUG][RDMA_SEND_PREP] peer=" << peer_rank
-              << " req=" << request_id << " buffer_id=" << local_buffer_id
-              << " local_addr=0x" << std::hex
-              << reinterpret_cast<uintptr_t>(local_ptr) << std::dec
-              << " len=" << len << " type="
-              << (send_mem->type == MemoryType::GPU ? "gpu" : "host")
-              << " local_lkeys=" << lkeys.str() << std::endl;
-  }
-
-  int64_t token = -1;
-  RequestKind kind = RequestKind::Send;
-  uint32_t expected_completions = 0;
-
-  if (rdma_hint_debug_enabled()) {
-    std::cout << "[DEBUG][RDMA_HINT] peer=" << peer_rank
-              << " req=" << request_id << " mode=SEND";
-    if (remote_slice != nullptr && remote_slice->has_rdma_write_hint()) {
-      std::ostringstream rkeys;
-      rkeys << "[";
-      for (size_t ctx = 0; ctx < remote_slice->write.rdma_keys.size(); ++ctx) {
-        if (ctx != 0) rkeys << ", ";
-        rkeys << "ctx" << ctx << "=0x" << std::hex
-              << remote_slice->write.rdma_keys[ctx] << std::dec;
-      }
-      rkeys << "]";
-      std::cout << " (rdma_write_with_imm buffer_id=" << remote_slice->buffer_id
-                << " addr=0x" << std::hex << remote_slice->write.addr
-                << std::dec << " capacity=" << remote_slice->write.capacity
-                << " mem_type=" << remote_slice->write.memory_type
-                << " rdma_rkeys=" << rkeys.str() << ")";
-    } else if (remote_slice != nullptr) {
-      std::cout << " (buffer_id=" << remote_slice->buffer_id
-                << ", offset=" << remote_slice->offset << ")";
-    } else {
-      std::cout << " (no_hint)";
-    }
-    std::cout << " len=" << len
-              << " remote_resolve="
-              << ((remote_slice != nullptr && remote_slice->has_rdma_write_hint())
-                      ? "direct_send_meta"
-                      : "control_channel_async")
-              << std::endl;
-  }
-
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    if (!try_enter_send_mode_locked(
-            peer_rank,
-            (remote_slice != nullptr && remote_slice->has_rdma_write_hint())
-                ? RequestKind::DirectSend
-                : RequestKind::Send)) {
-      PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
-      if (slot != nullptr) {
-        slot->failed = true;
-        slot->state = RequestState::Failed;
-      }
-      return -1;
-    }
-  }
-
-  if (remote_slice != nullptr && remote_slice->has_rdma_write_hint()) {
-    kind = RequestKind::DirectSend;
-    token =
-        submit_direct_send(peer_rank, send_mem, *remote_slice, &expected_completions);
-  } else {
-    token = submit_queued_send(send_conn, send_mem);
-    kind = RequestKind::Send;
-  }
-
-  if (token < 0) {
-    std::lock_guard<std::mutex> lk(mu_);
-    PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
-    if (slot != nullptr) {
-      slot->failed = true;
-      slot->state = RequestState::Failed;
-      slot->request.kind = kind;
-      slot->request.peer_rank = peer_rank;
-      slot->request.send_mode_tracked = true;
-      finalize_request_accounting_locked(*slot);
-    }
-    return -1;
-  }
-
-  std::lock_guard<std::mutex> lk(mu_);
-  PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
-  if (slot == nullptr) return -1;
-  slot->request.kind = kind;
-  slot->request.peer_rank = peer_rank;
-  slot->request.token = token;
-  slot->request.expected_completions = expected_completions;
-  slot->request.send_mode_tracked =
-      (kind == RequestKind::Send || kind == RequestKind::DirectSend);
-  slot->failed = false;
-  slot->state = RequestState::Posted;
-  return 0;
-}
-
-int RdmaTransportAdapter::recv_async_rdma(int peer_rank, void* local_ptr,
-                                          size_t len, uint32_t local_buffer_id,
-                                          uint64_t request_id) {
-  std::shared_ptr<RecvConnection> recv_conn;
-  LocalMr local_mr;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto peer_it = peer_contexts_.find(peer_rank);
-    if (peer_it == peer_contexts_.end() || !peer_it->second.recv_conn) return -1;
-    recv_conn = peer_it->second.recv_conn;
-
-    auto mh_it = buffer_id_to_local_mr_.find(local_buffer_id);
-    if (mh_it == buffer_id_to_local_mr_.end()) return -1;
-    local_mr = mh_it->second;
-
-    PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
-    if (slot == nullptr || slot->state != RequestState::Init) return -1;
-    slot->failed = false;
-  }
-
-  auto recv_mem = std::make_shared<RegMemBlock>(
-      local_ptr, len, local_mr.block->mr_array, local_mr.block->type);
-  auto recv_req = std::make_shared<RDMARecvRequest>(recv_mem);
-  int64_t token = recv_conn->recv(recv_req);
-
-  if (token < 0) {
-    std::lock_guard<std::mutex> lk(mu_);
-    PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
-    if (slot != nullptr) {
-      slot->failed = true;
-      slot->state = RequestState::Failed;
-    }
-    return -1;
-  }
-
-  std::lock_guard<std::mutex> lk(mu_);
-  PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
-  if (slot == nullptr) return -1;
-  slot->request.kind = RequestKind::Recv;
-  slot->request.peer_rank = peer_rank;
-  slot->request.token = token;
-  slot->failed = false;
-  slot->state = RequestState::Posted;
-  return 0;
-}
-
-bool RdmaTransportAdapter::is_backend_request_done(AdapterRequest const& request,
-                                                   bool* ok) {
-  if (ok) *ok = false;
-
-  std::shared_ptr<SendConnection> send_conn;
-  std::shared_ptr<RecvConnection> recv_conn;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    auto peer_it = peer_contexts_.find(request.peer_rank);
-    if (peer_it == peer_contexts_.end()) return true;
-    send_conn = peer_it->second.send_conn;
-    recv_conn = peer_it->second.recv_conn;
-  }
-
-  switch (request.kind) {
-    case RequestKind::Send:
-      if (!send_conn) return true;
-      if (ok) *ok = true;
-      return send_conn->check(request.token);
-    case RequestKind::DirectSend: {
-      (void)poll_direct_send_completions(request.peer_rank);
-      std::lock_guard<std::mutex> lk(mu_);
-      auto it =
-          direct_completion_counts_.find(static_cast<uint64_t>(request.token));
-      uint32_t completed = (it == direct_completion_counts_.end()) ? 0 : it->second;
-      if (ok) *ok = true;
-      return completed >= std::max<uint32_t>(1, request.expected_completions);
-    }
-    case RequestKind::Recv:
-      if (!recv_conn) return true;
-      if (ok) *ok = true;
-      return recv_conn->check(static_cast<uint64_t>(request.token));
-    default:
-      return true;
-  }
-}
-
-bool RdmaTransportAdapter::poll_completion(unsigned request_id) {
-  AdapterRequest req;
-  {
-    std::lock_guard<std::mutex> lk(mu_);
-    PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
-    if (slot == nullptr) return true;
-    if (slot->state == RequestState::Completed ||
-        slot->state == RequestState::Failed) {
-      return true;
-    }
-    if (slot->state != RequestState::Posted) return false;
-    req = slot->request;
-  }
-
-  bool backend_ok = false;
-  bool done = is_backend_request_done(req, &backend_ok);
-  if (!done) return false;
-
-  std::lock_guard<std::mutex> lk(mu_);
-  PendingRequestSlot* slot = resolve_request_slot_locked(request_id);
-  if (slot == nullptr) return true;
-
-  if (!backend_ok) {
-    slot->failed = true;
-    slot->state = RequestState::Failed;
-    finalize_request_accounting_locked(*slot);
-    return true;
-  }
-
-  if (slot->state == RequestState::Posted) {
-    slot->state = RequestState::Completed;
-    finalize_request_accounting_locked(*slot);
-  }
-  return true;
-}
-
-bool RdmaTransportAdapter::wait_completion(unsigned request_id) {
-  uint32_t spins = 0;
-  while (true) {
-    if (poll_completion(request_id)) return true;
-    if (spins < kRdmaWaitSpinCount) {
-      ++spins;
-      continue;
-    }
-    std::this_thread::yield();
-  }
-}
-
-void RdmaTransportAdapter::release_request(unsigned request_id) {
-  std::lock_guard<std::mutex> lk(mu_);
-  release_request_slot_locked(request_id);
+  release_request_slot_locked(id);
 }
 
 }  // namespace Transport
