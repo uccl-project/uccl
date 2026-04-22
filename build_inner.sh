@@ -264,22 +264,11 @@ build_ukernel() {
 if [[ "$TARGET" == "therock" ]]; then
   PY_V=$(echo ${PY_VER} | tr -d .)
 
-  # EP's host-side proxy/fifo code (e.g. ep/src/fifo_hip.cpp) needs <numaif.h>
-  # and links against -lnuma. The therock_build_manylinux_x86_64 base image
-  # already ships rdma-core-devel and libnl3-devel (used by the P2P build), but
-  # not numactl-devel, so install just that. Package names are AlmaLinux 8 /
-  # manylinux_2_28; do NOT use Debian-style "libibverbs-devel" here — that
-  # package doesn't exist on RHEL-family distros (ibverbs is in rdma-core-devel).
-  # We deliberately let dnf failures surface (no `|| echo WARN`) so missing
-  # build deps fail fast rather than 3 minutes later in the compiler.
-  if command -v dnf &>/dev/null; then
-    dnf install -y numactl-devel
-  elif command -v yum &>/dev/null; then
-    yum install -y numactl-devel
-  else
-    echo "[therock] ERROR: neither dnf nor yum available; cannot install numactl-devel" >&2
-    exit 1
-  fi
+  # NOTE: System packages required to build EP (rdma-core-devel, libnl3-devel,
+  # numactl-devel) are installed at image-build time in
+  # docker/Dockerfile.therock. We can't install them here at runtime because
+  # build.sh launches the container as the host user (--user $(id -u):$(id -g))
+  # and dnf needs root.
 
   export PATH=/opt/python/cp${PY_V}-cp${PY_V}/bin:$PATH
 
