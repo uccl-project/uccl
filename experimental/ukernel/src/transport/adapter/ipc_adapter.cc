@@ -5,6 +5,10 @@
 #include <chrono>
 #include <cstring>
 #include <string>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace UKernel {
 namespace Transport {
@@ -15,6 +19,7 @@ constexpr int kIpcControlPollTimeoutMs = 50;
 constexpr size_t kTaskRingSize = 1024;
 constexpr size_t kIpcSizePerEngine = 1ul << 20;
 constexpr int kIpcControlTimeoutMs = 50000;
+constexpr int kWorkerIdleSpinIters = 256;
 
 bool ipc_force_relay_enabled() {
   char const* env = std::getenv("UHM_IPC_FORCE_RELAY");
@@ -41,16 +46,75 @@ bool enqueue_one_request_id(jring_t* ring, unsigned elem,
   return !stop.load(std::memory_order_acquire);
 }
 
+void wait_for_worker_work(std::atomic<bool> const& stop,
+                          std::atomic<int> const& pending, std::mutex& cv_mu,
+                          std::condition_variable& cv) {
+  for (int i = 0; i < kWorkerIdleSpinIters; ++i) {
+    if (stop.load(std::memory_order_relaxed) ||
+        pending.load(std::memory_order_relaxed) > 0) {
+      return;
+    }
+    std::this_thread::yield();
+  }
+
+  std::unique_lock<std::mutex> lk(cv_mu);
+  cv.wait(lk, [&] {
+    return stop.load(std::memory_order_relaxed) ||
+           pending.load(std::memory_order_relaxed) > 0;
+  });
+}
+
+// POSIX SHM helpers for per-peer done_seq channel.
+// Lower rank creates, higher rank opens. One file per (lo,hi) pair.
+
+static IpcChannelPair* create_ipc_channel_pair(std::string const& name) {
+  shm_unlink(name.c_str());
+  int fd = shm_open(name.c_str(), O_CREAT | O_RDWR, 0600);
+  if (fd < 0) return nullptr;
+  if (ftruncate(fd, sizeof(IpcChannelPair)) < 0) {
+    close(fd);
+    shm_unlink(name.c_str());
+    return nullptr;
+  }
+  void* ptr = mmap(nullptr, sizeof(IpcChannelPair), PROT_READ | PROT_WRITE,
+                   MAP_SHARED, fd, 0);
+  close(fd);
+  if (ptr == MAP_FAILED) {
+    shm_unlink(name.c_str());
+    return nullptr;
+  }
+  return new (ptr) IpcChannelPair{};
+}
+
+static IpcChannelPair* open_ipc_channel_pair(std::string const& name,
+                                             int timeout_ms) {
+  auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+  while (true) {
+    int fd = shm_open(name.c_str(), O_RDWR, 0);
+    if (fd >= 0) {
+      void* ptr = mmap(nullptr, sizeof(IpcChannelPair), PROT_READ | PROT_WRITE,
+                       MAP_SHARED, fd, 0);
+      close(fd);
+      if (ptr != MAP_FAILED) return static_cast<IpcChannelPair*>(ptr);
+    }
+    if (std::chrono::steady_clock::now() >= deadline) return nullptr;
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+}
+
 }  // namespace
 
 IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
                        int self_local_id)
-    : next_match_seq_per_peer_(comm->world_size(),
+    : ring_namespace_(ring_namespace),
+      next_match_seq_per_peer_(comm->world_size(),
                                std::array<uint64_t, 2>{1, 1}),
       shm_control_(std::make_shared<ShmRingExchanger>(
           comm->rank(), comm->world_size(), std::move(ring_namespace),
           self_local_id)),
       comm_(comm) {
+  done_channels_.resize(comm->world_size());
   send_task_ring_ =
       UKernel::Transport::create_ring(sizeof(unsigned), kTaskRingSize);
   recv_task_ring_ =
@@ -76,10 +140,14 @@ void IpcAdapter::shutdown() {
   if (!shutdown_started_.compare_exchange_strong(expected, true)) return;
 
   stop_.store(true, std::memory_order_release);
-  cv_.notify_all();
+  send_cv_.notify_all();
+  recv_cv_.notify_all();
   if (send_thread_.joinable()) send_thread_.join();
   if (recv_thread_.joinable()) recv_thread_.join();
 
+  for (int peer_rank = 0; peer_rank < comm_->world_size(); ++peer_rank) {
+    if (peer_rank != comm_->rank()) teardown_done_channel(peer_rank);
+  }
   if (shm_control_ != nullptr) {
     for (int peer_rank = 0; peer_rank < comm_->world_size(); ++peer_rank) {
       if (peer_rank == comm_->rank()) continue;
@@ -108,6 +176,95 @@ void IpcAdapter::shutdown() {
   }
 }
 
+bool IpcAdapter::setup_done_channel(int peer_rank) {
+  if (peer_rank < 0 || peer_rank >= (int)done_channels_.size()) return false;
+  auto& ch = done_channels_[peer_rank];
+  if (ch.shm_base) return true;
+
+  int self = comm_->rank();
+  int lo = std::min(self, peer_rank);
+  int hi = std::max(self, peer_rank);
+  ch.is_creator = (self == lo);
+  ch.shm_name = "/" + ring_namespace_ + "_ipc_" + std::to_string(lo) + "_" +
+                std::to_string(hi);
+
+  IpcChannelPair* pair = nullptr;
+  if (ch.is_creator) {
+    pair = create_ipc_channel_pair(ch.shm_name);
+    if (!pair) {
+      fprintf(stderr, "[IPC] failed to create channel SHM %s\n",
+              ch.shm_name.c_str());
+      return false;
+    }
+  } else {
+    pair = open_ipc_channel_pair(ch.shm_name, /*timeout_ms=*/10000);
+    if (!pair) {
+      fprintf(stderr, "[IPC] failed to open channel SHM %s\n",
+              ch.shm_name.c_str());
+      return false;
+    }
+  }
+  ch.shm_base = pair;
+  // Lower rank owns done_seq_lo_to_hi (its sends); higher rank owns hi_to_lo.
+  if (ch.is_creator) {
+    ch.local_ptr = &pair->done_seq_lo_to_hi;
+    ch.remote_ptr = &pair->done_seq_hi_to_lo;
+    // Creator's pointers are set now, but the fast path is NOT active until
+    // wait_done_channel_peer_ready() confirms the opener has mapped this SHM.
+    // Until then local_ptr is non-null but send_one must not use it — that
+    // gate is enforced in wait_done_channel_peer_ready (which clears the
+    // pointers on timeout).
+  } else {
+    ch.local_ptr = &pair->done_seq_hi_to_lo;
+    ch.remote_ptr = &pair->done_seq_lo_to_hi;
+    // Signal to the creator that we have successfully mapped the SHM.
+    pair->opener_ready.store(1, std::memory_order_release);
+  }
+  return true;
+}
+
+void IpcAdapter::teardown_done_channel(int peer_rank) {
+  if (peer_rank < 0 || peer_rank >= (int)done_channels_.size()) return;
+  auto& ch = done_channels_[peer_rank];
+  if (ch.shm_base) {
+    munmap(ch.shm_base, sizeof(IpcChannelPair));
+    ch.shm_base = nullptr;
+    ch.local_ptr = nullptr;
+    ch.remote_ptr = nullptr;
+  }
+  if (ch.is_creator && !ch.shm_name.empty()) shm_unlink(ch.shm_name.c_str());
+  ch.shm_name.clear();
+  ch.is_creator = false;
+}
+
+// Called by the creator (lower rank) after connect_to() returns.
+// Polls the opener_ready flag that the higher rank writes when it maps the SHM.
+// If the opener does not confirm within the timeout the done_seq channel is
+// torn down on BOTH sides (creator tears down locally; opener's remote_ptr
+// becomes stale but it will find done_seq.load() == 0 and keep retrying until
+// it detects the channel is gone or falls back via the SHM ring).
+// Result: both sides end up with local_ptr == nullptr → consistent fallback.
+void IpcAdapter::wait_done_channel_peer_ready(int peer_rank) {
+  if (peer_rank < 0 || peer_rank >= (int)done_channels_.size()) return;
+  auto& ch = done_channels_[peer_rank];
+  if (!ch.shm_base || !ch.is_creator) return;
+
+  constexpr int kReadyTimeoutMs = 5000;
+  auto deadline = std::chrono::steady_clock::now() +
+                  std::chrono::milliseconds(kReadyTimeoutMs);
+  while (ch.shm_base->opener_ready.load(std::memory_order_acquire) == 0) {
+    if (std::chrono::steady_clock::now() >= deadline) {
+      fprintf(stderr,
+              "[IPC] done_seq opener did not signal ready in %dms for %s; "
+              "disabling done_seq fast path\n",
+              kReadyTimeoutMs, ch.shm_name.c_str());
+      teardown_done_channel(peer_rank);
+      return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+}
+
 bool IpcAdapter::connect_to(int rank) {
   return shm_control_ != nullptr && shm_control_->connect_to(rank, 30000);
 }
@@ -123,10 +280,29 @@ bool IpcAdapter::ensure_peer(PeerConnectSpec const& spec) {
         std::holds_alternative<std::monostate>(spec.detail))) {
     return false;
   }
-  if (spec.type == PeerConnectType::Connect) {
-    return connect_to(spec.peer_rank);
+  int peer_rank = spec.peer_rank;
+
+  // Lower rank creates the done_seq SHM *before* the connection handshake so
+  // the higher rank can open it by name right after the handshake completes.
+  bool is_lower = (comm_->rank() < peer_rank);
+  if (is_lower) setup_done_channel(peer_rank);
+
+  bool ok = (spec.type == PeerConnectType::Connect) ? connect_to(peer_rank)
+                                                    : accept_from(peer_rank);
+  if (!ok) return false;
+
+  if (!is_lower) {
+    // Higher rank: open the SHM created by lower rank.  On success, this also
+    // writes opener_ready = 1 so the lower rank can proceed past its poll.
+    setup_done_channel(peer_rank);
+  } else {
+    // Lower rank: wait for the opener to confirm it has mapped the SHM before
+    // allowing send_one to use the done_seq fast path.  If the opener never
+    // signals (e.g., name mismatch, OS error), we tear down our side too so
+    // both peers stay on the same (fallback) control path.
+    wait_done_channel_peer_ready(peer_rank);
   }
-  return accept_from(spec.peer_rank);
+  return true;
 }
 
 void IpcAdapter::set_peer_local_id(int peer_rank, int local_id) {
@@ -136,6 +312,7 @@ void IpcAdapter::set_peer_local_id(int peer_rank, int local_id) {
 }
 
 void IpcAdapter::close_peer(int peer_rank) {
+  teardown_done_channel(peer_rank);
   if (shm_control_ != nullptr) {
     shm_control_->close_peer(peer_rank);
   }
@@ -263,14 +440,15 @@ bool IpcAdapter::enqueue_request(unsigned request_id, IpcReqType type) {
       return false;
     }
     pending_send_.fetch_add(1, std::memory_order_relaxed);
+    send_cv_.notify_one();
   } else {
     if (recv_task_ring_ == nullptr ||
         !enqueue_one_request_id(recv_task_ring_, request_id, stop_)) {
       return false;
     }
     pending_recv_.fetch_add(1, std::memory_order_relaxed);
+    recv_cv_.notify_one();
   }
-  cv_.notify_all();
   return true;
 }
 
@@ -292,6 +470,7 @@ unsigned IpcAdapter::send_async(int peer_rank, void* local_ptr, size_t len,
   remote_slice.offset = remote_offset;
   if (remote_hint.has_value()) {
     remote_slice.write = remote_hint->write;
+    remote_slice.binding_version = remote_hint->binding_version;
   }
   unsigned request_id = 0;
   IpcRequestSlot* req = try_acquire_request_slot(&request_id);
@@ -523,8 +702,13 @@ bool IpcAdapter::send_one(IpcRequestSlot* creq) {
       }
       if (can_use_direct_peer) {
         copy_to_remote(cached_dst, cached_remote_gpu);
-        if (!shm_control_->send_ack(to_rank, creq->match_seq,
-                                    kAckStatusOkDirect)) {
+        // Signal completion via done_seq atomic (fast path).
+        // Fall back to SHM ring ack only if channel not set up.
+        auto& done_ch = done_channels_[to_rank];
+        if (done_ch.local_ptr) {
+          done_ch.local_ptr->store(creq->match_seq, std::memory_order_release);
+        } else if (!shm_control_->send_ack(to_rank, creq->match_seq,
+                                           kAckStatusOkDirect)) {
           std::cerr << "[ERROR] send direct cached ack(" << to_rank
                     << ") failed for req " << creq->id << " match_seq "
                     << creq->match_seq << std::endl;
@@ -602,7 +786,11 @@ bool IpcAdapter::send_one(IpcRequestSlot* creq) {
       reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(base) + got.offset);
   copy_to_remote(dst_ptr, static_cast<int>(got.remote_gpu_idx_));
 
-  if (!shm_control_->send_ack(to_rank, seq, kAckStatusOkDirect)) {
+  // Signal via done_seq (same as direct path), fallback to SHM ring ack.
+  auto& done_ch = done_channels_[to_rank];
+  if (done_ch.local_ptr) {
+    done_ch.local_ptr->store(seq, std::memory_order_release);
+  } else if (!shm_control_->send_ack(to_rank, seq, kAckStatusOkDirect)) {
     std::cerr << "[ERROR] send_ack(" << to_rank << ") failed for req "
               << creq->id << " match_seq " << creq->match_seq << std::endl;
     return false;
@@ -641,12 +829,13 @@ bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
   };
 
   // Phase 1: receiver waits for either:
-  // 1) direct completion ACK from sender; or
-  // 2) sender's bounce relay notification (ipc_cache/use_bounce_buffer=1); or
-  // 3) sender's ipc_cache_req asking receiver to advertise destination handle.
+  // 1) done_seq >= match_seq  → direct-path copy complete (fast atomic spin);
+  // or 2) ipc_cache_req from sender → cold path, must export IPC handle; or 3)
+  // ipc_cache(use_bounce_buffer=1) → relay path.
   auto phase1_deadline = std::chrono::steady_clock::now() +
                          std::chrono::milliseconds(kIpcControlTimeoutMs);
   bool got_cache_req = false;
+  auto& done_ch = done_channels_[from_rank];
   auto handle_relay_cache = [&](IpcCacheWire const& relay_cache,
                                 uint64_t relay_seq) -> bool {
     if (relay_seq != creq->match_seq) {
@@ -683,11 +872,18 @@ bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
     return true;
   };
   while (!stop_.load(std::memory_order_acquire)) {
-    uint32_t status = 0;
-    int ack_result = wait_sender_ack(/*timeout_ms=*/0, &status);
-    if (ack_result < 0) return false;
-    if (ack_result > 0) {
-      return true;
+    // Fast path: spin on done_seq atomic (no sleep, no SHM ring message).
+    if (done_ch.remote_ptr) {
+      if (done_ch.remote_ptr->load(std::memory_order_acquire) >=
+          creq->match_seq) {
+        return true;
+      }
+    } else {
+      // Fallback when done_seq channel is unavailable: poll SHM ring ack.
+      uint32_t status = 0;
+      int ack_result = wait_sender_ack(/*timeout_ms=*/0, &status);
+      if (ack_result < 0) return false;
+      if (ack_result > 0) return true;
     }
     uint64_t req_seq = 0;
     if (shm_control_->recv_ipc_cache_req(from_rank, &req_seq,
@@ -707,7 +903,7 @@ bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
           << creq->id << " match_seq " << creq->match_seq << std::endl;
       return false;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::this_thread::yield();  // no sleep — yield to other threads only
   }
   if (stop_.load(std::memory_order_acquire) || !got_cache_req) return false;
 
@@ -717,13 +913,16 @@ bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
   transfer_info.is_send = 0;
   transfer_info.remote_gpu_idx_ = comm_->local_gpu_idx();
   void* actual_dst = creq->data();
-
-  void* base = nullptr;
-  size_t base_size = 0;
-  GPU_RT_CHECK(gpuMemGetAddressRange(&base, &base_size, actual_dst));
-  GPU_RT_CHECK(gpuIpcGetMemHandle(&transfer_info.handle, base));
-  transfer_info.offset = reinterpret_cast<uintptr_t>(actual_dst) -
-                         reinterpret_cast<uintptr_t>(base);
+  IPCItem exported =
+      comm_->export_local_ipc_buffer(actual_dst, creq->size_bytes);
+  if (!exported.valid) {
+    std::cerr << "[ERROR] export_local_ipc_buffer failed for req " << creq->id
+              << " match_seq " << creq->match_seq << std::endl;
+    return false;
+  }
+  transfer_info.handle = exported.handle;
+  transfer_info.offset =
+      reinterpret_cast<uintptr_t>(actual_dst) - exported.base_addr;
 
   if (!shm_control_->send_ipc_cache(from_rank, creq->match_seq,
                                     transfer_info)) {
@@ -732,16 +931,22 @@ bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
     return false;
   }
 
-  // Phase 2: after advertising IPC cache, sender may either:
-  // 1) copy directly and send ACK; or
-  // 2) fall back to bounce relay and send ipc_cache(use_bounce_buffer=1).
+  // Phase 2: sender has the IPC handle; wait for it to finish the copy.
+  // Sender signals via done_seq (same channel as direct path).
   auto final_deadline = std::chrono::steady_clock::now() +
                         std::chrono::milliseconds(kIpcControlTimeoutMs);
   while (!stop_.load(std::memory_order_acquire)) {
-    uint32_t status = 0;
-    int ack_result = wait_sender_ack(/*timeout_ms=*/0, &status);
-    if (ack_result < 0) return false;
-    if (ack_result > 0) return true;
+    if (done_ch.remote_ptr) {
+      if (done_ch.remote_ptr->load(std::memory_order_acquire) >=
+          creq->match_seq) {
+        return true;
+      }
+    } else {
+      uint32_t status = 0;
+      int ack_result = wait_sender_ack(/*timeout_ms=*/0, &status);
+      if (ack_result < 0) return false;
+      if (ack_result > 0) return true;
+    }
 
     IpcCacheWire relay_cache{};
     uint64_t relay_seq = 0;
@@ -756,7 +961,7 @@ bool IpcAdapter::recv_one(IpcRequestSlot* creq) {
                 << std::endl;
       return false;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::this_thread::yield();  // no sleep
   }
   return false;
 }
@@ -772,13 +977,7 @@ void IpcAdapter::complete_task(IpcRequestSlot* req, bool ok) {
 
 void IpcAdapter::send_thread_func() {
   while (!stop_.load(std::memory_order_relaxed)) {
-    {
-      std::unique_lock<std::mutex> lk(cv_mu_);
-      cv_.wait(lk, [&] {
-        return stop_.load(std::memory_order_relaxed) ||
-               pending_send_.load(std::memory_order_relaxed) > 0;
-      });
-    }
+    wait_for_worker_work(stop_, pending_send_, send_cv_mu_, send_cv_);
     if (stop_.load(std::memory_order_relaxed)) break;
 
     unsigned request_id = 0;
@@ -804,13 +1003,7 @@ void IpcAdapter::send_thread_func() {
 
 void IpcAdapter::recv_thread_func() {
   while (!stop_.load(std::memory_order_relaxed)) {
-    {
-      std::unique_lock<std::mutex> lk(cv_mu_);
-      cv_.wait(lk, [&] {
-        return stop_.load(std::memory_order_relaxed) ||
-               pending_recv_.load(std::memory_order_relaxed) > 0;
-      });
-    }
+    wait_for_worker_work(stop_, pending_recv_, recv_cv_mu_, recv_cv_);
     if (stop_.load(std::memory_order_relaxed)) break;
 
     unsigned request_id = 0;

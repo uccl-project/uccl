@@ -22,6 +22,17 @@ namespace Transport {
 
 class Communicator;
 
+// Per-peer-pair POSIX SHM layout: two cache-line-aligned done_seq slots,
+// one per direction (lo→hi and hi→lo), plus an opener_ready handshake flag.
+// The opener (higher rank) writes opener_ready = 1 after mmap; the creator
+// (lower rank) polls it after connect_to returns to ensure both sides are
+// live before activating the done_seq fast path.
+struct IpcChannelPair {
+  alignas(64) std::atomic<uint64_t> done_seq_lo_to_hi{0};
+  alignas(64) std::atomic<uint64_t> done_seq_hi_to_lo{0};
+  alignas(64) std::atomic<uint32_t> opener_ready{0};
+};
+
 class IpcAdapter final : public TransportAdapter {
  public:
   // Lifecycle.
@@ -134,6 +145,16 @@ class IpcAdapter final : public TransportAdapter {
   IpcRequestSlot* resolve_request_slot_const(unsigned request_id) const;
   void release_request_slot(unsigned request_id);
 
+  struct PeerDoneChannel {
+    IpcChannelPair* shm_base = nullptr;
+    std::atomic<uint64_t>* local_ptr =
+        nullptr;  // we write after send completes
+    std::atomic<uint64_t>* remote_ptr =
+        nullptr;  // we read to detect peer send done
+    std::string shm_name;
+    bool is_creator = false;
+  };
+
   // Task queue / worker execution.
   bool enqueue_request(unsigned request_id, IpcReqType type);
   bool send_one(IpcRequestSlot* creq);
@@ -141,6 +162,9 @@ class IpcAdapter final : public TransportAdapter {
   void send_thread_func();
   void recv_thread_func();
   void complete_task(IpcRequestSlot* req, bool ok);
+  bool setup_done_channel(int peer_rank);
+  void teardown_done_channel(int peer_rank);
+  void wait_done_channel_peer_ready(int peer_rank);
 
   jring_t* send_task_ring_;
   jring_t* recv_task_ring_;
@@ -148,12 +172,15 @@ class IpcAdapter final : public TransportAdapter {
   std::atomic<bool> shutdown_started_{false};
   std::thread send_thread_;
   std::thread recv_thread_;
-  std::mutex cv_mu_;
-  std::condition_variable cv_;
+  std::mutex send_cv_mu_;
+  std::condition_variable send_cv_;
+  std::mutex recv_cv_mu_;
+  std::condition_variable recv_cv_;
   std::atomic<int> pending_send_{0};
   std::atomic<int> pending_recv_{0};
   std::vector<gpuStream_t> ipc_streams_;
 
+  std::string ring_namespace_;
   std::mutex match_seq_mu_;
   // Two directed-edge counters per peer:
   // dir=0 -> low-rank to high-rank, dir=1 -> high-rank to low-rank.
@@ -163,6 +190,7 @@ class IpcAdapter final : public TransportAdapter {
 
   std::shared_ptr<ShmRingExchanger> shm_control_;
   Communicator* comm_;
+  std::vector<PeerDoneChannel> done_channels_;
 };
 
 }  // namespace Transport

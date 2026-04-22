@@ -1267,11 +1267,37 @@ unsigned Communicator::irecv(int rank, LocalSlice dst) {
     void* ipc_base_ptr =
         reinterpret_cast<void*>(static_cast<uintptr_t>(local_mr.address));
     size_t ipc_bytes = static_cast<size_t>(local_mr.length);
-    if (!notify_ipc_buffer(rank, dst.mem_id, ipc_base_ptr, ipc_bytes)) {
-      std::cerr << "[WARN] Communicator " << global_rank_
-                << " failed to publish IPC buffer metadata for rank " << rank
-                << ", ipc_id=" << dst.mem_id
-                << "; sender may fallback to ipc_cache handshake" << std::endl;
+    uintptr_t ipc_base_addr = reinterpret_cast<uintptr_t>(ipc_base_ptr);
+    bool should_publish = true;
+    uint64_t publish_binding_version = 0;
+    {
+      std::lock_guard<std::mutex> lk(ipc_gen_mu_);
+      auto& published = local_ipc_published_buffers_[rank][dst.mem_id];
+      if (published.valid && published.base_addr == ipc_base_addr &&
+          published.bytes == ipc_bytes) {
+        should_publish = false;
+        publish_binding_version = published.binding_version;
+      } else {
+        publish_binding_version =
+            ++local_ipc_binding_versions_[rank][dst.mem_id];
+      }
+    }
+    if (should_publish) {
+      if (!notify_ipc_buffer(rank, dst.mem_id, ipc_base_ptr, ipc_bytes,
+                             publish_binding_version)) {
+        std::cerr << "[WARN] Communicator " << global_rank_
+                  << " failed to publish IPC buffer metadata for rank " << rank
+                  << ", ipc_id=" << dst.mem_id
+                  << "; sender may fallback to ipc_cache handshake"
+                  << std::endl;
+      } else {
+        std::lock_guard<std::mutex> lk(ipc_gen_mu_);
+        auto& published = local_ipc_published_buffers_[rank][dst.mem_id];
+        published.base_addr = ipc_base_addr;
+        published.bytes = ipc_bytes;
+        published.binding_version = publish_binding_version;
+        published.valid = true;
+      }
     }
   }
 
@@ -1480,6 +1506,35 @@ void Communicator::release(unsigned const req) {
 }
 
 bool Communicator::wait_finish(unsigned const req) {
+  if (req == 0) return false;
+  if (progress_started_.load(std::memory_order_acquire)) {
+    while (true) {
+      TrackedRequest* slot = resolve_request_slot(req);
+      if (slot == nullptr) return true;
+      if (slot->kind != PeerTransportKind::Ipc) break;
+      auto state = slot->state.load(std::memory_order_acquire);
+      if (state == TrackedRequest::SlotState::InFlight) {
+        std::this_thread::yield();
+        continue;
+      }
+      if (state == TrackedRequest::SlotState::Completed ||
+          state == TrackedRequest::SlotState::Failed) {
+        TrackedRequest snapshot{};
+        if (try_release_request_slot(req, &snapshot)) {
+          bool failed = (state == TrackedRequest::SlotState::Failed);
+          cleanup_tracked_request(snapshot);
+          return !failed;
+        }
+        // CAS lost: another releaser (e.g. destructor cleanup) claimed the
+        // slot. The slot is transitioning to Free — retry until nullptr.
+        std::this_thread::yield();
+        continue;
+      }
+      // Releasing is a transient state between Completed/Failed and Free.
+      // Yield and retry so the slot can finish transitioning.
+      std::this_thread::yield();
+    }
+  }
   return wait_finish(std::vector<unsigned>{req});
 }
 
@@ -1590,13 +1645,7 @@ bool Communicator::notify_ipc_buffer(int remote_rank, uint32_t ipc_id,
   info.binding_version = binding_version;
   info.valid = false;
   if (local_buf != nullptr && len != 0) {
-    int original_device = -1;
-    GPU_RT_CHECK(gpuGetDevice(&original_device));
-    auto restore = UKernel::Transport::finally(
-        [&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
-    GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
-    auto exported =
-        ipc_manager_.create_local_ipc(local_buf, len, local_gpu_idx_);
+    auto exported = export_local_ipc_buffer(local_buf, len);
     if (!exported.valid) return false;
 
     info.handle = exported.handle;
@@ -1613,6 +1662,17 @@ bool Communicator::notify_ipc_buffer(int remote_rank, uint32_t ipc_id,
   auto const versioned_key = ipc_buffer_versioned_key(global_rank_, remote_rank,
                                                       ipc_id, binding_version);
   return exchanger_client_->publish(versioned_key, info);
+}
+
+IPCItem Communicator::export_local_ipc_buffer(void* local_buf, size_t len) {
+  if (local_buf == nullptr || len == 0) return {};
+
+  int original_device = -1;
+  GPU_RT_CHECK(gpuGetDevice(&original_device));
+  auto restore = UKernel::Transport::finally(
+      [&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+  return ipc_manager_.create_local_ipc(local_buf, len, local_gpu_idx_);
 }
 
 bool Communicator::wait_ipc_buffer(int remote_rank, uint32_t ipc_id,
@@ -1636,7 +1696,11 @@ bool Communicator::wait_ipc_buffer(int remote_rank, uint32_t ipc_id,
       state.device_idx = info.device_idx;
       state.valid = info.valid;
       state.ipc_id = ipc_id;
-      return ipc_manager_.register_remote_ipc(remote_rank, state);
+      bool ok = ipc_manager_.register_remote_ipc(remote_rank, state);
+      if (ok) {
+        try_open_remote_ipc_buffer(remote_rank, state);
+      }
+      return ok;
     }
   }
   auto const deadline = std::chrono::steady_clock::now() +
@@ -1667,7 +1731,11 @@ bool Communicator::wait_ipc_buffer(int remote_rank, uint32_t ipc_id,
   state.device_idx = info.device_idx;
   state.valid = info.valid;
   state.ipc_id = ipc_id;
-  return ipc_manager_.register_remote_ipc(remote_rank, state);
+  bool ok = ipc_manager_.register_remote_ipc(remote_rank, state);
+  if (ok && expected_binding_version != 0) {
+    try_open_remote_ipc_buffer(remote_rank, state);
+  }
+  return ok;
 }
 
 bool Communicator::fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
@@ -1690,7 +1758,11 @@ bool Communicator::fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
         return false;
       }
       state.ipc_id = ipc_id;
-      return ipc_manager_.register_remote_ipc(remote_rank, state);
+      bool ok = ipc_manager_.register_remote_ipc(remote_rank, state);
+      if (ok && expected_binding_version != 0) {
+        try_open_remote_ipc_buffer(remote_rank, state);
+      }
+      return ok;
     }
   }
   if (!exchanger_client_->fetch(
@@ -1710,7 +1782,32 @@ bool Communicator::fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
     return false;
   }
   state.ipc_id = ipc_id;
-  return ipc_manager_.register_remote_ipc(remote_rank, state);
+  bool ok = ipc_manager_.register_remote_ipc(remote_rank, state);
+  if (ok && expected_binding_version != 0) {
+    try_open_remote_ipc_buffer(remote_rank, state);
+  }
+  return ok;
+}
+
+void Communicator::try_open_remote_ipc_buffer(int remote_rank,
+                                              IPCItem const& state) {
+  if (!state.valid || state.direct_ptr != nullptr) return;
+
+  int original_device = -1;
+  GPU_RT_CHECK(gpuGetDevice(&original_device));
+  auto restore = UKernel::Transport::finally(
+      [&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
+  GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
+
+  void* direct_ptr = nullptr;
+  gpuError_t open_err = gpuIpcOpenMemHandle(&direct_ptr, state.handle,
+                                            gpuIpcMemLazyEnablePeerAccess);
+  if (open_err != gpuSuccess || direct_ptr == nullptr) return;
+
+  IPCItem opened = state;
+  opened.direct_ptr = direct_ptr;
+  opened.ipc_id = state.ipc_id;
+  (void)ipc_manager_.register_remote_ipc(remote_rank, opened);
 }
 
 bool Communicator::has_fresh_remote_ipc_buffer(
