@@ -207,15 +207,29 @@ build_ep() {
   if [[ "$TARGET" == "roc6" ]]; then
     echo "ERROR: EP requires roc7 (ROCm 7) for HIP code transformation; roc6 is not supported." >&2
     exit 1
-  elif [[ "$TARGET" == "therock" ]]; then
-    echo "Skipping GPU-driven build on therock (no GPU-driven support yet)."
-  elif [[ "$TARGET" == roc[67] || "$TARGET" == cu* ]]; then
+  elif [[ "$TARGET" == roc[67] || "$TARGET" == cu* || "$TARGET" == "therock" ]]; then
     cd ep
     # This may be needed if you traverse through different git commits
     # make clean && rm -r build || true
-    USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} python3 setup.py build
+    extra_env=()
+    if [[ "$TARGET" == "therock" ]]; then
+      # On TheRock, ROCm comes from a pip-installed rocm-sdk wheel; expose its
+      # root to ep/setup.py via HIP_HOME/ROCM_HOME and disable the GPU-driven
+      # (IBGDA-style) RDMA path, which has no AMD equivalent yet. The intranode
+      # kernels (test_intranode.py) don't need GPU-driven RDMA.
+      ROCM_ROOT="$(rocm-sdk path --root)"
+      extra_env+=(
+        "HIP_HOME=${ROCM_ROOT}"
+        "ROCM_HOME=${ROCM_ROOT}"
+        "ROCM_PATH=${ROCM_ROOT}"
+        "UCCL_EP_DISABLE_GPU_DRIVEN=1"
+      )
+    fi
+    env "${extra_env[@]}" \
+      USE_INTEL_RDMA_NIC=${USE_INTEL_RDMA_NIC:-0} \
+      python3 setup.py build
     cd ..
-    echo "[container] Copying GPU-driven .so to uccl/"
+    echo "[container] Copying EP .so to uccl/"
     mkdir -p uccl/lib
     cp ep/build/**/*.so uccl/
   fi
@@ -249,6 +263,20 @@ build_ukernel() {
 
 if [[ "$TARGET" == "therock" ]]; then
   PY_V=$(echo ${PY_VER} | tr -d .)
+
+  # EP needs ibverbs / libnl / libnuma headers and shared libs to compile and
+  # link, even when the GPU-driven RDMA path is disabled (the host RDMA proxy
+  # code still references them). The manylinux base images don't ship these by
+  # default, so install them here. Try dnf first (manylinux_2_28+), fall back
+  # to yum (manylinux2014).
+  if command -v dnf &>/dev/null; then
+    dnf install -y libibverbs-devel libnl3-devel numactl-devel \
+      || echo "[therock] WARN: dnf failed to install RDMA dev packages; EP build may fail to link"
+  elif command -v yum &>/dev/null; then
+    yum install -y libibverbs-devel libnl3-devel numactl-devel \
+      || echo "[therock] WARN: yum failed to install RDMA dev packages; EP build may fail to link"
+  fi
+
   export PATH=/opt/python/cp${PY_V}-cp${PY_V}/bin:$PATH
 
   python3 -m venv /tmp/venv && . /tmp/venv/bin/activate

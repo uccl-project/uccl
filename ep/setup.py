@@ -268,35 +268,41 @@ if __name__ == "__main__":
         device_arch = os.getenv("TORCH_CUDA_ARCH_LIST", default_arch)
         os.environ["TORCH_CUDA_ARCH_LIST"] = device_arch
     else:
-        # AMD GPU Architecture Detection
+        # AMD GPU Architecture Detection.
+        # Priority: PYTORCH_ROCM_ARCH > TORCH_CUDA_ARCH_LIST > rocminfo > fallback.
+        # In TheRock CI / manylinux build containers, rocminfo isn't installed
+        # and there is no GPU on the build host; arch must come from the env.
+        env_arch = os.getenv("PYTORCH_ROCM_ARCH") or os.getenv("TORCH_CUDA_ARCH_LIST")
         detected_amd_arch = None
-        try:
-            rocminfo_output = subprocess.check_output(
-                ["rocminfo"], stderr=subprocess.DEVNULL
-            ).decode("ascii")
-            # Parse rocminfo output to find GPU architecture (e.g., gfx942, gfx90a)
-            for line in rocminfo_output.split("\n"):
-                if "Name:" in line and "gfx" in line.lower():
-                    # Extract architecture like "gfx942" from the line
-                    parts = line.split()
-                    for part in parts:
-                        if part.lower().startswith("gfx"):
-                            detected_amd_arch = part.lower()
+        if env_arch:
+            print(f"Using AMD GPU arch from env: {env_arch}")
+        else:
+            try:
+                rocminfo_output = subprocess.check_output(
+                    ["rocminfo"], stderr=subprocess.DEVNULL
+                ).decode("ascii")
+                # Parse rocminfo output to find GPU architecture (e.g., gfx942, gfx90a)
+                for line in rocminfo_output.split("\n"):
+                    if "Name:" in line and "gfx" in line.lower():
+                        # Extract architecture like "gfx942" from the line
+                        for part in line.split():
+                            if part.lower().startswith("gfx"):
+                                detected_amd_arch = part.lower()
+                                break
+                        if detected_amd_arch:
                             break
-                    if detected_amd_arch:
-                        break
-            if detected_amd_arch:
-                print(f"Detected AMD GPU architecture: {detected_amd_arch}")
-        except Exception as e:
-            print(
-                f"Warning: could not detect AMD GPU info via rocminfo: {e} (perhaps inside a container)"
-            )
+                if detected_amd_arch:
+                    print(f"Detected AMD GPU architecture: {detected_amd_arch}")
+            except Exception as e:
+                print(
+                    f"Warning: could not detect AMD GPU info via rocminfo: {e}"
+                    " (perhaps inside a container)"
+                )
 
-        # Use environment variable, then detected arch, then fallback
-        device_arch = os.getenv(
-            "TORCH_CUDA_ARCH_LIST",
-            detected_amd_arch if detected_amd_arch else "gfx420",
-        )
+        # Fallback: gfx942 (MI300X). Was 'gfx420' upstream which is a typo for
+        # gfx942 and not a real arch — anyone hitting that fallback got an
+        # unloadable binary.
+        device_arch = env_arch or detected_amd_arch or "gfx942"
 
         for arch in device_arch.split(","):
             nvcc_flags.append(f"--offload-arch={arch.lower()}")
@@ -304,6 +310,48 @@ if __name__ == "__main__":
         # Disable SM90 features on AMD
         cxx_flags.append("-DDISABLE_SM90_FEATURES")
         nvcc_flags.append("-DDISABLE_SM90_FEATURES")
+
+        # ROCm root discovery for TheRock-style installs.
+        # When ROCm comes from pip wheels (rocm-sdk), there is no /opt/rocm.
+        # Honor explicit HIP_HOME first, else query rocm-sdk, else /opt/rocm.
+        rocm_home = (
+            os.getenv("HIP_HOME")
+            or os.getenv("ROCM_HOME")
+            or os.getenv("ROCM_PATH")
+        )
+        if not rocm_home:
+            try:
+                rocm_home = (
+                    subprocess.check_output(
+                        ["rocm-sdk", "path", "--root"],
+                        stderr=subprocess.DEVNULL,
+                    )
+                    .decode("ascii")
+                    .strip()
+                )
+                print(f"Discovered ROCm root via rocm-sdk: {rocm_home}")
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                rocm_home = "/opt/rocm"
+
+        if rocm_home and Path(rocm_home).exists():
+            rocm_inc = Path(rocm_home) / "include"
+            rocm_lib = Path(rocm_home) / "lib"
+            if rocm_inc.exists():
+                include_dirs.append(rocm_inc)
+            if rocm_lib.exists():
+                library_dirs.append(rocm_lib)
+            os.environ.setdefault("ROCM_HOME", rocm_home)
+            os.environ.setdefault("ROCM_PATH", rocm_home)
+            os.environ.setdefault("HIP_HOME", rocm_home)
+            os.environ.setdefault("HIP_PATH", rocm_home)
+            print(f"Using ROCm root: {rocm_home}")
+        else:
+            print(
+                f"Warning: ROCm root '{rocm_home}' not found;"
+                " HIP toolchain may not link correctly."
+            )
+
+        os.environ["PYTORCH_ROCM_ARCH"] = device_arch
 
         if int(os.getenv("DISABLE_BUILTIN_SHLF_SYNC", 1)):
             # Disable built-in warp shuffle sync will have better performance in internode_combine kernel
