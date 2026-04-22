@@ -1318,8 +1318,8 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
   Conn* conn = new Conn;
   conn->remote_gpu_bdf_ = remote_gpu_bdf;
 
-  if (same_process || remote_gpu_bdf == gpu_bus_id_) {
-    // Same process or same GPU: use inbox_rings_ directly, no shm attach.
+  if (same_process) {
+    // Same process: use inbox_rings_ directly, no shm attach needed.
     auto it = inbox_rings_.find(remote_gpu_bdf);
     if (it != inbox_rings_.end()) {
       conn->remote_inbox_ = it->second;
