@@ -172,8 +172,21 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   if (is_local) {
     ok = engine->endpoint->connect_local(remote_bdf, conn_id, same_process);
     conn->sock_fd = -1;
+    // Cross-process local: connect_local doesn't establish OOB, so create a
+    // standalone OOB client for notification delivery.
     if (ok && !same_process) {
-      conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
+      auto oob_client = engine->endpoint->get_oob_client();
+      if (!oob_client) {
+        if (!engine->local_oob_client) {
+          engine->local_oob_client = std::make_shared<EpollClient>();
+          engine->local_oob_client->start();
+        }
+        oob_client = engine->local_oob_client;
+      }
+      if (oob_client) {
+        conn->oob_conn_key =
+            oob_client->connect_to_server(std::string(ip_addr), remote_port);
+      }
     }
   } else {
     ok = engine->endpoint->connect(std::string(ip_addr), 0, remote_port,
