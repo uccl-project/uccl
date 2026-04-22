@@ -46,6 +46,26 @@ bash build.sh roc7 ep --install
 python -c "import torch; import uccl.ep"
 ```
 
+## JAX bindings
+
+JAX users can install the companion `uccl_ep_jax` package, which mirrors
+the Primus-Turbo / mori MoE dispatch/combine APIs on top of `uccl.ep`:
+
+```bash
+cd ep/jax_wrapper && pip install -e .
+```
+
+Both JAX execution models are supported and auto-detected:
+
+* Single-process multi-thread (`jax.process_count() == 1`, one thread per
+  GPU), using an in-process rendezvous.
+* Multi-process (`jax.process_count() > 1`), using
+  `jax.distributed.initialize(...)` for OOB exchange -- matching the
+  pattern used by `transformer_engine/jax` and `mori.jax`.
+
+See [`ep/jax_wrapper/README.md`](jax_wrapper/README.md) for the full API
+and runnable examples.
+
 Note: 
 * If you hit some `CUDA error: invalid device function`, it is likely that the GPU arch auto-detection fails. You can forcely specify the arch by setting `TORCH_CUDA_ARCH_LIST=gfx950` (eg, default gfx942 for MI300X/MI325X, gfx950 for MI355X) during compilation. 
 * If you hit any weird compilation errors, try `python setup.py clean`.
