@@ -55,7 +55,12 @@ class RdmaContext {
     if (!ctx_) throw std::runtime_error("Failed to open context");
 
     struct ibv_device_attr dev_attr;
-    assert(ibv_query_device(ctx_.get(), &dev_attr) == 0);
+    int const query_dev_rc = ibv_query_device(ctx_.get(), &dev_attr);
+    if (unlikely(query_dev_rc != 0)) {
+      UCCL_LOG(ERROR) << "ibv_query_device failed, rc=" << query_dev_rc
+                      << ", errno=" << errno << " (" << strerror(errno) << ")";
+      throw std::runtime_error("ibv_query_device failed");
+    }
     vendor_id_ = dev_attr.vendor_id;
 
     struct ibv_pd* pd = ibv_alloc_pd(ctx_.get());
@@ -212,7 +217,13 @@ class RdmaContext {
 
   uint16_t queryLid(int port = 1) const {
     struct ibv_port_attr port_attr;
-    assert(ibv_query_port(ctx_.get(), port, &port_attr) == 0);
+    int const query_port_rc = ibv_query_port(ctx_.get(), port, &port_attr);
+    if (unlikely(query_port_rc != 0)) {
+      UCCL_LOG(ERROR) << "ibv_query_port failed, port=" << port
+                      << ", rc=" << query_port_rc << ", errno=" << errno
+                      << " (" << strerror(errno) << ")";
+      throw std::runtime_error("ibv_query_port failed");
+    }
     return port_attr.lid;
   }
 
