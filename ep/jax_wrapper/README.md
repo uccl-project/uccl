@@ -98,8 +98,8 @@ for t in threads: t.join()
 | `get_buffer()` | Return the `Buffer` registered on the current thread. |
 | `low_latency_dispatch(...)` | Port of `Buffer.low_latency_dispatch` (RDMA/IBGDA path). |
 | `low_latency_combine(...)` | Port of `Buffer.low_latency_combine`. |
-| `moe_dispatch(...)` | Primus-Turbo-compatible intranode high-throughput dispatch. |
-| `moe_combine(...)` | Primus-Turbo-compatible intranode high-throughput combine. |
+| `moe_dispatch(...)` | Primus-Turbo-compatible high-throughput dispatch (intranode when `num_rdma_ranks == 1`, internode when `num_rdma_ranks > 1`). |
+| `moe_combine(...)` | Primus-Turbo-compatible high-throughput combine (intranode or internode; path chosen automatically to match the handle from `moe_dispatch`). |
 | `get_dispatch_config(num_ranks)` | Recommended tuning config for dispatch. |
 | `get_combine_config(num_ranks)` | Recommended tuning config for combine. |
 
@@ -109,10 +109,11 @@ used by TransformerEngine JAX.
 
 ## Limitations / follow-ups
 
-* `moe_dispatch` / `moe_combine` currently target the intranode path
-  only; the internode (RDMA) path is still accessed through
-  `low_latency_dispatch` / `low_latency_combine`.
 * The ops execute eagerly (they block until inputs are ready) similar
   to `mori.jax.ops`. Exposing them as XLA custom-call primitives with
   proper batching / VJP rules (as Primus-Turbo does) is a planned
   follow-up.
+* `moe_dispatch` / `moe_combine` currently take the non-cached path on
+  every call. Caching the layout handle across iterations -- as the
+  PyTorch wrapper does when `handle` is passed back -- will be wired
+  through in a follow-up.
