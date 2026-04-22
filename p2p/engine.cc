@@ -1313,7 +1313,10 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
   constexpr int kMaxRetry = 20;
   constexpr int kRetrySleepMs = 10;
 
-  std::cout << "Connecting to GPU " << remote_gpu_bdf << std::endl;
+  std::cerr << "[connect_local] remote_bdf=" << remote_gpu_bdf
+            << " local_bdf=" << gpu_bus_id_
+            << " same_process=" << same_process
+            << " same_bdf=" << (remote_gpu_bdf == gpu_bus_id_) << std::endl;
 
   Conn* conn = new Conn;
   conn->remote_gpu_bdf_ = remote_gpu_bdf;
@@ -1326,8 +1329,10 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
     }
     conn->shm_attached_ = false;
   } else {
-    // cross GPU, cross process: attach remote inbox via shared memory
+    // cross process: attach remote inbox via shared memory
     conn->remote_inbox_.shm_name = shm_ring_name(gpu_bus_id_, remote_gpu_bdf);
+    std::cerr << "[connect_local] shm attach: " << conn->remote_inbox_.shm_name
+              << std::endl;
 
     jring_t* ring = nullptr;
     for (int attempt = 0; attempt < kMaxRetry; attempt++) {
@@ -1359,12 +1364,15 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
 
   if (!same_process) {
     // Cross-process: send CONNECT handshake via shm ring.
+    std::cerr << "[connect_local] sending CONNECT msg via shm ring, src_bdf="
+              << gpu_bus_id_ << std::endl;
     ShmMsg msg;
     std::strncpy(msg.src_bdf, gpu_bus_id_.c_str(), sizeof(msg.src_bdf) - 1);
     msg.src_bdf[sizeof(msg.src_bdf) - 1] = '\0';
     msg.type = ShmMsgType::CONNECT;
     msg.completion = 0;
     shm_ring_send(conn->remote_inbox_.ring, msg);
+    std::cerr << "[connect_local] CONNECT msg sent" << std::endl;
   }
 
   {
@@ -1379,7 +1387,13 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
 }
 
 bool Endpoint::accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id) {
-  std::cout << "Waiting for local CONNECT..." << std::endl;
+  std::cerr << "[accept_local] waiting for CONNECT, local_bdf=" << gpu_bus_id_
+            << " inbox_rings count=" << inbox_rings_.size() << std::endl;
+  for (auto& [bdf, handle] : inbox_rings_) {
+    std::cerr << "[accept_local]   ring bdf=" << bdf
+              << " is_self=" << (bdf == gpu_bus_id_)
+              << " ring_ptr=" << (void*)handle.ring << std::endl;
+  }
 
   // recv CONNECT
   ShmMsg msg;
@@ -1389,6 +1403,8 @@ bool Endpoint::accept_local(std::string& remote_gpu_bdf, uint64_t& conn_id) {
       if (handle.ring == nullptr) continue;
 
       if (!jring_empty(handle.ring)) {
+        std::cerr << "[accept_local] got CONNECT from ring bdf=" << bdf
+                  << std::endl;
         shm_ring_recv(handle.ring, msg);
         goto got;
       }
@@ -2672,6 +2688,8 @@ void Endpoint::passive_accept_thread_func() {
 }
 
 void Endpoint::passive_accept_local_thread_func() {
+  std::cerr << "[passive_accept_local] thread started, local_bdf="
+            << gpu_bus_id_ << std::endl;
   while (!passive_accept_stop_.load(std::memory_order_acquire)) {
     bool found = false;
     for (auto& [bdf, handle] : inbox_rings_) {

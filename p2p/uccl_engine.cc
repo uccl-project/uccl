@@ -151,6 +151,13 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   std::string local_ip = uccl::get_oob_ip();
   bool is_local = !ipc_disabled() && (std::string(ip_addr) == local_ip);
 
+  std::cerr << "[UCCL connect] ip=" << ip_addr
+            << " remote_gpu=" << (remote_gpu ? remote_gpu : "(null)")
+            << " port=" << remote_port
+            << " same_process=" << same_process
+            << " local_ip=" << local_ip
+            << " is_local=" << is_local << std::endl;
+
   // Resolve remote_gpu: accept either a PCI BDF string (e.g. "0000:4a:00.0")
   // or a CUDA device index string (e.g. "0").
   std::string remote_bdf;
@@ -163,11 +170,11 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
     remote_bdf = uccl::normalize_pci_bus_id(bdf_buf);
   }
 
+  std::cerr << "[UCCL connect] resolved remote_bdf=" << remote_bdf << std::endl;
+
   bool ok;
   if (is_local) {
-    // Intra-node: use IPC via shared memory rings, skip RDMA/TCP.
-    // same_process=true  → direct_addr (no gpuIpcOpenMemHandle)
-    // same_process=false → cross-process IPC (attach remote shm ring)
+    std::cerr << "[UCCL connect] using IPC path (connect_local)" << std::endl;
     ok = engine->endpoint->connect_local(remote_bdf, conn_id, same_process);
     conn->sock_fd = -1;
     // Cross-process local: connect_local doesn't establish OOB, so create a
