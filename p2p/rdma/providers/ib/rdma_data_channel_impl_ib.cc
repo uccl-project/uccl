@@ -65,9 +65,9 @@ inline void IBChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   attr.pkey_index = 0;
   attr.qp_access_flags =
       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_REMOTE_WRITE;
-  int const init_qp_rc = ibv_modify_qp(*qp, &attr,
-                                       IBV_QP_STATE | IBV_QP_PKEY_INDEX |
-                                           IBV_QP_PORT | IBV_QP_ACCESS_FLAGS);
+  int const init_qp_rc = ibv_modify_qp(
+      *qp, &attr,
+      IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS);
   if (unlikely(init_qp_rc != 0)) {
     UCCL_LOG(ERROR) << "ibv_modify_qp INIT failed, rc=" << init_qp_rc
                     << ", errno=" << errno << " (" << strerror(errno) << ")";

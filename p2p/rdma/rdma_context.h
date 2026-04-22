@@ -220,8 +220,8 @@ class RdmaContext {
     int const query_port_rc = ibv_query_port(ctx_.get(), port, &port_attr);
     if (unlikely(query_port_rc != 0)) {
       UCCL_LOG(ERROR) << "ibv_query_port failed, port=" << port
-                      << ", rc=" << query_port_rc << ", errno=" << errno
-                      << " (" << strerror(errno) << ")";
+                      << ", rc=" << query_port_rc << ", errno=" << errno << " ("
+                      << strerror(errno) << ")";
       throw std::runtime_error("ibv_query_port failed");
     }
     return port_attr.lid;

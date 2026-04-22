@@ -66,9 +66,8 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   attr.port_num = kPortNum;
   attr.qkey = QKEY;
   attr.pkey_index = 0;
-  int const init_qp_rc = ibv_modify_qp(*qp, &attr,
-                                       IBV_QP_STATE | IBV_QP_PKEY_INDEX |
-                                           IBV_QP_PORT | IBV_QP_QKEY);
+  int const init_qp_rc = ibv_modify_qp(
+      *qp, &attr, IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_QKEY);
   if (unlikely(init_qp_rc != 0)) {
     UCCL_LOG(ERROR) << "ibv_modify_qp INIT failed, rc=" << init_qp_rc
                     << ", errno=" << errno << " (" << strerror(errno) << ")";
@@ -87,9 +86,8 @@ inline void EFAChannelImpl::initQP(std::shared_ptr<RdmaContext> ctx,
   memset(&attr, 0, sizeof(attr));
   attr.qp_state = IBV_QPS_RTS;
   attr.rnr_retry = RNR_RETRY;
-  int const rts_rc = ibv_modify_qp(*qp, &attr,
-                                   IBV_QP_STATE | IBV_QP_RNR_RETRY |
-                                       IBV_QP_SQ_PSN);
+  int const rts_rc = ibv_modify_qp(
+      *qp, &attr, IBV_QP_STATE | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN);
   if (unlikely(rts_rc != 0)) {
     UCCL_LOG(ERROR) << "ibv_modify_qp RTS failed, rc=" << rts_rc
                     << ", errno=" << errno << " (" << strerror(errno) << ")";
