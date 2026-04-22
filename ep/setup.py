@@ -51,7 +51,7 @@ PROJECT_ROOT = Path(os.path.dirname(__file__)).resolve()
 
 
 class CustomInstall(install):
-    """Custom install command that installs .so file to INSTALL_DIR"""
+    """Custom install command that installs .so + Python files to INSTALL_DIR/ep/"""
 
     def run(self):
         # Run the standard build first
@@ -62,32 +62,41 @@ class CustomInstall(install):
         install_dir = os.getenv(
             "INSTALL_DIR", os.path.join(python_site_packages, "uccl")
         )
-        os.makedirs(install_dir, exist_ok=True)
 
-        # Find the built .so file
+        ep_dir = os.path.join(install_dir, "ep")
+        os.makedirs(ep_dir, exist_ok=True)
+
+        # --- Install Python source files from ep/python/uccl_ep/ ---
+        py_src_dir = PROJECT_ROOT / "python" / "uccl_ep"
+        if py_src_dir.is_dir():
+            for py_file in py_src_dir.glob("*.py"):
+                dest = os.path.join(ep_dir, py_file.name)
+                print(f"Installing {py_file.name} to {ep_dir}")
+                shutil.copy2(py_file, dest)
+
+        # --- Install the native .so ---
         build_lib = self.get_finalized_command("build_ext").build_lib
-        so_files = list(Path(build_lib).glob("ep*.so"))
+        so_files = list(Path(build_lib).glob("ep_cpp*.so"))
 
         if not so_files:
             raise RuntimeError(f"Could not find built .so file in {build_lib}")
 
         so_file = so_files[0]
-        dest_path = os.path.join(install_dir, so_file.name)
+        dest_path = os.path.join(ep_dir, so_file.name)
 
-        # Copy the .so file to the install directory
-        print(f"Installing {so_file.name} to {install_dir}")
+        print(f"Installing {so_file.name} to {ep_dir}")
         shutil.copy2(so_file, dest_path)
 
         if _use_abi3:
-            for old in Path(install_dir).glob("ep.cpython-*.so"):
+            for old in Path(ep_dir).glob("ep_cpp.cpython-*.so"):
                 print(f"Removing stale {old.name}")
                 old.unlink()
         else:
-            for old in Path(install_dir).glob("ep.abi3.so"):
+            for old in Path(ep_dir).glob("ep_cpp.abi3.so"):
                 print(f"Removing stale {old.name}")
                 old.unlink()
 
-        print(f"Installation complete. Module installed as: {dest_path}")
+        print(f"Installation complete. uccl.ep installed to: {ep_dir}")
 
 
 class CustomClean(Command):
@@ -382,7 +391,7 @@ if __name__ == "__main__":
         version="0.0.1" + revision,
         ext_modules=[
             CUDAExtension(
-                name="ep",
+                name="ep_cpp",
                 include_dirs=include_dirs,
                 library_dirs=library_dirs,
                 sources=sources,

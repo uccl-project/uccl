@@ -98,8 +98,8 @@ OBJ_CU  := $(SRC_CU:.cu=.o)
 
 SRC_BIND := src/uccl_ep.cc
 OBJ_BIND := $(SRC_BIND:.cc=.o)
-EP_EXT  := ep$(EXT_SUFFIX)
-PYTARGET      := ep$(EXT_SUFFIX)
+EP_EXT  := ep_cpp$(EXT_SUFFIX)
+PYTARGET      := ep_cpp$(EXT_SUFFIX)
 
 .PHONY: all py clean
 
@@ -133,15 +133,20 @@ py: $(PYTARGET) $(EP_EXT)
 # Repo uccl package dir (so in-repo runs use the same build)
 UCCL_UCCL := $(abspath $(CURDIR)/../uccl/uccl)
 
+EP_PYTHON_DIR := $(CURDIR)/python/uccl_ep
+
 install: $(EP_EXT)
-	@mkdir -p $(INSTALL_DIR)
-	@rm -f $(INSTALL_DIR)/ep.cpython-*.so $(INSTALL_DIR)/ep.abi3.so
-	@cp $(EP_EXT) $(INSTALL_DIR)/
-	@echo "Installed $(EP_EXT) -> $(INSTALL_DIR)/"
+	@mkdir -p $(INSTALL_DIR)/ep
+	@rm -f $(INSTALL_DIR)/ep/ep_cpp.cpython-*.so $(INSTALL_DIR)/ep/ep_cpp.abi3.so
+	@cp $(EP_EXT) $(INSTALL_DIR)/ep/
+	@cp $(EP_PYTHON_DIR)/*.py $(INSTALL_DIR)/ep/
+	@echo "Installed uccl.ep (.so + .py) -> $(INSTALL_DIR)/ep/"
 	@if [ -d "$(UCCL_UCCL)" ]; then \
-		rm -f "$(UCCL_UCCL)"/ep.cpython-*.so "$(UCCL_UCCL)"/ep.abi3.so; \
-		cp $(EP_EXT) "$(UCCL_UCCL)/"; \
-		echo "Installed $(EP_EXT) -> $(UCCL_UCCL)/ (for in-repo runs)"; \
+		mkdir -p "$(UCCL_UCCL)/ep"; \
+		rm -f "$(UCCL_UCCL)/ep"/ep_cpp.cpython-*.so "$(UCCL_UCCL)/ep"/ep_cpp.abi3.so; \
+		cp $(EP_EXT) "$(UCCL_UCCL)/ep/"; \
+		cp $(EP_PYTHON_DIR)/*.py "$(UCCL_UCCL)/ep/"; \
+		echo "Installed uccl.ep (.so + .py) -> $(UCCL_UCCL)/ep/ (for in-repo runs)"; \
 	fi
 
 # Clean all generated files

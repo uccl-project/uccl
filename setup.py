@@ -51,16 +51,21 @@ setup(
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
     url="https://github.com/uccl-project/uccl",
-    packages=find_packages(),
+    packages=find_packages() + ["uccl.ep"],
+    package_dir={
+        "uccl.ep": "ep/python/uccl_ep",
+    },
     ext_modules=[abi3_ext],
     package_data={
         "uccl": [
             "lib/*.so",
             "p2p*.so",
-            "ep*.so",
             "lib/*.a",
             "collective.py",
             "utils.py",
+        ],
+        "uccl.ep": [
+            "ep_cpp*.so",
         ],
     },
     license="Apache-2.0",
