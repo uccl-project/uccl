@@ -164,12 +164,10 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   }
 
   bool ok;
-#if !defined(UCCL_P2P_USE_NCCL)
-  // RDMA: all intra-node connections use IPC via connect_local.
-  // RDMA loopback same-node doesn't work (QP setup assertion), so IPC is the
-  // only viable path. start_passive_accept() in uccl_engine_accept ensures the
-  // remote's shm rings are ready for cross-process attach.
   if (is_local) {
+    // Intra-node: use IPC via shared memory rings, skip RDMA/TCP.
+    // same_process=true  → direct_addr (no gpuIpcOpenMemHandle)
+    // same_process=false → cross-process IPC (attach remote shm ring)
     ok = engine->endpoint->connect_local(remote_bdf, conn_id, same_process);
     conn->sock_fd = -1;
     // Cross-process local: connect_local doesn't establish OOB, so create a
@@ -189,29 +187,16 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
       }
     }
   } else {
+    // Remote inter-node: use RDMA/NCCL network connection.
     ok = engine->endpoint->connect(std::string(ip_addr), 0, remote_port,
                                    conn_id);
     if (ok) {
       conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
+#if !defined(UCCL_P2P_USE_NCCL)
       conn->oob_conn_key = engine->endpoint->get_oob_conn_key(conn_id);
-    }
-  }
-#else
-  // NCCL/TCP: same-process uses IPC, cross-process uses NCCL network.
-  // Cross-process connect_local deadlocks with NCCL because both sides try
-  // to attach each other's shm rings simultaneously (no passive accept).
-  // conn->is_local is still set true below so NIXL can use ipc_bufs for data.
-  if (is_local && same_process) {
-    ok = engine->endpoint->connect_local(remote_bdf, conn_id, true);
-    conn->sock_fd = -1;
-  } else {
-    ok = engine->endpoint->connect(std::string(ip_addr), 0, remote_port,
-                                   conn_id);
-    if (ok) {
-      conn->sock_fd = engine->endpoint->get_sock_fd(conn_id);
-    }
-  }
 #endif
+    }
+  }
 
   if (!ok) {
     delete conn;
@@ -234,6 +219,10 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   // cross-process local peers can connect via connect_local concurrently
   // with the blocking RDMA accept for remote peers.
   engine->endpoint->start_passive_accept();
+#else
+  // NCCL/TCP: only start the local IPC accept thread (NCCL handles
+  // remote accept in the caller's thread).
+  engine->endpoint->start_passive_accept_local();
 #endif
   uccl_conn_t* conn = new uccl_conn;
   std::string ip_addr;
