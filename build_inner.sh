@@ -281,8 +281,13 @@ if [[ "$TARGET" == "therock" ]]; then
 
   python3 -m venv /tmp/venv && . /tmp/venv/bin/activate
   pip3 install --no-cache-dir --upgrade pip
-  pip3 install --no-cache-dir build auditwheel pybind11 nanobind
-  pip3 install --no-cache-dir rocm[libraries,devel] --index-url ${ROCM_IDX_URL}
+  # setuptools: ep/setup.py's first line is `import setuptools`. venv-created
+  #   Python no longer ships setuptools by default since 3.12.
+  # torch: ep/setup.py uses torch.utils.cpp_extension.CUDAExtension to drive
+  #   the HIP build. Install the ROCm-flavored torch from the same index as
+  #   the rocm-sdk wheels so torch.version.hip is set correctly.
+  pip3 install --no-cache-dir build auditwheel pybind11 nanobind setuptools
+  pip3 install --no-cache-dir rocm[libraries,devel] torch --index-url ${ROCM_IDX_URL}
 fi
 
 if [[ "$TARGET" == roc[67] ]]; then
