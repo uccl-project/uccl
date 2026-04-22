@@ -264,17 +264,21 @@ build_ukernel() {
 if [[ "$TARGET" == "therock" ]]; then
   PY_V=$(echo ${PY_VER} | tr -d .)
 
-  # EP needs ibverbs / libnl / libnuma headers and shared libs to compile and
-  # link, even when the GPU-driven RDMA path is disabled (the host RDMA proxy
-  # code still references them). The manylinux base images don't ship these by
-  # default, so install them here. Try dnf first (manylinux_2_28+), fall back
-  # to yum (manylinux2014).
+  # EP's host-side proxy/fifo code (e.g. ep/src/fifo_hip.cpp) needs <numaif.h>
+  # and links against -lnuma. The therock_build_manylinux_x86_64 base image
+  # already ships rdma-core-devel and libnl3-devel (used by the P2P build), but
+  # not numactl-devel, so install just that. Package names are AlmaLinux 8 /
+  # manylinux_2_28; do NOT use Debian-style "libibverbs-devel" here — that
+  # package doesn't exist on RHEL-family distros (ibverbs is in rdma-core-devel).
+  # We deliberately let dnf failures surface (no `|| echo WARN`) so missing
+  # build deps fail fast rather than 3 minutes later in the compiler.
   if command -v dnf &>/dev/null; then
-    dnf install -y libibverbs-devel libnl3-devel numactl-devel \
-      || echo "[therock] WARN: dnf failed to install RDMA dev packages; EP build may fail to link"
+    dnf install -y numactl-devel
   elif command -v yum &>/dev/null; then
-    yum install -y libibverbs-devel libnl3-devel numactl-devel \
-      || echo "[therock] WARN: yum failed to install RDMA dev packages; EP build may fail to link"
+    yum install -y numactl-devel
+  else
+    echo "[therock] ERROR: neither dnf nor yum available; cannot install numactl-devel" >&2
+    exit 1
   fi
 
   export PATH=/opt/python/cp${PY_V}-cp${PY_V}/bin:$PATH
