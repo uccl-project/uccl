@@ -1,29 +1,37 @@
 """JAX bindings for UCCL-EP.
 
-This package mirrors the Primus-Turbo `primus_turbo.jax.lax.moe` API
-(`moe_dispatch` / `moe_combine`) on top of the UCCL-EP C++ runtime
-(`uccl.ep`).
+This package mirrors the Primus-Turbo ``primus_turbo.jax.lax.moe`` API
+(``moe_dispatch`` / ``moe_combine``) on top of the UCCL-EP C++ runtime
+(``uccl.ep``) and adds low-latency RDMA/IBGDA dispatch and combine
+entry points.
 
-Two JAX execution modes are supported:
+All public ops are real XLA custom-call primitives registered through
+``jax.ffi.register_ffi_target``. They:
 
-1. **Single-controller / single-process mode** -- one Python process owns
-   multiple GPUs (`jax.process_count() == 1`,
-   `jax.local_device_count() > 1`). User code typically spawns one Python
-   thread per GPU for true parallelism. Each thread must create its own
-   `Buffer` bound to its local device. An in-process rendezvous handles
-   the out-of-band exchange.
+* lower to ``stablehlo.custom_call``, so they work inside ``jax.jit``,
+  ``shard_map``, etc.;
+* participate in autodiff via ``jax.custom_vjp`` (dispatch's backward
+  is combine, combine's backward is a cached-mode dispatch replay --
+  matching the Primus-Turbo pattern);
+* auto-select the intranode or internode kernel based on
+  ``num_rdma_ranks``.
 
-2. **Multi-controller / multi-process mode** -- every GPU is owned by a
-   dedicated Python process (`jax.process_count() > 1`). The JAX
-   distributed client (`jax.distributed.initialize`) is used for the
-   out-of-band key-value exchange, matching the pattern used by
-   NVIDIA/TransformerEngine and ROCm/mori.
+Three JAX execution layouts are supported, all driven by a single
+:func:`initialize` entry point:
 
-The high-level APIs exposed here (`moe_dispatch`, `moe_combine`,
-`low_latency_dispatch`, `low_latency_combine`) operate eagerly (outside
-of `jax.jit`), similar to how ROCm/mori's JAX ops are invoked today. This
-keeps the integration simple while we do not yet own a dedicated XLA
-custom call / FFI primitive for EP communication.
+1. **Single-process, single-GPU** (``jax.process_count() == 1``,
+   ``jax.local_device_count() == 1``) -- ``local_rank`` defaults to 0.
+   In practice only :func:`low_latency_dispatch` /
+   :func:`low_latency_combine` are meaningful on a single rank.
+2. **Single-process, multi-thread multi-GPU**
+   (``jax.process_count() == 1``, ``jax.local_device_count() > 1``) --
+   one worker thread per GPU. Each thread calls
+   ``initialize(local_rank=i, ...)``.
+3. **Multi-process** (``jax.process_count() > 1``) -- the classic JAX
+   distributed setup, same pattern as NVIDIA/TransformerEngine and
+   ROCm/mori.
+
+The active layout is auto-detected; see :mod:`uccl_ep_jax.mode`.
 """
 
 from .config import Config, set_default_num_sms, get_dispatch_config, get_combine_config
@@ -42,18 +50,13 @@ from .bootstrap import (
     shutdown,
     get_buffer,
     Buffer,
-)
-from .ops import (
-    moe_dispatch as moe_dispatch_eager,
-    moe_combine as moe_combine_eager,
-    low_latency_dispatch as low_latency_dispatch_eager,
-    low_latency_combine as low_latency_combine_eager,
     get_low_latency_rdma_size_hint,
 )
 
-# Primitive + FFI (jit-friendly) public API. These mirror the Primus-Turbo
-# ``primus_turbo.jax.lax.moe`` entry points, including ``custom_vjp``
-# support, and are the recommended path for real JAX training loops.
+# Public XLA custom-call primitives. These are the only user-facing
+# dispatch/combine entry points; they mirror the Primus-Turbo API and
+# are backed by handlers in ``ep/src/uccl_ep.cc`` (``uccl_jax_ffi::``
+# namespace).
 from .lax import (
     moe_dispatch,
     moe_combine,
@@ -83,10 +86,6 @@ __all__ = [
     "moe_combine",
     "low_latency_dispatch",
     "low_latency_combine",
-    "moe_dispatch_eager",
-    "moe_combine_eager",
-    "low_latency_dispatch_eager",
-    "low_latency_combine_eager",
     "get_low_latency_rdma_size_hint",
     "register_ffi_targets",
 ]

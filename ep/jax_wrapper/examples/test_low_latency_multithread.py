@@ -66,19 +66,23 @@ def worker(
             device=device,
         )
 
-        recv_x, recv_count, handle, event, hook = ucx.low_latency_dispatch(
-            x,
-            topk_idx,
-            num_max_dispatch_tokens_per_rank=num_tokens,
-            num_experts=num_experts,
-            use_fp8=False,
-            buffer=buf,
-        )
-        if hook is not None:
-            hook()
-        combined, _, _ = ucx.low_latency_combine(
-            recv_x, topk_idx, topk_weights, handle, buffer=buf
-        )
+        # Primitive API: the XLA custom call is issued synchronously
+        # on the stream XLA picked for ``buf.cuda_device_index``; no
+        # ``event`` / ``hook`` return values are needed.
+        @jax.jit
+        def dispatch_combine(x, topk_idx, topk_weights):
+            recv_x, recv_count, handle = ucx.low_latency_dispatch(
+                x, topk_idx,
+                num_max_dispatch_tokens_per_rank=num_tokens,
+                num_experts=num_experts,
+                num_ranks=world_size,
+                use_fp8=False,
+            )
+            return ucx.low_latency_combine(
+                recv_x, topk_idx, topk_weights, handle,
+            )
+
+        combined = dispatch_combine(x, topk_idx, topk_weights)
         combined.block_until_ready()
         print(
             f"[rank {local_rank}] dispatch/combine OK, shape={combined.shape}",

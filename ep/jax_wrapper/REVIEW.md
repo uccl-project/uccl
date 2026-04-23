@@ -6,18 +6,23 @@ file paths are relative to the repository root.
 
 ## TL;DR
 
-| Commit | Purpose | Lines |
-| --- | --- | --- |
-| `18d2362b` | Initial eager API + bootstrap + mode detection | ~1.6k |
-| `41c9d5c4` | Eager `moe_dispatch` / `moe_combine` internode path | ~400 |
-| `6eb63dce` | C++ FFI bridge + primitive + `custom_vjp` (intranode) | ~700 |
-| `f770ad7d` | Primitive internode path (`num_rdma_ranks > 1`) | ~690 |
-| `18f3713a` | Cached-mode dispatch -- real `moe_combine` backward | ~470 |
-| `bb1769da` | Primitive safety for single-process multi-thread + multi-process | ~280 |
-| `4e4227c9` | Primitive also supports single-process single-GPU | ~140 |
+The PR ships a JAX-native wrapper around UCCL-EP, structured as a
+single user-facing API backed by XLA custom-call primitives.
+Development history (commits on this branch):
 
-Total: 23 files changed, +5188 lines. All 17 pure-Python tests pass
-on a CPU-only box with a stubbed `uccl.ep`.
+| Commit | Purpose |
+| --- | --- |
+| `18d2362b` | Initial bootstrap + mode detection (+ eager prototypes, later removed) |
+| `41c9d5c4` | Eager `moe_dispatch/combine` internode prototype (later removed) |
+| `6eb63dce` | C++ FFI bridge + primitive + `custom_vjp` (intranode) |
+| `f770ad7d` | Primitive internode path (`num_rdma_ranks > 1`) |
+| `18f3713a` | Cached-mode dispatch -- real `moe_combine` backward |
+| `bb1769da` | Primitive safety for single-process multi-thread + multi-process |
+| `4e4227c9` | Primitive also supports single-process single-GPU |
+| `ac902f78` | Initial `REVIEW.md` |
+| (this) | Remove the eager prototypes: only the primitive API is shipped |
+
+All tests pass on a CPU-only box with a stubbed `uccl.ep`.
 
 ## 1. Scope and execution modes
 
@@ -58,7 +63,6 @@ ep/
         ├── kv_store.py                ## in-process KV store for single-proc rendezvous
         ├── bootstrap.py               ## initialize() / shutdown() / Buffer
         ├── config.py                  ## Config + recommended tuning tables
-        ├── ops.py                     ## eager API (*_eager), kept for debugging
         ├── primitive/
         │   ├── __init__.py            ## re-exports
         │   ├── registry.py            ## register_ffi_targets()
@@ -72,7 +76,10 @@ ep/
 
 ## 3. Public API
 
-### Primitive API (recommended, jit-friendly)
+All dispatch/combine entry points are real XLA custom-call
+primitives. They lower to `stablehlo.custom_call`, work inside
+`jax.jit` and `shard_map`, and participate in autodiff via
+`jax.custom_vjp`.
 
 ```python
 import uccl_ep_jax as ux
@@ -81,31 +88,29 @@ import uccl_ep_jax as ux
 buf = ux.initialize(num_rdma_bytes=..., low_latency_mode=True,
                     num_experts=..., local_rank=...)
 
-# High-throughput intranode + internode, auto-selected.
-recv_x, recv_topk_idx, recv_topk_weights, handle = ux.moe_dispatch(
-    x, topk_idx, topk_weights,
-    num_experts=..., num_ranks=..., config=ux.get_dispatch_config(num_ranks))
-combined = ux.moe_combine(recv_x, handle, topk_weights=recv_topk_weights,
+@jax.jit
+def step(x, topk_idx, topk_weights):
+    # High-throughput intranode + internode, auto-selected.
+    recv_x, recv_topk_idx, recv_topk_weights, handle = ux.moe_dispatch(
+        x, topk_idx, topk_weights,
+        num_experts=..., num_ranks=...,
+        config=ux.get_dispatch_config(num_ranks))
+    return ux.moe_combine(recv_x, handle,
+                          topk_weights=recv_topk_weights,
                           num_ranks=num_ranks)
 
+combined = step(x, topk_idx, topk_weights)
+
 # Low-latency RDMA/IBGDA path (works on 1 GPU too).
-recv_x, recv_count, handle = ux.low_latency_dispatch(
-    x, topk_idx, num_max_dispatch_tokens_per_rank=..., num_experts=...,
-    num_ranks=..., use_fp8=False)
-combined, _, _ = ux.low_latency_combine(recv_x, topk_idx, topk_weights, handle)
+@jax.jit
+def ll_step(x, topk_idx, topk_weights):
+    recv_x, recv_count, handle = ux.low_latency_dispatch(
+        x, topk_idx, num_max_dispatch_tokens_per_rank=...,
+        num_experts=..., num_ranks=..., use_fp8=False)
+    return ux.low_latency_combine(recv_x, topk_idx, topk_weights, handle)
 
 ux.shutdown(buf)
 ```
-
-All of the above can appear inside `jax.jit`, `shard_map`, and
-`jax.vjp` / `jax.grad`.
-
-### Eager API (debug / bootstrap validation)
-
-Same names with `_eager` suffix
-(`moe_dispatch_eager`, `low_latency_dispatch_eager`, etc). Reads raw
-device pointers via `unsafe_buffer_pointer`; does **not** work
-inside `jax.jit`.
 
 ## 4. C++ FFI bridge (`ep/src/uccl_ep.cc`)
 
@@ -310,9 +315,6 @@ Current state: **17 passed**.
 - **GPU integration tests** live in `ep/jax_wrapper/examples/` and
   require a CUDA/ROCm `uccl.ep` build. They have not been exercised
   in this branch.
-- **The eager API is kept for debugging** (`moe_dispatch_eager`,
-  etc). It is *not* jit-friendly (uses `unsafe_buffer_pointer()`); in
-  production you want the primitive API.
 
 ## 11. Review checklist
 

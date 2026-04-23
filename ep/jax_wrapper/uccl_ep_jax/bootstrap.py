@@ -61,6 +61,23 @@ def _require_uccl_ep():
     return _uccl_ep
 
 
+def get_low_latency_rdma_size_hint(
+    num_max_dispatch_tokens_per_rank: int,
+    hidden: int,
+    num_ranks: int,
+    num_experts: int,
+) -> int:
+    """Return the RDMA scratch buffer size to pass to :func:`initialize`.
+
+    Mirror of ``uccl.ep.get_low_latency_rdma_size_hint``.
+    """
+    return int(
+        _require_uccl_ep().get_low_latency_rdma_size_hint(
+            num_max_dispatch_tokens_per_rank, hidden, num_ranks, num_experts
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # Per-thread/process Buffer registry
 # ---------------------------------------------------------------------------

@@ -48,12 +48,21 @@ buffer = ucx.initialize(
     num_experts=num_experts,
 )
 
-recv_x, recv_count, handle, event, hook = ucx.low_latency_dispatch(
-    x, topk_idx, num_tokens, num_experts, use_fp8=True,
-)
-combined_x, event, hook = ucx.low_latency_combine(
-    recv_x[0], topk_idx, topk_weights, handle,
-)
+@jax.jit
+def step(x, topk_idx, topk_weights):
+    recv_x, recv_count, handle = ucx.low_latency_dispatch(
+        x, topk_idx,
+        num_max_dispatch_tokens_per_rank=num_tokens,
+        num_experts=num_experts,
+        num_ranks=jax.device_count(),
+        use_fp8=True,
+    )
+    # When ``use_fp8=True`` the receive side returns a (values, scales)
+    # tuple; pick the values for the combine:
+    recv_values = recv_x[0] if isinstance(recv_x, tuple) else recv_x
+    return ucx.low_latency_combine(recv_values, topk_idx, topk_weights, handle)
+
+combined_x = step(x, topk_idx, topk_weights)
 
 ucx.shutdown()
 ```
@@ -91,15 +100,11 @@ for t in threads: t.join()
 
 ## API
 
-Two API flavours are shipped. The primitive API is the recommended one:
-
-### Primitive / XLA-custom-call API (jit-friendly)
-
-These are exported from the top-level module and are the default names
-(``uccl_ep_jax.moe_dispatch`` etc). They are lowered to
-``stablehlo.custom_call`` and therefore can be used inside ``jax.jit``,
-``shard_map``, and participate in ``jax.vjp`` / ``jax.grad`` via
-``jax.custom_vjp`` — matching the Primus-Turbo pattern.
+All public dispatch/combine entry points are real XLA custom-call
+primitives. They are lowered to ``stablehlo.custom_call`` and can be
+used inside ``jax.jit``, ``shard_map``, and participate in
+``jax.vjp`` / ``jax.grad`` via ``jax.custom_vjp`` — matching the
+Primus-Turbo pattern.
 
 | Function | Notes |
 | --- | --- |
@@ -108,20 +113,6 @@ These are exported from the top-level module and are the default names
 | `low_latency_dispatch(...)` | Low-latency RDMA/IBGDA dispatch as XLA custom call. |
 | `low_latency_combine(...)` | Low-latency RDMA/IBGDA combine as XLA custom call. |
 | `register_ffi_targets()` | Idempotent; called automatically on first use. |
-
-### Eager API (for bootstrapping / debugging)
-
-Same entry points with the ``_eager`` suffix
-(``uccl_ep_jax.moe_dispatch_eager`` etc). They skip ``jit`` and read raw
-device pointers via ``unsafe_buffer_pointer``. Useful while wiring up
-bootstrap, or when you need the cached-handle / internode throughput
-paths that the primitive layer does not yet cover.
-
-| Function | Notes |
-| --- | --- |
-| `moe_dispatch_eager(...)` | Intranode + internode; selected by `num_rdma_ranks`. |
-| `moe_combine_eager(...)` | Intranode + internode. |
-| `low_latency_dispatch_eager(...)` / `low_latency_combine_eager(...)` | Return `(event, hook)` for fine-grained overlap. |
 
 ### Shared infrastructure
 
