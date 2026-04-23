@@ -47,7 +47,7 @@ ep/
 ├── README.md                          ## new section pointing to the package
 ├── include/uccl_ep.hpp                ## NEW: Buffer class declaration (signatures only)
 ├── include/uccl_ep_jax.hpp            ## shared bridge interface (types + prototypes)
-├── src/uccl_ep.cc                     ## out-of-line Buffer method bodies + install_jax_buffer_bridge
+├── src/uccl_ep.cc                     ## out-of-line Buffer method bodies + NB_MODULE(ep, m) top-level
 ├── src/uccl_ep_jax.cc                 ## all JAX FFI handlers, registry, nanobind bindings
 └── jax_wrapper/
     ├── README.md                      ## user-facing docs
@@ -120,26 +120,29 @@ ux.shutdown(buf)
 ## 4. C++ FFI bridge
 
 The JAX-specific C++ code lives in its own translation unit,
-`ep/src/uccl_ep_jax.cc`, and is exposed to `ep/src/uccl_ep.cc` via
-`ep/include/uccl_ep_jax.hpp`. The two files are loosely coupled
-through a small C-style vtable (`uccl_jax_ffi::BufferBridge`):
+`ep/src/uccl_ep_jax.cc`, and is exposed to `ep/src/uccl_ep.cc`
+through a single entry point declared in
+`ep/include/uccl_ep_jax.hpp`:
 
-* `uccl_ep.cc` defines nine `bridge_*` trampolines (one per `Buffer`
-  method used by the FFI handlers) inside an anonymous namespace.
-  `install_jax_buffer_bridge()` hands them to `uccl_ep_jax.cc` and is
-  called at the top of `NB_MODULE(ep, m)`.
-* `uccl_ep_jax.cc` owns the per-device `Buffer*` registry, the eight
-  XLA legacy custom-call handlers, and the `register_jax_bindings(m)`
-  entry that attaches `register_jax_ffi_buffer` /
-  `unregister_jax_ffi_buffer` / `get_jax_ffi_targets` to the module.
-  It only ever touches `Buffer*` as `OpaqueBuffer = void*` and
-  dispatches through the bridge.
+```cpp
+namespace uccl_jax_ffi {
+  void register_jax_bindings(nanobind::module_& m);
+}
+```
 
-Since the `Buffer` class is now declared in a shared header
-(`ep/include/uccl_ep.hpp`, with out-of-line method definitions in
-`uccl_ep.cc`), the trampoline bridge is no longer *required* for
-compile-time decoupling; it is kept for ABI stability between the
-two translation units and can be dropped in a follow-up if desired.
+`uccl_ep_jax.cc` includes both `uccl_ep_jax.hpp` (for its own
+interface) and `uccl_ep.hpp` (for the `Buffer` class declaration),
+so the FFI handlers call `Buffer` methods directly -- no trampoline
+vtable, no opaque `void*` pointer. `uccl_ep.cc` calls
+`uccl_jax_ffi::register_jax_bindings(m)` exactly once inside
+`NB_MODULE(ep, m)`.
+
+`uccl_ep_jax.cc` owns:
+* the eight XLA legacy custom-call handlers,
+* the per-device `Buffer*` registry
+  (`std::unordered_map<int, Buffer*>`),
+* the nanobind bindings for `register_jax_ffi_buffer` /
+  `unregister_jax_ffi_buffer` / `get_jax_ffi_targets`.
 
 The eight XLA legacy custom-call handlers (ABI:
 `void(cudaStream_t, void**, const char* opaque, size_t opaque_len, XlaCustomCallStatus*)`):
@@ -160,12 +163,12 @@ Each handler (all in `ep/src/uccl_ep_jax.cc`):
 1. Casts the opaque byte blob to a per-op `struct` with int32 fields
    only (so Python can `struct.pack("i"*N, ...)` a byte-identical
    layout).
-2. Resolves the active `OpaqueBuffer` (== `Buffer*`) via
-   `cudaGetDevice()` and a process-global `unordered_map<int, void*>`
-   populated by the Python bootstrap.
-3. Dispatches to the existing `Buffer` methods through the
-   `BufferBridge` vtable with raw pointers taken straight from
-   `buffers[]`.
+2. Resolves the active `Buffer*` via `cudaGetDevice()` and a
+   process-global `unordered_map<int, Buffer*>` populated by the
+   Python bootstrap.
+3. Calls the appropriate `Buffer` method directly (now possible
+   because `Buffer` is declared in `ep/include/uccl_ep.hpp`) with
+   raw pointers taken straight from `buffers[]`.
 
 New Python bindings (defined in `uccl_ep_jax.cc`, attached to the
 module via `register_jax_bindings(m)` called from `uccl_ep.cc`):
@@ -347,11 +350,10 @@ Current state: **17 passed**.
 
 Focus areas, in rough priority order:
 
-1. `ep/include/uccl_ep_jax.hpp` + `ep/src/uccl_ep_jax.cc` -- the
-   eight FFI handlers and the bridge interface. In particular:
-   - `BufferBridge` signatures line up with the `bridge_*`
-     trampolines in `uccl_ep.cc` and with the `Buffer::*` methods
-     they forward to.
+1. `ep/src/uccl_ep_jax.cc` -- the eight FFI handlers. In particular:
+   - Each handler calls the right `Buffer` method and passes arguments
+     in the correct order. `Buffer` is included from
+     `ep/include/uccl_ep.hpp`; the method signatures are defined there.
    - Opaque struct layouts line up with the Python `pack_ints32`
      calls (search `pack_ints32(` in
      `ep/jax_wrapper/uccl_ep_jax/primitive/_calls.py` and diff field
@@ -359,17 +361,21 @@ Focus areas, in rough priority order:
    - Buffer-index order in each handler (`buffers[0]`, `buffers[1]`,
      ...) matches the order of operands + outputs declared in
      `_calls.py`.
-2. `ep/src/uccl_ep.cc`:
-   - `install_jax_buffer_bridge()` populates every
-     `BufferBridge` slot and is called exactly once in
-     `NB_MODULE(ep, m)` before `uccl_jax_ffi::register_jax_bindings(m)`.
-   - `PyGILState_Check()` guard in `internode_prepare` is correct.
-3. `ep/jax_wrapper/uccl_ep_jax/lax/moe.py` -- the `custom_vjp` logic
+2. `ep/include/uccl_ep.hpp` -- the `Buffer` class declaration:
+   - Matches the out-of-line definitions in `ep/src/uccl_ep.cc`.
+   - Default argument values are on declarations (header), not on
+     out-of-line definitions (`.cc`).
+3. `ep/src/uccl_ep.cc`:
+   - `NB_MODULE(ep, m)` calls `uccl_jax_ffi::register_jax_bindings(m)`
+     exactly once.
+   - `PyGILState_Check()` guard in `Buffer::internode_prepare` is
+     correct.
+4. `ep/jax_wrapper/uccl_ep_jax/lax/moe.py` -- the `custom_vjp` logic
    (handle arity, cached-replay in `_moe_combine_bwd`, residuals).
-4. `ep/jax_wrapper/uccl_ep_jax/bootstrap.py` -- CUDA-ordinal capture
+5. `ep/jax_wrapper/uccl_ep_jax/bootstrap.py` -- CUDA-ordinal capture
    and registration / deregistration paths.
-5. `ep/jax_wrapper/uccl_ep_jax/primitive/_calls.py` -- output shape
+6. `ep/jax_wrapper/uccl_ep_jax/primitive/_calls.py` -- output shape
    declarations (especially the internode dispatch's 17 outputs and
    their shape expressions).
-6. Everything else (mode detection, KV store) is straightforward
+7. Everything else (mode detection, KV store) is straightforward
    plumbing.

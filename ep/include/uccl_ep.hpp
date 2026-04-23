@@ -2,11 +2,10 @@
 // uccl.ep main class declaration.
 //
 // The ``Buffer`` class declaration lives here (interface only, no method
-// bodies).  Implementation is in ``ep/src/uccl_ep.cc``; the JAX FFI bridge
-// (``ep/src/uccl_ep_jax.cc``) and potentially other translation units can
-// now refer to ``Buffer`` directly instead of going through the
-// ``BufferBridge`` vtable that was needed while ``Buffer`` lived inside the
-// anonymous namespace of ``uccl_ep.cc``.
+// bodies).  Implementations are in ``ep/src/uccl_ep.cc``.  Other
+// translation units -- notably ``ep/src/uccl_ep_jax.cc`` which hosts the
+// JAX FFI handlers -- include this header and call ``Buffer`` methods
+// directly.
 // ============================================================================
 
 #pragma once

@@ -3,51 +3,35 @@
 // ----------------------------------------------------------------------------
 // This file contains every JAX-specific C++ component of the ``uccl.ep``
 // module. It is compiled as a separate translation unit from
-// ``uccl_ep.cc`` (which owns the ``Buffer`` class and the top-level
-// ``NB_MODULE`` definition). uccl_ep.cc reaches this file through two
-// hooks declared in ``ep/include/uccl_ep_jax.hpp``:
+// ``uccl_ep.cc`` (which owns the ``NB_MODULE(ep, m)`` top-level
+// definition and the out-of-line ``Buffer`` method bodies).
 //
-//   * ``uccl_jax_ffi::install_buffer_bridge(...)``: called once during
-//     ``NB_MODULE(ep, m)`` with a vtable of trampolines that forward to
-//     ``uccl::Buffer`` methods.
+// ``Buffer`` is declared in ``ep/include/uccl_ep.hpp``; both TUs
+// include it and the FFI handlers call ``Buffer`` methods directly.
+//
+// uccl_ep.cc reaches this file through one hook declared in
+// ``ep/include/uccl_ep_jax.hpp``:
+//
 //   * ``uccl_jax_ffi::register_jax_bindings(m)``: called once during
 //     ``NB_MODULE(ep, m)`` to install ``register_jax_ffi_buffer`` /
 //     ``unregister_jax_ffi_buffer`` / ``get_jax_ffi_targets`` onto the
 //     module.
-//
-// The file has no dependency on the ``Buffer`` class definition -- all
-// calls go through ``get_buffer_bridge()``. This keeps the translation
-// units loosely coupled, matching the user-facing split in
-// ``uccl_ep_jax``.
 // ============================================================================
 
 #include "uccl_ep_jax.hpp"
 
 #include <mutex>
+#include <optional>
 #include <unordered_map>
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 
+#include "uccl_ep.hpp"
+
 namespace uccl_jax_ffi {
 
 namespace nb = nanobind;
-
-// ---------------------------------------------------------------------------
-// Bridge slot (populated from uccl_ep.cc)
-// ---------------------------------------------------------------------------
-
-namespace {
-BufferBridge g_bridge{};
-bool g_bridge_installed = false;
-}  // namespace
-
-void install_buffer_bridge(BufferBridge const& bridge) {
-  g_bridge = bridge;
-  g_bridge_installed = true;
-}
-
-BufferBridge const& get_buffer_bridge() { return g_bridge; }
 
 // ---------------------------------------------------------------------------
 // Per-device Buffer registry
@@ -55,17 +39,17 @@ BufferBridge const& get_buffer_bridge() { return g_bridge; }
 
 namespace {
 std::mutex g_jax_ffi_mu;
-std::unordered_map<int, OpaqueBuffer> g_jax_ffi_buffers;
+std::unordered_map<int, Buffer*> g_jax_ffi_buffers;
 }  // namespace
 
-OpaqueBuffer get_buffer_for_device(int device_index) {
+Buffer* get_buffer_for_device(int device_index) {
   std::lock_guard<std::mutex> lk(g_jax_ffi_mu);
   auto it = g_jax_ffi_buffers.find(device_index);
   if (it == g_jax_ffi_buffers.end()) return nullptr;
   return it->second;
 }
 
-void register_buffer_for_device(int device_index, OpaqueBuffer buffer) {
+void register_buffer_for_device(int device_index, Buffer* buffer) {
   std::lock_guard<std::mutex> lk(g_jax_ffi_mu);
   g_jax_ffi_buffers[device_index] = buffer;
 }
@@ -75,10 +59,10 @@ void unregister_buffer_for_device(int device_index) {
   g_jax_ffi_buffers.erase(device_index);
 }
 
-static OpaqueBuffer current_buffer_or_die() {
+static Buffer* current_buffer_or_die() {
   int dev = 0;
   cudaError_t err = cudaGetDevice(&dev);
-  if (err != cudaSuccess || !g_bridge_installed) return nullptr;
+  if (err != cudaSuccess) return nullptr;
   return get_buffer_for_device(dev);
 }
 
@@ -127,8 +111,8 @@ extern "C" void uccl_moe_low_latency_dispatch_ffi(
   void* recv_x_scales_storage = buffers[6];
 
   auto compute_stream_ptr = reinterpret_cast<std::uintptr_t>(stream);
-  g_bridge.low_latency_dispatch(
-      buf, reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
+  buf->low_latency_dispatch(
+      reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
       reinterpret_cast<std::uintptr_t>(topk_idx), p.num_tokens, p.num_topk,
       reinterpret_cast<std::uintptr_t>(recv_x),
       p.use_fp8 ? reinterpret_cast<std::uintptr_t>(recv_x_scales_storage) : 0,
@@ -178,8 +162,8 @@ extern "C" void uccl_moe_low_latency_combine_ffi(
   void* combined_x = buffers[5];
 
   auto compute_stream_ptr = reinterpret_cast<std::uintptr_t>(stream);
-  g_bridge.low_latency_combine(
-      buf, reinterpret_cast<std::uintptr_t>(x), p.x_dim0, p.x_dim1, p.x_dim2,
+  buf->low_latency_combine(
+      reinterpret_cast<std::uintptr_t>(x), p.x_dim0, p.x_dim1, p.x_dim2,
       reinterpret_cast<std::uintptr_t>(topk_idx), p.num_tokens, p.num_topk,
       reinterpret_cast<std::uintptr_t>(topk_weights),
       reinterpret_cast<std::uintptr_t>(src_info), p.src_info_dim0,
@@ -240,30 +224,33 @@ extern "C" void uccl_moe_dispatch_ffi(
   void* send_head = buffers[15];
 
   auto compute_stream_ptr = reinterpret_cast<std::uintptr_t>(stream);
+  uccl::Config config(p.num_sms, p.num_max_nvl_chunked_send_tokens,
+                      p.num_max_nvl_chunked_recv_tokens,
+                      p.num_max_rdma_chunked_send_tokens,
+                      p.num_max_rdma_chunked_recv_tokens);
+  std::optional<EventHandle> prev;
 
   // 1) layout
-  g_bridge.get_dispatch_layout(
-      buf, reinterpret_cast<std::uintptr_t>(topk_idx), p.num_tokens, p.num_topk,
+  buf->get_dispatch_layout(
+      reinterpret_cast<std::uintptr_t>(topk_idx), p.num_tokens, p.num_topk,
       p.num_experts, reinterpret_cast<std::uintptr_t>(num_tokens_per_rank), 0,
       reinterpret_cast<std::uintptr_t>(num_tokens_per_expert),
-      reinterpret_cast<std::uintptr_t>(is_token_in_rank),
-      /*async=*/false, /*allocate_on_comm_stream=*/false, compute_stream_ptr);
+      reinterpret_cast<std::uintptr_t>(is_token_in_rank), prev, false, false,
+      compute_stream_ptr);
 
   // 2) intranode_prepare (num_worst_tokens > 0 => no host sync)
-  g_bridge.intranode_prepare(
-      buf, reinterpret_cast<std::uintptr_t>(num_tokens_per_rank),
+  buf->intranode_prepare(
+      reinterpret_cast<std::uintptr_t>(num_tokens_per_rank),
       reinterpret_cast<std::uintptr_t>(is_token_in_rank),
       reinterpret_cast<std::uintptr_t>(num_tokens_per_expert), p.num_tokens,
       p.num_experts, reinterpret_cast<std::uintptr_t>(rank_prefix_matrix),
       reinterpret_cast<std::uintptr_t>(channel_prefix_matrix),
-      p.expert_alignment, p.num_worst_tokens, p.num_sms,
-      p.num_max_nvl_chunked_send_tokens, p.num_max_nvl_chunked_recv_tokens,
-      p.num_max_rdma_chunked_send_tokens, p.num_max_rdma_chunked_recv_tokens,
-      /*async=*/false, /*allocate_on_comm_stream=*/false, compute_stream_ptr);
+      p.expert_alignment, p.num_worst_tokens, config, prev, false, false,
+      compute_stream_ptr);
 
   // 3) intranode_dispatch
-  g_bridge.intranode_dispatch(
-      buf, reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
+  buf->intranode_dispatch(
+      reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
       p.x_element_size,
       p.has_x_scales ? reinterpret_cast<std::uintptr_t>(x_scales) : 0,
       p.num_scales, p.scale_token_stride, p.scale_hidden_stride,
@@ -272,17 +259,15 @@ extern "C" void uccl_moe_dispatch_ffi(
       reinterpret_cast<std::uintptr_t>(is_token_in_rank),
       reinterpret_cast<std::uintptr_t>(rank_prefix_matrix),
       reinterpret_cast<std::uintptr_t>(channel_prefix_matrix), p.num_experts,
-      p.num_worst_tokens, /*cached_mode=*/false, p.num_sms,
-      p.num_max_nvl_chunked_send_tokens, p.num_max_nvl_chunked_recv_tokens,
-      p.num_max_rdma_chunked_send_tokens, p.num_max_rdma_chunked_recv_tokens,
-      p.num_worst_tokens, reinterpret_cast<std::uintptr_t>(recv_x),
+      p.num_worst_tokens, /*cached_mode=*/false, config, p.num_worst_tokens,
+      reinterpret_cast<std::uintptr_t>(recv_x),
       p.has_x_scales ? reinterpret_cast<std::uintptr_t>(recv_x_scales) : 0,
       reinterpret_cast<std::uintptr_t>(recv_topk_idx),
       reinterpret_cast<std::uintptr_t>(recv_topk_weights),
       reinterpret_cast<std::uintptr_t>(recv_channel_prefix_matrix),
       reinterpret_cast<std::uintptr_t>(recv_src_idx),
-      reinterpret_cast<std::uintptr_t>(send_head),
-      /*async=*/false, /*allocate_on_comm_stream=*/false, compute_stream_ptr);
+      reinterpret_cast<std::uintptr_t>(send_head), prev, false, false,
+      compute_stream_ptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -324,8 +309,14 @@ extern "C" void uccl_moe_cached_dispatch_ffi(
   void* recv_x_scales = buffers[9];
 
   auto compute_stream_ptr = reinterpret_cast<std::uintptr_t>(stream);
-  g_bridge.intranode_dispatch(
-      buf, reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
+  uccl::Config config(p.num_sms, p.num_max_nvl_chunked_send_tokens,
+                      p.num_max_nvl_chunked_recv_tokens,
+                      p.num_max_rdma_chunked_send_tokens,
+                      p.num_max_rdma_chunked_recv_tokens);
+  std::optional<EventHandle> prev;
+
+  buf->intranode_dispatch(
+      reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
       p.x_element_size,
       p.has_x_scales ? reinterpret_cast<std::uintptr_t>(x_scales) : 0,
       p.num_scales, p.scale_token_stride, p.scale_hidden_stride,
@@ -333,17 +324,14 @@ extern "C" void uccl_moe_cached_dispatch_ffi(
       reinterpret_cast<std::uintptr_t>(is_token_in_rank),
       reinterpret_cast<std::uintptr_t>(rank_prefix_matrix),
       reinterpret_cast<std::uintptr_t>(channel_prefix_matrix),
-      /*num_experts=*/0, /*num_worst_tokens=*/0, /*cached_mode=*/true,
-      p.num_sms, p.num_max_nvl_chunked_send_tokens,
-      p.num_max_nvl_chunked_recv_tokens, p.num_max_rdma_chunked_send_tokens,
-      p.num_max_rdma_chunked_recv_tokens, p.num_recv_tokens,
-      reinterpret_cast<std::uintptr_t>(recv_x),
+      /*num_experts=*/0, /*num_worst_tokens=*/0, /*cached_mode=*/true, config,
+      p.num_recv_tokens, reinterpret_cast<std::uintptr_t>(recv_x),
       p.has_x_scales ? reinterpret_cast<std::uintptr_t>(recv_x_scales) : 0,
       /*recv_topk_idx_ptr=*/0, /*recv_topk_weights_ptr=*/0,
       reinterpret_cast<std::uintptr_t>(recv_channel_prefix_matrix),
       reinterpret_cast<std::uintptr_t>(recv_src_idx),
-      reinterpret_cast<std::uintptr_t>(send_head),
-      /*async=*/false, /*allocate_on_comm_stream=*/false, compute_stream_ptr);
+      reinterpret_cast<std::uintptr_t>(send_head), prev, false, false,
+      compute_stream_ptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -387,8 +375,14 @@ extern "C" void uccl_moe_internode_cached_dispatch_ffi(
   void* recv_x_scales = buffers[8];
 
   auto compute_stream_ptr = reinterpret_cast<std::uintptr_t>(stream);
-  g_bridge.internode_dispatch(
-      buf, reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
+  uccl::Config config(p.num_sms, p.num_max_nvl_chunked_send_tokens,
+                      p.num_max_nvl_chunked_recv_tokens,
+                      p.num_max_rdma_chunked_send_tokens,
+                      p.num_max_rdma_chunked_recv_tokens);
+  std::optional<EventHandle> prev;
+
+  buf->internode_dispatch(
+      reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
       p.x_element_size,
       p.has_x_scales ? reinterpret_cast<std::uintptr_t>(x_scales) : 0,
       p.num_scales, p.scale_token_stride, p.scale_hidden_stride,
@@ -399,17 +393,15 @@ extern "C" void uccl_moe_internode_cached_dispatch_ffi(
       reinterpret_cast<std::uintptr_t>(gbl_channel_prefix_matrix),
       reinterpret_cast<std::uintptr_t>(recv_gbl_rank_prefix_sum),
       p.num_experts, /*num_worst_tokens=*/0, /*cached_mode=*/true,
-      p.num_rdma_recv_tokens, p.num_sms, p.num_max_nvl_chunked_send_tokens,
-      p.num_max_nvl_chunked_recv_tokens, p.num_max_rdma_chunked_send_tokens,
-      p.num_max_rdma_chunked_recv_tokens,
+      p.num_rdma_recv_tokens, config,
       reinterpret_cast<std::uintptr_t>(recv_x),
       p.has_x_scales ? reinterpret_cast<std::uintptr_t>(recv_x_scales) : 0,
       /*recv_topk_idx_ptr=*/0, /*recv_topk_weights_ptr=*/0,
       /*recv_src_meta_ptr=*/0,
       /*recv_rdma_channel_prefix_matrix_ptr=*/0,
       /*recv_gbl_channel_prefix_matrix_ptr=*/0,
-      /*send_rdma_head_ptr=*/0, /*send_nvl_head_ptr=*/0,
-      /*async=*/false, /*allocate_on_comm_stream=*/false, compute_stream_ptr);
+      /*send_rdma_head_ptr=*/0, /*send_nvl_head_ptr=*/0, prev, false, false,
+      compute_stream_ptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -468,35 +460,38 @@ extern "C" void uccl_moe_internode_dispatch_ffi(
   void* send_nvl_head = buffers[20];
 
   auto compute_stream_ptr = reinterpret_cast<std::uintptr_t>(stream);
+  uccl::Config config(p.num_sms, p.num_max_nvl_chunked_send_tokens,
+                      p.num_max_nvl_chunked_recv_tokens,
+                      p.num_max_rdma_chunked_send_tokens,
+                      p.num_max_rdma_chunked_recv_tokens);
+  std::optional<EventHandle> prev;
 
   // 1) Global layout (needs num_tokens_per_rdma_rank for the internode path).
-  g_bridge.get_dispatch_layout(
-      buf, reinterpret_cast<std::uintptr_t>(topk_idx), p.num_tokens, p.num_topk,
+  buf->get_dispatch_layout(
+      reinterpret_cast<std::uintptr_t>(topk_idx), p.num_tokens, p.num_topk,
       p.num_experts, reinterpret_cast<std::uintptr_t>(num_tokens_per_rank),
       reinterpret_cast<std::uintptr_t>(num_tokens_per_rdma_rank),
       reinterpret_cast<std::uintptr_t>(num_tokens_per_expert),
-      reinterpret_cast<std::uintptr_t>(is_token_in_rank),
-      /*async=*/false, /*allocate_on_comm_stream=*/false, compute_stream_ptr);
+      reinterpret_cast<std::uintptr_t>(is_token_in_rank), prev, false, false,
+      compute_stream_ptr);
 
   // 2) internode_prepare with num_worst_tokens > 0 (no host sync).
-  g_bridge.internode_prepare(
-      buf, reinterpret_cast<std::uintptr_t>(num_tokens_per_rank),
+  buf->internode_prepare(
+      reinterpret_cast<std::uintptr_t>(num_tokens_per_rank),
       reinterpret_cast<std::uintptr_t>(num_tokens_per_rdma_rank),
       reinterpret_cast<std::uintptr_t>(num_tokens_per_expert),
       reinterpret_cast<std::uintptr_t>(is_token_in_rank), p.num_tokens,
       p.hidden, p.x_element_size, p.num_scales, p.num_topk, p.num_experts,
-      p.expert_alignment, p.num_worst_tokens, p.num_sms,
-      p.num_max_nvl_chunked_send_tokens, p.num_max_nvl_chunked_recv_tokens,
-      p.num_max_rdma_chunked_send_tokens, p.num_max_rdma_chunked_recv_tokens,
+      p.expert_alignment, p.num_worst_tokens, config,
       reinterpret_cast<std::uintptr_t>(rdma_channel_prefix_matrix),
       reinterpret_cast<std::uintptr_t>(recv_rdma_rank_prefix_sum),
       reinterpret_cast<std::uintptr_t>(gbl_channel_prefix_matrix),
-      reinterpret_cast<std::uintptr_t>(recv_gbl_rank_prefix_sum),
-      /*async=*/false, /*allocate_on_comm_stream=*/false, compute_stream_ptr);
+      reinterpret_cast<std::uintptr_t>(recv_gbl_rank_prefix_sum), prev, false,
+      false, compute_stream_ptr);
 
   // 3) internode_dispatch.
-  g_bridge.internode_dispatch(
-      buf, reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
+  buf->internode_dispatch(
+      reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
       p.x_element_size,
       p.has_x_scales ? reinterpret_cast<std::uintptr_t>(x_scales) : 0,
       p.num_scales, p.scale_token_stride, p.scale_hidden_stride,
@@ -507,9 +502,7 @@ extern "C" void uccl_moe_internode_dispatch_ffi(
       reinterpret_cast<std::uintptr_t>(recv_rdma_rank_prefix_sum),
       reinterpret_cast<std::uintptr_t>(gbl_channel_prefix_matrix),
       reinterpret_cast<std::uintptr_t>(recv_gbl_rank_prefix_sum), p.num_experts,
-      p.num_worst_tokens, /*cached_mode=*/false, p.num_worst_tokens, p.num_sms,
-      p.num_max_nvl_chunked_send_tokens, p.num_max_nvl_chunked_recv_tokens,
-      p.num_max_rdma_chunked_send_tokens, p.num_max_rdma_chunked_recv_tokens,
+      p.num_worst_tokens, /*cached_mode=*/false, p.num_worst_tokens, config,
       reinterpret_cast<std::uintptr_t>(recv_x),
       p.has_x_scales ? reinterpret_cast<std::uintptr_t>(recv_x_scales) : 0,
       reinterpret_cast<std::uintptr_t>(recv_topk_idx),
@@ -518,8 +511,8 @@ extern "C" void uccl_moe_internode_dispatch_ffi(
       reinterpret_cast<std::uintptr_t>(recv_rdma_channel_prefix_matrix),
       reinterpret_cast<std::uintptr_t>(recv_gbl_channel_prefix_matrix),
       reinterpret_cast<std::uintptr_t>(send_rdma_head),
-      reinterpret_cast<std::uintptr_t>(send_nvl_head),
-      /*async=*/false, /*allocate_on_comm_stream=*/false, compute_stream_ptr);
+      reinterpret_cast<std::uintptr_t>(send_nvl_head), prev, false, false,
+      compute_stream_ptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -565,8 +558,14 @@ extern "C" void uccl_moe_internode_combine_ffi(
   void* combined_topk_weights = buffers[12];
 
   auto compute_stream_ptr = reinterpret_cast<std::uintptr_t>(stream);
-  g_bridge.internode_combine(
-      buf, reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
+  uccl::Config config(p.num_sms, p.num_max_nvl_chunked_send_tokens,
+                      p.num_max_nvl_chunked_recv_tokens,
+                      p.num_max_rdma_chunked_send_tokens,
+                      p.num_max_rdma_chunked_recv_tokens);
+  std::optional<EventHandle> prev;
+
+  buf->internode_combine(
+      reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
       p.x_dtype_code, p.x_element_size,
       p.has_topk_weights ? reinterpret_cast<std::uintptr_t>(topk_weights) : 0,
       p.num_topk,
@@ -578,14 +577,12 @@ extern "C" void uccl_moe_internode_combine_ffi(
       reinterpret_cast<std::uintptr_t>(recv_rdma_rank_prefix_sum),
       reinterpret_cast<std::uintptr_t>(gbl_channel_prefix_matrix),
       reinterpret_cast<std::uintptr_t>(send_rdma_head),
-      reinterpret_cast<std::uintptr_t>(send_nvl_head), p.num_sms,
-      p.num_max_nvl_chunked_send_tokens, p.num_max_nvl_chunked_recv_tokens,
-      p.num_max_rdma_chunked_send_tokens, p.num_max_rdma_chunked_recv_tokens,
+      reinterpret_cast<std::uintptr_t>(send_nvl_head), config,
       reinterpret_cast<std::uintptr_t>(combined_x),
       p.has_topk_weights
           ? reinterpret_cast<std::uintptr_t>(combined_topk_weights)
           : 0,
-      /*async=*/false, /*allocate_on_comm_stream=*/false, compute_stream_ptr);
+      prev, false, false, compute_stream_ptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -628,8 +625,14 @@ extern "C" void uccl_moe_combine_ffi(
   void* combined_topk_weights = buffers[9];
 
   auto compute_stream_ptr = reinterpret_cast<std::uintptr_t>(stream);
-  g_bridge.intranode_combine(
-      buf, reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
+  uccl::Config config(p.num_sms, p.num_max_nvl_chunked_send_tokens,
+                      p.num_max_nvl_chunked_recv_tokens,
+                      p.num_max_rdma_chunked_send_tokens,
+                      p.num_max_rdma_chunked_recv_tokens);
+  std::optional<EventHandle> prev;
+
+  buf->intranode_combine(
+      reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
       p.x_dtype_code, p.x_element_size,
       p.has_topk_weights ? reinterpret_cast<std::uintptr_t>(topk_weights) : 0,
       p.num_topk,
@@ -638,14 +641,12 @@ extern "C" void uccl_moe_combine_ffi(
       reinterpret_cast<std::uintptr_t>(src_idx), p.num_recv_tokens,
       reinterpret_cast<std::uintptr_t>(rank_prefix_matrix),
       reinterpret_cast<std::uintptr_t>(channel_prefix_matrix),
-      reinterpret_cast<std::uintptr_t>(send_head), p.num_sms,
-      p.num_max_nvl_chunked_send_tokens, p.num_max_nvl_chunked_recv_tokens,
-      p.num_max_rdma_chunked_send_tokens, p.num_max_rdma_chunked_recv_tokens,
+      reinterpret_cast<std::uintptr_t>(send_head), config,
       reinterpret_cast<std::uintptr_t>(combined_x),
       p.has_topk_weights
           ? reinterpret_cast<std::uintptr_t>(combined_topk_weights)
           : 0,
-      /*async=*/false, /*allocate_on_comm_stream=*/false, compute_stream_ptr);
+      prev, false, false, compute_stream_ptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -655,16 +656,8 @@ extern "C" void uccl_moe_combine_ffi(
 void register_jax_bindings(nb::module_& m) {
   m.def(
       "register_jax_ffi_buffer",
-      [](int device_index, nb::handle buf_obj) {
-        // ``buf_obj`` is a ``uccl.ep.Buffer`` which is defined in
-        // uccl_ep.cc's anonymous namespace. We don't know its real
-        // C++ type here -- but we don't need to: we only need its
-        // nanobind instance address as an opaque pointer, which is
-        // what ``register_buffer_for_device`` stores. Nanobind's
-        // ``inst_ptr`` helper recovers that address from the Python
-        // object.
-        void* self = nb::inst_ptr<void>(buf_obj);
-        register_buffer_for_device(device_index, self);
+      [](int device_index, Buffer& buf) {
+        register_buffer_for_device(device_index, &buf);
       },
       nb::arg("device_index"), nb::arg("buffer"),
       "Register a uccl.ep.Buffer for the given CUDA device so JAX FFI "
