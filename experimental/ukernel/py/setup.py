@@ -2,7 +2,8 @@ import os
 from pathlib import Path
 
 from setuptools import setup
-from torch.utils.cpp_extension import BuildExtension, CUDAExtension
+import torch
+from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CppExtension
 
 try:
     import nanobind
@@ -16,11 +17,17 @@ except ImportError as exc:
 ROOT = Path(__file__).resolve().parent.parent
 UCCL_ROOT = ROOT.parent.parent
 CUDA_HOME = Path("/usr/local/cuda")
+ROCM_HOME = Path(os.environ.get("ROCM_HOME", "/opt/rocm"))
+USE_ROCM = getattr(torch.version, "hip", None) is not None
+BUILD_CCL_ON_ROCM = os.environ.get("UKERNEL_BUILD_CCL_ON_ROCM", "0") == "1"
+RDMACM_SO = Path("/usr/lib/x86_64-linux-gnu/librdmacm.so.1")
 GDRCOPY_INCLUDE_DIR = Path(
     os.environ.get("GDRCOPY_INCLUDE_DIR", "/usr/local/include")
 )
 GDRCOPY_LIBDIR = os.environ.get("GDRCOPY_LIBDIR", "").strip()
-RDMA_STATIC = UCCL_ROOT / "collective" / "rdma" / "librdma.a"
+RDMA_STATIC = (
+    UCCL_ROOT / "collective" / "rdma" / ("librdma_hip.a" if USE_ROCM else "librdma.a")
+)
 NANOBIND_ROOT = Path(nanobind.__file__).resolve().parent
 
 
@@ -84,127 +91,112 @@ include_dirs = [
     rel(UCCL_ROOT / "collective" / "rdma"),
     rel(UCCL_ROOT / "include"),
     str(GDRCOPY_INCLUDE_DIR),
-    str(CUDA_HOME / "include"),
 ]
+if USE_ROCM:
+    include_dirs.append(str(ROCM_HOME / "include"))
+else:
+    include_dirs.append(str(CUDA_HOME / "include"))
 
-library_dirs = [
-    str(CUDA_HOME / "lib64"),
-    "/usr/local/lib",
-    "/usr/lib",
-    "/usr/lib64",
-]
-runtime_library_dirs = [str(CUDA_HOME / "lib64")]
+library_dirs = ["/usr/local/lib", "/usr/lib", "/usr/lib64", "/usr/lib/x86_64-linux-gnu"]
+runtime_library_dirs = []
+if USE_ROCM:
+    library_dirs.append(str(ROCM_HOME / "lib"))
+    runtime_library_dirs.append(str(ROCM_HOME / "lib"))
+else:
+    library_dirs.append(str(CUDA_HOME / "lib64"))
+    runtime_library_dirs.append(str(CUDA_HOME / "lib64"))
 if GDRCOPY_LIBDIR:
     library_dirs.append(GDRCOPY_LIBDIR)
     runtime_library_dirs.append(str(Path(GDRCOPY_LIBDIR).resolve()))
 
-ext = CUDAExtension(
+common_cxx_args = [
+    "-O3",
+    "-std=c++17",
+    "-Wall",
+    "-Wno-unused-function",
+    "-Wno-sign-compare",
+    "-Wno-reorder",
+    "-Wno-unused-variable",
+    "-Wno-unused-label",
+    "-Wno-unused-but-set-variable",
+    "-Wno-stringop-overread",
+    "-Wno-narrowing",
+    "-pthread",
+    "-fPIC",
+    "-DUKERNEL_ENABLE_TMA=0",
+]
+if USE_ROCM:
+    common_cxx_args.extend(["-D__HIP_PLATFORM_AMD__", "-DUSE_ROCM=1", "-DHIPBLAS_V2"])
+
+cuda_nvcc_args = [
+    "-O3",
+    "-std=c++20",
+    "--expt-extended-lambda",
+    "--expt-relaxed-constexpr",
+    "-DKITTENS_HOPPER",
+    "-DUKERNEL_ENABLE_TMA=0",
+    "-gencode",
+    "arch=compute_80,code=sm_80",
+    "-gencode",
+    "arch=compute_86,code=sm_86",
+    "-gencode",
+    "arch=compute_89,code=sm_89",
+]
+
+ExtensionCls = CppExtension if USE_ROCM else CUDAExtension
+
+common_libraries = [
+    "gflags",
+    "z",
+    "ibverbs",
+    "nl-3",
+    "nl-route-3",
+    "pthread",
+    "numa",
+]
+if USE_ROCM:
+    common_libraries.extend(["amdhip64", "elf", "dl"])
+else:
+    common_libraries.append("rdmacm")
+    common_libraries.extend(["cudart", "cuda", "gdrapi"])
+
+extra_link_args = []
+if USE_ROCM and RDMACM_SO.exists():
+    extra_link_args.append(str(RDMACM_SO.resolve()))
+
+ext = ExtensionCls(
     name="ukernel_ccl._C",
     sources=sources,
     include_dirs=include_dirs,
-    extra_compile_args={
-        "cxx": [
-            "-O3",
-            "-std=c++17",
-            "-Wall",
-            "-Wno-unused-function",
-            "-Wno-sign-compare",
-            "-Wno-reorder",
-            "-Wno-unused-variable",
-            "-Wno-unused-label",
-            "-Wno-unused-but-set-variable",
-            "-Wno-stringop-overread",
-            "-Wno-narrowing",
-            "-pthread",
-            "-fPIC",
-            "-DUKERNEL_ENABLE_TMA=0",
-        ],
-        "nvcc": [
-            "-O3",
-            "-std=c++20",
-            "--expt-extended-lambda",
-            "--expt-relaxed-constexpr",
-            "-DKITTENS_HOPPER",
-            "-DUKERNEL_ENABLE_TMA=0",
-            "-gencode",
-            "arch=compute_80,code=sm_80",
-            "-gencode",
-            "arch=compute_86,code=sm_86",
-            "-gencode",
-            "arch=compute_89,code=sm_89",
-        ],
+    extra_compile_args=common_cxx_args if USE_ROCM else {
+        "cxx": common_cxx_args,
+        "nvcc": cuda_nvcc_args,
     },
     library_dirs=library_dirs,
-    libraries=[
-        "cudart",
-        "cuda",
-        "gflags",
-        "z",
-        "ibverbs",
-        "nl-3",
-        "nl-route-3",
-        "pthread",
-        "rdmacm",
-        "gdrapi",
-        "numa",
-    ],
+    libraries=common_libraries,
     extra_objects=[str(RDMA_STATIC.resolve())],
+    extra_link_args=extra_link_args,
     runtime_library_dirs=runtime_library_dirs,
 )
 
-p2p_ext = CUDAExtension(
+p2p_ext = ExtensionCls(
     name="ukernel_p2p._C",
     sources=p2p_sources,
     include_dirs=include_dirs,
-    extra_compile_args={
-        "cxx": [
-            "-O3",
-            "-std=c++17",
-            "-Wall",
-            "-Wno-unused-function",
-            "-Wno-sign-compare",
-            "-Wno-reorder",
-            "-Wno-unused-variable",
-            "-Wno-unused-label",
-            "-Wno-unused-but-set-variable",
-            "-Wno-stringop-overread",
-            "-Wno-narrowing",
-            "-pthread",
-            "-fPIC",
-            "-DUKERNEL_ENABLE_TMA=0",
-        ],
-        "nvcc": [
-            "-O3",
-            "-std=c++20",
-            "--expt-extended-lambda",
-            "--expt-relaxed-constexpr",
-            "-DKITTENS_HOPPER",
-            "-DUKERNEL_ENABLE_TMA=0",
-            "-gencode",
-            "arch=compute_80,code=sm_80",
-            "-gencode",
-            "arch=compute_86,code=sm_86",
-            "-gencode",
-            "arch=compute_89,code=sm_89",
-        ],
+    extra_compile_args=common_cxx_args if USE_ROCM else {
+        "cxx": common_cxx_args,
+        "nvcc": cuda_nvcc_args,
     },
     library_dirs=library_dirs,
-    libraries=[
-        "cudart",
-        "cuda",
-        "gflags",
-        "z",
-        "ibverbs",
-        "nl-3",
-        "nl-route-3",
-        "pthread",
-        "rdmacm",
-        "gdrapi",
-        "numa",
-    ],
+    libraries=common_libraries,
     extra_objects=[str(RDMA_STATIC.resolve())],
+    extra_link_args=extra_link_args,
     runtime_library_dirs=runtime_library_dirs,
 )
+
+ext_modules = [p2p_ext]
+if not USE_ROCM or BUILD_CCL_ON_ROCM:
+    ext_modules.insert(0, ext)
 
 
 setup(
@@ -212,6 +204,6 @@ setup(
     version="0.1.0",
     packages=["ukernel_ccl", "ukernel_p2p"],
     package_dir={"ukernel_ccl": "ukernel_ccl", "ukernel_p2p": "ukernel_p2p"},
-    ext_modules=[ext, p2p_ext],
+    ext_modules=ext_modules,
     cmdclass={"build_ext": BuildExtension},
 )

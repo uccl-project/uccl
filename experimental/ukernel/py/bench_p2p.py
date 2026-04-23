@@ -23,30 +23,73 @@ def bench_p2p_ukernel(comm, peer, size_bytes, warmup, iters):
     n = size_bytes // 4  # float32
     send_buf = torch.empty(n, device="cuda", dtype=torch.float32)
     recv_buf = torch.empty(n, device="cuda", dtype=torch.float32)
-    comm.pin_tensor(send_buf)
-    comm.pin_tensor(recv_buf)
+    send_mr_id = comm.pin_tensor(send_buf)
+    recv_mr_id = comm.pin_tensor(recv_buf)
 
     rank = comm.rank
+    use_direct_ipc = comm.peer_transport(peer) == "ipc" and comm.same_host(peer)
+    remote_recv_mr_id = 0
+    ipc_binding_version = 1
+    if use_direct_ipc:
+        remote_recv_mr_id = _exchange_peer_i64(int(recv_mr_id), rank)
+        if not comm.notify_ipc_tensor(
+            peer, recv_mr_id, recv_buf, 0, size_bytes, ipc_binding_version
+        ):
+            raise RuntimeError(
+                f"notify_ipc_tensor(peer={peer}, mr={recv_mr_id}) failed"
+            )
+        if not comm.wait_ipc_buffer(peer, remote_recv_mr_id, ipc_binding_version):
+            raise RuntimeError(
+                f"wait_ipc_buffer(peer={peer}, mr={remote_recv_mr_id}) failed"
+            )
+        dist.barrier()
+
+    def _send():
+        if use_direct_ipc:
+            comm.send_direct(
+                peer, send_buf, remote_recv_mr_id, ipc_binding_version, 0, size_bytes, 0
+            )
+        else:
+            comm.send(peer, send_buf)
+
     # Server (rank 0) recv first, client (rank 1) send first
     if rank == 0:
         for _ in range(warmup):
-            comm.recv(peer, recv_buf)
-            comm.send(peer, send_buf)  # echo back
+            if use_direct_ipc:
+                req = comm.irecv(peer, recv_buf)
+                comm.wait_finish(req)
+            else:
+                comm.recv(peer, recv_buf)
+            _send()  # echo back
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         for _ in range(iters):
-            comm.recv(peer, recv_buf)
-            comm.send(peer, send_buf)
+            if use_direct_ipc:
+                req = comm.irecv(peer, recv_buf)
+                comm.wait_finish(req)
+            else:
+                comm.recv(peer, recv_buf)
+            _send()
         torch.cuda.synchronize()
     else:
         for _ in range(warmup):
-            comm.send(peer, send_buf)
-            comm.recv(peer, recv_buf)
+            if use_direct_ipc:
+                req = comm.irecv(peer, recv_buf)
+            _send()
+            if use_direct_ipc:
+                comm.wait_finish(req)
+            else:
+                comm.recv(peer, recv_buf)
         torch.cuda.synchronize()
         t0 = time.perf_counter()
         for _ in range(iters):
-            comm.send(peer, send_buf)
-            comm.recv(peer, recv_buf)
+            if use_direct_ipc:
+                req = comm.irecv(peer, recv_buf)
+            _send()
+            if use_direct_ipc:
+                comm.wait_finish(req)
+            else:
+                comm.recv(peer, recv_buf)
         torch.cuda.synchronize()
     elapsed = time.perf_counter() - t0
     comm.unpin_tensor(send_buf)
@@ -135,6 +178,15 @@ def _exchange_local_gpu_idx(local_gpu_idx: int, rank: int) -> int:
     remote_gpu_idx = _recv_i64(src=0)
     _send_i64(local_gpu_idx, dst=0)
     return remote_gpu_idx
+
+
+def _exchange_peer_i64(local_value: int, rank: int) -> int:
+    if rank == 0:
+        _send_i64(local_value, dst=1)
+        return _recv_i64(src=1)
+    remote_value = _recv_i64(src=0)
+    _send_i64(local_value, dst=0)
+    return remote_value
 
 
 def _create_uccl_endpoint(local_gpu_idx: int, rank: int):
