@@ -32,8 +32,10 @@ import jax.numpy as jnp
 
 from ..config import Config, get_combine_config, get_dispatch_config
 from ..primitive import (
+    moe_cached_dispatch_call,
     moe_combine_call,
     moe_dispatch_call,
+    moe_internode_cached_dispatch_call,
     moe_internode_combine_call,
     moe_internode_dispatch_call,
     register_ffi_targets,
@@ -348,20 +350,82 @@ def _moe_combine_fwd(x, handle, topk_weights, bias, num_ranks, config):
         x=x, handle=handle, topk_weights=topk_weights, bias=bias,
         num_ranks=num_ranks, config=config,
     )
-    residuals = (handle, config)
+    # Capture the input ``x``'s token count ( == num_recv_tokens on the
+    # backward pass) so we can allocate the right shaped output.
+    residuals = (handle, int(x.shape[0]), config)
     return combined, residuals
 
 
 def _moe_combine_bwd(num_ranks_outer, config_outer, residuals, grad_combined):
-    handle, config = residuals
-    # The backward of combine is a cached-mode dispatch replay.
-    # Cached-mode primitives are a planned follow-up; for now we return
-    # a zero gradient to keep the interface consistent.
-    grad_x = jnp.zeros(grad_combined.shape, grad_combined.dtype)
+    """Backward of combine is a cached-mode dispatch replay.
+
+    Following Primus-Turbo's ``_moe_combine_bwd``:
+    the gradient of ``x`` (the tensor that was fed to the forward
+    ``combine``) is obtained by re-running the original dispatch on the
+    incoming cotangent ``grad_combined``, using the same layout handle.
+    The gradient of the ``handle`` itself is zero (it is purely
+    auxiliary) and ``topk_weights`` / ``bias`` gradients stay ``None``.
+    """
+    handle, num_recv_tokens, config_cached = residuals
+    config = get_dispatch_config(num_ranks_outer)
+
+    # `grad_combined` has shape (num_tokens, hidden) — same as the forward's
+    # combine output, which in turn matches the original dispatch's input.
+    if len(handle) == 10:
+        (
+            is_token_in_rank,
+            sender_rdma_channel_prefix_matrix,
+            sender_gbl_channel_prefix_matrix,
+            _recv_rdma_channel_prefix_matrix,
+            recv_rdma_rank_prefix_sum,
+            _recv_gbl_channel_prefix_matrix,
+            recv_gbl_rank_prefix_sum,
+            _recv_src_meta,
+            _send_rdma_head,
+            _send_nvl_head,
+        ) = handle
+        grad_x, _ = moe_internode_cached_dispatch_call(
+            grad_combined,
+            is_token_in_rank,
+            sender_rdma_channel_prefix_matrix,
+            sender_gbl_channel_prefix_matrix,
+            recv_rdma_rank_prefix_sum,
+            recv_gbl_rank_prefix_sum,
+            num_recv_tokens=num_recv_tokens,
+            num_rdma_recv_tokens=num_recv_tokens,
+            # `num_experts` is only used by a host-side assertion in the
+            # cached path; pass 0 to match the assert that skips when
+            # cached_mode=True (the assert is `num_experts > 0` inside
+            # the non-cached branch only).
+            num_experts=0,
+            config=config,
+            x_scales=None,
+        )
+    else:
+        assert len(handle) == 6
+        (
+            rank_prefix_matrix,
+            channel_prefix_matrix,
+            recv_channel_prefix_matrix,
+            recv_src_idx,
+            is_token_in_rank,
+            send_head,
+        ) = handle
+        grad_x, _ = moe_cached_dispatch_call(
+            grad_combined,
+            is_token_in_rank,
+            rank_prefix_matrix,
+            channel_prefix_matrix,
+            recv_channel_prefix_matrix,
+            recv_src_idx,
+            send_head,
+            num_recv_tokens=num_recv_tokens,
+            config=config,
+            x_scales=None,
+        )
+
     grad_handle = jax.tree_util.tree_map(jnp.zeros_like, handle)
-    grad_topk = None
-    grad_bias = None
-    return (grad_x, grad_handle, grad_topk, grad_bias)
+    return (grad_x, grad_handle, None, None)
 
 
 _moe_combine.defvjp(_moe_combine_fwd, _moe_combine_bwd)

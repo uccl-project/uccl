@@ -1898,6 +1898,152 @@ extern "C" void uccl_moe_dispatch_ffi(cudaStream_t stream, void** buffers,
 }
 
 // ---------------------------------------------------------------------------
+// moe_cached_dispatch (intranode, replay via cached handle)
+// ---------------------------------------------------------------------------
+// Inputs : x, x_scales,
+//          is_token_in_rank, rank_prefix_matrix, channel_prefix_matrix,
+//          recv_channel_prefix_matrix, recv_src_idx, send_head
+// Outputs: recv_x, recv_x_scales
+struct MoECachedDispatchOpaque {
+  int32_t num_tokens;
+  int32_t hidden;
+  int32_t x_element_size;
+  int32_t num_scales;
+  int32_t scale_token_stride;
+  int32_t scale_hidden_stride;
+  int32_t num_recv_tokens;  // == num_worst_tokens of the original dispatch
+  // Config
+  int32_t num_sms;
+  int32_t num_max_nvl_chunked_send_tokens;
+  int32_t num_max_nvl_chunked_recv_tokens;
+  int32_t num_max_rdma_chunked_send_tokens;
+  int32_t num_max_rdma_chunked_recv_tokens;
+  int32_t has_x_scales;
+};
+
+extern "C" void uccl_moe_cached_dispatch_ffi(
+    cudaStream_t stream, void** buffers, char const* opaque, size_t opaque_len,
+    XlaCustomCallStatus* /*status*/) {
+  if (opaque_len != sizeof(MoECachedDispatchOpaque)) return;
+  auto const& p = *reinterpret_cast<MoECachedDispatchOpaque const*>(opaque);
+  auto* buf = current_buffer_or_die();
+  if (!buf) return;
+
+  void* x = buffers[0];
+  void* x_scales = buffers[1];
+  void* is_token_in_rank = buffers[2];
+  void* rank_prefix_matrix = buffers[3];
+  void* channel_prefix_matrix = buffers[4];
+  void* recv_channel_prefix_matrix = buffers[5];
+  void* recv_src_idx = buffers[6];
+  void* send_head = buffers[7];
+  void* recv_x = buffers[8];
+  void* recv_x_scales = buffers[9];
+
+  auto compute_stream_ptr = reinterpret_cast<std::uintptr_t>(stream);
+  uccl::Config config(p.num_sms, p.num_max_nvl_chunked_send_tokens,
+                      p.num_max_nvl_chunked_recv_tokens,
+                      p.num_max_rdma_chunked_send_tokens,
+                      p.num_max_rdma_chunked_recv_tokens);
+
+  std::optional<EventHandle> prev;
+  buf->intranode_dispatch(
+      reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
+      p.x_element_size,
+      p.has_x_scales ? reinterpret_cast<std::uintptr_t>(x_scales) : 0,
+      p.num_scales, p.scale_token_stride, p.scale_hidden_stride,
+      /*topk_idx_ptr=*/0, /*num_topk=*/0, /*topk_weights_ptr=*/0,
+      reinterpret_cast<std::uintptr_t>(is_token_in_rank),
+      reinterpret_cast<std::uintptr_t>(rank_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(channel_prefix_matrix),
+      /*num_experts=*/0, /*num_worst_tokens=*/0, /*cached_mode=*/true, config,
+      p.num_recv_tokens, reinterpret_cast<std::uintptr_t>(recv_x),
+      p.has_x_scales ? reinterpret_cast<std::uintptr_t>(recv_x_scales) : 0,
+      /*recv_topk_idx_ptr=*/0, /*recv_topk_weights_ptr=*/0,
+      reinterpret_cast<std::uintptr_t>(recv_channel_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(recv_src_idx),
+      reinterpret_cast<std::uintptr_t>(send_head), prev, false, false,
+      compute_stream_ptr);
+}
+
+// ---------------------------------------------------------------------------
+// moe_internode_cached_dispatch (replay via cached handle)
+// ---------------------------------------------------------------------------
+// Inputs : x, x_scales,
+//          is_token_in_rank,
+//          sender_rdma_channel_prefix_matrix,
+//          sender_gbl_channel_prefix_matrix,
+//          recv_rdma_rank_prefix_sum,
+//          recv_gbl_rank_prefix_sum
+// Outputs: recv_x, recv_x_scales
+struct MoEInternodeCachedDispatchOpaque {
+  int32_t num_tokens;
+  int32_t hidden;
+  int32_t x_element_size;
+  int32_t num_scales;
+  int32_t scale_token_stride;
+  int32_t scale_hidden_stride;
+  int32_t num_recv_tokens;      // == original num_worst_tokens
+  int32_t num_rdma_recv_tokens; // == original num_worst_tokens
+  int32_t num_experts;
+  int32_t num_sms;
+  int32_t num_max_nvl_chunked_send_tokens;
+  int32_t num_max_nvl_chunked_recv_tokens;
+  int32_t num_max_rdma_chunked_send_tokens;
+  int32_t num_max_rdma_chunked_recv_tokens;
+  int32_t has_x_scales;
+};
+
+extern "C" void uccl_moe_internode_cached_dispatch_ffi(
+    cudaStream_t stream, void** buffers, char const* opaque, size_t opaque_len,
+    XlaCustomCallStatus* /*status*/) {
+  if (opaque_len != sizeof(MoEInternodeCachedDispatchOpaque)) return;
+  auto const& p =
+      *reinterpret_cast<MoEInternodeCachedDispatchOpaque const*>(opaque);
+  auto* buf = current_buffer_or_die();
+  if (!buf) return;
+
+  void* x = buffers[0];
+  void* x_scales = buffers[1];
+  void* is_token_in_rank = buffers[2];
+  void* rdma_channel_prefix_matrix = buffers[3];
+  void* gbl_channel_prefix_matrix = buffers[4];
+  void* recv_rdma_rank_prefix_sum = buffers[5];
+  void* recv_gbl_rank_prefix_sum = buffers[6];
+  void* recv_x = buffers[7];
+  void* recv_x_scales = buffers[8];
+
+  auto compute_stream_ptr = reinterpret_cast<std::uintptr_t>(stream);
+  uccl::Config config(p.num_sms, p.num_max_nvl_chunked_send_tokens,
+                      p.num_max_nvl_chunked_recv_tokens,
+                      p.num_max_rdma_chunked_send_tokens,
+                      p.num_max_rdma_chunked_recv_tokens);
+
+  std::optional<EventHandle> prev;
+  buf->internode_dispatch(
+      reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
+      p.x_element_size,
+      p.has_x_scales ? reinterpret_cast<std::uintptr_t>(x_scales) : 0,
+      p.num_scales, p.scale_token_stride, p.scale_hidden_stride,
+      /*topk_idx_ptr=*/0, /*num_topk=*/0, /*topk_weights_ptr=*/0,
+      reinterpret_cast<std::uintptr_t>(is_token_in_rank),
+      reinterpret_cast<std::uintptr_t>(rdma_channel_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(recv_rdma_rank_prefix_sum),
+      reinterpret_cast<std::uintptr_t>(gbl_channel_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(recv_gbl_rank_prefix_sum),
+      p.num_experts, /*num_worst_tokens=*/0, /*cached_mode=*/true,
+      p.num_rdma_recv_tokens, config,
+      reinterpret_cast<std::uintptr_t>(recv_x),
+      p.has_x_scales ? reinterpret_cast<std::uintptr_t>(recv_x_scales) : 0,
+      /*recv_topk_idx_ptr=*/0, /*recv_topk_weights_ptr=*/0,
+      /*recv_src_meta_ptr=*/0,
+      /*recv_rdma_channel_prefix_matrix_ptr=*/0,
+      /*recv_gbl_channel_prefix_matrix_ptr=*/0,
+      /*send_rdma_head_ptr=*/0, /*send_nvl_head_ptr=*/0, prev, false, false,
+      compute_stream_ptr);
+}
+
+// ---------------------------------------------------------------------------
 // moe_internode_dispatch
 // ---------------------------------------------------------------------------
 // Inputs : x, x_scales, topk_idx, topk_weights
@@ -2713,6 +2859,11 @@ NB_MODULE(ep, m) {
         &uccl_jax_ffi::uccl_moe_internode_dispatch_ffi));
     d["uccl_moe_internode_combine"] = make_capsule(reinterpret_cast<void*>(
         &uccl_jax_ffi::uccl_moe_internode_combine_ffi));
+    d["uccl_moe_cached_dispatch"] = make_capsule(
+        reinterpret_cast<void*>(&uccl_jax_ffi::uccl_moe_cached_dispatch_ffi));
+    d["uccl_moe_internode_cached_dispatch"] =
+        make_capsule(reinterpret_cast<void*>(
+            &uccl_jax_ffi::uccl_moe_internode_cached_dispatch_ffi));
     return d;
   });
 

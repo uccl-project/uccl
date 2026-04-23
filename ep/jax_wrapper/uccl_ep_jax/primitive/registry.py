@@ -21,6 +21,8 @@ TARGET_NAMES = (
     "uccl_moe_combine",
     "uccl_moe_internode_dispatch",
     "uccl_moe_internode_combine",
+    "uccl_moe_cached_dispatch",
+    "uccl_moe_internode_cached_dispatch",
 )
 
 

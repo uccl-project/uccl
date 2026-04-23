@@ -126,6 +126,73 @@ def test_moe_dispatch_output_shapes_static_upper_bound():
     assert shape_dtype.dtype == jnp.bfloat16
 
 
+def test_moe_combine_backward_replays_cached_dispatch_intranode():
+    """The backward of a jit-able intranode moe_combine must emit a
+    ``uccl_moe_cached_dispatch`` custom call (not a zero-grad placeholder)."""
+    import jax
+    import jax.numpy as jnp
+    import uccl_ep_jax as ux
+
+    num_tokens, hidden = 128, 4096
+    num_ranks = 4
+
+    def step(x, topk_idx, topk_weights):
+        recv_x, _recv_ti, recv_tw, handle = ux.moe_dispatch(
+            x, topk_idx, topk_weights, num_experts=32, num_ranks=num_ranks,
+            num_rdma_ranks=1, num_max_nvl_peers=8, source_meta_bytes=8,
+        )
+        combined = ux.moe_combine(recv_x, handle, topk_weights=recv_tw,
+                                  num_ranks=num_ranks)
+        return combined.sum().astype(jnp.float32)
+
+    x = jnp.zeros((num_tokens, hidden), jnp.bfloat16)
+    topk = jnp.zeros((num_tokens, 8), jnp.int32)
+    topkw = jnp.zeros((num_tokens, 8), jnp.float32)
+    hlo = str(
+        jax.jit(jax.grad(step, argnums=0))
+        .lower(x, topk, topkw)
+        .compiler_ir(dialect="stablehlo")
+    )
+    assert "uccl_moe_dispatch" in hlo
+    assert "uccl_moe_combine" in hlo
+    # The combine backward must call cached dispatch rather than emit a
+    # zero-grad placeholder.
+    assert "uccl_moe_cached_dispatch" in hlo
+
+
+def test_moe_combine_backward_replays_cached_dispatch_internode():
+    import jax
+    import jax.numpy as jnp
+    import uccl_ep_jax as ux
+
+    num_tokens, hidden = 128, 4096
+    num_ranks = 16
+    num_rdma_ranks = 2
+
+    def step(x, topk_idx, topk_weights):
+        recv_x, _recv_ti, recv_tw, handle = ux.moe_dispatch(
+            x, topk_idx, topk_weights, num_experts=32, num_ranks=num_ranks,
+            num_rdma_ranks=num_rdma_ranks, num_max_nvl_peers=8,
+            source_meta_bytes=8,
+        )
+        combined = ux.moe_combine(recv_x, handle, topk_weights=recv_tw,
+                                  num_ranks=num_ranks)
+        return combined.sum().astype(jnp.float32)
+
+    x = jnp.zeros((num_tokens, hidden), jnp.bfloat16)
+    topk = jnp.zeros((num_tokens, 8), jnp.int32)
+    topkw = jnp.zeros((num_tokens, 8), jnp.float32)
+    hlo = str(
+        jax.jit(jax.grad(step, argnums=0))
+        .lower(x, topk, topkw)
+        .compiler_ir(dialect="stablehlo")
+    )
+    assert "uccl_moe_internode_dispatch" in hlo
+    assert "uccl_moe_internode_combine" in hlo
+    # Backward of internode combine must use the cached internode dispatch.
+    assert "uccl_moe_internode_cached_dispatch" in hlo
+
+
 def test_moe_combine_internode_lowers_to_internode_custom_call():
     import jax
     import jax.numpy as jnp

@@ -19,6 +19,8 @@ from ._calls import (
     moe_combine_call,
     moe_internode_dispatch_call,
     moe_internode_combine_call,
+    moe_cached_dispatch_call,
+    moe_internode_cached_dispatch_call,
 )
 
 __all__ = [
@@ -30,4 +32,6 @@ __all__ = [
     "moe_combine_call",
     "moe_internode_dispatch_call",
     "moe_internode_combine_call",
+    "moe_cached_dispatch_call",
+    "moe_internode_cached_dispatch_call",
 ]

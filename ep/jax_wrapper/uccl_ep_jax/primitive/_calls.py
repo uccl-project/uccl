@@ -258,6 +258,149 @@ def moe_dispatch_call(
 
 
 # ---------------------------------------------------------------------------
+# moe_cached_dispatch (intranode replay using cached handle)
+# ---------------------------------------------------------------------------
+
+
+def moe_cached_dispatch_call(
+    x: jax.Array,
+    is_token_in_rank: jax.Array,
+    rank_prefix_matrix: jax.Array,
+    channel_prefix_matrix: jax.Array,
+    recv_channel_prefix_matrix: jax.Array,
+    recv_src_idx: jax.Array,
+    send_head: jax.Array,
+    *,
+    num_recv_tokens: int,
+    config,
+    x_scales: Optional[jax.Array] = None,
+):
+    """Replay an intranode dispatch using the layout handle produced by
+    :func:`moe_dispatch_call`.
+
+    Output shape is ``(num_recv_tokens, hidden)`` — same as the first
+    element of the original dispatch output, but the caller is
+    responsible for passing the matching ``num_recv_tokens`` (the
+    ``num_worst_tokens`` of the original dispatch).
+    """
+    num_tokens, hidden = int(x.shape[0]), int(x.shape[1])
+
+    (x_scales_op, has_x_scales, num_scales, scale_token_stride,
+     scale_hidden_stride) = _empty_like_scales(x, x_scales)
+
+    scales_out_shape = (
+        (int(num_recv_tokens), num_scales)
+        if has_x_scales and x_scales is not None and x_scales.ndim == 2
+        else ((int(num_recv_tokens),) if has_x_scales else (0,))
+    )
+    scales_out_dtype = x_scales.dtype if x_scales is not None else jnp.float32
+
+    result_shapes = (
+        jax.ShapeDtypeStruct((int(num_recv_tokens), hidden), x.dtype),  # recv_x
+        jax.ShapeDtypeStruct(scales_out_shape, scales_out_dtype),       # recv_x_scales
+    )
+
+    opaque = pack_ints32(
+        num_tokens,
+        hidden,
+        itemsize(x.dtype),
+        num_scales,
+        scale_token_stride,
+        scale_hidden_stride,
+        int(num_recv_tokens),
+        int(config.num_sms),
+        int(config.num_max_nvl_chunked_send_tokens),
+        int(config.num_max_nvl_chunked_recv_tokens),
+        int(config.num_max_rdma_chunked_send_tokens),
+        int(config.num_max_rdma_chunked_recv_tokens),
+        has_x_scales,
+    )
+    call = jax.ffi.ffi_call(
+        "uccl_moe_cached_dispatch",
+        result_shapes,
+        custom_call_api_version=1,
+        legacy_backend_config=opaque,
+        has_side_effect=True,
+        vmap_method="sequential",
+    )
+    return call(
+        x, x_scales_op, is_token_in_rank, rank_prefix_matrix,
+        channel_prefix_matrix, recv_channel_prefix_matrix,
+        recv_src_idx, send_head,
+    )
+
+
+# ---------------------------------------------------------------------------
+# moe_internode_cached_dispatch (replay using cached internode handle)
+# ---------------------------------------------------------------------------
+
+
+def moe_internode_cached_dispatch_call(
+    x: jax.Array,
+    is_token_in_rank: jax.Array,
+    rdma_channel_prefix_matrix: jax.Array,
+    gbl_channel_prefix_matrix: jax.Array,
+    recv_rdma_rank_prefix_sum: jax.Array,
+    recv_gbl_rank_prefix_sum: jax.Array,
+    *,
+    num_recv_tokens: int,
+    num_rdma_recv_tokens: int,
+    num_experts: int,
+    config,
+    x_scales: Optional[jax.Array] = None,
+):
+    """Replay an internode dispatch using the layout handle produced by
+    :func:`moe_internode_dispatch_call`."""
+    num_tokens, hidden = int(x.shape[0]), int(x.shape[1])
+
+    (x_scales_op, has_x_scales, num_scales, scale_token_stride,
+     scale_hidden_stride) = _empty_like_scales(x, x_scales)
+
+    scales_out_shape = (
+        (int(num_recv_tokens), num_scales)
+        if has_x_scales and x_scales is not None and x_scales.ndim == 2
+        else ((int(num_recv_tokens),) if has_x_scales else (0,))
+    )
+    scales_out_dtype = x_scales.dtype if x_scales is not None else jnp.float32
+
+    result_shapes = (
+        jax.ShapeDtypeStruct((int(num_recv_tokens), hidden), x.dtype),  # recv_x
+        jax.ShapeDtypeStruct(scales_out_shape, scales_out_dtype),       # recv_x_scales
+    )
+
+    opaque = pack_ints32(
+        num_tokens,
+        hidden,
+        itemsize(x.dtype),
+        num_scales,
+        scale_token_stride,
+        scale_hidden_stride,
+        int(num_recv_tokens),
+        int(num_rdma_recv_tokens),
+        int(num_experts),
+        int(config.num_sms),
+        int(config.num_max_nvl_chunked_send_tokens),
+        int(config.num_max_nvl_chunked_recv_tokens),
+        int(config.num_max_rdma_chunked_send_tokens),
+        int(config.num_max_rdma_chunked_recv_tokens),
+        has_x_scales,
+    )
+    call = jax.ffi.ffi_call(
+        "uccl_moe_internode_cached_dispatch",
+        result_shapes,
+        custom_call_api_version=1,
+        legacy_backend_config=opaque,
+        has_side_effect=True,
+        vmap_method="sequential",
+    )
+    return call(
+        x, x_scales_op, is_token_in_rank, rdma_channel_prefix_matrix,
+        gbl_channel_prefix_matrix, recv_rdma_rank_prefix_sum,
+        recv_gbl_rank_prefix_sum,
+    )
+
+
+# ---------------------------------------------------------------------------
 # moe_internode_dispatch (jit-friendly, multi-node)
 # ---------------------------------------------------------------------------
 

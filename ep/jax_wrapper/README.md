@@ -136,15 +136,31 @@ The execution-mode helpers (`detect_execution_mode`,
 `is_single_process_mode`, `is_multi_process_mode`) mirror the pattern
 used by TransformerEngine JAX.
 
+## Autodiff
+
+The primitive ``moe_dispatch`` and ``moe_combine`` are decorated with
+``jax.custom_vjp`` and mirror Primus-Turbo's forward/backward structure:
+
+* **Backward of ``moe_dispatch``** replays ``moe_combine`` on the
+  incoming gradient, re-using the cached layout handle.
+* **Backward of ``moe_combine``** replays a **cached-mode** dispatch
+  (``moe_cached_dispatch`` / ``moe_internode_cached_dispatch``) on the
+  incoming gradient — the same path the PyTorch wrapper takes when a
+  ``handle`` is reused.
+
+Both paths are available in intranode and internode configurations and
+are selected automatically based on the handle arity
+(6-tuple = intranode, 10-tuple = internode).
+
 ## Limitations / follow-ups
 
-* ``moe_dispatch`` / ``moe_combine`` use the static-upper-bound
-  non-cached path on every call
-  (``num_worst_tokens = num_tokens * num_ranks``). Caching the layout
-  handle across iterations (as the PyTorch wrapper does when ``handle``
-  is reused) is a planned follow-up; once in place it also makes the
-  backward of the primitive ``moe_combine`` a true cached-dispatch
-  replay instead of the current zero-gradient placeholder.
-* The backward rule of the primitive ``moe_dispatch`` already does the
-  right thing (calls the primitive ``moe_combine`` on the upstream
-  gradient), automatically matching the intranode/internode path.
+* ``moe_dispatch`` / ``moe_combine`` use the static-upper-bound path
+  on every forward call
+  (``num_worst_tokens = num_tokens * num_ranks``). Exposing a separate
+  entry point that reuses an existing handle on the forward pass (so
+  subsequent iterations skip layout computation) is a nice optimization
+  for training loops that pin the token count; today it is already
+  exposed implicitly through the ``custom_vjp`` backward pass.
+* The internode throughput path assumes ``num_rdma_ranks > 1`` means
+  "proper multi-node"; for the edge case of a single RDMA rank the
+  intranode path is picked automatically.
