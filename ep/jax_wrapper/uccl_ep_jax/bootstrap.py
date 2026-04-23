@@ -125,6 +125,24 @@ class Buffer:
         if self._destroyed:
             return
         self._destroyed = True
+        ep = _require_uccl_ep()
+        # Remove the FFI registration before tearing down the runtime so
+        # any residual XLA call that might race the destructor sees an
+        # absent entry and early-returns instead of dereferencing
+        # freed memory.
+        if hasattr(ep, "unregister_jax_ffi_buffer"):
+            try:
+                import jax
+
+                local_devices = jax.local_devices()
+                if self.local_rank < len(local_devices):
+                    dev_id = int(getattr(local_devices[self.local_rank], "id",
+                                         self.local_rank))
+                    ep.unregister_jax_ffi_buffer(
+                        dev_id % max(len(local_devices), 1)
+                    )
+            except Exception:
+                pass
         try:
             self.runtime.destroy()
         except Exception:
@@ -135,7 +153,7 @@ class Buffer:
             except Exception:
                 pass
         try:
-            _require_uccl_ep().unregister_proxy(self.local_rank)
+            ep.unregister_proxy(self.local_rank)
         except Exception:
             pass
         _unregister_thread_buffer()
@@ -528,6 +546,16 @@ def initialize(
         atomic_ptr = proxies[0].get_atomic_buffer_ptr()
         for p in proxies:
             p.set_atomic_buffer_ptr(atomic_ptr)
+
+    # Register the C++ runtime for the JAX FFI handlers so XLA can resolve
+    # "which Buffer?" for the active CUDA device when it invokes the
+    # custom-call targets.  Older uccl.ep builds may not have this hook;
+    # in that case we silently fall back to the eager code path.
+    if hasattr(ep, "register_jax_ffi_buffer"):
+        try:
+            ep.register_jax_ffi_buffer(device_index, runtime)
+        except Exception:
+            pass
 
     buf = Buffer(
         runtime=runtime,

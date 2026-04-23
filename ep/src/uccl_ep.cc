@@ -1640,6 +1640,333 @@ class Buffer {
       nullptr};  // Device pointer to array of IPC base addresses
 };
 
+// ============================================================================
+// JAX FFI bridge
+// ----------------------------------------------------------------------------
+// We expose a handful of XLA custom-call entry points so that the JAX wrapper
+// (ep/jax_wrapper/uccl_ep_jax) can drive dispatch/combine as proper XLA ops
+// instead of via `unsafe_buffer_pointer()` + `block_until_ready()`.
+//
+// We target the *legacy* custom-call ABI (api_version=1):
+//
+//   void handler(cudaStream_t stream, void** buffers,
+//                const char* opaque, size_t opaque_len,
+//                XlaCustomCallStatus* status);
+//
+// Rationale:
+//   * it has no external header dependency (no xla/ffi/api/*.h on the
+//     compile line), matching the setup used by uccl.ep's current
+//     PyTorch build.
+//   * JAX exposes it transparently through `jax.ffi.register_ffi_target`
+//     with `api_version=0` on the register side and
+//     `custom_call_api_version=1` on the lowering side.
+//
+// The opaque buffer is a tightly-packed C struct defined below.  The
+// ``Buffer*`` for the currently active CUDA device is resolved via a
+// simple global map that the JAX Python layer keeps up to date.
+// ============================================================================
+
+namespace uccl_jax_ffi {
+
+using XlaCustomCallStatus = void;  // opaque; we never read/write it
+
+// Per-device registry populated by ``uccl.ep.register_jax_ffi_buffer``.
+static std::mutex g_jax_ffi_mu;
+static std::unordered_map<int, Buffer*> g_jax_ffi_buffers;
+
+static Buffer* get_buffer_for_device(int device_index) {
+  std::lock_guard<std::mutex> lk(g_jax_ffi_mu);
+  auto it = g_jax_ffi_buffers.find(device_index);
+  if (it == g_jax_ffi_buffers.end()) return nullptr;
+  return it->second;
+}
+
+static Buffer* current_buffer_or_die() {
+  int dev = 0;
+  cudaError_t err = cudaGetDevice(&dev);
+  if (err != cudaSuccess) return nullptr;
+  return get_buffer_for_device(dev);
+}
+
+// ---------------------------------------------------------------------------
+// low_latency_dispatch
+// ---------------------------------------------------------------------------
+// Inputs : x, topk_idx
+// Outputs: packed_recv_x, packed_recv_count, packed_recv_src_info,
+//          packed_recv_layout_range, packed_recv_x_scales_storage
+//          (the scales buffer is always allocated; it has size 0 bytes
+//          when use_fp8=false).
+//
+// Attributes (opaque blob, packed little-endian / native layout):
+struct LowLatencyDispatchOpaque {
+  int32_t num_tokens;
+  int32_t hidden;
+  int32_t num_topk;
+  int32_t num_max_dispatch_tokens_per_rank;
+  int32_t num_experts;
+  int32_t use_fp8;
+  int32_t round_scale;
+  int32_t use_ue8m0;
+};
+
+extern "C" void uccl_ll_dispatch_ffi(cudaStream_t stream, void** buffers,
+                                     char const* opaque, size_t opaque_len,
+                                     XlaCustomCallStatus* /*status*/) {
+  if (opaque_len != sizeof(LowLatencyDispatchOpaque)) return;
+  auto const& p = *reinterpret_cast<LowLatencyDispatchOpaque const*>(opaque);
+  auto* buf = current_buffer_or_die();
+  if (!buf) return;
+
+  // ordered: [x, topk_idx, recv_x, recv_count, recv_src_info,
+  //           recv_layout_range, recv_x_scales_storage]
+  void* x = buffers[0];
+  void* topk_idx = buffers[1];
+  void* recv_x = buffers[2];
+  void* recv_count = buffers[3];
+  void* recv_src_info = buffers[4];
+  void* recv_layout_range = buffers[5];
+  void* recv_x_scales_storage = buffers[6];
+
+  auto compute_stream_ptr = reinterpret_cast<std::uintptr_t>(stream);
+  buf->low_latency_dispatch(
+      reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
+      reinterpret_cast<std::uintptr_t>(topk_idx), p.num_tokens, p.num_topk,
+      reinterpret_cast<std::uintptr_t>(recv_x),
+      p.use_fp8 ? reinterpret_cast<std::uintptr_t>(recv_x_scales_storage) : 0,
+      reinterpret_cast<std::uintptr_t>(recv_count),
+      reinterpret_cast<std::uintptr_t>(recv_src_info),
+      reinterpret_cast<std::uintptr_t>(recv_layout_range),
+      /*cumulative_local_expert_recv_stats_ptr=*/0,
+      /*dispatch_wait_recv_cost_stats_ptr=*/0, compute_stream_ptr,
+      p.num_max_dispatch_tokens_per_rank, p.num_experts,
+      static_cast<bool>(p.use_fp8), static_cast<bool>(p.round_scale),
+      static_cast<bool>(p.use_ue8m0), /*async=*/false,
+      /*return_recv_hook=*/false);
+}
+
+// ---------------------------------------------------------------------------
+// low_latency_combine
+// ---------------------------------------------------------------------------
+// Inputs : x, topk_idx, topk_weights, src_info, layout_range
+// Outputs: combined_x
+struct LowLatencyCombineOpaque {
+  int32_t x_dim0;
+  int32_t x_dim1;
+  int32_t x_dim2;
+  int32_t num_tokens;
+  int32_t num_topk;
+  int32_t num_max_dispatch_tokens_per_rank;
+  int32_t num_experts;
+  int32_t use_logfmt;
+  int32_t zero_copy;
+  int32_t src_info_dim0;
+  int32_t src_info_dim1;
+  int32_t layout_range_dim0;
+  int32_t layout_range_dim1;
+};
+
+extern "C" void uccl_ll_combine_ffi(cudaStream_t stream, void** buffers,
+                                    char const* opaque, size_t opaque_len,
+                                    XlaCustomCallStatus* /*status*/) {
+  if (opaque_len != sizeof(LowLatencyCombineOpaque)) return;
+  auto const& p = *reinterpret_cast<LowLatencyCombineOpaque const*>(opaque);
+  auto* buf = current_buffer_or_die();
+  if (!buf) return;
+
+  void* x = buffers[0];
+  void* topk_idx = buffers[1];
+  void* topk_weights = buffers[2];
+  void* src_info = buffers[3];
+  void* layout_range = buffers[4];
+  void* combined_x = buffers[5];
+
+  auto compute_stream_ptr = reinterpret_cast<std::uintptr_t>(stream);
+  buf->low_latency_combine(
+      reinterpret_cast<std::uintptr_t>(x), p.x_dim0, p.x_dim1, p.x_dim2,
+      reinterpret_cast<std::uintptr_t>(topk_idx), p.num_tokens, p.num_topk,
+      reinterpret_cast<std::uintptr_t>(topk_weights),
+      reinterpret_cast<std::uintptr_t>(src_info), p.src_info_dim0,
+      p.src_info_dim1, reinterpret_cast<std::uintptr_t>(layout_range),
+      p.layout_range_dim0, p.layout_range_dim1,
+      /*combine_wait_recv_cost_stats_ptr=*/0, compute_stream_ptr,
+      p.num_max_dispatch_tokens_per_rank, p.num_experts,
+      static_cast<bool>(p.use_logfmt), static_cast<bool>(p.zero_copy),
+      /*async=*/false, /*return_recv_hook=*/false,
+      reinterpret_cast<std::uintptr_t>(combined_x));
+}
+
+// ---------------------------------------------------------------------------
+// moe_dispatch (intranode, statically-known upper bound on recv tokens)
+// ---------------------------------------------------------------------------
+// Inputs : x, x_scales (empty-sized buffer when absent),
+//          topk_idx, topk_weights
+// Outputs: recv_x, recv_x_scales, recv_topk_idx, recv_topk_weights,
+//          is_token_in_rank, num_tokens_per_rank, num_tokens_per_expert,
+//          rank_prefix_matrix, channel_prefix_matrix,
+//          recv_channel_prefix_matrix, recv_src_idx, send_head
+struct MoEDispatchOpaque {
+  int32_t num_tokens;
+  int32_t hidden;
+  int32_t x_element_size;
+  int32_t num_scales;
+  int32_t scale_token_stride;
+  int32_t scale_hidden_stride;
+  int32_t num_topk;
+  int32_t num_experts;
+  int32_t expert_alignment;
+  int32_t num_worst_tokens;
+  // Config fields
+  int32_t num_sms;
+  int32_t num_max_nvl_chunked_send_tokens;
+  int32_t num_max_nvl_chunked_recv_tokens;
+  int32_t num_max_rdma_chunked_send_tokens;
+  int32_t num_max_rdma_chunked_recv_tokens;
+  int32_t has_x_scales;
+};
+
+extern "C" void uccl_moe_dispatch_ffi(cudaStream_t stream, void** buffers,
+                                      char const* opaque, size_t opaque_len,
+                                      XlaCustomCallStatus* /*status*/) {
+  if (opaque_len != sizeof(MoEDispatchOpaque)) return;
+  auto const& p = *reinterpret_cast<MoEDispatchOpaque const*>(opaque);
+  auto* buf = current_buffer_or_die();
+  if (!buf) return;
+
+  void* x = buffers[0];
+  void* x_scales = buffers[1];
+  void* topk_idx = buffers[2];
+  void* topk_weights = buffers[3];
+  void* recv_x = buffers[4];
+  void* recv_x_scales = buffers[5];
+  void* recv_topk_idx = buffers[6];
+  void* recv_topk_weights = buffers[7];
+  void* is_token_in_rank = buffers[8];
+  void* num_tokens_per_rank = buffers[9];
+  void* num_tokens_per_expert = buffers[10];
+  void* rank_prefix_matrix = buffers[11];
+  void* channel_prefix_matrix = buffers[12];
+  void* recv_channel_prefix_matrix = buffers[13];
+  void* recv_src_idx = buffers[14];
+  void* send_head = buffers[15];
+
+  auto compute_stream_ptr = reinterpret_cast<std::uintptr_t>(stream);
+  uccl::Config config(p.num_sms, p.num_max_nvl_chunked_send_tokens,
+                      p.num_max_nvl_chunked_recv_tokens,
+                      p.num_max_rdma_chunked_send_tokens,
+                      p.num_max_rdma_chunked_recv_tokens);
+
+  std::optional<EventHandle> prev;
+
+  // 1) layout
+  buf->get_dispatch_layout(
+      reinterpret_cast<std::uintptr_t>(topk_idx), p.num_tokens, p.num_topk,
+      p.num_experts, reinterpret_cast<std::uintptr_t>(num_tokens_per_rank), 0,
+      reinterpret_cast<std::uintptr_t>(num_tokens_per_expert),
+      reinterpret_cast<std::uintptr_t>(is_token_in_rank), prev, false, false,
+      compute_stream_ptr);
+
+  // 2) intranode_prepare (with num_worst_tokens > 0 => no host sync)
+  buf->intranode_prepare(
+      reinterpret_cast<std::uintptr_t>(num_tokens_per_rank),
+      reinterpret_cast<std::uintptr_t>(is_token_in_rank),
+      reinterpret_cast<std::uintptr_t>(num_tokens_per_expert), p.num_tokens,
+      p.num_experts, reinterpret_cast<std::uintptr_t>(rank_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(channel_prefix_matrix),
+      p.expert_alignment, p.num_worst_tokens, config, prev, false, false,
+      compute_stream_ptr);
+
+  // 3) intranode_dispatch
+  buf->intranode_dispatch(
+      reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
+      p.x_element_size,
+      p.has_x_scales ? reinterpret_cast<std::uintptr_t>(x_scales) : 0,
+      p.num_scales, p.scale_token_stride, p.scale_hidden_stride,
+      reinterpret_cast<std::uintptr_t>(topk_idx), p.num_topk,
+      reinterpret_cast<std::uintptr_t>(topk_weights),
+      reinterpret_cast<std::uintptr_t>(is_token_in_rank),
+      reinterpret_cast<std::uintptr_t>(rank_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(channel_prefix_matrix), p.num_experts,
+      p.num_worst_tokens, /*cached_mode=*/false, config, p.num_worst_tokens,
+      reinterpret_cast<std::uintptr_t>(recv_x),
+      p.has_x_scales ? reinterpret_cast<std::uintptr_t>(recv_x_scales) : 0,
+      reinterpret_cast<std::uintptr_t>(recv_topk_idx),
+      reinterpret_cast<std::uintptr_t>(recv_topk_weights),
+      reinterpret_cast<std::uintptr_t>(recv_channel_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(recv_src_idx),
+      reinterpret_cast<std::uintptr_t>(send_head), prev, false, false,
+      compute_stream_ptr);
+}
+
+// ---------------------------------------------------------------------------
+// moe_combine (intranode)
+// ---------------------------------------------------------------------------
+// Inputs : x, topk_weights, bias_0, bias_1, src_idx, rank_prefix_matrix,
+//          channel_prefix_matrix, send_head
+// Outputs: combined_x, combined_topk_weights
+struct MoECombineOpaque {
+  int32_t num_tokens;
+  int32_t hidden;
+  int32_t x_dtype_code;
+  int32_t x_element_size;
+  int32_t num_topk;
+  int32_t num_recv_tokens;
+  int32_t has_topk_weights;
+  int32_t has_bias_0;
+  int32_t has_bias_1;
+  // Config
+  int32_t num_sms;
+  int32_t num_max_nvl_chunked_send_tokens;
+  int32_t num_max_nvl_chunked_recv_tokens;
+  int32_t num_max_rdma_chunked_send_tokens;
+  int32_t num_max_rdma_chunked_recv_tokens;
+};
+
+extern "C" void uccl_moe_combine_ffi(cudaStream_t stream, void** buffers,
+                                     char const* opaque, size_t opaque_len,
+                                     XlaCustomCallStatus* /*status*/) {
+  if (opaque_len != sizeof(MoECombineOpaque)) return;
+  auto const& p = *reinterpret_cast<MoECombineOpaque const*>(opaque);
+  auto* buf = current_buffer_or_die();
+  if (!buf) return;
+
+  void* x = buffers[0];
+  void* topk_weights = buffers[1];
+  void* bias_0 = buffers[2];
+  void* bias_1 = buffers[3];
+  void* src_idx = buffers[4];
+  void* rank_prefix_matrix = buffers[5];
+  void* channel_prefix_matrix = buffers[6];
+  void* send_head = buffers[7];
+  void* combined_x = buffers[8];
+  void* combined_topk_weights = buffers[9];
+
+  auto compute_stream_ptr = reinterpret_cast<std::uintptr_t>(stream);
+  uccl::Config config(p.num_sms, p.num_max_nvl_chunked_send_tokens,
+                      p.num_max_nvl_chunked_recv_tokens,
+                      p.num_max_rdma_chunked_send_tokens,
+                      p.num_max_rdma_chunked_recv_tokens);
+
+  std::optional<EventHandle> prev;
+  buf->intranode_combine(
+      reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
+      p.x_dtype_code, p.x_element_size,
+      p.has_topk_weights ? reinterpret_cast<std::uintptr_t>(topk_weights) : 0,
+      p.num_topk,
+      p.has_bias_0 ? reinterpret_cast<std::uintptr_t>(bias_0) : 0,
+      p.has_bias_1 ? reinterpret_cast<std::uintptr_t>(bias_1) : 0,
+      reinterpret_cast<std::uintptr_t>(src_idx), p.num_recv_tokens,
+      reinterpret_cast<std::uintptr_t>(rank_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(channel_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(send_head), config,
+      reinterpret_cast<std::uintptr_t>(combined_x),
+      p.has_topk_weights
+          ? reinterpret_cast<std::uintptr_t>(combined_topk_weights)
+          : 0,
+      prev, false, false, compute_stream_ptr);
+}
+
+}  // namespace uccl_jax_ffi
+
 NB_MODULE(ep, m) {
   m.doc() = "Minimal DeepEP-compatible shim with UCCL";
 
@@ -2147,6 +2474,44 @@ NB_MODULE(ep, m) {
            nb::arg("num_experts") = 1, nb::arg("use_logfmt") = false,
            nb::arg("zero_copy") = false, nb::arg("is_async") = false,
            nb::arg("return_recv_hook") = false, nb::arg("out_ptr"));
+
+  // ------------------------------------------------------------------
+  // JAX FFI integration
+  // ------------------------------------------------------------------
+  m.def(
+      "register_jax_ffi_buffer",
+      [](int device_index, Buffer& buf) {
+        std::lock_guard<std::mutex> lk(uccl_jax_ffi::g_jax_ffi_mu);
+        uccl_jax_ffi::g_jax_ffi_buffers[device_index] = &buf;
+      },
+      nb::arg("device_index"), nb::arg("buffer"),
+      "Register a uccl.ep.Buffer for the given CUDA device so JAX FFI "
+      "handlers can look it up at call time.");
+  m.def(
+      "unregister_jax_ffi_buffer",
+      [](int device_index) {
+        std::lock_guard<std::mutex> lk(uccl_jax_ffi::g_jax_ffi_mu);
+        uccl_jax_ffi::g_jax_ffi_buffers.erase(device_index);
+      },
+      nb::arg("device_index"));
+  m.def("get_jax_ffi_targets", []() {
+    // Return a dict `{target_name: PyCapsule(function_pointer)}` that can
+    // be fed into `jax.ffi.register_ffi_target(..., api_version=0)`.
+    auto make_capsule = [](void* fn) {
+      return nb::capsule(fn, "xla._CUSTOM_CALL_TARGET");
+    };
+    nb::dict d;
+    d["uccl_ll_dispatch"] = make_capsule(
+        reinterpret_cast<void*>(&uccl_jax_ffi::uccl_ll_dispatch_ffi));
+    d["uccl_ll_combine"] = make_capsule(
+        reinterpret_cast<void*>(&uccl_jax_ffi::uccl_ll_combine_ffi));
+    d["uccl_moe_dispatch"] = make_capsule(
+        reinterpret_cast<void*>(&uccl_jax_ffi::uccl_moe_dispatch_ffi));
+    d["uccl_moe_combine"] = make_capsule(
+        reinterpret_cast<void*>(&uccl_jax_ffi::uccl_moe_combine_ffi));
+    return d;
+  });
+
   m.def("alloc_cmd_ring", &alloc_cmd_ring);
   m.def("free_cmd_ring", &free_cmd_ring);
   m.def("launch_gpu_issue_kernel", [](int blocks, int threads_per_block,

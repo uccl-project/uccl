@@ -44,12 +44,23 @@ from .bootstrap import (
     Buffer,
 )
 from .ops import (
+    moe_dispatch as moe_dispatch_eager,
+    moe_combine as moe_combine_eager,
+    low_latency_dispatch as low_latency_dispatch_eager,
+    low_latency_combine as low_latency_combine_eager,
+    get_low_latency_rdma_size_hint,
+)
+
+# Primitive + FFI (jit-friendly) public API. These mirror the Primus-Turbo
+# ``primus_turbo.jax.lax.moe`` entry points, including ``custom_vjp``
+# support, and are the recommended path for real JAX training loops.
+from .lax import (
     moe_dispatch,
     moe_combine,
     low_latency_dispatch,
     low_latency_combine,
-    get_low_latency_rdma_size_hint,
 )
+from .primitive import register_ffi_targets
 
 __all__ = [
     "Config",
@@ -72,5 +83,10 @@ __all__ = [
     "moe_combine",
     "low_latency_dispatch",
     "low_latency_combine",
+    "moe_dispatch_eager",
+    "moe_combine_eager",
+    "low_latency_dispatch_eager",
+    "low_latency_combine_eager",
     "get_low_latency_rdma_size_hint",
+    "register_ffi_targets",
 ]

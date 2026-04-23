@@ -91,17 +91,46 @@ for t in threads: t.join()
 
 ## API
 
+Two API flavours are shipped. The primitive API is the recommended one:
+
+### Primitive / XLA-custom-call API (jit-friendly)
+
+These are exported from the top-level module and are the default names
+(``uccl_ep_jax.moe_dispatch`` etc). They are lowered to
+``stablehlo.custom_call`` and therefore can be used inside ``jax.jit``,
+``shard_map``, and participate in ``jax.vjp`` / ``jax.grad`` via
+``jax.custom_vjp`` — matching the Primus-Turbo pattern.
+
+| Function | Notes |
+| --- | --- |
+| `moe_dispatch(...)` | High-throughput intranode MoE dispatch; `custom_vjp`. |
+| `moe_combine(...)` | High-throughput intranode MoE combine; `custom_vjp`. |
+| `low_latency_dispatch(...)` | Low-latency RDMA/IBGDA dispatch as XLA custom call. |
+| `low_latency_combine(...)` | Low-latency RDMA/IBGDA combine as XLA custom call. |
+| `register_ffi_targets()` | Idempotent; called automatically on first use. |
+
+### Eager API (for bootstrapping / debugging)
+
+Same entry points with the ``_eager`` suffix
+(``uccl_ep_jax.moe_dispatch_eager`` etc). They skip ``jit`` and read raw
+device pointers via ``unsafe_buffer_pointer``. Useful while wiring up
+bootstrap, or when you need the cached-handle / internode throughput
+paths that the primitive layer does not yet cover.
+
+| Function | Notes |
+| --- | --- |
+| `moe_dispatch_eager(...)` | Intranode + internode; selected by `num_rdma_ranks`. |
+| `moe_combine_eager(...)` | Intranode + internode. |
+| `low_latency_dispatch_eager(...)` / `low_latency_combine_eager(...)` | Return `(event, hook)` for fine-grained overlap. |
+
+### Shared infrastructure
+
 | Function | Notes |
 | --- | --- |
 | `initialize(...)` | Boot the C++ runtime, proxies, and IPC exchange for the calling thread/process. |
 | `shutdown(buf=None)` | Destroy the runtime bound to the current thread (or the one passed in). |
 | `get_buffer()` | Return the `Buffer` registered on the current thread. |
-| `low_latency_dispatch(...)` | Port of `Buffer.low_latency_dispatch` (RDMA/IBGDA path). |
-| `low_latency_combine(...)` | Port of `Buffer.low_latency_combine`. |
-| `moe_dispatch(...)` | Primus-Turbo-compatible high-throughput dispatch (intranode when `num_rdma_ranks == 1`, internode when `num_rdma_ranks > 1`). |
-| `moe_combine(...)` | Primus-Turbo-compatible high-throughput combine (intranode or internode; path chosen automatically to match the handle from `moe_dispatch`). |
-| `get_dispatch_config(num_ranks)` | Recommended tuning config for dispatch. |
-| `get_combine_config(num_ranks)` | Recommended tuning config for combine. |
+| `get_dispatch_config(num_ranks)` / `get_combine_config(num_ranks)` | Recommended tuning configs. |
 
 The execution-mode helpers (`detect_execution_mode`,
 `is_single_process_mode`, `is_multi_process_mode`) mirror the pattern
@@ -109,11 +138,17 @@ used by TransformerEngine JAX.
 
 ## Limitations / follow-ups
 
-* The ops execute eagerly (they block until inputs are ready) similar
-  to `mori.jax.ops`. Exposing them as XLA custom-call primitives with
-  proper batching / VJP rules (as Primus-Turbo does) is a planned
+* The primitive `moe_dispatch` / `moe_combine` currently cover the
+  **intranode** path (``num_rdma_ranks == 1``). For internode
+  high-throughput today you can use the ``_eager`` variants. Wiring the
+  internode path through the primitive layer requires surfacing
+  ``num_recv_tokens`` as a runtime dynamic shape; that is a planned
   follow-up.
-* `moe_dispatch` / `moe_combine` currently take the non-cached path on
-  every call. Caching the layout handle across iterations -- as the
-  PyTorch wrapper does when `handle` is passed back -- will be wired
-  through in a follow-up.
+* ``moe_dispatch`` / ``moe_combine`` currently use the non-cached path
+  on every call. Caching the layout handle across iterations (as the
+  PyTorch wrapper does when ``handle`` is reused) will be added next.
+* The backward rule of the primitive ``moe_combine`` is currently a
+  zero-gradient placeholder pending the cached-dispatch primitive; the
+  backward rule of the primitive ``moe_dispatch`` already does the
+  right thing (calls the primitive ``moe_combine`` on the upstream
+  gradient).
