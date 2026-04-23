@@ -172,9 +172,16 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
 
   std::cerr << "[UCCL connect] resolved remote_bdf=" << remote_bdf << std::endl;
 
-  // Same-GPU cross-process can't use connect_local (shm ring self-skip issue),
-  // so fall back to network path. RDMA same-GPU loopback works fine.
+  // Decide whether to use IPC (connect_local) or network (connect).
+  // - Same-process: always IPC
+  // - Cross-process same-GPU: network (shm ring self-skip issue)
+  // - Cross-process diff-GPU RDMA: IPC (RDMA loopback has QP assertion)
+  // - Cross-process NCCL/TCP: network only (connect_local causes double-free)
+#if !defined(UCCL_P2P_USE_NCCL)
   bool use_ipc = is_local && (same_process || remote_bdf != engine->endpoint->get_gpu_bus_id());
+#else
+  bool use_ipc = is_local && same_process;
+#endif
 
   bool ok;
   if (use_ipc) {
@@ -230,11 +237,10 @@ uccl_conn_t* uccl_engine_accept(uccl_engine_t* engine, char* ip_addr_buf,
   // cross-process local peers can connect via connect_local concurrently
   // with the blocking RDMA accept for remote peers.
   engine->endpoint->start_passive_accept();
-#else
-  // NCCL/TCP: only start the local IPC accept thread (NCCL handles
-  // remote accept in the caller's thread).
-  engine->endpoint->start_passive_accept_local();
 #endif
+  // NCCL/TCP: no passive accept threads. Same-process uses connect_local
+  // directly. Cross-process uses NCCL network (connect_local causes
+  // double-free with NCCL endpoint).
   uccl_conn_t* conn = new uccl_conn;
   std::string ip_addr;
   uint64_t conn_id;
