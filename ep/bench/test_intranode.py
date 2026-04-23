@@ -181,14 +181,13 @@ def test_main(
         token_offsets = torch.arange(
             num_tokens, dtype=torch.int64, device="cuda"
         ).unsqueeze(1)
-        topk_offsets = torch.arange(num_topk, dtype=torch.int64, device="cuda").unsqueeze(
-            0
-        )
+        topk_offsets = torch.arange(
+            num_topk, dtype=torch.int64, device="cuda"
+        ).unsqueeze(0)
         zero_recv_topk_idx = (token_offsets + topk_offsets) % active_experts
-        zero_recv_topk_weights = (
-            torch.ones((num_tokens, num_topk), dtype=torch.float32, device="cuda")
-            * (rank + 1)
-        )
+        zero_recv_topk_weights = torch.ones(
+            (num_tokens, num_topk), dtype=torch.float32, device="cuda"
+        ) * (rank + 1)
 
         (
             zero_recv_num_tokens_per_rank,

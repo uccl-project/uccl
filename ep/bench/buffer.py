@@ -914,7 +914,9 @@ class Buffer:
                 is_token_in_rank,
                 send_head,
             ) = handle
-            num_recv_tokens = int(rank_prefix_matrix[self.group_size - 1, self.rank].item())
+            num_recv_tokens = int(
+                rank_prefix_matrix[self.group_size - 1, self.rank].item()
+            )
             num_topk = 0
             num_scales = (
                 0
@@ -1198,7 +1200,9 @@ class Buffer:
         if num_x_rows == 0:
             x = x.new_empty((1, x.size(1)))
         if src_idx.size(0) == 0:
-            src_idx = src_idx.new_empty((1,), dtype=src_idx.dtype, device=src_idx.device)
+            src_idx = src_idx.new_empty(
+                (1,), dtype=src_idx.dtype, device=src_idx.device
+            )
         if topk_weights is not None and topk_weights.size(0) == 0:
             topk_weights = topk_weights.new_empty(
                 (1, num_topk), dtype=topk_weights.dtype, device=topk_weights.device
