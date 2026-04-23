@@ -45,7 +45,9 @@ only the Python bootstrap differs. See
 ```
 ep/
 ├── README.md                          ## new section pointing to the package
-├── src/uccl_ep.cc                     ## + ~730 lines of FFI bridge
+├── include/uccl_ep_jax.hpp            ## shared bridge interface (types + prototypes)
+├── src/uccl_ep.cc                     ## unchanged Buffer class + thin install_jax_buffer_bridge
+├── src/uccl_ep_jax.cc                 ## NEW: all JAX FFI handlers, registry, nanobind bindings
 └── jax_wrapper/
     ├── README.md                      ## user-facing docs
     ├── REVIEW.md                      ## this file
@@ -114,10 +116,25 @@ def ll_step(x, topk_idx, topk_weights):
 ux.shutdown(buf)
 ```
 
-## 4. C++ FFI bridge (`ep/src/uccl_ep.cc`)
+## 4. C++ FFI bridge
 
-A new `uccl_jax_ffi::` namespace at the bottom of the file exposes
-**eight** XLA legacy custom-call handlers (ABI:
+The JAX-specific C++ code lives in its own translation unit,
+`ep/src/uccl_ep_jax.cc`, and is exposed to `ep/src/uccl_ep.cc` via
+`ep/include/uccl_ep_jax.hpp`. The two files are loosely coupled
+through a small C-style vtable (`uccl_jax_ffi::BufferBridge`):
+
+* `uccl_ep.cc` defines nine `bridge_*` trampolines (one per `Buffer`
+  method used by the FFI handlers) inside an anonymous namespace.
+  `install_jax_buffer_bridge()` hands them to `uccl_ep_jax.cc` and is
+  called at the top of `NB_MODULE(ep, m)`.
+* `uccl_ep_jax.cc` owns the per-device `Buffer*` registry, the eight
+  XLA legacy custom-call handlers, and the `register_jax_bindings(m)`
+  entry that attaches `register_jax_ffi_buffer` /
+  `unregister_jax_ffi_buffer` / `get_jax_ffi_targets` to the module.
+  It only ever touches `Buffer*` as `OpaqueBuffer = void*` and
+  dispatches through the bridge.
+
+The eight XLA legacy custom-call handlers (ABI:
 `void(cudaStream_t, void**, const char* opaque, size_t opaque_len, XlaCustomCallStatus*)`):
 
 | Target name | Purpose |
@@ -131,19 +148,20 @@ A new `uccl_jax_ffi::` namespace at the bottom of the file exposes
 | `uccl_moe_cached_dispatch` | intranode cached-replay (combine backward) |
 | `uccl_moe_internode_cached_dispatch` | internode cached-replay (combine backward) |
 
-Each handler:
+Each handler (all in `ep/src/uccl_ep_jax.cc`):
 
 1. Casts the opaque byte blob to a per-op `struct` with int32 fields
    only (so Python can `struct.pack("i"*N, ...)` a byte-identical
    layout).
-2. Resolves the active `Buffer*` via `cudaGetDevice()` and a
-   process-global `unordered_map<int, Buffer*> g_jax_ffi_buffers` that
-   is populated by the Python bootstrap.
-3. Calls the existing `Buffer::intranode_*` / `Buffer::internode_*` /
-   `Buffer::low_latency_*` methods with raw pointers taken straight
-   from `buffers[]`.
+2. Resolves the active `OpaqueBuffer` (== `Buffer*`) via
+   `cudaGetDevice()` and a process-global `unordered_map<int, void*>`
+   populated by the Python bootstrap.
+3. Dispatches to the existing `Buffer` methods through the
+   `BufferBridge` vtable with raw pointers taken straight from
+   `buffers[]`.
 
-New Python bindings:
+New Python bindings (defined in `uccl_ep_jax.cc`, attached to the
+module via `register_jax_bindings(m)` called from `uccl_ep.cc`):
 
 - `ep.register_jax_ffi_buffer(device_index, buffer)`
 - `ep.unregister_jax_ffi_buffer(device_index)`
@@ -322,21 +340,29 @@ Current state: **17 passed**.
 
 Focus areas, in rough priority order:
 
-1. `ep/src/uccl_ep.cc` -- the eight FFI handlers. In particular:
+1. `ep/include/uccl_ep_jax.hpp` + `ep/src/uccl_ep_jax.cc` -- the
+   eight FFI handlers and the bridge interface. In particular:
+   - `BufferBridge` signatures line up with the `bridge_*`
+     trampolines in `uccl_ep.cc` and with the `Buffer::*` methods
+     they forward to.
    - Opaque struct layouts line up with the Python `pack_ints32`
-     calls? (search `pack_ints32(` in
+     calls (search `pack_ints32(` in
      `ep/jax_wrapper/uccl_ep_jax/primitive/_calls.py` and diff field
-     order against the `MoE*Opaque` structs).
+     order against the `MoE*Opaque` structs in `uccl_ep_jax.cc`).
    - Buffer-index order in each handler (`buffers[0]`, `buffers[1]`,
      ...) matches the order of operands + outputs declared in
      `_calls.py`.
+2. `ep/src/uccl_ep.cc`:
+   - `install_jax_buffer_bridge()` populates every
+     `BufferBridge` slot and is called exactly once in
+     `NB_MODULE(ep, m)` before `uccl_jax_ffi::register_jax_bindings(m)`.
    - `PyGILState_Check()` guard in `internode_prepare` is correct.
-2. `ep/jax_wrapper/uccl_ep_jax/lax/moe.py` -- the `custom_vjp` logic
+3. `ep/jax_wrapper/uccl_ep_jax/lax/moe.py` -- the `custom_vjp` logic
    (handle arity, cached-replay in `_moe_combine_bwd`, residuals).
-3. `ep/jax_wrapper/uccl_ep_jax/bootstrap.py` -- CUDA-ordinal capture
+4. `ep/jax_wrapper/uccl_ep_jax/bootstrap.py` -- CUDA-ordinal capture
    and registration / deregistration paths.
-4. `ep/jax_wrapper/uccl_ep_jax/primitive/_calls.py` -- output shape
+5. `ep/jax_wrapper/uccl_ep_jax/primitive/_calls.py` -- output shape
    declarations (especially the internode dispatch's 17 outputs and
    their shape expressions).
-5. Everything else (mode detection, KV store, eager wrappers) is
-   straightforward plumbing.
+6. Everything else (mode detection, KV store) is straightforward
+   plumbing.
