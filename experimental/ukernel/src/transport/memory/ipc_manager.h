@@ -17,6 +17,7 @@ struct IPCItem {
   uintptr_t base_addr = 0;
   uintptr_t base_offset = 0;
   size_t bytes = 0;
+  size_t allocation_size = 0;
   int device_idx = -1;
   uint64_t binding_version = 0;
   uint32_t ipc_id = 0;
@@ -65,6 +66,8 @@ class IPCManager {
   }
 
   static bool has_handle(gpuIpcMemHandle_t const& h);
+  static bool local_cache_contains(IPCItem const& item,
+                                   uintptr_t ptr_addr) noexcept;
   // Close local imported mapping (gpuIpcOpenMemHandle result) if present.
   // This only affects this process's VA mapping, not remote process memory.
   static void close_local_import_if_open(IPCItem& item);
