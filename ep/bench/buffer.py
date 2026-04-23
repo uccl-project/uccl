@@ -910,13 +910,11 @@ class Buffer:
                 rank_prefix_matrix,
                 channel_prefix_matrix,
                 recv_channel_prefix_matrix,
+                num_recv_tokens,
                 recv_src_idx,
                 is_token_in_rank,
                 send_head,
             ) = handle
-            num_recv_tokens = int(
-                rank_prefix_matrix[self.group_size - 1, self.rank].item()
-            )
             num_topk = 0
             num_scales = (
                 0
@@ -1118,8 +1116,10 @@ class Buffer:
                 rank_prefix_matrix,
                 channel_prefix_matrix,
                 recv_channel_prefix_matrix,
-                # Cached combine expects a valid src_idx pointer even when the
-                # logical receive count is 0, so keep a 1-element sentinel.
+                # Keep the logical count separate from the storage tensor so
+                # cached dispatch avoids a GPU sync while cached combine still
+                # gets a valid src_idx pointer when the count is 0.
+                num_recv_tokens,
                 recv_src_idx if num_recv_tokens > 0 else recv_src_idx.new_empty((1,)),
                 is_token_in_rank,
                 send_head,
@@ -1187,6 +1187,7 @@ class Buffer:
             rank_prefix_matrix,
             _,
             channel_prefix_matrix,
+            _,
             src_idx,
             is_recv_token_in_rank,
             send_head,
@@ -1304,12 +1305,12 @@ class Buffer:
                 recv_rdma_rank_prefix_sum,
                 recv_gbl_channel_prefix_matrix,
                 recv_gbl_rank_prefix_sum,
+                num_recv_tokens,
+                num_rdma_recv_tokens,
                 recv_src_meta,
                 send_rdma_head,
                 send_nvl_head,
             ) = handle
-            num_recv_tokens = recv_src_meta.size(0)
-            num_rdma_recv_tokens = send_nvl_head.size(0)
             # Allocate at least 1 row so data_ptr() is never null (zero-token ranks
             # produce empty tensors whose data_ptr()==0, which trips C++ assertions).
             alloc_recv_tokens = max(num_recv_tokens, 1)
@@ -1549,6 +1550,8 @@ class Buffer:
                 recv_rdma_rank_prefix_sum,
                 recv_gbl_channel_prefix_matrix,
                 recv_gbl_rank_prefix_sum,
+                num_recv_tokens,
+                num_rdma_recv_tokens,
                 recv_src_meta,
                 send_rdma_head,
                 send_nvl_head,
@@ -1589,6 +1592,8 @@ class Buffer:
             rdma_rank_prefix_sum,
             gbl_channel_prefix_matrix,
             gbl_rank_prefix_sum,
+            _,
+            _,
             src_meta,
             send_rdma_head,
             send_nvl_head,
