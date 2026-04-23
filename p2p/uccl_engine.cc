@@ -150,15 +150,8 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   // Same-process self-connections always use the local path (connect_local)
   // regardless of DISABLE_IPC, since NCCL can't self-connect via network.
   std::string local_ip = uccl::get_oob_ip();
-  bool is_local = (same_process || !ipc_disabled()) &&
-                  (std::string(ip_addr) == local_ip);
-
-  std::cerr << "[UCCL connect] ip=" << ip_addr
-            << " remote_gpu=" << (remote_gpu ? remote_gpu : "(null)")
-            << " port=" << remote_port
-            << " same_process=" << same_process
-            << " local_ip=" << local_ip
-            << " is_local=" << is_local << std::endl;
+  bool is_local =
+      (same_process || !ipc_disabled()) && (std::string(ip_addr) == local_ip);
 
   // Resolve remote_gpu: accept either a PCI BDF string (e.g. "0000:4a:00.0")
   // or a CUDA device index string (e.g. "0").
@@ -172,22 +165,30 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
     remote_bdf = uccl::normalize_pci_bus_id(bdf_buf);
   }
 
-  std::cerr << "[UCCL connect] resolved remote_bdf=" << remote_bdf << std::endl;
-
   // Decide whether to use IPC (connect_local) or network (connect).
-  // - Same-process: always IPC
-  // - Cross-process same-GPU: network (shm ring self-skip issue)
-  // - Cross-process diff-GPU RDMA: IPC (RDMA loopback has QP assertion)
-  // - Cross-process NCCL/TCP: network only (connect_local causes double-free)
+  //
+  // RDMA build:
+  //   - Same-process: IPC (direct ring access)
+  //   - Cross-process diff-GPU same-node: IPC
+  //   - Cross-process same-GPU same-node: network (shm ring self-skip issue)
+  //   - Remote inter-node: network (RDMA)
+  //
+  // NCCL/TCP build:
+  //   - Same-process: IPC (direct ring access)
+  //   - Cross-process same-node: network (NCCL). Data still uses IPC via
+  //     NIXL ipc_bufs since conn->is_local is set true.
+  //     NOTE: same-GPU cross-process is unsupported with NCCL/TCP because
+  //     ncclCommInitRank rejects two ranks on the same physical GPU.
+  //   - Remote inter-node: network (NCCL)
 #if !defined(UCCL_P2P_USE_NCCL)
-  bool use_ipc = is_local && (same_process || remote_bdf != engine->endpoint->get_gpu_bus_id());
+  bool use_ipc = is_local && (same_process ||
+                              remote_bdf != engine->endpoint->get_gpu_bus_id());
 #else
   bool use_ipc = is_local && same_process;
 #endif
 
   bool ok;
   if (use_ipc) {
-    std::cerr << "[UCCL connect] using IPC path (connect_local)" << std::endl;
     ok = engine->endpoint->connect_local(remote_bdf, conn_id, same_process);
     conn->sock_fd = -1;
     // Cross-process local: connect_local doesn't establish OOB, so create a

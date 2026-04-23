@@ -444,8 +444,6 @@ class Endpoint {
 
   /* Start a background thread for accepting. */
   bool start_passive_accept();
-  /* Start only the local (IPC/shm) accept thread. */
-  bool start_passive_accept_local();
 
   /***************************************************/
   /* API for Ray */
