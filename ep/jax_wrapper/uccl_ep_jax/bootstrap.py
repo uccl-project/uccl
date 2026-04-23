@@ -78,6 +78,44 @@ def get_low_latency_rdma_size_hint(
     )
 
 
+def get_nvl_buffer_size_hint(hidden_bytes: int, num_ranks: int,
+                             config: Optional[Config] = None,
+                             margin: float = 1.2,
+                             alignment: int = 128) -> int:
+    """Return a size for the NVLink/xGMI intranode buffer.
+
+    :func:`moe_dispatch` / :func:`moe_combine` drive kernels that need
+    a per-device NVLink scratch buffer (``num_nvl_bytes`` on
+    :func:`initialize`). The recommended default is what the dispatch
+    tuning table asks for plus a small safety margin, rounded up to
+    the C++ allocation alignment.
+    """
+    cfg = config or Config(20, 6, 256, 6, 128)
+    uccl_cfg = cfg.to_uccl_config()
+    raw = int(uccl_cfg.get_nvl_buffer_size_hint(int(hidden_bytes), int(num_ranks)))
+    # Apply the same safety margin / alignment the PyTorch bench uses.
+    scaled = int(raw * margin)
+    return ((scaled + alignment - 1) // alignment) * alignment
+
+
+def get_rdma_buffer_size_hint(hidden_bytes: int, num_ranks: int,
+                              config: Optional[Config] = None,
+                              margin: float = 1.2,
+                              alignment: int = 128) -> int:
+    """Return a size for the internode RDMA buffer used by
+    :func:`moe_dispatch` / :func:`moe_combine`.
+
+    Not the same as :func:`get_low_latency_rdma_size_hint` -- the
+    high-throughput path uses a different sizing formula
+    (``Config.get_rdma_buffer_size_hint``).
+    """
+    cfg = config or Config(20, 6, 256, 6, 128)
+    uccl_cfg = cfg.to_uccl_config()
+    raw = int(uccl_cfg.get_rdma_buffer_size_hint(int(hidden_bytes), int(num_ranks)))
+    scaled = int(raw * margin)
+    return ((scaled + alignment - 1) // alignment) * alignment
+
+
 # ---------------------------------------------------------------------------
 # Per-thread/process Buffer registry
 # ---------------------------------------------------------------------------
@@ -385,6 +423,7 @@ def _build_kv_client(
 def initialize(
     *,
     num_rdma_bytes: int,
+    num_nvl_bytes: int = 0,
     low_latency_mode: bool = True,
     num_experts: int = 0,
     is_intranode: bool = False,
@@ -402,8 +441,15 @@ def initialize(
 
     Arguments:
         num_rdma_bytes: size of the RDMA scratch buffer in bytes. Use
-            :func:`uccl_ep_jax.get_low_latency_rdma_size_hint` to pick a
-            reasonable value in low-latency mode.
+            :func:`uccl_ep_jax.get_low_latency_rdma_size_hint` for the
+            low-latency kernels or
+            :func:`uccl_ep_jax.get_rdma_buffer_size_hint` for the
+            high-throughput kernels.
+        num_nvl_bytes: size of the NVLink/xGMI intranode scratch
+            buffer in bytes. Required (``> 0``) for
+            :func:`moe_dispatch` / :func:`moe_combine` on multi-GPU
+            setups; not needed for the low-latency path. Use
+            :func:`uccl_ep_jax.get_nvl_buffer_size_hint`.
         low_latency_mode: whether the low-latency dispatch/combine
             kernels will be used. Matches ``uccl.ep.Buffer``.
         num_experts: total number of experts (required for the proxy).
@@ -547,10 +593,14 @@ def initialize(
     time.sleep(3)
 
     # --- C++ Buffer runtime --------------------------------------------
+    # ``num_nvl_bytes`` only needs to be > 0 when the high-throughput
+    # intranode dispatch/combine kernels are going to be used
+    # (``moe_dispatch`` / ``moe_combine``). For the low-latency path a
+    # zero-sized NVL buffer is fine.
     runtime = ep.Buffer(
         global_rank,
         global_world_size,
-        0,  # num_nvl_bytes - this wrapper assumes low-latency path by default
+        int(num_nvl_bytes),
         scratch_nbytes,
         low_latency_mode,
         explicitly_destroy,

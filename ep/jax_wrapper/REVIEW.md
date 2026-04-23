@@ -51,8 +51,10 @@ ep/
     ├── REVIEW.md                      ## this file
     ├── setup.py                       ## pip install -e .
     ├── examples/
-    │   ├── test_low_latency_multithread.py
-    │   └── test_low_latency_multiprocess.py
+    │   ├── test_low_latency_multithread.py    ## single-process multi-thread
+    │   ├── test_low_latency_multiprocess.py   ## multi-process (torchrun/mpirun)
+    │   ├── test_moe_multithread.py            ## moe_dispatch/combine, single-process multi-thread
+    │   └── test_moe_multiprocess.py           ## moe_dispatch/combine, multi-process (intra/internode)
     ├── tests/                         ## pure Python, CPU-only, stubs uccl.ep
     │   ├── test_mode_detection.py
     │   ├── test_primitive_tracing.py

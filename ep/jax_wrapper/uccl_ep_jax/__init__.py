@@ -51,6 +51,8 @@ from .bootstrap import (
     get_buffer,
     Buffer,
     get_low_latency_rdma_size_hint,
+    get_nvl_buffer_size_hint,
+    get_rdma_buffer_size_hint,
 )
 
 # Public XLA custom-call primitives. These are the only user-facing
@@ -87,5 +89,7 @@ __all__ = [
     "low_latency_dispatch",
     "low_latency_combine",
     "get_low_latency_rdma_size_hint",
+    "get_nvl_buffer_size_hint",
+    "get_rdma_buffer_size_hint",
     "register_ffi_targets",
 ]
