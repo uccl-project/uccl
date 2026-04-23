@@ -45,9 +45,10 @@ only the Python bootstrap differs. See
 ```
 ep/
 ├── README.md                          ## new section pointing to the package
+├── include/uccl_ep.hpp                ## NEW: Buffer class declaration (signatures only)
 ├── include/uccl_ep_jax.hpp            ## shared bridge interface (types + prototypes)
-├── src/uccl_ep.cc                     ## unchanged Buffer class + thin install_jax_buffer_bridge
-├── src/uccl_ep_jax.cc                 ## NEW: all JAX FFI handlers, registry, nanobind bindings
+├── src/uccl_ep.cc                     ## out-of-line Buffer method bodies + install_jax_buffer_bridge
+├── src/uccl_ep_jax.cc                 ## all JAX FFI handlers, registry, nanobind bindings
 └── jax_wrapper/
     ├── README.md                      ## user-facing docs
     ├── REVIEW.md                      ## this file
@@ -133,6 +134,12 @@ through a small C-style vtable (`uccl_jax_ffi::BufferBridge`):
   `unregister_jax_ffi_buffer` / `get_jax_ffi_targets` to the module.
   It only ever touches `Buffer*` as `OpaqueBuffer = void*` and
   dispatches through the bridge.
+
+Since the `Buffer` class is now declared in a shared header
+(`ep/include/uccl_ep.hpp`, with out-of-line method definitions in
+`uccl_ep.cc`), the trampoline bridge is no longer *required* for
+compile-time decoupling; it is kept for ABI stability between the
+two translation units and can be dropped in a follow-up if desired.
 
 The eight XLA legacy custom-call handlers (ABI:
 `void(cudaStream_t, void**, const char* opaque, size_t opaque_len, XlaCustomCallStatus*)`):

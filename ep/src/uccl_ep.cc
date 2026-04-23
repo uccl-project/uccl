@@ -312,1352 +312,1310 @@ bool is_sm90_compiled() {
 #endif
 }
 
-class Buffer {
- public:
-  Buffer(int rank, int num_ranks, long num_nvl_bytes, long num_rdma_bytes,
-         bool low_latency_mode, bool explicitly_destroy, int num_local_ranks)
-      : rank(rank),
-        num_ranks(num_ranks),
-        num_nvl_bytes(num_nvl_bytes),
-        num_rdma_bytes(num_rdma_bytes),
-        low_latency_mode(low_latency_mode),
-        explicitly_destroy(explicitly_destroy) {
-    if (num_local_ranks == -1) num_local_ranks = get_num_max_nvl_peers();
-    max_nvl_peers = num_local_ranks;
+
+// Buffer class declaration lives in ep/include/uccl_ep.hpp; the
+// method bodies follow this include.
+#include "uccl_ep.hpp"
+
+// ============================================================================
+// Buffer method definitions (out-of-line).
+// ============================================================================
+
+Buffer::Buffer(int rank, int num_ranks, long num_nvl_bytes, long num_rdma_bytes,
+       bool low_latency_mode, bool explicitly_destroy, int num_local_ranks)
+    : rank(rank),
+      num_ranks(num_ranks),
+      num_nvl_bytes(num_nvl_bytes),
+      num_rdma_bytes(num_rdma_bytes),
+      low_latency_mode(low_latency_mode),
+      explicitly_destroy(explicitly_destroy) {
+  if (num_local_ranks == -1) num_local_ranks = get_num_max_nvl_peers();
+  max_nvl_peers = num_local_ranks;
+  {
+    cudaGetDevice(&device_index);
     {
-      cudaGetDevice(&device_index);
-      {
-        std::lock_guard<std::mutex> lk(g_proxies_mu);
-        auto it = uccl::g_proxies_by_dev.find(device_index);
-        if (it == uccl::g_proxies_by_dev.end() || it->second.empty()) {
-          throw std::runtime_error(
-              "ep.Buffer: no UcclProxy registered for device " +
-              std::to_string(device_index) +
-              ". Call uccl.ep.register_proxy(device_index, proxies) "
-              "first.");
-        }
-      }
-
-      {
-        CUDA_CHECK(cudaSetDevice(device_index));
-        int least_priority = 0, greatest_priority = 0;
-        CUDA_CHECK(cudaDeviceGetStreamPriorityRange(&least_priority,
-                                                    &greatest_priority));
-        CUDA_CHECK(cudaStreamCreateWithPriority(
-            &comm_stream, cudaStreamNonBlocking, greatest_priority));
-        auto host_addrs = collect_d2h_channel_addrs_for_device(device_index);
-        num_d2h_channel_addrs = static_cast<int>(host_addrs.size());
-        if (num_d2h_channel_addrs > 0) {
-          CUDA_CHECK(cudaMallocManaged(
-              &d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle)));
-
-          CUDA_CHECK(cudaMallocManaged(
-              &d_handles, num_d2h_channel_addrs * sizeof(uint64_t)));
-
-          for (int i = 0; i < num_d2h_channel_addrs; ++i) {
-#ifndef USE_MSCCLPP_FIFO_BACKEND
-            void* host_ptr = reinterpret_cast<void*>(host_addrs[i]);
-            void* dev_ptr = nullptr;
-#ifndef USE_GRACE_HOPPER
-            CUDA_CHECK(cudaHostGetDevicePointer(
-                reinterpret_cast<void**>(&dev_ptr), host_ptr, 0));
-#else
-            dev_ptr = host_ptr;
-#endif
-            d_handle_objs[i].init_from_dev_ptr(dev_ptr);
-            d_handles[i] = reinterpret_cast<uint64_t>(&d_handle_objs[i]);
-#else
-            auto* fifo = reinterpret_cast<mscclpp::Fifo*>(host_addrs[i]);
-            mscclpp::FifoDeviceHandle h = fifo->deviceHandle();
-            d_handle_objs[i].init_from_host_value(h);
-            d_handles[i] = reinterpret_cast<uint64_t>(d_handle_objs + i);
-#endif
-          }
-
-          // Prefetch so the device immediately sees initialized contents
-#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__) && \
-    CUDA_VERSION >= 12000
-          // CUDA 12+: cudaMemPrefetchAsync(ptr, count, cudaMemLocation, flags,
-          // stream)
-          cudaMemLocation loc;
-          loc.type = cudaMemLocationTypeDevice;
-          loc.id = device_index;
-          CUDA_CHECK(cudaMemPrefetchAsync(
-              d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
-              loc, 0));
-          CUDA_CHECK(cudaMemPrefetchAsync(
-              d_handles, num_d2h_channel_addrs * sizeof(uint64_t), loc, 0));
-#else
-          // CUDA 11.x / HIP: cudaMemPrefetchAsync(ptr, count, dstDevice,
-          // stream)
-          CUDA_CHECK(cudaMemPrefetchAsync(
-              d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
-              device_index, 0));
-          CUDA_CHECK(cudaMemPrefetchAsync(
-              d_handles, num_d2h_channel_addrs * sizeof(uint64_t),
-              device_index));
-#endif
-          CUDA_CHECK(cudaDeviceSynchronize());
-        }
-        // Allocate device memory for IPC base pointers
-        CUDA_CHECK(
-            cudaMalloc(&d_ipc_rdma_base_ptrs, max_nvl_peers * sizeof(void*)));
-        CUDA_CHECK(
-            cudaMemset(d_ipc_rdma_base_ptrs, 0, max_nvl_peers * sizeof(void*)));
+      std::lock_guard<std::mutex> lk(g_proxies_mu);
+      auto it = uccl::g_proxies_by_dev.find(device_index);
+      if (it == uccl::g_proxies_by_dev.end() || it->second.empty()) {
+        throw std::runtime_error(
+            "ep.Buffer: no UcclProxy registered for device " +
+            std::to_string(device_index) +
+            ". Call uccl.ep.register_proxy(device_index, proxies) "
+            "first.");
       }
     }
 
-    int64_t const barrier_signal_bytes = max_nvl_peers * sizeof(int);
-    int64_t const buffer_ptr_bytes = max_nvl_peers * sizeof(void*);
-    int64_t const barrier_signal_ptr_bytes = max_nvl_peers * sizeof(int*);
-
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-    EP_HOST_ASSERT(num_nvl_bytes % NUM_BUFFER_ALIGNMENT_BYTES == 0 &&
-                   (num_nvl_bytes <= std::numeric_limits<int64_t>::max() ||
-                    num_rdma_bytes == 0));
-    EP_HOST_ASSERT(num_rdma_bytes % NUM_BUFFER_ALIGNMENT_BYTES == 0 &&
-                   (low_latency_mode ||
-                    num_rdma_bytes <= std::numeric_limits<int64_t>::max()));
-#else
-    EP_HOST_ASSERT(num_nvl_bytes % NUM_BUFFER_ALIGNMENT_BYTES == 0 &&
-                   (num_nvl_bytes <= std::numeric_limits<int>::max() ||
-                    num_rdma_bytes == 0));
-    EP_HOST_ASSERT(num_rdma_bytes % NUM_BUFFER_ALIGNMENT_BYTES == 0 &&
-                   (low_latency_mode ||
-                    num_rdma_bytes <= std::numeric_limits<int>::max()));
-#endif
-    EP_HOST_ASSERT(
-        0 <= rank && rank < num_ranks &&
-        (num_ranks <= max_nvl_peers * NUM_MAX_RDMA_PEERS || low_latency_mode));
-    EP_HOST_ASSERT(num_ranks < max_nvl_peers ||
-                   (num_ranks % max_nvl_peers) == 0);
-    // if (num_rdma_bytes > 0)
-    //   EP_HOST_ASSERT(num_ranks > max_nvl_peers || low_latency_mode);
-
-    rdma_rank = rank / max_nvl_peers;
-    nvl_rank = rank % max_nvl_peers;
-    num_rdma_ranks = std::max(1, num_ranks / max_nvl_peers);
-    num_nvl_ranks = std::min(num_ranks, max_nvl_peers);
-
-    cudaDeviceProp prop{};
-    CUDA_CHECK(cudaGetDeviceProperties(&prop, device_index));
-    num_device_sms = prop.multiProcessorCount;
-
-    if (num_nvl_bytes > 0) {
-      size_t total_bytes = static_cast<size_t>(num_nvl_bytes) +
-                           static_cast<size_t>(barrier_signal_bytes) +
-                           static_cast<size_t>(buffer_ptr_bytes) +
-                           static_cast<size_t>(barrier_signal_ptr_bytes);
-
-      // Ensure we're on the correct device before memory allocation and IPC
-      // handle creation
+    {
       CUDA_CHECK(cudaSetDevice(device_index));
-#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-      // aggressive atomic will work with malloc with uncached memory
-      CUDA_CHECK(hipExtMallocWithFlags(&buffer_ptrs[nvl_rank], total_bytes,
-                                       hipDeviceMallocUncached));
+      int least_priority = 0, greatest_priority = 0;
+      CUDA_CHECK(cudaDeviceGetStreamPriorityRange(&least_priority,
+                                                  &greatest_priority));
+      CUDA_CHECK(cudaStreamCreateWithPriority(
+          &comm_stream, cudaStreamNonBlocking, greatest_priority));
+      auto host_addrs = collect_d2h_channel_addrs_for_device(device_index);
+      num_d2h_channel_addrs = static_cast<int>(host_addrs.size());
+      if (num_d2h_channel_addrs > 0) {
+        CUDA_CHECK(cudaMallocManaged(
+            &d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle)));
+
+        CUDA_CHECK(cudaMallocManaged(
+            &d_handles, num_d2h_channel_addrs * sizeof(uint64_t)));
+
+        for (int i = 0; i < num_d2h_channel_addrs; ++i) {
+#ifndef USE_MSCCLPP_FIFO_BACKEND
+          void* host_ptr = reinterpret_cast<void*>(host_addrs[i]);
+          void* dev_ptr = nullptr;
+#ifndef USE_GRACE_HOPPER
+          CUDA_CHECK(cudaHostGetDevicePointer(
+              reinterpret_cast<void**>(&dev_ptr), host_ptr, 0));
 #else
-      CUDA_CHECK(cudaMalloc(&buffer_ptrs[nvl_rank], total_bytes));
+          dev_ptr = host_ptr;
 #endif
+          d_handle_objs[i].init_from_dev_ptr(dev_ptr);
+          d_handles[i] = reinterpret_cast<uint64_t>(&d_handle_objs[i]);
+#else
+          auto* fifo = reinterpret_cast<mscclpp::Fifo*>(host_addrs[i]);
+          mscclpp::FifoDeviceHandle h = fifo->deviceHandle();
+          d_handle_objs[i].init_from_host_value(h);
+          d_handles[i] = reinterpret_cast<uint64_t>(d_handle_objs + i);
+#endif
+        }
+
+        // Prefetch so the device immediately sees initialized contents
+#if !defined(__HIP_PLATFORM_AMD__) && !defined(__HIPCC__) && \
+  CUDA_VERSION >= 12000
+        // CUDA 12+: cudaMemPrefetchAsync(ptr, count, cudaMemLocation, flags,
+        // stream)
+        cudaMemLocation loc;
+        loc.type = cudaMemLocationTypeDevice;
+        loc.id = device_index;
+        CUDA_CHECK(cudaMemPrefetchAsync(
+            d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
+            loc, 0));
+        CUDA_CHECK(cudaMemPrefetchAsync(
+            d_handles, num_d2h_channel_addrs * sizeof(uint64_t), loc, 0));
+#else
+        // CUDA 11.x / HIP: cudaMemPrefetchAsync(ptr, count, dstDevice,
+        // stream)
+        CUDA_CHECK(cudaMemPrefetchAsync(
+            d_handle_objs, num_d2h_channel_addrs * sizeof(d2hq::D2HHandle),
+            device_index, 0));
+        CUDA_CHECK(cudaMemPrefetchAsync(
+            d_handles, num_d2h_channel_addrs * sizeof(uint64_t),
+            device_index));
+#endif
+        CUDA_CHECK(cudaDeviceSynchronize());
+      }
+      // Allocate device memory for IPC base pointers
       CUDA_CHECK(
-          cudaIpcGetMemHandle(&ipc_handles[nvl_rank], buffer_ptrs[nvl_rank]));
-
-      buffer_ptrs_gpu = reinterpret_cast<void**>(
-          static_cast<uint8_t*>(buffer_ptrs[nvl_rank]) + num_nvl_bytes +
-          barrier_signal_bytes);
-
-      barrier_signal_ptrs[nvl_rank] = reinterpret_cast<int*>(
-          static_cast<uint8_t*>(buffer_ptrs[nvl_rank]) + num_nvl_bytes);
-
-      barrier_signal_ptrs_gpu = reinterpret_cast<int**>(
-          static_cast<uint8_t*>(buffer_ptrs[nvl_rank]) + num_nvl_bytes +
-          barrier_signal_bytes + buffer_ptr_bytes);
-
-      CUDA_CHECK(cudaMemsetAsync(barrier_signal_ptrs[nvl_rank], 0,
-                                 barrier_signal_bytes, comm_stream));
+          cudaMalloc(&d_ipc_rdma_base_ptrs, max_nvl_peers * sizeof(void*)));
+      CUDA_CHECK(
+          cudaMemset(d_ipc_rdma_base_ptrs, 0, max_nvl_peers * sizeof(void*)));
     }
+  }
+
+  int64_t const barrier_signal_bytes = max_nvl_peers * sizeof(int);
+  int64_t const buffer_ptr_bytes = max_nvl_peers * sizeof(void*);
+  int64_t const barrier_signal_ptr_bytes = max_nvl_peers * sizeof(int*);
 
 #if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
-    CUDA_CHECK(hipExtMallocWithFlags(&workspace, NUM_WORKSPACE_BYTES,
+  EP_HOST_ASSERT(num_nvl_bytes % NUM_BUFFER_ALIGNMENT_BYTES == 0 &&
+                 (num_nvl_bytes <= std::numeric_limits<int64_t>::max() ||
+                  num_rdma_bytes == 0));
+  EP_HOST_ASSERT(num_rdma_bytes % NUM_BUFFER_ALIGNMENT_BYTES == 0 &&
+                 (low_latency_mode ||
+                  num_rdma_bytes <= std::numeric_limits<int64_t>::max()));
+#else
+  EP_HOST_ASSERT(num_nvl_bytes % NUM_BUFFER_ALIGNMENT_BYTES == 0 &&
+                 (num_nvl_bytes <= std::numeric_limits<int>::max() ||
+                  num_rdma_bytes == 0));
+  EP_HOST_ASSERT(num_rdma_bytes % NUM_BUFFER_ALIGNMENT_BYTES == 0 &&
+                 (low_latency_mode ||
+                  num_rdma_bytes <= std::numeric_limits<int>::max()));
+#endif
+  EP_HOST_ASSERT(
+      0 <= rank && rank < num_ranks &&
+      (num_ranks <= max_nvl_peers * NUM_MAX_RDMA_PEERS || low_latency_mode));
+  EP_HOST_ASSERT(num_ranks < max_nvl_peers ||
+                 (num_ranks % max_nvl_peers) == 0);
+  // if (num_rdma_bytes > 0)
+  //   EP_HOST_ASSERT(num_ranks > max_nvl_peers || low_latency_mode);
+
+  rdma_rank = rank / max_nvl_peers;
+  nvl_rank = rank % max_nvl_peers;
+  num_rdma_ranks = std::max(1, num_ranks / max_nvl_peers);
+  num_nvl_ranks = std::min(num_ranks, max_nvl_peers);
+
+  cudaDeviceProp prop{};
+  CUDA_CHECK(cudaGetDeviceProperties(&prop, device_index));
+  num_device_sms = prop.multiProcessorCount;
+
+  if (num_nvl_bytes > 0) {
+    size_t total_bytes = static_cast<size_t>(num_nvl_bytes) +
+                         static_cast<size_t>(barrier_signal_bytes) +
+                         static_cast<size_t>(buffer_ptr_bytes) +
+                         static_cast<size_t>(barrier_signal_ptr_bytes);
+
+    // Ensure we're on the correct device before memory allocation and IPC
+    // handle creation
+    CUDA_CHECK(cudaSetDevice(device_index));
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+    // aggressive atomic will work with malloc with uncached memory
+    CUDA_CHECK(hipExtMallocWithFlags(&buffer_ptrs[nvl_rank], total_bytes,
                                      hipDeviceMallocUncached));
 #else
-    CUDA_CHECK(cudaMalloc(&workspace, NUM_WORKSPACE_BYTES));
+    CUDA_CHECK(cudaMalloc(&buffer_ptrs[nvl_rank], total_bytes));
 #endif
-    CUDA_CHECK(cudaMemsetAsync(workspace, 0, NUM_WORKSPACE_BYTES, comm_stream));
-    CUDA_CHECK(cudaMallocHost(&moe_recv_counter, sizeof(int64_t),
+    CUDA_CHECK(
+        cudaIpcGetMemHandle(&ipc_handles[nvl_rank], buffer_ptrs[nvl_rank]));
+
+    buffer_ptrs_gpu = reinterpret_cast<void**>(
+        static_cast<uint8_t*>(buffer_ptrs[nvl_rank]) + num_nvl_bytes +
+        barrier_signal_bytes);
+
+    barrier_signal_ptrs[nvl_rank] = reinterpret_cast<int*>(
+        static_cast<uint8_t*>(buffer_ptrs[nvl_rank]) + num_nvl_bytes);
+
+    barrier_signal_ptrs_gpu = reinterpret_cast<int**>(
+        static_cast<uint8_t*>(buffer_ptrs[nvl_rank]) + num_nvl_bytes +
+        barrier_signal_bytes + buffer_ptr_bytes);
+
+    CUDA_CHECK(cudaMemsetAsync(barrier_signal_ptrs[nvl_rank], 0,
+                               barrier_signal_bytes, comm_stream));
+  }
+
+#if defined(__HIP_PLATFORM_AMD__) || defined(__HIPCC__)
+  CUDA_CHECK(hipExtMallocWithFlags(&workspace, NUM_WORKSPACE_BYTES,
+                                   hipDeviceMallocUncached));
+#else
+  CUDA_CHECK(cudaMalloc(&workspace, NUM_WORKSPACE_BYTES));
+#endif
+  CUDA_CHECK(cudaMemsetAsync(workspace, 0, NUM_WORKSPACE_BYTES, comm_stream));
+  CUDA_CHECK(cudaMallocHost(&moe_recv_counter, sizeof(int64_t),
+                            cudaHostAllocMapped));
+  CUDA_CHECK(cudaHostGetDevicePointer(
+      reinterpret_cast<void**>(&moe_recv_counter_mapped),
+      const_cast<int*>(moe_recv_counter), 0));
+  *moe_recv_counter = -1;
+
+  CUDA_CHECK(cudaMallocHost(&moe_recv_expert_counter,
+                            sizeof(int) * NUM_MAX_LOCAL_EXPERTS,
+                            cudaHostAllocMapped));
+  CUDA_CHECK(cudaHostGetDevicePointer(
+      reinterpret_cast<void**>(&moe_recv_expert_counter_mapped),
+      const_cast<int*>(moe_recv_expert_counter), 0));
+  for (int i = 0; i < NUM_MAX_LOCAL_EXPERTS; ++i)
+    moe_recv_expert_counter[i] = -1;
+
+  if (num_rdma_ranks > 0) {
+    CUDA_CHECK(cudaMallocHost(&moe_recv_rdma_counter, sizeof(int),
                               cudaHostAllocMapped));
     CUDA_CHECK(cudaHostGetDevicePointer(
-        reinterpret_cast<void**>(&moe_recv_counter_mapped),
-        const_cast<int*>(moe_recv_counter), 0));
-    *moe_recv_counter = -1;
+        reinterpret_cast<void**>(&moe_recv_rdma_counter_mapped),
+        const_cast<int*>(moe_recv_rdma_counter), 0));
+    *moe_recv_rdma_counter = -1;
+  }
+}
 
-    CUDA_CHECK(cudaMallocHost(&moe_recv_expert_counter,
-                              sizeof(int) * NUM_MAX_LOCAL_EXPERTS,
-                              cudaHostAllocMapped));
-    CUDA_CHECK(cudaHostGetDevicePointer(
-        reinterpret_cast<void**>(&moe_recv_expert_counter_mapped),
-        const_cast<int*>(moe_recv_expert_counter), 0));
-    for (int i = 0; i < NUM_MAX_LOCAL_EXPERTS; ++i)
-      moe_recv_expert_counter[i] = -1;
+std::optional<EventHandle> Buffer::get_dispatch_layout(
+    std::uintptr_t topk_idx_ptr, int num_tokens, int num_topk,
+    int num_experts, std::uintptr_t num_tokens_per_rank_ptr,
+    std::uintptr_t num_tokens_per_rdma_rank_ptr,
+    std::uintptr_t num_tokens_per_expert_ptr,
+    std::uintptr_t is_token_in_rank_ptr,
+    std::optional<EventHandle>& previous_event, bool async,
+    bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
+  EP_HOST_ASSERT(topk_idx_ptr != 0);
+  EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);
+  EP_HOST_ASSERT(num_tokens_per_expert_ptr != 0);
+  EP_HOST_ASSERT(is_token_in_rank_ptr != 0);
+  EP_HOST_ASSERT(num_experts > 0);
 
-    if (num_rdma_ranks > 0) {
-      CUDA_CHECK(cudaMallocHost(&moe_recv_rdma_counter, sizeof(int),
-                                cudaHostAllocMapped));
-      CUDA_CHECK(cudaHostGetDevicePointer(
-          reinterpret_cast<void**>(&moe_recv_rdma_counter_mapped),
-          const_cast<int*>(moe_recv_rdma_counter), 0));
-      *moe_recv_rdma_counter = -1;
-    }
+  auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
+  if (allocate_on_comm_stream)
+    EP_HOST_ASSERT(previous_event.has_value() and async);
+
+  if (previous_event.has_value()) {
+    stream_wait(comm_stream, previous_event.value());
+  } else {
+    stream_wait(comm_stream, compute_stream);
   }
 
-  std::optional<EventHandle> get_dispatch_layout(
-      std::uintptr_t topk_idx_ptr, int num_tokens, int num_topk,
-      int num_experts, std::uintptr_t num_tokens_per_rank_ptr,
-      std::uintptr_t num_tokens_per_rdma_rank_ptr,
-      std::uintptr_t num_tokens_per_expert_ptr,
-      std::uintptr_t is_token_in_rank_ptr,
-      std::optional<EventHandle>& previous_event, bool async,
-      bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-    EP_HOST_ASSERT(topk_idx_ptr != 0);
-    EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);
-    EP_HOST_ASSERT(num_tokens_per_expert_ptr != 0);
-    EP_HOST_ASSERT(is_token_in_rank_ptr != 0);
-    EP_HOST_ASSERT(num_experts > 0);
+  auto* topk_idx = reinterpret_cast<int64_t*>(topk_idx_ptr);
+  auto* num_tokens_per_rank = reinterpret_cast<int*>(num_tokens_per_rank_ptr);
+  auto* num_tokens_per_rdma_rank =
+      num_tokens_per_rdma_rank_ptr == 0
+          ? nullptr
+          : reinterpret_cast<int*>(num_tokens_per_rdma_rank_ptr);
+  auto* num_tokens_per_expert =
+      reinterpret_cast<int*>(num_tokens_per_expert_ptr);
+  auto* is_token_in_rank = reinterpret_cast<bool*>(is_token_in_rank_ptr);
 
-    auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(previous_event.has_value() and async);
+  uccl::layout::get_dispatch_layout(
+      topk_idx, num_tokens_per_rank, num_tokens_per_rdma_rank,
+      num_tokens_per_expert, is_token_in_rank, num_tokens, num_topk,
+      num_ranks, num_experts, comm_stream);
 
-    if (previous_event.has_value()) {
-      stream_wait(comm_stream, previous_event.value());
-    } else {
-      stream_wait(comm_stream, compute_stream);
-    }
-
-    auto* topk_idx = reinterpret_cast<int64_t*>(topk_idx_ptr);
-    auto* num_tokens_per_rank = reinterpret_cast<int*>(num_tokens_per_rank_ptr);
-    auto* num_tokens_per_rdma_rank =
-        num_tokens_per_rdma_rank_ptr == 0
-            ? nullptr
-            : reinterpret_cast<int*>(num_tokens_per_rdma_rank_ptr);
-    auto* num_tokens_per_expert =
-        reinterpret_cast<int*>(num_tokens_per_expert_ptr);
-    auto* is_token_in_rank = reinterpret_cast<bool*>(is_token_in_rank_ptr);
-
-    uccl::layout::get_dispatch_layout(
-        topk_idx, num_tokens_per_rank, num_tokens_per_rdma_rank,
-        num_tokens_per_expert, is_token_in_rank, num_tokens, num_topk,
-        num_ranks, num_experts, comm_stream);
-
-    std::optional<EventHandle> event;
-    if (async) {
-      event = EventHandle(comm_stream);
-    } else {
-      stream_wait(compute_stream, comm_stream);
-    }
-    return event;
+  std::optional<EventHandle> event;
+  if (async) {
+    event = EventHandle(comm_stream);
+  } else {
+    stream_wait(compute_stream, comm_stream);
   }
+  return event;
+}
 
-  ~Buffer() noexcept(false) {
-    if (not explicitly_destroy) {
-      destroy();
-    } else if (not destroyed) {
-      printf(
-          "WARNING: destroy() was not called before DeepEP buffer destruction, "
-          "which can leak resources.\n");
-      fflush(stdout);
-    }
+Buffer::~Buffer() noexcept(false) {
+  if (not explicitly_destroy) {
+    destroy();
+  } else if (not destroyed) {
+    printf(
+        "WARNING: destroy() was not called before DeepEP buffer destruction, "
+        "which can leak resources.\n");
+    fflush(stdout);
   }
+}
 
-  void destroy() {
-    EP_HOST_ASSERT(not destroyed);
+void Buffer::destroy() {
+  EP_HOST_ASSERT(not destroyed);
 
-    // Synchronize
+  // Synchronize
+  CUDA_CHECK(cudaDeviceSynchronize());
+
+  if (num_nvl_bytes > 0) {
+    // Barrier
+    intranode::barrier(barrier_signal_ptrs_gpu, nvl_rank, num_nvl_ranks,
+                       comm_stream);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    if (num_nvl_bytes > 0) {
-      // Barrier
-      intranode::barrier(barrier_signal_ptrs_gpu, nvl_rank, num_nvl_ranks,
-                         comm_stream);
-      CUDA_CHECK(cudaDeviceSynchronize());
-
-      // Close remote IPC
-      if (is_available()) {
-        for (int i = 0; i < num_nvl_ranks; ++i)
-          if (i != nvl_rank) CUDA_CHECK(cudaIpcCloseMemHandle(buffer_ptrs[i]));
-      }
-
-      // Free local buffer and error flag
-      CUDA_CHECK(cudaFree(buffer_ptrs[nvl_rank]));
+    // Close remote IPC
+    if (is_available()) {
+      for (int i = 0; i < num_nvl_ranks; ++i)
+        if (i != nvl_rank) CUDA_CHECK(cudaIpcCloseMemHandle(buffer_ptrs[i]));
     }
 
-    if (num_rdma_bytes > 0) {
-      for (int i = 0; i < num_nvl_ranks; ++i) {
-        if (i != nvl_rank && ipc_rdma_base_ptrs[i] != nullptr) {
-          CUDA_CHECK(cudaIpcCloseMemHandle(ipc_rdma_base_ptrs[i]));
-        }
-      }
-    }
-
-    // Free workspace and MoE counter
-    CUDA_CHECK(cudaFree(workspace));
-    if (d_ipc_rdma_base_ptrs != nullptr) {
-      CUDA_CHECK(cudaFree(d_ipc_rdma_base_ptrs));
-    }
-    CUDA_CHECK(cudaFreeHost(const_cast<int*>(moe_recv_counter)));
-
-    // Free chunked mode staffs
-    CUDA_CHECK(cudaFreeHost(const_cast<int*>(moe_recv_expert_counter)));
-    // Free D2HHandle device-side arrays if allocated
-    if (d_handle_objs) {
-      CUDA_CHECK(cudaFree(d_handle_objs));
-      d_handle_objs = nullptr;
-    }
-    if (d_handles) {
-      CUDA_CHECK(cudaFree(d_handles));
-    }
-    if (comm_stream != nullptr) {
-      CUDA_CHECK(cudaStreamDestroy(comm_stream));
-      comm_stream = nullptr;
-    }
-    destroyed = true;
-    available = false;
+    // Free local buffer and error flag
+    CUDA_CHECK(cudaFree(buffer_ptrs[nvl_rank]));
   }
 
-  std::tuple<int, std::vector<int>, std::optional<EventHandle>>
-  intranode_prepare(std::uintptr_t num_tokens_per_rank_ptr,
-                    std::uintptr_t is_token_in_rank_ptr,
-                    std::uintptr_t num_tokens_per_expert_ptr, int num_tokens,
-                    int num_experts, std::uintptr_t rank_prefix_matrix_ptr,
-                    std::uintptr_t channel_prefix_matrix_ptr,
-                    int expert_alignment, int num_worst_tokens,
-                    uccl::Config const& config,
-                    std::optional<EventHandle>& previous_event, bool async,
-                    bool allocate_on_comm_stream,
-                    std::uintptr_t compute_stream_ptr) {
-    EP_HOST_ASSERT(num_tokens > 0);
-    EP_HOST_ASSERT(num_experts > 0);
-    EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);
-    EP_HOST_ASSERT(is_token_in_rank_ptr != 0);
-    EP_HOST_ASSERT(num_tokens_per_expert_ptr != 0);
+  if (num_rdma_bytes > 0) {
+    for (int i = 0; i < num_nvl_ranks; ++i) {
+      if (i != nvl_rank && ipc_rdma_base_ptrs[i] != nullptr) {
+        CUDA_CHECK(cudaIpcCloseMemHandle(ipc_rdma_base_ptrs[i]));
+      }
+    }
+  }
+
+  // Free workspace and MoE counter
+  CUDA_CHECK(cudaFree(workspace));
+  if (d_ipc_rdma_base_ptrs != nullptr) {
+    CUDA_CHECK(cudaFree(d_ipc_rdma_base_ptrs));
+  }
+  CUDA_CHECK(cudaFreeHost(const_cast<int*>(moe_recv_counter)));
+
+  // Free chunked mode staffs
+  CUDA_CHECK(cudaFreeHost(const_cast<int*>(moe_recv_expert_counter)));
+  // Free D2HHandle device-side arrays if allocated
+  if (d_handle_objs) {
+    CUDA_CHECK(cudaFree(d_handle_objs));
+    d_handle_objs = nullptr;
+  }
+  if (d_handles) {
+    CUDA_CHECK(cudaFree(d_handles));
+  }
+  if (comm_stream != nullptr) {
+    CUDA_CHECK(cudaStreamDestroy(comm_stream));
+    comm_stream = nullptr;
+  }
+  destroyed = true;
+  available = false;
+}
+
+std::tuple<int, std::vector<int>, std::optional<EventHandle>>
+Buffer::intranode_prepare(std::uintptr_t num_tokens_per_rank_ptr,
+                  std::uintptr_t is_token_in_rank_ptr,
+                  std::uintptr_t num_tokens_per_expert_ptr, int num_tokens,
+                  int num_experts, std::uintptr_t rank_prefix_matrix_ptr,
+                  std::uintptr_t channel_prefix_matrix_ptr,
+                  int expert_alignment, int num_worst_tokens,
+                  uccl::Config const& config,
+                  std::optional<EventHandle>& previous_event, bool async,
+                  bool allocate_on_comm_stream,
+                  std::uintptr_t compute_stream_ptr) {
+  EP_HOST_ASSERT(num_tokens > 0);
+  EP_HOST_ASSERT(num_experts > 0);
+  EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);
+  EP_HOST_ASSERT(is_token_in_rank_ptr != 0);
+  EP_HOST_ASSERT(num_tokens_per_expert_ptr != 0);
+  EP_HOST_ASSERT(rank_prefix_matrix_ptr != 0);
+  EP_HOST_ASSERT(channel_prefix_matrix_ptr != 0);
+
+  EP_HOST_ASSERT(config.num_sms % 2 == 0);
+  int num_channels = config.num_sms / 2;
+  int num_local_experts = num_experts / num_ranks;
+  EP_HOST_ASSERT(num_local_experts <= NUM_MAX_LOCAL_EXPERTS);
+
+  auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
+  if (allocate_on_comm_stream) {
+    EP_HOST_ASSERT(previous_event.has_value() and async);
+  }
+  if (previous_event.has_value()) {
+    stream_wait(comm_stream, previous_event.value());
+  } else {
+    stream_wait(comm_stream, compute_stream);
+  }
+
+  int* num_tokens_per_rank = reinterpret_cast<int*>(num_tokens_per_rank_ptr);
+  bool* is_token_in_rank = reinterpret_cast<bool*>(is_token_in_rank_ptr);
+  int* num_tokens_per_expert =
+      reinterpret_cast<int*>(num_tokens_per_expert_ptr);
+  int* rank_prefix_matrix = reinterpret_cast<int*>(rank_prefix_matrix_ptr);
+  int* channel_prefix_matrix =
+      reinterpret_cast<int*>(channel_prefix_matrix_ptr);
+
+  *moe_recv_counter = -1;
+  for (int i = 0; i < num_local_experts; ++i) moe_recv_expert_counter[i] = -1;
+  int num_memset_int = num_channels * num_ranks * 4;
+  EP_HOST_ASSERT(num_ranks * (num_ranks + num_local_experts) * sizeof(int) <=
+                 static_cast<size_t>(num_nvl_bytes));
+  uccl::intranode::notify_dispatch(
+      num_tokens_per_rank, moe_recv_counter_mapped, num_ranks,
+      num_tokens_per_expert, moe_recv_expert_counter_mapped, num_experts,
+      num_tokens, is_token_in_rank, channel_prefix_matrix, rank_prefix_matrix,
+      num_memset_int, expert_alignment, buffer_ptrs_gpu,
+      barrier_signal_ptrs_gpu, rank, comm_stream, num_channels);
+
+  int num_recv_tokens = -1;
+  std::vector<int> num_recv_tokens_per_expert_list;
+  if (num_worst_tokens > 0) {
+    num_recv_tokens = num_worst_tokens;
+  } else {
+    auto start_time = std::chrono::high_resolution_clock::now();
+    while (true) {
+      num_recv_tokens = static_cast<int>(*moe_recv_counter);
+      bool ready = (num_recv_tokens >= 0);
+      for (int i = 0; i < num_local_experts and ready; ++i) {
+        ready &= moe_recv_expert_counter[i] >= 0;
+      }
+      if (ready) break;
+      if (std::chrono::duration_cast<std::chrono::seconds>(
+              std::chrono::high_resolution_clock::now() - start_time)
+              .count() > NUM_CPU_TIMEOUT_SECS) {
+        throw std::runtime_error("DeepEP error: CPU recv timeout");
+      }
+    }
+    num_recv_tokens_per_expert_list = std::vector<int>(
+        moe_recv_expert_counter, moe_recv_expert_counter + num_local_experts);
+  }
+
+  std::optional<EventHandle> event;
+  if (async) {
+    event = EventHandle(comm_stream);
+  } else {
+    stream_wait(compute_stream, comm_stream);
+  }
+  return {num_recv_tokens, num_recv_tokens_per_expert_list, event};
+}
+
+std::optional<EventHandle> Buffer::intranode_dispatch(
+    std::uintptr_t x_ptr, int num_tokens, int hidden, int x_element_size,
+    std::uintptr_t x_scales_ptr, int num_scales, int scale_token_stride,
+    int scale_hidden_stride, std::uintptr_t topk_idx_ptr, int num_topk,
+    std::uintptr_t topk_weights_ptr, std::uintptr_t is_token_in_rank_ptr,
+    std::uintptr_t rank_prefix_matrix_ptr,
+    std::uintptr_t channel_prefix_matrix_ptr, int num_experts,
+    int num_worst_tokens, bool cached_mode, uccl::Config const& config,
+    int num_recv_tokens, std::uintptr_t recv_x_ptr,
+    std::uintptr_t recv_x_scales_ptr, std::uintptr_t recv_topk_idx_ptr,
+    std::uintptr_t recv_topk_weights_ptr,
+    std::uintptr_t recv_channel_prefix_matrix_ptr,
+    std::uintptr_t recv_src_idx_ptr, std::uintptr_t send_head_ptr,
+    std::optional<EventHandle>& previous_event, bool async,
+    bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
+  EP_HOST_ASSERT(x_ptr != 0 && is_token_in_rank_ptr != 0);
+  EP_HOST_ASSERT(channel_prefix_matrix_ptr != 0);
+  EP_HOST_ASSERT(recv_x_ptr != 0 && recv_channel_prefix_matrix_ptr != 0);
+  EP_HOST_ASSERT(recv_src_idx_ptr != 0 && send_head_ptr != 0);
+  EP_HOST_ASSERT(num_tokens > 0 && hidden > 0 && num_recv_tokens > 0);
+  EP_HOST_ASSERT((hidden * x_element_size) % static_cast<int>(sizeof(int4)) ==
+                 0);
+
+  EP_HOST_ASSERT(config.num_sms % 2 == 0);
+  int num_channels = config.num_sms / 2;
+  auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
+  if (allocate_on_comm_stream)
+    EP_HOST_ASSERT(previous_event.has_value() and async);
+  if (previous_event.has_value()) {
+    stream_wait(comm_stream, previous_event.value());
+  } else {
+    stream_wait(comm_stream, compute_stream);
+  }
+  if (cached_mode) {
     EP_HOST_ASSERT(rank_prefix_matrix_ptr != 0);
-    EP_HOST_ASSERT(channel_prefix_matrix_ptr != 0);
-
-    EP_HOST_ASSERT(config.num_sms % 2 == 0);
-    int num_channels = config.num_sms / 2;
-    int num_local_experts = num_experts / num_ranks;
-    EP_HOST_ASSERT(num_local_experts <= NUM_MAX_LOCAL_EXPERTS);
-
-    auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream) {
-      EP_HOST_ASSERT(previous_event.has_value() and async);
-    }
-    if (previous_event.has_value()) {
-      stream_wait(comm_stream, previous_event.value());
-    } else {
-      stream_wait(comm_stream, compute_stream);
-    }
-
-    int* num_tokens_per_rank = reinterpret_cast<int*>(num_tokens_per_rank_ptr);
-    bool* is_token_in_rank = reinterpret_cast<bool*>(is_token_in_rank_ptr);
-    int* num_tokens_per_expert =
-        reinterpret_cast<int*>(num_tokens_per_expert_ptr);
-    int* rank_prefix_matrix = reinterpret_cast<int*>(rank_prefix_matrix_ptr);
-    int* channel_prefix_matrix =
-        reinterpret_cast<int*>(channel_prefix_matrix_ptr);
-
-    *moe_recv_counter = -1;
-    for (int i = 0; i < num_local_experts; ++i) moe_recv_expert_counter[i] = -1;
     int num_memset_int = num_channels * num_ranks * 4;
-    EP_HOST_ASSERT(num_ranks * (num_ranks + num_local_experts) * sizeof(int) <=
-                   static_cast<size_t>(num_nvl_bytes));
-    uccl::intranode::notify_dispatch(
-        num_tokens_per_rank, moe_recv_counter_mapped, num_ranks,
-        num_tokens_per_expert, moe_recv_expert_counter_mapped, num_experts,
-        num_tokens, is_token_in_rank, channel_prefix_matrix, rank_prefix_matrix,
-        num_memset_int, expert_alignment, buffer_ptrs_gpu,
-        barrier_signal_ptrs_gpu, rank, comm_stream, num_channels);
+    uccl::intranode::cached_notify_dispatch(
+        reinterpret_cast<int*>(rank_prefix_matrix_ptr), num_memset_int,
+        buffer_ptrs_gpu, barrier_signal_ptrs_gpu, rank, num_ranks,
+        comm_stream);
+  }
 
-    int num_recv_tokens = -1;
-    std::vector<int> num_recv_tokens_per_expert_list;
-    if (num_worst_tokens > 0) {
-      num_recv_tokens = num_worst_tokens;
-    } else {
-      auto start_time = std::chrono::high_resolution_clock::now();
-      while (true) {
-        num_recv_tokens = static_cast<int>(*moe_recv_counter);
-        bool ready = (num_recv_tokens >= 0);
-        for (int i = 0; i < num_local_experts and ready; ++i) {
-          ready &= moe_recv_expert_counter[i] >= 0;
-        }
-        if (ready) break;
-        if (std::chrono::duration_cast<std::chrono::seconds>(
-                std::chrono::high_resolution_clock::now() - start_time)
-                .count() > NUM_CPU_TIMEOUT_SECS) {
-          throw std::runtime_error("DeepEP error: CPU recv timeout");
-        }
+  auto* x = reinterpret_cast<void*>(x_ptr);
+  auto* x_scales =
+      x_scales_ptr == 0 ? nullptr : reinterpret_cast<float*>(x_scales_ptr);
+  auto* topk_idx =
+      topk_idx_ptr == 0 ? nullptr : reinterpret_cast<int64_t*>(topk_idx_ptr);
+  auto* topk_weights = topk_weights_ptr == 0
+                           ? nullptr
+                           : reinterpret_cast<float*>(topk_weights_ptr);
+
+  uccl::intranode::dispatch(
+      reinterpret_cast<void*>(recv_x_ptr),
+      recv_x_scales_ptr == 0 ? nullptr
+                             : reinterpret_cast<float*>(recv_x_scales_ptr),
+      reinterpret_cast<int*>(recv_src_idx_ptr),
+      recv_topk_idx_ptr == 0 ? nullptr
+                             : reinterpret_cast<int64_t*>(recv_topk_idx_ptr),
+      recv_topk_weights_ptr == 0
+          ? nullptr
+          : reinterpret_cast<float*>(recv_topk_weights_ptr),
+      reinterpret_cast<int*>(recv_channel_prefix_matrix_ptr),
+      reinterpret_cast<int*>(send_head_ptr), x, x_scales, topk_idx,
+      topk_weights, reinterpret_cast<bool*>(is_token_in_rank_ptr),
+      reinterpret_cast<int*>(channel_prefix_matrix_ptr), num_tokens,
+      num_worst_tokens,
+      static_cast<int>(hidden * x_element_size / sizeof(int4)), num_topk,
+      num_experts, num_scales, scale_token_stride, scale_hidden_stride,
+      buffer_ptrs_gpu, rank, num_ranks, comm_stream, config.num_sms,
+      config.num_max_nvl_chunked_send_tokens,
+      config.num_max_nvl_chunked_recv_tokens);
+
+  std::optional<EventHandle> event;
+  if (async) {
+    event = EventHandle(comm_stream);
+  } else {
+    stream_wait(compute_stream, comm_stream);
+  }
+  return event;
+}
+
+std::optional<EventHandle> Buffer::intranode_combine(
+    std::uintptr_t x_ptr, int num_tokens, int hidden, int x_dtype_code,
+    int x_element_size, std::uintptr_t topk_weights_ptr, int num_topk,
+    std::uintptr_t bias_0_ptr, std::uintptr_t bias_1_ptr,
+    std::uintptr_t src_idx_ptr, int num_recv_tokens,
+    std::uintptr_t rank_prefix_matrix_ptr,
+    std::uintptr_t channel_prefix_matrix_ptr, std::uintptr_t send_head_ptr,
+    uccl::Config const& config, std::uintptr_t recv_x_ptr,
+    std::uintptr_t recv_topk_weights_ptr,
+    std::optional<EventHandle>& previous_event, bool async,
+    bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
+  EP_HOST_ASSERT(x_ptr != 0 && src_idx_ptr != 0 &&
+                 rank_prefix_matrix_ptr != 0);
+  EP_HOST_ASSERT(channel_prefix_matrix_ptr != 0 && send_head_ptr != 0);
+  EP_HOST_ASSERT(recv_x_ptr != 0);
+  EP_HOST_ASSERT((hidden * x_element_size) % static_cast<int>(sizeof(int4)) ==
+                 0);
+
+  EP_HOST_ASSERT(config.num_sms % 2 == 0);
+  int num_channels = config.num_sms / 2;
+
+  auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
+  if (allocate_on_comm_stream)
+    EP_HOST_ASSERT(previous_event.has_value() and async);
+  if (previous_event.has_value()) {
+    stream_wait(comm_stream, previous_event.value());
+  } else {
+    stream_wait(comm_stream, compute_stream);
+  }
+
+  EP_HOST_ASSERT(num_channels * num_ranks * sizeof(int) * 2 <=
+                 static_cast<size_t>(num_nvl_bytes));
+  uccl::intranode::cached_notify_combine(
+      buffer_ptrs_gpu, reinterpret_cast<int*>(send_head_ptr), num_channels,
+      num_recv_tokens, num_channels * num_ranks * 2, barrier_signal_ptrs_gpu,
+      rank, num_ranks, comm_stream);
+
+  void* bias_ptrs[2] = {
+      bias_0_ptr == 0 ? nullptr : reinterpret_cast<void*>(bias_0_ptr),
+      bias_1_ptr == 0 ? nullptr : reinterpret_cast<void*>(bias_1_ptr),
+  };
+  uccl::intranode::combine(
+      cuda_dtype_from_code(x_dtype_code), reinterpret_cast<void*>(recv_x_ptr),
+      recv_topk_weights_ptr == 0
+          ? nullptr
+          : reinterpret_cast<float*>(recv_topk_weights_ptr),
+      reinterpret_cast<void*>(x_ptr),
+      topk_weights_ptr == 0 ? nullptr
+                            : reinterpret_cast<float*>(topk_weights_ptr),
+      bias_ptrs[0], bias_ptrs[1], reinterpret_cast<int*>(src_idx_ptr),
+      reinterpret_cast<int*>(rank_prefix_matrix_ptr),
+      reinterpret_cast<int*>(channel_prefix_matrix_ptr),
+      reinterpret_cast<int*>(send_head_ptr), num_tokens, num_recv_tokens,
+      hidden, num_topk, buffer_ptrs_gpu, rank, num_ranks, comm_stream,
+      config.num_sms, config.num_max_nvl_chunked_send_tokens,
+      config.num_max_nvl_chunked_recv_tokens);
+
+  std::optional<EventHandle> event;
+  if (async) {
+    event = EventHandle(comm_stream);
+  } else {
+    stream_wait(compute_stream, comm_stream);
+  }
+  return event;
+}
+
+std::tuple<int, int, std::vector<int>, std::optional<EventHandle>>
+Buffer::internode_prepare(std::uintptr_t num_tokens_per_rank_ptr,
+                  std::uintptr_t num_tokens_per_rdma_rank_ptr,
+                  std::uintptr_t num_tokens_per_expert_ptr,
+                  std::uintptr_t is_token_in_rank_ptr, int num_tokens,
+                  int hidden, int x_element_size, int num_scales,
+                  int num_topk, int num_experts, int expert_alignment,
+                  int num_worst_tokens, uccl::Config const& config,
+                  std::uintptr_t rdma_channel_prefix_matrix_ptr,
+                  std::uintptr_t recv_rdma_rank_prefix_sum_ptr,
+                  std::uintptr_t gbl_channel_prefix_matrix_ptr,
+                  std::uintptr_t recv_gbl_rank_prefix_sum_ptr,
+                  std::optional<EventHandle>& previous_event, bool async,
+                  bool allocate_on_comm_stream,
+                  std::uintptr_t compute_stream_ptr) {
+  // `internode_prepare` may be called from two very different contexts:
+  //   1) a regular Python call (e.g. the PyTorch wrapper), holding the GIL,
+  //      in which case we want to release it so other Python threads can
+  //      make progress during the host spin-wait.
+  //   2) an XLA FFI handler running on an XLA worker thread, in which case
+  //      the GIL is not held and attempting to release it would assert.
+  // `PyGILState_Check()` lets us pick the right behaviour at runtime.
+  std::optional<nb::gil_scoped_release> release;
+  if (PyGILState_Check()) release.emplace();
+  EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);
+  EP_HOST_ASSERT(num_tokens_per_rdma_rank_ptr != 0);
+  EP_HOST_ASSERT(num_tokens_per_expert_ptr != 0);
+  EP_HOST_ASSERT(is_token_in_rank_ptr != 0);
+  EP_HOST_ASSERT(rdma_channel_prefix_matrix_ptr != 0);
+  EP_HOST_ASSERT(recv_rdma_rank_prefix_sum_ptr != 0);
+  EP_HOST_ASSERT(gbl_channel_prefix_matrix_ptr != 0);
+  EP_HOST_ASSERT(recv_gbl_rank_prefix_sum_ptr != 0);
+  EP_HOST_ASSERT(num_tokens > 0 && hidden > 0 && num_experts > 0);
+  EP_HOST_ASSERT(config.num_sms % 2 == 0);
+  EP_HOST_ASSERT(0 < get_num_rdma_ranks() &&
+                 get_num_rdma_ranks() <= NUM_MAX_RDMA_PEERS);
+
+  int const num_channels = config.num_sms / 2;
+  int const hidden_int4 =
+      hidden * x_element_size / static_cast<int>(sizeof(int4));
+  int const num_local_experts = num_experts / num_ranks;
+  EP_HOST_ASSERT(num_local_experts <= NUM_MAX_LOCAL_EXPERTS);
+
+  auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
+  if (allocate_on_comm_stream)
+    EP_HOST_ASSERT(previous_event.has_value() and async);
+  if (previous_event.has_value()) {
+    stream_wait(comm_stream, previous_event.value());
+  } else {
+    stream_wait(comm_stream, compute_stream);
+  }
+
+  *moe_recv_counter = -1;
+  *moe_recv_rdma_counter = -1;
+  for (int i = 0; i < num_local_experts; ++i) moe_recv_expert_counter[i] = -1;
+
+  uccl::internode::notify_dispatch(
+      reinterpret_cast<int const*>(num_tokens_per_rank_ptr),
+      moe_recv_counter_mapped, num_ranks,
+      reinterpret_cast<int const*>(num_tokens_per_rdma_rank_ptr),
+      moe_recv_rdma_counter_mapped,
+      reinterpret_cast<int const*>(num_tokens_per_expert_ptr),
+      moe_recv_expert_counter_mapped, num_experts,
+      reinterpret_cast<bool const*>(is_token_in_rank_ptr), num_tokens,
+      num_worst_tokens, num_channels, hidden_int4, num_scales, num_topk,
+      expert_alignment,
+      reinterpret_cast<int*>(rdma_channel_prefix_matrix_ptr),
+      reinterpret_cast<int*>(recv_rdma_rank_prefix_sum_ptr),
+      reinterpret_cast<int*>(gbl_channel_prefix_matrix_ptr),
+      reinterpret_cast<int*>(recv_gbl_rank_prefix_sum_ptr), rdma_buffer_ptr,
+      config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
+      config.num_max_nvl_chunked_recv_tokens, barrier_signal_ptrs_gpu, rank,
+      comm_stream,
+      config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4), num_ranks),
+      num_nvl_bytes, low_latency_mode, d_handles, num_d2h_channel_addrs,
+      atomic_buffer_ptr);
+
+  int num_recv_tokens = -1;
+  int num_rdma_recv_tokens = -1;
+  std::vector<int> num_recv_tokens_per_expert_list;
+  if (num_worst_tokens > 0) {
+    num_recv_tokens = num_worst_tokens;
+    num_rdma_recv_tokens = num_worst_tokens;
+  } else {
+    auto start_time = std::chrono::high_resolution_clock::now();
+    while (true) {
+      num_recv_tokens = static_cast<int>(*moe_recv_counter);
+      num_rdma_recv_tokens = static_cast<int>(*moe_recv_rdma_counter);
+      bool ready = (num_recv_tokens >= 0) && (num_rdma_recv_tokens >= 0);
+      for (int i = 0; i < num_local_experts && ready; ++i) {
+        ready &= moe_recv_expert_counter[i] >= 0;
       }
-      num_recv_tokens_per_expert_list = std::vector<int>(
-          moe_recv_expert_counter, moe_recv_expert_counter + num_local_experts);
-    }
-
-    std::optional<EventHandle> event;
-    if (async) {
-      event = EventHandle(comm_stream);
-    } else {
-      stream_wait(compute_stream, comm_stream);
-    }
-    return {num_recv_tokens, num_recv_tokens_per_expert_list, event};
-  }
-
-  std::optional<EventHandle> intranode_dispatch(
-      std::uintptr_t x_ptr, int num_tokens, int hidden, int x_element_size,
-      std::uintptr_t x_scales_ptr, int num_scales, int scale_token_stride,
-      int scale_hidden_stride, std::uintptr_t topk_idx_ptr, int num_topk,
-      std::uintptr_t topk_weights_ptr, std::uintptr_t is_token_in_rank_ptr,
-      std::uintptr_t rank_prefix_matrix_ptr,
-      std::uintptr_t channel_prefix_matrix_ptr, int num_experts,
-      int num_worst_tokens, bool cached_mode, uccl::Config const& config,
-      int num_recv_tokens, std::uintptr_t recv_x_ptr,
-      std::uintptr_t recv_x_scales_ptr, std::uintptr_t recv_topk_idx_ptr,
-      std::uintptr_t recv_topk_weights_ptr,
-      std::uintptr_t recv_channel_prefix_matrix_ptr,
-      std::uintptr_t recv_src_idx_ptr, std::uintptr_t send_head_ptr,
-      std::optional<EventHandle>& previous_event, bool async,
-      bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-    EP_HOST_ASSERT(x_ptr != 0 && is_token_in_rank_ptr != 0);
-    EP_HOST_ASSERT(channel_prefix_matrix_ptr != 0);
-    EP_HOST_ASSERT(recv_x_ptr != 0 && recv_channel_prefix_matrix_ptr != 0);
-    EP_HOST_ASSERT(recv_src_idx_ptr != 0 && send_head_ptr != 0);
-    EP_HOST_ASSERT(num_tokens > 0 && hidden > 0 && num_recv_tokens > 0);
-    EP_HOST_ASSERT((hidden * x_element_size) % static_cast<int>(sizeof(int4)) ==
-                   0);
-
-    EP_HOST_ASSERT(config.num_sms % 2 == 0);
-    int num_channels = config.num_sms / 2;
-    auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(previous_event.has_value() and async);
-    if (previous_event.has_value()) {
-      stream_wait(comm_stream, previous_event.value());
-    } else {
-      stream_wait(comm_stream, compute_stream);
-    }
-    if (cached_mode) {
-      EP_HOST_ASSERT(rank_prefix_matrix_ptr != 0);
-      int num_memset_int = num_channels * num_ranks * 4;
-      uccl::intranode::cached_notify_dispatch(
-          reinterpret_cast<int*>(rank_prefix_matrix_ptr), num_memset_int,
-          buffer_ptrs_gpu, barrier_signal_ptrs_gpu, rank, num_ranks,
-          comm_stream);
-    }
-
-    auto* x = reinterpret_cast<void*>(x_ptr);
-    auto* x_scales =
-        x_scales_ptr == 0 ? nullptr : reinterpret_cast<float*>(x_scales_ptr);
-    auto* topk_idx =
-        topk_idx_ptr == 0 ? nullptr : reinterpret_cast<int64_t*>(topk_idx_ptr);
-    auto* topk_weights = topk_weights_ptr == 0
-                             ? nullptr
-                             : reinterpret_cast<float*>(topk_weights_ptr);
-
-    uccl::intranode::dispatch(
-        reinterpret_cast<void*>(recv_x_ptr),
-        recv_x_scales_ptr == 0 ? nullptr
-                               : reinterpret_cast<float*>(recv_x_scales_ptr),
-        reinterpret_cast<int*>(recv_src_idx_ptr),
-        recv_topk_idx_ptr == 0 ? nullptr
-                               : reinterpret_cast<int64_t*>(recv_topk_idx_ptr),
-        recv_topk_weights_ptr == 0
-            ? nullptr
-            : reinterpret_cast<float*>(recv_topk_weights_ptr),
-        reinterpret_cast<int*>(recv_channel_prefix_matrix_ptr),
-        reinterpret_cast<int*>(send_head_ptr), x, x_scales, topk_idx,
-        topk_weights, reinterpret_cast<bool*>(is_token_in_rank_ptr),
-        reinterpret_cast<int*>(channel_prefix_matrix_ptr), num_tokens,
-        num_worst_tokens,
-        static_cast<int>(hidden * x_element_size / sizeof(int4)), num_topk,
-        num_experts, num_scales, scale_token_stride, scale_hidden_stride,
-        buffer_ptrs_gpu, rank, num_ranks, comm_stream, config.num_sms,
-        config.num_max_nvl_chunked_send_tokens,
-        config.num_max_nvl_chunked_recv_tokens);
-
-    std::optional<EventHandle> event;
-    if (async) {
-      event = EventHandle(comm_stream);
-    } else {
-      stream_wait(compute_stream, comm_stream);
-    }
-    return event;
-  }
-
-  std::optional<EventHandle> intranode_combine(
-      std::uintptr_t x_ptr, int num_tokens, int hidden, int x_dtype_code,
-      int x_element_size, std::uintptr_t topk_weights_ptr, int num_topk,
-      std::uintptr_t bias_0_ptr, std::uintptr_t bias_1_ptr,
-      std::uintptr_t src_idx_ptr, int num_recv_tokens,
-      std::uintptr_t rank_prefix_matrix_ptr,
-      std::uintptr_t channel_prefix_matrix_ptr, std::uintptr_t send_head_ptr,
-      uccl::Config const& config, std::uintptr_t recv_x_ptr,
-      std::uintptr_t recv_topk_weights_ptr,
-      std::optional<EventHandle>& previous_event, bool async,
-      bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-    EP_HOST_ASSERT(x_ptr != 0 && src_idx_ptr != 0 &&
-                   rank_prefix_matrix_ptr != 0);
-    EP_HOST_ASSERT(channel_prefix_matrix_ptr != 0 && send_head_ptr != 0);
-    EP_HOST_ASSERT(recv_x_ptr != 0);
-    EP_HOST_ASSERT((hidden * x_element_size) % static_cast<int>(sizeof(int4)) ==
-                   0);
-
-    EP_HOST_ASSERT(config.num_sms % 2 == 0);
-    int num_channels = config.num_sms / 2;
-
-    auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(previous_event.has_value() and async);
-    if (previous_event.has_value()) {
-      stream_wait(comm_stream, previous_event.value());
-    } else {
-      stream_wait(comm_stream, compute_stream);
-    }
-
-    EP_HOST_ASSERT(num_channels * num_ranks * sizeof(int) * 2 <=
-                   static_cast<size_t>(num_nvl_bytes));
-    uccl::intranode::cached_notify_combine(
-        buffer_ptrs_gpu, reinterpret_cast<int*>(send_head_ptr), num_channels,
-        num_recv_tokens, num_channels * num_ranks * 2, barrier_signal_ptrs_gpu,
-        rank, num_ranks, comm_stream);
-
-    void* bias_ptrs[2] = {
-        bias_0_ptr == 0 ? nullptr : reinterpret_cast<void*>(bias_0_ptr),
-        bias_1_ptr == 0 ? nullptr : reinterpret_cast<void*>(bias_1_ptr),
-    };
-    uccl::intranode::combine(
-        cuda_dtype_from_code(x_dtype_code), reinterpret_cast<void*>(recv_x_ptr),
-        recv_topk_weights_ptr == 0
-            ? nullptr
-            : reinterpret_cast<float*>(recv_topk_weights_ptr),
-        reinterpret_cast<void*>(x_ptr),
-        topk_weights_ptr == 0 ? nullptr
-                              : reinterpret_cast<float*>(topk_weights_ptr),
-        bias_ptrs[0], bias_ptrs[1], reinterpret_cast<int*>(src_idx_ptr),
-        reinterpret_cast<int*>(rank_prefix_matrix_ptr),
-        reinterpret_cast<int*>(channel_prefix_matrix_ptr),
-        reinterpret_cast<int*>(send_head_ptr), num_tokens, num_recv_tokens,
-        hidden, num_topk, buffer_ptrs_gpu, rank, num_ranks, comm_stream,
-        config.num_sms, config.num_max_nvl_chunked_send_tokens,
-        config.num_max_nvl_chunked_recv_tokens);
-
-    std::optional<EventHandle> event;
-    if (async) {
-      event = EventHandle(comm_stream);
-    } else {
-      stream_wait(compute_stream, comm_stream);
-    }
-    return event;
-  }
-
-  std::tuple<int, int, std::vector<int>, std::optional<EventHandle>>
-  internode_prepare(std::uintptr_t num_tokens_per_rank_ptr,
-                    std::uintptr_t num_tokens_per_rdma_rank_ptr,
-                    std::uintptr_t num_tokens_per_expert_ptr,
-                    std::uintptr_t is_token_in_rank_ptr, int num_tokens,
-                    int hidden, int x_element_size, int num_scales,
-                    int num_topk, int num_experts, int expert_alignment,
-                    int num_worst_tokens, uccl::Config const& config,
-                    std::uintptr_t rdma_channel_prefix_matrix_ptr,
-                    std::uintptr_t recv_rdma_rank_prefix_sum_ptr,
-                    std::uintptr_t gbl_channel_prefix_matrix_ptr,
-                    std::uintptr_t recv_gbl_rank_prefix_sum_ptr,
-                    std::optional<EventHandle>& previous_event, bool async,
-                    bool allocate_on_comm_stream,
-                    std::uintptr_t compute_stream_ptr) {
-    // `internode_prepare` may be called from two very different contexts:
-    //   1) a regular Python call (e.g. the PyTorch wrapper), holding the GIL,
-    //      in which case we want to release it so other Python threads can
-    //      make progress during the host spin-wait.
-    //   2) an XLA FFI handler running on an XLA worker thread, in which case
-    //      the GIL is not held and attempting to release it would assert.
-    // `PyGILState_Check()` lets us pick the right behaviour at runtime.
-    std::optional<nb::gil_scoped_release> release;
-    if (PyGILState_Check()) release.emplace();
-    EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);
-    EP_HOST_ASSERT(num_tokens_per_rdma_rank_ptr != 0);
-    EP_HOST_ASSERT(num_tokens_per_expert_ptr != 0);
-    EP_HOST_ASSERT(is_token_in_rank_ptr != 0);
-    EP_HOST_ASSERT(rdma_channel_prefix_matrix_ptr != 0);
-    EP_HOST_ASSERT(recv_rdma_rank_prefix_sum_ptr != 0);
-    EP_HOST_ASSERT(gbl_channel_prefix_matrix_ptr != 0);
-    EP_HOST_ASSERT(recv_gbl_rank_prefix_sum_ptr != 0);
-    EP_HOST_ASSERT(num_tokens > 0 && hidden > 0 && num_experts > 0);
-    EP_HOST_ASSERT(config.num_sms % 2 == 0);
-    EP_HOST_ASSERT(0 < get_num_rdma_ranks() &&
-                   get_num_rdma_ranks() <= NUM_MAX_RDMA_PEERS);
-
-    int const num_channels = config.num_sms / 2;
-    int const hidden_int4 =
-        hidden * x_element_size / static_cast<int>(sizeof(int4));
-    int const num_local_experts = num_experts / num_ranks;
-    EP_HOST_ASSERT(num_local_experts <= NUM_MAX_LOCAL_EXPERTS);
-
-    auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(previous_event.has_value() and async);
-    if (previous_event.has_value()) {
-      stream_wait(comm_stream, previous_event.value());
-    } else {
-      stream_wait(comm_stream, compute_stream);
-    }
-
-    *moe_recv_counter = -1;
-    *moe_recv_rdma_counter = -1;
-    for (int i = 0; i < num_local_experts; ++i) moe_recv_expert_counter[i] = -1;
-
-    uccl::internode::notify_dispatch(
-        reinterpret_cast<int const*>(num_tokens_per_rank_ptr),
-        moe_recv_counter_mapped, num_ranks,
-        reinterpret_cast<int const*>(num_tokens_per_rdma_rank_ptr),
-        moe_recv_rdma_counter_mapped,
-        reinterpret_cast<int const*>(num_tokens_per_expert_ptr),
-        moe_recv_expert_counter_mapped, num_experts,
-        reinterpret_cast<bool const*>(is_token_in_rank_ptr), num_tokens,
-        num_worst_tokens, num_channels, hidden_int4, num_scales, num_topk,
-        expert_alignment,
-        reinterpret_cast<int*>(rdma_channel_prefix_matrix_ptr),
-        reinterpret_cast<int*>(recv_rdma_rank_prefix_sum_ptr),
-        reinterpret_cast<int*>(gbl_channel_prefix_matrix_ptr),
-        reinterpret_cast<int*>(recv_gbl_rank_prefix_sum_ptr), rdma_buffer_ptr,
-        config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
-        config.num_max_nvl_chunked_recv_tokens, barrier_signal_ptrs_gpu, rank,
-        comm_stream,
-        config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4), num_ranks),
-        num_nvl_bytes, low_latency_mode, d_handles, num_d2h_channel_addrs,
-        atomic_buffer_ptr);
-
-    int num_recv_tokens = -1;
-    int num_rdma_recv_tokens = -1;
-    std::vector<int> num_recv_tokens_per_expert_list;
-    if (num_worst_tokens > 0) {
-      num_recv_tokens = num_worst_tokens;
-      num_rdma_recv_tokens = num_worst_tokens;
-    } else {
-      auto start_time = std::chrono::high_resolution_clock::now();
-      while (true) {
-        num_recv_tokens = static_cast<int>(*moe_recv_counter);
-        num_rdma_recv_tokens = static_cast<int>(*moe_recv_rdma_counter);
-        bool ready = (num_recv_tokens >= 0) && (num_rdma_recv_tokens >= 0);
-        for (int i = 0; i < num_local_experts && ready; ++i) {
-          ready &= moe_recv_expert_counter[i] >= 0;
-        }
-        if (ready) break;
-        if (std::chrono::duration_cast<std::chrono::seconds>(
-                std::chrono::high_resolution_clock::now() - start_time)
-                .count() > NUM_CPU_TIMEOUT_SECS) {
-          throw std::runtime_error("DeepEP error: timeout (dispatch CPU)");
-        }
+      if (ready) break;
+      if (std::chrono::duration_cast<std::chrono::seconds>(
+              std::chrono::high_resolution_clock::now() - start_time)
+              .count() > NUM_CPU_TIMEOUT_SECS) {
+        throw std::runtime_error("DeepEP error: timeout (dispatch CPU)");
       }
-      num_recv_tokens_per_expert_list = std::vector<int>(
-          moe_recv_expert_counter, moe_recv_expert_counter + num_local_experts);
     }
-
-    std::optional<EventHandle> event;
-    if (async) {
-      event = EventHandle(comm_stream);
-    } else {
-      stream_wait(compute_stream, comm_stream);
-    }
-    return {num_recv_tokens, num_rdma_recv_tokens,
-            num_recv_tokens_per_expert_list, event};
+    num_recv_tokens_per_expert_list = std::vector<int>(
+        moe_recv_expert_counter, moe_recv_expert_counter + num_local_experts);
   }
 
-  std::optional<EventHandle> internode_dispatch(
-      std::uintptr_t x_ptr, int num_tokens, int hidden, int x_element_size,
-      std::uintptr_t x_scales_ptr, int num_scales, int scale_token_stride,
-      int scale_hidden_stride, std::uintptr_t topk_idx_ptr, int num_topk,
-      std::uintptr_t topk_weights_ptr, std::uintptr_t is_token_in_rank_ptr,
-      std::uintptr_t rdma_channel_prefix_matrix_ptr,
-      std::uintptr_t recv_rdma_rank_prefix_sum_ptr,
-      std::uintptr_t gbl_channel_prefix_matrix_ptr,
-      std::uintptr_t recv_gbl_rank_prefix_sum_ptr, int num_experts,
-      int num_worst_tokens, bool cached_mode, int num_rdma_recv_tokens,
-      uccl::Config const& config, std::uintptr_t recv_x_ptr,
-      std::uintptr_t recv_x_scales_ptr, std::uintptr_t recv_topk_idx_ptr,
-      std::uintptr_t recv_topk_weights_ptr, std::uintptr_t recv_src_meta_ptr,
-      std::uintptr_t recv_rdma_channel_prefix_matrix_ptr,
-      std::uintptr_t recv_gbl_channel_prefix_matrix_ptr,
-      std::uintptr_t send_rdma_head_ptr, std::uintptr_t send_nvl_head_ptr,
-      std::optional<EventHandle>& previous_event, bool async,
-      bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-    EP_HOST_ASSERT(x_ptr != 0 && recv_x_ptr != 0 && is_token_in_rank_ptr != 0);
-    EP_HOST_ASSERT(rdma_channel_prefix_matrix_ptr != 0);
-    EP_HOST_ASSERT(recv_rdma_rank_prefix_sum_ptr != 0);
-    EP_HOST_ASSERT(gbl_channel_prefix_matrix_ptr != 0);
-    EP_HOST_ASSERT(recv_gbl_rank_prefix_sum_ptr != 0);
-    EP_HOST_ASSERT(num_tokens > 0 && hidden > 0);
-    EP_HOST_ASSERT(config.num_sms % 2 == 0);
+  std::optional<EventHandle> event;
+  if (async) {
+    event = EventHandle(comm_stream);
+  } else {
+    stream_wait(compute_stream, comm_stream);
+  }
+  return {num_recv_tokens, num_rdma_recv_tokens,
+          num_recv_tokens_per_expert_list, event};
+}
 
-    int const num_channels = config.num_sms / 2;
-    int const hidden_int4 =
-        hidden * x_element_size / static_cast<int>(sizeof(int4));
-    auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(previous_event.has_value() and async);
-    if (previous_event.has_value()) {
-      stream_wait(comm_stream, previous_event.value());
-    } else {
-      stream_wait(comm_stream, compute_stream);
-    }
+std::optional<EventHandle> Buffer::internode_dispatch(
+    std::uintptr_t x_ptr, int num_tokens, int hidden, int x_element_size,
+    std::uintptr_t x_scales_ptr, int num_scales, int scale_token_stride,
+    int scale_hidden_stride, std::uintptr_t topk_idx_ptr, int num_topk,
+    std::uintptr_t topk_weights_ptr, std::uintptr_t is_token_in_rank_ptr,
+    std::uintptr_t rdma_channel_prefix_matrix_ptr,
+    std::uintptr_t recv_rdma_rank_prefix_sum_ptr,
+    std::uintptr_t gbl_channel_prefix_matrix_ptr,
+    std::uintptr_t recv_gbl_rank_prefix_sum_ptr, int num_experts,
+    int num_worst_tokens, bool cached_mode, int num_rdma_recv_tokens,
+    uccl::Config const& config, std::uintptr_t recv_x_ptr,
+    std::uintptr_t recv_x_scales_ptr, std::uintptr_t recv_topk_idx_ptr,
+    std::uintptr_t recv_topk_weights_ptr, std::uintptr_t recv_src_meta_ptr,
+    std::uintptr_t recv_rdma_channel_prefix_matrix_ptr,
+    std::uintptr_t recv_gbl_channel_prefix_matrix_ptr,
+    std::uintptr_t send_rdma_head_ptr, std::uintptr_t send_nvl_head_ptr,
+    std::optional<EventHandle>& previous_event, bool async,
+    bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
+  EP_HOST_ASSERT(x_ptr != 0 && recv_x_ptr != 0 && is_token_in_rank_ptr != 0);
+  EP_HOST_ASSERT(rdma_channel_prefix_matrix_ptr != 0);
+  EP_HOST_ASSERT(recv_rdma_rank_prefix_sum_ptr != 0);
+  EP_HOST_ASSERT(gbl_channel_prefix_matrix_ptr != 0);
+  EP_HOST_ASSERT(recv_gbl_rank_prefix_sum_ptr != 0);
+  EP_HOST_ASSERT(num_tokens > 0 && hidden > 0);
+  EP_HOST_ASSERT(config.num_sms % 2 == 0);
 
-    if (cached_mode) {
-      uccl::internode::cached_notify(
-          hidden_int4, num_scales, num_topk, num_topk, num_ranks, num_channels,
-          0, nullptr,
-          reinterpret_cast<int const*>(rdma_channel_prefix_matrix_ptr),
-          reinterpret_cast<int const*>(recv_rdma_rank_prefix_sum_ptr), nullptr,
-          rdma_buffer_ptr, config.num_max_rdma_chunked_recv_tokens,
-          buffer_ptrs_gpu, config.num_max_nvl_chunked_recv_tokens,
-          barrier_signal_ptrs_gpu, rank, comm_stream,
-          config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4),
-                                           num_ranks),
-          num_nvl_bytes, true, low_latency_mode, d_handles,
-          num_d2h_channel_addrs, atomic_buffer_ptr);
-    } else {
-      EP_HOST_ASSERT(recv_src_meta_ptr != 0);
-      EP_HOST_ASSERT(send_rdma_head_ptr != 0);
-      EP_HOST_ASSERT(send_nvl_head_ptr != 0);
-      EP_HOST_ASSERT(recv_rdma_channel_prefix_matrix_ptr != 0);
-      EP_HOST_ASSERT(recv_gbl_channel_prefix_matrix_ptr != 0);
-    }
-
-    uccl::internode::dispatch(
-        reinterpret_cast<void*>(recv_x_ptr),
-        recv_x_scales_ptr == 0 ? nullptr
-                               : reinterpret_cast<float*>(recv_x_scales_ptr),
-        recv_topk_idx_ptr == 0 ? nullptr
-                               : reinterpret_cast<int64_t*>(recv_topk_idx_ptr),
-        recv_topk_weights_ptr == 0
-            ? nullptr
-            : reinterpret_cast<float*>(recv_topk_weights_ptr),
-        cached_mode ? nullptr : reinterpret_cast<void*>(recv_src_meta_ptr),
-        reinterpret_cast<void const*>(x_ptr),
-        x_scales_ptr == 0 ? nullptr
-                          : reinterpret_cast<float const*>(x_scales_ptr),
-        topk_idx_ptr == 0 ? nullptr
-                          : reinterpret_cast<int64_t const*>(topk_idx_ptr),
-        topk_weights_ptr == 0
-            ? nullptr
-            : reinterpret_cast<float const*>(topk_weights_ptr),
-        cached_mode ? nullptr : reinterpret_cast<int*>(send_rdma_head_ptr),
-        cached_mode ? nullptr : reinterpret_cast<int*>(send_nvl_head_ptr),
-        cached_mode
-            ? nullptr
-            : reinterpret_cast<int*>(recv_rdma_channel_prefix_matrix_ptr),
-        cached_mode
-            ? nullptr
-            : reinterpret_cast<int*>(recv_gbl_channel_prefix_matrix_ptr),
-        reinterpret_cast<int const*>(rdma_channel_prefix_matrix_ptr),
-        reinterpret_cast<int const*>(recv_rdma_rank_prefix_sum_ptr),
-        reinterpret_cast<int const*>(gbl_channel_prefix_matrix_ptr),
-        reinterpret_cast<int const*>(recv_gbl_rank_prefix_sum_ptr),
-        reinterpret_cast<bool const*>(is_token_in_rank_ptr), num_tokens,
-        num_worst_tokens, hidden_int4, num_scales, num_topk, num_experts,
-        scale_token_stride, scale_hidden_stride, rdma_buffer_ptr,
-        config.num_max_rdma_chunked_send_tokens,
-        config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
-        config.num_max_nvl_chunked_send_tokens,
-        config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, cached_mode,
-        comm_stream, num_channels, low_latency_mode, d_handles,
-        num_d2h_channel_addrs, atomic_buffer_ptr);
-
-    std::optional<EventHandle> event;
-    if (async) {
-      event = EventHandle(comm_stream);
-    } else {
-      stream_wait(compute_stream, comm_stream);
-    }
-    return event;
+  int const num_channels = config.num_sms / 2;
+  int const hidden_int4 =
+      hidden * x_element_size / static_cast<int>(sizeof(int4));
+  auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
+  if (allocate_on_comm_stream)
+    EP_HOST_ASSERT(previous_event.has_value() and async);
+  if (previous_event.has_value()) {
+    stream_wait(comm_stream, previous_event.value());
+  } else {
+    stream_wait(comm_stream, compute_stream);
   }
 
-  std::optional<EventHandle> internode_combine(
-      std::uintptr_t x_ptr, int num_tokens, int hidden, int x_dtype_code,
-      int x_element_size, std::uintptr_t topk_weights_ptr, int num_topk,
-      std::uintptr_t bias_0_ptr, std::uintptr_t bias_1_ptr,
-      std::uintptr_t src_meta_ptr, int num_combined_tokens,
-      std::uintptr_t is_combined_token_in_rank_ptr,
-      std::uintptr_t rdma_channel_prefix_matrix_ptr,
-      std::uintptr_t rdma_rank_prefix_sum_ptr,
-      std::uintptr_t gbl_channel_prefix_matrix_ptr,
-      std::uintptr_t combined_rdma_head_ptr,
-      std::uintptr_t combined_nvl_head_ptr, uccl::Config const& config,
-      std::uintptr_t combined_x_ptr, std::uintptr_t combined_topk_weights_ptr,
-      std::optional<EventHandle>& previous_event, bool async,
-      bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
-    EP_HOST_ASSERT(x_ptr != 0 && src_meta_ptr != 0 && combined_x_ptr != 0);
-    EP_HOST_ASSERT(is_combined_token_in_rank_ptr != 0);
-    EP_HOST_ASSERT(rdma_channel_prefix_matrix_ptr != 0);
-    EP_HOST_ASSERT(rdma_rank_prefix_sum_ptr != 0);
-    EP_HOST_ASSERT(gbl_channel_prefix_matrix_ptr != 0);
-    EP_HOST_ASSERT(combined_rdma_head_ptr != 0);
-    EP_HOST_ASSERT(combined_nvl_head_ptr != 0);
-    EP_HOST_ASSERT(config.num_sms % 2 == 0);
-
-    int const num_channels = config.num_sms / 2;
-    int const hidden_int4 =
-        hidden * x_element_size / static_cast<int>(sizeof(int4));
-    auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    if (allocate_on_comm_stream)
-      EP_HOST_ASSERT(previous_event.has_value() and async);
-    if (previous_event.has_value()) {
-      stream_wait(comm_stream, previous_event.value());
-    } else {
-      stream_wait(comm_stream, compute_stream);
-    }
-
+  if (cached_mode) {
     uccl::internode::cached_notify(
-        hidden_int4, 0, 0, num_topk, num_ranks, num_channels,
-        num_combined_tokens, reinterpret_cast<int*>(combined_rdma_head_ptr),
+        hidden_int4, num_scales, num_topk, num_topk, num_ranks, num_channels,
+        0, nullptr,
         reinterpret_cast<int const*>(rdma_channel_prefix_matrix_ptr),
-        reinterpret_cast<int const*>(rdma_rank_prefix_sum_ptr),
-        reinterpret_cast<int*>(combined_nvl_head_ptr), rdma_buffer_ptr,
-        config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
-        config.num_max_nvl_chunked_recv_tokens, barrier_signal_ptrs_gpu, rank,
-        comm_stream,
-        config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4), num_ranks),
-        num_nvl_bytes, false, low_latency_mode, d_handles,
+        reinterpret_cast<int const*>(recv_rdma_rank_prefix_sum_ptr), nullptr,
+        rdma_buffer_ptr, config.num_max_rdma_chunked_recv_tokens,
+        buffer_ptrs_gpu, config.num_max_nvl_chunked_recv_tokens,
+        barrier_signal_ptrs_gpu, rank, comm_stream,
+        config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4),
+                                         num_ranks),
+        num_nvl_bytes, true, low_latency_mode, d_handles,
         num_d2h_channel_addrs, atomic_buffer_ptr);
+  } else {
+    EP_HOST_ASSERT(recv_src_meta_ptr != 0);
+    EP_HOST_ASSERT(send_rdma_head_ptr != 0);
+    EP_HOST_ASSERT(send_nvl_head_ptr != 0);
+    EP_HOST_ASSERT(recv_rdma_channel_prefix_matrix_ptr != 0);
+    EP_HOST_ASSERT(recv_gbl_channel_prefix_matrix_ptr != 0);
+  }
 
-    void* bias_ptrs[2] = {
-        bias_0_ptr == 0 ? nullptr : reinterpret_cast<void*>(bias_0_ptr),
-        bias_1_ptr == 0 ? nullptr : reinterpret_cast<void*>(bias_1_ptr),
-    };
-    uccl::internode::combine(
-        cuda_dtype_from_code(x_dtype_code),
-        reinterpret_cast<void*>(combined_x_ptr),
-        combined_topk_weights_ptr == 0
-            ? nullptr
-            : reinterpret_cast<float*>(combined_topk_weights_ptr),
-        reinterpret_cast<bool const*>(is_combined_token_in_rank_ptr),
-        reinterpret_cast<void const*>(x_ptr),
-        topk_weights_ptr == 0
-            ? nullptr
-            : reinterpret_cast<float const*>(topk_weights_ptr),
-        bias_ptrs[0], bias_ptrs[1],
-        reinterpret_cast<int const*>(combined_rdma_head_ptr),
-        reinterpret_cast<int const*>(combined_nvl_head_ptr),
-        reinterpret_cast<void const*>(src_meta_ptr),
-        reinterpret_cast<int const*>(rdma_channel_prefix_matrix_ptr),
-        reinterpret_cast<int const*>(rdma_rank_prefix_sum_ptr),
-        reinterpret_cast<int const*>(gbl_channel_prefix_matrix_ptr), num_tokens,
-        num_combined_tokens, hidden, num_topk, rdma_buffer_ptr,
-        config.num_max_rdma_chunked_send_tokens,
-        config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
-        config.num_max_nvl_chunked_send_tokens,
-        config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, comm_stream,
-        num_channels, low_latency_mode, d_handles, num_d2h_channel_addrs,
-        atomic_buffer_ptr);
+  uccl::internode::dispatch(
+      reinterpret_cast<void*>(recv_x_ptr),
+      recv_x_scales_ptr == 0 ? nullptr
+                             : reinterpret_cast<float*>(recv_x_scales_ptr),
+      recv_topk_idx_ptr == 0 ? nullptr
+                             : reinterpret_cast<int64_t*>(recv_topk_idx_ptr),
+      recv_topk_weights_ptr == 0
+          ? nullptr
+          : reinterpret_cast<float*>(recv_topk_weights_ptr),
+      cached_mode ? nullptr : reinterpret_cast<void*>(recv_src_meta_ptr),
+      reinterpret_cast<void const*>(x_ptr),
+      x_scales_ptr == 0 ? nullptr
+                        : reinterpret_cast<float const*>(x_scales_ptr),
+      topk_idx_ptr == 0 ? nullptr
+                        : reinterpret_cast<int64_t const*>(topk_idx_ptr),
+      topk_weights_ptr == 0
+          ? nullptr
+          : reinterpret_cast<float const*>(topk_weights_ptr),
+      cached_mode ? nullptr : reinterpret_cast<int*>(send_rdma_head_ptr),
+      cached_mode ? nullptr : reinterpret_cast<int*>(send_nvl_head_ptr),
+      cached_mode
+          ? nullptr
+          : reinterpret_cast<int*>(recv_rdma_channel_prefix_matrix_ptr),
+      cached_mode
+          ? nullptr
+          : reinterpret_cast<int*>(recv_gbl_channel_prefix_matrix_ptr),
+      reinterpret_cast<int const*>(rdma_channel_prefix_matrix_ptr),
+      reinterpret_cast<int const*>(recv_rdma_rank_prefix_sum_ptr),
+      reinterpret_cast<int const*>(gbl_channel_prefix_matrix_ptr),
+      reinterpret_cast<int const*>(recv_gbl_rank_prefix_sum_ptr),
+      reinterpret_cast<bool const*>(is_token_in_rank_ptr), num_tokens,
+      num_worst_tokens, hidden_int4, num_scales, num_topk, num_experts,
+      scale_token_stride, scale_hidden_stride, rdma_buffer_ptr,
+      config.num_max_rdma_chunked_send_tokens,
+      config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
+      config.num_max_nvl_chunked_send_tokens,
+      config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, cached_mode,
+      comm_stream, num_channels, low_latency_mode, d_handles,
+      num_d2h_channel_addrs, atomic_buffer_ptr);
 
-    std::optional<EventHandle> event;
-    if (async) {
-      event = EventHandle(comm_stream);
-    } else {
-      stream_wait(compute_stream, comm_stream);
+  std::optional<EventHandle> event;
+  if (async) {
+    event = EventHandle(comm_stream);
+  } else {
+    stream_wait(compute_stream, comm_stream);
+  }
+  return event;
+}
+
+std::optional<EventHandle> Buffer::internode_combine(
+    std::uintptr_t x_ptr, int num_tokens, int hidden, int x_dtype_code,
+    int x_element_size, std::uintptr_t topk_weights_ptr, int num_topk,
+    std::uintptr_t bias_0_ptr, std::uintptr_t bias_1_ptr,
+    std::uintptr_t src_meta_ptr, int num_combined_tokens,
+    std::uintptr_t is_combined_token_in_rank_ptr,
+    std::uintptr_t rdma_channel_prefix_matrix_ptr,
+    std::uintptr_t rdma_rank_prefix_sum_ptr,
+    std::uintptr_t gbl_channel_prefix_matrix_ptr,
+    std::uintptr_t combined_rdma_head_ptr,
+    std::uintptr_t combined_nvl_head_ptr, uccl::Config const& config,
+    std::uintptr_t combined_x_ptr, std::uintptr_t combined_topk_weights_ptr,
+    std::optional<EventHandle>& previous_event, bool async,
+    bool allocate_on_comm_stream, std::uintptr_t compute_stream_ptr) {
+  EP_HOST_ASSERT(x_ptr != 0 && src_meta_ptr != 0 && combined_x_ptr != 0);
+  EP_HOST_ASSERT(is_combined_token_in_rank_ptr != 0);
+  EP_HOST_ASSERT(rdma_channel_prefix_matrix_ptr != 0);
+  EP_HOST_ASSERT(rdma_rank_prefix_sum_ptr != 0);
+  EP_HOST_ASSERT(gbl_channel_prefix_matrix_ptr != 0);
+  EP_HOST_ASSERT(combined_rdma_head_ptr != 0);
+  EP_HOST_ASSERT(combined_nvl_head_ptr != 0);
+  EP_HOST_ASSERT(config.num_sms % 2 == 0);
+
+  int const num_channels = config.num_sms / 2;
+  int const hidden_int4 =
+      hidden * x_element_size / static_cast<int>(sizeof(int4));
+  auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
+  if (allocate_on_comm_stream)
+    EP_HOST_ASSERT(previous_event.has_value() and async);
+  if (previous_event.has_value()) {
+    stream_wait(comm_stream, previous_event.value());
+  } else {
+    stream_wait(comm_stream, compute_stream);
+  }
+
+  uccl::internode::cached_notify(
+      hidden_int4, 0, 0, num_topk, num_ranks, num_channels,
+      num_combined_tokens, reinterpret_cast<int*>(combined_rdma_head_ptr),
+      reinterpret_cast<int const*>(rdma_channel_prefix_matrix_ptr),
+      reinterpret_cast<int const*>(rdma_rank_prefix_sum_ptr),
+      reinterpret_cast<int*>(combined_nvl_head_ptr), rdma_buffer_ptr,
+      config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
+      config.num_max_nvl_chunked_recv_tokens, barrier_signal_ptrs_gpu, rank,
+      comm_stream,
+      config.get_rdma_buffer_size_hint(hidden_int4 * sizeof(int4), num_ranks),
+      num_nvl_bytes, false, low_latency_mode, d_handles,
+      num_d2h_channel_addrs, atomic_buffer_ptr);
+
+  void* bias_ptrs[2] = {
+      bias_0_ptr == 0 ? nullptr : reinterpret_cast<void*>(bias_0_ptr),
+      bias_1_ptr == 0 ? nullptr : reinterpret_cast<void*>(bias_1_ptr),
+  };
+  uccl::internode::combine(
+      cuda_dtype_from_code(x_dtype_code),
+      reinterpret_cast<void*>(combined_x_ptr),
+      combined_topk_weights_ptr == 0
+          ? nullptr
+          : reinterpret_cast<float*>(combined_topk_weights_ptr),
+      reinterpret_cast<bool const*>(is_combined_token_in_rank_ptr),
+      reinterpret_cast<void const*>(x_ptr),
+      topk_weights_ptr == 0
+          ? nullptr
+          : reinterpret_cast<float const*>(topk_weights_ptr),
+      bias_ptrs[0], bias_ptrs[1],
+      reinterpret_cast<int const*>(combined_rdma_head_ptr),
+      reinterpret_cast<int const*>(combined_nvl_head_ptr),
+      reinterpret_cast<void const*>(src_meta_ptr),
+      reinterpret_cast<int const*>(rdma_channel_prefix_matrix_ptr),
+      reinterpret_cast<int const*>(rdma_rank_prefix_sum_ptr),
+      reinterpret_cast<int const*>(gbl_channel_prefix_matrix_ptr), num_tokens,
+      num_combined_tokens, hidden, num_topk, rdma_buffer_ptr,
+      config.num_max_rdma_chunked_send_tokens,
+      config.num_max_rdma_chunked_recv_tokens, buffer_ptrs_gpu,
+      config.num_max_nvl_chunked_send_tokens,
+      config.num_max_nvl_chunked_recv_tokens, rank, num_ranks, comm_stream,
+      num_channels, low_latency_mode, d_handles, num_d2h_channel_addrs,
+      atomic_buffer_ptr);
+
+  std::optional<EventHandle> event;
+  if (async) {
+    event = EventHandle(comm_stream);
+  } else {
+    stream_wait(compute_stream, comm_stream);
+  }
+  return event;
+}
+
+void Buffer::clean_low_latency_buffer(int num_max_dispatch_tokens_per_rank,
+                              int hidden, int num_experts,
+                              std::uintptr_t stream_ptr) {
+  EP_HOST_ASSERT(low_latency_mode);
+
+  auto layout = uccl::LowLatencyLayout(rdma_buffer_ptr,
+                                       num_max_dispatch_tokens_per_rank,
+                                       hidden, num_ranks, num_experts);
+  auto clean_meta_0 = layout.buffers[0].clean_meta();
+  auto clean_meta_1 = layout.buffers[1].clean_meta();
+  auto [ptr0, ptr_internode0, count0] = clean_meta_0;
+  auto [ptr1, ptr_internode1, count1] = clean_meta_1;
+
+  auto check_boundary = [=](void* ptr, size_t num_bytes) {
+    auto offset = reinterpret_cast<int64_t>(ptr) -
+                  reinterpret_cast<int64_t>(rdma_buffer_ptr);
+    EP_HOST_ASSERT(0 <= offset &&
+                   offset + num_bytes <= static_cast<size_t>(num_rdma_bytes));
+  };
+  check_boundary(ptr0, count0 * sizeof(int));
+  check_boundary(ptr1, count1 * sizeof(int));
+
+  auto stream = reinterpret_cast<cudaStream_t>(stream_ptr);
+  uccl::internode_ll::clean_low_latency_buffer(ptr0, count0, ptr1, count1,
+                                               stream);
+}
+
+std::tuple<std::optional<EventHandle>, std::optional<std::function<void()>>>
+Buffer::low_latency_dispatch(std::uintptr_t x_ptr, int x_rows, int x_cols,
+                     std::uintptr_t topk_idx_ptr, int topk_rows,
+                     int topk_cols, std::uintptr_t packed_recv_x_ptr,
+                     std::uintptr_t packed_recv_x_scales_ptr,
+                     std::uintptr_t packed_recv_count_ptr,
+                     std::uintptr_t packed_recv_src_info_ptr,
+                     std::uintptr_t packed_recv_layout_range_ptr,
+                     std::uintptr_t cumulative_local_expert_recv_stats_ptr,
+                     std::uintptr_t dispatch_wait_recv_cost_stats_ptr,
+                     std::uintptr_t compute_stream_ptr,
+                     int num_max_dispatch_tokens_per_rank, int num_experts,
+                     bool use_fp8, bool round_scale, bool use_ue8m0,
+                     bool async, bool return_recv_hook) {
+  EP_HOST_ASSERT(low_latency_mode);
+  EP_HOST_ASSERT(x_ptr != 0 && topk_idx_ptr != 0);
+  EP_HOST_ASSERT(packed_recv_x_ptr != 0 && packed_recv_count_ptr != 0);
+  EP_HOST_ASSERT(packed_recv_src_info_ptr != 0 &&
+                 packed_recv_layout_range_ptr != 0);
+  EP_HOST_ASSERT(x_rows == topk_rows);
+  EP_HOST_ASSERT(x_rows <= num_max_dispatch_tokens_per_rank);
+  EP_HOST_ASSERT(x_cols % static_cast<int>(sizeof(int4)) == 0 &&
+                 x_cols % 128 == 0);
+  EP_HOST_ASSERT(num_experts % num_ranks == 0);
+  EP_HOST_ASSERT((num_ranks * num_max_dispatch_tokens_per_rank) % 4 == 0 &&
+                 "TMA requires the number of tokens to be multiple of 4");
+  if (use_fp8) {
+    EP_HOST_ASSERT(packed_recv_x_scales_ptr != 0);
+    EP_HOST_ASSERT(x_cols % 512 == 0);
+    if (use_ue8m0) EP_HOST_ASSERT(round_scale);
+  }
+
+  auto num_tokens = x_rows;
+  auto hidden = x_cols;
+  auto num_topk = topk_cols;
+
+  uccl::LowLatencyLayout layout(rdma_buffer_ptr,
+                                num_max_dispatch_tokens_per_rank, hidden,
+                                num_ranks, num_experts, atomic_buffer_ptr);
+  EP_HOST_ASSERT(layout.total_bytes <=
+                 static_cast<std::size_t>(num_rdma_bytes));
+  int low_latency_buffer_idx_used = low_latency_buffer_idx;
+  auto buffer = layout.buffers[low_latency_buffer_idx];
+  auto next_buffer = layout.buffers[low_latency_buffer_idx ^= 1];
+
+  auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
+  auto launch_stream = return_recv_hook ? compute_stream : comm_stream;
+  EP_HOST_ASSERT(not(async and return_recv_hook));
+  if (not return_recv_hook) stream_wait(launch_stream, compute_stream);
+
+  void* x = reinterpret_cast<void*>(x_ptr);
+  int64_t* topk_idx = reinterpret_cast<int64_t*>(topk_idx_ptr);
+  void* packed_recv_x = reinterpret_cast<void*>(packed_recv_x_ptr);
+  void* packed_recv_x_scales =
+      packed_recv_x_scales_ptr == 0
+          ? nullptr
+          : reinterpret_cast<void*>(packed_recv_x_scales_ptr);
+  int* packed_recv_count = reinterpret_cast<int*>(packed_recv_count_ptr);
+  int* packed_recv_src_info =
+      reinterpret_cast<int*>(packed_recv_src_info_ptr);
+  int64_t* packed_recv_layout_range =
+      reinterpret_cast<int64_t*>(packed_recv_layout_range_ptr);
+  int* cumulative_local_expert_recv_stats =
+      cumulative_local_expert_recv_stats_ptr == 0
+          ? nullptr
+          : reinterpret_cast<int*>(cumulative_local_expert_recv_stats_ptr);
+  int64_t* dispatch_wait_recv_cost_stats =
+      dispatch_wait_recv_cost_stats_ptr == 0
+          ? nullptr
+          : reinterpret_cast<int64_t*>(dispatch_wait_recv_cost_stats_ptr);
+
+  auto [ptr0, ptr_internode0, count0] = next_buffer.clean_meta();
+  auto launcher = [=](int phases) {
+    uccl::internode_ll::dispatch(
+        packed_recv_x, packed_recv_x_scales, packed_recv_src_info,
+        packed_recv_layout_range, packed_recv_count,
+        cumulative_local_expert_recv_stats, dispatch_wait_recv_cost_stats,
+        buffer.dispatch_rdma_recv_data_buffer,
+        buffer.dispatch_rdma_recv_count_buffer,
+        buffer.dispatch_rdma_send_buffer, x, topk_idx, ptr0, ptr_internode0,
+        count0, num_tokens, hidden, num_max_dispatch_tokens_per_rank,
+        num_topk, num_experts, rank, num_ranks, use_fp8, round_scale,
+        use_ue8m0, workspace, num_device_sms, launch_stream, phases,
+        d_handles, num_d2h_channel_addrs, max_nvl_peers,
+        low_latency_buffer_idx_used, d_ipc_rdma_base_ptrs, rdma_buffer_ptr,
+        atomic_buffer_ptr, buffer.dispatch_rdma_recv_count_buffer_internode);
+  };
+  launcher(return_recv_hook
+               ? LOW_LATENCY_SEND_PHASE
+               : (LOW_LATENCY_SEND_PHASE | LOW_LATENCY_RECV_PHASE));
+
+  std::optional<EventHandle> event;
+  if (async) {
+    event = EventHandle(launch_stream);
+  } else if (not return_recv_hook) {
+    stream_wait(compute_stream, launch_stream);
+  }
+
+  std::optional<std::function<void()>> recv_hook = std::nullopt;
+  if (return_recv_hook)
+    recv_hook = [=]() { launcher(LOW_LATENCY_RECV_PHASE); };
+  return {event, recv_hook};
+}
+
+std::tuple<std::optional<EventHandle>, std::optional<std::function<void()>>>
+Buffer::low_latency_combine(std::uintptr_t x_ptr, int x_dim0, int x_dim1, int x_dim2,
+                    std::uintptr_t topk_idx_ptr, int topk_rows, int topk_cols,
+                    std::uintptr_t topk_weights_ptr,
+                    std::uintptr_t src_info_ptr, int src_info_dim0,
+                    int src_info_dim1, std::uintptr_t layout_range_ptr,
+                    int layout_range_dim0, int layout_range_dim1,
+                    std::uintptr_t combine_wait_recv_cost_stats_ptr,
+                    std::uintptr_t compute_stream_ptr,
+                    int num_max_dispatch_tokens_per_rank, int num_experts,
+                    bool use_logfmt, bool zero_copy, bool async,
+                    bool return_recv_hook, std::uintptr_t out_ptr) {
+  EP_HOST_ASSERT(low_latency_mode);
+  EP_HOST_ASSERT(x_ptr != 0 && topk_idx_ptr != 0 && topk_weights_ptr != 0);
+  EP_HOST_ASSERT(src_info_ptr != 0 && layout_range_ptr != 0);
+  EP_HOST_ASSERT(out_ptr != 0);
+
+  auto num_local_experts = num_experts / num_ranks;
+  EP_HOST_ASSERT(x_dim0 == num_local_experts);
+  EP_HOST_ASSERT(x_dim1 == num_ranks * num_max_dispatch_tokens_per_rank);
+  EP_HOST_ASSERT(x_dim2 % static_cast<int>(sizeof(int4)) == 0 &&
+                 x_dim2 % 128 == 0);
+  EP_HOST_ASSERT(src_info_dim0 == num_local_experts &&
+                 src_info_dim1 ==
+                     num_ranks * num_max_dispatch_tokens_per_rank);
+  EP_HOST_ASSERT(layout_range_dim0 == num_local_experts &&
+                 layout_range_dim1 == num_ranks);
+  EP_HOST_ASSERT(topk_rows <= num_max_dispatch_tokens_per_rank);
+
+  auto hidden = x_dim2;
+  auto num_topk = topk_cols;
+  auto num_combined_tokens = topk_rows;
+
+  uccl::LowLatencyLayout layout(rdma_buffer_ptr,
+                                num_max_dispatch_tokens_per_rank, hidden,
+                                num_ranks, num_experts, atomic_buffer_ptr);
+  EP_HOST_ASSERT(layout.total_bytes <=
+                 static_cast<std::size_t>(num_rdma_bytes));
+  int low_latency_buffer_idx_used = low_latency_buffer_idx;
+  auto buffer = layout.buffers[low_latency_buffer_idx];
+  auto next_buffer = layout.buffers[low_latency_buffer_idx ^= 1];
+
+  auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
+  auto launch_stream = return_recv_hook ? compute_stream : comm_stream;
+  EP_HOST_ASSERT(not(async and return_recv_hook));
+  if (not return_recv_hook) stream_wait(launch_stream, compute_stream);
+
+  void* x = reinterpret_cast<void*>(x_ptr);
+  int64_t* topk_idx = reinterpret_cast<int64_t*>(topk_idx_ptr);
+  float* topk_weights = reinterpret_cast<float*>(topk_weights_ptr);
+  int* src_info = reinterpret_cast<int*>(src_info_ptr);
+  int64_t* layout_range = reinterpret_cast<int64_t*>(layout_range_ptr);
+  int64_t* combine_wait_recv_cost_stats =
+      combine_wait_recv_cost_stats_ptr == 0
+          ? nullptr
+          : reinterpret_cast<int64_t*>(combine_wait_recv_cost_stats_ptr);
+  void* out = reinterpret_cast<void*>(out_ptr);
+
+  auto [ptr0, ptr_internode0, count0] = next_buffer.clean_meta();
+  auto launcher = [=](int phases) {
+    uccl::internode_ll::combine(
+        out, buffer.combine_rdma_recv_data_buffer,
+        buffer.combine_rdma_recv_flag_buffer, buffer.combine_rdma_send_buffer,
+        x, topk_idx, topk_weights, src_info, layout_range,
+        combine_wait_recv_cost_stats, ptr0, ptr_internode0, count0,
+        num_combined_tokens, hidden, num_max_dispatch_tokens_per_rank,
+        num_topk, num_experts, rank, num_ranks, use_logfmt, workspace,
+        num_device_sms, launch_stream, phases, zero_copy, d_handles,
+        num_d2h_channel_addrs, max_nvl_peers, low_latency_buffer_idx_used,
+        d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
+        buffer.combine_rdma_recv_flag_buffer_internode);
+  };
+  launcher(return_recv_hook
+               ? LOW_LATENCY_SEND_PHASE
+               : (LOW_LATENCY_SEND_PHASE | LOW_LATENCY_RECV_PHASE));
+
+  std::optional<EventHandle> event;
+  if (async) {
+    event = EventHandle(launch_stream);
+  } else if (not return_recv_hook) {
+    stream_wait(compute_stream, launch_stream);
+  }
+
+  std::optional<std::function<void()>> recv_hook = std::nullopt;
+  if (return_recv_hook)
+    recv_hook = [=]() { launcher(LOW_LATENCY_RECV_PHASE); };
+  return {event, recv_hook};
+}
+
+int Buffer::get_local_device_id() { return device_index; }
+
+nb::bytes Buffer::get_local_ipc_handle() const {
+  return nb::bytes(
+      reinterpret_cast<char const*>(ipc_handles[nvl_rank].reserved),
+      CUDA_IPC_HANDLE_SIZE);
+}
+
+nb::bytes Buffer::get_local_rdma_ipc_handle() {
+  EP_HOST_ASSERT(
+      rdma_buffer_ptr != nullptr &&
+      "set_rdma_buffer must be called before requesting RDMA IPC handle");
+  cudaIpcMemHandle_t h{};
+  CUDA_CHECK(cudaIpcGetMemHandle(&h, rdma_buffer_ptr));
+  return nb::bytes(reinterpret_cast<char const*>(h.reserved),
+                   CUDA_IPC_HANDLE_SIZE);
+}
+
+nb::bytes Buffer::get_local_atomics_ipc_handle() {
+  EP_HOST_ASSERT(atomic_buffer_ptr != nullptr &&
+                 "set_atomic_buffer must be called before requesting "
+                 "atomic IPC handle");
+  cudaIpcMemHandle_t h{};
+  CUDA_CHECK(cudaIpcGetMemHandle(&h, atomic_buffer_ptr));
+  return nb::bytes(reinterpret_cast<char const*>(h.reserved),
+                   CUDA_IPC_HANDLE_SIZE);
+}
+
+int Buffer::get_num_rdma_ranks() const { return num_rdma_ranks; }
+
+int Buffer::get_num_max_nvl_peers() const { return NUM_MAX_NVL_PEERS; }
+
+int Buffer::get_source_meta_bytes() const {
+  return uccl::internode::get_source_meta_bytes();
+}
+
+int Buffer::get_rdma_rank() const { return rdma_rank; }
+
+int Buffer::get_root_rdma_rank(bool global) const { return global ? nvl_rank : 0; }
+
+nb::bytes Buffer::get_local_uccl_shmem_unique_id() const {
+  EP_HOST_ASSERT(rdma_rank == 0 and
+                 "Only RDMA rank 0 can get UCCL unique ID");
+  auto unique_id = internode::get_unique_id();
+  return nb::bytes(reinterpret_cast<char const*>(unique_id.data()),
+                   unique_id.size());
+}
+
+void Buffer::reset_rdma_buffer() {
+  CUDA_CHECK(
+      cudaMemsetAsync(rdma_buffer_ptr, 0, num_rdma_bytes, comm_stream));
+  CUDA_CHECK(cudaStreamSynchronize(comm_stream));
+  // printf("RDMA buffer reset done\n");
+
+  if (atomic_buffer_ptr != nullptr) {
+    cudaMemset(atomic_buffer_ptr, 0, kAtomicBufferSize);
+    printf("Atomic buffer reset done\n");
+  }
+}
+
+void Buffer::sync(std::vector<int> const& device_ids,
+          std::vector<std::optional<nb::bytes>> const& all_gathered_handles,
+          std::optional<nb::bytes> const& root_unique_id_opt,
+          std::optional<std::vector<std::optional<nb::bytes>>> const&
+              all_gathered_rdma_handles_opt ) {
+  EP_HOST_ASSERT(not is_available());
+  // Sync IPC handles
+  if (num_nvl_bytes > 0) {
+    EP_HOST_ASSERT(static_cast<std::size_t>(num_ranks) == device_ids.size());
+    EP_HOST_ASSERT(device_ids.size() == all_gathered_handles.size());
+    for (int i = 0, offset = rdma_rank * num_nvl_ranks; i < num_nvl_ranks;
+         ++i) {
+      int global_rank = offset + i;
+      int local_rank_idx =
+          global_rank % max_nvl_peers;  // Map to correct buffer_ptrs index
+
+      EP_HOST_ASSERT(all_gathered_handles[global_rank].has_value());
+      nb::bytes const& h = all_gathered_handles[global_rank].value();
+      std::string handle_str(static_cast<char const*>(h.data()), h.size());
+      EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
+      if (global_rank != rank) {
+        std::memcpy(ipc_handles[local_rank_idx].reserved, handle_str.c_str(),
+                    CUDA_IPC_HANDLE_SIZE);
+        // Ensure we're on the correct device before opening IPC handle
+        CUDA_CHECK(cudaSetDevice(device_index));
+        CUDA_CHECK(cudaIpcOpenMemHandle(&buffer_ptrs[local_rank_idx],
+                                        ipc_handles[local_rank_idx],
+                                        cudaIpcMemLazyEnablePeerAccess));
+        barrier_signal_ptrs[local_rank_idx] = reinterpret_cast<int*>(
+            static_cast<uint8_t*>(buffer_ptrs[local_rank_idx]) +
+            num_nvl_bytes);
+      } else {
+        // This is our own rank - buffer_ptrs[local_rank_idx] should already
+        // be set from constructor But let's verify it's not null and the IPC
+        // handle matches
+        EP_HOST_ASSERT(buffer_ptrs[local_rank_idx] != nullptr);
+        EP_HOST_ASSERT(std::memcmp(ipc_handles[local_rank_idx].reserved,
+                                   handle_str.c_str(),
+                                   CUDA_IPC_HANDLE_SIZE) == 0);
+      }
     }
-    return event;
+
+    // Copy all buffer and barrier signal pointers to GPU
+    CUDA_CHECK(cudaMemcpy(buffer_ptrs_gpu, buffer_ptrs,
+                          sizeof(void*) * max_nvl_peers,
+                          cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(barrier_signal_ptrs_gpu, barrier_signal_ptrs,
+                          sizeof(int*) * max_nvl_peers,
+                          cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaDeviceSynchronize());
   }
 
-  void clean_low_latency_buffer(int num_max_dispatch_tokens_per_rank,
-                                int hidden, int num_experts,
-                                std::uintptr_t stream_ptr) {
-    EP_HOST_ASSERT(low_latency_mode);
-
-    auto layout = uccl::LowLatencyLayout(rdma_buffer_ptr,
-                                         num_max_dispatch_tokens_per_rank,
-                                         hidden, num_ranks, num_experts);
-    auto clean_meta_0 = layout.buffers[0].clean_meta();
-    auto clean_meta_1 = layout.buffers[1].clean_meta();
-    auto [ptr0, ptr_internode0, count0] = clean_meta_0;
-    auto [ptr1, ptr_internode1, count1] = clean_meta_1;
-
-    auto check_boundary = [=](void* ptr, size_t num_bytes) {
-      auto offset = reinterpret_cast<int64_t>(ptr) -
-                    reinterpret_cast<int64_t>(rdma_buffer_ptr);
-      EP_HOST_ASSERT(0 <= offset &&
-                     offset + num_bytes <= static_cast<size_t>(num_rdma_bytes));
-    };
-    check_boundary(ptr0, count0 * sizeof(int));
-    check_boundary(ptr1, count1 * sizeof(int));
-
-    auto stream = reinterpret_cast<cudaStream_t>(stream_ptr);
-    uccl::internode_ll::clean_low_latency_buffer(ptr0, count0, ptr1, count1,
-                                                 stream);
-  }
-
-  std::tuple<std::optional<EventHandle>, std::optional<std::function<void()>>>
-  low_latency_dispatch(std::uintptr_t x_ptr, int x_rows, int x_cols,
-                       std::uintptr_t topk_idx_ptr, int topk_rows,
-                       int topk_cols, std::uintptr_t packed_recv_x_ptr,
-                       std::uintptr_t packed_recv_x_scales_ptr,
-                       std::uintptr_t packed_recv_count_ptr,
-                       std::uintptr_t packed_recv_src_info_ptr,
-                       std::uintptr_t packed_recv_layout_range_ptr,
-                       std::uintptr_t cumulative_local_expert_recv_stats_ptr,
-                       std::uintptr_t dispatch_wait_recv_cost_stats_ptr,
-                       std::uintptr_t compute_stream_ptr,
-                       int num_max_dispatch_tokens_per_rank, int num_experts,
-                       bool use_fp8, bool round_scale, bool use_ue8m0,
-                       bool async, bool return_recv_hook) {
-    EP_HOST_ASSERT(low_latency_mode);
-    EP_HOST_ASSERT(x_ptr != 0 && topk_idx_ptr != 0);
-    EP_HOST_ASSERT(packed_recv_x_ptr != 0 && packed_recv_count_ptr != 0);
-    EP_HOST_ASSERT(packed_recv_src_info_ptr != 0 &&
-                   packed_recv_layout_range_ptr != 0);
-    EP_HOST_ASSERT(x_rows == topk_rows);
-    EP_HOST_ASSERT(x_rows <= num_max_dispatch_tokens_per_rank);
-    EP_HOST_ASSERT(x_cols % static_cast<int>(sizeof(int4)) == 0 &&
-                   x_cols % 128 == 0);
-    EP_HOST_ASSERT(num_experts % num_ranks == 0);
-    EP_HOST_ASSERT((num_ranks * num_max_dispatch_tokens_per_rank) % 4 == 0 &&
-                   "TMA requires the number of tokens to be multiple of 4");
-    if (use_fp8) {
-      EP_HOST_ASSERT(packed_recv_x_scales_ptr != 0);
-      EP_HOST_ASSERT(x_cols % 512 == 0);
-      if (use_ue8m0) EP_HOST_ASSERT(round_scale);
+  // Sync NVSHMEM handles and allocate memory
+  // NOTE(MaoZiming): drop nvshmem. we directly allocate rdma_buffer_ptr.
+  if (num_rdma_bytes > 0) {
+    // TODO(MaoZiming): this needs to be allocated by proxy.
+    if (!rdma_buffer_ptr) {
+      fprintf(stderr,
+              "WARNING: rdma_buffer_ptr is not set, allocating %ld bytes "
+              "for RDMA buffer.\n",
+              num_rdma_bytes);
+      std::abort();
     }
+    reset_rdma_buffer();
+    EP_HOST_ASSERT(all_gathered_rdma_handles_opt.has_value());
+    auto const& all_gathered_rdma_handles = *all_gathered_rdma_handles_opt;
+    EP_HOST_ASSERT(static_cast<std::size_t>(num_ranks) ==
+                   all_gathered_rdma_handles.size());
+    for (int i = 0, offset = rdma_rank * num_nvl_ranks; i < num_nvl_ranks;
+         ++i) {
+      int global_rank = offset + i;
+      int local_rank_idx = global_rank % max_nvl_peers;
 
-    auto num_tokens = x_rows;
-    auto hidden = x_cols;
-    auto num_topk = topk_cols;
-
-    uccl::LowLatencyLayout layout(rdma_buffer_ptr,
-                                  num_max_dispatch_tokens_per_rank, hidden,
-                                  num_ranks, num_experts, atomic_buffer_ptr);
-    EP_HOST_ASSERT(layout.total_bytes <=
-                   static_cast<std::size_t>(num_rdma_bytes));
-    int low_latency_buffer_idx_used = low_latency_buffer_idx;
-    auto buffer = layout.buffers[low_latency_buffer_idx];
-    auto next_buffer = layout.buffers[low_latency_buffer_idx ^= 1];
-
-    auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    auto launch_stream = return_recv_hook ? compute_stream : comm_stream;
-    EP_HOST_ASSERT(not(async and return_recv_hook));
-    if (not return_recv_hook) stream_wait(launch_stream, compute_stream);
-
-    void* x = reinterpret_cast<void*>(x_ptr);
-    int64_t* topk_idx = reinterpret_cast<int64_t*>(topk_idx_ptr);
-    void* packed_recv_x = reinterpret_cast<void*>(packed_recv_x_ptr);
-    void* packed_recv_x_scales =
-        packed_recv_x_scales_ptr == 0
-            ? nullptr
-            : reinterpret_cast<void*>(packed_recv_x_scales_ptr);
-    int* packed_recv_count = reinterpret_cast<int*>(packed_recv_count_ptr);
-    int* packed_recv_src_info =
-        reinterpret_cast<int*>(packed_recv_src_info_ptr);
-    int64_t* packed_recv_layout_range =
-        reinterpret_cast<int64_t*>(packed_recv_layout_range_ptr);
-    int* cumulative_local_expert_recv_stats =
-        cumulative_local_expert_recv_stats_ptr == 0
-            ? nullptr
-            : reinterpret_cast<int*>(cumulative_local_expert_recv_stats_ptr);
-    int64_t* dispatch_wait_recv_cost_stats =
-        dispatch_wait_recv_cost_stats_ptr == 0
-            ? nullptr
-            : reinterpret_cast<int64_t*>(dispatch_wait_recv_cost_stats_ptr);
-
-    auto [ptr0, ptr_internode0, count0] = next_buffer.clean_meta();
-    auto launcher = [=](int phases) {
-      uccl::internode_ll::dispatch(
-          packed_recv_x, packed_recv_x_scales, packed_recv_src_info,
-          packed_recv_layout_range, packed_recv_count,
-          cumulative_local_expert_recv_stats, dispatch_wait_recv_cost_stats,
-          buffer.dispatch_rdma_recv_data_buffer,
-          buffer.dispatch_rdma_recv_count_buffer,
-          buffer.dispatch_rdma_send_buffer, x, topk_idx, ptr0, ptr_internode0,
-          count0, num_tokens, hidden, num_max_dispatch_tokens_per_rank,
-          num_topk, num_experts, rank, num_ranks, use_fp8, round_scale,
-          use_ue8m0, workspace, num_device_sms, launch_stream, phases,
-          d_handles, num_d2h_channel_addrs, max_nvl_peers,
-          low_latency_buffer_idx_used, d_ipc_rdma_base_ptrs, rdma_buffer_ptr,
-          atomic_buffer_ptr, buffer.dispatch_rdma_recv_count_buffer_internode);
-    };
-    launcher(return_recv_hook
-                 ? LOW_LATENCY_SEND_PHASE
-                 : (LOW_LATENCY_SEND_PHASE | LOW_LATENCY_RECV_PHASE));
-
-    std::optional<EventHandle> event;
-    if (async) {
-      event = EventHandle(launch_stream);
-    } else if (not return_recv_hook) {
-      stream_wait(compute_stream, launch_stream);
-    }
-
-    std::optional<std::function<void()>> recv_hook = std::nullopt;
-    if (return_recv_hook)
-      recv_hook = [=]() { launcher(LOW_LATENCY_RECV_PHASE); };
-    return {event, recv_hook};
-  }
-
-  std::tuple<std::optional<EventHandle>, std::optional<std::function<void()>>>
-  low_latency_combine(std::uintptr_t x_ptr, int x_dim0, int x_dim1, int x_dim2,
-                      std::uintptr_t topk_idx_ptr, int topk_rows, int topk_cols,
-                      std::uintptr_t topk_weights_ptr,
-                      std::uintptr_t src_info_ptr, int src_info_dim0,
-                      int src_info_dim1, std::uintptr_t layout_range_ptr,
-                      int layout_range_dim0, int layout_range_dim1,
-                      std::uintptr_t combine_wait_recv_cost_stats_ptr,
-                      std::uintptr_t compute_stream_ptr,
-                      int num_max_dispatch_tokens_per_rank, int num_experts,
-                      bool use_logfmt, bool zero_copy, bool async,
-                      bool return_recv_hook, std::uintptr_t out_ptr) {
-    EP_HOST_ASSERT(low_latency_mode);
-    EP_HOST_ASSERT(x_ptr != 0 && topk_idx_ptr != 0 && topk_weights_ptr != 0);
-    EP_HOST_ASSERT(src_info_ptr != 0 && layout_range_ptr != 0);
-    EP_HOST_ASSERT(out_ptr != 0);
-
-    auto num_local_experts = num_experts / num_ranks;
-    EP_HOST_ASSERT(x_dim0 == num_local_experts);
-    EP_HOST_ASSERT(x_dim1 == num_ranks * num_max_dispatch_tokens_per_rank);
-    EP_HOST_ASSERT(x_dim2 % static_cast<int>(sizeof(int4)) == 0 &&
-                   x_dim2 % 128 == 0);
-    EP_HOST_ASSERT(src_info_dim0 == num_local_experts &&
-                   src_info_dim1 ==
-                       num_ranks * num_max_dispatch_tokens_per_rank);
-    EP_HOST_ASSERT(layout_range_dim0 == num_local_experts &&
-                   layout_range_dim1 == num_ranks);
-    EP_HOST_ASSERT(topk_rows <= num_max_dispatch_tokens_per_rank);
-
-    auto hidden = x_dim2;
-    auto num_topk = topk_cols;
-    auto num_combined_tokens = topk_rows;
-
-    uccl::LowLatencyLayout layout(rdma_buffer_ptr,
-                                  num_max_dispatch_tokens_per_rank, hidden,
-                                  num_ranks, num_experts, atomic_buffer_ptr);
-    EP_HOST_ASSERT(layout.total_bytes <=
-                   static_cast<std::size_t>(num_rdma_bytes));
-    int low_latency_buffer_idx_used = low_latency_buffer_idx;
-    auto buffer = layout.buffers[low_latency_buffer_idx];
-    auto next_buffer = layout.buffers[low_latency_buffer_idx ^= 1];
-
-    auto compute_stream = reinterpret_cast<cudaStream_t>(compute_stream_ptr);
-    auto launch_stream = return_recv_hook ? compute_stream : comm_stream;
-    EP_HOST_ASSERT(not(async and return_recv_hook));
-    if (not return_recv_hook) stream_wait(launch_stream, compute_stream);
-
-    void* x = reinterpret_cast<void*>(x_ptr);
-    int64_t* topk_idx = reinterpret_cast<int64_t*>(topk_idx_ptr);
-    float* topk_weights = reinterpret_cast<float*>(topk_weights_ptr);
-    int* src_info = reinterpret_cast<int*>(src_info_ptr);
-    int64_t* layout_range = reinterpret_cast<int64_t*>(layout_range_ptr);
-    int64_t* combine_wait_recv_cost_stats =
-        combine_wait_recv_cost_stats_ptr == 0
-            ? nullptr
-            : reinterpret_cast<int64_t*>(combine_wait_recv_cost_stats_ptr);
-    void* out = reinterpret_cast<void*>(out_ptr);
-
-    auto [ptr0, ptr_internode0, count0] = next_buffer.clean_meta();
-    auto launcher = [=](int phases) {
-      uccl::internode_ll::combine(
-          out, buffer.combine_rdma_recv_data_buffer,
-          buffer.combine_rdma_recv_flag_buffer, buffer.combine_rdma_send_buffer,
-          x, topk_idx, topk_weights, src_info, layout_range,
-          combine_wait_recv_cost_stats, ptr0, ptr_internode0, count0,
-          num_combined_tokens, hidden, num_max_dispatch_tokens_per_rank,
-          num_topk, num_experts, rank, num_ranks, use_logfmt, workspace,
-          num_device_sms, launch_stream, phases, zero_copy, d_handles,
-          num_d2h_channel_addrs, max_nvl_peers, low_latency_buffer_idx_used,
-          d_ipc_rdma_base_ptrs, rdma_buffer_ptr, atomic_buffer_ptr,
-          buffer.combine_rdma_recv_flag_buffer_internode);
-    };
-    launcher(return_recv_hook
-                 ? LOW_LATENCY_SEND_PHASE
-                 : (LOW_LATENCY_SEND_PHASE | LOW_LATENCY_RECV_PHASE));
-
-    std::optional<EventHandle> event;
-    if (async) {
-      event = EventHandle(launch_stream);
-    } else if (not return_recv_hook) {
-      stream_wait(compute_stream, launch_stream);
-    }
-
-    std::optional<std::function<void()>> recv_hook = std::nullopt;
-    if (return_recv_hook)
-      recv_hook = [=]() { launcher(LOW_LATENCY_RECV_PHASE); };
-    return {event, recv_hook};
-  }
-
-  int get_local_device_id() { return device_index; }
-
-  nb::bytes get_local_ipc_handle() const {
-    return nb::bytes(
-        reinterpret_cast<char const*>(ipc_handles[nvl_rank].reserved),
-        CUDA_IPC_HANDLE_SIZE);
-  }
-
-  nb::bytes get_local_rdma_ipc_handle() {
-    EP_HOST_ASSERT(
-        rdma_buffer_ptr != nullptr &&
-        "set_rdma_buffer must be called before requesting RDMA IPC handle");
-    cudaIpcMemHandle_t h{};
-    CUDA_CHECK(cudaIpcGetMemHandle(&h, rdma_buffer_ptr));
-    return nb::bytes(reinterpret_cast<char const*>(h.reserved),
-                     CUDA_IPC_HANDLE_SIZE);
-  }
-
-  nb::bytes get_local_atomics_ipc_handle() {
-    EP_HOST_ASSERT(atomic_buffer_ptr != nullptr &&
-                   "set_atomic_buffer must be called before requesting "
-                   "atomic IPC handle");
-    cudaIpcMemHandle_t h{};
-    CUDA_CHECK(cudaIpcGetMemHandle(&h, atomic_buffer_ptr));
-    return nb::bytes(reinterpret_cast<char const*>(h.reserved),
-                     CUDA_IPC_HANDLE_SIZE);
-  }
-
-  int get_num_rdma_ranks() const { return num_rdma_ranks; }
-  int get_num_max_nvl_peers() const { return NUM_MAX_NVL_PEERS; }
-  int get_source_meta_bytes() const {
-    return uccl::internode::get_source_meta_bytes();
-  }
-  int get_rdma_rank() const { return rdma_rank; }
-  int get_root_rdma_rank(bool global) const { return global ? nvl_rank : 0; }
-
-  nb::bytes get_local_uccl_shmem_unique_id() const {
-    EP_HOST_ASSERT(rdma_rank == 0 and
-                   "Only RDMA rank 0 can get UCCL unique ID");
-    auto unique_id = internode::get_unique_id();
-    return nb::bytes(reinterpret_cast<char const*>(unique_id.data()),
-                     unique_id.size());
-  }
-
-  void reset_rdma_buffer() {
-    CUDA_CHECK(
-        cudaMemsetAsync(rdma_buffer_ptr, 0, num_rdma_bytes, comm_stream));
-    CUDA_CHECK(cudaStreamSynchronize(comm_stream));
-    // printf("RDMA buffer reset done\n");
-
-    if (atomic_buffer_ptr != nullptr) {
-      cudaMemset(atomic_buffer_ptr, 0, kAtomicBufferSize);
-      printf("Atomic buffer reset done\n");
-    }
-  }
-
-  void sync(std::vector<int> const& device_ids,
-            std::vector<std::optional<nb::bytes>> const& all_gathered_handles,
-            std::optional<nb::bytes> const& root_unique_id_opt,
-            std::optional<std::vector<std::optional<nb::bytes>>> const&
-                all_gathered_rdma_handles_opt = std::nullopt) {
-    EP_HOST_ASSERT(not is_available());
-    // Sync IPC handles
-    if (num_nvl_bytes > 0) {
-      EP_HOST_ASSERT(static_cast<std::size_t>(num_ranks) == device_ids.size());
-      EP_HOST_ASSERT(device_ids.size() == all_gathered_handles.size());
-      for (int i = 0, offset = rdma_rank * num_nvl_ranks; i < num_nvl_ranks;
-           ++i) {
-        int global_rank = offset + i;
-        int local_rank_idx =
-            global_rank % max_nvl_peers;  // Map to correct buffer_ptrs index
-
-        EP_HOST_ASSERT(all_gathered_handles[global_rank].has_value());
-        nb::bytes const& h = all_gathered_handles[global_rank].value();
+      if (global_rank == rank) {
+        ipc_rdma_base_ptrs[local_rank_idx] = rdma_buffer_ptr;
+      } else if (all_gathered_rdma_handles[global_rank].has_value()) {
+        nb::bytes const& h = all_gathered_rdma_handles[global_rank].value();
         std::string handle_str(static_cast<char const*>(h.data()), h.size());
         EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
-        if (global_rank != rank) {
-          std::memcpy(ipc_handles[local_rank_idx].reserved, handle_str.c_str(),
-                      CUDA_IPC_HANDLE_SIZE);
-          // Ensure we're on the correct device before opening IPC handle
-          CUDA_CHECK(cudaSetDevice(device_index));
-          CUDA_CHECK(cudaIpcOpenMemHandle(&buffer_ptrs[local_rank_idx],
-                                          ipc_handles[local_rank_idx],
-                                          cudaIpcMemLazyEnablePeerAccess));
-          barrier_signal_ptrs[local_rank_idx] = reinterpret_cast<int*>(
-              static_cast<uint8_t*>(buffer_ptrs[local_rank_idx]) +
-              num_nvl_bytes);
-        } else {
-          // This is our own rank - buffer_ptrs[local_rank_idx] should already
-          // be set from constructor But let's verify it's not null and the IPC
-          // handle matches
-          EP_HOST_ASSERT(buffer_ptrs[local_rank_idx] != nullptr);
-          EP_HOST_ASSERT(std::memcmp(ipc_handles[local_rank_idx].reserved,
-                                     handle_str.c_str(),
-                                     CUDA_IPC_HANDLE_SIZE) == 0);
-        }
+        std::memcpy(rdma_ipc_handles[local_rank_idx].reserved,
+                    handle_str.c_str(), CUDA_IPC_HANDLE_SIZE);
+        CUDA_CHECK(cudaSetDevice(device_index));
+        CUDA_CHECK(cudaIpcOpenMemHandle(&ipc_rdma_base_ptrs[local_rank_idx],
+                                        rdma_ipc_handles[local_rank_idx],
+                                        cudaIpcMemLazyEnablePeerAccess));
+      } else {
+        // Host-allocated RDMA buffer (cudaMallocHost): no IPC handle
+        ipc_rdma_base_ptrs[local_rank_idx] = nullptr;
       }
-
-      // Copy all buffer and barrier signal pointers to GPU
-      CUDA_CHECK(cudaMemcpy(buffer_ptrs_gpu, buffer_ptrs,
+    }
+    if (d_ipc_rdma_base_ptrs != nullptr) {
+      CUDA_CHECK(cudaMemcpy(d_ipc_rdma_base_ptrs, ipc_rdma_base_ptrs,
                             sizeof(void*) * max_nvl_peers,
                             cudaMemcpyHostToDevice));
-      CUDA_CHECK(cudaMemcpy(barrier_signal_ptrs_gpu, barrier_signal_ptrs,
-                            sizeof(int*) * max_nvl_peers,
-                            cudaMemcpyHostToDevice));
-      CUDA_CHECK(cudaDeviceSynchronize());
     }
-
-    // Sync NVSHMEM handles and allocate memory
-    // NOTE(MaoZiming): drop nvshmem. we directly allocate rdma_buffer_ptr.
-    if (num_rdma_bytes > 0) {
-      // TODO(MaoZiming): this needs to be allocated by proxy.
-      if (!rdma_buffer_ptr) {
-        fprintf(stderr,
-                "WARNING: rdma_buffer_ptr is not set, allocating %ld bytes "
-                "for RDMA buffer.\n",
-                num_rdma_bytes);
-        std::abort();
-      }
-      reset_rdma_buffer();
-      EP_HOST_ASSERT(all_gathered_rdma_handles_opt.has_value());
-      auto const& all_gathered_rdma_handles = *all_gathered_rdma_handles_opt;
-      EP_HOST_ASSERT(static_cast<std::size_t>(num_ranks) ==
-                     all_gathered_rdma_handles.size());
-      for (int i = 0, offset = rdma_rank * num_nvl_ranks; i < num_nvl_ranks;
-           ++i) {
-        int global_rank = offset + i;
-        int local_rank_idx = global_rank % max_nvl_peers;
-
-        if (global_rank == rank) {
-          ipc_rdma_base_ptrs[local_rank_idx] = rdma_buffer_ptr;
-        } else if (all_gathered_rdma_handles[global_rank].has_value()) {
-          nb::bytes const& h = all_gathered_rdma_handles[global_rank].value();
-          std::string handle_str(static_cast<char const*>(h.data()), h.size());
-          EP_HOST_ASSERT(handle_str.size() == CUDA_IPC_HANDLE_SIZE);
-          std::memcpy(rdma_ipc_handles[local_rank_idx].reserved,
-                      handle_str.c_str(), CUDA_IPC_HANDLE_SIZE);
-          CUDA_CHECK(cudaSetDevice(device_index));
-          CUDA_CHECK(cudaIpcOpenMemHandle(&ipc_rdma_base_ptrs[local_rank_idx],
-                                          rdma_ipc_handles[local_rank_idx],
-                                          cudaIpcMemLazyEnablePeerAccess));
-        } else {
-          // Host-allocated RDMA buffer (cudaMallocHost): no IPC handle
-          ipc_rdma_base_ptrs[local_rank_idx] = nullptr;
-        }
-      }
-      if (d_ipc_rdma_base_ptrs != nullptr) {
-        CUDA_CHECK(cudaMemcpy(d_ipc_rdma_base_ptrs, ipc_rdma_base_ptrs,
-                              sizeof(void*) * max_nvl_peers,
-                              cudaMemcpyHostToDevice));
-      }
-      CUDA_CHECK(cudaDeviceSynchronize());
-    }
-
-    // Ready to use
-    available = true;
+    CUDA_CHECK(cudaDeviceSynchronize());
   }
 
-  void set_rdma_buffer(std::uintptr_t addr, bool is_host_ptr = false) {
-    if (addr == 0) {
-      throw std::invalid_argument("set_rdma_buffer: ptr null");
-    }
+  // Ready to use
+  available = true;
+}
 
-    void* ptr = reinterpret_cast<void*>(addr);
-    if (is_host_ptr) {
-      CUDA_CHECK(cudaSetDevice(device_index));
-      void* dev_ptr = nullptr;
+void Buffer::set_rdma_buffer(std::uintptr_t addr, bool is_host_ptr ) {
+  if (addr == 0) {
+    throw std::invalid_argument("set_rdma_buffer: ptr null");
+  }
+
+  void* ptr = reinterpret_cast<void*>(addr);
+  if (is_host_ptr) {
+    CUDA_CHECK(cudaSetDevice(device_index));
+    void* dev_ptr = nullptr;
 #ifndef USE_GRACE_HOPPER
-      CUDA_CHECK(
-          cudaHostGetDevicePointer(reinterpret_cast<void**>(&dev_ptr), ptr, 0));
+    CUDA_CHECK(
+        cudaHostGetDevicePointer(reinterpret_cast<void**>(&dev_ptr), ptr, 0));
 #else
-      dev_ptr = ptr;
+    dev_ptr = ptr;
 #endif
-      rdma_buffer_ptr = dev_ptr;
-    } else {
-      rdma_buffer_ptr = ptr;
-    }
+    rdma_buffer_ptr = dev_ptr;
+  } else {
+    rdma_buffer_ptr = ptr;
   }
+}
 
-  void set_atomic_buffer_ptr(void* ptr) {
-    if (ptr == nullptr) {
-      throw std::invalid_argument("set_atomic_buffer_ptr: ptr null");
-    }
-    atomic_buffer_ptr = ptr;
+void Buffer::set_atomic_buffer_ptr(void* ptr) {
+  if (ptr == nullptr) {
+    throw std::invalid_argument("set_atomic_buffer_ptr: ptr null");
   }
+  atomic_buffer_ptr = ptr;
+}
 
-  std::uintptr_t get_local_buffer_ptr(int64_t offset,
-                                      bool use_rdma_buffer) const {
-    auto base_ptr =
-        static_cast<uint8_t*>(use_rdma_buffer ? rdma_buffer_ptr
-                                              : buffer_ptrs[nvl_rank]) +
-        offset;
-    return reinterpret_cast<std::uintptr_t>(base_ptr);
-  }
+std::uintptr_t Buffer::get_local_buffer_ptr(int64_t offset,
+                                    bool use_rdma_buffer) const {
+  auto base_ptr =
+      static_cast<uint8_t*>(use_rdma_buffer ? rdma_buffer_ptr
+                                            : buffer_ptrs[nvl_rank]) +
+      offset;
+  return reinterpret_cast<std::uintptr_t>(base_ptr);
+}
 
-  int64_t get_local_buffer_nbytes(bool use_rdma_buffer) const {
-    return use_rdma_buffer ? num_rdma_bytes : num_nvl_bytes;
-  }
+int64_t Buffer::get_local_buffer_nbytes(bool use_rdma_buffer) const {
+  return use_rdma_buffer ? num_rdma_bytes : num_nvl_bytes;
+}
 
-  std::uintptr_t get_comm_stream() const {
-    return reinterpret_cast<std::uintptr_t>(comm_stream);
-  }
+std::uintptr_t Buffer::get_comm_stream() const {
+  return reinterpret_cast<std::uintptr_t>(comm_stream);
+}
 
-  bool is_available() const { return available; }
-  bool is_internode_available() const {
-    return is_available() and num_ranks > NUM_MAX_NVL_PEERS;
-  }
+bool Buffer::is_available() const { return available; }
 
- private:
-  int rank{0};
-  int num_ranks{1};
-  long num_nvl_bytes{0};
-  long num_rdma_bytes{0};
-  bool low_latency_mode{false};
-  bool explicitly_destroy{false};
-  int device_index{0};
-  std::vector<nb::object> proxies_;
-  bool available{false};
-  void* rdma_buffer_ptr = nullptr;
-  void* atomic_buffer_ptr = nullptr;
-  int low_latency_buffer_idx = 0;
-  void* workspace = nullptr;
-
-  // device / ranks
-  int rdma_rank{0}, nvl_rank{0};
-  int num_rdma_ranks{1}, num_nvl_ranks{1};
-  int num_device_sms{0};
-  int max_nvl_peers{0};
-
-  // stream & workspace
-  cudaStream_t comm_stream{nullptr};
-
-  cudaIpcMemHandle_t ipc_handles[NUM_MAX_NVL_PEERS]{};
-  void* buffer_ptrs[NUM_MAX_NVL_PEERS]{};
-  int* barrier_signal_ptrs[NUM_MAX_NVL_PEERS]{};
-  void** buffer_ptrs_gpu{nullptr};
-  int** barrier_signal_ptrs_gpu{nullptr};
-  cudaIpcMemHandle_t rdma_ipc_handles[NUM_MAX_NVL_PEERS]{};
-  void* ipc_rdma_base_ptrs[NUM_MAX_NVL_PEERS]{};
-
-  // clang-format would change to int volatile*
-  // clang-format off
-  // MoE counters (host mapped)
-  volatile int* moe_recv_counter = nullptr;
-  int* moe_recv_counter_mapped{nullptr};  // device pointer
-  volatile int* moe_recv_expert_counter{nullptr};
-  int* moe_recv_expert_counter_mapped{nullptr};
-  volatile int* moe_recv_rdma_counter{nullptr};
-  int* moe_recv_rdma_counter_mapped{nullptr};
-  // clang-format on
-
-  bool destroyed = false;
-
-  // Ring buffers
-  int num_d2h_channel_addrs{0};
-  d2hq::D2HHandle* d_handle_objs{nullptr};
-  uint64_t* d_handles{nullptr};
-
-  // IPC base pointers for GPU access (for replacing nvshmemi_get_p2p_ptr)
-  void** d_ipc_rdma_base_ptrs{
-      nullptr};  // Device pointer to array of IPC base addresses
-};
+bool Buffer::is_internode_available() const {
+  return is_available() and num_ranks > NUM_MAX_NVL_PEERS;
+}
 
 // ============================================================================
 // JAX bridge installation
 // ----------------------------------------------------------------------------
-// The JAX FFI code lives in ep/src/uccl_ep_jax.cc; it does not know the
-// ``Buffer`` class definition (that class is private to this
-// translation unit).  Here we hand it a table of trampolines that cast
-// the opaque ``void*`` self pointer back to ``Buffer*`` and forward to
-// the matching method.  This keeps the two translation units loosely
-// coupled while avoiding the larger refactor of turning ``Buffer``
-// into a public, header-visible class.
+// ``Buffer`` is now declared in ep/include/uccl_ep.hpp, but the JAX TU
+// (ep/src/uccl_ep_jax.cc) still accesses it through a small vtable of
+// trampolines for two reasons:
+//   * it keeps the ABI between the two TUs stable (the JAX FFI file
+//     does not need to recompile when private fields shift around), and
+//   * the TU separation documents that uccl_ep_jax.cc has no direct
+//     dependency on ``Buffer``'s internals -- just a handful of method
+//     signatures.
 // ============================================================================
 
 #include "uccl_ep_jax.hpp"
