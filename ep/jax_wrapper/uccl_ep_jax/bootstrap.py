@@ -89,6 +89,7 @@ class Buffer:
         rdma_buffer_is_host_allocated: bool,
         num_experts: int,
         kv_client: KVClient,
+        cuda_device_index: int,
         _owned_buffer=None,
     ) -> None:
         self.runtime = runtime
@@ -103,6 +104,10 @@ class Buffer:
         self.rdma_buffer_is_host_allocated = rdma_buffer_is_host_allocated
         self.num_experts = num_experts
         self.kv_client = kv_client
+        # CUDA ordinal the runtime actually ended up on. This is what the
+        # FFI handler's ``cudaGetDevice()`` will return on an XLA worker
+        # thread, so we use it as the key in the per-device registry.
+        self.cuda_device_index = int(cuda_device_index)
         # When the scratch buffer was allocated as a raw CUDA alloc via
         # `uccl.ep.get_rdma_buffer` we keep the capsule here so it is
         # freed at the right moment.
@@ -136,19 +141,14 @@ class Buffer:
         ep = _require_uccl_ep()
         # Remove the FFI registration before tearing down the runtime so
         # any residual XLA call that might race the destructor sees an
-        # absent entry and early-returns instead of dereferencing
-        # freed memory.
+        # absent entry and early-returns instead of dereferencing freed
+        # memory. We unregister under the *CUDA ordinal* the runtime
+        # was registered under (not the local_rank) so this works
+        # whether the calling thread is the one that originally owned
+        # this ``Buffer`` or another worker doing teardown.
         if hasattr(ep, "unregister_jax_ffi_buffer"):
             try:
-                import jax
-
-                local_devices = jax.local_devices()
-                if self.local_rank < len(local_devices):
-                    dev_id = int(getattr(local_devices[self.local_rank], "id",
-                                         self.local_rank))
-                    ep.unregister_jax_ffi_buffer(
-                        dev_id % max(len(local_devices), 1)
-                    )
+                ep.unregister_jax_ffi_buffer(self.cuda_device_index)
             except Exception:
                 pass
         try:
@@ -439,6 +439,16 @@ def initialize(
 
     device_index = _get_device_index(local_rank)
     ep.set_device(device_index)
+    # Pin this Python thread to the CUDA context that the runtime is
+    # about to use, and cache the ordinal that ``cudaGetDevice()`` will
+    # report inside the FFI handler. In single-process multi-thread
+    # mode, each worker thread has its own CUDA context set by
+    # ``ep.set_device``; in multi-process mode this is the one and only
+    # ordinal for the process.
+    try:
+        cuda_device_index = int(ep.get_device())
+    except Exception:
+        cuda_device_index = int(device_index)
 
     _cleanup_shm_files()
 
@@ -555,13 +565,21 @@ def initialize(
         for p in proxies:
             p.set_atomic_buffer_ptr(atomic_ptr)
 
-    # Register the C++ runtime for the JAX FFI handlers so XLA can resolve
-    # "which Buffer?" for the active CUDA device when it invokes the
-    # custom-call targets.  Older uccl.ep builds may not have this hook;
-    # in that case we silently fall back to the eager code path.
+    # Register the C++ runtime for the JAX FFI handlers so XLA can
+    # resolve "which Buffer?" for the active CUDA device when it
+    # invokes the custom-call targets. The key is the *CUDA ordinal*
+    # (what ``cudaGetDevice()`` returns inside the handler); this makes
+    # the registry work transparently across:
+    #   * single-process multi-thread mode: every worker thread has
+    #     its own CUDA context set by ``ep.set_device`` and owns a
+    #     distinct ``Buffer`` in ``g_jax_ffi_buffers``;
+    #   * multi-process mode: each process has one CUDA context and
+    #     one registered ``Buffer``.
+    # Older uccl.ep builds may not have this hook; in that case we
+    # silently fall back to the eager code path.
     if hasattr(ep, "register_jax_ffi_buffer"):
         try:
-            ep.register_jax_ffi_buffer(device_index, runtime)
+            ep.register_jax_ffi_buffer(cuda_device_index, runtime)
         except Exception:
             pass
 
@@ -578,6 +596,7 @@ def initialize(
         rdma_buffer_is_host_allocated=is_host_allocated,
         num_experts=num_experts,
         kv_client=kv,
+        cuda_device_index=cuda_device_index,
         _owned_buffer=owner,
     )
     _register_thread_buffer(buf)

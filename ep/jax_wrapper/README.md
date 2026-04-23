@@ -136,6 +136,33 @@ The execution-mode helpers (`detect_execution_mode`,
 `is_single_process_mode`, `is_multi_process_mode`) mirror the pattern
 used by TransformerEngine JAX.
 
+## Execution modes (primitive + FFI)
+
+The FFI primitive layer supports both JAX execution modes transparently:
+
+* **Single-process multi-thread** (`jax.process_count() == 1`,
+  `jax.local_device_count() > 1`, one Python thread per GPU).
+  Each worker thread calls `uccl_ep_jax.initialize(local_rank=i, ...)`
+  from inside its thread; the C++ runtime for that thread is
+  registered in the process-wide FFI map under the **CUDA ordinal**
+  the thread pinned to. At execute time XLA calls the handler with the
+  CUDA stream for that device, the handler looks up the correct
+  `Buffer` via `cudaGetDevice()`, and because `Buffer::comm_stream`
+  was created on that device everything just works. The per-thread
+  topology (`num_rdma_ranks`, etc.) is auto-detected from a
+  thread-local registry.
+* **Multi-process** (`jax.process_count() > 1`, one Python process per
+  GPU). `uccl_ep_jax.initialize(...)` is called once per process;
+  there is a single registered `Buffer` in the FFI map.
+
+A single subtle C++ fix is relevant here: `Buffer::internode_prepare`
+used to unconditionally release the GIL, which is correct when called
+from a Python thread but crashes when called from an XLA worker thread
+(which doesn't hold the GIL). The current C++ code checks
+`PyGILState_Check()` at runtime and only releases when the GIL is
+actually held — so both the eager (Python-thread) and primitive
+(XLA-thread) call paths are safe.
+
 ## Autodiff
 
 The primitive ``moe_dispatch`` and ``moe_combine`` are decorated with

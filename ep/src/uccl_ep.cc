@@ -872,7 +872,15 @@ class Buffer {
                     std::optional<EventHandle>& previous_event, bool async,
                     bool allocate_on_comm_stream,
                     std::uintptr_t compute_stream_ptr) {
-    nb::gil_scoped_release release;
+    // `internode_prepare` may be called from two very different contexts:
+    //   1) a regular Python call (e.g. the PyTorch wrapper), holding the GIL,
+    //      in which case we want to release it so other Python threads can
+    //      make progress during the host spin-wait.
+    //   2) an XLA FFI handler running on an XLA worker thread, in which case
+    //      the GIL is not held and attempting to release it would assert.
+    // `PyGILState_Check()` lets us pick the right behaviour at runtime.
+    std::optional<nb::gil_scoped_release> release;
+    if (PyGILState_Check()) release.emplace();
     EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);
     EP_HOST_ASSERT(num_tokens_per_rdma_rank_ptr != 0);
     EP_HOST_ASSERT(num_tokens_per_expert_ptr != 0);
