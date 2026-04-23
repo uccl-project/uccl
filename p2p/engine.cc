@@ -1313,20 +1313,18 @@ bool Endpoint::connect_local(std::string const& remote_gpu_bdf,
   constexpr int kMaxRetry = 20;
   constexpr int kRetrySleepMs = 10;
 
-  std::cout << "Connecting to GPU " << remote_gpu_bdf << std::endl;
-
   Conn* conn = new Conn;
   conn->remote_gpu_bdf_ = remote_gpu_bdf;
 
-  if (same_process || remote_gpu_bdf == gpu_bus_id_) {
-    // Same process or same GPU: use inbox_rings_ directly, no shm attach.
+  if (same_process) {
+    // Same process: use inbox_rings_ directly, no shm attach needed.
     auto it = inbox_rings_.find(remote_gpu_bdf);
     if (it != inbox_rings_.end()) {
       conn->remote_inbox_ = it->second;
     }
     conn->shm_attached_ = false;
   } else {
-    // cross GPU, cross process: attach remote inbox via shared memory
+    // cross process: attach remote inbox via shared memory
     conn->remote_inbox_.shm_name = shm_ring_name(gpu_bus_id_, remote_gpu_bdf);
 
     jring_t* ring = nullptr;
@@ -2387,16 +2385,6 @@ bool Endpoint::start_passive_accept() {
     passive_accept_stop_.store(false, std::memory_order_release);
     passive_accept_thread_ =
         std::thread(&Endpoint::passive_accept_thread_func, this);
-    passive_accept_local_thread_ =
-        std::thread(&Endpoint::passive_accept_local_thread_func, this);
-    passive_accept_ = true;
-  }
-  return true;
-}
-
-bool Endpoint::start_passive_accept_local() {
-  if (!passive_accept_) {
-    passive_accept_stop_.store(false, std::memory_order_release);
     passive_accept_local_thread_ =
         std::thread(&Endpoint::passive_accept_local_thread_func, this);
     passive_accept_ = true;

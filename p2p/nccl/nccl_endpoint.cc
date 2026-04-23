@@ -1,5 +1,8 @@
 #include "nccl/nccl_endpoint.h"
 #include "include/common.h"
+#include "include/nccl_wrapper.h"
+
+using namespace uccl::nccl_dl;
 #include "util/gpu_rt.h"
 #include "util/net.h"
 #include <arpa/inet.h>

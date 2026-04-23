@@ -444,8 +444,6 @@ class Endpoint {
 
   /* Start a background thread for accepting. */
   bool start_passive_accept();
-  /* Start only the local (IPC/shm) accept thread. */
-  bool start_passive_accept_local();
 
   /***************************************************/
   /* API for Ray */
@@ -472,6 +470,8 @@ class Endpoint {
   RDMAEndPoint get_endpoint() const;
 
   int send_notification(uint64_t conn_id, NotifyMsg const& notification) const;
+
+  std::string const& get_gpu_bus_id() const { return gpu_bus_id_; }
 
  private:
   int local_gpu_idx_;       // CUDA device ordinal (within visible set)

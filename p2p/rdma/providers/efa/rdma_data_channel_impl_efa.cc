@@ -2,7 +2,10 @@
 #define RDMA_DATA_CHANNEL_IMPL_EFA_CC_INCLUDED
 
 #include "rdma_data_channel_impl_efa.h"
+#include "include/efadv_wrapper.h"
 #include "util/debug.h"
+
+using namespace uccl::efa_dl;
 #include <cstring>
 #include <errno.h>
 

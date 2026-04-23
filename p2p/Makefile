@@ -1,21 +1,8 @@
 # Makefile for UCCL P2P Engine nanobind project (stable ABI)
-
-# EFA optional integration
-USE_EFA ?= $(shell echo $${USE_EFA:-0})
-
-# TCPX optional integration
-USE_TCPX ?= $(shell echo $${USE_TCPX:-0})
-
-# TCP optional integration
-USE_TCP ?= $(shell echo $${USE_TCP:-0})
-
-# NCCL optional integration
-USE_NCCL ?= $(shell echo $${USE_NCCL:-0})
-
-ENABLE_NCCL := 0
-ifneq ($(filter 1,$(USE_TCPX) $(USE_TCP) $(USE_NCCL)),)
-ENABLE_NCCL := 1
-endif
+#
+# Runtime transport selection: libibverbs, libnccl, and libefa are loaded
+# dynamically via dlopen/dlsym at runtime (see include/*_wrapper.h).
+# No transport-specific link flags or compile flags are needed.
 
 # DietGPU optional integration
 USE_DIETGPU ?= $(shell echo $${USE_DIETGPU:-0})
@@ -25,30 +12,20 @@ CUDA_HOME ?= /usr/local/cuda
 CUDA_INC  := $(CUDA_HOME)/include
 CUDA_LIB  := $(CUDA_HOME)/lib64
 EFA_HOME ?= /opt/amazon/efa
+NCCL_HOME ?= ../thirdparty/nccl/build
+NCCL_INC  ?= $(NCCL_HOME)/include
 
 # Building with the following settings:
+# NOTE: -libverbs, -lnccl, -lefa are NOT linked at compile time.
 INC = -I./ -I$(CUDA_HOME)/include
-LIBS = -L ${CUDA_HOME}/lib64 -libverbs -lcudart -lcuda -lpthread -lz -lelf
-LIBS2 =
+LIBS = -L ${CUDA_HOME}/lib64 -lcudart -lcuda -lpthread -lz -lelf -ldl
 
 CXX := g++
 CXXFLAGS := -O3 -shared -std=c++17 -fPIC -I. -I./include -I../include -I$(CUDA_INC) \
+	-I$(EFA_HOME)/include -I$(NCCL_INC) \
 	-MMD -MP \
 	-Wno-pointer-arith -Wno-sign-compare -Wno-unused-variable \
 	-Wl,-rpath=/usr/lib/x86_64-linux-gnu
-
-ifeq ($(USE_EFA),1)
-	CXXFLAGS += -DUCCL_P2P_USE_EFA
-	INC += -I${EFA_HOME}/include
-	LIBS += -L ${EFA_HOME}/lib -lefa
-else
-	LIBS2 +=  -lz -lelf -lpthread -libverbs -ldl
-endif
-
-# Add NCCL-over-TCP/NCCL-over-TCPX endpoint flag
-ifeq ($(ENABLE_NCCL),1)
-	CXXFLAGS += -DUCCL_P2P_USE_NCCL
-endif
 
 # ---------------- DietGPU ----------------
 DIETGPU_ROOT      := ../thirdparty/dietgpu
@@ -97,31 +74,19 @@ PREFIX ?= /usr/local
 LIBDIR ?= $(PREFIX)/lib
 INCDIR ?= $(PREFIX)/include
 
-LDFLAGS         = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) $(LIBS2) $(DIETGPU_LIBS)
+LDFLAGS = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) \
+          -lz -lelf -lpthread -ldl $(DIETGPU_LIBS)
 
-ifeq ($(ENABLE_NCCL),1)
-NCCL_HOME ?= ../thirdparty/nccl/build
-NCCL_INC  ?= $(NCCL_HOME)/include
-NCCL_LIB  ?= $(NCCL_HOME)/lib
-CXXFLAGS  += -I$(NCCL_INC)
-LDFLAGS   += -L$(NCCL_LIB) -lnccl -Wl,-rpath,$(NCCL_LIB)
-endif
-
-# Target and source files
+# Target and source files - always compile ALL sources
 P2P_PYTHON_EXT := p2p$(PYEXT)
 P2P_SHARED_LIB := libuccl_p2p.so
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h include/common.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
-SOURCES := engine.cc engine_api.cc
-CORE_OBJECT := engine.o
-ifeq ($(ENABLE_NCCL),1)
-SOURCES += nccl/nccl_endpoint.cc
-CORE_OBJECT += nccl/nccl_endpoint.o
-endif
+SOURCES := engine.cc engine_api.cc nccl/nccl_endpoint.cc
+CORE_OBJECT := engine.o nccl/nccl_endpoint.o
 OBJECTS := $(SOURCES:.cc=.o)
 
-# Build the shared libraries
 # Default target
 all: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 
@@ -145,7 +110,7 @@ nb_%.o: $(NB_SRC_DIR)/%.cpp
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -c $< -o $@
 
-# Compile NCCL-over-TCP source files
+# Compile NCCL endpoint source files
 nccl/%.o: nccl/%.cc
 	@mkdir -p nccl
 	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -I. -c $< -o $@
@@ -162,27 +127,21 @@ define safe_install
 		  exit 0; }
 endef
 
-install: $(P2P_PYTHON_EXT)
+install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 	$(MAKE) $(P2P_PYTHON_EXT)
 	@mkdir -p $(INSTALL_DIR)
 	@rm -f $(INSTALL_DIR)/p2p.cpython-*.so $(INSTALL_DIR)/p2p.abi3.so
 	@cp $(P2P_PYTHON_EXT) $(INSTALL_DIR)/
 	@echo "Installation complete. Module installed as: $(INSTALL_DIR)/$(P2P_PYTHON_EXT)"
-	@if [ -f libuccl_p2p_rdma.so ]; then \
-		echo "Transport backends detected, installing dispatcher..."; \
-		$(MAKE) install-all-transport; \
-	else \
-		echo "No transport backends, installing monolithic libuccl_p2p.so..."; \
-		$(MAKE) $(P2P_SHARED_LIB); \
-		install -m 755 $(P2P_SHARED_LIB) $(LIBDIR)/; \
-	fi
+	$(call safe_install,$(P2P_SHARED_LIB),$(LIBDIR),755)
 	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
 	@echo "Installation complete!"
+
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(CAPI_OBJECT) $(NB_OBJECTS)
+	rm -f $(OBJECTS) $(CAPI_OBJECT) $(NB_OBJECTS) $(P2P_SHARED_LIB)
 	rm -f $(DEPS)
-	rm -f nccl/*.o nccl/*.d libuccl_p2p*.so
+	rm -f nccl/*.o nccl/*.d
 	rm -f $(P2P_PYTHON_EXT)
 
 # Test the module
@@ -194,72 +153,20 @@ test:
 install-deps:
 	pip3 install nanobind
 
-# ---------------------------------------------------------------------------
-# Runtime transport selection: build all backends + thin dispatcher
-# ---------------------------------------------------------------------------
-DISPATCH_SRC := uccl_p2p_dispatch.cc
-DISPATCH_OBJ := uccl_p2p_dispatch.o
-
-# Auto-detect which optional backends can be built
-HAS_EFA  := $(shell test -f $(EFA_HOME)/include/infiniband/efadv.h && echo 1 || echo 0)
-HAS_NCCL := $(shell echo '\#include <nccl.h>' | $(CXX) -x c++ -E - >/dev/null 2>&1 && echo 1 || echo 0)
-
-TRANSPORT_TARGETS := dispatch-lib
-ifeq ($(HAS_EFA),1)
-TRANSPORT_TARGETS += transport-efa
-endif
-ifeq ($(HAS_NCCL),1)
-TRANSPORT_TARGETS += transport-nccl
-endif
-# RDMA last so its .o files remain for the default make install
-TRANSPORT_TARGETS += transport-rdma
-
-all-transport: $(TRANSPORT_TARGETS)
-	@echo "Built transports: $(TRANSPORT_TARGETS)"
-
-# Thin dispatcher (dlopen-based, no transport code).
-$(DISPATCH_OBJ): $(DISPATCH_SRC) uccl_p2p_ops.h uccl_engine.h include/common.h
-	$(CXX) -O3 -std=c++17 -fPIC -I. -I./include -I../include -I$(CUDA_INC) -c $< -o $@
-
-dispatch-lib: $(DISPATCH_OBJ)
-	$(CXX) -shared -fPIC $< -o libuccl_p2p.so -ldl
-
-# Each backend: re-invoke make with the appropriate flags and output name.
-clean-backend:
-	@rm -f $(CAPI_OBJECT) engine.o engine_api.o nccl/*.o nccl/*.d
-
-transport-rdma:
-	@$(MAKE) clean-backend
-	@$(MAKE) P2P_SHARED_LIB=libuccl_p2p_rdma.so libuccl_p2p_rdma.so
-
-transport-efa:
-	@$(MAKE) clean-backend
-	@$(MAKE) P2P_SHARED_LIB=libuccl_p2p_efa.so USE_EFA=1 libuccl_p2p_efa.so
-
-transport-nccl:
-	@$(MAKE) clean-backend
-	@$(MAKE) P2P_SHARED_LIB=libuccl_p2p_nccl.so USE_NCCL=1 libuccl_p2p_nccl.so
-
-install-all-transport:
-	$(call safe_install,libuccl_p2p.so,$(LIBDIR),755)
-	$(call safe_install,libuccl_p2p_rdma.so,$(LIBDIR),755)
-	$(call safe_install,libuccl_p2p_efa.so,$(LIBDIR),755)
-	$(call safe_install,libuccl_p2p_nccl.so,$(LIBDIR),755)
-	$(call safe_install,$(CAPI_HEADER),$(INCDIR),644)
-	@echo "Transport backends installed!"
-
 # Help target
 help:
 	@echo "Available targets:"
-	@echo "  all               - Build the nanobind module (stable ABI)"
-	@echo "  all-transport     - Build all transport backends + dispatcher"
-	@echo "  install           - Install the module to Python site-packages"
-	@echo "  install-all-transport - Install dispatcher + all backends"
-	@echo "  clean             - Remove build artifacts"
-	@echo "  test              - Run the test script"
-	@echo "  install-deps      - Install nanobind dependency"
-	@echo "  help              - Show this help message"
+	@echo "  all          - Build the nanobind module and shared library"
+	@echo "  install      - Install the module to Python site-packages"
+	@echo "  clean        - Remove build artifacts"
+	@echo "  test         - Run the test script"
+	@echo "  install-deps - Install nanobind dependency"
+	@echo "  help         - Show this help message"
+	@echo ""
+	@echo "Runtime transport selection (no rebuild needed):"
+	@echo "  UCCL_P2P_TRANSPORT=rdma|nccl|efa  (default: rdma)"
+	@echo "  UCCL_P2P_DISABLE_IPC=1            (force network transport)"
+	@echo "  UCCL_IBV_SO=/path/to/libibverbs.so (custom ibverbs path)"
+	@echo "  UCCL_NCCL_SO=/path/to/libnccl.so  (custom nccl path)"
 
-.PHONY: all all-transport dispatch-lib transport-rdma transport-efa \
-        transport-nccl clean clean-backend test install-deps \
-        help install install-all-transport
+.PHONY: all clean test install-deps help install
