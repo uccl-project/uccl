@@ -146,10 +146,12 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
   uint64_t conn_id;
 
   // Detect intra-node connection: if the target IP matches our own IP.
-  // When UCCL_P2P_DISABLE_IPC=1, treat all connections as remote so that
-  // data flows through the network transport instead of IPC.
+  // When UCCL_P2P_DISABLE_IPC=1, treat cross-process connections as remote.
+  // Same-process self-connections always use the local path (connect_local)
+  // regardless of DISABLE_IPC, since NCCL can't self-connect via network.
   std::string local_ip = uccl::get_oob_ip();
-  bool is_local = !ipc_disabled() && (std::string(ip_addr) == local_ip);
+  bool is_local = (same_process || !ipc_disabled()) &&
+                  (std::string(ip_addr) == local_ip);
 
   std::cerr << "[UCCL connect] ip=" << ip_addr
             << " remote_gpu=" << (remote_gpu ? remote_gpu : "(null)")
