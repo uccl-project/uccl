@@ -8,7 +8,10 @@ setup(
     packages=find_packages(),
     python_requires=">=3.9",
     install_requires=[
-        "uccl",
+        # ``uccl.ep`` must be installed separately by the user (see
+        # ``ep/setup.py`` / ``ep/README.md``). We intentionally do not
+        # list the PyPI ``uccl`` package as a hard dependency because it
+        # ships a CUDA-only wheel that would shadow a local ROCm build.
         "numpy",
         # JAX itself is intentionally left as a soft dependency: users
         # install the flavour (CUDA / ROCm) that matches their build.

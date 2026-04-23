@@ -14,6 +14,12 @@
 
 #include <nanobind/nanobind.h>
 
+// NOTE (typed-FFI migration):
+// Handlers no longer take ``XlaCustomCallStatus*``. They are now built
+// with the XLA Typed FFI (``XLA_FFI_DEFINE_HANDLER_SYMBOL``) declared
+// in ``xla/ffi/api/ffi.h`` (shipped with jaxlib). This header only
+// needs the nanobind forward declaration used by the one hook below.
+
 namespace uccl_jax_ffi {
 
 namespace nb = nanobind;

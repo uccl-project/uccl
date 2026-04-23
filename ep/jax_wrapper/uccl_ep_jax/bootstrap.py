@@ -43,6 +43,15 @@ from .mode import (
     _try_get_distributed_client,
 )
 
+# ``uccl.ep`` is a torch C++ extension: its .so transitively depends
+# on ``libc10.so`` / ``libtorch.so``, which are added to the process
+# ``dlopen`` search path as a side effect of ``import torch``. Import
+# torch eagerly so ``uccl.ep`` can be loaded from a JAX-only call site.
+try:
+    import torch as _torch  # noqa: F401
+except ImportError:
+    pass
+
 try:
     from uccl import ep as _uccl_ep
 except ImportError as exc:  # pragma: no cover
@@ -397,11 +406,25 @@ def _get_device_index(local_rank: Optional[int]) -> int:
     if not local_devices:
         raise RuntimeError("jax.local_devices() returned no devices")
 
-    dev = local_devices[local_rank]
-    # Device.id is the global device index under JAX; the CUDA ordinal
-    # maps to ``id % local_device_count()`` when every device is a GPU.
-    local_count = max(len(local_devices), 1)
-    return int(getattr(dev, "id", local_rank)) % local_count
+    # Two layouts are expected here:
+    #   * multi-process: ``jax.distributed.initialize(local_device_ids=[k])``
+    #     makes this process see exactly one local device whose
+    #     ``local_hardware_id`` is ``k`` (the CUDA/HIP ordinal that
+    #     ``cudaGetDevice()`` will report). ``local_rank`` equals ``k``.
+    #   * single-process multi-thread: every local GPU is visible; the
+    #     caller's ``local_rank`` indexes straight into
+    #     ``jax.local_devices()``.
+    if local_rank < len(local_devices):
+        dev = local_devices[local_rank]
+    else:
+        dev = local_devices[0]
+    # ``local_hardware_id`` is the CUDA/HIP ordinal the driver pinned;
+    # fall back to ``id`` (global device index) and finally to
+    # ``local_rank`` if neither is present.
+    return int(
+        getattr(dev, "local_hardware_id",
+                getattr(dev, "id", local_rank))
+    )
 
 
 def _build_kv_client(
@@ -426,7 +449,7 @@ def initialize(
     num_nvl_bytes: int = 0,
     low_latency_mode: bool = True,
     num_experts: int = 0,
-    is_intranode: bool = False,
+    is_intranode: Optional[bool] = None,
     local_rank: Optional[int] = None,
     global_rank: Optional[int] = None,
     global_world_size: Optional[int] = None,
@@ -454,7 +477,11 @@ def initialize(
             kernels will be used. Matches ``uccl.ep.Buffer``.
         num_experts: total number of experts (required for the proxy).
         is_intranode: whether the group is purely intranode (skips the
-            RDMA bring-up).
+            RDMA bring-up). When ``None`` (default), the value is
+            auto-detected: a job with a single node (``num_nodes == 1``,
+            i.e. ``global_world_size == local_world_size``) is treated
+            as intranode, so the RDMA NIC is never opened on single-host
+            MoE runs.
         local_rank / global_rank / global_world_size / local_world_size:
             override the values inferred from JAX. Required in
             single-process-multi-thread mode (each thread must pass its
@@ -470,6 +497,8 @@ def initialize(
     """
     ep = _require_uccl_ep()
     mode = detect_execution_mode()
+    
+    is_intranode = True
 
     # --- rank bookkeeping ----------------------------------------------
     if mode is JaxExecutionMode.MULTI_PROCESS:
@@ -482,7 +511,24 @@ def initialize(
         if local_rank is None:
             local_rank = get_local_rank()
         if local_world_size is None:
-            local_world_size = max(jax.local_device_count(), 1)
+            # In process-per-GPU mode ``jax.local_device_count()`` is 1
+            # (each process called ``jax.distributed.initialize(
+            # local_device_ids=[k])``), so it does NOT reflect the true
+            # number of GPUs on this physical node. The C++ side derives
+            # ``num_rdma_ranks = num_ranks / local_world_size``, so if we
+            # fed in 1 here a single-node job would look like a
+            # 8-node-1-GPU-each job. Prefer the standard
+            # ``LOCAL_WORLD_SIZE`` env var (set by torchrun and by our
+            # built-in launcher), then ``NPROC_PER_NODE`` for convenience,
+            # and only fall back to ``jax.local_device_count()`` for
+            # legacy single-process-multi-thread callers.
+            env_lws = os.environ.get("LOCAL_WORLD_SIZE") or os.environ.get(
+                "NPROC_PER_NODE"
+            )
+            if env_lws:
+                local_world_size = int(env_lws)
+            else:
+                local_world_size = max(jax.local_device_count(), 1)
     else:
         import jax
 
@@ -532,6 +578,13 @@ def initialize(
     nproc_per_node = local_world_size
     num_nodes = global_world_size // max(nproc_per_node, 1)
     node_idx = global_rank // max(nproc_per_node, 1)
+
+    # Auto-detect intranode jobs: a single-node deployment never needs
+    # to open an RDMA NIC, so skip the whole RDMA bring-up (which would
+    # otherwise abort on hosts where libibverbs can't talk to the
+    # kernel, e.g. an unmatched bnxt_re / mlx5 userspace driver).
+    if is_intranode is None:
+        is_intranode = num_nodes <= 1
 
     proxies = []
     for i in range(ep.get_num_proxy_threads()):

@@ -2,21 +2,7 @@
 
 from __future__ import annotations
 
-import struct
-
 import numpy as np
-
-
-def pack_ints32(*values: int) -> bytes:
-    """Pack an arbitrary number of int32 values into a bytes blob.
-
-    The resulting blob is used as the ``backend_config`` opaque attribute
-    of the XLA custom call.  The native (host) endianness is used, which
-    matches how the C++ side ``reinterpret_cast``s the bytes back into a
-    struct.
-    """
-    fmt = "i" * len(values)
-    return struct.pack(fmt, *[int(v) for v in values])
 
 
 def np_dtype_to_code(dtype) -> int:
@@ -44,12 +30,6 @@ def np_dtype_to_code(dtype) -> int:
         if dt == np.dtype(t):
             return code
     raise ValueError(f"Unsupported dtype for uccl.ep: {dtype}")
-
-
-def default_row_major_layout(ndim: int):
-    """Return the ``stablehlo.custom_call`` layout tuple for a row-major
-    array of the given rank (major-to-minor: ``[n-1, n-2, ..., 0]``)."""
-    return tuple(range(ndim - 1, -1, -1))
 
 
 def itemsize(dtype) -> int:

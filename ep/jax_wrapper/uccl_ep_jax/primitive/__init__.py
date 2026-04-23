@@ -1,14 +1,16 @@
 """Low-level XLA custom-call wrappers backing :mod:`uccl_ep_jax.lax`.
 
-These helpers build on :func:`jax.ffi.ffi_call` (legacy ABI
-``custom_call_api_version=1``) to turn the UCCL-EP dispatch/combine
-kernels into proper XLA ops that can be used inside ``jax.jit`` /
-``shard_map`` / ``jax.vjp``.
+These helpers build on :func:`jax.ffi.ffi_call` with the XLA Typed FFI
+(``custom_call_api_version=4`` at the MLIR level, which is the default
+for ``ffi_call``, and ``api_version=1`` at the
+:func:`jax.ffi.register_ffi_target` level) to turn the UCCL-EP
+dispatch/combine kernels into proper XLA ops that can be used inside
+``jax.jit`` / ``shard_map`` / ``jax.vjp``.
 
-All attributes (shapes, config, bool flags) are packed into a single
-``legacy_backend_config`` byte blob whose binary layout matches the
-``struct``s declared in ``ep/src/uccl_ep.cc``'s ``uccl_jax_ffi``
-namespace.
+All scalar attributes (shapes, config, bool flags) are passed as
+strongly-typed ``int32`` keyword attributes to ``ffi_call``; the C++
+side (see ``ep/src/uccl_ep_jax.cc``) decodes them one-by-one through
+``Attr<int32_t>("name")`` on a ``ffi::Ffi::Bind()`` chain.
 """
 
 from .registry import register_ffi_targets, TARGET_NAMES

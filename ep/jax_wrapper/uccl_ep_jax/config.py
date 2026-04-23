@@ -6,6 +6,17 @@ straight through to the C++ runtime.
 
 from typing import NamedTuple
 
+# ``uccl.ep`` is a torch C++ extension and transitively depends on
+# ``libc10.so`` / ``libtorch.so``. Those libraries are only added to
+# the process's search path as a side-effect of ``import torch``, so we
+# import torch first (best-effort) before loading ``uccl.ep``. This
+# lets downstream Python code (e.g. JAX-only callers) use
+# ``uccl_ep_jax`` without having to know about the torch dependency.
+try:
+    import torch as _torch  # noqa: F401  -- side-effect: add torch libs to dlopen path
+except ImportError:
+    pass
+
 try:
     from uccl import ep as _uccl_ep
 except ImportError as exc:  # pragma: no cover - import error surfaced lazily

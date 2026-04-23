@@ -32,6 +32,13 @@
 #include <vector>
 #include <cuda_runtime.h>
 
+// ``PyGILState_Check`` is a CPython stable ABI *function* but lives in
+// ``cpython/pystate.h`` -- a non-limited header -- so it is not visible
+// when compiling with ``Py_LIMITED_API=0x030C0000`` (Python 3.12). The
+// symbol is still exported by libpython at runtime, so we forward
+// declare it here to keep the limited-ABI build happy.
+extern "C" int PyGILState_Check(void);
+
 namespace uccl {
 std::unordered_map<int, std::vector<nb::object>> g_proxies_by_dev;
 
@@ -889,7 +896,8 @@ Buffer::internode_prepare(std::uintptr_t num_tokens_per_rank_ptr,
   //      make progress during the host spin-wait.
   //   2) an XLA FFI handler running on an XLA worker thread, in which case
   //      the GIL is not held and attempting to release it would assert.
-  // `PyGILState_Check()` lets us pick the right behaviour at runtime.
+  // `PyGILState_Check()` (forward-declared near the top of this TU) lets
+  // us pick the right behaviour at runtime.
   std::optional<nb::gil_scoped_release> release;
   if (PyGILState_Check()) release.emplace();
   EP_HOST_ASSERT(num_tokens_per_rank_ptr != 0);

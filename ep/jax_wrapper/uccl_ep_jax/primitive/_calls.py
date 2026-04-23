@@ -3,9 +3,22 @@
 Each function returns a tuple of ``jax.Array``s, making it usable from
 inside ``jax.jit``.  Shapes / dtypes must be fully determined from the
 inputs and a small number of static parameters (e.g., ``num_experts``,
-``num_worst_tokens``) — we follow Primus-Turbo's lead and use
+``num_worst_tokens``) - we follow Primus-Turbo's lead and use
 ``num_worst_tokens = num_tokens * num_ranks`` as a static upper bound on
 the number of received tokens for the high-throughput path.
+
+ABI note (typed FFI):
+    All calls below use the XLA Typed FFI. Static integer parameters are
+    passed as keyword arguments to ``call(...)`` and surface in the
+    MLIR ``stablehlo.custom_call`` as typed ``i32`` attributes, which
+    the C++ ``XLA_FFI_DEFINE_HANDLER_SYMBOL`` bindings in
+    ``ep/src/uccl_ep_jax.cc`` decode via ``Attr<int32_t>("...")``. The
+    legacy ``custom_call_api_version`` / ``legacy_backend_config`` path
+    is not used anymore: XLA:GPU removed execution support for the
+    legacy ABI (STATUS_RETURNING / ORIGINAL) in late-2025, and the only
+    surviving path is ``API_VERSION_TYPED_FFI`` (MLIR enum ``4``), which
+    is the default selected by ``jax.ffi.ffi_call`` when
+    ``custom_call_api_version`` is omitted.
 """
 
 from __future__ import annotations
@@ -16,7 +29,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from ._common import itemsize, np_dtype_to_code, pack_ints32
+from ._common import itemsize, np_dtype_to_code
+
+
+def _i32(v) -> np.int32:
+    """Coerce a Python int/bool to a numpy ``int32`` so ``ffi_call`` emits
+    a typed ``i32`` attribute (the C++ side binds ``Attr<int32_t>``)."""
+    return np.int32(int(v))
 
 
 _fp8_e4m3 = getattr(jnp, "float8_e4m3fnuz", None) or jnp.float8_e4m3fn
@@ -71,25 +90,24 @@ def moe_low_latency_dispatch_call(
         jax.ShapeDtypeStruct(scales_shape, scales_dtype),
     )
 
-    opaque = pack_ints32(
-        num_tokens,
-        hidden,
-        num_topk,
-        int(num_max_dispatch_tokens_per_rank),
-        int(num_experts),
-        int(bool(use_fp8)),
-        int(bool(round_scale)),
-        int(bool(use_ue8m0)),
-    )
     call = jax.ffi.ffi_call(
         "uccl_moe_low_latency_dispatch",
         result_shapes,
-        custom_call_api_version=1,
-        legacy_backend_config=opaque,
         has_side_effect=True,
         vmap_method="sequential",
     )
-    return call(x, topk_idx)
+    return call(
+        x,
+        topk_idx,
+        num_tokens=_i32(num_tokens),
+        hidden=_i32(hidden),
+        num_topk=_i32(num_topk),
+        num_max_dispatch_tokens_per_rank=_i32(num_max_dispatch_tokens_per_rank),
+        num_experts=_i32(num_experts),
+        use_fp8=_i32(bool(use_fp8)),
+        round_scale=_i32(bool(round_scale)),
+        use_ue8m0=_i32(bool(use_ue8m0)),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -114,30 +132,32 @@ def moe_low_latency_combine_call(
     hidden = int(x.shape[2])
     out_shape = jax.ShapeDtypeStruct((num_tokens, hidden), x.dtype)
 
-    opaque = pack_ints32(
-        int(x.shape[0]),
-        int(x.shape[1]),
-        int(x.shape[2]),
-        num_tokens,
-        num_topk,
-        int(num_max_dispatch_tokens_per_rank),
-        int(num_experts),
-        int(bool(use_logfmt)),
-        int(bool(zero_copy)),
-        int(src_info.shape[0]),
-        int(src_info.shape[1]),
-        int(layout_range.shape[0]),
-        int(layout_range.shape[1]),
-    )
     call = jax.ffi.ffi_call(
         "uccl_moe_low_latency_combine",
         out_shape,
-        custom_call_api_version=1,
-        legacy_backend_config=opaque,
         has_side_effect=True,
         vmap_method="sequential",
     )
-    return call(x, topk_idx, topk_weights, src_info, layout_range)
+    return call(
+        x,
+        topk_idx,
+        topk_weights,
+        src_info,
+        layout_range,
+        x_dim0=_i32(x.shape[0]),
+        x_dim1=_i32(x.shape[1]),
+        x_dim2=_i32(x.shape[2]),
+        num_tokens=_i32(num_tokens),
+        num_topk=_i32(num_topk),
+        num_max_dispatch_tokens_per_rank=_i32(num_max_dispatch_tokens_per_rank),
+        num_experts=_i32(num_experts),
+        use_logfmt=_i32(bool(use_logfmt)),
+        zero_copy=_i32(bool(zero_copy)),
+        src_info_dim0=_i32(src_info.shape[0]),
+        src_info_dim1=_i32(src_info.shape[1]),
+        layout_range_dim0=_i32(layout_range.shape[0]),
+        layout_range_dim1=_i32(layout_range.shape[1]),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -223,33 +243,31 @@ def moe_dispatch_call(
         jax.ShapeDtypeStruct((num_tokens, num_ranks), jnp.int32),          # send_head
     )
 
-    opaque = pack_ints32(
-        num_tokens,
-        hidden,
-        itemsize(x.dtype),
-        num_scales,
-        scale_token_stride,
-        scale_hidden_stride,
-        num_topk,
-        int(num_experts),
-        int(expert_alignment),
-        num_worst_tokens,
-        int(config.num_sms),
-        int(config.num_max_nvl_chunked_send_tokens),
-        int(config.num_max_nvl_chunked_recv_tokens),
-        int(config.num_max_rdma_chunked_send_tokens),
-        int(config.num_max_rdma_chunked_recv_tokens),
-        has_x_scales,
-    )
     call = jax.ffi.ffi_call(
         "uccl_moe_dispatch",
         result_shapes,
-        custom_call_api_version=1,
-        legacy_backend_config=opaque,
         has_side_effect=True,
         vmap_method="sequential",
     )
-    return call(x, x_scales_op, topk_idx, topk_weights)
+    return call(
+        x, x_scales_op, topk_idx, topk_weights,
+        num_tokens=_i32(num_tokens),
+        hidden=_i32(hidden),
+        x_element_size=_i32(itemsize(x.dtype)),
+        num_scales=_i32(num_scales),
+        scale_token_stride=_i32(scale_token_stride),
+        scale_hidden_stride=_i32(scale_hidden_stride),
+        num_topk=_i32(num_topk),
+        num_experts=_i32(num_experts),
+        expert_alignment=_i32(expert_alignment),
+        num_worst_tokens=_i32(num_worst_tokens),
+        num_sms=_i32(config.num_sms),
+        num_max_nvl_chunked_send_tokens=_i32(config.num_max_nvl_chunked_send_tokens),
+        num_max_nvl_chunked_recv_tokens=_i32(config.num_max_nvl_chunked_recv_tokens),
+        num_max_rdma_chunked_send_tokens=_i32(config.num_max_rdma_chunked_send_tokens),
+        num_max_rdma_chunked_recv_tokens=_i32(config.num_max_rdma_chunked_recv_tokens),
+        has_x_scales=_i32(has_x_scales),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -300,26 +318,9 @@ def moe_cached_dispatch_call(
         jax.ShapeDtypeStruct(scales_out_shape, scales_out_dtype),       # recv_x_scales
     )
 
-    opaque = pack_ints32(
-        num_tokens,
-        hidden,
-        itemsize(x.dtype),
-        num_scales,
-        scale_token_stride,
-        scale_hidden_stride,
-        int(num_recv_tokens),
-        int(config.num_sms),
-        int(config.num_max_nvl_chunked_send_tokens),
-        int(config.num_max_nvl_chunked_recv_tokens),
-        int(config.num_max_rdma_chunked_send_tokens),
-        int(config.num_max_rdma_chunked_recv_tokens),
-        has_x_scales,
-    )
     call = jax.ffi.ffi_call(
         "uccl_moe_cached_dispatch",
         result_shapes,
-        custom_call_api_version=1,
-        legacy_backend_config=opaque,
         has_side_effect=True,
         vmap_method="sequential",
     )
@@ -327,6 +328,19 @@ def moe_cached_dispatch_call(
         x, x_scales_op, is_token_in_rank, rank_prefix_matrix,
         channel_prefix_matrix, recv_channel_prefix_matrix,
         recv_src_idx, send_head,
+        num_tokens=_i32(num_tokens),
+        hidden=_i32(hidden),
+        x_element_size=_i32(itemsize(x.dtype)),
+        num_scales=_i32(num_scales),
+        scale_token_stride=_i32(scale_token_stride),
+        scale_hidden_stride=_i32(scale_hidden_stride),
+        num_recv_tokens=_i32(num_recv_tokens),
+        num_sms=_i32(config.num_sms),
+        num_max_nvl_chunked_send_tokens=_i32(config.num_max_nvl_chunked_send_tokens),
+        num_max_nvl_chunked_recv_tokens=_i32(config.num_max_nvl_chunked_recv_tokens),
+        num_max_rdma_chunked_send_tokens=_i32(config.num_max_rdma_chunked_send_tokens),
+        num_max_rdma_chunked_recv_tokens=_i32(config.num_max_rdma_chunked_recv_tokens),
+        has_x_scales=_i32(has_x_scales),
     )
 
 
@@ -368,28 +382,9 @@ def moe_internode_cached_dispatch_call(
         jax.ShapeDtypeStruct(scales_out_shape, scales_out_dtype),       # recv_x_scales
     )
 
-    opaque = pack_ints32(
-        num_tokens,
-        hidden,
-        itemsize(x.dtype),
-        num_scales,
-        scale_token_stride,
-        scale_hidden_stride,
-        int(num_recv_tokens),
-        int(num_rdma_recv_tokens),
-        int(num_experts),
-        int(config.num_sms),
-        int(config.num_max_nvl_chunked_send_tokens),
-        int(config.num_max_nvl_chunked_recv_tokens),
-        int(config.num_max_rdma_chunked_send_tokens),
-        int(config.num_max_rdma_chunked_recv_tokens),
-        has_x_scales,
-    )
     call = jax.ffi.ffi_call(
         "uccl_moe_internode_cached_dispatch",
         result_shapes,
-        custom_call_api_version=1,
-        legacy_backend_config=opaque,
         has_side_effect=True,
         vmap_method="sequential",
     )
@@ -397,6 +392,21 @@ def moe_internode_cached_dispatch_call(
         x, x_scales_op, is_token_in_rank, rdma_channel_prefix_matrix,
         gbl_channel_prefix_matrix, recv_rdma_rank_prefix_sum,
         recv_gbl_rank_prefix_sum,
+        num_tokens=_i32(num_tokens),
+        hidden=_i32(hidden),
+        x_element_size=_i32(itemsize(x.dtype)),
+        num_scales=_i32(num_scales),
+        scale_token_stride=_i32(scale_token_stride),
+        scale_hidden_stride=_i32(scale_hidden_stride),
+        num_recv_tokens=_i32(num_recv_tokens),
+        num_rdma_recv_tokens=_i32(num_rdma_recv_tokens),
+        num_experts=_i32(num_experts),
+        num_sms=_i32(config.num_sms),
+        num_max_nvl_chunked_send_tokens=_i32(config.num_max_nvl_chunked_send_tokens),
+        num_max_nvl_chunked_recv_tokens=_i32(config.num_max_nvl_chunked_recv_tokens),
+        num_max_rdma_chunked_send_tokens=_i32(config.num_max_rdma_chunked_send_tokens),
+        num_max_rdma_chunked_recv_tokens=_i32(config.num_max_rdma_chunked_recv_tokens),
+        has_x_scales=_i32(has_x_scales),
     )
 
 
@@ -472,34 +482,32 @@ def moe_internode_dispatch_call(
         jax.ShapeDtypeStruct((num_worst_tokens, int(num_max_nvl_peers)), jnp.int32),   # send_nvl_head
     )
 
-    opaque = pack_ints32(
-        num_tokens,
-        hidden,
-        itemsize(x.dtype),
-        num_scales,
-        scale_token_stride,
-        scale_hidden_stride,
-        num_topk,
-        int(num_experts),
-        int(expert_alignment),
-        num_worst_tokens,
-        int(source_meta_bytes),
-        int(config.num_sms),
-        int(config.num_max_nvl_chunked_send_tokens),
-        int(config.num_max_nvl_chunked_recv_tokens),
-        int(config.num_max_rdma_chunked_send_tokens),
-        int(config.num_max_rdma_chunked_recv_tokens),
-        has_x_scales,
-    )
     call = jax.ffi.ffi_call(
         "uccl_moe_internode_dispatch",
         result_shapes,
-        custom_call_api_version=1,
-        legacy_backend_config=opaque,
         has_side_effect=True,
         vmap_method="sequential",
     )
-    return call(x, x_scales_op, topk_idx, topk_weights)
+    return call(
+        x, x_scales_op, topk_idx, topk_weights,
+        num_tokens=_i32(num_tokens),
+        hidden=_i32(hidden),
+        x_element_size=_i32(itemsize(x.dtype)),
+        num_scales=_i32(num_scales),
+        scale_token_stride=_i32(scale_token_stride),
+        scale_hidden_stride=_i32(scale_hidden_stride),
+        num_topk=_i32(num_topk),
+        num_experts=_i32(num_experts),
+        expert_alignment=_i32(expert_alignment),
+        num_worst_tokens=_i32(num_worst_tokens),
+        source_meta_bytes=_i32(source_meta_bytes),
+        num_sms=_i32(config.num_sms),
+        num_max_nvl_chunked_send_tokens=_i32(config.num_max_nvl_chunked_send_tokens),
+        num_max_nvl_chunked_recv_tokens=_i32(config.num_max_nvl_chunked_recv_tokens),
+        num_max_rdma_chunked_send_tokens=_i32(config.num_max_rdma_chunked_send_tokens),
+        num_max_rdma_chunked_recv_tokens=_i32(config.num_max_rdma_chunked_recv_tokens),
+        has_x_scales=_i32(has_x_scales),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -544,27 +552,9 @@ def moe_internode_combine_call(
         topk_weights.dtype if has_topk else jnp.float32,
     )
 
-    opaque = pack_ints32(
-        num_tokens,
-        hidden,
-        np_dtype_to_code(x.dtype),
-        itemsize(x.dtype),
-        int(num_topk),
-        num_combined_tokens,
-        int(has_topk),
-        int(has_b0),
-        int(has_b1),
-        int(config.num_sms),
-        int(config.num_max_nvl_chunked_send_tokens),
-        int(config.num_max_nvl_chunked_recv_tokens),
-        int(config.num_max_rdma_chunked_send_tokens),
-        int(config.num_max_rdma_chunked_recv_tokens),
-    )
     call = jax.ffi.ffi_call(
         "uccl_moe_internode_combine",
         (combined_shape, combined_topk_shape),
-        custom_call_api_version=1,
-        legacy_backend_config=opaque,
         has_side_effect=True,
         vmap_method="sequential",
     )
@@ -573,6 +563,20 @@ def moe_internode_combine_call(
         is_combined_token_in_rank, rdma_channel_prefix_matrix,
         recv_rdma_rank_prefix_sum, gbl_channel_prefix_matrix,
         src_meta, send_rdma_head, send_nvl_head,
+        num_tokens=_i32(num_tokens),
+        hidden=_i32(hidden),
+        x_dtype_code=_i32(np_dtype_to_code(x.dtype)),
+        x_element_size=_i32(itemsize(x.dtype)),
+        num_topk=_i32(num_topk),
+        num_combined_tokens=_i32(num_combined_tokens),
+        has_topk_weights=_i32(has_topk),
+        has_bias_0=_i32(has_b0),
+        has_bias_1=_i32(has_b1),
+        num_sms=_i32(config.num_sms),
+        num_max_nvl_chunked_send_tokens=_i32(config.num_max_nvl_chunked_send_tokens),
+        num_max_nvl_chunked_recv_tokens=_i32(config.num_max_nvl_chunked_recv_tokens),
+        num_max_rdma_chunked_send_tokens=_i32(config.num_max_rdma_chunked_send_tokens),
+        num_max_rdma_chunked_recv_tokens=_i32(config.num_max_rdma_chunked_recv_tokens),
     )
 
 
@@ -608,31 +612,27 @@ def moe_combine_call(
         topk_weights.dtype if has_topk else jnp.float32,
     )
 
-    opaque = pack_ints32(
-        num_tokens,
-        hidden,
-        np_dtype_to_code(x.dtype),
-        itemsize(x.dtype),
-        int(num_topk),
-        int(num_recv_tokens),
-        int(has_topk),
-        int(has_b0),
-        int(has_b1),
-        int(config.num_sms),
-        int(config.num_max_nvl_chunked_send_tokens),
-        int(config.num_max_nvl_chunked_recv_tokens),
-        int(config.num_max_rdma_chunked_send_tokens),
-        int(config.num_max_rdma_chunked_recv_tokens),
-    )
     call = jax.ffi.ffi_call(
         "uccl_moe_combine",
         (combined_shape, combined_topk_shape),
-        custom_call_api_version=1,
-        legacy_backend_config=opaque,
         has_side_effect=True,
         vmap_method="sequential",
     )
     return call(
         x, topk_weights, bias_0, bias_1, src_idx, rank_prefix_matrix,
         channel_prefix_matrix, send_head,
+        num_tokens=_i32(num_tokens),
+        hidden=_i32(hidden),
+        x_dtype_code=_i32(np_dtype_to_code(x.dtype)),
+        x_element_size=_i32(itemsize(x.dtype)),
+        num_topk=_i32(num_topk),
+        num_recv_tokens=_i32(num_recv_tokens),
+        has_topk_weights=_i32(has_topk),
+        has_bias_0=_i32(has_b0),
+        has_bias_1=_i32(has_b1),
+        num_sms=_i32(config.num_sms),
+        num_max_nvl_chunked_send_tokens=_i32(config.num_max_nvl_chunked_send_tokens),
+        num_max_nvl_chunked_recv_tokens=_i32(config.num_max_nvl_chunked_recv_tokens),
+        num_max_rdma_chunked_send_tokens=_i32(config.num_max_rdma_chunked_send_tokens),
+        num_max_rdma_chunked_recv_tokens=_i32(config.num_max_rdma_chunked_recv_tokens),
     )

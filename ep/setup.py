@@ -138,13 +138,16 @@ if __name__ == "__main__":
         "-Wno-attributes",
         "-Wno-unused-result",
         "-Wno-unused-function",
+        "-fgpu-rdc",
     ]
-    nvcc_flags = ["-O3", "-Xcompiler", "-O3"]
+    nvcc_flags = ["-O3", "-Xcompiler", "-O3", "-fgpu-rdc"]
     sources = glob("./src/*.cu") + glob("./src/*.cpp") + glob("./src/*.cc")
     libraries = ["ibverbs", "nl-3", "nl-route-3", "numa"]
     include_dirs = [PROJECT_ROOT / "include", PROJECT_ROOT / ".." / "include"]
     # Nanobind stable-ABI bindings
     nb_dir = Path(nanobind.__file__).parent
+    
+    from jax import ffi
     include_dirs.extend([nb_dir / "include", nb_dir / "ext" / "robin_map" / "include"])
     sources.append(str(nb_dir / "src" / "nb_combined.cpp"))
     if _use_abi3:
@@ -383,7 +386,7 @@ if __name__ == "__main__":
         ext_modules=[
             CUDAExtension(
                 name="ep",
-                include_dirs=include_dirs,
+                include_dirs=include_dirs + [str(ffi.include_dir()),],
                 library_dirs=library_dirs,
                 sources=sources,
                 libraries=libraries,
