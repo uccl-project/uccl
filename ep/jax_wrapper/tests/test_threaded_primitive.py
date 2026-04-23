@@ -179,6 +179,108 @@ def test_primitive_topology_override_works_without_buffer():
     assert "uccl_moe_internode_dispatch" in hlo_b
 
 
+def test_primitive_single_process_single_gpu_lowers_to_custom_call():
+    """Primitive tracing must work in the simplest single-process,
+    single-GPU setup (no thread spawning, no explicit topology)."""
+    import jax
+    import jax.numpy as jnp
+    import uccl_ep_jax as ux
+
+    # Low-latency is the only meaningful path for a single GPU; moe_*
+    # needs num_ranks >= 2. We trace the low-latency dispatch/combine
+    # and check the custom_call targets are emitted.
+    num_ranks = 1
+    num_experts = 8
+    num_max = 64
+    hidden = 2048
+
+    @jax.jit
+    def fwd(x, topk_idx, topk_weights):
+        recv_x, _count, handle = ux.low_latency_dispatch(
+            x, topk_idx,
+            num_max_dispatch_tokens_per_rank=num_max,
+            num_experts=num_experts, num_ranks=num_ranks, use_fp8=False,
+        )
+        return ux.low_latency_combine(recv_x, topk_idx, topk_weights, handle)
+
+    x = jnp.zeros((num_max, hidden), jnp.bfloat16)
+    topk = jnp.zeros((num_max, 4), jnp.int32)
+    topkw = jnp.zeros((num_max, 4), jnp.float32)
+    hlo = str(jax.jit(fwd).lower(x, topk, topkw)
+              .compiler_ir(dialect="stablehlo"))
+    assert "uccl_ll_dispatch" in hlo
+    assert "uccl_ll_combine" in hlo
+
+
+def test_primitive_single_process_multi_thread_end_to_end_tracing():
+    """Two worker threads, each driving its own 'GPU', each tracing an
+    independent jit graph — verifies no thread-local state leaks
+    between them and each lowering uses its own topology."""
+    import jax
+    import jax.numpy as jnp
+    import uccl_ep_jax as ux
+
+    barrier = threading.Barrier(2)
+    hlos: dict = {}
+
+    def worker(name: str, num_ranks: int, num_rdma_ranks: int):
+        # Each worker owns its own Buffer; CUDA ordinal uses the thread
+        # identity so the two buffers land on different keys in the
+        # per-device registry.
+        _install_fake_buffer(
+            num_rdma_ranks, cuda_device_index=hash(name) & 7
+        )
+        try:
+            barrier.wait()
+
+            @jax.jit
+            def fwd(x, topk_idx, topk_weights):
+                recv_x, _ti, recv_tw, handle = ux.moe_dispatch(
+                    x, topk_idx, topk_weights,
+                    num_experts=32, num_ranks=num_ranks,
+                )
+                return ux.moe_combine(
+                    recv_x, handle, topk_weights=recv_tw,
+                    num_ranks=num_ranks,
+                )
+
+            x = jnp.zeros((128, 4096), jnp.bfloat16)
+            topk = jnp.zeros((128, 8), jnp.int32)
+            topkw = jnp.zeros((128, 8), jnp.float32)
+            hlos[name] = str(
+                jax.jit(fwd).lower(x, topk, topkw)
+                .compiler_ir(dialect="stablehlo")
+            )
+        finally:
+            _clear_fake_buffer()
+
+    threads = [
+        threading.Thread(
+            target=worker, args=("A_intranode", 4, 1), name="worker-A"
+        ),
+        threading.Thread(
+            target=worker, args=("B_internode", 16, 2), name="worker-B"
+        ),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Thread A: intranode custom calls only, no internode.
+    assert "uccl_moe_dispatch" in hlos["A_intranode"]
+    assert "uccl_moe_combine" in hlos["A_intranode"]
+    assert "uccl_moe_internode_dispatch" not in hlos["A_intranode"]
+    # Thread B: internode custom calls only, no bare intranode.
+    assert "uccl_moe_internode_dispatch" in hlos["B_internode"]
+    assert "uccl_moe_internode_combine" in hlos["B_internode"]
+    # The intranode target must not leak into the internode thread.
+    # We check for the exact target name (intranode moe_dispatch is a
+    # proper prefix of moe_internode_dispatch, so we search for the
+    # quoted attribute form XLA emits).
+    assert 'call_target_name = "uccl_moe_dispatch"' not in hlos["B_internode"]
+
+
 def test_register_ffi_targets_idempotent_across_threads():
     """``register_ffi_targets`` must be safe to call concurrently."""
     import uccl_ep_jax

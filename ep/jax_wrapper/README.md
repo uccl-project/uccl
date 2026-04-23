@@ -138,22 +138,31 @@ used by TransformerEngine JAX.
 
 ## Execution modes (primitive + FFI)
 
-The FFI primitive layer supports both JAX execution modes transparently:
+The FFI primitive layer supports all three JAX execution layouts
+transparently — the same code paths are exercised, only the
+bootstrap / ``initialize(...)`` call shape differs:
 
-* **Single-process multi-thread** (`jax.process_count() == 1`,
-  `jax.local_device_count() > 1`, one Python thread per GPU).
-  Each worker thread calls `uccl_ep_jax.initialize(local_rank=i, ...)`
-  from inside its thread; the C++ runtime for that thread is
-  registered in the process-wide FFI map under the **CUDA ordinal**
-  the thread pinned to. At execute time XLA calls the handler with the
-  CUDA stream for that device, the handler looks up the correct
-  `Buffer` via `cudaGetDevice()`, and because `Buffer::comm_stream`
-  was created on that device everything just works. The per-thread
-  topology (`num_rdma_ranks`, etc.) is auto-detected from a
-  thread-local registry.
-* **Multi-process** (`jax.process_count() > 1`, one Python process per
-  GPU). `uccl_ep_jax.initialize(...)` is called once per process;
-  there is a single registered `Buffer` in the FFI map.
+* **Single-process, single-GPU** (`jax.process_count() == 1`,
+  `jax.local_device_count() == 1`). One Python thread owns the only
+  local GPU; `uccl_ep_jax.initialize(...)` is called once on the main
+  thread and `local_rank` defaults to `0`. In practice only
+  `low_latency_dispatch` / `low_latency_combine` are meaningful here
+  (high-throughput `moe_dispatch` requires `num_ranks >= 2` at the
+  UCCL-EP C++ layer).
+* **Single-process, multi-thread multi-GPU** (`jax.process_count() == 1`,
+  `jax.local_device_count() > 1`). Each worker thread owns one GPU
+  and calls `uccl_ep_jax.initialize(local_rank=i, ...)` from inside
+  its thread. The C++ runtime for that thread is registered in the
+  process-wide FFI map under the **CUDA ordinal** the thread pinned
+  to. At execute time XLA calls the handler with the CUDA stream for
+  that device, the handler looks up the correct `Buffer` via
+  `cudaGetDevice()`, and because `Buffer::comm_stream` was created on
+  that device everything just works. The per-thread topology
+  (`num_rdma_ranks`, `num_max_nvl_peers`, `source_meta_bytes`) is
+  auto-detected from a thread-local registry.
+* **Multi-process** (`jax.process_count() > 1`, typically one Python
+  process per GPU). `uccl_ep_jax.initialize(...)` is called once per
+  process; there is a single registered `Buffer` in the FFI map.
 
 A single subtle C++ fix is relevant here: `Buffer::internode_prepare`
 used to unconditionally release the GIL, which is correct when called

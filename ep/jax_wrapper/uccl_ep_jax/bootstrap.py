@@ -428,10 +428,18 @@ def initialize(
         if local_world_size is None:
             local_world_size = global_world_size
         if local_rank is None:
-            raise RuntimeError(
-                "In single-process multi-thread JAX mode each thread must pass "
-                "its own `local_rank`."
-            )
+            # Single-process mode covers both:
+            #   * single-GPU (one thread, one device): local_rank defaults to 0.
+            #   * single-process multi-thread multi-GPU (one thread per GPU):
+            #     each worker thread MUST pass its own local_rank explicitly.
+            if max(jax.local_device_count(), 1) == 1:
+                local_rank = 0
+            else:
+                raise RuntimeError(
+                    "In single-process multi-thread JAX mode each thread must "
+                    "pass its own `local_rank` (0 .. local_device_count-1). "
+                    "Single-GPU callers can omit `local_rank`."
+                )
         if global_rank is None:
             global_rank = local_rank
 
