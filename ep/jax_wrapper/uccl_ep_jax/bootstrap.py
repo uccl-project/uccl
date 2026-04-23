@@ -119,6 +119,14 @@ class Buffer:
     def num_rdma_ranks(self) -> int:
         return int(self.runtime.get_num_rdma_ranks())
 
+    @property
+    def num_max_nvl_peers(self) -> int:
+        return int(self.runtime.get_num_max_nvl_peers())
+
+    @property
+    def source_meta_bytes(self) -> int:
+        return int(self.runtime.get_source_meta_bytes())
+
     # ----- lifecycle ------------------------------------------------------
 
     def destroy(self) -> None:

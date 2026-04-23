@@ -54,7 +54,7 @@ def test_low_latency_dispatch_lowers_to_custom_call():
     assert "uccl_ll_dispatch" in hlo
 
 
-def test_moe_dispatch_lowers_to_custom_call():
+def test_moe_dispatch_intranode_lowers_to_custom_call():
     import jax
     import jax.numpy as jnp
     import uccl_ep_jax as ux
@@ -64,6 +64,7 @@ def test_moe_dispatch_lowers_to_custom_call():
         return ux.moe_dispatch(
             x, topk_idx, topk_weights, num_experts=32, num_ranks=4,
             config=ux.get_dispatch_config(4),
+            num_rdma_ranks=1, num_max_nvl_peers=8, source_meta_bytes=8,
         )[0]
 
     x = jnp.zeros((128, 4096), jnp.bfloat16)
@@ -72,6 +73,35 @@ def test_moe_dispatch_lowers_to_custom_call():
     hlo = str(jax.jit(fwd).lower(x, topk, topkw).compiler_ir(dialect="stablehlo"))
     assert "stablehlo.custom_call" in hlo
     assert "uccl_moe_dispatch" in hlo
+    assert "uccl_moe_internode_dispatch" not in hlo
+
+
+def test_moe_dispatch_internode_lowers_to_internode_custom_call():
+    import jax
+    import jax.numpy as jnp
+    import uccl_ep_jax as ux
+
+    num_ranks = 16
+    num_rdma_ranks = 2
+    num_max_nvl_peers = 8
+    source_meta_bytes = 8
+
+    @jax.jit
+    def fwd(x, topk_idx, topk_weights):
+        return ux.moe_dispatch(
+            x, topk_idx, topk_weights, num_experts=32, num_ranks=num_ranks,
+            config=ux.get_dispatch_config(num_ranks),
+            num_rdma_ranks=num_rdma_ranks,
+            num_max_nvl_peers=num_max_nvl_peers,
+            source_meta_bytes=source_meta_bytes,
+        )[0]
+
+    x = jnp.zeros((128, 4096), jnp.bfloat16)
+    topk = jnp.zeros((128, 8), jnp.int32)
+    topkw = jnp.zeros((128, 8), jnp.float32)
+    hlo = str(jax.jit(fwd).lower(x, topk, topkw).compiler_ir(dialect="stablehlo"))
+    assert "stablehlo.custom_call" in hlo
+    assert "uccl_moe_internode_dispatch" in hlo
 
 
 def test_moe_dispatch_output_shapes_static_upper_bound():
@@ -83,6 +113,7 @@ def test_moe_dispatch_output_shapes_static_upper_bound():
     def fwd(x, topk_idx, topk_weights):
         recv_x, *_ = ux.moe_dispatch(
             x, topk_idx, topk_weights, num_experts=32, num_ranks=4,
+            num_rdma_ranks=1, num_max_nvl_peers=8, source_meta_bytes=8,
         )
         return recv_x
 
@@ -93,6 +124,41 @@ def test_moe_dispatch_output_shapes_static_upper_bound():
     # Upper-bound convention: num_worst_tokens = num_tokens * num_ranks.
     assert shape_dtype.shape == (512, 4096)
     assert shape_dtype.dtype == jnp.bfloat16
+
+
+def test_moe_combine_internode_lowers_to_internode_custom_call():
+    import jax
+    import jax.numpy as jnp
+    import uccl_ep_jax as ux
+
+    num_tokens = 128
+    num_ranks = 16
+    num_rdma_ranks = 2
+    hidden = 4096
+
+    @jax.jit
+    def fwd(x, topk_idx, topk_weights):
+        _recv_x, recv_topk_idx, recv_topk_weights, handle = ux.moe_dispatch(
+            x, topk_idx, topk_weights,
+            num_experts=32, num_ranks=num_ranks,
+            num_rdma_ranks=num_rdma_ranks,
+            num_max_nvl_peers=8, source_meta_bytes=8,
+        )
+        # Feed the received shape back into combine to emulate the full
+        # round-trip the user would do.
+        num_worst = num_tokens * num_ranks
+        combine_x = jnp.zeros((num_worst, hidden), jnp.bfloat16)
+        return ux.moe_combine(
+            combine_x, handle, topk_weights=recv_topk_weights,
+            num_ranks=num_ranks,
+        )
+
+    x = jnp.zeros((num_tokens, hidden), jnp.bfloat16)
+    topk = jnp.zeros((num_tokens, 8), jnp.int32)
+    topkw = jnp.zeros((num_tokens, 8), jnp.float32)
+    hlo = str(jax.jit(fwd).lower(x, topk, topkw).compiler_ir(dialect="stablehlo"))
+    assert "uccl_moe_internode_dispatch" in hlo
+    assert "uccl_moe_internode_combine" in hlo
 
 
 def test_low_latency_combine_lowers_to_custom_call():

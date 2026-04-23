@@ -1898,6 +1898,206 @@ extern "C" void uccl_moe_dispatch_ffi(cudaStream_t stream, void** buffers,
 }
 
 // ---------------------------------------------------------------------------
+// moe_internode_dispatch
+// ---------------------------------------------------------------------------
+// Inputs : x, x_scales, topk_idx, topk_weights
+// Outputs: recv_x, recv_x_scales, recv_topk_idx, recv_topk_weights,
+//          is_token_in_rank,
+//          num_tokens_per_rank, num_tokens_per_rdma_rank, num_tokens_per_expert,
+//          rdma_channel_prefix_matrix, recv_rdma_rank_prefix_sum,
+//          gbl_channel_prefix_matrix, recv_gbl_rank_prefix_sum,
+//          recv_src_meta, recv_rdma_channel_prefix_matrix,
+//          recv_gbl_channel_prefix_matrix,
+//          send_rdma_head, send_nvl_head
+struct MoEInternodeDispatchOpaque {
+  int32_t num_tokens;
+  int32_t hidden;
+  int32_t x_element_size;
+  int32_t num_scales;
+  int32_t scale_token_stride;
+  int32_t scale_hidden_stride;
+  int32_t num_topk;
+  int32_t num_experts;
+  int32_t expert_alignment;
+  int32_t num_worst_tokens;
+  int32_t source_meta_bytes;
+  // Config
+  int32_t num_sms;
+  int32_t num_max_nvl_chunked_send_tokens;
+  int32_t num_max_nvl_chunked_recv_tokens;
+  int32_t num_max_rdma_chunked_send_tokens;
+  int32_t num_max_rdma_chunked_recv_tokens;
+  int32_t has_x_scales;
+};
+
+extern "C" void uccl_moe_internode_dispatch_ffi(
+    cudaStream_t stream, void** buffers, char const* opaque, size_t opaque_len,
+    XlaCustomCallStatus* /*status*/) {
+  if (opaque_len != sizeof(MoEInternodeDispatchOpaque)) return;
+  auto const& p = *reinterpret_cast<MoEInternodeDispatchOpaque const*>(opaque);
+  auto* buf = current_buffer_or_die();
+  if (!buf) return;
+
+  // Inputs (4)
+  void* x = buffers[0];
+  void* x_scales = buffers[1];
+  void* topk_idx = buffers[2];
+  void* topk_weights = buffers[3];
+  // Outputs (17)
+  void* recv_x = buffers[4];
+  void* recv_x_scales = buffers[5];
+  void* recv_topk_idx = buffers[6];
+  void* recv_topk_weights = buffers[7];
+  void* is_token_in_rank = buffers[8];
+  void* num_tokens_per_rank = buffers[9];
+  void* num_tokens_per_rdma_rank = buffers[10];
+  void* num_tokens_per_expert = buffers[11];
+  void* rdma_channel_prefix_matrix = buffers[12];
+  void* recv_rdma_rank_prefix_sum = buffers[13];
+  void* gbl_channel_prefix_matrix = buffers[14];
+  void* recv_gbl_rank_prefix_sum = buffers[15];
+  void* recv_src_meta = buffers[16];
+  void* recv_rdma_channel_prefix_matrix = buffers[17];
+  void* recv_gbl_channel_prefix_matrix = buffers[18];
+  void* send_rdma_head = buffers[19];
+  void* send_nvl_head = buffers[20];
+
+  auto compute_stream_ptr = reinterpret_cast<std::uintptr_t>(stream);
+  uccl::Config config(p.num_sms, p.num_max_nvl_chunked_send_tokens,
+                      p.num_max_nvl_chunked_recv_tokens,
+                      p.num_max_rdma_chunked_send_tokens,
+                      p.num_max_rdma_chunked_recv_tokens);
+
+  std::optional<EventHandle> prev;
+
+  // 1) Global layout (needs num_tokens_per_rdma_rank for the internode path).
+  buf->get_dispatch_layout(
+      reinterpret_cast<std::uintptr_t>(topk_idx), p.num_tokens, p.num_topk,
+      p.num_experts, reinterpret_cast<std::uintptr_t>(num_tokens_per_rank),
+      reinterpret_cast<std::uintptr_t>(num_tokens_per_rdma_rank),
+      reinterpret_cast<std::uintptr_t>(num_tokens_per_expert),
+      reinterpret_cast<std::uintptr_t>(is_token_in_rank), prev, false, false,
+      compute_stream_ptr);
+
+  // 2) internode_prepare with num_worst_tokens > 0 (no host sync).
+  buf->internode_prepare(
+      reinterpret_cast<std::uintptr_t>(num_tokens_per_rank),
+      reinterpret_cast<std::uintptr_t>(num_tokens_per_rdma_rank),
+      reinterpret_cast<std::uintptr_t>(num_tokens_per_expert),
+      reinterpret_cast<std::uintptr_t>(is_token_in_rank), p.num_tokens,
+      p.hidden, p.x_element_size, p.num_scales, p.num_topk, p.num_experts,
+      p.expert_alignment, p.num_worst_tokens, config,
+      reinterpret_cast<std::uintptr_t>(rdma_channel_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(recv_rdma_rank_prefix_sum),
+      reinterpret_cast<std::uintptr_t>(gbl_channel_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(recv_gbl_rank_prefix_sum), prev, false,
+      false, compute_stream_ptr);
+
+  // 3) internode_dispatch.  With num_worst_tokens>0 both num_recv_tokens
+  //    and num_rdma_recv_tokens are set to num_worst_tokens on the C++
+  //    side, which matches the output buffer shapes we declared.
+  buf->internode_dispatch(
+      reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
+      p.x_element_size,
+      p.has_x_scales ? reinterpret_cast<std::uintptr_t>(x_scales) : 0,
+      p.num_scales, p.scale_token_stride, p.scale_hidden_stride,
+      reinterpret_cast<std::uintptr_t>(topk_idx), p.num_topk,
+      reinterpret_cast<std::uintptr_t>(topk_weights),
+      reinterpret_cast<std::uintptr_t>(is_token_in_rank),
+      reinterpret_cast<std::uintptr_t>(rdma_channel_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(recv_rdma_rank_prefix_sum),
+      reinterpret_cast<std::uintptr_t>(gbl_channel_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(recv_gbl_rank_prefix_sum), p.num_experts,
+      p.num_worst_tokens, /*cached_mode=*/false, p.num_worst_tokens, config,
+      reinterpret_cast<std::uintptr_t>(recv_x),
+      p.has_x_scales ? reinterpret_cast<std::uintptr_t>(recv_x_scales) : 0,
+      reinterpret_cast<std::uintptr_t>(recv_topk_idx),
+      reinterpret_cast<std::uintptr_t>(recv_topk_weights),
+      reinterpret_cast<std::uintptr_t>(recv_src_meta),
+      reinterpret_cast<std::uintptr_t>(recv_rdma_channel_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(recv_gbl_channel_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(send_rdma_head),
+      reinterpret_cast<std::uintptr_t>(send_nvl_head), prev, false, false,
+      compute_stream_ptr);
+}
+
+// ---------------------------------------------------------------------------
+// moe_internode_combine
+// ---------------------------------------------------------------------------
+// Inputs : x, topk_weights, bias_0, bias_1,
+//          is_combined_token_in_rank,
+//          rdma_channel_prefix_matrix, recv_rdma_rank_prefix_sum,
+//          gbl_channel_prefix_matrix,
+//          src_meta, send_rdma_head, send_nvl_head
+// Outputs: combined_x, combined_topk_weights
+struct MoEInternodeCombineOpaque {
+  int32_t num_tokens;
+  int32_t hidden;
+  int32_t x_dtype_code;
+  int32_t x_element_size;
+  int32_t num_topk;
+  int32_t num_combined_tokens;
+  int32_t has_topk_weights;
+  int32_t has_bias_0;
+  int32_t has_bias_1;
+  int32_t num_sms;
+  int32_t num_max_nvl_chunked_send_tokens;
+  int32_t num_max_nvl_chunked_recv_tokens;
+  int32_t num_max_rdma_chunked_send_tokens;
+  int32_t num_max_rdma_chunked_recv_tokens;
+};
+
+extern "C" void uccl_moe_internode_combine_ffi(
+    cudaStream_t stream, void** buffers, char const* opaque, size_t opaque_len,
+    XlaCustomCallStatus* /*status*/) {
+  if (opaque_len != sizeof(MoEInternodeCombineOpaque)) return;
+  auto const& p = *reinterpret_cast<MoEInternodeCombineOpaque const*>(opaque);
+  auto* buf = current_buffer_or_die();
+  if (!buf) return;
+
+  void* x = buffers[0];
+  void* topk_weights = buffers[1];
+  void* bias_0 = buffers[2];
+  void* bias_1 = buffers[3];
+  void* is_tir = buffers[4];
+  void* rdma_channel_prefix_matrix = buffers[5];
+  void* recv_rdma_rank_prefix_sum = buffers[6];
+  void* gbl_channel_prefix_matrix = buffers[7];
+  void* src_meta = buffers[8];
+  void* send_rdma_head = buffers[9];
+  void* send_nvl_head = buffers[10];
+  void* combined_x = buffers[11];
+  void* combined_topk_weights = buffers[12];
+
+  auto compute_stream_ptr = reinterpret_cast<std::uintptr_t>(stream);
+  uccl::Config config(p.num_sms, p.num_max_nvl_chunked_send_tokens,
+                      p.num_max_nvl_chunked_recv_tokens,
+                      p.num_max_rdma_chunked_send_tokens,
+                      p.num_max_rdma_chunked_recv_tokens);
+
+  std::optional<EventHandle> prev;
+  buf->internode_combine(
+      reinterpret_cast<std::uintptr_t>(x), p.num_tokens, p.hidden,
+      p.x_dtype_code, p.x_element_size,
+      p.has_topk_weights ? reinterpret_cast<std::uintptr_t>(topk_weights) : 0,
+      p.num_topk,
+      p.has_bias_0 ? reinterpret_cast<std::uintptr_t>(bias_0) : 0,
+      p.has_bias_1 ? reinterpret_cast<std::uintptr_t>(bias_1) : 0,
+      reinterpret_cast<std::uintptr_t>(src_meta), p.num_combined_tokens,
+      reinterpret_cast<std::uintptr_t>(is_tir),
+      reinterpret_cast<std::uintptr_t>(rdma_channel_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(recv_rdma_rank_prefix_sum),
+      reinterpret_cast<std::uintptr_t>(gbl_channel_prefix_matrix),
+      reinterpret_cast<std::uintptr_t>(send_rdma_head),
+      reinterpret_cast<std::uintptr_t>(send_nvl_head), config,
+      reinterpret_cast<std::uintptr_t>(combined_x),
+      p.has_topk_weights
+          ? reinterpret_cast<std::uintptr_t>(combined_topk_weights)
+          : 0,
+      prev, false, false, compute_stream_ptr);
+}
+
+// ---------------------------------------------------------------------------
 // moe_combine (intranode)
 // ---------------------------------------------------------------------------
 // Inputs : x, topk_weights, bias_0, bias_1, src_idx, rank_prefix_matrix,
@@ -2509,6 +2709,10 @@ NB_MODULE(ep, m) {
         reinterpret_cast<void*>(&uccl_jax_ffi::uccl_moe_dispatch_ffi));
     d["uccl_moe_combine"] = make_capsule(
         reinterpret_cast<void*>(&uccl_jax_ffi::uccl_moe_combine_ffi));
+    d["uccl_moe_internode_dispatch"] = make_capsule(reinterpret_cast<void*>(
+        &uccl_jax_ffi::uccl_moe_internode_dispatch_ffi));
+    d["uccl_moe_internode_combine"] = make_capsule(reinterpret_cast<void*>(
+        &uccl_jax_ffi::uccl_moe_internode_combine_ffi));
     return d;
   });
 

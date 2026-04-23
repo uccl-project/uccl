@@ -257,6 +257,182 @@ def moe_dispatch_call(
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# moe_internode_dispatch (jit-friendly, multi-node)
+# ---------------------------------------------------------------------------
+
+
+def moe_internode_dispatch_call(
+    x: jax.Array,
+    topk_idx: jax.Array,
+    topk_weights: jax.Array,
+    *,
+    num_experts: int,
+    num_ranks: int,
+    num_rdma_ranks: int,
+    num_max_nvl_peers: int,
+    source_meta_bytes: int,
+    expert_alignment: int = 1,
+    num_worst_tokens: Optional[int] = None,
+    config,
+    x_scales: Optional[jax.Array] = None,
+):
+    """Internode high-throughput dispatch as an XLA custom call.
+
+    Returns the full internode handle in a deterministic tuple order,
+    matching the C++ FFI handler:
+
+        (recv_x, recv_x_scales, recv_topk_idx, recv_topk_weights,
+         is_token_in_rank,
+         num_tokens_per_rank, num_tokens_per_rdma_rank, num_tokens_per_expert,
+         rdma_channel_prefix_matrix, recv_rdma_rank_prefix_sum,
+         gbl_channel_prefix_matrix, recv_gbl_rank_prefix_sum,
+         recv_src_meta, recv_rdma_channel_prefix_matrix,
+         recv_gbl_channel_prefix_matrix,
+         send_rdma_head, send_nvl_head)
+    """
+    num_tokens, hidden = int(x.shape[0]), int(x.shape[1])
+    num_topk = int(topk_idx.shape[1])
+    if num_worst_tokens is None:
+        num_worst_tokens = num_tokens * num_ranks
+    num_worst_tokens = int(num_worst_tokens)
+
+    (x_scales_op, has_x_scales, num_scales, scale_token_stride,
+     scale_hidden_stride) = _empty_like_scales(x, x_scales)
+
+    num_channels = int(config.num_sms) // 2
+
+    scales_out_shape = (
+        (num_worst_tokens, num_scales)
+        if has_x_scales and x_scales is not None and x_scales.ndim == 2
+        else ((num_worst_tokens,) if has_x_scales else (0,))
+    )
+    scales_out_dtype = x_scales.dtype if x_scales is not None else jnp.float32
+
+    result_shapes = (
+        jax.ShapeDtypeStruct((num_worst_tokens, hidden), x.dtype),           # recv_x
+        jax.ShapeDtypeStruct(scales_out_shape, scales_out_dtype),            # recv_x_scales
+        jax.ShapeDtypeStruct((num_worst_tokens, num_topk), topk_idx.dtype),  # recv_topk_idx
+        jax.ShapeDtypeStruct((num_worst_tokens, int(topk_weights.shape[1])), topk_weights.dtype),  # recv_topk_weights
+        jax.ShapeDtypeStruct((num_tokens, num_ranks), jnp.bool_),            # is_token_in_rank
+        jax.ShapeDtypeStruct((num_ranks,), jnp.int32),                       # num_tokens_per_rank
+        jax.ShapeDtypeStruct((num_rdma_ranks,), jnp.int32),                  # num_tokens_per_rdma_rank
+        jax.ShapeDtypeStruct((num_experts,), jnp.int32),                     # num_tokens_per_expert
+        jax.ShapeDtypeStruct((num_rdma_ranks, num_channels), jnp.int32),     # rdma_channel_prefix_matrix
+        jax.ShapeDtypeStruct((num_rdma_ranks,), jnp.int32),                  # recv_rdma_rank_prefix_sum
+        jax.ShapeDtypeStruct((num_ranks, num_channels), jnp.int32),          # gbl_channel_prefix_matrix
+        jax.ShapeDtypeStruct((num_ranks,), jnp.int32),                       # recv_gbl_rank_prefix_sum
+        jax.ShapeDtypeStruct((num_worst_tokens, int(source_meta_bytes)), jnp.uint8),  # recv_src_meta
+        jax.ShapeDtypeStruct((num_rdma_ranks, num_channels), jnp.int32),     # recv_rdma_channel_prefix_matrix
+        jax.ShapeDtypeStruct((num_ranks, num_channels), jnp.int32),          # recv_gbl_channel_prefix_matrix
+        jax.ShapeDtypeStruct((num_tokens, num_rdma_ranks), jnp.int32),       # send_rdma_head
+        jax.ShapeDtypeStruct((num_worst_tokens, int(num_max_nvl_peers)), jnp.int32),   # send_nvl_head
+    )
+
+    opaque = pack_ints32(
+        num_tokens,
+        hidden,
+        itemsize(x.dtype),
+        num_scales,
+        scale_token_stride,
+        scale_hidden_stride,
+        num_topk,
+        int(num_experts),
+        int(expert_alignment),
+        num_worst_tokens,
+        int(source_meta_bytes),
+        int(config.num_sms),
+        int(config.num_max_nvl_chunked_send_tokens),
+        int(config.num_max_nvl_chunked_recv_tokens),
+        int(config.num_max_rdma_chunked_send_tokens),
+        int(config.num_max_rdma_chunked_recv_tokens),
+        has_x_scales,
+    )
+    call = jax.ffi.ffi_call(
+        "uccl_moe_internode_dispatch",
+        result_shapes,
+        custom_call_api_version=1,
+        legacy_backend_config=opaque,
+        has_side_effect=True,
+        vmap_method="sequential",
+    )
+    return call(x, x_scales_op, topk_idx, topk_weights)
+
+
+# ---------------------------------------------------------------------------
+# moe_internode_combine (jit-friendly, multi-node)
+# ---------------------------------------------------------------------------
+
+
+def moe_internode_combine_call(
+    x: jax.Array,
+    topk_weights: Optional[jax.Array],
+    bias_0: Optional[jax.Array],
+    bias_1: Optional[jax.Array],
+    is_combined_token_in_rank: jax.Array,
+    rdma_channel_prefix_matrix: jax.Array,
+    recv_rdma_rank_prefix_sum: jax.Array,
+    gbl_channel_prefix_matrix: jax.Array,
+    src_meta: jax.Array,
+    send_rdma_head: jax.Array,
+    send_nvl_head: jax.Array,
+    *,
+    num_topk: int,
+    config,
+):
+    num_tokens, hidden = int(x.shape[0]), int(x.shape[1])
+    num_combined_tokens = int(is_combined_token_in_rank.shape[0])
+
+    has_topk = topk_weights is not None
+    if topk_weights is None:
+        topk_weights = jnp.zeros((0,), dtype=jnp.float32)
+    has_b0 = bias_0 is not None
+    if bias_0 is None:
+        bias_0 = jnp.zeros((0,), dtype=x.dtype)
+    has_b1 = bias_1 is not None
+    if bias_1 is None:
+        bias_1 = jnp.zeros((0,), dtype=x.dtype)
+
+    combined_shape = jax.ShapeDtypeStruct(
+        (num_combined_tokens, hidden), x.dtype
+    )
+    combined_topk_shape = jax.ShapeDtypeStruct(
+        (num_combined_tokens, int(num_topk)) if has_topk else (0,),
+        topk_weights.dtype if has_topk else jnp.float32,
+    )
+
+    opaque = pack_ints32(
+        num_tokens,
+        hidden,
+        np_dtype_to_code(x.dtype),
+        itemsize(x.dtype),
+        int(num_topk),
+        num_combined_tokens,
+        int(has_topk),
+        int(has_b0),
+        int(has_b1),
+        int(config.num_sms),
+        int(config.num_max_nvl_chunked_send_tokens),
+        int(config.num_max_nvl_chunked_recv_tokens),
+        int(config.num_max_rdma_chunked_send_tokens),
+        int(config.num_max_rdma_chunked_recv_tokens),
+    )
+    call = jax.ffi.ffi_call(
+        "uccl_moe_internode_combine",
+        (combined_shape, combined_topk_shape),
+        custom_call_api_version=1,
+        legacy_backend_config=opaque,
+        has_side_effect=True,
+        vmap_method="sequential",
+    )
+    return call(
+        x, topk_weights, bias_0, bias_1,
+        is_combined_token_in_rank, rdma_channel_prefix_matrix,
+        recv_rdma_rank_prefix_sum, gbl_channel_prefix_matrix,
+        src_meta, send_rdma_head, send_nvl_head,
+    )
+
+
 def moe_combine_call(
     x: jax.Array,
     topk_weights: Optional[jax.Array],

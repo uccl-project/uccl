@@ -17,6 +17,8 @@ from ._calls import (
     low_latency_combine_call,
     moe_dispatch_call,
     moe_combine_call,
+    moe_internode_dispatch_call,
+    moe_internode_combine_call,
 )
 
 __all__ = [
@@ -26,4 +28,6 @@ __all__ = [
     "low_latency_combine_call",
     "moe_dispatch_call",
     "moe_combine_call",
+    "moe_internode_dispatch_call",
+    "moe_internode_combine_call",
 ]

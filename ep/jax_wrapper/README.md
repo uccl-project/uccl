@@ -103,8 +103,8 @@ These are exported from the top-level module and are the default names
 
 | Function | Notes |
 | --- | --- |
-| `moe_dispatch(...)` | High-throughput intranode MoE dispatch; `custom_vjp`. |
-| `moe_combine(...)` | High-throughput intranode MoE combine; `custom_vjp`. |
+| `moe_dispatch(...)` | High-throughput MoE dispatch; intranode and internode paths selected automatically from `num_rdma_ranks`; `custom_vjp`. |
+| `moe_combine(...)` | High-throughput MoE combine; path selected from the handle arity (6-tuple = intranode, 10-tuple = internode); `custom_vjp`. |
 | `low_latency_dispatch(...)` | Low-latency RDMA/IBGDA dispatch as XLA custom call. |
 | `low_latency_combine(...)` | Low-latency RDMA/IBGDA combine as XLA custom call. |
 | `register_ffi_targets()` | Idempotent; called automatically on first use. |
@@ -138,17 +138,13 @@ used by TransformerEngine JAX.
 
 ## Limitations / follow-ups
 
-* The primitive `moe_dispatch` / `moe_combine` currently cover the
-  **intranode** path (``num_rdma_ranks == 1``). For internode
-  high-throughput today you can use the ``_eager`` variants. Wiring the
-  internode path through the primitive layer requires surfacing
-  ``num_recv_tokens`` as a runtime dynamic shape; that is a planned
-  follow-up.
-* ``moe_dispatch`` / ``moe_combine`` currently use the non-cached path
-  on every call. Caching the layout handle across iterations (as the
-  PyTorch wrapper does when ``handle`` is reused) will be added next.
-* The backward rule of the primitive ``moe_combine`` is currently a
-  zero-gradient placeholder pending the cached-dispatch primitive; the
-  backward rule of the primitive ``moe_dispatch`` already does the
+* ``moe_dispatch`` / ``moe_combine`` use the static-upper-bound
+  non-cached path on every call
+  (``num_worst_tokens = num_tokens * num_ranks``). Caching the layout
+  handle across iterations (as the PyTorch wrapper does when ``handle``
+  is reused) is a planned follow-up; once in place it also makes the
+  backward of the primitive ``moe_combine`` a true cached-dispatch
+  replay instead of the current zero-gradient placeholder.
+* The backward rule of the primitive ``moe_dispatch`` already does the
   right thing (calls the primitive ``moe_combine`` on the upstream
-  gradient).
+  gradient), automatically matching the intranode/internode path.
