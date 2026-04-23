@@ -13,8 +13,8 @@ namespace.
 
 from .registry import register_ffi_targets, TARGET_NAMES
 from ._calls import (
-    low_latency_dispatch_call,
-    low_latency_combine_call,
+    moe_low_latency_dispatch_call,
+    moe_low_latency_combine_call,
     moe_dispatch_call,
     moe_combine_call,
     moe_internode_dispatch_call,
@@ -26,8 +26,8 @@ from ._calls import (
 __all__ = [
     "register_ffi_targets",
     "TARGET_NAMES",
-    "low_latency_dispatch_call",
-    "low_latency_combine_call",
+    "moe_low_latency_dispatch_call",
+    "moe_low_latency_combine_call",
     "moe_dispatch_call",
     "moe_combine_call",
     "moe_internode_dispatch_call",

@@ -35,14 +35,14 @@ def _skip_ffi_registration():
     yield
 
 
-def test_low_latency_dispatch_lowers_to_custom_call():
+def test_moe_low_latency_dispatch_lowers_to_custom_call():
     import jax
     import jax.numpy as jnp
     import uccl_ep_jax as ux
 
     @jax.jit
     def fwd(x, topk_idx):
-        return ux.low_latency_dispatch(
+        return ux.moe_low_latency_dispatch(
             x, topk_idx, num_max_dispatch_tokens_per_rank=64,
             num_experts=16, num_ranks=2, use_fp8=False,
         )
@@ -51,7 +51,7 @@ def test_low_latency_dispatch_lowers_to_custom_call():
     topk = jnp.zeros((64, 4), jnp.int32)
     hlo = str(jax.jit(fwd).lower(x, topk).compiler_ir(dialect="stablehlo"))
     assert "stablehlo.custom_call" in hlo
-    assert "uccl_ll_dispatch" in hlo
+    assert "uccl_moe_low_latency_dispatch" in hlo
 
 
 def test_moe_dispatch_intranode_lowers_to_custom_call():
@@ -228,7 +228,7 @@ def test_moe_combine_internode_lowers_to_internode_custom_call():
     assert "uccl_moe_internode_combine" in hlo
 
 
-def test_low_latency_combine_lowers_to_custom_call():
+def test_moe_low_latency_combine_lowers_to_custom_call():
     import jax
     import jax.numpy as jnp
     import uccl_ep_jax as ux
@@ -239,7 +239,7 @@ def test_low_latency_combine_lowers_to_custom_call():
     @jax.jit
     def fwd(x, topk_idx, topk_weights, src_info, layout_range):
         handle = (src_info, layout_range, 64, 2048, 16)
-        return ux.low_latency_combine(x, topk_idx, topk_weights, handle)
+        return ux.moe_low_latency_combine(x, topk_idx, topk_weights, handle)
 
     x = jnp.zeros((num_local_experts, num_recv, 2048), jnp.bfloat16)
     topk = jnp.zeros((64, 4), jnp.int32)
@@ -249,4 +249,4 @@ def test_low_latency_combine_lowers_to_custom_call():
     hlo = str(jax.jit(fwd).lower(x, topk, topkw, src, lay)
               .compiler_ir(dialect="stablehlo"))
     assert "stablehlo.custom_call" in hlo
-    assert "uccl_ll_combine" in hlo
+    assert "uccl_moe_low_latency_combine" in hlo

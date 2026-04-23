@@ -51,10 +51,10 @@ ep/
     ├── REVIEW.md                      ## this file
     ├── setup.py                       ## pip install -e .
     ├── examples/
-    │   ├── test_low_latency_multithread.py    ## single-process multi-thread
-    │   ├── test_low_latency_multiprocess.py   ## multi-process (torchrun/mpirun)
-    │   ├── test_moe_multithread.py            ## moe_dispatch/combine, single-process multi-thread
-    │   └── test_moe_multiprocess.py           ## moe_dispatch/combine, multi-process (intra/internode)
+    │   ├── test_moe_low_latency_multithread.py    ## moe_low_latency_dispatch/combine, single-process multi-thread
+    │   ├── test_moe_low_latency_multiprocess.py   ## moe_low_latency_dispatch/combine, multi-process (torchrun/mpirun)
+    │   ├── test_moe_multithread.py                ## moe_dispatch/combine, single-process multi-thread
+    │   └── test_moe_multiprocess.py               ## moe_dispatch/combine, multi-process (intra/internode)
     ├── tests/                         ## pure Python, CPU-only, stubs uccl.ep
     │   ├── test_mode_detection.py
     │   ├── test_primitive_tracing.py
@@ -72,7 +72,7 @@ ep/
         │   └── _calls.py              ## 8 jax.ffi.ffi_call wrappers
         └── lax/
             ├── __init__.py
-            ├── low_latency.py         ## jit-friendly low_latency_dispatch/combine
+            ├── moe_low_latency.py     ## jit-friendly moe_low_latency_dispatch/combine
             └── moe.py                 ## jit-friendly moe_dispatch/combine + custom_vjp
 ```
 
@@ -106,10 +106,10 @@ combined = step(x, topk_idx, topk_weights)
 # Low-latency RDMA/IBGDA path (works on 1 GPU too).
 @jax.jit
 def ll_step(x, topk_idx, topk_weights):
-    recv_x, recv_count, handle = ux.low_latency_dispatch(
+    recv_x, recv_count, handle = ux.moe_low_latency_dispatch(
         x, topk_idx, num_max_dispatch_tokens_per_rank=...,
         num_experts=..., num_ranks=..., use_fp8=False)
-    return ux.low_latency_combine(recv_x, topk_idx, topk_weights, handle)
+    return ux.moe_low_latency_combine(recv_x, topk_idx, topk_weights, handle)
 
 ux.shutdown(buf)
 ```
@@ -122,8 +122,8 @@ A new `uccl_jax_ffi::` namespace at the bottom of the file exposes
 
 | Target name | Purpose |
 | --- | --- |
-| `uccl_ll_dispatch` | low-latency dispatch |
-| `uccl_ll_combine` | low-latency combine |
+| `uccl_moe_low_latency_dispatch` | low-latency MoE dispatch |
+| `uccl_moe_low_latency_combine` | low-latency MoE combine |
 | `uccl_moe_dispatch` | intranode high-throughput dispatch |
 | `uccl_moe_combine` | intranode high-throughput combine |
 | `uccl_moe_internode_dispatch` | internode (`num_rdma_ranks > 1`) dispatch |
@@ -186,8 +186,8 @@ and registers each capsule returned by
 
 ### `low_latency.py`
 
-Thin wrappers around `low_latency_dispatch_call` /
-`low_latency_combine_call`. Return `(recv_x, recv_count, handle)` /
+Thin wrappers around `moe_low_latency_dispatch_call` /
+`moe_low_latency_combine_call`. Return `(recv_x, recv_count, handle)` /
 `combined`. No `custom_vjp` here because the low-latency path is
 usually used in inference / serving contexts.
 
@@ -313,7 +313,7 @@ Current state: **17 passed**.
 
 - **`moe_dispatch` / `moe_combine` need `num_ranks >= 2`**. This is a
   constraint of the underlying UCCL-EP C++ layer, not JAX. Single-GPU
-  callers should use `low_latency_dispatch` / `low_latency_combine`.
+  callers should use `moe_low_latency_dispatch` / `moe_low_latency_combine`.
 - **GPU integration tests** live in `ep/jax_wrapper/examples/` and
   require a CUDA/ROCm `uccl.ep` build. They have not been exercised
   in this branch.

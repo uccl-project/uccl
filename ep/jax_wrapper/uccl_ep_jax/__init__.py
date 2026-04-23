@@ -13,16 +13,18 @@ All public ops are real XLA custom-call primitives registered through
 * participate in autodiff via ``jax.custom_vjp`` (dispatch's backward
   is combine, combine's backward is a cached-mode dispatch replay --
   matching the Primus-Turbo pattern);
-* auto-select the intranode or internode kernel based on
-  ``num_rdma_ranks``.
+* for ``moe_dispatch`` / ``moe_combine``, auto-select the intranode
+  or internode kernel based on ``num_rdma_ranks``;
+* for ``moe_low_latency_dispatch`` / ``moe_low_latency_combine``, use
+  the low-latency (RDMA / IBGDA) kernel regardless of topology.
 
 Three JAX execution layouts are supported, all driven by a single
 :func:`initialize` entry point:
 
 1. **Single-process, single-GPU** (``jax.process_count() == 1``,
    ``jax.local_device_count() == 1``) -- ``local_rank`` defaults to 0.
-   In practice only :func:`low_latency_dispatch` /
-   :func:`low_latency_combine` are meaningful on a single rank.
+   In practice only :func:`moe_low_latency_dispatch` /
+   :func:`moe_low_latency_combine` are meaningful on a single rank.
 2. **Single-process, multi-thread multi-GPU**
    (``jax.process_count() == 1``, ``jax.local_device_count() > 1``) --
    one worker thread per GPU. Each thread calls
@@ -62,8 +64,8 @@ from .bootstrap import (
 from .lax import (
     moe_dispatch,
     moe_combine,
-    low_latency_dispatch,
-    low_latency_combine,
+    moe_low_latency_dispatch,
+    moe_low_latency_combine,
 )
 from .primitive import register_ffi_targets
 
@@ -86,8 +88,8 @@ __all__ = [
     "Buffer",
     "moe_dispatch",
     "moe_combine",
-    "low_latency_dispatch",
-    "low_latency_combine",
+    "moe_low_latency_dispatch",
+    "moe_low_latency_combine",
     "get_low_latency_rdma_size_hint",
     "get_nvl_buffer_size_hint",
     "get_rdma_buffer_size_hint",

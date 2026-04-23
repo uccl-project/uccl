@@ -23,11 +23,11 @@ _fp8_e4m3 = getattr(jnp, "float8_e4m3fnuz", None) or jnp.float8_e4m3fn
 
 
 # ---------------------------------------------------------------------------
-# low-latency dispatch
+# moe_low_latency_dispatch
 # ---------------------------------------------------------------------------
 
 
-def low_latency_dispatch_call(
+def moe_low_latency_dispatch_call(
     x: jax.Array,
     topk_idx: jax.Array,
     *,
@@ -82,7 +82,7 @@ def low_latency_dispatch_call(
         int(bool(use_ue8m0)),
     )
     call = jax.ffi.ffi_call(
-        "uccl_ll_dispatch",
+        "uccl_moe_low_latency_dispatch",
         result_shapes,
         custom_call_api_version=1,
         legacy_backend_config=opaque,
@@ -93,11 +93,11 @@ def low_latency_dispatch_call(
 
 
 # ---------------------------------------------------------------------------
-# low-latency combine
+# moe_low_latency_combine
 # ---------------------------------------------------------------------------
 
 
-def low_latency_combine_call(
+def moe_low_latency_combine_call(
     x: jax.Array,
     topk_idx: jax.Array,
     topk_weights: jax.Array,
@@ -130,7 +130,7 @@ def low_latency_combine_call(
         int(layout_range.shape[1]),
     )
     call = jax.ffi.ffi_call(
-        "uccl_ll_combine",
+        "uccl_moe_low_latency_combine",
         out_shape,
         custom_call_api_version=1,
         legacy_backend_config=opaque,

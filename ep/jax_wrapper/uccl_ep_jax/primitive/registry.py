@@ -15,8 +15,8 @@ _REGISTERED = False
 _REGISTER_LOCK = threading.Lock()
 
 TARGET_NAMES = (
-    "uccl_ll_dispatch",
-    "uccl_ll_combine",
+    "uccl_moe_low_latency_dispatch",
+    "uccl_moe_low_latency_combine",
     "uccl_moe_dispatch",
     "uccl_moe_combine",
     "uccl_moe_internode_dispatch",

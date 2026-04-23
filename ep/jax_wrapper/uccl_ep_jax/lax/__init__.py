@@ -5,24 +5,20 @@ are the recommended entry points for JAX users. They:
 
 * work inside ``jax.jit`` (lowered to an XLA ``custom_call``),
 * participate in autodiff (``jax.vjp``, ``jax.grad``) via
-  :func:`jax.custom_vjp` — matching the Primus-Turbo pattern where the
+  :func:`jax.custom_vjp` -- matching the Primus-Turbo pattern where the
   backward pass of dispatch is combine and vice-versa,
-* support the high-throughput intranode path (``moe_dispatch`` /
-  ``moe_combine``) and the low-latency internode path
-  (``low_latency_dispatch`` / ``low_latency_combine``).
-
-Internode high-throughput (``num_rdma_ranks > 1``) is still served by
-the eager wrappers in :mod:`uccl_ep_jax.ops` today; moving it to a
-primitive requires propagating a runtime-only ``num_recv_tokens``, which
-is out of scope for the initial primitive landing.
+* support the high-throughput path (``moe_dispatch`` /
+  ``moe_combine``, which auto-selects intranode and internode based
+  on ``num_rdma_ranks``) and the low-latency RDMA/IBGDA path
+  (``moe_low_latency_dispatch`` / ``moe_low_latency_combine``).
 """
 
-from .low_latency import low_latency_dispatch, low_latency_combine
+from .moe_low_latency import moe_low_latency_dispatch, moe_low_latency_combine
 from .moe import moe_dispatch, moe_combine
 
 __all__ = [
-    "low_latency_dispatch",
-    "low_latency_combine",
+    "moe_low_latency_dispatch",
+    "moe_low_latency_combine",
     "moe_dispatch",
     "moe_combine",
 ]

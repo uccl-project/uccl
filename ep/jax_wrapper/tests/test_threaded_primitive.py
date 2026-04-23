@@ -196,20 +196,20 @@ def test_primitive_single_process_single_gpu_lowers_to_custom_call():
 
     @jax.jit
     def fwd(x, topk_idx, topk_weights):
-        recv_x, _count, handle = ux.low_latency_dispatch(
+        recv_x, _count, handle = ux.moe_low_latency_dispatch(
             x, topk_idx,
             num_max_dispatch_tokens_per_rank=num_max,
             num_experts=num_experts, num_ranks=num_ranks, use_fp8=False,
         )
-        return ux.low_latency_combine(recv_x, topk_idx, topk_weights, handle)
+        return ux.moe_low_latency_combine(recv_x, topk_idx, topk_weights, handle)
 
     x = jnp.zeros((num_max, hidden), jnp.bfloat16)
     topk = jnp.zeros((num_max, 4), jnp.int32)
     topkw = jnp.zeros((num_max, 4), jnp.float32)
     hlo = str(jax.jit(fwd).lower(x, topk, topkw)
               .compiler_ir(dialect="stablehlo"))
-    assert "uccl_ll_dispatch" in hlo
-    assert "uccl_ll_combine" in hlo
+    assert "uccl_moe_low_latency_dispatch" in hlo
+    assert "uccl_moe_low_latency_combine" in hlo
 
 
 def test_primitive_single_process_multi_thread_end_to_end_tracing():

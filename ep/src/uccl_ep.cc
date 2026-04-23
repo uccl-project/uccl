@@ -1697,7 +1697,7 @@ static Buffer* current_buffer_or_die() {
 }
 
 // ---------------------------------------------------------------------------
-// low_latency_dispatch
+// moe_low_latency_dispatch
 // ---------------------------------------------------------------------------
 // Inputs : x, topk_idx
 // Outputs: packed_recv_x, packed_recv_count, packed_recv_src_info,
@@ -1706,7 +1706,7 @@ static Buffer* current_buffer_or_die() {
 //          when use_fp8=false).
 //
 // Attributes (opaque blob, packed little-endian / native layout):
-struct LowLatencyDispatchOpaque {
+struct MoELowLatencyDispatchOpaque {
   int32_t num_tokens;
   int32_t hidden;
   int32_t num_topk;
@@ -1717,11 +1717,11 @@ struct LowLatencyDispatchOpaque {
   int32_t use_ue8m0;
 };
 
-extern "C" void uccl_ll_dispatch_ffi(cudaStream_t stream, void** buffers,
-                                     char const* opaque, size_t opaque_len,
-                                     XlaCustomCallStatus* /*status*/) {
-  if (opaque_len != sizeof(LowLatencyDispatchOpaque)) return;
-  auto const& p = *reinterpret_cast<LowLatencyDispatchOpaque const*>(opaque);
+extern "C" void uccl_moe_low_latency_dispatch_ffi(
+    cudaStream_t stream, void** buffers, char const* opaque, size_t opaque_len,
+    XlaCustomCallStatus* /*status*/) {
+  if (opaque_len != sizeof(MoELowLatencyDispatchOpaque)) return;
+  auto const& p = *reinterpret_cast<MoELowLatencyDispatchOpaque const*>(opaque);
   auto* buf = current_buffer_or_die();
   if (!buf) return;
 
@@ -1753,11 +1753,11 @@ extern "C" void uccl_ll_dispatch_ffi(cudaStream_t stream, void** buffers,
 }
 
 // ---------------------------------------------------------------------------
-// low_latency_combine
+// moe_low_latency_combine
 // ---------------------------------------------------------------------------
 // Inputs : x, topk_idx, topk_weights, src_info, layout_range
 // Outputs: combined_x
-struct LowLatencyCombineOpaque {
+struct MoELowLatencyCombineOpaque {
   int32_t x_dim0;
   int32_t x_dim1;
   int32_t x_dim2;
@@ -1773,11 +1773,11 @@ struct LowLatencyCombineOpaque {
   int32_t layout_range_dim1;
 };
 
-extern "C" void uccl_ll_combine_ffi(cudaStream_t stream, void** buffers,
-                                    char const* opaque, size_t opaque_len,
-                                    XlaCustomCallStatus* /*status*/) {
-  if (opaque_len != sizeof(LowLatencyCombineOpaque)) return;
-  auto const& p = *reinterpret_cast<LowLatencyCombineOpaque const*>(opaque);
+extern "C" void uccl_moe_low_latency_combine_ffi(
+    cudaStream_t stream, void** buffers, char const* opaque, size_t opaque_len,
+    XlaCustomCallStatus* /*status*/) {
+  if (opaque_len != sizeof(MoELowLatencyCombineOpaque)) return;
+  auto const& p = *reinterpret_cast<MoELowLatencyCombineOpaque const*>(opaque);
   auto* buf = current_buffer_or_die();
   if (!buf) return;
 
@@ -2855,10 +2855,10 @@ NB_MODULE(ep, m) {
       return nb::capsule(fn, "xla._CUSTOM_CALL_TARGET");
     };
     nb::dict d;
-    d["uccl_ll_dispatch"] = make_capsule(
-        reinterpret_cast<void*>(&uccl_jax_ffi::uccl_ll_dispatch_ffi));
-    d["uccl_ll_combine"] = make_capsule(
-        reinterpret_cast<void*>(&uccl_jax_ffi::uccl_ll_combine_ffi));
+    d["uccl_moe_low_latency_dispatch"] = make_capsule(reinterpret_cast<void*>(
+        &uccl_jax_ffi::uccl_moe_low_latency_dispatch_ffi));
+    d["uccl_moe_low_latency_combine"] = make_capsule(reinterpret_cast<void*>(
+        &uccl_jax_ffi::uccl_moe_low_latency_combine_ffi));
     d["uccl_moe_dispatch"] = make_capsule(
         reinterpret_cast<void*>(&uccl_jax_ffi::uccl_moe_dispatch_ffi));
     d["uccl_moe_combine"] = make_capsule(

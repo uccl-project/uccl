@@ -50,7 +50,7 @@ buffer = ucx.initialize(
 
 @jax.jit
 def step(x, topk_idx, topk_weights):
-    recv_x, recv_count, handle = ucx.low_latency_dispatch(
+    recv_x, recv_count, handle = ucx.moe_low_latency_dispatch(
         x, topk_idx,
         num_max_dispatch_tokens_per_rank=num_tokens,
         num_experts=num_experts,
@@ -60,7 +60,7 @@ def step(x, topk_idx, topk_weights):
     # When ``use_fp8=True`` the receive side returns a (values, scales)
     # tuple; pick the values for the combine:
     recv_values = recv_x[0] if isinstance(recv_x, tuple) else recv_x
-    return ucx.low_latency_combine(recv_values, topk_idx, topk_weights, handle)
+    return ucx.moe_low_latency_combine(recv_values, topk_idx, topk_weights, handle)
 
 combined_x = step(x, topk_idx, topk_weights)
 
@@ -110,8 +110,8 @@ Primus-Turbo pattern.
 | --- | --- |
 | `moe_dispatch(...)` | High-throughput MoE dispatch; intranode and internode paths selected automatically from `num_rdma_ranks`; `custom_vjp`. |
 | `moe_combine(...)` | High-throughput MoE combine; path selected from the handle arity (6-tuple = intranode, 10-tuple = internode); `custom_vjp`. |
-| `low_latency_dispatch(...)` | Low-latency RDMA/IBGDA dispatch as XLA custom call. |
-| `low_latency_combine(...)` | Low-latency RDMA/IBGDA combine as XLA custom call. |
+| `moe_low_latency_dispatch(...)` | Low-latency (RDMA/IBGDA) MoE dispatch as XLA custom call. |
+| `moe_low_latency_combine(...)` | Low-latency (RDMA/IBGDA) MoE combine as XLA custom call. |
 | `register_ffi_targets()` | Idempotent; called automatically on first use. |
 
 ### Shared infrastructure
@@ -137,7 +137,7 @@ bootstrap / ``initialize(...)`` call shape differs:
   `jax.local_device_count() == 1`). One Python thread owns the only
   local GPU; `uccl_ep_jax.initialize(...)` is called once on the main
   thread and `local_rank` defaults to `0`. In practice only
-  `low_latency_dispatch` / `low_latency_combine` are meaningful here
+  `moe_low_latency_dispatch` / `moe_low_latency_combine` are meaningful here
   (high-throughput `moe_dispatch` requires `num_ranks >= 2` at the
   UCCL-EP C++ layer).
 * **Single-process, multi-thread multi-GPU** (`jax.process_count() == 1`,

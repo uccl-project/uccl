@@ -1,11 +1,11 @@
-"""Multi-process low-latency dispatch/combine example.
+"""Multi-process ``moe_low_latency_dispatch/combine`` example.
 
 Launch this script with ``torchrun`` / ``mpirun`` / ``jax.distributed``
 bootstrap similar to the NVIDIA/TransformerEngine and ROCm/mori tests:
 
     # Example: 8 ranks on a single host, one process per GPU.
     jax_dist_init="jax.distributed.initialize()" \\
-    torchrun --standalone --nproc_per_node=8 test_low_latency_multiprocess.py \\
+    torchrun --standalone --nproc_per_node=8 test_moe_low_latency_multiprocess.py \\
         --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=32
 """
 
@@ -64,14 +64,14 @@ def main():
     # ``hook`` return values are needed.
     @jax.jit
     def dispatch_combine(x, topk_idx, topk_weights):
-        recv_x, recv_count, handle = ucx.low_latency_dispatch(
+        recv_x, recv_count, handle = ucx.moe_low_latency_dispatch(
             x, topk_idx,
             num_max_dispatch_tokens_per_rank=args.num_tokens,
             num_experts=args.num_experts,
             num_ranks=world_size,
             use_fp8=False,
         )
-        return ucx.low_latency_combine(recv_x, topk_idx, topk_weights, handle)
+        return ucx.moe_low_latency_combine(recv_x, topk_idx, topk_weights, handle)
 
     combined = dispatch_combine(x, topk_idx, topk_weights)
     combined.block_until_ready()

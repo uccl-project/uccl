@@ -1,8 +1,8 @@
-"""Single-process, multi-thread low-latency dispatch/combine example.
+"""Single-process, multi-thread ``moe_low_latency_dispatch/combine`` example.
 
 Run with JAX configured for a single host:
 
-    python test_low_latency_multithread.py \
+    python test_moe_low_latency_multithread.py \
         --num-tokens=128 --hidden=7168 --num-topk=8 --num-experts=32
 
 The script spawns one Python thread per local GPU, rendezvous happens
@@ -71,14 +71,14 @@ def worker(
         # ``event`` / ``hook`` return values are needed.
         @jax.jit
         def dispatch_combine(x, topk_idx, topk_weights):
-            recv_x, recv_count, handle = ucx.low_latency_dispatch(
+            recv_x, recv_count, handle = ucx.moe_low_latency_dispatch(
                 x, topk_idx,
                 num_max_dispatch_tokens_per_rank=num_tokens,
                 num_experts=num_experts,
                 num_ranks=world_size,
                 use_fp8=False,
             )
-            return ucx.low_latency_combine(
+            return ucx.moe_low_latency_combine(
                 recv_x, topk_idx, topk_weights, handle,
             )
 
