@@ -172,8 +172,12 @@ uccl_conn_t* uccl_engine_connect(uccl_engine_t* engine, char const* ip_addr,
 
   std::cerr << "[UCCL connect] resolved remote_bdf=" << remote_bdf << std::endl;
 
+  // Same-GPU cross-process can't use connect_local (shm ring self-skip issue),
+  // so fall back to network path. RDMA same-GPU loopback works fine.
+  bool use_ipc = is_local && (same_process || remote_bdf != engine->endpoint->get_gpu_bus_id());
+
   bool ok;
-  if (is_local) {
+  if (use_ipc) {
     std::cerr << "[UCCL connect] using IPC path (connect_local)" << std::endl;
     ok = engine->endpoint->connect_local(remote_bdf, conn_id, same_process);
     conn->sock_fd = -1;
