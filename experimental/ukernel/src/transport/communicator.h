@@ -78,6 +78,7 @@ class Communicator {
   bool resolve_ipc_buffer_pointer(int remote_rank, uint32_t ipc_id,
                                   size_t offset, size_t bytes, void** out_ptr,
                                   int* out_device_idx);
+  IPCItem export_local_ipc_buffer(void* local_buf, size_t len);
 
   bool register_remote_ipc_cache(int remote_rank, gpuIpcMemHandle_t handle,
                                  IPCItem const& ipc);
@@ -158,6 +159,7 @@ class Communicator {
   bool has_fresh_remote_ipc_buffer(int remote_rank, uint32_t ipc_id,
                                    uint64_t expected_binding_version) const;
   void invalidate_remote_ipc_buffer(int remote_rank, uint32_t ipc_id);
+  void try_open_remote_ipc_buffer(int remote_rank, IPCItem const& state);
   void cleanup_tracked_request(TrackedRequest& tracked);
   bool complete_host_bounce_recv(TrackedRequest& tracked, bool blocking);
   SHMManager& require_shm_manager(char const* caller);
@@ -225,6 +227,13 @@ class Communicator {
   };
   std::vector<std::weak_ptr<NotifyTarget>> notify_targets_;
 
+  struct PublishedIpcBuffer {
+    uintptr_t base_addr = 0;
+    size_t bytes = 0;
+    uint64_t binding_version = 0;
+    bool valid = false;
+  };
+
   // UCCL registration cache.
   mutable std::mutex uccl_reg_mu_;
   std::unordered_set<uint64_t> uccl_direct_reg_failed_mrs_;
@@ -234,6 +243,8 @@ class Communicator {
   mutable std::mutex ipc_gen_mu_;
   std::unordered_map<int, std::unordered_map<uint32_t, uint64_t>>
       local_ipc_binding_versions_;
+  std::unordered_map<int, std::unordered_map<uint32_t, PublishedIpcBuffer>>
+      local_ipc_published_buffers_;
 };
 
 }  // namespace Transport
