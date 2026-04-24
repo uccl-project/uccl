@@ -358,12 +358,15 @@ class Exchanger {
 
 class ShmExchanger : public Exchanger {
  public:
-  explicit ShmExchanger(std::string kv_namespace);
+  explicit ShmExchanger(std::string kv_namespace, bool create_if_missing = true,
+                        int open_timeout_ms = 30000);
   ~ShmExchanger() override;
 
   bool valid() const override;
   bool apply_remote(std::string_view key, std::string_view value);
-  bool reset_for_new_run();
+  bool begin_leader_run();
+  bool mark_run_ready();
+  bool wait_until_ready(int timeout_ms) const;
   size_t collect_unrelayed(
       std::vector<std::pair<std::string, std::string>>& out,
       size_t max_items = 32);
@@ -382,7 +385,7 @@ class ShmExchanger : public Exchanger {
     static uint64_t hash_key(std::string_view key);
   };
   static constexpr uint32_t kShmMagic = 0x554B4F42;  // "UKOB"
-  static constexpr uint32_t kShmVersion = 4;
+  static constexpr uint32_t kShmVersion = 6;
   static constexpr uint32_t kMaxSlots = 1024;
   static constexpr uint32_t kMaxKeyBytes = 256;
   static constexpr uint32_t kMaxValueBytes = 8192;
@@ -403,9 +406,10 @@ class ShmExchanger : public Exchanger {
   struct KvShmHeader {
     uint32_t magic = 0;
     uint32_t version = 0;
-    uint64_t recovery_epoch = 0;
     uint64_t write_seq = 0;
     uint32_t owner_pid = 0;
+    uint32_t init_done = 0;
+    uint64_t owner_start_ticks = 0;
     uint32_t slot_capacity = 0;
     uint32_t used_slots = 0;
     uint32_t first_free_hint = 0;
@@ -430,9 +434,11 @@ class ShmExchanger : public Exchanger {
   void unlock_store() const;
   void maybe_post_sem() const;
 
- friend class HierarchicalExchanger;
+  friend class HierarchicalExchanger;
 
   std::string kv_namespace_;
+  bool create_if_missing_ = true;
+  int open_timeout_ms_ = 30000;
   int shm_fd_ = -1;
   KvShmHeader* shm_ = nullptr;
   size_t next_unrelayed_scan_index_ = 0;

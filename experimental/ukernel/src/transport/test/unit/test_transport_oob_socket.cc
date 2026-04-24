@@ -161,7 +161,7 @@ void test_socket_exchanger_direct_sync_and_publish() {
 void publisher_socket(int port) {
   HierarchicalExchanger ex(
       /*is_server=*/false, "127.0.0.1", port, /*timeout_ms=*/kTestTimeoutMs,
-      /*max_line_bytes=*/1 * 1024 * 1024, /*local_id=*/0);
+      /*max_line_bytes=*/1 * 1024 * 1024, /*local_id=*/1);
   require(ex.valid(), "publisher failed to connect to socket exchanger");
 
   NamedMRInfos remote{};
@@ -214,7 +214,7 @@ void rank_thread_socket(int rank, int world_size, std::string const& ip,
     bool is_server = (rank == 0);
     auto ex = std::make_shared<HierarchicalExchanger>(
         is_server, ip, port, /*timeout_ms=*/kTestTimeoutMs,
-        /*max_line_bytes=*/1 * 1024 * 1024, /*local_id=*/0);
+        /*max_line_bytes=*/1 * 1024 * 1024, /*local_id=*/rank);
     require(ex->valid(), "rank failed to init socket exchanger");
 
     CommunicatorMeta local;
@@ -285,7 +285,7 @@ void test_socket_valid_implies_snapshot_ready() {
 
   HierarchicalExchanger client(
       /*is_server=*/false, "127.0.0.1", port, /*timeout_ms=*/kTestTimeoutMs,
-      /*max_line_bytes=*/1 * 1024 * 1024, /*local_id=*/0);
+      /*max_line_bytes=*/1 * 1024 * 1024, /*local_id=*/1);
   require(client.valid(), "client failed to finish initial sync");
 
   NamedMRInfos fetched{};
@@ -313,7 +313,7 @@ void test_socket_reconnect_gets_full_snapshot() {
   {
     HierarchicalExchanger client(
         /*is_server=*/false, "127.0.0.1", port, /*timeout_ms=*/kTestTimeoutMs,
-        /*max_line_bytes=*/1 * 1024 * 1024, /*local_id=*/0);
+        /*max_line_bytes=*/1 * 1024 * 1024, /*local_id=*/1);
     require(client.valid(), "first client failed to sync");
     CommunicatorMeta fetched{};
     require(client.get("meta:10", fetched),
@@ -328,7 +328,7 @@ void test_socket_reconnect_gets_full_snapshot() {
 
   HierarchicalExchanger reconnected(
       /*is_server=*/false, "127.0.0.1", port, /*timeout_ms=*/kTestTimeoutMs,
-      /*max_line_bytes=*/1 * 1024 * 1024, /*local_id=*/0);
+      /*max_line_bytes=*/1 * 1024 * 1024, /*local_id=*/1);
   require(reconnected.valid(), "reconnected client failed to sync");
 
   CommunicatorMeta fetched_first{};

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <poll.h>
+#include <signal.h>
 #include <sstream>
 #include <string>
 #include <sys/epoll.h>
@@ -24,6 +25,7 @@ namespace {
 constexpr int kSocketPollMs = 200;
 constexpr int kRelayWaitMs = 50;
 constexpr size_t kBufferCompactMinPrefix = 4096;
+constexpr int kLeaderReadyWaitDefaultMs = 30000;
 
 void compact_prefixed_buffer(std::string& buffer, size_t& offset) {
   if (offset == 0) return;
@@ -107,6 +109,40 @@ std::string kv_namespace_for_port(int port) {
   return oss.str();
 }
 
+bool read_process_start_ticks(pid_t pid, uint64_t& out_ticks) {
+  out_ticks = 0;
+  std::ostringstream path;
+  path << "/proc/" << static_cast<long long>(pid) << "/stat";
+  int const fd = ::open(path.str().c_str(), O_RDONLY | O_CLOEXEC);
+  if (fd < 0) return false;
+  char buf[2048] = {};
+  ssize_t const n = ::read(fd, buf, sizeof(buf) - 1);
+  ::close(fd);
+  if (n <= 0) return false;
+  std::string const stat(buf, static_cast<size_t>(n));
+  size_t const right_paren = stat.rfind(')');
+  if (right_paren == std::string::npos || right_paren + 2 >= stat.size()) {
+    return false;
+  }
+  std::istringstream iss(stat.substr(right_paren + 2));
+  std::string token;
+  for (int i = 0; i < 20; ++i) {
+    if (!(iss >> token)) return false;
+  }
+  try {
+    out_ticks = static_cast<uint64_t>(std::stoull(token));
+    return out_ticks != 0;
+  } catch (...) {
+    return false;
+  }
+}
+
+bool pid_is_alive(pid_t pid) {
+  if (pid <= 1) return false;
+  if (::kill(pid, 0) == 0) return true;
+  return errno == EPERM;
+}
+
 struct SocketFrame {
   SocketFrameType type = SocketFrameType::SyncRequest;
   std::string key;
@@ -188,8 +224,11 @@ uint64_t ShmExchanger::SlotCacheHash::hash_key(std::string_view key) {
   return h;
 }
 
-ShmExchanger::ShmExchanger(std::string kv_namespace)
-    : kv_namespace_(std::move(kv_namespace)) {
+ShmExchanger::ShmExchanger(std::string kv_namespace, bool create_if_missing,
+                           int open_timeout_ms)
+    : kv_namespace_(std::move(kv_namespace)),
+      create_if_missing_(create_if_missing),
+      open_timeout_ms_(open_timeout_ms > 0 ? open_timeout_ms : 30000) {
   (void)init_shared_store();
 }
 
@@ -201,21 +240,84 @@ bool ShmExchanger::apply_remote(std::string_view key, std::string_view value) {
   return put_encoded(key, value, /*mark_relayed=*/true);
 }
 
-bool ShmExchanger::reset_for_new_run() {
-  if (!shm_ || !lock_store()) return false;
+bool ShmExchanger::begin_leader_run() {
+  if (!lock_store()) return false;
+  uint32_t const owner_pid = shm_->owner_pid;
+  uint64_t const owner_start_ticks = shm_->owner_start_ticks;
+  bool owner_alive = false;
+  if (owner_pid > 1 && pid_is_alive(static_cast<pid_t>(owner_pid))) {
+    if (owner_start_ticks == 0) {
+      owner_alive = true;
+    } else {
+      uint64_t current_ticks = 0;
+      owner_alive =
+          read_process_start_ticks(static_cast<pid_t>(owner_pid), current_ticks) &&
+          current_ticks == owner_start_ticks;
+    }
+  }
+  if (owner_alive) {
+    unlock_store();
+    return false;
+  }
+
   for (uint32_t i = 0; i < shm_->slot_capacity; ++i) {
     shm_->slots[i] = KvSlot{};
   }
   shm_->used_slots = 0;
   shm_->first_free_hint = 0;
   shm_->write_seq = 0;
-  shm_->recovery_epoch += 1;
+  shm_->init_done = 0;
   shm_->owner_pid = static_cast<uint32_t>(::getpid());
+  uint64_t start_ticks = 0;
+  (void)read_process_start_ticks(::getpid(), start_ticks);
+  shm_->owner_start_ticks = start_ticks;
   next_unrelayed_scan_index_ = 0;
   slot_index_cache_.clear();
   unlock_store();
   maybe_post_sem();
   return true;
+}
+
+bool ShmExchanger::mark_run_ready() {
+  if (!shm_ || !lock_store()) return false;
+  shm_->init_done = 1;
+  shm_->owner_pid = static_cast<uint32_t>(::getpid());
+  uint64_t start_ticks = 0;
+  (void)read_process_start_ticks(::getpid(), start_ticks);
+  shm_->owner_start_ticks = start_ticks;
+  unlock_store();
+  maybe_post_sem();
+  return true;
+}
+
+bool ShmExchanger::wait_until_ready(int timeout_ms) const {
+  if (!shm_) return false;
+  int const wait_ms =
+      timeout_ms > 0 ? timeout_ms : kLeaderReadyWaitDefaultMs;
+  auto const deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(wait_ms);
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (!lock_store()) return false;
+    uint32_t const owner_pid = shm_->owner_pid;
+    uint64_t const owner_start_ticks = shm_->owner_start_ticks;
+    bool const init_done = shm_->init_done != 0;
+    unlock_store();
+
+    if (!init_done || owner_pid <= 1 ||
+        !pid_is_alive(static_cast<pid_t>(owner_pid))) {
+      (void)wait_for_update(10);
+      continue;
+    }
+    if (owner_start_ticks == 0) return true;
+
+    uint64_t current_ticks = 0;
+    if (read_process_start_ticks(static_cast<pid_t>(owner_pid), current_ticks) &&
+        current_ticks == owner_start_ticks) {
+      return true;
+    }
+    (void)wait_for_update(10);
+  }
+  return false;
 }
 
 size_t ShmExchanger::collect_unrelayed(
@@ -295,11 +397,23 @@ bool ShmExchanger::get_raw(std::string_view key, std::string& value) {
 
 bool ShmExchanger::init_shared_store() {
   bool created = false;
-  shm_fd_ = ::shm_open(kv_namespace_.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
-  if (shm_fd_ >= 0) {
-    created = true;
-  } else if (errno == EEXIST) {
-    shm_fd_ = ::shm_open(kv_namespace_.c_str(), O_CREAT | O_RDWR, 0600);
+  if (create_if_missing_) {
+    shm_fd_ =
+        ::shm_open(kv_namespace_.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+    if (shm_fd_ >= 0) {
+      created = true;
+    } else if (errno == EEXIST) {
+      shm_fd_ = ::shm_open(kv_namespace_.c_str(), O_CREAT | O_RDWR, 0600);
+    }
+  } else {
+    auto const deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(open_timeout_ms_);
+    while (std::chrono::steady_clock::now() < deadline) {
+      shm_fd_ = ::shm_open(kv_namespace_.c_str(), O_RDWR, 0600);
+      if (shm_fd_ >= 0) break;
+      if (errno != ENOENT) break;
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
   }
   if (shm_fd_ < 0) return false;
 
@@ -334,9 +448,10 @@ bool ShmExchanger::init_shared_store() {
     shm_->magic = kShmMagic;
     shm_->version = kShmVersion;
     shm_->slot_capacity = kMaxSlots;
-    shm_->recovery_epoch = 1;
     shm_->write_seq = 0;
-    shm_->owner_pid = static_cast<uint32_t>(::getpid());
+    shm_->owner_pid = 0;
+    shm_->init_done = 0;
+    shm_->owner_start_ticks = 0;
     shm_->used_slots = 0;
     shm_->first_free_hint = 0;
     shm_->reserved0 = 0;
@@ -362,8 +477,6 @@ bool ShmExchanger::init_shared_store() {
       shm_fd_ = -1;
       return false;
     }
-    shm_->recovery_epoch += 1;
-    shm_->owner_pid = static_cast<uint32_t>(::getpid());
     rebuild_metadata_locked();
     unlock_store();
   }
@@ -1384,17 +1497,11 @@ HierarchicalExchanger::HierarchicalExchanger(bool is_server,
   node_leader_ = is_node_leader();
 
   std::string const ns = kv_namespace();
-  shm_ = std::make_unique<ShmExchanger>(ns);
-  if (!shm_ || !shm_->valid()) return;
-  // On root startup, clear stale entries in-place in the same shared segment.
-  // This avoids split-brain behavior that can happen with shm_unlink while
-  // other local processes still hold mappings to the previous object.
-  if (is_server_ && env_bool_or_default("UHM_OOB_CLEAN_START", true)) {
-    (void)shm_->reset_for_new_run();
-  }
-
-  running_.store(true, std::memory_order_release);
   if (node_leader_) {
+    shm_ = std::make_unique<ShmExchanger>(ns, /*create_if_missing=*/true);
+    if (!shm_ || !shm_->valid()) return;
+    if (!shm_->begin_leader_run()) return;
+    running_.store(true, std::memory_order_release);
     socket_ = std::make_unique<SocketExchanger>(
         is_server_, host_, port_, timeout_ms, max_line_bytes,
         [this](std::string const& key, std::string const& value) {
@@ -1404,14 +1511,29 @@ HierarchicalExchanger::HierarchicalExchanger(bool is_server,
       running_.store(false, std::memory_order_release);
       return;
     }
+    if (!shm_->mark_run_ready()) {
+      running_.store(false, std::memory_order_release);
+      return;
+    }
     last_replayed_epoch_ = 0;
     relay_thread_ = std::thread(&HierarchicalExchanger::relay_loop, this);
+  } else {
+    shm_ = std::make_unique<ShmExchanger>(ns, /*create_if_missing=*/false,
+                                          timeout_ms);
+    if (!shm_ || !shm_->valid()) return;
+    int const wait_ms =
+        env_int_or_default("UHM_OOB_LEADER_READY_TIMEOUT_MS", timeout_ms);
+    if (!shm_->wait_until_ready(wait_ms)) return;
+    running_.store(true, std::memory_order_release);
   }
 }
 
 HierarchicalExchanger::~HierarchicalExchanger() {
   running_.store(false, std::memory_order_release);
   if (relay_thread_.joinable()) relay_thread_.join();
+  if (node_leader_) {
+    (void)::shm_unlink(kv_namespace().c_str());
+  }
 }
 
 bool HierarchicalExchanger::valid() const {
