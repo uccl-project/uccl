@@ -65,7 +65,7 @@ class Buffer:
         allow_nvlink_for_low_latency_mode: bool = True,
         allow_mnnvl: bool = False,
         explicitly_destroy: bool = False,
-        is_intranode: bool = False,
+        is_intranode: Optional[bool] = None,
     ) -> None:
         """
         Initialize the communication buffer.
@@ -85,6 +85,8 @@ class Buffer:
             explicitly_destroy: If this flag is set to True, you need to explicitly call `destroy()` to release resources;
                 otherwise, the resources will be released by the destructor.
                 Note: Releasing resources in the destructor may cause Python's exception handling process to hang.
+            is_intranode: whether to force intranode-only proxy mode. If set to `None`, infer it from the
+                process-group topology automatically. Explicit `True` is rejected when the group spans multiple nodes.
         """
         if "LOCAL_RANK" in os.environ:
             device_index = int(os.environ["LOCAL_RANK"])
@@ -808,12 +810,27 @@ class Buffer:
             allocate_on_comm_stream,
             self._ll_compute_stream_ptr(topk_idx.device),
         )
+        previous_tensors_to_record = (
+            ()
+            if previous_event is None or previous_event.extra_tensors is None
+            else previous_event.extra_tensors
+        )
+        tensors_to_record = previous_tensors_to_record + (
+            topk_idx,
+            num_tokens_per_rank,
+            num_tokens_per_rdma_rank,
+            num_tokens_per_expert,
+            is_token_in_rank,
+        )
         return (
             num_tokens_per_rank,
             num_tokens_per_rdma_rank,
             num_tokens_per_expert,
             is_token_in_rank,
-            EventOverlap(event),
+            EventOverlap(
+                event,
+                tensors_to_record if async_finish else None,
+            ),
         )
 
     # noinspection PyTypeChecker
@@ -973,7 +990,7 @@ class Buffer:
                 recv_channel_prefix_matrix.data_ptr(),
                 recv_src_idx.data_ptr(),
                 send_head.data_ptr(),
-                None,
+                getattr(previous_event, "event", None),
                 async_finish,
                 allocate_on_comm_stream,
                 self._ll_compute_stream_ptr(x.device),
@@ -981,13 +998,28 @@ class Buffer:
             recv_x = recv_x[:num_recv_tokens]
             if recv_x_scales is not None:
                 recv_x_scales = recv_x_scales[:num_recv_tokens]
+            previous_tensors_to_record = (
+                ()
+                if previous_event is None or previous_event.extra_tensors is None
+                else previous_event.extra_tensors
+            )
+            tensors_to_record = previous_tensors_to_record + (
+                x,
+                x_scales,
+                handle,
+                recv_x,
+                recv_x_scales,
+            )
             return (
                 (recv_x, recv_x_scales) if x_scales is not None else recv_x,
                 None,
                 None,
                 None,
                 None,
-                EventOverlap(event),
+                EventOverlap(
+                    event,
+                    tensors_to_record if async_finish else None,
+                ),
             )
         else:
             assert (
@@ -1124,13 +1156,34 @@ class Buffer:
                 is_token_in_rank,
                 send_head,
             )
+            previous_tensors_to_record = (
+                ()
+                if previous_event is None or previous_event.extra_tensors is None
+                else previous_event.extra_tensors
+            )
+            tensors_to_record = previous_tensors_to_record + (
+                x,
+                x_scales,
+                topk_idx,
+                topk_weights,
+                num_tokens_per_rank,
+                num_tokens_per_expert,
+                handle,
+                recv_x,
+                recv_x_scales,
+                recv_topk_idx,
+                recv_topk_weights,
+            )
             return (
                 (recv_x, recv_x_scales) if x_scales is not None else recv_x,
                 recv_topk_idx,
                 recv_topk_weights,
                 num_recv_tokens_per_expert_list,
                 handle,
-                EventOverlap(event),
+                EventOverlap(
+                    event,
+                    tensors_to_record if async_finish else None,
+                ),
             )
 
     # noinspection PyTypeChecker
@@ -1253,7 +1306,28 @@ class Buffer:
         recv_x = recv_x[:num_recv_tokens]
         if recv_topk_weights is not None:
             recv_topk_weights = recv_topk_weights[:num_recv_tokens]
-        return recv_x, recv_topk_weights, EventOverlap(event)
+        previous_tensors_to_record = (
+            ()
+            if previous_event is None or previous_event.extra_tensors is None
+            else previous_event.extra_tensors
+        )
+        tensors_to_record = previous_tensors_to_record + (
+            x,
+            topk_weights,
+            bias_0,
+            bias_1,
+            handle,
+            recv_x,
+            recv_topk_weights,
+        )
+        return (
+            recv_x,
+            recv_topk_weights,
+            EventOverlap(
+                event,
+                tensors_to_record if async_finish else None,
+            ),
+        )
 
     # noinspection PyTypeChecker
     def internode_dispatch(
@@ -1372,6 +1446,18 @@ class Buffer:
                 allocate_on_comm_stream,
                 self._ll_compute_stream_ptr(x.device),
             )
+            previous_tensors_to_record = (
+                ()
+                if previous_event is None or previous_event.extra_tensors is None
+                else previous_event.extra_tensors
+            )
+            tensors_to_record = previous_tensors_to_record + (
+                x,
+                x_scales,
+                handle,
+                recv_x,
+                recv_x_scales,
+            )
             # Slice back to the real number of received tokens.
             recv_x = recv_x[:num_recv_tokens]
             if recv_x_scales is not None:
@@ -1382,7 +1468,10 @@ class Buffer:
                 None,
                 None,
                 None,
-                EventOverlap(event),
+                EventOverlap(
+                    event,
+                    tensors_to_record if async_finish else None,
+                ),
             )
         else:
             assert (
@@ -1556,13 +1645,35 @@ class Buffer:
                 send_rdma_head,
                 send_nvl_head,
             )
+            previous_tensors_to_record = (
+                ()
+                if previous_event is None or previous_event.extra_tensors is None
+                else previous_event.extra_tensors
+            )
+            tensors_to_record = previous_tensors_to_record + (
+                x,
+                x_scales,
+                topk_idx,
+                topk_weights,
+                num_tokens_per_rank,
+                num_tokens_per_rdma_rank,
+                num_tokens_per_expert,
+                handle,
+                recv_x,
+                recv_x_scales,
+                recv_topk_idx,
+                recv_topk_weights,
+            )
             return (
                 (recv_x, recv_x_scales) if x_scales is not None else recv_x,
                 recv_topk_idx,
                 recv_topk_weights,
                 num_recv_tokens_per_expert_list,
                 handle,
-                EventOverlap(event),
+                EventOverlap(
+                    event,
+                    tensors_to_record if async_finish else None,
+                ),
             )
 
     # noinspection PyTypeChecker
@@ -1660,7 +1771,28 @@ class Buffer:
         combined_x = combined_x[:num_combined_tokens]
         if combined_topk_weights is not None:
             combined_topk_weights = combined_topk_weights[:num_combined_tokens]
-        return combined_x, combined_topk_weights, EventOverlap(event)
+        previous_tensors_to_record = (
+            ()
+            if previous_event is None or previous_event.extra_tensors is None
+            else previous_event.extra_tensors
+        )
+        tensors_to_record = previous_tensors_to_record + (
+            x,
+            topk_weights,
+            bias_0,
+            bias_1,
+            handle,
+            combined_x,
+            combined_topk_weights,
+        )
+        return (
+            combined_x,
+            combined_topk_weights,
+            EventOverlap(
+                event,
+                tensors_to_record if async_finish else None,
+            ),
+        )
 
     def clean_low_latency_buffer(
         self, num_max_dispatch_tokens_per_rank: int, hidden: int, num_experts: int
