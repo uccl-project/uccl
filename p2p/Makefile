@@ -85,15 +85,18 @@ P2P_SHARED_LIB := libuccl_p2p.so
 CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h include/common.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
+# dlsym wrapper objects provide ibv_*/nccl*/efadv_* symbols at link time
+DL_SOURCES := ibverbs_dl.cc nccl_dl.cc efadv_dl.cc
+DL_OBJECTS := $(DL_SOURCES:.cc=.o)
 SOURCES := engine.cc engine_api.cc nccl/nccl_endpoint.cc
-CORE_OBJECT := engine.o nccl/nccl_endpoint.o
+CORE_OBJECT := engine.o nccl/nccl_endpoint.o $(DL_OBJECTS)
 OBJECTS := $(SOURCES:.cc=.o)
 
 # Default target
 all: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 
-$(P2P_PYTHON_EXT): $(OBJECTS) $(NB_OBJECTS)
-	$(CXX) $(OBJECTS) $(NB_OBJECTS) \
+$(P2P_PYTHON_EXT): $(OBJECTS) $(NB_OBJECTS) $(DL_OBJECTS)
+	$(CXX) $(OBJECTS) $(DL_OBJECTS) $(NB_OBJECTS) \
 	      -L$(CUDA_LIB) -lcudart -lcuda \
 	      -o $@ $(LDFLAGS) $(PYTHON_LDFLAGS) $(CXXFLAGS) \
 	      -Wl,-rpath,$(CUDA_LIB) $(INC) $(LIBS)
@@ -141,7 +144,7 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 
 # Clean build artifacts
 clean:
-	rm -f $(OBJECTS) $(CAPI_OBJECT) $(NB_OBJECTS) $(P2P_SHARED_LIB)
+	rm -f $(OBJECTS) $(CAPI_OBJECT) $(DL_OBJECTS) $(NB_OBJECTS) $(P2P_SHARED_LIB)
 	rm -f $(DEPS)
 	rm -f nccl/*.o nccl/*.d
 	rm -f $(P2P_PYTHON_EXT)

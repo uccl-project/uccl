@@ -3,12 +3,9 @@
 #include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/util.h"
-#include "ibverbs_wrapper.h"
 #include <arpa/inet.h>
 #include <infiniband/efadv.h>
 #include <infiniband/verbs.h>
-
-using namespace uccl::ibv_dl;
 #include <netinet/in.h>
 #include <algorithm>
 #include <atomic>
