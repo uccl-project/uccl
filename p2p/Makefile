@@ -76,8 +76,12 @@ PREFIX ?= /usr/local
 LIBDIR ?= $(PREFIX)/lib
 INCDIR ?= $(PREFIX)/include
 
+# libibverbs is linked but loaded lazily at runtime - the dlsym wrappers in
+# ibverbs_dl.cc handle most symbols; the compat-layer symbols (ibv_query_port,
+# ibv_reg_mr etc.) are resolved from the linked libibverbs when the .so loads.
+# libnccl and libefa are NOT linked - fully dlsym'd at runtime.
 LDFLAGS = -L$(CUDA_LIB) -lcudart -lcuda -Wl,-rpath,$(CUDA_LIB) \
-          -lz -lelf -lpthread -ldl $(DIETGPU_LIBS)
+          -lz -lelf -lpthread -ldl -libverbs $(DIETGPU_LIBS)
 
 # Target and source files - always compile ALL sources
 P2P_PYTHON_EXT := p2p$(PYEXT)

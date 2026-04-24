@@ -7,6 +7,7 @@
 #include <dlfcn.h>
 #include <cstdio>
 #include <cstdlib>
+#include <utility>
 
 namespace uccl {
 namespace efa_dl {

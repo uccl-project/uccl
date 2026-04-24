@@ -11,6 +11,7 @@
 #include <dlfcn.h>
 #include <cstdio>
 #include <cstdlib>
+#include <utility>
 
 namespace uccl {
 namespace ibv_dl {
@@ -19,9 +20,9 @@ namespace ibv_dl {
 inline void* get_handle() {
   static void* h = [] {
     char const* custom = std::getenv("UCCL_IBV_SO");
-    void* handle = custom ? dlopen(custom, RTLD_NOW) : nullptr;
-    if (!handle) handle = dlopen("libibverbs.so", RTLD_NOW);
-    if (!handle) handle = dlopen("libibverbs.so.1", RTLD_NOW);
+    void* handle = custom ? dlopen(custom, RTLD_NOW | RTLD_GLOBAL) : nullptr;
+    if (!handle) handle = dlopen("libibverbs.so", RTLD_NOW | RTLD_GLOBAL);
+    if (!handle) handle = dlopen("libibverbs.so.1", RTLD_NOW | RTLD_GLOBAL);
     if (!handle) {
       std::fprintf(stderr,
                    "UCCL P2P: failed to load libibverbs.so: %s\n", dlerror());
