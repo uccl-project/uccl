@@ -1,8 +1,10 @@
 # Makefile for UCCL P2P Engine nanobind project (stable ABI)
 #
-# Runtime transport selection: libibverbs, libnccl, and libefa are loaded
-# dynamically via dlopen/dlsym at runtime (see include/*_wrapper.h).
-# No transport-specific link flags or compile flags are needed.
+# Single binary, runtime transport selection via UCCL_P2P_TRANSPORT env var.
+# libibverbs, libnccl, and libefa are loaded dynamically at runtime via
+# dlopen/dlsym (see include/*_wrapper.h). No transport libraries are linked.
+#
+# Runtime: UCCL_P2P_TRANSPORT=rdma|nccl|efa (default: rdma)
 
 # DietGPU optional integration
 USE_DIETGPU ?= $(shell echo $${USE_DIETGPU:-0})
@@ -163,7 +165,7 @@ help:
 	@echo "  install-deps - Install nanobind dependency"
 	@echo "  help         - Show this help message"
 	@echo ""
-	@echo "Runtime transport selection (no rebuild needed):"
+	@echo "Runtime options (no rebuild needed):"
 	@echo "  UCCL_P2P_TRANSPORT=rdma|nccl|efa  (default: rdma)"
 	@echo "  UCCL_P2P_DISABLE_IPC=1            (force network transport)"
 	@echo "  UCCL_IBV_SO=/path/to/libibverbs.so (custom ibverbs path)"

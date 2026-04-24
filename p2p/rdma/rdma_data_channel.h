@@ -6,20 +6,16 @@
 #include "util/debug.h"
 #include "util/util.h"
 
-#ifdef UCCL_P2P_USE_EFA
 #include "providers/efa/rdma_data_channel_impl_efa.h"
-#else
 #include "providers/ib/rdma_data_channel_impl_ib.h"
-#endif
+#include "include/transport_type.h"
 
-// Factory function implementation (inline, defined after including provider
-// headers)
+// Factory: select IB or EFA provider at runtime.
 inline std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl() {
-#ifdef UCCL_P2P_USE_EFA
-  return std::make_unique<EFAChannelImpl>();
-#else
-  return std::make_unique<IBChannelImpl>();
-#endif
+  if (uccl::is_efa_transport())
+    return std::make_unique<EFAChannelImpl>();
+  else
+    return std::make_unique<IBChannelImpl>();
 }
 
 class RDMADataChannel {
@@ -62,9 +58,9 @@ class RDMADataChannel {
 
   void establishChannel(ChannelMetaData const& remote_meta) {
     remote_meta_ = std::make_shared<ChannelMetaData>(remote_meta);
-#ifdef UCCL_P2P_USE_EFA
-    ah_ = ctx_->createAH(remote_meta_->gid);
-#endif
+    if (uccl::is_efa_transport()) {
+      ah_ = ctx_->createAH(remote_meta_->gid);
+    }
     impl_->connectQP(qp_, ctx_, *remote_meta_);
     UCCL_LOG_EP << "RDMADataChannel connected to remote qpn="
                 << remote_meta.qpn;

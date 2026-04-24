@@ -2,14 +2,13 @@
 
 #include "common.h"
 #include "rdma/rdma_endpoint.h"
+#include "nccl/nccl_endpoint.h"
+#include "include/transport_type.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
 #include "util/net.h"
 #include "util/shared_pool.h"
 #include "util/util.h"
-#ifdef UCCL_P2P_USE_NCCL
-#include "nccl/nccl_endpoint.h"
-#endif
 #include "util/debug.h"
 #include <infiniband/verbs.h>
 #include <atomic>
@@ -26,19 +25,19 @@
 
 extern thread_local bool inside_python;
 
-#ifdef UCCL_P2P_USE_NCCL
-using RDMAEndPoint = std::shared_ptr<tcp::TCPEndpoint>;
-using ReqType = uccl::ReqType;
-using ucclRequest = uccl::ucclRequest;
-#else
-using RDMAEndPoint = std::shared_ptr<NICEndpoint>;
+// Runtime-polymorphic endpoint: holds either RDMA or NCCL/TCP endpoint.
+using RDMAEndPoint = std::variant<
+    std::shared_ptr<NICEndpoint>,
+    std::shared_ptr<tcp::TCPEndpoint>>;
+
+// Use the RDMA-native request types as the common currency.
+// The NCCL shim functions in endpoint_wrapper.h convert as needed.
 enum ReqType { ReqTx, ReqRx, ReqRead, ReqWrite };
 struct ucclRequest {
   enum ReqType type;
   uint32_t n;
   uint32_t engine_idx;
 };
-#endif
 
 struct Mhandle {
   struct ibv_mr* mr;

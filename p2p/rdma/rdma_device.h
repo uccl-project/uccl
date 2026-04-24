@@ -17,20 +17,17 @@ class RDMADeviceSelectionStrategy {
       int gpu_idx) = 0;
 };
 
-// Include device selection strategy based on build configuration
-#ifdef UCCL_P2P_USE_EFA
 #include "providers/efa/rdma_device_selection_efa.h"
-#else
 #include "providers/ib/rdma_device_selection_ib.h"
-#endif
+#include "include/transport_type.h"
 
+// Factory: select IB or EFA device strategy at runtime.
 inline std::unique_ptr<RDMADeviceSelectionStrategy>
 createDeviceSelectionStrategy() {
-#ifdef UCCL_P2P_USE_EFA
-  return std::make_unique<EFADeviceSelectionStrategy>();
-#else
-  return std::make_unique<IBDeviceSelectionStrategy>();
-#endif
+  if (uccl::is_efa_transport())
+    return std::make_unique<EFADeviceSelectionStrategy>();
+  else
+    return std::make_unique<IBDeviceSelectionStrategy>();
 }
 
 class RdmaDevice {
