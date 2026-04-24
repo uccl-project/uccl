@@ -2418,7 +2418,9 @@ uint64_t Endpoint::conn_id_of_rank(int rank) const {
 }
 
 std::shared_ptr<EpollClient> Endpoint::get_oob_client() const {
-  return ep_->get_oob_client();
+  return std::visit([](auto const& s) -> std::shared_ptr<EpollClient> {
+    return s->get_oob_client();
+  }, ep_);
 }
 
 std::string Endpoint::get_oob_conn_key(uint64_t conn_id) const {
@@ -2428,7 +2430,9 @@ std::string Endpoint::get_oob_conn_key(uint64_t conn_id) const {
   }
   uint64_t rank_id = it->second->uccl_conn_id_.flow_id;
 
-  return ep_->get_oob_conn_key(rank_id);
+  return std::visit([&](auto const& s) -> std::string {
+    return s->get_oob_conn_key(rank_id);
+  }, ep_);
 }
 
 int Endpoint::send_notification(uint64_t conn_id,

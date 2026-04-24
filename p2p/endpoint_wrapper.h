@@ -125,7 +125,8 @@ inline int uccl_send_async(RDMAEndPoint const& ep, Conn* conn,
       ureq->n = conn->uccl_conn_id_.flow_id;
       return s->uccl_send_async(
           reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
-          nullptr, data, size, ureq);
+          nullptr, data, size,
+          reinterpret_cast<uccl::ucclRequest*>(ureq));
     } else {
       auto send_mem = std::make_shared<RegMemBlock>(
           const_cast<void*>(data), size, MemoryType::GPU);
@@ -156,7 +157,8 @@ inline int uccl_recv_async(RDMAEndPoint const& ep, Conn* conn,
       ureq->n = conn->uccl_conn_id_.flow_id;
       return s->uccl_recv_async(
           reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
-          nullptr, data, size, n, ureq);
+          nullptr, data, size, n,
+          reinterpret_cast<uccl::ucclRequest*>(ureq));
     } else {
       auto recv_mem =
           std::make_shared<RegMemBlock>(data[0], size[0], MemoryType::GPU);
@@ -175,7 +177,8 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& ep, ucclRequest* ureq) {
   return std::visit([&](auto const& s) -> bool {
     using T = std::decay_t<decltype(*s)>;
     if constexpr (std::is_same_v<T, tcp::TCPEndpoint>) {
-      return s->uccl_poll_ureq_once(ureq);
+      return s->uccl_poll_ureq_once(
+          reinterpret_cast<uccl::ucclRequest*>(ureq));
     } else {
       if (ureq->type == ReqType::ReqTx || ureq->type == ReqType::ReqWrite ||
           ureq->type == ReqType::ReqRead) {
@@ -206,7 +209,8 @@ inline int uccl_read_async(RDMAEndPoint const& ep, Conn* conn,
       std::memset(tcp_item.padding, 0, sizeof(tcp_item.padding));
       return s->uccl_read_async(
           reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
-          nullptr, dst, size, tcp_item, ureq);
+          nullptr, dst, size, tcp_item,
+          reinterpret_cast<uccl::ucclRequest*>(ureq));
     } else {
       ureq->type = ReqType::ReqRead;
       return set_request(s, conn, local_mh, dst, size, slot_item, ureq);
@@ -229,7 +233,8 @@ inline int uccl_write_async(RDMAEndPoint const& ep, Conn* conn,
       std::memset(tcp_item.padding, 0, sizeof(tcp_item.padding));
       return s->uccl_write_async(
           reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
-          nullptr, src, size, tcp_item, ureq);
+          nullptr, src, size, tcp_item,
+          reinterpret_cast<uccl::ucclRequest*>(ureq));
     } else {
       ureq->type = ReqType::ReqWrite;
       return set_request(s, conn, local_mh, src, size, slot_item, ureq);
