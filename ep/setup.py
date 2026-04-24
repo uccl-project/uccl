@@ -138,7 +138,6 @@ if __name__ == "__main__":
         "-Wno-attributes",
         "-Wno-unused-result",
         "-Wno-unused-function",
-        "-fgpu-rdc",
     ]
     nvcc_flags = ["-O3", "-Xcompiler", "-O3", "-fgpu-rdc"]
     sources = glob("./src/*.cu") + glob("./src/*.cpp") + glob("./src/*.cc")
@@ -312,6 +311,8 @@ if __name__ == "__main__":
             # Disable built-in warp shuffle sync will have better performance in internode_combine kernel
             cxx_flags.append("-DDISABLE_BUILTIN_SHLF_SYNC")
             nvcc_flags.append("-DDISABLE_BUILTIN_SHLF_SYNC")
+            
+        extra_link_args.append("-fgpu-rdc")
 
         # cxx_flags.append("-DENABLE_FAST_DEBUG")
         # nvcc_flags.append("-DENABLE_FAST_DEBUG")
