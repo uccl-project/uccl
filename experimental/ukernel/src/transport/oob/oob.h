@@ -378,6 +378,9 @@ class ShmExchanger : public Exchanger {
   bool get_raw(std::string_view key, std::string& value) override;
 
  private:
+  struct SlotCacheHash {
+    static uint64_t hash_key(std::string_view key);
+  };
   static constexpr uint32_t kShmMagic = 0x554B4F42;  // "UKOB"
   static constexpr uint32_t kShmVersion = 4;
   static constexpr uint32_t kMaxSlots = 1024;
@@ -433,7 +436,7 @@ class ShmExchanger : public Exchanger {
   int shm_fd_ = -1;
   KvShmHeader* shm_ = nullptr;
   size_t next_unrelayed_scan_index_ = 0;
-  mutable std::unordered_map<std::string, uint32_t> slot_index_cache_;
+  mutable std::unordered_map<uint64_t, uint32_t> slot_index_cache_;
 };
 
 class SocketExchanger : public Exchanger {
@@ -454,11 +457,27 @@ class SocketExchanger : public Exchanger {
   bool get_raw(std::string_view key, std::string& value) override;
 
  private:
+  struct PeerConn;
+
+  struct RootReactorState {
+    int listen_fd = -1;
+    int wakeup_read_fd = -1;
+    int wakeup_write_fd = -1;
+    std::thread thread;
+    std::mutex peers_mu;
+    std::unordered_map<int, std::shared_ptr<PeerConn>> peers;
+    std::mutex pending_mu;
+    std::deque<int> pending_write_interest;
+    std::unordered_set<int> pending_write_interest_set;
+  };
+
   struct PeerConn {
     int fd = -1;
     std::mutex send_mu;
     std::string read_buffer;
+    size_t read_offset = 0;
     std::string write_buffer;
+    size_t write_offset = 0;
   };
 
   bool start_root_server();
@@ -472,9 +491,10 @@ class SocketExchanger : public Exchanger {
   bool notify_root_wakeup() const;
   bool enqueue_frame_locked(std::string& write_buffer,
                             std::string const& frame) const;
-  bool flush_write_buffer_locked(int fd, std::string& write_buffer) const;
-  bool recv_frame_buffered(int fd, std::string& buffer, std::string& frame,
-                           int timeout_ms) const;
+  bool flush_write_buffer_locked(int fd, std::string& write_buffer,
+                                 size_t& write_offset) const;
+  bool recv_frame_buffered(int fd, std::string& buffer, size_t& read_offset,
+                           std::string& frame, int timeout_ms) const;
   bool connect_upstream_locked();
   void close_upstream_locked();
   void upstream_loop();
@@ -500,21 +520,15 @@ class SocketExchanger : public Exchanger {
   mutable std::mutex entries_mu_;
   std::unordered_map<std::string, std::string> entries_;
 
-  int listen_fd_ = -1;
-  int root_wakeup_read_fd_ = -1;
-  int root_wakeup_write_fd_ = -1;
-  std::thread server_thread_;
-  std::mutex peers_mu_;
-  std::unordered_map<int, std::shared_ptr<PeerConn>> peers_;
-  std::mutex root_pending_mu_;
-  std::deque<int> root_pending_write_interest_;
-  std::unordered_set<int> root_pending_write_interest_set_;
+  RootReactorState root_;
 
   mutable std::mutex upstream_mu_;
   int upstream_fd_ = -1;
   std::thread upstream_thread_;
   std::string upstream_read_buffer_;
+  size_t upstream_read_offset_ = 0;
   std::string upstream_write_buffer_;
+  size_t upstream_write_offset_ = 0;
   std::atomic<bool> upstream_sync_complete_{false};
 
   std::mutex pending_mu_;

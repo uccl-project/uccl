@@ -21,9 +21,22 @@ namespace Transport {
 
 namespace {
 
-constexpr int kRootAcceptPollMs = 100;
 constexpr int kSocketPollMs = 200;
 constexpr int kRelayWaitMs = 50;
+constexpr size_t kBufferCompactMinPrefix = 4096;
+
+void compact_prefixed_buffer(std::string& buffer, size_t& offset) {
+  if (offset == 0) return;
+  if (offset == buffer.size()) {
+    buffer.clear();
+    offset = 0;
+    return;
+  }
+  if (offset >= kBufferCompactMinPrefix && offset * 2 >= buffer.size()) {
+    buffer.erase(0, offset);
+    offset = 0;
+  }
+}
 
 enum class SocketFrameType : uint8_t {
   SyncRequest = 1,
@@ -164,6 +177,16 @@ bool decode_socket_frame(std::string const& payload, SocketFrame& frame) {
 }
 
 }  // namespace
+
+uint64_t ShmExchanger::SlotCacheHash::hash_key(std::string_view key) {
+  // 64-bit FNV-1a, stable and allocation-free for small key caching.
+  uint64_t h = 1469598103934665603ULL;
+  for (unsigned char c : key) {
+    h ^= static_cast<uint64_t>(c);
+    h *= 1099511628211ULL;
+  }
+  return h;
+}
 
 ShmExchanger::ShmExchanger(std::string kv_namespace)
     : kv_namespace_(std::move(kv_namespace)) {
@@ -388,8 +411,6 @@ bool ShmExchanger::put_encoded(std::string_view key, std::string_view value,
   slot.write_seq = ++shm_->write_seq;
   slot.key_len = static_cast<uint32_t>(key.size());
   slot.value_len = static_cast<uint32_t>(value.size());
-  std::memset(slot.key, 0, sizeof(slot.key));
-  std::memset(slot.value, 0, sizeof(slot.value));
   std::memcpy(slot.key, key.data(), key.size());
   std::memcpy(slot.value, value.data(), value.size());
   if (is_new_slot) {
@@ -399,7 +420,7 @@ bool ShmExchanger::put_encoded(std::string_view key, std::string_view value,
     shm_->first_free_hint = static_cast<uint32_t>((slot_idx + 1) %
                                                   shm_->slot_capacity);
   }
-  slot_index_cache_[std::string(key)] = static_cast<uint32_t>(slot_idx);
+  slot_index_cache_[SlotCacheHash::hash_key(key)] = static_cast<uint32_t>(slot_idx);
   unlock_store();
   maybe_post_sem();
   return true;
@@ -456,7 +477,8 @@ bool ShmExchanger::wait_for_update(int delay_ms) const {
 
 int ShmExchanger::find_slot_locked(std::string_view key) const {
   if (!shm_) return -1;
-  auto const cache_it = slot_index_cache_.find(std::string(key));
+  uint64_t const key_hash = SlotCacheHash::hash_key(key);
+  auto const cache_it = slot_index_cache_.find(key_hash);
   if (cache_it != slot_index_cache_.end()) {
     uint32_t const idx = cache_it->second;
     if (idx < shm_->slot_capacity) {
@@ -472,7 +494,7 @@ int ShmExchanger::find_slot_locked(std::string_view key) const {
     auto const& slot = shm_->slots[i];
     if (slot.state != kSlotUsed || slot.key_len != key.size()) continue;
     if (std::memcmp(slot.key, key.data(), key.size()) == 0) {
-      slot_index_cache_[std::string(key)] = i;
+      slot_index_cache_[key_hash] = i;
       return static_cast<int>(i);
     }
   }
@@ -505,7 +527,8 @@ void ShmExchanger::rebuild_metadata_locked() {
       continue;
     }
     shm_->used_slots += 1;
-    slot_index_cache_[std::string(slot.key, slot.key + slot.key_len)] = i;
+    slot_index_cache_[SlotCacheHash::hash_key(
+        std::string_view(slot.key, slot.key_len))] = i;
     if (slot.write_seq > max_write_seq) max_write_seq = slot.write_seq;
   }
   if (!found_free_slot) {
@@ -552,8 +575,8 @@ SocketExchanger::~SocketExchanger() {
   ready_cv_.notify_all();
   pending_cv_.notify_all();
   (void)notify_root_wakeup();
-  if (listen_fd_ >= 0) {
-    ::shutdown(listen_fd_, SHUT_RDWR);
+  if (root_.listen_fd >= 0) {
+    ::shutdown(root_.listen_fd, SHUT_RDWR);
   }
   {
     std::lock_guard<std::mutex> lk(upstream_mu_);
@@ -562,7 +585,7 @@ SocketExchanger::~SocketExchanger() {
     }
   }
   if (upstream_thread_.joinable()) upstream_thread_.join();
-  if (server_thread_.joinable()) server_thread_.join();
+  if (root_.thread.joinable()) root_.thread.join();
   stop_root_server();
 
   {
@@ -571,8 +594,8 @@ SocketExchanger::~SocketExchanger() {
   }
 
   {
-    std::lock_guard<std::mutex> lk(peers_mu_);
-    for (auto const& [fd, _] : peers_) {
+    std::lock_guard<std::mutex> lk(root_.peers_mu);
+    for (auto const& [fd, _] : root_.peers) {
       (void)_;
       ::shutdown(fd, SHUT_RDWR);
     }
@@ -654,32 +677,32 @@ bool SocketExchanger::get_raw(std::string_view key, std::string& value) {
 }
 
 bool SocketExchanger::start_root_server() {
-  listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-  if (listen_fd_ < 0) return false;
+  root_.listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
+  if (root_.listen_fd < 0) return false;
 
   int opt = 1;
-  (void)::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-  (void)::fcntl(listen_fd_, F_SETFL, O_NONBLOCK);
+  (void)::setsockopt(root_.listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  (void)::fcntl(root_.listen_fd, F_SETFL, O_NONBLOCK);
 
   sockaddr_in addr {};
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = INADDR_ANY;
   addr.sin_port = htons(static_cast<uint16_t>(port_));
-  if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) !=
+  if (::bind(root_.listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) !=
       0) {
-    ::close(listen_fd_);
-    listen_fd_ = -1;
+    ::close(root_.listen_fd);
+    root_.listen_fd = -1;
     return false;
   }
-  if (::listen(listen_fd_, 64) != 0) {
-    ::close(listen_fd_);
-    listen_fd_ = -1;
+  if (::listen(root_.listen_fd, 64) != 0) {
+    ::close(root_.listen_fd);
+    root_.listen_fd = -1;
     return false;
   }
   int wake_pipe[2] = {-1, -1};
   if (::pipe(wake_pipe) != 0) {
-    ::close(listen_fd_);
-    listen_fd_ = -1;
+    ::close(root_.listen_fd);
+    root_.listen_fd = -1;
     return false;
   }
   int const wake_read_flags = ::fcntl(wake_pipe[0], F_GETFL, 0);
@@ -689,14 +712,14 @@ bool SocketExchanger::start_root_server() {
       ::fcntl(wake_pipe[1], F_SETFL, wake_write_flags | O_NONBLOCK) != 0) {
     ::close(wake_pipe[0]);
     ::close(wake_pipe[1]);
-    ::close(listen_fd_);
-    listen_fd_ = -1;
+    ::close(root_.listen_fd);
+    root_.listen_fd = -1;
     return false;
   }
-  root_wakeup_read_fd_ = wake_pipe[0];
-  root_wakeup_write_fd_ = wake_pipe[1];
+  root_.wakeup_read_fd = wake_pipe[0];
+  root_.wakeup_write_fd = wake_pipe[1];
   try {
-    server_thread_ = std::thread(&SocketExchanger::root_accept_loop, this);
+    root_.thread = std::thread(&SocketExchanger::root_accept_loop, this);
   } catch (...) {
     stop_root_server();
     return false;
@@ -705,18 +728,18 @@ bool SocketExchanger::start_root_server() {
 }
 
 void SocketExchanger::stop_root_server() {
-  if (root_wakeup_write_fd_ >= 0) {
-    ::close(root_wakeup_write_fd_);
-    root_wakeup_write_fd_ = -1;
+  if (root_.wakeup_write_fd >= 0) {
+    ::close(root_.wakeup_write_fd);
+    root_.wakeup_write_fd = -1;
   }
-  if (root_wakeup_read_fd_ >= 0) {
-    ::close(root_wakeup_read_fd_);
-    root_wakeup_read_fd_ = -1;
+  if (root_.wakeup_read_fd >= 0) {
+    ::close(root_.wakeup_read_fd);
+    root_.wakeup_read_fd = -1;
   }
-  if (listen_fd_ >= 0) {
-    ::shutdown(listen_fd_, SHUT_RDWR);
-    ::close(listen_fd_);
-    listen_fd_ = -1;
+  if (root_.listen_fd >= 0) {
+    ::shutdown(root_.listen_fd, SHUT_RDWR);
+    ::close(root_.listen_fd);
+    root_.listen_fd = -1;
   }
 }
 
@@ -747,25 +770,8 @@ void SocketExchanger::root_accept_loop() {
     return set_peer_events(peer->fd, want_write);
   };
 
-  auto process_pending_interests = [&]() {
-    std::vector<int> pending_interest_fds;
-    drain_root_peer_write_interest(pending_interest_fds);
-    for (int pending_fd : pending_interest_fds) {
-      std::shared_ptr<PeerConn> pending_peer;
-      {
-        std::lock_guard<std::mutex> lk(peers_mu_);
-        auto it = peers_.find(pending_fd);
-        if (it != peers_.end()) pending_peer = it->second;
-      }
-      if (!pending_peer) continue;
-      if (!sync_peer_interest(pending_peer)) {
-        close_root_peer(pending_fd);
-      }
-    }
-  };
-
-  if (listen_fd_ < 0 || root_wakeup_read_fd_ < 0 || !add_epoll_in(listen_fd_) ||
-      !add_epoll_in(root_wakeup_read_fd_)) {
+  if (root_.listen_fd < 0 || root_.wakeup_read_fd < 0 ||
+      !add_epoll_in(root_.listen_fd) || !add_epoll_in(root_.wakeup_read_fd)) {
     ::close(epoll_fd);
     return;
   }
@@ -773,10 +779,7 @@ void SocketExchanger::root_accept_loop() {
   constexpr int kMaxEvents = 64;
   epoll_event events[kMaxEvents];
   while (running_.load(std::memory_order_acquire)) {
-    process_pending_interests();
-
-    int const ready_count =
-        ::epoll_wait(epoll_fd, events, kMaxEvents, kRootAcceptPollMs);
+    int const ready_count = ::epoll_wait(epoll_fd, events, kMaxEvents, -1);
     if (ready_count < 0) {
       if (errno == EINTR) continue;
       break;
@@ -784,12 +787,12 @@ void SocketExchanger::root_accept_loop() {
     for (int i = 0; i < ready_count; ++i) {
       int const fd = events[i].data.fd;
       uint32_t const ev = events[i].events;
-      if (fd == listen_fd_) {
+      if (fd == root_.listen_fd) {
         while (running_.load(std::memory_order_acquire)) {
           sockaddr_in cli {};
           socklen_t len = sizeof(cli);
           int conn_fd =
-              ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&cli), &len);
+              ::accept(root_.listen_fd, reinterpret_cast<sockaddr*>(&cli), &len);
           if (conn_fd < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
               break;
@@ -806,8 +809,8 @@ void SocketExchanger::root_accept_loop() {
           auto peer = std::make_shared<PeerConn>();
           peer->fd = conn_fd;
           {
-            std::lock_guard<std::mutex> lk(peers_mu_);
-            peers_[conn_fd] = peer;
+            std::lock_guard<std::mutex> lk(root_.peers_mu);
+            root_.peers[conn_fd] = peer;
           }
           if (!add_epoll_in(conn_fd)) {
             close_root_peer(conn_fd);
@@ -816,11 +819,24 @@ void SocketExchanger::root_accept_loop() {
         }
         continue;
       }
-      if (fd == root_wakeup_read_fd_) {
+      if (fd == root_.wakeup_read_fd) {
         char buf[128];
-        while (::read(root_wakeup_read_fd_, buf, sizeof(buf)) > 0) {
+        while (::read(root_.wakeup_read_fd, buf, sizeof(buf)) > 0) {
         }
-        process_pending_interests();
+        std::vector<int> pending_interest_fds;
+        drain_root_peer_write_interest(pending_interest_fds);
+        for (int pending_fd : pending_interest_fds) {
+          std::shared_ptr<PeerConn> pending_peer;
+          {
+            std::lock_guard<std::mutex> lk(root_.peers_mu);
+            auto it = root_.peers.find(pending_fd);
+            if (it != root_.peers.end()) pending_peer = it->second;
+          }
+          if (!pending_peer) continue;
+          if (!sync_peer_interest(pending_peer)) {
+            close_root_peer(pending_fd);
+          }
+        }
         continue;
       }
 
@@ -832,9 +848,9 @@ void SocketExchanger::root_accept_loop() {
 
       std::shared_ptr<PeerConn> peer;
       {
-        std::lock_guard<std::mutex> lk(peers_mu_);
-        auto it = peers_.find(fd);
-        if (it != peers_.end()) peer = it->second;
+        std::lock_guard<std::mutex> lk(root_.peers_mu);
+        auto it = root_.peers.find(fd);
+        if (it != root_.peers.end()) peer = it->second;
       }
       if (!peer) continue;
 
@@ -842,7 +858,8 @@ void SocketExchanger::root_accept_loop() {
       if (ev & EPOLLOUT) {
         std::lock_guard<std::mutex> send_lk(peer->send_mu);
         if (!peer->write_buffer.empty() &&
-            !flush_write_buffer_locked(fd, peer->write_buffer) &&
+            !flush_write_buffer_locked(fd, peer->write_buffer,
+                                       peer->write_offset) &&
             errno != EAGAIN && errno != EWOULDBLOCK) {
           close_peer_now = true;
         }
@@ -854,8 +871,8 @@ void SocketExchanger::root_accept_loop() {
 
       for (;;) {
         std::string frame;
-        bool const got_frame =
-            recv_frame_buffered(fd, peer->read_buffer, frame, 0);
+        bool const got_frame = recv_frame_buffered(
+            fd, peer->read_buffer, peer->read_offset, frame, 0);
         if (!got_frame) {
           if (errno == EAGAIN || errno == EWOULDBLOCK) break;
           close_peer_now = true;
@@ -867,7 +884,6 @@ void SocketExchanger::root_accept_loop() {
           std::vector<std::pair<std::string, std::string>> snapshot;
           snapshot_entries(snapshot);
           bool snapshot_ok = true;
-          bool need_write_interest = false;
           {
             std::lock_guard<std::mutex> send_lk(peer->send_mu);
             for (auto const& entry : snapshot) {
@@ -888,15 +904,6 @@ void SocketExchanger::root_accept_loop() {
                             enqueue_frame_locked(peer->write_buffer,
                                                  sync_done_frame);
             }
-            if (snapshot_ok && !peer->write_buffer.empty() &&
-                !flush_write_buffer_locked(fd, peer->write_buffer) &&
-                errno != EAGAIN && errno != EWOULDBLOCK) {
-              snapshot_ok = false;
-            }
-            need_write_interest = !peer->write_buffer.empty();
-          }
-          if (snapshot_ok && need_write_interest) {
-            queue_root_peer_write_interest(peer->fd);
           }
           if (!snapshot_ok) {
             close_peer_now = true;
@@ -923,9 +930,9 @@ void SocketExchanger::root_accept_loop() {
 
   std::vector<int> stale_fds;
   {
-    std::lock_guard<std::mutex> lk(peers_mu_);
-    stale_fds.reserve(peers_.size());
-    for (auto const& [fd, _] : peers_) stale_fds.push_back(fd);
+    std::lock_guard<std::mutex> lk(root_.peers_mu);
+    stale_fds.reserve(root_.peers.size());
+    for (auto const& [fd, _] : root_.peers) stale_fds.push_back(fd);
   }
   for (int fd : stale_fds) {
     close_root_peer(fd);
@@ -940,9 +947,9 @@ void SocketExchanger::root_broadcast_pub(std::string const& key,
   std::vector<int> stale_fds;
   std::vector<int> activate_write_fds;
   {
-    std::lock_guard<std::mutex> lk(peers_mu_);
-    peers.reserve(peers_.size());
-    for (auto const& [fd, peer] : peers_) {
+    std::lock_guard<std::mutex> lk(root_.peers_mu);
+    peers.reserve(root_.peers.size());
+    for (auto const& [fd, peer] : root_.peers) {
       if (fd == exclude_fd) continue;
       peers.push_back(peer);
     }
@@ -957,12 +964,6 @@ void SocketExchanger::root_broadcast_pub(std::string const& key,
     std::lock_guard<std::mutex> lk(peer->send_mu);
     bool const was_empty = peer->write_buffer.empty();
     if (!enqueue_frame_locked(peer->write_buffer, frame)) {
-      stale_fds.push_back(peer->fd);
-      continue;
-    }
-    if (!peer->write_buffer.empty() &&
-        !flush_write_buffer_locked(peer->fd, peer->write_buffer) &&
-        errno != EAGAIN && errno != EWOULDBLOCK) {
       stale_fds.push_back(peer->fd);
       continue;
     }
@@ -985,48 +986,50 @@ void SocketExchanger::root_broadcast_pub(std::string const& key,
 void SocketExchanger::close_root_peer(int fd) {
   std::shared_ptr<PeerConn> peer;
   {
-    std::lock_guard<std::mutex> lk(peers_mu_);
-    auto it = peers_.find(fd);
-    if (it == peers_.end()) return;
+    std::lock_guard<std::mutex> lk(root_.peers_mu);
+    auto it = root_.peers.find(fd);
+    if (it == root_.peers.end()) return;
     peer = it->second;
-    peers_.erase(it);
+    root_.peers.erase(it);
   }
   if (peer) {
     std::lock_guard<std::mutex> send_lk(peer->send_mu);
     peer->write_buffer.clear();
+    peer->write_offset = 0;
     peer->read_buffer.clear();
+    peer->read_offset = 0;
   }
   {
-    std::lock_guard<std::mutex> lk(root_pending_mu_);
-    root_pending_write_interest_set_.erase(fd);
+    std::lock_guard<std::mutex> lk(root_.pending_mu);
+    root_.pending_write_interest_set.erase(fd);
   }
   ::shutdown(fd, SHUT_RDWR);
   ::close(fd);
 }
 
 void SocketExchanger::queue_root_peer_write_interest(int fd) {
-  std::lock_guard<std::mutex> lk(root_pending_mu_);
-  auto const [_, inserted] = root_pending_write_interest_set_.insert(fd);
+  std::lock_guard<std::mutex> lk(root_.pending_mu);
+  auto const [_, inserted] = root_.pending_write_interest_set.insert(fd);
   if (!inserted) return;
-  root_pending_write_interest_.push_back(fd);
+  root_.pending_write_interest.push_back(fd);
 }
 
 void SocketExchanger::drain_root_peer_write_interest(std::vector<int>& fds) {
   fds.clear();
-  std::lock_guard<std::mutex> lk(root_pending_mu_);
-  fds.reserve(root_pending_write_interest_.size());
-  while (!root_pending_write_interest_.empty()) {
-    int const fd = root_pending_write_interest_.front();
-    root_pending_write_interest_.pop_front();
-    root_pending_write_interest_set_.erase(fd);
+  std::lock_guard<std::mutex> lk(root_.pending_mu);
+  fds.reserve(root_.pending_write_interest.size());
+  while (!root_.pending_write_interest.empty()) {
+    int const fd = root_.pending_write_interest.front();
+    root_.pending_write_interest.pop_front();
+    root_.pending_write_interest_set.erase(fd);
     fds.push_back(fd);
   }
 }
 
 bool SocketExchanger::notify_root_wakeup() const {
-  if (root_wakeup_write_fd_ < 0) return false;
+  if (root_.wakeup_write_fd < 0) return false;
   char one = 1;
-  ssize_t n = ::write(root_wakeup_write_fd_, &one, sizeof(one));
+  ssize_t n = ::write(root_.wakeup_write_fd, &one, sizeof(one));
   return n == static_cast<ssize_t>(sizeof(one)) || errno == EAGAIN ||
          errno == EWOULDBLOCK;
 }
@@ -1046,15 +1049,19 @@ bool SocketExchanger::enqueue_frame_locked(std::string& write_buffer,
 }
 
 bool SocketExchanger::flush_write_buffer_locked(int fd,
-                                                std::string& write_buffer) const {
+                                                std::string& write_buffer,
+                                                size_t& write_offset) const {
   int send_flags = 0;
 #ifdef MSG_NOSIGNAL
   send_flags |= MSG_NOSIGNAL;
 #endif
-  while (!write_buffer.empty()) {
-    ssize_t n = ::send(fd, write_buffer.data(), write_buffer.size(), send_flags);
+  while (write_offset < write_buffer.size()) {
+    char const* data = write_buffer.data() + write_offset;
+    size_t const pending = write_buffer.size() - write_offset;
+    ssize_t n = ::send(fd, data, pending, send_flags);
     if (n > 0) {
-      write_buffer.erase(0, static_cast<size_t>(n));
+      write_offset += static_cast<size_t>(n);
+      compact_prefixed_buffer(write_buffer, write_offset);
       continue;
     }
     if (n == 0) {
@@ -1065,24 +1072,33 @@ bool SocketExchanger::flush_write_buffer_locked(int fd,
     if (errno == EAGAIN || errno == EWOULDBLOCK) return false;
     return false;
   }
+  write_buffer.clear();
+  write_offset = 0;
   return true;
 }
 
 bool SocketExchanger::recv_frame_buffered(int fd, std::string& buffer,
+                                          size_t& read_offset,
                                           std::string& frame,
                                           int timeout_ms) const {
   auto extract_frame = [&]() -> bool {
-    if (buffer.size() < sizeof(uint32_t)) return false;
-    size_t pos = 0;
+    if (read_offset > buffer.size()) {
+      errno = EPROTO;
+      return false;
+    }
+    size_t const available = buffer.size() - read_offset;
+    if (available < sizeof(uint32_t)) return false;
+    size_t pos = read_offset;
     uint32_t payload_len = 0;
     if (!read_net_u32(buffer, pos, payload_len)) return false;
     if (payload_len > max_line_bytes_) {
       errno = EMSGSIZE;
       return false;
     }
-    if (buffer.size() < sizeof(uint32_t) + payload_len) return false;
-    frame.assign(buffer.data() + sizeof(uint32_t), payload_len);
-    buffer.erase(0, sizeof(uint32_t) + payload_len);
+    if (available < sizeof(uint32_t) + payload_len) return false;
+    frame.assign(buffer.data() + read_offset + sizeof(uint32_t), payload_len);
+    read_offset += sizeof(uint32_t) + payload_len;
+    compact_prefixed_buffer(buffer, read_offset);
     return true;
   };
 
@@ -1122,8 +1138,9 @@ bool SocketExchanger::recv_frame_buffered(int fd, std::string& buffer,
       if (errno == EINTR) continue;
       return false;
     }
+    compact_prefixed_buffer(buffer, read_offset);
     buffer.append(chunk, chunk + n);
-    if (buffer.size() > max_line_bytes_ * 2) {
+    if (buffer.size() - read_offset > max_line_bytes_ * 2) {
       errno = EMSGSIZE;
       return false;
     }
@@ -1156,7 +1173,9 @@ bool SocketExchanger::connect_upstream_locked() {
 
   upstream_fd_ = fd;
   upstream_read_buffer_.clear();
+  upstream_read_offset_ = 0;
   upstream_write_buffer_.clear();
+  upstream_write_offset_ = 0;
   upstream_sync_complete_.store(false, std::memory_order_release);
   std::string sync_request_frame;
   if (!encode_socket_frame(SocketFrame{SocketFrameType::SyncRequest, {}, {}},
@@ -1165,7 +1184,8 @@ bool SocketExchanger::connect_upstream_locked() {
     close_upstream_locked();
     return false;
   }
-  if (!flush_write_buffer_locked(upstream_fd_, upstream_write_buffer_) &&
+  if (!flush_write_buffer_locked(upstream_fd_, upstream_write_buffer_,
+                                 upstream_write_offset_) &&
       errno != EAGAIN && errno != EWOULDBLOCK) {
     close_upstream_locked();
     return false;
@@ -1180,7 +1200,9 @@ void SocketExchanger::close_upstream_locked() {
     upstream_fd_ = -1;
   }
   upstream_read_buffer_.clear();
+  upstream_read_offset_ = 0;
   upstream_write_buffer_.clear();
+  upstream_write_offset_ = 0;
   upstream_sync_complete_.store(false, std::memory_order_release);
   ready_.store(false, std::memory_order_release);
   ready_cv_.notify_all();
@@ -1234,7 +1256,8 @@ void SocketExchanger::upstream_loop() {
       std::lock_guard<std::mutex> lk(upstream_mu_);
       if (upstream_fd_ >= 0) {
         bool const got_buffered_frame =
-            recv_frame_buffered(upstream_fd_, upstream_read_buffer_, frame, 0);
+            recv_frame_buffered(upstream_fd_, upstream_read_buffer_,
+                                upstream_read_offset_, frame, 0);
         if (got_buffered_frame) {
           progressed = true;
         } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
@@ -1259,7 +1282,8 @@ void SocketExchanger::upstream_loop() {
             continue;
           }
           if (pfd.revents & POLLOUT) {
-            if (!flush_write_buffer_locked(upstream_fd_, upstream_write_buffer_) &&
+            if (!flush_write_buffer_locked(upstream_fd_, upstream_write_buffer_,
+                                           upstream_write_offset_) &&
                 errno != EAGAIN && errno != EWOULDBLOCK) {
               close_upstream_locked();
               continue;
@@ -1267,8 +1291,9 @@ void SocketExchanger::upstream_loop() {
             progressed = true;
           }
           if (pfd.revents & POLLIN) {
-            bool const got_frame = recv_frame_buffered(
-                upstream_fd_, upstream_read_buffer_, frame, 0);
+            bool const got_frame =
+                recv_frame_buffered(upstream_fd_, upstream_read_buffer_,
+                                    upstream_read_offset_, frame, 0);
             if (!got_frame && errno != EAGAIN && errno != EWOULDBLOCK) {
               close_upstream_locked();
               continue;
