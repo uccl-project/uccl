@@ -1,457 +1,1471 @@
 #include "oob.h"
+#include "../util/utils.h"
 #include <arpa/inet.h>
-#include <netinet/in.h>
-#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
-#include <functional>
-#include <iostream>
-#include <map>
-#include <mutex>
+#include <fcntl.h>
+#include <poll.h>
 #include <sstream>
 #include <string>
-#include <thread>
-#include <unordered_map>
-#include <vector>
+#include <sys/epoll.h>
+#include <sys/file.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 
 namespace UKernel {
 namespace Transport {
 
-/* ----------------- Internal helpers ----------------- */
+namespace {
 
-static ssize_t send_all_robust(int fd, char const* buf, size_t len) {
-  size_t total = 0;
-  while (total < len) {
-    ssize_t n = ::send(fd, buf + total, len - total, 0);
-    if (n > 0) {
-      total += static_cast<size_t>(n);
-      continue;
-    }
-    if (n == 0) {
-      // peer closed
-      return 0;
-    }
-    if (errno == EINTR) continue;
-    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
-      continue;
-    }
-    return -1;
+constexpr int kRootAcceptPollMs = 100;
+constexpr int kSocketPollMs = 200;
+constexpr int kRelayWaitMs = 50;
+
+enum class SocketFrameType : uint8_t {
+  SyncRequest = 1,
+  SyncDone = 2,
+  Publish = 3,
+};
+
+int env_int_or_default(char const* name, int default_value) {
+  char const* v = std::getenv(name);
+  if (!v || v[0] == '\0') return default_value;
+  try {
+    return std::stoi(v);
+  } catch (...) {
+    return default_value;
   }
-  return static_cast<ssize_t>(total);
 }
 
-// recv until newline, but with a max cap and ability to break on running=false
-static bool recv_line_capped(int fd, std::string& out, size_t max_line_bytes,
-                             std::atomic<bool>& running) {
+bool env_bool_or_default(char const* name, bool default_value) {
+  char const* v = std::getenv(name);
+  if (!v || v[0] == '\0') return default_value;
+  if (v[0] == '0' || v[0] == 'n' || v[0] == 'N' || v[0] == 'f' ||
+      v[0] == 'F') {
+    return false;
+  }
+  return true;
+}
+
+bool connect_with_timeout(int fd, sockaddr_in const& addr, int timeout_ms) {
+  int const current_flags = ::fcntl(fd, F_GETFL, 0);
+  if (current_flags < 0) return false;
+  if (::fcntl(fd, F_SETFL, current_flags | O_NONBLOCK) != 0) return false;
+
+  int rc = ::connect(fd, reinterpret_cast<sockaddr const*>(&addr), sizeof(addr));
+  if (rc == 0) {
+    (void)::fcntl(fd, F_SETFL, current_flags | O_NONBLOCK);
+    return true;
+  }
+  if (errno != EINPROGRESS) return false;
+
+  pollfd pfd {};
+  pfd.fd = fd;
+  pfd.events = POLLOUT;
+  rc = ::poll(&pfd, 1, timeout_ms > 0 ? timeout_ms : kSocketPollMs);
+  if (rc <= 0) return false;
+
+  int so_error = 0;
+  socklen_t so_error_len = sizeof(so_error);
+  if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &so_error, &so_error_len) != 0) {
+    return false;
+  }
+  if (so_error != 0) {
+    errno = so_error;
+    return false;
+  }
+
+  return ::fcntl(fd, F_SETFL, current_flags | O_NONBLOCK) == 0;
+}
+
+std::string kv_namespace_for_port(int port) {
+  char const* override_ns = std::getenv("UHM_OOB_NAMESPACE");
+  std::string seed =
+      std::string(override_ns && override_ns[0] != '\0' ? override_ns
+                                                        : generate_host_id()) +
+      ":" + std::to_string(port);
+  uint64_t h = static_cast<uint64_t>(std::hash<std::string>{}(seed));
+  std::ostringstream oss;
+  oss << "/uk_oob_kv_" << std::hex << h;
+  return oss.str();
+}
+
+struct SocketFrame {
+  SocketFrameType type = SocketFrameType::SyncRequest;
+  std::string key;
+  std::string value;
+};
+
+void append_net_u32(std::string& out, uint32_t value) {
+  uint32_t const net_value = htonl(value);
+  out.append(reinterpret_cast<char const*>(&net_value), sizeof(net_value));
+}
+
+bool read_net_u32(std::string const& in, size_t& pos, uint32_t& value) {
+  if (in.size() < pos + sizeof(uint32_t)) return false;
+  uint32_t net_value = 0;
+  std::memcpy(&net_value, in.data() + pos, sizeof(net_value));
+  value = ntohl(net_value);
+  pos += sizeof(uint32_t);
+  return true;
+}
+
+bool encode_socket_frame(SocketFrame const& frame, std::string& out) {
   out.clear();
-  char c;
-  while (running.load(std::memory_order_relaxed)) {
-    ssize_t n = ::recv(fd, &c, 1, 0);
-    if (n > 0) {
-      if (c == '\n') return true;
-      out.push_back(c);
-      if (out.size() > max_line_bytes) {
-        // protocol violation: line too big
-        return false;
-      }
-      continue;
+  if (frame.type == SocketFrameType::SyncRequest ||
+      frame.type == SocketFrameType::SyncDone) {
+    append_net_u32(out, 1);
+    out.push_back(static_cast<char>(frame.type));
+    return true;
+  }
+  if (frame.type != SocketFrameType::Publish) return false;
+  if (frame.key.size() > std::numeric_limits<uint32_t>::max() ||
+      frame.value.size() > std::numeric_limits<uint32_t>::max()) {
+    return false;
+  }
+  uint32_t const payload_len =
+      1 + sizeof(uint32_t) + static_cast<uint32_t>(frame.key.size()) +
+      sizeof(uint32_t) + static_cast<uint32_t>(frame.value.size());
+  append_net_u32(out, payload_len);
+  out.push_back(static_cast<char>(frame.type));
+  append_net_u32(out, static_cast<uint32_t>(frame.key.size()));
+  out.append(frame.key);
+  append_net_u32(out, static_cast<uint32_t>(frame.value.size()));
+  out.append(frame.value);
+  return true;
+}
+
+bool decode_socket_frame(std::string const& payload, SocketFrame& frame) {
+  frame = {};
+  if (payload.empty()) return false;
+  frame.type =
+      static_cast<SocketFrameType>(static_cast<uint8_t>(payload.front()));
+  if (frame.type == SocketFrameType::SyncRequest ||
+      frame.type == SocketFrameType::SyncDone) {
+    return payload.size() == 1;
+  }
+  if (frame.type != SocketFrameType::Publish) return false;
+
+  size_t pos = 1;
+  uint32_t key_len = 0;
+  uint32_t value_len = 0;
+  if (!read_net_u32(payload, pos, key_len)) return false;
+  if (payload.size() < pos + key_len) return false;
+  frame.key.assign(payload.data() + pos, key_len);
+  pos += key_len;
+  if (!read_net_u32(payload, pos, value_len)) return false;
+  if (payload.size() != pos + value_len) return false;
+  frame.value.assign(payload.data() + pos, value_len);
+  return true;
+}
+
+}  // namespace
+
+ShmExchanger::ShmExchanger(std::string kv_namespace)
+    : kv_namespace_(std::move(kv_namespace)) {
+  (void)init_shared_store();
+}
+
+ShmExchanger::~ShmExchanger() { close_shared_store(); }
+
+bool ShmExchanger::valid() const { return shm_ != nullptr; }
+
+bool ShmExchanger::apply_remote(std::string_view key, std::string_view value) {
+  return put_encoded(key, value, /*mark_relayed=*/true);
+}
+
+bool ShmExchanger::reset_for_new_run() {
+  if (!shm_ || !lock_store()) return false;
+  for (uint32_t i = 0; i < shm_->slot_capacity; ++i) {
+    shm_->slots[i] = KvSlot{};
+  }
+  shm_->used_slots = 0;
+  shm_->first_free_hint = 0;
+  shm_->write_seq = 0;
+  shm_->recovery_epoch += 1;
+  shm_->owner_pid = static_cast<uint32_t>(::getpid());
+  next_unrelayed_scan_index_ = 0;
+  slot_index_cache_.clear();
+  unlock_store();
+  maybe_post_sem();
+  return true;
+}
+
+size_t ShmExchanger::collect_unrelayed(
+    std::vector<std::pair<std::string, std::string>>& out, size_t max_items) {
+  size_t const collected =
+      collect_entries(out, max_items, next_unrelayed_scan_index_,
+                      /*only_unrelayed=*/true);
+  if (shm_ && shm_->slot_capacity > 0) {
+    next_unrelayed_scan_index_ =
+        (next_unrelayed_scan_index_ + (collected == 0 ? 1 : collected)) %
+        shm_->slot_capacity;
+  }
+  return collected;
+}
+
+size_t ShmExchanger::collect_all(
+    std::vector<std::pair<std::string, std::string>>& out,
+    size_t max_items) const {
+  return collect_entries(out, max_items, 0, /*only_unrelayed=*/false);
+}
+
+bool ShmExchanger::mark_relayed(std::string_view key) {
+  if (!shm_ || !lock_store()) return false;
+  int idx = find_slot_locked(key);
+  if (idx < 0) {
+    unlock_store();
+    return false;
+  }
+  shm_->slots[static_cast<size_t>(idx)].relayed = 1;
+  unlock_store();
+  return true;
+}
+
+bool ShmExchanger::wait_raw(std::string_view key, std::string& value,
+                            WaitOptions const& options) {
+  if (options.max_retries == 0) {
+    return get_raw(key, value);
+  }
+
+  int const delay_ms = options.delay_ms > 0 ? options.delay_ms : 1;
+  auto try_once = [&]() { return get_raw(key, value); };
+  if (try_once()) return true;
+
+  if (options.max_retries > 0) {
+    for (int i = 0; i < options.max_retries; ++i) {
+      if (!valid()) return false;
+      (void)wait_for_update(delay_ms);
+      if (try_once()) return true;
     }
-    if (n == 0) {
-      // peer closed
+    return false;
+  }
+
+  while (valid()) {
+    (void)wait_for_update(delay_ms);
+    if (try_once()) return true;
+  }
+  return false;
+}
+
+bool ShmExchanger::put_raw(std::string_view key, std::string_view value) {
+  return put_encoded(key, value, /*mark_relayed=*/false);
+}
+
+bool ShmExchanger::get_raw(std::string_view key, std::string& value) {
+  value.clear();
+  if (!shm_ || !lock_store()) return false;
+  int idx = find_slot_locked(key);
+  if (idx < 0) {
+    unlock_store();
+    return false;
+  }
+  auto const& slot = shm_->slots[static_cast<size_t>(idx)];
+  value.assign(slot.value, slot.value + slot.value_len);
+  unlock_store();
+  return true;
+}
+
+bool ShmExchanger::init_shared_store() {
+  bool created = false;
+  shm_fd_ = ::shm_open(kv_namespace_.c_str(), O_CREAT | O_EXCL | O_RDWR, 0600);
+  if (shm_fd_ >= 0) {
+    created = true;
+  } else if (errno == EEXIST) {
+    shm_fd_ = ::shm_open(kv_namespace_.c_str(), O_CREAT | O_RDWR, 0600);
+  }
+  if (shm_fd_ < 0) return false;
+
+  if (::flock(shm_fd_, LOCK_EX) != 0) {
+    ::close(shm_fd_);
+    shm_fd_ = -1;
+    return false;
+  }
+
+  if (created &&
+      ::ftruncate(shm_fd_, static_cast<off_t>(sizeof(KvShmHeader))) != 0) {
+    (void)::flock(shm_fd_, LOCK_UN);
+    ::close(shm_fd_);
+    shm_fd_ = -1;
+    return false;
+  }
+
+  void* mapped = ::mmap(nullptr, sizeof(KvShmHeader), PROT_READ | PROT_WRITE,
+                        MAP_SHARED, shm_fd_, 0);
+  if (mapped == MAP_FAILED) {
+    (void)::flock(shm_fd_, LOCK_UN);
+    ::close(shm_fd_);
+    shm_fd_ = -1;
+    return false;
+  }
+  shm_ = reinterpret_cast<KvShmHeader*>(mapped);
+
+  bool need_init = created || shm_->magic != kShmMagic ||
+                   shm_->version != kShmVersion ||
+                   shm_->slot_capacity != kMaxSlots;
+  if (need_init) {
+    shm_->magic = kShmMagic;
+    shm_->version = kShmVersion;
+    shm_->slot_capacity = kMaxSlots;
+    shm_->recovery_epoch = 1;
+    shm_->write_seq = 0;
+    shm_->owner_pid = static_cast<uint32_t>(::getpid());
+    shm_->used_slots = 0;
+    shm_->first_free_hint = 0;
+    shm_->reserved0 = 0;
+    for (uint32_t i = 0; i < kMaxSlots; ++i) {
+      shm_->slots[i] = KvSlot{};
+    }
+
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
+#ifdef PTHREAD_MUTEX_ROBUST
+    pthread_mutexattr_setrobust(&attr, PTHREAD_MUTEX_ROBUST);
+#endif
+    pthread_mutex_init(&shm_->mu, &attr);
+    pthread_mutexattr_destroy(&attr);
+    sem_init(&shm_->notify_sem, 1, 0);
+  } else {
+    if (!lock_store()) {
+      (void)::flock(shm_fd_, LOCK_UN);
+      ::munmap(shm_, sizeof(KvShmHeader));
+      shm_ = nullptr;
+      ::close(shm_fd_);
+      shm_fd_ = -1;
       return false;
     }
-    // n < 0
+    shm_->recovery_epoch += 1;
+    shm_->owner_pid = static_cast<uint32_t>(::getpid());
+    rebuild_metadata_locked();
+    unlock_store();
+  }
+
+  (void)::flock(shm_fd_, LOCK_UN);
+  return true;
+}
+
+void ShmExchanger::close_shared_store() {
+  slot_index_cache_.clear();
+  if (shm_) {
+    ::munmap(shm_, sizeof(KvShmHeader));
+    shm_ = nullptr;
+  }
+  if (shm_fd_ >= 0) {
+    ::close(shm_fd_);
+    shm_fd_ = -1;
+  }
+}
+
+bool ShmExchanger::put_encoded(std::string_view key, std::string_view value,
+                               bool mark_relayed) {
+  if (!shm_) return false;
+  if (key.empty() || key.size() >= kMaxKeyBytes) return false;
+  if (value.size() >= kMaxValueBytes) return false;
+  if (!lock_store()) return false;
+
+  int slot_idx = find_slot_locked(key);
+  if (slot_idx < 0) {
+    if (shm_->used_slots >= shm_->slot_capacity) {
+      unlock_store();
+      return false;
+    }
+    slot_idx = find_free_slot_locked();
+  }
+  if (slot_idx < 0) {
+    unlock_store();
+    return false;
+  }
+
+  auto& slot = shm_->slots[static_cast<size_t>(slot_idx)];
+  bool const is_new_slot = slot.state != kSlotUsed;
+  slot.state = kSlotUsed;
+  slot.relayed = mark_relayed ? 1 : 0;
+  slot.write_seq = ++shm_->write_seq;
+  slot.key_len = static_cast<uint32_t>(key.size());
+  slot.value_len = static_cast<uint32_t>(value.size());
+  std::memset(slot.key, 0, sizeof(slot.key));
+  std::memset(slot.value, 0, sizeof(slot.value));
+  std::memcpy(slot.key, key.data(), key.size());
+  std::memcpy(slot.value, value.data(), value.size());
+  if (is_new_slot) {
+    shm_->used_slots += 1;
+  }
+  if (static_cast<uint32_t>(slot_idx) == shm_->first_free_hint) {
+    shm_->first_free_hint = static_cast<uint32_t>((slot_idx + 1) %
+                                                  shm_->slot_capacity);
+  }
+  slot_index_cache_[std::string(key)] = static_cast<uint32_t>(slot_idx);
+  unlock_store();
+  maybe_post_sem();
+  return true;
+}
+
+size_t ShmExchanger::collect_entries(
+    std::vector<std::pair<std::string, std::string>>& out, size_t max_items,
+    size_t start_index, bool only_unrelayed) const {
+  out.clear();
+  if (!shm_ || max_items == 0) return 0;
+  if (!lock_store()) return 0;
+
+  size_t const slot_count = shm_->slot_capacity;
+  if (slot_count == 0) {
+    unlock_store();
+    return 0;
+  }
+
+  size_t const begin = start_index % slot_count;
+  for (size_t visited = 0; visited < slot_count && out.size() < max_items;
+       ++visited) {
+    size_t const index = (begin + visited) % slot_count;
+    auto const& slot = shm_->slots[index];
+    if (slot.state != kSlotUsed) continue;
+    if (only_unrelayed && slot.relayed) continue;
+    out.emplace_back(std::string(slot.key, slot.key + slot.key_len),
+                     std::string(slot.value, slot.value + slot.value_len));
+  }
+  unlock_store();
+  return out.size();
+}
+
+bool ShmExchanger::wait_for_update(int delay_ms) const {
+  if (!shm_) return false;
+  if (delay_ms <= 0) delay_ms = 1;
+
+  auto deadline = std::chrono::system_clock::now() +
+                  std::chrono::milliseconds(delay_ms);
+  auto sec = std::chrono::time_point_cast<std::chrono::seconds>(deadline);
+  auto nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(deadline -
+                                                                   sec)
+                  .count();
+  struct timespec ts {};
+  ts.tv_sec = static_cast<time_t>(sec.time_since_epoch().count());
+  ts.tv_nsec = static_cast<long>(nsec);
+
+  while (true) {
+    if (sem_timedwait(&shm_->notify_sem, &ts) == 0) return true;
     if (errno == EINTR) continue;
-    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-      // timed out; check running flag again
+    if (errno == ETIMEDOUT) return false;
+    return false;
+  }
+}
+
+int ShmExchanger::find_slot_locked(std::string_view key) const {
+  if (!shm_) return -1;
+  auto const cache_it = slot_index_cache_.find(std::string(key));
+  if (cache_it != slot_index_cache_.end()) {
+    uint32_t const idx = cache_it->second;
+    if (idx < shm_->slot_capacity) {
+      auto const& slot = shm_->slots[idx];
+      if (slot.state == kSlotUsed && slot.key_len == key.size() &&
+          std::memcmp(slot.key, key.data(), key.size()) == 0) {
+        return static_cast<int>(idx);
+      }
+    }
+    slot_index_cache_.erase(cache_it);
+  }
+  for (uint32_t i = 0; i < shm_->slot_capacity; ++i) {
+    auto const& slot = shm_->slots[i];
+    if (slot.state != kSlotUsed || slot.key_len != key.size()) continue;
+    if (std::memcmp(slot.key, key.data(), key.size()) == 0) {
+      slot_index_cache_[std::string(key)] = i;
+      return static_cast<int>(i);
+    }
+  }
+  return -1;
+}
+
+int ShmExchanger::find_free_slot_locked() const {
+  if (!shm_) return -1;
+  for (uint32_t offset = 0; offset < shm_->slot_capacity; ++offset) {
+    uint32_t const index = (shm_->first_free_hint + offset) % shm_->slot_capacity;
+    if (shm_->slots[index].state != kSlotUsed) return static_cast<int>(index);
+  }
+  return -1;
+}
+
+void ShmExchanger::rebuild_metadata_locked() {
+  if (!shm_) return;
+  slot_index_cache_.clear();
+  shm_->used_slots = 0;
+  shm_->first_free_hint = 0;
+  uint64_t max_write_seq = 0;
+  bool found_free_slot = false;
+  for (uint32_t i = 0; i < shm_->slot_capacity; ++i) {
+    auto const& slot = shm_->slots[i];
+    if (slot.state != kSlotUsed) {
+      if (!found_free_slot) {
+        shm_->first_free_hint = i;
+        found_free_slot = true;
+      }
       continue;
     }
-    return false;
+    shm_->used_slots += 1;
+    slot_index_cache_[std::string(slot.key, slot.key + slot.key_len)] = i;
+    if (slot.write_seq > max_write_seq) max_write_seq = slot.write_seq;
   }
+  if (!found_free_slot) {
+    shm_->first_free_hint = 0;
+  }
+  shm_->write_seq = std::max(shm_->write_seq, max_write_seq);
+}
+
+bool ShmExchanger::lock_store() const {
+  if (!shm_) return false;
+  int rc = pthread_mutex_lock(&shm_->mu);
+  if (rc == 0) return true;
+#ifdef EOWNERDEAD
+  if (rc == EOWNERDEAD) {
+    (void)pthread_mutex_consistent(&shm_->mu);
+    return true;
+  }
+#endif
   return false;
 }
 
-static std::vector<std::string> split_tokens(std::string const& s) {
-  std::istringstream iss(s);
-  std::vector<std::string> toks;
-  std::string t;
-  while (iss >> t) toks.push_back(t);
-  return toks;
+void ShmExchanger::unlock_store() const {
+  if (!shm_) return;
+  (void)pthread_mutex_unlock(&shm_->mu);
 }
 
-static void add_conn_thread(std::vector<std::thread>& vec, std::mutex& mtx,
-                            std::thread&& t) {
-  std::lock_guard<std::mutex> lk(mtx);
-  vec.emplace_back(std::move(t));
+void ShmExchanger::maybe_post_sem() const {
+  if (!shm_) return;
+  (void)sem_post(&shm_->notify_sem);
 }
 
-/* ----------------- Forward decl for friend ----------------- */
-static void handle_connection_inner(
-    int connfd,
-    std::unordered_map<std::string, std::map<std::string, std::string>>& store,
-    std::mutex& store_mutex, std::atomic<bool>& running,
-    size_t max_line_bytes) {
-  try {
-    std::string line;
-    while (running.load(std::memory_order_relaxed)) {
-      if (!recv_line_capped(connfd, line, max_line_bytes, running)) break;
-
-      auto toks = split_tokens(line);
-      if (toks.empty()) {
-        char const* r = "ERR\n";
-        send_all_robust(connfd, r, ::strlen(r));
-        continue;
-      }
-      std::string const& cmd = toks[0];
-
-      if (cmd == "HSET") {
-        if (toks.size() < 4 || ((toks.size() - 2) % 2 != 0)) {
-          char const* r = "ERR\n";
-          send_all_robust(connfd, r, ::strlen(r));
-          continue;
-        }
-        std::string const& key = toks[1];
-        {
-          std::lock_guard<std::mutex> lk(store_mutex);
-          auto& mp = store[key];
-          for (size_t i = 2; i + 1 < toks.size(); i += 2) {
-            mp[toks[i]] = toks[i + 1];
-          }
-        }
-        char const* r = "OK\n";
-        send_all_robust(connfd, r, ::strlen(r));
-      } else if (cmd == "HGETALL") {
-        if (toks.size() != 2) {
-          char const* r = "ERR\n";
-          send_all_robust(connfd, r, ::strlen(r));
-          continue;
-        }
-        std::string const& key = toks[1];
-        std::ostringstream oss;
-        {
-          std::lock_guard<std::mutex> lk(store_mutex);
-          auto it = store.find(key);
-          if (it == store.end()) {
-            char const* r = "EMPTY\n";
-            send_all_robust(connfd, r, ::strlen(r));
-            continue;
-          } else {
-            auto const& mp = it->second;
-            oss << "ARRAY " << mp.size();
-            for (auto const& p : mp) {
-              oss << " " << p.first << " " << p.second;
-            }
-            oss << "\n";
-          }
-        }
-        const std::string resp = oss.str();
-        send_all_robust(connfd, resp.c_str(), resp.size());
-      } else {
-        char const* r = "ERR\n";
-        send_all_robust(connfd, r, ::strlen(r));
-      }
-    }
-  } catch (std::exception const& e) {
-    std::cerr << "[EXCEPTION] handle_connection_inner: " << e.what() << "\n";
-  } catch (...) {
-    std::cerr << "[EXCEPTION] handle_connection_inner: unknown\n";
-  }
-
-  ::shutdown(connfd, SHUT_RDWR);
-  ::close(connfd);
-}
-
-void handle_connection(
-    int connfd,
-    std::unordered_map<std::string, std::map<std::string, std::string>>& store,
-    std::mutex& store_mutex, std::atomic<bool>& running, size_t max_line_bytes,
-    std::function<void(std::thread&&)> register_thread) {
-  std::thread t(handle_connection_inner, connfd, std::ref(store),
-                std::ref(store_mutex), std::ref(running), max_line_bytes);
-  register_thread(std::move(t));
-}
-
-/* ----------------- SockExchanger implementation ----------------- */
-
-SockExchanger::SockExchanger(bool is_server, std::string const& host, int port,
-                             int timeout_ms, size_t max_line_bytes)
-    : sock_fd_(-1),
-      host_(host),
+SocketExchanger::SocketExchanger(bool is_root, std::string host, int port,
+                                 int timeout_ms, size_t max_line_bytes,
+                                 ReceiveCallback on_receive)
+    : host_(std::move(host)),
       port_(port),
       timeout_ms_(timeout_ms),
-      is_server_(is_server),
-      listen_fd_(-1),
-      running_(false),
-      max_line_bytes_(max_line_bytes) {
-  if (is_server_) {
-    if (!start_server()) {
-      std::cerr << "SockExchanger: failed to start server on port " << port_
-                << "\n";
+      is_root_(is_root),
+      max_line_bytes_(max_line_bytes),
+      on_receive_(std::move(on_receive)) {}
+
+SocketExchanger::~SocketExchanger() {
+  running_.store(false, std::memory_order_release);
+  ready_cv_.notify_all();
+  pending_cv_.notify_all();
+  (void)notify_root_wakeup();
+  if (listen_fd_ >= 0) {
+    ::shutdown(listen_fd_, SHUT_RDWR);
+  }
+  {
+    std::lock_guard<std::mutex> lk(upstream_mu_);
+    if (upstream_fd_ >= 0) {
+      ::shutdown(upstream_fd_, SHUT_RDWR);
     }
-  } else {
-    int count = 0;
-    while (!running_.load(std::memory_order_relaxed) && count <= 10) {
-      if (connect_client()) {
-        std::cout << "SockExchanger: connect to " << host_ << ":" << port_
-                  << " success.\n";
-        break;
-      }
-      std::cout << "SockExchanger: connect to " << host_ << ":" << port_
-                << " failed (errno=" << errno << "). Retrying...\n";
-      std::this_thread::sleep_for(std::chrono::seconds(1));
-      ++count;
-    }
-    if (!running_.load(std::memory_order_relaxed)) {
-      std::cerr << "SockExchanger: failed to connect to " << host_ << ":"
-                << port_ << " after " << count << " attempts.\n";
+  }
+  if (upstream_thread_.joinable()) upstream_thread_.join();
+  if (server_thread_.joinable()) server_thread_.join();
+  stop_root_server();
+
+  {
+    std::lock_guard<std::mutex> lk(upstream_mu_);
+    close_upstream_locked();
+  }
+
+  {
+    std::lock_guard<std::mutex> lk(peers_mu_);
+    for (auto const& [fd, _] : peers_) {
+      (void)_;
+      ::shutdown(fd, SHUT_RDWR);
     }
   }
 }
 
-SockExchanger::~SockExchanger() {
-  // orderly shutdown
+bool SocketExchanger::valid() const {
+  return started_.load(std::memory_order_acquire) &&
+         running_.load(std::memory_order_acquire);
+}
+
+bool SocketExchanger::start() {
+  if (started_.exchange(true, std::memory_order_acq_rel)) return valid();
+  running_.store(true, std::memory_order_release);
+  if (is_root_) {
+    if (!start_root_server()) {
+      running_.store(false, std::memory_order_release);
+      ready_.store(false, std::memory_order_release);
+      return false;
+    }
+    ready_.store(true, std::memory_order_release);
+    connection_epoch_.fetch_add(1, std::memory_order_acq_rel);
+    ready_cv_.notify_all();
+    return true;
+  }
+  upstream_thread_ = std::thread(&SocketExchanger::upstream_loop, this);
+  if (wait_until_ready(timeout_ms_)) return true;
+
+  running_.store(false, std::memory_order_release);
+  ready_cv_.notify_all();
+  pending_cv_.notify_all();
+  {
+    std::lock_guard<std::mutex> lk(upstream_mu_);
+    if (upstream_fd_ >= 0) {
+      ::shutdown(upstream_fd_, SHUT_RDWR);
+    }
+  }
+  if (upstream_thread_.joinable()) upstream_thread_.join();
+  {
+    std::lock_guard<std::mutex> lk(upstream_mu_);
+    close_upstream_locked();
+  }
+  started_.store(false, std::memory_order_release);
+  return false;
+}
+
+uint64_t SocketExchanger::connection_epoch() const {
+  return connection_epoch_.load(std::memory_order_acquire);
+}
+
+bool SocketExchanger::put_raw(std::string_view key, std::string_view value) {
+  if (!running_.load(std::memory_order_acquire)) return false;
+  if (is_root_ && !ready_.load(std::memory_order_acquire)) return false;
+
+  std::string key_copy(key);
+  std::string value_copy(value);
+  {
+    std::lock_guard<std::mutex> lk(entries_mu_);
+    entries_[key_copy] = value_copy;
+  }
+  if (is_root_) {
+    root_broadcast_pub(key_copy, value_copy, -1);
+    return true;
+  }
+  {
+    std::lock_guard<std::mutex> lk(pending_mu_);
+    pending_pubs_.emplace_back(std::move(key_copy), std::move(value_copy));
+  }
+  pending_cv_.notify_all();
+  return running_.load(std::memory_order_acquire);
+}
+
+bool SocketExchanger::get_raw(std::string_view key, std::string& value) {
+  std::lock_guard<std::mutex> lk(entries_mu_);
+  auto it = entries_.find(std::string(key));
+  if (it == entries_.end()) return false;
+  value = it->second;
+  return true;
+}
+
+bool SocketExchanger::start_root_server() {
+  listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+  if (listen_fd_ < 0) return false;
+
+  int opt = 1;
+  (void)::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  (void)::fcntl(listen_fd_, F_SETFL, O_NONBLOCK);
+
+  sockaddr_in addr {};
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = INADDR_ANY;
+  addr.sin_port = htons(static_cast<uint16_t>(port_));
+  if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) !=
+      0) {
+    ::close(listen_fd_);
+    listen_fd_ = -1;
+    return false;
+  }
+  if (::listen(listen_fd_, 64) != 0) {
+    ::close(listen_fd_);
+    listen_fd_ = -1;
+    return false;
+  }
+  int wake_pipe[2] = {-1, -1};
+  if (::pipe(wake_pipe) != 0) {
+    ::close(listen_fd_);
+    listen_fd_ = -1;
+    return false;
+  }
+  int const wake_read_flags = ::fcntl(wake_pipe[0], F_GETFL, 0);
+  int const wake_write_flags = ::fcntl(wake_pipe[1], F_GETFL, 0);
+  if (wake_read_flags < 0 || wake_write_flags < 0 ||
+      ::fcntl(wake_pipe[0], F_SETFL, wake_read_flags | O_NONBLOCK) != 0 ||
+      ::fcntl(wake_pipe[1], F_SETFL, wake_write_flags | O_NONBLOCK) != 0) {
+    ::close(wake_pipe[0]);
+    ::close(wake_pipe[1]);
+    ::close(listen_fd_);
+    listen_fd_ = -1;
+    return false;
+  }
+  root_wakeup_read_fd_ = wake_pipe[0];
+  root_wakeup_write_fd_ = wake_pipe[1];
   try {
-    running_.store(false, std::memory_order_relaxed);
-
-    // Break accept()
-    if (listen_fd_ != -1) {
-      ::shutdown(listen_fd_, SHUT_RDWR);
-    }
-
-    // Give the accept loop a brief moment to observe running_=false
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-    // Close listening socket
-    if (listen_fd_ != -1) {
-      ::close(listen_fd_);
-      listen_fd_ = -1;
-    }
-
-    // Close client socket if any
-    if (sock_fd_ != -1) {
-      ::shutdown(sock_fd_, SHUT_RDWR);
-      ::close(sock_fd_);
-      sock_fd_ = -1;
-    }
-
-    // Join accept thread
-    if (server_thread_.joinable()) server_thread_.join();
-
-    // Join all connection handler threads
-    {
-      std::lock_guard<std::mutex> lk(conn_threads_mutex_);
-      for (auto& t : conn_threads_) {
-        if (t.joinable()) t.join();
-      }
-      conn_threads_.clear();
-    }
+    server_thread_ = std::thread(&SocketExchanger::root_accept_loop, this);
   } catch (...) {
-    // do not throw in destructor
-    std::cerr << "[WARN] SockExchanger::~SockExchanger caught exception during "
-                 "shutdown\n";
+    stop_root_server();
+    return false;
+  }
+  return true;
+}
+
+void SocketExchanger::stop_root_server() {
+  if (root_wakeup_write_fd_ >= 0) {
+    ::close(root_wakeup_write_fd_);
+    root_wakeup_write_fd_ = -1;
+  }
+  if (root_wakeup_read_fd_ >= 0) {
+    ::close(root_wakeup_read_fd_);
+    root_wakeup_read_fd_ = -1;
+  }
+  if (listen_fd_ >= 0) {
+    ::shutdown(listen_fd_, SHUT_RDWR);
+    ::close(listen_fd_);
+    listen_fd_ = -1;
   }
 }
 
-bool SockExchanger::valid() const {
-  if (!running_.load(std::memory_order_relaxed)) return false;
-  if (is_server_) return listen_fd_ != -1;
-  return sock_fd_ != -1;
-}
+void SocketExchanger::root_accept_loop() {
+  int epoll_fd = ::epoll_create1(EPOLL_CLOEXEC);
+  if (epoll_fd < 0) return;
 
-bool SockExchanger::send_cmd_and_recv(std::string const& cmd,
-                                      std::string& resp) {
-  if (sock_fd_ == -1) return false;
-  std::string out = cmd;
-  if (out.empty() || out.back() != '\n') out.push_back('\n');
-  if (send_all_robust(sock_fd_, out.c_str(), out.size()) <= 0) return false;
-  return recv_line_capped(sock_fd_, resp, max_line_bytes_, running_);
-}
+  auto set_peer_events = [&](int fd, bool want_write) -> bool {
+    epoll_event ev {};
+    ev.events = EPOLLIN | EPOLLRDHUP | (want_write ? EPOLLOUT : 0);
+    ev.data.fd = fd;
+    return ::epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &ev) == 0;
+  };
 
-bool SockExchanger::publish(std::string const& key, Exchangeable const& obj) {
-  auto kv = obj.to_map();
+  auto add_epoll_in = [&](int fd) -> bool {
+    epoll_event ev {};
+    ev.events = EPOLLIN | EPOLLRDHUP;
+    ev.data.fd = fd;
+    return ::epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev) == 0;
+  };
 
-  // Build command: HSET key f1 v1 f2 v2 ... (no spaces in fields/values)
-  std::ostringstream oss;
-  oss << "HSET " << key;
-  for (auto const& p : kv) {
-    oss << " " << p.first << " " << p.second;
-  }
-  std::string cmd = oss.str();
+  auto sync_peer_interest = [&](std::shared_ptr<PeerConn> const& peer) -> bool {
+    bool want_write = false;
+    {
+      std::lock_guard<std::mutex> send_lk(peer->send_mu);
+      want_write = !peer->write_buffer.empty();
+    }
+    return set_peer_events(peer->fd, want_write);
+  };
 
-  if (is_server_) {
-    std::lock_guard<std::mutex> lk(store_mutex_);
-    auto& mp = store_[key];
-    for (auto const& p : kv) mp[p.first] = p.second;
-    return true;
-  } else {
-    std::string resp;
-    if (!send_cmd_and_recv(cmd, resp)) return false;
-    return resp.rfind("OK", 0) == 0;
-  }
-}
-
-bool SockExchanger::fetch(std::string const& key, Exchangeable& obj) {
-  if (is_server_) {
-    std::lock_guard<std::mutex> lk(store_mutex_);
-    auto it = store_.find(key);
-    if (it == store_.end()) return false;
-    obj.from_map(it->second);
-    return true;
-  } else {
-    std::string cmd = "HGETALL " + key;
-    std::string resp;
-    if (!send_cmd_and_recv(cmd, resp)) return false;
-    if (resp.rfind("EMPTY", 0) == 0) return false;
-    if (resp.rfind("ARRAY ", 0) == 0) {
-      // format: ARRAY <n> f1 v1 f2 v2 ...
-      std::istringstream iss(resp);
-      std::string tag;
-      size_t n;
-      iss >> tag >> n;
-      std::map<std::string, std::string> kv;
-      for (size_t i = 0; i < n; ++i) {
-        std::string f, v;
-        if (!(iss >> f >> v)) return false;
-        kv[f] = v;
+  auto process_pending_interests = [&]() {
+    std::vector<int> pending_interest_fds;
+    drain_root_peer_write_interest(pending_interest_fds);
+    for (int pending_fd : pending_interest_fds) {
+      std::shared_ptr<PeerConn> pending_peer;
+      {
+        std::lock_guard<std::mutex> lk(peers_mu_);
+        auto it = peers_.find(pending_fd);
+        if (it != peers_.end()) pending_peer = it->second;
       }
-      obj.from_map(kv);
-      return true;
+      if (!pending_peer) continue;
+      if (!sync_peer_interest(pending_peer)) {
+        close_root_peer(pending_fd);
+      }
     }
-    return false;
+  };
+
+  if (listen_fd_ < 0 || root_wakeup_read_fd_ < 0 || !add_epoll_in(listen_fd_) ||
+      !add_epoll_in(root_wakeup_read_fd_)) {
+    ::close(epoll_fd);
+    return;
+  }
+
+  constexpr int kMaxEvents = 64;
+  epoll_event events[kMaxEvents];
+  while (running_.load(std::memory_order_acquire)) {
+    process_pending_interests();
+
+    int const ready_count =
+        ::epoll_wait(epoll_fd, events, kMaxEvents, kRootAcceptPollMs);
+    if (ready_count < 0) {
+      if (errno == EINTR) continue;
+      break;
+    }
+    for (int i = 0; i < ready_count; ++i) {
+      int const fd = events[i].data.fd;
+      uint32_t const ev = events[i].events;
+      if (fd == listen_fd_) {
+        while (running_.load(std::memory_order_acquire)) {
+          sockaddr_in cli {};
+          socklen_t len = sizeof(cli);
+          int conn_fd =
+              ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&cli), &len);
+          if (conn_fd < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
+              break;
+            }
+            break;
+          }
+          int const current_flags = ::fcntl(conn_fd, F_GETFL, 0);
+          if (current_flags < 0 ||
+              ::fcntl(conn_fd, F_SETFL, current_flags | O_NONBLOCK) != 0) {
+            ::shutdown(conn_fd, SHUT_RDWR);
+            ::close(conn_fd);
+            continue;
+          }
+          auto peer = std::make_shared<PeerConn>();
+          peer->fd = conn_fd;
+          {
+            std::lock_guard<std::mutex> lk(peers_mu_);
+            peers_[conn_fd] = peer;
+          }
+          if (!add_epoll_in(conn_fd)) {
+            close_root_peer(conn_fd);
+            continue;
+          }
+        }
+        continue;
+      }
+      if (fd == root_wakeup_read_fd_) {
+        char buf[128];
+        while (::read(root_wakeup_read_fd_, buf, sizeof(buf)) > 0) {
+        }
+        process_pending_interests();
+        continue;
+      }
+
+      if (ev & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
+        close_root_peer(fd);
+        continue;
+      }
+      if (!(ev & (EPOLLIN | EPOLLOUT))) continue;
+
+      std::shared_ptr<PeerConn> peer;
+      {
+        std::lock_guard<std::mutex> lk(peers_mu_);
+        auto it = peers_.find(fd);
+        if (it != peers_.end()) peer = it->second;
+      }
+      if (!peer) continue;
+
+      bool close_peer_now = false;
+      if (ev & EPOLLOUT) {
+        std::lock_guard<std::mutex> send_lk(peer->send_mu);
+        if (!peer->write_buffer.empty() &&
+            !flush_write_buffer_locked(fd, peer->write_buffer) &&
+            errno != EAGAIN && errno != EWOULDBLOCK) {
+          close_peer_now = true;
+        }
+      }
+      if (close_peer_now) {
+        close_root_peer(fd);
+        continue;
+      }
+
+      for (;;) {
+        std::string frame;
+        bool const got_frame =
+            recv_frame_buffered(fd, peer->read_buffer, frame, 0);
+        if (!got_frame) {
+          if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+          close_peer_now = true;
+          break;
+        }
+        SocketFrame decoded;
+        if (!decode_socket_frame(frame, decoded)) continue;
+        if (decoded.type == SocketFrameType::SyncRequest) {
+          std::vector<std::pair<std::string, std::string>> snapshot;
+          snapshot_entries(snapshot);
+          bool snapshot_ok = true;
+          bool need_write_interest = false;
+          {
+            std::lock_guard<std::mutex> send_lk(peer->send_mu);
+            for (auto const& entry : snapshot) {
+              std::string publish_frame;
+              if (!encode_socket_frame(SocketFrame{SocketFrameType::Publish,
+                                                   entry.first, entry.second},
+                                       publish_frame) ||
+                  !enqueue_frame_locked(peer->write_buffer, publish_frame)) {
+                snapshot_ok = false;
+                break;
+              }
+            }
+            if (snapshot_ok) {
+              std::string sync_done_frame;
+              snapshot_ok = encode_socket_frame(
+                                SocketFrame{SocketFrameType::SyncDone, {}, {}},
+                                sync_done_frame) &&
+                            enqueue_frame_locked(peer->write_buffer,
+                                                 sync_done_frame);
+            }
+            if (snapshot_ok && !peer->write_buffer.empty() &&
+                !flush_write_buffer_locked(fd, peer->write_buffer) &&
+                errno != EAGAIN && errno != EWOULDBLOCK) {
+              snapshot_ok = false;
+            }
+            need_write_interest = !peer->write_buffer.empty();
+          }
+          if (snapshot_ok && need_write_interest) {
+            queue_root_peer_write_interest(peer->fd);
+          }
+          if (!snapshot_ok) {
+            close_peer_now = true;
+            break;
+          }
+          if (!sync_peer_interest(peer)) {
+            close_peer_now = true;
+            break;
+          }
+          continue;
+        }
+        if (decoded.type == SocketFrameType::Publish) {
+          handle_publish(decoded.key, decoded.value, /*broadcast_from_root=*/true,
+                         fd);
+        }
+      }
+      if (close_peer_now) {
+        close_root_peer(fd);
+      } else if (!sync_peer_interest(peer)) {
+        close_root_peer(fd);
+      }
+    }
+  }
+
+  std::vector<int> stale_fds;
+  {
+    std::lock_guard<std::mutex> lk(peers_mu_);
+    stale_fds.reserve(peers_.size());
+    for (auto const& [fd, _] : peers_) stale_fds.push_back(fd);
+  }
+  for (int fd : stale_fds) {
+    close_root_peer(fd);
+  }
+  ::close(epoll_fd);
+}
+
+void SocketExchanger::root_broadcast_pub(std::string const& key,
+                                         std::string const& value,
+                                         int exclude_fd) {
+  std::vector<std::shared_ptr<PeerConn>> peers;
+  std::vector<int> stale_fds;
+  std::vector<int> activate_write_fds;
+  {
+    std::lock_guard<std::mutex> lk(peers_mu_);
+    peers.reserve(peers_.size());
+    for (auto const& [fd, peer] : peers_) {
+      if (fd == exclude_fd) continue;
+      peers.push_back(peer);
+    }
+  }
+
+  std::string frame;
+  if (!encode_socket_frame(
+          SocketFrame{SocketFrameType::Publish, key, value}, frame)) {
+    return;
+  }
+  for (auto const& peer : peers) {
+    std::lock_guard<std::mutex> lk(peer->send_mu);
+    bool const was_empty = peer->write_buffer.empty();
+    if (!enqueue_frame_locked(peer->write_buffer, frame)) {
+      stale_fds.push_back(peer->fd);
+      continue;
+    }
+    if (!peer->write_buffer.empty() &&
+        !flush_write_buffer_locked(peer->fd, peer->write_buffer) &&
+        errno != EAGAIN && errno != EWOULDBLOCK) {
+      stale_fds.push_back(peer->fd);
+      continue;
+    }
+    if (was_empty && !peer->write_buffer.empty()) {
+      activate_write_fds.push_back(peer->fd);
+    }
+  }
+  for (int fd : activate_write_fds) {
+    queue_root_peer_write_interest(fd);
+  }
+
+  if (!stale_fds.empty()) {
+    for (int fd : stale_fds) {
+      close_root_peer(fd);
+    }
+  }
+  (void)notify_root_wakeup();
+}
+
+void SocketExchanger::close_root_peer(int fd) {
+  std::shared_ptr<PeerConn> peer;
+  {
+    std::lock_guard<std::mutex> lk(peers_mu_);
+    auto it = peers_.find(fd);
+    if (it == peers_.end()) return;
+    peer = it->second;
+    peers_.erase(it);
+  }
+  if (peer) {
+    std::lock_guard<std::mutex> send_lk(peer->send_mu);
+    peer->write_buffer.clear();
+    peer->read_buffer.clear();
+  }
+  {
+    std::lock_guard<std::mutex> lk(root_pending_mu_);
+    root_pending_write_interest_set_.erase(fd);
+  }
+  ::shutdown(fd, SHUT_RDWR);
+  ::close(fd);
+}
+
+void SocketExchanger::queue_root_peer_write_interest(int fd) {
+  std::lock_guard<std::mutex> lk(root_pending_mu_);
+  auto const [_, inserted] = root_pending_write_interest_set_.insert(fd);
+  if (!inserted) return;
+  root_pending_write_interest_.push_back(fd);
+}
+
+void SocketExchanger::drain_root_peer_write_interest(std::vector<int>& fds) {
+  fds.clear();
+  std::lock_guard<std::mutex> lk(root_pending_mu_);
+  fds.reserve(root_pending_write_interest_.size());
+  while (!root_pending_write_interest_.empty()) {
+    int const fd = root_pending_write_interest_.front();
+    root_pending_write_interest_.pop_front();
+    root_pending_write_interest_set_.erase(fd);
+    fds.push_back(fd);
   }
 }
 
-bool SockExchanger::wait_and_fetch(std::string const& key, Exchangeable& obj,
-                                   int max_retries, int delay_ms) {
-  if (max_retries > 0) {
-    for (int i = 0; i < max_retries; ++i) {
-      if (!running_.load(std::memory_order_relaxed)) return false;
-      if (fetch(key, obj)) return true;
-      std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
-    }
-  } else {  // -1 => forever but stop if running_ becomes false
-    while (running_.load(std::memory_order_relaxed)) {
-      if (fetch(key, obj)) return true;
-      std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
-    }
+bool SocketExchanger::notify_root_wakeup() const {
+  if (root_wakeup_write_fd_ < 0) return false;
+  char one = 1;
+  ssize_t n = ::write(root_wakeup_write_fd_, &one, sizeof(one));
+  return n == static_cast<ssize_t>(sizeof(one)) || errno == EAGAIN ||
+         errno == EWOULDBLOCK;
+}
+
+bool SocketExchanger::enqueue_frame_locked(std::string& write_buffer,
+                                           std::string const& frame) const {
+  if (frame.size() > max_line_bytes_) {
+    errno = EMSGSIZE;
     return false;
+  }
+  if (write_buffer.size() + frame.size() > max_line_bytes_ * 4) {
+    errno = ENOBUFS;
+    return false;
+  }
+  write_buffer.append(frame);
+  return true;
+}
+
+bool SocketExchanger::flush_write_buffer_locked(int fd,
+                                                std::string& write_buffer) const {
+  int send_flags = 0;
+#ifdef MSG_NOSIGNAL
+  send_flags |= MSG_NOSIGNAL;
+#endif
+  while (!write_buffer.empty()) {
+    ssize_t n = ::send(fd, write_buffer.data(), write_buffer.size(), send_flags);
+    if (n > 0) {
+      write_buffer.erase(0, static_cast<size_t>(n));
+      continue;
+    }
+    if (n == 0) {
+      errno = ECONNRESET;
+      return false;
+    }
+    if (errno == EINTR) continue;
+    if (errno == EAGAIN || errno == EWOULDBLOCK) return false;
+    return false;
+  }
+  return true;
+}
+
+bool SocketExchanger::recv_frame_buffered(int fd, std::string& buffer,
+                                          std::string& frame,
+                                          int timeout_ms) const {
+  auto extract_frame = [&]() -> bool {
+    if (buffer.size() < sizeof(uint32_t)) return false;
+    size_t pos = 0;
+    uint32_t payload_len = 0;
+    if (!read_net_u32(buffer, pos, payload_len)) return false;
+    if (payload_len > max_line_bytes_) {
+      errno = EMSGSIZE;
+      return false;
+    }
+    if (buffer.size() < sizeof(uint32_t) + payload_len) return false;
+    frame.assign(buffer.data() + sizeof(uint32_t), payload_len);
+    buffer.erase(0, sizeof(uint32_t) + payload_len);
+    return true;
+  };
+
+  if (extract_frame()) return true;
+
+  while (running_.load(std::memory_order_acquire)) {
+    if (timeout_ms > 0) {
+      pollfd pfd {};
+      pfd.fd = fd;
+      pfd.events = POLLIN;
+      int rc = ::poll(&pfd, 1, timeout_ms);
+      if (rc == 0) {
+        errno = EAGAIN;
+        return false;
+      }
+      if (rc < 0) {
+        if (errno == EINTR) continue;
+        return false;
+      }
+      if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+        errno = ECONNRESET;
+        return false;
+      }
+      if (!(pfd.revents & POLLIN)) {
+        errno = EAGAIN;
+        return false;
+      }
+    }
+
+    char chunk[4096];
+    ssize_t n = ::recv(fd, chunk, sizeof(chunk), 0);
+    if (n == 0) {
+      errno = ECONNRESET;
+      return false;
+    }
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      return false;
+    }
+    buffer.append(chunk, chunk + n);
+    if (buffer.size() > max_line_bytes_ * 2) {
+      errno = EMSGSIZE;
+      return false;
+    }
+    if (extract_frame()) return true;
+    if (timeout_ms == 0) {
+      errno = EAGAIN;
+      return false;
+    }
   }
   return false;
 }
 
-bool SockExchanger::connect_client() {
+bool SocketExchanger::connect_upstream_locked() {
+  if (upstream_fd_ >= 0) return true;
+
   int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-  if (fd < 0) {
-    std::cerr << "SockExchanger: socket() failed: " << std::strerror(errno)
-              << "\n";
+  if (fd < 0) return false;
+
+  sockaddr_in addr {};
+  addr.sin_family = AF_INET;
+  addr.sin_port = htons(static_cast<uint16_t>(port_));
+  if (::inet_pton(AF_INET, host_.c_str(), &addr.sin_addr) <= 0) {
+    ::close(fd);
     return false;
   }
-
-  // set timeouts
-  struct timeval tv;
-  tv.tv_sec = timeout_ms_ / 1000;
-  tv.tv_usec = (timeout_ms_ % 1000) * 1000;
-  ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (char const*)&tv, sizeof tv);
-  ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (char const*)&tv, sizeof tv);
-
-  struct sockaddr_in serv {};
-  serv.sin_family = AF_INET;
-  serv.sin_port = htons(port_);
-  if (::inet_pton(AF_INET, host_.c_str(), &serv.sin_addr) <= 0) {
+  if (!connect_with_timeout(fd, addr, timeout_ms_)) {
     ::close(fd);
     return false;
   }
 
-  if (::connect(fd, (struct sockaddr*)&serv, sizeof(serv)) < 0) {
-    ::close(fd);
+  upstream_fd_ = fd;
+  upstream_read_buffer_.clear();
+  upstream_write_buffer_.clear();
+  upstream_sync_complete_.store(false, std::memory_order_release);
+  std::string sync_request_frame;
+  if (!encode_socket_frame(SocketFrame{SocketFrameType::SyncRequest, {}, {}},
+                           sync_request_frame) ||
+      !enqueue_frame_locked(upstream_write_buffer_, sync_request_frame)) {
+    close_upstream_locked();
     return false;
   }
-
-  sock_fd_ = fd;
-  running_.store(true, std::memory_order_relaxed);
+  if (!flush_write_buffer_locked(upstream_fd_, upstream_write_buffer_) &&
+      errno != EAGAIN && errno != EWOULDBLOCK) {
+    close_upstream_locked();
+    return false;
+  }
   return true;
 }
 
-bool SockExchanger::start_server() {
-  listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-  if (listen_fd_ < 0) {
-    std::cerr << "SockExchanger: create listen socket failed: "
-              << std::strerror(errno) << "\n";
-    return false;
+void SocketExchanger::close_upstream_locked() {
+  if (upstream_fd_ >= 0) {
+    ::shutdown(upstream_fd_, SHUT_RDWR);
+    ::close(upstream_fd_);
+    upstream_fd_ = -1;
   }
+  upstream_read_buffer_.clear();
+  upstream_write_buffer_.clear();
+  upstream_sync_complete_.store(false, std::memory_order_release);
+  ready_.store(false, std::memory_order_release);
+  ready_cv_.notify_all();
+}
 
-  int opt = 1;
-  ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+void SocketExchanger::upstream_loop() {
+  while (running_.load(std::memory_order_acquire)) {
+    {
+      std::lock_guard<std::mutex> lk(upstream_mu_);
+      if (upstream_fd_ < 0 && !connect_upstream_locked()) {
+        std::unique_lock<std::mutex> pending_lk(pending_mu_);
+        pending_cv_.wait_for(pending_lk, std::chrono::milliseconds(kSocketPollMs));
+        continue;
+      }
+    }
 
-  struct sockaddr_in addr {};
-  addr.sin_family = AF_INET;
-  addr.sin_addr.s_addr = INADDR_ANY;
-  addr.sin_port = htons(port_);
+    for (;;) {
+      bool queued_any = false;
+      {
+        std::lock_guard<std::mutex> lk(pending_mu_);
+        while (!pending_pubs_.empty()) {
+          std::string frame;
+          auto const& pending = pending_pubs_.front();
+          if (!encode_socket_frame(
+                  SocketFrame{SocketFrameType::Publish, pending.first,
+                              pending.second},
+                  frame)) {
+            pending_pubs_.pop_front();
+            continue;
+          }
+          std::lock_guard<std::mutex> upstream_lk(upstream_mu_);
+          if (!enqueue_frame_locked(upstream_write_buffer_, frame)) {
+            if (errno == EMSGSIZE) {
+              // Oversized payload can never be sent; drop it to avoid
+              // head-of-line blocking in pending_pubs_.
+              pending_pubs_.pop_front();
+              continue;
+            }
+            break;
+          }
+          pending_pubs_.pop_front();
+          queued_any = true;
+        }
+      }
+      if (!queued_any) break;
+    }
 
-  if (::bind(listen_fd_, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-    std::cerr << "SockExchanger: bind failed: " << std::strerror(errno) << "\n";
-    ::close(listen_fd_);
-    listen_fd_ = -1;
-    return false;
-  }
-
-  if (::listen(listen_fd_, 16) < 0) {
-    std::cerr << "SockExchanger: listen failed: " << std::strerror(errno)
-              << "\n";
-    ::close(listen_fd_);
-    listen_fd_ = -1;
-    return false;
-  }
-
-  running_.store(true, std::memory_order_relaxed);
-
-  // background accept loop
-  server_thread_ = std::thread([this]() {
-    try {
-      // default per-connection timeout so recv() can exit when shutting down
-      struct timeval conn_tv;
-      conn_tv.tv_sec = 1;  // 1s
-      conn_tv.tv_usec = 0;
-
-      while (running_.load(std::memory_order_relaxed)) {
-        struct sockaddr_in cli {};
-        socklen_t clilen = sizeof(cli);
-        int conn = ::accept(listen_fd_, (struct sockaddr*)&cli, &clilen);
-        if (conn < 0) {
-          if (!running_.load(std::memory_order_relaxed)) break;
-          if (errno == EINTR) continue;
-          // transient error; small backoff
-          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    std::string frame;
+    bool progressed = false;
+    {
+      std::lock_guard<std::mutex> lk(upstream_mu_);
+      if (upstream_fd_ >= 0) {
+        bool const got_buffered_frame =
+            recv_frame_buffered(upstream_fd_, upstream_read_buffer_, frame, 0);
+        if (got_buffered_frame) {
+          progressed = true;
+        } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+          close_upstream_locked();
           continue;
         }
 
-        // Set timeouts on accepted socket so that recv() can wake up
-        ::setsockopt(conn, SOL_SOCKET, SO_RCVTIMEO, (const char*)&conn_tv,
-                     sizeof conn_tv);
-        ::setsockopt(conn, SOL_SOCKET, SO_SNDTIMEO, (const char*)&conn_tv,
-                     sizeof conn_tv);
-
-        auto registrar = [this](std::thread&& t) {
-          add_conn_thread(this->conn_threads_, this->conn_threads_mutex_,
-                          std::move(t));
-        };
-
-        handle_connection(conn, this->store_, this->store_mutex_,
-                          this->running_, this->max_line_bytes_, registrar);
+        pollfd pfd {};
+        pfd.fd = upstream_fd_;
+        pfd.events = POLLIN;
+        if (!upstream_write_buffer_.empty()) pfd.events |= POLLOUT;
+        if (!progressed) {
+          int rc = ::poll(&pfd, 1, kSocketPollMs);
+          if (rc < 0) {
+            if (errno == EINTR) continue;
+            close_upstream_locked();
+            continue;
+          }
+          if (rc == 0) continue;
+          if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+            close_upstream_locked();
+            continue;
+          }
+          if (pfd.revents & POLLOUT) {
+            if (!flush_write_buffer_locked(upstream_fd_, upstream_write_buffer_) &&
+                errno != EAGAIN && errno != EWOULDBLOCK) {
+              close_upstream_locked();
+              continue;
+            }
+            progressed = true;
+          }
+          if (pfd.revents & POLLIN) {
+            bool const got_frame = recv_frame_buffered(
+                upstream_fd_, upstream_read_buffer_, frame, 0);
+            if (!got_frame && errno != EAGAIN && errno != EWOULDBLOCK) {
+              close_upstream_locked();
+              continue;
+            }
+            progressed = got_frame || progressed;
+          }
+        }
       }
-    } catch (const std::exception& e) {
-      std::cerr << "[EXCEPTION] accept loop: " << e.what() << "\n";
-    } catch (...) {
-      std::cerr << "[EXCEPTION] accept loop: unknown\n";
     }
-  });
 
+    if (!progressed || frame.empty()) {
+      continue;
+    }
+
+    SocketFrame decoded;
+    if (!decode_socket_frame(frame, decoded)) continue;
+    if (decoded.type == SocketFrameType::SyncDone) {
+      if (!upstream_sync_complete_.load(std::memory_order_acquire)) {
+        upstream_sync_complete_.store(true, std::memory_order_release);
+        ready_.store(true, std::memory_order_release);
+        connection_epoch_.fetch_add(1, std::memory_order_acq_rel);
+        ready_cv_.notify_all();
+      }
+      continue;
+    }
+    if (decoded.type == SocketFrameType::Publish) {
+      handle_publish(decoded.key, decoded.value, /*broadcast_from_root=*/false,
+                     -1);
+    }
+  }
+}
+
+void SocketExchanger::handle_publish(std::string const& key,
+                                     std::string const& value,
+                                     bool broadcast_from_root,
+                                     int exclude_fd) {
+  {
+    std::lock_guard<std::mutex> lk(entries_mu_);
+    entries_[key] = value;
+  }
+  if (on_receive_) on_receive_(key, value);
+  if (is_root_ && broadcast_from_root) {
+    root_broadcast_pub(key, value, exclude_fd);
+  }
+}
+
+bool SocketExchanger::wait_until_ready(int timeout_ms) {
+  if (ready_.load(std::memory_order_acquire)) return true;
+  std::unique_lock<std::mutex> lk(ready_mu_);
+  if (timeout_ms <= 0) {
+    ready_cv_.wait(lk, [this] {
+      return !running_.load(std::memory_order_acquire) ||
+             ready_.load(std::memory_order_acquire);
+    });
+  } else {
+    ready_cv_.wait_for(lk, std::chrono::milliseconds(timeout_ms), [this] {
+      return !running_.load(std::memory_order_acquire) ||
+             ready_.load(std::memory_order_acquire);
+    });
+  }
+  return ready_.load(std::memory_order_acquire);
+}
+
+void SocketExchanger::snapshot_entries(
+    std::vector<std::pair<std::string, std::string>>& out) {
+  out.clear();
+  std::lock_guard<std::mutex> lk(entries_mu_);
+  out.reserve(entries_.size());
+  for (auto const& [key, value] : entries_) {
+    out.emplace_back(key, value);
+  }
+}
+
+HierarchicalExchanger::HierarchicalExchanger(bool is_server,
+                                             std::string const& host, int port,
+                                             int timeout_ms,
+                                             size_t max_line_bytes,
+                                             int local_id)
+    : host_(host),
+      port_(port),
+      is_server_(is_server),
+      local_id_(local_id),
+      node_leader_(false) {
+  if (local_id_ < 0) {
+    local_id_ = env_int_or_default("UHM_LOCAL_ID",
+                                   env_int_or_default("LOCAL_RANK", -1));
+  }
+  node_leader_ = is_node_leader();
+
+  std::string const ns = kv_namespace();
+  shm_ = std::make_unique<ShmExchanger>(ns);
+  if (!shm_ || !shm_->valid()) return;
+  // On root startup, clear stale entries in-place in the same shared segment.
+  // This avoids split-brain behavior that can happen with shm_unlink while
+  // other local processes still hold mappings to the previous object.
+  if (is_server_ && env_bool_or_default("UHM_OOB_CLEAN_START", true)) {
+    (void)shm_->reset_for_new_run();
+  }
+
+  running_.store(true, std::memory_order_release);
+  if (node_leader_) {
+    socket_ = std::make_unique<SocketExchanger>(
+        is_server_, host_, port_, timeout_ms, max_line_bytes,
+        [this](std::string const& key, std::string const& value) {
+          apply_remote_entry(key, value);
+        });
+    if (!socket_->start()) {
+      running_.store(false, std::memory_order_release);
+      return;
+    }
+    last_replayed_epoch_ = 0;
+    relay_thread_ = std::thread(&HierarchicalExchanger::relay_loop, this);
+  }
+}
+
+HierarchicalExchanger::~HierarchicalExchanger() {
+  running_.store(false, std::memory_order_release);
+  if (relay_thread_.joinable()) relay_thread_.join();
+}
+
+bool HierarchicalExchanger::valid() const {
+  if (!running_.load(std::memory_order_acquire) || !shm_ || !shm_->valid()) {
+    return false;
+  }
+  if (node_leader_ && (!socket_ || !socket_->valid())) return false;
   return true;
+}
+
+bool HierarchicalExchanger::wait_raw(std::string_view key, std::string& value,
+                                     WaitOptions const& options) {
+  if (!shm_) return false;
+  return shm_->wait_raw(key, value, options);
+}
+
+bool HierarchicalExchanger::put_raw(std::string_view key,
+                                    std::string_view value) {
+  if (!shm_) return false;
+  if (!shm_->put_raw(key, value)) return false;
+  if (node_leader_ && socket_) {
+    if (socket_->put_raw(key, value)) {
+      (void)shm_->mark_relayed(key);
+    }
+  }
+  return true;
+}
+
+bool HierarchicalExchanger::get_raw(std::string_view key, std::string& value) {
+  if (!shm_) return false;
+  return shm_->get_raw(key, value);
+}
+
+bool HierarchicalExchanger::is_node_leader() const {
+  if (local_id_ >= 0) return local_id_ == 0;
+  return is_server_;
+}
+
+void HierarchicalExchanger::relay_loop() {
+  std::vector<std::pair<std::string, std::string>> pending;
+  while (running_.load(std::memory_order_acquire)) {
+    if (!socket_ || !shm_) break;
+    uint64_t const socket_epoch = socket_->connection_epoch();
+    if (socket_epoch != 0 && socket_epoch != last_replayed_epoch_) {
+      replay_local_state();
+      last_replayed_epoch_ = socket_epoch;
+    }
+    if (shm_->collect_unrelayed(pending, 32) == 0) {
+      (void)shm_->wait_for_update(kRelayWaitMs);
+      continue;
+    }
+
+    for (auto const& [key, value] : pending) {
+      if (!socket_->put_raw(key, value)) break;
+      (void)shm_->mark_relayed(key);
+    }
+  }
+}
+
+void HierarchicalExchanger::replay_local_state() {
+  if (!socket_ || !shm_) return;
+  std::vector<std::pair<std::string, std::string>> batch;
+  if (shm_->collect_all(batch, std::numeric_limits<size_t>::max()) == 0) {
+    return;
+  }
+  for (auto const& [key, value] : batch) {
+    if (!socket_->put_raw(key, value)) return;
+    (void)shm_->mark_relayed(key);
+  }
+}
+
+std::string HierarchicalExchanger::kv_namespace() const {
+  return kv_namespace_for_port(port_);
+}
+
+void HierarchicalExchanger::apply_remote_entry(std::string const& key,
+                                               std::string const& value) {
+  if (!running_.load(std::memory_order_acquire) || !shm_) return;
+  (void)shm_->apply_remote(key, value);
 }
 
 }  // namespace Transport
