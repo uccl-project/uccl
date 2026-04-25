@@ -914,6 +914,7 @@ bool Communicator::accept(int rank) {
     if (!ipc_adapter_->ensure_peer(spec)) {
       std::cerr << "[ERROR] Communicator " << global_rank_
                 << " IPC accept_from failed from rank " << rank << std::endl;
+      ipc_adapter_->close_peer(rank);
       return false;
     }
     mark_peer_path_ready(rank, PeerTransportKind::Ipc);
