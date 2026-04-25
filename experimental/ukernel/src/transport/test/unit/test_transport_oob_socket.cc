@@ -3,17 +3,17 @@
 #include "test_utils.h"
 #include "util/utils.h"
 #include <arpa/inet.h>
+#include <netinet/in.h>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <exception>
 #include <memory>
-#include <netinet/in.h>
 #include <sstream>
 #include <string>
-#include <sys/socket.h>
 #include <thread>
 #include <vector>
+#include <sys/socket.h>
 #include <unistd.h>
 
 using SocketExchanger = UKernel::Transport::SocketExchanger;
@@ -60,8 +60,8 @@ int socket_test_port() {
 }
 
 bool wait_for_listener(std::string const& ip, int port, int timeout_ms) {
-  auto const deadline = std::chrono::steady_clock::now() +
-                        std::chrono::milliseconds(timeout_ms);
+  auto const deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
   while (std::chrono::steady_clock::now() < deadline) {
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {

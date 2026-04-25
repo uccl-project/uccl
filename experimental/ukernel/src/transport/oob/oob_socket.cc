@@ -1,14 +1,14 @@
-#include "oob.h"
 #include "../util/utils.h"
+#include "oob.h"
 #include <arpa/inet.h>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <sstream>
+#include <string>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
-#include <sstream>
-#include <string>
 #include <sys/epoll.h>
 #include <sys/file.h>
 #include <sys/mman.h>
@@ -59,8 +59,7 @@ int env_int_or_default(char const* name, int default_value) {
 bool env_bool_or_default(char const* name, bool default_value) {
   char const* v = std::getenv(name);
   if (!v || v[0] == '\0') return default_value;
-  if (v[0] == '0' || v[0] == 'n' || v[0] == 'N' || v[0] == 'f' ||
-      v[0] == 'F') {
+  if (v[0] == '0' || v[0] == 'n' || v[0] == 'N' || v[0] == 'f' || v[0] == 'F') {
     return false;
   }
   return true;
@@ -71,14 +70,15 @@ bool connect_with_timeout(int fd, sockaddr_in const& addr, int timeout_ms) {
   if (current_flags < 0) return false;
   if (::fcntl(fd, F_SETFL, current_flags | O_NONBLOCK) != 0) return false;
 
-  int rc = ::connect(fd, reinterpret_cast<sockaddr const*>(&addr), sizeof(addr));
+  int rc =
+      ::connect(fd, reinterpret_cast<sockaddr const*>(&addr), sizeof(addr));
   if (rc == 0) {
     (void)::fcntl(fd, F_SETFL, current_flags | O_NONBLOCK);
     return true;
   }
   if (errno != EINPROGRESS) return false;
 
-  pollfd pfd {};
+  pollfd pfd{};
   pfd.fd = fd;
   pfd.events = POLLOUT;
   rc = ::poll(&pfd, 1, timeout_ms > 0 ? timeout_ms : kSocketPollMs);
@@ -250,9 +250,9 @@ bool ShmExchanger::begin_leader_run() {
       owner_alive = true;
     } else {
       uint64_t current_ticks = 0;
-      owner_alive =
-          read_process_start_ticks(static_cast<pid_t>(owner_pid), current_ticks) &&
-          current_ticks == owner_start_ticks;
+      owner_alive = read_process_start_ticks(static_cast<pid_t>(owner_pid),
+                                             current_ticks) &&
+                    current_ticks == owner_start_ticks;
     }
   }
   if (owner_alive) {
@@ -292,8 +292,7 @@ bool ShmExchanger::mark_run_ready() {
 
 bool ShmExchanger::wait_until_ready(int timeout_ms) const {
   if (!shm_) return false;
-  int const wait_ms =
-      timeout_ms > 0 ? timeout_ms : kLeaderReadyWaitDefaultMs;
+  int const wait_ms = timeout_ms > 0 ? timeout_ms : kLeaderReadyWaitDefaultMs;
   auto const deadline =
       std::chrono::steady_clock::now() + std::chrono::milliseconds(wait_ms);
   while (std::chrono::steady_clock::now() < deadline) {
@@ -311,7 +310,8 @@ bool ShmExchanger::wait_until_ready(int timeout_ms) const {
     if (owner_start_ticks == 0) return true;
 
     uint64_t current_ticks = 0;
-    if (read_process_start_ticks(static_cast<pid_t>(owner_pid), current_ticks) &&
+    if (read_process_start_ticks(static_cast<pid_t>(owner_pid),
+                                 current_ticks) &&
         current_ticks == owner_start_ticks) {
       return true;
     }
@@ -530,10 +530,11 @@ bool ShmExchanger::put_encoded(std::string_view key, std::string_view value,
     shm_->used_slots += 1;
   }
   if (static_cast<uint32_t>(slot_idx) == shm_->first_free_hint) {
-    shm_->first_free_hint = static_cast<uint32_t>((slot_idx + 1) %
-                                                  shm_->slot_capacity);
+    shm_->first_free_hint =
+        static_cast<uint32_t>((slot_idx + 1) % shm_->slot_capacity);
   }
-  slot_index_cache_[SlotCacheHash::hash_key(key)] = static_cast<uint32_t>(slot_idx);
+  slot_index_cache_[SlotCacheHash::hash_key(key)] =
+      static_cast<uint32_t>(slot_idx);
   unlock_store();
   maybe_post_sem();
   return true;
@@ -570,12 +571,12 @@ bool ShmExchanger::wait_for_update(int delay_ms) const {
   if (!shm_) return false;
   if (delay_ms <= 0) delay_ms = 1;
 
-  auto deadline = std::chrono::system_clock::now() +
-                  std::chrono::milliseconds(delay_ms);
+  auto deadline =
+      std::chrono::system_clock::now() + std::chrono::milliseconds(delay_ms);
   auto sec = std::chrono::time_point_cast<std::chrono::seconds>(deadline);
-  auto nsec = std::chrono::duration_cast<std::chrono::nanoseconds>(deadline -
-                                                                   sec)
-                  .count();
+  auto nsec =
+      std::chrono::duration_cast<std::chrono::nanoseconds>(deadline - sec)
+          .count();
   struct timespec ts {};
   ts.tv_sec = static_cast<time_t>(sec.time_since_epoch().count());
   ts.tv_nsec = static_cast<long>(nsec);
@@ -617,7 +618,8 @@ int ShmExchanger::find_slot_locked(std::string_view key) const {
 int ShmExchanger::find_free_slot_locked() const {
   if (!shm_) return -1;
   for (uint32_t offset = 0; offset < shm_->slot_capacity; ++offset) {
-    uint32_t const index = (shm_->first_free_hint + offset) % shm_->slot_capacity;
+    uint32_t const index =
+        (shm_->first_free_hint + offset) % shm_->slot_capacity;
     if (shm_->slots[index].state != kSlotUsed) return static_cast<int>(index);
   }
   return -1;
@@ -794,15 +796,16 @@ bool SocketExchanger::start_root_server() {
   if (root_.listen_fd < 0) return false;
 
   int opt = 1;
-  (void)::setsockopt(root_.listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+  (void)::setsockopt(root_.listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt,
+                     sizeof(opt));
   (void)::fcntl(root_.listen_fd, F_SETFL, O_NONBLOCK);
 
-  sockaddr_in addr {};
+  sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_addr.s_addr = INADDR_ANY;
   addr.sin_port = htons(static_cast<uint16_t>(port_));
-  if (::bind(root_.listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) !=
-      0) {
+  if (::bind(root_.listen_fd, reinterpret_cast<sockaddr*>(&addr),
+             sizeof(addr)) != 0) {
     ::close(root_.listen_fd);
     root_.listen_fd = -1;
     return false;
@@ -861,14 +864,14 @@ void SocketExchanger::root_accept_loop() {
   if (epoll_fd < 0) return;
 
   auto set_peer_events = [&](int fd, bool want_write) -> bool {
-    epoll_event ev {};
+    epoll_event ev{};
     ev.events = EPOLLIN | EPOLLRDHUP | (want_write ? EPOLLOUT : 0);
     ev.data.fd = fd;
     return ::epoll_ctl(epoll_fd, EPOLL_CTL_MOD, fd, &ev) == 0;
   };
 
   auto add_epoll_in = [&](int fd) -> bool {
-    epoll_event ev {};
+    epoll_event ev{};
     ev.events = EPOLLIN | EPOLLRDHUP;
     ev.data.fd = fd;
     return ::epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &ev) == 0;
@@ -902,10 +905,10 @@ void SocketExchanger::root_accept_loop() {
       uint32_t const ev = events[i].events;
       if (fd == root_.listen_fd) {
         while (running_.load(std::memory_order_acquire)) {
-          sockaddr_in cli {};
+          sockaddr_in cli{};
           socklen_t len = sizeof(cli);
-          int conn_fd =
-              ::accept(root_.listen_fd, reinterpret_cast<sockaddr*>(&cli), &len);
+          int conn_fd = ::accept(root_.listen_fd,
+                                 reinterpret_cast<sockaddr*>(&cli), &len);
           if (conn_fd < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR) {
               break;
@@ -984,8 +987,8 @@ void SocketExchanger::root_accept_loop() {
 
       for (;;) {
         std::string frame;
-        bool const got_frame = recv_frame_buffered(
-            fd, peer->read_buffer, peer->read_offset, frame, 0);
+        bool const got_frame = recv_frame_buffered(fd, peer->read_buffer,
+                                                   peer->read_offset, frame, 0);
         if (!got_frame) {
           if (errno == EAGAIN || errno == EWOULDBLOCK) break;
           close_peer_now = true;
@@ -1011,11 +1014,11 @@ void SocketExchanger::root_accept_loop() {
             }
             if (snapshot_ok) {
               std::string sync_done_frame;
-              snapshot_ok = encode_socket_frame(
-                                SocketFrame{SocketFrameType::SyncDone, {}, {}},
-                                sync_done_frame) &&
-                            enqueue_frame_locked(peer->write_buffer,
-                                                 sync_done_frame);
+              snapshot_ok =
+                  encode_socket_frame(
+                      SocketFrame{SocketFrameType::SyncDone, {}, {}},
+                      sync_done_frame) &&
+                  enqueue_frame_locked(peer->write_buffer, sync_done_frame);
             }
           }
           if (!snapshot_ok) {
@@ -1029,8 +1032,8 @@ void SocketExchanger::root_accept_loop() {
           continue;
         }
         if (decoded.type == SocketFrameType::Publish) {
-          handle_publish(decoded.key, decoded.value, /*broadcast_from_root=*/true,
-                         fd);
+          handle_publish(decoded.key, decoded.value,
+                         /*broadcast_from_root=*/true, fd);
         }
       }
       if (close_peer_now) {
@@ -1069,8 +1072,8 @@ void SocketExchanger::root_broadcast_pub(std::string const& key,
   }
 
   std::string frame;
-  if (!encode_socket_frame(
-          SocketFrame{SocketFrameType::Publish, key, value}, frame)) {
+  if (!encode_socket_frame(SocketFrame{SocketFrameType::Publish, key, value},
+                           frame)) {
     return;
   }
   for (auto const& peer : peers) {
@@ -1219,7 +1222,7 @@ bool SocketExchanger::recv_frame_buffered(int fd, std::string& buffer,
 
   while (running_.load(std::memory_order_acquire)) {
     if (timeout_ms > 0) {
-      pollfd pfd {};
+      pollfd pfd{};
       pfd.fd = fd;
       pfd.events = POLLIN;
       int rc = ::poll(&pfd, 1, timeout_ms);
@@ -1272,7 +1275,7 @@ bool SocketExchanger::connect_upstream_locked() {
   int fd = ::socket(AF_INET, SOCK_STREAM, 0);
   if (fd < 0) return false;
 
-  sockaddr_in addr {};
+  sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_port = htons(static_cast<uint16_t>(port_));
   if (::inet_pton(AF_INET, host_.c_str(), &addr.sin_addr) <= 0) {
@@ -1327,7 +1330,8 @@ void SocketExchanger::upstream_loop() {
       std::lock_guard<std::mutex> lk(upstream_mu_);
       if (upstream_fd_ < 0 && !connect_upstream_locked()) {
         std::unique_lock<std::mutex> pending_lk(pending_mu_);
-        pending_cv_.wait_for(pending_lk, std::chrono::milliseconds(kSocketPollMs));
+        pending_cv_.wait_for(pending_lk,
+                             std::chrono::milliseconds(kSocketPollMs));
         continue;
       }
     }
@@ -1339,10 +1343,9 @@ void SocketExchanger::upstream_loop() {
         while (!pending_pubs_.empty()) {
           std::string frame;
           auto const& pending = pending_pubs_.front();
-          if (!encode_socket_frame(
-                  SocketFrame{SocketFrameType::Publish, pending.first,
-                              pending.second},
-                  frame)) {
+          if (!encode_socket_frame(SocketFrame{SocketFrameType::Publish,
+                                               pending.first, pending.second},
+                                   frame)) {
             pending_pubs_.pop_front();
             continue;
           }
@@ -1378,7 +1381,7 @@ void SocketExchanger::upstream_loop() {
           continue;
         }
 
-        pollfd pfd {};
+        pollfd pfd{};
         pfd.fd = upstream_fd_;
         pfd.events = POLLIN;
         if (!upstream_write_buffer_.empty()) pfd.events |= POLLOUT;
@@ -1441,8 +1444,7 @@ void SocketExchanger::upstream_loop() {
 
 void SocketExchanger::handle_publish(std::string const& key,
                                      std::string const& value,
-                                     bool broadcast_from_root,
-                                     int exclude_fd) {
+                                     bool broadcast_from_root, int exclude_fd) {
   {
     std::lock_guard<std::mutex> lk(entries_mu_);
     entries_[key] = value;

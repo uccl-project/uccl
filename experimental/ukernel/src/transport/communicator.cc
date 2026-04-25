@@ -329,9 +329,9 @@ void Communicator::exchange_peer_metas() {
   for (int i = 0; i < world_size_; i++) {
     if (i == global_rank_) continue;
     std::string key = "meta:" + std::to_string(i);
-    if (exchanger_client_->wait(key, remote, make_wait_options(
-                                                 bootstrap_timeout_ms(),
-                                                 kBootstrapPollDelayMs))) {
+    if (exchanger_client_->wait(
+            key, remote,
+            make_wait_options(bootstrap_timeout_ms(), kBootstrapPollDelayMs))) {
       std::lock_guard<std::mutex> lk(peer_mu_);
       auto& peer = peer_states_.at(static_cast<size_t>(i));
       peer.meta = remote;
@@ -1755,8 +1755,8 @@ bool Communicator::fetch_ipc_buffer(int remote_rank, uint32_t ipc_id,
                                       /*eager_open_direct_ptr=*/true);
     }
   }
-  if (!exchanger_client_->get(
-          ipc_buffer_key(remote_rank, global_rank_, ipc_id), info)) {
+  if (!exchanger_client_->get(ipc_buffer_key(remote_rank, global_rank_, ipc_id),
+                              info)) {
     return false;
   }
   if (info.valid && expected_binding_version != 0 &&

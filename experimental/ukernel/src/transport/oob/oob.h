@@ -2,8 +2,8 @@
 
 #include "../../include/config.h"
 #include "../../include/gpu_rt.h"
-#include <atomic>
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
@@ -14,8 +14,6 @@
 #include <limits>
 #include <memory>
 #include <mutex>
-#include <pthread.h>
-#include <semaphore.h>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -25,6 +23,8 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#include <pthread.h>
+#include <semaphore.h>
 
 namespace UKernel {
 namespace Transport {
@@ -44,10 +44,12 @@ bool serialize_object(T const& obj, std::string& out);
 template <typename T>
 bool deserialize_object(std::string const& in, T& obj);
 
-#define UK_OOB_SERDE_METHODS(Type)                                             \
-  bool serialize(std::string& out) const { return serialize_object(*this, out); } \
-  bool deserialize(std::string const& in) {                                    \
-    return deserialize_object(in, *this);                                      \
+#define UK_OOB_SERDE_METHODS(Type)          \
+  bool serialize(std::string& out) const {  \
+    return serialize_object(*this, out);    \
+  }                                         \
+  bool deserialize(std::string const& in) { \
+    return deserialize_object(in, *this);   \
   }
 
 struct CommunicatorMeta {
@@ -119,11 +121,15 @@ struct IpcBufferInfo {
   UK_OOB_SERDE_METHODS(IpcBufferInfo)
 };
 
-#define UK_OOB_DEFINE_VISIT_FIELDS(Type, BODY)                                 \
-  template <class F>                                                           \
-  inline void visit_fields(Type& v, F&& f) { BODY }                            \
-  template <class F>                                                           \
-  inline void visit_fields(Type const& v, F&& f) { BODY }
+#define UK_OOB_DEFINE_VISIT_FIELDS(Type, BODY)     \
+  template <class F>                               \
+  inline void visit_fields(Type& v, F&& f) {       \
+    BODY                                           \
+  }                                                \
+  template <class F>                               \
+  inline void visit_fields(Type const& v, F&& f) { \
+    BODY                                           \
+  }
 
 UK_OOB_DEFINE_VISIT_FIELDS(CommunicatorMeta, f("host_id", v.host_id);
                            f("ip", v.ip); f("local_id", v.local_id);
@@ -131,8 +137,7 @@ UK_OOB_DEFINE_VISIT_FIELDS(CommunicatorMeta, f("host_id", v.host_id);
 UK_OOB_DEFINE_VISIT_FIELDS(MR, f("id", v.id); f("address", v.address);
                            f("length", v.length); f("lkey", v.lkey);
                            f("key", v.key);)
-UK_OOB_DEFINE_VISIT_FIELDS(NamedMR, f("buffer_id", v.buffer_id);
-                           f("mr", v.mr);)
+UK_OOB_DEFINE_VISIT_FIELDS(NamedMR, f("buffer_id", v.buffer_id); f("mr", v.mr);)
 UK_OOB_DEFINE_VISIT_FIELDS(NamedMRInfos, f("generation", v.generation);
                            f("entries", v.entries);)
 UK_OOB_DEFINE_VISIT_FIELDS(UCCLP2PInfo, f("ip", v.ip); f("port", v.port);
@@ -141,8 +146,7 @@ UK_OOB_DEFINE_VISIT_FIELDS(TcpP2PInfo, f("ip", v.ip); f("port", v.port);)
 UK_OOB_DEFINE_VISIT_FIELDS(IpcBufferInfo, f("ipc_id", v.ipc_id);
                            f("binding_version", v.binding_version);
                            f("handle", v.handle);
-                           f("base_offset", v.base_offset);
-                           f("bytes", v.bytes);
+                           f("base_offset", v.base_offset); f("bytes", v.bytes);
                            f("device_idx", v.device_idx); f("valid", v.valid);)
 
 #undef UK_OOB_DEFINE_VISIT_FIELDS
@@ -192,13 +196,15 @@ void read_value(ByteReader& r, T& value);
 
 template <typename T>
 void write_pod(ByteWriter& w, T const& value) {
-  static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
+  static_assert(std::is_trivially_copyable_v<T>,
+                "T must be trivially copyable");
   w.append(&value, sizeof(T));
 }
 
 template <typename T>
 void read_pod(ByteReader& r, T& value) {
-  static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
+  static_assert(std::is_trivially_copyable_v<T>,
+                "T must be trivially copyable");
   (void)r.take(&value, sizeof(T));
 }
 
@@ -234,9 +240,8 @@ void write_value(ByteWriter& w, T const& value) {
       if (!w.ok) return;
     }
   } else {
-    visit_fields(value, [&](char const*, auto const& field) {
-      write_value(w, field);
-    });
+    visit_fields(
+        value, [&](char const*, auto const& field) { write_value(w, field); });
   }
 }
 
@@ -276,7 +281,8 @@ void read_value(ByteReader& r, T& value) {
       if (!r.ok) return;
     }
   } else {
-    visit_fields(value, [&](char const*, auto& field) { read_value(r, field); });
+    visit_fields(value,
+                 [&](char const*, auto& field) { read_value(r, field); });
   }
 }
 
