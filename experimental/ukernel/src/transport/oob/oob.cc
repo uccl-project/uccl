@@ -3,6 +3,29 @@
 namespace UKernel {
 namespace Transport {
 
+bool Exchanger::wait_raw(std::string_view key, std::string& value,
+                         WaitOptions const& options) {
+  if (options.max_retries == 0) {
+    return get_raw(key, value);
+  }
+
+  int const delay_ms = options.delay_ms > 0 ? options.delay_ms : 1;
+  if (options.max_retries > 0) {
+    for (int i = 0; i < options.max_retries; ++i) {
+      if (!valid()) return false;
+      if (get_raw(key, value)) return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+    }
+    return false;
+  }
+
+  while (valid()) {
+    if (get_raw(key, value)) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+  }
+  return false;
+}
+
 char const* peer_transport_kind_name(PeerTransportKind kind) {
   switch (kind) {
     case PeerTransportKind::Unknown:

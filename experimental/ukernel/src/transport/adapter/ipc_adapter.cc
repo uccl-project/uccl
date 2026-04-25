@@ -110,6 +110,7 @@ IpcAdapter::IpcAdapter(Communicator* comm, std::string ring_namespace,
     : ring_namespace_(ring_namespace),
       next_match_seq_per_peer_(comm->world_size(),
                                std::array<uint64_t, 2>{1, 1}),
+      peer_connect_mu_(comm->world_size()),
       shm_control_(std::make_shared<ShmRingExchanger>(
           comm->rank(), comm->world_size(), std::move(ring_namespace),
           self_local_id)),
@@ -275,20 +276,25 @@ bool IpcAdapter::accept_from(int rank) {
 
 bool IpcAdapter::ensure_peer(PeerConnectSpec const& spec) {
   if (spec.peer_rank < 0) return false;
-  if (has_peer(spec.peer_rank)) return true;
   if (!(std::holds_alternative<IpcPeerConnectSpec>(spec.detail) ||
         std::holds_alternative<std::monostate>(spec.detail))) {
     return false;
   }
   int peer_rank = spec.peer_rank;
+  if (peer_rank >= static_cast<int>(peer_connect_mu_.size())) return false;
+  std::lock_guard<std::mutex> peer_lk(
+      peer_connect_mu_[static_cast<size_t>(peer_rank)]);
+  if (has_peer(peer_rank)) return true;
 
   // Lower rank creates the done_seq SHM *before* the connection handshake so
   // the higher rank can open it by name right after the handshake completes.
   bool is_lower = (comm_->rank() < peer_rank);
   if (is_lower) setup_done_channel(peer_rank);
 
-  bool ok = (spec.type == PeerConnectType::Connect) ? connect_to(peer_rank)
-                                                    : accept_from(peer_rank);
+  // Keep peer handshake role deterministic to avoid connect/accept races when
+  // multiple request paths concurrently establish the same peer.
+  bool const use_connect = is_lower;
+  bool ok = use_connect ? connect_to(peer_rank) : accept_from(peer_rank);
   if (!ok) return false;
 
   if (!is_lower) {

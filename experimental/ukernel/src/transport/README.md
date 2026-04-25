@@ -16,6 +16,47 @@ Run unit tests:
 make test-unit
 ```
 
+### OOB Testing
+
+Build the unit test binary:
+
+```bash
+cd experimental/ukernel/src/transport
+make -j$(nproc) test-unit
+```
+
+Run OOB serializer round-trip tests (`serialize_object` / `deserialize_object`):
+
+```bash
+./test_transport_unit oob-serde
+```
+
+Run `ShmExchanger` tests (`put/get/wait`, relay-state helpers):
+
+```bash
+./test_transport_unit oob-shm
+```
+
+Run `SocketExchanger` and `HierarchicalExchanger` tests:
+
+```bash
+./test_transport_unit oob-socket
+./test_transport_unit oob-socket-meta --world-size 4
+```
+
+Recommended OOB-only check on a server:
+
+```bash
+./test_transport_unit oob-serde && \
+./test_transport_unit oob-shm && \
+./test_transport_unit oob-socket && \
+./test_transport_unit oob-socket-meta --world-size 4
+```
+
+If you want only socket-layer behavior in manual debugging, use different
+`UHM_OOB_NAMESPACE` values between different node groups so same-host shared
+memory does not mask cross-node relay behavior.
+
 Optional manual SHM OOB case:
 
 ```bash
@@ -84,6 +125,7 @@ TRANSPORT_RUN_UCCL=1 make suite
 ## Notes
 
 - `test-unit` covers memory registry, socket OOB, peer session, host bounce pool, and TCP adapter.
+- OOB unit coverage includes `ShmExchanger`, `SocketExchanger`, and `HierarchicalExchanger`.
 - `test-integration` is a lightweight smoke target.
 - Multi-process communicator checks are manual by default.
 - Use `test_transport_integration communicator --role=server|client --case=exchange ...` for normal two-process transport bring-up.
