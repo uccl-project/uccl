@@ -46,6 +46,21 @@ namespace nb = nanobind;
 
 static std::mutex g_proxies_mu;
 
+// Runtime override for the CPU recv timeout (default: NUM_CPU_TIMEOUT_SECS).
+// Long training steps (e.g. large grad-accum, heavy checkpoint I/O) can exceed
+// the compile-time default and trigger false timeouts during dispatch. Set
+// UCCL_EP_CPU_TIMEOUT_SECS to a larger value (in seconds) to widen the window.
+// The env is parsed once per process via a C++11 thread-safe static local.
+static inline int get_cpu_timeout_secs() {
+  static int const val = []() -> int {
+    char const* env = getenv("UCCL_EP_CPU_TIMEOUT_SECS");
+    if (env == nullptr) return NUM_CPU_TIMEOUT_SECS;
+    int v = atoi(env);
+    return v > 0 ? v : NUM_CPU_TIMEOUT_SECS;
+  }();
+  return val;
+}
+
 struct EventOverlap {};
 struct Ctx {
   long num_tokens{0};
@@ -693,7 +708,7 @@ class Buffer {
         if (ready) break;
         if (std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::high_resolution_clock::now() - start_time)
-                .count() > NUM_CPU_TIMEOUT_SECS) {
+                .count() > get_cpu_timeout_secs()) {
           throw std::runtime_error("DeepEP error: CPU recv timeout");
         }
       }
@@ -941,7 +956,7 @@ class Buffer {
         if (ready) break;
         if (std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::high_resolution_clock::now() - start_time)
-                .count() > NUM_CPU_TIMEOUT_SECS) {
+                .count() > get_cpu_timeout_secs()) {
           throw std::runtime_error("DeepEP error: timeout (dispatch CPU)");
         }
       }
