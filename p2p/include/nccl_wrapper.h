@@ -3,11 +3,11 @@
 // Keeps #include <nccl.h> for types and enums (ncclChar, ncclSuccess, etc.).
 // Custom library path: set UCCL_NCCL_SO environment variable.
 
-#include <nccl.h>
-#include <dlfcn.h>
 #include <cstdio>
 #include <cstdlib>
 #include <utility>
+#include <dlfcn.h>
+#include <nccl.h>
 
 namespace uccl {
 namespace nccl_dl {
@@ -20,8 +20,8 @@ inline void* get_handle() {
     if (!handle) handle = dlopen("libnccl.so.2", RTLD_NOW);
     if (!handle) handle = dlopen("librccl.so", RTLD_NOW);  // ROCm
     if (!handle) {
-      std::fprintf(stderr,
-                   "UCCL P2P: failed to load libnccl.so: %s\n", dlerror());
+      std::fprintf(stderr, "UCCL P2P: failed to load libnccl.so: %s\n",
+                   dlerror());
     }
     return handle;
   }();
@@ -39,13 +39,13 @@ inline void* resolve(char const* name) {
   return sym;
 }
 
-#define UCCL_NCCL_WRAP(func_name)                                           \
-  template <typename... Args>                                               \
-  inline auto func_name(Args&&... args)                                     \
-      -> decltype(::func_name(std::forward<Args>(args)...)) {              \
-    using FnType = decltype(&::func_name);                                  \
-    static FnType fn = reinterpret_cast<FnType>(resolve(#func_name));       \
-    return fn(std::forward<Args>(args)...);                                 \
+#define UCCL_NCCL_WRAP(func_name)                                     \
+  template <typename... Args>                                         \
+  inline auto func_name(Args&&... args)                               \
+      ->decltype(::func_name(std::forward<Args>(args)...)) {          \
+    using FnType = decltype(&::func_name);                            \
+    static FnType fn = reinterpret_cast<FnType>(resolve(#func_name)); \
+    return fn(std::forward<Args>(args)...);                           \
   }
 
 UCCL_NCCL_WRAP(ncclGetUniqueId)

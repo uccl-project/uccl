@@ -1,15 +1,15 @@
 #pragma once
 
 #include "common.h"
-#include "rdma/rdma_endpoint.h"
-#include "nccl/nccl_endpoint.h"
 #include "include/transport_type.h"
+#include "nccl/nccl_endpoint.h"
+#include "rdma/rdma_endpoint.h"
+#include "util/debug.h"
 #include "util/gpu_rt.h"
 #include "util/jring.h"
 #include "util/net.h"
 #include "util/shared_pool.h"
 #include "util/util.h"
-#include "util/debug.h"
 #include <infiniband/verbs.h>
 #include <atomic>
 #include <cstdlib>
@@ -26,9 +26,8 @@
 extern thread_local bool inside_python;
 
 // Runtime-polymorphic endpoint: holds either RDMA or NCCL/TCP endpoint.
-using RDMAEndPoint = std::variant<
-    std::shared_ptr<NICEndpoint>,
-    std::shared_ptr<tcp::TCPEndpoint>>;
+using RDMAEndPoint = std::variant<std::shared_ptr<NICEndpoint>,
+                                  std::shared_ptr<tcp::TCPEndpoint>>;
 
 // Use the RDMA-native request types as the common currency.
 // The NCCL shim functions in endpoint_wrapper.h convert as needed.

@@ -1,14 +1,13 @@
 #pragma once
 #include "define.h"
+#include "include/transport_type.h"
+#include "providers/efa/rdma_data_channel_impl_efa.h"
+#include "providers/ib/rdma_data_channel_impl_ib.h"
 #include "rdma_context.h"
 #include "rdma_data_channel_impl.h"
 #include "seq_num.h"
 #include "util/debug.h"
 #include "util/util.h"
-
-#include "providers/efa/rdma_data_channel_impl_efa.h"
-#include "providers/ib/rdma_data_channel_impl_ib.h"
-#include "include/transport_type.h"
 
 // Factory: select IB or EFA provider at runtime.
 inline std::unique_ptr<RDMADataChannelImpl> createRDMADataChannelImpl() {

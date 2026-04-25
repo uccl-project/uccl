@@ -4,10 +4,10 @@
 // Custom library path: set UCCL_EFA_SO environment variable.
 
 #include <infiniband/efadv.h>
-#include <dlfcn.h>
 #include <cstdio>
 #include <cstdlib>
 #include <utility>
+#include <dlfcn.h>
 
 namespace uccl {
 namespace efa_dl {
@@ -19,8 +19,8 @@ inline void* get_handle() {
     if (!handle) handle = dlopen("libefa.so", RTLD_NOW);
     if (!handle) handle = dlopen("libefa.so.1", RTLD_NOW);
     if (!handle) {
-      std::fprintf(stderr,
-                   "UCCL P2P: failed to load libefa.so: %s\n", dlerror());
+      std::fprintf(stderr, "UCCL P2P: failed to load libefa.so: %s\n",
+                   dlerror());
     }
     return handle;
   }();
@@ -38,13 +38,13 @@ inline void* resolve(char const* name) {
   return sym;
 }
 
-#define UCCL_EFA_WRAP(func_name)                                            \
-  template <typename... Args>                                               \
-  inline auto func_name(Args&&... args)                                     \
-      -> decltype(::func_name(std::forward<Args>(args)...)) {              \
-    using FnType = decltype(&::func_name);                                  \
-    static FnType fn = reinterpret_cast<FnType>(resolve(#func_name));       \
-    return fn(std::forward<Args>(args)...);                                 \
+#define UCCL_EFA_WRAP(func_name)                                      \
+  template <typename... Args>                                         \
+  inline auto func_name(Args&&... args)                               \
+      ->decltype(::func_name(std::forward<Args>(args)...)) {          \
+    using FnType = decltype(&::func_name);                            \
+    static FnType fn = reinterpret_cast<FnType>(resolve(#func_name)); \
+    return fn(std::forward<Args>(args)...);                           \
   }
 
 UCCL_EFA_WRAP(efadv_create_qp_ex)

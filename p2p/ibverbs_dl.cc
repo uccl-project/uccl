@@ -16,22 +16,25 @@
 // Eagerly load libibverbs.so at library load time with RTLD_GLOBAL so that
 // compat-layer functions in verbs.h (ibv_query_port, ibv_reg_mr, etc.) can
 // resolve their symbols from the dlopen'd library.
-__attribute__((constructor))
-static void ibv_dl_init() { uccl::ibv_dl::get_handle(); }
+__attribute__((constructor)) static void ibv_dl_init() {
+  uccl::ibv_dl::get_handle();
+}
 
 static void* ibv_handle() { return uccl::ibv_dl::get_handle(); }
-static void* ibv_resolve(char const* name) { return uccl::ibv_dl::resolve(name); }
+static void* ibv_resolve(char const* name) {
+  return uccl::ibv_dl::resolve(name);
+}
 
 extern "C" {
 
 // We need to provide implementations for every ibv_* symbol that the RDMA code
 // references. Each function dlsym's the real implementation on first call.
 
-#define IBV_DL_FUNC(ret, name, args, call_args) \
-  ret name args { \
-    using FnType = ret(*)args; \
+#define IBV_DL_FUNC(ret, name, args, call_args)                      \
+  ret name args {                                                    \
+    using FnType = ret(*) args;                                      \
     static FnType fn = reinterpret_cast<FnType>(ibv_resolve(#name)); \
-    return fn call_args; \
+    return fn call_args;                                             \
   }
 
 // Device management
@@ -39,34 +42,45 @@ extern "C" {
 // The macro redirects to __ibv_get_device_list, so we provide that symbol.
 // The actual library exports "ibv_get_device_list".
 struct ibv_device** __ibv_get_device_list(int* num_devices) {
-  using FnType = struct ibv_device**(*)(int*);
-  static FnType fn = reinterpret_cast<FnType>(ibv_resolve("ibv_get_device_list"));
+  using FnType = struct ibv_device** (*)(int*);
+  static FnType fn =
+      reinterpret_cast<FnType>(ibv_resolve("ibv_get_device_list"));
   return fn(num_devices);
 }
 
-IBV_DL_FUNC(void, ibv_free_device_list, (struct ibv_device** list), (list))
-IBV_DL_FUNC(const char*, ibv_get_device_name, (struct ibv_device* device), (device))
-IBV_DL_FUNC(struct ibv_context*, ibv_open_device, (struct ibv_device* device), (device))
-IBV_DL_FUNC(int, ibv_close_device, (struct ibv_context* context), (context))
-IBV_DL_FUNC(int, ibv_query_device, (struct ibv_context* context, struct ibv_device_attr* device_attr), (context, device_attr))
+IBV_DL_FUNC(void, ibv_free_device_list, (struct ibv_device * *list), (list))
+IBV_DL_FUNC(char const*, ibv_get_device_name, (struct ibv_device * device),
+            (device))
+IBV_DL_FUNC(struct ibv_context*, ibv_open_device, (struct ibv_device * device),
+            (device))
+IBV_DL_FUNC(int, ibv_close_device, (struct ibv_context * context), (context))
+IBV_DL_FUNC(int, ibv_query_device,
+            (struct ibv_context * context, struct ibv_device_attr* device_attr),
+            (context, device_attr))
 
 // Port and GID
-IBV_DL_FUNC(int, ibv_query_gid, (struct ibv_context* context, uint8_t port_num, int index, union ibv_gid* gid), (context, port_num, index, gid))
+IBV_DL_FUNC(int, ibv_query_gid,
+            (struct ibv_context * context, uint8_t port_num, int index,
+             union ibv_gid* gid),
+            (context, port_num, index, gid))
 
 // Protection domain
-IBV_DL_FUNC(struct ibv_pd*, ibv_alloc_pd, (struct ibv_context* context), (context))
-IBV_DL_FUNC(int, ibv_dealloc_pd, (struct ibv_pd* pd), (pd))
+IBV_DL_FUNC(struct ibv_pd*, ibv_alloc_pd, (struct ibv_context * context),
+            (context))
+IBV_DL_FUNC(int, ibv_dealloc_pd, (struct ibv_pd * pd), (pd))
 
 // Memory registration
-IBV_DL_FUNC(int, ibv_dereg_mr, (struct ibv_mr* mr), (mr))
+IBV_DL_FUNC(int, ibv_dereg_mr, (struct ibv_mr * mr), (mr))
 
 // Completion queue
 // ibv_create_cq is declared in verbs.h, resolved via RTLD_GLOBAL.
-IBV_DL_FUNC(int, ibv_destroy_cq, (struct ibv_cq* cq), (cq))
+IBV_DL_FUNC(int, ibv_destroy_cq, (struct ibv_cq * cq), (cq))
 
 // Queue pair
-IBV_DL_FUNC(int, ibv_destroy_qp, (struct ibv_qp* qp), (qp))
-IBV_DL_FUNC(int, ibv_modify_qp, (struct ibv_qp* qp, struct ibv_qp_attr* attr, int attr_mask), (qp, attr, attr_mask))
+IBV_DL_FUNC(int, ibv_destroy_qp, (struct ibv_qp * qp), (qp))
+IBV_DL_FUNC(int, ibv_modify_qp,
+            (struct ibv_qp * qp, struct ibv_qp_attr* attr, int attr_mask),
+            (qp, attr, attr_mask))
 // ibv_create_qp, ibv_qp_to_qp_ex are declared in verbs.h and resolved
 // via RTLD_GLOBAL dlopen of libibverbs.so in the constructor above.
 
@@ -77,10 +91,12 @@ IBV_DL_FUNC(int, ibv_modify_qp, (struct ibv_qp* qp, struct ibv_qp_attr* attr, in
 // in verbs.h that call ibv_cmd_* internally.
 
 // Address handle
-IBV_DL_FUNC(struct ibv_ah*, ibv_create_ah, (struct ibv_pd* pd, struct ibv_ah_attr* attr), (pd, attr))
+IBV_DL_FUNC(struct ibv_ah*, ibv_create_ah,
+            (struct ibv_pd * pd, struct ibv_ah_attr* attr), (pd, attr))
 
 // Error strings
-IBV_DL_FUNC(const char*, ibv_wc_status_str, (enum ibv_wc_status status), (status))
+IBV_DL_FUNC(char const*, ibv_wc_status_str, (enum ibv_wc_status status),
+            (status))
 
 #undef IBV_DL_FUNC
 

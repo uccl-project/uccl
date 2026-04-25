@@ -8,10 +8,10 @@
 // Custom library path: set UCCL_IBV_SO environment variable.
 
 #include <infiniband/verbs.h>
-#include <dlfcn.h>
 #include <cstdio>
 #include <cstdlib>
 #include <utility>
+#include <dlfcn.h>
 
 namespace uccl {
 namespace ibv_dl {
@@ -24,8 +24,8 @@ inline void* get_handle() {
     if (!handle) handle = dlopen("libibverbs.so", RTLD_NOW | RTLD_GLOBAL);
     if (!handle) handle = dlopen("libibverbs.so.1", RTLD_NOW | RTLD_GLOBAL);
     if (!handle) {
-      std::fprintf(stderr,
-                   "UCCL P2P: failed to load libibverbs.so: %s\n", dlerror());
+      std::fprintf(stderr, "UCCL P2P: failed to load libibverbs.so: %s\n",
+                   dlerror());
     }
     return handle;
   }();
@@ -44,13 +44,13 @@ inline void* resolve(char const* name) {
 }
 
 // Wrapper macro - only safe for names that are NOT #define macros in verbs.h.
-#define UCCL_IBV_WRAP(func_name)                                            \
-  template <typename... Args>                                               \
-  inline auto func_name(Args&&... args)                                     \
-      -> decltype(::func_name(std::forward<Args>(args)...)) {              \
-    using FnType = decltype(&::func_name);                                  \
-    static FnType fn = reinterpret_cast<FnType>(resolve(#func_name));       \
-    return fn(std::forward<Args>(args)...);                                 \
+#define UCCL_IBV_WRAP(func_name)                                      \
+  template <typename... Args>                                         \
+  inline auto func_name(Args&&... args)                               \
+      ->decltype(::func_name(std::forward<Args>(args)...)) {          \
+    using FnType = decltype(&::func_name);                            \
+    static FnType fn = reinterpret_cast<FnType>(resolve(#func_name)); \
+    return fn(std::forward<Args>(args)...);                           \
   }
 
 // --- True library functions (safe to wrap) ---

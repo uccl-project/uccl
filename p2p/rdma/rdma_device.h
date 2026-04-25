@@ -17,9 +17,9 @@ class RDMADeviceSelectionStrategy {
       int gpu_idx) = 0;
 };
 
+#include "include/transport_type.h"
 #include "providers/efa/rdma_device_selection_efa.h"
 #include "providers/ib/rdma_device_selection_ib.h"
-#include "include/transport_type.h"
 
 // Factory: select IB or EFA device strategy at runtime.
 inline std::unique_ptr<RDMADeviceSelectionStrategy>
