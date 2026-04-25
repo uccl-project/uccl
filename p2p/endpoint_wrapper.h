@@ -6,6 +6,22 @@
 template <class T>
 struct always_false : std::false_type {};
 
+// Convert between the global ucclRequest and uccl::ucclRequest.
+// They have different layouts (uccl:: version has an extra context pointer).
+static inline uccl::ucclRequest to_nccl_req(ucclRequest const& r) {
+  uccl::ucclRequest out{};
+  out.type = static_cast<uccl::ReqType>(r.type);
+  out.n = r.n;
+  out.context = nullptr;
+  out.engine_idx = r.engine_idx;
+  return out;
+}
+static inline void from_nccl_req(uccl::ucclRequest const& in, ucclRequest* out) {
+  out->type = static_cast<ReqType>(in.type);
+  out->n = in.n;
+  out->engine_idx = in.engine_idx;
+}
+
 // Convert NCCL ConnID to the common ConnID used by Endpoint.
 static inline ConnID to_conn_id(uccl::ConnID const& in) {
   ConnID out{};
@@ -123,10 +139,12 @@ inline int uccl_send_async(RDMAEndPoint const& ep, Conn* conn,
       (void)mhandle;
       ureq->type = ReqType::ReqTx;
       ureq->n = conn->uccl_conn_id_.flow_id;
-      return s->uccl_send_async(
+      uccl::ucclRequest nreq = to_nccl_req(*ureq);
+      int ret = s->uccl_send_async(
           reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
-          nullptr, data, size,
-          reinterpret_cast<uccl::ucclRequest*>(ureq));
+          nullptr, data, size, &nreq);
+      from_nccl_req(nreq, ureq);
+      return ret;
     } else {
       auto send_mem = std::make_shared<RegMemBlock>(
           const_cast<void*>(data), size, MemoryType::GPU);
@@ -155,10 +173,12 @@ inline int uccl_recv_async(RDMAEndPoint const& ep, Conn* conn,
       (void)mhandles;
       ureq->type = ReqType::ReqRx;
       ureq->n = conn->uccl_conn_id_.flow_id;
-      return s->uccl_recv_async(
+      uccl::ucclRequest nreq = to_nccl_req(*ureq);
+      int ret = s->uccl_recv_async(
           reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
-          nullptr, data, size, n,
-          reinterpret_cast<uccl::ucclRequest*>(ureq));
+          nullptr, data, size, n, &nreq);
+      from_nccl_req(nreq, ureq);
+      return ret;
     } else {
       auto recv_mem =
           std::make_shared<RegMemBlock>(data[0], size[0], MemoryType::GPU);
@@ -177,8 +197,10 @@ inline bool uccl_poll_ureq_once(RDMAEndPoint const& ep, ucclRequest* ureq) {
   return std::visit([&](auto const& s) -> bool {
     using T = std::decay_t<decltype(*s)>;
     if constexpr (std::is_same_v<T, tcp::TCPEndpoint>) {
-      return s->uccl_poll_ureq_once(
-          reinterpret_cast<uccl::ucclRequest*>(ureq));
+      uccl::ucclRequest nreq = to_nccl_req(*ureq);
+      bool ret = s->uccl_poll_ureq_once(&nreq);
+      from_nccl_req(nreq, ureq);
+      return ret;
     } else {
       if (ureq->type == ReqType::ReqTx || ureq->type == ReqType::ReqWrite ||
           ureq->type == ReqType::ReqRead) {
@@ -207,10 +229,12 @@ inline int uccl_read_async(RDMAEndPoint const& ep, Conn* conn,
       tcp_item.addr = slot_item.addr;
       tcp_item.size = static_cast<uint32_t>(size);
       std::memset(tcp_item.padding, 0, sizeof(tcp_item.padding));
-      return s->uccl_read_async(
+      uccl::ucclRequest nreq = to_nccl_req(*ureq);
+      int ret = s->uccl_read_async(
           reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
-          nullptr, dst, size, tcp_item,
-          reinterpret_cast<uccl::ucclRequest*>(ureq));
+          nullptr, dst, size, tcp_item, &nreq);
+      from_nccl_req(nreq, ureq);
+      return ret;
     } else {
       ureq->type = ReqType::ReqRead;
       return set_request(s, conn, local_mh, dst, size, slot_item, ureq);
@@ -231,10 +255,12 @@ inline int uccl_write_async(RDMAEndPoint const& ep, Conn* conn,
       tcp_item.addr = slot_item.addr;
       tcp_item.size = static_cast<uint32_t>(size);
       std::memset(tcp_item.padding, 0, sizeof(tcp_item.padding));
-      return s->uccl_write_async(
+      uccl::ucclRequest nreq = to_nccl_req(*ureq);
+      int ret = s->uccl_write_async(
           reinterpret_cast<uccl::UcclFlow*>(conn->uccl_conn_id_.context),
-          nullptr, src, size, tcp_item,
-          reinterpret_cast<uccl::ucclRequest*>(ureq));
+          nullptr, src, size, tcp_item, &nreq);
+      from_nccl_req(nreq, ureq);
+      return ret;
     } else {
       ureq->type = ReqType::ReqWrite;
       return set_request(s, conn, local_mh, src, size, slot_item, ureq);
