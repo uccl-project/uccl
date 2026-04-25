@@ -157,27 +157,29 @@ def _recv_bytes(src: int) -> bytes:
     return bytes(t.tolist())
 
 
-def _exchange_uccl_metadata(local_metadata: bytes, local_gpu_idx: int, rank: int):
+def _exchange_uccl_metadata(local_metadata: bytes, local_gpu_bdf: str, rank: int):
+    local_bdf_bytes = local_gpu_bdf.encode("utf-8")
     if rank == 0:
         _send_bytes(local_metadata, dst=1)
-        _send_i64(local_gpu_idx, dst=1)
+        _send_bytes(local_bdf_bytes, dst=1)
         remote_metadata = _recv_bytes(src=1)
-        remote_gpu_idx = _recv_i64(src=1)
+        remote_gpu_bdf = _recv_bytes(src=1).decode("utf-8")
     else:
         remote_metadata = _recv_bytes(src=0)
-        remote_gpu_idx = _recv_i64(src=0)
+        remote_gpu_bdf = _recv_bytes(src=0).decode("utf-8")
         _send_bytes(local_metadata, dst=0)
-        _send_i64(local_gpu_idx, dst=0)
-    return remote_metadata, remote_gpu_idx
+        _send_bytes(local_bdf_bytes, dst=0)
+    return remote_metadata, remote_gpu_bdf
 
 
-def _exchange_local_gpu_idx(local_gpu_idx: int, rank: int) -> int:
+def _exchange_local_gpu_bdf(local_gpu_bdf: str, rank: int) -> str:
+    local_bdf_bytes = local_gpu_bdf.encode("utf-8")
     if rank == 0:
-        _send_i64(local_gpu_idx, dst=1)
-        return _recv_i64(src=1)
-    remote_gpu_idx = _recv_i64(src=0)
-    _send_i64(local_gpu_idx, dst=0)
-    return remote_gpu_idx
+        _send_bytes(local_bdf_bytes, dst=1)
+        return _recv_bytes(src=1).decode("utf-8")
+    remote_gpu_bdf = _recv_bytes(src=0).decode("utf-8")
+    _send_bytes(local_bdf_bytes, dst=0)
+    return remote_gpu_bdf
 
 
 def _exchange_peer_i64(local_value: int, rank: int) -> int:
@@ -336,6 +338,9 @@ def main() -> None:
         uc_send_conn_id = None
         uc_recv_conn_id = None
         uc_ep = _create_uccl_endpoint(local_rank, rank)
+        local_meta = bytes(uc_ep.get_metadata())
+        _, _, local_gpu_bdf = uccl_p2p.Endpoint.parse_metadata(local_meta)
+        local_gpu_bdf = str(local_gpu_bdf)
         if uc_mode == "ipc":
             required_ipc_api = ("connect_local", "accept_local", "send_ipc", "recv_ipc")
             missing = [name for name in required_ipc_api if not hasattr(uc_ep, name)]
@@ -343,31 +348,36 @@ def main() -> None:
                 raise RuntimeError(
                     f"[uccl] ipc mode requested but endpoint lacks API: {missing}"
                 )
-            remote_gpu_idx = _exchange_local_gpu_idx(local_rank, rank)
+            remote_gpu_bdf = _exchange_local_gpu_bdf(local_gpu_bdf, rank)
             if rank == 0:
-                ok, uc_send_conn_id = uc_ep.connect_local(remote_gpu_idx)
+                ok, uc_send_conn_id = uc_ep.connect_local(remote_gpu_bdf)
                 assert ok, "[uccl] connect_local(0->1) failed"
                 ok, _, uc_recv_conn_id = uc_ep.accept_local()
                 assert ok, "[uccl] accept_local(1->0) failed"
             else:
                 ok, _, uc_recv_conn_id = uc_ep.accept_local()
                 assert ok, "[uccl] accept_local(0->1) failed"
-                ok, uc_send_conn_id = uc_ep.connect_local(remote_gpu_idx)
+                ok, uc_send_conn_id = uc_ep.connect_local(remote_gpu_bdf)
                 assert ok, "[uccl] connect_local(1->0) failed"
         else:
-            local_meta = bytes(uc_ep.get_metadata())
-            remote_meta, remote_gpu_idx = _exchange_uccl_metadata(local_meta, local_rank, rank)
+            remote_meta, remote_gpu_bdf = _exchange_uccl_metadata(
+                local_meta, local_gpu_bdf, rank
+            )
+            ip, port, meta_gpu_bdf = uccl_p2p.Endpoint.parse_metadata(remote_meta)
+            target_gpu_bdf = str(meta_gpu_bdf) if meta_gpu_bdf else remote_gpu_bdf
             if rank == 0:
-                ip, port, _ = uccl_p2p.Endpoint.parse_metadata(remote_meta)
-                ok, uc_send_conn_id = uc_ep.connect(ip, remote_gpu_idx, remote_port=port)
+                ok, uc_send_conn_id = uc_ep.connect(
+                    ip, target_gpu_bdf, remote_port=port
+                )
                 assert ok, "[uccl] connect(0->1) failed"
                 ok, _, _, uc_recv_conn_id = uc_ep.accept()
                 assert ok, "[uccl] accept(1->0) failed"
             else:
                 ok, _, _, uc_recv_conn_id = uc_ep.accept()
                 assert ok, "[uccl] accept(0->1) failed"
-                ip, port, _ = uccl_p2p.Endpoint.parse_metadata(remote_meta)
-                ok, uc_send_conn_id = uc_ep.connect(ip, remote_gpu_idx, remote_port=port)
+                ok, uc_send_conn_id = uc_ep.connect(
+                    ip, target_gpu_bdf, remote_port=port
+                )
                 assert ok, "[uccl] connect(1->0) failed"
         dist.barrier()
         if rank == 0:
