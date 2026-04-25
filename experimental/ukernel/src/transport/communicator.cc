@@ -1790,10 +1790,22 @@ void Communicator::try_open_remote_ipc_buffer(int remote_rank,
       [&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
+  bool can_use_direct_peer = (state.device_idx == local_gpu_idx_);
+  if (!can_use_direct_peer && state.device_idx >= 0) {
+    int can_access_peer = 0;
+    GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can_access_peer, local_gpu_idx_,
+                                        state.device_idx));
+    can_use_direct_peer = (can_access_peer != 0);
+  }
+  if (!can_use_direct_peer) return;
+
   void* direct_ptr = nullptr;
   gpuError_t open_err = gpuIpcOpenMemHandle(&direct_ptr, state.handle,
                                             gpuIpcMemLazyEnablePeerAccess);
-  if (open_err != gpuSuccess || direct_ptr == nullptr) return;
+  if (open_err != gpuSuccess || direct_ptr == nullptr) {
+    (void)gpuGetLastError();
+    return;
+  }
 
   IPCItem opened = state;
   opened.direct_ptr = direct_ptr;
@@ -1833,12 +1845,22 @@ bool Communicator::resolve_ipc_buffer_pointer(int remote_rank, uint32_t ipc_id,
       [&]() { GPU_RT_CHECK(gpuSetDevice(original_device)); });
   GPU_RT_CHECK(gpuSetDevice(local_gpu_idx_));
 
+  bool can_use_direct_peer = (state.device_idx == local_gpu_idx_);
+  if (!can_use_direct_peer && state.device_idx >= 0) {
+    int can_access_peer = 0;
+    GPU_RT_CHECK(gpuDeviceCanAccessPeer(&can_access_peer, local_gpu_idx_,
+                                        state.device_idx));
+    can_use_direct_peer = (can_access_peer != 0);
+  }
+  if (!can_use_direct_peer) return false;
+
   if (state.direct_ptr == nullptr) {
     gpuError_t open_err = gpuIpcOpenMemHandle(&state.direct_ptr, state.handle,
                                               gpuIpcMemLazyEnablePeerAccess);
     if (open_err != gpuSuccess) {
       // Treat IPC open failure as recoverable here so upper layers can
       // fallback to host-bounce relay instead of aborting.
+      (void)gpuGetLastError();
       return false;
     }
     state.ipc_id = ipc_id;
