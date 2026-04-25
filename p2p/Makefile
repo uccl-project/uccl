@@ -90,8 +90,8 @@ CAPI_SOURCE := uccl_engine.cc
 CAPI_HEADER := uccl_engine.h include/common.h
 CAPI_OBJECT := $(CAPI_SOURCE:.cc=.o)
 # dlsym wrapper objects provide ibv_*/nccl*/efadv_* symbols at link time
-DL_SOURCES := ibverbs_dl.cc nccl_dl.cc efadv_dl.cc
-DL_OBJECTS := $(DL_SOURCES:.cc=.o)
+DL_SOURCES := rdma/ibverbs_dl.cc nccl/nccl_dl.cc rdma/providers/efa/efadv_dl.cc
+DL_OBJECTS := rdma/ibverbs_dl.o nccl/nccl_dl.o rdma/providers/efa/efadv_dl.o
 SOURCES := engine.cc engine_api.cc nccl/nccl_endpoint.cc
 CORE_OBJECT := engine.o nccl/nccl_endpoint.o $(DL_OBJECTS)
 OBJECTS := $(SOURCES:.cc=.o)
@@ -119,9 +119,14 @@ nb_%.o: $(NB_SRC_DIR)/%.cpp
 %.o: %.cc
 	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -c $< -o $@
 
-# Compile NCCL endpoint source files
+# Compile NCCL source files
 nccl/%.o: nccl/%.cc
 	@mkdir -p nccl
+	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -I. -c $< -o $@
+
+# Compile RDMA provider source files
+rdma/providers/efa/%.o: rdma/providers/efa/%.cc
+	@mkdir -p rdma/providers/efa
 	$(CXX) $(CXXFLAGS) $(NB_INCLUDES) $(NB_ABI_FLAGS) -I. -c $< -o $@
 
 # Auto-generated header dependencies
@@ -150,7 +155,7 @@ install: $(P2P_PYTHON_EXT) $(P2P_SHARED_LIB)
 clean:
 	rm -f $(OBJECTS) $(CAPI_OBJECT) $(DL_OBJECTS) $(NB_OBJECTS) $(P2P_SHARED_LIB)
 	rm -f $(DEPS)
-	rm -f nccl/*.o nccl/*.d
+	rm -f nccl/*.o nccl/*.d rdma/*.o rdma/*.d rdma/providers/efa/*.o rdma/providers/efa/*.d
 	rm -f $(P2P_PYTHON_EXT)
 
 # Test the module
